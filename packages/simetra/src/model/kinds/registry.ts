@@ -13,6 +13,8 @@ import { enumerationKind } from "./enumeration"
 import { eventSubscriptionKind } from "./event-subscription"
 import { informationRegisterKind } from "./information-register"
 import { pgEnumKind } from "./pg-enum"
+import { rightsSetKind } from "./rights-set"
+import { roleKind } from "./role"
 import type { KindDefinition } from "./standard"
 
 export { isUuidColumn, singleUuidKeyColumn }
@@ -62,6 +64,8 @@ export const KIND_REGISTRY: Readonly<Record<MetadataKind, KindDefinition>> = {
   CustomTable: customTableKind,
   PgEnum: pgEnumKind,
   EventSubscription: eventSubscriptionKind,
+  RightsSet: rightsSetKind,
+  Role: roleKind,
 }
 
 const KINDS_BY_DIR = new Map(

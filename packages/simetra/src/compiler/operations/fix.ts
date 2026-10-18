@@ -249,6 +249,9 @@ class NameAssigner {
   }
 
   private assignObject(file: ObjectFile): void {
+    // Набір прав і роль фізичного імені не мають (Р1b-9): у даних їх
+    // називає UUID, тож призначене ім'я було б невідомим ключем схеми.
+    if (file.def.physicalName === false) return
     // Ліміт рахується з похідними таблицями: `makeObjectName` їх мовчки
     // обрізав би, і дві таблиці регістра розійшлися б із його ім'ям.
     const keys =

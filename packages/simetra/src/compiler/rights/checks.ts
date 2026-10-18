@@ -530,8 +530,8 @@ function checkSources(ctx: RightsCheckContext): Diagnostic[] {
 /**
  * Декларації прав без «Користувачів» можливі лише з прийнятим джерелом
  * членства (спека прав §4.6): інакше множини «моїх» значень і суб'єкти
- * призначень не мали б з чим зіставити поточного користувача. Права-1b
- * додадуть до декларацій ролі й набори прав.
+ * призначень не мали б з чим зіставити поточного користувача. Роль і набір
+ * прав — теж декларації: без користувачів їх нікому призначити.
  */
 function checkUsers(ctx: RightsCheckContext): Diagnostic[] {
   if (ctx.objects.some(isUsers) || ctx.project.membershipSources.length > 0) {
@@ -542,6 +542,7 @@ function checkUsers(ctx: RightsCheckContext): Diagnostic[] {
     ctx.project.assignmentSources.length > 0 ||
     ctx.objects.some(
       (o) =>
+        KIND_REGISTRY[o.kind].rightsDeclaration !== undefined ||
         ownershipOf(o).length > 0 ||
         accessOf(o).length > 0 ||
         bindingOf(o) !== undefined

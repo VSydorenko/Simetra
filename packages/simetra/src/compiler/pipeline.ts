@@ -34,6 +34,7 @@ import { checkIntegrity } from "./stages/integrity"
 import {
   accessDimensionContracts,
   rightsContracts,
+  roleContracts,
   sourceContracts,
 } from "./rights/contracts"
 import { checkLinks } from "./stages/links"
@@ -432,7 +433,8 @@ export async function runStages(
         stage2.references,
         physical,
         stage1.project
-      )
+      ),
+      roleContracts(stage1.objects, stage2.references)
     ),
     presentation: buildPresentation(
       stage1.objects,

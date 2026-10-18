@@ -80,6 +80,9 @@ export {
   membershipSourceSchema,
   ownershipSchema,
   rightsCarrierSchema,
+  rightsSetSchema,
+  roleAssignedOnSchema,
+  roleSchema,
   type AccessDimension,
   type AccessMapping,
   type AssignedOn,
@@ -87,6 +90,9 @@ export {
   type CustomAction,
   type MembershipSource,
   type RightsCarrier,
+  type RightsSet,
+  type Role,
+  type RoleAssignedOn,
 } from "./rights"
 export {
   customTableSchema,

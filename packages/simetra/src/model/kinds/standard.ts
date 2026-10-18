@@ -158,6 +158,14 @@ export type ReferenceRole =
   | "source.scopeKind"
   /** Контейнер рівня джерела призначень (`assignedOn.container`). */
   | "source.container"
+  /** Набір прав у `include` набору чи ролі. */
+  | "rights.include"
+  /** Вид скоупу рівня ролі (`assignedOn.scopeKind`). */
+  | "role.scopeKind"
+  /** Контейнер рівня ролі (`assignedOn.container`). */
+  | "role.container"
+  /** Джерело призначень у `sourceKeys[].source` ролі. */
+  | "role.sourceKey"
 
 export interface FoundReference {
   /** JSON Pointer (RFC 6901) на місце посилання у файлі. */
@@ -317,6 +325,11 @@ export interface KindDefinition {
   rightsBinding?: true
   /** The object can be the value catalog of a project access dimension. */
   accessDimensionTarget?: true
+  /**
+   * The object declares rights (rights spec §4.1): a rights set or a role.
+   * Only a set can be included; every declaration needs the users catalog.
+   */
+  rightsDeclaration?: "set" | "role"
   materializes: "table" | "enumType" | "none"
   /**
    * Що приймає `<Ім'я>.sql` об'єкта (спека П2 §3, «Дослівний SQL»):
@@ -337,6 +350,12 @@ export interface KindDefinition {
    * нічого не виводять із виду, тож стадія 3 бере їх з опису.
    */
   declared: boolean
+  /**
+   * `false` — фізичного імені у виду немає (Р1b-9): ні таблиці, ні тригера,
+   * ні мітки в даних, бо в даних об'єкт називає його UUID. Тоді поля немає
+   * і в схемі, стадія 2 його не вимагає, а `fix` не призначає.
+   */
+  physicalName?: false
   /**
    * Вид має мітку виду (`kindLabel`): вона відрізняє поліморфні пари й
    * ідентифікує об'єкт у контракті прав. Для прийнятої таблиці мітка

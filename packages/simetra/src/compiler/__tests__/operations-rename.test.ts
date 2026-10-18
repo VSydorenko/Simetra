@@ -475,6 +475,8 @@ function targetOf(model: CompiledModel, id: string): ElementTarget | undefined {
   const projectElement = [
     ...model.scopeKinds,
     ...model.project.accessDimensions,
+    ...model.project.membershipSources,
+    ...model.project.assignmentSources,
   ].find((k) => k.id === id)
   if (projectElement !== undefined) {
     return { kind: "Project", element: [projectElement.name] }

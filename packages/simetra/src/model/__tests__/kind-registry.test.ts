@@ -16,6 +16,8 @@ import {
   customTableSchema,
   documentSchema,
   informationRegisterSchema,
+  rightsSetSchema,
+  roleSchema,
 } from "../schemas"
 
 function column(
@@ -45,13 +47,12 @@ describe("KIND_REGISTRY", () => {
   it("key order starts with the header and covers every schema key", () => {
     for (const kind of METADATA_KINDS) {
       const def = KIND_REGISTRY[kind]
-      expect(def.keyOrder.slice(0, 5)).toEqual([
-        "$schema",
-        "id",
-        "kind",
-        "name",
-        "physicalName",
-      ])
+      // Вид без фізичного імені (Р1b-9) має шапку без `physicalName`.
+      const header = ["$schema", "id", "kind", "name", "physicalName"].slice(
+        0,
+        def.physicalName === false ? 4 : 5
+      )
+      expect(def.keyOrder.slice(0, header.length)).toEqual(header)
       const shape = (def.schema as z.ZodObject).shape
       expect([...def.keyOrder].sort()).toEqual(Object.keys(shape).sort())
     }
@@ -930,5 +931,78 @@ describe("expectsKindLabel", () => {
       if (def.rowLevelSecurity !== "enabled" || def.declared) continue
       expect(expectsKindLabel(kind, {}), kind).toBe(true)
     }
+  })
+})
+
+describe("rights declarations", () => {
+  it("are storage-less kinds without a physical name", () => {
+    for (const [kind, dir] of [
+      ["RightsSet", "rights-sets"],
+      ["Role", "roles"],
+    ] as const) {
+      const def = KIND_REGISTRY[kind]
+      expect(kindByDir(dir)?.kind).toBe(kind)
+      expect(def).toMatchObject({
+        materializes: "none",
+        referenceable: false,
+        writePattern: "none",
+        scope: "absent",
+        physicalName: false,
+      })
+      expect(
+        Object.keys((def.schema as z.ZodObject).shape),
+        kind
+      ).not.toContain("physicalName")
+    }
+    // Факт `physicalName: false` мають саме види без поля у схемі.
+    for (const kind of METADATA_KINDS) {
+      const def = KIND_REGISTRY[kind]
+      expect("physicalName" in (def.schema as z.ZodObject).shape, kind).toBe(
+        def.physicalName !== false
+      )
+    }
+  })
+
+  it("index the includes, the container and the project elements of a role", () => {
+    const role = roleSchema.parse({
+      kind: "Role",
+      name: "ProjectLead",
+      assignedOn: { container: { kind: "Catalog", name: "Project" } },
+      include: [{ kind: "RightsSet", name: "Readers" }],
+      sourceKeys: [{ source: "grants", key: "lead" }],
+    })
+    expect(
+      KIND_REGISTRY.Role.references(role).map((r) => [r.pointer, r.role])
+    ).toEqual([
+      ["/include/0", "rights.include"],
+      ["/assignedOn/container", "role.container"],
+    ])
+    expect(
+      KIND_REGISTRY.Role.projectReferences?.(role).map((r) => [
+        r.pointer,
+        r.collection,
+        r.role,
+      ])
+    ).toEqual([["/sourceKeys/0/source", "assignmentSources", "role.sourceKey"]])
+    const scoped = roleSchema.parse({
+      kind: "Role",
+      name: "OrgAdmin",
+      assignedOn: { scopeKind: "org" },
+    })
+    expect(
+      KIND_REGISTRY.Role.projectReferences?.(scoped).map((r) => [
+        r.pointer,
+        r.collection,
+        r.role,
+      ])
+    ).toEqual([["/assignedOn/scopeKind", "scopeKinds", "role.scopeKind"]])
+    const set = rightsSetSchema.parse({
+      kind: "RightsSet",
+      name: "Editors",
+      include: [{ kind: "RightsSet", name: "Readers" }],
+    })
+    expect(
+      KIND_REGISTRY.RightsSet.references(set).map((r) => [r.pointer, r.role])
+    ).toEqual([["/include/0", "rights.include"]])
   })
 })

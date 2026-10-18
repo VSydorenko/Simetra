@@ -884,6 +884,47 @@ export function kitchenSink(): Map<string, string> {
     scope: "none",
   }
 
+  // Набори й ролі (спека прав §4.1): роль кожного рівня, з ключами в
+  // джерелах свого рівня й включеннями. Id — поза лічильником, як у джерел.
+  const declaration = (n: number, kind: string, name: string) => ({
+    ...schemaHint(kind),
+    id: uuid(n),
+    kind,
+    name,
+  })
+  const viewers = declaration(9940, "RightsSet", "Viewers")
+  const editors = {
+    ...declaration(9941, "RightsSet", "Editors"),
+    include: [ref("RightsSet", "Viewers")],
+  }
+  const admin = {
+    ...declaration(9942, "Role", "Admin"),
+    assignedOn: "global",
+    fullAccess: true,
+    order: 0,
+    sourceKeys: [{ source: "globalGrants", key: "admin" }],
+    include: [ref("RightsSet", "Editors")],
+  }
+  const orgOwner = {
+    ...declaration(9943, "Role", "OrgOwner"),
+    assignedOn: { scopeKind: "org" },
+    order: 1,
+    assignable: false,
+    maxHolders: 1,
+    rootCreator: true,
+    sourceKeys: [{ source: "orgGrants", key: "org_owner" }],
+    include: [ref("RightsSet", "Viewers")],
+  }
+  const partnerManager = {
+    ...declaration(9944, "Role", "PartnerManager"),
+    assignedOn: { container: ref("Catalog", "Partner") },
+    sourceKeys: [{ source: "partnerGrants", key: "manager" }],
+  }
+  const visitor = {
+    ...declaration(9945, "Role", "Visitor"),
+    assignedOn: "everyUser",
+  }
+
   const entries: Record<string, unknown> = {
     "project.meta.json": project,
     "catalogs/Organization/Organization.meta.json": organization,
@@ -903,6 +944,12 @@ export function kitchenSink(): Map<string, string> {
     "custom-tables/RoleGrant/RoleGrant.meta.json": roleGrant,
     "event-subscriptions/StampItem/StampItem.meta.json": stampItem,
     "event-subscriptions/UserDeleted/UserDeleted.meta.json": userDeleted,
+    "rights-sets/Viewers/Viewers.meta.json": viewers,
+    "rights-sets/Editors/Editors.meta.json": editors,
+    "roles/Admin/Admin.meta.json": admin,
+    "roles/OrgOwner/OrgOwner.meta.json": orgOwner,
+    "roles/PartnerManager/PartnerManager.meta.json": partnerManager,
+    "roles/Visitor/Visitor.meta.json": visitor,
     "sql/public/subscription-handlers.sql": handlers,
     // Функція значень виміру `partner` — у закритій формі (Р1a-14): читає
     // лише таблицю застосунку й поточного користувача.

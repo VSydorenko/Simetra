@@ -20,6 +20,24 @@ export function projectTarget(
 }
 
 /**
+ * Ціль посилання з файлу об'єкта за вказівником і роллю — як `projectTarget`,
+ * для полів самого об'єкта (рівень і включення ролі).
+ */
+export function objectTarget(
+  object: { file: string },
+  pointer: string,
+  role: ResolvedReference["role"],
+  references: readonly ResolvedReference[]
+): string | undefined {
+  return references.find(
+    (r) =>
+      r.from.file === object.file &&
+      r.from.pointer === pointer &&
+      r.role === role
+  )?.to.id
+}
+
+/**
  * Попередні стадії гарантують наявність (id, резолв, перевірене правило);
  * відсутність — дефект компілятора, а не помилка метаданих.
  */

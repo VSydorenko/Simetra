@@ -1,12 +1,22 @@
 import { describe, expect, it } from "vitest"
 import { completeFiles } from "simetra/compiler"
 import {
+  GRANT_FILE,
+  GRANTS_SOURCE_ID,
   MEMBER_FILE,
   ORG_KIND_ID,
   PROJECT_ID,
+  ROLE_FILE,
+  SET_FILE,
+  SUPPORT_ID,
   TASK_FILE,
+  TASK_READERS_ID,
   compileRights,
+  grantTable,
+  grantsSource,
   rightsFiles,
+  rightsSet,
+  role,
 } from "./fixtures/rights"
 import { uuid } from "./helpers"
 
@@ -14,14 +24,11 @@ type Files = ReturnType<typeof rightsFiles>
 
 const PROJECT = "project.meta.json"
 const MEMBERSHIP_FILE = "custom-tables/Membership/Membership.meta.json"
-const GRANT_FILE = "custom-tables/RoleGrant/RoleGrant.meta.json"
 const MEMBER_REGION_FILE =
   "information-registers/MemberRegion/MemberRegion.meta.json"
 const USERS_FILE = "catalogs/Users/Users.meta.json"
 const MEMBERSHIP_ID = uuid(6100)
-const GRANT_ID = uuid(6110)
 const MEMBERS_SOURCE_ID = uuid(6120)
-const GRANTS_SOURCE_ID = uuid(6121)
 
 const ref = (kind: string, name: string) => ({ kind, name })
 
@@ -51,25 +58,6 @@ function membershipTable(overrides: Record<string, unknown> = {}) {
   }
 }
 
-function grantTable(overrides: Record<string, unknown> = {}) {
-  return {
-    id: GRANT_ID,
-    kind: "CustomTable",
-    name: "RoleGrant",
-    physicalName: "role_grant",
-    kindLabel: "role_grant",
-    scope: "none",
-    columns: [
-      column(6111, "id", "id", "UUID"),
-      column(6112, "memberId", "member_id", "UUID"),
-      column(6113, "roleKey", "role_key", "Text"),
-      column(6114, "projectId", "project_id", "UUID"),
-    ],
-    primaryKey: { columns: ["id"] },
-    ...overrides,
-  }
-}
-
 function membersSource(overrides: Record<string, unknown> = {}) {
   return {
     id: MEMBERS_SOURCE_ID,
@@ -77,17 +65,6 @@ function membersSource(overrides: Record<string, unknown> = {}) {
     scopeKind: "org",
     table: ref("CustomTable", "Membership"),
     columns: { scope: "orgId", user: "userId", active: "isActive" },
-    ...overrides,
-  }
-}
-
-function grantsSource(overrides: Record<string, unknown> = {}) {
-  return {
-    id: GRANTS_SOURCE_ID,
-    name: "grants",
-    assignedOn: { container: ref("Catalog", "Project") },
-    table: ref("CustomTable", "RoleGrant"),
-    columns: { member: "memberId", role: "roleKey", container: "projectId" },
     ...overrides,
   }
 }
@@ -410,9 +387,11 @@ describe("adopted sources", () => {
   it("requires users or a membership source for rights declarations", async () => {
     const withoutUsers = (
       project: Record<string, unknown>,
-      task: Record<string, unknown> = {}
+      task: Record<string, unknown> = {},
+      extra: Record<string, Record<string, unknown>> = {}
     ) => {
       const files = adopted(project, {
+        ...extra,
         [TASK_FILE]: {
           trackAuthor: false,
           attributes: [
@@ -448,6 +427,7 @@ describe("adopted sources", () => {
       string,
       Record<string, unknown>,
       Record<string, unknown>,
+      Record<string, Record<string, unknown>>?,
     ][] = [
       ["ownership", {}, { ownership: ["assignee"] }],
       [
@@ -458,12 +438,26 @@ describe("adopted sources", () => {
       ["containerBinding", {}, { containerBinding: "project" }],
       ["accessDimensions", { accessDimensions: [region] }, {}],
       ["assignmentSources", { assignmentSources: [grantsSource()] }, {}],
+      [
+        "Role",
+        {},
+        {},
+        { [ROLE_FILE("Support")]: role(SUPPORT_ID, "Support", "global") },
+      ],
+      [
+        "RightsSet",
+        {},
+        {},
+        {
+          [SET_FILE("TaskReaders")]: rightsSet(TASK_READERS_ID, "TaskReaders"),
+        },
+      ],
     ]
-    for (const [label, project, task] of declarations) {
-      expect(await codes(withoutUsers(project, task)), label).toContainEqual([
-        "rights.users-missing",
-        "",
-      ])
+    for (const [label, project, task, extra] of declarations) {
+      expect(
+        await codes(withoutUsers(project, task, extra)),
+        label
+      ).toContainEqual(["rights.users-missing", ""])
     }
     // Без декларацій прав «Користувачі» не потрібні.
     await compiled(withoutUsers({}))

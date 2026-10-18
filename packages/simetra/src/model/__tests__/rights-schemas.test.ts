@@ -15,6 +15,8 @@ import {
   customActionSchema,
   membershipSourceSchema,
   rightsCarrierSchema,
+  rightsSetSchema,
+  roleSchema,
 } from "../schemas/rights"
 import { METADATA_KINDS } from "../schemas/metadata-kind"
 
@@ -283,5 +285,123 @@ describe("adopted sources", () => {
     })
     expect(parsed.membershipSources).toEqual([])
     expect(parsed.assignmentSources).toEqual([])
+  })
+})
+
+describe("rights sets and roles", () => {
+  const container = { container: { kind: "Catalog", name: "Project" } }
+  const role = (fields: Record<string, unknown>) => ({
+    kind: "Role",
+    name: "Lead",
+    assignedOn: "global",
+    ...fields,
+  })
+  const set = (fields: Record<string, unknown>) => ({
+    kind: "RightsSet",
+    name: "Readers",
+    ...fields,
+  })
+
+  it.each([
+    { case: "a global role", schema: roleSchema, input: role({}), ok: true },
+    {
+      case: "a role of every user",
+      schema: roleSchema,
+      input: role({ assignedOn: "everyUser" }),
+      ok: true,
+    },
+    {
+      case: "a role on a scope kind",
+      schema: roleSchema,
+      input: role({ assignedOn: { scopeKind: "org" } }),
+      ok: true,
+    },
+    {
+      case: "a role on a container",
+      schema: roleSchema,
+      input: role({ assignedOn: container }),
+      ok: true,
+    },
+    {
+      case: "a role with a physical name",
+      schema: roleSchema,
+      input: role({ physicalName: "lead" }),
+      ok: false,
+    },
+    {
+      case: "a role with a title",
+      schema: roleSchema,
+      input: role({ title: { en: "Lead" } }),
+      ok: false,
+    },
+    {
+      case: "a role with no holders",
+      schema: roleSchema,
+      input: role({ maxHolders: 0 }),
+      ok: false,
+    },
+    {
+      case: "a role with a negative order",
+      schema: roleSchema,
+      input: role({ order: -1 }),
+      ok: false,
+    },
+    {
+      case: "a role with an empty source key",
+      schema: roleSchema,
+      input: role({ sourceKeys: [{ source: "grants", key: "" }] }),
+      ok: false,
+    },
+    { case: "a set", schema: rightsSetSchema, input: set({}), ok: true },
+    {
+      case: "a set with a level",
+      schema: rightsSetSchema,
+      input: set({ assignedOn: "global" }),
+      ok: false,
+    },
+    {
+      case: "a set with full access",
+      schema: rightsSetSchema,
+      input: set({ fullAccess: true }),
+      ok: false,
+    },
+    {
+      case: "a set with a physical name",
+      schema: rightsSetSchema,
+      input: set({ physicalName: "readers" }),
+      ok: false,
+    },
+    // «Кожен дійсний користувач» — рівень лише ролі, не джерела (Р1b-3).
+    {
+      case: "a source of every user",
+      schema: assignmentSourceSchema,
+      input: {
+        name: "grants",
+        assignedOn: "everyUser",
+        table: { kind: "CustomTable", name: "RoleGrant" },
+        columns: { member: "memberId", role: "roleKey" },
+      },
+      ok: false,
+    },
+  ])("parses $case strictly", ({ schema, input, ok }) => {
+    expect(schema.safeParse(input).success, JSON.stringify(input)).toBe(ok)
+  })
+
+  it("fills role defaults", () => {
+    expect(roleSchema.parse(role({}))).toEqual({
+      kind: "Role",
+      name: "Lead",
+      assignedOn: "global",
+      fullAccess: false,
+      assignable: true,
+      rootCreator: false,
+      sourceKeys: [],
+      include: [],
+    })
+    expect(rightsSetSchema.parse(set({}))).toEqual({
+      kind: "RightsSet",
+      name: "Readers",
+      include: [],
+    })
   })
 })

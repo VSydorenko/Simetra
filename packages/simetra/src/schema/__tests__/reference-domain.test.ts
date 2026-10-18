@@ -36,10 +36,12 @@ describe("reference domain", () => {
     const { model } = await compile(readReferenceDomain())
     const kinds = new Set(model!.objects.map((object) => object.kind))
     // PgEnum свідомо поза доменом: енам-тип Postgres — форма прийнятої схеми,
-    // а новий застосунок бере перерахування (спека П2 §4).
+    // а новий застосунок бере перерахування (спека П2 §4). Ролі й набори прав
+    // приходять у приклади з переходом прикладів (план Права-2).
     expect([...kinds].sort()).toEqual(
-      Object.keys(KIND_REGISTRY)
-        .filter((kind) => kind !== "PgEnum")
+      Object.values(KIND_REGISTRY)
+        .filter((def) => def.kind !== "PgEnum" && !def.rightsDeclaration)
+        .map((def) => def.kind)
         .sort()
     )
   })

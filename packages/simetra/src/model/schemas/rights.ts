@@ -1,6 +1,7 @@
 import { z } from "zod"
 import { elementNameSchema, metadataIdSchema } from "./identity"
 import { metadataRefSchema } from "./metadata-ref"
+import { objectHeaderShape } from "./object-header"
 import { appSchemaNameSchema } from "./pg-schema"
 
 /**
@@ -257,3 +258,101 @@ export const assignmentSourceSchema = z.strictObject({
 })
 
 export type AssignmentSource = z.infer<typeof assignmentSourceSchema>
+
+/**
+ * Рівень ролі (спека прав §4.1, Рх7): рівні джерела плюс «кожен дійсний
+ * користувач» — без рядків призначень, тож джерелам ця форма не потрібна
+ * (Р1b-3).
+ */
+export const roleAssignedOnSchema = z
+  .union([
+    assignedOnSchema,
+    z.literal("everyUser").meta({
+      description: "Every authenticated user, with no assignment rows.",
+    }),
+  ])
+  .meta({
+    description:
+      "Level of the role: global, every user, a scope kind or a rights container.",
+  })
+
+export type RoleAssignedOn = z.infer<typeof roleAssignedOnSchema>
+
+/**
+ * Шапка декларацій прав: без PG-схеми, скоупу й фізичного імені — у базі
+ * набір і роль живуть лише в згенерованій проєкції, а в даних їх називає
+ * UUID (Р1b-9). `title`/`description` відкладено до плану зі споживачем
+ * (Р1b-14).
+ */
+const rightsDeclarationHeader = z.object(objectHeaderShape).omit({
+  schema: true,
+  scope: true,
+  physicalName: true,
+  title: true,
+  description: true,
+}).shape
+
+const includeSchema = z.array(metadataRefSchema).default([]).meta({
+  description: "Rights sets whose grants this declaration includes.",
+})
+
+/**
+ * Набір прав (спека прав §4.1, Рх16): іменована група грантів, яку
+ * включають ролі й інші набори. Цикл включень — помилка компілятора.
+ */
+export const rightsSetSchema = z.strictObject({
+  ...rightsDeclarationHeader,
+  kind: z
+    .literal("RightsSet")
+    .meta({ description: "Metadata kind; always RightsSet." }),
+  include: includeSchema,
+})
+
+export type RightsSet = z.infer<typeof rightsSetSchema>
+
+/**
+ * Роль (спека прав §4.1): рівень призначення, повні права, включені набори.
+ * `assignedOn` призначається раз (Рх20); `sourceKeys` — ключі ролі в даних
+ * прийнятих джерел призначень (§4.7).
+ */
+export const roleSchema = z.strictObject({
+  ...rightsDeclarationHeader,
+  kind: z.literal("Role").meta({ description: "Metadata kind; always Role." }),
+  assignedOn: roleAssignedOnSchema,
+  fullAccess: z.boolean().default(false).meta({
+    description:
+      "Bypass the rights checks on the objects of the role level; not on a container role or every user.",
+  }),
+  order: z.number().int().nonnegative().optional().meta({
+    description: "Position of the role in the rights matrix.",
+  }),
+  assignable: z.boolean().default(true).meta({
+    description:
+      "Whether administrators assign the role; an owner role is handed over by its own command.",
+  }),
+  maxHolders: z.number().int().positive().optional().meta({
+    description: "Most holders of the role on one level value.",
+  }),
+  rootCreator: z.boolean().default(false).meta({
+    description:
+      "Scope level only: the command that creates a scope root assigns this role to its creator.",
+  }),
+  sourceKeys: z
+    .array(
+      z.strictObject({
+        source: elementNameSchema.meta({
+          description: "Name of a project assignment source of the same level.",
+        }),
+        key: z.string().min(1).meta({
+          description: "Role key in the role column of the source.",
+        }),
+      })
+    )
+    .default([])
+    .meta({
+      description: "Keys that name this role in adopted assignment sources.",
+    }),
+  include: includeSchema,
+})
+
+export type Role = z.infer<typeof roleSchema>

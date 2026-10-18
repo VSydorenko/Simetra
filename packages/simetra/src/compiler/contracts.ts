@@ -376,6 +376,25 @@ export interface AssignmentSourceContract {
   active?: string
 }
 
+/** Рівень ролі: рівні джерела плюс «кожен дійсний користувач» (Р1b-3). */
+export type CompiledRoleLevel = CompiledAssignedOn | { level: "everyUser" }
+
+/** Роль (спека прав §4.1): рівень, повні права й замкнені включення. */
+export interface RoleContract {
+  roleId: string
+  name: string
+  assignedOn: CompiledRoleLevel
+  fullAccess: boolean
+  order?: number
+  assignable: boolean
+  maxHolders?: number
+  rootCreator: boolean
+  /** Ключі ролі в прийнятих джерелах призначень, у порядку файлу. */
+  sourceKeys: { sourceId: string; key: string }[]
+  /** Транзитивне замикання включених наборів, за id. */
+  sets: string[]
+}
+
 export interface Contracts {
   /** За `documentId`. */
   posting: PostingContract[]
@@ -405,6 +424,8 @@ export interface Contracts {
   membershipSources: MembershipSourceContract[]
   /** За `sourceId`. */
   assignmentSources: AssignmentSourceContract[]
+  /** За `roleId`. */
+  roles: RoleContract[]
 }
 
 /** Функція контракту, якої ще немає в БД, з місцем у метаданих для діагностики. */
@@ -712,7 +733,8 @@ export function buildContracts(
   eventSubscriptions: readonly EventSubscriptionContract[],
   rights: readonly RightsContract[],
   accessDimensions: readonly AccessDimensionContract[],
-  sources: Pick<Contracts, "membershipSources" | "assignmentSources">
+  sources: Pick<Contracts, "membershipSources" | "assignmentSources">,
+  roles: readonly RoleContract[]
 ): Contracts {
   const registers = objects
     .filter(isRegister)
@@ -783,6 +805,7 @@ export function buildContracts(
     accessDimensions: [...accessDimensions],
     membershipSources: [...sources.membershipSources],
     assignmentSources: [...sources.assignmentSources],
+    roles: [...roles],
   }
 }
 

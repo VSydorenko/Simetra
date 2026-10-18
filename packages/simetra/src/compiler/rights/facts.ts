@@ -1,15 +1,20 @@
-import type {
-  AccessMapping,
-  ActionEffects,
-  CustomAction,
-  PhysicalSnapshot,
-  Project,
-  RightsCarrier,
+import {
+  KIND_REGISTRY,
+  type AccessMapping,
+  type ActionEffects,
+  type AssignedOn,
+  type CustomAction,
+  type MetadataRef,
+  type PhysicalSnapshot,
+  type Project,
+  type RightsCarrier,
+  type RoleAssignedOn,
 } from "simetra/model"
+import type { CompiledAssignedOn, CompiledRoleLevel } from "../contracts"
 import type { ParsedObject } from "../stages/files"
 import type { ResolvedReference } from "../stages/identity"
 import type { CarrierContext } from "./carriers"
-import { must } from "./references"
+import { must, objectTarget, projectTarget } from "./references"
 
 // Спільні факти прав для правил стадії 4 і контрактів: обидва читають ті самі
 // поля розібраного об'єкта й ті самі рядки індексу посилань, тож і читання
@@ -132,4 +137,89 @@ export function carrierContext(input: {
     project: input.project,
     byId: input.byId ?? new Map(input.objects.map((o) => [must(o.id), o])),
   }
+}
+
+/** Декларації прав одного факту реєстру (`rightsDeclaration`), у порядку файлів. */
+export function declarationsOf(
+  objects: readonly ParsedObject[],
+  which: "set" | "role"
+): ParsedObject[] {
+  return objects.filter(
+    (o) => KIND_REGISTRY[o.kind].rightsDeclaration === which
+  )
+}
+
+/**
+ * Рівень у скомпільованій формі: id виду скоупу чи контейнера дає `target`
+ * з індексу посилань. `undefined` — ціль невідома: про неї звітує правило
+ * поля чи стадія 2. Одна функція для ролі й джерела, тож рівні порівнюються
+ * без перекладу.
+ */
+export function compileLevel(
+  level: AssignedOn,
+  target: (field: "scopeKind" | "container") => string | undefined
+): CompiledAssignedOn | undefined
+export function compileLevel(
+  level: RoleAssignedOn,
+  target: (field: "scopeKind" | "container") => string | undefined
+): CompiledRoleLevel | undefined
+export function compileLevel(
+  level: RoleAssignedOn,
+  target: (field: "scopeKind" | "container") => string | undefined
+): CompiledRoleLevel | undefined {
+  if (level === "global" || level === "everyUser") return { level }
+  if ("scopeKind" in level) {
+    const scopeKindId = target("scopeKind")
+    return scopeKindId === undefined
+      ? undefined
+      : { level: "scope", scopeKindId }
+  }
+  const containerId = target("container")
+  return containerId === undefined
+    ? undefined
+    : { level: "container", containerId }
+}
+
+/** Рівень ролі за посиланнями її файлу (`role.scopeKind`, `role.container`). */
+export function roleLevel(
+  object: ParsedObject,
+  references: readonly ResolvedReference[]
+): CompiledRoleLevel | undefined {
+  const level = (object.data as { assignedOn: RoleAssignedOn }).assignedOn
+  return compileLevel(level, (field) =>
+    objectTarget(object, `/assignedOn/${field}`, `role.${field}`, references)
+  )
+}
+
+/** Рівень джерела призначень `index` за посиланнями файлу проєкту. */
+export function sourceLevel(
+  project: Pick<Project, "assignmentSources">,
+  index: number,
+  references: readonly ResolvedReference[]
+): CompiledAssignedOn | undefined {
+  const at = `/assignmentSources/${index}/assignedOn`
+  return compileLevel(must(project.assignmentSources[index]).assignedOn, (f) =>
+    projectTarget(`${at}/${f}`, `source.${f}`, { references })
+  )
+}
+
+/** Ключ рівня для порівняння: однакові рівні мають однаковий ключ. */
+export function levelKey(level: CompiledRoleLevel): string {
+  if (level.level === "scope") return `scope:${level.scopeKindId}`
+  if (level.level === "container") return `container:${level.containerId}`
+  return level.level
+}
+
+/**
+ * Id включених наборів декларації в порядку `include`; `undefined` на
+ * позиції — ціль не резолвлено (звітувала стадія 2).
+ */
+export function includedSets(
+  object: ParsedObject,
+  references: readonly ResolvedReference[]
+): (string | undefined)[] {
+  const include = (object.data as { include: MetadataRef[] }).include
+  return include.map((_, index) =>
+    objectTarget(object, `/include/${index}`, "rights.include", references)
+  )
 }

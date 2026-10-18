@@ -51,6 +51,7 @@ import { mechanicsStandardNames } from "../mechanics-units"
 import { movementWrapperName } from "../movement-functions"
 import { standardOverrideNames, type PresentationFields } from "../presentation"
 import { checkRights } from "../rights/checks"
+import { checkRoles } from "../rights/role-checks"
 import { pgNamespaceKeys, type VerbatimUnit } from "../sql/units"
 import { PROJECT_FILE, objectKey, type ParsedObject } from "./files"
 import {
@@ -214,9 +215,9 @@ export function checkIntegrity(
   diagnostics.push(...checkUsersCatalogs(objects, model))
   diagnostics.push(...checkAuthorTracking(objects))
   diagnostics.push(...checkMembership(objects, scopeKinds))
-  diagnostics.push(
-    ...checkRights({ objects, references, model, scopeKinds, project, byId })
-  )
+  const rights = { objects, references, model, scopeKinds, project, byId }
+  diagnostics.push(...checkRights(rights))
+  diagnostics.push(...checkRoles(rights))
 
   for (const { file, pointer, name } of model.declaredNames) {
     if (isSqlReservedWord(name)) {
@@ -444,6 +445,10 @@ function referenceTargetError(
     return def.materializes === "table"
       ? undefined
       : "subscription.source-not-table"
+  }
+  // Включають лише набір прав: роль — вершина складання, а не група грантів.
+  if (role === "rights.include") {
+    return def.rightsDeclaration === "set" ? undefined : "rights.include-target"
   }
   if (role === "register.recorder") {
     return postsMovements(target.kind, target.data)

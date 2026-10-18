@@ -329,7 +329,12 @@ export function checkIdentity(
 
   for (const object of objects) {
     const data = object.data as Element
-    checkIdentified(object.file, "", data)
+    checkIdentified(
+      object.file,
+      "",
+      data,
+      KIND_REGISTRY[object.kind].physicalName !== false
+    )
     checkKindLabel(object, data)
     const scopeKind = checkDeclaration(object)
     if (scopeKind !== undefined) scopeOf.set(object, scopeKind)

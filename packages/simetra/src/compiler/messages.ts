@@ -1558,13 +1558,17 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "rights.container-target": {
     en: (p) =>
-      p.source === undefined
-        ? `Container binding "${p.attribute}" references "${p.name}", which is not a rights container`
-        : `Assignment source "${p.source}" is assigned on "${p.name}", which is not a rights container`,
+      p.role !== undefined
+        ? `Role "${p.role}" is assigned on "${p.name}", which is not a rights container`
+        : p.source === undefined
+          ? `Container binding "${p.attribute}" references "${p.name}", which is not a rights container`
+          : `Assignment source "${p.source}" is assigned on "${p.name}", which is not a rights container`,
     uk: (p) =>
-      p.source === undefined
-        ? `Прив'язка до контейнера "${p.attribute}" посилається на "${p.name}", який не є контейнером прав`
-        : `Джерело призначень "${p.source}" має рівень "${p.name}", який не є контейнером прав`,
+      p.role !== undefined
+        ? `Роль "${p.role}" має рівень "${p.name}", який не є контейнером прав`
+        : p.source === undefined
+          ? `Прив'язка до контейнера "${p.attribute}" посилається на "${p.name}", який не є контейнером прав`
+          : `Джерело призначень "${p.source}" має рівень "${p.name}", який не є контейнером прав`,
     hint: {
       en: "Set rightsContainer: true on the target catalog or name another attribute.",
       uk: "Задайте rightsContainer: true на довіднику-цілі або назвіть інший реквізит.",
@@ -1759,6 +1763,96 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     hint: {
       en: "Declare a catalog with role: users, or an adopted membership source on a provider where the user id is the session subject.",
       uk: "Оголосіть довідник з role: users або прийняте джерело членства на провайдері, де id користувача — суб'єкт сесії.",
+    },
+  },
+  "rights.include-target": {
+    en: (p) =>
+      `include names ${p.kind} "${p.name}", but only a rights set can be included`,
+    uk: (p) =>
+      `include називає ${p.kind} "${p.name}", але включити можна лише набір прав`,
+    hint: {
+      en: "Move the shared grants into a RightsSet and include it in both roles.",
+      uk: "Винесіть спільні гранти в RightsSet і включіть його в обидві ролі.",
+    },
+  },
+  "rights.include-cycle": {
+    en: (p) => `Rights sets include each other in a cycle: ${p.chain}`,
+    uk: (p) => `Набори прав включають одне одного по колу: ${p.chain}`,
+    hint: {
+      en: "Remove one include of the chain.",
+      uk: "Приберіть одне включення ланцюжка.",
+    },
+  },
+  "rights.scope-without-membership": {
+    en: (p) =>
+      `The role is assigned on scope kind "${p.scopeKind}", which has no membership`,
+    uk: (p) =>
+      `Роль має рівень виду скоупу "${p.scopeKind}", у якого немає членства`,
+    hint: {
+      en: "Declare a membership catalog of the scope kind or an adopted membership source; a scope role is assigned to members.",
+      uk: "Оголосіть довідник членства виду скоупу чи прийняте джерело членства: роль рівня скоупу призначають учаснику.",
+    },
+  },
+  "rights.full-access-level": {
+    en: (p) =>
+      p.level === "container"
+        ? "fullAccess is not allowed on a container role"
+        : "fullAccess is not allowed on a role of every user",
+    uk: (p) =>
+      p.level === "container"
+        ? "fullAccess не дозволено на контейнерній ролі"
+        : "fullAccess не дозволено на ролі кожного користувача",
+    hint: {
+      en: "Full access belongs to a global or a scope role; list the grants of this role instead.",
+      uk: "Повні права — властивість глобальної ролі чи ролі рівня скоупу; перелічіть гранти цієї ролі.",
+    },
+  },
+  "rights.root-creator-level": {
+    en: (p) =>
+      `rootCreator is allowed on a scope role only, not on a ${p.level} role`,
+    uk: (p) =>
+      `rootCreator дозволено лише на ролі рівня скоупу, а не на ролі рівня ${p.level}`,
+    hint: {
+      en: "The creator of a scope root gets a role of that scope kind; assign other levels explicitly.",
+      uk: "Творець кореня скоупу отримує роль цього виду скоупу; інші рівні призначайте явно.",
+    },
+  },
+  "rights.root-creator-duplicate": {
+    en: (p) =>
+      `Scope kind "${p.scopeKind}" already has a root creator role in ${p.firstFile}`,
+    uk: (p) =>
+      `Вид скоупу "${p.scopeKind}" уже має роль творця кореня в ${p.firstFile}`,
+    hint: {
+      en: "Keep rootCreator on one role of the scope kind.",
+      uk: "Залиште rootCreator на одній ролі виду скоупу.",
+    },
+  },
+  "rights.source-unknown": {
+    en: (p) => `Assignment source "${p.source}" is not declared in the project`,
+    uk: (p) => `Джерело призначень "${p.source}" не оголошено в проєкті`,
+    hint: {
+      en: "Name a source from assignmentSources of project.meta.json.",
+      uk: "Назвіть джерело з assignmentSources файлу project.meta.json.",
+    },
+  },
+  "rights.source-key-level": {
+    en: (p) =>
+      `Assignment source "${p.source}" assigns on another level than the role`,
+    uk: (p) =>
+      `Джерело призначень "${p.source}" призначає на іншому рівні, ніж роль`,
+    hint: {
+      en: "Key the role in a source of its own level; a role of every user needs no source.",
+      uk: "Задайте ключ ролі в джерелі її рівня; ролі кожного користувача джерело не потрібне.",
+    },
+  },
+  "rights.source-key-duplicate": {
+    en: (p) =>
+      `Key "${p.key}" of assignment source "${p.source}" already names a role in ${p.firstFile}`,
+    uk: (p) =>
+      `Ключ "${p.key}" джерела призначень "${p.source}" уже називає роль у ${p.firstFile}`,
+    hint: {
+      en: "Give each role its own key in the source.",
+      uk: "Дайте кожній ролі власний ключ у джерелі.",
     },
   },
   "rights.ownership-target": {

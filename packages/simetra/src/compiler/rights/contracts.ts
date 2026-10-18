@@ -5,16 +5,17 @@ import {
   type ActionEffects,
   type PhysicalSnapshot,
   type Project,
+  type Role,
 } from "simetra/model"
 import {
   mainTableOf,
   type AccessDimensionContract,
   type AssignmentSourceContract,
-  type CompiledAssignedOn,
   type Contracts,
   type MembershipSourceContract,
   type RightsAction,
   type RightsContract,
+  type RoleContract,
 } from "../contracts"
 import { compareStrings } from "../diagnostics"
 import type { ParsedObject } from "../stages/files"
@@ -35,12 +36,16 @@ import {
   carrierContext,
   customActionEffects,
   customActionsOf,
+  declarationsOf,
   headerReference,
+  includedSets,
   isRightsContainer,
   ownershipOf,
+  roleLevel,
   scopeKindOf,
+  sourceLevel,
 } from "./facts"
-import { must, projectTarget } from "./references"
+import { must, objectTarget, projectTarget } from "./references"
 
 /**
  * Контракти прав (спека прав §3): запис має кожен об'єкт виду з непорожнім
@@ -323,27 +328,10 @@ export function sourceContracts(
     .map((source, index): AssignmentSourceContract => {
       const at = `/assignmentSources/${index}`
       const { table, column } = tableOf(at)
-      const level = source.assignedOn
-      const assignedOn: CompiledAssignedOn =
-        level === "global"
-          ? { level: "global" }
-          : "scopeKind" in level
-            ? {
-                level: "scope",
-                scopeKindId: must(
-                  toId(`${at}/assignedOn/scopeKind`, "source.scopeKind")
-                ),
-              }
-            : {
-                level: "container",
-                containerId: must(
-                  toId(`${at}/assignedOn/container`, "source.container")
-                ),
-              }
       return {
         sourceId: must(source.id),
         name: source.name,
-        assignedOn,
+        assignedOn: must(sourceLevel(project, index, references)),
         table,
         member: column("member"),
         role: column("role"),
@@ -357,4 +345,66 @@ export function sourceContracts(
     })
     .sort((a, b) => compareStrings(a.sourceId, b.sourceId))
   return { membershipSources, assignmentSources }
+}
+
+/**
+ * Транзитивне замикання включень декларації (набору чи ролі) — id наборів за
+ * зростанням. Викликається лише на моделі без помилок: цикли включень уже
+ * відхилила стадія 4, тож обхід скінченний; ромб дає набір один раз.
+ */
+export function includeClosure(
+  object: ParsedObject,
+  byId: ReadonlyMap<string, ParsedObject>,
+  references: readonly ResolvedReference[]
+): string[] {
+  const seen = new Set<string>()
+  const walk = (from: ParsedObject) => {
+    for (const id of includedSets(from, references)) {
+      if (seen.has(must(id))) continue
+      seen.add(must(id))
+      walk(must(byId.get(must(id))))
+    }
+  }
+  walk(object)
+  return [...seen].sort(compareStrings)
+}
+
+/**
+ * Контракти ролей (спека прав §4.1): рівень з id цілей, загальні властивості
+ * й замкнені включення. Викликається лише на моделі без помилок.
+ */
+export function roleContracts(
+  objects: readonly ParsedObject[],
+  references: readonly ResolvedReference[]
+): RoleContract[] {
+  const byId = new Map(objects.map((o) => [must(o.id), o]))
+  return declarationsOf(objects, "role")
+    .map((object): RoleContract => {
+      const role = object.data as Role
+      return {
+        roleId: must(object.id),
+        name: object.name,
+        assignedOn: must(roleLevel(object, references)),
+        fullAccess: role.fullAccess,
+        ...(role.order === undefined ? {} : { order: role.order }),
+        assignable: role.assignable,
+        ...(role.maxHolders === undefined
+          ? {}
+          : { maxHolders: role.maxHolders }),
+        rootCreator: role.rootCreator,
+        sourceKeys: role.sourceKeys.map((entry, index) => ({
+          sourceId: must(
+            objectTarget(
+              object,
+              `/sourceKeys/${index}/source`,
+              "role.sourceKey",
+              references
+            )
+          ),
+          key: entry.key,
+        })),
+        sets: includeClosure(object, byId, references),
+      }
+    })
+    .sort((a, b) => compareStrings(a.roleId, b.roleId))
 }

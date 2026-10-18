@@ -128,7 +128,9 @@
                       "Constant",
                       "CustomTable",
                       "PgEnum",
-                      "EventSubscription"
+                      "EventSubscription",
+                      "RightsSet",
+                      "Role"
                     ],
                     "description": "Kind of the referenced metadata object."
                   },
@@ -226,7 +228,9 @@
               "Constant",
               "CustomTable",
               "PgEnum",
-              "EventSubscription"
+              "EventSubscription",
+              "RightsSet",
+              "Role"
             ],
             "description": "Kind of the referenced metadata object."
           },
@@ -594,7 +598,9 @@
                   "Constant",
                   "CustomTable",
                   "PgEnum",
-                  "EventSubscription"
+                  "EventSubscription",
+                  "RightsSet",
+                  "Role"
                 ],
                 "description": "Kind of the referenced metadata object."
               },
@@ -628,7 +634,9 @@
                     "Constant",
                     "CustomTable",
                     "PgEnum",
-                    "EventSubscription"
+                    "EventSubscription",
+                    "RightsSet",
+                    "Role"
                   ],
                   "description": "Kind of the referenced metadata object."
                 },
@@ -970,7 +978,9 @@
                         "Constant",
                         "CustomTable",
                         "PgEnum",
-                        "EventSubscription"
+                        "EventSubscription",
+                        "RightsSet",
+                        "Role"
                       ],
                       "description": "Kind of the referenced metadata object."
                     },
@@ -1004,7 +1014,9 @@
                           "Constant",
                           "CustomTable",
                           "PgEnum",
-                          "EventSubscription"
+                          "EventSubscription",
+                          "RightsSet",
+                          "Role"
                         ],
                         "description": "Kind of the referenced metadata object."
                       },
