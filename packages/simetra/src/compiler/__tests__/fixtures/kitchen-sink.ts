@@ -141,7 +141,8 @@ const overrides = (name: string) => ({
 })
 
 /**
- * Кастомні дії: `approve` пише задані колонки, `archive` вимагає її — так
+ * Кастомні дії: `approve` пише задані колонки (на видах без запису — нічого,
+ * правило `rights.custom-action-effects`), `archive` вимагає її — так
  * задано обидва види вимог (слово словника й кастомна дія). Id — поза
  * лічильником, щоб не зсувати id решти фікстури.
  */
@@ -463,7 +464,8 @@ export function kitchenSink(): Map<string, string> {
     publicRead: "anon",
     periodicity: "Month",
     writeMode: "RecorderSubordinate",
-    customActions: customActions("read", ["price"], false),
+    // Підлеглий регістр пишуть лише рухи: кастомна дія без ефектів.
+    customActions: customActions("read", [], false),
     // Обидві форми мапінгу: реквізит і шлях до власника товару.
     access: [
       { attribute: "item", dimension: "item" },
@@ -501,7 +503,8 @@ export function kitchenSink(): Map<string, string> {
     registerType: "Balance",
     recorderTypes: [ref("Document", "Sale")],
     balanceControl: { resources: ["qty"] },
-    customActions: customActions("read", ["qty"], false),
+    // Регістр накопичення пишуть лише рухи: кастомна дія без ефектів.
+    customActions: customActions("read", [], false),
     // Обидві форми мапінгу: реквізит і шлях до власника товару.
     access: [
       { attribute: "item", dimension: "item" },

@@ -1484,6 +1484,26 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Перейменуйте кастомну дію: стандартна дія вже існує.",
     },
   },
+  "rights.custom-action-effects": {
+    en: (p) =>
+      p.reason === "noWrite"
+        ? `Custom action "${p.action}" declares effects, but no standard action of the kind writes its rows`
+        : `Custom action "${p.action}" writes tabular sections, but the kind has none`,
+    uk: (p) =>
+      p.reason === "noWrite"
+        ? `Кастомна дія "${p.action}" оголошує ефекти, але жодна стандартна дія виду не пише його рядків`
+        : `Кастомна дія "${p.action}" пише табличні частини, а вид їх не має`,
+    hint: {
+      en: (p) =>
+        p.reason === "noWrite"
+          ? "Rows of this kind are written only by posting movements: declare no effects, or move the action to a kind that writes."
+          : "Drop tabularSections: true or declare the action on a kind with tabular sections.",
+      uk: (p) =>
+        p.reason === "noWrite"
+          ? "Рядки цього виду пишуть лише рухи проведення: не оголошуйте ефектів або перенесіть дію на вид із записом."
+          : "Приберіть tabularSections: true або оголосіть дію на виді з табличними частинами.",
+    },
+  },
   "rights.requires-cycle": {
     en: (p) => `Custom action requirements form a cycle: ${p.actions}`,
     uk: (p) => `Вимоги кастомних дій утворюють цикл: ${p.actions}`,

@@ -103,6 +103,7 @@ export const COMPILER_RULES = [
   "membership.duplicate",
   "rights.action-unknown",
   "rights.custom-action-reserved",
+  "rights.custom-action-effects",
   "rights.requires-cycle",
   "rights.attribute-unknown",
   "rights.carrier-not-ref",

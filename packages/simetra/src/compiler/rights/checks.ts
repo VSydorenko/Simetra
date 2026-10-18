@@ -19,6 +19,7 @@ import {
   accessDimensionId,
   accessOf,
   bindingOf,
+  customActionEffects,
   customActionsOf,
   ownershipOf,
 } from "./contracts"
@@ -38,7 +39,8 @@ export interface RightsCheckContext {
  * Правила прав стадії 4 (спека прав §3): кастомні дії не повторюють
  * стандартних, вимоги називають відомі дії й не замикаються в цикл, а
  * колонки ефектів — власні колонки об'єкта. Контракт будується лише після
- * них, тож замикання вимог там не зустріне циклу.
+ * них, тож замикання вимог там не зустріне циклу. Ефекти кастомної дії —
+ * лише на виді, стандартні дії якого пишуть, і ТЧ — лише на виді з ТЧ.
  */
 export function checkRights(ctx: RightsCheckContext): Diagnostic[] {
   const diagnostics: Diagnostic[] = []
@@ -50,6 +52,12 @@ export function checkRights(ctx: RightsCheckContext): Diagnostic[] {
     )
     const actions = customActionsOf(object)
     const custom = new Set(actions.map((a) => a.name))
+    // Вид, жодна стандартна дія якого не пише (регістр накопичення,
+    // підлеглий регістр відомостей), пишуть лише рухи проведення (§5.3):
+    // ефект кастомної дії там відкрив би запис в обхід оболонки.
+    const writes = def
+      .actions(object.data)
+      .some((a) => a.effects.dml.length > 0)
     actions.forEach((action, index) => {
       const at = `/customActions/${index}`
       if (standard.has(action.name)) {
@@ -77,6 +85,32 @@ export function checkRights(ctx: RightsCheckContext): Diagnostic[] {
         )
       })
       diagnostics.push(...unknownHeader(object, action, index, ctx.references))
+      const effects = customActionEffects(action)
+      if (!writes && effects.dml.length > 0) {
+        diagnostics.push(
+          diagnostic(
+            "rights.custom-action-effects",
+            object.file,
+            `${at}/effects`,
+            {
+              action: action.name,
+              reason: "noWrite",
+            }
+          )
+        )
+      } else if (
+        effects.tabularSections &&
+        def.tabularSectionColumns === undefined
+      ) {
+        diagnostics.push(
+          diagnostic(
+            "rights.custom-action-effects",
+            object.file,
+            `${at}/effects/tabularSections`,
+            { action: action.name, reason: "noTabularSections" }
+          )
+        )
+      }
     })
     diagnostics.push(...requiresCycles(object, actions, standard))
     if (def.rightsExtents.includes("own")) {

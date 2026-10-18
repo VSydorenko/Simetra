@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { applyChanges, fixFiles } from "simetra/compiler"
+import { applyChanges, fixFiles, localize } from "simetra/compiler"
 import {
   MEMBER_REGION_ID,
   ORG_KIND_ID,
@@ -9,6 +9,10 @@ import {
   rightsFiles,
 } from "./fixtures/rights"
 import { uuid } from "./helpers"
+
+const STOCK_FILE = "accumulation-registers/RegionStock/RegionStock.meta.json"
+const MEMBER_REGION_FILE =
+  "information-registers/MemberRegion/MemberRegion.meta.json"
 
 function errors(result: Awaited<ReturnType<typeof compileRights>>) {
   return result.diagnostics.filter((d) => d.severity === "error")
@@ -200,6 +204,101 @@ describe("rights contract", () => {
     ).toEqual([
       ["rights.attribute-unknown", "/customActions/0/effects/header/0"],
     ])
+  })
+
+  it("refuses custom action effects on a kind whose standard actions write nothing", async () => {
+    const stock = (effects: Record<string, unknown>) =>
+      compileRights(
+        rightsFiles({
+          [STOCK_FILE]: {
+            id: uuid(7751),
+            kind: "AccumulationRegister",
+            name: "RegionStock",
+            physicalName: "region_stock",
+            kindLabel: "region_stock",
+            scope: "org",
+            registerType: "Turnover",
+            dimensions: [
+              {
+                id: uuid(7752),
+                name: "region",
+                physicalName: "region_id",
+                type: "Ref",
+                ref: { kind: "Catalog", name: "Region" },
+              },
+            ],
+            resources: [
+              {
+                id: uuid(7753),
+                name: "qty",
+                physicalName: "qty",
+                type: "Numeric",
+                precision: 15,
+                scale: 3,
+              },
+            ],
+            customActions: [{ id: uuid(7754), name: "approve", effects }],
+          },
+        })
+      )
+    const found = async (effects: Record<string, unknown>) =>
+      errors(await stock(effects)).map((d) => [d.code, d.pointer, d.params])
+    const noWrite = [
+      "rights.custom-action-effects",
+      "/customActions/0/effects",
+      { action: "approve", reason: "noWrite" },
+    ]
+    expect(await found({ header: ["qty"] })).toEqual([noWrite])
+    expect(await found({ header: "all" })).toEqual([noWrite])
+    expect(await found({ tabularSections: true })).toEqual([noWrite])
+    // Порожні ефекти нічого не пишуть, тож і на виді без запису законні.
+    expect(await found({ header: [], tabularSections: false })).toEqual([])
+  })
+
+  it("refuses tabular section effects on a kind without tabular sections", async () => {
+    const result = await compileRights(
+      rightsFiles({
+        [MEMBER_REGION_FILE]: {
+          customActions: [
+            {
+              id: uuid(7761),
+              name: "approve",
+              effects: { header: ["region"], tabularSections: true },
+            },
+          ],
+        },
+      })
+    )
+    expect(errors(result).map((d) => [d.code, d.pointer, d.params])).toEqual([
+      [
+        "rights.custom-action-effects",
+        "/customActions/0/effects/tabularSections",
+        { action: "approve", reason: "noTabularSections" },
+      ],
+    ])
+    expect(localize(errors(result)[0]!, "uk").message).not.toBe(
+      localize(errors(result)[0]!, "en").message
+    )
+  })
+
+  it("accepts header effects on an independent information register", async () => {
+    const contract = await contractOf(
+      rightsFiles({
+        [MEMBER_REGION_FILE]: {
+          customActions: [
+            {
+              id: uuid(7771),
+              name: "approve",
+              effects: { header: ["region"] },
+            },
+          ],
+        },
+      }),
+      MEMBER_REGION_ID
+    )
+    expect(contract.actions.find((a) => a.name === "approve")?.effects).toEqual(
+      { dml: ["update"], header: ["region_id"], tabularSections: false }
+    )
   })
 
   it("refuses a custom action named like a sibling attribute", async () => {
