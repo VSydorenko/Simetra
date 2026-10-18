@@ -613,6 +613,62 @@ describe("assignedOn of a role is assigned once", () => {
     }
   )
 
+  // Ціль рівня зникла чи змінила ім'я без переписаної ролі: ім'я лишається
+  // ім'ям, тож рівень уже не той самий id — це зміна.
+  it.each<
+    [string, unknown, (files: Map<string, string>) => void, string, string]
+  >([
+    [
+      "its scope kind is renamed",
+      { scopeKind: "org" },
+      (files) => {
+        const project = JSON.parse(files.get(RIGHTS_PROJECT)!) as Json
+        ;(project.scopeKinds as Json[])[0]!.name = "tenant"
+        files.set(RIGHTS_PROJECT, JSON.stringify(project))
+      },
+      `scope:${ORG_KIND_ID}`,
+      "scope?:org",
+    ],
+    [
+      "its scope kind is deleted",
+      { scopeKind: "org" },
+      (files) => {
+        const project = JSON.parse(files.get(RIGHTS_PROJECT)!) as Json
+        project.scopeKinds = []
+        files.set(RIGHTS_PROJECT, JSON.stringify(project))
+      },
+      `scope:${ORG_KIND_ID}`,
+      "scope?:org",
+    ],
+    [
+      "its container is deleted",
+      { container: { kind: "Catalog", name: "Project" } },
+      (files) => {
+        files.delete(PROJECT_CATALOG_FILE)
+      },
+      `container:${uuid(6020)}`,
+      "container?:Catalog:Project",
+    ],
+  ])(
+    "reports a level whose target %s",
+    (_, assignedOn, edit, before, after) => {
+      const baseline = level(assignedOn)
+      const current = new Map(baseline)
+      edit(current)
+      expect(
+        assignedOnceDiagnostics(baseline, current)
+          .filter((d) => d.file === ROLE)
+          .map((d) => [d.code, d.pointer, d.params])
+      ).toEqual([
+        [
+          "identity.assigned-once-changed",
+          "/assignedOn",
+          { field: "assignedOn", before, after },
+        ],
+      ])
+    }
+  )
+
   it("keeps a level across a rename of its scope kind and container", () => {
     const before = level({ scopeKind: "org" })
     // Перейменування переписує кожне посилання на вид скоупу й контейнер.

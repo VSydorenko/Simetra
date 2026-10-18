@@ -11,7 +11,6 @@ import {
   type AccessDimension,
   type AttributeCase,
   type Expr,
-  type GrantEntry,
   type MetadataKind,
   type MovementDecl,
   type Project,
@@ -28,6 +27,7 @@ import {
   valueAt,
   type Diagnostic,
 } from "../diagnostics"
+import { customActionsOf, grantRecords } from "../rights/facts"
 import { PROJECT_FILE, objectKey, type ParsedObject } from "./files"
 
 export interface ResolvedReference {
@@ -1298,35 +1298,26 @@ function resolveCustomActionReferences(
   if (KIND_REGISTRY[object.kind].rightsDeclaration === undefined) return
   const objectId = object.id
   if (objectId === undefined) return
-  const grants = (object.data as { grants: GrantEntry[] }).grants
-  grants.forEach((entry, index) => {
-    const [key, body] =
-      "grant" in entry
-        ? (["grant", entry.grant] as const)
-        : "deny" in entry
-          ? (["deny", entry.deny] as const)
-          : [undefined, undefined]
-    if (body === undefined || !Array.isArray(body.objects)) return
-    if (body.objects.length !== 1) return
-    const [only] = body.objects
+  for (const record of grantRecords(object)) {
+    const selector = record.objects
+    if (!Array.isArray(selector) || selector.length !== 1) continue
+    const [only] = selector
     const target = objectsByName.get(objectKey(only!.kind, only!.name))
-    const actions =
-      (target?.data as { customActions?: Element[] } | undefined)
-        ?.customActions ?? []
-    body.actions.forEach((name, at) => {
+    const actions = target === undefined ? [] : customActionsOf(target)
+    record.actions.forEach((name, at) => {
       const id = actions.find((a) => a.name === name)?.id
       if (typeof id !== "string") return
       references.push({
         from: {
           file: object.file,
-          pointer: `/grants/${index}/${key}/actions/${at}`,
+          pointer: `${record.pointer}/actions/${at}`,
           objectId,
         },
         to: { kind: "Element", id },
         role: "grant.customAction",
       })
     })
-  })
+  }
 }
 
 /**

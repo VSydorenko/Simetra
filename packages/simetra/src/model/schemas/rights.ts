@@ -1,4 +1,5 @@
 import { z } from "zod"
+import { STANDARD_ACTIONS } from "../kinds/actions"
 import { elementNameSchema, metadataIdSchema } from "./identity"
 import { metadataRefSchema } from "./metadata-ref"
 import { objectHeaderShape } from "./object-header"
@@ -326,7 +327,9 @@ export const objectSelectorSchema = z
   .union([
     z.array(metadataRefSchema).min(1),
     z.strictObject({
-      withAction: elementNameSchema.meta({
+      // Лише слово словника: кастомна дія в різних об'єктах — різні UUID
+      // (Р1b-10), тож описка тут — помилка схеми, а не тихий порожній вибір.
+      withAction: z.enum(STANDARD_ACTIONS).meta({
         description:
           "Standard action word; selects every object of the role level that has it.",
       }),

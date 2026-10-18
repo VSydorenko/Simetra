@@ -502,6 +502,14 @@ describe("rights sets and roles", () => {
       input: { withAction: "post" },
       ok: true,
     },
+    // Кастомна дія в різних об'єктах — різні UUID: селектор бере лише слово
+    // словника (Р1b-10).
+    {
+      case: "objects with a custom action",
+      schema: objectSelectorSchema,
+      input: { withAction: "reassign" },
+      ok: false,
+    },
     // «Кожен дійсний користувач» — рівень лише ролі, не джерела (Р1b-3).
     {
       case: "a source of every user",

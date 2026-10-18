@@ -137,9 +137,103 @@ describe("rights projection", () => {
           action: "update",
           requires: "read",
           extent: "own",
+          role: "OrgMember",
         },
       },
     ])
+    // Без `TaskEditors` вимог немає: `deny read` без обсягу знімає й
+    // `read@any`, і породжені з нього `own` та вимір.
+    const readOnly = await compiled(
+      files({
+        [ROLE_FILE("OrgMember")]: {
+          include: [ref("RightsSet", "TaskReaders")],
+          grants: [deny(TASK, ["read"])],
+        },
+      })
+    )
+    expect(
+      rows(readOnly).filter(
+        ([, object, action]) => object === "Task" && action === "read"
+      )
+    ).toEqual([])
+  })
+
+  it("reports a missing requirement once per mistake and role", async () => {
+    // `update@any` породжує `own` і вимір; вимога `read` не виконана на
+    // жодному, але хиба одна — на `any`.
+    expect(await errors(files(member(grant(TASK, ["update"], "any"))))).toEqual(
+      [
+        {
+          code: "rights.requires-missing",
+          file: ROLE_FILE("OrgMember"),
+          pointer: "/grants/0",
+          params: {
+            object: "Task",
+            action: "update",
+            requires: "read",
+            extent: "any",
+            role: "OrgMember",
+          },
+        },
+      ]
+    )
+    // Набір під двома ролями: діагностика на місці набору — для кожної ролі.
+    const shared = await errors(
+      files({
+        [SET_FILE("TaskReaders")]: {
+          grants: [grant(TASK, ["update"], "any")],
+        },
+        [ROLE_FILE("OrgAdmin")]: {
+          include: [ref("RightsSet", "TaskReaders")],
+        },
+      })
+    )
+    expect(
+      shared.map(({ code, file, pointer, params }) => [
+        code,
+        file,
+        pointer,
+        (params as { role: string }).role,
+      ])
+    ).toEqual([
+      [
+        "rights.requires-missing",
+        SET_FILE("TaskReaders"),
+        "/grants/0",
+        "OrgAdmin",
+      ],
+      [
+        "rights.requires-missing",
+        SET_FILE("TaskReaders"),
+        "/grants/0",
+        "OrgMember",
+      ],
+    ])
+  })
+
+  it("rejects grantAll on any only in the own grants of an everyUser role", async () => {
+    expect(
+      await errors(
+        files({ [ROLE_FILE("Everyone")]: { grants: [grantAll("any")] } })
+      )
+    ).toEqual([
+      {
+        code: "rights.grant-level",
+        file: ROLE_FILE("Everyone"),
+        pointer: "/grants/0/grantAll/extent",
+        params: { level: "everyUser", extent: "any", role: "Everyone" },
+      },
+    ])
+    // У набору рівня немає: під такою роллю `grantAll any` просто нічого не дає.
+    const viaSet = await compiled(
+      files({
+        [SET_FILE("TaskReaders")]: { grants: [grantAll("any")] },
+        [ROLE_FILE("Everyone")]: {
+          include: [ref("RightsSet", "TaskReaders")],
+        },
+      })
+    )
+    expect(rows(viaSet).filter(([role]) => role === "Everyone")).toEqual([])
   })
 
   it("merges a diamond of sets", async () => {
@@ -265,7 +359,12 @@ describe("rights projection", () => {
       code: "rights.grant-level",
       file: memberFile,
       pointer: "/grants/0/grant/actions/0",
-      params: { object: "Users", action: "update", level: "scope" },
+      params: {
+        object: "Users",
+        action: "update",
+        level: "scope",
+        role: "OrgMember",
+      },
     },
     {
       case: "grants a scoped object to a global role",
@@ -275,17 +374,31 @@ describe("rights projection", () => {
       code: "rights.grant-level",
       file: ROLE_FILE("Support"),
       pointer: "/grants/0/grant/actions/0",
-      params: { object: "Task", action: "read", level: "global" },
+      params: {
+        object: "Task",
+        action: "read",
+        level: "global",
+        role: "Support",
+      },
     },
     {
+      // Одна помилка на запис, хоч об'єктів і дій у ньому кілька.
       case: "grants the any extent to every user",
       input: files({
-        [ROLE_FILE("Everyone")]: { grants: [grant(USERS, ["read"], "any")] },
+        [ROLE_FILE("Everyone")]: {
+          grants: [
+            grant(
+              objects(["Catalog", "Users"], ["Document", "Announcement"]),
+              ["read", "update"],
+              "any"
+            ),
+          ],
+        },
       }),
       code: "rights.grant-level",
       file: ROLE_FILE("Everyone"),
       pointer: "/grants/0/grant/extent",
-      params: { object: "Users", action: "read", level: "everyUser" },
+      params: { level: "everyUser", extent: "any", role: "Everyone" },
     },
     {
       case: "grants an extent the object lacks",
@@ -347,7 +460,7 @@ describe("rights projection", () => {
       case: "grants a custom action through an action selector",
       input: files(
         REASSIGN,
-        member(grant({ withAction: "reassign" }, ["reassign"], "any"))
+        member(grant({ withAction: "update" }, ["reassign"], "any"))
       ),
       code: "rights.custom-action-multi-object",
       file: memberFile,
@@ -355,15 +468,28 @@ describe("rights projection", () => {
       params: { action: "reassign" },
     },
     {
-      case: "selects objects by a custom action",
+      // Слово словника, яке один з об'єктів переліку тримає кастомною дією:
+      // для нього це не стандартна дія, а UUID лише його.
+      case: "grants a standard word that one object holds as a custom action",
       input: files(
-        REASSIGN,
-        member(grant({ withAction: "reassign" }, ["read"], "any"))
+        {
+          [COMMENT_FILE]: {
+            ...BASE[COMMENT_FILE],
+            customActions: [{ id: COMMENT_REASSIGN_ID, name: "post" }],
+          },
+        },
+        member(
+          grant(
+            objects(["Document", "Task"], ["Catalog", "TaskComment"]),
+            ["post"],
+            "any"
+          )
+        )
       ),
       code: "rights.custom-action-multi-object",
       file: memberFile,
-      pointer: "/grants/0/grant/objects/withAction",
-      params: { action: "reassign" },
+      pointer: "/grants/0/grant/actions/0",
+      params: { action: "post" },
     },
     {
       case: "denies an unknown action",

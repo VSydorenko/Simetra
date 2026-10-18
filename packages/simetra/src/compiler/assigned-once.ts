@@ -54,7 +54,7 @@ function stateOf(files: ReadonlyMap<string, string>): State {
   const defaultSchema = parsed?.success ? parsed.data.defaultSchema : undefined
   // Резолвери читають сирий стан: рівень ролі порівнюється за id, тож
   // перейменування виду скоупу чи контейнера не є зміною рівня.
-  const files_ = readObjectFiles(files)
+  const objectFiles = readObjectFiles(files)
   const scopeKindIds = new Map<string, string>()
   for (const at of project === undefined
     ? []
@@ -65,7 +65,7 @@ function stateOf(files: ReadonlyMap<string, string>): State {
     }
   }
   const objectIds = new Map<string, string>()
-  for (const { raw } of files_) {
+  for (const { raw } of objectFiles) {
     const { kind, name, id } = raw
     if (
       typeof kind === "string" &&
@@ -91,7 +91,7 @@ function stateOf(files: ReadonlyMap<string, string>): State {
       holders[on].set(id, holder)
     }
   }
-  for (const file of files_) {
+  for (const file of objectFiles) {
     const ctx = contextOf(file.def.materializes !== "none")
     add("object", {
       file: file.path,

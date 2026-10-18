@@ -1865,24 +1865,28 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "rights.grant-level": {
     en: (p) =>
-      p.level === "scope"
-        ? `A scope role cannot grant "${p.action}" on ${p.object}: it covers the objects of its scope kind and only reads unscoped ones`
-        : p.level === "global"
-          ? `A global role cannot grant "${p.action}" on ${p.object}: in a project with scope kinds it covers unscoped objects only`
-          : p.level === "container"
-            ? `A container role cannot grant "${p.action}" on ${p.object}: the object is not bound to the role container`
-            : `A role of every user cannot grant "${p.action}" on ${p.object}: it covers unscoped objects with the own or a dimension extent only`,
+      p.extent !== undefined
+        ? `Role ${p.role} of every user cannot grant with the ${p.extent} extent: it covers unscoped objects with the own or a dimension extent only`
+        : p.level === "scope"
+          ? `Scope role ${p.role} cannot grant "${p.action}" on ${p.object}: it covers the objects of its scope kind and only reads unscoped ones`
+          : p.level === "global"
+            ? `Global role ${p.role} cannot grant "${p.action}" on ${p.object}: in a project with scope kinds it covers unscoped objects only`
+            : p.level === "container"
+              ? `Container role ${p.role} cannot grant "${p.action}" on ${p.object}: the object is not bound to the role container`
+              : `Role ${p.role} of every user cannot grant "${p.action}" on ${p.object}: it covers unscoped objects only`,
     uk: (p) =>
-      p.level === "scope"
-        ? `Роль рівня скоупу не може дати "${p.action}" на ${p.object}: вона покриває об'єкти свого виду скоупу, а нескоуплені лише читає`
-        : p.level === "global"
-          ? `Глобальна роль не може дати "${p.action}" на ${p.object}: у проєкті з видами скоупу вона покриває лише нескоуплені об'єкти`
-          : p.level === "container"
-            ? `Контейнерна роль не може дати "${p.action}" на ${p.object}: об'єкт не прив'язаний до контейнера ролі`
-            : `Роль кожного користувача не може дати "${p.action}" на ${p.object}: вона покриває нескоуплені об'єкти лише з обсягом own чи виміру`,
+      p.extent !== undefined
+        ? `Роль кожного користувача ${p.role} не може давати з обсягом ${p.extent}: вона покриває нескоуплені об'єкти лише з обсягом own чи виміру`
+        : p.level === "scope"
+          ? `Роль рівня скоупу ${p.role} не може дати "${p.action}" на ${p.object}: вона покриває об'єкти свого виду скоупу, а нескоуплені лише читає`
+          : p.level === "global"
+            ? `Глобальна роль ${p.role} не може дати "${p.action}" на ${p.object}: у проєкті з видами скоупу вона покриває лише нескоуплені об'єкти`
+            : p.level === "container"
+              ? `Контейнерна роль ${p.role} не може дати "${p.action}" на ${p.object}: об'єкт не прив'язаний до контейнера ролі`
+              : `Роль кожного користувача ${p.role} не може дати "${p.action}" на ${p.object}: вона покриває лише нескоуплені об'єкти`,
     hint: {
-      en: "Grant the action on a role of the level that covers the object.",
-      uk: "Дайте дію на ролі того рівня, який покриває об'єкт.",
+      en: "Grant the action on a role of the level that covers the object, or use the own or a dimension extent for every user.",
+      uk: "Дайте дію на ролі того рівня, який покриває об'єкт, а кожному користувачу — з обсягом own чи виміру.",
     },
   },
   "rights.extent-unsupported": {
@@ -1901,9 +1905,9 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "rights.requires-missing": {
     en: (p) =>
-      `"${p.action}" on ${p.object} with extent ${p.extent} requires "${p.requires}", which the role does not grant with that extent or any`,
+      `"${p.action}" on ${p.object} with extent ${p.extent} requires "${p.requires}", which role ${p.role} does not grant with that extent or any`,
     uk: (p) =>
-      `"${p.action}" на ${p.object} з обсягом ${p.extent} вимагає "${p.requires}", якої роль не дає з тим самим обсягом чи any`,
+      `"${p.action}" на ${p.object} з обсягом ${p.extent} вимагає "${p.requires}", якої роль ${p.role} не дає з тим самим обсягом чи any`,
     hint: {
       en: "Grant the required action too, or deny the action that requires it.",
       uk: "Дайте й потрібну дію або заберіть дію, яка її вимагає.",

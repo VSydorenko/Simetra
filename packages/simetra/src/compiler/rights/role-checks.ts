@@ -182,19 +182,9 @@ function checkGrants(ctx: RightsCheckContext): Diagnostic[] {
       const selector = record.objects
       if (selector === undefined) continue
       if (!Array.isArray(selector)) {
-        // Селектор за дією бере об'єкти з цим словом словника; кастомна дія
-        // в різних об'єктах — різні UUID, тож без одного об'єкта вона
-        // неоднозначна (Р1b-10). Ключ кастомної дії в контракті — UUID, тож
-        // селектор з її іменем мовчки не взяв би жодного об'єкта. Одна
-        // причина на запис: кастомна дія в `actions` уже названа там.
-        const customAction = record.actions.some((a) => !STANDARD_WORDS.has(a))
-        if (!customAction && !STANDARD_WORDS.has(selector.withAction)) {
-          report(
-            "rights.custom-action-multi-object",
-            `${at}/objects/withAction`,
-            { action: selector.withAction }
-          )
-        }
+        // Селектор за дією бере об'єкти з цим словом словника (його значення
+        // обмежує схема); кастомна дія в різних об'єктах — різні UUID, тож без
+        // одного об'єкта вона неоднозначна (Р1b-10).
         record.actions.forEach((action, index) => {
           if (STANDARD_WORDS.has(action)) return
           report(

@@ -289,7 +289,16 @@
                         "properties": {
                           "withAction": {
                             "type": "string",
-                            "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+                            "enum": [
+                              "read",
+                              "create",
+                              "update",
+                              "markDeletion",
+                              "delete",
+                              "post",
+                              "unpost",
+                              "write"
+                            ],
                             "description": "Standard action word; selects every object of the role level that has it."
                           }
                         },
@@ -403,7 +412,16 @@
                         "properties": {
                           "withAction": {
                             "type": "string",
-                            "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+                            "enum": [
+                              "read",
+                              "create",
+                              "update",
+                              "markDeletion",
+                              "delete",
+                              "post",
+                              "unpost",
+                              "write"
+                            ],
                             "description": "Standard action word; selects every object of the role level that has it."
                           }
                         },

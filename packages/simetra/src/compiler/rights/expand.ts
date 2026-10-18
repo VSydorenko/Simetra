@@ -140,6 +140,17 @@ export function expandRole(
       : (ctx.dimensionNames.get(extent.dimensionId) ?? extent.dimensionId)
   const actionName = (contract: RightsContract, key: string) =>
     contract.actions.find((a) => a.action === key)?.name ?? key
+  // Набір включають кілька ролей: ім'я ролі в параметрах розводить їхні
+  // діагностики на тому самому місці набору, тож дедуплікація їх не зливає.
+  const roleName = objectName(role.id)
+  // Обсяг, якого рівень не має, — одна помилка на запис, а не на кожну дію.
+  const extentLevelError = (grant: ResolvedGrant, extent: ProjectionExtent) =>
+    diagnostic(
+      "rights.grant-level",
+      grant.file,
+      `/grants/${grant.index}/${grant.form}/extent`,
+      { level: level.level, extent: extentName(extent), role: roleName }
+    )
 
   const add = (
     contract: RightsContract,
@@ -188,6 +199,10 @@ export function expandRole(
       pointer: string,
       params: Record<string, string>
     ) => diagnostics.push(diagnostic(code, grant.file, pointer, params))
+    if (grant.extent !== undefined && !levelAllowsExtent(level, grant.extent)) {
+      diagnostics.push(extentLevelError(grant, grant.extent))
+      return []
+    }
     const selector = grant.objects
     const targets: RightsContract[] = []
     if (selector !== undefined && "withAction" in selector) {
@@ -222,14 +237,7 @@ export function expandRole(
           report("rights.grant-level", actionAt, {
             ...params,
             level: level.level,
-          })
-        } else if (
-          grant.extent !== undefined &&
-          !levelAllowsExtent(level, grant.extent)
-        ) {
-          report("rights.grant-level", `${at}/extent`, {
-            ...params,
-            level: level.level,
+            role: roleName,
           })
         } else if (
           grant.extent !== undefined &&
@@ -270,7 +278,14 @@ export function expandRole(
       if (grant.form === "deny") continue
       if (grant.form === "grantAll") {
         const extent = grant.extent!
-        if (!levelAllowsExtent(level, extent)) continue
+        if (!levelAllowsExtent(level, extent)) {
+          // Власний запис ролі суперечить її рівню — помилка; у наборі рівня
+          // немає, тож набір під такою роллю просто нічого не дає (Р1b-7).
+          if (declaration === role) {
+            diagnostics.push(extentLevelError(grant, extent))
+          }
+          continue
+        }
         // `grantAll` бере кожну дію, яку рівень дозволяє, і пропускає
         // об'єкти без обсягу (Р1b-7); кастомні дії теж — об'єкт один, тож
         // UUID однозначний.
@@ -308,6 +323,13 @@ export function expandRole(
 
   // Вимога `X ⇒ Y` для обсягу e виконана, коли є `Y@e` або `Y@any` (Р1b-4).
   for (const row of rows.values()) {
+    // Поруч є `X@any`: якщо вимога не виконана тут, то й там (немає `Y@any`),
+    // і помилка вже стоїть на `any` — одна на хибу, а не на кожен обсяг.
+    if (
+      row.extent !== "any" &&
+      rows.has(keyOf(row.objectId, row.action, "any"))
+    )
+      continue
     const contract = ctx.rights.get(row.objectId)!
     const action = contract.actions.find((a) => a.action === row.action)!
     for (const required of action.requires) {
@@ -325,6 +347,7 @@ export function expandRole(
             action: action.name,
             requires: actionName(contract, required),
             extent: extentName(row.extent),
+            role: roleName,
           }
         )
       )
