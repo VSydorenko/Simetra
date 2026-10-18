@@ -290,6 +290,22 @@ describe("access dimensions", () => {
       field: "subject",
       reason: "target",
     })
+    const unknown = errors(
+      await compileRights(
+        withDimension(
+          {},
+          dimension({
+            values: { relation: { ...RELATION.relation, value: "nowhere" } },
+          })
+        )
+      )
+    ).find((d) => d.code === "rights.dimension-relation")
+    expect(unknown?.params).toEqual({
+      dimension: "region",
+      field: "value",
+      reason: "unknown",
+      name: "nowhere",
+    })
   })
 
   it("accepts an unscoped target in a single-tenant project", async () => {

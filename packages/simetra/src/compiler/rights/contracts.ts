@@ -198,13 +198,15 @@ function rightsContract(
       dimensionId,
     })),
   ]
+  // Ім'я шапки стандартної дії — факт реєстру; без фізичної колонки це дрейф
+  // реєстру, а не порожній ефект.
   const canonicalHeader = (header: ActionEffects["header"]) =>
     header === "all"
       ? ("all" as const)
-      : header.flatMap(
-          (name) =>
-            columnsOf.get(standardElementId(objectId, { logicalName: name })) ??
-            []
+      : header.flatMap((name) =>
+          must(
+            columnsOf.get(standardElementId(objectId, { logicalName: name }))
+          )
         )
   const customHeader = (index: number, header: ActionEffects["header"]) =>
     header === "all"

@@ -9,6 +9,7 @@ import { buildPlatformUnits } from "../platform/units"
 import { loadSqlParser } from "../sql/parse"
 import {
   acceptDebt,
+  attribute,
   catalog,
   customTable,
   document,
@@ -199,6 +200,18 @@ describe("platform layer", () => {
         id: uuid(71),
         kindLabel: "sale",
       }),
+      // Регістр має мітку з плану прав (Р1a-9): в'юха бере її з того самого
+      // факту реєстру, а не з переліку видів 1С.
+      "information-registers/Price/Price.meta.json": {
+        id: uuid(72),
+        kind: "InformationRegister",
+        name: "Price",
+        physicalName: "price",
+        kindLabel: "price",
+        writeMode: "Independent",
+        periodicity: "NonPeriodic",
+        dimensions: [attribute("item", { id: uuid(73), type: "Text" })],
+      },
     })
     const view = unit(model, "view:simetra.kind_labels")
     expect(view.sql).toContain(
@@ -210,6 +223,9 @@ describe("platform layer", () => {
     )
     expect(view.sql).toContain(
       `('users', 'Catalog', '${USERS_ID}'::uuid, 'Users', 'app', 'users')`
+    )
+    expect(view.sql).toContain(
+      `('price', 'InformationRegister', '${uuid(72)}'::uuid, 'Price', 'app', 'price')`
     )
     // Грантів ролям застосунку на в'юху немає.
     expect(

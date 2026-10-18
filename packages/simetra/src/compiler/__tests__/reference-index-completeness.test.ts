@@ -1,16 +1,23 @@
 import { describe, expect, it } from "vitest"
 import { compile, type ResolvedReference } from "simetra/compiler"
-import { STANDARD_ACTIONS, parseExpression, walkExpr } from "simetra/model"
+import {
+  KIND_REGISTRY,
+  STANDARD_ACTIONS,
+  parseExpression,
+  walkExpr,
+  type MetadataKind,
+} from "simetra/model"
 import { readReferenceDomain } from "./fixtures/reference-domain"
 import { kitchenSink } from "./fixtures/kitchen-sink"
+import { catalog, metaFiles, project, uuid } from "./helpers"
 
 /**
  * Охоронець повноти індексу посилань. Каскад перейменування й перевірка
  * залежностей видалення бачать лише те, що є в індексі, тож кожне посилання
  * за логічним іменем у файлах мусить мати запис. Тест навмисно не знає ролей
- * і не читає реєстр видів: кандидатів він знаходить сам, за формою місця, і
- * лише потім звіряє з індексом. Нове поле, що називає елемент за іменем, а в
- * індекс не потрапило, тут червоніє.
+ * і не читає реєстр видів (крім словника стандартних дій): кандидатів він
+ * знаходить сам, за формою місця, і лише потім звіряє з індексом. Нове поле,
+ * що називає елемент за іменем, а в індекс не потрапило, тут червоніє.
  */
 
 /** Місце кандидата; форма — як його переписуватиме каскад. */
@@ -37,8 +44,22 @@ function toPointer(path: Path): string {
  */
 const STANDARD_ACTION_WORDS: ReadonlySet<string> = new Set(STANDARD_ACTIONS)
 
+/**
+ * Стандартні дії самого об'єкта файлу. Виняток читає реєстр видів лише тут:
+ * слово платформи залежить від виду й налаштувань, а кастомна дія з тим самим
+ * словом в іншого виду (`post` довідника) — посилання й лишається кандидатом.
+ */
+function standardActionsOf(data: unknown): ReadonlySet<string> {
+  const kind = isRecord(data) ? data.kind : undefined
+  if (typeof kind !== "string" || !(kind in KIND_REGISTRY)) return new Set()
+  const def = KIND_REGISTRY[kind as MetadataKind]
+  const parsed = def.schema.safeParse(data)
+  if (!parsed.success) return new Set()
+  return new Set(def.actions(parsed.data).map((a) => a.name))
+}
+
 const NOT_REFERENCES: {
-  matches: (path: Path, value: string) => boolean
+  matches: (path: Path, value: string, data: unknown) => boolean
   reason: string
 }[] = [
   {
@@ -69,11 +90,14 @@ const NOT_REFERENCES: {
   {
     // І місце, і слово: ім'я кастомної дії в тому самому масиві лишається
     // кандидатом.
-    matches: (path, value) =>
-      STANDARD_ACTION_WORDS.has(value) &&
-      (path.at(-2) === "requires" ||
-        (path.at(-2) === "actions" &&
-          (path.at(-3) === "grant" || path.at(-3) === "deny"))),
+    // `requires` — дії самого об'єкта файлу; ціль гранту Прав-1b — інший
+    // об'єкт, тож там лишається словник платформи.
+    matches: (path, value, data) =>
+      path.at(-2) === "requires"
+        ? standardActionsOf(data).has(value)
+        : STANDARD_ACTION_WORDS.has(value) &&
+          path.at(-2) === "actions" &&
+          (path.at(-3) === "grant" || path.at(-3) === "deny"),
     reason:
       "стандартна дія — слово платформи, а не посилання на елемент метаданих; кастомні дії — посилання й винятку не мають",
   },
@@ -172,7 +196,8 @@ function candidates(files: ReadonlyMap<string, string>): Candidate[] {
           return
         }
         if (!all.has(value)) return
-        if (NOT_REFERENCES.some((entry) => entry.matches(path, value))) return
+        if (NOT_REFERENCES.some((entry) => entry.matches(path, value, data)))
+          return
         found.push({
           file,
           pointer: toPointer(path),
@@ -330,6 +355,36 @@ describe("reference index completeness", () => {
         span: dropped.span,
         form: "token",
       }),
+    ])
+  })
+
+  it("the guard sees a custom action named like another kind's standard action", async () => {
+    // `post` — дія документа, а не довідника: у `requires` довідника це
+    // кастомна дія, тож посилання, а `read` — слово самого довідника.
+    const file = "catalogs/Ticket/Ticket.meta.json"
+    const files = metaFiles({
+      "project.meta.json": project(),
+      [file]: catalog("Ticket", {
+        scope: "none",
+        customActions: [
+          { id: uuid(9901), name: "post" },
+          { id: uuid(9902), name: "close", requires: ["post", "read"] },
+        ],
+      }),
+    })
+    const result = await compile(files)
+    expect(result.diagnostics.filter((d) => d.severity === "error")).toEqual([])
+    const pointers = candidates(files)
+      .filter((c) => c.file === file)
+      .map((c) => c.pointer)
+    expect(pointers).toContain("/customActions/1/requires/0")
+    expect(pointers).not.toContain("/customActions/1/requires/1")
+    expect(missing(files, result.model!.references)).toEqual([])
+    const without = result.model!.references.filter(
+      (r) => r.role !== "customAction.requires"
+    )
+    expect(missing(files, without)).toEqual([
+      expect.objectContaining({ pointer: "/customActions/1/requires/0" }),
     ])
   })
 })

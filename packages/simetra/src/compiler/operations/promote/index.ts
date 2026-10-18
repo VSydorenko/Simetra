@@ -446,16 +446,6 @@ export async function promoteObject(
     kindModule: `${dir}${into.name}.sql`,
   })
   problems.push(...sql.problems)
-  // Мітки споживача перекладаються в мітку виду; виду без мітки нема куди.
-  if (input.consumerLabels.length > 0 && def.kindLabel !== true) {
-    problems.push(
-      diagnostic("promote.mapping-unknown", "", "", {
-        at: toPointer(["consumerLabels"]),
-        detail: `${into.kind} has no kind label to translate the consumer labels to`,
-      })
-    )
-  }
-
   const structural = tables.map((t, i) =>
     structuralSubjects(
       t.promoted,

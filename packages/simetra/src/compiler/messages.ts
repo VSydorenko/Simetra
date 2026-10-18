@@ -1574,7 +1574,7 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   "rights.dimension-relation": {
     en: (p) =>
       p.reason === "unknown"
-        ? `Relation of access dimension "${p.dimension}" has no field "${p.field}"`
+        ? `Relation object of access dimension "${p.dimension}" has no field "${p.name}" (${p.field})`
         : p.reason === "table"
           ? `Relation object of access dimension "${p.dimension}" has no table`
           : p.reason === "scope"
@@ -1584,7 +1584,7 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
               : `Value of access dimension "${p.dimension}" does not reference the dimension target`,
     uk: (p) =>
       p.reason === "unknown"
-        ? `Зв'язок виміру доступу "${p.dimension}" не має поля "${p.field}"`
+        ? `Об'єкт зв'язку виміру доступу "${p.dimension}" не має поля "${p.name}" (${p.field})`
         : p.reason === "table"
           ? `Об'єкт зв'язку виміру доступу "${p.dimension}" не має таблиці`
           : p.reason === "scope"

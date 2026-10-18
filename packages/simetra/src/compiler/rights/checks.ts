@@ -179,19 +179,21 @@ function checkBinding(
   const at = typeof carrier === "string" ? pointer : `${pointer}/1`
   const { field } = resolved.terminal
   const target = carrierTarget(resolved.terminal)
-  if (target === object) {
-    return [
-      diagnostic("rights.container-self", object.file, at, {
-        attribute: field.name,
-        name: object.name,
-      }),
-    ]
-  }
+  // Спершу — чи ціль контейнер: не-контейнер, прив'язаний сам до себе,
+  // помиляється ціллю, а не самоприв'язкою контейнера.
   if ((target.data as { rightsContainer?: boolean }).rightsContainer !== true) {
     return [
       diagnostic("rights.container-target", object.file, at, {
         attribute: field.name,
         name: target.name,
+      }),
+    ]
+  }
+  if (target === object) {
+    return [
+      diagnostic("rights.container-self", object.file, at, {
+        attribute: field.name,
+        name: object.name,
       }),
     ]
   }
@@ -250,14 +252,21 @@ function checkDimensions(ctx: RightsCheckContext): Diagnostic[] {
     const relationAt = `${at}/values/relation`
     const broken = (
       field: "object" | "subject" | "value",
-      why: "table" | "scope" | "unknown" | "target"
+      why: "table" | "scope" | "unknown" | "target",
+      // Ім'я, якого немає в об'єкті зв'язку, — лише для `unknown`.
+      name?: string
     ) =>
       diagnostics.push(
         diagnostic(
           "rights.dimension-relation",
           PROJECT_FILE,
           `${relationAt}/${field}`,
-          { dimension: dimension.name, field, reason: why }
+          {
+            dimension: dimension.name,
+            field,
+            reason: why,
+            ...(name === undefined ? {} : { name }),
+          }
         )
       )
     const objectId = projectTarget(
@@ -286,12 +295,12 @@ function checkDimensions(ctx: RightsCheckContext): Diagnostic[] {
     const member = (o: ParsedObject) =>
       (o.data as { membership?: unknown }).membership !== undefined &&
       scopeOf(o) === scopeOf(target)
-    if (subject === null) broken("subject", "unknown")
+    if (subject === null) broken("subject", "unknown", relation.subject)
     else if (subject === undefined || !(isUsers(subject) || member(subject))) {
       broken("subject", "target")
     }
     const value = targetOf("value")
-    if (value === null) broken("value", "unknown")
+    if (value === null) broken("value", "unknown", relation.value)
     else if (value !== target) broken("value", "target")
   })
   return diagnostics

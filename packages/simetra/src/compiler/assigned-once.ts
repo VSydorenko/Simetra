@@ -200,8 +200,6 @@ interface Change {
   id: string
   was: Holder
   now: Holder
-  /** Нове ефективне значення; немає — поле зникло. */
-  value: string | undefined
 }
 
 /**
@@ -243,7 +241,7 @@ export function assignedOnceDiagnostics(
       const value = valueOf(record, now)
       if (old === null || value === null) continue
       if (old === undefined || old === value) continue
-      if (releasedByPromotion(promotion, { record, id, was, now, value })) {
+      if (releasedByPromotion(promotion, { record, id, was, now })) {
         continue
       }
       result.push(

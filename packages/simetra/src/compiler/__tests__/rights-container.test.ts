@@ -101,4 +101,10 @@ describe("rights container", () => {
       )
     ).toEqual([["rights.container-self", "/containerBinding"]])
   })
+
+  it("rejects a non-container bound to itself as a binding to a non-container", async () => {
+    expect(
+      await codes(rightsFiles({ [COMMENT_FILE]: { containerBinding: "ref" } }))
+    ).toEqual([["rights.container-target", "/containerBinding"]])
+  })
 })
