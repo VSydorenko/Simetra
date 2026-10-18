@@ -2,6 +2,8 @@ import {
   KIND_REGISTRY,
   METADATA_KINDS,
   PROVIDER_IDENTITY_SOURCES,
+  type PhysicalSnapshot,
+  type Project,
 } from "simetra/model"
 import type {
   CompileResult,
@@ -22,7 +24,11 @@ import {
   generatedGrantConflicts,
 } from "./function-execute"
 import { buildPresentation } from "./presentation"
-import { readFiles, type FilesStageResult } from "./stages/files"
+import {
+  readFiles,
+  type FilesStageResult,
+  type ParsedObject,
+} from "./stages/files"
 import { checkIdentity } from "./stages/identity"
 import { checkIntegrity } from "./stages/integrity"
 import { accessDimensionContracts, rightsContracts } from "./rights/contracts"
@@ -62,6 +68,37 @@ export { readFiles }
  * `runStages` — межа «розібрані дані → їхні читачі»: ратчет «поле без
  * споживача» стоїть саме тут і бачить, які поля схем хтось прочитав.
  */
+/**
+ * Кваліфіковані імена згенерованих функцій членства, яким може довіряти
+ * перевірка функції значень виміру (стадія 5). Стадії 4 і 5 ідуть підряд до
+ * гейта помилок, тож довідник, на членство якого стадія 4 вже поскаржилась,
+ * сюди не входить: зламане членство не легалізує виклик своєї функції.
+ */
+function validMembershipFunctions(
+  objects: readonly ParsedObject[],
+  physical: PhysicalSnapshot,
+  project: Project,
+  integrity: readonly Diagnostic[]
+): ReadonlySet<string> {
+  const broken = new Set(
+    integrity
+      .filter(
+        (d) =>
+          d.code.startsWith("membership.") ||
+          d.pointer.startsWith("/membership")
+      )
+      .map((d) => d.file)
+  )
+  const valid = objects.filter((object) => !broken.has(object.file))
+  return new Set(
+    membershipsOf(valid, physical, project).flatMap((m) =>
+      [m.myMember, m.setFunction].flatMap((fn) =>
+        fn === undefined ? [] : [`${fn.schema}.${fn.name}`]
+      )
+    )
+  )
+}
+
 export async function runStages(
   stage1: FilesStageResult
 ): Promise<CompileResult> {
@@ -124,23 +161,30 @@ export async function runStages(
   }
   const physical = embedded.physical
 
+  const integrity = checkIntegrity(
+    stage1.objects,
+    stage2.references,
+    { ...stage3, physical },
+    stage1.project,
+    sql.units
+  )
   const diagnostics = sortDiagnostics([
     ...early,
     ...debt.stale,
-    ...checkIntegrity(
-      stage1.objects,
-      stage2.references,
-      { ...stage3, physical },
-      stage1.project,
-      sql.units
-    ),
+    ...integrity,
     ...checkLinks(
       stage1.objects,
       stage2.references,
       stage1.project,
       sql.units,
       parse,
-      plpgsql
+      plpgsql,
+      validMembershipFunctions(
+        stage1.objects,
+        physical,
+        stage1.project,
+        integrity
+      )
     ),
   ])
   const ok = !hasErrors(diagnostics)

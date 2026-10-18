@@ -70,6 +70,31 @@ export function routineLanguage(tree: Node): string | undefined {
   return fn === undefined ? undefined : functionLanguage(fn)
 }
 
+function emptySearchPath(options: readonly DefElem[]): boolean {
+  // Останній `SET search_path` перемагає, як і в Postgres.
+  const set = options
+    .filter(
+      (o) =>
+        o.defname === "set" && o.arg?.VariableSetStmt?.name === "search_path"
+    )
+    .at(-1)?.arg?.VariableSetStmt
+  const args = set?.args ?? []
+  return (
+    set?.kind === "VAR_SET_VALUE" &&
+    args.length === 1 &&
+    args[0]!.A_Const?.sval?.sval === ""
+  )
+}
+
+/**
+ * Функція з `SET search_path = ''` (останній `SET` перемагає): лише тоді
+ * некваліфіковане ім'я в її тілі не може розв'язатися в чужу схему.
+ */
+export function hasEmptySearchPath(tree: Node): boolean {
+  const fn = createFunction(tree)
+  return fn !== undefined && emptySearchPath(functionOptions(fn).options)
+}
+
 /**
  * Закрита оболонка функції (спека П2 §3, «Дослівний SQL»): мова `sql` чи
  * `plpgsql`, явна волатильність, `SECURITY DEFINER` лише з `SET search_path
@@ -92,20 +117,11 @@ export function closedShellProblem(
   const language = functionLanguage(fn)
   if (language !== "sql" && language !== "plpgsql") return "language"
   if (option("volatility") === undefined) return "volatility"
-  if (option("security")?.Boolean?.boolval === true) {
-    // Останній `SET search_path` перемагає, як і в Postgres.
-    const set = options
-      .filter(
-        (o) =>
-          o.defname === "set" && o.arg?.VariableSetStmt?.name === "search_path"
-      )
-      .at(-1)?.arg?.VariableSetStmt
-    const args = set?.args ?? []
-    const empty =
-      set?.kind === "VAR_SET_VALUE" &&
-      args.length === 1 &&
-      args[0]!.A_Const?.sval?.sval === ""
-    if (!empty) return "searchPath"
+  if (
+    option("security")?.Boolean?.boolval === true &&
+    !emptySearchPath(options)
+  ) {
+    return "searchPath"
   }
   if (language !== "plpgsql") return undefined
   const body = plpgsql(unit.sql)

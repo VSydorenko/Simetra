@@ -11,6 +11,7 @@ import type { Node } from "libpg-query"
 import { diagnostic, toPointer, type Diagnostic } from "../diagnostics"
 import { CURRENT_USER_FUNCTION } from "../platform/names"
 import { closedShellProblem } from "../sql/closed-forms"
+import { checkDimensionFunctions } from "../rights/dimension-functions"
 import type { SqlParser } from "../sql/parse"
 import { mechanicsStandardNames } from "../mechanics-units"
 import type { PlpgsqlFunction, PlpgsqlParser } from "../sql/plpgsql"
@@ -20,8 +21,8 @@ import { registerTargetError, type ResolvedReference } from "./identity"
 
 /**
  * Стадія 5 (спека П2 §8.2): зв'язки між частинами моделі, які не видно в
- * одному файлі: повнота й вигляд джерел рухів та функції множини скоупів у
- * SQL-одиницях.
+ * одному файлі: повнота й вигляд джерел рухів, функцій множини скоупів і
+ * функцій значень вимірів доступу в SQL-одиницях.
  */
 export function checkLinks(
   objects: readonly ParsedObject[],
@@ -29,7 +30,8 @@ export function checkLinks(
   project: Project,
   units: readonly VerbatimUnit[],
   parse: SqlParser,
-  plpgsql: PlpgsqlParser
+  plpgsql: PlpgsqlParser,
+  membershipFunctions: ReadonlySet<string>
 ): Diagnostic[] {
   return [
     ...checkMovementSources(objects, references),
@@ -37,6 +39,13 @@ export function checkLinks(
     ...checkSetFunctions(objects, project, units, parse, plpgsql),
     ...checkSubscriptionHandlers(objects, project, units, parse, plpgsql),
     ...checkPolicyCurrentUser(units),
+    ...checkDimensionFunctions(
+      project,
+      units,
+      membershipFunctions,
+      parse,
+      plpgsql
+    ),
   ]
 }
 
@@ -315,7 +324,7 @@ function checkSetFunctions(
   return found
 }
 
-interface FunctionNode {
+export interface FunctionNode {
   parameters?: unknown[]
   returnType?: {
     names?: { String?: { sval?: string } }[]
@@ -372,7 +381,7 @@ function nullaryReturning(
  * Функція `<схема>.<ім'я>` без аргументів серед SQL-одиниць: `undefined` —
  * функції з таким ім'ям немає, рядок — причина невідповідності підпису.
  */
-function nullaryFunction(
+export function nullaryFunction(
   units: readonly VerbatimUnit[],
   schema: string,
   name: string,
@@ -402,7 +411,7 @@ export type SetFunctionReason =
  * `search_path` читає спільний `closedShellProblem`, щоб не дублювати його.
  * Тіло, яке не розбирається, не перевіряється: його відхилить тіньова база.
  */
-function setFunctionClosedProblem(
+export function setFunctionClosedProblem(
   fn: FunctionNode,
   units: readonly VerbatimUnit[],
   schema: string,
@@ -427,17 +436,28 @@ function setFunctionClosedProblem(
   ) {
     return "searchPath"
   }
+  return bodyHasUnqualifiedRelation(fn, parse) ? "unqualified" : undefined
+}
+
+/**
+ * Тіло `LANGUAGE sql` називає відношення без схеми. Тіло, яке не
+ * розбирається, не перевіряється: його відхилить тіньова база.
+ */
+export function bodyHasUnqualifiedRelation(
+  fn: FunctionNode,
+  parse: SqlParser
+): boolean {
   // `AS` — список рядків; для `LANGUAGE sql` перший і є тілом.
-  const body = option("as")[0]?.arg?.List?.items?.[0]?.String?.sval
-  if (body === undefined) return undefined
+  const body = (fn.options ?? [])
+    .map((o) => o.DefElem)
+    .find((o) => o?.defname === "as")?.arg?.List?.items?.[0]?.String?.sval
+  if (body === undefined) return false
   const parsed = parse(body)
-  if (!parsed.ok) return undefined
+  if (!parsed.ok) return false
   return hasUnqualifiedRelation(
     parsed.statements.map((s) => s.stmt),
     new Set()
   )
-    ? "unqualified"
-    : undefined
 }
 
 /**
@@ -479,7 +499,7 @@ function hasUnqualifiedRelation(
 }
 
 /** Функція множини читає дані, тож мусить бути STABLE. */
-function volatilityProblem(fn: FunctionNode): string | undefined {
+export function volatilityProblem(fn: FunctionNode): string | undefined {
   const volatility = (fn.options ?? [])
     .map((o) => o.DefElem)
     .find((o) => o?.defname === "volatility")?.arg?.String?.sval

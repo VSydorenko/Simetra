@@ -822,6 +822,10 @@ export function kitchenSink(): Map<string, string> {
     "event-subscriptions/StampItem/StampItem.meta.json": stampItem,
     "event-subscriptions/UserDeleted/UserDeleted.meta.json": userDeleted,
     "sql/public/subscription-handlers.sql": handlers,
+    // Функція значень виміру `partner` — у закритій формі (Р1a-14): читає
+    // лише таблицю застосунку й поточного користувача.
+    "sql/public/access-dimensions.sql":
+      "CREATE FUNCTION public.my_partner_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT p.id FROM public.partner p WHERE (SELECT simetra.current_user_id()) IS NOT NULL $$;",
   }
   for (const [name, value] of Object.entries(constants)) {
     entries[`constants/${name}/${name}.meta.json`] = value

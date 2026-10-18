@@ -1603,6 +1603,44 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Грант обмежує рядок одним носієм на вимір; лишіть один мапінг.",
     },
   },
+  "rights.dimension-function-missing": {
+    en: (p) =>
+      `Values function ${p.function}() of access dimension "${p.dimension}" is not defined in any .sql file`,
+    uk: (p) =>
+      `Функція значень ${p.function}() виміру доступу "${p.dimension}" не визначена в жодному файлі .sql`,
+    hint: {
+      en: "Add 'CREATE FUNCTION <schema>.<name>() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' ...' to a .sql file.",
+      uk: "Додайте 'CREATE FUNCTION <схема>.<ім'я>() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' ...' до файлу .sql.",
+    },
+  },
+  "rights.dimension-function-signature": {
+    en: (p) =>
+      p.reason === undefined
+        ? `Values function ${p.function}() of access dimension "${p.dimension}" has the wrong signature: ${p.problem}`
+        : `Function ${p.function}() in the values of access dimension "${p.dimension}" is outside the closed form: ${SET_FUNCTION_REASON[String(p.reason)]?.en ?? p.reason}`,
+    uk: (p) =>
+      p.reason === undefined
+        ? `Функція значень ${p.function}() виміру доступу "${p.dimension}" має хибну сигнатуру: ${p.problem}`
+        : `Функція ${p.function}() у значеннях виміру доступу "${p.dimension}" поза закритою формою: ${SET_FUNCTION_REASON[String(p.reason)]?.uk ?? p.reason}`,
+    hint: {
+      en: "The values function takes no arguments, returns SETOF uuid and is LANGUAGE sql STABLE SECURITY DEFINER SET search_path = ''; every function it calls is LANGUAGE sql SET search_path = ''; every relation is qualified by a schema.",
+      uk: "Функція значень не приймає аргументів, повертає SETOF uuid і є LANGUAGE sql STABLE SECURITY DEFINER SET search_path = ''; кожна функція, яку вона кличе, — LANGUAGE sql SET search_path = ''; кожне відношення кваліфіковане схемою.",
+    },
+  },
+  "rights.dimension-function-reads-rights": {
+    en: (p) =>
+      p.object === "plpgsql" || p.object === "unknown"
+        ? `Values of access dimension "${p.dimension}" depend on a function the compiler cannot check (${p.object}): ${p.chain}`
+        : `Values of access dimension "${p.dimension}" read the platform object ${p.object}: ${p.chain}`,
+    uk: (p) =>
+      p.object === "plpgsql" || p.object === "unknown"
+        ? `Значення виміру доступу "${p.dimension}" залежать від функції, яку компілятор не може перевірити (${p.object}): ${p.chain}`
+        : `Значення виміру доступу "${p.dimension}" читають об'єкт платформи ${p.object}: ${p.chain}`,
+    hint: {
+      en: "Rights checks call the values function, so it must not read rights itself: of the platform schema only simetra.current_user_id() is allowed, and every called function must be a LANGUAGE sql function of the project, a generated membership function or a builtin.",
+      uk: "Перевірка прав кличе функцію значень, тож сама вона прав не читає: зі схеми платформи дозволено лише simetra.current_user_id(), а кожна викликана функція — LANGUAGE sql функція проєкту, згенерована функція членства чи вбудована.",
+    },
+  },
   "rights.ownership-target": {
     en: (p) =>
       p.reason === "key"

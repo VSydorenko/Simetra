@@ -54,6 +54,15 @@ async function codes(files: Files) {
   ])
 }
 
+/** Функція значень у закритій формі: без неї стадія 5 червоніє (Р1a-14). */
+function withValuesFunction(files: Files, name: string): Files {
+  files.set(
+    "sql/public/access-dimensions.sql",
+    `CREATE FUNCTION public.${name}() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT NULL::uuid $$;`
+  )
+  return files
+}
+
 const withDimension = (
   overrides: Record<string, Record<string, unknown>>,
   dim: Record<string, unknown> = dimension()
@@ -99,9 +108,12 @@ describe("access dimensions", () => {
 
   it("names the function of values in the default schema", async () => {
     const contracts = await compiled(
-      withDimension(
-        {},
-        dimension({ values: { function: { name: "my_regions" } } })
+      withValuesFunction(
+        withDimension(
+          {},
+          dimension({ values: { function: { name: "my_regions" } } })
+        ),
+        "my_regions"
       )
     )
     expect(contracts.accessDimensions[0]!.values).toEqual({
@@ -188,9 +200,12 @@ describe("access dimensions", () => {
     ).toEqual([["rights.dimension-unknown", TASK_FILE, "/access/0/dimension"]])
     expect(
       await codes(
-        withDimension(
-          {},
-          dimension({ target: ref("Document", "Task"), ...functionValues })
+        withValuesFunction(
+          withDimension(
+            {},
+            dimension({ target: ref("Document", "Task"), ...functionValues })
+          ),
+          "my_ids"
         )
       )
     ).toEqual([
@@ -198,9 +213,12 @@ describe("access dimensions", () => {
     ])
     expect(
       await codes(
-        withDimension(
-          { "catalogs/Region/Region.meta.json": { scope: "none" } },
-          dimension(functionValues)
+        withValuesFunction(
+          withDimension(
+            { "catalogs/Region/Region.meta.json": { scope: "none" } },
+            dimension(functionValues)
+          ),
+          "my_ids"
         )
       )
     ).toEqual([
@@ -276,19 +294,22 @@ describe("access dimensions", () => {
 
   it("accepts an unscoped target in a single-tenant project", async () => {
     const result = await compile(
-      metaFiles({
-        [PROJECT]: project({
-          accessDimensions: [
-            {
-              id: uuid(6080),
-              name: "region",
-              target: ref("Catalog", "Region"),
-              values: { function: { name: "my_regions" } },
-            },
-          ],
+      withValuesFunction(
+        metaFiles({
+          [PROJECT]: project({
+            accessDimensions: [
+              {
+                id: uuid(6080),
+                name: "region",
+                target: ref("Catalog", "Region"),
+                values: { function: { name: "my_regions" } },
+              },
+            ],
+          }),
+          "catalogs/Region/Region.meta.json": catalog("Region"),
         }),
-        "catalogs/Region/Region.meta.json": catalog("Region"),
-      })
+        "my_regions"
+      )
     )
     expect(errors(result)).toEqual([])
   })
