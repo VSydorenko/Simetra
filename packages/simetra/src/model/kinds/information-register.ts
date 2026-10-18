@@ -12,6 +12,9 @@ import {
   type KindDefinition,
   type StandardColumnDef,
   customActionReferences,
+  accessDimensionReferences,
+  accessReferences,
+  registerCarrierHost,
 } from "./standard"
 
 function standardColumns(obj: unknown): StandardColumnDef[] {
@@ -66,8 +69,15 @@ export const informationRegisterKind: KindDefinition = {
           : ["sliceLast", "sliceFirst"],
     }
   },
-  elementReferences: (obj) =>
-    customActionReferences(obj as InformationRegister),
+  elementReferences: (obj) => [
+    ...customActionReferences(obj as InformationRegister),
+    ...accessReferences(
+      registerCarrierHost(obj as InformationRegister),
+      standardColumns(obj)
+    ),
+  ],
+  projectReferences: (obj) =>
+    accessDimensionReferences(obj as InformationRegister),
   references(obj) {
     const register = obj as InformationRegister
     return [

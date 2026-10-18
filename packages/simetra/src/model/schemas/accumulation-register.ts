@@ -1,6 +1,6 @@
 import { z } from "zod"
 import { publicReadSchema } from "./public-read"
-import { customActionsSchema } from "./rights"
+import { accessSchema, customActionsSchema } from "./rights"
 import { attributeSchema, registerFieldSchema } from "./attribute"
 import {
   elementNameSchema,
@@ -86,6 +86,7 @@ export const accumulationRegisterSchema = z
 
     publicRead: publicReadSchema,
     customActions: customActionsSchema,
+    access: accessSchema.optional(),
 
     standardAttributeOverrides: standardAttributeOverridesSchema,
 

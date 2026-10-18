@@ -1,6 +1,7 @@
 import { z } from "zod"
 import { publicReadSchema } from "./public-read"
 import {
+  accessSchema,
   customActionsSchema,
   ownershipSchema,
   rightsCarrierSchema,
@@ -130,6 +131,7 @@ export const catalogSchema = z.strictObject({
 
   publicRead: publicReadSchema,
   customActions: customActionsSchema,
+  access: accessSchema.optional(),
   ownership: ownershipSchema.optional().meta({
     description:
       "Owners of a row: users or members the own extent of a grant opens the row to.",

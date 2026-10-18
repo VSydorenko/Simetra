@@ -9,7 +9,11 @@ import { toSnakeCase, type AttributeCase } from "../schemas/identity"
 import type { LocalizedString } from "../schemas/localized-string"
 import type { MetadataKind } from "../schemas/metadata-kind"
 import type { MetadataRef } from "../schemas/metadata-ref"
-import type { CustomAction, RightsCarrier } from "../schemas/rights"
+import type {
+  AccessMapping,
+  CustomAction,
+  RightsCarrier,
+} from "../schemas/rights"
 import type { TabularSection } from "../schemas/tabular-section"
 import type { DefaultValue, ValueType } from "../schemas/value-type"
 
@@ -136,6 +140,16 @@ export type ReferenceRole =
   | "rights.carrier"
   /** Другий крок шляху носія — реквізит цілі першого кроку. */
   | "rights.carrierPath"
+  /** Вимір доступу проєкту в `access[].dimension` об'єкта. */
+  | "access.dimension"
+  /** Носій мапінгу `access`: реквізит об'єкта чи перший крок шляху. */
+  | "access.attribute"
+  /** Довідник значень виміру доступу (`accessDimensions[].target`). */
+  | "dimension.target"
+  /** Об'єкт зв'язку виміру (`values.relation.object`). */
+  | "dimension.relationObject"
+  /** Поле об'єкта зв'язку виміру (`values.relation.subject`/`value`). */
+  | "dimension.relationField"
 
 export interface FoundReference {
   /** JSON Pointer (RFC 6901) на місце посилання у файлі. */
@@ -175,6 +189,24 @@ export interface FoundElementReference {
    * тож ціль стандартного `ref: "users"` вона й підставляє.
    */
   owner?: MetadataRef | "users"
+  role: ReferenceRole
+}
+
+/**
+ * Посилання з файлу об'єкта на іменований елемент проєкту (Р1a-19): вид
+ * скоупу, вимір доступу, джерело. Ціль — за іменем у колекції проєкту; імена
+ * елементів проєкту унікальні в усіх колекціях, тож колекція лише звужує
+ * пошук, а не робить ім'я однозначним.
+ */
+export interface FoundProjectReference {
+  /** JSON Pointer (RFC 6901) на рядок з іменем. */
+  pointer: string
+  name: string
+  collection:
+    | "scopeKinds"
+    | "accessDimensions"
+    | "membershipSources"
+    | "assignmentSources"
   role: ReferenceRole
 }
 
@@ -275,6 +307,8 @@ export interface KindDefinition {
   rightsContainer?: true
   /** The object can bind to a rights container (rights contract). */
   rightsBinding?: true
+  /** The object can be the value catalog of a project access dimension. */
+  accessDimensionTarget?: true
   materializes: "table" | "enumType" | "none"
   /**
    * Що приймає `<Ім'я>.sql` об'єкта (спека П2 §3, «Дослівний SQL»):
@@ -371,6 +405,12 @@ export interface KindDefinition {
    * володіє полем.
    */
   elementReferences?(obj: unknown): FoundElementReference[]
+  /**
+   * Посилання на іменовані елементи проєкту за логічним іменем (`access`):
+   * стадія 2 резолвить їх у id елемента, тож перейменування виміру бачить
+   * індекс. Невідоме ім'я звітує правило поля (`rights.*`).
+   */
+  projectReferences?(obj: unknown): FoundProjectReference[]
   /** Ключі таблиць регістра; є лише у видів-регістрів. */
   registerKeys?(obj: unknown): RegisterKeySpec
   /**
@@ -655,7 +695,8 @@ export function customActionReferences(obj: {
 export interface CarrierHost {
   kind: MetadataRef["kind"]
   name: string
-  attributes: readonly Attribute[]
+  /** Поля, що стають колонками: реквізити, а в регістра — ще виміри й ресурси. */
+  attributes: readonly Pick<Attribute, "name" | "ref">[]
   owners?: readonly MetadataRef[]
 }
 
@@ -671,15 +712,16 @@ export function carrierReferences(
   carrier: RightsCarrier,
   pointer: string,
   host: CarrierHost,
-  standard: readonly StandardColumnDef[]
+  standard: readonly StandardColumnDef[],
+  head: ReferenceRole = "rights.carrier"
 ): FoundElementReference[] {
   if (typeof carrier === "string") {
-    return [{ pointer, name: carrier, role: "rights.carrier" }]
+    return [{ pointer, name: carrier, role: head }]
   }
   const [first, second] = carrier
   const owner = carrierStepTarget(first, host, standard)
   return [
-    { pointer: `${pointer}/0`, name: first, role: "rights.carrier" },
+    { pointer: `${pointer}/0`, name: first, role: head },
     ...(owner === undefined
       ? []
       : [
@@ -741,6 +783,70 @@ export function bindingReferences(
         obj,
         standard
       )
+}
+
+/**
+ * Носії мапінгів `access` об'єкта: реквізит — на `/access/i/attribute`, шлях —
+ * на `/access/i/ref`; роль першого кроку — `access.attribute`, другого — та
+ * сама, що в будь-якого шляху носія.
+ */
+export function accessReferences(
+  obj: CarrierHost & { access?: readonly AccessMapping[] },
+  standard: readonly StandardColumnDef[]
+): FoundElementReference[] {
+  return (obj.access ?? []).flatMap((mapping, index) =>
+    "attribute" in mapping
+      ? carrierReferences(
+          mapping.attribute,
+          `/access/${index}/attribute`,
+          obj,
+          standard,
+          "access.attribute"
+        )
+      : carrierReferences(
+          mapping.ref,
+          `/access/${index}/ref`,
+          obj,
+          standard,
+          "access.attribute"
+        )
+  )
+}
+
+/**
+ * Регістр як носій прав: колонки дають виміри, ресурси й реквізити, тож
+ * перший крок шляху шукається серед усіх них.
+ */
+export function registerCarrierHost(register: {
+  kind: MetadataRef["kind"]
+  name: string
+  dimensions: readonly Pick<Attribute, "name" | "ref">[]
+  resources: readonly Pick<Attribute, "name" | "ref">[]
+  attributes: readonly Pick<Attribute, "name" | "ref">[]
+  access?: readonly AccessMapping[]
+}): CarrierHost & { access?: readonly AccessMapping[] } {
+  return {
+    kind: register.kind,
+    name: register.name,
+    attributes: [
+      ...register.dimensions,
+      ...register.resources,
+      ...register.attributes,
+    ],
+    ...(register.access === undefined ? {} : { access: register.access }),
+  }
+}
+
+/** Виміри доступу проєкту, які називає `access` об'єкта. */
+export function accessDimensionReferences(obj: {
+  access?: readonly AccessMapping[]
+}): FoundProjectReference[] {
+  return (obj.access ?? []).map((mapping, index) => ({
+    pointer: `/access/${index}/dimension`,
+    name: mapping.dimension,
+    collection: "accessDimensions" as const,
+    role: "access.dimension" as const,
+  }))
 }
 
 type TypedField = Pick<ValueType, "ref" | "allowedTypes">

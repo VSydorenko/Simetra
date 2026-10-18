@@ -5,7 +5,14 @@ import { catalogSchema } from "../schemas/catalog"
 import { documentSchema } from "../schemas/document"
 import { customTableSchema } from "../schemas/custom-table"
 import { informationRegisterSchema } from "../schemas/information-register"
-import { customActionSchema, rightsCarrierSchema } from "../schemas/rights"
+import { constantSchema } from "../schemas/constant"
+import { projectSchema } from "../schemas/project"
+import {
+  accessDimensionSchema,
+  accessMappingSchema,
+  customActionSchema,
+  rightsCarrierSchema,
+} from "../schemas/rights"
 import { METADATA_KINDS } from "../schemas/metadata-kind"
 
 describe("custom actions", () => {
@@ -117,6 +124,101 @@ describe("container and binding", () => {
         def.rightsContainer === true
       )
       expect("containerBinding" in shape, kind).toBe(def.rightsBinding === true)
+    }
+  })
+})
+
+describe("access dimensions", () => {
+  const target = { kind: "Catalog", name: "Region" }
+
+  it("accepts both forms of values", () => {
+    expect(
+      accessDimensionSchema.safeParse({
+        name: "region",
+        target,
+        values: {
+          relation: {
+            object: { kind: "InformationRegister", name: "MemberRegion" },
+            subject: "member",
+            value: "region",
+          },
+        },
+      }).success
+    ).toBe(true)
+    expect(
+      accessDimensionSchema.safeParse({
+        name: "region",
+        target,
+        values: { function: { name: "my_regions" } },
+      }).success
+    ).toBe(true)
+  })
+
+  it("rejects a title until it has a consumer", () => {
+    expect(
+      accessDimensionSchema.safeParse({
+        name: "region",
+        title: { en: "Region" },
+        target,
+        values: { function: { name: "my_regions" } },
+      }).success
+    ).toBe(false)
+  })
+
+  it("lives on the project with an empty default", () => {
+    expect(
+      projectSchema.parse({ name: "App", database: { provider: "supabase" } })
+        .accessDimensions
+    ).toEqual([])
+  })
+})
+
+describe("access mapping", () => {
+  it("accepts an attribute or a path", () => {
+    expect(
+      accessMappingSchema.safeParse({
+        attribute: "region",
+        dimension: "region",
+      }).success
+    ).toBe(true)
+    expect(
+      accessMappingSchema.safeParse({
+        ref: ["task", "region"],
+        dimension: "region",
+      }).success
+    ).toBe(true)
+    expect(
+      accessMappingSchema.safeParse({
+        attribute: "region",
+        ref: ["task", "region"],
+        dimension: "region",
+      }).success
+    ).toBe(false)
+  })
+
+  it("lives on kinds with the dimension extent only", () => {
+    expect(
+      constantSchema.safeParse({
+        kind: "Constant",
+        name: "MainCurrency",
+        type: "String",
+        length: 3,
+        access: [{ attribute: "value", dimension: "region" }],
+      }).success
+    ).toBe(false)
+    expect(
+      documentSchema.safeParse({
+        kind: "Document",
+        name: "Task",
+        access: [],
+      }).success
+    ).toBe(false)
+    for (const kind of METADATA_KINDS) {
+      const def = KIND_REGISTRY[kind]
+      const shape = (def.schema as z.ZodObject).shape
+      expect("access" in shape, kind).toBe(
+        def.rightsExtents.includes("dimension")
+      )
     }
   })
 })

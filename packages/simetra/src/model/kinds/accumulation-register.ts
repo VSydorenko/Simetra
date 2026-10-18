@@ -12,6 +12,9 @@ import {
   type KindDefinition,
   type StandardColumnDef,
   customActionReferences,
+  accessDimensionReferences,
+  accessReferences,
+  registerCarrierHost,
 } from "./standard"
 
 function standardColumns(obj: unknown): StandardColumnDef[] {
@@ -66,8 +69,15 @@ export const accumulationRegisterKind: KindDefinition = {
         ? ["balance", "balanceAndTurnovers"]
         : ["turnovers"],
   }),
-  elementReferences: (obj) =>
-    customActionReferences(obj as AccumulationRegister),
+  elementReferences: (obj) => [
+    ...customActionReferences(obj as AccumulationRegister),
+    ...accessReferences(
+      registerCarrierHost(obj as AccumulationRegister),
+      standardColumns(obj)
+    ),
+  ],
+  projectReferences: (obj) =>
+    accessDimensionReferences(obj as AccumulationRegister),
   references(obj) {
     const register = obj as AccumulationRegister
     return [

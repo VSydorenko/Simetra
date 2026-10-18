@@ -204,6 +204,69 @@
         "additionalProperties": false
       }
     },
+    "access": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "attribute": {
+                "type": "string",
+                "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+                "description": "Attribute of this object that references the dimension target."
+              },
+              "dimension": {
+                "type": "string",
+                "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+                "description": "Name of a project access dimension."
+              }
+            },
+            "required": [
+              "attribute",
+              "dimension"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "ref": {
+                "type": "array",
+                "prefixItems": [
+                  {
+                    "type": "string",
+                    "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+                    "description": "Logical element name (attribute, section, column). The casing style is checked against the project naming setting."
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+                    "description": "Logical element name (attribute, section, column). The casing style is checked against the project naming setting."
+                  }
+                ],
+                "items": false,
+                "minItems": 2,
+                "maxItems": 2,
+                "description": "Path [attribute, attribute of its target] whose last reference is to the dimension target."
+              },
+              "dimension": {
+                "type": "string",
+                "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+                "description": "Name of a project access dimension."
+              }
+            },
+            "required": [
+              "ref",
+              "dimension"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "description": "Access dimensions that restrict the rows of this object, each with its carrier."
+    },
     "standardAttributeOverrides": {
       "default": {},
       "description": "Custom titles and descriptions of derived standard attributes, keyed by standard attribute name.",

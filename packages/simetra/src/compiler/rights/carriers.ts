@@ -99,16 +99,18 @@ export function carrierTarget(terminal: {
  * означати, вирішує правило поля (власність, прив'язка, вимір).
  *
  * `at.pointer` — вказівник носія у файлі, `at.field` — ім'я поля для
- * діагностики невідомого реквізиту.
+ * діагностики невідомого реквізиту, `at.role` — роль першого кроку в індексі
+ * (типово `rights.carrier`; мапінг `access` має власну).
  */
 export function resolveCarrier(
   object: ParsedObject,
   carrier: RightsCarrier,
-  at: { pointer: string; field: string },
+  at: { pointer: string; field: string; role?: ReferenceRole },
   ctx: CarrierContext
 ): CarrierResolution {
+  const headRole = at.role ?? "rights.carrier"
   if (typeof carrier === "string") {
-    const step = resolveStep(object, object, carrier, at, "rights.carrier", ctx)
+    const step = resolveStep(object, object, carrier, at, headRole, ctx)
     if (!step.ok) return step
     return {
       ok: true,
@@ -122,7 +124,7 @@ export function resolveCarrier(
     object,
     first,
     { pointer: `${at.pointer}/0`, field: at.field },
-    "rights.carrier",
+    headRole,
     ctx
   )
   if (!head.ok) return head
@@ -197,35 +199,49 @@ function resolveStep(
       ),
     }
   }
-  const table = must(mainTableOf(ctx.physical, object.id))
+  const field = elementField(object, reference.to.id, name, ctx)
+  return field === undefined
+    ? fail("rights.carrier-not-ref", owner, at.pointer, name)
+    : { ok: true, field }
+}
+
+/**
+ * Що за поле — елемент `elementId` в основній таблиці об'єкта, за фізичним
+ * знімком: одна колонка з FK — одиночний `Ref` (і реквізит, і стандартний, як
+ * `createdBy`), ключ — колонка первинного ключа без FK. Поліморфна пара FK не
+ * має й двох колонок, тож, як і не-посилання, дає `undefined`.
+ */
+export function elementField(
+  object: ParsedObject,
+  elementId: string,
+  name: string,
+  ctx: CarrierContext
+): CarrierField | undefined {
+  const table = must(mainTableOf(ctx.physical, must(object.id)))
   const columns =
     elementColumns(object, table, ctx.project.naming.attributeCase).get(
-      reference.to.id
+      elementId
     ) ?? []
-  const notRef = fail("rights.carrier-not-ref", owner, at.pointer, name)
-  if (columns.length !== 1) return notRef
+  if (columns.length !== 1) return undefined
   const column = columns[0]!
   if (
     table.primaryKey?.columns.length === 1 &&
     table.primaryKey.columns[0] === column
   ) {
-    return { ok: true, field: { name, column, key: true, inScope: true } }
+    return { name, column, key: true, inScope: true }
   }
   const foreignKey = fieldForeignKey(table, column)
   const target =
     foreignKey === undefined
       ? undefined
       : objectOfTable(foreignKey.references, ctx)
-  if (target === undefined) return notRef
+  if (target === undefined) return undefined
   return {
-    ok: true,
-    field: {
-      name,
-      column,
-      key: false,
-      target,
-      inScope: inScopeTarget(foreignKey, ctx.project),
-    },
+    name,
+    column,
+    key: false,
+    target,
+    inScope: inScopeTarget(foreignKey, ctx.project),
   }
 }
 

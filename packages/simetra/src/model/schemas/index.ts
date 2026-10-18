@@ -70,10 +70,15 @@ export {
 } from "./accumulation-register"
 export { constantSchema, type Constant } from "./constant"
 export {
+  accessDimensionSchema,
+  accessMappingSchema,
+  accessSchema,
   customActionSchema,
   customActionsSchema,
   ownershipSchema,
   rightsCarrierSchema,
+  type AccessDimension,
+  type AccessMapping,
   type CustomAction,
   type RightsCarrier,
 } from "./rights"

@@ -2,6 +2,7 @@ import {
   KIND_REGISTRY,
   actionRequires,
   closeRequires,
+  type AccessMapping,
   type ActionEffects,
   type CustomAction,
   type PhysicalSnapshot,
@@ -10,16 +11,18 @@ import {
 } from "simetra/model"
 import {
   mainTableOf,
+  type AccessDimensionContract,
   type RightsAction,
   type RightsContract,
 } from "../contracts"
 import { compareStrings } from "../diagnostics"
-import type { ParsedObject } from "../stages/files"
+import { PROJECT_FILE, type ParsedObject } from "../stages/files"
 import { standardElementId, type ResolvedReference } from "../stages/identity"
 import { kindLabelOf } from "../stages/model"
 import {
   carrierTarget,
   elementColumns,
+  elementField,
   resolveCarrier,
   type CarrierContext,
 } from "./carriers"
@@ -37,6 +40,36 @@ export function ownershipOf(object: ParsedObject): readonly RightsCarrier[] {
 /** Носій `containerBinding` об'єкта виду з фактом `rightsBinding`. */
 export function bindingOf(object: ParsedObject): RightsCarrier | undefined {
   return (object.data as { containerBinding?: RightsCarrier }).containerBinding
+}
+
+/** Мапінги `access` об'єкта виду з обсягом `dimension`. */
+export function accessOf(object: ParsedObject): readonly AccessMapping[] {
+  return (object.data as { access?: AccessMapping[] }).access ?? []
+}
+
+/** Носій мапінгу й його вказівник: реквізит чи шлях `ref`. */
+export function accessCarrier(
+  mapping: AccessMapping,
+  index: number
+): { carrier: RightsCarrier; pointer: string } {
+  return "attribute" in mapping
+    ? { carrier: mapping.attribute, pointer: `/access/${index}/attribute` }
+    : { carrier: mapping.ref, pointer: `/access/${index}/ref` }
+}
+
+/** Id виміру, який називає мапінг: його резолвить стадія 2 (`access.dimension`). */
+export function accessDimensionId(
+  object: ParsedObject,
+  index: number,
+  references: readonly ResolvedReference[]
+): string | undefined {
+  const pointer = `/access/${index}/dimension`
+  return references.find(
+    (r) =>
+      r.role === "access.dimension" &&
+      r.from.file === object.file &&
+      r.from.pointer === pointer
+  )?.to.id
 }
 
 /**
@@ -138,9 +171,27 @@ function rightsContract(
       carrier: resolved.contract,
     }
   }
+  const access = accessOf(object).map((mapping, index) => {
+    const { carrier, pointer } = accessCarrier(mapping, index)
+    const resolved = resolveCarrier(
+      object,
+      carrier,
+      { pointer, field: "access", role: "access.attribute" },
+      ctx
+    )
+    if (!resolved.ok) throw new Error("internal: unchecked rights carrier")
+    return {
+      dimensionId: must(accessDimensionId(object, index, references)),
+      carrier: resolved.contract,
+    }
+  })
   const extents: RightsAction["extents"] = [
     { form: "any" },
     ...(ownership.length > 0 ? [{ form: "own" as const }] : []),
+    ...access.map(({ dimensionId }) => ({
+      form: "dimension" as const,
+      dimensionId,
+    })),
   ]
   const canonicalHeader = (header: ActionEffects["header"]) =>
     header === "all"
@@ -206,7 +257,81 @@ function rightsContract(
       ? { container: true as const }
       : {}),
     ...(binding === undefined ? {} : { binding }),
+    access,
   }
+}
+
+/**
+ * Контракти вимірів доступу проєкту (спека прав §4.4). Викликається лише на
+ * моделі без помилок: ціль, об'єкт і поля зв'язку вже перевірила стадія 4.
+ */
+export function accessDimensionContracts(
+  objects: readonly ParsedObject[],
+  references: readonly ResolvedReference[],
+  physical: PhysicalSnapshot,
+  project: Project
+): AccessDimensionContract[] {
+  const ctx: CarrierContext = {
+    references,
+    physical,
+    project,
+    byId: new Map(objects.map((o) => [must(o.id), o])),
+  }
+  const toId = (pointer: string, role: ResolvedReference["role"]) =>
+    must(
+      references.find(
+        (r) =>
+          r.from.file === PROJECT_FILE &&
+          r.from.pointer === pointer &&
+          r.role === role
+      )?.to.id
+    )
+  return project.accessDimensions
+    .map((dimension, index): AccessDimensionContract => {
+      const at = `/accessDimensions/${index}`
+      const dimensionId = must(dimension.id)
+      const targetId = toId(`${at}/target`, "dimension.target")
+      if ("function" in dimension.values) {
+        const { schema, name } = dimension.values.function
+        return {
+          dimensionId,
+          name: dimension.name,
+          targetId,
+          values: {
+            function: { schema: schema ?? project.defaultSchema, name },
+          },
+        }
+      }
+      const { relation } = dimension.values
+      const relationAt = `${at}/values/relation`
+      const object = must(
+        ctx.byId.get(toId(`${relationAt}/object`, "dimension.relationObject"))
+      )
+      const table = must(mainTableOf(physical, must(object.id)))
+      const column = (field: "subject" | "value") =>
+        must(
+          elementField(
+            object,
+            toId(`${relationAt}/${field}`, "dimension.relationField"),
+            relation[field],
+            ctx
+          )
+        ).column
+      return {
+        dimensionId,
+        name: dimension.name,
+        targetId,
+        values: {
+          relation: {
+            objectId: must(object.id),
+            table: { schema: table.schema, name: table.name },
+            subject: column("subject"),
+            value: column("value"),
+          },
+        },
+      }
+    })
+    .sort((a, b) => compareStrings(a.dimensionId, b.dimensionId))
 }
 
 /** Модель без помилок гарантує наявність; відсутність — дефект компілятора. */

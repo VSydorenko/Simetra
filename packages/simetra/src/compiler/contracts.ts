@@ -310,6 +310,34 @@ export interface RightsContract {
   container?: true
   /** Прив'язка до контейнера (спека прав §4.3): носій і ціль. */
   binding?: { containerId: string; carrier: CarrierContract }
+  /**
+   * Мапінги на виміри доступу (спека прав §4.4) у порядку файлу; кожен
+   * додає обсяг `dimension` кожній дії.
+   */
+  access: { dimensionId: string; carrier: CarrierContract }[]
+}
+
+/**
+ * Вимір доступу проєкту (спека прав §4.4): довідник значень і джерело
+ * значень поточного користувача. Зв'язок названо фізичними колонками, бо
+ * з нього Права-2 будують функцію значень; функція — уже кваліфікована.
+ */
+export interface AccessDimensionContract {
+  dimensionId: string
+  name: string
+  targetId: string
+  values:
+    | {
+        relation: {
+          objectId: string
+          table: QualifiedName
+          /** Колонка посилання на «Користувачі» чи на довідник членства. */
+          subject: string
+          /** Колонка посилання на довідник значень. */
+          value: string
+        }
+      }
+    | { function: QualifiedName }
 }
 
 export interface Contracts {
@@ -335,6 +363,8 @@ export interface Contracts {
   membership: MembershipContract[]
   /** За `objectId`: кожен об'єкт виду з непорожнім `rightsExtents`. */
   rights: RightsContract[]
+  /** За `dimensionId`. */
+  accessDimensions: AccessDimensionContract[]
 }
 
 /** Функція контракту, якої ще немає в БД, з місцем у метаданих для діагностики. */
@@ -640,7 +670,8 @@ export function buildContracts(
   >,
   access: readonly AccessContract[],
   eventSubscriptions: readonly EventSubscriptionContract[],
-  rights: readonly RightsContract[]
+  rights: readonly RightsContract[],
+  accessDimensions: readonly AccessDimensionContract[]
 ): Contracts {
   const registers = objects
     .filter(isRegister)
@@ -708,6 +739,7 @@ export function buildContracts(
       })
     ),
     rights: [...rights],
+    accessDimensions: [...accessDimensions],
   }
 }
 

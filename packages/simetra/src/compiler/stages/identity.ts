@@ -6,6 +6,9 @@ import {
   parseExpression,
   walkExpr,
   standardLogicalName,
+  namedCollections,
+  projectSchema,
+  type AccessDimension,
   type AttributeCase,
   type Expr,
   type MetadataKind,
@@ -16,6 +19,7 @@ import {
   type Span,
   type StandardColumnDef,
 } from "simetra/model"
+import type { z } from "zod"
 import {
   compareStrings,
   diagnostic,
@@ -179,33 +183,63 @@ export function checkIdentity(
     }
   }
 
-  // Види скоупу ідентифікуються раніше за об'єкти: за ними розпізнаються
-  // корені й резолвиться `scope` об'єктів.
-  const scopeKinds = project?.scopeKinds ?? []
-  const scopeKindsByName = new Map<string, ScopeKind>()
-  scopeKinds.forEach((kind, index) => {
-    const pointer = `/scopeKinds/${index}`
-    checkIdentified(PROJECT_FILE, pointer, kind)
-    const at = `${pointer}/name`
-    if (scopeKindsByName.has(kind.name)) {
+  // Імена елементів проєкту унікальні в усіх його колекціях (Р1a-19):
+  // адресація `{ kind: "Project", element }` бере першу колекцію зі збігом,
+  // а посилання з файлу об'єкта називає елемент лише іменем.
+  const projectNames = new Set<string>()
+  const checkProjectName = (at: string, name: string): boolean => {
+    const fresh = !projectNames.has(name)
+    if (fresh) {
+      projectNames.add(name)
+    } else {
       diagnostics.push(
         diagnostic("identity.name-duplicate", PROJECT_FILE, at, {
-          name: kind.name,
-          scope: "project scope kinds",
+          name,
+          scope: "project elements",
         })
       )
-    } else {
-      scopeKindsByName.set(kind.name, kind)
     }
-    if (style !== undefined && !matchesAttributeCase(kind.name, style)) {
+    if (style !== undefined && !matchesAttributeCase(name, style)) {
       diagnostics.push(
-        diagnostic("identity.name-case", PROJECT_FILE, at, {
-          name: kind.name,
-          style,
-        })
+        diagnostic("identity.name-case", PROJECT_FILE, at, { name, style })
       )
     }
-  })
+    return fresh
+  }
+
+  // Елементи проєкту ідентифікуються раніше за об'єкти: за видами скоупу
+  // розпізнаються корені й резолвиться `scope` об'єктів. Колекції — зі схеми
+  // проєкту (`namedCollections`), тож нова колекція потрапляє в спільний
+  // простір імен сама; фізичне ім'я перевіряється лише там, де схема його має.
+  const projectElements = new Map<string, Map<string, { id?: string }>>()
+  if (project !== undefined) {
+    for (const [field, schema] of namedCollections(projectSchema)) {
+      const labelled = Object.hasOwn(
+        (schema as z.ZodObject).shape,
+        "physicalName"
+      )
+      const byName = new Map<string, { id?: string }>()
+      projectElements.set(field, byName)
+      const elements = (project as unknown as Record<string, Element[]>)[field]
+      elements?.forEach((element, index) => {
+        const pointer = `/${field}/${index}`
+        checkIdentified(PROJECT_FILE, pointer, element, labelled)
+        const name = String(element.name)
+        if (checkProjectName(`${pointer}/name`, name)) {
+          byName.set(name, element as { id?: string })
+        }
+      })
+    }
+  }
+  const scopeKinds = project?.scopeKinds ?? []
+  const scopeKindsByName = new Map(
+    scopeKinds
+      .filter(
+        (kind) => projectElements.get("scopeKinds")?.get(kind.name) === kind
+      )
+      .map((kind) => [kind.name, kind])
+  )
+  const dimensions = project?.accessDimensions ?? []
   // Бакет називає вид скоупу за логічним іменем (id призначає цей самий
   // файл), тож резолв тут — поруч із видами, а контракт бере вже id.
   const bucketsSeen = new Set<string>()
@@ -459,7 +493,35 @@ export function checkIdentity(
       role: "storage.scopeKind",
     })
   })
+  dimensions.forEach((dimension, index) => {
+    resolveDimension(
+      dimension,
+      `/accessDimensions/${index}`,
+      resolveObjectRef,
+      style,
+      references
+    )
+  })
   for (const object of objects) {
+    for (const found of KIND_REGISTRY[object.kind].projectReferences?.(
+      object.data
+    ) ?? []) {
+      const element = projectElements.get(found.collection)?.get(found.name)
+      // Невідоме ім'я звітує правило поля (`rights.dimension-unknown`).
+      if (element?.id === undefined || object.id === undefined) continue
+      references.push({
+        from: {
+          file: object.file,
+          pointer: found.pointer,
+          objectId: object.id,
+        },
+        to: {
+          kind: found.collection === "scopeKinds" ? "ScopeKind" : "Element",
+          id: element.id,
+        },
+        role: found.role,
+      })
+    }
     for (const found of KIND_REGISTRY[object.kind].references(object.data)) {
       const target = resolveObjectRef(object.file, object.id, found, found.role)
       if (target !== undefined) {
@@ -505,6 +567,58 @@ export function checkIdentity(
   )
 
   return { references, diagnostics }
+}
+
+type ObjectRefResolver = (
+  file: string,
+  fromId: string | undefined,
+  found: { pointer: string; ref: { kind: string; name: string } },
+  role: ReferenceRole
+) => ParsedObject | undefined
+
+/**
+ * Посилання виміру доступу: довідник значень, об'єкт зв'язку й поля зв'язку.
+ * Власник — сам вимір: перейменування цілі чи поля бачить індекс. Поле, якого
+ * в об'єкта зв'язку немає, звітує правило виміру (`rights.dimension-relation`).
+ */
+function resolveDimension(
+  dimension: AccessDimension,
+  pointer: string,
+  resolveObjectRef: ObjectRefResolver,
+  style: AttributeCase | undefined,
+  references: ResolvedReference[]
+) {
+  resolveObjectRef(
+    PROJECT_FILE,
+    dimension.id,
+    { pointer: `${pointer}/target`, ref: dimension.target },
+    "dimension.target"
+  )
+  if (!("relation" in dimension.values)) return
+  const { relation } = dimension.values
+  const at = `${pointer}/values/relation`
+  const object = resolveObjectRef(
+    PROJECT_FILE,
+    dimension.id,
+    { pointer: `${at}/object`, ref: relation.object },
+    "dimension.relationObject"
+  )
+  if (object === undefined || dimension.id === undefined) return
+  if (KIND_REGISTRY[object.kind].materializes !== "table") return
+  const table = columnTable(object, style)
+  for (const field of ["subject", "value"] as const) {
+    const id = table?.get(relation[field])
+    if (id === undefined) continue
+    references.push({
+      from: {
+        file: PROJECT_FILE,
+        pointer: `${at}/${field}`,
+        objectId: dimension.id,
+      },
+      to: { kind: "Element", id },
+      role: "dimension.relationField",
+    })
+  }
 }
 
 /** Роль типового значення за роллю одиночного `Ref`, що його несе. */

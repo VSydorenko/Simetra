@@ -475,6 +475,7 @@ describe("projectSchema", () => {
       naming: { attributeCase: "camelCase" },
       timezone: "UTC",
       scopeKinds: [],
+      accessDimensions: [],
       storageBuckets: [],
     })
   })

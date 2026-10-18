@@ -17,6 +17,8 @@ import {
   type NumberingSpec,
   type StandardColumnDef,
   customActionReferences,
+  accessDimensionReferences,
+  accessReferences,
   bindingReferences,
   ownershipReferences,
 } from "./standard"
@@ -149,7 +151,9 @@ export const documentKind: KindDefinition = {
     ...customActionReferences(obj as Document),
     ...ownershipReferences(obj as Document, standardColumns(obj)),
     ...bindingReferences(obj as Document, standardColumns(obj)),
+    ...accessReferences(obj as Document, standardColumns(obj)),
   ],
+  projectReferences: (obj) => accessDimensionReferences(obj as Document),
   references(obj) {
     const document = obj as Document
     return [

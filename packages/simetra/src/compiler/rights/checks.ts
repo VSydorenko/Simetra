@@ -5,11 +5,23 @@ import {
   type ScopeKind,
 } from "simetra/model"
 import { diagnostic, type Diagnostic } from "../diagnostics"
-import type { ParsedObject } from "../stages/files"
+import { PROJECT_FILE, type ParsedObject } from "../stages/files"
 import type { ResolvedReference } from "../stages/identity"
 import type { ModelStageResult } from "../stages/model"
-import { carrierTarget, resolveCarrier, type CarrierContext } from "./carriers"
-import { bindingOf, customActionsOf, ownershipOf } from "./contracts"
+import {
+  carrierTarget,
+  elementField,
+  resolveCarrier,
+  type CarrierContext,
+} from "./carriers"
+import {
+  accessCarrier,
+  accessDimensionId,
+  accessOf,
+  bindingOf,
+  customActionsOf,
+  ownershipOf,
+} from "./contracts"
 
 /** Вхід правил прав стадії 4: усе, що вже знає цілісність. */
 export interface RightsCheckContext {
@@ -70,7 +82,11 @@ export function checkRights(ctx: RightsCheckContext): Diagnostic[] {
       diagnostics.push(...checkOwnership(object, ctx))
     }
     if (def.rightsBinding) diagnostics.push(...checkBinding(object, ctx))
+    if (def.rightsExtents.includes("dimension")) {
+      diagnostics.push(...checkAccess(object, ctx))
+    }
   }
+  diagnostics.push(...checkDimensions(ctx))
   return diagnostics
 }
 
@@ -96,10 +112,7 @@ function checkOwnership(
   ctx: RightsCheckContext
 ): Diagnostic[] {
   const carriers = carrierContext(ctx)
-  const scopeOf = (o: ParsedObject) =>
-    ctx.references.find(
-      (r) => r.role === "object.scope" && r.from.file === o.file
-    )?.to.id
+  const scopeOf = (o: ParsedObject) => scopeKindOf(o, ctx.references)
   return ownershipOf(object).flatMap((carrier, index) => {
     const pointer = `/ownership/${index}`
     const resolved = resolveCarrier(
@@ -180,6 +193,183 @@ function checkBinding(
           attribute: field.name,
         }),
       ]
+}
+
+/** Id виду скоупу об'єкта; немає — об'єкт без скоупу. */
+function scopeKindOf(
+  object: ParsedObject,
+  references: readonly ResolvedReference[]
+): string | undefined {
+  return references.find(
+    (r) => r.role === "object.scope" && r.from.file === object.file
+  )?.to.id
+}
+
+/** Ціль посилання з файлу проєкту за вказівником і роллю. */
+function projectTarget(
+  pointer: string,
+  role: ResolvedReference["role"],
+  ctx: RightsCheckContext
+): string | undefined {
+  return ctx.references.find(
+    (r) =>
+      r.from.file === PROJECT_FILE &&
+      r.from.pointer === pointer &&
+      r.role === role
+  )?.to.id
+}
+
+/**
+ * Правила виміру доступу (спека прав §4.4, Р1a-13): довідник значень — вид,
+ * що може ним бути, і скоуплений, коли в проєкті є види скоупу (інакше
+ * значення одного тенанта відкривали б рядки іншого). Зв'язок — у тому самому
+ * виді скоупу, що й довідник; `subject` — одиночний `Ref` на «Користувачі» чи
+ * на довідник членства того самого виду, `value` — одиночний `Ref` на
+ * довідник значень. Функцію значень перевіряє стадія 5.
+ */
+function checkDimensions(ctx: RightsCheckContext): Diagnostic[] {
+  const diagnostics: Diagnostic[] = []
+  const carriers = carrierContext(ctx)
+  const scopeOf = (o: ParsedObject) => scopeKindOf(o, ctx.references)
+  ctx.project.accessDimensions.forEach((dimension, index) => {
+    const at = `/accessDimensions/${index}`
+    const targetId = projectTarget(`${at}/target`, "dimension.target", ctx)
+    const target = targetId === undefined ? undefined : ctx.byId.get(targetId)
+    // Невідому ціль уже звітувала стадія 2 (`reference.unresolved`).
+    if (target === undefined) return
+    const reason = !KIND_REGISTRY[target.kind].accessDimensionTarget
+      ? "kind"
+      : ctx.scopeKinds.length > 0 && scopeOf(target) === undefined
+        ? "unscoped"
+        : undefined
+    if (reason !== undefined) {
+      diagnostics.push(
+        diagnostic("rights.dimension-target", PROJECT_FILE, `${at}/target`, {
+          dimension: dimension.name,
+          reason,
+        })
+      )
+    }
+    if (!("relation" in dimension.values)) return
+    const { relation } = dimension.values
+    const relationAt = `${at}/values/relation`
+    const broken = (
+      field: "object" | "subject" | "value",
+      why: "table" | "scope" | "unknown" | "target"
+    ) =>
+      diagnostics.push(
+        diagnostic(
+          "rights.dimension-relation",
+          PROJECT_FILE,
+          `${relationAt}/${field}`,
+          { dimension: dimension.name, field, reason: why }
+        )
+      )
+    const objectId = projectTarget(
+      `${relationAt}/object`,
+      "dimension.relationObject",
+      ctx
+    )
+    const object = objectId === undefined ? undefined : ctx.byId.get(objectId)
+    if (object === undefined) return
+    if (KIND_REGISTRY[object.kind].materializes !== "table") {
+      broken("object", "table")
+      return
+    }
+    if (scopeOf(object) !== scopeOf(target)) broken("object", "scope")
+    // Ціль одиночного `Ref` поля зв'язку; `null` — поля немає в об'єкта.
+    const targetOf = (field: "subject" | "value") => {
+      const id = projectTarget(
+        `${relationAt}/${field}`,
+        "dimension.relationField",
+        ctx
+      )
+      if (id === undefined) return null
+      return elementField(object, id, relation[field], carriers)?.target
+    }
+    const subject = targetOf("subject")
+    const member = (o: ParsedObject) =>
+      (o.data as { membership?: unknown }).membership !== undefined &&
+      scopeOf(o) === scopeOf(target)
+    if (subject === null) broken("subject", "unknown")
+    else if (subject === undefined || !(isUsers(subject) || member(subject))) {
+      broken("subject", "target")
+    }
+    const value = targetOf("value")
+    if (value === null) broken("value", "unknown")
+    else if (value !== target) broken("value", "target")
+  })
+  return diagnostics
+}
+
+/**
+ * Правило мапінгу `access` (спека прав §4.4): вимір відомий і названий раз,
+ * кінцевий `Ref` носія — на довідник значень виміру й у межах скоупу
+ * (інакше значення з чужого тенанта відкрили б рядок).
+ */
+function checkAccess(
+  object: ParsedObject,
+  ctx: RightsCheckContext
+): Diagnostic[] {
+  const carriers = carrierContext(ctx)
+  const seen = new Set<string>()
+  return accessOf(object).flatMap((mapping, index) => {
+    const dimensionAt = `/access/${index}/dimension`
+    const params = { dimension: mapping.dimension }
+    const dimensionId = accessDimensionId(object, index, ctx.references)
+    if (dimensionId === undefined) {
+      return [
+        diagnostic(
+          "rights.dimension-unknown",
+          object.file,
+          dimensionAt,
+          params
+        ),
+      ]
+    }
+    if (seen.has(dimensionId)) {
+      return [
+        diagnostic("rights.access-duplicate", object.file, dimensionAt, params),
+      ]
+    }
+    seen.add(dimensionId)
+    const { carrier, pointer } = accessCarrier(mapping, index)
+    const resolved = resolveCarrier(
+      object,
+      carrier,
+      { pointer, field: "access", role: "access.attribute" },
+      carriers
+    )
+    if (!resolved.ok) return [resolved.diagnostic]
+    const at = typeof carrier === "string" ? pointer : `${pointer}/1`
+    const { field } = resolved.terminal
+    const dimensionIndex = ctx.project.accessDimensions.findIndex(
+      (d) => d.id === dimensionId
+    )
+    const targetId = projectTarget(
+      `/accessDimensions/${dimensionIndex}/target`,
+      "dimension.target",
+      ctx
+    )
+    if (
+      targetId !== undefined &&
+      carrierTarget(resolved.terminal).id !== targetId
+    ) {
+      return [
+        diagnostic("rights.access-target", object.file, at, {
+          attribute: field.name,
+          dimension: mapping.dimension,
+        }),
+      ]
+    }
+    return field.inScope
+      ? []
+      : [
+          diagnostic("rights.carrier-cross-tenant", object.file, at, {
+            attribute: field.name,
+          }),
+        ]
+  })
 }
 
 function isUsers(object: ParsedObject): boolean {

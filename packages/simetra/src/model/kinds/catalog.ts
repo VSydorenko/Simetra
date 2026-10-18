@@ -15,6 +15,8 @@ import {
   type NumberingSpec,
   type StandardColumnDef,
   customActionReferences,
+  accessDimensionReferences,
+  accessReferences,
   bindingReferences,
   ownershipReferences,
 } from "./standard"
@@ -184,6 +186,7 @@ export const catalogKind: KindDefinition = {
   rightsExtents: ["any", "own", "dimension"],
   rightsContainer: true,
   rightsBinding: true,
+  accessDimensionTarget: true,
   sqlModule: "closed",
   materializes: "table",
   rowLevelSecurity: "enabled",
@@ -207,7 +210,9 @@ export const catalogKind: KindDefinition = {
     ...customActionReferences(obj as Catalog),
     ...ownershipReferences(obj as Catalog, standardColumns(obj)),
     ...bindingReferences(obj as Catalog, standardColumns(obj)),
+    ...accessReferences(obj as Catalog, standardColumns(obj)),
   ],
+  projectReferences: (obj) => accessDimensionReferences(obj as Catalog),
   references(obj) {
     const catalog = obj as Catalog
     return [

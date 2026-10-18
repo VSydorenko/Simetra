@@ -24,6 +24,9 @@ describe("namedCollections", () => {
       "tabularSections"
     )!
     expect([...namedCollections(sections).keys()]).toEqual(["attributes"])
-    expect([...namedCollections(projectSchema).keys()]).toEqual(["scopeKinds"])
+    expect([...namedCollections(projectSchema).keys()]).toEqual([
+      "scopeKinds",
+      "accessDimensions",
+    ])
   })
 })

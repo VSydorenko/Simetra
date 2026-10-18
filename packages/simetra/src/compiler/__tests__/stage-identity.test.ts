@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { compile } from "simetra/compiler"
+import { compile, completeFiles } from "simetra/compiler"
 import {
   attribute,
   catalog,
@@ -402,6 +402,66 @@ describe("stage 2: identity", () => {
         role: "attribute.ref",
       },
     ])
+  })
+  it("refuses one name in two project collections", async () => {
+    const result = await compile(
+      metaFiles({
+        "project.meta.json": project({
+          scopeKinds: [
+            {
+              id: uuid(7001),
+              name: "org",
+              physicalName: "org_id",
+              root: {
+                external: { schema: "auth", table: "users", column: "id" },
+              },
+              setFunction: { name: "org_ids" },
+            },
+          ],
+          accessDimensions: [
+            {
+              id: uuid(7002),
+              name: "org",
+              target: { kind: "Catalog", name: "Currency" },
+              values: { function: { name: "my_orgs" } },
+            },
+          ],
+        }),
+        "catalogs/Currency/Currency.meta.json": catalog("Currency", {
+          scope: "org",
+        }),
+      })
+    )
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({
+        code: "identity.name-duplicate",
+        file: "project.meta.json",
+        pointer: "/accessDimensions/0/name",
+        params: { name: "org", scope: "project elements" },
+      })
+    )
+  })
+
+  it("assigns ids to access dimensions", () => {
+    const completed = completeFiles(
+      metaFiles({
+        "project.meta.json": project({
+          accessDimensions: [
+            {
+              name: "region",
+              target: { kind: "Catalog", name: "Currency" },
+              values: { function: { name: "my_regions" } },
+            },
+          ],
+        }),
+        "catalogs/Currency/Currency.meta.json": catalog("Currency"),
+      }),
+      { schemaPath: (_, schema) => schema, newId: () => uuid(7100) }
+    )
+    const written = JSON.parse(completed.files.get("project.meta.json")!) as {
+      accessDimensions: { id?: string }[]
+    }
+    expect(written.accessDimensions[0]!.id).toBe(uuid(7100))
   })
 })
 

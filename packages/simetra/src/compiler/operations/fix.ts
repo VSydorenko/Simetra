@@ -8,6 +8,7 @@ import {
   formatProjectFile,
   formatSqlDebtFile,
   makeObjectName,
+  namedCollections,
   projectSchema,
   type PhysicalNameRole,
   type StandardColumnDef,
@@ -423,7 +424,13 @@ export function completeFiles(
   // Id першими: вони не залежать ні від чого, а порядок обходу (шлях файлу,
   // порядок елементів) робить лічильник тестів відтворюваним.
   const identified = [
-    ...(project === undefined ? [] : elementsAt(project, "scopeKinds")),
+    // Колекції проєкту — зі схеми, як в адресації `{ kind: "Project" }`: нова
+    // іменована колекція отримує id сама.
+    ...(project === undefined
+      ? []
+      : [...namedCollections(projectSchema).keys()].flatMap((field) =>
+          elementsAt(project, field)
+        )),
     ...objects.flatMap(namedElementsOf),
   ]
   for (const { element } of identified) {

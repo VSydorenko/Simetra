@@ -35,6 +35,7 @@ export {
   standardLogicalName,
   versionColumn,
   type FoundElementReference,
+  type FoundProjectReference,
   type FoundReference,
   type KindDefinition,
   type NumberingSpec,

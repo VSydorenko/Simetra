@@ -1,6 +1,6 @@
 import { z } from "zod"
 import { publicReadSchema } from "./public-read"
-import { customActionsSchema } from "./rights"
+import { accessSchema, customActionsSchema } from "./rights"
 import { attributeSchema, registerFieldSchema } from "./attribute"
 import { physicalNameSchema } from "./identity"
 import { metadataRefSchema } from "./metadata-ref"
@@ -40,6 +40,7 @@ export const informationRegisterSchema = z.strictObject({
 
   publicRead: publicReadSchema,
   customActions: customActionsSchema,
+  access: accessSchema.optional(),
 
   standardAttributeOverrides: standardAttributeOverridesSchema,
 

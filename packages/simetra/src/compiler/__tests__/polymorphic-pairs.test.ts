@@ -132,6 +132,14 @@ function manyOwners(): Map<string, string> {
     { kind: "Catalog", name: "Item" },
   ]
   files.set(path, JSON.stringify(item))
+  // Ні кроком шляху мапінгу доступу: шляхи фікстури йдуть через власника.
+  for (const [file, text] of files) {
+    if (!file.endsWith(".meta.json")) continue
+    const data = JSON.parse(text) as { access?: { attribute?: string }[] }
+    if (data.access === undefined) continue
+    data.access = data.access.filter((m) => m.attribute !== undefined)
+    files.set(file, JSON.stringify(data))
+  }
   return files
 }
 

@@ -472,9 +472,12 @@ function nameAt(
 
 /** Ланцюжок імен до елемента з id: об'єкт, вкладені колекції чи вид скоупу. */
 function targetOf(model: CompiledModel, id: string): ElementTarget | undefined {
-  const scopeKind = model.scopeKinds.find((k) => k.id === id)
-  if (scopeKind !== undefined) {
-    return { kind: "Project", element: [scopeKind.name] }
+  const projectElement = [
+    ...model.scopeKinds,
+    ...model.project.accessDimensions,
+  ].find((k) => k.id === id)
+  if (projectElement !== undefined) {
+    return { kind: "Project", element: [projectElement.name] }
   }
   // Ланцюжок — імена кожного іменованого предка нижче за сам об'єкт.
   const chain = (node: unknown, path: string[]): string[] | undefined => {

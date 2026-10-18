@@ -4,6 +4,7 @@ import { localizedStringSchema } from "./localized-string"
 import type { SchemaRule } from "./rules"
 import { ATTRIBUTE_CASES, elementNameSchema } from "./identity"
 import { NO_SCOPE, scopeKindSchema } from "./scope"
+import { accessDimensionSchema } from "./rights"
 
 /**
  * Пресети провайдера бази (платформна спека §6.9). Проєкт вибирає пресет
@@ -242,6 +243,10 @@ export const projectSchema = z
     scopeKinds: z.array(scopeKindSchema).default([]).meta({
       description:
         "Scope kinds of the application; leave empty for a single-tenant application.",
+    }),
+    accessDimensions: z.array(accessDimensionSchema).default([]).meta({
+      description:
+        "Access dimensions of the application: value catalogs that grants may restrict rows by.",
     }),
     // Бакет — ключ політик сховища провайдера; сам бакет створює провайдер,
     // а тут лише декларація, за якою П3 генерує політики за скоупом.

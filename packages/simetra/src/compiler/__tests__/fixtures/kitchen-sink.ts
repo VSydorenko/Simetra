@@ -217,6 +217,28 @@ export function kitchenSink(): Map<string, string> {
       },
     ],
     storageBuckets: [{ bucket: "attachments", scopeKind: "org" }],
+    // Обидві гілки `values`: зв'язок через сам товар (автор ↔ товар) і
+    // дослівна функція. Id — поза лічильником, щоб не зсувати id решти.
+    accessDimensions: [
+      {
+        id: uuid(9900),
+        name: "item",
+        target: ref("Catalog", "Item"),
+        values: {
+          relation: {
+            object: ref("Catalog", "Item"),
+            subject: "createdBy",
+            value: "itemItem",
+          },
+        },
+      },
+      {
+        id: uuid(9901),
+        name: "partner",
+        target: ref("Catalog", "Partner"),
+        values: { function: { schema: "public", name: "my_partner_ids" } },
+      },
+    ],
   }
 
   const organization = {
@@ -247,6 +269,11 @@ export function kitchenSink(): Map<string, string> {
     // Контейнер, прив'язаний до іншого контейнера через стандартний власник.
     rightsContainer: true,
     containerBinding: "owner",
+    // Обидві форми мапінгу: реквізит і шлях до власника товару.
+    access: [
+      { attribute: "itemItem", dimension: "item" },
+      { ref: ["itemItem", "owner"], dimension: "partner" },
+    ],
     predefinedItems: [
       {
         id: id(),
@@ -313,6 +340,11 @@ export function kitchenSink(): Map<string, string> {
     // Обидві форми носія: рядок і шлях через товар до його автора.
     ownership: ["createdBy", ["saleItem", "createdBy"]],
     containerBinding: "saleItem",
+    // Обидві форми мапінгу: реквізит і шлях до власника товару.
+    access: [
+      { attribute: "saleItem", dimension: "item" },
+      { ref: ["saleItem", "owner"], dimension: "partner" },
+    ],
     posting: {
       movements: [
         {
@@ -393,6 +425,11 @@ export function kitchenSink(): Map<string, string> {
     periodicity: "Month",
     writeMode: "RecorderSubordinate",
     customActions: customActions("read", ["price"], false),
+    // Обидві форми мапінгу: реквізит і шлях до власника товару.
+    access: [
+      { attribute: "item", dimension: "item" },
+      { ref: ["item", "owner"], dimension: "partner" },
+    ],
     recorderTypes: [ref("Document", "Sale")],
     standardAttributeOverrides: overrides("period"),
     dimensions: [
@@ -426,6 +463,11 @@ export function kitchenSink(): Map<string, string> {
     recorderTypes: [ref("Document", "Sale")],
     balanceControl: { resources: ["qty"] },
     customActions: customActions("read", ["qty"], false),
+    // Обидві форми мапінгу: реквізит і шлях до власника товару.
+    access: [
+      { attribute: "item", dimension: "item" },
+      { ref: ["item", "owner"], dimension: "partner" },
+    ],
     standardAttributeOverrides: overrides("period"),
     dimensions: [
       {

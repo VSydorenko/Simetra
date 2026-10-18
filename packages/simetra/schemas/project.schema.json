@@ -249,6 +249,160 @@
         "description": "Scope kind of the application (tenant dimension)."
       }
     },
+    "accessDimensions": {
+      "default": [],
+      "description": "Access dimensions of the application: value catalogs that grants may restrict rows by.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+            "description": "Stable lowercase UUID v4 identity of the element. Assigned by tooling at creation and never reused; a rename keeps it."
+          },
+          "name": {
+            "type": "string",
+            "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+            "description": "Logical name of the access dimension, unique among all named elements of the project."
+          },
+          "target": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "Catalog",
+                  "Document",
+                  "Enumeration",
+                  "InformationRegister",
+                  "AccumulationRegister",
+                  "Constant",
+                  "CustomTable",
+                  "PgEnum",
+                  "EventSubscription"
+                ],
+                "description": "Kind of the referenced metadata object."
+              },
+              "name": {
+                "type": "string",
+                "pattern": "^[A-Z][A-Za-z0-9]*$",
+                "description": "Logical name of the referenced object."
+              }
+            },
+            "required": [
+              "kind",
+              "name"
+            ],
+            "additionalProperties": false,
+            "description": "Catalog of the dimension values; scoped when the project has scope kinds."
+          },
+          "values": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "relation": {
+                    "type": "object",
+                    "properties": {
+                      "object": {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "Catalog",
+                              "Document",
+                              "Enumeration",
+                              "InformationRegister",
+                              "AccumulationRegister",
+                              "Constant",
+                              "CustomTable",
+                              "PgEnum",
+                              "EventSubscription"
+                            ],
+                            "description": "Kind of the referenced metadata object."
+                          },
+                          "name": {
+                            "type": "string",
+                            "pattern": "^[A-Z][A-Za-z0-9]*$",
+                            "description": "Logical name of the referenced object."
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "name"
+                        ],
+                        "additionalProperties": false,
+                        "description": "Object whose rows link a user or a member to a value of the dimension."
+                      },
+                      "subject": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+                        "description": "Reference of the relation object to the users catalog or to the membership catalog."
+                      },
+                      "value": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+                        "description": "Reference of the relation object to the target catalog."
+                      }
+                    },
+                    "required": [
+                      "object",
+                      "subject",
+                      "value"
+                    ],
+                    "additionalProperties": false,
+                    "description": "Values of a user read from a relation."
+                  }
+                },
+                "required": [
+                  "relation"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "function": {
+                    "type": "object",
+                    "properties": {
+                      "schema": {
+                        "description": "PostgreSQL schema of the function; the project default schema when omitted.",
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "name": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "Name of a verbatim SQL function that returns the value ids of the current user."
+                      }
+                    },
+                    "required": [
+                      "name"
+                    ],
+                    "additionalProperties": false,
+                    "description": "Values of a user returned by a function."
+                  }
+                },
+                "required": [
+                  "function"
+                ],
+                "additionalProperties": false
+              }
+            ],
+            "description": "Where the values of the current user come from."
+          }
+        },
+        "required": [
+          "name",
+          "target",
+          "values"
+        ],
+        "additionalProperties": false
+      }
+    },
     "storageBuckets": {
       "default": [],
       "description": "Provider storage buckets whose access policies follow a scope kind.",

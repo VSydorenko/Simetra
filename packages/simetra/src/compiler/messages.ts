@@ -1536,6 +1536,73 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Контейнер — вершина власного рівня: не прив'язуйте його або прив'яжіть до іншого контейнера.",
     },
   },
+  "rights.dimension-unknown": {
+    en: (p) =>
+      `Access dimension "${p.dimension}" is not declared in the project`,
+    uk: (p) => `Вимір доступу "${p.dimension}" не оголошено в проєкті`,
+    hint: {
+      en: "Declare the dimension in accessDimensions of project.meta.json or name a declared one.",
+      uk: "Оголосіть вимір в accessDimensions файлу project.meta.json або назвіть оголошений.",
+    },
+  },
+  "rights.dimension-target": {
+    en: (p) =>
+      p.reason === "kind"
+        ? `Target of access dimension "${p.dimension}" is not a catalog`
+        : `Target of access dimension "${p.dimension}" is not scoped, but the project has scope kinds`,
+    uk: (p) =>
+      p.reason === "kind"
+        ? `Ціль виміру доступу "${p.dimension}" — не довідник`
+        : `Ціль виміру доступу "${p.dimension}" не скоуплена, а в проєкті є види скоупу`,
+    hint: {
+      en: "The values of a dimension are rows of a catalog; in a project with scope kinds the catalog is scoped, so values of one tenant never open rows of another.",
+      uk: "Значення виміру — рядки довідника; у проєкті з видами скоупу довідник скоуплений, щоб значення одного тенанта не відкривали рядків іншого.",
+    },
+  },
+  "rights.dimension-relation": {
+    en: (p) =>
+      p.reason === "unknown"
+        ? `Relation of access dimension "${p.dimension}" has no field "${p.field}"`
+        : p.reason === "table"
+          ? `Relation object of access dimension "${p.dimension}" has no table`
+          : p.reason === "scope"
+            ? `Relation object of access dimension "${p.dimension}" is not in the scope kind of the dimension target`
+            : p.field === "subject"
+              ? `Subject of access dimension "${p.dimension}" references neither the users catalog nor the membership catalog of the target's scope kind`
+              : `Value of access dimension "${p.dimension}" does not reference the dimension target`,
+    uk: (p) =>
+      p.reason === "unknown"
+        ? `Зв'язок виміру доступу "${p.dimension}" не має поля "${p.field}"`
+        : p.reason === "table"
+          ? `Об'єкт зв'язку виміру доступу "${p.dimension}" не має таблиці`
+          : p.reason === "scope"
+            ? `Об'єкт зв'язку виміру доступу "${p.dimension}" не у виді скоупу цілі виміру`
+            : p.field === "subject"
+              ? `Суб'єкт виміру доступу "${p.dimension}" не посилається ні на «Користувачі», ні на довідник членства виду скоупу цілі`
+              : `Значення виміру доступу "${p.dimension}" не посилається на ціль виміру`,
+    hint: {
+      en: "A relation row links a user (or a member) to a value: subject is a single Ref to users or to the membership catalog, value is a single Ref to the target, both in the target's scope kind.",
+      uk: "Рядок зв'язку пов'язує користувача (чи учасника) зі значенням: subject — одиночний Ref на «Користувачі» чи на довідник членства, value — одиночний Ref на ціль, обидва у виді скоупу цілі.",
+    },
+  },
+  "rights.access-target": {
+    en: (p) =>
+      `Access carrier "${p.attribute}" does not reference the target of dimension "${p.dimension}"`,
+    uk: (p) =>
+      `Носій доступу "${p.attribute}" не посилається на ціль виміру "${p.dimension}"`,
+    hint: {
+      en: "Name an attribute (or a path) whose last reference is to the value catalog of the dimension.",
+      uk: "Назвіть реквізит (чи шлях), чиє кінцеве посилання — на довідник значень виміру.",
+    },
+  },
+  "rights.access-duplicate": {
+    en: (p) => `Access dimension "${p.dimension}" is mapped more than once`,
+    uk: (p) => `Вимір доступу "${p.dimension}" зіставлено більше одного разу`,
+    hint: {
+      en: "A grant restricts a row by one carrier per dimension; keep one mapping.",
+      uk: "Грант обмежує рядок одним носієм на вимір; лишіть один мапінг.",
+    },
+  },
   "rights.ownership-target": {
     en: (p) =>
       p.reason === "key"
