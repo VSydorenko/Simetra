@@ -17,7 +17,12 @@ import { compareStrings } from "../diagnostics"
 import type { ParsedObject } from "../stages/files"
 import { standardElementId, type ResolvedReference } from "../stages/identity"
 import { kindLabelOf } from "../stages/model"
-import { elementColumns, resolveCarrier, type CarrierContext } from "./carriers"
+import {
+  carrierTarget,
+  elementColumns,
+  resolveCarrier,
+  type CarrierContext,
+} from "./carriers"
 
 /** Кастомні дії розібраного об'єкта виду з контрактом прав. */
 export function customActionsOf(object: ParsedObject): readonly CustomAction[] {
@@ -27,6 +32,11 @@ export function customActionsOf(object: ParsedObject): readonly CustomAction[] {
 /** Носії `ownership` об'єкта виду з обсягом `own`. */
 export function ownershipOf(object: ParsedObject): readonly RightsCarrier[] {
   return (object.data as { ownership?: RightsCarrier[] }).ownership ?? []
+}
+
+/** Носій `containerBinding` об'єкта виду з фактом `rightsBinding`. */
+export function bindingOf(object: ParsedObject): RightsCarrier | undefined {
+  return (object.data as { containerBinding?: RightsCarrier }).containerBinding
 }
 
 /**
@@ -113,6 +123,21 @@ function rightsContract(
     if (!resolved.ok) throw new Error("internal: unchecked rights carrier")
     return resolved.contract
   })
+  const bindingCarrier = bindingOf(object)
+  let binding: RightsContract["binding"]
+  if (bindingCarrier !== undefined) {
+    const resolved = resolveCarrier(
+      object,
+      bindingCarrier,
+      { pointer: "/containerBinding", field: "containerBinding" },
+      ctx
+    )
+    if (!resolved.ok) throw new Error("internal: unchecked rights carrier")
+    binding = {
+      containerId: must(carrierTarget(resolved.terminal).id),
+      carrier: resolved.contract,
+    }
+  }
   const extents: RightsAction["extents"] = [
     { form: "any" },
     ...(ownership.length > 0 ? [{ form: "own" as const }] : []),
@@ -177,6 +202,10 @@ function rightsContract(
     ...(scopeKindId === undefined ? {} : { scopeKindId }),
     actions,
     ownership,
+    ...((object.data as { rightsContainer?: boolean }).rightsContainer === true
+      ? { container: true as const }
+      : {}),
+    ...(binding === undefined ? {} : { binding }),
   }
 }
 

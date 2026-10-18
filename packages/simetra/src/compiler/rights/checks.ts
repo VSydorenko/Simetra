@@ -8,8 +8,8 @@ import { diagnostic, type Diagnostic } from "../diagnostics"
 import type { ParsedObject } from "../stages/files"
 import type { ResolvedReference } from "../stages/identity"
 import type { ModelStageResult } from "../stages/model"
-import { resolveCarrier, type CarrierContext } from "./carriers"
-import { customActionsOf, ownershipOf } from "./contracts"
+import { carrierTarget, resolveCarrier, type CarrierContext } from "./carriers"
+import { bindingOf, customActionsOf, ownershipOf } from "./contracts"
 
 /** Вхід правил прав стадії 4: усе, що вже знає цілісність. */
 export interface RightsCheckContext {
@@ -69,6 +69,7 @@ export function checkRights(ctx: RightsCheckContext): Diagnostic[] {
     if (def.rightsExtents.includes("own")) {
       diagnostics.push(...checkOwnership(object, ctx))
     }
+    if (def.rightsBinding) diagnostics.push(...checkBinding(object, ctx))
   }
   return diagnostics
 }
@@ -132,6 +133,53 @@ function checkOwnership(
           }),
         ]
   })
+}
+
+/**
+ * Правило прив'язки до контейнера (спека прав §4.3, Р1a-10): кінцева ціль
+ * носія — об'єкт із `rightsContainer`, не сам об'єкт, і в межах скоупу
+ * (інакше чужий контейнер відкрив би рядок).
+ */
+function checkBinding(
+  object: ParsedObject,
+  ctx: RightsCheckContext
+): Diagnostic[] {
+  const carrier = bindingOf(object)
+  if (carrier === undefined) return []
+  const pointer = "/containerBinding"
+  const resolved = resolveCarrier(
+    object,
+    carrier,
+    { pointer, field: "containerBinding" },
+    carrierContext(ctx)
+  )
+  if (!resolved.ok) return [resolved.diagnostic]
+  const at = typeof carrier === "string" ? pointer : `${pointer}/1`
+  const { field } = resolved.terminal
+  const target = carrierTarget(resolved.terminal)
+  if (target === object) {
+    return [
+      diagnostic("rights.container-self", object.file, at, {
+        attribute: field.name,
+        name: object.name,
+      }),
+    ]
+  }
+  if ((target.data as { rightsContainer?: boolean }).rightsContainer !== true) {
+    return [
+      diagnostic("rights.container-target", object.file, at, {
+        attribute: field.name,
+        name: target.name,
+      }),
+    ]
+  }
+  return field.inScope
+    ? []
+    : [
+        diagnostic("rights.carrier-cross-tenant", object.file, at, {
+          attribute: field.name,
+        }),
+      ]
 }
 
 function isUsers(object: ParsedObject): boolean {

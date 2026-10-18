@@ -1,6 +1,10 @@
 import { z } from "zod"
 import { publicReadSchema } from "./public-read"
-import { customActionsSchema, ownershipSchema } from "./rights"
+import {
+  customActionsSchema,
+  ownershipSchema,
+  rightsCarrierSchema,
+} from "./rights"
 import { attributeSchema } from "./attribute"
 import { compositeIndexesSchema } from "./composite-index"
 import { tabularSectionSchema } from "./tabular-section"
@@ -138,6 +142,10 @@ export const documentSchema = z.strictObject({
   ownership: ownershipSchema.optional().meta({
     description:
       "Owners of a row: users or members the own extent of a grant opens the row to.",
+  }),
+  containerBinding: rightsCarrierSchema.optional().meta({
+    description:
+      "Attribute (or a two-step path of attributes) that binds a row to its rights container: the catalog flagged rightsContainer.",
   }),
 
   standardAttributeOverrides: standardAttributeOverridesSchema,

@@ -222,7 +222,10 @@ export function kitchenSink(): Map<string, string> {
   const organization = {
     ...header("Catalog", "Organization", "organization"),
   }
-  const partner = { ...header("Catalog", "Partner", "partner") }
+  const partner = {
+    ...header("Catalog", "Partner", "partner"),
+    rightsContainer: true,
+  }
 
   const item = {
     ...header("Catalog", "Item", "item"),
@@ -241,6 +244,9 @@ export function kitchenSink(): Map<string, string> {
     customActions: customActions("update", ["itemNote", "description"], true),
     // Власник — стандартний реквізит авторства («Користувачі»).
     ownership: ["createdBy"],
+    // Контейнер, прив'язаний до іншого контейнера через стандартний власник.
+    rightsContainer: true,
+    containerBinding: "owner",
     predefinedItems: [
       {
         id: id(),
@@ -306,6 +312,7 @@ export function kitchenSink(): Map<string, string> {
     customActions: customActions("post", "all", true),
     // Обидві форми носія: рядок і шлях через товар до його автора.
     ownership: ["createdBy", ["saleItem", "createdBy"]],
+    containerBinding: "saleItem",
     posting: {
       movements: [
         {

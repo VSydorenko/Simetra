@@ -83,6 +83,14 @@ export type CarrierResolution =
     }
   | { ok: false; diagnostic: Diagnostic }
 
+/** Об'єкт, на який вказує кінцеве поле носія: сам власник ключа чи ціль `Ref`. */
+export function carrierTarget(terminal: {
+  object: ParsedObject
+  field: CarrierField
+}): ParsedObject {
+  return terminal.field.key ? terminal.object : terminal.field.target!
+}
+
 /**
  * Резолв носія прав (Р1a-10, Рх21) у колонку таблиці об'єкта: рядок — власне
  * поле; шлях — перший крок мусить бути одиночним неполіморфним `Ref` у межах

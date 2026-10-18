@@ -354,6 +354,34 @@
         "description": "An attribute of this object, or a path [attribute, attribute of its target]"
       }
     },
+    "containerBinding": {
+      "description": "Attribute (or a two-step path of attributes) that binds a row to its rights container: the catalog flagged rightsContainer.",
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+          "description": "Logical element name (attribute, section, column). The casing style is checked against the project naming setting."
+        },
+        {
+          "type": "array",
+          "prefixItems": [
+            {
+              "type": "string",
+              "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+              "description": "Logical element name (attribute, section, column). The casing style is checked against the project naming setting."
+            },
+            {
+              "type": "string",
+              "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+              "description": "Logical element name (attribute, section, column). The casing style is checked against the project naming setting."
+            }
+          ],
+          "items": false,
+          "minItems": 2,
+          "maxItems": 2
+        }
+      ]
+    },
     "standardAttributeOverrides": {
       "default": {},
       "description": "Custom titles and descriptions of derived standard attributes, keyed by standard attribute name.",

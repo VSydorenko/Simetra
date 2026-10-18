@@ -125,6 +125,8 @@ function manyOwners(): Map<string, string> {
   const files = kitchenSink()
   const path = "catalogs/Item/Item.meta.json"
   const item = JSON.parse(files.get(path)!) as Record<string, unknown>
+  // Поліморфний власник не може бути носієм прив'язки до контейнера.
+  delete item.containerBinding
   item.owners = [
     { kind: "Catalog", name: "Partner" },
     { kind: "Catalog", name: "Item" },

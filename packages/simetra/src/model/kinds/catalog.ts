@@ -15,6 +15,7 @@ import {
   type NumberingSpec,
   type StandardColumnDef,
   customActionReferences,
+  bindingReferences,
   ownershipReferences,
 } from "./standard"
 
@@ -205,6 +206,7 @@ export const catalogKind: KindDefinition = {
   elementReferences: (obj) => [
     ...customActionReferences(obj as Catalog),
     ...ownershipReferences(obj as Catalog, standardColumns(obj)),
+    ...bindingReferences(obj as Catalog, standardColumns(obj)),
   ],
   references(obj) {
     const catalog = obj as Catalog

@@ -108,6 +108,8 @@ export const COMPILER_RULES = [
   "rights.carrier-not-ref",
   "rights.carrier-cross-tenant",
   "rights.ownership-target",
+  "rights.container-target",
+  "rights.container-self",
   "reference.not-referenceable",
   "reference.custom-table-key",
   "reference.custom-table-deferrable-key",

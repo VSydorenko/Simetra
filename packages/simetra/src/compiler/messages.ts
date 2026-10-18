@@ -1516,6 +1516,26 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Посилання мусить лишатися в межах скоупу (складений зовнішній ключ): приберіть crossScope або назвіть інший реквізит.",
     },
   },
+  "rights.container-target": {
+    en: (p) =>
+      `Container binding "${p.attribute}" references "${p.name}", which is not a rights container`,
+    uk: (p) =>
+      `Прив'язка до контейнера "${p.attribute}" посилається на "${p.name}", який не є контейнером прав`,
+    hint: {
+      en: "Set rightsContainer: true on the target catalog or name another attribute.",
+      uk: "Задайте rightsContainer: true на довіднику-цілі або назвіть інший реквізит.",
+    },
+  },
+  "rights.container-self": {
+    en: (p) =>
+      `Container "${p.name}" is bound to itself through "${p.attribute}"`,
+    uk: (p) =>
+      `Контейнер "${p.name}" прив'язаний сам до себе через "${p.attribute}"`,
+    hint: {
+      en: "A container is the top of its own level: bind it to nothing, or to another container.",
+      uk: "Контейнер — вершина власного рівня: не прив'язуйте його або прив'яжіть до іншого контейнера.",
+    },
+  },
   "rights.ownership-target": {
     en: (p) =>
       p.reason === "key"

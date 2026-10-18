@@ -728,6 +728,21 @@ export function ownershipReferences(
   )
 }
 
+/** Носій `containerBinding` об'єкта (прив'язка до контейнера прав). */
+export function bindingReferences(
+  obj: CarrierHost & { containerBinding?: RightsCarrier },
+  standard: readonly StandardColumnDef[]
+): FoundElementReference[] {
+  return obj.containerBinding === undefined
+    ? []
+    : carrierReferences(
+        obj.containerBinding,
+        "/containerBinding",
+        obj,
+        standard
+      )
+}
+
 type TypedField = Pick<ValueType, "ref" | "allowedTypes">
 
 /**

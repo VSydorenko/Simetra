@@ -306,6 +306,10 @@ export interface RightsContract {
    * додає обсяг `own` кожній дії.
    */
   ownership: CarrierContract[]
+  /** Об'єкт — контейнер прав: гранти на нього покривають прив'язані об'єкти. */
+  container?: true
+  /** Прив'язка до контейнера (спека прав §4.3): носій і ціль. */
+  binding?: { containerId: string; carrier: CarrierContract }
 }
 
 export interface Contracts {

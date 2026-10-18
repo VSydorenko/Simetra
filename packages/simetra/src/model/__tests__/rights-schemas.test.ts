@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 import type { z } from "zod"
 import { KIND_REGISTRY } from "../kinds/registry"
 import { catalogSchema } from "../schemas/catalog"
+import { documentSchema } from "../schemas/document"
 import { customTableSchema } from "../schemas/custom-table"
 import { informationRegisterSchema } from "../schemas/information-register"
 import { customActionSchema, rightsCarrierSchema } from "../schemas/rights"
@@ -96,6 +97,26 @@ describe("ownership", () => {
       const def = KIND_REGISTRY[kind]
       const shape = (def.schema as z.ZodObject).shape
       expect("ownership" in shape, kind).toBe(def.rightsExtents.includes("own"))
+    }
+  })
+})
+
+describe("container and binding", () => {
+  it("live on kinds with the registry facts only", () => {
+    expect(
+      documentSchema.safeParse({
+        kind: "Document",
+        name: "Task",
+        rightsContainer: true,
+      }).success
+    ).toBe(false)
+    for (const kind of METADATA_KINDS) {
+      const def = KIND_REGISTRY[kind]
+      const shape = (def.schema as z.ZodObject).shape
+      expect("rightsContainer" in shape, kind).toBe(
+        def.rightsContainer === true
+      )
+      expect("containerBinding" in shape, kind).toBe(def.rightsBinding === true)
     }
   })
 })
