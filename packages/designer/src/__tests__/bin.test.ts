@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process"
+import { readFile } from "node:fs/promises"
 import { resolve } from "node:path"
 import { promisify } from "node:util"
 import { expect, it } from "vitest"
@@ -32,4 +33,18 @@ it("usage errors exit with code 2", async () => {
       exec(process.execPath, ["bin/simetra.mjs", ...args], { cwd: PACKAGE })
     ).rejects.toMatchObject({ code: 2 })
   }
+}, 60_000)
+
+it("--version prints the package version", async () => {
+  const { version } = JSON.parse(
+    await readFile(resolve(PACKAGE, "package.json"), "utf8")
+  ) as { version: string }
+  const { stdout } = await exec(
+    process.execPath,
+    ["bin/simetra.mjs", "--version"],
+    {
+      cwd: PACKAGE,
+    }
+  )
+  expect(stdout.trim()).toBe(version)
 }, 60_000)

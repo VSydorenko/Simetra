@@ -1,9 +1,12 @@
 import { defineCommand, runCommand, runMain, showUsage } from "citty"
+// Версію вбудовує збірка: у пакеті `dist/main.js` не читає маніфест з диска
+import pkg from "../package.json" with { type: "json" }
 import { TOOL_NAMES } from "./tools/types"
 
 const main = defineCommand({
   meta: {
     name: "simetra",
+    version: pkg.version,
     description: "Simetra metadata tooling",
   },
   subCommands: {

@@ -1,10 +1,13 @@
-import { readFile } from "node:fs/promises"
-import { join } from "node:path"
+import { cp, readFile, writeFile } from "node:fs/promises"
+import { dirname, join, resolve, sep } from "node:path"
+import { Client } from "@modelcontextprotocol/client"
+import { StdioClientTransport } from "@modelcontextprotocol/client/stdio"
 import { publint } from "publint"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import {
   exec,
   installConsumer,
+  REPO,
   listPackedFiles,
   packWorkspace,
   readPackedManifest,
@@ -112,5 +115,93 @@ describe("simetra", () => {
         "ascii",
       ])
     ).resolves.toBeDefined()
+  })
+})
+
+describe("@simetrajs/designer", () => {
+  let consumer: string
+  let bin: string
+  const run = (args: string[]) => exec(bin, args, { cwd: consumer })
+
+  beforeAll(async () => {
+    consumer = await installConsumer([tarballs.simetra, tarballs.designer])
+    // Симлінк, який створив npm, а не `node dist/main.js`: так його запускає споживач
+    bin = join(consumer, "node_modules/.bin/simetra")
+    await cp(
+      join(REPO, "examples/reference/metadata"),
+      join(consumer, "metadata"),
+      { recursive: true }
+    )
+  })
+
+  it("pins simetra to its own version and has no dev launcher deps", async () => {
+    const m = await readPackedManifest(tarballs.designer)
+    const s = await readPackedManifest(tarballs.simetra)
+    expect(m.version).toBe(s.version) // lockstep, Р1
+    expect((m.dependencies as Record<string, string>).simetra).toBe(s.version)
+    expect(m.dependencies).not.toHaveProperty("tsx")
+    expect(m.bin).toEqual({ simetra: "./dist/main.js" })
+  })
+
+  it("ships dist and both consumer skills, not the dev launcher", async () => {
+    const files = await listPackedFiles(tarballs.designer)
+    for (const f of [
+      "dist/main.js",
+      "skills/simetra-metadata/SKILL.md",
+      "skills/simetra-adoption/SKILL.md",
+      "LICENSE",
+      "README.md",
+    ])
+      expect(files).toContain(f)
+    expect(files.filter((f) => /^(bin|src)\//.test(f))).toEqual([])
+  })
+
+  it("--version prints the package version", async () => {
+    const { version } = await readPackedManifest(tarballs.designer)
+    const { stdout } = await run(["--version"])
+    expect(stdout.trim()).toBe(version)
+  })
+
+  it("compiles the reference metadata", async () => {
+    const { stdout } = await run(["compile", "metadata"])
+    expect(stdout).toContain("0 error(s)")
+  })
+
+  it("fix writes $schema that resolves inside node_modules/simetra", async () => {
+    const file = join(consumer, "metadata/catalogs/Currency/Currency.meta.json")
+    const json = JSON.parse(await readFile(file, "utf8")) as Record<
+      string,
+      unknown
+    >
+    delete json.$schema
+    await writeFile(file, JSON.stringify(json, null, 2))
+    await run(["fix", "metadata"])
+    const { $schema } = JSON.parse(await readFile(file, "utf8"))
+    const target = resolve(dirname(file), $schema)
+    expect(
+      target.startsWith(join(consumer, "node_modules/simetra/schemas") + sep)
+    ).toBe(true)
+    await expect(readFile(target, "utf8")).resolves.toContain('"$schema"')
+  })
+
+  it("serves tools over MCP", async () => {
+    const client = new Client({ name: "packaging-gate", version: "0" })
+    await client.connect(
+      new StdioClientTransport({
+        command: bin,
+        args: ["mcp", "metadata", "--read-only"],
+        cwd: consumer,
+      })
+    )
+    try {
+      const { tools } = await client.listTools()
+      expect(tools.map((t) => t.name)).toContain("compile")
+    } finally {
+      await client.close()
+    }
+  })
+
+  it("passes publint", async () => {
+    expect(await publintMessages(tarballs.designer)).toEqual([])
   })
 })

@@ -1,19 +1,37 @@
 {
   "name": "@simetrajs/designer",
   "version": "0.0.1",
+  "description": "Simetra developer tools: command line and MCP server over the metadata compiler",
+  "keywords": [
+    "simetra",
+    "metadata",
+    "postgres",
+    "cli",
+    "mcp",
+    "schema"
+  ],
+  "homepage": "https://github.com/VSydorenko/Simetra#readme",
+  "bugs": "https://github.com/VSydorenko/Simetra/issues",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/VSydorenko/Simetra.git",
+    "directory": "packages/designer"
+  },
+  "license": "Apache-2.0",
   "type": "module",
-  "private": true,
+  "engines": {
+    "node": ">=24"
+  },
   "files": [
-    "bin",
-    "src",
+    "dist",
     "skills"
   ],
-  "license": "Apache-2.0",
   "bin": {
     "simetra": "bin/simetra.mjs"
   },
   "scripts": {
     "build": "tsc --noEmit",
+    "build:package": "tsdown",
     "lint": "eslint",
     "format": "prettier --write \"**/*.{ts,tsx}\"",
     "typecheck": "tsc --noEmit",
@@ -28,7 +46,6 @@
     "citty": "0.2.2",
     "pg": "8.23.1",
     "simetra": "workspace:*",
-    "tsx": "4.23.15",
     "zod": "4.6.5"
   },
   "devDependencies": {
@@ -41,8 +58,15 @@
     "eslint": "^10.11.0",
     "publint": "0.3.25",
     "tsdown": "0.23.1",
+    "tsx": "4.23.15",
     "typescript": "npm:@typescript/typescript6@^6.0.2",
     "typescript-eslint": "^8.70.1",
     "vitest": "^5.0.2"
+  },
+  "publishConfig": {
+    "access": "public",
+    "bin": {
+      "simetra": "./dist/main.js"
+    }
   }
 }
