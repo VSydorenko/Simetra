@@ -1,6 +1,6 @@
 {
   "name": "@simetrajs/designer",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Simetra developer tools: command line and MCP server over the metadata compiler",
   "keywords": [
     "simetra",
