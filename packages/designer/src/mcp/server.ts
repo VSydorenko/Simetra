@@ -1,4 +1,5 @@
 import { McpServer } from "@modelcontextprotocol/server"
+import pkg from "../../package.json" with { type: "json" }
 import { databaseWriteHint, readOnlyHint } from "../tools/hints"
 import { registerCatalog, type McpToolOptions } from "./tools"
 
@@ -29,7 +30,7 @@ export function createMcpServer(o: McpToolOptions): McpServer {
     "dryRun does not apply to apply: review with plan, and rehearse it before applying.",
   ].join(" ")
   const server = new McpServer(
-    { name: "simetra", version: "0.0.1" },
+    { name: "simetra", version: pkg.version },
     { instructions }
   )
   registerCatalog(server, o)

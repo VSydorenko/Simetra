@@ -656,3 +656,11 @@ describe("simetra mcp", () => {
     expect(existsSync(join(dir, "x/a.meta.json"))).toBe(true)
   })
 })
+
+it("server reports the package version", async () => {
+  const { version } = JSON.parse(
+    await readFile(join(__dirname, "../../package.json"), "utf8")
+  ) as { version: string }
+  const client = await connect(".", true)
+  expect(client.getServerVersion()?.version).toBe(version)
+})
