@@ -20,6 +20,7 @@
 | [repository.md](repository.md) | Які пакети є, що в кожному, як їх розділено, які гейти їх тримають |
 | [metadata-pipeline.md](metadata-pipeline.md) | Шлях від файлів `metadata/` через компілятор і рендер до бази |
 | [designer.md](designer.md) | Інструменти розробника `@simetrajs/designer`: каталог, режими CLI і MCP, скіли споживача; репо платформи проти проєкту споживача |
+| [release.md](release.md) | Що потрапляє в пакети, гейт пакування, як випустити версію, Trusted Publishing і перша публікація |
 
 ## Як підтримувати
 

@@ -56,4 +56,6 @@ dev-залежність. Устрій — [designer.md](designer.md).
   (`simetra`), адаптер двигуна схеми й звірка на корпусі (`@simetrajs/designer`);
 - `pnpm metadata:check` — `simetra compile --all` над кожною текою метаданих
   репо; pre-commit запускає його з `--staged` (компілюється вміст індексу Git),
-  CI — без нього.
+  CI — без нього;
+- `pnpm build:packages && pnpm test:packaging` — збірка пакетів і гейт по
+  tarball-ах у проєкті споживача ([release.md](release.md)).

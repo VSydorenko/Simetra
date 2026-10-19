@@ -14,7 +14,8 @@ it.
 
 ## Status
 
-**Pre-alpha.** Nothing is published to npm yet, and there are no stable APIs.
+**Pre-alpha.** A first preview is published to npm; there are no stable APIs
+yet, and minor versions break.
 The platform is built according to the
 [platform design spec](docs/superpowers/specs/2026-09-24-simetra-platform-design.md);
 progress is tracked in the [roadmap](docs/ROADMAP.md).
@@ -23,7 +24,13 @@ What exists today: the metamodel and the compiler (milestone P2), rendering of
 the desired database state, a schema-engine port with a first adapter, and the
 developer toolset `@simetrajs/designer` — command line and MCP server over one
 catalog of tools. The rest of the platform (data runtime, screens, studio,
-package delivery) is ahead on the roadmap.
+`simetra init` for consumer projects) is ahead on the roadmap.
+
+```bash
+npm install simetra
+npm install -D @simetrajs/designer
+npx simetra compile metadata
+```
 
 ## Core ideas
 
@@ -67,7 +74,7 @@ mutations `create`, `add`, `rename` (with a cascade over every reference) and
 only when the result compiles without errors; `--dry-run` previews, and
 destructive tools need `--yes`.
 
-Inside this repository, until the package is published:
+Inside this repository the tools run from sources:
 
 ```bash
 node packages/designer/bin/simetra.mjs compile examples/reference/metadata
@@ -79,9 +86,9 @@ The MCP server writes metadata files by default, under the same rules as the
 CLI (only a result that compiles, only inside the directory). With
 `simetra mcp --read-only` every tool is still listed, and a write tool answers
 with how to enable writes (remove `--read-only` from the server's arguments).
-In a consumer project the package will be installed as a dev dependency, and
-`simetra init` will link its agent skills and write an MCP configuration —
-that arrives with package delivery (see the roadmap). How it works: [docs/architecture/designer.md](docs/architecture/designer.md).
+In a consumer project the package is installed as a dev dependency; `simetra
+init`, which will link its agent skills and write an MCP configuration, arrives
+with package delivery (see the roadmap). How it works: [docs/architecture/designer.md](docs/architecture/designer.md).
 
 ## Getting started
 
@@ -105,6 +112,7 @@ Before opening a pull request, run the same gates as CI:
 
 ```bash
 pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm metadata:check
+pnpm build:packages && pnpm test:packaging   # the packed tarballs in a scratch consumer project
 ```
 
 ## Documentation

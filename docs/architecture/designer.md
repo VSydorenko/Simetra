@@ -146,7 +146,8 @@ MCP  simetra mcp│  src/mcp ─┼─► src/tools: каталог + invoke ─
 ### Репо платформи (тут)
 
 - `@simetrajs/designer` розробляється як пакет workspace; запуск — з
-  вихідників (`packages/designer/bin/simetra.mjs` через tsx).
+  вихідників (`packages/designer/bin/simetra.mjs` через tsx). У пакеті
+  бінарник — зібраний `dist/main.js` ([release.md](release.md)).
 - Скіл споживача лежить у пакеті як частина продукту й **невидимий** агентам
   платформи: його немає в `.agents/skills` і `.claude/skills`, designer не є
   кореневою залежністю, його не індексують пошук документації й граф коду.
@@ -177,9 +178,10 @@ pnpm exec simetra init --agents claude,codex
   підхоплюють новий скіл самі, `init --check` у CI ловить розбіжності.
 
 **Стан:** каталог (з `introspect`, `diff`, `plan` і `apply`), режими CLI і MCP,
-`compile --all`, скіл у пакеті й тест прикладів — у коді. `simetra init`, збірка й публікація пакета, пілот із
-tarball — разом із доставкою пакета (П0 (а), [ROADMAP](../ROADMAP.md)); до
-того сценарій споживача відтворюється лише вручну.
+`compile --all`, скіл у пакеті й тест прикладів — у коді; збірка, гейт
+пакування й публікація — [release.md](release.md). `simetra init` і пілот із
+host — разом із доставкою пакета (П0 (а), [ROADMAP](../ROADMAP.md)); до того
+скіли й MCP-конфіг у проєкті споживача підключаються вручну.
 
 ## 5. Що далі
 

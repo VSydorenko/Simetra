@@ -198,6 +198,7 @@ pnpm format:fix                           # fixes what format:check reports
 
 python3 scripts/check-doc-anchors.py      # dead paths / § pointers in docs
 pnpm metadata:check                       # simetra compile --all via packages/designer/bin; pre-commit runs it with --staged
+pnpm build:packages && pnpm test:packaging # build the npm packages, then test the packed tarballs in a scratch consumer project
 
 pnpm db:start                             # local Supabase stack (needs Docker)
 pnpm test:db                              # provider base-state pgTAP tests + Vitest DB tests (*.db.test.ts) of simetra and @simetrajs/designer against the local stack
@@ -225,9 +226,11 @@ pnpm db:stop
   its own pid: stop a DB run by signalling its process group (Ctrl-C, GNU
   `timeout` without `--foreground`) or the vitest pid.
 - CI (`.github/workflows/ci.yml`) runs the same four gates plus
-  `pnpm metadata:check` and a `db` job that starts the stack and runs `pnpm test:db`. It does not run
-  the anchor check — run it yourself whenever you edit docs or skills, or
-  rename or move a file.
+  `pnpm metadata:check`, a `db` job that starts the stack and runs `pnpm test:db`,
+  and a `packaging` job (`pnpm build:packages && pnpm test:packaging`). It does
+  not run the anchor check — run it yourself whenever you edit docs or skills,
+  or rename or move a file. Releases and npm publishing —
+  `docs/architecture/release.md`.
 - Versions live in `.node-version` and `package.json`, not here.
 - `tsc` is TypeScript 7 (native); the `typescript` package is aliased to
   TypeScript 6 because typescript-eslint needs its JS API. Don't "fix" the
