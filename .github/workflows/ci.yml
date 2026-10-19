@@ -41,11 +41,29 @@ jobs:
       - name: Metadata check
         run: pnpm metadata:check
 
-  # DB-тести йдуть проти того самого стеку й образу провайдера, що в dev
+  # DB-тести йдуть проти того самого стеку й образу провайдера, що в dev.
+  # Шарди — окремі раннери, кожен зі своїм стеком: DB-тести designer на
+  # 4 ядрах раннера не вкладалися в одну джобу (кейс будує тінь і копію через
+  # pg-delta). Локально `pnpm test:db` лишається одним послідовним прогоном.
   db:
-    name: Database
+    name: Database (${{ matrix.name }})
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
+    strategy:
+      # Червоний шард не скасовує решту: видно всі падіння одного прогону
+      fail-fast: false
+      matrix:
+        include:
+          - name: provider + simetra
+            run: pnpm exec supabase test db && pnpm --filter simetra test:db
+          - name: designer 1/4
+            run: pnpm --filter @simetrajs/designer test:db --shard=1/4
+          - name: designer 2/4
+            run: pnpm --filter @simetrajs/designer test:db --shard=2/4
+          - name: designer 3/4
+            run: pnpm --filter @simetrajs/designer test:db --shard=3/4
+          - name: designer 4/4
+            run: pnpm --filter @simetrajs/designer test:db --shard=4/4
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Версію pnpm бере з поля packageManager у package.json
@@ -59,7 +77,7 @@ jobs:
       - name: Start Supabase stack
         run: pnpm db:start
       - name: Database tests
-        run: pnpm test:db
+        run: ${{ matrix.run }}
 
   # Гейт пакування: пакує tarball-и так, як їх побачить реєстр, і ставить їх
   # у тимчасовий проєкт споживача через npm (імпорт ярусів, CLI, MCP)

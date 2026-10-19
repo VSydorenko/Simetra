@@ -226,7 +226,8 @@ pnpm db:stop
   its own pid: stop a DB run by signalling its process group (Ctrl-C, GNU
   `timeout` without `--foreground`) or the vitest pid.
 - CI (`.github/workflows/ci.yml`) runs the same four gates plus
-  `pnpm metadata:check`, a `db` job that starts the stack and runs `pnpm test:db`,
+  `pnpm metadata:check`, a `db` matrix (each shard starts its own stack: provider
+  pgTAP with `simetra`, then `@simetrajs/designer` split by `vitest --shard`),
   and a `packaging` job (`pnpm build:packages && pnpm test:packaging`). It does
   not run the anchor check — run it yourself whenever you edit docs or skills,
   or rename or move a file. Releases and npm publishing —
