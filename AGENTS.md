@@ -84,7 +84,7 @@ tier table, and product choices — what to build and for whom.
 **Target** (platform spec §3): one flagship package `simetra` with tier folders
 under lint zones — T0 `model`, T1 `compiler`, T2 `schema`, T3 `server`,
 T4 `data`, T5 `ui`, T6 `shell`. **Imports go only downward.** A separate package
-exists only for a unit with its own life cycle (the developer toolset `@simetra/designer`,
+exists only for a unit with its own life cycle (the developer toolset `@simetrajs/designer`,
 the app template); the toolset's modes — command line, MCP, studio — are not
 separate packages;
 versions are lockstep. Both this tier order and the framework boundary below are
@@ -96,12 +96,12 @@ owner decision.
 the navigation adapter interface; framework adapters live in T6; the host
 template and the studio are the only places that import TanStack Start. It is
 held by the same `packages/simetra/eslint.tier-zones.js` and its negative test.
-In `@simetra/designer` the studio is `src/studio` and nothing else there imports
+In `@simetrajs/designer` the studio is `src/studio` and nothing else there imports
 TanStack Start; that zone is held by `packages/designer/eslint.zones.js` and its
 negative test `packages/designer/test/studio-boundary.test.ts`.
 
 **Engine adapter boundary.** Production sources of `simetra` do not import `pg`
-or the pg-delta engine package: the schema-engine adapter lives in `@simetra/designer`
+or the pg-delta engine package: the schema-engine adapter lives in `@simetrajs/designer`
 and is passed into the T2 port from outside. It is held by
 `packages/simetra/eslint.tier-zones.js` and its negative test
 `packages/simetra/test/tier-boundary.test.ts`.
@@ -113,7 +113,7 @@ Platform agents never load a consumer skill.
 **Current code is a prototype.** The prototype metamodel lives in T0
 (`packages/simetra/src/model`) and is rebuilt in place (P2 spec M9). The rest
 of the prototype (CLI, generators, UI, web configurator) is frozen in
-`legacy/` (the live developer tools are `@simetra/designer`, not `legacy/cli`): read it, but do not build, test, import or extend it. Platform spec §14 sets the fate (becomes T0, stays as reference,
+`legacy/` (the live developer tools are `@simetrajs/designer`, not `legacy/cli`): read it, but do not build, test, import or extend it. Platform spec §14 sets the fate (becomes T0, stays as reference,
 is deleted) of the parts it names — read it there, do not restate it. A package
 §14 does not name has an **open** fate: treat it as neither slated for deletion
 nor adopted, and ask the owner before investing in it or removing it.
@@ -200,7 +200,7 @@ python3 scripts/check-doc-anchors.py      # dead paths / § pointers in docs
 pnpm metadata:check                       # simetra compile --all via packages/designer/bin; pre-commit runs it with --staged
 
 pnpm db:start                             # local Supabase stack (needs Docker)
-pnpm test:db                              # provider base-state pgTAP tests + Vitest DB tests (*.db.test.ts) of simetra and @simetra/designer against the local stack
+pnpm test:db                              # provider base-state pgTAP tests + Vitest DB tests (*.db.test.ts) of simetra and @simetrajs/designer against the local stack
 pnpm db:stop
 ```
 

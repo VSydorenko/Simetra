@@ -1,4 +1,4 @@
-# `@simetra/designer` — інструменти розробника
+# `@simetrajs/designer` — інструменти розробника
 
 Рішення й причини — [спека designer](../superpowers/specs/2026-10-02-simetra-designer-design.md);
 дослідження — [постачання інструментів, 2026-10](../research/tooling/toolset-delivery-2026-10.md).
@@ -8,7 +8,7 @@
 ## 1. Один каталог, кілька режимів
 
 ```
-                ┌──────────── @simetra/designer ────────────┐
+                ┌──────────── @simetrajs/designer ────────────┐
 CLI  simetra …  │  src/cli ─┐                               │
 MCP  simetra mcp│  src/mcp ─┼─► src/tools: каталог + invoke ─┼─► T1 операції (simetra/compiler)
 студія (П6)     │  src/studio ┘     │                        │
@@ -145,7 +145,7 @@ MCP  simetra mcp│  src/mcp ─┼─► src/tools: каталог + invoke ─
 
 ### Репо платформи (тут)
 
-- `@simetra/designer` розробляється як пакет workspace; запуск — з
+- `@simetrajs/designer` розробляється як пакет workspace; запуск — з
   вихідників (`packages/designer/bin/simetra.mjs` через tsx).
 - Скіл споживача лежить у пакеті як частина продукту й **невидимий** агентам
   платформи: його немає в `.agents/skills` і `.claude/skills`, designer не є
@@ -161,19 +161,19 @@ MCP  simetra mcp│  src/mcp ─┼─► src/tools: каталог + invoke ─
 
 ```bash
 pnpm add simetra
-pnpm add -D @simetra/designer
+pnpm add -D @simetrajs/designer
 pnpm exec simetra init --agents claude,codex
 ```
 
 - `init` кладе відносні симлінки `.claude/skills/<скіл>` і
-  `.agents/skills/<скіл>` → `node_modules/@simetra/designer/skills/<скіл>` і
+  `.agents/skills/<скіл>` → `node_modules/@simetrajs/designer/skills/<скіл>` і
   пише MCP-конфіг без прапорців (запис увімкнено) і друкує, що є
   `--read-only`; `AGENTS.md` і `CLAUDE.md` споживача не
   змінює. Агент споживача знаходить скіл автодискавері, і той завжди тієї ж
   версії, що й встановлені інструменти й рантайм.
 - Агент працює через MCP-інструменти (або CLI) за правилами скіла: перегляд
   `dryRun`, без `id` у вході, перейменування — інструментом з каскадом.
-- Оновлення платформи — `pnpm up simetra @simetra/designer`; симлінки
+- Оновлення платформи — `pnpm up simetra @simetrajs/designer`; симлінки
   підхоплюють новий скіл самі, `init --check` у CI ловить розбіжності.
 
 **Стан:** каталог (з `introspect`, `diff`, `plan` і `apply`), режими CLI і MCP,

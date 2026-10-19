@@ -1,4 +1,4 @@
-// Єдина точка, через яку тести @simetra/designer беруть фікстури `simetra`
+// Єдина точка, через яку тести @simetrajs/designer беруть фікстури `simetra`
 // (план designer-1, рішення 12): лише реекспорти, без логіки. Тека `test/` не
 // входить в `exports` пакета, тож виробничий код designer її не імпортує —
 // це тримає лінт-зона `packages/designer/eslint.zones.js`.

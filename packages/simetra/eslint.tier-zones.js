@@ -62,14 +62,14 @@ const tierConfigs = TIERS.flatMap((tier, index) => {
 const PURITY_FILES = (tier) => [`src/${tier}/**/*.{ts,tsx,mts,cts}`]
 const PURITY_IGNORES = ["**/__tests__/**"]
 
-// Драйвер бази й двигун схеми — у @simetra/designer (рішення Д5): рантайм-пакет
+// Драйвер бази й двигун схеми — у @simetrajs/designer (рішення Д5): рантайм-пакет
 // не тягне їх навіть `import type`. Тести виключено — DB-тести T2 говорять із
 // базою напряму. Патерн живе в кожному блоці правила, бо блок ярусу замінює
 // опції загального блоку цілком.
 const DB_ENGINE_PATTERN = {
   regex: "^(?:pg|@supabase/pg-delta)(?:/|$)",
   message:
-    "Runtime boundary: simetra production sources import neither pg nor @supabase/pg-delta; the schema engine and database readers live in @simetra/designer (designer plan, decision 4).",
+    "Runtime boundary: simetra production sources import neither pg nor @supabase/pg-delta; the schema engine and database readers live in @simetrajs/designer (designer plan, decision 4).",
 }
 
 export const purityConfigs = [
@@ -115,7 +115,7 @@ export const purityConfigs = [
               regex:
                 "^(?:node:|(?:fs|path|os|crypto|url|child_process)(?:/|$))",
               message:
-                "T1 purity: the compiler is a pure function over a file map; disk access belongs to @simetra/designer (P2 spec §8.2).",
+                "T1 purity: the compiler is a pure function over a file map; disk access belongs to @simetrajs/designer (P2 spec §8.2).",
             },
           ],
         },

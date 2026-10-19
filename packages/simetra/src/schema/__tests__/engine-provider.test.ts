@@ -10,7 +10,7 @@ import { UNMANAGED_SCHEMAS } from "../render/desired-state"
 /**
  * Пресет провайдера узгоджений із рендером бажаного стану. Рівність пресету
  * політиці закріпленого двигуна тримає контрактний тест адаптера в
- * @simetra/designer (`schema-engine/__tests__/engine-policy.test.ts`).
+ * @simetrajs/designer (`schema-engine/__tests__/engine-policy.test.ts`).
  */
 describe("provider preset matches the desired-state render", () => {
   it("schemas the render does not create are provider schemas", () => {

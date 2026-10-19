@@ -26,7 +26,7 @@ export {
   type ModelScope,
 } from "./desired"
 // Чисті функції й типи перепису та пресет провайдера: адаптер двигуна й
-// читачі бази живуть у @simetra/designer (рішення Д5) і беруть їх звідси
+// читачі бази живуть у @simetrajs/designer (рішення Д5) і беруть їх звідси
 export {
   censusDiagnostics,
   reconcileCensus,

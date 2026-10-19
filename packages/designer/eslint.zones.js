@@ -1,4 +1,4 @@
-// Лінт-зони @simetra/designer: межа тестової опори `simetra` і зона студії.
+// Лінт-зони @simetrajs/designer: межа тестової опори `simetra` і зона студії.
 //
 // Обмеження механізму те саме, що в `packages/simetra/eslint.tier-zones.js`:
 // `no-restricted-imports` звіряє рядок специфікатора, а не резолвлений модуль.

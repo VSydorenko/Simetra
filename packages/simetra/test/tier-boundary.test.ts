@@ -221,7 +221,7 @@ describe("tier zones", () => {
   })
 
   it("production sources import neither pg nor pg-delta", async () => {
-    // Рушій схеми й читачі бази живуть у @simetra/designer (рішення Д5):
+    // Рушій схеми й читачі бази живуть у @simetrajs/designer (рішення Д5):
     // рантайм-пакет не тягне драйвер бази й двигун навіть типами
     for (const code of [
       'import pg from "pg"\nexport const used = pg\n',

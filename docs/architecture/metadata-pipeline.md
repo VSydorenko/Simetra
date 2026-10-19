@@ -7,7 +7,7 @@
 
 ```
 metadata/*.meta.json, *.sql, *.module.ts
-        │  читання диска — лише в @simetra/designer (src/io)
+        │  читання диска — лише в @simetrajs/designer (src/io)
         ▼
 T1 compile(files)  ──►  діагностика (file:line:col, коди правил)
         │  без помилок
@@ -21,7 +21,7 @@ CompiledModel: логічна модель з UUID, фізичний знімо�
         └─► T2 рендер бажаного стану → DDL
                  │
                  ▼
-         T2 порт SchemaEngine  ◄── адаптер pg-delta (@simetra/designer)
+         T2 порт SchemaEngine  ◄── адаптер pg-delta (@simetrajs/designer)
                  │  extract бази, план між базою й тінню
                  ▼
          T2 звірка бажаного стану з базою
@@ -67,7 +67,7 @@ CompiledModel: логічна модель з UUID, фізичний знімо�
 - **Порт `SchemaEngine`** (`schema/engine/port.ts`) — контракт двигуна:
   extract бази в модель каталогу Simetra, план між двома станами, тінь.
 - **Адаптер** порту на pg-delta і читачі бази живуть у
-  `@simetra/designer` (`packages/designer/src/schema-engine/`) і передаються
+  `@simetrajs/designer` (`packages/designer/src/schema-engine/`) і передаються
   в порт ззовні: рантайм застосунку двигуна не тягне.
 - **Звірка** (`compareWithDesired`) розгортає бажаний стан у тінь і порівнює
   extract тіні з extract бази; межа керування — профіль провайдера
@@ -79,7 +79,7 @@ CompiledModel: логічна модель з UUID, фізичний знімо�
 порту й наявною текою: без бази й диска. Вихід — підсумкова мапа теки після
 злиття, зміни відносно наявної й діагностика; змін немає за будь-якої
 помилки. Інваріанти (типи, ключі ідентичності, розкладка одиниць) — спека П2
-§9. Підключення до бази, тінь і запис файлів складає `@simetra/designer`.
+§9. Підключення до бази, тінь і запис файлів складає `@simetrajs/designer`.
 Повноту ланцюжка «extract → зворотна генерація → компіляція → рендер → тінь»
 тримає DB-тест round-trip з незалежним читачем `pg_catalog`
 (`packages/designer/src/schema-engine/__tests__/round-trip.db.test.ts`).

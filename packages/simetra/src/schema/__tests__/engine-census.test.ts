@@ -9,7 +9,7 @@ import {
 /**
  * Власна мапа покриття тесту: чисті функції не залежать від покриття
  * конкретного двигуна; покриття pg-delta перевіряє тест адаптера в
- * @simetra/designer (`schema-engine/__tests__/census-coverage.test.ts`).
+ * @simetrajs/designer (`schema-engine/__tests__/census-coverage.test.ts`).
  */
 const COVERAGE = {
   table: "compared",

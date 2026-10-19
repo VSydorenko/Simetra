@@ -21,7 +21,7 @@ progress is tracked in the [roadmap](docs/ROADMAP.md).
 
 What exists today: the metamodel and the compiler (milestone P2), rendering of
 the desired database state, a schema-engine port with a first adapter, and the
-developer toolset `@simetra/designer` — command line and MCP server over one
+developer toolset `@simetrajs/designer` — command line and MCP server over one
 catalog of tools. The rest of the platform (data runtime, screens, studio,
 package delivery) is ahead on the roadmap.
 
@@ -41,7 +41,7 @@ package delivery) is ahead on the roadmap.
 - **A clean runtime and a separate toolset.** The flagship `simetra` package is
   what an application depends on, with tier folders — model, compiler, schema,
   server, data, UI, shell — where imports go only downward. Developer tools
-  live in `@simetra/designer` and never reach the application bundle.
+  live in `@simetrajs/designer` and never reach the application bundle.
 
 The full design, with the reasoning behind each decision, is in the platform
 design spec.
@@ -51,7 +51,7 @@ design spec.
 | Package | What it is |
 | --- | --- |
 | `simetra` (`packages/simetra`) | The runtime and core: metamodel, compiler and metadata operations, desired-state rendering, schema-engine port |
-| `@simetra/designer` (`packages/designer`) | The developer toolset, binary `simetra`: one tool catalog served by the command line and an MCP server (a visual studio follows as another mode), the schema-engine adapter, and agent skills for consumer projects |
+| `@simetrajs/designer` (`packages/designer`) | The developer toolset, binary `simetra`: one tool catalog served by the command line and an MCP server (a visual studio follows as another mode), the schema-engine adapter, and agent skills for consumer projects |
 
 `examples/reference` holds a synthetic reference domain used by the tests.
 `legacy/` is the frozen prototype that predates the platform design: read-only
