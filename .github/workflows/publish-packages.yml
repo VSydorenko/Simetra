@@ -25,6 +25,9 @@ concurrency:
 jobs:
   publish:
     name: Publish to npmjs
+    # Trusted publisher прив'язаний до файлу воркфлоу, а не до гілки: ручний
+    # запуск (`workflow_dispatch`) з іншої гілки опублікував би неперевірений код
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
