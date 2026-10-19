@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "description": "Editor hint: path to the JSON Schema of this file.",
+      "type": "string"
+    },
+    "units": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Identities of verbatim SQL units accepted as debt (outside the closed function shell), sorted and without duplicates. Written by introspect; fix only removes entries."
+    }
+  },
+  "required": [
+    "units"
+  ],
+  "additionalProperties": false,
+  "description": "Debt ratchet of verbatim SQL: a debt unit missing from this list is an error.",
+  "$id": "sql-debt.schema.json"
+}

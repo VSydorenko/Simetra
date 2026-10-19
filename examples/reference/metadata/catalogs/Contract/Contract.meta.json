@@ -1,0 +1,43 @@
+{
+  "$schema": "../../../../../node_modules/simetra/schemas/catalogs.schema.json",
+  "id": "d984851b-be8f-4a67-b208-4a873fa0df3d",
+  "kind": "Catalog",
+  "name": "Contract",
+  "physicalName": "contract",
+  "kindLabel": "contract",
+  "scope": "org",
+  "title": {
+    "uk": "Договори"
+  },
+  "owners": [
+    {
+      "kind": "Catalog",
+      "name": "Counterparty"
+    }
+  ],
+  "attributes": [
+    {
+      "id": "9b453c1c-12ba-495a-bfd2-71425e3301f2",
+      "name": "currency",
+      "physicalName": "currency_id",
+      "title": {
+        "uk": "Валюта"
+      },
+      "type": "Ref",
+      "ref": {
+        "kind": "Catalog",
+        "name": "Currency"
+      },
+      "required": true
+    },
+    {
+      "id": "cc7a3024-438e-4c02-8970-80f6d0f6c780",
+      "name": "startDate",
+      "physicalName": "start_date",
+      "title": {
+        "uk": "Дата початку"
+      },
+      "type": "Date"
+    }
+  ]
+}

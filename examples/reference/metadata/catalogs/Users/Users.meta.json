@@ -1,0 +1,27 @@
+{
+  "$schema": "../../../../../node_modules/simetra/schemas/catalogs.schema.json",
+  "id": "b30f51c8-00be-46e0-a82b-08f13b00b0e1",
+  "kind": "Catalog",
+  "name": "Users",
+  "physicalName": "users",
+  "kindLabel": "users",
+  "scope": "none",
+  "title": {
+    "uk": "Користувачі"
+  },
+  "role": "users",
+  "attributes": [
+    {
+      "id": "08ab75f3-9626-416d-a014-64d002c50196",
+      "name": "locale",
+      "physicalName": "locale",
+      "title": {
+        "uk": "Мова інтерфейсу"
+      },
+      "type": "String",
+      "length": 5,
+      "required": true,
+      "defaultValue": "uk"
+    }
+  ]
+}

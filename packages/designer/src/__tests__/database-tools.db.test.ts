@@ -1,0 +1,814 @@
+import { existsSync } from "node:fs"
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { dirname, join, resolve } from "node:path"
+import { Client } from "@modelcontextprotocol/client"
+import { InMemoryTransport } from "@modelcontextprotocol/server"
+import pg from "pg"
+import { compile, type CompiledModel } from "simetra/compiler"
+import {
+  desiredForApply,
+  renderApplyState,
+  renderDesiredState,
+  type EngineScope,
+} from "simetra/schema"
+import { afterEach, describe, expect, it, vi } from "vitest"
+import { runTool, type CliArgs } from "../cli/command"
+import { databaseResource } from "../io/database"
+import { readMetadataDir } from "../io/metadata-dir"
+import { createMcpServer } from "../mcp/server"
+import { createPgDeltaEngine } from "../schema-engine"
+import { readOnlyTransactionPool } from "../schema-engine/read-only"
+import type { DiffData } from "../tools/database-tools"
+import { toolByName } from "../tools/catalog"
+import { invoke } from "../tools/invoke"
+import type { InvokeOptions, ToolResult } from "../tools/types"
+import {
+  catalog,
+  metaFiles,
+  project as projectFile,
+  testDatabaseUrl,
+  testRoleName,
+  testSuperuserUrl,
+} from "../../../simetra/test/support"
+import {
+  asSuperuser,
+  dropRoles,
+  inTarget as loadTarget,
+  query,
+} from "./support/db"
+import { project, snapshotOf, useTmpProjects } from "./helpers/catalog"
+
+/**
+ * Інструменти `introspect` і `diff` над живою базою (план E2b, задача 5):
+ * ціль — тінь стеку з SQL фікстури; інструменти бачать її лише через ресурс
+ * запуску з середовища, як у справжньому запуску.
+ */
+
+const engine = createPgDeltaEngine()
+const stack = { url: testDatabaseUrl() }
+const SIMETRA = resolve(__dirname, "../../../simetra")
+const ENV = "SIMETRA_DATABASE_URL"
+
+useTmpProjects()
+
+const disposers: (() => Promise<void>)[] = []
+const clients: Client[] = []
+afterEach(async () => {
+  await Promise.all(clients.splice(0).map((c) => c.close()))
+  await Promise.all(disposers.splice(0).map((d) => d()))
+})
+
+/** Корінь проєкту з `node_modules/simetra`; тека метаданих ще не існує. */
+async function freshProject(): Promise<string> {
+  const root = await mkdtemp(join(tmpdir(), "simetra-db-tools-"))
+  await mkdir(join(root, "node_modules"))
+  await symlink(SIMETRA, join(root, "node_modules", "simetra"), "dir")
+  disposers.push(() => rm(root, { recursive: true }))
+  return join(root, "metadata")
+}
+
+const scopeOf = (schemas: string[]): EngineScope => ({
+  schemas,
+  provider: "supabase",
+})
+
+/**
+ * Розгортає `sql` у тимчасову базу поруч зі стеком; її прибирає порт.
+ * Спільний `inTarget`, де межу задає перелік схем.
+ */
+const inTarget = (
+  sql: string,
+  schemas: string[],
+  fn: (url: string) => Promise<void>
+): Promise<void> => loadTarget(sql, scopeOf(schemas), fn)
+
+const options = (
+  dir: string,
+  env: NodeJS.ProcessEnv,
+  shadow?: string
+): InvokeOptions => ({
+  dir,
+  readOnly: false,
+  allowDatabaseWrite: false,
+  dryRun: false,
+  confirmed: false,
+  channel: "cli",
+  database: databaseResource(env, {
+    url: ENV,
+    ...(shadow === undefined ? {} : { shadow }),
+  }),
+})
+
+const call = (
+  name: "introspect" | "diff",
+  input: unknown,
+  o: InvokeOptions
+): Promise<ToolResult> => invoke(toolByName(name)!, input, o)
+
+const errors = (r: ToolResult) =>
+  r.diagnostics.filter((d) => d.severity === "error")
+
+async function connectMcp(
+  dir: string,
+  env: NodeJS.ProcessEnv
+): Promise<Client> {
+  const server = createMcpServer({
+    dir,
+    readOnly: false,
+    database: databaseResource(env, { url: ENV }),
+    databaseEnv: ENV,
+  })
+  const [clientEnd, serverEnd] = InMemoryTransport.createLinkedPair()
+  const client = new Client({ name: "test", version: "0.0.0" })
+  clients.push(client)
+  await server.connect(serverEnd)
+  await client.connect(clientEnd)
+  return client
+}
+
+/** Роль поза членством ролі сесії: її об'єкт двигун не прочитає. */
+const STRANGER = testRoleName("db_tools_stranger")
+
+const SHOP = `
+  CREATE SCHEMA app;
+  CREATE TYPE app.order_status AS ENUM ('new', 'paid');
+  CREATE TABLE app.customer (id uuid PRIMARY KEY, name text NOT NULL);
+  CREATE TABLE app.orders (
+    id uuid PRIMARY KEY,
+    customer_id uuid NOT NULL REFERENCES app.customer (id),
+    status app.order_status NOT NULL,
+    total numeric(12, 2)
+  );
+  CREATE INDEX orders_customer_idx ON app.orders (customer_id);
+`
+
+const introspectInput = {
+  schemas: ["app"],
+  project: { name: "Shop", attributeCase: "snake_case" },
+}
+
+/** Ціль SHOP і тека, вже прочитана з неї. */
+async function introspected(
+  fn: (dir: string, env: NodeJS.ProcessEnv, url: string) => Promise<void>
+): Promise<void> {
+  await inTarget(SHOP, ["app"], async (url) => {
+    const dir = await freshProject()
+    const env = { [ENV]: url }
+    const r = await call("introspect", introspectInput, options(dir, env))
+    expect(errors(r)).toEqual([])
+    expect(r.written).toBe(true)
+    await fn(dir, env, url)
+  })
+}
+
+describe("introspect", () => {
+  it("introspect writes metadata that compiles", async () => {
+    await introspected(async (dir) => {
+      const compiled = await invoke(
+        toolByName("compile")!,
+        {},
+        {
+          dir,
+          readOnly: false,
+          allowDatabaseWrite: false,
+          dryRun: false,
+          confirmed: false,
+          channel: "cli",
+        }
+      )
+      expect(compiled.ok).toBe(true)
+      expect(errors(compiled)).toEqual([])
+      expect(existsSync(join(dir, "project.meta.json"))).toBe(true)
+      expect(
+        existsSync(join(dir, "custom-tables/Orders/Orders.meta.json"))
+      ).toBe(true)
+    })
+  })
+
+  it("introspect into an empty directory writes the default provider explicitly", async () => {
+    await inTarget(SHOP, ["app"], async (url) => {
+      const dir = await freshProject()
+      const r = await call(
+        "introspect",
+        { schemas: ["app"] },
+        options(dir, { [ENV]: url })
+      )
+      expect(errors(r)).toEqual([])
+      const written = JSON.parse(
+        await readFile(join(dir, "project.meta.json"), "utf8")
+      ) as { database?: unknown }
+      expect(written.database).toEqual({ provider: "supabase" })
+    })
+  })
+
+  it("introspect twice changes nothing", async () => {
+    await introspected(async (dir, env) => {
+      const before = await snapshotOf(dir)
+      const again = await call("introspect", {}, options(dir, env))
+      expect(errors(again)).toEqual([])
+      expect(again.changes).toEqual([])
+      expect(again.written).toBe(false)
+      expect(await snapshotOf(dir)).toEqual(before)
+    })
+  })
+
+  it("introspect with errors writes nothing", async () => {
+    await inTarget(
+      `CREATE SCHEMA app;
+       CREATE TABLE app.note (id uuid PRIMARY KEY);
+       CREATE TABLE app.booking (
+         id uuid PRIMARY KEY,
+         during tstzrange NOT NULL,
+         CONSTRAINT booking_no_overlap EXCLUDE USING gist (during WITH &&)
+       );`,
+      ["app"],
+      async (url) => {
+        const dir = await freshProject()
+        const r = await call(
+          "introspect",
+          introspectInput,
+          options(dir, { [ENV]: url })
+        )
+        expect(r.ok).toBe(false)
+        expect(r.written).toBe(false)
+        expect(r.changes).toEqual([])
+        expect(errors(r).map((d) => d.code)).toContain("engine.unrepresentable")
+        // Навіть таблиця без вад не записана: помилка зупиняє весь запис
+        expect(existsSync(dir)).toBe(false)
+      }
+    )
+  })
+
+  it("introspect reports non-default identity options as an error", async () => {
+    // `buildPlan` знижує цей код до попередження (там модель — деталь), а
+    // для `introspect` модель і є результатом, тож це помилка
+    await inTarget(
+      `CREATE SCHEMA app;
+       CREATE TABLE app.counter (
+         seq bigint GENERATED ALWAYS AS IDENTITY (CACHE 10) PRIMARY KEY
+       );`,
+      ["app"],
+      async (url) => {
+        const dir = await freshProject()
+        const r = await call(
+          "introspect",
+          introspectInput,
+          options(dir, { [ENV]: url })
+        )
+        expect(r.ok).toBe(false)
+        expect(r.written).toBe(false)
+        expect(
+          errors(r).filter((d) => d.code === "engine.unrepresentable")
+        ).not.toEqual([])
+      }
+    )
+  })
+
+  it("introspect into a fresh dir without schemas is refused", async () => {
+    const dir = await freshProject()
+    let connects = 0
+    const r = await call(
+      "introspect",
+      {},
+      {
+        ...options(dir, {}),
+        database: {
+          describe: "localhost:5432/app",
+          connect: () => {
+            connects++
+            return Promise.reject(new Error("must not connect"))
+          },
+        },
+      }
+    )
+    expect(r.refusal?.message).toContain("pass schemas")
+    expect(connects).toBe(0)
+    expect(existsSync(dir)).toBe(false)
+  })
+})
+
+describe("diff", () => {
+  it("diff of an introspected database is empty", async () => {
+    await introspected(async (dir, env) => {
+      const r = await runTool(
+        toolByName("diff")!,
+        { _: [dir] },
+        undefined,
+        process.cwd(),
+        env
+      )
+      expect(r.stdout).toContain("diff: the database matches the metadata")
+      expect(r.exitCode).toBe(0)
+    })
+  })
+
+  it("diff refuses an object of a role the session is not a member of", async () => {
+    // Двигун не будує витягу цілі з таким об'єктом (відмова «capability»):
+    // без передперевірки власників `diff` давав би безликий `database.failed`
+    await introspected(async (dir, env, url) => {
+      await query(testSuperuserUrl(), `CREATE ROLE ${STRANGER} NOLOGIN;`)
+      // Роль кластерна: знімається після бази цілі, яку прибирає порт
+      disposers.push(() => dropRoles(STRANGER))
+      await query(
+        asSuperuser(url),
+        `CREATE TABLE app.stray (id int);
+         ALTER TABLE app.stray OWNER TO ${STRANGER};`
+      )
+      const r = await runTool(
+        toolByName("diff")!,
+        { _: [dir] },
+        undefined,
+        process.cwd(),
+        env
+      )
+      expect(r.exitCode).toBe(1)
+      expect(r.stdout).toContain("engine.owner-not-member")
+      expect(r.stdout).toContain(
+        `relation app.stray (owner ${STRANGER}, not a role postgres is a member of)`
+      )
+      expect(r.stdout).toContain("ALTER … OWNER TO <role>")
+      expect(`${r.stdout}${r.stderr}`).not.toMatch(/\n\s+at /)
+      expect(r.stdout).not.toContain(url)
+    })
+  })
+
+  it("diff names a dropped index in cli and mcp structured output", async () => {
+    await introspected(async (dir, env, url) => {
+      await query(url, "DROP INDEX app.orders_customer_idx")
+      const cli = await runTool(
+        toolByName("diff")!,
+        { _: [dir] },
+        undefined,
+        process.cwd(),
+        env
+      )
+      expect(cli.exitCode).toBe(1)
+      expect(cli.stdout).toContain("orders_customer_idx")
+
+      const json = await runTool(
+        toolByName("diff")!,
+        { _: [dir], format: "json" },
+        undefined,
+        process.cwd(),
+        env
+      )
+      const parsed = JSON.parse(json.stdout) as DiffData
+      expect(parsed.empty).toBe(false)
+      expect(parsed.plan.map((a) => a.sql).join("\n")).toContain(
+        "orders_customer_idx"
+      )
+
+      const mcp = await (
+        await connectMcp(dir, env)
+      ).callTool({
+        name: "diff",
+        arguments: {},
+      })
+      // Відмінності — не помилка виклику
+      expect(mcp.isError).not.toBe(true)
+      const data = mcp.structuredContent as unknown as DiffData
+      expect(data.empty).toBe(false)
+      expect(data.plan.some((a) => a.sql.includes("orders_customer_idx"))).toBe(
+        true
+      )
+      expect(
+        data.differences.some((d) => d.path.includes("orders_customer_idx"))
+      ).toBe(true)
+    })
+  })
+
+  it("diff tables filter", async () => {
+    await introspected(async (dir, env, url) => {
+      // FK замовлення посилається на клієнта, але його дія належить
+      // замовленню: фільтр клієнта її не бачить
+      await query(
+        url,
+        `DROP INDEX app.orders_customer_idx;
+         ALTER TABLE app.orders DROP CONSTRAINT orders_customer_id_fkey;`
+      )
+      const narrowed = async (tables: string[]) =>
+        (await call("diff", { tables }, options(dir, env))).data as DiffData
+
+      const other = await narrowed(["app.customer"])
+      expect(other).toMatchObject({ plan: [], differences: [], empty: true })
+
+      const own = await narrowed(["orders"])
+      expect(own.empty).toBe(false)
+      expect(own.plan.length).toBeGreaterThan(0)
+      expect(own.differences.length).toBeGreaterThan(0)
+
+      const unknown = await call(
+        "diff",
+        { tables: ["app.nope"] },
+        options(dir, env)
+      )
+      expect(unknown.refusal?.message).toContain("app.nope")
+    })
+  })
+})
+
+/** Модель теки, як її бачить `diff`. */
+async function modelOf(dir: string): Promise<CompiledModel> {
+  const compiled = await compile(await readMetadataDir(dir))
+  expect(compiled.diagnostics.filter((d) => d.severity === "error")).toEqual([])
+  return compiled.model!
+}
+
+const diffData = async (
+  dir: string,
+  env: NodeJS.ProcessEnv
+): Promise<DiffData> =>
+  (await call("diff", {}, options(dir, env))).data as DiffData
+
+/** Тека проєкту з довідником «Користувачі»: модель має платформний шар. */
+async function usersProject(): Promise<{ dir: string; model: CompiledModel }> {
+  const dir = await freshProject()
+  const files = metaFiles({
+    "project.meta.json": projectFile(),
+    "catalogs/Users/Users.meta.json": catalog("Users", {
+      role: "users",
+      scope: "none",
+    }),
+  })
+  for (const [path, content] of files) {
+    await mkdir(dirname(join(dir, path)), { recursive: true })
+    await writeFile(join(dir, path), content)
+  }
+  return { dir, model: await modelOf(dir) }
+}
+
+describe("diff and the apply state", () => {
+  it("a database without the apply state matches its metadata", async () => {
+    await introspected(async (dir, env) => {
+      const data = await diffData(dir, env)
+      expect(data).toMatchObject({
+        plan: [],
+        differences: [],
+        empty: true,
+        applyState: "absent",
+      })
+      const cli = await runTool(
+        toolByName("diff")!,
+        { _: [dir] },
+        undefined,
+        process.cwd(),
+        env
+      )
+      expect(cli.exitCode).toBe(0)
+    })
+  })
+
+  it("a complete apply state matches, a partial one is a difference", async () => {
+    await introspected(async (dir, env, url) => {
+      await query(url, renderApplyState(await modelOf(dir)))
+      expect(await diffData(dir, env)).toMatchObject({
+        empty: true,
+        applyState: "present",
+      })
+      await query(url, "DROP TABLE simetra.ledger")
+      const partial = await diffData(dir, env)
+      expect(partial.empty).toBe(false)
+      expect(partial.applyState).toBe("present")
+      expect(partial.plan.map((a) => a.sql).join("\n")).toContain("ledger")
+    })
+  })
+
+  it("a bare simetra schema is a partial apply state", async () => {
+    // Порожню схему без грантів модель каталогу не несе: відсутність схеми
+    // видно лише з плану, і без цього її поява лишилася б непоміченою
+    await introspected(async (dir, env, url) => {
+      await query(url, "CREATE SCHEMA simetra")
+      const data = await diffData(dir, env)
+      expect(data.applyState).toBe("present")
+      expect(data.empty).toBe(false)
+    })
+  })
+
+  it("a changed marker table is a difference", async () => {
+    await introspected(async (dir, env, url) => {
+      await query(url, renderApplyState(await modelOf(dir)))
+      await query(url, "ALTER TABLE simetra.marker ADD COLUMN x int")
+      const data = await diffData(dir, env)
+      expect(data.empty).toBe(false)
+      expect(data.applyState).toBe("present")
+      expect(
+        data.differences.some((d) => d.path.startsWith("tables.simetra.marker"))
+      ).toBe(true)
+    })
+  })
+
+  it("a deployed platform layer without the apply state matches", async () => {
+    const { dir, model } = await usersProject()
+    const { scope } = await desiredForApply(model)
+    await inTarget(renderDesiredState(model).sql, [...scope.schemas], (url) =>
+      diffData(dir, { [ENV]: url }).then((data) =>
+        expect(data).toMatchObject({
+          plan: [],
+          differences: [],
+          empty: true,
+          applyState: "absent",
+        })
+      )
+    )
+  })
+
+  it("the filter never hides the platform layer", async () => {
+    const { dir, model } = await usersProject()
+    const { scope } = await desiredForApply(model)
+    await inTarget(
+      `${renderDesiredState(model).sql}\n\nDROP TABLE simetra.identities;`,
+      [...scope.schemas],
+      async (url) => {
+        const data = await diffData(dir, { [ENV]: url })
+        expect(data.applyState).toBe("absent")
+        expect(data.empty).toBe(false)
+        const sql = data.plan.map((a) => a.sql).join("\n")
+        expect(sql).toContain("identities")
+        expect(sql).not.toContain("marker")
+        expect(
+          data.differences.some((d) => d.path === "tables.simetra.identities")
+        ).toBe(true)
+      }
+    )
+  })
+})
+
+describe("introspect and the platform schema", () => {
+  it("introspect never reads the apply state into metadata", async () => {
+    const { dir, model } = await usersProject()
+    const desired = await desiredForApply(model)
+    await inTarget(desired.sql, [...desired.scope.schemas], async (url) => {
+      const r = await call("introspect", {}, options(dir, { [ENV]: url }))
+      expect(errors(r)).toEqual([])
+      expect((r.data as { schemas: string[] }).schemas).not.toContain("simetra")
+      expect(r.changes.filter((c) => /marker|ledger/i.test(c.path))).toEqual([])
+    })
+  })
+})
+
+describe("sessions", () => {
+  it("target session is read-only", async () => {
+    await inTarget(SHOP, ["app"], async (url) => {
+      const pool = readOnlyTransactionPool(url)
+      try {
+        await expect(
+          pool.query("CREATE TABLE app.intruder (id int)")
+        ).rejects.toMatchObject({ code: "25006" })
+      } finally {
+        await pool.end()
+      }
+    })
+  })
+
+  it("shadow session is not read-only", async () => {
+    // Завантаження бажаного стану пише в тінь, поки ціль лише читається
+    await inTarget(SHOP, ["app"], async (url) => {
+      const outcome = await engine.withDesiredShadow(
+        { target: { url } },
+        `${SHOP} CREATE TABLE app.extra (id int);`,
+        scopeOf(["app"]),
+        async (_shadow, plan) => plan
+      )
+      expect(outcome.status).toBe("loaded")
+      if (outcome.status === "loaded")
+        expect(
+          outcome.value.actions.some((a) =>
+            a.produces.includes("table:app.extra")
+          )
+        ).toBe(true)
+    })
+  })
+
+  it("a shadow on another server of the same major version is accepted", async () => {
+    // Другий сервер тієї самої версії локально — той самий стек під іншою
+    // змінною: шлях `--shadow-url-env` проходить повністю
+    await introspected(async (dir, env) => {
+      const r = await call(
+        "diff",
+        {},
+        options(dir, { ...env, SHADOW_URL: stack.url }, "SHADOW_URL")
+      )
+      expect(errors(r)).toEqual([])
+      expect((r.data as DiffData).empty).toBe(true)
+    })
+  })
+})
+
+describe("credentials never leak", () => {
+  const USER = "leaky_user_q7x"
+  const PASSWORD = "Wr0ng-pa55-Kx81"
+  const badPassword = (() => {
+    const u = new URL(stack.url)
+    u.username = USER
+    u.password = PASSWORD
+    return u.toString()
+  })()
+  const unreachable = `postgresql://${USER}:${PASSWORD}@127.0.0.1:1/app_db`
+  const secrets = [USER, PASSWORD, badPassword, unreachable]
+  const leaks = (text: string) => secrets.filter((s) => text.includes(s))
+
+  for (const [name, url] of [
+    ["bad password", badPassword],
+    ["unreachable host", unreachable],
+  ] as const) {
+    it(`${name} is redacted in text, structuredContent and stderr`, async () => {
+      const printed: string[] = []
+      const capture = (...args: unknown[]) => {
+        printed.push(args.map(String).join(" "))
+      }
+      const spies = [
+        vi.spyOn(console, "error").mockImplementation(capture),
+        vi.spyOn(console, "warn").mockImplementation(capture),
+        vi.spyOn(console, "log").mockImplementation(capture),
+      ]
+      try {
+        const fresh = await freshProject()
+        // `diff` доходить до бази лише з текою, що компілюється
+        const reference = await project()
+        const env = { [ENV]: url }
+        const channels: string[] = []
+        const cases: ["introspect" | "diff", CliArgs][] = [
+          ["introspect", { _: [fresh], schemas: "app" }],
+          ["diff", { _: [reference] }],
+        ]
+        for (const [tool, argv] of cases) {
+          const r = await runTool(
+            toolByName(tool)!,
+            argv,
+            undefined,
+            process.cwd(),
+            env
+          )
+          expect(r.exitCode, tool).toBe(2)
+          expect(r.stderr, tool).toMatch(
+            name === "bad password"
+              ? /Authentication to the database at .* failed/
+              : /is unreachable \(ECONNREFUSED\)/
+          )
+          channels.push(r.stdout, r.stderr)
+        }
+
+        for (const [tool, dir, args] of [
+          ["introspect", fresh, { schemas: ["app"] }],
+          ["diff", reference, {}],
+        ] as const) {
+          const client = await connectMcp(dir, env)
+          const r = await client.callTool({ name: tool, arguments: args })
+          expect(r.isError, tool).toBe(true)
+          channels.push(
+            JSON.stringify(r.content),
+            JSON.stringify(r.structuredContent ?? null)
+          )
+          const direct = await call(tool, args, options(dir, env))
+          expect(direct.refusal, tool).toBeDefined()
+          channels.push(JSON.stringify(direct))
+        }
+        expect(channels.join("\n")).toContain(new URL(url).hostname)
+        expect(leaks([...channels, ...printed].join("\n"))).toEqual([])
+      } finally {
+        for (const s of spies) s.mockRestore()
+      }
+    })
+  }
+})
+
+describe("pools", () => {
+  /**
+   * Клієнтські сесії цілі — їх лишив би незакритий пул. Службові процеси
+   * сервера (autovacuum, паралельні виконавці) приходять і йдуть самі, тож у
+   * лічбу не входять. Сесія лічби — з базою стеку, не цілі.
+   */
+  async function sessions(url: string): Promise<number> {
+    const client = new pg.Client({ connectionString: stack.url })
+    await client.connect()
+    try {
+      const { rows } = await client.query<{ n: number }>(
+        `select count(*)::int as n from pg_stat_activity
+          where datname = $1 and backend_type = 'client backend'`,
+        [new URL(url).pathname.slice(1)]
+      )
+      return rows[0]!.n
+    } finally {
+      await client.end()
+    }
+  }
+
+  /**
+   * Межа очікування, поки сесії закритого пулу зникнуть із
+   * `pg_stat_activity`: процес сервера завершується вже після того, як
+   * клієнт закрив з'єднання, і під навантаженням це помітно довше за мить.
+   * Межа нижча за `idleTimeoutMillis` пулу `pg` (типово 10 с): інакше
+   * незакритий пул сам закрив би простійні з'єднання, і тест пройшов би хибно.
+   */
+  const SETTLE_MS = 6_000
+
+  /**
+   * Клієнтських сесій цілі не лишилося. Порівняння — з нулем, а не зі
+   * знімком «до»: знімок одразу після попереднього виклику ще бачив би його
+   * сесії, що закриваються, і порівняння ставало б перегонами (флейк у обидва
+   * боки: «до» з сесіями, що потім зникли, чи без тих, що ще не зникли). Між
+   * викликами ціль сесій не має: порт тіні з'єднань із нею не тримає.
+   */
+  async function settled(url: string): Promise<number> {
+    const deadline = Date.now() + SETTLE_MS
+    let n = await sessions(url)
+    while (n !== 0 && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 100))
+      n = await sessions(url)
+    }
+    return n
+  }
+
+  it("no pool is left open after a refused or failed call", async () => {
+    await introspected(async (dir, env, url) => {
+      expect(await settled(url)).toBe(0)
+      // Відмова після читання бази: невідома таблиця фільтра
+      const refused = await call(
+        "diff",
+        { tables: ["app.nope"] },
+        options(dir, env)
+      )
+      expect(refused.refusal).toBeDefined()
+      expect(await settled(url)).toBe(0)
+      // Відмова до бази: схема провайдера не читається
+      const failed = await call(
+        "introspect",
+        { schemas: ["auth"] },
+        options(dir, env)
+      )
+      expect(failed.refusal).toBeDefined()
+      expect(await settled(url)).toBe(0)
+      // Схема платформи теж не читається
+      const platform = await call(
+        "introspect",
+        { schemas: ["simetra"] },
+        options(dir, env)
+      )
+      expect(platform.refusal?.message).toContain("belongs to the platform")
+      expect(await settled(url)).toBe(0)
+    })
+  })
+
+  it("no pool is left open after a failure in the middle of the database work", async () => {
+    await introspected(async (dir, env, url) => {
+      expect(await settled(url)).toBe(0)
+      // Підключення вдається, а запити двигуна падають за таймаутом
+      // (57014): збій роботи з базою, а не відмова підключення
+      const slow = new URL(url)
+      slow.searchParams.set("options", "-c statement_timeout=1")
+      for (const tool of ["introspect", "diff"] as const) {
+        const r = await call(tool, {}, options(dir, { [ENV]: slow.toString() }))
+        expect(r.refusal, tool).toBeUndefined()
+        expect(r.ok, tool).toBe(false)
+        expect(
+          r.diagnostics.filter((d) => d.code === "database.failed"),
+          tool
+        ).toEqual([
+          expect.objectContaining({
+            params: expect.objectContaining({ tool, sqlstate: "57014" }),
+          }),
+        ])
+        expect(await settled(url), tool).toBe(0)
+      }
+      const cli = await runTool(
+        toolByName("diff")!,
+        { _: [dir] },
+        undefined,
+        process.cwd(),
+        { [ENV]: slow.toString() }
+      )
+      expect(cli.exitCode).toBe(1)
+      expect(cli.stdout).toContain("database.failed")
+    })
+  })
+
+  it("no pool is left open after introspect with errors", async () => {
+    await inTarget(
+      `CREATE SCHEMA app;
+       CREATE TABLE app.booking (
+         id uuid PRIMARY KEY,
+         during tstzrange NOT NULL,
+         CONSTRAINT booking_no_overlap EXCLUDE USING gist (during WITH &&)
+       );`,
+      ["app"],
+      async (url) => {
+        expect(await settled(url)).toBe(0)
+        const r = await call(
+          "introspect",
+          introspectInput,
+          options(await freshProject(), { [ENV]: url })
+        )
+        expect(r.ok).toBe(false)
+        expect(await settled(url)).toBe(0)
+      }
+    )
+  })
+})

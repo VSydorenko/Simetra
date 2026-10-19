@@ -1,0 +1,491 @@
+---
+name: simetra-metadata
+description: Use when you need to create, change, validate or explain Simetra metadata (a `metadata/` directory) with the `simetra` tools — compile it, read a compiler diagnostic (`file:line:col`, `--format json`, `--locale`), explain the compiled picture of an object, fix missing ids and `physicalName`, create, add, rename or delete elements, or promote an adopted table, through checked operations, compare a database with the metadata (`diff`), plan and apply the metadata to a database (`plan`, `apply`), or expose the tools to an agent with `simetra mcp` (`--read-only` to refuse writes). Also use when a pre-commit or CI metadata check fails. For bringing an existing database under metadata (`introspect`), use `simetra-adoption`.
+---
+
+# Simetra metadata — compile, explain, fix, create, add, rename, delete, promote, introspect, diff, plan, apply
+
+The tools are one catalog served by the command line and by the MCP server,
+with the same tool names and the same input in both. Run the CLI
+from the project root as `pnpm exec simetra …` (or `node_modules/.bin/simetra …`).
+Every command defaults to `./metadata`.
+
+This skill covers how to use the tools. What the metadata model means is
+described by the schemas in `node_modules/simetra/schemas/` and by the
+diagnostics themselves.
+
+## Which tool when
+
+| Task                                                                              | Tool         | CLI                                      | MCP call                                    |
+| --------------------------------------------------------------------------------- | ------------ | ---------------------------------------- | ------------------------------------------- |
+| Is the metadata accepted by the compiler?                                         | `compile`    | `simetra compile [dirs...]`              | `compile` with `{}`                         |
+| What does the compiler derive for one object (tables, columns, keys, queries)?    | `explain`    | `simetra explain <Kind>.<Name> [dir]`    | `explain` with `{kind, name}`               |
+| New elements miss `id` / `physicalName` / `kindLabel`, or files are not canonical | `fix`        | `simetra fix [dir]`                      | `fix` with `{}`                             |
+| New object                                                                        | `create`     | `simetra create '<json>' [dir]`          | `create` with `{kind, name, data?}`         |
+| New element in a collection of an object or of the project root                   | `add`        | `simetra add '<json>' [dir]`             | `add` with `{target, collection, element}`  |
+| Rename an object or a nested element                                              | `rename`     | `simetra rename '<json>' [dir]`          | `rename` with `{target, newName}`           |
+| Remove an object or a nested element                                              | `delete`     | `simetra delete '<json>' [dir] --yes`    | `delete` with `{target, confirm}`           |
+| Turn an adopted `CustomTable` into a Catalog, Document or InformationRegister     | `promote`    | `simetra promote <json\|-> [dir]`        | `promote` with `{target, into, columns, …}` |
+| Read a live database into metadata                                                | `introspect` | `simetra introspect [dir] --schemas a,b` | `introspect` with `{schemas?, project?}`    |
+| Does the database match the metadata?                                             | `diff`       | `simetra diff [dir] --tables a,b`        | `diff` with `{tables?}`                     |
+| Plan bringing the database to the metadata (writes `plans/…plan.json`)            | `plan`       | `simetra plan [dir]`                     | `plan` with `{}`                            |
+| Apply a reviewed plan to the database                                             | `apply`      | `simetra apply <plan> [dir] --plan-hash <hex> --yes` | `apply` with `{plan, planHash, allow?, confirm}` |
+
+`compile`, `explain`, `diff`, `apply` only read files. `fix`, `create`, `add`,
+`rename`, `delete`, `promote`, `introspect` change files; `plan` writes only its
+plan file. `introspect`, `diff` and `plan` read the database; only `apply`
+writes to it.
+
+## Examples
+
+Create an object (ids and physical names are assigned for you):
+
+```json simetra:create
+{ "kind": "Catalog", "name": "Currency" }
+```
+
+Add an attribute to it:
+
+```json simetra:add
+{
+  "target": { "kind": "Catalog", "name": "Currency" },
+  "collection": "attributes",
+  "element": { "name": "symbol", "type": "String", "length": 5 }
+}
+```
+
+Rename it; references are rewritten, `physicalName` stays:
+
+```json simetra:rename
+{
+  "target": { "kind": "Catalog", "name": "Currency", "element": ["symbol"] },
+  "newName": "sign"
+}
+```
+
+Preview a deletion without writing and without confirmation:
+
+```json simetra:delete
+{
+  "target": { "kind": "Catalog", "name": "Currency", "element": ["sign"] },
+  "dryRun": true
+}
+```
+
+Promote an adopted `CustomTable` into a Catalog from a complete one-off
+mapping (every column of the table is named; the call is dry-runnable like any
+mutation, and its response carries the promotion record). `promote` also
+writes the record to `plans/<objectId>.promotion.json`: commit it with the
+metadata, since `plan` refuses a promotion without it
+(`plan.promotion-record-missing`).
+
+```json simetra:promote
+{
+  "target": { "name": "Tag" },
+  "into": { "kind": "Catalog", "name": "Tag", "data": { "codeLength": 0 } },
+  "columns": {
+    "id": { "to": "standard", "name": "ref" },
+    "name": { "to": "standard", "name": "description" }
+  }
+}
+```
+
+Filling a `promote` mapping (the schema says what the fields are; a refusal
+says why a mapping is wrong, so read its diagnostics):
+
+- `columns` names every column of the adopted table by its logical name, with
+  one fate: `{to: "standard", name}` (canonical camelCase name of a standard
+  attribute: `ref`, `description`, `deletionMark`, `parent`, `owner`, `number`,
+  `date`, ... whatever the project's attribute case), `{to: "scope"}` (the
+  scope carrier), `{to: "attribute", element: {name, ...}}` (an own attribute;
+  `collection` is `dimensions` or `resources` only in registers) or
+  `{to: "retire"}`. An element carries no `id` or `physicalName`.
+- `into.data` holds the kind's settings (for example `codeLength`); name, kind,
+  schema, scope, ids and physical names come from the table and the operation
+  and are refused in the input. `tabularSections` lists further adopted tables
+  with their own `columns`.
+- `fill` computes a target column: one that no column carries, or a mapped
+  target whose source allows NULL while the target is NOT NULL. On a mapped
+  target, `coalesce(<its source column>, <value>)` keeps the existing values
+  and fills only the NULLs (transaction time such as `now()` is allowed in
+  `<value>`); any other expression rewrites the existing values (step kind
+  `repair`), which must be deterministic. A `fill` step addresses a tabular
+  section table through `table`. Its `expression` is written in the old
+  physical names and runs before the renames; a model function is called
+  schema-qualified.
+- `conversions` gives a class (`platform`, `property`, `rowRule`, `metadata`,
+  `applicationCode`, `removed`) to each adopted element the kind does not take
+  over: the identity of every SQL unit of the adopted tables' modules except a
+  function in the closed shell, and of every unit elsewhere whose target is a
+  promoted table; `<CustomTable>#uniques|checks|indexes/<name or index>`;
+  `<CustomTable>#default/<column>` (the default of a column mapped to an own
+  attribute without `defaultValue`); `<CustomTable>#comment` and
+  `<CustomTable>#comment/<column>` (a comment the kind has no place for; only
+  `removed`). A refusal names each element still missing a class.
+- A class must be true of the desired state: `property` is accepted only when
+  the kind recreates the element equivalently
+  (`promote.property-not-equivalent`; a DEFERRABLE attribute, for one, cannot be
+  `property`), and `platform` only when the desired state holds the replacement
+  mechanism (`plan.platform-replacement-missing`, raised by `plan`, which then
+  writes no plan). `plan` checks `property` again against the desired state:
+  a record, a later metadata change or a hand edit whose element the kind no
+  longer recreates equivalently is refused (`plan.property-not-reproduced`).
+  When refused, classify the element `removed` (the plan then needs the
+  `remove:` permission) or keep the table a `CustomTable`; for
+  `plan.property-not-reproduced`, alternatively make the kind recreate the
+  element equivalently.
+- Before promoting, check whether server code reads or writes the table with
+  the service key. If it does, do not promote the table: the kind gives the
+  service role no privileges, so that code loses access
+  (`plan.service-role-access-lost`); keep the table a `CustomTable` until
+  platform commands exist. An explicit adopted grant to the service role takes
+  the class `removed`.
+- Functions in the closed shell move to the kind's module, and functions that
+  read the promoted tables are rewritten in place. Other verbatim SQL that
+  reads them is refused: rewrite or drop it first.
+- `sharedFunctions` lists identities of those module functions that move to
+  `sql/<schema>/<function>.sql` instead; `consumerLabels` the values by which
+  the consumer's data encodes the object (the record's `labelTranslation`
+  maps them to the kind label and lists the polymorphic `_type` columns that
+  hold them).
+
+The same calls from a shell. A mutation takes its JSON as an argument, as
+`--input`, or as `-` for stdin:
+
+```sh
+pnpm exec simetra compile
+pnpm exec simetra explain Catalog.Currency
+pnpm exec simetra create '{"kind":"Catalog","name":"Currency"}' --dry-run
+pnpm exec simetra delete --input '{"target":{"kind":"Catalog","name":"Currency"}}' --yes
+pnpm exec simetra diff
+pnpm exec simetra plan
+pnpm exec simetra apply plans/initial-3f2a9c1b7d4e.plan.json --plan-hash <hex> --allow s2 --yes
+```
+
+An input that does not match the tool's schema is refused with the path of the
+offending field (for example `target.kind`); nothing is written.
+
+## Reading the result
+
+- Exit code: `0` ok (warnings allowed), `1` the result has error diagnostics
+  (this includes refused operations such as `operation.delete-referenced`)
+  or, for `diff`, differences or errors — `0` from `diff` means the database
+  matches the metadata,
+  `2` the call itself was refused: input that does not match the tool's schema
+  (bad JSON, unknown field), a missing `--yes`, a usage or I/O error (bad flag,
+  missing directory) or an unknown `explain` target. In MCP the same cases are
+  `isError`, with diagnostics for the exit-1 ones.
+- Text diagnostics look like `path/File.meta.json:LINE:COL severity code message`.
+  A diagnostic without a position (the input as a whole, a missing file) has no
+  `LINE:COL`. The code (`file.kind-mismatch`, …) is the stable handle; do not
+  match on message text.
+- `--format json` carries the same diagnostics as data; use it when a program,
+  not a human, reads the output.
+- `--locale en|uk` picks the message language (default `en`); code and
+  location are identical in both.
+- Start from the first error: one root cause often produces several follow-ups.
+- Artifacts (`snapshot.json`, `desired-state.sql`, `entities.d.ts`) are written
+  only with `compile --out <dir>`, and `--out` takes one metadata directory per run.
+
+## Mutations are checked, never raw
+
+- Every mutation writes files **only when the result compiles without errors**;
+  otherwise nothing is written and the diagnostics are returned.
+- `create`, `add`, `rename`, `delete` also need the current metadata to compile
+  cleanly (`operation.input-invalid` otherwise): run `fix` or repair the file by
+  hand first.
+- `--dry-run` (MCP: `dryRun: true`) reports the changes without writing. Use it
+  before the real run.
+- `delete` is destructive: it needs `--yes` (MCP: `confirm: true`) and is refused
+  while anything references the target: the result then carries
+  `operation.delete-referenced` listing every reference (exit 1, nothing
+  written). A dry run needs no confirmation; it reports `would write <file>` for
+  a file that changes and `would delete <file>` only for a file that is removed.
+- Rename never changes `physicalName` or `kindLabel` (no DDL). Do not edit ids,
+  `physicalName` or `kindLabel` of existing elements by hand: they are assigned
+  once (by `fix`, `create`, `add`), and in a Git repository `compile` checks
+  them, together with an object's PG schema, against `HEAD`
+  (`identity.assigned-once-changed`). Outside Git that check is skipped with a
+  warning.
+- Never pass an `id` to `create` or `add`: ids are assigned by the operation, and
+  an input carrying one gets `operation.input-invalid` (exit 1, nothing written).
+
+## Declare, don't write SQL
+
+A rule the platform can derive is a property in the metadata, not a statement
+in a `.sql` file. The schemas in `node_modules/simetra/schemas/` describe each
+property; some that replace hand-written SQL are listed below.
+
+Attribute properties (an element of `attributes`):
+
+- `defaultValue`: `{ "fill": "now" | "today" | "newUuid" }` on a scalar of the
+  matching type, `{ "empty": true }` on an array (`"array": true`), or
+  `{ "empty": "object" | "array" }` on a scalar `Json`.
+- `unique`: `true`, or `"ignoreCase"` on a scalar String or Text. `uniqueWithin`: `"owner"` or `"parent"`,
+  only on a catalog's own attributes and only when the catalog has owners or a
+  hierarchy.
+- Numbers (scalar only): `nonNegative`, `positive`, `minValue`, `maxValue`.
+- Strings and text (scalar only): `minLength`, `pattern`. The pattern must
+  mean the same in JavaScript and Postgres: no named groups, `\p{}`, `\k<>`,
+  `\b`, `\B`, `\x`, `\u{}` or inline flag groups such as `(?i:…)`. Write a
+  character as itself or as `\uXXXX`.
+- `personalData: true` marks personal data (a name, a phone, an address):
+  anonymization sets it to `NULL`, so it cannot also be `required`.
+
+Object properties:
+
+- `indexes` on a Catalog, a Document and their tabular sections: a list of
+  composite indexes, each `{ "attributes": [name | { "name": …, "order": "desc" }] }`.
+- `publicRead`: `"authenticated"` or `"anon"` on kinds with row-level security.
+- Project file: `storageBuckets`, a list of `{ "bucket": …, "scopeKind": … }`.
+
+An attribute with properties, added through the tool:
+
+```json simetra:add
+{
+  "target": { "kind": "Catalog", "name": "Currency" },
+  "collection": "attributes",
+  "element": {
+    "name": "isoCode",
+    "type": "String",
+    "length": 3,
+    "unique": "ignoreCase",
+    "minLength": 3
+  }
+}
+```
+
+An event subscription is a file in `event-subscriptions/`, created with `create`
+(kind `EventSubscription`): `sources` (refs `{ kind, name }` or
+`{ "providerTable": "<schema>.<table>" }`), `event` (`beforeWrite`, `onWrite`,
+`beforeDelete`, `onDelete`), optional `whenChanged` (attribute names, write
+events only) and `handler` (`{ schema?, name }`, a no-argument function that
+`RETURNS trigger`, in the closed shell below). The platform generates its
+`FOR EACH ROW` triggers, named after `physicalName`, on every source: `before*`
+is `BEFORE`, `on*` is `AFTER`, `*Write` is `INSERT OR UPDATE`, `*Delete` is
+`DELETE`. With `whenChanged`, `<physicalName>` fires on an `UPDATE` that changes
+a listed column (`IS DISTINCT FROM`), `<physicalName>_insert` on every `INSERT`.
+No event is insert-only; `TG_OP` tells insert from update. A handler on a
+provider table (`auth.users`) that writes app tables must be `SECURITY DEFINER`
+with `SET search_path = ''`: the provider role has no rights on your schemas.
+
+Catalogs and Documents get the row mechanics trigger `<table>_simetra_touch`
+(the single platform function `simetra.touch()`): an insert sets `version` to 1,
+an update adds 1, both set `updatedAt` to `now()` whatever the client writes.
+Never maintain them (`moddatetime`) or list them in `whenChanged`. A
+`beforeWrite` handler never assigns `NEW.updated_at` or `NEW.version` and never
+replaces the row (`NEW := …`, `SELECT … INTO NEW`): it returns `NEW`, or `NULL`
+to skip the write, never `OLD` or a copy of the row.
+
+## Users, membership and rights
+
+People are platform data, not tables you write yourself: a users catalog
+(`"role": "users"`), authorship (`trackAuthor`) and a membership catalog
+(`membership`) instead of hand-written tables and set functions. Rights are
+declarations too: `customActions`, `ownership`, `rightsContainer`,
+`containerBinding` and `access` on objects; `accessDimensions`,
+`membershipSources` and `assignmentSources` on the project; rights sets
+(`rights-sets/`) and roles (`roles/`) are objects of their own. Every name in
+them is a reference, so `rename` rewrites it and `delete` refuses while it is
+used; the compiler checks them (rules `users.*`, `rights.*`) and `explain`
+shows the derived rights contract, a role's contract and the rows of the
+rights projection. Forms of each field:
+`references/people-and-rights.md`.
+
+```json simetra:add
+{
+  "target": { "kind": "Catalog", "name": "Currency" },
+  "collection": "customActions",
+  "element": { "name": "revalue", "requires": ["update"] }
+}
+```
+
+The platform layer (identities, the current user, provisioning) lives in the
+PG schema `simetra`, generated when a users catalog exists. The schema is
+reserved: no object, `defaultSchema`, set function, external reference,
+event handler or SQL unit may use it, and there is no `metadata/sql/simetra/`
+folder (`schema.reserved`). In SQL, the
+current user is `(select simetra.current_user_id())`, written exactly so in a
+policy (`sql.bare-current-user` rejects a bare call there); it is `NULL` for
+an anonymous session or an anonymous sign-in of the provider, a service
+session and an invalid user.
+
+## The SQL module: closed forms only
+
+The `.sql` module of an object of a 1C kind accepts only:
+
+- Functions in the closed shell: `LANGUAGE sql` or `plpgsql`, an explicit
+  volatility, and `SET search_path = ''` for every `SECURITY DEFINER`. No
+  overloads.
+- Row rules: `ALTER TABLE <own table> ADD CONSTRAINT <name> CHECK (<rule>)`
+  within a small grammar. The constraint needs a name and must target the
+  object's own table or one of its own tabular-section tables.
+- Movement query blocks in a document module.
+
+Any other statement is rejected (`sql.statement-not-allowed`, `sql.closed-shell`,
+`sql.row-rule-grammar`, …) with a hint that names the property that replaces it.
+Follow the hint instead of rewording the statement. `CustomTable` and `PgEnum`
+modules and the shared `metadata/sql/` folder are not closed: their content is
+debt (below).
+
+Privileges on what the platform owns are generated: `EXECUTE` on a declared
+scope set function and on a subscription handler, and every grant on a kind's
+tables. In debt SQL (a `CustomTable` or `PgEnum` module, the shared
+`metadata/sql/`) a verbatim `GRANT`/`REVOKE` on them fails with
+`sql.generated-grant` (a kind's own module rejects any). `simetra fix` removes
+the statement (and its file, if left empty) only when every target belongs to
+the platform; one that also names other objects you split by hand. A grant on another overload of the same name is not affected.
+
+A row rule shape:
+
+```sql
+ALTER TABLE <schema>.<own_table> ADD CONSTRAINT <rule_name> CHECK (<rule>);
+```
+
+## SQL debt
+
+`metadata/sql-debt.json` lists the verbatim SQL units that the compiler still
+tolerates. It only shrinks:
+
+- Only `introspect` writes it, from the database. Never add an entry by hand.
+- An entry that is no longer debt (its unit is gone or now has a closed form)
+  fails `compile` with `sql.debt-stale`; `fix` removes exactly such entries
+  and never adds one. A removed entry comes back only through `introspect`.
+- A debt unit that is not in the list fails `compile` with `sql.debt-grows`.
+  Express the statement as a property, an `EventSubscription` or a closed-shell
+  function; moving it to another file does not make it acceptable.
+- A project with an existing `sql/` folder and no list is seeded by running
+  `introspect` again (see `simetra-adoption`).
+
+## The database: introspect and diff
+
+`introspect` and `diff` read a live database and never write to it. The
+connection comes only from the environment (`SIMETRA_DATABASE_URL`, or the
+variable named with `--database-url-env`); never paste a connection string.
+Scope, the shadow database, exit codes and how to judge a result are in the
+`simetra-adoption` skill. `diff` output carries `applyState`: `absent` while
+the database holds none of the platform's apply state, which the first `apply`
+creates and `diff` does not count as a difference; `present` otherwise.
+
+## The database: plan and apply
+
+`plan` compares the live database with the metadata and writes
+`plans/<from>-<to>.plan.json` next to the metadata directory (the directory
+that holds `metadata/`); the database is only read. Its output shows drift
+first, then each step with its class and lock level, then the `planHash`.
+Show the plan to the owner before applying it.
+
+`apply` applies exactly that file in one transaction. It needs the `planHash`
+of the reviewed plan, confirmation (`--yes`, MCP `confirm: true`), and in
+`allow` the id of every step that drops data or relaxes a guarantee and
+`drift` when the plan carries drift; the plan output says which items need
+it. `rehearse` runs the plan and rolls it back, but still takes the same
+locks as `apply`. It also builds the desired shadow database and proves on the
+same connection that the catalog equals the desired state, so it holds the
+plan's locks a little longer. A successful `rehearse` writes its report to
+`plans/<from>-<to>.rehearsal.json` next to the plan.
+
+Before the end of the transaction, `apply` and `rehearse` re-validate function
+bodies and fire deferred constraints; an invalid constraint or index that the
+desired state does not have is refused. An `apply.function-check-blind` warning lists
+functions the check cannot see (another language, no `EXECUTE` for the role, a
+trigger function without a trigger): nothing proved their bodies, so review
+them by hand.
+
+When the role has global default privileges, a plan also ends with environment
+steps: explicit GRANT/REVOKE that cancel them on the objects the plan creates.
+The output shows them as their own group, `environment rights: the global
+default privileges of role <role>`; review them with the rest of the plan.
+If the environment changes before the apply, it is refused
+(`apply.target-changed`); plan again. A plan file from an older tool version is
+refused too: rebuild it with `plan`.
+
+A promotion plan's `allow` also takes the `access:<table>`,
+`delete:<table>.<constraint>`, `remove:<table>` and `repair:<table>` items its
+output lists; a repair rewrites existing values with the fill expression shown.
+A promotion is applied only with a valid rehearsal report: rehearse the plan on
+a copy of the target with data first. Point the rehearsal at the copy through
+the connection variable: `simetra apply --rehearse --database-url-env <VAR>`
+on the command line, or an MCP server launched with
+`simetra mcp --database-url-env <VAR>` (an MCP server's database is fixed at
+launch). Make the copy from the target after the plan, restore it as the plan's
+role with `pg_restore --no-owner`, on a server with the same PostgreSQL major
+version, encoding and collation; otherwise the rehearsal is refused as not a
+copy of the plan's target (`apply.target-changed`). Rehearsing on the target
+itself is allowed, but it holds the target's locks for the whole run: make it
+a deliberate choice of the owner, not a default. `apply` refuses without a
+report (`apply.rehearsal-required`), with a stale one (`apply.rehearsal-stale`:
+another plan, report format, server, ledger head, or not one row count per
+promoted table), and when a table has rows on the target but none on the copy
+(`apply.rehearsal-copy-empty`); it warns when the copy has fewer rows
+(`apply.rehearsal-fewer-rows`) or when the statement timeout computed from the
+report exceeds what Postgres accepts (`apply.rehearsal-timeout-unbounded`).
+
+Which connection to use:
+
+- Reads of the target (`introspect`, `diff`, `plan`) run in short read-only
+  transactions and work through a transaction-mode pooler.
+- The shadow database of `diff` and `plan` needs a direct or session-mode
+  connection: it is created, reached by name and loaded with session settings
+  that a transaction-mode pooler is not guaranteed to keep. With a pooled target
+  connection, point `--shadow-url-env` at a direct one.
+- A long `apply` wants a direct or session-mode connection too: a pooler may
+  cut the transaction with its own timeouts.
+
+```json simetra:apply
+{
+  "plan": "plans/initial-3f2a9c1b7d4e.plan.json",
+  "planHash": "9b1d6e0c4f3a2b8d7e6f5a4c3b2a1908f7e6d5c4b3a29180f7e6d5c4b3a2918f",
+  "allow": ["drift", "s2"],
+  "confirm": true
+}
+```
+
+A changed plan file, changed metadata or a changed database refuses the
+apply; plan again.
+
+If `apply` reports `outcome unknown`, the connection was lost and the apply may
+or may not have been committed. Never apply again blindly: look up the printed
+apply id in the `apply_id` column of `simetra.ledger` first — a row means it was
+committed.
+
+## Agents over MCP
+
+```sh
+pnpm exec simetra mcp
+pnpm exec simetra mcp --read-only
+pnpm exec simetra mcp --database-url-env STAGING_DATABASE_URL
+pnpm exec simetra mcp --allow-database-write
+```
+
+- By default the write tools change files in the served directory, under the
+  same rules as the CLI: the metadata is in git, and nothing is written unless
+  the result compiles. `--read-only` is a flag of `simetra mcp` only; the CLI
+  has none (preview with `--dry-run`).
+- With `--read-only` every tool is still listed, but a write tool is refused
+  with a hint to remove `--read-only` from the server's args. Ask the owner
+  before restarting the server without it.
+- `apply` writes to the database only when the server runs with
+  `--allow-database-write`; without it `apply` is refused with a hint to add
+  the flag. Ask the owner; never add it yourself. `--read-only` refuses
+  `plan` and `apply` too: they write their files under `plans/`.
+- `plan` and `apply` have no `dryRun`: review with `plan`, and check on the
+  database with `rehearse`.
+- The server reads the disk on every call, so edits made by hand between calls
+  are seen.
+
+## Pre-commit and CI
+
+Check every metadata directory under the current directory with
+`simetra compile --all`; add `--staged` to compile the Git **index** instead of
+the working tree (what a pre-commit hook wants). Fields assigned once are
+compared with `HEAD` in both modes:
+
+```sh
+pnpm exec simetra compile --all
+pnpm exec simetra compile --all --staged
+```
+
+A rejected commit means the staged content does not compile: run
+`simetra compile --all` for the working tree, fix, `git add`, commit again. Do
+not bypass the hook with `--no-verify`.

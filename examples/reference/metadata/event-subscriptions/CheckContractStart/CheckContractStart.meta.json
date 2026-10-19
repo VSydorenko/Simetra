@@ -1,0 +1,23 @@
+{
+  "$schema": "../../../../../node_modules/simetra/schemas/event-subscriptions.schema.json",
+  "id": "85e8246e-327d-4009-ae3c-99a339ecaf82",
+  "kind": "EventSubscription",
+  "name": "CheckContractStart",
+  "physicalName": "check_contract_start",
+  "title": {
+    "uk": "Перевірка дати початку договору"
+  },
+  "sources": [
+    {
+      "kind": "Catalog",
+      "name": "Contract"
+    }
+  ],
+  "event": "beforeWrite",
+  "whenChanged": [
+    "startDate"
+  ],
+  "handler": {
+    "name": "check_contract_start"
+  }
+}
