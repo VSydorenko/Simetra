@@ -1,0 +1,81 @@
+name: Publish packages
+
+# Публікація `simetra` і `@simetrajs/designer` на npmjs (docs/architecture/release.md).
+#
+# Тригер — push у `main`: публікуються лише версії, яких ще немає в реєстрі,
+# тож merge без підняття версії нічого не публікує. `workflow_dispatch` —
+# ручний повтор після падіння на середині: опубліковане вдруге не публікується.
+#
+# Авторизація — npm Trusted Publishing (OIDC): секрету-токена немає, npm CLI
+# обмінює OIDC-токен GitHub на право публікації і додає provenance. Trusted
+# publisher налаштовується на npmjs для кожного пакета окремо й лише для
+# пакета, який уже є в реєстрі, тому першу версію нового пакета публікує
+# власник руками.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Дві публікації одночасно змагалися б за ту саму версію й тег
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish to npmjs
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      # Push тега після публікації
+      contents: write
+      # OIDC-токен для Trusted Publishing
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Версію pnpm бере з поля packageManager у package.json
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+          # Без registry-url setup-node не створює .npmrc і npm не знає реєстру публікації
+          registry-url: https://registry.npmjs.org
+
+      # Trusted Publishing вимагає npm CLI ≥ 11.5.1; старіший npm падає на
+      # публікації невиразним 404 на PUT, тож перевіряємо до збірки
+      - name: Check npm version
+        run: |
+          node -e '
+            const [a, b, c] = process.argv[1].split(".").map(Number)
+            const ok = a > 11 || (a === 11 && (b > 5 || (b === 5 && c >= 1)))
+            if (!ok) { console.error("::error::npm " + process.argv[1] + " < 11.5.1: Trusted Publishing не працює"); process.exit(1) }
+          ' "$(npm --version)"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Build packages
+        run: pnpm build:packages
+      # Той самий гейт, що в CI: перевіряє рівно те, що поїде в реєстр
+      - name: Packaging tests
+        run: pnpm test:packaging
+      - name: Publish
+        run: node scripts/release/publish.mts
+
+      # Тег означає «опубліковано»: крок не запускається, якщо публікація впала.
+      # Ідемпотентний — повтор на вже опубліковану версію лише логує наявний тег.
+      # Перевіряється remote, бо в щойно зачекаутченому раннері локальних тегів немає.
+      - name: Tag release
+        run: |
+          set -euo pipefail
+          VERSION="$(node -p "require('./packages/simetra/package.json').version")"
+          TAG="v${VERSION}"
+          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null; then
+            echo "Тег ${TAG} уже є в remote — пропускаю."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "${TAG}" -m "Реліз ${TAG}: опубліковано на npmjs"
+          git push origin "refs/tags/${TAG}"
