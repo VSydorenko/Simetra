@@ -9,8 +9,14 @@ export default defineConfig({
         test: {
           name: "unit",
           include: ["**/*.test.ts"],
-          // DB-тести потребують локального стеку — вони окремий проєкт `db`
-          exclude: ["**/node_modules/**", "**/dist/**", "**/*.db.test.ts"],
+          // DB-тести потребують локального стеку — вони окремий проєкт `db`;
+          // гейт пакування потребує свіжого `pnpm build:packages` — проєкт `packaging`
+          exclude: [
+            "**/node_modules/**",
+            "**/dist/**",
+            "**/*.db.test.ts",
+            "**/*.pack.test.ts",
+          ],
         },
       },
       {
@@ -35,6 +41,18 @@ export default defineConfig({
           // це довше за типові 5 с, а перерваний за тайм-аутом тест лишає
           // тінь, яку облік провізій назве лише наприкінці файлу.
           testTimeout: 60_000,
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: "packaging",
+          include: ["test/packaging/**/*.pack.test.ts"],
+          // Пакування й `npm install` у тимчасовий проєкт — I/O і мережа:
+          // паралельні файли лише б'ються за диск
+          fileParallelism: false,
+          testTimeout: 300_000,
+          hookTimeout: 300_000,
         },
       },
     ],

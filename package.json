@@ -6,6 +6,8 @@
   "license": "Apache-2.0",
   "scripts": {
     "build": "turbo build",
+    "build:packages": "NODE_OPTIONS=--max-old-space-size=3072 pnpm --filter simetra --filter @simetrajs/designer run build:package",
+    "test:packaging": "pnpm --filter @simetrajs/designer test:packaging",
     "dev": "turbo dev",
     "lint": "turbo lint",
     "db:start": "supabase start",
