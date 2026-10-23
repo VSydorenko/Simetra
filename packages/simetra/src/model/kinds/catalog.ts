@@ -214,8 +214,14 @@ function deltaColumns(): StandardColumnDef[] {
   ]
 }
 
+/**
+ * Логічне ім'я стандартної ТЧ дельти «Ролей» (Р2a1-6): за ним компілятор
+ * знаходить її таблицю для контракту довідників прав.
+ */
+export const RIGHTS_DELTA_SECTION = "delta"
+
 const DELTA_SECTION: StandardTabularSectionDef = {
-  logicalName: "delta",
+  logicalName: RIGHTS_DELTA_SECTION,
   physicalSuffix: "delta",
   columns: deltaColumns,
   title: { uk: "Дельта", en: "Delta" },

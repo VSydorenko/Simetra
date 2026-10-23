@@ -1,10 +1,13 @@
 import {
   KIND_REGISTRY,
+  RIGHTS_DELTA_SECTION,
+  type Catalog,
   type PhysicalSnapshot,
   type RightsSystemCatalog,
 } from "simetra/model"
 import {
   mainTableOf,
+  type CompiledAssignedOn,
   type CompiledRoleLevel,
   type Contracts,
   type QualifiedName,
@@ -81,14 +84,31 @@ function storageOf(
 }
 
 /**
+ * Рівні призначення, покриті прийнятими джерелами (Р2a1-24): ключ — рівень
+ * призначення (`levelKey`: вид скоупу, контейнер за id, глобальний), а не
+ * рівень зберігання, бо в одному виді скоупу джерело може покривати
+ * контейнерний рівень поряд із довідниками рівня скоупу. Одне правило для
+ * перевірок стадії 4 і для `rightsLevelOf`.
+ */
+export function coveredAssignmentLevels(
+  levels: readonly CompiledAssignedOn[]
+): ReadonlySet<string> {
+  return new Set(levels.map(levelKey))
+}
+
+/**
  * Рівень зберігання ролі (Р2a1-12): у довіднику якого рівня лежать її
  * призначення. Контейнер — вид скоупу контейнера чи глобальний; «кожен
- * користувач» — `undefined`.
+ * користувач» і рівень, покритий джерелом призначень, — `undefined`.
  */
 export function rightsLevelOf(
   level: CompiledRoleLevel,
-  contracts: Pick<Contracts, "rights">
+  contracts: Pick<Contracts, "rights" | "assignmentSources">
 ): RightsLevelKey | undefined {
+  const covered = coveredAssignmentLevels(
+    contracts.assignmentSources.map((source) => source.assignedOn)
+  )
+  if (covered.has(levelKey(level))) return undefined
   return storageOf(level, (containerId) => {
     const contract = contracts.rights.find((c) => c.objectId === containerId)
     return contract === undefined ? null : contract.scopeKindId
@@ -154,7 +174,7 @@ export function checkSystemCatalogs(ctx: RightsCheckContext): Diagnostic[] {
     // нічим назвати в інтерфейсі адміністрування.
     if (
       system === "rightsRoles" &&
-      (object.data as { descriptionLength?: number }).descriptionLength === 0
+      (object.data as Catalog).descriptionLength === 0
     ) {
       diagnostics.push(
         diagnostic(
@@ -184,15 +204,20 @@ export function checkSystemCatalogs(ctx: RightsCheckContext): Diagnostic[] {
     }
   }
 
+  // Рівні джерел — з індексу посилань: контрактів на стадії 4 ще немає.
+  const sourceLevels = ctx.project.assignmentSources.map((_, index) =>
+    sourceLevel(ctx.project, index, ctx.references)
+  )
   // Рівень призначення, покритий джерелом, обслуговує прийнята таблиця
   // (Р2a1-24, п. 1): системні довідники йому не потрібні.
-  const covered = new Set<string>()
+  const covered = coveredAssignmentLevels(
+    sourceLevels.filter((level) => level !== undefined)
+  )
   // Перше джерело кожного рівня зберігання — для тексту паралельної системи.
   const sourced = new Map<string, string>()
   ctx.project.assignmentSources.forEach((source, index) => {
-    const level = sourceLevel(ctx.project, index, ctx.references)
+    const level = sourceLevels[index]
     if (level === undefined) return
-    covered.add(levelKey(level))
     const storage = storageOf(level, scopeOfContainer)
     if (storage === undefined) return
     const key = storageKey(storage)
@@ -324,11 +349,10 @@ export function rightsCatalogContracts(
     .flatMap(({ level, rightsRoles, roleAssignments }) => {
       if (rightsRoles === undefined || roleAssignments === undefined) return []
       const rolesId = must(rightsRoles.id)
-      // Дельта — єдина стандартна ТЧ «Ролей» (Р2a1-6).
       const delta = must(
-        KIND_REGISTRY[rightsRoles.kind].standardTabularSections?.(
-          rightsRoles.data
-        )[0]
+        KIND_REGISTRY[rightsRoles.kind]
+          .standardTabularSections?.(rightsRoles.data)
+          .find((section) => section.logicalName === RIGHTS_DELTA_SECTION)
       )
       return [
         {

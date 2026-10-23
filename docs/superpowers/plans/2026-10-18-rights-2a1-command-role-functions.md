@@ -407,7 +407,8 @@ git commit -m "feat(model): системні довідники «Ролі» й 
   - `type RightsLevelKey = { level: "global" } | { level: "scope"; scopeKindId: string }`;
   - `interface RightsCatalogContract { level: RightsLevelKey; roles: { objectId: string; table: QualifiedName; delta: QualifiedName }; assignments: { objectId: string; table: QualifiedName } }` — фізичні колонки — сталі Р2a1-6/7 у формі стилю проєкту, які рендер бере з фізичного знімка за `origin.standard`;
   - `Contracts.rightsCatalogs: RightsCatalogContract[]` (за рівнем: глобальний, далі за `scopeKindId`);
-  - `rightsLevelOf(level: CompiledRoleLevel, contracts: Pick<Contracts, "rights">): RightsLevelKey | undefined` — рівень зберігання ролі (контейнер → вид скоупу контейнера чи глобальний; `everyUser` → `undefined`);
+  - `coveredAssignmentLevels(levels: readonly CompiledAssignedOn[]): ReadonlySet<string>` — ключі (`levelKey`) рівнів призначення, покритих прийнятими джерелами (Р2a1-24); ключ — рівень призначення (контейнер — за `containerId`), а не рівень зберігання; перевірки стадії 4 дають йому рівні з `sourceLevel`, `rightsLevelOf` — з `contracts.assignmentSources`;
+  - `rightsLevelOf(level: CompiledRoleLevel, contracts: Pick<Contracts, "rights" | "assignmentSources">): RightsLevelKey | undefined` — рівень зберігання ролі (контейнер → вид скоупу контейнера чи глобальний; `everyUser` і рівень, покритий джерелом, → `undefined`, Р2a1-12);
   - коди-помилки `rights.system-catalog-missing` (`{ level, missing: "rightsRoles" | "roleAssignments" }`), `rights.system-catalog-duplicate` (`{ role, level, firstFile }`), `rights.system-catalog-scope` (`{ name, scopeKind }`), `rights.system-catalog-description` (`{ name }`), `rights.system-catalog-parallel` (`{ level, source }`); попередження `rights.adopted-source-unsupported` (`{ source }`, у `WARNING_RULES`).
 
 - [ ] **Step 1: Write the failing test (unit)** — одна таблиця `it.each` на `rights-catalogs.test.ts`:
@@ -475,7 +476,7 @@ git commit -m "feat(compiler): перевірки й контракт систе
 | `rights_projection()` | `TABLE (role_id uuid, object text, action text, extent text, dimension_id uuid)` | дані, `IMMUTABLE`; нікому |
 | `rights_requires()` | `TABLE (object text, action text, required text)` | дані; нікому |
 | `rights_domain()` | `TABLE (level text, level_id uuid, object text, action text, extent text, dimension_id uuid)` | дані; нікому |
-| `rights_roles()` | `TABLE (role_id uuid, level text, level_id uuid, storage text, storage_id uuid)` — `storage`: `global` / `scope` / `NULL` (`everyUser`), `storage_id` — вид скоупу зберігання (Р2a1-12) | дані; нікому |
+| `rights_roles()` | `TABLE (role_id uuid, level text, level_id uuid, storage text, storage_id uuid)` — `storage`: `global` / `scope` / `NULL` (`everyUser` чи рівень, покритий джерелом призначень), `storage_id` — вид скоупу зберігання; обидва — з `rightsLevelOf(level, contracts)` над `rights` і `assignmentSources` (Р2a1-12) | дані; нікому |
 | `rights_my_scopes()` | `TABLE (scope_kind_id uuid, scope uuid, member uuid)` | `STABLE SECURITY DEFINER`; user, service, command |
 | `rights_mine()` | `TABLE (level text, level_id uuid, scope uuid, container uuid, object text, action text, extent text, dimension_id uuid)` | те саме |
 | `rights_any(p_action text, p_object text)` | `SETOF uuid` (скоупи) | те саме |

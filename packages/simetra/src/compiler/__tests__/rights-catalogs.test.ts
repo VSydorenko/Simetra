@@ -10,8 +10,10 @@ import {
   ORG_ASSIGNMENTS_ID,
   ORG_KIND_ID,
   ORG_ROLES_FILE,
+  ORG_ADMIN_ID,
   ORG_ROLES_ID,
   PROJECT_FILE,
+  PROJECT_LEAD_ID,
   ROLE_FILE,
   adoptedMembership,
   compileRights,
@@ -30,6 +32,7 @@ import {
   type Layer,
 } from "./fixtures/rights"
 import { uuid } from "./helpers"
+import { rightsLevelOf } from "../rights/system-catalogs"
 
 /** Роль `OrgMember` лише з власними грантами, без включень. */
 const member = (...grants: unknown[]): Layer => ({
@@ -548,5 +551,48 @@ describe("system rights catalog checks", () => {
         params,
       }))
     ).toEqual(expected)
+  })
+})
+
+describe("rightsLevelOf", () => {
+  const orgGrants = grantsSource({
+    id: uuid(6122),
+    name: "orgGrants",
+    assignedOn: { scopeKind: "org" },
+    columns: { member: "memberId", role: "roleKey" },
+  })
+  const ORG = { level: "scope", scopeKindId: ORG_KIND_ID }
+
+  // Покриття — за рівнем призначення: сусід на тому самому рівні зберігання
+  // (`org`) без джерела лишається на ньому (Р2a1-24).
+  it.each([
+    {
+      case: "a covered scope level",
+      source: orgGrants,
+      roleId: ORG_ADMIN_ID,
+      expected: undefined,
+    },
+    {
+      case: "the uncovered container next to a covered scope level",
+      source: orgGrants,
+      roleId: PROJECT_LEAD_ID,
+      expected: ORG,
+    },
+    {
+      case: "a covered container",
+      source: grantsSource(),
+      roleId: PROJECT_LEAD_ID,
+      expected: undefined,
+    },
+    {
+      case: "the uncovered scope level next to a covered container",
+      source: grantsSource(),
+      roleId: ORG_ADMIN_ID,
+      expected: ORG,
+    },
+  ])("maps $case", async ({ source, roleId, expected }) => {
+    const { contracts } = await compiled(assignmentSources(source))
+    const role = contracts.roles.find((r) => r.roleId === roleId)!
+    expect(rightsLevelOf(role.assignedOn, contracts)).toEqual(expected)
   })
 })
