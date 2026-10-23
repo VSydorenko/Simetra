@@ -470,10 +470,12 @@ function describeTransaction(): {
   return {
     client: () => current!,
     open: async () => {
-      current = new pg.Client({ connectionString: testDatabaseUrl() })
-      await current.connect()
-      await current.query("BEGIN")
-      return current
+      const client = new pg.Client({ connectionString: testDatabaseUrl() })
+      await client.connect()
+      // `current` лише після успішного з'єднання: `close` не закриває клієнта, що не підключився
+      current = client
+      await client.query("BEGIN")
+      return client
     },
     close: async () => {
       if (current === undefined) return
