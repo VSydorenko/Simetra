@@ -91,6 +91,8 @@ export const COMPILER_RULES = [
   "subscription.handler-signature",
   "subscription.handler-not-closed",
   "subscription.handler-assigns-mechanics",
+  "subscription.handler-assigns-carrier",
+  "subscription.handler-reads-carrier",
   "subscription.trigger-name-taken",
   "subscription.when-changed-mechanics",
   "users.catalog-duplicate",

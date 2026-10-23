@@ -586,6 +586,7 @@ export const COUNT_COMMENT_FILE =
   "event-subscriptions/CountComment/CountComment.meta.json"
 export const COMMENT_COUNTER_FILE =
   "custom-tables/CommentCounter/CommentCounter.meta.json"
+export const COUNT_COMMENT_SQL_FILE = "sql/public/count-comment.sql"
 
 /** Таблиці ТЧ і похідні таблиці регістра домену політик (`policyDomain`). */
 export const CHECKLIST_TABLE = "task_checklist"
@@ -633,7 +634,7 @@ export function policyDomain(...layers: Layer[]): Map<string, string> {
   // Обробник лічильника — SQL-файл, а не метадані: шар `withRoles` зливає
   // лише JSON-об'єкти.
   files.set(
-    "sql/public/count-comment.sql",
+    COUNT_COMMENT_SQL_FILE,
     "CREATE FUNCTION public.count_comment() RETURNS trigger LANGUAGE plpgsql VOLATILE AS $$ BEGIN INSERT INTO public.comment_counter (comment_id) VALUES (NEW.id); RETURN NEW; END $$;"
   )
   return files

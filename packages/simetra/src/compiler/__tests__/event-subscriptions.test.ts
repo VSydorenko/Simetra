@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest"
+import { makeObjectName } from "simetra/model"
 import { compile } from "simetra/compiler"
 import {
   attribute,
@@ -8,6 +9,11 @@ import {
   project,
   uuid,
 } from "./helpers"
+import {
+  COUNT_COMMENT_FILE,
+  COUNT_COMMENT_SQL_FILE,
+  policyDomain,
+} from "./fixtures/rights"
 
 const SUBSCRIPTION = "event-subscriptions/StampContract/StampContract.meta.json"
 const HANDLER_FILE = "sql/app/stamp.sql"
@@ -587,6 +593,76 @@ describe("EventSubscription", () => {
           "new.version",
         ],
       ])
+    })
+
+    describe("and the rights carrier copies", () => {
+      // Копія шляху `TaskComment` (власність через `task`) і її перший крок.
+      const COPY = makeObjectName("task_id", undefined, "assignee_id")
+      const carrierFound = async (body: string, event = "beforeWrite") => {
+        const files = policyDomain({ [COUNT_COMMENT_FILE]: { event } })
+        files.set(
+          COUNT_COMMENT_SQL_FILE,
+          `CREATE FUNCTION public.count_comment() RETURNS trigger LANGUAGE plpgsql VOLATILE AS $$ ${body} $$;`
+        )
+        return (await compile(files)).diagnostics.map((d) => [
+          d.code,
+          d.file,
+          d.pointer,
+          d.params?.column,
+        ])
+      }
+      const at = (code: string, column: string) => [
+        code,
+        COUNT_COMMENT_FILE,
+        "/handler",
+        column,
+      ]
+      const assigns = (column: string) => [
+        at("subscription.handler-assigns-carrier", column),
+      ]
+      const reads = (column: string) => [
+        at("subscription.handler-reads-carrier", column),
+      ]
+
+      it.each([
+        [`BEGIN NEW.${COPY} := NULL; RETURN NEW; END`, assigns(COPY)],
+        ["BEGIN NEW.task_id := NULL; RETURN NEW; END", assigns("task_id")],
+        // Параметр `INOUT` процедури пише в перший крок шляху.
+        [
+          "BEGIN CALL public.bump(NEW.task_id); RETURN NEW; END",
+          assigns("task_id"),
+        ],
+        [
+          `BEGIN IF NEW.${COPY} IS NULL THEN RETURN NULL; END IF; RETURN NEW; END`,
+          reads(COPY),
+        ],
+        [`BEGIN NEW.description := NEW.${COPY}; RETURN NEW; END`, reads(COPY)],
+        [
+          `BEGIN INSERT INTO public.comment_counter (comment_id) VALUES (NEW.${COPY}); RETURN NEW; END`,
+          reads(COPY),
+        ],
+        [`DECLARE c uuid := NEW.${COPY}; BEGIN RETURN NEW; END`, reads(COPY)],
+        // Запис цілком — звичайний патерн журналу; копії в ньому не читаються
+        // як окреме значення.
+        ["BEGIN PERFORM public.log(to_jsonb(NEW)); RETURN NEW; END", []],
+        ["BEGIN PERFORM public.log(NEW); RETURN NEW; END", []],
+        ["DECLARE r record; BEGIN SELECT NEW.* INTO r; RETURN NEW; END", []],
+        [
+          "BEGIN NEW.description := upper(NEW.description); RETURN NEW; END",
+          [],
+        ],
+      ])("%s", async (body, expected) => {
+        expect(await carrierFound(body)).toEqual(expected)
+      })
+
+      it("an AFTER handler is not checked: Postgres ignores its row", async () => {
+        expect(
+          await carrierFound(
+            `BEGIN NEW.task_id := NEW.${COPY}; RETURN NEW; END`,
+            "onWrite"
+          )
+        ).toEqual([])
+      })
     })
   })
 

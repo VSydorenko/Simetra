@@ -264,11 +264,11 @@ git commit -m "feat(compiler): тригери копій носіїв; поши�
 **Interfaces:**
 - Produces: коди `subscription.handler-assigns-carrier` (`{ column }`; підказка — присвоєння в хук команди, П4) і `subscription.handler-reads-carrier` (`{ column }`).
 
-- [ ] **Step 1: Write the failing test (unit)** — `it.each` у наявному блоці перевірок обробника (будівник підписки файлу тесту над `policyDomain()`, джерело — `TaskComment`): присвоєння копії шляху → `subscription.handler-assigns-carrier`; присвоєння `NEW.task_id` (перший крок шляху) → той самий код; пряме читання `NEW.<копія>` у виразі → `subscription.handler-reads-carrier`; `to_jsonb(NEW)`, `NEW.*` і передача `NEW` у функцію → нічого; присвоєння й читання `NEW.<звичайний реквізит>` → нічого.
-- [ ] **Step 2:** Run: `pnpm --filter simetra test event-subscriptions` — FAIL.
-- [ ] **Step 3: Implement:** множина заборонених присвоєнь — колонки механіки ∪ копії ∪ колонки `through` копій шляху основної таблиці; заборонене читання — пряме `NEW.<копія>` (новий обхід `PlpgsqlStatement.expressions`, `ColumnRef` з двох полів `new.<копія>`); тексти en/uk.
-- [ ] **Step 4:** Run: `pnpm --filter simetra test event-subscriptions messages` — PASS.
-- [ ] **Step 5: Commit**
+- [X] **Step 1: Write the failing test (unit)** — `it.each` у наявному блоці перевірок обробника (будівник підписки файлу тесту над `policyDomain()`, джерело — `TaskComment`): присвоєння копії шляху → `subscription.handler-assigns-carrier`; присвоєння `NEW.task_id` (перший крок шляху) → той самий код; пряме читання `NEW.<копія>` у виразі → `subscription.handler-reads-carrier`; `to_jsonb(NEW)`, `NEW.*` і передача `NEW` у функцію → нічого; присвоєння й читання `NEW.<звичайний реквізит>` → нічого.
+- [X] **Step 2:** Run: `pnpm --filter simetra test event-subscriptions` — FAIL.
+- [X] **Step 3: Implement:** множина заборонених присвоєнь — колонки механіки ∪ копії ∪ колонки `through` копій шляху основної таблиці; заборонене читання — пряме `NEW.<копія>` (новий обхід `PlpgsqlStatement.expressions`, `ColumnRef` з двох полів `new.<копія>`); тексти en/uk.
+- [X] **Step 4:** Run: `pnpm --filter simetra test event-subscriptions messages` — PASS.
+- [X] **Step 5: Commit**
 
 ```bash
 git add packages/simetra/src/compiler

@@ -189,6 +189,7 @@ export async function runStages(
       stage1.objects,
       stage2.references,
       stage1.project,
+      physical,
       sql.units,
       parse,
       plpgsql,

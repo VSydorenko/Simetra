@@ -4,6 +4,7 @@ import {
   standardLogicalName,
   type MetadataRef,
   type MovementDecl,
+  type PhysicalSnapshot,
   type Project,
   type SubscriptionSpec,
 } from "simetra/model"
@@ -20,6 +21,7 @@ import {
 import type { SqlParser } from "../sql/parse"
 import { mechanicsStandardNames } from "../mechanics-units"
 import type { PlpgsqlFunction, PlpgsqlParser } from "../sql/plpgsql"
+import { splitAssignment } from "../sql/rewrite/plpgsql-body"
 import { functionIdentity, type VerbatimUnit } from "../sql/units"
 import { objectKey, type ParsedObject } from "./files"
 import { registerTargetError, type ResolvedReference } from "./identity"
@@ -33,6 +35,7 @@ export function checkLinks(
   objects: readonly ParsedObject[],
   references: readonly ResolvedReference[],
   project: Project,
+  physical: PhysicalSnapshot,
   units: readonly VerbatimUnit[],
   parse: SqlParser,
   plpgsql: PlpgsqlParser,
@@ -43,7 +46,14 @@ export function checkLinks(
     ...checkMovementSources(objects, references),
     ...checkMovementQueries(objects, parse),
     ...checkSetFunctions(objects, project, units, parse, plpgsql),
-    ...checkSubscriptionHandlers(objects, project, units, parse, plpgsql),
+    ...checkSubscriptionHandlers(
+      objects,
+      project,
+      physical,
+      units,
+      parse,
+      plpgsql
+    ),
     ...checkPolicyCurrentUser(units),
     ...checkDimensionFunctions(
       project,
@@ -340,6 +350,7 @@ function checkSetFunctions(
 function checkSubscriptionHandlers(
   objects: readonly ParsedObject[],
   project: Project,
+  physical: PhysicalSnapshot,
   units: readonly VerbatimUnit[],
   parse: SqlParser,
   plpgsql: PlpgsqlParser
@@ -392,19 +403,41 @@ function checkSubscriptionHandlers(
         )
       } else if (unit !== undefined) {
         const mechanics = beforeWriteMechanics(spec, objects, project)
-        const parsed = mechanics.size === 0 ? undefined : plpgsql(unit.sql)
+        const carriers = beforeWriteCarriers(spec, objects, physical)
+        const parsed =
+          mechanics.size === 0 && carriers.copies.size === 0
+            ? undefined
+            : plpgsql(unit.sql)
         if (parsed?.ok === true && parsed.fn !== undefined) {
-          for (const assigned of mechanicsProblems(
+          const forbidden = new Set([...mechanics, ...carriers.assigned])
+          for (const { problem, column } of assignmentProblems(
             parsed.fn,
-            mechanics,
+            forbidden,
             parse
           )) {
             found.push(
+              column !== undefined && carriers.assigned.has(column)
+                ? diagnostic(
+                    "subscription.handler-assigns-carrier",
+                    object.file,
+                    "/handler",
+                    { column }
+                  )
+                : diagnostic(
+                    "subscription.handler-assigns-mechanics",
+                    object.file,
+                    "/handler",
+                    { function: fn, problem }
+                  )
+            )
+          }
+          for (const column of copyReads(parsed.fn, carriers.copies, parse)) {
+            found.push(
               diagnostic(
-                "subscription.handler-assigns-mechanics",
+                "subscription.handler-reads-carrier",
                 object.file,
                 "/handler",
-                { function: fn, problem: assigned }
+                { column }
               )
             )
           }
@@ -449,8 +482,106 @@ function beforeWriteMechanics(
 }
 
 /**
- * Чим обробник ламає механіку: запис у `NEW` цілком (`NEW :=`, `SELECT … INTO
- * NEW`) чи в колонку механіки, або `RETURN` не `NEW` і не `NULL`. Рядок, що
+ * Колонки носіїв прав на основних таблицях джерел підписки `beforeWrite`
+ * (спека прав §5.2, Р2a2-9): `copies` — копії носіїв, `assigned` — копії й
+ * колонки першого кроку шляху, з яких тригер носіїв їх виводить. Порядок
+ * `BEFORE`-тригерів задають імена, тож обробник, що спрацював після тригера
+ * носіїв, присвоєнням копії чи кроку розійшовся б із джерелом, а копії в
+ * `NEW` до тригера носіїв на `INSERT` — значення запиту, а не виведені.
+ * Підписок на таблицях ТЧ не буває, тож лише основна таблиця; `AFTER` не
+ * змінює рядка, і його не обмежує й текст спеки.
+ */
+function beforeWriteCarriers(
+  spec: SubscriptionSpec,
+  objects: readonly ParsedObject[],
+  physical: PhysicalSnapshot
+): { copies: ReadonlySet<string>; assigned: ReadonlySet<string> } {
+  const copies = new Set<string>()
+  const assigned = new Set<string>()
+  if (spec.event !== "beforeWrite") return { copies, assigned }
+  for (const source of spec.sources) {
+    if (!("ref" in source)) continue
+    const target = objects.find(
+      (o) =>
+        objectKey(o.kind, o.name) ===
+        objectKey(source.ref.kind, source.ref.name)
+    )
+    const table = physical.tables.find(
+      (t) =>
+        target?.id !== undefined &&
+        t.origin.objectId === target.id &&
+        t.origin.tabularSectionId === undefined &&
+        t.origin.part === undefined
+    )
+    for (const column of table?.columns ?? []) {
+      const copyOf = column.origin.copyOf
+      if (copyOf === undefined) continue
+      copies.add(column.name.toLowerCase())
+      assigned.add(column.name.toLowerCase())
+      assigned.add(copyOf.through.toLowerCase())
+    }
+  }
+  return { copies, assigned }
+}
+
+/**
+ * Пряме читання копії `NEW.<копія>` у будь-якому виразі обробника (Р2a2-9).
+ * Запис цілком (`to_jsonb(NEW)`, `NEW.*`, `NEW` аргументом) — звичайний
+ * патерн журналу, тож дозволений. Ціль присвоєння — не читання: її судить
+ * перевірка присвоєнь. Динамічний SQL сюди не доходить: його відкидає
+ * закрита оболонка. Нерозбірний вираз — теж: розбір тіла оболонки вже
+ * пройшов.
+ */
+function copyReads(
+  fn: PlpgsqlFunction,
+  copies: ReadonlySet<string>,
+  parse: SqlParser
+): string[] {
+  if (copies.size === 0) return []
+  const read = new Set<string>()
+  const visit = (value: unknown): void => {
+    if (Array.isArray(value)) {
+      for (const item of value) visit(item)
+      return
+    }
+    if (typeof value !== "object" || value === null) return
+    const node = value as Record<string, unknown>
+    const ref = node.ColumnRef as
+      { fields?: { String?: { sval?: string } }[] } | undefined
+    const fields = (ref?.fields ?? []).map((f) => f.String?.sval?.toLowerCase())
+    const [record, column] = fields
+    if (
+      fields.length === 2 &&
+      record === "new" &&
+      column !== undefined &&
+      copies.has(column)
+    ) {
+      read.add(column)
+    }
+    for (const inner of Object.values(node)) visit(inner)
+  }
+  for (const statement of fn.statements) {
+    for (const e of statement.expressions) {
+      if (e.role === "dynamic") continue
+      let text = e.query
+      if (e.parseMode >= 3) {
+        const split = splitAssignment(e.query, e.parseMode - 2)
+        if (split === undefined) continue
+        text = `SELECT ${e.query.slice(split.valueStart)}`
+      } else if (e.parseMode > 0) {
+        text = `SELECT ${e.query}`
+      }
+      const parsed = parse(text)
+      if (parsed.ok) visit(parsed.statements.map((s) => s.stmt))
+    }
+  }
+  return [...read]
+}
+
+/**
+ * Чим обробник ламає механіку чи носії: запис у `NEW` цілком (`NEW :=`,
+ * `SELECT … INTO NEW`) чи в заборонену колонку (`column`), або `RETURN` не
+ * `NEW` і не `NULL`. Рядок, що
  * його повертає пізніший `BEFORE`-тригер, і є рядком для запису, тож `RETURN
  * OLD` чи копія запису затерли б версію й дату, які поставила механіка.
  *
@@ -459,18 +590,18 @@ function beforeWriteMechanics(
  * повертає інше), а `CALL` з `NEW` аргументом пише в нього через `INOUT`
  * без цілі в дереві.
  */
-function mechanicsProblems(
+function assignmentProblems(
   fn: PlpgsqlFunction,
-  mechanics: ReadonlySet<string>,
+  forbidden: ReadonlySet<string>,
   parse: SqlParser
-): string[] {
-  const problems: string[] = []
+): { problem: string; column?: string }[] {
+  const problems: { problem: string; column?: string }[] = []
   // Запис тригера `new` є в списку змінних завжди; другий — уже затінення.
   const shadows =
     fn.variables.filter((v) => v.name.toLowerCase() === "new").length -
     1 +
     fn.aliases.filter((a) => a.toLowerCase() === "new").length
-  if (shadows > 0) problems.push("declares a variable named NEW")
+  if (shadows > 0) problems.push({ problem: "declares a variable named NEW" })
   for (const statement of fn.statements) {
     if (statement.type === "declare") continue
     for (const name of statement.target?.variable.split(", ") ?? []) {
@@ -478,16 +609,18 @@ function mechanicsProblems(
       if (
         record === "new" &&
         rest.length === 0 &&
-        (column === undefined || mechanics.has(column))
+        (column === undefined || forbidden.has(column))
       ) {
-        problems.push(name.toLowerCase())
+        problems.push({
+          problem: name.toLowerCase(),
+          ...(column === undefined ? {} : { column }),
+        })
       }
     }
     if (statement.type === "call") {
       for (const e of statement.expressions) {
-        if (callPassesNew(e.query, mechanics, fn.aliases, parse)) {
-          problems.push(e.query)
-        }
+        const passed = callPassesNew(e.query, forbidden, fn.aliases, parse)
+        if (passed !== undefined) problems.push({ problem: e.query, ...passed })
       }
     }
     if (statement.type !== "return") continue
@@ -497,9 +630,9 @@ function mechanicsProblems(
       ("null" in returns || returns.variable.toLowerCase() === "new")
     // `RETURN;` без виразу не повертає ні запису, ні копії.
     if (!allowed && statement.expressions.length > 0) {
-      problems.push(
-        `RETURN ${statement.expressions.map((e) => e.query).join(" ")}`
-      )
+      problems.push({
+        problem: `RETURN ${statement.expressions.map((e) => e.query).join(" ")}`,
+      })
     }
   }
   return problems
@@ -510,21 +643,28 @@ function mechanicsProblems(
  * в аргумент-змінну без цілі в дереві, а дістатися `NEW` можна й через
  * псевдонім (`r.version`), і через мітку функції (`f.new.version`): ціль
  * псевдоніма дерево не зберігає, тож підозрілий кожен. Дозволено лише пряме
- * `new.<колонка не механіки>`. Вкладене теж рахується — суворіше, зате без
- * розбору сигнатури процедури; нерозбірний текст — теж відмова.
+ * `new.<незаборонена колонка>`; пряма заборонена дає свою `column`. Вкладене
+ * теж рахується — суворіше, зате без розбору сигнатури процедури;
+ * нерозбірний текст — теж відмова. `undefined` — виклик нічого не пише.
  */
 function callPassesNew(
   query: string,
-  mechanics: ReadonlySet<string>,
+  forbidden: ReadonlySet<string>,
   aliases: readonly string[],
   parse: SqlParser
-): boolean {
+): { column?: string } | undefined {
   const parsed = parse(query)
-  if (!parsed.ok) return true
+  if (!parsed.ok) return {}
   const suspect = new Set(["new", ...aliases.map((a) => a.toLowerCase())])
-  const visit = (value: unknown): boolean => {
-    if (Array.isArray(value)) return value.some(visit)
-    if (typeof value !== "object" || value === null) return false
+  const visit = (value: unknown): { column?: string } | undefined => {
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        const found = visit(item)
+        if (found !== undefined) return found
+      }
+      return undefined
+    }
+    if (typeof value !== "object" || value === null) return undefined
     const node = value as Record<string, unknown>
     const ref = node.ColumnRef as
       { fields?: { String?: { sval?: string } }[] } | undefined
@@ -539,12 +679,12 @@ function callPassesNew(
           fields.length === 2 &&
           record === "new" &&
           column !== undefined &&
-          !suspect.has(column) &&
-          !mechanics.has(column)
-        if (!direct) return true
+          !suspect.has(column)
+        if (!direct) return {}
+        if (forbidden.has(column)) return { column }
       }
     }
-    return Object.values(node).some(visit)
+    return visit(Object.values(node))
   }
   return visit(parsed.statements.map((s) => s.stmt))
 }

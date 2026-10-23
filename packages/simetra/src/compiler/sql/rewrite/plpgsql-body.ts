@@ -960,7 +960,7 @@ export function unknownRecordFields(
  * Межа цілі присвоєння `ім'я[.ім'я…][індекси] :=|= значення`; `names` —
  * кількість імен цілі за режимом розбору Postgres.
  */
-function splitAssignment(
+export function splitAssignment(
   query: string,
   names: number
 ): { targetEnd: number; valueStart: number } | undefined {
