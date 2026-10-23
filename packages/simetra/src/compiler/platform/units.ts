@@ -1,20 +1,19 @@
 import {
   PLATFORM_SCHEMA,
-  PROVIDER_API_ROLES,
   quoteIdent,
-  type ApiRolePurpose,
   type DatabaseProvider,
+  type GrantPurpose,
   type IdentityNameSource,
   type IdentitySource,
   type PhysicalSnapshot,
   type Project,
 } from "simetra/model"
-import type { QualifiedName, UsersContract } from "../contracts"
+import { qualified, type QualifiedName, type UsersContract } from "../contracts"
 import { compareStrings } from "../diagnostics"
 import { dollarTag } from "../movement-functions"
 import type { CreationNode } from "../sql/dependencies"
 import type { SqlParser } from "../sql/parse"
-import { executeGrants } from "../sql/execute-grants"
+import { executeGrants, grantRole } from "../sql/execute-grants"
 import { generatedUnit, type SqlUnit } from "../sql/units"
 import type { ParsedObject } from "../stages/files"
 import { kindLabelOf, sqlLiteral } from "../stages/model"
@@ -22,16 +21,19 @@ import { IDENTITIES_TABLE } from "./identities"
 import { CURRENT_USER_FUNCTION } from "./names"
 
 /**
- * Призначення ролей запитів API: функцію сесії в політиці виконує роль
+ * Призначення ролей, що кличуть функцію сесії: у політиці її виконує роль
  * запиту, тож їм потрібні `USAGE` схеми й `EXECUTE` функції поточного
  * користувача (спека користувачів §3). Сервісна роль сесії не має й отримує
- * `NULL`, а не помилку доступу. Схему від PostgREST ховає конфіг провайдера, а
- * не відсутність `USAGE`; таблиці схеми закриті відсутністю грантів.
+ * `NULL`, а не помилку доступу. Роль команд кличе функції прав схеми
+ * `simetra`, а ті — функцію поточного користувача (спека прав §5.1). Схему
+ * від PostgREST ховає конфіг провайдера, а не відсутність `USAGE`; таблиці
+ * схеми закриті відсутністю грантів.
  */
-const SESSION_ROLES: readonly ApiRolePurpose[] = [
+const SESSION_ROLES: readonly GrantPurpose[] = [
   "user",
   "anonymous",
   "service",
+  "command",
 ]
 
 const IDENTITIES: QualifiedName = {
@@ -81,9 +83,9 @@ export interface PlatformLayerInput {
  * кваліфікованими іменами: тригер провайдера спрацьовує від ролі сервісу
  * автентифікації без прав на `simetra` і схеми застосунку, а функцію сесії
  * кличе роль запиту. `EXECUTE` від `PUBLIC` і ролей провайдера відкликано на
- * кожній; явно його має лише функція поточного користувача — кожна роль API. Функції —
- * plpgsql: тіла Postgres при створенні не перевіряє, а порядок дають явні
- * ребра `requires`.
+ * кожній; явно його має лише функція поточного користувача — кожна роль API
+ * й роль команд. Функції — plpgsql: тіла Postgres при створенні не
+ * перевіряє, а порядок дають явні ребра `requires`.
  *
  * SQL провізії й недійсності один загальний над фактами `source`: новий
  * провайдер — новий запис `PROVIDER_IDENTITY_SOURCES`, а не новий SQL.
@@ -148,19 +150,19 @@ export function buildPlatformUnits(
 
 /**
  * Безпека самої схеми `simetra` (спека користувачів §3): `REVOKE ALL` від
- * `PUBLIC` і `USAGE` ролям API. Одна функція на два споживачі — платформний
- * шар і стан застосування T2 без шару, — щоб правило безпеки схеми не
- * роздвоїлося. Гранти поштучно на отримувача — та сама форма, в якій їх читає
- * extract, тож зворотна генерація впізнає їх як описані.
+ * `PUBLIC` і `USAGE` ролям API й ролі команд. Одна функція на два
+ * споживачі — платформний шар і стан застосування T2 без шару, — щоб
+ * правило безпеки схеми не роздвоїлося. Гранти поштучно на отримувача — та
+ * сама форма, в якій їх читає extract, тож зворотна генерація впізнає їх як
+ * описані.
  */
 export function platformSchemaGrants(provider: DatabaseProvider): string[] {
   const schema = quoteIdent(PLATFORM_SCHEMA)
-  const apiRoles = PROVIDER_API_ROLES[provider]
   return [
     `REVOKE ALL ON SCHEMA ${schema} FROM PUBLIC;`,
     ...SESSION_ROLES.map(
       (purpose) =>
-        `GRANT USAGE ON SCHEMA ${schema} TO ${quoteIdent(apiRoles[purpose])};`
+        `GRANT USAGE ON SCHEMA ${schema} TO ${quoteIdent(grantRole(purpose, provider))};`
     ),
   ]
 }
@@ -397,8 +399,4 @@ function plpgsqlFunction(
     `SET search_path = ''\n` +
     `AS ${tag}\n${text}\n${tag};`
   )
-}
-
-function qualified(name: QualifiedName): string {
-  return `${quoteIdent(name.schema)}.${quoteIdent(name.name)}`
 }

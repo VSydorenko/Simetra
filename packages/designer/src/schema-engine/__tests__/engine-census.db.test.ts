@@ -3,6 +3,7 @@ import { resolveView } from "@supabase/pg-delta/policy"
 import pg from "pg"
 import { describe, expect, it } from "vitest"
 import { compile } from "simetra/compiler"
+import { PLATFORM_ROLES } from "simetra/model"
 import {
   renderDesiredState,
   SUPABASE_SCHEMAS,
@@ -335,6 +336,7 @@ async function engineKindsAndCensus(
   shadowScope: EngineScope
 ): Promise<{
   kinds: Set<string>
+  roles: Set<string>
   census: CensusCount[]
   extracted: Extracted
 }> {
@@ -350,13 +352,12 @@ async function engineKindsAndCensus(
         options.capability,
         options.baseline
       )
-      const kinds = new Set(
-        view
-          .facts()
-          .filter((f) => !view.isReferenceOnly(f.id))
-          .map((f) => f.id.kind)
+      const managed = view.facts().filter((f) => !view.isReferenceOnly(f.id))
+      const kinds = new Set(managed.map((f) => f.id.kind))
+      const roles = new Set(
+        managed.flatMap((f) => (f.id.kind === "role" ? [f.id.name] : []))
       )
-      return { kinds, census: await readCensus(pool, shadowScope) }
+      return { kinds, roles, census: await readCensus(pool, shadowScope) }
     })),
   }))
 }
@@ -379,17 +380,32 @@ describe("covered classes match the pinned engine", () => {
   for (const [name, load] of corpus) {
     it(name, async () => {
       const [desiredSql, shadowScope] = await load()
-      const { kinds, census, extracted } = await engineKindsAndCensus(
+      const { kinds, roles, census, extracted } = await engineKindsAndCensus(
         desiredSql,
         shadowScope
       )
-      // Кожен вид факту, що трапився, перепис рахує як покритий клас або
-      // він — частина такого класу
-      for (const kind of kinds)
+      // Роль — інфраструктура кластера (§6.9): факт двигуна з'являється, лише
+      // коли грант називає платформну роль поза пресетом провайдера. Будь-яка
+      // інша роль означала б, що бажаний стан створює роль сам, а ролі
+      // створює лише `simetra roles`
+      const platformRoles = new Set<string>(Object.values(PLATFORM_ROLES))
+      for (const role of roles)
         expect(
-          coveredKinds.has(kind as never) || satellites.has(kind),
-          `engine fact kind ${kind} is neither a covered census class nor a part of one`
+          platformRoles.has(role),
+          `engine role fact ${role} is not a platform role a grant names`
         ).toBe(true)
+      // Без факту ролі перевірка вище порожня: бажаний стан кожної фікстури
+      // грантує роль команд (гранти схеми `simetra`, Р2a1-2, Р2a1-4)
+      if (desiredSql !== BROAD_SQL)
+        expect([...roles]).toContain(PLATFORM_ROLES.command)
+      // Кожен інший вид факту, що трапився, перепис рахує як покритий клас
+      // або він — частина такого класу
+      for (const kind of kinds)
+        if (kind !== "role")
+          expect(
+            coveredKinds.has(kind as never) || satellites.has(kind),
+            `engine fact kind ${kind} is neither a covered census class nor a part of one`
+          ).toBe(true)
       // Покритий клас, що трапився в переписі, має принаймні вид факту в
       // двигуні; точну кількість за класом звіряє сам extract
       // (`engine.census-mismatch`), зокрема для класів, що ділять вид

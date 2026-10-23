@@ -36,7 +36,8 @@ export function checkLinks(
   units: readonly VerbatimUnit[],
   parse: SqlParser,
   plpgsql: PlpgsqlParser,
-  membershipFunctions: ReadonlySet<string>
+  membershipFunctions: ReadonlySet<string>,
+  rightsTables: ReadonlySet<string>
 ): Diagnostic[] {
   return [
     ...checkMovementSources(objects, references),
@@ -48,6 +49,7 @@ export function checkLinks(
       project,
       units,
       membershipFunctions,
+      rightsTables,
       parse,
       plpgsql
     ),

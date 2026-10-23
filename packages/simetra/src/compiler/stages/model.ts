@@ -316,8 +316,8 @@ class SnapshotBuilder {
    * стадія 2; тут — лише id → мітка, без другого читання імені.
    */
   private readonly enumDefaultLabels: Map<string, string>
-  /** Ціль стандартного `ref: "users"`; немає — авторство без FK (стадія 4). */
-  private readonly users: MetadataRef | undefined
+  /** Цілі стандартних посилань від проєкту; немає цілі — колонка без FK (стадія 4). */
+  private readonly targets: StandardRefTargets
 
   constructor(
     objects: readonly ParsedObject[],
@@ -325,7 +325,7 @@ class SnapshotBuilder {
     references: readonly ResolvedReference[]
   ) {
     this.byKey = new Map(objects.map((o) => [objectKey(o.kind, o.name), o]))
-    this.users = usersRefOf(objects)
+    this.targets = standardRefTargets(objects)
     this.style = project.naming.attributeCase
     this.scopeKinds = new Map(project.scopeKinds.map((k) => [k.name, k]))
     this.rootKinds = new Map(
@@ -546,65 +546,112 @@ class SnapshotBuilder {
         ? []
         : (data.tabularSections as TabularSection[])
     sections.forEach((section, index) => {
-      const pointer = `/tabularSections/${index}`
-      const table = this.pendingTable(
-        schema,
-        section.physicalName!,
-        { ...origin, tabularSectionId: section.id ?? "" },
-        object
-      )
-      const rowColumns = def.tabularSectionColumns?.(data) ?? []
-      // Рядок ТЧ кореня несе скоуп у `parent_id` — окрема колонка лише
-      // дублювала б його.
-      const rowScope: TableScope | undefined =
-        scope === undefined || scope.own
-          ? scope
-          : {
-              kind: scope.kind,
-              carrier: rowColumns.find((c) => c.ref === "owningObject")
-                ?.physicalName,
-              own: false,
-              partitioned: true,
-            }
-      const rowStandard = new Map<StandardColumnDef, Field>()
-      const sectionFields = this.withScope(rowColumns, rowScope, (column) => {
-        const field = this.standardField(column, object, main, rowScope)
-        rowStandard.set(column, field)
-        return field
+      this.addSection(object, main, scope, {
+        id: section.id ?? "",
+        name: section.physicalName!,
+        pointer: `/tabularSections/${index}`,
+        standard: [],
+        attributes: section.attributes,
+        indexes: section.indexes,
       })
-      const sectionNamed = this.standardFieldsByName(rowStandard)
-      section.attributes.forEach((attribute, i) => {
-        const built = this.attributeField(
-          attribute,
-          `${pointer}/attributes/${i}`,
-          rowScope,
-          def.requiredOnPost === true
-        )
-        sectionFields.push(built)
-        sectionNamed.set(attribute.name, built)
-        this.declare(
-          object.file,
-          `${pointer}/attributes/${i}/physicalName`,
-          attribute.physicalName!
-        )
-      })
-      this.declare(object.file, `${pointer}/physicalName`, table.name)
-      const sectionColumns = this.addTable(
-        table,
-        sectionFields,
-        object.file,
-        `${pointer}/physicalName`
-      )
-      if (def.compositeIndexes === true) {
-        this.addCompositeIndexes(
-          table,
-          section.indexes,
-          sectionNamed,
-          sectionColumns,
-          rowScope
-        )
-      }
     })
+    // Стандартна ТЧ (дельта «Ролей») будується тим самим шляхом, що ТЧ з
+    // файлу: скоуп рядка, складений FK на власника й каскад — ті самі.
+    for (const section of def.standardTabularSections?.(data) ?? []) {
+      this.addSection(object, main, scope, {
+        id: standardElementId(origin.objectId, section),
+        name: makeObjectName(name, undefined, section.physicalSuffix),
+        standard: section.columns(),
+        attributes: [],
+        indexes: [],
+      })
+    }
+  }
+
+  /**
+   * Таблиця ТЧ: стандартні колонки рядка виду, далі колонки самої ТЧ —
+   * стандартні (у стандартної ТЧ) і реквізити (у ТЧ з файлу). `pointer` —
+   * місце ТЧ у файлі; у стандартної його немає, тож її ім'я, як ім'я похідної
+   * таблиці регістра, вказує на `physicalName` об'єкта.
+   */
+  private addSection(
+    object: ParsedObject,
+    main: PendingTable,
+    scope: TableScope | undefined,
+    section: {
+      id: string
+      name: string
+      pointer?: string
+      standard: readonly StandardColumnDef[]
+      attributes: readonly Attribute[]
+      indexes: CompositeIndexes
+    }
+  ): void {
+    const def = KIND_REGISTRY[object.kind]
+    const { pointer } = section
+    const table = this.pendingTable(
+      main.schema,
+      section.name,
+      { objectId: object.id ?? "", tabularSectionId: section.id },
+      object
+    )
+    const rowColumns = [
+      ...(def.tabularSectionColumns?.(object.data) ?? []),
+      ...section.standard,
+    ]
+    // Рядок ТЧ кореня несе скоуп у `parent_id` — окрема колонка лише
+    // дублювала б його.
+    const rowScope: TableScope | undefined =
+      scope === undefined || scope.own
+        ? scope
+        : {
+            kind: scope.kind,
+            carrier: rowColumns.find((c) => c.ref === "owningObject")
+              ?.physicalName,
+            own: false,
+            partitioned: true,
+          }
+    const rowStandard = new Map<StandardColumnDef, Field>()
+    const sectionFields = this.withScope(rowColumns, rowScope, (column) => {
+      const field = this.standardField(column, object, main, rowScope)
+      rowStandard.set(column, field)
+      return field
+    })
+    const sectionNamed = this.standardFieldsByName(rowStandard)
+    section.attributes.forEach((attribute, i) => {
+      const built = this.attributeField(
+        attribute,
+        `${pointer}/attributes/${i}`,
+        rowScope,
+        def.requiredOnPost === true
+      )
+      sectionFields.push(built)
+      sectionNamed.set(attribute.name, built)
+      this.declare(
+        object.file,
+        `${pointer}/attributes/${i}/physicalName`,
+        attribute.physicalName!
+      )
+    })
+    const namePointer =
+      pointer === undefined ? "/physicalName" : `${pointer}/physicalName`
+    if (pointer !== undefined)
+      this.declare(object.file, namePointer, table.name)
+    const sectionColumns = this.addTable(
+      table,
+      sectionFields,
+      object.file,
+      namePointer
+    )
+    if (def.compositeIndexes === true) {
+      this.addCompositeIndexes(
+        table,
+        section.indexes,
+        sectionNamed,
+        sectionColumns,
+        rowScope
+      )
+    }
   }
 
   private standardFieldsByName(
@@ -1099,7 +1146,7 @@ class SnapshotBuilder {
     column: StandardColumnDef,
     object: ParsedObject
   ): ParsedObject[] {
-    return standardTargetRefs(column, object.data, this.users).map((ref) =>
+    return standardTargetRefs(column, object.data, this.targets).map((ref) =>
       this.lookup(ref)
     )
   }
@@ -1581,17 +1628,67 @@ export function registerSingletonOf(
 }
 
 /**
+ * Цілі стандартних посилань, які дає проєкт, а не файл об'єкта: «Користувачі»
+ * (`usersRefOf`), довідник членства за видом скоупу й довідник «Ролі» за
+ * рівнем (ім'я виду скоупу чи `none` для глобального). Дубль на рівні звітує
+ * стадія 4, тож тут — перший за шляхом файлу, як у `usersCatalogOf`.
+ */
+export interface StandardRefTargets {
+  users: MetadataRef | undefined
+  membership: ReadonlyMap<string, MetadataRef>
+  rightsRoles: ReadonlyMap<string, MetadataRef>
+}
+
+export function standardRefTargets(
+  objects: readonly ParsedObject[]
+): StandardRefTargets {
+  const membership = new Map<string, MetadataRef>()
+  const rightsRoles = new Map<string, MetadataRef>()
+  const sorted = [...objects].sort((a, b) => compareStrings(a.file, b.file))
+  for (const object of sorted) {
+    const data = object.data as { scope?: string; membership?: unknown }
+    const ref = { kind: object.kind, name: object.name }
+    const level = levelOf(data)
+    if (data.membership !== undefined && !membership.has(level)) {
+      membership.set(level, ref)
+    }
+    const system = KIND_REGISTRY[object.kind].rightsSystem?.(object.data)
+    if (system === "rightsRoles" && !rightsRoles.has(level)) {
+      rightsRoles.set(level, ref)
+    }
+  }
+  return { users: usersRefOf(objects), membership, rightsRoles }
+}
+
+/** Рівень таблиці для цілей `member` і `rightsRoles`: її вид скоупу чи `none`. */
+function levelOf(data: unknown): string {
+  return (data as { scope?: string }).scope ?? "none"
+}
+
+/**
  * Цілі стандартного посилання (власники довідника, реєстратори регістра,
- * «Користувачі» авторства) за налаштуваннями виду. Спільний для стадії 3 і
- * кодогену типів. `users` — довідник із роллю «користувачі» (`usersRefOf`):
- * без нього ціль порожня, а помилку `users.catalog-missing` дає стадія 4.
+ * «Користувачі» авторства, учасник і «Ролі» рівня) за налаштуваннями виду.
+ * Спільний для стадії 3 і кодогену типів. Без цілі (немає «Користувачів» чи
+ * довідника рівня) — порожньо, а помилку дає стадія 4.
  */
 export function standardTargetRefs(
   column: StandardColumnDef,
   data: unknown,
-  users: MetadataRef | undefined
+  targets: StandardRefTargets
 ): MetadataRef[] {
-  if (column.ref === "users") return users === undefined ? [] : [users]
+  const found = (ref: MetadataRef | undefined) =>
+    ref === undefined ? [] : [ref]
+  if (column.ref === "users") return found(targets.users)
+  if (column.ref === "member") {
+    // Нескоуплена таблиця — глобальний рівень: його учасник — користувач.
+    const level = levelOf(data)
+    return found(
+      level === "none" ? targets.users : targets.membership.get(level)
+    )
+  }
+  if (column.ref === "rightsRoles") {
+    return found(targets.rightsRoles.get(levelOf(data)))
+  }
   const { owners, recorderTypes } = data as Element
   const refs =
     column.ref === "owners"

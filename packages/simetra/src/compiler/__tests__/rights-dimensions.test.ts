@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest"
 import { compile, localize } from "simetra/compiler"
 import {
+  MEMBER_REGION_FILE,
   MEMBER_REGION_ID,
+  ORG_KIND_ID,
   TASK_FILE,
   TASK_ID,
   compileRights,
@@ -99,11 +101,45 @@ describe("access dimensions", () => {
             objectId: MEMBER_REGION_ID,
             table: { schema: "public", name: "member_region" },
             subject: "member_id",
+            subjectTarget: { membership: ORG_KIND_ID },
             value: "region_id",
           },
         },
       },
     ])
+  })
+
+  it("resolves the subject target of a dimension relation", async () => {
+    const subjectOf = async (files: Files) => {
+      const { values } = (await compiled(files)).accessDimensions[0]!
+      return "relation" in values ? values.relation.subjectTarget : undefined
+    }
+    expect(await subjectOf(withDimension({}))).toEqual({
+      membership: ORG_KIND_ID,
+    })
+    // Суб'єкт на «Користувачах» — генератор порівнює з поточним
+    // користувачем, а не з моїми учасниками.
+    const onUsers = withDimension({
+      [MEMBER_REGION_FILE]: {
+        dimensions: [
+          {
+            id: uuid(6031),
+            name: "member",
+            physicalName: "member_id",
+            type: "Ref",
+            ref: ref("Catalog", "Users"),
+          },
+          {
+            id: uuid(6032),
+            name: "region",
+            physicalName: "region_id",
+            type: "Ref",
+            ref: ref("Catalog", "Region"),
+          },
+        ],
+      },
+    })
+    expect(await subjectOf(onUsers)).toEqual({ users: true })
   })
 
   it("names the function of values in the default schema", async () => {

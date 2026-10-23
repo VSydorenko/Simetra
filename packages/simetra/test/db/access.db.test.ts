@@ -11,6 +11,7 @@ import {
   project,
   uuid,
 } from "../../src/compiler/__tests__/helpers"
+import { signUp } from "./auth"
 import { queryAs, withRollback, type ApiRole } from "./connection"
 
 /**
@@ -142,14 +143,6 @@ async function compiled(scenario: Scenario): Promise<CompiledModel> {
   const result = await compile(files)
   expect(result.diagnostics).toEqual([])
   return result.model!
-}
-
-/** Обліковий запис провайдера: провізія створює рядок «Користувачів». */
-async function signUp(client: pg.Client): Promise<string> {
-  const { rows } = await client.query<{ id: string }>(
-    "INSERT INTO auth.users (id, email) VALUES (gen_random_uuid(), gen_random_uuid() || '@example.test') RETURNING id"
-  )
-  return rows[0]!.id
 }
 
 interface Tenant {

@@ -154,3 +154,11 @@ The compiler reports these as `rights.*` (for example `rights.grant-level`,
 the compiler's rule catalog. Changing a role's level is an
 `identity.assigned-once-changed` error; renaming its scope kind or container
 is not.
+
+## System rights catalogs
+
+The system rights catalogs are Catalogs with `"role": "rightsRoles"` (custom
+roles; standard tabular section `delta`) or `"role": "roleAssignments"`. Their
+level is the catalog's own scope. They are read-only until rights
+administration exists: a custom action on one is `rights.system-catalog-custom-action`.
+Run `simetra roles` before the first `plan` on a new database.

@@ -10,7 +10,7 @@ import {
   type RequestRolePurpose,
 } from "simetra/model"
 import type { CompiledScopeKind } from "./compile"
-import type { AccessContract, QualifiedName } from "./contracts"
+import { qualified, type AccessContract, type QualifiedName } from "./contracts"
 import { compareStrings } from "./diagnostics"
 import type { SqlParser } from "./sql/parse"
 import { generatedUnit, type SqlUnit } from "./sql/units"
@@ -195,8 +195,4 @@ function readPolicy(
     .map((role) => quoteIdent(role))
     .join(", ")
   return `CREATE POLICY ${quoteIdent(name)} ON ${qualified(table)} AS PERMISSIVE FOR SELECT TO ${to} USING (${predicate});`
-}
-
-function qualified(name: QualifiedName): string {
-  return `${quoteIdent(name.schema)}.${quoteIdent(name.name)}`
 }

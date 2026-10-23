@@ -119,7 +119,10 @@ export async function invoke<D>(
     // Коли заважає лише прапорець запису в базу, підказка називає саме його:
     // `--read-only` вимикає запис у базу завжди, і тоді радити прапорець марно
     return permits(tool, { ...o, allowDatabaseWrite: true })
-      ? refused("database-write-disabled", databaseWriteHint(o.launchArgs))
+      ? refused(
+          "database-write-disabled",
+          databaseWriteHint(o.launchArgs, { tools: tool.name })
+        )
       : refused("read-only", readOnlyHint(o.launchArgs))
   if (tool.database !== "none" && o.database === undefined)
     return refused(

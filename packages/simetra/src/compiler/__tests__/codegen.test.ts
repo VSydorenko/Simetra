@@ -16,6 +16,7 @@ import {
   scopedProject,
   uuid,
 } from "./helpers"
+import { compileRights, withRoles } from "./fixtures/rights"
 
 const PACKAGE_ROOT = fileURLToPath(new URL("../../../", import.meta.url))
 
@@ -646,6 +647,65 @@ describe("emitEntityTypes", { timeout: 30_000 }, () => {
         customer: string | null
       }"
     `)
+    expect(diagnosticsOf(code)).toEqual([])
+  })
+
+  it("standard tabular section of the roles catalog is emitted like a file section", async () => {
+    const result = await compileRights(withRoles())
+    expect(result.diagnostics.filter((d) => d.severity === "error")).toEqual([])
+    const code = emitEntityTypes(result.model!)
+    // `block` бере перший інтерфейс ТЧ з таким іменем, тож знімки — для
+    // глобальних «Ролей» (за абеткою перші); скоуплені — поле-масив.
+    expect(block(code, "Catalogs.GlobalRoles")).toMatchInlineSnapshot(`
+      "export interface GlobalRoles {
+        /** Reference */
+        ref: string
+        /** Code */
+        code: string | null
+        /** Description */
+        description: string | null
+        /** Deletion mark */
+        deletionMark: boolean
+        /** Archetype */
+        archetype: string
+        /** Order */
+        order: number | null
+        /** Predefined name */
+        predefinedName: string | null
+        /** Version */
+        version: string
+        /** Created at */
+        createdAt: string
+        /** Updated at */
+        updatedAt: string
+        /** Delta */
+        delta: Catalogs_GlobalRoles_Delta[]
+      }"
+    `)
+    expect(block(code, "Catalogs.GlobalRoles.Delta")).toMatchInlineSnapshot(`
+      "/** Delta */
+      export interface Delta {
+        /** Reference */
+        ref: string
+        /** Owning object */
+        parent: string
+        /** Line number */
+        lineNumber: number
+        /** Object */
+        object: string
+        /** Action */
+        action: string
+        /** Extent */
+        extent: string
+        /** Access dimension */
+        dimension: string | null
+        /** Effect */
+        effect: string
+      }"
+    `)
+    expect(block(code, "Catalogs.OrgRoles")).toContain(
+      "delta: Catalogs_OrgRoles_Delta[]"
+    )
     expect(diagnosticsOf(code)).toEqual([])
   })
 

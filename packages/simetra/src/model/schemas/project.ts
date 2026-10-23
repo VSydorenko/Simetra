@@ -141,6 +141,19 @@ export const PROVIDER_API_ROLES: Readonly<
 }
 
 /**
+ * Ролі платформи за призначенням (платформна спека §6.7, спека прав §5.1):
+ * на відміну від ролей API їх не дає провайдер — на базі споживача їх
+ * створює designer (`simetra roles`), тож ім'я одне для всіх провайдерів.
+ * Роль кластерна: її немає в бажаному SQL, і згенерований SQL нею не
+ * керує — лише дає їй `EXECUTE` функцій і `USAGE` схеми.
+ */
+export const PLATFORM_ROLES = { command: "simetra_command" } as const
+/** Роль команд: виконує функції прав і команди, DML таблиць виду не має. */
+export type PlatformRolePurpose = keyof typeof PLATFORM_ROLES
+/** Отримувач гранту згенерованого SQL: роль API провайдера чи платформи. */
+export type GrantPurpose = ApiRolePurpose | PlatformRolePurpose
+
+/**
  * Звідки береться відображуване ім'я нового користувача: колонка таблиці
  * облікових записів або ключ JSON-колонки метаданих.
  */

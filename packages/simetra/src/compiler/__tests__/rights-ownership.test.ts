@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 import { applyChanges, compile, renameElement } from "simetra/compiler"
 import {
   COMMENT_FILE,
+  ORG_KIND_ID,
   PROJECT_CATALOG_FILE,
   TASK_FILE,
   TASK_ID,
@@ -67,8 +68,8 @@ describe("rights ownership", () => {
       TASK_ID
     )
     expect(task.ownership).toEqual([
-      { column: "assignee_id" },
-      { column: "created_by_id" },
+      { column: "assignee_id", owner: { membership: ORG_KIND_ID } },
+      { column: "created_by_id", owner: { users: true } },
     ])
     for (const action of task.actions) {
       expect(action.extents).toEqual([{ form: "any" }, { form: "own" }])
@@ -89,7 +90,9 @@ describe("rights ownership", () => {
     const contract = result.model!.contracts.rights.find(
       (c) => c.objectId === users.id
     )!
-    expect(contract.ownership).toEqual([{ column: "id" }])
+    expect(contract.ownership).toEqual([
+      { column: "id", owner: { users: true } },
+    ])
 
     const other = errors(
       await compileRights(
@@ -114,6 +117,7 @@ describe("rights ownership", () => {
           table: { schema: "public", name: "task" },
           column: "assignee_id",
         },
+        owner: { membership: ORG_KIND_ID },
       },
     ])
   })
@@ -206,6 +210,7 @@ describe("rights ownership", () => {
           table: { schema: "public", name: "region" },
           column: "lead_id",
         },
+        owner: { membership: ORG_KIND_ID },
       },
     ])
   })
@@ -283,6 +288,7 @@ describe("rights ownership", () => {
           table: { schema: "public", name: "users" },
           column: "mentor_id",
         },
+        owner: { users: true },
       },
     ])
   })

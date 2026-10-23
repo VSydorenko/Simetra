@@ -71,9 +71,13 @@
       "minLength": 1
     },
     "role": {
-      "description": "System role of the catalog: users marks the users catalog that the platform layer provisions and references; at most one per project, unscoped.",
+      "description": "System role of the catalog: users marks the users catalog that the platform layer provisions and references (at most one per project, unscoped); rightsRoles and roleAssignments mark the custom roles and role assignments catalogs of a rights level, the level being the catalog's own scope (at most one per role and level).",
       "type": "string",
-      "const": "users"
+      "enum": [
+        "users",
+        "rightsRoles",
+        "roleAssignments"
+      ]
     },
     "codeLength": {
       "default": 9,

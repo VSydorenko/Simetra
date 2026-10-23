@@ -80,6 +80,7 @@ import {
   type ProviderLockSet,
   type TableLock,
 } from "./locks"
+import { checkPlatformRoles } from "./platform-roles"
 import { ApplyConnectionLost, ApplyDbError, type ApplyDatabase } from "./port"
 import {
   accessChanges,
@@ -424,6 +425,19 @@ export async function buildPlan(
     state.status === "applied" ? state.marker.scope : undefined
   const scope = planScope(desired.scope, markerScope)
 
+  // 1а. Платформні ролі, яким бажаний SQL дає гранти, — на цілі й на
+  // сервері тіні до будь-якої тіні й до гілки промоції (Р2a1-2): тінь без
+  // ролі впала б сирою помилкою гранту, а план промоції будує свої тіні
+  const parse = await loadSqlParser()
+  const roles = await checkPlatformRoles(
+    dbs.reader,
+    o.target,
+    o.shadowBase,
+    desired.sql,
+    parse
+  )
+  if (roles.refusal !== undefined) return refused(roles.refusal)
+
   // 2а. Власники цілі — до будь-якого витягу: об'єкт ролі, членом якої роль
   // сесії не є, план не зніме й не змінить, а двигун на такій цілі навіть
   // витяг не будує. Тож це відмова з порадою ще до гейта
@@ -441,7 +455,6 @@ export async function buildPlan(
   // поза межею застосунку), а крок двигуна замінив би його мовчки (рішення 8
   // плану П3-3a2)
   const live = await witness(o.target, scope)
-  const parse = await loadSqlParser()
   const taken = providerTriggerConflicts({
     desired: model.sqlUnits,
     live: live.extracted.model,

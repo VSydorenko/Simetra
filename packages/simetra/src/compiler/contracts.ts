@@ -2,6 +2,7 @@ import {
   KIND_REGISTRY,
   PROVIDER_EVENT_SOURCES,
   makeObjectName,
+  quoteIdent,
   postsMovements,
   truncatedPeriodExpression,
   standardLogicalName,
@@ -18,6 +19,7 @@ import {
   type Project,
   type RegisterKeySpec,
   type RequestRolePurpose,
+  type RightsSystemCatalog,
   type ScopeKind,
   type SubscriptionEvent,
   type VirtualTableKind,
@@ -35,11 +37,16 @@ import {
 } from "./stages/model"
 import { isMovementQuery, type SqlUnit } from "./sql/units"
 import { objectKey, type ParsedObject } from "./stages/files"
-import type { ResolvedReference } from "./stages/identity"
+import { standardElementId, type ResolvedReference } from "./stages/identity"
 
 export interface QualifiedName {
   schema: string
   name: string
+}
+
+/** Кваліфіковане ім'я для SQL: одне місце замість копій у кожному генераторі. */
+export function qualified(name: QualifiedName): string {
+  return `${quoteIdent(name.schema)}.${quoteIdent(name.name)}`
 }
 
 export interface PostingContract {
@@ -243,6 +250,8 @@ export interface MembershipContract {
   objectId: string
   scopeKindId: string
   table: QualifiedName
+  /** Ключ рядка членства — id учасника. */
+  keyColumn: string
   scopeColumn: string
   userColumn: string
   myMemberFunction: QualifiedName
@@ -289,6 +298,16 @@ export interface CarrierContract {
 }
 
 /**
+ * Носій власності (спека прав §4.2): кому належить рядок — моєму учаснику
+ * виду скоупу об'єкта чи мені як користувачу. Ціль — факт контракту, як
+ * `subjectTarget` виміру (Р2a1-27): будівник умов обирає форму `own`
+ * (Р2a1-10), не виводячи її з FK.
+ */
+export interface OwnershipContract extends CarrierContract {
+  owner: { users: true } | { membership: string }
+}
+
+/**
  * Контракт прав об'єкта (спека прав §3): дії з вимогами, ефектами й
  * обсягами. Його мають усі об'єкти видів з непорожнім `rightsExtents`; з
  * нього Права-2 будують політики, а матриця — рядки дій.
@@ -305,7 +324,7 @@ export interface RightsContract {
    * Носії власності (спека прав §4.2) у порядку файлу; непорожній перелік
    * додає обсяг `own` кожній дії.
    */
-  ownership: CarrierContract[]
+  ownership: OwnershipContract[]
   /** Об'єкт — контейнер прав: гранти на нього покривають прив'язані об'єкти. */
   container?: true
   /** Прив'язка до контейнера (спека прав §4.3): носій і ціль. */
@@ -315,6 +334,11 @@ export interface RightsContract {
    * додає обсяг `dimension` кожній дії.
    */
   access: { dimensionId: string; carrier: CarrierContract }[]
+  /**
+   * Системний довідник прав (спека прав §4.6, Р2a1-23): лише `read`, поза
+   * `grantAll` і `withAction`, належить лише своєму рівню.
+   */
+  system?: RightsSystemCatalog
 }
 
 /**
@@ -333,6 +357,12 @@ export interface AccessDimensionContract {
           table: QualifiedName
           /** Колонка посилання на «Користувачі» чи на довідник членства. */
           subject: string
+          /**
+           * Ціль суб'єкта (Р2a1-27): «Користувачі» чи довідник членства виду
+           * скоупу — генератор функції значень знає, чий id порівнювати, не
+           * виводячи його з FK.
+           */
+          subjectTarget: { users: true } | { membership: string }
           /** Колонка посилання на довідник значень. */
           value: string
         }
@@ -413,6 +443,24 @@ export interface RightsProjectionRow {
   sources: { kind: "Role" | "RightsSet"; id: string }[]
 }
 
+/**
+ * Рівень зберігання прав (спека прав §4.6, Р2a1-5): глобальний чи вид скоупу.
+ * Контейнерні призначення лежать на рівні виду скоупу контейнера.
+ */
+export type RightsLevelKey =
+  { level: "global" } | { level: "scope"; scopeKindId: string }
+
+/**
+ * Системні довідники прав одного рівня (спека прав §4.6): «Ролі» з ТЧ дельти
+ * й «Призначення ролей». Фізичні колонки — сталі ролей довідника (Р2a1-6,
+ * Р2a1-7), тож генератор бере їх із фізичного знімка за `origin.standard`.
+ */
+export interface RightsCatalogContract {
+  level: RightsLevelKey
+  roles: { objectId: string; table: QualifiedName; delta: QualifiedName }
+  assignments: { objectId: string; table: QualifiedName }
+}
+
 export interface Contracts {
   /** За `documentId`. */
   posting: PostingContract[]
@@ -446,6 +494,8 @@ export interface Contracts {
   roles: RoleContract[]
   /** За `roleId`, `objectId`, `action`, далі обсяг: `any` < `own` < вимір за id. */
   rightsProjection: RightsProjectionRow[]
+  /** За рівнем: глобальний, далі за `scopeKindId`. */
+  rightsCatalogs: RightsCatalogContract[]
 }
 
 /** Функція контракту, якої ще немає в БД, з місцем у метаданих для діагностики. */
@@ -755,7 +805,8 @@ export function buildContracts(
   accessDimensions: readonly AccessDimensionContract[],
   sources: Pick<Contracts, "membershipSources" | "assignmentSources">,
   roles: readonly RoleContract[],
-  rightsProjection: readonly RightsProjectionRow[]
+  rightsProjection: readonly RightsProjectionRow[],
+  rightsCatalogs: readonly RightsCatalogContract[]
 ): Contracts {
   const registers = objects
     .filter(isRegister)
@@ -811,24 +862,38 @@ export function buildContracts(
     eventSubscriptions: [...eventSubscriptions],
     personalData: personalDataContracts(objects, physical),
     ...withUsers(usersContractOf(objects, physical)),
-    membership: membershipsOf(objects, physical, project).map(
-      (m): MembershipContract => ({
-        objectId: m.object.id ?? "",
-        scopeKindId: m.scopeKind.id ?? "",
-        table: { schema: m.table.schema, name: m.table.name },
-        scopeColumn: m.scopeColumn,
-        userColumn: m.userColumn,
-        myMemberFunction: m.myMember,
-        ...(m.setFunction === undefined ? {} : { setFunction: m.setFunction }),
-      })
-    ),
+    membership: membershipContracts(objects, physical, project),
     rights: [...rights],
     accessDimensions: [...accessDimensions],
     membershipSources: [...sources.membershipSources],
     assignmentSources: [...sources.assignmentSources],
     roles: [...roles],
     rightsProjection: [...rightsProjection],
+    rightsCatalogs: [...rightsCatalogs],
   }
+}
+
+/**
+ * Контракти членства — і для блоку контрактів, і для генератора функцій прав,
+ * який будується раніше за них (одне джерело).
+ */
+export function membershipContracts(
+  objects: readonly ParsedObject[],
+  physical: PhysicalSnapshot,
+  project: Pick<Project, "scopeKinds">
+): MembershipContract[] {
+  return membershipsOf(objects, physical, project).map(
+    (m): MembershipContract => ({
+      objectId: m.object.id ?? "",
+      scopeKindId: m.scopeKind.id ?? "",
+      table: { schema: m.table.schema, name: m.table.name },
+      keyColumn: m.keyColumn,
+      scopeColumn: m.scopeColumn,
+      userColumn: m.userColumn,
+      myMemberFunction: m.myMember,
+      ...(m.setFunction === undefined ? {} : { setFunction: m.setFunction }),
+    })
+  )
 }
 
 function withUsers(users: UsersContract | undefined): {
@@ -904,6 +969,7 @@ function personalDataContracts(
       const own = KIND_REGISTRY[object.kind].columnFields.flatMap((field) =>
         personal(data[field] as Attribute[] | undefined)
       )
+      // Лише ТЧ з файлу: стандартна ТЧ реквізитів з `personalData` не має.
       const sections = (
         (data.tabularSections ?? []) as {
           id?: string
@@ -1104,6 +1170,8 @@ function requiredOnPost(
         )
       ).check,
     }))
+  // Лише ТЧ з файлу: обов'язковість при проведенні — властивість
+  // реквізиту, а стандартна ТЧ реквізитів не має.
   const sections = data.tabularSections.flatMap((section) => {
     const sectionTable = must(
       physical.tables.find((t) => t.origin.tabularSectionId === section.id)
@@ -1136,10 +1204,19 @@ function immutability(
   table: PhysicalTable,
   physical: PhysicalSnapshot
 ): PostingContract["immutability"] {
-  const sections = (
-    document.data as { tabularSections: { id?: string }[] }
-  ).tabularSections.map((section) =>
-    must(physical.tables.find((t) => t.origin.tabularSectionId === section.id))
+  // Проведений документ незмінний у всіх своїх таблицях: стандартна ТЧ —
+  // така сама ТЧ, як із файлу.
+  const ids = [
+    ...(
+      document.data as { tabularSections: { id?: string }[] }
+    ).tabularSections.map((section) => section.id),
+    ...(
+      KIND_REGISTRY[document.kind].standardTabularSections?.(document.data) ??
+      []
+    ).map((section) => standardElementId(document.id ?? "", section)),
+  ]
+  const sections = ids.map((id) =>
+    must(physical.tables.find((t) => t.origin.tabularSectionId === id))
   )
   return {
     trigger: makeObjectName(table.name, undefined, "immutable"),

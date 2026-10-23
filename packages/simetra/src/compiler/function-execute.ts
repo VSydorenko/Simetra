@@ -1,6 +1,6 @@
 import {
   quoteIdent,
-  type ApiRolePurpose,
+  type GrantPurpose,
   type DatabaseProvider,
 } from "simetra/model"
 import type { QualifiedName } from "./contracts"
@@ -12,7 +12,8 @@ import { generatedUnit, grantObjects, type SqlUnit } from "./sql/units"
 /**
  * `EXECUTE` функцій, які оголошують метадані (платформна спека §6.7): функцію
  * множини виду скоупу викликає політика від імені запиту, тож її виконують
- * роль користувача й сервісна; обробник підписки викликає тригер без
+ * роль користувача й сервісна, а також роль команд — від неї функції прав
+ * обчислюють скоупи (спека прав §5.1); обробник підписки викликає тригер без
  * `EXECUTE` у ролі, що пише, тож він не потрібен жодній ролі API. Функцію
  * множини `membership` сюди не передають: її гранти дає генератор членства.
  * Одна функція в кількох видах скоупу чи підписках — одна група грантів.
@@ -26,13 +27,13 @@ export function buildFunctionExecuteUnits(
 ): SqlUnit[] {
   const groups = new Map<
     string,
-    { fn: QualifiedName; purposes: ApiRolePurpose[] }
+    { fn: QualifiedName; purposes: GrantPurpose[] }
   >()
   // Функція множини (`SETOF uuid`) і обробник (`trigger`) — різні функції за
   // правилами стадії 5, тож перша назва не перекриває другу на чистій моделі.
   for (const fn of setFunctions)
     if (!groups.has(key(fn)))
-      groups.set(key(fn), { fn, purposes: ["user", "service"] })
+      groups.set(key(fn), { fn, purposes: ["user", "service", "command"] })
   for (const fn of handlers)
     if (!groups.has(key(fn))) groups.set(key(fn), { fn, purposes: [] })
   return [...groups.values()]

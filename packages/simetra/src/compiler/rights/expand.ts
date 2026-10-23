@@ -88,11 +88,17 @@ const supports = (contract: RightsContract, extent: ProjectionExtent) =>
  * рівнем. Нескоуплений об'єкт роль скоупу лише читає (Р1b-1); глобальна
  * роль і «кожен користувач» покривають нескоуплені об'єкти — в однотенантному
  * проєкті це всі; контейнерна — прив'язані до свого контейнера (Р1b-2).
+ * Спільне правило рівня для розгортання ролі й домену рівня функцій прав.
  */
-function allowedActions(
+export function allowedActions(
   level: CompiledRoleLevel,
   contract: RightsContract
 ): ReadonlySet<string> | undefined {
+  // Довідник прав належить лише своєму рівню (Р2a1-20): інакше роль скоупу
+  // через `read` нескоуплених бачила б, хто адмін платформи.
+  if (contract.system !== undefined && !ownRightsLevel(level, contract)) {
+    return undefined
+  }
   const all = new Set(contract.actions.map((a) => a.action))
   switch (level.level) {
     case "scope":
@@ -108,8 +114,20 @@ function allowedActions(
   }
 }
 
+/**
+ * Рівень системного довідника прав — його власний скоуп (Р2a1-5): вид скоупу
+ * — роль цього виду, без скоупу — глобальна роль.
+ */
+function ownRightsLevel(
+  level: CompiledRoleLevel,
+  contract: RightsContract
+): boolean {
+  if (level.level === "scope") return contract.scopeKindId === level.scopeKindId
+  return level.level === "global" && contract.scopeKindId === undefined
+}
+
 /** «Кожен користувач» не має обсягу `any`: рядки відкриває лише власність чи вимір (Р1b-3). */
-const levelAllowsExtent = (
+export const levelAllowsExtent = (
   level: CompiledRoleLevel,
   extent: ProjectionExtent
 ) => level.level !== "everyUser" || extent !== "any"
@@ -206,6 +224,8 @@ export function expandRole(
       // обсяг запису. Об'єкта запис не називав, тож непридатна пара — не
       // помилка, а просто не його пара; запис без рядків — теж не помилка.
       for (const contract of ctx.rights.values()) {
+        // Системні довідники прав дає лише явний грант (Р2a1-8).
+        if (contract.system !== undefined) continue
         const allowed = allowedActions(level, contract)
         if (allowed?.has(selector.withAction) !== true) continue
         if (grant.extent !== undefined && !supports(contract, grant.extent)) {
@@ -278,6 +298,8 @@ export function expandRole(
         // об'єкти без обсягу (Р1b-7); кастомні дії теж — об'єкт один, тож
         // UUID однозначний.
         for (const contract of ctx.rights.values()) {
+          // Системні довідники прав дає лише явний грант (Р2a1-8).
+          if (contract.system !== undefined) continue
           const allowed = allowedActions(level, contract)
           if (allowed === undefined || !supports(contract, extent)) continue
           for (const { action } of contract.actions) {

@@ -228,6 +228,11 @@ describe("cli adapter", () => {
     await expect(
       cliInput(tool("diff"), { _: [], tables: "a,,b" }, noStdin)
     ).rejects.toThrow("--tables expects a comma-separated list")
+    // `simetra roles` — без JSON: інструмент нічого не бере на вхід
+    expect(await cliInput(tool("roles"), { _: [] }, noStdin)).toEqual({
+      input: {},
+      dirs: ["./metadata"],
+    })
   })
 
   it("database flags exist only on database tools", () => {

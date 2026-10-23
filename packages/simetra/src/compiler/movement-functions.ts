@@ -580,6 +580,8 @@ function findAttribute(document: ParsedObject, id: string): Attribute {
     attributes?: Attribute[]
     tabularSections?: { attributes: Attribute[] }[]
   }
+  // Лише ТЧ з файлу: стандартна ТЧ реквізитів з id не має, а рухи
+  // називають реквізит за id з файлу.
   const all = [
     ...(data.attributes ?? []),
     ...(data.tabularSections ?? []).flatMap((s) => s.attributes),

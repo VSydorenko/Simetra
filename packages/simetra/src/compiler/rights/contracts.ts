@@ -42,6 +42,7 @@ import {
   headerReference,
   includedSets,
   isRightsContainer,
+  isUsers,
   ownershipOf,
   recordCustomAction,
   recordExtent,
@@ -116,7 +117,10 @@ function rightsContract(
     })),
   ])
 
-  // Носії вже перевірила стадія 4, тож резолв тут не падає.
+  const scopeKindId = scopeKindOf(object, references)
+  // Носії вже перевірила стадія 4, тож резолв тут не падає, а ціль власності
+  // — «Користувачі» чи учасник виду скоупу самого об'єкта (довідник членства
+  // чи прийняте джерело того самого виду).
   const ownership = ownershipOf(object).map((carrier, index) => {
     const resolved = resolveCarrier(
       object,
@@ -125,7 +129,12 @@ function rightsContract(
       ctx
     )
     if (!resolved.ok) throw new Error("internal: unchecked rights carrier")
-    return resolved.contract
+    return {
+      ...resolved.contract,
+      owner: isUsers(carrierTarget(resolved.terminal))
+        ? ({ users: true } as const)
+        : { membership: must(scopeKindId) },
+    }
   })
   const bindingCarrier = bindingOf(object)
   let binding: RightsContract["binding"]
@@ -208,7 +217,7 @@ function rightsContract(
       }
     }),
   ]
-  const scopeKindId = scopeKindOf(object, references)
+  const system = def.rightsSystem?.(object.data)
   return {
     objectId,
     kindLabel: must(kindLabelOf(object)),
@@ -219,6 +228,7 @@ function rightsContract(
     ...(isRightsContainer(object) ? { container: true as const } : {}),
     ...(binding === undefined ? {} : { binding }),
     access,
+    ...(system === undefined ? {} : { system }),
   }
 }
 
@@ -257,15 +267,19 @@ export function accessDimensionContracts(
         ctx.byId.get(toId(`${relationAt}/object`, "dimension.relationObject"))
       )
       const table = must(mainTableOf(physical, must(object.id)))
-      const column = (field: "subject" | "value") =>
+      const field = (name: "subject" | "value") =>
         must(
           elementField(
             object,
-            toId(`${relationAt}/${field}`, "dimension.relationField"),
-            relation[field],
+            toId(`${relationAt}/${name}`, "dimension.relationField"),
+            relation[name],
             ctx
           )
-        ).column
+        )
+      const column = (name: "subject" | "value") => field(name).column
+      // Ціль суб'єкта стадія 4 вже звузила до «Користувачів» чи довідника
+      // членства виду зв'язку (Р2a1-27).
+      const subject = must(field("subject").target)
       return {
         dimensionId,
         name: dimension.name,
@@ -275,6 +289,9 @@ export function accessDimensionContracts(
             objectId: must(object.id),
             table: { schema: table.schema, name: table.name },
             subject: column("subject"),
+            subjectTarget: isUsers(subject)
+              ? { users: true }
+              : { membership: must(scopeKindOf(subject, references)) },
             value: column("value"),
           },
         },

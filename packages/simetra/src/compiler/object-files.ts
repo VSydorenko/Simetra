@@ -42,7 +42,11 @@ export function elementsAt(owner: Json, field: string, base = ""): Located[] {
   )
 }
 
-/** Табличні частини — лише у виду, якому реєстр їх дозволяє. */
+/**
+ * Табличні частини — лише у виду, якому реєстр їх дозволяє. Лише ТЧ з файлу:
+ * стандартна ТЧ не має у файлі ні імені, ні `physicalName` — її таблицю
+ * називає ім'я об'єкта, а `fix` займає його через `standardTabularSections`.
+ */
 export function sectionsOf(file: ObjectFile): Located[] {
   return file.def.tabularSectionColumns === undefined
     ? []

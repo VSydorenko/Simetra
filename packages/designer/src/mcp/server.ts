@@ -25,7 +25,10 @@ export function createMcpServer(o: McpToolOptions): McpServer {
       : [
           o.allowDatabaseWrite === true
             ? "Database writes are enabled: apply needs confirm: true and the planHash of the plan you showed."
-            : databaseWriteHint(o.launchArgs, { refusal: false }),
+            : databaseWriteHint(o.launchArgs, {
+                refusal: false,
+                tools: "apply and roles",
+              }),
         ]),
     "dryRun does not apply to apply: review with plan, and rehearse it before applying.",
   ].join(" ")

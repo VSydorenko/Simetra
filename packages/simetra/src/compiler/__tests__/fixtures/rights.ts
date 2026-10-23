@@ -39,9 +39,28 @@ export const ROLE_FILE = (name: string) => `roles/${name}/${name}.meta.json`
 export const SET_FILE = (name: string) =>
   `rights-sets/${name}/${name}.meta.json`
 
+export const ORG_ROLES_ID = uuid(6230)
+export const ORG_ASSIGNMENTS_ID = uuid(6231)
+export const GLOBAL_ROLES_ID = uuid(6232)
+export const GLOBAL_ASSIGNMENTS_ID = uuid(6233)
+export const ORG_ROLES_FILE = "catalogs/OrgRoles/OrgRoles.meta.json"
+export const ORG_ASSIGNMENTS_FILE =
+  "catalogs/OrgRoleAssignments/OrgRoleAssignments.meta.json"
+export const GLOBAL_ROLES_FILE = "catalogs/GlobalRoles/GlobalRoles.meta.json"
+export const GLOBAL_ASSIGNMENTS_FILE =
+  "catalogs/GlobalRoleAssignments/GlobalRoleAssignments.meta.json"
+
 export const GRANT_FILE = "custom-tables/RoleGrant/RoleGrant.meta.json"
 const GRANT_ID = uuid(6110)
 export const GRANTS_SOURCE_ID = uuid(6121)
+export const GLOBAL_GRANTS_SOURCE_ID = uuid(6123)
+
+export const MEMBERSHIP_FILE = "custom-tables/Membership/Membership.meta.json"
+export const MEMBERSHIP_ID = uuid(6100)
+export const MEMBERS_SOURCE_ID = uuid(6120)
+export const MEMBER_REGION_FILE =
+  "information-registers/MemberRegion/MemberRegion.meta.json"
+export const TEAM_KIND_ID = uuid(6008)
 
 const ref = (kind: string, name: string) => ({ kind, name })
 
@@ -54,7 +73,8 @@ function refAttribute(
   return { id: uuid(id), name, physicalName, type: "Ref", ref: target }
 }
 
-function catalog(
+/** Довідник фікстури у виді `org`; `rest` перевизначає поля. */
+export function catalog(
   id: string,
   name: string,
   physicalName: string,
@@ -71,20 +91,21 @@ function catalog(
   }
 }
 
+/** Вид скоупу `org` фікстури: членство дає довідник `OrgMember`. */
+const ORG_SCOPE_KIND = {
+  id: ORG_KIND_ID,
+  name: "org",
+  physicalName: "org_id",
+  root: { object: ref("Catalog", "Organization") },
+  setFunction: "membership",
+}
+
 function defaults(): Record<string, Record<string, unknown>> {
   return {
     "project.meta.json": {
       name: "RightsApp",
       database: { provider: "supabase" },
-      scopeKinds: [
-        {
-          id: ORG_KIND_ID,
-          name: "org",
-          physicalName: "org_id",
-          root: { object: ref("Catalog", "Organization") },
-          setFunction: "membership",
-        },
-      ],
+      scopeKinds: [ORG_SCOPE_KIND],
     },
     "catalogs/Organization/Organization.meta.json": catalog(
       uuid(6002),
@@ -122,7 +143,7 @@ function defaults(): Record<string, Record<string, unknown>> {
         refAttribute(6013, "region", "region_id", ref("Catalog", "Region")),
       ],
     },
-    "information-registers/MemberRegion/MemberRegion.meta.json": {
+    [MEMBER_REGION_FILE]: {
       id: MEMBER_REGION_ID,
       kind: "InformationRegister",
       name: "MemberRegion",
@@ -211,9 +232,14 @@ const ANNOUNCEMENT = {
  * кроки. Контейнерна роль вимагає прапорця контейнера на `Project`.
  * Нескоуплений документ `Announcement` має `post`, якого рівень скоупу на
  * ньому не дає (Р1b-1). Грантів типові ролі й набори не мають.
+ * Системні довідники прав — по одному на (роль, рівень) для рівнів `org` і
+ * глобального (Р2a1-5); вони мають лише `read` і поза селекторами (Р2a1-8),
+ * тож рядків проєкції інших тестів не змінюють.
  */
 export function rolesAndSets(): Record<string, Record<string, unknown>> {
   return {
+    ...systemCatalogs("org"),
+    ...systemCatalogs("none"),
     [ANNOUNCEMENT_FILE]: ANNOUNCEMENT,
     [SET_FILE("TaskReaders")]: rightsSet(TASK_READERS_ID, "TaskReaders"),
     [SET_FILE("TaskEditors")]: rightsSet(TASK_EDITORS_ID, "TaskEditors", {
@@ -240,20 +266,304 @@ export function rolesAndSets(): Record<string, Record<string, unknown>> {
   }
 }
 
+/** Довідники «Ролі» й «Призначення ролей» рівня: `org` чи глобального. */
+function systemCatalogs(
+  scope: "org" | "none"
+): Record<string, Record<string, unknown>> {
+  const [prefix, rolesFile, rolesId, assignmentsFile, assignmentsId] =
+    scope === "org"
+      ? ([
+          "org",
+          ORG_ROLES_FILE,
+          ORG_ROLES_ID,
+          ORG_ASSIGNMENTS_FILE,
+          ORG_ASSIGNMENTS_ID,
+        ] as const)
+      : ([
+          "global",
+          GLOBAL_ROLES_FILE,
+          GLOBAL_ROLES_ID,
+          GLOBAL_ASSIGNMENTS_FILE,
+          GLOBAL_ASSIGNMENTS_ID,
+        ] as const)
+  const name = prefix === "org" ? "Org" : "Global"
+  return {
+    [rolesFile]: systemCatalog(
+      rolesId,
+      `${name}Roles`,
+      `${prefix}_roles`,
+      "rightsRoles",
+      scope
+    ),
+    [assignmentsFile]: systemCatalog(
+      assignmentsId,
+      `${name}RoleAssignments`,
+      `${prefix}_role_assignments`,
+      "roleAssignments",
+      scope
+    ),
+  }
+}
+
+/** Системний довідник прав (Р2a1-5) з роллю й рівнем — власним скоупом. */
+export function systemCatalog(
+  id: string,
+  name: string,
+  physicalName: string,
+  role: "rightsRoles" | "roleAssignments",
+  scope: string
+) {
+  return catalog(id, name, physicalName, { role, scope })
+}
+
+/** Шар перевизначень: `null` прибирає файл з проєкту. */
+export type Layer = Record<string, Record<string, unknown> | null>
+
+/** Шар, що прибирає файли за шляхами. */
+export const without = (...paths: string[]): Layer =>
+  Object.fromEntries(paths.map((path) => [path, null]))
+
 /**
  * Ролі й набори фікстури з шарами перевизначень: кожен шар зливається з
- * файлом за шляхом на верхньому рівні ключів, пізніший — поверх раннього.
+ * файлом за шляхом на верхньому рівні ключів, пізніший — поверх раннього;
+ * `null` прибирає файл.
  */
-export function withRoles(
-  ...layers: Record<string, Record<string, unknown>>[]
-): Map<string, string> {
+export function withRoles(...layers: Layer[]): Map<string, string> {
   const merged = rolesAndSets()
+  const removed = new Set<string>()
   for (const layer of layers) {
     for (const [path, fields] of Object.entries(layer)) {
-      merged[path] = { ...merged[path], ...fields }
+      if (fields === null) {
+        delete merged[path]
+        removed.add(path)
+      } else {
+        merged[path] = { ...merged[path], ...fields }
+        removed.delete(path)
+      }
     }
   }
-  return rightsFiles(merged)
+  const files = rightsFiles(merged)
+  // Типові файли `rightsFiles` теж можна прибрати: шар знає лише шлях.
+  for (const path of removed) files.delete(path)
+  return files
+}
+
+/**
+ * Другий вид скоупу `team` без членства: зовнішній корінь і дослівна функція
+ * множини, тож проєкт компілюється без довідника членства виду.
+ */
+export function teamScopeKind(): Layer {
+  return {
+    [PROJECT_FILE]: {
+      scopeKinds: [
+        ORG_SCOPE_KIND,
+        {
+          id: TEAM_KIND_ID,
+          name: "team",
+          physicalName: "team_id",
+          root: {
+            external: { schema: "public", table: "teams", column: "id" },
+          },
+          setFunction: { schema: "public", name: "team_ids" },
+        },
+      ],
+    },
+  }
+}
+
+export const TEAM_ROLES_FILE = "catalogs/TeamRoles/TeamRoles.meta.json"
+export const TEAM_ASSIGNMENTS_FILE =
+  "catalogs/TeamRoleAssignments/TeamRoleAssignments.meta.json"
+export const TEAM_LEAD_ID = uuid(6410)
+
+/**
+ * Другий вид скоупу `team` з власним членством: корінь `Team`, учасники
+ * `TeamMember`, системні довідники прав `TeamRoles`/`TeamRoleAssignments`,
+ * довідник `TeamNote` і роль `TeamLead` з `read@any` на ньому. Так один
+ * проєкт має два види скоупу, кожен зі своїми рівнем прав і учасниками.
+ */
+export function secondScopeKind(): Layer {
+  return {
+    [PROJECT_FILE]: {
+      scopeKinds: [
+        ORG_SCOPE_KIND,
+        {
+          id: TEAM_KIND_ID,
+          name: "team",
+          physicalName: "team_id",
+          root: { object: ref("Catalog", "Team") },
+          setFunction: "membership",
+        },
+      ],
+    },
+    "catalogs/Team/Team.meta.json": catalog(uuid(6400), "Team", "team", {
+      scope: "team",
+    }),
+    "catalogs/TeamMember/TeamMember.meta.json": catalog(
+      uuid(6401),
+      "TeamMember",
+      "team_member",
+      {
+        scope: "team",
+        membership: { user: "user" },
+        attributes: [
+          refAttribute(6402, "user", "user_id", ref("Catalog", "Users")),
+        ],
+      }
+    ),
+    "catalogs/TeamNote/TeamNote.meta.json": catalog(
+      uuid(6403),
+      "TeamNote",
+      "team_note",
+      { scope: "team" }
+    ),
+    [TEAM_ROLES_FILE]: systemCatalog(
+      uuid(6404),
+      "TeamRoles",
+      "team_roles",
+      "rightsRoles",
+      "team"
+    ),
+    [TEAM_ASSIGNMENTS_FILE]: systemCatalog(
+      uuid(6405),
+      "TeamRoleAssignments",
+      "team_role_assignments",
+      "roleAssignments",
+      "team"
+    ),
+    [ROLE_FILE("TeamLead")]: role(
+      TEAM_LEAD_ID,
+      "TeamLead",
+      { scopeKind: "team" },
+      {
+        grants: [grant(objects(["Catalog", "TeamNote"]), ["read"], "any")],
+      }
+    ),
+  }
+}
+
+/** Прийнята таблиця членства виду `org`; `uniques` дає `UNIQUE (scope, id)`. */
+export function membershipTable(overrides: Record<string, unknown> = {}) {
+  return {
+    id: MEMBERSHIP_ID,
+    kind: "CustomTable",
+    name: "Membership",
+    physicalName: "membership",
+    kindLabel: "membership",
+    scope: "org",
+    columns: [
+      column(6101, "id", "id", "UUID"),
+      column(6102, "orgId", "org_id", "UUID"),
+      column(6103, "userId", "user_id", "UUID"),
+      column(6104, "isActive", "is_active", "Boolean"),
+    ],
+    primaryKey: { columns: ["id"] },
+    uniques: [{ columns: ["orgId", "id"] }],
+    scopeColumn: "orgId",
+    ...overrides,
+  }
+}
+
+/** Прийняте джерело членства виду `org` над `Membership`. */
+export function membersSource(overrides: Record<string, unknown> = {}) {
+  return {
+    id: MEMBERS_SOURCE_ID,
+    name: "members",
+    scopeKind: "org",
+    table: ref("CustomTable", "Membership"),
+    columns: { scope: "orgId", user: "userId", active: "isActive" },
+    ...overrides,
+  }
+}
+
+/**
+ * Шар: членство виду `org` дає прийнята таблиця, а не `OrgMember` (Р1a-17).
+ * Функція множини — дослівна; довідник членства й зв'язок над ним прибрано,
+ * виконавець задачі посилається на прийняту таблицю. Саме джерело членства
+ * тест додає сам — разом з іншими полями проєкту.
+ */
+export function adoptedMembership(): Layer {
+  return {
+    [PROJECT_FILE]: {
+      scopeKinds: [
+        {
+          ...ORG_SCOPE_KIND,
+          setFunction: { schema: "public", name: "org_ids" },
+        },
+      ],
+    },
+    [TASK_FILE]: {
+      attributes: [
+        refAttribute(
+          6011,
+          "assignee",
+          "assignee_id",
+          ref("CustomTable", "Membership")
+        ),
+      ],
+    },
+    [MEMBERSHIP_FILE]: membershipTable(),
+    ...without(MEMBER_FILE, MEMBER_REGION_FILE),
+  }
+}
+
+/** Джерело призначень глобального рівня над `RoleGrant`. */
+export function globalGrantsSource() {
+  return grantsSource({
+    id: GLOBAL_GRANTS_SOURCE_ID,
+    name: "globalGrants",
+    assignedOn: "global",
+    columns: { member: "memberId", role: "roleKey" },
+  })
+}
+
+/**
+ * Однотенантний проєкт прав: без видів скоупу, «Користувачі», контейнер
+ * `Project`, задача з прив'язкою до нього, контейнерна роль `ProjectLead` з
+ * `read@any` на задачі й глобальні системні довідники — контейнерні
+ * призначення без виду скоупу лежать у глобальному довіднику (Р2a1-7).
+ * Перевизначення зливається з файлом за шляхом, як у `rightsFiles`.
+ */
+export function singleTenantRights(
+  overrides: Record<string, Record<string, unknown>> = {}
+): Map<string, string> {
+  const files: Record<string, Record<string, unknown>> = {
+    "project.meta.json": {
+      name: "SingleTenantRights",
+      database: { provider: "supabase" },
+    },
+    [USERS_FILE]: catalog(uuid(6003), "Users", "users", {
+      role: "users",
+      scope: "none",
+    }),
+    [PROJECT_CATALOG_FILE]: catalog(PROJECT_ID, "Project", "project", {
+      scope: "none",
+      rightsContainer: true,
+    }),
+    [TASK_FILE]: {
+      id: TASK_ID,
+      kind: "Document",
+      name: "Task",
+      physicalName: "task",
+      kindLabel: "task",
+      scope: "none",
+      containerBinding: "project",
+      attributes: [
+        refAttribute(6012, "project", "project_id", ref("Catalog", "Project")),
+      ],
+    },
+    [ROLE_FILE("ProjectLead")]: role(
+      PROJECT_LEAD_ID,
+      "ProjectLead",
+      { container: ref("Catalog", "Project") },
+      { grants: [grant(objects(["Document", "Task"]), ["read"], "any")] }
+    ),
+    ...systemCatalogs("none"),
+  }
+  for (const [path, fields] of Object.entries(overrides)) {
+    files[path] = { ...files[path], ...fields }
+  }
+  return metaFiles(files)
 }
 
 /** Вимір `region`: значення учасника — рядки зв'язку `MemberRegion`. */

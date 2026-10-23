@@ -141,6 +141,13 @@ export const COMPILER_RULES = [
   "rights.custom-table-no-contract",
   "rights.object-without-rights",
   "rights.custom-action-multi-object",
+  "rights.system-catalog-missing",
+  "rights.system-catalog-duplicate",
+  "rights.system-catalog-scope",
+  "rights.system-catalog-description",
+  "rights.system-catalog-parallel",
+  "rights.system-catalog-custom-action",
+  "rights.adopted-source-unsupported",
   "reference.not-referenceable",
   "reference.custom-table-key",
   "reference.custom-table-deferrable-key",
@@ -265,6 +272,8 @@ export const COMPILER_RULES = [
   "plan.fingerprint-disagrees",
   "plan.schema-only-proof",
   "plan.owner-mismatch",
+  "plan.platform-role-missing",
+  "plan.platform-role-shape",
   "plan.type-guard-unsupported",
   "plan.type-change-dependent",
   "plan.promotion-record-missing",
@@ -295,6 +304,7 @@ export const COMPILER_RULES = [
   "plan.provider-trigger-taken",
   "plan.numbering-not-generated",
   "database.failed",
+  "roles.create-role-denied",
   "introspect.unrepresentable",
   "introspect.identity-conflict",
   "introspect.project-mismatch",
@@ -370,7 +380,9 @@ export interface Diagnostic {
  * промоції (`*`, ціле значення рядка, сигнатура) переписана коректно, але
  * змінює форму результату для викликачів — це рішення скіла конверсії, а не
  * помилка переписування. Динамічний SQL поза кандидатами промоції статично
- * не видно: попередження називає межу, а не порушення.
+ * не видно: попередження називає межу, а не порушення. Прийняте джерело поряд
+ * із ролями ще не дає прав (Права-2d): межа fail-closed — прав менше, а не
+ * більше, — тож попередження, а не помилка (Р2a1-21).
  */
 const WARNING_RULES: ReadonlySet<RuleCode> = new Set<RuleCode>([
   "physical.reserved-word",
@@ -382,6 +394,7 @@ const WARNING_RULES: ReadonlySet<RuleCode> = new Set<RuleCode>([
   "identity.kind-label-retained",
   "rewrite.contract-change",
   "rewrite.dynamic-sql-unscoped",
+  "rights.adopted-source-unsupported",
 ])
 
 /** Діагностика з каталогу повідомлень; серйозність — властивість правила. */

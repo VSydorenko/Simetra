@@ -20,6 +20,7 @@ import {
   SUPABASE_SCHEMAS,
   applyStateOf,
   checkOwnerMembership,
+  checkPlatformRoles,
   compareWithDesired,
   desiredForApply,
   engineScope,
@@ -470,14 +471,25 @@ export const diffTool = defineTool({
       async (db) => {
         // Та сама передперевірка власників, що в плані: двигун не будує
         // витягу цілі з об'єктом ролі, членом якої роль сесії не є
+        const reader = createApplyDatabase({ readOnly: true })
         const membership = await checkOwnerMembership(
-          createApplyDatabase({ readOnly: true }),
+          reader,
           db.target,
           desired.scope,
           "engine.owner-not-member"
         )
         if (membership.refusal !== undefined)
-          return { refusal: membership.refusal }
+          return { refusal: [membership.refusal] }
+        // Платформні ролі — до тіні, як у плані: тінь без ролі впала б
+        // сирою помилкою гранту (Р2a1-2)
+        const roles = await checkPlatformRoles(
+          reader,
+          db.target,
+          db.shadowBase,
+          desired.sql,
+          await loadSqlParser()
+        )
+        if (roles.refusal !== undefined) return { refusal: roles.refusal }
         return {
           comparison: await compareWithDesired(
             engine,
@@ -504,7 +516,7 @@ export const diffTool = defineTool({
         changes: [],
         diagnostics: [
           ...compiled.diagnostics,
-          fromEngine(compared.value.refusal),
+          ...compared.value.refusal.map(fromEngine),
         ],
       }
     const comparison = compared.value.comparison

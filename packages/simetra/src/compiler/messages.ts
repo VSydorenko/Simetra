@@ -1012,8 +1012,9 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     uk: (p) => `Ім'я "${p.name}" не відповідає стилю імен проєкту ${p.style}`,
   },
   "identity.name-reserved": {
-    en: (p) => `Name "${p.name}" is taken by a standard attribute of ${p.kind}`,
-    uk: (p) => `Ім'я "${p.name}" зайняте стандартним реквізитом виду ${p.kind}`,
+    en: (p) =>
+      `Name "${p.name}" is taken by a standard element of the kind ${p.kind}`,
+    uk: (p) => `Ім'я "${p.name}" зайняте стандартним елементом виду ${p.kind}`,
   },
   "reference.unresolved": {
     en: (p) => `${p.kind} "${p.name}" does not exist`,
@@ -1785,9 +1786,13 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "rights.scope-without-membership": {
     en: (p) =>
-      `The role is assigned on scope kind "${p.scopeKind}", which has no membership`,
+      p.container === undefined
+        ? `The role is assigned on scope kind "${p.scopeKind}", which has no membership`
+        : `Container ${p.container} lives in scope kind "${p.scopeKind}", which has no membership`,
     uk: (p) =>
-      `Роль має рівень виду скоупу "${p.scopeKind}", у якого немає членства`,
+      p.container === undefined
+        ? `Роль має рівень виду скоупу "${p.scopeKind}", у якого немає членства`
+        : `Контейнер ${p.container} у виді скоупу "${p.scopeKind}" без членства`,
     hint: {
       en: "Declare a membership catalog of the scope kind or an adopted membership source; a scope role is assigned to members.",
       uk: "Оголосіть довідник членства виду скоупу чи прийняте джерело членства: роль рівня скоупу призначають учаснику.",
@@ -1940,6 +1945,73 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       en: "One name in different objects is a different custom action; grant it on one object at a time.",
       uk: "Одне ім'я в різних об'єктах — різні кастомні дії; давайте її на один об'єкт за раз.",
     },
+  },
+  "rights.system-catalog-missing": {
+    en: (p) =>
+      `Roles of the ${p.level} level have no catalog with role ${p.missing}`,
+    uk: (p) => `Ролі рівня ${p.level} не мають довідника з роллю ${p.missing}`,
+    hint: {
+      en: (p) =>
+        `Declare one catalog with role ${p.missing} on this level, for example simetra create '{"kind":"Catalog","name":"<Name>","data":{"role":"${p.missing}","scope":"${p.level === "global" ? "none" : p.level}"}}', or adopt an assignment source for the level.`,
+      uk: (p) =>
+        `Оголосіть на цьому рівні один довідник з роллю ${p.missing}, наприклад simetra create '{"kind":"Catalog","name":"<Name>","data":{"role":"${p.missing}","scope":"${p.level === "global" ? "none" : p.level}"}}', або прийняте джерело призначень рівня.`,
+    },
+  },
+  "rights.system-catalog-duplicate": {
+    en: (p) =>
+      `The ${p.level} level already has a catalog with role ${p.role} in ${p.firstFile}`,
+    uk: (p) =>
+      `Рівень ${p.level} уже має довідник з роллю ${p.role} у ${p.firstFile}`,
+    hint: {
+      en: "Keep one catalog per role and level; extend it with your own attributes instead.",
+      uk: "Лишіть один довідник на роль і рівень; розширюйте його власними реквізитами.",
+    },
+  },
+  "rights.system-catalog-scope": {
+    en: (p) =>
+      `${p.name} is scoped by "${p.scopeKind}", which has no membership catalog`,
+    uk: (p) =>
+      `${p.name} скоуплено видом "${p.scopeKind}", у якого немає довідника членства`,
+    hint: {
+      en: "The assignment subject is a member of the scope kind: declare its membership catalog; members of an adopted membership source are not assignable yet.",
+      uk: "Суб'єкт призначення — учасник виду скоупу: оголосіть довідник членства виду; учасників прийнятого джерела членства поки призначати не можна.",
+    },
+  },
+  "rights.system-catalog-description": {
+    en: (p) =>
+      `${p.name} keeps custom role names in its description, but descriptionLength is 0`,
+    uk: (p) =>
+      `${p.name} зберігає назви кастомних ролей у найменуванні, але descriptionLength дорівнює 0`,
+    hint: {
+      en: "Give the catalog a positive descriptionLength.",
+      uk: "Задайте довіднику додатний descriptionLength.",
+    },
+  },
+  "rights.system-catalog-parallel": {
+    en: (p) =>
+      `The ${p.level} level gets its assignments from the adopted source "${p.source}", so its rights catalog would be a parallel system`,
+    uk: (p) =>
+      `Рівень ${p.level} бере призначення з прийнятого джерела "${p.source}", тож його довідник прав був би паралельною системою`,
+    hint: {
+      en: "Keep either the adopted source or the rights catalogs on a level: remove the catalog, or promote the source table.",
+      uk: "Лишіть на рівні або прийняте джерело, або довідники прав: приберіть довідник чи промотуйте таблицю джерела.",
+    },
+  },
+  "rights.system-catalog-custom-action": {
+    en: (p) =>
+      `${p.name} is a rights catalog, so it cannot declare the custom action "${p.action}"`,
+    uk: (p) =>
+      `${p.name} — довідник прав, тож кастомної дії "${p.action}" в нього не буває`,
+    hint: {
+      en: "Rights catalogs are written only by the rights administration action; remove the custom action.",
+      uk: "Довідники прав пишуться лише дією адміністрування прав; приберіть кастомну дію.",
+    },
+  },
+  "rights.adopted-source-unsupported": {
+    en: (p) =>
+      `Rights from the adopted source "${p.source}" are not computed yet: members of the source will not get rights on the objects of the kind`,
+    uk: (p) =>
+      `Права з прийнятого джерела "${p.source}" ще не обчислюються: учасники джерела не отримають прав на об'єкти виду`,
   },
   "rights.ownership-target": {
     en: (p) =>
@@ -3369,6 +3441,26 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: `План не записано. Керовані об'єкти належать ролі, що застосовує: інший власник може обходити захист рядків, а об'єкт, який план знімає чи змінює, потребує власника, членом якого є роль застосування. ${OWNER_RECIPE.uk} й сплануйте знову.`,
     },
   },
+  "plan.platform-role-missing": {
+    en: (p) =>
+      `The platform role ${p.role} that the generated SQL grants to does not exist on the ${p.server} server`,
+    uk: (p) =>
+      `Платформної ролі ${p.role}, якій згенерований SQL дає гранти, немає на сервері ${p.server === "shadow" ? "тіні" : "цілі"}`,
+    hint: {
+      en: "Nothing was planned or created. Platform roles live in the cluster, not in the database, so plan and apply do not create them: run `simetra roles` once with a role that has CREATEROLE, and run the command again.",
+      uk: "Нічого не сплановано й не створено. Платформні ролі живуть у кластері, а не в базі, тож план і застосування їх не створюють: один раз запустіть `simetra roles` від ролі з CREATEROLE і повторіть команду.",
+    },
+  },
+  "plan.platform-role-shape": {
+    en: (p) =>
+      `The platform role ${p.role} on the ${p.server} server has an unsafe shape (${p.violation}): it must be NOLOGIN NOINHERIT with no other attribute, belong to no role, and its members may only administer it`,
+    uk: (p) =>
+      `Платформна роль ${p.role} на сервері ${p.server === "shadow" ? "тіні" : "цілі"} має небезпечну форму (${p.violation}): вона мусить бути NOLOGIN NOINHERIT без інших атрибутів, ні в що не входити, а її члени можуть лише керувати нею`,
+    hint: {
+      en: "Nothing was planned or created. `simetra roles` does not change an existing role: fix it by hand with `ALTER ROLE <role> NO<attribute>` for an attribute, or `REVOKE <role> FROM <member>` (or revoke the role it belongs to) for a membership, and run the command again.",
+      uk: "Нічого не сплановано й не створено. `simetra roles` наявну роль не змінює: виправте її вручну — `ALTER ROLE <роль> NO<атрибут>` для атрибута чи `REVOKE <роль> FROM <член>` (або відкличте роль, у яку вона входить) для членства — і повторіть команду.",
+    },
+  },
   "plan.type-guard-unsupported": {
     en: (p) =>
       p.reason === "equality"
@@ -3717,6 +3809,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     hint: {
       en: "The connection itself worked; the failure happened during the database work. The text of the driver error is withheld because it may carry credentials; look up the SQLSTATE, or rerun after fixing the database.",
       uk: "Саме підключення вдалося; збій стався під час роботи з базою. Текст помилки драйвера приховано, бо він може нести облікові дані; знайдіть SQLSTATE або повторіть після виправлення бази.",
+    },
+  },
+  "roles.create-role-denied": {
+    en: (p) =>
+      `The connecting role cannot create the platform role ${p.role} on the ${p.server} server: it has neither CREATEROLE nor SUPERUSER`,
+    uk: (p) =>
+      `Роль підключення не може створити платформну роль ${p.role} на сервері ${p.server === "shadow" ? "тіні" : "цілі"}: у неї немає ні CREATEROLE, ні SUPERUSER`,
+    hint: {
+      en: "Nothing was created on any server. Run `simetra roles` with a connection whose role has CREATEROLE, or ask the database administrator to create the role as NOLOGIN NOINHERIT.",
+      uk: "Ні на одному сервері нічого не створено. Запустіть `simetra roles` з підключенням, роль якого має CREATEROLE, або попросіть адміністратора бази створити роль як NOLOGIN NOINHERIT.",
     },
   },
   "introspect.unrepresentable": {

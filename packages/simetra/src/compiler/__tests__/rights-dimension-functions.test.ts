@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest"
 import type { Diagnostic } from "simetra/compiler"
-import { MEMBER_FILE, compileRights, rightsFiles } from "./fixtures/rights"
+import {
+  MEMBER_FILE,
+  compileRights,
+  rightsFiles,
+  rolesAndSets,
+} from "./fixtures/rights"
 import { acceptDebt, uuid } from "./helpers"
 
 const PROJECT = "project.meta.json"
@@ -125,6 +130,45 @@ describe("access dimension value function", () => {
       },
     ])
   })
+
+  // Таблиці системних довідників прав (основні й ТЧ дельти) — дані прав:
+  // множина значень виміру не може залежати від гранту.
+  it.each([
+    {
+      case: "directly",
+      sql: fn(
+        "region_ids",
+        CLOSED,
+        "SELECT a.container FROM public.org_role_assignments a"
+      ),
+      chain: "public.region_ids",
+      object: "public.org_role_assignments",
+    },
+    {
+      case: "through a project sql function",
+      sql:
+        fn("region_ids", CLOSED, "SELECT public.helper_ids()") +
+        fn(
+          "helper_ids",
+          LINK,
+          "SELECT d.dimension FROM public.org_roles_delta d"
+        ),
+      chain: "public.region_ids → public.helper_ids",
+      object: "public.org_roles_delta",
+    },
+  ])(
+    "rejects a dimension function that reads a rights catalog $case",
+    async ({ sql, chain, object }) => {
+      expect(rightsErrors(await errors(sql, rolesAndSets()))).toEqual([
+        {
+          code: "rights.dimension-function-reads-rights",
+          file: PROJECT,
+          pointer: POINTER,
+          params: { dimension: "region", chain, object },
+        },
+      ])
+    }
+  )
 
   it("allows generated membership functions and builtins", async () => {
     expect(

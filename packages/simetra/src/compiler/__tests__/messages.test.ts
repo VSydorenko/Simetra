@@ -9,6 +9,7 @@ import {
 } from "simetra/compiler"
 import { metaFiles, project } from "./helpers"
 import { diagnostic } from "../diagnostics"
+import type { SetFunctionReason } from "../sql/function-shape"
 
 const ALL_RULES: RuleCode[] = [...SCHEMA_RULES, ...COMPILER_RULES]
 
@@ -151,6 +152,30 @@ describe("messages catalog", () => {
     )
   })
 
+  it("renders every closed-form reason of a scope set function as a sentence", () => {
+    const reasons: SetFunctionReason[] = [
+      "language",
+      "security",
+      "searchPath",
+      "unqualified",
+      "sqlBody",
+    ]
+    for (const locale of ["en", "uk"] as const) {
+      for (const reason of reasons) {
+        const { message } = localize(
+          diagnostic("scope.set-function-signature", "", "", {
+            function: "public.f",
+            reason,
+          }),
+          locale
+        )
+        expect(message, `${reason} ${locale}`).not.toMatch(
+          new RegExp(`: ${reason}$`)
+        )
+      }
+    }
+  })
+
   it("renders every fill problem of promote.expression-invalid as a sentence", () => {
     const reasons = [
       "noKey",
@@ -279,6 +304,49 @@ describe("messages catalog", () => {
     )
     expect(uk.hint).toBe(
       "Приберіть оператор; simetra fix прибирає його, коли всі цілі належать платформі, — оператор, що називає й чужі об'єкти, ділять вручну."
+    )
+  })
+
+  it.each([
+    { level: "org", scope: "org" },
+    { level: "global", scope: "none" },
+  ])(
+    "rights.system-catalog-missing on the $level level hints simetra create",
+    ({ level, scope }) => {
+      const d = diagnostic("rights.system-catalog-missing", "", "", {
+        level,
+        missing: "roleAssignments",
+      })
+      const command = `simetra create '{"kind":"Catalog","name":"<Name>","data":{"role":"roleAssignments","scope":"${scope}"}}'`
+      for (const hint of [d.hint, localize(d, "uk").hint]) {
+        expect(hint).toContain(command)
+      }
+    }
+  )
+
+  it("rights.adopted-source-unsupported names the consequence without a plan label", () => {
+    const d = diagnostic("rights.adopted-source-unsupported", "", "", {
+      source: "grants",
+    })
+    expect(d.severity).toBe("warning")
+    expect(d.message).toBe(
+      'Rights from the adopted source "grants" are not computed yet: members of the source will not get rights on the objects of the kind'
+    )
+    expect(localize(d, "uk").message).toBe(
+      `Права з прийнятого джерела "grants" ще не обчислюються: учасники джерела не отримають прав на об'єкти виду`
+    )
+  })
+
+  it("rights.scope-without-membership names the container when there is one", () => {
+    const d = diagnostic("rights.scope-without-membership", "", "", {
+      scopeKind: "team",
+      container: "Squad",
+    })
+    expect(d.message).toBe(
+      'Container Squad lives in scope kind "team", which has no membership'
+    )
+    expect(localize(d, "uk").message).toBe(
+      'Контейнер Squad у виді скоупу "team" без членства'
     )
   })
 

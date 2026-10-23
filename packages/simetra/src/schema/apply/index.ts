@@ -232,6 +232,15 @@ export {
   type PlanOutcome,
 } from "./plan"
 export {
+  checkPlatformRoles,
+  ensurePlatformRoles,
+  platformRoleRefusals,
+  readPlatformRoles,
+  requiredPlatformRoles,
+  type PlatformRoleRow,
+  type RoleServer,
+} from "./platform-roles"
+export {
   planChange,
   statementSubjects,
   type StatementSubject,

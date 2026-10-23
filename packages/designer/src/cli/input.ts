@@ -40,6 +40,7 @@ const ERGONOMIC = new Set<string>([
   "diff",
   "plan",
   "apply",
+  "roles",
 ])
 
 /** `a,b` → `["a", "b"]`; порожні елементи — помилка написання, не фільтр. */
@@ -129,7 +130,7 @@ export async function cliInput(
       dirs: [trimSlash(positional[0] ?? DEFAULT_DIR)],
     }
   }
-  if (tool.name === "plan") {
+  if (tool.name === "plan" || tool.name === "roles") {
     return { input: {}, dirs: [trimSlash(positional[0] ?? DEFAULT_DIR)] }
   }
   if (tool.name === "apply") {

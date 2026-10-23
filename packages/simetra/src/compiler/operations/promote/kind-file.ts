@@ -10,6 +10,7 @@ import {
 import type { CompiledModel } from "../../compile"
 import { diagnostic, type Diagnostic } from "../../diagnostics"
 import { isRecord, type Json } from "../../object-files"
+import { standardRefTargets, standardTargetRefs } from "../../stages/model"
 import type { PromoteInput } from "../inputs"
 import { referencesProviderUsers } from "./gates"
 import type { PlacedColumn, PromotedTable, PromotionTarget } from "./mapping"
@@ -342,6 +343,14 @@ class References {
         return model.objects
           .filter((o) => (o.data as { role?: string }).role === "users")
           .map((o) => ({ kind: o.kind, name: o.name }))
+      case "member":
+      case "rightsRoles":
+        // Ціль за рівнем таблиці — та сама, що дасть стадія 3 об'єкту.
+        return standardTargetRefs(
+          def,
+          target.data,
+          standardRefTargets(model.objects)
+        )
       case "recorders":
       case undefined:
         return []

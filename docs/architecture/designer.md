@@ -177,7 +177,7 @@ pnpm exec simetra init --agents claude,codex
 - Оновлення платформи — `pnpm up simetra @simetrajs/designer`; симлінки
   підхоплюють новий скіл самі, `init --check` у CI ловить розбіжності.
 
-**Стан:** каталог (з `introspect`, `diff`, `plan` і `apply`), режими CLI і MCP,
+**Стан:** каталог (з `introspect`, `diff`, `plan`, `apply` і `roles`), режими CLI і MCP,
 `compile --all`, скіл у пакеті й тест прикладів — у коді; збірка, гейт
 пакування й публікація — [release.md](release.md). `simetra init` і пілот із
 host — разом із доставкою пакета (П0 (а), [ROADMAP](../ROADMAP.md)); до того

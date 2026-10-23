@@ -2,13 +2,13 @@ import {
   MEMBERSHIP_SET_FUNCTION,
   makeObjectName,
   quoteIdent,
-  type ApiRolePurpose,
+  type GrantPurpose,
   type PhysicalSnapshot,
   type PhysicalTable,
   type Project,
   type ScopeKind,
 } from "simetra/model"
-import type { QualifiedName } from "./contracts"
+import { qualified, type QualifiedName } from "./contracts"
 import { compareStrings } from "./diagnostics"
 import { dollarTag } from "./movement-functions"
 import { CURRENT_USER_FUNCTION } from "./platform/names"
@@ -23,18 +23,19 @@ import { keyColumnOf, membershipUserOf } from "./stages/model"
  * (спека користувачів С9): планувальник обчислює його раз на запит, а не на
  * рядок.
  */
-const CURRENT_USER = `(SELECT ${quoteIdent(CURRENT_USER_FUNCTION.schema)}.${quoteIdent(CURRENT_USER_FUNCTION.name)}())`
+export const CURRENT_USER = `(SELECT ${quoteIdent(CURRENT_USER_FUNCTION.schema)}.${quoteIdent(CURRENT_USER_FUNCTION.name)}())`
 
 /** Мітки імен функцій членства — алгоритм імен Postgres від таблиці довідника. */
 const MY_MEMBER_LABEL = "my_member"
 const MEMBER_SCOPES_LABEL = "member_scopes"
 
 /**
- * Ролі API, яким відкрито виконання функцій членства (спека користувачів §8):
+ * Ролі, яким відкрито виконання функцій членства (спека користувачів §8):
  * сервісна сесії не має й отримує порожній результат замість помилки доступу;
- * анонімна — помилку.
+ * анонімна — помилку. Роль команд читає членство у функціях прав і командах
+ * (спека прав §5.1).
  */
-const MEMBER_ROLES: readonly ApiRolePurpose[] = ["user", "service"]
+const MEMBER_ROLES: readonly GrantPurpose[] = ["user", "service", "command"]
 
 /**
  * Імена функцій членства — спільні для генератора, контракту й перевірки
@@ -216,23 +217,35 @@ function memberScopesFunction(
   )
 }
 
-function closedFunction(
+/**
+ * Форма згенерованої sql-функції: `definer` — функція, яку кличе політика чи
+ * команда (`STABLE SECURITY DEFINER`); `data` — стала платформи без читання
+ * таблиць (`IMMUTABLE`, від імені того, хто кличе: її кличуть лише функції
+ * `definer` від власника, спека прав §5.1).
+ */
+export type ClosedFunctionShape = "definer" | "data"
+
+/**
+ * Закрита оболонка згенерованої sql-функції: `SET search_path = ''` і
+ * рядкове тіло під `$тег$`, а не тіло стандарту SQL, — його імена зв'язуються
+ * під час створення з `search_path` сесії.
+ */
+export function closedFunction(
   signature: string,
   returns: string,
-  body: string
+  body: string,
+  shape: ClosedFunctionShape = "definer"
 ): string {
   const tag = dollarTag(body)
+  const attributes =
+    shape === "definer" ? "STABLE SECURITY DEFINER" : "IMMUTABLE"
   return (
     `CREATE OR REPLACE FUNCTION ${signature}\n` +
     `RETURNS ${returns}\n` +
-    `LANGUAGE sql STABLE SECURITY DEFINER\n` +
+    `LANGUAGE sql ${attributes}\n` +
     `SET search_path = ''\n` +
     `AS ${tag}\n${body}\n${tag};`
   )
-}
-
-function qualified(name: QualifiedName): string {
-  return `${quoteIdent(name.schema)}.${quoteIdent(name.name)}`
 }
 
 /** Модель без помилок гарантує наявність; відсутність — дефект компілятора. */

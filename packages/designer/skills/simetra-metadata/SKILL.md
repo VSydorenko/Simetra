@@ -30,11 +30,12 @@ diagnostics themselves.
 | Does the database match the metadata?                                             | `diff`       | `simetra diff [dir] --tables a,b`        | `diff` with `{tables?}`                     |
 | Plan bringing the database to the metadata (writes `plans/…plan.json`)            | `plan`       | `simetra plan [dir]`                     | `plan` with `{}`                            |
 | Apply a reviewed plan to the database                                             | `apply`      | `simetra apply <plan> [dir] --plan-hash <hex> --yes` | `apply` with `{plan, planHash, allow?, confirm}` |
+| Create the platform's cluster roles once per server (before the first `plan`)     | `roles`      | `simetra roles`                          | `roles` with `{}`                           |
 
-`compile`, `explain`, `diff`, `apply` only read files. `fix`, `create`, `add`,
-`rename`, `delete`, `promote`, `introspect` change files; `plan` writes only its
-plan file. `introspect`, `diff` and `plan` read the database; only `apply`
-writes to it.
+`compile`, `explain`, `diff`, `apply`, `roles` only read files. `fix`,
+`create`, `add`, `rename`, `delete`, `promote`, `introspect` change files;
+`plan` writes only its plan file. `introspect`, `diff` and `plan` read the
+database; only `apply` and `roles` write to it.
 
 ## Examples
 
@@ -290,7 +291,7 @@ them is a reference, so `rename` rewrites it and `delete` refuses while it is
 used; the compiler checks them (rules `users.*`, `rights.*`) and `explain`
 shows the derived rights contract, a role's contract and the rows of the
 rights projection. Forms of each field:
-`references/people-and-rights.md`.
+`references/people-and-rights.md` (also the system rights catalogs).
 
 ```json simetra:add
 {
@@ -374,6 +375,14 @@ creates and `diff` does not count as a difference; `present` otherwise.
 that holds `metadata/`); the database is only read. Its output shows drift
 first, then each step with its class and lock level, then the `planHash`.
 Show the plan to the owner before applying it.
+
+The generated SQL grants to platform roles (`simetra_command`) that live in the
+cluster, not in the database, so `plan` does not create them. Without one on
+the target or the shadow server, `plan`, `diff` and `rehearse` refuse with
+`plan.platform-role-missing`: run `simetra roles` once with a role that has
+`CREATEROLE`. It creates a missing role as `NOLOGIN NOINHERIT` and only checks
+an existing one; a role of an unsafe shape (`plan.platform-role-shape`) is
+fixed by hand as the hint says, not by `roles`.
 
 `apply` applies exactly that file in one transaction. It needs the `planHash`
 of the reviewed plan, confirmation (`--yes`, MCP `confirm: true`), and in
@@ -465,8 +474,8 @@ pnpm exec simetra mcp --allow-database-write
 - With `--read-only` every tool is still listed, but a write tool is refused
   with a hint to remove `--read-only` from the server's args. Ask the owner
   before restarting the server without it.
-- `apply` writes to the database only when the server runs with
-  `--allow-database-write`; without it `apply` is refused with a hint to add
+- `apply` and `roles` write to the database only when the server runs with
+  `--allow-database-write`; without it they are refused with a hint to add
   the flag. Ask the owner; never add it yourself. `--read-only` refuses
   `plan` and `apply` too: they write their files under `plans/`.
 - `plan` and `apply` have no `dryRun`: review with `plan`, and check on the

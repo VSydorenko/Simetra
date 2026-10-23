@@ -1,4 +1,4 @@
-import { recordActions } from "./actions"
+import { readAction, recordActions } from "./actions"
 import { catalogSchema, type Catalog } from "../schemas/catalog"
 import {
   authorColumns,
@@ -13,7 +13,9 @@ import {
   versionColumn,
   type KindDefinition,
   type NumberingSpec,
+  type RightsSystemCatalog,
   type StandardColumnDef,
+  type StandardTabularSectionDef,
   customActionReferences,
   accessDimensionReferences,
   accessReferences,
@@ -52,7 +54,7 @@ function standardColumns(obj: unknown): StandardColumnDef[] {
   // Колонки ролі беремо з її опису, а не з перевірки імені ролі: опис ролі —
   // єдине місце фактів ролі (див. CATALOG_ROLES).
   if (catalog.role !== undefined) {
-    columns.push(...(CATALOG_ROLES[catalog.role].columns?.() ?? []))
+    columns.push(...(CATALOG_ROLES[catalog.role].columns?.(catalog) ?? []))
   }
 
   if (catalog.hierarchyType !== "None") {
@@ -137,6 +139,141 @@ function userColumns(): StandardColumnDef[] {
   ]
 }
 
+/**
+ * «Ролі» рівня (спека прав §4.6, Р2a1-6): базовий архетип — UUID ролі
+ * метаданих без FK (ролі метаданих таблиць не мають), назва — стандартне
+ * найменування, порядок — для показу.
+ */
+function rightsRolesColumns(): StandardColumnDef[] {
+  return [
+    {
+      logicalName: "archetype",
+      physicalName: "archetype",
+      type: { type: "UUID" },
+      notNull: true,
+      title: { uk: "Архетип", en: "Archetype" },
+    },
+    {
+      logicalName: "order",
+      physicalName: "order",
+      type: { type: "Integer" },
+      notNull: false,
+      title: { uk: "Порядок", en: "Order" },
+    },
+  ]
+}
+
+/**
+ * Дельта кастомної ролі відносно архетипу: мітка виду об'єкта, ключ дії
+ * (слово словника чи UUID кастомної дії, Рх18), обсяг і ефект. Значення —
+ * дані цілі, тож невідоме значення функції прав ігнорують (fail-closed), а
+ * CHECK тримає лише форму, яку видно без метаданих.
+ */
+function deltaColumns(): StandardColumnDef[] {
+  return [
+    {
+      logicalName: "object",
+      physicalName: "object",
+      type: { type: "Text" },
+      notNull: true,
+      title: { uk: "Об'єкт", en: "Object" },
+    },
+    {
+      logicalName: "action",
+      physicalName: "action",
+      type: { type: "Text" },
+      notNull: true,
+      title: { uk: "Дія", en: "Action" },
+    },
+    {
+      logicalName: "extent",
+      physicalName: "extent",
+      type: { type: "Text" },
+      notNull: true,
+      check: "extent IN ('any', 'own', 'dimension')",
+      title: { uk: "Обсяг", en: "Extent" },
+    },
+    {
+      logicalName: "dimension",
+      physicalName: "dimension",
+      type: { type: "UUID" },
+      notNull: false,
+      // Вимір має лише обсяг `dimension`: інакше рядок означав би два різні
+      // обсяги залежно від того, яку колонку читає функція.
+      check: "(extent = 'dimension') = (dimension IS NOT NULL)",
+      title: { uk: "Вимір доступу", en: "Access dimension" },
+    },
+    {
+      logicalName: "effect",
+      physicalName: "effect",
+      type: { type: "Text" },
+      notNull: true,
+      check: "effect IN ('allow', 'deny')",
+      title: { uk: "Ефект", en: "Effect" },
+    },
+  ]
+}
+
+/**
+ * Логічне ім'я стандартної ТЧ дельти «Ролей» (Р2a1-6): за ним компілятор
+ * знаходить її таблицю для контракту довідників прав.
+ */
+export const RIGHTS_DELTA_SECTION = "delta"
+
+const DELTA_SECTION: StandardTabularSectionDef = {
+  logicalName: RIGHTS_DELTA_SECTION,
+  physicalSuffix: "delta",
+  columns: deltaColumns,
+  title: { uk: "Дельта", en: "Delta" },
+}
+
+/**
+ * «Призначення ролей» рівня (Р2a1-7): суб'єкт — учасник рівня скоупу (у
+ * глобальному довіднику — користувач), роль — архетип або кастомна роль того
+ * самого рівня, рівно одне з двох. Контейнер без FK: цілі — різні
+ * довідники-контейнери, а належність тенанту перевіряють функції прав.
+ */
+function roleAssignmentsColumns(catalog: Catalog): StandardColumnDef[] {
+  const scoped = catalog.scope !== undefined && catalog.scope !== "none"
+  return [
+    {
+      logicalName: "subject",
+      physicalName: "subject",
+      type: { type: "UUID" },
+      notNull: true,
+      ref: "member",
+      indexed: true,
+      title: scoped
+        ? { uk: "Учасник", en: "Member" }
+        : { uk: "Користувач", en: "User" },
+    },
+    {
+      logicalName: "archetype",
+      physicalName: "archetype",
+      type: { type: "UUID" },
+      notNull: false,
+      title: { uk: "Архетип", en: "Archetype" },
+    },
+    {
+      logicalName: "customRole",
+      physicalName: "custom_role",
+      type: { type: "UUID" },
+      notNull: false,
+      ref: "rightsRoles",
+      check: "num_nonnulls(archetype, custom_role) = 1",
+      title: { uk: "Кастомна роль", en: "Custom role" },
+    },
+    {
+      logicalName: "container",
+      physicalName: "container",
+      type: { type: "UUID" },
+      notNull: false,
+      indexed: true,
+      title: { uk: "Контейнер", en: "Container" },
+    },
+  ]
+}
+
 /** Факти системної ролі довідника: що платформа виводить із ролі. */
 interface CatalogRoleDefinition {
   /**
@@ -150,7 +287,16 @@ interface CatalogRoleDefinition {
    * Стандартні колонки, які роль додає одразу після позначки видалення:
    * порядок колонок входить у фізичну форму таблиці.
    */
-  columns?: () => StandardColumnDef[]
+  columns?: (catalog: Catalog) => StandardColumnDef[]
+  /** Стандартна ТЧ, яку роль додає довіднику. */
+  tabularSection?: StandardTabularSectionDef
+  /**
+   * Лише `read` (Р2a1-8): запис системних довідників прав — дія
+   * адміністрування прав (Права-2c), а не стандартні дії запису.
+   */
+  actions?: "read"
+  /** Роль системного довідника прав (Р2a1-23). */
+  rightsSystem?: RightsSystemCatalog
 }
 
 /** Ролі довідника — одне місце, звідки компілятор бере їхні факти. */
@@ -159,6 +305,23 @@ const CATALOG_ROLES: Record<
   CatalogRoleDefinition
 > = {
   users: { globalRoot: true, columns: userColumns },
+  rightsRoles: {
+    columns: rightsRolesColumns,
+    tabularSection: DELTA_SECTION,
+    actions: "read",
+    rightsSystem: "rightsRoles",
+  },
+  roleAssignments: {
+    columns: roleAssignmentsColumns,
+    actions: "read",
+    rightsSystem: "roleAssignments",
+  },
+}
+
+/** Опис ролі довідника; без ролі — порожній. */
+function roleOf(obj: unknown): CatalogRoleDefinition {
+  const { role } = obj as Catalog
+  return role === undefined ? {} : CATALOG_ROLES[role]
 }
 
 function numbering(obj: unknown): NumberingSpec | undefined {
@@ -182,7 +345,10 @@ export const catalogKind: KindDefinition = {
   referenceable: true,
   compositeIndexes: true,
   writePattern: "optimistic",
-  actions: () => recordActions(catalogKind.tabularSectionColumns !== undefined),
+  actions: (obj) =>
+    roleOf(obj).actions === "read"
+      ? [readAction]
+      : recordActions(catalogKind.tabularSectionColumns !== undefined),
   rightsExtents: ["any", "own", "dimension"],
   rightsContainer: true,
   rightsBinding: true,
@@ -200,10 +366,12 @@ export const catalogKind: KindDefinition = {
   namedElementFields: ["predefinedItems"],
   ownerKinds: ["Catalog"],
   standardColumns,
-  globalRoot(obj) {
-    const { role } = obj as Catalog
-    return role !== undefined && CATALOG_ROLES[role].globalRoot === true
+  globalRoot: (obj) => roleOf(obj).globalRoot === true,
+  standardTabularSections(obj) {
+    const section = roleOf(obj).tabularSection
+    return section === undefined ? [] : [section]
   },
+  rightsSystem: (obj) => roleOf(obj).rightsSystem,
   numbering,
   tabularSectionColumns: () => tabularRowColumns(false),
   elementReferences: (obj) => [

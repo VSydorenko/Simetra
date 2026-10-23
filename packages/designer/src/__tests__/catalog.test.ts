@@ -61,6 +61,7 @@ describe("tool catalog", () => {
       "plan",
       "promote",
       "rename",
+      "roles",
     ])
   })
 

@@ -321,6 +321,7 @@ git commit -m "feat(schema): відмова плану, коли нова коп
   - `accessPolicyNames(table: { name: string }): { scopeRead: string; scopeInsert: string; scopeUpdate: string; scopeDelete: string; publicRead: string; rights(label: string): string }` (`rights` — з обмеженням мітки Р2a2-2);
   - `simetra.rights_visible_users() RETURNS SETOF uuid` у генераторі `rights` (Р2a2-18);
   - `rightsPredicates(contract, action, table)` (2a1) приймає таблицю ТЧ і похідну таблицю регістра (Р2a2-6).
+  - прибрати пропуск носіїв `via` з 2a1; кейс: носій шляху дає предикат на копії; тест 2a1 про пропуск — перевернути, а не видалити.
 
 - [ ] **Step 1: Write the failing tests (unit)**:
   - `access-units.test.ts` (замінює `scoped table gets the uncorrelated read policy`): `it("scoped table gets restrictive scope policies for every command")` — рівно `CREATE POLICY item_scope_read ON public.item AS RESTRICTIVE FOR SELECT TO authenticated, simetra_command USING (org_id = ANY (ARRAY(SELECT public.org_member_scopes())));` і три політики запису з `WITH CHECK`/`USING` тієї самої форми (цілі оператори).

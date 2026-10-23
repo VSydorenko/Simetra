@@ -18,6 +18,7 @@ import { roleKind } from "./role"
 import type { KindDefinition } from "./standard"
 
 export { isUuidColumn, singleUuidKeyColumn }
+export { RIGHTS_DELTA_SECTION } from "./catalog"
 
 export {
   STANDARD_ACTIONS,
@@ -43,7 +44,9 @@ export {
   type NumberingSpec,
   type ReferenceRole,
   type RegisterKeySpec,
+  type RightsSystemCatalog,
   type StandardColumnDef,
+  type StandardTabularSectionDef,
   type SubscriptionSpec,
   type VirtualTableKind,
   type WritePattern,

@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest"
 import { completeFiles } from "simetra/compiler"
 import {
   EVERYONE_ID,
+  GLOBAL_ASSIGNMENTS_FILE,
+  GLOBAL_ROLES_FILE,
   GRANT_FILE,
   GRANTS_SOURCE_ID,
   ORG_ADMIN_ID,
@@ -15,12 +17,14 @@ import {
   SUPPORT_ID,
   TASK_EDITORS_ID,
   TASK_READERS_ID,
+  catalog,
   compileRights,
   grantTable,
   grantsSource,
   rightsFiles,
   rightsSet,
   role,
+  without,
   withRoles,
 } from "./fixtures/rights"
 import { uuid } from "./helpers"
@@ -29,9 +33,15 @@ const ref = (kind: string, name: string) => ({ kind, name })
 
 const files = withRoles
 
-/** Джерела призначень контейнерного (`grants`) і глобального рівня. */
+const SQUAD_FILE = "catalogs/Squad/Squad.meta.json"
+
+/**
+ * Джерела призначень контейнерного (`grants`) і глобального рівня. Глобальне
+ * джерело покриває всі глобальні ролі, тож глобальних довідників прав немає
+ * (Р2a1-24); рівень `org` змішаний — його довідники лишаються.
+ */
 function withSources(overrides: Record<string, Record<string, unknown>> = {}) {
-  return files({
+  return files(without(GLOBAL_ROLES_FILE, GLOBAL_ASSIGNMENTS_FILE), {
     [PROJECT_FILE]: {
       assignmentSources: [
         grantsSource(),
@@ -72,6 +82,13 @@ describe("roles and rights sets", () => {
       })
     )
     expect(result.diagnostics.filter((d) => d.severity === "error")).toEqual([])
+    // Права джерел ще не обчислюються (Р2a1-21): попередження на кожне.
+    expect(
+      result.diagnostics.map(({ code, pointer }) => [code, pointer])
+    ).toEqual([
+      ["rights.adopted-source-unsupported", "/assignmentSources/0"],
+      ["rights.adopted-source-unsupported", "/assignmentSources/1"],
+    ])
     const roles = result.model!.contracts.roles
     expect(roles.find((r) => r.name === "OrgAdmin")).toEqual({
       roleId: ORG_ADMIN_ID,
@@ -175,7 +192,26 @@ describe("roles and rights sets", () => {
     ],
   }
 
-  it.each([
+  // Вид `team` без членства: довідників прав його рівня теж немає, тож роль
+  // рівня `team` отримує й `rights.system-catalog-missing` (Р2a1-5).
+  const teamCatalogsMissing = (file: string) =>
+    (["rightsRoles", "roleAssignments"] as const).map((missing) => ({
+      code: "rights.system-catalog-missing",
+      file,
+      pointer: "/assignedOn",
+      params: { level: "team", missing },
+    }))
+
+  it.each<{
+    case: string
+    input: ReturnType<typeof files>
+    code: string
+    file: string
+    pointer: string
+    params: Record<string, string>
+    /** Діагностики того самого файлу, що стоять перед очікуваною. */
+    before?: object[]
+  }>([
     {
       case: "includes a role instead of a set",
       input: files({
@@ -222,6 +258,26 @@ describe("roles and rights sets", () => {
       file: ROLE_FILE("TeamLead"),
       pointer: "/assignedOn/scopeKind",
       params: { scopeKind: "team" },
+      before: teamCatalogsMissing(ROLE_FILE("TeamLead")),
+    },
+    {
+      // Контейнерне призначення дістається учаснику виду контейнера (Р2a1-7).
+      case: "is assigned on a container of a scope kind without membership",
+      input: files({
+        [PROJECT_FILE]: team,
+        [SQUAD_FILE]: catalog(uuid(6141), "Squad", "squad", {
+          scope: "team",
+          rightsContainer: true,
+        }),
+        [ROLE_FILE("SquadLead")]: role(uuid(6222), "SquadLead", {
+          container: ref("Catalog", "Squad"),
+        }),
+      }),
+      code: "rights.scope-without-membership",
+      file: ROLE_FILE("SquadLead"),
+      pointer: "/assignedOn/container",
+      params: { scopeKind: "team", container: "Squad" },
+      before: teamCatalogsMissing(ROLE_FILE("SquadLead")),
     },
     {
       case: "gives full access on a container role",
@@ -341,8 +397,8 @@ describe("roles and rights sets", () => {
       params: { role: "ProjectLead", name: "Region" },
     },
   ])("rejects a role that $case", async (row) => {
-    const { case: label, input, ...expected } = row
-    expect(await errors(input), label).toEqual([expected])
+    const { case: label, input, before = [], ...expected } = row
+    expect(await errors(input), label).toEqual([...before, expected])
   })
 
   it("closes a diamond of includes once", async () => {
@@ -368,10 +424,12 @@ describe("roles and rights sets", () => {
 
   it("needs no physical name and gets an id from fix", async () => {
     const declared = rightsFiles({
+      // Рівень «кожного користувача» призначень не має, тож проєкт без
+      // системних довідників прав компілюється (Р2a1-5).
       [ROLE_FILE("Support")]: {
         kind: "Role",
         name: "Support",
-        assignedOn: "global",
+        assignedOn: "everyUser",
       },
       [SET_FILE("TaskReaders")]: { kind: "RightsSet", name: "TaskReaders" },
     })
