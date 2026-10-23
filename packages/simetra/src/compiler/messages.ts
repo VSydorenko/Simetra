@@ -1012,8 +1012,9 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     uk: (p) => `Ім'я "${p.name}" не відповідає стилю імен проєкту ${p.style}`,
   },
   "identity.name-reserved": {
-    en: (p) => `Name "${p.name}" is taken by a standard attribute of ${p.kind}`,
-    uk: (p) => `Ім'я "${p.name}" зайняте стандартним реквізитом виду ${p.kind}`,
+    en: (p) =>
+      `Name "${p.name}" is taken by a standard element of the kind ${p.kind}`,
+    uk: (p) => `Ім'я "${p.name}" зайняте стандартним елементом виду ${p.kind}`,
   },
   "reference.unresolved": {
     en: (p) => `${p.kind} "${p.name}" does not exist`,
@@ -1940,6 +1941,73 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       en: "One name in different objects is a different custom action; grant it on one object at a time.",
       uk: "Одне ім'я в різних об'єктах — різні кастомні дії; давайте її на один об'єкт за раз.",
     },
+  },
+  "rights.system-catalog-missing": {
+    en: (p) =>
+      `Roles of the ${p.level} level have no catalog with role ${p.missing}`,
+    uk: (p) => `Ролі рівня ${p.level} не мають довідника з роллю ${p.missing}`,
+    hint: {
+      en: (p) =>
+        `Declare one catalog with role ${p.missing} on this level, for example simetra create '{"kind":"Catalog","name":"<Name>","data":{"role":"${p.missing}","scope":"${p.level === "global" ? "none" : p.level}"}}', or adopt an assignment source for the level.`,
+      uk: (p) =>
+        `Оголосіть на цьому рівні один довідник з роллю ${p.missing}, наприклад simetra create '{"kind":"Catalog","name":"<Name>","data":{"role":"${p.missing}","scope":"${p.level === "global" ? "none" : p.level}"}}', або прийняте джерело призначень рівня.`,
+    },
+  },
+  "rights.system-catalog-duplicate": {
+    en: (p) =>
+      `The ${p.level} level already has a catalog with role ${p.role} in ${p.firstFile}`,
+    uk: (p) =>
+      `Рівень ${p.level} уже має довідник з роллю ${p.role} у ${p.firstFile}`,
+    hint: {
+      en: "Keep one catalog per role and level; extend it with your own attributes instead.",
+      uk: "Лишіть один довідник на роль і рівень; розширюйте його власними реквізитами.",
+    },
+  },
+  "rights.system-catalog-scope": {
+    en: (p) =>
+      `${p.name} is scoped by "${p.scopeKind}", which has no membership catalog`,
+    uk: (p) =>
+      `${p.name} скоуплено видом "${p.scopeKind}", у якого немає довідника членства`,
+    hint: {
+      en: "The assignment subject is a member of the scope kind: declare its membership catalog; members of an adopted membership source are not assignable yet.",
+      uk: "Суб'єкт призначення — учасник виду скоупу: оголосіть довідник членства виду; учасників прийнятого джерела членства поки призначати не можна.",
+    },
+  },
+  "rights.system-catalog-description": {
+    en: (p) =>
+      `${p.name} keeps custom role names in its description, but descriptionLength is 0`,
+    uk: (p) =>
+      `${p.name} зберігає назви кастомних ролей у найменуванні, але descriptionLength дорівнює 0`,
+    hint: {
+      en: "Give the catalog a positive descriptionLength.",
+      uk: "Задайте довіднику додатний descriptionLength.",
+    },
+  },
+  "rights.system-catalog-parallel": {
+    en: (p) =>
+      `The ${p.level} level gets its assignments from the adopted source "${p.source}", so its rights catalog would be a parallel system`,
+    uk: (p) =>
+      `Рівень ${p.level} бере призначення з прийнятого джерела "${p.source}", тож його довідник прав був би паралельною системою`,
+    hint: {
+      en: "Keep either the adopted source or the rights catalogs on a level: remove the catalog, or promote the source table.",
+      uk: "Лишіть на рівні або прийняте джерело, або довідники прав: приберіть довідник чи промотуйте таблицю джерела.",
+    },
+  },
+  "rights.system-catalog-custom-action": {
+    en: (p) =>
+      `${p.name} is a rights catalog, so it cannot declare the custom action "${p.action}"`,
+    uk: (p) =>
+      `${p.name} — довідник прав, тож кастомної дії "${p.action}" в нього не буває`,
+    hint: {
+      en: "Rights catalogs are written only by the rights administration action; remove the custom action.",
+      uk: "Довідники прав пишуться лише дією адміністрування прав; приберіть кастомну дію.",
+    },
+  },
+  "rights.adopted-source-unsupported": {
+    en: (p) =>
+      `Rights from the adopted source "${p.source}" are not computed yet (2d): members of the source get no rights on the objects of the kind`,
+    uk: (p) =>
+      `Права з прийнятого джерела "${p.source}" ще не обчислюються (2d): учасники джерела не отримають прав на об'єкти виду`,
   },
   "rights.ownership-target": {
     en: (p) =>

@@ -3,7 +3,11 @@ import { completeFiles } from "simetra/compiler"
 import {
   GRANT_FILE,
   GRANTS_SOURCE_ID,
+  MEMBERSHIP_FILE,
+  MEMBERSHIP_ID,
+  MEMBERS_SOURCE_ID,
   MEMBER_FILE,
+  MEMBER_REGION_FILE,
   ORG_KIND_ID,
   PROJECT_ID,
   ROLE_FILE,
@@ -14,6 +18,8 @@ import {
   compileRights,
   grantTable,
   grantsSource,
+  membersSource,
+  membershipTable,
   rightsFiles,
   rightsSet,
   role,
@@ -23,51 +29,9 @@ import { uuid } from "./helpers"
 type Files = ReturnType<typeof rightsFiles>
 
 const PROJECT = "project.meta.json"
-const MEMBERSHIP_FILE = "custom-tables/Membership/Membership.meta.json"
-const MEMBER_REGION_FILE =
-  "information-registers/MemberRegion/MemberRegion.meta.json"
 const USERS_FILE = "catalogs/Users/Users.meta.json"
-const MEMBERSHIP_ID = uuid(6100)
-const MEMBERS_SOURCE_ID = uuid(6120)
 
 const ref = (kind: string, name: string) => ({ kind, name })
-
-function column(id: number, name: string, physicalName: string, type: string) {
-  return { id: uuid(id), name, physicalName, type, notNull: true }
-}
-
-/** Прийнята таблиця членства виду `org`; `uniques` дає `UNIQUE (scope, id)`. */
-function membershipTable(overrides: Record<string, unknown> = {}) {
-  return {
-    id: MEMBERSHIP_ID,
-    kind: "CustomTable",
-    name: "Membership",
-    physicalName: "membership",
-    kindLabel: "membership",
-    scope: "org",
-    columns: [
-      column(6101, "id", "id", "UUID"),
-      column(6102, "orgId", "org_id", "UUID"),
-      column(6103, "userId", "user_id", "UUID"),
-      column(6104, "isActive", "is_active", "Boolean"),
-    ],
-    primaryKey: { columns: ["id"] },
-    uniques: [{ columns: ["orgId", "id"] }],
-    scopeColumn: "orgId",
-    ...overrides,
-  }
-}
-
-function membersSource(overrides: Record<string, unknown> = {}) {
-  return {
-    id: MEMBERS_SOURCE_ID,
-    name: "members",
-    scopeKind: "org",
-    table: ref("CustomTable", "Membership"),
-    columns: { scope: "orgId", user: "userId", active: "isActive" },
-    ...overrides,
-  }
-}
 
 /**
  * Вид `org` без довідника членства: членство дає прийнята таблиця, тож

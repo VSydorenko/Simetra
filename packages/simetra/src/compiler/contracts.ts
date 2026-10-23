@@ -419,6 +419,24 @@ export interface RightsProjectionRow {
   sources: { kind: "Role" | "RightsSet"; id: string }[]
 }
 
+/**
+ * Рівень зберігання прав (спека прав §4.6, Р2a1-5): глобальний чи вид скоупу.
+ * Контейнерні призначення лежать на рівні виду скоупу контейнера.
+ */
+export type RightsLevelKey =
+  { level: "global" } | { level: "scope"; scopeKindId: string }
+
+/**
+ * Системні довідники прав одного рівня (спека прав §4.6): «Ролі» з ТЧ дельти
+ * й «Призначення ролей». Фізичні колонки — сталі ролей довідника (Р2a1-6,
+ * Р2a1-7), тож генератор бере їх із фізичного знімка за `origin.standard`.
+ */
+export interface RightsCatalogContract {
+  level: RightsLevelKey
+  roles: { objectId: string; table: QualifiedName; delta: QualifiedName }
+  assignments: { objectId: string; table: QualifiedName }
+}
+
 export interface Contracts {
   /** За `documentId`. */
   posting: PostingContract[]
@@ -452,6 +470,8 @@ export interface Contracts {
   roles: RoleContract[]
   /** За `roleId`, `objectId`, `action`, далі обсяг: `any` < `own` < вимір за id. */
   rightsProjection: RightsProjectionRow[]
+  /** За рівнем: глобальний, далі за `scopeKindId`. */
+  rightsCatalogs: RightsCatalogContract[]
 }
 
 /** Функція контракту, якої ще немає в БД, з місцем у метаданих для діагностики. */
@@ -761,7 +781,8 @@ export function buildContracts(
   accessDimensions: readonly AccessDimensionContract[],
   sources: Pick<Contracts, "membershipSources" | "assignmentSources">,
   roles: readonly RoleContract[],
-  rightsProjection: readonly RightsProjectionRow[]
+  rightsProjection: readonly RightsProjectionRow[],
+  rightsCatalogs: readonly RightsCatalogContract[]
 ): Contracts {
   const registers = objects
     .filter(isRegister)
@@ -834,6 +855,7 @@ export function buildContracts(
     assignmentSources: [...sources.assignmentSources],
     roles: [...roles],
     rightsProjection: [...rightsProjection],
+    rightsCatalogs: [...rightsCatalogs],
   }
 }
 

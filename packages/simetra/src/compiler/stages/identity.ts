@@ -76,12 +76,14 @@ type Element = Record<string, unknown>
 /**
  * Простір імен: елементи, чиї логічні імена мусять бути унікальні. `styled` —
  * ім'я підлягає стилю проєкту; `reserved` — стандартні колонки таблиці, куди
- * елемент потрапить колонкою.
+ * елемент потрапить колонкою; `reservedSections` — стандартні ТЧ: їхні імена
+ * зайняті в просторі, де живуть ТЧ з файлу.
  */
 interface Namespace {
   scope: string
   styled: boolean
   reserved: StandardColumnDef[]
+  reservedSections?: Pick<StandardColumnDef, "logicalName">[]
   elements: NamedElement[]
   /**
    * Мітки (`physicalName`) унікальні в межах простору: так у предвизначених
@@ -376,6 +378,16 @@ export function checkIdentity(
               standardLogicalName(column, style)
             )
       )
+      // Ім'я стандартної ТЧ — поле типу сутності й адреса елемента, як ім'я
+      // ТЧ з файлу: реквізит, ТЧ чи дія з ним зіткнулися б так само, як два
+      // елементи простору між собою.
+      const reservedSections = new Set(
+        style === undefined
+          ? []
+          : (namespace.reservedSections ?? []).map((section) =>
+              standardLogicalName(section, style)
+            )
+      )
       if (collides && !standardCollision && reserved.has(scopeKind.name)) {
         standardCollision = true
         diagnostics.push(
@@ -430,7 +442,7 @@ export function checkIdentity(
             })
           )
         }
-        if (column && reserved.has(name)) {
+        if ((column && reserved.has(name)) || reservedSections.has(name)) {
           diagnostics.push(
             diagnostic("identity.name-reserved", object.file, at, {
               name,
@@ -821,6 +833,7 @@ function namespacesOf(
     scope: `${object.kind} ${object.name}`,
     styled: true,
     reserved: style === undefined ? [] : def.standardColumns(data),
+    reservedSections: def.standardTabularSections?.(data) ?? [],
     elements: [...columns, ...sections, ...actions],
   })
 

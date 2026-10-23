@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest"
 import { completeFiles } from "simetra/compiler"
 import {
   EVERYONE_ID,
+  GLOBAL_ASSIGNMENTS_FILE,
+  GLOBAL_ROLES_FILE,
   GRANT_FILE,
   GRANTS_SOURCE_ID,
   ORG_ADMIN_ID,
@@ -21,6 +23,7 @@ import {
   rightsFiles,
   rightsSet,
   role,
+  without,
   withRoles,
 } from "./fixtures/rights"
 import { uuid } from "./helpers"
@@ -29,9 +32,13 @@ const ref = (kind: string, name: string) => ({ kind, name })
 
 const files = withRoles
 
-/** Джерела призначень контейнерного (`grants`) і глобального рівня. */
+/**
+ * Джерела призначень контейнерного (`grants`) і глобального рівня. Глобальне
+ * джерело покриває всі глобальні ролі, тож глобальних довідників прав немає
+ * (Р2a1-24); рівень `org` змішаний — його довідники лишаються.
+ */
 function withSources(overrides: Record<string, Record<string, unknown>> = {}) {
-  return files({
+  return files(without(GLOBAL_ROLES_FILE, GLOBAL_ASSIGNMENTS_FILE), {
     [PROJECT_FILE]: {
       assignmentSources: [
         grantsSource(),
@@ -72,6 +79,13 @@ describe("roles and rights sets", () => {
       })
     )
     expect(result.diagnostics.filter((d) => d.severity === "error")).toEqual([])
+    // Права джерел ще не обчислюються (Р2a1-21): попередження на кожне.
+    expect(
+      result.diagnostics.map(({ code, pointer }) => [code, pointer])
+    ).toEqual([
+      ["rights.adopted-source-unsupported", "/assignmentSources/0"],
+      ["rights.adopted-source-unsupported", "/assignmentSources/1"],
+    ])
     const roles = result.model!.contracts.roles
     expect(roles.find((r) => r.name === "OrgAdmin")).toEqual({
       roleId: ORG_ADMIN_ID,
@@ -368,10 +382,12 @@ describe("roles and rights sets", () => {
 
   it("needs no physical name and gets an id from fix", async () => {
     const declared = rightsFiles({
+      // Рівень «кожного користувача» призначень не має, тож проєкт без
+      // системних довідників прав компілюється (Р2a1-5).
       [ROLE_FILE("Support")]: {
         kind: "Role",
         name: "Support",
-        assignedOn: "global",
+        assignedOn: "everyUser",
       },
       [SET_FILE("TaskReaders")]: { kind: "RightsSet", name: "TaskReaders" },
     })

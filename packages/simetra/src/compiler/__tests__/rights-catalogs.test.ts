@@ -1,21 +1,35 @@
 import { describe, expect, it } from "vitest"
 import type { PhysicalSnapshot, PhysicalTable } from "simetra/model"
 import {
+  GLOBAL_ASSIGNMENTS_FILE,
+  GLOBAL_ASSIGNMENTS_ID,
   GLOBAL_ROLES_FILE,
+  GLOBAL_ROLES_ID,
+  GRANT_FILE,
   ORG_ASSIGNMENTS_FILE,
   ORG_ASSIGNMENTS_ID,
+  ORG_KIND_ID,
   ORG_ROLES_FILE,
   ORG_ROLES_ID,
+  PROJECT_FILE,
   ROLE_FILE,
+  adoptedMembership,
   compileRights,
+  globalGrantsSource,
   grant,
   grantAll,
+  grantTable,
+  grantsSource,
+  membersSource,
   objects,
   singleTenantRights,
+  systemCatalog,
+  teamScopeKind,
+  without,
   withRoles,
+  type Layer,
 } from "./fixtures/rights"
-
-type Layer = Record<string, Record<string, unknown>>
+import { uuid } from "./helpers"
 
 /** Роль `OrgMember` лише з власними грантами, без включень. */
 const member = (...grants: unknown[]): Layer => ({
@@ -246,8 +260,293 @@ describe("system rights catalogs", () => {
     }
   })
 
+  it("lists the rights catalogs of every level", async () => {
+    const { contracts } = await compiled()
+    const table = (name: string) => ({ schema: "public", name })
+    expect(contracts.rightsCatalogs).toEqual([
+      {
+        level: { level: "global" },
+        roles: {
+          objectId: GLOBAL_ROLES_ID,
+          table: table("global_roles"),
+          delta: table("global_roles_delta"),
+        },
+        assignments: {
+          objectId: GLOBAL_ASSIGNMENTS_ID,
+          table: table("global_role_assignments"),
+        },
+      },
+      {
+        level: { level: "scope", scopeKindId: ORG_KIND_ID },
+        roles: {
+          objectId: ORG_ROLES_ID,
+          table: table("org_roles"),
+          delta: table("org_roles_delta"),
+        },
+        assignments: {
+          objectId: ORG_ASSIGNMENTS_ID,
+          table: table("org_role_assignments"),
+        },
+      },
+    ])
+  })
+
   it("singleTenantRights compiles without errors", async () => {
     const result = await compileRights(singleTenantRights())
     expect(result.diagnostics.filter((d) => d.severity === "error")).toEqual([])
+  })
+})
+
+/** Проєкт задає прийняті джерела призначень над `RoleGrant`. */
+const assignmentSources = (...sources: unknown[]): Layer => ({
+  [PROJECT_FILE]: { assignmentSources: sources },
+  [GRANT_FILE]: grantTable(),
+})
+
+const ORG_ROLES_EXTRA_FILE = "catalogs/OrgRolesExtra/OrgRolesExtra.meta.json"
+const TEAM_ASSIGNMENTS_FILE =
+  "catalogs/TeamRoleAssignments/TeamRoleAssignments.meta.json"
+
+const unsupported = (pointer: string, source: string) => ({
+  code: "rights.adopted-source-unsupported",
+  severity: "warning",
+  file: PROJECT_FILE,
+  pointer,
+  params: { source },
+})
+
+const error = (
+  code: string,
+  file: string,
+  pointer: string,
+  params: Record<string, string>
+) => ({ code, severity: "error", file, pointer, params })
+
+describe("system rights catalog checks", () => {
+  it.each([
+    {
+      case: "missing-roles",
+      layers: [without(ORG_ROLES_FILE)],
+      expected: [
+        error(
+          "rights.system-catalog-missing",
+          ROLE_FILE("OrgAdmin"),
+          "/assignedOn",
+          { level: "org", missing: "rightsRoles" }
+        ),
+      ],
+    },
+    {
+      // Контейнер `Project` лежить у виді `org`: його призначення — у
+      // довідниках рівня `org` (Р2a1-7).
+      case: "missing-for-container",
+      layers: [
+        without(
+          ROLE_FILE("OrgAdmin"),
+          ROLE_FILE("OrgMember"),
+          ORG_ROLES_FILE,
+          ORG_ASSIGNMENTS_FILE
+        ),
+      ],
+      expected: ["rightsRoles", "roleAssignments"].map((missing) =>
+        error(
+          "rights.system-catalog-missing",
+          ROLE_FILE("ProjectLead"),
+          "/assignedOn",
+          { level: "org", missing }
+        )
+      ),
+    },
+    {
+      case: "duplicate",
+      layers: [
+        {
+          [ORG_ROLES_EXTRA_FILE]: systemCatalog(
+            uuid(6234),
+            "OrgRolesExtra",
+            "org_roles_extra",
+            "rightsRoles",
+            "org"
+          ),
+        },
+      ],
+      expected: [
+        error(
+          "rights.system-catalog-duplicate",
+          ORG_ROLES_EXTRA_FILE,
+          "/role",
+          {
+            role: "rightsRoles",
+            level: "org",
+            firstFile: ORG_ROLES_FILE,
+          }
+        ),
+      ],
+    },
+    {
+      case: "scope-without-membership",
+      layers: [
+        teamScopeKind(),
+        {
+          [TEAM_ASSIGNMENTS_FILE]: systemCatalog(
+            uuid(6235),
+            "TeamRoleAssignments",
+            "team_role_assignments",
+            "roleAssignments",
+            "team"
+          ),
+        },
+      ],
+      expected: [
+        error("rights.system-catalog-scope", TEAM_ASSIGNMENTS_FILE, "/scope", {
+          name: "TeamRoleAssignments",
+          scopeKind: "team",
+        }),
+      ],
+    },
+    {
+      case: "no-description",
+      layers: [{ [ORG_ROLES_FILE]: { descriptionLength: 0 } }],
+      expected: [
+        error(
+          "rights.system-catalog-description",
+          ORG_ROLES_FILE,
+          "/descriptionLength",
+          { name: "OrgRoles" }
+        ),
+      ],
+    },
+    {
+      // Запис довідників прав — дія адміністрування прав (Права-2c), тож
+      // кастомна дія на них — помилка, а не мовчазний пропуск.
+      case: "custom-action",
+      layers: [
+        {
+          [ORG_ROLES_FILE]: {
+            customActions: [{ id: uuid(6236), name: "invite" }],
+          },
+        },
+      ],
+      expected: [
+        error(
+          "rights.system-catalog-custom-action",
+          ORG_ROLES_FILE,
+          "/customActions/0",
+          { name: "OrgRoles", action: "invite" }
+        ),
+      ],
+    },
+    {
+      // Ім'я стандартної ТЧ зайняте в просторі імен ТЧ, як стандартні
+      // колонки — у просторі реквізитів.
+      case: "delta-section",
+      layers: [
+        {
+          [ORG_ROLES_FILE]: {
+            tabularSections: [
+              {
+                id: uuid(6237),
+                name: "delta",
+                physicalName: "extra",
+                attributes: [],
+              },
+            ],
+          },
+        },
+      ],
+      expected: [
+        error(
+          "identity.name-reserved",
+          ORG_ROLES_FILE,
+          "/tabularSections/0/name",
+          { name: "delta", kind: "Catalog" }
+        ),
+      ],
+    },
+    {
+      case: "every-user-only",
+      layers: [
+        without(
+          ROLE_FILE("OrgAdmin"),
+          ROLE_FILE("OrgMember"),
+          ROLE_FILE("ProjectLead"),
+          ROLE_FILE("Support"),
+          ORG_ROLES_FILE,
+          ORG_ASSIGNMENTS_FILE,
+          GLOBAL_ROLES_FILE,
+          GLOBAL_ASSIGNMENTS_FILE
+        ),
+      ],
+      expected: [],
+    },
+    {
+      // Членство `org` дає лише джерело: довідників `org` бути не може, а
+      // межу — права джерела з'являться з 2d — називає попередження (Р2a1-21).
+      case: "adopted-source",
+      layers: [
+        adoptedMembership(),
+        without(ORG_ROLES_FILE, ORG_ASSIGNMENTS_FILE),
+        { [PROJECT_FILE]: { membershipSources: [membersSource()] } },
+      ],
+      expected: [unsupported("/membershipSources/0", "members")],
+    },
+    {
+      case: "source-covers-level",
+      layers: [
+        without(GLOBAL_ROLES_FILE, GLOBAL_ASSIGNMENTS_FILE),
+        assignmentSources(globalGrantsSource()),
+      ],
+      expected: [unsupported("/assignmentSources/0", "globalGrants")],
+    },
+    {
+      case: "parallel",
+      layers: [assignmentSources(globalGrantsSource())],
+      expected: [
+        error(
+          "rights.system-catalog-parallel",
+          GLOBAL_ASSIGNMENTS_FILE,
+          "/role",
+          { level: "global", source: "globalGrants" }
+        ),
+        error("rights.system-catalog-parallel", GLOBAL_ROLES_FILE, "/role", {
+          level: "global",
+          source: "globalGrants",
+        }),
+        unsupported("/assignmentSources/0", "globalGrants"),
+      ],
+    },
+    {
+      // Перша міграція: прийняті контейнерні призначення поряд із новими
+      // ролями рівня скоупу в тому самому виді (Р2a1-24).
+      case: "mixed-in-scope-kind",
+      layers: [assignmentSources(grantsSource())],
+      expected: [unsupported("/assignmentSources/0", "grants")],
+    },
+    {
+      // До 2d у `subject` немає цілі: членство виду дає лише джерело.
+      case: "source-only-membership",
+      layers: [
+        adoptedMembership(),
+        { [PROJECT_FILE]: { membershipSources: [membersSource()] } },
+      ],
+      expected: [
+        error("rights.system-catalog-scope", ORG_ASSIGNMENTS_FILE, "/scope", {
+          name: "OrgRoleAssignments",
+          scopeKind: "org",
+        }),
+        unsupported("/membershipSources/0", "members"),
+      ],
+    },
+  ])("$case", async ({ layers, expected }) => {
+    const result = await compileRights(withRoles(...layers))
+    expect(
+      result.diagnostics.map(({ code, severity, file, pointer, params }) => ({
+        code,
+        severity,
+        file,
+        pointer,
+        params,
+      }))
+    ).toEqual(expected)
   })
 })

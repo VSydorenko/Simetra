@@ -307,6 +307,23 @@ describe("messages catalog", () => {
     )
   })
 
+  it.each([
+    { level: "org", scope: "org" },
+    { level: "global", scope: "none" },
+  ])(
+    "rights.system-catalog-missing on the $level level hints simetra create",
+    ({ level, scope }) => {
+      const d = diagnostic("rights.system-catalog-missing", "", "", {
+        level,
+        missing: "roleAssignments",
+      })
+      const command = `simetra create '{"kind":"Catalog","name":"<Name>","data":{"role":"roleAssignments","scope":"${scope}"}}'`
+      for (const hint of [d.hint, localize(d, "uk").hint]) {
+        expect(hint).toContain(command)
+      }
+    }
+  )
+
   it("plan.provider-trigger-taken names the trigger and the provider table", () => {
     const d = diagnostic("plan.provider-trigger-taken", "", "", {
       trigger: "audit_x",

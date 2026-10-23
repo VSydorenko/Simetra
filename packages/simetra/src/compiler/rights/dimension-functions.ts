@@ -73,12 +73,14 @@ interface Step {
  * компілятор не читає (динамічний SQL і `PERFORM` ховають читання), тож
  * plpgsql чи невідома кваліфікована функція в ланцюжку — помилка (fail-closed).
  * Зі схеми платформи дозволено лише `current_user_id()`; згенеровані функції
- * дійсного членства — листи, їхні тіла пише компілятор.
+ * дійсного членства — листи, їхні тіла пише компілятор. Таблиці системних
+ * довідників прав (`rightsTables`, `схема.ім'я`) — теж дані прав.
  */
 export function checkDimensionFunctions(
   project: Project,
   units: readonly VerbatimUnit[],
   membershipFunctions: ReadonlySet<string>,
+  rightsTables: ReadonlySet<string>,
   parse: SqlParser,
   plpgsql: PlpgsqlParser
 ): Diagnostic[] {
@@ -125,7 +127,7 @@ export function checkDimensionFunctions(
       (u) => u.identity === functionIdentity(schema, name, [])
     )
     if (head === undefined) return
-    walk(head, qualified, units, membershipFunctions, parse, at)
+    walk(head, qualified, units, membershipFunctions, rightsTables, parse, at)
   })
   return found
 }
@@ -141,6 +143,7 @@ function walk(
   headName: string,
   units: readonly VerbatimUnit[],
   membershipFunctions: ReadonlySet<string>,
+  rightsTables: ReadonlySet<string>,
   parse: SqlParser,
   at: (code: RuleCode, params: DiagnosticParams) => void
 ): void {
@@ -189,8 +192,9 @@ function walk(
         unqualified ||= view
         continue
       }
-      if (relation.schema === PLATFORM) {
-        readsRights(chain, `${relation.schema}.${relation.name}`)
+      const qualified = `${relation.schema}.${relation.name}`
+      if (relation.schema === PLATFORM || rightsTables.has(qualified)) {
+        readsRights(chain, qualified)
         continue
       }
       for (const target of named(

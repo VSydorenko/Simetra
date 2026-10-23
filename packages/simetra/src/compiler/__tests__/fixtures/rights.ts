@@ -53,6 +53,14 @@ export const GLOBAL_ASSIGNMENTS_FILE =
 export const GRANT_FILE = "custom-tables/RoleGrant/RoleGrant.meta.json"
 const GRANT_ID = uuid(6110)
 export const GRANTS_SOURCE_ID = uuid(6121)
+export const GLOBAL_GRANTS_SOURCE_ID = uuid(6123)
+
+export const MEMBERSHIP_FILE = "custom-tables/Membership/Membership.meta.json"
+export const MEMBERSHIP_ID = uuid(6100)
+export const MEMBERS_SOURCE_ID = uuid(6120)
+export const MEMBER_REGION_FILE =
+  "information-registers/MemberRegion/MemberRegion.meta.json"
+export const TEAM_KIND_ID = uuid(6008)
 
 const ref = (kind: string, name: string) => ({ kind, name })
 
@@ -82,20 +90,21 @@ function catalog(
   }
 }
 
+/** Вид скоупу `org` фікстури: членство дає довідник `OrgMember`. */
+const ORG_SCOPE_KIND = {
+  id: ORG_KIND_ID,
+  name: "org",
+  physicalName: "org_id",
+  root: { object: ref("Catalog", "Organization") },
+  setFunction: "membership",
+}
+
 function defaults(): Record<string, Record<string, unknown>> {
   return {
     "project.meta.json": {
       name: "RightsApp",
       database: { provider: "supabase" },
-      scopeKinds: [
-        {
-          id: ORG_KIND_ID,
-          name: "org",
-          physicalName: "org_id",
-          root: { object: ref("Catalog", "Organization") },
-          setFunction: "membership",
-        },
-      ],
+      scopeKinds: [ORG_SCOPE_KIND],
     },
     "catalogs/Organization/Organization.meta.json": catalog(
       uuid(6002),
@@ -133,7 +142,7 @@ function defaults(): Record<string, Record<string, unknown>> {
         refAttribute(6013, "region", "region_id", ref("Catalog", "Region")),
       ],
     },
-    "information-registers/MemberRegion/MemberRegion.meta.json": {
+    [MEMBER_REGION_FILE]: {
       id: MEMBER_REGION_ID,
       kind: "InformationRegister",
       name: "MemberRegion",
@@ -278,33 +287,162 @@ function systemCatalogs(
         ] as const)
   const name = prefix === "org" ? "Org" : "Global"
   return {
-    [rolesFile]: catalog(rolesId, `${name}Roles`, `${prefix}_roles`, {
-      role: "rightsRoles",
-      scope,
-    }),
-    [assignmentsFile]: catalog(
+    [rolesFile]: systemCatalog(
+      rolesId,
+      `${name}Roles`,
+      `${prefix}_roles`,
+      "rightsRoles",
+      scope
+    ),
+    [assignmentsFile]: systemCatalog(
       assignmentsId,
       `${name}RoleAssignments`,
       `${prefix}_role_assignments`,
-      { role: "roleAssignments", scope }
+      "roleAssignments",
+      scope
     ),
   }
 }
 
+/** Системний довідник прав (Р2a1-5) з роллю й рівнем — власним скоупом. */
+export function systemCatalog(
+  id: string,
+  name: string,
+  physicalName: string,
+  role: "rightsRoles" | "roleAssignments",
+  scope: string
+) {
+  return catalog(id, name, physicalName, { role, scope })
+}
+
+/** Шар перевизначень: `null` прибирає файл з проєкту. */
+export type Layer = Record<string, Record<string, unknown> | null>
+
+/** Шар, що прибирає файли за шляхами. */
+export const without = (...paths: string[]): Layer =>
+  Object.fromEntries(paths.map((path) => [path, null]))
+
 /**
  * Ролі й набори фікстури з шарами перевизначень: кожен шар зливається з
- * файлом за шляхом на верхньому рівні ключів, пізніший — поверх раннього.
+ * файлом за шляхом на верхньому рівні ключів, пізніший — поверх раннього;
+ * `null` прибирає файл.
  */
-export function withRoles(
-  ...layers: Record<string, Record<string, unknown>>[]
-): Map<string, string> {
+export function withRoles(...layers: Layer[]): Map<string, string> {
   const merged = rolesAndSets()
+  const removed = new Set<string>()
   for (const layer of layers) {
     for (const [path, fields] of Object.entries(layer)) {
-      merged[path] = { ...merged[path], ...fields }
+      if (fields === null) {
+        delete merged[path]
+        removed.add(path)
+      } else {
+        merged[path] = { ...merged[path], ...fields }
+        removed.delete(path)
+      }
     }
   }
-  return rightsFiles(merged)
+  const files = rightsFiles(merged)
+  // Типові файли `rightsFiles` теж можна прибрати: шар знає лише шлях.
+  for (const path of removed) files.delete(path)
+  return files
+}
+
+/**
+ * Другий вид скоупу `team` без членства: зовнішній корінь і дослівна функція
+ * множини, тож проєкт компілюється без довідника членства виду.
+ */
+export function teamScopeKind(): Layer {
+  return {
+    [PROJECT_FILE]: {
+      scopeKinds: [
+        ORG_SCOPE_KIND,
+        {
+          id: TEAM_KIND_ID,
+          name: "team",
+          physicalName: "team_id",
+          root: {
+            external: { schema: "public", table: "teams", column: "id" },
+          },
+          setFunction: { schema: "public", name: "team_ids" },
+        },
+      ],
+    },
+  }
+}
+
+/** Прийнята таблиця членства виду `org`; `uniques` дає `UNIQUE (scope, id)`. */
+export function membershipTable(overrides: Record<string, unknown> = {}) {
+  return {
+    id: MEMBERSHIP_ID,
+    kind: "CustomTable",
+    name: "Membership",
+    physicalName: "membership",
+    kindLabel: "membership",
+    scope: "org",
+    columns: [
+      column(6101, "id", "id", "UUID"),
+      column(6102, "orgId", "org_id", "UUID"),
+      column(6103, "userId", "user_id", "UUID"),
+      column(6104, "isActive", "is_active", "Boolean"),
+    ],
+    primaryKey: { columns: ["id"] },
+    uniques: [{ columns: ["orgId", "id"] }],
+    scopeColumn: "orgId",
+    ...overrides,
+  }
+}
+
+/** Прийняте джерело членства виду `org` над `Membership`. */
+export function membersSource(overrides: Record<string, unknown> = {}) {
+  return {
+    id: MEMBERS_SOURCE_ID,
+    name: "members",
+    scopeKind: "org",
+    table: ref("CustomTable", "Membership"),
+    columns: { scope: "orgId", user: "userId", active: "isActive" },
+    ...overrides,
+  }
+}
+
+/**
+ * Шар: членство виду `org` дає прийнята таблиця, а не `OrgMember` (Р1a-17).
+ * Функція множини — дослівна; довідник членства й зв'язок над ним прибрано,
+ * виконавець задачі посилається на прийняту таблицю. Саме джерело членства
+ * тест додає сам — разом з іншими полями проєкту.
+ */
+export function adoptedMembership(): Layer {
+  return {
+    [PROJECT_FILE]: {
+      scopeKinds: [
+        {
+          ...ORG_SCOPE_KIND,
+          setFunction: { schema: "public", name: "org_ids" },
+        },
+      ],
+    },
+    [TASK_FILE]: {
+      attributes: [
+        refAttribute(
+          6011,
+          "assignee",
+          "assignee_id",
+          ref("CustomTable", "Membership")
+        ),
+      ],
+    },
+    [MEMBERSHIP_FILE]: membershipTable(),
+    ...without(MEMBER_FILE, MEMBER_REGION_FILE),
+  }
+}
+
+/** Джерело призначень глобального рівня над `RoleGrant`. */
+export function globalGrantsSource() {
+  return grantsSource({
+    id: GLOBAL_GRANTS_SOURCE_ID,
+    name: "globalGrants",
+    assignedOn: "global",
+    columns: { member: "memberId", role: "roleKey" },
+  })
 }
 
 /**

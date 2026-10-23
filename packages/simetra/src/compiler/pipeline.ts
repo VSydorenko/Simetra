@@ -38,6 +38,10 @@ import {
   roleContracts,
   sourceContracts,
 } from "./rights/contracts"
+import {
+  rightsCatalogContracts,
+  rightsCatalogTables,
+} from "./rights/system-catalogs"
 import { checkLinks } from "./stages/links"
 import { buildModel, enumTypeOf, rowTypesOf } from "./stages/model"
 import { buildMovementFunctions } from "./movement-functions"
@@ -190,7 +194,8 @@ export async function runStages(
         physical,
         stage1.project,
         integrity
-      )
+      ),
+      rightsCatalogTables(stage1.objects, physical)
     ),
   ])
   const ok = !hasErrors(diagnostics)
@@ -219,6 +224,13 @@ export async function runStages(
       diagnostics: sortDiagnostics([...diagnostics, ...projection.diagnostics]),
     }
   }
+  // Довідники прав потрібні і контрактам, і генератору прав серед SQL-одиниць:
+  // обчислюються до одиниць, тож `buildContracts` їх лише приймає (Р2a1-22).
+  const rightsCatalogs = rightsCatalogContracts(
+    stage1.objects,
+    stage2.references,
+    physical
+  )
 
   const scopeKindIdByFile = new Map<string, string>()
   const rootIdByPointer = new Map<string, string>()
@@ -455,7 +467,8 @@ export async function runStages(
         stage1.project
       ),
       roles,
-      projection.rows
+      projection.rows,
+      rightsCatalogs
     ),
     presentation: buildPresentation(
       stage1.objects,

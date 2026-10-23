@@ -52,6 +52,7 @@ import { movementWrapperName } from "../movement-functions"
 import { standardOverrideNames, type PresentationFields } from "../presentation"
 import { checkRights } from "../rights/checks"
 import { checkRoles } from "../rights/role-checks"
+import { checkSystemCatalogs } from "../rights/system-catalogs"
 import { pgNamespaceKeys, type VerbatimUnit } from "../sql/units"
 import { PROJECT_FILE, objectKey, type ParsedObject } from "./files"
 import {
@@ -218,6 +219,7 @@ export function checkIntegrity(
   const rights = { objects, references, model, scopeKinds, project, byId }
   diagnostics.push(...checkRights(rights))
   diagnostics.push(...checkRoles(rights))
+  diagnostics.push(...checkSystemCatalogs(rights))
 
   for (const { file, pointer, name } of model.declaredNames) {
     if (isSqlReservedWord(name)) {
