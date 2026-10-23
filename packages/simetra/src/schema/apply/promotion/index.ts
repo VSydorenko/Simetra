@@ -1,5 +1,6 @@
 export {
   foreignSequenceRefusals,
+  markerTables,
   promotionTransition,
   type PromotionInput,
   type TransitionVerdict,

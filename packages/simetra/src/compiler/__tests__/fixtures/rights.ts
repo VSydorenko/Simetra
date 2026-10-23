@@ -1,4 +1,9 @@
-import { compile, type CompileResult } from "simetra/compiler"
+import {
+  compile,
+  promoteInput,
+  type CompileResult,
+  type PromoteInput,
+} from "simetra/compiler"
 import { metaFiles, uuid } from "../helpers"
 
 /**
@@ -791,4 +796,47 @@ export function compileRights(
   files: ReadonlyMap<string, string>
 ): Promise<CompileResult> {
   return compile(files)
+}
+
+export const TAG_FILE = "custom-tables/Tag/Tag.meta.json"
+export const TAG_ID = uuid(6590)
+
+/**
+ * Шар з прийнятою таблицею `Tag` (`public.tag`), яку `tagMapping` промотує
+ * в довідник без кроків даних, змін типу й перетворень одиниць: план із
+ * промоцією поверх домену політик (Р2a2-11).
+ */
+export function promotableTag(): Layer {
+  return {
+    [TAG_FILE]: {
+      id: TAG_ID,
+      kind: "CustomTable",
+      name: "Tag",
+      physicalName: "tag",
+      kindLabel: "tag",
+      scope: "none",
+      columns: [
+        column(6591, "id", "id", "UUID"),
+        { ...column(6592, "name", "name", "String"), length: 150 },
+      ],
+      primaryKey: { name: "tag_pkey", columns: ["id"] },
+    },
+  }
+}
+
+export function tagMapping(): PromoteInput {
+  return promoteInput.parse({
+    target: { name: "Tag" },
+    into: {
+      kind: "Catalog",
+      name: "Tag",
+      data: { codeLength: 0, descriptionLength: 150 },
+    },
+    columns: {
+      id: { to: "standard", name: "ref" },
+      name: { to: "standard", name: "description" },
+    },
+    fill: [],
+    conversions: {},
+  })
 }

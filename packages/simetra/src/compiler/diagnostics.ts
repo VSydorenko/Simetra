@@ -310,6 +310,7 @@ export const COMPILER_RULES = [
   "plan.preservation-type",
   "plan.provider-trigger-taken",
   "plan.numbering-not-generated",
+  "plan.carrier-backfill-missing",
   "database.failed",
   "roles.create-role-denied",
   "introspect.unrepresentable",
