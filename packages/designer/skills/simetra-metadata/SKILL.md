@@ -474,8 +474,8 @@ pnpm exec simetra mcp --allow-database-write
 - With `--read-only` every tool is still listed, but a write tool is refused
   with a hint to remove `--read-only` from the server's args. Ask the owner
   before restarting the server without it.
-- `apply` writes to the database only when the server runs with
-  `--allow-database-write`; without it `apply` is refused with a hint to add
+- `apply` and `roles` write to the database only when the server runs with
+  `--allow-database-write`; without it they are refused with a hint to add
   the flag. Ask the owner; never add it yourself. `--read-only` refuses
   `plan` and `apply` too: they write their files under `plans/`.
 - `plan` and `apply` have no `dryRun`: review with `plan`, and check on the

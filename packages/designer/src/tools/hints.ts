@@ -35,12 +35,12 @@ export function readOnlyHint(
  */
 export function databaseWriteHint(
   launchArgs: readonly string[] = ["simetra", "mcp"],
-  o: { refusal?: boolean } = {}
+  o: { refusal?: boolean; tools?: string } = {}
 ): string {
   const before = launchArgs.filter((a) => a !== ALLOW_DATABASE_WRITE_FLAG)
   const after = [...before, ALLOW_DATABASE_WRITE_FLAG]
   return [
-    `This server runs without ${ALLOW_DATABASE_WRITE_FLAG}: apply cannot write to the database.`,
+    `This server runs without ${ALLOW_DATABASE_WRITE_FLAG}: ${o.tools ?? "apply"} cannot write to the database.`,
     `Only the owner may enable it: add ${ALLOW_DATABASE_WRITE_FLAG} to this server's args in the MCP client config and restart it:`,
     `args ending in ${JSON.stringify(before)} become ${JSON.stringify(after)}.`,
     // «Nothing changed.» — фраза відмови; в `instructions` вона хибно

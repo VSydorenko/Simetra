@@ -18,6 +18,7 @@ import {
   readOnlyHint,
 } from "../tools/hints"
 import { invoke } from "../tools/invoke"
+import { rolesTool } from "../tools/roles-tool"
 import type { DatabaseResource } from "../tools/types"
 import {
   addAdoptedTag,
@@ -122,6 +123,31 @@ const applyInput = {
   planHash: "a".repeat(64),
 }
 
+describe("roles over MCP", () => {
+  it("is refused without --allow-database-write, naming roles in the hint", async () => {
+    const spy = spyDatabase()
+    const direct = await invoke(
+      rolesTool,
+      {},
+      {
+        dir: await project(),
+        readOnly: false,
+        allowDatabaseWrite: false,
+        dryRun: false,
+        confirmed: true,
+        channel: "mcp",
+        database: spy.database,
+      }
+    )
+    expect(direct.refusal?.reason).toBe("database-write-disabled")
+    expect(direct.refusal?.message).toBe(
+      databaseWriteHint(undefined, { tools: "roles" })
+    )
+    expect(direct.refusal?.message).toContain("roles cannot write")
+    expect(spy.connects()).toBe(0)
+  })
+})
+
 describe("apply over MCP", () => {
   it("is refused without --allow-database-write, naming the flag, before connecting", async () => {
     const dir = await project()
@@ -215,11 +241,17 @@ describe("apply over MCP", () => {
   it("instructions name the database write flag", async () => {
     const off = await connect(await project(), false)
     expect(off.getInstructions()).toContain(
-      databaseWriteHint(undefined, { refusal: false })
+      databaseWriteHint(undefined, {
+        refusal: false,
+        tools: "apply and roles",
+      })
     )
     const on = await connect(await project(), false, undefined, undefined, true)
     expect(on.getInstructions()).not.toContain(
-      databaseWriteHint(undefined, { refusal: false })
+      databaseWriteHint(undefined, {
+        refusal: false,
+        tools: "apply and roles",
+      })
     )
     expect(on.getInstructions()).toContain("planHash")
   })
