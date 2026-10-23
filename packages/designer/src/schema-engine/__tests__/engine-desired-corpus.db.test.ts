@@ -14,6 +14,7 @@ import {
   readReferenceDomain,
   customTables,
   FIXTURES,
+  policyDomain,
 } from "../../../../simetra/test/support"
 
 /**
@@ -107,6 +108,13 @@ describe("deployed desired state reconciles empty through the port", () => {
 
   it("reference domain", async () => {
     await expectDeployedRenderIsEmpty(readReferenceDomain())
+  })
+
+  // Функції й тригери копій носіїв, `WHEN` механіки й підписки з
+  // генерованою колонкою (`TaskReport`), `RESTRICTIVE`-межі й
+  // `rights_visible_users` проходять туди-назад через двигун
+  it("policy domain", async () => {
+    await expectDeployedRenderIsEmpty(policyDomain())
   })
 })
 
