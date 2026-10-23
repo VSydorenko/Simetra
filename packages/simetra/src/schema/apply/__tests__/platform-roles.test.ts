@@ -3,6 +3,7 @@ import { compile, loadSqlParser } from "simetra/compiler"
 import { PLATFORM_ROLES } from "simetra/model"
 import {
   desiredForApply,
+  ApplyDbError,
   ensurePlatformRoles,
   platformRoleRefusals,
   requiredPlatformRoles,
@@ -98,6 +99,12 @@ describe("platformRoleRefusals", () => {
       violation: "member:migrator",
     },
     {
+      case: "member-without-admin",
+      found: [row({ members: [member({ admin: false })] })],
+      codes: ["plan.platform-role-shape"],
+      violation: "member:migrator",
+    },
+    {
       case: "admin-manager",
       found: [row({ members: [member({})] })],
       codes: [],
@@ -166,15 +173,28 @@ function fakeCluster(o: {
   canCreate: Record<string, boolean>
   roles?: Record<string, PlatformRoleRow[]>
   shared?: boolean
+  /**
+   * Роль, що з'являється між фазами: `read` — до першої транзакції запису
+   * (її бачить читання фази запису), `create` — разом із чужим
+   * `CREATE ROLE`, тож власний падає `42710`.
+   */
+  appear?: { row: PlatformRoleRow; on: "read" | "create" }
 }): { dbs: ApplyDatabase; writes: { url: string; sql: string }[] } {
   const roles = new Map<string, PlatformRoleRow[]>(
     Object.entries(o.roles ?? {})
   )
   const clusterOf = (url: string) => (o.shared === true ? "cluster" : url)
   const writes: { url: string; sql: string }[] = []
+  let pending = o.appear
+  const arrive = (key: string) => {
+    if (pending === undefined) return
+    roles.set(key, [...(roles.get(key) ?? []), pending.row])
+    pending = undefined
+  }
   const dbs: ApplyDatabase = {
-    transaction: async (db, end, fn) =>
-      fn({
+    transaction: async (db, end, fn) => {
+      if (end === "commit" && pending?.on === "read") arrive(clusterOf(db.url))
+      return fn({
         query: async <R extends Record<string, unknown>>(
           sql: string,
           params?: readonly unknown[]
@@ -192,6 +212,10 @@ function fakeCluster(o: {
             throw new Error(`write in a read transaction: ${sql}`)
           writes.push({ url: db.url, sql })
           const created = /^CREATE ROLE "?([a-z_]+)"?/.exec(sql)
+          if (created !== null && pending?.on === "create") {
+            arrive(key)
+            throw new ApplyDbError("role already exists", "42710")
+          }
           if (created !== null)
             roles.set(key, [
               ...(roles.get(key) ?? []),
@@ -200,7 +224,8 @@ function fakeCluster(o: {
           return [] as R[]
         },
         extract: () => Promise.reject(new Error("no extract expected")),
-      }),
+      })
+    },
   }
   return { dbs, writes }
 }
@@ -267,4 +292,24 @@ describe("ensurePlatformRoles", () => {
       { url: TARGET.url, sql: expect.stringContaining("NOLOGIN NOINHERIT") },
     ])
   })
+
+  it.each(["read", "create"] as const)(
+    "checks the shape of a role that appeared between the phases (on %s)",
+    async (on) => {
+      const { dbs } = fakeCluster({
+        canCreate: { [TARGET.url]: true },
+        appear: { row: row({ attributes: { login: true } }), on },
+      })
+      expect(
+        await ensurePlatformRoles(dbs, [BOTH[0]!], [PLATFORM_ROLES.command])
+      ).toMatchObject({
+        refusal: [
+          {
+            code: "plan.platform-role-shape",
+            params: { server: "target", violation: "login" },
+          },
+        ],
+      })
+    }
+  )
 })

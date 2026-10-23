@@ -3375,8 +3375,8 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     uk: (p) =>
       `Платформної ролі ${p.role}, якій згенерований SQL дає гранти, немає на сервері ${p.server === "shadow" ? "тіні" : "цілі"}`,
     hint: {
-      en: "No plan was written. Platform roles live in the cluster, not in the database, so the plan does not create them: run `simetra roles` once with a role that has CREATEROLE, and plan again.",
-      uk: "План не записано. Платформні ролі живуть у кластері, а не в базі, тож план їх не створює: один раз запустіть `simetra roles` від ролі з CREATEROLE і сплануйте знову.",
+      en: "Nothing was planned or created. Platform roles live in the cluster, not in the database, so plan and apply do not create them: run `simetra roles` once with a role that has CREATEROLE, and run the command again.",
+      uk: "Нічого не сплановано й не створено. Платформні ролі живуть у кластері, а не в базі, тож план і застосування їх не створюють: один раз запустіть `simetra roles` від ролі з CREATEROLE і повторіть команду.",
     },
   },
   "plan.platform-role-shape": {
@@ -3385,8 +3385,8 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     uk: (p) =>
       `Платформна роль ${p.role} на сервері ${p.server === "shadow" ? "тіні" : "цілі"} має небезпечну форму (${p.violation}): вона мусить бути NOLOGIN NOINHERIT без інших атрибутів, ні в що не входити, а її члени можуть лише керувати нею`,
     hint: {
-      en: "No plan was written. `simetra roles` does not change an existing role: fix it by hand with `ALTER ROLE <role> NO<attribute>` for an attribute, or `REVOKE <role> FROM <member>` (or revoke the role it belongs to) for a membership, and plan again.",
-      uk: "План не записано. `simetra roles` наявну роль не змінює: виправте її вручну — `ALTER ROLE <роль> NO<атрибут>` для атрибута чи `REVOKE <роль> FROM <член>` (або відкличте роль, у яку вона входить) для членства — і сплануйте знову.",
+      en: "Nothing was planned or created. `simetra roles` does not change an existing role: fix it by hand with `ALTER ROLE <role> NO<attribute>` for an attribute, or `REVOKE <role> FROM <member>` (or revoke the role it belongs to) for a membership, and run the command again.",
+      uk: "Нічого не сплановано й не створено. `simetra roles` наявну роль не змінює: виправте її вручну — `ALTER ROLE <роль> NO<атрибут>` для атрибута чи `REVOKE <роль> FROM <член>` (або відкличте роль, у яку вона входить) для членства — і повторіть команду.",
     },
   },
   "plan.type-guard-unsupported": {

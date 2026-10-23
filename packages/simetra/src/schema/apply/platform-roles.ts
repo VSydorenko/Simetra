@@ -2,7 +2,7 @@ import type { SqlParser } from "simetra/compiler"
 import { PLATFORM_ROLES, quoteIdent } from "simetra/model"
 import type { DbConnection, EngineDiagnostic } from "../engine"
 import { applyDiagnostic } from "./diagnostic"
-import type { ApplyDatabase, ApplyTransaction } from "./port"
+import { ApplyDbError, type ApplyDatabase, type ApplyTransaction } from "./port"
 
 /** Сервер, на якому перевірено роль: ціль чи база тіні. */
 export type RoleServer = "target" | "shadow"
@@ -133,7 +133,7 @@ function violation(found: PlatformRoleRow): string | undefined {
   const [parent] = [...found.memberOf].sort()
   if (parent !== undefined) return `member-of:${parent}`
   const holder = found.members.find(
-    (m) => m.inherit || m.set || (m.admin && !m.manager)
+    (m) => m.inherit || m.set || !m.admin || !m.manager
   )
   return holder === undefined ? undefined : `member:${holder.role}`
 }
@@ -252,6 +252,7 @@ export async function ensurePlatformRoles(
     name: string
     outcome: "created" | "present"
   }[] = []
+  const late: EngineDiagnostic[] = []
   for (const { server, db } of servers) {
     await dbs.transaction(db, "commit", async (tx) => {
       // Налаштування сесії чи кластера (`'set, inherit'`) дало б творцеві
@@ -259,16 +260,45 @@ export async function ensurePlatformRoles(
       // `plan.platform-role-shape`; порожнє — рівно ADMIN
       await tx.query("SET LOCAL createrole_self_grant = ''")
       for (const name of names) {
-        const [present] = await readPlatformRoles(tx, [name])
-        if (present === undefined)
-          await tx.query(`CREATE ROLE ${quoteIdent(name)} NOLOGIN NOINHERIT`)
-        outcomes.push({
-          server,
-          name,
-          outcome: present === undefined ? "created" : "present",
-        })
+        const outcome = await createOrCheck(tx, name, server)
+        if (outcome === "created" || outcome === "present")
+          outcomes.push({ server, name, outcome })
+        else late.push(...outcome)
       }
     })
   }
-  return outcomes
+  return late.length > 0 ? { refusal: late } : outcomes
+}
+
+/**
+ * Створення однієї ролі фази запису. Роль, що з'явилася між фазами (чужий
+ * запуск, адміністратор), звіряється так само, як наявна у фазі читання:
+ * інакше `present` прикрив би небезпечну форму. Гонку з паралельним
+ * `CREATE ROLE` (`42710`) ловить точка збереження, тож транзакція живе далі.
+ */
+async function createOrCheck(
+  tx: ApplyTransaction,
+  name: string,
+  server: RoleServer
+): Promise<"created" | "present" | EngineDiagnostic[]> {
+  const shape = async (): Promise<"present" | EngineDiagnostic[]> => {
+    const refusal = platformRoleRefusals(
+      [name],
+      await readPlatformRoles(tx, [name]),
+      server
+    )
+    return refusal.length > 0 ? refusal : "present"
+  }
+  if ((await readPlatformRoles(tx, [name])).length > 0) return shape()
+  await tx.query("SAVEPOINT platform_role")
+  try {
+    await tx.query(`CREATE ROLE ${quoteIdent(name)} NOLOGIN NOINHERIT`)
+  } catch (error) {
+    if (!(error instanceof ApplyDbError) || error.sqlstate !== "42710")
+      throw error
+    await tx.query("ROLLBACK TO SAVEPOINT platform_role")
+    return shape()
+  }
+  await tx.query("RELEASE SAVEPOINT platform_role")
+  return "created"
 }
