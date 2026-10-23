@@ -648,7 +648,7 @@ git commit -m "test(db): сценарій функцій прав під рол�
 - [x] **Step 1:** Скіл споживача: системні довідники прав (ролі `rightsRoles`, `roleAssignments`, рівень — скоуп довідника, лише `read` до адміністрування прав), команда `simetra roles` перед першим `plan` на новій базі. Англійською.
 - [x] **Step 2:** Run: `pnpm format:check && pnpm lint && pnpm typecheck && pnpm test` — код 0.
 - [x] **Step 3:** Run: `pnpm metadata:check && python3 scripts/check-doc-anchors.py && .agents/skills/codebase-research/scripts/orient --plan docs/superpowers/plans/2026-10-18-rights-2a1-command-role-functions.md` — код 0, якорі живі.
-- [x] **Step 4:** Повний `pnpm test:db` на одному SHA (у фоні; зовнішній таймаут не коротший за 45 хв): `/usr/bin/time -f %e pnpm test:db` — код 0; записати тривалість і порівняти з останнім прогоном до плану (приріст ≤ 45 с: два розгортання сценарію, `roles-tool`, `provider-roles`; більший — звіт архітектору з розкладом за файлами).
+- [x] **Step 4:** Повний `pnpm test:db` на одному SHA (у фоні; зовнішній таймаут не коротший за 45 хв): `/usr/bin/time -f %e pnpm test:db` — код 0; записати тривалість і порівняти з останнім прогоном до плану (приріст ≤ 45 с: два розгортання сценарію, `roles-tool`, `provider-roles`; більший — звіт архітектору з розкладом за файлами). Замір: код 0 на `5315ce8` (чисте дерево), 1256 с; останній повний прогін до плану — 21 хв 21 с на `5a9e140`, тож приросту поза шумом немає (новий `rights-functions.db.test.ts` — близько 3 с). CI job `db` — після push.
 - [x] **Step 5:** ROADMAP — рядок прав: «Права-2a1 виконано»; позначки плану.
 - [x] **Step 6: Commit**
 
