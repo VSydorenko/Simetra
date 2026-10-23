@@ -1,8 +1,11 @@
 import {
+  carrierFunctionNames,
+  carrierTriggerNames,
   diagnostic,
   grantTargetKeys,
   MECHANICS_FUNCTION,
   mechanicsTriggerName,
+  mechanicsUpdateTriggerName,
   ownsTarget,
   readSqlUnits,
   unitPlacement,
@@ -235,31 +238,86 @@ function ownerTable(unit: CatalogUnit, ctx: UnitsContext): string | undefined {
 const MECHANICS = qualified(MECHANICS_FUNCTION.schema, MECHANICS_FUNCTION.name)
 
 /**
- * Одиниця механіки рядка (рішення 9 плану П3-3a2): функція
- * `simetra.touch()`, грант лише на неї й тригер з ім'ям механіки, що кличе
- * саме її. Ними володіє платформа, тож вони не пишуться й без збереженого
- * опису теки — модуль користувача ними не володіє. Інший тригер, що кличе
- * ту саму функцію, — власний тригер таблиці: пропуск за самою схемою
- * `simetra` його б загубив.
+ * Функція, яку платформний тригер таблиці мусить кликати за своїм іменем:
+ * механіка рядка (`<t>_simetra_touch` і, на таблиці з копіями носіїв,
+ * `<t>_simetra_touch_update`) — `simetra.touch()`, тригери копій носіїв —
+ * функції носіїв таблиці (Р2a2-20). Інше ім'я — не платформний тригер.
  */
-function isMechanics(unit: CatalogUnit, ctx: UnitsContext): boolean {
+function platformTriggerFunction(
+  unit: CatalogUnit,
+  ctx: UnitsContext
+): string | undefined {
+  const target = unitTarget(unit, ctx.parse)
+  if (target?.object === undefined) return undefined
+  const table = {
+    schema: target.schema || ctx.defaultSchema,
+    name: target.object,
+  }
+  if (
+    unit.name === mechanicsTriggerName(table.name) ||
+    unit.name === mechanicsUpdateTriggerName(table.name)
+  )
+    return MECHANICS
+  const triggers = carrierTriggerNames(table)
+  const functions = carrierFunctionNames(table)
+  if (unit.name === triggers.derive)
+    return qualified(functions.derive.schema, functions.derive.name)
+  if (
+    unit.name === triggers.propagate ||
+    unit.name === triggers.propagateInsert
+  )
+    return qualified(functions.propagate.schema, functions.propagate.name)
+  return undefined
+}
+
+/**
+ * Функції платформних тригерів серед одиниць: механіка й ті функції носіїв,
+ * які кличе тригер носіїв з відповідним іменем. Функцію носіїв за самим
+ * іменем не впізнаємо: ім'я таблиці, від якого воно походить, дає лише
+ * тригер.
+ */
+function platformFunctions(
+  units: readonly CatalogUnit[],
+  ctx: UnitsContext
+): ReadonlySet<string> {
+  const found = new Set([MECHANICS])
+  for (const unit of units) {
+    if (unit.class !== "trigger") continue
+    const fn = platformTriggerFunction(unit, ctx)
+    if (fn !== undefined && triggerFunction(unit, ctx) === fn) found.add(fn)
+  }
+  return found
+}
+
+/**
+ * Платформна одиниця тригерів таблиці (рішення 9 плану П3-3a2, Р2a2-20):
+ * механіка рядка й копії носіїв — функція без аргументів, грант лише на такі
+ * функції й тригер з платформним ім'ям, що кличе саме свою функцію. Ними
+ * володіє платформа, тож вони не пишуться й без збереженого опису теки —
+ * модуль користувача ними не володіє. Інший тригер, що кличе ту саму
+ * функцію, — власний тригер таблиці: пропуск за самою схемою `simetra` чи
+ * за міткою імені його б загубив.
+ */
+function isPlatformTrigger(
+  unit: CatalogUnit,
+  ctx: UnitsContext,
+  functions: ReadonlySet<string>
+): boolean {
   switch (unit.class) {
     case "function":
-      return unit.identity === `function:${MECHANICS}()`
+      return [...functions].some((fn) => unit.identity === `function:${fn}()`)
     case "grant": {
       const targets = grantTargetKeys(unit, ctx.parse)
       return (
         targets.length > 0 &&
-        targets.every((t) => t === `function|${MECHANICS}()`)
+        targets.every((t) =>
+          [...functions].some((fn) => t === `function|${fn}()`)
+        )
       )
     }
     case "trigger": {
-      const table = unitTarget(unit, ctx.parse)?.object
-      return (
-        table !== undefined &&
-        unit.name === mechanicsTriggerName(table) &&
-        triggerFunction(unit, ctx) === MECHANICS
-      )
+      const fn = platformTriggerFunction(unit, ctx)
+      return fn !== undefined && triggerFunction(unit, ctx) === fn
     }
     default:
       return false
@@ -366,6 +424,7 @@ export function layoutUnits(
   }
 
   const grouped = new Map<string, CatalogUnit[]>()
+  const platform = platformFunctions(units, ctx)
   const platformOwned = (unit: CatalogUnit) =>
     grantTargetKeys(unit, ctx.parse).some((target) =>
       ownsTarget(ctx.platformGrants, target)
@@ -374,7 +433,7 @@ export function layoutUnits(
     if (
       ctx.described.has(unit.identity) ||
       platformOwned(unit) ||
-      isMechanics(unit, ctx)
+      isPlatformTrigger(unit, ctx, platform)
     )
       continue
     const path = pathOf(unit)

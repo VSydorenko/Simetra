@@ -38,7 +38,16 @@ export {
 } from "./sql/units"
 export { loadSqlParser, relationNameText, type SqlParser } from "./sql/parse"
 export { platformSchemaGrants } from "./platform/units"
-export { MECHANICS_FUNCTION, mechanicsTriggerName } from "./mechanics-units"
+export {
+  MECHANICS_FUNCTION,
+  contentChangeCondition,
+  mechanicsTriggerName,
+  mechanicsUpdateTriggerName,
+} from "./mechanics-units"
+export {
+  carrierFunctionNames,
+  carrierTriggerNames,
+} from "./rights/carrier-units"
 export {
   grantTargetKeys,
   ownsTarget,

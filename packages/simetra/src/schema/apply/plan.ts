@@ -983,6 +983,8 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
       clone: cloneModel,
       valueElementColumns: valueElementColumns(c.model),
       provider: c.model.project.database.provider,
+      physical: c.model.physical,
+      attributeCase: c.model.project.naming.attributeCase,
       parse,
     }),
     // Клас `property` — лише за еквівалентного відтворення в тіні (R10):
@@ -1002,6 +1004,8 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
     record,
     clone: cloneModel,
     desired: target.extracted.model,
+    physical: c.model.physical,
+    attributeCase: c.model.project.naming.attributeCase,
     parse,
   })
 
