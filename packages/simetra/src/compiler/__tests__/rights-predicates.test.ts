@@ -12,17 +12,24 @@ import { loadSqlParser, type SqlParser } from "../sql/parse"
 import { kitchenSink } from "./fixtures/kitchen-sink"
 import {
   ANNOUNCEMENT_FILE,
+  COMMENT_FILE,
   ANNOUNCEMENT_ID,
   ORG_KIND_ID,
   PROJECT_FILE,
   PROJECT_ID,
+  REGION_FILE,
   REGION_DIMENSION_ID,
   TASK_FILE,
   TASK_ID,
+  catalog,
   regionDimension,
   singleTenantRights,
   withRoles,
 } from "./fixtures/rights"
+import { uuid } from "./helpers"
+
+const COMMENT_ID = uuid(6050)
+const USER_REGION_FILE = "information-registers/UserRegion/UserRegion.meta.json"
 
 let parse: SqlParser
 beforeAll(async () => {
@@ -37,6 +44,72 @@ const allCarriers = () =>
       ownership: ["assignee", "createdBy"],
       access: [{ attribute: "region", dimension: "region" }],
       containerBinding: "project",
+    },
+  })
+
+const ref = (kind: string, name: string) => ({ kind, name })
+const refAttribute = (id: number, name: string, target: string) => ({
+  id: uuid(id),
+  name,
+  physicalName: `${name}_id`,
+  type: "Ref",
+  ref: ref("Catalog", target),
+})
+
+/**
+ * Однотенантний `Task` з виміром `region`: значення користувача — рядки
+ * зв'язку `UserRegion` на «Користувачів».
+ */
+const unscopedDimension = () =>
+  singleTenantRights({
+    [PROJECT_FILE]: {
+      accessDimensions: [
+        {
+          ...regionDimension(),
+          values: {
+            relation: {
+              object: ref("InformationRegister", "UserRegion"),
+              subject: "user",
+              value: "region",
+            },
+          },
+        },
+      ],
+    },
+    [REGION_FILE]: catalog(uuid(6040), "Region", "region", { scope: "none" }),
+    [USER_REGION_FILE]: {
+      id: uuid(6070),
+      kind: "InformationRegister",
+      name: "UserRegion",
+      physicalName: "user_region",
+      kindLabel: "user_region",
+      scope: "none",
+      dimensions: [
+        refAttribute(6071, "user", "Users"),
+        refAttribute(6072, "region", "Region"),
+      ],
+    },
+    [TASK_FILE]: {
+      attributes: [
+        refAttribute(6012, "project", "Project"),
+        refAttribute(6013, "region", "Region"),
+      ],
+      access: [{ attribute: "region", dimension: "region" }],
+    },
+  })
+
+/**
+ * `TaskComment` з носіями лише через шлях `task`: власність, вимір і
+ * прив'язка до контейнера.
+ */
+const viaCarriers = () =>
+  withRoles({
+    [PROJECT_FILE]: { accessDimensions: [regionDimension()] },
+    [TASK_FILE]: { containerBinding: "project" },
+    [COMMENT_FILE]: {
+      ownership: [["task", "assignee"]],
+      access: [{ ref: ["task", "region"], dimension: "region" }],
+      containerBinding: ["task", "project"],
     },
   })
 
@@ -271,6 +344,17 @@ describe("rights predicates", () => {
         "(SELECT simetra.has_right('read', 'announcement', 'own', NULL))",
       ],
     ],
+    [
+      "a dimension of an unscoped object",
+      unscopedDimension,
+      TASK_ID,
+      "read",
+      { extent: { dimensionId: REGION_DIMENSION_ID }, carrier: "region_id" },
+      [
+        `region_id = ANY (ARRAY(SELECT simetra.rights_dimension_values(${dim})))`,
+        `(SELECT simetra.has_right('read', 'task', 'dimension', ${dim}))`,
+      ],
+    ],
   ])("%s", async (_, files, objectId, action, selector, expected) => {
     const predicates = predicatesOf(await compiled(files()), objectId, action)
     const found = predicates.filter(
@@ -302,6 +386,30 @@ describe("rights predicates", () => {
       [inProject("own"), "assignee_id"],
       [inProject("own"), "created_by_id"],
       [inProject(region), "region_id"],
+    ])
+  })
+
+  // Межа 2a1: план 2a2 цей тест перевертає (носій шляху дає предикат на
+  // копії), а не видаляє — Р2a2-6.
+  it("skips via carriers until 2a2 (fail-closed)", async () => {
+    const model = await compiled(viaCarriers())
+    const comment = model.contracts.rights.find(
+      (c) => c.objectId === COMMENT_ID
+    )!
+    expect(comment.ownership[0]!.via).toBeDefined()
+    expect(comment.access[0]!.carrier.via).toBeDefined()
+    expect(comment.binding!.carrier.via).toBeDefined()
+    expect(comment.actions[0]!.extents.map((e) => e.form)).toEqual([
+      "any",
+      "own",
+      "dimension",
+    ])
+    const predicates = predicatesOf(model, COMMENT_ID, "read")
+    expect(predicates.map((p) => [p.extent, p.carrier])).toEqual([
+      ["any", undefined],
+    ])
+    expect(predicates[0]!.conditions.map(renderCondition)).toEqual([
+      "org_id = ANY (ARRAY(SELECT simetra.rights_any('read', 'task_comment')))",
     ])
   })
 })

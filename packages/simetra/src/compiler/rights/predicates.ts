@@ -46,9 +46,10 @@ interface Inner {
  * предикат на рівні скоупу (нескоуплений об'єкт — булева перевірка права) і
  * один у контейнері, якщо об'єкт до нього прив'язаний.
  *
- * Носій зі шляхом (Рх21) предиката тут не отримує: з'єднання через ціль
- * шляху й денормалізовані носії ТЧ — план 2a2; без предиката рядок лише не
- * відкривається цим обсягом (fail-closed).
+ * Носій зі шляхом (Рх21) предиката тут не отримує: у 2a2 будівник бере
+ * `CarrierContract.value` — копію шляху в основній таблиці (план 2a2,
+ * Р2a2-6); до того без предиката рядок лише не відкривається цим обсягом
+ * (fail-closed).
  */
 export function rightsPredicates(
   contract: RightsContract,
@@ -119,6 +120,7 @@ export function rightsPredicates(
   })
 
   const binding = contract.binding
+  // Прив'язка зі шляхом — до `CarrierContract.value` у 2a2 (Р2a2-6).
   if (binding === undefined || binding.carrier.via !== undefined) return atScope
   const inContainer = inners.map(
     ({ extent, carrier, mine }): RightsPredicate => ({
@@ -150,6 +152,7 @@ export function renderCondition(condition: RightsCondition): string {
   }
 }
 
+/** Носії без шляху; шлях — через `CarrierContract.value` у 2a2 (Р2a2-6). */
 function direct<T extends CarrierContract>(carriers: readonly T[]): T[] {
   return carriers.filter((c) => c.via === undefined)
 }
