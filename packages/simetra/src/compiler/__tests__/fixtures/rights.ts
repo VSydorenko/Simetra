@@ -73,7 +73,8 @@ function refAttribute(
   return { id: uuid(id), name, physicalName, type: "Ref", ref: target }
 }
 
-function catalog(
+/** Довідник фікстури у виді `org`; `rest` перевизначає поля. */
+export function catalog(
   id: string,
   name: string,
   physicalName: string,

@@ -337,6 +337,19 @@ describe("messages catalog", () => {
     )
   })
 
+  it("rights.scope-without-membership names the container when there is one", () => {
+    const d = diagnostic("rights.scope-without-membership", "", "", {
+      scopeKind: "team",
+      container: "Squad",
+    })
+    expect(d.message).toBe(
+      'Container Squad lives in scope kind "team", which has no membership'
+    )
+    expect(localize(d, "uk").message).toBe(
+      'Контейнер Squad у виді скоупу "team" без членства'
+    )
+  })
+
   it("plan.provider-trigger-taken names the trigger and the provider table", () => {
     const d = diagnostic("plan.provider-trigger-taken", "", "", {
       trigger: "audit_x",

@@ -14,11 +14,12 @@ import {
   recordExtent,
   recordObjects,
   roleLevel,
+  scopeKindOf,
   sourceLevel,
   supportedExtents,
   supportsExtent,
 } from "./facts"
-import { objectTarget } from "./references"
+import { must, objectTarget } from "./references"
 
 /**
  * Правила ролей і наборів прав стадії 4 (спека прав §4.1, §4.7, Рх7, Рх19):
@@ -30,6 +31,7 @@ import { objectTarget } from "./references"
 export function checkRoles(ctx: RightsCheckContext): Diagnostic[] {
   const diagnostics: Diagnostic[] = []
   const known = new Set(ctx.scopeKinds.map((k) => k.name))
+  const kindNames = new Map(ctx.scopeKinds.map((k) => [k.id, k.name]))
   const sourceLevels = new Map(
     ctx.project.assignmentSources.flatMap((source, index) => {
       const level = sourceLevel(ctx.project, index, ctx.references)
@@ -84,6 +86,20 @@ export function checkRoles(ctx: RightsCheckContext): Diagnostic[] {
         report("rights.container-target", "/assignedOn/container", {
           role: object.name,
           name: target.name,
+        })
+      }
+      // Контейнерне призначення лежить у довідниках виду скоупу контейнера й
+      // дістається учаснику цього виду (Р2a1-7): без членства — нікому.
+      const containerKind =
+        target === undefined ? undefined : scopeKindOf(target, ctx.references)
+      if (
+        target !== undefined &&
+        containerKind !== undefined &&
+        membershipOfScopeKind(containerKind, ctx.objects, ctx) === undefined
+      ) {
+        report("rights.scope-without-membership", "/assignedOn/container", {
+          scopeKind: must(kindNames.get(containerKind)),
+          container: target.name,
         })
       }
     }

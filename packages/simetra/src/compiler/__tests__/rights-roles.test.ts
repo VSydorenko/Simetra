@@ -17,6 +17,7 @@ import {
   SUPPORT_ID,
   TASK_EDITORS_ID,
   TASK_READERS_ID,
+  catalog,
   compileRights,
   grantTable,
   grantsSource,
@@ -31,6 +32,8 @@ import { uuid } from "./helpers"
 const ref = (kind: string, name: string) => ({ kind, name })
 
 const files = withRoles
+
+const SQUAD_FILE = "catalogs/Squad/Squad.meta.json"
 
 /**
  * Джерела призначень контейнерного (`grants`) і глобального рівня. Глобальне
@@ -189,7 +192,26 @@ describe("roles and rights sets", () => {
     ],
   }
 
-  it.each([
+  // Вид `team` без членства: довідників прав його рівня теж немає, тож роль
+  // рівня `team` отримує й `rights.system-catalog-missing` (Р2a1-5).
+  const teamCatalogsMissing = (file: string) =>
+    (["rightsRoles", "roleAssignments"] as const).map((missing) => ({
+      code: "rights.system-catalog-missing",
+      file,
+      pointer: "/assignedOn",
+      params: { level: "team", missing },
+    }))
+
+  it.each<{
+    case: string
+    input: ReturnType<typeof files>
+    code: string
+    file: string
+    pointer: string
+    params: Record<string, string>
+    /** Діагностики того самого файлу, що стоять перед очікуваною. */
+    before?: object[]
+  }>([
     {
       case: "includes a role instead of a set",
       input: files({
@@ -236,6 +258,26 @@ describe("roles and rights sets", () => {
       file: ROLE_FILE("TeamLead"),
       pointer: "/assignedOn/scopeKind",
       params: { scopeKind: "team" },
+      before: teamCatalogsMissing(ROLE_FILE("TeamLead")),
+    },
+    {
+      // Контейнерне призначення дістається учаснику виду контейнера (Р2a1-7).
+      case: "is assigned on a container of a scope kind without membership",
+      input: files({
+        [PROJECT_FILE]: team,
+        [SQUAD_FILE]: catalog(uuid(6141), "Squad", "squad", {
+          scope: "team",
+          rightsContainer: true,
+        }),
+        [ROLE_FILE("SquadLead")]: role(uuid(6222), "SquadLead", {
+          container: ref("Catalog", "Squad"),
+        }),
+      }),
+      code: "rights.scope-without-membership",
+      file: ROLE_FILE("SquadLead"),
+      pointer: "/assignedOn/container",
+      params: { scopeKind: "team", container: "Squad" },
+      before: teamCatalogsMissing(ROLE_FILE("SquadLead")),
     },
     {
       case: "gives full access on a container role",
@@ -355,8 +397,8 @@ describe("roles and rights sets", () => {
       params: { role: "ProjectLead", name: "Region" },
     },
   ])("rejects a role that $case", async (row) => {
-    const { case: label, input, ...expected } = row
-    expect(await errors(input), label).toEqual([expected])
+    const { case: label, input, before = [], ...expected } = row
+    expect(await errors(input), label).toEqual([...before, expected])
   })
 
   it("closes a diamond of includes once", async () => {

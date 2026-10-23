@@ -210,12 +210,12 @@ export function checkSystemCatalogs(ctx: RightsCheckContext): Diagnostic[] {
     if (storage === undefined) continue
     const key = storageKey(storage)
     uncovered.add(key)
-    // Довідники виду без довідника членства неможливі (суб'єкту немає цілі):
-    // без членства роль уже має свою помилку, а членство з джерела дає права
-    // лише з 2d — про цю межу каже попередження джерела.
+    // Членство з джерела: довідників прав виду бути не може (суб'єкту немає
+    // цілі до 2d), а межу називає попередження джерела. Вид зовсім без
+    // членства — помилка ролі, і довідники йому все одно потрібні.
     if (
       storage.level === "scope" &&
-      membershipOfScopeKind(storage.scopeKindId, ctx.objects, ctx) !== "catalog"
+      membershipOfScopeKind(storage.scopeKindId, ctx.objects, ctx) === "source"
     ) {
       continue
     }

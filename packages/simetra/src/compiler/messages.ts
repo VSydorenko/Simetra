@@ -1786,9 +1786,13 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "rights.scope-without-membership": {
     en: (p) =>
-      `The role is assigned on scope kind "${p.scopeKind}", which has no membership`,
+      p.container === undefined
+        ? `The role is assigned on scope kind "${p.scopeKind}", which has no membership`
+        : `Container ${p.container} lives in scope kind "${p.scopeKind}", which has no membership`,
     uk: (p) =>
-      `Роль має рівень виду скоупу "${p.scopeKind}", у якого немає членства`,
+      p.container === undefined
+        ? `Роль має рівень виду скоупу "${p.scopeKind}", у якого немає членства`
+        : `Контейнер ${p.container} у виді скоупу "${p.scopeKind}" без членства`,
     hint: {
       en: "Declare a membership catalog of the scope kind or an adopted membership source; a scope role is assigned to members.",
       uk: "Оголосіть довідник членства виду скоупу чи прийняте джерело членства: роль рівня скоупу призначають учаснику.",
