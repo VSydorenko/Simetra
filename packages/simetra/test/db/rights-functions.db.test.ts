@@ -5,6 +5,7 @@ import type { CompiledModel } from "simetra/compiler"
 import { renderDesiredState } from "simetra/schema"
 import {
   EVERYONE_ID,
+  GRANT_FILE,
   ORG_ADMIN_ID,
   ORG_KIND_ID,
   ORG_MEMBER_ROLE_ID,
@@ -19,9 +20,12 @@ import {
   TEAM_LEAD_ID,
   USERS_FILE,
   compileRights,
+  globalGrantsSource,
   grant,
+  grantTable,
   objects,
   regionDimension,
+  role,
   secondScopeKind,
   singleTenantRights,
   withRoles,
@@ -115,7 +119,7 @@ type Delta = [
 
 /**
  * Сценарій опису «with a scope kind»: організації A і B, проєкти P1, P3 (з
- * позначкою видалення) в A і P2 у B, регіони A, користувачі `u1`–`u21`,
+ * позначкою видалення) в A і P2 у B, регіони A, користувачі `u1`–`u22`,
  * `x1`, `x2` з призначеннями з таблиці кейсів плану. Учасник `u` в
  * організації `O` — ключ `u@O`.
  */
@@ -177,7 +181,7 @@ async function seedScopeKind(client: pg.Client): Promise<Seed> {
   for (const region of ["R1", "R2", "R3"]) {
     await create(region, "region", { org_id: ids.A })
   }
-  await users(...Array.from({ length: 21 }, (_, i) => `u${i + 1}`), "x1", "x2")
+  await users(...Array.from({ length: 22 }, (_, i) => `u${i + 1}`), "x1", "x2")
   for (const user of [
     "u1",
     "u2",
@@ -196,6 +200,7 @@ async function seedScopeKind(client: pg.Client): Promise<Seed> {
     "u19",
     "u20",
     "u21",
+    "u22",
     "x2",
   ]) {
     await member(user)
@@ -245,6 +250,10 @@ async function seedScopeKind(client: pg.Client): Promise<Seed> {
   await assign("u20", { archetype: TEAM_LEAD_ID })
   await assign("u21", { archetype: PROJECT_LEAD_ID, container: ids.P3 })
   await assign("x2", { customRole: ids.custom })
+  // Р2a1-11: u22 має кастомну роль без `read@any` і окремо простий
+  // `OrgMember` з ним — вимога з іншого призначення дії не рятує.
+  await assign("u22", { customRole: ids.custom })
+  await assign("u22", { archetype: ORG_MEMBER_ROLE_ID })
 
   // Р2a1-26: команда з `id` організації A, а учасники команди — з `id`
   // учасників u3 (OrgAdmin в A) і u1 (виконавець задачі в A).
@@ -322,6 +331,13 @@ const CASES: [name: string, checks: (() => Check[]) | Check[]][] = [
     ],
   ],
   ["closure", [["u2", any("update"), []]]],
+  [
+    "closure-same-assignment",
+    [
+      ["u22", any("update"), []],
+      ["u22", any("read"), ["A"]],
+    ],
+  ],
   [
     "closure-chain",
     [
@@ -552,17 +568,41 @@ describe("rights functions with a scope kind", () => {
   })
 })
 
+/**
+ * Однотенантний проєкт, де глобальний рівень призначень покриває прийняте
+ * джерело, а глобальні довідники лишаються за контейнерний рівень `Project`
+ * (Р2a1-24): так поруч живуть глобальне призначення й архетип покритого
+ * рівня — обидва з `storage_id` `NULL`, і розрізняє їх лише рівень
+ * зберігання.
+ */
+async function singleTenantModel(): Promise<CompiledModel> {
+  const result = await compileRights(
+    singleTenantRights({
+      [PROJECT_FILE]: { assignmentSources: [globalGrantsSource()] },
+      [GRANT_FILE]: grantTable(),
+      [ROLE_FILE("Support")]: role(SUPPORT_ID, "Support", "global", {
+        grants: [grant(TASK, ["read"], "any")],
+      }),
+    })
+  )
+  expect(result.diagnostics.map((d) => [d.severity, d.code])).toEqual([
+    ["warning", "rights.adopted-source-unsupported"],
+  ])
+  return result.model!
+}
+
 describe("rights functions without scope kinds", () => {
   const tx = describeTransaction()
   let s1 = ""
+  let s2 = ""
   let p1 = ""
 
   beforeAll(async () => {
-    const result = await compileRights(singleTenantRights())
-    expect(result.diagnostics).toEqual([])
+    const model = await singleTenantModel()
     const client = await tx.open()
-    await client.query(renderDesiredState(result.model!).sql)
+    await client.query(renderDesiredState(model).sql)
     s1 = await signUp(client)
+    s2 = await signUp(client)
     p1 = randomUUID()
     await insert(client, "project", { id: p1 })
     await insert(client, "project", { id: randomUUID() })
@@ -571,19 +611,32 @@ describe("rights functions without scope kinds", () => {
       "global_role_assignments",
       assignmentRow(s1, { archetype: PROJECT_LEAD_ID, container: p1 })
     )
+    await insert(
+      client,
+      "global_role_assignments",
+      assignmentRow(s2, { archetype: SUPPORT_ID })
+    )
   })
+
+  const as = (sub: string, sql: string) =>
+    queryAs<{ v: unknown }>(
+      tx.client(),
+      "authenticated",
+      { sub, role: "authenticated" },
+      sql
+    )
 
   afterAll(() => tx.close())
 
   it("single-tenant-container: a container role opens its container only", async () => {
-    const as = (sql: string) =>
-      queryAs<{ v: unknown }>(
-        tx.client(),
-        "authenticated",
-        { sub: s1, role: "authenticated" },
-        sql
-      )
-    expect.soft(outcome(await as(hasRight("read", "task")))).toBe(false)
-    expect.soft(outcome(await as(containers))).toEqual([p1])
+    expect.soft(outcome(await as(s1, hasRight("read", "task")))).toBe(false)
+    expect.soft(outcome(await as(s1, containers))).toEqual([p1])
+  })
+
+  // Р2a1-12/24: рядок глобального довідника не вмикає архетип рівня,
+  // покритого джерелом, хоч `storage_id` обох — `NULL`.
+  it("covered-level-archetype: a global catalog row does not enable it", async () => {
+    expect.soft(outcome(await as(s2, hasRight("read", "task")))).toBe(false)
+    expect.soft(outcome(await as(s2, mineCount("true")))).toBe(0)
   })
 })
