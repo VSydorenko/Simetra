@@ -9,7 +9,7 @@ import {
 } from "../sql/dependencies"
 import { loadSqlParser } from "../sql/parse"
 import { withoutLocations } from "../sql/units"
-import { compileRights, withRoles } from "./fixtures/rights"
+import { compileRights, policyDomain, withRoles } from "./fixtures/rights"
 import {
   expectClean,
   acceptDebt,
@@ -217,6 +217,38 @@ describe("creation order", () => {
       ["function:simetra.rights_projection()", mine],
       [mine, "function:simetra.has_right(text,text,text,uuid)"],
     ])
+  })
+
+  it("creates carrier propagation triggers after their function and the dependent tables", async () => {
+    // Тіла plpgsql граф не читає: залежні таблиці тіла — явні ребра `requires`.
+    const result = await compileRights(policyDomain())
+    expectClean(result)
+    const list = result.model!.creationOrder.map((node) =>
+      node.type === "unit"
+        ? node.identity
+        : `${node.type}:${node.schema}.${node.name}`
+    )
+    const fn = "function:public.task_simetra_carriers_out()"
+    const triggers = [
+      "trigger:public.task.task_simetra_carriers_out",
+      "trigger:public.task.task_simetra_carriers_out_insert",
+    ]
+    expectBefore(list, [
+      ["table:public.task_checklist", fn],
+      ["table:public.task_comment", fn],
+      ...triggers.map((t): [string, string] => [fn, t]),
+    ])
+    // Таблиці й так ідуть раніше за одиниці (tie-break), тож ребра тіла
+    // перевіряються й прямо.
+    expect(
+      result.model!.sqlUnits.find((u) => u.identity === fn)?.requires
+    ).toEqual(
+      ["task_checklist", "task_comment", "task_report"].map((name) => ({
+        type: "table",
+        schema: "public",
+        name,
+      }))
+    )
   })
 
   it("extensions come before everything", async () => {

@@ -8,10 +8,12 @@ import {
   type AttributeCase,
   type DatabaseProvider,
   type PhysicalSnapshot,
+  type PhysicalTable,
 } from "simetra/model"
 import type { QualifiedName } from "./contracts"
 import { compareStrings } from "./diagnostics"
 import { dollarTag } from "./movement-functions"
+import { carrierCopies } from "./rights/carrier-units"
 import { executeGrants } from "./sql/execute-grants"
 import type { SqlParser } from "./sql/parse"
 import { generatedUnit, type SqlUnit } from "./sql/units"
@@ -30,6 +32,14 @@ export function mechanicsTriggerName(table: string): string {
   return makeObjectName(table, undefined, "simetra_touch")
 }
 
+/**
+ * Ім'я тригера механіки на `UPDATE` таблиці з копіями носіїв: там механіка
+ * розділена на вставку й оновлення з умовою `contentChangeCondition`.
+ */
+export function mechanicsUpdateTriggerName(table: string): string {
+  return makeObjectName(table, undefined, "simetra_touch_update")
+}
+
 /** Колонки механіки за реєстром — щоб тіло функції не тримало літералів. */
 const UPDATED_AT = serviceDateColumns().find(
   (c) => c.logicalName === "updatedAt"
@@ -46,6 +56,41 @@ export function mechanicsStandardNames(
   return new Set(
     [UPDATED_AT, VERSION].map((def) => standardLogicalName(def, attributeCase))
   )
+}
+
+/**
+ * Умова «змінився зміст рядка» таблиці з копіями носіїв (спека прав §5.2,
+ * Р2a2-19): `(<зміст змінився>) OR NOT (<копії змінилися>)`. Поширення копій
+ * платформою — не зміна змісту: воно пише лише копії, тож придушується, а
+ * звичайне перезбереження без змін (нічого не змінилося) поводиться, як на
+ * будь-якій таблиці. Умова `BEFORE`-тригера рахується з `NEW` після
+ * попередніх тригерів, але поширення пише лише копії за будь-якого порядку
+ * тригерів, тож результат від порядку імен не залежить. Зміст — колонки поза
+ * механікою, копіями й генерованими: умова `BEFORE`-тригера не може
+ * посилатися на `NEW` генерованої колонки, а та випливає зі змістових.
+ * Таблиця без копій умови не має.
+ */
+export function contentChangeCondition(
+  table: Pick<PhysicalTable, "columns">,
+  attributeCase: AttributeCase
+): string | undefined {
+  const copies = carrierCopies(table)
+  if (copies.length === 0) return undefined
+  const mechanics = mechanicsStandardNames(attributeCase)
+  const content = table.columns.filter(
+    (c) =>
+      c.origin.copyOf === undefined &&
+      c.generated === undefined &&
+      !mechanics.has(c.origin.standard ?? "")
+  )
+  const changed = (columns: readonly { name: string }[]) =>
+    columns
+      .map(
+        (c) =>
+          `(OLD.${quoteIdent(c.name)} IS DISTINCT FROM NEW.${quoteIdent(c.name)})`
+      )
+      .join(" OR ")
+  return `(${changed(content)}) OR NOT (${changed(copies)})`
 }
 
 /**
@@ -91,21 +136,44 @@ export function buildMechanicsUnits(
     module,
     generator: "mechanics",
   })
+  const trigger = (
+    table: PhysicalSnapshot["tables"][number],
+    name: string,
+    events: string,
+    when?: string
+  ): SqlUnit => ({
+    ...generatedUnit(
+      `CREATE TRIGGER ${quoteIdent(name)} BEFORE ${events} ON ${quoteIdent(table.schema)}.${quoteIdent(table.name)} FOR EACH ROW ` +
+        (when === undefined ? "" : `WHEN (${when}) `) +
+        `EXECUTE FUNCTION ${fn}();`,
+      table.schema,
+      parse
+    ),
+    ownerObjectId: table.origin.objectId,
+    module,
+    generator: "mechanics",
+  })
   // Тригер, що спрацьовує в ролі, яка пише, не потребує `EXECUTE` функції, тож
   // жодна роль API його не має (платформна спека §6.7).
   const units: SqlUnit[] = [
     shared(touchFunction(fn)),
     ...executeGrants(`${fn}()`, [], provider).map(shared),
-    ...tables.map((table): SqlUnit => ({
-      ...generatedUnit(
-        `CREATE TRIGGER ${quoteIdent(mechanicsTriggerName(table.name))} BEFORE INSERT OR UPDATE ON ${quoteIdent(table.schema)}.${quoteIdent(table.name)} FOR EACH ROW EXECUTE FUNCTION ${fn}();`,
-        table.schema,
-        parse
-      ),
-      ownerObjectId: table.origin.objectId,
-      module,
-      generator: "mechanics",
-    })),
+    ...tables.flatMap((table): SqlUnit[] => {
+      const content = contentChangeCondition(table, attributeCase)
+      // Поширення копій носіїв не підвищує версію (Р2a2-19): оновлення —
+      // окремим тригером з умовою, бо на вставці `OLD` немає.
+      return content === undefined
+        ? [trigger(table, mechanicsTriggerName(table.name), "INSERT OR UPDATE")]
+        : [
+            trigger(table, mechanicsTriggerName(table.name), "INSERT"),
+            trigger(
+              table,
+              mechanicsUpdateTriggerName(table.name),
+              "UPDATE",
+              content
+            ),
+          ]
+    }),
   ]
   return units.sort((a, b) => compareStrings(a.identity, b.identity))
 }

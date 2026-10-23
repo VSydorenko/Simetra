@@ -48,6 +48,7 @@ import {
   type DerivedFunction,
 } from "../contracts"
 import { mechanicsStandardNames } from "../mechanics-units"
+import { carrierCopies } from "../rights/carrier-units"
 import { movementWrapperName } from "../movement-functions"
 import { standardOverrideNames, type PresentationFields } from "../presentation"
 import { checkRights } from "../rights/checks"
@@ -494,6 +495,21 @@ function referenceTargetError(
   return polymorphic ? "reference.polymorphic-target-kind" : undefined
 }
 
+/** Ім'я тригера вставки підписки `<physicalName>_insert` — у межі довжини. */
+function insertTriggerLength(
+  file: string,
+  physicalName: string | undefined
+): Diagnostic[] {
+  return physicalName !== undefined &&
+    byteLength(`${physicalName}_insert`) > MAX_IDENT_BYTES
+    ? [
+        diagnostic("physical.name-too-long", file, "/physicalName", {
+          name: `${physicalName}_insert`,
+        }),
+      ]
+    : []
+}
+
 /**
  * Підписки на подію (спека промоції §9.3): таблиця провайдера — з пресету
  * провайдера проєкту; джерело й ім'я `whenChanged` — не більше разу;
@@ -503,8 +519,8 @@ function referenceTargetError(
  * на спільній таблиці, а простору імен таблиць підписка не займає. Джерело-
  * об'єкт без таблиці звітує перевірка цілей посилань, невідоме — стадія 2.
  *
- * `whenChanged` дає другий тригер `<physicalName>_insert`, тож довжину
- * перевіряє й його ім'я. Колонка механіки в `whenChanged` — помилка: умову
+ * `whenChanged` чи джерело з копіями носіїв дає другий тригер
+ * `<physicalName>_insert`, тож довжину перевіряє й його ім'я. Колонка механіки в `whenChanged` — помилка: умову
  * `BEFORE`-тригера Postgres рахує з `NEW` після попередніх тригерів, тож
  * спрацювання залежало б від того, чи йде механіка раніше за ім'ям.
  */
@@ -584,7 +600,21 @@ function checkSubscriptions(
         )
       )
     }
-    if (spec.whenChanged === undefined) continue
+    // Джерело з копіями носіїв дає пару `<physicalName>` і `<physicalName>_insert`
+    // і без `whenChanged` (Р2a2-19).
+    const copies = spec.sources.some((source) => {
+      const table = tables.get(source.pointer)
+      const physical =
+        table === undefined
+          ? undefined
+          : tablesByName.get(`${table.schema}.${table.table}`)
+      return physical !== undefined && carrierCopies(physical).length > 0
+    })
+    if (spec.whenChanged === undefined) {
+      if (copies && !DELETE_EVENTS.has(spec.event))
+        found.push(...insertTriggerLength(object.file, physicalName))
+      continue
+    }
     if (DELETE_EVENTS.has(spec.event)) {
       found.push(
         diagnostic(
@@ -597,16 +627,7 @@ function checkSubscriptions(
       continue
     }
     // Лише подія запису дає тригер вставки.
-    if (
-      physicalName !== undefined &&
-      byteLength(`${physicalName}_insert`) > MAX_IDENT_BYTES
-    ) {
-      found.push(
-        diagnostic("physical.name-too-long", object.file, "/physicalName", {
-          name: `${physicalName}_insert`,
-        })
-      )
-    }
+    found.push(...insertTriggerLength(object.file, physicalName))
     const seenNames = new Set<string>()
     spec.whenChanged.forEach((name, index) => {
       const pointer = `/whenChanged/${index}`

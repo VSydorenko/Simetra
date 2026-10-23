@@ -1,6 +1,12 @@
-import { quoteIdent, type SubscriptionEvent } from "simetra/model"
+import {
+  quoteIdent,
+  type AttributeCase,
+  type PhysicalSnapshot,
+  type SubscriptionEvent,
+} from "simetra/model"
 import type { EventSubscriptionContract } from "./contracts"
 import { compareStrings, diagnostic, type Diagnostic } from "./diagnostics"
+import { contentChangeCondition } from "./mechanics-units"
 import type { SqlParser } from "./sql/parse"
 import { generatedUnit, type SqlUnit } from "./sql/units"
 
@@ -17,17 +23,20 @@ const TIMING: Readonly<
 type Source = EventSubscriptionContract["sources"][number]
 
 /**
- * Імена тригерів підписки на джерелі. З `whenChanged` вставка йде окремим
- * тригером: умова `OLD … IS DISTINCT FROM NEW …` на вставці не має `OLD`, а
- * вставка мусить спрацьовувати завжди. Простір імен тригерів у Postgres —
- * таблиця, тож кожне джерело дає ті самі імена.
+ * Імена тригерів підписки на джерелі. З `whenChanged` чи на таблиці з копіями
+ * носіїв (`copies`) вставка йде окремим тригером: умова `OLD … IS DISTINCT
+ * FROM NEW …` на вставці не має `OLD`, а вставка мусить спрацьовувати завжди.
+ * Простір імен тригерів у Postgres — таблиця, тож кожне джерело дає ті самі
+ * імена, крім пари на таблиці з копіями.
  */
 export function subscriptionTriggerNames(
   contract: EventSubscriptionContract,
-  source: Source
+  source: Source,
+  copies: boolean
 ): string[] {
-  // `whenChanged` має сенс лише для подій запису (стадія 4).
-  return source.whenChanged.length === 0 || !TIMING[contract.event].write
+  // Умова має сенс лише для подій запису (стадія 4).
+  return (source.whenChanged.length === 0 && !copies) ||
+    !TIMING[contract.event].write
     ? [contract.name]
     : [contract.name, `${contract.name}_insert`]
 }
@@ -41,23 +50,44 @@ export function subscriptionTriggerNames(
  */
 export function buildSubscriptionUnits(
   subscriptions: readonly EventSubscriptionContract[],
+  physical: Pick<PhysicalSnapshot, "tables">,
+  attributeCase: AttributeCase,
   module: string,
   parse: SqlParser
 ): SqlUnit[] {
+  const tables = new Map(
+    physical.tables.map((t) => [`${t.schema}.${t.name}`, t])
+  )
   const units = subscriptions.flatMap((contract) =>
-    contract.sources.flatMap((source) =>
-      triggers(contract, source).map((sql): SqlUnit => ({
+    contract.sources.flatMap((source) => {
+      const table = tables.get(`${source.schema}.${source.table}`)
+      const content =
+        table === undefined
+          ? undefined
+          : contentChangeCondition(table, attributeCase)
+      return triggers(contract, source, content).map((sql): SqlUnit => ({
         ...generatedUnit(sql, source.schema, parse),
         ownerObjectId: contract.subscriptionId,
         module,
         generator: "subscription",
       }))
-    )
+    })
   )
   return units.sort((a, b) => compareStrings(a.identity, b.identity))
 }
 
-function triggers(contract: EventSubscriptionContract, source: Source) {
+/**
+ * `content` — `contentChangeCondition` таблиці джерела з копіями носіїв:
+ * підписка без `whenChanged` не спрацьовує на поширенні копій (Р2a2-19), бо
+ * інакше обробник ішов би від імені власника таблиці на зміні, якої ніхто не
+ * робив. З `whenChanged` лишається її умова: копії й механіки в ній бути не
+ * може.
+ */
+function triggers(
+  contract: EventSubscriptionContract,
+  source: Source,
+  content: string | undefined
+) {
   const { timing, write } = TIMING[contract.event]
   const table = `${quoteIdent(source.schema)}.${quoteIdent(source.table)}`
   const execute = `EXECUTE FUNCTION ${quoteIdent(contract.handler.schema)}.${quoteIdent(contract.handler.name)}();`
@@ -66,8 +96,15 @@ function triggers(contract: EventSubscriptionContract, source: Source) {
     (when === undefined ? "" : `WHEN (${when}) `) +
     execute
   if (!write) return [trigger(contract.name, "DELETE")]
-  const [name, insert] = subscriptionTriggerNames(contract, source)
+  const [name, insert] = subscriptionTriggerNames(
+    contract,
+    source,
+    content !== undefined
+  )
   if (insert === undefined) return [trigger(name!, "INSERT OR UPDATE")]
+  if (source.whenChanged.length === 0) {
+    return [trigger(name!, "UPDATE", content), trigger(insert, "INSERT")]
+  }
   // Кожне порівняння в дужках, як у `pg_get_triggerdef` (він друкує `old.` і
   // `new.` малими); дерева розбору від регістру й дужок не залежать.
   const changed = source.whenChanged

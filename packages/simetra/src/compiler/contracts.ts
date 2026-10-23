@@ -30,6 +30,7 @@ import {
   membershipFunctionNames,
   membershipsOf,
 } from "./membership-functions"
+import { carrierFunctions } from "./rights/carrier-units"
 import {
   kindLabelOf,
   usersCatalogOf,
@@ -732,6 +733,17 @@ export function derivedFunctions(
   ) => result.push({ ...name, file: object.file, pointer, description })
 
   const byId = new Map(objects.map((o) => [o.id ?? "", o]))
+  // Функції носіїв — згенеровані одиниці з іменами від таблиць (Р2a2-22): ТЧ
+  // довгої таблиці може отримати те саме ім'я, що й функція основної.
+  for (const { table, fn, role } of carrierFunctions(physical)) {
+    const object = byId.get(table.origin.objectId)
+    if (object === undefined) continue
+    add(
+      object,
+      fn,
+      `${role === "derive" ? "carrier copies" : "carrier propagation"} of ${table.schema}.${table.name}`
+    )
+  }
   for (const object of objects) {
     const table = mainTableOf(physical, object.id ?? "")
     if (table === undefined) continue

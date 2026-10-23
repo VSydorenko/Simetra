@@ -3,6 +3,12 @@ import { compile } from "simetra/compiler"
 import type { EventSubscriptionContract } from "../contracts"
 import { mechanicsTriggerName } from "../mechanics-units"
 import { loadSqlParser, type SqlParser } from "../sql/parse"
+import { withoutLocations } from "../sql/units"
+import {
+  COUNT_COMMENT_FILE,
+  compileRights,
+  policyDomain,
+} from "./fixtures/rights"
 import {
   buildSubscriptionUnits,
   subscriptionTriggerNames,
@@ -36,12 +42,23 @@ function contract(
   }
 }
 
+/** Знімок без таблиць: джерела контрактів — без копій носіїв. */
+const NO_TABLES = { tables: [] }
+
 const sqlOf = (c: EventSubscriptionContract) =>
-  buildSubscriptionUnits([c], "TestApp", parse).map((u) => u.sql)
+  buildSubscriptionUnits([c], NO_TABLES, "camelCase", "TestApp", parse).map(
+    (u) => u.sql
+  )
 
 describe("buildSubscriptionUnits", () => {
   it("beforeWrite without whenChanged gives one BEFORE INSERT OR UPDATE trigger", () => {
-    const units = buildSubscriptionUnits([contract()], "TestApp", parse)
+    const units = buildSubscriptionUnits(
+      [contract()],
+      NO_TABLES,
+      "camelCase",
+      "TestApp",
+      parse
+    )
     expect(units.map((u) => [u.identity, u.sql])).toEqual([
       [
         "trigger:public.item.audit",
@@ -71,11 +88,17 @@ describe("buildSubscriptionUnits", () => {
     const c = contract({
       sources: [{ schema: "public", table: "item", whenChanged: ["a", "b"] }],
     })
-    expect(subscriptionTriggerNames(c, c.sources[0]!)).toEqual([
+    expect(subscriptionTriggerNames(c, c.sources[0]!, false)).toEqual([
       "audit",
       "audit_insert",
     ])
-    const units = buildSubscriptionUnits([c], "TestApp", parse)
+    const units = buildSubscriptionUnits(
+      [c],
+      NO_TABLES,
+      "camelCase",
+      "TestApp",
+      parse
+    )
     expect(units.map((u) => [u.identity, u.sql])).toEqual([
       [
         "trigger:public.item.audit",
@@ -93,7 +116,7 @@ describe("buildSubscriptionUnits", () => {
       event: "onDelete",
       sources: [{ schema: "public", table: "item", whenChanged: ["a"] }],
     })
-    expect(subscriptionTriggerNames(c, c.sources[0]!)).toEqual(["audit"])
+    expect(subscriptionTriggerNames(c, c.sources[0]!, false)).toEqual(["audit"])
   })
 
   it("two sources give the same names on both tables, distinct identities", () => {
@@ -104,7 +127,13 @@ describe("buildSubscriptionUnits", () => {
         { schema: "public", table: "partner", whenChanged: [] },
       ],
     })
-    const units = buildSubscriptionUnits([c], "TestApp", parse)
+    const units = buildSubscriptionUnits(
+      [c],
+      NO_TABLES,
+      "camelCase",
+      "TestApp",
+      parse
+    )
     expect(units.map((u) => [u.identity, u.name])).toEqual([
       ["trigger:public.item.audit", "audit"],
       ["trigger:public.partner.audit", "audit"],
@@ -272,6 +301,78 @@ describe("subscription triggers in the compiled model", () => {
           table: "auth.users",
           holder: "the platform layer of Users",
         },
+      ],
+    ])
+  })
+})
+
+describe("subscriptions on a table with carrier copies", () => {
+  const triggers = async (...layers: Parameters<typeof policyDomain>) => {
+    const result = await compileRights(policyDomain(...layers))
+    expect(result.diagnostics).toEqual([])
+    return result
+      .model!.sqlUnits.filter((u) => u.generator === "subscription")
+      .map((u) => u.tree)
+  }
+  const tree = (sql: string) => {
+    const parsed = parse(sql)
+    if (!parsed.ok) throw new Error(sql)
+    return withoutLocations(parsed.statements[0]!.stmt)
+  }
+  const CONTENT = [
+    "id",
+    "org_id",
+    "code",
+    "description",
+    "deletion_mark",
+    "predefined_name",
+    "created_at",
+    "task_id",
+  ]
+    .map((c) => `OLD.${c} IS DISTINCT FROM NEW.${c}`)
+    .join(" OR ")
+
+  it("a subscription on a table with copies ignores copy-only updates", async () => {
+    // Поширення копій — не зміна змісту (Р2a2-19): без `whenChanged` пара
+    // тригерів, оновлення — з умовою змісту.
+    expect(await triggers()).toEqual([
+      tree(
+        "CREATE TRIGGER count_comment AFTER UPDATE ON public.task_comment FOR EACH ROW " +
+          `WHEN ((${CONTENT}) OR NOT (OLD.task_id_assignee_id IS DISTINCT FROM NEW.task_id_assignee_id)) ` +
+          "EXECUTE FUNCTION public.count_comment();"
+      ),
+      tree(
+        "CREATE TRIGGER count_comment_insert AFTER INSERT ON public.task_comment FOR EACH ROW EXECUTE FUNCTION public.count_comment();"
+      ),
+    ])
+  })
+
+  it("whenChanged keeps its own condition", async () => {
+    expect(
+      await triggers({ [COUNT_COMMENT_FILE]: { whenChanged: ["task"] } })
+    ).toEqual([
+      tree(
+        "CREATE TRIGGER count_comment AFTER UPDATE ON public.task_comment FOR EACH ROW WHEN ((OLD.task_id IS DISTINCT FROM NEW.task_id)) EXECUTE FUNCTION public.count_comment();"
+      ),
+      tree(
+        "CREATE TRIGGER count_comment_insert AFTER INSERT ON public.task_comment FOR EACH ROW EXECUTE FUNCTION public.count_comment();"
+      ),
+    ])
+  })
+
+  it("the insert trigger name of a table with copies is checked for length", async () => {
+    const name = "c".repeat(57)
+    const result = await compileRights(
+      policyDomain({ [COUNT_COMMENT_FILE]: { physicalName: name } })
+    )
+    expect(
+      result.diagnostics.map((d) => [d.code, d.file, d.pointer, d.params])
+    ).toEqual([
+      [
+        "physical.name-too-long",
+        COUNT_COMMENT_FILE,
+        "/physicalName",
+        { name: `${name}_insert` },
       ],
     ])
   })

@@ -48,6 +48,7 @@ import { checkLinks } from "./stages/links"
 import { buildModel, enumTypeOf, rowTypesOf } from "./stages/model"
 import { buildMovementFunctions } from "./movement-functions"
 import { buildMechanicsUnits } from "./mechanics-units"
+import { buildCarrierUnits } from "./rights/carrier-units"
 import {
   buildSubscriptionUnits,
   subscriptionTriggerConflicts,
@@ -376,7 +377,19 @@ export async function runStages(
       module,
       parse
     ),
-    ...buildSubscriptionUnits(eventSubscriptions, module, parse),
+    ...buildSubscriptionUnits(
+      eventSubscriptions,
+      physical,
+      stage1.project.naming.attributeCase,
+      module,
+      parse
+    ),
+    ...buildCarrierUnits(
+      physical,
+      stage1.project.database.provider,
+      module,
+      parse
+    ),
     ...buildRightsUnits(
       {
         rights,
@@ -418,6 +431,7 @@ export async function runStages(
       `the event subscription ${name(unit.ownerObjectId)}`,
     // Функції прав спільні для всіх об'єктів — власника немає.
     rights: (unit) => `the rights function ${unit.name}`,
+    carriers: (unit) => `the carrier copies of ${name(unit.ownerObjectId)}`,
   }
   const fileById = new Map(stage1.objects.map((o) => [o.id ?? "", o.file]))
   const triggerConflicts = subscriptionTriggerConflicts(

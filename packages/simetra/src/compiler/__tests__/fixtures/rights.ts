@@ -19,6 +19,7 @@ export const PROJECT_CATALOG_FILE = "catalogs/Project/Project.meta.json"
 export const COMMENT_FILE = "catalogs/TaskComment/TaskComment.meta.json"
 export const MEMBER_FILE = "catalogs/OrgMember/OrgMember.meta.json"
 export const PROJECT_FILE = "project.meta.json"
+export const ORGANIZATION_FILE = "catalogs/Organization/Organization.meta.json"
 
 export const TASK_EDITORS_ID = uuid(6201)
 export const TASK_READERS_ID = uuid(6202)
@@ -107,11 +108,7 @@ function defaults(): Record<string, Record<string, unknown>> {
       database: { provider: "supabase" },
       scopeKinds: [ORG_SCOPE_KIND],
     },
-    "catalogs/Organization/Organization.meta.json": catalog(
-      uuid(6002),
-      "Organization",
-      "organization"
-    ),
+    [ORGANIZATION_FILE]: catalog(uuid(6002), "Organization", "organization"),
     [USERS_FILE]: catalog(uuid(6003), "Users", "users", {
       role: "users",
       scope: "none",
@@ -722,6 +719,22 @@ function policyLayer(): Layer {
     [SET_FILE("TaskReaders")]: { grants: [grant(readAny, ["read"], "any")] },
     [ROLE_FILE("Everyone")]: {
       grants: [grant(objects(["Catalog", "Users"]), ["read"], "own")],
+    },
+  }
+}
+
+/**
+ * Корінь скоупу з носієм власності й ТЧ `sites` (`organization_sites`):
+ * скоуп рядка ТЧ кореня — сам `parent_id`, тож зв'язок копії — одна колонка.
+ */
+export function scopeRootCarrier(): Layer {
+  return {
+    [ORGANIZATION_FILE]: {
+      ownership: ["owner"],
+      attributes: [
+        refAttribute(6601, "owner", "owner_id", ref("Catalog", "Users")),
+      ],
+      tabularSections: [section(6602, "sites", "organization_sites", "label")],
     },
   }
 }
