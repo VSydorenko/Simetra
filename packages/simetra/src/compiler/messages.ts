@@ -2013,6 +2013,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     uk: (p) =>
       `Права з прийнятого джерела "${p.source}" ще не обчислюються: учасники джерела не отримають прав на об'єкти виду`,
   },
+  "rights.scope-kind-unread": {
+    en: (p) =>
+      `No role reads the objects of scope kind "${p.scopeKind}": nobody will see their rows`,
+    uk: (p) =>
+      `Об'єкти виду скоупу "${p.scopeKind}" не читає жодна роль: їхніх рядків не побачить ніхто`,
+    hint: {
+      en: "Grant read on these objects to a role, or declare a role with fullAccess.",
+      uk: "Надайте ролі читання цих об'єктів або оголосіть роль із fullAccess.",
+    },
+  },
   "rights.ownership-target": {
     en: (p) =>
       p.reason === "key"

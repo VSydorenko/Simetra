@@ -5,6 +5,7 @@ import ts from "typescript"
 import { beforeAll, describe, expect, it } from "vitest"
 import { compile, emitEntityTypes } from "simetra/compiler"
 import {
+  expectClean,
   attribute,
   catalog,
   customTable,
@@ -22,7 +23,7 @@ const PACKAGE_ROOT = fileURLToPath(new URL("../../../", import.meta.url))
 
 async function emit(entries: Record<string, unknown>): Promise<string> {
   const result = await compile(metaFiles(entries))
-  expect(result.diagnostics).toEqual([])
+  expectClean(result, { allow: ["rights.scope-kind-unread"] })
   return emitEntityTypes(result.model!)
 }
 

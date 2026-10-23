@@ -7,6 +7,7 @@ import { readMetadataDir } from "../io/metadata-dir"
 import { runTool, type CliArgs } from "../cli/command"
 import { toolByName } from "../tools/catalog"
 import { project, snapshotOf, useTmpProjects } from "./helpers/catalog"
+import { expectClean } from "../../../simetra/test/support"
 
 const REFERENCE = resolve(__dirname, "../../../../examples/reference/metadata")
 
@@ -168,6 +169,6 @@ describe("readMetadataDir", () => {
     const files = await readMetadataDir(dir)
     expect(files.has("sql-debt.json")).toBe(true)
     expect(files.has("README.md")).toBe(false)
-    expect((await compile(files)).diagnostics).toEqual([])
+    expectClean(await compile(files), { allow: ["rights.scope-kind-unread"] })
   })
 })

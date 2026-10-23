@@ -31,7 +31,14 @@ import {
   counterpartyMapping,
   promotionProject,
 } from "./fixtures/promotion"
-import { catalog, metaFiles, project, scopedProject, uuid } from "./helpers"
+import {
+  expectClean,
+  catalog,
+  metaFiles,
+  project,
+  scopedProject,
+  uuid,
+} from "./helpers"
 
 type Json = Record<string, unknown>
 
@@ -2909,7 +2916,7 @@ describe("promoteObject: tabular sections, documents, registers, data steps", ()
       [COUNTERPARTY_FILE]: counterparty,
       [CONTACT_FILE]: contact,
     })
-    expect((await compile(files)).diagnostics).toEqual([])
+    expectClean(await compile(files), { allow: ["rights.scope-kind-unread"] })
     const input = withContacts((m) => {
       m.columns.orgId = { to: "scope" }
     })

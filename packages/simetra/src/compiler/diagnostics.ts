@@ -148,6 +148,7 @@ export const COMPILER_RULES = [
   "rights.system-catalog-parallel",
   "rights.system-catalog-custom-action",
   "rights.adopted-source-unsupported",
+  "rights.scope-kind-unread",
   "reference.not-referenceable",
   "reference.custom-table-key",
   "reference.custom-table-deferrable-key",
@@ -395,6 +396,7 @@ const WARNING_RULES: ReadonlySet<RuleCode> = new Set<RuleCode>([
   "rewrite.contract-change",
   "rewrite.dynamic-sql-unscoped",
   "rights.adopted-source-unsupported",
+  "rights.scope-kind-unread",
 ])
 
 /** Діагностика з каталогу повідомлень; серйозність — властивість правила. */

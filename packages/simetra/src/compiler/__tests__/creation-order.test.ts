@@ -11,6 +11,7 @@ import { loadSqlParser } from "../sql/parse"
 import { withoutLocations } from "../sql/units"
 import { compileRights, withRoles } from "./fixtures/rights"
 import {
+  expectClean,
   acceptDebt,
   catalog,
   customTable,
@@ -70,7 +71,7 @@ async function compileWith(
 /** Порядок створення як рядки: таблиці й енам-типи з префіксом, одиниці — ідентичність. */
 async function order(entries: Record<string, unknown>): Promise<string[]> {
   const result = await compileWith(entries)
-  expect(result.diagnostics).toEqual([])
+  expectClean(result, { allow: ["rights.scope-kind-unread"] })
   return result.model!.creationOrder.map((node) =>
     node.type === "unit"
       ? node.identity

@@ -6,6 +6,7 @@ import { readCatalog } from "../../../test/db/catalog"
 import { expectCatalogMatchesSnapshot } from "../../../test/db/compare"
 import { queryAs, withRollback } from "../../../test/db/connection"
 import { readReferenceDomain } from "../../compiler/__tests__/fixtures/reference-domain"
+import { expectClean } from "../../compiler/__tests__/helpers"
 
 /**
  * Референсний домен на справжньому Postgres 17 (спека П2 §10.1, §10.4): він
@@ -16,7 +17,7 @@ import { readReferenceDomain } from "../../compiler/__tests__/fixtures/reference
 
 async function compiled(): Promise<CompiledModel> {
   const result = await compile(readReferenceDomain())
-  expect(result.diagnostics).toEqual([])
+  expectClean(result, { allow: ["rights.scope-kind-unread"] })
   return result.model!
 }
 

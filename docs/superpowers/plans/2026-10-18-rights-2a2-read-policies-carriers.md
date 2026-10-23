@@ -380,11 +380,11 @@ git commit -m "fix(schema): промоція й зворотна генерац�
 **Interfaces:**
 - Produces: `expectClean(result: { diagnostics: readonly Diagnostic[] }, options?: { allow?: readonly RuleCode[] }): void`; код `rights.scope-kind-unread` (зареєстрований, ще не випускається).
 
-- [ ] **Step 1: Write the failing test (unit)** `helpers.test.ts`: `expectClean` проходить без діагностик; падає на будь-якій помилці навіть з `allow`; падає на попередженні поза `allow`; проходить на дозволеному.
-- [ ] **Step 2:** Run: `pnpm --filter simetra test helpers` — FAIL; реалізувати `expectClean`, зареєструвати код (`RuleCode`, `WARNING_RULES`, `MESSAGES` en/uk — наслідок для автора) — PASS.
-- [ ] **Step 3:** У кожному файлі, що компілює скоуплену фікстуру без ролей, замінити `expect(result.diagnostics).toEqual([])` на `expectClean(result, { allow: ["rights.scope-kind-unread"] })`; перевірки, що чекають конкретного попередження, лишити з точним очікуванням; жодної іншої зміни тестів.
-- [ ] **Step 4:** Run: `pnpm test` і `pnpm --filter simetra exec vitest run --project db access membership paper-test` — PASS (код ще не випускається, тож хвиля нічого не послаблює).
-- [ ] **Step 5: Commit** (окремий — Р2a2-16)
+- [X] **Step 1: Write the failing test (unit)** `helpers.test.ts`: `expectClean` проходить без діагностик; падає на будь-якій помилці навіть з `allow`; падає на попередженні поза `allow`; проходить на дозволеному.
+- [X] **Step 2:** Run: `pnpm --filter simetra test helpers` — FAIL; реалізувати `expectClean`, зареєструвати код (`RuleCode`, `WARNING_RULES`, `MESSAGES` en/uk — наслідок для автора) — PASS.
+- [X] **Step 3:** У кожному файлі, що компілює скоуплену фікстуру без ролей, замінити `expect(result.diagnostics).toEqual([])` на `expectClean(result, { allow: ["rights.scope-kind-unread"] })`; перевірки, що чекають конкретного попередження, лишити з точним очікуванням; жодної іншої зміни тестів.
+- [X] **Step 4:** Run: `pnpm test` і `pnpm --filter simetra exec vitest run --project db access membership paper-test` — PASS (код ще не випускається, тож хвиля нічого не послаблює). `pnpm test` — PASS; DB-прогін — CI.
+- [X] **Step 5: Commit** (окремий — Р2a2-16)
 
 ```bash
 git add packages

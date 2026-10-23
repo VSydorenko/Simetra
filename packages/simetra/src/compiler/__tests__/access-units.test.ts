@@ -8,6 +8,7 @@ import {
 import type { AccessContract } from "../contracts"
 import { loadSqlParser } from "../sql/parse"
 import {
+  expectClean,
   STOCK_FILE,
   SALE_FILE,
   attribute,
@@ -23,7 +24,7 @@ import {
 
 async function compiled(entries: Record<string, unknown>) {
   const result = await compile(metaFiles(entries))
-  expect(result.diagnostics).toEqual([])
+  expectClean(result, { allow: ["rights.scope-kind-unread"] })
   return result.model!
 }
 

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { compile, completeFiles } from "simetra/compiler"
 import {
+  expectClean,
   attribute,
   catalog,
   customTable,
@@ -92,7 +93,7 @@ describe("stage 2: identity", () => {
         }),
       })
     )
-    expect(result.diagnostics).toEqual([])
+    expectClean(result, { allow: ["rights.scope-kind-unread"] })
   })
 
   it("predefined name is PascalCase regardless of project case", async () => {

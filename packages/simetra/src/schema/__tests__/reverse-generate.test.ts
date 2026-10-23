@@ -20,6 +20,7 @@ import {
 } from "simetra/model"
 import { reverseGenerate, type ReverseResult } from "simetra/schema"
 import {
+  expectClean,
   catalog,
   metaFiles,
   project,
@@ -1383,7 +1384,7 @@ describe("reverseGenerate", () => {
       }),
     })
     const compiled = await compile(kept)
-    expect(compiled.diagnostics).toEqual([])
+    expectClean(compiled, { allow: ["rights.scope-kind-unread"] })
     const layer = compiled.model!
     expect(layer.sqlUnits.some((u) => u.generator === "functionExecute")).toBe(
       true
@@ -1422,7 +1423,9 @@ describe("reverseGenerate", () => {
         false
       )
     expect(written.some((t) => t.includes(OWN_GRANT.slice(0, -1)))).toBe(true)
-    expect((await compile(result.files)).diagnostics).toEqual([])
+    expectClean(await compile(result.files), {
+      allow: ["rights.scope-kind-unread"],
+    })
   })
 
   it("final map compiles", async () => {

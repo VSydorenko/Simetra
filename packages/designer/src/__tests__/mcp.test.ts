@@ -3,6 +3,7 @@ import { readFile, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { Client } from "@modelcontextprotocol/client"
 import { InMemoryTransport } from "@modelcontextprotocol/server"
+import type { Diagnostic } from "simetra/compiler"
 import { elementNameSchema, objectNameSchema } from "simetra/model"
 import { afterEach, describe, expect, it } from "vitest"
 import { z } from "zod"
@@ -27,6 +28,7 @@ import {
   tagMapping,
   useTmpProjects,
 } from "./helpers/catalog"
+import { expectClean } from "../../../simetra/test/support"
 
 const CURRENCY = "catalogs/Currency/Currency.meta.json"
 // перевиміряно в E2b: 10055 символів JSON усіх інструментів (+introspect, diff)
@@ -80,7 +82,7 @@ interface Out {
   ok: boolean
   written: boolean
   changes: { path: string; deleted: boolean }[]
-  diagnostics: { code: string }[]
+  diagnostics: Diagnostic[]
 }
 
 async function call(
@@ -578,7 +580,7 @@ describe("simetra mcp", () => {
         name: "Scratch",
         data: { scope: "none" },
       })
-      expect(created.out.diagnostics).toEqual([])
+      expectClean(created.out, { allow: ["rights.scope-kind-unread"] })
       const file = join(dir, "catalogs/Scratch/Scratch.meta.json")
       expect(existsSync(file)).toBe(true)
       return { dir, client, file, target: { kind: "Catalog", name: "Scratch" } }
@@ -638,7 +640,7 @@ describe("simetra mcp", () => {
       collection: "attributes",
       element: { name: "note", type: "String", length: 20 },
     })
-    expect(r.out.diagnostics).toEqual([])
+    expectClean(r.out, { allow: ["rights.scope-kind-unread"] })
     expect(await readFile(join(dir, CURRENCY), "utf8")).toContain("note")
   })
 
@@ -654,7 +656,8 @@ describe("simetra mcp", () => {
         element: { name, type: "Boolean" },
       })
     const results = await Promise.all([add("flagOne"), add("flagTwo")])
-    expect(results.map((r) => r.out.diagnostics)).toEqual([[], []])
+    for (const r of results)
+      expectClean(r.out, { allow: ["rights.scope-kind-unread"] })
     const text = await readFile(
       join(dir, "catalogs/Counterparty/Counterparty.meta.json"),
       "utf8"

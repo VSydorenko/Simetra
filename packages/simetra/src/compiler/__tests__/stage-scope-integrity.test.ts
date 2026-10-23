@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { compile, type CompileResult } from "simetra/compiler"
 import {
+  expectClean,
   attribute,
   catalog,
   customTable,
@@ -94,7 +95,7 @@ describe("стадія 4: скоуп", () => {
       [SALE]: document("Sale", { scope: "org" }),
       [STOCK]: register("org", [{ kind: "Document", name: "Sale" }]),
     })
-    expect(scopeDiagnostics(result)).toEqual([])
+    expectClean(result, { allow: ["rights.scope-kind-unread"] })
     expect(result.ok).toBe(true)
   })
 
@@ -113,7 +114,7 @@ describe("стадія 4: скоуп", () => {
       }),
       [CP]: counterparty(),
     })
-    expect(scopeDiagnostics(result)).toEqual([])
+    expectClean(result, { allow: ["rights.scope-kind-unread"] })
     expect(result.ok).toBe(true)
   })
 
@@ -147,7 +148,7 @@ describe("стадія 4: скоуп", () => {
         ],
       }),
     })
-    expect(scopeDiagnostics(result)).toEqual([])
+    expectClean(result, { allow: ["rights.scope-kind-unread"] })
     expect(result.ok).toBe(true)
   })
 
@@ -334,7 +335,7 @@ describe("стадія 4: скоуп", () => {
         ],
       }),
     })
-    expect(scopeDiagnostics(result)).toEqual([])
+    expectClean(result, { allow: ["rights.scope-kind-unread"] })
     expect(result.ok).toBe(true)
   })
 
@@ -351,7 +352,7 @@ describe("стадія 4: скоуп", () => {
     const cross = await compileScoped({
       [ORG]: organization({ attributes: attributes({ crossScope: true }) }),
     })
-    expect(scopeDiagnostics(cross)).toEqual([])
+    expectClean(cross, { allow: ["rights.scope-kind-unread"] })
     expect(cross.ok).toBe(true)
   })
 
@@ -400,7 +401,7 @@ describe("стадія 4: скоуп", () => {
       ["scope.cross-kind", "error", CP, "/attributes/1/allowedTypes/1"],
     ])
     const cross = await compileScoped(entries({ crossScope: true }), project)
-    expect(scopeDiagnostics(cross)).toEqual([])
+    expectClean(cross, { allow: ["rights.scope-kind-unread"] })
     expect(cross.ok).toBe(true)
   })
 
@@ -598,7 +599,7 @@ describe("стадія 4: скоуп", () => {
         ],
       }),
     })
-    expect(scopeDiagnostics(result)).toEqual([])
+    expectClean(result, { allow: ["rights.scope-kind-unread"] })
     expect(result.ok).toBe(true)
   })
 
@@ -650,12 +651,12 @@ describe("стадія 4: скоуп", () => {
         [LEDGER]: ledger([{ columns: ["id", "orgRef"] }]),
         [SALE]: sale(),
       })
-      expect(scopeDiagnostics(unique)).toEqual([])
+      expectClean(unique, { allow: ["rights.scope-kind-unread"] })
       const cross = await compileScoped({
         [LEDGER]: ledger([]),
         [SALE]: sale({ crossScope: true }),
       })
-      expect(scopeDiagnostics(cross)).toEqual([])
+      expectClean(cross, { allow: ["rights.scope-kind-unread"] })
     })
   })
 
@@ -693,7 +694,7 @@ describe("стадія 4: скоуп", () => {
         ],
       }),
     })
-    expect(scopeDiagnostics(result)).toEqual([])
+    expectClean(result, { allow: ["rights.scope-kind-unread"] })
     expect(result.ok).toBe(true)
   })
 
@@ -711,23 +712,21 @@ describe("стадія 4: скоуп", () => {
         }),
         [CURRENCY]: currency(),
       })
-    expect(
-      scopeDiagnostics(
-        await polymorphic([
-          { kind: "Catalog", name: "Currency" },
-          { kind: "Catalog", name: "Counterparty" },
-        ])
-      )
-    ).toEqual([])
+    expectClean(
+      await polymorphic([
+        { kind: "Catalog", name: "Currency" },
+        { kind: "Catalog", name: "Counterparty" },
+      ]),
+      { allow: ["rights.scope-kind-unread"] }
+    )
     // Корисна ціль не мусить іти останньою.
-    expect(
-      scopeDiagnostics(
-        await polymorphic([
-          { kind: "Catalog", name: "Counterparty" },
-          { kind: "Catalog", name: "Currency" },
-        ])
-      )
-    ).toEqual([])
+    expectClean(
+      await polymorphic([
+        { kind: "Catalog", name: "Counterparty" },
+        { kind: "Catalog", name: "Currency" },
+      ]),
+      { allow: ["rights.scope-kind-unread"] }
+    )
     expect(
       scopeDiagnostics(
         await polymorphic([{ kind: "Catalog", name: "Currency" }])
@@ -810,7 +809,7 @@ function prefixedScopeTable(
 describe("scope column is taken from the reference index", () => {
   it("stage 4 checks the indexed column", async () => {
     const valid = await compileScoped({ [SETTINGS]: prefixedScopeTable("org") })
-    expect(scopeDiagnostics(valid)).toEqual([])
+    expectClean(valid, { allow: ["rights.scope-kind-unread"] })
     const swapped = await compileScoped({
       [SETTINGS]: prefixedScopeTable("org", { org: "String", orgName: "UUID" }),
     })
@@ -839,7 +838,7 @@ describe("scope column is taken from the reference index", () => {
       { [SETTINGS]: prefixedScopeTable("org") },
       projectFile
     )
-    expect(result.diagnostics).toEqual([])
+    expectClean(result, { allow: ["rights.scope-kind-unread"] })
     const table = result.model!.physical.tables.find(
       (t) => t.name === "user_settings"
     )!

@@ -15,6 +15,7 @@ import {
   tagMapping,
   useTmpProjects,
 } from "./helpers/catalog"
+import { expectClean } from "../../../simetra/test/support"
 
 // Шпигун лише записує виклики й пише як є: тест порядку читає їхню чергу.
 vi.mock("../io/metadata-dir", async (importOriginal) => {
@@ -98,7 +99,7 @@ describe("mutation tools", () => {
       name: "Scratch",
       data: { scope: "none" },
     })
-    expect(created.diagnostics).toEqual([])
+    expectClean(created, { allow: ["rights.scope-kind-unread"] })
     const file = join(dir, "catalogs/Scratch/Scratch.meta.json")
     expect(existsSync(file)).toBe(true)
     const target = { kind: "Catalog", name: "Scratch" }
@@ -145,7 +146,7 @@ describe("mutation tools", () => {
       collection: "attributes",
       element: { name: "note", type: "String", length: 20 },
     })
-    expect(r.diagnostics).toEqual([])
+    expectClean(r, { allow: ["rights.scope-kind-unread"] })
     expect(await readFile(join(dir, CURRENCY), "utf8")).toContain("note")
   })
 
@@ -158,7 +159,8 @@ describe("mutation tools", () => {
         element: { name, type: "Boolean" },
       })
     const results = await Promise.all([add("flagOne"), add("flagTwo")])
-    expect(results.map((r) => r.diagnostics)).toEqual([[], []])
+    for (const r of results)
+      expectClean(r, { allow: ["rights.scope-kind-unread"] })
     const text = await readFile(
       join(dir, "catalogs/Counterparty/Counterparty.meta.json"),
       "utf8"

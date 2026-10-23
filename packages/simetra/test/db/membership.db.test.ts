@@ -4,6 +4,7 @@ import { compile } from "simetra/compiler"
 import { PROVIDER_API_ROLES } from "simetra/model"
 import { renderDesiredState } from "simetra/schema"
 import {
+  expectClean,
   attribute,
   catalog,
   metaFiles,
@@ -55,7 +56,7 @@ async function deploy(client: pg.Client): Promise<void> {
       }),
     })
   )
-  expect(result.diagnostics).toEqual([])
+  expectClean(result, { allow: ["rights.scope-kind-unread"] })
   await client.query(renderDesiredState(result.model!).sql)
 }
 

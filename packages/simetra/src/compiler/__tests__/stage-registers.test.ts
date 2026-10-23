@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 import { compile } from "simetra/compiler"
 import type { PhysicalSnapshot, PhysicalTable } from "simetra/model"
 import {
+  expectClean,
   attribute,
   catalog,
   document,
@@ -679,7 +680,7 @@ describe("balance control", () => {
     const result = await compile(
       stockFiles({ resources: [qty], balanceControl: { resources: ["qty"] } })
     )
-    expect(result.diagnostics).toEqual([])
+    expectClean(result, { allow: ["rights.scope-kind-unread"] })
     // Каскад перейменування ресурсу знаходить налаштування за індексом.
     expect(
       result.model!.references.filter(

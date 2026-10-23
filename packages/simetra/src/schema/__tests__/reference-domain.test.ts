@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 import { compile } from "simetra/compiler"
 import { formatMetaFile, formatProjectFile, KIND_REGISTRY } from "simetra/model"
 import { readReferenceDomain } from "../../compiler/__tests__/fixtures/reference-domain"
+import { expectClean } from "../../compiler/__tests__/helpers"
 
 /**
  * Синтетичний референсний домен (спека П2 §10.1) — публічний зразок
@@ -13,7 +14,7 @@ describe("reference domain", () => {
   it("compiles without diagnostics", async () => {
     const result = await compile(readReferenceDomain())
     // Жодної діагностики, зокрема попереджень: зразок не вчить поганого.
-    expect(result.diagnostics).toEqual([])
+    expectClean(result, { allow: ["rights.scope-kind-unread"] })
     expect(result.ok).toBe(true)
   })
 

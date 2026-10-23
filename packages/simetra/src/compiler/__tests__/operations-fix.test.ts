@@ -8,6 +8,7 @@ import {
 import { formatMetaFile, metadataIdSchema } from "simetra/model"
 import { readReferenceDomain } from "./fixtures/reference-domain"
 import {
+  expectClean,
   acceptDebt,
   catalog,
   customTable,
@@ -76,7 +77,7 @@ describe("fixFiles", () => {
   it("reconstructs the reference domain", async () => {
     const original = readReferenceDomain()
     const result = await fixFiles(strippedDomain(), options())
-    expect(result.diagnostics).toEqual([])
+    expectClean(result, { allow: ["rights.scope-kind-unread"] })
     expect(result.ok).toBe(true)
     const fixed = applyChanges(strippedDomain(), result.changes)
 
@@ -574,14 +575,14 @@ describe("fixFiles: sql.generated-grant", () => {
       "sql.generated-grant",
     ])
     const result = await fixFiles(files, options())
-    expect(result.diagnostics).toEqual([])
+    expectClean(result, { allow: ["rights.scope-kind-unread"] })
     expect(result.ok).toBe(true)
     const fixed = applyChanges(files, result.changes)
     expect(fixed.get(GRANTS)).toBe(`${OTHER}\n\n${OTHER_GRANT}\n`)
     expect(JSON.parse(fixed.get(DEBT)!).units).toEqual([
       "grant:grant:function:public.other():anon:execute",
     ])
-    expect((await compile(fixed)).diagnostics).toEqual([])
+    expectClean(await compile(fixed), { allow: ["rights.scope-kind-unread"] })
   })
 
   it("fix leaves a statement that also grants on another object", async () => {

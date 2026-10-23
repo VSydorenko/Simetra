@@ -3,6 +3,7 @@ import type pg from "pg"
 import { compile, type CompiledModel } from "simetra/compiler"
 import { renderDesiredState } from "simetra/schema"
 import {
+  expectClean,
   acceptDebt,
   attribute,
   catalog,
@@ -141,7 +142,7 @@ async function compiled(scenario: Scenario): Promise<CompiledModel> {
     files = await acceptDebt(files)
   }
   const result = await compile(files)
-  expect(result.diagnostics).toEqual([])
+  expectClean(result, { allow: ["rights.scope-kind-unread"] })
   return result.model!
 }
 

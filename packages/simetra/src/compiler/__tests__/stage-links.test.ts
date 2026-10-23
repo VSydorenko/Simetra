@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { compile, type CompileResult } from "simetra/compiler"
 import {
+  expectClean,
   SALE_FILE,
   SCOPE_FUNCTIONS_FILE,
   acceptDebt,
@@ -375,7 +376,7 @@ describe("stage 5: scope set functions", () => {
 
   it("set function with the right signature passes", async () => {
     const result = await buildScoped(good("org_ids") + good("user_ids"))
-    expect(result.diagnostics).toEqual([])
+    expectClean(result, { allow: ["rights.scope-kind-unread"] })
   })
 
   it.each([
@@ -441,7 +442,7 @@ describe("stage 5: scope set functions", () => {
         "WITH mine AS (SELECT m.org_id FROM app.org_member m WHERE m.user_id = auth.uid()) SELECT org_id FROM mine"
       ) + good("user_ids")
     )
-    expect(result.diagnostics).toEqual([])
+    expectClean(result, { allow: ["rights.scope-kind-unread"] })
   })
 
   it.each([
