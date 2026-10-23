@@ -75,6 +75,7 @@ export type RightsFunctionContracts = Pick<
   | "accessDimensions"
   | "membership"
   | "assignmentSources"
+  | "users"
 >
 
 interface Declaration {
@@ -101,6 +102,12 @@ export function buildRightsUnits(
   parse: SqlParser
 ): SqlUnit[] {
   if (contracts.roles.length === 0) return []
+  // Без «Користувачів» немає `current_user_id` (шар платформи нічого не
+  // генерує), а права можливі лише через прийняте джерело (спека прав §4.6,
+  // С8), яке до 2d прав не дає (Р2a1-30). Функції, що кличуть неіснуючу
+  // `current_user_id`, не застосувались би; межа fail-closed та сама — прав
+  // немає, і попередження `rights.adopted-source-unsupported` це вже каже.
+  if (contracts.users === undefined) return []
   const F = RIGHTS_FUNCTIONS
   const text = (name: string): [string, string] => [name, "text"]
   const uuid = (name: string): [string, string] => [name, "uuid"]

@@ -332,6 +332,9 @@ export async function runStages(
           },
         ]
   )
+  // Один контракт «Користувачів» і для шару платформи, і для функцій прав:
+  // без нього обидва генератори мовчать (Р2a1-30).
+  const users = usersContractOf(stage1.objects, physical)
   const sqlUnits = [
     ...sql.units.map((unit) => verbatimUnit(unit, ownerId, module)),
     ...wrappers,
@@ -345,7 +348,7 @@ export async function runStages(
       {
         objects: stage1.objects,
         physical,
-        contracts: { users: usersContractOf(stage1.objects, physical) },
+        contracts: { users },
         project: stage1.project,
       },
       parse,
@@ -387,6 +390,7 @@ export async function runStages(
           stage1.project
         ),
         assignmentSources: sources.assignmentSources,
+        users,
       },
       physical,
       stage1.project.database.provider,

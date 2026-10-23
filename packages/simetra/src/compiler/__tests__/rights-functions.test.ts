@@ -11,8 +11,12 @@ import { withoutLocations, type SqlUnit } from "../sql/units"
 import { kitchenSink } from "./fixtures/kitchen-sink"
 import {
   EVERYONE_ID,
+  GLOBAL_ASSIGNMENTS_FILE,
+  GLOBAL_ROLES_FILE,
   GRANT_FILE,
   ORG_ADMIN_ID,
+  ORG_ASSIGNMENTS_FILE,
+  ORG_ROLES_FILE,
   ORG_KIND_ID,
   ORG_MEMBER_ROLE_ID,
   PROJECT_FILE,
@@ -22,13 +26,17 @@ import {
   SUPPORT_ID,
   TASK_FILE,
   USERS_FILE,
+  adoptedMembership,
   compileRights,
+  globalGrantsSource,
   grant,
   grantTable,
   grantsSource,
+  membersSource,
   objects,
   rightsFiles,
   singleTenantRights,
+  without,
   withRoles,
   type Layer,
 } from "./fixtures/rights"
@@ -220,6 +228,34 @@ describe("rights functions", () => {
 
   it("renders no rights functions without roles", async () => {
     expect(rightsUnits(await compiled(rightsFiles()))).toEqual([])
+  })
+
+  it("renders no rights functions without users, even with roles and an adopted source", async () => {
+    // Р2a1-30: `current_user_id` дає лише шар «Користувачів», а прийняте
+    // джерело прав до 2d не дає — компіляція чиста, функцій прав немає.
+    const result = await compileRights(
+      withRoles(
+        adoptedMembership(),
+        {
+          [PROJECT_FILE]: {
+            membershipSources: [membersSource()],
+            assignmentSources: [grantsSource(), globalGrantsSource()],
+          },
+          [GRANT_FILE]: grantTable(),
+          [TASK_FILE]: { trackAuthor: false },
+        },
+        without(
+          USERS_FILE,
+          ORG_ROLES_FILE,
+          ORG_ASSIGNMENTS_FILE,
+          GLOBAL_ROLES_FILE,
+          GLOBAL_ASSIGNMENTS_FILE
+        )
+      )
+    )
+    expect(result.diagnostics.filter((d) => d.severity === "error")).toEqual([])
+    expect(result.model!.contracts.roles).not.toEqual([])
+    expect(rightsUnits(result.model!)).toEqual([])
   })
 
   it("declares every rights function with its signature, shape and grants", () => {
