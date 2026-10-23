@@ -11,10 +11,10 @@ import { expectClean } from "../../compiler/__tests__/helpers"
  */
 
 describe("reference domain", () => {
-  it("compiles without diagnostics", async () => {
+  it("the reference domain compiles clean", async () => {
     const result = await compile(readReferenceDomain())
     // Жодної діагностики, зокрема попереджень: зразок не вчить поганого.
-    expectClean(result, { allow: ["rights.scope-kind-unread"] })
+    expectClean(result)
     expect(result.ok).toBe(true)
   })
 
@@ -37,11 +37,10 @@ describe("reference domain", () => {
     const { model } = await compile(readReferenceDomain())
     const kinds = new Set(model!.objects.map((object) => object.kind))
     // PgEnum свідомо поза доменом: енам-тип Postgres — форма прийнятої схеми,
-    // а новий застосунок бере перерахування (спека П2 §4). Ролі й набори прав
-    // приходять у приклади з переходом прикладів (план Права-2).
+    // а новий застосунок бере перерахування (спека П2 §4).
     expect([...kinds].sort()).toEqual(
       Object.values(KIND_REGISTRY)
-        .filter((def) => def.kind !== "PgEnum" && !def.rightsDeclaration)
+        .filter((def) => def.kind !== "PgEnum")
         .map((def) => def.kind)
         .sort()
     )

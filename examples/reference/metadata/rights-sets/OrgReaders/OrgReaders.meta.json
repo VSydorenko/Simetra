@@ -1,0 +1,19 @@
+{
+  "$schema": "../../../../../node_modules/simetra/schemas/rights-sets.schema.json",
+  "id": "aab210cc-fa13-482b-bdda-b8c16177b465",
+  "kind": "RightsSet",
+  "name": "OrgReaders",
+  "grants": [
+    {
+      "grant": {
+        "objects": {
+          "withAction": "read"
+        },
+        "actions": [
+          "read"
+        ],
+        "extent": "any"
+      }
+    }
+  ]
+}

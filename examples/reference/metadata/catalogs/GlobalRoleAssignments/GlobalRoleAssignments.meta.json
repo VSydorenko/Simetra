@@ -1,0 +1,13 @@
+{
+  "$schema": "../../../../../node_modules/simetra/schemas/catalogs.schema.json",
+  "id": "3d7f24ac-8796-4cc0-8fab-caf7c793b71d",
+  "kind": "Catalog",
+  "name": "GlobalRoleAssignments",
+  "physicalName": "global_role_assignments",
+  "kindLabel": "global_role_assignments",
+  "scope": "none",
+  "title": {
+    "uk": "Призначення глобальних ролей"
+  },
+  "role": "roleAssignments"
+}

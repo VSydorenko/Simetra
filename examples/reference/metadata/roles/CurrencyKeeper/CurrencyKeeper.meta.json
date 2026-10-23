@@ -1,0 +1,24 @@
+{
+  "$schema": "../../../../../node_modules/simetra/schemas/roles.schema.json",
+  "id": "ab32aac7-9368-479f-b043-4512905434d9",
+  "kind": "Role",
+  "name": "CurrencyKeeper",
+  "assignedOn": "global",
+  "grants": [
+    {
+      "grant": {
+        "objects": [
+          {
+            "kind": "Catalog",
+            "name": "Currency"
+          }
+        ],
+        "actions": [
+          "read",
+          "update"
+        ],
+        "extent": "any"
+      }
+    }
+  ]
+}

@@ -430,11 +430,11 @@ git commit -m "feat(compiler): попередження на вид скоупу
 - Create: `examples/reference/metadata/catalogs/{OrgRoles,OrgRoleAssignments,GlobalRoles,GlobalRoleAssignments}/*.meta.json`, `examples/reference/metadata/rights-sets/OrgReaders/OrgReaders.meta.json`, `examples/reference/metadata/roles/{OrgMemberRole,OrgAdmin,CurrencyKeeper}/*.meta.json`
 - Modify: `packages/simetra/src/schema/__tests__/reference-domain.test.ts`, `packages/simetra/src/compiler/__tests__/fixtures/reference-domain.ts` (якщо перелік файлів фіксований)
 
-- [ ] **Step 1: Write the failing test (unit)** — у `reference-domain.test.ts` прибрати фільтр `!def.rightsDeclaration` («covers every kind»): тест червоніє, бо `Role` і `RightsSet` у прикладі немає; і `it("the reference domain compiles clean")` — `expectClean(result)` без `allow`.
+- [X] **Step 1: Write the failing test (unit)** — у `reference-domain.test.ts` прибрати фільтр `!def.rightsDeclaration` («covers every kind»): тест червоніє, бо `Role` і `RightsSet` у прикладі немає; і `it("the reference domain compiles clean")` — `expectClean(result)` без `allow`.
 - [ ] **Step 2:** Run: `pnpm --filter simetra test reference-domain` — FAIL.
-- [ ] **Step 3:** Додати (через `simetra create` чи вручну з UUID): системні довідники `org` і глобальні; набір `OrgReaders` (`grant { objects: { withAction: "read" }, actions: ["read"], extent: "any" }`: роль рівня скоупу з ним читає й «Користувачів», але лише видимих — Р2a2-18); роль `OrgMemberRole` (`assignedOn: { scopeKind: "org" }`, `include: [OrgReaders]`); роль `OrgAdmin` (`scopeKind: "org"`, `fullAccess: true`); глобальна роль `CurrencyKeeper` (`read`, `update` на `Currency`, `any`).
-- [ ] **Step 4:** Run: `pnpm --filter simetra test reference-domain explain operations reference-index-completeness && pnpm metadata:check` — PASS; `pnpm --filter simetra exec vitest run --project db reference-domain paper-test` — PASS.
-- [ ] **Step 5: Commit**
+- [X] **Step 3:** Додати (через `simetra create` чи вручну з UUID): системні довідники `org` і глобальні; набір `OrgReaders` (`grant { objects: { withAction: "read" }, actions: ["read"], extent: "any" }`: роль рівня скоупу з ним читає й «Користувачів», але лише видимих — Р2a2-18); роль `OrgMemberRole` (`assignedOn: { scopeKind: "org" }`, `include: [OrgReaders]`); роль `OrgAdmin` (`scopeKind: "org"`, `fullAccess: true`); глобальна роль `CurrencyKeeper` (`read`, `update` на `Currency`, `any`).
+- [X] **Step 4:** (DB-прогін `--project db` — CI; юніт і `metadata:check` зелені) Run: `pnpm --filter simetra test reference-domain explain operations reference-index-completeness && pnpm metadata:check` — PASS; `pnpm --filter simetra exec vitest run --project db reference-domain paper-test` — PASS.
+- [X] **Step 5: Commit**
 
 ```bash
 git add examples packages/simetra/src

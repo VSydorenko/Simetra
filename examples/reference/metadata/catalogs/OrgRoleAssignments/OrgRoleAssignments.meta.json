@@ -1,0 +1,13 @@
+{
+  "$schema": "../../../../../node_modules/simetra/schemas/catalogs.schema.json",
+  "id": "b880cf3a-33ea-414d-8d06-a001a22c9750",
+  "kind": "Catalog",
+  "name": "OrgRoleAssignments",
+  "physicalName": "org_role_assignments",
+  "kindLabel": "org_role_assignments",
+  "scope": "org",
+  "title": {
+    "uk": "Призначення ролей організації"
+  },
+  "role": "roleAssignments"
+}

@@ -1,0 +1,15 @@
+{
+  "$schema": "../../../../../node_modules/simetra/schemas/roles.schema.json",
+  "id": "5525d3af-b0e7-4b87-8e7d-ca378429b5be",
+  "kind": "Role",
+  "name": "OrgMemberRole",
+  "assignedOn": {
+    "scopeKind": "org"
+  },
+  "include": [
+    {
+      "kind": "RightsSet",
+      "name": "OrgReaders"
+    }
+  ]
+}
