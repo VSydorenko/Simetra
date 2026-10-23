@@ -457,7 +457,9 @@ describe("adopted sources", () => {
       owned({ membershipSources: [membersSource()] })
     )
     const task = model.contracts.rights.find((r) => r.table.name === "task")!
-    expect(task.ownership).toEqual([{ column: "assignee_id" }])
+    expect(task.ownership).toEqual([
+      { column: "assignee_id", owner: { membership: ORG_KIND_ID } },
+    ])
     const fk = model.physical.tables
       .find((t) => t.name === "task")!
       .foreignKeys.find((f) => f.columns.includes("assignee_id"))!

@@ -117,7 +117,10 @@ function rightsContract(
     })),
   ])
 
-  // Носії вже перевірила стадія 4, тож резолв тут не падає.
+  const scopeKindId = scopeKindOf(object, references)
+  // Носії вже перевірила стадія 4, тож резолв тут не падає, а ціль власності
+  // — «Користувачі» чи учасник виду скоупу самого об'єкта (довідник членства
+  // чи прийняте джерело того самого виду).
   const ownership = ownershipOf(object).map((carrier, index) => {
     const resolved = resolveCarrier(
       object,
@@ -126,7 +129,12 @@ function rightsContract(
       ctx
     )
     if (!resolved.ok) throw new Error("internal: unchecked rights carrier")
-    return resolved.contract
+    return {
+      ...resolved.contract,
+      owner: isUsers(carrierTarget(resolved.terminal))
+        ? ({ users: true } as const)
+        : { membership: must(scopeKindId) },
+    }
   })
   const bindingCarrier = bindingOf(object)
   let binding: RightsContract["binding"]
@@ -209,7 +217,6 @@ function rightsContract(
       }
     }),
   ]
-  const scopeKindId = scopeKindOf(object, references)
   const system = def.rightsSystem?.(object.data)
   return {
     objectId,

@@ -899,7 +899,8 @@ function qualified(name: QualifiedName): string {
   return `${quoteIdent(name.schema)}.${quoteIdent(name.name)}`
 }
 
-function call(fn: QualifiedName, args: readonly string[] = []): string {
+/** Виклик функції з аргументами-сталими; спільний з будівником умов. */
+export function call(fn: QualifiedName, args: readonly string[] = []): string {
   return `${qualified(fn)}(${args.join(", ")})`
 }
 
@@ -911,11 +912,12 @@ function param(fn: QualifiedName, name: string): string {
   return `${quoteIdent(fn.name)}.${name}`
 }
 
-function literal(value: string): string {
+/** Рядкова стала SQL з екрануванням лапок. */
+export function literal(value: string): string {
   return `'${value.replaceAll("'", "''")}'`
 }
 
-function uuidLiteral(value: string): string {
+export function uuidLiteral(value: string): string {
   return `${literal(value)}::uuid`
 }
 
