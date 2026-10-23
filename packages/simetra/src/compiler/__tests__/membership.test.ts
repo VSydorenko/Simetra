@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { compile } from "simetra/compiler"
-import type { PhysicalTable } from "simetra/model"
+import { PLATFORM_ROLES, type PhysicalTable } from "simetra/model"
 import { attribute, catalog, metaFiles, project, uuid } from "./helpers"
 
 const MEMBER_FILE = "catalogs/OrgMember/OrgMember.meta.json"
@@ -134,7 +134,7 @@ describe("membership", () => {
     )
   })
 
-  it("generated membership functions revoke PUBLIC and anon and grant authenticated and service_role", async () => {
+  it("generated membership functions revoke PUBLIC and anon and grant authenticated, service_role and the command role", async () => {
     const model = await compileOk(files())
     // Гранти самого членства: платформний шар «Користувачів» має власні.
     const grants = model.sqlUnits
@@ -146,8 +146,10 @@ describe("membership", () => {
     expect(grants.sort()).toEqual([
       "GRANT EXECUTE ON FUNCTION app.org_member_member_scopes() TO authenticated;",
       "GRANT EXECUTE ON FUNCTION app.org_member_member_scopes() TO service_role;",
+      `GRANT EXECUTE ON FUNCTION app.org_member_member_scopes() TO ${PLATFORM_ROLES.command};`,
       "GRANT EXECUTE ON FUNCTION app.org_member_my_member(uuid) TO authenticated;",
       "GRANT EXECUTE ON FUNCTION app.org_member_my_member(uuid) TO service_role;",
+      `GRANT EXECUTE ON FUNCTION app.org_member_my_member(uuid) TO ${PLATFORM_ROLES.command};`,
       "REVOKE EXECUTE ON FUNCTION app.org_member_member_scopes() FROM PUBLIC;",
       "REVOKE EXECUTE ON FUNCTION app.org_member_member_scopes() FROM anon;",
       "REVOKE EXECUTE ON FUNCTION app.org_member_my_member(uuid) FROM PUBLIC;",
@@ -168,6 +170,26 @@ describe("membership", () => {
     const grant = grantOf("GRANT EXECUTE ON FUNCTION app.org_member_my_member")
     expect(at(MY_MEMBER)).toBeLessThan(at(revoke))
     expect(at(revoke)).toBeLessThan(at(grant))
+  })
+
+  it("grants EXECUTE of membership functions to the command role", async () => {
+    // Функції прав і команди читають членство від ролі команд (спека прав
+    // §5.1): без гранту виклик дав би помилку доступу, а не множину.
+    const model = await compileOk(files())
+    const grants = model.sqlUnits
+      .filter((u) => u.class === "grant" && u.generator === "membership")
+      .map((u) => u.sql)
+    for (const fn of [
+      "app.org_member_member_scopes()",
+      "app.org_member_my_member(uuid)",
+    ]) {
+      expect(grants).toContain(
+        `GRANT EXECUTE ON FUNCTION ${fn} TO ${PLATFORM_ROLES.command};`
+      )
+      expect(grants).not.toContain(
+        `REVOKE EXECUTE ON FUNCTION ${fn} FROM ${PLATFORM_ROLES.command};`
+      )
+    }
   })
 
   it("scope kind with setFunction membership uses the generated set function", async () => {

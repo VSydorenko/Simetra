@@ -2,7 +2,7 @@ import {
   MEMBERSHIP_SET_FUNCTION,
   makeObjectName,
   quoteIdent,
-  type ApiRolePurpose,
+  type GrantPurpose,
   type PhysicalSnapshot,
   type PhysicalTable,
   type Project,
@@ -30,11 +30,12 @@ const MY_MEMBER_LABEL = "my_member"
 const MEMBER_SCOPES_LABEL = "member_scopes"
 
 /**
- * Ролі API, яким відкрито виконання функцій членства (спека користувачів §8):
+ * Ролі, яким відкрито виконання функцій членства (спека користувачів §8):
  * сервісна сесії не має й отримує порожній результат замість помилки доступу;
- * анонімна — помилку.
+ * анонімна — помилку. Роль команд читає членство у функціях прав і командах
+ * (спека прав §5.1).
  */
-const MEMBER_ROLES: readonly ApiRolePurpose[] = ["user", "service"]
+const MEMBER_ROLES: readonly GrantPurpose[] = ["user", "service", "command"]
 
 /**
  * Імена функцій членства — спільні для генератора, контракту й перевірки

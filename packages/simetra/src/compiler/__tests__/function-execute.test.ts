@@ -1,5 +1,6 @@
 import { beforeAll, describe, expect, it } from "vitest"
 import { compile } from "simetra/compiler"
+import { PLATFORM_ROLES } from "simetra/model"
 import { buildFunctionExecuteUnits } from "../function-execute"
 import { loadSqlParser, type SqlParser } from "../sql/parse"
 import {
@@ -106,7 +107,7 @@ async function grantDiagnostics(entries: Record<string, unknown>, sql: string) {
 }
 
 describe("buildFunctionExecuteUnits", () => {
-  it("a declared set function revokes PUBLIC and anon and grants authenticated and service_role", () => {
+  it("a declared set function revokes PUBLIC and anon and grants authenticated, service_role and the command role", () => {
     const units = buildFunctionExecuteUnits(
       [{ schema: "public", name: "my_orgs" }],
       [],
@@ -120,6 +121,7 @@ describe("buildFunctionExecuteUnits", () => {
         "REVOKE EXECUTE ON FUNCTION public.my_orgs() FROM anon;",
         "GRANT EXECUTE ON FUNCTION public.my_orgs() TO authenticated;",
         "GRANT EXECUTE ON FUNCTION public.my_orgs() TO service_role;",
+        `GRANT EXECUTE ON FUNCTION public.my_orgs() TO ${PLATFORM_ROLES.command};`,
       ].sort()
     )
     for (const unit of units) {
@@ -128,6 +130,22 @@ describe("buildFunctionExecuteUnits", () => {
       expect(unit.file).toBeUndefined()
       expect(unit.module).toBe("app")
     }
+  })
+
+  it("a declared set function is executable by the command role", () => {
+    const sql = buildFunctionExecuteUnits(
+      [{ schema: "public", name: "my_orgs" }],
+      [],
+      "supabase",
+      "app",
+      parse
+    ).map((u) => u.sql)
+    expect(sql).toContain(
+      `GRANT EXECUTE ON FUNCTION public.my_orgs() TO ${PLATFORM_ROLES.command};`
+    )
+    expect(sql).not.toContain(
+      `REVOKE EXECUTE ON FUNCTION public.my_orgs() FROM ${PLATFORM_ROLES.command};`
+    )
   })
 
   it("compile generates the set function grants of a scope kind", async () => {

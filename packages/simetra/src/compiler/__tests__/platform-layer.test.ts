@@ -1,12 +1,15 @@
 import { describe, expect, it } from "vitest"
 import { compile, type CompiledModel } from "simetra/compiler"
 import {
+  PLATFORM_ROLES,
   PLATFORM_SCHEMA,
   PROVIDER_IDENTITY_SOURCES,
   type IdentitySource,
 } from "simetra/model"
-import { buildPlatformUnits } from "../platform/units"
+import { buildPlatformUnits, platformSchemaGrants } from "../platform/units"
 import { loadSqlParser } from "../sql/parse"
+import { kitchenSink } from "./fixtures/kitchen-sink"
+import { compileRights, withRoles } from "./fixtures/rights"
 import {
   acceptDebt,
   attribute,
@@ -111,7 +114,7 @@ describe("platform layer", () => {
     ])
   })
 
-  it("schema grants: REVOKE ALL FROM PUBLIC, USAGE for API roles only", async () => {
+  it("schema grants: REVOKE ALL FROM PUBLIC, USAGE for API roles and the command role only", async () => {
     const model = await withUsers()
     const schemaGrants = platformUnits(model)
       .filter((u) => u.class === "grant" && u.sql.includes("ON SCHEMA"))
@@ -121,6 +124,7 @@ describe("platform layer", () => {
       "GRANT USAGE ON SCHEMA simetra TO anon;",
       "GRANT USAGE ON SCHEMA simetra TO authenticated;",
       "GRANT USAGE ON SCHEMA simetra TO service_role;",
+      `GRANT USAGE ON SCHEMA simetra TO ${PLATFORM_ROLES.command};`,
       "REVOKE ALL ON SCHEMA simetra FROM PUBLIC;",
     ])
   })
@@ -157,6 +161,7 @@ describe("platform layer", () => {
       "GRANT EXECUTE ON FUNCTION simetra.current_user_id() TO anon;",
       "GRANT EXECUTE ON FUNCTION simetra.current_user_id() TO authenticated;",
       "GRANT EXECUTE ON FUNCTION simetra.current_user_id() TO service_role;",
+      `GRANT EXECUTE ON FUNCTION simetra.current_user_id() TO ${PLATFORM_ROLES.command};`,
     ])
     // Типові привілеї провайдера теж відкликано: провізію не виконує жодна
     // роль API, функцію сесії — кожна роль API (сервісна отримує `NULL`).
@@ -179,6 +184,59 @@ describe("platform layer", () => {
       "service_role",
     ])
     expect(revokedFrom(CURRENT_USER)).toEqual(["PUBLIC"])
+  })
+
+  it("the command role executes current_user_id and uses the simetra schema", async () => {
+    // Функції прав від ролі команд кличуть `current_user_id` (спека прав §5.1).
+    const model = await withUsers()
+    const grants = platformUnits(model)
+      .filter((u) => u.class === "grant")
+      .map((u) => u.sql)
+    const command = PLATFORM_ROLES.command
+    expect(grants).toContain(
+      `GRANT EXECUTE ON FUNCTION simetra.current_user_id() TO ${command};`
+    )
+    expect(grants).not.toContain(
+      `REVOKE EXECUTE ON FUNCTION simetra.current_user_id() FROM ${command};`
+    )
+    expect(platformSchemaGrants("supabase")).toContain(
+      `GRANT USAGE ON SCHEMA simetra TO ${command};`
+    )
+  })
+
+  it("generated SQL never manages the command role itself", async () => {
+    // Роль кластерна (платформна спека §6.9): її створює `simetra roles`, а
+    // членство й DML-гранти — П4; згенерований SQL не створює, не змінює й
+    // не видає її, а таблиць їй не відкриває.
+    const parse = await loadSqlParser()
+    const models = [
+      await compile(kitchenSink()),
+      await compileRights(withRoles()),
+    ]
+    for (const result of models) {
+      expect(result.diagnostics.filter((d) => d.severity === "error")).toEqual(
+        []
+      )
+      for (const unit of result.model!.sqlUnits) {
+        const parsed = parse(unit.sql)
+        expect(parsed.ok, unit.identity).toBe(true)
+        if (!parsed.ok) continue
+        for (const { stmt } of parsed.statements) {
+          expect(
+            "CreateRoleStmt" in stmt ||
+              "AlterRoleStmt" in stmt ||
+              "GrantRoleStmt" in stmt,
+            unit.identity
+          ).toBe(false)
+          if (!("GrantStmt" in stmt)) continue
+          if (stmt.GrantStmt.objtype !== "OBJECT_TABLE") continue
+          const grantees = (stmt.GrantStmt.grantees ?? []).map((g) =>
+            "RoleSpec" in g ? g.RoleSpec.rolename : undefined
+          )
+          expect(grantees, unit.identity).not.toContain(PLATFORM_ROLES.command)
+        }
+      }
+    }
   })
 
   it("current_user_id reads sub of the claims and skips invalid users", async () => {
