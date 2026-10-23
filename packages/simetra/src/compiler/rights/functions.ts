@@ -507,9 +507,11 @@ function mineBody(
       "held",
       // Контейнер — лише в архетипу контейнерного рівня й лише існуючий
       // контейнер того самого тенанта (Р2a1-7): inner join, тож `NULL`,
-      // неіснуючий чи чужий контейнер не дає рядка. Тенант контейнера —
-      // того самого виду скоупу, що довідник призначень: рівень зберігання
-      // контейнерного архетипу — вид скоупу виду контейнера (`typed`).
+      // неіснуючий чи чужий контейнер не дає рядка. Вид скоупу контейнера
+      // зіставлено явно з видом довідника призначень, а не лише через
+      // рівень зберігання архетипу (`typed`): скоуп без виду нічого не
+      // означає (Р2a1-26). Позначка видалення контейнера прав не відкликає
+      // (Р2a1-28): права зникають із вилученням контейнера.
       [
         `SELECT t.storage, t.storage_id, t.scope, NULL::uuid AS container, t.custom_role, t.archetype, t.level, t.level_id`,
         `FROM typed t`,
@@ -520,6 +522,7 @@ function mineBody(
         `JOIN containers k`,
         `  ON k.level_id = t.level_id`,
         ` AND k.container = t.container`,
+        ` AND k.scope_kind_id IS NOT DISTINCT FROM t.storage_id`,
         ` AND k.scope IS NOT DISTINCT FROM t.scope`,
         `WHERE t.level = 'container'`,
       ].join("\n"),
@@ -573,9 +576,9 @@ function mineBody(
     // `own` і вимірів: `y@e`, на якому тримається `x@e` після проходу 2, міг
     // би впасти в проході 3 лише за браком `z@e` і `z@any`, z ∈ req(x) — але
     // їх уже перевірено для `x@e`. Один прохід недостатній через різницю
-    // обсягів (`post@own` на `update@own`, якого немає, коли лишились
-    // `update@any` без `read@any` і `read@own`); рекурсивний CTE віднімання
-    // не виражає.
+    // обсягів: коли лишились `post@own`, `update@any` і `read@own`, прохід 1
+    // знімає `update@any` (немає `read@any`), і лише прохід 2 — `post@own`,
+    // що тримався на `update@any`. Рекурсивний CTE віднімання не виражає.
     ["closure_1", closurePass("role_rows")],
     ["closure_2", closurePass("closure_1")],
   ]
@@ -720,12 +723,14 @@ function deltasCte(
 const CONTAINER_COLUMNS: readonly Column[] = [
   ["level_id", "uuid"],
   ["container", "uuid"],
+  ["scope_kind_id", "uuid"],
   ["scope", "uuid"],
 ]
 
 /**
- * Рядки кожного виду-контейнера з їхнім скоупом; нескоуплений контейнер —
- * лише існування (скоуп `NULL`, як у глобального довідника призначень).
+ * Рядки кожного виду-контейнера з видом скоупу й скоупом; нескоуплений
+ * контейнер — лише існування (вид і скоуп `NULL`, як у глобального довідника
+ * призначень).
  */
 function containersCte(
   rights: readonly RightsContract[],
@@ -739,12 +744,16 @@ function containersCte(
       const key = must(
         table.columns.find((c) => c.origin.standard === "ref")
       ).name
-      const scope =
-        contract.scopeKindId === undefined
-          ? "NULL::uuid"
-          : `k.${quoteIdent(scopeColumn(physical, contract.table))}`
+      const { scopeKindId } = contract
+      const [kind, scope] =
+        scopeKindId === undefined
+          ? ["NULL::uuid", "NULL::uuid"]
+          : [
+              uuidLiteral(scopeKindId),
+              `k.${quoteIdent(scopeColumn(physical, contract.table))}`,
+            ]
       return [
-        `SELECT ${uuidLiteral(contract.objectId)} AS level_id, k.${quoteIdent(key)} AS container, ${scope} AS scope`,
+        `SELECT ${uuidLiteral(contract.objectId)} AS level_id, k.${quoteIdent(key)} AS container, ${kind} AS scope_kind_id, ${scope} AS scope`,
         `FROM ${qualified(contract.table)} k`,
       ].join("\n")
     })

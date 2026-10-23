@@ -415,6 +415,26 @@ describe("rights functions", () => {
     if (extent !== undefined) expect(found).toContainEqual(extent)
   })
 
+  it("matches the scope kind of a container explicitly", () => {
+    // Скоуп без виду нічого не означає (Р2a1-26): контейнер зіставляється з
+    // видом довідника призначень, а не лише через рівень зберігання архетипу.
+    const columns = (node: unknown) =>
+      (
+        node as { ColumnRef?: { fields: { String?: { sval: string } }[] } }
+      ).ColumnRef?.fields
+        .map((f) => f.String?.sval)
+        .join(".")
+    const notDistinct = nodes(
+      bodyTree(functionUnit(model, RIGHTS_FUNCTIONS.mine.name)),
+      "A_Expr"
+    )
+      .map((expr) => expr as { kind: string; lexpr: unknown; rexpr: unknown })
+      .filter((expr) => expr.kind === "AEXPR_NOT_DISTINCT")
+      .map((expr) => [columns(expr.lexpr), columns(expr.rexpr)])
+    expect(notDistinct).toContainEqual(["k.scope_kind_id", "t.storage_id"])
+    expect(notDistinct).toContainEqual(["k.scope", "t.scope"])
+  })
+
   it("renders rights functions for a project without scope kinds", async () => {
     const single = await compiled(singleTenantRights())
     expect(functionIdentities(single)).toEqual(SIGNATURES)
