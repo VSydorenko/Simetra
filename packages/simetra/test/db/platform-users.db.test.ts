@@ -1,4 +1,4 @@
-import { randomInt, randomUUID } from "node:crypto"
+import { randomInt } from "node:crypto"
 import { describe, expect, it } from "vitest"
 import type pg from "pg"
 import { compile } from "simetra/compiler"
@@ -10,6 +10,7 @@ import {
   metaFiles,
   project,
 } from "../../src/compiler/__tests__/helpers"
+import { signUp } from "./auth"
 import { asRole, queryAs, withRollback } from "./connection"
 
 /**
@@ -49,33 +50,6 @@ async function deploy(client: pg.Client): Promise<void> {
   )
   expect(result.diagnostics).toEqual([])
   await client.query(renderDesiredState(result.model!).sql)
-}
-
-interface Account {
-  email?: string | null
-  phone?: string
-  meta?: Record<string, unknown> | null
-  anonymous?: boolean
-}
-
-/** Реєстрація облікового запису так, як її робить сервіс автентифікації. */
-async function signUp(
-  client: pg.Client,
-  account: Account = {}
-): Promise<string> {
-  const { rows } = await client.query<{ id: string }>(
-    `INSERT INTO auth.users (id, email, phone, raw_user_meta_data, is_anonymous)
-     VALUES (gen_random_uuid(), $1, $2, $3, $4) RETURNING id`,
-    [
-      account.email === undefined
-        ? `${randomUUID()}@example.test`
-        : account.email,
-      account.phone ?? null,
-      account.meta === undefined ? null : account.meta,
-      account.anonymous ?? false,
-    ]
-  )
-  return rows[0]!.id
 }
 
 interface UserRow {

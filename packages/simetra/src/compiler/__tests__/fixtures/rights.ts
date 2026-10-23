@@ -371,6 +371,77 @@ export function teamScopeKind(): Layer {
   }
 }
 
+export const TEAM_ROLES_FILE = "catalogs/TeamRoles/TeamRoles.meta.json"
+export const TEAM_ASSIGNMENTS_FILE =
+  "catalogs/TeamRoleAssignments/TeamRoleAssignments.meta.json"
+export const TEAM_LEAD_ID = uuid(6410)
+
+/**
+ * Другий вид скоупу `team` з власним членством: корінь `Team`, учасники
+ * `TeamMember`, системні довідники прав `TeamRoles`/`TeamRoleAssignments`,
+ * довідник `TeamNote` і роль `TeamLead` з `read@any` на ньому. Так один
+ * проєкт має два види скоупу, кожен зі своїми рівнем прав і учасниками.
+ */
+export function secondScopeKind(): Layer {
+  return {
+    [PROJECT_FILE]: {
+      scopeKinds: [
+        ORG_SCOPE_KIND,
+        {
+          id: TEAM_KIND_ID,
+          name: "team",
+          physicalName: "team_id",
+          root: { object: ref("Catalog", "Team") },
+          setFunction: "membership",
+        },
+      ],
+    },
+    "catalogs/Team/Team.meta.json": catalog(uuid(6400), "Team", "team", {
+      scope: "team",
+    }),
+    "catalogs/TeamMember/TeamMember.meta.json": catalog(
+      uuid(6401),
+      "TeamMember",
+      "team_member",
+      {
+        scope: "team",
+        membership: { user: "user" },
+        attributes: [
+          refAttribute(6402, "user", "user_id", ref("Catalog", "Users")),
+        ],
+      }
+    ),
+    "catalogs/TeamNote/TeamNote.meta.json": catalog(
+      uuid(6403),
+      "TeamNote",
+      "team_note",
+      { scope: "team" }
+    ),
+    [TEAM_ROLES_FILE]: systemCatalog(
+      uuid(6404),
+      "TeamRoles",
+      "team_roles",
+      "rightsRoles",
+      "team"
+    ),
+    [TEAM_ASSIGNMENTS_FILE]: systemCatalog(
+      uuid(6405),
+      "TeamRoleAssignments",
+      "team_role_assignments",
+      "roleAssignments",
+      "team"
+    ),
+    [ROLE_FILE("TeamLead")]: role(
+      TEAM_LEAD_ID,
+      "TeamLead",
+      { scopeKind: "team" },
+      {
+        grants: [grant(objects(["Catalog", "TeamNote"]), ["read"], "any")],
+      }
+    ),
+  }
+}
+
 /** Прийнята таблиця членства виду `org`; `uniques` дає `UNIQUE (scope, id)`. */
 export function membershipTable(overrides: Record<string, unknown> = {}) {
   return {

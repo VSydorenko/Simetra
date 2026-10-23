@@ -10,6 +10,7 @@ import {
   project,
   uuid,
 } from "../../src/compiler/__tests__/helpers"
+import { signUp } from "./auth"
 import { queryAs, withRollback } from "./connection"
 
 /**
@@ -56,14 +57,6 @@ async function deploy(client: pg.Client): Promise<void> {
   )
   expect(result.diagnostics).toEqual([])
   await client.query(renderDesiredState(result.model!).sql)
-}
-
-/** Обліковий запис провайдера: провізія створює рядок «Користувачів». */
-async function signUp(client: pg.Client): Promise<string> {
-  const { rows } = await client.query<{ id: string }>(
-    "INSERT INTO auth.users (id, email) VALUES (gen_random_uuid(), gen_random_uuid() || '@example.test') RETURNING id"
-  )
-  return rows[0]!.id
 }
 
 async function organization(client: pg.Client): Promise<string> {
