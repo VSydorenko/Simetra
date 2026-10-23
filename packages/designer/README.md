@@ -29,9 +29,10 @@ npx simetra mcp metadata             # the same tools over MCP (stdio)
 ```
 
 `simetra --help` lists every command, and `simetra <command> --help` its
-options. Commands that read the database (`introspect`, `diff`, `plan`,
-`apply`) take the connection string from `SIMETRA_DATABASE_URL`; `apply`
-needs the hash of a reviewed plan file.
+options. Commands that work with the database (`introspect`, `diff`, `plan`,
+`apply`, `roles`) take the connection string from `SIMETRA_DATABASE_URL`;
+`apply` needs the hash of a reviewed plan file, and `roles` creates the
+platform's cluster roles once, before the first `plan`.
 
 ## Agent skills
 

@@ -8,6 +8,7 @@ import {
   renameTool,
 } from "./mutations"
 import { compileTool, explainTool, fixTool } from "./read"
+import { rolesTool } from "./roles-tool"
 import type { Tool } from "./types"
 
 export type {
@@ -38,6 +39,7 @@ export const TOOLS: readonly Tool[] = [
   diffTool,
   planTool,
   applyTool,
+  rolesTool,
 ]
 
 export function toolByName(name: string): Tool | undefined {

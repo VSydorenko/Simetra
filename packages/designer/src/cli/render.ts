@@ -8,6 +8,7 @@ import {
 import type { ApplyData, PlanData } from "../tools/apply-tools"
 import type { Tool, ToolResult } from "../tools/catalog"
 import type { DiffData } from "../tools/database-tools"
+import type { RolesData } from "../tools/roles-tool"
 
 /** Текст пояснення об'єкта для терміналу; JSON-вигляд друкується як є. */
 export function renderExplanation(e: Explanation): string {
@@ -147,6 +148,23 @@ export function renderResult(
               written: r.written,
             })
           : renderApply(r.data as ApplyData | undefined, r.diagnostics, report),
+    }
+  }
+  if (tool.name === "roles" && r.data !== undefined) {
+    const { roles } = r.data as RolesData
+    return {
+      stdout:
+        o.format === "json"
+          ? JSON.stringify(
+              {
+                ok: r.ok,
+                roles,
+                diagnostics: JSON.parse(report) as unknown,
+              },
+              null,
+              2
+            )
+          : roles.map((x) => `${x.server}: ${x.name} ${x.outcome}`).join("\n"),
     }
   }
   if (tool.files === "read") return { stdout: report }

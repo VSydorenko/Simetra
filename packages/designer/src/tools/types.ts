@@ -16,6 +16,7 @@ export const TOOL_NAMES = [
   "diff",
   "plan",
   "apply",
+  "roles",
 ] as const
 export type ToolName = (typeof TOOL_NAMES)[number]
 

@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest"
-import { compile } from "simetra/compiler"
+import { compile, type PromotionRecord } from "simetra/compiler"
+import { PLATFORM_ROLES } from "simetra/model"
 import {
   buildPlan,
   type ApplyDatabase,
   type ApplyTransaction,
+  type PromotionInput,
   type SchemaEngine,
 } from "simetra/schema"
 import {
@@ -65,4 +67,75 @@ describe("buildPlan", () => {
     expect(statements).toHaveLength(1)
     expect(statements[0]).toContain("server_version_num")
   })
+
+  it.each([
+    { server: "target", promotions: false },
+    { server: "shadow", promotions: false },
+    { server: "target", promotions: true },
+  ])(
+    "refuses a plan when the command role is missing on the $server server (promotion: $promotions)",
+    async ({ server, promotions }) => {
+      const compiled = await compile(
+        metaFiles({
+          "project.meta.json": project(),
+          "catalogs/Party/Party.meta.json": catalog("Party"),
+        })
+      )
+      const urls = {
+        target: "postgres://target",
+        shadow: "postgres://shadow",
+      }
+      // Свіжа ціль Postgres 17; роль команд є лише на іншому сервері
+      const reader: ApplyDatabase = {
+        transaction: (db, _end, fn) =>
+          fn({
+            query: async <R extends Record<string, unknown>>(sql: string) =>
+              (sql.includes("server_version_num")
+                ? [{ num: 170004, version: "17.4", major: 17 }]
+                : sql.includes("pg_auth_members") &&
+                    db.url !== urls[server as "target" | "shadow"]
+                  ? [
+                      {
+                        name: PLATFORM_ROLES.command,
+                        attributes: {},
+                        memberOf: [],
+                        members: [],
+                      },
+                    ]
+                  : []) as unknown as R[],
+            extract: () => Promise.reject(new Error("no extract expected")),
+          }),
+      }
+      const scratch: ApplyDatabase = {
+        transaction: () => Promise.reject(new Error("no copy expected")),
+      }
+      // Будь-який виклик двигуна — і `withDesiredShadow` — кидає: відмова
+      // мусить прийти до тіні й до гілки промоції
+      const engine = new Proxy({} as SchemaEngine, {
+        get: (_, name) => {
+          throw new Error(`no engine call expected: ${String(name)}`)
+        },
+      })
+      // Запис промоції відмова не читає: вона — до розгалуження
+      const records: PromotionInput[] = promotions
+        ? [{ record: {} as PromotionRecord, file: "plans/x.promotion.json" }]
+        : []
+      const outcome = await buildPlan(
+        engine,
+        { reader, scratch },
+        compiled.model!,
+        { target: { url: urls.target }, shadowBase: { url: urls.shadow } },
+        records
+      )
+      expect(outcome).toMatchObject({
+        status: "refused",
+        diagnostics: [
+          {
+            code: "plan.platform-role-missing",
+            params: { role: PLATFORM_ROLES.command, server },
+          },
+        ],
+      })
+    }
+  )
 })

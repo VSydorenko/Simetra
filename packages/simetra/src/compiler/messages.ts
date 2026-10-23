@@ -3369,6 +3369,26 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: `План не записано. Керовані об'єкти належать ролі, що застосовує: інший власник може обходити захист рядків, а об'єкт, який план знімає чи змінює, потребує власника, членом якого є роль застосування. ${OWNER_RECIPE.uk} й сплануйте знову.`,
     },
   },
+  "plan.platform-role-missing": {
+    en: (p) =>
+      `The platform role ${p.role} that the generated SQL grants to does not exist on the ${p.server} server`,
+    uk: (p) =>
+      `Платформної ролі ${p.role}, якій згенерований SQL дає гранти, немає на сервері ${p.server === "shadow" ? "тіні" : "цілі"}`,
+    hint: {
+      en: "No plan was written. Platform roles live in the cluster, not in the database, so the plan does not create them: run `simetra roles` once with a role that has CREATEROLE, and plan again.",
+      uk: "План не записано. Платформні ролі живуть у кластері, а не в базі, тож план їх не створює: один раз запустіть `simetra roles` від ролі з CREATEROLE і сплануйте знову.",
+    },
+  },
+  "plan.platform-role-shape": {
+    en: (p) =>
+      `The platform role ${p.role} on the ${p.server} server has an unsafe shape (${p.violation}): it must be NOLOGIN NOINHERIT with no other attribute, belong to no role, and its members may only administer it`,
+    uk: (p) =>
+      `Платформна роль ${p.role} на сервері ${p.server === "shadow" ? "тіні" : "цілі"} має небезпечну форму (${p.violation}): вона мусить бути NOLOGIN NOINHERIT без інших атрибутів, ні в що не входити, а її члени можуть лише керувати нею`,
+    hint: {
+      en: "No plan was written. `simetra roles` does not change an existing role: fix it by hand with `ALTER ROLE <role> NO<attribute>` for an attribute, or `REVOKE <role> FROM <member>` (or revoke the role it belongs to) for a membership, and plan again.",
+      uk: "План не записано. `simetra roles` наявну роль не змінює: виправте її вручну — `ALTER ROLE <роль> NO<атрибут>` для атрибута чи `REVOKE <роль> FROM <член>` (або відкличте роль, у яку вона входить) для членства — і сплануйте знову.",
+    },
+  },
   "plan.type-guard-unsupported": {
     en: (p) =>
       p.reason === "equality"
@@ -3717,6 +3737,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     hint: {
       en: "The connection itself worked; the failure happened during the database work. The text of the driver error is withheld because it may carry credentials; look up the SQLSTATE, or rerun after fixing the database.",
       uk: "Саме підключення вдалося; збій стався під час роботи з базою. Текст помилки драйвера приховано, бо він може нести облікові дані; знайдіть SQLSTATE або повторіть після виправлення бази.",
+    },
+  },
+  "roles.create-role-denied": {
+    en: (p) =>
+      `The connecting role cannot create the platform role ${p.role} on the ${p.server} server: it has neither CREATEROLE nor SUPERUSER`,
+    uk: (p) =>
+      `Роль підключення не може створити платформну роль ${p.role} на сервері ${p.server === "shadow" ? "тіні" : "цілі"}: у неї немає ні CREATEROLE, ні SUPERUSER`,
+    hint: {
+      en: "Nothing was created on any server. Run `simetra roles` with a connection whose role has CREATEROLE, or ask the database administrator to create the role as NOLOGIN NOINHERIT.",
+      uk: "Ні на одному сервері нічого не створено. Запустіть `simetra roles` з підключенням, роль якого має CREATEROLE, або попросіть адміністратора бази створити роль як NOLOGIN NOINHERIT.",
     },
   },
   "introspect.unrepresentable": {

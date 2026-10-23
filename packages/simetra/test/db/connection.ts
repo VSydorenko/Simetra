@@ -1,4 +1,5 @@
 import pg from "pg"
+import type { ApplyDatabase, ApplyTransaction } from "simetra/schema"
 
 const DEFAULT_URL = "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
 
@@ -221,6 +222,22 @@ export async function withRollback<T>(
   } finally {
     await client.end()
   }
+}
+
+/**
+ * Порт застосування поверх транзакції тесту: кожен виклик `transaction`
+ * працює в ній же, тож усе, що код пише, відкочує `withRollback`.
+ */
+export function rollbackDatabase(client: pg.Client): ApplyDatabase {
+  const tx: ApplyTransaction = {
+    query: async <R extends Record<string, unknown>>(
+      sql: string,
+      params?: readonly unknown[]
+    ) => (await client.query(sql, params as unknown[])).rows as R[],
+    extract: () =>
+      Promise.reject(new Error("no extract in a test transaction")),
+  }
+  return { transaction: (_db, _end, fn) => fn(tx) }
 }
 
 /**

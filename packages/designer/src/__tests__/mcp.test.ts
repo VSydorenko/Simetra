@@ -260,6 +260,7 @@ describe("simetra mcp", () => {
       "plan",
       "promote",
       "rename",
+      "roles",
     ])
   })
 

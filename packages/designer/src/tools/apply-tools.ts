@@ -4,6 +4,7 @@ import {
   canonicalSnapshot,
   compile,
   diagnostic,
+  loadSqlParser,
   promotionFileName,
   promotionRecordSchema,
   type CompiledModel,
@@ -14,6 +15,7 @@ import {
 import {
   buildPlan,
   checkPermissions,
+  checkPlatformRoles,
   desiredForApply,
   executePlan,
   FINGERPRINT_VERSION,
@@ -113,7 +115,9 @@ export interface PlanData {
 
 /** Результат колбека `withDatabase`: застосування або відмова бажаної тіні. */
 type ApplyRun =
-  { outcome: ExecuteOutcome } | { shadowFailed: EngineDiagnostic[] }
+  | { outcome: ExecuteOutcome }
+  | { shadowFailed: EngineDiagnostic[] }
+  | { rolesRefused: EngineDiagnostic[] }
 
 export interface ApplyData {
   status: "committed" | "rolledBack"
@@ -545,6 +549,15 @@ export const applyTool = defineTool({
         // з'єднанні, тож бажану тінь будують до відкриття транзакції цілі
         // (рішення 7 плану П3-2b-1): під замками плану її не будують
         const desired = await desiredForApply(model)
+        // Платформні ролі — до тіні, як у плані (Р2a1-2)
+        const roles = await checkPlatformRoles(
+          await applyDatabase({ readOnly: true }),
+          db.target,
+          db.shadowBase,
+          desired.sql,
+          await loadSqlParser()
+        )
+        if (roles.refusal !== undefined) return { rolesRefused: roles.refusal }
         const shadow = await engine.withDesiredShadow(
           {
             target: db.target,
@@ -568,6 +581,8 @@ export const applyTool = defineTool({
     if (!executed.ok) return refusedWith([executed.diagnostic])
     if ("shadowFailed" in executed.value)
       return refusedWith(executed.value.shadowFailed.map(fromEngine))
+    if ("rolesRefused" in executed.value)
+      return refusedWith(executed.value.rolesRefused.map(fromEngine))
     const outcome = executed.value.outcome
     const diagnostics = outcome.diagnostics.map(fromEngine)
     const ok = !hasErrors(diagnostics)
