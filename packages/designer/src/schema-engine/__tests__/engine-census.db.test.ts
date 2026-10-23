@@ -309,6 +309,9 @@ const SATELLITE_KINDS: readonly [string, string][] = [
   ["acl", "a grant on a counted object"],
   ["comment", "a comment on a counted object"],
   ["securityLabel", "a label on a counted object"],
+  // Платформна роль поза пресетом провайдера (`simetra_command`) — факт
+  // двигуна, бо її називають гранти; межа керує грантами, а не ролями (§6.9)
+  ["role", "a cluster role a grant names; the boundary manages grants only"],
 ]
 
 /** Межа фікстури — її схеми без схем провайдера. */
