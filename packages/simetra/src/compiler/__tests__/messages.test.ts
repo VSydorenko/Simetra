@@ -324,6 +324,19 @@ describe("messages catalog", () => {
     }
   )
 
+  it("rights.adopted-source-unsupported names the consequence without a plan label", () => {
+    const d = diagnostic("rights.adopted-source-unsupported", "", "", {
+      source: "grants",
+    })
+    expect(d.severity).toBe("warning")
+    expect(d.message).toBe(
+      'Rights from the adopted source "grants" are not computed yet: members of the source will not get rights on the objects of the kind'
+    )
+    expect(localize(d, "uk").message).toBe(
+      `Права з прийнятого джерела "grants" ще не обчислюються: учасники джерела не отримають прав на об'єкти виду`
+    )
+  })
+
   it("plan.provider-trigger-taken names the trigger and the provider table", () => {
     const d = diagnostic("plan.provider-trigger-taken", "", "", {
       trigger: "audit_x",

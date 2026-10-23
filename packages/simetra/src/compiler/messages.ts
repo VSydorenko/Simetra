@@ -2005,9 +2005,9 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "rights.adopted-source-unsupported": {
     en: (p) =>
-      `Rights from the adopted source "${p.source}" are not computed yet (2d): members of the source get no rights on the objects of the kind`,
+      `Rights from the adopted source "${p.source}" are not computed yet: members of the source will not get rights on the objects of the kind`,
     uk: (p) =>
-      `Права з прийнятого джерела "${p.source}" ще не обчислюються (2d): учасники джерела не отримають прав на об'єкти виду`,
+      `Права з прийнятого джерела "${p.source}" ще не обчислюються: учасники джерела не отримають прав на об'єкти виду`,
   },
   "rights.ownership-target": {
     en: (p) =>
