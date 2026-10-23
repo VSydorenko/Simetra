@@ -16,6 +16,7 @@ import {
   type RightsContract,
   type RightsExtent,
   type RightsLevelKey,
+  type RightsProjectionRow,
   qualified,
 } from "../contracts"
 import { compareStrings } from "../diagnostics"
@@ -353,18 +354,16 @@ function levelDomain(
 /**
  * Рядки проєкції з розгорнутим `fullAccess` (Р2a1-9): роль з повними правами
  * отримує явні рядки всього домену свого рівня, тож гілки обходу в SQL
- * немає. Порядок — порядок проєкції.
+ * немає. Порядок — порядок проєкції. Одне місце для таблиці проєкції й для
+ * попередження на вид скоупу: «хто читає» в попередженні — рівно те, що
+ * побачать політики.
  */
-function projectionRows(contracts: RightsFunctionContracts): Value[][] {
-  const byObject = new Map(contracts.rights.map((c) => [c.objectId, c]))
+export function expandedProjection(
+  contracts: Pick<Contracts, "rights" | "roles" | "rightsProjection">
+): Pick<RightsProjectionRow, "roleId" | "objectId" | "action" | "extent">[] {
   const rows = new Map<
     string,
-    {
-      roleId: string
-      objectId: string
-      action: string
-      extent: ProjectionExtent
-    }
+    Pick<RightsProjectionRow, "roleId" | "objectId" | "action" | "extent">
   >()
   const add = (
     roleId: string,
@@ -392,20 +391,23 @@ function projectionRows(contracts: RightsFunctionContracts): Value[][] {
       add(role.roleId, entry.contract.objectId, entry.action, entry.extent)
     }
   }
-  return [...rows.values()]
-    .sort(
-      (a, b) =>
-        compareStrings(a.roleId, b.roleId) ||
-        compareStrings(a.objectId, b.objectId) ||
-        compareStrings(a.action, b.action) ||
-        compareExtents(a.extent, b.extent)
-    )
-    .map((row) => [
-      row.roleId,
-      must(byObject.get(row.objectId)).kindLabel,
-      row.action,
-      ...extentValues(row.extent),
-    ])
+  return [...rows.values()].sort(
+    (a, b) =>
+      compareStrings(a.roleId, b.roleId) ||
+      compareStrings(a.objectId, b.objectId) ||
+      compareStrings(a.action, b.action) ||
+      compareExtents(a.extent, b.extent)
+  )
+}
+
+function projectionRows(contracts: RightsFunctionContracts): Value[][] {
+  const byObject = new Map(contracts.rights.map((c) => [c.objectId, c]))
+  return expandedProjection(contracts).map((row) => [
+    row.roleId,
+    must(byObject.get(row.objectId)).kindLabel,
+    row.action,
+    ...extentValues(row.extent),
+  ])
 }
 
 /** Вимоги дій — уже транзитивне замикання контракту (`RightsAction.requires`). */

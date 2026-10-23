@@ -571,9 +571,11 @@ describe("fixFiles: sql.generated-grant", () => {
       "grant:grant:function:public.my_orgs():anon:execute"
     )
     const before = await compile(files)
-    expect(before.diagnostics.map((d) => d.code)).toEqual([
-      "sql.generated-grant",
-    ])
+    expect(
+      before.diagnostics
+        .filter((d) => d.code !== "rights.scope-kind-unread")
+        .map((d) => d.code)
+    ).toEqual(["sql.generated-grant"])
     const result = await fixFiles(files, options())
     expectClean(result, { allow: ["rights.scope-kind-unread"] })
     expect(result.ok).toBe(true)
@@ -592,9 +594,11 @@ describe("fixFiles: sql.generated-grant", () => {
     const files = await grantFiles(`${OTHER}\n\n${mixed}\n`)
     const result = await fixFiles(files, options())
     expect(result.ok).toBe(false)
-    expect(result.diagnostics.map((d) => [d.code, d.params?.object])).toEqual([
-      ["sql.generated-grant", "public.my_orgs()"],
-    ])
+    expect(
+      result.diagnostics
+        .filter((d) => d.code !== "rights.scope-kind-unread")
+        .map((d) => [d.code, d.params?.object])
+    ).toEqual([["sql.generated-grant", "public.my_orgs()"]])
     expect(result.changes.map((c) => c.path)).not.toContain(GRANTS)
     expect(applyChanges(files, result.changes).get(GRANTS)).toBe(
       files.get(GRANTS)

@@ -39,8 +39,14 @@ async function compileScoped(
  * Усі діагностики прогону як (код, серйозність, файл, pointer): тест бачить і
  * побічні правила, а не лише скоуп.
  */
+/**
+ * Діагностики без попередження виду скоупу: фікстури скоуплені й без ролей,
+ * а перевірки тут — про скоуп (як `allow` в `expectClean`).
+ */
 function scopeDiagnostics(result: CompileResult) {
-  return result.diagnostics.map((d) => [d.code, d.severity, d.file, d.pointer])
+  return result.diagnostics
+    .filter((d) => d.code !== "rights.scope-kind-unread")
+    .map((d) => [d.code, d.severity, d.file, d.pointer])
 }
 
 /** Проєкт, у якого корінь виду за індексом — інший об'єкт. */

@@ -102,9 +102,15 @@ async function compiled(files: Map<string, string>) {
 }
 
 /** Компіляція з дослівними грантами у `GRANTS_FILE`; борг прийнято. */
+/**
+ * Діагностики компіляції без попередження виду скоупу: фікстури скоуплені й
+ * без ролей, а перевірки тут — лише про гранти (як `allow` в `expectClean`).
+ */
 async function grantDiagnostics(entries: Record<string, unknown>, sql: string) {
   const files = await acceptDebt(metaFiles({ ...entries, [GRANTS_FILE]: sql }))
-  return (await compile(files)).diagnostics
+  return (await compile(files)).diagnostics.filter(
+    (d) => d.code !== "rights.scope-kind-unread"
+  )
 }
 
 describe("buildFunctionExecuteUnits", () => {

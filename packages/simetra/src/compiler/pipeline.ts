@@ -40,6 +40,7 @@ import {
   sourceContracts,
 } from "./rights/contracts"
 import { buildRightsUnits } from "./rights/functions"
+import { scopeKindUnreadWarnings } from "./rights/scope-kind-warnings"
 import {
   rightsCatalogContracts,
   rightsCatalogTables,
@@ -181,7 +182,7 @@ export async function runStages(
     stage1.project,
     sql.units
   )
-  const diagnostics = sortDiagnostics([
+  const staged = sortDiagnostics([
     ...early,
     ...debt.stale,
     ...integrity,
@@ -202,8 +203,8 @@ export async function runStages(
       rightsCatalogTables(stage1.objects, physical)
     ),
   ])
-  const ok = !hasErrors(diagnostics)
-  if (!ok) return { ok, diagnostics }
+  const ok = !hasErrors(staged)
+  if (!ok) return { ok, diagnostics: staged }
 
   const rights = rightsContracts(
     stage1.objects,
@@ -225,9 +226,18 @@ export async function runStages(
   if (projection.diagnostics.length > 0) {
     return {
       ok: false,
-      diagnostics: sortDiagnostics([...diagnostics, ...projection.diagnostics]),
+      diagnostics: sortDiagnostics([...staged, ...projection.diagnostics]),
     }
   }
+  // Вид скоупу, об'єктів якого не читає жодна роль (Р2a2-13), видно лише на
+  // проєкції ролей — тож попередження йде після неї й не зупиняє компіляції.
+  const diagnostics = sortDiagnostics([
+    ...staged,
+    ...scopeKindUnreadWarnings(
+      { rights, roles, rightsProjection: projection.rows },
+      stage1.project
+    ),
+  ])
   // Довідники прав потрібні і контрактам, і генератору прав серед SQL-одиниць:
   // обчислюються до одиниць, тож `buildContracts` їх лише приймає (Р2a1-22).
   const rightsCatalogs = rightsCatalogContracts(

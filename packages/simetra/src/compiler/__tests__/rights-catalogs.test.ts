@@ -318,6 +318,14 @@ const unsupported = (pointer: string, source: string) => ({
   params: { source },
 })
 
+const unread = (pointer: string, scopeKind: string) => ({
+  code: "rights.scope-kind-unread",
+  severity: "warning",
+  file: PROJECT_FILE,
+  pointer,
+  params: { scopeKind },
+})
+
 const error = (
   code: string,
   file: string,
@@ -480,7 +488,8 @@ describe("system rights catalog checks", () => {
           GLOBAL_ASSIGNMENTS_FILE
         ),
       ],
-      expected: [],
+      // Роль «кожного користувача» скоуплених об'єктів не читає (Р2a2-13).
+      expected: [unread("/scopeKinds/0", "org")],
     },
     {
       // Членство `org` дає лише джерело: довідників `org` бути не може, а
