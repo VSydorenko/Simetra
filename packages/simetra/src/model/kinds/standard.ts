@@ -80,9 +80,19 @@ export interface StandardColumnDef {
   partialUnique?: string
   /**
    * Ціль посилання; сама колонка має тип UUID. `users` — системний довідник
-   * «Користувачі»: ціль — роль, а не ім'я, її резолвить компілятор.
+   * «Користувачі»: ціль — роль, а не ім'я, її резолвить компілятор. Цілі за
+   * рівнем таблиці (її скоупом) теж резолвить компілятор: `member` —
+   * довідник членства виду скоупу таблиці, у нескоупленій — «Користувачі»;
+   * `rightsRoles` — довідник «Ролі» того самого рівня.
    */
-  ref?: "self" | "owningObject" | "owners" | "recorders" | "users"
+  ref?:
+    | "self"
+    | "owningObject"
+    | "owners"
+    | "recorders"
+    | "users"
+    | "member"
+    | "rightsRoles"
   /** Дія FK при видаленні цілі — лише там, де вона не типова. */
   onDelete?: FkAction
   /**
@@ -309,6 +319,20 @@ export interface SubscriptionSpec {
   handler: { schema?: string; name: string }
 }
 
+/** Роль системного довідника прав (спека прав §4.6). */
+export type RightsSystemCatalog = "rightsRoles" | "roleAssignments"
+
+/**
+ * Стандартна таблична частина, яку дає вид (дельта «Ролей»): її колонки йдуть
+ * після стандартних колонок рядка ТЧ, а таблиця — `<таблиця об'єкта>_<суфікс>`,
+ * id — `<objectId>#<logicalName>`, бо у файлі її немає.
+ */
+export interface StandardTabularSectionDef {
+  logicalName: string
+  physicalSuffix: string
+  columns: () => StandardColumnDef[]
+}
+
 export interface KindDefinition {
   kind: MetadataKind
   /** Тека виду в `metadata/` (спека §3). */
@@ -430,6 +454,16 @@ export interface KindDefinition {
    * дозволені ТЧ, тож його наявність і є цим дозволом.
    */
   tabularSectionColumns?(obj: unknown): StandardColumnDef[]
+  /**
+   * Стандартні табличні частини об'єкта — не з файлу, а з його налаштувань.
+   * Немає — таких у виду не буває.
+   */
+  standardTabularSections?(obj: unknown): StandardTabularSectionDef[]
+  /**
+   * Об'єкт — системний довідник прав (спека прав §4.6); `undefined` — ні.
+   * Єдине джерело цього факту для контракту прав, селекторів і правила рівня.
+   */
+  rightsSystem?(obj: unknown): RightsSystemCatalog | undefined
   references(obj: unknown): FoundReference[]
   /**
    * Посилання на колонки за логічним іменем: ключі, індекси й FK прийнятої

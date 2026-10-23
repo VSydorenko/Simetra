@@ -209,6 +209,7 @@ function rightsContract(
     }),
   ]
   const scopeKindId = scopeKindOf(object, references)
+  const system = def.rightsSystem?.(object.data)
   return {
     objectId,
     kindLabel: must(kindLabelOf(object)),
@@ -219,6 +220,7 @@ function rightsContract(
     ...(isRightsContainer(object) ? { container: true as const } : {}),
     ...(binding === undefined ? {} : { binding }),
     access,
+    ...(system === undefined ? {} : { system }),
   }
 }
 

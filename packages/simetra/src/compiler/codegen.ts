@@ -14,8 +14,8 @@ import type { CompiledModel } from "./compile"
 import { compareStrings } from "./diagnostics"
 import {
   registerSingletonOf,
+  standardRefTargets,
   standardTargetRefs,
-  usersRefOf,
 } from "./stages/model"
 
 /**
@@ -99,7 +99,7 @@ export function emitEntityTypes(model: CompiledModel): string {
     model.objects.map((object) => [`${object.kind}.${object.name}`, object])
   )
   const lookup = (ref: MetadataRef) => byRef.get(`${ref.kind}.${ref.name}`)
-  const users = usersRefOf(model.objects)
+  const refTargets = standardRefTargets(model.objects)
   const scopeNames = new Map(model.scopeKinds.map((k) => [k.id, k.name]))
   // Заголовок виду скоупу живе лише в проєкті, а не в знімку скоупів.
   const scopeTitles = new Map(
@@ -444,7 +444,7 @@ export function emitEntityTypes(model: CompiledModel): string {
       }
 
       const targetsOf = (column: StandardColumnDef) =>
-        standardTargetRefs(column, object.data, users)
+        standardTargetRefs(column, object.data, refTargets)
       const block = model.presentation.objects.find(
         (p) => p.objectId === object.id
       )

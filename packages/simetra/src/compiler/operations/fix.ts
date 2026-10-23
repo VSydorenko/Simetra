@@ -111,6 +111,14 @@ function columnsOfField(name: string, role: PhysicalNameRole): string[] {
     : [name]
 }
 
+/** Суфікси таблиць стандартних ТЧ об'єкта (`<таблиця>_<суфікс>`). */
+function standardSectionLabels(file: ObjectFile): string[] {
+  if (file.data === undefined) return []
+  return (file.def.standardTabularSections?.(file.data) ?? []).map(
+    (section) => section.physicalSuffix
+  )
+}
+
 /** Фізичні імена стандартних колонок, разом із можливою поліморфною парою. */
 function standardNames(columns: readonly StandardColumnDef[]): string[] {
   return columns.flatMap((column) =>
@@ -216,7 +224,10 @@ class NameAssigner {
     return set
   }
 
-  /** Похідні від імені таблиці об'єкта: таблиці регістра й функції. */
+  /**
+   * Похідні від імені таблиці об'єкта: таблиці регістра, стандартні ТЧ і
+   * функції.
+   */
   private derivedLabels(file: ObjectFile): string[] {
     if (file.data === undefined) return []
     const keys = file.def.registerKeys?.(file.data)
@@ -225,6 +236,7 @@ class NameAssigner {
       ...(keys?.turnoversMonth !== undefined
         ? [DERIVED_TABLE_LABELS.turnoversMonth]
         : []),
+      ...standardSectionLabels(file),
       ...derivedFunctionLabels({ kind: file.def.kind, data: file.data }).map(
         (l) => l.label
       ),
@@ -261,6 +273,7 @@ class NameAssigner {
       ...(keys?.turnoversMonth !== undefined
         ? [`_${DERIVED_TABLE_LABELS.turnoversMonth}`]
         : []),
+      ...standardSectionLabels(file).map((label) => `_${label}`),
     ]
     const name = this.assign(
       file.path,

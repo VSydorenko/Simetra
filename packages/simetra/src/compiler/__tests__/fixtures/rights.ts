@@ -39,6 +39,17 @@ export const ROLE_FILE = (name: string) => `roles/${name}/${name}.meta.json`
 export const SET_FILE = (name: string) =>
   `rights-sets/${name}/${name}.meta.json`
 
+export const ORG_ROLES_ID = uuid(6230)
+export const ORG_ASSIGNMENTS_ID = uuid(6231)
+export const GLOBAL_ROLES_ID = uuid(6232)
+export const GLOBAL_ASSIGNMENTS_ID = uuid(6233)
+export const ORG_ROLES_FILE = "catalogs/OrgRoles/OrgRoles.meta.json"
+export const ORG_ASSIGNMENTS_FILE =
+  "catalogs/OrgRoleAssignments/OrgRoleAssignments.meta.json"
+export const GLOBAL_ROLES_FILE = "catalogs/GlobalRoles/GlobalRoles.meta.json"
+export const GLOBAL_ASSIGNMENTS_FILE =
+  "catalogs/GlobalRoleAssignments/GlobalRoleAssignments.meta.json"
+
 export const GRANT_FILE = "custom-tables/RoleGrant/RoleGrant.meta.json"
 const GRANT_ID = uuid(6110)
 export const GRANTS_SOURCE_ID = uuid(6121)
@@ -211,9 +222,14 @@ const ANNOUNCEMENT = {
  * кроки. Контейнерна роль вимагає прапорця контейнера на `Project`.
  * Нескоуплений документ `Announcement` має `post`, якого рівень скоупу на
  * ньому не дає (Р1b-1). Грантів типові ролі й набори не мають.
+ * Системні довідники прав — по одному на (роль, рівень) для рівнів `org` і
+ * глобального (Р2a1-5); вони мають лише `read` і поза селекторами (Р2a1-8),
+ * тож рядків проєкції інших тестів не змінюють.
  */
 export function rolesAndSets(): Record<string, Record<string, unknown>> {
   return {
+    ...systemCatalogs("org"),
+    ...systemCatalogs("none"),
     [ANNOUNCEMENT_FILE]: ANNOUNCEMENT,
     [SET_FILE("TaskReaders")]: rightsSet(TASK_READERS_ID, "TaskReaders"),
     [SET_FILE("TaskEditors")]: rightsSet(TASK_EDITORS_ID, "TaskEditors", {
@@ -240,6 +256,41 @@ export function rolesAndSets(): Record<string, Record<string, unknown>> {
   }
 }
 
+/** Довідники «Ролі» й «Призначення ролей» рівня: `org` чи глобального. */
+function systemCatalogs(
+  scope: "org" | "none"
+): Record<string, Record<string, unknown>> {
+  const [prefix, rolesFile, rolesId, assignmentsFile, assignmentsId] =
+    scope === "org"
+      ? ([
+          "org",
+          ORG_ROLES_FILE,
+          ORG_ROLES_ID,
+          ORG_ASSIGNMENTS_FILE,
+          ORG_ASSIGNMENTS_ID,
+        ] as const)
+      : ([
+          "global",
+          GLOBAL_ROLES_FILE,
+          GLOBAL_ROLES_ID,
+          GLOBAL_ASSIGNMENTS_FILE,
+          GLOBAL_ASSIGNMENTS_ID,
+        ] as const)
+  const name = prefix === "org" ? "Org" : "Global"
+  return {
+    [rolesFile]: catalog(rolesId, `${name}Roles`, `${prefix}_roles`, {
+      role: "rightsRoles",
+      scope,
+    }),
+    [assignmentsFile]: catalog(
+      assignmentsId,
+      `${name}RoleAssignments`,
+      `${prefix}_role_assignments`,
+      { role: "roleAssignments", scope }
+    ),
+  }
+}
+
 /**
  * Ролі й набори фікстури з шарами перевизначень: кожен шар зливається з
  * файлом за шляхом на верхньому рівні ключів, пізніший — поверх раннього.
@@ -254,6 +305,55 @@ export function withRoles(
     }
   }
   return rightsFiles(merged)
+}
+
+/**
+ * Однотенантний проєкт прав: без видів скоупу, «Користувачі», контейнер
+ * `Project`, задача з прив'язкою до нього, контейнерна роль `ProjectLead` з
+ * `read@any` на задачі й глобальні системні довідники — контейнерні
+ * призначення без виду скоупу лежать у глобальному довіднику (Р2a1-7).
+ * Перевизначення зливається з файлом за шляхом, як у `rightsFiles`.
+ */
+export function singleTenantRights(
+  overrides: Record<string, Record<string, unknown>> = {}
+): Map<string, string> {
+  const files: Record<string, Record<string, unknown>> = {
+    "project.meta.json": {
+      name: "SingleTenantRights",
+      database: { provider: "supabase" },
+    },
+    [USERS_FILE]: catalog(uuid(6003), "Users", "users", {
+      role: "users",
+      scope: "none",
+    }),
+    [PROJECT_CATALOG_FILE]: catalog(PROJECT_ID, "Project", "project", {
+      scope: "none",
+      rightsContainer: true,
+    }),
+    [TASK_FILE]: {
+      id: TASK_ID,
+      kind: "Document",
+      name: "Task",
+      physicalName: "task",
+      kindLabel: "task",
+      scope: "none",
+      containerBinding: "project",
+      attributes: [
+        refAttribute(6012, "project", "project_id", ref("Catalog", "Project")),
+      ],
+    },
+    [ROLE_FILE("ProjectLead")]: role(
+      PROJECT_LEAD_ID,
+      "ProjectLead",
+      { container: ref("Catalog", "Project") },
+      { grants: [grant(objects(["Document", "Task"]), ["read"], "any")] }
+    ),
+    ...systemCatalogs("none"),
+  }
+  for (const [path, fields] of Object.entries(overrides)) {
+    files[path] = { ...files[path], ...fields }
+  }
+  return metaFiles(files)
 }
 
 /** Вимір `region`: значення учасника — рядки зв'язку `MemberRegion`. */

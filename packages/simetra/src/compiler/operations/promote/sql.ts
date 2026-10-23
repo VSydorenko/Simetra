@@ -6,7 +6,7 @@ import {
   type StandardColumnDef,
 } from "simetra/model"
 import type { CompiledModel } from "../../compile"
-import { standardTargetRefs } from "../../stages/model"
+import { standardRefTargets, standardTargetRefs } from "../../stages/model"
 import {
   compareStrings,
   diagnostic,
@@ -810,9 +810,10 @@ function standardPairTargets(
   if (!("raw" in column.type) && column.type.allowedTypes !== undefined) {
     return column.type.allowedTypes
   }
-  // «Користувачі» парою не бувають, тож їхня ціль тут не потрібна.
+  // Цілі від проєкту («Користувачі», учасник, «Ролі» рівня) парою не
+  // бувають, тож тут вони не потрібні.
   return column.polymorphic !== undefined
-    ? standardTargetRefs(column, data, undefined)
+    ? standardTargetRefs(column, data, standardRefTargets([]))
     : []
 }
 

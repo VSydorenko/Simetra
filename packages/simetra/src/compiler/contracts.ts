@@ -18,6 +18,7 @@ import {
   type Project,
   type RegisterKeySpec,
   type RequestRolePurpose,
+  type RightsSystemCatalog,
   type ScopeKind,
   type SubscriptionEvent,
   type VirtualTableKind,
@@ -315,6 +316,11 @@ export interface RightsContract {
    * додає обсяг `dimension` кожній дії.
    */
   access: { dimensionId: string; carrier: CarrierContract }[]
+  /**
+   * Системний довідник прав (спека прав §4.6, Р2a1-23): лише `read`, поза
+   * `grantAll` і `withAction`, належить лише своєму рівню.
+   */
+  system?: RightsSystemCatalog
 }
 
 /**

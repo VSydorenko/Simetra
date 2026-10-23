@@ -140,6 +140,17 @@ describe("catalogSchema", () => {
     ])
   })
 
+  it.each([
+    ["users", true],
+    ["rightsRoles", true],
+    ["roleAssignments", true],
+    ["rightsVersions", false],
+  ])("system role %s is accepted: %s", (role, accepted) => {
+    expect(
+      catalogSchema.safeParse({ kind: "Catalog", name: "Roles", role }).success
+    ).toBe(accepted)
+  })
+
   it("membership names the user attribute and is a strict object", () => {
     const base = { kind: "Catalog", name: "OrgMember" }
     expect(
