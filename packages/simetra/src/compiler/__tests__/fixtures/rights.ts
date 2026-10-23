@@ -840,3 +840,61 @@ export function tagMapping(): PromoteInput {
     conversions: {},
   })
 }
+
+export const TASK_NOTE_FILE = "custom-tables/TaskNote/TaskNote.meta.json"
+export const TASK_NOTE_ID = uuid(6595)
+/** Ім'я прийнятої таблиці `TaskNote`; промоція дає довіднику `task_note`. */
+export const TASK_NOTE_ADOPTED_TABLE = "task_notes"
+
+/**
+ * Шар з прийнятою таблицею `TaskNote` (`public.task_notes`), яку
+ * `taskNoteMapping` промотує в довідник `task_note` скоупу `org` з власністю
+ * шляхом через задачу: перейменована промоцією таблиця отримує копію носія
+ * (Р2a2-11).
+ */
+export function promotableTaskNote(): Layer {
+  return {
+    [TASK_NOTE_FILE]: {
+      id: TASK_NOTE_ID,
+      kind: "CustomTable",
+      name: "TaskNote",
+      physicalName: TASK_NOTE_ADOPTED_TABLE,
+      kindLabel: "task_note",
+      scope: "org",
+      scopeColumn: "orgId",
+      columns: [
+        column(6596, "id", "id", "UUID"),
+        { ...column(6597, "name", "name", "String"), length: 150 },
+        column(6598, "taskId", "task_id", "UUID"),
+        column(6599, "orgId", "org_id", "UUID"),
+      ],
+      primaryKey: { name: "task_notes_pkey", columns: ["id"] },
+    },
+  }
+}
+
+export function taskNoteMapping(): PromoteInput {
+  return promoteInput.parse({
+    target: { name: "TaskNote" },
+    into: {
+      kind: "Catalog",
+      name: "TaskNote",
+      data: {
+        codeLength: 0,
+        descriptionLength: 150,
+        ownership: [["task", "assignee"]],
+      },
+    },
+    columns: {
+      id: { to: "standard", name: "ref" },
+      name: { to: "standard", name: "description" },
+      orgId: { to: "scope" },
+      taskId: {
+        to: "attribute",
+        element: { name: "task", type: "Ref", ref: ref("Document", "Task") },
+      },
+    },
+    fill: [],
+    conversions: {},
+  })
+}

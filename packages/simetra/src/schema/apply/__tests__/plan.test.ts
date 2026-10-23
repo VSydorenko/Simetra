@@ -30,10 +30,14 @@ import {
   ATTACHMENTS_TABLE,
   CHECKLIST_TABLE,
   TAG_ID,
+  TASK_NOTE_ADOPTED_TABLE,
+  TASK_NOTE_ID,
   compileRights,
   policyDomain,
   promotableTag,
+  promotableTaskNote,
   tagMapping,
+  taskNoteMapping,
 } from "../../../compiler/__tests__/fixtures/rights"
 
 /**
@@ -208,6 +212,40 @@ describe("buildPlan", () => {
       expect(target.existsQueried).toEqual([`public.${CHECKLIST_TABLE}`])
     }
   )
+
+  it("reads and refuses a table renamed by the promotion under its old name", async () => {
+    // Р2a2-11: копія носія лягає на таблицю, яку промоція перейменовує;
+    // перевірка рядків іде до перейменувань, тож лише старе ім'я існує в цілі
+    const { before, desired, records } = await promoted(
+      promotableTaskNote(),
+      taskNoteMapping(),
+      TASK_NOTE_ID
+    )
+    expect(
+      desired.physical.tables.some((t) => t.name === TASK_NOTE_ADOPTED_TABLE)
+    ).toBe(false)
+    const target = await fakeTarget(before, { notCopies: [] })
+    const outcome = await buildPlan(
+      fakeEngine([]),
+      { reader: target.reader, scratch: emptyScratch },
+      desired,
+      { target: { url: "postgres://target" } },
+      records
+    )
+    expect(
+      outcome.diagnostics.filter(
+        (d) => d.code === "plan.carrier-backfill-missing"
+      )
+    ).toEqual([
+      expect.objectContaining({
+        params: {
+          table: `public.${TASK_NOTE_ADOPTED_TABLE}`,
+          columns: "task_id_assignee_id",
+        },
+      }),
+    ])
+    expect(target.existsQueried).toEqual([`public.${TASK_NOTE_ADOPTED_TABLE}`])
+  })
 })
 
 async function samePolicyDomain() {
@@ -216,19 +254,28 @@ async function samePolicyDomain() {
 }
 
 /** Домен політик з прийнятою `Tag` до промоції, після неї й запис. */
-async function promotedTag() {
-  const files = policyDomain(promotableTag())
+function promotedTag() {
+  return promoted(promotableTag(), tagMapping(), TAG_ID)
+}
+
+/** Домен політик з прийнятою таблицею `layer` до промоції, після неї й запис. */
+async function promoted(
+  layer: Parameters<typeof policyDomain>[0],
+  mapping: Parameters<typeof promoteObject>[1],
+  id: string
+) {
+  const files = policyDomain(layer)
   const before = (await compileRights(files)).model!
   let n = 950_000
-  const promoted = await promoteObject(files, tagMapping(), {
+  const result = await promoteObject(files, mapping, {
     schemaPath: (file, schemaFile) => `schemas-of/${file}/${schemaFile}`,
     newId: () => uuid(++n),
   })
-  expect(promoted.diagnostics).toEqual([])
-  const desired = (await compileRights(applyChanges(files, promoted.changes)))
+  expect(result.diagnostics).toEqual([])
+  const desired = (await compileRights(applyChanges(files, result.changes)))
     .model!
   const records: PromotionInput[] = [
-    { record: promoted.record!, file: `plans/${TAG_ID}.promotion.json` },
+    { record: result.record!, file: `plans/${id}.promotion.json` },
   ]
   return { before, desired, records }
 }

@@ -584,6 +584,32 @@ describe("rights read and users visibility policies", () => {
     ])
   })
 
+  it("several ownership carriers are told apart by the carrier column", async () => {
+    // Р2a2-2: без суфікса колонки носія обидві власні політики мали б одне
+    // ім'я — дубль ідентичності без діагностики.
+    const result = await compile(
+      policyDomain({ [TASK_FILE]: { ownership: ["assignee", "createdBy"] } })
+    )
+    expectClean(result)
+    const model = result.model!
+    expect(
+      [...policiesOf(model, "task").keys()]
+        .filter((name) => name.includes("_read_"))
+        .sort()
+    ).toEqual([
+      "task_read_any",
+      "task_read_in_project_any",
+      "task_read_in_project_own_assignee_id",
+      "task_read_in_project_own_created_by_id",
+      "task_read_in_project_region",
+      "task_read_own_assignee_id",
+      "task_read_own_created_by_id",
+      "task_read_region",
+    ])
+    const identities = model.sqlUnits.map((u) => u.identity)
+    expect(new Set(identities).size).toBe(identities.length)
+  })
+
   const members = `ANY (ARRAY(SELECT simetra.rights_my_members('${ORG_KIND_ID}'::uuid)))`
   const own = (label: string) =>
     `org_id = ANY (ARRAY(SELECT simetra.rights_own('read', '${label}')))`
