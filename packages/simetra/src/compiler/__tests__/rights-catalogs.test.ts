@@ -1,12 +1,17 @@
 import { describe, expect, it } from "vitest"
 import type { PhysicalSnapshot, PhysicalTable } from "simetra/model"
 import {
+  GLOBAL_ROLES_FILE,
+  ORG_ASSIGNMENTS_FILE,
+  ORG_ASSIGNMENTS_ID,
+  ORG_ROLES_FILE,
   ORG_ROLES_ID,
   ROLE_FILE,
   compileRights,
   grant,
   grantAll,
   objects,
+  singleTenantRights,
   withRoles,
 } from "./fixtures/rights"
 
@@ -147,6 +152,10 @@ describe("system rights catalogs", () => {
         .map((row) => names.get(row.objectId))
         .filter((name) => name === "OrgRoles" || name === "OrgRoleAssignments")
     expect(projected(all)).toEqual([])
+    const selected = await compiled(
+      member(grant({ withAction: "read" }, ["read"], "any"))
+    )
+    expect(projected(selected)).toEqual([])
 
     const explicit = await compiled(
       member(grant(objects(["Catalog", "OrgRoleAssignments"]), ["read"], "any"))
@@ -172,5 +181,73 @@ describe("system rights catalogs", () => {
     ])
     // Нескоуплений довідник, що не є довідником прав, роль скоупу читає.
     expect(await levelErrors("Users")).toEqual([])
+  })
+
+  // Контейнерний рівень — не рівень довідника: контейнерні призначення лише
+  // лежать у довіднику виду скоупу контейнера (Р2a1-20). «Кожен користувач»
+  // має лише вужчі обсяги, тож глобальні «Ролі» отримують власність.
+  it.each([
+    { role: "Support", target: "GlobalRoles", extent: "any" },
+    { role: "Support", target: "OrgRoles", extent: "any" },
+    { role: "Everyone", target: "GlobalRoles", extent: "own" },
+    { role: "ProjectLead", target: "GlobalRoleAssignments", extent: "any" },
+    { role: "ProjectLead", target: "OrgRoleAssignments", extent: "any" },
+  ])(
+    "$role reads $target only on its own level",
+    async ({ role, target, extent }) => {
+      const result = await compileRights(
+        withRoles({
+          [GLOBAL_ROLES_FILE]: { trackAuthor: true, ownership: ["createdBy"] },
+          [ROLE_FILE(role)]: {
+            grants: [grant(objects(["Catalog", target]), ["read"], extent)],
+          },
+        })
+      )
+      const errors = result.diagnostics
+        .filter((d) => d.severity === "error")
+        .map(({ code, file, pointer }) => ({ code, file, pointer }))
+      // Глобальна роль на глобальних «Ролях» — свій рівень, без помилки.
+      expect(errors).toEqual(
+        role === "Support" && target === "GlobalRoles"
+          ? []
+          : [
+              {
+                code: "rights.grant-level",
+                file: ROLE_FILE(role),
+                pointer: "/grants/0/grant/actions/0",
+              },
+            ]
+      )
+    }
+  )
+
+  it("keeps generated constraint names of a long catalog within 63 bytes", async () => {
+    const long = (base: string) => base.padEnd(60, "x")
+    const { physical } = await compiled({
+      [ORG_ROLES_FILE]: { physicalName: long("org_roles") },
+      [ORG_ASSIGNMENTS_FILE]: { physicalName: long("org_assignments") },
+    })
+    const delta = physical.tables.find(
+      (t) => t.origin.tabularSectionId === `${ORG_ROLES_ID}#delta`
+    )!
+    const assignments = physical.tables.find(
+      (t) =>
+        t.origin.objectId === ORG_ASSIGNMENTS_ID && !t.origin.tabularSectionId
+    )!
+    const bytes = (name: string) => new TextEncoder().encode(name).length
+    expect(bytes(delta.name)).toBeLessThanOrEqual(63)
+    expect(delta.name.endsWith("_delta")).toBe(true)
+    const names = [...delta.checks, ...assignments.checks].map((c) => c.name)
+    expect(names).toHaveLength(4)
+    expect(new Set(names).size).toBe(4)
+    for (const name of names) {
+      expect(bytes(name)).toBeLessThanOrEqual(63)
+      expect(name.endsWith("_check")).toBe(true)
+    }
+  })
+
+  it("singleTenantRights compiles without errors", async () => {
+    const result = await compileRights(singleTenantRights())
+    expect(result.diagnostics.filter((d) => d.severity === "error")).toEqual([])
   })
 })
