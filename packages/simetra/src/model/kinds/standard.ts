@@ -331,6 +331,7 @@ export interface StandardTabularSectionDef {
   logicalName: string
   physicalSuffix: string
   columns: () => StandardColumnDef[]
+  title: LocalizedString
 }
 
 export interface KindDefinition {
@@ -1006,7 +1007,10 @@ export function standardRefReferences(
   )
 }
 
-/** Реквізити об'єкта й реквізити його табличних частин. */
+/**
+ * Реквізити об'єкта й реквізити його табличних частин з файлу: стандартна ТЧ
+ * посилань на об'єкти метаданих не має.
+ */
 export function objectFieldReferences(obj: {
   attributes: readonly Attribute[]
   tabularSections: readonly TabularSection[]

@@ -218,6 +218,7 @@ const DELTA_SECTION: StandardTabularSectionDef = {
   logicalName: "delta",
   physicalSuffix: "delta",
   columns: deltaColumns,
+  title: { uk: "Дельта", en: "Delta" },
 }
 
 /**

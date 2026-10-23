@@ -36,7 +36,7 @@ import {
 } from "./stages/model"
 import { isMovementQuery, type SqlUnit } from "./sql/units"
 import { objectKey, type ParsedObject } from "./stages/files"
-import type { ResolvedReference } from "./stages/identity"
+import { standardElementId, type ResolvedReference } from "./stages/identity"
 
 export interface QualifiedName {
   schema: string
@@ -910,6 +910,7 @@ function personalDataContracts(
       const own = KIND_REGISTRY[object.kind].columnFields.flatMap((field) =>
         personal(data[field] as Attribute[] | undefined)
       )
+      // Лише ТЧ з файлу: стандартна ТЧ реквізитів з `personalData` не має.
       const sections = (
         (data.tabularSections ?? []) as {
           id?: string
@@ -1110,6 +1111,8 @@ function requiredOnPost(
         )
       ).check,
     }))
+  // Лише ТЧ з файлу: обов'язковість при проведенні — властивість
+  // реквізиту, а стандартна ТЧ реквізитів не має.
   const sections = data.tabularSections.flatMap((section) => {
     const sectionTable = must(
       physical.tables.find((t) => t.origin.tabularSectionId === section.id)
@@ -1142,10 +1145,19 @@ function immutability(
   table: PhysicalTable,
   physical: PhysicalSnapshot
 ): PostingContract["immutability"] {
-  const sections = (
-    document.data as { tabularSections: { id?: string }[] }
-  ).tabularSections.map((section) =>
-    must(physical.tables.find((t) => t.origin.tabularSectionId === section.id))
+  // Проведений документ незмінний у всіх своїх таблицях: стандартна ТЧ —
+  // така сама ТЧ, як із файлу.
+  const ids = [
+    ...(
+      document.data as { tabularSections: { id?: string }[] }
+    ).tabularSections.map((section) => section.id),
+    ...(
+      KIND_REGISTRY[document.kind].standardTabularSections?.(document.data) ??
+      []
+    ).map((section) => standardElementId(document.id ?? "", section)),
+  ]
+  const sections = ids.map((id) =>
+    must(physical.tables.find((t) => t.origin.tabularSectionId === id))
   )
   return {
     trigger: makeObjectName(table.name, undefined, "immutable"),

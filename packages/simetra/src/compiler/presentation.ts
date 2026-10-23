@@ -119,6 +119,8 @@ export function buildPresentation(
       )
       // Наявність ТЧ у виду — факт реєстру (`tabularSectionColumns`).
       const rowColumns = def.tabularSectionColumns?.(object.data) ?? []
+      // Лише ТЧ з файлу: перевизначення підписів задає ТЧ у файлі, а
+      // стандартної ТЧ там немає.
       const sections = (
         def.tabularSectionColumns === undefined
           ? []

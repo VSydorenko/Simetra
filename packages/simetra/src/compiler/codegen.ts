@@ -12,6 +12,7 @@ import {
 } from "simetra/model"
 import type { CompiledModel } from "./compile"
 import { compareStrings } from "./diagnostics"
+import { standardElementId } from "./stages/identity"
 import {
   registerSingletonOf,
   standardRefTargets,
@@ -422,9 +423,7 @@ export function emitEntityTypes(model: CompiledModel): string {
         ...(singleton === undefined ? [] : [singleton]),
         ...def.standardColumns(object.data),
       ])
-      const sectionStandard = styled(
-        def.tabularSectionColumns?.(object.data) ?? []
-      )
+      const rowColumns = def.tabularSectionColumns?.(object.data) ?? []
 
       const elements = new Map<string, ElementSource>()
       const addElement = (element: ElementSource) => {
@@ -435,13 +434,32 @@ export function emitEntityTypes(model: CompiledModel): string {
           addElement(element)
         }
       }
-      const sections =
+      const fileSections =
         def.tabularSectionColumns === undefined
           ? []
           : (data.tabularSections ?? [])
-      for (const section of sections) {
+      for (const section of fileSections) {
         for (const attribute of section.attributes) addElement(attribute)
       }
+      // Стандартна ТЧ (дельта «Ролей») — тим самим шляхом, що ТЧ з файлу:
+      // поле-масив і вкладений інтерфейс рядка; колонки — стандартні колонки
+      // рядка виду й власні колонки ТЧ, id — як у стадії 3.
+      const sections = [
+        ...fileSections.map((section) => ({
+          id: section.id ?? "",
+          name: section.name,
+          title: section.title,
+          standard: styled(rowColumns),
+        })),
+        ...(def.standardTabularSections?.(object.data) ?? []).map(
+          (section) => ({
+            id: standardElementId(object.id ?? "", section),
+            name: standardLogicalName(section, style),
+            title: section.title,
+            standard: styled([...rowColumns, ...section.columns()]),
+          })
+        ),
+      ]
 
       const targetsOf = (column: StandardColumnDef) =>
         standardTargetRefs(column, object.data, refTargets)
@@ -510,7 +528,7 @@ export function emitEntityTypes(model: CompiledModel): string {
               `${inner}export interface ${name} {`,
               ...emitFields(
                 table,
-                sectionStandard,
+                section.standard,
                 elements,
                 targetsOf,
                 new Map(

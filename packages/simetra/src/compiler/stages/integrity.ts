@@ -830,6 +830,8 @@ function checkStandardOverrides(
     )
     if (def.tabularSectionColumns !== undefined) {
       const rowColumns = def.tabularSectionColumns(object.data)
+      // Лише ТЧ з файлу: перевизначення задає ТЧ у файлі, а стандартної
+      // ТЧ там немає.
       ;(data.tabularSections ?? []).forEach((section, index) => {
         report(
           section.standardAttributeOverrides,
@@ -964,6 +966,8 @@ function checkCompositeIndexes(
     )
     if (def.tabularSectionColumns !== undefined) {
       const rowColumns = def.tabularSectionColumns(object.data)
+      // Лише ТЧ з файлу: складені індекси оголошує ТЧ у файлі, а
+      // стандартна ТЧ їх не має.
       ;(data.tabularSections ?? []).forEach((section, index) => {
         report(
           section.indexes,
@@ -1498,6 +1502,8 @@ function checkPosting(
       }
     }
     const rowColumns = def.tabularSectionColumns?.(data) ?? []
+    // Лише ТЧ з файлу: конструктор рухів називає ТЧ за іменем у файлі, а
+    // стандартна ТЧ (дельта «Ролей») у документа не буває.
     for (const section of data.tabularSections ?? []) {
       if (section.id === undefined) continue
       // Рядок ТЧ — не об'єкт метаданих, тож на нього самого `Ref` не веде.

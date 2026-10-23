@@ -798,7 +798,9 @@ function namespacesOf(
   const namespaces: Namespace[] = []
 
   const columns = def.columnFields.flatMap((field) => elementsAt(data, field))
-  // Таблична частина — окрема таблиця, а не колонка основної.
+  // Таблична частина — окрема таблиця, а не колонка основної. Лише ТЧ з
+  // файлу: стандартна ТЧ не є елементом файлу, тож id й імені для резолву
+  // тут у неї немає.
   const sections = (
     def.tabularSectionColumns === undefined
       ? []
@@ -1203,6 +1205,7 @@ function resolveIndexAttributes(
     ),
     ""
   )
+  // Лише ТЧ з файлу: складені індекси оголошує ТЧ у файлі.
   ;(data.tabularSections ?? []).forEach((section, index) => {
     if (typeof section.id !== "string") return
     resolve(
@@ -1392,6 +1395,7 @@ function resolveMovements(
   if (movements === undefined || object.id === undefined) return
   const ownerId = object.id
   const def = KIND_REGISTRY[object.kind]
+  // Лише ТЧ з файлу: конструктор рухів називає ТЧ за іменем у файлі.
   const sections = data.tabularSections ?? []
   const header = nameTable(
     ownerId,
