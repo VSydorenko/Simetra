@@ -94,6 +94,8 @@
 | Р2a2-24 | Політики прав лише там, де є функції прав (архітектор, до старту, за Р2a1-30): умова Р2a2-2 («генеруються, лише коли є `Role`») і умова Р2a2-18 (`rights_visible_users`) беруть той самий предикат, що й `buildRightsUnits` (`compiler/rights/functions.ts`) — хоч одна `Role` і контракт «Користувачів»; предикат — один експортований помічник, з яким звіряються генератори функцій і політик. У проєкті з ролями без «Користувачів» лишаються лише `RESTRICTIVE`-межі, `PERMISSIVE`-політик прав немає (fail-closed; попередження `rights.adopted-source-unsupported`). Unit: ролі й прийняте джерело членства без «Користувачів» → жодної `<t>_read_*`, межі `<t>_scope_*` є; мутація — прибрати умову → червоне | немає |
 | — (факт 2a1) | Носії через шлях (`via`) у 2a1 предиката не дають (fail-closed); Задача 5 прибирає цей пропуск (Р2a2-6): носій шляху дає предикат на копії, тест 2a1 про пропуск перевертається, а не видаляється | немає |
 | — (факт 2a1) | Ціль носія власності — `OwnershipContract.owner: { users: true } \| { membership: <scopeKindId> }` (Р2a1-29); на ТЧ і похідних таблицях форма `own` бере той самий контракт власника, без нової логіки за FK | немає |
+| Р2a2-25 | Ратчет полів (`test/field-ratchet.test.ts`) — по виду, а не по полю схеми: після зняття мапінгів шляху з регістрів `kitchen-sink.ts` (Р2a2-4) шляхи `AccumulationRegister.access.ref` і `InformationRegister.access.ref` валідна модель не має (шлях на регістрі — завжди `rights.register-access-dimension`), тож вони — у `EXCEPTIONS` з причиною. Схему `access` регістра не звужено: тоді шлях давав би `file.schema` замість коду Р2a2-4. Форму шляху ратчет бачить на `Item` і `Sale` (виконавець Задачі 1) | немає |
+| Р2a2-26 | Копії будує `SnapshotBuilder.finish` після всіх таблиць (копія шляху бере тип колонки цілі, а ціль може бути побудована пізніше) і дописує в кінець колонок таблиці; крок, якого стадія 3 не резолвила, шлях через прийняту таблицю чи зайняте ім'я копії не дають — їх звітує стадія 4 (`rights.carrier-column-taken` — на вказівнику носія у файлі об'єкта, параметри `{ table, column }`). Резолв кроків стадії 3 — за індексом посилань (`rights.carrier`, `rights.carrierPath`, `access.attribute`) і тими самими `elementColumns`/`fieldForeignKey`, що в стадії 4 (перенесені з `rights/carriers.ts` у `stages/model.ts`); перелік носіїв об'єкта — один (`carrierDeclarations` у `rights/facts.ts`) (виконавець Задачі 1) | немає |
 
 ## Відомі обмеження
 
@@ -193,7 +195,7 @@ git commit -m "docs(spec): межа тенанта трьома політика
 **Interfaces:**
 - Produces: `PhysicalColumn.origin.copyOf?: { table: QualifiedName; column: string; through: string }`; `CarrierContract.value: string`; коди `rights.carrier-column-taken` (`{ table, column }`), `rights.carrier-path-adopted` (`{ attribute }`), `rights.register-access-dimension` (`{ attribute }`), `rights.dimension-name-reserved` (`{ name }`).
 
-- [ ] **Step 1: Write the failing tests (unit)** над `policyDomain()`:
+- [X] **Step 1: Write the failing tests (unit)** над `policyDomain()`:
   - `it("copies every owner carrier into each tabular section")`: таблиця `task_checklist` має колонки `assignee_id`, `region_id`, `project_id` з `origin.copyOf = { table: task, column: <та сама>, through: "parent_id" }`, nullable, без FK; індекси `(org_id, assignee_id)`, `(org_id, region_id)`, `(org_id, project_id)`.
   - `it("denormalizes a path carrier into the object row and its tabular sections")`: `task_comment` має копію `makeObjectName("task_id", undefined, "assignee_id")` з `copyOf = { table: task, column: "assignee_id", through: "task_id" }` і індекс (скоуп, копія); `task_comment_attachments` копіює цю копію (`copyOf.table: task_comment`); `contracts.rights` запису `TaskComment` — `ownership[0].value` дорівнює імені копії, у `Task` — `value === column`.
   - `it("the policy domain compiles clean")`: `expectClean(await compileRights(policyDomain()))` без `allow` (інструмент — Задача 7; до неї — перевірка, що помилок і попереджень немає).
@@ -208,10 +210,10 @@ git commit -m "docs(spec): межа тенанта трьома політика
 | `register-path` | `TaskHours` з `access` через шлях | `rights.register-access-dimension` |
 | `dimension-reserved` | вимір проєкту з ім'ям `any`, `own`, `ownRegion`, `inProject` | `rights.dimension-name-reserved` |
 
-- [ ] **Step 2:** Run: `pnpm --filter simetra test rights-carrier-copies` — FAIL.
-- [ ] **Step 3: Implement:** у `SnapshotBuilder` — після стандартних колонок ТЧ і основної таблиці поля-копії з `origin.copyOf` і `indexed` зі `indexWithin` скоупу (той самий шлях `addField`); `resolveCarrier` заповнює `value`; перевірки — у стадії 4 поруч із наявними `rights.*`; тексти en/uk. У `kitchen-sink.ts` прибрати мапінги `{ ref: ["item", "owner"], dimension: "partner" }` з регістрів `Prices` і `Stock` (на `Item` і `Sale` шлях лишається — ратчет бачить його там).
-- [ ] **Step 4:** Run: `pnpm --filter simetra test rights-carrier-copies rights-carriers rights-contract field-ratchet messages` — PASS; точні очікування контрактів 1a змінюються лише полем `value` і знятими мапінгами регістрів.
-- [ ] **Step 5: Commit**
+- [X] **Step 2:** Run: `pnpm --filter simetra test rights-carrier-copies` — FAIL.
+- [X] **Step 3: Implement:** у `SnapshotBuilder` — після стандартних колонок ТЧ і основної таблиці поля-копії з `origin.copyOf` і `indexed` зі `indexWithin` скоупу (той самий шлях `addField`); `resolveCarrier` заповнює `value`; перевірки — у стадії 4 поруч із наявними `rights.*`; тексти en/uk. У `kitchen-sink.ts` прибрати мапінги `{ ref: ["item", "owner"], dimension: "partner" }` з регістрів `Prices` і `Stock` (на `Item` і `Sale` шлях лишається — ратчет бачить його там).
+- [X] **Step 4:** Run: `pnpm --filter simetra test rights-carrier-copies rights-carriers rights-contract field-ratchet messages` — PASS; точні очікування контрактів 1a змінюються лише полем `value` і знятими мапінгами регістрів.
+- [X] **Step 5: Commit**
 
 ```bash
 git add packages/simetra/src

@@ -139,6 +139,23 @@ export interface PhysicalColumn {
    * кореня, `parent_id` рядка ТЧ кореня й названої в описі скоуп-колонки
    * `CustomTable` (`scopeColumn`). Остання лишається елементом опису, тож
    * несе `elementId` разом зі `scopeKindId`.
+   *
+   * `copyOf` — денормалізована копія носія прав (спека прав §5.2, Рх21):
+   * значення колонки `column` таблиці `table` з рядка, на який указує
+   * локальна колонка `through`. Копію пише лише платформа, тож вона не
+   * елемент опису й не має ні `elementId`, ні `standard`.
    */
-  origin: { elementId?: string; standard?: string; scopeKindId?: string }
+  origin: {
+    elementId?: string
+    standard?: string
+    scopeKindId?: string
+    copyOf?: CarrierCopyOf
+  }
+}
+
+/** Джерело копії носія: колонка таблиці й локальна колонка зв'язку з нею. */
+export interface CarrierCopyOf {
+  table: { schema: string; name: string }
+  column: string
+  through: string
 }

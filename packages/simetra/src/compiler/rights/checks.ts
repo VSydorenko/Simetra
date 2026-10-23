@@ -1,9 +1,13 @@
 import {
   KIND_REGISTRY,
+  toSnakeCase,
+  type CarrierCopyOf,
   type CustomAction,
+  type PhysicalTable,
   type Project,
   type ScopeKind,
 } from "simetra/model"
+import { mainTableOf } from "../contracts"
 import { diagnostic, type Diagnostic } from "../diagnostics"
 import { PROJECT_FILE, type ParsedObject } from "../stages/files"
 import type { ResolvedReference } from "../stages/identity"
@@ -21,6 +25,7 @@ import {
   accessOf,
   bindingOf,
   carrierContext,
+  carrierDeclarations,
   customActionEffects,
   customActionsOf,
   headerReference,
@@ -131,6 +136,7 @@ export function checkRights(ctx: RightsCheckContext): Diagnostic[] {
     if (def.rightsExtents.includes("dimension")) {
       diagnostics.push(...checkAccess(object, ctx, carriers))
     }
+    diagnostics.push(...checkCarrierCopies(object, carriers))
   }
   diagnostics.push(...checkDimensions(ctx, carriers))
   diagnostics.push(...checkSources(ctx))
@@ -247,6 +253,27 @@ function checkDimensions(
   const scopeOf = (o: ParsedObject) => scopeKindOf(o, ctx.references)
   ctx.project.accessDimensions.forEach((dimension, index) => {
     const at = `/accessDimensions/${index}`
+    // Політика прав читання виміру — `<t>_read_<вимір snake_case>` (Р2a2-14):
+    // такі імена збіглися б з політиками форм обсягу `any`, `own` і
+    // `in_<контейнер>`.
+    const snake = toSnakeCase(dimension.name)
+    if (
+      snake === "any" ||
+      snake === "own" ||
+      snake.startsWith("own_") ||
+      snake.startsWith("in_")
+    ) {
+      diagnostics.push(
+        diagnostic(
+          "rights.dimension-name-reserved",
+          PROJECT_FILE,
+          `${at}/name`,
+          {
+            name: dimension.name,
+          }
+        )
+      )
+    }
     const targetId = projectTarget(`${at}/target`, "dimension.target", ctx)
     const target = targetId === undefined ? undefined : ctx.byId.get(targetId)
     // Невідому ціль уже звітувала стадія 2 (`reference.unresolved`).
@@ -354,6 +381,18 @@ function checkAccess(
     }
     seen.add(dimensionId)
     const { carrier, pointer } = accessCarrier(mapping, index)
+    // Регістр читають за вимірами і в рухах, і в підсумках (§5.2, Р2a2-4):
+    // похідні таблиці несуть лише виміри, а копій носіїв у регістра немає.
+    if (
+      KIND_REGISTRY[object.kind].registerKeys !== undefined &&
+      !(typeof carrier === "string" && registerDimensions(object).has(carrier))
+    ) {
+      return [
+        diagnostic("rights.register-access-dimension", object.file, pointer, {
+          attribute: typeof carrier === "string" ? carrier : carrier.join("."),
+        }),
+      ]
+    }
     const resolved = resolveCarrier(
       object,
       carrier,
@@ -386,6 +425,79 @@ function checkAccess(
       ? []
       : [crossTenant(object, at, field.name, ctx.references)]
   })
+}
+
+/**
+ * Копії носіїв (Р2a2-5): ім'я копії в основній таблиці (шлях) і в кожній ТЧ
+ * (кожен носій, крім ключа) мусить бути копією з тим самим джерелом. Інакше
+ * ім'я зайняте колонкою опису, і стадія 3 копії не поклала — права читали б
+ * чуже значення.
+ */
+function checkCarrierCopies(
+  object: ParsedObject,
+  carriers: CarrierContext
+): Diagnostic[] {
+  if (KIND_REGISTRY[object.kind].registerKeys !== undefined) return []
+  const objectId = must(object.id)
+  const main = must(mainTableOf(carriers.physical, objectId))
+  const owner = { schema: main.schema, name: main.name }
+  const sections = carriers.physical.tables.filter(
+    (t) =>
+      t.origin.objectId === objectId && t.origin.tabularSectionId !== undefined
+  )
+  const diagnostics: Diagnostic[] = []
+  const reported = new Set<string>()
+  for (const { carrier, pointer, field, role } of carrierDeclarations(object)) {
+    const resolved = resolveCarrier(
+      object,
+      carrier,
+      { pointer, field, role },
+      carriers
+    )
+    if (!resolved.ok) continue
+    const { contract } = resolved
+    const expected: [PhysicalTable, Omit<CarrierCopyOf, "through">][] = []
+    if (contract.via !== undefined) {
+      expected.push([
+        main,
+        { table: contract.via.table, column: contract.via.column },
+      ])
+    }
+    // Носій-ключ копії не має: його значення в ТЧ — сам `parent_id`.
+    if (contract.via !== undefined || !resolved.terminal.field.key) {
+      for (const table of sections) {
+        expected.push([table, { table: owner, column: contract.value }])
+      }
+    }
+    for (const [table, source] of expected) {
+      const copyOf = table.columns.find((c) => c.name === contract.value)
+        ?.origin.copyOf
+      if (
+        copyOf !== undefined &&
+        copyOf.table.schema === source.table.schema &&
+        copyOf.table.name === source.table.name &&
+        copyOf.column === source.column
+      ) {
+        continue
+      }
+      const key = `${table.schema}.${table.name}.${contract.value}`
+      if (reported.has(key)) continue
+      reported.add(key)
+      diagnostics.push(
+        diagnostic("rights.carrier-column-taken", object.file, pointer, {
+          table: table.name,
+          column: contract.value,
+        })
+      )
+    }
+  }
+  return diagnostics
+}
+
+/** Логічні імена вимірів регістра. */
+function registerDimensions(object: ParsedObject): Set<string> {
+  const { dimensions } = object.data as { dimensions?: { name: string }[] }
+  return new Set((dimensions ?? []).map((d) => d.name))
 }
 
 /**

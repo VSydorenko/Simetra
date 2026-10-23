@@ -64,7 +64,7 @@ export const TEAM_KIND_ID = uuid(6008)
 
 const ref = (kind: string, name: string) => ({ kind, name })
 
-function refAttribute(
+export function refAttribute(
   id: number,
   name: string,
   physicalName: string,
@@ -578,6 +578,150 @@ export function regionDimension() {
         subject: "member",
         value: "region",
       },
+    },
+  }
+}
+
+export const TASK_HOURS_FILE =
+  "accumulation-registers/TaskHours/TaskHours.meta.json"
+export const TASK_REPORT_FILE = "documents/TaskReport/TaskReport.meta.json"
+export const COUNT_COMMENT_FILE =
+  "event-subscriptions/CountComment/CountComment.meta.json"
+export const COMMENT_COUNTER_FILE =
+  "custom-tables/CommentCounter/CommentCounter.meta.json"
+
+/** Таблиці ТЧ і похідні таблиці регістра домену політик (`policyDomain`). */
+export const CHECKLIST_TABLE = "task_checklist"
+export const COMMENT_TABLE = "task_comment"
+export const ATTACHMENTS_TABLE = "task_comment_attachments"
+export const HOURS_TABLES = {
+  movements: "task_hours",
+  totals: "task_hours_totals",
+  turnoversMonth: "task_hours_turnovers_month",
+} as const
+
+/** Табличну частину з одним рядковим реквізитом. */
+function section(id: number, name: string, physicalName: string, attr: string) {
+  return {
+    id: uuid(id),
+    name,
+    physicalName,
+    attributes: [
+      {
+        id: uuid(id + 1),
+        name: attr,
+        physicalName: attr,
+        type: "String",
+        length: 200,
+      },
+    ],
+  }
+}
+
+/**
+ * Домен політик читання (план 2a2): кожна форма носія, яку денормалізує
+ * платформа, і кожна таблиця, на яку лягає політика прав. `Task` — прямі
+ * носії всіх трьох полів прав і ТЧ `checklist`; `TaskComment` і `TaskReport`
+ * — власність шляхом через задачу (у коментаря — ТЧ `attachments`, другий
+ * крок копії; у звіту — генерована колонка періоду типової нумерації);
+ * регістр `TaskHours` — вимір доступу на виміру регістра й похідні таблиці;
+ * «Користувачі» — носій-ключ і ТЧ `devices`; підписка `onWrite` на коментарі
+ * пише рядок у службовий лічильник. Ролі читають усе скоуплене (`TaskReaders`
+ * через `OrgMember`), а «Користувачів» — і рівень скоупу, і `Everyone` (свій
+ * рядок), тож проєкт компілюється без попереджень. Шар поверх `withRoles`:
+ * типові файли `rightsFiles` не змінюються.
+ */
+export function policyDomain(...layers: Layer[]): Map<string, string> {
+  const files = withRoles(policyLayer(), ...layers)
+  // Обробник лічильника — SQL-файл, а не метадані: шар `withRoles` зливає
+  // лише JSON-об'єкти.
+  files.set(
+    "sql/public/count-comment.sql",
+    "CREATE FUNCTION public.count_comment() RETURNS trigger LANGUAGE plpgsql VOLATILE AS $$ BEGIN INSERT INTO public.comment_counter (comment_id) VALUES (NEW.id); RETURN NEW; END $$;"
+  )
+  return files
+}
+
+function policyLayer(): Layer {
+  const readAny = objects(
+    ["Document", "Task"],
+    ["Catalog", "TaskComment"],
+    ["AccumulationRegister", "TaskHours"],
+    ["Catalog", "Users"]
+  )
+  return {
+    [PROJECT_FILE]: { accessDimensions: [regionDimension()] },
+    [USERS_FILE]: {
+      ownership: ["ref"],
+      tabularSections: [section(6501, "devices", "users_devices", "label")],
+    },
+    [TASK_FILE]: {
+      ownership: ["assignee"],
+      access: [{ attribute: "region", dimension: "region" }],
+      containerBinding: "project",
+      tabularSections: [section(6511, "checklist", CHECKLIST_TABLE, "note")],
+    },
+    [COMMENT_FILE]: {
+      ownership: [["task", "assignee"]],
+      tabularSections: [
+        section(6521, "attachments", ATTACHMENTS_TABLE, "label"),
+      ],
+    },
+    [TASK_HOURS_FILE]: {
+      id: uuid(6530),
+      kind: "AccumulationRegister",
+      name: "TaskHours",
+      physicalName: HOURS_TABLES.movements,
+      kindLabel: HOURS_TABLES.movements,
+      scope: "org",
+      registerType: "Balance",
+      access: [{ attribute: "region", dimension: "region" }],
+      dimensions: [
+        refAttribute(6531, "region", "region_id", ref("Catalog", "Region")),
+      ],
+      resources: [
+        {
+          id: uuid(6532),
+          name: "hours",
+          physicalName: "hours",
+          type: "Numeric",
+          precision: 10,
+          scale: 2,
+        },
+      ],
+    },
+    [TASK_REPORT_FILE]: {
+      id: uuid(6540),
+      kind: "Document",
+      name: "TaskReport",
+      physicalName: "task_report",
+      kindLabel: "task_report",
+      scope: "org",
+      ownership: [["task", "assignee"]],
+      attributes: [
+        refAttribute(6541, "task", "task_id", ref("Document", "Task")),
+      ],
+    },
+    [COMMENT_COUNTER_FILE]: {
+      id: uuid(6550),
+      kind: "CustomTable",
+      name: "CommentCounter",
+      physicalName: "comment_counter",
+      scope: "none",
+      columns: [column(6551, "commentId", "comment_id", "UUID")],
+    },
+    [COUNT_COMMENT_FILE]: {
+      id: uuid(6560),
+      kind: "EventSubscription",
+      name: "CountComment",
+      physicalName: "count_comment",
+      sources: [ref("Catalog", "TaskComment")],
+      event: "onWrite",
+      handler: { schema: "public", name: "count_comment" },
+    },
+    [SET_FILE("TaskReaders")]: { grants: [grant(readAny, ["read"], "any")] },
+    [ROLE_FILE("Everyone")]: {
+      grants: [grant(objects(["Catalog", "Users"]), ["read"], "own")],
     },
   }
 }

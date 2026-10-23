@@ -114,6 +114,43 @@ export function accessCarrier(
     : { carrier: mapping.ref, pointer: `/access/${index}/ref` }
 }
 
+/**
+ * Усі носії прав об'єкта — власності, прив'язки й мапінгів `access` — з
+ * вказівником, полем для діагностики й роллю першого кроку в індексі
+ * посилань: стадія 3 будує за ними копії, стадія 4 — перевіряє їх.
+ */
+export function carrierDeclarations(object: ParsedObject): {
+  carrier: RightsCarrier
+  pointer: string
+  field: "ownership" | "containerBinding" | "access"
+  role: "rights.carrier" | "access.attribute"
+}[] {
+  const binding = bindingOf(object)
+  return [
+    ...ownershipOf(object).map((carrier, index) => ({
+      carrier,
+      pointer: `/ownership/${index}`,
+      field: "ownership" as const,
+      role: "rights.carrier" as const,
+    })),
+    ...(binding === undefined
+      ? []
+      : [
+          {
+            carrier: binding,
+            pointer: "/containerBinding",
+            field: "containerBinding" as const,
+            role: "rights.carrier" as const,
+          },
+        ]),
+    ...accessOf(object).map((mapping, index) => ({
+      ...accessCarrier(mapping, index),
+      field: "access" as const,
+      role: "access.attribute" as const,
+    })),
+  ]
+}
+
 /** Id виміру, який називає мапінг: його резолвить стадія 2 (`access.dimension`). */
 export function accessDimensionId(
   object: ParsedObject,

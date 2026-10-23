@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
-import { fieldForeignKey, inScopeTarget } from "../rights/carriers"
+import { inScopeTarget } from "../rights/carriers"
+import { fieldForeignKey } from "../stages/model"
 
 const scoped = { scopeKinds: [{}] } as never
 const single = { scopeKinds: [] } as never
@@ -34,7 +35,7 @@ describe("fieldForeignKey", () => {
       fk("member", ["org_id", "assignee_id"]),
       fk("organization", ["org_id"]),
     ],
-  } as never
+  }
 
   it("takes the foreign key of exactly the field column plus scope columns", () => {
     expect(fieldForeignKey(table, "assignee_id")?.name).toBe("member")

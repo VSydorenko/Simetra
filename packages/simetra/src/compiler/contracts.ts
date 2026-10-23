@@ -293,6 +293,11 @@ export interface RightsAction {
 export interface CarrierContract {
   /** Власна колонка основної таблиці; у шляху — колонка першого кроку. */
   column: string
+  /**
+   * Колонка основної таблиці з кінцевим значенням носія (Р2a2-6): у прямого
+   * носія — `column`, у шляху — його копія (`origin.copyOf`).
+   */
+  value: string
   /** Шлях: колонка в основній таблиці цілі першого кроку. */
   via?: { objectId: string; table: QualifiedName; column: string }
 }

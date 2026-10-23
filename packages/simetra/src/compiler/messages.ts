@@ -1557,6 +1557,42 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
           : "Посилання мусить лишатися в межах скоупу (складений зовнішній ключ): приберіть crossScope або назвіть інший реквізит.",
     },
   },
+  "rights.carrier-column-taken": {
+    en: (p) =>
+      `Column "${p.column}" of table "${p.table}" is taken: a rights carrier copies its value there`,
+    uk: (p) =>
+      `Колонка "${p.column}" таблиці "${p.table}" зайнята: туди копіює значення носій прав`,
+    hint: {
+      en: "The platform keeps a copy of every rights carrier in each tabular section and of a path carrier in the object row under this name; rename the attribute that takes it.",
+      uk: "Платформа тримає копію кожного носія прав у кожній ТЧ, а носія через шлях — і в рядку об'єкта, під цим ім'ям; перейменуйте реквізит, що його займає.",
+    },
+  },
+  "rights.carrier-path-adopted": {
+    en: (p) =>
+      `Rights carrier path "${p.attribute}" goes through an adopted table`,
+    uk: (p) => `Шлях носія прав "${p.attribute}" іде через прийняту таблицю`,
+    hint: {
+      en: "The step of a path must point to an object of a kind: the platform propagates the carrier copy with a trigger on the target table, and an adopted table carries no platform triggers.",
+      uk: "Крок шляху мусить указувати на об'єкт виду: копію носія платформа поширює тригером на таблиці цілі, а прийнята таблиця платформних тригерів не несе.",
+    },
+  },
+  "rights.register-access-dimension": {
+    en: (p) =>
+      `Access mapping "${p.attribute}" of a register is not a register dimension`,
+    uk: (p) => `Мапінг доступу "${p.attribute}" регістра не є виміром регістра`,
+    hint: {
+      en: "A register is read by its dimensions in the movements and the totals alike, so an access mapping names a dimension of the register itself, not a resource, an attribute or a path.",
+      uk: "Регістр читається за вимірами і в рухах, і в підсумках, тож мапінг доступу називає вимір самого регістра, а не ресурс, реквізит чи шлях.",
+    },
+  },
+  "rights.dimension-name-reserved": {
+    en: (p) => `Access dimension name "${p.name}" is reserved`,
+    uk: (p) => `Ім'я виміру доступу "${p.name}" зарезервоване`,
+    hint: {
+      en: "A rights read policy is named after the dimension next to the extent forms any, own and in_<container>; choose a name that is not any or own and does not start with own or in.",
+      uk: "Політику прав читання названо за виміром поруч із формами обсягу any, own та in_<контейнер>; оберіть ім'я, що не є any чи own і не починається з own чи in.",
+    },
+  },
   "rights.container-target": {
     en: (p) =>
       p.role !== undefined

@@ -24,6 +24,7 @@ import {
   type Attribute,
   type CatalogAttribute,
   type AttributeCase,
+  type CarrierCopyOf,
   type CompositeIndexes,
   type CustomTable,
   type CustomTableColumn,
@@ -32,6 +33,7 @@ import {
   type DefaultValue,
   type MetadataRef,
   type PgQualifiedName,
+  type ReferenceRole,
   type PhysicalColumn,
   type PhysicalEnumType,
   type PhysicalSnapshot,
@@ -47,6 +49,7 @@ import {
 } from "simetra/model"
 import { compareStrings, valueAt } from "../diagnostics"
 import { identitiesTable } from "../platform/identities"
+import { carrierDeclarations } from "../rights/facts"
 import { objectKey, type ParsedObject } from "./files"
 import {
   COLUMN_NAME_ROLES,
@@ -225,6 +228,95 @@ interface PendingTable {
   derivedIndexes: DerivedIndex[]
 }
 
+/**
+ * FK колонки поля: той, що містить саме цю колонку, а решта його колонок —
+ * скоуп-колонки таблиці. Так складений FK поля не сплутати з FK іншого поля,
+ * що теж несе скоуп-колонку.
+ */
+export function fieldForeignKey<T extends { columns: readonly string[] }>(
+  table: {
+    columns: readonly Pick<PhysicalColumn, "name" | "origin">[]
+    foreignKeys: readonly T[]
+  },
+  column: string
+): T | undefined {
+  const scopeColumns = new Set(
+    table.columns
+      .filter((c) => c.origin.scopeKindId !== undefined)
+      .map((c) => c.name)
+  )
+  return table.foreignKeys.find(
+    (fk) =>
+      fk.columns.includes(column) &&
+      fk.columns.every((c) => c === column || scopeColumns.has(c))
+  )
+}
+
+/**
+ * Фізичні колонки основної таблиці за id елемента: реквізит — за своїм UUID,
+ * стандартний реквізит — за синтетичним id з канонічним ім'ям (той самий, що
+ * дає індекс посилань), тож ефекти реєстру й посилання файлу читаються
+ * однаково. Поліморфна пара дає обидві колонки.
+ */
+export function elementColumns(
+  object: ParsedObject,
+  table: { columns: readonly PhysicalColumn[] },
+  style: AttributeCase
+): Map<string, string[]> {
+  const objectId = object.id ?? ""
+  const byStandard = new Map(
+    KIND_REGISTRY[object.kind]
+      .standardColumns(object.data)
+      .map((c) => [
+        standardLogicalName(c, style),
+        standardElementId(objectId, c),
+      ])
+  )
+  const result = new Map<string, string[]>()
+  for (const column of table.columns) {
+    const id =
+      column.origin.elementId ??
+      (column.origin.standard === undefined
+        ? undefined
+        : byStandard.get(column.origin.standard))
+    if (id === undefined) continue
+    result.set(id, [...(result.get(id) ?? []), column.name])
+  }
+  return result
+}
+
+/** Об'єкт із носіями прав: основна таблиця, її скоуп і таблиці ТЧ. */
+interface CarrierHost {
+  object: ParsedObject
+  main: PendingTable
+  scope: TableScope | undefined
+  /** `parent` — колонка рядка ТЧ з ключем власника. */
+  sections: {
+    table: PendingTable
+    scope: TableScope | undefined
+    parent: string | undefined
+  }[]
+}
+
+/** Ролі індексу посилань, що називають кроки носіїв прав. */
+const CARRIER_ROLES: ReadonlySet<ReferenceRole> = new Set<ReferenceRole>([
+  "rights.carrier",
+  "rights.carrierPath",
+  "access.attribute",
+])
+
+function carrierRefKey(file: string, pointer: string, role: string): string {
+  return `${file}\0${pointer}\0${role}`
+}
+
+/**
+ * Ім'я копії носія шляху в основній таблиці (Р2a2-5): колонка першого кроку
+ * й колонка цілі — копії двох шляхів через ту саму колонку не збігаються.
+ */
+export function carrierCopyName(through: string, column: string): string {
+  return makeObjectName(through, undefined, column)
+}
+
 /** Елемент ключа похідного індексу; `order` лише там, де не `asc`. */
 interface DerivedIndexKey {
   column: string
@@ -318,6 +410,11 @@ class SnapshotBuilder {
   private readonly enumDefaultLabels: Map<string, string>
   /** Цілі стандартних посилань від проєкту; немає цілі — колонка без FK (стадія 4). */
   private readonly targets: StandardRefTargets
+  private readonly byId: Map<string, ParsedObject>
+  /** `файл\0pointer\0роль` → id елемента, який називає крок носія прав. */
+  private readonly carrierRefs: Map<string, string>
+  /** Об'єкти з носіями прав, чиї таблиці отримують копії носіїв у `finish`. */
+  private readonly carrierHosts: CarrierHost[] = []
 
   constructor(
     objects: readonly ParsedObject[],
@@ -325,6 +422,15 @@ class SnapshotBuilder {
     references: readonly ResolvedReference[]
   ) {
     this.byKey = new Map(objects.map((o) => [objectKey(o.kind, o.name), o]))
+    this.byId = new Map(objects.map((o) => [o.id ?? "", o]))
+    this.carrierRefs = new Map(
+      references
+        .filter((r) => CARRIER_ROLES.has(r.role))
+        .map((r) => [
+          carrierRefKey(r.from.file, r.from.pointer, r.role),
+          r.to.id,
+        ])
+    )
     this.targets = standardRefTargets(objects)
     this.style = project.naming.attributeCase
     this.scopeKinds = new Map(project.scopeKinds.map((k) => [k.name, k]))
@@ -545,8 +651,9 @@ class SnapshotBuilder {
       def.tabularSectionColumns === undefined
         ? []
         : (data.tabularSections as TabularSection[])
+    const sectionTables: CarrierHost["sections"] = []
     sections.forEach((section, index) => {
-      this.addSection(object, main, scope, {
+      const built = this.addSection(object, main, scope, {
         id: section.id ?? "",
         name: section.physicalName!,
         pointer: `/tabularSections/${index}`,
@@ -554,17 +661,24 @@ class SnapshotBuilder {
         attributes: section.attributes,
         indexes: section.indexes,
       })
+      sectionTables.push(built)
     })
     // Стандартна ТЧ (дельта «Ролей») будується тим самим шляхом, що ТЧ з
     // файлу: скоуп рядка, складений FK на власника й каскад — ті самі.
     for (const section of def.standardTabularSections?.(data) ?? []) {
-      this.addSection(object, main, scope, {
+      const built = this.addSection(object, main, scope, {
         id: standardElementId(origin.objectId, section),
         name: makeObjectName(name, undefined, section.physicalSuffix),
         standard: section.columns(),
         attributes: [],
         indexes: [],
       })
+      sectionTables.push(built)
+    }
+    // Регістр копій не має (Р2a2-4): носій `access` — лише його вимір, а
+    // похідні таблиці несуть той самий вимір власною колонкою.
+    if (def.rightsExtents.length > 0 && registerKeys === undefined) {
+      this.carrierHosts.push({ object, main, scope, sections: sectionTables })
     }
   }
 
@@ -586,7 +700,7 @@ class SnapshotBuilder {
       attributes: readonly Attribute[]
       indexes: CompositeIndexes
     }
-  ): void {
+  ): CarrierHost["sections"][number] {
     const def = KIND_REGISTRY[object.kind]
     const { pointer } = section
     const table = this.pendingTable(
@@ -601,13 +715,13 @@ class SnapshotBuilder {
     ]
     // Рядок ТЧ кореня несе скоуп у `parent_id` — окрема колонка лише
     // дублювала б його.
+    const parent = rowColumns.find((c) => c.ref === "owningObject")
     const rowScope: TableScope | undefined =
       scope === undefined || scope.own
         ? scope
         : {
             kind: scope.kind,
-            carrier: rowColumns.find((c) => c.ref === "owningObject")
-              ?.physicalName,
+            carrier: parent?.physicalName,
             own: false,
             partitioned: true,
           }
@@ -652,6 +766,7 @@ class SnapshotBuilder {
         rowScope
       )
     }
+    return { table, scope: rowScope, parent: parent?.physicalName }
   }
 
   private standardFieldsByName(
@@ -876,6 +991,9 @@ class SnapshotBuilder {
   }
 
   finish(): ModelStageResult {
+    // Копії — після всіх таблиць: копія шляху бере тип колонки цілі, а та
+    // могла бути побудована пізніше за об'єкт носія.
+    for (const host of this.carrierHosts) this.addCarrierCopies(host)
     // Імена призначаються в порядку знімка, а явні імена резервуються наперед
     // в усій схемі, тож знімок самоузгоджений: жодне похідне ім'я не збігається
     // з іншим. Postgres за колізій обрав би інакше (він не знає наперед про
@@ -893,6 +1011,127 @@ class SnapshotBuilder {
       declaredNames: this.declaredNames,
       elementChecks,
     }
+  }
+
+  // --- Копії носіїв прав ---------------------------------------------------
+
+  /**
+   * Денормалізовані копії носіїв прав (спека прав §5.2, Рх21, Р2a2-5): шлях
+   * дає копію кінцевого значення в основній таблиці, а кожна ТЧ — копію
+   * кінцевого значення кожного носія власника (прямого — його колонки,
+   * шляху — копії шляху). Політики ТЧ і шляху тоді — ті самі некорельовані
+   * форми, що й власника, без підзапиту до іншої таблиці. Носій-ключ копії не
+   * має: його значення в ТЧ — сам `parent_id`. Крок, якого стадія 3 не може
+   * резолвити, чи шлях через прийняту таблицю копії не дає — їх звітує стадія 4.
+   */
+  private addCarrierCopies(host: CarrierHost): void {
+    const { object, main } = host
+    const values: { name: string; type: string }[] = []
+    for (const { carrier, pointer, role } of carrierDeclarations(object)) {
+      const headPointer = typeof carrier === "string" ? pointer : `${pointer}/0`
+      const head = this.carrierColumn(object, main, headPointer, role)
+      if (head === undefined) continue
+      if (typeof carrier === "string") {
+        const key =
+          main.primaryKey?.columns.length === 1 &&
+          main.primaryKey.columns[0] === head.name
+        if (!key) values.push(head)
+        continue
+      }
+      const fk = fieldForeignKey(main, head.name)
+      const target =
+        fk === undefined
+          ? undefined
+          : this.tables.find(
+              (t) =>
+                t.schema === fk.references.schema &&
+                t.name === fk.references.table &&
+                t.origin.tabularSectionId === undefined &&
+                t.origin.part === undefined
+            )
+      const targetObject =
+        target === undefined ? undefined : this.byId.get(target.origin.objectId)
+      // Тригер поширення лежав би на прийнятій таблиці (Р2a2-10).
+      if (targetObject === undefined || isDeclaredTable(targetObject)) continue
+      const tail = this.carrierColumn(
+        targetObject,
+        target!,
+        `${pointer}/1`,
+        "rights.carrierPath",
+        object.file
+      )
+      if (tail === undefined) continue
+      const copy = {
+        name: carrierCopyName(head.name, tail.name),
+        type: tail.type,
+      }
+      this.addCopy(main, host.scope, copy, {
+        table: { schema: target!.schema, name: target!.name },
+        column: tail.name,
+        through: head.name,
+      })
+      values.push(copy)
+    }
+    const owner = { schema: main.schema, name: main.name }
+    for (const section of host.sections) {
+      if (section.parent === undefined) continue
+      for (const value of values) {
+        this.addCopy(section.table, section.scope, value, {
+          table: owner,
+          column: value.name,
+          through: section.parent,
+        })
+      }
+    }
+  }
+
+  /**
+   * Колонка кроку носія: елемент, який резолвила стадія 2 за вказівником у
+   * файлі `file` (у шляху — у файлі власника носія), у таблиці `table` його
+   * об'єкта. Поліморфна пара чи невідомий крок колонки не дають.
+   */
+  private carrierColumn(
+    object: ParsedObject,
+    table: PendingTable,
+    pointer: string,
+    role: ReferenceRole,
+    file = object.file
+  ): PhysicalColumn | undefined {
+    const id = this.carrierRefs.get(carrierRefKey(file, pointer, role))
+    if (id === undefined) return undefined
+    const names = elementColumns(object, table, this.style).get(id) ?? []
+    if (names.length !== 1) return undefined
+    return table.columns.find((c) => c.name === names[0])
+  }
+
+  /**
+   * Копія — nullable і без FK (FK тримає власник, а копія лише повторює його
+   * значення), з індексом, де скоуп першим: політика читає її разом зі
+   * скоупом. Зайняте ім'я копії не дає — збіг звітує стадія 4
+   * (`rights.carrier-column-taken`).
+   */
+  private addCopy(
+    table: PendingTable,
+    scope: TableScope | undefined,
+    copy: { name: string; type: string },
+    copyOf: CarrierCopyOf
+  ): void {
+    if (table.columns.some((c) => c.name === copy.name)) return
+    table.columns.push({
+      name: copy.name,
+      type: copy.type,
+      notNull: false,
+      origin: { copyOf },
+    })
+    this.sources
+      .find((s) => s.schema === table.schema && s.name === table.name)
+      ?.columns.push({ name: copy.name })
+    // Скоуп таблиці — її колонка значення скоупу; у ТЧ кореня — `parent_id`.
+    // Основна таблиця кореня розбиття не має: її рядки й є значеннями скоупу.
+    const lead = scope?.partitioned === true ? scope.carrier : undefined
+    table.derivedIndexes.push(
+      ascending(lead === undefined ? [copy.name] : [lead, copy.name])
+    )
   }
 
   // --- Таблиці видів ------------------------------------------------------
