@@ -16,6 +16,7 @@ import {
   type RightsContract,
   type RightsExtent,
   type RightsLevelKey,
+  qualified,
 } from "../contracts"
 import { compareStrings } from "../diagnostics"
 import {
@@ -30,6 +31,7 @@ import { allowedActions, compareExtents, levelAllowsExtent } from "./expand"
 import { levelKey } from "./facts"
 import { must } from "./references"
 import { rightsLevelOf } from "./system-catalogs"
+import { sqlLiteral } from "../stages/model"
 
 const platform = (name: string): QualifiedName => ({
   schema: PLATFORM_SCHEMA,
@@ -433,7 +435,7 @@ function valuesBody(columns: readonly Column[], rows: Value[][]): string {
   const names = columns.map(([name]) => name).join(", ")
   if (rows.length === 0) return emptySet(columns)
   const value = (v: Value, type: string) =>
-    v === null ? `NULL::${type}` : `${literal(v)}::${type}`
+    v === null ? `NULL::${type}` : `${sqlLiteral(v)}::${type}`
   const lines = rows.map(
     (row) =>
       `  (${row.map((v, i) => value(v, must(columns[i])[1])).join(", ")})`
@@ -772,7 +774,7 @@ function scopesBody(
     `SELECT DISTINCT m.scope`,
     `FROM ${call(RIGHTS_FUNCTIONS.mine)} m`,
     `WHERE m.level = 'scope'`,
-    `  AND m.extent = ${literal(extent)}`,
+    `  AND m.extent = ${sqlLiteral(extent)}`,
     `  AND m.object = ${param(fn, "p_object")}`,
     `  AND m.action = ${param(fn, "p_action")}`,
     ...(extent === "dimension"
@@ -895,10 +897,6 @@ function tableOf(
   )
 }
 
-function qualified(name: QualifiedName): string {
-  return `${quoteIdent(name.schema)}.${quoteIdent(name.name)}`
-}
-
 /** Виклик функції з аргументами-сталими; спільний з будівником умов. */
 export function call(fn: QualifiedName, args: readonly string[] = []): string {
   return `${qualified(fn)}(${args.join(", ")})`
@@ -912,13 +910,8 @@ function param(fn: QualifiedName, name: string): string {
   return `${quoteIdent(fn.name)}.${name}`
 }
 
-/** Рядкова стала SQL з екрануванням лапок. */
-export function literal(value: string): string {
-  return `'${value.replaceAll("'", "''")}'`
-}
-
 export function uuidLiteral(value: string): string {
-  return `${literal(value)}::uuid`
+  return `${sqlLiteral(value)}::uuid`
 }
 
 function indent(sql: string): string {

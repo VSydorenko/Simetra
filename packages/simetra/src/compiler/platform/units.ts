@@ -8,7 +8,7 @@ import {
   type PhysicalSnapshot,
   type Project,
 } from "simetra/model"
-import type { QualifiedName, UsersContract } from "../contracts"
+import { qualified, type QualifiedName, type UsersContract } from "../contracts"
 import { compareStrings } from "../diagnostics"
 import { dollarTag } from "../movement-functions"
 import type { CreationNode } from "../sql/dependencies"
@@ -399,8 +399,4 @@ function plpgsqlFunction(
     `SET search_path = ''\n` +
     `AS ${tag}\n${text}\n${tag};`
   )
-}
-
-function qualified(name: QualifiedName): string {
-  return `${quoteIdent(name.schema)}.${quoteIdent(name.name)}`
 }

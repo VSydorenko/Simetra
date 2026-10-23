@@ -6,7 +6,8 @@ import type {
   RightsContract,
 } from "../contracts"
 import { CURRENT_USER } from "../membership-functions"
-import { RIGHTS_FUNCTIONS, call, literal, uuidLiteral } from "./functions"
+import { RIGHTS_FUNCTIONS, call, uuidLiteral } from "./functions"
+import { sqlLiteral } from "../stages/model"
 import { must } from "./references"
 
 /**
@@ -58,7 +59,7 @@ export function rightsPredicates(
 ): RightsPredicate[] {
   const { extents } = must(contract.actions.find((a) => a.action === action))
   const F = RIGHTS_FUNCTIONS
-  const head = [literal(action), literal(contract.kindLabel)]
+  const head = [sqlLiteral(action), sqlLiteral(contract.kindLabel)]
   const own = extents.some((e) => e.form === "own")
   const dimensions = new Set(
     extents.flatMap((e) => (e.form === "dimension" ? [e.dimensionId] : []))
@@ -186,6 +187,6 @@ function scopeSet(extent: ProjectionExtent, head: string[]): string {
 /** Обсяг і вимір — останні аргументи `has_right` і `rights_container`. */
 function extentArgs(extent: ProjectionExtent): string[] {
   return typeof extent === "string"
-    ? [literal(extent), "NULL"]
-    : [literal("dimension"), uuidLiteral(extent.dimensionId)]
+    ? [sqlLiteral(extent), "NULL"]
+    : [sqlLiteral("dimension"), uuidLiteral(extent.dimensionId)]
 }

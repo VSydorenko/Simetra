@@ -2,6 +2,7 @@ import {
   KIND_REGISTRY,
   PROVIDER_EVENT_SOURCES,
   makeObjectName,
+  quoteIdent,
   postsMovements,
   truncatedPeriodExpression,
   standardLogicalName,
@@ -41,6 +42,11 @@ import { standardElementId, type ResolvedReference } from "./stages/identity"
 export interface QualifiedName {
   schema: string
   name: string
+}
+
+/** Кваліфіковане ім'я для SQL: одне місце замість копій у кожному генераторі. */
+export function qualified(name: QualifiedName): string {
+  return `${quoteIdent(name.schema)}.${quoteIdent(name.name)}`
 }
 
 export interface PostingContract {

@@ -8,7 +8,7 @@ import {
   type Project,
   type ScopeKind,
 } from "simetra/model"
-import type { QualifiedName } from "./contracts"
+import { qualified, type QualifiedName } from "./contracts"
 import { compareStrings } from "./diagnostics"
 import { dollarTag } from "./movement-functions"
 import { CURRENT_USER_FUNCTION } from "./platform/names"
@@ -246,10 +246,6 @@ export function closedFunction(
     `SET search_path = ''\n` +
     `AS ${tag}\n${body}\n${tag};`
   )
-}
-
-function qualified(name: QualifiedName): string {
-  return `${quoteIdent(name.schema)}.${quoteIdent(name.name)}`
 }
 
 /** Модель без помилок гарантує наявність; відсутність — дефект компілятора. */
