@@ -394,6 +394,10 @@ describe("covered classes match the pinned engine", () => {
           platformRoles.has(role),
           `engine role fact ${role} is not a platform role a grant names`
         ).toBe(true)
+      // Без факту ролі перевірка вище порожня: бажаний стан кожної фікстури
+      // грантує роль команд (гранти схеми `simetra`, Р2a1-2, Р2a1-4)
+      if (desiredSql !== BROAD_SQL)
+        expect([...roles]).toContain(PLATFORM_ROLES.command)
       // Кожен інший вид факту, що трапився, перепис рахує як покритий клас
       // або він — частина такого класу
       for (const kind of kinds)
