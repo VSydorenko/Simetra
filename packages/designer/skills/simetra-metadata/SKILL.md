@@ -265,18 +265,21 @@ events only) and `handler` (`{ schema?, name }`, a no-argument function that
 `FOR EACH ROW` triggers, named after `physicalName`, on every source: `before*`
 is `BEFORE`, `on*` is `AFTER`, `*Write` is `INSERT OR UPDATE`, `*Delete` is
 `DELETE`. With `whenChanged`, `<physicalName>` fires on an `UPDATE` that changes
-a listed column (`IS DISTINCT FROM`), `<physicalName>_insert` on every `INSERT`.
+a listed column (`IS DISTINCT FROM`), `<physicalName>_insert` on every `INSERT`;
+on a table with carrier copies (below) a subscription without `whenChanged`
+gets the same pair, its `UPDATE` trigger firing on a content change only.
 No event is insert-only; `TG_OP` tells insert from update. A handler on a
 provider table (`auth.users`) that writes app tables must be `SECURITY DEFINER`
 with `SET search_path = ''`: the provider role has no rights on your schemas.
 
 Catalogs and Documents get the row mechanics trigger `<table>_simetra_touch`
 (the single platform function `simetra.touch()`): an insert sets `version` to 1,
-an update adds 1, both set `updatedAt` to `now()` whatever the client writes.
-Never maintain them (`moddatetime`) or list them in `whenChanged`. A
-`beforeWrite` handler never assigns `NEW.updated_at` or `NEW.version` and never
-replaces the row (`NEW := …`, `SELECT … INTO NEW`): it returns `NEW`, or `NULL`
-to skip the write, never `OLD` or a copy of the row.
+an update adds 1, both set `updatedAt` to `now()` whatever the client writes;
+on a table with carrier copies the update is `<table>_simetra_touch_update`,
+firing on a content change only. Never maintain them (`moddatetime`) or list
+them in `whenChanged`. A `beforeWrite` handler never assigns `NEW.updated_at`
+or `NEW.version` and never replaces the row (`NEW := …`, `SELECT … INTO NEW`):
+it returns `NEW`, or `NULL` to skip the write, never `OLD` or a copy of the row.
 
 ## Users, membership and rights
 
@@ -290,8 +293,9 @@ declarations too: `customActions`, `ownership`, `rightsContainer`,
 them is a reference, so `rename` rewrites it and `delete` refuses while it is
 used; the compiler checks them (rules `users.*`, `rights.*`) and `explain`
 shows the derived rights contract, a role's contract and the rows of the
-rights projection. Forms of each field:
-`references/people-and-rights.md` (also the system rights catalogs).
+rights projection. Forms of each field, who reads what, and what carrier copies
+forbid a `beforeWrite` handler: `references/people-and-rights.md` (also the
+system rights catalogs).
 
 ```json simetra:add
 {
@@ -301,15 +305,9 @@ rights projection. Forms of each field:
 }
 ```
 
-The platform layer (identities, the current user, provisioning) lives in the
-PG schema `simetra`, generated when a users catalog exists. The schema is
-reserved: no object, `defaultSchema`, set function, external reference,
-event handler or SQL unit may use it, and there is no `metadata/sql/simetra/`
-folder (`schema.reserved`). In SQL, the
-current user is `(select simetra.current_user_id())`, written exactly so in a
-policy (`sql.bare-current-user` rejects a bare call there); it is `NULL` for
-an anonymous session or an anonymous sign-in of the provider, a service
-session and an invalid user.
+The PG schema `simetra` (identities, the current user, provisioning) belongs
+to the platform and is reserved (`schema.reserved`); in SQL the current user is
+`(select simetra.current_user_id())`. Both rules in full: the same reference.
 
 ## The SQL module: closed forms only
 

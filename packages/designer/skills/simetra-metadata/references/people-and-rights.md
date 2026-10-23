@@ -7,6 +7,8 @@ Contents:
 - Users, authorship and membership
 - Rights declarations
 - Rights sets and roles
+- Who reads what
+- Carrier copies
 
 ## Users, authorship and membership
 
@@ -40,11 +42,24 @@ People are platform data, not tables you write yourself:
   its scope set function from that catalog. Use it instead of a hand-written
   member table and set function. One membership catalog per scope kind.
 
+The platform layer (identities, the current user, provisioning) lives in the
+PG schema `simetra`, generated when a users catalog exists. The schema is
+reserved: no object, `defaultSchema`, set function, external reference,
+event handler or SQL unit may use it, and there is no `metadata/sql/simetra/`
+folder (`schema.reserved`). In SQL, the
+current user is `(select simetra.current_user_id())`, written exactly so in a
+policy (`sql.bare-current-user` rejects a bare call there); it is `NULL` for
+an anonymous session or an anonymous sign-in of the provider, a service
+session and an invalid user.
+
 ## Rights declarations
 
 A **carrier** is an attribute of the object, or a two-step path
 `["<ref attribute>", "<attribute of its target>"]`; every step stays inside
-the tenant (`rights.carrier-cross-tenant`).
+the tenant (`rights.carrier-cross-tenant`), and the first step points to an
+object of a kind, not to an adopted `CustomTable`
+(`rights.carrier-path-adopted`: the platform keeps a copy of the path's value
+with a trigger on the target table, see "Carrier copies").
 
 - **`customActions`** — actions beyond the standard ones of the kind; each
   gets an id, `requires` names standard action words or other custom actions
@@ -69,11 +84,17 @@ the tenant (`rights.carrier-cross-tenant`).
 - **`access`** — the project access dimensions that narrow the rows, each with
   its carrier to the dimension's value catalog.
   `"access": [{ "attribute": "<attribute>", "dimension": "<dimension>" }]` or
-  `{ "ref": ["<ref attribute>", "<attribute>"], "dimension": "<dimension>" }`
+  `{ "ref": ["<ref attribute>", "<attribute>"], "dimension": "<dimension>" }`.
+  A register maps only a dimension of its own (`"attribute"`), never a
+  resource, an attribute or a path (`rights.register-access-dimension`): its
+  movements and totals are read by the same dimensions.
 - **`accessDimensions`** (project) — a value catalog plus where the current
   user's values come from: a relation object or a verbatim SQL function.
   `{ "name": "<dimension>", "target": <catalog ref>, "values": { "relation": { "object": <ref>, "subject": "<field>", "value": "<field>" } } }`
   or `"values": { "function": { "name": "<function>" } }`.
+  A read policy is named after the dimension, so a name that is `any` or
+  `own`, or starts with `own_` or `in_` (in snake case), is
+  `rights.dimension-name-reserved`.
   The function is verbatim SQL of a closed form: no arguments,
   `RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = ''`
   with an `AS $$ … $$` body,
@@ -162,3 +183,55 @@ roles; standard tabular section `delta`) or `"role": "roleAssignments"`. Their
 level is the catalog's own scope. They are read-only until rights
 administration exists: a custom action on one is `rights.system-catalog-custom-action`.
 Run `simetra roles` before the first `plan` on a new database.
+
+## Who reads what
+
+Rows are read through rights, not by default. In a project with at least one
+role and a users catalog:
+
+- A table of a kind is read only through a role's `read` right on its object,
+  at the extent of the grant (`any`, `own`, a dimension, in a container); its
+  tabular sections and a register's movements and totals follow the object.
+  `publicRead` opens every row instead and needs no right.
+- A scoped object is read only inside the reader's scopes, and only through a
+  role assigned there: membership in a tenant without a role reads nothing.
+- The users catalog shows only yourself and the users of members of your
+  scopes (when the project has a membership catalog), whatever the role grants
+  on it: a scope-level `read` on the users catalog reads only those.
+
+Without any role (or without a users catalog) no right opens a row: only
+`publicRead` objects are readable. `rights.scope-kind-unread` (a warning on
+the scope kind in `project.meta.json`) says that no role reads any object of
+that scope kind, so nobody will see their rows: grant `read` to a role or
+declare one with `fullAccess`.
+
+## Carrier copies
+
+A tabular section cannot be read by the carriers of its owner without a
+copy, and neither can an object whose carrier is a path. So the platform
+keeps copies: every tabular section of an object with carriers gets a column
+per carrier (named like the owner's column), and a path carrier gets a column
+in the object row. The copies are written only by the platform:
+
+- A value the client writes into a copy is replaced by the value of the
+  source row; a request that changes only copies is a resave.
+- When the source changes, the copies of dependent rows (and of their tabular
+  sections) follow. This propagation is not a change of the row: it does not
+  bump `version` or `updatedAt` and fires no subscription and no platform
+  `BEFORE UPDATE` guard.
+- The names are taken: an attribute under a copy's name is
+  `rights.carrier-column-taken`; rename the attribute.
+- A `beforeWrite` handler on such a table never assigns a copy or the column
+  of the first path step (`subscription.handler-assigns-carrier`: assign them
+  in the command hook) and never reads a copy as `NEW.<copy>`
+  (`subscription.handler-reads-carrier`: on `INSERT` it may still hold the
+  client's value); look the carrier up in the row the first step points to.
+- On a table with copies the row mechanics are two triggers,
+  `<table>_simetra_touch` on `INSERT` and `<table>_simetra_touch_update` on an
+  `UPDATE` that changes the content, and a write subscription without
+  `whenChanged` gets the pair `<physicalName>` (`UPDATE`, content changed)
+  and `<physicalName>_insert` (`INSERT`), so propagation triggers neither.
+- A new copy on a table that already has rows is refused by `plan`
+  (`plan.carrier-backfill-missing`, no plan written): copies get their values
+  only when a row is written. Add the carrier before the table gets rows, or
+  wait for the platform's data step for carrier copies.
