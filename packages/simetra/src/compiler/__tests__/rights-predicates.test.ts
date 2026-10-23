@@ -22,6 +22,7 @@ import {
   TASK_FILE,
   TASK_ID,
   catalog,
+  policyDomain,
   regionDimension,
   singleTenantRights,
   withRoles,
@@ -201,36 +202,72 @@ function shapeOf(table: string, condition: RightsCondition): SubLink[] {
 
 describe("rights predicates", () => {
   it("every predicate keeps at most one grant-dependent set (§5.4)", async () => {
+    // Правило — на кожній таблиці, на яку лягає політика прав: основній,
+    // ТЧ (копії носіїв), з носієм шляху (копія шляху) і похідній таблиці
+    // регістра (Р2a2-6).
     const models = [
       await compiled(kitchenSink()),
       await compiled(allCarriers()),
       await compiled(singleTenantRights()),
+      await compiled(viaCarriers()),
+      await compiled(policyDomain()),
     ]
     let checked = 0
+    const shapes = new Set<string>()
     for (const model of models) {
       for (const contract of model.contracts.rights) {
-        const table = mainTableOf(model.physical, contract.objectId)!
-        const names = new Set(table.columns.map((c) => c.name))
-        for (const { action } of contract.actions) {
-          for (const predicate of rightsPredicates(contract, action, table)) {
-            // Рівно одна множина з гранту: без неї предикат відкрив би рядок
-            // без жодного права, з двома — декартів добуток (§5.4).
-            expect(predicate.conditions.filter(grantDependent)).toHaveLength(1)
-            for (const condition of predicate.conditions) {
-              if (condition.kind !== "boolean") {
-                expect(names).toContain(condition.column)
+        const main = mainTableOf(model.physical, contract.objectId)!
+        const tables = model.contracts.access
+          .filter((a) => a.rights?.objectId === contract.objectId)
+          .map((a) =>
+            model.physical.tables.find(
+              (t) => t.schema === a.table.schema && t.name === a.table.name
+            )!
+          )
+        for (const table of tables) {
+          const names = new Set(table.columns.map((c) => c.name))
+          for (const { action } of contract.actions) {
+            for (const predicate of rightsPredicates(
+              contract,
+              action,
+              table,
+              main
+            )) {
+              shapes.add(
+                table.origin.tabularSectionId !== undefined
+                  ? "section"
+                  : table.origin.part !== undefined
+                    ? "derived"
+                    : table.columns.some(
+                          (c) =>
+                            c.name === predicate.carrier &&
+                            c.origin.copyOf !== undefined
+                        )
+                      ? "path"
+                      : "main"
+              )
+              // Рівно одна множина з гранту: без неї предикат відкрив би рядок
+              // без жодного права, з двома — декартів добуток (§5.4).
+              expect(predicate.conditions.filter(grantDependent)).toHaveLength(
+                1
+              )
+              for (const condition of predicate.conditions) {
+                if (condition.kind !== "boolean") {
+                  expect(names).toContain(condition.column)
+                }
+                for (const link of shapeOf(table.name, condition)) {
+                  // Некорельованість: підзапит не посилається на рядок таблиці.
+                  expect(nodes(link.subselect, "ColumnRef")).toEqual([])
+                }
+                checked++
               }
-              for (const link of shapeOf(table.name, condition)) {
-                // Некорельованість: підзапит не посилається на рядок таблиці.
-                expect(nodes(link.subselect, "ColumnRef")).toEqual([])
-              }
-              checked++
             }
           }
         }
       }
     }
     expect(checked).toBeGreaterThan(0)
+    expect([...shapes].sort()).toEqual(["derived", "main", "path", "section"])
   })
 
   const any = (extent: ProjectionExtent) => ({ extent })
@@ -389,9 +426,10 @@ describe("rights predicates", () => {
     ])
   })
 
-  // Межа 2a1: план 2a2 цей тест перевертає (носій шляху дає предикат на
-  // копії), а не видаляє — Р2a2-6.
-  it("skips via carriers until 2a2 (fail-closed)", async () => {
+  // Перевернутий тест 2a1 про пропуск носіїв шляху (Р2a2-6): носій шляху дає
+  // предикат на своїй копії в основній таблиці — власність, вимір і
+  // прив'язка до контейнера.
+  it("a via carrier gives its predicate on the path copy", async () => {
     const model = await compiled(viaCarriers())
     const comment = model.contracts.rights.find(
       (c) => c.objectId === COMMENT_ID
@@ -405,11 +443,25 @@ describe("rights predicates", () => {
       "dimension",
     ])
     const predicates = predicatesOf(model, COMMENT_ID, "read")
+    const region = { dimensionId: REGION_DIMENSION_ID }
+    const inProject = (inner: ProjectionExtent) => ({
+      container: PROJECT_ID,
+      inner,
+    })
     expect(predicates.map((p) => [p.extent, p.carrier])).toEqual([
       ["any", undefined],
+      ["own", "task_id_assignee_id"],
+      [region, "task_id_region_id"],
+      [inProject("any"), "task_id_project_id"],
+      [inProject("own"), "task_id_assignee_id"],
+      [inProject(region), "task_id_region_id"],
     ])
-    expect(predicates[0]!.conditions.map(renderCondition)).toEqual([
-      "org_id = ANY (ARRAY(SELECT simetra.rights_any('read', 'task_comment')))",
+    expect(predicates[1]!.conditions.map(renderCondition)).toEqual([
+      `task_id_assignee_id = ANY (ARRAY(SELECT simetra.rights_my_members('${ORG_KIND_ID}'::uuid)))`,
+      "org_id = ANY (ARRAY(SELECT simetra.rights_own('read', 'task_comment')))",
+    ])
+    expect(predicates[3]!.conditions.map(renderCondition)).toEqual([
+      "task_id_project_id = ANY (ARRAY(SELECT simetra.rights_container('read', 'task_comment', 'any', NULL)))",
     ])
   })
 })

@@ -220,8 +220,8 @@ const KIND_MODULE_REPLACEMENT: Readonly<
     uk: "Службову дату й версію рядка тримає механіка платформи; для решти реакцій оголосіть EventSubscription на подію таблиці, а обробник залиште функцією в закритій оболонці.",
   },
   policy: {
-    en: "Row access is declared, not written: use publicRead on the object, and a scoped object gets its scope read policy <table>_read derived from the kind; access rights come with the rights spec (P3).",
-    uk: "Доступ до рядків оголошується, а не пишеться: використайте publicRead об'єкта, а об'єкт зі скоупом отримує політику читання скоупу <table>_read, виведену з виду; права приходять зі спекою прав (П3).",
+    en: "Row access is declared, not written: a scoped table gets the tenant boundary policies <table>_scope_read, <table>_scope_insert, <table>_scope_update and <table>_scope_delete derived from the kind, roles give the read policies <table>_read_*, and publicRead on the object opens every row for reading.",
+    uk: "Доступ до рядків оголошується, а не пишеться: скоуплена таблиця отримує політики межі тенанта <table>_scope_read, <table>_scope_insert, <table>_scope_update і <table>_scope_delete, виведені з виду, ролі дають політики читання <table>_read_*, а publicRead об'єкта відкриває на читання всі рядки.",
   },
   grant: {
     en: "Privileges are derived, not written: on a kind's tables they come from the kind, EXECUTE on a scope set function and a subscription handler comes from the metadata, and EXECUTE on any other function comes from its TypeScript declaration (P4).",

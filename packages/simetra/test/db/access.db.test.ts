@@ -2,6 +2,7 @@ import { beforeAll, describe, expect, it } from "vitest"
 import type pg from "pg"
 import { compile, type CompiledModel } from "simetra/compiler"
 import { renderDesiredState } from "simetra/schema"
+import { accessPolicyNames } from "../../src/compiler/access-units"
 import {
   expectClean,
   acceptDebt,
@@ -37,6 +38,48 @@ function lines(id: number, physicalName: string) {
     name: "lines",
     physicalName,
     attributes: [attribute("note", { type: "String", length: 20 })],
+  }
+}
+
+/** Роль рівня `org`: `read@any` на скоуплених об'єктах тесту. */
+const ORG_READER_ID = uuid(85)
+
+/**
+ * Системні довідники прав рівня `org` (спека прав §4.6) і роль, що читає
+ * явний перелік скоуплених об'єктів — не `withAction`: інакше вона читала б і
+ * нескоуплений `Secret`, а тест доводить, що його не читає ніхто.
+ */
+function orgRights(): Record<string, unknown> {
+  const ref = (kind: string, name: string) => ({ kind, name })
+  return {
+    "catalogs/OrgRoles/OrgRoles.meta.json": catalog("OrgRoles", {
+      scope: "org",
+      role: "rightsRoles",
+    }),
+    "catalogs/OrgRoleAssignments/OrgRoleAssignments.meta.json": catalog(
+      "OrgRoleAssignments",
+      { scope: "org", role: "roleAssignments" }
+    ),
+    "roles/OrgReader/OrgReader.meta.json": {
+      id: ORG_READER_ID,
+      kind: "Role",
+      name: "OrgReader",
+      assignedOn: { scopeKind: "org" },
+      grants: [
+        {
+          grant: {
+            objects: [
+              ref("Catalog", "Organization"),
+              ref("Catalog", "Item"),
+              ref("Document", "Sale"),
+              ref("AccumulationRegister", "Stock"),
+            ],
+            actions: ["read"],
+            extent: "any",
+          },
+        },
+      ],
+    },
   }
 }
 
@@ -130,6 +173,7 @@ async function compiled(scenario: Scenario): Promise<CompiledModel> {
       publicRead: "anon",
     }),
     "catalogs/Secret/Secret.meta.json": catalog("Secret", { scope: "none" }),
+    ...orgRights(),
   }
   let files = metaFiles(entries)
   if (scenario.schema === "app") {
@@ -152,8 +196,10 @@ interface Tenant {
 }
 
 /**
- * Організація з одним рядком у кожній таблиці, яку перевіряє тест. Пише
- * власник таблиць: RLS його не обмежує, а запис від ролей API — поза a1.
+ * Організація з одним рядком у кожній таблиці, яку перевіряє тест, і
+ * користувачем — учасником з роллю `OrgReader`: читання тепер дає право, а
+ * межа тенанта лише звужує (Р2a2-1). Пише власник таблиць: RLS його не
+ * обмежує, а запис від ролей API — поза a1.
  */
 async function tenant(
   client: pg.Client,
@@ -169,9 +215,13 @@ async function tenant(
     `INSERT INTO ${schema}.organization_lines (id, parent_id, line_number) VALUES (gen_random_uuid(), $1, 1)`,
     [org]
   )
-  await client.query(
-    `INSERT INTO ${schema}.org_member (id, org_id, user_id) VALUES (gen_random_uuid(), $1, $2)`,
+  const member = (await one(
+    `INSERT INTO ${schema}.org_member (id, org_id, user_id) VALUES (gen_random_uuid(), $1, $2) RETURNING id`,
     [org, user]
+  ))!
+  await client.query(
+    `INSERT INTO ${schema}.org_role_assignments (id, org_id, subject, archetype) VALUES (gen_random_uuid(), $1, $2, $3)`,
+    [org, member, ORG_READER_ID]
   )
   const item = (await one(
     `INSERT INTO ${schema}.item (id, org_id) VALUES (gen_random_uuid(), $1) RETURNING id`,
@@ -376,23 +426,63 @@ describe.each(SCENARIOS)("kind table access in schema $schema", (scenario) => {
     }
   )
 
-  it("every read policy plans the scope set once (InitPlan, no SubPlan)", async () => {
+  it("every read policy plans its sets once (InitPlan, no SubPlan)", async () => {
+    // Причина DB-рівня: форму плану (InitPlan проти SubPlan на рядок) вирішує
+    // планувальник Postgres, а не текст політики (§5.4).
     await withRollback(async (client) => {
       await deploy(client)
       const alice = await signUp(client)
       await tenant(client, schema, alice)
-      const { rows: policies } = await client.query<{ table: string }>(
-        `SELECT tablename AS table FROM pg_policies
-         WHERE schemaname = $1 AND policyname = tablename || '_read'
-         ORDER BY 1`,
+      // Політики читання кожної таблиці: межа тенанта чи «Користувачів»
+      // (`scope_read`) і кожна політика прав (`read_*`); імена — з
+      // `accessPolicyNames`, а не зі сталого суфікса.
+      const expected = new Map<string, string[]>()
+      for (const contract of model.contracts.access) {
+        const names = accessPolicyNames(contract.table)
+        const writes = new Set([
+          names.scopeInsert,
+          names.scopeUpdate,
+          names.scopeDelete,
+          names.publicRead,
+        ])
+        const reads = model.sqlUnits
+          .filter(
+            (u) =>
+              u.generator === "access" &&
+              u.class === "policy" &&
+              u.ownerObjectId === contract.objectId &&
+              (u.tree as { CreatePolicyStmt: { table: { relname: string } } })
+                .CreatePolicyStmt.table.relname === contract.table.name &&
+              !writes.has(u.name)
+          )
+          .map((u) => u.name)
+          .sort()
+        if (reads.length === 0) continue
+        if (contract.scope !== undefined && contract.publicRead.length === 0) {
+          expect(reads, contract.table.name).toContain(names.scopeRead)
+        }
+        expect(
+          reads.filter((name) => name !== names.scopeRead).length,
+          contract.table.name
+        ).toBeGreaterThan(0)
+        expected.set(contract.table.name, reads)
+      }
+      const { rows: policies } = await client.query<{
+        table: string
+        policy: string
+      }>(
+        `SELECT tablename AS table, policyname AS policy FROM pg_policies
+         WHERE schemaname = $1 AND cmd = 'SELECT' AND roles @> ARRAY['authenticated']::name[]
+         ORDER BY 1, 2`,
         [schema]
       )
-      const scoped = model.contracts.access
-        .filter((c) => c.scope !== undefined)
-        .map((c) => c.table.name)
-        .sort()
-      expect(policies.map((p) => p.table)).toEqual(scoped)
-      for (const table of scoped) {
+      const deployed = new Map<string, string[]>()
+      for (const { table, policy } of policies) {
+        if (policy === accessPolicyNames({ name: table }).publicRead) continue
+        deployed.set(table, [...(deployed.get(table) ?? []), policy].sort())
+      }
+      expect(deployed).toEqual(expected)
+      for (const [table, reads] of expected) {
         const result = await queryAs<{ "QUERY PLAN": unknown }>(
           client,
           "authenticated",
@@ -403,7 +493,12 @@ describe.each(SCENARIOS)("kind table access in schema $schema", (scenario) => {
         const plan = (result as { rows: { "QUERY PLAN": unknown }[] }).rows[0]![
           "QUERY PLAN"
         ]
-        expect(parentRelationships(plan), table).toContain("InitPlan")
+        // Кожна політика читання тут — множина `ARRAY(SELECT …)` чи булева
+        // перевірка `(SELECT …)`: щонайменше одна InitPlan на політику.
+        expect(
+          parentRelationships(plan).filter((r) => r === "InitPlan").length,
+          table
+        ).toBeGreaterThanOrEqual(reads.length)
         expect(JSON.stringify(plan), table).not.toContain("SubPlan")
       }
     })

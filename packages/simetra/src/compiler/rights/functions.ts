@@ -56,6 +56,7 @@ export const RIGHTS_FUNCTIONS = {
   hasRight: platform("has_right"),
   myMembers: platform("rights_my_members"),
   dimensionValues: platform("rights_dimension_values"),
+  visibleUsers: platform("rights_visible_users"),
 } as const satisfies Record<string, QualifiedName>
 
 /**
@@ -88,6 +89,32 @@ interface Declaration {
 }
 
 /**
+ * Чи є в проєкті функції прав (Р2a1-15, Р2a1-30, Р2a2-24) — одне місце, з яким
+ * звіряються генератор функцій і генератор політик: політика, що кличе
+ * неіснуючу функцію, не застосувалась би. Без жодної `Role` прав немає. Без
+ * «Користувачів» немає `current_user_id` (шар платформи нічого не генерує), а
+ * права можливі лише через прийняте джерело (спека прав §4.6, С8), яке до 2d
+ * прав не дає (Р2a1-30); межа fail-closed та сама — прав немає, і
+ * попередження `rights.adopted-source-unsupported` це вже каже.
+ */
+export function hasRightsFunctions(
+  contracts: Pick<Contracts, "roles" | "users">
+): boolean {
+  return contracts.roles.length > 0 && contracts.users !== undefined
+}
+
+/**
+ * Чи є межа видимості «Користувачів» (Р2a2-18): функції прав і хоч один
+ * довідник членства — без учасників «моїх скоупів» множина звелася б до «я», а
+ * прийняте джерело членства до 2d прав не дає.
+ */
+export function hasVisibleUsers(
+  contracts: Pick<Contracts, "roles" | "users" | "membership">
+): boolean {
+  return hasRightsFunctions(contracts) && contracts.membership.length > 0
+}
+
+/**
  * Функції прав у схемі `simetra` (спека прав §5.1) — згенеровані одиниці без
  * власника, як механіка рядків: вони спільні для всіх об'єктів. Без жодної
  * `Role` функцій немає (Р2a1-15). Фізичні колонки системних довідників і
@@ -101,13 +128,7 @@ export function buildRightsUnits(
   module: string,
   parse: SqlParser
 ): SqlUnit[] {
-  if (contracts.roles.length === 0) return []
-  // Без «Користувачів» немає `current_user_id` (шар платформи нічого не
-  // генерує), а права можливі лише через прийняте джерело (спека прав §4.6,
-  // С8), яке до 2d прав не дає (Р2a1-30). Функції, що кличуть неіснуючу
-  // `current_user_id`, не застосувались би; межа fail-closed та сама — прав
-  // немає, і попередження `rights.adopted-source-unsupported` це вже каже.
-  if (contracts.users === undefined) return []
+  if (!hasRightsFunctions(contracts)) return []
   const F = RIGHTS_FUNCTIONS
   const text = (name: string): [string, string] => [name, "text"]
   const uuid = (name: string): [string, string] => [name, "uuid"]
@@ -201,6 +222,9 @@ export function buildRightsUnits(
       "SETOF uuid",
       dimensionValuesBody(contracts)
     ),
+    ...(hasVisibleUsers(contracts)
+      ? [definer(F.visibleUsers, [], "SETOF uuid", visibleUsersBody(contracts))]
+      : []),
   ]
   return declarations
     .flatMap(({ fn, args, returns, body, shape }) => {
@@ -479,6 +503,32 @@ function myScopesBody(contracts: RightsFunctionContracts): string {
       ].join("\n")
     })
     .join("\nUNION ALL\n")
+}
+
+/**
+ * Видимі «Користувачі» (спека системної схеми §12, Р2a2-18): я ∪ користувачі
+ * учасників моїх скоупів. Мої скоупи обчислює лише `rights_my_scopes`
+ * (Р2a1-25); таблицю членства виду K функція читає лише за рядками
+ * `rights_my_scopes()` того самого виду (Р2a1-26) — інакше учасник іншого
+ * виду з тим самим значенням скоупу відкрив би чужих користувачів.
+ */
+function visibleUsersBody(contracts: RightsFunctionContracts): string {
+  return [
+    `SELECT ${CURRENT_USER}`,
+    `WHERE ${CURRENT_USER} IS NOT NULL`,
+    ...contracts.membership.flatMap((m) => {
+      const user = `m.${quoteIdent(m.userColumn)}`
+      return [
+        `UNION`,
+        `SELECT ${user}`,
+        `FROM ${qualified(m.table)} m`,
+        `JOIN ${call(RIGHTS_FUNCTIONS.myScopes)} s`,
+        `  ON s.scope_kind_id = ${uuidLiteral(m.scopeKindId)}`,
+        ` AND s.scope = m.${quoteIdent(m.scopeColumn)}`,
+        `WHERE ${user} IS NOT NULL`,
+      ]
+    }),
+  ].join("\n")
 }
 
 /**

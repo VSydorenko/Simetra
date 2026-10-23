@@ -707,9 +707,44 @@ describe("creation order", () => {
       [table, revoke],
       [table, grant],
       [revoke, grant],
-      [table, "policy:public.item.item_read"],
-      ["function:public.org_ids()", "policy:public.item.item_read"],
+      [table, "policy:public.item.item_scope_read"],
+      ["function:public.org_ids()", "policy:public.item.item_scope_read"],
     ])
+  })
+
+  it("rights read and users policies come after the rights functions they call", async () => {
+    // Політика, що кличе ще не створену функцію прав, не застосувалась би:
+    // ребро дає виклик у виразі політики, а не порядок імен.
+    const result = await compileRights(policyDomain())
+    expectClean(result)
+    const model = result.model!
+    const list = model.creationOrder.map((node) =>
+      node.type === "unit"
+        ? node.identity
+        : `${node.type}:${node.schema}.${node.name}`
+    )
+    const readAny = "policy:public.task.task_read_any"
+    const users = "policy:public.users.users_scope_read"
+    expectBefore(list, [
+      ["table:public.task", readAny],
+      ["function:simetra.rights_any(text,text)", readAny],
+      ["table:public.users", users],
+      ["function:simetra.rights_visible_users()", users],
+    ])
+    const parse = await loadSqlParser()
+    const calls = (identity: string) =>
+      unitCalls(
+        model.sqlUnits.find((u) => u.identity === identity)!,
+        parse
+      )
+    expect(calls(readAny)).toContainEqual({
+      schema: "simetra",
+      name: "rights_any",
+    })
+    expect(calls(users)).toContainEqual({
+      schema: "simetra",
+      name: "rights_visible_users",
+    })
   })
 
   it("same-named unqualified views, sequences and materialized views in two schemas are not a cycle", async () => {

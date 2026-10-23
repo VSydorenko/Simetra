@@ -282,11 +282,16 @@ export async function runStages(
       onRootDelete: kind.onRootDelete,
     }))
     .sort((a, b) => compareStrings(a.name, b.name))
+  // Один контракт «Користувачів» і для шару платформи, і для функцій прав, і
+  // для меж доступу: без нього всі мовчать (Р2a1-30).
+  const users = usersContractOf(stage1.objects, physical)
   const access = accessContracts(
     stage1.objects,
     physical,
     scopeKinds,
-    scopeKindIdByFile
+    scopeKindIdByFile,
+    rights,
+    users?.objectId
   )
 
   const projectModule = stage1.project.name
@@ -334,9 +339,11 @@ export async function runStages(
           },
         ]
   )
-  // Один контракт «Користувачів» і для шару платформи, і для функцій прав:
-  // без нього обидва генератори мовчать (Р2a1-30).
-  const users = usersContractOf(stage1.objects, physical)
+  const membership = membershipContracts(
+    stage1.objects,
+    physical,
+    stage1.project
+  )
   const sqlUnits = [
     ...sql.units.map((unit) => verbatimUnit(unit, ownerId, module)),
     ...wrappers,
@@ -360,6 +367,8 @@ export async function runStages(
     ),
     ...buildAccessUnits(
       access,
+      { rights, accessDimensions, roles, users, membership },
+      physical,
       stage1.project.database.provider,
       module,
       parse
@@ -398,11 +407,7 @@ export async function runStages(
         rightsProjection: projection.rows,
         rightsCatalogs,
         accessDimensions,
-        membership: membershipContracts(
-          stage1.objects,
-          physical,
-          stage1.project
-        ),
+        membership,
         assignmentSources: sources.assignmentSources,
         users,
       },

@@ -272,6 +272,15 @@ export interface AccessContract {
   scope?: { scopeKindId: string; carrier: string; setFunction: QualifiedName }
   /** Ролі запиту, яким відкрито всі рядки: `anon` → обидві, `authenticated` → `user`. */
   publicRead: RequestRolePurpose[]
+  /** Основна таблиця кореня виду скоупу: без межі тенанта на `INSERT` (Р2a2-1). */
+  root: boolean
+  /**
+   * Таблиця «Користувачів» — основна чи ТЧ: межа видимості «Користувачів»
+   * (Р2a2-18) лягає на обидві.
+   */
+  users: boolean
+  /** Контракт прав об'єкта таблиці — основної, ТЧ чи похідної (Р2a2-6). */
+  rights?: { objectId: string }
 }
 
 /** Обсяг, яким грант може обмежити дію (спека прав §3). */
