@@ -9,6 +9,7 @@ import {
 } from "simetra/compiler"
 import { metaFiles, project } from "./helpers"
 import { diagnostic } from "../diagnostics"
+import type { SetFunctionReason } from "../sql/function-shape"
 
 const ALL_RULES: RuleCode[] = [...SCHEMA_RULES, ...COMPILER_RULES]
 
@@ -149,6 +150,30 @@ describe("messages catalog", () => {
     expect(text("volatility", "uk")).toBe(
       "Функція public.f у рядку 7 поза закритою оболонкою: її волатильність не явна"
     )
+  })
+
+  it("renders every closed-form reason of a scope set function as a sentence", () => {
+    const reasons: SetFunctionReason[] = [
+      "language",
+      "security",
+      "searchPath",
+      "unqualified",
+      "sqlBody",
+    ]
+    for (const locale of ["en", "uk"] as const) {
+      for (const reason of reasons) {
+        const { message } = localize(
+          diagnostic("scope.set-function-signature", "", "", {
+            function: "public.f",
+            reason,
+          }),
+          locale
+        )
+        expect(message, `${reason} ${locale}`).not.toMatch(
+          new RegExp(`: ${reason}$`)
+        )
+      }
+    }
   })
 
   it("renders every fill problem of promote.expression-invalid as a sentence", () => {

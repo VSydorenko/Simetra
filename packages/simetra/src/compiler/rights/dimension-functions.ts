@@ -28,7 +28,7 @@ const CURRENT_USER = `${PLATFORM}.${CURRENT_USER_FUNCTION.name}`
 const ARROW = " → "
 
 /** Причина закритої форми функції виміру й ланок понад причини функції множини. */
-type DimensionFunctionReason = SetFunctionReason | "sqlBody" | "viewUnqualified"
+type DimensionFunctionReason = SetFunctionReason | "viewUnqualified"
 
 /**
  * Вбудовані функції, що виконують SQL з рядка: обхід бачить лише дерево, а не
@@ -107,8 +107,7 @@ export function checkDimensionFunctions(
     const reason: DimensionFunctionReason | undefined =
       typeof fn === "string" || problem !== undefined
         ? undefined
-        : (setFunctionClosedProblem(fn, units, schema, name, parse, plpgsql) ??
-          (fn.sql_body === undefined ? undefined : "sqlBody"))
+        : setFunctionClosedProblem(fn, units, schema, name, parse, plpgsql)
     // Спершу закрита форма: без неї мова чи search_path роблять обхід
     // безпідставним.
     if (reason !== undefined) {

@@ -89,7 +89,7 @@ export function nullaryFunction(
 
 /** Чим функція множини виходить за закриту форму (`params.reason`). */
 export type SetFunctionReason =
-  "language" | "security" | "searchPath" | "unqualified"
+  "language" | "security" | "searchPath" | "unqualified" | "sqlBody"
 
 /**
  * Функція множини — `LANGUAGE sql SECURITY DEFINER SET search_path = ''` із
@@ -97,7 +97,10 @@ export type SetFunctionReason =
  * таблицями з RLS, тож виклик від імені користувача зациклив би політику, а
  * порожній search_path не лишає простору для підміни імен. Оболонку
  * `search_path` читає спільний `closedShellProblem`, щоб не дублювати його.
- * Тіло, яке не розбирається, не перевіряється: його відхилить тіньова база.
+ * Тіло стандарту SQL (`BEGIN ATOMIC`, `RETURN`) зв'язує імена під час
+ * створення з `search_path` сесії, тож компілятор його не судить і відхиляє
+ * (fail-closed). Рядкове тіло, яке не розбирається, не перевіряється: його
+ * відхилить тіньова база.
  */
 export function setFunctionClosedProblem(
   fn: FunctionNode,
@@ -124,6 +127,7 @@ export function setFunctionClosedProblem(
   ) {
     return "searchPath"
   }
+  if (fn.sql_body !== undefined) return "sqlBody"
   return bodyHasUnqualifiedRelation(fn, parse) ? "unqualified" : undefined
 }
 

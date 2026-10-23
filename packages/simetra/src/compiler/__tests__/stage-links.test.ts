@@ -409,6 +409,18 @@ describe("stage 5: scope set functions", () => {
       create("org_ids()", undefined, "SELECT m.org_id FROM org_member m"),
       "unqualified",
     ],
+    // Тіло стандарту SQL зв'язує некваліфіковане `org` за search_path сесії
+    // під час CREATE, тож перевірка відношень рядкового тіла його не бачить.
+    [
+      "a BEGIN ATOMIC body",
+      "CREATE FUNCTION public.org_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' BEGIN ATOMIC SELECT id FROM org; END;\n",
+      "sqlBody",
+    ],
+    [
+      "a RETURN body",
+      "CREATE FUNCTION public.org_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' RETURN (SELECT id FROM org LIMIT 1);\n",
+      "sqlBody",
+    ],
   ])("set function: %s", async (_name, bad, reason) => {
     const result = await buildScoped(bad + good("user_ids"))
     expect(codes(result)).toEqual([
