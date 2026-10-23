@@ -103,6 +103,32 @@ describe("roles", () => {
     })
   })
 
+  // Відповідність атрибута колонці `pg_roles` бачить лише Postgres: модульна
+  // таблиця форм подає рядок уже готовим.
+  it("reads a role attribute from its own catalog column", async () => {
+    await withRollback(async (client) => {
+      const name = testRoleName("command")
+      await client.query(`CREATE ROLE ${name} NOLOGIN NOINHERIT CREATEDB`)
+      const found = await rollbackDatabase(client).transaction(
+        TARGET[0]!.db,
+        "rollback",
+        (tx) => readPlatformRoles(tx, [name])
+      )
+      expect(found[0]?.attributes).toEqual({
+        login: false,
+        inherit: false,
+        superuser: false,
+        bypassRls: false,
+        createRole: false,
+        createDb: true,
+        replication: false,
+      })
+      expect(platformRoleRefusals([name], found, "target")).toMatchObject([
+        { code: "plan.platform-role-shape", params: { violation: "createDb" } },
+      ])
+    })
+  })
+
   it("the plan role of the local stack sees the command role", async () => {
     await withRollback(async (client) => {
       const found = await rollbackDatabase(client).transaction(

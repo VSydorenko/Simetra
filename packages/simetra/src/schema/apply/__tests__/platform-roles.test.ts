@@ -75,6 +75,30 @@ describe("platformRoleRefusals", () => {
       violation: "superuser",
     },
     {
+      case: "bypassRls",
+      found: [row({ attributes: { bypassRls: true } })],
+      codes: ["plan.platform-role-shape"],
+      violation: "bypassRls",
+    },
+    {
+      case: "createRole",
+      found: [row({ attributes: { createRole: true } })],
+      codes: ["plan.platform-role-shape"],
+      violation: "createRole",
+    },
+    {
+      case: "createDb",
+      found: [row({ attributes: { createDb: true } })],
+      codes: ["plan.platform-role-shape"],
+      violation: "createDb",
+    },
+    {
+      case: "replication",
+      found: [row({ attributes: { replication: true } })],
+      codes: ["plan.platform-role-shape"],
+      violation: "replication",
+    },
+    {
       case: "member-of",
       found: [row({ memberOf: ["authenticated"] })],
       codes: ["plan.platform-role-shape"],
