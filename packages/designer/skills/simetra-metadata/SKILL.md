@@ -291,7 +291,7 @@ them is a reference, so `rename` rewrites it and `delete` refuses while it is
 used; the compiler checks them (rules `users.*`, `rights.*`) and `explain`
 shows the derived rights contract, a role's contract and the rows of the
 rights projection. Forms of each field:
-`references/people-and-rights.md`.
+`references/people-and-rights.md` (also the system rights catalogs).
 
 ```json simetra:add
 {

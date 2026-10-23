@@ -190,7 +190,7 @@
 - Modify: `docs/superpowers/specs/2026-10-02-simetra-designer-design.md` (§3.2)
 - Modify: `docs/superpowers/plans/2026-10-15-p3-2b-residual-debt.md` (§5)
 
-- [ ] **Step 1:** Спека прав:
+- [x] **Step 1:** Спека прав:
   - Рх5 — дописати «обхід реалізовано розгортанням у явні рядки проєкції (усі дії й обсяги об'єктів рівня); окремої гілки обходу в SQL немає».
   - §4.6 — абзац: рівень системного довідника — його власний скоуп, один довідник на (роль, рівень); контейнерні призначення — у довіднику виду скоупу контейнера; до дії адміністрування прав системні об'єкти мають лише `read` і не підпадають під `grantAll` і `withAction`; кастомна роль на архетипі з `fullAccess` отримує його рядки й свої дельти, але носієм `fullAccess` не є.
   - §5.1 — рядок `any`: «скоупи, де користувач має право (`fullAccess` уже розгорнуто в рядки проєкції)»; рядки `own` і вимір: функції прав повертають лише скоупи з правом, мої id і значення виміру — окремі функції без гранту, умова — AND за §5.4; абзац «Імена» замінити остаточними: `simetra.rights_any`, `rights_own`, `rights_dim`, `rights_container`, `has_right`, `rights_mine`, `rights_my_scopes`, `rights_my_members`, `rights_dimension_values`, функції даних `rights_projection`, `rights_requires`, `rights_domain`, `rights_roles`; `authorize` і `rights_explain` лишаються формою.
@@ -201,11 +201,11 @@
   - §5.1 — «мої id учасника й мої скоупи — за видом скоупу: учасник одного виду не діє в іншому, хоч би які `id` мали їхні рядки».
   - §7 — у пункті про останній дієвий `fullAccess`: «носій — призначення самого архетипу з `fullAccess`; кастомна роль на ньому носієм не є».
   - §8 п.2 — «роль `simetra_command` (без DML) — з Прав-2»; новий рядок: «стеля агента (Рх12) і закріплення скоупу (Рх22) — з механізмом агентів, П4».
-- [ ] **Step 2:** Платформна спека §6.7 — речення «Ролі `simetra_runtime` і `simetra_command` з'являються разом із першим шляхом запису (команди, П4): до того DML у таблиці виду не має жодна роль застосунку…» переписати: «`simetra_command` з'являється з Правами-2 як роль без DML (її створює інструмент designer `roles`); гранти DML, `simetra_runtime` і перемикання ролі — з першим шляхом запису (команди, П4): до того DML у таблиці виду не має жодна роль застосунку…» (решту речення зберегти). §12: у рядку П3 таблиці віх «ролі `simetra_runtime` і `simetra_command` — з першим шляхом запису, П4» → «роль `simetra_command` — з Правами-2, `simetra_runtime` і гранти DML — з першим шляхом запису, П4»; п.5 порядку — «ролі `simetra_runtime` і `simetra_command`» → «роль `simetra_runtime`, гранти DML ролі `simetra_command`».
-- [ ] **Step 3:** Спека designer §3.2 — після пункту «Запис у базу»: «**Платформні ролі** (інструмент `roles`, `database: "write"`): створює відсутні кластерні ролі платформи (`PLATFORM_ROLES`) як `NOLOGIN NOINHERIT` на цілі й на сервері тіні, наявні лише звіряє; без `CREATEROLE` — відмова. `plan` ролей не створює: без них він відмовляє з порадою запустити `roles`; з небезпечною формою (атрибути, членство) — відмовляє, називаючи порушення й ручний `ALTER ROLE`/`REVOKE`, а `roles` на такій ролі повертає ту саму відмову, а не «наявна». Правило форми «жодного члена з `SET`» послаблює П4 для `simetra_runtime → simetra_command` (Р21).»
-- [ ] **Step 4:** Борг §5: позначити пункт «тіла `BEGIN ATOMIC`/`RETURN`» як закритий планом 2a1 (видалити пункт, правило лишається в коді й тесті); додати пункт «**Генератор віртуальних таблиць регістрів** — одразу `security_invoker` (спека прав §5.2); у Права-2 віртуальних таблиць немає».
-- [ ] **Step 5:** Run: `python3 scripts/check-doc-anchors.py && pnpm format:check` — код 0.
-- [ ] **Step 6: Commit**
+- [x] **Step 2:** Платформна спека §6.7 — речення «Ролі `simetra_runtime` і `simetra_command` з'являються разом із першим шляхом запису (команди, П4): до того DML у таблиці виду не має жодна роль застосунку…» переписати: «`simetra_command` з'являється з Правами-2 як роль без DML (її створює інструмент designer `roles`); гранти DML, `simetra_runtime` і перемикання ролі — з першим шляхом запису (команди, П4): до того DML у таблиці виду не має жодна роль застосунку…» (решту речення зберегти). §12: у рядку П3 таблиці віх «ролі `simetra_runtime` і `simetra_command` — з першим шляхом запису, П4» → «роль `simetra_command` — з Правами-2, `simetra_runtime` і гранти DML — з першим шляхом запису, П4»; п.5 порядку — «ролі `simetra_runtime` і `simetra_command`» → «роль `simetra_runtime`, гранти DML ролі `simetra_command`».
+- [x] **Step 3:** Спека designer §3.2 — після пункту «Запис у базу»: «**Платформні ролі** (інструмент `roles`, `database: "write"`): створює відсутні кластерні ролі платформи (`PLATFORM_ROLES`) як `NOLOGIN NOINHERIT` на цілі й на сервері тіні, наявні лише звіряє; без `CREATEROLE` — відмова. `plan` ролей не створює: без них він відмовляє з порадою запустити `roles`; з небезпечною формою (атрибути, членство) — відмовляє, називаючи порушення й ручний `ALTER ROLE`/`REVOKE`, а `roles` на такій ролі повертає ту саму відмову, а не «наявна». Правило форми «жодного члена з `SET`» послаблює П4 для `simetra_runtime → simetra_command` (Р21).»
+- [x] **Step 4:** Борг §5: позначити пункт «тіла `BEGIN ATOMIC`/`RETURN`» як закритий планом 2a1 (видалити пункт, правило лишається в коді й тесті); додати пункт «**Генератор віртуальних таблиць регістрів** — одразу `security_invoker` (спека прав §5.2); у Права-2 віртуальних таблиць немає».
+- [x] **Step 5:** Run: `python3 scripts/check-doc-anchors.py && pnpm format:check` — код 0.
+- [x] **Step 6: Commit**
 
 ```bash
 git add docs/superpowers/specs docs/superpowers/plans/2026-10-15-p3-2b-residual-debt.md
@@ -226,18 +226,18 @@ git commit -m "docs(spec): роль команд з Прав-2, системні
 **Interfaces:**
 - Produces: `PLATFORM_ROLES: { readonly command: "simetra_command" }`, `type PlatformRolePurpose = keyof typeof PLATFORM_ROLES`, `type GrantPurpose = ApiRolePurpose | PlatformRolePurpose` (T0); `executeGrants(signature: string, purposes: readonly GrantPurpose[], provider: DatabaseProvider): string[]`.
 
-- [ ] **Step 1: Write the failing tests (unit)**
+- [x] **Step 1: Write the failing tests (unit)**
   - `membership.test.ts`, `it("grants EXECUTE of membership functions to the command role")`: серед одиниць класу `grant` функції `<t>_member_scopes` є `GRANT EXECUTE ON FUNCTION … TO "simetra_command";`, а `REVOKE … FROM "simetra_command"` немає.
   - `function-execute.test.ts`: оголошена функція множини скоупу — те саме.
   - `platform-layer.test.ts`: `current_user_id` — `GRANT EXECUTE … TO "simetra_command"`; `platformSchemaGrants("supabase")` містить `GRANT USAGE ON SCHEMA "simetra" TO "simetra_command";`.
   - `platform-layer.test.ts`, `it("generated SQL never manages the command role itself")`: над усіма `sqlUnits` моделей `kitchenSink()` і `withRoles(...)` (після Задачі 6 — разом із функціями прав) жодного `CreateRoleStmt`, `AlterRoleStmt`, `GrantRoleStmt` і жодного табличного `GrantStmt` (`objtype` таблиці) з отримувачем `PLATFORM_ROLES.command`.
-- [ ] **Step 2:** Run: `pnpm --filter simetra test membership function-execute platform-layer` — FAIL.
-- [ ] **Step 3: Implement**
+- [x] **Step 2:** Run: `pnpm --filter simetra test membership function-execute platform-layer` — FAIL.
+- [x] **Step 3: Implement**
   - T0 `PLATFORM_ROLES`, `PlatformRolePurpose`, `GrantPurpose` поруч із `PROVIDER_API_ROLES`, реекспорт з `model/schemas/index.ts`; коментар «чому»: роль платформи, а не провайдера — її створює designer, а не провайдер.
   - `executeGrants`: призначення `command` дає `GRANT … TO PLATFORM_ROLES.command`; `REVOKE` і далі лише для ролей API без права (роль команд типових привілеїв провайдера не має).
   - Призначення `command` додати в `MEMBER_ROLES`, в оголошені функції множини скоупу (`function-execute.ts`), у `current_user_id` і в `platformSchemaGrants`.
-- [ ] **Step 4:** Run: `pnpm --filter simetra test membership function-execute platform-layer` — PASS; далі `pnpm --filter simetra test` — оновити знімки й точні очікування ACL, які змінив новий грант (зокрема знімок каталогу референсного домену), лише за переліком нових рядків `simetra_command`.
-- [ ] **Step 5:** Create `supabase/roles.sql` — ідемпотентний блок:
+- [x] **Step 4:** Run: `pnpm --filter simetra test membership function-execute platform-layer` — PASS; далі `pnpm --filter simetra test` — оновити знімки й точні очікування ACL, які змінив новий грант (зокрема знімок каталогу референсного домену), лише за переліком нових рядків `simetra_command`.
+- [x] **Step 5:** Create `supabase/roles.sql` — ідемпотентний блок:
 
 ```sql
 -- Роль команд платформи (спека прав §5.1, Р2a1-1): кластерна, тож її немає в
@@ -255,8 +255,8 @@ $$;
 ```
 
   У `provider-base-state.test.sql`: `plan(9)` → `plan(12)`; `has_role('simetra_command')`; `is((SELECT rolcanlogin OR rolinherit OR rolsuper OR rolbypassrls OR rolcreaterole OR rolcreatedb OR rolreplication FROM pg_roles WHERE rolname = 'simetra_command'), false, …)` (відсутня роль дає `NULL` і провал перевірки); `is((SELECT count(*) FROM pg_auth_members m JOIN pg_roles g ON g.oid = m.member WHERE m.member = to_regrole('simetra_command') OR (m.roleid = to_regrole('simetra_command') AND (m.inherit_option OR m.set_option OR NOT (g.rolsuper OR g.rolcreaterole))))::int, 0, …)` — роль не входить у жодну роль, а її член має лише `ADMIN` і сам керує ролями.
-- [ ] **Step 6:** (Рішення архітектора під час виконання: цей DB-тест пише Задача 2 — він залежить від `readPlatformRoles`; приріст `test:db` Задачі 9 рахує його там.) DB-тест `test/db/provider-roles.db.test.ts` (причина DB-рівня — `CREATE ROLE` і `createrole_self_grant` вирішує Postgres): `it("roles.sql creates an ADMIN-only role under postgres whatever createrole_self_grant says")` — у `withRollback` від `postgres`: `SET LOCAL createrole_self_grant = 'set, inherit'`, текст `supabase/roles.sql` з `simetra_command`, заміненим на `testRoleName("command")`, → `readPlatformRoles` (Задача 2) дає форму без відмов. Тест іде після Задачі 2 (той самий коміт, що й `readPlatformRoles`, або наступний). Run: `pnpm --filter simetra typecheck && pnpm --filter simetra lint` — код 0. pgTAP на піднятому стеку з'явиться після Задачі 2 Step 6 (роль створює `roles`); свіжий стек CI застосовує `roles.sql` сам — це доводить зелений job `db` (Задача 9). Якщо CI-pgTAP падає на `has_role` — стоп і звіт архітектору, обхідного кроку в CI не додавати.
-- [ ] **Step 7: Commit**
+- [x] **Step 6:** (Рішення архітектора під час виконання: цей DB-тест пише Задача 2 — він залежить від `readPlatformRoles`; приріст `test:db` Задачі 9 рахує його там.) DB-тест `test/db/provider-roles.db.test.ts` (причина DB-рівня — `CREATE ROLE` і `createrole_self_grant` вирішує Postgres): `it("roles.sql creates an ADMIN-only role under postgres whatever createrole_self_grant says")` — у `withRollback` від `postgres`: `SET LOCAL createrole_self_grant = 'set, inherit'`, текст `supabase/roles.sql` з `simetra_command`, заміненим на `testRoleName("command")`, → `readPlatformRoles` (Задача 2) дає форму без відмов. Тест іде після Задачі 2 (той самий коміт, що й `readPlatformRoles`, або наступний). Run: `pnpm --filter simetra typecheck && pnpm --filter simetra lint` — код 0. pgTAP на піднятому стеку з'явиться після Задачі 2 Step 6 (роль створює `roles`); свіжий стек CI застосовує `roles.sql` сам — це доводить зелений job `db` (Задача 9). Якщо CI-pgTAP падає на `has_role` — стоп і звіт архітектору, обхідного кроку в CI не додавати.
+- [x] **Step 7: Commit**
 
 ```bash
 git add packages/simetra supabase
@@ -286,7 +286,7 @@ git commit -m "feat(compiler): роль команд у T0, EXECUTE функці
   - `ensurePlatformRoles(dbs: ApplyDatabase, servers: readonly { server: "target" | "shadow"; db: DbConnection }[], names: readonly string[]): Promise<{ server: "target" | "shadow"; name: string; outcome: "created" | "present" }[] | { refusal: ApplyDiagnostic[] }>` (експорт `simetra/schema`): спершу на **всіх** серверах читальна перевірка `CREATEROLE` і форми наявних ролей (`platformRoleRefusals`), і лише без відмов — транзакції запису `CREATE ROLE` (Р2a1-3); наявна роль з порушеною формою — відмова, а не `present`;
   - коди `plan.platform-role-missing` (`{ role, server }`), `plan.platform-role-shape` (`{ role, server, violation }` — `violation`: назва атрибута чи `member:<роль>`; підказка — ручний `ALTER ROLE … NO<атрибут>` чи `REVOKE <роль> FROM …`, а не `simetra roles`), `roles.create-role-denied` (`{ role, server }`).
 
-- [ ] **Step 1: Write the failing test (unit)** `platform-roles.test.ts`, таблиця `it.each`:
+- [x] **Step 1: Write the failing test (unit)** `platform-roles.test.ts`, таблиця `it.each`:
 
 ```ts
 it.each([
@@ -308,18 +308,18 @@ it.each([
 ```
 
   (`row` — локальний будівник: усі `attributes` — `false`, `memberOf: []`, `members: []`, `over.attributes` зливається з типовими; `member` — `{ role: "migrator", admin: true, inherit: false, set: false, manager: true, ...over }`.) Кожен рядок `plan.platform-role-shape` перевіряє й `params.violation`: `"login"`, `"inherit"`, `"superuser"`, `"member-of:authenticated"`, `"member:migrator"`; і `it("names the first violation in a fixed order")` — роль з `login` і членом з `set` → `"login"`. Плюс `it("checks CREATEROLE on every server before creating anything")` над фейковою `ApplyDatabase`: ціль має `CREATEROLE`, тінь — ні → `refusal` з `roles.create-role-denied` (`server: "shadow"`), і жодної транзакції запису (жодного `CREATE ROLE`) на цілі; `it("reports a present role of the wrong shape instead of present")`: наявна роль з `LOGIN` → `refusal` з `plan.platform-role-shape`; і `it("creates once when target and shadow share a cluster")`: фейкова база, де обидва сервери бачать той самий стан ролей, → `[{ server: "target", outcome: "created" }, { server: "shadow", outcome: "present" }]` (після першого запису читання другого сервера бачить роль). Плюс `it("asks for nothing when the model needs no platform role")`: `platformRoleRefusals([], [], "target")` → `[]`; і `it("finds the command role in the apply state of a project without users")`: `requiredPlatformRoles(desiredForApply(<модель без «Користувачів»>).sql, parse)` → `["simetra_command"]` (гранти схеми `simetra` вставив `renderApplyState`), а проєкт з «Користувачами» — теж `["simetra_command"]` (гранти шару).
-- [ ] **Step 2:** Run: `pnpm --filter simetra test platform-roles` — FAIL.
-- [ ] **Step 3: Implement** `platform-roles.ts`; коди й тексти en/uk (`hint` відмови плану починається з «No plan was written.» / «План не записано.» і радить `simetra roles`); `checkPlatformRoles` — читальна транзакція цілі (`"rollback"`), за наявності `shadowBase` — ще одна до нього. Виклики: у `buildPlan` — до розгалуження промоції й до першого `withDesiredShadow` (відмова — `refused([...])`); у `diff` (`database-tools.ts`, поруч із `checkOwnerMembership`) і в репетиції `apply` (`apply-tools.ts`, до `withDesiredShadow`) — та сама функція.
-- [ ] **Step 4: Write the failing test (unit)** `schema/apply/__tests__/plan.test.ts` за наявним зразком фейкової бази (двигун — `Proxy`, що кидає на будь-який виклик): `it.each(["target", "shadow"])("refuses a plan when the command role is missing on the %s server")` — фейкова транзакція повертає порожній `readPlatformRoles` для названого сервера → `status: "refused"`, діагностика `plan.platform-role-missing` з `server`, `withDesiredShadow` не викликано; той самий кейс для плану з промоцією (`promotions` непорожні) — відмова до гілки промоції. `diff` і репетиція `apply` кличуть той самий `checkPlatformRoles` до тіні: їхні інструменти мають лише DB-тести (проєкт `unit` їх виключає), а відсутньої кластерної ролі на спільному стеку не створити, тож від'ємний шлях доводить unit-тест помічника, а додатний — наявні DB-тести `diff` і `apply` на стеку з роллю.
-- [ ] **Step 5:** Run: `pnpm --filter simetra test platform-roles plan messages` і `pnpm --filter @simetrajs/designer exec vitest run --project db apply-tools database-tools` — PASS.
-- [ ] **Step 6: DB test** — тут і DB-тест `provider-roles.db.test.ts` Задачі 1 Step 6 (перенесено). `roles-tool.db.test.ts` (причина DB-рівня — атрибути ролі й право `CREATEROLE` вирішує Postgres). Один `withRollback` на кейс, ім'я ролі — `testRoleName("command")`, тож сторож стеку слідів не бачить (роль відкочується); `ensurePlatformRoles` отримує `ApplyDatabase`, чия `transaction` віддає транзакцію тесту (як фейкова база в `plan.test.ts`), і один сервер-ціль:
+- [x] **Step 2:** Run: `pnpm --filter simetra test platform-roles` — FAIL.
+- [x] **Step 3: Implement** `platform-roles.ts`; коди й тексти en/uk (`hint` відмови плану починається з «No plan was written.» / «План не записано.» і радить `simetra roles`); `checkPlatformRoles` — читальна транзакція цілі (`"rollback"`), за наявності `shadowBase` — ще одна до нього. Виклики: у `buildPlan` — до розгалуження промоції й до першого `withDesiredShadow` (відмова — `refused([...])`); у `diff` (`database-tools.ts`, поруч із `checkOwnerMembership`) і в репетиції `apply` (`apply-tools.ts`, до `withDesiredShadow`) — та сама функція.
+- [x] **Step 4: Write the failing test (unit)** `schema/apply/__tests__/plan.test.ts` за наявним зразком фейкової бази (двигун — `Proxy`, що кидає на будь-який виклик): `it.each(["target", "shadow"])("refuses a plan when the command role is missing on the %s server")` — фейкова транзакція повертає порожній `readPlatformRoles` для названого сервера → `status: "refused"`, діагностика `plan.platform-role-missing` з `server`, `withDesiredShadow` не викликано; той самий кейс для плану з промоцією (`promotions` непорожні) — відмова до гілки промоції. `diff` і репетиція `apply` кличуть той самий `checkPlatformRoles` до тіні: їхні інструменти мають лише DB-тести (проєкт `unit` їх виключає), а відсутньої кластерної ролі на спільному стеку не створити, тож від'ємний шлях доводить unit-тест помічника, а додатний — наявні DB-тести `diff` і `apply` на стеку з роллю.
+- [x] **Step 5:** Run: `pnpm --filter simetra test platform-roles plan messages` і `pnpm --filter @simetrajs/designer exec vitest run --project db apply-tools database-tools` — PASS.
+- [x] **Step 6: DB test** — тут і DB-тест `provider-roles.db.test.ts` Задачі 1 Step 6 (перенесено). `roles-tool.db.test.ts` (причина DB-рівня — атрибути ролі й право `CREATEROLE` вирішує Postgres). Один `withRollback` на кейс, ім'я ролі — `testRoleName("command")`, тож сторож стеку слідів не бачить (роль відкочується); `ensurePlatformRoles` отримує `ApplyDatabase`, чия `transaction` віддає транзакцію тесту (як фейкова база в `plan.test.ts`), і один сервер-ціль:
   - `it("creates a missing role NOLOGIN NOINHERIT and is idempotent")`: `ensurePlatformRoles` з одним сервером-ціллю (транзакція тесту) і `[name]` → `[{ server: "target", name, outcome: "created" }]`; `readPlatformRoles` → усі `attributes` `false`, `memberOf: []`, `platformRoleRefusals` порожній (член-творець лише з `ADMIN` і з `CREATEROLE` форму не ламає); повторний виклик → `outcome: "present"`.
   - `it("creates the role with an ADMIN-only self grant whatever createrole_self_grant says")`: `SET LOCAL createrole_self_grant = 'set, inherit'` до виклику → після `ensurePlatformRoles` жоден рядок `members` не має `inherit` чи `set`. Мутація: прибрати з `ensurePlatformRoles` `SET LOCAL createrole_self_grant = ''` — тест червоніє (на стеку, де роль створює не суперкористувач; якщо сесія тесту — суперкористувач, тест робить `SET LOCAL ROLE` у тегову роль з `CREATEROLE`, створену в тій самій транзакції).
   - `it("refuses without CREATEROLE and creates nothing")`: після `SET LOCAL ROLE authenticated` виклик дає `refusal.code === "roles.create-role-denied"`; після `RESET ROLE` роль відсутня.
   - `it("the plan role of the local stack sees the command role")`: `readPlatformRoles(tx, [PLATFORM_ROLES.command])` → одна форма без проблем (`platformRoleRefusals` порожній) — доказ, що стек готовий.
-- [ ] **Step 7: Implement the tool** `roles-tool.ts`: `defineTool({ name: "roles", files: "read", database: "write", destructive: false, input: z.strictObject({}) })`; `ensurePlatformRoles(dbs, [{ server: "target", db: ціль }, …(shadowBase ? [{ server: "shadow", db: shadowBase }] : [])], Object.values(PLATFORM_ROLES))` — перевірка `rolcreaterole OR rolsuper` ролі `current_user` і форми наявних ролей на всіх серверах до будь-якого запису; далі на кожному сервері транзакція `SET LOCAL createrole_self_grant = ''` і ідемпотентний `DO` з `IF NOT EXISTS` (як у `roles.sql`) для кожної ролі: ціль і `shadowBase` можуть бути одним кластером, а ролі кластерні, тож роль, що вже з'явилася з першого сервера, дає `present` (Р2a1-3); `data` — перелік `{ server, name, outcome }`; відмова — `refusal` з кодом. Додати в `TOOLS` і `TOOL_NAMES`; опис англійською. Потім **один раз на піднятому стеку**, коли файла замка сторожа `$(node -p "require('os').tmpdir()")/simetra-db-stack.lock` немає (жоден DB-прогін не йде): `SIMETRA_DATABASE_URL=<рядок testDatabaseUrl(), типово локальний стек> node packages/designer/bin/simetra.mjs roles` (інструмент метаданих не читає) — результат `created` або `present`; після цього `pnpm exec supabase test db` — зелений.
-- [ ] **Step 8:** Run: `pnpm --filter @simetrajs/designer test cli roles-tool` (`roles-tool` — у проєкті `db`: `pnpm --filter @simetrajs/designer exec vitest run --project db roles-tool`) — PASS; `cli.test.ts` бачить інструмент `roles` у переліку й у тест-гейті розміру описів.
-- [ ] **Step 9: Commit**
+- [x] **Step 7: Implement the tool** `roles-tool.ts`: `defineTool({ name: "roles", files: "read", database: "write", destructive: false, input: z.strictObject({}) })`; `ensurePlatformRoles(dbs, [{ server: "target", db: ціль }, …(shadowBase ? [{ server: "shadow", db: shadowBase }] : [])], Object.values(PLATFORM_ROLES))` — перевірка `rolcreaterole OR rolsuper` ролі `current_user` і форми наявних ролей на всіх серверах до будь-якого запису; далі на кожному сервері транзакція `SET LOCAL createrole_self_grant = ''` і ідемпотентний `DO` з `IF NOT EXISTS` (як у `roles.sql`) для кожної ролі: ціль і `shadowBase` можуть бути одним кластером, а ролі кластерні, тож роль, що вже з'явилася з першого сервера, дає `present` (Р2a1-3); `data` — перелік `{ server, name, outcome }`; відмова — `refusal` з кодом. Додати в `TOOLS` і `TOOL_NAMES`; опис англійською. Потім **один раз на піднятому стеку**, коли файла замка сторожа `$(node -p "require('os').tmpdir()")/simetra-db-stack.lock` немає (жоден DB-прогін не йде): `SIMETRA_DATABASE_URL=<рядок testDatabaseUrl(), типово локальний стек> node packages/designer/bin/simetra.mjs roles` (інструмент метаданих не читає) — результат `created` або `present`; після цього `pnpm exec supabase test db` — зелений.
+- [x] **Step 8:** Run: `pnpm --filter @simetrajs/designer test cli roles-tool` (`roles-tool` — у проєкті `db`: `pnpm --filter @simetrajs/designer exec vitest run --project db roles-tool`) — PASS; `cli.test.ts` бачить інструмент `roles` у переліку й у тест-гейті розміру описів.
+- [x] **Step 9: Commit**
 
 ```bash
 git add packages/simetra packages/designer
@@ -337,7 +337,7 @@ git commit -m "feat(designer): інструмент roles і відмова пл
 **Interfaces:**
 - Produces: `SetFunctionReason = "language" | "security" | "searchPath" | "unqualified" | "sqlBody"`.
 
-- [ ] **Step 1: Write the failing test (unit)** `stage-links.test.ts`, `it.each` за формою тіла:
+- [x] **Step 1: Write the failing test (unit)** `stage-links.test.ts`, `it.each` за формою тіла:
 
 ```ts
 it.each([
@@ -351,10 +351,10 @@ it.each([
 ```
 
   (`setFunctionReasons` — будівник у файлі тесту над наявним фікстурним проєктом виду скоупу з `setFunction: { name }` і SQL-файлом функції; повертає `reason` діагностик `scope.set-function-signature`.)
-- [ ] **Step 2:** Run: `pnpm --filter simetra test stage-links` — FAIL (форма проходить).
-- [ ] **Step 3: Implement:** `setFunctionClosedProblem` повертає `"sqlBody"`, коли `fn.sql_body !== undefined` (перед перевіркою відношень); `dimension-functions.ts` бере причину з неї й не дублює перевірку; текст причини `sqlBody` в `MESSAGES["scope.set-function-signature"]` en/uk.
-- [ ] **Step 4:** Run: `pnpm --filter simetra test stage-links rights-dimension-functions messages` — PASS.
-- [ ] **Step 5: Commit**
+- [x] **Step 2:** Run: `pnpm --filter simetra test stage-links` — FAIL (форма проходить).
+- [x] **Step 3: Implement:** `setFunctionClosedProblem` повертає `"sqlBody"`, коли `fn.sql_body !== undefined` (перед перевіркою відношень); `dimension-functions.ts` бере причину з неї й не дублює перевірку; текст причини `sqlBody` в `MESSAGES["scope.set-function-signature"]` en/uk.
+- [x] **Step 4:** Run: `pnpm --filter simetra test stage-links rights-dimension-functions messages` — PASS.
+- [x] **Step 5: Commit**
 
 ```bash
 git add packages/simetra/src/compiler
@@ -381,17 +381,17 @@ git commit -m "fix(compiler): функція множини скоупу не п
   - `RightsContract.system?: "rightsRoles" | "roleAssignments"` (Р2a1-23);
   - `StandardColumnDef.ref` додає `"member"` (довідник членства виду скоупу таблиці; у нескоупленій — «Користувачі») і `"rightsRoles"` (довідник `rightsRoles` того самого рівня).
 
-- [ ] **Step 1: Write the failing tests (unit)** `rights-catalogs.test.ts` над `withRoles()`:
+- [x] **Step 1: Write the failing tests (unit)** `rights-catalogs.test.ts` над `withRoles()`:
   - `it("gives the roles catalog its standard columns and the delta tabular section")`: таблиця `org_roles` має колонки `archetype` (uuid, NOT NULL) і `order` (integer); таблиця `org_roles_delta` — `object`, `action`, `extent`, `dimension`, `effect` із CHECK `extent IN ('any', 'own', 'dimension')`, `effect IN ('allow', 'deny')` і `(extent = 'dimension') = (dimension IS NOT NULL)`; `origin.tabularSectionId === "<ORG_ROLES_ID>#delta"`; складений FK `(org_id, parent_id)` на `org_roles`.
   - `it.each` за рівнем `it("points the assignment subject at the member of the level")`: `org_role_assignments.subject` → FK `(org_id, subject)` на `org_member (org_id, id)`; `global_role_assignments.subject` → FK на `users (id)`; `custom_role` → складений FK `(org_id, custom_role)` на `org_roles (org_id, id)` / простий FK на `global_roles (id)`; CHECK `num_nonnulls(archetype, custom_role) = 1`; `container` без FK; індекси (скоуп, `subject`), (скоуп, `container`).
   - `it("system rights catalogs have only read and stay out of selectors")`: `contracts.rights` запису `OrgRoleAssignments` має дії `["read"]`; роль з `grantAll("any")` не має рядків проєкції на `OrgRoles` і `OrgRoleAssignments`, а явний `grant(objects(["Catalog","OrgRoleAssignments"]), ["read"], "any")` — має.
   - `it("a rights catalog belongs only to its level")` (Р2a1-20): роль `OrgMember` з явним `grant(objects(["Catalog","GlobalRoleAssignments"]), ["read"], "any")` → `rights.grant-level`; та сама роль з `grant(objects(["Catalog","Users"]), ["read"], "any")` (нескоуплений, але не довідник прав) — без помилки.
-- [ ] **Step 2:** Run: `pnpm --filter simetra test rights-catalogs` — FAIL.
-- [ ] **Step 3: Implement:** значення `role` у схемі (опис англійською, «at most one per role and level»); `CATALOG_ROLES.rightsRoles` / `.roleAssignments` з колонками за Р2a1-6, Р2a1-7, `actions: "read"`, `rightsSystem`; `actions(obj)` довідника бере `read` з ролі; `standardTabularSections` будує ТЧ з фізичним ім'ям `<physicalName довідника>_<physicalSuffix>`; стадія моделі будує стандартну ТЧ тим самим шляхом, що ТЧ з файлу (`rowScope`, `withScope`, `standardField`), а цілі `member` і `rightsRoles` резолвить за рівнем таблиці; `rightsContracts` заповнює `system` з `rightsSystem`; `expandRole` для `grantAll` і `withAction` пропускає контракти з `system`; `allowedActions` (тепер спільний експорт `expand.ts`) не дає довідника прав іншого рівня (Р2a1-20). Фікстури: шар `rolesAndSets()` отримує чотири системні довідники (опис структури файлів вище); `kitchen-sink.ts` — жодного: усі його рівні з ролями (глобальний, `org`, контейнер `Partner`) покриті джерелами `globalGrants`, `orgGrants`, `partnerGrants` (Р2a1-24), тож ратчет бачить поля джерел без помилок.
-- [ ] **Step 4:** Run: `UPDATE_JSON_SCHEMAS=1 pnpm --filter simetra test json-schema && pnpm --filter simetra test rights-catalogs rights-expand rights-roles field-ratchet reference-index-completeness` — PASS; рядки проєкції `rights-expand.test.ts` не змінилися. Поле `system` змінює лише записи системних довідників: точні очікування `rights-contract.test.ts` і вивід `explain.test.ts`, де є ці довідники, оновити саме цими рядками.
+- [x] **Step 2:** Run: `pnpm --filter simetra test rights-catalogs` — FAIL.
+- [x] **Step 3: Implement:** значення `role` у схемі (опис англійською, «at most one per role and level»); `CATALOG_ROLES.rightsRoles` / `.roleAssignments` з колонками за Р2a1-6, Р2a1-7, `actions: "read"`, `rightsSystem`; `actions(obj)` довідника бере `read` з ролі; `standardTabularSections` будує ТЧ з фізичним ім'ям `<physicalName довідника>_<physicalSuffix>`; стадія моделі будує стандартну ТЧ тим самим шляхом, що ТЧ з файлу (`rowScope`, `withScope`, `standardField`), а цілі `member` і `rightsRoles` резолвить за рівнем таблиці; `rightsContracts` заповнює `system` з `rightsSystem`; `expandRole` для `grantAll` і `withAction` пропускає контракти з `system`; `allowedActions` (тепер спільний експорт `expand.ts`) не дає довідника прав іншого рівня (Р2a1-20). Фікстури: шар `rolesAndSets()` отримує чотири системні довідники (опис структури файлів вище); `kitchen-sink.ts` — жодного: усі його рівні з ролями (глобальний, `org`, контейнер `Partner`) покриті джерелами `globalGrants`, `orgGrants`, `partnerGrants` (Р2a1-24), тож ратчет бачить поля джерел без помилок.
+- [x] **Step 4:** Run: `UPDATE_JSON_SCHEMAS=1 pnpm --filter simetra test json-schema && pnpm --filter simetra test rights-catalogs rights-expand rights-roles field-ratchet reference-index-completeness` — PASS; рядки проєкції `rights-expand.test.ts` не змінилися. Поле `system` змінює лише записи системних довідників: точні очікування `rights-contract.test.ts` і вивід `explain.test.ts`, де є ці довідники, оновити саме цими рядками.
 
   Фікстура однотенантного проєкту для Задач 6 і 8 — `singleTenantRights(overrides?)` у `fixtures/rights.ts`: без видів скоупу; «Користувачі»; `Project` (`rightsContainer: true`); документ `Task` з `containerBinding: "project"`; роль `ProjectLead` (`assignedOn: { container: Project }`, `read@any` на `Task`); `GlobalRoles`, `GlobalRoleAssignments`. Додається в цій задачі разом із системними довідниками.
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add packages/simetra
@@ -416,7 +416,7 @@ git commit -m "feat(model): системні довідники «Ролі» й 
   - `rightsLevelOf(level: CompiledRoleLevel, contracts: Pick<Contracts, "rights" | "assignmentSources">): RightsLevelKey | undefined` — рівень зберігання ролі (контейнер → вид скоупу контейнера чи глобальний; `everyUser` і рівень, покритий джерелом, → `undefined`, Р2a1-12);
   - коди-помилки `rights.system-catalog-missing` (`{ level, missing: "rightsRoles" | "roleAssignments" }`), `rights.system-catalog-duplicate` (`{ role, level, firstFile }`), `rights.system-catalog-scope` (`{ name, scopeKind }`), `rights.system-catalog-description` (`{ name }`), `rights.system-catalog-parallel` (`{ level, source }`); попередження `rights.adopted-source-unsupported` (`{ source }`, у `WARNING_RULES`).
 
-- [ ] **Step 1: Write the failing test (unit)** — одна таблиця `it.each` на `rights-catalogs.test.ts`:
+- [x] **Step 1: Write the failing test (unit)** — одна таблиця `it.each` на `rights-catalogs.test.ts`:
 
 | case | перевизначення `withRoles(...)` | очікувані коди (pointer) |
 | --- | --- | --- |
@@ -436,10 +436,10 @@ git commit -m "feat(model): системні довідники «Ролі» й 
 
   Плюс `it("lists the rights catalogs of every level")`: `contracts.rightsCatalogs` — два записи (глобальний, `org`) з таблицями `global_roles`, `global_roles_delta`, `global_role_assignments`, `org_roles`, `org_roles_delta`, `org_role_assignments`.
   Наявні тести з джерелами: `rights-roles.test.ts` (`withSources` — джерела є предметом тестів; його глобальне джерело покриває всі глобальні ролі, тож `withSources` прибирає з шару `GlobalRoles`/`GlobalRoleAssignments`, а орг-довідники лишає — рівень `org` змішаний) — кожна перевірка діагностик рахує й нове попередження поруч із власними кодами; `operations-roles.test.ts` (`BASE` з `assignmentSources` — джерела випадкові) — прибрати їх з `BASE`; `kitchen-sink.ts` і `rights-sources.test.ts` — без змін (попередження не ламає ратчет).
-- [ ] **Step 2:** Run: `pnpm --filter simetra test rights-catalogs` — FAIL.
-- [ ] **Step 3: Implement** перевірки на стадії, де живуть перевірки ролей 1b; перевірка функцій виміру додає таблиці (основні й ТЧ) довідників `rightsRoles` і `roleAssignments` до заборонених відношень тим самим транзитивним обходом; коди en/uk (підказка `missing` називає роль довідника, вид скоупу й `simetra create`); контракт — у `buildContracts` поруч із `roles`, з параметром `rightsCatalogs`, обчисленим до `sqlUnits` (Р2a1-22).
-- [ ] **Step 4:** Run: `pnpm --filter simetra test rights-catalogs rights-dimension-functions rights-roles operations-roles field-ratchet messages contracts explain` — PASS.
-- [ ] **Step 5: Commit**
+- [x] **Step 2:** Run: `pnpm --filter simetra test rights-catalogs` — FAIL.
+- [x] **Step 3: Implement** перевірки на стадії, де живуть перевірки ролей 1b; перевірка функцій виміру додає таблиці (основні й ТЧ) довідників `rightsRoles` і `roleAssignments` до заборонених відношень тим самим транзитивним обходом; коди en/uk (підказка `missing` називає роль довідника, вид скоупу й `simetra create`); контракт — у `buildContracts` поруч із `roles`, з параметром `rightsCatalogs`, обчисленим до `sqlUnits` (Р2a1-22).
+- [x] **Step 4:** Run: `pnpm --filter simetra test rights-catalogs rights-dimension-functions rights-roles operations-roles field-ratchet messages contracts explain` — PASS.
+- [x] **Step 5: Commit**
 
 ```bash
 git add packages/simetra/src/compiler
@@ -494,7 +494,7 @@ git commit -m "feat(compiler): перевірки й контракт систе
 
   `object` — мітка виду, `action` — слово словника чи UUID кастомної дії, `extent` — `any` / `own` / `dimension`, `level` — `everyUser` / `global` / `scope` / `container`, `level_id` — id виду скоупу чи об'єкта-контейнера.
 
-- [ ] **Step 1: Write the failing tests (unit)** `rights-functions.test.ts` над `withRoles(...)` (гранти — явні перевизначення тесту):
+- [x] **Step 1: Write the failing tests (unit)** `rights-functions.test.ts` над `withRoles(...)` (гранти — явні перевизначення тесту):
   - `it("renders no rights functions without roles")`: `rightsFiles()` → жодної одиниці `generator: "rights"`.
   - `it("declares every rights function with its signature, shape and grants")`: множина `identity` одиниць класу `function` дорівнює сигнатурам таблиці вище; для кожної функції множини й помічника закриту форму перевіряє власне дерево одиниці (`closedShellProblem` чи опція `search_path` дорівнює `''`, `sql_body` відсутній, `LANGUAGE sql`), бо `functionIdentity(…, [])` функцій з аргументами не знаходить, — і `SECURITY DEFINER`; для функцій даних — `IMMUTABLE`, без `SECURITY DEFINER`; гранти: `GRANT EXECUTE` рівно ролям колонки «`EXECUTE`» (`authenticated`, `service_role`, `simetra_command` чи нікому), `REVOKE … FROM PUBLIC` у кожної.
   - `it.each` `rows of the projection` — рядки `VALUES` тіла `rights_projection` (розбір дерева, не текст) як кортежі `[role, object, action, extent, dimension]`:
@@ -510,8 +510,8 @@ git commit -m "feat(compiler): перевірки й контракт систе
   - `it("reads every catalog it needs only through qualified relations")`: тіло `rights_mine` згадує таблиці `org_role_assignments`, `org_roles`, `org_roles_delta`, `global_role_assignments`, `global_roles`, `global_roles_delta` і функції `simetra.rights_my_scopes`, `simetra.rights_projection`, `simetra.rights_domain`, `simetra.rights_requires`, `simetra.rights_roles`; таблиці членства згадує **лише** тіло `rights_my_scopes` (Global Constraints).
   - `rights-dimensions.test.ts`: `it("resolves the subject target of a dimension relation")` — `regionDimension()` (`MemberRegion.member` → `OrgMember`) → `subjectTarget: { membership: ORG_KIND_ID }`; суб'єкт на «Користувачів» → `{ users: true }`.
   - `creation-order.test.ts`: `it("creates rights functions after the catalogs they read")` — ребро від `org_role_assignments` до `simetra.rights_mine`.
-- [ ] **Step 2:** Run: `pnpm --filter simetra test rights-functions creation-order` — FAIL.
-- [ ] **Step 3: Implement** `functions.ts`. Тіла — `closedFunction`-форма (як у `membership-functions.ts`, `dollarTag`). Семантика, яку тіла мусять дати (доводить DB-сценарій Задачі 8):
+- [x] **Step 2:** Run: `pnpm --filter simetra test rights-functions creation-order` — FAIL.
+- [x] **Step 3: Implement** `functions.ts`. Тіла — `closedFunction`-форма (як у `membership-functions.ts`, `dollarTag`). Семантика, яку тіла мусять дати (доводить DB-сценарій Задачі 8):
   - `rights_projection` — рядки `contracts.rightsProjection` плюс розгортання `fullAccess` (Р2a1-9) за правилами рівня `expandRole` (виділити `allowedActions` і `levelAllowsExtent` у спільний експорт `expand.ts`, а не копіювати); мітки — `RightsContract.kindLabel`; порядок рядків — порядок проєкції.
   - `rights_my_scopes` — для кожного довідника членства: `(scopeKindId, <скоуп>, <id учасника>)` рядків, де користувач = `(SELECT simetra.current_user_id())`, за тією самою умовою, що `member_scopes`.
   - `rights_mine` — CTE:
@@ -523,8 +523,8 @@ git commit -m "feat(compiler): перевірки й контракт систе
   - `rights_my_members(p_scope_kind)` — `member` із `rights_my_scopes()` з `scope_kind_id = p_scope_kind`.
   - `rights_dimension_values` — `UNION ALL` за `accessDimensions`, кожна гілка під `p_dimension = '<id>'`: зв'язок — значення рядків, де суб'єкт ∈ `rights_my_members(<вид з relation.subjectTarget>)` (суб'єкт-учасник) чи = `current_user_id()` (`subjectTarget.users`); дослівна функція — `SELECT * FROM <схема>.<функція>()`.
   - Гранти — `executeGrants` за таблицею сигнатур.
-- [ ] **Step 4:** Run: `pnpm --filter simetra test rights-functions creation-order platform-layer` — PASS.
-- [ ] **Step 5: Commit**
+- [x] **Step 4:** Run: `pnpm --filter simetra test rights-functions creation-order platform-layer` — PASS.
+- [x] **Step 5: Commit**
 
 ```bash
 git add packages/simetra/src/compiler
@@ -563,13 +563,13 @@ export function renderCondition(condition: RightsCondition): string
 
   Форми (Р2a1-10): скоуплений `any` — `[скоуп = ANY(rights_any(a, o))]`; `own` на носії-учаснику — `[носій = ANY(rights_my_members(<вид скоупу об'єкта>)), скоуп = ANY(rights_own(a, o))]`, на «Користувачах» — `[currentUser(носій), скоуп = ANY(rights_own(a, o))]`; вимір — `[носій = ANY(rights_dimension_values(d)), скоуп = ANY(rights_dim(a, o, d))]`; контейнер — `[прив'язка = ANY(rights_container(a, o, '<обсяг>', d))]` плюс умова власності чи виміру без гранту для внутрішніх `own`/вимір; нескоуплений — `any`: `[boolean has_right(a, o, 'any', NULL)]`, `own`: `[currentUser(носій), boolean has_right(a, o, 'own', NULL)]`, вимір: `[носій = ANY(rights_dimension_values(d)), boolean has_right(…, 'dimension', d)]`. Корінь скоупу — скоуп-колонка `id`. У 2a1 — основні таблиці й носії без шляху; шлях і ТЧ додає 2a2.
 
-- [ ] **Step 1: Write the failing test (unit)** `rights-predicates.test.ts`:
+- [x] **Step 1: Write the failing test (unit)** `rights-predicates.test.ts`:
   - `it("every predicate keeps at most one grant-dependent set (§5.4)")` — над `kitchen-sink.ts` і `withRoles` з усіма носіями 1a (`ownership: ["assignee"]`, `ownership: ["createdBy"]`, `access` на `region`, `containerBinding: "project"`): для кожного `RightsContract`, дії й предиката — `conditions.filter(grantDependent).length <= 1`, де `grantDependent` — `kind === "boolean"` чи `column` з `grantDependent: true`; і кожен відрендерений `renderCondition` розбирається libpg-query так: `column` і `currentUser` — `A_Expr` `=` з правою частиною `ARRAY(SubLink)` чи скалярним `SubLink`; `boolean` — голий `SubLink` (`EXPR_SUBLINK`); у жодному підзапиті немає посилань на колонки таблиці (некорельованість).
   - `it.each` форм (таблиця `[case, overrides, action, expected]`): `any` скоупленого `Task` → `["org_id = ANY (ARRAY(SELECT \"simetra\".\"rights_any\"('read', 'task')))"]`; `own` на `assignee` → дві умови в порядку (носій, скоуп); `own` на `createdBy` → `currentUser` першою; вимір `region` → значення виміру й `rights_dim`; контейнер `project` → `rights_container(…, 'any', NULL)`; нескоуплений `Announcement` `any` → одна умова `boolean`.
-- [ ] **Step 2:** Run: `pnpm --filter simetra test rights-predicates` — FAIL.
-- [ ] **Step 3: Implement** `predicates.ts` (лапки — `quoteIdent`, рядкові сталі — екранування літерала, як у генераторах).
-- [ ] **Step 4:** Run: `pnpm --filter simetra test rights-predicates` — PASS.
-- [ ] **Step 5: Commit**
+- [x] **Step 2:** Run: `pnpm --filter simetra test rights-predicates` — FAIL.
+- [x] **Step 3: Implement** `predicates.ts` (лапки — `quoteIdent`, рядкові сталі — екранування літерала, як у генераторах).
+- [x] **Step 4:** Run: `pnpm --filter simetra test rights-predicates` — PASS.
+- [x] **Step 5: Commit**
 
 ```bash
 git add packages/simetra/src/compiler
@@ -590,7 +590,7 @@ git commit -m "feat(compiler): будівник умов прав за прав�
 
 Причина DB-рівня (рядок у шапці файлу): множини, які повертають функції під `authenticated`, вирішує Postgres над даними — компілятор їх не бачить.
 
-- [ ] **Step 1: Write the test.** Два описи, кожен із власним розгортанням (Р2a1-18).
+- [x] **Step 1: Write the test.** Два описи, кожен із власним розгортанням (Р2a1-18).
 
   **Опис «with a scope kind».** `beforeAll`: компіляція `withRoles(...)` з грантами (`OrgMember` — набори фікстури; `OrgAdmin` — `fullAccess`; `ProjectLead` — `read@any` на `Task`; `Everyone` — `read@own` на «Користувачах»; `Task` з `ownership: ["assignee"]`, `access` на `region`, `containerBinding: "project"`), `renderDesiredState`; відкрити клієнта, `BEGIN`, розгорнути, засіяти: організації A, B; користувачі `u1` (учасник A, архетип `OrgMember`, `ProjectLead` на проєкті `P1`), `u2` (учасник A, кастомна роль `custom` на архетипі `OrgMember` з дельтами нижче), `u3` (учасник A, `OrgAdmin`), `u4` (учасник B без призначень), `u5` (глобальна `Support`), `u6` (учасник A, призначення `OrgMember` з позначкою видалення), `u7` (учасник A з призначенням `OrgMember`, недійсний: `invalid = true`), `u8` (учасник A і B, контейнер чужого тенанта в призначенні A), `u9` (кастомна роль на `OrgAdmin` з `deny read@any`), `u10` (кастомна роль на `OrgAdmin` з `deny read@any`, `deny update@own`, `deny post@any` — лишаються `post@own`, `update@any`, `read@own`), `u11`–`u14` (рівні, що не збігаються: призначення `Support` у `OrgRoleAssignments`; глобальне призначення `OrgAdmin`; глобальне призначення `ProjectLead` з контейнером `P1`; кастомна роль в `OrgRoles` на архетипі `Support`, призначена в A), `u15` (учасник A, кастомна роль з позначкою видалення), `u16` (учасник A, призначення `ProjectLead` з `container = NULL`), `u17` (учасник A і B, призначення `OrgMember` в A з `container = P2` тенанта B), `u18` (учасник A лише з `ProjectLead` на `P1`), `x1`, `x2` (Р2a1-26: учасники `team` з навмисно однаковими з A `id` кореня й учасника), `u19` (учасник A, призначення архетипу `Everyone` в `OrgRoleAssignments`), `u20` (учасник A, призначення архетипу `TeamLead` другого виду скоупу `team` в `OrgRoleAssignments`), `u21` (учасник A лише з `ProjectLead` на проєкті `P3` тенанта A з позначкою видалення). У u2 немає рядків `MemberRegion`. Для u20 опис додає перевизначенням `secondScopeKind()` (`fixtures/rights.ts`, новий будівник): вид скоупу `team` з коренем `Team`, членством `TeamMember`, довідниками `TeamRoles`/`TeamRoleAssignments`, довідником `TeamNote` і роллю `TeamLead` (`read@any` на `TeamNote`). `afterAll`: `ROLLBACK`, `client.end()`. Кожен кейс — `queryAs(client, "authenticated", { sub, role: "authenticated" }, sql)`:
 
@@ -629,9 +629,9 @@ git commit -m "feat(compiler): будівник умов прав за прав�
   `anon` — `queryAs(client, "anon", { role: "anon" }, "SELECT simetra.rights_any('read','task')")` → `{ code: "42501" }`.
 
   **Опис «without scope kinds».** `beforeAll` за `singleTenantRights()`: користувач `s1` з глобальним призначенням `ProjectLead` на `P1`, проєкти `P1`, `P2`. Кейс `single-tenant-container`: `has_right('read','task','any',NULL)` → `false`; `rights_container('read','task','any',NULL)` → `{P1}`.
-- [ ] **Step 2:** Run: `pnpm --filter simetra exec vitest run --project db rights-functions` — тест проходить на коді Задач 1–7; **мутаційний доказ** (вручну, без коміту): прибрати з `rights_mine` умову замикання — червоніє `closure`; лишити один прохід замикання — `closure-extents`; прибрати фільтр домену — `domain`; прибрати правило рівня довідника прав з домену — `global-catalog`; прибрати фільтр позначки видалення — `deletion-mark`, `custom-deletion-mark`; прибрати умову скоупу контейнера — `foreign-container`; прибрати вид із з'єднання призначень з `rights_my_scopes()` — `cross-kind-assignment`; прибрати фільтр виду в `rights_my_members` — `cross-kind-own`; inner join контейнера замінити на left join — `container-null`; брати колонку `container` для неконтейнерних рівнів — `container-ignored` (перший запит); прибрати `level = 'container'` з `rights_container` — `container-ignored` (другий запит, `{NULL}`); прибрати `level = 'scope'` з `rights_any` — `container-only`; прибрати `level <> 'container'` з `has_right` — `single-tenant-container`; прибрати збіг рівня зберігання архетипу (з'єднання кроку 1) — `level-mismatch`, `every-user-archetype`, `other-scope-kind`; прибрати `level = 'scope'` з `rights_own` — `container-only` (`rights_own`); прибрати `level = 'scope'` з `rights_dim` — `container-only` (`rights_dim`); прибрати умову `current_user_id() IS NOT NULL` гілки `everyUser` — `invalid-user`. Повернути код.
-- [ ] **Step 3:** Перенести `signUp` в `test/db/auth.ts`, імпортувати в обох наявних файлах; Run: `pnpm --filter simetra exec vitest run --project db access membership rights-functions` — PASS.
-- [ ] **Step 4: Commit**
+- [x] **Step 2:** Run: `pnpm --filter simetra exec vitest run --project db rights-functions` — тест проходить на коді Задач 1–7; **мутаційний доказ** (вручну, без коміту): прибрати з `rights_mine` умову замикання — червоніє `closure`; лишити один прохід замикання — `closure-extents`; прибрати фільтр домену — `domain`; прибрати правило рівня довідника прав з домену — `global-catalog`; прибрати фільтр позначки видалення — `deletion-mark`, `custom-deletion-mark`; прибрати умову скоупу контейнера — `foreign-container`; прибрати вид із з'єднання призначень з `rights_my_scopes()` — `cross-kind-assignment`; прибрати фільтр виду в `rights_my_members` — `cross-kind-own`; inner join контейнера замінити на left join — `container-null`; брати колонку `container` для неконтейнерних рівнів — `container-ignored` (перший запит); прибрати `level = 'container'` з `rights_container` — `container-ignored` (другий запит, `{NULL}`); прибрати `level = 'scope'` з `rights_any` — `container-only`; прибрати `level <> 'container'` з `has_right` — `single-tenant-container`; прибрати збіг рівня зберігання архетипу (з'єднання кроку 1) — `level-mismatch`, `every-user-archetype`, `other-scope-kind`; прибрати `level = 'scope'` з `rights_own` — `container-only` (`rights_own`); прибрати `level = 'scope'` з `rights_dim` — `container-only` (`rights_dim`); прибрати умову `current_user_id() IS NOT NULL` гілки `everyUser` — `invalid-user`. Повернути код.
+- [x] **Step 3:** Перенести `signUp` в `test/db/auth.ts`, імпортувати в обох наявних файлах; Run: `pnpm --filter simetra exec vitest run --project db access membership rights-functions` — PASS.
+- [x] **Step 4: Commit**
 
 ```bash
 git add packages/simetra/test/db
@@ -645,12 +645,12 @@ git commit -m "test(db): сценарій функцій прав під рол�
 **Files:**
 - Modify: `packages/designer/skills/simetra-metadata/SKILL.md`, `docs/ROADMAP.md`, `docs/superpowers/plans/2026-10-18-rights-2a1-command-role-functions.md` (позначки)
 
-- [ ] **Step 1:** Скіл споживача: системні довідники прав (ролі `rightsRoles`, `roleAssignments`, рівень — скоуп довідника, лише `read` до адміністрування прав), команда `simetra roles` перед першим `plan` на новій базі. Англійською.
-- [ ] **Step 2:** Run: `pnpm format:check && pnpm lint && pnpm typecheck && pnpm test` — код 0.
-- [ ] **Step 3:** Run: `pnpm metadata:check && python3 scripts/check-doc-anchors.py && .agents/skills/codebase-research/scripts/orient --plan docs/superpowers/plans/2026-10-18-rights-2a1-command-role-functions.md` — код 0, якорі живі.
-- [ ] **Step 4:** Повний `pnpm test:db` на одному SHA (у фоні; зовнішній таймаут не коротший за 45 хв): `/usr/bin/time -f %e pnpm test:db` — код 0; записати тривалість і порівняти з останнім прогоном до плану (приріст ≤ 45 с: два розгортання сценарію, `roles-tool`, `provider-roles`; більший — звіт архітектору з розкладом за файлами).
-- [ ] **Step 5:** ROADMAP — рядок прав: «Права-2a1 виконано»; позначки плану.
-- [ ] **Step 6: Commit**
+- [x] **Step 1:** Скіл споживача: системні довідники прав (ролі `rightsRoles`, `roleAssignments`, рівень — скоуп довідника, лише `read` до адміністрування прав), команда `simetra roles` перед першим `plan` на новій базі. Англійською.
+- [x] **Step 2:** Run: `pnpm format:check && pnpm lint && pnpm typecheck && pnpm test` — код 0.
+- [x] **Step 3:** Run: `pnpm metadata:check && python3 scripts/check-doc-anchors.py && .agents/skills/codebase-research/scripts/orient --plan docs/superpowers/plans/2026-10-18-rights-2a1-command-role-functions.md` — код 0, якорі живі.
+- [x] **Step 4:** Повний `pnpm test:db` на одному SHA (у фоні; зовнішній таймаут не коротший за 45 хв): `/usr/bin/time -f %e pnpm test:db` — код 0; записати тривалість і порівняти з останнім прогоном до плану (приріст ≤ 45 с: два розгортання сценарію, `roles-tool`, `provider-roles`; більший — звіт архітектору з розкладом за файлами).
+- [x] **Step 5:** ROADMAP — рядок прав: «Права-2a1 виконано»; позначки плану.
+- [x] **Step 6: Commit**
 
 ```bash
 git add packages/designer/skills docs/ROADMAP.md docs/superpowers/plans/2026-10-18-rights-2a1-command-role-functions.md
