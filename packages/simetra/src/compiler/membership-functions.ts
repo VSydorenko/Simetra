@@ -23,7 +23,7 @@ import { keyColumnOf, membershipUserOf } from "./stages/model"
  * (спека користувачів С9): планувальник обчислює його раз на запит, а не на
  * рядок.
  */
-const CURRENT_USER = `(SELECT ${quoteIdent(CURRENT_USER_FUNCTION.schema)}.${quoteIdent(CURRENT_USER_FUNCTION.name)}())`
+export const CURRENT_USER = `(SELECT ${quoteIdent(CURRENT_USER_FUNCTION.schema)}.${quoteIdent(CURRENT_USER_FUNCTION.name)}())`
 
 /** Мітки імен функцій членства — алгоритм імен Postgres від таблиці довідника. */
 const MY_MEMBER_LABEL = "my_member"
@@ -217,16 +217,32 @@ function memberScopesFunction(
   )
 }
 
-function closedFunction(
+/**
+ * Форма згенерованої sql-функції: `definer` — функція, яку кличе політика чи
+ * команда (`STABLE SECURITY DEFINER`); `data` — стала платформи без читання
+ * таблиць (`IMMUTABLE`, від імені того, хто кличе: її кличуть лише функції
+ * `definer` від власника, спека прав §5.1).
+ */
+export type ClosedFunctionShape = "definer" | "data"
+
+/**
+ * Закрита оболонка згенерованої sql-функції: `SET search_path = ''` і
+ * рядкове тіло під `$тег$`, а не тіло стандарту SQL, — його імена зв'язуються
+ * під час створення з `search_path` сесії.
+ */
+export function closedFunction(
   signature: string,
   returns: string,
-  body: string
+  body: string,
+  shape: ClosedFunctionShape = "definer"
 ): string {
   const tag = dollarTag(body)
+  const attributes =
+    shape === "definer" ? "STABLE SECURITY DEFINER" : "IMMUTABLE"
   return (
     `CREATE OR REPLACE FUNCTION ${signature}\n` +
     `RETURNS ${returns}\n` +
-    `LANGUAGE sql STABLE SECURITY DEFINER\n` +
+    `LANGUAGE sql ${attributes}\n` +
     `SET search_path = ''\n` +
     `AS ${tag}\n${body}\n${tag};`
   )

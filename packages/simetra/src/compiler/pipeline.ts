@@ -17,6 +17,7 @@ import { accessContracts, buildAccessUnits } from "./access-units"
 import {
   buildContracts,
   eventSubscriptionContracts,
+  membershipContracts,
   usersContractOf,
 } from "./contracts"
 import {
@@ -38,6 +39,7 @@ import {
   roleContracts,
   sourceContracts,
 } from "./rights/contracts"
+import { buildRightsUnits } from "./rights/functions"
 import {
   rightsCatalogContracts,
   rightsCatalogTables,
@@ -231,6 +233,18 @@ export async function runStages(
     stage2.references,
     physical
   )
+  const accessDimensions = accessDimensionContracts(
+    stage1.objects,
+    stage2.references,
+    physical,
+    stage1.project
+  )
+  const sources = sourceContracts(
+    stage1.objects,
+    stage2.references,
+    physical,
+    stage1.project
+  )
 
   const scopeKindIdByFile = new Map<string, string>()
   const rootIdByPointer = new Map<string, string>()
@@ -360,6 +374,25 @@ export async function runStages(
       parse
     ),
     ...buildSubscriptionUnits(eventSubscriptions, module, parse),
+    ...buildRightsUnits(
+      {
+        rights,
+        roles,
+        rightsProjection: projection.rows,
+        rightsCatalogs,
+        accessDimensions,
+        membership: membershipContracts(
+          stage1.objects,
+          physical,
+          stage1.project
+        ),
+        assignmentSources: sources.assignmentSources,
+      },
+      physical,
+      stage1.project.database.provider,
+      module,
+      parse
+    ),
   ].sort((a, b) => compareStrings(a.identity, b.identity))
   const nameById = new Map(stage1.objects.map((o) => [o.id ?? "", o.name]))
   const name = (id: string | undefined) => nameById.get(id ?? "") ?? ""
@@ -379,6 +412,8 @@ export async function runStages(
         : `the row mechanics of ${name(unit.ownerObjectId)}`,
     subscription: (unit) =>
       `the event subscription ${name(unit.ownerObjectId)}`,
+    // Функції прав спільні для всіх об'єктів — власника немає.
+    rights: (unit) => `the rights function ${unit.name}`,
   }
   const fileById = new Map(stage1.objects.map((o) => [o.id ?? "", o.file]))
   const triggerConflicts = subscriptionTriggerConflicts(
@@ -454,18 +489,8 @@ export async function runStages(
       access,
       eventSubscriptions,
       rights,
-      accessDimensionContracts(
-        stage1.objects,
-        stage2.references,
-        physical,
-        stage1.project
-      ),
-      sourceContracts(
-        stage1.objects,
-        stage2.references,
-        physical,
-        stage1.project
-      ),
+      accessDimensions,
+      sources,
       roles,
       projection.rows,
       rightsCatalogs

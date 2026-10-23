@@ -244,6 +244,8 @@ export interface MembershipContract {
   objectId: string
   scopeKindId: string
   table: QualifiedName
+  /** Ключ рядка членства — id учасника. */
+  keyColumn: string
   scopeColumn: string
   userColumn: string
   myMemberFunction: QualifiedName
@@ -339,6 +341,12 @@ export interface AccessDimensionContract {
           table: QualifiedName
           /** Колонка посилання на «Користувачі» чи на довідник членства. */
           subject: string
+          /**
+           * Ціль суб'єкта (Р2a1-27): «Користувачі» чи довідник членства виду
+           * скоупу — генератор функції значень знає, чий id порівнювати, не
+           * виводячи його з FK.
+           */
+          subjectTarget: { users: true } | { membership: string }
           /** Колонка посилання на довідник значень. */
           value: string
         }
@@ -838,17 +846,7 @@ export function buildContracts(
     eventSubscriptions: [...eventSubscriptions],
     personalData: personalDataContracts(objects, physical),
     ...withUsers(usersContractOf(objects, physical)),
-    membership: membershipsOf(objects, physical, project).map(
-      (m): MembershipContract => ({
-        objectId: m.object.id ?? "",
-        scopeKindId: m.scopeKind.id ?? "",
-        table: { schema: m.table.schema, name: m.table.name },
-        scopeColumn: m.scopeColumn,
-        userColumn: m.userColumn,
-        myMemberFunction: m.myMember,
-        ...(m.setFunction === undefined ? {} : { setFunction: m.setFunction }),
-      })
-    ),
+    membership: membershipContracts(objects, physical, project),
     rights: [...rights],
     accessDimensions: [...accessDimensions],
     membershipSources: [...sources.membershipSources],
@@ -857,6 +855,29 @@ export function buildContracts(
     rightsProjection: [...rightsProjection],
     rightsCatalogs: [...rightsCatalogs],
   }
+}
+
+/**
+ * Контракти членства — і для блоку контрактів, і для генератора функцій прав,
+ * який будується раніше за них (одне джерело).
+ */
+export function membershipContracts(
+  objects: readonly ParsedObject[],
+  physical: PhysicalSnapshot,
+  project: Pick<Project, "scopeKinds">
+): MembershipContract[] {
+  return membershipsOf(objects, physical, project).map(
+    (m): MembershipContract => ({
+      objectId: m.object.id ?? "",
+      scopeKindId: m.scopeKind.id ?? "",
+      table: { schema: m.table.schema, name: m.table.name },
+      keyColumn: m.keyColumn,
+      scopeColumn: m.scopeColumn,
+      userColumn: m.userColumn,
+      myMemberFunction: m.myMember,
+      ...(m.setFunction === undefined ? {} : { setFunction: m.setFunction }),
+    })
+  )
 }
 
 function withUsers(users: UsersContract | undefined): {

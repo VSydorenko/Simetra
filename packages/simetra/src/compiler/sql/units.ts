@@ -81,6 +81,7 @@ export type UnitGenerator =
   | "functionExecute"
   | "mechanics"
   | "subscription"
+  | "rights"
 
 /**
  * Чи тіло функцій генератора фіксоване платформою: таку функцію перевіряють
@@ -99,6 +100,7 @@ const FIXED_BODY: Readonly<Record<UnitGenerator, boolean>> = {
   // Лише тригери: тіло обробника — дослівна функція застосунку, не одиниця
   // генератора.
   subscription: true,
+  rights: true,
 }
 
 /**

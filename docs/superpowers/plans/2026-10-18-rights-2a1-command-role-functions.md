@@ -468,8 +468,8 @@ git commit -m "feat(compiler): перевірки й контракт систе
 - Test: `packages/simetra/src/compiler/__tests__/rights-functions.test.ts` (новий), `creation-order.test.ts`, `rights-dimensions.test.ts` (`subjectTarget`)
 
 **Interfaces:**
-- Consumes: `Contracts.rights`, `roles`, `rightsProjection`, `rightsCatalogs`, `accessDimensions`, `membership` (наявний `MembershipContract`), `executeGrants` із `command`, `allowedActions` / `levelAllowsExtent` (спільний експорт `expand.ts`, Задача 4).
-- Produces: `buildRightsUnits(contracts: Pick<Contracts, "rights" | "roles" | "rightsProjection" | "rightsCatalogs" | "accessDimensions" | "membership">, provider: DatabaseProvider, module: string, parse: SqlParser): SqlUnit[]` (Р2a1-22) (порожньо без `Role`), сталі імен `RIGHTS_FUNCTIONS` (`QualifiedName` кожної функції нижче). Сигнатури (усі в `simetra`):
+- Consumes: `Contracts.rights`, `roles`, `rightsProjection`, `rightsCatalogs`, `accessDimensions`, `membership` (`MembershipContract` + `keyColumn` — id учасника для `rights_my_scopes`), `assignmentSources` (для `rightsLevelOf`, рішення архітектора R3 до Задачі 5), `executeGrants` із `command`, `allowedActions` / `levelAllowsExtent` (спільний експорт `expand.ts`, Задача 4), фізичний знімок (колонки системних довідників і контейнерів — за `origin.standard` / `origin.scopeKindId`, як каже коментар `RightsCatalogContract`).
+- Produces: `buildRightsUnits(contracts: Pick<Contracts, "rights" | "roles" | "rightsProjection" | "rightsCatalogs" | "accessDimensions" | "membership" | "assignmentSources">, physical: PhysicalSnapshot, provider: DatabaseProvider, module: string, parse: SqlParser): SqlUnit[]` (Р2a1-22; `assignmentSources` і `physical` — уточнення виконання, вплив на спеку: немає) (порожньо без `Role`), сталі імен `RIGHTS_FUNCTIONS` (`QualifiedName` кожної функції нижче). Сигнатури (усі в `simetra`):
 
 | Функція | Повертає | Форма, `EXECUTE` |
 | --- | --- | --- |

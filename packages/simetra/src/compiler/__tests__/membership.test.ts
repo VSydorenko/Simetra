@@ -203,6 +203,7 @@ describe("membership", () => {
         objectId: uuid(81),
         scopeKindId: uuid(80),
         table: { schema: "app", name: "org_member" },
+        keyColumn: "id",
         scopeColumn: "org_id",
         userColumn: "user_id",
         myMemberFunction: { schema: "app", name: "org_member_my_member" },

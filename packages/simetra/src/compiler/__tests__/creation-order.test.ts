@@ -9,6 +9,7 @@ import {
 } from "../sql/dependencies"
 import { loadSqlParser } from "../sql/parse"
 import { withoutLocations } from "../sql/units"
+import { compileRights, withRoles } from "./fixtures/rights"
 import {
   acceptDebt,
   catalog,
@@ -194,6 +195,26 @@ describe("creation order", () => {
       ["table:simetra.identities", trigger],
       [currentUser, "function:public.org_member_member_scopes()"],
       [currentUser, "function:public.org_member_my_member(uuid)"],
+    ])
+  })
+
+  it("creates rights functions after the catalogs they read", async () => {
+    // Postgres перевіряє тіло `LANGUAGE sql` під час створення: таблиці й
+    // функції, які воно називає, мусять уже існувати.
+    const result = await compileRights(withRoles())
+    expect(result.diagnostics.filter((d) => d.severity === "error")).toEqual([])
+    const list = result.model!.creationOrder.map((node) =>
+      node.type === "unit"
+        ? node.identity
+        : `${node.type}:${node.schema}.${node.name}`
+    )
+    const mine = "function:simetra.rights_mine()"
+    expectBefore(list, [
+      ["table:public.org_role_assignments", mine],
+      ["table:public.org_roles_delta", mine],
+      ["function:simetra.rights_my_scopes()", mine],
+      ["function:simetra.rights_projection()", mine],
+      [mine, "function:simetra.has_right(text,text,text,uuid)"],
     ])
   })
 

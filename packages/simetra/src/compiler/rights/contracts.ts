@@ -42,6 +42,7 @@ import {
   headerReference,
   includedSets,
   isRightsContainer,
+  isUsers,
   ownershipOf,
   recordCustomAction,
   recordExtent,
@@ -259,15 +260,19 @@ export function accessDimensionContracts(
         ctx.byId.get(toId(`${relationAt}/object`, "dimension.relationObject"))
       )
       const table = must(mainTableOf(physical, must(object.id)))
-      const column = (field: "subject" | "value") =>
+      const field = (name: "subject" | "value") =>
         must(
           elementField(
             object,
-            toId(`${relationAt}/${field}`, "dimension.relationField"),
-            relation[field],
+            toId(`${relationAt}/${name}`, "dimension.relationField"),
+            relation[name],
             ctx
           )
-        ).column
+        )
+      const column = (name: "subject" | "value") => field(name).column
+      // Ціль суб'єкта стадія 4 вже звузила до «Користувачів» чи довідника
+      // членства виду зв'язку (Р2a1-27).
+      const subject = must(field("subject").target)
       return {
         dimensionId,
         name: dimension.name,
@@ -277,6 +282,9 @@ export function accessDimensionContracts(
             objectId: must(object.id),
             table: { schema: table.schema, name: table.name },
             subject: column("subject"),
+            subjectTarget: isUsers(subject)
+              ? { users: true }
+              : { membership: must(scopeKindOf(subject, references)) },
             value: column("value"),
           },
         },
