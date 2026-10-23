@@ -107,7 +107,7 @@
 | Р2a1-27 | `AccessDimensionContract.values.relation.subjectTarget: { users: true } \| { membership: <scopeKindId> }` — генератор гілки зв'язку виміру знає ціль суб'єкта, не виводячи її з FK | немає |
 | Р2a1-28 | Позначка видалення контейнера прав не відкликає: `rights_mine` не фільтрує контейнери за позначкою — зняти її може лише той, хто має права на контейнер; права зникають із вилученням контейнера | спека прав §4.6 |
 | Р2a1-29 | Носій власності знає свою ціль: `OwnershipContract.owner: { users: true } \| { membership: <scopeKindId> }` — з резолвленої цілі посилання (роль довідника «Користувачі» чи членство виду скоупу об'єкта), ніколи з назви виду чи таблиці; будівник умов обирає за ним форму `own` (Р2a1-10), не виводячи її з FK | немає |
-| Р2a1-22 | Контракти прав для генератора — `Pick<Contracts, "rights" \| "roles" \| "rightsProjection" \| "rightsCatalogs" \| "accessDimensions" \| "membership">`, обчислені до `sqlUnits`; `rightsCatalogs` передається в `buildContracts`, а не будується з `sqlUnits`, — без циклу в `pipeline.ts` | немає |
+| Р2a1-22 | Контракти прав для генератора — `Pick<Contracts, "rights" \| "roles" \| "rightsProjection" \| "rightsCatalogs" \| "accessDimensions" \| "membership" \| "assignmentSources" \| "users">` (`assignmentSources` — для `rightsLevelOf`, R3; `users` — Р2a1-30) і фізичний знімок, обчислені до `sqlUnits`; `rightsCatalogs` передається в `buildContracts`, а не будується з `sqlUnits`, — без циклу в `pipeline.ts` | немає |
 | Р2a1-30 | Без «Користувачів» функції прав не генеруються; 2d дає `current_user_id` без шару «Користувачів» (`sub::uuid`, С8) і вмикає їх | немає (§4.6 уже обмежує такі права прийнятим джерелом) |
 
 ## Відомі обмеження
