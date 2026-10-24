@@ -100,7 +100,13 @@ export function pendingCarrierCopies(
       const was = before?.columns.find((b) => b.name === c.name)
       if (!recreated && sameCopy(c.origin.copyOf, was?.origin.copyOf)) continue
       columns.push(c.name)
-      if (!recreated && was !== undefined && was.origin.copyOf === undefined)
+      // Без знімка таблиці (Р2b2-13) історії колонки не знаємо: невідоме —
+      // дані
+      if (
+        !recreated &&
+        (before === undefined ||
+          (was !== undefined && was.origin.copyOf === undefined))
+      )
         overwrites.push(c.name)
     }
     if (columns.length > 0)

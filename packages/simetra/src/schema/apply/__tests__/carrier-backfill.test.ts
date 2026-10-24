@@ -137,10 +137,24 @@ describe("pendingCarrierCopies", () => {
       expected: [{ table: CHECKLIST, columns: COPIES, overwrites: [] }],
     },
     {
+      // Р2b2-13: без знімка наявна колонка з іменем копії — колонка з даними
       case: "fresh",
       applied: undefined,
       created: created(),
-      expected: [{ table: CHECKLIST, columns: COPIES, overwrites: [] }],
+      expected: [{ table: CHECKLIST, columns: COPIES, overwrites: COPIES }],
+    },
+    {
+      // Колонку, створену планом, і без знімка заповнюють без дозволу
+      case: "fresh-recreated",
+      applied: undefined,
+      created: created({ columns: [`${CHECKLIST_TABLE}.assignee_id`] }),
+      expected: [
+        {
+          table: CHECKLIST,
+          columns: COPIES,
+          overwrites: COPIES.filter((c) => c !== "assignee_id"),
+        },
+      ],
     },
     {
       // Р2b2-12: колонку-копію вручну знято, дрейф прийнято — знімок каже
