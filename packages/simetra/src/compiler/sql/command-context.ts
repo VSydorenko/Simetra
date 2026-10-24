@@ -214,7 +214,15 @@ function optionWrite(
   )) {
     const set = (def.arg as { VariableSetStmt?: SetStatement } | undefined)
       ?.VariableSetStmt
-    if (def.defname === "set" && set !== undefined && setStatementWrite(set)) {
+    // `RESET ALL` опції лише прибирає власні налаштування функції (Р2b1-25):
+    // у сесію він нічого не пише, тож не відмова. Оператор `RESET ALL` у тілі
+    // судиться окремо і лишається забороненим.
+    if (
+      def.defname === "set" &&
+      set !== undefined &&
+      set.kind !== "VAR_RESET_ALL" &&
+      setStatementWrite(set)
+    ) {
       return "functionOption"
     }
   }
@@ -244,7 +252,10 @@ export function commandContextWrite(
     // загального обходу, який назвав би їх оператором `SET`.
     const alter = (tree as { AlterFunctionStmt?: { actions?: DefElemNode[] } })
       .AlterFunctionStmt
-    return optionWrite(alter?.actions) ?? treeWrite(tree)
+    if (alter !== undefined) {
+      return optionWrite(alter.actions) ?? treeWrite({ ...alter, actions: [] })
+    }
+    return treeWrite(tree)
   }
   const option = optionWrite(fn.options)
   if (option !== undefined) return option
@@ -257,7 +268,8 @@ export function commandContextWrite(
   )?.String?.sval?.toLowerCase()
   // Значення параметрів за замовчуванням обчислює виклик, а тіло
   // `BEGIN ATOMIC` уже розібране: обидва — частина дерева самого оператора.
-  const declared = treeWrite(tree)
+  // Опції судить `optionWrite`, тож у загальний обхід вони не входять.
+  const declared = treeWrite({ ...fn, options: [] })
   if (declared !== undefined || fn.sql_body !== undefined) return declared
   if (language === "sql") {
     const body = (

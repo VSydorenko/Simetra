@@ -562,6 +562,20 @@ const CASES: [name: string, steps: Step[]][] = [
     ],
   ],
   [
+    "section-owner-move",
+    [
+      // Р2b1-24: рядок ТЧ T2 до іншої задачі того самого тенанта. `update` у
+      // w1 є на обох (RLS пропускає), FK (A, T1) існує, а дія над коренем
+      // дозволяє в ТЧ усе — відмовляє лише незмінність власника.
+      step(
+        "w1",
+        ["update", "task", "T2"],
+        `UPDATE public.${CHECKLIST_TABLE} SET parent_id = {T1} WHERE id = {T2.l1}`,
+        effect("parent_id")
+      ),
+    ],
+  ],
+  [
     "create-root",
     [
       step(

@@ -232,7 +232,8 @@ command role and nobody else.
   clears it, while `markDeletion` may set or clear the mark. A custom action is
   not a transition action and cannot name a transition column in its header
   effects (`rights.custom-action-effects`, reason `transitionColumn`).
-- The ref key and the scope column of a row cannot be changed by any command;
+- The ref key and the scope column of a row cannot be changed by any command,
+  and a tabular-section row cannot be moved to another owner;
   a custom action that names the key in its header effects is refused
   (`rights.custom-action-effects`, reason `immutableColumn`).
 - A `beforeWrite` handler that, under a transition, changes another column makes
