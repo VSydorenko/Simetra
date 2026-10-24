@@ -2,9 +2,7 @@ import { beforeAll, describe, expect, it } from "vitest"
 import type { CompiledModel } from "simetra/compiler"
 import { hasEmptySearchPath, routineLanguage } from "../sql/closed-forms"
 import { executeGrants } from "../sql/execute-grants"
-import { loadSqlParser, type SqlParser } from "../sql/parse"
-import { loadPlpgsqlParser, type PlpgsqlParser } from "../sql/plpgsql"
-import { withoutLocations, type SqlUnit } from "../sql/units"
+import type { SqlUnit } from "../sql/units"
 import {
   COMMENT_FILE,
   compileRights,
@@ -12,14 +10,17 @@ import {
   rightsFiles,
   scopeRootCarrier,
 } from "./fixtures/rights"
+import {
+  bodyShape,
+  expectedFunction,
+  funcNames,
+  loadShapeParsers,
+  relationsOf,
+  tree,
+} from "./fixtures/sql-shape"
 import { uuid } from "./helpers"
 
-let parse: SqlParser
-let plpgsql: PlpgsqlParser
-beforeAll(async () => {
-  parse = await loadSqlParser()
-  plpgsql = await loadPlpgsqlParser()
-})
+beforeAll(loadShapeParsers)
 
 const carriers = (model: CompiledModel) =>
   model.sqlUnits.filter((u) => u.generator === "carriers")
@@ -29,76 +30,6 @@ function unit(model: CompiledModel, identity: string): SqlUnit {
   expect(found, identity).toBeDefined()
   return found!
 }
-
-function tree(sql: string): unknown {
-  const parsed = parse(sql)
-  if (!parsed.ok || parsed.statements.length !== 1)
-    throw new Error(`does not parse: ${sql}`)
-  return withoutLocations(parsed.statements[0]!.stmt)
-}
-
-/**
- * Тіло plpgsql як дерево операторів: вид, глибина, ціль, `RETURN` і дерево
- * розбору кожного виразу — форматування не впливає, а кожен запит
- * порівнюється цілим (зокрема `FOR SHARE` і ціль `INTO`).
- */
-function bodyShape(createFunction: string) {
-  const parsed = plpgsql(createFunction)
-  if (!parsed.ok || parsed.fn === undefined)
-    throw new Error(`body does not parse: ${createFunction}`)
-  return parsed.fn.statements.map((s) => ({
-    type: s.type,
-    depth: s.depth,
-    target: s.target,
-    returns: s.returns,
-    expressions: s.expressions.map((e) => ({
-      role: e.role,
-      into: e.into,
-      // Вираз (`parseMode` 2) — без `SELECT`, запит — цілий оператор.
-      tree: tree(e.parseMode === 0 ? e.query : `SELECT ${e.query}`),
-    })),
-  }))
-}
-
-/** Очікувана функція-тригер з тілом `body`. */
-const expectedFunction = (fn: string, body: string) =>
-  `CREATE FUNCTION ${fn}() RETURNS trigger LANGUAGE plpgsql AS $$\n${body}\n$$;`
-
-/** Вузли дерева з ключем `key`, у порядку обходу. */
-function nodes(value: unknown, key: string): unknown[] {
-  if (Array.isArray(value)) return value.flatMap((item) => nodes(item, key))
-  if (typeof value !== "object" || value === null) return []
-  const node = value as Record<string, unknown>
-  return [
-    ...(key in node ? [node[key]] : []),
-    ...Object.values(node).flatMap((child) => nodes(child, key)),
-  ]
-}
-
-/** Відношення дерева: кожен вузол з `relname`. */
-function relationsOf(
-  value: unknown
-): { schemaname?: string; relname: string }[] {
-  if (Array.isArray(value)) return value.flatMap(relationsOf)
-  if (typeof value !== "object" || value === null) return []
-  const node = value as Record<string, unknown>
-  return [
-    ...(typeof node.relname === "string"
-      ? [node as { schemaname?: string; relname: string }]
-      : []),
-    ...Object.values(node).flatMap(relationsOf),
-  ]
-}
-
-const funcNames = (shape: ReturnType<typeof bodyShape>) =>
-  nodes(
-    shape.map((s) => s.expressions.map((e) => e.tree)),
-    "FuncCall"
-  ).flatMap((call) =>
-    (call as { funcname: { String: { sval: string } }[] }).funcname.map(
-      (n) => n.String.sval
-    )
-  )
 
 describe("buildCarrierUnits", () => {
   it("derives copies on insert and on a changed link FOR SHARE, keeps them otherwise", async () => {
@@ -315,7 +246,8 @@ describe("buildCarrierUnits", () => {
 
   it("carrier function names collide like membership functions", async () => {
     // Ім'я функції носіїв обрізає ім'я таблиці до тих самих 46 байтів: у
-    // довгої основної таблиці й її ТЧ вони однакові.
+    // довгої основної таблиці й її ТЧ вони однакові. Так само збігаються
+    // імена функцій ефектів (Р2b1-11) — друга колізія.
     const long = "c".repeat(60)
     const result = await compileRights(
       policyDomain({
@@ -336,6 +268,9 @@ describe("buildCarrierUnits", () => {
       result.diagnostics
         .filter((d) => d.severity === "error")
         .map((d) => [d.code, d.file, d.pointer])
-    ).toEqual([["physical.function-duplicate", COMMENT_FILE, "/physicalName"]])
+    ).toEqual([
+      ["physical.function-duplicate", COMMENT_FILE, "/physicalName"],
+      ["physical.function-duplicate", COMMENT_FILE, "/physicalName"],
+    ])
   })
 })

@@ -84,6 +84,7 @@ export type UnitGenerator =
   | "rights"
   | "carriers"
   | "command"
+  | "effects"
 
 /**
  * Чи тіло функцій генератора фіксоване платформою: таку функцію перевіряють
@@ -105,6 +106,7 @@ const FIXED_BODY: Readonly<Record<UnitGenerator, boolean>> = {
   rights: true,
   carriers: true,
   command: true,
+  effects: true,
 }
 
 /**

@@ -407,7 +407,15 @@ describe("stage 4: integrity", () => {
       "catalogs/A/A.meta.json": catalog("A", { physicalName: "shared" }),
       "documents/B/B.meta.json": document("B", { physicalName: "shared" }),
     })
+    // Імена похідних функцій від таблиці (тут — функції ефектів, Р2b1-11)
+    // теж збігаються.
     expect(result.diagnostics).toEqual([
+      expect.objectContaining({
+        code: "physical.function-duplicate",
+        severity: "error",
+        file: "documents/B/B.meta.json",
+        pointer: "/physicalName",
+      }),
       expect.objectContaining({
         code: "physical.table-duplicate",
         severity: "error",

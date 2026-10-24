@@ -9,7 +9,12 @@ import {
 } from "../sql/dependencies"
 import { loadSqlParser } from "../sql/parse"
 import { withoutLocations } from "../sql/units"
-import { compileRights, policyDomain, withRoles } from "./fixtures/rights"
+import {
+  compileRights,
+  policyDomain,
+  withRoles,
+  writeRoles,
+} from "./fixtures/rights"
 import {
   expectClean,
   acceptDebt,
@@ -270,6 +275,38 @@ describe("creation order", () => {
         name,
       }))
     )
+  })
+
+  it("creates the effects function after the context function and the owner table", async () => {
+    // Тіла plpgsql граф не читає: функцію контексту й таблицю власника рядка
+    // ТЧ тригер ефектів називає явними ребрами `requires`.
+    const result = await compileRights(policyDomain(writeRoles()))
+    expectClean(result)
+    const list = result.model!.creationOrder.map((node) =>
+      node.type === "unit"
+        ? node.identity
+        : `${node.type}:${node.schema}.${node.name}`
+    )
+    const current = "function:simetra.command_current()"
+    const section = "function:public.task_checklist_simetra_effects()"
+    const main = "function:public.task_simetra_effects()"
+    expectBefore(list, [
+      [current, main],
+      [current, section],
+      [section, "trigger:public.task_checklist.task_checklist_simetra_effects"],
+      [
+        section,
+        "trigger:public.task_checklist.task_checklist_simetra_effects_update",
+      ],
+      [main, "trigger:public.task.task_simetra_effects"],
+    ])
+    const requires = (identity: string) =>
+      result.model!.sqlUnits.find((u) => u.identity === identity)?.requires
+    expect(requires(section)).toEqual([
+      { type: "table", schema: "public", name: "task" },
+      { type: "unit", identity: current },
+    ])
+    expect(requires(main)).toEqual([{ type: "unit", identity: current }])
   })
 
   it("extensions come before everything", async () => {

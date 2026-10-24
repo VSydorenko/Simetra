@@ -7,6 +7,7 @@ import {
   versionColumn,
   type AttributeCase,
   type DatabaseProvider,
+  type PhysicalColumn,
   type PhysicalSnapshot,
   type PhysicalTable,
 } from "simetra/model"
@@ -59,16 +60,34 @@ export function mechanicsStandardNames(
 }
 
 /**
+ * Змістові колонки таблиці (Р2b1-9, Р2b1-15): поза механікою, копіями й
+ * генерованими. Механіку платформа примушує за будь-якої дії, копії пише
+ * лише вона, а генерована колонка випливає зі змістових (і умова
+ * `BEFORE`-тригера не може посилатися на її `NEW`). Одне джерело для умови
+ * `contentChangeCondition` і порівнянь тригера ефектів.
+ */
+export function contentColumns(
+  table: Pick<PhysicalTable, "columns">,
+  attributeCase: AttributeCase
+): PhysicalColumn[] {
+  const mechanics = mechanicsStandardNames(attributeCase)
+  return table.columns.filter(
+    (c) =>
+      c.origin.copyOf === undefined &&
+      c.generated === undefined &&
+      !mechanics.has(c.origin.standard ?? "")
+  )
+}
+
+/**
  * Умова «змінився зміст рядка» таблиці з копіями носіїв (спека прав §5.2,
  * Р2a2-19): `(<зміст змінився>) OR NOT (<копії змінилися>)`. Поширення копій
  * платформою — не зміна змісту: воно пише лише копії, тож придушується, а
  * звичайне перезбереження без змін (нічого не змінилося) поводиться, як на
  * будь-якій таблиці. Умова `BEFORE`-тригера рахується з `NEW` після
  * попередніх тригерів, але поширення пише лише копії за будь-якого порядку
- * тригерів, тож результат від порядку імен не залежить. Зміст — колонки поза
- * механікою, копіями й генерованими: умова `BEFORE`-тригера не може
- * посилатися на `NEW` генерованої колонки, а та випливає зі змістових.
- * Таблиця без копій умови не має.
+ * тригерів, тож результат від порядку імен не залежить. Зміст —
+ * `contentColumns`. Таблиця без копій умови не має.
  */
 export function contentChangeCondition(
   table: Pick<PhysicalTable, "columns">,
@@ -76,13 +95,6 @@ export function contentChangeCondition(
 ): string | undefined {
   const copies = carrierCopies(table)
   if (copies.length === 0) return undefined
-  const mechanics = mechanicsStandardNames(attributeCase)
-  const content = table.columns.filter(
-    (c) =>
-      c.origin.copyOf === undefined &&
-      c.generated === undefined &&
-      !mechanics.has(c.origin.standard ?? "")
-  )
   const changed = (columns: readonly { name: string }[]) =>
     columns
       .map(
@@ -90,7 +102,7 @@ export function contentChangeCondition(
           `(OLD.${quoteIdent(c.name)} IS DISTINCT FROM NEW.${quoteIdent(c.name)})`
       )
       .join(" OR ")
-  return `(${changed(content)}) OR NOT (${changed(copies)})`
+  return `(${changed(contentColumns(table, attributeCase))}) OR NOT (${changed(copies)})`
 }
 
 /**

@@ -31,6 +31,8 @@ import {
   membershipsOf,
 } from "./membership-functions"
 import { carrierFunctions } from "./rights/carrier-units"
+import { effectsFunctionName, effectsTables } from "./rights/effects-units"
+import { writesByCommand } from "./rights/facts"
 import {
   kindLabelOf,
   usersCatalogOf,
@@ -294,8 +296,11 @@ export interface RightsAction {
   name: string
   /** Замикання вимог без самої дії, відсортоване. */
   requires: string[]
-  /** `header` — фізичні колонки основної таблиці або "all". */
-  effects: { dml: Dml[]; header: "all" | string[]; tabularSections: boolean }
+  /**
+   * `header` — фізичні колонки основної таблиці, які дія може змінити:
+   * `"all"` метаданих контракт уже розгорнув (Р2b1-18).
+   */
+  effects: { dml: Dml[]; header: string[]; tabularSections: boolean }
   /**
    * Природні DML дії (Р2b1-7): `effects.dml` природної дії виду, інакше `[]`
    * (кастомна — завжди `[]`). Їх покриває політика «решти рядків».
@@ -596,6 +601,33 @@ export function mainTableOf(
   )
 }
 
+/**
+ * Ключ кореневої родини (Р2b1-4): колонка стандартного реквізиту `ref`, лише
+ * коли саме вона — одноколонковий первинний ключ основної таблиці; у ТЧ такої
+ * таблиці — колонка власника. Інакше (`singleton` чи колонка скоупу
+ * константи, регістр без ключа) родини немає: порівняння з `uuid` кореня там
+ * не мало б сенсу, а на `boolean` — не розгорнулося б. Одне джерело для
+ * політик запису й тригера ефектів.
+ */
+export function rootFamilyKey(
+  table: PhysicalTable,
+  main: PhysicalTable
+): string | undefined {
+  const key = main.primaryKey?.columns
+  const ref = main.columns.find((c) => c.origin.standard === "ref")
+  if (key?.length !== 1 || ref === undefined || key[0] !== ref.name) {
+    return undefined
+  }
+  if (table.origin.tabularSectionId === undefined) return ref.name
+  const parent = table.columns.find((c) => c.origin.standard === "parent")
+  if (parent === undefined) {
+    throw new Error(
+      `internal: tabular section ${table.schema}.${table.name} has no parent column`
+    )
+  }
+  return parent.name
+}
+
 function derivedTableOf(
   physical: PhysicalSnapshot,
   objectId: string,
@@ -763,6 +795,20 @@ export function derivedFunctions(
       object,
       fn,
       `${role === "derive" ? "carrier copies" : "carrier propagation"} of ${table.schema}.${table.name}`
+    )
+  }
+  // Функції ефектів (Р2b1-11) — з надлишком, на кожну таблицю з кореневою
+  // родиною об'єкта, що пише командою, незалежно від функцій прав: ролей
+  // стадія 4 не зважує, а зайве резервування лише звужує простір імен. Об'єкт
+  // без дії з DML (системні довідники прав) тригера не має ніколи, тож імені
+  // не резервує.
+  for (const { table } of effectsTables(physical)) {
+    const object = byId.get(table.origin.objectId)
+    if (object === undefined || !writesByCommand(object)) continue
+    add(
+      object,
+      effectsFunctionName(table),
+      `action effects of ${table.schema}.${table.name}`
     )
   }
   for (const object of objects) {

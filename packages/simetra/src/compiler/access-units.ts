@@ -17,6 +17,7 @@ import type { CompiledScopeKind } from "./compile"
 import {
   mainTableOf,
   qualified,
+  rootFamilyKey,
   type AccessContract,
   type Contracts,
   type QualifiedName,
@@ -437,7 +438,7 @@ function writePolicies(
       using: guard,
     }),
   ]
-  const key = rootKey(table, main)
+  const key = rootFamilyKey(table, main)
   const root =
     key === undefined
       ? undefined
@@ -490,26 +491,6 @@ function writePolicies(
     }
   }
   return policies
-}
-
-/**
- * Ключ кореневої родини (Р2b1-4): колонка стандартного реквізиту `ref`, лише
- * коли саме вона — одноколонковий первинний ключ основної таблиці; у ТЧ такої
- * таблиці — колонка власника. Інакше (`singleton` чи колонка скоупу
- * константи, регістр без ключа) родини немає: порівняння з `uuid` кореня там
- * не мало б сенсу, а на `boolean` — не розгорнулося б.
- */
-function rootKey(
-  table: PhysicalTable,
-  main: PhysicalTable
-): string | undefined {
-  const key = main.primaryKey?.columns
-  const ref = main.columns.find((c) => c.origin.standard === "ref")
-  if (key?.length !== 1 || ref === undefined || key[0] !== ref.name) {
-    return undefined
-  }
-  if (table.origin.tabularSectionId === undefined) return ref.name
-  return must(table.columns.find((c) => c.origin.standard === "parent")).name
 }
 
 /**

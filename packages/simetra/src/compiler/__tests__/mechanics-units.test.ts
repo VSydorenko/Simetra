@@ -5,6 +5,8 @@ import { executeGrants } from "../sql/execute-grants"
 import { platformFunctionSignatures, withoutLocations } from "../sql/units"
 import {
   buildMechanicsUnits,
+  contentChangeCondition,
+  contentColumns,
   MECHANICS_FUNCTION,
   mechanicsTriggerName,
 } from "../mechanics-units"
@@ -270,6 +272,31 @@ describe("buildMechanicsUnits", () => {
         "CREATE TRIGGER task_simetra_touch BEFORE INSERT OR UPDATE ON public.task FOR EACH ROW EXECUTE FUNCTION simetra.touch();"
       ),
     ])
+  })
+
+  it("content columns are one list for the condition and the effects", async () => {
+    // Р2b1-9, Р2b1-15: умову механіки й порівняння тригера ефектів дає один
+    // перелік — без механіки, копій і генерованих колонок.
+    const model = (await compileRights(policyDomain())).model!
+    const report = model.physical.tables.find((t) => t.name === "task_report")!
+    const content = contentColumns(report, "camelCase")
+    expect(content.map((c) => c.name)).toEqual([
+      "id",
+      "org_id",
+      "number",
+      "date",
+      "posted",
+      "deletion_mark",
+      "created_at",
+      "task_id",
+    ])
+    const changed = (columns: readonly { name: string }[]) =>
+      columns
+        .map((c) => `(OLD.${c.name} IS DISTINCT FROM NEW.${c.name})`)
+        .join(" OR ")
+    expect(contentChangeCondition(report, "camelCase")).toBe(
+      `(${changed(content)}) OR NOT (${changed([{ name: "task_id_assignee_id" }])})`
+    )
   })
 
   it("compile orders the trigger after its table and the function", async () => {
