@@ -1519,20 +1519,28 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     en: (p) =>
       p.reason === "noWrite"
         ? `Custom action "${p.action}" declares effects, but no standard action of the kind writes its rows`
-        : `Custom action "${p.action}" writes tabular sections, but the kind has none`,
+        : p.reason === "transitionColumn"
+          ? `Custom action "${p.action}" names a transition column in its header effects`
+          : `Custom action "${p.action}" writes tabular sections, but the kind has none`,
     uk: (p) =>
       p.reason === "noWrite"
         ? `Кастомна дія "${p.action}" оголошує ефекти, але жодна стандартна дія виду не пише його рядків`
-        : `Кастомна дія "${p.action}" пише табличні частини, а вид їх не має`,
+        : p.reason === "transitionColumn"
+          ? `Кастомна дія "${p.action}" називає колонку переходу в ефектах шапки`
+          : `Кастомна дія "${p.action}" пише табличні частини, а вид їх не має`,
     hint: {
       en: (p) =>
         p.reason === "noWrite"
           ? "Rows of this kind are written only by posting movements: declare no effects, or move the action to a kind that writes."
-          : "Drop tabularSections: true or declare the action on a kind with tabular sections.",
+          : p.reason === "transitionColumn"
+            ? "Transition columns (posted, deletion mark) change only through their standard actions: drop the column from the header."
+            : "Drop tabularSections: true or declare the action on a kind with tabular sections.",
       uk: (p) =>
         p.reason === "noWrite"
           ? "Рядки цього виду пишуть лише рухи проведення: не оголошуйте ефектів або перенесіть дію на вид із записом."
-          : "Приберіть tabularSections: true або оголосіть дію на виді з табличними частинами.",
+          : p.reason === "transitionColumn"
+            ? "Колонки переходів (проведення, позначка видалення) змінюють лише їхні стандартні дії: приберіть колонку з шапки."
+            : "Приберіть tabularSections: true або оголосіть дію на виді з табличними частинами.",
     },
   },
   "rights.requires-cycle": {

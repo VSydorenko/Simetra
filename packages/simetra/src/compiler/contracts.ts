@@ -296,6 +296,13 @@ export interface RightsAction {
   requires: string[]
   /** `header` — фізичні колонки основної таблиці або "all". */
   effects: { dml: Dml[]; header: "all" | string[]; tabularSections: boolean }
+  /**
+   * Природні DML дії (Р2b1-7): `effects.dml` природної дії виду, інакше `[]`
+   * (кастомна — завжди `[]`). Їх покриває політика «решти рядків».
+   */
+  natural: Dml[]
+  /** Дія-перехід: фізична колонка й напрям (факт реєстру). */
+  transition?: { column: string; from?: boolean; to?: boolean }
   extents: RightsExtent[]
 }
 
@@ -335,6 +342,11 @@ export interface RightsContract {
   scopeKindId?: string
   /** Стандартні дії в порядку реєстру, далі кастомні за `id`. */
   actions: RightsAction[]
+  /**
+   * Колонки переходів об'єкта (фізичні) зі значенням за замовчуванням, за
+   * іменем колонки. Їх змінює лише дія-перехід (Р2b1-18).
+   */
+  transitions: { column: string; default: string }[]
   /**
    * Носії власності (спека прав §4.2) у порядку файлу; непорожній перелік
    * додає обсяг `own` кожній дії.

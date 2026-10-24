@@ -33,6 +33,19 @@ export interface KindAction {
   /** Direct edges of the kind only, without the general `read` edge. */
   requires: readonly StandardAction[]
   effects: ActionEffects
+  /**
+   * Природна дія за DML: покриває `effects.dml` для рядків, що не є кореневими
+   * для дії команди (спека прав §3). Факт реєстру, а не гілка за видом:
+   * регістр не має `create`/`update`/`delete`, лише `write`, а константа
+   * вставляє через `update`. На кожен DML — щонайбільше одна така дія.
+   */
+  natural?: true
+  /**
+   * Дія-перехід: єдина колонка шапки, яку дія змінює, і напрям. Без `from`/`to`
+   * напрямку немає (`markDeletion` — в обидва боки). Колонку переходу не
+   * зачіпають ні `"all"`, ні кастомні дії.
+   */
+  transition?: { column: string; from?: boolean; to?: boolean }
 }
 
 /** The extent forms a kind can restrict an action to (rights contract). */
@@ -54,6 +67,7 @@ export const deleteAction: KindAction = {
   name: "delete",
   requires: [],
   effects: { dml: ["delete"], header: [], tabularSections: false },
+  natural: true,
 }
 
 export const markDeletionAction: KindAction = {
@@ -64,6 +78,7 @@ export const markDeletionAction: KindAction = {
     header: ["deletionMark"],
     tabularSections: false,
   },
+  transition: { column: "deletionMark" },
 }
 
 export function createAction(tabularSections: boolean): KindAction {
@@ -71,6 +86,7 @@ export function createAction(tabularSections: boolean): KindAction {
     name: "create",
     requires: [],
     effects: { dml: ["insert"], header: "all", tabularSections },
+    natural: true,
   }
 }
 
@@ -82,6 +98,7 @@ export function updateAction(
     name: "update",
     requires: [],
     effects: { dml, header: "all", tabularSections },
+    natural: true,
   }
 }
 
@@ -91,12 +108,14 @@ export const postAction: KindAction = {
   name: "post",
   requires: ["update"],
   effects: { dml: ["update"], header: ["posted"], tabularSections: false },
+  transition: { column: "posted", from: false, to: true },
 }
 
 export const unpostAction: KindAction = {
   name: "unpost",
   requires: ["post"],
   effects: { dml: ["update"], header: ["posted"], tabularSections: false },
+  transition: { column: "posted", from: true, to: false },
 }
 
 export const writeAction: KindAction = {
@@ -107,6 +126,7 @@ export const writeAction: KindAction = {
     header: "all",
     tabularSections: false,
   },
+  natural: true,
 }
 
 /** The reference vocabulary of a record kind: read plus the four writes. */

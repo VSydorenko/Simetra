@@ -745,6 +745,81 @@ export function scopeRootCarrier(): Layer {
   }
 }
 
+const REGION_NOTES_FILE =
+  "information-registers/RegionNotes/RegionNotes.meta.json"
+export const REGION_NOTES_TABLE = "region_notes"
+export const REGION_WRITER_ID = uuid(6733)
+export const RATE_TABLE = "rate"
+
+/**
+ * Незалежний регістр відомостей `RegionNotes` з обсягом виміру `region` і
+ * власна роль `RegionWriter` (`read`, `write`). Шар самодостатній:
+ * `withRoles` зливає файли поверхнево, тож умовного `include` між шарами
+ * немає.
+ */
+export function writableRegister(): Layer {
+  return {
+    [REGION_NOTES_FILE]: {
+      id: uuid(6730),
+      kind: "InformationRegister",
+      name: "RegionNotes",
+      physicalName: REGION_NOTES_TABLE,
+      kindLabel: REGION_NOTES_TABLE,
+      scope: "org",
+      access: [{ attribute: "region", dimension: "region" }],
+      dimensions: [
+        refAttribute(6731, "region", "region_id", ref("Catalog", "Region")),
+      ],
+      resources: [
+        {
+          id: uuid(6732),
+          name: "note",
+          physicalName: "note",
+          type: "String",
+          length: 200,
+        },
+      ],
+    },
+    [ROLE_FILE("RegionWriter")]: role(
+      REGION_WRITER_ID,
+      "RegionWriter",
+      { scopeKind: "org" },
+      {
+        grants: [
+          grant(
+            objects(["InformationRegister", "RegionNotes"]),
+            ["read", "write"],
+            { dimension: "region" }
+          ),
+        ],
+      }
+    ),
+  }
+}
+
+/**
+ * Нескоупована константа `Rate`: у глобальній ролі `Support` її `update`
+ * природний для вставки й оновлення (Р2b1-7).
+ */
+export function globalConstant(): Layer {
+  return {
+    "constants/Rate/Rate.meta.json": {
+      id: uuid(6734),
+      kind: "Constant",
+      name: "Rate",
+      physicalName: RATE_TABLE,
+      kindLabel: RATE_TABLE,
+      scope: "none",
+      type: "Numeric",
+      precision: 10,
+      scale: 2,
+    },
+    [ROLE_FILE("Support")]: {
+      grants: [grant(objects(["Constant", "Rate"]), ["read", "update"], "any")],
+    },
+  }
+}
+
 /** Перерахування — вид без контракту прав. */
 export function statusEnumeration() {
   return {

@@ -148,6 +148,21 @@ export const PROVIDER_API_ROLES: Readonly<
  * керує — лише дає їй `EXECUTE` функцій і `USAGE` схеми.
  */
 export const PLATFORM_ROLES = { command: "simetra_command" } as const
+
+/**
+ * Налаштування сесії, у якому `runCommand` передає контекст команди (спека
+ * прав §5.3): значення — JSON `CommandContext`. Ім'я одне для всіх
+ * провайдерів, тож літерала поза T0 немає.
+ */
+export const COMMAND_SETTING = "simetra.command"
+
+/** Контекст команди: дія, мітка кореневого об'єкта й UUID кореневого рядка. */
+export interface CommandContext {
+  /** Слово словника дій або UUID кастомної дії. */
+  action: string
+  object: string
+  root: string
+}
 /** Роль команд: виконує функції прав і команди, DML таблиць виду не має. */
 export type PlatformRolePurpose = keyof typeof PLATFORM_ROLES
 /** Отримувач гранту згенерованого SQL: роль API провайдера чи платформи. */

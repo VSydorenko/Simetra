@@ -11,7 +11,7 @@ import {
 import { mainTableOf } from "../contracts"
 import { diagnostic, type Diagnostic } from "../diagnostics"
 import { PROJECT_FILE, type ParsedObject } from "../stages/files"
-import type { ResolvedReference } from "../stages/identity"
+import { standardElementId, type ResolvedReference } from "../stages/identity"
 import type { ModelStageResult } from "../stages/model"
 import {
   carrierTarget,
@@ -67,6 +67,18 @@ export function checkRights(ctx: RightsCheckContext): Diagnostic[] {
     )
     const actions = customActionsOf(object)
     const custom = new Set(actions.map((a) => a.name))
+    // Колонки переходів — з `transition` стандартних дій виду (Р2b1-18).
+    const transitionIds = new Set(
+      def.actions(object.data).flatMap((a) =>
+        a.transition === undefined
+          ? []
+          : [
+              standardElementId(must(object.id), {
+                logicalName: a.transition.column,
+              }),
+            ]
+      )
+    )
     // Вид, жодна стандартна дія якого не пише (регістр накопичення,
     // підлеглий регістр відомостей), пишуть лише рухи проведення (§5.3):
     // ефект кастомної дії там відкрив би запис в обхід оболонки.
@@ -100,6 +112,15 @@ export function checkRights(ctx: RightsCheckContext): Diagnostic[] {
         )
       })
       diagnostics.push(...unknownHeader(object, action, index, ctx.references))
+      diagnostics.push(
+        ...transitionHeader(
+          object,
+          action,
+          index,
+          transitionIds,
+          ctx.references
+        )
+      )
       const effects = customActionEffects(action)
       if (!writes && effects.dml.length > 0) {
         diagnostics.push(
@@ -775,6 +796,34 @@ function unknownHeader(
           ),
         ]
   )
+}
+
+/**
+ * Кастомна дія не називає колонку переходу (Р2b1-18): інакше вона була б
+ * обхідною дорогою повз право `post`/`markDeletion`.
+ */
+function transitionHeader(
+  object: ParsedObject,
+  action: CustomAction,
+  index: number,
+  transitionIds: ReadonlySet<string>,
+  references: readonly ResolvedReference[]
+): Diagnostic[] {
+  const { header } = action.effects
+  if (header === undefined || header === "all") return []
+  return header.flatMap((_, at) => {
+    const target = headerReference(object, index, at, references)?.to.id
+    return target !== undefined && transitionIds.has(target)
+      ? [
+          diagnostic(
+            "rights.custom-action-effects",
+            object.file,
+            `/customActions/${index}/effects/header/${at}`,
+            { action: action.name, reason: "transitionColumn" }
+          ),
+        ]
+      : []
+  })
 }
 
 /**
