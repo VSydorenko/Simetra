@@ -1,12 +1,15 @@
 import { beforeAll, describe, expect, it } from "vitest"
 import {
+  applyChanges,
   compile,
   loadSqlParser,
+  promoteObject,
   type PromotionObject,
   type PromotionRecord,
   type SqlParser,
   unitSubjectKeys,
 } from "simetra/compiler"
+import { catalogFromSnapshot } from "simetra/model"
 import type {
   CatalogColumn,
   CatalogModel,
@@ -36,6 +39,13 @@ import {
   type PlanStep,
   type RenameIntent,
 } from "simetra/schema"
+import { uuid } from "../../../compiler/__tests__/helpers"
+import {
+  policyDomain,
+  promotableTag,
+  tagMapping,
+  writeRoles,
+} from "../../../compiler/__tests__/fixtures/rights"
 import { enumerations } from "../../__tests__/fixtures/e1-fixtures"
 
 /**
@@ -1447,6 +1457,39 @@ describe("access and permission items", () => {
     ])
   })
 
+  it("write rights policies of the command role are listed under access", async () => {
+    // Р2b1-12: політики запису ролі команд, яких прийнята таблиця не мала, —
+    // `extra … adds roles simetra_command` у пункті `access:<таблиця>`; код
+    // `addedRoles` не змінено, тест фіксує поведінку над справжнім виходом
+    const files = policyDomain(writeRoles(), promotableTag())
+    const before = (await compile(files)).model!
+    let n = 950_000
+    const result = await promoteObject(files, tagMapping(), {
+      schemaPath: (file, schemaFile) => `schemas-of/${file}/${schemaFile}`,
+      newId: () => uuid(++n),
+    })
+    expect(result.diagnostics).toEqual([])
+    const after = (await compile(applyChanges(files, result.changes))).model!
+    const catalogOf = (m: typeof after): CatalogModel => ({
+      tables: catalogFromSnapshot(m.physical).tables,
+      enumTypes: [],
+      units: m.sqlUnits.map((u) => ({
+        class: u.class,
+        identity: u.identity,
+        schema: u.schema,
+        name: u.name,
+        sql: u.sql,
+      })),
+    })
+    const changes = access(result.record!, catalogOf(before), catalogOf(after))
+    expect(changes.map((c) => `${c.table.schema}.${c.table.name}`)).toEqual([
+      "public.tag",
+    ])
+    expect(changes[0]!.policies).toContain(
+      "extra policy:public.tag.tag_update_root_any adds roles simetra_command"
+    )
+  })
+
   it("counts an adopted policy for public as the user role", () => {
     const policy = (name: string, sql: string) =>
       unit("policy", `policy:app.items.${name}`, name, sql)
@@ -2624,6 +2667,19 @@ describe("platformReplacements", () => {
         over?: Partial<PromotionRecord>,
         tables?: PhysicalTable[]
       ) => triggerGate(sql, units, over, tables).codes
+
+      it("an effects trigger is never a replacement of an adopted trigger", () => {
+        // Р2b1-12: тригер ефектів дії платформний, тож прийнятий тригер на всі
+        // події з функцією того самого імені ним не замінюється (fail-closed)
+        const EFFECTS_NAME =
+          "CREATE TRIGGER item_simetra_effects AFTER INSERT OR UPDATE OR DELETE ON app.item FOR EACH ROW EXECUTE FUNCTION app.item_simetra_effects()"
+        expect(
+          codesOf(
+            "CREATE TRIGGER a AFTER INSERT OR UPDATE OR DELETE ON app.item FOR EACH ROW EXECUTE FUNCTION app.item_simetra_effects()",
+            [MECHANICS, trigger("item_simetra_effects", EFFECTS_NAME)]
+          )
+        ).toEqual(MISSING)
+      })
 
       describe("on a table with carrier copies (Р2a2-20)", () => {
         const physicalColumn = (

@@ -4,6 +4,8 @@ import {
   carrierFunctionNames,
   carrierTriggerNames,
   contentChangeCondition,
+  effectsFunctionName,
+  effectsTriggerNames,
   mechanicsTriggerName,
   mechanicsUpdateTriggerName,
   statementTargets,
@@ -1156,7 +1158,15 @@ function triggerReplacement(
       sameFunction(t.function, carrierFns.derive)) ||
     ((t.name === carriers.propagate || t.name === carriers.propagateInsert) &&
       sameFunction(t.function, carrierFns.propagate))
-  const platform = (t: TriggerShape) => touch(t) || touchUpdate(t) || carrier(t)
+  // Тригери ефектів дії (Р2b1-12) теж платформні: тригер з їхнім іменем, що
+  // кличе функцію ефектів, прийнятого тригера не замінює
+  const effects = effectsTriggerNames({ schema: key.schema, name: table })
+  const effectsFn = effectsFunctionName({ schema: key.schema, name: table })
+  const effect = (t: TriggerShape) =>
+    (t.name === effects.all || t.name === effects.update) &&
+    sameFunction(t.function, effectsFn)
+  const platform = (t: TriggerShape) =>
+    touch(t) || touchUpdate(t) || carrier(t) || effect(t)
 
   // Механіка спрацьовує й на вставку — ширше за `moddatetime`, і це
   // посилення: дата й версія правильні й на вставці (спека промоції §8).

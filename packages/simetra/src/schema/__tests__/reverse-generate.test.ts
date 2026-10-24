@@ -26,7 +26,10 @@ import {
   project,
   uuid,
 } from "../../compiler/__tests__/helpers"
-import { policyDomain } from "../../compiler/__tests__/fixtures/rights"
+import {
+  policyDomain,
+  writeRoles,
+} from "../../compiler/__tests__/fixtures/rights"
 
 /** Зворотний генератор (план E2b, задача 3): рішення плану 3–8. */
 
@@ -1373,6 +1376,98 @@ describe("reverseGenerate", () => {
     expect(written).toContain("CREATE TRIGGER task_audit")
     expect(written).not.toContain("simetra_carriers")
     expect(written).not.toContain("simetra_touch")
+  })
+
+  it("recognizes effects triggers and functions as platform", async () => {
+    // Р2b1-12: тригери ефектів дії й функції контексту команди — платформні
+    // (генератори `effects` і `command`), як механіка й копії носіїв.
+    // Одиниці — справжній вихід генераторів над доменом із правами запису
+    const compiled = await compile(policyDomain(writeRoles()))
+    const platform = compiled.model!.sqlUnits.filter(
+      (u) => u.generator === "effects"
+    )
+    const names = new Set(platform.map((u) => u.name))
+    for (const label of ["simetra_effects", "simetra_effects_update"])
+      expect(
+        [...names].some((n) => n.endsWith(`_${label}`)),
+        label
+      ).toBe(true)
+    expect(new Set(platform.map((u) => u.class))).toEqual(
+      new Set(["function", "grant", "trigger"])
+    )
+    const AUDIT_FN =
+      "CREATE FUNCTION public.audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;"
+    const AUDIT =
+      "CREATE TRIGGER task_audit AFTER UPDATE ON public.task FOR EACH ROW EXECUTE FUNCTION public.audit();"
+    const result = await reverseGenerate(
+      model({
+        units: [
+          ...platform.map((u) => ({
+            class: u.class,
+            identity: u.identity,
+            schema: u.schema,
+            name: u.name,
+            sql: u.sql,
+          })),
+          ...units([AUDIT_FN, AUDIT].join("\n")),
+        ],
+      }),
+      options(new Map(), { defaultSchema: "public" })
+    )
+    const written = [...result.files.values()].join("\n")
+    expect(written).toContain("CREATE TRIGGER task_audit")
+    expect(written).not.toContain("simetra_effects")
+    expect(errors(result)).toEqual([])
+  })
+
+  it("introspect over a deployed write-rights layer writes nothing for command functions", async () => {
+    // Функції контексту команди — одиниці генератора `command`, як функції
+    // `rights`: їх описує збережена тека, тож вони не стають дослівним SQL
+    const kept = policyDomain(writeRoles())
+    const compiled = await compile(kept)
+    expect(compiled.diagnostics).toEqual([])
+    const layer = compiled.model!
+    expect(layer.sqlUnits.some((u) => u.generator === "command")).toBe(true)
+    const result = await reverseGenerate(
+      model({
+        tables: catalogFromSnapshot(layer.physical).tables,
+        units: layer.sqlUnits.map((u) => ({
+          class: u.class,
+          identity: u.identity,
+          schema: u.schema,
+          name: u.name,
+          sql: u.sql,
+        })),
+      }),
+      options(kept, {
+        name: "RightsApp",
+        defaultSchema: "public",
+        attributeCase: "camelCase",
+      })
+    )
+    expect(errors(result)).toEqual([])
+    const written = [...result.files.values()].join("\n")
+    expect(written).not.toContain("command_parsed")
+    expect(written).not.toContain("simetra_effects")
+  })
+
+  it("an effects-named trigger that calls another function is written", async () => {
+    // Fail-closed: ім'я тригера ефектів без власної функції — тригер таблиці
+    const FN =
+      "CREATE FUNCTION app.stamp() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;"
+    const NAMESAKE =
+      "CREATE TRIGGER note_simetra_effects AFTER UPDATE ON app.note FOR EACH ROW EXECUTE FUNCTION app.stamp();"
+    const result = await reverseGenerate(
+      model({
+        tables: [table("app", "note")],
+        units: units([FN, NAMESAKE].join("\n")),
+      }),
+      options()
+    )
+    expect(errors(result)).toEqual([])
+    expect(result.files.get("custom-tables/Note/Note.sql")).toContain(
+      NAMESAKE.slice(0, -1)
+    )
   })
 
   it("a grant shared with another function and a mechanics-named trigger on another function are written", async () => {
