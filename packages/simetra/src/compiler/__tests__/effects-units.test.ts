@@ -206,12 +206,17 @@ describe("buildEffectsUnits", () => {
     expect(fk.columns).toEqual(["org_id", "parent_id"])
     const body = [
       ...PREAMBLE,
-      // Скоуп рядка ТЧ незмінний (Р2b1-20); `parent_id` — ні: перенесення
-      // рядка в інший документ перевіряють політики запису.
+      // Скоуп рядка ТЧ (Р2b1-20) і його власник (Р2b1-24) незмінні: рядок
+      // не переходить ні до іншого тенанта, ні до іншого документа.
       ...raiseIf(
         "TG_OP = 'UPDATE' AND OLD.org_id IS DISTINCT FROM NEW.org_id",
         t,
         "org_id"
+      ),
+      ...raiseIf(
+        "TG_OP = 'UPDATE' AND OLD.parent_id IS DISTINCT FROM NEW.parent_id",
+        t,
+        "parent_id"
       ),
       "IF TG_OP = 'DELETE' AND NOT EXISTS (SELECT 1 FROM public.task WHERE org_id = OLD.org_id AND id = OLD.parent_id) THEN",
       "RETURN NULL;",
