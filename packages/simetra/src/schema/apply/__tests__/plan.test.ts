@@ -163,19 +163,20 @@ describe("buildPlan", () => {
     { case: "plan", promotion: false },
     { case: "plan with a promotion", promotion: true },
   ])(
-    "no backfill refusal and no read of the target for a new copy ($case)",
+    "carrier copy steps reach the footprint without a read of the target ($case)",
     async ({ promotion }) => {
       // Р2b2-7: у marker цілі колонки копій ТЧ `checklist` і `attachments` не
       // були копіями, а в кожній таблиці є рядок — план дає кроки даних
-      // копій, а не відмову, і ціль на рядки не читає. Фейк зупиняє план на
-      // зборі середовища; самі кроки доводить `carrier-backfill.test.ts`
+      // копій, а не відмову, і ціль на рядки не читає. Слід плану питає
+      // право `LOCK` на таблиці кроків: `checklist` і її джерело є, а
+      // `attachments`, яку план створює, кроку не має. Фейк зупиняє план на
+      // цьому читанні; самі кроки доводить `carrier-backfill.test.ts`
       const { before, desired, records } = promotion
         ? await promotedTag()
         : await samePolicyDomain()
       const target = await fakeTarget(before, {
         notCopies: [CHECKLIST_TABLE, ATTACHMENTS_TABLE],
       })
-      // План дійшов до збору середовища — відмови до нього не було
       await expect(
         buildPlan(
           fakeEngine([createTable(ATTACHMENTS_TABLE)]),
@@ -184,8 +185,11 @@ describe("buildPlan", () => {
           { target: { url: "postgres://target" } },
           records
         )
-      ).rejects.toBeInstanceOf(ReachedEnvironment)
-      expect(target.existsQueried).toEqual([])
+      ).rejects.toBeInstanceOf(ReachedLockRights)
+      const names = target.lockTables.map((t) => t.name)
+      expect(names).toContain(CHECKLIST_TABLE)
+      expect(names).toContain("task")
+      expect(names).not.toContain(ATTACHMENTS_TABLE)
     }
   )
 })
@@ -216,17 +220,17 @@ const emptyScratch: ApplyDatabase = {
     }),
 }
 
-/** Фейкова ціль дійшла до читання глобальних ADP збору середовища. */
-class ReachedEnvironment extends Error {}
+/** Фейкова ціль дійшла до читання права `LOCK` на таблиці сліду плану. */
+class ReachedLockRights extends Error {}
 
 const EMPTY_CATALOG: CatalogModel = { tables: [], enumTypes: [], units: [] }
 
 /**
  * Фейкова ціль Postgres 17 з marker `model`: колонки копій таблиць
  * `notCopies` у знімку marker — звичайні колонки. Відбиток і модель
- * каталогу збігаються з marker, тож гейт дрейфу пропускає; у кожній таблиці
- * є рядок. `existsQueried` — таблиці, які план перевірив на рядки. Читання
- * глобальних ADP кидає `ReachedEnvironment`.
+ * каталогу збігаються з marker, тож гейт дрейфу пропускає. Глобальних ADP
+ * немає, тож збір середовища копії не бере. `lockTables` — таблиці сліду, на
+ * які план питає право `LOCK`; це читання кидає `ReachedLockRights`.
  */
 async function fakeTarget(
   model: CompiledModel,
@@ -259,7 +263,7 @@ async function fakeTarget(
     platform_version: "0",
     plan_hash: "p",
   }
-  const existsQueried: string[] = []
+  const lockTables: Named[] = []
   const answer = (sql: string, params: readonly unknown[] = []): unknown[] => {
     if (sql.includes("pg_database"))
       return [{ major: 17, encoding: "UTF8", collate: "C", ctype: "C" }]
@@ -277,13 +281,14 @@ async function fakeTarget(
       }))
     if (sql.includes("AS session")) return [{ session: "app" }]
     if (sql.includes("surface_rel")) return [fingerprint]
-    // Читання глобальних ADP — перший запит збору середовища, що йде
-    // одразу за кроками копій: далі план фейкам не потрібен
-    if (sql.includes("pg_default_acl")) throw new ReachedEnvironment()
-    const exists = /^SELECT EXISTS \(SELECT 1 FROM (\S+)\)/.exec(sql)
-    if (exists !== null) {
-      existsQueried.push(exists[1]!)
-      return [{ found: true }]
+    // Факти `plpgsql_check`: розширення немає — план іде далі з
+    // діагностикою, а не падає
+    if (sql.includes('AS "checkSchemaTaken"')) return [{ installed: false }]
+    // Право `LOCK` на таблиці сліду читається вже після збору середовища:
+    // кроки копій до нього дійшли, далі план фейкам не потрібен
+    if (sql.includes("AS lockable")) {
+      lockTables.push(...(JSON.parse(params[0] as string) as Named[]))
+      throw new ReachedLockRights()
     }
     return []
   }
@@ -295,8 +300,10 @@ async function fakeTarget(
     extract: () => Promise.reject(new Error("no extract expected")),
   }
   const reader: ApplyDatabase = { transaction: (_db, _end, fn) => fn(tx) }
-  return { reader, existsQueried }
+  return { reader, lockTables }
 }
+
+type Named = { schema: string; name: string }
 
 const ENGINE = { name: "fake", version: "1" }
 
