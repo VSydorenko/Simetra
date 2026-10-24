@@ -79,6 +79,13 @@ export function checkRights(ctx: RightsCheckContext): Diagnostic[] {
             ]
       )
     )
+    // Незмінні колонки (Р2b1-9, Р2b1-20) — ключ `ref` і колонка скоупу. Шапка
+    // може назвати лише ключ: у кореня виду скоупу колонка скоупу і є `ref`,
+    // а власну колонку скоупу платформа додає без імені елемента, тож її
+    // назва в шапці — `rights.attribute-unknown`.
+    const immutableIds = new Set([
+      standardElementId(must(object.id), { logicalName: "ref" }),
+    ])
     // Вид, жодна стандартна дія якого не пише (регістр накопичення,
     // підлеглий регістр відомостей), пишуть лише рухи проведення (§5.3):
     // ефект кастомної дії там відкрив би запис в обхід оболонки.
@@ -113,11 +120,11 @@ export function checkRights(ctx: RightsCheckContext): Diagnostic[] {
       })
       diagnostics.push(...unknownHeader(object, action, index, ctx.references))
       diagnostics.push(
-        ...transitionHeader(
+        ...forbiddenHeader(
           object,
           action,
           index,
-          transitionIds,
+          { transitionIds, immutableIds },
           ctx.references
         )
       )
@@ -800,29 +807,42 @@ function unknownHeader(
 
 /**
  * Кастомна дія не називає колонку переходу (Р2b1-18): інакше вона була б
- * обхідною дорогою повз право `post`/`markDeletion`.
+ * обхідною дорогою повз право `post`/`markDeletion`. Не називає й незмінної
+ * колонки (Р2b1-23): тригер ефектів однаково відмовив би її зміну, тож
+ * декларація тихо нічого б не дала.
  */
-function transitionHeader(
+function forbiddenHeader(
   object: ParsedObject,
   action: CustomAction,
   index: number,
-  transitionIds: ReadonlySet<string>,
+  forbidden: {
+    transitionIds: ReadonlySet<string>
+    immutableIds: ReadonlySet<string>
+  },
   references: readonly ResolvedReference[]
 ): Diagnostic[] {
   const { header } = action.effects
   if (header === undefined || header === "all") return []
   return header.flatMap((_, at) => {
     const target = headerReference(object, index, at, references)?.to.id
-    return target !== undefined && transitionIds.has(target)
-      ? [
+    const reason =
+      target === undefined
+        ? undefined
+        : forbidden.transitionIds.has(target)
+          ? "transitionColumn"
+          : forbidden.immutableIds.has(target)
+            ? "immutableColumn"
+            : undefined
+    return reason === undefined
+      ? []
+      : [
           diagnostic(
             "rights.custom-action-effects",
             object.file,
             `/customActions/${index}/effects/header/${at}`,
-            { action: action.name, reason: "transitionColumn" }
+            { action: action.name, reason }
           ),
         ]
-      : []
   })
 }
 

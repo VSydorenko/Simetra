@@ -495,6 +495,44 @@ describe("rights contract", () => {
       )
     })
 
+    // Незмінну колонку тригер ефектів відмовляє за будь-якої дії (Р2b1-9,
+    // Р2b1-20), тож її назва в шапці — декларація, що тихо нічого не дає
+    // (Р2b1-23). Колонку скоупу шапка назвати не може: платформа додає її без
+    // імені елемента, а в кореня виду скоупу вона і є `ref`.
+    it.each([
+      [
+        "ref",
+        "rights.custom-action-effects",
+        { action: "stamp", reason: "immutableColumn" },
+      ],
+      [
+        "org",
+        "rights.attribute-unknown",
+        { attribute: "org", field: "customActions.effects.header" },
+      ],
+      [
+        "orgId",
+        "rights.attribute-unknown",
+        { attribute: "orgId", field: "customActions.effects.header" },
+      ],
+    ])(
+      "a custom action naming %s in its header is refused",
+      async (name, code, params) => {
+        const result = await compileRights(
+          policyDomain({
+            [TASK_FILE]: {
+              customActions: [
+                { id: uuid(7901), name: "stamp", effects: { header: [name] } },
+              ],
+            },
+          })
+        )
+        expect(
+          errors(result).map((d) => [d.code, d.pointer, d.params])
+        ).toEqual([[code, "/customActions/0/effects/header/0", params]])
+      }
+    )
+
     it("uniformExtents refuses differing extent sets", () => {
       const action = (extents: RightsAction["extents"]): RightsAction => ({
         action: "read",

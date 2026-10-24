@@ -182,6 +182,32 @@ describe("messages catalog", () => {
     }
   })
 
+  it("rights.custom-action-effects gives every reason its own text and hint", () => {
+    const reasons = [
+      "noWrite",
+      "transitionColumn",
+      "immutableColumn",
+      "noTabularSections",
+    ]
+    for (const locale of ["en", "uk"] as const) {
+      const texts = reasons.map((reason) =>
+        localize(
+          diagnostic("rights.custom-action-effects", "a.meta.json", "", {
+            action: "stamp",
+            reason,
+          }),
+          locale
+        )
+      )
+      expect(new Set(texts.map((t) => t.message)).size, locale).toBe(
+        reasons.length
+      )
+      expect(new Set(texts.map((t) => t.hint)).size, locale).toBe(
+        reasons.length
+      )
+    }
+  })
+
   it("renders every closed-form reason of a scope set function as a sentence", () => {
     const reasons: SetFunctionReason[] = [
       "language",
