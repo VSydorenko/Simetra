@@ -3,7 +3,12 @@ import {
   PLATFORM_SCHEMA,
   type DatabaseProvider,
 } from "simetra/model"
-import { qualified, type Contracts, type QualifiedName } from "../contracts"
+import {
+  isWriteAction,
+  qualified,
+  type Contracts,
+  type QualifiedName,
+} from "../contracts"
 import { compareStrings } from "../diagnostics"
 import { dollarTag } from "../movement-functions"
 import type { CreationNode } from "../sql/dependencies"
@@ -41,7 +46,7 @@ function actionPairs(rights: Contract["rights"]): [string, string][] {
   return rights
     .flatMap((contract) =>
       contract.actions
-        .filter((action) => action.effects.dml.length > 0)
+        .filter(isWriteAction)
         .map((action): [string, string] => [contract.kindLabel, action.action])
     )
     .sort((a, b) => compareStrings(a[0], b[0]) || compareStrings(a[1], b[1]))

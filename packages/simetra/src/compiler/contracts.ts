@@ -31,7 +31,7 @@ import {
   membershipsOf,
 } from "./membership-functions"
 import { carrierFunctions } from "./rights/carrier-units"
-import { effectsFunctionName, effectsTables } from "./rights/effects-units"
+import { effectsFunctionName } from "./rights/effects-names"
 import { writesByCommand } from "./rights/facts"
 import {
   kindLabelOf,
@@ -334,6 +334,20 @@ export interface OwnershipContract extends CarrierContract {
   owner: { users: true } | { membership: string }
 }
 
+/** Дія з записом (непорожній `effects.dml`): лише вона є командою. */
+export function isWriteAction(action: RightsAction): boolean {
+  return action.effects.dml.length > 0
+}
+
+/**
+ * Чи пише об'єкт командою: хоч одна дія з записом. Одна умова для політик
+ * запису, тригера ефектів і розбору контексту; її форма над реєстром для
+ * стадії 4 — `writesByCommand` (`rights/facts.ts`).
+ */
+export function writesByCommandContract(rights: RightsContract): boolean {
+  return rights.actions.some(isWriteAction)
+}
+
 /**
  * Контракт прав об'єкта (спека прав §3): дії з вимогами, ефектами й
  * обсягами. Його мають усі об'єкти видів з непорожнім `rightsExtents`; з
@@ -626,6 +640,34 @@ export function rootFamilyKey(
     )
   }
   return parent.name
+}
+
+/** Таблиця з тригером ефектів, її основна таблиця й ключ кореневої родини. */
+export interface EffectsTable {
+  table: PhysicalTable
+  main: PhysicalTable
+  key: string
+}
+
+/**
+ * Таблиці, на які лягає тригер ефектів незалежно від прав: основні таблиці з
+ * кореневою родиною (Р2b1-4) і їхні ТЧ. Спільні для генератора й
+ * резервування імен функцій стадії 4 (`derivedFunctions`, Р2b1-11).
+ */
+export function effectsTables(physical: PhysicalSnapshot): EffectsTable[] {
+  return physical.tables
+    .flatMap((table): EffectsTable[] => {
+      if (table.origin.part !== undefined) return []
+      const main = mainTableOf(physical, table.origin.objectId)
+      if (main === undefined) return []
+      const key = rootFamilyKey(table, main)
+      return key === undefined ? [] : [{ table, main, key }]
+    })
+    .sort(
+      (a, b) =>
+        compareStrings(a.table.schema, b.table.schema) ||
+        compareStrings(a.table.name, b.table.name)
+    )
 }
 
 function derivedTableOf(

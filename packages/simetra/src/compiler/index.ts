@@ -51,7 +51,7 @@ export {
 export {
   effectsFunctionName,
   effectsTriggerNames,
-} from "./rights/effects-units"
+} from "./rights/effects-names"
 export {
   grantTargetKeys,
   ownsTarget,

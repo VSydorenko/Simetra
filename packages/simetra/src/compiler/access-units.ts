@@ -18,6 +18,7 @@ import {
   mainTableOf,
   qualified,
   rootFamilyKey,
+  writesByCommandContract,
   type AccessContract,
   type Contracts,
   type QualifiedName,
@@ -365,11 +366,7 @@ export function buildAccessUnits(
       }
       // Похідна таблиця регістра пишеться лише механікою проведення, а
       // об'єкт без дії з DML запису команди не має (Р2b1-4).
-      if (
-        rightsOn &&
-        rights !== undefined &&
-        rights.actions.some((a) => a.effects.dml.length > 0)
-      ) {
+      if (rightsOn && rights !== undefined && writesByCommandContract(rights)) {
         const physicalTable = tableOf(physical, table)
         if (physicalTable.origin.part === undefined) {
           policies.push(

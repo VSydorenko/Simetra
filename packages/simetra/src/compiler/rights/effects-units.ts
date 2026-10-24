@@ -1,5 +1,4 @@
 import {
-  makeObjectName,
   quoteIdent,
   type AttributeCase,
   type DatabaseProvider,
@@ -8,8 +7,8 @@ import {
   type PhysicalTable,
 } from "simetra/model"
 import {
-  mainTableOf,
-  rootFamilyKey,
+  effectsTables,
+  writesByCommandContract,
   type Contracts,
   type QualifiedName,
   type RightsAction,
@@ -24,60 +23,8 @@ import type { SqlParser } from "../sql/parse"
 import { functionIdentity, generatedUnit, type SqlUnit } from "../sql/units"
 import { fieldForeignKey, sqlLiteral } from "../stages/model"
 import { COMMAND_FUNCTIONS } from "./command-units"
+import { effectsFunctionName, effectsTriggerNames } from "./effects-names"
 import { hasRightsFunctions } from "./functions"
-
-/** Мітки імен тригерів ефектів — алгоритм імен Postgres від таблиці. */
-const ALL_LABEL = "simetra_effects"
-const UPDATE_LABEL = "simetra_effects_update"
-
-/**
- * Імена тригерів ефектів на таблиці (Р2b1-8): `all` — на всі події (на
- * таблиці з копіями — на вставку й видалення), `update` — оновлення таблиці з
- * копіями. Алгоритм Postgres тримає мітку цілою, тож довга таблиця не дає
- * імені понад 63 байти, яке Postgres мовчки обрізав би.
- */
-export function effectsTriggerNames(table: QualifiedName): {
-  all: string
-  update: string
-} {
-  return {
-    all: makeObjectName(table.name, undefined, ALL_LABEL),
-    update: makeObjectName(table.name, undefined, UPDATE_LABEL),
-  }
-}
-
-/** Функція ефектів у схемі таблиці — одна для обох її тригерів. */
-export function effectsFunctionName(table: QualifiedName): QualifiedName {
-  return { schema: table.schema, name: effectsTriggerNames(table).all }
-}
-
-/** Таблиця з тригером ефектів, її основна таблиця й ключ кореневої родини. */
-export interface EffectsTable {
-  table: PhysicalTable
-  main: PhysicalTable
-  key: string
-}
-
-/**
- * Таблиці, на які лягає тригер ефектів незалежно від прав: основні таблиці з
- * кореневою родиною (Р2b1-4) і їхні ТЧ. Спільні для генератора й
- * резервування імен функцій стадії 4 (`derivedFunctions`, Р2b1-11).
- */
-export function effectsTables(physical: PhysicalSnapshot): EffectsTable[] {
-  return physical.tables
-    .flatMap((table): EffectsTable[] => {
-      if (table.origin.part !== undefined) return []
-      const main = mainTableOf(physical, table.origin.objectId)
-      if (main === undefined) return []
-      const key = rootFamilyKey(table, main)
-      return key === undefined ? [] : [{ table, main, key }]
-    })
-    .sort(
-      (a, b) =>
-        compareStrings(a.table.schema, b.table.schema) ||
-        compareStrings(a.table.name, b.table.name)
-    )
-}
 
 const q = quoteIdent
 const relation = (t: { schema: string; name: string }) =>
@@ -127,12 +74,7 @@ export function buildEffectsUnits(
   const units: SqlUnit[] = []
   for (const { table, main, key } of effectsTables(physical)) {
     const rights = rightsById.get(table.origin.objectId)
-    if (
-      rights === undefined ||
-      !rights.actions.some((a) => a.effects.dml.length > 0)
-    ) {
-      continue
-    }
+    if (rights === undefined || !writesByCommandContract(rights)) continue
     const unit = (
       sql: string,
       requires?: readonly CreationNode[]

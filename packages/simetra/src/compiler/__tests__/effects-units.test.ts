@@ -3,7 +3,7 @@ import { beforeAll, describe, expect, it } from "vitest"
 import type { CompiledModel } from "simetra/compiler"
 import { makeObjectName } from "simetra/model"
 import { contentChangeCondition, contentColumns } from "../mechanics-units"
-import { effectsTables } from "../rights/effects-units"
+import { effectsTables, writesByCommandContract } from "../contracts"
 import { writesByCommand } from "../rights/facts"
 import { hasEmptySearchPath, routineLanguage } from "../sql/closed-forms"
 import { executeGrants } from "../sql/execute-grants"
@@ -33,6 +33,7 @@ import {
   tree,
 } from "./fixtures/sql-shape"
 import { expectClean, uuid } from "./helpers"
+import { kitchenSink } from "./fixtures/kitchen-sink"
 
 let domain: CompiledModel
 beforeAll(async () => {
@@ -262,6 +263,33 @@ describe("buildEffectsUnits", () => {
         ),
       ])
     }
+  })
+
+  it("the registry and the contract forms of writing by command agree", async () => {
+    // Стадія 4 судить за реєстром (`writesByCommand`), генератори — за
+    // контрактом (`writesByCommandContract`): розбіжність дала б тригер без
+    // зарезервованого імені чи резерв без тригера.
+    const models = [
+      (
+        await compileRights(
+          policyDomain(writeRoles(), writableRegister(), globalConstant())
+        )
+      ).model!,
+      (await compileRights(kitchenSink())).model!,
+    ]
+    const seen = new Set<boolean>()
+    for (const model of models) {
+      const byId = new Map(model.objects.map((o) => [o.id, o]))
+      for (const contract of model.contracts.rights) {
+        const object = byId.get(contract.objectId)!
+        expect(writesByCommand(object), contract.kindLabel).toBe(
+          writesByCommandContract(contract)
+        )
+        seen.add(writesByCommandContract(contract))
+      }
+    }
+    // Обидві відповіді трапляються: системні довідники прав лише читаються.
+    expect([...seen].sort()).toEqual([false, true])
   })
 
   it("every table with effects has a reserved function name", async () => {
