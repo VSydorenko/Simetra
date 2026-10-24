@@ -106,17 +106,28 @@ describe("carrier copy locks", () => {
   afterAll(() => target.close(), 60_000)
 
   // `FOR SHARE` виведення копії конфліктує з блокуванням `UPDATE` власника:
-  // вставка не прочитає носія, який змінює незакомічена транзакція.
+  // вставка не прочитає носія, який змінює незакомічена транзакція. Власника
+  // тримає `FOR NO KEY UPDATE`: він сумісний з `FOR KEY SHARE` перевірки FK
+  // рядка ТЧ, тож чекання доводить саме `FOR SHARE` тригера, а не FK.
   it("inserting a tabular row waits for the owner row lock", async () => {
     const first = await session(url)
     const second = await session(url)
     try {
       await first.query("BEGIN")
       await first.query(
-        "UPDATE public.task SET assignee_id = $1 WHERE id = $2",
-        [ids.m1, ids.task]
+        "SELECT id FROM public.task WHERE id = $1 FOR NO KEY UPDATE",
+        [ids.task]
       )
       await second.query("SET lock_timeout = '200ms'")
+      // Передумова: блокування FK (`FOR KEY SHARE`) власника вільне
+      expect(
+        await errorCode(
+          second.query(
+            "SELECT id FROM public.task WHERE id = $1 FOR KEY SHARE",
+            [ids.task]
+          )
+        )
+      ).toBeUndefined()
       expect(
         await errorCode(
           second.query(
