@@ -3398,9 +3398,9 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "apply.replication-role": {
     en: (p) =>
-      `The apply transaction runs with session_replication_role = ${p.value}, and the promotion's data steps need origin: otherwise foreign key triggers do not fire and the written values bypass the reference checks. Nothing was written`,
+      `The apply transaction runs with session_replication_role = ${p.value}, and the plan's data steps need origin: otherwise foreign key triggers do not fire and the written values bypass the reference checks. Nothing was written`,
     uk: (p) =>
-      `Транзакція застосування має session_replication_role = ${p.value}, а кроки даних промоції потребують origin: інакше тригери зовнішніх ключів не спрацьовують, і записані значення обходять перевірку посилань. Нічого не записано`,
+      `Транзакція застосування має session_replication_role = ${p.value}, а кроки даних плану потребують origin: інакше тригери зовнішніх ключів не спрацьовують, і записані значення обходять перевірку посилань. Нічого не записано`,
     hint: {
       en: "Remove the session_replication_role setting of the database or the role (ALTER DATABASE … RESET / ALTER ROLE … RESET), then apply again.",
       uk: "Зніміть налаштування session_replication_role бази чи ролі (ALTER DATABASE … RESET / ALTER ROLE … RESET) і застосуйте знову.",
