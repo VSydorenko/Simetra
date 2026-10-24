@@ -208,6 +208,27 @@ the scope kind in `project.meta.json`) says that no role reads any object of
 that scope kind, so nobody will see their rows: grant `read` to a role or
 declare one with `fullAccess`.
 
+## Who writes what
+
+Kind tables are written **only by commands**: the write policies grant the
+command role and nobody else. The root row of a command is checked against the
+command's action right (`create`, `update`, `delete`, or a custom action's
+`requires`); every other row is a natural consequence of the DML, so it needs no
+right of its own.
+
+- A transition action (`post`, `markDeletion`, a custom action) changes only its
+  own header columns and never writes tabular sections. The ref key and the scope
+  column of a row cannot be changed by any command; transition columns (`posted`,
+  the deletion mark) change only through their own actions and only in their own
+  direction.
+- A `beforeWrite` handler that, under a transition, changes another column makes
+  the command fail. Put a computation done at posting into the command hook or
+  into the effects of a custom action.
+- Application SQL (subscription handlers, object-module functions, shared `sql/`
+  files) must not change `simetra.*` settings in any form (`set_config`,
+  `SET`/`RESET`, a function option, `pg_settings`): compiler error
+  `sql.command-context-write`. The command context belongs to the platform.
+
 ## Carrier copies
 
 A tabular section cannot be read by the carriers of its owner without a
