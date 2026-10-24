@@ -802,6 +802,7 @@ export const TASK_MARKER_ID = uuid(6722)
 export const PROJECT_WRITER_ID = uuid(6723)
 export const REASSIGN_ACTION_ID = uuid(6720)
 export const BULLETIN_TABLE = "bulletin"
+export const BULLETIN_FILE = "catalogs/Bulletin/Bulletin.meta.json"
 
 /**
  * Ролі запису поверх `policyDomain()`: кастомна дія `reassign` на `Task`
@@ -825,23 +826,18 @@ export function writeRoles(): Layer {
         },
       ],
     },
-    "catalogs/Bulletin/Bulletin.meta.json": catalog(
-      uuid(6724),
-      "Bulletin",
-      BULLETIN_TABLE,
-      {
-        publicRead: "authenticated",
-        attributes: [
-          {
-            id: uuid(6725),
-            name: "text",
-            physicalName: "text",
-            type: "String",
-            length: 200,
-          },
-        ],
-      }
-    ),
+    [BULLETIN_FILE]: catalog(uuid(6724), "Bulletin", BULLETIN_TABLE, {
+      publicRead: "authenticated",
+      attributes: [
+        {
+          id: uuid(6725),
+          name: "text",
+          physicalName: "text",
+          type: "String",
+          length: 200,
+        },
+      ],
+    }),
     [ROLE_FILE("TaskWriter")]: role(
       TASK_WRITER_ID,
       "TaskWriter",

@@ -3,6 +3,7 @@ import type { CompiledModel } from "simetra/compiler"
 import { compile } from "simetra/compiler"
 import { mainTableOf, type ProjectionExtent } from "../contracts"
 import {
+  COMMAND_ACTION,
   renderCondition,
   rightsPredicates,
   type RightsCondition,
@@ -123,7 +124,7 @@ async function compiled(files: Map<string, string>): Promise<CompiledModel> {
 function predicatesOf(
   model: CompiledModel,
   objectId: string,
-  action: string
+  action: string | typeof COMMAND_ACTION
 ): RightsPredicate[] {
   const contract = model.contracts.rights.find((c) => c.objectId === objectId)!
   return rightsPredicates(
@@ -226,7 +227,12 @@ describe("rights predicates", () => {
           )
         for (const table of tables) {
           const names = new Set(table.columns.map((c) => c.name))
-          for (const { action } of contract.actions) {
+          // Дія контексту команди (Р2b1-5) — під тим самим правилом.
+          const actions: (string | typeof COMMAND_ACTION)[] = [
+            ...contract.actions.map((a) => a.action),
+            COMMAND_ACTION,
+          ]
+          for (const action of actions) {
             for (const predicate of rightsPredicates(
               contract,
               action,
@@ -268,6 +274,30 @@ describe("rights predicates", () => {
     }
     expect(checked).toBeGreaterThan(0)
     expect([...shapes].sort()).toEqual(["derived", "main", "path", "section"])
+  })
+
+  it("the command action renders the context action, uncorrelated", async () => {
+    // Р2b1-5: дію бере вираз контексту, а обсяги й носії — спільний набір
+    // обсягів об'єкта, тож предикати збігаються з предикатами `update`
+    // аж до першого аргументу функцій прав.
+    const model = await compiled(policyDomain())
+    const command = predicatesOf(model, TASK_ID, COMMAND_ACTION)
+    const update = predicatesOf(model, TASK_ID, "update")
+    expect(command.map((p) => [p.extent, p.carrier])).toEqual(
+      update.map((p) => [p.extent, p.carrier])
+    )
+    expect(command.length).toBeGreaterThan(1)
+    const context = "(SELECT simetra.command_action())"
+    command.forEach((predicate, i) => {
+      expect(predicate.conditions.map(renderCondition)).toEqual(
+        update[i]!.conditions.map((condition) =>
+          renderCondition(condition).replaceAll("('update', ", `(${context}, `)
+        )
+      )
+    })
+    expect(
+      command.flatMap((p) => p.conditions.map(renderCondition)).join(" ")
+    ).not.toContain("'update'")
   })
 
   const any = (extent: ProjectionExtent) => ({ extent })

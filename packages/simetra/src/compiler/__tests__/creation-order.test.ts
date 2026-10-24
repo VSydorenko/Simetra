@@ -746,7 +746,15 @@ describe("creation order", () => {
     )
     const readAny = "policy:public.task.task_read_any"
     const users = "policy:public.users.users_scope_read"
+    const updateRoot = "policy:public.task.task_update_root_any"
     expectBefore(list, [
+      // Політики запису кличуть функції контексту команди (Р2b1-4, Р2b1-3).
+      ["function:simetra.command_root(text)", updateRoot],
+      ["function:simetra.command_action()", updateRoot],
+      [
+        "function:simetra.command_action()",
+        "policy:public.task.task_command_update",
+      ],
       ["table:public.task", readAny],
       ["function:simetra.rights_any(text,text)", readAny],
       ["table:public.users", users],
@@ -765,6 +773,10 @@ describe("creation order", () => {
     expect(calls(users)).toContainEqual({
       schema: "simetra",
       name: "rights_visible_users",
+    })
+    expect(calls(updateRoot)).toContainEqual({
+      schema: "simetra",
+      name: "command_root",
     })
   })
 
