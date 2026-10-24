@@ -1526,7 +1526,6 @@ async function readPlpgsqlChecked(
   }
 }
 
-/** Кроки блоку по черзі, кожен після своїх сторожів. */
 /**
  * Режим реплікації транзакції — лише `origin` (рішення 13 плану П3-2b-2,
  * Р2b2-4): у `replica` не спрацювали б ні внутрішні тригери FK (запис даних
@@ -1565,6 +1564,7 @@ export async function runCarrierSteps(
   )
 }
 
+/** Кроки блоку по черзі, кожен після своїх сторожів. */
 async function runSteps(
   tx: ApplyTransaction,
   steps: readonly PlanStep[],
