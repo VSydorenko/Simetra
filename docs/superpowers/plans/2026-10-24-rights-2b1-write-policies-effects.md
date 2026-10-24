@@ -92,6 +92,9 @@
 | Р2b1-19a | **Межа довіри контексту — розширення** (рішення архітектора 2026-10-24). SQL застосунку (функції закритих модулів, обробники й функції спільних SQL-файлів, крім боргового SQL прийнятих таблиць `CustomTable`) не змінює налаштувань `simetra.*` у жодній формі: `set_config`, `SET`/`RESET`, опція функції, запис у `pg_settings` (форма `settingsTable`: `UPDATE`/`INSERT`/`DELETE` над `pg_settings` чи `pg_catalog.pg_settings`, незалежно від `WHERE`), літеральний динамічний SQL (`EXECUTE '…'` розбирається й судиться як звичайний SQL); нелітеральний — у закритих модулях і обробниках заборонено (`dynamicSql`), у боргових функціях спільних файлів — відоме обмеження до 2c | функція закритого модуля чи обробник може викликати допоміжну функцію спільного `sql/`-файлу; `UPDATE pg_settings` проходить правилом подання в `set_config`, а ім'я налаштування в `WHERE` надійно не перевірити; прийом реальних баз з борговим динамічним SQL не ламається, а `rewrite.dynamic-sql-unscoped` промоції лишається попередженням | спека прав §5.3 — речення про SQL застосунку замінено текстом цього рішення |
 | Р2b1-20 | Колонка скоупу основної таблиці й ТЧ, як і ключ `ref`, незмінна за будь-якої дії й для будь-якого рядка: `OLD.<скоуп> IS DISTINCT FROM NEW.<скоуп>` на `UPDATE` — `effect`; на `INSERT` не порівнюється (`OLD` немає) — вставка під `create` і рядки ТЧ не відмовляють через колонку скоупу. Незмінні колонки — одне джерело (те саме правило, що для ключа `ref`), не окремий перелік | перенесення між тенантами — не правка змісту, а складені FK скоупу ТЧ і копій однаково не дали б зробити його цілісно; якщо знадобиться — окремий механізм зі спекою, не `update` (рішення архітектора) | спека прав §5.3 — «колонка скоупу, як і ключ `ref`, незмінна за будь-якої дії» |
 | Р2b1-19b | **Захищені налаштування сесії й заборона зміни ролі** (рішення архітектора 2026-10-24). Перелік у T0 (`PROTECTED_SESSION_SETTINGS`): префікси `simetra.` і `request.jwt.` (claims `SESSION_CLAIMS_SETTING` і стара форма `request.jwt.claim.*`), імена `role` і `session_authorization`; `command-context.ts` судить за ним усіма формами Р2b1-19a, код — `sql.command-context-write`. Зміна ролі (`SET ROLE`, `RESET ROLE`, `SET`/`RESET SESSION AUTHORIZATION`, `set_config('role' \| 'session_authorization', …)`, опція функції `SET role`) — та сама форма `setStatement`/`setConfig`/`functionOption`: розбирач дає `VariableSetStmt` з цими іменами, окремої форми немає. Обробник підписки й функція множини судяться й у модулі боргу `CustomTable` | claims визначають користувача в політиках запису — підміна сильніша за `simetra.command`; `RESET ROLE` стане обходом, коли в П4 розшириться членство `simetra_runtime`; легітимної причини в SQL застосунку немає | спека прав §5.3 — речення про SQL застосунку: налаштування сесії платформи — `simetra.*`, claims (`request.jwt.*`) і роль |
+| Р2b1-21 | `maxWorkers: "50%"` в обох `vitest.config.ts` (`simetra`, `@simetrajs/designer`) | інфраструктура прогону, а не поведінка: паралельний `pnpm test` двох пакетів разом зі збіркою переплачував за ядра й падав на 5-секундних таймаутах щоразу в інших тестах; DB-проєктів не зачіпає (`fileParallelism: false`); відкат — один рядок | немає |
+| Р2b1-22 | **`sql.command-context-write` судить кожну одиницю SQL застосунку**, не лише класи `FUNCTION_CLASSES`: усі одиниці спільних `sql/`-файлів і модулів видів, зокрема прийнятий борг спільних файлів; поза перевіркою — лише борговий SQL `CustomTable` (з винятком для обробників і функцій множин). Механізм один — обхід дерева одиниці (`treeWrite`): опції `ALTER FUNCTION/PROCEDURE/ROUTINE … SET` — форма `functionOption` (до загального обходу), подання, домени (CHECK), політики, значення параметрів за замовчуванням. Вбудований `set_config` — останнє ім'я `set_config` і одна частина або `pg_catalog` перед ним (до трьох частин: `<база>.pg_catalog.set_config`). Агрегат, опція якого (`sfunc`, `finalfunc`, `combinefunc`, `serialfunc`, `deserialfunc`, `msfunc`, `minvfunc`, `mfinalfunc`) називає вбудований `set_config`, — `nonLiteral`. Подання, що читає `pg_settings` (без схеми чи `pg_catalog`), — `settingsTable`; читання `pg_settings` у тілах функцій дозволене. Тіла мов поза `sql`/`plpgsql` не розбираються — відоме обмеження разом із нелітеральним `EXECUTE` | доказ на стеку (архітектор): `postgres.pg_catalog.set_config(…)` змінює налаштування під роллю `postgres`; `CREATE AGGREGATE … (SFUNC = pg_catalog.set_config, STYPE = text, INITCOND = <налаштування>)` ставить його; `UPDATE` подання над `pg_settings` змінює налаштування; усе це компілювалося без діагностики | спека прав §5.3 — речення про SQL застосунку: кожна одиниця, будь-яка допустима кваліфікація `set_config`, подання над `pg_settings`, тіла інших мов — обмеження |
+| Р2b1-23 | Кастомна дія, чий `effects.header` називає незмінну колонку (ключ `ref` основної таблиці), — `rights.custom-action-effects` з причиною `immutableColumn`, як `transitionColumn`. Колонку скоупу шапка назвати не може: у кореня виду скоупу вона і є `ref`, а власну колонку скоупу платформа додає без імені елемента (`rights.attribute-unknown`) | `header: ["ref"]` компілювався мовчки, а тригер ефектів однаково відмовляв: декларація тихо нічого не давала | спека прав §5.3 і §6.2 — причина `immutableColumn` у переліку відмов ефектів кастомної дії |
 | Р2b1-16 | Відхилення від обмеження 2a1 «`GRANT simetra_command TO …` не виконує ніхто» — лише в транзакції DB-тесту з відкатом (Р2b1-13): згенерований SQL і інструменти його й далі не дають (тест `generated SQL never manages the command role itself`) | DB-сценарій запису неможливий без членства з `SET` | немає |
 
 ## Відомі обмеження
@@ -107,10 +110,11 @@
   закривається: такий код у домені довіри `runCommand` (може й `RESET ROLE`);
   захист — API хуків П4 (Р2b1-19). Борговий SQL `CustomTable` перевірка
   `sql.command-context-write` не охоплює.
-- Нелітеральний динамічний SQL функцій спільних файлів (борг прийнятих баз) може
-  змінити `simetra.*`, якщо його викличе код у транзакції команди; закриття —
-  2c (заборона дослівних тригерів на таблицях виду й аналіз викликів із закритих
-  модулів і обробників) разом з API хуків П4.
+- Нелітеральний динамічний SQL функцій спільних файлів (борг прийнятих баз) і
+  тіла функцій мовами поза `sql`/`plpgsql` у спільних файлах (перевірка їх не
+  розбирає, Р2b1-22) можуть змінити `simetra.*`, якщо їх викличе код у
+  транзакції команди; закриття — 2c (заборона дослівних тригерів на таблицях
+  виду й аналіз викликів із закритих модулів і обробників) разом з API хуків П4.
 - Гранти DML ролі команд, `simetra_runtime`, `runCommand`, `authorize` і
   мапінг `42501` → `command.forbidden` — П4; запобіжники §7, версії й журнал
   прав — 2c; гейт планів і бенчмарк — 2d.
@@ -372,7 +376,7 @@ git commit -m "fix(schema): промоція й зворотна генерац�
 - Modify: `packages/designer/src/schema-engine/__tests__/engine-desired-corpus.db.test.ts` (модель з новими одиницями — у корпус)
 
 **Interfaces:**
-- Produces: `commandAs<T>(client: pg.Client, claims: Record<string, unknown>, context: CommandContext | string | undefined, sql: string, options?: { params?: unknown[]; after?: string }): Promise<{ rows: T[]; after?: pg.QueryResultRow[] } | { code: string; message: string; detail?: string }>` — точка збереження, `request.jwt.claims`, `set_config(COMMAND_SETTING, …, true)` (рядок — сирий, для кейсу зіпсованого; `undefined` — не ставити), перемикання ролі за обраним шляхом Р2b1-13, запит; `after` — запит власником (`RESET ROLE`) у тій самій точці збереження до відкату (каскад і поширення копій інакше не видно); відкат до точки збереження. Кількість змінених рядків — лише через `RETURNING id`.
+- Produces: `commandAs<T>(client: pg.Client, claims: Record<string, unknown>, context: CommandContext | string | undefined, sql: string, options?: { params?: unknown[]; after?: string }): Promise<{ rows: T[]; after?: pg.QueryResultRow[] } | { code: string; message: string; detail?: string; column?: string }>` — точка збереження, `request.jwt.claims`, `set_config(COMMAND_SETTING, …, true)` (рядок — сирий, для кейсу зіпсованого; `undefined` — не ставити), перемикання ролі за обраним шляхом Р2b1-13, запит; `after` — запит власником (`RESET ROLE`) у тій самій точці збереження до відкату (каскад і поширення копій інакше не видно); відкат до точки збереження. Кількість змінених рядків — лише через `RETURNING id`.
 
 Причина DB-рівня (шапка файлу): які рядки пише роль під RLS запису, що відхиляє тригер `AFTER` і як каскад ТЧ проходить тригер — вирішує Postgres.
 
@@ -383,7 +387,7 @@ git commit -m "fix(schema): промоція й зворотна генерац�
 | case | user, контекст | запит | очікування |
 | --- | --- | --- | --- |
 | `no-context` | w1, без контексту | `UPDATE task SET region_id = r2 WHERE id = T2`; `INSERT INTO region_notes (…, region_id = r1, …)` | `42501` `command.context`/`missing`; те саме |
-| `malformed-context` | w1, `'{"action":"update","object":"task"}'` (бракує лише `root`); повний контекст з зайвим ключем `"x":1` | `UPDATE task SET region_id = r2 WHERE id = T2` | `42501` `command.context`/`malformed`; те саме |
+| `malformed-context` | w1, `'{"action":"update","object":"task"}'` (бракує лише `root`); повний контекст з зайвим ключем `"x":1`; сирі `'not json'`, `'[1,2,3]'`, `'{"action":"update","object":"task","root":"x"}'` | `UPDATE task SET region_id = r2 WHERE id = T2` | `42501` `command.context`/`malformed` на кожен (не `22P02`/`22023` з глибини розбору) |
 | `root-transition` | w2, `markDeletion/task/T1` | `UPDATE task SET deletion_mark = true WHERE id = T1 RETURNING id` | 1 рядок (`markDeletion` без `update`) |
 | `rest-needs-natural` | w2, `markDeletion/task/T1` | `UPDATE task SET deletion_mark = true WHERE id = T2 RETURNING id` | 0 рядків (T2 — природна `update`, якої в w2 немає) |
 | `rest-delete-needs-natural` | w2, `markDeletion/task/T1` | `DELETE FROM task WHERE id = T2 RETURNING id` | 0 рядків (T2 — природна `delete`, якої в w2 немає) |
@@ -406,14 +410,15 @@ git commit -m "fix(schema): промоція й зворотна генерац�
 | `post-cannot-unpost` | w1, `post/task/T5` | `UPDATE task SET posted = false WHERE id = T5` | `42501` `command.forbidden`/`effect` |
 | `rest-cannot-post` | w1, `post/task/T2` | `UPDATE task SET posted = true WHERE id = T1` (T1 — природна `update`, яку w1 має) | `42501` `command.forbidden`/`effect` |
 | `cross-object-transition` | w1 (`TaskWriter`: `update@any` на `Bulletin`), `update/task/T2` | `UPDATE bulletin SET deletion_mark = true WHERE id = BA` | `42501` `command.forbidden`/`effect` (запис іншого об'єкта — природна `update` без колонок переходів) |
-| `unknown-action` | w1, `'{"action":"invent","object":"task","root":"<T2>"}'` | `UPDATE bulletin SET text = 'x' WHERE id = BA` | `42501` `command.context`/`unknown-action` |
-| `root-rekey` | w1, `update/task/T6` | `UPDATE task SET id = <новий UUID> WHERE id = T6` | `42501` `command.forbidden`/`effect` (T6 без залежних рядків: на T2 FK рядка ТЧ `ON UPDATE NO ACTION` дав би `23503` раніше за тригер `AFTER`) |
+| `unknown-action` | w1, `'{"action":"invent","object":"task","root":"<T2>"}'`; `post/bulletin/BA` (дія є, але в іншого об'єкта) | `UPDATE bulletin SET text = 'x' WHERE id = BA` | `42501` `command.context`/`unknown-action`; те саме |
+| `root-rekey` | w1, `update/task/T6` | `UPDATE task SET id = <новий UUID> WHERE id = T6` | `42501` `command.forbidden`/`effect`, колонка `id` (T6 без залежних рядків: на T2 FK рядка ТЧ `ON UPDATE NO ACTION` дав би `23503` раніше за тригер `AFTER`) |
 | `create-root` | w1, `create/task/<новий id>` | `INSERT INTO task (id = <новий>, org_id = A, project_id = P1, …)` | успіх |
-| `tenant-move` | w5 (`TaskWriter` в A і B), `update/task/T6` | `UPDATE task SET org_id = B WHERE id = T6` | `42501` `command.forbidden`/`effect` (RLS пропускає: `USING` в A, `WITH CHECK` у B; відмовляє тригер, Р2b1-20) |
+| `tenant-move` | w5 (`TaskWriter` в A і B), `update/task/T6`; `update/task/T2` | `UPDATE task SET org_id = B WHERE id = T6`; `UPDATE task_checklist SET org_id = B, parent_id = TB WHERE id = <рядок T2>` | `42501` `command.forbidden`/`effect`, колонка `org_id` (RLS пропускає: `USING` в A, `WITH CHECK` у B; відмовляє тригер, Р2b1-20); те саме (FK (B, TB) існує, шапку ТЧ тригер не порівнює — скоуп рядка ТЧ тримає лише незмінність) |
+| `provider-api-role-write` | сервісна роль провайдера (`PROVIDER_API_ROLES`, DML-грант у транзакції опису), без контексту | `UPDATE task SET region_id = r2 WHERE id = T2 RETURNING region_id`; власником — `SELECT region_id` | 1 рядок; рядок змінено (тригер ефектів `SECURITY DEFINER` доходить до раннього виходу без контексту: `EXECUTE` на функціях контексту має лише роль команд, Р2b1-8) |
 
   EXPLAIN-гейт шаблонів запису (платформна спека §6.8): під роллю команд з контекстом `EXPLAIN (FORMAT JSON, VERBOSE)` `UPDATE` і `DELETE` над `task` і `task_checklist` — виклики `simetra.command_action()` і `simetra.command_root(…)` лише у виходах InitPlan, жодного виклику функції `simetra.*` в умовах сканування, жодного `SubPlan`. `INSERT … VALUES` перевірок `WITH CHECK` у плані не показує, тож його в гейті немає.
 
-  Кейс `no-context` пише в `region_notes` рядок з `region_id = r1` (без запобіжника його пропустила б природна `write@region` ролі `RegionWriter`; w1 у засіві має й `RegionWriter`). Кожна відмова звіряється з `code` і `message`/`detail` — `42501` дають і RLS, і відсутній грант, і контекст, і тригер.
+  Кейс `no-context` пише в `region_notes` рядок з `region_id = r1` (без запобіжника його пропустила б природна `write@region` ролі `RegionWriter`; w1 у засіві має й `RegionWriter`). Кожна відмова звіряється з `code` і `message`/`detail`, відмова тригера ефектів — ще й з колонкою (`column`), якщо тригер її називає — `42501` дають і RLS, і відсутній грант, і контекст, і тригер.
 
 - [x] **Step 3:** `engine-desired-corpus.db.test.ts` — модель `policyDomain(writeRoles(), writableRegister())` у корпус поруч із `policyDomain()`: функції контексту, тригери ефектів з `WHEN` і `RESTRICTIVE`/`PERMISSIVE`-політики запису проходять туди-назад.
 - [x] **Step 4:** Run: `pnpm --filter simetra exec vitest run --project db rights-write rights-policies` і `pnpm --filter @simetrajs/designer exec vitest run --project db engine-desired-corpus` — PASS. **Мутаційний доказ** (вручну, без коміту; кожна мутація червонить свій кейс):
@@ -431,7 +436,7 @@ git commit -m "fix(schema): промоція й зворотна генерац�
 | прибрати кореневу родину | `create-root` |
 | прибрати порівняння шапки в тригері | `root-effect` |
 | прибрати перевірку `TG_OP` ∈ `effects.dml` | `root-dml` |
-| прибрати колонку скоупу з незмінних | `tenant-move` |
+| прибрати колонку скоупу з незмінних | `tenant-move` (другий запит, рядок ТЧ: `{ rows: [] }` замість відмови з колонкою `org_id`); в основній таблиці мутація рівнозначна — порівняння шапки відмовляє з тією самою колонкою |
 | прибрати перевірку `tabularSections` у ТЧ | `tabular-transition` (перший запит) |
 | прибрати виняток каскаду | `delete-cascade` |
 | прибрати умову `NOT EXISTS` (виняток на будь-який `DELETE`) | `delete-single-line` |
@@ -450,7 +455,10 @@ git commit -m "fix(schema): промоція й зворотна генерац�
 | прибрати перевірку некореневих рядків | `rest-cannot-post` |
 | на `object` ≠ мітка — ранній `RETURN NULL` | `cross-object-transition` |
 | прибрати перевірку пари (`object`, `action`) у `command_parsed` | `unknown-action` |
-| прибрати незмінність ключа | `root-rekey` |
+| прибрати незмінність ключа | DB-рівнем рівнозначна: ключ поза шапкою будь-якої дії, тож порівняння шапки дає ту саму відмову з колонкою `id` (`root-rekey` зелений); її ловить юніт `effects-units` «checks the root row against the effects of the command action» |
+| тригер ефектів без `SECURITY DEFINER` і `row_security = off` | `provider-api-role-write` (запис сервісної ролі падає на правах функцій контексту) |
+| у `command_parsed` пара — лише `t.a = action` (без `t.o = object`) | `unknown-action` (другий запит) |
+| прибрати з `command_parsed` три перевірки: `pg_input_is_valid(…, 'jsonb')`, `jsonb_typeof = 'object'`, `pg_input_is_valid(root, 'uuid')` | `malformed-context` (сирі: `22P02` замість `command.context`) |
 | у регістрі прибрати умову значень виміру (`rights_dimension_values`) з предиката | `register-dimension` (другий запит) |
 
 - [x] **Step 5: Commit**

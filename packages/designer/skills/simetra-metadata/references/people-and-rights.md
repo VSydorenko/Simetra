@@ -69,8 +69,9 @@ with a trigger on the target table, see "Carrier copies").
   Effects only on a kind with a writing standard action (not an accumulation
   register or a recorder-subordinate information register),
   `tabularSections: true` only on a kind with tabular sections, and never a
-  transition column (`posted`, the deletion mark) in `header`
-  (`rights.custom-action-effects`).
+  transition column (`posted`, the deletion mark) or an immutable column (the
+  `ref` key) in `header` (`rights.custom-action-effects`, reasons
+  `transitionColumn` and `immutableColumn`).
 - **`ownership`** — carriers whose `Ref` names the owner of a row (a member
   or a user). `"ownership": ["<attribute>", ["<ref attribute>", "<attribute>"]]`
   The target is the users catalog, the membership catalog of the object's own
@@ -231,17 +232,22 @@ command role and nobody else.
   clears it, while `markDeletion` may set or clear the mark. A custom action is
   not a transition action and cannot name a transition column in its header
   effects (`rights.custom-action-effects`, reason `transitionColumn`).
-- The ref key and the scope column of a row cannot be changed by any command.
+- The ref key and the scope column of a row cannot be changed by any command;
+  a custom action that names the key in its header effects is refused
+  (`rights.custom-action-effects`, reason `immutableColumn`).
 - A `beforeWrite` handler that, under a transition, changes another column makes
   the command fail. Put a computation done at posting into the command hook or
   into the effects of a custom action.
-- Application SQL (subscription handlers wherever they live, object-module
-  functions, shared `sql/` files) must not change the platform's session
-  settings — `simetra.*`, the request claims (`request.jwt.*`) and the role
-  (`SET ROLE`, `SET SESSION AUTHORIZATION` and their `RESET`) — in any form
-  (`set_config`, `SET`/`RESET`, a function option, a write to `pg_settings`, a
-  literal `EXECUTE`): compiler error `sql.command-context-write`. The command
-  context, the user and the role belong to the platform.
+- Any application SQL unit (subscription handlers wherever they live,
+  object-module functions, and every statement of shared `sql/` files:
+  functions, `ALTER FUNCTION`, views, domains, aggregates, policies) must not
+  change the platform's session settings — `simetra.*`, the request claims
+  (`request.jwt.*`) and the role (`SET ROLE`, `SET SESSION AUTHORIZATION` and
+  their `RESET`) — in any form (`set_config` however it is qualified, also as
+  an aggregate function, `SET`/`RESET`, a function option, a write to
+  `pg_settings` or a view over it, a literal `EXECUTE`): compiler error
+  `sql.command-context-write`. The command context, the user and the role
+  belong to the platform.
 
 ## Carrier copies
 
