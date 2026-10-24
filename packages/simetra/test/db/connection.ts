@@ -1,4 +1,9 @@
 import pg from "pg"
+import {
+  COMMAND_SETTING,
+  PLATFORM_ROLES,
+  type CommandContext,
+} from "simetra/model"
 import type { ApplyDatabase, ApplyTransaction } from "simetra/schema"
 
 const DEFAULT_URL = "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
@@ -283,5 +288,52 @@ export async function queryAs<T extends pg.QueryResultRow>(
     return { code: (error as { code: string }).code }
   } finally {
     await client.query("ROLLBACK TO SAVEPOINT as_role")
+  }
+}
+
+/** Відмова запиту: код, повідомлення й деталь помилки Postgres. */
+export interface Refusal {
+  code: string
+  message: string
+  detail?: string
+}
+
+/**
+ * Один запит від ролі команд у точці збереження, як його виконає
+ * `runCommand`: claims користувача, контекст команди в `COMMAND_SETTING`
+ * (рядок ставиться сирим — для зіпсованого контексту; `undefined` — не
+ * ставиться) і `SET LOCAL ROLE` ролі команд. Членство з `SET` у ролі команд
+ * дає собі опис (Р2b1-13). `after` виконує власник (`RESET ROLE`) у тій самій
+ * точці збереження до відкату: каскад і поширення копій інакше не видно.
+ * Відмова повертається кодом, повідомленням і деталлю — `42501` дають і RLS,
+ * і контекст, і тригер ефектів.
+ */
+export async function commandAs<T extends pg.QueryResultRow>(
+  client: pg.Client,
+  claims: Record<string, unknown>,
+  context: CommandContext | string | undefined,
+  sql: string,
+  options: { params?: unknown[]; after?: string } = {}
+): Promise<{ rows: T[]; after?: pg.QueryResultRow[] } | Refusal> {
+  await client.query("SAVEPOINT command_as")
+  try {
+    await client.query("SELECT set_config('request.jwt.claims', $1, true)", [
+      JSON.stringify(claims),
+    ])
+    if (context !== undefined)
+      await client.query("SELECT set_config($1, $2, true)", [
+        COMMAND_SETTING,
+        typeof context === "string" ? context : JSON.stringify(context),
+      ])
+    await client.query(`SET LOCAL ROLE ${PLATFORM_ROLES.command}`)
+    const { rows } = await client.query<T>(sql, options.params)
+    if (options.after === undefined) return { rows }
+    await client.query("RESET ROLE")
+    return { rows, after: (await client.query(options.after)).rows }
+  } catch (error) {
+    const { code, message, detail } = error as pg.DatabaseError
+    return { code: code!, message, ...(detail === undefined ? {} : { detail }) }
+  } finally {
+    await client.query("ROLLBACK TO SAVEPOINT command_as")
   }
 }
