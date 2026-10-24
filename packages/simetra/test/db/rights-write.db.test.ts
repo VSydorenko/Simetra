@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import type pg from "pg"
-import { PLATFORM_ROLES, type CommandContext } from "simetra/model"
+import {
+  PLATFORM_ROLES,
+  PROVIDER_API_ROLES,
+  type CommandContext,
+} from "simetra/model"
 import { renderDesiredState } from "simetra/schema"
 import {
   BULLETIN_TABLE,
@@ -163,7 +167,15 @@ const refused = (message: string, detail: string): Refusal => ({
   message,
   detail,
 })
-const EFFECT = refused("command.forbidden", "effect")
+/**
+ * Відмова тригера ефектів; колонка — та, на якій він відмовив (без неї —
+ * відмова DML чи рядка, а не колонки). Інакше кейс, де колонка лише випала з
+ * однієї перевірки й упала в іншу з тим самим кодом, лишився б зеленим.
+ */
+const effect = (column?: string): Refusal =>
+  column === undefined
+    ? refused("command.forbidden", "effect")
+    : { ...refused("command.forbidden", "effect"), column }
 const context = (detail: string) => refused("command.context", detail)
 /** Відмова RLS: `42501` з текстом Postgres про порушення політики. */
 const RLS = {
@@ -215,6 +227,20 @@ const CASES: [name: string, steps: Step[]][] = [
         '{"action":"update","object":"task","root":"<T2>","x":1}',
         "UPDATE public.task SET region_id = {r2} WHERE id = {T2}",
         context("malformed")
+      ),
+      // Не JSON, не об'єкт і корінь не UUID — теж контракт §6.2, а не
+      // помилка розбору (`22P02`, `22023`) з глибини функції контексту.
+      ...[
+        "not json",
+        "[1,2,3]",
+        '{"action":"update","object":"task","root":"x"}',
+      ].map((raw) =>
+        step(
+          "w1",
+          raw,
+          "UPDATE public.task SET region_id = {r2} WHERE id = {T2}",
+          context("malformed")
+        )
       ),
     ],
   ],
@@ -278,7 +304,7 @@ const CASES: [name: string, steps: Step[]][] = [
         "w2",
         ["markDeletion", "task", "T1"],
         "UPDATE public.task SET deletion_mark = true, region_id = {r2} WHERE id = {T1}",
-        EFFECT
+        effect("region_id")
       ),
     ],
   ],
@@ -289,7 +315,7 @@ const CASES: [name: string, steps: Step[]][] = [
         "w1",
         ["update", "task", "T2"],
         "DELETE FROM public.task WHERE id = {T2}",
-        EFFECT
+        effect()
       ),
     ],
   ],
@@ -300,7 +326,7 @@ const CASES: [name: string, steps: Step[]][] = [
         "w2",
         ["markDeletion", "task", "T1"],
         `INSERT INTO public.${CHECKLIST_TABLE} (org_id, parent_id, line_number) VALUES ({A}, {T1}, 1)`,
-        EFFECT
+        effect()
       ),
       step(
         "w1",
@@ -331,7 +357,7 @@ const CASES: [name: string, steps: Step[]][] = [
         "w1",
         ["delete", "task", "T4"],
         `DELETE FROM public.${CHECKLIST_TABLE} WHERE parent_id = {T4} AND id = {T4.l1}`,
-        EFFECT
+        effect()
       ),
     ],
   ],
@@ -420,7 +446,7 @@ const CASES: [name: string, steps: Step[]][] = [
         "w1",
         ["post", "task", "T2"],
         "UPDATE public.task SET posted = true, created_by_id = {w2} WHERE id = {T2}",
-        EFFECT
+        effect("created_by_id")
       ),
     ],
   ],
@@ -431,7 +457,7 @@ const CASES: [name: string, steps: Step[]][] = [
         "w1",
         ["create", "task", "T2"],
         `UPDATE public.${CHECKLIST_TABLE} SET note = 'x' WHERE parent_id = {T2}`,
-        EFFECT
+        effect()
       ),
     ],
   ],
@@ -442,7 +468,7 @@ const CASES: [name: string, steps: Step[]][] = [
         "w1",
         ["update", "task", "T2"],
         "UPDATE public.task SET posted = true WHERE id = {T2}",
-        EFFECT
+        effect("posted")
       ),
     ],
   ],
@@ -453,7 +479,7 @@ const CASES: [name: string, steps: Step[]][] = [
         "w1",
         ["update", "task", "T2"],
         "UPDATE public.task SET deletion_mark = true WHERE id = {T2}",
-        EFFECT
+        effect("deletion_mark")
       ),
     ],
   ],
@@ -464,7 +490,7 @@ const CASES: [name: string, steps: Step[]][] = [
         "w1",
         ["create", "task", "new"],
         "INSERT INTO public.task (id, org_id, project_id, date, posted) VALUES ({new}, {A}, {P1}, now(), true)",
-        EFFECT
+        effect("posted")
       ),
     ],
   ],
@@ -475,7 +501,7 @@ const CASES: [name: string, steps: Step[]][] = [
         "w1",
         ["post", "task", "T5"],
         "UPDATE public.task SET posted = false WHERE id = {T5}",
-        EFFECT
+        effect("posted")
       ),
     ],
   ],
@@ -487,7 +513,7 @@ const CASES: [name: string, steps: Step[]][] = [
         "w1",
         ["post", "task", "T2"],
         "UPDATE public.task SET posted = true WHERE id = {T1}",
-        EFFECT
+        effect("posted")
       ),
     ],
   ],
@@ -499,7 +525,7 @@ const CASES: [name: string, steps: Step[]][] = [
         "w1",
         ["update", "task", "T2"],
         `UPDATE public.${BULLETIN_TABLE} SET deletion_mark = true WHERE id = {BA}`,
-        EFFECT
+        effect("deletion_mark")
       ),
     ],
   ],
@@ -509,6 +535,14 @@ const CASES: [name: string, steps: Step[]][] = [
       step(
         "w1",
         ["invent", "task", "T2"],
+        `UPDATE public.${BULLETIN_TABLE} SET text = 'x' WHERE id = {BA}`,
+        context("unknown-action")
+      ),
+      // Дія `post` існує, але в задачі, а не в оголошенні: пару «дія, об'єкт»
+      // судить запобіжник, а не саме ім'я дії.
+      step(
+        "w1",
+        ["post", BULLETIN_TABLE, "BA"],
         `UPDATE public.${BULLETIN_TABLE} SET text = 'x' WHERE id = {BA}`,
         context("unknown-action")
       ),
@@ -523,7 +557,7 @@ const CASES: [name: string, steps: Step[]][] = [
         "w1",
         ["update", "task", "T6"],
         "UPDATE public.task SET id = gen_random_uuid() WHERE id = {T6}",
-        EFFECT
+        effect("id")
       ),
     ],
   ],
@@ -546,7 +580,16 @@ const CASES: [name: string, steps: Step[]][] = [
         "w5",
         ["update", "task", "T6"],
         "UPDATE public.task SET org_id = {B} WHERE id = {T6}",
-        EFFECT
+        effect("org_id")
+      ),
+      // Рядок ТЧ разом із власником до B: FK (B, TB) існує, RLS пропускає, а
+      // шапку ТЧ тригер не порівнює — скоуп рядка тримає лише незмінність.
+      // В основній таблиці її дублює порівняння шапки з тією самою колонкою.
+      step(
+        "w5",
+        ["update", "task", "T2"],
+        `UPDATE public.${CHECKLIST_TABLE} SET org_id = {B}, parent_id = {TB} WHERE id = {T2.l1}`,
+        effect("org_id")
       ),
     ],
   ],
@@ -601,6 +644,11 @@ describe("command writes", () => {
     )
     await client.query(
       `GRANT ${PLATFORM_ROLES.command} TO CURRENT_USER WITH SET TRUE`
+    )
+    // Серверний код споживача досі пише сервісною роллю провайдера: DML їй
+    // теж лише в цій транзакції (кейс `provider-api-role-write`).
+    await client.query(
+      `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ${PROVIDER_API_ROLES.supabase.service}`
     )
     ids = await seedWrites(client)
   })
@@ -699,6 +747,29 @@ describe("command writes", () => {
       )
     })
     expect(seen).toEqual({ rows: [{ role: false, definer: true }] })
+  })
+
+  // Р2b1-8: тригер ефектів спрацьовує й на записі ролі API, а `EXECUTE` на
+  // функціях контексту має лише роль команд. Під правами викликача кожен
+  // такий запис упав би на функції контексту; `SECURITY DEFINER` дає йому
+  // дійти до раннього виходу без контексту. Права функцій вирішує Postgres.
+  it("provider-api-role-write", async () => {
+    const written = await probe(async (client) => {
+      await client.query(
+        `SET LOCAL ROLE ${PROVIDER_API_ROLES.supabase.service}`
+      )
+      const { rows } = await client.query<{ region_id: string }>(
+        "UPDATE public.task SET region_id = $1 WHERE id = $2 RETURNING region_id",
+        [key("r2"), key("T2")]
+      )
+      await client.query("RESET ROLE")
+      const after = await client.query<{ region_id: string }>(
+        "SELECT region_id FROM public.task WHERE id = $1",
+        [key("T2")]
+      )
+      return { rows: byKey(rows), after: byKey(after.rows) }
+    })
+    expect(written).toEqual({ rows: ["r2"], after: ["r2"] })
   })
 
   it.each(CASES)("%s", async (_, steps) => {
