@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-Статус: чернетка на аудит.
+Статус: прийнято архітектором 2026-10-24 після 4 раундів аудиту автора й аудиту Codex.
 Архітектор задачі — сесія `consumer-reconciliation2`; якщо її немає — власник.
 
 **Мета:** роль `simetra_command` пише в таблиці виду лише за правами. Контекст
@@ -88,6 +88,7 @@
 | Р2b1-15 | Тригер ефектів не рахує зміною лише колонки, значення яких **примушує платформа**: механіка (`touchFunction`, `compiler/mechanics-units.ts`) перезаписує `NEW.version` (`1` на вставці, `OLD.version + 1` на оновленні) і `NEW.updated_at := now()` незалежно від запиту, а `contentColumns` їх уже виключає (`mechanicsStandardNames`) — одне джерело з механікою. `created_at`, `created_by`, `updated_by` механіка не примушує (факт коду), тож вони — зміст: дія-перехід, що їх змінює, — відмова `effect` (fail-closed: інакше `post` переписав би автора). Коли П4 дасть механіку авторства (примушене `updated_by`), колонка переходить у перелік механіки тим самим джерелом (рядок боргу) | архітектор: виключення лише для примушеного; окремого переліку немає | спека прав §5.3 — «аудит (авторство) — лише після примушеної механіки авторства П4; до того зміна авторства під дією-переходом — відмова `effect`» (Задача 0) |
 | Р2b1-17 | Об'єкт із `publicRead`: `<t>_public_read` отримує й `PLATFORM_ROLES.command` — уточнення форми Р2a2-3 (архітектор). Роль команд діє від імені користувача з його claims, а рядки такого об'єкта цьому користувачеві й так відкриті; без цього `UPDATE … WHERE`, `DELETE … WHERE` і `INSERT … RETURNING` на ньому не бачили б рядків, і політики запису були б мертві. Межі запису 2a2 й політики запису 2b1 на ньому діють | роль команд не повинна бачити менше за користувача, від імені якого діє | спека прав §5.2 — пункт про `publicRead` (Задача 0); план 2a2 — уточнення Р2a2-3 (Задача 0) |
 | Р2b1-18 | **Колонки переходів** (рішення архітектора за F1 раунду 4). Факт реєстру `KindAction.transition?: { column: string; from?: boolean; to?: boolean }` (`column` — канонічне логічне ім'я): `post` — `{ column: "posted", from: false, to: true }`, `unpost` — `{ column: "posted", from: true, to: false }`, `markDeletion` — `{ column: "deletionMark" }` (у реєстрі одна дія в обидва боки, напрямку немає; окремої дії зняття позначки реєстр і спека не мають). Контракт: `RightsAction.transition?: { column: string; from?: boolean; to?: boolean }` (фізична колонка) і `RightsContract.transitions: { column: string; default: string }[]` (колонки переходів об'єкта зі значенням за замовчуванням з реєстру, `"false"`). (1) `"all"` у `canonicalHeader` розгортається в «колонки шапки основної таблиці мінус колонки переходів» — `update`, `create` і кастомні дії з `"all"` мають явний перелік, тож тригер порівнює колонки переходів, як будь-які поза ефектом. (2) `INSERT` рядка основної таблиці (корінь чи ні): кожна колонка переходу = своє значення за замовчуванням, інакше `effect`. (3) Перехід змінює свою колонку лише у своєму напрямку: змінена колонка під дією з `from`/`to` — лише `OLD = from` і `NEW = to`. (4) **Некореневі рядки** таблиці з колонками переходів у контексті будь-якої команди (контекст є, рядок не кореневий цього об'єкта) перевіряються за ефектами природної дії: `UPDATE` — шапка природної `update` (без колонок переходів), `INSERT` — правило (2). (5) Кастомна дія, чий `effects.header` називає колонку переходу, — помилка `rights.custom-action-effects` з `reason: "transitionColumn"` на `/customActions/<i>/effects/header/<j>` (колонки переходів — з `transition` стандартних дій виду, без гілки за видом) | інакше `update`/`create` проводили б чи позначали б рядок без права `post`/`markDeletion`, `post` розпроводив би без `unpost`, команда над A проводила б B під природним `update`, а кастомна дія була б обхідною дорогою | спека прав §3 — напрям переходу як факт реєстру й заборона колонок переходів у кастомних діях; §5.3 — шапка `update` без колонок переходів, перехід лише у своєму напрямку, тригер перевіряє й некореневі рядки за природною дією (Задача 0) |
+| Р2b1-19 | **Межа довіри контексту** (F1 аудиту Codex, рішення архітектора). Контекст ставить `runCommand`; TS-код із сирим SQL у транзакції команди — у домені довіри `runCommand` (може й `RESET ROLE`), тож захист від підміни контексту там — API хуків П4 (хуки без сирого SQL і без `SET`/`RESET`/`set_config`), а не база. SQL застосунку, що виконується в базі посеред DML команди, контексту не змінює: функція закритого SQL-модуля будь-якого виду (`sqlModule: "closed"` — обробники підписок `EventSubscription` і функції модуля об'єкта М5) з `set_config` з першим аргументом-літералом на `simetra.` чи з нелітеральним першим аргументом, з оператором `SET`/`RESET` на `simetra.*` чи `RESET ALL`, або з опцією функції `SET simetra.…` — помилка `sql.command-context-write` (`{ name, form: "setConfig" \| "setStatement" \| "functionOption" \| "nonLiteral" }`). Динамічний SQL у закритому модулі вже відмовлено (`closedFormProblem` → `dynamicSql`, `compiler/sql/closed-forms.ts`), тож нелітеральний текст `EXECUTE` окремої перевірки не потребує. Борговий SQL `CustomTable` (`sqlModule: "debt"`) поза перевіркою — відоме обмеження до заборони дослівних тригерів на таблицях виду (2c) | обробник підписки спрацьовує посеред оператора команди, і змінений ним GUC побачили б політики наступних рядків і операторів | спека прав §5.3 — межа довіри контексту й заборона для SQL застосунку; спека промоції §9.3 — заборона в переліку для обробника (Задача 0) |
 | Р2b1-16 | Відхилення від обмеження 2a1 «`GRANT simetra_command TO …` не виконує ніхто» — лише в транзакції DB-тесту з відкатом (Р2b1-13): згенерований SQL і інструменти його й далі не дають (тест `generated SQL never manages the command role itself`) | DB-сценарій запису неможливий без членства з `SET` | немає |
 
 ## Відомі обмеження
@@ -99,6 +100,10 @@
   шапки кореня, дає відмову (Р2b1-10).
 - Дослівний тригер на таблиці виду ще не заборонено (2c): він бачить запис
   команди, як і раніше.
+- Підміна контексту кодом із сирим SQL у транзакції команди (TS-хук) базою не
+  закривається: такий код у домені довіри `runCommand` (може й `RESET ROLE`);
+  захист — API хуків П4 (Р2b1-19). Борговий SQL `CustomTable` перевірка
+  `sql.command-context-write` не охоплює.
 - Гранти DML ролі команд, `simetra_runtime`, `runCommand`, `authorize` і
   мапінг `42501` → `command.forbidden` — П4; запобіжники §7, версії й журнал
   прав — 2c; гейт планів і бенчмарк — 2d.
@@ -122,6 +127,7 @@
 | `packages/simetra/src/model/kinds/actions.ts` | `KindAction.natural` |
 | `packages/simetra/src/compiler/contracts.ts`, `compiler/rights/contracts.ts` | `RightsAction.natural`, `uniformExtents` |
 | `packages/simetra/src/compiler/rights/command-units.ts` (новий) | генератор `command` |
+| `packages/simetra/src/compiler/sql/closed-forms.ts` | `sql.command-context-write` |
 | `packages/simetra/src/compiler/rights/predicates.ts` | `COMMAND_ACTION` |
 | `packages/simetra/src/compiler/access-units.ts` | політики запису й запобіжник контексту |
 | `packages/simetra/src/compiler/mechanics-units.ts` | `contentColumns` |
@@ -144,7 +150,7 @@
 ### Задача 0: правки спек
 
 **Files:**
-- Modify: `docs/superpowers/specs/2026-10-17-rights-design.md` (§3, §5.2, §5.3, §6.2)
+- Modify: `docs/superpowers/specs/2026-10-17-rights-design.md` (§3, §5.2, §5.3, §6.2), `docs/superpowers/specs/2026-10-06-promotion-design.md` (§9.3)
 - Modify: `docs/superpowers/plans/2026-10-18-rights-2a2-read-policies-carriers.md` (Р2a2-3), `docs/superpowers/plans/2026-10-15-p3-2b-residual-debt.md` (§5)
 - Modify: `docs/superpowers/plans/2026-10-18-rights-2a1-command-role-functions.md` (таблиця рішень)
 
@@ -156,13 +162,14 @@
   - пункт про ефекти, на початку: «шапка `update` і `create` — уся шапка, крім колонок переходів; вставка рядка — колонки переходів зі значенням за замовчуванням; перехід змінює свою колонку лише у своєму напрямку; тригер перевіряє й некореневі рядки — за ефектами природної дії»; далі «тригер платформи (`AFTER`, тож бачить рядок після всіх `BEFORE`-тригерів; функція `SECURITY DEFINER`, що повз RLS читає лише існування власника рядка ТЧ) відхиляє решту, зокрема DML поза ефектами дії й зміну обробника `beforeWrite`; зміна лише копій носіїв і колонок механіки — не дія»;
   - пункт «порожнє чи відсутнє `simetra.command` — відмова»: дописати «(`RESTRICTIVE`-політики `<t>_command_*`)».
 - [ ] **Step 3:** §6.2 — після переліку кодів причини: «тригер ефектів відмовляє `42501` з `MESSAGE 'command.forbidden'` і `DETAIL 'effect'`, без даних рядка; рядок ТЧ кореня під дією без запису ТЧ видаляється лише каскадом — коли рядка власника вже немає; окремий рядок ТЧ живого документа — відмова `effect`».
+- [ ] **Step 2a:** §5.3 — новий пункт: «контекст ставить `runCommand`; код із сирим SQL у транзакції команди — у домені довіри `runCommand` (може й `RESET ROLE`), тож захист від підміни контексту там — API хуків П4 (хуки без сирого SQL і без `SET`/`RESET`/`set_config`); SQL застосунку в базі (обробники підписок, функції SQL-модуля) налаштувань `simetra.*` не змінює — помилка компілятора». Спека промоції §9.3, речення про те, чого обробник `beforeWrite` не присвоює, — дописати «і не змінює налаштувань `simetra.*` (`set_config`, `SET`/`RESET`, опція функції), спека прав §5.3».
 - [ ] **Step 3a:** §5.2, пункт про межу тенанта — речення про `publicRead`: дописати «політика читання всіх рядків `<t>_public_read` — для ролей API за `publicRead` і для ролі команд, що діє від імені користувача». План 2a2, рядок Р2a2-3 — дописати «(уточнено Р2b1-17: `<t>_public_read` — і для ролі команд)». Борг `docs/superpowers/plans/2026-10-15-p3-2b-residual-debt.md` §5 — рядок «**Механіка авторства** (П4): примушене `updated_by` переходить у перелік механіки (`mechanicsStandardNames`), тож тригер ефектів 2b1 перестає рахувати його зміною (Р2b1-15)».
 - [ ] **Step 4:** План 2a1, таблиця рішень — новий рядок після Р2a1-17: «Р2a1-17a | `rightsPredicates` приймає й дію контексту `COMMAND_ACTION` (план Права-2b1, Р2b1-5, Р2b1-6) | немає».
 - [ ] **Step 5:** Run: `python3 scripts/check-doc-anchors.py && pnpm format:check` — код 0.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add docs/superpowers/specs/2026-10-17-rights-design.md docs/superpowers/plans/2026-10-18-rights-2a1-command-role-functions.md docs/superpowers/plans/2026-10-18-rights-2a2-read-policies-carriers.md docs/superpowers/plans/2026-10-15-p3-2b-residual-debt.md
+git add docs/superpowers/specs/2026-10-17-rights-design.md docs/superpowers/specs/2026-10-06-promotion-design.md docs/superpowers/plans/2026-10-18-rights-2a1-command-role-functions.md docs/superpowers/plans/2026-10-18-rights-2a2-read-policies-carriers.md docs/superpowers/plans/2026-10-15-p3-2b-residual-debt.md
 git commit -m "docs(spec): контекст команди, політики запису двох родин і тригер ефектів"
 ```
 
@@ -221,6 +228,39 @@ git commit -m "feat(model): природна дія за DML у реєстрі �
 ```bash
 git add packages/simetra/src/compiler
 git commit -m "feat(compiler): функції контексту команди в схемі simetra"
+```
+
+---
+
+### Задача 2a: SQL застосунку не змінює контексту команди
+
+**Files:**
+- Modify: `packages/simetra/src/compiler/sql/closed-forms.ts` (`checkSqlModules`), `compiler/diagnostics.ts`, `compiler/messages.ts`
+- Test: `packages/simetra/src/compiler/__tests__/closed-forms.test.ts` , `messages.test.ts`
+
+**Interfaces:**
+- Produces: код `sql.command-context-write` (`{ name: string; form: "setConfig" | "setStatement" | "functionOption" | "nonLiteral" }`), en/uk.
+
+- [ ] **Step 1: Write the failing test (unit)** — `it.each` над модулем обробника підписки (будівник підписки з `event-subscriptions.test.ts`) і над функцією модуля документа (М5), форма → очікування:
+
+| form | тіло | код |
+| --- | --- | --- |
+| `setConfig` | `PERFORM set_config('simetra.command', '{}', true);` | `sql.command-context-write` |
+| `setConfig` (кваліфікований, регістр) | `PERFORM pg_catalog.set_config('Simetra.Command', '{}', true);` | те саме |
+| `nonLiteral` | `PERFORM set_config(v_name, '{}', true);` | те саме |
+| `setStatement` | `SET LOCAL simetra.command = '{}';`, `RESET simetra.command;`, `RESET ALL;` | те саме |
+| `functionOption` | `CREATE FUNCTION … SET simetra.command = '{}' AS …` | те саме |
+| — | `PERFORM set_config('app.x', '1', true);`, `SET LOCAL statement_timeout = '1s';` | нічого |
+
+  Плюс функція мовою `sql` з `SELECT set_config('simetra.command', …)` — той самий код. Мутація: прибрати перевірку `FuncCall` — рядки `setConfig` і `nonLiteral` червоніють; прибрати перевірку `VariableSetStmt` — рядки `setStatement`.
+- [ ] **Step 2:** Run: `pnpm --filter simetra test closed-forms event-subscriptions messages` — FAIL.
+- [ ] **Step 3: Implement** у `checkSqlModules` для кожної функції закритого модуля: обхід дерев виразів plpgsql (`PlpgsqlStatement.expressions` ролей, крім `dynamic`, — той самий обхід, що `copyReads` у `stages/links.ts`, Р2a2-9) і тіла функції `sql`: `FuncCall` з ім'ям `set_config` (з чи без `pg_catalog`) — перший аргумент `A_Const` рядок, що без урахування регістру починається з `simetra.`, → `setConfig`; не `A_Const` → `nonLiteral`; `VariableSetStmt` з ім'ям на `simetra.` чи `VAR_RESET_ALL` → `setStatement`; опції `CREATE FUNCTION` `SET` (`VariableSetStmt` у `options`) на `simetra.` → `functionOption`. Коментар «чому» — Р2b1-19.
+- [ ] **Step 4:** Run: `pnpm --filter simetra test closed-forms event-subscriptions messages stage-links && pnpm metadata:check` — PASS (примірні застосунки контексту не змінюють).
+- [ ] **Step 5: Commit**
+
+```bash
+git add packages/simetra/src/compiler
+git commit -m "feat(compiler): SQL застосунку не змінює налаштувань simetra.* контексту команди"
 ```
 
 ---

@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-Статус: чернетка на аудит.
+Статус: прийнято архітектором 2026-10-24 після 4 раундів аудиту автора й аудиту Codex.
 Архітектор задачі — сесія `consumer-reconciliation2`; якщо її немає — власник.
 
 **Мета:** нова копія носія на таблиці з рядками заповнюється кроком даних
