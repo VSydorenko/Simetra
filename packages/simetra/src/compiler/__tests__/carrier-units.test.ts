@@ -1,5 +1,6 @@
 import { beforeAll, describe, expect, it } from "vitest"
 import type { CompiledModel } from "simetra/compiler"
+import { carrierBackfillStatements } from "../rights/carrier-units"
 import { hasEmptySearchPath, routineLanguage } from "../sql/closed-forms"
 import { executeGrants } from "../sql/execute-grants"
 import type { SqlUnit } from "../sql/units"
@@ -15,6 +16,7 @@ import {
   expectedFunction,
   funcNames,
   loadShapeParsers,
+  nodes,
   relationsOf,
   tree,
 } from "./fixtures/sql-shape"
@@ -272,5 +274,154 @@ describe("buildCarrierUnits", () => {
       ["physical.function-duplicate", COMMENT_FILE, "/physicalName"],
       ["physical.function-duplicate", COMMENT_FILE, "/physicalName"],
     ])
+  })
+})
+
+describe("carrierBackfillStatements", () => {
+  const pending = (name: string, ...columns: string[]) => ({
+    table: { schema: "public", name },
+    columns,
+  })
+  const physicalOf = async (...layers: Parameters<typeof policyDomain>) =>
+    (await compileRights(policyDomain(...layers))).model!.physical
+
+  /**
+   * Пари рівності умови: `{ local, source }` за аліасами — `d` (залежна) чи
+   * `NEW` (рядок джерела в тригері поширення) проти `s` (джерело кроку).
+   */
+  function linkPairs(where: unknown): { local: string; source: string }[] {
+    const field = (ref: unknown) => {
+      const fields = (
+        ref as { ColumnRef: { fields: { String: { sval: string } }[] } }
+      ).ColumnRef.fields.map((f) => f.String.sval)
+      return { alias: fields[0]!, column: fields[1]! }
+    }
+    return nodes(where, "A_Expr").flatMap((node) => {
+      const expr = node as { kind: string; lexpr: unknown; rexpr: unknown }
+      if (expr.kind !== "AEXPR_OP") return []
+      const [l, r] = [field(expr.lexpr), field(expr.rexpr)]
+      const local = l.alias === "d" ? l : r
+      const source = l.alias === "d" ? r : l
+      return [{ local: local.column, source: source.column }]
+    })
+  }
+
+  it("backfills copies through the composite key of their link", async () => {
+    const physical = await physicalOf()
+    const statements = carrierBackfillStatements(physical, [
+      pending("task_checklist", "assignee_id", "region_id", "project_id"),
+    ])
+    expect(statements.map((s) => [s.table, s.source, tree(s.sql)])).toEqual([
+      [
+        { schema: "public", name: "task_checklist" },
+        { schema: "public", name: "task" },
+        tree(
+          "UPDATE public.task_checklist AS d SET (assignee_id, project_id, region_id) = (SELECT s.assignee_id, s.project_id, s.region_id FROM public.task AS s WHERE s.org_id OPERATOR(pg_catalog.=) d.org_id AND s.id OPERATOR(pg_catalog.=) d.parent_id)" +
+            " WHERE d.assignee_id IS DISTINCT FROM (SELECT s.assignee_id FROM public.task AS s WHERE s.org_id OPERATOR(pg_catalog.=) d.org_id AND s.id OPERATOR(pg_catalog.=) d.parent_id)" +
+            " OR d.project_id IS DISTINCT FROM (SELECT s.project_id FROM public.task AS s WHERE s.org_id OPERATOR(pg_catalog.=) d.org_id AND s.id OPERATOR(pg_catalog.=) d.parent_id)" +
+            " OR d.region_id IS DISTINCT FROM (SELECT s.region_id FROM public.task AS s WHERE s.org_id OPERATOR(pg_catalog.=) d.org_id AND s.id OPERATOR(pg_catalog.=) d.parent_id)"
+        ),
+      ],
+    ])
+    // Лише очікувані колонки: решта копій зв'язку вже узгоджена.
+    expect(
+      carrierBackfillStatements(physical, [
+        pending("task_checklist", "region_id"),
+      ]).map((s) => tree(s.sql))
+    ).toEqual([
+      tree(
+        "UPDATE public.task_checklist AS d SET (region_id) = (SELECT s.region_id FROM public.task AS s WHERE s.org_id OPERATOR(pg_catalog.=) d.org_id AND s.id OPERATOR(pg_catalog.=) d.parent_id)" +
+          " WHERE d.region_id IS DISTINCT FROM (SELECT s.region_id FROM public.task AS s WHERE s.org_id OPERATOR(pg_catalog.=) d.org_id AND s.id OPERATOR(pg_catalog.=) d.parent_id)"
+      ),
+    ])
+  })
+
+  it("a row without a link gets a NULL copy", async () => {
+    // Підзапит у `SET`, а не `UPDATE … FROM`: внутрішнє з'єднання пропустило
+    // б рядок з `NULL` у зв'язку, і старе значення лишилося б під іменем
+    // копії (Р2b2-2).
+    const [statement] = carrierBackfillStatements(await physicalOf(), [
+      pending("task_comment", "task_id_assignee_id"),
+    ])
+    const update = (
+      tree(statement!.sql) as { UpdateStmt: Record<string, unknown> }
+    ).UpdateStmt
+    expect(update.fromClause).toBeUndefined()
+    expect(nodes(update.targetList, "SubLink")).toHaveLength(1)
+  })
+
+  it("orders a copy after the copy it reads", async () => {
+    // Ім'я ТЧ коментаря менше за ім'я коментаря: порядок за іменем поставив
+    // би копію копії раніше за копію, яку вона читає.
+    const physical = await physicalOf({
+      [COMMENT_FILE]: {
+        tabularSections: [
+          {
+            id: uuid(6521),
+            name: "attachments",
+            physicalName: "a_comment_files",
+            attributes: [],
+          },
+        ],
+      },
+    })
+    const files = pending("a_comment_files", "task_id_assignee_id")
+    const comment = pending("task_comment", "task_id_assignee_id")
+    for (const input of [
+      [files, comment],
+      [comment, files],
+    ]) {
+      expect(
+        carrierBackfillStatements(physical, input).map((s) => s.table.name)
+      ).toEqual(["task_comment", "a_comment_files"])
+    }
+  })
+
+  it("the backfill joins like the propagation trigger", async () => {
+    const result = await compileRights(policyDomain())
+    const model = result.model!
+    const [statement] = carrierBackfillStatements(model.physical, [
+      pending("task_comment", "task_id_assignee_id"),
+    ])
+    const update = (
+      tree(statement!.sql) as {
+        UpdateStmt: { targetList: unknown }
+      }
+    ).UpdateStmt
+    const sub = nodes(update.targetList, "SubLink")[0] as {
+      subselect: { SelectStmt: { whereClause: unknown } }
+    }
+    const propagation = bodyShape(
+      unit(model, "function:public.task_simetra_carriers_out()").sql
+    )
+    const toComment = propagation
+      .flatMap((s) => s.expressions.map((e) => e.tree))
+      .map((t) => (t as { UpdateStmt?: Record<string, unknown> }).UpdateStmt)
+      .find(
+        (u) =>
+          (u?.relation as { relname: string } | undefined)?.relname ===
+          "task_comment"
+      )!
+    // Пари тригера — без умови «копія відрізняється» (`IS DISTINCT FROM`).
+    expect(linkPairs(sub.subselect.SelectStmt.whereClause)).toEqual([
+      { local: "org_id", source: "org_id" },
+      { local: "task_id", source: "id" },
+    ])
+    expect(linkPairs(toComment.whereClause)).toEqual(
+      linkPairs(sub.subselect.SelectStmt.whereClause)
+    )
+  })
+
+  it("refuses a pending copy the snapshot does not know", async () => {
+    const physical = await physicalOf()
+    for (const input of [
+      pending("task_checklist", "note"),
+      pending("task_checklist", "missing"),
+      pending("no_such_table", "assignee_id"),
+    ]) {
+      expect(() => carrierBackfillStatements(physical, [input])).toThrow(
+        `internal: pending carrier public.${input.table.name}.${input.columns[0]} is not a copy in the desired snapshot`
+      )
+    }
   })
 })
