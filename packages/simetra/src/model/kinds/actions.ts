@@ -33,17 +33,18 @@ export interface KindAction {
   /** Direct edges of the kind only, without the general `read` edge. */
   requires: readonly StandardAction[]
   effects: ActionEffects
+  // Факт реєстру, а не гілка за видом (спека прав §3): регістр не має
+  // `create`/`update`/`delete`, лише `write`, а константа вставляє через
+  // `update`.
   /**
-   * Природна дія за DML: покриває `effects.dml` для рядків, що не є кореневими
-   * для дії команди (спека прав §3). Факт реєстру, а не гілка за видом:
-   * регістр не має `create`/`update`/`delete`, лише `write`, а константа
-   * вставляє через `update`. На кожен DML — щонайбільше одна така дія.
+   * The natural action of its DML: it covers `effects.dml` for the rows that
+   * are not the command's root row. At most one such action per DML.
    */
   natural?: true
   /**
-   * Дія-перехід: єдина колонка шапки, яку дія змінює, і напрям. Без `from`/`to`
-   * напрямку немає (`markDeletion` — в обидва боки). Колонку переходу не
-   * зачіпають ні `"all"`, ні кастомні дії.
+   * A transition action: the one header column it changes and the direction.
+   * Without `from`/`to` there is no direction (`markDeletion` goes both
+   * ways). Neither `"all"` nor a custom action touches a transition column.
    */
   transition?: { column: string; from?: boolean; to?: boolean }
 }

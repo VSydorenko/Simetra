@@ -427,6 +427,16 @@ describe("EventSubscription", () => {
     ).toEqual([
       ["event-subscriptions/StampContract/StampContract.sql", "setConfig"],
     ])
+    // Модуль прийнятої таблиці — борг, але обробник боргом не буває: його
+    // судять і там, і теж одним записом.
+    const TABLE_SQL = "custom-tables/T/T.sql"
+    expect(
+      await forms({
+        [HANDLER_FILE]: undefined,
+        "custom-tables/T/T.meta.json": customTable("T"),
+        [TABLE_SQL]: write,
+      })
+    ).toEqual([[TABLE_SQL, "setConfig"]])
     expect(
       await forms({
         [HANDLER_FILE]: handler("PERFORM set_config('app.x', '1', true);"),

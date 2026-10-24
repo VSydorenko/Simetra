@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { compile } from "simetra/compiler"
-import { COMMAND_SETTING } from "simetra/model"
+import { COMMAND_SETTING, SESSION_CLAIMS_SETTING } from "simetra/model"
 import {
   acceptDebt,
   customTable,
@@ -226,6 +226,68 @@ describe("kind module: closed forms only", () => {
       expect(await writes(sql)).toEqual([
         ["sql.command-context-write", SALE_SQL, form],
       ])
+    })
+
+    // Claims запиту й роль захищені нарівні з контекстом (Р2b1-19b): claims
+    // визначають користувача в політиках запису, а зміна ролі виходить з ролі
+    // команд. Стара форма claims — `request.jwt.claim.<ключ>`.
+    const CLAIMS = SESSION_CLAIMS_SETTING
+    const LEGACY_CLAIM = `${CLAIMS.replace(/s$/, "")}.sub`
+    it.each([
+      [
+        "claims via set_config",
+        "setConfig",
+        plpgsqlBody(`PERFORM set_config('${CLAIMS}', '{}', true);`),
+      ],
+      [
+        "claims via SET LOCAL",
+        "setStatement",
+        plpgsqlBody(`SET LOCAL ${CLAIMS} = '{}';`),
+      ],
+      [
+        "a legacy claim",
+        "setConfig",
+        plpgsqlBody(`PERFORM set_config('${LEGACY_CLAIM}', 'x', true);`),
+      ],
+      ["SET ROLE", "setStatement", plpgsqlBody("SET ROLE postgres;")],
+      ["RESET ROLE", "setStatement", plpgsqlBody("RESET ROLE;")],
+      [
+        "SET SESSION AUTHORIZATION",
+        "setStatement",
+        plpgsqlBody("SET SESSION AUTHORIZATION postgres;"),
+      ],
+      [
+        "RESET SESSION AUTHORIZATION",
+        "setStatement",
+        plpgsqlBody("RESET SESSION AUTHORIZATION;"),
+      ],
+      [
+        "set_config on the role",
+        "setConfig",
+        plpgsqlBody("PERFORM set_config('role', 'postgres', true);"),
+      ],
+      [
+        "set_config on the session authorization",
+        "setConfig",
+        plpgsqlBody(
+          "PERFORM set_config('session_authorization', 'postgres', true);"
+        ),
+      ],
+      [
+        "a SET role function option",
+        "functionOption",
+        shell("LANGUAGE sql STABLE SET role = postgres", "select 1"),
+      ],
+    ])("%s is refused", async (_case, form, sql) => {
+      expect(await writes(sql)).toEqual([
+        ["sql.command-context-write", SALE_SQL, form],
+      ])
+    })
+
+    it("reading the claims passes", async () => {
+      expect(
+        await writes(plpgsqlBody(`PERFORM current_setting('${CLAIMS}', true);`))
+      ).toEqual([])
     })
 
     // Допоміжна функція спільного `sql/`-файлу (не обробник, не модуль виду):

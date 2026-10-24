@@ -9,6 +9,7 @@ import {
 } from "simetra/compiler"
 import { metaFiles, project } from "./helpers"
 import { diagnostic } from "../diagnostics"
+import type { CommandContextWrite } from "../sql/command-context"
 import type { SetFunctionReason } from "../sql/function-shape"
 
 const ALL_RULES: RuleCode[] = [...SCHEMA_RULES, ...COMPILER_RULES]
@@ -153,13 +154,14 @@ describe("messages catalog", () => {
   })
 
   it("sql.command-context-write names the function and the form in both locales", () => {
-    const forms = [
-      "setConfig",
-      "setStatement",
-      "functionOption",
-      "nonLiteral",
-      "settingsTable",
-    ]
+    // Повнота за типом: нова форма без запису тут — помилка `tsc`.
+    const forms = Object.keys({
+      setConfig: 0,
+      setStatement: 0,
+      functionOption: 0,
+      nonLiteral: 0,
+      settingsTable: 0,
+    } satisfies Record<CommandContextWrite, 0>)
     for (const locale of ["en", "uk"] as const) {
       const messages = forms.map(
         (form) =>
@@ -171,7 +173,11 @@ describe("messages catalog", () => {
             locale
           ).message
       )
-      for (const message of messages) expect(message).toContain("public.f")
+      messages.forEach((message, i) => {
+        expect(message).toContain("public.f")
+        // Сирий ідентифікатор форми означав би пропущений текст.
+        expect(message, `${forms[i]} ${locale}`).not.toContain(forms[i])
+      })
       expect(new Set(messages).size).toBe(forms.length)
     }
   })

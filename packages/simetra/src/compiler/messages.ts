@@ -4,6 +4,7 @@ import type {
   FillProblem,
   RuleCode,
 } from "./diagnostics"
+import type { CommandContextWrite } from "./sql/command-context"
 
 export type Locale = "en" | "uk"
 
@@ -296,27 +297,37 @@ const CLOSED_SHELL_PROBLEM: Readonly<
     uk: "її тіло plpgsql не розбирається",
   },
 }
-/** Форми зміни контексту команди (`sql.command-context-write`). */
+/**
+ * Форми зміни захищеного налаштування сесії (`sql.command-context-write`):
+ * мапа повна за типом форм, тож нова форма без тексту — помилка `tsc`.
+ */
 const COMMAND_CONTEXT_FORM: Readonly<
-  Record<string, { en: string; uk: string }>
+  Record<CommandContextWrite, { en: string; uk: string }>
 > = {
   setConfig: {
-    en: "set_config on a platform setting",
-    uk: "set_config на налаштуванні платформи",
+    en: "set_config on a protected session setting",
+    uk: "set_config на захищеному налаштуванні сесії",
   },
   setStatement: {
-    en: "SET or RESET of a platform setting",
-    uk: "SET чи RESET налаштування платформи",
+    en: "SET or RESET of a protected session setting or of the role",
+    uk: "SET чи RESET захищеного налаштування сесії чи ролі",
   },
   functionOption: {
-    en: "a SET function option on a platform setting",
-    uk: "опція функції SET на налаштуванні платформи",
+    en: "a SET function option on a protected session setting",
+    uk: "опція функції SET на захищеному налаштуванні сесії",
   },
   nonLiteral: {
     en: "set_config with a name that is not a literal",
     uk: "set_config з ім'ям, що не є літералом",
   },
+  settingsTable: {
+    en: "a write to pg_settings",
+    uk: "запис у pg_settings",
+  },
 }
+const commandContextForm = (form: unknown) =>
+  COMMAND_CONTEXT_FORM[String(form) as CommandContextWrite] as
+    { en: string; uk: string } | undefined
 /** Причини виходу функції множини скоупу за закриту форму. */
 const SET_FUNCTION_REASON: Readonly<
   Record<string, { en: string; uk: string }>
@@ -743,12 +754,12 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "sql.command-context-write": {
     en: (p) =>
-      `Function ${p.name} changes the command context (${COMMAND_CONTEXT_FORM[String(p.form)]?.en ?? p.form})`,
+      `Function ${p.name} changes a platform session setting (${commandContextForm(p.form)?.en ?? p.form})`,
     uk: (p) =>
-      `Функція ${p.name} змінює контекст команди (${COMMAND_CONTEXT_FORM[String(p.form)]?.uk ?? p.form})`,
+      `Функція ${p.name} змінює налаштування сесії платформи (${commandContextForm(p.form)?.uk ?? p.form})`,
     hint: {
-      en: "Only the platform sets the command context. Application SQL runs in the middle of a command statement, so a changed setting would leak into the policies of the following rows; do not call set_config, SET or RESET on the platform settings, or declare them as a function option.",
-      uk: "Контекст команди ставить лише платформа. SQL застосунку виконується посеред оператора команди, тож змінене налаштування потрапило б у політики наступних рядків; не викликайте set_config, SET чи RESET для налаштувань платформи й не задавайте їх опцією функції.",
+      en: "Only the platform sets the command context (simetra.*), the request claims (request.jwt.*) and the role. Application SQL runs in the middle of a command statement, so a changed setting would leak into the policies of the following rows: do not change them with set_config, SET or RESET (SET ROLE and SET SESSION AUTHORIZATION included), a SET function option, a write to pg_settings or a literal EXECUTE.",
+      uk: "Контекст команди (simetra.*), claims запиту (request.jwt.*) і роль ставить лише платформа. SQL застосунку виконується посеред оператора команди, тож змінене налаштування потрапило б у політики наступних рядків: не змінюйте їх через set_config, SET чи RESET (зокрема SET ROLE і SET SESSION AUTHORIZATION), опцію функції SET, запис у pg_settings чи літеральний EXECUTE.",
     },
   },
   "sql.function-overload": {

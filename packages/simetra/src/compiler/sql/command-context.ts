@@ -1,10 +1,15 @@
 import type { Node } from "libpg-query"
-import { COMMAND_SETTING } from "simetra/model"
+import { PROTECTED_SESSION_SETTINGS } from "simetra/model"
 import { plpgsqlExpressionTrees } from "./rewrite/plpgsql-body"
 import type { SqlParser } from "./parse"
 import type { PlpgsqlParser } from "./plpgsql"
 
-/** Чим SQL застосунку зачіпає налаштування `simetra.*` (Р2b1-19). */
+/**
+ * Чим SQL застосунку зачіпає захищене налаштування сесії (Р2b1-19,
+ * Р2b1-19b). Зміна ролі (`SET ROLE`, `SET SESSION AUTHORIZATION` і їхні
+ * `RESET`) окремої форми не має: розбирач дає їй той самий `VariableSetStmt`
+ * з іменем `role` чи `session_authorization`, тож вона — `setStatement`.
+ */
 export type CommandContextWrite =
   | "setConfig"
   | "setStatement"
@@ -13,14 +18,17 @@ export type CommandContextWrite =
   | "settingsTable"
 
 /**
- * Простір імен налаштувань платформи, виведений зі сталої контексту: літерала
- * імені поза T0 немає. Забороняється весь простір, а не одне ім'я: наступне
- * налаштування платформи не повинно ставати новою дірою.
+ * Захищені налаштування — з переліку T0, тож літерала імені поза T0 немає.
+ * Імена налаштувань у Postgres нечутливі до регістру.
  */
-const PLATFORM_SETTING_PREFIX = `${COMMAND_SETTING.split(".")[0]}.`
-
-const isPlatformSetting = (name: string | undefined): boolean =>
-  name?.toLowerCase().startsWith(PLATFORM_SETTING_PREFIX) === true
+function isProtectedSetting(name: string | undefined): boolean {
+  const lower = name?.toLowerCase()
+  if (lower === undefined) return false
+  return (
+    PROTECTED_SESSION_SETTINGS.prefixes.some((p) => lower.startsWith(p)) ||
+    PROTECTED_SESSION_SETTINGS.names.some((n) => n === lower)
+  )
+}
 
 interface SetStatement {
   kind?: string
@@ -73,7 +81,7 @@ function settingsTableWrite(node: Record<string, unknown>): boolean {
 }
 
 function setStatementWrite(set: SetStatement): boolean {
-  return set.kind === "VAR_RESET_ALL" || isPlatformSetting(set.name)
+  return set.kind === "VAR_RESET_ALL" || isProtectedSetting(set.name)
 }
 
 function callWrite(call: CallNode): CommandContextWrite | undefined {
@@ -88,7 +96,7 @@ function callWrite(call: CallNode): CommandContextWrite | undefined {
   if (first === undefined) return undefined
   const text = literalText(first)
   if (text === undefined) return "nonLiteral"
-  return isPlatformSetting(text) ? "setConfig" : undefined
+  return isProtectedSetting(text) ? "setConfig" : undefined
 }
 
 /** Обхід дерева розбору: перша заборонена форма чи `undefined`. */
@@ -126,11 +134,12 @@ interface FunctionTree {
 }
 
 /**
- * Чи змінює функція налаштування `simetra.*` (контекст команди). Контекст
- * ставить лише `runCommand`; обробник підписки спрацьовує посеред оператора
- * команди, і змінений ним контекст побачили б політики наступних рядків
- * (Р2b1-19, Р2b1-19a). Тіло `LANGUAGE sql` розбирається тут, тіло plpgsql — через
- * вирази його операторів. Перша знайдена форма.
+ * Чи змінює функція захищене налаштування сесії: `simetra.*` (контекст
+ * команди), claims запиту чи роль. Їх ставить лише платформа; обробник
+ * підписки спрацьовує посеред оператора команди, і змінене ним налаштування
+ * побачили б політики наступних рядків (Р2b1-19, Р2b1-19a, Р2b1-19b). Тіло
+ * `LANGUAGE sql` розбирається тут, тіло plpgsql — через вирази його
+ * операторів. Перша знайдена форма.
  */
 export function commandContextWrite(
   tree: Node,

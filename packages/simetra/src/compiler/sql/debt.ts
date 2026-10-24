@@ -2,9 +2,9 @@ import type { Node } from "libpg-query"
 import { KIND_REGISTRY, SQL_DEBT_FILE, type Project } from "simetra/model"
 import { compareStrings, diagnostic, type Diagnostic } from "../diagnostics"
 import type { ParsedObject } from "../stages/files"
-import { closedShellProblem } from "./closed-forms"
+import { closedShellProblem, ruledFunctions } from "./closed-forms"
 import type { PlpgsqlParser } from "./plpgsql"
-import { functionIdentity, type VerbatimUnit } from "./units"
+import type { VerbatimUnit } from "./units"
 
 /**
  * Ідентичності одиниць боргу (план промоції 2b, рішення 12), відсортовані:
@@ -51,33 +51,6 @@ function debtPredicate(
         plpgsql
       ) === undefined
     )
-}
-
-/**
- * Ідентичності функцій без аргументів, які оголошують метадані: обробники
- * підписок і функції множини видів скоупу. Обидві мають власні правила
- * оболонки (стадія 5), тож не є ні боргом, ні винятком із ратчета.
- */
-function ruledFunctions(
-  objects: readonly ParsedObject[],
-  project: Project | undefined
-): ReadonlySet<string> {
-  if (project === undefined) return new Set()
-  const declared = [
-    ...objects.flatMap((o) => {
-      const spec = KIND_REGISTRY[o.kind].subscription?.(o.data)
-      return spec === undefined ? [] : [spec.handler]
-    }),
-    // Згенерована функція множини (`membership`) — не дослівна одиниця.
-    ...project.scopeKinds.flatMap((kind) =>
-      typeof kind.setFunction === "string" ? [] : [kind.setFunction]
-    ),
-  ]
-  return new Set(
-    declared.map((fn) =>
-      functionIdentity(fn.schema ?? project.defaultSchema, fn.name, [])
-    )
-  )
 }
 
 /**

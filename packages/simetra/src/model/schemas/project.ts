@@ -149,16 +149,36 @@ export const PROVIDER_API_ROLES: Readonly<
  */
 export const PLATFORM_ROLES = { command: "simetra_command" } as const
 
+// Ім'я одне для всіх провайдерів, тож літерала поза T0 немає (спека прав §5.3).
 /**
- * Налаштування сесії, у якому `runCommand` передає контекст команди (спека
- * прав §5.3): значення — JSON `CommandContext`. Ім'я одне для всіх
- * провайдерів, тож літерала поза T0 немає.
+ * The session setting through which `runCommand` passes the command context;
+ * its value is a JSON `CommandContext`.
  */
 export const COMMAND_SETTING = "simetra.command"
 
-/** Контекст команди: дія, мітка кореневого об'єкта й UUID кореневого рядка. */
+/**
+ * The session setting that carries the request claims: the platform layer
+ * reads the current user's subject (`sub`) from it.
+ */
+export const SESSION_CLAIMS_SETTING = "request.jwt.claims"
+
+// Підміна будь-якого з них посеред оператора команди змінила б, кого й що
+// бачать політики запису (Р2b1-19, Р2b1-19b): claims визначають користувача,
+// а `RESET ROLE` вийшов би з ролі команд. Простори імен, а не окремі імена:
+// наступне налаштування платформи чи стара форма `request.jwt.claim.*` не
+// стають новою дірою.
+/**
+ * Session settings that application SQL must never change: name prefixes
+ * (case-insensitive) and exact names.
+ */
+export const PROTECTED_SESSION_SETTINGS = {
+  prefixes: ["simetra.", "request.jwt."],
+  names: ["role", "session_authorization"],
+} as const
+
+/** The command context: the action, the root object's label and the root row's UUID. */
 export interface CommandContext {
-  /** Слово словника дій або UUID кастомної дії. */
+  /** A word of the action vocabulary or the UUID of a custom action. */
   action: string
   object: string
   root: string
@@ -202,7 +222,7 @@ export interface IdentitySource {
  *
  * Чого `IdentitySource` не виражає — межа, яку другий провайдер перевіряє
  * першою, бо платформний шар вважає це спільним для всіх:
- * - контракт сесії: `current_setting('request.jwt.claims')` і claim `sub`
+ * - контракт сесії: `current_setting(SESSION_CLAIMS_SETTING)` і claim `sub`
  *   у ньому (функція поточного користувача);
  * - правило С8: ключ облікового запису — uuid, він же `id` користувача, а
  *   `subject` — цей ключ як `::text`;

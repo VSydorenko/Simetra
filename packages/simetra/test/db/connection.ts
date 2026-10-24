@@ -2,6 +2,7 @@ import pg from "pg"
 import {
   COMMAND_SETTING,
   PLATFORM_ROLES,
+  SESSION_CLAIMS_SETTING,
   type CommandContext,
 } from "simetra/model"
 import type { ApplyDatabase, ApplyTransaction } from "simetra/schema"
@@ -262,7 +263,8 @@ export async function asRole(
   role: ApiRole,
   claims: Record<string, unknown>
 ): Promise<void> {
-  await client.query("SELECT set_config('request.jwt.claims', $1, true)", [
+  await client.query("SELECT set_config($1, $2, true)", [
+    SESSION_CLAIMS_SETTING,
     JSON.stringify(claims),
   ])
   await client.query(`SET LOCAL ROLE ${role}`)
@@ -285,10 +287,20 @@ export async function queryAs<T extends pg.QueryResultRow>(
     const { rows } = await client.query<T>(sql, params)
     return { rows }
   } catch (error) {
-    return { code: (error as { code: string }).code }
+    // Без коду Postgres це не відмова запиту, а збій з'єднання чи помічника:
+    // загорнутий у відповідь, він маскувався б під очікувану відмову.
+    if (!isDatabaseError(error)) throw error
+    return { code: error.code }
   } finally {
     await client.query("ROLLBACK TO SAVEPOINT as_role")
   }
+}
+
+/** Помилка, яку повернув Postgres (з кодом SQLSTATE), а не збій клієнта. */
+function isDatabaseError(
+  error: unknown
+): error is pg.DatabaseError & { code: string } {
+  return error instanceof pg.DatabaseError && typeof error.code === "string"
 }
 
 /** Відмова запиту: код, повідомлення й деталь помилки Postgres. */
@@ -317,7 +329,8 @@ export async function commandAs<T extends pg.QueryResultRow>(
 ): Promise<{ rows: T[]; after?: pg.QueryResultRow[] } | Refusal> {
   await client.query("SAVEPOINT command_as")
   try {
-    await client.query("SELECT set_config('request.jwt.claims', $1, true)", [
+    await client.query("SELECT set_config($1, $2, true)", [
+      SESSION_CLAIMS_SETTING,
       JSON.stringify(claims),
     ])
     if (context !== undefined)
@@ -331,8 +344,9 @@ export async function commandAs<T extends pg.QueryResultRow>(
     await client.query("RESET ROLE")
     return { rows, after: (await client.query(options.after)).rows }
   } catch (error) {
-    const { code, message, detail } = error as pg.DatabaseError
-    return { code: code!, message, ...(detail === undefined ? {} : { detail }) }
+    if (!isDatabaseError(error)) throw error
+    const { code, message, detail } = error
+    return { code, message, ...(detail === undefined ? {} : { detail }) }
   } finally {
     await client.query("ROLLBACK TO SAVEPOINT command_as")
   }
