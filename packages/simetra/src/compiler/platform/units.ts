@@ -1,6 +1,7 @@
 import {
   PLATFORM_SCHEMA,
   quoteIdent,
+  SESSION_CLAIMS_SETTING,
   type DatabaseProvider,
   type GrantPurpose,
   type IdentityNameSource,
@@ -178,7 +179,7 @@ function currentUserFunction(
 ): string {
   return plpgsqlFunction(`${qualified(CURRENT_USER)}()`, "uuid", "STABLE", [
     "DECLARE",
-    "  v_subject text := nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub';",
+    `  v_subject text := nullif(current_setting(${sqlLiteral(SESSION_CLAIMS_SETTING)}, true), '')::jsonb ->> 'sub';`,
     "BEGIN",
     "  RETURN (",
     "    SELECT i.user_id",

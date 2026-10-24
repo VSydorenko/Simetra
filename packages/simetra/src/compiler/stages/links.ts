@@ -21,7 +21,7 @@ import {
 import type { SqlParser } from "../sql/parse"
 import { mechanicsStandardNames } from "../mechanics-units"
 import type { PlpgsqlFunction, PlpgsqlParser } from "../sql/plpgsql"
-import { splitAssignment } from "../sql/rewrite/plpgsql-body"
+import { plpgsqlExpressionTrees } from "../sql/rewrite/plpgsql-body"
 import { functionIdentity, type VerbatimUnit } from "../sql/units"
 import { objectKey, type ParsedObject } from "./files"
 import { registerTargetError, type ResolvedReference } from "./identity"
@@ -560,21 +560,7 @@ function copyReads(
     }
     for (const inner of Object.values(node)) visit(inner)
   }
-  for (const statement of fn.statements) {
-    for (const e of statement.expressions) {
-      if (e.role === "dynamic") continue
-      let text = e.query
-      if (e.parseMode >= 3) {
-        const split = splitAssignment(e.query, e.parseMode - 2)
-        if (split === undefined) continue
-        text = `SELECT ${e.query.slice(split.valueStart)}`
-      } else if (e.parseMode > 0) {
-        text = `SELECT ${e.query}`
-      }
-      const parsed = parse(text)
-      if (parsed.ok) visit(parsed.statements.map((s) => s.stmt))
-    }
-  }
+  for (const tree of plpgsqlExpressionTrees(fn, parse)) visit(tree)
   return [...read]
 }
 

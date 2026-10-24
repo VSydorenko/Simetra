@@ -957,6 +957,36 @@ export function unknownRecordFields(
 }
 
 /**
+ * Дерева виразів тіла plpgsql: той самий обхід, що й читання копій обробником
+ * (Р2a2-9). Вирази динамічного SQL (`EXECUTE`) пропускаються: у закритих
+ * модулях і обробниках їх відкидає оболонка, а в спільних файлах літеральний
+ * текст розбирає `command-context.ts`, нелітеральний — відоме обмеження до 2c
+ * (Р2b1-19a). Нерозбірний вираз пропускається: тіло вже пройшло розбір.
+ */
+export function plpgsqlExpressionTrees(
+  fn: PlpgsqlFunction,
+  parse: SqlParser
+): unknown[] {
+  const trees: unknown[] = []
+  for (const statement of fn.statements) {
+    for (const e of statement.expressions) {
+      if (e.role === "dynamic") continue
+      let text = e.query
+      if (e.parseMode >= 3) {
+        const split = splitAssignment(e.query, e.parseMode - 2)
+        if (split === undefined) continue
+        text = `SELECT ${e.query.slice(split.valueStart)}`
+      } else if (e.parseMode > 0) {
+        text = `SELECT ${e.query}`
+      }
+      const parsed = parse(text)
+      if (parsed.ok) trees.push(parsed.statements.map((s) => s.stmt))
+    }
+  }
+  return trees
+}
+
+/**
  * Межа цілі присвоєння `ім'я[.ім'я…][індекси] :=|= значення`; `names` —
  * кількість імен цілі за режимом розбору Postgres.
  */

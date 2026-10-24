@@ -258,6 +258,12 @@ async function unreadPaths(
   )
 }
 
+// Прохід без приманок — один на файл: обидва кейси нижче звіряються з ним, а
+// кожен прохід — повна компіляція kitchen sink, і дві в одному кейсі під
+// паралельним `pnpm test` упирались у таймаут.
+let baseline: Promise<string[]> | undefined
+const baselinePaths = () => (baseline ??= unreadPaths())
+
 describe("field ratchet", () => {
   it("schema paths come from the Zod shapes, nested and union branches included", () => {
     const paths = requiredPaths()
@@ -272,7 +278,7 @@ describe("field ratchet", () => {
   })
 
   it("every metamodel field is read by the compiler stages or codegen", async () => {
-    expect(await unreadPaths()).toEqual([])
+    expect(await baselinePaths()).toEqual([])
   })
 
   it("a field that nobody reads turns the ratchet red at every nested position", async () => {
@@ -280,13 +286,13 @@ describe("field ratchet", () => {
     // об'єкті мусить з'явитися серед непрочитаних — інакше ратчет там
     // порожній (так було з переліком ключів загальним обходом за обрізаним
     // стеком і зі spread колонок CustomTable й зовнішньої цілі FK).
-    const baseline = await unreadPaths()
+    const untampered = await baselinePaths()
     let injected: string[] = []
     const tampered = await unreadPaths((stage1) => {
       injected = injectBaitEverywhere(stage1)
       return injected
     })
-    expect(tampered.filter((path) => !baseline.includes(path))).toEqual(
+    expect(tampered.filter((path) => !untampered.includes(path))).toEqual(
       injected
     )
     expect(injected).toEqual(

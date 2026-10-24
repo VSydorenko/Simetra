@@ -55,7 +55,9 @@ export function isRightsContainer(object: ParsedObject): boolean {
 }
 
 /** Кастомні дії розібраного об'єкта виду з контрактом прав. */
-export function customActionsOf(object: ParsedObject): readonly CustomAction[] {
+export function customActionsOf(
+  object: Pick<ParsedObject, "data">
+): readonly CustomAction[] {
   return (object.data as { customActions?: CustomAction[] }).customActions ?? []
 }
 
@@ -68,6 +70,22 @@ export function customActionEffects(action: CustomAction): ActionEffects {
   const tabularSections = action.effects.tabularSections ?? false
   const writes = header === "all" || header.length > 0 || tabularSections
   return { dml: writes ? ["update"] : [], header, tabularSections }
+}
+
+/**
+ * Чи пише об'єкт командою: вид із контрактом прав і хоч одна дія з DML — та
+ * сама умова, з якою контракт дає політики запису й тригер ефектів, але без
+ * контракту: стадія 4 контрактів прав не бачить.
+ */
+export function writesByCommand(
+  object: Pick<ParsedObject, "kind" | "data">
+): boolean {
+  const def = KIND_REGISTRY[object.kind]
+  if (def.rightsExtents.length === 0) return false
+  return (
+    def.actions(object.data).some((a) => a.effects.dml.length > 0) ||
+    customActionsOf(object).some((a) => customActionEffects(a).dml.length > 0)
+  )
 }
 
 /**

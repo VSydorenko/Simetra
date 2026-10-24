@@ -1,12 +1,18 @@
 import { describe, expect, it } from "vitest"
-import { applyChanges, fixFiles, localize } from "simetra/compiler"
+import { applyChanges, compile, fixFiles, localize } from "simetra/compiler"
+import type { RightsAction } from "../contracts"
+import { uniformExtents } from "../rights/contracts"
+import { kitchenSink } from "./fixtures/kitchen-sink"
 import {
   MEMBER_REGION_ID,
   ORG_KIND_ID,
   TASK_FILE,
   TASK_ID,
   compileRights,
+  globalConstant,
+  policyDomain,
   rightsFiles,
+  writableRegister,
 } from "./fixtures/rights"
 import { uuid } from "./helpers"
 
@@ -59,11 +65,11 @@ describe("rights contract", () => {
       header: ["deletion_mark"],
       tabularSections: false,
     })
-    expect(task.actions.find((a) => a.action === "create")!.effects).toEqual({
-      dml: ["insert"],
-      header: "all",
-      tabularSections: true,
-    })
+    // «all» розгорнуто в явний перелік шапки без колонок переходів (Р2b1-18).
+    const create = task.actions.find((a) => a.action === "create")!.effects
+    expect(create).toMatchObject({ dml: ["insert"], tabularSections: true })
+    expect(create.header).toContain("assignee_id")
+    expect(create.header).not.toContain("posted")
   })
 
   it("has a record for every kind with rights extents and none for others", async () => {
@@ -123,7 +129,7 @@ describe("rights contract", () => {
           {
             id: uuid(7704),
             name: "stamp",
-            effects: { header: ["deletionMark", "createdBy"] },
+            effects: { header: ["createdBy"] },
           },
         ],
       },
@@ -142,10 +148,12 @@ describe("rights contract", () => {
     })
     expect(archive).toMatchObject({
       requires: ["post", "read", "update", uuid(7702)].sort(),
-      effects: { dml: ["update"], header: "all", tabularSections: true },
+      effects: { dml: ["update"], tabularSections: true },
     })
+    expect(archive!.effects.header).toContain("assignee_id")
+    expect(archive!.effects.header).not.toContain("deletion_mark")
     // Стандартні реквізити — за ім'ям у стилі проєкту.
-    expect(stamp!.effects.header).toEqual(["deletion_mark", "created_by_id"])
+    expect(stamp!.effects.header).toEqual(["created_by_id"])
     expect(stamp!.requires).toEqual(["read"])
   })
 
@@ -385,5 +393,164 @@ describe("rights contract", () => {
       applyChanges(files, result.changes).get(TASK_FILE)!
     ) as { customActions: Record<string, unknown>[] }
     expect(task.customActions).toEqual([{ id: uuid(7801), name: "close" }])
+  })
+
+  describe("natural action and transition facts", () => {
+    const domain = () =>
+      compileRights(policyDomain(writableRegister(), globalConstant()))
+    const byLabel = async (label: string) =>
+      (await domain()).model!.contracts.rights.find(
+        (c) => c.kindLabel === label
+      )!
+
+    it.each([
+      ["task", "create", ["insert"]],
+      ["task", "update", ["update"]],
+      ["task", "delete", ["delete"]],
+      ["task", "markDeletion", []],
+      ["task", "post", []],
+      ["task", "read", []],
+      ["region_notes", "write", ["insert", "update", "delete"]],
+      ["rate", "update", ["insert", "update"]],
+    ])("%s: %s has natural %j", async (label, action, natural) => {
+      const found = (await byLabel(label)).actions.find(
+        (a) => a.action === action
+      )!
+      expect(found.natural).toEqual(natural)
+    })
+
+    it("every object's actions share one extent set", async () => {
+      const kitchen = await compile(kitchenSink())
+      const contracts = [
+        ...kitchen.model!.contracts.rights,
+        ...(await domain()).model!.contracts.rights,
+      ]
+      expect(contracts.length).toBeGreaterThan(0)
+      for (const c of contracts) {
+        expect(uniformExtents(c.actions, c.kindLabel)).toEqual(
+          c.actions[0]!.extents
+        )
+        for (const a of c.actions)
+          expect(a.extents).toEqual(c.actions[0]!.extents)
+      }
+    })
+
+    it("transition columns belong to their transitions", async () => {
+      const task = (
+        await compileRights(policyDomain())
+      ).model!.contracts.rights.find((c) => c.objectId === TASK_ID)!
+      const action = (name: string) =>
+        task.actions.find((a) => a.action === name)!
+      expect(action("post").transition).toEqual({
+        column: "posted",
+        from: false,
+        to: true,
+      })
+      expect(action("unpost").transition).toEqual({
+        column: "posted",
+        from: true,
+        to: false,
+      })
+      expect(action("markDeletion").transition).toEqual({
+        column: "deletion_mark",
+      })
+      expect(task.transitions).toEqual([
+        { column: "deletion_mark", default: "false" },
+        { column: "posted", default: "false" },
+      ])
+      // «all» розгорнуто в явний перелік шапки без колонок переходів.
+      for (const name of ["create", "update"]) {
+        const header = action(name).effects.header
+        expect(header).not.toBe("all")
+        expect(header).toContain("assignee_id")
+        expect(header).not.toContain("posted")
+        expect(header).not.toContain("id")
+        expect(header).not.toContain("deletion_mark")
+      }
+    })
+
+    it("a custom action may not name a transition column", async () => {
+      const result = await compileRights(
+        policyDomain({
+          [TASK_FILE]: {
+            customActions: [
+              {
+                id: uuid(7901),
+                name: "stamp",
+                effects: { header: ["posted"] },
+              },
+            ],
+          },
+        })
+      )
+      expect(errors(result).map((d) => [d.code, d.pointer, d.params])).toEqual([
+        [
+          "rights.custom-action-effects",
+          "/customActions/0/effects/header/0",
+          { action: "stamp", reason: "transitionColumn" },
+        ],
+      ])
+      expect(localize(errors(result)[0]!, "uk").message).not.toBe(
+        localize(errors(result)[0]!, "en").message
+      )
+    })
+
+    // Незмінну колонку тригер ефектів відмовляє за будь-якої дії (Р2b1-9,
+    // Р2b1-20), тож її назва в шапці — декларація, що тихо нічого не дає
+    // (Р2b1-23). Колонку скоупу шапка назвати не може: платформа додає її без
+    // імені елемента, а в кореня виду скоупу вона і є `ref`.
+    it.each([
+      [
+        "ref",
+        "rights.custom-action-effects",
+        { action: "stamp", reason: "immutableColumn" },
+      ],
+      [
+        "org",
+        "rights.attribute-unknown",
+        { attribute: "org", field: "customActions.effects.header" },
+      ],
+      [
+        "orgId",
+        "rights.attribute-unknown",
+        { attribute: "orgId", field: "customActions.effects.header" },
+      ],
+    ])(
+      "a custom action naming %s in its header is refused",
+      async (name, code, params) => {
+        const result = await compileRights(
+          policyDomain({
+            [TASK_FILE]: {
+              customActions: [
+                { id: uuid(7901), name: "stamp", effects: { header: [name] } },
+              ],
+            },
+          })
+        )
+        expect(
+          errors(result).map((d) => [d.code, d.pointer, d.params])
+        ).toEqual([[code, "/customActions/0/effects/header/0", params]])
+      }
+    )
+
+    it("uniformExtents refuses differing extent sets", () => {
+      const action = (extents: RightsAction["extents"]): RightsAction => ({
+        action: "read",
+        name: "read",
+        requires: [],
+        effects: { dml: [], header: [], tabularSections: false },
+        natural: [],
+        extents,
+      })
+      expect(() =>
+        uniformExtents(
+          [
+            action([{ form: "any" }]),
+            action([{ form: "any" }, { form: "own" }]),
+          ],
+          "x"
+        )
+      ).toThrow("internal: rights actions of x differ in extents")
+    })
   })
 })

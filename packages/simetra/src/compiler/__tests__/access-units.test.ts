@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from "vitest"
 import { compile, type CompiledModel } from "simetra/compiler"
-import { makeObjectName } from "simetra/model"
+import { makeObjectName, type Dml } from "simetra/model"
 import {
   accessPolicyNames,
   buildAccessUnits,
@@ -10,12 +10,19 @@ import {
 import { sha256Hex } from "../canonical"
 import { mainTableOf, type AccessContract } from "../contracts"
 import { RIGHTS_FUNCTIONS } from "../rights/functions"
-import { renderCondition, rightsPredicates } from "../rights/predicates"
+import {
+  COMMAND_ACTION,
+  renderCondition,
+  rightsPredicates,
+  type RightsPredicate,
+} from "../rights/predicates"
 import { sha256HexSync } from "../sha256"
 import { loadSqlParser } from "../sql/parse"
 import type { SqlUnit } from "../sql/units"
 import {
   ATTACHMENTS_TABLE,
+  BULLETIN_FILE,
+  BULLETIN_TABLE,
   CHECKLIST_TABLE,
   COMMENT_TABLE,
   GLOBAL_ASSIGNMENTS_FILE,
@@ -26,11 +33,14 @@ import {
   ORG_KIND_ID,
   ORG_ROLES_FILE,
   PROJECT_FILE,
+  RATE_TABLE,
   REGION_DIMENSION_ID,
+  REGION_NOTES_TABLE,
   SET_FILE,
   TASK_FILE,
   USERS_FILE,
   adoptedMembership,
+  globalConstant,
   globalGrantsSource,
   grant,
   grantTable,
@@ -42,7 +52,10 @@ import {
   singleTenantRights,
   without,
   withRoles,
+  writableRegister,
+  writeRoles,
 } from "./fixtures/rights"
+import { readReferenceDomain } from "./fixtures/reference-domain"
 import {
   expectClean,
   STOCK_FILE,
@@ -356,7 +369,7 @@ describe("buildAccessUnits", () => {
       contract({ publicRead: ["anonymous", "user"] }),
     ])
     expect(policySql(result)).toEqual([
-      "CREATE POLICY item_public_read ON public.item AS PERMISSIVE FOR SELECT TO anon, authenticated USING (true);",
+      "CREATE POLICY item_public_read ON public.item AS PERMISSIVE FOR SELECT TO anon, authenticated, simetra_command USING (true);",
     ])
     expect(result.map((u) => u.sql)).toContain(
       "GRANT SELECT ON TABLE public.item TO anon;"
@@ -424,13 +437,23 @@ describe("buildAccessUnits", () => {
       `in_${container}_own_${"k".repeat(62)}x`,
       `in_${container}_${dimension}`,
     ]
+    const dmls: Dml[] = ["insert", "update", "delete"]
     const all = [
       names.scopeRead,
       names.scopeInsert,
       names.scopeUpdate,
       names.scopeDelete,
       names.publicRead,
+      names.commandInsert,
+      names.commandUpdate,
+      names.commandDelete,
       ...labels.map((label) => names.rights(label)),
+      // Р2b1-11: мітка запису — `<dml>_<родина>_<мітка>` з тією самою межею.
+      ...dmls.flatMap((dml) =>
+        (["root", "rest"] as const).flatMap((family) =>
+          labels.map((label) => names.write(dml, family, label))
+        )
+      ),
     ]
     for (const name of all) {
       expect(new TextEncoder().encode(name).length).toBeLessThanOrEqual(63)
@@ -442,6 +465,16 @@ describe("buildAccessUnits", () => {
     expect(hashed).toHaveLength(40)
     expect(names.rights(`in_${container}_any`)).toBe(
       `${"t".repeat(22)}_${hashed}`
+    )
+    const longWrite = `update_root_in_${container}_own`
+    expect(names.write("update", "root", `in_${container}_own`)).toBe(
+      `${"t".repeat(22)}_${longWrite.slice(0, 31)}_${(await sha256Hex(longWrite)).slice(0, 8)}`
+    )
+    expect(names.write("insert", "rest", "any")).toBe(
+      makeObjectName(table.name, undefined, "insert_rest_any")
+    )
+    expect(names.commandUpdate).toBe(
+      makeObjectName(table.name, undefined, "command_update")
     )
     // Коротка мітка лишається як є.
     expect(names.rights("in_project_any")).toBe(
@@ -570,7 +603,12 @@ describe("rights read and users visibility policies", () => {
         `CREATE POLICY ${unit.name} ${expected.get(`${table}:${using}`)!}`
       )
     }
-    expect([...policiesOf(domain, "task").keys()].sort()).toEqual([
+    // Предмет тесту — читання: політики запису перевіряють тести запису.
+    expect(
+      [...policiesOf(domain, "task").keys()]
+        .filter((name) => /_(read|scope)_/.test(name))
+        .sort()
+    ).toEqual([
       "task_read_any",
       "task_read_in_project_any",
       "task_read_in_project_own",
@@ -686,7 +724,12 @@ describe("rights read and users visibility policies", () => {
     )
     expectClean(result)
     for (const table of ["task", CHECKLIST_TABLE]) {
-      expect([...policiesOf(result.model!, table).keys()].sort()).toEqual([
+      // Предмет тесту — читання й межі: політики запису перевіряють тести запису.
+      expect(
+        [...policiesOf(result.model!, table).keys()]
+          .filter((name) => /_(read|scope)_|_public_read$/.test(name))
+          .sort()
+      ).toEqual([
         `${table}_public_read`,
         `${table}_scope_delete`,
         `${table}_scope_insert`,
@@ -747,6 +790,298 @@ describe("rights read and users visibility policies", () => {
   })
 
   it("policy identities of the policy domain are unique", () => {
+    const identities = domain.sqlUnits
+      .filter((u) => u.class === "policy")
+      .map((u) => u.identity)
+    expect(new Set(identities).size).toBe(identities.length)
+  })
+})
+
+describe("rights write policies", () => {
+  let domain: CompiledModel
+  beforeAll(async () => {
+    const result = await compile(policyDomain(writeRoles(), writableRegister()))
+    expectClean(result)
+    domain = result.model!
+  })
+
+  const DMLS: Dml[] = ["insert", "update", "delete"]
+  const COMMAND = "TO simetra_command"
+  const context = "(SELECT simetra.command_action()) IS NOT NULL"
+  const rootOf = (label: string) => `(SELECT simetra.command_root('${label}'))`
+  const WRITE = /_(insert|update|delete)_(root|rest)_/
+
+  /** Мітка політики за обсягом предиката: домен має один носій кожної форми. */
+  function labelOf(predicate: RightsPredicate): string {
+    const inner = (extent: RightsPredicate["extent"]): string => {
+      if (extent === "any" || extent === "own") return extent
+      if ("dimensionId" in extent) return "region"
+      return `in_project_${inner(extent.inner)}`
+    }
+    return inner(predicate.extent)
+  }
+
+  function clauses(dml: Dml, condition: string): string {
+    if (dml === "insert") return `WITH CHECK (${condition})`
+    if (dml === "delete") return `USING (${condition})`
+    return `USING (${condition}) WITH CHECK (${condition})`
+  }
+
+  /**
+   * Очікувані політики запису таблиці (Р2b1-4): кореневий рядок — предикати
+   * дії контексту з умовою родини, решта — предикати природної дії за DML.
+   * Кожна умова — з будівника умов 2a1.
+   */
+  function expectedWrites(
+    model: CompiledModel,
+    tableName: string,
+    root: { key: string; label: string } | undefined,
+    rest: Partial<Record<Dml, string>>
+  ): Map<string, string> {
+    const table = model.physical.tables.find((t) => t.name === tableName)!
+    const contract = model.contracts.rights.find(
+      (c) => c.objectId === table.origin.objectId
+    )!
+    const main = mainTableOf(model.physical, contract.objectId)!
+    const expected = new Map<string, string>()
+    const add = (
+      dml: Dml,
+      family: "root" | "rest",
+      action: string | typeof COMMAND_ACTION,
+      prefix: string[]
+    ) => {
+      for (const predicate of rightsPredicates(contract, action, table, main)) {
+        const name = `${tableName}_${dml}_${family}_${labelOf(predicate)}`
+        const condition = [
+          ...prefix,
+          ...predicate.conditions.map(renderCondition),
+        ].join(" AND ")
+        expected.set(
+          name,
+          `CREATE POLICY ${name} ON ${table.schema}.${tableName} AS PERMISSIVE FOR ${dml.toUpperCase()} ${COMMAND} ${clauses(dml, condition)};`
+        )
+      }
+    }
+    for (const dml of DMLS) {
+      if (root !== undefined) {
+        add(dml, "root", COMMAND_ACTION, [
+          `${root.key} = ${rootOf(root.label)}`,
+        ])
+      }
+      const action = rest[dml]
+      if (action !== undefined) {
+        add(
+          dml,
+          "rest",
+          action,
+          root === undefined
+            ? []
+            : [`${root.key} IS DISTINCT FROM ${rootOf(root.label)}`]
+        )
+      }
+    }
+    return expected
+  }
+
+  const writesOf = (model: CompiledModel, table: string) =>
+    new Map([...policiesOf(model, table)].filter(([name]) => WRITE.test(name)))
+
+  /**
+   * Повний набір імен політик таблиці зі скоупом: межа скоупу, читання за
+   * предикатами `read`, охорона контексту й очікувані політики запису. Без
+   * нього зайва політика з іменем поза шаблоном запису (скажімо, ще одна
+   * `PERMISSIVE … WITH CHECK (true)`) пройшла б непоміченою.
+   */
+  function allPolicies(
+    model: CompiledModel,
+    tableName: string,
+    writes: ReadonlyMap<string, string>
+  ): string[] {
+    const table = model.physical.tables.find((t) => t.name === tableName)!
+    const contract = model.contracts.rights.find(
+      (c) => c.objectId === table.origin.objectId
+    )!
+    const main = mainTableOf(model.physical, contract.objectId)!
+    const names = accessPolicyNames(table)
+    return [
+      names.scopeRead,
+      names.scopeInsert,
+      names.scopeUpdate,
+      names.scopeDelete,
+      ...rightsPredicates(contract, "read", table, main).map((p) =>
+        names.rights(labelOf(p))
+      ),
+      names.commandInsert,
+      names.commandUpdate,
+      names.commandDelete,
+      ...writes.keys(),
+    ].sort()
+  }
+  const policyNames = (model: CompiledModel, table: string) =>
+    [...policiesOf(model, table).keys()].sort()
+
+  it("guards every write command with the context", () => {
+    // Р2b1-3: порожній чи відсутній контекст — відмова й там, де кореневої
+    // родини немає (регістр).
+    for (const table of ["task", CHECKLIST_TABLE, REGION_NOTES_TABLE]) {
+      const policies = policiesOf(domain, table)
+      expect(policies.get(`${table}_command_insert`)).toBe(
+        `CREATE POLICY ${table}_command_insert ON public.${table} AS RESTRICTIVE FOR INSERT ${COMMAND} WITH CHECK (${context});`
+      )
+      expect(policies.get(`${table}_command_update`)).toBe(
+        `CREATE POLICY ${table}_command_update ON public.${table} AS RESTRICTIVE FOR UPDATE ${COMMAND} USING (${context}) WITH CHECK (${context});`
+      )
+      expect(policies.get(`${table}_command_delete`)).toBe(
+        `CREATE POLICY ${table}_command_delete ON public.${table} AS RESTRICTIVE FOR DELETE ${COMMAND} USING (${context});`
+      )
+    }
+  })
+
+  it("binds the root row to the command action and the rest to the natural one", () => {
+    const expected = expectedWrites(
+      domain,
+      "task",
+      { key: "id", label: "task" },
+      { insert: "create", update: "update", delete: "delete" }
+    )
+    // Шість обсягів домену на кожну з шести пар (DML, родина).
+    expect(expected.size).toBe(36)
+    expect(writesOf(domain, "task")).toEqual(expected)
+    expect(policyNames(domain, "task")).toEqual(
+      allPolicies(domain, "task", expected)
+    )
+  })
+
+  it("a tabular section binds to its owner", () => {
+    // Р2b1-4, Р2b1-7: ключ родини — колонка власника з міткою власника;
+    // природна дія ТЧ на будь-який DML — `update` власника.
+    const expected = expectedWrites(
+      domain,
+      CHECKLIST_TABLE,
+      { key: "parent_id", label: "task" },
+      { insert: "update", update: "update", delete: "update" }
+    )
+    expect(writesOf(domain, CHECKLIST_TABLE)).toEqual(expected)
+    expect(policyNames(domain, CHECKLIST_TABLE)).toEqual(
+      allPolicies(domain, CHECKLIST_TABLE, expected)
+    )
+  })
+
+  it("a register writes by its natural action without a root family", () => {
+    const expected = expectedWrites(domain, REGION_NOTES_TABLE, undefined, {
+      insert: "write",
+      update: "write",
+      delete: "write",
+    })
+    expect(expected.size).toBeGreaterThan(0)
+    expect(writesOf(domain, REGION_NOTES_TABLE)).toEqual(expected)
+    expect(policyNames(domain, REGION_NOTES_TABLE)).toEqual(
+      allPolicies(domain, REGION_NOTES_TABLE, expected)
+    )
+    // Похідні таблиці регістра й регістр лише з `read` політик запису не мають.
+    for (const table of Object.values(HOURS_TABLES)) {
+      expect(
+        [...policiesOf(domain, table).keys()].filter(
+          (name) => WRITE.test(name) || name.includes("_command_")
+        )
+      ).toEqual([])
+    }
+  })
+
+  it("public read opens rows to the command role too", async () => {
+    // Р2b1-17: роль команд діє від імені користувача, якому рядки й так
+    // відкриті; без цього запис з `WHERE` чи `RETURNING` не бачив би рядків.
+    const policies = policiesOf(domain, BULLETIN_TABLE)
+    expect(policies.get(`${BULLETIN_TABLE}_public_read`)).toBe(
+      `CREATE POLICY ${BULLETIN_TABLE}_public_read ON public.${BULLETIN_TABLE} AS PERMISSIVE FOR SELECT TO authenticated, simetra_command USING (true);`
+    )
+    for (const dml of DMLS) {
+      expect(policies.has(`${BULLETIN_TABLE}_scope_${dml}`)).toBe(true)
+      expect(policies.has(`${BULLETIN_TABLE}_command_${dml}`)).toBe(true)
+    }
+    expect(policies.has(`${BULLETIN_TABLE}_scope_read`)).toBe(false)
+    expect(
+      [...policies.keys()].filter((name) => name.includes("_read_"))
+    ).toEqual([])
+    expect(writesOf(domain, BULLETIN_TABLE)).toEqual(
+      expectedWrites(
+        domain,
+        BULLETIN_TABLE,
+        { key: "id", label: BULLETIN_TABLE },
+        { insert: "create", update: "update", delete: "delete" }
+      )
+    )
+    const anon = await compile(
+      policyDomain(writeRoles(), { [BULLETIN_FILE]: { publicRead: "anon" } })
+    )
+    expectClean(anon)
+    expect(
+      policiesOf(anon.model!, BULLETIN_TABLE).get(
+        `${BULLETIN_TABLE}_public_read`
+      )
+    ).toContain("TO anon, authenticated, simetra_command USING (true)")
+    // Читання від імені користувача від функцій прав не залежить.
+    expect(
+      policySql(await units([contract({ publicRead: ["user"] })]))
+    ).toEqual([
+      "CREATE POLICY item_public_read ON public.item AS PERMISSIVE FOR SELECT TO authenticated, simetra_command USING (true);",
+    ])
+  })
+
+  it("a constant has no root family", async () => {
+    // Р2b1-4: ключ константи — `singleton` чи колонка скоупу, а не `ref`,
+    // тож умови родини немає (`boolean = uuid` зламав би розгортання);
+    // Р2b1-7: природна `update` константи покриває вставку й оновлення.
+    const reference = await compile(readReferenceDomain())
+    expectClean(reference)
+    const currency = policiesOf(reference.model!, "default_currency")
+    expect([...currency.values()].join(" ")).not.toContain("command_root")
+    expect(writesOf(reference.model!, "default_currency")).toEqual(
+      expectedWrites(reference.model!, "default_currency", undefined, {
+        insert: "update",
+        update: "update",
+      })
+    )
+    const result = await compile(policyDomain(globalConstant()))
+    expectClean(result)
+    const model = result.model!
+    const writes = writesOf(model, RATE_TABLE)
+    expect([...writes.keys()].sort()).toEqual([
+      `${RATE_TABLE}_insert_rest_any`,
+      `${RATE_TABLE}_update_rest_any`,
+    ])
+    expect(writes).toEqual(
+      expectedWrites(model, RATE_TABLE, undefined, {
+        insert: "update",
+        update: "update",
+      })
+    )
+  })
+
+  it("no write policies without rights functions or write actions", async () => {
+    const result = await compile(rightsFiles())
+    expectClean(result, { allow: ["rights.scope-kind-unread"] })
+    const names = result
+      .model!.sqlUnits.filter(
+        (u) => u.generator === "access" && u.class === "policy"
+      )
+      .map((u) => u.name)
+    expect(names.length).toBeGreaterThan(0)
+    expect(
+      names.filter((name) => WRITE.test(name) || name.includes("_command_"))
+    ).toEqual([])
+    // Системні довідники прав мають лише `read`.
+    for (const contract of domain.contracts.rights) {
+      if (contract.system === undefined) continue
+      expect(
+        [...policiesOf(domain, contract.table.name).keys()].filter(
+          (name) => WRITE.test(name) || name.includes("_command_")
+        )
+      ).toEqual([])
+    }
+  })
+
+  it("policy identities stay unique with write policies", () => {
     const identities = domain.sqlUnits
       .filter((u) => u.class === "policy")
       .map((u) => u.identity)

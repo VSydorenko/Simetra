@@ -3,6 +3,7 @@ import {
   actionRequires,
   closeRequires,
   type ActionEffects,
+  type Dml,
   type PhysicalSnapshot,
   type Project,
   type Role,
@@ -15,6 +16,7 @@ import {
   type MembershipSourceContract,
   type RightsAction,
   type RightsContract,
+  type RightsExtent,
   type RightsProjectionRow,
   type RoleContract,
 } from "../contracts"
@@ -58,6 +60,23 @@ import {
   type ResolvedGrant,
 } from "./expand"
 import { must, objectTarget, projectTarget } from "./references"
+
+/**
+ * Спільний набір обсягів дій об'єкта. Усі дії об'єкта мають один набір
+ * (на цьому стоїть єдина умова політик запису, Р2b1-5): різні набори дали б
+ * мовчазне розходження політик, тож це внутрішня помилка компілятора.
+ */
+export function uniformExtents(
+  actions: readonly RightsAction[],
+  label: string
+): RightsExtent[] {
+  const first = must(actions[0]).extents
+  const key = JSON.stringify(first)
+  if (actions.some((a) => JSON.stringify(a.extents) !== key)) {
+    throw new Error(`internal: rights actions of ${label} differ in extents`)
+  }
+  return first
+}
 
 /**
  * Контракти прав (спека прав §3): запис має кожен об'єкт виду з непорожнім
@@ -165,21 +184,49 @@ function rightsContract(
     }
   })
   const extents = supportedExtents(object, references)
+  const physicalOf = (logicalName: string) =>
+    must(columnsOf.get(standardElementId(objectId, { logicalName })))
+  // Колонки переходів — з `transition` стандартних дій виду (без гілки за
+  // видом), значення за замовчуванням — зі стандартної колонки реєстру.
+  const standardColumns = def.standardColumns(object.data)
+  const transitions = [
+    ...new Set(
+      standard.flatMap((a) => (a.transition ? [a.transition.column] : []))
+    ),
+  ]
+    .flatMap((logicalName) => {
+      const standardColumn = must(
+        standardColumns.find((c) => c.logicalName === logicalName)
+      )
+      return physicalOf(logicalName).map((column) => ({
+        column,
+        default: must(standardColumn.default),
+      }))
+    })
+    .sort((a, b) => compareStrings(a.column, b.column))
+  const transitionColumns = new Set(transitions.map((t) => t.column))
+  // Колонки переходів змінює лише дія-перехід, тож `"all"` розгортається в
+  // явний перелік без них (Р2b1-18): тригер ефектів порівнює їх, як будь-які
+  // колонки поза ефектом дії.
+  // Ключ `ref` незмінний за будь-якої дії (Р2b1-9): змінений ключ — зміна
+  // ідентичності кореня, тож у шапку дії він не входить.
+  const keyColumns = new Set(
+    columnsOf.get(standardElementId(objectId, { logicalName: "ref" })) ?? []
+  )
+  const expandAll = [...columnsOf.values()]
+    .flat()
+    .filter(
+      (column) => !transitionColumns.has(column) && !keyColumns.has(column)
+    )
   // Ім'я шапки стандартної дії — факт реєстру; без фізичної колонки це дрейф
   // реєстру, а не порожній ефект.
   const canonicalHeader = (header: ActionEffects["header"]) =>
-    header === "all"
-      ? ("all" as const)
-      : header.flatMap((name) =>
-          must(
-            columnsOf.get(standardElementId(objectId, { logicalName: name }))
-          )
-        )
+    header === "all" ? expandAll : header.flatMap(physicalOf)
   // Ім'я шапки кастомної дії резолвила стадія 2 і перевірила стадія 4, тож
   // відсутня колонка — дефект компілятора, а не тихо порожній ефект.
   const customHeader = (index: number, header: ActionEffects["header"]) =>
     header === "all"
-      ? ("all" as const)
+      ? expandAll
       : header.flatMap((_, at) =>
           must(
             columnsOf.get(
@@ -198,6 +245,15 @@ function rightsContract(
         header: canonicalHeader(a.effects.header),
         tabularSections: a.effects.tabularSections,
       },
+      natural: a.natural ? [...a.effects.dml] : [],
+      ...(a.transition
+        ? {
+            transition: {
+              ...a.transition,
+              column: must(physicalOf(a.transition.column)[0]),
+            },
+          }
+        : {}),
       extents,
     })),
     ...custom.map(({ action, index }) => {
@@ -212,17 +268,34 @@ function rightsContract(
           header: customHeader(index, effects.header),
           tabularSections: effects.tabularSections,
         },
+        natural: [],
         extents,
       }
     }),
   ]
+  const label = must(kindLabelOf(object))
+  // На кожен DML — щонайбільше одна природна дія (Р2b1-7): інакше «решта
+  // рядків» мала б дві рівноправні умови.
+  const naturalDml = new Set<Dml>()
+  for (const action of actions) {
+    for (const dml of action.natural) {
+      if (naturalDml.has(dml)) {
+        throw new Error(
+          `internal: rights actions of ${label} have two natural actions for ${dml}`
+        )
+      }
+      naturalDml.add(dml)
+    }
+  }
+  uniformExtents(actions, label)
   const system = def.rightsSystem?.(object.data)
   return {
     objectId,
-    kindLabel: must(kindLabelOf(object)),
+    kindLabel: label,
     table: { schema: table.schema, name: table.name },
     ...(scopeKindId === undefined ? {} : { scopeKindId }),
     actions,
+    transitions,
     ownership,
     ...(isRightsContainer(object) ? { container: true as const } : {}),
     ...(binding === undefined ? {} : { binding }),

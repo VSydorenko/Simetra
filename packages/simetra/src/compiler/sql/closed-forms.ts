@@ -1,9 +1,16 @@
 import type { Node } from "libpg-query"
-import { KIND_REGISTRY } from "simetra/model"
+import { KIND_REGISTRY, type Project } from "simetra/model"
 import { diagnostic, type Diagnostic } from "../diagnostics"
 import type { ParsedObject } from "../stages/files"
+import { commandContextWrite } from "./command-context"
+import type { SqlParser } from "./parse"
 import type { PlpgsqlParser } from "./plpgsql"
-import { FUNCTION_CLASSES, type RowRule, type VerbatimUnit } from "./units"
+import {
+  FUNCTION_CLASSES,
+  functionIdentity,
+  type RowRule,
+  type VerbatimUnit,
+} from "./units"
 
 /** Чим функція виходить за закриту оболонку (спека промоції §9.4). */
 export type ClosedShellProblem =
@@ -156,6 +163,33 @@ export function firstDynamicSqlLine(
 }
 
 /**
+ * Ідентичності функцій без аргументів, які оголошують метадані: обробники
+ * підписок і функції множини видів скоупу. Обидві мають власні правила
+ * оболонки (стадія 5), тож не є ні боргом, ні винятком із ратчета.
+ */
+export function ruledFunctions(
+  objects: readonly ParsedObject[],
+  project: Project | undefined
+): ReadonlySet<string> {
+  if (project === undefined) return new Set()
+  const declared = [
+    ...objects.flatMap((o) => {
+      const spec = KIND_REGISTRY[o.kind].subscription?.(o.data)
+      return spec === undefined ? [] : [spec.handler]
+    }),
+    // Згенерована функція множини (`membership`) — не дослівна одиниця.
+    ...project.scopeKinds.flatMap((kind) =>
+      typeof kind.setFunction === "string" ? [] : [kind.setFunction]
+    ),
+  ]
+  return new Set(
+    declared.map((fn) =>
+      functionIdentity(fn.schema ?? project.defaultSchema, fn.name, [])
+    )
+  )
+}
+
+/**
  * Файли об'єктів, чий вид має факт `sqlModule: "closed"`: модуль такого
  * об'єкта приймає лише закриті форми. Вид — з `ownerFile` стадії 1, тож
  * перевірка не чекає моделі стадії 3.
@@ -175,14 +209,19 @@ export function closedModuleOwners(
  * закритій оболонці без перевантажень і правила рядка; блоки запиту рухів
  * вирізано до розбору, тож одиницями вони не стають. Решта класів —
  * `sql.statement-not-allowed` з підказкою властивості, що їх заміщує. Модуль
- * `debt` і спільні `sql/` тут не звужуються: це борг, його ратчет — окремо;
- * правило рядка поза модулем виду — помилка, бо воно належить таблиці
- * об'єкта, а таблиці боргу описані власними полями.
+ * `debt` і спільні `sql/` за формою не звужуються: це борг, його ратчет —
+ * окремо; правило рядка поза модулем виду — помилка, бо воно належить таблиці
+ * об'єкта, а таблиці боргу описані власними полями. Контекст команди
+ * (`sql.command-context-write`) судиться інакше: кожна одиниця модулів видів
+ * і спільних `sql/`-файлів, крім боргового SQL прийнятих таблиць;
+ * обробники підписок і функції множини — будь-де.
  */
 export function checkSqlModules(
   objects: readonly ParsedObject[],
+  project: Project | undefined,
   units: readonly VerbatimUnit[],
   rowRules: readonly RowRule[],
+  parse: SqlParser,
   plpgsql: PlpgsqlParser
 ): Diagnostic[] {
   const owners = closedModuleOwners(objects)
@@ -206,6 +245,44 @@ export function checkSqlModules(
         line: rule.line,
       })
     )
+  }
+  // Борговий SQL прийнятих таблиць `CustomTable` поза перевіркою контексту
+  // команди (відоме обмеження до 2c); решта — кожна одиниця спільних
+  // `sql/`-файлів і модулів видів, не лише функції (Р2b1-22): функція
+  // закритого модуля чи обробник може викликати допоміжну функцію спільного
+  // файлу, а подання, домен чи політика виконують свій вираз у сесії
+  // команди, тож межа довіри (Р2b1-19a) охоплює їх усі.
+  // Обробник підписки й функція множини боргом не бувають, хоч би де лежав
+  // файл (спека промоції §9.4): у модулі таблиці боргу їх теж судимо.
+  const debtOwners = new Set(
+    objects
+      .filter((o) => KIND_REGISTRY[o.kind].sqlModule === "debt")
+      .map((o) => o.file)
+  )
+  const ruled = ruledFunctions(objects, project)
+  for (const unit of units) {
+    if (closed(unit)) continue
+    if (
+      unit.ownerFile !== undefined &&
+      debtOwners.has(unit.ownerFile) &&
+      !ruled.has(unit.identity)
+    ) {
+      continue
+    }
+    const write = commandContextWrite(
+      unit.tree as Node,
+      unit.sql,
+      parse,
+      plpgsql
+    )
+    if (write !== undefined) {
+      found.push(
+        diagnostic("sql.command-context-write", unit.file, "", {
+          name: unit.schema === "" ? unit.name : `${unit.schema}.${unit.name}`,
+          form: write,
+        })
+      )
+    }
   }
   for (const unit of units) {
     if (!closed(unit)) continue
@@ -234,6 +311,21 @@ export function checkSqlModules(
           function: `${unit.schema}.${unit.name}`,
           line,
           problem,
+        })
+      )
+    }
+    // Контекст команди ставить лише `runCommand` (Р2b1-19): SQL застосунку
+    // виконується посеред оператора команди, і змінений ним контекст побачили
+    // б політики наступних рядків. Оболонка, що не пройшла, тіла не гарантує.
+    const write =
+      problem === undefined
+        ? commandContextWrite(shellUnit.tree, unit.sql, parse, plpgsql)
+        : undefined
+    if (write !== undefined) {
+      found.push(
+        diagnostic("sql.command-context-write", unit.file, "", {
+          name: `${unit.schema}.${unit.name}`,
+          form: write,
         })
       )
     }

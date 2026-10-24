@@ -9,7 +9,12 @@ import {
 } from "../sql/dependencies"
 import { loadSqlParser } from "../sql/parse"
 import { withoutLocations } from "../sql/units"
-import { compileRights, policyDomain, withRoles } from "./fixtures/rights"
+import {
+  compileRights,
+  policyDomain,
+  withRoles,
+  writeRoles,
+} from "./fixtures/rights"
 import {
   expectClean,
   acceptDebt,
@@ -219,6 +224,27 @@ describe("creation order", () => {
     ])
   })
 
+  it("creates the command parser before the surfaces that call it", async () => {
+    // Тіла plpgsql граф не читає, а сортування за ідентичністю ставить
+    // `command_action` раніше за `command_parsed`: порядок дають явні ребра.
+    const result = await compileRights(withRoles())
+    expectClean(result, { allow: ["rights.scope-kind-unread"] })
+    const list = result.model!.creationOrder.map((node) =>
+      node.type === "unit"
+        ? node.identity
+        : `${node.type}:${node.schema}.${node.name}`
+    )
+    const parsed = "function:simetra.command_parsed(bool)"
+    expectBefore(
+      list,
+      [
+        "function:simetra.command_action()",
+        "function:simetra.command_root(text)",
+        "function:simetra.command_current()",
+      ].map((surface): [string, string] => [parsed, surface])
+    )
+  })
+
   it("creates carrier propagation triggers after their function and the dependent tables", async () => {
     // Тіла plpgsql граф не читає: залежні таблиці тіла — явні ребра `requires`.
     const result = await compileRights(policyDomain())
@@ -249,6 +275,38 @@ describe("creation order", () => {
         name,
       }))
     )
+  })
+
+  it("creates the effects function after the context function and the owner table", async () => {
+    // Тіла plpgsql граф не читає: функцію контексту й таблицю власника рядка
+    // ТЧ тригер ефектів називає явними ребрами `requires`.
+    const result = await compileRights(policyDomain(writeRoles()))
+    expectClean(result)
+    const list = result.model!.creationOrder.map((node) =>
+      node.type === "unit"
+        ? node.identity
+        : `${node.type}:${node.schema}.${node.name}`
+    )
+    const current = "function:simetra.command_current()"
+    const section = "function:public.task_checklist_simetra_effects()"
+    const main = "function:public.task_simetra_effects()"
+    expectBefore(list, [
+      [current, main],
+      [current, section],
+      [section, "trigger:public.task_checklist.task_checklist_simetra_effects"],
+      [
+        section,
+        "trigger:public.task_checklist.task_checklist_simetra_effects_update",
+      ],
+      [main, "trigger:public.task.task_simetra_effects"],
+    ])
+    const requires = (identity: string) =>
+      result.model!.sqlUnits.find((u) => u.identity === identity)?.requires
+    expect(requires(section)).toEqual([
+      { type: "table", schema: "public", name: "task" },
+      { type: "unit", identity: current },
+    ])
+    expect(requires(main)).toEqual([{ type: "unit", identity: current }])
   })
 
   it("extensions come before everything", async () => {
@@ -725,7 +783,15 @@ describe("creation order", () => {
     )
     const readAny = "policy:public.task.task_read_any"
     const users = "policy:public.users.users_scope_read"
+    const updateRoot = "policy:public.task.task_update_root_any"
     expectBefore(list, [
+      // Політики запису кличуть функції контексту команди (Р2b1-4, Р2b1-3).
+      ["function:simetra.command_root(text)", updateRoot],
+      ["function:simetra.command_action()", updateRoot],
+      [
+        "function:simetra.command_action()",
+        "policy:public.task.task_command_update",
+      ],
       ["table:public.task", readAny],
       ["function:simetra.rights_any(text,text)", readAny],
       ["table:public.users", users],
@@ -744,6 +810,10 @@ describe("creation order", () => {
     expect(calls(users)).toContainEqual({
       schema: "simetra",
       name: "rights_visible_users",
+    })
+    expect(calls(updateRoot)).toContainEqual({
+      schema: "simetra",
+      name: "command_root",
     })
   })
 

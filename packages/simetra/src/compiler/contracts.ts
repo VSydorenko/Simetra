@@ -31,6 +31,8 @@ import {
   membershipsOf,
 } from "./membership-functions"
 import { carrierFunctions } from "./rights/carrier-units"
+import { effectsFunctionName } from "./rights/effects-names"
+import { writesByCommand } from "./rights/facts"
 import {
   kindLabelOf,
   usersCatalogOf,
@@ -294,8 +296,18 @@ export interface RightsAction {
   name: string
   /** Замикання вимог без самої дії, відсортоване. */
   requires: string[]
-  /** `header` — фізичні колонки основної таблиці або "all". */
-  effects: { dml: Dml[]; header: "all" | string[]; tabularSections: boolean }
+  /**
+   * `header` — фізичні колонки основної таблиці, які дія може змінити:
+   * `"all"` метаданих контракт уже розгорнув (Р2b1-18).
+   */
+  effects: { dml: Dml[]; header: string[]; tabularSections: boolean }
+  /**
+   * Природні DML дії (Р2b1-7): `effects.dml` природної дії виду, інакше `[]`
+   * (кастомна — завжди `[]`). Їх покриває політика «решти рядків».
+   */
+  natural: Dml[]
+  /** Дія-перехід: фізична колонка й напрям (факт реєстру). */
+  transition?: { column: string; from?: boolean; to?: boolean }
   extents: RightsExtent[]
 }
 
@@ -322,6 +334,20 @@ export interface OwnershipContract extends CarrierContract {
   owner: { users: true } | { membership: string }
 }
 
+/** Дія з записом (непорожній `effects.dml`): лише вона є командою. */
+export function isWriteAction(action: RightsAction): boolean {
+  return action.effects.dml.length > 0
+}
+
+/**
+ * Чи пише об'єкт командою: хоч одна дія з записом. Одна умова для політик
+ * запису, тригера ефектів і розбору контексту; її форма над реєстром для
+ * стадії 4 — `writesByCommand` (`rights/facts.ts`).
+ */
+export function writesByCommandContract(rights: RightsContract): boolean {
+  return rights.actions.some(isWriteAction)
+}
+
 /**
  * Контракт прав об'єкта (спека прав §3): дії з вимогами, ефектами й
  * обсягами. Його мають усі об'єкти видів з непорожнім `rightsExtents`; з
@@ -335,6 +361,11 @@ export interface RightsContract {
   scopeKindId?: string
   /** Стандартні дії в порядку реєстру, далі кастомні за `id`. */
   actions: RightsAction[]
+  /**
+   * Колонки переходів об'єкта (фізичні) зі значенням за замовчуванням, за
+   * іменем колонки. Їх змінює лише дія-перехід (Р2b1-18).
+   */
+  transitions: { column: string; default: string }[]
   /**
    * Носії власності (спека прав §4.2) у порядку файлу; непорожній перелік
    * додає обсяг `own` кожній дії.
@@ -584,6 +615,61 @@ export function mainTableOf(
   )
 }
 
+/**
+ * Ключ кореневої родини (Р2b1-4): колонка стандартного реквізиту `ref`, лише
+ * коли саме вона — одноколонковий первинний ключ основної таблиці; у ТЧ такої
+ * таблиці — колонка власника. Інакше (`singleton` чи колонка скоупу
+ * константи, регістр без ключа) родини немає: порівняння з `uuid` кореня там
+ * не мало б сенсу, а на `boolean` — не розгорнулося б. Одне джерело для
+ * політик запису й тригера ефектів.
+ */
+export function rootFamilyKey(
+  table: PhysicalTable,
+  main: PhysicalTable
+): string | undefined {
+  const key = main.primaryKey?.columns
+  const ref = main.columns.find((c) => c.origin.standard === "ref")
+  if (key?.length !== 1 || ref === undefined || key[0] !== ref.name) {
+    return undefined
+  }
+  if (table.origin.tabularSectionId === undefined) return ref.name
+  const parent = table.columns.find((c) => c.origin.standard === "parent")
+  if (parent === undefined) {
+    throw new Error(
+      `internal: tabular section ${table.schema}.${table.name} has no parent column`
+    )
+  }
+  return parent.name
+}
+
+/** Таблиця з тригером ефектів, її основна таблиця й ключ кореневої родини. */
+export interface EffectsTable {
+  table: PhysicalTable
+  main: PhysicalTable
+  key: string
+}
+
+/**
+ * Таблиці, на які лягає тригер ефектів незалежно від прав: основні таблиці з
+ * кореневою родиною (Р2b1-4) і їхні ТЧ. Спільні для генератора й
+ * резервування імен функцій стадії 4 (`derivedFunctions`, Р2b1-11).
+ */
+export function effectsTables(physical: PhysicalSnapshot): EffectsTable[] {
+  return physical.tables
+    .flatMap((table): EffectsTable[] => {
+      if (table.origin.part !== undefined) return []
+      const main = mainTableOf(physical, table.origin.objectId)
+      if (main === undefined) return []
+      const key = rootFamilyKey(table, main)
+      return key === undefined ? [] : [{ table, main, key }]
+    })
+    .sort(
+      (a, b) =>
+        compareStrings(a.table.schema, b.table.schema) ||
+        compareStrings(a.table.name, b.table.name)
+    )
+}
+
 function derivedTableOf(
   physical: PhysicalSnapshot,
   objectId: string,
@@ -751,6 +837,20 @@ export function derivedFunctions(
       object,
       fn,
       `${role === "derive" ? "carrier copies" : "carrier propagation"} of ${table.schema}.${table.name}`
+    )
+  }
+  // Функції ефектів (Р2b1-11) — з надлишком, на кожну таблицю з кореневою
+  // родиною об'єкта, що пише командою, незалежно від функцій прав: ролей
+  // стадія 4 не зважує, а зайве резервування лише звужує простір імен. Об'єкт
+  // без дії з DML (системні довідники прав) тригера не має ніколи, тож імені
+  // не резервує.
+  for (const { table } of effectsTables(physical)) {
+    const object = byId.get(table.origin.objectId)
+    if (object === undefined || !writesByCommand(object)) continue
+    add(
+      object,
+      effectsFunctionName(table),
+      `action effects of ${table.schema}.${table.name}`
     )
   }
   for (const object of objects) {

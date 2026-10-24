@@ -15,6 +15,8 @@ import {
   customTables,
   FIXTURES,
   policyDomain,
+  writableRegister,
+  writeRoles,
 } from "../../../../simetra/test/support"
 
 /**
@@ -115,6 +117,14 @@ describe("deployed desired state reconciles empty through the port", () => {
   // `rights_visible_users` проходять туди-назад через двигун
   it("policy domain", async () => {
     await expectDeployedRenderIsEmpty(policyDomain())
+  })
+
+  // Функції контексту команди, тригери ефектів з `WHEN` і `RESTRICTIVE`- та
+  // `PERMISSIVE`-політики запису ролі команд проходять туди-назад
+  it("write policy domain", async () => {
+    await expectDeployedRenderIsEmpty(
+      policyDomain(writeRoles(), writableRegister())
+    )
   })
 })
 

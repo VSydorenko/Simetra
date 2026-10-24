@@ -4,6 +4,7 @@ import type {
   FillProblem,
   RuleCode,
 } from "./diagnostics"
+import type { CommandContextWrite } from "./sql/command-context"
 
 export type Locale = "en" | "uk"
 
@@ -296,6 +297,37 @@ const CLOSED_SHELL_PROBLEM: Readonly<
     uk: "її тіло plpgsql не розбирається",
   },
 }
+/**
+ * Форми зміни захищеного налаштування сесії (`sql.command-context-write`):
+ * мапа повна за типом форм, тож нова форма без тексту — помилка `tsc`.
+ */
+const COMMAND_CONTEXT_FORM: Readonly<
+  Record<CommandContextWrite, { en: string; uk: string }>
+> = {
+  setConfig: {
+    en: "set_config on a protected session setting",
+    uk: "set_config на захищеному налаштуванні сесії",
+  },
+  setStatement: {
+    en: "SET or RESET of a protected session setting or of the role",
+    uk: "SET чи RESET захищеного налаштування сесії чи ролі",
+  },
+  functionOption: {
+    en: "a SET function option on a protected session setting",
+    uk: "опція функції SET на захищеному налаштуванні сесії",
+  },
+  nonLiteral: {
+    en: "set_config with a name that is not a literal, an aggregate over set_config included",
+    uk: "set_config з ім'ям, що не є літералом, зокрема агрегат над set_config",
+  },
+  settingsTable: {
+    en: "a write to pg_settings or a view over it",
+    uk: "запис у pg_settings чи подання над ним",
+  },
+}
+const commandContextForm = (form: unknown) =>
+  COMMAND_CONTEXT_FORM[String(form) as CommandContextWrite] as
+    { en: string; uk: string } | undefined
 /** Причини виходу функції множини скоупу за закриту форму. */
 const SET_FUNCTION_REASON: Readonly<
   Record<string, { en: string; uk: string }>
@@ -719,6 +751,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
         : `Функція ${p.function} у рядку ${p.line} поза закритою оболонкою: ${problem}`
     },
     hint: CLOSED_SHELL_HINT,
+  },
+  "sql.command-context-write": {
+    en: (p) =>
+      `SQL unit ${p.name} changes a platform session setting (${commandContextForm(p.form)?.en ?? p.form})`,
+    uk: (p) =>
+      `Одиниця SQL ${p.name} змінює налаштування сесії платформи (${commandContextForm(p.form)?.uk ?? p.form})`,
+    hint: {
+      en: "Only the platform sets the command context (simetra.*), the request claims (request.jwt.*) and the role. Application SQL runs in the middle of a command statement, so a changed setting would leak into the policies of the following rows: do not change them with set_config, SET or RESET (SET ROLE and SET SESSION AUTHORIZATION included), a SET function option (ALTER FUNCTION included), a write to pg_settings or a view over it, an aggregate over set_config or a literal EXECUTE. This holds for every application SQL unit: functions, views, domains, policies and aggregates.",
+      uk: "Контекст команди (simetra.*), claims запиту (request.jwt.*) і роль ставить лише платформа. SQL застосунку виконується посеред оператора команди, тож змінене налаштування потрапило б у політики наступних рядків: не змінюйте їх через set_config, SET чи RESET (зокрема SET ROLE і SET SESSION AUTHORIZATION), опцію функції SET (зокрема ALTER FUNCTION), запис у pg_settings чи подання над ним, агрегат над set_config чи літеральний EXECUTE. Це стосується кожної одиниці SQL застосунку: функцій, подань, доменів, політик і агрегатів.",
+    },
   },
   "sql.function-overload": {
     en: (p) =>
@@ -1519,20 +1561,36 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     en: (p) =>
       p.reason === "noWrite"
         ? `Custom action "${p.action}" declares effects, but no standard action of the kind writes its rows`
-        : `Custom action "${p.action}" writes tabular sections, but the kind has none`,
+        : p.reason === "transitionColumn"
+          ? `Custom action "${p.action}" names a transition column in its header effects`
+          : p.reason === "immutableColumn"
+            ? `Custom action "${p.action}" names an immutable column in its header effects`
+            : `Custom action "${p.action}" writes tabular sections, but the kind has none`,
     uk: (p) =>
       p.reason === "noWrite"
         ? `Кастомна дія "${p.action}" оголошує ефекти, але жодна стандартна дія виду не пише його рядків`
-        : `Кастомна дія "${p.action}" пише табличні частини, а вид їх не має`,
+        : p.reason === "transitionColumn"
+          ? `Кастомна дія "${p.action}" називає колонку переходу в ефектах шапки`
+          : p.reason === "immutableColumn"
+            ? `Кастомна дія "${p.action}" називає незмінну колонку в ефектах шапки`
+            : `Кастомна дія "${p.action}" пише табличні частини, а вид їх не має`,
     hint: {
       en: (p) =>
         p.reason === "noWrite"
           ? "Rows of this kind are written only by posting movements: declare no effects, or move the action to a kind that writes."
-          : "Drop tabularSections: true or declare the action on a kind with tabular sections.",
+          : p.reason === "transitionColumn"
+            ? "Transition columns (posted, deletion mark) change only through their standard actions: drop the column from the header."
+            : p.reason === "immutableColumn"
+              ? "The key (ref) and the scope column never change, under any action: drop the column from the header."
+              : "Drop tabularSections: true or declare the action on a kind with tabular sections.",
       uk: (p) =>
         p.reason === "noWrite"
           ? "Рядки цього виду пишуть лише рухи проведення: не оголошуйте ефектів або перенесіть дію на вид із записом."
-          : "Приберіть tabularSections: true або оголосіть дію на виді з табличними частинами.",
+          : p.reason === "transitionColumn"
+            ? "Колонки переходів (проведення, позначка видалення) змінюють лише їхні стандартні дії: приберіть колонку з шапки."
+            : p.reason === "immutableColumn"
+              ? "Ключ (ref) і колонка скоупу не змінюються за жодної дії: приберіть колонку з шапки."
+              : "Приберіть tabularSections: true або оголосіть дію на виді з табличними частинами.",
     },
   },
   "rights.requires-cycle": {

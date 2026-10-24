@@ -49,6 +49,10 @@ export {
   carrierTriggerNames,
 } from "./rights/carrier-units"
 export {
+  effectsFunctionName,
+  effectsTriggerNames,
+} from "./rights/effects-names"
+export {
   grantTargetKeys,
   ownsTarget,
   platformGrantTargets,

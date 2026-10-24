@@ -2,6 +2,8 @@ import {
   carrierFunctionNames,
   carrierTriggerNames,
   diagnostic,
+  effectsFunctionName,
+  effectsTriggerNames,
   grantTargetKeys,
   MECHANICS_FUNCTION,
   mechanicsTriggerName,
@@ -241,7 +243,8 @@ const MECHANICS = qualified(MECHANICS_FUNCTION.schema, MECHANICS_FUNCTION.name)
  * Функція, яку платформний тригер таблиці мусить кликати за своїм іменем:
  * механіка рядка (`<t>_simetra_touch` і, на таблиці з копіями носіїв,
  * `<t>_simetra_touch_update`) — `simetra.touch()`, тригери копій носіїв —
- * функції носіїв таблиці (Р2a2-20). Інше ім'я — не платформний тригер.
+ * функції носіїв таблиці (Р2a2-20), тригери ефектів — функція ефектів таблиці
+ * (Р2b1-12). Інше ім'я — не платформний тригер.
  */
 function platformTriggerFunction(
   unit: CatalogUnit,
@@ -267,6 +270,12 @@ function platformTriggerFunction(
     unit.name === triggers.propagateInsert
   )
     return qualified(functions.propagate.schema, functions.propagate.name)
+  // Тригери ефектів дії (Р2b1-12): обидва кличуть одну функцію таблиці
+  const effects = effectsTriggerNames(table)
+  if (unit.name === effects.all || unit.name === effects.update) {
+    const fn = effectsFunctionName(table)
+    return qualified(fn.schema, fn.name)
+  }
   return undefined
 }
 

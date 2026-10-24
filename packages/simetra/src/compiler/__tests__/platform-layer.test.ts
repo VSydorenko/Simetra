@@ -4,6 +4,7 @@ import {
   PLATFORM_ROLES,
   PLATFORM_SCHEMA,
   PROVIDER_IDENTITY_SOURCES,
+  SESSION_CLAIMS_SETTING,
   type IdentitySource,
 } from "simetra/model"
 import { buildPlatformUnits, platformSchemaGrants } from "../platform/units"
@@ -244,7 +245,7 @@ describe("platform layer", () => {
     const { sql } = unit(model, CURRENT_USER)
     expect(sql).toContain("LANGUAGE plpgsql STABLE SECURITY DEFINER")
     expect(sql).toContain(
-      "nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub'"
+      `nullif(current_setting('${SESSION_CLAIMS_SETTING}', true), '')::jsonb ->> 'sub'`
     )
     expect(sql).toContain("FROM simetra.identities i")
     expect(sql).toContain("JOIN app.users u ON u.id = i.user_id")

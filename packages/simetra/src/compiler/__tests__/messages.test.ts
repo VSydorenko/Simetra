@@ -9,6 +9,7 @@ import {
 } from "simetra/compiler"
 import { metaFiles, project } from "./helpers"
 import { diagnostic } from "../diagnostics"
+import type { CommandContextWrite } from "../sql/command-context"
 import type { SetFunctionReason } from "../sql/function-shape"
 
 const ALL_RULES: RuleCode[] = [...SCHEMA_RULES, ...COMPILER_RULES]
@@ -150,6 +151,61 @@ describe("messages catalog", () => {
     expect(text("volatility", "uk")).toBe(
       "Функція public.f у рядку 7 поза закритою оболонкою: її волатильність не явна"
     )
+  })
+
+  it("sql.command-context-write names the function and the form in both locales", () => {
+    // Повнота за типом: нова форма без запису тут — помилка `tsc`.
+    const forms = Object.keys({
+      setConfig: 0,
+      setStatement: 0,
+      functionOption: 0,
+      nonLiteral: 0,
+      settingsTable: 0,
+    } satisfies Record<CommandContextWrite, 0>)
+    for (const locale of ["en", "uk"] as const) {
+      const messages = forms.map(
+        (form) =>
+          localize(
+            diagnostic("sql.command-context-write", "a.sql", "", {
+              name: "public.f",
+              form,
+            }),
+            locale
+          ).message
+      )
+      messages.forEach((message, i) => {
+        expect(message).toContain("public.f")
+        // Сирий ідентифікатор форми означав би пропущений текст.
+        expect(message, `${forms[i]} ${locale}`).not.toContain(forms[i])
+      })
+      expect(new Set(messages).size).toBe(forms.length)
+    }
+  })
+
+  it("rights.custom-action-effects gives every reason its own text and hint", () => {
+    const reasons = [
+      "noWrite",
+      "transitionColumn",
+      "immutableColumn",
+      "noTabularSections",
+    ]
+    for (const locale of ["en", "uk"] as const) {
+      const texts = reasons.map((reason) =>
+        localize(
+          diagnostic("rights.custom-action-effects", "a.meta.json", "", {
+            action: "stamp",
+            reason,
+          }),
+          locale
+        )
+      )
+      expect(new Set(texts.map((t) => t.message)).size, locale).toBe(
+        reasons.length
+      )
+      expect(new Set(texts.map((t) => t.hint)).size, locale).toBe(
+        reasons.length
+      )
+    }
   })
 
   it("renders every closed-form reason of a scope set function as a sentence", () => {

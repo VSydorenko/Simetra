@@ -745,6 +745,158 @@ export function scopeRootCarrier(): Layer {
   }
 }
 
+const REGION_NOTES_FILE =
+  "information-registers/RegionNotes/RegionNotes.meta.json"
+export const REGION_NOTES_TABLE = "region_notes"
+export const REGION_WRITER_ID = uuid(6733)
+export const RATE_TABLE = "rate"
+
+/**
+ * Незалежний регістр відомостей `RegionNotes` з обсягом виміру `region` і
+ * власна роль `RegionWriter` (`read`, `write`). Шар самодостатній:
+ * `withRoles` зливає файли поверхнево, тож умовного `include` між шарами
+ * немає.
+ */
+export function writableRegister(): Layer {
+  return {
+    [REGION_NOTES_FILE]: {
+      id: uuid(6730),
+      kind: "InformationRegister",
+      name: "RegionNotes",
+      physicalName: REGION_NOTES_TABLE,
+      kindLabel: REGION_NOTES_TABLE,
+      scope: "org",
+      access: [{ attribute: "region", dimension: "region" }],
+      dimensions: [
+        refAttribute(6731, "region", "region_id", ref("Catalog", "Region")),
+      ],
+      resources: [
+        {
+          id: uuid(6732),
+          name: "note",
+          physicalName: "note",
+          type: "String",
+          length: 200,
+        },
+      ],
+    },
+    [ROLE_FILE("RegionWriter")]: role(
+      REGION_WRITER_ID,
+      "RegionWriter",
+      { scopeKind: "org" },
+      {
+        grants: [
+          grant(
+            objects(["InformationRegister", "RegionNotes"]),
+            ["read", "write"],
+            { dimension: "region" }
+          ),
+        ],
+      }
+    ),
+  }
+}
+
+export const TASK_WRITER_ID = uuid(6721)
+export const TASK_MARKER_ID = uuid(6722)
+export const PROJECT_WRITER_ID = uuid(6723)
+export const REASSIGN_ACTION_ID = uuid(6720)
+export const BULLETIN_TABLE = "bulletin"
+export const BULLETIN_FILE = "catalogs/Bulletin/Bulletin.meta.json"
+
+/**
+ * Ролі запису поверх `policyDomain()`: кастомна дія `reassign` на `Task`
+ * (лише шапка `assignee`, без ТЧ); `TaskWriter` пише `Task` і коментарі,
+ * `post` — лише `own`; `TaskMarker` лише позначає на видалення;
+ * `ProjectWriter` — контейнерна роль, на якій мутація межі тенанта 2a2 дає
+ * інший результат (предикат контейнера не містить умови скоупу); довідник
+ * `Bulletin` з `publicRead`.
+ */
+export function writeRoles(): Layer {
+  const task = objects(["Document", "Task"])
+  return {
+    [TASK_FILE]: {
+      customActions: [
+        {
+          id: REASSIGN_ACTION_ID,
+          name: "reassign",
+          requires: ["read"],
+          // `dml` в метаданих не пишеться: дія з ефектами — це `update`.
+          effects: { header: ["assignee"], tabularSections: false },
+        },
+      ],
+    },
+    [BULLETIN_FILE]: catalog(uuid(6724), "Bulletin", BULLETIN_TABLE, {
+      publicRead: "authenticated",
+      attributes: [
+        {
+          id: uuid(6725),
+          name: "text",
+          physicalName: "text",
+          type: "String",
+          length: 200,
+        },
+      ],
+    }),
+    [ROLE_FILE("TaskWriter")]: role(
+      TASK_WRITER_ID,
+      "TaskWriter",
+      { scopeKind: "org" },
+      {
+        grants: [
+          grant(
+            task,
+            ["read", "create", "update", "delete", "reassign"],
+            "any"
+          ),
+          grant(objects(["Catalog", "TaskComment"]), ["read", "update"], "any"),
+          grant(task, ["post"], "own"),
+          grant(
+            objects(["Catalog", "Bulletin"]),
+            ["read", "create", "update"],
+            "any"
+          ),
+        ],
+      }
+    ),
+    [ROLE_FILE("TaskMarker")]: role(
+      TASK_MARKER_ID,
+      "TaskMarker",
+      { scopeKind: "org" },
+      { grants: [grant(task, ["read", "markDeletion"], "any")] }
+    ),
+    [ROLE_FILE("ProjectWriter")]: role(
+      PROJECT_WRITER_ID,
+      "ProjectWriter",
+      { container: ref("Catalog", "Project") },
+      { grants: [grant(task, ["read", "create", "update"], "any")] }
+    ),
+  }
+}
+
+/**
+ * Нескоупована константа `Rate`: у глобальній ролі `Support` її `update`
+ * природний для вставки й оновлення (Р2b1-7).
+ */
+export function globalConstant(): Layer {
+  return {
+    "constants/Rate/Rate.meta.json": {
+      id: uuid(6734),
+      kind: "Constant",
+      name: "Rate",
+      physicalName: RATE_TABLE,
+      kindLabel: RATE_TABLE,
+      scope: "none",
+      type: "Numeric",
+      precision: 10,
+      scale: 2,
+    },
+    [ROLE_FILE("Support")]: {
+      grants: [grant(objects(["Constant", "Rate"]), ["read", "update"], "any")],
+    },
+  }
+}
+
 /** Перерахування — вид без контракту прав. */
 export function statusEnumeration() {
   return {

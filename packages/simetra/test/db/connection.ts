@@ -1,4 +1,10 @@
 import pg from "pg"
+import {
+  COMMAND_SETTING,
+  PLATFORM_ROLES,
+  SESSION_CLAIMS_SETTING,
+  type CommandContext,
+} from "simetra/model"
 import type { ApplyDatabase, ApplyTransaction } from "simetra/schema"
 
 const DEFAULT_URL = "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
@@ -257,7 +263,8 @@ export async function asRole(
   role: ApiRole,
   claims: Record<string, unknown>
 ): Promise<void> {
-  await client.query("SELECT set_config('request.jwt.claims', $1, true)", [
+  await client.query("SELECT set_config($1, $2, true)", [
+    SESSION_CLAIMS_SETTING,
     JSON.stringify(claims),
   ])
   await client.query(`SET LOCAL ROLE ${role}`)
@@ -280,8 +287,77 @@ export async function queryAs<T extends pg.QueryResultRow>(
     const { rows } = await client.query<T>(sql, params)
     return { rows }
   } catch (error) {
-    return { code: (error as { code: string }).code }
+    // Без коду Postgres це не відмова запиту, а збій з'єднання чи помічника:
+    // загорнутий у відповідь, він маскувався б під очікувану відмову.
+    if (!isDatabaseError(error)) throw error
+    return { code: error.code }
   } finally {
     await client.query("ROLLBACK TO SAVEPOINT as_role")
+  }
+}
+
+/** Помилка, яку повернув Postgres (з кодом SQLSTATE), а не збій клієнта. */
+function isDatabaseError(
+  error: unknown
+): error is pg.DatabaseError & { code: string } {
+  return error instanceof pg.DatabaseError && typeof error.code === "string"
+}
+
+/**
+ * Відмова запиту: код, повідомлення, деталь і колонка помилки Postgres.
+ * Колонка розрізняє відмови з тим самим кодом і текстом: тригер ефектів
+ * називає нею колонку, на якій відмовив.
+ */
+export interface Refusal {
+  code: string
+  message: string
+  detail?: string
+  column?: string
+}
+
+/**
+ * Один запит від ролі команд у точці збереження, як його виконає
+ * `runCommand`: claims користувача, контекст команди в `COMMAND_SETTING`
+ * (рядок ставиться сирим — для зіпсованого контексту; `undefined` — не
+ * ставиться) і `SET LOCAL ROLE` ролі команд. Членство з `SET` у ролі команд
+ * дає собі опис (Р2b1-13). `after` виконує власник (`RESET ROLE`) у тій самій
+ * точці збереження до відкату: каскад і поширення копій інакше не видно.
+ * Відмова повертається кодом, повідомленням, деталлю й колонкою — `42501`
+ * дають і RLS, і контекст, і тригер ефектів.
+ */
+export async function commandAs<T extends pg.QueryResultRow>(
+  client: pg.Client,
+  claims: Record<string, unknown>,
+  context: CommandContext | string | undefined,
+  sql: string,
+  options: { params?: unknown[]; after?: string } = {}
+): Promise<{ rows: T[]; after?: pg.QueryResultRow[] } | Refusal> {
+  await client.query("SAVEPOINT command_as")
+  try {
+    await client.query("SELECT set_config($1, $2, true)", [
+      SESSION_CLAIMS_SETTING,
+      JSON.stringify(claims),
+    ])
+    if (context !== undefined)
+      await client.query("SELECT set_config($1, $2, true)", [
+        COMMAND_SETTING,
+        typeof context === "string" ? context : JSON.stringify(context),
+      ])
+    await client.query(`SET LOCAL ROLE ${PLATFORM_ROLES.command}`)
+    const { rows } = await client.query<T>(sql, options.params)
+    if (options.after === undefined) return { rows }
+    await client.query("RESET ROLE")
+    return { rows, after: (await client.query(options.after)).rows }
+  } catch (error) {
+    if (!isDatabaseError(error)) throw error
+    const { code, message, detail, column } = error
+    return {
+      code,
+      message,
+      ...(detail === undefined ? {} : { detail }),
+      ...(column === undefined ? {} : { column }),
+    }
+  } finally {
+    await client.query("ROLLBACK TO SAVEPOINT command_as")
   }
 }

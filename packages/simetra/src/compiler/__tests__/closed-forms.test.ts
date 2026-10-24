@@ -1,11 +1,15 @@
 import { describe, expect, it } from "vitest"
 import { compile } from "simetra/compiler"
+import { COMMAND_SETTING, SESSION_CLAIMS_SETTING } from "simetra/model"
 import {
   acceptDebt,
   customTable,
   metaFiles,
+  organization,
   project,
+  SCOPE_FUNCTIONS_FILE,
   salesDocument,
+  scopedProject,
   withoutAccess,
   withoutMechanics,
 } from "./helpers"
@@ -185,6 +189,293 @@ describe("kind module: closed forms only", () => {
             "CREATE FUNCTION public.sale_touch() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN EXECUTE 'select 1'; RETURN NEW; END $$;",
         })
       ).toEqual([["sql.closed-shell", "volatility"]])
+    })
+  })
+
+  describe("application SQL leaves the command context alone", () => {
+    // Імена налаштувань — лише через сталу: літерала поза T0 немає.
+    const C = COMMAND_SETTING
+    const MIXED = C.replace(/\b\w/g, (c) => c.toUpperCase())
+    const plpgsqlBody = (statement: string) =>
+      shell("LANGUAGE plpgsql VOLATILE", `BEGIN ${statement} RETURN 1; END`)
+    const writes = async (sql: string) =>
+      (await diagnostics({ [SALE_SQL]: sql }))
+        .filter((d) => d.code === "sql.command-context-write")
+        .map((d) => [d.code, d.file, d.params?.form])
+
+    it.each([
+      ["setConfig", plpgsqlBody(`PERFORM set_config('${C}', '{}', true);`)],
+      [
+        "setConfig",
+        plpgsqlBody(`PERFORM pg_catalog.set_config('${MIXED}', '{}', true);`),
+      ],
+      ["nonLiteral", plpgsqlBody(`PERFORM set_config(v_name, '{}', true);`)],
+      ["setStatement", plpgsqlBody(`SET LOCAL ${C} = '{}';`)],
+      ["setStatement", plpgsqlBody(`RESET ${C};`)],
+      ["setStatement", plpgsqlBody("RESET ALL;")],
+      [
+        "functionOption",
+        shell(`LANGUAGE sql STABLE SET ${C} = '{}'`, "select 1"),
+      ],
+      [
+        "setConfig",
+        shell("LANGUAGE sql VOLATILE", `SELECT set_config('${C}', '{}', true)`),
+      ],
+      [
+        "setConfig",
+        `CREATE FUNCTION public.sale_total() RETURNS text LANGUAGE sql VOLATILE BEGIN ATOMIC SELECT set_config('${C}', '{}', true); END;`,
+      ],
+    ])("%s is refused", async (form, sql) => {
+      expect(await writes(sql)).toEqual([
+        ["sql.command-context-write", SALE_SQL, form],
+      ])
+    })
+
+    // Claims запиту й роль захищені нарівні з контекстом (Р2b1-19b): claims
+    // визначають користувача в політиках запису, а зміна ролі виходить з ролі
+    // команд. Стара форма claims — `request.jwt.claim.<ключ>`.
+    const CLAIMS = SESSION_CLAIMS_SETTING
+    const LEGACY_CLAIM = `${CLAIMS.replace(/s$/, "")}.sub`
+    it.each([
+      [
+        "claims via set_config",
+        "setConfig",
+        plpgsqlBody(`PERFORM set_config('${CLAIMS}', '{}', true);`),
+      ],
+      [
+        "claims via SET LOCAL",
+        "setStatement",
+        plpgsqlBody(`SET LOCAL ${CLAIMS} = '{}';`),
+      ],
+      [
+        "a legacy claim",
+        "setConfig",
+        plpgsqlBody(`PERFORM set_config('${LEGACY_CLAIM}', 'x', true);`),
+      ],
+      ["SET ROLE", "setStatement", plpgsqlBody("SET ROLE postgres;")],
+      ["RESET ROLE", "setStatement", plpgsqlBody("RESET ROLE;")],
+      [
+        "SET SESSION AUTHORIZATION",
+        "setStatement",
+        plpgsqlBody("SET SESSION AUTHORIZATION postgres;"),
+      ],
+      [
+        "RESET SESSION AUTHORIZATION",
+        "setStatement",
+        plpgsqlBody("RESET SESSION AUTHORIZATION;"),
+      ],
+      [
+        "set_config on the role",
+        "setConfig",
+        plpgsqlBody("PERFORM set_config('role', 'postgres', true);"),
+      ],
+      [
+        "set_config on the session authorization",
+        "setConfig",
+        plpgsqlBody(
+          "PERFORM set_config('session_authorization', 'postgres', true);"
+        ),
+      ],
+      [
+        "a SET role function option",
+        "functionOption",
+        shell("LANGUAGE sql STABLE SET role = postgres", "select 1"),
+      ],
+    ])("%s is refused", async (_case, form, sql) => {
+      expect(await writes(sql)).toEqual([
+        ["sql.command-context-write", SALE_SQL, form],
+      ])
+    })
+
+    it("reading the claims passes", async () => {
+      expect(
+        await writes(plpgsqlBody(`PERFORM current_setting('${CLAIMS}', true);`))
+      ).toEqual([])
+    })
+
+    // Допоміжна функція спільного `sql/`-файлу (не обробник, не модуль виду):
+    // її може викликати функція закритого модуля чи обробник (Р2b1-19a).
+    const SHARED_SQL = "sql/public/helpers.sql"
+    const sharedWrites = async (sql: string) =>
+      (await diagnostics({ [SHARED_SQL]: sql }))
+        .filter((d) => d.code === "sql.command-context-write")
+        .map((d) => [d.code, d.file, d.params?.form])
+
+    it.each([
+      ["setConfig", plpgsqlBody(`PERFORM set_config('${C}', '{}', true);`)],
+      [
+        "settingsTable",
+        plpgsqlBody("UPDATE pg_settings SET setting = '1' WHERE name = 'x';"),
+      ],
+      [
+        "settingsTable",
+        plpgsqlBody(
+          "UPDATE pg_catalog.pg_settings SET setting = '1' WHERE name = 'x';"
+        ),
+      ],
+      [
+        "settingsTable",
+        plpgsqlBody(`UPDATE "pg_catalog"."pg_settings" SET setting = '1';`),
+      ],
+      [
+        "settingsTable",
+        plpgsqlBody("INSERT INTO pg_settings (name) VALUES ('x');"),
+      ],
+      ["settingsTable", plpgsqlBody("DELETE FROM pg_catalog.pg_settings;")],
+      [
+        "settingsTable",
+        shell("LANGUAGE sql VOLATILE", "UPDATE pg_settings SET setting = '1'"),
+      ],
+      ["setStatement", plpgsqlBody(`EXECUTE 'SET ${C} = ''{}''';`)],
+      [
+        "settingsTable",
+        plpgsqlBody("EXECUTE 'UPDATE pg_settings SET setting = ''1''';"),
+      ],
+    ])("shared file function: %s is refused", async (form, sql) => {
+      expect(await sharedWrites(sql)).toEqual([
+        ["sql.command-context-write", SHARED_SQL, form],
+      ])
+    })
+
+    // Кожна одиниця спільного файлу, а не лише функції (Р2b1-22). Борг
+    // фікстури прийнято (`acceptDebt`): `ALTER FUNCTION` у спільному файлі —
+    // борг, і без прийняття його й так відхилив би ратчет.
+    const HELPER = `CREATE FUNCTION public.helper() RETURNS int LANGUAGE sql STABLE AS $$ select 1 $$;`
+    const DB_QUALIFIED = `postgres.pg_catalog.set_config('${C}', '{}', true)`
+    it.each([
+      [
+        "ALTER FUNCTION … SET the command context",
+        "functionOption",
+        `${HELPER} ALTER FUNCTION public.helper() SET ${C} = '{}';`,
+      ],
+      [
+        "ALTER FUNCTION … SET the claims",
+        "functionOption",
+        `${HELPER} ALTER FUNCTION public.helper() SET ${CLAIMS} = '{}';`,
+      ],
+      [
+        "an aggregate over set_config",
+        "nonLiteral",
+        `CREATE AGGREGATE public.agg(text, boolean) (SFUNC = pg_catalog.set_config, STYPE = text, INITCOND = '${C}');`,
+      ],
+      [
+        "a view calling set_config",
+        "setConfig",
+        `CREATE VIEW public.v AS SELECT set_config('${C}', '{}', true) AS x;`,
+      ],
+      [
+        "a view over pg_settings",
+        "settingsTable",
+        "CREATE VIEW public.v AS SELECT name, setting FROM pg_catalog.pg_settings;",
+      ],
+      [
+        "a domain CHECK calling set_config",
+        "setConfig",
+        `CREATE DOMAIN public.d AS text CHECK (set_config('${C}', VALUE, true) IS NOT NULL);`,
+      ],
+      [
+        "RESET ALL as a body statement",
+        "setStatement",
+        plpgsqlBody("RESET ALL;"),
+      ],
+      [
+        "a parameter default calling set_config",
+        "setConfig",
+        `CREATE FUNCTION public.helper(x text DEFAULT set_config('${C}', '{}', true)) RETURNS int LANGUAGE sql STABLE AS $$ select 1 $$;`,
+      ],
+      [
+        "a database-qualified set_config in plpgsql",
+        "setConfig",
+        plpgsqlBody(`PERFORM ${DB_QUALIFIED};`),
+      ],
+      [
+        "a database-qualified set_config in LANGUAGE sql",
+        "setConfig",
+        shell("LANGUAGE sql VOLATILE", `SELECT ${DB_QUALIFIED}`),
+      ],
+      [
+        "a database-qualified set_config in a literal EXECUTE",
+        "setConfig",
+        plpgsqlBody(`EXECUTE 'SELECT ${DB_QUALIFIED.replaceAll("'", "''")}';`),
+      ],
+    ])("shared file unit: %s is refused", async (_case, form, sql) => {
+      expect(await sharedWrites(sql)).toEqual([
+        ["sql.command-context-write", SHARED_SQL, form],
+      ])
+    })
+
+    it.each([
+      plpgsqlBody("PERFORM setting FROM pg_settings WHERE name = 'x';"),
+      "CREATE VIEW public.v AS SELECT current_setting('app.x', true) AS x;",
+      "CREATE DOMAIN public.d AS text CHECK (VALUE <> '');",
+      `${HELPER} ALTER FUNCTION public.helper() SET search_path = '';`,
+      // `RESET ALL` опції прибирає лише власні налаштування функції (Р2b1-25).
+      `${HELPER} ALTER FUNCTION public.helper() RESET ALL;`,
+      // `set_config` іншої схеми — не вбудований, навіть за трьох частин.
+      plpgsqlBody(`PERFORM postgres.app.set_config('${C}', '{}', true);`),
+      shell(
+        "LANGUAGE sql STABLE",
+        "SELECT setting FROM pg_catalog.pg_settings"
+      ),
+      plpgsqlBody("PERFORM set_config('app.x', '1', true);"),
+      // Нелітеральний `EXECUTE` — відоме обмеження до 2c, не помилка (Р2b1-19a).
+      plpgsqlBody("EXECUTE v_sql;"),
+      plpgsqlBody("EXECUTE format('delete from app.%I', v_table);"),
+      plpgsqlBody("EXECUTE 'select 1';"),
+    ])("shared file function: harmless SQL passes: %s", async (sql) => {
+      expect(await sharedWrites(sql)).toEqual([])
+    })
+
+    it("a kind module function is refused for the new forms too", async () => {
+      expect(await writes(plpgsqlBody("DELETE FROM pg_settings;"))).toEqual([
+        ["sql.command-context-write", SALE_SQL, "settingsTable"],
+      ])
+    })
+
+    it("a custom table module (debt) is outside the check", async () => {
+      const found = await diagnostics({
+        [TABLE_SQL]: plpgsqlBody(`PERFORM set_config('${C}', '{}', true);`),
+      })
+      expect(found.map((d) => d.code)).not.toContain(
+        "sql.command-context-write"
+      )
+    })
+
+    it("a scope set function is judged in a custom table module too", async () => {
+      // Функція множини скоупу боргом не буває (спека промоції §9.4), хоч би
+      // де лежав файл: у модулі прийнятої таблиці її теж судять.
+      const setFunction = (body: string) =>
+        `CREATE FUNCTION public.user_ids() RETURNS SETOF uuid LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = '' AS $$ BEGIN ${body} RETURN; END $$;`
+      const forms = async (body: string) =>
+        (
+          await compile(
+            await acceptDebt(
+              metaFiles({
+                "project.meta.json": scopedProject(),
+                "catalogs/Organization/Organization.meta.json": organization(),
+                [SCOPE_FUNCTIONS_FILE]: `CREATE FUNCTION public.org_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT NULL::uuid $$;`,
+                "custom-tables/T/T.meta.json": customTable("T"),
+                [TABLE_SQL]: setFunction(body),
+              })
+            )
+          )
+        ).diagnostics
+          .filter((d) => d.code === "sql.command-context-write")
+          .map((d) => [d.file, d.params?.form])
+      expect(
+        await forms(`PERFORM pg_catalog.set_config('${C}', '{}', true);`)
+      ).toEqual([[TABLE_SQL, "setConfig"]])
+      expect(
+        await forms("PERFORM pg_catalog.set_config('app.x', '1', true);")
+      ).toEqual([])
+    })
+
+    it.each([
+      plpgsqlBody("PERFORM set_config('app.x', '1', true);"),
+      plpgsqlBody("SET LOCAL statement_timeout = '1s';"),
+      plpgsqlBody(`PERFORM current_setting('${C}', true);`),
+    ])("an unrelated setting passes: %s", async (sql) => {
+      expect(await writes(sql)).toEqual([])
     })
   })
 

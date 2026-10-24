@@ -6,9 +6,18 @@ import type {
   RightsContract,
 } from "../contracts"
 import { CURRENT_USER } from "../membership-functions"
+import { COMMAND_FUNCTIONS } from "./command-units"
+import { uniformExtents } from "./contracts"
 import { RIGHTS_FUNCTIONS, call, uuidLiteral } from "./functions"
 import { sqlLiteral } from "../stages/model"
 import { must } from "./references"
+
+/**
+ * Дія контексту команди (Р2b1-5): замість літерала дії предикат кличе
+ * `command_action()`, тож політики запису кореневого рядка не множаться на
+ * кількість дій об'єкта.
+ */
+export const COMMAND_ACTION: unique symbol = Symbol("command action")
 
 /**
  * Умова предиката прав (спека прав §5.4). `column` — `<колонка> =
@@ -54,13 +63,25 @@ interface Inner {
  */
 export function rightsPredicates(
   contract: RightsContract,
-  action: string,
+  action: string | typeof COMMAND_ACTION,
   table: PhysicalTable,
   main: PhysicalTable = table
 ): RightsPredicate[] {
-  const { extents } = must(contract.actions.find((a) => a.action === action))
+  // Дія контексту має обсяги будь-якої дії об'єкта лише тому, що набір
+  // обсягів у всіх дій один (Р2b1-6): інакше політика мовчки розійшлася б з
+  // правом. Вираз контексту — скалярний підзапит без посилань на рядок, тож
+  // множини лишаються некорельованими (§5.4).
+  const extents =
+    action === COMMAND_ACTION
+      ? uniformExtents(contract.actions, contract.kindLabel)
+      : must(contract.actions.find((a) => a.action === action)).extents
   const F = RIGHTS_FUNCTIONS
-  const head = [sqlLiteral(action), sqlLiteral(contract.kindLabel)]
+  const head = [
+    action === COMMAND_ACTION
+      ? `(SELECT ${call(COMMAND_FUNCTIONS.action)})`
+      : sqlLiteral(action),
+    sqlLiteral(contract.kindLabel),
+  ]
   const own = extents.some((e) => e.form === "own")
   const dimensions = new Set(
     extents.flatMap((e) => (e.form === "dimension" ? [e.dimensionId] : []))

@@ -309,6 +309,8 @@ The PG schema `simetra` (identities, the current user, provisioning) belongs
 to the platform and is reserved (`schema.reserved`); in SQL the current user is
 `(select simetra.current_user_id())`. Both rules in full: the same reference.
 
+Only commands write kind tables, and application SQL never changes `simetra.*` settings (`sql.command-context-write`): `references/people-and-rights.md`.
+
 ## The SQL module: closed forms only
 
 The `.sql` module of an object of a 1C kind accepts only:

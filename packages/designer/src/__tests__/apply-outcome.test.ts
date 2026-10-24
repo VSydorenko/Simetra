@@ -131,22 +131,28 @@ const HEAD =
   /^apply: outcome unknown — check simetra\.ledger for apply id ([0-9a-f-]{36})$/m
 
 describe("apply with an unknown outcome", () => {
+  // Канал на кейс, а не три застосування в одному `it`: кожне компілює
+  // метадані, і під паралельним `pnpm test` один кейс упирався в таймаут.
+  const applyOptions = (dir: string) => ({
+    dir,
+    readOnly: false,
+    allowDatabaseWrite: true,
+    dryRun: false,
+    confirmed: true,
+    channel: "cli" as const,
+    database: databaseResource(env, { url: ENV }),
+  })
+
   it("reports the outcome as unknown, never as nothing written", async () => {
     const dir = await project()
     const { file, artifact } = await writePlan(dir)
-    const r = await invoke(
-      toolByName("apply")!,
-      { plan: file, planHash: artifact.planHash },
-      {
-        dir,
-        readOnly: false,
-        allowDatabaseWrite: true,
-        dryRun: false,
-        confirmed: true,
-        channel: "cli",
-        database: databaseResource(env, { url: ENV }),
-      }
-    )
+    const applyOnce = () =>
+      invoke(
+        toolByName("apply")!,
+        { plan: file, planHash: artifact.planHash },
+        applyOptions(dir)
+      )
+    const r = await applyOnce()
     expect(r.ok).toBe(false)
     expect(r.data).toBeUndefined()
     expect(r.diagnostics.map((d) => [d.code, d.params?.outcome])).toEqual([
@@ -154,8 +160,17 @@ describe("apply with an unknown outcome", () => {
     ])
     // Спроба й пошук у ledger; повтору на невідомому результаті немає
     expect(lost.transactions).toBe(2)
-    const applyId = r.diagnostics[0]!.params?.applyId
+    // Кожен виклик — нове застосування зі своїм id
+    const again = await applyOnce()
+    expect(r.diagnostics[0]!.params?.applyId).toEqual(expect.any(String))
+    expect(again.diagnostics[0]!.params?.applyId).not.toBe(
+      r.diagnostics[0]!.params?.applyId
+    )
+  })
 
+  it("the cli reports the unknown outcome with the apply id", async () => {
+    const dir = await project()
+    const { file, artifact } = await writePlan(dir)
     const cli = await runTool(
       toolByName("apply")!,
       { _: [file, dir], "plan-hash": artifact.planHash, yes: true },
@@ -166,7 +181,11 @@ describe("apply with an unknown outcome", () => {
     expect(cli.exitCode).toBe(1)
     expect(cli.stdout).toMatch(HEAD)
     expect(cli.stdout).not.toContain("nothing was written")
+  })
 
+  it("mcp reports the unknown outcome with the apply id", async () => {
+    const dir = await project()
+    const { file, artifact } = await writePlan(dir)
     const server = createMcpServer({
       dir,
       readOnly: false,
@@ -186,8 +205,6 @@ describe("apply with an unknown outcome", () => {
     const text = (mcp.content as { text: string }[])[0]!.text
     expect(text).toMatch(HEAD)
     expect(text).not.toContain("nothing was written")
-    // Кожен виклик — нове застосування зі своїм id
-    expect(HEAD.exec(text)?.[1]).not.toBe(applyId)
   })
 
   it("refuses a plan of another format with a rebuild hint, before connecting", async () => {

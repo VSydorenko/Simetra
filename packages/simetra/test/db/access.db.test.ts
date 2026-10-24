@@ -444,27 +444,31 @@ describe.each(SCENARIOS)("kind table access in schema $schema", (scenario) => {
       const alice = await signUp(client)
       await tenant(client, schema, alice)
       // Політики читання кожної таблиці: межа тенанта чи «Користувачів»
-      // (`scope_read`) і кожна політика прав (`read_*`); імена — з
-      // `accessPolicyNames`, а не зі сталого суфікса.
+      // (`scope_read`) і кожна політика прав (`read_*`). Команду політики
+      // бере дерево (`FOR SELECT`), а не перелік імен: так політики запису
+      // не потрапляють у порівняння з `cmd = 'SELECT'`.
       const expected = new Map<string, string[]>()
       for (const contract of model.contracts.access) {
         const names = accessPolicyNames(contract.table)
-        const writes = new Set([
-          names.scopeInsert,
-          names.scopeUpdate,
-          names.scopeDelete,
-          names.publicRead,
-        ])
         const reads = model.sqlUnits
-          .filter(
-            (u) =>
+          .filter((u) => {
+            const statement = (
+              u.tree as {
+                CreatePolicyStmt: {
+                  table: { relname: string }
+                  cmd_name: string
+                }
+              }
+            ).CreatePolicyStmt
+            return (
               u.generator === "access" &&
               u.class === "policy" &&
               u.ownerObjectId === contract.objectId &&
-              (u.tree as { CreatePolicyStmt: { table: { relname: string } } })
-                .CreatePolicyStmt.table.relname === contract.table.name &&
-              !writes.has(u.name)
-          )
+              statement.table.relname === contract.table.name &&
+              statement.cmd_name === "select" &&
+              u.name !== names.publicRead
+            )
+          })
           .map((u) => u.name)
           .sort()
         if (reads.length === 0) continue

@@ -15,8 +15,11 @@ import {
   metadataKindSchema,
   METADATA_KINDS,
   eventSubscriptionSchema,
+  COMMAND_SETTING,
+  PROTECTED_SESSION_SETTINGS,
   PROVIDER_API_ROLES,
   PUBLIC_READ_PURPOSES,
+  SESSION_CLAIMS_SETTING,
   PUBLIC_READ_ROLES,
 } from "../schemas"
 import { KIND_REGISTRY } from "../kinds/registry"
@@ -802,6 +805,17 @@ describe("publicRead", () => {
       for (const roles of Object.values(PROVIDER_API_ROLES)) {
         expect(roles[purpose], value).not.toBe(roles.service)
       }
+    }
+  })
+
+  it("the protected session settings cover the command context and the claims", () => {
+    // Перевірка SQL застосунку судить за переліком: налаштування платформи
+    // поза ним стало б дірою межі довіри (Р2b1-19b).
+    for (const setting of [COMMAND_SETTING, SESSION_CLAIMS_SETTING]) {
+      expect(
+        PROTECTED_SESSION_SETTINGS.prefixes.some((p) => setting.startsWith(p)),
+        setting
+      ).toBe(true)
     }
   })
 
