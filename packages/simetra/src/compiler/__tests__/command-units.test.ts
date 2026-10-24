@@ -18,6 +18,7 @@ import {
   withRoles,
   writeRoles,
 } from "./fixtures/rights"
+import { nodes } from "./fixtures/sql-shape"
 
 let parse: SqlParser
 let plpgsql: PlpgsqlParser
@@ -52,17 +53,6 @@ const option = (unit: SqlUnit, name: string) =>
     (unit.tree as { CreateFunctionStmt: CreateFunction }).CreateFunctionStmt
       .options ?? []
   ).find((o) => o.DefElem?.defname === name)?.DefElem?.arg
-
-/** Вузли дерева з ключем `key`, у порядку обходу. */
-function nodes(value: unknown, key: string): unknown[] {
-  if (Array.isArray(value)) return value.flatMap((item) => nodes(item, key))
-  if (typeof value !== "object" || value === null) return []
-  const node = value as Record<string, unknown>
-  return [
-    ...(key in node ? [node[key]] : []),
-    ...Object.values(node).flatMap((child) => nodes(child, key)),
-  ]
-}
 
 /** Дерева виразів тіла plpgsql: кожен вираз чи запит як розібране дерево. */
 function bodyTrees(unit: SqlUnit): unknown[] {

@@ -886,6 +886,40 @@ describe("rights write policies", () => {
   const writesOf = (model: CompiledModel, table: string) =>
     new Map([...policiesOf(model, table)].filter(([name]) => WRITE.test(name)))
 
+  /**
+   * Повний набір імен політик таблиці зі скоупом: межа скоупу, читання за
+   * предикатами `read`, охорона контексту й очікувані політики запису. Без
+   * нього зайва політика з іменем поза шаблоном запису (скажімо, ще одна
+   * `PERMISSIVE … WITH CHECK (true)`) пройшла б непоміченою.
+   */
+  function allPolicies(
+    model: CompiledModel,
+    tableName: string,
+    writes: ReadonlyMap<string, string>
+  ): string[] {
+    const table = model.physical.tables.find((t) => t.name === tableName)!
+    const contract = model.contracts.rights.find(
+      (c) => c.objectId === table.origin.objectId
+    )!
+    const main = mainTableOf(model.physical, contract.objectId)!
+    const names = accessPolicyNames(table)
+    return [
+      names.scopeRead,
+      names.scopeInsert,
+      names.scopeUpdate,
+      names.scopeDelete,
+      ...rightsPredicates(contract, "read", table, main).map((p) =>
+        names.rights(labelOf(p))
+      ),
+      names.commandInsert,
+      names.commandUpdate,
+      names.commandDelete,
+      ...writes.keys(),
+    ].sort()
+  }
+  const policyNames = (model: CompiledModel, table: string) =>
+    [...policiesOf(model, table).keys()].sort()
+
   it("guards every write command with the context", () => {
     // Р2b1-3: порожній чи відсутній контекст — відмова й там, де кореневої
     // родини немає (регістр).
@@ -913,18 +947,23 @@ describe("rights write policies", () => {
     // Шість обсягів домену на кожну з шести пар (DML, родина).
     expect(expected.size).toBe(36)
     expect(writesOf(domain, "task")).toEqual(expected)
+    expect(policyNames(domain, "task")).toEqual(
+      allPolicies(domain, "task", expected)
+    )
   })
 
   it("a tabular section binds to its owner", () => {
     // Р2b1-4, Р2b1-7: ключ родини — колонка власника з міткою власника;
     // природна дія ТЧ на будь-який DML — `update` власника.
-    expect(writesOf(domain, CHECKLIST_TABLE)).toEqual(
-      expectedWrites(
-        domain,
-        CHECKLIST_TABLE,
-        { key: "parent_id", label: "task" },
-        { insert: "update", update: "update", delete: "update" }
-      )
+    const expected = expectedWrites(
+      domain,
+      CHECKLIST_TABLE,
+      { key: "parent_id", label: "task" },
+      { insert: "update", update: "update", delete: "update" }
+    )
+    expect(writesOf(domain, CHECKLIST_TABLE)).toEqual(expected)
+    expect(policyNames(domain, CHECKLIST_TABLE)).toEqual(
+      allPolicies(domain, CHECKLIST_TABLE, expected)
     )
   })
 
@@ -936,6 +975,9 @@ describe("rights write policies", () => {
     })
     expect(expected.size).toBeGreaterThan(0)
     expect(writesOf(domain, REGION_NOTES_TABLE)).toEqual(expected)
+    expect(policyNames(domain, REGION_NOTES_TABLE)).toEqual(
+      allPolicies(domain, REGION_NOTES_TABLE, expected)
+    )
     // Похідні таблиці регістра й регістр лише з `read` політик запису не мають.
     for (const table of Object.values(HOURS_TABLES)) {
       expect(

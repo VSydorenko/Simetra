@@ -241,6 +241,19 @@ const CASES: [name: string, steps: Step[]][] = [
     ],
   ],
   [
+    "rest-delete-needs-natural",
+    [
+      // T2 не кореневий: видалити його може лише природна `delete`, якої
+      // `TaskMarker` не має.
+      step(
+        "w2",
+        ["markDeletion", "task", "T1"],
+        "DELETE FROM public.task WHERE id = {T2} RETURNING id",
+        ok([])
+      ),
+    ],
+  ],
+  [
     "post-extent",
     [
       // T1 — чужа: `update@any` є, `post@own` — ні.
@@ -300,12 +313,14 @@ const CASES: [name: string, steps: Step[]][] = [
   [
     "delete-cascade",
     [
+      // Рядки T3 у тій самій вибірці — позитивний контроль: порожнє `after`
+      // для T4 інакше могло б означати лише, що запит нічого не бачить.
       step(
         "w1",
         ["delete", "task", "T4"],
         "DELETE FROM public.task WHERE id = {T4} RETURNING id",
-        ok(["T4"], []),
-        `SELECT id FROM public.${CHECKLIST_TABLE} WHERE parent_id = {T4}`
+        ok(["T4"], ["T3", "T3"]),
+        `SELECT parent_id FROM public.${CHECKLIST_TABLE} WHERE parent_id IN ({T4}, {T3})`
       ),
     ],
   ],
@@ -386,7 +401,9 @@ const CASES: [name: string, steps: Step[]][] = [
         `UPDATE public.${BULLETIN_TABLE} SET text = 'x' WHERE id = {BA} RETURNING id`,
         ok(["BA"])
       ),
-      // BB видно через `publicRead`, але межа запису тенанта його не пускає.
+      // BB видно через `publicRead`, але запису не пускає вже предикат прав:
+      // у w1 немає прав в організації B (межу тенанта доводить
+      // `tenant-boundary`).
       step(
         "w1",
         ["update", BULLETIN_TABLE, "BB"],
@@ -535,6 +552,37 @@ const CASES: [name: string, steps: Step[]][] = [
   ],
 ]
 
+/**
+ * Вирази плану `EXPLAIN (FORMAT JSON, VERBOSE)`: виходи піддерев InitPlan і
+ * умови решти вузлів (фільтри, умови індексу й з'єднання).
+ */
+function planExpressions(
+  plan: unknown,
+  inInitPlan = false,
+  found: { initPlans: string[]; quals: string[] } = {
+    initPlans: [],
+    quals: [],
+  }
+): { initPlans: string[]; quals: string[] } {
+  if (Array.isArray(plan)) {
+    for (const item of plan) planExpressions(item, inInitPlan, found)
+    return found
+  }
+  if (typeof plan !== "object" || plan === null) return found
+  const node = plan as Record<string, unknown>
+  const init = inInitPlan || node["Parent Relationship"] === "InitPlan"
+  for (const [key, value] of Object.entries(node)) {
+    if (key === "Output" && init && Array.isArray(value)) {
+      found.initPlans.push(...value.map(String))
+    } else if (/(Filter|Cond)$/.test(key) && typeof value === "string") {
+      ;(init ? found.initPlans : found.quals).push(value)
+    } else {
+      planExpressions(value, init, found)
+    }
+  }
+  return found
+}
+
 describe("command writes", () => {
   const tx = describeTransaction()
   let ids: Seed = {}
@@ -661,6 +709,57 @@ describe("command writes", () => {
         .toEqual(s.expected)
     }
   })
+
+  // Причина DB-рівня (платформна спека §6.8, §5.4): чи рахується умова
+  // родини й запобіжник контексту раз на оператор (InitPlan), а не на рядок,
+  // вирішує планувальник. `USING` політик запису стає фільтром сканування, тож
+  // виклик функції платформи поза InitPlan означає обчислення на кожен рядок.
+  // `INSERT … VALUES` перевірок `WITH CHECK` у плані не показує — його тут немає.
+  it.each([
+    [
+      "update",
+      "task",
+      "UPDATE public.task SET region_id = {r2} WHERE id = {T2}",
+    ],
+    ["delete", "task", "DELETE FROM public.task WHERE id = {T2}"],
+    [
+      "update",
+      CHECKLIST_TABLE,
+      `UPDATE public.${CHECKLIST_TABLE} SET note = 'x' WHERE parent_id = {T2}`,
+    ],
+    [
+      "delete",
+      CHECKLIST_TABLE,
+      `DELETE FROM public.${CHECKLIST_TABLE} WHERE parent_id = {T2}`,
+    ],
+  ])(
+    "plan of %s on %s evaluates the write policies once per statement",
+    async (action, _table, sql) => {
+      const result = await commandAs<{ "QUERY PLAN": unknown }>(
+        tx.client(),
+        claims("w1"),
+        { action, object: "task", root: key("T2") },
+        `EXPLAIN (FORMAT JSON, VERBOSE) ${literal(sql)}`
+      )
+      if (!("rows" in result))
+        throw new Error(`EXPLAIN failed: ${result.code} ${result.message}`)
+      const { initPlans, quals } = planExpressions(
+        result.rows[0]!["QUERY PLAN"]
+      )
+      const calls = (texts: string[]) =>
+        texts.join(" ").match(/simetra\.\w+\(/g) ?? []
+      expect
+        .soft(calls(initPlans))
+        .toEqual(
+          expect.arrayContaining([
+            "simetra.command_action(",
+            "simetra.command_root(",
+          ])
+        )
+      expect.soft(calls(quals)).toEqual([])
+      expect.soft(JSON.stringify(result.rows)).not.toContain("SubPlan")
+    }
+  )
 
   // Механіка примушує `version` після запиту: тригер ефектів її зміни не
   // бачить (Р2b1-15), і значення запиту не доходить до рядка.
