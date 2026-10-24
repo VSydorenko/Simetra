@@ -177,9 +177,11 @@ export function closedModuleOwners(
  * закритій оболонці без перевантажень і правила рядка; блоки запиту рухів
  * вирізано до розбору, тож одиницями вони не стають. Решта класів —
  * `sql.statement-not-allowed` з підказкою властивості, що їх заміщує. Модуль
- * `debt` і спільні `sql/` тут не звужуються: це борг, його ратчет — окремо;
- * правило рядка поза модулем виду — помилка, бо воно належить таблиці
- * об'єкта, а таблиці боргу описані власними полями.
+ * `debt` і спільні `sql/` за формою не звужуються: це борг, його ратчет —
+ * окремо; правило рядка поза модулем виду — помилка, бо воно належить таблиці
+ * об'єкта, а таблиці боргу описані власними полями. Контекст команди
+ * (`sql.command-context-write`) судиться інакше: функції модулів видів і
+ * спільних `sql/`-файлів — усі, крім боргового SQL прийнятих таблиць.
  */
 export function checkSqlModules(
   objects: readonly ParsedObject[],
@@ -209,6 +211,33 @@ export function checkSqlModules(
         line: rule.line,
       })
     )
+  }
+  // Борговий SQL прийнятих таблиць `CustomTable` поза перевіркою контексту
+  // команди (відоме обмеження до 2c); решта — спільні `sql/`-файли й модулі
+  // видів: функція закритого модуля чи обробник може викликати допоміжну
+  // функцію спільного файлу, тож межа довіри (Р2b1-19a) охоплює їх усі.
+  const debtOwners = new Set(
+    objects
+      .filter((o) => KIND_REGISTRY[o.kind].sqlModule === "debt")
+      .map((o) => o.file)
+  )
+  for (const unit of units) {
+    if (closed(unit) || !FUNCTION_CLASSES.has(unit.class)) continue
+    if (unit.ownerFile !== undefined && debtOwners.has(unit.ownerFile)) continue
+    const write = commandContextWrite(
+      unit.tree as Node,
+      unit.sql,
+      parse,
+      plpgsql
+    )
+    if (write !== undefined) {
+      found.push(
+        diagnostic("sql.command-context-write", unit.file, "", {
+          name: `${unit.schema}.${unit.name}`,
+          form: write,
+        })
+      )
+    }
   }
   for (const unit of units) {
     if (!closed(unit)) continue

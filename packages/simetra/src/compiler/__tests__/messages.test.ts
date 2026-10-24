@@ -153,7 +153,13 @@ describe("messages catalog", () => {
   })
 
   it("sql.command-context-write names the function and the form in both locales", () => {
-    const forms = ["setConfig", "setStatement", "functionOption", "nonLiteral"]
+    const forms = [
+      "setConfig",
+      "setStatement",
+      "functionOption",
+      "nonLiteral",
+      "settingsTable",
+    ]
     for (const locale of ["en", "uk"] as const) {
       const messages = forms.map(
         (form) =>

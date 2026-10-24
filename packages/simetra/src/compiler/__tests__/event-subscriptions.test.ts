@@ -416,7 +416,7 @@ describe("EventSubscription", () => {
       `PERFORM set_config('${COMMAND_SETTING}', '{}', true);`
     )
     expect(await forms({ [HANDLER_FILE]: write })).toEqual([
-      [SUBSCRIPTION, "setConfig"],
+      [HANDLER_FILE, "setConfig"],
     ])
     // Модуль самої підписки — закритий модуль виду: одна діагностика, не дві.
     expect(

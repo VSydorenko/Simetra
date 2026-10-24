@@ -228,6 +228,80 @@ describe("kind module: closed forms only", () => {
       ])
     })
 
+    // Допоміжна функція спільного `sql/`-файлу (не обробник, не модуль виду):
+    // її може викликати функція закритого модуля чи обробник (Р2b1-19a).
+    const SHARED_SQL = "sql/public/helpers.sql"
+    const sharedWrites = async (sql: string) =>
+      (await diagnostics({ [SHARED_SQL]: sql }))
+        .filter((d) => d.code === "sql.command-context-write")
+        .map((d) => [d.code, d.file, d.params?.form])
+
+    it.each([
+      ["setConfig", plpgsqlBody(`PERFORM set_config('${C}', '{}', true);`)],
+      [
+        "settingsTable",
+        plpgsqlBody("UPDATE pg_settings SET setting = '1' WHERE name = 'x';"),
+      ],
+      [
+        "settingsTable",
+        plpgsqlBody(
+          "UPDATE pg_catalog.pg_settings SET setting = '1' WHERE name = 'x';"
+        ),
+      ],
+      [
+        "settingsTable",
+        plpgsqlBody(`UPDATE "pg_catalog"."pg_settings" SET setting = '1';`),
+      ],
+      [
+        "settingsTable",
+        plpgsqlBody("INSERT INTO pg_settings (name) VALUES ('x');"),
+      ],
+      ["settingsTable", plpgsqlBody("DELETE FROM pg_catalog.pg_settings;")],
+      [
+        "settingsTable",
+        shell("LANGUAGE sql VOLATILE", "UPDATE pg_settings SET setting = '1'"),
+      ],
+      ["setStatement", plpgsqlBody(`EXECUTE 'SET ${C} = ''{}''';`)],
+      [
+        "settingsTable",
+        plpgsqlBody("EXECUTE 'UPDATE pg_settings SET setting = ''1''';"),
+      ],
+    ])("shared file function: %s is refused", async (form, sql) => {
+      expect(await sharedWrites(sql)).toEqual([
+        ["sql.command-context-write", SHARED_SQL, form],
+      ])
+    })
+
+    it.each([
+      plpgsqlBody("PERFORM setting FROM pg_settings WHERE name = 'x';"),
+      shell(
+        "LANGUAGE sql STABLE",
+        "SELECT setting FROM pg_catalog.pg_settings"
+      ),
+      plpgsqlBody("PERFORM set_config('app.x', '1', true);"),
+      // Нелітеральний `EXECUTE` — відоме обмеження до 2c, не помилка (Р2b1-19a).
+      plpgsqlBody("EXECUTE v_sql;"),
+      plpgsqlBody("EXECUTE format('delete from app.%I', v_table);"),
+      plpgsqlBody("EXECUTE 'select 1';"),
+    ])("shared file function: harmless SQL passes: %s", async (sql) => {
+      expect(await sharedWrites(sql)).toEqual([])
+    })
+
+    it("a kind module function is refused for the new forms too", async () => {
+      expect(await writes(plpgsqlBody("DELETE FROM pg_settings;"))).toEqual([
+        ["sql.command-context-write", SALE_SQL, "settingsTable"],
+      ])
+    })
+
+    it("a custom table module (debt) is outside the check", async () => {
+      const found = await diagnostics({
+        [TABLE_SQL]: plpgsqlBody(`PERFORM set_config('${C}', '{}', true);`),
+      })
+      expect(found.map((d) => d.code)).not.toContain(
+        "sql.command-context-write"
+      )
+    })
+
     it.each([
       plpgsqlBody("PERFORM set_config('app.x', '1', true);"),
       plpgsqlBody("SET LOCAL statement_timeout = '1s';"),

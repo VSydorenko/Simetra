@@ -1,12 +1,16 @@
 import type { Node } from "libpg-query"
 import { COMMAND_SETTING } from "simetra/model"
-import { splitAssignment } from "./rewrite/plpgsql-body"
+import { plpgsqlExpressionTrees } from "./rewrite/plpgsql-body"
 import type { SqlParser } from "./parse"
-import type { PlpgsqlFunction, PlpgsqlParser } from "./plpgsql"
+import type { PlpgsqlParser } from "./plpgsql"
 
 /** Чим SQL застосунку зачіпає налаштування `simetra.*` (Р2b1-19). */
 export type CommandContextWrite =
-  "setConfig" | "setStatement" | "functionOption" | "nonLiteral"
+  | "setConfig"
+  | "setStatement"
+  | "functionOption"
+  | "nonLiteral"
+  | "settingsTable"
 
 /**
  * Простір імен налаштувань платформи, виведений зі сталої контексту: літерала
@@ -28,6 +32,16 @@ interface CallNode {
   args?: Node[]
 }
 
+/** Єдине значення `SELECT <значення>`: вираз динамічного оператора. */
+function selectedValue(stmt: unknown): unknown {
+  const targets = (
+    stmt as {
+      SelectStmt?: { targetList?: { ResTarget?: { val?: unknown } }[] }
+    }
+  )?.SelectStmt?.targetList
+  return targets?.length === 1 ? targets[0]!.ResTarget?.val : undefined
+}
+
 /** Пряме читання рядкового літерала (з можливим приведенням типу). */
 function literalText(arg: unknown): string | undefined {
   const node = arg as Record<string, unknown> | undefined
@@ -35,6 +49,27 @@ function literalText(arg: unknown): string | undefined {
   if (cast !== undefined) return literalText(cast.arg)
   const text = (node?.A_Const as { sval?: { sval?: string } } | undefined)?.sval
   return text?.sval
+}
+
+const DML_STATEMENTS = ["UpdateStmt", "InsertStmt", "DeleteStmt", "MergeStmt"]
+
+/**
+ * `UPDATE pg_settings` проходить правилом подання в `set_config`, а ім'я
+ * налаштування в `WHERE` надійно не перевірити (Р2b1-19a), тож забороняється
+ * будь-який запис у відношення, незалежно від умови. Читання дозволене.
+ */
+function settingsTableWrite(node: Record<string, unknown>): boolean {
+  return DML_STATEMENTS.some((key) => {
+    const relation = (
+      node[key] as
+        { relation?: { schemaname?: string; relname?: string } } | undefined
+    )?.relation
+    return (
+      relation?.relname === "pg_settings" &&
+      (relation.schemaname === undefined ||
+        relation.schemaname === "pg_catalog")
+    )
+  })
 }
 
 function setStatementWrite(set: SetStatement): boolean {
@@ -71,6 +106,7 @@ function treeWrite(value: unknown): CommandContextWrite | undefined {
     const found = callWrite(node.FuncCall as CallNode)
     if (found !== undefined) return found
   }
+  if (settingsTableWrite(node)) return "settingsTable"
   if (
     node.VariableSetStmt !== undefined &&
     setStatementWrite(node.VariableSetStmt as SetStatement)
@@ -84,34 +120,6 @@ function treeWrite(value: unknown): CommandContextWrite | undefined {
   return undefined
 }
 
-/**
- * Дерева виразів тіла plpgsql: той самий обхід, що й читання копій обробником
- * (Р2a2-9). Динамічний SQL сюди не доходить: його відкидає закрита оболонка, а
- * нерозбірний вираз — розбір тіла, що вже пройшов.
- */
-export function plpgsqlExpressionTrees(
-  fn: PlpgsqlFunction,
-  parse: SqlParser
-): unknown[] {
-  const trees: unknown[] = []
-  for (const statement of fn.statements) {
-    for (const e of statement.expressions) {
-      if (e.role === "dynamic") continue
-      let text = e.query
-      if (e.parseMode >= 3) {
-        const split = splitAssignment(e.query, e.parseMode - 2)
-        if (split === undefined) continue
-        text = `SELECT ${e.query.slice(split.valueStart)}`
-      } else if (e.parseMode > 0) {
-        text = `SELECT ${e.query}`
-      }
-      const parsed = parse(text)
-      if (parsed.ok) trees.push(parsed.statements.map((s) => s.stmt))
-    }
-  }
-  return trees
-}
-
 interface FunctionTree {
   options?: { DefElem?: { defname?: string; arg?: unknown } }[]
   sql_body?: unknown
@@ -121,7 +129,7 @@ interface FunctionTree {
  * Чи змінює функція налаштування `simetra.*` (контекст команди). Контекст
  * ставить лише `runCommand`; обробник підписки спрацьовує посеред оператора
  * команди, і змінений ним контекст побачили б політики наступних рядків
- * (Р2b1-19). Тіло `LANGUAGE sql` розбирається тут, тіло plpgsql — через
+ * (Р2b1-19, Р2b1-19a). Тіло `LANGUAGE sql` розбирається тут, тіло plpgsql — через
  * вирази його операторів. Перша знайдена форма.
  */
 export function commandContextWrite(
@@ -160,5 +168,25 @@ export function commandContextWrite(
   if (language !== "plpgsql") return undefined
   const body = plpgsql(sql)
   if (!body.ok || body.fn === undefined) return undefined
-  return treeWrite(plpgsqlExpressionTrees(body.fn, parse))
+  const found = treeWrite(plpgsqlExpressionTrees(body.fn, parse))
+  if (found !== undefined) return found
+  // Літеральний `EXECUTE '…'` — звичайний SQL, лише записаний рядком: його
+  // розбираємо й судимо усіма формами. Нелітеральний текст перевірка дерев
+  // не бачить: у закритих модулях і обробниках його відмовлено оболонкою
+  // (`dynamicSql`), а в боргових функціях спільних файлів це відоме
+  // обмеження до 2c (Р2b1-19a).
+  for (const statement of body.fn.statements) {
+    for (const e of statement.expressions) {
+      if (e.role !== "dynamic") continue
+      const wrapped = parse(`SELECT ${e.query}`)
+      const text = wrapped.ok
+        ? literalText(selectedValue(wrapped.statements[0]?.stmt))
+        : undefined
+      const inner = text === undefined ? undefined : parse(text)
+      if (inner?.ok !== true) continue
+      const literal = treeWrite(inner.statements.map((s) => s.stmt))
+      if (literal !== undefined) return literal
+    }
+  }
+  return undefined
 }
