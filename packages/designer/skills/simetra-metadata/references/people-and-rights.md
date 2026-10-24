@@ -67,8 +67,9 @@ with a trigger on the target table, see "Carrier copies").
   object's attributes, tabular sections and custom actions.
   `{ "name": "<action>", "requires": ["update"], "effects": { "header": ["<attribute>"] } }`
   Effects only on a kind with a writing standard action (not an accumulation
-  register or a recorder-subordinate information register), and
-  `tabularSections: true` only on a kind with tabular sections
+  register or a recorder-subordinate information register),
+  `tabularSections: true` only on a kind with tabular sections, and never a
+  transition column (`posted`, the deletion mark) in `header`
   (`rights.custom-action-effects`).
 - **`ownership`** — carriers whose `Ref` names the owner of a row (a member
   or a user). `"ownership": ["<attribute>", ["<ref attribute>", "<attribute>"]]`
@@ -211,23 +212,35 @@ declare one with `fullAccess`.
 ## Who writes what
 
 Kind tables are written **only by commands**: the write policies grant the
-command role and nobody else. The root row of a command is checked against the
-command's action right (`create`, `update`, `delete`, or a custom action's
-`requires`); every other row is a natural consequence of the DML, so it needs no
-right of its own.
+command role and nobody else.
 
-- A transition action (`post`, `markDeletion`, a custom action) changes only its
-  own header columns and never writes tabular sections. The ref key and the scope
-  column of a row cannot be changed by any command; transition columns (`posted`,
-  the deletion mark) change only through their own actions and only in their own
-  direction.
+- The **root row** of a command is checked against the right of the command's
+  **own action** — the standard action (`create`, `update`, `delete`, `post`,
+  …) or the custom action itself, not the actions it `requires` — and only
+  through that action's DML (`create` inserts, `delete` deletes, the rest
+  update).
+- **Every other row** is checked against the right of the **natural action of
+  its DML**, a fact of the kind (`create` for an insert, `update` for an
+  update, `delete` for a delete; `write` on an information register; `update`
+  for both on a constant); a tabular-section row is checked against `update`
+  of its owner. A DML with no natural action on that
+  table is refused.
+- An action without `tabularSections` does not write tabular sections. The
+  transition columns (`posted`, the deletion mark) change only through `post`,
+  `unpost` and `markDeletion`, each in its own direction. A custom action is
+  not a transition action and cannot name a transition column in its header
+  effects (`rights.custom-action-effects`, reason `transitionColumn`).
+- The ref key and the scope column of a row cannot be changed by any command.
 - A `beforeWrite` handler that, under a transition, changes another column makes
   the command fail. Put a computation done at posting into the command hook or
   into the effects of a custom action.
-- Application SQL (subscription handlers, object-module functions, shared `sql/`
-  files) must not change `simetra.*` settings in any form (`set_config`,
-  `SET`/`RESET`, a function option, `pg_settings`): compiler error
-  `sql.command-context-write`. The command context belongs to the platform.
+- Application SQL (subscription handlers wherever they live, object-module
+  functions, shared `sql/` files) must not change the platform's session
+  settings — `simetra.*`, the request claims (`request.jwt.*`) and the role
+  (`SET ROLE`, `SET SESSION AUTHORIZATION` and their `RESET`) — in any form
+  (`set_config`, `SET`/`RESET`, a function option, a write to `pg_settings`, a
+  literal `EXECUTE`): compiler error `sql.command-context-write`. The command
+  context, the user and the role belong to the platform.
 
 ## Carrier copies
 
