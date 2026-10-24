@@ -208,9 +208,16 @@ function rightsContract(
   // Колонки переходів змінює лише дія-перехід, тож `"all"` розгортається в
   // явний перелік без них (Р2b1-18): тригер ефектів порівнює їх, як будь-які
   // колонки поза ефектом дії.
+  // Ключ `ref` незмінний за будь-якої дії (Р2b1-9): змінений ключ — зміна
+  // ідентичності кореня, тож у шапку дії він не входить.
+  const keyColumns = new Set(
+    columnsOf.get(standardElementId(objectId, { logicalName: "ref" })) ?? []
+  )
   const expandAll = [...columnsOf.values()]
     .flat()
-    .filter((column) => !transitionColumns.has(column))
+    .filter(
+      (column) => !transitionColumns.has(column) && !keyColumns.has(column)
+    )
   // Ім'я шапки стандартної дії — факт реєстру; без фізичної колонки це дрейф
   // реєстру, а не порожній ефект.
   const canonicalHeader = (header: ActionEffects["header"]) =>

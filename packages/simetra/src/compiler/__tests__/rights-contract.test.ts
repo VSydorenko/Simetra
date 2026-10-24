@@ -464,6 +464,7 @@ describe("rights contract", () => {
         expect(header).not.toBe("all")
         expect(header).toContain("assignee_id")
         expect(header).not.toContain("posted")
+        expect(header).not.toContain("id")
         expect(header).not.toContain("deletion_mark")
       }
     })
