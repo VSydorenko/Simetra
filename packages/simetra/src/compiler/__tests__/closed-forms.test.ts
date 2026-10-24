@@ -374,6 +374,11 @@ describe("kind module: closed forms only", () => {
         `CREATE DOMAIN public.d AS text CHECK (set_config('${C}', VALUE, true) IS NOT NULL);`,
       ],
       [
+        "RESET ALL as a body statement",
+        "setStatement",
+        plpgsqlBody("RESET ALL;"),
+      ],
+      [
         "a parameter default calling set_config",
         "setConfig",
         `CREATE FUNCTION public.helper(x text DEFAULT set_config('${C}', '{}', true)) RETURNS int LANGUAGE sql STABLE AS $$ select 1 $$;`,
@@ -404,6 +409,8 @@ describe("kind module: closed forms only", () => {
       "CREATE VIEW public.v AS SELECT current_setting('app.x', true) AS x;",
       "CREATE DOMAIN public.d AS text CHECK (VALUE <> '');",
       `${HELPER} ALTER FUNCTION public.helper() SET search_path = '';`,
+      // `RESET ALL` опції прибирає лише власні налаштування функції (Р2b1-25).
+      `${HELPER} ALTER FUNCTION public.helper() RESET ALL;`,
       // `set_config` іншої схеми — не вбудований, навіть за трьох частин.
       plpgsqlBody(`PERFORM postgres.app.set_config('${C}', '{}', true);`),
       shell(
