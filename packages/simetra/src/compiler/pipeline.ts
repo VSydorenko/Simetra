@@ -50,6 +50,7 @@ import { buildModel, enumTypeOf, rowTypesOf } from "./stages/model"
 import { buildMovementFunctions } from "./movement-functions"
 import { buildMechanicsUnits } from "./mechanics-units"
 import { buildCarrierUnits } from "./rights/carrier-units"
+import { buildCommandUnits } from "./rights/command-units"
 import {
   buildSubscriptionUnits,
   subscriptionTriggerConflicts,
@@ -426,6 +427,12 @@ export async function runStages(
       module,
       parse
     ),
+    ...buildCommandUnits(
+      { rights, roles, users },
+      stage1.project.database.provider,
+      module,
+      parse
+    ),
   ].sort((a, b) => compareStrings(a.identity, b.identity))
   const nameById = new Map(stage1.objects.map((o) => [o.id ?? "", o.name]))
   const name = (id: string | undefined) => nameById.get(id ?? "") ?? ""
@@ -448,6 +455,8 @@ export async function runStages(
     // Функції прав спільні для всіх об'єктів — власника немає.
     rights: (unit) => `the rights function ${unit.name}`,
     carriers: (unit) => `the carrier copies of ${name(unit.ownerObjectId)}`,
+    // Функції контексту команди спільні для всіх об'єктів — власника немає.
+    command: (unit) => `the command context function ${unit.name}`,
   }
   const fileById = new Map(stage1.objects.map((o) => [o.id ?? "", o.file]))
   const triggerConflicts = subscriptionTriggerConflicts(

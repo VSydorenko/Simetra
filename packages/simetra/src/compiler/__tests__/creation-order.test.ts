@@ -219,6 +219,27 @@ describe("creation order", () => {
     ])
   })
 
+  it("creates the command parser before the surfaces that call it", async () => {
+    // Тіла plpgsql граф не читає, а сортування за ідентичністю ставить
+    // `command_action` раніше за `command_parsed`: порядок дають явні ребра.
+    const result = await compileRights(withRoles())
+    expectClean(result, { allow: ["rights.scope-kind-unread"] })
+    const list = result.model!.creationOrder.map((node) =>
+      node.type === "unit"
+        ? node.identity
+        : `${node.type}:${node.schema}.${node.name}`
+    )
+    const parsed = "function:simetra.command_parsed(bool)"
+    expectBefore(
+      list,
+      [
+        "function:simetra.command_action()",
+        "function:simetra.command_root(text)",
+        "function:simetra.command_current()",
+      ].map((surface): [string, string] => [parsed, surface])
+    )
+  })
+
   it("creates carrier propagation triggers after their function and the dependent tables", async () => {
     // Тіла plpgsql граф не читає: залежні таблиці тіла — явні ребра `requires`.
     const result = await compileRights(policyDomain())

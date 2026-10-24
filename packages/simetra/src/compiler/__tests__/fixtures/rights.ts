@@ -797,6 +797,87 @@ export function writableRegister(): Layer {
   }
 }
 
+export const TASK_WRITER_ID = uuid(6721)
+export const TASK_MARKER_ID = uuid(6722)
+export const PROJECT_WRITER_ID = uuid(6723)
+export const REASSIGN_ACTION_ID = uuid(6720)
+export const BULLETIN_TABLE = "bulletin"
+
+/**
+ * Ролі запису поверх `policyDomain()`: кастомна дія `reassign` на `Task`
+ * (лише шапка `assignee`, без ТЧ); `TaskWriter` пише `Task` і коментарі,
+ * `post` — лише `own`; `TaskMarker` лише позначає на видалення;
+ * `ProjectWriter` — контейнерна роль, на якій мутація межі тенанта 2a2 дає
+ * інший результат (предикат контейнера не містить умови скоупу); довідник
+ * `Bulletin` з `publicRead`.
+ */
+export function writeRoles(): Layer {
+  const task = objects(["Document", "Task"])
+  return {
+    [TASK_FILE]: {
+      customActions: [
+        {
+          id: REASSIGN_ACTION_ID,
+          name: "reassign",
+          requires: ["read"],
+          // `dml` в метаданих не пишеться: дія з ефектами — це `update`.
+          effects: { header: ["assignee"], tabularSections: false },
+        },
+      ],
+    },
+    "catalogs/Bulletin/Bulletin.meta.json": catalog(
+      uuid(6724),
+      "Bulletin",
+      BULLETIN_TABLE,
+      {
+        publicRead: "authenticated",
+        attributes: [
+          {
+            id: uuid(6725),
+            name: "text",
+            physicalName: "text",
+            type: "String",
+            length: 200,
+          },
+        ],
+      }
+    ),
+    [ROLE_FILE("TaskWriter")]: role(
+      TASK_WRITER_ID,
+      "TaskWriter",
+      { scopeKind: "org" },
+      {
+        grants: [
+          grant(
+            task,
+            ["read", "create", "update", "delete", "reassign"],
+            "any"
+          ),
+          grant(objects(["Catalog", "TaskComment"]), ["read", "update"], "any"),
+          grant(task, ["post"], "own"),
+          grant(
+            objects(["Catalog", "Bulletin"]),
+            ["read", "create", "update"],
+            "any"
+          ),
+        ],
+      }
+    ),
+    [ROLE_FILE("TaskMarker")]: role(
+      TASK_MARKER_ID,
+      "TaskMarker",
+      { scopeKind: "org" },
+      { grants: [grant(task, ["read", "markDeletion"], "any")] }
+    ),
+    [ROLE_FILE("ProjectWriter")]: role(
+      PROJECT_WRITER_ID,
+      "ProjectWriter",
+      { container: ref("Catalog", "Project") },
+      { grants: [grant(task, ["read", "create", "update"], "any")] }
+    ),
+  }
+}
+
 /**
  * Нескоупована константа `Rate`: у глобальній ролі `Support` її `update`
  * природний для вставки й оновлення (Р2b1-7).
