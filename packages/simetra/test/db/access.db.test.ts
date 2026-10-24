@@ -13,6 +13,12 @@ import {
   project,
   uuid,
 } from "../../src/compiler/__tests__/helpers"
+import {
+  grant,
+  objects,
+  role,
+  systemCatalog,
+} from "../../src/compiler/__tests__/fixtures/rights"
 import { signUp } from "./auth"
 import { queryAs, withRollback, type ApiRole } from "./connection"
 
@@ -50,36 +56,40 @@ const ORG_READER_ID = uuid(85)
  * нескоуплений `Secret`, а тест доводить, що його не читає ніхто.
  */
 function orgRights(): Record<string, unknown> {
-  const ref = (kind: string, name: string) => ({ kind, name })
   return {
-    "catalogs/OrgRoles/OrgRoles.meta.json": catalog("OrgRoles", {
-      scope: "org",
-      role: "rightsRoles",
-    }),
-    "catalogs/OrgRoleAssignments/OrgRoleAssignments.meta.json": catalog(
-      "OrgRoleAssignments",
-      { scope: "org", role: "roleAssignments" }
+    "catalogs/OrgRoles/OrgRoles.meta.json": systemCatalog(
+      uuid(86),
+      "OrgRoles",
+      "org_roles",
+      "rightsRoles",
+      "org"
     ),
-    "roles/OrgReader/OrgReader.meta.json": {
-      id: ORG_READER_ID,
-      kind: "Role",
-      name: "OrgReader",
-      assignedOn: { scopeKind: "org" },
-      grants: [
-        {
-          grant: {
-            objects: [
-              ref("Catalog", "Organization"),
-              ref("Catalog", "Item"),
-              ref("Document", "Sale"),
-              ref("AccumulationRegister", "Stock"),
-            ],
-            actions: ["read"],
-            extent: "any",
-          },
-        },
-      ],
-    },
+    "catalogs/OrgRoleAssignments/OrgRoleAssignments.meta.json": systemCatalog(
+      uuid(87),
+      "OrgRoleAssignments",
+      "org_role_assignments",
+      "roleAssignments",
+      "org"
+    ),
+    "roles/OrgReader/OrgReader.meta.json": role(
+      ORG_READER_ID,
+      "OrgReader",
+      { scopeKind: "org" },
+      {
+        grants: [
+          grant(
+            objects(
+              ["Catalog", "Organization"],
+              ["Catalog", "Item"],
+              ["Document", "Sale"],
+              ["AccumulationRegister", "Stock"]
+            ),
+            ["read"],
+            "any"
+          ),
+        ],
+      }
+    ),
   }
 }
 
