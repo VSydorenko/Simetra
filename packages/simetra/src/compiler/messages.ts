@@ -317,12 +317,12 @@ const COMMAND_CONTEXT_FORM: Readonly<
     uk: "опція функції SET на захищеному налаштуванні сесії",
   },
   nonLiteral: {
-    en: "set_config with a name that is not a literal",
-    uk: "set_config з ім'ям, що не є літералом",
+    en: "set_config with a name that is not a literal, an aggregate over set_config included",
+    uk: "set_config з ім'ям, що не є літералом, зокрема агрегат над set_config",
   },
   settingsTable: {
-    en: "a write to pg_settings",
-    uk: "запис у pg_settings",
+    en: "a write to pg_settings or a view over it",
+    uk: "запис у pg_settings чи подання над ним",
   },
 }
 const commandContextForm = (form: unknown) =>
@@ -754,12 +754,12 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "sql.command-context-write": {
     en: (p) =>
-      `Function ${p.name} changes a platform session setting (${commandContextForm(p.form)?.en ?? p.form})`,
+      `SQL unit ${p.name} changes a platform session setting (${commandContextForm(p.form)?.en ?? p.form})`,
     uk: (p) =>
-      `Функція ${p.name} змінює налаштування сесії платформи (${commandContextForm(p.form)?.uk ?? p.form})`,
+      `Одиниця SQL ${p.name} змінює налаштування сесії платформи (${commandContextForm(p.form)?.uk ?? p.form})`,
     hint: {
-      en: "Only the platform sets the command context (simetra.*), the request claims (request.jwt.*) and the role. Application SQL runs in the middle of a command statement, so a changed setting would leak into the policies of the following rows: do not change them with set_config, SET or RESET (SET ROLE and SET SESSION AUTHORIZATION included), a SET function option, a write to pg_settings or a literal EXECUTE.",
-      uk: "Контекст команди (simetra.*), claims запиту (request.jwt.*) і роль ставить лише платформа. SQL застосунку виконується посеред оператора команди, тож змінене налаштування потрапило б у політики наступних рядків: не змінюйте їх через set_config, SET чи RESET (зокрема SET ROLE і SET SESSION AUTHORIZATION), опцію функції SET, запис у pg_settings чи літеральний EXECUTE.",
+      en: "Only the platform sets the command context (simetra.*), the request claims (request.jwt.*) and the role. Application SQL runs in the middle of a command statement, so a changed setting would leak into the policies of the following rows: do not change them with set_config, SET or RESET (SET ROLE and SET SESSION AUTHORIZATION included), a SET function option (ALTER FUNCTION included), a write to pg_settings or a view over it, an aggregate over set_config or a literal EXECUTE. This holds for every application SQL unit: functions, views, domains, policies and aggregates.",
+      uk: "Контекст команди (simetra.*), claims запиту (request.jwt.*) і роль ставить лише платформа. SQL застосунку виконується посеред оператора команди, тож змінене налаштування потрапило б у політики наступних рядків: не змінюйте їх через set_config, SET чи RESET (зокрема SET ROLE і SET SESSION AUTHORIZATION), опцію функції SET (зокрема ALTER FUNCTION), запис у pg_settings чи подання над ним, агрегат над set_config чи літеральний EXECUTE. Це стосується кожної одиниці SQL застосунку: функцій, подань, доменів, політик і агрегатів.",
     },
   },
   "sql.function-overload": {

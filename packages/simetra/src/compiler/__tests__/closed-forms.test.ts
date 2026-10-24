@@ -5,8 +5,11 @@ import {
   acceptDebt,
   customTable,
   metaFiles,
+  organization,
   project,
+  SCOPE_FUNCTIONS_FILE,
   salesDocument,
+  scopedProject,
   withoutAccess,
   withoutMechanics,
 } from "./helpers"
@@ -334,8 +337,75 @@ describe("kind module: closed forms only", () => {
       ])
     })
 
+    // Кожна одиниця спільного файлу, а не лише функції (Р2b1-22). Борг
+    // фікстури прийнято (`acceptDebt`): `ALTER FUNCTION` у спільному файлі —
+    // борг, і без прийняття його й так відхилив би ратчет.
+    const HELPER = `CREATE FUNCTION public.helper() RETURNS int LANGUAGE sql STABLE AS $$ select 1 $$;`
+    const DB_QUALIFIED = `postgres.pg_catalog.set_config('${C}', '{}', true)`
+    it.each([
+      [
+        "ALTER FUNCTION … SET the command context",
+        "functionOption",
+        `${HELPER} ALTER FUNCTION public.helper() SET ${C} = '{}';`,
+      ],
+      [
+        "ALTER FUNCTION … SET the claims",
+        "functionOption",
+        `${HELPER} ALTER FUNCTION public.helper() SET ${CLAIMS} = '{}';`,
+      ],
+      [
+        "an aggregate over set_config",
+        "nonLiteral",
+        `CREATE AGGREGATE public.agg(text, boolean) (SFUNC = pg_catalog.set_config, STYPE = text, INITCOND = '${C}');`,
+      ],
+      [
+        "a view calling set_config",
+        "setConfig",
+        `CREATE VIEW public.v AS SELECT set_config('${C}', '{}', true) AS x;`,
+      ],
+      [
+        "a view over pg_settings",
+        "settingsTable",
+        "CREATE VIEW public.v AS SELECT name, setting FROM pg_catalog.pg_settings;",
+      ],
+      [
+        "a domain CHECK calling set_config",
+        "setConfig",
+        `CREATE DOMAIN public.d AS text CHECK (set_config('${C}', VALUE, true) IS NOT NULL);`,
+      ],
+      [
+        "a parameter default calling set_config",
+        "setConfig",
+        `CREATE FUNCTION public.helper(x text DEFAULT set_config('${C}', '{}', true)) RETURNS int LANGUAGE sql STABLE AS $$ select 1 $$;`,
+      ],
+      [
+        "a database-qualified set_config in plpgsql",
+        "setConfig",
+        plpgsqlBody(`PERFORM ${DB_QUALIFIED};`),
+      ],
+      [
+        "a database-qualified set_config in LANGUAGE sql",
+        "setConfig",
+        shell("LANGUAGE sql VOLATILE", `SELECT ${DB_QUALIFIED}`),
+      ],
+      [
+        "a database-qualified set_config in a literal EXECUTE",
+        "setConfig",
+        plpgsqlBody(`EXECUTE 'SELECT ${DB_QUALIFIED.replaceAll("'", "''")}';`),
+      ],
+    ])("shared file unit: %s is refused", async (_case, form, sql) => {
+      expect(await sharedWrites(sql)).toEqual([
+        ["sql.command-context-write", SHARED_SQL, form],
+      ])
+    })
+
     it.each([
       plpgsqlBody("PERFORM setting FROM pg_settings WHERE name = 'x';"),
+      "CREATE VIEW public.v AS SELECT current_setting('app.x', true) AS x;",
+      "CREATE DOMAIN public.d AS text CHECK (VALUE <> '');",
+      `${HELPER} ALTER FUNCTION public.helper() SET search_path = '';`,
+      // `set_config` іншої схеми — не вбудований, навіть за трьох частин.
+      plpgsqlBody(`PERFORM postgres.app.set_config('${C}', '{}', true);`),
       shell(
         "LANGUAGE sql STABLE",
         "SELECT setting FROM pg_catalog.pg_settings"
@@ -362,6 +432,35 @@ describe("kind module: closed forms only", () => {
       expect(found.map((d) => d.code)).not.toContain(
         "sql.command-context-write"
       )
+    })
+
+    it("a scope set function is judged in a custom table module too", async () => {
+      // Функція множини скоупу боргом не буває (спека промоції §9.4), хоч би
+      // де лежав файл: у модулі прийнятої таблиці її теж судять.
+      const setFunction = (body: string) =>
+        `CREATE FUNCTION public.user_ids() RETURNS SETOF uuid LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = '' AS $$ BEGIN ${body} RETURN; END $$;`
+      const forms = async (body: string) =>
+        (
+          await compile(
+            await acceptDebt(
+              metaFiles({
+                "project.meta.json": scopedProject(),
+                "catalogs/Organization/Organization.meta.json": organization(),
+                [SCOPE_FUNCTIONS_FILE]: `CREATE FUNCTION public.org_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT NULL::uuid $$;`,
+                "custom-tables/T/T.meta.json": customTable("T"),
+                [TABLE_SQL]: setFunction(body),
+              })
+            )
+          )
+        ).diagnostics
+          .filter((d) => d.code === "sql.command-context-write")
+          .map((d) => [d.file, d.params?.form])
+      expect(
+        await forms(`PERFORM pg_catalog.set_config('${C}', '{}', true);`)
+      ).toEqual([[TABLE_SQL, "setConfig"]])
+      expect(
+        await forms("PERFORM pg_catalog.set_config('app.x', '1', true);")
+      ).toEqual([])
     })
 
     it.each([

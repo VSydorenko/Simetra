@@ -67,36 +67,107 @@ const DML_STATEMENTS = ["UpdateStmt", "InsertStmt", "DeleteStmt", "MergeStmt"]
  * будь-який запис у відношення, незалежно від умови. Читання дозволене.
  */
 function settingsTableWrite(node: Record<string, unknown>): boolean {
-  return DML_STATEMENTS.some((key) => {
-    const relation = (
-      node[key] as
-        { relation?: { schemaname?: string; relname?: string } } | undefined
-    )?.relation
-    return (
-      relation?.relname === "pg_settings" &&
-      (relation.schemaname === undefined ||
-        relation.schemaname === "pg_catalog")
+  return DML_STATEMENTS.some((key) =>
+    isSettingsRelation(
+      (node[key] as { relation?: unknown } | undefined)?.relation
     )
-  })
+  )
 }
 
 function setStatementWrite(set: SetStatement): boolean {
   return set.kind === "VAR_RESET_ALL" || isProtectedSetting(set.name)
 }
 
-function callWrite(call: CallNode): CommandContextWrite | undefined {
-  const names = (call.funcname ?? []).map((f) => f.String?.sval?.toLowerCase())
-  // Лише вбудований `set_config`: функція з тим самим іменем в іншій схемі —
-  // чужий код, його судять його власні перевірки.
-  const builtin =
+/**
+ * Лише вбудований `set_config`: функція з тим самим іменем в іншій схемі —
+ * чужий код, його судять його власні перевірки. Ім'я бази перед
+ * `pg_catalog` Postgres приймає (`<база>.pg_catalog.set_config`), тож воно
+ * не виводить виклик з-під перевірки.
+ */
+function isBuiltinSetConfig(
+  parts: readonly { String?: { sval?: string } }[] | undefined
+): boolean {
+  const names = (parts ?? []).map((f) => f.String?.sval?.toLowerCase())
+  return (
     names.at(-1) === "set_config" &&
-    (names.length === 1 || (names.length === 2 && names[0] === "pg_catalog"))
-  if (!builtin) return undefined
+    (names.length === 1 || (names.length <= 3 && names.at(-2) === "pg_catalog"))
+  )
+}
+
+function callWrite(call: CallNode): CommandContextWrite | undefined {
+  if (!isBuiltinSetConfig(call.funcname)) return undefined
   const first = call.args?.[0]
   if (first === undefined) return undefined
   const text = literalText(first)
   if (text === undefined) return "nonLiteral"
   return isProtectedSetting(text) ? "setConfig" : undefined
+}
+
+/**
+ * Опції агрегату, що називають функцію. Вбудований `set_config` у будь-якій
+ * з них ставить налаштування, чиє ім'я — стан агрегату чи його аргумент,
+ * тобто значення часу виконання.
+ */
+const AGGREGATE_FUNCTION_OPTIONS: ReadonlySet<string> = new Set([
+  "sfunc",
+  "finalfunc",
+  "combinefunc",
+  "serialfunc",
+  "deserialfunc",
+  "msfunc",
+  "minvfunc",
+  "mfinalfunc",
+])
+
+interface DefElemNode {
+  DefElem?: { defname?: string; arg?: unknown }
+}
+
+function aggregateWrite(node: Record<string, unknown>): boolean {
+  const define = node.DefineStmt as
+    { kind?: string; definition?: DefElemNode[] } | undefined
+  if (define?.kind !== "OBJECT_AGGREGATE") return false
+  return (define.definition ?? []).some((d) => {
+    const def = d.DefElem
+    const type = (
+      def?.arg as
+        { TypeName?: { names?: { String?: { sval?: string } }[] } } | undefined
+    )?.TypeName
+    return (
+      def?.defname !== undefined &&
+      AGGREGATE_FUNCTION_OPTIONS.has(def.defname.toLowerCase()) &&
+      isBuiltinSetConfig(type?.names)
+    )
+  })
+}
+
+function isSettingsRelation(relation: unknown): boolean {
+  const r = relation as { schemaname?: string; relname?: string } | undefined
+  return (
+    r?.relname === "pg_settings" &&
+    (r.schemaname === undefined || r.schemaname === "pg_catalog")
+  )
+}
+
+/**
+ * Подання над `pg_settings` успадковує його правило оновлення: `UPDATE` у
+ * подання змінює налаштування так само, як запис у саме відношення. Читання
+ * `pg_settings` у тілах функцій дозволене — запису там перевірка не пропустить.
+ */
+function settingsView(node: Record<string, unknown>): boolean {
+  const view = node.ViewStmt as { query?: unknown } | undefined
+  return view !== undefined && readsRelation(view.query, isSettingsRelation)
+}
+
+function readsRelation(
+  value: unknown,
+  match: (relation: unknown) => boolean
+): boolean {
+  if (Array.isArray(value)) return value.some((v) => readsRelation(v, match))
+  if (typeof value !== "object" || value === null) return false
+  const node = value as Record<string, unknown>
+  if (node.RangeVar !== undefined && match(node.RangeVar)) return true
+  return Object.values(node).some((v) => readsRelation(v, match))
 }
 
 /** Обхід дерева розбору: перша заборонена форма чи `undefined`. */
@@ -114,7 +185,8 @@ function treeWrite(value: unknown): CommandContextWrite | undefined {
     const found = callWrite(node.FuncCall as CallNode)
     if (found !== undefined) return found
   }
-  if (settingsTableWrite(node)) return "settingsTable"
+  if (settingsTableWrite(node) || settingsView(node)) return "settingsTable"
+  if (aggregateWrite(node)) return "nonLiteral"
   if (
     node.VariableSetStmt !== undefined &&
     setStatementWrite(node.VariableSetStmt as SetStatement)
@@ -129,17 +201,36 @@ function treeWrite(value: unknown): CommandContextWrite | undefined {
 }
 
 interface FunctionTree {
-  options?: { DefElem?: { defname?: string; arg?: unknown } }[]
+  options?: DefElemNode[]
   sql_body?: unknown
 }
 
+/** Опція `SET <налаштування> …` функції (`CREATE` чи `ALTER FUNCTION`). */
+function optionWrite(
+  options: readonly DefElemNode[] | undefined
+): CommandContextWrite | undefined {
+  for (const def of (options ?? []).flatMap((o) =>
+    o.DefElem === undefined ? [] : [o.DefElem]
+  )) {
+    const set = (def.arg as { VariableSetStmt?: SetStatement } | undefined)
+      ?.VariableSetStmt
+    if (def.defname === "set" && set !== undefined && setStatementWrite(set)) {
+      return "functionOption"
+    }
+  }
+  return undefined
+}
+
 /**
- * Чи змінює функція захищене налаштування сесії: `simetra.*` (контекст
- * команди), claims запиту чи роль. Їх ставить лише платформа; обробник
- * підписки спрацьовує посеред оператора команди, і змінене ним налаштування
- * побачили б політики наступних рядків (Р2b1-19, Р2b1-19a, Р2b1-19b). Тіло
- * `LANGUAGE sql` розбирається тут, тіло plpgsql — через вирази його
- * операторів. Перша знайдена форма.
+ * Чи змінює одиниця SQL застосунку захищене налаштування сесії: `simetra.*`
+ * (контекст команди), claims запиту чи роль. Їх ставить лише платформа;
+ * обробник підписки спрацьовує посеред оператора команди, і змінене ним
+ * налаштування побачили б політики наступних рядків (Р2b1-19, Р2b1-19a,
+ * Р2b1-19b). Судиться кожна одиниця, а не лише функції (Р2b1-22): подання,
+ * домен, політика чи опція `ALTER FUNCTION` виконують свій вираз у тій самій
+ * сесії. Тіло `LANGUAGE sql` розбирається тут, тіло plpgsql — через вирази
+ * його операторів; тіла інших мов не розбираються — те саме відоме
+ * обмеження до 2c, що й нелітеральний `EXECUTE`. Перша знайдена форма.
  */
 export function commandContextWrite(
   tree: Node,
@@ -148,22 +239,26 @@ export function commandContextWrite(
   plpgsql: PlpgsqlParser
 ): CommandContextWrite | undefined {
   const fn = (tree as { CreateFunctionStmt?: FunctionTree }).CreateFunctionStmt
-  if (fn === undefined) return undefined
+  if (fn === undefined) {
+    // Опції `ALTER FUNCTION … SET` — та сама форма, що й опції `CREATE`: до
+    // загального обходу, який назвав би їх оператором `SET`.
+    const alter = (tree as { AlterFunctionStmt?: { actions?: DefElemNode[] } })
+      .AlterFunctionStmt
+    return optionWrite(alter?.actions) ?? treeWrite(tree)
+  }
+  const option = optionWrite(fn.options)
+  if (option !== undefined) return option
   const defs = (fn.options ?? []).flatMap((o) =>
     o.DefElem === undefined ? [] : [o.DefElem]
   )
-  for (const def of defs) {
-    const set = (def.arg as { VariableSetStmt?: SetStatement } | undefined)
-      ?.VariableSetStmt
-    if (def.defname === "set" && set !== undefined && setStatementWrite(set)) {
-      return "functionOption"
-    }
-  }
   const language = (
     defs.find((d) => d.defname === "language")?.arg as
       { String?: { sval?: string } } | undefined
   )?.String?.sval?.toLowerCase()
-  if (fn.sql_body !== undefined) return treeWrite(fn.sql_body)
+  // Значення параметрів за замовчуванням обчислює виклик, а тіло
+  // `BEGIN ATOMIC` уже розібране: обидва — частина дерева самого оператора.
+  const declared = treeWrite(tree)
+  if (declared !== undefined || fn.sql_body !== undefined) return declared
   if (language === "sql") {
     const body = (
       defs.find((d) => d.defname === "as")?.arg as

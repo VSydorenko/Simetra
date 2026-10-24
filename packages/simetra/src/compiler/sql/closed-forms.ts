@@ -212,8 +212,8 @@ export function closedModuleOwners(
  * `debt` і спільні `sql/` за формою не звужуються: це борг, його ратчет —
  * окремо; правило рядка поза модулем виду — помилка, бо воно належить таблиці
  * об'єкта, а таблиці боргу описані власними полями. Контекст команди
- * (`sql.command-context-write`) судиться інакше: функції модулів видів і
- * спільних `sql/`-файлів — усі, крім боргового SQL прийнятих таблиць;
+ * (`sql.command-context-write`) судиться інакше: кожна одиниця модулів видів
+ * і спільних `sql/`-файлів, крім боргового SQL прийнятих таблиць;
  * обробники підписок і функції множини — будь-де.
  */
 export function checkSqlModules(
@@ -247,9 +247,11 @@ export function checkSqlModules(
     )
   }
   // Борговий SQL прийнятих таблиць `CustomTable` поза перевіркою контексту
-  // команди (відоме обмеження до 2c); решта — спільні `sql/`-файли й модулі
-  // видів: функція закритого модуля чи обробник може викликати допоміжну
-  // функцію спільного файлу, тож межа довіри (Р2b1-19a) охоплює їх усі.
+  // команди (відоме обмеження до 2c); решта — кожна одиниця спільних
+  // `sql/`-файлів і модулів видів, не лише функції (Р2b1-22): функція
+  // закритого модуля чи обробник може викликати допоміжну функцію спільного
+  // файлу, а подання, домен чи політика виконують свій вираз у сесії
+  // команди, тож межа довіри (Р2b1-19a) охоплює їх усі.
   // Обробник підписки й функція множини боргом не бувають, хоч би де лежав
   // файл (спека промоції §9.4): у модулі таблиці боргу їх теж судимо.
   const debtOwners = new Set(
@@ -259,7 +261,7 @@ export function checkSqlModules(
   )
   const ruled = ruledFunctions(objects, project)
   for (const unit of units) {
-    if (closed(unit) || !FUNCTION_CLASSES.has(unit.class)) continue
+    if (closed(unit)) continue
     if (
       unit.ownerFile !== undefined &&
       debtOwners.has(unit.ownerFile) &&
@@ -276,7 +278,7 @@ export function checkSqlModules(
     if (write !== undefined) {
       found.push(
         diagnostic("sql.command-context-write", unit.file, "", {
-          name: `${unit.schema}.${unit.name}`,
+          name: unit.schema === "" ? unit.name : `${unit.schema}.${unit.name}`,
           form: write,
         })
       )
