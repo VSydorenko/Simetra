@@ -3,6 +3,7 @@ import { carrierBackfillStatements } from "simetra/compiler"
 import type { PhysicalTable } from "simetra/model"
 import {
   carrierBackfillSteps,
+  createdByPlan,
   pendingCarrierCopies,
   stepFootprint,
   tableKey,
@@ -57,23 +58,54 @@ const withoutColumns = (
   columns: table.columns.filter((c) => !names.includes(c.name)),
 })
 
+/**
+ * Що створюють дії двигуна плану — структурні `produced`, як їх дає адаптер:
+ * таблиці цілком і окремі колонки (`<таблиця>.<колонка>`) у `public`.
+ */
+const created = (o: { tables?: string[]; columns?: string[] } = {}) =>
+  createdByPlan([
+    {
+      produced: [
+        ...(o.tables ?? []).map((name) => ({
+          kind: "table",
+          schema: "public",
+          name,
+        })),
+        ...(o.columns ?? []).map((c) => {
+          const [table, name] = c.split(".") as [string, string]
+          return { kind: "column", schema: "public", table, name }
+        }),
+      ],
+    },
+  ])
+
 describe("pendingCarrierCopies", () => {
+  // Р2b2-11: чим колонка копії була в `applied` — випадок 3 (звичайна
+  // колонка) перезаписує дані й іде в `overwrites`. Р2b2-12: колонку, яку
+  // створює двигун цього плану, план заповнює, хоч би що казав `applied`
   it.each([
     {
       case: "already-copy",
       applied: (t: PhysicalTable) => [t],
-      created: [],
+      created: created(),
       expected: [],
     },
     {
-      // Видалений реквізит ТЧ з даними під іменем копії: старі значення не
-      // стають копією
+      // Випадок 3: видалений реквізит ТЧ з даними під іменем копії — старі
+      // значення не стають копією, а крок їх перезаписує
       case: "same-name-not-copy",
       applied: (t: PhysicalTable) => [withoutCopyOf(t, ["assignee_id"])],
-      created: [],
-      expected: [{ table: CHECKLIST, columns: ["assignee_id"] }],
+      created: created(),
+      expected: [
+        {
+          table: CHECKLIST,
+          columns: ["assignee_id"],
+          overwrites: ["assignee_id"],
+        },
+      ],
     },
     {
+      // Випадок 2: копія з іншого джерела — значення похідні, не чужі дані
       case: "other-source",
       applied: (t: PhysicalTable) => [
         {
@@ -88,49 +120,79 @@ describe("pendingCarrierCopies", () => {
           ),
         },
       ],
-      created: [],
-      expected: [{ table: CHECKLIST, columns: ["region_id"] }],
+      created: created(),
+      expected: [{ table: CHECKLIST, columns: ["region_id"], overwrites: [] }],
     },
     {
       case: "created",
       applied: () => [],
-      created: [`table:public.${CHECKLIST_TABLE}`],
+      created: created({ tables: [CHECKLIST_TABLE] }),
       expected: [],
     },
     {
+      // Випадок 1: колонки не було
       case: "new-copy",
       applied: (t: PhysicalTable) => [withoutColumns(t, COPIES)],
-      created: [],
-      expected: [{ table: CHECKLIST, columns: COPIES }],
+      created: created(),
+      expected: [{ table: CHECKLIST, columns: COPIES, overwrites: [] }],
     },
     {
       case: "fresh",
       applied: undefined,
-      created: [],
-      expected: [{ table: CHECKLIST, columns: COPIES }],
+      created: created(),
+      expected: [{ table: CHECKLIST, columns: COPIES, overwrites: [] }],
+    },
+    {
+      // Р2b2-12: колонку-копію вручну знято, дрейф прийнято — знімок каже
+      // «жива», а двигун відтворює її порожньою
+      case: "recreated-copy",
+      applied: (t: PhysicalTable) => [t],
+      created: created({ columns: [`${CHECKLIST_TABLE}.assignee_id`] }),
+      expected: [
+        { table: CHECKLIST, columns: ["assignee_id"], overwrites: [] },
+      ],
+    },
+    {
+      // Колонку, створену планом, план і заповнює: старі дані губить крок
+      // двигуна, що зняв звичайну колонку, і дозвіл просить він
+      case: "recreated-over-plain-column",
+      applied: (t: PhysicalTable) => [withoutCopyOf(t, ["assignee_id"])],
+      created: created({ columns: [`${CHECKLIST_TABLE}.assignee_id`] }),
+      expected: [
+        { table: CHECKLIST, columns: ["assignee_id"], overwrites: [] },
+      ],
     },
   ])("$case", async ({ applied, created, expected }) => {
     const table = await checklist()
     const pending = pendingCarrierCopies(
       { tables: [table] },
       applied === undefined ? undefined : { tables: applied(table) },
-      new Set(created)
+      created
     )
     expect(pending).toEqual(expected)
   })
 
-  it("promotion: an adopted column of the copy's name is not a copy, reported in the new name", async () => {
-    // Крок іде після кроків двигуна, коли таблиця вже в новому імені; старе
-    // ім'я лише шукає її в знімку `applied` (Р2b2-6)
+  it("promotion: an unmapped adopted column of the copy's name is overwritten, found under the old name", async () => {
+    // Р2b2-6, Р2b2-11: крок іде після кроків двигуна, коли таблиця вже в
+    // новому імені; старе ім'я лише шукає її в знімку `applied`. Прийнята
+    // колонка `assignee_id`, яку мапінг не взяв, — випадок 3; решти копій у
+    // прийнятій таблиці не було — випадок 1
     const table = await checklist()
-    const adopted = { ...withoutCopyOf(table, COPIES), name: LEGACY.name }
+    const adopted = {
+      ...withoutCopyOf(withoutColumns(table, ["project_id", "region_id"]), [
+        "assignee_id",
+      ]),
+      name: LEGACY.name,
+    }
     const pending = pendingCarrierCopies(
       { tables: [table] },
       { tables: [adopted] },
-      new Set(),
+      created(),
       (t) => (t.name === CHECKLIST_TABLE ? LEGACY : t)
     )
-    expect(pending).toEqual([{ table: CHECKLIST, columns: COPIES }])
+    expect(pending).toEqual([
+      { table: CHECKLIST, columns: COPIES, overwrites: ["assignee_id"] },
+    ])
   })
 })
 
@@ -154,7 +216,7 @@ const footprintModels = (
 describe("carrierBackfillSteps", () => {
   it("one dataStep per link, after the given offset", async () => {
     const physical = (await compileRights(policyDomain())).model!.physical
-    const pending = [{ table: CHECKLIST, columns: COPIES }]
+    const pending = [{ table: CHECKLIST, columns: COPIES, overwrites: [] }]
     const statements = carrierBackfillStatements(physical, pending)
     expect(statements.length).toBeGreaterThan(0)
     const steps = carrierBackfillSteps(physical, pending, 3)
@@ -182,6 +244,36 @@ describe("carrierBackfillSteps", () => {
     )
   })
 
+  it("a statement overwriting a plain column is destructive, the rest stay dataStep", async () => {
+    // Р2b2-11: колонка `assignee_id` ТЧ була звичайною колонкою з даними —
+    // оператор її зв'язку перезаписує чужі дані й потребує дозволу; копія
+    // вкладення — чисте заповнення
+    const physical = (await compileRights(policyDomain())).model!.physical
+    const attachments = { schema: "public", name: ATTACHMENTS_TABLE }
+    const steps = carrierBackfillSteps(
+      physical,
+      [
+        { table: CHECKLIST, columns: COPIES, overwrites: ["assignee_id"] },
+        {
+          table: attachments,
+          columns: ["task_id_assignee_id"],
+          overwrites: [],
+        },
+      ],
+      0
+    )
+    expect(
+      steps.map((s) => ({
+        table: s.lockedTables[0]!.name,
+        class: s.class,
+        dataLoss: s.dataLoss,
+      }))
+    ).toEqual([
+      { table: CHECKLIST_TABLE, class: "destructive", dataLoss: true },
+      { table: ATTACHMENTS_TABLE, class: "dataStep", dataLoss: false },
+    ])
+  })
+
   it("no steps without pending copies", async () => {
     const physical = (await compileRights(policyDomain())).model!.physical
     expect(carrierBackfillSteps(physical, [], 0)).toEqual([])
@@ -202,7 +294,7 @@ describe("carrierBackfillSteps", () => {
     const pending = pendingCarrierCopies(
       physical,
       { tables: applied },
-      new Set([`table:public.${ATTACHMENTS_TABLE}`])
+      created({ tables: [ATTACHMENTS_TABLE] })
     )
     const steps = carrierBackfillSteps(physical, pending, 0)
     expect(steps.length).toBeGreaterThan(0)
@@ -232,11 +324,11 @@ describe("carrierBackfillSteps", () => {
     const pending = pendingCarrierCopies(
       desired.physical,
       before.physical,
-      new Set(),
+      created(),
       (t) => (t.name === renamed.name ? old : t)
     )
     expect(pending).toEqual([
-      { table: renamed, columns: ["task_id_assignee_id"] },
+      { table: renamed, columns: ["task_id_assignee_id"], overwrites: [] },
     ])
     const [step, ...rest] = carrierBackfillSteps(desired.physical, pending, 0)
     expect(rest).toEqual([])

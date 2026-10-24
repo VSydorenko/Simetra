@@ -37,7 +37,12 @@ import {
   type PlanArtifact,
   type PromotionSection,
 } from "./artifact"
-import { carrierBackfillSteps, pendingCarrierCopies } from "./carrier-backfill"
+import {
+  carrierBackfillSteps,
+  createdByPlan,
+  pendingCarrierCopies,
+  type CreatedByPlan,
+} from "./carrier-backfill"
 import { desiredForApply, type ApplyDesired } from "./desired"
 import { applyDiagnostic } from "./diagnostic"
 import { driftGate, type DriftReport } from "./drift"
@@ -606,7 +611,7 @@ export async function buildPlan(
         state.status === "applied"
           ? { tables: markerTables(state.marker) }
           : undefined,
-        createdTables(actions)
+        createdByPlan(actions)
       ),
       planSteps.length
     ),
@@ -1286,8 +1291,8 @@ type CloneAnalysis =
       steps: PlanStep[]
       /** Модель копії після наміру: вихідний стан кроків двигуна. */
       model: CatalogModel
-      /** Таблиці, які створюють кроки двигуна (`createdTables`). */
-      created: ReadonlySet<string>
+      /** Таблиці й колонки, які створюють кроки двигуна (`createdByPlan`). */
+      created: CreatedByPlan
       /** Намір разом із тимчасовими іменами канонічних перейменувань. */
       intent: RenameIntent
       /**
@@ -1311,15 +1316,6 @@ class IntentStepFailed extends Error {
     this.name = "IntentStepFailed"
   }
 }
-
-/**
- * Таблиці, які створює план: ідентичності `table:<схема>.<ім'я>` з `produces`
- * дій двигуна (`classifySteps` цієї множини не повертає).
- */
-const createdTables = (actions: readonly EngineAction[]): ReadonlySet<string> =>
-  new Set(
-    actions.flatMap((a) => a.produces.filter((id) => id.startsWith("table:")))
-  )
 
 /** Кроки наміру на копії однією транзакцією з `COMMIT`. */
 async function runOnClone(
@@ -1458,7 +1454,7 @@ async function analyseOnClone(p: {
       ok: true,
       steps,
       model: extracted.model,
-      created: createdTables(actions),
+      created: createdByPlan(actions),
       intent: withTempNames(p.intent, canonical.tempNames),
       equivalence,
       canonicalNames: canonical.renames,

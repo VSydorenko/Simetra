@@ -371,6 +371,8 @@ function propagateFunction(
 export interface CarrierBackfillStatement {
   table: QualifiedName
   source: QualifiedName
+  /** Колонки-копії, які пише оператор: за ними план вирішує клас кроку. */
+  columns: string[]
   sql: string
 }
 
@@ -477,6 +479,7 @@ export function carrierBackfillStatements(
     return {
       table: { schema: link.table.schema, name: link.table.name },
       source: { schema: link.source.schema, name: link.source.name },
+      columns: copies.map((c) => c.name),
       sql:
         `UPDATE ${relation(link.table)} AS d SET (${copies.map((c) => q(c.name)).join(", ")}) = ` +
         `(SELECT ${copies.map((c) => `s.${q(c.column)}`).join(", ")} ${from}) ` +

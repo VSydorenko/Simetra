@@ -4,6 +4,7 @@ import {
   type PhysicalColumn,
   type PhysicalSnapshot,
 } from "simetra/model"
+import type { EngineAction } from "../engine/port"
 import { stepId, type PlanStep } from "./steps"
 import { tableKey } from "./table-key"
 
@@ -11,6 +12,38 @@ import { tableKey } from "./table-key"
 export interface PendingCarrierCopies {
   table: QualifiedName
   columns: string[]
+  /**
+   * Колонки з `columns`, що в знімку `applied` були звичайними колонками з
+   * даними (Р2b2-11): крок їх перезаписує, тож він `destructive` з дозволом.
+   */
+  overwrites: string[]
+}
+
+/**
+ * Таблиці й колонки, які створюють дії двигуна плану, — з їхніх структурних
+ * `produced` (рядкова ідентичність двигуна в T2 не відтворюється). Ключі —
+ * `tableKey` і `columnKey`.
+ */
+export interface CreatedByPlan {
+  tables: ReadonlySet<string>
+  columns: ReadonlySet<string>
+}
+
+const columnKey = (schema: string, table: string, column: string): string =>
+  JSON.stringify([schema, table, column])
+
+export function createdByPlan(
+  actions: readonly Pick<EngineAction, "produced">[]
+): CreatedByPlan {
+  const tables = new Set<string>()
+  const columns = new Set<string>()
+  for (const ref of actions.flatMap((a) => a.produced)) {
+    if (ref.kind === "table" && ref.table === undefined)
+      tables.add(tableKey(ref.schema, ref.name))
+    if (ref.kind === "column" && ref.table !== undefined)
+      columns.add(columnKey(ref.schema, ref.table, ref.name))
+  }
+  return { tables, columns }
 }
 
 const sameCopy = (a: CarrierCopyOf, b: CarrierCopyOf | undefined): boolean =>
@@ -28,19 +61,21 @@ const sameCopy = (a: CarrierCopyOf, b: CarrierCopyOf | undefined): boolean =>
  *
  * Копія вже жива, лише коли в знімку останнього застосування (`applied`,
  * marker цілі) та сама колонка — копія з тим самим `copyOf`: тоді тригери її
- * підтримували. Одна лише наявність колонки з тим самим ім'ям не рахується:
- * видалений реквізит ТЧ `assignee_id` з даними чи прийнята колонка промоції
- * дали б старі значення за копію. Таблиця, яку план створює (`created` —
- * ідентичності `table:<схема>.<ім'я>` з `produces` дій двигуна), рядків не
- * має. `oldName` — ім'я таблиці на цілі, коли воно інше (промоція, `applied`
- * у старих іменах): ним таблицю лише шукають у `applied`, а повертають у
- * бажаному імені (Р2b2-6) — крок копій іде після кроків двигуна, коли
- * таблиця вже перейменована.
+ * підтримували. Але колонку, яку створює двигун цього плану (Р2b2-12),
+ * план і заповнює, хоч би що казав знімок: її могли зняти вручну й прийняти
+ * дрейф, і двигун відтворить її порожньою. Колонка з тим самим ім'ям, що в
+ * знімку копією не була (видалений реквізит ТЧ `assignee_id` з даними,
+ * прийнята колонка, яку мапінг промоції не взяв), — теж очікувана копія, але
+ * крок перезаписує її дані, тож вона йде в `overwrites` (Р2b2-11). Таблиця,
+ * яку план створює, рядків не має. `oldName` — ім'я таблиці на цілі, коли
+ * воно інше (промоція, `applied` у старих іменах): ним таблицю лише шукають
+ * у `applied`, а повертають у бажаному імені (Р2b2-6) — крок копій іде після
+ * кроків двигуна, коли таблиця вже перейменована.
  */
 export function pendingCarrierCopies(
   desired: Pick<PhysicalSnapshot, "tables">,
   applied: Pick<PhysicalSnapshot, "tables"> | undefined,
-  created: ReadonlySet<string>,
+  created: CreatedByPlan,
   oldName: (table: QualifiedName) => QualifiedName = (table) => table
 ): PendingCarrierCopies[] {
   const appliedTables = new Map(
@@ -53,22 +88,26 @@ export function pendingCarrierCopies(
         c.origin.copyOf !== undefined
     )
     if (copies.length === 0) continue
-    if (created.has(`table:${table.schema}.${table.name}`)) continue
+    if (created.tables.has(tableKey(table.schema, table.name))) continue
     const live = oldName({ schema: table.schema, name: table.name })
     const before = appliedTables.get(tableKey(live.schema, live.name))
-    const columns = copies
-      .filter(
-        (c) =>
-          !sameCopy(
-            c.origin.copyOf,
-            before?.columns.find((b) => b.name === c.name)?.origin.copyOf
-          )
+    const columns: string[] = []
+    const overwrites: string[] = []
+    for (const c of copies) {
+      const recreated = created.columns.has(
+        columnKey(table.schema, table.name, c.name)
       )
-      .map((c) => c.name)
+      const was = before?.columns.find((b) => b.name === c.name)
+      if (!recreated && sameCopy(c.origin.copyOf, was?.origin.copyOf)) continue
+      columns.push(c.name)
+      if (!recreated && was !== undefined && was.origin.copyOf === undefined)
+        overwrites.push(c.name)
+    }
     if (columns.length > 0)
       pending.push({
         table: { schema: table.schema, name: table.name },
         columns,
+        overwrites,
       })
   }
   return pending
@@ -82,34 +121,47 @@ export function pendingCarrierCopies(
  * лишила б застарілу копію, коли тригер поширення не перестворюється цим
  * планом. Таблиці — у бажаних іменах, як у кроках двигуна; слід перекладає їх
  * у вихідні. Крок генерується незалежно від наявності рядків (Р2b2-7): план
- * не читає ціль, а на порожній таблиці крок пише нуль рядків.
+ * не читає ціль, а на порожній таблиці крок пише нуль рядків. Оператор, що
+ * пише хоч одну колонку з `overwrites`, перезаписує чужі дані — він
+ * `destructive` з `dataLoss` і просить дозволу (Р2b2-11); оператор один на
+ * зв'язок, тож розділити його на чисте заповнення й перезапис не можна.
  */
 export function carrierBackfillSteps(
   desired: Pick<PhysicalSnapshot, "tables">,
   pending: readonly PendingCarrierCopies[],
   offset: number
 ): PlanStep[] {
-  return carrierBackfillStatements(desired, pending).map((s, i) => ({
-    id: stepId(offset + i),
-    origin: "carriers",
-    sql: s.sql,
-    verb: "alter",
-    class: "dataStep",
-    lockClass: "shareRowExclusive",
-    transactionality: "transactional",
-    newSegmentBefore: false,
-    lockedTables: [
-      { schema: s.table.schema, name: s.table.name },
-      { schema: s.source.schema, name: s.source.name },
-    ],
-    produces: [],
-    consumes: [],
-    destroys: [],
-    produced: [],
-    destroyed: [],
-    consumed: [],
-    dataLoss: false,
-    rewriteRisk: false,
-    guards: [],
-  }))
+  const overwrites = new Set(
+    pending.flatMap((p) =>
+      p.overwrites.map((c) => columnKey(p.table.schema, p.table.name, c))
+    )
+  )
+  return carrierBackfillStatements(desired, pending).map((s, i): PlanStep => {
+    const lossy = s.columns.some((c) =>
+      overwrites.has(columnKey(s.table.schema, s.table.name, c))
+    )
+    return {
+      id: stepId(offset + i),
+      origin: "carriers",
+      sql: s.sql,
+      verb: "alter",
+      class: lossy ? "destructive" : "dataStep",
+      lockClass: "shareRowExclusive",
+      transactionality: "transactional",
+      newSegmentBefore: false,
+      lockedTables: [
+        { schema: s.table.schema, name: s.table.name },
+        { schema: s.source.schema, name: s.source.name },
+      ],
+      produces: [],
+      consumes: [],
+      destroys: [],
+      produced: [],
+      destroyed: [],
+      consumed: [],
+      dataLoss: lossy,
+      rewriteRisk: false,
+      guards: [],
+    }
+  })
 }

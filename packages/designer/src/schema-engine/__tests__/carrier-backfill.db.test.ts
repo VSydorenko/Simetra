@@ -227,12 +227,45 @@ describe.concurrent("carrier copy steps on live rows", () => {
         COMMENT_TABLE,
         ATTACHMENTS_TABLE,
       ])
-      const outcome = await executePlan(writer, { url }, artifact, {
-        mode: "apply",
-        planHash: artifact.planHash,
-        allow: artifact.requiredPermissions,
-        snapshot: canonicalSnapshot(after),
+      // Р2b2-11: `legacyOwner` коментаря й `assignee` рядка ТЧ — звичайні
+      // колонки з даними під іменами копій, тож їхні оператори перезаписують
+      // чужі дані: `destructive` з дозволом. Копія вкладення — чисте
+      // заповнення без дозволу
+      const carriers = artifact.steps.filter((s) => s.origin === "carriers")
+      expect(
+        carriers.map((s) => ({
+          table: s.lockedTables[0]!.name,
+          class: s.class,
+        }))
+      ).toEqual([
+        { table: CHECKLIST_TABLE, class: "destructive" },
+        { table: COMMENT_TABLE, class: "destructive" },
+        { table: ATTACHMENTS_TABLE, class: "dataStep" },
+      ])
+      const overwriting = carriers
+        .filter((s) => s.class === "destructive")
+        .map((s) => s.id)
+      const apply = (allow: string[]) =>
+        executePlan(writer, { url }, artifact, {
+          mode: "apply",
+          planHash: artifact.planHash,
+          allow,
+          snapshot: canonicalSnapshot(after),
+        })
+      // Без дозволу на перезапис — відмова до будь-якого запису
+      const refused = await apply(
+        artifact.requiredPermissions.filter((p) => !overwriting.includes(p))
+      )
+      expect(refused).toMatchObject({
+        status: "refused",
+        diagnostics: [
+          {
+            code: "apply.permission-required",
+            params: { items: overwriting.join(", ") },
+          },
+        ],
       })
+      const outcome = await apply(artifact.requiredPermissions)
       expect(outcome.diagnostics).toEqual([])
       expect(outcome.status).toBe("committed")
 
