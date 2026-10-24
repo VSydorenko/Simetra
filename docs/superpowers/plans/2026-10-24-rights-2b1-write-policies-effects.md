@@ -470,7 +470,7 @@ git commit -m "test(db): запис під роллю команд — роди�
 - [x] **Step 1:** Скіл споживача (англійською): таблиці виду пише лише команда; кореневий рядок команди — право дії команди, решта — природна дія за DML; дія-перехід (`post`, `markDeletion`, кастомна) змінює лише свої колонки шапки й не пише ТЧ; обробник `beforeWrite`, що під переходом змінює іншу колонку, дає відмову — обчислення під проведенням у хук команди чи в ефекти кастомної дії.
 - [x] **Step 2:** Run: `pnpm format:check && pnpm lint && pnpm typecheck && pnpm test` — код 0.
 - [x] **Step 3:** Run: `pnpm metadata:check && python3 scripts/check-doc-anchors.py && .agents/skills/codebase-research/scripts/orient --plan docs/superpowers/plans/2026-10-24-rights-2b1-write-policies-effects.md` — код 0.
-- [ ] **Step 4:** Повний `pnpm test:db` на одному SHA (у фоні, таймаут не коротший за 45 хв): `/usr/bin/time -f %e pnpm test:db` — код 0 (або CI job `db`, якщо стеку немає); приріст проти прогону після 2a2 ≤ 15 с, інакше звіт архітектору з розкладом за файлами.
+- [x] **Step 4:** (локально на d112352: код 0, 1345 с — pgTAP, simetra 171, designer 559; приріст — нові `rights-write` ≈ 3,4 с і кейс корпусу `write policy domain` ≈ 5,9 с, разом ≈ 9 с; базу 2a2 міряли на CI, тож приріст — за доданими файлами) Повний `pnpm test:db` на одному SHA (у фоні, таймаут не коротший за 45 хв): `/usr/bin/time -f %e pnpm test:db` — код 0 (або CI job `db`, якщо стеку немає); приріст проти прогону після 2a2 ≤ 15 с, інакше звіт архітектору з розкладом за файлами.
 - [x] **Step 5:** ROADMAP — рядок прав: «Права-2b1 виконано»; позначки плану.
 - [x] **Step 6: Commit**
 

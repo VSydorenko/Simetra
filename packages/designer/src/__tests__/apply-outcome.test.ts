@@ -162,6 +162,7 @@ describe("apply with an unknown outcome", () => {
     expect(lost.transactions).toBe(2)
     // Кожен виклик — нове застосування зі своїм id
     const again = await applyOnce()
+    expect(r.diagnostics[0]!.params?.applyId).toEqual(expect.any(String))
     expect(again.diagnostics[0]!.params?.applyId).not.toBe(
       r.diagnostics[0]!.params?.applyId
     )

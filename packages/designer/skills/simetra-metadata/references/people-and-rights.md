@@ -227,7 +227,8 @@ command role and nobody else.
   table is refused.
 - An action without `tabularSections` does not write tabular sections. The
   transition columns (`posted`, the deletion mark) change only through `post`,
-  `unpost` and `markDeletion`, each in its own direction. A custom action is
+  `unpost` and `markDeletion`; `post` only sets `posted` and `unpost` only
+  clears it, while `markDeletion` may set or clear the mark. A custom action is
   not a transition action and cannot name a transition column in its header
   effects (`rights.custom-action-effects`, reason `transitionColumn`).
 - The ref key and the scope column of a row cannot be changed by any command.
