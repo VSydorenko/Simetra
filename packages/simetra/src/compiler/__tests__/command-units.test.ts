@@ -66,8 +66,6 @@ function nodes(value: unknown, key: string): unknown[] {
 
 /** Дерева виразів тіла plpgsql: кожен вираз чи запит як розібране дерево. */
 function bodyTrees(unit: SqlUnit): unknown[] {
-  const text = (unit.sql.match(/\$[^$]*\$\n([\s\S]*)\n\$[^$]*\$;$/) ?? [])[1]
-  expect(text, unit.identity).toBeDefined()
   const parsed = plpgsql(unit.sql)
   if (!parsed.ok || parsed.fn === undefined)
     throw new Error(`body does not parse: ${unit.identity}`)
@@ -84,7 +82,7 @@ function bodyTrees(unit: SqlUnit): unknown[] {
   )
 }
 
-/** Вызови функцій тіла: останнє ім'я й сталі аргументи (boolean чи текст). */
+/** Виклики функцій тіла: останнє ім'я й сталі аргументи (boolean чи текст). */
 function calls(unit: SqlUnit): { name: string; args: unknown[] }[] {
   return nodes(bodyTrees(unit), "FuncCall").map((call) => {
     const c = call as {

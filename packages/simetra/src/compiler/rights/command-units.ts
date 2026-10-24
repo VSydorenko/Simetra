@@ -168,12 +168,19 @@ function parsedBody(pairs: readonly [string, string][]): string {
     `    ${raise("malformed")}`,
     "  END IF;",
     "  v_ctx := v_raw::jsonb;",
-    "  IF jsonb_typeof(v_ctx) IS DISTINCT FROM 'object'",
-    "    OR (SELECT count(*) FROM jsonb_object_keys(v_ctx)) <> 3",
+    "  IF jsonb_typeof(v_ctx) IS DISTINCT FROM 'object' THEN",
+    `    ${raise("malformed")}`,
+    "  END IF;",
+    // Ключі й типи — лише для об'єкта: порядок обчислення `OR` SQL не
+    // гарантує, а `jsonb_object_keys` на масиві кидає 22023.
+    "  IF (SELECT count(*) FROM jsonb_object_keys(v_ctx)) <> 3",
     "    OR jsonb_typeof(v_ctx -> 'action') IS DISTINCT FROM 'string'",
     "    OR jsonb_typeof(v_ctx -> 'object') IS DISTINCT FROM 'string'",
-    "    OR jsonb_typeof(v_ctx -> 'root') IS DISTINCT FROM 'string'",
-    "    OR (v_ctx ->> 'action') = ''",
+    "    OR jsonb_typeof(v_ctx -> 'root') IS DISTINCT FROM 'string' THEN",
+    `    ${raise("malformed")}`,
+    "  END IF;",
+    // Текст — лише для рядків: `->>` на не-рядку не дав би значення для UUID.
+    "  IF (v_ctx ->> 'action') = ''",
     "    OR (v_ctx ->> 'object') = ''",
     "    OR NOT pg_input_is_valid(v_ctx ->> 'root', 'uuid') THEN",
     `    ${raise("malformed")}`,
