@@ -3,6 +3,8 @@ import { beforeAll, describe, expect, it } from "vitest"
 import type { CompiledModel } from "simetra/compiler"
 import { makeObjectName } from "simetra/model"
 import { contentChangeCondition, contentColumns } from "../mechanics-units"
+import { effectsTables } from "../rights/effects-units"
+import { writesByCommand } from "../rights/facts"
 import { hasEmptySearchPath, routineLanguage } from "../sql/closed-forms"
 import { executeGrants } from "../sql/execute-grants"
 import type { SqlUnit } from "../sql/units"
@@ -96,13 +98,13 @@ const fnOf = (model: CompiledModel, table: string) =>
 describe("buildEffectsUnits", () => {
   it("checks the root row against the effects of the command action", () => {
     const t = "task"
-    // Колонки порівняння — змістові без ключа (його перевіряє окрема умова):
-    // авторство механіка не примушує, тож воно в переліку (Р2b1-15).
+    // Колонки порівняння — змістові без незмінних (ключ і скоуп перевіряє
+    // окрема умова, Р2b1-20): авторство механіка не примушує, тож воно в
+    // переліку (Р2b1-15).
     const content = contentColumns(tableOf(domain, t), "camelCase")
       .map((c) => c.name)
-      .filter((c) => c !== "id")
+      .filter((c) => c !== "id" && c !== "org_id")
     expect(content).toEqual([
-      "org_id",
       "number",
       "date",
       "posted",
@@ -117,8 +119,8 @@ describe("buildEffectsUnits", () => {
     const except = (...columns: string[]) =>
       content.filter((c) => !columns.includes(c))
     // Шапка `update` — уся шапка без колонок переходів (Р2b1-18), тож
-    // оновлення порівнює саме їх (і колонку скоупу, якої шапка не має).
-    const updateCompared = ["org_id", "posted", "deletion_mark"]
+    // оновлення порівнює саме їх.
+    const updateCompared = ["posted", "deletion_mark"]
     const direction = (from: boolean, to: boolean) =>
       raiseIf(
         `OLD.posted IS DISTINCT FROM NEW.posted AND (OLD.posted IS DISTINCT FROM ${from} OR NEW.posted IS DISTINCT FROM ${to})`,
@@ -128,10 +130,17 @@ describe("buildEffectsUnits", () => {
     const onlyOp = (op: string) => raiseIf(`TG_OP NOT IN ('${op}')`, t)
     const body = [
       ...PREAMBLE,
+      // Незмінні колонки — лише на оновленні: вставка під `create` свій
+      // скоуп лише отримує (Р2b1-20).
       ...raiseIf(
         "TG_OP = 'UPDATE' AND OLD.id IS DISTINCT FROM NEW.id",
         t,
         "id"
+      ),
+      ...raiseIf(
+        "TG_OP = 'UPDATE' AND OLD.org_id IS DISTINCT FROM NEW.org_id",
+        t,
+        "org_id"
       ),
       ...raiseIf(
         "TG_OP = 'INSERT' AND NEW.deletion_mark IS DISTINCT FROM false",
@@ -182,7 +191,7 @@ describe("buildEffectsUnits", () => {
     expect(bodyShape(fnOf(domain, t).sql)).toEqual(
       bodyShape(expectedFunction("public.task_simetra_effects", body))
     )
-    // Позначка видалення — рівно змістові колонки без неї (і без ключа).
+    // Позначка видалення — рівно змістові колонки без неї (і без незмінних).
     expect(except("deletion_mark")).toEqual(
       content.filter((c) => c !== "deletion_mark")
     )
@@ -196,6 +205,13 @@ describe("buildEffectsUnits", () => {
     expect(fk.columns).toEqual(["org_id", "parent_id"])
     const body = [
       ...PREAMBLE,
+      // Скоуп рядка ТЧ незмінний (Р2b1-20); `parent_id` — ні: перенесення
+      // рядка в інший документ перевіряють політики запису.
+      ...raiseIf(
+        "TG_OP = 'UPDATE' AND OLD.org_id IS DISTINCT FROM NEW.org_id",
+        t,
+        "org_id"
+      ),
       "IF TG_OP = 'DELETE' AND NOT EXISTS (SELECT 1 FROM public.task WHERE org_id = OLD.org_id AND id = OLD.parent_id) THEN",
       "RETURN NULL;",
       "END IF;",
@@ -225,6 +241,53 @@ describe("buildEffectsUnits", () => {
     expect(bodyShape(fnOf(domain, t).sql)).toEqual(
       bodyShape(expectedFunction(`public.${t}_simetra_effects`, body))
     )
+  })
+
+  it("the scope column is compared only on update", () => {
+    // Р2b1-20: на вставці `OLD` немає — новий рядок під `create` і рядок ТЧ
+    // свій скоуп лише отримують, тож жодна умова з `NEW.org_id` не діє поза
+    // `UPDATE`.
+    for (const table of ["task", CHECKLIST_TABLE]) {
+      const conditions = bodyShape(fnOf(domain, table).sql).flatMap((s) =>
+        s.expressions.filter((e) => e.role === "condition").map((e) => e.tree)
+      )
+      const scoped = conditions.filter((c) =>
+        JSON.stringify(c).includes(
+          '{"String":{"sval":"new"}},{"String":{"sval":"org_id"}}'
+        )
+      )
+      expect(scoped, table).toEqual([
+        tree(
+          "SELECT TG_OP = 'UPDATE' AND OLD.org_id IS DISTINCT FROM NEW.org_id"
+        ),
+      ])
+    }
+  })
+
+  it("every table with effects has a reserved function name", async () => {
+    // Резервування стадії 4 (`writesByCommand`) і умова генератора (контракт
+    // з дією з DML) — дві форми одного предиката: на моделях з функціями прав
+    // вони дають ті самі таблиці.
+    const constant = (await compileRights(policyDomain(globalConstant())))
+      .model!
+    for (const model of [domain, constant]) {
+      const byId = new Map(model.objects.map((o) => [o.id, o]))
+      const reserved = effectsTables(model.physical)
+        .filter(({ table }) =>
+          writesByCommand(byId.get(table.origin.objectId)!)
+        )
+        .map(
+          ({ table }) =>
+            `function:${table.schema}.${table.name}_simetra_effects()`
+        )
+        .sort()
+      const generated = effects(model)
+        .filter((u) => u.class === "function")
+        .map((u) => u.identity)
+        .sort()
+      expect(generated.length).toBeGreaterThan(0)
+      expect(generated).toEqual(reserved)
+    }
   })
 
   it("the effects function is a closed definer granted to nobody", () => {

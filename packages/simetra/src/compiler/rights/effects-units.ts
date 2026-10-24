@@ -101,8 +101,9 @@ const ops = (dmls: readonly Dml[]) =>
  * тригерів і не потребує заборон на них. На таблиці з копіями оновлення —
  * окремим тригером з умовою `contentChangeCondition`: зміна лише копій
  * (поширення функціями носіїв) — не дія, а умова тригера не має `OLD` на
- * вставці. `EXECUTE` — нікому: тригер спрацьовує в ролі, яка пише (платформна
- * спека §6.7). Тіла plpgsql граф не читає, тож відношення тіла й функція
+ * вставці. `EXECUTE` не видається нікому: при спрацюванні тригера право
+ * виконання функції не перевіряється (платформна спека §6.7), а викликати
+ * її напряму нема кому. Тіла plpgsql граф не читає, тож відношення тіла й функція
  * контексту — явні ребра `requires`.
  */
 export function buildEffectsUnits(
@@ -271,8 +272,36 @@ function actionChain(
 }
 
 /**
- * Основна таблиця (Р2b1-9, Р2b1-18). Ключ `ref` незмінний за будь-якої дії
- * й для будь-якого рядка: змінений ключ — інша ідентичність кореня. Вставка
+ * Незмінні колонки таблиці (Р2b1-9, Р2b1-20) — за будь-якої дії й для
+ * будь-якого рядка: ключ `ref` основної таблиці (змінений ключ — інша
+ * ідентичність кореня) і колонка скоупу основної таблиці й ТЧ (перенесення
+ * між тенантами — не правка змісту; складені FK скоупу ТЧ і копій однаково не
+ * дали б зробити його цілісно). Порядок — колонок таблиці.
+ */
+function immutableColumns(table: PhysicalTable, key: string): string[] {
+  const section = table.origin.tabularSectionId !== undefined
+  return table.columns
+    .filter(
+      (c) => (!section && c.name === key) || c.origin.scopeKindId !== undefined
+    )
+    .map((c) => c.name)
+}
+
+/**
+ * Зміна незмінної колонки — відмова. Лише на `UPDATE`: на вставці `OLD`
+ * немає, і новий рядок під `create` чи рядок ТЧ свій скоуп лише отримує.
+ */
+function immutableChecks(table: PhysicalTable, columns: readonly string[]) {
+  return columns.flatMap((column) => [
+    `IF TG_OP = 'UPDATE' AND OLD.${q(column)} IS DISTINCT FROM NEW.${q(column)} THEN`,
+    `  ${refuse(table, column)}`,
+    "END IF;",
+  ])
+}
+
+/**
+ * Основна таблиця (Р2b1-9, Р2b1-18). Незмінні колонки перевіряються раз до
+ * гілок дій, тож у порівняння шапки не входять. Вставка
  * будь-якого рядка ставить колонки переходів у значення за замовчуванням.
  * Некореневий рядок (інший об'єкт контексту чи інший рядок) — за ефектами
  * природної дії свого DML, а не вихід: інакше команда над A змінювала б
@@ -284,18 +313,17 @@ function mainBody(
   key: string,
   attributeCase: AttributeCase
 ): string {
+  const immutable = immutableColumns(table, key)
   const compared = contentColumns(table, attributeCase)
     .map((c) => c.name)
-    .filter((name) => name !== key)
+    .filter((name) => !immutable.includes(name))
   const natural = (dml: Dml) =>
     rights.actions.find((action) => action.natural.includes(dml))
   const naturalUpdate = natural("update")
   const missing = DMLS.filter((dml) => natural(dml) === undefined)
   const lines = [
     ...contextLines(),
-    `IF TG_OP = 'UPDATE' AND OLD.${q(key)} IS DISTINCT FROM NEW.${q(key)} THEN`,
-    `  ${refuse(table, key)}`,
-    "END IF;",
+    ...immutableChecks(table, immutable),
     ...rights.transitions.flatMap(({ column, default: value }) => [
       `IF TG_OP = 'INSERT' AND NEW.${q(column)} IS DISTINCT FROM ${value} THEN`,
       `  ${refuse(table, column)}`,
@@ -395,6 +423,7 @@ function sectionBody(
   )
   const lines = [
     ...contextLines(),
+    ...immutableChecks(table, immutableColumns(table, key)),
     `IF TG_OP = 'DELETE' AND NOT EXISTS (SELECT 1 FROM ${relation(main)} WHERE ${owner}) THEN`,
     "  RETURN NULL;",
     "END IF;",

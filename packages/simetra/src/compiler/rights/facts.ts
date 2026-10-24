@@ -55,7 +55,9 @@ export function isRightsContainer(object: ParsedObject): boolean {
 }
 
 /** Кастомні дії розібраного об'єкта виду з контрактом прав. */
-export function customActionsOf(object: ParsedObject): readonly CustomAction[] {
+export function customActionsOf(
+  object: Pick<ParsedObject, "data">
+): readonly CustomAction[] {
   return (object.data as { customActions?: CustomAction[] }).customActions ?? []
 }
 
@@ -75,7 +77,9 @@ export function customActionEffects(action: CustomAction): ActionEffects {
  * сама умова, з якою контракт дає політики запису й тригер ефектів, але без
  * контракту: стадія 4 контрактів прав не бачить.
  */
-export function writesByCommand(object: ParsedObject): boolean {
+export function writesByCommand(
+  object: Pick<ParsedObject, "kind" | "data">
+): boolean {
   const def = KIND_REGISTRY[object.kind]
   if (def.rightsExtents.length === 0) return false
   return (
