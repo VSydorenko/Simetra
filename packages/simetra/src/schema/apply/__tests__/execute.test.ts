@@ -1350,9 +1350,7 @@ describe("executePlan", () => {
     expect(seen.ledger).toEqual([SESSION])
   })
 
-  // Р2b2-4: кроки копій — після двигуна (колонку-копію створює він) і до
-  // середовища; блоки вибираються за походженням, а не за позицією
-  it("runs the blocks in origin order: intent, engine, carriers, environment", async () => {
+  describe("carrier steps (Р2b2-4)", () => {
     const intent = step("s1", "ALTER TABLE app.t RENAME TO t2", {
       origin: "intent",
     })
@@ -1366,21 +1364,72 @@ describe("executePlan", () => {
     const environment = step(`s${n + 1}`, "GRANT SELECT ON app.n TO anon", {
       origin: "environment",
     })
-    const { db, log, seen } = fakeDb()
-    const outcome = await executePlan(
-      db,
-      target,
-      { ...plan, steps: [intent, ...engineSteps, carriers, environment] },
-      options
-    )
-    expect(outcome).toMatchObject({ status: "committed" })
-    const order = [intent, ...engineSteps, carriers, environment].map((s) =>
-      log.indexOf(s.sql)
-    )
-    expect(order.every((i) => i >= 0)).toBe(true)
-    expect(order).toEqual([...order].sort((a, b) => a - b))
-    // Крок копій — під налаштуваннями транзакції, а не під преамбулою
-    expect(seen[carriers.sql]).toEqual([SESSION])
+    const withCarriers: ExecutablePlan = {
+      ...plan,
+      steps: [intent, ...engineSteps, carriers, environment],
+    }
+
+    // Колонку-копію створює двигун, тож крок копій — після нього й до
+    // середовища; блоки вибираються за походженням, а не за позицією.
+    // Налаштування — лише `row_security = off` (Р2b2-9): закріплений
+    // `search_path` зламав би тіло тригера, що називає об'єкти без схеми
+    it("runs carrier steps with row security off only, after the engine", async () => {
+      const fake = clocked()
+      const outcome = await executePlan(fake.db, target, withCarriers, {
+        ...withMode("rehearse"),
+        clock: fake.clock,
+      })
+      if (outcome.status !== "rolledBack")
+        throw new Error(`not rolled back: ${outcome.status}`)
+      const order = [intent, ...engineSteps, carriers, environment].map((s) =>
+        fake.log.indexOf(s.sql)
+      )
+      expect(order.every((i) => i >= 0)).toBe(true)
+      expect(order).toEqual([...order].sort((a, b) => a - b))
+      expect(fake.seen[carriers.sql]).toEqual([
+        { ...SESSION, row_security: "off" },
+      ])
+      // Після фази — знову налаштування транзакції
+      expect(fake.seen[environment.sql]).toEqual([SESSION])
+      // Перевірка режиму реплікації й налаштування — час фази `carriers`
+      expect(
+        outcome.evidence.durations.steps
+          .filter((s) => s.phase === "carriers")
+          .map((s) => s.id)
+      ).toEqual([
+        "carriers-1",
+        "carriers-2",
+        "carriers-3",
+        carriers.id,
+        "carriers-4",
+      ])
+      expect(fake.log.lastIndexOf("replication-role")).toBeGreaterThan(
+        fake.log.indexOf(engineSteps.at(-1)!.sql)
+      )
+    })
+
+    it("refuses carrier steps in replica mode", async () => {
+      const { db, log } = fakeDb({ replicationRole: "replica" })
+      const outcome = await executePlan(db, target, withCarriers, options)
+      expect(outcome).toMatchObject({
+        status: "refused",
+        attempts: 1,
+        diagnostics: [
+          { code: "apply.replication-role", params: { value: "replica" } },
+        ],
+      })
+      expect(log).not.toContain(carriers.sql)
+      expect(log).not.toContain(environment.sql)
+    })
+
+    // Тригер носіїв перевиводить ту саму копію, а `contentChangeCondition`
+    // придушує механіку й підписки: вимикати нічого не треба
+    it("disables no triggers for carrier steps", async () => {
+      const { db, log } = fakeDb()
+      const outcome = await executePlan(db, target, withCarriers, options)
+      expect(outcome).toMatchObject({ status: "committed" })
+      expect(log.some((l) => /DISABLE TRIGGER/i.test(l))).toBe(false)
+    })
   })
 
   it("runs a preamble of the search path alone as it is", async () => {

@@ -1,13 +1,9 @@
 import { carrierBackfillStatements, type QualifiedName } from "simetra/compiler"
 import {
-  quoteIdent,
   type CarrierCopyOf,
   type PhysicalColumn,
   type PhysicalSnapshot,
 } from "simetra/model"
-import type { EngineDiagnostic } from "../engine"
-import { applyDiagnostic } from "./diagnostic"
-import type { ApplyTransaction } from "./port"
 import { stepId, type PlanStep } from "./steps"
 import { tableKey } from "./table-key"
 
@@ -116,36 +112,4 @@ export function carrierBackfillSteps(
     rewriteRisk: false,
     guards: [],
   }))
-}
-
-/**
- * Відмова `plan.carrier-backfill-missing` на кожну таблицю з копіями без
- * значень, у якій уже є рядок. `row_security = off` — як у `DATA_SETTINGS`:
- * під `FORCE ROW LEVEL SECURITY` власник без `BYPASSRLS` інакше бачив би
- * лише рядки, які пропускають політики, і порожня з погляду політик таблиця
- * дала б тихий «рядків немає». З `off` Postgres такий запит відхиляє
- * помилкою — план падає гучно, а не пропускає дані без копій. Транзакцію
- * відкочує той, хто її відкрив, тож налаштування не виходить за неї.
- */
-export async function carrierBackfillRefusals(
-  tx: ApplyTransaction,
-  pending: readonly PendingCarrierCopies[]
-): Promise<EngineDiagnostic[]> {
-  if (pending.length === 0) return []
-  await tx.query("SET LOCAL row_security = off")
-  const refusals: EngineDiagnostic[] = []
-  for (const { table, columns } of pending) {
-    const [row] = await tx.query<{ found: boolean }>(
-      `SELECT EXISTS (SELECT 1 FROM ${quoteIdent(table.schema)}.${quoteIdent(table.name)}) AS found`
-    )
-    if (row === undefined) throw new Error("EXISTS returned no row")
-    if (row.found)
-      refusals.push(
-        applyDiagnostic("plan.carrier-backfill-missing", "error", {
-          table: `${table.schema}.${table.name}`,
-          columns: columns.join(", "),
-        })
-      )
-  }
-  return refusals
 }

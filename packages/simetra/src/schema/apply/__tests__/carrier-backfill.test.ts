@@ -2,12 +2,10 @@ import { describe, expect, it } from "vitest"
 import { carrierBackfillStatements } from "simetra/compiler"
 import type { PhysicalTable } from "simetra/model"
 import {
-  carrierBackfillRefusals,
   carrierBackfillSteps,
   pendingCarrierCopies,
   stepFootprint,
   tableKey,
-  type ApplyTransaction,
   type FootprintModels,
 } from "simetra/schema"
 import {
@@ -263,48 +261,5 @@ describe("carrierBackfillSteps", () => {
       { ...old, mode: "shareRowExclusive" },
       { schema: "public", name: "task", mode: "shareRowExclusive" },
     ])
-  })
-})
-
-describe("carrierBackfillRefusals", () => {
-  /** Фейкова транзакція: `EXISTS` відповідає `found`. */
-  function fakeTx(found: boolean) {
-    const statements: string[] = []
-    const tx: ApplyTransaction = {
-      query: async <R extends Record<string, unknown>>(sql: string) => {
-        statements.push(sql)
-        return (sql.startsWith("SELECT EXISTS")
-          ? [{ found }]
-          : []) as unknown as R[]
-      },
-      extract: () => Promise.reject(new Error("no extract expected")),
-    }
-    return { tx, statements }
-  }
-
-  const pending = [{ table: CHECKLIST, columns: ["assignee_id", "region_id"] }]
-
-  it("refuses a table with rows, reading it with row security off first", async () => {
-    const { tx, statements } = fakeTx(true)
-    expect(await carrierBackfillRefusals(tx, pending)).toMatchObject([
-      {
-        code: "plan.carrier-backfill-missing",
-        severity: "error",
-        params: {
-          table: `public.${CHECKLIST_TABLE}`,
-          columns: "assignee_id, region_id",
-        },
-      },
-    ])
-    expect(statements).toEqual([
-      "SET LOCAL row_security = off",
-      `SELECT EXISTS (SELECT 1 FROM public.${CHECKLIST_TABLE}) AS found`,
-    ])
-  })
-
-  it("passes an empty table", async () => {
-    const { tx, statements } = fakeTx(false)
-    expect(await carrierBackfillRefusals(tx, pending)).toEqual([])
-    expect(statements[0]).toBe("SET LOCAL row_security = off")
   })
 })

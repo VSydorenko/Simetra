@@ -82,6 +82,7 @@ import {
 import { isRetryable } from "./retry"
 import { readInvalidObjects } from "./validity"
 import {
+  CARRIER_STEP_SETTINGS,
   DATA_SETTINGS,
   revalidationSettings,
   withLocalSettings,
@@ -897,9 +898,8 @@ async function runAttempt(
   }))
 
   // 8. Обчислення кроків даних у старих іменах, до кроків наміру (рішення 1
-  // плану П3-2b-2). Режим `replica` вимкнув би внутрішні тригери FK, і запис
-  // обійшов би перевірку посилань: план це вже бачив, але налаштування бази
-  // чи ролі могло змінитися після нього, тож гарантія — тут (рішення 13)
+  // плану П3-2b-2), лише в режимі реплікації `origin`
+  // (`requireOriginReplication`)
   // Блок — за іменем походження, а не за позицією: новий блок у
   // `ORIGIN_ORDER` інакше мовчки зсунув би решту під чужу фазу
   const block = (origin: (typeof ORIGIN_ORDER)[number]) =>
@@ -907,13 +907,7 @@ async function runAttempt(
   let computed = new Map<string, number>()
   phase("compute")
   if (data.length > 0) {
-    const [session] = await tx.query<{ role: string }>(
-      "SELECT pg_catalog.current_setting('session_replication_role') AS role"
-    )
-    if (session === undefined)
-      throw new Error("current_setting returned no row")
-    if (session.role !== "origin")
-      throw stop("refused", "apply.replication-role", { value: session.role })
+    await requireOriginReplication(tx)
     computed = await withLocalSettings(tx, DATA_SETTINGS, () =>
       computeData(tx, data, (id) => phase("compute", id))
     )
@@ -953,14 +947,14 @@ async function runAttempt(
   await withLocalSettings(tx, plan.preamble, () =>
     runSteps(tx, block("engine"), parse, (id) => phase("engine", id))
   )
-  // 11а. Кроки копій носіїв (Р2b2-4) — після двигуна (колонку-копію створює
-  // він) і до середовища, під налаштуваннями транзакції: тригери не
-  // вимикаються, тож їхні тіла йдуть під `search_path` транзакції. Фаза —
-  // лише для непорожнього блоку: план без копій лишає журнал фаз як був
+  // 11а. Кроки копій носіїв (Р2b2-4) — після двигуна: колонку-копію
+  // створює він, а кроки даних промоції (фаза 10) йдуть ще до нього. Фаза —
+  // лише для непорожнього блоку: план без копій лишає журнал фаз як був.
+  // Позначка — до перевірки режиму, тож її час рахується фазі копій
   const carriers = block("carriers")
   if (carriers.length > 0) {
     phase("carriers")
-    await runSteps(tx, carriers, parse, (id) => phase("carriers", id))
+    await runCarrierSteps(tx, carriers, parse, (id) => phase("carriers", id))
   }
   // 12. Кроки середовища (рішення 5 плану П3-2b-0) — під налаштуваннями
   // транзакції
@@ -1533,6 +1527,44 @@ async function readPlpgsqlChecked(
 }
 
 /** Кроки блоку по черзі, кожен після своїх сторожів. */
+/**
+ * Режим реплікації транзакції — лише `origin` (рішення 13 плану П3-2b-2,
+ * Р2b2-4): у `replica` не спрацювали б ні внутрішні тригери FK (запис даних
+ * обійшов би перевірку посилань), ні тригери носіїв (крок копій записав би
+ * значення без перевиведення). План це вже бачив, але налаштування бази чи
+ * ролі могло змінитися після нього, тож гарантія — тут.
+ */
+async function requireOriginReplication(tx: ApplyTransaction): Promise<void> {
+  const [session] = await tx.query<{ role: string }>(
+    "SELECT pg_catalog.current_setting('session_replication_role') AS role"
+  )
+  if (session === undefined) throw new Error("current_setting returned no row")
+  if (session.role !== "origin")
+    throw stop("refused", "apply.replication-role", { value: session.role })
+}
+
+/**
+ * Кроки копій носіїв (Р2b2-4, Р2b2-9) — лише під `row_security = off`: під
+ * `FORCE ROW LEVEL SECURITY` власник без `BYPASSRLS` інакше оновив би лише
+ * рядки, які пропускають політики, і тихо лишив би решту без копій; з `off`
+ * Postgres такий оператор відхиляє гучно. Не `DATA_SETTINGS`: крок нічого не
+ * обчислює й не приводить, а тригери не вимикаються (тригер носіїв
+ * перевиводить ту саму копію, `contentChangeCondition` придушує механіку й
+ * підписки), тож закріплений `search_path` зламав би тіло дослівного чи
+ * прийнятого тригера, що називає об'єкти без схеми. Експорт — для DB-тесту.
+ */
+export async function runCarrierSteps(
+  tx: ApplyTransaction,
+  steps: readonly PlanStep[],
+  parse: SqlParser,
+  onStep: (id: string) => void
+): Promise<void> {
+  await requireOriginReplication(tx)
+  await withLocalSettings(tx, CARRIER_STEP_SETTINGS, () =>
+    runSteps(tx, steps, parse, onStep)
+  )
+}
+
 async function runSteps(
   tx: ApplyTransaction,
   steps: readonly PlanStep[],

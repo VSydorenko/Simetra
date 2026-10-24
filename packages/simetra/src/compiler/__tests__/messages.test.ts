@@ -446,22 +446,6 @@ describe("messages catalog", () => {
     )
   })
 
-  it("plan.carrier-backfill-missing names the table and the copies and says no plan was written", () => {
-    const d = diagnostic("plan.carrier-backfill-missing", "", "", {
-      table: "public.task_checklist",
-      columns: "assignee_id, region_id",
-    })
-    expect(d.message).toBe(
-      "public.task_checklist already has rows, and the plan adds the rights carrier copies assignee_id, region_id to it, but the copies get their values only when a row is written: the existing rows would be left without them"
-    )
-    expect(d.hint?.startsWith("No plan was written.")).toBe(true)
-    const uk = localize(d, "uk")
-    expect(uk.message).toBe(
-      "public.task_checklist уже має рядки, а план додає до неї копії носіїв прав assignee_id, region_id, але копії отримують значення лише на записі рядка: наявні рядки лишилися б без них"
-    )
-    expect(uk.hint?.startsWith("План не записано.")).toBe(true)
-  })
-
   it("plan.update-of-narrowed names the trigger, the table and the columns", () => {
     const d = diagnostic("plan.update-of-narrowed", "", "", {
       trigger: "items_price",
