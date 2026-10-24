@@ -283,3 +283,10 @@ in the object row. The copies are written only by the platform:
   gets `NULL`. The step holds `SHARE ROW EXCLUSIVE` on the table and on its
   source until the apply ends. Triggers stay on, and a copy-only change does
   not bump `version` or fire subscriptions.
+- When a copy takes the place of a column that was not a copy (a removed
+  attribute that still holds data, or an adopted column the promotion
+  mapping left out), the step overwrites that data: it is class
+  `destructive` and needs `--allow <step id>` like any other step that loses
+  data. A copy column the plan itself creates is always filled, even if the
+  last applied snapshot says the copy already exists (for example, an
+  administrator dropped it by hand and the drift was accepted).
