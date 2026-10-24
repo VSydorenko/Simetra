@@ -24,6 +24,7 @@ export const COMPILER_RULES = [
   "sql.generated-grant",
   "sql.dependency-cycle",
   "sql.closed-shell",
+  "sql.command-context-write",
   "sql.function-overload",
   "sql.row-rule-grammar",
   "sql.row-rule-foreign-table",

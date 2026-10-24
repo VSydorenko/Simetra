@@ -152,6 +152,24 @@ describe("messages catalog", () => {
     )
   })
 
+  it("sql.command-context-write names the function and the form in both locales", () => {
+    const forms = ["setConfig", "setStatement", "functionOption", "nonLiteral"]
+    for (const locale of ["en", "uk"] as const) {
+      const messages = forms.map(
+        (form) =>
+          localize(
+            diagnostic("sql.command-context-write", "a.sql", "", {
+              name: "public.f",
+              form,
+            }),
+            locale
+          ).message
+      )
+      for (const message of messages) expect(message).toContain("public.f")
+      expect(new Set(messages).size).toBe(forms.length)
+    }
+  })
+
   it("renders every closed-form reason of a scope set function as a sentence", () => {
     const reasons: SetFunctionReason[] = [
       "language",

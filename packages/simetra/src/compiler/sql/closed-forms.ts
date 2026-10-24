@@ -2,6 +2,8 @@ import type { Node } from "libpg-query"
 import { KIND_REGISTRY } from "simetra/model"
 import { diagnostic, type Diagnostic } from "../diagnostics"
 import type { ParsedObject } from "../stages/files"
+import { commandContextWrite } from "./command-context"
+import type { SqlParser } from "./parse"
 import type { PlpgsqlParser } from "./plpgsql"
 import { FUNCTION_CLASSES, type RowRule, type VerbatimUnit } from "./units"
 
@@ -183,6 +185,7 @@ export function checkSqlModules(
   objects: readonly ParsedObject[],
   units: readonly VerbatimUnit[],
   rowRules: readonly RowRule[],
+  parse: SqlParser,
   plpgsql: PlpgsqlParser
 ): Diagnostic[] {
   const owners = closedModuleOwners(objects)
@@ -234,6 +237,21 @@ export function checkSqlModules(
           function: `${unit.schema}.${unit.name}`,
           line,
           problem,
+        })
+      )
+    }
+    // Контекст команди ставить лише `runCommand` (Р2b1-19): SQL застосунку
+    // виконується посеред оператора команди, і змінений ним контекст побачили
+    // б політики наступних рядків. Оболонка, що не пройшла, тіла не гарантує.
+    const write =
+      problem === undefined
+        ? commandContextWrite(shellUnit.tree, unit.sql, parse, plpgsql)
+        : undefined
+    if (write !== undefined) {
+      found.push(
+        diagnostic("sql.command-context-write", unit.file, "", {
+          name: `${unit.schema}.${unit.name}`,
+          form: write,
         })
       )
     }

@@ -159,7 +159,7 @@ export async function runStages(
   const early = [
     ...upstream,
     ...sql.diagnostics,
-    ...checkSqlModules(stage1.objects, sql.units, sql.rowRules, plpgsql),
+    ...checkSqlModules(stage1.objects, sql.units, sql.rowRules, parse, plpgsql),
     ...debt.grows,
     ...(embedded?.diagnostics ?? []),
   ]

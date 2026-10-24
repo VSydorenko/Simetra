@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { makeObjectName } from "simetra/model"
+import { COMMAND_SETTING, makeObjectName } from "simetra/model"
 import { compile } from "simetra/compiler"
 import {
   attribute,
@@ -403,6 +403,35 @@ describe("EventSubscription", () => {
     expect(await found("BEGIN SELEKT 1; RETURN NEW; END")).toEqual([
       ["subscription.handler-not-closed", "/handler", "body"],
     ])
+  })
+
+  it("a handler does not change the command context, in a shared file or its own module", async () => {
+    const handler = (statement: string) =>
+      `CREATE FUNCTION app.stamp() RETURNS trigger LANGUAGE plpgsql VOLATILE AS $$ BEGIN ${statement} RETURN NEW; END $$;`
+    const forms = async (files: Record<string, unknown>) =>
+      (await compile(metaFiles(entries({}, files)))).diagnostics
+        .filter((d) => d.code === "sql.command-context-write")
+        .map((d) => [d.file, d.params?.form])
+    const write = handler(
+      `PERFORM set_config('${COMMAND_SETTING}', '{}', true);`
+    )
+    expect(await forms({ [HANDLER_FILE]: write })).toEqual([
+      [SUBSCRIPTION, "setConfig"],
+    ])
+    // Модуль самої підписки — закритий модуль виду: одна діагностика, не дві.
+    expect(
+      await forms({
+        [HANDLER_FILE]: undefined,
+        "event-subscriptions/StampContract/StampContract.sql": write,
+      })
+    ).toEqual([
+      ["event-subscriptions/StampContract/StampContract.sql", "setConfig"],
+    ])
+    expect(
+      await forms({
+        [HANDLER_FILE]: handler("PERFORM set_config('app.x', '1', true);"),
+      })
+    ).toEqual([])
   })
 
   describe("a beforeWrite handler leaves the row mechanics alone", () => {

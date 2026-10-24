@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { compile } from "simetra/compiler"
+import { COMMAND_SETTING } from "simetra/model"
 import {
   acceptDebt,
   customTable,
@@ -185,6 +186,54 @@ describe("kind module: closed forms only", () => {
             "CREATE FUNCTION public.sale_touch() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN EXECUTE 'select 1'; RETURN NEW; END $$;",
         })
       ).toEqual([["sql.closed-shell", "volatility"]])
+    })
+  })
+
+  describe("application SQL leaves the command context alone", () => {
+    // Імена налаштувань — лише через сталу: літерала поза T0 немає.
+    const C = COMMAND_SETTING
+    const MIXED = C.replace(/\b\w/g, (c) => c.toUpperCase())
+    const plpgsqlBody = (statement: string) =>
+      shell("LANGUAGE plpgsql VOLATILE", `BEGIN ${statement} RETURN 1; END`)
+    const writes = async (sql: string) =>
+      (await diagnostics({ [SALE_SQL]: sql }))
+        .filter((d) => d.code === "sql.command-context-write")
+        .map((d) => [d.code, d.file, d.params?.form])
+
+    it.each([
+      ["setConfig", plpgsqlBody(`PERFORM set_config('${C}', '{}', true);`)],
+      [
+        "setConfig",
+        plpgsqlBody(`PERFORM pg_catalog.set_config('${MIXED}', '{}', true);`),
+      ],
+      ["nonLiteral", plpgsqlBody(`PERFORM set_config(v_name, '{}', true);`)],
+      ["setStatement", plpgsqlBody(`SET LOCAL ${C} = '{}';`)],
+      ["setStatement", plpgsqlBody(`RESET ${C};`)],
+      ["setStatement", plpgsqlBody("RESET ALL;")],
+      [
+        "functionOption",
+        shell(`LANGUAGE sql STABLE SET ${C} = '{}'`, "select 1"),
+      ],
+      [
+        "setConfig",
+        shell("LANGUAGE sql VOLATILE", `SELECT set_config('${C}', '{}', true)`),
+      ],
+      [
+        "setConfig",
+        `CREATE FUNCTION public.sale_total() RETURNS text LANGUAGE sql VOLATILE BEGIN ATOMIC SELECT set_config('${C}', '{}', true); END;`,
+      ],
+    ])("%s is refused", async (form, sql) => {
+      expect(await writes(sql)).toEqual([
+        ["sql.command-context-write", SALE_SQL, form],
+      ])
+    })
+
+    it.each([
+      plpgsqlBody("PERFORM set_config('app.x', '1', true);"),
+      plpgsqlBody("SET LOCAL statement_timeout = '1s';"),
+      plpgsqlBody(`PERFORM current_setting('${C}', true);`),
+    ])("an unrelated setting passes: %s", async (sql) => {
+      expect(await writes(sql)).toEqual([])
     })
   })
 

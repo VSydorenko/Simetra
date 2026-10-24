@@ -11,7 +11,11 @@ import {
 import type { Node } from "libpg-query"
 import { diagnostic, toPointer, type Diagnostic } from "../diagnostics"
 import { CURRENT_USER_FUNCTION } from "../platform/names"
-import { closedShellProblem } from "../sql/closed-forms"
+import { closedModuleOwners, closedShellProblem } from "../sql/closed-forms"
+import {
+  commandContextWrite,
+  plpgsqlExpressionTrees,
+} from "../sql/command-context"
 import { checkDimensionFunctions } from "../rights/dimension-functions"
 import {
   nullaryFunction,
@@ -21,7 +25,6 @@ import {
 import type { SqlParser } from "../sql/parse"
 import { mechanicsStandardNames } from "../mechanics-units"
 import type { PlpgsqlFunction, PlpgsqlParser } from "../sql/plpgsql"
-import { splitAssignment } from "../sql/rewrite/plpgsql-body"
 import { functionIdentity, type VerbatimUnit } from "../sql/units"
 import { objectKey, type ParsedObject } from "./files"
 import { registerTargetError, type ResolvedReference } from "./identity"
@@ -356,6 +359,7 @@ function checkSubscriptionHandlers(
   plpgsql: PlpgsqlParser
 ): Diagnostic[] {
   const found: Diagnostic[] = []
+  const closedOwners = closedModuleOwners(objects)
   for (const object of objects) {
     const spec = KIND_REGISTRY[object.kind].subscription?.(object.data)
     if (spec === undefined) continue
@@ -402,6 +406,21 @@ function checkSubscriptionHandlers(
           )
         )
       } else if (unit !== undefined) {
+        // Обробник у спільному `sql/` не бачить перевірка модулів виду, тож
+        // контекст команди (Р2b1-19) судимо тут; у модулі самої підписки його
+        // вже судила вона, і друга діагностика була б дублем.
+        const write =
+          unit.ownerFile !== undefined && closedOwners.has(unit.ownerFile)
+            ? undefined
+            : commandContextWrite(unit.tree as Node, unit.sql, parse, plpgsql)
+        if (write !== undefined) {
+          found.push(
+            diagnostic("sql.command-context-write", object.file, "/handler", {
+              name: fn,
+              form: write,
+            })
+          )
+        }
         const mechanics = beforeWriteMechanics(spec, objects, project)
         const carriers = beforeWriteCarriers(spec, objects, physical)
         const parsed =
@@ -560,21 +579,7 @@ function copyReads(
     }
     for (const inner of Object.values(node)) visit(inner)
   }
-  for (const statement of fn.statements) {
-    for (const e of statement.expressions) {
-      if (e.role === "dynamic") continue
-      let text = e.query
-      if (e.parseMode >= 3) {
-        const split = splitAssignment(e.query, e.parseMode - 2)
-        if (split === undefined) continue
-        text = `SELECT ${e.query.slice(split.valueStart)}`
-      } else if (e.parseMode > 0) {
-        text = `SELECT ${e.query}`
-      }
-      const parsed = parse(text)
-      if (parsed.ok) visit(parsed.statements.map((s) => s.stmt))
-    }
-  }
+  for (const tree of plpgsqlExpressionTrees(fn, parse)) visit(tree)
   return [...read]
 }
 
