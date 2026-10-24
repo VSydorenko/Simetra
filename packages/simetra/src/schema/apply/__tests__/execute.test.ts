@@ -1350,6 +1350,39 @@ describe("executePlan", () => {
     expect(seen.ledger).toEqual([SESSION])
   })
 
+  // Р2b2-4: кроки копій — після двигуна (колонку-копію створює він) і до
+  // середовища; блоки вибираються за походженням, а не за позицією
+  it("runs the blocks in origin order: intent, engine, carriers, environment", async () => {
+    const intent = step("s1", "ALTER TABLE app.t RENAME TO t2", {
+      origin: "intent",
+    })
+    const engineSteps = plan.steps.map((s, i) => ({ ...s, id: `s${i + 2}` }))
+    const n = engineSteps.length + 2
+    const carriers = step(`s${n}`, "UPDATE app.c AS d SET x = NULL", {
+      origin: "carriers",
+      class: "dataStep",
+      lockClass: "shareRowExclusive",
+    })
+    const environment = step(`s${n + 1}`, "GRANT SELECT ON app.n TO anon", {
+      origin: "environment",
+    })
+    const { db, log, seen } = fakeDb()
+    const outcome = await executePlan(
+      db,
+      target,
+      { ...plan, steps: [intent, ...engineSteps, carriers, environment] },
+      options
+    )
+    expect(outcome).toMatchObject({ status: "committed" })
+    const order = [intent, ...engineSteps, carriers, environment].map((s) =>
+      log.indexOf(s.sql)
+    )
+    expect(order.every((i) => i >= 0)).toBe(true)
+    expect(order).toEqual([...order].sort((a, b) => a - b))
+    // Крок копій — під налаштуваннями транзакції, а не під преамбулою
+    expect(seen[carriers.sql]).toEqual([SESSION])
+  })
+
   it("runs a preamble of the search path alone as it is", async () => {
     const { db, seen } = fakeDb()
     const outcome = await executePlan(db, target, plan, options)
@@ -2198,6 +2231,14 @@ describe("executePlan", () => {
       "whose environment step precedes an engine step",
       ["environment", "engine"] as const,
     ],
+    [
+      "whose carrier copy step precedes an engine step",
+      ["carriers", "engine"] as const,
+    ],
+    [
+      "whose environment step precedes a carrier copy step",
+      ["environment", "carriers"] as const,
+    ],
   ])("refuses a plan %s before BEGIN", async (_, origins) => {
     const { db, log } = fakeDb()
     const run = executePlan(
@@ -2212,7 +2253,7 @@ describe("executePlan", () => {
       options
     )
     await expect(run).rejects.toThrow(
-      "plan steps are out of origin order: intent, engine, environment"
+      "plan steps are out of origin order: intent, engine, carriers, environment"
     )
     expect(log).toEqual([])
   })

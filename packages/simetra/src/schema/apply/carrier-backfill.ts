@@ -1,4 +1,4 @@
-import type { QualifiedName } from "simetra/compiler"
+import { carrierBackfillStatements, type QualifiedName } from "simetra/compiler"
 import {
   quoteIdent,
   type CarrierCopyOf,
@@ -8,9 +8,10 @@ import {
 import type { EngineDiagnostic } from "../engine"
 import { applyDiagnostic } from "./diagnostic"
 import type { ApplyTransaction } from "./port"
+import { stepId, type PlanStep } from "./steps"
 import { tableKey } from "./table-key"
 
-/** Таблиця з копіями носіїв, яким план не дає значень. */
+/** Таблиця з копіями носіїв, які ще не живі й чекають кроку даних плану. */
 export interface PendingCarrierCopies {
   table: QualifiedName
   columns: string[]
@@ -24,11 +25,10 @@ const sameCopy = (a: CarrierCopyOf, b: CarrierCopyOf | undefined): boolean =>
   a.through === b.through
 
 /**
- * Копії носіїв бажаного стану, яким план не дає значень (Р2a2-11): кроку
- * даних для копій ще немає (план Права-2b), а тригер носіїв виводить копію
- * лише на запис рядка, тож наявні рядки лишилися б з порожньою копією — і
- * політики читання за нею їх не бачили б, або, гірше, бачили б за чужим
- * значенням.
+ * Копії носіїв бажаного стану, яким потрібен крок даних плану (Р2a2-11,
+ * Р2b2-1): тригер носіїв виводить копію лише на запис рядка, тож без кроку
+ * наявні рядки лишилися б з порожньою копією — і політики читання за нею їх
+ * не бачили б, або, гірше, бачили б за чужим значенням.
  *
  * Копія вже жива, лише коли в знімку останнього застосування (`applied`,
  * marker цілі) та сама колонка — копія з тим самим `copyOf`: тоді тригери її
@@ -37,7 +37,9 @@ const sameCopy = (a: CarrierCopyOf, b: CarrierCopyOf | undefined): boolean =>
  * дали б старі значення за копію. Таблиця, яку план створює (`created` —
  * ідентичності `table:<схема>.<ім'я>` з `produces` дій двигуна), рядків не
  * має. `oldName` — ім'я таблиці на цілі, коли воно інше (промоція, `applied`
- * у старих іменах); звіт — теж у ньому, бо `EXISTS` читає живу ціль.
+ * у старих іменах): ним таблицю лише шукають у `applied`, а повертають у
+ * бажаному імені (Р2b2-6) — крок копій іде після кроків двигуна, коли
+ * таблиця вже перейменована.
  */
 export function pendingCarrierCopies(
   desired: Pick<PhysicalSnapshot, "tables">,
@@ -67,9 +69,53 @@ export function pendingCarrierCopies(
           )
       )
       .map((c) => c.name)
-    if (columns.length > 0) pending.push({ table: live, columns })
+    if (columns.length > 0)
+      pending.push({
+        table: { schema: table.schema, name: table.name },
+        columns,
+      })
   }
   return pending
+}
+
+/**
+ * Кроки даних копій носіїв (Р2b2-1): по одному на оператор
+ * `carrierBackfillStatements`, з id від `offset` — кроки копій стоять після
+ * кроків наміру й двигуна. Замок `SHARE ROW EXCLUSIVE` на залежній таблиці й
+ * джерелі (Р2b2-5): чужа зміна носія власника між читанням кроку й `COMMIT`
+ * лишила б застарілу копію, коли тригер поширення не перестворюється цим
+ * планом. Таблиці — у бажаних іменах, як у кроках двигуна; слід перекладає їх
+ * у вихідні. Крок генерується незалежно від наявності рядків (Р2b2-7): план
+ * не читає ціль, а на порожній таблиці крок пише нуль рядків.
+ */
+export function carrierBackfillSteps(
+  desired: Pick<PhysicalSnapshot, "tables">,
+  pending: readonly PendingCarrierCopies[],
+  offset: number
+): PlanStep[] {
+  return carrierBackfillStatements(desired, pending).map((s, i) => ({
+    id: stepId(offset + i),
+    origin: "carriers",
+    sql: s.sql,
+    verb: "alter",
+    class: "dataStep",
+    lockClass: "shareRowExclusive",
+    transactionality: "transactional",
+    newSegmentBefore: false,
+    lockedTables: [
+      { schema: s.table.schema, name: s.table.name },
+      { schema: s.source.schema, name: s.source.name },
+    ],
+    produces: [],
+    consumes: [],
+    destroys: [],
+    produced: [],
+    destroyed: [],
+    consumed: [],
+    dataLoss: false,
+    rewriteRisk: false,
+    guards: [],
+  }))
 }
 
 /**
