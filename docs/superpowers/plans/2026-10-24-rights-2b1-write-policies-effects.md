@@ -1,0 +1,390 @@
+# Права-2b1: контекст команди, політики запису й тригер ефектів — план імплементації
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+Статус: чернетка на аудит.
+Архітектор задачі — сесія `consumer-reconciliation2`; якщо її немає — власник.
+
+**Мета:** роль `simetra_command` пише в таблиці виду лише за правами. Контекст
+команди `simetra.command` розбирає одна згенерована функція; політики
+`INSERT`/`UPDATE`/`DELETE` дають кореневому рядку право дії команди, решті
+рядків — природну дію за DML; тригер ефектів відхиляє зміну, що виходить за
+дозволені ефекти дії. Межу тенанта на запис 2a2 вперше доводить DB-сценарій.
+
+**Архітектура:**
+
+- **T0** (`packages/simetra/src/model`): `COMMAND_SETTING` і форма
+  `CommandContext` поруч із `PLATFORM_ROLES`; факт реєстру
+  `KindAction.natural` — природна дія за DML.
+- **T1** (`packages/simetra/src/compiler`): контракт прав несе `natural` і
+  тримає інваріант «усі дії об'єкта — один набір обсягів»; генератор
+  `command` (`compiler/rights/command-units.ts`) — функції контексту; будівник
+  умов 2a1 приймає дію контексту (`COMMAND_ACTION`); `access-units.ts` —
+  політики запису двох родин і `RESTRICTIVE`-запобіжник контексту; генератор
+  `effects` (`compiler/rights/effects-units.ts`) — тригер ефектів.
+- **T2** (`packages/simetra/src/schema`): зворотна генерація й промоція
+  впізнають одиниці ефектів як платформні.
+- **Тести:** unit на деревах SQL; один DB-опис запису під `simetra_command`.
+
+**Стек:** TypeScript 7 (native `tsc`), Zod 4, Vitest, libpg-query (WASM),
+локальний стек Supabase (Postgres 17).
+
+**Спека:** [спека прав](../specs/2026-10-17-rights-design.md) — читати повністю,
+головне §3, §5.2, §5.3, §5.4, §6.2, §8; [платформна
+спека](../specs/2026-09-24-simetra-platform-design.md) §6.7, §6.8, Р21, Р24,
+Р29; [спека промоції](../specs/2026-10-06-promotion-design.md) §8, §9.2, §9.3.
+Плани [Права-2a1](2026-10-18-rights-2a1-command-role-functions.md) і
+[Права-2a2](2026-10-18-rights-2a2-read-policies-carriers.md) — їхні таблиці
+рішень діють; їхні форми тут — дані.
+
+**Залежність:** Права-2a2 виконано й прийнято (гілка `feat/rights-2a2` чи її
+злиття): є `rightsPredicates`/`renderCondition` (`compiler/rights/predicates.ts`),
+`accessPolicyNames`, `buildAccessUnits` (`compiler/access-units.ts`),
+`hasRightsFunctions` (`compiler/rights/functions.ts`), `contentChangeCondition`
+і `mechanicsStandardNames` (`compiler/mechanics-units.ts`), `carrierCopies`,
+`carrierTriggerNames` (`compiler/rights/carrier-units.ts`), `policyDomain()`
+(`compiler/__tests__/fixtures/rights.ts`), `describeTransaction`
+(`test/db/rights-seed.ts`), `queryAs` (`test/db/connection.ts`), помилка
+`rights.public-read-forbidden` (Р2a2-33). З планом
+[Права-2b2](2026-10-24-rights-2b2-carrier-backfill.md) спільного коду немає;
+порядок виконання — 2b1, потім 2b2 (обидва змінюють `messages.ts` і
+`diagnostics.ts`, тож одночасно на одному checkout — ні). Перед стартом —
+`.agents/skills/codebase-research/scripts/orient --plan docs/superpowers/plans/2026-10-24-rights-2b1-write-policies-effects.md`.
+
+## Global Constraints
+
+- Усі обмеження планів Права-1a, 1b, 2a1 і 2a2 (їхні розділи «Global Constraints») діють і тут.
+- 🔴 `pnpm --filter <pkg> test <pattern>` — **без** `--` перед шаблоном.
+- 🔴 Кожна умова права в політиці запису — з `rightsPredicates`/`renderCondition`; власних форм предиката немає. Умова родини (кореневий рядок чи ні) — лише через `simetra.command_root`.
+- 🔴 Ролі в `TO` — лише `PLATFORM_ROLES.command` (політики запису й запобіжник контексту); ролі API й `anon` — ніколи. Ім'я налаштування — лише через `COMMAND_SETTING`, літерала `'simetra.command'` поза T0 немає (тести — теж через сталу).
+- 🔴 Жодних грантів DML у згенерованому SQL (тест 2a1 `generated SQL never manages the command role itself` лишається зеленим); DML і `SELECT` ролі команд — П4. DB-сценарій видає їх собі в транзакції з відкатом.
+- 🔴 Тригер ефектів не читає GUC-прапорців, `pg_trigger_depth()` чи `current_user`; контекст — лише через безвиняткову поверхню розбору (Р2b1-3).
+- 🔴 Перелік змістових колонок (поза механікою, копіями й генерованими) — одне джерело для `contentChangeCondition` і тригера ефектів (Р2b1-9).
+- Генератори `command` і `effects` і політики запису — лише там, де `hasRightsFunctions` (Р2a2-24).
+- DB-тест — лише для того, що вирішує Postgres; SQL-текст — unit. Скіл `.agents/skills/writing-tests/SKILL.md` обов'язковий перед кожним кроком тестів.
+- Між задачами гейти не червоні: зміна, що ламає тест, і правка цього тесту — в одному коміті.
+- Репо публічне: приклади й фікстури — синтетичні.
+
+## Рішення плану
+
+Розвилки (а), (г), (д), (е), (ж) і поділ 2b на 2b1/2b2 вирішив архітектор
+задачі 2026-10-24.
+
+| # | Рішення | Чому | Вплив на спеку |
+| --- | --- | --- | --- |
+| Р2b1-1 | Значення `simetra.command` — JSON-об'єкт рівно з ключами `action` (непорожній рядок: слово словника чи UUID кастомної дії), `object` (непорожній рядок: мітка кореневого об'єкта), `root` (UUID кореневого рядка). Ім'я налаштування — T0 `COMMAND_SETTING = "simetra.command"`, форма — T0 `CommandContext { action: string; object: string; root: string }` (їх візьме `runCommand` П4) | мітка й дія — довільний текст, позиційний формат вимагав би екранування; JSON розбирає Postgres | спека прав §5.3 — формат значення й імена функцій (Задача 0) |
+| Р2b1-2 | Генератор `command` (схема `simetra`, `LANGUAGE plpgsql STABLE SECURITY INVOKER SET search_path = ''`, `EXECUTE` лише `PLATFORM_ROLES.command`, `REVOKE … FROM PUBLIC` і ролей API): приватний розбір `command_parsed(p_strict boolean, OUT action text, OUT object text, OUT root uuid)` і три поверхні над ним — `command_action() RETURNS text` і `command_root(p_object text) RETURNS uuid` (суворі: відсутнє, порожнє чи зіпсоване значення — `RAISE` `42501`, `MESSAGE 'command.context'`, `DETAIL 'missing'` чи `'malformed'`), `command_current(OUT action text, OUT object text, OUT root uuid)` (безвиняткова для відсутнього й порожнього: усі `NULL`; зіпсоване — той самий `RAISE`). `command_root` повертає `root`, коли `object = p_object`, інакше `NULL`. Розбір один | гучна відмова замість тихих «0 рядків» на `UPDATE`; тригеру треба розрізнити «контексту немає» без винятку; один парсер — без розсинхрону | спека прав §5.3 (Задача 0) |
+| Р2b1-3 | Запобіжник контексту — `RESTRICTIVE` `<t>_command_insert` (`WITH CHECK`), `<t>_command_update` (`USING` і `WITH CHECK`), `<t>_command_delete` (`USING`) `TO simetra_command` з умовою `(SELECT "simetra"."command_action"()) IS NOT NULL` на кожній таблиці з політиками запису. Порожній чи відсутній контекст — відмова навіть на таблиці без кореневої родини (регістр) | один запобіжник з одною мутацією; умова суворої функції або істинна, або кидає | спека прав §5.3, рядок «порожнє чи відсутнє — відмова» (Задача 0: назва запобіжника) |
+| Р2b1-4 | Політики запису — дві родини на кожну команду `INSERT`/`UPDATE`/`DELETE`, `PERMISSIVE TO simetra_command`, по політиці на предикат: **кореневий рядок** — `<ключ> = (SELECT "simetra"."command_root"('<мітка>'))` AND предикат дії контексту (`COMMAND_ACTION`); **решта рядків** — `<ключ> IS DISTINCT FROM (SELECT "simetra"."command_root"('<мітка>'))` AND предикат природної дії за DML. Ключ основної таблиці — колонка її одноколонкового первинного ключа; ТЧ — колонка власника (`parent_id`, та сама, що в `carrierColumn` для носія-ключа) з міткою власника. Таблиця без одноколонкового ключа (незалежний регістр відомостей) кореневої родини не має, а «решта» — без умови родини. `UPDATE`: та сама умова в `USING` і `WITH CHECK`. Похідні таблиці регістрів (`origin.part`) і об'єкти без жодної дії з `dml` політик запису не мають. Межі тенанта 2a2 — без змін | дія команди діє лише над кореневим рядком (§5.3); обидві умови некорельовані (`InitPlan`) | спека прав §5.3 — дві родини (Задача 0) |
+| Р2b1-5 | Будівник 2a1 приймає дію контексту: `rightsPredicates(contract, action: string \| typeof COMMAND_ACTION, table, main?)`, де `COMMAND_ACTION` — експортований символ; у `head` замість `sqlLiteral(action)` — `(SELECT "simetra"."command_action"())`. Обсяги — спільний набір обсягів об'єкта (Р2b1-6). Сумісне розширення сигнатури, виклики з літералом не змінюються | ~42 політики на основну таблицю документа замість ~63 статичних на кожну дію, без росту від кастомних дій | Р2a1-17 / Задача 7 плану 2a1 — рядок про розширення сигнатури (Задача 0); спека — немає |
+| Р2b1-6 | Інваріант «усі дії об'єкта мають один набір обсягів» (на ньому стоїть Р2b1-5) тримає код: `uniformExtents(actions: readonly RightsAction[]): RightsExtent[]` у `compiler/rights/contracts.ts` кидає внутрішню помилку компілятора (`internal: rights actions of <мітка> differ in extents`), якщо набори різняться; `rightsPredicates` з `COMMAND_ACTION` бере обсяги лише через неї | дія з іншим набором обсягів дала б мовчазне розходження політик | немає |
+| Р2b1-7 | Природна дія за DML — факт реєстру `KindAction.natural?: readonly Dml[]`: `create` — `["insert"]`, `update` — `["update"]`, `delete` — `["delete"]`, `write` — `["insert", "update", "delete"]`; контракт — `RightsAction.natural: Dml[]` (кастомна дія — `[]`). На кожен DML об'єкта — щонайбільше одна природна дія (внутрішня перевірка контракту). Природна дія ТЧ на будь-який DML — природна дія власника для `update`. DML без природної дії — «решта» не генерується (fail-closed) | гілка за видом заборонена (`AGENTS.md`); регістр не має `create`/`update`/`delete`, лише `write` | спека прав §3 — «природна дія за DML — факт реєстру» (Задача 0) |
+| Р2b1-8 | Тригер ефектів — генератор `effects`: функція `<t>_simetra_effects()` у схемі таблиці (`LANGUAGE plpgsql SECURITY DEFINER SET search_path = ''`, кваліфіковані відношення, `RETURNS trigger`, `EXECUTE` — нікому; повз RLS читає лише існування власника рядка ТЧ (Р2b1-9) і GUC контексту, у запит віддає лише `NULL` чи відмову — як функції носіїв, Р2a2-8; запобіжник не тримає безпеки на вимозі графа `delete ⇒ read`) і `AFTER … FOR EACH ROW` тригери: на таблиці без копій — `<t>_simetra_effects` на `INSERT OR UPDATE OR DELETE`; з копіями — `<t>_simetra_effects` на `INSERT OR DELETE` і `<t>_simetra_effects_update` на `UPDATE … WHEN (<contentChangeCondition>)`. Лише на основних таблицях з кореневою родиною (Р2b1-4) і їхніх ТЧ. `AFTER` бачить остаточний рядок після всіх `BEFORE`-тригерів — незалежність від порядку без заборон; зміна лише копій (поширення функціями носіїв `SECURITY DEFINER`, виведення копій) — не дія | без GUC, `pg_trigger_depth` і `current_user` (архітектор) | спека прав §5.3 — тригер `AFTER`, зміна лише копій не є дією (Задача 0) |
+| Р2b1-9 | Тіло тригера: `command_current()`; `action IS NULL` чи `object` ≠ мітка (власника для ТЧ) — `RETURN NULL`. Основна таблиця: рядок кореневий, якщо `OLD.<ключ>` чи `NEW.<ключ>` (за `TG_OP`) = `root`; для кореневого — `TG_OP` ∈ `effects.dml` дії і, на `UPDATE` з `header` ≠ `"all"`, жодна змістова колонка поза `header` не змінилася. ТЧ: рядок кореня, якщо `OLD.parent_id`/`NEW.parent_id` = `root`; дозволено, якщо `effects.tabularSections`, або `TG_OP = 'DELETE'` і рядка власника вже немає — `NOT EXISTS (SELECT 1 FROM <власник> WHERE <скоуп> = OLD.<скоуп> AND <ключ> = OLD.parent_id)` (так виглядає каскад FK: він іде після видалення власника, і власник уже не видимий; у ТЧ кореня скоупу умова — одна пара за `parent_id`). Окремий рядок ТЧ живого документа під дією без `tabularSections` не видаляється: інакше роль з `delete` без `update` змінила б зміст документа (архітектор). Невідома дія — відмова. Змістові колонки — `contentColumns(table, attributeCase)` (новий експорт `mechanics-units.ts`, з якого тепер будується й `contentChangeCondition`). Відмова — `RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'command.forbidden', DETAIL = 'effect', TABLE = '<t>'` (і `COLUMN = '<колонка>'` для шапки), без даних рядка | §5.3, §6.2 (`effect`); без винятку каскаду видалення документа з рядками впало б на тригері ТЧ | спека прав §6.2 — код відмови тригера й виняток каскаду (Задача 0) |
+| Р2b1-10 | Обробник `beforeWrite`, що під дією-переходом (`post`, `markDeletion`) змінює іншу колонку шапки кореня, — відмова тригера ефектів (fail-closed); детермінований перерахунок того самого значення змін не дає. Обчислення під проведенням — у хуку команди П4 чи в ефектах кастомної дії | ефект — межа дії, а не лише оператора | спека прав §5.3 — речення (Задача 0); скіл споживача |
+| Р2b1-11 | Імена: `accessPolicyNames(table)` додає `commandInsert`, `commandUpdate`, `commandDelete` (`<t>_command_<dml>`) і `write(dml: Dml, family: "root" \| "rest", label: string)` = `<t>_<dml>_<family>_<мітка>` з тим самим обмеженням мітки 40 байтів, що `rights` (Р2a2-2; мітка — `rightsLabel`). Імена функцій ефектів — у `derivedFunctions` (колізія — `physical.function-duplicate`, як Р2a2-22) | наявні члени `accessPolicyNames` не змінюються | немає |
+| Р2b1-12 | Зворотна генерація й промоція: `<t>_simetra_effects`, `<t>_simetra_effects_update` і функція `<t>_simetra_effects()` — платформні (`platformTriggerFunction` у `schema/reverse/units.ts`), не стають заміною прийнятого тригера (fail-closed); функції генератора `command` — як функції генератора `rights`. Нові `PERMISSIVE`-політики запису ролі команд у промоції потрапляють у пункт `access:<таблиця>` рядком `adds roles simetra_command` (наявна поведінка `addedRoles`; коду не змінює — тест фіксує) | доступ, який додає промоція, має бути видно під дозволом | немає |
+| Р2b1-13 | DB-сценарій під `simetra_command`: у транзакції опису `GRANT SELECT, INSERT, UPDATE, DELETE` таблицям схеми фікстури ролі команд і членство з `SET`. Перший шлях — `GRANT simetra_command TO CURRENT_USER WITH SET TRUE`; якщо Postgres відмовляє (код помилки ≠ успіх), запасний — `SET LOCAL createrole_self_grant = 'set'`, `CREATE ROLE <testRoleName("command")> NOLOGIN`, `GRANT simetra_command TO <тегова> WITH SET TRUE`, далі в кожному кейсі `SET LOCAL ROLE <тегова>` і `SET LOCAL ROLE simetra_command`. Критерій вибору — результат першого `GRANT` у точці збереження; обраний шлях — у коментарі опису. Усе відкочується | механізм визначає весь сценарій (архітектор) | немає |
+| Р2b1-14 | Відхилення від умови архітектора до (д) «команда `post` пише A лише з правом `post`, без `update`»: за графом `post ⇒ update` (`postAction.requires`), тож замикання прибирає `post` без `update`, і кейс неможливий. Натомість DB-кейси `post-extent` (роль з `update@any` і `post@own` не проводить чужу задачу, хоч оновити її може), `root-transition` (корінь пишеться лише з правом `markDeletion`, що вимагає лише `read`) і `rest-needs-natural` (інший рядок тієї самої команди вимагає `update`) — погоджено архітектором | вони гостріші й можливі за графом | немає |
+
+## Відомі обмеження
+
+- Створення кореня скоупу (`<корінь>` з `assignedOn` рівня скоупу) політика
+  `create` не пропускає: множина скоупів нового тенанта не містить; межу нового
+  тенанта дає `rootCreator` у П4 (Рх19).
+- Обробник `beforeWrite`, що під `post`/`markDeletion` змінює іншу колонку
+  шапки кореня, дає відмову (Р2b1-10).
+- Дослівний тригер на таблиці виду ще не заборонено (2c): він бачить запис
+  команди, як і раніше.
+- Гранти DML ролі команд, `simetra_runtime`, `runCommand`, `authorize` і
+  мапінг `42501` → `command.forbidden` — П4; запобіжники §7, версії й журнал
+  прав — 2c; гейт планів і бенчмарк — 2d.
+
+## Review Focus
+
+1. **Дія команди на чужому рядку:** команда `markDeletion` над T1 пише T2 — потрібне `update` на T2, а не `markDeletion`. Тест — Задача 6 (`rest-needs-natural`).
+2. **Обсяг дії, а не `update`:** роль з `update@any` і `post@own` не проводить чужу задачу, хоч оновити її може. Тест — Задача 6 (`post-extent`).
+3. **Запис без контексту:** будь-який DML ролі команд без `simetra.command` — `42501`, зокрема на регістрі без кореневої родини. Тест — Задача 6 (`no-context`).
+4. **Зміна лише копій під дією без ТЧ:** кастомна дія `reassign` (шапка `assignee`, без ТЧ) змінює носій — поширення в ТЧ кореня проходить. Тест — Задача 6 (`copy-only`).
+5. **Видалення документа з рядками ТЧ:** дія `delete` видаляє корінь, каскад ТЧ проходить. Тест — Задача 6 (`delete-cascade`).
+
+---
+
+## Структура файлів
+
+| Файл | Відповідальність |
+| --- | --- |
+| `packages/simetra/src/model/schemas/project.ts` | `COMMAND_SETTING`, `CommandContext` |
+| `packages/simetra/src/model/kinds/actions.ts` | `KindAction.natural` |
+| `packages/simetra/src/compiler/contracts.ts`, `compiler/rights/contracts.ts` | `RightsAction.natural`, `uniformExtents` |
+| `packages/simetra/src/compiler/rights/command-units.ts` (новий) | генератор `command` |
+| `packages/simetra/src/compiler/rights/predicates.ts` | `COMMAND_ACTION` |
+| `packages/simetra/src/compiler/access-units.ts` | політики запису й запобіжник контексту |
+| `packages/simetra/src/compiler/mechanics-units.ts` | `contentColumns` |
+| `packages/simetra/src/compiler/rights/effects-units.ts` (новий) | генератор `effects` |
+| `packages/simetra/src/compiler/{sql/units,pipeline}.ts` | генератори `command`, `effects` |
+| `packages/simetra/src/schema/reverse/units.ts`, `schema/apply/promotion/replacements.ts` | одиниці ефектів — платформні |
+| `packages/simetra/src/compiler/__tests__/fixtures/rights.ts` | шари `writeRoles()`, `writableRegister()` |
+| `packages/simetra/test/db/connection.ts` | `commandAs` |
+| `packages/simetra/test/db/rights-write.db.test.ts` (новий) | DB-сценарій запису |
+| `packages/designer/skills/simetra-metadata/SKILL.md` | запис командою, ефекти |
+
+Шари фікстури (`fixtures/rights.ts`, поверх `policyDomain()`):
+
+- `writeRoles(): Layer` — кастомна дія `reassign` на `Task` (`requires: ["read"]`, ефекти `{ dml: ["update"], header: ["assignee"], tabularSections: false }`); роль `TaskWriter` (`scopeKind: "org"`): `read`, `create`, `update`, `delete`, `reassign` на `Task` і `read`, `update` на `TaskComment` — `any`, `post` на `Task` — `own`; роль `TaskMarker` (`scopeKind: "org"`): `read`, `markDeletion` на `Task` — `any`; роль `ProjectWriter` (`assignedOn: { container: Project }`): `read`, `create`, `update` на `Task` — `any` (предикат контейнера не містить умови скоупу, тож лише на ньому мутація межі тенанта 2a2 дає інший результат). Експорти `TASK_WRITER_ID`, `TASK_MARKER_ID`, `PROJECT_WRITER_ID`, `REASSIGN_ACTION_ID`.
+- `writableRegister(): Layer` — незалежний регістр відомостей `RegionNotes` (`scope: "org"`, вимір `region` → `Region`, ресурс `note`, `access: [{ attribute: "region", dimension: "region" }]`); набір `RegionNoteWriters` — `read`, `write` на `RegionNotes` з обсягом виміру `region`; роль `TaskWriter` його включає (коли обидва шари). Експорт `REGION_NOTES_TABLE`.
+
+---
+
+### Задача 0: правки спек
+
+**Files:**
+- Modify: `docs/superpowers/specs/2026-10-17-rights-design.md` (§3, §5.3, §6.2)
+- Modify: `docs/superpowers/plans/2026-10-18-rights-2a1-command-role-functions.md` (таблиця рішень)
+
+- [ ] **Step 1:** §3 — після речення про ефекти: «природна дія за DML (`create` — вставка, `update` — оновлення, `delete` — видалення, `write` регістра — усі три) — факт реєстру; рядок ТЧ — природна дія власника для оновлення».
+- [ ] **Step 2:** §5.3:
+  - перше речення: дописати «значення — JSON `{"action", "object", "root"}`; розбирає його лише платформа: `simetra.command_action()` і `simetra.command_root(<мітка>)` (порожнє чи зіпсоване — відмова `42501`) і безвиняткова `simetra.command_current()` для тригера ефектів»;
+  - пункт про кореневий рядок: «політики запису — дві родини: кореневий рядок (`<ключ> = command_root(<мітка>)`) — право дії команди; решта рядків — право природної дії за DML; ТЧ — за колонкою власника з міткою власника; таблиця без одноколонкового ключа (регістр) — лише природна дія»;
+  - пункт про ефекти: «тригер платформи (`AFTER`, тож бачить рядок після всіх `BEFORE`-тригерів; функція `SECURITY DEFINER`, що повз RLS читає лише існування власника рядка ТЧ) відхиляє решту, зокрема DML поза ефектами дії й зміну обробника `beforeWrite`; зміна лише копій носіїв і колонок механіки — не дія»;
+  - пункт «порожнє чи відсутнє `simetra.command` — відмова»: дописати «(`RESTRICTIVE`-політики `<t>_command_*`)».
+- [ ] **Step 3:** §6.2 — після переліку кодів причини: «тригер ефектів відмовляє `42501` з `MESSAGE 'command.forbidden'` і `DETAIL 'effect'`, без даних рядка; рядок ТЧ кореня під дією без запису ТЧ видаляється лише каскадом — коли рядка власника вже немає; окремий рядок ТЧ живого документа — відмова `effect`».
+- [ ] **Step 4:** План 2a1, таблиця рішень — новий рядок після Р2a1-17: «Р2a1-17a | `rightsPredicates` приймає й дію контексту `COMMAND_ACTION` (план Права-2b1, Р2b1-5, Р2b1-6) | немає».
+- [ ] **Step 5:** Run: `python3 scripts/check-doc-anchors.py && pnpm format:check` — код 0.
+- [ ] **Step 6: Commit**
+
+```bash
+git add docs/superpowers/specs/2026-10-17-rights-design.md docs/superpowers/plans/2026-10-18-rights-2a1-command-role-functions.md
+git commit -m "docs(spec): контекст команди, політики запису двох родин і тригер ефектів"
+```
+
+---
+
+### Задача 1: природна дія й єдиний набір обсягів
+
+**Files:**
+- Modify: `packages/simetra/src/model/kinds/actions.ts`, `model/schemas/project.ts`, `model/schemas/index.ts`, `compiler/contracts.ts`, `compiler/rights/contracts.ts`
+- Test: `packages/simetra/src/compiler/__tests__/rights-contract.test.ts`
+
+**Interfaces:**
+- Produces: `KindAction.natural?: readonly Dml[]`; `RightsAction.natural: Dml[]`; `uniformExtents(actions: readonly RightsAction[], label: string): RightsExtent[]`; T0 `COMMAND_SETTING: "simetra.command"`, `interface CommandContext { action: string; object: string; root: string }`.
+
+- [ ] **Step 1: Write the failing tests (unit)** у `rights-contract.test.ts`:
+  - `it.each` над контрактами `kitchenSink()` і `policyDomain(writableRegister())`: `Task` — `natural` у `create`/`update`/`delete` — `["insert"]`/`["update"]`/`["delete"]`, у `markDeletion`, `post`, `read` — `[]`; `RegionNotes` — `write.natural` = `["insert", "update", "delete"]`.
+  - `it("every object's actions share one extent set")`: для кожного контракту обох фікстур `uniformExtents(c.actions, c.kindLabel)` повертає `c.actions[0].extents`, а кожна дія має рівно його.
+  - `it("uniformExtents refuses differing extent sets")`: дві дії з `[{ form: "any" }]` і `[{ form: "any" }, { form: "own" }]` → кидає `internal: rights actions of x differ in extents`.
+- [ ] **Step 2:** Run: `pnpm --filter simetra test rights-contract` — FAIL.
+- [ ] **Step 3: Implement:** `natural` у `createAction`, `updateAction`, `deleteAction`, `writeAction`; копіювання в `RightsAction` (`compiler/rights/contracts.ts`, поруч із `effects`), у кастомних — `[]`; перевірка «щонайбільше одна природна дія на DML» — `must`-подібна внутрішня помилка при побудові контракту; `uniformExtents` викликається й тут (контракт не будується з різними наборами). T0 сталі поруч із `PLATFORM_ROLES`, реекспорт. Коментар «чому» біля `natural` — Р2b1-7.
+- [ ] **Step 4:** Run: `pnpm --filter simetra test rights-contract rights-expand explain contracts` — PASS; точні очікування контрактів змінюються лише полем `natural`.
+- [ ] **Step 5: Commit**
+
+```bash
+git add packages/simetra/src
+git commit -m "feat(model): природна дія за DML у реєстрі й єдиний набір обсягів дій"
+```
+
+---
+
+### Задача 2: генератор контексту команди
+
+**Files:**
+- Create: `packages/simetra/src/compiler/rights/command-units.ts`
+- Modify: `packages/simetra/src/compiler/sql/units.ts` (`UnitGenerator` — `"command"`, `FIXED_BODY.command = true`), `compiler/pipeline.ts` (`sqlUnits`, `describeGenerated`)
+- Test: `packages/simetra/src/compiler/__tests__/command-units.test.ts` (новий), `creation-order.test.ts`
+
+**Interfaces:**
+- Consumes: `COMMAND_SETTING`, `PLATFORM_ROLES`, `executeGrants`, `hasRightsFunctions`, `generatedUnit`.
+- Produces: `COMMAND_FUNCTIONS: { parsed: QualifiedName; action: QualifiedName; root: QualifiedName; current: QualifiedName }` (схема `simetra`); `buildCommandUnits(contracts: Pick<Contracts, "roles" | "users">, provider: DatabaseProvider, module: string, parse: SqlParser): SqlUnit[]`.
+
+- [ ] **Step 1: Write the failing tests (unit)** `command-units.test.ts`:
+  - `it("renders no command functions without rights functions")`: `rightsFiles()` → жодної одиниці `generator: "command"`.
+  - `it("declares the command functions closed, invoker and for the command role only")` над `withRoles()`: ідентичності — `simetra.command_parsed(boolean)`, `command_action()`, `command_root(text)`, `command_current()`; дерево кожної — `LANGUAGE plpgsql`, `STABLE`, без `SECURITY DEFINER`, опція `search_path = ''`; гранти — `REVOKE … FROM PUBLIC` і ролей API, `GRANT EXECUTE … TO "simetra_command"` і нікому іншому.
+  - `it("parses the setting once")`: `current_setting(<COMMAND_SETTING>, true)` є лише в тілі `command_parsed`; інші три кличуть `simetra.command_parsed` (`true` у суворих, `false` у `command_current`).
+  - `creation-order.test.ts`: `command_parsed` створюється раніше за три поверхні.
+- [ ] **Step 2:** Run: `pnpm --filter simetra test command-units creation-order` — FAIL.
+- [ ] **Step 3: Implement** `command-units.ts` за зразком `compiler/rights/functions.ts` (`closedFunction`-форма, `dollarTag`). Тіло `command_parsed`: `current_setting(…, true)`; `NULL` чи `''` — суворий `RAISE` (`DETAIL 'missing'`) / безвиняткова повертає `NULL`; не об'єкт JSON, ключі ≠ рівно три, порожні `action`/`object`, `root` не UUID — `RAISE` (`DETAIL 'malformed'`) в обох (Р2b1-2). Підключити в `sqlUnits` після `rights`.
+- [ ] **Step 4:** Run: `pnpm --filter simetra test command-units creation-order platform-layer function-execute` — PASS.
+- [ ] **Step 5: Commit**
+
+```bash
+git add packages/simetra/src/compiler
+git commit -m "feat(compiler): функції контексту команди в схемі simetra"
+```
+
+---
+
+### Задача 3: політики запису двох родин і запобіжник контексту
+
+**Files:**
+- Modify: `packages/simetra/src/compiler/rights/predicates.ts`, `compiler/access-units.ts`
+- Modify: `packages/simetra/src/compiler/__tests__/fixtures/rights.ts` (шари `writeRoles()`, `writableRegister()`)
+- Test: `packages/simetra/src/compiler/__tests__/access-units.test.ts`, `rights-predicates.test.ts`, `creation-order.test.ts`
+
+**Interfaces:**
+- Consumes: `COMMAND_FUNCTIONS` (Задача 2), `uniformExtents`, `RightsAction.natural` (Задача 1).
+- Produces: `COMMAND_ACTION: unique symbol` (експорт `predicates.ts`); `rightsPredicates(contract, action: string | typeof COMMAND_ACTION, table, main?)`; `accessPolicyNames(table)` додає `commandInsert`, `commandUpdate`, `commandDelete`, `write(dml, family, label)` (Р2b1-11).
+
+- [ ] **Step 1: Write the failing tests (unit):**
+  - `rights-predicates.test.ts`: `it("the command action renders the context action, uncorrelated")` — для `Task` предикати з `COMMAND_ACTION` мають ті самі обсяги й носії, що з `"update"`, а в кожній умові з функцією прав перший аргумент — `(SELECT "simetra"."command_action"())`; правило §5.4 (2a1) — і над цими предикатами.
+  - `access-units.test.ts` над `policyDomain(writeRoles(), writableRegister())`:
+    - `it("guards every write command with the context")`: на `task`, `task_checklist`, `region_notes` — рівно `CREATE POLICY task_command_insert ON public.task AS RESTRICTIVE FOR INSERT TO simetra_command WITH CHECK ((SELECT "simetra"."command_action"()) IS NOT NULL);` і відповідні `_update` (`USING` і `WITH CHECK`) та `_delete` (`USING`) — цілі оператори.
+    - `it("binds the root row to the command action and the rest to the natural one")`: на `task` для кожного предиката `rightsPredicates(Task, COMMAND_ACTION)` — `task_update_root_<мітка>` `PERMISSIVE FOR UPDATE TO simetra_command USING ("id" = (SELECT "simetra"."command_root"('task')) AND <умови>) WITH CHECK (той самий вираз)`, а для кожного предиката `rightsPredicates(Task, "update")` — `task_update_rest_<мітка>` з `"id" IS DISTINCT FROM (…)`; `INSERT` — `rest` за `create`, `DELETE` — за `delete`.
+    - `it("a tabular section binds to its owner")`: `task_checklist` — умови родини за `parent_id` з міткою `task`; `rest` на всі три команди — за `update` власника.
+    - `it("a register writes by its natural action without a root family")`: `region_notes` — лише `region_notes_<dml>_rest_*` за `write`, без `command_root`; похідні таблиці `TaskHours` — жодної політики запису.
+    - `it("no write policies without rights functions or write actions")`: `rightsFiles()` — жодної `_command_*` і `_<dml>_*`; системні довідники прав (лише `read`) — жодної.
+    - наявний тест довжини імен (`policy names of a 60-byte table stay within 63 bytes`) — і над `commandInsert…` і `write(…)`, зокрема `update_root_in_<60-байтний контейнер>_own`; ідентичності політик таблиці не дублюються.
+  - `creation-order.test.ts`: ребро `simetra.command_root(text)` → `policy:public.task.task_update_root_any`.
+- [ ] **Step 2:** Run: `pnpm --filter simetra test access-units rights-predicates creation-order` — FAIL.
+- [ ] **Step 3: Implement:** у `rightsPredicates` — гілка `COMMAND_ACTION`: обсяги — `uniformExtents(contract.actions, contract.kindLabel)`, `head[0]` — вираз контексту; у `buildAccessUnits` — для таблиці з контрактом прав, коли `rightsOn`, таблиця не похідна (`origin.part`) і в контракті є дія з непорожнім `effects.dml`: запобіжник Р2b1-3 і родини Р2b1-4 (ключ кореневої родини — одноколонковий `primaryKey` основної таблиці чи колонка власника ТЧ; немає — родини немає); природна дія — за `natural` (Р2b1-7). Коментарі «чому» — Р2b1-3, Р2b1-4 (некорельованість умови родини). Шари фікстури — за описом вище.
+- [ ] **Step 4:** Run: `pnpm --filter simetra test access-units rights-predicates creation-order platform-layer` — PASS (`generated SQL never manages the command role itself` — без змін).
+- [ ] **Step 5: Commit**
+
+```bash
+git add packages/simetra/src/compiler
+git commit -m "feat(compiler): політики запису ролі команд — кореневий рядок і природна дія"
+```
+
+---
+
+### Задача 4: тригер ефектів дії
+
+**Files:**
+- Create: `packages/simetra/src/compiler/rights/effects-units.ts`
+- Modify: `packages/simetra/src/compiler/mechanics-units.ts` (`contentColumns`), `compiler/sql/units.ts` (`"effects"`, `FIXED_BODY.effects = true`), `compiler/pipeline.ts`, `compiler/stages/model.ts` чи місце `derivedFunctions` (імена функцій ефектів)
+- Test: `packages/simetra/src/compiler/__tests__/effects-units.test.ts` (новий), `mechanics-units.test.ts`, `creation-order.test.ts`
+
+**Interfaces:**
+- Consumes: `COMMAND_FUNCTIONS.current`, `RightsAction.effects`, `contentChangeCondition`, `carrierCopies`.
+- Produces: `contentColumns(table: Pick<PhysicalTable, "columns">, attributeCase: AttributeCase): PhysicalColumn[]`; `effectsTriggerNames(table: QualifiedName): { all: string; update: string }` (`<t>_simetra_effects`, `<t>_simetra_effects_update`); `effectsFunctionName(table: QualifiedName): QualifiedName`; `buildEffectsUnits(contracts: Pick<Contracts, "rights" | "roles" | "users">, physical: PhysicalSnapshot, attributeCase: AttributeCase, module: string, parse: SqlParser): SqlUnit[]`.
+
+- [ ] **Step 1: Write the failing tests (unit)** `effects-units.test.ts` над `policyDomain(writeRoles(), writableRegister())`, перевірки — на дереві PL/pgSQL:
+  - `it("checks the root row against the effects of the command action")`: функція `task` — виклик `simetra.command_current()`; ранній `RETURN NULL`, коли дії немає чи `object <> 'task'`; гілка на кожну дію `Task` (зокрема UUID `reassign`): дозволені `TG_OP` = `effects.dml`; для `markDeletion` — порівняння `OLD.<c> IS DISTINCT FROM NEW.<c>` рівно над `contentColumns(task)` без колонки позначки видалення; для `reassign` — без `assignee_id`; для `update` — порівнянь немає (`"all"`); гілка «інша дія» — `RAISE`.
+  - `it("a tabular section follows its owner's effects, deletion cascades")`: функція `task_checklist` — `parent_id` проти `root`; `update`, `create` — дозволено; `markDeletion`, `post`, `reassign`, `delete` — `RAISE`, крім `TG_OP = 'DELETE'` з `NOT EXISTS (SELECT 1 FROM <схема>.task WHERE org_id = OLD.org_id AND id = OLD.parent_id)` (пари — з `fieldForeignKey(task_checklist, "parent_id")`, кваліфіковане відношення).
+  - `it("the effects function is a closed definer granted to nobody")`: дерево кожної функції — `SECURITY DEFINER`, опція `search_path = ''`, жодного `GRANT EXECUTE`; єдине відношення в тілі — таблиця власника в `NOT EXISTS` (лише у функціях ТЧ). Мутація: прибрати умову скоупу з `NOT EXISTS` — тест форми вище червоніє.
+  - `it("fires after the row is final and skips copy-only updates")`: на `task_comment` (з копіями) — `task_comment_simetra_effects` `AFTER INSERT OR DELETE` і `task_comment_simetra_effects_update` `AFTER UPDATE … WHEN (<contentChangeCondition(task_comment)>)`; на `task` — один `AFTER INSERT OR UPDATE OR DELETE`; кожен `FOR EACH ROW`.
+  - `it("refuses with the effect code and no row data")`: кожен `RAISE` — `ERRCODE = '42501'`, `MESSAGE = 'command.forbidden'`, `DETAIL = 'effect'`; жодного `NEW.`/`OLD.` у `MESSAGE`, `DETAIL`, `HINT`.
+  - `it("reads no flags, depth or current user")`: у тілах немає `current_setting`, `pg_trigger_depth`, `current_user`, `session_user`.
+  - `it("no effects triggers on registers or without rights functions")`: `region_notes`, похідні `TaskHours`, `rightsFiles()` — нічого.
+  - `it("effects function names collide like carrier functions")` (Р2b1-11) — `physical.function-duplicate`.
+  - `mechanics-units.test.ts`: `it("content columns are one list for the condition and the effects")` — `contentChangeCondition(t)` будується рівно з `contentColumns(t)` (на `task_report` генерована колонка періоду поза переліком).
+- [ ] **Step 2:** Run: `pnpm --filter simetra test effects-units mechanics-units creation-order` — FAIL.
+- [ ] **Step 3: Implement** `effects-units.ts` за зразком `carrier-units.ts` (`generatedUnit`, `requires` — таблиця й `command_current`); `contentChangeCondition` переписати через `contentColumns`. Коментарі «чому»: `AFTER` — Р2b1-8 (незалежність від порядку); `WHEN` — зміна лише копій не дія; каскад ТЧ — Р2b1-9.
+- [ ] **Step 4:** Run: `pnpm --filter simetra test effects-units mechanics-units carrier-units subscription-units creation-order platform-layer` — PASS.
+- [ ] **Step 5: Commit**
+
+```bash
+git add packages/simetra/src/compiler
+git commit -m "feat(compiler): тригер дозволених ефектів дії команди"
+```
+
+---
+
+### Задача 5: зворотна генерація й промоція впізнають нові одиниці
+
+**Files:**
+- Modify: `packages/simetra/src/schema/reverse/units.ts` (`platformTriggerFunction`, `isPlatformTrigger`), `schema/apply/promotion/replacements.ts`
+- Test: `packages/simetra/src/schema/apply/__tests__/promotion-removals.test.ts`, тест зворотної генерації поруч із розпізнавачем (`orient platformTriggerFunction`)
+
+- [ ] **Step 1: Write the failing tests (unit):**
+  - зворотна генерація: `it("recognizes effects triggers and functions as platform")` — бажаний стан `policyDomain(writeRoles())` туди-назад не пише `<t>_simetra_effects`, `<t>_simetra_effects_update`, `<t>_simetra_effects()` і функцій `simetra.command_*` як дослівних одиниць; тригер з іменем `<t>_simetra_effects`, що кличе іншу функцію, — дослівний.
+  - `promotion-removals.test.ts`: `it("an effects trigger is never a replacement of an adopted trigger")` — прийнятий тригер `AFTER UPDATE` на промотованій таблиці, бажаний стан лише з тригером ефектів → `plan.platform-replacement-missing`; `it("write rights policies of the command role are listed under access")` — у пункті `access:<таблиця>` рядки `created <t>_update_root_any … adds roles simetra_command` (Р2b1-12).
+- [ ] **Step 2:** Run: `pnpm --filter simetra test promotion-removals reverse-generate` — FAIL на нових кейсах розпізнавача (кейс `access` може пройти одразу — він фіксує наявну поведінку).
+- [ ] **Step 3: Implement** за Р2b1-12.
+- [ ] **Step 4:** Run: `pnpm --filter simetra test promotion-removals reverse-generate` — PASS.
+- [ ] **Step 5: Commit**
+
+```bash
+git add packages/simetra/src/schema
+git commit -m "fix(schema): промоція й зворотна генерація впізнають тригер ефектів і функції контексту"
+```
+
+---
+
+### Задача 6: DB-сценарій запису під роллю команд
+
+**Files:**
+- Create: `packages/simetra/test/db/rights-write.db.test.ts`
+- Modify: `packages/simetra/test/db/connection.ts` (`commandAs`), `test/db/rights-seed.ts` (засів, якщо спільний з `rights-policies`)
+- Modify: `packages/designer/src/schema-engine/__tests__/engine-desired-corpus.db.test.ts` (модель з новими одиницями — у корпус)
+
+**Interfaces:**
+- Produces: `commandAs<T>(client: pg.Client, claims: Record<string, unknown>, context: CommandContext | string | undefined, sql: string, params?: unknown[]): Promise<{ rows: T[] } | { code: string }>` — точка збереження, `request.jwt.claims`, `set_config(COMMAND_SETTING, …, true)` (рядок — сирий, для кейсу зіпсованого; `undefined` — не ставити), перемикання ролі за обраним шляхом Р2b1-13, запит, відкат до точки збереження.
+
+Причина DB-рівня (шапка файлу): які рядки пише роль під RLS запису, що відхиляє тригер `AFTER` і як каскад ТЧ проходить тригер — вирішує Postgres.
+
+- [ ] **Step 1: Перевірити механізм ролі** (Р2b1-13): у транзакції опису, у точці збереження — `GRANT simetra_command TO CURRENT_USER WITH SET TRUE`; успіх — перший шлях, помилка — відкат точки й запасний шлях; записати обраний у коментар опису.
+- [ ] **Step 1a: Перевірити два факти Postgres** (Р2b1-8, Р2b1-9), до кейсів, на розгорнутій моделі: (1) під час каскаду `DELETE FROM task WHERE id = T3` тимчасовий `AFTER DELETE`-тригер на `task_checklist`, що записує результат `EXISTS (SELECT 1 FROM task WHERE id = OLD.parent_id)` у тимчасову таблицю, дає `false` — власник уже не видимий; (2) функція `SECURITY DEFINER` бачить рядок `task`, якого роль `simetra_command` під своїми політиками читання не бачить. Обидва — у точці збереження з відкатом. **Якщо (1) дає `true` — стоп і звіт архітектору**, без кейсів далі.
+- [ ] **Step 2: Write the test** — один опис, одне розгортання (`describeTransaction`): компіляція `policyDomain(writeRoles(), writableRegister())`, `renderDesiredState`, розгортання, гранти Р2b1-13, засів власником: організації A, B; учасники `w1` (A, `TaskWriter`), `w2` (A, `TaskMarker`), `w3` (B, `TaskWriter`), `w4` (A, лише `ProjectWriter` на `P1`); проєкти `P1` (A), `PB` (B); задачі A у `P1`: `T1` (`assignee` = w2), `T2` (`assignee` = w1), `T3` з рядками `checklist` і коментарем; задача B `TB` у `PB`; рядок `MemberRegion` w1 → `r1`. Кейси — `commandAs(…)`, кожен у точці збереження:
+
+| case | user, контекст | запит | очікування |
+| --- | --- | --- | --- |
+| `no-context` | w1, без контексту | `UPDATE task SET note = 'x' WHERE id = T2`; `INSERT INTO region_notes …` | `42501`; `42501` |
+| `malformed-context` | w1, `'{"action":"update"}'` | `UPDATE task … WHERE id = T2` | `42501` |
+| `root-transition` | w2, `markDeletion/task/T1` | `UPDATE task SET deletion_mark = true WHERE id = T1 RETURNING id` | 1 рядок (`markDeletion` без `update`) |
+| `rest-needs-natural` | w2, `markDeletion/task/T1` | `UPDATE task SET deletion_mark = true WHERE id = T2 RETURNING id` | 0 рядків (T2 — природна `update`, якої в w2 немає) |
+| `post-extent` | w1, `post/task/T1`; `post/task/T2` | `UPDATE task SET posted = true WHERE id = <корінь> RETURNING id` | T1 (чужа) — 0 рядків, хоч `update@any` є; T2 (своя) — 1 |
+| `root-effect` | w2, `markDeletion/task/T1` | `UPDATE task SET deletion_mark = true, note = 'x' WHERE id = T1` | `42501` (тригер) |
+| `root-dml` | w1, `update/task/T2` | `DELETE FROM task WHERE id = T2` | `42501` (тригер: `DELETE` ∉ ефектів `update`) |
+| `tabular-transition` | w2, `markDeletion/task/T1`; w1, `update/task/T1` | `INSERT INTO task_checklist (parent_id = T1, …)` | `42501`; успіх |
+| `delete-cascade` | w1, `delete/task/T3` | `DELETE FROM task WHERE id = T3` | 1 рядок; рядки `checklist` T3 зникли |
+| `delete-single-line` | w1, `delete/task/T3` | `DELETE FROM task_checklist WHERE parent_id = T3 AND <один рядок>` | `42501` (тригер: власник живий) |
+| `copy-only` | w1, `reassign/task/T3` | `UPDATE task SET assignee_id = w2 WHERE id = T3` | 1 рядок; копії `assignee_id` у `task_checklist` T3 = w2 |
+| `tenant-boundary` | w4, `update/task/TB`; `create/task/<новий id>`; `update/task/T2` | `UPDATE task … WHERE id = TB RETURNING id`; `INSERT INTO task (id = <новий>, org_id = B, project_id = P1, …)`; `UPDATE task SET org_id = B WHERE id = T2` | 0 рядків; `42501` (RLS — раніше за FK `AFTER`); `42501` |
+| `register-dimension` | w1, `write/region_notes/<будь-який uuid>` | `INSERT INTO region_notes (org_id = A, region_id = r1, …)`; те саме з `r2` | успіх; `42501` |
+
+  Кейс `no-context` пише в `region_notes` рядок з `region_id = r1` (без запобіжника його пропустила б природна `write@region`).
+| `create-root` | w1, `create/task/<новий id>` | `INSERT INTO task (id = <новий>, org_id = A, …)` | успіх |
+
+- [ ] **Step 3:** `engine-desired-corpus.db.test.ts` — модель `policyDomain(writeRoles(), writableRegister())` у корпус поруч із `policyDomain()`: функції контексту, тригери ефектів з `WHEN` і `RESTRICTIVE`/`PERMISSIVE`-політики запису проходять туди-назад.
+- [ ] **Step 4:** Run: `pnpm --filter simetra exec vitest run --project db rights-write rights-policies` і `pnpm --filter @simetrajs/designer exec vitest run --project db engine-desired-corpus` — PASS. **Мутаційний доказ** (вручну, без коміту; кожна мутація червонить свій кейс):
+
+| Мутація | Червоніє |
+| --- | --- |
+| прибрати `<t>_command_*` | `no-context` (регістр) |
+| `command_parsed` приймає ключі понад три / без `root` | `malformed-context` |
+| у кореневій родині `COMMAND_ACTION` → природна дія | `root-transition`, `post-extent` |
+| прибрати умову `IS DISTINCT FROM` з родини «решта» | `rest-needs-natural` |
+| прибрати порівняння шапки в тригері | `root-effect` |
+| прибрати перевірку `TG_OP` ∈ `effects.dml` | `root-dml` |
+| прибрати перевірку `tabularSections` у ТЧ | `tabular-transition` (перший запит) |
+| прибрати виняток каскаду | `delete-cascade` |
+| прибрати умову `NOT EXISTS` (виняток на будь-який `DELETE`) | `delete-single-line` |
+| прибрати `WHEN (<contentChangeCondition>)` з `_effects_update` | `copy-only` |
+| прибрати `<t>_scope_update` (2a2) | `tenant-boundary` (третій запит: `23503` складеного FK замість `42501`) |
+| прибрати `<t>_scope_insert` (2a2) | `tenant-boundary` (другий запит: `23503` замість `42501`) |
+| у регістрі предикат виміру → `any` | `register-dimension` (другий запит) |
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add packages/simetra/test/db packages/designer/src
+git commit -m "test(db): запис під роллю команд — родини політик, ефекти дії й межа тенанта"
+```
+
+---
+
+### Задача 7: скіл, гейти й заміри
+
+**Files:**
+- Modify: `packages/designer/skills/simetra-metadata/SKILL.md`, `docs/ROADMAP.md`, цей план (позначки)
+
+- [ ] **Step 1:** Скіл споживача (англійською): таблиці виду пише лише команда; кореневий рядок команди — право дії команди, решта — природна дія за DML; дія-перехід (`post`, `markDeletion`, кастомна) змінює лише свої колонки шапки й не пише ТЧ; обробник `beforeWrite`, що під переходом змінює іншу колонку, дає відмову — обчислення під проведенням у хук команди чи в ефекти кастомної дії.
+- [ ] **Step 2:** Run: `pnpm format:check && pnpm lint && pnpm typecheck && pnpm test` — код 0.
+- [ ] **Step 3:** Run: `pnpm metadata:check && python3 scripts/check-doc-anchors.py && .agents/skills/codebase-research/scripts/orient --plan docs/superpowers/plans/2026-10-24-rights-2b1-write-policies-effects.md` — код 0.
+- [ ] **Step 4:** Повний `pnpm test:db` на одному SHA (у фоні, таймаут не коротший за 45 хв): `/usr/bin/time -f %e pnpm test:db` — код 0 (або CI job `db`, якщо стеку немає); приріст проти прогону після 2a2 ≤ 15 с, інакше звіт архітектору з розкладом за файлами.
+- [ ] **Step 5:** ROADMAP — рядок прав: «Права-2b1 виконано»; позначки плану.
+- [ ] **Step 6: Commit**
+
+```bash
+git add packages/designer/skills docs/ROADMAP.md docs/superpowers/plans/2026-10-24-rights-2b1-write-policies-effects.md
+git commit -m "docs(plan): Права-2b1 виконано — скіл, ROADMAP, позначки"
+```
+
+## Критерії приймання
+
+- `pnpm format:check && pnpm lint && pnpm typecheck && pnpm test`, `pnpm metadata:check`, `python3 scripts/check-doc-anchors.py` — зелені після **кожного** коміту; повний `pnpm test:db` — зелений на одному SHA, приріст записано (≤ 15 с).
+- Згенерований SQL не дає DML ролі команд і не керує нею (тест 2a1 без змін).
+- Кожна умова права в політиці запису — з `rightsPredicates`; дія контексту — лише через `COMMAND_ACTION`; інваріант єдиного набору обсягів тримає `uniformExtents` (Задача 1).
+- `simetra.command` розбирає одна функція; суворі поверхні відмовляють `42501`, тригер — без винятку на відсутньому контексті (Задача 2).
+- Кожен запобіжник Задачі 6 має мутаційний доказ з її таблиці.
+- Спека прав §3, §5.3, §6.2 і таблиця 2a1 оновлені (Задача 0).
