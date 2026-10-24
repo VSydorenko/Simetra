@@ -6,6 +6,7 @@ import {
   GLOBAL_ROLES_FILE,
   GLOBAL_ROLES_ID,
   GRANT_FILE,
+  MEMBER_FILE,
   ORG_ASSIGNMENTS_FILE,
   ORG_ASSIGNMENTS_ID,
   ORG_KIND_ID,
@@ -14,7 +15,9 @@ import {
   ORG_ROLES_ID,
   PROJECT_FILE,
   PROJECT_LEAD_ID,
+  REGION_FILE,
   ROLE_FILE,
+  USERS_FILE,
   adoptedMembership,
   compileRights,
   globalGrantsSource,
@@ -560,6 +563,38 @@ describe("system rights catalog checks", () => {
         params,
       }))
     ).toEqual(expected)
+  })
+})
+
+// Рядки людей і їхніх прав не відкриваються `publicRead` (Р2a2-33): він
+// зняв би межу тенанта й межу видимості «Користувачів».
+describe("publicRead on catalogs of people and their rights", () => {
+  const publicCodes = async (file: string) => {
+    const result = await compileRights(
+      withRoles({ [file]: { publicRead: "anon" } })
+    )
+    return result.diagnostics
+      .filter((d) => d.code === "rights.public-read-forbidden")
+      .map(({ file, pointer, params }) => ({ file, pointer, params }))
+  }
+
+  it.each([
+    { file: USERS_FILE, object: "Users", holds: "users" },
+    { file: MEMBER_FILE, object: "OrgMember", holds: "membership" },
+    { file: ORG_ROLES_FILE, object: "OrgRoles", holds: "rightsRoles" },
+    {
+      file: ORG_ASSIGNMENTS_FILE,
+      object: "OrgRoleAssignments",
+      holds: "roleAssignments",
+    },
+  ])("forbids it on $object ($holds)", async ({ file, object, holds }) => {
+    expect(await publicCodes(file)).toEqual([
+      { file, pointer: "/publicRead", params: { object, holds } },
+    ])
+  })
+
+  it("allows it on an ordinary catalog", async () => {
+    expect(await publicCodes(REGION_FILE)).toEqual([])
   })
 })
 

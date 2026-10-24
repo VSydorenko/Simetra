@@ -132,6 +132,7 @@ export const COMPILER_RULES = [
   "rights.source-container-column",
   "rights.scope-kind-unknown",
   "rights.users-missing",
+  "rights.public-read-forbidden",
   "rights.include-target",
   "rights.include-cycle",
   "rights.scope-without-membership",

@@ -40,6 +40,16 @@ const COPY_OWNERS_HINT = {
   uk: "Нічого не записано. Відновіть копію роллю плану з `pg_restore --no-owner`, щоб її об'єктами, як і на цілі, володіла роль плану, і повторіть репетицію.",
 }
 
+/** Що тримають рядки довідника, на якому `publicRead` заборонено (Р2a2-33). */
+const PEOPLE_ROWS: Record<string, { en: string; uk: string }> = {
+  users: { en: "the users", uk: "користувачів" },
+  membership: { en: "the members", uk: "учасників" },
+  rightsRoles: { en: "the roles", uk: "ролі" },
+  roleAssignments: { en: "the role assignments", uk: "призначення ролей" },
+}
+const peopleRows = (holds: string | number | undefined, locale: Locale) =>
+  PEOPLE_ROWS[String(holds)]?.[locale] ?? String(holds)
+
 /**
  * Перевірки ідентичності цілі фази 4e (рішення 1 плану П3-2b-3): це не секції
  * відбитка каталогу, тож відмова `apply.target-changed` називає їх окремо.
@@ -1820,6 +1830,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     hint: {
       en: "Declare a catalog with role: users, or an adopted membership source on a provider where the user id is the session subject.",
       uk: "Оголосіть довідник з role: users або прийняте джерело членства на провайдері, де id користувача — суб'єкт сесії.",
+    },
+  },
+  "rights.public-read-forbidden": {
+    en: (p) =>
+      `publicRead on "${p.object}" would open ${peopleRows(p.holds, "en")} of every tenant to guests and every user`,
+    uk: (p) =>
+      `publicRead на "${p.object}" відкрив би гостям і кожному користувачу ${peopleRows(p.holds, "uk")} всіх тенантів`,
+    hint: {
+      en: "Drop publicRead: rows of people and their rights are read through roles. For public profiles declare a separate catalog with the public fields and a reference to the users catalog.",
+      uk: "Приберіть publicRead: рядки людей і їхніх прав читають через ролі. Для публічних профілів оголосіть окремий довідник з публічними полями й посиланням на «Користувачі».",
     },
   },
   "rights.include-target": {

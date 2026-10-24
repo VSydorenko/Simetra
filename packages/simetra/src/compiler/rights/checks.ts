@@ -5,6 +5,7 @@ import {
   type CustomAction,
   type PhysicalTable,
   type Project,
+  type RightsSystemCatalog,
   type ScopeKind,
 } from "simetra/model"
 import { mainTableOf } from "../contracts"
@@ -141,7 +142,50 @@ export function checkRights(ctx: RightsCheckContext): Diagnostic[] {
   diagnostics.push(...checkDimensions(ctx, carriers))
   diagnostics.push(...checkSources(ctx))
   diagnostics.push(...checkUsers(ctx))
+  diagnostics.push(...checkPublicRead(ctx))
   return diagnostics
+}
+
+/**
+ * `publicRead` заборонено на довідниках, рядки яких — люди чи їхні права
+ * (Р2a2-33): він знімає межу тенанта (Р2a2-3) і відкриває всі рядки гостю й
+ * кожному користувачу, тож гість бачив би більше за учасника — межа
+ * видимості «Користувачів» (спека системної схеми §12) і членства з
+ * призначеннями зникли б. Публічні профілі — окремий довідник з посиланням
+ * на «Користувачі».
+ */
+function checkPublicRead(ctx: RightsCheckContext): Diagnostic[] {
+  return ctx.objects.flatMap((object) => {
+    if ((object.data as { publicRead?: unknown }).publicRead === undefined) {
+      return []
+    }
+    const holds = peopleRowsOf(object)
+    return holds === undefined
+      ? []
+      : [
+          diagnostic(
+            "rights.public-read-forbidden",
+            object.file,
+            "/publicRead",
+            {
+              object: object.name,
+              holds,
+            }
+          ),
+        ]
+  })
+}
+
+/**
+ * Що з людей чи їхніх прав тримають рядки об'єкта; `undefined` — нічого.
+ * Роль системного довідника прав — з хука реєстру (Р2a1-23).
+ */
+function peopleRowsOf(
+  object: ParsedObject
+): "users" | "membership" | RightsSystemCatalog | undefined {
+  if (isUsers(object)) return "users"
+  if (isMembershipCatalog(object)) return "membership"
+  return KIND_REGISTRY[object.kind].rightsSystem?.(object.data)
 }
 
 /**

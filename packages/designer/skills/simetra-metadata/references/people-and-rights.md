@@ -192,7 +192,10 @@ role and a users catalog:
 - A table of a kind is read only through a role's `read` right on its object,
   at the extent of the grant (`any`, `own`, a dimension, in a container); its
   tabular sections and a register's movements and totals follow the object.
-  `publicRead` opens every row instead and needs no right.
+  `publicRead` opens every row instead and needs no right. It is an error
+  (`rights.public-read-forbidden`) on the users catalog, a membership catalog
+  and the rights system catalogs: for public profiles declare a separate
+  catalog with the public fields and a reference to the users catalog.
 - A scoped object is read only inside the reader's scopes, and only through a
   role assigned there: membership in a tenant without a role reads nothing.
 - The users catalog shows only yourself and the users of members of your
