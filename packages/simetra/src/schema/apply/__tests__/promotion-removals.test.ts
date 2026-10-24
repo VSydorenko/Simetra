@@ -2,6 +2,7 @@ import { beforeAll, describe, expect, it } from "vitest"
 import {
   applyChanges,
   compile,
+  type CompiledModel,
   loadSqlParser,
   promoteObject,
   type PromotionObject,
@@ -1457,37 +1458,51 @@ describe("access and permission items", () => {
     ])
   })
 
-  it("write rights policies of the command role are listed under access", async () => {
-    // Р2b1-12: політики запису ролі команд, яких прийнята таблиця не мала, —
-    // `extra … adds roles simetra_command` у пункті `access:<таблиця>`; код
-    // `addedRoles` не змінено, тест фіксує поведінку над справжнім виходом
+  describe("write rights policies of the command role", () => {
+    // Компіляція «до» й промоція — у `beforeAll`: разом з компіляцією «після»
+    // це три повні компіляції домену політик, які в одному `it` під
+    // паралельним `pnpm test` упирались у таймаут.
     const files = policyDomain(writeRoles(), promotableTag())
-    const before = (await compile(files)).model!
-    let n = 950_000
-    const result = await promoteObject(files, tagMapping(), {
-      schemaPath: (file, schemaFile) => `schemas-of/${file}/${schemaFile}`,
-      newId: () => uuid(++n),
+    let before: CompiledModel
+    let result: Awaited<ReturnType<typeof promoteObject>>
+    beforeAll(async () => {
+      before = (await compile(files)).model!
+      let n = 950_000
+      result = await promoteObject(files, tagMapping(), {
+        schemaPath: (file, schemaFile) => `schemas-of/${file}/${schemaFile}`,
+        newId: () => uuid(++n),
+      })
     })
-    expect(result.diagnostics).toEqual([])
-    const after = (await compile(applyChanges(files, result.changes))).model!
-    const catalogOf = (m: typeof after): CatalogModel => ({
-      tables: catalogFromSnapshot(m.physical).tables,
-      enumTypes: [],
-      units: m.sqlUnits.map((u) => ({
-        class: u.class,
-        identity: u.identity,
-        schema: u.schema,
-        name: u.name,
-        sql: u.sql,
-      })),
+
+    it("are listed under access", async () => {
+      // Р2b1-12: політики запису ролі команд, яких прийнята таблиця не мала, —
+      // `extra … adds roles simetra_command` у пункті `access:<таблиця>`; код
+      // `addedRoles` не змінено, тест фіксує поведінку над справжнім виходом
+      expect(result.diagnostics).toEqual([])
+      const after = (await compile(applyChanges(files, result.changes))).model!
+      const catalogOf = (m: CompiledModel): CatalogModel => ({
+        tables: catalogFromSnapshot(m.physical).tables,
+        enumTypes: [],
+        units: m.sqlUnits.map((u) => ({
+          class: u.class,
+          identity: u.identity,
+          schema: u.schema,
+          name: u.name,
+          sql: u.sql,
+        })),
+      })
+      const changes = access(
+        result.record!,
+        catalogOf(before),
+        catalogOf(after)
+      )
+      expect(changes.map((c) => `${c.table.schema}.${c.table.name}`)).toEqual([
+        "public.tag",
+      ])
+      expect(changes[0]!.policies).toContain(
+        "extra policy:public.tag.tag_update_root_any adds roles simetra_command"
+      )
     })
-    const changes = access(result.record!, catalogOf(before), catalogOf(after))
-    expect(changes.map((c) => `${c.table.schema}.${c.table.name}`)).toEqual([
-      "public.tag",
-    ])
-    expect(changes[0]!.policies).toContain(
-      "extra policy:public.tag.tag_update_root_any adds roles simetra_command"
-    )
   })
 
   it("counts an adopted policy for public as the user role", () => {
