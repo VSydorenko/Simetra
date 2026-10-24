@@ -23,6 +23,7 @@ import {
   TASK_FILE,
   TASK_NOTE_ADOPTED_TABLE,
   taskNoteMapping,
+  uuid,
 } from "../../../../simetra/test/support"
 import { inTarget, query } from "../../__tests__/support/db"
 import {
@@ -91,6 +92,38 @@ function sourceFiles(): Map<string, string> {
   return files
 }
 
+/** Нова ТЧ коментаря в цільовій моделі: її таблицю план створює. */
+const LINKS_TABLE = "task_comment_links"
+
+/**
+ * Цільова модель звичайного плану: `policyDomain()` і нова ТЧ `links`
+ * коментаря, чия копія читає копію шляху коментаря. Таблицю створює двигун,
+ * рядків у ній немає, тож кроку копій їй не належить — без неї вибір
+ * створених таблиць у плані ніщо б не тримало.
+ */
+function targetFiles(): Map<string, string> {
+  const files = policyDomain()
+  const comment = JSON.parse(files.get(COMMENT_FILE)!) as {
+    tabularSections: unknown[]
+  }
+  comment.tabularSections.push({
+    id: uuid(6903),
+    name: "links",
+    physicalName: LINKS_TABLE,
+    attributes: [
+      {
+        id: uuid(6904),
+        name: "url",
+        physicalName: "url",
+        type: "String",
+        length: 200,
+      },
+    ],
+  })
+  files.set(COMMENT_FILE, JSON.stringify(comment))
+  return files
+}
+
 /** Ціль у межах схем моделі: `policyDomain()` живе в `public`. */
 async function inModelTarget<T>(
   model: CompiledModel,
@@ -127,7 +160,7 @@ const one = async <R extends Record<string, unknown>>(
 describe.concurrent("carrier copy steps on live rows", () => {
   it("a plain plan backfills a path copy and the tabular copy reading it", async () => {
     const before = await compiled(sourceFiles())
-    const after = await compiled(policyDomain())
+    const after = await compiled(targetFiles())
     const id = {
       org: randomUUID(),
       u1: randomUUID(),
@@ -176,11 +209,19 @@ describe.concurrent("carrier copy steps on live rows", () => {
         )
       const versionBefore = await commentVersion()
       const counterBefore = await counter()
+      // Позитивний контроль: підписка `onWrite` спрацювала на кожній вставці
+      // коментаря, тож «лічильник не зріс» нижче — не порожній висновок
+      expect(counterBefore).toEqual({ n: 2 })
 
       const artifact = planned(
         await buildPlan(engine, dbs, after, { target: { url } }, [])
       )
-      // Р2b2-3: копія вкладення читає копію коментаря — її оператор пізніше
+      // Id кроків наскрізні: кроки копій продовжують нумерацію двигуна
+      expect(artifact.steps.map((s) => s.id)).toEqual(
+        artifact.steps.map((_, i) => `s${i + 1}`)
+      )
+      // Р2b2-3: копія вкладення читає копію коментаря — її оператор пізніше;
+      // створена планом таблиця `links` кроку не має
       expect(carrierTables(artifact)).toEqual([
         CHECKLIST_TABLE,
         COMMENT_TABLE,
@@ -194,6 +235,18 @@ describe.concurrent("carrier copy steps on live rows", () => {
       })
       expect(outcome.diagnostics).toEqual([])
       expect(outcome.status).toBe("committed")
+
+      // Створена таблиця теж несе копію: без неї відсутність її кроку вище
+      // нічого б не доводила
+      expect(
+        await query(
+          url,
+          `select column_name from information_schema.columns
+            where table_schema = 'public' and table_name = $1
+              and column_name = 'task_id_assignee_id'`,
+          [LINKS_TABLE]
+        )
+      ).toEqual([{ column_name: "task_id_assignee_id" }])
 
       // Р2b2-10: тригери ефектів є на кожній таблиці кроку — інакше висновок
       // «тригер мовчить» нижче доводився б порожньо
