@@ -62,6 +62,12 @@ const EXCEPTIONS: Record<string, string> = Object.fromEntries([
     [`${kind}.kind`, "read by stage 1"],
     [`${kind}.name`, "read by stage 1"],
   ]),
+  // Схема `access` спільна для видів, а регістр мапить доступ лише на свій
+  // вимір (Р2a2-4): шлях на регістрі — завжди `rights.register-access-dimension`,
+  // тож валідна модель його не має. Форму шляху ратчет бачить на об'єктах
+  // (`Item`, `Sale`) — Р2a2-25.
+  ["AccumulationRegister.access.ref", "register path is an error (Р2a2-4)"],
+  ["InformationRegister.access.ref", "register path is an error (Р2a2-4)"],
 ])
 
 /**

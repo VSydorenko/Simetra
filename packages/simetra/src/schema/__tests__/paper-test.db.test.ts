@@ -10,6 +10,7 @@ import {
   type CatalogDiff,
 } from "../../../test/db/diff"
 import { readReferenceDomain } from "../../compiler/__tests__/fixtures/reference-domain"
+import { expectClean } from "../../compiler/__tests__/helpers"
 
 /**
  * Паперовий тест (спека П2 §10.2, М4): рукописна «прийнята» форма документа
@@ -40,7 +41,7 @@ const TABLES = [
 describe("paper test", () => {
   it("compiled minus accepted is exactly the kind's standard elements", async () => {
     const result = await compile(readReferenceDomain())
-    expect(result.diagnostics).toEqual([])
+    expectClean(result, { allow: ["rights.scope-kind-unread"] })
     const expected = JSON.parse(
       readFileSync(new URL("expected-diff.json", ACCEPTED), "utf8")
     ) as CatalogDiff

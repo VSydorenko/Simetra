@@ -7,6 +7,7 @@ import {
   type CompiledModel,
 } from "simetra/compiler"
 import {
+  expectClean,
   SALE_FILE,
   STOCK_FILE,
   attribute,
@@ -120,7 +121,7 @@ async function compileModel(
   files: ReadonlyMap<string, string>
 ): Promise<CompiledModel> {
   const result = await compile(files)
-  expect(result.diagnostics).toEqual([])
+  expectClean(result, { allow: ["rights.scope-kind-unread"] })
   return result.model!
 }
 

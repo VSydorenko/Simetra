@@ -39,7 +39,7 @@ describe("rights container", () => {
     const task = await contractOf(files, TASK_ID)
     expect(task.binding).toEqual({
       containerId: PROJECT_ID,
-      carrier: { column: "project_id" },
+      carrier: { column: "project_id", value: "project_id" },
     })
     expect(task.container).toBeUndefined()
     const project = await contractOf(files, PROJECT_ID)

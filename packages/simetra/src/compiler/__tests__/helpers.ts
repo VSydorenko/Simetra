@@ -4,6 +4,8 @@ import {
   toSnakeCase,
   type MetadataKind,
 } from "simetra/model"
+import { expect } from "vitest"
+import type { Diagnostic, RuleCode } from "../diagnostics"
 import { readFiles, sqlStage } from "../pipeline"
 import { debtUnits } from "../sql/debt"
 import { loadSqlParser } from "../sql/parse"
@@ -30,6 +32,23 @@ export function withoutMechanics<T extends Pick<SqlUnit, "generator">>(
   units: readonly T[]
 ): T[] {
   return units.filter((u) => u.generator !== "mechanics")
+}
+
+/**
+ * Компіляція чиста: помилок немає, а кожне попередження має код з `allow`.
+ * Дозвіл — лише явними кодами: перевірка, що дозволяє попередження, не
+ * пропускає ні помилки, ні іншого попередження, тож новий код не тоне мовчки.
+ */
+export function expectClean(
+  result: { diagnostics: readonly Diagnostic[] },
+  options: { allow?: readonly RuleCode[] } = {}
+): void {
+  const allow = options.allow ?? []
+  expect(
+    result.diagnostics.filter(
+      (d) => d.severity === "error" || !allow.includes(d.code)
+    )
+  ).toEqual([])
 }
 
 /** Детермінований UUID v4 для фікстур: номер видно в самому id. */

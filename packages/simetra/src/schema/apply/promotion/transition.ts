@@ -73,7 +73,21 @@ const markerSnapshotSchema = z.looseObject({
             name: z.string(),
             type: z.string(),
             notNull: z.boolean(),
-            origin: z.looseObject({ elementId: z.string().optional() }),
+            origin: z.looseObject({
+              elementId: z.string().optional(),
+              // Копія носія (Р2a2-11): план відмовляє, коли бажана копія не
+              // була копією з тим самим джерелом
+              copyOf: z
+                .looseObject({
+                  table: z.looseObject({
+                    schema: z.string(),
+                    name: z.string(),
+                  }),
+                  column: z.string(),
+                  through: z.string(),
+                })
+                .optional(),
+            }),
           })
         ),
         primaryKey: z.looseObject({ name: z.string() }).optional(),
@@ -106,6 +120,13 @@ function markerSnapshot(marker: MarkerRecord): MarkerSnapshot {
     tables: parsed.data.physical.tables as unknown as PhysicalTable[],
   }
 }
+
+/**
+ * Фізичні таблиці знімка marker: стан останнього застосування, з яким план
+ * звіряє копії носіїв (Р2a2-11).
+ */
+export const markerTables = (marker: MarkerRecord): PhysicalTable[] =>
+  markerSnapshot(marker).tables
 
 /** Види, у які промоція вміє перетворювати: їх задає вхід операції. */
 const PROMOTION_KINDS: ReadonlySet<MetadataKind> = new Set(

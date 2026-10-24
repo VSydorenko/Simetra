@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { compile } from "simetra/compiler"
 import {
+  expectClean,
   SALE_FILE,
   STOCK_FILE,
   attribute,
@@ -18,7 +19,7 @@ const SALE_SQL = "documents/Sale/Sale.sql"
 
 async function units(entries: Record<string, unknown>) {
   const result = await compile(metaFiles(entries))
-  expect(result.diagnostics).toEqual([])
+  expectClean(result, { allow: ["rights.scope-kind-unread"] })
   // Гранти таблиць виду (генератор `access`) звіряє access-units.test.ts.
   return withoutMechanics(withoutAccess(result.model!.sqlUnits))
 }

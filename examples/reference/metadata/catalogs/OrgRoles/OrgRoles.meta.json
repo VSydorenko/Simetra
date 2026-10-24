@@ -1,0 +1,13 @@
+{
+  "$schema": "../../../../../node_modules/simetra/schemas/catalogs.schema.json",
+  "id": "9d6fff58-e322-4a91-81ad-593cd4fa1d81",
+  "kind": "Catalog",
+  "name": "OrgRoles",
+  "physicalName": "org_roles",
+  "kindLabel": "org_roles",
+  "scope": "org",
+  "title": {
+    "uk": "Ролі організації"
+  },
+  "role": "rightsRoles"
+}

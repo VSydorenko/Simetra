@@ -30,6 +30,7 @@ import {
   membershipFunctionNames,
   membershipsOf,
 } from "./membership-functions"
+import { carrierFunctions } from "./rights/carrier-units"
 import {
   kindLabelOf,
   usersCatalogOf,
@@ -271,6 +272,15 @@ export interface AccessContract {
   scope?: { scopeKindId: string; carrier: string; setFunction: QualifiedName }
   /** Ролі запиту, яким відкрито всі рядки: `anon` → обидві, `authenticated` → `user`. */
   publicRead: RequestRolePurpose[]
+  /** Основна таблиця кореня виду скоупу: без межі тенанта на `INSERT` (Р2a2-1). */
+  root: boolean
+  /**
+   * Таблиця «Користувачів» — основна чи ТЧ: межа видимості «Користувачів»
+   * (Р2a2-18) лягає на обидві.
+   */
+  users: boolean
+  /** Контракт прав об'єкта таблиці — основної, ТЧ чи похідної (Р2a2-6). */
+  rights?: { objectId: string }
 }
 
 /** Обсяг, яким грант може обмежити дію (спека прав §3). */
@@ -293,6 +303,11 @@ export interface RightsAction {
 export interface CarrierContract {
   /** Власна колонка основної таблиці; у шляху — колонка першого кроку. */
   column: string
+  /**
+   * Колонка основної таблиці з кінцевим значенням носія (Р2a2-6): у прямого
+   * носія — `column`, у шляху — його копія (`origin.copyOf`).
+   */
+  value: string
   /** Шлях: колонка в основній таблиці цілі першого кроку. */
   via?: { objectId: string; table: QualifiedName; column: string }
 }
@@ -727,6 +742,17 @@ export function derivedFunctions(
   ) => result.push({ ...name, file: object.file, pointer, description })
 
   const byId = new Map(objects.map((o) => [o.id ?? "", o]))
+  // Функції носіїв — згенеровані одиниці з іменами від таблиць (Р2a2-22): ТЧ
+  // довгої таблиці може отримати те саме ім'я, що й функція основної.
+  for (const { table, fn, role } of carrierFunctions(physical)) {
+    const object = byId.get(table.origin.objectId)
+    if (object === undefined) continue
+    add(
+      object,
+      fn,
+      `${role === "derive" ? "carrier copies" : "carrier propagation"} of ${table.schema}.${table.name}`
+    )
+  }
   for (const object of objects) {
     const table = mainTableOf(physical, object.id ?? "")
     if (table === undefined) continue

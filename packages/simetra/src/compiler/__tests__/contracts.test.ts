@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 import { compile } from "simetra/compiler"
 import { PROVIDER_API_ROLES } from "simetra/model"
 import {
+  expectClean,
   SALE_FILE,
   STOCK_FILE,
   attribute,
@@ -18,7 +19,7 @@ import {
 
 async function contracts(entries: Record<string, unknown>) {
   const result = await compile(metaFiles(entries))
-  expect(result.diagnostics).toEqual([])
+  expectClean(result, { allow: ["rights.scope-kind-unread"] })
   return result.model!.contracts
 }
 
@@ -70,7 +71,7 @@ describe("publicRead and storage buckets contracts", () => {
       ],
     })
     const result = await compile(metaFiles(entries))
-    expect(result.diagnostics).toEqual([])
+    expectClean(result, { allow: ["rights.scope-kind-unread"] })
     const model = result.model!
     const id = (name: string) =>
       model.scopeKinds.find((kind) => kind.name === name)!.id
@@ -101,7 +102,7 @@ describe("publicRead grantees", () => {
       publicRead: "anon",
     })
     const result = await compile(metaFiles(entries))
-    expect(result.diagnostics).toEqual([])
+    expectClean(result, { allow: ["rights.scope-kind-unread"] })
     const roles = PROVIDER_API_ROLES.supabase
     const grantees = [
       ...new Set(

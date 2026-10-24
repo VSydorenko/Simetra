@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { compile, type CompileResult } from "simetra/compiler"
 import {
+  expectClean,
   attribute,
   catalog,
   customTable,
@@ -38,7 +39,7 @@ describe("stage 2: scope identity", () => {
     const result = await compileScoped({
       [CP]: catalog("Counterparty", { scope: "org" }),
     })
-    expect(result.diagnostics).toEqual([])
+    expectClean(result, { allow: ["rights.scope-kind-unread"] })
     expect(result.ok).toBe(true)
     const model = result.model!
     expect(model.scopeKinds.map((kind) => kind.name)).toEqual(["org", "user"])
@@ -70,7 +71,7 @@ describe("stage 2: scope identity", () => {
     const result = await compileScoped({
       [CP]: catalog("Counterparty", { scope: "none" }),
     })
-    expect(result.diagnostics).toEqual([])
+    expectClean(result, { allow: ["rights.scope-kind-unread"] })
     const cp = result.model!.objects.find((o) => o.name === "Counterparty")!
     expect(cp.scopeKindId).toBeUndefined()
   })
@@ -244,7 +245,7 @@ describe("stage 2: scope identity", () => {
       { [CP]: catalog("Counterparty", { scope: "code", codeLength: 0 }) },
       renamed
     )
-    expect(codes(noCode)).toEqual([])
+    expectClean(noCode, { allow: ["rights.scope-kind-unread"] })
   })
 
   it("custom table may name a column like its scope kind", async () => {
@@ -258,7 +259,7 @@ describe("stage 2: scope identity", () => {
         ],
       }),
     })
-    expect(codes(result)).toEqual([])
+    expectClean(result, { allow: ["rights.scope-kind-unread"] })
     expect(result.ok).toBe(true)
   })
 
@@ -289,7 +290,7 @@ describe("stage 2: scope identity", () => {
     const result = await compileScoped({
       [ORG]: organization({ attributes: [attribute("org")] }),
     })
-    expect(result.diagnostics).toEqual([])
+    expectClean(result, { allow: ["rights.scope-kind-unread"] })
   })
 
   it("custom table scope column must exist", async () => {
@@ -310,7 +311,7 @@ describe("stage 2: scope identity", () => {
       [CP]: catalog("Counterparty", { scope: "org" }),
       [TABLE]: customTable("Log", { scope: "org", scopeColumn: "id" }),
     })
-    expect(result.diagnostics).toEqual([])
+    expectClean(result, { allow: ["rights.scope-kind-unread"] })
     const { references, scopeKinds, objects } = result.model!
     const org = scopeKinds[0]!
     const table = objects.find((o) => o.name === "Log")!

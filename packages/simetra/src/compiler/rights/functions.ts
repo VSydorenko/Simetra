@@ -16,6 +16,7 @@ import {
   type RightsContract,
   type RightsExtent,
   type RightsLevelKey,
+  type RightsProjectionRow,
   qualified,
 } from "../contracts"
 import { compareStrings } from "../diagnostics"
@@ -56,6 +57,7 @@ export const RIGHTS_FUNCTIONS = {
   hasRight: platform("has_right"),
   myMembers: platform("rights_my_members"),
   dimensionValues: platform("rights_dimension_values"),
+  visibleUsers: platform("rights_visible_users"),
 } as const satisfies Record<string, QualifiedName>
 
 /**
@@ -88,6 +90,32 @@ interface Declaration {
 }
 
 /**
+ * Чи є в проєкті функції прав (Р2a1-15, Р2a1-30, Р2a2-24) — одне місце, з яким
+ * звіряються генератор функцій і генератор політик: політика, що кличе
+ * неіснуючу функцію, не застосувалась би. Без жодної `Role` прав немає. Без
+ * «Користувачів» немає `current_user_id` (шар платформи нічого не генерує), а
+ * права можливі лише через прийняте джерело (спека прав §4.6, С8), яке до 2d
+ * прав не дає (Р2a1-30); межа fail-closed та сама — прав немає, і
+ * попередження `rights.adopted-source-unsupported` це вже каже.
+ */
+export function hasRightsFunctions(
+  contracts: Pick<Contracts, "roles" | "users">
+): boolean {
+  return contracts.roles.length > 0 && contracts.users !== undefined
+}
+
+/**
+ * Чи є межа видимості «Користувачів» (Р2a2-18): функції прав і хоч один
+ * довідник членства — без учасників «моїх скоупів» множина звелася б до «я», а
+ * прийняте джерело членства до 2d прав не дає.
+ */
+export function hasVisibleUsers(
+  contracts: Pick<Contracts, "roles" | "users" | "membership">
+): boolean {
+  return hasRightsFunctions(contracts) && contracts.membership.length > 0
+}
+
+/**
  * Функції прав у схемі `simetra` (спека прав §5.1) — згенеровані одиниці без
  * власника, як механіка рядків: вони спільні для всіх об'єктів. Без жодної
  * `Role` функцій немає (Р2a1-15). Фізичні колонки системних довідників і
@@ -101,13 +129,7 @@ export function buildRightsUnits(
   module: string,
   parse: SqlParser
 ): SqlUnit[] {
-  if (contracts.roles.length === 0) return []
-  // Без «Користувачів» немає `current_user_id` (шар платформи нічого не
-  // генерує), а права можливі лише через прийняте джерело (спека прав §4.6,
-  // С8), яке до 2d прав не дає (Р2a1-30). Функції, що кличуть неіснуючу
-  // `current_user_id`, не застосувались би; межа fail-closed та сама — прав
-  // немає, і попередження `rights.adopted-source-unsupported` це вже каже.
-  if (contracts.users === undefined) return []
+  if (!hasRightsFunctions(contracts)) return []
   const F = RIGHTS_FUNCTIONS
   const text = (name: string): [string, string] => [name, "text"]
   const uuid = (name: string): [string, string] => [name, "uuid"]
@@ -201,6 +223,9 @@ export function buildRightsUnits(
       "SETOF uuid",
       dimensionValuesBody(contracts)
     ),
+    ...(hasVisibleUsers(contracts)
+      ? [definer(F.visibleUsers, [], "SETOF uuid", visibleUsersBody(contracts))]
+      : []),
   ]
   return declarations
     .flatMap(({ fn, args, returns, body, shape }) => {
@@ -329,18 +354,16 @@ function levelDomain(
 /**
  * Рядки проєкції з розгорнутим `fullAccess` (Р2a1-9): роль з повними правами
  * отримує явні рядки всього домену свого рівня, тож гілки обходу в SQL
- * немає. Порядок — порядок проєкції.
+ * немає. Порядок — порядок проєкції. Одне місце для таблиці проєкції й для
+ * попередження на вид скоупу: «хто читає» в попередженні — рівно те, що
+ * побачать політики.
  */
-function projectionRows(contracts: RightsFunctionContracts): Value[][] {
-  const byObject = new Map(contracts.rights.map((c) => [c.objectId, c]))
+export function expandedProjection(
+  contracts: Pick<Contracts, "rights" | "roles" | "rightsProjection">
+): Pick<RightsProjectionRow, "roleId" | "objectId" | "action" | "extent">[] {
   const rows = new Map<
     string,
-    {
-      roleId: string
-      objectId: string
-      action: string
-      extent: ProjectionExtent
-    }
+    Pick<RightsProjectionRow, "roleId" | "objectId" | "action" | "extent">
   >()
   const add = (
     roleId: string,
@@ -368,20 +391,23 @@ function projectionRows(contracts: RightsFunctionContracts): Value[][] {
       add(role.roleId, entry.contract.objectId, entry.action, entry.extent)
     }
   }
-  return [...rows.values()]
-    .sort(
-      (a, b) =>
-        compareStrings(a.roleId, b.roleId) ||
-        compareStrings(a.objectId, b.objectId) ||
-        compareStrings(a.action, b.action) ||
-        compareExtents(a.extent, b.extent)
-    )
-    .map((row) => [
-      row.roleId,
-      must(byObject.get(row.objectId)).kindLabel,
-      row.action,
-      ...extentValues(row.extent),
-    ])
+  return [...rows.values()].sort(
+    (a, b) =>
+      compareStrings(a.roleId, b.roleId) ||
+      compareStrings(a.objectId, b.objectId) ||
+      compareStrings(a.action, b.action) ||
+      compareExtents(a.extent, b.extent)
+  )
+}
+
+function projectionRows(contracts: RightsFunctionContracts): Value[][] {
+  const byObject = new Map(contracts.rights.map((c) => [c.objectId, c]))
+  return expandedProjection(contracts).map((row) => [
+    row.roleId,
+    must(byObject.get(row.objectId)).kindLabel,
+    row.action,
+    ...extentValues(row.extent),
+  ])
 }
 
 /** Вимоги дій — уже транзитивне замикання контракту (`RightsAction.requires`). */
@@ -479,6 +505,32 @@ function myScopesBody(contracts: RightsFunctionContracts): string {
       ].join("\n")
     })
     .join("\nUNION ALL\n")
+}
+
+/**
+ * Видимі «Користувачі» (спека системної схеми §12, Р2a2-18): я ∪ користувачі
+ * учасників моїх скоупів. Мої скоупи обчислює лише `rights_my_scopes`
+ * (Р2a1-25); таблицю членства виду K функція читає лише за рядками
+ * `rights_my_scopes()` того самого виду (Р2a1-26) — інакше учасник іншого
+ * виду з тим самим значенням скоупу відкрив би чужих користувачів.
+ */
+function visibleUsersBody(contracts: RightsFunctionContracts): string {
+  return [
+    `SELECT ${CURRENT_USER}`,
+    `WHERE ${CURRENT_USER} IS NOT NULL`,
+    ...contracts.membership.flatMap((m) => {
+      const user = `m.${quoteIdent(m.userColumn)}`
+      return [
+        `UNION`,
+        `SELECT ${user}`,
+        `FROM ${qualified(m.table)} m`,
+        `JOIN ${call(RIGHTS_FUNCTIONS.myScopes)} s`,
+        `  ON s.scope_kind_id = ${uuidLiteral(m.scopeKindId)}`,
+        ` AND s.scope = m.${quoteIdent(m.scopeColumn)}`,
+        `WHERE ${user} IS NOT NULL`,
+      ]
+    }),
+  ].join("\n")
 }
 
 /**

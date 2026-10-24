@@ -1,7 +1,11 @@
 import type { GrantStmt, Node, RoleSpec } from "libpg-query"
 import {
   MECHANICS_FUNCTION,
+  carrierFunctionNames,
+  carrierTriggerNames,
+  contentChangeCondition,
   mechanicsTriggerName,
+  mechanicsUpdateTriggerName,
   statementTargets,
   uniqueDifferences,
   unitSubjectKeys,
@@ -17,10 +21,12 @@ import {
   KIND_REGISTRY,
   PROVIDER_API_ROLES,
   serviceDateColumns,
+  type AttributeCase,
   type CatalogModel,
   type CatalogUnit,
   type DatabaseProvider,
   type MetadataKind,
+  type PhysicalSnapshot,
 } from "simetra/model"
 import type { EngineDiagnostic } from "../../engine"
 import { applyDiagnostic } from "../diagnostic"
@@ -83,6 +89,11 @@ interface Context {
   newTable(schema: string, table: string): string
   /** Нове ім'я колонки за старим на таблиці в новому імені (`record.columns`). */
   newColumn(schema: string, table: string, column: string): string
+  /**
+   * Дерево `contentChangeCondition` бажаної таблиці (нове ім'я) з копіями
+   * носіїв; таблиця без копій умови не має.
+   */
+  content(schema: string, table: string): Node | undefined
 }
 
 /**
@@ -279,8 +290,10 @@ const REPLACEMENT_SHAPES = {
    * нічого не губиться, а борг лишається видимим. Прийнятий тригер з копії після
    * наміру (таблиця вже в новому імені) замінено механікою, коли він —
    * `moddatetime` на колонці, що стає службовою датою, або підпискою з тим
-   * самим обробником, часом, рівнем, подіями й умовою. Тригера, якого на
-   * копії немає, ціль не має.
+   * самим обробником, часом, рівнем, подіями й умовою. На таблиці з копіями
+   * носіїв `moddatetime` замінює лише `<t>_simetra_touch_update` з умовою
+   * змісту, а пара підписки з цією умовою — підписка без умови (Р2a2-20).
+   * Тригера, якого на копії немає, ціль не має.
    */
   trigger: (
     key: Extract<PromotionObject, { kind: "unit" }>,
@@ -309,6 +322,9 @@ export function platformReplacements(p: {
   clone: CatalogModel
   valueElementColumns: readonly ColumnName[]
   provider: DatabaseProvider
+  /** Таблиці бажаної моделі: копії носіїв дають умову змісту тригерів. */
+  physical: Pick<PhysicalSnapshot, "tables">
+  attributeCase: AttributeCase
   parse: SqlParser
 }): EngineDiagnostic[] {
   const { record, parse } = p
@@ -381,6 +397,8 @@ export function updateOfNarrowings(p: {
   record: PromotionRecord
   clone: CatalogModel
   desired: CatalogModel
+  physical: Pick<PhysicalSnapshot, "tables">
+  attributeCase: AttributeCase
   parse: SqlParser
 }): EngineDiagnostic[] {
   const c = triggerContext(p)
@@ -412,13 +430,15 @@ export function updateOfNarrowings(p: {
 /** Те, з чим форма `trigger` порівнює прийнятий тригер. */
 type TriggerContext = Pick<
   Context,
-  "clone" | "desired" | "parse" | "newTable" | "newColumn"
+  "clone" | "desired" | "parse" | "newTable" | "newColumn" | "content"
 >
 
 function triggerContext(p: {
   record: PromotionRecord
   clone: CatalogModel
   desired: CatalogModel
+  physical: Pick<PhysicalSnapshot, "tables">
+  attributeCase: AttributeCase
   parse: SqlParser
 }): TriggerContext {
   const { record } = p
@@ -431,7 +451,36 @@ function triggerContext(p: {
       record.columns.find(
         (m) => m.schema === schema && m.table === table && m.from === column
       )?.to ?? column,
+    content: (schema, table) => {
+      const found = p.physical.tables.find(
+        (t) => t.schema === schema && t.name === table
+      )
+      const when =
+        found === undefined
+          ? undefined
+          : contentChangeCondition(found, p.attributeCase)
+      return when === undefined ? undefined : whenTree(when, p.parse)
+    },
   }
+}
+
+/**
+ * Дерево умови `WHEN` з тексту умови: розбір цілого оператора тригера, бо
+ * окремого виразу libpg-query не розбирає. Умову дав компілятор, тож збій —
+ * порушений інваріант.
+ */
+function whenTree(when: string, parse: SqlParser): Node {
+  const parsed = parse(
+    `CREATE TRIGGER t BEFORE UPDATE ON t FOR EACH ROW WHEN (${when}) EXECUTE FUNCTION f()`
+  )
+  const stmt = parsed.ok ? parsed.statements[0]?.stmt : undefined
+  const tree =
+    stmt !== undefined && "CreateTrigStmt" in stmt
+      ? stmt.CreateTrigStmt.whenClause
+      : undefined
+  if (tree === undefined)
+    throw new Error(`internal: content condition does not parse: ${when}`)
+  return tree
 }
 
 /**
@@ -1076,14 +1125,44 @@ function triggerReplacement(
   if (adopted === undefined) return { replaced: true }
   if (adopted.special || !adopted.row) return { replaced: false }
   const desired = triggersOn(c.desired, key.schema, table, c.parse)
-  const isMechanics = (t: TriggerShape) =>
+  const content = c.content(key.schema, table)
+  // Умова змісту таблиці з копіями носіїв еквівалентна «без `WHEN`»
+  // (Р2a2-20): вона придушує лише поширення копій платформою. Впізнається
+  // лише рівністю дерева з умовою бажаної таблиці — власна умова `… OR NOT
+  // …` іншого набору колонок платформною не є
+  const isContent = (when: Node | undefined) =>
+    content !== undefined &&
+    when !== undefined &&
+    sameTree(withoutRowOperandCasts(when), content)
+  const touch = (t: TriggerShape) =>
     t.name === mechanicsTriggerName(table) &&
     sameFunction(t.function, MECHANICS_FUNCTION)
+  // На таблиці з копіями механіка оновлення — окремий тригер з умовою змісту
+  const touchUpdate = (t: TriggerShape) =>
+    t.name === mechanicsUpdateTriggerName(table) &&
+    sameFunction(t.function, MECHANICS_FUNCTION) &&
+    t.timing === TRIGGER_BEFORE &&
+    t.events === TRIGGER_UPDATE &&
+    t.row &&
+    !t.special &&
+    t.columns.length === 0 &&
+    isContent(t.when)
+  const carriers = carrierTriggerNames({ schema: key.schema, name: table })
+  const carrierFns = carrierFunctionNames({ schema: key.schema, name: table })
+  // Тригери копій носіїв — платформні: прийнятого тригера вони не замінюють,
+  // навіть коли той кличе функцію з тим самим іменем
+  const carrier = (t: TriggerShape) =>
+    (t.name === carriers.derive &&
+      sameFunction(t.function, carrierFns.derive)) ||
+    ((t.name === carriers.propagate || t.name === carriers.propagateInsert) &&
+      sameFunction(t.function, carrierFns.propagate))
+  const platform = (t: TriggerShape) => touch(t) || touchUpdate(t) || carrier(t)
 
   // Механіка спрацьовує й на вставку — ширше за `moddatetime`, і це
   // посилення: дата й версія правильні й на вставці (спека промоції §8).
   // Аргумент тригера — рядок, перейменування колонки його не переписує, тож
-  // ім'я колонки береться з мапінгу запису.
+  // ім'я колонки береться з мапінгу запису. На таблиці з копіями оновлення
+  // тримає лише `<t>_simetra_touch_update` з умовою змісту.
   if (
     adopted.function.name === "moddatetime" &&
     adopted.timing === TRIGGER_BEFORE &&
@@ -1093,9 +1172,14 @@ function triggerReplacement(
     adopted.args.length === 1 &&
     c.newColumn(key.schema, table, adopted.args[0]!) === UPDATED_AT
   )
-    return { replaced: desired.some(isMechanics) }
+    return {
+      replaced: desired.some(content === undefined ? touch : touchUpdate),
+    }
 
-  const found = subscriptionShapes(desired.filter((t) => !isMechanics(t)))
+  const found = subscriptionShapes(
+    desired.filter((t) => !platform(t)),
+    isContent
+  )
     .filter(
       (s) =>
         !s.special &&
@@ -1119,21 +1203,28 @@ function triggerReplacement(
 }
 
 /**
- * Логічні тригери підписок: `whenChanged` дає пару — `<name>` на `UPDATE` з
- * умовою й `<name>_insert` на `INSERT` без неї (`subscriptionTriggerNames`),
- * і разом вони спрацьовують на обидві події. Без пари тригер — сам по собі.
+ * Логічні тригери підписок: `whenChanged` чи джерело з копіями носіїв дає
+ * пару — `<name>` на `UPDATE` з умовою й `<name>_insert` на `INSERT` без неї
+ * (`subscriptionTriggerNames`), і разом вони спрацьовують на обидві події.
+ * Пара з умовою змісту (`isContent`) — це підписка без умови (Р2a2-20). Без
+ * пари тригер — сам по собі.
  */
-function subscriptionShapes(triggers: readonly TriggerShape[]): TriggerShape[] {
+function subscriptionShapes(
+  triggers: readonly TriggerShape[],
+  isContent: (when: Node | undefined) => boolean
+): TriggerShape[] {
   const byName = new Map(triggers.map((t) => [t.name, t]))
   const paired = new Set<string>()
   const shapes = triggers.map((t) => {
     const insert = byName.get(`${t.name}_insert`)
-    // Половина `UPDATE` пари — лише з умовою форми `whenChanged`: інакше два
-    // боргові тригери `x` з довільним `WHEN` і `x_insert` зійшли б за пару
+    // Половина `UPDATE` пари — лише з умовою форми `whenChanged` чи з умовою
+    // змісту: інакше два боргові тригери `x` з довільним `WHEN` і `x_insert`
+    // зійшли б за пару
+    const content = isContent(t.when)
     if (
       insert === undefined ||
       t.events !== TRIGGER_UPDATE ||
-      changedColumns(t.when) === undefined ||
+      (changedColumns(t.when) === undefined && !content) ||
       insert.events !== TRIGGER_INSERT ||
       insert.when !== undefined ||
       insert.columns.length > 0 ||
@@ -1145,7 +1236,11 @@ function subscriptionShapes(triggers: readonly TriggerShape[]): TriggerShape[] {
     )
       return t
     paired.add(insert.name)
-    return { ...t, events: TRIGGER_UPDATE | TRIGGER_INSERT }
+    return {
+      ...t,
+      events: TRIGGER_UPDATE | TRIGGER_INSERT,
+      ...(content ? { when: undefined } : {}),
+    }
   })
   return shapes.filter((s) => !paired.has(s.name))
 }
@@ -1179,32 +1274,34 @@ export function withoutRowTextCasts(stmt: Node): Node {
     stmt.CreateTrigStmt.whenClause === undefined
   )
     return stmt
-  const strip = (node: Node): Node => {
-    if ("BoolExpr" in node)
-      return {
-        BoolExpr: {
-          ...node.BoolExpr,
-          args: node.BoolExpr.args?.map(strip),
-        },
-      }
-    if ("A_Expr" in node) {
-      const { lexpr, rexpr } = node.A_Expr
-      return {
-        A_Expr: {
-          ...node.A_Expr,
-          ...(lexpr === undefined ? {} : { lexpr: rowOperand(lexpr).node }),
-          ...(rexpr === undefined ? {} : { rexpr: rowOperand(rexpr).node }),
-        },
-      }
-    }
-    return node
-  }
   return {
     CreateTrigStmt: {
       ...stmt.CreateTrigStmt,
-      whenClause: strip(stmt.CreateTrigStmt.whenClause),
+      whenClause: withoutRowOperandCasts(stmt.CreateTrigStmt.whenClause),
     },
   }
+}
+
+/** Умова `WHEN` без `::text` над `old.c`/`new.c` (`withoutRowTextCasts`). */
+function withoutRowOperandCasts(node: Node): Node {
+  if ("BoolExpr" in node)
+    return {
+      BoolExpr: {
+        ...node.BoolExpr,
+        args: node.BoolExpr.args?.map(withoutRowOperandCasts),
+      },
+    }
+  if ("A_Expr" in node) {
+    const { lexpr, rexpr } = node.A_Expr
+    return {
+      A_Expr: {
+        ...node.A_Expr,
+        ...(lexpr === undefined ? {} : { lexpr: rowOperand(lexpr).node }),
+        ...(rexpr === undefined ? {} : { rexpr: rowOperand(rexpr).node }),
+      },
+    }
+  }
+  return node
 }
 
 /**

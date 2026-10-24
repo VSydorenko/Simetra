@@ -40,22 +40,23 @@ interface Inner {
 }
 
 /**
- * Предикати дії над основною таблицею (правило некорельованої форми §5.4):
+ * Предикати дії над таблицею об'єкта (правило некорельованої форми §5.4):
  * кожна множина — функція від сталих, тож обчислюється раз на запит, а AND
  * множини з гранту й множини, що залежить лише від користувача, не дає
  * декартового добутку. На кожен підтриманий обсяг і кожен його носій — один
  * предикат на рівні скоупу (нескоуплений об'єкт — булева перевірка права) і
  * один у контейнері, якщо об'єкт до нього прив'язаний.
  *
- * Носій зі шляхом (Рх21) предиката тут не отримує: у 2a2 будівник бере
- * `CarrierContract.value` — копію шляху в основній таблиці (план 2a2,
- * Р2a2-6); до того без предиката рядок лише не відкривається цим обсягом
- * (fail-closed).
+ * Таблиця — основна, ТЧ чи похідна таблиця регістра (Р2a2-6); для двох
+ * останніх `main` — основна таблиця об'єкта. Носій береться з колонки самої
+ * таблиці (`carrierColumn`): політика ТЧ і похідної таблиці — та сама
+ * некорельована форма, що й власника, без підзапиту до іншої таблиці (§5.2).
  */
 export function rightsPredicates(
   contract: RightsContract,
   action: string,
-  table: PhysicalTable
+  table: PhysicalTable,
+  main: PhysicalTable = table
 ): RightsPredicate[] {
   const { extents } = must(contract.actions.find((a) => a.action === action))
   const F = RIGHTS_FUNCTIONS
@@ -64,25 +65,24 @@ export function rightsPredicates(
   const dimensions = new Set(
     extents.flatMap((e) => (e.form === "dimension" ? [e.dimensionId] : []))
   )
+  const column = (carrier: CarrierContract) =>
+    carrierColumn(contract, carrier, table, main)
   const inners: Inner[] = [
     { extent: "any", mine: [] },
-    ...(own ? direct(contract.ownership) : []).map((carrier): Inner => ({
+    ...(own ? contract.ownership : []).map((carrier): Inner => ({
       extent: "own",
-      carrier: carrier.column,
-      mine: [ownerCondition(carrier)],
+      carrier: column(carrier),
+      mine: [ownerCondition(carrier, column(carrier))],
     })),
     ...contract.access
-      .filter(
-        ({ dimensionId, carrier }) =>
-          dimensions.has(dimensionId) && carrier.via === undefined
-      )
+      .filter(({ dimensionId }) => dimensions.has(dimensionId))
       .map(({ dimensionId, carrier }): Inner => ({
         extent: { dimensionId },
-        carrier: carrier.column,
+        carrier: column(carrier),
         mine: [
           {
             kind: "column",
-            column: carrier.column,
+            column: column(carrier),
             set: call(F.dimensionValues, [uuidLiteral(dimensionId)]),
             grantDependent: false,
           },
@@ -90,8 +90,8 @@ export function rightsPredicates(
       })),
   ]
 
-  // Корінь виду скоупу несе скоуп у колонці `id`: колонку дає модель
-  // (`origin.scopeKindId`), а не ім'я.
+  // Корінь виду скоупу несе скоуп у колонці `id`, рядок його ТЧ — у
+  // `parent_id`: колонку дає модель (`origin.scopeKindId`), а не ім'я.
   const scope =
     contract.scopeKindId === undefined
       ? undefined
@@ -121,17 +121,17 @@ export function rightsPredicates(
   })
 
   const binding = contract.binding
-  // Прив'язка зі шляхом — до `CarrierContract.value` у 2a2 (Р2a2-6).
-  if (binding === undefined || binding.carrier.via !== undefined) return atScope
+  if (binding === undefined) return atScope
+  const bound = column(binding.carrier)
   const inContainer = inners.map(
     ({ extent, carrier, mine }): RightsPredicate => ({
       extent: { container: binding.containerId, inner: extent },
-      carrier: carrier ?? binding.carrier.column,
+      carrier: carrier ?? bound,
       conditions: [
         ...mine,
         {
           kind: "column",
-          column: binding.carrier.column,
+          column: bound,
           set: call(F.container, [...head, ...extentArgs(extent)]),
           grantDependent: true,
         },
@@ -139,6 +139,46 @@ export function rightsPredicates(
     })
   )
   return [...atScope, ...inContainer]
+}
+
+/**
+ * Колонка таблиці з кінцевим значенням носія (Р2a2-4, Р2a2-6). Основна
+ * таблиця — `value` (для шляху — його копія). ТЧ — копія з `copyOf.column ===
+ * value` власника; носій-ключ (значення — сам ключ власника) копії не має, його
+ * значення в ТЧ — `parent_id`. Похідна таблиця регістра — колонка з тим самим
+ * `origin.elementId` (носій регістра — завжди його вимір, Р2a2-4). Колонки
+ * немає — дефект моделі: краще гучна помилка, ніж мовчазний предикат на чужій
+ * колонці.
+ */
+function carrierColumn(
+  contract: RightsContract,
+  carrier: CarrierContract,
+  table: PhysicalTable,
+  main: PhysicalTable
+): string {
+  const same = (t: { schema: string; name: string }) =>
+    t.schema === contract.table.schema && t.name === contract.table.name
+  if (same(table)) return carrier.value
+  if (!same(main)) throw new Error("internal: rights predicate without main")
+  if (table.origin.tabularSectionId !== undefined) {
+    const copy = table.columns.find(
+      (c) =>
+        c.origin.copyOf !== undefined &&
+        same(c.origin.copyOf.table) &&
+        c.origin.copyOf.column === carrier.value
+    )
+    if (copy !== undefined) return copy.name
+    const key = main.primaryKey?.columns
+    if (key?.length === 1 && key[0] === carrier.value) {
+      return must(table.columns.find((c) => c.origin.standard === "parent"))
+        .name
+    }
+    throw new Error(`internal: no carrier copy of ${carrier.value}`)
+  }
+  const elementId = must(
+    main.columns.find((c) => c.name === carrier.value)?.origin.elementId
+  )
+  return must(table.columns.find((c) => c.origin.elementId === elementId)).name
 }
 
 /** Текст умови для `USING`/`WITH CHECK` політики. */
@@ -153,22 +193,20 @@ export function renderCondition(condition: RightsCondition): string {
   }
 }
 
-/** Носії без шляху; шлях — через `CarrierContract.value` у 2a2 (Р2a2-6). */
-function direct<T extends CarrierContract>(carriers: readonly T[]): T[] {
-  return carriers.filter((c) => c.via === undefined)
-}
-
 /**
  * «Мій» рядок за носієм власності (Р2a1-10): мої id учасника — лише свого
  * виду скоупу (Р2a1-26), бо `id` довідника задає той, хто пише; носій на
  * «Користувачів» — сам поточний користувач.
  */
-function ownerCondition(carrier: OwnershipContract): RightsCondition {
+function ownerCondition(
+  carrier: OwnershipContract,
+  column: string
+): RightsCondition {
   return "users" in carrier.owner
-    ? { kind: "currentUser", column: carrier.column }
+    ? { kind: "currentUser", column }
     : {
         kind: "column",
-        column: carrier.column,
+        column,
         set: call(RIGHTS_FUNCTIONS.myMembers, [
           uuidLiteral(carrier.owner.membership),
         ]),

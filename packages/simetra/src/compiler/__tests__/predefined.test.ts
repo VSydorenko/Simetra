@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { compile } from "simetra/compiler"
 import {
+  expectClean,
   catalog,
   document,
   metaFiles,
@@ -90,7 +91,7 @@ describe("predefined catalog items", () => {
         }),
       })
     )
-    expect(result.diagnostics).toEqual([])
+    expectClean(result, { allow: ["rights.scope-kind-unread"] })
     expect(result.model!.contracts.predefined).toEqual([
       {
         objectId: WAREHOUSE_ID,
@@ -140,7 +141,7 @@ describe("predefined catalog items", () => {
         ),
       })
     )
-    expect(result.diagnostics).toEqual([])
+    expectClean(result, { allow: ["rights.scope-kind-unread"] })
     const table = result.model!.physical.tables.find(
       (t) => t.name === "warehouse"
     )!
@@ -171,7 +172,7 @@ describe("predefined catalog items", () => {
         }),
       })
     )
-    expect(result.diagnostics).toEqual([])
+    expectClean(result, { allow: ["rights.scope-kind-unread"] })
     const model = result.model!
     const keyOf = (name: string) =>
       model.physical.tables

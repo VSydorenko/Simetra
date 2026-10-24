@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
-import pg from "pg"
+import type pg from "pg"
 import type { CompiledModel } from "simetra/compiler"
 import { renderDesiredState } from "simetra/schema"
 import {
@@ -36,7 +36,18 @@ import {
   rightsPredicates,
 } from "../../src/compiler/rights/predicates"
 import { signUp } from "./auth"
-import { queryAs, testDatabaseUrl } from "./connection"
+import { queryAs } from "./connection"
+import {
+  type Assignment,
+  type Delta,
+  type Seed,
+  assignmentRow,
+  describeTransaction,
+  insert,
+  orgDeltaRow,
+  outcome,
+  set,
+} from "./rights-seed"
 
 /**
  * Функції прав на справжньому Postgres (спека прав §5.1, план Права-2a1):
@@ -77,45 +88,6 @@ async function scopeKindModel(): Promise<CompiledModel> {
   expect(result.diagnostics).toEqual([])
   return result.model!
 }
-
-/** Ключі засіяних рядків → їхні id. */
-type Seed = Record<string, string>
-
-/** Рядок у таблицю `public` від власника: RLS його не обмежує. */
-async function insert(
-  client: pg.Client,
-  table: string,
-  values: Record<string, unknown>
-): Promise<void> {
-  const columns = Object.keys(values)
-  await client.query(
-    `INSERT INTO public.${table} (${columns.join(", ")}) VALUES (${columns.map((_, i) => `$${i + 1}`).join(", ")})`,
-    Object.values(values)
-  )
-}
-
-interface Assignment {
-  archetype?: string
-  customRole?: string
-  container?: string | null
-  deletionMark?: boolean
-}
-
-const assignmentRow = (subject: string, a: Assignment) => ({
-  id: randomUUID(),
-  subject,
-  archetype: a.archetype ?? null,
-  custom_role: a.customRole ?? null,
-  container: a.container ?? null,
-  deletion_mark: a.deletionMark ?? false,
-})
-
-type Delta = [
-  effect: "allow" | "deny",
-  object: string,
-  action: string,
-  extent: "any" | "own",
-]
 
 /**
  * Сценарій опису «with a scope kind»: організації A і B, проєкти P1, P3 (з
@@ -159,17 +131,12 @@ async function seedScopeKind(client: pg.Client): Promise<Seed> {
       archetype,
       deletion_mark: deletionMark,
     })
-    for (const [i, [effect, object, action, extent]] of deltas.entries()) {
-      await insert(client, "org_roles_delta", {
-        id: randomUUID(),
-        org_id: ids.A,
-        parent_id: ids[key],
-        line_number: i + 1,
-        object,
-        action,
-        extent,
-        effect,
-      })
+    for (const [i, delta] of deltas.entries()) {
+      await insert(
+        client,
+        "org_roles_delta",
+        orgDeltaRow(ids.A!, ids[key]!, i + 1, delta)
+      )
     }
   }
 
@@ -296,9 +263,6 @@ async function seedScopeKind(client: pg.Client): Promise<Seed> {
   return ids
 }
 
-/** Множина як масив тексту: порядок вирівнює тест, не колація бази. */
-const set = (call: string) =>
-  `SELECT coalesce(array_agg(s::text), '{}') AS v FROM ${call} AS s`
 const value = (expr: string) => `SELECT ${expr} AS v`
 const mineCount = (where: string) =>
   `SELECT count(*)::int AS v FROM simetra.rights_mine() WHERE ${where}`
@@ -468,39 +432,6 @@ const CASES: [name: string, checks: (() => Check[]) | Check[]][] = [
   ],
   ["predicate", () => [["u2", readableTasks, ["t2"]]]],
 ]
-
-/** Значення `v` єдиного рядка; масив — відсортований. */
-function outcome(result: { rows: { v: unknown }[] } | { code: string }) {
-  if (!("rows" in result)) return result
-  const v = result.rows[0]?.v
-  return Array.isArray(v) ? [...(v as string[])].sort() : v
-}
-
-/** Транзакція опису: відкривається в `beforeAll`, відкочується в `afterAll`. */
-function describeTransaction(): {
-  client: () => pg.Client
-  open: () => Promise<pg.Client>
-  close: () => Promise<void>
-} {
-  let current: pg.Client | undefined
-  return {
-    client: () => current!,
-    open: async () => {
-      const client = new pg.Client({ connectionString: testDatabaseUrl() })
-      await client.connect()
-      // `current` лише після успішного з'єднання: `close` не закриває клієнта, що не підключився
-      current = client
-      await client.query("BEGIN")
-      return client
-    },
-    close: async () => {
-      if (current === undefined) return
-      // Відкат після збою засіву може сам впасти — першопричину це не затирає
-      await current.query("ROLLBACK").catch(() => undefined)
-      await current.end()
-    },
-  }
-}
 
 describe("rights functions with a scope kind", () => {
   const tx = describeTransaction()

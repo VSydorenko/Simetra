@@ -9,8 +9,9 @@ import {
 } from "../sql/dependencies"
 import { loadSqlParser } from "../sql/parse"
 import { withoutLocations } from "../sql/units"
-import { compileRights, withRoles } from "./fixtures/rights"
+import { compileRights, policyDomain, withRoles } from "./fixtures/rights"
 import {
+  expectClean,
   acceptDebt,
   catalog,
   customTable,
@@ -70,7 +71,7 @@ async function compileWith(
 /** Порядок створення як рядки: таблиці й енам-типи з префіксом, одиниці — ідентичність. */
 async function order(entries: Record<string, unknown>): Promise<string[]> {
   const result = await compileWith(entries)
-  expect(result.diagnostics).toEqual([])
+  expectClean(result, { allow: ["rights.scope-kind-unread"] })
   return result.model!.creationOrder.map((node) =>
     node.type === "unit"
       ? node.identity
@@ -216,6 +217,38 @@ describe("creation order", () => {
       ["function:simetra.rights_projection()", mine],
       [mine, "function:simetra.has_right(text,text,text,uuid)"],
     ])
+  })
+
+  it("creates carrier propagation triggers after their function and the dependent tables", async () => {
+    // Тіла plpgsql граф не читає: залежні таблиці тіла — явні ребра `requires`.
+    const result = await compileRights(policyDomain())
+    expectClean(result)
+    const list = result.model!.creationOrder.map((node) =>
+      node.type === "unit"
+        ? node.identity
+        : `${node.type}:${node.schema}.${node.name}`
+    )
+    const fn = "function:public.task_simetra_carriers_out()"
+    const triggers = [
+      "trigger:public.task.task_simetra_carriers_out",
+      "trigger:public.task.task_simetra_carriers_out_insert",
+    ]
+    expectBefore(list, [
+      ["table:public.task_checklist", fn],
+      ["table:public.task_comment", fn],
+      ...triggers.map((t): [string, string] => [fn, t]),
+    ])
+    // Таблиці й так ідуть раніше за одиниці (tie-break), тож ребра тіла
+    // перевіряються й прямо.
+    expect(
+      result.model!.sqlUnits.find((u) => u.identity === fn)?.requires
+    ).toEqual(
+      ["task_checklist", "task_comment", "task_report"].map((name) => ({
+        type: "table",
+        schema: "public",
+        name,
+      }))
+    )
   })
 
   it("extensions come before everything", async () => {
@@ -674,9 +707,44 @@ describe("creation order", () => {
       [table, revoke],
       [table, grant],
       [revoke, grant],
-      [table, "policy:public.item.item_read"],
-      ["function:public.org_ids()", "policy:public.item.item_read"],
+      [table, "policy:public.item.item_scope_read"],
+      ["function:public.org_ids()", "policy:public.item.item_scope_read"],
     ])
+  })
+
+  it("rights read and users policies come after the rights functions they call", async () => {
+    // Політика, що кличе ще не створену функцію прав, не застосувалась би:
+    // ребро дає виклик у виразі політики, а не порядок імен.
+    const result = await compileRights(policyDomain())
+    expectClean(result)
+    const model = result.model!
+    const list = model.creationOrder.map((node) =>
+      node.type === "unit"
+        ? node.identity
+        : `${node.type}:${node.schema}.${node.name}`
+    )
+    const readAny = "policy:public.task.task_read_any"
+    const users = "policy:public.users.users_scope_read"
+    expectBefore(list, [
+      ["table:public.task", readAny],
+      ["function:simetra.rights_any(text,text)", readAny],
+      ["table:public.users", users],
+      ["function:simetra.rights_visible_users()", users],
+    ])
+    const parse = await loadSqlParser()
+    const calls = (identity: string) =>
+      unitCalls(
+        model.sqlUnits.find((u) => u.identity === identity)!,
+        parse
+      )
+    expect(calls(readAny)).toContainEqual({
+      schema: "simetra",
+      name: "rights_any",
+    })
+    expect(calls(users)).toContainEqual({
+      schema: "simetra",
+      name: "rights_visible_users",
+    })
   })
 
   it("same-named unqualified views, sequences and materialized views in two schemas are not a cycle", async () => {

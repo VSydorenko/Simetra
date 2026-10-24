@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 import { compile } from "simetra/compiler"
 import type { PhysicalTable } from "simetra/model"
 import {
+  expectClean,
   attribute,
   catalog,
   document,
@@ -461,9 +462,7 @@ describe("users as the root of a scope kind", () => {
 
   it("compiles with no scope diagnostics: references to users are plain FKs", async () => {
     const result = await compile(metaFiles(files()))
-    expect(result.diagnostics.map((d) => [d.code, d.file, d.pointer])).toEqual(
-      []
-    )
+    expectClean(result, { allow: ["rights.scope-kind-unread"] })
     const { physical } = result.model!
     const plainFk = (table: string, column: string) =>
       expect(tableOf(physical, table).foreignKeys).toContainEqual(

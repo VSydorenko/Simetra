@@ -68,8 +68,16 @@ describe("rights ownership", () => {
       TASK_ID
     )
     expect(task.ownership).toEqual([
-      { column: "assignee_id", owner: { membership: ORG_KIND_ID } },
-      { column: "created_by_id", owner: { users: true } },
+      {
+        column: "assignee_id",
+        value: "assignee_id",
+        owner: { membership: ORG_KIND_ID },
+      },
+      {
+        column: "created_by_id",
+        value: "created_by_id",
+        owner: { users: true },
+      },
     ])
     for (const action of task.actions) {
       expect(action.extents).toEqual([{ form: "any" }, { form: "own" }])
@@ -91,7 +99,7 @@ describe("rights ownership", () => {
       (c) => c.objectId === users.id
     )!
     expect(contract.ownership).toEqual([
-      { column: "id", owner: { users: true } },
+      { column: "id", value: "id", owner: { users: true } },
     ])
 
     const other = errors(
@@ -112,6 +120,7 @@ describe("rights ownership", () => {
     expect(comment.ownership).toEqual([
       {
         column: "task_id",
+        value: "task_id_assignee_id",
         via: {
           objectId: TASK_ID,
           table: { schema: "public", name: "task" },
@@ -205,6 +214,7 @@ describe("rights ownership", () => {
     expect(region.ownership).toEqual([
       {
         column: "parent_id",
+        value: "parent_id_lead_id",
         via: {
           objectId: REGION_ID,
           table: { schema: "public", name: "region" },
@@ -283,6 +293,7 @@ describe("rights ownership", () => {
     expect(task.ownership).toEqual([
       {
         column: "created_by_id",
+        value: "created_by_id_mentor_id",
         via: {
           objectId: uuid(6101),
           table: { schema: "public", name: "users" },

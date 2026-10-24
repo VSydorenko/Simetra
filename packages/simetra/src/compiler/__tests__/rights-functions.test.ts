@@ -25,6 +25,7 @@ import {
   SET_FILE,
   SUPPORT_ID,
   TASK_FILE,
+  TEAM_KIND_ID,
   USERS_FILE,
   adoptedMembership,
   compileRights,
@@ -35,6 +36,7 @@ import {
   membersSource,
   objects,
   rightsFiles,
+  secondScopeKind,
   singleTenantRights,
   without,
   withRoles,
@@ -191,6 +193,54 @@ function executeGrantees(model: CompiledModel): {
   return { granted, revoked }
 }
 
+/**
+ * Кожне читання таблиці членства в `rights_visible_users`: з'єднання з
+ * `rights_my_scopes()` за видом скоупу (стала) і за скоупом рядка членства.
+ */
+function membershipJoins(
+  model: CompiledModel
+): { scopeKind: Value; scope: string }[] {
+  const column = (node: unknown) =>
+    (
+      node as { ColumnRef?: { fields: { String?: { sval: string } }[] } }
+    ).ColumnRef?.fields
+      .map((f) => f.String?.sval)
+      .join(".")
+  const tree = bodyTree(functionUnit(model, RIGHTS_FUNCTIONS.visibleUsers.name))
+  return nodes(tree, "JoinExpr").map((join) => {
+    const { larg, rarg, quals } = join as {
+      larg: { RangeVar?: { schemaname: string; relname: string } }
+      rarg: { RangeFunction?: unknown }
+      quals: { BoolExpr: { boolop: string; args: unknown[] } }
+    }
+    expect(larg.RangeVar).toBeDefined()
+    expect(unitCallsOf(rarg)).toEqual([
+      `${RIGHTS_FUNCTIONS.myScopes.schema}.${RIGHTS_FUNCTIONS.myScopes.name}`,
+    ])
+    expect(quals.BoolExpr.boolop).toBe("AND_EXPR")
+    const pairs = quals.BoolExpr.args.map((arg) => {
+      const { lexpr, rexpr } = (
+        arg as { A_Expr: { lexpr: unknown; rexpr: unknown } }
+      ).A_Expr
+      return [column(lexpr), rexpr] as const
+    })
+    expect(pairs.map(([left]) => left)).toEqual(["s.scope_kind_id", "s.scope"])
+    return {
+      scopeKind: constant(pairs[0]![1]),
+      scope: column(pairs[1]![1])!,
+    }
+  })
+}
+
+/** Імена функцій у піддереві. */
+function unitCallsOf(node: unknown): string[] {
+  return nodes(node, "FuncCall").map((call) =>
+    (call as { funcname: { String: { sval: string } }[] }).funcname
+      .map((n) => n.String.sval)
+      .join(".")
+  )
+}
+
 const DATA = [
   RIGHTS_FUNCTIONS.projection,
   RIGHTS_FUNCTIONS.requires,
@@ -212,7 +262,13 @@ const SIGNATURES = [
   "function:simetra.rights_projection()",
   "function:simetra.rights_requires()",
   "function:simetra.rights_roles()",
+  "function:simetra.rights_visible_users()",
 ]
+
+/** Без довідника членства «Користувачів» не обмежує видимість (Р2a2-18). */
+const WITHOUT_MEMBERSHIP = SIGNATURES.filter(
+  (s) => s !== "function:simetra.rights_visible_users()"
+)
 
 const functionIdentities = (model: CompiledModel) =>
   rightsUnits(model)
@@ -473,7 +529,7 @@ describe("rights functions", () => {
 
   it("renders rights functions for a project without scope kinds", async () => {
     const single = await compiled(singleTenantRights())
-    expect(functionIdentities(single)).toEqual(SIGNATURES)
+    expect(functionIdentities(single)).toEqual(WITHOUT_MEMBERSHIP)
     const empty = parse(
       "SELECT NULL::uuid AS scope_kind_id, NULL::uuid AS scope, NULL::uuid AS member WHERE false"
     )
@@ -512,7 +568,9 @@ describe("rights functions", () => {
     ]) {
       expect(calls).toContain(`${fn.schema}.${fn.name}`)
     }
-    // Членство читає лише `rights_my_scopes` (Р2a1-25).
+    // Таблиці членства згадують лише `rights_my_scopes` і
+    // `rights_visible_users`, остання — лише в з'єднанні з
+    // `rights_my_scopes()` (Р2a1-25, Р2a2-18): мої скоупи обчислює одне місце.
     const readers = rightsUnits(model)
       .filter((unit) =>
         unitRelations(unit, parse).some(
@@ -520,6 +578,43 @@ describe("rights functions", () => {
         )
       )
       .map((unit) => unit.name)
-    expect(readers).toEqual([RIGHTS_FUNCTIONS.myScopes.name])
+      .sort()
+    expect(readers).toEqual(
+      [
+        RIGHTS_FUNCTIONS.myScopes.name,
+        RIGHTS_FUNCTIONS.visibleUsers.name,
+      ].sort()
+    )
+    expect(membershipJoins(model)).toEqual([
+      { scopeKind: ORG_KIND_ID, scope: "m.org_id" },
+    ])
+  })
+
+  it("renders the visible users set", () => {
+    const unit = functionUnit(model, RIGHTS_FUNCTIONS.visibleUsers.name)
+    expect(unit.identity).toBe("function:simetra.rights_visible_users()")
+    expect(option(unit, "volatility")?.String?.sval).toBe("stable")
+    expect(option(unit, "security")?.Boolean?.boolval).toBe(true)
+    expect(hasEmptySearchPath(unit.tree as never)).toBe(true)
+    const api = PROVIDER_API_ROLES.supabase
+    expect(executeGrantees(model).granted.get(unit.name)).toEqual(
+      [api.user, api.service, PLATFORM_ROLES.command].sort()
+    )
+    const calls = unitCalls(unit, parse).map((c) => `${c.schema}.${c.name}`)
+    expect(calls).toContain("simetra.current_user_id")
+    expect(calls).toContain(
+      `${RIGHTS_FUNCTIONS.myScopes.schema}.${RIGHTS_FUNCTIONS.myScopes.name}`
+    )
+  })
+
+  it("reads the members of every scope kind only in my scopes of that kind", async () => {
+    // Р2a1-26: учасники довідника членства виду K — лише за рядками
+    // `rights_my_scopes()` з `scope_kind_id = K`, інакше учасник іншого виду
+    // з тим самим значенням скоупу відкрив би чужих користувачів.
+    const two = await compiled(withRoles(BASE, secondScopeKind()))
+    expect(membershipJoins(two)).toEqual([
+      { scopeKind: ORG_KIND_ID, scope: "m.org_id" },
+      { scopeKind: TEAM_KIND_ID, scope: "m.team_id" },
+    ])
   })
 })

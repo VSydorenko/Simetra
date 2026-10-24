@@ -466,11 +466,8 @@ export function kitchenSink(): Map<string, string> {
     writeMode: "RecorderSubordinate",
     // Підлеглий регістр пишуть лише рухи: кастомна дія без ефектів.
     customActions: customActions("read", [], false),
-    // Обидві форми мапінгу: реквізит і шлях до власника товару.
-    access: [
-      { attribute: "item", dimension: "item" },
-      { ref: ["item", "owner"], dimension: "partner" },
-    ],
+    // Регістр мапить доступ лише на свій вимір (Р2a2-4): шлях — на об'єктах.
+    access: [{ attribute: "item", dimension: "item" }],
     recorderTypes: [ref("Document", "Sale")],
     standardAttributeOverrides: overrides("period"),
     dimensions: [
@@ -505,11 +502,8 @@ export function kitchenSink(): Map<string, string> {
     balanceControl: { resources: ["qty"] },
     // Регістр накопичення пишуть лише рухи: кастомна дія без ефектів.
     customActions: customActions("read", [], false),
-    // Обидві форми мапінгу: реквізит і шлях до власника товару.
-    access: [
-      { attribute: "item", dimension: "item" },
-      { ref: ["item", "owner"], dimension: "partner" },
-    ],
+    // Регістр мапить доступ лише на свій вимір (Р2a2-4): шлях — на об'єктах.
+    access: [{ attribute: "item", dimension: "item" }],
     standardAttributeOverrides: overrides("period"),
     dimensions: [
       {

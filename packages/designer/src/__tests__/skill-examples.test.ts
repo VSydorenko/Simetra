@@ -12,6 +12,7 @@ import {
 import { mcpInputSchema } from "../mcp/tools"
 import { TOOLS, toolByName } from "../tools/catalog"
 import { addAdoptedTag, project, run, useTmpProjects } from "./helpers/catalog"
+import { expectClean } from "../../../simetra/test/support"
 
 const pkgDir = join(dirname(fileURLToPath(import.meta.url)), "../..")
 const read = (name: string) =>
@@ -68,7 +69,7 @@ describe("simetra-metadata skill", () => {
     const dir = await project()
     await addAdoptedTag(dir)
     const r = await run("promote", dir, JSON.parse(body!))
-    expect(r.diagnostics, JSON.stringify(r.diagnostics)).toEqual([])
+    expectClean(r, { allow: ["rights.scope-kind-unread"] })
     expect(r.written).toBe(true)
   })
 

@@ -21,10 +21,9 @@ import {
 import { compareStrings, type Diagnostic } from "../diagnostics"
 import type { ParsedObject } from "../stages/files"
 import { standardElementId, type ResolvedReference } from "../stages/identity"
-import { kindLabelOf } from "../stages/model"
+import { elementColumns, kindLabelOf } from "../stages/model"
 import {
   carrierTarget,
-  elementColumns,
   elementField,
   resolveCarrier,
   type CarrierContext,

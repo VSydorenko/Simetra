@@ -8,6 +8,10 @@ export {
 } from "../src/compiler/__tests__/fixtures/reference-domain"
 export * from "../src/compiler/__tests__/helpers"
 export * from "../src/compiler/__tests__/fixtures/promotion"
+export {
+  CHECKLIST_TABLE,
+  policyDomain,
+} from "../src/compiler/__tests__/fixtures/rights"
 export * from "../src/schema/__tests__/fixtures/e1-fixtures"
 export * from "./db/connection"
 export * from "./db/fingerprint"

@@ -12,6 +12,8 @@ import type {
   CatalogModel,
   CatalogTable,
   CatalogUnit,
+  PhysicalColumn,
+  PhysicalTable,
 } from "simetra/model"
 import {
   accessChanges,
@@ -1542,6 +1544,29 @@ describe("access and permission items", () => {
     ])
   })
 
+  it("a restrictive generated policy opens no roles", () => {
+    // Межа тенанта лише звужує доступ (Р2a2-12): прийнятої політики `INSERT`
+    // немає, але нова `RESTRICTIVE` ролі `authenticated` нічого не відкриває
+    const changes = access(
+      record({}),
+      model([table("items")]),
+      model(
+        [table("items")],
+        [
+          unit(
+            "policy",
+            "policy:app.items.items_scope_insert",
+            "items_scope_insert",
+            "CREATE POLICY items_scope_insert ON app.items AS RESTRICTIVE FOR INSERT TO authenticated WITH CHECK (org_id = ANY (ARRAY(SELECT app.my_orgs())))"
+          ),
+        ]
+      )
+    )
+    expect(changes.map((c) => c.policies)).toEqual([
+      ["extra policy:app.items.items_scope_insert"],
+    ])
+  })
+
   it("lists a table that only loses the service role access, read under the old name", () => {
     const same = model([table("catalog_items")])
     const changes = access(
@@ -1864,6 +1889,9 @@ describe("platformReplacements", () => {
       clone: model([table("item")], o.cloneUnits ?? []),
       valueElementColumns: o.labels ?? [],
       provider: "supabase",
+      // Бажані таблиці без копій носіїв: умов змісту немає
+      physical: { tables: [] },
+      attributeCase: "snake_case",
       parse,
     })
   }
@@ -2278,7 +2306,7 @@ describe("platformReplacements", () => {
 
   describe("units by class (§8 механізм-заміна)", () => {
     // Бажаний стан — згенеровані одиниці доступу (генератор `access`):
-    // скоуплена таблиця з `publicRead: authenticated`
+    // скоуплена таблиця з межею тенанта й правом читання `any`
     const GENERATED = [
       unit(
         "grant",
@@ -2302,15 +2330,15 @@ describe("platformReplacements", () => {
       ),
       unit(
         "policy",
-        "policy:app.item.item_read",
-        "item_read",
-        "CREATE POLICY item_read ON app.item AS PERMISSIVE FOR SELECT TO authenticated USING (org_id = ANY (ARRAY(SELECT app.my_orgs())))"
+        "policy:app.item.item_scope_read",
+        "item_scope_read",
+        "CREATE POLICY item_scope_read ON app.item AS RESTRICTIVE FOR SELECT TO authenticated, simetra_command USING (org_id = ANY (ARRAY(SELECT app.my_orgs())))"
       ),
       unit(
         "policy",
-        "policy:app.item.item_public_read",
-        "item_public_read",
-        "CREATE POLICY item_public_read ON app.item AS PERMISSIVE FOR SELECT TO authenticated USING (true)"
+        "policy:app.item.item_read_any",
+        "item_read_any",
+        "CREATE POLICY item_read_any ON app.item AS PERMISSIVE FOR SELECT TO authenticated, simetra_command USING ((SELECT simetra.has_right('item', 'read', 'any')))"
       ),
     ]
 
@@ -2483,6 +2511,21 @@ describe("platformReplacements", () => {
         ).toEqual(MISSING)
       })
 
+      it("is replaced only by a permissive rights policy, not by the restrictive scope policy", () => {
+        // Межа тенанта читання не відкриває (Р2a2-12): без політики прав
+        // прийняте читання зникло б мовчки
+        const scopeOnly = GENERATED.filter(
+          (u) => u.class === "grant" || u.name === "item_scope_read"
+        )
+        expect(
+          verdict(
+            "policy",
+            "CREATE POLICY p ON app.item FOR SELECT TO authenticated USING (x)",
+            scopeOnly
+          )
+        ).toEqual(MISSING)
+      })
+
       it("refuses SELECT on a table without a generated policy", () => {
         // Нескоуплена таблиця без `publicRead`: лише гранти, політик немає
         const grantsOnly = GENERATED.filter((u) => u.class === "grant")
@@ -2544,7 +2587,8 @@ describe("platformReplacements", () => {
       function triggerGate(
         sql: string,
         units: CatalogUnit[],
-        over: Partial<PromotionRecord> = {}
+        over: Partial<PromotionRecord> = {},
+        tables: PhysicalTable[] = []
       ) {
         const a = adopted("trigger", sql)
         const input = {
@@ -2555,6 +2599,8 @@ describe("platformReplacements", () => {
           }),
           clone: model([table("item")], [a.onClone]),
           desired: model([table("item")], units),
+          physical: { tables },
+          attributeCase: "snake_case" as const,
           parse,
         }
         return {
@@ -2575,8 +2621,130 @@ describe("platformReplacements", () => {
       const codesOf = (
         sql: string,
         units: CatalogUnit[],
-        over?: Partial<PromotionRecord>
-      ) => triggerGate(sql, units, over).codes
+        over?: Partial<PromotionRecord>,
+        tables?: PhysicalTable[]
+      ) => triggerGate(sql, units, over, tables).codes
+
+      describe("on a table with carrier copies (Р2a2-20)", () => {
+        const physicalColumn = (
+          name: string,
+          type: string,
+          origin: PhysicalColumn["origin"] = {}
+        ): PhysicalColumn => ({ name, type, notNull: false, origin })
+        // Бажана таблиця з копією носія власника: механіка й підписка без
+        // `whenChanged` на ній — з умовою змісту (Р2a2-19)
+        const COPIES: PhysicalTable = {
+          schema: "app",
+          name: "item",
+          origin: { objectId: OBJECT_ID },
+          rowLevelSecurity: "enabled",
+          columns: [
+            physicalColumn("id", "uuid"),
+            physicalColumn("parent_id", "uuid"),
+            physicalColumn("note", "character varying(200)"),
+            physicalColumn("assignee_id", "uuid", {
+              copyOf: {
+                table: { schema: "app", name: "task" },
+                column: "assignee_id",
+                through: "parent_id",
+              },
+            }),
+            physicalColumn("updated_at", "timestamp with time zone", {
+              standard: "updated_at",
+            }),
+            physicalColumn("version", "integer", { standard: "version" }),
+          ],
+          uniques: [],
+          checks: [],
+          foreignKeys: [],
+          indexes: [],
+        }
+        // Умова змісту у формі `pg_get_triggerdef`: `old.`/`new.` малими, без
+        // лапок, `::text` над `varchar`, `OR` одним списком
+        const CONTENT =
+          "((old.id IS DISTINCT FROM new.id) OR (old.parent_id IS DISTINCT FROM new.parent_id) OR ((old.note)::text IS DISTINCT FROM (new.note)::text) OR (NOT (old.assignee_id IS DISTINCT FROM new.assignee_id)))"
+        // Інша умова тієї самої форми — без колонки змісту `note`
+        const OTHER =
+          "((old.id IS DISTINCT FROM new.id) OR (old.parent_id IS DISTINCT FROM new.parent_id) OR (NOT (old.assignee_id IS DISTINCT FROM new.assignee_id)))"
+        const TOUCH_INSERT = trigger(
+          "item_simetra_touch",
+          "CREATE TRIGGER item_simetra_touch BEFORE INSERT ON app.item FOR EACH ROW EXECUTE FUNCTION simetra.touch()"
+        )
+        const touchUpdate = (when: string) =>
+          trigger(
+            "item_simetra_touch_update",
+            `CREATE TRIGGER item_simetra_touch_update BEFORE UPDATE ON app.item FOR EACH ROW WHEN (${when}) EXECUTE FUNCTION simetra.touch()`
+          )
+        const SPLIT = [TOUCH_INSERT, touchUpdate(CONTENT)]
+        const pair = (when: string) => [
+          ...SPLIT,
+          trigger(
+            "s",
+            `CREATE TRIGGER s BEFORE UPDATE ON app.item FOR EACH ROW WHEN (${when}) EXECUTE FUNCTION app.h()`
+          ),
+          trigger(
+            "s_insert",
+            "CREATE TRIGGER s_insert BEFORE INSERT ON app.item FOR EACH ROW EXECUTE FUNCTION app.h()"
+          ),
+        ]
+        const HANDLER =
+          "CREATE TRIGGER a BEFORE INSERT OR UPDATE ON app.item FOR EACH ROW EXECUTE FUNCTION app.h()"
+
+        it("moddatetime is replaced only by the split mechanics with an UPDATE trigger", () => {
+          expect(
+            codesOf(moddatetime("updated_at"), SPLIT, {}, [COPIES])
+          ).toEqual([])
+          // Механіка лише на вставку чи нерозділена механіка на таблиці з
+          // копіями оновлення з умовою змісту не тримає
+          expect(
+            codesOf(moddatetime("updated_at"), [TOUCH_INSERT], {}, [COPIES])
+          ).toEqual(MISSING)
+          expect(
+            codesOf(moddatetime("updated_at"), [MECHANICS], {}, [COPIES])
+          ).toEqual(MISSING)
+        })
+
+        it("a subscription pair replaces the adopted trigger", () => {
+          expect(triggerGate(HANDLER, pair(CONTENT), {}, [COPIES])).toEqual({
+            codes: [],
+            narrowed: [],
+          })
+          // Умову змісту дає лише бажана таблиця з копіями: без неї та сама
+          // умова — довільний `WHEN`
+          expect(codesOf(HANDLER, pair(CONTENT))).toEqual(MISSING)
+        })
+
+        it.each([
+          [
+            "mechanics",
+            moddatetime("updated_at"),
+            [TOUCH_INSERT, touchUpdate(OTHER)],
+          ],
+          ["subscription", HANDLER, pair(OTHER)],
+        ])(
+          "a user trigger with another OR NOT condition is not platform (%s)",
+          (_, sql, units) => {
+            expect(codesOf(sql, units, {}, [COPIES])).toEqual(MISSING)
+          }
+        )
+
+        it("a carrier trigger does not stand in for an adopted trigger of the same function", () => {
+          expect(
+            codesOf(
+              "CREATE TRIGGER a BEFORE INSERT OR UPDATE ON app.item FOR EACH ROW EXECUTE FUNCTION app.item_simetra_carriers()",
+              [
+                ...SPLIT,
+                trigger(
+                  "item_simetra_carriers",
+                  "CREATE TRIGGER item_simetra_carriers BEFORE INSERT OR UPDATE ON app.item FOR EACH ROW EXECUTE FUNCTION app.item_simetra_carriers()"
+                ),
+              ],
+              {},
+              [COPIES]
+            )
+          ).toEqual(MISSING)
+        })
+      })
 
       it("is replaced by the row mechanics for moddatetime on updated_at", () => {
         expect(codesOf(moddatetime("updated_at"), [MECHANICS])).toEqual([])

@@ -12,7 +12,7 @@ import {
 } from "simetra/compiler"
 import { metadataIdSchema } from "simetra/model"
 import { readReferenceDomain } from "./fixtures/reference-domain"
-import { uuid } from "./helpers"
+import { expectClean, uuid } from "./helpers"
 
 /** Детерміноване джерело id у формі UUID v4. */
 function counter(start = 800_000): () => string {
@@ -36,7 +36,7 @@ const codes = (result: { diagnostics: { code: string }[] }) =>
 
 async function modelOf(files: ReadonlyMap<string, string>) {
   const compiled = await compile(files)
-  expect(compiled.diagnostics).toEqual([])
+  expectClean(compiled, { allow: ["rights.scope-kind-unread"] })
   return compiled.model as CompiledModel
 }
 
@@ -61,7 +61,7 @@ describe("createObject", () => {
       },
       options()
     )
-    expect(result.diagnostics).toEqual([])
+    expectClean(result, { allow: ["rights.scope-kind-unread"] })
     expect(result.ok).toBe(true)
     expect(result.changes.map((c) => c.path)).toEqual([WAREHOUSE])
 
@@ -181,7 +181,7 @@ describe("addElement", () => {
       },
       options()
     )
-    expect(result.diagnostics).toEqual([])
+    expectClean(result, { allow: ["rights.scope-kind-unread"] })
     expect(result.ok).toBe(true)
     expect(result.changes.map((c) => c.path)).toEqual([SERVICE_ACCRUAL])
 
@@ -281,7 +281,7 @@ describe("addElement", () => {
       },
       options()
     )
-    expect(result.diagnostics).toEqual([])
+    expectClean(result, { allow: ["rights.scope-kind-unread"] })
     expect(result.ok).toBe(true)
     expect(result.changes.map((c) => c.path)).toEqual(["project.meta.json"])
 

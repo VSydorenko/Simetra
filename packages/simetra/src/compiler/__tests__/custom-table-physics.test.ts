@@ -325,6 +325,9 @@ describe("CustomTable physics round-trip", () => {
     // унікальністю (`org_id`, `account_id`), решта знімка та сама.
     // Далі «Користувачі» ввімкнули платформний шар — нова таблиця
     // `simetra.identities`; без неї хеш той самий, що до шару.
+    // Далі носії прав отримали денормалізовані копії (Р2a2-5) — нові колонки
+    // з `origin.copyOf` та їхні індекси в `item`, `sale` і їхніх ТЧ; без них
+    // хеш той самий, що до копій.
     const derived = {
       tables: physical.tables.filter(
         (t) =>
@@ -338,7 +341,7 @@ describe("CustomTable physics round-trip", () => {
       .update(JSON.stringify(derived))
       .digest("hex")
     expect(digest).toBe(
-      "581d7661d8f4417d8b5da3456fe6040fde85db64b380ca36664e68e4f4ba50c6"
+      "ba94ddce884bee5d5d4988a4b5a3980f1f1f7f9b0f2c57d377c13b7c11b99655"
     )
   })
 })

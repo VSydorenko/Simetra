@@ -20,6 +20,7 @@ import {
 } from "../cli/metadata-dirs"
 import { toolByName } from "../tools/catalog"
 import { tmpProject } from "./helpers/tmp-project"
+import { expectClean } from "../../../simetra/test/support"
 
 const exec = promisify(execFile)
 const BIN = resolve(__dirname, "../../bin/simetra.mjs")
@@ -116,7 +117,10 @@ describe("compile --all / --staged", () => {
       noStdin,
       root
     )
-    expect(JSON.parse(json.stdout)).toEqual([])
+    expectClean(
+      { diagnostics: JSON.parse(json.stdout) },
+      { allow: ["rights.scope-kind-unread"] }
+    )
   })
 
   it("--all with explicit dirs exits 2", async () => {

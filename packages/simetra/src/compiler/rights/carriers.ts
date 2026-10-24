@@ -1,7 +1,5 @@
 import {
   KIND_REGISTRY,
-  standardLogicalName,
-  type AttributeCase,
   type PhysicalSnapshot,
   type PhysicalTable,
   type Project,
@@ -11,7 +9,12 @@ import {
 import { mainTableOf, type CarrierContract } from "../contracts"
 import { diagnostic, type Diagnostic } from "../diagnostics"
 import type { ParsedObject } from "../stages/files"
-import { standardElementId, type ResolvedReference } from "../stages/identity"
+import type { ResolvedReference } from "../stages/identity"
+import {
+  carrierCopyName,
+  elementColumns,
+  fieldForeignKey,
+} from "../stages/model"
 import { scopeKindOf } from "./facts"
 import { must } from "./references"
 
@@ -35,27 +38,6 @@ export function inScopeTarget(
 ): boolean {
   if (project.scopeKinds.length === 0) return true
   return foreignKey !== undefined && foreignKey.columns.length > 1
-}
-
-/**
- * FK колонки поля: той, що містить саме цю колонку, а решта його колонок —
- * скоуп-колонки таблиці. Так складений FK поля не сплутати з FK іншого поля,
- * що теж несе скоуп-колонку.
- */
-export function fieldForeignKey(
-  table: PhysicalTable,
-  column: string
-): PhysicalTable["foreignKeys"][number] | undefined {
-  const scopeColumns = new Set(
-    table.columns
-      .filter((c) => c.origin.scopeKindId !== undefined)
-      .map((c) => c.name)
-  )
-  return table.foreignKeys.find(
-    (fk) =>
-      fk.columns.includes(column) &&
-      fk.columns.every((c) => c === column || scopeColumns.has(c))
-  )
 }
 
 /** Вхід резолву носія: індекс посилань і фізичний знімок стадії 3. */
@@ -120,7 +102,7 @@ export function resolveCarrier(
     return {
       ok: true,
       terminal: { object, field: step.field },
-      contract: { column: step.field.column },
+      contract: { column: step.field.column, value: step.field.column },
     }
   }
   const [first, second] = carrier
@@ -136,6 +118,11 @@ export function resolveCarrier(
   const firstPointer = `${at.pointer}/0`
   if (head.field.target === undefined) {
     return fail("rights.carrier-not-ref", object, firstPointer, first)
+  }
+  // Ціль кроку — об'єкт виду (Рх21, Р2a2-10): копію шляху поширює тригер на
+  // таблиці цілі, а прийнята таблиця платформних тригерів не несе.
+  if (KIND_REGISTRY[head.field.target.kind].declared) {
+    return fail("rights.carrier-path-adopted", object, firstPointer, first)
   }
   if (!head.field.inScope) {
     return {
@@ -159,6 +146,7 @@ export function resolveCarrier(
     terminal: { object: target, field: tail.field },
     contract: {
       column: head.field.column,
+      value: carrierCopyName(head.field.column, tail.field.column),
       via: {
         objectId: must(target.id),
         table: { schema: table.schema, name: table.name },
@@ -292,7 +280,7 @@ export function crossTenant(
 }
 
 function fail(
-  code: "rights.carrier-not-ref",
+  code: "rights.carrier-not-ref" | "rights.carrier-path-adopted",
   object: ParsedObject,
   pointer: string,
   attribute: string
@@ -301,37 +289,4 @@ function fail(
     ok: false,
     diagnostic: diagnostic(code, object.file, pointer, { attribute }),
   }
-}
-
-/**
- * Фізичні колонки основної таблиці за id елемента: реквізит — за своїм UUID,
- * стандартний реквізит — за синтетичним id з канонічним ім'ям (той самий, що
- * дає індекс посилань), тож ефекти реєстру й посилання файлу читаються
- * однаково. Поліморфна пара дає обидві колонки.
- */
-export function elementColumns(
-  object: ParsedObject,
-  table: PhysicalTable,
-  style: AttributeCase
-): Map<string, string[]> {
-  const objectId = must(object.id)
-  const byStandard = new Map(
-    KIND_REGISTRY[object.kind]
-      .standardColumns(object.data)
-      .map((c) => [
-        standardLogicalName(c, style),
-        standardElementId(objectId, c),
-      ])
-  )
-  const result = new Map<string, string[]>()
-  for (const column of table.columns) {
-    const id =
-      column.origin.elementId ??
-      (column.origin.standard === undefined
-        ? undefined
-        : byStandard.get(column.origin.standard))
-    if (id === undefined) continue
-    result.set(id, [...(result.get(id) ?? []), column.name])
-  }
-  return result
 }

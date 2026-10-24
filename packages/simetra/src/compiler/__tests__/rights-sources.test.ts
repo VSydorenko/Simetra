@@ -458,7 +458,11 @@ describe("adopted sources", () => {
     )
     const task = model.contracts.rights.find((r) => r.table.name === "task")!
     expect(task.ownership).toEqual([
-      { column: "assignee_id", owner: { membership: ORG_KIND_ID } },
+      {
+        column: "assignee_id",
+        value: "assignee_id",
+        owner: { membership: ORG_KIND_ID },
+      },
     ])
     const fk = model.physical.tables
       .find((t) => t.name === "task")!

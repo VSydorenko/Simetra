@@ -1,4 +1,9 @@
-import { compile, type CompileResult } from "simetra/compiler"
+import {
+  compile,
+  promoteInput,
+  type CompileResult,
+  type PromoteInput,
+} from "simetra/compiler"
 import { metaFiles, uuid } from "../helpers"
 
 /**
@@ -19,6 +24,7 @@ export const PROJECT_CATALOG_FILE = "catalogs/Project/Project.meta.json"
 export const COMMENT_FILE = "catalogs/TaskComment/TaskComment.meta.json"
 export const MEMBER_FILE = "catalogs/OrgMember/OrgMember.meta.json"
 export const PROJECT_FILE = "project.meta.json"
+export const ORGANIZATION_FILE = "catalogs/Organization/Organization.meta.json"
 
 export const TASK_EDITORS_ID = uuid(6201)
 export const TASK_READERS_ID = uuid(6202)
@@ -64,7 +70,7 @@ export const TEAM_KIND_ID = uuid(6008)
 
 const ref = (kind: string, name: string) => ({ kind, name })
 
-function refAttribute(
+export function refAttribute(
   id: number,
   name: string,
   physicalName: string,
@@ -107,11 +113,7 @@ function defaults(): Record<string, Record<string, unknown>> {
       database: { provider: "supabase" },
       scopeKinds: [ORG_SCOPE_KIND],
     },
-    "catalogs/Organization/Organization.meta.json": catalog(
-      uuid(6002),
-      "Organization",
-      "organization"
-    ),
+    [ORGANIZATION_FILE]: catalog(uuid(6002), "Organization", "organization"),
     [USERS_FILE]: catalog(uuid(6003), "Users", "users", {
       role: "users",
       scope: "none",
@@ -582,6 +584,167 @@ export function regionDimension() {
   }
 }
 
+export const TASK_HOURS_FILE =
+  "accumulation-registers/TaskHours/TaskHours.meta.json"
+export const TASK_REPORT_FILE = "documents/TaskReport/TaskReport.meta.json"
+export const COUNT_COMMENT_FILE =
+  "event-subscriptions/CountComment/CountComment.meta.json"
+export const COMMENT_COUNTER_FILE =
+  "custom-tables/CommentCounter/CommentCounter.meta.json"
+export const COUNT_COMMENT_SQL_FILE = "sql/public/count-comment.sql"
+
+/** Таблиці ТЧ і похідні таблиці регістра домену політик (`policyDomain`). */
+export const CHECKLIST_TABLE = "task_checklist"
+export const COMMENT_TABLE = "task_comment"
+export const ATTACHMENTS_TABLE = "task_comment_attachments"
+export const HOURS_TABLES = {
+  movements: "task_hours",
+  totals: "task_hours_totals",
+  turnoversMonth: "task_hours_turnovers_month",
+} as const
+
+/** Табличну частину з одним рядковим реквізитом. */
+function section(id: number, name: string, physicalName: string, attr: string) {
+  return {
+    id: uuid(id),
+    name,
+    physicalName,
+    attributes: [
+      {
+        id: uuid(id + 1),
+        name: attr,
+        physicalName: attr,
+        type: "String",
+        length: 200,
+      },
+    ],
+  }
+}
+
+/**
+ * Домен політик читання (план 2a2): кожна форма носія, яку денормалізує
+ * платформа, і кожна таблиця, на яку лягає політика прав. `Task` — прямі
+ * носії всіх трьох полів прав і ТЧ `checklist`; `TaskComment` і `TaskReport`
+ * — власність шляхом через задачу (у коментаря — ТЧ `attachments`, другий
+ * крок копії; у звіту — генерована колонка періоду типової нумерації);
+ * регістр `TaskHours` — вимір доступу на виміру регістра й похідні таблиці;
+ * «Користувачі» — носій-ключ і ТЧ `devices`; підписка `onWrite` на коментарі
+ * пише рядок у службовий лічильник. Ролі читають усе скоуплене (`TaskReaders`
+ * через `OrgMember`), а «Користувачів» — і рівень скоупу, і `Everyone` (свій
+ * рядок), тож проєкт компілюється без попереджень. Шар поверх `withRoles`:
+ * типові файли `rightsFiles` не змінюються.
+ */
+export function policyDomain(...layers: Layer[]): Map<string, string> {
+  const files = withRoles(policyLayer(), ...layers)
+  // Обробник лічильника — SQL-файл, а не метадані: шар `withRoles` зливає
+  // лише JSON-об'єкти.
+  files.set(
+    COUNT_COMMENT_SQL_FILE,
+    "CREATE FUNCTION public.count_comment() RETURNS trigger LANGUAGE plpgsql VOLATILE AS $$ BEGIN INSERT INTO public.comment_counter (comment_id) VALUES (NEW.id); RETURN NEW; END $$;"
+  )
+  return files
+}
+
+function policyLayer(): Layer {
+  const readAny = objects(
+    ["Document", "Task"],
+    ["Catalog", "TaskComment"],
+    ["AccumulationRegister", "TaskHours"],
+    ["Catalog", "Users"]
+  )
+  return {
+    [PROJECT_FILE]: { accessDimensions: [regionDimension()] },
+    [USERS_FILE]: {
+      ownership: ["ref"],
+      tabularSections: [section(6501, "devices", "users_devices", "label")],
+    },
+    [TASK_FILE]: {
+      ownership: ["assignee"],
+      access: [{ attribute: "region", dimension: "region" }],
+      containerBinding: "project",
+      tabularSections: [section(6511, "checklist", CHECKLIST_TABLE, "note")],
+    },
+    [COMMENT_FILE]: {
+      ownership: [["task", "assignee"]],
+      tabularSections: [
+        section(6521, "attachments", ATTACHMENTS_TABLE, "label"),
+      ],
+    },
+    [TASK_HOURS_FILE]: {
+      id: uuid(6530),
+      kind: "AccumulationRegister",
+      name: "TaskHours",
+      physicalName: HOURS_TABLES.movements,
+      kindLabel: HOURS_TABLES.movements,
+      scope: "org",
+      registerType: "Balance",
+      access: [{ attribute: "region", dimension: "region" }],
+      dimensions: [
+        refAttribute(6531, "region", "region_id", ref("Catalog", "Region")),
+      ],
+      resources: [
+        {
+          id: uuid(6532),
+          name: "hours",
+          physicalName: "hours",
+          type: "Numeric",
+          precision: 10,
+          scale: 2,
+        },
+      ],
+    },
+    [TASK_REPORT_FILE]: {
+      id: uuid(6540),
+      kind: "Document",
+      name: "TaskReport",
+      physicalName: "task_report",
+      kindLabel: "task_report",
+      scope: "org",
+      ownership: [["task", "assignee"]],
+      attributes: [
+        refAttribute(6541, "task", "task_id", ref("Document", "Task")),
+      ],
+    },
+    [COMMENT_COUNTER_FILE]: {
+      id: uuid(6550),
+      kind: "CustomTable",
+      name: "CommentCounter",
+      physicalName: "comment_counter",
+      scope: "none",
+      columns: [column(6551, "commentId", "comment_id", "UUID")],
+    },
+    [COUNT_COMMENT_FILE]: {
+      id: uuid(6560),
+      kind: "EventSubscription",
+      name: "CountComment",
+      physicalName: "count_comment",
+      sources: [ref("Catalog", "TaskComment")],
+      event: "onWrite",
+      handler: { schema: "public", name: "count_comment" },
+    },
+    [SET_FILE("TaskReaders")]: { grants: [grant(readAny, ["read"], "any")] },
+    [ROLE_FILE("Everyone")]: {
+      grants: [grant(objects(["Catalog", "Users"]), ["read"], "own")],
+    },
+  }
+}
+
+/**
+ * Корінь скоупу з носієм власності й ТЧ `sites` (`organization_sites`):
+ * скоуп рядка ТЧ кореня — сам `parent_id`, тож зв'язок копії — одна колонка.
+ */
+export function scopeRootCarrier(): Layer {
+  return {
+    [ORGANIZATION_FILE]: {
+      ownership: ["owner"],
+      attributes: [
+        refAttribute(6601, "owner", "owner_id", ref("Catalog", "Users")),
+      ],
+      tabularSections: [section(6602, "sites", "organization_sites", "label")],
+    },
+  }
+}
+
 /** Перерахування — вид без контракту прав. */
 export function statusEnumeration() {
   return {
@@ -633,4 +796,105 @@ export function compileRights(
   files: ReadonlyMap<string, string>
 ): Promise<CompileResult> {
   return compile(files)
+}
+
+export const TAG_FILE = "custom-tables/Tag/Tag.meta.json"
+export const TAG_ID = uuid(6590)
+
+/**
+ * Шар з прийнятою таблицею `Tag` (`public.tag`), яку `tagMapping` промотує
+ * в довідник без кроків даних, змін типу й перетворень одиниць: план із
+ * промоцією поверх домену політик (Р2a2-11).
+ */
+export function promotableTag(): Layer {
+  return {
+    [TAG_FILE]: {
+      id: TAG_ID,
+      kind: "CustomTable",
+      name: "Tag",
+      physicalName: "tag",
+      kindLabel: "tag",
+      scope: "none",
+      columns: [
+        column(6591, "id", "id", "UUID"),
+        { ...column(6592, "name", "name", "String"), length: 150 },
+      ],
+      primaryKey: { name: "tag_pkey", columns: ["id"] },
+    },
+  }
+}
+
+export function tagMapping(): PromoteInput {
+  return promoteInput.parse({
+    target: { name: "Tag" },
+    into: {
+      kind: "Catalog",
+      name: "Tag",
+      data: { codeLength: 0, descriptionLength: 150 },
+    },
+    columns: {
+      id: { to: "standard", name: "ref" },
+      name: { to: "standard", name: "description" },
+    },
+    fill: [],
+    conversions: {},
+  })
+}
+
+export const TASK_NOTE_FILE = "custom-tables/TaskNote/TaskNote.meta.json"
+export const TASK_NOTE_ID = uuid(6595)
+/** Ім'я прийнятої таблиці `TaskNote`; промоція дає довіднику `task_note`. */
+export const TASK_NOTE_ADOPTED_TABLE = "task_notes"
+
+/**
+ * Шар з прийнятою таблицею `TaskNote` (`public.task_notes`), яку
+ * `taskNoteMapping` промотує в довідник `task_note` скоупу `org` з власністю
+ * шляхом через задачу: перейменована промоцією таблиця отримує копію носія
+ * (Р2a2-11).
+ */
+export function promotableTaskNote(): Layer {
+  return {
+    [TASK_NOTE_FILE]: {
+      id: TASK_NOTE_ID,
+      kind: "CustomTable",
+      name: "TaskNote",
+      physicalName: TASK_NOTE_ADOPTED_TABLE,
+      kindLabel: "task_note",
+      scope: "org",
+      scopeColumn: "orgId",
+      columns: [
+        column(6596, "id", "id", "UUID"),
+        { ...column(6597, "name", "name", "String"), length: 150 },
+        column(6598, "taskId", "task_id", "UUID"),
+        column(6599, "orgId", "org_id", "UUID"),
+      ],
+      primaryKey: { name: "task_notes_pkey", columns: ["id"] },
+    },
+  }
+}
+
+export function taskNoteMapping(): PromoteInput {
+  return promoteInput.parse({
+    target: { name: "TaskNote" },
+    into: {
+      kind: "Catalog",
+      name: "TaskNote",
+      data: {
+        codeLength: 0,
+        descriptionLength: 150,
+        ownership: [["task", "assignee"]],
+      },
+    },
+    columns: {
+      id: { to: "standard", name: "ref" },
+      name: { to: "standard", name: "description" },
+      orgId: { to: "scope" },
+      taskId: {
+        to: "attribute",
+        element: { name: "task", type: "Ref", ref: ref("Document", "Task") },
+      },
+    },
+    fill: [],
+    conversions: {},
+  })
 }

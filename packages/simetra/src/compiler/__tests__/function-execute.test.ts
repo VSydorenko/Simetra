@@ -4,6 +4,7 @@ import { PLATFORM_ROLES } from "simetra/model"
 import { buildFunctionExecuteUnits } from "../function-execute"
 import { loadSqlParser, type SqlParser } from "../sql/parse"
 import {
+  expectClean,
   acceptDebt,
   attribute,
   catalog,
@@ -96,14 +97,20 @@ function subscription(n: number, name: string) {
 
 async function compiled(files: Map<string, string>) {
   const result = await compile(files)
-  expect(result.diagnostics).toEqual([])
+  expectClean(result, { allow: ["rights.scope-kind-unread"] })
   return result.model!
 }
 
 /** Компіляція з дослівними грантами у `GRANTS_FILE`; борг прийнято. */
+/**
+ * Діагностики компіляції без попередження виду скоупу: фікстури скоуплені й
+ * без ролей, а перевірки тут — лише про гранти (як `allow` в `expectClean`).
+ */
 async function grantDiagnostics(entries: Record<string, unknown>, sql: string) {
   const files = await acceptDebt(metaFiles({ ...entries, [GRANTS_FILE]: sql }))
-  return (await compile(files)).diagnostics
+  return (await compile(files)).diagnostics.filter(
+    (d) => d.code !== "rights.scope-kind-unread"
+  )
 }
 
 describe("buildFunctionExecuteUnits", () => {
@@ -286,7 +293,7 @@ describe("sql.generated-grant", () => {
       scopeEntries(),
       "GRANT EXECUTE ON FUNCTION public.my_orgs_x TO anon;"
     )
-    expect(diagnostics).toEqual([])
+    expectClean({ diagnostics }, { allow: ["rights.scope-kind-unread"] })
   })
 
   it("a statement on a platform and another function names only the platform one", async () => {
@@ -304,6 +311,6 @@ describe("sql.generated-grant", () => {
       scopeEntries(),
       "GRANT EXECUTE ON FUNCTION public.other() TO anon;"
     )
-    expect(diagnostics).toEqual([])
+    expectClean({ diagnostics }, { allow: ["rights.scope-kind-unread"] })
   })
 })

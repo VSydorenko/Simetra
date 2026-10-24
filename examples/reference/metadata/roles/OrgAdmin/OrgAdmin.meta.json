@@ -1,0 +1,10 @@
+{
+  "$schema": "../../../../../node_modules/simetra/schemas/roles.schema.json",
+  "id": "97ff96a4-88e0-424c-84a1-ef2903290900",
+  "kind": "Role",
+  "name": "OrgAdmin",
+  "assignedOn": {
+    "scopeKind": "org"
+  },
+  "fullAccess": true
+}

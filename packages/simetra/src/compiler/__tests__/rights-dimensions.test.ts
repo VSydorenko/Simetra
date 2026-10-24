@@ -82,7 +82,10 @@ describe("access dimensions", () => {
     )
     const task = contracts.rights.find((c) => c.objectId === TASK_ID)!
     expect(task.access).toEqual([
-      { dimensionId: REGION_DIM_ID, carrier: { column: "region_id" } },
+      {
+        dimensionId: REGION_DIM_ID,
+        carrier: { column: "region_id", value: "region_id" },
+      },
     ])
     for (const action of task.actions) {
       expect(action.extents).toEqual([
@@ -171,6 +174,7 @@ describe("access dimensions", () => {
         dimensionId: REGION_DIM_ID,
         carrier: {
           column: "task_id",
+          value: "task_id_region_id",
           via: {
             objectId: TASK_ID,
             table: { schema: "public", name: "task" },
@@ -217,7 +221,10 @@ describe("access dimensions", () => {
     )
     const stock = contracts.rights.find((c) => c.objectId === STOCK_ID)!
     expect(stock.access).toEqual([
-      { dimensionId: REGION_DIM_ID, carrier: { column: "region_id" } },
+      {
+        dimensionId: REGION_DIM_ID,
+        carrier: { column: "region_id", value: "region_id" },
+      },
     ])
     expect(stock.actions[0]!.extents).toEqual([
       { form: "any" },

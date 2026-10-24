@@ -40,6 +40,7 @@ import {
   sourceContracts,
 } from "./rights/contracts"
 import { buildRightsUnits } from "./rights/functions"
+import { scopeKindUnreadWarnings } from "./rights/scope-kind-warnings"
 import {
   rightsCatalogContracts,
   rightsCatalogTables,
@@ -48,6 +49,7 @@ import { checkLinks } from "./stages/links"
 import { buildModel, enumTypeOf, rowTypesOf } from "./stages/model"
 import { buildMovementFunctions } from "./movement-functions"
 import { buildMechanicsUnits } from "./mechanics-units"
+import { buildCarrierUnits } from "./rights/carrier-units"
 import {
   buildSubscriptionUnits,
   subscriptionTriggerConflicts,
@@ -180,7 +182,7 @@ export async function runStages(
     stage1.project,
     sql.units
   )
-  const diagnostics = sortDiagnostics([
+  const staged = sortDiagnostics([
     ...early,
     ...debt.stale,
     ...integrity,
@@ -188,6 +190,7 @@ export async function runStages(
       stage1.objects,
       stage2.references,
       stage1.project,
+      physical,
       sql.units,
       parse,
       plpgsql,
@@ -200,8 +203,8 @@ export async function runStages(
       rightsCatalogTables(stage1.objects, physical)
     ),
   ])
-  const ok = !hasErrors(diagnostics)
-  if (!ok) return { ok, diagnostics }
+  const ok = !hasErrors(staged)
+  if (!ok) return { ok, diagnostics: staged }
 
   const rights = rightsContracts(
     stage1.objects,
@@ -223,9 +226,18 @@ export async function runStages(
   if (projection.diagnostics.length > 0) {
     return {
       ok: false,
-      diagnostics: sortDiagnostics([...diagnostics, ...projection.diagnostics]),
+      diagnostics: sortDiagnostics([...staged, ...projection.diagnostics]),
     }
   }
+  // Вид скоупу, об'єктів якого не читає жодна роль (Р2a2-13), видно лише на
+  // проєкції ролей — тож попередження йде після неї й не зупиняє компіляції.
+  const diagnostics = sortDiagnostics([
+    ...staged,
+    ...scopeKindUnreadWarnings(
+      { rights, roles, rightsProjection: projection.rows },
+      stage1.project
+    ),
+  ])
   // Довідники прав потрібні і контрактам, і генератору прав серед SQL-одиниць:
   // обчислюються до одиниць, тож `buildContracts` їх лише приймає (Р2a1-22).
   const rightsCatalogs = rightsCatalogContracts(
@@ -280,11 +292,16 @@ export async function runStages(
       onRootDelete: kind.onRootDelete,
     }))
     .sort((a, b) => compareStrings(a.name, b.name))
+  // Один контракт «Користувачів» і для шару платформи, і для функцій прав, і
+  // для меж доступу: без нього всі мовчать (Р2a1-30).
+  const users = usersContractOf(stage1.objects, physical)
   const access = accessContracts(
     stage1.objects,
     physical,
     scopeKinds,
-    scopeKindIdByFile
+    scopeKindIdByFile,
+    rights,
+    users?.objectId
   )
 
   const projectModule = stage1.project.name
@@ -332,9 +349,11 @@ export async function runStages(
           },
         ]
   )
-  // Один контракт «Користувачів» і для шару платформи, і для функцій прав:
-  // без нього обидва генератори мовчать (Р2a1-30).
-  const users = usersContractOf(stage1.objects, physical)
+  const membership = membershipContracts(
+    stage1.objects,
+    physical,
+    stage1.project
+  )
   const sqlUnits = [
     ...sql.units.map((unit) => verbatimUnit(unit, ownerId, module)),
     ...wrappers,
@@ -358,6 +377,8 @@ export async function runStages(
     ),
     ...buildAccessUnits(
       access,
+      { rights, accessDimensions, roles, users, membership },
+      physical,
       stage1.project.database.provider,
       module,
       parse
@@ -376,7 +397,19 @@ export async function runStages(
       module,
       parse
     ),
-    ...buildSubscriptionUnits(eventSubscriptions, module, parse),
+    ...buildSubscriptionUnits(
+      eventSubscriptions,
+      physical,
+      stage1.project.naming.attributeCase,
+      module,
+      parse
+    ),
+    ...buildCarrierUnits(
+      physical,
+      stage1.project.database.provider,
+      module,
+      parse
+    ),
     ...buildRightsUnits(
       {
         rights,
@@ -384,11 +417,7 @@ export async function runStages(
         rightsProjection: projection.rows,
         rightsCatalogs,
         accessDimensions,
-        membership: membershipContracts(
-          stage1.objects,
-          physical,
-          stage1.project
-        ),
+        membership,
         assignmentSources: sources.assignmentSources,
         users,
       },
@@ -418,6 +447,7 @@ export async function runStages(
       `the event subscription ${name(unit.ownerObjectId)}`,
     // Функції прав спільні для всіх об'єктів — власника немає.
     rights: (unit) => `the rights function ${unit.name}`,
+    carriers: (unit) => `the carrier copies of ${name(unit.ownerObjectId)}`,
   }
   const fileById = new Map(stage1.objects.map((o) => [o.id ?? "", o.file]))
   const triggerConflicts = subscriptionTriggerConflicts(
