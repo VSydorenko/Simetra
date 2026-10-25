@@ -160,6 +160,7 @@ export async function runStages(
           kinds,
           stage1.sqlDebt,
           !sql.diagnostics.some((d) => d.code === "sql.parse"),
+          parse,
           plpgsql
         )
   // Модуль виду 1С звужено до закритих форм: вид власника одиниці — з її
@@ -171,7 +172,7 @@ export async function runStages(
       stage1.objects,
       sql.units,
       sql.rowRules,
-      debtPredicate(stage1.objects, stage1.project, kinds, plpgsql),
+      debtPredicate(stage1.objects, stage1.project, kinds, parse, plpgsql),
       parse,
       plpgsql
     ),
@@ -184,15 +185,18 @@ export async function runStages(
       parse
     ),
     ...debt.grows,
-    // Дослівна політика чи тригер на таблиці виду — помилка раннього блоку
-    // поруч із ратчетом боргу (Р2c1-1): стадія 5 за нею не запускається, а
-    // знімок таблиць уже є — стадія 3 будує його до розбору `.sql`.
+    // Дослівна політика чи тригер на таблиці виду і тіло функції, що її
+    // змінює, — помилка раннього блоку поруч із ратчетом боргу (Р2c1-1,
+    // Р2c1-15): стадія 5 за нею не запускається, а знімок таблиць уже є —
+    // стадія 3 будує його до розбору `.sql`.
     ...(stage3 === undefined
       ? []
       : checkKindTableVerbatim(
           stage1.objects,
           stage3.physical.tables,
-          sql.units
+          sql.units,
+          parse,
+          plpgsql
         )),
     ...(embedded?.diagnostics ?? []),
   ]

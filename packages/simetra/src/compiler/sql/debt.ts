@@ -3,7 +3,12 @@ import { KIND_REGISTRY, SQL_DEBT_FILE, type Project } from "simetra/model"
 import { compareStrings, diagnostic, type Diagnostic } from "../diagnostics"
 import type { ParsedObject } from "../stages/files"
 import { closedShellProblem, ruledFunctions } from "./closed-forms"
-import { kindTableOf, type KindTables } from "./kind-table-verbatim"
+import {
+  bodyKindTable,
+  kindTableOf,
+  type KindTables,
+} from "./kind-table-verbatim"
+import type { SqlParser } from "./parse"
 import type { PlpgsqlParser } from "./plpgsql"
 import type { VerbatimUnit } from "./units"
 
@@ -20,16 +25,19 @@ import type { VerbatimUnit } from "./units"
  * правила стадії 5, і `sql.debt-grows` лише сховав би конкретнішу діагностику.
  * Дослівна політика чи тригер на таблиці виду боргом не бувають теж (Р2c1-1):
  * це помилка `sql.kind-table-verbatim` у будь-якому файлі, тож підказка
- * «внести в борг» вела б не туди, а запис у переліку — застарілий.
+ * «внести в борг» вела б не туди, а запис у переліку — застарілий. Так само
+ * функція чи процедура, тіло якої змінює таблицю виду (Р2c1-15, та сама
+ * помилка з формою `functionBody`).
  */
 export function debtUnits(
   units: readonly VerbatimUnit[],
   objects: readonly ParsedObject[],
   project: Project | undefined,
   kindTables: KindTables,
+  parse: SqlParser,
   plpgsql: PlpgsqlParser
 ): string[] {
-  const isDebt = debtPredicate(objects, project, kindTables, plpgsql)
+  const isDebt = debtPredicate(objects, project, kindTables, parse, plpgsql)
   return [...new Set(units.filter(isDebt).map((unit) => unit.identity))].sort(
     compareStrings
   )
@@ -44,6 +52,7 @@ export function debtPredicate(
   objects: readonly ParsedObject[],
   project: Project | undefined,
   kindTables: KindTables,
+  parse: SqlParser,
   plpgsql: PlpgsqlParser
 ): (unit: VerbatimUnit) => boolean {
   const debtOwners = new Set(
@@ -56,6 +65,7 @@ export function debtPredicate(
     (unit.ownerFile === undefined || debtOwners.has(unit.ownerFile)) &&
     !(unit.class === "function" && ruled.has(unit.identity)) &&
     kindTableOf(unit, kindTables) === undefined &&
+    bodyKindTable(unit, kindTables, parse, plpgsql) === undefined &&
     !(
       unit.class === "function" &&
       closedShellProblem(
@@ -84,10 +94,11 @@ export function checkDebt(
   kindTables: KindTables,
   listed: readonly string[],
   unitsComplete: boolean,
+  parse: SqlParser,
   plpgsql: PlpgsqlParser
 ): { grows: Diagnostic[]; stale: Diagnostic[] } {
   const accepted = new Set(listed)
-  const isDebt = debtPredicate(objects, project, kindTables, plpgsql)
+  const isDebt = debtPredicate(objects, project, kindTables, parse, plpgsql)
   const debt = units.filter(isDebt)
   const grows = debt
     .filter((unit) => !accepted.has(unit.identity))

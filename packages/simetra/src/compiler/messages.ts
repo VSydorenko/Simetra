@@ -873,17 +873,27 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Приберіть оператор; simetra fix прибирає його, коли всі цілі належать платформі, — оператор, що називає й чужі об'єкти, ділять вручну.",
     },
   },
-  // Форма — політика чи тригер; заміна — та сама, що підказує модуль виду.
+  // Форма — політика, тригер чи тіло функції (Р2c1-15); заміна політики й
+  // тригера — та сама, що підказує модуль виду, а тілу підказка називає, що
+  // йому дозволено.
   "sql.kind-table-verbatim": {
     en: (p) =>
-      `Verbatim ${p.form === "trigger" ? "trigger" : "policy"} ${p.identity} at line ${p.line} is on ${p.table}, a table of a kind`,
+      p.form === "functionBody"
+        ? `Function ${p.function} at line ${p.line} runs ${p.statement} on ${p.table}, a table of a kind`
+        : `Verbatim ${p.form === "trigger" ? "trigger" : "policy"} ${p.identity} at line ${p.line} is on ${p.table}, a table of a kind`,
     uk: (p) =>
-      `${p.form === "trigger" ? "Дослівний тригер" : "Дослівна політика"} ${p.identity} у рядку ${p.line} стоїть на ${p.table} — таблиці виду`,
+      p.form === "functionBody"
+        ? `Функція ${p.function} у рядку ${p.line} виконує ${p.statement} над ${p.table} — таблицею виду`
+        : `${p.form === "trigger" ? "Дослівний тригер" : "Дослівна політика"} ${p.identity} у рядку ${p.line} стоїть на ${p.table} — таблиці виду`,
     hint: {
       en: (p) =>
-        `Only the platform attaches policies and triggers to a table of a kind, in any .sql file: a hand-written one would open rows past the rights or act inside every command. Such a statement is never SQL debt, so sql-debt.json cannot list it. ${(KIND_MODULE_REPLACEMENT[String(p.form)] ?? KIND_MODULE_GENERAL).en}`,
+        p.form === "functionBody"
+          ? "Only the platform defines a table of a kind: the body of a function or procedure, in any .sql file and in the text of a literal EXECUTE, may only read and write its rows (SELECT, INSERT, UPDATE, DELETE, MERGE) and LOCK it. A policy, trigger, grant, index, TRUNCATE or ALTER TABLE run by a function would change the table past the rights and the platform's checks, so such a function is never SQL debt and sql-debt.json cannot list it. Remove the statement and declare what it did in metadata: a right for row access, an EventSubscription for a reaction to a change."
+          : `Only the platform attaches policies and triggers to a table of a kind, in any .sql file: a hand-written one would open rows past the rights or act inside every command. Such a statement is never SQL debt, so sql-debt.json cannot list it. ${(KIND_MODULE_REPLACEMENT[String(p.form)] ?? KIND_MODULE_GENERAL).en}`,
       uk: (p) =>
-        `Політики й тригери на таблицю виду ставить лише платформа, у будь-якому файлі .sql: написані вручну відкрили б рядки повз права чи діяли б усередині кожної команди. Такий оператор ніколи не є боргом дослівного SQL, тож sql-debt.json його не перелічує. ${(KIND_MODULE_REPLACEMENT[String(p.form)] ?? KIND_MODULE_GENERAL).uk}`,
+        p.form === "functionBody"
+          ? "Таблицю виду визначає лише платформа: тіло функції чи процедури, у будь-якому файлі .sql і в тексті літерального EXECUTE, лише читає й пише її рядки (SELECT, INSERT, UPDATE, DELETE, MERGE) і блокує її (LOCK). Політика, тригер, грант, індекс, TRUNCATE чи ALTER TABLE, виконані функцією, змінили б таблицю повз права й перевірки платформи, тож така функція ніколи не є боргом дослівного SQL, і sql-debt.json її не перелічує. Приберіть оператор, а те, що він робив, оголосіть у метаданих: право — для доступу до рядків, EventSubscription — для реакції на зміну."
+          : `Політики й тригери на таблицю виду ставить лише платформа, у будь-якому файлі .sql: написані вручну відкрили б рядки повз права чи діяли б усередині кожної команди. Такий оператор ніколи не є боргом дослівного SQL, тож sql-debt.json його не перелічує. ${(KIND_MODULE_REPLACEMENT[String(p.form)] ?? KIND_MODULE_GENERAL).uk}`,
     },
   },
   "sql.namespace-conflict": {

@@ -281,6 +281,20 @@ hand-written trigger would act inside every command. Use what replaces them:
   `access` or `publicRead` on the object;
 - a trigger → an `EventSubscription` with a handler in the closed shell.
 
+A function or procedure body does not change a table of a kind either, in
+any file, closed shell and kind module included: it may only read and write
+the rows (`SELECT`, `INSERT`, `UPDATE`, `DELETE`, `MERGE`) and `LOCK` the
+table. Any other statement on the table — a policy, trigger, grant, index,
+`TRUNCATE`, `ALTER TABLE`, `COMMENT`, `DROP`, a child table, and a statement
+on its whole schema (`DROP SCHEMA`, `GRANT … ON ALL TABLES IN SCHEMA`) — is
+the same error with the form `functionBody`, also inside the text of a
+literal `EXECUTE`, a `DO` block or a function the body creates. Such a
+function is never debt. Reading the table in a nested query of another
+statement (`CREATE TEMP TABLE … AS SELECT`) is fine. Remove the statement and
+declare what it did: a right for row access, an `EventSubscription` for a
+reaction. An unqualified table name counts in every schema, because the body
+may run with any `search_path`: qualify the names of your own tables.
+
 The same statement on a `CustomTable` is ordinary SQL debt until the table is
 promoted into a kind.
 

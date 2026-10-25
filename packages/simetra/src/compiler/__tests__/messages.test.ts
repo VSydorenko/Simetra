@@ -574,6 +574,28 @@ describe("messages catalog", () => {
     }
   )
 
+  it("sql.kind-table-verbatim names the function and the statement of a body", () => {
+    const d = diagnostic("sql.kind-table-verbatim", "sql/public/x.sql", "", {
+      identity: "function:public.f()",
+      function: "public.f",
+      table: "public.task",
+      form: "functionBody",
+      statement: "TruncateStmt",
+      line: 3,
+    })
+    expect(d.message).toBe(
+      "Function public.f at line 3 runs TruncateStmt on public.task, a table of a kind"
+    )
+    expect(localize(d, "uk").message).toBe(
+      "Функція public.f у рядку 3 виконує TruncateStmt над public.task — таблицею виду"
+    )
+    // Підказка називає, що тілу дозволено, а не заміну політики чи тригера.
+    expect(d.hint).toContain("SELECT, INSERT, UPDATE, DELETE, MERGE")
+    expect(localize(d, "uk").hint).toContain(
+      "SELECT, INSERT, UPDATE, DELETE, MERGE"
+    )
+  })
+
   it.each([
     { level: "org", scope: "org" },
     { level: "global", scope: "none" },

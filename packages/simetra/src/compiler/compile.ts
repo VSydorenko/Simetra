@@ -162,6 +162,7 @@ export async function currentDebt(
     stage1.objects,
     stage1.project,
     kindTables(stage1.objects, stage3.physical.tables),
+    parse,
     plpgsql
   )
 }

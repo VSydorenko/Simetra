@@ -323,8 +323,8 @@ The `.sql` module of an object of a 1C kind accepts only:
   object's own table or one of its own tabular-section tables.
 - Movement query blocks in a document module.
 
-A verbatim policy or trigger on a table of a kind is an error, never debt
-(`sql.kind-table-verbatim`): use a right and an `EventSubscription`.
+A verbatim policy or trigger on a table of a kind, or a function body statement on it other than DML and `LOCK`, is an error, never debt
+(`sql.kind-table-verbatim`): use a right and an `EventSubscription` (`references/people-and-rights.md`).
 
 Any other statement is rejected (`sql.statement-not-allowed`, `sql.closed-shell`,
 `sql.row-rule-grammar`, …) with a hint that names the property that replaces it.

@@ -317,6 +317,7 @@ export async function acceptDebt(
           stage1.objects,
           stage1.project,
           kindTables(stage1.objects, stage3?.physical.tables ?? []),
+          await loadSqlParser(),
           await loadPlpgsqlParser()
         ),
       }),
