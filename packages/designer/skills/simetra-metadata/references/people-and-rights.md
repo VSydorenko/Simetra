@@ -44,7 +44,9 @@ People are platform data, not tables you write yourself:
   member table and set function. One membership catalog per scope kind.
 
 The platform layer (identities, the current user, provisioning) lives in the
-PG schema `simetra`, generated when a users catalog exists. The schema is
+PG schema `simetra`, generated when a users catalog exists, or when the
+project has a membership source and its provider's user id is the `sub` claim
+(then only the current-user function, no identities table). The schema is
 reserved: no object, `defaultSchema`, set function, external reference,
 event handler or SQL unit may use it, and there is no `metadata/sql/simetra/`
 folder (`schema.reserved`). In SQL, the
@@ -226,14 +228,15 @@ key in such a table through `sourceKeys`.
   `scope_type`) and give each source a different literal, or a literal
   against `isNull`. Otherwise `rights.source-where`, reason `shared`.
   `rights.source-where` also reports a condition on a column that is not
-  text, uuid, boolean or integer, and a literal of the wrong type.
+  text, uuid, boolean or integer, and an `equals` literal of the wrong type
+  (`isNull` is allowed on any column).
 - **Verbatim set function.** A scope kind with its own `setFunction` (SQL you
   write) must apply the same `where` and `active` conditions of its
   membership source, or the tenant boundary will differ from the platform's
   own "my scopes" function.
 - **Grants.** The application role that applies the metadata owns the rights
-  functions (`SECURITY DEFINER`), so it needs `SELECT` on every source table
-  and on every role table, and, when a table has row level security enabled,
+  functions (`SECURITY DEFINER`), so it needs `USAGE` on the schema of
+  every source and role table, `SELECT` on every such table, and, when a table has row level security enabled,
   must own it or have `BYPASSRLS`; `plan` refuses to write a plan otherwise
   (`plan.rights-source-access`). Rows with a role key no role declares in
   `sourceKeys` grant nothing; `plan` reports them
@@ -257,7 +260,8 @@ Run `simetra roles` before the first `plan` on a new database.
 ## Who reads what
 
 Rows are read through rights, not by default. In a project with at least one
-role and a users catalog:
+role and a session user (a users catalog, or a membership source on a provider
+whose user id is the `sub` claim):
 
 - A table of a kind is read only through a role's `read` right on its object,
   at the extent of the grant (`any`, `own`, a dimension, in a container); its
@@ -269,10 +273,12 @@ role and a users catalog:
 - A scoped object is read only inside the reader's scopes, and only through a
   role assigned there: membership in a tenant without a role reads nothing.
 - The users catalog shows only yourself and the users of members of your
-  scopes (when the project has a membership catalog), whatever the role grants
+  scopes (when the project has a membership catalog or a membership source),
+  whatever the role grants
   on it: a scope-level `read` on the users catalog reads only those.
 
-Without any role (or without a users catalog) no right opens a row: only
+Without any role (or without a session user: no users catalog and no
+membership source on such a provider) no right opens a row: only
 `publicRead` objects are readable. `rights.scope-kind-unread` (a warning on
 the scope kind in `project.meta.json`) says that no role reads any object of
 that scope kind, so nobody will see their rows: grant `read` to a role or

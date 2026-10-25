@@ -1934,8 +1934,8 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     uk: (p) =>
       `Колонка ${p.column} джерела "${p.source}" мусить мати тип ${p.expected}`,
     hint: {
-      en: "Rights functions compare scope, user, member and container columns as uuid, read the active column as boolean and the role column as text: map a column of that type.",
-      uk: "Функції прав порівнюють колонки скоупу, користувача, учасника й контейнера як uuid, читають колонку активності як boolean, а колонку ролі — як текст: зіставте колонку такого типу.",
+      en: "Rights functions compare scope, user, member and container columns as uuid, read the active column as boolean, the role key column as text and a role reference column as uuid: map a column of that type.",
+      uk: "Функції прав порівнюють колонки скоупу, користувача, учасника й контейнера як uuid, читають колонку активності як boolean, колонку ключа ролі — як текст, а колонку посилання на роль — як uuid: зіставте колонку такого типу.",
     },
   },
   "rights.source-where": {
