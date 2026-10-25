@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest"
+import { isDeepStrictEqual } from "node:util"
+import { beforeAll, describe, expect, it } from "vitest"
 import { compile, type CompiledModel } from "simetra/compiler"
 import {
   PLATFORM_ROLES,
@@ -8,9 +9,17 @@ import {
   type IdentitySource,
 } from "simetra/model"
 import { buildPlatformUnits, platformSchemaGrants } from "../platform/units"
+import { hasEmptySearchPath, routineLanguage } from "../sql/closed-forms"
 import { loadSqlParser } from "../sql/parse"
+import type { SqlUnit } from "../sql/units"
 import { kitchenSink } from "./fixtures/kitchen-sink"
-import { compileRights, withRoles } from "./fixtures/rights"
+import {
+  adoptedSourcesDomain,
+  compileRights,
+  withoutUsers,
+  withRoles,
+} from "./fixtures/rights"
+import { bodyShape, loadShapeParsers, nodes, tree } from "./fixtures/sql-shape"
 import {
   acceptDebt,
   attribute,
@@ -471,6 +480,138 @@ describe("platform layer", () => {
       identity: "trigger:auth.users.simetra_provision_user",
       first: "the platform layer of Users",
     })
+  })
+})
+
+/**
+ * Без «Користувачів» поточного користувача дає `sub` (Р2d1-6, спека
+ * користувачів §7): лише з прийнятим джерелом членства на провайдері, де
+ * `sub` — id користувача (С8).
+ */
+describe("platform layer without users", () => {
+  const UUID_PATTERN =
+    "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+  let model: CompiledModel
+  beforeAll(async () => {
+    await loadShapeParsers()
+    const result = await compileRights(adoptedSourcesDomain(withoutUsers()))
+    expect(result.diagnostics.filter((d) => d.severity === "error")).toEqual([])
+    model = result.model!
+  })
+
+  const layer = (m: CompiledModel) =>
+    m.sqlUnits.filter((u) => u.generator === "platformLayer")
+
+  const subjectFunction = (): SqlUnit => {
+    const functions = layer(model).filter((u) => u.class === "function")
+    expect(functions.map((u) => u.identity)).toEqual([CURRENT_USER])
+    return functions[0]!
+  }
+
+  /** Оператори гілки `IF` з умовою `condition`; без такого `IF` — помилка. */
+  function branch(condition: string) {
+    const shape = bodyShape(subjectFunction().sql)
+    const at = shape.findIndex(
+      (s) =>
+        s.type === "if" &&
+        isDeepStrictEqual(s.expressions[0]?.tree, tree(`SELECT ${condition}`))
+    )
+    expect(at, condition).toBeGreaterThanOrEqual(0)
+    const rest = shape.slice(at + 1)
+    const end = rest.findIndex((s) => s.depth <= shape[at]!.depth)
+    return { at, statements: end === -1 ? rest : rest.slice(0, end) }
+  }
+
+  it("without users the session user is the subject as uuid", () => {
+    expect(model.contracts.users).toBeUndefined()
+    const fn = subjectFunction()
+    // Функція спільна для проєкту, як функції прав: власника-об'єкта немає.
+    expect(fn.ownerObjectId).toBeUndefined()
+    expect(routineLanguage(fn.tree as never)).toBe("plpgsql")
+    expect(hasEmptySearchPath(fn.tree as never)).toBe(true)
+    const options = nodes(fn.tree, "DefElem") as {
+      defname: string
+      arg?: { String?: { sval?: string }; Boolean?: { boolval?: boolean } }
+    }[]
+    const option = (name: string) => options.find((o) => o.defname === name)
+    expect(option("volatility")?.arg?.String?.sval).toBe("stable")
+    expect(option("security")?.arg?.Boolean?.boolval).toBe(true)
+    // `sub` з claims сесії; до uuid приводиться лише рядок формату uuid.
+    const shape = bodyShape(fn.sql)
+    expect(
+      shape.some((s) =>
+        s.expressions.some((e) =>
+          isDeepStrictEqual(
+            e.tree,
+            tree(
+              `SELECT nullif(current_setting('${SESSION_CLAIMS_SETTING}', true), '')::jsonb`
+            )
+          )
+        )
+      )
+    ).toBe(true)
+    const guarded = branch(`v_subject ~ '${UUID_PATTERN}'`)
+    expect(
+      guarded.statements.map((s) => [s.type, s.expressions[0]?.tree])
+    ).toEqual([["return", tree("SELECT v_subject::uuid")]])
+    const casts = nodes(
+      shape.map((s) => s.expressions.map((e) => e.tree)),
+      "TypeCast"
+    ).filter((c) => JSON.stringify(c).includes('"sval":"uuid"'))
+    expect(casts).toHaveLength(1)
+    expect(
+      shape.at(-1 - shape.filter((s) => s.type === "declare").length)
+    ).toMatchObject({ type: "return", depth: 1, returns: { null: true } })
+    // `EXECUTE` — ті самі ролі сесії, що з «Користувачами»; гранти схеми
+    // дає стан застосування, шар їх не повторює (state.test.ts).
+    const grants = layer(model)
+      .filter((u) => u.class === "grant")
+      .map((u) => u.sql)
+      .sort()
+    expect(grants).toEqual([
+      "GRANT EXECUTE ON FUNCTION simetra.current_user_id() TO anon;",
+      "GRANT EXECUTE ON FUNCTION simetra.current_user_id() TO authenticated;",
+      "GRANT EXECUTE ON FUNCTION simetra.current_user_id() TO service_role;",
+      `GRANT EXECUTE ON FUNCTION simetra.current_user_id() TO ${PLATFORM_ROLES.command};`,
+      "REVOKE EXECUTE ON FUNCTION simetra.current_user_id() FROM PUBLIC;",
+    ])
+  })
+
+  it("an anonymous session is not a user", () => {
+    // Анонімного входу провізія не створює (`anonymousColumn`), тож без
+    // «Користувачів» його відкидає сама функція — інакше він мав би права
+    // `everyUser`. Перевірка — до приведення `sub`.
+    const anonymous = branch("v_claims ->> 'is_anonymous' = 'true'")
+    expect(anonymous.statements).toMatchObject([
+      { type: "return", returns: { null: true } },
+    ])
+    expect(anonymous.at).toBeLessThan(
+      branch(`v_subject ~ '${UUID_PATTERN}'`).at
+    )
+  })
+
+  it("without users and without a membership source there is no session user", async () => {
+    const parse = await loadSqlParser()
+    const units = buildPlatformUnits(
+      {
+        objects: model.objects,
+        physical: model.physical,
+        contracts: { ...model.contracts, membershipSources: [] },
+        project: model.project,
+      },
+      parse,
+      PROVIDER_IDENTITY_SOURCES.supabase
+    )
+    expect(units).toEqual([])
+    // Проєкт без «Користувачів» і без джерела членства: ні шару, ні прав.
+    const plain = await compileOk({
+      "catalogs/Currency/Currency.meta.json": catalog("Currency"),
+    })
+    expect(
+      plain.sqlUnits.filter(
+        (u) => u.generator === "platformLayer" || u.generator === "rights"
+      )
+    ).toEqual([])
   })
 })
 

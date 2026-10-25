@@ -376,7 +376,10 @@ export async function runStages(
       {
         objects: stage1.objects,
         physical,
-        contracts: { users },
+        contracts: {
+          users,
+          membershipSources: sources.membershipSources,
+        },
         project: stage1.project,
       },
       parse,
@@ -465,8 +468,11 @@ export async function runStages(
     movementQuery: (unit) =>
       `the movement query of ${name(unit.documentId)} into ${name(unit.registerId)}`,
     membership: (unit) => `the membership SQL of ${name(unit.ownerObjectId)}`,
+    // Без «Користувачів» функція поточного користувача — спільна, без власника.
     platformLayer: (unit) =>
-      `the platform layer of ${name(unit.ownerObjectId)}`,
+      unit.ownerObjectId === undefined
+        ? "the platform layer"
+        : `the platform layer of ${name(unit.ownerObjectId)}`,
     access: (unit) => `the access SQL of ${name(unit.ownerObjectId)}`,
     functionExecute: (unit) => `the EXECUTE grant of ${unit.name}`,
     // Функція механіки й її гранти спільні для всіх таблиць — власника немає.

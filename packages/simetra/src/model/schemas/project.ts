@@ -219,6 +219,12 @@ export interface IdentitySource {
    * бо колонка користувача джерела зіставляється з `sub` напряму.
    */
   subjectIsUserId: boolean
+  /**
+   * Claim анонімної сесії провайдера (значення `true`). Без «Користувачів»
+   * провізії, що відкидає анонімний вхід за `anonymousColumn`, немає, тож
+   * функція поточного користувача відкидає такий вхід за цим claim сама.
+   */
+  anonymousClaim?: string
 }
 
 /**
@@ -252,6 +258,7 @@ export const PROVIDER_IDENTITY_SOURCES: Readonly<
     deletedAtColumn: "deleted_at",
     providerKey: "supabase",
     subjectIsUserId: true,
+    anonymousClaim: "is_anonymous",
   },
 }
 

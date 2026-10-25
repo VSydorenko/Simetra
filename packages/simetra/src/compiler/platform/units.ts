@@ -9,9 +9,15 @@ import {
   type PhysicalSnapshot,
   type Project,
 } from "simetra/model"
-import { qualified, type QualifiedName, type UsersContract } from "../contracts"
+import {
+  qualified,
+  type Contracts,
+  type QualifiedName,
+  type UsersContract,
+} from "../contracts"
 import { compareStrings } from "../diagnostics"
 import { dollarTag } from "../movement-functions"
+import { hasSessionUser } from "../rights/functions"
 import type { CreationNode } from "../sql/dependencies"
 import type { SqlParser } from "../sql/parse"
 import { executeGrants, grantRole } from "../sql/execute-grants"
@@ -70,7 +76,7 @@ const KIND_LABEL_COLUMNS = [
 export interface PlatformLayerInput {
   objects: readonly ParsedObject[]
   physical: PhysicalSnapshot
-  contracts: { users?: UsersContract }
+  contracts: Pick<Contracts, "users" | "membershipSources">
   project: Pick<Project, "name" | "database">
 }
 
@@ -78,7 +84,9 @@ export interface PlatformLayerInput {
  * Платформний шар схеми `simetra` (спека користувачів §3–§5, спека П2 §8.3):
  * гранти схеми, функції сесії й провізії, тригери на таблиці облікових
  * записів провайдера й в'юха міток виду — згенеровані одиниці без файлу з
- * власником «Користувачі». Без довідника з роллю «користувачі» шар порожній.
+ * власником «Користувачі». Без довідника з роллю «користувачі» шар — лише
+ * функція поточного користувача з `sub`, коли вона є (`hasSessionUser`,
+ * Р2d1-6), інакше порожній.
  *
  * Кожна функція — `SECURITY DEFINER` з порожнім `search_path` і повністю
  * кваліфікованими іменами: тригер провайдера спрацьовує від ролі сервісу
@@ -97,7 +105,12 @@ export function buildPlatformUnits(
   source: IdentitySource
 ): SqlUnit[] {
   const { users } = input.contracts
-  if (users === undefined) return []
+  const { provider } = input.project.database
+  if (users === undefined) {
+    return hasSessionUser(input.contracts, provider)
+      ? subjectUserUnits(input.project.name, provider, parse, source)
+      : []
+  }
   const tables: CreationNode[] = [
     { type: "table", ...users.table },
     { type: "table", ...IDENTITIES },
@@ -112,7 +125,6 @@ export function buildPlatformUnits(
   // Тригерна функція реєстрації кличе провізію з тіла plpgsql: ребро до неї
   // бере ідентичність самої одиниці, а не другий запис сигнатури.
   const provision = unit(provisionFunction(users), tables)
-  const { provider } = input.project.database
   const functions = [
     {
       signature: `${qualified(CURRENT_USER)}()`,
@@ -147,6 +159,33 @@ export function buildPlatformUnits(
     unit(kindLabelsView(input.objects, input.physical)),
   ]
   return units.sort((a, b) => compareStrings(a.identity, b.identity))
+}
+
+/**
+ * Шар без «Користувачів»: лише функція поточного користувача і її `EXECUTE`
+ * тим самим ролям сесії. Власника-об'єкта немає — функція спільна для
+ * проєкту, як функції прав. Гранти схеми `simetra` дає стан застосування
+ * (`renderApplyState` T2), тож шар їх не повторює — інакше дубль.
+ */
+function subjectUserUnits(
+  module: string,
+  provider: DatabaseProvider,
+  parse: SqlParser,
+  source: IdentitySource
+): SqlUnit[] {
+  const unit = (sql: string): SqlUnit => ({
+    ...generatedUnit(sql, PLATFORM_SCHEMA, parse),
+    module,
+    generator: "platformLayer",
+  })
+  return [
+    unit(subjectUserFunction(source)),
+    ...executeGrants(
+      `${qualified(CURRENT_USER)}()`,
+      SESSION_ROLES,
+      provider
+    ).map(unit),
+  ].sort((a, b) => compareStrings(a.identity, b.identity))
 }
 
 /**
@@ -192,6 +231,40 @@ function currentUserFunction(
     "END",
   ])
 }
+
+/**
+ * Поточний користувач без «Користувачів» (спека користувачів §7, Р2d1-6):
+ * на провайдері, де id користувача і є `sub` (С8), функція повертає `sub` як
+ * uuid. До uuid приводиться лише рядок формату uuid: `sub` стороннього
+ * провайдера, що не є uuid, дає `NULL`, а не помилку приведення, яка звалила б
+ * увесь запит (спека користувачів §7.1). Анонімна сесія — `NULL`: з
+ * «Користувачами» її відкидає провізія, тут — сама функція, інакше анонімний
+ * вхід отримав би права `everyUser`.
+ */
+function subjectUserFunction(source: IdentitySource): string {
+  return plpgsqlFunction(`${qualified(CURRENT_USER)}()`, "uuid", "STABLE", [
+    "DECLARE",
+    `  v_claims jsonb := nullif(current_setting(${sqlLiteral(SESSION_CLAIMS_SETTING)}, true), '')::jsonb;`,
+    "  v_subject text := v_claims ->> 'sub';",
+    "BEGIN",
+    ...(source.anonymousClaim === undefined
+      ? []
+      : [
+          `  IF v_claims ->> ${sqlLiteral(source.anonymousClaim)} = 'true' THEN`,
+          "    RETURN NULL;",
+          "  END IF;",
+        ]),
+    `  IF v_subject ~ ${sqlLiteral(UUID_PATTERN)} THEN`,
+    "    RETURN v_subject::uuid;",
+    "  END IF;",
+    "  RETURN NULL;",
+    "END",
+  ])
+}
+
+/** Текстова форма uuid: лише такий `sub` приводиться до `uuid` без помилки. */
+const UUID_PATTERN =
+  "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 
 /**
  * Провізія (спека користувачів §5): ідентичність вставляється першою (FK
