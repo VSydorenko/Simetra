@@ -516,6 +516,35 @@ describe("messages catalog", () => {
     )
   })
 
+  it.each([
+    [
+      "plan.rights-source-access",
+      { tables: "public.membership, public.role_grant" },
+    ],
+    [
+      "plan.rights-source-unknown-keys",
+      { source: "grants", keys: "boss, chief", more: 3 },
+    ],
+  ] as const)("%s names its parameters in both locales", (code, params) => {
+    const d = diagnostic(code, "", "", params)
+    for (const message of [d.message, localize(d, "uk").message]) {
+      for (const value of Object.values(params)) {
+        expect(message).toContain(String(value))
+      }
+    }
+  })
+
+  it("plan.rights-source-unknown-keys omits the rest when there is none", () => {
+    const d = diagnostic("plan.rights-source-unknown-keys", "", "", {
+      source: "grants",
+      keys: "boss",
+      more: 0,
+    })
+    for (const message of [d.message, localize(d, "uk").message]) {
+      expect(message).not.toContain("0")
+    }
+  })
+
   it("plan.service-role-access-lost names the tables and keeps them CustomTable", () => {
     const d = diagnostic("plan.service-role-access-lost", "", "", {
       tables: "app.items, app.item_lines",

@@ -143,6 +143,11 @@ import {
   stepId,
   type PlanStep,
 } from "./steps"
+import {
+  readRightsSourceFacts,
+  rightsSourceDiagnostics,
+  rightsSourceInput,
+} from "./rights-sources"
 import { tableKey } from "./table-key"
 import { typeChangeRefusals, typeGuards, type TypeChange } from "./type-guard"
 import { PLATFORM_VERSION } from "./version"
@@ -457,6 +462,20 @@ export async function buildPlan(
   if (membership.refusal !== undefined) return refused([membership.refusal])
   const targetOwners = membership.owners
 
+  // 2в. Прийняті джерела прав (Р2d1-10, Р2d1-11, Р2d1-13): доступ ролі
+  // застосування до таблиць-джерел і ключі ролей у їхніх даних — однією
+  // читальною транзакцією до витягу й тіні і до розгалуження промоції, тож
+  // перевірка діє в обох гілках
+  const sourceInput = rightsSourceInput(model.contracts)
+  const sources = rightsSourceDiagnostics(
+    sourceInput.tables.length === 0
+      ? { owners: [], unknownKeys: [] }
+      : await dbs.reader.transaction(o.target, "rollback", (tx) =>
+          readRightsSourceFacts(tx, sourceInput)
+        )
+  )
+  if (sources.refusal !== undefined) return refused([sources.refusal])
+
   // 2б. Свідок цілі під межею плану. Чужий тригер з іменем згенерованого на
   // таблиці провайдера — до гейта й кроків: дрейф його не бачить (таблиця
   // поза межею застосунку), а крок двигуна замінив би його мовчки (рішення 8
@@ -503,7 +522,13 @@ export async function buildPlan(
     ),
   })
   if (transition.status === "refused")
-    return refused(dedupe([...verdict.diagnostics, ...transition.diagnostics]))
+    return refused(
+      dedupe([
+        ...verdict.diagnostics,
+        ...sources.warnings,
+        ...transition.diagnostics,
+      ])
+    )
   if (transition.status === "promotion") {
     // Вердикт несе той самий об'єкт запису, що прийшов на вхід
     const input = promotions.find((p) => p.record === transition.record)
@@ -528,6 +553,7 @@ export async function buildPlan(
       file: input.file,
       diagnostics: dedupe([
         ...verdict.diagnostics,
+        ...sources.warnings,
         ...transition.diagnostics,
         ...desired.diagnostics,
       ]),
@@ -553,6 +579,7 @@ export async function buildPlan(
     return refused(
       dedupe([
         ...verdict.diagnostics,
+        ...sources.warnings,
         ...transition.diagnostics,
         ...desired.diagnostics,
         ...shadow.diagnostics,
@@ -561,6 +588,7 @@ export async function buildPlan(
   const target = shadow.value
   const diagnostics = dedupe([
     ...verdict.diagnostics,
+    ...sources.warnings,
     ...transition.diagnostics,
     ...desired.diagnostics,
     ...shadow.diagnostics,

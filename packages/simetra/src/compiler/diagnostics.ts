@@ -317,6 +317,8 @@ export const COMPILER_RULES = [
   "plan.preservation-type",
   "plan.provider-trigger-taken",
   "plan.numbering-not-generated",
+  "plan.rights-source-access",
+  "plan.rights-source-unknown-keys",
   "database.failed",
   "roles.create-role-denied",
   "introspect.unrepresentable",

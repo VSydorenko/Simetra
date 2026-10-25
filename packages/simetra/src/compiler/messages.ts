@@ -4031,6 +4031,26 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "План не записано. Перейменуйте чи зніміть наявний тригер; підписці можна й дати інший physicalName.",
     },
   },
+  "plan.rights-source-access": {
+    en: (p) =>
+      `The applying role cannot read every row of the adopted rights source table(s) ${p.tables}: it lacks SELECT on them, or row level security is enabled and the role neither owns them nor has BYPASSRLS`,
+    uk: (p) =>
+      `Роль застосування не може прочитати всіх рядків прийнятих таблиць-джерел прав ${p.tables}: вона не має на них SELECT або на них увімкнено захист рядків, а роль ними не володіє й не має BYPASSRLS`,
+    hint: {
+      en: "No plan was written. The rights functions run as their owner, the applying role (SECURITY DEFINER), and read these tables; row level security lets only the table owner or a BYPASSRLS role see every row. Grant the applying role SELECT and transfer ownership with `ALTER TABLE … OWNER TO <role>` in a step that has the permission, or give the role BYPASSRLS, and plan again.",
+      uk: "План не записано. Функції прав виконуються від свого власника — ролі застосування (SECURITY DEFINER) — і читають ці таблиці; захист рядків показує всі рядки лише власнику таблиці чи ролі з BYPASSRLS. Дайте ролі застосування SELECT і передайте їй власність через `ALTER TABLE … OWNER TO <роль>` кроком, що має на це дозвіл, або дайте ролі BYPASSRLS, і сплануйте знову.",
+    },
+  },
+  "plan.rights-source-unknown-keys": {
+    en: (p) =>
+      `Rows of the adopted assignment source "${p.source}" carry role keys no role declares in sourceKeys: ${p.keys}${Number(p.more) > 0 ? ` and ${p.more} more` : ""}; these rows grant nothing`,
+    uk: (p) =>
+      `Рядки прийнятого джерела призначень "${p.source}" несуть ключі ролей, яких жодна роль не оголошує в sourceKeys: ${p.keys}${Number(p.more) > 0 ? ` і ще ${p.more}` : ""}; ці рядки прав не дають`,
+    hint: {
+      en: "Add the key to sourceKeys of the archetype it stands for, or fix the rows; until then a row with an unknown key gives no rights.",
+      uk: "Додайте ключ у sourceKeys архетипу, який він означає, або виправте рядки; доти рядок з невідомим ключем прав не дає.",
+    },
+  },
   "plan.numbering-not-generated": {
     en: (p) =>
       `${p.object} (${p.table}) numbers rows on first write, but counters are not generated yet: the number stays empty`,

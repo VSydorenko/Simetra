@@ -966,16 +966,23 @@ export function compileRights(
 /**
  * Домен політик з шаром прийнятої таблиці `layer` до промоції `mapping` і
  * після неї та запис промоції: вихідна й бажана моделі плану з промоцією.
+ * `domain` — будівник домену (типово `policyDomain`).
  */
-export async function promotedRights(layer: Layer, mapping: PromoteInput) {
-  const files = policyDomain(layer)
+export async function promotedRights(
+  layer: Layer,
+  mapping: PromoteInput,
+  domain: (...layers: Layer[]) => Map<string, string> = policyDomain
+) {
+  const files = domain(layer)
   const before = (await compileRights(files)).model!
   let n = 950_000
   const result = await promoteObject(files, mapping, {
     schemaPath: (file, schemaFile) => `schemas-of/${file}/${schemaFile}`,
     newId: () => uuid(++n),
   })
-  if (result.diagnostics.length > 0)
+  // Попередження домену (як `rights.adopted-source-writes`) промоції не
+  // зупиняють
+  if (result.diagnostics.some((d) => d.severity === "error"))
     throw new Error(`promotion failed: ${JSON.stringify(result.diagnostics)}`)
   const desired = (await compileRights(applyChanges(files, result.changes)))
     .model!
