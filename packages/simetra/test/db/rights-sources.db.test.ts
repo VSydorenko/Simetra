@@ -17,6 +17,7 @@ import {
   withoutUsers,
 } from "../../src/compiler/__tests__/fixtures/rights"
 import {
+  type RightsSourceInput,
   readRightsSourceFacts,
   rightsSourceInput,
 } from "../../src/schema/apply/rights-sources"
@@ -116,6 +117,23 @@ async function ownerCode(
     return code
   } finally {
     await client.query("ROLLBACK TO SAVEPOINT owner_try")
+  }
+}
+
+/**
+ * Факти джерел (`readRightsSourceFacts`) у точці збереження: виняток читача
+ * не лишає транзакцію опису перерваною, а `row_security` — зміненим.
+ */
+async function sourceFacts(client: pg.Client, input: RightsSourceInput) {
+  await client.query("SAVEPOINT source_facts")
+  try {
+    return await rollbackDatabase(client).transaction(
+      { url: "" },
+      "rollback",
+      (t) => readRightsSourceFacts(t, input)
+    )
+  } finally {
+    await client.query("ROLLBACK TO SAVEPOINT source_facts")
   }
 }
 
@@ -237,7 +255,21 @@ const ADOPTED_CASES: Case[] = [
     ],
   ],
   ["source-wrong-level", () => [["u9", MINE, []]]],
-  ["source-global", () => [["u4", hasRight("read", "announcement"), true]]],
+  [
+    "source-global",
+    () => [
+      ["u4", hasRight("read", "announcement"), true],
+      // Негативний контроль: глобальний рядок u4 — не мій
+      ["u1", hasRight("read", "announcement"), false],
+      [
+        "u1",
+        value(
+          "(SELECT count(*)::int FROM simetra.rights_mine() m WHERE m.level = 'global')"
+        ),
+        0,
+      ],
+    ],
+  ],
   [
     "source-visible-users",
     (id) => [
@@ -313,10 +345,12 @@ describe("adopted sources", () => {
   it("source-plan-facts", async () => {
     const client = tx.client()
     const input = rightsSourceInput(model.contracts)
-    const facts = () =>
-      rollbackDatabase(client).transaction({ url: "" }, "rollback", (t) =>
-        readRightsSourceFacts(t, input)
-      )
+    const facts = (only: RightsSourceInput = input) => sourceFacts(client, only)
+    const ownersOf = (...tables: [schema: string, name: string][]) =>
+      facts({
+        tables: tables.map(([schema, name]) => ({ schema, name })),
+        assignments: [],
+      })
     // Під роллю опису — власник таблиць
     expect(await facts()).toEqual({
       owners: [
@@ -332,6 +366,13 @@ describe("adopted sources", () => {
     // Роль з `SELECT`, але не власник і без `BYPASSRLS`: таблиця з RLS —
     // відмова, і її дані не читаються; таблиці без RLS — без вимоги
     const role = testRoleName("source_reader")
+    const owner = testRoleName("source_owner")
+    const heir = testRoleName("source_heir")
+    const blind = testRoleName("source_blind")
+    // Таблиці й схема — з тегованими іменами ролей: окремого помічника імен
+    // схем немає, а все створене відкочує точка збереження
+    const ownedTable = `${owner}_t`
+    const schema = testRoleName("source_schema")
     await client.query("SAVEPOINT plan_facts")
     try {
       // Творець ролі може перемкнутися на неї лише з `set` (Postgres 16+)
@@ -352,6 +393,45 @@ describe("adopted sources", () => {
           { table: "public.global_grant", owned: true },
         ],
         unknownKeys: [{ source: "globalGrants", keys: [], more: 0 }],
+      })
+      await client.query("RESET ROLE")
+
+      // Власник, успадкований через членство (`pg_has_role`), обходить RLS
+      await client.query(`CREATE ROLE ${owner} NOLOGIN NOBYPASSRLS`)
+      await client.query(`GRANT USAGE, CREATE ON SCHEMA public TO ${owner}`)
+      await client.query(`CREATE TABLE public.${ownedTable} (id integer)`)
+      await client.query(`ALTER TABLE public.${ownedTable} OWNER TO ${owner}`)
+      await client.query(
+        `ALTER TABLE public.${ownedTable} ENABLE ROW LEVEL SECURITY`
+      )
+      await client.query(`CREATE ROLE ${heir} NOLOGIN NOBYPASSRLS`)
+      await client.query(`GRANT ${owner} TO ${heir}`)
+      await client.query(`SET LOCAL ROLE ${heir}`)
+      expect
+        .soft(await ownersOf(["public", ownedTable]), "inherited owner")
+        .toEqual({
+          owners: [{ table: `public.${ownedTable}`, owned: true }],
+          unknownKeys: [],
+        })
+      await client.query("RESET ROLE")
+
+      // Без `SELECT` на таблиці без RLS — відмова; без `USAGE` на схемі —
+      // теж відмова (рядок є), а не відсутність і не `42501`
+      await client.query(`CREATE ROLE ${blind} NOLOGIN NOBYPASSRLS`)
+      await client.query(`GRANT USAGE ON SCHEMA public TO ${blind}`)
+      await client.query(`CREATE SCHEMA ${schema}`)
+      await client.query(`CREATE TABLE ${schema}.t (id integer)`)
+      await client.query(`GRANT SELECT ON ${schema}.t TO ${blind}`)
+      await client.query(`SET LOCAL ROLE ${blind}`)
+      expect
+        .soft(await ownersOf(["public", "membership"]), "no SELECT")
+        .toEqual({
+          owners: [{ table: "public.membership", owned: false }],
+          unknownKeys: [],
+        })
+      expect.soft(await ownersOf([schema, "t"]), "no schema USAGE").toEqual({
+        owners: [{ table: `${schema}.t`, owned: false }],
+        unknownKeys: [],
       })
     } finally {
       await client.query("ROLLBACK TO SAVEPOINT plan_facts")
@@ -446,6 +526,7 @@ const WITHOUT_USERS_CASES: Case[] = [
       ["u1", TASKS, [id("t1")]],
       [NOT_A_UUID, CURRENT_USER, null],
       [NOT_A_UUID, TASKS, []],
+      [NOT_A_UUID, MINE, []],
       [{ role: "anon", claims: { role: "anon" } }, CURRENT_USER, null],
     ],
   ],
@@ -486,7 +567,9 @@ describe("without users", () => {
     const client = await tx.open()
     await client.query(renderDesiredState(model).sql)
     // Без «Користувачів» гранти схеми `simetra` дає стан застосування, а не
-    // платформний шар (Р2d1-6): без них роль API не дійде до жодної функції
+    // платформний шар (Р2d1-6): без них роль API не дійде до жодної функції.
+    // Те саме поєднання, що застосування бере з `desiredForApply`
+    // (`schema/apply/desired.ts`)
     await client.query(renderApplyState(model))
     ids = await seedWithoutUsers(client)
   })
@@ -501,10 +584,9 @@ describe("without users", () => {
   // `zzz` відсікає `where` ролі, а `lead` рядка колізії і `member` рядка R1'
   // — ключі іншого рівня в джерелі над спільною таблицею
   it("poly-plan-keys", async () => {
-    const facts = await rollbackDatabase(tx.client()).transaction(
-      { url: "" },
-      "rollback",
-      (t) => readRightsSourceFacts(t, rightsSourceInput(model.contracts))
+    const facts = await sourceFacts(
+      tx.client(),
+      rightsSourceInput(model.contracts)
     )
     const keysOf = (source: string) =>
       facts.unknownKeys.find((u) => u.source === source)?.keys
