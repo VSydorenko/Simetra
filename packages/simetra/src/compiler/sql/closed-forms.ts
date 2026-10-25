@@ -150,25 +150,25 @@ function alterFunction(tree: unknown): AlterFunctionNode | undefined {
 
 /**
  * Чи одиниця `functionSettings` (`ALTER FUNCTION`) діє на функцію чи
- * процедуру `fn`. Ідентичності без префікса класу збігаються
- * (`function:<схема.ім'я(типи)>` ↔ `functionSettings:<схема.ім'я(типи)>`);
- * `ALTER` без аргументів — кожне перевантаження з цим ім'ям, як `ownsTarget`.
- * Некваліфіковане ім'я — у будь-якій схемі (fail-closed): рендер не задає
- * `search_path`, тож Postgres розв'яже його за шляхом сесії, а не за схемою
- * файлу (як `kindTableOf`).
+ * процедуру `fn`: за `схема.ім'я`, без типів аргументів (fail-closed).
+ * Сигнатуру ідентичності компілятор зводить не так, як Postgres: `%TYPE` не
+ * розгортає, а некваліфікований тип поза моделлю лишає як є, тож `ALTER` з
+ * іншим написанням типу тієї самої функції `pg_proc` виходив би з-під
+ * перевірки. Перевантаження компілятор не розрізняє й в обході досяжності, а
+ * в закритих модулях їх заборонено (`sql.function-overload`). Некваліфіковане
+ * ім'я — у будь-якій схемі: рендер не задає `search_path`, тож Postgres
+ * розв'яже його за шляхом сесії, а не за схемою файлу (як `kindTableOf`).
  */
 export function settingsTargets(
-  settings: Pick<VerbatimUnit, "identity" | "tree">,
-  fn: Pick<VerbatimUnit, "class" | "identity" | "name">
+  settings: Pick<VerbatimUnit, "tree">,
+  fn: Pick<VerbatimUnit, "class" | "schema" | "name">
 ): boolean {
   if (fn.class !== "function" && fn.class !== "procedure") return false
   const alter = alterFunction(settings.tree)
   const names = (alter?.func?.objname ?? []).map((n) => n.String?.sval)
-  if (names.length === 1) return names[0] === fn.name
-  const target = settings.identity.slice("functionSettings:".length)
-  const key = fn.identity.slice(fn.class.length + 1)
   return (
-    target === key || (!target.endsWith(")") && key.startsWith(`${target}(`))
+    names.at(-1) === fn.name &&
+    (names.length === 1 || names.at(-2) === fn.schema)
   )
 }
 

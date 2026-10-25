@@ -27,6 +27,8 @@ import {
 } from "./helpers"
 
 const SHARED = "sql/public/shared.sql"
+/** Спільний файл іншої схеми; тип `string` — ключ рядка таблиці кейсів. */
+const OTHER_SCHEMA_SQL: string = "sql/app/s.sql"
 const PROJECT_MODULE = PROJECT_CATALOG_FILE.replace(".meta.json", ".sql")
 const COUNTER_MODULE = COMMENT_COUNTER_FILE.replace(".meta.json", ".sql")
 const HEAD = "public.count_comment"
@@ -834,6 +836,26 @@ describe("sql.function-settings-shell", () => {
           },
         },
       ],
+    },
+    {
+      // Сигнатуру `ALTER` компілятор зводить не так, як Postgres (`%TYPE`
+      // він не розгортає), тож ціль — за ім'ям.
+      name: "an ALTER that spells the argument type differently",
+      sql: {
+        [PROJECT_MODULE]:
+          "CREATE FUNCTION public.project_label(x public.project.id%TYPE) RETURNS int LANGUAGE sql STABLE SECURITY INVOKER AS $$ SELECT 1 $$;\n",
+        [SHARED]: "ALTER FUNCTION public.project_label(uuid) SECURITY DEFINER;",
+      },
+      layers: [],
+      expected: [shell(SHARED, "public.project_label", "security")],
+    },
+    {
+      // Некваліфіковане ім'я рендер розв'язує за шляхом сесії, а не за
+      // схемою файлу.
+      name: "an unqualified ALTER in a file of another schema",
+      sql: { [OTHER_SCHEMA_SQL]: "ALTER FUNCTION count_comment() RESET ALL;" },
+      layers: [],
+      expected: [shell(OTHER_SCHEMA_SQL, "app.count_comment", "*")],
     },
     {
       name: "claims set on a handler from a debt module",
