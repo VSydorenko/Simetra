@@ -376,6 +376,7 @@ describe("platform layer", () => {
       nameSources: [{ column: "nickname" }],
       providerKey: "other-idp",
       subjectIsUserId: true,
+      anonymousClaim: null,
     }
     const units = buildPlatformUnits(
       {
@@ -431,6 +432,7 @@ describe("platform layer", () => {
         anonymousColumn: "guest",
         providerKey: "other-idp",
         subjectIsUserId: true,
+        anonymousClaim: null,
       }
     )
     expect(
@@ -588,6 +590,23 @@ describe("platform layer without users", () => {
     expect(anonymous.at).toBeLessThan(
       branch(`v_subject ~ '${UUID_PATTERN}'`).at
     )
+  })
+
+  it("a provider without anonymous sessions has no anonymous check", async () => {
+    const parse = await loadSqlParser()
+    const units = buildPlatformUnits(
+      {
+        objects: model.objects,
+        physical: model.physical,
+        contracts: model.contracts,
+        project: model.project,
+      },
+      parse,
+      { ...PROVIDER_IDENTITY_SOURCES.supabase, anonymousClaim: null }
+    )
+    const fn = units.find((u) => u.identity === CURRENT_USER)!
+    expect(bodyShape(fn.sql).filter((s) => s.type === "if")).toHaveLength(1)
+    expect(fn.sql).not.toContain("is_anonymous")
   })
 
   it("without users and without a membership source there is no session user", async () => {

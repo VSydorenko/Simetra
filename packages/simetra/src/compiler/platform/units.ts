@@ -247,7 +247,7 @@ function subjectUserFunction(source: IdentitySource): string {
     `  v_claims jsonb := nullif(current_setting(${sqlLiteral(SESSION_CLAIMS_SETTING)}, true), '')::jsonb;`,
     "  v_subject text := v_claims ->> 'sub';",
     "BEGIN",
-    ...(source.anonymousClaim === undefined
+    ...(source.anonymousClaim === null
       ? []
       : [
           `  IF v_claims ->> ${sqlLiteral(source.anonymousClaim)} = 'true' THEN`,
