@@ -7,6 +7,7 @@ Contents:
 - Users, authorship and membership
 - Rights declarations
 - Rights sets and roles
+- Adopted membership and assignment sources
 - Who reads what
 - Who writes what
 - Policies and triggers on a table of a kind
@@ -48,7 +49,9 @@ People are platform data, not tables you write yourself:
   member table and set function. One membership catalog per scope kind.
 
 The platform layer (identities, the current user, provisioning) lives in the
-PG schema `simetra`, generated when a users catalog exists. The schema is
+PG schema `simetra`, generated when a users catalog exists, or when the
+project has a membership source and its provider's user id is the `sub` claim
+(then only the current-user function, no identities table). The schema is
 reserved: no object, `defaultSchema`, set function, external reference,
 event handler or SQL unit may use it, and there is no `metadata/sql/simetra/`
 folder (`schema.reserved`). In SQL, the
@@ -111,11 +114,14 @@ with a trigger on the target table, see "Carrier copies").
   (`rights.dimension-function-*`).
 - **`membershipSources`** (project) — an adopted table that holds the
   membership of a scope kind instead of a membership catalog.
-  `{ "name": "<source>", "scopeKind": "<scope kind>", "table": <CustomTable ref>, "columns": { "scope": "<column>", "user": "<column>" } }`
+  `{ "name": "<source>", "scopeKind": "<scope kind>", "table": <CustomTable ref>, "columns": { "scope": "<column>", "user": "<column>", "active": "<column>" }, "where": [<condition>] }`
+  (`active` and `where` are optional). See "Adopted membership and assignment sources".
 - **`assignmentSources`** (project) — an adopted table that holds role
   assignments of one level: `"global"`, `{ "scopeKind": "<scope kind>" }` or
   `{ "container": <ref> }`.
-  `{ "name": "<source>", "assignedOn": "global", "table": <CustomTable ref>, "columns": { "member": "<column>", "role": "<column>" } }`
+  `{ "name": "<source>", "assignedOn": "global", "table": <CustomTable ref>, "columns": { "member": "<column>", "role": "<column>" }, "where": [<condition>] }`
+  (`columns` also takes `scope`, `container` and `active`). See "Adopted
+  membership and assignment sources".
 
 Dimensions and sources are project elements: add them to the project root
 (`"target": { "kind": "Project" }`) and rename or delete them by
@@ -183,6 +189,71 @@ the compiler's rule catalog. Changing a role's level is an
 `identity.assigned-once-changed` error; renaming its scope kind or container
 is not.
 
+## Adopted membership and assignment sources
+
+A membership source and an assignment source make the rows of an adopted
+table give rights: the platform reads them in its rights functions, the same
+way as a membership catalog and the system rights catalogs. A role takes its
+key in such a table through `sourceKeys`.
+
+- **Member.** The member of a membership source is the table key, so the
+  table needs a primary key of one uuid column
+  (`rights.source-member-key`). The system rights catalogs of the scope kind
+  refer to the member by a composite foreign key within the scope, so the
+  table metadata also needs `UNIQUE (<scope column>, <key>)` in `uniques`
+  (`rights.source-member-unique`). The `scope`, `user`, `member` and
+  `container` columns are uuid, `active` is boolean
+  (`rights.source-column-type`). A table with
+  `rowLevelSecurity: forced` is refused (`rights.source-forced-rls`).
+- **Without a users catalog.** The user is the `sub` claim of the session read
+  as a uuid; the source's user column holds that uuid.
+- **Rows.** `where` is a conjunction of conditions on columns of the table,
+  `{ "column": "<column>", "equals": <string | boolean | integer> }` or
+  `{ "column": "<column>", "isNull": true | false }`; rows that fail it are
+  not part of the source. Use it when one table holds several kinds of rows.
+  The plan does not report rows cut off by `where` as unknown role keys.
+- **Scope of an assignment row** (`columns.scope`, scope level only): a column
+  whose value must equal the scope of the member; `null` takes the scope from
+  the member; omitted means the `scopeColumn` of the table. Omitted on a
+  table without `scopeColumn` is `rights.source-scope-column`. The field on
+  another level is the same error.
+- **Role through a reference.** `columns.role` is either a column holding the
+  role key or `{ "column": "<column>", "references": <CustomTable ref>, "key": "<column>", "where": [<condition>] }`:
+  the column is a uuid reference to an adopted role table, `key` is the role
+  key there, and the role `where` keeps only the roles of the source (custom
+  roles with the same key do not turn a system role on). The role table needs
+  a single-column uuid primary key (`rights.source-role-key`, reason
+  `primaryKey`). Without a role `where` the `key` column must be unique on
+  its own: a non-deferrable unique constraint or a unique index without
+  predicate, operator class or collation; otherwise
+  `rights.source-role-key`, reason `ambiguous`.
+- **Two sources over one table** (for example global and per-scope
+  assignments in one table) need `where` conditions that provably exclude
+  each other on one column; add one discriminator column (for example
+  `scope_type`) and give each source a different literal, or a literal
+  against `isNull`. Otherwise `rights.source-where`, reason `shared`.
+  `rights.source-where` also reports a condition on a column that is not
+  text, uuid, boolean or integer, and an `equals` literal of the wrong type
+  (`isNull` is allowed on any column).
+- **Verbatim set function.** A scope kind with its own `setFunction` (SQL you
+  write) must apply the same `where` and `active` conditions of its
+  membership source, or the tenant boundary will differ from the platform's
+  own "my scopes" function.
+- **Grants.** The application role that applies the metadata owns the rights
+  functions (`SECURITY DEFINER`), so it needs `USAGE` on the schema of
+  every source and role table, `SELECT` on every such table, and, when a table has row level security enabled,
+  must own it or have `BYPASSRLS`; `plan` refuses to write a plan otherwise
+  (`plan.rights-source-access`). Rows with a role key no role declares in
+  `sourceKeys` grant nothing; `plan` reports them
+  (`plan.rights-source-unknown-keys`).
+- **The platform only reads sources.** Whatever writes a source table
+  belongs to the application; the rights safeguards (last-holder guards,
+  versions, the rights journal) do not apply to those writes, which the
+  compiler notes as `rights.adopted-source-writes`.
+- **Deleting a member.** A member of an adopted membership referenced by
+  platform role assignments cannot be deleted until those assignments are
+  removed (foreign key violation `23503`).
+
 ## System rights catalogs
 
 The system rights catalogs are Catalogs with `"role": "rightsRoles"` (custom
@@ -194,7 +265,8 @@ Run `simetra roles` before the first `plan` on a new database.
 ## Who reads what
 
 Rows are read through rights, not by default. In a project with at least one
-role and a users catalog:
+role and a session user (a users catalog, or a membership source on a provider
+whose user id is the `sub` claim):
 
 - A table of a kind is read only through a role's `read` right on its object,
   at the extent of the grant (`any`, `own`, a dimension, in a container); its
@@ -206,10 +278,12 @@ role and a users catalog:
 - A scoped object is read only inside the reader's scopes, and only through a
   role assigned there: membership in a tenant without a role reads nothing.
 - The users catalog shows only yourself and the users of members of your
-  scopes (when the project has a membership catalog), whatever the role grants
+  scopes (when the project has a membership catalog or a membership source),
+  whatever the role grants
   on it: a scope-level `read` on the users catalog reads only those.
 
-Without any role (or without a users catalog) no right opens a row: only
+Without any role (or without a session user: no users catalog and no
+membership source on such a provider) no right opens a row: only
 `publicRead` objects are readable. `rights.scope-kind-unread` (a warning on
 the scope kind in `project.meta.json`) says that no role reads any object of
 that scope kind, so nobody will see their rows: grant `read` to a role or
@@ -399,7 +473,17 @@ in the object row. The copies are written only by the platform:
   `UPDATE` that changes the content, and a write subscription without
   `whenChanged` gets the pair `<physicalName>` (`UPDATE`, content changed)
   and `<physicalName>_insert` (`INSERT`), so propagation triggers neither.
-- A new copy on a table that already has rows is refused by `plan`
-  (`plan.carrier-backfill-missing`, no plan written): copies get their values
-  only when a row is written. Add the carrier before the table gets rows, or
-  wait for the platform's data step for carrier copies.
+- A new copy on a table that already has rows is filled by a plan step of
+  origin `carriers` (class `dataStep`, no `--allow` needed) that runs right
+  after the engine steps, in the same transaction: each row takes the value
+  from the row its composite foreign key points to, and a row without a link
+  gets `NULL`. The step holds `SHARE ROW EXCLUSIVE` on the table and on its
+  source until the apply ends. Triggers stay on, and a copy-only change does
+  not bump `version` or fire subscriptions.
+- When a copy takes the place of a column that was not a copy (a removed
+  attribute that still holds data, or an adopted column the promotion
+  mapping left out), the step overwrites that data: it is class
+  `destructive` and needs `--allow <step id>` like any other step that loses
+  data. A copy column the plan itself creates is always filled, even if the
+  last applied snapshot says the copy already exists (for example, an
+  administrator dropped it by hand and the drift was accepted).

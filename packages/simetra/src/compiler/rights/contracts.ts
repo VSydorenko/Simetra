@@ -2,11 +2,14 @@ import {
   KIND_REGISTRY,
   actionRequires,
   closeRequires,
+  singleUuidKeyColumn,
   type ActionEffects,
+  type CustomTable,
   type Dml,
   type PhysicalSnapshot,
   type Project,
   type Role,
+  type SourceCondition,
 } from "simetra/model"
 import {
   mainTableOf,
@@ -15,6 +18,7 @@ import {
   type Contracts,
   type MembershipSourceContract,
   type RightsAction,
+  type SourceConditionContract,
   type RightsContract,
   type RightsExtent,
   type RightsProjectionRow,
@@ -51,6 +55,7 @@ import {
   roleLevel,
   scopeKindOf,
   sourceLevel,
+  sourceLiteralType,
   supportedExtents,
 } from "./facts"
 import {
@@ -387,54 +392,141 @@ export function sourceContracts(
   const { byId } = carrierContext({ objects, references, physical, project })
   const toId = (pointer: string, role: ResolvedReference["role"]) =>
     projectTarget(pointer, role, { references })
-  // Таблиця джерела й фізична колонка за логічним полем мапінгу.
-  const tableOf = (at: string) => {
-    const object = must(byId.get(must(toId(`${at}/table`, "source.table"))))
+  // Таблиця за посиланням (таблиця-джерело чи таблиця ролей) і фізична
+  // колонка за вказівником її логічного імені.
+  const tableOf = (
+    pointer: string,
+    role: "source.table" | "source.roleTable"
+  ) => {
+    const object = must(byId.get(must(toId(pointer, role))))
+    const data = object.data as CustomTable
     const table = must(mainTableOf(physical, must(object.id)))
     const columns = elementColumns(object, table, project.naming.attributeCase)
-    const column = (field: string) =>
-      must(
-        columns.get(must(toId(`${at}/columns/${field}`, "source.column")))?.[0]
-      )
+    const columnAt = (at: string) => {
+      const id = must(toId(at, "source.column"))
+      return {
+        physical: must(columns.get(id)?.[0]),
+        column: must(data.columns.find((c) => c.id === id)),
+      }
+    }
+    // Одноколонковий uuid-ключ — учасник джерела членства (Р2d1-2) і ключ
+    // таблиці ролей (Р2d1-17); його перевірила стадія 4.
+    const key = () =>
+      must(columns.get(must(singleUuidKeyColumn(data)?.id))?.[0])
+    // Умова рядків з фізичними колонками; тип літерала — за колонкою, її
+    // відповідність перевірила стадія 4.
+    const conditions = (
+      at: string,
+      where: readonly SourceCondition[]
+    ): SourceConditionContract[] =>
+      where.map((condition, j) => {
+        const { physical: name, column } = columnAt(`${at}/where/${j}/column`)
+        return "isNull" in condition
+          ? { column: name, isNull: condition.isNull }
+          : {
+              column: name,
+              equals: condition.equals,
+              type: must(sourceLiteralType(column)),
+            }
+      })
     return {
       table: { schema: table.schema, name: table.name },
-      column,
+      column: (at: string) => columnAt(at).physical,
+      key,
+      conditions,
     }
+  }
+  // Таблиця ролей джерела призначень (Р2d1-17): ключ — її uuid-ключ, роль —
+  // колонка `key`, умова — над її колонками.
+  const roleTableOf = (
+    at: string,
+    where: readonly SourceCondition[]
+  ): NonNullable<AssignmentSourceContract["roleTable"]> => {
+    const roles = tableOf(`${at}/references`, "source.roleTable")
+    return {
+      table: roles.table,
+      id: roles.key(),
+      key: roles.column(`${at}/key`),
+      where: roles.conditions(at, where),
+    }
+  }
+  // Фізична колонка `scopeColumn` таблиці-джерела.
+  const tableScopeColumn = (pointer: string) => {
+    const object = must(byId.get(must(toId(pointer, "source.table"))))
+    const table = must(mainTableOf(physical, must(object.id)))
+    const columns = elementColumns(object, table, project.naming.attributeCase)
+    const id = must(
+      references.find(
+        (r) =>
+          r.from.file === object.file &&
+          r.from.pointer === "/scopeColumn" &&
+          r.role === "customTable.scopeColumn"
+      )?.to.id
+    )
+    return must(columns.get(id)?.[0])
   }
   const membershipSources = project.membershipSources
     .map((source, index): MembershipSourceContract => {
       const at = `/membershipSources/${index}`
-      const { table, column } = tableOf(at)
+      const { table, column, key, conditions } = tableOf(
+        `${at}/table`,
+        "source.table"
+      )
       return {
         sourceId: must(source.id),
         name: source.name,
         scopeKindId: must(toId(`${at}/scopeKind`, "source.scopeKind")),
         table,
-        scope: column("scope"),
-        user: column("user"),
+        scope: column(`${at}/columns/scope`),
+        member: key(),
+        user: column(`${at}/columns/user`),
         ...(source.columns.active === undefined
           ? {}
-          : { active: column("active") }),
+          : { active: column(`${at}/columns/active`) }),
+        where: conditions(at, source.where),
       }
     })
     .sort((a, b) => compareStrings(a.sourceId, b.sourceId))
   const assignmentSources = project.assignmentSources
     .map((source, index): AssignmentSourceContract => {
       const at = `/assignmentSources/${index}`
-      const { table, column } = tableOf(at)
+      const { table, column, conditions } = tableOf(
+        `${at}/table`,
+        "source.table"
+      )
+      const assignedOn = must(sourceLevel(project, index, references))
+      const { role } = source.columns
+      // Колонка скоупу рядка (Р2d1-16, Р2d1-19): назва — її колонка, `null` —
+      // скоуп з учасника, пропуск — `scopeColumn` таблиці (на рівні скоупу
+      // без нього пропуск відхилила стадія 4).
+      const scope =
+        assignedOn.level !== "scope" || source.columns.scope === null
+          ? undefined
+          : source.columns.scope === undefined
+            ? tableScopeColumn(`${at}/table`)
+            : column(`${at}/columns/scope`)
       return {
         sourceId: must(source.id),
         name: source.name,
-        assignedOn: must(sourceLevel(project, index, references)),
+        assignedOn,
         table,
-        member: column("member"),
-        role: column("role"),
+        member: column(`${at}/columns/member`),
+        role: column(
+          typeof role === "string"
+            ? `${at}/columns/role`
+            : `${at}/columns/role/column`
+        ),
+        ...(typeof role === "string"
+          ? {}
+          : { roleTable: roleTableOf(`${at}/columns/role`, role.where) }),
+        ...(scope === undefined ? {} : { scope }),
         ...(source.columns.container === undefined
           ? {}
-          : { container: column("container") }),
+          : { container: column(`${at}/columns/container`) }),
         ...(source.columns.active === undefined
           ? {}
-          : { active: column("active") }),
+          : { active: column(`${at}/columns/active`) }),
+        where: conditions(at, source.where),
       }
     })
     .sort((a, b) => compareStrings(a.sourceId, b.sourceId))

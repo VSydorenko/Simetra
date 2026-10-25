@@ -54,14 +54,17 @@ const ops = (dmls: readonly Dml[]) =>
  * контексту — явні ребра `requires`.
  */
 export function buildEffectsUnits(
-  contracts: Pick<Contracts, "rights" | "roles" | "users">,
+  contracts: Pick<
+    Contracts,
+    "rights" | "roles" | "users" | "membershipSources"
+  >,
   physical: PhysicalSnapshot,
   attributeCase: AttributeCase,
   provider: DatabaseProvider,
   module: string,
   parse: SqlParser
 ): SqlUnit[] {
-  if (!hasRightsFunctions(contracts)) return []
+  if (!hasRightsFunctions(contracts, provider)) return []
   const rightsById = new Map(contracts.rights.map((c) => [c.objectId, c]))
   const current: CreationNode = {
     type: "unit",

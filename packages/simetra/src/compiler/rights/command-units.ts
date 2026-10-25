@@ -35,7 +35,10 @@ export const COMMAND_FUNCTIONS = {
   current: platform("command_current"),
 } as const satisfies Record<string, QualifiedName>
 
-type Contract = Pick<Contracts, "rights" | "roles" | "users">
+type Contract = Pick<
+  Contracts,
+  "rights" | "roles" | "users" | "membershipSources"
+>
 
 /**
  * Пари (`object`, `action`), які команда може назвати: дії з непорожнім
@@ -65,7 +68,7 @@ export function buildCommandUnits(
   module: string,
   parse: SqlParser
 ): SqlUnit[] {
-  if (!hasRightsFunctions(contracts)) return []
+  if (!hasRightsFunctions(contracts, provider)) return []
   const F = COMMAND_FUNCTIONS
   const parsedNode: CreationNode = {
     type: "unit",

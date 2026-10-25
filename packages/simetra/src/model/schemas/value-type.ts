@@ -139,7 +139,8 @@ const INT8_RANGE: [bigint, bigint] = [-(2n ** 63n), 2n ** 63n - 1n]
 
 const DECIMAL = /^[+-]?(\d+(\.\d*)?|\.\d+)$/
 const INTEGER_TEXT = /^[+-]?\d+$/
-const UUID_TEXT =
+/** Канонічна текстова форма uuid з дефісами (регістр байдужий). */
+export const UUID_TEXT =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const DATE_TEXT = /^(\d{4})-(\d{2})-(\d{2})$/
 /**

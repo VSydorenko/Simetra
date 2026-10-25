@@ -88,7 +88,9 @@ const tableKey = (t: { schema: string; name: string }) =>
  * Зв'язки копій знімка. Копію будує стадія 1 лише там, де FK зв'язку й
  * таблиця джерела є, тож їхня відсутність — дефект компілятора.
  */
-function carrierLinks(physical: PhysicalSnapshot): CarrierLink[] {
+function carrierLinks(
+  physical: Pick<PhysicalSnapshot, "tables">
+): CarrierLink[] {
   const byKey = new Map(physical.tables.map((t) => [tableKey(t), t]))
   const links: CarrierLink[] = []
   for (const table of physical.tables) {
@@ -363,6 +365,127 @@ function propagateFunction(
   }
   body.push("  RETURN NULL;", "END")
   return definerTrigger(fn, body.join("\n"))
+}
+
+/** Оператор кроку даних копій носіїв: таблиця з копіями, джерело й SQL. */
+export interface CarrierBackfillStatement {
+  table: QualifiedName
+  source: QualifiedName
+  /** Колонки-копії, які пише оператор: за ними план вирішує клас кроку. */
+  columns: string[]
+  sql: string
+}
+
+/**
+ * SQL кроку даних копій носіїв (спека прав §5.2, Р2b2-2): один `UPDATE` на
+ * зв'язок (таблиця з копіями, `through`) з очікуваними копіями. Пари й
+ * колонки — ті самі зв'язки, що будують тригери виведення й поширення, тож
+ * значення копії бере лише рядок, на який указує складений FK (Р2a2-8,
+ * Р2a2-27). Форма — виведення тригера: підзапит у `SET` дає `NULL`, коли
+ * рядка джерела немає, тож рядок з `NULL` у зв'язку отримує `NULL`-копію, а
+ * не лишає старе значення під іменем копії (`UPDATE … FROM` з внутрішнім
+ * з'єднанням його б пропустив, Р2a2-11). Умова — `IS DISTINCT FROM` по
+ * кожній колонці: Postgres не порівнює рядок з підзапитом цим оператором, а
+ * `ROW(…)` вважав би рядок без зв'язку з `NULL`-копіями відмінним щоразу й
+ * будив би підписки; узгоджених рядків крок не чіпає. `BEFORE`-тригер
+ * носіїв на цьому `UPDATE` перевиводить змінену копію з того самого
+ * джерела — значення з `SET` перезаписується тим самим. Крок іде під
+ * `search_path` транзакції, тож кожне ім'я кваліфіковане, а рівність —
+ * `OPERATOR(pg_catalog.=)`.
+ *
+ * Порядок (Р2b2-3): оператор, чия копія читає іншу очікувану копію (копія
+ * ТЧ читає копію шляху власника), — після неї; решта — за таблицею й
+ * `through`. Поширення й так дописує наступний крок, тож другий оператор
+ * знаходить рядки вже узгодженими, а план лишається детермінованим.
+ */
+export function carrierBackfillStatements(
+  physical: Pick<PhysicalSnapshot, "tables">,
+  pending: readonly { table: QualifiedName; columns: readonly string[] }[]
+): CarrierBackfillStatement[] {
+  const wanted = new Map<string, Set<string>>()
+  for (const entry of pending) {
+    const key = tableKey(entry.table)
+    const columns = wanted.get(key) ?? new Set<string>()
+    for (const c of entry.columns) columns.add(c)
+    wanted.set(key, columns)
+  }
+  const byTable = new Map(physical.tables.map((t) => [tableKey(t), t]))
+  for (const [key, columns] of wanted) {
+    const table = byTable.get(key)
+    for (const column of columns) {
+      if (
+        table === undefined ||
+        table.columns.find((c) => c.name === column)?.origin.copyOf ===
+          undefined
+      ) {
+        throw new Error(
+          `internal: pending carrier ${key}.${column} is not a copy in the desired snapshot`
+        )
+      }
+    }
+  }
+  const backfills = carrierLinks(physical)
+    .map((link) => {
+      const columns = wanted.get(tableKey(link.table))
+      return {
+        link,
+        copies: link.copies.filter((c) => columns?.has(c.name) === true),
+      }
+    })
+    .filter((b) => b.copies.length > 0)
+    .sort(
+      (a, b) =>
+        compareStrings(a.link.table.schema, b.link.table.schema) ||
+        compareStrings(a.link.table.name, b.link.table.name) ||
+        compareStrings(a.link.through, b.link.through)
+    )
+  // Хто пише кожну очікувану копію: оператор, що читає її з джерела, — після.
+  type Backfill = (typeof backfills)[number]
+  const writer = new Map<string, Backfill>()
+  for (const b of backfills) {
+    for (const c of b.copies)
+      writer.set(`${tableKey(b.link.table)}\0${c.name}`, b)
+  }
+  const ordered: Backfill[] = []
+  const state = new Map<Backfill, "visiting" | "done">()
+  const visit = (b: Backfill) => {
+    if (state.get(b) === "done") return
+    if (state.get(b) === "visiting") {
+      throw new Error(
+        `internal: carrier copies of ${tableKey(b.link.table)} read each other`
+      )
+    }
+    state.set(b, "visiting")
+    for (const c of b.copies) {
+      const read = writer.get(`${tableKey(b.link.source)}\0${c.column}`)
+      if (read !== undefined) visit(read)
+    }
+    state.set(b, "done")
+    ordered.push(b)
+  }
+  for (const b of backfills) visit(b)
+  return ordered.map(({ link, copies }) => {
+    const from =
+      `FROM ${relation(link.source)} AS s WHERE ` +
+      link.pairs
+        .map((p) => `s.${q(p.source)} OPERATOR(pg_catalog.=) d.${q(p.local)}`)
+        .join(" AND ")
+    const differs = copies
+      .map(
+        (c) =>
+          `d.${q(c.name)} IS DISTINCT FROM (SELECT s.${q(c.column)} ${from})`
+      )
+      .join(" OR ")
+    return {
+      table: { schema: link.table.schema, name: link.table.name },
+      source: { schema: link.source.schema, name: link.source.name },
+      columns: copies.map((c) => c.name),
+      sql:
+        `UPDATE ${relation(link.table)} AS d SET (${copies.map((c) => q(c.name)).join(", ")}) = ` +
+        `(SELECT ${copies.map((c) => `s.${q(c.column)}`).join(", ")} ${from}) ` +
+        `WHERE ${differs};`,
+    }
+  })
 }
 
 /**

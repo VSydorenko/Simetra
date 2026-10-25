@@ -168,6 +168,8 @@ export type ReferenceRole =
   | "source.scopeKind"
   /** Контейнер рівня джерела призначень (`assignedOn.container`). */
   | "source.container"
+  /** Прийнята таблиця ролей джерела призначень (`columns.role.references`). */
+  | "source.roleTable"
   /** Набір прав у `include` набору чи ролі. */
   | "rights.include"
   /** Вид скоупу рівня ролі (`assignedOn.scopeKind`). */

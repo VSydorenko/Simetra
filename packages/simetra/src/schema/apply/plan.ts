@@ -38,9 +38,10 @@ import {
   type PromotionSection,
 } from "./artifact"
 import {
-  carrierBackfillRefusals,
+  carrierBackfillSteps,
+  createdByPlan,
   pendingCarrierCopies,
-  type PendingCarrierCopies,
+  type CreatedByPlan,
 } from "./carrier-backfill"
 import { desiredForApply, type ApplyDesired } from "./desired"
 import { applyDiagnostic } from "./diagnostic"
@@ -142,6 +143,11 @@ import {
   stepId,
   type PlanStep,
 } from "./steps"
+import {
+  readRightsSourceFacts,
+  rightsSourceDiagnostics,
+  rightsSourceInput,
+} from "./rights-sources"
 import { tableKey } from "./table-key"
 import { typeChangeRefusals, typeGuards, type TypeChange } from "./type-guard"
 import { PLATFORM_VERSION } from "./version"
@@ -456,6 +462,20 @@ export async function buildPlan(
   if (membership.refusal !== undefined) return refused([membership.refusal])
   const targetOwners = membership.owners
 
+  // 2в. Прийняті джерела прав (Р2d1-10, Р2d1-11, Р2d1-13): доступ ролі
+  // застосування до таблиць-джерел і ключі ролей у їхніх даних — однією
+  // читальною транзакцією до витягу й тіні і до розгалуження промоції, тож
+  // перевірка діє в обох гілках
+  const sourceInput = rightsSourceInput(model.contracts)
+  const sources = rightsSourceDiagnostics(
+    sourceInput.tables.length === 0
+      ? { owners: [], unknownKeys: [] }
+      : await dbs.reader.transaction(o.target, "rollback", (tx) =>
+          readRightsSourceFacts(tx, sourceInput)
+        )
+  )
+  if (sources.refusal !== undefined) return refused([sources.refusal])
+
   // 2б. Свідок цілі під межею плану. Чужий тригер з іменем згенерованого на
   // таблиці провайдера — до гейта й кроків: дрейф його не бачить (таблиця
   // поза межею застосунку), а крок двигуна замінив би його мовчки (рішення 8
@@ -502,7 +522,13 @@ export async function buildPlan(
     ),
   })
   if (transition.status === "refused")
-    return refused(dedupe([...verdict.diagnostics, ...transition.diagnostics]))
+    return refused(
+      dedupe([
+        ...verdict.diagnostics,
+        ...sources.warnings,
+        ...transition.diagnostics,
+      ])
+    )
   if (transition.status === "promotion") {
     // Вердикт несе той самий об'єкт запису, що прийшов на вхід
     const input = promotions.find((p) => p.record === transition.record)
@@ -527,6 +553,7 @@ export async function buildPlan(
       file: input.file,
       diagnostics: dedupe([
         ...verdict.diagnostics,
+        ...sources.warnings,
         ...transition.diagnostics,
         ...desired.diagnostics,
       ]),
@@ -552,6 +579,7 @@ export async function buildPlan(
     return refused(
       dedupe([
         ...verdict.diagnostics,
+        ...sources.warnings,
         ...transition.diagnostics,
         ...desired.diagnostics,
         ...shadow.diagnostics,
@@ -560,6 +588,7 @@ export async function buildPlan(
   const target = shadow.value
   const diagnostics = dedupe([
     ...verdict.diagnostics,
+    ...sources.warnings,
     ...transition.diagnostics,
     ...desired.diagnostics,
     ...shadow.diagnostics,
@@ -598,20 +627,23 @@ export async function buildPlan(
   const guarded = guardedChanges(planSteps, live.extracted.model, parse)
   const lint = [...lintSteps(planSteps, parse), ...guarded.refusals]
   if (lint.length > 0) return refused([...diagnostics, ...lint])
-  // 7а. Нова копія носія на таблиці з рядками — відмова до кроку даних
-  // (Р2a2-11): копію звіряємо зі знімком marker, а не з живою колонкою
-  const backfill = await carrierBackfillGate(
-    dbs.reader,
-    o.target,
-    pendingCarrierCopies(
+  // 7а. Кроки даних нових копій носіїв (Р2a2-11, Р2b2-1) — після кроків
+  // двигуна, що створюють колонки-копії: копію звіряємо зі знімком marker, а
+  // не з живою колонкою
+  const withCarriers = [
+    ...planSteps,
+    ...carrierBackfillSteps(
       model.physical,
-      state.status === "applied"
-        ? { tables: markerTables(state.marker) }
-        : undefined,
-      createdTables(actions)
-    )
-  )
-  if (backfill.length > 0) return refused([...diagnostics, ...backfill])
+      pendingCarrierCopies(
+        model.physical,
+        state.status === "applied"
+          ? { tables: markerTables(state.marker) }
+          : undefined,
+        createdByPlan(actions)
+      ),
+      planSteps.length
+    ),
+  ]
   // 7б. Кроки середовища (рішення 5 плану П3-2b-0) — наприкінці плану; клас
   // і дозволи рахуються вже з ними
   const collected = await collectEnvironment({
@@ -623,12 +655,12 @@ export async function buildPlan(
     live,
     desired: target.extracted.catalog,
     role: targetOwners.session,
-    steps: planSteps,
+    steps: withCarriers,
     parse,
   })
   if (!collected.ok) return refused([...diagnostics, ...collected.diagnostics])
   const { environment } = collected
-  const steps = [...planSteps, ...collected.steps]
+  const steps = [...withCarriers, ...collected.steps]
   const permissions = requiredPermissions({ steps, drift, promotion: null })
   // Слід кроків — те саме правило, що й для плану з промоцією (R26); без
   // промоції імена вихідного стану й кроків збігаються
@@ -1009,30 +1041,33 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
     parse,
   })
 
-  // Нова копія носія на таблиці з рядками (Р2a2-11): знімок marker і ціль
-  // — у старих іменах, тож промотовану таблицю звіряємо й читаємо за ними;
-  // прийнята колонка з ім'ям копії копією не була
-  const backfill = await carrierBackfillGate(
-    dbs.reader,
-    o.target,
-    pendingCarrierCopies(
+  // Кроки даних нових копій носіїв (Р2a2-11, Р2b2-6) — після наміру й
+  // двигуна, у нових іменах: знімок marker — у старих, тож промотовану
+  // таблицю в ньому шукаємо за старим; прийнята колонка з ім'ям копії копією
+  // не була
+  const withCarriers = [
+    ...planSteps,
+    ...carrierBackfillSteps(
       c.model.physical,
-      { tables: promotion.source },
-      analysis.created,
-      (table) => {
-        const old = intent.tablesNewToOld.get(
-          tableKey(table.schema, table.name)
-        )
-        if (old === undefined) return table
-        const [schema, name] = JSON.parse(old) as [string, string]
-        return { schema, name }
-      }
-    )
-  )
-  if (backfill.length > 0) return refused([...withClone, ...backfill])
+      pendingCarrierCopies(
+        c.model.physical,
+        { tables: promotion.source },
+        analysis.created,
+        (table) => {
+          const old = intent.tablesNewToOld.get(
+            tableKey(table.schema, table.name)
+          )
+          if (old === undefined) return table
+          const [schema, name] = JSON.parse(old) as [string, string]
+          return { schema, name }
+        }
+      ),
+      planSteps.length
+    ),
+  ]
 
   // Кроки середовища (рішення 5 плану П3-2b-0): копія цілі в старих іменах
-  // проходить і кроки наміру, і кроки двигуна, тож залишок — у нових
+  // проходить кроки наміру, двигуна й копій, тож залишок — у нових
   const collected = await collectEnvironment({
     engine,
     dbs,
@@ -1042,12 +1077,12 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
     live,
     desired: target.extracted.catalog,
     role: c.targetOwners.session,
-    steps: planSteps,
+    steps: withCarriers,
     parse,
   })
   if (!collected.ok) return refused([...withClone, ...collected.diagnostics])
   const { environment } = collected
-  const steps = [...planSteps, ...collected.steps]
+  const steps = [...withCarriers, ...collected.steps]
 
   // Залежні доступу (рішення 8) — з живої цілі, у старих іменах, транзакцією
   // READ ONLY
@@ -1284,8 +1319,8 @@ type CloneAnalysis =
       steps: PlanStep[]
       /** Модель копії після наміру: вихідний стан кроків двигуна. */
       model: CatalogModel
-      /** Таблиці, які створюють кроки двигуна (`createdTables`). */
-      created: ReadonlySet<string>
+      /** Таблиці й колонки, які створюють кроки двигуна (`createdByPlan`). */
+      created: CreatedByPlan
       /** Намір разом із тимчасовими іменами канонічних перейменувань. */
       intent: RenameIntent
       /**
@@ -1308,30 +1343,6 @@ class IntentStepFailed extends Error {
     super(diagnostic.message)
     this.name = "IntentStepFailed"
   }
-}
-
-/**
- * Таблиці, які створює план: ідентичності `table:<схема>.<ім'я>` з `produces`
- * дій двигуна (`classifySteps` цієї множини не повертає).
- */
-const createdTables = (actions: readonly EngineAction[]): ReadonlySet<string> =>
-  new Set(
-    actions.flatMap((a) => a.produces.filter((id) => id.startsWith("table:")))
-  )
-
-/**
- * Відмова `plan.carrier-backfill-missing` (Р2a2-11) читальною транзакцією
- * цілі з відкатом: `row_security = off` у ній не переживає читання.
- */
-async function carrierBackfillGate(
-  reader: ApplyDatabase,
-  target: DbConnection,
-  pending: readonly PendingCarrierCopies[]
-): Promise<EngineDiagnostic[]> {
-  if (pending.length === 0) return []
-  return reader.transaction(target, "rollback", (tx) =>
-    carrierBackfillRefusals(tx, pending)
-  )
 }
 
 /** Кроки наміру на копії однією транзакцією з `COMMIT`. */
@@ -1471,7 +1482,7 @@ async function analyseOnClone(p: {
       ok: true,
       steps,
       model: extracted.model,
-      created: createdTables(actions),
+      created: createdByPlan(actions),
       intent: withTempNames(p.intent, canonical.tempNames),
       equivalence,
       canonicalNames: canonical.renames,

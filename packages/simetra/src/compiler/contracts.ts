@@ -423,6 +423,19 @@ export type CompiledAssignedOn =
   | { level: "container"; containerId: string }
 
 /**
+ * Кон'юнкт умови рядків прийнятого джерела (Р2d1-15) з фізичною колонкою:
+ * літерал рівності несе тип колонки, бо від нього залежить форма літерала
+ * SQL (`'…'`, `'…'::uuid`, `TRUE`, число).
+ */
+export type SourceConditionContract =
+  | { column: string; isNull: boolean }
+  | {
+      column: string
+      equals: string | boolean | number
+      type: "text" | "uuid" | "boolean" | "integer"
+    }
+
+/**
  * Прийняте джерело членства (спека прав §4.7): таблиця й фізичні колонки,
  * з яких Права-2 будують функції членства виду скоупу.
  */
@@ -433,10 +446,18 @@ export interface MembershipSourceContract {
   table: QualifiedName
   /** Колонка значення скоупу. */
   scope: string
+  /**
+   * Колонка учасника — одноколонковий uuid-ключ таблиці (Р2d1-2): його
+   * значення несуть носій власності, суб'єкт призначення й `member` джерела
+   * призначень.
+   */
+  member: string
   /** Колонка id користувача (С8). */
   user: string
   /** Колонка активності; немає — активний кожен рядок. */
   active?: string
+  /** Умова рядків джерела (Р2d1-15); порожня — кожен рядок. */
+  where: SourceConditionContract[]
 }
 
 /** Прийняте джерело призначень (спека прав §4.7): один рівень, фізичні колонки. */
@@ -446,10 +467,32 @@ export interface AssignmentSourceContract {
   assignedOn: CompiledAssignedOn
   table: QualifiedName
   member: string
+  /**
+   * Колонка таблиці-джерела з роллю: ключ ролі або, коли є `roleTable`,
+   * посилання на рядок таблиці ролей (Р2d1-17).
+   */
   role: string
+  /**
+   * Таблиця ролей джерела (Р2d1-17): ключ ролі — у колонці `key` рядка, на
+   * який посилається `role`; `where` відсікає рядки, що не є ролями джерела.
+   */
+  roleTable?: {
+    table: QualifiedName
+    /** Одноколонковий uuid-ключ таблиці ролей. */
+    id: string
+    key: string
+    where: SourceConditionContract[]
+  }
+  /**
+   * Колонка скоупу рядка (Р2d1-16): є лише на рівні скоупу й мусить
+   * дорівнювати скоупу учасника; немає — скоуп з учасника.
+   */
+  scope?: string
   /** Колонка контейнера; є саме на контейнерному рівні. */
   container?: string
   active?: string
+  /** Умова рядків джерела (Р2d1-15); порожня — кожен рядок. */
+  where: SourceConditionContract[]
 }
 
 /** Рівень ролі: рівні джерела плюс «кожен дійсний користувач» (Р1b-3). */

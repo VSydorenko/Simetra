@@ -517,7 +517,7 @@ async function singleTenantModel(): Promise<CompiledModel> {
     })
   )
   expect(result.diagnostics.map((d) => [d.severity, d.code])).toEqual([
-    ["warning", "rights.adopted-source-unsupported"],
+    ["warning", "rights.adopted-source-writes"],
   ])
   return result.model!
 }

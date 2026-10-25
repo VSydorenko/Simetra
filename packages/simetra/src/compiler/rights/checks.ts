@@ -1,18 +1,23 @@
 import {
   KIND_REGISTRY,
+  isUuidColumn,
+  singleUuidKeyColumn,
   toSnakeCase,
   type CarrierCopyOf,
   type CustomAction,
+  type AssignmentSource,
+  type CustomTable,
   type PhysicalTable,
   type Project,
   type RightsSystemCatalog,
   type ScopeKind,
+  type SourceCondition,
 } from "simetra/model"
 import { mainTableOf } from "../contracts"
 import { diagnostic, type Diagnostic } from "../diagnostics"
 import { PROJECT_FILE, type ParsedObject } from "../stages/files"
 import { standardElementId, type ResolvedReference } from "../stages/identity"
-import type { ModelStageResult } from "../stages/model"
+import { hasScopeKeyUnique, type ModelStageResult } from "../stages/model"
 import {
   carrierTarget,
   crossTenant,
@@ -36,6 +41,8 @@ import {
   isUsers,
   ownershipOf,
   scopeKindOf,
+  sourceLiteralFits,
+  sourceLiteralType,
 } from "./facts"
 import { must, projectTarget } from "./references"
 
@@ -572,12 +579,31 @@ function registerDimensions(object: ParsedObject): Set<string> {
   return new Set((dimensions ?? []).map((d) => d.name))
 }
 
+/** Тип змапованої колонки джерела, якого чекають функції прав (Р2d1-2a). */
+type SourceColumnType = "UUID" | "Boolean" | "Text"
+
+const SOURCE_COLUMN_TYPES: Record<
+  SourceColumnType,
+  (column: CustomTable["columns"][number]) => boolean
+> = {
+  // Та сама перевірка uuid, що й для ключа учасника: `Raw` з `pgType` uuid —
+  // теж uuid.
+  UUID: isUuidColumn,
+  Boolean: (column) => column.array !== true && column.type === "Boolean",
+  Text: (column) =>
+    column.array !== true &&
+    (column.type === "Text" || column.type === "String"),
+}
+
 /**
  * Правила прийнятих джерел (спека прав §4.7): таблиця — прийнята
  * (`CustomTable`) і без `FORCE ROW LEVEL SECURITY`, бо функції прав
  * `SECURITY DEFINER` інакше проходили б її політики; вид скоупу відомий і має
  * одне членство — довідник чи джерело (Р1a-17); рівень контейнера — об'єкт із
  * `rightsContainer`, а колонка контейнера є саме на контейнерному рівні.
+ * Учасник джерела членства — одноколонковий uuid-ключ таблиці (Р2d1-2), а
+ * змаповані колонки мають типи, з якими працюють функції прав (Р2d1-2a):
+ * інакше невідповідність виявилася б лише на застосуванні.
  */
 function checkSources(ctx: RightsCheckContext): Diagnostic[] {
   const diagnostics: Diagnostic[] = []
@@ -589,23 +615,26 @@ function checkSources(ctx: RightsCheckContext): Diagnostic[] {
   const known = new Set(ctx.scopeKinds.map((k) => k.name))
   // Прийнята таблиця джерела; `undefined` — ціль невідома (стадія 2) чи не
   // прийнята таблиця (звітовано тут).
+  // Той самий шлях — для таблиці-джерела й таблиці ролей джерела призначень
+  // (Р2d1-17): обидві читають функції прав `SECURITY DEFINER`.
   const table = (
     source: { name: string },
-    at: string
+    pointer: string,
+    role: "source.table" | "source.roleTable" = "source.table"
   ): ParsedObject | undefined => {
-    const id = projectTarget(`${at}/table`, "source.table", ctx)
+    const id = projectTarget(pointer, role, ctx)
     const target = id === undefined ? undefined : ctx.byId.get(id)
     // Невідому ціль уже звітувала стадія 2 (`reference.unresolved`).
     if (target === undefined) return
     if (!KIND_REGISTRY[target.kind].declared) {
-      report("rights.source-table", `${at}/table`, { source: source.name })
+      report("rights.source-table", pointer, { source: source.name })
       return
     }
     if (
       (target.data as { rowLevelSecurity?: string }).rowLevelSecurity ===
       "forced"
     ) {
-      report("rights.source-forced-rls", `${at}/table`, {
+      report("rights.source-forced-rls", pointer, {
         source: source.name,
         table: target.name,
       })
@@ -650,6 +679,202 @@ function checkSources(ctx: RightsCheckContext): Diagnostic[] {
       })
     }
   }
+  // `base` — вказівник об'єкта полів (`…/columns` чи `…/columns/role`), а
+  // `target` — таблиця, серед колонок якої поле резолвлено: ключ ролі живе в
+  // таблиці ролей, і з таблицею-джерелом тип мовчки не перевірився б.
+  const checkColumnTypes = (
+    source: string,
+    base: string,
+    target: ParsedObject,
+    expected: Record<string, SourceColumnType>
+  ) => {
+    const { columns } = target.data as CustomTable
+    for (const [field, type] of Object.entries(expected)) {
+      const pointer = `${base}/${field}`
+      // Незмаповану чи невідому колонку тут не перевіряти: невідому звітувала
+      // стадія 2.
+      const id = projectTarget(pointer, "source.column", ctx)
+      const column = columns.find((c) => c.id === id)
+      if (id === undefined || column === undefined) continue
+      if (!SOURCE_COLUMN_TYPES[type](column)) {
+        report("rights.source-column-type", pointer, {
+          source,
+          column: column.name,
+          expected: type,
+        })
+      }
+    }
+  }
+  // Учасник — одноколонковий uuid-ключ (Р2d1-2): id учасника — значення
+  // носія власності, суб'єкта призначення й `member` джерела призначень, а
+  // складений ключ одного значення не має. Суб'єкт системних довідників прав
+  // виду посилається на таблицю складеним FK у межах скоупу (Р2d1-5), тож
+  // тоді таблиця мусить оголосити `UNIQUE (scope, id)` — Postgres не прийме
+  // FK на неунікальну пару.
+  const checkMember = (
+    source: string,
+    at: string,
+    target: ParsedObject,
+    kindId: string | undefined
+  ) => {
+    const data = target.data as CustomTable
+    if (singleUuidKeyColumn(data) === undefined) {
+      report("rights.source-member-key", `${at}/table`, {
+        source,
+        table: target.name,
+      })
+      return
+    }
+    if (
+      kindId !== undefined &&
+      memberSubjectCatalogs(kindId, ctx) &&
+      !hasScopeKeyUnique(data)
+    ) {
+      report("rights.source-member-unique", `${at}/table`, {
+        source,
+        table: target.name,
+      })
+    }
+  }
+  // Умова рядків (Р2d1-15): рівність порівнює лише колонку тексту, uuid,
+  // логічну чи цілу, і літерал — форми її типу; `isNull` — будь-яку колонку.
+  // `base` — вказівник власника `where` (джерело чи `columns/role`), `target`
+  // — таблиця, над якою умова стоїть.
+  const checkWhere = (
+    source: string,
+    base: string,
+    target: ParsedObject,
+    where: readonly SourceCondition[]
+  ) => {
+    const { columns } = target.data as CustomTable
+    where.forEach((condition, j) => {
+      if (!("equals" in condition)) return
+      const pointer = `${base}/where/${j}`
+      const id = projectTarget(`${pointer}/column`, "source.column", ctx)
+      const column = columns.find((c) => c.id === id)
+      // Невідому колонку звітувала стадія 2.
+      if (id === undefined || column === undefined) return
+      const type = sourceLiteralType(column)
+      const reason =
+        type === undefined
+          ? "type"
+          : sourceLiteralFits(type, condition.equals)
+            ? undefined
+            : "literal"
+      if (reason === undefined) return
+      report("rights.source-where", pointer, {
+        source,
+        column: column.name,
+        reason,
+      })
+    })
+  }
+  // Колонка скоупу рядка джерела призначень (Р2d1-16, Р2d1-19): скоуп
+  // призначення рівня скоупу — скоуп учасника, а власна колонка скоупу рядка
+  // мусить із ним збігатися (R1: адмін тенанта A вписує учасника B зі скоупом
+  // A — без звірки рядок діяв би в B). Скоуп з учасника — лише явним `null`,
+  // тож забута колонка — помилка, а не тихе «скоуп з учасника».
+  const checkRowScope = (
+    source: AssignmentSource,
+    at: string,
+    target: ParsedObject | undefined
+  ) => {
+    const level = source.assignedOn
+    const { scope } = source.columns
+    if (level === "global" || !("scopeKind" in level)) {
+      if (scope !== undefined) {
+        report("rights.source-scope-column", `${at}/columns/scope`, {
+          source: source.name,
+          reason: "level",
+        })
+      }
+      return
+    }
+    if (target === undefined) return
+    const kindId = projectTarget(
+      `${at}/assignedOn/scopeKind`,
+      "source.scopeKind",
+      ctx
+    )
+    const tableKind = scopeKindOf(target, ctx.references)
+    // Скоуплена таблиця іншого виду несе чужий скоуп; нескоуплена
+    // (поліморфна) — законна, скоуп тоді дає `columns.scope`.
+    if (
+      kindId !== undefined &&
+      tableKind !== undefined &&
+      tableKind !== kindId
+    ) {
+      report("rights.source-scope-column", `${at}/table`, {
+        source: source.name,
+        reason: "scope",
+      })
+      return
+    }
+    const scopeColumn = ctx.references.find(
+      (r) =>
+        r.from.file === target.file &&
+        r.from.pointer === "/scopeColumn" &&
+        r.role === "customTable.scopeColumn"
+    )?.to.id
+    if (scope === undefined) {
+      if (scopeColumn === undefined) {
+        report("rights.source-scope-column", `${at}/columns`, {
+          source: source.name,
+          reason: "missing",
+        })
+      }
+      return
+    }
+    if (scopeColumn === undefined) return
+    // `null` на таблиці зі скоуп-колонкою вимкнув би звірку саме там, де
+    // таблиця скоуп несе.
+    const column =
+      scope === null
+        ? undefined
+        : projectTarget(`${at}/columns/scope`, "source.column", ctx)
+    // Невідому колонку звітувала стадія 2.
+    if (scope !== null && column === undefined) return
+    if (column !== scopeColumn) {
+      report("rights.source-scope-column", `${at}/columns/scope`, {
+        source: source.name,
+        reason: "column",
+      })
+    }
+  }
+  // Таблиця ролей (Р2d1-17): прийнята, без `FORCE`, з одноколонковим
+  // uuid-ключем; ключ — текст. Без `where` ролі ключ мусить бути унікальним
+  // сам (R2): інакше кастомна роль тенанта з ключем системної ролі вмикала б
+  // системну роль.
+  const checkRoleTable = (
+    source: string,
+    at: string,
+    role: Exclude<AssignmentSource["columns"]["role"], string>
+  ) => {
+    const base = `${at}/columns/role`
+    const target = table(
+      { name: source },
+      `${base}/references`,
+      "source.roleTable"
+    )
+    if (target === undefined) return
+    const data = target.data as CustomTable
+    if (singleUuidKeyColumn(data) === undefined) {
+      report("rights.source-role-key", `${base}/references`, {
+        source,
+        table: target.name,
+        reason: "primaryKey",
+      })
+    }
+    checkColumnTypes(source, base, target, { key: "Text" })
+    checkWhere(source, base, target, role.where)
+    if (role.where.length === 0 && !uniqueKey(data, role.key)) {
+      report("rights.source-role-key", base, {
+        source,
+        table: target.name,
+        reason: "ambiguous",
+      })
+    }
+  }
   ctx.project.membershipSources.forEach((source, index) => {
     const at = `/membershipSources/${index}`
     if (!known.has(source.scopeKind)) {
@@ -668,8 +893,22 @@ function checkSources(ctx: RightsCheckContext): Diagnostic[] {
         counted.add(kindId)
       }
     }
-    const target = table(source, at)
-    if (target !== undefined) checkSourceScope(source.name, at, target)
+    const target = table(source, `${at}/table`)
+    if (target !== undefined) {
+      checkSourceScope(source.name, at, target)
+      checkMember(
+        source.name,
+        at,
+        target,
+        projectTarget(`${at}/scopeKind`, "source.scopeKind", ctx)
+      )
+      checkColumnTypes(source.name, `${at}/columns`, target, {
+        scope: "UUID",
+        user: "UUID",
+        active: "Boolean",
+      })
+      checkWhere(source.name, at, target, source.where)
+    }
   })
   ctx.project.assignmentSources.forEach((source, index) => {
     const at = `/assignmentSources/${index}`
@@ -707,9 +946,165 @@ function checkSources(ctx: RightsCheckContext): Diagnostic[] {
         reason: "unexpected",
       })
     }
-    table(source, at)
+    const target = table(source, `${at}/table`)
+    const { role } = source.columns
+    if (target !== undefined) {
+      checkColumnTypes(source.name, `${at}/columns`, target, {
+        member: "UUID",
+        ...(typeof role === "string"
+          ? { role: "Text" as const }
+          : { "role/column": "UUID" as const }),
+        scope: "UUID",
+        container: "UUID",
+        active: "Boolean",
+      })
+      checkWhere(source.name, at, target, source.where)
+    }
+    checkRowScope(source, at, target)
+    if (typeof role !== "string") checkRoleTable(source.name, at, role)
   })
+  diagnostics.push(...sharedTables(ctx))
   return diagnostics
+}
+
+/**
+ * Одна прийнята таблиця під кількома джерелами призначень (Р2d1-19, п. 2):
+ * умови `where` кожної пари мусять бути доведено несумісні однією колонкою —
+ * інакше рядок одного рівня поліморфної таблиці читався б і як рядок іншого
+ * (R1'). Несумісність через різні колонки компілятор не доводить.
+ */
+function sharedTables(ctx: RightsCheckContext): Diagnostic[] {
+  const byTable = new Map<string, number[]>()
+  ctx.project.assignmentSources.forEach((_, index) => {
+    const id = projectTarget(
+      `/assignmentSources/${index}/table`,
+      "source.table",
+      ctx
+    )
+    if (id === undefined) return
+    byTable.set(id, [...(byTable.get(id) ?? []), index])
+  })
+  const reported = new Set<number>()
+  for (const [tableId, indexes] of byTable) {
+    const target = ctx.byId.get(tableId)
+    if (target === undefined || !KIND_REGISTRY[target.kind].declared) continue
+    const { columns } = target.data as CustomTable
+    const conjuncts = (index: number) =>
+      must(ctx.project.assignmentSources[index]).where.flatMap(
+        (condition, j) => {
+          const id = projectTarget(
+            `/assignmentSources/${index}/where/${j}/column`,
+            "source.column",
+            ctx
+          )
+          const column = columns.find((c) => c.id === id)
+          return column === undefined ? [] : [{ condition, column }]
+        }
+      )
+    indexes.forEach((a, i) => {
+      for (const b of indexes.slice(i + 1)) {
+        const left = conjuncts(a)
+        const right = conjuncts(b)
+        const disjoint = left.some((l) =>
+          right.some(
+            (r) =>
+              l.column.id === r.column.id &&
+              excludes(l.condition, r.condition, l.column)
+          )
+        )
+        if (disjoint) continue
+        reported.add(a)
+        reported.add(b)
+      }
+    })
+  }
+  return [...reported]
+    .sort((a, b) => a - b)
+    .map((index) =>
+      diagnostic(
+        "rights.source-where",
+        PROJECT_FILE,
+        `/assignmentSources/${index}/table`,
+        {
+          source: must(ctx.project.assignmentSources[index]).name,
+          reason: "shared",
+        }
+      )
+    )
+}
+
+/**
+ * Чи два кон'юнкти на одній колонці не пропускають спільного рядка: різні
+ * літерали, літерал проти `NULL`, `NULL` проти не-`NULL`. Літерали
+ * порівнюються як значення колонки: uuid Postgres ототожнює без регістру, а
+ * текст під власною колацією може ототожнити різні рядки (недетермінована
+ * колація) — тоді несумісності немає (fail-closed).
+ */
+function excludes(
+  left: SourceCondition,
+  right: SourceCondition,
+  column: CustomTable["columns"][number]
+): boolean {
+  if ("isNull" in left && "isNull" in right) {
+    return left.isNull !== right.isNull
+  }
+  if ("isNull" in left) return left.isNull
+  if ("isNull" in right) return right.isNull
+  const type = sourceLiteralType(column)
+  if (type === "uuid") {
+    return (
+      String(left.equals).toLowerCase() !== String(right.equals).toLowerCase()
+    )
+  }
+  if (type === "text" && column.collation !== undefined) return false
+  return left.equals !== right.equals
+}
+
+/**
+ * Чи колонка `key` таблиці ролей унікальна сама (Р2d1-19, п. 3): обмеження
+ * рівно над нею чи унікальний індекс з одним ключем-колонкою без предиката.
+ * Частковий індекс пускає кастомну роль із ключем системної, а клас
+ * операторів чи колація ключа може розрізняти рядки, які `=` з'єднання
+ * ототожнює, — обидва не рахуються (fail-closed).
+ */
+function uniqueKey(table: CustomTable, key: string): boolean {
+  // Відкладене обмеження не доводить унікальності: усередині транзакції
+  // функції прав бачать дубль, а відкат на COMMIT не скасовує того, що в ній
+  // уже прочитано й зроблено. Індекс відкладеним не буває (у схемі поля немає).
+  const constraint = table.uniques.some(
+    (u) =>
+      u.deferrable === "no" && u.columns.length === 1 && u.columns[0] === key
+  )
+  const index = table.indexes.some((i) => {
+    if (!i.unique || i.where !== undefined || i.keys.length !== 1) return false
+    const [only] = i.keys
+    return (
+      only !== undefined &&
+      "column" in only &&
+      only.column === key &&
+      only.opclass === undefined &&
+      only.collation === undefined
+    )
+  })
+  return constraint || index
+}
+
+/**
+ * Чи має вид скоупу системний довідник прав із суб'єктом-учасником: лише
+ * тоді таблиці прийнятого членства потрібен `UNIQUE (scope, id)` (Р2d1-5).
+ */
+function memberSubjectCatalogs(
+  scopeKindId: string,
+  ctx: Pick<RightsCheckContext, "objects" | "references">
+): boolean {
+  return ctx.objects.some(
+    (o) =>
+      KIND_REGISTRY[o.kind].rightsSystem?.(o.data) !== undefined &&
+      KIND_REGISTRY[o.kind]
+        .standardColumns(o.data)
+        .some((column) => column.ref === "member") &&
+      scopeKindOf(o, ctx.references) === scopeKindId
+  )
 }
 
 /**

@@ -119,11 +119,13 @@ export function rightsLevelOf(
  * Правила системних довідників прав стадії 4 (спека прав §4.6, Р2a1-5,
  * Р2a1-21, Р2a1-24): один довідник на (роль, рівень); рівень із ролями, не
  * покритий прийнятим джерелом, має обидва довідники; довідник, чий суб'єкт —
- * учасник, скоуплено видом із довідником членства; назва кастомної ролі —
+ * учасник, скоуплено видом із членством — довідником чи прийнятим джерелом
+ * (Р2d1-5); назва кастомної ролі —
  * найменування; рівень, весь покритий джерелами, довідників не має
  * (паралельна система, Рх14). Кастомна дія на довіднику прав — помилка: його
- * пише лише дія адміністрування прав. Прийняті джерела поряд із ролями ще не
- * дають прав — попередження на кожне.
+ * пише лише дія адміністрування прав. Прийняте джерело платформа лише читає,
+ * тож межу відповідальності за шляхи запису в нього називає попередження на
+ * кожне джерело (§4.7, Р2d1-9).
  */
 export function checkSystemCatalogs(ctx: RightsCheckContext): Diagnostic[] {
   const diagnostics: Diagnostic[] = []
@@ -185,15 +187,15 @@ export function checkSystemCatalogs(ctx: RightsCheckContext): Diagnostic[] {
         )
       )
     }
-    // Суб'єкт — учасник рівня: ціль його FK дає лише довідник членства, а
-    // учасників прийнятого джерела 2a1 ще не призначає (Р2a1-24, п. 4).
+    // Суб'єкт — учасник рівня: ціль його FK — довідник членства чи таблиця
+    // прийнятого джерела членства (Р2d1-5); виду без членства цілі немає.
     const subject = KIND_REGISTRY[object.kind]
       .standardColumns(object.data)
       .some((column) => column.ref === "member")
     if (
       subject &&
       level.level === "scope" &&
-      membershipOfScopeKind(level.scopeKindId, ctx.objects, ctx) !== "catalog"
+      membershipOfScopeKind(level.scopeKindId, ctx.objects, ctx) === undefined
     ) {
       diagnostics.push(
         diagnostic("rights.system-catalog-scope", object.file, "/scope", {
@@ -235,15 +237,10 @@ export function checkSystemCatalogs(ctx: RightsCheckContext): Diagnostic[] {
     if (storage === undefined) continue
     const key = storageKey(storage)
     uncovered.add(key)
-    // Членство з джерела: довідників прав виду бути не може (суб'єкту немає
-    // цілі до 2d), а межу називає попередження джерела. Вид зовсім без
-    // членства — помилка ролі, і довідники йому все одно потрібні.
-    if (
-      storage.level === "scope" &&
-      membershipOfScopeKind(storage.scopeKindId, ctx.objects, ctx) === "source"
-    ) {
-      continue
-    }
+    // Членство з прийнятого джерела довідників не скасовує (Р2d1-5): перша
+    // міграція — прийняте членство й нові ролі в довідниках Simetra, суб'єкт
+    // яких посилається на таблицю-джерело. Вид зовсім без членства — помилка
+    // ролі, і довідники йому все одно потрібні.
     for (const system of SYSTEMS) {
       const missing = `${system}\u0000${key}`
       if (first.has(missing) || reported.has(missing)) continue
@@ -280,7 +277,7 @@ export function checkSystemCatalogs(ctx: RightsCheckContext): Diagnostic[] {
       list.forEach((source, index) => {
         diagnostics.push(
           diagnostic(
-            "rights.adopted-source-unsupported",
+            "rights.adopted-source-writes",
             PROJECT_FILE,
             `/${field}/${index}`,
             { source: source.name }

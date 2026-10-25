@@ -8,6 +8,7 @@ import {
   requiredPermissions,
   type DriftReport,
   type EngineAction,
+  type PlanStep,
   type StepClass,
 } from "simetra/schema"
 
@@ -625,6 +626,21 @@ describe("requiredPermissions", () => {
     expect(
       requiredPermissions({ steps, drift: null, promotion: null })
     ).toEqual(["s2", "s3"])
+  })
+
+  it("needs nothing for a carrier copy data step", () => {
+    // Р2b2-1: крок копій лише виводить значення з джерела, тож дозволу не
+    // просить; дозвіл — лише для `destructive` і `relaxation`
+    const [base] = classifySteps([addCheck], UNIQUE, parse)
+    const carriers: PlanStep = {
+      ...base!,
+      origin: "carriers",
+      class: "dataStep",
+      lockClass: "shareRowExclusive",
+    }
+    expect(
+      requiredPermissions({ steps: [carriers], drift: null, promotion: null })
+    ).toEqual([])
   })
 
   it("needs nothing for a replacement", () => {

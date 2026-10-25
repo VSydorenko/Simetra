@@ -26,12 +26,11 @@ import {
   CHECKLIST_TABLE,
   COMMENT_TABLE,
   GLOBAL_ASSIGNMENTS_FILE,
+  GLOBAL_GRANT_FILE,
   GLOBAL_ROLES_FILE,
   GRANT_FILE,
   HOURS_TABLES,
-  ORG_ASSIGNMENTS_FILE,
   ORG_KIND_ID,
-  ORG_ROLES_FILE,
   PROJECT_FILE,
   RATE_TABLE,
   REGION_DIMENSION_ID,
@@ -41,6 +40,7 @@ import {
   USERS_FILE,
   adoptedMembership,
   globalConstant,
+  globalGrantTable,
   globalGrantsSource,
   grant,
   grantTable,
@@ -272,6 +272,7 @@ const NO_RIGHTS: AccessPolicyContracts = {
   accessDimensions: [],
   roles: [],
   membership: [],
+  membershipSources: [],
 }
 
 async function units(access: AccessContract[]) {
@@ -752,31 +753,34 @@ describe("rights read and users visibility policies", () => {
     }
   })
 
-  it("no rights read policies where there are no rights functions", async () => {
-    // Р2a2-24: ролі й прийняте джерело членства без «Користувачів» — функцій
-    // прав немає (Р2a1-30), тож немає й політик, що їх кличуть; межа тенанта
-    // лишається (fail-closed).
+  it("rights read policies follow the rights functions without users", async () => {
+    // Р2a2-24, Р2d1-7: ролі й прийняте джерело членства без «Користувачів» —
+    // поточного користувача дає `sub` (Р2d1-6), тож функції прав є, а з ними
+    // й політики, що їх кличуть; межа тенанта лишається. Без функцій прав
+    // політик немає — це тримає таблиця предикатів (rights-functions).
+    // Довідники прав `org` лишаються: рівень скоупу з ролями джерелом не
+    // покрито (Р2d1-5).
     const result = await compile(
       withRoles(
         adoptedMembership(),
         {
           [PROJECT_FILE]: {
             membershipSources: [membersSource()],
-            assignmentSources: [grantsSource(), globalGrantsSource()],
+            assignmentSources: [
+              grantsSource(),
+              globalGrantsSource({
+                table: { kind: "CustomTable", name: "GlobalGrant" },
+              }),
+            ],
           },
           [GRANT_FILE]: grantTable(),
+          [GLOBAL_GRANT_FILE]: globalGrantTable(),
           [TASK_FILE]: { trackAuthor: false },
           [SET_FILE("TaskReaders")]: {
             grants: [grant(objects(["Document", "Task"]), ["read"], "any")],
           },
         },
-        without(
-          USERS_FILE,
-          ORG_ROLES_FILE,
-          ORG_ASSIGNMENTS_FILE,
-          GLOBAL_ROLES_FILE,
-          GLOBAL_ASSIGNMENTS_FILE
-        )
+        without(USERS_FILE, GLOBAL_ROLES_FILE, GLOBAL_ASSIGNMENTS_FILE)
       )
     )
     expect(result.diagnostics.filter((d) => d.severity === "error")).toEqual([])
@@ -786,7 +790,7 @@ describe("rights read and users visibility policies", () => {
       .filter((u) => u.generator === "access" && u.class === "policy")
       .map((u) => u.name)
     expect(names).toContain("task_scope_read")
-    expect(names.filter((name) => name.includes("_read_"))).toEqual([])
+    expect(names).toContain("task_read_any")
   })
 
   it("policy identities of the policy domain are unique", () => {

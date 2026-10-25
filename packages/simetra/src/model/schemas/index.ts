@@ -38,6 +38,7 @@ export {
 } from "./identity"
 export {
   LOGICAL_TYPES,
+  UUID_TEXT,
   valueTypeShape,
   refineValueType,
   isScalarDefault,
@@ -88,6 +89,7 @@ export {
   roleAssignedOnSchema,
   roleSchema,
   setGrantEntrySchema,
+  sourceConditionSchema,
   type AccessDimension,
   type AccessMapping,
   type AssignedOn,
@@ -98,6 +100,7 @@ export {
   type MembershipSource,
   type ObjectSelector,
   type RightsCarrier,
+  type SourceCondition,
   type RightsSet,
   type Role,
   type RoleAssignedOn,

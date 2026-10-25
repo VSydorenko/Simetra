@@ -223,7 +223,12 @@ export function tableGrants(
 /** Контракти, з яких генератор будує політики прав і межі «Користувачів». */
 export type AccessPolicyContracts = Pick<
   Contracts,
-  "rights" | "accessDimensions" | "roles" | "users" | "membership"
+  | "rights"
+  | "accessDimensions"
+  | "roles"
+  | "users"
+  | "membership"
+  | "membershipSources"
 >
 
 /**
@@ -252,8 +257,8 @@ export function buildAccessUnits(
 ): SqlUnit[] {
   const apiRoles = PROVIDER_API_ROLES[provider]
   const bounded = [apiRoles.user, PLATFORM_ROLES.command]
-  const rightsOn = hasRightsFunctions(contracts)
-  const visibleUsers = hasVisibleUsers(contracts)
+  const rightsOn = hasRightsFunctions(contracts, provider)
+  const visibleUsers = hasVisibleUsers(contracts, provider)
   const rightsById = new Map(contracts.rights.map((c) => [c.objectId, c]))
   const labels = {
     container: new Map(contracts.rights.map((c) => [c.objectId, c.kindLabel])),
