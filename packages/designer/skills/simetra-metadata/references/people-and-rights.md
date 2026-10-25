@@ -288,7 +288,8 @@ the middle of a command statement. Everything they reach must therefore be
 SQL the compiler can check, or the policies of the following rows would run
 under a changed user or role. The compiler follows the call chain, and also
 the views they read, the policies of the tables they touch and the defaults
-and checks of the tables they write. `sql.command-context-reach` names the
+and checks of the tables they write, directly or through a view.
+`sql.command-context-reach` names the
 reached function, the reason and the chain. Closed code must not reach a
 function that:
 
