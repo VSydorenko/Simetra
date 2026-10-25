@@ -1480,6 +1480,11 @@ describe("adopted source where, row scope and role table", () => {
       [{ column: "scopeType", isNull: true }],
     ],
     [
+      "isNull true against equals",
+      [{ column: "scopeType", isNull: true }],
+      [{ column: "scopeType", equals: "container" }],
+    ],
+    [
       "isNull true against isNull false",
       [{ column: "scopeType", isNull: true }],
       [{ column: "scopeType", isNull: false }],
