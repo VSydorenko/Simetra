@@ -26,6 +26,8 @@ export const COMPILER_RULES = [
   "sql.dependency-cycle",
   "sql.closed-shell",
   "sql.command-context-write",
+  "sql.command-context-reach",
+  "sql.function-settings-shell",
   "sql.function-overload",
   "sql.row-rule-grammar",
   "sql.row-rule-foreign-table",

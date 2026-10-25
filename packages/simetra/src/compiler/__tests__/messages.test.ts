@@ -10,6 +10,7 @@ import {
 import { metaFiles, project } from "./helpers"
 import { diagnostic } from "../diagnostics"
 import type { CommandContextWrite } from "../sql/command-context"
+import type { ReachReason } from "../sql/reach"
 import type { SetFunctionReason } from "../sql/function-shape"
 
 const ALL_RULES: RuleCode[] = [...SCHEMA_RULES, ...COMPILER_RULES]
@@ -180,6 +181,67 @@ describe("messages catalog", () => {
       })
       expect(new Set(messages).size).toBe(forms.length)
     }
+  })
+
+  it("sql.command-context-reach names the reached function, the reason and the chain", () => {
+    // Повнота за типом: нова причина без запису тут — помилка `tsc`.
+    const reasons = Object.keys({
+      nonLiteralExecute: 0,
+      language: 0,
+      dynamicBuiltin: 0,
+      unknown: 0,
+      sessionWrite: 0,
+    } satisfies Record<ReachReason, 0>)
+    for (const locale of ["en", "uk"] as const) {
+      const render = (reason: string) =>
+        localize(
+          diagnostic("sql.command-context-reach", "a.sql", "", {
+            function: "public.helper",
+            chain: "public.h → public.helper",
+            reason,
+          }),
+          locale
+        ).message
+      const messages = reasons.map(render)
+      messages.forEach((message, i) => {
+        expect(message).toContain("public.helper")
+        expect(message).toContain("public.h → public.helper")
+        // Сирий ідентифікатор причини на місці тексту — пропущений запис.
+        expect(message, `${reasons[i]} ${locale}`).not.toBe(
+          render("<reason>").replace("<reason>", reasons[i]!)
+        )
+      })
+      expect(new Set(messages).size).toBe(reasons.length)
+    }
+    expect(
+      diagnostic("sql.command-context-reach", "a.sql", "", {
+        function: "public.helper",
+        chain: "public.h → public.helper",
+        reason: "nonLiteralExecute",
+      }).message
+    ).toBe(
+      "Closed code reaches public.helper, and it runs EXECUTE of a string built at run time: public.h → public.helper"
+    )
+  })
+
+  it("sql.function-settings-shell names RESET ALL as every setting", () => {
+    const text = (setting: string, locale: "en" | "uk") =>
+      localize(
+        diagnostic("sql.function-settings-shell", "a.sql", "", {
+          function: "public.h",
+          setting,
+        }),
+        locale
+      ).message
+    expect(text("security", "en")).toBe(
+      "ALTER FUNCTION public.h changes security of a function whose shell only its CREATE sets"
+    )
+    expect(text("*", "en")).toBe(
+      "ALTER FUNCTION public.h changes every setting (RESET ALL) of a function whose shell only its CREATE sets"
+    )
+    expect(text("*", "uk")).toBe(
+      "ALTER FUNCTION public.h змінює усі налаштування (RESET ALL) функції, оболонку якої задає лише її CREATE"
+    )
   })
 
   it("rights.custom-action-effects gives every reason its own text and hint", () => {

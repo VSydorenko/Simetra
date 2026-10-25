@@ -50,8 +50,24 @@ function selectedValue(stmt: unknown): unknown {
   return targets?.length === 1 ? targets[0]!.ResTarget?.val : undefined
 }
 
+/**
+ * Текст динамічного оператора plpgsql (`EXECUTE`, `OPEN … FOR EXECUTE`,
+ * `RETURN QUERY EXECUTE`, `FOR … IN EXECUTE`), коли він — рядковий літерал;
+ * зібраний під час виконання — `undefined`. Одне правило літерала для
+ * перевірки контексту команди й обходу досяжності (Р2c1-5).
+ */
+export function literalDynamicText(
+  query: string,
+  parse: SqlParser
+): string | undefined {
+  const wrapped = parse(`SELECT ${query}`)
+  return wrapped.ok
+    ? literalText(selectedValue(wrapped.statements[0]?.stmt))
+    : undefined
+}
+
 /** Пряме читання рядкового літерала (з можливим приведенням типу). */
-function literalText(arg: unknown): string | undefined {
+export function literalText(arg: unknown): string | undefined {
   const node = arg as Record<string, unknown> | undefined
   const cast = node?.TypeCast as { arg?: unknown } | undefined
   if (cast !== undefined) return literalText(cast.arg)
@@ -84,7 +100,7 @@ function setStatementWrite(set: SetStatement): boolean {
  * `pg_catalog` Postgres приймає (`<база>.pg_catalog.set_config`), тож воно
  * не виводить виклик з-під перевірки.
  */
-function isBuiltinSetConfig(
+export function isBuiltinSetConfig(
   parts: readonly { String?: { sval?: string } }[] | undefined
 ): boolean {
   const names = (parts ?? []).map((f) => f.String?.sval?.toLowerCase())
@@ -237,8 +253,9 @@ function optionWrite(
  * Р2b1-19b). Судиться кожна одиниця, а не лише функції (Р2b1-22): подання,
  * домен, політика чи опція `ALTER FUNCTION` виконують свій вираз у тій самій
  * сесії. Тіло `LANGUAGE sql` розбирається тут, тіло plpgsql — через вирази
- * його операторів; тіла інших мов не розбираються — те саме відоме
- * обмеження до 2c, що й нелітеральний `EXECUTE`. Перша знайдена форма.
+ * його операторів; тіла інших мов не розбираються — як і нелітерального
+ * `EXECUTE`, закритий код таких функцій не досягає (`reach.ts`, Р2c1-5).
+ * Перша знайдена форма.
  */
 export function commandContextWrite(
   tree: Node,
@@ -289,15 +306,12 @@ export function commandContextWrite(
   // Літеральний `EXECUTE '…'` — звичайний SQL, лише записаний рядком: його
   // розбираємо й судимо усіма формами. Нелітеральний текст перевірка дерев
   // не бачить: у закритих модулях і обробниках його відмовлено оболонкою
-  // (`dynamicSql`), а в боргових функціях спільних файлів це відоме
-  // обмеження до 2c (Р2b1-19a).
+  // (`dynamicSql`), а боргових функцій з ним у спільних файлах закритий код
+  // не досягає (`reach.ts`, Р2c1-5).
   for (const statement of body.fn.statements) {
     for (const e of statement.expressions) {
       if (e.role !== "dynamic") continue
-      const wrapped = parse(`SELECT ${e.query}`)
-      const text = wrapped.ok
-        ? literalText(selectedValue(wrapped.statements[0]?.stmt))
-        : undefined
+      const text = literalDynamicText(e.query, parse)
       const inner = text === undefined ? undefined : parse(text)
       if (inner?.ok !== true) continue
       const literal = treeWrite(inner.statements.map((s) => s.stmt))

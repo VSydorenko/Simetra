@@ -61,6 +61,7 @@ import { buildPlatformUnits } from "./platform/units"
 import { checkSqlModules, closedModuleOwners } from "./sql/closed-forms"
 import { creationOrder } from "./sql/dependencies"
 import { checkDebt } from "./sql/debt"
+import { checkFunctionSettingsShell } from "./sql/function-settings-shell"
 import { checkKindTableVerbatim, kindTables } from "./sql/kind-table-verbatim"
 import { loadSqlParser, type SqlParser } from "./sql/parse"
 import { loadPlpgsqlParser } from "./sql/plpgsql"
@@ -169,6 +170,14 @@ export async function runStages(
       sql.rowRules,
       parse,
       plpgsql
+    ),
+    // Оболонку судимих функцій задає лише `CREATE` (Р2c1-10): набір судимих
+    // відомий до стадії 3, тож помилка стоїть поруч із формами модулів.
+    ...checkFunctionSettingsShell(
+      stage1.objects,
+      stage1.project,
+      sql.units,
+      parse
     ),
     ...debt.grows,
     // Дослівна політика чи тригер на таблиці виду — помилка раннього блоку

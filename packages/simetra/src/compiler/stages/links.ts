@@ -1,6 +1,7 @@
 import {
   KIND_REGISTRY,
   MEMBERSHIP_SET_FUNCTION,
+  PROVIDER_SCHEMAS,
   standardLogicalName,
   type MetadataRef,
   type MovementDecl,
@@ -9,7 +10,9 @@ import {
   type SubscriptionSpec,
 } from "simetra/model"
 import type { Node } from "libpg-query"
+import { derivedFunctions } from "../contracts"
 import { diagnostic, toPointer, type Diagnostic } from "../diagnostics"
+import { movementWrapperName } from "../movement-functions"
 import { CURRENT_USER_FUNCTION } from "../platform/names"
 import { closedShellProblem } from "../sql/closed-forms"
 import { checkDimensionFunctions } from "../rights/dimension-functions"
@@ -21,6 +24,7 @@ import {
 import type { SqlParser } from "../sql/parse"
 import { mechanicsStandardNames } from "../mechanics-units"
 import type { PlpgsqlFunction, PlpgsqlParser } from "../sql/plpgsql"
+import { checkCommandContextReach, type ReachTrust } from "../sql/reach"
 import { plpgsqlExpressionTrees } from "../sql/rewrite/plpgsql-body"
 import { functionIdentity, type VerbatimUnit } from "../sql/units"
 import { objectKey, type ParsedObject } from "./files"
@@ -29,7 +33,8 @@ import { registerTargetError, type ResolvedReference } from "./identity"
 /**
  * Стадія 5 (спека П2 §8.2): зв'язки між частинами моделі, які не видно в
  * одному файлі: повнота й вигляд джерел рухів, функцій множини скоупів і
- * функцій значень вимірів доступу в SQL-одиницях.
+ * функцій значень вимірів доступу в SQL-одиницях, досяжність недосудного SQL
+ * із закритого коду.
  */
 export function checkLinks(
   objects: readonly ParsedObject[],
@@ -55,6 +60,15 @@ export function checkLinks(
       plpgsql
     ),
     ...checkPolicyCurrentUser(units),
+    ...checkCommandContextReach(
+      objects,
+      project,
+      units,
+      physical.tables,
+      reachTrust(objects, references, project, physical, membershipFunctions),
+      parse,
+      plpgsql
+    ),
     ...checkDimensionFunctions(
       project,
       units,
@@ -64,6 +78,37 @@ export function checkLinks(
       plpgsql
     ),
   ]
+}
+
+/**
+ * Довірені множини обходу досяжності (Р2c1-5): схеми провайдера проєкту й
+ * згенеровані функції схем застосунку — функції членства й похідні функції
+ * контрактів, тіла яких пише компілятор. Обгортка запиту рухів несе запит
+ * застосунку (її тіло не фіксоване платформою), тож довіри не має.
+ */
+function reachTrust(
+  objects: readonly ParsedObject[],
+  references: readonly ResolvedReference[],
+  project: Project,
+  physical: PhysicalSnapshot,
+  membershipFunctions: ReadonlySet<string>
+): ReachTrust {
+  const derived = derivedFunctions(
+    objects,
+    references,
+    physical,
+    movementWrapperName,
+    project.scopeKinds
+  )
+  return {
+    providerSchemas: new Set(PROVIDER_SCHEMAS[project.database.provider]),
+    generated: new Set([
+      ...membershipFunctions,
+      ...derived
+        .filter((fn) => fn.movementQuery !== true)
+        .map((fn) => `${fn.schema}.${fn.name}`),
+    ]),
+  }
 }
 
 /**

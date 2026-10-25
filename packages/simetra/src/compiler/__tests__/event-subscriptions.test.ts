@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 import { COMMAND_SETTING, makeObjectName } from "simetra/model"
 import { compile } from "simetra/compiler"
 import {
+  acceptDebt,
   attribute,
   catalog,
   customTable,
@@ -447,6 +448,17 @@ describe("EventSubscription", () => {
   describe("a beforeWrite handler leaves the row mechanics alone", () => {
     const handler = (body: string) =>
       `CREATE FUNCTION app.stamp() RETURNS trigger LANGUAGE plpgsql VOLATILE AS $$ ${body} $$;`
+    // Процедури, які кличе обробник, — функції моделі: закритий код не
+    // досягає невідомих функцій (Р2c1-5). Процедура — борг, тож перелік
+    // приймає його: предмет тут — присвоєння, а не ратчет.
+    const routines = {
+      "sql/app/routines.sql": ["bump", "swap", "log"]
+        .map(
+          (name) =>
+            `CREATE PROCEDURE app.${name}(INOUT v int) LANGUAGE plpgsql AS $$ BEGIN END $$;`
+        )
+        .join("\n"),
+    }
     const found = async (
       body: string,
       overrides: Record<string, unknown> = {},
@@ -454,8 +466,14 @@ describe("EventSubscription", () => {
     ) =>
       (
         await compile(
-          metaFiles(
-            entries(overrides, { [HANDLER_FILE]: handler(body), ...extra })
+          await acceptDebt(
+            metaFiles(
+              entries(overrides, {
+                [HANDLER_FILE]: handler(body),
+                ...routines,
+                ...extra,
+              })
+            )
           )
         )
       ).diagnostics.map((d) => [d.code, d.file, d.pointer, d.params?.problem])
@@ -643,7 +661,13 @@ describe("EventSubscription", () => {
           COUNT_COMMENT_SQL_FILE,
           `CREATE FUNCTION public.count_comment() RETURNS trigger LANGUAGE plpgsql VOLATILE AS $$ ${body} $$;`
         )
-        return (await compile(files)).diagnostics.map((d) => [
+        // Викликані обробником — функції моделі (Р2c1-5); процедура — борг.
+        files.set(
+          "sql/public/routines.sql",
+          "CREATE PROCEDURE public.bump(INOUT v uuid) LANGUAGE plpgsql AS $$ BEGIN END $$;\n" +
+            "CREATE FUNCTION public.log(r jsonb) RETURNS void LANGUAGE sql VOLATILE AS $$ SELECT $$;"
+        )
+        return (await compile(await acceptDebt(files))).diagnostics.map((d) => [
           d.code,
           d.file,
           d.pointer,

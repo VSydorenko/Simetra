@@ -5,6 +5,7 @@ import type {
   RuleCode,
 } from "./diagnostics"
 import type { CommandContextWrite } from "./sql/command-context"
+import type { ReachReason } from "./sql/reach"
 
 export type Locale = "en" | "uk"
 
@@ -327,6 +328,36 @@ const COMMAND_CONTEXT_FORM: Readonly<
 }
 const commandContextForm = (form: unknown) =>
   COMMAND_CONTEXT_FORM[String(form) as CommandContextWrite] as
+    { en: string; uk: string } | undefined
+/**
+ * Чому закритий код не може досягати функції (`sql.command-context-reach`):
+ * мапа повна за типом причин, тож нова причина без тексту — помилка `tsc`.
+ */
+const REACH_REASON: Readonly<Record<ReachReason, { en: string; uk: string }>> =
+  {
+    nonLiteralExecute: {
+      en: "it runs EXECUTE of a string built at run time",
+      uk: "вона виконує EXECUTE рядка, зібраного під час виконання",
+    },
+    language: {
+      en: "its language is not sql or plpgsql",
+      uk: "її мова не sql і не plpgsql",
+    },
+    dynamicBuiltin: {
+      en: "it executes SQL from a string",
+      uk: "вона виконує SQL з рядка",
+    },
+    unknown: {
+      en: "the compiler does not know it or cannot read its body",
+      uk: "компілятор її не знає чи не може прочитати її тіла",
+    },
+    sessionWrite: {
+      en: "it changes a platform session setting",
+      uk: "вона змінює налаштування сесії платформи",
+    },
+  }
+const reachReason = (reason: unknown) =>
+  REACH_REASON[String(reason) as ReachReason] as
     { en: string; uk: string } | undefined
 /** Причини виходу функції множини скоупу за закриту форму. */
 const SET_FUNCTION_REASON: Readonly<
@@ -773,6 +804,26 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     hint: {
       en: "Only the platform sets the command context (simetra.*), the request claims (request.jwt.*) and the role. Application SQL runs in the middle of a command statement, so a changed setting would leak into the policies of the following rows: do not change them with set_config, SET or RESET (SET ROLE and SET SESSION AUTHORIZATION included), a SET function option (ALTER FUNCTION included), a write to pg_settings or a view over it, an aggregate over set_config or a literal EXECUTE. This holds for every application SQL unit: functions, views, domains, policies and aggregates.",
       uk: "Контекст команди (simetra.*), claims запиту (request.jwt.*) і роль ставить лише платформа. SQL застосунку виконується посеред оператора команди, тож змінене налаштування потрапило б у політики наступних рядків: не змінюйте їх через set_config, SET чи RESET (зокрема SET ROLE і SET SESSION AUTHORIZATION), опцію функції SET (зокрема ALTER FUNCTION), запис у pg_settings чи подання над ним, агрегат над set_config чи літеральний EXECUTE. Це стосується кожної одиниці SQL застосунку: функцій, подань, доменів, політик і агрегатів.",
+    },
+  },
+  "sql.command-context-reach": {
+    en: (p) =>
+      `Closed code reaches ${p.function}, and ${reachReason(p.reason)?.en ?? p.reason}: ${p.chain}`,
+    uk: (p) =>
+      `Закритий код досягає ${p.function}, а ${reachReason(p.reason)?.uk ?? p.reason}: ${p.chain}`,
+    hint: {
+      en: "Functions of kind modules, subscription handlers and scope set functions run in the middle of a command statement, so everything they reach must be SQL the compiler can check: the functions they call, the views they read, the policies of the tables they touch and the defaults and checks of the tables they write. Make the reached function LANGUAGE sql or plpgsql without EXECUTE of a built string and without writes to session settings, or stop calling it; functions of the platform schema, generated functions, builtins and functions of provider schemas are trusted, except those that execute SQL from a string (query_to_xml, dblink and the like).",
+      uk: "Функції модулів видів, обробники підписок і функції множини скоупу виконуються посеред оператора команди, тож усе, чого вони досягають, має бути SQL, який компілятор може перевірити: функції, які вони кличуть, подання, які читають, політики таблиць, яких торкаються, і значення за замовчуванням та перевірки таблиць, у які пишуть. Зробіть досягнуту функцію LANGUAGE sql чи plpgsql без EXECUTE зібраного рядка й без запису налаштувань сесії або не кличте її; функції схеми платформи, згенеровані функції, вбудовані й функції схем провайдера довірені, крім тих, що виконують SQL з рядка (query_to_xml, dblink тощо).",
+    },
+  },
+  "sql.function-settings-shell": {
+    en: (p) =>
+      `ALTER FUNCTION ${p.function} changes ${p.setting === "*" ? "every setting (RESET ALL)" : p.setting} of a function whose shell only its CREATE sets`,
+    uk: (p) =>
+      `ALTER FUNCTION ${p.function} змінює ${p.setting === "*" ? "усі налаштування (RESET ALL)" : p.setting} функції, оболонку якої задає лише її CREATE`,
+    hint: {
+      en: "The platform checks the shell (volatility, SECURITY, search_path, SET options) of kind module functions, subscription handlers, scope set functions, access dimension value functions and every function they call in the CREATE FUNCTION statement; a separate ALTER FUNCTION would change it past that check. Move the option into CREATE FUNCTION and remove the ALTER FUNCTION statement.",
+      uk: "Оболонку (волатильність, SECURITY, search_path, опції SET) функцій модулів видів, обробників підписок, функцій множини скоупу, функцій значень вимірів доступу й кожної функції, яку вони кличуть, платформа перевіряє в операторі CREATE FUNCTION; окремий ALTER FUNCTION змінив би її повз цю перевірку. Перенесіть опцію в CREATE FUNCTION і приберіть оператор ALTER FUNCTION.",
     },
   },
   "sql.function-overload": {

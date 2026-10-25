@@ -10,6 +10,7 @@ import {
 import { CURRENT_USER_FUNCTION } from "../platform/names"
 import { hasEmptySearchPath, routineLanguage } from "../sql/closed-forms"
 import { unitCalls, unitRelations } from "../sql/dependencies"
+import { DYNAMIC_SQL_BUILTINS } from "../sql/reach"
 import type { SqlParser } from "../sql/parse"
 import type { PlpgsqlParser } from "../sql/plpgsql"
 import { functionIdentity, type VerbatimUnit } from "../sql/units"
@@ -29,30 +30,6 @@ const ARROW = " → "
 
 /** Причина закритої форми функції виміру й ланок понад причини функції множини. */
 type DimensionFunctionReason = SetFunctionReason | "viewUnqualified"
-
-/**
- * Вбудовані функції, що виконують SQL з рядка: обхід бачить лише дерево, а не
- * текст, який вони виконають, тож будь-яке читання в ньому — невидиме.
- */
-const DYNAMIC_SQL_BUILTINS: ReadonlySet<string> = new Set([
-  "query_to_xml",
-  "query_to_xml_and_xmlschema",
-  "query_to_xmlschema",
-  "table_to_xml",
-  "table_to_xml_and_xmlschema",
-  "table_to_xmlschema",
-  "cursor_to_xml",
-  "cursor_to_xmlschema",
-  "schema_to_xml",
-  "schema_to_xmlschema",
-  "schema_to_xml_and_xmlschema",
-  "database_to_xml",
-  "database_to_xmlschema",
-  "database_to_xml_and_xmlschema",
-  // Аргумент-запит `tsvector`/`tsquery` — теж текст, що виконується.
-  "ts_stat",
-  "ts_rewrite",
-])
 
 const FUNCTION_CLASSES: ReadonlySet<string> = new Set(["function"])
 const VIEW_CLASSES: ReadonlySet<string> = new Set(["view", "materializedView"])
@@ -133,6 +110,37 @@ export function checkDimensionFunctions(
 }
 
 /**
+ * Функції значень вимірів доступу й кожна ланка їхніх ланцюжків — тим самим
+ * обходом, що їх судить: оболонку цих функцій задає лише `CREATE`, тож
+ * окремий `ALTER FUNCTION` на будь-яку з них — помилка (Р2c1-10,
+ * `sql.function-settings-shell`).
+ */
+export function dimensionFunctionUnits(
+  project: Project,
+  units: readonly VerbatimUnit[],
+  parse: SqlParser
+): VerbatimUnit[] {
+  return project.accessDimensions.flatMap((dimension) => {
+    if (!("function" in dimension.values)) return []
+    const { schema = project.defaultSchema, name } = dimension.values.function
+    const head = units.find(
+      (u) => u.identity === functionIdentity(schema, name, [])
+    )
+    if (head === undefined) return []
+    // Діагностики тут не потрібні — лише одиниці, яких досягає обхід.
+    return walk(
+      head,
+      `${schema}.${name}`,
+      units,
+      new Set(),
+      new Set(),
+      parse,
+      () => {}
+    ).filter((u) => u.class === "function")
+  })
+}
+
+/**
  * Обхід у ширину від функції виміру за викликами й за відношеннями-
  * представленнями проєкту: представлення читає свої таблиці від імені
  * власника так само, як функція. Відвідані одиниці — множина: цикл (його
@@ -146,13 +154,14 @@ function walk(
   rightsTables: ReadonlySet<string>,
   parse: SqlParser,
   at: (code: RuleCode, params: DiagnosticParams) => void
-): void {
+): VerbatimUnit[] {
   const readsRights = (chain: readonly string[], object: string) =>
     at("rights.dimension-function-reads-rights", {
       chain: chain.join(ARROW),
       object,
     })
   const visited = new Set<string>([head.identity])
+  const reached: VerbatimUnit[] = [head]
   const queue: Step[] = [{ unit: head, chain: [headName] }]
   const named = (classes: ReadonlySet<string>, name: string, schema?: string) =>
     units.filter(
@@ -164,6 +173,7 @@ function walk(
   const enqueue = (unit: VerbatimUnit, chain: readonly string[]) => {
     if (visited.has(unit.identity)) return
     visited.add(unit.identity)
+    reached.push(unit)
     const next = [...chain, `${unit.schema}.${unit.name}`]
     if (unit.class === "function") {
       const language = routineLanguage(unit.tree as Node)
@@ -239,6 +249,7 @@ function walk(
       })
     }
   }
+  return reached
 }
 
 /**

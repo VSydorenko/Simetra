@@ -102,6 +102,88 @@ export function hasEmptySearchPath(tree: Node): boolean {
   return fn !== undefined && emptySearchPath(functionOptions(fn).options)
 }
 
+interface AlterFunctionNode {
+  func?: {
+    objname?: { String?: { sval?: string } }[]
+    args_unspecified?: boolean
+  }
+  actions?: { DefElem?: DefElem }[]
+}
+
+function alterFunction(tree: unknown): AlterFunctionNode | undefined {
+  return (tree as { AlterFunctionStmt?: AlterFunctionNode } | undefined)
+    ?.AlterFunctionStmt
+}
+
+/**
+ * Чи одиниця `functionSettings` (`ALTER FUNCTION`) діє на функцію чи
+ * процедуру `fn`. Ідентичності без префікса класу збігаються
+ * (`function:<схема.ім'я(типи)>` ↔ `functionSettings:<схема.ім'я(типи)>`);
+ * `ALTER` без аргументів — кожне перевантаження з цим ім'ям, як `ownsTarget`.
+ * Некваліфіковане ім'я — у будь-якій схемі (fail-closed): рендер не задає
+ * `search_path`, тож Postgres розв'яже його за шляхом сесії, а не за схемою
+ * файлу (як `kindTableOf`).
+ */
+export function settingsTargets(
+  settings: Pick<VerbatimUnit, "identity" | "tree">,
+  fn: Pick<VerbatimUnit, "class" | "identity" | "name">
+): boolean {
+  if (fn.class !== "function" && fn.class !== "procedure") return false
+  const alter = alterFunction(settings.tree)
+  const names = (alter?.func?.objname ?? []).map((n) => n.String?.sval)
+  if (names.length === 1) return names[0] === fn.name
+  const target = settings.identity.slice("functionSettings:".length)
+  const key = fn.identity.slice(fn.class.length + 1)
+  return (
+    target === key || (!target.endsWith(")") && key.startsWith(`${target}(`))
+  )
+}
+
+/** Одиниці `ALTER FUNCTION` функції чи процедури (Р2c1-10 (б)). */
+export function functionSettingsOf(
+  fn: VerbatimUnit,
+  units: readonly VerbatimUnit[]
+): VerbatimUnit[] {
+  return units.filter(
+    (u) => u.class === "functionSettings" && settingsTargets(u, fn)
+  )
+}
+
+/**
+ * Ефективний порожній `search_path` (Р2c1-10 (б)): його задає сам `CREATE`
+ * (функції чи процедури), і жодна одиниця `ALTER FUNCTION` цієї функції не
+ * зачіпає `search_path` (`SET`, `RESET`, `FROM CURRENT`) і не робить `RESET
+ * ALL`. Порядок одиниць не моделюється (fail-closed): окремий `ALTER … RESET
+ * search_path` інакше змінив би розв'язання імен під час виконання повз
+ * статичне судження. `hasEmptySearchPath` лишається правилом однієї одиниці
+ * для закритої оболонки.
+ */
+export function hasEffectiveEmptySearchPath(
+  unit: VerbatimUnit,
+  units: readonly VerbatimUnit[]
+): boolean {
+  const fn = (unit.tree as { CreateFunctionStmt?: FunctionNode })
+    .CreateFunctionStmt
+  if (fn === undefined || !emptySearchPath(functionOptions(fn).options)) {
+    return false
+  }
+  return functionSettingsOf(unit, units).every((settings) => {
+    const alter = alterFunction(settings.tree)
+    if (alter === undefined) return false
+    return !(alter.actions ?? []).some((action) => {
+      const set =
+        action.DefElem?.defname === "set"
+          ? action.DefElem.arg?.VariableSetStmt
+          : undefined
+      return (
+        set !== undefined &&
+        (set.kind === "VAR_RESET_ALL" ||
+          set.name?.toLowerCase() === "search_path")
+      )
+    })
+  })
+}
+
 /**
  * Закрита оболонка функції (спека П2 §3, «Дослівний SQL»): мова `sql` чи
  * `plpgsql`, явна волатильність, `SECURITY DEFINER` лише з `SET search_path
