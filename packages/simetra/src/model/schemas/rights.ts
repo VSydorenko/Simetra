@@ -189,6 +189,46 @@ export const assignedOnSchema = z
 export type AssignedOn = z.infer<typeof assignedOnSchema>
 
 /**
+ * Кон'юнкт умови рядків прийнятого джерела (спека прав §4.7, Р2d1-15):
+ * рівність колонки літералу чи перевірка на `NULL`. Умова лише звужує рядки
+ * джерела — рядок, що їй не відповідає, не належить джерелу (наприклад, рядок
+ * іншого рівня поліморфної таблиці). Тип літерала звіряє з типом колонки
+ * стадія 4.
+ */
+export const sourceConditionSchema = z
+  .union([
+    z.strictObject({
+      column: elementNameSchema.meta({
+        description: "Logical name of a column of the table.",
+      }),
+      equals: z.union([z.string(), z.boolean(), z.number().int()]).meta({
+        description:
+          "Literal the column must equal: a string for a text or uuid column, a boolean, or an integer.",
+      }),
+    }),
+    z.strictObject({
+      column: elementNameSchema.meta({
+        description: "Logical name of a column of the table.",
+      }),
+      isNull: z.boolean().meta({
+        description: "true: the column must be NULL; false: must not be NULL.",
+      }),
+    }),
+  ])
+  .meta({
+    description:
+      "Condition on a row of the table: a column equals a literal or is (not) NULL.",
+  })
+
+export type SourceCondition = z.infer<typeof sourceConditionSchema>
+
+/** Умова рядків джерела: кон'юнкція; порожня — кожен рядок. */
+const sourceWhereSchema = z.array(sourceConditionSchema).default([]).meta({
+  description:
+    "Conditions every row of the source must meet (a conjunction); rows that fail them are not part of the source.",
+})
+
+/**
  * Прийняте джерело членства (спека прав §4.7): `CustomTable`, чиї рядки
  * пов'язують користувача зі значенням виду скоупу. Колонки — логічні імена
  * колонок таблиці, тож перейменування колонки переписує мапінг.
@@ -220,6 +260,7 @@ export const membershipSourceSchema = z.strictObject({
       }),
     })
     .meta({ description: "Logical names of the table columns." }),
+  where: sourceWhereSchema,
 })
 
 export type MembershipSource = z.infer<typeof membershipSourceSchema>
@@ -243,9 +284,40 @@ export const assignmentSourceSchema = z.strictObject({
       member: elementNameSchema.meta({
         description: "Column with the member (a user for the global level).",
       }),
-      role: elementNameSchema.meta({
+      // Роль — ключ у колонці джерела або посилання на прийняту таблицю
+      // ролей (Р2d1-17): ключ системної ролі споживач тоді тримає в таблиці
+      // ролей, і `where` ролі відсікає кастомні ролі з тим самим ключем.
+      role: z
+        .union([
+          elementNameSchema,
+          z.strictObject({
+            column: elementNameSchema.meta({
+              description:
+                "Column of the source table with the uuid reference to the role table.",
+            }),
+            references: metadataRefSchema.meta({
+              description:
+                "Adopted role table (CustomTable) with a single-column uuid key.",
+            }),
+            key: elementNameSchema.meta({
+              description:
+                "Column of the role table with the role key declared by a role in sourceKeys.",
+            }),
+            where: z.array(sourceConditionSchema).default([]).meta({
+              description:
+                "Conditions every row of the role table must meet (a conjunction); required unless the key column is unique on its own.",
+            }),
+          }),
+        ])
+        .meta({
+          description:
+            "Column with the role key declared by a role in sourceKeys, or a reference to an adopted role table with the key column.",
+        }),
+      // Три стани (Р2d1-19): колонка, `null` — скоуп з учасника, пропуск
+      // — `scopeColumn` таблиці; без нього пропуск — помилка стадії 4.
+      scope: elementNameSchema.nullable().optional().meta({
         description:
-          "Column with the role key declared by a role in sourceKeys.",
+          "Scope level only: column with the scope of the row, which must equal the scope of the member; null takes the scope from the member; omitted means the scopeColumn of the table.",
       }),
       container: elementNameSchema.optional().meta({
         description:
@@ -256,6 +328,7 @@ export const assignmentSourceSchema = z.strictObject({
       }),
     })
     .meta({ description: "Logical names of the table columns." }),
+  where: sourceWhereSchema,
 })
 
 export type AssignmentSource = z.infer<typeof assignmentSourceSchema>

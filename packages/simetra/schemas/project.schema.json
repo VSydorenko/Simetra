@@ -490,6 +490,66 @@
             ],
             "additionalProperties": false,
             "description": "Logical names of the table columns."
+          },
+          "where": {
+            "default": [],
+            "description": "Conditions every row of the source must meet (a conjunction); rows that fail them are not part of the source.",
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "column": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+                      "description": "Logical name of a column of the table."
+                    },
+                    "equals": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "boolean"
+                        },
+                        {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        }
+                      ],
+                      "description": "Literal the column must equal: a string for a text or uuid column, a boolean, or an integer."
+                    }
+                  },
+                  "required": [
+                    "column",
+                    "equals"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "column": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+                      "description": "Logical name of a column of the table."
+                    },
+                    "isNull": {
+                      "type": "boolean",
+                      "description": "true: the column must be NULL; false: must not be NULL."
+                    }
+                  },
+                  "required": [
+                    "column",
+                    "isNull"
+                  ],
+                  "additionalProperties": false
+                }
+              ],
+              "description": "Condition on a row of the table: a column equals a literal or is (not) NULL."
+            }
           }
         },
         "required": [
@@ -626,9 +686,141 @@
                 "description": "Column with the member (a user for the global level)."
               },
               "role": {
-                "type": "string",
-                "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
-                "description": "Column with the role key declared by a role in sourceKeys."
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+                    "description": "Logical element name (attribute, section, column). The casing style is checked against the project naming setting."
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "column": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+                        "description": "Column of the source table with the uuid reference to the role table."
+                      },
+                      "references": {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "Catalog",
+                              "Document",
+                              "Enumeration",
+                              "InformationRegister",
+                              "AccumulationRegister",
+                              "Constant",
+                              "CustomTable",
+                              "PgEnum",
+                              "EventSubscription",
+                              "RightsSet",
+                              "Role"
+                            ],
+                            "description": "Kind of the referenced metadata object."
+                          },
+                          "name": {
+                            "type": "string",
+                            "pattern": "^[A-Z][A-Za-z0-9]*$",
+                            "description": "Logical name of the referenced object."
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "name"
+                        ],
+                        "additionalProperties": false,
+                        "description": "Adopted role table (CustomTable) with a single-column uuid key."
+                      },
+                      "key": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+                        "description": "Column of the role table with the role key declared by a role in sourceKeys."
+                      },
+                      "where": {
+                        "default": [],
+                        "description": "Conditions every row of the role table must meet (a conjunction); required unless the key column is unique on its own.",
+                        "type": "array",
+                        "items": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "column": {
+                                  "type": "string",
+                                  "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+                                  "description": "Logical name of a column of the table."
+                                },
+                                "equals": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "boolean"
+                                    },
+                                    {
+                                      "type": "integer",
+                                      "minimum": -9007199254740991,
+                                      "maximum": 9007199254740991
+                                    }
+                                  ],
+                                  "description": "Literal the column must equal: a string for a text or uuid column, a boolean, or an integer."
+                                }
+                              },
+                              "required": [
+                                "column",
+                                "equals"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "column": {
+                                  "type": "string",
+                                  "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+                                  "description": "Logical name of a column of the table."
+                                },
+                                "isNull": {
+                                  "type": "boolean",
+                                  "description": "true: the column must be NULL; false: must not be NULL."
+                                }
+                              },
+                              "required": [
+                                "column",
+                                "isNull"
+                              ],
+                              "additionalProperties": false
+                            }
+                          ],
+                          "description": "Condition on a row of the table: a column equals a literal or is (not) NULL."
+                        }
+                      }
+                    },
+                    "required": [
+                      "column",
+                      "references",
+                      "key"
+                    ],
+                    "additionalProperties": false
+                  }
+                ],
+                "description": "Column with the role key declared by a role in sourceKeys, or a reference to an adopted role table with the key column."
+              },
+              "scope": {
+                "description": "Scope level only: column with the scope of the row, which must equal the scope of the member; null takes the scope from the member; omitted means the scopeColumn of the table.",
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+                    "description": "Logical element name (attribute, section, column). The casing style is checked against the project naming setting."
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               },
               "container": {
                 "description": "Column with the container; required for the container level only.",
@@ -647,6 +839,66 @@
             ],
             "additionalProperties": false,
             "description": "Logical names of the table columns."
+          },
+          "where": {
+            "default": [],
+            "description": "Conditions every row of the source must meet (a conjunction); rows that fail them are not part of the source.",
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "column": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+                      "description": "Logical name of a column of the table."
+                    },
+                    "equals": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "boolean"
+                        },
+                        {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        }
+                      ],
+                      "description": "Literal the column must equal: a string for a text or uuid column, a boolean, or an integer."
+                    }
+                  },
+                  "required": [
+                    "column",
+                    "equals"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "column": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+                      "description": "Logical name of a column of the table."
+                    },
+                    "isNull": {
+                      "type": "boolean",
+                      "description": "true: the column must be NULL; false: must not be NULL."
+                    }
+                  },
+                  "required": [
+                    "column",
+                    "isNull"
+                  ],
+                  "additionalProperties": false
+                }
+              ],
+              "description": "Condition on a row of the table: a column equals a literal or is (not) NULL."
+            }
           }
         },
         "required": [

@@ -20,6 +20,7 @@ import {
   type RightsExtent,
   type RightsLevelKey,
   type RightsProjectionRow,
+  type SourceConditionContract,
   qualified,
 } from "../contracts"
 import { compareStrings } from "../diagnostics"
@@ -561,6 +562,7 @@ function myScopesBody(contracts: RightsFunctionContracts): string {
       `WHERE ${user} IS NOT NULL`,
       `  AND ${user} = ${CURRENT_USER}`,
       ...activeCondition("s", source.active).map((c) => `  AND ${c}`),
+      ...sourceConditions("s", source.where).map((c) => `  AND ${c}`),
     ].join("\n")
   })
   const branches = [...catalogs, ...sources]
@@ -574,6 +576,33 @@ function myScopesBody(contracts: RightsFunctionContracts): string {
  */
 function activeCondition(alias: string, column: string | undefined): string[] {
   return column === undefined ? [] : [`${alias}.${quoteIdent(column)} IS TRUE`]
+}
+
+/**
+ * Кон'юнкти умови рядків прийнятого джерела чи його таблиці ролей
+ * (Р2d1-15): рівність колонки літералу чи `IS [NOT] NULL`. Умова лише
+ * звужує, а `NULL = <літерал>` рядка не дає (fail-closed). Ті самі кон'юнкти
+ * читає план ключів ролей (Р2d1-11), тож форма — одна.
+ */
+export function sourceConditions(
+  alias: string,
+  conditions: readonly SourceConditionContract[]
+): string[] {
+  return conditions.map((condition) => {
+    const column = `${alias}.${quoteIdent(condition.column)}`
+    if ("isNull" in condition) {
+      return `${column} IS ${condition.isNull ? "" : "NOT "}NULL`
+    }
+    const { equals } = condition
+    switch (condition.type) {
+      case "uuid":
+        return `${column} = ${uuidLiteral(String(equals))}`
+      case "boolean":
+        return `${column} = ${equals === true ? "TRUE" : "FALSE"}`
+      default:
+        return `${column} = ${sqlLiteral(equals)}`
+    }
+  })
 }
 
 /**
@@ -612,6 +641,7 @@ function visibleUsersBody(contracts: RightsFunctionContracts): string {
         ` AND s.scope = m.${quoteIdent(source.scope)}`,
         `WHERE ${user} IS NOT NULL`,
         ...activeCondition("m", source.active).map((c) => `  AND ${c}`),
+        ...sourceConditions("m", source.where).map((c) => `  AND ${c}`),
       ]
     }),
   ].join("\n")
@@ -867,19 +897,46 @@ function sourceAssignments(
   const conditions = [
     ...(scoped ? [] : [`${src(source.member)} = ${CURRENT_USER}`]),
     ...activeCondition("src", source.active),
+    // Умова рядків (R1'): рядок іншого рівня поліморфної таблиці інакше
+    // читався б як призначення цього джерела.
+    ...sourceConditions("src", source.where),
   ]
+  // Роль через посилання (R2): ключ — у рядку таблиці ролей, а її умова
+  // відсікає кастомну роль тенанта з ключем системної. Псевдонім `sr`, бо
+  // `r` у `typed` того самого тіла — `rights_roles()`.
+  const { roleTable } = source
+  const roleKey =
+    roleTable === undefined
+      ? src(source.role)
+      : `sr.${quoteIdent(roleTable.key)}`
+  const roleJoin =
+    roleTable === undefined
+      ? []
+      : [
+          `JOIN ${qualified(roleTable.table)} sr`,
+          `  ON ${[
+            `sr.${quoteIdent(roleTable.id)} = ${src(source.role)}`,
+            ...sourceConditions("sr", roleTable.where),
+          ].join("\n AND ")}`,
+        ]
+  // Скоуп рядка мусить дорівнювати скоупу учасника (R1): інакше адмін тенанта
+  // A вписав би учасника B зі скоупом A, і рядок діяв би в B.
+  const rowScope =
+    source.scope === undefined ? [] : [` AND s.scope = ${src(source.scope)}`]
   return [
     `SELECT 'source'::text AS storage, ${uuidLiteral(source.sourceId)} AS storage_id, ${scoped ? "s.scope" : "NULL::uuid"} AS scope, ${container} AS container, NULL::uuid AS custom_role, k.role_id AS archetype,`,
     `       ${scoped ? uuidLiteral(scopeKindId) : "NULL::uuid"} AS scope_kind_id, ${sqlLiteral(level)}::text AS source_level, ${levelId === null ? "NULL::uuid" : uuidLiteral(levelId)} AS source_level_id`,
     `FROM ${qualified(source.table)} src`,
+    ...roleJoin,
     `JOIN ${call(RIGHTS_FUNCTIONS.sourceKeys)} k`,
     `  ON k.source_id = ${uuidLiteral(source.sourceId)}`,
-    ` AND k.key = ${src(source.role)}`,
+    ` AND k.key = ${roleKey}`,
     ...(scoped
       ? [
           `JOIN my_scopes s`,
           `  ON s.scope_kind_id = ${uuidLiteral(scopeKindId)}`,
           ` AND s.member = ${src(source.member)}`,
+          ...rowScope,
         ]
       : []),
     ...(conditions.length === 0

@@ -2,11 +2,12 @@ import { beforeAll, describe, expect, it } from "vitest"
 import type { CompiledModel } from "simetra/compiler"
 import { compile } from "simetra/compiler"
 import { PLATFORM_ROLES, PROVIDER_API_ROLES } from "simetra/model"
-import type { RightsContract } from "../contracts"
+import type { RightsContract, SourceConditionContract } from "../contracts"
 import {
   RIGHTS_FUNCTIONS,
   hasRightsFunctions,
   hasVisibleUsers,
+  sourceConditions,
 } from "../rights/functions"
 import { hasEmptySearchPath, routineLanguage } from "../sql/closed-forms"
 import { unitCalls, unitRelations } from "../sql/dependencies"
@@ -23,6 +24,8 @@ import {
   ORG_ADMIN_ID,
   ORG_KIND_ID,
   ORG_MEMBER_ROLE_ID,
+  POLY_GRANTS_SOURCE_ID,
+  POLY_GRANT_FILE,
   PROJECT_FILE,
   PROJECT_ID,
   PROJECT_LEAD_ID,
@@ -39,6 +42,9 @@ import {
   grantsSource,
   membersSource,
   objects,
+  polyColumns,
+  polyGrantTable,
+  polymorphicGrantsDomain,
   rightsFiles,
   role,
   secondScopeKind,
@@ -771,6 +777,39 @@ describe("rights functions over adopted sources", () => {
     )
   })
 
+  it("a membership where narrows my scopes and visible users", async () => {
+    // Р2d1-15: умова рядків членства — та сама в «моїх скоупах» і в межі
+    // «Користувачів».
+    const narrowed = await compiled(
+      adoptedSourcesDomain({
+        [PROJECT_FILE]: {
+          membershipSources: [
+            membersSource({
+              where: [
+                { column: "userId", isNull: false },
+                { column: "isActive", equals: true },
+              ],
+            }),
+          ],
+        },
+      })
+    )
+    expect(
+      bodyTree(functionUnit(narrowed, RIGHTS_FUNCTIONS.myScopes.name))
+    ).toEqual(
+      tree(
+        `SELECT '${ORG_KIND_ID}'::uuid AS scope_kind_id, s.org_id AS scope, s.id AS member FROM public.membership s WHERE s.user_id IS NOT NULL AND s.user_id = ${CURRENT} AND s.is_active IS TRUE AND s.user_id IS NOT NULL AND s.is_active = TRUE`
+      )
+    )
+    expect(
+      bodyTree(functionUnit(narrowed, RIGHTS_FUNCTIONS.visibleUsers.name))
+    ).toEqual(
+      tree(
+        `SELECT ${CURRENT} WHERE ${CURRENT} IS NOT NULL UNION SELECT m.user_id FROM public.membership m JOIN simetra.rights_my_scopes() s ON s.scope_kind_id = '${ORG_KIND_ID}'::uuid AND s.scope = m.org_id WHERE m.user_id IS NOT NULL AND m.is_active IS TRUE AND m.user_id IS NOT NULL AND m.is_active = TRUE`
+      )
+    )
+  })
+
   it.each([
     ["roles, users and a membership catalog", "catalog", true, true, true],
     ["roles, users and a membership source", "source", true, true, true],
@@ -799,4 +838,82 @@ describe("rights functions over adopted sources", () => {
       expect(hasVisibleUsers(contracts, "supabase")).toBe(visible)
     }
   )
+})
+
+describe("rights functions over a polymorphic adopted source", () => {
+  let model: CompiledModel
+  beforeAll(async () => {
+    model = await compiled(polymorphicGrantsDomain())
+  })
+
+  /** Гілка джерела `polyGrants` з кон'юнктом скоупу рядка чи без нього. */
+  const polyArm = (rowScope: string) =>
+    selectOf(
+      tree(
+        `SELECT 'source'::text AS storage, '${POLY_GRANTS_SOURCE_ID}'::uuid AS storage_id, s.scope AS scope, NULL::uuid AS container, NULL::uuid AS custom_role, k.role_id AS archetype, '${ORG_KIND_ID}'::uuid AS scope_kind_id, 'scope'::text AS source_level, '${ORG_KIND_ID}'::uuid AS source_level_id FROM public.poly_grants src JOIN public.source_roles sr ON sr.id = src.role_id AND sr.org_id IS NULL JOIN simetra.rights_source_keys() k ON k.source_id = '${POLY_GRANTS_SOURCE_ID}'::uuid AND k.key = sr.key JOIN my_scopes s ON s.scope_kind_id = '${ORG_KIND_ID}'::uuid AND s.member = src.member_id${rowScope} WHERE src.scope_type = 'org'`
+      )
+    )
+
+  it("a polymorphic source filters rows, checks the row scope and joins the role table", () => {
+    // R1: скоуп рядка — скоуп учасника; R1': рядок іншого рівня відсікає
+    // `where`; R2: кастомну роль із ключем системної — умова ролі.
+    expect(sourceArm(model, POLY_GRANTS_SOURCE_ID)).toEqual(
+      polyArm(" AND s.scope = src.scope_id")
+    )
+  })
+
+  it("the row scope column defaults to the table scope column", async () => {
+    const scoped = await compiled(
+      polymorphicGrantsDomain(
+        { polyGrants: { columns: polyColumns({ scope: undefined }) } },
+        {
+          [POLY_GRANT_FILE]: polyGrantTable({
+            scope: "org",
+            scopeColumn: "scopeId",
+          }),
+        }
+      )
+    )
+    expect(sourceArm(scoped, POLY_GRANTS_SOURCE_ID)).toEqual(
+      polyArm(" AND s.scope = src.scope_id")
+    )
+    // Явний `null` — скоуп з учасника: кон'юнкта скоупу рядка немає.
+    const fromMember = await compiled(
+      polymorphicGrantsDomain({
+        polyGrants: { columns: polyColumns({ scope: null }) },
+      })
+    )
+    expect(sourceArm(fromMember, POLY_GRANTS_SOURCE_ID)).toEqual(polyArm(""))
+    // Контейнерний рівень колонки скоупу рядка не має.
+    expect(sourceArm(model, GRANTS_SOURCE_ID)).toEqual(
+      selectOf(
+        tree(
+          `SELECT 'source'::text AS storage, '${GRANTS_SOURCE_ID}'::uuid AS storage_id, s.scope AS scope, src.project_id AS container, NULL::uuid AS custom_role, k.role_id AS archetype, '${ORG_KIND_ID}'::uuid AS scope_kind_id, 'container'::text AS source_level, '${PROJECT_ID}'::uuid AS source_level_id FROM public.role_grant src JOIN simetra.rights_source_keys() k ON k.source_id = '${GRANTS_SOURCE_ID}'::uuid AND k.key = src.role_key JOIN my_scopes s ON s.scope_kind_id = '${ORG_KIND_ID}'::uuid AND s.member = src.member_id`
+        )
+      )
+    )
+  })
+
+  it.each<[string, SourceConditionContract, string]>([
+    [
+      "text with a quote",
+      { column: "c", equals: "o'k", type: "text" },
+      "src.c = 'o''k'",
+    ],
+    [
+      "uuid",
+      { column: "c", equals: ORG_KIND_ID, type: "uuid" },
+      `src.c = '${ORG_KIND_ID}'::uuid`,
+    ],
+    ["boolean", { column: "c", equals: true, type: "boolean" }, "src.c = TRUE"],
+    ["integer", { column: "c", equals: 7, type: "integer" }, "src.c = 7"],
+    ["not null", { column: "c", isNull: false }, "src.c IS NOT NULL"],
+    ["null", { column: "c", isNull: true }, "src.c IS NULL"],
+  ])("sourceConditions renders %s", (_, condition, sql) => {
+    expect(sourceConditions("src", [condition])).toEqual([sql])
+  })
+
+  it("sourceConditions of an empty where is empty", () => {
+    expect(sourceConditions("src", [])).toEqual([])
+  })
 })

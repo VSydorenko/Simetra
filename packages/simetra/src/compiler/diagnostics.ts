@@ -131,6 +131,8 @@ export const COMPILER_RULES = [
   "rights.source-member-key",
   "rights.source-member-unique",
   "rights.source-column-type",
+  "rights.source-where",
+  "rights.source-role-key",
   "rights.source-scope-column",
   "rights.membership-source-duplicate",
   "rights.source-container-column",

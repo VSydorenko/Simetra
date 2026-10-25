@@ -26,6 +26,7 @@ import {
   CHECKLIST_TABLE,
   COMMENT_TABLE,
   GLOBAL_ASSIGNMENTS_FILE,
+  GLOBAL_GRANT_FILE,
   GLOBAL_ROLES_FILE,
   GRANT_FILE,
   HOURS_TABLES,
@@ -39,6 +40,7 @@ import {
   USERS_FILE,
   adoptedMembership,
   globalConstant,
+  globalGrantTable,
   globalGrantsSource,
   grant,
   grantTable,
@@ -764,9 +766,15 @@ describe("rights read and users visibility policies", () => {
         {
           [PROJECT_FILE]: {
             membershipSources: [membersSource()],
-            assignmentSources: [grantsSource(), globalGrantsSource()],
+            assignmentSources: [
+              grantsSource(),
+              globalGrantsSource({
+                table: { kind: "CustomTable", name: "GlobalGrant" },
+              }),
+            ],
           },
           [GRANT_FILE]: grantTable(),
+          [GLOBAL_GRANT_FILE]: globalGrantTable(),
           [TASK_FILE]: { trackAuthor: false },
           [SET_FILE("TaskReaders")]: {
             grants: [grant(objects(["Document", "Task"]), ["read"], "any")],

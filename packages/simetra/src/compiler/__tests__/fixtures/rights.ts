@@ -1263,3 +1263,172 @@ export function adoptedCrossKind(): Layer {
     },
   }
 }
+
+export const SOURCE_ROLE_FILE = "custom-tables/SourceRole/SourceRole.meta.json"
+export const POLY_GRANT_FILE = "custom-tables/PolyGrant/PolyGrant.meta.json"
+export const POLY_GRANTS_SOURCE_ID = uuid(6160)
+export const POLY_CONTAINER_GRANTS_SOURCE_ID = uuid(6161)
+/** Ключ `OrgMember` у таблиці ролей джерела `polyGrants`. */
+export const ADOPTED_MEMBER_KEY = "member"
+
+/**
+ * Прийнята таблиця ролей: системна роль — рядок без тенанта (`orgId` —
+ * `NULL`), кастомна роль тенанта може мати той самий ключ.
+ */
+export function sourceRoleTable(overrides: Record<string, unknown> = {}) {
+  return {
+    id: uuid(6150),
+    kind: "CustomTable",
+    name: "SourceRole",
+    physicalName: "source_roles",
+    kindLabel: "source_roles",
+    scope: "none",
+    columns: [
+      column(6151, "id", "id", "UUID"),
+      column(6152, "key", "key", "Text"),
+      nullable(6153, "orgId", "org_id", "UUID"),
+    ],
+    primaryKey: { columns: ["id"] },
+    ...overrides,
+  }
+}
+
+/**
+ * Поліморфна таблиця призначень: рівень рядка — `scopeType`, а `scopeId` —
+ * тенант чи контейнер за рівнем; без FK і без `scopeColumn`.
+ */
+export function polyGrantTable(overrides: Record<string, unknown> = {}) {
+  return {
+    id: uuid(6155),
+    kind: "CustomTable",
+    name: "PolyGrant",
+    physicalName: "poly_grants",
+    kindLabel: "poly_grants",
+    scope: "none",
+    columns: [
+      column(6156, "id", "id", "UUID"),
+      nullable(6157, "memberId", "member_id", "UUID"),
+      nullable(6158, "roleId", "role_id", "UUID"),
+      column(6159, "scopeType", "scope_type", "Text"),
+      column(6154, "scopeId", "scope_id", "UUID"),
+    ],
+    primaryKey: { columns: ["id"] },
+    ...overrides,
+  }
+}
+
+/** Роль через посилання на `SourceRole`: лише системні рядки без тенанта. */
+export function sourceRoleRef(overrides: Record<string, unknown> = {}) {
+  return {
+    column: "roleId",
+    references: ref("CustomTable", "SourceRole"),
+    key: "key",
+    where: [{ column: "orgId", isNull: true }],
+    ...overrides,
+  }
+}
+
+/** Колонки `columns` джерела `polyGrants` з перевизначеннями. */
+export const polyColumns = (overrides: Record<string, unknown> = {}) => ({
+  member: "memberId",
+  scope: "scopeId",
+  role: sourceRoleRef(),
+  ...overrides,
+})
+
+/** Джерело рівня скоупу `org` над поліморфною `PolyGrant`. */
+export function polyGrantsSource(overrides: Record<string, unknown> = {}) {
+  return {
+    id: POLY_GRANTS_SOURCE_ID,
+    name: "polyGrants",
+    assignedOn: { scopeKind: "org" },
+    table: ref("CustomTable", "PolyGrant"),
+    where: [{ column: "scopeType", equals: "org" }],
+    columns: polyColumns(),
+    ...overrides,
+  }
+}
+
+/** Контейнерне джерело `Project` над тією самою `PolyGrant`. */
+export function polyContainerGrantsSource(
+  overrides: Record<string, unknown> = {}
+) {
+  return {
+    id: POLY_CONTAINER_GRANTS_SOURCE_ID,
+    name: "polyContainerGrants",
+    assignedOn: { container: ref("Catalog", "Project") },
+    table: ref("CustomTable", "PolyGrant"),
+    where: [{ column: "scopeType", equals: "container" }],
+    columns: {
+      member: "memberId",
+      container: "scopeId",
+      role: sourceRoleRef(),
+    },
+    ...overrides,
+  }
+}
+
+/**
+ * Шар поліморфних призначень поверх `adoptedSources()` (Р2d1-15…Р2d1-19): одна
+ * таблиця `PolyGrant` під джерелом рівня скоупу `polyGrants` і контейнерним
+ * `polyContainerGrants`, розділеними дискримінатором `scopeType`; роль — через
+ * таблицю ролей `SourceRole` з умовою «без тенанта». Обидва рівні тоді покриті
+ * джерелами, тож довідники прав `org` прибрано. `assignmentSources`
+ * повторено повністю: шари зливаються поверхнево.
+ */
+export function polymorphicGrants(): Layer {
+  const base = adoptedSources()
+  return {
+    [PROJECT_FILE]: {
+      ...base[PROJECT_FILE],
+      assignmentSources: [
+        grantsSource(),
+        globalGrantsSource({ table: ref("CustomTable", "GlobalGrant") }),
+        polyGrantsSource(),
+        polyContainerGrantsSource(),
+      ],
+    },
+    [SOURCE_ROLE_FILE]: sourceRoleTable(),
+    [POLY_GRANT_FILE]: polyGrantTable(),
+    [ROLE_FILE("OrgMember")]: {
+      sourceKeys: [{ source: "polyGrants", key: ADOPTED_MEMBER_KEY }],
+    },
+    [ROLE_FILE("ProjectLead")]: {
+      sourceKeys: [
+        { source: "grants", key: ADOPTED_LEAD_KEY },
+        { source: "polyContainerGrants", key: ADOPTED_LEAD_KEY },
+      ],
+    },
+    ...without(ORG_ROLES_FILE, ORG_ASSIGNMENTS_FILE),
+  }
+}
+
+/**
+ * Домен `polymorphicGrants()` з перевизначеннями джерел (за іменем) і шарами
+ * таблиць поверх: джерела повторено повністю, бо шари зливаються поверхнево.
+ */
+export function polymorphicGrantsDomain(
+  sources: {
+    members?: Record<string, unknown>
+    grants?: Record<string, unknown>
+    polyGrants?: Record<string, unknown>
+    polyContainerGrants?: Record<string, unknown>
+  } = {},
+  ...layers: Layer[]
+): Map<string, string> {
+  return adoptedSourcesDomain(
+    polymorphicGrants(),
+    {
+      [PROJECT_FILE]: {
+        membershipSources: [membersSource(sources.members)],
+        assignmentSources: [
+          grantsSource(sources.grants),
+          globalGrantsSource({ table: ref("CustomTable", "GlobalGrant") }),
+          polyGrantsSource(sources.polyGrants),
+          polyContainerGrantsSource(sources.polyContainerGrants),
+        ],
+      },
+    },
+    ...layers
+  )
+}

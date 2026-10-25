@@ -409,6 +409,39 @@ describe("messages catalog", () => {
     }
   })
 
+  it.each([
+    ["rights.source-where", ["type", "literal", "shared"]],
+    ["rights.source-role-key", ["primaryKey", "ambiguous"]],
+    ["rights.source-scope-column", ["scope", "column", "level", "missing"]],
+  ] as const)(
+    "%s gives every reason its own text and hint",
+    (code, reasons) => {
+      expect(diagnostic(code, "", "", { reason: reasons[0] }).severity).toBe(
+        "error"
+      )
+      for (const locale of ["en", "uk"] as const) {
+        const texts = reasons.map((reason) =>
+          localize(
+            diagnostic(code, "", "", {
+              source: "polyGrants",
+              table: "SourceRole",
+              column: "scopeType",
+              reason,
+            }),
+            locale
+          )
+        )
+        for (const text of texts) expect(text.message).toContain("polyGrants")
+        expect(new Set(texts.map((t) => t.message)).size, locale).toBe(
+          reasons.length
+        )
+        // Причини scope і column мають одну пораду — про скоуп-колонку таблиці.
+        const hints = code === "rights.source-scope-column" ? 3 : reasons.length
+        expect(new Set(texts.map((t) => t.hint)).size, locale).toBe(hints)
+      }
+    }
+  )
+
   it("rights.scope-without-membership names the container when there is one", () => {
     const d = diagnostic("rights.scope-without-membership", "", "", {
       scopeKind: "team",

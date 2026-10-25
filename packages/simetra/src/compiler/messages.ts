@@ -19,6 +19,73 @@ export interface MessageEntry {
 }
 
 /**
+ * Поради правил прийнятих джерел за причиною (Р2d1-15…Р2d1-19): невідома
+ * причина бере запасну — каталог не падає на параметрах.
+ */
+function hintOf<K extends string>(
+  hints: Record<K, { en: string; uk: string }>,
+  params: DiagnosticParams,
+  fallback: K
+): { en: string; uk: string } {
+  const reason = String(params.reason)
+  return Object.hasOwn(hints, reason) ? hints[reason as K] : hints[fallback]
+}
+
+const SOURCE_WHERE_HINTS: Record<
+  "shared" | "type" | "literal",
+  { en: string; uk: string }
+> = {
+  shared: {
+    en: "Rows of one source would also count as rows of the other. Give each source a where condition on one discriminator column that the other excludes: different literals (not on a column with its own collation), a literal against isNull: true, or isNull: true against isNull: false — or use separate tables.",
+    uk: "Рядки одного джерела рахувалися б і рядками іншого. Дайте кожному джерелу умову where на одну колонку-дискримінатор, яку інше виключає: різні літерали (не на колонці з власною колацією), літерал проти isNull: true чи isNull: true проти isNull: false, — або візьміть окремі таблиці.",
+  },
+  type: {
+    en: "equals compares a text, uuid, boolean or integer column that is not an array; use isNull for other columns.",
+    uk: "equals порівнює колонку тексту, uuid, логічну чи цілу, не масив; для інших колонок — isNull.",
+  },
+  literal: {
+    en: "Use a string for a text column, a uuid with dashes for a uuid column, true or false for a boolean column and an integer for an integer column.",
+    uk: "Для текстової колонки — рядок, для uuid — uuid з дефісами, для логічної — true чи false, для цілої — ціле число.",
+  },
+}
+
+const SOURCE_ROLE_KEY_HINTS: Record<
+  "primaryKey" | "ambiguous",
+  { en: string; uk: string }
+> = {
+  primaryKey: {
+    en: "The role column of the source refers to the role table by its key: declare a primary key of one UUID column in the CustomTable metadata.",
+    uk: "Колонка ролі джерела посилається на таблицю ролей за її ключем: оголосіть у метаданих CustomTable первинний ключ з однієї колонки UUID.",
+  },
+  ambiguous: {
+    en: "A custom role with the key of a system role would turn the system role on. Add a where condition to columns.role that keeps only the roles of the source, or make the key column unique on its own (a unique constraint or a unique index over the column, without a predicate, operator class or collation).",
+    uk: "Кастомна роль із ключем системної вмикала б системну роль. Додайте до columns.role умову where, що лишає лише ролі джерела, або зробіть колонку ключа унікальною самою (унікальне обмеження чи унікальний індекс над колонкою, без предиката, класу операторів і колації).",
+  },
+}
+
+/** Скоуп джерела — скоуп-колонка таблиці, яку FK тримає в межах тенанта. */
+const SCOPE_COLUMN_HINT = {
+  en: "Scope the table by the source's scope kind and map columns.scope to its scopeColumn: the composite foreign key of an owner keeps exactly that column within the tenant.",
+  uk: "Скоупте таблицю видом скоупу джерела й зіставте columns.scope з її scopeColumn: складений зовнішній ключ власника тримає в межах тенанта саме цю колонку.",
+}
+
+const SOURCE_SCOPE_HINTS: Record<
+  "scope" | "column" | "level" | "missing",
+  { en: string; uk: string }
+> = {
+  scope: SCOPE_COLUMN_HINT,
+  column: SCOPE_COLUMN_HINT,
+  level: {
+    en: "columns.scope belongs to the scope level only: drop it.",
+    uk: "columns.scope буває лише на рівні скоупу: приберіть її.",
+  },
+  missing: {
+    en: "The scope of an assignment is the scope of its member, and the own scope column of the row must match it: name that column in columns.scope, or set columns.scope to null when the row carries no scope.",
+    uk: "Скоуп призначення — скоуп учасника, і власна колонка скоупу рядка мусить із ним збігатися: назвіть цю колонку в columns.scope або задайте columns.scope: null, коли рядок скоупу не несе.",
+  },
+}
+
+/**
  * Порада відмов власників — одна для плану (`plan.owner-mismatch`) і звірки
  * (`engine.owner-not-member`): виправлення те саме, різниться лише наслідок.
  */
@@ -1866,18 +1933,66 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Функції прав порівнюють колонки скоупу, користувача, учасника й контейнера як uuid, читають колонку активності як boolean, а колонку ролі — як текст: зіставте колонку такого типу.",
     },
   },
-  "rights.source-scope-column": {
+  "rights.source-where": {
     en: (p) =>
-      p.reason === "scope"
-        ? `Table of membership source "${p.source}" is not scoped by the scope kind of the source`
-        : `Scope column of membership source "${p.source}" is not the scope column of its table`,
+      p.reason === "shared"
+        ? `Assignment source "${p.source}" shares its table with another assignment source, and their where conditions do not exclude each other`
+        : p.reason === "type"
+          ? `Condition on column ${p.column} of source "${p.source}" compares a column that is not text, uuid, boolean or integer`
+          : `Condition on column ${p.column} of source "${p.source}" has a literal that does not fit the column type`,
     uk: (p) =>
-      p.reason === "scope"
-        ? `Таблиця джерела членства "${p.source}" не скоуплена видом скоупу джерела`
-        : `Колонка скоупу джерела членства "${p.source}" — не скоуп-колонка його таблиці`,
+      p.reason === "shared"
+        ? `Джерело призначень "${p.source}" ділить таблицю з іншим джерелом призначень, і їхні умови where не виключають одна одну`
+        : p.reason === "type"
+          ? `Умова на колонку ${p.column} джерела "${p.source}" порівнює колонку не текстову, не uuid, не логічну й не цілу`
+          : `Умова на колонку ${p.column} джерела "${p.source}" має літерал, що не відповідає типу колонки`,
     hint: {
-      en: "Scope the table by the source's scope kind and map columns.scope to its scopeColumn: the composite foreign key of an owner keeps exactly that column within the tenant.",
-      uk: "Скоупте таблицю видом скоупу джерела й зіставте columns.scope з її scopeColumn: складений зовнішній ключ власника тримає в межах тенанта саме цю колонку.",
+      en: (p) => hintOf(SOURCE_WHERE_HINTS, p, "literal").en,
+      uk: (p) => hintOf(SOURCE_WHERE_HINTS, p, "literal").uk,
+    },
+  },
+  "rights.source-role-key": {
+    en: (p) =>
+      p.reason === "primaryKey"
+        ? `Role table ${p.table} of assignment source "${p.source}" has no single-column uuid key`
+        : `Role key of assignment source "${p.source}" is not unique in role table ${p.table}, and the role has no where condition`,
+    uk: (p) =>
+      p.reason === "primaryKey"
+        ? `Таблиця ролей ${p.table} джерела призначень "${p.source}" не має одноколонкового uuid-ключа`
+        : `Ключ ролі джерела призначень "${p.source}" не унікальний у таблиці ролей ${p.table}, а роль не має умови where`,
+    hint: {
+      en: (p) => hintOf(SOURCE_ROLE_KEY_HINTS, p, "ambiguous").en,
+      uk: (p) => hintOf(SOURCE_ROLE_KEY_HINTS, p, "ambiguous").uk,
+    },
+  },
+  "rights.source-scope-column": {
+    en: (p) => {
+      switch (p.reason) {
+        case "scope":
+          return `Table of source "${p.source}" is not scoped by the scope kind of the source`
+        case "level":
+          return `Assignment source "${p.source}" names a row scope column, but its level is not a scope kind`
+        case "missing":
+          return `Assignment source "${p.source}" on a scope level names no row scope column, and its table has no scopeColumn`
+        default:
+          return `Scope column of source "${p.source}" is not the scope column of its table`
+      }
+    },
+    uk: (p) => {
+      switch (p.reason) {
+        case "scope":
+          return `Таблиця джерела "${p.source}" не скоуплена видом скоупу джерела`
+        case "level":
+          return `Джерело призначень "${p.source}" називає колонку скоупу рядка, а його рівень — не вид скоупу`
+        case "missing":
+          return `Джерело призначень "${p.source}" рівня скоупу не називає колонки скоупу рядка, а його таблиця не має scopeColumn`
+        default:
+          return `Колонка скоупу джерела "${p.source}" — не скоуп-колонка його таблиці`
+      }
+    },
+    hint: {
+      en: (p) => hintOf(SOURCE_SCOPE_HINTS, p, "column").en,
+      uk: (p) => hintOf(SOURCE_SCOPE_HINTS, p, "column").uk,
     },
   },
   "rights.membership-source-duplicate": {

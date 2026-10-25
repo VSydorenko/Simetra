@@ -4,6 +4,7 @@ import {
   EVERYONE_ID,
   GLOBAL_ASSIGNMENTS_FILE,
   GLOBAL_ROLES_FILE,
+  GLOBAL_GRANT_FILE,
   GRANT_FILE,
   GRANTS_SOURCE_ID,
   ORG_ADMIN_ID,
@@ -19,6 +20,7 @@ import {
   TASK_READERS_ID,
   catalog,
   compileRights,
+  globalGrantTable,
   grantTable,
   grantsSource,
   rightsFiles,
@@ -36,7 +38,9 @@ const files = withRoles
 const SQUAD_FILE = "catalogs/Squad/Squad.meta.json"
 
 /**
- * Джерела призначень контейнерного (`grants`) і глобального рівня. Глобальне
+ * Джерела призначень контейнерного (`grants`, над `RoleGrant`) і глобального
+ * рівня (над окремою `GlobalGrant`: таблиця під двома джерелами вимагала б
+ * несумісних умов `where`, Р2d1-19). Глобальне
  * джерело покриває всі глобальні ролі, тож глобальних довідників прав немає
  * (Р2a1-24); рівень `org` змішаний — його довідники лишаються.
  */
@@ -49,11 +53,13 @@ function withSources(overrides: Record<string, Record<string, unknown>> = {}) {
           id: uuid(6122),
           name: "globalGrants",
           assignedOn: "global",
+          table: { kind: "CustomTable", name: "GlobalGrant" },
           columns: { member: "memberId", role: "roleKey" },
         }),
       ],
     },
     [GRANT_FILE]: grantTable(),
+    [GLOBAL_GRANT_FILE]: globalGrantTable(),
     ...overrides,
   })
 }

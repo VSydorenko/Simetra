@@ -623,7 +623,8 @@ describe("rightsLevelOf", () => {
     id: uuid(6122),
     name: "orgGrants",
     assignedOn: { scopeKind: "org" },
-    columns: { member: "memberId", role: "roleKey" },
+    // `RoleGrant` скоупу не несе: скоуп — з учасника (Р2d1-19).
+    columns: { member: "memberId", role: "roleKey", scope: null },
   })
   const ORG = { level: "scope", scopeKindId: ORG_KIND_ID }
 
