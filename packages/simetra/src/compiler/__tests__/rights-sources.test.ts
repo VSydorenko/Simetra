@@ -24,12 +24,15 @@ import {
   adoptedMembershipTable,
   adoptedSourcesDomain,
   compileRights,
+  globalGrantsSource,
   grantTable,
   grantsSource,
   membersSource,
   membershipTable,
   polyColumns,
+  polyContainerGrantsSource,
   polyGrantTable,
+  polyGrantsSource,
   polymorphicGrantsDomain,
   rightsFiles,
   rightsSet,
@@ -612,6 +615,40 @@ describe("adopted source member and column types", () => {
       pointer: "/membershipSources/0/columns/active",
       params: { source: "members", column: "isActive", expected: "Boolean" },
     },
+    {
+      case: "user text",
+      layer: {
+        [MEMBERSHIP_FILE]: retype(adoptedMembershipTable(), "userId", "Text"),
+      },
+      code: "rights.source-column-type",
+      pointer: "/membershipSources/0/columns/user",
+      params: { source: "members", column: "userId", expected: "UUID" },
+    },
+    {
+      case: "membership scope text",
+      layer: {
+        [MEMBERSHIP_FILE]: retype(adoptedMembershipTable(), "orgId", "Text"),
+      },
+      code: "rights.source-column-type",
+      pointer: "/membershipSources/0/columns/scope",
+      params: { source: "members", column: "orgId", expected: "UUID" },
+    },
+    {
+      case: "container text",
+      layer: {
+        [GRANT_FILE]: retype(adoptedGrantTable(), "projectId", "Text"),
+      },
+      code: "rights.source-column-type",
+      pointer: "/assignmentSources/0/columns/container",
+      params: { source: "grants", column: "projectId", expected: "UUID" },
+    },
+    {
+      case: "role key column uuid",
+      layer: { [GRANT_FILE]: retype(adoptedGrantTable(), "roleKey", "UUID") },
+      code: "rights.source-column-type",
+      pointer: "/assignmentSources/0/columns/role",
+      params: { source: "grants", column: "roleKey", expected: "Text" },
+    },
   ])("$case", async ({ layer, code, pointer, params }) => {
     const result = await compileRights(adoptedSourcesDomain(layer))
     expect(
@@ -698,6 +735,9 @@ const polyColumn = (
 ) => ({ id: uuid(n), name, physicalName, type, notNull: true, ...more })
 
 const roleWithout = { role: sourceRoleRef({ where: [] }) }
+
+/** Ціла колонка `PolyGrant` для умов рівності з числом. */
+const RANK = polyColumn(6174, "rank", "rank", "Integer")
 
 /** Скоуплена видом `kind` таблиця `PolyGrant` зі скоуп-колонкою. */
 const scopedPolyOf = (kind: string, scopeColumn: string) =>
@@ -795,6 +835,28 @@ describe("adopted source where, row scope and role table", () => {
             column: "scopeId",
             reason: "literal",
           },
+        },
+      ],
+    },
+    {
+      case: "where integer literal",
+      files: () =>
+        poly(
+          {
+            polyGrants: {
+              where: [
+                { column: "scopeType", equals: "org" },
+                { column: "rank", equals: "7" },
+              ],
+            },
+          },
+          polyTable([RANK])
+        ),
+      expected: [
+        {
+          code: "rights.source-where",
+          pointer: "/assignmentSources/2/where/1",
+          params: { source: "polyGrants", column: "rank", reason: "literal" },
         },
       ],
     },
@@ -993,6 +1055,16 @@ describe("adopted source where, row scope and role table", () => {
           [{ column: "scopeType", isNull: false }],
         ],
         [
+          "shared with isNull true on both",
+          [{ column: "scopeType", isNull: true }],
+          [{ column: "scopeType", isNull: true }],
+        ],
+        [
+          "shared with isNull false against equals",
+          [{ column: "scopeType", isNull: false }],
+          [{ column: "scopeType", equals: "container" }],
+        ],
+        [
           "shared with conditions on different columns",
           [{ column: "scopeType", equals: "org" }],
           [{ column: "scopeId", isNull: true }],
@@ -1093,6 +1165,14 @@ describe("adopted source where, row scope and role table", () => {
           },
         ],
         [
+          "role ambiguous with a composite index",
+          {
+            name: "source_roles_key_org",
+            unique: true,
+            keys: [{ column: "key" }, { column: "orgId" }],
+          },
+        ],
+        [
           "role ambiguous with a partial unique index",
           {
             name: "source_roles_key_system",
@@ -1152,6 +1232,29 @@ describe("adopted source where, row scope and role table", () => {
         },
       ],
     })),
+    {
+      case: "role ambiguous with a composite unique",
+      files: () =>
+        poly(
+          { polyGrants: { columns: polyColumns(roleWithout) } },
+          {
+            [SOURCE_ROLE_FILE]: sourceRoleTable({
+              uniques: [{ columns: ["key", "orgId"] }],
+            }),
+          }
+        ),
+      expected: [
+        {
+          code: "rights.source-role-key",
+          pointer: "/assignmentSources/2/columns/role",
+          params: {
+            source: "polyGrants",
+            table: "SourceRole",
+            reason: "ambiguous",
+          },
+        },
+      ],
+    },
     {
       // Скоуплена таблиця іншого виду несе чужий тенант.
       case: "table scoped by another kind than the level",
@@ -1305,6 +1408,54 @@ describe("adopted source where, row scope and role table", () => {
         )
       )
     ).not.toContain("rights.source-where")
+  })
+
+  it("an integer column takes a JSON integer literal", async () => {
+    expect(
+      await codesOf(
+        poly(
+          {
+            polyGrants: {
+              where: [
+                { column: "scopeType", equals: "org" },
+                { column: "rank", equals: 7 },
+              ],
+            },
+          },
+          polyTable([RANK])
+        )
+      )
+    ).not.toContain("rights.source-where")
+  })
+
+  it("reports shared conditions of every pair, not only of neighbours", async () => {
+    // Третє джерело над `PolyGrant` перетинається з першим, а друге — посередині
+    // — несумісне з обома: сусідні пари пройшли б.
+    const found = await diagnosticsOf(
+      poly(
+        {},
+        {
+          [PROJECT]: {
+            assignmentSources: [
+              grantsSource(),
+              globalGrantsSource({ table: ref("CustomTable", "GlobalGrant") }),
+              polyGrantsSource(),
+              polyContainerGrantsSource(),
+              polyGrantsSource({ id: uuid(6162), name: "polyOrgGrants" }),
+            ],
+          },
+        }
+      )
+    )
+    expect(
+      found
+        .filter(
+          (d) =>
+            d.code === "rights.source-where" &&
+            (d.params as { reason?: string }).reason === "shared"
+        )
+        .map((d) => d.pointer)
+    ).toEqual(["/assignmentSources/2/table", "/assignmentSources/4/table"])
   })
 
   it.each([

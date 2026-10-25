@@ -135,6 +135,7 @@ describe("readRightsSourceFacts", () => {
   function fakeTarget(o: {
     present: Partial<Record<string, boolean>>
     missingColumns?: string[]
+    unknownKeys?: { unknown_key: string; total: string }[]
   }) {
     const log: { sql: string; params: readonly unknown[] }[] = []
     const answer = (sql: string, params: readonly unknown[]): unknown[] => {
@@ -175,7 +176,7 @@ describe("readRightsSourceFacts", () => {
           )
       }
       if (sql.includes("AS unknown_key"))
-        return [{ unknown_key: "stale", total: "1" }]
+        return o.unknownKeys ?? [{ unknown_key: "stale", total: "1" }]
       return []
     }
     const tx: ApplyTransaction = {
@@ -276,6 +277,22 @@ describe("readRightsSourceFacts", () => {
       )
     }
   )
+
+  it("counts unknown keys past the limit from the window total", async () => {
+    // Запит повертає не більше ліміту рядків, а `total` — усі невідомі ключі.
+    const keys = Array.from({ length: RIGHTS_SOURCE_LIMIT }, (_, i) => `k${i}`)
+    const target = fakeTarget({
+      present: { "public.membership": true, "public.role_grant": true },
+      unknownKeys: keys.map((unknown_key) => ({ unknown_key, total: "25" })),
+    })
+    const facts = await readRightsSourceFacts(
+      target.tx,
+      rightsSourceInput(adopted.contracts)
+    )
+    expect(facts.unknownKeys).toEqual([
+      { source: "grants", keys, more: 25 - RIGHTS_SOURCE_LIMIT },
+    ])
+  })
 
   it("refuses a table in a schema the apply role cannot use instead of missing it", async () => {
     // Р2d1-10: `to_regclass` на схемі без `USAGE` кидає сирий `42501`, тож

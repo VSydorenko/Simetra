@@ -10,6 +10,7 @@ import {
   ORG_KIND_ID,
   ORG_MEMBER_ROLE_ID,
   PROJECT_LEAD_ID,
+  activeGrants,
   adoptedCrossKind,
   adoptedSourcesDomain,
   compileRights,
@@ -153,14 +154,27 @@ function seeder(client: pg.Client, ids: Seed) {
 /**
  * Засів опису «adopted sources»: тенанти A і B, учасники `Membership` (ключ
  * `u@O`; `un` — з `is_active IS NULL`, `nouser@A` — без користувача),
- * проєкти P1 і P2 в A, задача P1, рядки `RoleGrant` і `GlobalGrant` з плану,
+ * проєкти P1 і P2 в A, задача P1, рядки `RoleGrant` і `GlobalGrant` з плану
+ * (рядки `lead` учасників u10@A і u11@A — з `is_active` `false` і `NULL`),
  * призначення довідника `org` з учасником u7 і учасник `team` u6 з id
  * неактивного u2@A у команді з id A (Р2a1-26).
  */
 async function seedAdopted(client: pg.Client): Promise<Seed> {
   const ids: Seed = {}
   const create = seeder(client, ids)
-  for (const user of ["u1", "u2", "u3", "u4", "u5", "u6", "u7", "u9", "un"])
+  for (const user of [
+    "u1",
+    "u2",
+    "u3",
+    "u4",
+    "u5",
+    "u6",
+    "u7",
+    "u9",
+    "u10",
+    "u11",
+    "un",
+  ])
     ids[user] = await signUp(client)
   await create("A", "organization")
   await create("B", "organization")
@@ -170,7 +184,8 @@ async function seedAdopted(client: pg.Client): Promise<Seed> {
       user_id: user === null ? null : ids[user],
       is_active: active,
     })
-  for (const user of ["u1", "u5", "u7", "u9"]) await member(user, "A", true)
+  for (const user of ["u1", "u5", "u7", "u9", "u10", "u11"])
+    await member(user, "A", true)
   await member("u2", "A", false)
   await member("un", "A", null)
   await member(null, "A", true)
@@ -185,13 +200,15 @@ async function seedAdopted(client: pg.Client): Promise<Seed> {
   const roleGrant = (
     member: string | null,
     key: string | null,
-    project: string
+    project: string,
+    active: boolean | null = true
   ) =>
     insert(client, "role_grant", {
       id: randomUUID(),
       member_id: member === null ? null : ids[member],
       role_key: key,
       project_id: ids[project],
+      is_active: active,
     })
   await roleGrant("u1@A", ADOPTED_LEAD_KEY, "P1")
   // Учасник B на проєкті A — аналог R1 для контейнера (Review Focus 6)
@@ -203,6 +220,8 @@ async function seedAdopted(client: pg.Client): Promise<Seed> {
   await roleGrant("u9@A", ADOPTED_SUPPORT_KEY, "P1")
   await roleGrant("u1@A", null, "P1")
   await roleGrant(null, ADOPTED_LEAD_KEY, "P1")
+  await roleGrant("u10@A", ADOPTED_LEAD_KEY, "P1", false)
+  await roleGrant("u11@A", ADOPTED_LEAD_KEY, "P1", null)
   await insert(client, "global_grant", {
     id: randomUUID(),
     member_id: ids.u4,
@@ -254,6 +273,15 @@ const ADOPTED_CASES: Case[] = [
       ["un", MINE, []],
     ],
   ],
+  // Активний учасник з рядком `lead` на P1, неактивним чи з `NULL`: функції
+  // прав читають рядок джерела під `IS TRUE`
+  [
+    "source-grant-inactive",
+    () => [
+      ["u10", MINE, []],
+      ["u11", MINE, []],
+    ],
+  ],
   ["source-wrong-level", () => [["u9", MINE, []]]],
   [
     "source-global",
@@ -276,7 +304,7 @@ const ADOPTED_CASES: Case[] = [
       [
         "u1",
         set("simetra.rights_visible_users()"),
-        [id("u1"), id("u5"), id("u7"), id("u9")],
+        [id("u1"), id("u5"), id("u7"), id("u9"), id("u10"), id("u11")],
       ],
     ],
   ],
@@ -290,7 +318,9 @@ describe("adopted sources", () => {
   let leadRows: string[] = []
 
   beforeAll(async () => {
-    model = await sourcesModel(adoptedSourcesDomain(adoptedCrossKind()))
+    model = await sourcesModel(
+      adoptedSourcesDomain(adoptedCrossKind(), activeGrants())
+    )
     const client = await tx.open()
     await client.query(renderDesiredState(model).sql)
     ids = await seedAdopted(client)
@@ -369,6 +399,7 @@ describe("adopted sources", () => {
     const owner = testRoleName("source_owner")
     const heir = testRoleName("source_heir")
     const blind = testRoleName("source_blind")
+    const bypass = testRoleName("source_bypass")
     // Таблиці й схема — з тегованими іменами ролей: окремого помічника імен
     // схем немає, а все створене відкочує точка збереження
     const ownedTable = `${owner}_t`
@@ -394,6 +425,19 @@ describe("adopted sources", () => {
         ],
         unknownKeys: [{ source: "globalGrants", keys: [], more: 0 }],
       })
+      await client.query("RESET ROLE")
+
+      // Не власник, але з `BYPASSRLS`: RLS таблиці його не зупиняє
+      await client.query(`CREATE ROLE ${bypass} NOLOGIN BYPASSRLS`)
+      await client.query(`GRANT USAGE ON SCHEMA public TO ${bypass}`)
+      await client.query(`GRANT SELECT ON public.role_grant TO ${bypass}`)
+      await client.query(`SET LOCAL ROLE ${bypass}`)
+      expect
+        .soft(await ownersOf(["public", "role_grant"]), "bypassrls")
+        .toEqual({
+          owners: [{ table: "public.role_grant", owned: true }],
+          unknownKeys: [],
+        })
       await client.query("RESET ROLE")
 
       // Власник, успадкований через членство (`pg_has_role`), обходить RLS

@@ -1221,6 +1221,36 @@ export function adoptedSourcesDomain(...layers: Layer[]): Map<string, string> {
 }
 
 /**
+ * Шар поверх `adoptedSources()`: рядки `RoleGrant` мають nullable `isActive`,
+ * змаповану як активність джерела `grants`. Окремим шаром, бо типова
+ * `RoleGrant` активності не має, а на неї спираються інші твердження.
+ * `assignmentSources` повторено повністю: шари зливаються поверхнево.
+ */
+export function activeGrants(): Layer {
+  return {
+    [PROJECT_FILE]: {
+      assignmentSources: [
+        grantsSource({
+          columns: {
+            member: "memberId",
+            role: "roleKey",
+            container: "projectId",
+            active: "isActive",
+          },
+        }),
+        globalGrantsSource({ table: ref("CustomTable", "GlobalGrant") }),
+      ],
+    },
+    [GRANT_FILE]: adoptedGrantTable({
+      columns: [
+        ...adoptedGrantTable().columns,
+        nullable(6105, "isActive", "is_active", "Boolean"),
+      ],
+    }),
+  }
+}
+
+/**
  * Проєкт без «Користувачів» (спека прав §4.6): прибирає довідник і все, що на
  * нього посилається, — авторство `Task` і «Користувачів» із грантів
  * `TaskReaders` і `Everyone`; власність і ТЧ «Користувачів» ідуть разом із

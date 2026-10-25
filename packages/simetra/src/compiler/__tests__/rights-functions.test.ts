@@ -35,6 +35,7 @@ import {
   TASK_FILE,
   TEAM_KIND_ID,
   USERS_FILE,
+  activeGrants,
   adoptedSourcesDomain,
   compileRights,
   grant,
@@ -753,6 +754,18 @@ describe("rights functions over adopted sources", () => {
     )
   })
 
+  it("an assignment source with an active column reads active rows only", async () => {
+    // `IS TRUE`: `NULL` в активності призначення прав не дає (fail-closed).
+    const active = await compiled(adoptedSourcesDomain(activeGrants()))
+    expect(sourceArm(active, GRANTS_SOURCE_ID)).toEqual(
+      selectOf(
+        tree(
+          `SELECT 'source'::text AS storage, '${GRANTS_SOURCE_ID}'::uuid AS storage_id, s.scope AS scope, src.project_id AS container, NULL::uuid AS custom_role, k.role_id AS archetype, '${ORG_KIND_ID}'::uuid AS scope_kind_id, 'container'::text AS source_level, '${PROJECT_ID}'::uuid AS source_level_id FROM public.role_grant src JOIN simetra.rights_source_keys() k ON k.source_id = '${GRANTS_SOURCE_ID}'::uuid AND k.key = src.role_key JOIN my_scopes s ON s.scope_kind_id = '${ORG_KIND_ID}'::uuid AND s.member = src.member_id WHERE src.is_active IS TRUE`
+        )
+      )
+    )
+  })
+
   it("a source row passes only for a role of the source level", () => {
     // Р2d1-4: рівень зберігання ролей, покритих джерелом, — `NULL`
     // (Р2a1-12), тож рядок джерела типізує рівень джерела — стала генератора.
@@ -906,6 +919,11 @@ describe("rights functions over a polymorphic adopted source", () => {
       `src.c = '${ORG_KIND_ID}'::uuid`,
     ],
     ["boolean", { column: "c", equals: true, type: "boolean" }, "src.c = TRUE"],
+    [
+      "boolean false",
+      { column: "c", equals: false, type: "boolean" },
+      "src.c = FALSE",
+    ],
     ["integer", { column: "c", equals: 7, type: "integer" }, "src.c = 7"],
     ["not null", { column: "c", isNull: false }, "src.c IS NOT NULL"],
     ["null", { column: "c", isNull: true }, "src.c IS NULL"],
