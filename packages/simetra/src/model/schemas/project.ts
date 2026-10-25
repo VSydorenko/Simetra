@@ -141,6 +141,42 @@ export const PROVIDER_API_ROLES: Readonly<
 }
 
 /**
+ * Схеми, які створює й наповнює провайдер (платформна спека §6.9): застосунок
+ * має в них лише поверхню пресету. Факт T0, бо його потребує і компілятор (T1:
+ * доступність недосудного SQL, `SECURITY DEFINER` над RLS), і схема (T2) та
+ * designer — один перелік замість копії по ярусах. Порядок зберігається:
+ * його читає й `SUPABASE_SURFACES`.
+ */
+export const PROVIDER_SCHEMAS: Readonly<
+  Record<DatabaseProvider, readonly string[]>
+> = {
+  supabase: [
+    "_analytics",
+    "_realtime",
+    "_supavisor",
+    "auth",
+    "cron",
+    "etl",
+    "extensions",
+    "graphql",
+    "graphql_public",
+    "information_schema",
+    "net",
+    "pgbouncer",
+    "pgmq",
+    "pgmq_public",
+    "pgsodium",
+    "pgsodium_masks",
+    "pgtle",
+    "realtime",
+    "storage",
+    "supabase_functions",
+    "supabase_migrations",
+    "vault",
+  ],
+}
+
+/**
  * Ролі платформи за призначенням (платформна спека §6.7, спека прав §5.1):
  * на відміну від ролей API їх не дає провайдер — на базі споживача їх
  * створює designer (`simetra roles`), тож ім'я одне для всіх провайдерів.

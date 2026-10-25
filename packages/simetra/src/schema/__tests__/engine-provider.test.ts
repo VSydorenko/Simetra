@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest"
+import { PROVIDER_SCHEMAS } from "simetra/model"
 import {
   renderProviderSeed,
   SUPABASE_BASE_EXTENSIONS,
   SUPABASE_EXTENSIONS,
-  SUPABASE_SCHEMAS,
 } from "../engine/provider/supabase"
 import { UNMANAGED_SCHEMAS } from "../render/desired-state"
 
@@ -17,7 +17,9 @@ describe("provider preset matches the desired-state render", () => {
     // `public` існує в кожній базі Postgres — не схема провайдера
     for (const schema of UNMANAGED_SCHEMAS)
       if (schema !== "public")
-        expect(SUPABASE_SCHEMAS, `render skips ${schema}`).toContain(schema)
+        expect(PROVIDER_SCHEMAS.supabase, `render skips ${schema}`).toContain(
+          schema
+        )
   })
 })
 

@@ -5,11 +5,8 @@ import {
   type IntegrationProfile,
   type Policy,
 } from "@supabase/pg-delta"
-import {
-  SUPABASE_EXTENSIONS,
-  SUPABASE_SCHEMAS,
-  type EngineScope,
-} from "simetra/schema"
+import { SUPABASE_EXTENSIONS, type EngineScope } from "simetra/schema"
+import { PROVIDER_SCHEMAS } from "simetra/model"
 
 /**
  * Політика межі §6.9 поверх `supabasePolicy`. Фільтр двигуна — «перше збігле
@@ -25,7 +22,7 @@ import {
  * генерація пише одиницею лише відмінність цілі від пресету.
  */
 export function scopePolicy(scope: EngineScope): Policy {
-  const inside = [...scope.schemas, ...SUPABASE_SCHEMAS]
+  const inside = [...scope.schemas, ...PROVIDER_SCHEMAS.supabase]
   const policy: Policy = {
     id: "simetra-scope",
     extends: [supabasePolicy],

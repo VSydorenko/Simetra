@@ -11,9 +11,9 @@ import { describe, expect, it } from "vitest"
 import {
   SUPABASE_EXTENSIONS,
   SUPABASE_ROLES,
-  SUPABASE_SCHEMAS,
   SUPABASE_SURFACES,
 } from "simetra/schema"
+import { PROVIDER_SCHEMAS } from "simetra/model"
 import { scopePolicy } from "../pg-delta/policy"
 
 /**
@@ -106,7 +106,7 @@ function ownerRoles(policy: Policy): Set<string> {
 
 describe("provider preset matches the pinned engine", () => {
   it("provider schemas are the engine's assumed schemas", () => {
-    expect(new Set(SUPABASE_SCHEMAS)).toEqual(
+    expect(new Set(PROVIDER_SCHEMAS.supabase)).toEqual(
       new Set(flattenPolicy(supabasePolicy).assumedSchemas)
     )
   })

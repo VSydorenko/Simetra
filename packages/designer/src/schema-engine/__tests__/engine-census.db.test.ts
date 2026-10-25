@@ -3,10 +3,9 @@ import { resolveView } from "@supabase/pg-delta/policy"
 import pg from "pg"
 import { describe, expect, it } from "vitest"
 import { compile } from "simetra/compiler"
-import { PLATFORM_ROLES } from "simetra/model"
+import { PLATFORM_ROLES, PROVIDER_SCHEMAS } from "simetra/model"
 import {
   renderDesiredState,
-  SUPABASE_SCHEMAS,
   type CensusCount,
   type DbConnection,
   type EngineScope,
@@ -319,7 +318,7 @@ async function fixtureCase(
   const result = await compile(files)
   expect(result.diagnostics.filter((d) => d.severity === "error")).toEqual([])
   const model = result.model!
-  const provider = new Set(SUPABASE_SCHEMAS)
+  const provider = new Set(PROVIDER_SCHEMAS.supabase)
   const schemas = [
     ...new Set([
       ...model.physical.tables.map((t) => t.schema),

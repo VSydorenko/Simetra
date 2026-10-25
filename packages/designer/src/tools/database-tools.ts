@@ -15,9 +15,9 @@ import {
   type CatalogDifference,
   type CatalogUnit,
   PLATFORM_SCHEMA,
+  PROVIDER_SCHEMAS,
 } from "simetra/model"
 import {
-  SUPABASE_SCHEMAS,
   applyStateOf,
   checkOwnerMembership,
   checkPlatformRoles,
@@ -119,7 +119,7 @@ export const introspectTool = defineTool({
   destructive: false,
   async run({ dir, database }, input) {
     const existing = await readFolder(dir)
-    const provider = new Set(SUPABASE_SCHEMAS)
+    const provider = new Set(PROVIDER_SCHEMAS.supabase)
     const foreign = (input.schemas ?? []).filter((s) => provider.has(s))
     if (foreign.length > 0)
       throw new UsageError(
