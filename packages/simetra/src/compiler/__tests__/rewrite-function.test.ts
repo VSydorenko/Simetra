@@ -360,20 +360,25 @@ describe("rewriteFunction", () => {
     ])
   })
 
-  it("resolves unqualified tables by the function's search_path", () => {
-    const sql = plpgsql(
-      "BEGIN\n  PERFORM 1 FROM counterparties WHERE inn = '';\n  RETURN p_id;\nEND",
-      "app.f(p_id uuid) RETURNS uuid LANGUAGE plpgsql STABLE SET search_path = app"
-    )
-    const r = rewriteFunction(sql, ctx)
-    expect(r.problems).toEqual([])
-    expect(r.sql).toBe(
-      sql.replace(
-        "FROM counterparties WHERE inn",
-        "FROM counterparty WHERE tax_id"
+  // Ім'я налаштування Postgres шукає без огляду на регістр: `"SEARCH_PATH"`
+  // у лапках — той самий `search_path`.
+  it.each(["search_path", '"SEARCH_PATH"'])(
+    "resolves unqualified tables by the function's search_path (SET %s)",
+    (setting) => {
+      const sql = plpgsql(
+        "BEGIN\n  PERFORM 1 FROM counterparties WHERE inn = '';\n  RETURN p_id;\nEND",
+        `app.f(p_id uuid) RETURNS uuid LANGUAGE plpgsql STABLE SET ${setting} = app`
       )
-    )
-  })
+      const r = rewriteFunction(sql, ctx)
+      expect(r.problems).toEqual([])
+      expect(r.sql).toBe(
+        sql.replace(
+          "FROM counterparties WHERE inn",
+          "FROM counterparty WHERE tax_id"
+        )
+      )
+    }
+  )
 
   it("rewrites a CASE WHEN value", () => {
     const sql = trigger(
