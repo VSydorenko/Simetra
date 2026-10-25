@@ -100,7 +100,8 @@ RLS» (платформна спека §6.7, Р30).
 - Тіло функції судиться за відношеннями своїх операторів (Р2c1-15): тіла
   інших мов, нелітеральний `EXECUTE` і оператори на всю роль (`DROP OWNED`,
   `REASSIGN OWNED`) — поза судженням.
-- `relationReads` (`compiler/sql/definer-reads.ts`, Р2c1-8) судить
+- `relationReads` (`compiler/sql/reach.ts`), з якого бере таблиці
+  `sql.definer-reads-rls` (`compiler/sql/definer-reads.ts`, Р2c1-8), судить
   некваліфіковане відношення функції з порожнім `search_path` як вбудоване й
   не знає, що досягнута одиниця записала `search_path` (Р2c1-10 (б)): це
   зачіпає лише попередження `sql.definer-reads-rls` і лише в бік пропущеного
