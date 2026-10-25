@@ -77,6 +77,16 @@ describe("kind module: closed forms only", () => {
       "searchPath",
       "LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public",
     ],
+    [
+      "SET search_path = '' reset by a later RESET ALL",
+      "searchPath",
+      "LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' RESET ALL",
+    ],
+    [
+      "SET search_path = '' overridden by a later SET in another case",
+      "searchPath",
+      `LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' SET "SEARCH_PATH" = public`,
+    ],
   ])("closed shell: %s", async (_name, problem, options) => {
     const found = await diagnostics({ [SALE_SQL]: shell(options) })
     expect(found.map((d) => [d.code, d.file, d.params?.problem])).toEqual([

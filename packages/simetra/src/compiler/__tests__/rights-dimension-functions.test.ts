@@ -274,6 +274,25 @@ describe("access dimension value function", () => {
         },
       ],
     ])
+    // `RESET ALL` після `SET search_path = ''` повертає шлях сесії.
+    expect(
+      await linkReason(
+        fn(
+          "helper_ids",
+          `${LINK} RESET ALL`,
+          "SELECT r.region_id FROM public.member_region r"
+        )
+      )
+    ).toEqual([
+      [
+        "rights.dimension-function-signature",
+        {
+          dimension: "region",
+          function: "public.helper_ids",
+          reason: "searchPath",
+        },
+      ],
+    ])
     expect(
       await linkReason(
         fn("helper_ids", LINK, "SELECT r.region_id FROM member_region r")

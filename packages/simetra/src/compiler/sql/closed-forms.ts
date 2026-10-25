@@ -93,25 +93,13 @@ function setsEmptyValue(set: SetOption | undefined): boolean {
   )
 }
 
-function emptySearchPath(options: readonly DefElem[]): boolean {
-  // Останній `SET search_path` перемагає, як і в Postgres.
-  return setsEmptyValue(
-    options
-      .filter(
-        (o) =>
-          o.defname === "set" && o.arg?.VariableSetStmt?.name === "search_path"
-      )
-      .at(-1)?.arg?.VariableSetStmt
-  )
-}
-
 /**
  * Порожній `search_path` після опцій самого `CREATE`, згорнутих по черзі, як
  * це робить Postgres (`update_proconfig_value`): ім'я налаштування нечутливе
  * до регістру, опція `RESET ALL` прибирає все задане до неї, перемагає
  * останнє. Без цього `SET search_path = '' RESET ALL` чи пізніший
- * `SET "SEARCH_PATH" = 'public'` лишали б обходу уявний порожній шлях.
- * `emptySearchPath` закритої оболонки не змінюється (Р2c1-10 (б)).
+ * `SET "SEARCH_PATH" = 'public'` лишали б оболонці, ланці виміру й обходу
+ * уявний порожній шлях (Р2c1-10 (б)).
  */
 function foldedEmptySearchPath(options: readonly DefElem[]): boolean {
   let empty = false
@@ -127,12 +115,13 @@ function foldedEmptySearchPath(options: readonly DefElem[]): boolean {
 }
 
 /**
- * Функція з `SET search_path = ''` (останній `SET` перемагає): лише тоді
- * некваліфіковане ім'я в її тілі не може розв'язатися в чужу схему.
+ * Функція з `SET search_path = ''` після згортання опцій `CREATE`
+ * (`foldedEmptySearchPath`): лише тоді некваліфіковане ім'я в її тілі не
+ * може розв'язатися в чужу схему.
  */
 export function hasEmptySearchPath(tree: Node): boolean {
   const fn = createFunction(tree)
-  return fn !== undefined && emptySearchPath(functionOptions(fn).options)
+  return fn !== undefined && foldedEmptySearchPath(functionOptions(fn).options)
 }
 
 interface AlterFunctionNode {
@@ -189,8 +178,9 @@ export function functionSettingsOf(
  * зачіпає `search_path` (`SET`, `RESET`, `FROM CURRENT`) і не робить `RESET
  * ALL`. Порядок одиниць не моделюється (fail-closed): окремий `ALTER … RESET
  * search_path` інакше змінив би розв'язання імен під час виконання повз
- * статичне судження. `hasEmptySearchPath` лишається правилом однієї одиниці
- * для закритої оболонки.
+ * статичне судження. Закрита оболонка й ланка виміру (`hasEmptySearchPath`)
+ * судять лише сам `CREATE` за тим самим згортанням: окремий `ALTER FUNCTION`
+ * на судиму функцію — окрема помилка (`function-settings-shell.ts`).
  */
 export function hasEffectiveEmptySearchPath(
   unit: VerbatimUnit,
@@ -242,7 +232,7 @@ export function closedShellProblem(
   if (option("volatility") === undefined) return "volatility"
   if (
     option("security")?.Boolean?.boolval === true &&
-    !emptySearchPath(options)
+    !foldedEmptySearchPath(options)
   ) {
     return "searchPath"
   }
