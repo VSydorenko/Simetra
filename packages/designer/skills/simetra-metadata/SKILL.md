@@ -323,19 +323,15 @@ The `.sql` module of an object of a 1C kind accepts only:
   object's own table or one of its own tabular-section tables.
 - Movement query blocks in a document module.
 
+A verbatim policy or trigger on a table of a kind is an error, never debt
+(`sql.kind-table-verbatim`): use a right and an `EventSubscription`.
+
 Any other statement is rejected (`sql.statement-not-allowed`, `sql.closed-shell`,
 `sql.row-rule-grammar`, …) with a hint that names the property that replaces it.
 Follow the hint instead of rewording the statement. `CustomTable` and `PgEnum`
 modules and the shared `metadata/sql/` folder are not closed: their content is
-debt (below).
-
-Privileges on what the platform owns are generated: `EXECUTE` on a declared
-scope set function and on a subscription handler, and every grant on a kind's
-tables. In debt SQL (a `CustomTable` or `PgEnum` module, the shared
-`metadata/sql/`) a verbatim `GRANT`/`REVOKE` on them fails with
-`sql.generated-grant` (a kind's own module rejects any). `simetra fix` removes
-the statement (and its file, if left empty) only when every target belongs to
-the platform; one that also names other objects you split by hand. A grant on another overload of the same name is not affected.
+debt (below). Privileges on what the platform owns are generated
+(`sql.generated-grant`).
 
 A row rule shape:
 
@@ -357,6 +353,10 @@ tolerates. It only shrinks:
   function; moving it to another file does not make it acceptable.
 - A project with an existing `sql/` folder and no list is seeded by running
   `introspect` again (see `simetra-adoption`).
+- Debt SQL must not write `simetra.*` (`sql.command-context-write`), and
+  `sql.definer-reads-rls` marks reads past RLS; the trust boundary of closed
+  code (`sql.command-context-reach`) and the conversion steps are in
+  `references/people-and-rights.md`.
 
 ## The database: introspect and diff
 

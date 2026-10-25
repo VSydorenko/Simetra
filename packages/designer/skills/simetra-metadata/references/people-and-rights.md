@@ -8,6 +8,11 @@ Contents:
 - Rights declarations
 - Rights sets and roles
 - Who reads what
+- Who writes what
+- Policies and triggers on a table of a kind
+- What closed code may reach
+- Generated privileges
+- Reading past row-level security
 - Carrier copies
 
 ## Users, authorship and membership
@@ -249,6 +254,105 @@ command role and nobody else.
   `pg_settings` or a view over it, a literal `EXECUTE`): compiler error
   `sql.command-context-write`. The command context, the user and the role
   belong to the platform.
+- In SQL debt of an adopted table (`CustomTable`, `PgEnum`, shared `sql/`)
+  the same rule is split by setting. A write to `simetra.*` is an error
+  (`sql.command-context-write`, module `debt`): those settings carry the
+  command context and the rights maintenance mode, and `RESET ALL` and a
+  write to `pg_settings` reset them too. A write to the role or the request
+  claims (`request.jwt.*`) is a warning (`sql.debt-session-write`): it may
+  stay while the unit is debt, but closed code must not reach the unit (next
+  section). Remove the named statement when you convert the unit; write a
+  `set_config` name as a literal, because a name built at run time counts as
+  a write.
+
+## Policies and triggers on a table of a kind
+
+Only the platform attaches policies and triggers to a table of a kind (and to
+its tabular sections), in any `.sql` file, shared `sql/` folder included.
+A verbatim `CREATE POLICY` or `CREATE TRIGGER` there is the error
+`sql.kind-table-verbatim`, and the unit can never be listed in
+`sql-debt.json`. A hand-written policy would open rows past the rights, a
+hand-written trigger would act inside every command. Use what replaces them:
+
+- a policy → a right: a role's `grant` (with an extent), `ownership`,
+  `access` or `publicRead` on the object;
+- a trigger → an `EventSubscription` with a handler in the closed shell.
+
+The same statement on a `CustomTable` is ordinary SQL debt until the table is
+promoted into a kind.
+
+## What closed code may reach
+
+Kind module functions, subscription handlers and scope set functions run in
+the middle of a command statement. Everything they reach must therefore be
+SQL the compiler can check, or the policies of the following rows would run
+under a changed user or role. The compiler follows the call chain, and also
+the views they read, the policies of the tables they touch and the defaults
+and checks of the tables they write. `sql.command-context-reach` names the
+reached function, the reason and the chain. Closed code must not reach a
+function that:
+
+- executes a string built at run time (`EXECUTE` of a non-literal);
+- is written in a language other than `sql` or `plpgsql`;
+- the compiler does not know or whose body it cannot read;
+- writes a session setting of the platform (see above).
+
+Make the reached function `LANGUAGE sql` or `plpgsql` without `EXECUTE` of a
+built string and without writes to session settings, or stop calling it.
+Functions of the platform schema, generated functions, builtins and functions
+of provider schemas are trusted, except those that execute SQL from a string
+(`query_to_xml`, `dblink` and the like).
+
+The shell of every function the check relies on (volatility, `SECURITY`,
+`search_path`, `SET` options) is read from its `CREATE FUNCTION`. A separate
+`ALTER FUNCTION` that changes it is refused
+(`sql.function-settings-shell`, `RESET ALL` included): move the option into
+`CREATE FUNCTION` and remove the `ALTER FUNCTION` statement.
+
+Known limit: a debt trigger of an adopted table with `EXECUTE` of a built
+string or a body in another language runs in the middle of a command when
+the command reaches the table by a foreign-key cascade or by a handler's
+write, and the compiler cannot close that statically. Treat such a trigger
+as a candidate for conversion (a property, an `EventSubscription` or a
+closed-shell function) before the first command that writes the related
+table.
+
+## Generated privileges
+
+Privileges on what the platform owns are generated: `EXECUTE` on a declared
+scope set function and on a subscription handler, and every grant on a kind's
+tables. In debt SQL (a `CustomTable` or `PgEnum` module, the shared
+`metadata/sql/`) a verbatim `GRANT`/`REVOKE` on them fails with
+`sql.generated-grant` (a kind's own module rejects any). `simetra fix` removes
+the statement (and its file, if left empty) only when every target belongs to
+the platform; one that also names other objects you split by hand. A grant
+on another overload of the same name is not affected.
+
+## Reading past row-level security
+
+`sql.definer-reads-rls` (a warning) marks a unit that reads a table under
+row-level security as its owner, so the caller's policies do not apply, while
+a role of the API (or `PUBLIC`) can run or read it:
+
+- a `SECURITY DEFINER` function that someone may `EXECUTE`;
+- a view without `security_invoker` that someone may `SELECT`;
+- a materialized view, which stores the rows its owner read at `REFRESH`.
+
+When the unit reads SQL the compiler cannot check, the diagnostic says so
+instead of listing tables. The compiler does not see the owner of a function,
+so one whose owner is itself subject to row-level security is flagged too.
+Convert in this order of preference:
+
+1. Read through a right and a policy: let the caller read the kind's table
+   itself, so the platform's policies decide, and make the unit
+   `SECURITY INVOKER` (a view: `WITH (security_invoker = true)` in
+   `CREATE VIEW`; a separate `ALTER VIEW` is not accepted in `.sql` files).
+2. If the unit must run as its owner, check the caller's membership or rights
+   inside it, or filter the rows with the rights functions in a view.
+3. If no API caller needs it, `REVOKE EXECUTE` (function) or `REVOKE SELECT`
+   (view, materialized view) from `PUBLIC` and from each API role. A
+   materialized view that serves callers is replaced by a view with
+   `security_invoker`.
 
 ## Carrier copies
 
