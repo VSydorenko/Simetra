@@ -63,10 +63,15 @@ const SOURCE_ROLE_KEY_HINTS: Record<
   },
 }
 
-/** Скоуп джерела — скоуп-колонка таблиці, яку FK тримає в межах тенанта. */
+/**
+ * Скоуп джерела — скоуп-колонка таблиці: для членства її тримає в межах
+ * тенанта FK власника, для призначень скоуп рядка мусить дорівнювати скоупу
+ * учасника (R1). Код один на обидва види джерел, тож порада називає обидві
+ * причини.
+ */
 const SCOPE_COLUMN_HINT = {
-  en: "Scope the table by the source's scope kind and map columns.scope to its scopeColumn: the composite foreign key of an owner keeps exactly that column within the tenant.",
-  uk: "Скоупте таблицю видом скоупу джерела й зіставте columns.scope з її scopeColumn: складений зовнішній ключ власника тримає в межах тенанта саме цю колонку.",
+  en: "Scope the table by the source's scope kind and map columns.scope to its scopeColumn. For a membership source the composite foreign key of an owner keeps exactly that column within the tenant; for an assignment source the scope of the row must equal the scope of its member, or a row written in one tenant would grant a role in another.",
+  uk: "Скоупте таблицю видом скоупу джерела й зіставте columns.scope з її scopeColumn. Для джерела членства складений зовнішній ключ власника тримає в межах тенанта саме цю колонку; для джерела призначень скоуп рядка мусить дорівнювати скоупу учасника, інакше рядок, записаний в одному тенанті, давав би роль в іншому.",
 }
 
 const SOURCE_SCOPE_HINTS: Record<
@@ -76,8 +81,8 @@ const SOURCE_SCOPE_HINTS: Record<
   scope: SCOPE_COLUMN_HINT,
   column: SCOPE_COLUMN_HINT,
   level: {
-    en: "columns.scope belongs to the scope level only: drop it.",
-    uk: "columns.scope буває лише на рівні скоупу: приберіть її.",
+    en: "columns.scope, a column or null, belongs to the scope level only: drop the field.",
+    uk: "columns.scope — колонка чи null — буває лише на рівні скоупу: приберіть поле.",
   },
   missing: {
     en: "The scope of an assignment is the scope of its member, and the own scope column of the row must match it: name that column in columns.scope, or set columns.scope to null when the row carries no scope.",
@@ -1971,7 +1976,7 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
         case "scope":
           return `Table of source "${p.source}" is not scoped by the scope kind of the source`
         case "level":
-          return `Assignment source "${p.source}" names a row scope column, but its level is not a scope kind`
+          return `Assignment source "${p.source}" sets columns.scope, but its level is not a scope kind`
         case "missing":
           return `Assignment source "${p.source}" on a scope level names no row scope column, and its table has no scopeColumn`
         default:
@@ -1983,7 +1988,7 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
         case "scope":
           return `Таблиця джерела "${p.source}" не скоуплена видом скоупу джерела`
         case "level":
-          return `Джерело призначень "${p.source}" називає колонку скоупу рядка, а його рівень — не вид скоупу`
+          return `Джерело призначень "${p.source}" задає columns.scope, а його рівень — не вид скоупу`
         case "missing":
           return `Джерело призначень "${p.source}" рівня скоупу не називає колонки скоупу рядка, а його таблиця не має scopeColumn`
         default:

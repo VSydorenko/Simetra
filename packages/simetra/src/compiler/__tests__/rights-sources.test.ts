@@ -699,6 +699,10 @@ const polyColumn = (
 
 const roleWithout = { role: sourceRoleRef({ where: [] }) }
 
+/** Скоуплена видом `kind` таблиця `PolyGrant` зі скоуп-колонкою. */
+const scopedPolyOf = (kind: string, scopeColumn: string) =>
+  polyTable([], { scope: kind, scopeColumn })
+
 /** Скоуплена `org` таблиця `PolyGrant` зі скоуп-колонкою. */
 const scopedPoly = (
   scopeColumn: string,
@@ -1117,6 +1121,50 @@ describe("adopted source where, row scope and role table", () => {
         },
       ],
     })),
+    ...(
+      [
+        ["role ambiguous with a deferrable unique", "deferrable"],
+        [
+          "role ambiguous with an initially deferred unique",
+          "initiallyDeferred",
+        ],
+      ] as const
+    ).map(([label, deferrable]) => ({
+      case: label,
+      files: () =>
+        poly(
+          { polyGrants: { columns: polyColumns(roleWithout) } },
+          {
+            [SOURCE_ROLE_FILE]: sourceRoleTable({
+              uniques: [{ columns: ["key"], deferrable }],
+            }),
+          }
+        ),
+      expected: [
+        {
+          code: "rights.source-role-key",
+          pointer: "/assignmentSources/2/columns/role",
+          params: {
+            source: "polyGrants",
+            table: "SourceRole",
+            reason: "ambiguous",
+          },
+        },
+      ],
+    })),
+    {
+      // Скоуплена таблиця іншого виду несе чужий тенант.
+      case: "table scoped by another kind than the level",
+      files: () =>
+        poly({}, adoptedCrossKind(), scopedPolyOf("team", "scopeId")),
+      expected: [
+        {
+          code: "rights.source-scope-column",
+          pointer: "/assignmentSources/2/table",
+          params: { source: "polyGrants", reason: "scope" },
+        },
+      ],
+    },
     {
       case: "role table not adopted",
       files: () =>

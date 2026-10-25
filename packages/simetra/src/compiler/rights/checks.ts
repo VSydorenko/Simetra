@@ -1068,8 +1068,12 @@ function excludes(
  * ототожнює, — обидва не рахуються (fail-closed).
  */
 function uniqueKey(table: CustomTable, key: string): boolean {
+  // Відкладене обмеження не доводить унікальності: усередині транзакції
+  // функції прав бачать дубль, а відкат на COMMIT не скасовує того, що в ній
+  // уже прочитано й зроблено. Індекс відкладеним не буває (у схемі поля немає).
   const constraint = table.uniques.some(
-    (u) => u.columns.length === 1 && u.columns[0] === key
+    (u) =>
+      u.deferrable === "no" && u.columns.length === 1 && u.columns[0] === key
   )
   const index = table.indexes.some((i) => {
     if (!i.unique || i.where !== undefined || i.keys.length !== 1) return false
