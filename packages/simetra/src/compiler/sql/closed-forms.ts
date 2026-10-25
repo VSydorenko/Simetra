@@ -2,6 +2,8 @@ import type { Node } from "libpg-query"
 import {
   KIND_REGISTRY,
   PLATFORM_SETTING_PREFIX,
+  PROVIDER_SQL_TEXT_FUNCTIONS,
+  type DatabaseProvider,
   type Project,
 } from "simetra/model"
 import { diagnostic, type Diagnostic } from "../diagnostics"
@@ -272,12 +274,17 @@ export function firstDynamicSqlLine(
  * Запис, що зачіпає налаштування платформи неминуче: ім'я з її префіксом
  * (нечутливе до регістру, як у Postgres), оператор `RESET ALL` (`*`) чи
  * запис у `pg_settings`, ім'я в якому статично не перевірити (Р2b1-19a).
+ * `session_replication_role` — теж платформи (Р2c1-40): `replica` вимикає її
+ * тригери (носії, ефекти, механіка, RI), а в сесії пулу — і для чужих команд,
+ * тож у боргу він помилка, а не попередження.
  */
 function platformWrite(hit: CommandContextHit): boolean {
+  const setting = hit.setting?.toLowerCase()
   return (
     hit.form === "settingsTable" ||
-    hit.setting === "*" ||
-    hit.setting?.toLowerCase().startsWith(PLATFORM_SETTING_PREFIX) === true
+    setting === "*" ||
+    setting === "session_replication_role" ||
+    setting?.startsWith(PLATFORM_SETTING_PREFIX) === true
   )
 }
 
@@ -335,7 +342,8 @@ export function closedModuleOwners(
  * і спільних `sql/`-файлів, обробники підписок і функції множини — будь-де;
  * одиниця боргу (`isDebt` — `debtPredicate` ратчета) — лише платформним
  * префіксом, решта її записів — попередження `sql.debt-session-write`
- * (Р2c1-6, Р2c1-14).
+ * (Р2c1-6, Р2c1-14). Функції провайдера `provider`, що виконують текст SQL,
+ * судяться формою `dynamicText` (Р2c1-32); без проєкту провайдера немає.
  */
 export function checkSqlModules(
   objects: readonly ParsedObject[],
@@ -343,8 +351,12 @@ export function checkSqlModules(
   rowRules: readonly RowRule[],
   isDebt: (unit: VerbatimUnit) => boolean,
   parse: SqlParser,
-  plpgsql: PlpgsqlParser
+  plpgsql: PlpgsqlParser,
+  provider: DatabaseProvider | undefined
 ): Diagnostic[] {
+  const textFunctions: ReadonlySet<string> = new Set(
+    provider === undefined ? [] : PROVIDER_SQL_TEXT_FUNCTIONS[provider]
+  )
   const owners = closedModuleOwners(objects)
   const closed = (unit: { ownerFile?: string }) =>
     unit.ownerFile !== undefined && owners.has(unit.ownerFile)
@@ -377,7 +389,8 @@ export function checkSqlModules(
       unit.tree as Node,
       unit.sql,
       parse,
-      plpgsql
+      plpgsql,
+      textFunctions
     )
     if (writes.length === 0) continue
     const name = unit.schema === "" ? unit.name : `${unit.schema}.${unit.name}`
@@ -456,7 +469,13 @@ export function checkSqlModules(
     // б політики наступних рядків. Оболонка, що не пройшла, тіла не гарантує.
     const write =
       problem === undefined
-        ? commandContextWrite(shellUnit.tree, unit.sql, parse, plpgsql)[0]
+        ? commandContextWrite(
+            shellUnit.tree,
+            unit.sql,
+            parse,
+            plpgsql,
+            textFunctions
+          )[0]
         : undefined
     if (write !== undefined) {
       found.push(

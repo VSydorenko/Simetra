@@ -1,5 +1,6 @@
 import type { Node } from "libpg-query"
 import { PROTECTED_SESSION_SETTINGS } from "simetra/model"
+import { executesSqlText } from "./builtin-exclusions"
 import { plpgsqlExpressionTrees } from "./rewrite/plpgsql-body"
 import type { SqlParser } from "./parse"
 import type { PlpgsqlParser } from "./plpgsql"
@@ -9,6 +10,8 @@ import type { PlpgsqlParser } from "./plpgsql"
  * Р2b1-19b). Зміна ролі (`SET ROLE`, `SET SESSION AUTHORIZATION` і їхні
  * `RESET`) окремої форми не має: розбирач дає їй той самий `VariableSetStmt`
  * з іменем `role` чи `session_authorization`, тож вона — `setStatement`.
+ * `dynamicText` — виклик функції, що виконує переданий текст SQL (Р2c1-32):
+ * що вона виконає, статично не відомо, тож це зміна сесії невідомою формою.
  */
 export type CommandContextWrite =
   | "setConfig"
@@ -16,6 +19,7 @@ export type CommandContextWrite =
   | "functionOption"
   | "nonLiteral"
   | "settingsTable"
+  | "dynamicText"
 
 /**
  * Один запис захищеного налаштування: форма й ім'я налаштування, коли воно
@@ -125,7 +129,35 @@ export function isBuiltinSetConfig(
   )
 }
 
-function callWrite(call: CallNode): CommandContextHit | undefined {
+/**
+ * Чи кличе виклик функцію, що виконує текст SQL: вбудовану з класу
+ * виключень (некваліфіковану чи `pg_catalog.`, як `set_config`) або функцію
+ * провайдера з поіменного переліку. Некваліфікований виклик розв'язує шлях
+ * пошуку сесії, тож він судиться за голим ім'ям кожного елемента переліку.
+ */
+function sqlTextCall(
+  parts: readonly { String?: { sval?: string } }[] | undefined,
+  textFunctions: ReadonlySet<string>
+): boolean {
+  const names = (parts ?? []).map((f) => f.String?.sval?.toLowerCase())
+  const name = names.at(-1)
+  if (name === undefined) return false
+  const schema = names.length > 1 ? names.at(-2) : undefined
+  if (
+    (schema === undefined || (names.length <= 3 && schema === "pg_catalog")) &&
+    executesSqlText(name)
+  ) {
+    return true
+  }
+  if (schema !== undefined) return textFunctions.has(`${schema}.${name}`)
+  return [...textFunctions].some((fn) => fn.split(".").at(-1) === name)
+}
+
+function callWrite(
+  call: CallNode,
+  textFunctions: ReadonlySet<string>
+): CommandContextHit | undefined {
+  if (sqlTextCall(call.funcname, textFunctions)) return { form: "dynamicText" }
   if (!isBuiltinSetConfig(call.funcname)) return undefined
   const first = call.args?.[0]
   if (first === undefined) return undefined
@@ -208,15 +240,19 @@ function readsRelation(
  * раніше за дітей), тож перший елемент — та сама форма, що бачила перевірка
  * першого запису.
  */
-function treeWrites(value: unknown): CommandContextHit[] {
-  if (Array.isArray(value)) return value.flatMap(treeWrites)
+function treeWrites(
+  value: unknown,
+  textFunctions: ReadonlySet<string>
+): CommandContextHit[] {
+  const walk = (v: unknown) => treeWrites(v, textFunctions)
+  if (Array.isArray(value)) return value.flatMap(walk)
   if (typeof value !== "object" || value === null) return []
   const node = value as Record<string, unknown>
   const own: CommandContextHit[] = []
   const call =
     node.FuncCall === undefined
       ? undefined
-      : callWrite(node.FuncCall as CallNode)
+      : callWrite(node.FuncCall as CallNode, textFunctions)
   if (call !== undefined) own.push(call)
   else if (settingsTableWrite(node) || settingsView(node)) {
     own.push({ form: "settingsTable" })
@@ -231,7 +267,7 @@ function treeWrites(value: unknown): CommandContextHit[] {
       ...(setting === undefined ? {} : { setting }),
     })
   }
-  return [...own, ...Object.values(node).flatMap(treeWrites)]
+  return [...own, ...Object.values(node).flatMap(walk)]
 }
 
 interface FunctionTree {
@@ -279,13 +315,15 @@ function optionWrites(
  * `EXECUTE`, закритий код таких функцій не досягає (`reach.ts`, Р2c1-5).
  * Усі записи одиниці, а не перший: у борговому SQL `SET ROLE` перед
  * `set_config('simetra.…')` інакше сховав би помилку за попередженням
- * (Р2c1-6). Порожній масив — записів немає.
+ * (Р2c1-6). Порожній масив — записів немає. `textFunctions` — функції
+ * провайдера, що виконують текст SQL (`schema.name`, Р2c1-32).
  */
 export function commandContextWrite(
   tree: Node,
   sql: string,
   parse: SqlParser,
-  plpgsql: PlpgsqlParser
+  plpgsql: PlpgsqlParser,
+  textFunctions: ReadonlySet<string> = new Set()
 ): CommandContextHit[] {
   const fn = (tree as { CreateFunctionStmt?: FunctionTree }).CreateFunctionStmt
   if (fn === undefined) {
@@ -296,10 +334,10 @@ export function commandContextWrite(
     if (alter !== undefined) {
       return [
         ...optionWrites(alter.actions),
-        ...treeWrites({ ...alter, actions: [] }),
+        ...treeWrites({ ...alter, actions: [] }, textFunctions),
       ]
     }
-    return treeWrites(tree)
+    return treeWrites(tree, textFunctions)
   }
   const options = optionWrites(fn.options)
   const defs = (fn.options ?? []).flatMap((o) =>
@@ -312,9 +350,15 @@ export function commandContextWrite(
   // Значення параметрів за замовчуванням обчислює виклик, а тіло
   // `BEGIN ATOMIC` уже розібране: обидва — частина дерева самого оператора.
   // Опції судить `optionWrites`, тож у загальний обхід вони не входять.
-  const declared = [...options, ...treeWrites({ ...fn, options: [] })]
+  const declared = [
+    ...options,
+    ...treeWrites({ ...fn, options: [] }, textFunctions),
+  ]
   if (fn.sql_body !== undefined) return declared
-  return [...declared, ...bodyWrites(defs, language, sql, parse, plpgsql)]
+  return [
+    ...declared,
+    ...bodyWrites(defs, language, sql, parse, plpgsql, textFunctions),
+  ]
 }
 
 /** Записи рядкового тіла `LANGUAGE sql` чи plpgsql. */
@@ -323,22 +367,22 @@ function bodyWrites(
   language: string | undefined,
   sql: string,
   parse: SqlParser,
-  plpgsql: PlpgsqlParser
+  plpgsql: PlpgsqlParser,
+  textFunctions: ReadonlySet<string>
 ): CommandContextHit[] {
+  const walk = (v: unknown) => treeWrites(v, textFunctions)
   if (language === "sql") {
     const body = (
       defs.find((d) => d.defname === "as")?.arg as
         { List?: { items?: { String?: { sval?: string } }[] } } | undefined
     )?.List?.items?.[0]?.String?.sval
     const parsed = body === undefined ? undefined : parse(body)
-    return parsed?.ok === true
-      ? treeWrites(parsed.statements.map((s) => s.stmt))
-      : []
+    return parsed?.ok === true ? walk(parsed.statements.map((s) => s.stmt)) : []
   }
   if (language !== "plpgsql") return []
   const body = plpgsql(sql)
   if (!body.ok || body.fn === undefined) return []
-  const found = treeWrites(plpgsqlExpressionTrees(body.fn, parse))
+  const found = walk(plpgsqlExpressionTrees(body.fn, parse))
   // Літеральний `EXECUTE '…'` — звичайний SQL, лише записаний рядком: його
   // розбираємо й судимо усіма формами. Нелітеральний текст перевірка дерев
   // не бачить: у закритих модулях і обробниках його відмовлено оболонкою
@@ -350,7 +394,7 @@ function bodyWrites(
       const text = literalDynamicText(e.query, parse)
       const inner = text === undefined ? undefined : parse(text)
       if (inner?.ok !== true) continue
-      found.push(...treeWrites(inner.statements.map((s) => s.stmt)))
+      found.push(...walk(inner.statements.map((s) => s.stmt)))
     }
   }
   return found

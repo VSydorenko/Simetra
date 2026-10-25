@@ -357,6 +357,12 @@ describe("access dimension value function", () => {
     const head = (body: string) => fn("region_ids", CLOSED, body)
     const params = async (sql: string) =>
       rightsErrors(await errors(sql)).map((d) => [d.code, d.params])
+    // Функцію, що виконує текст SQL, відмовляє ранній блок форм модулів
+    // (`dynamicText`, Р2c1-32): до судження функції виміру справа не доходить.
+    const textWrites = async (sql: string) =>
+      (await errors(sql))
+        .filter((d) => d.code === "sql.command-context-write")
+        .map((d) => d.params?.form)
     const reads = (chain: string, object: string) => [
       "rights.dimension-function-reads-rights",
       { dimension: "region", chain, object },
@@ -456,25 +462,25 @@ describe("access dimension value function", () => {
       ["ts_rewrite", "ts_rewrite('a'::tsquery, 'select 1')"],
     ])("rejects the dynamic builtin %s", async (_name, call) => {
       expect(
-        await params(head(`SELECT NULL::uuid WHERE ${call} IS NOT NULL`))
-      ).toEqual([reads("public.region_ids", "dynamic")])
+        await textWrites(head(`SELECT NULL::uuid WHERE ${call} IS NOT NULL`))
+      ).toEqual(["dynamicText"])
     })
 
     it("rejects builtins that execute SQL from a string", async () => {
       expect(
-        await params(
+        await textWrites(
           head(
             "SELECT NULL::uuid WHERE query_to_xml('select 1', true, true, '') IS NOT NULL"
           )
         )
-      ).toEqual([reads("public.region_ids", "dynamic")])
+      ).toEqual(["dynamicText"])
       expect(
-        await params(
+        await textWrites(
           head(
             "SELECT NULL::uuid WHERE pg_catalog.table_to_xml('public.member_region'::regclass, true, true, '') IS NOT NULL"
           )
         )
-      ).toEqual([reads("public.region_ids", "dynamic")])
+      ).toEqual(["dynamicText"])
     })
 
     it("rejects other platform functions and non-sql links, allows pg_catalog builtins", async () => {

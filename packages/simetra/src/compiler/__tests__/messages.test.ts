@@ -167,6 +167,7 @@ describe("messages catalog", () => {
       functionOption: 0,
       nonLiteral: 0,
       settingsTable: 0,
+      dynamicText: 0,
     } satisfies Record<CommandContextWrite, 0>)
     for (const locale of ["en", "uk"] as const) {
       const messages = forms.map(
@@ -198,6 +199,7 @@ describe("messages catalog", () => {
       { form: "functionOption", setting: SESSION_CLAIMS_SETTING },
       { form: "settingsTable" },
       { form: "nonLiteral" },
+      { form: "dynamicText" },
     ]
     for (const code of [
       "sql.command-context-write",

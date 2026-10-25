@@ -176,6 +176,30 @@ export const PROVIDER_SCHEMAS: Readonly<
   ],
 }
 
+// Що саме виконає така функція, статично не відомо, тож її виклик з
+// вільного SQL — зміна сесії невідомою формою (Р2c1-32). Поіменно, а не
+// схемою: перелік поповнюється з рев'ю.
+/**
+ * Provider functions that execute the SQL text passed to them, as
+ * `schema.name`.
+ */
+export const PROVIDER_SQL_TEXT_FUNCTIONS: Readonly<
+  Record<DatabaseProvider, readonly string[]>
+> = {
+  supabase: [
+    "extensions.dblink",
+    "extensions.dblink_exec",
+    "extensions.dblink_send_query",
+    "extensions.dblink_open",
+    "graphql.resolve",
+    "graphql_public.graphql",
+    "pgtle.install_extension",
+    "cron.schedule",
+    "cron.schedule_in_database",
+    "cron.alter_job",
+  ],
+}
+
 /**
  * Ролі платформи за призначенням (платформна спека §6.7, спека прав §5.1):
  * на відміну від ролей API їх не дає провайдер — на базі споживача їх
@@ -198,6 +222,8 @@ export const COMMAND_SETTING = "simetra.command"
  */
 export const SESSION_CLAIMS_SETTING = "request.jwt.claims"
 
+// `session_replication_role = replica` вимикає тригери платформи (носії,
+// ефекти, механіка, RI), а в сесії пулу — і для чужих команд (Р2c1-40).
 // Підміна будь-якого з них посеред оператора команди змінила б, кого й що
 // бачать політики запису (Р2b1-19, Р2b1-19b): claims визначають користувача,
 // а `RESET ROLE` вийшов би з ролі команд. Простори імен, а не окремі імена:
@@ -215,7 +241,7 @@ export const PLATFORM_SETTING_PREFIX = "simetra."
  */
 export const PROTECTED_SESSION_SETTINGS = {
   prefixes: [PLATFORM_SETTING_PREFIX, "request.jwt."],
-  names: ["role", "session_authorization"],
+  names: ["role", "session_authorization", "session_replication_role"],
 } as const
 
 /** The command context: the action, the root object's label and the root row's UUID. */

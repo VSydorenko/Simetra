@@ -587,6 +587,53 @@ describe("kind module: closed forms only", () => {
       })
     })
 
+    // Функція, що виконує текст SQL, змінює сесію невідомою формою (Р2c1-32):
+    // поза боргом — помилка, у боргу — попередження, як нелітеральне ім'я.
+    // Боргова форма — без явної волатильності, закрита — `STABLE`.
+    const closedShell = (body: string) => shell("LANGUAGE sql STABLE", body)
+    const debtShell = (body: string) => shell("LANGUAGE sql", body)
+    it.each([
+      ["pg_catalog.query_to_xml('SELECT 1', false, false, '')"],
+      ["ts_stat('SELECT 1')"],
+      ["extensions.dblink_exec('c', 'SELECT 1')"],
+      // Некваліфікований виклик розв'язує шлях сесії: судиться голе ім'я.
+      ["dblink_exec('c', 'SELECT 1')"],
+      ["cron.schedule('j', '* * * * *', 'SELECT 1')"],
+    ])("a call of %s executes SQL text", async (call) => {
+      expect(
+        sessionWrites(
+          await diagnostics({ [SHARED_SQL]: closedShell(`SELECT ${call}`) })
+        )
+      ).toEqual([[ERROR, "dynamicText", undefined]])
+      expect(
+        sessionWrites(
+          await diagnostics({ [SHARED_SQL]: debtShell(`SELECT ${call}`) })
+        )
+      ).toEqual([[WARNING, "dynamicText", undefined]])
+    })
+
+    it("an ordinary builtin call writes nothing", async () => {
+      expect(
+        sessionWrites(
+          await diagnostics({
+            [SHARED_SQL]: closedShell("SELECT pg_catalog.lower('x')"),
+          })
+        )
+      ).toEqual([])
+    })
+
+    // `replica` вимикає тригери платформи, у сесії пулу — і для чужих команд
+    // (Р2c1-40): налаштування платформи, тож і в боргу помилка.
+    it("SET session_replication_role in debt is an error", async () => {
+      expect(
+        sessionWrites(
+          await diagnostics({
+            [TABLE_SQL]: debtBody("SET session_replication_role = replica;"),
+          })
+        )
+      ).toEqual([[ERROR, "setStatement", "session_replication_role"]])
+    })
+
     it("a debt function reached by closed code is a reach error, its own write a warning", async () => {
       // Запис сесії в борговій функції, якої досягає закритий код, судить
       // обхід (Р2c1-10 (а)) на голові; попередження боргу лишається на самій

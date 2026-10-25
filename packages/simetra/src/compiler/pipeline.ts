@@ -174,7 +174,8 @@ export async function runStages(
       sql.rowRules,
       debtPredicate(stage1.objects, stage1.project, kinds, parse, plpgsql),
       parse,
-      plpgsql
+      plpgsql,
+      stage1.project?.database.provider
     ),
     // Оболонку судимих функцій задає лише `CREATE` (Р2c1-10): набір судимих
     // відомий до стадії 3, тож помилка стоїть поруч із формами модулів.
