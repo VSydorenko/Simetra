@@ -1,8 +1,12 @@
 import type { Node } from "libpg-query"
-import { KIND_REGISTRY, type Project } from "simetra/model"
+import {
+  KIND_REGISTRY,
+  PLATFORM_SETTING_PREFIX,
+  type Project,
+} from "simetra/model"
 import { diagnostic, type Diagnostic } from "../diagnostics"
 import type { ParsedObject } from "../stages/files"
-import { commandContextWrite } from "./command-context"
+import { commandContextWrite, type CommandContextHit } from "./command-context"
 import type { SqlParser } from "./parse"
 import type { PlpgsqlParser } from "./plpgsql"
 import {
@@ -245,6 +249,19 @@ export function firstDynamicSqlLine(
 }
 
 /**
+ * Запис, що зачіпає налаштування платформи неминуче: ім'я з її префіксом
+ * (нечутливе до регістру, як у Postgres), оператор `RESET ALL` (`*`) чи
+ * запис у `pg_settings`, ім'я в якому статично не перевірити (Р2b1-19a).
+ */
+function platformWrite(hit: CommandContextHit): boolean {
+  return (
+    hit.form === "settingsTable" ||
+    hit.setting === "*" ||
+    hit.setting?.toLowerCase().startsWith(PLATFORM_SETTING_PREFIX) === true
+  )
+}
+
+/**
  * Ідентичності функцій без аргументів, які оголошують метадані: обробники
  * підписок і функції множини видів скоупу. Обидві мають власні правила
  * оболонки (стадія 5), тож не є ні боргом, ні винятком із ратчета.
@@ -295,8 +312,9 @@ export function closedModuleOwners(
  * окремо; правило рядка поза модулем виду — помилка, бо воно належить таблиці
  * об'єкта, а таблиці боргу описані власними полями. Контекст команди
  * (`sql.command-context-write`) судиться інакше: кожна одиниця модулів видів
- * і спільних `sql/`-файлів, крім боргового SQL прийнятих таблиць;
- * обробники підписок і функції множини — будь-де.
+ * і спільних `sql/`-файлів, обробники підписок і функції множини — будь-де;
+ * борговий SQL прийнятих таблиць — лише платформним префіксом, решта його
+ * записів — попередження `sql.debt-session-write` (Р2c1-6).
  */
 export function checkSqlModules(
   objects: readonly ParsedObject[],
@@ -328,12 +346,10 @@ export function checkSqlModules(
       })
     )
   }
-  // Борговий SQL прийнятих таблиць `CustomTable` поза перевіркою контексту
-  // команди (відоме обмеження до 2c); решта — кожна одиниця спільних
-  // `sql/`-файлів і модулів видів, не лише функції (Р2b1-22): функція
-  // закритого модуля чи обробник може викликати допоміжну функцію спільного
-  // файлу, а подання, домен чи політика виконують свій вираз у сесії
-  // команди, тож межа довіри (Р2b1-19a) охоплює їх усі.
+  // Кожна одиниця спільних `sql/`-файлів і модулів видів, не лише функції
+  // (Р2b1-22): функція закритого модуля чи обробник може викликати допоміжну
+  // функцію спільного файлу, а подання, домен чи політика виконують свій
+  // вираз у сесії команди, тож межа довіри (Р2b1-19a) охоплює їх усі.
   // Обробник підписки й функція множини боргом не бувають, хоч би де лежав
   // файл (спека промоції §9.4): у модулі таблиці боргу їх теж судимо.
   const debtOwners = new Set(
@@ -344,27 +360,52 @@ export function checkSqlModules(
   const ruled = ruledFunctions(objects, project)
   for (const unit of units) {
     if (closed(unit)) continue
-    if (
-      unit.ownerFile !== undefined &&
-      debtOwners.has(unit.ownerFile) &&
-      !ruled.has(unit.identity)
-    ) {
-      continue
-    }
-    const write = commandContextWrite(
+    const writes = commandContextWrite(
       unit.tree as Node,
       unit.sql,
       parse,
       plpgsql
     )
-    if (write !== undefined) {
+    if (writes.length === 0) continue
+    const name = unit.schema === "" ? unit.name : `${unit.schema}.${unit.name}`
+    const debt =
+      unit.ownerFile !== undefined &&
+      debtOwners.has(unit.ownerFile) &&
+      !ruled.has(unit.identity)
+    if (!debt) {
       found.push(
         diagnostic("sql.command-context-write", unit.file, "", {
-          name: unit.schema === "" ? unit.name : `${unit.schema}.${unit.name}`,
-          form: write,
+          name,
+          form: writes[0]!.form,
         })
       )
+      continue
     }
+    // Борговий SQL прийнятої таблиці (Р2c1-6) уперше судиться контекстом
+    // команди. Платформний префікс несе контекст команди й режим
+    // обслуговування прав — у чужому боргу його бути не може, тож запис туди
+    // (зокрема `RESET ALL` і запис у `pg_settings`, що зачіпають його
+    // неминуче) — помилка. Зміну ролі чи claims реальна база в боргу має
+    // (`SET ROLE` у службовій функції): прийом не ламається, а закритий код
+    // такої функції не досягає (`sql.command-context-reach`). Судяться всі
+    // записи одиниці: помилка не ховається за попередженням.
+    const platform = writes.find(platformWrite)
+    const hit = platform ?? writes[0]!
+    found.push(
+      diagnostic(
+        platform === undefined
+          ? "sql.debt-session-write"
+          : "sql.command-context-write",
+        unit.file,
+        "",
+        {
+          name,
+          form: hit.form,
+          ...(hit.setting === undefined ? {} : { setting: hit.setting }),
+          ...(platform === undefined ? {} : { module: "debt" }),
+        }
+      )
+    )
   }
   for (const unit of units) {
     if (!closed(unit)) continue
@@ -401,13 +442,13 @@ export function checkSqlModules(
     // б політики наступних рядків. Оболонка, що не пройшла, тіла не гарантує.
     const write =
       problem === undefined
-        ? commandContextWrite(shellUnit.tree, unit.sql, parse, plpgsql)
+        ? commandContextWrite(shellUnit.tree, unit.sql, parse, plpgsql)[0]
         : undefined
     if (write !== undefined) {
       found.push(
         diagnostic("sql.command-context-write", unit.file, "", {
           name: `${unit.schema}.${unit.name}`,
-          form: write,
+          form: write.form,
         })
       )
     }

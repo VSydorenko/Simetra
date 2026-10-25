@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest"
-import { SCHEMA_RULES } from "simetra/model"
+import {
+  COMMAND_SETTING,
+  SCHEMA_RULES,
+  SESSION_CLAIMS_SETTING,
+} from "simetra/model"
 import {
   COMPILER_RULES,
   MESSAGES,
@@ -8,7 +12,7 @@ import {
   type RuleCode,
 } from "simetra/compiler"
 import { metaFiles, project } from "./helpers"
-import { diagnostic } from "../diagnostics"
+import { diagnostic, type DiagnosticParams } from "../diagnostics"
 import type { CommandContextWrite } from "../sql/command-context"
 import type { ReachReason } from "../sql/reach"
 import type { SetFunctionReason } from "../sql/function-shape"
@@ -181,6 +185,74 @@ describe("messages catalog", () => {
       })
       expect(new Set(messages).size).toBe(forms.length)
     }
+  })
+
+  it("a session write of debt SQL names what to remove from the debt function", () => {
+    // Прийом реальної бази — перша зустріч споживача з правилом (Р2c1-6):
+    // текст називає оператор чи ім'я налаштування, а не лише форму.
+    const cases: DiagnosticParams[] = [
+      { form: "setConfig", setting: COMMAND_SETTING },
+      { form: "setStatement", setting: "role" },
+      { form: "setStatement", setting: "*" },
+      { form: "functionOption", setting: SESSION_CLAIMS_SETTING },
+      { form: "settingsTable" },
+      { form: "nonLiteral" },
+    ]
+    for (const code of [
+      "sql.command-context-write",
+      "sql.debt-session-write",
+    ] as const) {
+      for (const locale of ["en", "uk"] as const) {
+        const render = (p: DiagnosticParams) =>
+          localize(
+            diagnostic(code, "a.sql", "", {
+              name: "public.f",
+              module: "debt",
+              ...p,
+            }),
+            locale
+          )
+        const messages = cases.map((p) => render(p).message)
+        cases.forEach((p, i) => {
+          expect(messages[i]).toContain("public.f")
+          if (p.setting !== undefined && p.setting !== "*") {
+            expect(messages[i]).toContain(String(p.setting))
+          }
+        })
+        expect(new Set(messages).size).toBe(cases.length)
+        if (code === "sql.command-context-write") {
+          // Борговий текст і підказка конверсії — не ті, що для закритого коду.
+          const plain = localize(
+            diagnostic(code, "a.sql", "", {
+              name: "public.f",
+              form: "setConfig",
+            }),
+            locale
+          )
+          expect(render(cases[0]!).message).not.toBe(plain.message)
+          expect(render(cases[0]!).hint).not.toBe(plain.hint)
+        }
+      }
+    }
+    expect(
+      diagnostic("sql.command-context-write", "a.sql", "", {
+        name: "public.f",
+        form: "setConfig",
+        setting: COMMAND_SETTING,
+        module: "debt",
+      }).message
+    ).toBe(
+      `Debt SQL unit public.f of an adopted table changes a platform session setting: remove set_config('${COMMAND_SETTING}', …)`
+    )
+    const warning = diagnostic("sql.debt-session-write", "a.sql", "", {
+      name: "public.f",
+      form: "setStatement",
+      setting: "role",
+    })
+    expect(warning.severity).toBe("warning")
+    expect(warning.message).toBe(
+      "Debt SQL unit public.f of an adopted table changes a protected session setting: remove SET or RESET of role"
+    )
   })
 
   it("sql.command-context-reach names the reached function, the reason and the chain", () => {

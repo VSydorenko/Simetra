@@ -36,6 +36,7 @@ export const COMPILER_RULES = [
   "sql.bare-current-user",
   "sql.debt-grows",
   "sql.debt-stale",
+  "sql.debt-session-write",
   "rewrite.ambiguous-name",
   "rewrite.unqualified-table",
   "rewrite.unsupported",
@@ -395,7 +396,10 @@ export interface Diagnostic {
  * помилка переписування. Динамічний SQL поза кандидатами промоції статично
  * не видно: попередження називає межу, а не порушення. Прийняте джерело поряд
  * із ролями ще не дає прав (Права-2d): межа fail-closed — прав менше, а не
- * більше, — тож попередження, а не помилка (Р2a1-21).
+ * більше, — тож попередження, а не помилка (Р2a1-21). Зміна ролі чи claims у
+ * борговому SQL прийнятої таблиці — форма реальних баз (`SET ROLE` у
+ * службовій функції): прийом не ламається, а закритий код такої функції не
+ * досягає — це судить `sql.command-context-reach` (Р2c1-6).
  */
 const WARNING_RULES: ReadonlySet<RuleCode> = new Set<RuleCode>([
   "physical.reserved-word",
@@ -409,6 +413,7 @@ const WARNING_RULES: ReadonlySet<RuleCode> = new Set<RuleCode>([
   "rewrite.dynamic-sql-unscoped",
   "rights.adopted-source-unsupported",
   "rights.scope-kind-unread",
+  "sql.debt-session-write",
 ])
 
 /** Діагностика з каталогу повідомлень; серйозність — властивість правила. */

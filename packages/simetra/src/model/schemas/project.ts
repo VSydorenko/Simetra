@@ -204,11 +204,17 @@ export const SESSION_CLAIMS_SETTING = "request.jwt.claims"
 // наступне налаштування платформи чи стара форма `request.jwt.claim.*` не
 // стають новою дірою.
 /**
+ * The namespace of the platform's own session settings: the command context
+ * and every later platform setting.
+ */
+export const PLATFORM_SETTING_PREFIX = "simetra."
+
+/**
  * Session settings that application SQL must never change: name prefixes
  * (case-insensitive) and exact names.
  */
 export const PROTECTED_SESSION_SETTINGS = {
-  prefixes: ["simetra.", "request.jwt."],
+  prefixes: [PLATFORM_SETTING_PREFIX, "request.jwt."],
   names: ["role", "session_authorization"],
 } as const
 

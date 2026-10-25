@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest"
 import { compile } from "simetra/compiler"
-import { COMMAND_SETTING, SESSION_CLAIMS_SETTING } from "simetra/model"
+import {
+  COMMAND_SETTING,
+  PLATFORM_SETTING_PREFIX,
+  SESSION_CLAIMS_SETTING,
+} from "simetra/model"
 import {
   acceptDebt,
   customTable,
@@ -432,13 +436,94 @@ describe("kind module: closed forms only", () => {
       ])
     })
 
-    it("a custom table module (debt) is outside the check", async () => {
+    // Борговий SQL прийнятої таблиці (Р2c1-6): платформний префікс і форми,
+    // що зачіпають його неминуче, — помилка; решта захищених — попередження,
+    // щоб прийом реальної бази з `SET ROLE` у борговій функції не ламався.
+    const PLATFORM = `${PLATFORM_SETTING_PREFIX}rights_maintenance`
+    const ERROR = "sql.command-context-write"
+    const WARNING = "sql.debt-session-write"
+    it.each([
+      [
+        "set_config on the command context",
+        plpgsqlBody(`PERFORM set_config('${C}', '{}', true);`),
+        [ERROR, "setConfig", C],
+      ],
+      [
+        "SET of a platform setting",
+        plpgsqlBody(`SET ${PLATFORM} = 'on';`),
+        [ERROR, "setStatement", PLATFORM],
+      ],
+      [
+        "a SET function option on the command context",
+        shell(`LANGUAGE sql STABLE SET ${C} = '{}'`, "select 1"),
+        [ERROR, "functionOption", C],
+      ],
+      [
+        "SET ROLE",
+        plpgsqlBody("SET ROLE postgres;"),
+        [WARNING, "setStatement", "role"],
+      ],
+      [
+        "set_config with a non-literal name",
+        plpgsqlBody("PERFORM set_config(v_name, 'x', true);"),
+        [WARNING, "nonLiteral", undefined],
+      ],
+      [
+        "set_config on the claims",
+        plpgsqlBody(`PERFORM set_config('${CLAIMS}', '{}', true);`),
+        [WARNING, "setConfig", CLAIMS],
+      ],
+      [
+        // Перший запис — попередження, але судяться всі записи одиниці.
+        "SET ROLE before set_config on the command context",
+        plpgsqlBody(
+          `SET ROLE postgres; PERFORM set_config('${C}', '{}', true);`
+        ),
+        [ERROR, "setConfig", C],
+      ],
+      [
+        "RESET ALL as a body statement",
+        plpgsqlBody("RESET ALL;"),
+        [ERROR, "setStatement", "*"],
+      ],
+      [
+        "a write to pg_settings",
+        plpgsqlBody(
+          "UPDATE pg_settings SET setting = 'x' WHERE name = 'role';"
+        ),
+        [ERROR, "settingsTable", undefined],
+      ],
+    ])("debt module: %s", async (_case, sql, expected) => {
+      const found = await diagnostics({ [TABLE_SQL]: sql })
+      expect(
+        found
+          .filter((d) => d.code === ERROR || d.code === WARNING)
+          .map((d) => [d.code, d.params?.form, d.params?.setting])
+      ).toEqual([expected])
+      // Попередження не зупиняє компіляцію: прийом бази з ним проходить.
+      if (expected[0] === WARNING) {
+        expect(found.filter((d) => d.severity === "error")).toEqual([])
+      }
+    })
+
+    it("a debt function reached by closed code is a reach error, its own write a warning", async () => {
+      // Запис сесії в борговій функції, якої досягає закритий код, судить
+      // обхід (Р2c1-10 (а)) на голові; попередження боргу лишається на самій
+      // одиниці — ранній блок досяжності не бачить.
       const found = await diagnostics({
-        [TABLE_SQL]: plpgsqlBody(`PERFORM set_config('${C}', '{}', true);`),
+        [SALE_SQL]: shell(
+          "LANGUAGE plpgsql VOLATILE",
+          "BEGIN PERFORM public.t_role(); RETURN 1; END"
+        ),
+        [TABLE_SQL]:
+          "CREATE FUNCTION public.t_role() RETURNS void LANGUAGE plpgsql VOLATILE AS $$ BEGIN SET ROLE postgres; END $$;",
       })
-      expect(found.map((d) => d.code)).not.toContain(
-        "sql.command-context-write"
-      )
+      expect(
+        found.map((d) => [d.code, d.file, d.params?.reason ?? d.params?.form])
+      ).toEqual([
+        [WARNING, TABLE_SQL, "setStatement"],
+        ["sql.command-context-reach", SALE_SQL, "sessionWrite"],
+      ])
     })
 
     it("a scope set function is judged in a custom table module too", async () => {
@@ -460,11 +545,20 @@ describe("kind module: closed forms only", () => {
             )
           )
         ).diagnostics
-          .filter((d) => d.code === "sql.command-context-write")
-          .map((d) => [d.file, d.params?.form])
+          .filter(
+            (d) =>
+              d.code === "sql.command-context-write" ||
+              d.code === "sql.debt-session-write"
+          )
+          .map((d) => [d.code, d.file, d.params?.form])
       expect(
         await forms(`PERFORM pg_catalog.set_config('${C}', '{}', true);`)
-      ).toEqual([[TABLE_SQL, "setConfig"]])
+      ).toEqual([["sql.command-context-write", TABLE_SQL, "setConfig"]])
+      // Зміна ролі — помилка, а не попередження боргу: функція множини
+      // виконується посеред команди й боргом не буває.
+      expect(await forms("SET ROLE postgres;")).toEqual([
+        ["sql.command-context-write", TABLE_SQL, "setStatement"],
+      ])
       expect(
         await forms("PERFORM pg_catalog.set_config('app.x', '1', true);")
       ).toEqual([])

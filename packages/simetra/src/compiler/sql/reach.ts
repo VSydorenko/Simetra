@@ -501,7 +501,7 @@ function writesSession(
   plpgsql: PlpgsqlParser
 ): boolean {
   const writes = (u: VerbatimUnit) =>
-    commandContextWrite(u.tree as Node, u.sql, parse, plpgsql) !== undefined
+    commandContextWrite(u.tree as Node, u.sql, parse, plpgsql).length > 0
   return (
     writes(unit) ||
     (BODIES.has(unit.class) && functionSettingsOf(unit, units).some(writes))

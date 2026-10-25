@@ -18,6 +18,16 @@ export type CommandContextWrite =
   | "settingsTable"
 
 /**
+ * Один запис захищеного налаштування: форма й ім'я налаштування, коли воно
+ * статично відоме (`RESET ALL` — `*`). Ім'я потрібне боргу прийнятих таблиць:
+ * платформний префікс там — помилка, решта — попередження (Р2c1-6).
+ */
+export interface CommandContextHit {
+  form: CommandContextWrite
+  setting?: string
+}
+
+/**
  * Захищені налаштування — з переліку T0, тож літерала імені поза T0 немає.
  * Імена налаштувань у Postgres нечутливі до регістру.
  */
@@ -94,6 +104,11 @@ function setStatementWrite(set: SetStatement): boolean {
   return set.kind === "VAR_RESET_ALL" || isProtectedSetting(set.name)
 }
 
+/** Ім'я налаштування оператора `SET`/`RESET`; `RESET ALL` — усі (`*`). */
+function setStatementSetting(set: SetStatement): string | undefined {
+  return set.kind === "VAR_RESET_ALL" ? "*" : set.name
+}
+
 /**
  * Лише вбудований `set_config`: функція з тим самим іменем в іншій схемі —
  * чужий код, його судять його власні перевірки. Ім'я бази перед
@@ -110,13 +125,15 @@ export function isBuiltinSetConfig(
   )
 }
 
-function callWrite(call: CallNode): CommandContextWrite | undefined {
+function callWrite(call: CallNode): CommandContextHit | undefined {
   if (!isBuiltinSetConfig(call.funcname)) return undefined
   const first = call.args?.[0]
   if (first === undefined) return undefined
   const text = literalText(first)
-  if (text === undefined) return "nonLiteral"
-  return isProtectedSetting(text) ? "setConfig" : undefined
+  if (text === undefined) return { form: "nonLiteral" }
+  return isProtectedSetting(text)
+    ? { form: "setConfig", setting: text }
+    : undefined
 }
 
 /**
@@ -186,34 +203,35 @@ function readsRelation(
   return Object.values(node).some((v) => readsRelation(v, match))
 }
 
-/** Обхід дерева розбору: перша заборонена форма чи `undefined`. */
-function treeWrite(value: unknown): CommandContextWrite | undefined {
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      const found = treeWrite(item)
-      if (found !== undefined) return found
-    }
-    return undefined
-  }
-  if (typeof value !== "object" || value === null) return undefined
+/**
+ * Обхід дерева розбору: кожна заборонена форма в порядку обходу (вузол —
+ * раніше за дітей), тож перший елемент — та сама форма, що бачила перевірка
+ * першого запису.
+ */
+function treeWrites(value: unknown): CommandContextHit[] {
+  if (Array.isArray(value)) return value.flatMap(treeWrites)
+  if (typeof value !== "object" || value === null) return []
   const node = value as Record<string, unknown>
-  if (node.FuncCall !== undefined) {
-    const found = callWrite(node.FuncCall as CallNode)
-    if (found !== undefined) return found
-  }
-  if (settingsTableWrite(node) || settingsView(node)) return "settingsTable"
-  if (aggregateWrite(node)) return "nonLiteral"
-  if (
+  const own: CommandContextHit[] = []
+  const call =
+    node.FuncCall === undefined
+      ? undefined
+      : callWrite(node.FuncCall as CallNode)
+  if (call !== undefined) own.push(call)
+  else if (settingsTableWrite(node) || settingsView(node)) {
+    own.push({ form: "settingsTable" })
+  } else if (aggregateWrite(node)) own.push({ form: "nonLiteral" })
+  else if (
     node.VariableSetStmt !== undefined &&
     setStatementWrite(node.VariableSetStmt as SetStatement)
   ) {
-    return "setStatement"
+    const setting = setStatementSetting(node.VariableSetStmt as SetStatement)
+    own.push({
+      form: "setStatement",
+      ...(setting === undefined ? {} : { setting }),
+    })
   }
-  for (const inner of Object.values(node)) {
-    const found = treeWrite(inner)
-    if (found !== undefined) return found
-  }
-  return undefined
+  return [...own, ...Object.values(node).flatMap(treeWrites)]
 }
 
 interface FunctionTree {
@@ -221,10 +239,11 @@ interface FunctionTree {
   sql_body?: unknown
 }
 
-/** Опція `SET <налаштування> …` функції (`CREATE` чи `ALTER FUNCTION`). */
-function optionWrite(
+/** Опції `SET <налаштування> …` функції (`CREATE` чи `ALTER FUNCTION`). */
+function optionWrites(
   options: readonly DefElemNode[] | undefined
-): CommandContextWrite | undefined {
+): CommandContextHit[] {
+  const found: CommandContextHit[] = []
   for (const def of (options ?? []).flatMap((o) =>
     o.DefElem === undefined ? [] : [o.DefElem]
   )) {
@@ -239,10 +258,13 @@ function optionWrite(
       set.kind !== "VAR_RESET_ALL" &&
       setStatementWrite(set)
     ) {
-      return "functionOption"
+      found.push({
+        form: "functionOption",
+        ...(set.name === undefined ? {} : { setting: set.name }),
+      })
     }
   }
-  return undefined
+  return found
 }
 
 /**
@@ -255,14 +277,16 @@ function optionWrite(
  * сесії. Тіло `LANGUAGE sql` розбирається тут, тіло plpgsql — через вирази
  * його операторів; тіла інших мов не розбираються — як і нелітерального
  * `EXECUTE`, закритий код таких функцій не досягає (`reach.ts`, Р2c1-5).
- * Перша знайдена форма.
+ * Усі записи одиниці, а не перший: у борговому SQL `SET ROLE` перед
+ * `set_config('simetra.…')` інакше сховав би помилку за попередженням
+ * (Р2c1-6). Порожній масив — записів немає.
  */
 export function commandContextWrite(
   tree: Node,
   sql: string,
   parse: SqlParser,
   plpgsql: PlpgsqlParser
-): CommandContextWrite | undefined {
+): CommandContextHit[] {
   const fn = (tree as { CreateFunctionStmt?: FunctionTree }).CreateFunctionStmt
   if (fn === undefined) {
     // Опції `ALTER FUNCTION … SET` — та сама форма, що й опції `CREATE`: до
@@ -270,12 +294,14 @@ export function commandContextWrite(
     const alter = (tree as { AlterFunctionStmt?: { actions?: DefElemNode[] } })
       .AlterFunctionStmt
     if (alter !== undefined) {
-      return optionWrite(alter.actions) ?? treeWrite({ ...alter, actions: [] })
+      return [
+        ...optionWrites(alter.actions),
+        ...treeWrites({ ...alter, actions: [] }),
+      ]
     }
-    return treeWrite(tree)
+    return treeWrites(tree)
   }
-  const option = optionWrite(fn.options)
-  if (option !== undefined) return option
+  const options = optionWrites(fn.options)
   const defs = (fn.options ?? []).flatMap((o) =>
     o.DefElem === undefined ? [] : [o.DefElem]
   )
@@ -285,9 +311,20 @@ export function commandContextWrite(
   )?.String?.sval?.toLowerCase()
   // Значення параметрів за замовчуванням обчислює виклик, а тіло
   // `BEGIN ATOMIC` уже розібране: обидва — частина дерева самого оператора.
-  // Опції судить `optionWrite`, тож у загальний обхід вони не входять.
-  const declared = treeWrite({ ...fn, options: [] })
-  if (declared !== undefined || fn.sql_body !== undefined) return declared
+  // Опції судить `optionWrites`, тож у загальний обхід вони не входять.
+  const declared = [...options, ...treeWrites({ ...fn, options: [] })]
+  if (fn.sql_body !== undefined) return declared
+  return [...declared, ...bodyWrites(defs, language, sql, parse, plpgsql)]
+}
+
+/** Записи рядкового тіла `LANGUAGE sql` чи plpgsql. */
+function bodyWrites(
+  defs: NonNullable<DefElemNode["DefElem"]>[],
+  language: string | undefined,
+  sql: string,
+  parse: SqlParser,
+  plpgsql: PlpgsqlParser
+): CommandContextHit[] {
   if (language === "sql") {
     const body = (
       defs.find((d) => d.defname === "as")?.arg as
@@ -295,14 +332,13 @@ export function commandContextWrite(
     )?.List?.items?.[0]?.String?.sval
     const parsed = body === undefined ? undefined : parse(body)
     return parsed?.ok === true
-      ? treeWrite(parsed.statements.map((s) => s.stmt))
-      : undefined
+      ? treeWrites(parsed.statements.map((s) => s.stmt))
+      : []
   }
-  if (language !== "plpgsql") return undefined
+  if (language !== "plpgsql") return []
   const body = plpgsql(sql)
-  if (!body.ok || body.fn === undefined) return undefined
-  const found = treeWrite(plpgsqlExpressionTrees(body.fn, parse))
-  if (found !== undefined) return found
+  if (!body.ok || body.fn === undefined) return []
+  const found = treeWrites(plpgsqlExpressionTrees(body.fn, parse))
   // Літеральний `EXECUTE '…'` — звичайний SQL, лише записаний рядком: його
   // розбираємо й судимо усіма формами. Нелітеральний текст перевірка дерев
   // не бачить: у закритих модулях і обробниках його відмовлено оболонкою
@@ -314,9 +350,8 @@ export function commandContextWrite(
       const text = literalDynamicText(e.query, parse)
       const inner = text === undefined ? undefined : parse(text)
       if (inner?.ok !== true) continue
-      const literal = treeWrite(inner.statements.map((s) => s.stmt))
-      if (literal !== undefined) return literal
+      found.push(...treeWrites(inner.statements.map((s) => s.stmt)))
     }
   }
-  return undefined
+  return found
 }

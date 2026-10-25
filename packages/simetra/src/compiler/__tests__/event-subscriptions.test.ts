@@ -438,6 +438,15 @@ describe("EventSubscription", () => {
         [TABLE_SQL]: write,
       })
     ).toEqual([[TABLE_SQL, "setConfig"]])
+    // Зміна ролі в обробнику з модуля боргу — теж помилка, а не попередження
+    // боргового SQL (Р2c1-6): обробник виконується посеред команди.
+    expect(
+      await forms({
+        [HANDLER_FILE]: undefined,
+        "custom-tables/T/T.meta.json": customTable("T"),
+        [TABLE_SQL]: handler("SET ROLE postgres;"),
+      })
+    ).toEqual([[TABLE_SQL, "setStatement"]])
     expect(
       await forms({
         [HANDLER_FILE]: handler("PERFORM set_config('app.x', '1', true);"),
