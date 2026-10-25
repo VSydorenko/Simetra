@@ -345,7 +345,7 @@ describe("buildEffectsUnits", () => {
       ).toEqual({ Boolean: { boolval: true } })
       expect(hasEmptySearchPath(fn.tree as never), fn.identity).toBe(true)
       // `row_security = off`: власник під RLS дав би гучну помилку замість
-      // тихого «власника немає» (як `carrierBackfillRefusals` 2a2).
+      // тихого «власника немає» (як кроки копій носіїв, Р2b2-9).
       expect(
         nodes(create.options, "VariableSetStmt").map((v) => {
           const set = v as {

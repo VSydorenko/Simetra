@@ -276,7 +276,17 @@ in the object row. The copies are written only by the platform:
   `UPDATE` that changes the content, and a write subscription without
   `whenChanged` gets the pair `<physicalName>` (`UPDATE`, content changed)
   and `<physicalName>_insert` (`INSERT`), so propagation triggers neither.
-- A new copy on a table that already has rows is refused by `plan`
-  (`plan.carrier-backfill-missing`, no plan written): copies get their values
-  only when a row is written. Add the carrier before the table gets rows, or
-  wait for the platform's data step for carrier copies.
+- A new copy on a table that already has rows is filled by a plan step of
+  origin `carriers` (class `dataStep`, no `--allow` needed) that runs right
+  after the engine steps, in the same transaction: each row takes the value
+  from the row its composite foreign key points to, and a row without a link
+  gets `NULL`. The step holds `SHARE ROW EXCLUSIVE` on the table and on its
+  source until the apply ends. Triggers stay on, and a copy-only change does
+  not bump `version` or fire subscriptions.
+- When a copy takes the place of a column that was not a copy (a removed
+  attribute that still holds data, or an adopted column the promotion
+  mapping left out), the step overwrites that data: it is class
+  `destructive` and needs `--allow <step id>` like any other step that loses
+  data. A copy column the plan itself creates is always filled, even if the
+  last applied snapshot says the copy already exists (for example, an
+  administrator dropped it by hand and the drift was accepted).

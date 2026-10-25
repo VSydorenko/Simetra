@@ -75,8 +75,8 @@ const markerSnapshotSchema = z.looseObject({
             notNull: z.boolean(),
             origin: z.looseObject({
               elementId: z.string().optional(),
-              // Копія носія (Р2a2-11): план відмовляє, коли бажана копія не
-              // була копією з тим самим джерелом
+              // Копія носія (Р2a2-11, Р2b2-1): бажана копія, що не була
+              // копією з тим самим джерелом, отримує крок даних плану
               copyOf: z
                 .looseObject({
                   table: z.looseObject({

@@ -1,6 +1,8 @@
 import {
+  applyChanges,
   compile,
   promoteInput,
+  promoteObject,
   type CompileResult,
   type PromoteInput,
 } from "simetra/compiler"
@@ -948,6 +950,25 @@ export function compileRights(
   files: ReadonlyMap<string, string>
 ): Promise<CompileResult> {
   return compile(files)
+}
+
+/**
+ * Домен політик з шаром прийнятої таблиці `layer` до промоції `mapping` і
+ * після неї та запис промоції: вихідна й бажана моделі плану з промоцією.
+ */
+export async function promotedRights(layer: Layer, mapping: PromoteInput) {
+  const files = policyDomain(layer)
+  const before = (await compileRights(files)).model!
+  let n = 950_000
+  const result = await promoteObject(files, mapping, {
+    schemaPath: (file, schemaFile) => `schemas-of/${file}/${schemaFile}`,
+    newId: () => uuid(++n),
+  })
+  if (result.diagnostics.length > 0)
+    throw new Error(`promotion failed: ${JSON.stringify(result.diagnostics)}`)
+  const desired = (await compileRights(applyChanges(files, result.changes)))
+    .model!
+  return { before, desired, record: result.record! }
 }
 
 export const TAG_FILE = "custom-tables/Tag/Tag.meta.json"

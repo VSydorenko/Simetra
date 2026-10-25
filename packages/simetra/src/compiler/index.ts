@@ -45,8 +45,10 @@ export {
   mechanicsUpdateTriggerName,
 } from "./mechanics-units"
 export {
+  carrierBackfillStatements,
   carrierFunctionNames,
   carrierTriggerNames,
+  type CarrierBackfillStatement,
 } from "./rights/carrier-units"
 export {
   effectsFunctionName,

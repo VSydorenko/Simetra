@@ -49,9 +49,11 @@ import { STEP_CLASSES, type PermissionItem, type PlanStep } from "./steps"
  * голова ledger цілі (рішення 1–2 плану П3-2b-3) — файл третього формату
  * без них отримує чесну відмову «формат застарів», а не «це не план». П'ятий
  * формат: сигнатури функцій платформи (`platformFunctions`, план П3-3a2) —
- * раннер виключає їх з `plpgsql_check` і переліку сліпих.
+ * раннер виключає їх з `plpgsql_check` і переліку сліпих. Шостий формат:
+ * кроки копій носіїв (`origin: "carriers"`, Р2b2-1) — раннер п'ятого
+ * формату не знав би їхнього блоку.
  */
-export const PLAN_FORMAT = 5
+export const PLAN_FORMAT = 6
 
 /**
  * Таблиця одиниці, чиї дані план зберігає (рішення 6 плану П3-2a): імена до й
@@ -345,7 +347,7 @@ const objectRefSchema = z.strictObject({
 
 const stepSchema = z.strictObject({
   id: z.string(),
-  origin: z.enum(["intent", "engine", "environment"]),
+  origin: z.enum(["intent", "engine", "carriers", "environment"]),
   sql: z.string(),
   verb: z.enum(ENGINE_ACTION_VERBS),
   class: z.enum(STEP_CLASSES),

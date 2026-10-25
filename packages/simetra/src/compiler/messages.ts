@@ -3398,9 +3398,9 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "apply.replication-role": {
     en: (p) =>
-      `The apply transaction runs with session_replication_role = ${p.value}, and the promotion's data steps need origin: otherwise foreign key triggers do not fire and the written values bypass the reference checks. Nothing was written`,
+      `The apply transaction runs with session_replication_role = ${p.value}, and the plan's data steps need origin: otherwise foreign key triggers do not fire and the written values bypass the reference checks. Nothing was written`,
     uk: (p) =>
-      `Транзакція застосування має session_replication_role = ${p.value}, а кроки даних промоції потребують origin: інакше тригери зовнішніх ключів не спрацьовують, і записані значення обходять перевірку посилань. Нічого не записано`,
+      `Транзакція застосування має session_replication_role = ${p.value}, а кроки даних плану потребують origin: інакше тригери зовнішніх ключів не спрацьовують, і записані значення обходять перевірку посилань. Нічого не записано`,
     hint: {
       en: "Remove the session_replication_role setting of the database or the role (ALTER DATABASE … RESET / ALTER ROLE … RESET), then apply again.",
       uk: "Зніміть налаштування session_replication_role бази чи ролі (ALTER DATABASE … RESET / ALTER ROLE … RESET) і застосуйте знову.",
@@ -3889,16 +3889,6 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     hint: {
       en: "If the object needs no number, set autonumber: false, or codeLength: 0 for a catalog; otherwise the number stays empty until the platform generates counters.",
       uk: "Якщо номер об'єкту не потрібен, задайте autonumber: false, а довіднику — codeLength: 0; інакше номер лишатиметься порожнім, доки платформа не генерує лічильників.",
-    },
-  },
-  "plan.carrier-backfill-missing": {
-    en: (p) =>
-      `${p.table} already has rows, and the plan adds the rights carrier copies ${p.columns} to it, but the copies get their values only when a row is written: the existing rows would be left without them`,
-    uk: (p) =>
-      `${p.table} уже має рядки, а план додає до неї копії носіїв прав ${p.columns}, але копії отримують значення лише на записі рядка: наявні рядки лишилися б без них`,
-    hint: {
-      en: "No plan was written. Add the carrier before the table gets rows, or wait for the data step of carrier copies (plan Rights-2b).",
-      uk: "План не записано. Додайте носій до появи рядків або дочекайтеся кроку даних (план Права-2b).",
     },
   },
   // Попередження, не відмова: заміна законна (рішення 6 плану П3-3a2), але

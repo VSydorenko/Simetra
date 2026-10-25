@@ -400,7 +400,7 @@ describe("plan artifact", () => {
     expect(parsed.diagnostic.message).toMatch(
       /plan format 1 is not supported.*rebuild the plan/i
     )
-    expect(PLAN_FORMAT).toBe(5)
+    expect(PLAN_FORMAT).toBe(6)
   })
 
   it("asks to rebuild a plan of the second format", async () => {
@@ -454,6 +454,51 @@ describe("plan artifact", () => {
     expect(parsed.diagnostic.message).toMatch(
       /plan format 4 is not supported.*rebuild the plan/i
     )
+  })
+
+  it("asks to rebuild a plan of the fifth format", async () => {
+    // П'ятий формат не знав кроків копій носіїв: читач без їхнього
+    // походження не виконав би блок `carriers`
+    const artifact = await stampPlan(draft())
+    const old: Record<string, unknown> = { ...artifact, format: 5 }
+    expect(parsePlan(JSON.stringify(old))).toMatchObject({
+      ok: false,
+      reason: "format",
+      diagnostic: {
+        code: "apply.plan-format",
+        params: { found: 5, supported: PLAN_FORMAT },
+      },
+    })
+  })
+
+  it("round-trips a carrier copy data step", async () => {
+    const base = draft()
+    const artifact = await stampPlan({
+      ...base,
+      steps: [
+        ...base.steps,
+        {
+          ...base.steps[0]!,
+          id: "s2",
+          origin: "carriers",
+          sql: 'UPDATE "app"."c" AS d SET ("x") = (SELECT s."x" FROM "app"."t" AS s WHERE s."id" OPERATOR(pg_catalog.=) d."t_id") WHERE d."x" IS DISTINCT FROM (SELECT s."x" FROM "app"."t" AS s WHERE s."id" OPERATOR(pg_catalog.=) d."t_id")',
+          class: "dataStep",
+          lockClass: "shareRowExclusive",
+          lockedTables: [
+            { schema: "app", name: "c" },
+            { schema: "app", name: "t" },
+          ],
+          consumes: [],
+          destroys: [],
+          destroyed: [],
+          consumed: [],
+          dataLoss: false,
+        },
+      ],
+    })
+    const parsed = parsePlan(serializePlan(artifact))
+    if (!parsed.ok) throw new Error(parsed.message)
+    expect(parsed.artifact).toEqual(artifact)
   })
 
   it("round-trips environment steps and the role's global default privileges", async () => {

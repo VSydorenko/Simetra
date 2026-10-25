@@ -43,6 +43,7 @@ export const REHEARSAL_PHASES = [
   "intent",
   "write",
   "engine",
+  "carriers",
   "environment",
   "deferred",
   "measureAfter",

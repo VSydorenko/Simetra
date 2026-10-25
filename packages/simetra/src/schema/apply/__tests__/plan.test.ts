@@ -1,9 +1,7 @@
 import { describe, expect, it } from "vitest"
 import {
-  applyChanges,
   canonicalSnapshot,
   compile,
-  promoteObject,
   type CompiledModel,
   type PromotionRecord,
 } from "simetra/compiler"
@@ -24,20 +22,16 @@ import {
   catalog,
   metaFiles,
   project,
-  uuid,
 } from "../../../compiler/__tests__/helpers"
 import {
   ATTACHMENTS_TABLE,
   CHECKLIST_TABLE,
   TAG_ID,
-  TASK_NOTE_ADOPTED_TABLE,
-  TASK_NOTE_ID,
   compileRights,
   policyDomain,
   promotableTag,
-  promotableTaskNote,
+  promotedRights,
   tagMapping,
-  taskNoteMapping,
 } from "../../../compiler/__tests__/fixtures/rights"
 
 /**
@@ -169,83 +163,35 @@ describe("buildPlan", () => {
     { case: "plan", promotion: false },
     { case: "plan with a promotion", promotion: true },
   ])(
-    "refuses a new carrier copy on a table with rows, judged against the marker snapshot ($case)",
+    "carrier copy steps reach the footprint without a read of the target ($case)",
     async ({ promotion }) => {
-      // Р2a2-11: у marker цілі колонки копій ТЧ `checklist` і `attachments` не
-      // були копіями (видалені реквізити з даними); таблицю `attachments`
-      // план створює наново, тож рядків вона не має. З промоцією план іде
-      // гілкою промоції: `Tag` з прийнятої таблиці стає довідником
+      // Р2b2-7: у marker цілі колонки копій ТЧ `checklist` і `attachments` не
+      // були копіями, а в кожній таблиці є рядок — план дає кроки даних
+      // копій, а не відмову, і ціль на рядки не читає. Слід плану питає
+      // право `LOCK` на таблиці кроків: `checklist` і її джерело є, а
+      // `attachments`, яку план створює, кроку не має. Фейк зупиняє план на
+      // цьому читанні; самі кроки доводить `carrier-backfill.test.ts`
       const { before, desired, records } = promotion
         ? await promotedTag()
         : await samePolicyDomain()
       const target = await fakeTarget(before, {
         notCopies: [CHECKLIST_TABLE, ATTACHMENTS_TABLE],
       })
-      const outcome = await buildPlan(
-        fakeEngine([createTable(ATTACHMENTS_TABLE)]),
-        {
-          reader: target.reader,
-          scratch: promotion ? emptyScratch : noScratch,
-        },
-        desired,
-        { target: { url: "postgres://target" } },
-        records
-      )
-      expect(outcome).toMatchObject({
-        status: "refused",
-        diagnostics: expect.arrayContaining([
-          expect.objectContaining({
-            code: "plan.carrier-backfill-missing",
-            params: {
-              table: `public.${CHECKLIST_TABLE}`,
-              columns: "assignee_id, project_id, region_id",
-            },
-          }),
-        ]),
-      })
-      expect(
-        outcome.diagnostics.filter(
-          (d) => d.code === "plan.carrier-backfill-missing"
+      await expect(
+        buildPlan(
+          fakeEngine([createTable(ATTACHMENTS_TABLE)]),
+          { reader: target.reader, scratch: emptyScratch },
+          desired,
+          { target: { url: "postgres://target" } },
+          records
         )
-      ).toHaveLength(1)
-      // Читається лише таблиця з копіями, яких marker не знав і план не створює
-      expect(target.existsQueried).toEqual([`public.${CHECKLIST_TABLE}`])
+      ).rejects.toBeInstanceOf(ReachedLockRights)
+      const names = target.lockTables.map((t) => t.name)
+      expect(names).toContain(CHECKLIST_TABLE)
+      expect(names).toContain("task")
+      expect(names).not.toContain(ATTACHMENTS_TABLE)
     }
   )
-
-  it("reads and refuses a table renamed by the promotion under its old name", async () => {
-    // Р2a2-11: копія носія лягає на таблицю, яку промоція перейменовує;
-    // перевірка рядків іде до перейменувань, тож лише старе ім'я існує в цілі
-    const { before, desired, records } = await promoted(
-      promotableTaskNote(),
-      taskNoteMapping(),
-      TASK_NOTE_ID
-    )
-    expect(
-      desired.physical.tables.some((t) => t.name === TASK_NOTE_ADOPTED_TABLE)
-    ).toBe(false)
-    const target = await fakeTarget(before, { notCopies: [] })
-    const outcome = await buildPlan(
-      fakeEngine([]),
-      { reader: target.reader, scratch: emptyScratch },
-      desired,
-      { target: { url: "postgres://target" } },
-      records
-    )
-    expect(
-      outcome.diagnostics.filter(
-        (d) => d.code === "plan.carrier-backfill-missing"
-      )
-    ).toEqual([
-      expect.objectContaining({
-        params: {
-          table: `public.${TASK_NOTE_ADOPTED_TABLE}`,
-          columns: "task_id_assignee_id",
-        },
-      }),
-    ])
-    expect(target.existsQueried).toEqual([`public.${TASK_NOTE_ADOPTED_TABLE}`])
-  })
 })
 
 async function samePolicyDomain() {
@@ -254,28 +200,13 @@ async function samePolicyDomain() {
 }
 
 /** Домен політик з прийнятою `Tag` до промоції, після неї й запис. */
-function promotedTag() {
-  return promoted(promotableTag(), tagMapping(), TAG_ID)
-}
-
-/** Домен політик з прийнятою таблицею `layer` до промоції, після неї й запис. */
-async function promoted(
-  layer: Parameters<typeof policyDomain>[0],
-  mapping: Parameters<typeof promoteObject>[1],
-  id: string
-) {
-  const files = policyDomain(layer)
-  const before = (await compileRights(files)).model!
-  let n = 950_000
-  const result = await promoteObject(files, mapping, {
-    schemaPath: (file, schemaFile) => `schemas-of/${file}/${schemaFile}`,
-    newId: () => uuid(++n),
-  })
-  expect(result.diagnostics).toEqual([])
-  const desired = (await compileRights(applyChanges(files, result.changes)))
-    .model!
+async function promotedTag() {
+  const { before, desired, record } = await promotedRights(
+    promotableTag(),
+    tagMapping()
+  )
   const records: PromotionInput[] = [
-    { record: result.record!, file: `plans/${id}.promotion.json` },
+    { record, file: `plans/${TAG_ID}.promotion.json` },
   ]
   return { before, desired, records }
 }
@@ -289,18 +220,17 @@ const emptyScratch: ApplyDatabase = {
     }),
 }
 
-/** Ціль, якої план не пише: прогін-доказ і копії тут не потрібні. */
-const noScratch: ApplyDatabase = {
-  transaction: () => Promise.reject(new Error("no copy expected")),
-}
+/** Фейкова ціль дійшла до читання права `LOCK` на таблиці сліду плану. */
+class ReachedLockRights extends Error {}
 
 const EMPTY_CATALOG: CatalogModel = { tables: [], enumTypes: [], units: [] }
 
 /**
  * Фейкова ціль Postgres 17 з marker `model`: колонки копій таблиць
  * `notCopies` у знімку marker — звичайні колонки. Відбиток і модель
- * каталогу збігаються з marker, тож гейт дрейфу пропускає; у кожній таблиці
- * є рядок. `existsQueried` — таблиці, які план перевірив на рядки.
+ * каталогу збігаються з marker, тож гейт дрейфу пропускає. Глобальних ADP
+ * немає, тож збір середовища копії не бере. `lockTables` — таблиці сліду, на
+ * які план питає право `LOCK`; це читання кидає `ReachedLockRights`.
  */
 async function fakeTarget(
   model: CompiledModel,
@@ -333,7 +263,7 @@ async function fakeTarget(
     platform_version: "0",
     plan_hash: "p",
   }
-  const existsQueried: string[] = []
+  const lockTables: Named[] = []
   const answer = (sql: string, params: readonly unknown[] = []): unknown[] => {
     if (sql.includes("pg_database"))
       return [{ major: 17, encoding: "UTF8", collate: "C", ctype: "C" }]
@@ -351,10 +281,14 @@ async function fakeTarget(
       }))
     if (sql.includes("AS session")) return [{ session: "app" }]
     if (sql.includes("surface_rel")) return [fingerprint]
-    const exists = /^SELECT EXISTS \(SELECT 1 FROM (\S+)\)/.exec(sql)
-    if (exists !== null) {
-      existsQueried.push(exists[1]!)
-      return [{ found: true }]
+    // Факти `plpgsql_check`: розширення немає — план іде далі з
+    // діагностикою, а не падає
+    if (sql.includes('AS "checkSchemaTaken"')) return [{ installed: false }]
+    // Право `LOCK` на таблиці сліду читається вже після збору середовища:
+    // кроки копій до нього дійшли, далі план фейкам не потрібен
+    if (sql.includes("AS lockable")) {
+      lockTables.push(...(JSON.parse(params[0] as string) as Named[]))
+      throw new ReachedLockRights()
     }
     return []
   }
@@ -366,8 +300,10 @@ async function fakeTarget(
     extract: () => Promise.reject(new Error("no extract expected")),
   }
   const reader: ApplyDatabase = { transaction: (_db, _end, fn) => fn(tx) }
-  return { reader, existsQueried }
+  return { reader, lockTables }
 }
+
+type Named = { schema: string; name: string }
 
 const ENGINE = { name: "fake", version: "1" }
 
