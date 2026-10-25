@@ -343,14 +343,15 @@ export function closedModuleOwners(
  * об'єкта, а таблиці боргу описані власними полями. Контекст команди
  * (`sql.command-context-write`) судиться інакше: кожна одиниця модулів видів
  * і спільних `sql/`-файлів, обробники підписок і функції множини — будь-де;
- * борговий SQL прийнятих таблиць — лише платформним префіксом, решта його
- * записів — попередження `sql.debt-session-write` (Р2c1-6).
+ * одиниця боргу (`isDebt` — `debtPredicate` ратчета) — лише платформним
+ * префіксом, решта її записів — попередження `sql.debt-session-write`
+ * (Р2c1-6, Р2c1-14).
  */
 export function checkSqlModules(
   objects: readonly ParsedObject[],
-  project: Project | undefined,
   units: readonly VerbatimUnit[],
   rowRules: readonly RowRule[],
+  isDebt: (unit: VerbatimUnit) => boolean,
   parse: SqlParser,
   plpgsql: PlpgsqlParser
 ): Diagnostic[] {
@@ -380,14 +381,6 @@ export function checkSqlModules(
   // (Р2b1-22): функція закритого модуля чи обробник може викликати допоміжну
   // функцію спільного файлу, а подання, домен чи політика виконують свій
   // вираз у сесії команди, тож межа довіри (Р2b1-19a) охоплює їх усі.
-  // Обробник підписки й функція множини боргом не бувають, хоч би де лежав
-  // файл (спека промоції §9.4): у модулі таблиці боргу їх теж судимо.
-  const debtOwners = new Set(
-    objects
-      .filter((o) => KIND_REGISTRY[o.kind].sqlModule === "debt")
-      .map((o) => o.file)
-  )
-  const ruled = ruledFunctions(objects, project)
   for (const unit of units) {
     if (closed(unit)) continue
     const writes = commandContextWrite(
@@ -398,11 +391,7 @@ export function checkSqlModules(
     )
     if (writes.length === 0) continue
     const name = unit.schema === "" ? unit.name : `${unit.schema}.${unit.name}`
-    const debt =
-      unit.ownerFile !== undefined &&
-      debtOwners.has(unit.ownerFile) &&
-      !ruled.has(unit.identity)
-    if (!debt) {
+    if (!isDebt(unit)) {
       found.push(
         diagnostic("sql.command-context-write", unit.file, "", {
           name,
@@ -411,15 +400,18 @@ export function checkSqlModules(
       )
       continue
     }
-    // Борговий SQL прийнятої таблиці (Р2c1-6) уперше судиться контекстом
-    // команди. Платформний префікс несе контекст команди й режим
-    // обслуговування прав — у чужому боргу його бути не може, тож запис туди
-    // (зокрема `RESET ALL` і запис у `pg_settings`, що зачіпають його
-    // неминуче) — помилка. Зміна ролі чи claims у модулі прийнятого об'єкта
-    // (після introspect там лише тригерні функції його таблиці) може
-    // лишатися, доки одиниця — борг: закритий код такої функції не досягає
-    // (`sql.command-context-reach`). Одиниці спільних `sql/`-файлів
-    // `ownerFile` не мають і лишаються під помилкою вище. Судяться всі
+    // Одиниця боргу — модуля прийнятої таблиці чи спільного `sql/`-файлу
+    // (Р2c1-6, Р2c1-14) — судиться контекстом команди м'якше. Платформний
+    // префікс несе контекст команди й режим обслуговування прав — у чужому
+    // боргу його бути не може, тож запис туди (зокрема `RESET ALL` і запис у
+    // `pg_settings`, що зачіпають його неминуче) — помилка. Зміна ролі чи
+    // claims може лишатися, доки одиниця — борг: досяжну з закритого коду
+    // функцію з таким записом уже відмовляє `sql.command-context-reach`
+    // (`sessionWrite`, Р2c1-10), а новий неперелічений борг — `sql.debt-grows`,
+    // тож попередження дістає лише прийнятий борг реальної бази, якого
+    // закритий код не досягає. Борг — рівно те, що рахує ратчет
+    // (`debtPredicate`): функція в закритій оболонці, обробник і функція
+    // множини боргом не бувають, тож їхній запис — помилка вище. Судяться всі
     // записи одиниці: помилка не ховається за попередженням.
     const platform = writes.find(platformWrite)
     const hit = platform ?? writes[0]!
@@ -434,7 +426,7 @@ export function checkSqlModules(
           name,
           form: hit.form,
           ...(hit.setting === undefined ? {} : { setting: hit.setting }),
-          ...(platform === undefined ? {} : { module: "debt" }),
+          ...(platform === undefined ? {} : { unit: "debt" }),
         }
       )
     )

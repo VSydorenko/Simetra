@@ -252,21 +252,21 @@ command role and nobody else.
   their `RESET`) — in any form (`set_config` however it is qualified, also as
   an aggregate function, `SET`/`RESET`, a function option, a write to
   `pg_settings` or a view over it, a literal `EXECUTE`): compiler error
-  `sql.command-context-write`. The command context, the user and the role
-  belong to the platform.
-- In the debt module of an adopted object (the `.sql` file of a
-  `CustomTable` or a `PgEnum`; after `introspect` its only functions are the
-  trigger functions of that table) the same rule is split by setting. A write
-  to `simetra.*` is an error (`sql.command-context-write`, module `debt`):
+  `sql.command-context-write` (a debt unit is split by setting, below). The
+  command context, the user and the role belong to the platform.
+- In a debt unit — a statement of the `.sql` file of a `CustomTable` or a
+  `PgEnum`, or of a shared `sql/` file, that is listed in `sql-debt.json`
+  (a function in the closed shell, a subscription handler and a scope set
+  function are never debt) — the same rule is split by setting. A write to
+  `simetra.*` is an error (`sql.command-context-write`, marked `unit: debt`):
   those settings carry the command context and the rights maintenance mode,
   and `RESET ALL` and a write to `pg_settings` reset them too. A write to the
   role or the request claims (`request.jwt.*`) is a warning
   (`sql.debt-session-write`): it may stay while the unit is debt, but closed
-  code must not reach the unit (next section). Shared `sql/` files are not
-  split: every write there, the role and the claims included, stays the
-  error above, even for a unit listed as debt. Remove the named statement
-  when you convert the unit; write a `set_config` name as a literal, because
-  a name built at run time counts as a write.
+  code must not reach the unit (next section). Converting the unit into a
+  closed-shell function turns that warning into the error above, so remove
+  the named statement when you convert the unit; write a `set_config` name as
+  a literal, because a name built at run time counts as a write.
 
 ## Policies and triggers on a table of a kind
 

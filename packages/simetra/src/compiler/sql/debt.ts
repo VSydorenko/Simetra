@@ -35,7 +35,12 @@ export function debtUnits(
   )
 }
 
-function debtPredicate(
+/**
+ * Чи одиниця — борг (план промоції 2b, рішення 12): одне правило для ратчета
+ * й для судження запису сесії боргу (`checkSqlModules`, Р2c1-14), щоб
+ * попередження не діставала одиниця, якої ратчет боргом не рахує.
+ */
+export function debtPredicate(
   objects: readonly ParsedObject[],
   project: Project | undefined,
   kindTables: KindTables,

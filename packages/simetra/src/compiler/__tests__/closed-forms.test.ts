@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { compile } from "simetra/compiler"
+import { compile, type Diagnostic } from "simetra/compiler"
 import {
   COMMAND_SETTING,
   PLATFORM_SETTING_PREFIX,
@@ -302,7 +302,11 @@ describe("kind module: closed forms only", () => {
     const SHARED_SQL = "sql/public/helpers.sql"
     const sharedWrites = async (sql: string) =>
       (await diagnostics({ [SHARED_SQL]: sql }))
-        .filter((d) => d.code === "sql.command-context-write")
+        .filter(
+          (d) =>
+            d.code === "sql.command-context-write" ||
+            d.code === "sql.debt-session-write"
+        )
         .map((d) => [d.code, d.file, d.params?.form])
 
     it.each([
@@ -343,69 +347,82 @@ describe("kind module: closed forms only", () => {
 
     // Кожна одиниця спільного файлу, а не лише функції (Р2b1-22). Борг
     // фікстури прийнято (`acceptDebt`): `ALTER FUNCTION` у спільному файлі —
-    // борг, і без прийняття його й так відхилив би ратчет.
+    // борг, і без прийняття його й так відхилив би ратчет. Борг пише
+    // `simetra.*` з помилкою, решту захищених — з попередженням (Р2c1-14);
+    // функція в закритій оболонці боргом не є, тож її запис — помилка.
+    const REFUSED = "sql.command-context-write"
+    const WARNED = "sql.debt-session-write"
     const HELPER = `CREATE FUNCTION public.helper() RETURNS int LANGUAGE sql STABLE AS $$ select 1 $$;`
     const DB_QUALIFIED = `postgres.pg_catalog.set_config('${C}', '{}', true)`
     it.each([
       [
         "ALTER FUNCTION … SET the command context",
+        REFUSED,
         "functionOption",
         `${HELPER} ALTER FUNCTION public.helper() SET ${C} = '{}';`,
       ],
       [
         "ALTER FUNCTION … SET the claims",
+        WARNED,
         "functionOption",
         `${HELPER} ALTER FUNCTION public.helper() SET ${CLAIMS} = '{}';`,
       ],
       [
         "an aggregate over set_config",
+        WARNED,
         "nonLiteral",
         `CREATE AGGREGATE public.agg(text, boolean) (SFUNC = pg_catalog.set_config, STYPE = text, INITCOND = '${C}');`,
       ],
       [
         "a view calling set_config",
+        REFUSED,
         "setConfig",
         `CREATE VIEW public.v AS SELECT set_config('${C}', '{}', true) AS x;`,
       ],
       [
         "a view over pg_settings",
+        REFUSED,
         "settingsTable",
         "CREATE VIEW public.v AS SELECT name, setting FROM pg_catalog.pg_settings;",
       ],
       [
         "a domain CHECK calling set_config",
+        REFUSED,
         "setConfig",
         `CREATE DOMAIN public.d AS text CHECK (set_config('${C}', VALUE, true) IS NOT NULL);`,
       ],
       [
         "RESET ALL as a body statement",
+        REFUSED,
         "setStatement",
         plpgsqlBody("RESET ALL;"),
       ],
       [
         "a parameter default calling set_config",
+        REFUSED,
         "setConfig",
         `CREATE FUNCTION public.helper(x text DEFAULT set_config('${C}', '{}', true)) RETURNS int LANGUAGE sql STABLE AS $$ select 1 $$;`,
       ],
       [
         "a database-qualified set_config in plpgsql",
+        REFUSED,
         "setConfig",
         plpgsqlBody(`PERFORM ${DB_QUALIFIED};`),
       ],
       [
         "a database-qualified set_config in LANGUAGE sql",
+        REFUSED,
         "setConfig",
         shell("LANGUAGE sql VOLATILE", `SELECT ${DB_QUALIFIED}`),
       ],
       [
         "a database-qualified set_config in a literal EXECUTE",
+        REFUSED,
         "setConfig",
         plpgsqlBody(`EXECUTE 'SELECT ${DB_QUALIFIED.replaceAll("'", "''")}';`),
       ],
-    ])("shared file unit: %s is refused", async (_case, form, sql) => {
-      expect(await sharedWrites(sql)).toEqual([
-        ["sql.command-context-write", SHARED_SQL, form],
-      ])
+    ])("shared file unit: %s", async (_case, code, form, sql) => {
+      expect(await sharedWrites(sql)).toEqual([[code, SHARED_SQL, form]])
     })
 
     it.each([
@@ -437,103 +454,127 @@ describe("kind module: closed forms only", () => {
       ])
     })
 
-    // Борговий модуль прийнятої таблиці (Р2c1-6): платформний префікс і
-    // форми, що зачіпають його неминуче, — помилка; решта захищених —
-    // попередження, доки одиниця — борг. Спільні `sql/`-файли — під помилкою
-    // (вище).
+    // Борговий SQL (Р2c1-6, Р2c1-14): платформний префікс і форми, що
+    // зачіпають його неминуче, — помилка; решта захищених — попередження,
+    // доки одиниця — борг (`debtPredicate`), однаково в модулі прийнятої
+    // таблиці й у спільному `sql/`-файлі. Боргова форма фікстури — функція без
+    // явної волатильності (так її віддає introspect для `VOLATILE`): у
+    // закритій оболонці вона боргом не була б.
     const PLATFORM = `${PLATFORM_SETTING_PREFIX}rights_maintenance`
     const ERROR = "sql.command-context-write"
     const WARNING = "sql.debt-session-write"
-    it.each([
-      [
-        "set_config on the command context",
-        plpgsqlBody(`PERFORM set_config('${C}', '{}', true);`),
-        [ERROR, "setConfig", C],
-      ],
-      [
-        "SET of a platform setting",
-        plpgsqlBody(`SET ${PLATFORM} = 'on';`),
-        [ERROR, "setStatement", PLATFORM],
-      ],
-      [
-        "a SET function option on the command context",
-        shell(`LANGUAGE sql STABLE SET ${C} = '{}'`, "select 1"),
-        [ERROR, "functionOption", C],
-      ],
-      [
-        "SET ROLE",
-        plpgsqlBody("SET ROLE postgres;"),
-        [WARNING, "setStatement", "role"],
-      ],
-      [
-        "set_config with a non-literal name",
-        plpgsqlBody("PERFORM set_config(v_name, 'x', true);"),
-        [WARNING, "nonLiteral", undefined],
-      ],
-      [
-        "set_config on the claims",
-        plpgsqlBody(`PERFORM set_config('${CLAIMS}', '{}', true);`),
-        [WARNING, "setConfig", CLAIMS],
-      ],
-      [
-        // Перший запис — попередження, але судяться всі записи одиниці.
-        "SET ROLE before set_config on the command context",
-        plpgsqlBody(
-          `SET ROLE postgres; PERFORM set_config('${C}', '{}', true);`
-        ),
-        [ERROR, "setConfig", C],
-      ],
-      [
-        // Записи одного оператора судяться всі, а не лише перший.
-        "two writes in one statement, the claims first",
-        plpgsqlBody(
-          `PERFORM set_config('${CLAIMS}', '{}', true), set_config('${C}', '{}', true);`
-        ),
-        [ERROR, "setConfig", C],
-      ],
-      [
-        // Опція SET не ховає тіла: запис платформи в ньому — помилка.
-        "a SET option on the claims with the command context in the body",
-        shell(
-          `LANGUAGE plpgsql VOLATILE SET ${CLAIMS} = '{}'`,
-          `BEGIN PERFORM set_config('${C}', '{}', true); RETURN 1; END`
-        ),
-        [ERROR, "setConfig", C],
-      ],
-      [
-        // Postgres імен налаштувань за регістром не розрізняє.
-        "an upper-case platform prefix",
-        plpgsqlBody(`PERFORM set_config('${C.toUpperCase()}', '{}', true);`),
-        [ERROR, "setConfig", C.toUpperCase()],
-      ],
-      [
-        "RESET ALL as a body statement",
-        plpgsqlBody("RESET ALL;"),
-        [ERROR, "setStatement", "*"],
-      ],
-      [
-        "a write to pg_settings",
-        plpgsqlBody(
-          "UPDATE pg_settings SET setting = 'x' WHERE name = 'role';"
-        ),
-        [ERROR, "settingsTable", undefined],
-      ],
-    ])("debt module: %s", async (_case, sql, expected) => {
-      const found = await diagnostics({ [TABLE_SQL]: sql })
-      expect(
-        found
-          .filter((d) => d.code === ERROR || d.code === WARNING)
-          .map((d) => [d.code, d.params?.form, d.params?.setting])
-      ).toEqual([expected])
-      // Помилка боргу несе маркер модуля: повідомлення й підказка конверсії
-      // боргові (Р2c1-6), а не текст закритого коду.
-      expect(
-        found.filter((d) => d.code === ERROR).map((d) => d.params?.module)
-      ).toEqual(expected[0] === ERROR ? ["debt"] : [])
-      // Попередження не зупиняє компіляцію: прийом бази з ним проходить.
-      if (expected[0] === WARNING) {
-        expect(found.filter((d) => d.severity === "error")).toEqual([])
-      }
+    const debtBody = (statement: string) =>
+      shell("LANGUAGE plpgsql", `BEGIN ${statement} RETURN 1; END`)
+    const sessionWrites = (found: readonly Diagnostic[]) =>
+      found
+        .filter((d) => d.code === ERROR || d.code === WARNING)
+        .map((d) => [d.code, d.params?.form, d.params?.setting])
+    describe.each([
+      ["debt module", TABLE_SQL],
+      ["shared file", SHARED_SQL],
+    ])("%s", (_where, file) => {
+      it.each([
+        [
+          "set_config on the command context",
+          debtBody(`PERFORM set_config('${C}', '{}', true);`),
+          [ERROR, "setConfig", C],
+        ],
+        [
+          "SET of a platform setting",
+          debtBody(`SET ${PLATFORM} = 'on';`),
+          [ERROR, "setStatement", PLATFORM],
+        ],
+        [
+          "a SET function option on the command context",
+          shell(`LANGUAGE sql SET ${C} = '{}'`, "select 1"),
+          [ERROR, "functionOption", C],
+        ],
+        [
+          "SET ROLE",
+          debtBody("SET ROLE postgres;"),
+          [WARNING, "setStatement", "role"],
+        ],
+        [
+          "set_config with a non-literal name",
+          debtBody("PERFORM set_config(v_name, 'x', true);"),
+          [WARNING, "nonLiteral", undefined],
+        ],
+        [
+          "set_config on the claims",
+          debtBody(`PERFORM set_config('${CLAIMS}', '{}', true);`),
+          [WARNING, "setConfig", CLAIMS],
+        ],
+        [
+          // Перший запис — попередження, але судяться всі записи одиниці.
+          "SET ROLE before set_config on the command context",
+          debtBody(
+            `SET ROLE postgres; PERFORM set_config('${C}', '{}', true);`
+          ),
+          [ERROR, "setConfig", C],
+        ],
+        [
+          // Записи одного оператора судяться всі, а не лише перший.
+          "two writes in one statement, the claims first",
+          debtBody(
+            `PERFORM set_config('${CLAIMS}', '{}', true), set_config('${C}', '{}', true);`
+          ),
+          [ERROR, "setConfig", C],
+        ],
+        [
+          // Опція SET не ховає тіла: запис платформи в ньому — помилка.
+          "a SET option on the claims with the command context in the body",
+          shell(
+            `LANGUAGE plpgsql SET ${CLAIMS} = '{}'`,
+            `BEGIN PERFORM set_config('${C}', '{}', true); RETURN 1; END`
+          ),
+          [ERROR, "setConfig", C],
+        ],
+        [
+          // Postgres імен налаштувань за регістром не розрізняє.
+          "an upper-case platform prefix",
+          debtBody(`PERFORM set_config('${C.toUpperCase()}', '{}', true);`),
+          [ERROR, "setConfig", C.toUpperCase()],
+        ],
+        [
+          "RESET ALL as a body statement",
+          debtBody("RESET ALL;"),
+          [ERROR, "setStatement", "*"],
+        ],
+        [
+          "a write to pg_settings",
+          debtBody("UPDATE pg_settings SET setting = 'x' WHERE name = 'role';"),
+          [ERROR, "settingsTable", undefined],
+        ],
+      ])("debt: %s", async (_case, sql, expected) => {
+        const found = await diagnostics({ [file]: sql })
+        expect(sessionWrites(found)).toEqual([expected])
+        // Помилка боргу несе маркер боргової одиниці: повідомлення й
+        // підказка конверсії боргові, а не текст закритого коду.
+        expect(
+          found.filter((d) => d.code === ERROR).map((d) => d.params?.unit)
+        ).toEqual(expected[0] === ERROR ? ["debt"] : [])
+        // Попередження не зупиняє компіляцію: прийом бази з ним проходить.
+        if (expected[0] === WARNING) {
+          expect(found.filter((d) => d.severity === "error")).toEqual([])
+        }
+      })
+
+      // Функція в закритій оболонці боргом не є ніде (`debtPredicate`), тож
+      // зміна ролі в ній — помилка закритого коду, а не попередження боргу.
+      it.each([
+        "LANGUAGE plpgsql VOLATILE",
+        "LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = ''",
+      ])("closed shell %s: SET ROLE is an error", async (options) => {
+        const found = await diagnostics({
+          [file]: shell(options, "BEGIN SET ROLE postgres; RETURN 1; END"),
+        })
+        expect(sessionWrites(found)).toEqual([
+          [ERROR, "setStatement", undefined],
+        ])
+        expect(found.find((d) => d.code === ERROR)?.params?.unit).toBe(
+          undefined
+        )
+      })
     })
 
     it("a debt function reached by closed code is a reach error, its own write a warning", async () => {
@@ -546,7 +587,7 @@ describe("kind module: closed forms only", () => {
           "BEGIN PERFORM public.t_role(); RETURN 1; END"
         ),
         [TABLE_SQL]:
-          "CREATE FUNCTION public.t_role() RETURNS void LANGUAGE plpgsql VOLATILE AS $$ BEGIN SET ROLE postgres; END $$;",
+          "CREATE FUNCTION public.t_role() RETURNS void LANGUAGE plpgsql AS $$ BEGIN SET ROLE postgres; END $$;",
       })
       expect(
         found.map((d) => [d.code, d.file, d.params?.reason ?? d.params?.form])

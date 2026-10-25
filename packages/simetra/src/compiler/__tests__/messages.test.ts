@@ -208,7 +208,7 @@ describe("messages catalog", () => {
           localize(
             diagnostic(code, "a.sql", "", {
               name: "public.f",
-              module: "debt",
+              unit: "debt",
               ...p,
             }),
             locale
@@ -240,10 +240,10 @@ describe("messages catalog", () => {
         name: "public.f",
         form: "setConfig",
         setting: COMMAND_SETTING,
-        module: "debt",
+        unit: "debt",
       }).message
     ).toBe(
-      `Debt SQL unit public.f of an adopted table changes a platform session setting: remove set_config('${COMMAND_SETTING}', …)`
+      `Debt SQL unit public.f changes a platform session setting: remove set_config('${COMMAND_SETTING}', …)`
     )
     const warning = diagnostic("sql.debt-session-write", "a.sql", "", {
       name: "public.f",
@@ -252,7 +252,7 @@ describe("messages catalog", () => {
     })
     expect(warning.severity).toBe("warning")
     expect(warning.message).toBe(
-      "Debt SQL unit public.f of an adopted table changes a protected session setting: remove SET or RESET of role"
+      "Debt SQL unit public.f changes a protected session setting: remove SET or RESET of role"
     )
   })
 

@@ -331,7 +331,7 @@ const commandContextForm = (form: unknown) =>
   COMMAND_CONTEXT_FORM[String(form) as CommandContextWrite] as
     { en: string; uk: string } | undefined
 /**
- * Що прибрати з боргової одиниці прийнятої таблиці (Р2c1-6): на прийомі
+ * Що прибрати з боргової одиниці (Р2c1-6, Р2c1-14): на прийомі
  * реальної бази це перша зустріч споживача з правилом, тож текст називає
  * оператор чи ім'я налаштування, коли воно відоме, а не лише форму.
  */
@@ -368,8 +368,8 @@ const COMMAND_CONTEXT_HINT = {
   uk: "Контекст команди (simetra.*), claims запиту (request.jwt.*) і роль ставить лише платформа. SQL застосунку виконується посеред оператора команди, тож змінене налаштування потрапило б у політики наступних рядків: не змінюйте їх через set_config, SET чи RESET (зокрема SET ROLE і SET SESSION AUTHORIZATION), опцію функції SET (зокрема ALTER FUNCTION), запис у pg_settings чи подання над ним, агрегат над set_config чи літеральний EXECUTE. Це стосується кожної одиниці SQL застосунку: функцій, подань, доменів, політик і агрегатів.",
 }
 const DEBT_PLATFORM_WRITE_HINT = {
-  en: "Verbatim SQL of an adopted table stays debt, but it must not write the platform settings (simetra.*): they carry the command context and the rights maintenance mode, which only the platform sets, and the RESET ALL statement and a write to pg_settings reset them too. Remove the named statement from the debt unit; if the behaviour is needed, convert the unit: express it through metadata (a kind property, an EventSubscription) or as a function in the closed shell.",
-  uk: "Дослівний SQL прийнятої таблиці лишається боргом, але не пише налаштувань платформи (simetra.*): вони несуть контекст команди й режим обслуговування прав, які ставить лише платформа, а оператор RESET ALL і запис у pg_settings скидають і їх. Приберіть названий оператор з боргової одиниці; якщо поведінка потрібна, конвертуйте одиницю: виразіть її метаданими (властивість виду, EventSubscription) або функцією в закритій оболонці.",
+  en: "Verbatim SQL debt (of an adopted table or of a shared sql/ file) may stay, but it must not write the platform settings (simetra.*): they carry the command context and the rights maintenance mode, which only the platform sets, and the RESET ALL statement and a write to pg_settings reset them too. Remove the named statement from the debt unit; if the behaviour is needed, convert the unit: express it through metadata (a kind property, an EventSubscription) or as a function in the closed shell.",
+  uk: "Борг дослівного SQL (прийнятої таблиці чи спільного файлу sql/) може лишатися, але не пише налаштувань платформи (simetra.*): вони несуть контекст команди й режим обслуговування прав, які ставить лише платформа, а оператор RESET ALL і запис у pg_settings скидають і їх. Приберіть названий оператор з боргової одиниці; якщо поведінка потрібна, конвертуйте одиницю: виразіть її метаданими (властивість виду, EventSubscription) або функцією в закритій оболонці.",
 }
 /**
  * Чому закритий код не може досягати функції (`sql.command-context-reach`):
@@ -917,24 +917,25 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     },
     hint: CLOSED_SHELL_HINT,
   },
-  // Борговий SQL прийнятої таблиці (`module: "debt"`, Р2c1-6) судиться лише
-  // платформним префіксом: текст називає, що прибрати, і підказує конверсію.
+  // Одиниця боргу (`unit: "debt"`, Р2c1-6, Р2c1-14) — модуля прийнятої
+  // таблиці чи спільного файлу — судиться лише платформним префіксом: текст
+  // називає, що прибрати, і підказує конверсію.
   "sql.command-context-write": {
     en: (p) =>
-      p.module === "debt"
-        ? `Debt SQL unit ${p.name} of an adopted table changes a platform session setting: remove ${debtRemoval(p, "en")}`
+      p.unit === "debt"
+        ? `Debt SQL unit ${p.name} changes a platform session setting: remove ${debtRemoval(p, "en")}`
         : `SQL unit ${p.name} changes a platform session setting (${commandContextForm(p.form)?.en ?? p.form})`,
     uk: (p) =>
-      p.module === "debt"
-        ? `Одиниця боргового SQL ${p.name} прийнятої таблиці змінює налаштування сесії платформи: приберіть ${debtRemoval(p, "uk")}`
+      p.unit === "debt"
+        ? `Одиниця боргового SQL ${p.name} змінює налаштування сесії платформи: приберіть ${debtRemoval(p, "uk")}`
         : `Одиниця SQL ${p.name} змінює налаштування сесії платформи (${commandContextForm(p.form)?.uk ?? p.form})`,
     hint: {
       en: (p) =>
-        p.module === "debt"
+        p.unit === "debt"
           ? DEBT_PLATFORM_WRITE_HINT.en
           : COMMAND_CONTEXT_HINT.en,
       uk: (p) =>
-        p.module === "debt"
+        p.unit === "debt"
           ? DEBT_PLATFORM_WRITE_HINT.uk
           : COMMAND_CONTEXT_HINT.uk,
     },
@@ -1028,12 +1029,12 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "sql.debt-session-write": {
     en: (p) =>
-      `Debt SQL unit ${p.name} of an adopted table changes a protected session setting: remove ${debtRemoval(p, "en")}`,
+      `Debt SQL unit ${p.name} changes a protected session setting: remove ${debtRemoval(p, "en")}`,
     uk: (p) =>
-      `Одиниця боргового SQL ${p.name} прийнятої таблиці змінює захищене налаштування сесії: приберіть ${debtRemoval(p, "uk")}`,
+      `Одиниця боргового SQL ${p.name} змінює захищене налаштування сесії: приберіть ${debtRemoval(p, "uk")}`,
     hint: {
-      en: "Debt SQL of an adopted table may change the role or the request claims (request.jwt.*) while it stays debt, but in the middle of a command such a change would swap the user the rights policies see: closed code (kind module functions, subscription handlers, scope set functions) must not reach the unit (sql.command-context-reach). Remove the named statement when you convert the unit, before a closed function calls it; a set_config name built at run time counts as such a change, so write the name as a literal.",
-      uk: "Борговий SQL прийнятої таблиці може змінювати роль чи claims запиту (request.jwt.*), поки лишається боргом, але посеред команди така зміна підмінила б користувача, якого бачать політики прав: закритий код (функції модулів видів, обробники підписок, функції множини скоупу) такої одиниці не досягає (sql.command-context-reach). Приберіть названий оператор під час конверсії одиниці, до того як її покличе закрита функція; ім'я set_config, зібране під час виконання, вважається такою зміною, тож пишіть ім'я літералом.",
+      en: "Debt SQL (of an adopted table or of a shared sql/ file, listed in sql-debt.json) may change the role or the request claims (request.jwt.*) while it stays debt, but in the middle of a command such a change would swap the user the rights policies see: closed code (kind module functions, subscription handlers, scope set functions) must not reach the unit (sql.command-context-reach). A function in the closed shell is not debt, and there the same write is an error. Remove the named statement when you convert the unit, before a closed function calls it; a set_config name built at run time counts as such a change, so write the name as a literal.",
+      uk: "Борговий SQL (прийнятої таблиці чи спільного файлу sql/, перелічений у sql-debt.json) може змінювати роль чи claims запиту (request.jwt.*), поки лишається боргом, але посеред команди така зміна підмінила б користувача, якого бачать політики прав: закритий код (функції модулів видів, обробники підписок, функції множини скоупу) такої одиниці не досягає (sql.command-context-reach). Функція в закритій оболонці боргом не є, і там той самий запис — помилка. Приберіть названий оператор під час конверсії одиниці, до того як її покличе закрита функція; ім'я set_config, зібране під час виконання, вважається такою зміною, тож пишіть ім'я літералом.",
     },
   },
   "sql.definer-reads-rls": {

@@ -60,7 +60,7 @@ import { buildMembershipFunctions, membershipsOf } from "./membership-functions"
 import { buildPlatformUnits } from "./platform/units"
 import { checkSqlModules, closedModuleOwners } from "./sql/closed-forms"
 import { creationOrder } from "./sql/dependencies"
-import { checkDebt } from "./sql/debt"
+import { checkDebt, debtPredicate } from "./sql/debt"
 import { checkFunctionSettingsShell } from "./sql/function-settings-shell"
 import { checkKindTableVerbatim, kindTables } from "./sql/kind-table-verbatim"
 import { loadSqlParser, type SqlParser } from "./sql/parse"
@@ -143,6 +143,10 @@ export async function runStages(
           ),
           (ownerFile) => idByFile.get(ownerFile)
         )
+  // Таблиці видів — зі знімка стадії 3. Без неї компіляцію вже зупиняють
+  // помилки вище за течією, тож порожній знімок лише для судження запису
+  // сесії боргу (Р2c1-14): ратчет на ньому не судиться.
+  const kinds = kindTables(stage1.objects, stage3?.physical.tables ?? [])
   // Ратчет боргу судить лише повні одиниці: без стадії 3 ідентичності
   // функцій (типи рядків) неповні, і `sql.debt-grows` на вже зламаній
   // компіляції був би шумом.
@@ -153,7 +157,7 @@ export async function runStages(
           sql.units,
           stage1.objects,
           stage1.project,
-          kindTables(stage1.objects, stage3.physical.tables),
+          kinds,
           stage1.sqlDebt,
           !sql.diagnostics.some((d) => d.code === "sql.parse"),
           plpgsql
@@ -165,9 +169,9 @@ export async function runStages(
     ...sql.diagnostics,
     ...checkSqlModules(
       stage1.objects,
-      stage1.project,
       sql.units,
       sql.rowRules,
+      debtPredicate(stage1.objects, stage1.project, kinds, plpgsql),
       parse,
       plpgsql
     ),
