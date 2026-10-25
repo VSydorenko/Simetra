@@ -138,8 +138,9 @@ interface Analysis {
   problem?: Unjudgeable
   opaque: boolean
   /**
-   * Тіло саме змінює `search_path` (`SET`, `RESET`, `set_config`): далі в
-   * ньому некваліфіковане ім'я розв'язується вже не за шляхом `CREATE`.
+   * Одиниця сама змінює `search_path` (`SET`, `RESET`, `set_config`): далі в
+   * її тілі некваліфіковане ім'я розв'язується вже не за шляхом `CREATE`, а
+   * досягнута — змінює шлях викликача (`traverse`).
    */
   pathWrite?: true
 }
@@ -390,11 +391,38 @@ type Step =
   | { unit: VerbatimUnit; chain: readonly string[] }
   | { table: PhysicalTable; chain: readonly string[] }
 
+interface Walk {
+  reached: Reached[]
+  findings: ReachFinding[]
+  /** Досягнута одиниця чи вираз таблиці пише `search_path`. */
+  pathWritten: boolean
+}
+
+/**
+ * Обхід від голови. Досягнута одиниця, що пише `search_path`, змінює шлях
+ * викликачів: `set_config(…, true)` у функції без власної опції діє до виходу
+ * з найближчої функції з опцією, а `SET` без `LOCAL` чи `set_config(…, false)`
+ * переживає й вихід із неї. Котрі виклики виконаються після запису, статично
+ * не видно, тож тоді обхід повторюється з непорожнім шляхом для всіх одиниць,
+ * голови теж (fail-closed): некваліфіковане ім'я судиться так, ніби Postgres
+ * розв'язав його за шляхом сесії.
+ */
 function traverse(
   head: VerbatimUnit,
   model: ReachModel,
   trusted: ReachTrust
 ): { reached: Reached[]; findings: ReachFinding[] } {
+  const first = walk(head, model, trusted, false)
+  return first.pathWritten ? walk(head, model, trusted, true) : first
+}
+
+function walk(
+  head: VerbatimUnit,
+  model: ReachModel,
+  trusted: ReachTrust,
+  sessionPath: boolean
+): Walk {
+  let pathWritten = false
   const reached: Reached[] = []
   const findings = new Map<string, ReachFinding>()
   const report = (
@@ -487,6 +515,7 @@ function traverse(
     if ("table" in step) {
       const analysis = model.tableReferences(step.table)
       refs = analysis.refs
+      pathWritten ||= analysis.pathWrite
       // Вираз, якого розбір не прочитав, Postgres однаково обчислить посеред
       // запису: його виклики невидимі, тож таблиця — недосудна ланка.
       if (analysis.opaque) {
@@ -495,7 +524,10 @@ function traverse(
     } else {
       const analysis = model.analysis(step.unit)
       refs = analysis.refs
-      emptyPath = model.emptyPath(step.unit)
+      emptyPath = !sessionPath && model.emptyPath(step.unit)
+      // Власний запис голови вже знято з її шляху (`emptyPathOf`), а
+      // викликані нею функції з опцією шляху ставлять його на вході.
+      if (step.unit !== head) pathWritten ||= analysis.pathWrite === true
       // Голова: власну недосудність судить оболонка, а непрочитану частину
       // тіла — ніхто, тож вона знахідка обходу.
       if (step.unit === head && analysis.opaque) {
@@ -524,7 +556,7 @@ function traverse(
       }
     }
   }
-  return { reached, findings: [...findings.values()] }
+  return { reached, findings: [...findings.values()], pathWritten }
 }
 
 /** Ім'я одиниці в ланцюжку: `схема.ім'я`, а політика — її ідентичністю. */
@@ -567,9 +599,12 @@ function analyze(
   parse: SqlParser,
   plpgsql: PlpgsqlParser
 ): Analysis {
-  return BODIES.has(unit.class)
-    ? analyzeBody(unit, parse, plpgsql)
-    : { refs: treeReferences(unit.tree, parse, true), opaque: false }
+  if (BODIES.has(unit.class)) return analyzeBody(unit, parse, plpgsql)
+  return {
+    refs: treeReferences(unit.tree, parse, true),
+    opaque: false,
+    ...(writesSearchPath(unit.tree) ? { pathWrite: true } : {}),
+  }
 }
 
 function analyzeBody(
@@ -711,6 +746,7 @@ function expressionTexts(e: PlpgsqlExpression): string[] | undefined {
 interface TableAnalysis {
   refs: Reference[]
   opaque: boolean
+  pathWrite: boolean
 }
 
 /** Вирази таблиці, які Postgres обчислює, коли в неї пишуть. */
@@ -733,15 +769,19 @@ function tableReferences(
     }
   }
   let opaque = false
+  let pathWrite = false
   const refs = expressions.flatMap((expression) => {
     const parsed = parse(`SELECT (${expression})`)
     if (!parsed.ok) {
       opaque = true
       return []
     }
-    return parsed.statements.flatMap((s) => treeReferences(s.stmt, parse, true))
+    return parsed.statements.flatMap((s) => {
+      pathWrite ||= writesSearchPath(s.stmt)
+      return treeReferences(s.stmt, parse, true)
+    })
   })
-  return { refs, opaque }
+  return { refs, opaque, pathWrite }
 }
 
 function treeReferences(

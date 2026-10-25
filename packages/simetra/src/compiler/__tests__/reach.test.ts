@@ -257,6 +257,64 @@ describe("reachableCalls", () => {
       expected: [found("public.helper", "nonLiteralExecute")],
     },
     {
+      // `RESET ALL` окремого ALTER скидає й шлях досягнутої функції.
+      name: "alter-reset-all-reached",
+      head: handler("PERFORM public.mid();", EMPTY_PATH),
+      shared:
+        "CREATE FUNCTION public.mid() RETURNS int LANGUAGE sql STABLE SET search_path = '' AS $$ SELECT helper() $$;\n" +
+        dynamicFunction("public.helper") +
+        "ALTER FUNCTION public.mid() RESET ALL;",
+      expected: [found("public.helper", "nonLiteralExecute", "public.mid")],
+    },
+    {
+      // Опції CREATE Postgres згортає по черзі: пізніший `RESET ALL` чи
+      // `SET` того самого налаштування (ім'я нечутливе до регістру) скасовує
+      // порожній шлях.
+      name: "create-reset-all",
+      head: handler("PERFORM helper();", `${EMPTY_PATH} RESET ALL`),
+      shared: dynamicFunction("public.helper"),
+      expected: [found("public.helper", "nonLiteralExecute")],
+    },
+    {
+      name: "create-later-set-other-case",
+      head: handler(
+        "PERFORM helper();",
+        `${EMPTY_PATH} SET "SEARCH_PATH" = 'public'`
+      ),
+      shared: dynamicFunction("public.helper"),
+      expected: [found("public.helper", "nonLiteralExecute")],
+    },
+    {
+      name: "body-set-search-path-statement",
+      head: handler("SET search_path = public; PERFORM helper();", EMPTY_PATH),
+      shared: dynamicFunction("public.helper"),
+      expected: [found("public.helper", "nonLiteralExecute")],
+    },
+    {
+      // Досягнута функція без власної опції шляху пише шлях викликача: далі
+      // некваліфіковане ім'я голови розв'язується вже за ним.
+      name: "reached-sets-search-path",
+      head: handler("PERFORM public.setpath(); PERFORM helper();", EMPTY_PATH),
+      shared:
+        plpgsqlFunction(
+          "public.setpath",
+          "PERFORM set_config('search_path', 'public', true);"
+        ) + dynamicFunction("public.helper"),
+      expected: [found("public.helper", "nonLiteralExecute")],
+    },
+    {
+      // Те саме робить політика таблиці, яку голова читає.
+      name: "policy-sets-search-path",
+      head: handler(
+        "PERFORM 1 FROM public.comment_counter; PERFORM helper();",
+        EMPTY_PATH
+      ),
+      shared:
+        "CREATE POLICY p ON public.comment_counter USING (set_config('search_path', 'public', false) IS NOT NULL);\n" +
+        dynamicFunction("public.helper"),
+      expected: [found("public.helper", "nonLiteralExecute")],
+    },
+    {
       name: "call-statement",
       head: handler("CALL public.proc();"),
       shared:
@@ -354,9 +412,21 @@ describe("reachableCalls", () => {
       layer: counterColumn({ default: "public.dyn()" }),
       expected: [],
     },
-  ])("$name", ({ body, layer, expected }) => {
+    {
+      // Вираз таблиці, що пише шлях, змінює розв'язання імен голови.
+      name: "table-default-sets-search-path",
+      body: "INSERT INTO public.comment_counter (comment_id) VALUES (NEW.id); PERFORM dyn();",
+      options: EMPTY_PATH,
+      layer: counterColumn({
+        default: "set_config('search_path', 'public', true)::uuid",
+      }),
+      expected: [found("public.dyn", "nonLiteralExecute")],
+    },
+  ])("$name", ({ body, layer, expected, options = "" }) => {
     expect(
-      reach(handler(body), dynamicFunction("public.dyn", "", "uuid"), [layer])
+      reach(handler(body, options), dynamicFunction("public.dyn", "", "uuid"), [
+        layer,
+      ])
     ).toEqual(expected)
   })
 

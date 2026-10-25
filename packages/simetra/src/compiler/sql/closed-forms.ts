@@ -81,20 +81,49 @@ export function routineLanguage(tree: Node): string | undefined {
   return fn === undefined ? undefined : functionLanguage(fn)
 }
 
-function emptySearchPath(options: readonly DefElem[]): boolean {
-  // Останній `SET search_path` перемагає, як і в Postgres.
-  const set = options
-    .filter(
-      (o) =>
-        o.defname === "set" && o.arg?.VariableSetStmt?.name === "search_path"
-    )
-    .at(-1)?.arg?.VariableSetStmt
+type SetOption = NonNullable<NonNullable<DefElem["arg"]>["VariableSetStmt"]>
+
+/** Опція `SET … = ''` — порожній список схем. */
+function setsEmptyValue(set: SetOption | undefined): boolean {
   const args = set?.args ?? []
   return (
     set?.kind === "VAR_SET_VALUE" &&
     args.length === 1 &&
     args[0]!.A_Const?.sval?.sval === ""
   )
+}
+
+function emptySearchPath(options: readonly DefElem[]): boolean {
+  // Останній `SET search_path` перемагає, як і в Postgres.
+  return setsEmptyValue(
+    options
+      .filter(
+        (o) =>
+          o.defname === "set" && o.arg?.VariableSetStmt?.name === "search_path"
+      )
+      .at(-1)?.arg?.VariableSetStmt
+  )
+}
+
+/**
+ * Порожній `search_path` після опцій самого `CREATE`, згорнутих по черзі, як
+ * це робить Postgres (`update_proconfig_value`): ім'я налаштування нечутливе
+ * до регістру, опція `RESET ALL` прибирає все задане до неї, перемагає
+ * останнє. Без цього `SET search_path = '' RESET ALL` чи пізніший
+ * `SET "SEARCH_PATH" = 'public'` лишали б обходу уявний порожній шлях.
+ * `emptySearchPath` закритої оболонки не змінюється (Р2c1-10 (б)).
+ */
+function foldedEmptySearchPath(options: readonly DefElem[]): boolean {
+  let empty = false
+  for (const option of options) {
+    const set =
+      option.defname === "set" ? option.arg?.VariableSetStmt : undefined
+    if (set?.kind === "VAR_RESET_ALL") empty = false
+    else if (set?.name?.toLowerCase() === "search_path") {
+      empty = setsEmptyValue(set)
+    }
+  }
+  return empty
 }
 
 /**
@@ -155,7 +184,8 @@ export function functionSettingsOf(
 
 /**
  * Ефективний порожній `search_path` (Р2c1-10 (б)): його задає сам `CREATE`
- * (функції чи процедури), і жодна одиниця `ALTER FUNCTION` цієї функції не
+ * (функції чи процедури) після згортання всіх його опцій
+ * (`foldedEmptySearchPath`), і жодна одиниця `ALTER FUNCTION` цієї функції не
  * зачіпає `search_path` (`SET`, `RESET`, `FROM CURRENT`) і не робить `RESET
  * ALL`. Порядок одиниць не моделюється (fail-closed): окремий `ALTER … RESET
  * search_path` інакше змінив би розв'язання імен під час виконання повз
@@ -168,7 +198,7 @@ export function hasEffectiveEmptySearchPath(
 ): boolean {
   const fn = (unit.tree as { CreateFunctionStmt?: FunctionNode })
     .CreateFunctionStmt
-  if (fn === undefined || !emptySearchPath(functionOptions(fn).options)) {
+  if (fn === undefined || !foldedEmptySearchPath(functionOptions(fn).options)) {
     return false
   }
   return functionSettingsOf(unit, units).every((settings) => {
