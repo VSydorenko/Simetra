@@ -14,6 +14,7 @@ import {
 import { metaFiles, project } from "./helpers"
 import { diagnostic, type DiagnosticParams } from "../diagnostics"
 import type { CommandContextWrite } from "../sql/command-context"
+import type { DefinerReadsForm } from "../sql/definer-reads"
 import type { ReachReason } from "../sql/reach"
 import type { SetFunctionReason } from "../sql/function-shape"
 
@@ -293,6 +294,56 @@ describe("messages catalog", () => {
       }).message
     ).toBe(
       "Closed code reaches public.helper, and it runs EXECUTE of a string built at run time: public.h → public.helper"
+    )
+  })
+
+  it("sql.definer-reads-rls gives every form its own text and hint", () => {
+    // Повнота за типом: нова форма без запису тут — помилка `tsc`.
+    const forms = Object.keys({
+      function: 0,
+      view: 0,
+      materializedView: 0,
+    } satisfies Record<DefinerReadsForm, 0>)
+    const reads: DiagnosticParams[] = [
+      { tables: "public.task, public.task_checklist" },
+      { tables: "public.task", reason: "unknown" },
+      { tables: "", reason: "unknown" },
+    ]
+    for (const locale of ["en", "uk"] as const) {
+      const render = (params: DiagnosticParams) =>
+        localize(
+          diagnostic("sql.definer-reads-rls", "a.sql", "", {
+            object: "public.rpc",
+            roles: "PUBLIC, authenticated",
+            line: 3,
+            ...params,
+          }),
+          locale
+        )
+      const rendered = forms.flatMap((form) =>
+        reads.map((p) => render({ form, ...p }))
+      )
+      rendered.forEach(({ message }, i) => {
+        expect(message).toContain("public.rpc")
+        expect(message).toContain("PUBLIC, authenticated")
+        const tables = String(reads[i % reads.length]!.tables)
+        if (tables !== "") expect(message).toContain(tables)
+      })
+      expect(new Set(rendered.map((d) => d.message)).size).toBe(rendered.length)
+      expect(
+        new Set(forms.map((form) => render({ form, tables: "t" }).hint)).size
+      ).toBe(forms.length)
+    }
+    const warning = diagnostic("sql.definer-reads-rls", "a.sql", "", {
+      object: "public.rpc",
+      form: "function",
+      tables: "public.task",
+      roles: "PUBLIC, authenticated, anon",
+      line: 1,
+    })
+    expect(warning.severity).toBe("warning")
+    expect(warning.message).toBe(
+      "Function public.rpc at line 1 runs as its owner (SECURITY DEFINER), PUBLIC, authenticated, anon may have EXECUTE on it, and it reads tables under row-level security past the caller's rights: public.task"
     )
   })
 

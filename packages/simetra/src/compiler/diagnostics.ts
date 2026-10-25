@@ -37,6 +37,7 @@ export const COMPILER_RULES = [
   "sql.debt-grows",
   "sql.debt-stale",
   "sql.debt-session-write",
+  "sql.definer-reads-rls",
   "rewrite.ambiguous-name",
   "rewrite.unqualified-table",
   "rewrite.unsupported",
@@ -399,7 +400,10 @@ export interface Diagnostic {
  * більше, — тож попередження, а не помилка (Р2a1-21). Зміна ролі чи claims у
  * борговому SQL прийнятої таблиці — форма реальних баз (`SET ROLE` у
  * службовій функції): прийом не ламається, а закритий код такої функції не
- * досягає — це судить `sql.command-context-reach` (Р2c1-6).
+ * досягає — це судить `sql.command-context-reach` (Р2c1-6). Власника
+ * `SECURITY DEFINER`-функції чи подання статично не видно, а подання може
+ * само фільтрувати рядки функціями прав, тож читання таблиці під RLS повз
+ * права викликача — попередження (Р2c1-8, Р2c1-13).
  */
 const WARNING_RULES: ReadonlySet<RuleCode> = new Set<RuleCode>([
   "physical.reserved-word",
@@ -414,6 +418,7 @@ const WARNING_RULES: ReadonlySet<RuleCode> = new Set<RuleCode>([
   "rights.adopted-source-unsupported",
   "rights.scope-kind-unread",
   "sql.debt-session-write",
+  "sql.definer-reads-rls",
 ])
 
 /** Діагностика з каталогу повідомлень; серйозність — властивість правила. */

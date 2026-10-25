@@ -328,10 +328,7 @@ class ReachModel {
   emptyPath(unit: VerbatimUnit): boolean {
     let found = this.emptyPaths.get(unit)
     if (found === undefined) {
-      found =
-        BODIES.has(unit.class) &&
-        this.analysis(unit).pathWrite !== true &&
-        hasEffectiveEmptySearchPath(unit, this.units)
+      found = emptyPathOf(unit, this.analysis(unit), this.units)
       this.emptyPaths.set(unit, found)
     }
     return found
@@ -345,6 +342,46 @@ class ReachModel {
     }
     return found
   }
+}
+
+/**
+ * Порожній `search_path` під час виконання тіла: ефективний порожній шлях
+ * функції, якого тіло саме не змінює.
+ */
+function emptyPathOf(
+  unit: VerbatimUnit,
+  analysis: Analysis,
+  units: readonly VerbatimUnit[]
+): boolean {
+  return (
+    BODIES.has(unit.class) &&
+    analysis.pathWrite !== true &&
+    hasEffectiveEmptySearchPath(unit, units)
+  )
+}
+
+/**
+ * Відношення, які одиниця читає чи пише, з того самого розбору, що й обхід
+ * (тіло `sql`, вирази plpgsql, текст літерального `EXECUTE`, визначення
+ * подання): два прочитання одного тіла розійшлися б. Некваліфіковане ім'я,
+ * яке з порожнім `search_path` може назвати лише `pg_catalog` чи `pg_temp`,
+ * не входить; решта некваліфікованих — без схеми (збіг у будь-якій схемі,
+ * fail-closed): шлях, за яким Postgres їх розв'яже, статично не відомий.
+ */
+export function relationReads(
+  unit: VerbatimUnit,
+  units: readonly VerbatimUnit[],
+  parse: SqlParser,
+  plpgsql: PlpgsqlParser
+): ReferencedName[] {
+  const analysis = analyze(unit, parse, plpgsql)
+  const empty = emptyPathOf(unit, analysis, units)
+  return analysis.refs.flatMap((ref): ReferencedName[] => {
+    if (ref.space !== "rel") return []
+    if (ref.schema === undefined)
+      return empty && !ref.bound ? [] : [{ name: ref.name }]
+    return [{ schema: ref.schema, name: ref.name }]
+  })
 }
 
 /** Вузол черги: одиниця моделі чи таблиця знімка, у яку пишуть. */

@@ -15,6 +15,7 @@ import { diagnostic, toPointer, type Diagnostic } from "../diagnostics"
 import { movementWrapperName } from "../movement-functions"
 import { CURRENT_USER_FUNCTION } from "../platform/names"
 import { closedShellProblem } from "../sql/closed-forms"
+import { checkDefinerReads } from "../sql/definer-reads"
 import { checkDimensionFunctions } from "../rights/dimension-functions"
 import {
   nullaryFunction,
@@ -34,7 +35,7 @@ import { registerTargetError, type ResolvedReference } from "./identity"
  * Стадія 5 (спека П2 §8.2): зв'язки між частинами моделі, які не видно в
  * одному файлі: повнота й вигляд джерел рухів, функцій множини скоупів і
  * функцій значень вимірів доступу в SQL-одиницях, досяжність недосудного SQL
- * із закритого коду.
+ * із закритого коду, читання таблиць під RLS від імені власника.
  */
 export function checkLinks(
   objects: readonly ParsedObject[],
@@ -47,6 +48,13 @@ export function checkLinks(
   membershipFunctions: ReadonlySet<string>,
   rightsTables: ReadonlySet<string>
 ): Diagnostic[] {
+  const trusted = reachTrust(
+    objects,
+    references,
+    project,
+    physical,
+    membershipFunctions
+  )
   return [
     ...checkMovementSources(objects, references),
     ...checkMovementQueries(objects, parse),
@@ -65,7 +73,16 @@ export function checkLinks(
       project,
       units,
       physical.tables,
-      reachTrust(objects, references, project, physical, membershipFunctions),
+      trusted,
+      parse,
+      plpgsql
+    ),
+    ...checkDefinerReads(
+      objects,
+      project,
+      physical,
+      units,
+      trusted,
       parse,
       plpgsql
     ),

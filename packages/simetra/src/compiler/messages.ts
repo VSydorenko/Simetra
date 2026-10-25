@@ -5,6 +5,7 @@ import type {
   RuleCode,
 } from "./diagnostics"
 import type { CommandContextWrite } from "./sql/command-context"
+import type { DefinerReadsForm } from "./sql/definer-reads"
 import type { ReachReason } from "./sql/reach"
 
 export type Locale = "en" | "uk"
@@ -400,6 +401,85 @@ const REACH_REASON: Readonly<Record<ReachReason, { en: string; uk: string }>> =
 const reachReason = (reason: unknown) =>
   REACH_REASON[String(reason) as ReachReason] as
     { en: string; uk: string } | undefined
+/**
+ * Форми `sql.definer-reads-rls` (Р2c1-8, Р2c1-13): чим одиниця читає від
+ * імені власника, хто може її викликати чи читати і як це виправити.
+ * Тип за формою робить перелік вичерпним.
+ */
+const DEFINER_READS: Readonly<
+  Record<
+    DefinerReadsForm,
+    {
+      subject: { en: Text; uk: Text }
+      /** Займенник підмета в українському тексті: рід одиниці. */
+      pronoun: string
+      hint: { en: string; uk: string }
+    }
+  >
+> = {
+  function: {
+    subject: {
+      en: (p) =>
+        `Function ${p.object} at line ${p.line} runs as its owner (SECURITY DEFINER), ${p.roles} may have EXECUTE on it`,
+      uk: (p) =>
+        `Функція ${p.object} у рядку ${p.line} виконується від імені власника (SECURITY DEFINER), EXECUTE на неї можуть мати ${p.roles}`,
+    },
+    pronoun: "вона",
+    hint: {
+      en: "A function that runs as its owner reads rows the caller's rights do not open (an RPC past RLS): check the caller's membership or rights inside the function, make it SECURITY INVOKER so the policies apply, or revoke EXECUTE from PUBLIC and from each API role when no API caller needs it. The compiler does not see the owner of the function, so a function whose owner is subject to row-level security is flagged too.",
+      uk: "Функція, що виконується від імені власника, читає рядки, яких права викликача не відкривають (RPC читання повз RLS): перевірте членство чи права викликача в самій функції, зробіть її SECURITY INVOKER, щоб діяли політики, або відкличте EXECUTE від PUBLIC і від кожної ролі API, якщо жодному викликачеві через API вона не потрібна. Власника функції компілятор не бачить, тож позначено й функцію, власник якої підлягає RLS.",
+    },
+  },
+  view: {
+    subject: {
+      en: (p) =>
+        `View ${p.object} at line ${p.line} runs as its owner (no security_invoker), ${p.roles} may have SELECT on it`,
+      uk: (p) =>
+        `Подання ${p.object} у рядку ${p.line} виконується від імені власника (без security_invoker), SELECT на нього можуть мати ${p.roles}`,
+    },
+    pronoun: "воно",
+    hint: {
+      en: "A view without security_invoker reads its tables as its owner, so the caller's policies do not apply: add WITH (security_invoker = true) to CREATE VIEW, filter the rows by the rights functions inside the view, or revoke SELECT from PUBLIC and from each API role. Only CREATE VIEW sets the option: a separate ALTER VIEW is not accepted in .sql files.",
+      uk: "Подання без security_invoker читає свої таблиці від імені власника, тож політики викликача не діють: додайте WITH (security_invoker = true) до CREATE VIEW, фільтруйте рядки функціями прав у самому поданні або відкличте SELECT від PUBLIC і від кожної ролі API. Опцію задає лише CREATE VIEW: окремий ALTER VIEW у файлах .sql не приймається.",
+    },
+  },
+  materializedView: {
+    subject: {
+      en: (p) =>
+        `Materialized view ${p.object} at line ${p.line} stores the rows its owner read, ${p.roles} may have SELECT on it`,
+      uk: (p) =>
+        `Матеріалізоване подання ${p.object} у рядку ${p.line} зберігає рядки, прочитані власником, SELECT на нього можуть мати ${p.roles}`,
+    },
+    pronoun: "воно",
+    hint: {
+      en: "A materialized view keeps the rows its owner read at REFRESH, and row-level security does not apply when it is read: revoke SELECT from PUBLIC and from each API role, or replace it with a view WITH (security_invoker = true).",
+      uk: "Матеріалізоване подання зберігає рядки, які власник прочитав під час REFRESH, і RLS під час читання з нього не діє: відкличте SELECT від PUBLIC і від кожної ролі API або замініть його поданням WITH (security_invoker = true).",
+    },
+  },
+}
+const definerReads = (form: unknown) =>
+  DEFINER_READS[String(form) as DefinerReadsForm] ?? DEFINER_READS.function
+
+/** Що читає одиниця `sql.definer-reads-rls`: таблиці, недосудний SQL чи обидва. */
+function definerReadsWhat(p: DiagnosticParams, locale: Locale): string {
+  const it = definerReads(p.form).pronoun
+  if (p.tables === "") {
+    return {
+      en: "and it reaches SQL the compiler cannot check, which may read tables under row-level security",
+      uk: `і ${it} досягає SQL, якого компілятор не може перевірити й що може читати таблиці під RLS`,
+    }[locale]
+  }
+  const tables = {
+    en: `and it reads tables under row-level security past the caller's rights: ${p.tables}`,
+    uk: `і ${it} читає таблиці під RLS повз права викликача: ${p.tables}`,
+  }[locale]
+  if (p.reason !== "unknown") return tables
+  return {
+    en: `${tables}; it also reaches SQL the compiler cannot check`,
+    uk: `${tables}; також ${it} досягає SQL, якого компілятор не може перевірити`,
+  }[locale]
+}
+
 /** Причини виходу функції множини скоупу за закриту форму. */
 const SET_FUNCTION_REASON: Readonly<
   Record<string, { en: string; uk: string }>
@@ -954,6 +1034,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     hint: {
       en: "Debt SQL of an adopted table may change the role or the request claims (request.jwt.*) while it stays debt, but in the middle of a command such a change would swap the user the rights policies see: closed code (kind module functions, subscription handlers, scope set functions) must not reach the unit (sql.command-context-reach). Remove the named statement when you convert the unit, before a closed function calls it; a set_config name built at run time counts as such a change, so write the name as a literal.",
       uk: "Борговий SQL прийнятої таблиці може змінювати роль чи claims запиту (request.jwt.*), поки лишається боргом, але посеред команди така зміна підмінила б користувача, якого бачать політики прав: закритий код (функції модулів видів, обробники підписок, функції множини скоупу) такої одиниці не досягає (sql.command-context-reach). Приберіть названий оператор під час конверсії одиниці, до того як її покличе закрита функція; ім'я set_config, зібране під час виконання, вважається такою зміною, тож пишіть ім'я літералом.",
+    },
+  },
+  "sql.definer-reads-rls": {
+    en: (p) =>
+      `${definerReads(p.form).subject.en(p)}, ${definerReadsWhat(p, "en")}`,
+    uk: (p) =>
+      `${definerReads(p.form).subject.uk(p)}, ${definerReadsWhat(p, "uk")}`,
+    hint: {
+      en: (p) => definerReads(p.form).hint.en,
+      uk: (p) => definerReads(p.form).hint.uk,
     },
   },
   "sql.debt-stale": {
