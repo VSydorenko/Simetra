@@ -27,6 +27,12 @@ export interface PlpgsqlFunction {
    * тож без цього списку перевірка не побачила б, що `new` означає інший запис.
    */
   readonly aliases: readonly string[]
+  /**
+   * Рядки ініціалізаторів `record`, яким сканер не знайшов пари серед
+   * змінних; порожній — усе прочитано. Ініціалізатор без пари не губиться
+   * мовчки: споживач сам вирішує, що робити з непрочитаним.
+   */
+  readonly unreadLines: readonly number[]
 }
 
 export interface PlpgsqlVariable {
@@ -284,11 +290,15 @@ function recordInitializers(source: {
   return found
 }
 
-/** Ім'я, як його бачить Postgres: квотоване — дослівно, інше — в нижньому регістрі. */
+/**
+ * Ім'я, як його бачить Postgres: квотоване — дослівно, інше — з нижнім
+ * регістром лише ASCII `A`–`Z`, як `downcase_identifier`. Unicode-зниження
+ * дало б ім'я, якого немає серед `refname` (`Ж` лишається `Ж`).
+ */
 function identName(text: string): string {
   return text.startsWith('"')
     ? text.slice(1, -1).replaceAll('""', '"')
-    : text.toLowerCase()
+    : text.replace(/[A-Z]/g, (c) => c.toLowerCase())
 }
 
 /**
@@ -375,14 +385,14 @@ function readFunction(
   if (root !== undefined) {
     walkStatement(root.kind, root.body, 0, datums, statements, dynamicLines)
   }
-  for (const statement of declarationStatements(datums, initializers)) {
-    statements.push(statement)
-  }
+  const declarations = declarationStatements(datums, initializers)
+  statements.push(...declarations.statements)
 
   return {
     variables: datums.flatMap((datum) => variableOf(datum, datums)),
     statements,
     dynamicSqlLines: [...dynamicLines].sort((a, b) => a - b),
+    unreadLines: declarations.unreadLines,
   }
 }
 
@@ -631,11 +641,12 @@ function roleOf(
  * наприкінці списку, щоб споживачі виразів не пропустили їх. Ініціалізатор
  * запису приходить зі сканера (`recordInitializers`): оголошення зіставляється
  * зі змінною за ім'ям і рядком, однойменні на одному рядку — за порядком.
+ * Ініціалізатор без пари — рядок у `unreadLines`: він міг нести виклик.
  */
 function declarationStatements(
   datums: Datum[],
   initializers: readonly RecordInitializer[]
-): StatementDraft[] {
+): { statements: StatementDraft[]; unreadLines: number[] } {
   const out: StatementDraft[] = []
   const unmatched = [...initializers]
   for (const datum of datums) {
@@ -686,5 +697,10 @@ function declarationStatements(
       ...(name === undefined ? {} : { target: { variable: name } }),
     })
   }
-  return out
+  return {
+    statements: out,
+    unreadLines: [...new Set(unmatched.map((i) => i.lineno))].sort(
+      (a, b) => a - b
+    ),
+  }
 }

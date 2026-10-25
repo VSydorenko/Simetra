@@ -6,7 +6,7 @@ import {
   type CompileResult,
   type PromoteInput,
 } from "simetra/compiler"
-import { SCOPE_FUNCTIONS_FILE, metaFiles, uuid } from "../helpers"
+import { SCOPE_FUNCTIONS_FILE, acceptDebt, metaFiles, uuid } from "../helpers"
 
 /**
  * Синтетичний проєкт прав для тестів плану прав: вид скоупу `org`,
@@ -656,6 +656,19 @@ export function policyDomain(...layers: Layer[]): Map<string, string> {
     "CREATE FUNCTION public.count_comment() RETURNS trigger LANGUAGE plpgsql VOLATILE AS $$ BEGIN INSERT INTO public.comment_counter (comment_id) VALUES (NEW.id); RETURN NEW; END $$;"
   )
   return files
+}
+
+/**
+ * Компіляція домену політик з SQL-файлами `sql` і прийнятим боргом: предмет
+ * тесту — перевірка SQL, а не ратчет.
+ */
+export async function compiledPolicyDomain(
+  sql: Record<string, string>,
+  layers: Layer[] = []
+): Promise<CompileResult> {
+  const result = policyDomain(...layers)
+  for (const [path, text] of Object.entries(sql)) result.set(path, text)
+  return compile(await acceptDebt(result))
 }
 
 function policyLayer(): Layer {

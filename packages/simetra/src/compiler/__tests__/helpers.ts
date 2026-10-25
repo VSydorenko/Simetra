@@ -52,6 +52,16 @@ export function expectClean(
   ).toEqual([])
 }
 
+/** Діагностики з кодами `codes` без тексту: тест звіряє контракт, не слова. */
+export function diagnosticBrief(
+  diagnostics: readonly Diagnostic[],
+  codes: readonly string[]
+) {
+  return diagnostics
+    .filter((d) => codes.includes(d.code))
+    .map((d) => ({ code: d.code, file: d.file, params: d.params }))
+}
+
 /** Детермінований UUID v4 для фікстур: номер видно в самому id. */
 export function uuid(n: number): string {
   return `00000000-0000-4000-8000-${n.toString().padStart(12, "0")}`

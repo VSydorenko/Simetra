@@ -258,6 +258,35 @@ describe("loadPlpgsqlParser", () => {
     ])
   })
 
+  // `downcase_identifier` Postgres знижує лише ASCII: неквотоване `Ж`
+  // лишається `Ж`, тож Unicode-зниження загубило б ініціалізатор.
+  it.each([
+    { name: "an unquoted non-ASCII", decl: "Ж", variable: "Ж" },
+    { name: "a quoted non-ASCII", decl: '"Ж"', variable: "Ж" },
+    { name: "an unquoted mixed-case", decl: "Rж", variable: "rж" },
+  ])("reads the record initializer of $name name", ({ decl, variable }) => {
+    const f = parsed(
+      fn(
+        `DECLARE ${decl} record := (SELECT public.f());\nBEGIN\n  RETURN NEW;\nEND`
+      )
+    )
+    expect(
+      f.statements
+        .filter((s) => s.type === "declare")
+        .map((s) => [s.target, s.expressions.map((e) => e.query)])
+    ).toEqual([[{ variable }, ["(SELECT public.f())"]]])
+    expect(f.unreadLines).toEqual([])
+  })
+
+  it("reports an initializer the scanner could not match as unread", () => {
+    // `r.record = 1` у значенні змінної `a` — для сканера «оголошення» `.`
+    // типу `record`, якому немає пари серед змінних: рядок не прочитано.
+    const f = parsed(
+      fn(`DECLARE r record; a bool := r.record = 1;\nBEGIN\n  RETURN NEW;\nEND`)
+    )
+    expect(f.unreadLines).toEqual([2])
+  })
+
   it("does not list unnamed INTO rows as variables", () => {
     const f = parsed(
       fn(

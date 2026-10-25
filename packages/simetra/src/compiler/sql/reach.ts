@@ -700,6 +700,8 @@ function analyzeBody(
   if (language !== "plpgsql") return result("language")
   const body = plpgsql(unit.sql)
   if (!body.ok || body.fn === undefined) return result("unknown")
+  // Ініціалізатор, якого порт не прочитав, міг нести виклик.
+  if (body.fn.unreadLines.length > 0) opaque = true
   let problem: Unjudgeable | undefined
   for (const statement of body.fn.statements) {
     for (const e of statement.expressions) {
