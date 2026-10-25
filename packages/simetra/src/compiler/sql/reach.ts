@@ -196,10 +196,12 @@ export function reachableUnits(
  * і вирази plpgsql, текст літерального `EXECUTE`, значення аргументів за
  * замовчуванням, `CALL`, запис `x.f`), за поданнями моделі, за дослівними
  * політиками таблиць, які одиниця читає чи пише (Postgres обчислює їх посеред
- * команди), і за виразами таблиць знімка, у які одиниця пише (`DEFAULT`,
- * `CHECK`, генеровані колонки, ключі й предикати індексів; вираз, що не
- * розбирається, робить таблицю недосудною — `unknown`). Кожна недосудна
- * ціль і кожна досяжна одиниця, що пише налаштування сесії, — раз; голова
+ * команди), і за виразами таблиць знімка, у які одиниця пише сама чи через
+ * подання моделі (`DEFAULT`, `CHECK`, генеровані колонки, ключі й предикати
+ * індексів; вираз, що не розбирається, робить таблицю недосудною —
+ * `unknown`, а вираз із записом налаштувань сесії — `sessionWrite`). Кожна
+ * недосудна ціль і кожна досяжна одиниця чи таблиця, що пише налаштування
+ * сесії, — раз; голова
  * судиться лише за досяжним, не за власним тілом (його судить оболонка), крім
  * частини тіла, якої компілятор не прочитав.
  *
@@ -339,7 +341,7 @@ class ReachModel {
   tableReferences(table: PhysicalTable): TableAnalysis {
     let found = this.tableRefs.get(table)
     if (found === undefined) {
-      found = tableReferences(table, this.parse)
+      found = tableReferences(table, this.parse, this.plpgsql)
       this.tableRefs.set(table, found)
     }
     return found
@@ -508,6 +510,44 @@ function walk(
     }
   }
 
+  /**
+   * Ціль `INSERT`/`UPDATE`/`MERGE`: таблиця знімка — її вирази в черзі.
+   * Запис у подання моделі Postgres переписує на запис у базове відношення
+   * (автооновлюване подання) і обчислює вирази його таблиці; котре з
+   * відношень подання базове, без каталогу не видно, тож ціллю стає кожне
+   * (fail-closed), рекурсивно. Імена подання зв'язано під час створення.
+   */
+  const write = (
+    schema: string | undefined,
+    name: string,
+    chain: readonly string[],
+    through: Set<VerbatimUnit>
+  ) => {
+    for (const table of model.tables) {
+      if (
+        table.name === name &&
+        (schema === undefined || table.schema === schema)
+      ) {
+        enqueueTable(table, chain)
+      }
+    }
+    for (const view of model.views) {
+      if (
+        view.name !== name ||
+        (schema !== undefined && view.schema !== schema) ||
+        through.has(view)
+      ) {
+        continue
+      }
+      through.add(view)
+      for (const ref of model.analysis(view).refs) {
+        if (ref.space === "rel") {
+          write(ref.schema, ref.name, [...chain, labelOf(view)], through)
+        }
+      }
+    }
+  }
+
   for (let step = queue.shift(); step !== undefined; step = queue.shift()) {
     const { chain } = step
     let refs: readonly Reference[]
@@ -518,9 +558,9 @@ function walk(
       pathWritten ||= analysis.pathWrite
       // Вираз, якого розбір не прочитав, Postgres однаково обчислить посеред
       // запису: його виклики невидимі, тож таблиця — недосудна ланка.
-      if (analysis.opaque) {
-        report(`${step.table.schema}.${step.table.name}`, chain, "unknown")
-      }
+      const label = `${step.table.schema}.${step.table.name}`
+      if (analysis.opaque) report(label, chain, "unknown")
+      if (analysis.sessionWrite) report(label, chain, "sessionWrite")
     } else {
       const analysis = model.analysis(step.unit)
       refs = analysis.refs
@@ -545,14 +585,7 @@ function walk(
             enqueue(target, chain)
         }
       } else if (!(ref.schema === undefined && empty)) {
-        for (const table of model.tables) {
-          if (
-            table.name === ref.name &&
-            (ref.schema === undefined || table.schema === ref.schema)
-          ) {
-            enqueueTable(table, chain)
-          }
-        }
+        write(ref.schema, ref.name, chain, new Set())
       }
     }
   }
@@ -747,12 +780,15 @@ interface TableAnalysis {
   refs: Reference[]
   opaque: boolean
   pathWrite: boolean
+  /** Вираз пише захищене налаштування сесії (`commandContextWrite`). */
+  sessionWrite: boolean
 }
 
 /** Вирази таблиці, які Postgres обчислює, коли в неї пишуть. */
 function tableReferences(
   table: PhysicalTable,
-  parse: SqlParser
+  parse: SqlParser,
+  plpgsql: PlpgsqlParser
 ): TableAnalysis {
   const expressions: string[] = []
   for (const column of table.columns) {
@@ -770,6 +806,7 @@ function tableReferences(
   }
   let opaque = false
   let pathWrite = false
+  let sessionWrite = false
   const refs = expressions.flatMap((expression) => {
     const parsed = parse(`SELECT (${expression})`)
     if (!parsed.ok) {
@@ -778,10 +815,14 @@ function tableReferences(
     }
     return parsed.statements.flatMap((s) => {
       pathWrite ||= writesSearchPath(s.stmt)
+      // Те саме правило, що й для одиниці (`writesSession`): вираз таблиці
+      // виконується посеред команди, як і досягнута функція.
+      sessionWrite ||=
+        commandContextWrite(s.stmt as Node, "", parse, plpgsql).length > 0
       return treeReferences(s.stmt, parse, true)
     })
   })
-  return { refs, opaque, pathWrite }
+  return { refs, opaque, pathWrite, sessionWrite }
 }
 
 function treeReferences(

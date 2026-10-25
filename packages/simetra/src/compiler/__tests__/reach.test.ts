@@ -196,6 +196,14 @@ describe("reachableCalls", () => {
       expected: [found("public.dyn", "nonLiteralExecute", "public.v")],
     },
     {
+      name: "view-unqualified",
+      head: handler("PERFORM 1 FROM v;"),
+      shared:
+        "CREATE VIEW public.v AS SELECT public.dyn() AS x;\n" +
+        dynamicFunction("public.dyn"),
+      expected: [found("public.dyn", "nonLiteralExecute", "public.v")],
+    },
+    {
       name: "unsafe-provider",
       head: handler("PERFORM extensions.dblink_exec('c', 'select 1');"),
       shared: "",
@@ -212,6 +220,38 @@ describe("reachableCalls", () => {
       head: handler(
         "INSERT INTO public.comment_counter (comment_id) VALUES (NEW.id);"
       ),
+      shared:
+        "CREATE POLICY p ON public.comment_counter USING (public.f(comment_id));\n" +
+        dynamicFunction("public.f", "id uuid", "boolean"),
+      expected: [
+        found(
+          "public.f",
+          "nonLiteralExecute",
+          "policy:public.comment_counter.p"
+        ),
+      ],
+    },
+    {
+      // Некваліфіковану ціль політики Postgres розв'язав під час створення:
+      // схема статично не відома, тож політика — на кожній однойменній.
+      name: "policy-unqualified-target",
+      head: handler(
+        "INSERT INTO public.comment_counter (comment_id) VALUES (NEW.id);"
+      ),
+      shared:
+        "CREATE POLICY p ON comment_counter USING (public.f(comment_id));\n" +
+        dynamicFunction("public.f", "id uuid", "boolean"),
+      expected: [
+        found(
+          "public.f",
+          "nonLiteralExecute",
+          "policy:public.comment_counter.p"
+        ),
+      ],
+    },
+    {
+      name: "read-unqualified-policy",
+      head: handler("PERFORM 1 FROM comment_counter;"),
       shared:
         "CREATE POLICY p ON public.comment_counter USING (public.f(comment_id));\n" +
         dynamicFunction("public.f", "id uuid", "boolean"),
@@ -369,7 +409,18 @@ describe("reachableCalls", () => {
   })
 
   // Вирази таблиці Postgres обчислює посеред запису: значення за
-  // замовчуванням і перевірка — ланки обходу; читання їх не обчислює.
+  // замовчуванням, перевірка, генерована колонка, ключ і предикат індексу —
+  // ланки обходу; читання їх не обчислює.
+  const counterIndex = (index: Record<string, unknown>): Layer => ({
+    [COMMENT_COUNTER_FILE]: { indexes: [{ name: "counter_idx", ...index }] },
+  })
+  const throughTable = found(
+    "public.dyn",
+    "nonLiteralExecute",
+    "public.comment_counter"
+  )
+  const insert =
+    "INSERT INTO public.comment_counter (comment_id) VALUES (NEW.id);"
   it.each([
     {
       name: "table-default",
@@ -407,6 +458,73 @@ describe("reachableCalls", () => {
       ],
     },
     {
+      name: "table-generated",
+      body: insert,
+      layer: counterColumn({ generated: { expression: "public.dyn()" } }),
+      expected: [throughTable],
+    },
+    {
+      name: "table-index-where",
+      body: insert,
+      layer: counterIndex({
+        keys: [{ column: "commentId" }],
+        where: "public.dyn() IS NULL",
+      }),
+      expected: [throughTable],
+    },
+    {
+      name: "table-index-expression-key",
+      body: insert,
+      layer: counterIndex({ keys: [{ expression: "public.dyn()" }] }),
+      expected: [throughTable],
+    },
+    {
+      name: "merge-write",
+      body: "MERGE INTO public.comment_counter c USING (SELECT NEW.id AS id) s ON c.comment_id = s.id WHEN NOT MATCHED THEN INSERT (comment_id) VALUES (s.id);",
+      layer: counterColumn({ default: "public.dyn()" }),
+      expected: [throughTable],
+    },
+    {
+      // Без власного search_path ім'я таблиці розв'язується за шляхом сесії.
+      name: "write-unqualified-table",
+      body: "INSERT INTO comment_counter (comment_id) VALUES (NEW.id);",
+      layer: counterColumn({ default: "public.dyn()" }),
+      expected: [throughTable],
+    },
+    {
+      // Запис у просте подання Postgres переписує на запис у його базову
+      // таблицю, тож обчислює й її вирази.
+      name: "write-through-view",
+      body: "INSERT INTO public.cv (comment_id) VALUES (NEW.id);",
+      extra: "CREATE VIEW public.cv AS SELECT * FROM public.comment_counter;\n",
+      layer: counterColumn({ default: "public.dyn()" }),
+      expected: [
+        found(
+          "public.dyn",
+          "nonLiteralExecute",
+          "public.cv",
+          "public.comment_counter"
+        ),
+      ],
+    },
+    {
+      // Запис налаштувань сесії у виразі таблиці — та сама підміна claims,
+      // що й у досягнутій функції.
+      name: "table-default-session-write",
+      body: insert,
+      layer: counterColumn({
+        default:
+          "CASE WHEN set_config('request.jwt.claims', '{}', true) IS NULL THEN NULL ELSE gen_random_uuid() END",
+      }),
+      expected: [
+        {
+          function: "public.comment_counter",
+          chain: [HEAD, "public.comment_counter"],
+          reason: "sessionWrite",
+        },
+      ],
+    },
+    {
       name: "table-read-only",
       body: "PERFORM 1 FROM public.comment_counter;",
       layer: counterColumn({ default: "public.dyn()" }),
@@ -422,11 +540,13 @@ describe("reachableCalls", () => {
       }),
       expected: [found("public.dyn", "nonLiteralExecute")],
     },
-  ])("$name", ({ body, layer, expected, options = "" }) => {
+  ])("$name", ({ body, layer, expected, options = "", extra = "" }) => {
     expect(
-      reach(handler(body, options), dynamicFunction("public.dyn", "", "uuid"), [
-        layer,
-      ])
+      reach(
+        handler(body, options),
+        extra + dynamicFunction("public.dyn", "", "uuid"),
+        [layer]
+      )
     ).toEqual(expected)
   })
 
@@ -505,6 +625,14 @@ describe("reachableCalls", () => {
         "public.bad",
         "EXECUTE 'DO $d$ BEGIN PERFORM 1; END $d$';"
       ),
+      expected: [found("public.bad", "unknown")],
+    },
+    {
+      // `EXECUTE` підготовленого оператора сесії виконує текст, якого тіло не
+      // несе.
+      name: "prepared statement in a reached function",
+      head: handler("PERFORM public.bad();"),
+      shared: plpgsqlFunction("public.bad", "EXECUTE 'EXECUTE p';"),
       expected: [found("public.bad", "unknown")],
     },
     {
