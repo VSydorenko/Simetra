@@ -218,14 +218,41 @@ describe("readRightsSourceFacts", () => {
       missingColumns: ["public.role_grant.role_key"],
       read: ["globalGrants"],
     },
+    {
+      // Р2d1-11: з'єднання `sr` з недоступною таблицею ролей впало б `42501`
+      case: "an unowned role table",
+      poly: true,
+      present: {
+        "public.membership": true,
+        "public.role_grant": true,
+        "public.global_grant": true,
+        "public.poly_grants": true,
+        "public.source_roles": false,
+      },
+      missingColumns: [],
+      read: ["grants", "globalGrants"],
+    },
+    {
+      case: "a missing role table",
+      poly: true,
+      present: {
+        "public.membership": true,
+        "public.role_grant": true,
+        "public.global_grant": true,
+        "public.poly_grants": true,
+      },
+      missingColumns: [],
+      read: ["grants", "globalGrants"],
+    },
   ])(
     "reads data with row security off and skips $case",
-    async ({ present, missingColumns, read }) => {
+    async ({ present, missingColumns, read, ...o }) => {
+      const model = "poly" in o && o.poly ? poly : adopted
       // Р2d1-10, Р2d1-11: дані — лише під `row_security = off` (на RLS без
       // обходу — гучна помилка, не тихий нуль); таблиці, якої немає, чи якій
       // відмовлено, і колонки, якої ще немає, не читаються.
       const target = fakeTarget({ present, missingColumns })
-      const input = rightsSourceInput(adopted.contracts)
+      const input = rightsSourceInput(model.contracts)
       const facts = await readRightsSourceFacts(target.tx, input)
 
       const setConfig = target.log.findIndex(
@@ -241,7 +268,7 @@ describe("readRightsSourceFacts", () => {
       expect(reads).toHaveLength(read.length)
       for (const q of reads) expect(q.i).toBeGreaterThan(setConfig)
       expect(reads.map((q) => q.sql)).toEqual(
-        read.map((name) => unknownKeysQuery(sourceNamed(adopted, name)).sql)
+        read.map((name) => unknownKeysQuery(sourceNamed(model, name)).sql)
       )
       expect(facts.unknownKeys.map((u) => u.source)).toEqual(read)
       expect(facts.owners).toEqual(
@@ -249,6 +276,37 @@ describe("readRightsSourceFacts", () => {
       )
     }
   )
+
+  it("refuses a table in a schema the apply role cannot use instead of missing it", async () => {
+    // Р2d1-10: `to_regclass` на схемі без `USAGE` кидає сирий `42501`, тож
+    // таблицю шукають за іменем у каталозі, а `USAGE` на схемі — частина
+    // доступу: така таблиця — відмова, а не відсутня (фейк відповідає за
+    // ціль, тож форма запиту перевіряється тут же).
+    const target = fakeTarget({
+      present: {
+        "public.membership": true,
+        "public.role_grant": true,
+        "public.global_grant": false,
+      },
+    })
+    const facts = await readRightsSourceFacts(
+      target.tx,
+      rightsSourceInput(adopted.contracts)
+    )
+    const catalog = target.log.filter(
+      (q) =>
+        q.sql.includes("AS source_owned") || q.sql.includes("AS source_column")
+    )
+    expect(catalog).toHaveLength(2)
+    for (const q of catalog) expect(q.sql).not.toContain("to_regclass")
+    expect(catalog[0]!.sql).toContain(
+      "pg_catalog.has_schema_privilege(CURRENT_USER, n.oid, 'USAGE')"
+    )
+    expect(rightsSourceDiagnostics(facts).refusal).toMatchObject({
+      code: "plan.rights-source-access",
+      params: { tables: "public.global_grant" },
+    })
+  })
 
   it("passes the known keys of the source as a parameter", async () => {
     const target = fakeTarget({

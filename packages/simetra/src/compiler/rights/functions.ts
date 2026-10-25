@@ -606,6 +606,24 @@ export function sourceConditions(
 }
 
 /**
+ * З'єднання рядка джерела `src` з таблицею ролей `sr` (Р2d1-17): посилання й
+ * умова ролі. Одне місце для гілки джерела `rights_mine` і запиту ключів плану
+ * (Р2d1-18): розійдися вони — план називав би ключі рядків, яких функції прав
+ * не читають, чи мовчав би про ті, що читають. Без таблиці ролей — порожньо.
+ */
+export function roleTableJoin(source: AssignmentSourceContract): string[] {
+  const { roleTable } = source
+  if (roleTable === undefined) return []
+  return [
+    `JOIN ${qualified(roleTable.table)} sr`,
+    `  ON ${[
+      `sr.${quoteIdent(roleTable.id)} = src.${quoteIdent(source.role)}`,
+      ...sourceConditions("sr", roleTable.where),
+    ].join("\n AND ")}`,
+  ]
+}
+
+/**
  * Видимі «Користувачі» (спека системної схеми §12, Р2a2-18): я ∪ користувачі
  * учасників моїх скоупів. Мої скоупи обчислює лише `rights_my_scopes`
  * (Р2a1-25); таблицю членства виду K функція читає лише за рядками
@@ -909,16 +927,7 @@ function sourceAssignments(
     roleTable === undefined
       ? src(source.role)
       : `sr.${quoteIdent(roleTable.key)}`
-  const roleJoin =
-    roleTable === undefined
-      ? []
-      : [
-          `JOIN ${qualified(roleTable.table)} sr`,
-          `  ON ${[
-            `sr.${quoteIdent(roleTable.id)} = ${src(source.role)}`,
-            ...sourceConditions("sr", roleTable.where),
-          ].join("\n AND ")}`,
-        ]
+  const roleJoin = roleTableJoin(source)
   // Скоуп рядка мусить дорівнювати скоупу учасника (R1): інакше адмін тенанта
   // A вписав би учасника B зі скоупом A, і рядок діяв би в B.
   const rowScope =

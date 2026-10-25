@@ -80,7 +80,7 @@ export type {
   RangeVar,
 } from "libpg-query"
 export { mainTableOf, qualified } from "./contracts"
-export { sourceConditions } from "./rights/functions"
+export { roleTableJoin, sourceConditions } from "./rights/functions"
 export type {
   AssignmentSourceContract,
   Contracts,

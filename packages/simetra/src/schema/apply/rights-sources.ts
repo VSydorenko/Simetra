@@ -1,5 +1,6 @@
 import {
   qualified,
+  roleTableJoin,
   sourceConditions,
   type AssignmentSourceContract,
   type Contracts,
@@ -85,16 +86,8 @@ export function unknownKeysQuery(source: AssignmentSourceContract): {
     roleTable === undefined
       ? src(source.role)
       : `sr.${quoteIdent(roleTable.key)}`
-  const join =
-    roleTable === undefined
-      ? []
-      : [
-          `JOIN ${qualified(roleTable.table)} sr`,
-          `  ON ${[
-            `sr.${quoteIdent(roleTable.id)} = ${src(source.role)}`,
-            ...sourceConditions("sr", roleTable.where),
-          ].join("\n     AND ")}`,
-        ]
+  // З'єднання — те саме, що в гілці джерела `rights_mine` (Р2d1-18)
+  const join = roleTableJoin(source)
   const conditions = [
     `${key} IS NOT NULL`,
     ...(source.active === undefined ? [] : [`${src(source.active)} IS TRUE`]),
@@ -144,20 +137,24 @@ export function unknownKeysQuery(source: AssignmentSourceContract): {
  * (`current_user` цієї транзакції). RLS таблиці Postgres пропускає лише для
  * ролі з правами власника (зокрема успадкованими через членство), з
  * `BYPASSRLS` чи суперкористувача; `BYPASSRLS` власника таблиці, коли функцією
- * володіє інша роль, нічого не дає. Без `SELECT` функції гучно падали б на
- * кожному виклику. Таблиці, якої немає (`to_regclass` — `NULL`), рядка немає:
- * її створить план.
+ * володіє інша роль, нічого не дає. Без `SELECT` чи `USAGE` на схемі функції
+ * гучно падали б на кожному виклику. Таблиця шукається за іменем у каталозі,
+ * а не `to_regclass`: той на схемі без `USAGE` кидає `42501`, а така таблиця —
+ * відмова, не відсутність. Таблиці, якої немає, рядка немає: її створить план.
  */
 const OWNERS_SQL = `SELECT t.table_schema, t.table_name,
-  pg_catalog.has_table_privilege(CURRENT_USER, c.oid, 'SELECT')
+  pg_catalog.has_schema_privilege(CURRENT_USER, n.oid, 'USAGE')
+  AND pg_catalog.has_table_privilege(CURRENT_USER, c.oid, 'SELECT')
   AND (NOT c.relrowsecurity
     OR pg_catalog.pg_has_role(CURRENT_USER, c.relowner, 'USAGE')
     OR r.rolbypassrls
     OR r.rolsuper) AS source_owned
 FROM ROWS FROM (pg_catalog.unnest($1::text[]), pg_catalog.unnest($2::text[]))
   WITH ORDINALITY AS t(table_schema, table_name, i)
+JOIN pg_catalog.pg_namespace n ON n.nspname = t.table_schema
 JOIN pg_catalog.pg_class c
-  ON c.oid = pg_catalog.to_regclass(pg_catalog.format('%I.%I', t.table_schema, t.table_name))
+  ON c.relnamespace = n.oid
+ AND c.relname = t.table_name
 JOIN pg_catalog.pg_roles r ON r.rolname = CURRENT_USER
 ORDER BY t.i`
 
@@ -165,8 +162,12 @@ ORDER BY t.i`
 const COLUMNS_SQL = `SELECT t.table_schema, t.table_name, t.column_name AS source_column
 FROM ROWS FROM (pg_catalog.unnest($1::text[]), pg_catalog.unnest($2::text[]), pg_catalog.unnest($3::text[]))
   AS t(table_schema, table_name, column_name)
+JOIN pg_catalog.pg_namespace n ON n.nspname = t.table_schema
+JOIN pg_catalog.pg_class c
+  ON c.relnamespace = n.oid
+ AND c.relname = t.table_name
 JOIN pg_catalog.pg_attribute a
-  ON a.attrelid = pg_catalog.to_regclass(pg_catalog.format('%I.%I', t.table_schema, t.table_name))
+  ON a.attrelid = c.oid
  AND a.attname = t.column_name
  AND a.attnum > 0
  AND NOT a.attisdropped`

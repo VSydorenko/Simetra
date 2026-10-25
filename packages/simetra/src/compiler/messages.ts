@@ -4033,12 +4033,12 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "plan.rights-source-access": {
     en: (p) =>
-      `The applying role cannot read every row of the adopted rights source table(s) ${p.tables}: it lacks SELECT on them, or row level security is enabled and the role neither owns them nor has BYPASSRLS`,
+      `The applying role cannot read every row of the adopted rights source table(s) ${p.tables}: it lacks USAGE on the schema or SELECT on the table, or row level security is enabled and the role neither owns the table nor has BYPASSRLS`,
     uk: (p) =>
-      `Роль застосування не може прочитати всіх рядків прийнятих таблиць-джерел прав ${p.tables}: вона не має на них SELECT або на них увімкнено захист рядків, а роль ними не володіє й не має BYPASSRLS`,
+      `Роль застосування не може прочитати всіх рядків прийнятих таблиць-джерел прав ${p.tables}: вона не має USAGE на схемі чи SELECT на таблиці або на таблиці увімкнено захист рядків, а роль нею не володіє й не має BYPASSRLS`,
     hint: {
-      en: "No plan was written. The rights functions run as their owner, the applying role (SECURITY DEFINER), and read these tables; row level security lets only the table owner or a BYPASSRLS role see every row. Grant the applying role SELECT and transfer ownership with `ALTER TABLE … OWNER TO <role>` in a step that has the permission, or give the role BYPASSRLS, and plan again.",
-      uk: "План не записано. Функції прав виконуються від свого власника — ролі застосування (SECURITY DEFINER) — і читають ці таблиці; захист рядків показує всі рядки лише власнику таблиці чи ролі з BYPASSRLS. Дайте ролі застосування SELECT і передайте їй власність через `ALTER TABLE … OWNER TO <роль>` кроком, що має на це дозвіл, або дайте ролі BYPASSRLS, і сплануйте знову.",
+      en: "No plan was written. The rights functions run as their owner, the applying role (SECURITY DEFINER), and read these tables. The applying role always needs USAGE on the schema and SELECT on the table; when the table has row level security enabled, it must also own the table (`ALTER TABLE … OWNER TO <role>`, in a step that has the permission) or have BYPASSRLS, because row level security shows every row only to the owner or a BYPASSRLS role. Fix this and plan again.",
+      uk: "План не записано. Функції прав виконуються від свого власника — ролі застосування (SECURITY DEFINER) — і читають ці таблиці. Ролі застосування завжди потрібні USAGE на схемі й SELECT на таблиці; коли на таблиці увімкнено захист рядків, вона ще мусить володіти таблицею (`ALTER TABLE … OWNER TO <роль>` кроком, що має на це дозвіл) або мати BYPASSRLS, бо захист рядків показує всі рядки лише власнику чи ролі з BYPASSRLS. Виправте це й сплануйте знову.",
     },
   },
   "plan.rights-source-unknown-keys": {
