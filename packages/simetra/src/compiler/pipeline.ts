@@ -386,7 +386,14 @@ export async function runStages(
     ),
     ...buildAccessUnits(
       access,
-      { rights, accessDimensions, roles, users, membership },
+      {
+        rights,
+        accessDimensions,
+        roles,
+        users,
+        membership,
+        membershipSources: sources.membershipSources,
+      },
       physical,
       stage1.project.database.provider,
       module,
@@ -427,6 +434,7 @@ export async function runStages(
         rightsCatalogs,
         accessDimensions,
         membership,
+        membershipSources: sources.membershipSources,
         assignmentSources: sources.assignmentSources,
         users,
       },
@@ -436,13 +444,13 @@ export async function runStages(
       parse
     ),
     ...buildCommandUnits(
-      { rights, roles, users },
+      { rights, roles, users, membershipSources: sources.membershipSources },
       stage1.project.database.provider,
       module,
       parse
     ),
     ...buildEffectsUnits(
-      { rights, roles, users },
+      { rights, roles, users, membershipSources: sources.membershipSources },
       physical,
       stage1.project.naming.attributeCase,
       stage1.project.database.provider,

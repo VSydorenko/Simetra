@@ -270,6 +270,7 @@ const NO_RIGHTS: AccessPolicyContracts = {
   accessDimensions: [],
   roles: [],
   membership: [],
+  membershipSources: [],
 }
 
 async function units(access: AccessContract[]) {
@@ -750,11 +751,13 @@ describe("rights read and users visibility policies", () => {
     }
   })
 
-  it("no rights read policies where there are no rights functions", async () => {
-    // Р2a2-24: ролі й прийняте джерело членства без «Користувачів» — функцій
-    // прав немає (Р2a1-30), тож немає й політик, що їх кличуть; межа тенанта
-    // лишається (fail-closed). Довідники прав `org` лишаються: рівень скоупу
-    // з ролями джерелом не покрито (Р2d1-5).
+  it("rights read policies follow the rights functions without users", async () => {
+    // Р2a2-24, Р2d1-7: ролі й прийняте джерело членства без «Користувачів» —
+    // поточного користувача дає `sub` (Р2d1-6), тож функції прав є, а з ними
+    // й політики, що їх кличуть; межа тенанта лишається. Без функцій прав
+    // політик немає — це тримає таблиця предикатів (rights-functions).
+    // Довідники прав `org` лишаються: рівень скоупу з ролями джерелом не
+    // покрито (Р2d1-5).
     const result = await compile(
       withRoles(
         adoptedMembership(),
@@ -779,7 +782,7 @@ describe("rights read and users visibility policies", () => {
       .filter((u) => u.generator === "access" && u.class === "policy")
       .map((u) => u.name)
     expect(names).toContain("task_scope_read")
-    expect(names.filter((name) => name.includes("_read_"))).toEqual([])
+    expect(names).toContain("task_read_any")
   })
 
   it("policy identities of the policy domain are unique", () => {

@@ -18,6 +18,7 @@ import {
   TASK_FILE,
   TASK_READERS_ID,
   adoptedGrantTable,
+  adoptedCrossKind,
   adoptedMembershipTable,
   adoptedSourcesDomain,
   compileRights,
@@ -29,6 +30,7 @@ import {
   rightsSet,
   role,
   without,
+  withoutUsers,
   type Layer,
 } from "./fixtures/rights"
 import { expectClean, uuid } from "./helpers"
@@ -623,5 +625,13 @@ describe("adopted source member and column types", () => {
     expect(result.model!.contracts.membershipSources).toEqual([
       expect.objectContaining({ sourceId: MEMBERS_SOURCE_ID, member: "id" }),
     ])
+  })
+
+  it.each([
+    ["without users", withoutUsers()],
+    ["with a second scope kind", adoptedCrossKind()],
+  ])("clean %s: only the write-boundary warning", async (_, layer) => {
+    const result = await compileRights(adoptedSourcesDomain(layer))
+    expectClean(result, { allow: ["rights.adopted-source-writes"] })
   })
 })
