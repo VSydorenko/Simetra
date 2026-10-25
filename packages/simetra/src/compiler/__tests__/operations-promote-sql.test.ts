@@ -17,6 +17,12 @@ import {
   counterpartyMapping,
   promotionProject,
 } from "./fixtures/promotion"
+import {
+  TASK_NOTE_ADOPTED_TABLE,
+  policyDomain,
+  promotableTaskNote,
+  taskNoteMapping,
+} from "./fixtures/rights"
 import { acceptDebt, attribute, customTable, document, uuid } from "./helpers"
 
 // Шпигун викликає справжній розбір: решта тестів файлу розбирає plpgsql далі.
@@ -420,30 +426,6 @@ CREATE POLICY counterparties_edit ON app.counterparties FOR UPDATE TO authentica
     ])
   })
 
-  it("warns about out-of-scope debt functions with dynamic SQL", async () => {
-    const files = await project({
-      "sql/app/dyn.sql": `CREATE FUNCTION app.dyn(t text) RETURNS void LANGUAGE plpgsql VOLATILE AS $fn$
-BEGIN
-  EXECUTE format('delete from app.%I', t);
-END
-$fn$;
-`,
-    })
-    const { result } = await passes(files)
-    expect(
-      brief(result).filter((d) => d.code === "rewrite.dynamic-sql-unscoped")
-    ).toEqual([
-      {
-        code: "rewrite.dynamic-sql-unscoped",
-        file: "sql/app/dyn.sql",
-        params: expect.objectContaining({
-          function: "function:app.dyn(text)",
-          line: 3,
-        }),
-      },
-    ])
-  })
-
   it("propagates a contract change to callers transitively", async () => {
     const files = await project({
       "sql/app/f.sql": fn(
@@ -635,7 +617,7 @@ CREATE TRIGGER touch_name BEFORE INSERT ON app.partners
   it("aggregates rewriter refusals and writes nothing", async () => {
     const dynamic = `CREATE FUNCTION app.purge() RETURNS void LANGUAGE plpgsql VOLATILE AS $fn$
 BEGIN
-  EXECUTE 'delete from app.counterparties';
+  EXECUTE 'select count(*) from app.counterparties';
 END
 $fn$;
 `
@@ -1099,5 +1081,72 @@ $fn$;
         }),
       },
     ])
+  })
+})
+
+describe("promoteObject: debt that writes the promoted table (Rule 4, Р2c1-24)", () => {
+  const TASK_NOTE_MODULE = "custom-tables/TaskNote/TaskNote.sql"
+  const SHARED = "sql/public/notes.sql"
+  const table = `public.${TASK_NOTE_ADOPTED_TABLE}`
+
+  async function taskNotes(sql: Record<string, string>) {
+    const files = policyDomain(promotableTaskNote())
+    for (const [path, text] of Object.entries(sql)) files.set(path, text)
+    const accepted = await acceptDebt(files)
+    expect(errors(await compile(accepted))).toEqual([])
+    return accepted
+  }
+
+  it("refuses with every unit that writes it, before any change", async () => {
+    // Після промоції такий запис був би SQL застосунку в таблиці виду
+    // (Правило 1): гейт називає кожну одиницю до змін, а не першу відмову
+    // переписувача чи компіляції результату.
+    const files = await taskNotes({
+      [SHARED]: `CREATE FUNCTION public.add_note() RETURNS void LANGUAGE sql AS $$ INSERT INTO ${table} (id) VALUES (NULL) $$;\n`,
+      [TASK_NOTE_MODULE]: `CREATE FUNCTION public.task_notes_touch() RETURNS trigger LANGUAGE plpgsql VOLATILE AS $$ BEGIN UPDATE ${table} SET name = name WHERE false; RETURN NEW; END $$;\n`,
+    })
+    const { result, after } = await promoted(files, taskNoteMapping())
+    expect(result.ok).toBe(false)
+    expect(result.changes).toEqual([])
+    expect(after).toEqual(files)
+    expect(
+      result.diagnostics
+        .filter((d) => d.severity === "error")
+        .map((d) => d.code)
+    ).toEqual(["promote.debt-writes-table", "promote.debt-writes-table"])
+    expect(
+      brief(result).filter((d) => d.code === "promote.debt-writes-table")
+    ).toEqual([
+      {
+        code: "promote.debt-writes-table",
+        file: TASK_NOTE_MODULE,
+        params: {
+          identity: "function:public.task_notes_touch()",
+          table,
+          statement: "UpdateStmt",
+          line: 1,
+        },
+      },
+      {
+        code: "promote.debt-writes-table",
+        file: SHARED,
+        params: {
+          identity: "function:public.add_note()",
+          table,
+          statement: "InsertStmt",
+          line: 1,
+        },
+      },
+    ])
+  })
+
+  it("does not refuse a function that only reads it", async () => {
+    const files = await taskNotes({
+      [SHARED]: `CREATE FUNCTION public.note_count() RETURNS bigint LANGUAGE sql STABLE AS $$ SELECT count(*) FROM ${table} $$;\n`,
+    })
+    const { result } = await promoted(files, taskNoteMapping())
+    expect(
+      result.diagnostics.filter((d) => d.code === "promote.debt-writes-table")
+    ).toEqual([])
   })
 })

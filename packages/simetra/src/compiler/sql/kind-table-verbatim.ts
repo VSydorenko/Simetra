@@ -1,15 +1,19 @@
 import type { Node } from "libpg-query"
-import type { PhysicalTable } from "simetra/model"
+import {
+  PROVIDER_IDENTITY_SOURCES,
+  type DatabaseProvider,
+  type PhysicalTable,
+} from "simetra/model"
 import { diagnostic, type Diagnostic } from "../diagnostics"
 import type { ParsedObject } from "../stages/files"
 import { isDeclaredTable } from "../stages/model"
-import { closedModuleOwners, routineLanguage } from "./closed-forms"
-import { literalDynamicText } from "./command-context"
+import { closedModuleOwners } from "./closed-forms"
+import { unitRelations } from "./dependencies"
+import { modelViews, routineBody, type ModelView } from "./function-body"
 import type { SqlParser } from "./parse"
 import type { PlpgsqlParser } from "./plpgsql"
 import {
   bodyStatementTargets,
-  isStatementKey,
   statementTargets,
   type UnitTarget,
 } from "./unit-target"
@@ -47,6 +51,33 @@ export function kindTables(
     bySchema.set(table.schema, [...(bySchema.get(table.schema) ?? []), key])
   }
   return { qualified, byName, bySchema }
+}
+
+/**
+ * Таблиці, у які SQL застосунку не пише (Правило 1): таблиці виду і таблиця
+ * джерела ідентичностей провайдера — тригери платформи переносять запис у неї
+ * в «Користувачі» й `simetra.identities` (N7), тож запис туди змінював би
+ * таблицю виду повз команду. Лише для DML тіла: дослівні політики й тригери
+ * (Р2c1-1) судяться над `kindTables`.
+ */
+export function ruleOneTables(
+  tables: KindTables,
+  provider: DatabaseProvider | undefined
+): KindTables {
+  if (provider === undefined) return tables
+  const { schema, name } = PROVIDER_IDENTITY_SOURCES[provider].table
+  const key = `${schema}.${name}`
+  return {
+    qualified: new Set([...tables.qualified, key]),
+    byName: new Map([
+      ...tables.byName,
+      [name, [...(tables.byName.get(name) ?? []), key]],
+    ]),
+    bySchema: new Map([
+      ...tables.bySchema,
+      [schema, [...(tables.bySchema.get(schema) ?? []), key]],
+    ]),
+  }
 }
 
 /**
@@ -91,34 +122,42 @@ export function kindTableOf(
   return undefined
 }
 
-/** Оператор тіла функції, що змінює таблицю виду, і ця таблиця. */
+/** Оператор тіла функції, що пише таблицю виду, і ця таблиця. */
 export interface BodyKindTable {
   table: string
-  /** Вузол оператора в дереві розбору: `TruncateStmt`, `CreatePolicyStmt`… */
+  /** Вузол оператора в дереві розбору: `InsertStmt`, `UpdateStmt`… */
   statement: string
 }
 
 /**
- * Перший оператор тіла функції чи процедури, чия ціль
- * (`bodyStatementTargets`) — таблиця виду (Р2c1-15); інший клас чи тіло без
- * такого оператора — `undefined`. Судяться оператори, які тіло виконує
- * (`bodyTrees`), і вкладені в них.
+ * Перший DML тіла функції чи процедури, чия ціль (`bodyStatementTargets`) —
+ * таблиця з `tables` (Правило 1, Р2c1-16); інший клас чи тіло без такого
+ * оператора — `undefined`. Судяться оператори, які тіло виконує
+ * (`routineBody`), і вкладені в них. Ціль, що є поданням моделі,
+ * розгортається до кожного відношення його визначення, рекурсивно: Postgres
+ * переписує запис в автооновлюване подання на базову таблицю, а котре
+ * відношення базове, без каталогу не видно (fail-closed).
  */
 export function bodyKindTable(
   unit: Pick<VerbatimUnit, "class" | "schema" | "sql" | "tree">,
   tables: KindTables,
   parse: SqlParser,
-  plpgsql: PlpgsqlParser
+  plpgsql: PlpgsqlParser,
+  views: readonly ModelView[]
 ): BodyKindTable | undefined {
   if (unit.class !== "function" && unit.class !== "procedure") return undefined
   if (tables.qualified.size === 0) return undefined
-  const tree = unit.tree as Node
-  for (const stmt of statementsOf([
-    tree,
-    ...bodyTrees(tree, unit.sql, parse, plpgsql),
-  ])) {
+  const body = routineBody(unit.tree as Node, unit.sql, parse, plpgsql)
+  for (const { stmt } of body.statements) {
     for (const target of bodyStatementTargets(stmt, "")) {
-      const table = kindTableNamed(target, unit.schema, tables)
+      const table = writtenKindTable(
+        target,
+        unit.schema,
+        tables,
+        views,
+        parse,
+        new Set()
+      )
       if (table !== undefined)
         return { table, statement: Object.keys(stmt)[0] ?? "" }
     }
@@ -126,115 +165,39 @@ export function bodyKindTable(
   return undefined
 }
 
-/** Кожен вузол оператора дерева в порядку обходу, вкладені — теж. */
-function statementsOf(value: unknown): Node[] {
-  if (Array.isArray(value)) return value.flatMap(statementsOf)
-  if (typeof value !== "object" || value === null) return []
-  return Object.entries(value).flatMap(([key, child]) => [
-    ...(isStatementKey(key) ? [{ [key]: child } as Node] : []),
-    ...statementsOf(child),
-  ])
-}
-
-interface DefElemNode {
-  DefElem?: { defname?: string; arg?: unknown }
-}
-
-/** Рядкове значення опції: `List` рядків (`AS` функції) чи рядок. */
-function optionText(
-  options: readonly DefElemNode[] | undefined,
-  name: string
+/** Таблиця виду, у яку потрапляє запис у ціль, зокрема через подання моделі. */
+function writtenKindTable(
+  target: UnitTarget,
+  own: string,
+  tables: KindTables,
+  views: readonly ModelView[],
+  parse: SqlParser,
+  visited: Set<string>
 ): string | undefined {
-  const arg = (options ?? []).find((o) => o.DefElem?.defname === name)?.DefElem
-    ?.arg as
-    | {
-        String?: { sval?: string }
-        List?: { items?: { String?: { sval?: string } }[] }
-      }
-    | undefined
-  return arg?.String?.sval ?? arg?.List?.items?.[0]?.String?.sval
-}
-
-/**
- * Оператори рядкового тіла функції чи процедури: тіло `LANGUAGE sql`,
- * оператори plpgsql і текст кожного літерального `EXECUTE`; вкладене
- * визначення функції й блок `DO` — їхні тіла, рекурсивно: створена тілом
- * функція й блок виконуються так само, як саме тіло. Тіло `BEGIN ATOMIC` уже
- * в дереві оператора. Тіло іншої мови, нелітеральний `EXECUTE` і нерозбірний
- * текст тут не читаються: закритий код таких функцій не досягає (`reach.ts`,
- * Р2c1-5), а в боргу це наявна межа статичного судження.
- */
-function bodyTrees(
-  tree: Node,
-  sql: string,
-  parse: SqlParser,
-  plpgsql: PlpgsqlParser
-): Node[] {
-  const fn = (
-    tree as {
-      CreateFunctionStmt?: { options?: DefElemNode[]; sql_body?: unknown }
+  const direct = kindTableNamed(target, own, tables)
+  if (direct !== undefined) return direct
+  const name = target.object ?? ""
+  // Некваліфіковане ім'я — подання з тим самим ім'ям у будь-якій схемі, як і
+  // таблиця (`kindTableNamed`).
+  for (const view of views) {
+    if (view.name !== name) continue
+    if (target.schema !== "" && view.schema !== target.schema) continue
+    const key = `${view.schema}.${view.name}`
+    if (visited.has(key)) continue
+    visited.add(key)
+    for (const relation of unitRelations({ tree: view.tree }, parse)) {
+      const table = writtenKindTable(
+        { schema: relation.schema ?? "", object: relation.name, kind: "table" },
+        view.schema,
+        tables,
+        views,
+        parse,
+        visited
+      )
+      if (table !== undefined) return table
     }
-  ).CreateFunctionStmt
-  if (fn === undefined || fn.sql_body !== undefined) return []
-  const language = routineLanguage(tree)
-  if (language === "sql") {
-    const body = optionText(fn.options, "as")
-    return body === undefined ? [] : textTrees(body, parse, plpgsql)
   }
-  return language === "plpgsql" ? plpgsqlTrees(sql, parse, plpgsql) : []
-}
-
-/** Оператори тіла plpgsql: запити (`parseMode` 0) і літеральні `EXECUTE`. */
-function plpgsqlTrees(
-  createFunction: string,
-  parse: SqlParser,
-  plpgsql: PlpgsqlParser
-): Node[] {
-  const body = plpgsql(createFunction)
-  if (!body.ok || body.fn === undefined) return []
-  return body.fn.statements.flatMap((statement) =>
-    statement.expressions.flatMap((e) => {
-      // Вираз (`parseMode` > 0) — значення: оператора поза DML він не несе.
-      const text =
-        e.role === "dynamic"
-          ? literalDynamicText(e.query, parse)
-          : e.parseMode === 0
-            ? e.query
-            : undefined
-      return text === undefined ? [] : textTrees(text, parse, plpgsql)
-    })
-  )
-}
-
-function textTrees(
-  text: string,
-  parse: SqlParser,
-  plpgsql: PlpgsqlParser
-): Node[] {
-  const parsed = parse(text)
-  if (!parsed.ok) return []
-  return parsed.statements.flatMap(({ stmt, start, end }) => [
-    stmt,
-    ...bodyTrees(stmt, text.slice(start, end), parse, plpgsql),
-    ...doTrees(stmt, parse, plpgsql),
-  ])
-}
-
-/**
- * Тіло блоку `DO` plpgsql. Порт plpgsql розбирає лише `CREATE FUNCTION`, тож
- * блок обгортається функцією з тим самим тілом — рядком із подвоєними
- * лапками, що дає Postgres рівно той самий текст.
- */
-function doTrees(stmt: Node, parse: SqlParser, plpgsql: PlpgsqlParser): Node[] {
-  const args = (stmt as { DoStmt?: { args?: DefElemNode[] } }).DoStmt?.args
-  const body = optionText(args, "as")
-  const language = optionText(args, "language")?.toLowerCase() ?? "plpgsql"
-  if (body === undefined || language !== "plpgsql") return []
-  return plpgsqlTrees(
-    `CREATE FUNCTION do_block() RETURNS void LANGUAGE plpgsql AS '${body.replaceAll("'", "''")}'`,
-    parse,
-    plpgsql
-  )
+  return undefined
 }
 
 /**
@@ -248,23 +211,28 @@ function doTrees(stmt: Node, parse: SqlParser, plpgsql: PlpgsqlParser): Node[] {
  * шум.
  *
  * Тіло функції чи процедури в будь-якому файлі, зокрема в модулі виду й у
- * закритій оболонці, таблиці виду не змінює (Р2c1-15, форма
- * `functionBody`): лише DML і `LOCK`. Інакше тіло під час виконання зробило б
- * те, що заборонено дослівним одиницям (політика, тригер, грант), або обійшло
- * б RLS і перевірки платформи (`TRUNCATE`, `ALTER TABLE … DISABLE ROW LEVEL
- * SECURITY`). Модуль виду функцію приймає, тож там ця діагностика єдина.
+ * закритій оболонці, у таблицю виду не пише (Правило 1, Р2c1-16, форма
+ * `functionBody`): таблицю виду пишуть лише ядро команд, оболонка проведення
+ * й тригери платформи, а DML застосунку обійшов би права, рухи й перевірки
+ * команди. Що ще тіло може виконувати, судить дозвільний перелік операторів
+ * (`sql.function-body-statement`, Р2c1-37). Модуль виду функцію приймає, тож
+ * там ця діагностика єдина. `provider` дає таблицю джерела ідентичностей
+ * (`ruleOneTables`).
  */
 export function checkKindTableVerbatim(
   objects: readonly ParsedObject[],
   tables: readonly PhysicalTable[],
   units: readonly VerbatimUnit[],
   parse: SqlParser,
-  plpgsql: PlpgsqlParser
+  plpgsql: PlpgsqlParser,
+  provider: DatabaseProvider | undefined
 ): Diagnostic[] {
   const kind = kindTables(objects, tables)
+  const written = ruleOneTables(kind, provider)
+  const views = modelViews(units)
   const closed = closedModuleOwners(objects)
   return units.flatMap((unit) => {
-    const body = bodyKindTable(unit, kind, parse, plpgsql)
+    const body = bodyKindTable(unit, written, parse, plpgsql, views)
     if (body !== undefined) {
       return [
         diagnostic("sql.kind-table-verbatim", unit.file, "", {

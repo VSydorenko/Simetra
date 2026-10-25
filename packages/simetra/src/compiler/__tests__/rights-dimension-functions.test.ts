@@ -484,15 +484,32 @@ describe("access dimension value function", () => {
     })
 
     it("rejects other platform functions and non-sql links, allows pg_catalog builtins", async () => {
-      expect(await params(head("SELECT simetra.role_ids()"))).toEqual([
-        reads("public.region_ids", "simetra.role_ids"),
+      // Виклик функції платформи поза переліком, що читає, і тіло іншої мови
+      // відмовляє ранній блок (Р2c1-38, Р2c1-37): до судження функції виміру
+      // справа не доходить.
+      const early = async (sql: string) =>
+        (await errors(sql)).map((d) => [d.code, d.params])
+      expect(await early(head("SELECT simetra.role_ids()"))).toEqual([
+        [
+          "sql.platform-function-call",
+          {
+            unit: "function:public.region_ids()",
+            function: "simetra.role_ids",
+            line: 1,
+          },
+        ],
       ])
       expect(
-        await params(
+        await early(
           head("SELECT public.helper_ids()") +
             "CREATE FUNCTION public.helper_ids() RETURNS SETOF uuid LANGUAGE c STABLE AS 'helper_lib', 'helper_ids';\n"
         )
-      ).toEqual([reads("public.region_ids → public.helper_ids", "unknown")])
+      ).toEqual([
+        [
+          "sql.function-body-statement",
+          { function: "public.helper_ids", statement: "language", line: 2 },
+        ],
+      ])
       expect(await errors(head("SELECT pg_catalog.lower('x')::uuid"))).toEqual(
         []
       )

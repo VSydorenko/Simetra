@@ -949,9 +949,9 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Приберіть оператор; simetra fix прибирає його, коли всі цілі належать платформі, — оператор, що називає й чужі об'єкти, ділять вручну.",
     },
   },
-  // Форма — політика, тригер чи тіло функції (Р2c1-15); заміна політики й
-  // тригера — та сама, що підказує модуль виду, а тілу підказка називає, що
-  // йому дозволено.
+  // Форма — політика, тригер чи DML тіла функції (Правило 1); заміна
+  // політики й тригера — та сама, що підказує модуль виду, а тілу підказка
+  // називає, хто пише таблицю виду.
   "sql.kind-table-verbatim": {
     en: (p) =>
       p.form === "functionBody"
@@ -964,12 +964,44 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     hint: {
       en: (p) =>
         p.form === "functionBody"
-          ? "Only the platform defines a table of a kind: the body of a function or procedure, in any .sql file and in the text of a literal EXECUTE, may only read and write its rows (SELECT, INSERT, UPDATE, DELETE, MERGE) and LOCK it. A policy, trigger, grant, index, TRUNCATE or ALTER TABLE run by a function would change the table past the rights and the platform's checks, so such a function is never SQL debt and sql-debt.json cannot list it. Remove the statement and declare what it did in metadata: a right for row access, an EventSubscription for a reaction to a change."
+          ? "Only the platform writes a table of a kind: the command core, the posting shell and the platform's triggers. INSERT, UPDATE, DELETE or MERGE by application SQL, also through a view of the model or in the text of a literal EXECUTE, would change its rows past the rights, the movements and the checks of a command, so such a function is never SQL debt and sql-debt.json cannot list it. The same holds for the identity table of the database provider. Reading and locking the rows (SELECT, SELECT … FOR UPDATE, LOCK) stays allowed. Run the change as a command of the object, or write it in a TypeScript hook."
           : `Only the platform attaches policies and triggers to a table of a kind, in any .sql file: a hand-written one would open rows past the rights or act inside every command. Such a statement is never SQL debt, so sql-debt.json cannot list it. ${(KIND_MODULE_REPLACEMENT[String(p.form)] ?? KIND_MODULE_GENERAL).en}`,
       uk: (p) =>
         p.form === "functionBody"
-          ? "Таблицю виду визначає лише платформа: тіло функції чи процедури, у будь-якому файлі .sql і в тексті літерального EXECUTE, лише читає й пише її рядки (SELECT, INSERT, UPDATE, DELETE, MERGE) і блокує її (LOCK). Політика, тригер, грант, індекс, TRUNCATE чи ALTER TABLE, виконані функцією, змінили б таблицю повз права й перевірки платформи, тож така функція ніколи не є боргом дослівного SQL, і sql-debt.json її не перелічує. Приберіть оператор, а те, що він робив, оголосіть у метаданих: право — для доступу до рядків, EventSubscription — для реакції на зміну."
+          ? "Таблицю виду пише лише платформа: ядро команд, оболонка проведення й тригери платформи. INSERT, UPDATE, DELETE чи MERGE з SQL застосунку, зокрема через подання моделі чи в тексті літерального EXECUTE, змінили б її рядки повз права, рухи й перевірки команди, тож така функція ніколи не є боргом дослівного SQL, і sql-debt.json її не перелічує. Те саме стосується таблиці ідентичностей провайдера бази. Читати й блокувати рядки (SELECT, SELECT … FOR UPDATE, LOCK) дозволено. Виконайте зміну командою об'єкта або запишіть її в TypeScript-хуку."
           : `Політики й тригери на таблицю виду ставить лише платформа, у будь-якому файлі .sql: написані вручну відкрили б рядки повз права чи діяли б усередині кожної команди. Такий оператор ніколи не є боргом дослівного SQL, тож sql-debt.json його не перелічує. ${(KIND_MODULE_REPLACEMENT[String(p.form)] ?? KIND_MODULE_GENERAL).uk}`,
+    },
+  },
+  "sql.function-body-statement": {
+    en: (p) =>
+      p.statement === "nonLiteralExecute"
+        ? `Function ${p.function} at line ${p.line} runs EXECUTE of a non-literal text`
+        : p.statement === "language"
+          ? `Function ${p.function} at line ${p.line} is written in a language other than sql and plpgsql`
+          : p.statement === "unread"
+            ? `Function ${p.function} at line ${p.line} has a part the compiler could not read`
+            : `Function ${p.function} at line ${p.line} runs ${p.statement}, which a function body may not run`,
+    uk: (p) =>
+      p.statement === "nonLiteralExecute"
+        ? `Функція ${p.function} у рядку ${p.line} виконує EXECUTE нелітерального тексту`
+        : p.statement === "language"
+          ? `Функція ${p.function} у рядку ${p.line} написана мовою, іншою за sql і plpgsql`
+          : p.statement === "unread"
+            ? `Функція ${p.function} у рядку ${p.line} має частину, яку компілятор не прочитав`
+            : `Функція ${p.function} у рядку ${p.line} виконує ${p.statement}, якого тілу функції виконувати не можна`,
+    hint: {
+      en: "The body of a function or procedure, in any .sql file and in SQL debt too, runs only allowlisted statements: SELECT, INSERT, UPDATE, DELETE, MERGE, LOCK, SET and RESET, CALL, NOTIFY, REFRESH MATERIALIZED VIEW of a view of the model, DO, and temporary tables of the body itself (CREATE TEMP TABLE … ON COMMIT DROP and their DROP). The text of a literal EXECUTE and a DO block follow the same list. A non-literal EXECUTE, another language or a part the compiler cannot read cannot be judged, so they are refused too. Rewrite the function without the statement or move the change into metadata or a migration.",
+      uk: "Тіло функції чи процедури, у будь-якому файлі .sql і в боргу теж, виконує лише оператори з дозвільного переліку: SELECT, INSERT, UPDATE, DELETE, MERGE, LOCK, SET і RESET, CALL, NOTIFY, REFRESH MATERIALIZED VIEW подання моделі, DO і тимчасові таблиці самого тіла (CREATE TEMP TABLE … ON COMMIT DROP та їхній DROP). Текст літерального EXECUTE і блок DO — за тим самим переліком. Нелітеральний EXECUTE, іншу мову чи частину, яку компілятор не прочитав, судити неможливо, тож вони теж заборонені. Перепишіть функцію без цього оператора або перенесіть зміну в метадані чи міграцію.",
+    },
+  },
+  "sql.platform-function-call": {
+    en: (p) =>
+      `${p.unit} at line ${p.line} calls ${p.function}, a platform function application SQL may not call`,
+    uk: (p) =>
+      `${p.unit} у рядку ${p.line} викликає ${p.function} — функцію платформи, якої SQL застосунку кликати не можна`,
+    hint: {
+      en: "Application SQL calls only the platform functions that read, such as simetra.current_user_id(). The other platform functions write the platform's tables and identities: called from application SQL they would act past the commands and the rights.",
+      uk: "SQL застосунку кличе лише функції платформи, що читають, як-от simetra.current_user_id(). Решта функцій платформи пишуть її таблиці й ідентичності: викликані з SQL застосунку, вони діяли б повз команди й права.",
     },
   },
   "sql.namespace-conflict": {
@@ -3068,6 +3100,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     hint: {
       en: 'Revoke the write privilege or drop the write policy before promoting; see the open question "Write path after promotion" in the promotion spec.',
       uk: "Відкличте привілей запису чи зніміть політику запису перед промоцією; див. відкрите питання «Шлях запису після промоції» у спеці промоції.",
+    },
+  },
+  "promote.debt-writes-table": {
+    en: (p) =>
+      `${p.identity} at line ${p.line} runs ${p.statement} on ${p.table}, which the promotion turns into a table of a kind`,
+    uk: (p) =>
+      `${p.identity} у рядку ${p.line} виконує ${p.statement} над ${p.table}, яку промоція робить таблицею виду`,
+    hint: {
+      en: "Only the platform writes a table of a kind, so the promotion does not carry over code that writes the promoted table. Remove the write from each listed unit before promoting: run it as a command of the object after the promotion or write it in a TypeScript hook.",
+      uk: "Таблицю виду пише лише платформа, тож промоція не переносить код, що пише промотовану таблицю. Приберіть запис з кожної названої одиниці до промоції: після неї виконайте його командою об'єкта або запишіть у TypeScript-хуку.",
     },
   },
   "promote.provider-user-reference": {

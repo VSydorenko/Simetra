@@ -4,8 +4,14 @@ import { compareStrings, diagnostic, type Diagnostic } from "../diagnostics"
 import type { ParsedObject } from "../stages/files"
 import { closedShellProblem, ruledFunctions } from "./closed-forms"
 import {
+  bodyStatementProblem,
+  modelViews,
+  type ModelView,
+} from "./function-body"
+import {
   bodyKindTable,
   kindTableOf,
+  ruleOneTables,
   type KindTables,
 } from "./kind-table-verbatim"
 import type { SqlParser } from "./parse"
@@ -26,8 +32,9 @@ import type { VerbatimUnit } from "./units"
  * Дослівна політика чи тригер на таблиці виду боргом не бувають теж (Р2c1-1):
  * це помилка `sql.kind-table-verbatim` у будь-якому файлі, тож підказка
  * «внести в борг» вела б не туди, а запис у переліку — застарілий. Так само
- * функція чи процедура, тіло якої змінює таблицю виду (Р2c1-15, та сама
- * помилка з формою `functionBody`).
+ * функція чи процедура, тіло якої пише таблицю виду (Правило 1, та сама
+ * помилка з формою `functionBody`) чи виконує оператор поза дозвільним
+ * переліком (`sql.function-body-statement`, Р2c1-37).
  */
 export function debtUnits(
   units: readonly VerbatimUnit[],
@@ -37,7 +44,14 @@ export function debtUnits(
   parse: SqlParser,
   plpgsql: PlpgsqlParser
 ): string[] {
-  const isDebt = debtPredicate(objects, project, kindTables, parse, plpgsql)
+  const isDebt = debtPredicate(
+    objects,
+    project,
+    kindTables,
+    parse,
+    plpgsql,
+    modelViews(units)
+  )
   return [...new Set(units.filter(isDebt).map((unit) => unit.identity))].sort(
     compareStrings
   )
@@ -46,14 +60,16 @@ export function debtUnits(
 /**
  * Чи одиниця — борг (план промоції 2b, рішення 12): одне правило для ратчета
  * й для судження запису сесії боргу (`checkSqlModules`, Р2c1-14), щоб
- * попередження не діставала одиниця, якої ратчет боргом не рахує.
+ * попередження не діставала одиниця, якої ратчет боргом не рахує. `views` —
+ * подання моделі: через них DML досягає таблиці виду, і їх оновлює `REFRESH`.
  */
 export function debtPredicate(
   objects: readonly ParsedObject[],
   project: Project | undefined,
   kindTables: KindTables,
   parse: SqlParser,
-  plpgsql: PlpgsqlParser
+  plpgsql: PlpgsqlParser,
+  views: readonly ModelView[]
 ): (unit: VerbatimUnit) => boolean {
   const debtOwners = new Set(
     objects
@@ -61,11 +77,13 @@ export function debtPredicate(
       .map((o) => o.file)
   )
   const ruled = ruledFunctions(objects, project)
+  const written = ruleOneTables(kindTables, project?.database.provider)
   return (unit) =>
     (unit.ownerFile === undefined || debtOwners.has(unit.ownerFile)) &&
     !(unit.class === "function" && ruled.has(unit.identity)) &&
     kindTableOf(unit, kindTables) === undefined &&
-    bodyKindTable(unit, kindTables, parse, plpgsql) === undefined &&
+    bodyKindTable(unit, written, parse, plpgsql, views) === undefined &&
+    bodyStatementProblem(unit, parse, plpgsql, views) === undefined &&
     !(
       unit.class === "function" &&
       closedShellProblem(
@@ -98,7 +116,14 @@ export function checkDebt(
   plpgsql: PlpgsqlParser
 ): { grows: Diagnostic[]; stale: Diagnostic[] } {
   const accepted = new Set(listed)
-  const isDebt = debtPredicate(objects, project, kindTables, parse, plpgsql)
+  const isDebt = debtPredicate(
+    objects,
+    project,
+    kindTables,
+    parse,
+    plpgsql,
+    modelViews(units)
+  )
   const debt = units.filter(isDebt)
   const grows = debt
     .filter((unit) => !accepted.has(unit.identity))

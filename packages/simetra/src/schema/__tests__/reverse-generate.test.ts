@@ -1319,7 +1319,20 @@ describe("reverseGenerate", () => {
       }),
       options()
     )
-    expect(errors(result)).toEqual([])
+    // Власний тригер пишеться дослівно, а виклик функції платформи, що не
+    // лише читає, — гучна помилка на ньому (Р2c1-38), а не тихий пропуск.
+    expect(
+      errors(result).map((d) => ({ code: d.code, params: d.params }))
+    ).toEqual([
+      {
+        code: "sql.platform-function-call",
+        params: {
+          unit: "trigger:app.note.note_stamp",
+          function: "simetra.touch",
+          line: 5,
+        },
+      },
+    ])
     const sidecar = result.files.get("custom-tables/Note/Note.sql")
     expect(sidecar).toContain("CREATE TRIGGER note_audit")
     expect(sidecar).toContain("CREATE FUNCTION app.audit()")

@@ -227,103 +227,31 @@ export function statementTargets(stmt: Node, schema: string): UnitTarget[] {
   return []
 }
 
-/**
- * Оператори, що лише читають чи пишуть рядки, і `LOCK`: на них діють RLS і
- * права таблиці, як на запит команди, тож відношень вони не змінюють.
- */
-const DATA_STATEMENTS: ReadonlySet<string> = new Set([
-  "SelectStmt",
+/** Оператори, що змінюють рядки: ціль — лише поле `relation`. */
+const DML_STATEMENTS = [
   "InsertStmt",
   "UpdateStmt",
   "DeleteStmt",
   "MergeStmt",
-  "LockStmt",
-])
-
-/** Види об'єктів простору `pg_class`, які оператор називає списком імен. */
-const RELATION_TYPES: ReadonlySet<string> = new Set([
-  "OBJECT_TABLE",
-  "OBJECT_FOREIGN_TABLE",
-  "OBJECT_VIEW",
-  "OBJECT_MATVIEW",
-  "OBJECT_SEQUENCE",
-  "OBJECT_INDEX",
-])
+] as const
 
 /**
- * Відношення, які змінює оператор тіла функції (Р2c1-15). DML і `LOCK` — без
- * цілей. Решта — fail-closed: кожне відношення оператора поза вкладеним
- * оператором (`ALTER TABLE`, `TRUNCATE`, `CREATE INDEX`, політика, тригер,
- * грант, `INHERITS`/`PARTITION OF`, `REFERENCES`, `LIKE` — без розбору, що
- * саме оператор з ним робить) і відношення чи його член, названий списком
- * імен (`COMMENT`, `SECURITY LABEL`, `DROP`), тим самим розбором імен, що й
- * `statementTargets`. Таблиця, яку оператор лише читає вкладеним запитом
- * (`CREATE TABLE … AS SELECT`, підзапит політики), його ціллю не є: запит
- * читає рядки під RLS, а вкладений оператор судиться окремо. Оператор над
- * схемою цілком, що діє на кожну її таблицю (`DROP SCHEMA`, `ALTER SCHEMA …
- * RENAME`/`OWNER`, `GRANT … ON ALL TABLES IN SCHEMA`), дає ціль `kind:
- * "schema"`. `statementTargets` цим не годиться: він знає лише класи одиниць
- * файлів і цілей `ALTER TABLE`, `TRUNCATE` чи `DROP` не має.
+ * Відношення, у яке пише оператор тіла функції (Правило 1, Р2c1-16): лише
+ * `relation` DML. Відношення, які DML лише читає (`UPDATE … FROM`, `DELETE …
+ * USING`, `MERGE … USING`), ціллю не є — вони під RLS і правами, як запит
+ * команди; вкладений оператор, що змінює дані (CTE), судиться окремо. Решта
+ * операторів цілей не має: що тіло може виконувати, судить дозвільний
+ * перелік операторів (Р2c1-37), тож денайліст за ціллю (`ALTER TABLE`,
+ * `TRUNCATE`, `COMMENT`…) зайвий.
  */
 export function bodyStatementTargets(stmt: Node, schema: string): UnitTarget[] {
-  const [key] = Object.keys(stmt)
-  if (key === undefined || DATA_STATEMENTS.has(key)) return []
-  return [
-    ...namedTargets(stmt, schema),
-    ...relations((stmt as Record<string, unknown>)[key], schema),
-  ]
-}
-
-/** Відношення, назване списком імен, і оператори над схемою цілком. */
-function namedTargets(stmt: Node, schema: string): UnitTarget[] {
-  const relation = (object: Node | undefined, objtype: string | undefined) =>
-    object !== undefined &&
-    (RELATION_TYPES.has(objtype ?? "") || TABLE_MEMBERS.has(objtype ?? ""))
-      ? [objectTarget(object, objtype, schema)]
-      : []
-  if ("CommentStmt" in stmt)
-    return relation(stmt.CommentStmt.object, stmt.CommentStmt.objtype)
-  if ("SecLabelStmt" in stmt)
-    return relation(stmt.SecLabelStmt.object, stmt.SecLabelStmt.objtype)
-  if ("DropStmt" in stmt) {
-    const { objects, removeType } = stmt.DropStmt
-    if (removeType === "OBJECT_SCHEMA")
-      return strings(objects).map((name) => schemaTarget(name))
-    return (objects ?? []).flatMap((o) => relation(o, removeType))
+  for (const key of DML_STATEMENTS) {
+    const node = (stmt as Record<string, { relation?: RangeVar } | undefined>)[
+      key
+    ]
+    if (node !== undefined) return [table(node.relation, schema)]
   }
-  if ("GrantStmt" in stmt) {
-    const node = stmt.GrantStmt
-    return node.targtype === "ACL_TARGET_ALL_IN_SCHEMA" &&
-      node.objtype === "OBJECT_TABLE"
-      ? strings(node.objects).map((name) => schemaTarget(name))
-      : []
-  }
-  if ("RenameStmt" in stmt && stmt.RenameStmt.renameType === "OBJECT_SCHEMA")
-    return [schemaTarget(stmt.RenameStmt.subname ?? "")]
-  if (
-    "AlterOwnerStmt" in stmt &&
-    stmt.AlterOwnerStmt.objectType === "OBJECT_SCHEMA" &&
-    stmt.AlterOwnerStmt.object !== undefined
-  )
-    return strings([stmt.AlterOwnerStmt.object]).map((name) =>
-      schemaTarget(name)
-    )
   return []
-}
-
-/**
- * Кожне відношення (`RangeVar`) вузла поза вкладеними операторами: дерево
- * розбору дає його і вузлом `RangeVar`, і голим полем (`relation`, `table`),
- * тож відношення впізнається за `relname`.
- */
-function relations(value: unknown, schema: string): UnitTarget[] {
-  if (Array.isArray(value)) return value.flatMap((v) => relations(v, schema))
-  if (typeof value !== "object" || value === null) return []
-  const node = value as Record<string, unknown>
-  if (typeof node.relname === "string") return [table(node as RangeVar, schema)]
-  return Object.entries(node).flatMap(([key, child]) =>
-    isStatementKey(key) ? [] : relations(child, schema)
-  )
 }
 
 /**

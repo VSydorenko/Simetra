@@ -12,7 +12,6 @@ import {
   teamScopeKind,
   type Layer,
 } from "./fixtures/rights"
-import { dynamicFunction } from "./fixtures/sql-shape"
 import { SCOPE_FUNCTIONS_FILE, acceptDebt } from "./helpers"
 
 const RPC_FILE = "sql/public/rpc.sql"
@@ -222,13 +221,6 @@ describe("checkDefinerReads: functions", () => {
       expected: [warned(RPC, { tables: `public.${CHECKLIST_TABLE}` })],
     },
     {
-      name: "a plpgsql EXECUTE of a built string",
-      sql: {
-        [RPC_FILE]: plpgsqlFunction("EXECUTE format('SELECT %s', 1) INTO v;"),
-      },
-      expected: [warned(RPC, { tables: "", reason: "unknown" })],
-    },
-    {
       // Помічник виконується від власника зовнішньої функції.
       name: "a SECURITY INVOKER helper reading the table",
       sql: {
@@ -241,15 +233,6 @@ describe("checkDefinerReads: functions", () => {
           ),
       },
       expected: [warned(RPC)],
-    },
-    {
-      name: "a reached function with dynamic SQL",
-      sql: {
-        [RPC_FILE]:
-          sqlFunction(RPC, "SELECT public.dyn()") +
-          dynamicFunction("public.dyn"),
-      },
-      expected: [warned(RPC, { tables: "", reason: "unknown" })],
     },
     {
       // Закрита оболонка не забороняє читати таблицю під RLS, а EXECUTE без

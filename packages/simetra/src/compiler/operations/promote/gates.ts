@@ -6,7 +6,10 @@ import {
 } from "simetra/model"
 import type { CompiledModel } from "../../compile"
 import { diagnostic, type Diagnostic } from "../../diagnostics"
+import { modelViews } from "../../sql/function-body"
+import { bodyKindTable, type KindTables } from "../../sql/kind-table-verbatim"
 import type { SqlParser } from "../../sql/parse"
+import type { PlpgsqlParser } from "../../sql/plpgsql"
 import { unitTargets } from "../../sql/unit-target"
 import type { PromotedTable } from "./mapping"
 
@@ -118,6 +121,46 @@ export function writePathProblems(
     }
   }
   return problems
+}
+
+/**
+ * Правило 4 (Р2c1-24 а): промоція не переносить старий код, що пише
+ * промотовану таблицю. Після промоції вона — таблиця виду, і така одиниця
+ * дала б `sql.kind-table-verbatim` (Правило 1); гейт називає кожну до змін,
+ * тож автор бачить увесь перелік, а не першу відмову компіляції результату.
+ * Таблиці виду складаються з промотованих таблиць вручну: `kindTables` їх не
+ * дасть, бо до промоції вони ще `CustomTable`.
+ */
+export function debtWritesProblems(
+  model: CompiledModel,
+  tables: readonly QualifiedTable[],
+  parse: SqlParser,
+  plpgsql: PlpgsqlParser
+): Diagnostic[] {
+  const qualified = new Set<string>()
+  const byName = new Map<string, string[]>()
+  const bySchema = new Map<string, string[]>()
+  for (const t of tables) {
+    const k = key(t.schema, t.name)
+    qualified.add(k)
+    byName.set(t.name, [...(byName.get(t.name) ?? []), k])
+    bySchema.set(t.schema, [...(bySchema.get(t.schema) ?? []), k])
+  }
+  const promoted: KindTables = { qualified, byName, bySchema }
+  const views = modelViews(model.sqlUnits)
+  return model.sqlUnits.flatMap((unit) => {
+    if (unit.file === undefined || unit.line === undefined) return []
+    const body = bodyKindTable(unit, promoted, parse, plpgsql, views)
+    if (body === undefined) return []
+    return [
+      diagnostic("promote.debt-writes-table", unit.file, "", {
+        identity: unit.identity,
+        table: body.table,
+        statement: body.statement,
+        line: unit.line,
+      }),
+    ]
+  })
 }
 
 /**

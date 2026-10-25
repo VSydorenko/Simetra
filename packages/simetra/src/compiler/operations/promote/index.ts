@@ -29,7 +29,11 @@ import { objectFiles } from "../target"
 import type { OperationResult } from "../types"
 import { cascadeReferences, type PromotedReferences } from "./cascade"
 import { fillStepKind, fillTargetKey, modelFunctions } from "./fill"
-import { providerUserProblems, writePathProblems } from "./gates"
+import {
+  debtWritesProblems,
+  providerUserProblems,
+  writePathProblems,
+} from "./gates"
 import { kindFile, type PromotedSection } from "./kind-file"
 import {
   missingFills,
@@ -434,6 +438,7 @@ export async function promoteObject(
     }
   })
   problems.push(...writePathProblems(model, unitTables, parse))
+  problems.push(...debtWritesProblems(model, unitTables, parse, plpgsql))
   problems.push(
     ...providerUserProblems(
       model,

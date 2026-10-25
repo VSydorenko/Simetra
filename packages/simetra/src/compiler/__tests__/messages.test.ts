@@ -582,21 +582,45 @@ describe("messages catalog", () => {
       function: "public.f",
       table: "public.task",
       form: "functionBody",
-      statement: "TruncateStmt",
+      statement: "InsertStmt",
       line: 3,
     })
     expect(d.message).toBe(
-      "Function public.f at line 3 runs TruncateStmt on public.task, a table of a kind"
+      "Function public.f at line 3 runs InsertStmt on public.task, a table of a kind"
     )
     expect(localize(d, "uk").message).toBe(
-      "Функція public.f у рядку 3 виконує TruncateStmt над public.task — таблицею виду"
+      "Функція public.f у рядку 3 виконує InsertStmt над public.task — таблицею виду"
     )
-    // Підказка називає, що тілу дозволено, а не заміну політики чи тригера.
-    expect(d.hint).toContain("SELECT, INSERT, UPDATE, DELETE, MERGE")
-    expect(localize(d, "uk").hint).toContain(
-      "SELECT, INSERT, UPDATE, DELETE, MERGE"
-    )
+    // Підказка називає, хто пише таблицю виду, а не заміну політики чи тригера.
+    expect(d.hint).toContain("Only the platform writes a table of a kind")
+    expect(localize(d, "uk").hint).toContain("Таблицю виду пише лише платформа")
   })
+
+  it.each([
+    { statement: "AlterDatabaseSetStmt", en: "runs AlterDatabaseSetStmt" },
+    {
+      statement: "nonLiteralExecute",
+      en: "runs EXECUTE of a non-literal text",
+    },
+    { statement: "language", en: "is written in a language" },
+    { statement: "unread", en: "has a part the compiler could not read" },
+  ])(
+    "sql.function-body-statement gives $statement its own text",
+    ({ statement, en }) => {
+      const d = diagnostic(
+        "sql.function-body-statement",
+        "sql/public/x.sql",
+        "",
+        {
+          function: "public.f",
+          statement,
+          line: 3,
+        }
+      )
+      expect(d.message).toContain(en)
+      expect(localize(d, "uk").message).not.toBe(d.message)
+    }
+  )
 
   it.each([
     { level: "org", scope: "org" },

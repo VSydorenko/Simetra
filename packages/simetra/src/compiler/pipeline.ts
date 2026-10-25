@@ -61,6 +61,11 @@ import { buildPlatformUnits } from "./platform/units"
 import { checkSqlModules, closedModuleOwners } from "./sql/closed-forms"
 import { creationOrder } from "./sql/dependencies"
 import { checkDebt, debtPredicate } from "./sql/debt"
+import {
+  checkFunctionBodies,
+  checkPlatformCalls,
+  modelViews,
+} from "./sql/function-body"
 import { checkFunctionSettingsShell } from "./sql/function-settings-shell"
 import { checkKindTableVerbatim, kindTables } from "./sql/kind-table-verbatim"
 import { loadSqlParser, type SqlParser } from "./sql/parse"
@@ -172,7 +177,14 @@ export async function runStages(
       stage1.objects,
       sql.units,
       sql.rowRules,
-      debtPredicate(stage1.objects, stage1.project, kinds, parse, plpgsql),
+      debtPredicate(
+        stage1.objects,
+        stage1.project,
+        kinds,
+        parse,
+        plpgsql,
+        modelViews(sql.units)
+      ),
       parse,
       plpgsql,
       stage1.project?.database.provider
@@ -187,8 +199,8 @@ export async function runStages(
     ),
     ...debt.grows,
     // Дослівна політика чи тригер на таблиці виду і тіло функції, що її
-    // змінює, — помилка раннього блоку поруч із ратчетом боргу (Р2c1-1,
-    // Р2c1-15): стадія 5 за нею не запускається, а знімок таблиць уже є —
+    // пише, — помилка раннього блоку поруч із ратчетом боргу (Р2c1-1,
+    // Правило 1): стадія 5 за нею не запускається, а знімок таблиць уже є —
     // стадія 3 будує його до розбору `.sql`.
     ...(stage3 === undefined
       ? []
@@ -197,8 +209,20 @@ export async function runStages(
           stage3.physical.tables,
           sql.units,
           parse,
-          plpgsql
+          plpgsql,
+          stage1.project?.database.provider
         )),
+    // Дозвільний перелік операторів тіла (Р2c1-37) і виклики функцій
+    // платформи (Р2c1-38) знімка не потребують: стадія 5 після них судить
+    // лише прочитані тіла.
+    ...checkFunctionBodies(
+      stage1.objects,
+      stage1.project,
+      sql.units,
+      parse,
+      plpgsql
+    ),
+    ...checkPlatformCalls(sql.units, parse, plpgsql),
     ...(embedded?.diagnostics ?? []),
   ]
   if (

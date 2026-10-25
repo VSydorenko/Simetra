@@ -251,13 +251,17 @@ const plpgsqlFn = (body: string, name = "public.f", shell = "VOLATILE") =>
 /** Функція `LANGUAGE sql` без волатильності — поза оболонкою, тобто борг. */
 const sqlFn = (body: string) =>
   `CREATE FUNCTION public.f() RETURNS void LANGUAGE sql AS $$ ${body} $$`
+/** Подання моделі `v1` над `v2` над `public.task` — автооновлювані. */
+const VIEWS =
+  "CREATE VIEW public.v2 AS SELECT * FROM public.task;\nCREATE VIEW public.v1 AS SELECT * FROM public.v2;\n"
 
 const bodyVerbatim = (
   file: string,
   table: string,
   statement: string,
   fn = "public.f",
-  identity = `function:${fn}()`
+  identity = `function:${fn}()`,
+  line = 1
 ) => ({
   code: "sql.kind-table-verbatim",
   file,
@@ -267,182 +271,157 @@ const bodyVerbatim = (
     table,
     form: "functionBody",
     statement,
-    line: 1,
+    line,
   },
 })
 
-describe("sql.kind-table-verbatim: a function body changes a kind table (Р2c1-15)", () => {
-  // Тіло будь-якої функції чи процедури, у будь-якому файлі, лише читає й
-  // пише рядки таблиці виду (DML) і блокує її (`LOCK`): решта операторів
-  // змінила б таблицю повз права й перевірки платформи — `TRUNCATE` повз RLS,
-  // політика, тригер чи грант під час виконання. Такий оператор боргом не
-  // буває, тож неперелічена функція поза оболонкою не дає `sql.debt-grows`.
+describe("sql.kind-table-verbatim: application SQL does not write a kind table (Rule 1, Р2c1-16)", () => {
+  // Таблицю виду пишуть лише ядро команд, оболонка проведення й тригери
+  // платформи: DML застосунку в неї обійшов би права, рухи й перевірки
+  // команди. Ціль — лише відношення, яке оператор змінює (`relation`), тож
+  // таблиця, яку DML лише читає, ціллю не є. Такий оператор боргом не буває,
+  // тож неперелічена функція поза оболонкою не дає `sql.debt-grows`.
   it.each([
     {
-      name: "CREATE POLICY in a plpgsql body",
-      file: EXTRA,
-      sql: plpgsqlFn(policy("public.task")),
-      expected: bodyVerbatim(EXTRA, "public.task", "CreatePolicyStmt"),
+      name: "INSERT",
+      sql: plpgsqlFn("INSERT INTO public.task (id) VALUES (NULL)"),
+      expected: bodyVerbatim(EXTRA, "public.task", "InsertStmt"),
     },
     {
-      // Функція поза оболонкою — борг, але не з таким тілом.
-      name: "ALTER TABLE … DISABLE ROW LEVEL SECURITY in an sql body",
-      file: EXTRA,
-      sql: sqlFn("ALTER TABLE public.task DISABLE ROW LEVEL SECURITY"),
-      expected: bodyVerbatim(EXTRA, "public.task", "AlterTableStmt"),
+      name: "UPDATE",
+      sql: plpgsqlFn("UPDATE public.task SET id = id WHERE false"),
+      expected: bodyVerbatim(EXTRA, "public.task", "UpdateStmt"),
     },
     {
-      name: "TRUNCATE of a tabular section table",
-      file: EXTRA,
-      sql: plpgsqlFn(`TRUNCATE public.${CHECKLIST_TABLE}`),
+      name: "DELETE in an sql body",
+      sql: sqlFn("DELETE FROM public.task WHERE false"),
+      expected: bodyVerbatim(EXTRA, "public.task", "DeleteStmt"),
+    },
+    {
+      name: "MERGE",
+      sql: plpgsqlFn(
+        "MERGE INTO public.task t USING (SELECT 1 AS x) s ON false WHEN NOT MATCHED THEN DO NOTHING"
+      ),
+      expected: bodyVerbatim(EXTRA, "public.task", "MergeStmt"),
+    },
+    {
+      name: "a tabular section table",
+      sql: plpgsqlFn(`DELETE FROM public.${CHECKLIST_TABLE} WHERE false`),
+      expected: bodyVerbatim(EXTRA, `public.${CHECKLIST_TABLE}`, "DeleteStmt"),
+    },
+    {
+      name: "the movements table of a register",
+      sql: plpgsqlFn(
+        `DELETE FROM public.${HOURS_TABLES.movements} WHERE false`
+      ),
       expected: bodyVerbatim(
         EXTRA,
-        `public.${CHECKLIST_TABLE}`,
-        "TruncateStmt"
-      ),
-    },
-    {
-      name: "GRANT",
-      file: EXTRA,
-      sql: plpgsqlFn("GRANT INSERT ON public.task TO authenticated"),
-      expected: bodyVerbatim(EXTRA, "public.task", "GrantStmt"),
-    },
-    {
-      name: "literal EXECUTE 'CREATE POLICY …'",
-      file: EXTRA,
-      sql: plpgsqlFn(`EXECUTE '${policy("public.task")}'`),
-      expected: bodyVerbatim(EXTRA, "public.task", "CreatePolicyStmt"),
-    },
-    {
-      name: "in a kind module",
-      file: TASK_MODULE,
-      sql: plpgsqlFn(
-        "ALTER TABLE public.task DISABLE TRIGGER ALL",
-        "public.task_reopen"
-      ),
-      expected: bodyVerbatim(
-        TASK_MODULE,
-        "public.task",
-        "AlterTableStmt",
-        "public.task_reopen"
-      ),
-    },
-    {
-      name: "in the debt module of an adopted table",
-      file: TASK_NOTE_MODULE,
-      sql: sqlFn(`DROP POLICY task_read ON public.${HOURS_TABLES.movements}`),
-      expected: bodyVerbatim(
-        TASK_NOTE_MODULE,
         `public.${HOURS_TABLES.movements}`,
-        "DropStmt"
+        "DeleteStmt"
       ),
     },
     {
-      // Проба рев'ю: закрита оболонка не робить таке тіло дозволеним.
-      name: "VOLATILE SECURITY DEFINER SET search_path = '' creating a policy",
-      file: EXTRA,
+      // Тригери платформи переносять запис у джерело ідентичностей у
+      // «Користувачі» й `simetra.identities` (N7).
+      name: "the identity source table of the provider",
+      sql: plpgsqlFn("UPDATE auth.users SET email = NULL WHERE false"),
+      expected: bodyVerbatim(EXTRA, "auth.users", "UpdateStmt"),
+    },
+    {
+      name: "DML in a literal EXECUTE",
+      sql: plpgsqlFn("EXECUTE 'DELETE FROM public.task WHERE false'"),
+      expected: bodyVerbatim(EXTRA, "public.task", "DeleteStmt"),
+    },
+    {
+      name: "a DO block in a body",
       sql: plpgsqlFn(
-        policy("public.task"),
-        "public.f",
-        "VOLATILE SECURITY DEFINER SET search_path = ''"
+        "DO $d$ BEGIN DELETE FROM public.task WHERE false; END $d$"
       ),
-      expected: bodyVerbatim(EXTRA, "public.task", "CreatePolicyStmt"),
+      expected: bodyVerbatim(EXTRA, "public.task", "DeleteStmt"),
+    },
+    {
+      name: "BEGIN ATOMIC",
+      sql: "CREATE FUNCTION public.f() RETURNS void LANGUAGE sql BEGIN ATOMIC INSERT INTO public.task (id) VALUES (NULL); END",
+      expected: bodyVerbatim(EXTRA, "public.task", "InsertStmt"),
+    },
+    {
+      // Вкладений оператор, що змінює дані, судиться окремо.
+      name: "a data-modifying CTE",
+      sql: sqlFn("WITH d AS (DELETE FROM public.task RETURNING 1) SELECT 1"),
+      expected: bodyVerbatim(EXTRA, "public.task", "DeleteStmt"),
+    },
+    {
+      // Postgres переписує запис в автооновлюване подання на базову таблицю,
+      // тож подання моделі розгортається до відношень визначення.
+      name: "a model view over a model view over a kind table",
+      sql: VIEWS + plpgsqlFn("INSERT INTO public.v1 (id) VALUES (NULL)"),
+      expected: bodyVerbatim(
+        EXTRA,
+        "public.task",
+        "InsertStmt",
+        "public.f",
+        "function:public.f()",
+        3
+      ),
     },
     {
       name: "procedure",
-      file: EXTRA,
-      sql: "CREATE PROCEDURE public.f() LANGUAGE sql AS $$ CREATE INDEX ON public.task (id) $$",
+      sql: "CREATE PROCEDURE public.f() LANGUAGE sql AS $$ DELETE FROM public.task WHERE false $$",
       expected: bodyVerbatim(
         EXTRA,
         "public.task",
-        "IndexStmt",
+        "DeleteStmt",
         "public.f",
         "procedure:public.f()"
       ),
-    },
-    {
-      name: "COMMENT ON TABLE",
-      file: EXTRA,
-      sql: plpgsqlFn("COMMENT ON TABLE public.org_roles IS 'x'"),
-      expected: bodyVerbatim(EXTRA, "public.org_roles", "CommentStmt"),
-    },
-    {
-      name: "SECURITY LABEL ON TABLE",
-      file: EXTRA,
-      sql: plpgsqlFn("SECURITY LABEL FOR anon ON TABLE public.task IS 'x'"),
-      expected: bodyVerbatim(EXTRA, "public.task", "SecLabelStmt"),
     },
     {
       // Шлях пошуку під час виконання статично не відомий: ім'я судиться за
       // будь-якою схемою, як у дослівної політики.
       name: "unqualified table in a function of another schema",
       file: OTHER_SCHEMA,
-      sql: plpgsqlFn(policy("task"), "app.f"),
+      sql: plpgsqlFn("DELETE FROM task WHERE false", "app.f"),
       expected: bodyVerbatim(
         OTHER_SCHEMA,
         "public.task",
-        "CreatePolicyStmt",
+        "DeleteStmt",
         "app.f"
       ),
     },
     {
-      name: "a child table of a kind table",
-      file: EXTRA,
+      name: "in a kind module",
+      file: TASK_MODULE,
       sql: plpgsqlFn(
-        "CREATE TABLE public.task_extra () INHERITS (public.task)"
+        "DELETE FROM public.task WHERE false",
+        "public.task_reopen"
       ),
-      expected: bodyVerbatim(EXTRA, "public.task", "CreateStmt"),
-    },
-    {
-      // Схема цілком: грант на кожну її таблицю, зокрема таблиці виду.
-      name: "GRANT … ON ALL TABLES IN SCHEMA",
-      file: EXTRA,
-      sql: plpgsqlFn(
-        "GRANT TRUNCATE ON ALL TABLES IN SCHEMA public TO authenticated"
+      expected: bodyVerbatim(
+        TASK_MODULE,
+        "public.task",
+        "DeleteStmt",
+        "public.task_reopen"
       ),
-      expected: bodyVerbatim(EXTRA, "public.announcement", "GrantStmt"),
     },
     {
-      name: "DROP SCHEMA",
-      file: EXTRA,
-      sql: plpgsqlFn("DROP SCHEMA public CASCADE"),
-      expected: bodyVerbatim(EXTRA, "public.announcement", "DropStmt"),
-    },
-    {
-      name: "ALTER SCHEMA … RENAME",
-      file: EXTRA,
-      sql: plpgsqlFn("ALTER SCHEMA public RENAME TO old_public"),
-      expected: bodyVerbatim(EXTRA, "public.announcement", "RenameStmt"),
-    },
-    {
-      // Власник схеми може видалити будь-яку її таблицю.
-      name: "ALTER SCHEMA … OWNER",
-      file: EXTRA,
-      sql: plpgsqlFn("ALTER SCHEMA public OWNER TO authenticated"),
-      expected: bodyVerbatim(EXTRA, "public.announcement", "AlterOwnerStmt"),
-    },
-    {
-      name: "a DO block in a body",
-      file: EXTRA,
-      sql: plpgsqlFn("DO $d$ BEGIN TRUNCATE public.task; END $d$"),
-      expected: bodyVerbatim(EXTRA, "public.task", "TruncateStmt"),
-    },
-    {
-      name: "a function defined in a body",
-      file: EXTRA,
-      sql: plpgsqlFn(
-        "CREATE FUNCTION pg_temp.g() RETURNS void LANGUAGE sql AS $g$ TRUNCATE public.task $g$; PERFORM pg_temp.g()"
+      name: "in the debt module of an adopted table",
+      file: TASK_NOTE_MODULE,
+      sql: sqlFn(`DELETE FROM public.${HOURS_TABLES.movements} WHERE false`),
+      expected: bodyVerbatim(
+        TASK_NOTE_MODULE,
+        `public.${HOURS_TABLES.movements}`,
+        "DeleteStmt"
       ),
-      expected: bodyVerbatim(EXTRA, "public.task", "TruncateStmt"),
     },
-  ])("$name → error, not debt", async ({ file, sql, expected }) => {
-    const result = await compile(files({ [file]: sql }))
+  ])("$name → error, not debt", async ({ file = EXTRA, sql, expected }) => {
+    const result = await compile(await acceptDebt(files({ [file]: sql })))
     expect(brief(result.diagnostics)).toEqual([expected])
   })
 
   it("a listed function with such a body is an error and a stale entry", async () => {
     const result = await compile(
-      files({ [EXTRA]: sqlFn("TRUNCATE public.task") }, ["function:public.f()"])
+      files({ [EXTRA]: sqlFn("DELETE FROM public.task WHERE false") }, [
+        "function:public.f()",
+      ])
     )
     expect(result.diagnostics.map((d) => d.code).sort()).toEqual([
       "sql.debt-stale",
@@ -450,42 +429,35 @@ describe("sql.kind-table-verbatim: a function body changes a kind table (Р2c1-1
     ])
   })
 
-  // Рядки DML — під RLS і правами таблиці, як і запит команди; `LOCK` рядків
-  // не змінює. Таблиця виду, яку оператор поза DML лише читає вкладеним
-  // запитом, його ціллю не є.
+  // Читання й блокування рядків таблиці виду — під RLS і правами таблиці,
+  // як запит команди; таблиця, яку DML лише читає (`FROM`, `USING`), ціллю
+  // не є.
   it.each([
     ["SELECT", "PERFORM 1 FROM public.task"],
     ["SELECT … INTO", "SELECT count(*) INTO STRICT n FROM public.task"],
-    [
-      "INSERT",
-      `INSERT INTO public.${CHECKLIST_TABLE} SELECT * FROM public.${CHECKLIST_TABLE} WHERE false`,
-    ],
-    ["UPDATE", "UPDATE public.task SET id = id WHERE false"],
-    ["DELETE", "DELETE FROM public.task WHERE false"],
-    [
-      "MERGE",
-      "MERGE INTO public.task t USING (SELECT 1 AS x) s ON false WHEN NOT MATCHED THEN DO NOTHING",
-    ],
+    ["SELECT … FOR UPDATE", "PERFORM 1 FROM public.task FOR UPDATE"],
     ["LOCK", "LOCK TABLE public.task IN SHARE MODE"],
     [
-      "DML in a literal EXECUTE",
-      "EXECUTE 'DELETE FROM public.task WHERE false'",
-    ],
-    ["a policy on a CustomTable", policy(`public.${TASK_NOTE_ADOPTED_TABLE}`)],
-    ["TRUNCATE of a CustomTable", `TRUNCATE public.${TASK_NOTE_ADOPTED_TABLE}`],
-    [
-      "a policy on a CustomTable reading a kind table",
-      `CREATE POLICY p ON public.${TASK_NOTE_ADOPTED_TABLE} FOR SELECT USING (EXISTS (SELECT 1 FROM public.task))`,
+      "INSERT into a CustomTable",
+      `INSERT INTO public.${TASK_NOTE_ADOPTED_TABLE} (id) SELECT id FROM public.task`,
     ],
     [
-      "a temporary table copied from a kind table",
-      "CREATE TEMP TABLE snapshot AS SELECT * FROM public.task",
+      "UPDATE … FROM a kind table",
+      `UPDATE public.${TASK_NOTE_ADOPTED_TABLE} n SET name = n.name FROM public.task t WHERE n.task_id = t.id`,
+    ],
+    [
+      "DELETE … USING a kind table",
+      `DELETE FROM public.${TASK_NOTE_ADOPTED_TABLE} n USING public.task t WHERE n.task_id = t.id`,
+    ],
+    [
+      "MERGE … USING a kind table",
+      `MERGE INTO public.${TASK_NOTE_ADOPTED_TABLE} n USING public.task t ON n.task_id = t.id WHEN MATCHED THEN DELETE`,
     ],
   ])("%s → no error", async (_, body) => {
-    // Літеральний `EXECUTE` виводить функцію з оболонки, тож вона — борг:
-    // перелік приймає його, і лишається лише те, що судить це правило.
+    // Функція без волатильності — борг: перелік приймає його, і лишається
+    // лише те, що судить це правило.
     const result = await compile(
-      await acceptDebt(files({ [EXTRA]: plpgsqlFn(body) }))
+      await acceptDebt(files({ [EXTRA]: plpgsqlFn(body, "public.f", "") }))
     )
     expect(brief(result.diagnostics)).toEqual([])
   })

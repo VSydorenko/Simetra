@@ -8,7 +8,6 @@ import { reachableCalls, type ReachReason, type ReachTrust } from "../sql/reach"
 import {
   COMMENT_COUNTER_FILE,
   COUNT_COMMENT_SQL_FILE,
-  PROJECT_CATALOG_FILE,
   compiledPolicyDomain,
   counterColumn,
   policyDomain,
@@ -17,7 +16,6 @@ import {
 import { dynamicFunction } from "./fixtures/sql-shape"
 import {
   acceptDebt,
-  diagnosticBrief,
   expectClean,
   metaFiles,
   project,
@@ -26,7 +24,6 @@ import {
 } from "./helpers"
 
 const SHARED = "sql/public/shared.sql"
-const PROJECT_MODULE = PROJECT_CATALOG_FILE.replace(".meta.json", ".sql")
 const HEAD = "public.count_comment"
 /** Згенерована функція членства `OrgMember` домену політик. */
 const MY_MEMBER = "public.org_member_my_member"
@@ -663,47 +660,6 @@ describe("reachableCalls", () => {
 })
 
 describe("checkLinks: sql.command-context-reach", () => {
-  const reachCodes = ["sql.command-context-reach"]
-
-  it("names the head, the reached function and the chain", async () => {
-    const result = await compiledPolicyDomain({
-      [COUNT_COMMENT_SQL_FILE]: handler("PERFORM public.helper();"),
-      [SHARED]: dynamicFunction("public.helper"),
-    })
-    expect(diagnosticBrief(result.diagnostics, reachCodes)).toEqual([
-      {
-        code: "sql.command-context-reach",
-        file: COUNT_COMMENT_SQL_FILE,
-        params: {
-          function: "public.helper",
-          chain: "public.count_comment → public.helper",
-          reason: "nonLiteralExecute",
-        },
-      },
-    ])
-  })
-
-  it("judges a function of a closed module as a head", async () => {
-    const result = await compiledPolicyDomain({
-      [PROJECT_MODULE]: sqlFunction(
-        "public.project_total",
-        "SELECT public.helper()"
-      ).replace("STABLE", "STABLE SET search_path = ''"),
-      [SHARED]: dynamicFunction("public.helper"),
-    })
-    expect(diagnosticBrief(result.diagnostics, reachCodes)).toEqual([
-      {
-        code: "sql.command-context-reach",
-        file: PROJECT_MODULE,
-        params: {
-          function: "public.helper",
-          chain: "public.project_total → public.helper",
-          reason: "nonLiteralExecute",
-        },
-      },
-    ])
-  })
-
   it("leaves the own body of a handler to its shell check", async () => {
     const result = await compiledPolicyDomain({
       [COUNT_COMMENT_SQL_FILE]: handler("EXECUTE format('SELECT %s', 1);"),
@@ -713,12 +669,6 @@ describe("checkLinks: sql.command-context-reach", () => {
         .filter((d) => d.severity === "error")
         .map((d) => d.code)
     ).toEqual(["subscription.handler-not-closed"])
-  })
-
-  it("keeps dynamic SQL that closed code does not reach as debt", async () => {
-    expectClean(
-      await compiledPolicyDomain({ [SHARED]: dynamicFunction("public.helper") })
-    )
   })
 
   it("trusts the platform schema and generated functions", async () => {
