@@ -54,7 +54,9 @@ export const DYNAMIC_SQL_BUILTINS: ReadonlySet<string> = new Set([
 /**
  * Функції схем провайдера, що виконують SQL з рядка (кваліфіковані імена):
  * решті функцій цих схем обхід довіряє (Р2c1-5, п. 4). Нова функція
- * провайдера такого роду потребує поповнення переліку.
+ * провайдера такого роду потребує поповнення переліку. Обгортка над такою
+ * функцією теж її виконує: `graphql_public.graphql` — sql-функція над
+ * `graphql.resolve`, яку Supabase ставить разом із pg_graphql.
  */
 export const UNSAFE_PROVIDER_FUNCTIONS: ReadonlySet<string> = new Set([
   "extensions.dblink",
@@ -62,6 +64,7 @@ export const UNSAFE_PROVIDER_FUNCTIONS: ReadonlySet<string> = new Set([
   "extensions.dblink_send_query",
   "extensions.dblink_open",
   "graphql.resolve",
+  "graphql_public.graphql",
   "pgtle.install_extension",
 ])
 

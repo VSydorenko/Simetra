@@ -210,6 +210,15 @@ describe("reachableCalls", () => {
       expected: [found("extensions.dblink_exec", "dynamicBuiltin")],
     },
     {
+      // Публічна обгортка pg_graphql кличе `graphql.resolve`.
+      name: "unsafe-provider-graphql-wrapper",
+      head: handler(
+        "PERFORM graphql_public.graphql(query := 'mutation { x }');"
+      ),
+      shared: "",
+      expected: [found("graphql_public.graphql", "dynamicBuiltin")],
+    },
+    {
       name: "unqualified-unsafe-provider",
       head: handler("PERFORM dblink_exec('c', 'select 1');"),
       shared: "",
