@@ -482,6 +482,29 @@ describe("kind module: closed forms only", () => {
         [ERROR, "setConfig", C],
       ],
       [
+        // Записи одного оператора судяться всі, а не лише перший.
+        "two writes in one statement, the claims first",
+        plpgsqlBody(
+          `PERFORM set_config('${CLAIMS}', '{}', true), set_config('${C}', '{}', true);`
+        ),
+        [ERROR, "setConfig", C],
+      ],
+      [
+        // Опція SET не ховає тіла: запис платформи в ньому — помилка.
+        "a SET option on the claims with the command context in the body",
+        shell(
+          `LANGUAGE plpgsql VOLATILE SET ${CLAIMS} = '{}'`,
+          `BEGIN PERFORM set_config('${C}', '{}', true); RETURN 1; END`
+        ),
+        [ERROR, "setConfig", C],
+      ],
+      [
+        // Postgres імен налаштувань за регістром не розрізняє.
+        "an upper-case platform prefix",
+        plpgsqlBody(`PERFORM set_config('${C.toUpperCase()}', '{}', true);`),
+        [ERROR, "setConfig", C.toUpperCase()],
+      ],
+      [
         "RESET ALL as a body statement",
         plpgsqlBody("RESET ALL;"),
         [ERROR, "setStatement", "*"],
@@ -500,6 +523,11 @@ describe("kind module: closed forms only", () => {
           .filter((d) => d.code === ERROR || d.code === WARNING)
           .map((d) => [d.code, d.params?.form, d.params?.setting])
       ).toEqual([expected])
+      // Помилка боргу несе маркер модуля: повідомлення й підказка конверсії
+      // боргові (Р2c1-6), а не текст закритого коду.
+      expect(
+        found.filter((d) => d.code === ERROR).map((d) => d.params?.module)
+      ).toEqual(expected[0] === ERROR ? ["debt"] : [])
       // Попередження не зупиняє компіляцію: прийом бази з ним проходить.
       if (expected[0] === WARNING) {
         expect(found.filter((d) => d.severity === "error")).toEqual([])

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 import {
   applyChanges,
   compile,
+  fixFiles,
   promoteObject,
   type Diagnostic,
 } from "simetra/compiler"
@@ -196,6 +197,25 @@ describe("sql.kind-table-verbatim", () => {
     )
     expect(result.diagnostics.map((d) => d.code).sort()).toEqual([
       "sql.debt-stale",
+      "sql.kind-table-verbatim",
+    ])
+  })
+
+  it("fix drops a listed verbatim policy on a kind table from the debt list", async () => {
+    // `fix` (як і introspect) рахує борг тим самим правилом, що й компіляція:
+    // дослівна політика на таблиці виду боргом не буває, тож запис про неї
+    // `fix` прибирає, а не лишає застарілим назавжди.
+    const before = files({ [EXTRA]: policy("public.task") }, [
+      "policy:public.task.p",
+    ])
+    let n = 970_000
+    const result = await fixFiles(before, {
+      schemaPath: (file, schemaFile) => `schemas-of/${file}/${schemaFile}`,
+      newId: () => uuid(++n),
+    })
+    const fixed = applyChanges(before, result.changes)
+    expect(JSON.parse(fixed.get(SQL_DEBT_FILE)!).units).toEqual([])
+    expect((await compile(fixed)).diagnostics.map((d) => d.code)).toEqual([
       "sql.kind-table-verbatim",
     ])
   })

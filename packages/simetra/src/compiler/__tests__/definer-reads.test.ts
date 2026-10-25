@@ -147,6 +147,17 @@ describe("checkDefinerReads: functions", () => {
       expected: [warned(RPC, { roles: API.anonymous })],
     },
     {
+      // Грант PUBLIC повертає EXECUTE кожній ролі API (Р2c1-8).
+      name: "EXECUTE revoked from all and granted back to PUBLIC",
+      sql: {
+        [RPC_FILE]:
+          countTask() +
+          revokeExecute(...ALL) +
+          grants(`GRANT EXECUTE ON FUNCTION ${RPC}() TO`, ["PUBLIC"]),
+      },
+      expected: [warned(RPC)],
+    },
+    {
       // Відкликає лише право передавати привілей, не сам привілей.
       name: "REVOKE GRANT OPTION FOR",
       sql: {
