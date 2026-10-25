@@ -148,22 +148,38 @@ function parseFunction(sql: string): PlpgsqlParse {
   if (body === undefined || action === undefined) {
     return { ok: true, fn: undefined }
   }
-  const aliases = aliasesOf(sql)
+  const source = bodySource(sql)
   // Тіло, яке Postgres уже розібрав, сканер теж прочитає; якщо ж ні, —
-  // нерозбірне тіло чесніше за порожній список псевдонімів.
-  if (aliases === undefined) {
+  // нерозбірне тіло чесніше за порожній список псевдонімів чи пропущений
+  // ініціалізатор запису.
+  if (source === undefined) {
     return { ok: false, message: "PL/pgSQL body does not compile" }
   }
-  return { ok: true, fn: { ...readFunction(body, action), aliases } }
+  return {
+    ok: true,
+    fn: {
+      ...readFunction(body, action, recordInitializers(source)),
+      aliases: aliasesOf(source.tokens),
+    },
+  }
+}
+
+/** Лексема рядкового тіла: зсуви — у байтах UTF-8, як їх дає сканер. */
+interface BodyToken {
+  text: string
+  start: number
+  end: number
 }
 
 /**
- * Псевдоніми тіла — лексемами сканера Postgres, а не регулярним виразом:
- * рядки, коментарі й квотовані імена сканер уже відділив. Шаблон
- * `<ім'я> ALIAS FOR` може трапитися й поза `DECLARE` (`… FROM t alias FOR
- * UPDATE`); тоді «псевдонім» зайвий, і перевірка лише суворіша.
+ * Рядкове тіло лексемами сканера Postgres, без коментарів, і його байти:
+ * рядки, коментарі й квотовані імена сканер уже відділив, тож шаблони
+ * шукаються в лексемах, а не регулярним виразом. Тіла немає — порожній
+ * список; збій сканера — `undefined`.
  */
-function aliasesOf(sql: string): string[] | undefined {
+function bodySource(
+  sql: string
+): { tokens: BodyToken[]; bytes: Uint8Array } | undefined {
   try {
     const create = asRecord(
       asRecord(asRecord(asArray(asRecord(parseSync(sql))?.stmts)[0])?.stmt)
@@ -175,26 +191,97 @@ function aliasesOf(sql: string): string[] | undefined {
     const source = asRecord(
       asRecord(asArray(asRecord(asRecord(as?.arg)?.List)?.items)[0])?.String
     )?.sval
-    if (typeof source !== "string") return []
+    if (typeof source !== "string") {
+      return { tokens: [], bytes: new Uint8Array() }
+    }
     const tokens = scanSync(source).tokens.filter(
       (t) => t.tokenName !== "SQL_COMMENT" && t.tokenName !== "C_COMMENT"
     )
-    const names: string[] = []
-    tokens.forEach((token, index) => {
-      const next = tokens[index + 1]
-      const previous = tokens[index - 1]
-      if (
-        previous !== undefined &&
-        token.text.toLowerCase() === "alias" &&
-        next?.text.toLowerCase() === "for"
-      ) {
-        names.push(identName(previous.text))
-      }
-    })
-    return names
+    return { tokens, bytes: new TextEncoder().encode(source) }
   } catch {
     return undefined
   }
+}
+
+/**
+ * Псевдоніми тіла. Шаблон `<ім'я> ALIAS FOR` може трапитися й поза `DECLARE`
+ * (`… FROM t alias FOR UPDATE`); тоді «псевдонім» зайвий, і перевірка лише
+ * суворіша.
+ */
+function aliasesOf(tokens: readonly BodyToken[]): string[] {
+  const names: string[] = []
+  tokens.forEach((token, index) => {
+    const next = tokens[index + 1]
+    const previous = tokens[index - 1]
+    if (
+      previous !== undefined &&
+      token.text.toLowerCase() === "alias" &&
+      next?.text.toLowerCase() === "for"
+    ) {
+      names.push(identName(previous.text))
+    }
+  })
+  return names
+}
+
+/** Ініціалізатор оголошеного запису: ім'я, рядок оголошення й текст виразу. */
+interface RecordInitializer {
+  name: string
+  lineno: number
+  query: string
+}
+
+const INITIALIZERS: ReadonlySet<string> = new Set([":=", "=", "default"])
+
+/**
+ * Ініціалізатори змінних типу `record` (`r record := ROW(…)`). Postgres
+ * обчислює їх на вході в блок, як і значення інших змінних, але розбір
+ * `@libpg-query/parser` віддає `PLpgSQL_rec` без `default_val`: без цього
+ * читання виклик чи запис налаштувань в ініціалізаторі не побачив би жоден
+ * споживач порту. Тип запису в оголошенні — лише голе слово `record` (інше
+ * написання парсер дає змінною з `default_val`), тож оголошення — це
+ * `<ім'я> [CONSTANT] record … (:= | = | DEFAULT) <вираз>;`; вираз — текст від
+ * лексеми після ініціалізатора до `;` поза дужками, як `default_val`.
+ */
+function recordInitializers(source: {
+  tokens: readonly BodyToken[]
+  bytes: Uint8Array
+}): RecordInitializer[] {
+  const { tokens, bytes } = source
+  const decoder = new TextDecoder()
+  const lineOf = (offset: number) => {
+    let line = 1
+    for (let i = 0; i < offset; i++) if (bytes[i] === 0x0a) line++
+    return line
+  }
+  const found: RecordInitializer[] = []
+  tokens.forEach((token, index) => {
+    const constant = tokens[index + 1]?.text.toLowerCase() === "constant"
+    const type = tokens[index + (constant ? 2 : 1)]
+    if (type?.text.toLowerCase() !== "record") return
+    let depth = 0
+    let initializer: number | undefined
+    for (let i = index + (constant ? 3 : 2); i < tokens.length; i++) {
+      const text = tokens[i]!.text.toLowerCase()
+      if (text === "(") depth++
+      else if (text === ")") depth--
+      else if (depth === 0 && text === ";") {
+        if (initializer !== undefined && initializer + 1 < i) {
+          found.push({
+            name: identName(token.text),
+            lineno: lineOf(token.start),
+            query: decoder.decode(
+              bytes.subarray(tokens[initializer + 1]!.start, tokens[i - 1]!.end)
+            ),
+          })
+        }
+        return
+      } else if (initializer === undefined && INITIALIZERS.has(text)) {
+        initializer = i
+      }
+    }
+  })
+  return found
 }
 
 /** Ім'я, як його бачить Postgres: квотоване — дослівно, інше — в нижньому регістрі. */
@@ -277,7 +364,8 @@ function linenoOf(body: Json, fallback = 0): number {
 
 function readFunction(
   body: Json,
-  action: Json
+  action: Json,
+  initializers: readonly RecordInitializer[]
 ): Omit<PlpgsqlFunction, "aliases"> {
   const datums = asArray(body.datums).map(nodeOf)
   const statements: StatementDraft[] = []
@@ -287,7 +375,7 @@ function readFunction(
   if (root !== undefined) {
     walkStatement(root.kind, root.body, 0, datums, statements, dynamicLines)
   }
-  for (const statement of declarationStatements(datums)) {
+  for (const statement of declarationStatements(datums, initializers)) {
     statements.push(statement)
   }
 
@@ -540,11 +628,39 @@ function roleOf(
  * Значення за замовчуванням змінних (`n int := (SELECT … FROM t)`) і запити
  * явних курсорів живуть у списку змінних, а не в операторах, але читають
  * таблиці так само. Вони повертаються службовими операторами `declare`
- * наприкінці списку, щоб споживачі виразів не пропустили їх.
+ * наприкінці списку, щоб споживачі виразів не пропустили їх. Ініціалізатор
+ * запису приходить зі сканера (`recordInitializers`): оголошення зіставляється
+ * зі змінною за ім'ям і рядком, однойменні на одному рядку — за порядком.
  */
-function declarationStatements(datums: Datum[]): StatementDraft[] {
+function declarationStatements(
+  datums: Datum[],
+  initializers: readonly RecordInitializer[]
+): StatementDraft[] {
   const out: StatementDraft[] = []
+  const unmatched = [...initializers]
   for (const datum of datums) {
+    if (datum?.kind === "PLpgSQL_rec") {
+      const at = unmatched.findIndex(
+        (i) => i.name === datum.body.refname && i.lineno === datum.body.lineno
+      )
+      if (at < 0) continue
+      const [initializer] = unmatched.splice(at, 1)
+      out.push({
+        type: "declare",
+        lineno: initializer!.lineno,
+        depth: 0,
+        expressions: [
+          {
+            query: initializer!.query,
+            parseMode: 2,
+            role: "value",
+            lineno: initializer!.lineno,
+          },
+        ],
+        target: { variable: initializer!.name },
+      })
+      continue
+    }
     if (datum === undefined || datum.kind !== "PLpgSQL_var") continue
     const lineno = linenoOf(datum.body)
     const name = datumName(datum, datums)

@@ -399,6 +399,9 @@ describe("reachableCalls", () => {
   it.each([
     { declare: "v int := public.dyn();", body: "" },
     { declare: "k CURSOR FOR SELECT public.dyn();", body: "OPEN k;" },
+    // Ініціалізатор запису Postgres обчислює на вході в блок, а дерево
+    // розбору його не несе.
+    { declare: "r record := ROW(public.dyn());", body: "" },
   ])("plpgsql declaration: $declare", ({ declare, body }) => {
     const mid = `CREATE FUNCTION public.mid() RETURNS int LANGUAGE plpgsql VOLATILE AS $$ DECLARE ${declare} BEGIN ${body} RETURN NULL; END $$;\n`
     expect(

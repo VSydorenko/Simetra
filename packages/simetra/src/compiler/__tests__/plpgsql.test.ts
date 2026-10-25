@@ -234,6 +234,30 @@ describe("loadPlpgsqlParser", () => {
     expect(f.statements[0]?.type).toBe("block")
   })
 
+  it("exposes the initializer of a record variable, which the tree drops", () => {
+    // Неініціалізований запис і запис циклу за курсором ініціалізатора не
+    // мають; однойменні оголошення в різних блоках — кожне своє.
+    const f = parsed(
+      fn(
+        `DECLARE -- записи\n  r record := ROW(app.f());\n  q RECORD;\n  c CURSOR FOR SELECT 1;\n  s CONSTANT record NOT NULL DEFAULT ROW(1);\nBEGIN\n  FOR k IN c LOOP NULL; END LOOP;\n  DECLARE r record = NEW; BEGIN NULL; END;\n  RETURN NEW;\nEND`
+      )
+    )
+    expect(
+      f.statements
+        .filter((s) => s.type === "declare")
+        .map((s) => [
+          s.lineno,
+          s.target,
+          s.expressions.map((e) => [e.role, e.query]),
+        ])
+    ).toEqual([
+      [3, { variable: "r" }, [["value", "ROW(app.f())"]]],
+      [5, { variable: "c" }, [["statement", "SELECT 1"]]],
+      [6, { variable: "s" }, [["value", "ROW(1)"]]],
+      [9, { variable: "r" }, [["value", "NEW"]]],
+    ])
+  })
+
   it("does not list unnamed INTO rows as variables", () => {
     const f = parsed(
       fn(
