@@ -366,6 +366,7 @@ describe("platform layer", () => {
       keyColumn: "account_id",
       nameSources: [{ column: "nickname" }],
       providerKey: "other-idp",
+      subjectIsUserId: true,
     }
     const units = buildPlatformUnits(
       {
@@ -420,6 +421,7 @@ describe("platform layer", () => {
         nameSources: [{ column: "nickname" }],
         anonymousColumn: "guest",
         providerKey: "other-idp",
+        subjectIsUserId: true,
       }
     )
     expect(

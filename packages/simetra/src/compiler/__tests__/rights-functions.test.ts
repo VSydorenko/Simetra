@@ -15,8 +15,6 @@ import {
   GLOBAL_ROLES_FILE,
   GRANT_FILE,
   ORG_ADMIN_ID,
-  ORG_ASSIGNMENTS_FILE,
-  ORG_ROLES_FILE,
   ORG_KIND_ID,
   ORG_MEMBER_ROLE_ID,
   PROJECT_FILE,
@@ -287,8 +285,9 @@ describe("rights functions", () => {
   })
 
   it("renders no rights functions without users, even with roles and an adopted source", async () => {
-    // Р2a1-30: `current_user_id` дає лише шар «Користувачів», а прийняте
-    // джерело прав до 2d не дає — компіляція чиста, функцій прав немає.
+    // Р2a1-30: `current_user_id` дає лише шар «Користувачів» — компіляція
+    // чиста, функцій прав немає. Довідники прав `org` лишаються: рівень
+    // скоупу з ролями джерелом не покрито (Р2d1-5).
     const result = await compileRights(
       withRoles(
         adoptedMembership(),
@@ -300,13 +299,7 @@ describe("rights functions", () => {
           [GRANT_FILE]: grantTable(),
           [TASK_FILE]: { trackAuthor: false },
         },
-        without(
-          USERS_FILE,
-          ORG_ROLES_FILE,
-          ORG_ASSIGNMENTS_FILE,
-          GLOBAL_ROLES_FILE,
-          GLOBAL_ASSIGNMENTS_FILE
-        )
+        without(USERS_FILE, GLOBAL_ROLES_FILE, GLOBAL_ASSIGNMENTS_FILE)
       )
     )
     expect(result.diagnostics.filter((d) => d.severity === "error")).toEqual([])

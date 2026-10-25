@@ -380,17 +380,33 @@ describe("messages catalog", () => {
     }
   )
 
-  it("rights.adopted-source-unsupported names the consequence without a plan label", () => {
-    const d = diagnostic("rights.adopted-source-unsupported", "", "", {
+  it("rights.adopted-source-writes names the write boundary of the source", () => {
+    const d = diagnostic("rights.adopted-source-writes", "", "", {
       source: "grants",
     })
     expect(d.severity).toBe("warning")
     expect(d.message).toBe(
-      'Rights from the adopted source "grants" are not computed yet: members of the source will not get rights on the objects of the kind'
+      'The platform only reads the adopted source "grants": the paths that write it belong to the application, and the rights safeguards do not apply to them until the rights tables are promoted'
     )
     expect(localize(d, "uk").message).toBe(
-      `Права з прийнятого джерела "grants" ще не обчислюються: учасники джерела не отримають прав на об'єкти виду`
+      `Прийняте джерело "grants" платформа лише читає: шляхи запису в нього — застосунку, і запобіжники прав на них не діють, доки таблиці прав не промотовано`
     )
+  })
+
+  it.each([
+    ["rights.source-member-key", { source: "members", table: "Membership" }],
+    ["rights.source-member-unique", { source: "members", table: "Membership" }],
+    [
+      "rights.source-column-type",
+      { source: "grants", column: "memberId", expected: "UUID" },
+    ],
+  ] as const)("%s is an error that names its parameters", (code, params) => {
+    const d = diagnostic(code, "", "", params)
+    expect(d.severity).toBe("error")
+    for (const value of Object.values(params)) {
+      expect(d.message).toContain(value)
+      expect(localize(d, "uk").message).toContain(value)
+    }
   })
 
   it("rights.scope-without-membership names the container when there is one", () => {

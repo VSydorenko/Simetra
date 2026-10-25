@@ -349,7 +349,7 @@ class References {
         return standardTargetRefs(
           def,
           target.data,
-          standardRefTargets(model.objects)
+          standardRefTargets(model.objects, model.project)
         )
       case "recorders":
       case undefined:

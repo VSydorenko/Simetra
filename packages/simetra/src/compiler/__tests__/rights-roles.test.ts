@@ -82,12 +82,12 @@ describe("roles and rights sets", () => {
       })
     )
     expect(result.diagnostics.filter((d) => d.severity === "error")).toEqual([])
-    // Права джерел ще не обчислюються (Р2a1-21): попередження на кожне.
+    // Межа відповідальності за запис у джерело (Р2d1-9): попередження на кожне.
     expect(
       result.diagnostics.map(({ code, pointer }) => [code, pointer])
     ).toEqual([
-      ["rights.adopted-source-unsupported", "/assignmentSources/0"],
-      ["rights.adopted-source-unsupported", "/assignmentSources/1"],
+      ["rights.adopted-source-writes", "/assignmentSources/0"],
+      ["rights.adopted-source-writes", "/assignmentSources/1"],
     ])
     const roles = result.model!.contracts.roles
     expect(roles.find((r) => r.name === "OrgAdmin")).toEqual({

@@ -213,6 +213,12 @@ export interface IdentitySource {
   deletedAtColumn?: string
   /** Значення `simetra.identities.provider` для цього провайдера. */
   providerKey: string
+  /**
+   * Чи `sub` сесії — і є id користувача (С8): лише тоді права без
+   * «Користувачів» можливі з прийнятим джерелом членства (спека прав §4.6),
+   * бо колонка користувача джерела зіставляється з `sub` напряму.
+   */
+  subjectIsUserId: boolean
 }
 
 /**
@@ -245,6 +251,7 @@ export const PROVIDER_IDENTITY_SOURCES: Readonly<
     anonymousColumn: "is_anonymous",
     deletedAtColumn: "deleted_at",
     providerKey: "supabase",
+    subjectIsUserId: true,
   },
 }
 

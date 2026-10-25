@@ -29,9 +29,7 @@ import {
   GLOBAL_ROLES_FILE,
   GRANT_FILE,
   HOURS_TABLES,
-  ORG_ASSIGNMENTS_FILE,
   ORG_KIND_ID,
-  ORG_ROLES_FILE,
   PROJECT_FILE,
   RATE_TABLE,
   REGION_DIMENSION_ID,
@@ -755,7 +753,8 @@ describe("rights read and users visibility policies", () => {
   it("no rights read policies where there are no rights functions", async () => {
     // Р2a2-24: ролі й прийняте джерело членства без «Користувачів» — функцій
     // прав немає (Р2a1-30), тож немає й політик, що їх кличуть; межа тенанта
-    // лишається (fail-closed).
+    // лишається (fail-closed). Довідники прав `org` лишаються: рівень скоупу
+    // з ролями джерелом не покрито (Р2d1-5).
     const result = await compile(
       withRoles(
         adoptedMembership(),
@@ -770,13 +769,7 @@ describe("rights read and users visibility policies", () => {
             grants: [grant(objects(["Document", "Task"]), ["read"], "any")],
           },
         },
-        without(
-          USERS_FILE,
-          ORG_ROLES_FILE,
-          ORG_ASSIGNMENTS_FILE,
-          GLOBAL_ROLES_FILE,
-          GLOBAL_ASSIGNMENTS_FILE
-        )
+        without(USERS_FILE, GLOBAL_ROLES_FILE, GLOBAL_ASSIGNMENTS_FILE)
       )
     )
     expect(result.diagnostics.filter((d) => d.severity === "error")).toEqual([])

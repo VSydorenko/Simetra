@@ -313,8 +313,8 @@ const ORG_ROLES_EXTRA_FILE = "catalogs/OrgRolesExtra/OrgRolesExtra.meta.json"
 const TEAM_ASSIGNMENTS_FILE =
   "catalogs/TeamRoleAssignments/TeamRoleAssignments.meta.json"
 
-const unsupported = (pointer: string, source: string) => ({
-  code: "rights.adopted-source-unsupported",
+const writes = (pointer: string, source: string) => ({
+  code: "rights.adopted-source-writes",
   severity: "warning",
   file: PROJECT_FILE,
   pointer,
@@ -495,15 +495,25 @@ describe("system rights catalog checks", () => {
       expected: [unread("/scopeKinds/0", "org")],
     },
     {
-      // Членство `org` дає лише джерело: довідників `org` бути не може, а
-      // межу — права джерела з'являться з 2d — називає попередження (Р2a1-21).
-      case: "adopted-source",
+      // Членство `org` дає джерело, а ролі рівня `org` джерелом призначень не
+      // покрито: довідники потрібні, як на будь-якому рівні (Р2d1-5).
+      case: "source-membership-without-catalogs",
       layers: [
         adoptedMembership(),
         without(ORG_ROLES_FILE, ORG_ASSIGNMENTS_FILE),
         { [PROJECT_FILE]: { membershipSources: [membersSource()] } },
       ],
-      expected: [unsupported("/membershipSources/0", "members")],
+      expected: [
+        writes("/membershipSources/0", "members"),
+        ...["rightsRoles", "roleAssignments"].map((missing) =>
+          error(
+            "rights.system-catalog-missing",
+            ROLE_FILE("OrgAdmin"),
+            "/assignedOn",
+            { level: "org", missing }
+          )
+        ),
+      ],
     },
     {
       case: "source-covers-level",
@@ -511,7 +521,7 @@ describe("system rights catalog checks", () => {
         without(GLOBAL_ROLES_FILE, GLOBAL_ASSIGNMENTS_FILE),
         assignmentSources(globalGrantsSource()),
       ],
-      expected: [unsupported("/assignmentSources/0", "globalGrants")],
+      expected: [writes("/assignmentSources/0", "globalGrants")],
     },
     {
       case: "parallel",
@@ -527,7 +537,7 @@ describe("system rights catalog checks", () => {
           level: "global",
           source: "globalGrants",
         }),
-        unsupported("/assignmentSources/0", "globalGrants"),
+        writes("/assignmentSources/0", "globalGrants"),
       ],
     },
     {
@@ -535,22 +545,17 @@ describe("system rights catalog checks", () => {
       // ролями рівня скоупу в тому самому виді (Р2a1-24).
       case: "mixed-in-scope-kind",
       layers: [assignmentSources(grantsSource())],
-      expected: [unsupported("/assignmentSources/0", "grants")],
+      expected: [writes("/assignmentSources/0", "grants")],
     },
     {
-      // До 2d у `subject` немає цілі: членство виду дає лише джерело.
+      // Перша міграція: прийняте членство й ролі Simetra в довідниках, чий
+      // `subject` посилається на таблицю-джерело (Р2d1-5).
       case: "source-only-membership",
       layers: [
         adoptedMembership(),
         { [PROJECT_FILE]: { membershipSources: [membersSource()] } },
       ],
-      expected: [
-        error("rights.system-catalog-scope", ORG_ASSIGNMENTS_FILE, "/scope", {
-          name: "OrgRoleAssignments",
-          scopeKind: "org",
-        }),
-        unsupported("/membershipSources/0", "members"),
-      ],
+      expected: [writes("/membershipSources/0", "members")],
     },
   ])("$case", async ({ layers, expected }) => {
     const result = await compileRights(withRoles(...layers))
@@ -563,6 +568,21 @@ describe("system rights catalog checks", () => {
         params,
       }))
     ).toEqual(expected)
+  })
+})
+
+describe("rights catalogs of a kind with an adopted membership", () => {
+  it("refer the subject to the source table by a composite key", async () => {
+    const { physical } = await compiled(adoptedMembership(), {
+      [PROJECT_FILE]: { membershipSources: [membersSource()] },
+    })
+    const fk = tableOf(physical, "org_role_assignments").foreignKeys.find((f) =>
+      f.columns.includes("subject")
+    )
+    expect(fk && [fk.columns, fk.references]).toEqual([
+      ["org_id", "subject"],
+      { schema: "public", table: "membership", columns: ["org_id", "id"] },
+    ])
   })
 })
 

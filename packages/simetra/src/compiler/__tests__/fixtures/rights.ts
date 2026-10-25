@@ -6,7 +6,7 @@ import {
   type CompileResult,
   type PromoteInput,
 } from "simetra/compiler"
-import { metaFiles, uuid } from "../helpers"
+import { SCOPE_FUNCTIONS_FILE, metaFiles, uuid } from "../helpers"
 
 /**
  * Синтетичний проєкт прав для тестів плану прав: вид скоупу `org`,
@@ -169,6 +169,16 @@ function defaults(): Record<string, Record<string, unknown>> {
 
 function column(id: number, name: string, physicalName: string, type: string) {
   return { id: uuid(id), name, physicalName, type, notNull: true }
+}
+
+/** Колонка без `NOT NULL`: fail-closed гілки джерел доводяться на `NULL`. */
+function nullable(
+  id: number,
+  name: string,
+  physicalName: string,
+  type: string
+) {
+  return { ...column(id, name, physicalName, type), notNull: false }
 }
 
 /** Прийнята таблиця призначень: учасник, ключ ролі й контейнер-проєкт. */
@@ -511,13 +521,14 @@ export function adoptedMembership(): Layer {
   }
 }
 
-/** Джерело призначень глобального рівня над `RoleGrant`. */
-export function globalGrantsSource() {
+/** Джерело призначень глобального рівня; типова таблиця — `RoleGrant`. */
+export function globalGrantsSource(overrides: Record<string, unknown> = {}) {
   return grantsSource({
     id: GLOBAL_GRANTS_SOURCE_ID,
     name: "globalGrants",
     assignedOn: "global",
     columns: { member: "memberId", role: "roleKey" },
+    ...overrides,
   })
 }
 
@@ -1070,4 +1081,185 @@ export function taskNoteMapping(): PromoteInput {
     fill: [],
     conversions: {},
   })
+}
+
+export const GLOBAL_GRANT_FILE =
+  "custom-tables/GlobalGrant/GlobalGrant.meta.json"
+const GLOBAL_GRANT_ID = uuid(6115)
+/** Ключ `ProjectLead` у джерелі `grants` і ключ `Support` у `globalGrants`. */
+export const ADOPTED_LEAD_KEY = "lead"
+export const ADOPTED_SUPPORT_KEY = "support"
+
+/**
+ * Функція множини виду `org` над прийнятим членством: межа тенанта поважає
+ * активність, як і «мої скоупи».
+ */
+const ORG_IDS_SQL =
+  "CREATE FUNCTION public.org_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT m.org_id FROM public.membership m WHERE m.user_id = (SELECT simetra.current_user_id()) AND m.is_active IS TRUE $$;"
+
+/** `Membership` джерела: користувач і активність — без `NOT NULL`. */
+export function adoptedMembershipTable(
+  overrides: Record<string, unknown> = {}
+) {
+  return membershipTable({
+    columns: [
+      column(6101, "id", "id", "UUID"),
+      column(6102, "orgId", "org_id", "UUID"),
+      nullable(6103, "userId", "user_id", "UUID"),
+      nullable(6104, "isActive", "is_active", "Boolean"),
+    ],
+    ...overrides,
+  })
+}
+
+/** `RoleGrant` джерела: учасник і ключ ролі — без `NOT NULL`. */
+export function adoptedGrantTable(overrides: Record<string, unknown> = {}) {
+  return grantTable({
+    columns: [
+      column(6111, "id", "id", "UUID"),
+      nullable(6112, "memberId", "member_id", "UUID"),
+      nullable(6113, "roleKey", "role_key", "Text"),
+      column(6114, "projectId", "project_id", "UUID"),
+    ],
+    ...overrides,
+  })
+}
+
+/**
+ * Прийнята таблиця глобальних призначень: учасник — id користувача, ключ
+ * ролі; окрема від `RoleGrant`, тож ключі одного джерела не «невідомі» для
+ * іншого.
+ */
+export function globalGrantTable(overrides: Record<string, unknown> = {}) {
+  return {
+    id: GLOBAL_GRANT_ID,
+    kind: "CustomTable",
+    name: "GlobalGrant",
+    physicalName: "global_grant",
+    kindLabel: "global_grant",
+    scope: "none",
+    columns: [
+      column(6116, "id", "id", "UUID"),
+      nullable(6117, "memberId", "member_id", "UUID"),
+      nullable(6118, "roleKey", "role_key", "Text"),
+    ],
+    primaryKey: { columns: ["id"] },
+    ...overrides,
+  }
+}
+
+/**
+ * Шар прийнятих джерел поверх домену політик (спека прав §4.7): членство виду
+ * `org` дає `Membership` (джерело `members`), контейнерні призначення
+ * `ProjectLead` — `RoleGrant` (`grants`, учасник — рядок `Membership`),
+ * глобальні призначення `Support` — `GlobalGrant` (`globalGrants`, учасник —
+ * користувач). Довідники прав `org` лишаються (рівень скоупу джерелом не
+ * покрито, Р2d1-5), а глобальні прибрано: єдину глобальну роль покриває
+ * джерело. Вимір `region` прибрано — його зв'язок `MemberRegion` прибрав
+ * `adoptedMembership()`. Збирає `adoptedSourcesDomain`.
+ */
+export function adoptedSources(): Layer {
+  const membership = adoptedMembership()
+  return {
+    ...membership,
+    [PROJECT_FILE]: {
+      ...membership[PROJECT_FILE],
+      accessDimensions: [],
+      membershipSources: [membersSource()],
+      assignmentSources: [
+        grantsSource(),
+        globalGrantsSource({ table: ref("CustomTable", "GlobalGrant") }),
+      ],
+    },
+    // `access` не буває порожнім (схема), тож поле прибирається: `undefined`
+    // зникає при серіалізації файлу.
+    [TASK_FILE]: {
+      access: undefined,
+      attributes: [
+        refAttribute(
+          6011,
+          "assignee",
+          "assignee_id",
+          ref("CustomTable", "Membership")
+        ),
+        refAttribute(6012, "project", "project_id", ref("Catalog", "Project")),
+        refAttribute(6013, "region", "region_id", ref("Catalog", "Region")),
+      ],
+    },
+    [TASK_HOURS_FILE]: { access: undefined },
+    [MEMBERSHIP_FILE]: adoptedMembershipTable(),
+    [GRANT_FILE]: adoptedGrantTable(),
+    [GLOBAL_GRANT_FILE]: globalGrantTable(),
+    [ROLE_FILE("ProjectLead")]: {
+      sourceKeys: [{ source: "grants", key: ADOPTED_LEAD_KEY }],
+      grants: [grant(objects(["Document", "Task"]), ["read"], "any")],
+    },
+    [ROLE_FILE("Support")]: {
+      sourceKeys: [{ source: "globalGrants", key: ADOPTED_SUPPORT_KEY }],
+      grants: [grant(objects(["Document", "Announcement"]), ["read"], "any")],
+    },
+    ...without(GLOBAL_ROLES_FILE, GLOBAL_ASSIGNMENTS_FILE),
+  }
+}
+
+/**
+ * Домен політик з прийнятими джерелами (`adoptedSources`) і шарами поверх.
+ * SQL функції множини `org_ids` — файл, а не метадані: шари зливають лише
+ * JSON, тож його кладе будівник, як `policyDomain` — обробник лічильника.
+ */
+export function adoptedSourcesDomain(...layers: Layer[]): Map<string, string> {
+  const files = policyDomain(adoptedSources(), ...layers)
+  files.set(SCOPE_FUNCTIONS_FILE, ORG_IDS_SQL)
+  return files
+}
+
+/**
+ * Проєкт без «Користувачів» (спека прав §4.6): прибирає довідник і все, що на
+ * нього посилається, — авторство `Task` і «Користувачів» із грантів
+ * `TaskReaders` і `Everyone`; власність і ТЧ «Користувачів» ідуть разом із
+ * файлом. Прийняті джерела лишаються — лише з ними права без «Користувачів»
+ * можливі.
+ */
+export function withoutUsers(): Layer {
+  return {
+    ...without(USERS_FILE),
+    [TASK_FILE]: { trackAuthor: false },
+    [SET_FILE("TaskReaders")]: {
+      grants: [
+        grant(
+          objects(
+            ["Document", "Task"],
+            ["Catalog", "TaskComment"],
+            ["AccumulationRegister", "TaskHours"]
+          ),
+          ["read"],
+          "any"
+        ),
+      ],
+    },
+    [ROLE_FILE("Everyone")]: { grants: [] },
+  }
+}
+
+/**
+ * Другий вид скоупу `team` поряд із прийнятим членством `org` — для кейсу між
+ * видами (Р2a1-26). Обидва види оголошено одним значенням `scopeKinds`:
+ * `withRoles` зливає файли поверхнево, і `secondScopeKind()` повернув би
+ * `org` форму `membership`. Решта файлів — з `secondScopeKind()`.
+ */
+export function adoptedCrossKind(): Layer {
+  const { [PROJECT_FILE]: project, ...rest } = secondScopeKind()
+  const [, team] = (project as { scopeKinds: unknown[] }).scopeKinds
+  return {
+    ...rest,
+    [PROJECT_FILE]: {
+      scopeKinds: [
+        {
+          ...ORG_SCOPE_KIND,
+          setFunction: { schema: "public", name: "org_ids" },
+        },
+        team,
+      ],
+    },
+  }
 }

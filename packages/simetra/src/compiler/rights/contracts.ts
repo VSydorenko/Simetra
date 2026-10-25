@@ -2,7 +2,9 @@ import {
   KIND_REGISTRY,
   actionRequires,
   closeRequires,
+  singleUuidKeyColumn,
   type ActionEffects,
+  type CustomTable,
   type Dml,
   type PhysicalSnapshot,
   type Project,
@@ -396,21 +398,30 @@ export function sourceContracts(
       must(
         columns.get(must(toId(`${at}/columns/${field}`, "source.column")))?.[0]
       )
+    // Учасник — одноколонковий uuid-ключ (Р2d1-2), його перевірила стадія 4.
+    const key = () =>
+      must(
+        columns.get(
+          must(singleUuidKeyColumn(object.data as CustomTable)?.id)
+        )?.[0]
+      )
     return {
       table: { schema: table.schema, name: table.name },
       column,
+      key,
     }
   }
   const membershipSources = project.membershipSources
     .map((source, index): MembershipSourceContract => {
       const at = `/membershipSources/${index}`
-      const { table, column } = tableOf(at)
+      const { table, column, key } = tableOf(at)
       return {
         sourceId: must(source.id),
         name: source.name,
         scopeKindId: must(toId(`${at}/scopeKind`, "source.scopeKind")),
         table,
         scope: column("scope"),
+        member: key(),
         user: column("user"),
         ...(source.columns.active === undefined
           ? {}

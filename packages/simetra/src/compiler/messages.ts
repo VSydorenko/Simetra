@@ -1836,6 +1836,36 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Функції прав — SECURITY DEFINER і проходили б політики таблиці: приберіть rowLevelSecurity: forced.",
     },
   },
+  "rights.source-member-key": {
+    en: (p) =>
+      `Table ${p.table} of membership source "${p.source}" has no single-column uuid key`,
+    uk: (p) =>
+      `Таблиця ${p.table} джерела членства "${p.source}" не має одноколонкового uuid-ключа`,
+    hint: {
+      en: "The member of a membership source is the table key: declare a primary key of one UUID column in the CustomTable metadata.",
+      uk: "Учасник джерела членства — ключ таблиці: оголосіть у метаданих CustomTable первинний ключ з однієї колонки UUID.",
+    },
+  },
+  "rights.source-member-unique": {
+    en: (p) =>
+      `Table ${p.table} of membership source "${p.source}" has no UNIQUE (scope, id) for the subject of the rights catalogs`,
+    uk: (p) =>
+      `Таблиця ${p.table} джерела членства "${p.source}" не має UNIQUE (скоуп, id) для суб'єкта довідників прав`,
+    hint: {
+      en: "The subject of the rights catalogs of the scope kind refers to the table by a composite foreign key within the scope: add a unique constraint over the scope column and the key to the CustomTable metadata (uniques).",
+      uk: "Суб'єкт довідників прав виду посилається на таблицю складеним зовнішнім ключем у межах скоупу: додайте в метадані CustomTable (uniques) унікальне обмеження над колонкою скоупу й ключем.",
+    },
+  },
+  "rights.source-column-type": {
+    en: (p) =>
+      `Column ${p.column} of source "${p.source}" must be of type ${p.expected}`,
+    uk: (p) =>
+      `Колонка ${p.column} джерела "${p.source}" мусить мати тип ${p.expected}`,
+    hint: {
+      en: "Rights functions compare scope, user, member and container columns as uuid, read the active column as boolean and the role column as text: map a column of that type.",
+      uk: "Функції прав порівнюють колонки скоупу, користувача, учасника й контейнера як uuid, читають колонку активності як boolean, а колонку ролі — як текст: зіставте колонку такого типу.",
+    },
+  },
   "rights.source-scope-column": {
     en: (p) =>
       p.reason === "scope"
@@ -2141,11 +2171,11 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Довідники прав пишуться лише дією адміністрування прав; приберіть кастомну дію.",
     },
   },
-  "rights.adopted-source-unsupported": {
+  "rights.adopted-source-writes": {
     en: (p) =>
-      `Rights from the adopted source "${p.source}" are not computed yet: members of the source will not get rights on the objects of the kind`,
+      `The platform only reads the adopted source "${p.source}": the paths that write it belong to the application, and the rights safeguards do not apply to them until the rights tables are promoted`,
     uk: (p) =>
-      `Права з прийнятого джерела "${p.source}" ще не обчислюються: учасники джерела не отримають прав на об'єкти виду`,
+      `Прийняте джерело "${p.source}" платформа лише читає: шляхи запису в нього — застосунку, і запобіжники прав на них не діють, доки таблиці прав не промотовано`,
   },
   "rights.scope-kind-unread": {
     en: (p) =>

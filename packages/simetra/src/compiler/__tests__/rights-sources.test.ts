@@ -3,6 +3,8 @@ import { completeFiles } from "simetra/compiler"
 import {
   GRANT_FILE,
   GRANTS_SOURCE_ID,
+  ORG_ASSIGNMENTS_FILE,
+  ORG_ROLES_FILE,
   MEMBERSHIP_FILE,
   MEMBERSHIP_ID,
   MEMBERS_SOURCE_ID,
@@ -15,6 +17,9 @@ import {
   SUPPORT_ID,
   TASK_FILE,
   TASK_READERS_ID,
+  adoptedGrantTable,
+  adoptedMembershipTable,
+  adoptedSourcesDomain,
   compileRights,
   grantTable,
   grantsSource,
@@ -23,8 +28,10 @@ import {
   rightsFiles,
   rightsSet,
   role,
+  without,
+  type Layer,
 } from "./fixtures/rights"
-import { uuid } from "./helpers"
+import { expectClean, uuid } from "./helpers"
 
 type Files = ReturnType<typeof rightsFiles>
 
@@ -119,6 +126,7 @@ describe("adopted sources", () => {
         scopeKindId: ORG_KIND_ID,
         table: { schema: "public", name: "membership" },
         scope: "org_id",
+        member: "id",
         user: "user_id",
         active: "is_active",
       },
@@ -500,5 +508,120 @@ describe("adopted sources", () => {
     }
     expect(written.membershipSources[0]!.id).toBe(uuid(7201))
     expect(written.assignmentSources[0]!.id).toBe(uuid(7202))
+  })
+})
+
+/** Таблиця з колонкою `name` іншого типу. */
+const retype = (
+  table: { columns: { name: string }[] },
+  name: string,
+  type: string
+) => ({
+  ...table,
+  columns: table.columns.map((c) => (c.name === name ? { ...c, type } : c)),
+})
+
+describe("adopted source member and column types", () => {
+  // Зламаний ключ таблиці дає й супутні діагностики (власність `Task.assignee`
+  // на неї), тож рядок перевіряє наявність свого коду на своєму вказівнику.
+  it.each<{
+    case: string
+    layer: Layer
+    code: string
+    pointer: string
+    params: Record<string, string>
+  }>([
+    {
+      case: "composite key",
+      layer: {
+        [MEMBERSHIP_FILE]: { primaryKey: { columns: ["orgId", "id"] } },
+      },
+      code: "rights.source-member-key",
+      pointer: "/membershipSources/0/table",
+      params: { source: "members", table: "Membership" },
+    },
+    {
+      case: "text key",
+      layer: {
+        [MEMBERSHIP_FILE]: retype(adoptedMembershipTable(), "id", "Text"),
+      },
+      code: "rights.source-member-key",
+      pointer: "/membershipSources/0/table",
+      params: { source: "members", table: "Membership" },
+    },
+    {
+      // Суб'єкт довідників прав `org` посилається на таблицю складеним FK.
+      case: "no unique for subject",
+      layer: { [MEMBERSHIP_FILE]: { uniques: [] } },
+      code: "rights.source-member-unique",
+      pointer: "/membershipSources/0/table",
+      params: { source: "members", table: "Membership" },
+    },
+    {
+      case: "member text",
+      layer: { [GRANT_FILE]: retype(adoptedGrantTable(), "memberId", "Text") },
+      code: "rights.source-column-type",
+      pointer: "/assignmentSources/0/columns/member",
+      params: { source: "grants", column: "memberId", expected: "UUID" },
+    },
+    {
+      case: "active text",
+      layer: {
+        [MEMBERSHIP_FILE]: retype(adoptedMembershipTable(), "isActive", "Text"),
+      },
+      code: "rights.source-column-type",
+      pointer: "/membershipSources/0/columns/active",
+      params: { source: "members", column: "isActive", expected: "Boolean" },
+    },
+  ])("$case", async ({ layer, code, pointer, params }) => {
+    const result = await compileRights(adoptedSourcesDomain(layer))
+    expect(
+      errors(result).map((d) => ({
+        code: d.code,
+        pointer: d.pointer,
+        params: d.params,
+      }))
+    ).toContainEqual({ code, pointer, params })
+  })
+
+  it("asks for UNIQUE (scope, id) only when the scope kind has rights catalogs", async () => {
+    const result = await compileRights(
+      adoptedSourcesDomain(
+        { [MEMBERSHIP_FILE]: { uniques: [] } },
+        without(ORG_ROLES_FILE, ORG_ASSIGNMENTS_FILE)
+      )
+    )
+    expect(errors(result).map((d) => d.code)).not.toContain(
+      "rights.source-member-unique"
+    )
+  })
+
+  it("clean: only the write-boundary warning on every source", async () => {
+    const result = await compileRights(adoptedSourcesDomain())
+    expectClean(result, { allow: ["rights.adopted-source-writes"] })
+    expect(
+      result.diagnostics
+        .map((d) => [d.code, d.pointer, d.params])
+        .sort((a, b) => String(a[1]).localeCompare(String(b[1])))
+    ).toEqual([
+      [
+        "rights.adopted-source-writes",
+        "/assignmentSources/0",
+        { source: "grants" },
+      ],
+      [
+        "rights.adopted-source-writes",
+        "/assignmentSources/1",
+        { source: "globalGrants" },
+      ],
+      [
+        "rights.adopted-source-writes",
+        "/membershipSources/0",
+        { source: "members" },
+      ],
+    ])
+    expect(result.model!.contracts.membershipSources).toEqual([
+      expect.objectContaining({ sourceId: MEMBERS_SOURCE_ID, member: "id" }),
+    ])
   })
 })

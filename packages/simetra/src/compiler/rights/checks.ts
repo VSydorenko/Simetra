@@ -1,8 +1,11 @@
 import {
   KIND_REGISTRY,
+  isUuidColumn,
+  singleUuidKeyColumn,
   toSnakeCase,
   type CarrierCopyOf,
   type CustomAction,
+  type CustomTable,
   type PhysicalTable,
   type Project,
   type RightsSystemCatalog,
@@ -12,7 +15,7 @@ import { mainTableOf } from "../contracts"
 import { diagnostic, type Diagnostic } from "../diagnostics"
 import { PROJECT_FILE, type ParsedObject } from "../stages/files"
 import { standardElementId, type ResolvedReference } from "../stages/identity"
-import type { ModelStageResult } from "../stages/model"
+import { hasScopeKeyUnique, type ModelStageResult } from "../stages/model"
 import {
   carrierTarget,
   crossTenant,
@@ -572,12 +575,31 @@ function registerDimensions(object: ParsedObject): Set<string> {
   return new Set((dimensions ?? []).map((d) => d.name))
 }
 
+/** Тип змапованої колонки джерела, якого чекають функції прав (Р2d1-2a). */
+type SourceColumnType = "UUID" | "Boolean" | "Text"
+
+const SOURCE_COLUMN_TYPES: Record<
+  SourceColumnType,
+  (column: CustomTable["columns"][number]) => boolean
+> = {
+  // Та сама перевірка uuid, що й для ключа учасника: `Raw` з `pgType` uuid —
+  // теж uuid.
+  UUID: isUuidColumn,
+  Boolean: (column) => column.array !== true && column.type === "Boolean",
+  Text: (column) =>
+    column.array !== true &&
+    (column.type === "Text" || column.type === "String"),
+}
+
 /**
  * Правила прийнятих джерел (спека прав §4.7): таблиця — прийнята
  * (`CustomTable`) і без `FORCE ROW LEVEL SECURITY`, бо функції прав
  * `SECURITY DEFINER` інакше проходили б її політики; вид скоупу відомий і має
  * одне членство — довідник чи джерело (Р1a-17); рівень контейнера — об'єкт із
  * `rightsContainer`, а колонка контейнера є саме на контейнерному рівні.
+ * Учасник джерела членства — одноколонковий uuid-ключ таблиці (Р2d1-2), а
+ * змаповані колонки мають типи, з якими працюють функції прав (Р2d1-2a):
+ * інакше невідповідність виявилася б лише на застосуванні.
  */
 function checkSources(ctx: RightsCheckContext): Diagnostic[] {
   const diagnostics: Diagnostic[] = []
@@ -650,6 +672,60 @@ function checkSources(ctx: RightsCheckContext): Diagnostic[] {
       })
     }
   }
+  const checkColumnTypes = (
+    source: string,
+    at: string,
+    target: ParsedObject,
+    expected: Record<string, SourceColumnType>
+  ) => {
+    const { columns } = target.data as CustomTable
+    for (const [field, type] of Object.entries(expected)) {
+      const pointer = `${at}/columns/${field}`
+      // Незмаповану чи невідому колонку тут не перевіряти: невідому звітувала
+      // стадія 2.
+      const id = projectTarget(pointer, "source.column", ctx)
+      const column = columns.find((c) => c.id === id)
+      if (id === undefined || column === undefined) continue
+      if (!SOURCE_COLUMN_TYPES[type](column)) {
+        report("rights.source-column-type", pointer, {
+          source,
+          column: column.name,
+          expected: type,
+        })
+      }
+    }
+  }
+  // Учасник — одноколонковий uuid-ключ (Р2d1-2): id учасника — значення
+  // носія власності, суб'єкта призначення й `member` джерела призначень, а
+  // складений ключ одного значення не має. Суб'єкт системних довідників прав
+  // виду посилається на таблицю складеним FK у межах скоупу (Р2d1-5), тож
+  // тоді таблиця мусить оголосити `UNIQUE (scope, id)` — Postgres не прийме
+  // FK на неунікальну пару.
+  const checkMember = (
+    source: string,
+    at: string,
+    target: ParsedObject,
+    kindId: string | undefined
+  ) => {
+    const data = target.data as CustomTable
+    if (singleUuidKeyColumn(data) === undefined) {
+      report("rights.source-member-key", `${at}/table`, {
+        source,
+        table: target.name,
+      })
+      return
+    }
+    if (
+      kindId !== undefined &&
+      memberSubjectCatalogs(kindId, ctx) &&
+      !hasScopeKeyUnique(data)
+    ) {
+      report("rights.source-member-unique", `${at}/table`, {
+        source,
+        table: target.name,
+      })
+    }
+  }
   ctx.project.membershipSources.forEach((source, index) => {
     const at = `/membershipSources/${index}`
     if (!known.has(source.scopeKind)) {
@@ -669,7 +745,20 @@ function checkSources(ctx: RightsCheckContext): Diagnostic[] {
       }
     }
     const target = table(source, at)
-    if (target !== undefined) checkSourceScope(source.name, at, target)
+    if (target !== undefined) {
+      checkSourceScope(source.name, at, target)
+      checkMember(
+        source.name,
+        at,
+        target,
+        projectTarget(`${at}/scopeKind`, "source.scopeKind", ctx)
+      )
+      checkColumnTypes(source.name, at, target, {
+        scope: "UUID",
+        user: "UUID",
+        active: "Boolean",
+      })
+    }
   })
   ctx.project.assignmentSources.forEach((source, index) => {
     const at = `/assignmentSources/${index}`
@@ -707,9 +796,35 @@ function checkSources(ctx: RightsCheckContext): Diagnostic[] {
         reason: "unexpected",
       })
     }
-    table(source, at)
+    const target = table(source, at)
+    if (target !== undefined) {
+      checkColumnTypes(source.name, at, target, {
+        member: "UUID",
+        role: "Text",
+        container: "UUID",
+        active: "Boolean",
+      })
+    }
   })
   return diagnostics
+}
+
+/**
+ * Чи має вид скоупу системний довідник прав із суб'єктом-учасником: лише
+ * тоді таблиці прийнятого членства потрібен `UNIQUE (scope, id)` (Р2d1-5).
+ */
+function memberSubjectCatalogs(
+  scopeKindId: string,
+  ctx: Pick<RightsCheckContext, "objects" | "references">
+): boolean {
+  return ctx.objects.some(
+    (o) =>
+      KIND_REGISTRY[o.kind].rightsSystem?.(o.data) !== undefined &&
+      KIND_REGISTRY[o.kind]
+        .standardColumns(o.data)
+        .some((column) => column.ref === "member") &&
+      scopeKindOf(o, ctx.references) === scopeKindId
+  )
 }
 
 /**

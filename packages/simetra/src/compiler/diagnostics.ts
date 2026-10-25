@@ -128,6 +128,9 @@ export const COMPILER_RULES = [
   "rights.dimension-function-reads-rights",
   "rights.source-table",
   "rights.source-forced-rls",
+  "rights.source-member-key",
+  "rights.source-member-unique",
+  "rights.source-column-type",
   "rights.source-scope-column",
   "rights.membership-source-duplicate",
   "rights.source-container-column",
@@ -155,7 +158,7 @@ export const COMPILER_RULES = [
   "rights.system-catalog-description",
   "rights.system-catalog-parallel",
   "rights.system-catalog-custom-action",
-  "rights.adopted-source-unsupported",
+  "rights.adopted-source-writes",
   "rights.scope-kind-unread",
   "reference.not-referenceable",
   "reference.custom-table-key",
@@ -403,7 +406,7 @@ const WARNING_RULES: ReadonlySet<RuleCode> = new Set<RuleCode>([
   "identity.kind-label-retained",
   "rewrite.contract-change",
   "rewrite.dynamic-sql-unscoped",
-  "rights.adopted-source-unsupported",
+  "rights.adopted-source-writes",
   "rights.scope-kind-unread",
 ])
 

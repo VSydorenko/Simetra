@@ -431,7 +431,7 @@ class SnapshotBuilder {
           r.to.id,
         ])
     )
-    this.targets = standardRefTargets(objects)
+    this.targets = standardRefTargets(objects, project)
     this.style = project.naming.attributeCase
     this.scopeKinds = new Map(project.scopeKinds.map((k) => [k.name, k]))
     this.rootKinds = new Map(
@@ -1868,9 +1868,11 @@ export function registerSingletonOf(
 
 /**
  * Цілі стандартних посилань, які дає проєкт, а не файл об'єкта: «Користувачі»
- * (`usersRefOf`), довідник членства за видом скоупу й довідник «Ролі» за
- * рівнем (ім'я виду скоупу чи `none` для глобального). Дубль на рівні звітує
- * стадія 4, тож тут — перший за шляхом файлу, як у `usersCatalogOf`.
+ * (`usersRefOf`), членство за видом скоупу — довідник членства чи таблиця
+ * прийнятого джерела членства — і довідник «Ролі» за рівнем (ім'я виду
+ * скоупу чи `none` для глобального). Дубль на рівні звітує стадія 4, тож тут
+ * — перший за шляхом файлу, як у `usersCatalogOf`, а довідник — раніше за
+ * джерело.
  */
 export interface StandardRefTargets {
   users: MetadataRef | undefined
@@ -1879,7 +1881,8 @@ export interface StandardRefTargets {
 }
 
 export function standardRefTargets(
-  objects: readonly ParsedObject[]
+  objects: readonly ParsedObject[],
+  project: Pick<Project, "membershipSources">
 ): StandardRefTargets {
   const membership = new Map<string, MetadataRef>()
   const rightsRoles = new Map<string, MetadataRef>()
@@ -1894,6 +1897,14 @@ export function standardRefTargets(
     const system = KIND_REGISTRY[object.kind].rightsSystem?.(object.data)
     if (system === "rightsRoles" && !rightsRoles.has(level)) {
       rightsRoles.set(level, ref)
+    }
+  }
+  // Учасник виду з прийнятим членством — рядок таблиці-джерела (Р2d1-5):
+  // так системні довідники прав такого виду посилаються на прийняту таблицю,
+  // і ролі Simetra стають поряд із прийнятим членством (перша міграція).
+  for (const source of project.membershipSources) {
+    if (!membership.has(source.scopeKind)) {
+      membership.set(source.scopeKind, source.table)
     }
   }
   return { users: usersRefOf(objects), membership, rightsRoles }
