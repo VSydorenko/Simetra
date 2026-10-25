@@ -11,6 +11,7 @@ import {
   PROJECT_CATALOG_FILE,
   PROJECT_FILE,
   REGION_DIMENSION_ID,
+  counterColumn,
   policyDomain,
   teamScopeKind,
   type Layer,
@@ -47,22 +48,6 @@ const found = (fn: string, reason: ReachReason, ...via: string[]) => ({
   function: fn,
   chain: [HEAD, ...via, fn],
   reason,
-})
-
-/** Колонка лічильника з виразом, який Postgres обчислює під час запису. */
-const counter = (fields: Record<string, unknown>): Layer => ({
-  [COMMENT_COUNTER_FILE]: {
-    columns: [
-      {
-        id: uuid(6551),
-        name: "commentId",
-        physicalName: "comment_id",
-        type: "UUID",
-        notNull: true,
-        ...fields,
-      },
-    ],
-  },
 })
 
 let parse: SqlParser
@@ -331,7 +316,7 @@ describe("reachableCalls", () => {
     {
       name: "table-default",
       body: "INSERT INTO public.comment_counter (comment_id) VALUES (NEW.id);",
-      layer: counter({ default: "public.dyn()" }),
+      layer: counterColumn({ default: "public.dyn()" }),
       expected: [
         found("public.dyn", "nonLiteralExecute", "public.comment_counter"),
       ],
@@ -351,9 +336,22 @@ describe("reachableCalls", () => {
       ],
     },
     {
+      // Вираз, якого розбір не читає, ховає свої виклики: fail-closed.
+      name: "table-unparsable-default",
+      body: "INSERT INTO public.comment_counter (comment_id) VALUES (NEW.id);",
+      layer: counterColumn({ default: "public.dyn(" }),
+      expected: [
+        {
+          function: "public.comment_counter",
+          chain: [HEAD, "public.comment_counter"],
+          reason: "unknown",
+        },
+      ],
+    },
+    {
       name: "table-read-only",
       body: "PERFORM 1 FROM public.comment_counter;",
-      layer: counter({ default: "public.dyn()" }),
+      layer: counterColumn({ default: "public.dyn()" }),
       expected: [],
     },
   ])("$name", ({ body, layer, expected }) => {

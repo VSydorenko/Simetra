@@ -7,6 +7,7 @@ import {
   PROJECT_CATALOG_FILE,
   PROJECT_FILE,
   REGION_DIMENSION_ID,
+  counterColumn,
   policyDomain,
   teamScopeKind,
   type Layer,
@@ -294,6 +295,23 @@ describe("checkDefinerReads: functions", () => {
     )
     expect(brief(result.diagnostics, ["sql.definer-reads-rls"])).toEqual([
       warned(RPC, { tables: "public.comment_counter" }),
+    ])
+  })
+
+  // Вираз таблиці, якого розбір не читає, Postgres однаково обчислить
+  // посеред запису від імені власника функції.
+  it("marks a write into a table with an unparsable default as unknown", async () => {
+    const result = await compiled(
+      {
+        [RPC_FILE]: sqlFunction(
+          RPC,
+          "INSERT INTO public.comment_counter (comment_id) VALUES (NULL) RETURNING 1"
+        ),
+      },
+      [counterColumn({ default: "public.dyn(" })]
+    )
+    expect(brief(result.diagnostics, ["sql.definer-reads-rls"])).toEqual([
+      warned(RPC, { tables: "", reason: "unknown" }),
     ])
   })
 })

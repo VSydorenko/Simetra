@@ -730,6 +730,20 @@ function policyLayer(): Layer {
 }
 
 /**
+ * Колонка `comment_id` лічильника з полями `fields` — зокрема виразом, який
+ * Postgres обчислює посеред запису в таблицю.
+ */
+export function counterColumn(fields: Record<string, unknown>): Layer {
+  return {
+    [COMMENT_COUNTER_FILE]: {
+      columns: [
+        { ...column(6551, "commentId", "comment_id", "UUID"), ...fields },
+      ],
+    },
+  }
+}
+
+/**
  * Корінь скоупу з носієм власності й ТЧ `sites` (`organization_sites`):
  * скоуп рядка ТЧ кореня — сам `parent_id`, тож зв'язок копії — одна колонка.
  */

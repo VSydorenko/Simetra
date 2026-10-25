@@ -196,7 +196,8 @@ export function reachableUnits(
  * замовчуванням, `CALL`, запис `x.f`), за поданнями моделі, за дослівними
  * політиками таблиць, які одиниця читає чи пише (Postgres обчислює їх посеред
  * команди), і за виразами таблиць знімка, у які одиниця пише (`DEFAULT`,
- * `CHECK`, генеровані колонки, ключі й предикати індексів). Кожна недосудна
+ * `CHECK`, генеровані колонки, ключі й предикати індексів; вираз, що не
+ * розбирається, робить таблицю недосудною — `unknown`). Кожна недосудна
  * ціль і кожна досяжна одиниця, що пише налаштування сесії, — раз; голова
  * судиться лише за досяжним, не за власним тілом (його судить оболонка), крім
  * частини тіла, якої компілятор не прочитав.
@@ -280,7 +281,7 @@ class ReachModel {
   private readonly analyses = new Map<VerbatimUnit, Analysis>()
   private readonly verdicts = new Map<VerbatimUnit, ReachReason | undefined>()
   private readonly emptyPaths = new Map<VerbatimUnit, boolean>()
-  private readonly tableRefs = new Map<PhysicalTable, Reference[]>()
+  private readonly tableRefs = new Map<PhysicalTable, TableAnalysis>()
 
   constructor(
     readonly units: readonly VerbatimUnit[],
@@ -334,7 +335,7 @@ class ReachModel {
     return found
   }
 
-  tableReferences(table: PhysicalTable): Reference[] {
+  tableReferences(table: PhysicalTable): TableAnalysis {
     let found = this.tableRefs.get(table)
     if (found === undefined) {
       found = tableReferences(table, this.parse)
@@ -484,7 +485,13 @@ function traverse(
     let refs: readonly Reference[]
     let emptyPath = false
     if ("table" in step) {
-      refs = model.tableReferences(step.table)
+      const analysis = model.tableReferences(step.table)
+      refs = analysis.refs
+      // Вираз, якого розбір не прочитав, Postgres однаково обчислить посеред
+      // запису: його виклики невидимі, тож таблиця — недосудна ланка.
+      if (analysis.opaque) {
+        report(`${step.table.schema}.${step.table.name}`, chain, "unknown")
+      }
     } else {
       const analysis = model.analysis(step.unit)
       refs = analysis.refs
@@ -697,8 +704,20 @@ function expressionTexts(e: PlpgsqlExpression): string[] | undefined {
   return [e.parseMode > 0 ? `SELECT ${e.query}` : e.query]
 }
 
+/**
+ * Посилання виразів таблиці й `opaque` — вираз, що не розбирається: мовчки
+ * пропущений, він сховав би виклик, який Postgres виконає посеред запису.
+ */
+interface TableAnalysis {
+  refs: Reference[]
+  opaque: boolean
+}
+
 /** Вирази таблиці, які Postgres обчислює, коли в неї пишуть. */
-function tableReferences(table: PhysicalTable, parse: SqlParser): Reference[] {
+function tableReferences(
+  table: PhysicalTable,
+  parse: SqlParser
+): TableAnalysis {
   const expressions: string[] = []
   for (const column of table.columns) {
     if (column.default !== undefined) expressions.push(column.default)
@@ -713,12 +732,16 @@ function tableReferences(table: PhysicalTable, parse: SqlParser): Reference[] {
       if ("expression" in key) expressions.push(key.expression)
     }
   }
-  return expressions.flatMap((expression) => {
+  let opaque = false
+  const refs = expressions.flatMap((expression) => {
     const parsed = parse(`SELECT (${expression})`)
-    return parsed.ok
-      ? parsed.statements.flatMap((s) => treeReferences(s.stmt, parse, true))
-      : []
+    if (!parsed.ok) {
+      opaque = true
+      return []
+    }
+    return parsed.statements.flatMap((s) => treeReferences(s.stmt, parse, true))
   })
+  return { refs, opaque }
 }
 
 function treeReferences(
