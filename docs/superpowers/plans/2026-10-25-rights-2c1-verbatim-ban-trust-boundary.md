@@ -100,6 +100,13 @@ RLS» (платформна спека §6.7, Р30).
 - Тіло функції судиться за відношеннями своїх операторів (Р2c1-15): тіла
   інших мов, нелітеральний `EXECUTE` і оператори на всю роль (`DROP OWNED`,
   `REASSIGN OWNED`) — поза судженням.
+- `relationReads` (`compiler/sql/definer-reads.ts`, Р2c1-8) судить
+  некваліфіковане відношення функції з порожнім `search_path` як вбудоване й
+  не знає, що досягнута одиниця записала `search_path` (Р2c1-10 (б)): це
+  зачіпає лише попередження `sql.definer-reads-rls` і лише в бік пропущеного
+  попередження, не хибного дозволу — обхід `sql.command-context-reach`
+  повторюється з непорожнім шляхом.
+
 ## Review Focus
 
 1. **Виклик через `PERFORM` у plpgsql:** обробник підписки кличе `PERFORM public.helper()` зі спільного файлу, а `helper` робить `EXECUTE format(…)` — `sql.command-context-reach` з ланцюжком. Тест — Задача 3 (`plpgsql-perform`).
