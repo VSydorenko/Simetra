@@ -14,6 +14,7 @@ import type { CreationNode } from "./sql/dependencies"
 import type { SqlUnit, VerbatimUnit } from "./sql/units"
 import { readFiles, runStages, sqlStage } from "./pipeline"
 import { debtUnits } from "./sql/debt"
+import { kindTables } from "./sql/kind-table-verbatim"
 import { loadSqlParser } from "./sql/parse"
 import { loadPlpgsqlParser } from "./sql/plpgsql"
 
@@ -156,5 +157,11 @@ export async function currentDebt(
   ) {
     return undefined
   }
-  return debtUnits(sql.units, stage1.objects, stage1.project, plpgsql)
+  return debtUnits(
+    sql.units,
+    stage1.objects,
+    stage1.project,
+    kindTables(stage1.objects, stage3.physical.tables),
+    plpgsql
+  )
 }

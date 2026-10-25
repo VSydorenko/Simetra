@@ -22,6 +22,7 @@ export const COMPILER_RULES = [
   "sql.unit-duplicate",
   "sql.namespace-conflict",
   "sql.generated-grant",
+  "sql.kind-table-verbatim",
   "sql.dependency-cycle",
   "sql.closed-shell",
   "sql.command-context-write",

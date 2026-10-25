@@ -364,6 +364,32 @@ describe("messages catalog", () => {
   })
 
   it.each([
+    { form: "policy", en: "Verbatim policy", uk: "Дослівна політика" },
+    { form: "trigger", en: "Verbatim trigger", uk: "Дослівний тригер" },
+  ])(
+    "sql.kind-table-verbatim names the $form and its kind table",
+    ({ form, en, uk }) => {
+      const d = diagnostic("sql.kind-table-verbatim", "sql/public/x.sql", "", {
+        identity: `${form}:public.task.p`,
+        table: "public.task",
+        form,
+        line: 3,
+      })
+      expect(d.message).toBe(
+        `${en} ${form}:public.task.p at line 3 is on public.task, a table of a kind`
+      )
+      expect(localize(d, "uk").message).toBe(
+        `${uk} ${form}:public.task.p у рядку 3 стоїть на public.task — таблиці виду`
+      )
+      // Підказка веде до тієї самої заміни, що й модуль виду: політика —
+      // права, тригер — підписка.
+      expect(d.hint).toContain(
+        form === "policy" ? "Row access is declared" : "EventSubscription"
+      )
+    }
+  )
+
+  it.each([
     { level: "org", scope: "org" },
     { level: "global", scope: "none" },
   ])(

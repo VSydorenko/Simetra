@@ -61,6 +61,7 @@ import { buildPlatformUnits } from "./platform/units"
 import { checkSqlModules, closedModuleOwners } from "./sql/closed-forms"
 import { creationOrder } from "./sql/dependencies"
 import { checkDebt } from "./sql/debt"
+import { checkKindTableVerbatim, kindTables } from "./sql/kind-table-verbatim"
 import { loadSqlParser, type SqlParser } from "./sql/parse"
 import { loadPlpgsqlParser } from "./sql/plpgsql"
 import { embedRowRules } from "./sql/row-rule"
@@ -151,6 +152,7 @@ export async function runStages(
           sql.units,
           stage1.objects,
           stage1.project,
+          kindTables(stage1.objects, stage3.physical.tables),
           stage1.sqlDebt,
           !sql.diagnostics.some((d) => d.code === "sql.parse"),
           plpgsql
@@ -169,6 +171,16 @@ export async function runStages(
       plpgsql
     ),
     ...debt.grows,
+    // Дослівна політика чи тригер на таблиці виду — помилка раннього блоку
+    // поруч із ратчетом боргу (Р2c1-1): стадія 5 за нею не запускається, а
+    // знімок таблиць уже є — стадія 3 будує його до розбору `.sql`.
+    ...(stage3 === undefined
+      ? []
+      : checkKindTableVerbatim(
+          stage1.objects,
+          stage3.physical.tables,
+          sql.units
+        )),
     ...(embedded?.diagnostics ?? []),
   ]
   if (

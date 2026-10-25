@@ -8,6 +8,7 @@ import { expect } from "vitest"
 import type { Diagnostic, RuleCode } from "../diagnostics"
 import { readFiles, sqlStage } from "../pipeline"
 import { debtUnits } from "../sql/debt"
+import { kindTables } from "../sql/kind-table-verbatim"
 import { loadSqlParser } from "../sql/parse"
 import { loadPlpgsqlParser } from "../sql/plpgsql"
 import type { SqlUnit } from "../sql/units"
@@ -305,7 +306,7 @@ export async function acceptDebt(
   files: ReadonlyMap<string, string>
 ): Promise<Map<string, string>> {
   const stage1 = readFiles(files)
-  const { sql } = sqlStage(stage1, await loadSqlParser())
+  const { sql, stage3 } = sqlStage(stage1, await loadSqlParser())
   return new Map([
     ...files,
     [
@@ -315,6 +316,7 @@ export async function acceptDebt(
           sql.units,
           stage1.objects,
           stage1.project,
+          kindTables(stage1.objects, stage3?.physical.tables ?? []),
           await loadPlpgsqlParser()
         ),
       }),
