@@ -422,7 +422,8 @@ describe("kind module: closed forms only", () => {
         "SELECT setting FROM pg_catalog.pg_settings"
       ),
       plpgsqlBody("PERFORM set_config('app.x', '1', true);"),
-      // Нелітеральний `EXECUTE` — відоме обмеження до 2c, не помилка (Р2b1-19a).
+      // Нелітеральний `EXECUTE` сам не помилка: закритий код функції з ним не
+      // досягає — це судить `sql.command-context-reach` (Р2c1-5).
       plpgsqlBody("EXECUTE v_sql;"),
       plpgsqlBody("EXECUTE format('delete from app.%I', v_table);"),
       plpgsqlBody("EXECUTE 'select 1';"),
@@ -436,9 +437,10 @@ describe("kind module: closed forms only", () => {
       ])
     })
 
-    // Борговий SQL прийнятої таблиці (Р2c1-6): платформний префікс і форми,
-    // що зачіпають його неминуче, — помилка; решта захищених — попередження,
-    // щоб прийом реальної бази з `SET ROLE` у борговій функції не ламався.
+    // Борговий модуль прийнятої таблиці (Р2c1-6): платформний префікс і
+    // форми, що зачіпають його неминуче, — помилка; решта захищених —
+    // попередження, доки одиниця — борг. Спільні `sql/`-файли — під помилкою
+    // (вище).
     const PLATFORM = `${PLATFORM_SETTING_PREFIX}rights_maintenance`
     const ERROR = "sql.command-context-write"
     const WARNING = "sql.debt-session-write"

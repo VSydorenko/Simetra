@@ -254,16 +254,19 @@ command role and nobody else.
   `pg_settings` or a view over it, a literal `EXECUTE`): compiler error
   `sql.command-context-write`. The command context, the user and the role
   belong to the platform.
-- In SQL debt of an adopted table (`CustomTable`, `PgEnum`, shared `sql/`)
-  the same rule is split by setting. A write to `simetra.*` is an error
-  (`sql.command-context-write`, module `debt`): those settings carry the
-  command context and the rights maintenance mode, and `RESET ALL` and a
-  write to `pg_settings` reset them too. A write to the role or the request
-  claims (`request.jwt.*`) is a warning (`sql.debt-session-write`): it may
-  stay while the unit is debt, but closed code must not reach the unit (next
-  section). Remove the named statement when you convert the unit; write a
-  `set_config` name as a literal, because a name built at run time counts as
-  a write.
+- In the debt module of an adopted object (the `.sql` file of a
+  `CustomTable` or a `PgEnum`; after `introspect` its only functions are the
+  trigger functions of that table) the same rule is split by setting. A write
+  to `simetra.*` is an error (`sql.command-context-write`, module `debt`):
+  those settings carry the command context and the rights maintenance mode,
+  and `RESET ALL` and a write to `pg_settings` reset them too. A write to the
+  role or the request claims (`request.jwt.*`) is a warning
+  (`sql.debt-session-write`): it may stay while the unit is debt, but closed
+  code must not reach the unit (next section). Shared `sql/` files are not
+  split: every write there, the role and the claims included, stays the
+  error above, even for a unit listed as debt. Remove the named statement
+  when you convert the unit; write a `set_config` name as a literal, because
+  a name built at run time counts as a write.
 
 ## Policies and triggers on a table of a kind
 
@@ -339,8 +342,9 @@ a role of the API (or `PUBLIC`) can run or read it:
 - a view without `security_invoker` that someone may `SELECT`;
 - a materialized view, which stores the rows its owner read at `REFRESH`.
 
-When the unit reads SQL the compiler cannot check, the diagnostic says so
-instead of listing tables. The compiler does not see the owner of a function,
+When the unit also reaches SQL the compiler cannot check, the diagnostic
+lists the tables it found and adds that the unit reaches unchecked SQL; with
+no tables found, it says only the latter. The compiler does not see the owner of a function,
 so one whose owner is itself subject to row-level security is flagged too.
 Convert in this order of preference:
 
