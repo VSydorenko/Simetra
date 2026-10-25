@@ -813,7 +813,11 @@ function standardPairTargets(
   // Цілі від проєкту («Користувачі», учасник, «Ролі» рівня) парою не
   // бувають, тож тут вони не потрібні.
   return column.polymorphic !== undefined
-    ? standardTargetRefs(column, data, standardRefTargets([]))
+    ? standardTargetRefs(
+        column,
+        data,
+        standardRefTargets([], { membershipSources: [] })
+      )
     : []
 }
 

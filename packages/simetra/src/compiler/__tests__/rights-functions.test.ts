@@ -2,44 +2,56 @@ import { beforeAll, describe, expect, it } from "vitest"
 import type { CompiledModel } from "simetra/compiler"
 import { compile } from "simetra/compiler"
 import { PLATFORM_ROLES, PROVIDER_API_ROLES } from "simetra/model"
-import type { RightsContract } from "../contracts"
-import { RIGHTS_FUNCTIONS } from "../rights/functions"
+import type { RightsContract, SourceConditionContract } from "../contracts"
+import {
+  RIGHTS_FUNCTIONS,
+  hasRightsFunctions,
+  hasVisibleUsers,
+  sourceConditions,
+} from "../rights/functions"
 import { hasEmptySearchPath, routineLanguage } from "../sql/closed-forms"
 import { unitCalls, unitRelations } from "../sql/dependencies"
 import { loadSqlParser, type SqlParser } from "../sql/parse"
 import { withoutLocations, type SqlUnit } from "../sql/units"
 import { kitchenSink } from "./fixtures/kitchen-sink"
 import {
+  ADOPTED_LEAD_KEY,
+  ADOPTED_SUPPORT_KEY,
   EVERYONE_ID,
-  GLOBAL_ASSIGNMENTS_FILE,
-  GLOBAL_ROLES_FILE,
+  GLOBAL_GRANTS_SOURCE_ID,
+  GRANTS_SOURCE_ID,
   GRANT_FILE,
   ORG_ADMIN_ID,
-  ORG_ASSIGNMENTS_FILE,
-  ORG_ROLES_FILE,
   ORG_KIND_ID,
   ORG_MEMBER_ROLE_ID,
+  POLY_GRANTS_SOURCE_ID,
+  POLY_GRANT_FILE,
   PROJECT_FILE,
   PROJECT_ID,
   PROJECT_LEAD_ID,
+  ROLE_FILE,
   SET_FILE,
   SUPPORT_ID,
   TASK_FILE,
   TEAM_KIND_ID,
   USERS_FILE,
-  adoptedMembership,
+  activeGrants,
+  adoptedSourcesDomain,
   compileRights,
-  globalGrantsSource,
   grant,
   grantTable,
   grantsSource,
   membersSource,
   objects,
+  polyColumns,
+  polyGrantTable,
+  polymorphicGrantsDomain,
   rightsFiles,
+  role,
   secondScopeKind,
   singleTenantRights,
-  without,
   withRoles,
+  withoutUsers,
   type Layer,
 } from "./fixtures/rights"
 import { uuid } from "./helpers"
@@ -246,6 +258,7 @@ const DATA = [
   RIGHTS_FUNCTIONS.requires,
   RIGHTS_FUNCTIONS.domain,
   RIGHTS_FUNCTIONS.roles,
+  RIGHTS_FUNCTIONS.sourceKeys,
 ].map((fn) => fn.name)
 
 const SIGNATURES = [
@@ -262,6 +275,7 @@ const SIGNATURES = [
   "function:simetra.rights_projection()",
   "function:simetra.rights_requires()",
   "function:simetra.rights_roles()",
+  "function:simetra.rights_source_keys()",
   "function:simetra.rights_visible_users()",
 ]
 
@@ -286,32 +300,12 @@ describe("rights functions", () => {
     expect(rightsUnits(await compiled(rightsFiles()))).toEqual([])
   })
 
-  it("renders no rights functions without users, even with roles and an adopted source", async () => {
-    // Р2a1-30: `current_user_id` дає лише шар «Користувачів», а прийняте
-    // джерело прав до 2d не дає — компіляція чиста, функцій прав немає.
-    const result = await compileRights(
-      withRoles(
-        adoptedMembership(),
-        {
-          [PROJECT_FILE]: {
-            membershipSources: [membersSource()],
-            assignmentSources: [grantsSource(), globalGrantsSource()],
-          },
-          [GRANT_FILE]: grantTable(),
-          [TASK_FILE]: { trackAuthor: false },
-        },
-        without(
-          USERS_FILE,
-          ORG_ROLES_FILE,
-          ORG_ASSIGNMENTS_FILE,
-          GLOBAL_ROLES_FILE,
-          GLOBAL_ASSIGNMENTS_FILE
-        )
-      )
-    )
-    expect(result.diagnostics.filter((d) => d.severity === "error")).toEqual([])
-    expect(result.model!.contracts.roles).not.toEqual([])
-    expect(rightsUnits(result.model!)).toEqual([])
+  it("renders rights functions without users from an adopted membership source", async () => {
+    // Р2d1-6, Р2d1-7: поточного користувача дає `sub`, тож функції прав є, а
+    // межі «Користувачів» без самих «Користувачів» немає.
+    const sourced = await compiled(adoptedSourcesDomain(withoutUsers()))
+    expect(sourced.contracts.users).toBeUndefined()
+    expect(functionIdentities(sourced)).toEqual(WITHOUT_MEMBERSHIP)
   })
 
   it("declares every rights function with its signature, shape and grants", () => {
@@ -507,9 +501,14 @@ describe("rights functions", () => {
     if (extent !== undefined) expect(found).toContainEqual(extent)
   })
 
-  it("matches the scope kind of a container explicitly", () => {
+  it("held compares the container kind with the row scope kind, not the storage", () => {
     // Скоуп без виду нічого не означає (Р2a1-26): контейнер зіставляється з
-    // видом довідника призначень, а не лише через рівень зберігання архетипу.
+    // видом скоупу рядка призначення, а не лише через рівень зберігання
+    // архетипу. `storage_id` рядка джерела — id джерела (Р2d1-4), тож вид
+    // несе окрема колонка; рядок довідника дає в неї свій `storage_id`.
+    for (const arm of unionArms(cteQuery(model, "assignments"))) {
+      expect(target(arm, "scope_kind_id")).toEqual(target(arm, "storage_id"))
+    }
     const columns = (node: unknown) =>
       (
         node as { ColumnRef?: { fields: { String?: { sval: string } }[] } }
@@ -523,7 +522,8 @@ describe("rights functions", () => {
       .map((expr) => expr as { kind: string; lexpr: unknown; rexpr: unknown })
       .filter((expr) => expr.kind === "AEXPR_NOT_DISTINCT")
       .map((expr) => [columns(expr.lexpr), columns(expr.rexpr)])
-    expect(notDistinct).toContainEqual(["k.scope_kind_id", "t.storage_id"])
+    expect(notDistinct).toContainEqual(["k.scope_kind_id", "t.scope_kind_id"])
+    expect(notDistinct).not.toContainEqual(["k.scope_kind_id", "t.storage_id"])
     expect(notDistinct).toContainEqual(["k.scope", "t.scope"])
   })
 
@@ -616,5 +616,322 @@ describe("rights functions", () => {
       { scopeKind: ORG_KIND_ID, scope: "m.org_id" },
       { scopeKind: TEAM_KIND_ID, scope: "m.team_id" },
     ])
+  })
+})
+
+/** Запит CTE `name` тіла `rights_mine`. */
+function cteQuery(model: CompiledModel, name: string): unknown {
+  const found = nodes(
+    bodyTree(functionUnit(model, RIGHTS_FUNCTIONS.mine.name)),
+    "CommonTableExpr"
+  ).filter((cte) => (cte as { ctename: string }).ctename === name)
+  expect(found).toHaveLength(1)
+  return withoutLocations((found[0] as { ctequery: unknown }).ctequery)
+}
+
+interface Select {
+  op?: string
+  larg?: Select
+  rarg?: Select
+  targetList?: { ResTarget: { name?: string; val: unknown } }[]
+}
+
+const selectOf = (node: unknown): Select =>
+  (node as { SelectStmt?: Select }).SelectStmt ?? (node as Select)
+
+/** Гілки `UNION ALL` запиту зліва направо. */
+function unionArms(node: unknown): Select[] {
+  const select = selectOf(node)
+  if (select.op === undefined || select.op === "SETOP_NONE") return [select]
+  return [...unionArms(select.larg), ...unionArms(select.rarg)]
+}
+
+/** Вираз цілі `name` гілки. */
+function target(arm: Select, name: string): unknown {
+  return arm.targetList?.find((t) => t.ResTarget.name === name)?.ResTarget.val
+}
+
+/** Очікуваний SQL як дерево без позицій. */
+function tree(sql: string): unknown {
+  const parsed = parse(sql)
+  if (!parsed.ok) throw new Error(`expected SQL does not parse: ${sql}`)
+  expect(parsed.statements).toHaveLength(1)
+  return withoutLocations(parsed.statements[0]!.stmt)
+}
+
+/** Гілка `assignments` рядків джерела `sourceId` (за сталою `storage_id`). */
+function sourceArm(model: CompiledModel, sourceId: string): Select {
+  const arms = unionArms(cteQuery(model, "assignments")).filter((arm) => {
+    const storageId = target(arm, "storage_id")
+    return storageId !== undefined && constant(storageId) === sourceId
+  })
+  expect(arms).toHaveLength(1)
+  return arms[0]!
+}
+
+const CURRENT = "(SELECT simetra.current_user_id())"
+
+describe("rights functions over adopted sources", () => {
+  let model: CompiledModel
+  beforeAll(async () => {
+    model = await compiled(adoptedSourcesDomain())
+  })
+
+  it("my scopes include an adopted membership source, active rows only", async () => {
+    // Р2d1-3: та сама форма, що гілка довідника членства; `IS TRUE` —
+    // `NULL` в активності членства не дає.
+    const branch = (active: string) =>
+      tree(
+        `SELECT '${ORG_KIND_ID}'::uuid AS scope_kind_id, s.org_id AS scope, s.id AS member FROM public.membership s WHERE s.user_id IS NOT NULL AND s.user_id = ${CURRENT}${active}`
+      )
+    expect(
+      bodyTree(functionUnit(model, RIGHTS_FUNCTIONS.myScopes.name))
+    ).toEqual(branch(" AND s.is_active IS TRUE"))
+    const always = await compiled(
+      adoptedSourcesDomain({
+        [PROJECT_FILE]: {
+          membershipSources: [
+            membersSource({ columns: { scope: "orgId", user: "userId" } }),
+          ],
+        },
+      })
+    )
+    expect(
+      bodyTree(functionUnit(always, RIGHTS_FUNCTIONS.myScopes.name))
+    ).toEqual(branch(""))
+  })
+
+  it("source keys are a data function of the role keys", () => {
+    const unit = functionUnit(model, RIGHTS_FUNCTIONS.sourceKeys.name)
+    expect(option(unit, "volatility")?.String?.sval).toBe("immutable")
+    expect(option(unit, "security")).toBeUndefined()
+    expect(
+      executeGrantees(model).granted.get(RIGHTS_FUNCTIONS.sourceKeys.name)
+    ).toBeUndefined()
+    expect(valuesRows(model, RIGHTS_FUNCTIONS.sourceKeys.name)).toEqual([
+      [GRANTS_SOURCE_ID, ADOPTED_LEAD_KEY, PROJECT_LEAD_ID],
+      [GLOBAL_GRANTS_SOURCE_ID, ADOPTED_SUPPORT_KEY, SUPPORT_ID],
+    ])
+  })
+
+  it("an assignment source joins the key and is typed by kind", async () => {
+    // Р2d1-4: невідомий ключ — нуль рядків (внутрішнє з'єднання); учасник
+    // контейнерного джерела — лише мій учасник виду скоупу контейнера.
+    const keys = (id: string) =>
+      `JOIN simetra.rights_source_keys() k ON k.source_id = '${id}'::uuid AND k.key = src.role_key`
+    expect(sourceArm(model, GRANTS_SOURCE_ID)).toEqual(
+      selectOf(
+        tree(
+          `SELECT 'source'::text AS storage, '${GRANTS_SOURCE_ID}'::uuid AS storage_id, s.scope AS scope, src.project_id AS container, NULL::uuid AS custom_role, k.role_id AS archetype, '${ORG_KIND_ID}'::uuid AS scope_kind_id, 'container'::text AS source_level, '${PROJECT_ID}'::uuid AS source_level_id FROM public.role_grant src ${keys(GRANTS_SOURCE_ID)} JOIN my_scopes s ON s.scope_kind_id = '${ORG_KIND_ID}'::uuid AND s.member = src.member_id`
+        )
+      )
+    )
+    expect(sourceArm(model, GLOBAL_GRANTS_SOURCE_ID)).toEqual(
+      selectOf(
+        tree(
+          `SELECT 'source'::text AS storage, '${GLOBAL_GRANTS_SOURCE_ID}'::uuid AS storage_id, NULL::uuid AS scope, NULL::uuid AS container, NULL::uuid AS custom_role, k.role_id AS archetype, NULL::uuid AS scope_kind_id, 'global'::text AS source_level, NULL::uuid AS source_level_id FROM public.global_grant src ${keys(GLOBAL_GRANTS_SOURCE_ID)} WHERE src.member_id = ${CURRENT}`
+        )
+      )
+    )
+    // Контейнер без виду скоупу (однотенантний `Project`): учасник — я сам,
+    // скоупу й виду немає, контейнер — колонка джерела.
+    const single = await compiled(
+      singleTenantRights({
+        [PROJECT_FILE]: { assignmentSources: [grantsSource()] },
+        [GRANT_FILE]: grantTable(),
+        [ROLE_FILE("ProjectLead")]: {
+          sourceKeys: [{ source: "grants", key: ADOPTED_LEAD_KEY }],
+        },
+        [ROLE_FILE("Support")]: role(SUPPORT_ID, "Support", "global"),
+      })
+    )
+    expect(sourceArm(single, GRANTS_SOURCE_ID)).toEqual(
+      selectOf(
+        tree(
+          `SELECT 'source'::text AS storage, '${GRANTS_SOURCE_ID}'::uuid AS storage_id, NULL::uuid AS scope, src.project_id AS container, NULL::uuid AS custom_role, k.role_id AS archetype, NULL::uuid AS scope_kind_id, 'container'::text AS source_level, '${PROJECT_ID}'::uuid AS source_level_id FROM public.role_grant src ${keys(GRANTS_SOURCE_ID)} WHERE src.member_id = ${CURRENT}`
+        )
+      )
+    )
+  })
+
+  it("an assignment source with an active column reads active rows only", async () => {
+    // `IS TRUE`: `NULL` в активності призначення прав не дає (fail-closed).
+    const active = await compiled(adoptedSourcesDomain(activeGrants()))
+    expect(sourceArm(active, GRANTS_SOURCE_ID)).toEqual(
+      selectOf(
+        tree(
+          `SELECT 'source'::text AS storage, '${GRANTS_SOURCE_ID}'::uuid AS storage_id, s.scope AS scope, src.project_id AS container, NULL::uuid AS custom_role, k.role_id AS archetype, '${ORG_KIND_ID}'::uuid AS scope_kind_id, 'container'::text AS source_level, '${PROJECT_ID}'::uuid AS source_level_id FROM public.role_grant src JOIN simetra.rights_source_keys() k ON k.source_id = '${GRANTS_SOURCE_ID}'::uuid AND k.key = src.role_key JOIN my_scopes s ON s.scope_kind_id = '${ORG_KIND_ID}'::uuid AND s.member = src.member_id WHERE src.is_active IS TRUE`
+        )
+      )
+    )
+  })
+
+  it("a source row passes only for a role of the source level", () => {
+    // Р2d1-4: рівень зберігання ролей, покритих джерелом, — `NULL`
+    // (Р2a1-12), тож рядок джерела типізує рівень джерела — стала генератора.
+    const columns =
+      "x.storage, x.storage_id, x.scope, x.container, x.custom_role, x.archetype, x.scope_kind_id, r.level, r.level_id"
+    expect(cteQuery(model, "typed")).toEqual(
+      tree(
+        `SELECT ${columns} FROM assignments x JOIN simetra.rights_roles() r ON r.role_id = x.archetype AND r.storage = x.storage AND r.storage_id IS NOT DISTINCT FROM x.storage_id UNION ALL SELECT ${columns} FROM assignments x JOIN simetra.rights_roles() r ON r.role_id = x.archetype AND r.level = x.source_level AND r.level_id IS NOT DISTINCT FROM x.source_level_id WHERE x.storage = 'source'`
+      )
+    )
+  })
+
+  it("visible users include an adopted membership", () => {
+    // Р2d1-8: учасники джерела — лише за моїми скоупами того самого виду й
+    // з тією самою умовою активності, що «мої скоупи».
+    expect(
+      bodyTree(functionUnit(model, RIGHTS_FUNCTIONS.visibleUsers.name))
+    ).toEqual(
+      tree(
+        `SELECT ${CURRENT} WHERE ${CURRENT} IS NOT NULL UNION SELECT m.user_id FROM public.membership m JOIN simetra.rights_my_scopes() s ON s.scope_kind_id = '${ORG_KIND_ID}'::uuid AND s.scope = m.org_id WHERE m.user_id IS NOT NULL AND m.is_active IS TRUE`
+      )
+    )
+  })
+
+  it("a membership where narrows my scopes and visible users", async () => {
+    // Р2d1-15: умова рядків членства — та сама в «моїх скоупах» і в межі
+    // «Користувачів».
+    const narrowed = await compiled(
+      adoptedSourcesDomain({
+        [PROJECT_FILE]: {
+          membershipSources: [
+            membersSource({
+              where: [
+                { column: "userId", isNull: false },
+                { column: "isActive", equals: true },
+              ],
+            }),
+          ],
+        },
+      })
+    )
+    expect(
+      bodyTree(functionUnit(narrowed, RIGHTS_FUNCTIONS.myScopes.name))
+    ).toEqual(
+      tree(
+        `SELECT '${ORG_KIND_ID}'::uuid AS scope_kind_id, s.org_id AS scope, s.id AS member FROM public.membership s WHERE s.user_id IS NOT NULL AND s.user_id = ${CURRENT} AND s.is_active IS TRUE AND s.user_id IS NOT NULL AND s.is_active = TRUE`
+      )
+    )
+    expect(
+      bodyTree(functionUnit(narrowed, RIGHTS_FUNCTIONS.visibleUsers.name))
+    ).toEqual(
+      tree(
+        `SELECT ${CURRENT} WHERE ${CURRENT} IS NOT NULL UNION SELECT m.user_id FROM public.membership m JOIN simetra.rights_my_scopes() s ON s.scope_kind_id = '${ORG_KIND_ID}'::uuid AND s.scope = m.org_id WHERE m.user_id IS NOT NULL AND m.is_active IS TRUE AND m.user_id IS NOT NULL AND m.is_active = TRUE`
+      )
+    )
+  })
+
+  it.each([
+    ["roles, users and a membership catalog", "catalog", true, true, true],
+    ["roles, users and a membership source", "source", true, true, true],
+    [
+      "roles and a membership source without users",
+      "source",
+      false,
+      true,
+      false,
+    ],
+    ["roles without users or a membership source", "none", false, false, false],
+  ] as const)(
+    "%s: rights functions and the users boundary",
+    async (_, membership, users, rights, visible) => {
+      // Р2d1-7: одне місце правди для генератора функцій і політик.
+      const base = (await compiled(withRoles(BASE))).contracts
+      const contracts = {
+        roles: base.roles,
+        users: users ? base.users : undefined,
+        membership: membership === "catalog" ? base.membership : [],
+        membershipSources:
+          membership === "source" ? model.contracts.membershipSources : [],
+      }
+      expect(contracts.roles).not.toEqual([])
+      expect(hasRightsFunctions(contracts, "supabase")).toBe(rights)
+      expect(hasVisibleUsers(contracts, "supabase")).toBe(visible)
+    }
+  )
+})
+
+describe("rights functions over a polymorphic adopted source", () => {
+  let model: CompiledModel
+  beforeAll(async () => {
+    model = await compiled(polymorphicGrantsDomain())
+  })
+
+  /** Гілка джерела `polyGrants` з кон'юнктом скоупу рядка чи без нього. */
+  const polyArm = (rowScope: string) =>
+    selectOf(
+      tree(
+        `SELECT 'source'::text AS storage, '${POLY_GRANTS_SOURCE_ID}'::uuid AS storage_id, s.scope AS scope, NULL::uuid AS container, NULL::uuid AS custom_role, k.role_id AS archetype, '${ORG_KIND_ID}'::uuid AS scope_kind_id, 'scope'::text AS source_level, '${ORG_KIND_ID}'::uuid AS source_level_id FROM public.poly_grants src JOIN public.source_roles sr ON sr.id = src.role_id AND sr.org_id IS NULL JOIN simetra.rights_source_keys() k ON k.source_id = '${POLY_GRANTS_SOURCE_ID}'::uuid AND k.key = sr.key JOIN my_scopes s ON s.scope_kind_id = '${ORG_KIND_ID}'::uuid AND s.member = src.member_id${rowScope} WHERE src.scope_type = 'org'`
+      )
+    )
+
+  it("a polymorphic source filters rows, checks the row scope and joins the role table", () => {
+    // R1: скоуп рядка — скоуп учасника; R1': рядок іншого рівня відсікає
+    // `where`; R2: кастомну роль із ключем системної — умова ролі.
+    expect(sourceArm(model, POLY_GRANTS_SOURCE_ID)).toEqual(
+      polyArm(" AND s.scope = src.scope_id")
+    )
+  })
+
+  it("the row scope column defaults to the table scope column", async () => {
+    const scoped = await compiled(
+      polymorphicGrantsDomain(
+        { polyGrants: { columns: polyColumns({ scope: undefined }) } },
+        {
+          [POLY_GRANT_FILE]: polyGrantTable({
+            scope: "org",
+            scopeColumn: "scopeId",
+          }),
+        }
+      )
+    )
+    expect(sourceArm(scoped, POLY_GRANTS_SOURCE_ID)).toEqual(
+      polyArm(" AND s.scope = src.scope_id")
+    )
+    // Явний `null` — скоуп з учасника: кон'юнкта скоупу рядка немає.
+    const fromMember = await compiled(
+      polymorphicGrantsDomain({
+        polyGrants: { columns: polyColumns({ scope: null }) },
+      })
+    )
+    expect(sourceArm(fromMember, POLY_GRANTS_SOURCE_ID)).toEqual(polyArm(""))
+    // Контейнерний рівень колонки скоупу рядка не має.
+    expect(sourceArm(model, GRANTS_SOURCE_ID)).toEqual(
+      selectOf(
+        tree(
+          `SELECT 'source'::text AS storage, '${GRANTS_SOURCE_ID}'::uuid AS storage_id, s.scope AS scope, src.project_id AS container, NULL::uuid AS custom_role, k.role_id AS archetype, '${ORG_KIND_ID}'::uuid AS scope_kind_id, 'container'::text AS source_level, '${PROJECT_ID}'::uuid AS source_level_id FROM public.role_grant src JOIN simetra.rights_source_keys() k ON k.source_id = '${GRANTS_SOURCE_ID}'::uuid AND k.key = src.role_key JOIN my_scopes s ON s.scope_kind_id = '${ORG_KIND_ID}'::uuid AND s.member = src.member_id`
+        )
+      )
+    )
+  })
+
+  it.each<[string, SourceConditionContract, string]>([
+    [
+      "text with a quote",
+      { column: "c", equals: "o'k", type: "text" },
+      "src.c = 'o''k'",
+    ],
+    [
+      "uuid",
+      { column: "c", equals: ORG_KIND_ID, type: "uuid" },
+      `src.c = '${ORG_KIND_ID}'::uuid`,
+    ],
+    ["boolean", { column: "c", equals: true, type: "boolean" }, "src.c = TRUE"],
+    [
+      "boolean false",
+      { column: "c", equals: false, type: "boolean" },
+      "src.c = FALSE",
+    ],
+    ["integer", { column: "c", equals: 7, type: "integer" }, "src.c = 7"],
+    ["not null", { column: "c", isNull: false }, "src.c IS NOT NULL"],
+    ["null", { column: "c", isNull: true }, "src.c IS NULL"],
+  ])("sourceConditions renders %s", (_, condition, sql) => {
+    expect(sourceConditions("src", [condition])).toEqual([sql])
+  })
+
+  it("sourceConditions of an empty where is empty", () => {
+    expect(sourceConditions("src", [])).toEqual([])
   })
 })

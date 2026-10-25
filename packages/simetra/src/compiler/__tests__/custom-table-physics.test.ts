@@ -331,9 +331,14 @@ describe("CustomTable physics round-trip", () => {
     const derived = {
       tables: physical.tables.filter(
         (t) =>
-          !["ledger", "ledger_tag", "note", "crew", "role_grant"].includes(
-            t.name
-          )
+          ![
+            "ledger",
+            "ledger_tag",
+            "note",
+            "crew",
+            "role_grant",
+            "source_role",
+          ].includes(t.name)
       ),
       enumTypes: physical.enumTypes,
     }

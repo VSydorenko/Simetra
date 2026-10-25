@@ -1,5 +1,6 @@
 import {
   PLATFORM_SCHEMA,
+  PROVIDER_IDENTITY_SOURCES,
   quoteIdent,
   type DatabaseProvider,
   type GrantPurpose,
@@ -8,6 +9,8 @@ import {
 } from "simetra/model"
 import {
   mainTableOf,
+  type AssignmentSourceContract,
+  type CompiledAssignedOn,
   type CompiledRoleLevel,
   type Contracts,
   type ProjectionExtent,
@@ -17,6 +20,7 @@ import {
   type RightsExtent,
   type RightsLevelKey,
   type RightsProjectionRow,
+  type SourceConditionContract,
   qualified,
 } from "../contracts"
 import { compareStrings } from "../diagnostics"
@@ -48,6 +52,7 @@ export const RIGHTS_FUNCTIONS = {
   requires: platform("rights_requires"),
   domain: platform("rights_domain"),
   roles: platform("rights_roles"),
+  sourceKeys: platform("rights_source_keys"),
   myScopes: platform("rights_my_scopes"),
   mine: platform("rights_mine"),
   any: platform("rights_any"),
@@ -76,6 +81,7 @@ export type RightsFunctionContracts = Pick<
   | "rightsCatalogs"
   | "accessDimensions"
   | "membership"
+  | "membershipSources"
   | "assignmentSources"
   | "users"
 >
@@ -90,29 +96,53 @@ interface Declaration {
 }
 
 /**
- * Чи є в проєкті функції прав (Р2a1-15, Р2a1-30, Р2a2-24) — одне місце, з яким
- * звіряються генератор функцій і генератор політик: політика, що кличе
- * неіснуючу функцію, не застосувалась би. Без жодної `Role` прав немає. Без
- * «Користувачів» немає `current_user_id` (шар платформи нічого не генерує), а
- * права можливі лише через прийняте джерело (спека прав §4.6, С8), яке до 2d
- * прав не дає (Р2a1-30); межа fail-closed та сама — прав немає, і
- * попередження `rights.adopted-source-unsupported` це вже каже.
+ * Чи є в проєкті `simetra.current_user_id()` (Р2a1-30, Р2d1-6, Р2d1-7) — одне
+ * місце, з яким звіряються шар сесії, генератор прав і генератори політик.
+ * Функцію дає шар «Користувачів», а без них — лише прийняте джерело членства
+ * на провайдері, де `sub` і є id користувача (спека прав §4.6, С8): колонка
+ * користувача джерела порівнюється з ним напряму.
  */
-export function hasRightsFunctions(
-  contracts: Pick<Contracts, "roles" | "users">
+export function hasSessionUser(
+  contracts: Pick<Contracts, "users" | "membershipSources">,
+  provider: DatabaseProvider
 ): boolean {
-  return contracts.roles.length > 0 && contracts.users !== undefined
+  return (
+    contracts.users !== undefined ||
+    (contracts.membershipSources.length > 0 &&
+      PROVIDER_IDENTITY_SOURCES[provider].subjectIsUserId)
+  )
 }
 
 /**
- * Чи є межа видимості «Користувачів» (Р2a2-18): функції прав і хоч один
- * довідник членства — без учасників «моїх скоупів» множина звелася б до «я», а
- * прийняте джерело членства до 2d прав не дає.
+ * Чи є в проєкті функції прав (Р2a1-15, Р2a2-24, Р2d1-7) — одне місце, з яким
+ * звіряються генератор функцій і генератор політик: політика, що кличе
+ * неіснуючу функцію, не застосувалась би. Без жодної `Role` прав немає; без
+ * функції поточного користувача — теж (fail-closed, Р2a1-30).
+ */
+export function hasRightsFunctions(
+  contracts: Pick<Contracts, "roles" | "users" | "membershipSources">,
+  provider: DatabaseProvider
+): boolean {
+  return contracts.roles.length > 0 && hasSessionUser(contracts, provider)
+}
+
+/**
+ * Чи є межа видимості «Користувачів» (Р2a2-18, Р2d1-7): функції прав, самі
+ * «Користувачі» й хоч одне членство — довідник чи прийняте джерело; без
+ * учасників «моїх скоупів» множина звелася б до «я».
  */
 export function hasVisibleUsers(
-  contracts: Pick<Contracts, "roles" | "users" | "membership">
+  contracts: Pick<
+    Contracts,
+    "roles" | "users" | "membership" | "membershipSources"
+  >,
+  provider: DatabaseProvider
 ): boolean {
-  return hasRightsFunctions(contracts) && contracts.membership.length > 0
+  return (
+    hasRightsFunctions(contracts, provider) &&
+    contracts.users !== undefined &&
+    (contracts.membership.length > 0 || contracts.membershipSources.length > 0)
+  )
 }
 
 /**
@@ -129,7 +159,7 @@ export function buildRightsUnits(
   module: string,
   parse: SqlParser
 ): SqlUnit[] {
-  if (!hasRightsFunctions(contracts)) return []
+  if (!hasRightsFunctions(contracts, provider)) return []
   const F = RIGHTS_FUNCTIONS
   const text = (name: string): [string, string] => [name, "text"]
   const uuid = (name: string): [string, string] => [name, "uuid"]
@@ -164,6 +194,11 @@ export function buildRightsUnits(
       F.roles,
       table(ROLES_COLUMNS),
       valuesBody(ROLES_COLUMNS, rolesRows(contracts))
+    ),
+    data(
+      F.sourceKeys,
+      table(SOURCE_KEYS_COLUMNS),
+      valuesBody(SOURCE_KEYS_COLUMNS, sourceKeysRows(contracts))
     ),
     definer(F.myScopes, [], table(MY_SCOPES_COLUMNS), myScopesBody(contracts)),
     definer(F.mine, [], table(MINE_COLUMNS), mineBody(contracts, physical)),
@@ -223,7 +258,7 @@ export function buildRightsUnits(
       "SETOF uuid",
       dimensionValuesBody(contracts)
     ),
-    ...(hasVisibleUsers(contracts)
+    ...(hasVisibleUsers(contracts, provider)
       ? [definer(F.visibleUsers, [], "SETOF uuid", visibleUsersBody(contracts))]
       : []),
   ]
@@ -279,6 +314,11 @@ const ROLES_COLUMNS: readonly Column[] = [
   ["level_id", "uuid"],
   ["storage", "text"],
   ["storage_id", "uuid"],
+]
+const SOURCE_KEYS_COLUMNS: readonly Column[] = [
+  ["source_id", "uuid"],
+  ["key", "text"],
+  ["role_id", "uuid"],
 ]
 const MY_SCOPES_COLUMNS: readonly Column[] = [
   ["scope_kind_id", "uuid"],
@@ -449,6 +489,17 @@ function rolesRows(contracts: RightsFunctionContracts): Value[][] {
   ])
 }
 
+/**
+ * Ключі ролей у прийнятих джерелах призначень (Р2d1-4): (джерело, ключ) →
+ * архетип. Стала генератора, тож невідомий ключ у даних цілі не з'єднується
+ * ні з чим (fail-closed, спека прав §4.7).
+ */
+function sourceKeysRows(contracts: RightsFunctionContracts): Value[][] {
+  return contracts.roles.flatMap((role) =>
+    role.sourceKeys.map(({ sourceId, key }) => [sourceId, key, role.roleId])
+  )
+}
+
 function storageValues(level: RightsLevelKey | undefined): [Value, Value] {
   if (level === undefined) return [null, null]
   return level.level === "global"
@@ -488,23 +539,88 @@ function emptySet(columns: readonly Column[]): string {
 // --- Функції множини ------------------------------------------------------
 
 /**
- * Мої скоупи (Р2a1-25, Р2a1-26): єдине місце, що читає таблиці членства, —
- * учасник поточного користувача за видом скоупу, за тією самою умовою, що
- * функція множини членства. Без довідників членства — порожня множина.
+ * Мої скоупи (Р2a1-25, Р2a1-26): єдине місце, що читає таблиці членства й
+ * прийняті джерела членства (Р2d1-3), — учасник поточного користувача за
+ * видом скоупу, за тією самою умовою, що функція множини членства. Без
+ * членства — порожня множина.
  */
 function myScopesBody(contracts: RightsFunctionContracts): string {
-  if (contracts.membership.length === 0) return emptySet(MY_SCOPES_COLUMNS)
-  return contracts.membership
-    .map((m) => {
-      const user = `m.${quoteIdent(m.userColumn)}`
-      return [
-        `SELECT ${uuidLiteral(m.scopeKindId)} AS scope_kind_id, m.${quoteIdent(m.scopeColumn)} AS scope, m.${quoteIdent(m.keyColumn)} AS member`,
-        `FROM ${qualified(m.table)} m`,
-        `WHERE ${user} IS NOT NULL`,
-        `  AND ${user} = ${CURRENT_USER}`,
-      ].join("\n")
-    })
-    .join("\nUNION ALL\n")
+  const catalogs = contracts.membership.map((m) => {
+    const user = `m.${quoteIdent(m.userColumn)}`
+    return [
+      `SELECT ${uuidLiteral(m.scopeKindId)} AS scope_kind_id, m.${quoteIdent(m.scopeColumn)} AS scope, m.${quoteIdent(m.keyColumn)} AS member`,
+      `FROM ${qualified(m.table)} m`,
+      `WHERE ${user} IS NOT NULL`,
+      `  AND ${user} = ${CURRENT_USER}`,
+    ].join("\n")
+  })
+  const sources = contracts.membershipSources.map((source) => {
+    const user = `s.${quoteIdent(source.user)}`
+    return [
+      `SELECT ${uuidLiteral(source.scopeKindId)} AS scope_kind_id, s.${quoteIdent(source.scope)} AS scope, s.${quoteIdent(source.member)} AS member`,
+      `FROM ${qualified(source.table)} s`,
+      `WHERE ${user} IS NOT NULL`,
+      `  AND ${user} = ${CURRENT_USER}`,
+      ...activeCondition("s", source.active).map((c) => `  AND ${c}`),
+      ...sourceConditions("s", source.where).map((c) => `  AND ${c}`),
+    ].join("\n")
+  })
+  const branches = [...catalogs, ...sources]
+  if (branches.length === 0) return emptySet(MY_SCOPES_COLUMNS)
+  return branches.join("\nUNION ALL\n")
+}
+
+/**
+ * Умова активності рядка прийнятого джерела: `IS TRUE`, тож `NULL` прав не дає
+ * (fail-closed); без змапованої колонки активний кожен рядок.
+ */
+function activeCondition(alias: string, column: string | undefined): string[] {
+  return column === undefined ? [] : [`${alias}.${quoteIdent(column)} IS TRUE`]
+}
+
+/**
+ * Кон'юнкти умови рядків прийнятого джерела чи його таблиці ролей
+ * (Р2d1-15): рівність колонки літералу чи `IS [NOT] NULL`. Умова лише
+ * звужує, а `NULL = <літерал>` рядка не дає (fail-closed). Ті самі кон'юнкти
+ * читає план ключів ролей (Р2d1-11), тож форма — одна.
+ */
+export function sourceConditions(
+  alias: string,
+  conditions: readonly SourceConditionContract[]
+): string[] {
+  return conditions.map((condition) => {
+    const column = `${alias}.${quoteIdent(condition.column)}`
+    if ("isNull" in condition) {
+      return `${column} IS ${condition.isNull ? "" : "NOT "}NULL`
+    }
+    const { equals } = condition
+    switch (condition.type) {
+      case "uuid":
+        return `${column} = ${uuidLiteral(String(equals))}`
+      case "boolean":
+        return `${column} = ${equals === true ? "TRUE" : "FALSE"}`
+      default:
+        return `${column} = ${sqlLiteral(equals)}`
+    }
+  })
+}
+
+/**
+ * З'єднання рядка джерела `src` з таблицею ролей `sr` (Р2d1-17): посилання й
+ * умова ролі. Одне місце для гілки джерела `rights_mine` і запиту ключів плану
+ * (Р2d1-18): розійдися вони — план називав би ключі рядків, яких функції прав
+ * не читають, чи мовчав би про ті, що читають. Без таблиці ролей — порожньо.
+ */
+export function roleTableJoin(source: AssignmentSourceContract): string[] {
+  const { roleTable } = source
+  if (roleTable === undefined) return []
+  return [
+    `JOIN ${qualified(roleTable.table)} sr`,
+    `  ON ${[
+      `sr.${quoteIdent(roleTable.id)} = src.${quoteIdent(source.role)}`,
+      ...sourceConditions("sr", roleTable.where),
+    ].join("\n AND ")}`,
+  ]
 }
 
 /**
@@ -530,6 +646,22 @@ function visibleUsersBody(contracts: RightsFunctionContracts): string {
         `WHERE ${user} IS NOT NULL`,
       ]
     }),
+    // Учасники прийнятого джерела (Р2d1-8) — за тією самою умовою активності,
+    // що «мої скоупи»: неактивний учасник не відкриває свого користувача.
+    ...contracts.membershipSources.flatMap((source) => {
+      const user = `m.${quoteIdent(source.user)}`
+      return [
+        `UNION`,
+        `SELECT ${user}`,
+        `FROM ${qualified(source.table)} m`,
+        `JOIN ${call(RIGHTS_FUNCTIONS.myScopes)} s`,
+        `  ON s.scope_kind_id = ${uuidLiteral(source.scopeKindId)}`,
+        ` AND s.scope = m.${quoteIdent(source.scope)}`,
+        `WHERE ${user} IS NOT NULL`,
+        ...activeCondition("m", source.active).map((c) => `  AND ${c}`),
+        ...sourceConditions("m", source.where).map((c) => `  AND ${c}`),
+      ]
+    }),
   ].join("\n")
 }
 
@@ -548,31 +680,20 @@ function mineBody(
       "my_scopes",
       `SELECT s.scope_kind_id, s.scope, s.member\nFROM ${call(RIGHTS_FUNCTIONS.myScopes)} s`,
     ],
-    ["assignments", assignmentsCte(contracts.rightsCatalogs, physical)],
-    [
-      "typed",
-      // Архетип діє лише з довідника свого рівня зберігання (Р2a1-12): так
-      // відкидається і чужий рівень, і зниклий архетип, і «кожен
-      // користувач», і рівень, покритий джерелом.
-      [
-        `SELECT x.storage, x.storage_id, x.scope, x.container, x.custom_role, x.archetype, r.level, r.level_id`,
-        `FROM assignments x`,
-        `JOIN ${call(RIGHTS_FUNCTIONS.roles)} r`,
-        `  ON r.role_id = x.archetype`,
-        ` AND r.storage = x.storage`,
-        ` AND r.storage_id IS NOT DISTINCT FROM x.storage_id`,
-      ].join("\n"),
-    ],
+    ["assignments", assignmentsCte(contracts, physical)],
+    ["typed", typedCte(contracts.assignmentSources.length > 0)],
     ["containers", containersCte(contracts.rights, physical)],
     [
       "held",
       // Контейнер — лише в архетипу контейнерного рівня й лише існуючий
       // контейнер того самого тенанта (Р2a1-7): inner join, тож `NULL`,
       // неіснуючий чи чужий контейнер не дає рядка. Вид скоупу контейнера
-      // зіставлено явно з видом довідника призначень, а не лише через
+      // зіставлено явно з видом скоупу рядка призначення, а не лише через
       // рівень зберігання архетипу (`typed`): скоуп без виду нічого не
-      // означає (Р2a1-26). Позначка видалення контейнера прав не відкликає
-      // (Р2a1-28): права зникають із вилученням контейнера.
+      // означає (Р2a1-26). Вид — колонка `scope_kind_id`, а не `storage_id`:
+      // у рядка джерела там id джерела (Р2d1-4). Позначка видалення
+      // контейнера прав не відкликає (Р2a1-28): права зникають із вилученням
+      // контейнера.
       [
         `SELECT t.storage, t.storage_id, t.scope, NULL::uuid AS container, t.custom_role, t.archetype, t.level, t.level_id`,
         `FROM typed t`,
@@ -583,7 +704,7 @@ function mineBody(
         `JOIN containers k`,
         `  ON k.level_id = t.level_id`,
         ` AND k.container = t.container`,
-        ` AND k.scope_kind_id IS NOT DISTINCT FROM t.storage_id`,
+        ` AND k.scope_kind_id IS NOT DISTINCT FROM t.scope_kind_id`,
         ` AND k.scope IS NOT DISTINCT FROM t.scope`,
         `WHERE t.level = 'container'`,
       ].join("\n"),
@@ -688,66 +809,203 @@ const ASSIGNMENT_COLUMNS: readonly Column[] = [
   ["container", "uuid"],
   ["custom_role", "uuid"],
   ["archetype", "uuid"],
+  ["scope_kind_id", "uuid"],
+  ["source_level", "text"],
+  ["source_level_id", "uuid"],
 ]
 
 /**
- * Мої призначення за довідниками прав (Р2a1-13, Р2a1-26): рівень скоупу —
- * учасник з моїх скоупів того самого виду, глобальний — я сам. Кастомна роль
- * — того самого рівня й тенанта, без позначки видалення; призначення
- * кастомної ролі, якої немає, не діє.
+ * Мої призначення (Р2a1-13, Р2a1-26, Р2d1-4) — з довідників прав і з прийнятих
+ * джерел призначень, одним шляхом далі: `scope_kind_id` — вид скоупу рядка
+ * (для `held`), `source_level`/`source_level_id` — рівень джерела (для
+ * `typed`), у рядка довідника — `NULL`.
  */
 function assignmentsCte(
-  catalogs: readonly RightsCatalogContract[],
+  contracts: RightsFunctionContracts,
   physical: PhysicalSnapshot
 ): string {
-  if (catalogs.length === 0) return emptySet(ASSIGNMENT_COLUMNS)
-  return catalogs
-    .map((catalog) => {
-      const assignments = catalogColumns(physical, catalog.assignments.table)
-      const roles = catalogColumns(physical, catalog.roles.table)
-      const a = (logical: string) => `a.${quoteIdent(assignments(logical))}`
-      const c = (logical: string) => `c.${quoteIdent(roles(logical))}`
-      const { level } = catalog
-      const storage = storageSql(level)
-      const scope =
-        level.level === "scope"
-          ? `a.${quoteIdent(scopeColumn(physical, catalog.assignments.table))}`
-          : "NULL::uuid"
-      // Кастомна роль — з «Ролей» того самого тенанта (Р2a1-7): інакше
-      // призначення в A взяло б кастомну роль B з її дельтами.
-      const sameTenant =
-        level.level === "scope"
-          ? [
-              `c.${quoteIdent(scopeColumn(physical, catalog.roles.table))} = ${scope}`,
-            ]
-          : []
-      // Учасник рівня скоупу — мій лише в моїх скоупах того самого виду
-      // (Р2a1-26): id учасника задає той, хто пише.
-      const mine =
-        level.level === "scope"
-          ? [
-              `JOIN my_scopes s`,
-              `  ON s.scope_kind_id = ${uuidLiteral(level.scopeKindId)}`,
-              ` AND s.scope = ${scope}`,
-              ` AND s.member = ${a("subject")}`,
-            ]
-          : []
-      return [
-        `SELECT ${storage.storage} AS storage, ${storage.storageId} AS storage_id, ${scope} AS scope, ${a("container")} AS container, ${a("customRole")} AS custom_role,`,
-        `       CASE WHEN ${a("customRole")} IS NULL THEN ${a("archetype")} ELSE ${c("archetype")} END AS archetype`,
-        `FROM ${qualified(catalog.assignments.table)} a`,
-        ...mine,
-        `LEFT JOIN ${qualified(catalog.roles.table)} c`,
-        `  ON ${[...sameTenant, `${c("ref")} = ${a("customRole")}`].join("\n AND ")}`,
-        ` AND NOT ${c("deletionMark")}`,
-        `WHERE NOT ${a("deletionMark")}`,
-        `  AND (${a("customRole")} IS NULL) = (${c("ref")} IS NULL)`,
-        ...(level.level === "scope"
-          ? []
-          : [`  AND ${a("subject")} = ${CURRENT_USER}`]),
-      ].join("\n")
-    })
-    .join("\nUNION ALL\n")
+  const branches = [
+    ...contracts.rightsCatalogs.map((catalog) =>
+      catalogAssignments(catalog, physical)
+    ),
+    ...contracts.assignmentSources.map((source) =>
+      sourceAssignments(source, contracts.rights)
+    ),
+  ]
+  if (branches.length === 0) return emptySet(ASSIGNMENT_COLUMNS)
+  return branches.join("\nUNION ALL\n")
+}
+
+/**
+ * Призначення довідника прав: рівень скоупу — учасник з моїх скоупів того
+ * самого виду, глобальний — я сам. Кастомна роль — того самого рівня й
+ * тенанта, без позначки видалення; призначення кастомної ролі, якої немає,
+ * не діє. Вид скоупу рядка — рівень зберігання довідника: він і є вид
+ * скоупу чи `NULL`.
+ */
+function catalogAssignments(
+  catalog: RightsCatalogContract,
+  physical: PhysicalSnapshot
+): string {
+  const assignments = catalogColumns(physical, catalog.assignments.table)
+  const roles = catalogColumns(physical, catalog.roles.table)
+  const a = (logical: string) => `a.${quoteIdent(assignments(logical))}`
+  const c = (logical: string) => `c.${quoteIdent(roles(logical))}`
+  const { level } = catalog
+  const storage = storageSql(level)
+  const scope =
+    level.level === "scope"
+      ? `a.${quoteIdent(scopeColumn(physical, catalog.assignments.table))}`
+      : "NULL::uuid"
+  // Кастомна роль — з «Ролей» того самого тенанта (Р2a1-7): інакше
+  // призначення в A взяло б кастомну роль B з її дельтами.
+  const sameTenant =
+    level.level === "scope"
+      ? [
+          `c.${quoteIdent(scopeColumn(physical, catalog.roles.table))} = ${scope}`,
+        ]
+      : []
+  // Учасник рівня скоупу — мій лише в моїх скоупах того самого виду
+  // (Р2a1-26): id учасника задає той, хто пише.
+  const mine =
+    level.level === "scope"
+      ? [
+          `JOIN my_scopes s`,
+          `  ON s.scope_kind_id = ${uuidLiteral(level.scopeKindId)}`,
+          ` AND s.scope = ${scope}`,
+          ` AND s.member = ${a("subject")}`,
+        ]
+      : []
+  return [
+    `SELECT ${storage.storage} AS storage, ${storage.storageId} AS storage_id, ${scope} AS scope, ${a("container")} AS container, ${a("customRole")} AS custom_role,`,
+    `       CASE WHEN ${a("customRole")} IS NULL THEN ${a("archetype")} ELSE ${c("archetype")} END AS archetype,`,
+    `       ${storage.storageId} AS scope_kind_id, NULL::text AS source_level, NULL::uuid AS source_level_id`,
+    `FROM ${qualified(catalog.assignments.table)} a`,
+    ...mine,
+    `LEFT JOIN ${qualified(catalog.roles.table)} c`,
+    `  ON ${[...sameTenant, `${c("ref")} = ${a("customRole")}`].join("\n AND ")}`,
+    ` AND NOT ${c("deletionMark")}`,
+    `WHERE NOT ${a("deletionMark")}`,
+    `  AND (${a("customRole")} IS NULL) = (${c("ref")} IS NULL)`,
+    ...(level.level === "scope"
+      ? []
+      : [`  AND ${a("subject")} = ${CURRENT_USER}`]),
+  ].join("\n")
+}
+
+/**
+ * Призначення прийнятого джерела (Р2d1-4, спека прав §4.7): лише архетип за
+ * ключем ролі — внутрішнє з'єднання, тож невідомий ключ чи `NULL` у колонці
+ * ролі не дає рядка; кастомних ролей з джерела немає. Учасник рівня скоупу й
+ * контейнера зі скоупленим контейнером — мій учасник виду K (Р2a1-26), скоуп
+ * — з моїх скоупів; глобальний і нескоуплений контейнер — я сам.
+ */
+function sourceAssignments(
+  source: AssignmentSourceContract,
+  rights: readonly RightsContract[]
+): string {
+  const src = (column: string) => `src.${quoteIdent(column)}`
+  const scopeKindId = sourceScopeKind(source.assignedOn, rights)
+  const [level, levelId] = levelValues(source.assignedOn)
+  const scoped = scopeKindId !== undefined
+  const container =
+    source.assignedOn.level === "container" && source.container !== undefined
+      ? src(source.container)
+      : "NULL::uuid"
+  const conditions = [
+    ...(scoped ? [] : [`${src(source.member)} = ${CURRENT_USER}`]),
+    ...activeCondition("src", source.active),
+    // Умова рядків (R1'): рядок іншого рівня поліморфної таблиці інакше
+    // читався б як призначення цього джерела.
+    ...sourceConditions("src", source.where),
+  ]
+  // Роль через посилання (R2): ключ — у рядку таблиці ролей, а її умова
+  // відсікає кастомну роль тенанта з ключем системної. Псевдонім `sr`, бо
+  // `r` у `typed` того самого тіла — `rights_roles()`.
+  const { roleTable } = source
+  const roleKey =
+    roleTable === undefined
+      ? src(source.role)
+      : `sr.${quoteIdent(roleTable.key)}`
+  const roleJoin = roleTableJoin(source)
+  // Скоуп рядка мусить дорівнювати скоупу учасника (R1): інакше адмін тенанта
+  // A вписав би учасника B зі скоупом A, і рядок діяв би в B.
+  const rowScope =
+    source.scope === undefined ? [] : [` AND s.scope = ${src(source.scope)}`]
+  return [
+    `SELECT 'source'::text AS storage, ${uuidLiteral(source.sourceId)} AS storage_id, ${scoped ? "s.scope" : "NULL::uuid"} AS scope, ${container} AS container, NULL::uuid AS custom_role, k.role_id AS archetype,`,
+    `       ${scoped ? uuidLiteral(scopeKindId) : "NULL::uuid"} AS scope_kind_id, ${sqlLiteral(level)}::text AS source_level, ${levelId === null ? "NULL::uuid" : uuidLiteral(levelId)} AS source_level_id`,
+    `FROM ${qualified(source.table)} src`,
+    ...roleJoin,
+    `JOIN ${call(RIGHTS_FUNCTIONS.sourceKeys)} k`,
+    `  ON k.source_id = ${uuidLiteral(source.sourceId)}`,
+    ` AND k.key = ${roleKey}`,
+    ...(scoped
+      ? [
+          `JOIN my_scopes s`,
+          `  ON s.scope_kind_id = ${uuidLiteral(scopeKindId)}`,
+          ` AND s.member = ${src(source.member)}`,
+          ...rowScope,
+        ]
+      : []),
+    ...(conditions.length === 0
+      ? []
+      : [`WHERE ${conditions.join("\n  AND ")}`]),
+  ].join("\n")
+}
+
+/**
+ * Вид скоупу рядків джерела: рівень скоупу — його вид, контейнерний — вид
+ * скоупу контейнера; глобальний і нескоуплений контейнер (рівень зберігання
+ * глобальний, `rightsLevelOf`) — без виду.
+ */
+function sourceScopeKind(
+  level: CompiledAssignedOn,
+  rights: readonly RightsContract[]
+): string | undefined {
+  switch (level.level) {
+    case "scope":
+      return level.scopeKindId
+    case "container":
+      return must(rights.find((c) => c.objectId === level.containerId))
+        .scopeKindId
+    default:
+      return undefined
+  }
+}
+
+/**
+ * Типізація призначень рівнем ролі. Рядок довідника вмикає архетип лише свого
+ * рівня зберігання (Р2a1-12): так відкидається і чужий рівень, і зниклий
+ * архетип, і «кожен користувач», і рівень, покритий джерелом. Рівень
+ * зберігання ролей, покритих джерелом, — `NULL`, тож рядок джерела
+ * типізується інакше (Р2d1-4): рівень ролі мусить дорівнювати рівню джерела —
+ * сталій генератора, а не даним; ключ глобальної ролі в контейнерному джерелі
+ * її не вмикає.
+ */
+function typedCte(withSources: boolean): string {
+  const columns = `SELECT x.storage, x.storage_id, x.scope, x.container, x.custom_role, x.archetype, x.scope_kind_id, r.level, r.level_id`
+  const roles = `JOIN ${call(RIGHTS_FUNCTIONS.roles)} r`
+  return [
+    columns,
+    `FROM assignments x`,
+    roles,
+    `  ON r.role_id = x.archetype`,
+    ` AND r.storage = x.storage`,
+    ` AND r.storage_id IS NOT DISTINCT FROM x.storage_id`,
+    ...(withSources
+      ? [
+          `UNION ALL`,
+          columns,
+          `FROM assignments x`,
+          roles,
+          `  ON r.role_id = x.archetype`,
+          ` AND r.level = x.source_level`,
+          ` AND r.level_id IS NOT DISTINCT FROM x.source_level_id`,
+          `WHERE x.storage = 'source'`,
+        ]
+      : []),
+  ].join("\n")
 }
 
 const DELTA_COLUMNS: readonly Column[] = [

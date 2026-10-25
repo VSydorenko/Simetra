@@ -19,6 +19,78 @@ export interface MessageEntry {
 }
 
 /**
+ * Поради правил прийнятих джерел за причиною (Р2d1-15…Р2d1-19): невідома
+ * причина бере запасну — каталог не падає на параметрах.
+ */
+function hintOf<K extends string>(
+  hints: Record<K, { en: string; uk: string }>,
+  params: DiagnosticParams,
+  fallback: K
+): { en: string; uk: string } {
+  const reason = String(params.reason)
+  return Object.hasOwn(hints, reason) ? hints[reason as K] : hints[fallback]
+}
+
+const SOURCE_WHERE_HINTS: Record<
+  "shared" | "type" | "literal",
+  { en: string; uk: string }
+> = {
+  shared: {
+    en: "Rows of one source would also count as rows of the other. Give each source a where condition on one discriminator column that the other excludes: different literals (not on a column with its own collation), a literal against isNull: true, or isNull: true against isNull: false — or use separate tables.",
+    uk: "Рядки одного джерела рахувалися б і рядками іншого. Дайте кожному джерелу умову where на одну колонку-дискримінатор, яку інше виключає: різні літерали (не на колонці з власною колацією), літерал проти isNull: true чи isNull: true проти isNull: false, — або візьміть окремі таблиці.",
+  },
+  type: {
+    en: "equals compares a text, uuid, boolean or integer column that is not an array; use isNull for other columns.",
+    uk: "equals порівнює колонку тексту, uuid, логічну чи цілу, не масив; для інших колонок — isNull.",
+  },
+  literal: {
+    en: "Use a string for a text column, a uuid with dashes for a uuid column, true or false for a boolean column and an integer for an integer column.",
+    uk: "Для текстової колонки — рядок, для uuid — uuid з дефісами, для логічної — true чи false, для цілої — ціле число.",
+  },
+}
+
+const SOURCE_ROLE_KEY_HINTS: Record<
+  "primaryKey" | "ambiguous",
+  { en: string; uk: string }
+> = {
+  primaryKey: {
+    en: "The role column of the source refers to the role table by its key: declare a primary key of one UUID column in the CustomTable metadata.",
+    uk: "Колонка ролі джерела посилається на таблицю ролей за її ключем: оголосіть у метаданих CustomTable первинний ключ з однієї колонки UUID.",
+  },
+  ambiguous: {
+    en: "A custom role with the key of a system role would turn the system role on. Add a where condition to columns.role that keeps only the roles of the source, or make the key column unique on its own (a unique constraint or a unique index over the column, without a predicate, operator class or collation).",
+    uk: "Кастомна роль із ключем системної вмикала б системну роль. Додайте до columns.role умову where, що лишає лише ролі джерела, або зробіть колонку ключа унікальною самою (унікальне обмеження чи унікальний індекс над колонкою, без предиката, класу операторів і колації).",
+  },
+}
+
+/**
+ * Скоуп джерела — скоуп-колонка таблиці: для членства її тримає в межах
+ * тенанта FK власника, для призначень скоуп рядка мусить дорівнювати скоупу
+ * учасника (R1). Код один на обидва види джерел, тож порада називає обидві
+ * причини.
+ */
+const SCOPE_COLUMN_HINT = {
+  en: "Scope the table by the source's scope kind and map columns.scope to its scopeColumn. For a membership source the composite foreign key of an owner keeps exactly that column within the tenant; for an assignment source the scope of the row must equal the scope of its member, or a row written in one tenant would grant a role in another.",
+  uk: "Скоупте таблицю видом скоупу джерела й зіставте columns.scope з її scopeColumn. Для джерела членства складений зовнішній ключ власника тримає в межах тенанта саме цю колонку; для джерела призначень скоуп рядка мусить дорівнювати скоупу учасника, інакше рядок, записаний в одному тенанті, давав би роль в іншому.",
+}
+
+const SOURCE_SCOPE_HINTS: Record<
+  "scope" | "column" | "level" | "missing",
+  { en: string; uk: string }
+> = {
+  scope: SCOPE_COLUMN_HINT,
+  column: SCOPE_COLUMN_HINT,
+  level: {
+    en: "columns.scope, a column or null, belongs to the scope level only: drop the field.",
+    uk: "columns.scope — колонка чи null — буває лише на рівні скоупу: приберіть поле.",
+  },
+  missing: {
+    en: "The scope of an assignment is the scope of its member, and the own scope column of the row must match it: name that column in columns.scope, or set columns.scope to null when the row carries no scope.",
+    uk: "Скоуп призначення — скоуп учасника, і власна колонка скоупу рядка мусить із ним збігатися: назвіть цю колонку в columns.scope або задайте columns.scope: null, коли рядок скоупу не несе.",
+  },
+}
+
+/**
  * Порада відмов власників — одна для плану (`plan.owner-mismatch`) і звірки
  * (`engine.owner-not-member`): виправлення те саме, різниться лише наслідок.
  */
@@ -1836,18 +1908,96 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Функції прав — SECURITY DEFINER і проходили б політики таблиці: приберіть rowLevelSecurity: forced.",
     },
   },
-  "rights.source-scope-column": {
+  "rights.source-member-key": {
     en: (p) =>
-      p.reason === "scope"
-        ? `Table of membership source "${p.source}" is not scoped by the scope kind of the source`
-        : `Scope column of membership source "${p.source}" is not the scope column of its table`,
+      `Table ${p.table} of membership source "${p.source}" has no single-column uuid key`,
     uk: (p) =>
-      p.reason === "scope"
-        ? `Таблиця джерела членства "${p.source}" не скоуплена видом скоупу джерела`
-        : `Колонка скоупу джерела членства "${p.source}" — не скоуп-колонка його таблиці`,
+      `Таблиця ${p.table} джерела членства "${p.source}" не має одноколонкового uuid-ключа`,
     hint: {
-      en: "Scope the table by the source's scope kind and map columns.scope to its scopeColumn: the composite foreign key of an owner keeps exactly that column within the tenant.",
-      uk: "Скоупте таблицю видом скоупу джерела й зіставте columns.scope з її scopeColumn: складений зовнішній ключ власника тримає в межах тенанта саме цю колонку.",
+      en: "The member of a membership source is the table key: declare a primary key of one UUID column in the CustomTable metadata.",
+      uk: "Учасник джерела членства — ключ таблиці: оголосіть у метаданих CustomTable первинний ключ з однієї колонки UUID.",
+    },
+  },
+  "rights.source-member-unique": {
+    en: (p) =>
+      `Table ${p.table} of membership source "${p.source}" has no UNIQUE (scope, id) for the subject of the rights catalogs`,
+    uk: (p) =>
+      `Таблиця ${p.table} джерела членства "${p.source}" не має UNIQUE (скоуп, id) для суб'єкта довідників прав`,
+    hint: {
+      en: "The subject of the rights catalogs of the scope kind refers to the table by a composite foreign key within the scope: add a unique constraint over the scope column and the key to the CustomTable metadata (uniques).",
+      uk: "Суб'єкт довідників прав виду посилається на таблицю складеним зовнішнім ключем у межах скоупу: додайте в метадані CustomTable (uniques) унікальне обмеження над колонкою скоупу й ключем.",
+    },
+  },
+  "rights.source-column-type": {
+    en: (p) =>
+      `Column ${p.column} of source "${p.source}" must be of type ${p.expected}`,
+    uk: (p) =>
+      `Колонка ${p.column} джерела "${p.source}" мусить мати тип ${p.expected}`,
+    hint: {
+      en: "Rights functions compare scope, user, member and container columns as uuid, read the active column as boolean, the role key column as text and a role reference column as uuid: map a column of that type.",
+      uk: "Функції прав порівнюють колонки скоупу, користувача, учасника й контейнера як uuid, читають колонку активності як boolean, колонку ключа ролі — як текст, а колонку посилання на роль — як uuid: зіставте колонку такого типу.",
+    },
+  },
+  "rights.source-where": {
+    en: (p) =>
+      p.reason === "shared"
+        ? `Assignment source "${p.source}" shares its table with another assignment source, and their where conditions do not exclude each other`
+        : p.reason === "type"
+          ? `Condition on column ${p.column} of source "${p.source}" compares a column that is not text, uuid, boolean or integer`
+          : `Condition on column ${p.column} of source "${p.source}" has a literal that does not fit the column type`,
+    uk: (p) =>
+      p.reason === "shared"
+        ? `Джерело призначень "${p.source}" ділить таблицю з іншим джерелом призначень, і їхні умови where не виключають одна одну`
+        : p.reason === "type"
+          ? `Умова на колонку ${p.column} джерела "${p.source}" порівнює колонку не текстову, не uuid, не логічну й не цілу`
+          : `Умова на колонку ${p.column} джерела "${p.source}" має літерал, що не відповідає типу колонки`,
+    hint: {
+      en: (p) => hintOf(SOURCE_WHERE_HINTS, p, "literal").en,
+      uk: (p) => hintOf(SOURCE_WHERE_HINTS, p, "literal").uk,
+    },
+  },
+  "rights.source-role-key": {
+    en: (p) =>
+      p.reason === "primaryKey"
+        ? `Role table ${p.table} of assignment source "${p.source}" has no single-column uuid key`
+        : `Role key of assignment source "${p.source}" is not unique in role table ${p.table}, and the role has no where condition`,
+    uk: (p) =>
+      p.reason === "primaryKey"
+        ? `Таблиця ролей ${p.table} джерела призначень "${p.source}" не має одноколонкового uuid-ключа`
+        : `Ключ ролі джерела призначень "${p.source}" не унікальний у таблиці ролей ${p.table}, а роль не має умови where`,
+    hint: {
+      en: (p) => hintOf(SOURCE_ROLE_KEY_HINTS, p, "ambiguous").en,
+      uk: (p) => hintOf(SOURCE_ROLE_KEY_HINTS, p, "ambiguous").uk,
+    },
+  },
+  "rights.source-scope-column": {
+    en: (p) => {
+      switch (p.reason) {
+        case "scope":
+          return `Table of source "${p.source}" is not scoped by the scope kind of the source`
+        case "level":
+          return `Assignment source "${p.source}" sets columns.scope, but its level is not a scope kind`
+        case "missing":
+          return `Assignment source "${p.source}" on a scope level names no row scope column, and its table has no scopeColumn`
+        default:
+          return `Scope column of source "${p.source}" is not the scope column of its table`
+      }
+    },
+    uk: (p) => {
+      switch (p.reason) {
+        case "scope":
+          return `Таблиця джерела "${p.source}" не скоуплена видом скоупу джерела`
+        case "level":
+          return `Джерело призначень "${p.source}" задає columns.scope, а його рівень — не вид скоупу`
+        case "missing":
+          return `Джерело призначень "${p.source}" рівня скоупу не називає колонки скоупу рядка, а його таблиця не має scopeColumn`
+        default:
+          return `Колонка скоупу джерела "${p.source}" — не скоуп-колонка його таблиці`
+      }
+    },
+    hint: {
+      en: (p) => hintOf(SOURCE_SCOPE_HINTS, p, "column").en,
+      uk: (p) => hintOf(SOURCE_SCOPE_HINTS, p, "column").uk,
     },
   },
   "rights.membership-source-duplicate": {
@@ -2141,11 +2291,11 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Довідники прав пишуться лише дією адміністрування прав; приберіть кастомну дію.",
     },
   },
-  "rights.adopted-source-unsupported": {
+  "rights.adopted-source-writes": {
     en: (p) =>
-      `Rights from the adopted source "${p.source}" are not computed yet: members of the source will not get rights on the objects of the kind`,
+      `The platform only reads the adopted source "${p.source}": the paths that write it belong to the application, and the rights safeguards do not apply to them until the rights tables are promoted`,
     uk: (p) =>
-      `Права з прийнятого джерела "${p.source}" ще не обчислюються: учасники джерела не отримають прав на об'єкти виду`,
+      `Прийняте джерело "${p.source}" платформа лише читає: шляхи запису в нього — застосунку, і запобіжники прав на них не діють, доки таблиці прав не промотовано`,
   },
   "rights.scope-kind-unread": {
     en: (p) =>
@@ -3879,6 +4029,26 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     hint: {
       en: "No plan was written. Rename or drop the existing trigger; for a subscription, another physicalName also works.",
       uk: "План не записано. Перейменуйте чи зніміть наявний тригер; підписці можна й дати інший physicalName.",
+    },
+  },
+  "plan.rights-source-access": {
+    en: (p) =>
+      `The applying role cannot read every row of the adopted rights source table(s) ${p.tables}: it lacks USAGE on the schema or SELECT on the table, or row level security is enabled and the role neither owns the table nor has BYPASSRLS`,
+    uk: (p) =>
+      `Роль застосування не може прочитати всіх рядків прийнятих таблиць-джерел прав ${p.tables}: вона не має USAGE на схемі чи SELECT на таблиці або на таблиці увімкнено захист рядків, а роль нею не володіє й не має BYPASSRLS`,
+    hint: {
+      en: "No plan was written. The rights functions run as their owner, the applying role (SECURITY DEFINER), and read these tables. The applying role always needs USAGE on the schema and SELECT on the table; when the table has row level security enabled, it must also own the table (`ALTER TABLE … OWNER TO <role>`, in a step that has the permission) or have BYPASSRLS, because row level security shows every row only to the owner or a BYPASSRLS role. Fix this and plan again.",
+      uk: "План не записано. Функції прав виконуються від свого власника — ролі застосування (SECURITY DEFINER) — і читають ці таблиці. Ролі застосування завжди потрібні USAGE на схемі й SELECT на таблиці; коли на таблиці увімкнено захист рядків, вона ще мусить володіти таблицею (`ALTER TABLE … OWNER TO <роль>` кроком, що має на це дозвіл) або мати BYPASSRLS, бо захист рядків показує всі рядки лише власнику чи ролі з BYPASSRLS. Виправте це й сплануйте знову.",
+    },
+  },
+  "plan.rights-source-unknown-keys": {
+    en: (p) =>
+      `Rows of the adopted assignment source "${p.source}" carry role keys no role declares in sourceKeys: ${p.keys}${Number(p.more) > 0 ? ` and ${p.more} more` : ""}; these rows grant nothing`,
+    uk: (p) =>
+      `Рядки прийнятого джерела призначень "${p.source}" несуть ключі ролей, яких жодна роль не оголошує в sourceKeys: ${p.keys}${Number(p.more) > 0 ? ` і ще ${p.more}` : ""}; ці рядки прав не дають`,
+    hint: {
+      en: "Add the key to sourceKeys of the archetype it stands for, or fix the rows; until then a row with an unknown key gives no rights.",
+      uk: "Додайте ключ у sourceKeys архетипу, який він означає, або виправте рядки; доти рядок з невідомим ключем прав не дає.",
     },
   },
   "plan.numbering-not-generated": {

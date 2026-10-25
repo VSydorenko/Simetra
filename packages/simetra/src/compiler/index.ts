@@ -79,9 +79,12 @@ export type {
   Node,
   RangeVar,
 } from "libpg-query"
-export { mainTableOf } from "./contracts"
+export { mainTableOf, qualified } from "./contracts"
+export { roleTableJoin, sourceConditions } from "./rights/functions"
 export type {
+  AssignmentSourceContract,
   Contracts,
+  MembershipSourceContract,
   PostingContract,
   QualifiedName,
   RegisterContract,

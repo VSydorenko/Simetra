@@ -380,18 +380,67 @@ describe("messages catalog", () => {
     }
   )
 
-  it("rights.adopted-source-unsupported names the consequence without a plan label", () => {
-    const d = diagnostic("rights.adopted-source-unsupported", "", "", {
+  it("rights.adopted-source-writes names the write boundary of the source", () => {
+    const d = diagnostic("rights.adopted-source-writes", "", "", {
       source: "grants",
     })
     expect(d.severity).toBe("warning")
     expect(d.message).toBe(
-      'Rights from the adopted source "grants" are not computed yet: members of the source will not get rights on the objects of the kind'
+      'The platform only reads the adopted source "grants": the paths that write it belong to the application, and the rights safeguards do not apply to them until the rights tables are promoted'
     )
     expect(localize(d, "uk").message).toBe(
-      `Права з прийнятого джерела "grants" ще не обчислюються: учасники джерела не отримають прав на об'єкти виду`
+      `Прийняте джерело "grants" платформа лише читає: шляхи запису в нього — застосунку, і запобіжники прав на них не діють, доки таблиці прав не промотовано`
     )
   })
+
+  it.each([
+    ["rights.source-member-key", { source: "members", table: "Membership" }],
+    ["rights.source-member-unique", { source: "members", table: "Membership" }],
+    [
+      "rights.source-column-type",
+      { source: "grants", column: "memberId", expected: "UUID" },
+    ],
+  ] as const)("%s is an error that names its parameters", (code, params) => {
+    const d = diagnostic(code, "", "", params)
+    expect(d.severity).toBe("error")
+    for (const value of Object.values(params)) {
+      expect(d.message).toContain(value)
+      expect(localize(d, "uk").message).toContain(value)
+    }
+  })
+
+  it.each([
+    ["rights.source-where", ["type", "literal", "shared"]],
+    ["rights.source-role-key", ["primaryKey", "ambiguous"]],
+    ["rights.source-scope-column", ["scope", "column", "level", "missing"]],
+  ] as const)(
+    "%s gives every reason its own text and hint",
+    (code, reasons) => {
+      expect(diagnostic(code, "", "", { reason: reasons[0] }).severity).toBe(
+        "error"
+      )
+      for (const locale of ["en", "uk"] as const) {
+        const texts = reasons.map((reason) =>
+          localize(
+            diagnostic(code, "", "", {
+              source: "polyGrants",
+              table: "SourceRole",
+              column: "scopeType",
+              reason,
+            }),
+            locale
+          )
+        )
+        for (const text of texts) expect(text.message).toContain("polyGrants")
+        expect(new Set(texts.map((t) => t.message)).size, locale).toBe(
+          reasons.length
+        )
+        // Причини scope і column мають одну пораду — про скоуп-колонку таблиці.
+        const hints = code === "rights.source-scope-column" ? 3 : reasons.length
+        expect(new Set(texts.map((t) => t.hint)).size, locale).toBe(hints)
+      }
+    }
+  )
 
   it("rights.scope-without-membership names the container when there is one", () => {
     const d = diagnostic("rights.scope-without-membership", "", "", {
@@ -465,6 +514,35 @@ describe("messages catalog", () => {
     expect(uk.hint).toBe(
       "Перевірте обробник: UPDATE, що записує в ці колонки їхні поточні значення, його більше не запускає."
     )
+  })
+
+  it.each([
+    [
+      "plan.rights-source-access",
+      { tables: "public.membership, public.role_grant" },
+    ],
+    [
+      "plan.rights-source-unknown-keys",
+      { source: "grants", keys: "boss, chief", more: 3 },
+    ],
+  ] as const)("%s names its parameters in both locales", (code, params) => {
+    const d = diagnostic(code, "", "", params)
+    for (const message of [d.message, localize(d, "uk").message]) {
+      for (const value of Object.values(params)) {
+        expect(message).toContain(String(value))
+      }
+    }
+  })
+
+  it("plan.rights-source-unknown-keys omits the rest when there is none", () => {
+    const d = diagnostic("plan.rights-source-unknown-keys", "", "", {
+      source: "grants",
+      keys: "boss",
+      more: 0,
+    })
+    for (const message of [d.message, localize(d, "uk").message]) {
+      expect(message).not.toContain("0")
+    }
   })
 
   it("plan.service-role-access-lost names the tables and keeps them CustomTable", () => {

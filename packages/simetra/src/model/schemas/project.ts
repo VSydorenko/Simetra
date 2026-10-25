@@ -213,6 +213,21 @@ export interface IdentitySource {
   deletedAtColumn?: string
   /** Значення `simetra.identities.provider` для цього провайдера. */
   providerKey: string
+  /**
+   * Чи `sub` сесії — і є id користувача (С8): лише тоді права без
+   * «Користувачів» можливі з прийнятим джерелом членства (спека прав §4.6),
+   * бо колонка користувача джерела зіставляється з `sub` напряму.
+   */
+  subjectIsUserId: boolean
+  /**
+   * Claim анонімної сесії провайдера (значення `true`); `null` — анонімних
+   * сесій у провайдера немає. Без «Користувачів» провізії, що відкидає
+   * анонімний вхід за `anonymousColumn`, немає, тож такий вхід відкидає сама
+   * функція поточного користувача за цим claim. Факт обов'язковий: пропущений
+   * claim тихо дав би анонімній сесії права `everyUser` (fail-open), тож новий
+   * провайдер мусить відповісти на це явно.
+   */
+  anonymousClaim: string | null
 }
 
 /**
@@ -245,6 +260,8 @@ export const PROVIDER_IDENTITY_SOURCES: Readonly<
     anonymousColumn: "is_anonymous",
     deletedAtColumn: "deleted_at",
     providerKey: "supabase",
+    subjectIsUserId: true,
+    anonymousClaim: "is_anonymous",
   },
 }
 

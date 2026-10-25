@@ -100,7 +100,7 @@ export function emitEntityTypes(model: CompiledModel): string {
     model.objects.map((object) => [`${object.kind}.${object.name}`, object])
   )
   const lookup = (ref: MetadataRef) => byRef.get(`${ref.kind}.${ref.name}`)
-  const refTargets = standardRefTargets(model.objects)
+  const refTargets = standardRefTargets(model.objects, model.project)
   const scopeNames = new Map(model.scopeKinds.map((k) => [k.id, k.name]))
   // Заголовок виду скоупу живе лише в проєкті, а не в знімку скоупів.
   const scopeTitles = new Map(

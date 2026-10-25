@@ -654,7 +654,8 @@ function resolveDimension(
 
 /**
  * Посилання прийнятих джерел (спека прав §4.7): таблиця, вид скоупу, контейнер
- * рівня й колонки. Власник — саме джерело, як у виміру: перейменування
+ * рівня, колонки, колонки умов `where` і таблиця ролей з її колонками
+ * (Р2d1-15, Р2d1-17). Власник — саме джерело, як у виміру: перейменування
  * таблиці, колонки чи виду бачить індекс і переписує мапінг. Невідома колонка
  * прийнятої таблиці — помилка опису джерела тут, як і будь-яке ім'я колонки,
  * що називає опис таблиці; ціль не `CustomTable` і невідомий вид звітують
@@ -681,23 +682,21 @@ function resolveSources(
       role: "source.scopeKind",
     })
   }
+  // Таблиця за посиланням і колонки над нею: пари «вказівник → логічне ім'я
+  // колонки». Той самий шлях резолвить таблицю-джерело й таблицю ролей
+  // (Р2d1-17), колонки `columns`, умов `where` і ключа ролі.
   const table = (
-    source: { id?: string; table: { kind: string; name: string } },
-    at: string,
-    columns: readonly (readonly [string, string | undefined])[]
+    sourceId: string | undefined,
+    found: { pointer: string; ref: { kind: string; name: string } },
+    role: "source.table" | "source.roleTable",
+    columns: readonly (readonly [string, string | null | undefined])[]
   ) => {
-    const target = resolveObjectRef(
-      PROJECT_FILE,
-      source.id,
-      { pointer: `${at}/table`, ref: source.table },
-      "source.table"
-    )
+    const target = resolveObjectRef(PROJECT_FILE, sourceId, found, role)
     if (target === undefined || !KIND_REGISTRY[target.kind].declared) return
     const byName = columnTable(target, style)
     if (byName === undefined) return
-    for (const [field, name] of columns) {
-      if (name === undefined) continue
-      const pointer = `${at}/columns/${field}`
+    for (const [pointer, name] of columns) {
+      if (name === undefined || name === null) continue
       if (!byName.has(name)) {
         diagnostics.push(
           diagnostic("customTable.column-unknown", PROJECT_FILE, pointer, {
@@ -708,23 +707,34 @@ function resolveSources(
         continue
       }
       const id = byName.get(name)
-      if (id === undefined || source.id === undefined) continue
+      if (id === undefined || sourceId === undefined) continue
       references.push({
-        from: { file: PROJECT_FILE, pointer, objectId: source.id },
+        from: { file: PROJECT_FILE, pointer, objectId: sourceId },
         to: { kind: "Element", id },
         role: "source.column",
       })
     }
   }
+  // Колонки `columns` за полями та колонки кон'юнктів `where`.
+  const fields = (
+    at: string,
+    columns: Record<string, string | null | undefined>
+  ) =>
+    Object.entries(columns).map(
+      ([field, name]) => [`${at}/columns/${field}`, name] as const
+    )
+  const conditions = (at: string, where: readonly { column: string }[]) =>
+    where.map(({ column }, j) => [`${at}/where/${j}/column`, column] as const)
   ;(project?.membershipSources ?? []).forEach((source, index) => {
     const at = `/membershipSources/${index}`
     scopeKind(source.id, `${at}/scopeKind`, source.scopeKind)
     const { scope, user, active } = source.columns
-    table(source, at, [
-      ["scope", scope],
-      ["user", user],
-      ["active", active],
-    ])
+    table(
+      source.id,
+      { pointer: `${at}/table`, ref: source.table },
+      "source.table",
+      [...fields(at, { scope, user, active }), ...conditions(at, source.where)]
+    )
   })
   ;(project?.assignmentSources ?? []).forEach((source, index) => {
     const at = `/assignmentSources/${index}`
@@ -740,13 +750,28 @@ function resolveSources(
         "source.container"
       )
     }
-    const { member, role, container, active } = source.columns
-    table(source, at, [
-      ["member", member],
-      ["role", role],
-      ["container", container],
-      ["active", active],
-    ])
+    const { member, role, scope, container, active } = source.columns
+    table(
+      source.id,
+      { pointer: `${at}/table`, ref: source.table },
+      "source.table",
+      [
+        ...fields(at, { member, scope, container, active }),
+        typeof role === "string"
+          ? [`${at}/columns/role`, role]
+          : [`${at}/columns/role/column`, role.column],
+        ...conditions(at, source.where),
+      ]
+    )
+    if (typeof role === "string") return
+    // Ключ і умова ролі — колонки таблиці ролей, не таблиці-джерела.
+    const roleAt = `${at}/columns/role`
+    table(
+      source.id,
+      { pointer: `${roleAt}/references`, ref: role.references },
+      "source.roleTable",
+      [[`${roleAt}/key`, role.key], ...conditions(roleAt, role.where)]
+    )
   })
 }
 

@@ -250,8 +250,16 @@ export function kitchenSink(): Map<string, string> {
         scopeKind: "user",
         table: ref("CustomTable", "Crew"),
         columns: { scope: "userRoot", user: "account", active: "isActive" },
+        where: [
+          { column: "account", isNull: false },
+          { column: "isActive", equals: true },
+        ],
       },
     ],
+    // Три джерела над однією `RoleGrant` розділяє дискримінатор `level`
+    // (Р2d1-19); літерали не збігаються з жодним логічним іменем фікстури.
+    // `orgGrants` — рівень скоупу без колонки скоупу (скоуп з учасника) і
+    // роль через таблицю ролей `SourceRole`.
     assignmentSources: [
       {
         id: uuid(9911),
@@ -259,13 +267,30 @@ export function kitchenSink(): Map<string, string> {
         assignedOn: "global",
         table: ref("CustomTable", "RoleGrant"),
         columns: { member: "memberId", role: "roleKey", active: "isActive" },
+        where: [{ column: "level", equals: "level_global" }],
       },
       {
         id: uuid(9912),
         name: "orgGrants",
         assignedOn: { scopeKind: "org" },
         table: ref("CustomTable", "RoleGrant"),
-        columns: { member: "memberId", role: "roleKey" },
+        columns: {
+          member: "memberId",
+          scope: null,
+          role: {
+            column: "roleId",
+            references: ref("CustomTable", "SourceRole"),
+            key: "key",
+            where: [
+              { column: "tenantId", isNull: true },
+              { column: "isSystem", equals: true },
+            ],
+          },
+        },
+        where: [
+          { column: "level", equals: "level_org" },
+          { column: "memberId", isNull: false },
+        ],
       },
       {
         id: uuid(9913),
@@ -277,6 +302,7 @@ export function kitchenSink(): Map<string, string> {
           role: "roleKey",
           container: "partnerId",
         },
+        where: [{ column: "level", equals: "level_partner" }],
       },
     ],
   }
@@ -873,8 +899,31 @@ export function kitchenSink(): Map<string, string> {
       sourceColumn(9933, "roleKey", "role_key", "Text"),
       sourceColumn(9934, "partnerId", "partner_id", "UUID"),
       sourceColumn(9935, "isActive", "is_active", "Boolean"),
+      sourceColumn(9936, "level", "level", "Text"),
+      sourceColumn(9937, "roleId", "role_id", "UUID"),
     ],
     primaryKey: { name: "role_grant_pk", columns: ["id"] },
+    scope: "none",
+  }
+  // Таблиця ролей джерела `orgGrants`: системна роль — рядок без тенанта.
+  // Заголовок — без `header()`, щоб не зсувати лічильника id.
+  const sourceRole = {
+    ...schemaHint("CustomTable"),
+    id: uuid(9950),
+    kind: "CustomTable",
+    name: "SourceRole",
+    physicalName: "source_role",
+    kindLabel: "source_role",
+    columns: [
+      sourceColumn(9951, "id", "id", "UUID"),
+      sourceColumn(9952, "key", "key", "Text"),
+      {
+        ...sourceColumn(9953, "tenantId", "tenant_id", "UUID"),
+        notNull: false,
+      },
+      sourceColumn(9954, "isSystem", "is_system", "Boolean"),
+    ],
+    primaryKey: { name: "source_role_pk", columns: ["id"] },
     scope: "none",
   }
 
@@ -1008,6 +1057,7 @@ export function kitchenSink(): Map<string, string> {
     "custom-tables/Note/Note.meta.json": note,
     "custom-tables/Crew/Crew.meta.json": crew,
     "custom-tables/RoleGrant/RoleGrant.meta.json": roleGrant,
+    "custom-tables/SourceRole/SourceRole.meta.json": sourceRole,
     "event-subscriptions/StampItem/StampItem.meta.json": stampItem,
     "event-subscriptions/UserDeleted/UserDeleted.meta.json": userDeleted,
     "rights-sets/Viewers/Viewers.meta.json": viewers,

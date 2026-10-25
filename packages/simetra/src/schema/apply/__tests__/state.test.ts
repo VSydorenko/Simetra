@@ -4,7 +4,7 @@ import {
   type CompiledModel,
   type PromotionRecord,
 } from "simetra/compiler"
-import { PROVIDER_API_ROLES, quoteIdent } from "simetra/model"
+import { PLATFORM_ROLES, PROVIDER_API_ROLES, quoteIdent } from "simetra/model"
 import {
   FINGERPRINT_SECTIONS,
   renderApplyState,
@@ -13,6 +13,11 @@ import {
   type DriftReport,
   type FingerprintSection,
 } from "simetra/schema"
+import {
+  adoptedSourcesDomain,
+  compileRights,
+  withoutUsers as withoutUsersLayer,
+} from "../../../compiler/__tests__/fixtures/rights"
 import {
   catalog,
   metaFiles,
@@ -66,6 +71,32 @@ describe("renderApplyState", () => {
     const layer = m.sqlUnits.map((u) => u.sql)
     expect(layer).toContain("REVOKE ALL ON SCHEMA simetra FROM PUBLIC;")
     for (const grant of usage) expect(layer).toContain(grant)
+  })
+
+  it("secures the schema once when the session user comes from the subject", async () => {
+    // Без «Користувачів» шар дає лише `current_user_id()` з `sub` (Р2d1-6):
+    // безпеку схеми — стан застосування, і в бажаному SQL вона рівно одна.
+    const result = await compileRights(
+      adoptedSourcesDomain(withoutUsersLayer())
+    )
+    expect(result.diagnostics.filter((d) => d.severity === "error")).toEqual([])
+    const m = result.model!
+    expect(m.sqlUnits.map((u) => u.identity)).toContain(
+      "function:simetra.current_user_id()"
+    )
+    const desired = [
+      ...renderApplyState(m).split("\n"),
+      ...m.sqlUnits.flatMap((u) => u.sql.split("\n")),
+    ]
+    for (const grant of [
+      ...usage,
+      `GRANT USAGE ON SCHEMA simetra TO ${quoteIdent(PLATFORM_ROLES.command)};`,
+      "REVOKE ALL ON SCHEMA simetra FROM PUBLIC;",
+    ])
+      expect(
+        desired.filter((line) => line === grant),
+        grant
+      ).toHaveLength(1)
   })
 
   it("gives the ledger a nullable promotion column", async () => {

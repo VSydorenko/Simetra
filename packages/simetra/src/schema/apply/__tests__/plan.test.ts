@@ -27,12 +27,14 @@ import {
   ATTACHMENTS_TABLE,
   CHECKLIST_TABLE,
   TAG_ID,
+  adoptedSourcesDomain,
   compileRights,
   policyDomain,
   promotableTag,
   promotedRights,
   tagMapping,
 } from "../../../compiler/__tests__/fixtures/rights"
+import { applyDiagnostic } from "../diagnostic"
 
 /**
  * Конвеєр плану на фейковому порті — лише те, що не потребує справжньої
@@ -192,18 +194,110 @@ describe("buildPlan", () => {
       expect(names).not.toContain(ATTACHMENTS_TABLE)
     }
   )
+
+  it.each([
+    { case: "plan", promotion: false },
+    { case: "plan with a promotion", promotion: true },
+  ])(
+    "refuses a plan when the apply role cannot bypass RLS of a source table ($case)",
+    async ({ promotion }) => {
+      // Р2d1-10, Р2d1-13: відмова — до витягу й тіні, до розгалуження
+      // промоції; двигун не кличеться зовсім
+      const { before, desired, records } = promotion
+        ? await promotedTag(adoptedSourcesDomain)
+        : await samePolicyDomain(adoptedSourcesDomain)
+      const target = await fakeTarget(before, {
+        notCopies: [],
+        sources: { owned: false },
+      })
+      const engine = new Proxy({} as SchemaEngine, {
+        get: (_, name) => {
+          throw new Error(`no engine call expected: ${String(name)}`)
+        },
+      })
+      const outcome = await buildPlan(
+        engine,
+        { reader: target.reader, scratch: emptyScratch },
+        desired,
+        { target: { url: "postgres://target" } },
+        records
+      )
+      expect(outcome.status).toBe("refused")
+      expect(outcome.diagnostics.map((d) => [d.code, d.severity])).toEqual([
+        ["plan.rights-source-access", "error"],
+      ])
+    }
+  )
+
+  it.each([
+    { case: "plan", promotion: false },
+    { case: "plan with a promotion", promotion: true },
+  ])(
+    "warns about unknown role keys in a source ($case)",
+    async ({ promotion }) => {
+      // Р2d1-11: попередження, а не відмова — план іде далі, до бажаної тіні
+      // (тут вона падає, і відмова несе зібрані до неї діагностики)
+      const { before, desired, records } = promotion
+        ? await promotedTag(adoptedSourcesDomain)
+        : await samePolicyDomain(adoptedSourcesDomain)
+      const target = await fakeTarget(before, {
+        notCopies: [],
+        sources: { owned: true, unknownKey: "stale" },
+      })
+      const outcome = await buildPlan(
+        shadowFailing(),
+        { reader: target.reader, scratch: emptyScratch },
+        desired,
+        { target: { url: "postgres://target" } },
+        records
+      )
+      const codes = outcome.diagnostics.map((d) => d.code)
+      expect(codes).toContain(SHADOW_FAILED.code)
+      expect(
+        outcome.diagnostics
+          .filter((d) => d.code === "plan.rights-source-unknown-keys")
+          .map((d) => [d.severity, d.params])
+      ).toEqual([
+        ["warning", { source: "grants", keys: "stale", more: 0 }],
+        ["warning", { source: "globalGrants", keys: "stale", more: 0 }],
+      ])
+    }
+  )
 })
 
-async function samePolicyDomain() {
-  const model = (await compileRights(policyDomain())).model!
+/** Маркер падіння бажаної тіні фейкового двигуна. */
+const SHADOW_FAILED = applyDiagnostic("engine.clone-failed", "error", {
+  detail: "fake shadow",
+})
+
+/** Двигун, чия бажана тінь падає: план дійшов до неї. */
+function shadowFailing(): SchemaEngine {
+  const engine = fakeEngine([])
+  return new Proxy(engine, {
+    get: (target, name) =>
+      name === "withDesiredShadow"
+        ? () =>
+            Promise.resolve({
+              status: "shadow-failed",
+              diagnostics: [SHADOW_FAILED],
+            })
+        : target[name as keyof SchemaEngine],
+  })
+}
+
+type Domain = typeof policyDomain
+
+async function samePolicyDomain(domain: Domain = policyDomain) {
+  const model = (await compileRights(domain())).model!
   return { before: model, desired: model, records: [] }
 }
 
-/** Домен політик з прийнятою `Tag` до промоції, після неї й запис. */
-async function promotedTag() {
+/** Домен (типово політик) з прийнятою `Tag` до промоції, після неї й запис. */
+async function promotedTag(domain: Domain = policyDomain) {
   const { before, desired, record } = await promotedRights(
     promotableTag(),
-    tagMapping()
+    tagMapping(),
+    domain
   )
   const records: PromotionInput[] = [
     { record, file: `plans/${TAG_ID}.promotion.json` },
@@ -234,7 +328,14 @@ const EMPTY_CATALOG: CatalogModel = { tables: [], enumTypes: [], units: [] }
  */
 async function fakeTarget(
   model: CompiledModel,
-  o: { notCopies: readonly string[] }
+  o: {
+    notCopies: readonly string[]
+    /**
+     * Таблиці прийнятих джерел прав: доступ ролі застосування й ключ ролі,
+     * якого не оголошує жодна роль, у кожному джерелі призначень.
+     */
+    sources?: { owned: boolean; unknownKey?: string }
+  }
 ) {
   const snapshot = JSON.parse(JSON.stringify(canonicalSnapshot(model))) as {
     physical: {
@@ -281,6 +382,28 @@ async function fakeTarget(
       }))
     if (sql.includes("AS session")) return [{ session: "app" }]
     if (sql.includes("surface_rel")) return [fingerprint]
+    if (sql.includes("current_setting(s.name)"))
+      return (params[0] as string[]).map(() => ({ value: "on" }))
+    if (sql.includes("AS source_owned")) {
+      const [schemas, names] = params as [string[], string[]]
+      return schemas.map((schema, i) => ({
+        table_schema: schema,
+        table_name: names[i],
+        source_owned: o.sources?.owned ?? true,
+      }))
+    }
+    if (sql.includes("AS source_column")) {
+      const [schemas, names, columns] = params as [string[], string[], string[]]
+      return schemas.map((schema, i) => ({
+        table_schema: schema,
+        table_name: names[i],
+        source_column: columns[i],
+      }))
+    }
+    if (sql.includes("AS unknown_key"))
+      return o.sources?.unknownKey === undefined
+        ? []
+        : [{ unknown_key: o.sources.unknownKey, total: "1" }]
     // Факти `plpgsql_check`: розширення немає — план іде далі з
     // діагностикою, а не падає
     if (sql.includes('AS "checkSchemaTaken"')) return [{ installed: false }]

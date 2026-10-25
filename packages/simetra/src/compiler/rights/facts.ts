@@ -1,10 +1,13 @@
 import {
   KIND_REGISTRY,
+  UUID_TEXT,
   grantEntryForm,
+  isUuidColumn,
   type AccessMapping,
   type ActionEffects,
   type AssignedOn,
   type CustomAction,
+  type CustomTable,
   type Extent,
   type GrantEntry,
   type MetadataRef,
@@ -13,6 +16,7 @@ import {
   type Project,
   type RightsCarrier,
   type RoleAssignedOn,
+  type SourceCondition,
 } from "simetra/model"
 import type {
   CompiledAssignedOn,
@@ -270,6 +274,51 @@ export function sourceLevel(
   return compileLevel(must(project.assignmentSources[index]).assignedOn, (f) =>
     projectTarget(`${at}/${f}`, `source.${f}`, { references })
   )
+}
+
+/**
+ * Тип літерала рівності умови `where` за колонкою (Р2d1-15): текст, uuid,
+ * логічне чи ціле, у кожному разі не масив; інше — `undefined` (колонку
+ * умова рівності не порівнює). Один тлумач для правила стадії 4 і контракту.
+ */
+export function sourceLiteralType(
+  column: CustomTable["columns"][number]
+): "text" | "uuid" | "boolean" | "integer" | undefined {
+  if (column.array === true) return undefined
+  if (isUuidColumn(column)) return "uuid"
+  switch (column.type) {
+    case "Text":
+    case "String":
+      return "text"
+    case "Boolean":
+      return "boolean"
+    case "SmallInt":
+    case "Integer":
+    case "BigInt":
+      return "integer"
+    default:
+      return undefined
+  }
+}
+
+/**
+ * Чи літерал рівності має форму типу колонки: uuid — канонічний текст із
+ * дефісами, ціле — точне число JSON.
+ */
+export function sourceLiteralFits(
+  type: NonNullable<ReturnType<typeof sourceLiteralType>>,
+  value: Extract<SourceCondition, { equals: unknown }>["equals"]
+): boolean {
+  switch (type) {
+    case "text":
+      return typeof value === "string"
+    case "uuid":
+      return typeof value === "string" && UUID_TEXT.test(value)
+    case "boolean":
+      return typeof value === "boolean"
+    case "integer":
+      return typeof value === "number" && Number.isSafeInteger(value)
+  }
 }
 
 /** Ключ рівня для порівняння: однакові рівні мають однаковий ключ. */

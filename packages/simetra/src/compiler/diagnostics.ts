@@ -128,6 +128,11 @@ export const COMPILER_RULES = [
   "rights.dimension-function-reads-rights",
   "rights.source-table",
   "rights.source-forced-rls",
+  "rights.source-member-key",
+  "rights.source-member-unique",
+  "rights.source-column-type",
+  "rights.source-where",
+  "rights.source-role-key",
   "rights.source-scope-column",
   "rights.membership-source-duplicate",
   "rights.source-container-column",
@@ -155,7 +160,7 @@ export const COMPILER_RULES = [
   "rights.system-catalog-description",
   "rights.system-catalog-parallel",
   "rights.system-catalog-custom-action",
-  "rights.adopted-source-unsupported",
+  "rights.adopted-source-writes",
   "rights.scope-kind-unread",
   "reference.not-referenceable",
   "reference.custom-table-key",
@@ -312,6 +317,8 @@ export const COMPILER_RULES = [
   "plan.preservation-type",
   "plan.provider-trigger-taken",
   "plan.numbering-not-generated",
+  "plan.rights-source-access",
+  "plan.rights-source-unknown-keys",
   "database.failed",
   "roles.create-role-denied",
   "introspect.unrepresentable",
@@ -389,9 +396,10 @@ export interface Diagnostic {
  * промоції (`*`, ціле значення рядка, сигнатура) переписана коректно, але
  * змінює форму результату для викликачів — це рішення скіла конверсії, а не
  * помилка переписування. Динамічний SQL поза кандидатами промоції статично
- * не видно: попередження називає межу, а не порушення. Прийняте джерело поряд
- * із ролями ще не дає прав (Права-2d): межа fail-closed — прав менше, а не
- * більше, — тож попередження, а не помилка (Р2a1-21).
+ * не видно: попередження називає межу, а не порушення. Платформа лише читає
+ * прийняте джерело членства чи призначень (`rights.adopted-source-writes`):
+ * шляхи запису в нього — справа застосунку, тож це попередження про межу
+ * відповідальності, а не відмова (Р2d1-9).
  */
 const WARNING_RULES: ReadonlySet<RuleCode> = new Set<RuleCode>([
   "physical.reserved-word",
@@ -403,7 +411,7 @@ const WARNING_RULES: ReadonlySet<RuleCode> = new Set<RuleCode>([
   "identity.kind-label-retained",
   "rewrite.contract-change",
   "rewrite.dynamic-sql-unscoped",
-  "rights.adopted-source-unsupported",
+  "rights.adopted-source-writes",
   "rights.scope-kind-unread",
 ])
 
