@@ -75,7 +75,18 @@ async function promoted() {
     schemaPath: (file, schemaFile) => `schemas-of/${file}/${schemaFile}`,
     newId: () => uuid(++n),
   })
-  expect(result.diagnostics).toEqual([])
+  // Контакти лишаються CustomTable, тож їхній каскад на промотований об'єкт
+  // промоція переводить у restrict із попередженням (Р2c1-34).
+  expect(result.diagnostics.map((d) => [d.code, d.params])).toEqual([
+    [
+      "promote.cascade-to-restrict",
+      expect.objectContaining({
+        table: "app.counterparty_contacts",
+        foreignKey: "counterparty_contacts_counterparty_id_fkey",
+        action: "cascade",
+      }),
+    ],
+  ])
   expect(result.record).toBeDefined()
   return {
     before: files,

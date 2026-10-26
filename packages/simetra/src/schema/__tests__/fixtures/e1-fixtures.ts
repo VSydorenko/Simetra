@@ -445,15 +445,16 @@ export function movementQuery(): Map<string, string> {
         attribute("qty", { type: "Numeric", precision: 15, scale: 3 }),
       ],
     },
-    // Функції множини скоупу — справжні одиниці з тілом, що читає таблиці
-    // домену й провайдера: `LANGUAGE sql` перевіряє його при створенні.
+    // Функції множини скоупу — справжні одиниці з тілом: `LANGUAGE sql`
+    // перевіряє його при створенні. Голова не читає `auth.users` (Р2c1-18):
+    // поточного користувача дає поіменна функція провайдера.
     [SCOPE_FUNCTIONS_FILE]: [
       "CREATE FUNCTION app.org_ids() RETURNS SETOF uuid LANGUAGE sql STABLE",
       "  SECURITY DEFINER SET search_path = ''",
       "  AS $$ SELECT id FROM app.organization $$;",
       "CREATE FUNCTION app.user_ids() RETURNS SETOF uuid LANGUAGE sql STABLE",
       "  SECURITY DEFINER SET search_path = ''",
-      "  AS $$ SELECT id FROM auth.users WHERE id = auth.uid() $$;",
+      "  AS $$ SELECT auth.uid() $$;",
     ].join("\n"),
     [MOVEMENTS_SQL]: [
       "-- @movements Stock",
