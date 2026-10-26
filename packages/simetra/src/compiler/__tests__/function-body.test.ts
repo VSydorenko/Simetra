@@ -2,7 +2,14 @@ import { describe, expect, it } from "vitest"
 import { compile, type Diagnostic } from "simetra/compiler"
 import { SQL_DEBT_FILE } from "simetra/model"
 import { policyDomain, promotableTaskNote } from "./fixtures/rights"
-import { acceptDebt } from "./helpers"
+import {
+  acceptDebt,
+  catalog,
+  metaFiles,
+  project,
+  salesDocument,
+  uuid,
+} from "./helpers"
 
 const EXTRA = "sql/public/extra.sql"
 const TASK_NOTE_MODULE = "custom-tables/TaskNote/TaskNote.sql"
@@ -315,6 +322,46 @@ describe("sql.platform-function-call: only the reading platform functions (Р2c1
         params: { unit, function: fn, line: 1 },
       },
     ])
+  })
+})
+
+describe("sql.platform-function-call: generated functions that write (Р2c1-38, stage 5)", () => {
+  // Документ з проведенням дає оболонку проведення, довідник із
+  // предвизначеними — функцію пошуку, що лише читає.
+  const generated = (call: string) =>
+    metaFiles({
+      "project.meta.json": project(),
+      ...salesDocument(),
+      "catalogs/Warehouse/Warehouse.meta.json": catalog("Warehouse", {
+        id: uuid(7120),
+        predefinedItems: [
+          { id: uuid(7121), name: "Main", physicalName: "main" },
+        ],
+      }),
+      [EXTRA]: `CREATE FUNCTION public.f() RETURNS void LANGUAGE sql AS $$ SELECT ${call} $$`,
+    })
+
+  it.each([
+    {
+      call: "public.sale_post(NULL)",
+      expected: [
+        {
+          code: "sql.platform-function-call",
+          file: EXTRA,
+          params: {
+            unit: "function:public.f()",
+            function: "public.sale_post",
+            line: 1,
+          },
+        },
+      ],
+    },
+    { call: "public.warehouse_predefined('main')", expected: [] },
+  ])("$call", async ({ call, expected }) => {
+    const result = await compile(await acceptDebt(generated(call)))
+    expect(
+      brief(result.diagnostics.filter((d) => d.severity === "error"))
+    ).toEqual(expected)
   })
 })
 

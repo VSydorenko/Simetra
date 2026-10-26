@@ -28,7 +28,7 @@ export const COMPILER_RULES = [
   "sql.dependency-cycle",
   "sql.closed-shell",
   "sql.command-context-write",
-  "sql.command-context-reach",
+  "sql.head-not-allowed",
   "sql.function-settings-shell",
   "sql.function-overload",
   "sql.row-rule-grammar",
@@ -410,8 +410,8 @@ export interface Diagnostic {
  * відповідальності, а не відмова (Р2d1-9). Зміна ролі чи claims в
  * одиниці боргу (`debtPredicate`: модуль прийнятого об'єкта `CustomTable`,
  * `PgEnum` чи спільний `sql/`-файл) може лишатися, доки одиниця — борг:
- * досяжну з закритого коду функцію з таким записом відмовляє
- * `sql.command-context-reach`, а новий неперелічений борг — `sql.debt-grows`
+ * голова кличе лише функції-запити, у яких такого запису немає
+ * (`sql.head-not-allowed`), а новий неперелічений борг — `sql.debt-grows`
  * (Р2c1-6, Р2c1-14); у закритій оболонці, закритому модулі, обробнику й
  * функції множини такий запис — помилка `sql.command-context-write`. Власника
  * `SECURITY DEFINER`-функції чи подання статично не видно, а подання може

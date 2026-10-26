@@ -195,7 +195,8 @@ export async function runStages(
       stage1.objects,
       stage1.project,
       sql.units,
-      parse
+      parse,
+      plpgsql
     ),
     ...debt.grows,
     // Дослівна політика чи тригер на таблиці виду і тіло функції, що її

@@ -1,7 +1,6 @@
 import {
   KIND_REGISTRY,
   MEMBERSHIP_SET_FUNCTION,
-  PROVIDER_SCHEMAS,
   standardLogicalName,
   type MetadataRef,
   type MovementDecl,
@@ -16,16 +15,23 @@ import { movementWrapperName } from "../movement-functions"
 import { CURRENT_USER_FUNCTION } from "../platform/names"
 import { closedShellProblem } from "../sql/closed-forms"
 import { checkDefinerReads } from "../sql/definer-reads"
+import { checkGeneratedCalls } from "../sql/function-body"
 import { checkDimensionFunctions } from "../rights/dimension-functions"
 import {
   nullaryFunction,
   setFunctionClosedProblem,
   volatilityProblem,
 } from "../sql/function-shape"
+import {
+  blockHeadKey,
+  checkHeads,
+  headFunctionIdentities,
+  headScope,
+} from "../sql/heads"
 import type { SqlParser } from "../sql/parse"
 import { mechanicsStandardNames } from "../mechanics-units"
 import type { PlpgsqlFunction, PlpgsqlParser } from "../sql/plpgsql"
-import { checkCommandContextReach, type ReachTrust } from "../sql/reach"
+import { sideEffectOf } from "../sql/query-shape"
 import { plpgsqlExpressionTrees } from "../sql/rewrite/plpgsql-body"
 import { functionIdentity, type VerbatimUnit } from "../sql/units"
 import { objectKey, type ParsedObject } from "./files"
@@ -34,8 +40,9 @@ import { registerTargetError, type ResolvedReference } from "./identity"
 /**
  * Стадія 5 (спека П2 §8.2): зв'язки між частинами моделі, які не видно в
  * одному файлі: повнота й вигляд джерел рухів, функцій множини скоупів і
- * функцій значень вимірів доступу в SQL-одиницях, досяжність недосудного SQL
- * із закритого коду, читання таблиць під RLS від імені власника.
+ * функцій значень вимірів доступу в SQL-одиницях, судження голів дозвільним
+ * переліком (Р2c1-17), виклики згенерованих функцій, що пишуть, і читання
+ * таблиць під RLS від імені власника.
  */
 export function checkLinks(
   objects: readonly ParsedObject[],
@@ -48,84 +55,80 @@ export function checkLinks(
   membershipFunctions: ReadonlySet<string>,
   rightsTables: ReadonlySet<string>
 ): Diagnostic[] {
-  const trusted = reachTrust(
+  const scope = headScope(
     objects,
     references,
     project,
     physical,
-    membershipFunctions
+    units,
+    membershipFunctions,
+    parse,
+    plpgsql
   )
-  return [
+  // Голова з діагностикою оболонки не судиться далі: друга діагностика на
+  // одну причину була б шумом.
+  const skip = new Set<string>()
+  const heads = headFunctionIdentities(objects, project, units)
+  const shells = [
     ...checkMovementSources(objects, references),
-    ...checkMovementQueries(objects, parse),
-    ...checkSetFunctions(objects, project, units, parse, plpgsql),
+    ...checkMovementQueries(objects, parse, skip),
+    ...checkSetFunctions(objects, project, units, plpgsql, skip),
     ...checkSubscriptionHandlers(
       objects,
       project,
       physical,
       units,
       parse,
-      plpgsql
-    ),
-    ...checkPolicyCurrentUser(units),
-    ...checkCommandContextReach(
-      objects,
-      project,
-      units,
-      physical.tables,
-      trusted,
-      parse,
-      plpgsql
-    ),
-    ...checkDefinerReads(
-      objects,
-      project,
-      physical,
-      units,
-      trusted,
-      parse,
-      plpgsql
+      plpgsql,
+      skip
     ),
     ...checkDimensionFunctions(
       project,
       units,
-      membershipFunctions,
       rightsTables,
+      scope,
+      plpgsql,
+      skip
+    ),
+  ]
+  return [
+    ...shells,
+    ...checkPolicyCurrentUser(units),
+    ...checkHeads(objects, project, units, scope, skip),
+    // У голові такий виклик — уже `call` судді голів: одна діагностика.
+    ...checkGeneratedCalls(
+      units.filter((u) => !heads.has(u.identity)),
+      writingGenerated(objects, references, project, physical),
       parse,
       plpgsql
     ),
+    ...checkDefinerReads(objects, project, physical, units, parse, plpgsql),
   ]
 }
 
 /**
- * Довірені множини обходу досяжності (Р2c1-5): схеми провайдера проєкту й
- * згенеровані функції схем застосунку — функції членства й похідні функції
- * контрактів, тіла яких пише компілятор. Обгортка запиту рухів несе запит
- * застосунку (її тіло не фіксоване платформою), тож довіри не має.
+ * `схема.ім'я` згенерованих функцій схем застосунку, що не лише читають
+ * (Р2c1-38): оболонка проведення, перерахунок підсумків, обгортки рухів,
+ * функції носіїв і ефектів. Функція членства лише читає; недійсне членство
+ * не генерується, а його помилку вже названо.
  */
-function reachTrust(
+function writingGenerated(
   objects: readonly ParsedObject[],
   references: readonly ResolvedReference[],
   project: Project,
-  physical: PhysicalSnapshot,
-  membershipFunctions: ReadonlySet<string>
-): ReachTrust {
-  const derived = derivedFunctions(
-    objects,
-    references,
-    physical,
-    movementWrapperName,
-    project.scopeKinds
+  physical: PhysicalSnapshot
+): ReadonlySet<string> {
+  return new Set(
+    derivedFunctions(
+      objects,
+      references,
+      physical,
+      movementWrapperName,
+      project.scopeKinds
+    )
+      .filter((fn) => fn.reads !== true && fn.membership !== true)
+      .map((fn) => `${fn.schema}.${fn.name}`)
   )
-  return {
-    providerSchemas: new Set(PROVIDER_SCHEMAS[project.database.provider]),
-    generated: new Set([
-      ...membershipFunctions,
-      ...derived
-        .filter((fn) => fn.movementQuery !== true)
-        .map((fn) => `${fn.schema}.${fn.name}`),
-    ]),
-  }
 }
 
 /**
@@ -240,7 +243,8 @@ function hasBareCurrentUser(value: unknown, wrapped: Set<unknown>): boolean {
  */
 function checkMovementQueries(
   objects: readonly ParsedObject[],
-  parse: SqlParser
+  parse: SqlParser,
+  skip: Set<string>
 ): Diagnostic[] {
   const found: Diagnostic[] = []
   for (const object of objects) {
@@ -252,6 +256,9 @@ function checkMovementQueries(
           : undefined
       const stmt = select?.SelectStmt as { sortClause?: unknown[] } | undefined
       const effect = stmt === undefined ? undefined : sideEffectOf(stmt)
+      if (effect !== undefined || stmt === undefined) {
+        skip.add(blockHeadKey(block))
+      }
       if (effect !== undefined) {
         found.push(
           diagnostic("posting.query-not-select", block.file, "", {
@@ -282,42 +289,6 @@ function checkMovementQueries(
   return found
 }
 
-/** Вузли дерева, якими `SELECT` змінює дані. */
-const WRITING_STATEMENTS: Readonly<Record<string, string>> = {
-  InsertStmt: "INSERT",
-  UpdateStmt: "UPDATE",
-  DeleteStmt: "DELETE",
-  MergeStmt: "MERGE",
-}
-
-/**
- * Перший побічний ефект у дереві `SELECT`, якщо він є: оператор, що змінює
- * дані (у `WITH` будь-якого рівня), `SELECT … INTO` чи блокування рядків у
- * будь-якому підзапиті.
- */
-function sideEffectOf(value: unknown): string | undefined {
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      const found = sideEffectOf(item)
-      if (found !== undefined) return found
-    }
-    return undefined
-  }
-  if (typeof value !== "object" || value === null) return undefined
-  const node = value as Record<string, unknown>
-  for (const [key, child] of Object.entries(node)) {
-    const writing = WRITING_STATEMENTS[key]
-    if (writing !== undefined) return `${writing} is not allowed`
-    if (key === "intoClause") return "SELECT INTO is not allowed"
-    if (key === "lockingClause" && Array.isArray(child) && child.length > 0) {
-      return "FOR UPDATE and FOR SHARE are not allowed"
-    }
-    const found = sideEffectOf(child)
-    if (found !== undefined) return found
-  }
-  return undefined
-}
-
 /** 0-базний рядок усередині тексту за індексом UTF-16. */
 function lineOf(text: string, offset: number): number {
   return text.slice(0, offset).split("\n").length - 1
@@ -334,8 +305,8 @@ function checkSetFunctions(
   objects: readonly ParsedObject[],
   project: Project,
   units: readonly VerbatimUnit[],
-  parse: SqlParser,
-  plpgsql: PlpgsqlParser
+  plpgsql: PlpgsqlParser,
+  skip: Set<string>
 ): Diagnostic[] {
   const found: Diagnostic[] = []
   project.scopeKinds.forEach((kind, index) => {
@@ -364,6 +335,7 @@ function checkSetFunctions(
       type: "uuid",
       setof: true,
     })
+    const before = found.length
     if (fn === undefined) {
       found.push(
         diagnostic("scope.set-function-missing", "project.meta.json", pointer, {
@@ -376,7 +348,7 @@ function checkSetFunctions(
     const reason =
       problem !== undefined || typeof fn === "string"
         ? undefined
-        : setFunctionClosedProblem(fn, units, schema, name, parse, plpgsql)
+        : setFunctionClosedProblem(fn, units, schema, name, plpgsql)
     if (reason !== undefined) {
       found.push(
         diagnostic(
@@ -399,6 +371,7 @@ function checkSetFunctions(
         )
       )
     }
+    if (found.length > before) skip.add(functionIdentity(schema, name, []))
   })
   return found
 }
@@ -415,7 +388,8 @@ function checkSubscriptionHandlers(
   physical: PhysicalSnapshot,
   units: readonly VerbatimUnit[],
   parse: SqlParser,
-  plpgsql: PlpgsqlParser
+  plpgsql: PlpgsqlParser,
+  skip: Set<string>
 ): Diagnostic[] {
   const found: Diagnostic[] = []
   for (const object of objects) {
@@ -424,17 +398,20 @@ function checkSubscriptionHandlers(
     const schema = spec.handler.schema ?? project.defaultSchema
     const { name } = spec.handler
     const fn = `${schema}.${name}`
+    const identity = functionIdentity(schema, name, [])
     const handler = nullaryFunction(units, schema, name, {
       type: "trigger",
       setof: false,
     })
     if (handler === undefined) {
+      skip.add(identity)
       found.push(
         diagnostic("subscription.handler-missing", object.file, "/handler", {
           function: fn,
         })
       )
     } else if (typeof handler === "string") {
+      skip.add(identity)
       found.push(
         diagnostic("subscription.handler-signature", object.file, "/handler", {
           function: fn,
@@ -444,9 +421,7 @@ function checkSubscriptionHandlers(
     } else {
       // Обробник не буває боргом (спека промоції §9.4): оболонка перевіряється
       // тут, хоч би де лежав файл, — у спільному `sql/` теж.
-      const unit = units.find(
-        (u) => u.identity === functionIdentity(schema, name, [])
-      )
+      const unit = units.find((u) => u.identity === identity)
       const problem =
         unit === undefined
           ? undefined
@@ -455,6 +430,7 @@ function checkSubscriptionHandlers(
               plpgsql
             )
       if (problem !== undefined) {
+        skip.add(identity)
         found.push(
           diagnostic(
             "subscription.handler-not-closed",
@@ -466,8 +442,14 @@ function checkSubscriptionHandlers(
       } else if (unit !== undefined) {
         const mechanics = beforeWriteMechanics(spec, objects, project)
         const carriers = beforeWriteCarriers(spec, objects, physical)
+        // Рядок таблиці провайдера тригери платформи переносять у
+        // «Користувачі» (Р2c1-39), тож `RETURN OLD` чи копія запису змінили б
+        // таблицю виду повз команду й без механіки в джерела.
+        const provider =
+          spec.event === "beforeWrite" &&
+          spec.sources.some((source) => "providerTable" in source)
         const parsed =
-          mechanics.size === 0 && carriers.copies.size === 0
+          mechanics.size === 0 && carriers.copies.size === 0 && !provider
             ? undefined
             : plpgsql(unit.sql)
         if (parsed?.ok === true && parsed.fn !== undefined) {

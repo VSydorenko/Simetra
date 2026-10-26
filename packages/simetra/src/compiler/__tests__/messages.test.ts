@@ -15,7 +15,7 @@ import { metaFiles, project } from "./helpers"
 import { diagnostic, type DiagnosticParams } from "../diagnostics"
 import type { CommandContextWrite } from "../sql/command-context"
 import type { DefinerReadsForm } from "../sql/definer-reads"
-import type { ReachReason } from "../sql/reach"
+import type { HeadConstruct } from "../sql/query-shape"
 import type { SetFunctionReason } from "../sql/function-shape"
 
 const ALL_RULES: RuleCode[] = [...SCHEMA_RULES, ...COMPILER_RULES]
@@ -258,45 +258,45 @@ describe("messages catalog", () => {
     )
   })
 
-  it("sql.command-context-reach names the reached function, the reason and the chain", () => {
-    // Повнота за типом: нова причина без запису тут — помилка `tsc`.
-    const reasons = Object.keys({
-      nonLiteralExecute: 0,
+  it("sql.head-not-allowed names the head, the construct, the detail and the chain", () => {
+    // Повнота за типом: нова конструкція без запису тут — помилка `tsc`.
+    const constructs = Object.keys({
       language: 0,
-      dynamicBuiltin: 0,
-      unknown: 0,
-      sessionWrite: 0,
-    } satisfies Record<ReachReason, 0>)
+      searchPath: 0,
+      setting: 0,
+      sqlBody: 0,
+      query: 0,
+      statement: 0,
+      call: 0,
+      relation: 0,
+      unqualified: 0,
+      operator: 0,
+      unread: 0,
+    } satisfies Record<HeadConstruct, 0>)
     for (const locale of ["en", "uk"] as const) {
-      const render = (reason: string) =>
+      const render = (construct: string) =>
         localize(
-          diagnostic("sql.command-context-reach", "a.sql", "", {
-            function: "public.helper",
+          diagnostic("sql.head-not-allowed", "a.sql", "", {
+            head: "public.h",
             chain: "public.h → public.helper",
-            reason,
+            construct,
+            detail: "public.x",
+            line: 3,
           }),
           locale
         ).message
-      const messages = reasons.map(render)
+      const messages = constructs.map(render)
       messages.forEach((message, i) => {
-        expect(message).toContain("public.helper")
+        expect(message).toContain("public.h")
         expect(message).toContain("public.h → public.helper")
-        // Сирий ідентифікатор причини на місці тексту — пропущений запис.
-        expect(message, `${reasons[i]} ${locale}`).not.toBe(
-          render("<reason>").replace("<reason>", reasons[i]!)
+        expect(message).toContain("public.x")
+        // Сирий ідентифікатор конструкції на місці тексту — пропущений запис.
+        expect(message, `${constructs[i]} ${locale}`).not.toBe(
+          render("<construct>").replace("<construct>", constructs[i]!)
         )
       })
-      expect(new Set(messages).size).toBe(reasons.length)
+      expect(new Set(messages).size).toBe(constructs.length)
     }
-    expect(
-      diagnostic("sql.command-context-reach", "a.sql", "", {
-        function: "public.helper",
-        chain: "public.h → public.helper",
-        reason: "nonLiteralExecute",
-      }).message
-    ).toBe(
-      "Closed code reaches public.helper, and it runs EXECUTE of a string built at run time: public.h → public.helper"
-    )
   })
 
   it("sql.definer-reads-rls gives every form its own text and hint", () => {
@@ -308,8 +308,7 @@ describe("messages catalog", () => {
     } satisfies Record<DefinerReadsForm, 0>)
     const reads: DiagnosticParams[] = [
       { tables: "public.task, public.task_checklist" },
-      { tables: "public.task", reason: "unknown" },
-      { tables: "", reason: "unknown" },
+      { tables: "public.task" },
     ]
     for (const locale of ["en", "uk"] as const) {
       const render = (params: DiagnosticParams) =>
@@ -396,13 +395,7 @@ describe("messages catalog", () => {
   })
 
   it("renders every closed-form reason of a scope set function as a sentence", () => {
-    const reasons: SetFunctionReason[] = [
-      "language",
-      "security",
-      "searchPath",
-      "unqualified",
-      "sqlBody",
-    ]
+    const reasons: SetFunctionReason[] = ["language", "security", "searchPath"]
     for (const locale of ["en", "uk"] as const) {
       for (const reason of reasons) {
         const { message } = localize(

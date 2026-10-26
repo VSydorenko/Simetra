@@ -1050,9 +1050,10 @@ describe("reverseGenerate", () => {
   it("a trigger function also called from a kept file is shared", async () => {
     // Тригер довідника — підписка: модуль виду тригерів не приймає. Обробник
     // лежить у `sql/app/` попередньої генерації, тож теку можна скомпілювати.
+    // Обробник — з порожнім `search_path` (Р2c1-19).
     const touch = TOUCH.split("\n")[0]!.replace(
       "LANGUAGE plpgsql",
-      "LANGUAGE plpgsql VOLATILE"
+      "LANGUAGE plpgsql VOLATILE SET search_path = ''"
     )
     const kept = keptCatalog({
       [SUBSCRIPTION_FILE]: {
@@ -1095,7 +1096,12 @@ describe("reverseGenerate", () => {
   it("a subscription handler re-introspected from catalog text stays closed and is not debt", async () => {
     // Текст каталогу (`pg_get_functiondef`) типової VOLATILE не друкує;
     // волатильність — факт, тож обробник після introspect лишається закритим.
-    const handler = TOUCH.split("\n")[0]!.replace(
+    // Обробник — з порожнім `search_path` (Р2c1-19).
+    const catalogText = TOUCH.split("\n")[0]!.replace(
+      "LANGUAGE plpgsql",
+      "LANGUAGE plpgsql SET search_path = ''"
+    )
+    const handler = catalogText.replace(
       "LANGUAGE plpgsql",
       "LANGUAGE plpgsql VOLATILE"
     )
@@ -1116,13 +1122,13 @@ describe("reverseGenerate", () => {
     const result = await reverseGenerate(
       model({
         tables: catalogFromSnapshot(compiled.model!.physical).tables,
-        units: units(TOUCH.split("\n")[0]!),
+        units: units(catalogText),
       }),
       options(kept)
     )
     expect(result.diagnostics).toEqual([])
     expect(result.files.get("sql/app/touch.sql")).toBe(
-      "CREATE FUNCTION app.touch() RETURNS trigger VOLATILE LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;\n"
+      "CREATE FUNCTION app.touch() RETURNS trigger VOLATILE LANGUAGE plpgsql SET search_path = '' AS $$ BEGIN RETURN NEW; END $$;\n"
     )
     expect(json(result, "sql-debt.json").units).toEqual([])
     expect((await compile(result.files)).diagnostics).toEqual([])

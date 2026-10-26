@@ -176,6 +176,19 @@ export const PROVIDER_SCHEMAS: Readonly<
   ],
 }
 
+// Довіри до цілої схеми провайдера немає (Р2c1-21): голова кличе лише
+// поіменні функції, що читають; нова — поповнення переліку з рев'ю.
+/**
+ * Provider functions that application SQL running inside a command (kind
+ * module functions, subscription handlers, set and dimension functions,
+ * movement query blocks) may call, as `schema.name`.
+ */
+export const PROVIDER_FUNCTIONS: Readonly<
+  Record<DatabaseProvider, readonly string[]>
+> = {
+  supabase: ["auth.uid", "auth.jwt", "auth.role"],
+}
+
 // Що саме виконає така функція, статично не відомо, тож її виклик з
 // вільного SQL — зміна сесії невідомою формою (Р2c1-32). Поіменно, а не
 // схемою: перелік поповнюється з рев'ю.

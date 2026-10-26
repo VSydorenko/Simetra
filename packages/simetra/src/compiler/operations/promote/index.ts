@@ -602,8 +602,10 @@ export async function promoteObject(
   after.set(path, JSON.stringify(built.raw))
   for (const [file, text] of cascade.files) after.set(file, text)
   // SQL: класифіковане вирізано, функції модуля переїхали — ще в старих
-  // іменах: нові фізичні імена дає лише доповнення нижче.
-  const moved = sqlFileTexts(files, sql, new Map(), deleted, parse)
+  // іменах: нові фізичні імена дає лише доповнення нижче. Функція-запит
+  // поки лежить у спільному файлі (`staged`): у модулі виду її старі імена
+  // судив би суддя голів.
+  const moved = sqlFileTexts(files, sql, new Map(), deleted, parse, [], true)
   if (moved.problems.length > 0) return refused(files, moved.problems)
   setTexts(after, moved.files)
 
@@ -698,7 +700,10 @@ export async function promoteObject(
     ...sql.unscoped.map((u) => u.unit),
   ])
   if (final.problems.length > 0) return refused(files, final.problems)
-  if (changed.length > 0) {
+  // Фінальна компіляція судить і переписані тексти, і функції-запити вже в
+  // модулі виду — як голови (Р2c1-24 (б)): порушення Правила 3 там —
+  // відмова промоції.
+  if (changed.length > 0 || sql.moved.some((m) => m.staged !== undefined)) {
     const next = applyChanges(files, completed.result.changes)
     setTexts(next, final.files)
     renameDebt(next, sql, changed, rewrite.texts, parse, completed.model, o)

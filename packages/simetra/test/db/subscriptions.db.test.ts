@@ -5,7 +5,6 @@ import { renderDesiredState } from "simetra/schema"
 import {
   attribute,
   catalog,
-  customTable,
   metaFiles,
   project,
   uuid,
@@ -16,7 +15,8 @@ import { testSuperuserUrl, withRollback } from "./connection"
  * Тригери підписок на справжньому Postgres (спека промоції §9.3): подія
  * підписки — час і події тригера, `whenChanged` — умова на оновленні й
  * окремий тригер вставки, таблиця провайдера — джерело, як таблиця виду.
- * Кожен обробник пише в журнал `TG_OP`: запис журналу — доказ спрацювання.
+ * Обробник лише перевіряє (Р2c1-19), тож спрацювання доводить повідомлення
+ * `RAISE NOTICE '<джерело>:<TG_OP>'`, а не запис у таблицю.
  */
 
 /**
@@ -29,27 +29,26 @@ const AUTH_SERVICE_ROLE = "supabase_auth_admin"
 /** Роль застосунку локального стеку: від неї застосовується схема. */
 const APP_ROLE = "postgres"
 
-const journalInsert = (source: string) =>
-  `INSERT INTO public.journal (id, op, source) VALUES (pg_catalog.gen_random_uuid(), TG_OP, '${source}');`
+const notice = (source: string) => `RAISE NOTICE '${source}:%', TG_OP;`
 
 const HANDLERS = [
   // Обробник `beforeWrite` бачить і міняє рядок до запису.
   `CREATE FUNCTION public.on_price() RETURNS trigger LANGUAGE plpgsql VOLATILE SET search_path = '' AS $$
 BEGIN
-  ${journalInsert("price")}
+  ${notice("price")}
   NEW.name := pg_catalog.upper(NEW.name);
   RETURN NEW;
 END $$;`,
   `CREATE FUNCTION public.on_item_delete() RETURNS trigger LANGUAGE plpgsql VOLATILE SET search_path = '' AS $$
 BEGIN
-  ${journalInsert("delete")}
+  ${notice("delete")}
   RETURN OLD;
 END $$;`,
   // Роль автентифікації прав на схеми застосунку не має, тож обробник на
   // таблиці провайдера — `SECURITY DEFINER` з порожнім шляхом.
   `CREATE FUNCTION public.on_user() RETURNS trigger LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = '' AS $$
 BEGIN
-  ${journalInsert("user")}
+  ${notice("user")}
   RETURN NEW;
 END $$;`,
 ].join("\n")
@@ -80,33 +79,6 @@ async function deploy(client: pg.Client): Promise<void> {
           attribute("price", { type: "Integer" }),
         ],
       }),
-      "custom-tables/Journal/Journal.meta.json": customTable("Journal", {
-        columns: [
-          {
-            id: uuid(7201),
-            name: "id",
-            physicalName: "id",
-            type: "UUID",
-            notNull: true,
-          },
-          {
-            id: uuid(7202),
-            name: "op",
-            physicalName: "op",
-            type: "String",
-            length: 10,
-            notNull: true,
-          },
-          {
-            id: uuid(7203),
-            name: "source",
-            physicalName: "source",
-            type: "String",
-            length: 10,
-            notNull: true,
-          },
-        ],
-      }),
       ...Object.fromEntries([
         subscription(7211, "OnPrice", {
           physicalName: "on_price",
@@ -135,58 +107,70 @@ async function deploy(client: pg.Client): Promise<void> {
   await client.query(renderDesiredState(result.model!).sql)
 }
 
-async function journal(client: pg.Client): Promise<string[]> {
-  const { rows } = await client.query<{ entry: string }>(
-    "SELECT source || ':' || op AS entry FROM public.journal ORDER BY source, op"
-  )
-  return rows.map((r) => r.entry)
-}
-
-/** Журнал з чистого аркуша: кожна перевірка бачить лише свої спрацювання. */
-async function freshJournal(client: pg.Client): Promise<void> {
-  await client.query("DELETE FROM public.journal")
+/**
+ * Повідомлення обробників сесії `client` у порядку `(джерело, op)`;
+ * `clear` — з чистого аркуша: кожна перевірка бачить лише свої спрацювання.
+ */
+function journal(client: pg.Client): {
+  entries: () => string[]
+  clear: () => void
+} {
+  let seen: string[] = []
+  client.on("notice", (message) => {
+    if (/^(price|delete|user):/.test(message.message ?? "")) {
+      seen.push(message.message!)
+    }
+  })
+  return {
+    entries: () => [...seen].sort(),
+    clear: () => {
+      seen = []
+    },
+  }
 }
 
 describe("event subscription triggers in Postgres", () => {
   it("whenChanged: an insert always fires, an update only on a real change of a listed column", async () => {
     await withRollback(async (client) => {
       await deploy(client)
+      const log = journal(client)
       const inserted = await client.query<{ id: string; name: string }>(
         "INSERT INTO public.item (id, description, name, price) VALUES (gen_random_uuid(), 'd', 'a', 1) RETURNING id, name"
       )
       const { id } = inserted.rows[0]!
       expect(inserted.rows[0]!.name).toBe("A")
-      expect(await journal(client)).toEqual(["price:INSERT"])
+      expect(log.entries()).toEqual(["price:INSERT"])
 
-      await freshJournal(client)
+      log.clear()
       await client.query("UPDATE public.item SET name = 'b' WHERE id = $1", [
         id,
       ])
-      expect(await journal(client)).toEqual([])
+      expect(log.entries()).toEqual([])
 
       // Та сама колонка тим самим значенням — не зміна.
       await client.query("UPDATE public.item SET price = price WHERE id = $1", [
         id,
       ])
-      expect(await journal(client)).toEqual([])
+      expect(log.entries()).toEqual([])
 
       await client.query(
         "UPDATE public.item SET price = price + 1 WHERE id = $1",
         [id]
       )
-      expect(await journal(client)).toEqual(["price:UPDATE"])
+      expect(log.entries()).toEqual(["price:UPDATE"])
     })
   })
 
   it("onDelete fires after a delete", async () => {
     await withRollback(async (client) => {
       await deploy(client)
+      const log = journal(client)
       const { rows } = await client.query<{ id: string }>(
         "INSERT INTO public.item (id, description, name, price) VALUES (gen_random_uuid(), 'd', 'a', 1) RETURNING id"
       )
-      await freshJournal(client)
+      log.clear()
       await client.query("DELETE FROM public.item WHERE id = $1", [rows[0]!.id])
-      expect(await journal(client)).toEqual(["delete:DELETE"])
+      expect(log.entries()).toEqual(["delete:DELETE"])
     })
   })
 
@@ -199,6 +183,7 @@ describe("event subscription triggers in Postgres", () => {
       await client.query(`SET LOCAL ROLE ${APP_ROLE}`)
       await deploy(client)
       await client.query("RESET ROLE")
+      const log = journal(client)
       const owner = await client.query<{ owner: string }>(
         "SELECT pg_get_userbyid(proowner) AS owner FROM pg_proc WHERE oid = 'public.on_user()'::regprocedure"
       )
@@ -209,7 +194,7 @@ describe("event subscription triggers in Postgres", () => {
         [`${uuid(7299)}@example.test`]
       )
       await client.query("RESET ROLE")
-      expect(await journal(client)).toEqual(["user:INSERT"])
+      expect(log.entries()).toEqual(["user:INSERT"])
     }, testSuperuserUrl())
   })
 })

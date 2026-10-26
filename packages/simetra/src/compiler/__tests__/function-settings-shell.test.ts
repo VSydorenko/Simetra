@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import {
   COMMENT_COUNTER_FILE,
+  COUNT_COMMENT_SQL_FILE,
   PROJECT_CATALOG_FILE,
   PROJECT_FILE,
   REGION_DIMENSION_ID,
@@ -8,7 +9,7 @@ import {
   teamScopeKind,
   type Layer,
 } from "./fixtures/rights"
-import { diagnosticBrief, expectClean } from "./helpers"
+import { SCOPE_FUNCTIONS_FILE, diagnosticBrief, expectClean } from "./helpers"
 
 const SHARED = "sql/public/shared.sql"
 /** Спільний файл іншої схеми; тип `string` — ключ рядка таблиці кейсів. */
@@ -37,6 +38,11 @@ const dimensionFunction = (): Layer => ({
 const DIMENSION_SQL =
   "CREATE FUNCTION public.region_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT public.region_link() $$;\n" +
   "CREATE FUNCTION public.region_link() RETURNS SETOF uuid LANGUAGE sql STABLE SET search_path = '' AS $$ SELECT NULL::uuid $$;\n"
+/** Функція множини `team_ids`, що кличе ланку `public.helper`. */
+const TEAM_IDS =
+  "CREATE FUNCTION public.team_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT public.helper() $$;\n"
+const HELPER =
+  "CREATE FUNCTION public.helper() RETURNS SETOF uuid LANGUAGE sql STABLE SET search_path = '' AS $$ SELECT NULL::uuid $$;\n"
 const PROJECT_FUNCTION =
   "CREATE FUNCTION public.project_label() RETURNS int LANGUAGE sql STABLE SECURITY INVOKER AS $$ SELECT 1 $$;\n"
 
@@ -52,7 +58,12 @@ describe("sql.function-settings-shell", () => {
     params: { function: fn, setting },
   })
 
-  it.each([
+  it.each<{
+    name: string
+    sql: Record<string, string>
+    layers: Layer[]
+    expected: unknown[]
+  }>([
     {
       name: "a closed module function made SECURITY DEFINER",
       sql: {
@@ -98,6 +109,38 @@ describe("sql.function-settings-shell", () => {
       },
       layers: [dimensionFunction()],
       expected: [shell(SHARED, "public.region_link", "search_path")],
+    },
+    // Ланки голів (`headLinks`, Р2c1-31) — судимі функції: окремий `ALTER`
+    // підмінив би claims чи шлях ланки повз судження голови.
+    {
+      name: "a link of a scope set function given request claims",
+      sql: {
+        [SCOPE_FUNCTIONS_FILE]: TEAM_IDS,
+        [SHARED]:
+          HELPER +
+          "ALTER FUNCTION public.helper() SET request.jwt.claims = '{}';",
+      },
+      layers: [teamScopeKind()],
+      expected: [shell(SHARED, "public.helper", "request.jwt.claims")],
+    },
+    {
+      name: "a link of a scope set function losing its search_path",
+      sql: {
+        [SCOPE_FUNCTIONS_FILE]: TEAM_IDS,
+        [SHARED]: HELPER + "ALTER FUNCTION public.helper() RESET search_path;",
+      },
+      layers: [teamScopeKind()],
+      expected: [shell(SHARED, "public.helper", "search_path")],
+    },
+    {
+      name: "a link called from a plpgsql expression of a handler",
+      sql: {
+        [COUNT_COMMENT_SQL_FILE]:
+          "CREATE FUNCTION public.count_comment() RETURNS trigger LANGUAGE plpgsql VOLATILE SET search_path = '' AS $$ BEGIN PERFORM public.helper(); RETURN NEW; END $$;",
+        [SHARED]: HELPER + "ALTER FUNCTION public.helper() RESET search_path;",
+      },
+      layers: [],
+      expected: [shell(SHARED, "public.helper", "search_path")],
     },
     {
       name: "ALTER inside a closed module",

@@ -9,13 +9,7 @@ import type { ParsedObject } from "../stages/files"
 import { functionSettingsOf, ruledFunctions } from "./closed-forms"
 import type { SqlParser } from "./parse"
 import type { PlpgsqlParser } from "./plpgsql"
-import {
-  reachableCalls,
-  reachableUnits,
-  relationReads,
-  unjudgeable,
-  type ReachTrust,
-} from "./reach"
+import { reachableUnits, relationReads } from "./reads"
 import { functionIdentity, type VerbatimUnit } from "./units"
 
 /** Що читає повз права викликача: функція, подання чи матеріалізоване подання. */
@@ -42,16 +36,15 @@ const PUBLIC = "PUBLIC"
  * читати повз RLS їм належить за задумом (обмеження їхніх тіл судять власні
  * правила стадії 5). Власника одиниці статично не видно (власник без обходу RLS
  * нічого не відкриває), а подання може саме фільтрувати рядки функціями прав,
- * тож це попередження, а не помилка. Одиниця, частини якої компілятор не може
- * судити (нелітеральний `EXECUTE`, інша мова, невідома функція), — теж
- * попередження з `reason: "unknown"` і переліком уже знайдених таблиць.
+ * тож це попередження, а не помилка. Недосудних форм тіла (нелітеральний
+ * `EXECUTE`, інша мова, непрочитаний текст) стадія 5 не бачить: їх відмовляє
+ * ранній блок (Р2c1-37).
  */
 export function checkDefinerReads(
   objects: readonly ParsedObject[],
   project: Project,
   physical: PhysicalSnapshot,
   units: readonly VerbatimUnit[],
-  trusted: ReachTrust,
   parse: SqlParser,
   plpgsql: PlpgsqlParser
 ): Diagnostic[] {
@@ -74,22 +67,9 @@ export function checkDefinerReads(
       apiRoles
     )
     if (!privileged.some((role) => role !== PUBLIC)) continue
-    const reached = reachableUnits(
-      unit,
-      units,
-      trusted,
-      parse,
-      plpgsql,
-      physical.tables
-    )
-    // Перелік таблиць — те, чиї рядки одиниця віддає. Політика лише фільтрує
-    // рядки своєї таблиці, а та вже серед прочитаних: таблиці її підзапиту
-    // викликачеві рядків не віддають. Недосудне ж (нижче) рахується будь-де,
-    // зокрема в політиці: що воно робить від імені власника, не видно.
-    const readers = [
-      unit,
-      ...reached.map((r) => r.unit).filter((u) => u.class !== "policy"),
-    ]
+    // Перелік таблиць — те, чиї рядки одиниця віддає: її власні читання й
+    // читання функцій і подань, яких вона досягає.
+    const readers = [unit, ...reachableUnits(unit, units, parse, plpgsql)]
     const tables = new Set(
       readers.flatMap((reader) =>
         relationReads(reader, units, parse, plpgsql).flatMap((ref) =>
@@ -103,19 +83,7 @@ export function checkDefinerReads(
         )
       )
     )
-    // Запис сесії досяжною функцією читань не ховає: його судить обхід
-    // закритого коду.
-    const unknown =
-      unjudgeable(unit, plpgsql, parse) !== undefined ||
-      reachableCalls(
-        unit,
-        units,
-        trusted,
-        parse,
-        plpgsql,
-        physical.tables
-      ).some((f) => f.reason !== "sessionWrite")
-    if (tables.size === 0 && !unknown) continue
+    if (tables.size === 0) continue
     found.push(
       diagnostic("sql.definer-reads-rls", unit.file, "", {
         object: `${unit.schema}.${unit.name}`,
@@ -123,7 +91,6 @@ export function checkDefinerReads(
         tables: [...tables].sort(compareStrings).join(", "),
         roles: privileged.join(", "),
         line: unit.line,
-        ...(unknown ? { reason: "unknown" } : {}),
       })
     )
   }

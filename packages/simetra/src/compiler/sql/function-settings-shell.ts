@@ -1,25 +1,27 @@
 import type { Project } from "simetra/model"
 import { diagnostic, type Diagnostic } from "../diagnostics"
-import { dimensionFunctionUnits } from "../rights/dimension-functions"
 import type { ParsedObject } from "../stages/files"
 import {
   closedModuleOwners,
   ruledFunctions,
   settingsTargets,
 } from "./closed-forms"
+import { headLinks } from "./heads"
 import type { SqlParser } from "./parse"
+import type { PlpgsqlParser } from "./plpgsql"
 import type { VerbatimUnit } from "./units"
 
 /**
- * Функції, оболонку яких судить платформа: функції закритих модулів,
- * обробники підписок і функції множини (`ruledFunctions`), функції значень
- * вимірів доступу й кожна ланка їхніх ланцюжків.
+ * Функції, оболонку яких судить платформа: голови — функції закритих
+ * модулів, обробники підписок і функції множини (`ruledFunctions`), функції
+ * значень вимірів доступу — і кожна їхня ланка (`headLinks`, Р2c1-31).
  */
 export function judgedFunctionIdentities(
   objects: readonly ParsedObject[],
   project: Project | undefined,
   units: readonly VerbatimUnit[],
-  parse: SqlParser
+  parse: SqlParser,
+  plpgsql: PlpgsqlParser
 ): ReadonlySet<string> {
   const closed = closedModuleOwners(objects)
   return new Set([
@@ -32,9 +34,9 @@ export function judgedFunctionIdentities(
       )
       .map((u) => u.identity),
     ...ruledFunctions(objects, project),
-    ...(project === undefined
-      ? []
-      : dimensionFunctionUnits(project, units, parse).map((u) => u.identity)),
+    ...headLinks(objects, project, units, parse, plpgsql).map(
+      (u) => u.identity
+    ),
   ])
 }
 
@@ -63,9 +65,16 @@ export function checkFunctionSettingsShell(
   objects: readonly ParsedObject[],
   project: Project | undefined,
   units: readonly VerbatimUnit[],
-  parse: SqlParser
+  parse: SqlParser,
+  plpgsql: PlpgsqlParser
 ): Diagnostic[] {
-  const judged = judgedFunctionIdentities(objects, project, units, parse)
+  const judged = judgedFunctionIdentities(
+    objects,
+    project,
+    units,
+    parse,
+    plpgsql
+  )
   const functions = units.filter((u) => judged.has(u.identity))
   return units.flatMap((unit) => {
     if (unit.class !== "functionSettings") return []

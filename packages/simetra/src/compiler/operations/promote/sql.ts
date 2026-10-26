@@ -14,6 +14,7 @@ import {
   type Diagnostic,
 } from "../../diagnostics"
 import { closedShellProblem, firstDynamicSqlLine } from "../../sql/closed-forms"
+import { queryFunctionShape } from "../../sql/query-shape"
 import {
   textCalls,
   unitCalls,
@@ -67,7 +68,12 @@ export type UnitSubject = ConversionSubject & { line: number }
  */
 export interface UnitPlan {
   removed: FileUnit[]
-  moved: { unit: FileUnit; to: string }[]
+  /**
+   * `to` — фінальне місце; `staged` — місце функції-запиту на проміжній
+   * компіляції (`sql/<схема>/<ім'я>.sql`): зі старими іменами в модулі виду
+   * її судив би суддя голів, а виправляє імена лише переписувач.
+   */
+  moved: { unit: FileUnit; to: string; staged?: string }[]
   candidates: FileUnit[]
   subjects: UnitSubject[]
   problems: Diagnostic[]
@@ -117,8 +123,8 @@ function wordPattern(names: readonly string[]): RegExp {
 /**
  * Класифікація SQL-одиниць промотованих таблиць (рішення 5, 13; спека
  * промоції §6, §7.1). Модуль прийнятої таблиці йде цілком: функція в
- * закритій оболонці переїжджає в модуль виду (або, названа в
- * `sharedFunctions`, — у `sql/<схема>/<ім'я>.sql`), решта його одиниць
+ * закритій оболонці у формі функції-запиту переїжджає в модуль виду, а інша
+ * чи названа в `sharedFunctions` — у `sql/<схема>/<ім'я>.sql`; решта його одиниць
  * потребує класу. Одиниця деінде з ціллю — промотованою таблицею — теж
  * потребує класу; ціль упереміш з іншими об'єктами класом не знімається
  * (зняття зачепило б чуже) — це текст боргу. Не-функція деінде, що за
@@ -190,12 +196,17 @@ export function planUnits(
         continue
       }
       moved.add(unit.identity)
-      plan.moved.push({
-        unit,
-        to: shared.has(unit.identity)
-          ? `sql/${unit.schema}/${unit.name}.sql`
-          : o.kindModule,
-      })
+      // Функцію модуля виду судять як голову (Р2c1-24 (б)): туди йде лише
+      // функція-запит, решта закритих — у спільний файл, як `sharedFunctions`.
+      const query =
+        !shared.has(unit.identity) &&
+        queryFunctionShape(unit, units, o.parse) === undefined
+      const sharedFile = `sql/${unit.schema}/${unit.name}.sql`
+      plan.moved.push(
+        query
+          ? { unit, to: o.kindModule, staged: sharedFile }
+          : { unit, to: sharedFile }
+      )
       continue
     }
     const targets = targetsOf(unit, o.parse)
@@ -515,7 +526,8 @@ export function sqlFileTexts(
   texts: ReadonlyMap<string, string>,
   deleted: ReadonlySet<string>,
   parse: SqlParser,
-  track: readonly FileUnit[] = []
+  track: readonly FileUnit[] = [],
+  staged = false
 ): {
   files: Map<string, string | undefined>
   placements: Map<string, Placement>
@@ -600,9 +612,15 @@ export function sqlFileTexts(
   }
 
   // Переїжджі — у порядку файлу й рядка, кожна з `;` і порожнім рядком між ними.
+  // Проміжний текст кладе функцію-запит у спільний файл (`staged`), а
+  // фінальний — у модуль виду й прибирає проміжний файл.
   const byTarget = new Map<string, FileUnit[]>()
-  for (const { unit, to } of plan.moved) {
-    byTarget.set(to, [...(byTarget.get(to) ?? []), unit])
+  for (const move of plan.moved) {
+    const to = staged ? (move.staged ?? move.to) : move.to
+    byTarget.set(to, [...(byTarget.get(to) ?? []), move.unit])
+    if (!staged && move.staged !== undefined && !files.has(move.staged)) {
+      result.set(move.staged, undefined)
+    }
   }
   for (const [to, list] of byTarget) {
     list.sort((a, b) => compareStrings(a.file, b.file) || a.line - b.line)

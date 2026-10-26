@@ -1533,7 +1533,7 @@ describe("promoteObject: cascade through subscriptions and scope kinds", () => {
   })
   const HANDLER = {
     "sql/app/on-counterparty.sql":
-      "CREATE FUNCTION app.on_counterparty() RETURNS trigger LANGUAGE plpgsql VOLATILE AS $$ BEGIN RETURN NEW; END $$;",
+      "CREATE FUNCTION app.on_counterparty() RETURNS trigger LANGUAGE plpgsql VOLATILE SET search_path = '' AS $$ BEGIN RETURN NEW; END $$;",
   }
 
   it("rewrites a subscription source and its whenChanged columns", async () => {

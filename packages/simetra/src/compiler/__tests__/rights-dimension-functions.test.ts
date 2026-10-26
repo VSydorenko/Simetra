@@ -50,6 +50,23 @@ async function errors(sql: string, overrides = {}) {
   return result.diagnostics.filter((d) => d.severity === "error")
 }
 
+/** `sql.head-not-allowed` судді голів (Р2c1-17): конструкція, деталь, ланцюжок. */
+const heads = (found: Diagnostic[]) =>
+  found
+    .filter((d) => d.code === "sql.head-not-allowed")
+    .map((d) => [
+      d.file,
+      d.params?.construct,
+      d.params?.detail,
+      d.params?.chain,
+    ])
+const head = (construct: string, detail: string | undefined, chain: string) => [
+  SQL_FILE,
+  construct,
+  detail,
+  chain,
+]
+
 const rightsErrors = (found: Diagnostic[]) =>
   found
     .filter((d) => d.code.startsWith("rights.dimension-function"))
@@ -74,10 +91,10 @@ describe("access dimension value function", () => {
   })
 
   it("follows calls into project sql functions", async () => {
-    const head = fn("region_ids", CLOSED, "SELECT public.helper_ids()")
+    const caller = fn("region_ids", CLOSED, "SELECT public.helper_ids()")
     expect(
       await errors(
-        head +
+        caller +
           fn(
             "helper_ids",
             LINK,
@@ -85,23 +102,17 @@ describe("access dimension value function", () => {
           )
       )
     ).toEqual([])
-    expect(
-      rightsErrors(
-        await errors(
-          head + fn("helper_ids", LINK, "SELECT i.id FROM simetra.identities i")
-        )
-      )
-    ).toEqual([
-      {
-        code: "rights.dimension-function-reads-rights",
-        file: PROJECT,
-        pointer: POINTER,
-        params: {
-          dimension: "region",
-          chain: "public.region_ids → public.helper_ids",
-          object: "simetra.identities",
-        },
-      },
+    // Відношення схеми платформи судить суддя голів, без другої діагностики.
+    const found = await errors(
+      caller + fn("helper_ids", LINK, "SELECT i.id FROM simetra.identities i")
+    )
+    expect(rightsErrors(found)).toEqual([])
+    expect(heads(found)).toEqual([
+      head(
+        "relation",
+        "simetra.identities",
+        "public.region_ids → public.helper_ids"
+      ),
     ])
   })
 
@@ -114,20 +125,12 @@ describe("access dimension value function", () => {
           "BEGIN RETURN QUERY SELECT NULL::uuid; END"
         )
     )
-    expect(rightsErrors(plpgsql).map((d) => d.params)).toEqual([
-      {
-        dimension: "region",
-        chain: "public.region_ids → public.helper_ids",
-        object: "plpgsql",
-      },
+    expect(heads(plpgsql)).toEqual([
+      head("language", undefined, "public.region_ids → public.helper_ids"),
     ])
     const unknown = await errors(fn("region_ids", CLOSED, "SELECT ext.foo()"))
-    expect(rightsErrors(unknown).map((d) => d.params)).toEqual([
-      {
-        dimension: "region",
-        chain: "public.region_ids → ext.foo",
-        object: "unknown",
-      },
+    expect(heads(unknown)).toEqual([
+      head("call", "ext.foo", "public.region_ids"),
     ])
   })
 
@@ -235,78 +238,31 @@ describe("access dimension value function", () => {
   })
 
   it("checks the closed form of every function in the chain", async () => {
-    const head = fn("region_ids", CLOSED, "SELECT public.helper_ids()")
-    const linkReason = async (link: string) =>
-      rightsErrors(await errors(head + link)).map((d) => [d.code, d.params])
-    expect(
-      await linkReason(
-        fn(
-          "helper_ids",
-          "RETURNS SETOF uuid LANGUAGE sql STABLE SET search_path = simetra",
-          "SELECT i.id FROM identities i"
-        )
-      )
-    ).toEqual([
+    const caller = fn("region_ids", CLOSED, "SELECT public.helper_ids()")
+    const linkFindings = async (link: string) =>
+      heads(await errors(caller + link))
+    const LINK_CHAIN = "public.region_ids → public.helper_ids"
+    for (const [tail, body] of [
       [
-        "rights.dimension-function-signature",
-        {
-          dimension: "region",
-          function: "public.helper_ids",
-          reason: "searchPath",
-        },
+        "RETURNS SETOF uuid LANGUAGE sql STABLE SET search_path = simetra",
+        "SELECT i.id FROM identities i",
       ],
-    ])
-    expect(
-      await linkReason(
-        fn(
-          "helper_ids",
-          "RETURNS SETOF uuid LANGUAGE sql STABLE",
-          "SELECT r.region_id FROM public.member_region r"
-        )
-      )
-    ).toEqual([
       [
-        "rights.dimension-function-signature",
-        {
-          dimension: "region",
-          function: "public.helper_ids",
-          reason: "searchPath",
-        },
+        "RETURNS SETOF uuid LANGUAGE sql STABLE",
+        "SELECT r.region_id FROM public.member_region r",
       ],
-    ])
-    // `RESET ALL` після `SET search_path = ''` повертає шлях сесії.
+      // `RESET ALL` після `SET search_path = ''` повертає шлях сесії.
+      [`${LINK} RESET ALL`, "SELECT r.region_id FROM public.member_region r"],
+    ] as const) {
+      expect(await linkFindings(fn("helper_ids", tail, body)), tail).toEqual([
+        head("searchPath", undefined, LINK_CHAIN),
+      ])
+    }
     expect(
-      await linkReason(
-        fn(
-          "helper_ids",
-          `${LINK} RESET ALL`,
-          "SELECT r.region_id FROM public.member_region r"
-        )
-      )
-    ).toEqual([
-      [
-        "rights.dimension-function-signature",
-        {
-          dimension: "region",
-          function: "public.helper_ids",
-          reason: "searchPath",
-        },
-      ],
-    ])
-    expect(
-      await linkReason(
+      await linkFindings(
         fn("helper_ids", LINK, "SELECT r.region_id FROM member_region r")
       )
-    ).toEqual([
-      [
-        "rights.dimension-function-signature",
-        {
-          dimension: "region",
-          function: "public.helper_ids",
-          reason: "unqualified",
-        },
-      ],
-    ])
+    ).toEqual([head("unqualified", "member_region", LINK_CHAIN)])
   })
 
   it("does not loop on recursive calls", async () => {
@@ -345,16 +301,12 @@ describe("access dimension value function", () => {
       }
     )
     expect(found.map((d) => d.code)).toContain("membership.user-not-users-ref")
-    expect(rightsErrors(found).map((d) => d.params)).toEqual([
-      {
-        dimension: "region",
-        chain: "public.region_ids → public.org_member_my_member",
-        object: "unknown",
-      },
+    expect(heads(found)).toEqual([
+      head("call", "public.org_member_my_member", "public.region_ids"),
     ])
   })
   describe("fix round 1", () => {
-    const head = (body: string) => fn("region_ids", CLOSED, body)
+    const head_ = (body: string) => fn("region_ids", CLOSED, body)
     const params = async (sql: string) =>
       rightsErrors(await errors(sql)).map((d) => [d.code, d.params])
     // Функцію, що виконує текст SQL, відмовляє ранній блок форм модулів
@@ -363,36 +315,38 @@ describe("access dimension value function", () => {
       (await errors(sql))
         .filter((d) => d.code === "sql.command-context-write")
         .map((d) => d.params?.form)
-    const reads = (chain: string, object: string) => [
-      "rights.dimension-function-reads-rights",
-      { dimension: "region", chain, object },
-    ]
-    const signature = (fn: string, reason: string) => [
-      "rights.dimension-function-signature",
-      { dimension: "region", function: fn, reason },
-    ]
 
     it("follows project views", async () => {
-      const viewHead = head("SELECT v.id FROM public.v v")
+      const viewHead = head_("SELECT v.id FROM public.v v")
+      const VIEW_CHAIN = "public.region_ids → public.v"
       expect(
-        await params(
-          viewHead +
-            "CREATE VIEW public.v AS SELECT i.id FROM simetra.identities i;\n"
+        heads(
+          await errors(
+            viewHead +
+              "CREATE VIEW public.v AS SELECT i.id FROM simetra.identities i;\n"
+          )
         )
-      ).toEqual([reads("public.region_ids → public.v", "simetra.identities")])
+      ).toEqual([head("relation", "simetra.identities", VIEW_CHAIN)])
       expect(
-        await params(
-          viewHead +
-            "CREATE FUNCTION public.p() RETURNS uuid LANGUAGE plpgsql STABLE AS $$ BEGIN RETURN NULL; END $$;\n" +
-            "CREATE VIEW public.v AS SELECT public.p() AS id;\n"
+        heads(
+          await errors(
+            viewHead +
+              "CREATE FUNCTION public.p() RETURNS uuid LANGUAGE plpgsql STABLE AS $$ BEGIN RETURN NULL; END $$;\n" +
+              "CREATE VIEW public.v AS SELECT public.p() AS id;\n"
+          )
         )
-      ).toEqual([reads("public.region_ids → public.v → public.p", "plpgsql")])
+      ).toEqual([
+        head("language", undefined, `${VIEW_CHAIN} → public.p`),
+        head("searchPath", undefined, `${VIEW_CHAIN} → public.p`),
+      ])
       expect(
-        await params(
-          viewHead +
-            "CREATE VIEW public.v AS SELECT r.region_id AS id FROM member_region r;\n"
+        heads(
+          await errors(
+            viewHead +
+              "CREATE VIEW public.v AS SELECT r.region_id AS id FROM member_region r;\n"
+          )
         )
-      ).toEqual([signature("public.v", "viewUnqualified")])
+      ).toEqual([head("unqualified", "member_region", VIEW_CHAIN)])
       expect(
         await params(
           viewHead +
@@ -403,16 +357,22 @@ describe("access dimension value function", () => {
 
     it("rejects SQL-standard bodies in the head and in a link", async () => {
       expect(
-        await params(
-          "CREATE FUNCTION public.region_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' BEGIN ATOMIC SELECT NULL::uuid; END;\n"
+        heads(
+          await errors(
+            "CREATE FUNCTION public.region_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' BEGIN ATOMIC SELECT NULL::uuid; END;\n"
+          )
         )
-      ).toEqual([signature("public.region_ids", "sqlBody")])
+      ).toEqual([head("sqlBody", undefined, "public.region_ids")])
       expect(
-        await params(
-          head("SELECT public.helper_id()") +
-            "CREATE FUNCTION public.helper_id() RETURNS uuid LANGUAGE sql STABLE SET search_path = '' RETURN NULL::uuid;\n"
+        heads(
+          await errors(
+            head_("SELECT public.helper_id()") +
+              "CREATE FUNCTION public.helper_id() RETURNS uuid LANGUAGE sql STABLE SET search_path = '' RETURN NULL::uuid;\n"
+          )
         )
-      ).toEqual([signature("public.helper_id", "sqlBody")])
+      ).toEqual([
+        head("sqlBody", undefined, "public.region_ids → public.helper_id"),
+      ])
     })
 
     it("judges a project function that shares a membership function name", async () => {
@@ -420,28 +380,32 @@ describe("access dimension value function", () => {
       // `/membership`), тож членство стає недовіреним; обхід і сам судить
       // одиницю проєкту раніше за довіру до згенерованого імені.
       const found = await errors(
-        head(
+        head_(
           "SELECT r.region_id FROM public.member_region r WHERE r.member_id = public.org_member_my_member(r.org_id::text)"
         ) +
           "CREATE FUNCTION public.org_member_my_member(p text) RETURNS uuid LANGUAGE plpgsql STABLE AS $$ BEGIN RETURN NULL; END $$;\n"
       )
       expect(found.map((d) => d.code)).toContain("physical.function-duplicate")
-      expect(rightsErrors(found).map((d) => [d.code, d.params])).toEqual([
-        reads("public.region_ids → public.org_member_my_member", "plpgsql"),
+      const chain = "public.region_ids → public.org_member_my_member"
+      expect(heads(found)).toEqual([
+        head("language", undefined, chain),
+        head("searchPath", undefined, chain),
       ])
     })
 
     it("requires schema-qualified calls in views", async () => {
-      const viewHead = head("SELECT v.id FROM public.v v")
+      const viewHead = head_("SELECT v.id FROM public.v v")
       const view = (select: string) =>
         viewHead + `CREATE VIEW public.v AS ${select};\n`
       expect(
-        await params(
-          view(
-            "SELECT lower(r.region_id::text)::uuid AS id FROM public.member_region r"
+        heads(
+          await errors(
+            view(
+              "SELECT lower(r.region_id::text)::uuid AS id FROM public.member_region r"
+            )
           )
         )
-      ).toEqual([signature("public.v", "viewUnqualified")])
+      ).toEqual([head("unqualified", "lower", "public.region_ids → public.v")])
       // Не виклики функцій: COALESCE, NULLIF, CASE і CAST — вирази дерева.
       expect(
         await params(
@@ -462,21 +426,21 @@ describe("access dimension value function", () => {
       ["ts_rewrite", "ts_rewrite('a'::tsquery, 'select 1')"],
     ])("rejects the dynamic builtin %s", async (_name, call) => {
       expect(
-        await textWrites(head(`SELECT NULL::uuid WHERE ${call} IS NOT NULL`))
+        await textWrites(head_(`SELECT NULL::uuid WHERE ${call} IS NOT NULL`))
       ).toEqual(["dynamicText"])
     })
 
     it("rejects builtins that execute SQL from a string", async () => {
       expect(
         await textWrites(
-          head(
+          head_(
             "SELECT NULL::uuid WHERE query_to_xml('select 1', true, true, '') IS NOT NULL"
           )
         )
       ).toEqual(["dynamicText"])
       expect(
         await textWrites(
-          head(
+          head_(
             "SELECT NULL::uuid WHERE pg_catalog.table_to_xml('public.member_region'::regclass, true, true, '') IS NOT NULL"
           )
         )
@@ -489,7 +453,7 @@ describe("access dimension value function", () => {
       // справа не доходить.
       const early = async (sql: string) =>
         (await errors(sql)).map((d) => [d.code, d.params])
-      expect(await early(head("SELECT simetra.role_ids()"))).toEqual([
+      expect(await early(head_("SELECT simetra.role_ids()"))).toEqual([
         [
           "sql.platform-function-call",
           {
@@ -501,7 +465,7 @@ describe("access dimension value function", () => {
       ])
       expect(
         await early(
-          head("SELECT public.helper_ids()") +
+          head_("SELECT public.helper_ids()") +
             "CREATE FUNCTION public.helper_ids() RETURNS SETOF uuid LANGUAGE c STABLE AS 'helper_lib', 'helper_ids';\n"
         )
       ).toEqual([
@@ -510,7 +474,7 @@ describe("access dimension value function", () => {
           { function: "public.helper_ids", statement: "language", line: 2 },
         ],
       ])
-      expect(await errors(head("SELECT pg_catalog.lower('x')::uuid"))).toEqual(
+      expect(await errors(head_("SELECT pg_catalog.lower('x')::uuid"))).toEqual(
         []
       )
     })

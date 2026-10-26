@@ -457,13 +457,15 @@ describe("policies", () => {
             [key("t2.c")]
           )
         ).rows[0]!
-      const counted = async () =>
-        (
-          await client.query<{ n: number }>(
-            "SELECT count(*)::int AS n FROM public.comment_counter"
-          )
-        ).rows[0]!.n
-      const before = { comment: await comment(), counted: await counted() }
+      const before = { comment: await comment() }
+      // Підписка `onWrite` коментаря сповіщає (`RAISE NOTICE`) на кожному
+      // своєму спрацюванні; поширення копій її не будить.
+      const fired: string[] = []
+      client.on("notice", (message) => {
+        if (message.message?.startsWith("count_comment:") === true) {
+          fired.push(message.message)
+        }
+      })
       await client.query(
         "UPDATE public.task SET assignee_id = $1 WHERE id = $2",
         [key("m1@A"), key("t2")]
@@ -477,7 +479,7 @@ describe("policies", () => {
         version: before.comment.version,
       })
       expect.soft(rows).toEqual([{ copy: key("m1@A") }])
-      expect.soft(await counted()).toBe(before.counted)
+      expect.soft(fired).toEqual([])
     }))
 
   // Якір Р-Г: рядок ТЧ не посилається на власника чужого скоупу (складений

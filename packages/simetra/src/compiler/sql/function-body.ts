@@ -483,13 +483,54 @@ export function checkPlatformCalls(
   const allowed = new Set(
     PLATFORM_READ_FUNCTIONS.map((f) => `${f.schema}.${f.name}`)
   )
+  return forbiddenCalls(units, parse, plpgsql, (call) => {
+    if (call.schema !== PLATFORM_SCHEMA) return undefined
+    const name = `${call.schema}.${call.name}`
+    return allowed.has(name) ? undefined : name
+  })
+}
+
+/**
+ * Виклик згенерованої функції схеми застосунку, що пише (`writing` —
+ * `схема.ім'я`; Р2c1-38): оболонка проведення, перерахунок підсумків, обгортка
+ * рухів і тригерні функції пишуть таблиці виду чи належать їм, тож SQL
+ * застосунку кличе зі згенерованих лише ті, що читають. Імена згенерованих
+ * відомі лише зі знімка, тож це стадія 5. Некваліфікований виклик —
+ * fail-closed за голим ім'ям: шлях пошуку, за яким Postgres його розв'яже,
+ * статично не відомий.
+ */
+export function checkGeneratedCalls(
+  units: readonly VerbatimUnit[],
+  writing: ReadonlySet<string>,
+  parse: SqlParser,
+  plpgsql: PlpgsqlParser
+): Diagnostic[] {
+  const byName = new Map(
+    [...writing].map((qualified) => [qualified.split(".").at(-1)!, qualified])
+  )
+  return forbiddenCalls(units, parse, plpgsql, (call) =>
+    call.schema === undefined
+      ? byName.get(call.name)
+      : writing.has(`${call.schema}.${call.name}`)
+        ? `${call.schema}.${call.name}`
+        : undefined
+  )
+}
+
+/** `sql.platform-function-call` на кожен виклик, що його називає `forbidden`. */
+function forbiddenCalls(
+  units: readonly VerbatimUnit[],
+  parse: SqlParser,
+  plpgsql: PlpgsqlParser,
+  forbidden: (call: ReferencedName) => string | undefined
+): Diagnostic[] {
   return units.flatMap((unit) => {
     if (INERT_CLASSES.has(unit.class)) return []
     const called = new Set(
-      callsOf(unit, parse, plpgsql)
-        .filter((c) => c.schema === PLATFORM_SCHEMA)
-        .map((c) => `${c.schema}.${c.name}`)
-        .filter((name) => !allowed.has(name))
+      callsOf(unit, parse, plpgsql).flatMap((call) => {
+        const name = forbidden(call)
+        return name === undefined ? [] : [name]
+      })
     )
     return [...called].map((name) =>
       diagnostic("sql.platform-function-call", unit.file, "", {

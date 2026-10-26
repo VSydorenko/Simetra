@@ -1,6 +1,5 @@
 import type { Node } from "libpg-query"
 import { closedShellProblem } from "./closed-forms"
-import type { SqlParser } from "./parse"
 import type { PlpgsqlParser } from "./plpgsql"
 import { functionIdentity, type VerbatimUnit } from "./units"
 
@@ -12,8 +11,6 @@ import { functionIdentity, type VerbatimUnit } from "./units"
  */
 export interface FunctionNode {
   parameters?: unknown[]
-  /** Тіло стандарту SQL (`BEGIN ATOMIC`, `RETURN`): без рядка `AS`. */
-  sql_body?: unknown
   returnType?: {
     names?: { String?: { sval?: string } }[]
     setof?: boolean
@@ -88,26 +85,22 @@ export function nullaryFunction(
 }
 
 /** Чим функція множини виходить за закриту форму (`params.reason`). */
-export type SetFunctionReason =
-  "language" | "security" | "searchPath" | "unqualified" | "sqlBody"
+export type SetFunctionReason = "language" | "security" | "searchPath"
 
 /**
- * Функція множини — `LANGUAGE sql SECURITY DEFINER SET search_path = ''` із
- * відношеннями, кваліфікованими схемою: RLS-політики викликають її над
- * таблицями з RLS, тож виклик від імені користувача зациклив би політику, а
- * порожній search_path не лишає простору для підміни імен. Оболонку
- * `search_path` читає спільний `closedShellProblem`, щоб не дублювати його.
- * Тіло стандарту SQL (`BEGIN ATOMIC`, `RETURN`) зв'язує імена під час
- * створення з `search_path` сесії, тож компілятор його не судить і відхиляє
- * (fail-closed). Рядкове тіло, яке не розбирається, не перевіряється: його
- * відхилить тіньова база.
+ * Функція множини — `LANGUAGE sql SECURITY DEFINER SET search_path = ''`:
+ * RLS-політики викликають її над таблицями з RLS, тож виклик від імені
+ * користувача зациклив би політику, а порожній search_path не лишає простору
+ * для підміни імен. Оболонку `search_path` читає спільний
+ * `closedShellProblem`, щоб не дублювати його. Тіло (рядкове, один `SELECT`,
+ * кваліфіковані відношення) судить суддя голів (`sql.head-not-allowed`,
+ * Р2c1-18): друга причина тут була б дублем.
  */
 export function setFunctionClosedProblem(
   fn: FunctionNode,
   units: readonly VerbatimUnit[],
   schema: string,
   name: string,
-  parse: SqlParser,
   plpgsql: PlpgsqlParser
 ): SetFunctionReason | undefined {
   const option = (key: string) =>
@@ -127,67 +120,7 @@ export function setFunctionClosedProblem(
   ) {
     return "searchPath"
   }
-  if (fn.sql_body !== undefined) return "sqlBody"
-  return bodyHasUnqualifiedRelation(fn, parse) ? "unqualified" : undefined
-}
-
-/**
- * Тіло `LANGUAGE sql` називає відношення без схеми. Тіло, яке не
- * розбирається, не перевіряється: його відхилить тіньова база.
- */
-export function bodyHasUnqualifiedRelation(
-  fn: FunctionNode,
-  parse: SqlParser
-): boolean {
-  // `AS` — список рядків; для `LANGUAGE sql` перший і є тілом.
-  const body = (fn.options ?? [])
-    .map((o) => o.DefElem)
-    .find((o) => o?.defname === "as")?.arg?.List?.items?.[0]?.String?.sval
-  if (body === undefined) return false
-  const parsed = parse(body)
-  if (!parsed.ok) return false
-  return hasUnqualifiedRelation(
-    parsed.statements.map((s) => s.stmt),
-    new Set()
-  )
-}
-
-/**
- * Некваліфіковане відношення в дереві: `RangeVar` без схеми, ім'я якого не CTE
- * в області видимості. Виклики функцій (`auth.uid()`) — не `RangeVar`.
- */
-function hasUnqualifiedRelation(
-  value: unknown,
-  ctes: ReadonlySet<string>
-): boolean {
-  if (Array.isArray(value)) {
-    return value.some((item) => hasUnqualifiedRelation(item, ctes))
-  }
-  if (typeof value !== "object" || value === null) return false
-  const node = value as Record<string, unknown>
-  const clause = node.withClause as
-    { ctes?: { CommonTableExpr?: { ctename?: string } }[] } | undefined
-  const visible =
-    clause === undefined
-      ? ctes
-      : new Set([
-          ...ctes,
-          ...(clause.ctes ?? []).flatMap((c) =>
-            c.CommonTableExpr?.ctename === undefined
-              ? []
-              : [c.CommonTableExpr.ctename]
-          ),
-        ])
-  if (
-    typeof node.relname === "string" &&
-    node.schemaname === undefined &&
-    !visible.has(node.relname)
-  ) {
-    return true
-  }
-  return Object.values(node).some((child) =>
-    hasUnqualifiedRelation(child, visible)
-  )
+  return undefined
 }
 
 /** Функція множини читає дані, тож мусить бути STABLE. */

@@ -642,18 +642,19 @@ function section(id: number, name: string, physicalName: string, attr: string) {
  * крок копії; у звіту — генерована колонка періоду типової нумерації);
  * регістр `TaskHours` — вимір доступу на виміру регістра й похідні таблиці;
  * «Користувачі» — носій-ключ і ТЧ `devices`; підписка `onWrite` на коментарі
- * пише рядок у службовий лічильник. Ролі читають усе скоуплене (`TaskReaders`
+ * лише сповіщає (`RAISE NOTICE`): обробник лише перевіряє (Р2c1-19), а
+ * службовий лічильник лишається прийнятою таблицею домену. Ролі читають усе скоуплене (`TaskReaders`
  * через `OrgMember`), а «Користувачів» — і рівень скоупу, і `Everyone` (свій
  * рядок), тож проєкт компілюється без попереджень. Шар поверх `withRoles`:
  * типові файли `rightsFiles` не змінюються.
  */
 export function policyDomain(...layers: Layer[]): Map<string, string> {
   const files = withRoles(policyLayer(), ...layers)
-  // Обробник лічильника — SQL-файл, а не метадані: шар `withRoles` зливає
-  // лише JSON-об'єкти.
+  // Обробник — SQL-файл, а не метадані: шар `withRoles` зливає лише
+  // JSON-об'єкти. Спрацювання він доводить повідомленням, а не записом.
   files.set(
     COUNT_COMMENT_SQL_FILE,
-    "CREATE FUNCTION public.count_comment() RETURNS trigger LANGUAGE plpgsql VOLATILE AS $$ BEGIN INSERT INTO public.comment_counter (comment_id) VALUES (NEW.id); RETURN NEW; END $$;"
+    "CREATE FUNCTION public.count_comment() RETURNS trigger LANGUAGE plpgsql VOLATILE SET search_path = '' AS $$ BEGIN RAISE NOTICE 'count_comment:%', TG_OP; RETURN NEW; END $$;"
   )
   return files
 }

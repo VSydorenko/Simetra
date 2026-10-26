@@ -246,7 +246,7 @@ describe("deleteElement", () => {
         handler: { name: "stamp" },
       },
       "sql/public/stamp.sql":
-        "CREATE FUNCTION public.stamp() RETURNS trigger LANGUAGE plpgsql VOLATILE AS $$ BEGIN RETURN NEW; END $$;",
+        "CREATE FUNCTION public.stamp() RETURNS trigger LANGUAGE plpgsql VOLATILE SET search_path = '' AS $$ BEGIN RETURN NEW; END $$;",
     })
     await modelOf(files)
     const result = await deleteElement(files, {

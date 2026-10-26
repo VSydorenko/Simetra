@@ -19,7 +19,7 @@ import {
 const SUBSCRIPTION = "event-subscriptions/StampContract/StampContract.meta.json"
 const HANDLER_FILE = "sql/app/stamp.sql"
 const HANDLER_SQL =
-  "CREATE FUNCTION app.stamp() RETURNS trigger LANGUAGE plpgsql VOLATILE AS $$ BEGIN RETURN NEW; END $$;"
+  "CREATE FUNCTION app.stamp() RETURNS trigger LANGUAGE plpgsql VOLATILE SET search_path = '' AS $$ BEGIN RETURN NEW; END $$;"
 
 function subscription(overrides: Record<string, unknown> = {}) {
   return {
@@ -86,7 +86,7 @@ describe("EventSubscription", () => {
           },
           {
             "sql/public/on-user.sql":
-              "CREATE FUNCTION public.on_user() RETURNS trigger LANGUAGE plpgsql VOLATILE AS $$ BEGIN RETURN NEW; END $$;",
+              "CREATE FUNCTION public.on_user() RETURNS trigger LANGUAGE plpgsql VOLATILE SET search_path = '' AS $$ BEGIN RETURN NEW; END $$;",
           }
         )
       )
@@ -392,7 +392,7 @@ describe("EventSubscription", () => {
             entries(
               {},
               {
-                [HANDLER_FILE]: `CREATE FUNCTION app.stamp() RETURNS trigger LANGUAGE plpgsql VOLATILE AS $$ ${body} $$;`,
+                [HANDLER_FILE]: `CREATE FUNCTION app.stamp() RETURNS trigger LANGUAGE plpgsql VOLATILE SET search_path = '' AS $$ ${body} $$;`,
               }
             )
           )
@@ -408,7 +408,7 @@ describe("EventSubscription", () => {
 
   it("a handler does not change the command context, in a shared file or its own module", async () => {
     const handler = (statement: string) =>
-      `CREATE FUNCTION app.stamp() RETURNS trigger LANGUAGE plpgsql VOLATILE AS $$ BEGIN ${statement} RETURN NEW; END $$;`
+      `CREATE FUNCTION app.stamp() RETURNS trigger LANGUAGE plpgsql VOLATILE SET search_path = '' AS $$ BEGIN ${statement} RETURN NEW; END $$;`
     const forms = async (files: Record<string, unknown>) =>
       (await compile(metaFiles(entries({}, files)))).diagnostics
         .filter((d) => d.code === "sql.command-context-write")
@@ -456,10 +456,11 @@ describe("EventSubscription", () => {
 
   describe("a beforeWrite handler leaves the row mechanics alone", () => {
     const handler = (body: string) =>
-      `CREATE FUNCTION app.stamp() RETURNS trigger LANGUAGE plpgsql VOLATILE AS $$ ${body} $$;`
-    // Процедури, які кличе обробник, — функції моделі: закритий код не
-    // досягає невідомих функцій (Р2c1-5). Процедура — борг, тож перелік
-    // приймає його: предмет тут — присвоєння, а не ратчет.
+      `CREATE FUNCTION app.stamp() RETURNS trigger LANGUAGE plpgsql VOLATILE SET search_path = '' AS $$ ${body} $$;`
+    // Процедури, які кличе обробник, — функції моделі; `CALL` обробнику
+    // заборонено (Р2c1-19), але присвоєння механіки через `INOUT` судиться
+    // окремо. Процедура — борг, тож перелік приймає його: предмет тут —
+    // присвоєння, а не ратчет.
     const routines = {
       "sql/app/routines.sql": ["bump", "swap", "log"]
         .map(
@@ -485,7 +486,20 @@ describe("EventSubscription", () => {
             )
           )
         )
-      ).diagnostics.map((d) => [d.code, d.file, d.pointer, d.params?.problem])
+      ).diagnostics.map((d) => [
+        d.code,
+        d.file,
+        d.pointer,
+        d.params?.problem ?? d.params?.detail,
+      ])
+    // Оператор поза переліком обробника (Р2c1-19) — окрема перевірка голів:
+    // присвоєння механіки судиться й тоді.
+    const head = (detail: string) => [
+      "sql.head-not-allowed",
+      HANDLER_FILE,
+      "",
+      detail,
+    ]
     const assigns = (problem: string) => [
       [
         "subscription.handler-assigns-mechanics",
@@ -504,6 +518,7 @@ describe("EventSubscription", () => {
       [
         "BEGIN GET DIAGNOSTICS NEW.version = ROW_COUNT; RETURN NEW; END",
         "new.version",
+        ["getdiag"],
       ],
       [
         "DECLARE r record; BEGIN r := NEW; r.version := 5; RETURN r; END",
@@ -524,8 +539,13 @@ describe("EventSubscription", () => {
       [
         "BEGIN CALL app.bump(NEW.version); RETURN NEW; END",
         "CALL app.bump(NEW.version)",
+        ["call"],
       ],
-      ["BEGIN CALL app.swap(NEW); RETURN NEW; END", "CALL app.swap(NEW)"],
+      [
+        "BEGIN CALL app.swap(NEW); RETURN NEW; END",
+        "CALL app.swap(NEW)",
+        ["call"],
+      ],
       // `INTO` у безіменний рядок: ціль — розв'язана змінна, а не текст автора.
       [
         "DECLARE r ALIAS FOR NEW; BEGIN SELECT 1 INTO r.version; RETURN NEW; END",
@@ -538,10 +558,12 @@ describe("EventSubscription", () => {
       [
         "DECLARE c CURSOR FOR SELECT 1; r ALIAS FOR NEW; BEGIN OPEN c; FETCH c INTO r.version; RETURN NEW; END",
         "new.version",
+        ["open", "fetch"],
       ],
       [
         "DECLARE a int; c CURSOR FOR SELECT 1, 2; r ALIAS FOR NEW; BEGIN OPEN c; FETCH c INTO a, r.version; RETURN NEW; END",
         "new.version",
+        ["open", "fetch"],
       ],
       [
         "<<b>> DECLARE a int; r ALIAS FOR NEW; BEGIN SELECT 1, 2 INTO a, b.r.version; RETURN NEW; END",
@@ -550,23 +572,33 @@ describe("EventSubscription", () => {
       [
         "DECLARE r ALIAS FOR NEW; BEGIN INSERT INTO app.log (n) VALUES (1) RETURNING n INTO r.version; RETURN NEW; END",
         "new.version",
+        ["InsertStmt"],
       ],
       // Ціль псевдоніма дерево не зберігає, а `NEW` живе й під міткою функції.
       [
         "DECLARE r ALIAS FOR NEW; BEGIN CALL app.bump(r.version); RETURN NEW; END",
         "CALL app.bump(r.version)",
+        ["call"],
       ],
       [
         "BEGIN CALL app.bump(stamp.new.version); RETURN NEW; END",
         "CALL app.bump(stamp.new.version)",
+        ["call"],
       ],
       [
         "BEGIN CALL app.swap(stamp.new); RETURN NEW; END",
         "CALL app.swap(stamp.new)",
+        ["call"],
       ],
-    ])("%s", async (body, problem) => {
-      expect(await found(body)).toEqual(assigns(problem))
-    })
+    ] as [string, string, string[]?][])(
+      "%s",
+      async (body, problem, heads = []) => {
+        expect(await found(body)).toEqual([
+          ...assigns(problem),
+          ...heads.map(head),
+        ])
+      }
+    )
 
     it("dynamic SQL INTO NEW is stopped by the closed shell first", async () => {
       expect(
@@ -593,9 +625,10 @@ describe("EventSubscription", () => {
       expect(
         await found("BEGIN NEW.number := upper(NEW.number); RETURN NEW; END")
       ).toEqual([])
+      // Присвоєння механіки `CALL` не робить, але обробник `CALL` не виконує.
       expect(
         await found("BEGIN CALL app.log(NEW.number); RETURN NEW; END")
-      ).toEqual([])
+      ).toEqual([head("call")])
       expect(
         await found(
           "BEGIN IF NEW.number = '' THEN RETURN NULL; END IF; RETURN NEW; END"
@@ -668,13 +701,14 @@ describe("EventSubscription", () => {
         const files = policyDomain({ [COUNT_COMMENT_FILE]: { event } })
         files.set(
           COUNT_COMMENT_SQL_FILE,
-          `CREATE FUNCTION public.count_comment() RETURNS trigger LANGUAGE plpgsql VOLATILE AS $$ ${body} $$;`
+          `CREATE FUNCTION public.count_comment() RETURNS trigger LANGUAGE plpgsql VOLATILE SET search_path = '' AS $$ ${body} $$;`
         )
-        // Викликані обробником — функції моделі (Р2c1-5); процедура — борг.
+        // Викликані обробником — функції моделі: `log` — функція-запит
+        // (Р2c1-18), процедура — борг.
         files.set(
           "sql/public/routines.sql",
           "CREATE PROCEDURE public.bump(INOUT v uuid) LANGUAGE plpgsql AS $$ BEGIN END $$;\n" +
-            "CREATE FUNCTION public.log(r jsonb) RETURNS void LANGUAGE sql VOLATILE AS $$ SELECT $$;"
+            "CREATE FUNCTION public.log(r jsonb) RETURNS void LANGUAGE sql VOLATILE SET search_path = '' AS $$ SELECT $$;"
         )
         return (await compile(await acceptDebt(files))).diagnostics.map((d) => [
           d.code,
@@ -695,6 +729,13 @@ describe("EventSubscription", () => {
       const reads = (column: string) => [
         at("subscription.handler-reads-carrier", column),
       ]
+      // `CALL` і `INSERT` обробнику заборонено (Р2c1-19) — окрема перевірка.
+      const statement = [
+        "sql.head-not-allowed",
+        COUNT_COMMENT_SQL_FILE,
+        "",
+        undefined,
+      ]
 
       it.each([
         [`BEGIN NEW.${COPY} := NULL; RETURN NEW; END`, assigns(COPY)],
@@ -702,7 +743,7 @@ describe("EventSubscription", () => {
         // Параметр `INOUT` процедури пише в перший крок шляху.
         [
           "BEGIN CALL public.bump(NEW.task_id); RETURN NEW; END",
-          assigns("task_id"),
+          [...assigns("task_id"), statement],
         ],
         [
           `BEGIN IF NEW.${COPY} IS NULL THEN RETURN NULL; END IF; RETURN NEW; END`,
@@ -711,7 +752,7 @@ describe("EventSubscription", () => {
         [`BEGIN NEW.description := NEW.${COPY}; RETURN NEW; END`, reads(COPY)],
         [
           `BEGIN INSERT INTO public.comment_counter (comment_id) VALUES (NEW.${COPY}); RETURN NEW; END`,
-          reads(COPY),
+          [...reads(COPY), statement],
         ],
         [`DECLARE c uuid := NEW.${COPY}; BEGIN RETURN NEW; END`, reads(COPY)],
         // Запис цілком — звичайний патерн журналу; копії в ньому не читаються

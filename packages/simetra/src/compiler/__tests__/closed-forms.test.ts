@@ -94,20 +94,32 @@ describe("kind module: closed forms only", () => {
     ])
   })
 
-  it("a function in the closed shell passes", async () => {
+  // Оболонку судить ранній блок, а тіло — суддя голів: функція модуля виду
+  // — функція-запит (Р2c1-18).
+  it("a function in the closed shell is judged as a query function", async () => {
+    const heads = async (files: Record<string, string>) =>
+      (await diagnostics(files)).map((d) => [d.code, d.params?.construct])
     expect(
-      await diagnostics({
+      await heads({
         [SALE_SQL]: shell(
           "LANGUAGE plpgsql IMMUTABLE SECURITY DEFINER SET search_path = ''",
           "BEGIN RETURN 1; END"
         ),
       })
-    ).toEqual([])
+    ).toEqual([["sql.head-not-allowed", "language"]])
     // Тіло стандарту SQL (`RETURN …`) — теж `LANGUAGE sql`.
     expect(
-      await diagnostics({
+      await heads({
         [SALE_SQL]:
           "CREATE FUNCTION public.sale_total() RETURNS int STABLE RETURN 1;",
+      })
+    ).toEqual([
+      ["sql.head-not-allowed", "sqlBody"],
+      ["sql.head-not-allowed", "searchPath"],
+    ])
+    expect(
+      await diagnostics({
+        [SALE_SQL]: shell("LANGUAGE sql STABLE SET search_path = ''"),
       })
     ).toEqual([])
   })
@@ -178,22 +190,34 @@ describe("kind module: closed forms only", () => {
       ).toEqual([["sql.closed-shell", "body"]])
     })
 
-    it("accepts static plpgsql", async () => {
+    // Тригерна функція, яку жодна підписка не називає обробником, — теж
+    // функція-запит (Р2c1-18): оболонку вона проходить, тіло — ні.
+    it("passes static plpgsql to the head judge", async () => {
       expect(
-        await diagnostics({
-          [SALE_SQL]: plpgsql("BEGIN PERFORM 1; RETURN NEW; END"),
-        })
-      ).toEqual([])
+        (
+          await diagnostics({
+            [SALE_SQL]: plpgsql("BEGIN PERFORM 1; RETURN NEW; END"),
+          })
+        ).map((d) => [d.code, d.params?.construct])
+      ).toEqual([
+        ["sql.head-not-allowed", "language"],
+        ["sql.head-not-allowed", "searchPath"],
+      ])
     })
 
-    it("accepts a LANGUAGE sql BEGIN ATOMIC body", async () => {
+    it("passes a LANGUAGE sql BEGIN ATOMIC body to the head judge", async () => {
       // Розбирач plpgsql на такому тілі падає: його не можна кликати для sql.
       expect(
-        await diagnostics({
-          [SALE_SQL]:
-            "CREATE FUNCTION public.sale_total() RETURNS int LANGUAGE sql STABLE BEGIN ATOMIC SELECT 1; END;",
-        })
-      ).toEqual([])
+        (
+          await diagnostics({
+            [SALE_SQL]:
+              "CREATE FUNCTION public.sale_total() RETURNS int LANGUAGE sql STABLE BEGIN ATOMIC SELECT 1; END;",
+          })
+        ).map((d) => [d.code, d.params?.construct])
+      ).toEqual([
+        ["sql.head-not-allowed", "sqlBody"],
+        ["sql.head-not-allowed", "searchPath"],
+      ])
     })
 
     it("keeps the order: shell problems come before the body", async () => {
@@ -449,8 +473,8 @@ describe("kind module: closed forms only", () => {
         "SELECT setting FROM pg_catalog.pg_settings"
       ),
       plpgsqlBody("PERFORM set_config('app.x', '1', true);"),
-      // Нелітеральний `EXECUTE` сам не помилка: закритий код функції з ним не
-      // досягає — це судить `sql.command-context-reach` (Р2c1-5).
+      // Нелітеральний `EXECUTE` — не запис сесії: його відмовляє дозвільний
+      // перелік тіла (`sql.function-body-statement`, Р2c1-37).
       plpgsqlBody("EXECUTE v_sql;"),
       plpgsqlBody("EXECUTE format('delete from app.%I', v_table);"),
       plpgsqlBody("EXECUTE 'select 1';"),
@@ -634,23 +658,33 @@ describe("kind module: closed forms only", () => {
       ).toEqual([[ERROR, "setStatement", "session_replication_role"]])
     })
 
-    it("a debt function reached by closed code is a reach error, its own write a warning", async () => {
-      // Запис сесії в борговій функції, якої досягає закритий код, судить
-      // обхід (Р2c1-10 (а)) на голові; попередження боргу лишається на самій
-      // одиниці — ранній блок досяжності не бачить.
+    it("a debt function called by closed code is a head error, its own write a warning", async () => {
+      // Функція модуля виду кличе лише функції-запити (Р2c1-18): боргова
+      // ланка на plpgsql — помилка голови; попередження боргу лишається на
+      // самій одиниці.
       const found = await diagnostics({
         [SALE_SQL]: shell(
-          "LANGUAGE plpgsql VOLATILE",
-          "BEGIN PERFORM public.t_role(); RETURN 1; END"
+          "LANGUAGE sql STABLE SET search_path = ''",
+          "SELECT 1 WHERE public.t_role() IS NULL"
         ),
         [TABLE_SQL]:
           "CREATE FUNCTION public.t_role() RETURNS void LANGUAGE plpgsql AS $$ BEGIN SET ROLE postgres; END $$;",
       })
       expect(
-        found.map((d) => [d.code, d.file, d.params?.reason ?? d.params?.form])
+        found.map((d) => [
+          d.code,
+          d.file,
+          d.params?.construct ?? d.params?.form,
+          d.params?.chain,
+        ])
       ).toEqual([
-        [WARNING, TABLE_SQL, "setStatement"],
-        ["sql.command-context-reach", SALE_SQL, "sessionWrite"],
+        [WARNING, TABLE_SQL, "setStatement", undefined],
+        ...["language", "searchPath"].map((construct) => [
+          "sql.head-not-allowed",
+          SALE_SQL,
+          construct,
+          "public.sale_total → public.t_role",
+        ]),
       ])
     })
 
@@ -740,7 +774,7 @@ describe("kind module: closed forms only", () => {
         "project.meta.json": project(),
         ...salesDocument({}, { posting: undefined }),
         [SALE_SQL]:
-          shell("LANGUAGE sql STABLE") +
+          shell("LANGUAGE sql STABLE SET search_path = ''") +
           "\n-- @movements Stock\nSELECT now(), 'Expense', null::uuid, 1 ORDER BY 1\n-- @end\n",
       })
     )
