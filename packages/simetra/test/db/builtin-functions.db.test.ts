@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import {
   BUILTIN_EXCLUSIONS,
+  HEAD_EXCLUDED_BUILTINS,
   REGCLASS_PARAMETER_QUERY,
   excludedBuiltin,
 } from "../../src/compiler/sql/builtin-exclusions"
@@ -46,7 +47,10 @@ describe("builtin function allowlist", () => {
     // Точне ім'я, якого немає в каталозі, — опечатка: виключення нічого б не
     // виключило, а справжня функція лишилася б у переліку.
     expect(
-      BUILTIN_EXCLUSIONS.flatMap((e) => e.names).filter((n) => !live.has(n))
+      [
+        ...BUILTIN_EXCLUSIONS.flatMap((e) => e.names),
+        ...HEAD_EXCLUDED_BUILTINS,
+      ].filter((n) => !live.has(n))
     ).toEqual([])
   })
 })

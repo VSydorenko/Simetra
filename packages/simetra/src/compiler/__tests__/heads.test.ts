@@ -188,6 +188,24 @@ describe("checkHeads: Rule 3 — query functions", () => {
       sql: selectWhere(`${call} IS NOT NULL`),
       expected: [found("call", call.slice(0, call.indexOf("(")), SET_FUNCTION)],
     })),
+    // Голова не називає відношення текстом (Р2c1-56): рядок, приведений до
+    // `regclass`, — відношення, а вбудовані з іменем відношення в тексті —
+    // поза переліком голови.
+    {
+      name: "relation named by a regclass cast",
+      sql: selectWhere(
+        "pg_catalog.obj_description('auth.users'::regclass, 'pg_class') IS NULL"
+      ),
+      expected: [found("relation", "auth.users", SET_FUNCTION)],
+    },
+    ...[
+      ["has_table_privilege('auth.users', 'select')", "has_table_privilege"],
+      ["pg_catalog.to_regclass('x.y') IS NULL", "pg_catalog.to_regclass"],
+    ].map(([condition, call]) => ({
+      name: `text-named relation ${call}`,
+      sql: selectWhere(condition!),
+      expected: [found("call", call!, SET_FUNCTION)],
+    })),
     {
       // Аргумент `regclass` називає відношення текстом, якого збирач
       // відношень не бачить (Р2c1-56).

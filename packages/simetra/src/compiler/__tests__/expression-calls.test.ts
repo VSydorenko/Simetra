@@ -75,6 +75,18 @@ describe("expression units call only allowlisted functions (Р2c1-55)", () => {
       sql: MODEL_FUNCTION + policy("public.can_read(id)"),
       expected: [],
     },
+    // Вбудовані з іменем відношення в тексті поза головою дозволені:
+    // видно з них лише метадані (Р2c1-56, відомі обмеження плану).
+    {
+      name: "policy checking a table privilege",
+      sql: policy("has_table_privilege('public.task_notes', 'select')"),
+      expected: [],
+    },
+    {
+      name: "view resolving a relation name",
+      sql: view("pg_catalog.to_regclass('x.y')"),
+      expected: [],
+    },
     {
       name: "view calling builtins",
       sql: view("pg_catalog.lower('X') || gen_random_uuid()::text"),

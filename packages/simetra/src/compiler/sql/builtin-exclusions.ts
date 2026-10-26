@@ -175,6 +175,28 @@ export const BUILTIN_EXCLUSIONS: readonly BuiltinExclusion[] = [
   },
 ]
 
+// Голова читає лише відношення, які називає дерево (Р2c1-18), а ці вбудовані
+// називають відношення текстом (`has_table_privilege('auth.users', …)`,
+// `to_regclass('x.y')`): збирач відношень такого імені не бачить. Поза
+// головою вони лишаються в переліку — подання й політики прийнятих баз їх
+// уживають, а видно з них лише метадані (відомі обмеження плану). Ручний
+// перелік з рев'ю: аргумент типу `text` каталог за роллю не розрізняє.
+/**
+ * Builtins that name a relation by a text argument: refused in heads only.
+ */
+export const HEAD_EXCLUDED_BUILTINS: readonly string[] = [
+  "has_any_column_privilege",
+  "has_column_privilege",
+  "has_sequence_privilege",
+  "has_table_privilege",
+  "pg_get_object_address",
+  "pg_get_serial_sequence",
+  "pg_get_viewdef",
+  "regclass",
+  "regclassin",
+  "to_regclass",
+]
+
 /**
  * Імена класу `regclassParameter`: генератор — свіжі з каталогу, решта —
  * `REGCLASS_BUILTINS` згенерованого переліку. Модуль без імпортів, тож

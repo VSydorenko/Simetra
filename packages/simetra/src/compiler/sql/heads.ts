@@ -13,6 +13,7 @@ import { movementWrapperName } from "../movement-functions"
 import { PLATFORM_READ_FUNCTIONS } from "../platform/names"
 import type { ParsedObject } from "../stages/files"
 import type { ResolvedReference } from "../stages/identity"
+import { HEAD_EXCLUDED_BUILTINS } from "./builtin-exclusions"
 import { BUILTIN_FUNCTIONS } from "./builtin-functions"
 import {
   closedModuleOwners,
@@ -145,7 +146,11 @@ export function headScope(
         .map((f) => `${f.schema}.${f.name}`),
       ...PROVIDER_FUNCTIONS[project.database.provider],
     ]),
-    builtins: new Set(BUILTIN_FUNCTIONS),
+    // Вбудована, що називає відношення текстом, голові не дозволена
+    // (Р2c1-56): збирач відношень бачить лише дерево.
+    builtins: new Set(
+      BUILTIN_FUNCTIONS.filter((name) => !HEAD_EXCLUDED_BUILTINS.includes(name))
+    ),
     wrappers,
     extensions: extensionSchemas(units, project.database.provider),
     parse,
