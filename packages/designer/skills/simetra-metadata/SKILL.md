@@ -141,9 +141,10 @@ says why a mapping is wrong, so read its diagnostics):
   (`plan.service-role-access-lost`); keep the table a `CustomTable` until
   platform commands exist. An explicit adopted grant to the service role takes
   the class `removed`.
-- Functions in the closed shell move to the kind's module, and functions that
-  read the promoted tables are rewritten in place. Other verbatim SQL that
-  reads them is refused: rewrite or drop it first.
+- Closed-shell query functions move to the kind's module; functions reading
+  the promoted tables are rewritten in place. Other SQL that reads or writes
+  them is refused (`promote.debt-writes-table`): rewrite or drop it first.
+  Incoming cascades become `restrict`: `references/sql-trust-boundary.md`.
 - `sharedFunctions` lists identities of those module functions that move to
   `sql/<schema>/<function>.sql` instead; `consumerLabels` the values by which
   the consumer's data encodes the object (the record's `labelTranslation`
@@ -268,9 +269,7 @@ is `BEFORE`, `on*` is `AFTER`, `*Write` is `INSERT OR UPDATE`, `*Delete` is
 a listed column (`IS DISTINCT FROM`), `<physicalName>_insert` on every `INSERT`;
 on a table with carrier copies (below) a subscription without `whenChanged`
 gets the same pair, its `UPDATE` trigger firing on a content change only.
-No event is insert-only; `TG_OP` tells insert from update. A handler on a
-provider table (`auth.users`) that writes app tables must be `SECURITY DEFINER`
-with `SET search_path = ''`: the provider role has no rights on your schemas.
+No event is insert-only; `TG_OP` tells insert from update.
 
 Catalogs and Documents get the row mechanics trigger `<table>_simetra_touch`
 (the single platform function `simetra.touch()`): an insert sets `version` to 1,
@@ -309,22 +308,24 @@ The PG schema `simetra` (identities, the current user, provisioning) belongs
 to the platform and is reserved (`schema.reserved`); in SQL the current user is
 `(select simetra.current_user_id())`. Both rules in full: the same reference.
 
-Only commands write kind tables, and application SQL never changes `simetra.*` settings (`sql.command-context-write`): `references/people-and-rights.md`.
-
 ## The SQL module: closed forms only
 
 The `.sql` module of an object of a 1C kind accepts only:
 
-- Functions in the closed shell: `LANGUAGE sql` or `plpgsql`, an explicit
-  volatility, and `SET search_path = ''` for every `SECURITY DEFINER`. No
-  overloads.
+- Functions in the closed shell, with `SET search_path = ''`, an explicit
+  volatility and no overloads: a subscription handler in `plpgsql` that only
+  checks, any other function a query function (`LANGUAGE sql`, one `SELECT`).
 - Row rules: `ALTER TABLE <own table> ADD CONSTRAINT <name> CHECK (<rule>)`
   within a small grammar. The constraint needs a name and must target the
   object's own table or one of its own tabular-section tables.
 - Movement query blocks in a document module.
 
-A verbatim policy or trigger on a table of a kind, or a function body statement on it other than DML and `LOCK`, is an error, never debt
-(`sql.kind-table-verbatim`): use a right and an `EventSubscription` (`references/people-and-rights.md`).
+A verbatim policy or trigger on a table of a kind, or SQL that writes one, is
+an error, never debt (`sql.kind-table-verbatim`): use a right, an
+`EventSubscription` or a command. Function bodies, session settings
+(`sql.command-context-write`), code inside a command (`sql.head-not-allowed`),
+domains, foreign keys, scope roots, extensions and promotion gates:
+`references/sql-trust-boundary.md`.
 
 Any other statement is rejected (`sql.statement-not-allowed`, `sql.closed-shell`,
 `sql.row-rule-grammar`, …) with a hint that names the property that replaces it.
@@ -353,10 +354,9 @@ tolerates. It only shrinks:
   function; moving it to another file does not make it acceptable.
 - A project with an existing `sql/` folder and no list is seeded by running
   `introspect` again (see `simetra-adoption`).
-- Debt SQL must not write `simetra.*` (`sql.command-context-write`), and
-  `sql.definer-reads-rls` marks reads past RLS; the trust boundary of closed
-  code (`sql.command-context-reach`) and the conversion steps are in
-  `references/people-and-rights.md`.
+- Debt SQL must not write `simetra.*` (`sql.command-context-write`), and its
+  function bodies follow `sql.function-body-statement` (`references/sql-trust-boundary.md`);
+  `sql.definer-reads-rls` marks reads past RLS (`references/people-and-rights.md`).
 
 ## The database: introspect and diff
 

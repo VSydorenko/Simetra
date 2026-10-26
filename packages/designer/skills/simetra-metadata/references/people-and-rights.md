@@ -10,8 +10,6 @@ Contents:
 - Adopted membership and assignment sources
 - Who reads what
 - Who writes what
-- Policies and triggers on a table of a kind
-- What closed code may reach
 - Generated privileges
 - Reading past row-level security
 - Carrier copies
@@ -318,96 +316,9 @@ command role and nobody else.
 - A `beforeWrite` handler that, under a transition, changes another column makes
   the command fail. Put a computation done at posting into the command hook or
   into the effects of a custom action.
-- Any application SQL unit (subscription handlers wherever they live,
-  object-module functions, and every statement of shared `sql/` files:
-  functions, `ALTER FUNCTION`, views, domains, aggregates, policies) must not
-  change the platform's session settings — `simetra.*`, the request claims
-  (`request.jwt.*`) and the role (`SET ROLE`, `SET SESSION AUTHORIZATION` and
-  their `RESET`) — in any form (`set_config` however it is qualified, also as
-  an aggregate function, `SET`/`RESET`, a function option, a write to
-  `pg_settings` or a view over it, a literal `EXECUTE`): compiler error
-  `sql.command-context-write` (a debt unit is split by setting, below). The
-  command context, the user and the role belong to the platform.
-- In a debt unit — a statement of the `.sql` file of a `CustomTable` or a
-  `PgEnum`, or of a shared `sql/` file, that is listed in `sql-debt.json`
-  (a function in the closed shell, a subscription handler and a scope set
-  function are never debt) — the same rule is split by setting. A write to
-  `simetra.*` is an error (`sql.command-context-write`, marked `unit: debt`):
-  those settings carry the command context and the rights maintenance mode,
-  and `RESET ALL` and a write to `pg_settings` reset them too. A write to the
-  role or the request claims (`request.jwt.*`) is a warning
-  (`sql.debt-session-write`): it may stay while the unit is debt, but closed
-  code must not reach the unit (next section). Converting the unit into a
-  closed-shell function turns that warning into the error above, so remove
-  the named statement when you convert the unit; write a `set_config` name as
-  a literal, because a name built at run time counts as a write.
-
-## Policies and triggers on a table of a kind
-
-Only the platform attaches policies and triggers to a table of a kind (and to
-its tabular sections), in any `.sql` file, shared `sql/` folder included.
-A verbatim `CREATE POLICY` or `CREATE TRIGGER` there is the error
-`sql.kind-table-verbatim`, and the unit can never be listed in
-`sql-debt.json`. A hand-written policy would open rows past the rights, a
-hand-written trigger would act inside every command. Use what replaces them:
-
-- a policy → a right: a role's `grant` (with an extent), `ownership`,
-  `access` or `publicRead` on the object;
-- a trigger → an `EventSubscription` with a handler in the closed shell.
-
-A function or procedure body does not change a table of a kind either, in
-any file, closed shell and kind module included: it may only read and write
-the rows (`SELECT`, `INSERT`, `UPDATE`, `DELETE`, `MERGE`) and `LOCK` the
-table. Any other statement on the table — a policy, trigger, grant, index,
-`TRUNCATE`, `ALTER TABLE`, `COMMENT`, `DROP`, a child table, and a statement
-on its whole schema (`DROP SCHEMA`, `GRANT … ON ALL TABLES IN SCHEMA`) — is
-the same error with the form `functionBody`, also inside the text of a
-literal `EXECUTE`, a `DO` block or a function the body creates. Such a
-function is never debt. Reading the table in a nested query of another
-statement (`CREATE TEMP TABLE … AS SELECT`) is fine. Remove the statement and
-declare what it did: a right for row access, an `EventSubscription` for a
-reaction. An unqualified table name counts in every schema, because the body
-may run with any `search_path`: qualify the names of your own tables.
-
-The same statement on a `CustomTable` is ordinary SQL debt until the table is
-promoted into a kind.
-
-## What closed code may reach
-
-Kind module functions, subscription handlers and scope set functions run in
-the middle of a command statement. Everything they reach must therefore be
-SQL the compiler can check, or the policies of the following rows would run
-under a changed user or role. The compiler follows the call chain, and also
-the views they read, the policies of the tables they touch and the defaults
-and checks of the tables they write, directly or through a view.
-`sql.command-context-reach` names the
-reached function, the reason and the chain. Closed code must not reach a
-function that:
-
-- executes a string built at run time (`EXECUTE` of a non-literal);
-- is written in a language other than `sql` or `plpgsql`;
-- the compiler does not know or whose body it cannot read;
-- writes a session setting of the platform (see above).
-
-Make the reached function `LANGUAGE sql` or `plpgsql` without `EXECUTE` of a
-built string and without writes to session settings, or stop calling it.
-Functions of the platform schema, generated functions, builtins and functions
-of provider schemas are trusted, except those that execute SQL from a string
-(`query_to_xml`, `dblink` and the like).
-
-The shell of every function the check relies on (volatility, `SECURITY`,
-`search_path`, `SET` options) is read from its `CREATE FUNCTION`. A separate
-`ALTER FUNCTION` that changes it is refused
-(`sql.function-settings-shell`, `RESET ALL` included): move the option into
-`CREATE FUNCTION` and remove the `ALTER FUNCTION` statement.
-
-Known limit: a debt trigger of an adopted table with `EXECUTE` of a built
-string or a body in another language runs in the middle of a command when
-the command reaches the table by a foreign-key cascade or by a handler's
-write, and the compiler cannot close that statically. Treat such a trigger
-as a candidate for conversion (a property, an `EventSubscription` or a
-closed-shell function) before the first command that writes the related
-table.
+- Application SQL never writes a table of a kind and never changes the
+  platform's session settings: `SKILL.md`, section "The SQL module: closed
+  forms only", names the reference with those rules.
 
 ## Generated privileges
 
@@ -430,9 +341,7 @@ a role of the API (or `PUBLIC`) can run or read it:
 - a view without `security_invoker` that someone may `SELECT`;
 - a materialized view, which stores the rows its owner read at `REFRESH`.
 
-When the unit also reaches SQL the compiler cannot check, the diagnostic
-lists the tables it found and adds that the unit reaches unchecked SQL; with
-no tables found, it says only the latter. The compiler does not see the owner of a function,
+The diagnostic lists the tables it found. The compiler does not see the owner of a function,
 so one whose owner is itself subject to row-level security is flagged too.
 Convert in this order of preference:
 
