@@ -10,6 +10,7 @@ import {
 import { diagnostic, type Diagnostic } from "../diagnostics"
 import type { ParsedObject } from "../stages/files"
 import { commandContextWrite, type CommandContextHit } from "./command-context"
+import { isExpressionUnit } from "./expression-calls"
 import type { SqlParser } from "./parse"
 import type { PlpgsqlParser } from "./plpgsql"
 import {
@@ -374,17 +375,28 @@ export function extensionSchemas(
 /**
  * Виклик, що виконує текст SQL, у функції чи процедурі судить дозвільний
  * перелік тіла (`sql.function-body-statement`, Р2c1-50) — помилкою скрізь,
- * борг включно; тут він дав би другу діагностику того самого виклику.
+ * борг включно; тут він дав би другу діагностику того самого виклику. Так
+ * само кожен виклик подання чи політики (`set_config`, виконання тексту SQL)
+ * судить дозвільний перелік виразів (`sql.expression-call-not-allowed`,
+ * Р2c1-55): тут лишається лише запис у `pg_settings`.
  */
-function bodyJudged(
+function judgedElsewhere(
   unit: Pick<VerbatimUnit, "class">,
   hit: CommandContextHit
 ): boolean {
+  if (isExpressionUnit(unit)) return CALL_FORMS.has(hit.form)
   return (
     hit.form === "dynamicText" &&
     (unit.class === "function" || unit.class === "procedure")
   )
 }
+
+/** Форми запису сесії, які дає лише виклик функції в виразі. */
+const CALL_FORMS: ReadonlySet<CommandContextHit["form"]> = new Set([
+  "setConfig",
+  "nonLiteral",
+  "dynamicText",
+])
 
 /**
  * Модуль об'єкта виду з фактом `sqlModule: "closed"` приймає лише функції в
@@ -400,7 +412,7 @@ function bodyJudged(
  * префіксом, решта її записів — попередження `sql.debt-session-write`
  * (Р2c1-6, Р2c1-14). Функції провайдера `provider`, що виконують текст SQL,
  * судяться формою `dynamicText` (Р2c1-32); без проєкту провайдера немає. У
- * функції чи процедурі цю форму судить перелік тіла (`bodyJudged`).
+ * функції чи процедурі цю форму судить перелік тіла (`judgedElsewhere`).
  */
 export function checkSqlModules(
   objects: readonly ParsedObject[],
@@ -448,7 +460,7 @@ export function checkSqlModules(
       parse,
       plpgsql,
       textFunctions
-    ).filter((hit) => !bodyJudged(unit, hit))
+    ).filter((hit) => !judgedElsewhere(unit, hit))
     if (writes.length === 0) continue
     const name = unit.schema === "" ? unit.name : `${unit.schema}.${unit.name}`
     if (!isDebt(unit)) {
@@ -551,7 +563,7 @@ export function checkSqlModules(
             parse,
             plpgsql,
             textFunctions
-          ).find((hit) => !bodyJudged(unit, hit))
+          ).find((hit) => !judgedElsewhere(unit, hit))
         : undefined
     if (write !== undefined) {
       found.push(

@@ -667,9 +667,13 @@ describe("stage 5: bare current user in a policy", () => {
   })
 
   it("a quoted name in another case is another function", async () => {
+    // Чужа функція — не поточний користувач: її відмовляє дозвільний
+    // перелік виразів (Р2c1-55), а не правило голого виклику.
     const result = await policy(
       'CREATE POLICY p ON public.t USING (owner_id = "Simetra".current_user_id());'
     )
-    expect(result.diagnostics).toEqual([])
+    expect(codes(result)).toEqual([
+      ["sql.expression-call-not-allowed", TABLE_SQL, ""],
+    ])
   })
 })

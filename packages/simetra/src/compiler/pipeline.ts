@@ -16,6 +16,7 @@ import { modelHash } from "./canonical"
 import { accessContracts, buildAccessUnits } from "./access-units"
 import {
   buildContracts,
+  derivedFunctions,
   eventSubscriptionContracts,
   membershipContracts,
   usersContractOf,
@@ -47,7 +48,10 @@ import {
 } from "./rights/system-catalogs"
 import { checkLinks } from "./stages/links"
 import { buildModel, enumTypeOf, rowTypesOf } from "./stages/model"
-import { buildMovementFunctions } from "./movement-functions"
+import {
+  buildMovementFunctions,
+  movementWrapperName,
+} from "./movement-functions"
 import { buildMechanicsUnits } from "./mechanics-units"
 import { buildCarrierUnits } from "./rights/carrier-units"
 import { buildCommandUnits } from "./rights/command-units"
@@ -67,6 +71,11 @@ import {
   modelViews,
 } from "./sql/function-body"
 import { checkFunctionSettingsShell } from "./sql/function-settings-shell"
+import {
+  checkExpressionCalls,
+  expressionScope,
+  type ExpressionScope,
+} from "./sql/expression-calls"
 import { checkKindTableVerbatim, kindTables } from "./sql/kind-table-verbatim"
 import { loadSqlParser, type SqlParser } from "./sql/parse"
 import { loadPlpgsqlParser } from "./sql/plpgsql"
@@ -168,6 +177,36 @@ export async function runStages(
           parse,
           plpgsql
         )
+  // Згенеровані функції схем застосунку відомі лише зі знімка. Подання й
+  // політики їх не судять дозвільним переліком виразів (Р2c1-55): ті, що
+  // пишуть, судить `sql.platform-function-call` стадії 5. Вирази прийнятих
+  // таблиць цієї стадії не мають, тож для них поза переліком лише ті, що
+  // читають.
+  const derived =
+    stage3 === undefined || stage1.project === undefined
+      ? undefined
+      : derivedFunctions(
+          stage1.objects,
+          stage2.references,
+          stage3.physical,
+          movementWrapperName,
+          stage1.project.scopeKinds
+        )
+  const expressions = (reading: boolean): ExpressionScope | undefined =>
+    derived === undefined || stage1.project === undefined
+      ? undefined
+      : expressionScope(
+          sql.units,
+          stage1.project.database.provider,
+          new Set(
+            derived
+              .filter(
+                (f) => !reading || f.reads === true || f.membership === true
+              )
+              .map((f) => `${f.schema}.${f.name}`)
+          )
+        )
+  const unitExpressions = expressions(false)
   // Модуль виду 1С звужено до закритих форм: вид власника одиниці — з її
   // `ownerFile`, тож перевірка не чекає моделі стадії 3.
   const early = [
@@ -224,6 +263,10 @@ export async function runStages(
       plpgsql
     ),
     ...checkPlatformCalls(sql.units, parse, plpgsql),
+    // Виклики подань і політик — дозвільний перелік виразів (Р2c1-55).
+    ...(unitExpressions === undefined
+      ? []
+      : checkExpressionCalls(sql.units, unitExpressions, parse)),
     ...(embedded?.diagnostics ?? []),
   ]
   if (
@@ -247,7 +290,12 @@ export async function runStages(
       stage1.project,
       sql.units
     ),
-    ...checkDeclaredExpressions(stage1.objects, stage1.project, parse, plpgsql),
+    ...checkDeclaredExpressions(
+      stage1.objects,
+      stage1.project,
+      expressions(true)!,
+      parse
+    ),
   ]
   const staged = sortDiagnostics([
     ...early,

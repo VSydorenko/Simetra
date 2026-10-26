@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { compile } from "simetra/compiler"
 import {
+  acceptDebt,
   attribute,
   catalog,
   customTable,
@@ -708,14 +709,12 @@ describe("stage 4: integrity", () => {
       )
     })
 
-    describe("metadata expressions of an adopted table (Р2c1-41)", () => {
+    describe("metadata expressions of an adopted table (Р2c1-41, Р2c1-55)", () => {
       // Postgres обчислює ці вирази на кожному записі в прийняту таблицю,
-      // зокрема записі ролі API, тож вони судяться як вільний SQL боргу.
-      const PLATFORM_WRITE =
-        "pg_catalog.set_config('simetra.actor', 'x', false) IS NOT NULL"
-      const CLAIMS_WRITE =
-        "set_config('request.jwt.claims', '{}', true) IS NOT NULL"
-      const PLATFORM_CALL = "simetra.provision_user(id, id) IS NOT NULL"
+      // зокрема записі ролі API, тож їхні виклики — дозвільний перелік
+      // виразів: запис сесії й виконання тексту SQL у нього не входять.
+      const NOT_ALLOWED = "sql.expression-call-not-allowed"
+      const SEQUENCE = "CREATE SEQUENCE public.log_seq;\n"
       const amount = {
         id: uuid(746),
         name: "amount",
@@ -752,35 +751,116 @@ describe("stage 4: integrity", () => {
         "index key": "/indexes/0/keys/0/expression",
         "index where": "/indexes/0/where",
       }
+      const refused = (field: string, call: string) => ({
+        code: NOT_ALLOWED,
+        pointer: POINTERS[field],
+        call,
+      })
       const cases = Object.keys(at).flatMap((field) => [
         {
           field,
-          expression: PLATFORM_WRITE,
-          expected: [
-            ["sql.command-context-write", "error", LOG, POINTERS[field]],
-          ],
+          expression:
+            "pg_catalog.set_config('simetra.actor', 'x', false) IS NOT NULL",
+          expected: [refused(field, "pg_catalog.set_config")],
         },
         {
           field,
-          expression: CLAIMS_WRITE,
-          expected: [
-            ["sql.debt-session-write", "warning", LOG, POINTERS[field]],
-          ],
+          expression:
+            "pg_catalog.set_config('request.jwt.claims', '{}', false) IS NOT NULL",
+          expected: [refused(field, "pg_catalog.set_config")],
         },
         {
           field,
-          expression: PLATFORM_CALL,
+          expression: "query_to_xml('select 1', true, true, '') IS NOT NULL",
+          expected: [refused(field, "query_to_xml")],
+        },
+        {
+          field,
+          expression: "extensions.whatever() IS NOT NULL",
+          expected: [refused(field, "extensions.whatever")],
+        },
+        {
+          field,
+          expression: "simetra.provision_user(id, id) IS NOT NULL",
           expected: [
-            ["sql.platform-function-call", "error", LOG, POINTERS[field]],
+            {
+              code: "sql.platform-function-call",
+              pointer: POINTERS[field],
+              call: undefined,
+            },
           ],
         },
+        // `nextval` поза `DEFAULT` — поза переліком і над послідовністю моделі.
+        ...(field === "default"
+          ? []
+          : [
+              {
+                field,
+                expression: "nextval('public.log_seq') > 0",
+                expected: [refused(field, "nextval")],
+              },
+            ]),
         { field, expression: "now() IS NOT NULL", expected: [] },
+        { field, expression: "gen_random_uuid() IS NOT NULL", expected: [] },
+        {
+          field,
+          expression: "extensions.uuid_generate_v4() IS NOT NULL",
+          expected: [],
+        },
         { field, expression: "amount >= 0", expected: [] },
       ])
-      it.each(cases)(
+      // Таблиця колонки `serial`: `DEFAULT nextval(...)` послідовності моделі.
+      const serial = [
+        { expression: "nextval('public.log_seq'::regclass) > 0", expected: [] },
+        {
+          expression: "pg_catalog.nextval('public.log_seq') > 0",
+          expected: [],
+        },
+        {
+          expression: "nextval('public.' || 'log_seq') > 0",
+          expected: [refused("default", "nextval")],
+        },
+        {
+          expression: "nextval('public.other_seq'::regclass) > 0",
+          expected: [refused("default", "nextval")],
+        },
+        {
+          expression: "nextval('log_seq'::regclass) > 0",
+          expected: [refused("default", "nextval")],
+        },
+        {
+          expression: "nextval('public.log_seq'::text) > 0",
+          expected: [refused("default", "nextval")],
+        },
+      ].map((c) => ({ field: "default", ...c }))
+      it.each([...cases, ...serial])(
         "$field: $expression",
         async ({ field, expression, expected }) => {
-          expect(codes(await log(at[field]!(expression)))).toEqual(expected)
+          // Послідовність — прийнятий борг модуля таблиці.
+          const result = await compile(
+            await acceptDebt(
+              metaFiles({
+                "project.meta.json": project(),
+                [LOG]: customTable("Log", {
+                  columns,
+                  ...at[field]!(expression),
+                }),
+                "custom-tables/Log/Log.sql": SEQUENCE,
+              })
+            )
+          )
+          expect(
+            result.diagnostics.map((d) => ({
+              code: d.code,
+              pointer: d.pointer,
+              call: d.params?.call,
+            }))
+          ).toEqual(expected)
+          expect(
+            result.diagnostics.every(
+              (d) => d.file === LOG && d.severity === "error"
+            )
+          ).toBe(true)
         }
       )
     })

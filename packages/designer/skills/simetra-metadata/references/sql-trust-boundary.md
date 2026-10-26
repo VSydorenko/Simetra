@@ -68,6 +68,14 @@ default) calls only the platform and generated functions that read, such as
 `simetra.current_user_id()`; calling another one is
 `sql.platform-function-call`. Run the write through a command instead.
 
+Expressions — a view, the `USING` and `WITH CHECK` of a policy, and the
+defaults, generated columns, checks and index expressions of an adopted
+table — call only allowlisted builtins, functions of the model by
+`schema.name` and the listed provider functions, in any file and in debt too
+(`sql.expression-call-not-allowed`): `set_config` and functions that execute
+SQL text are refused there. A column default may also call
+`nextval('<schema>.<sequence>')` of a sequence declared in the model.
+
 The shell of every judged function (volatility, `SECURITY`, `search_path`,
 `SET` options) is read from its `CREATE FUNCTION`. A separate
 `ALTER FUNCTION` that changes it is refused
@@ -136,8 +144,6 @@ The diagnostic names the head, the chain from the head to the construct, and
   the error above, so remove the named statement when you convert the unit;
   write a `set_config` name as a literal, because a name built at run time
   counts as a write.
-- The defaults, generated columns, checks and index expressions of an adopted
-  table follow the same debt rules.
 
 ## Other paths into a command
 

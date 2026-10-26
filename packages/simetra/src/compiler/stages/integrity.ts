@@ -18,7 +18,6 @@ import {
   type Expr,
   NO_SCOPE,
   PLATFORM_SCHEMA,
-  PROVIDER_SQL_TEXT_FUNCTIONS,
   type MetadataRef,
   type MovementDecl,
   type Project,
@@ -56,13 +55,14 @@ import { standardOverrideNames, type PresentationFields } from "../presentation"
 import { checkRights } from "../rights/checks"
 import { checkRoles } from "../rights/role-checks"
 import { checkSystemCatalogs } from "../rights/system-catalogs"
-import type { Node } from "libpg-query"
 import { PLATFORM_READ_FUNCTIONS } from "../platform/names"
-import { platformWrite } from "../sql/closed-forms"
-import { commandContextWrite } from "../sql/command-context"
+import {
+  expressionCallProblem,
+  modelSequenceDefault,
+  type ExpressionScope,
+} from "../sql/expression-calls"
 import { textCalls } from "../sql/dependencies"
 import type { SqlParser } from "../sql/parse"
-import type { PlpgsqlParser } from "../sql/plpgsql"
 import { pgNamespaceKeys, type VerbatimUnit } from "../sql/units"
 import { PROJECT_FILE, objectKey, type ParsedObject } from "./files"
 import {
@@ -1161,23 +1161,22 @@ const CASCADING_ACTIONS: ReadonlySet<string> = new Set([
 ])
 
 /**
- * Вирази метаданих прийнятих таблиць (Р2c1-41): значення за замовчуванням,
- * генеровані колонки, CHECK, ключі-вирази й предикати індексів — довільний
- * SQL, який Postgres обчислює на кожному записі в таблицю, зокрема записі
- * ролі API. Тож вони судяться як вільний SQL боргу: запис налаштувань
- * платформи — помилка, решти захищених і виконання тексту SQL —
- * попередження; виклик функції платформи поза переліком, що читає, —
- * помилка. Вираз, що не розбирається, судить Postgres під час застосування.
+ * Вирази метаданих прийнятих таблиць (Р2c1-41, Р2c1-55): значення за
+ * замовчуванням, генеровані колонки, CHECK, ключі-вирази й предикати
+ * індексів — довільний SQL, який Postgres обчислює на кожному записі в
+ * таблицю, зокрема записі ролі API. Тож їхні виклики — дозвільний перелік
+ * одиниць-виразів (`sql.expression-call-not-allowed`): `set_config` і
+ * виконання тексту SQL у нього не входять. Виклик функції платформи поза
+ * переліком, що читає, — `sql.platform-function-call`. Єдиний виняток —
+ * `nextval` послідовності моделі у `DEFAULT` (колонка `serial`). Вираз, що
+ * не розбирається, судить Postgres під час застосування.
  */
 export function checkDeclaredExpressions(
   objects: readonly ParsedObject[],
   project: Project,
-  parse: SqlParser,
-  plpgsql: PlpgsqlParser
+  scope: ExpressionScope,
+  parse: SqlParser
 ): Diagnostic[] {
-  const textFunctions: ReadonlySet<string> = new Set(
-    PROVIDER_SQL_TEXT_FUNCTIONS[project.database.provider]
-  )
   const allowed = new Set(
     PLATFORM_READ_FUNCTIONS.map((f) => `${f.schema}.${f.name}`)
   )
@@ -1186,12 +1185,13 @@ export function checkDeclaredExpressions(
     if (!isDeclaredTable(object)) continue
     const table = object.data as CustomTable
     const name = `${table.schema ?? project.defaultSchema}.${table.physicalName}`
-    const expressions: { pointer: string; text: string }[] = []
+    const expressions: { pointer: string; text: string; column?: true }[] = []
     table.columns.forEach((column, i) => {
       if (column.default !== undefined) {
         expressions.push({
           pointer: `/columns/${i}/default`,
           text: column.default,
+          column: true,
         })
       }
       if (column.generated !== undefined) {
@@ -1220,41 +1220,46 @@ export function checkDeclaredExpressions(
         expressions.push({ pointer: `/indexes/${i}/where`, text: index.where })
       }
     })
-    for (const { pointer, text } of expressions) {
+    for (const { pointer, text, column } of expressions) {
       const sql = `SELECT (${text})`
       const parsed = parse(sql)
       if (!parsed.ok) continue
-      const writes = parsed.statements.flatMap((s) =>
-        commandContextWrite(s.stmt as Node, sql, parse, plpgsql, textFunctions)
+      const calls = textCalls(sql, parse)
+      const sequence =
+        column === true &&
+        modelSequenceDefault(
+          parsed.statements.map((s) => s.stmt),
+          scope,
+          parse
+        )
+      const problems = new Set(
+        calls.flatMap((call) => {
+          const problem = expressionCallProblem(call, scope)
+          return problem === undefined ||
+            (sequence &&
+              call.name === "nextval" &&
+              (call.schema === undefined || call.schema === "pg_catalog"))
+            ? []
+            : [problem]
+        })
       )
-      const platform = writes.find(platformWrite)
-      const hit = platform ?? writes[0]
-      if (hit !== undefined) {
+      for (const call of problems) {
         found.push(
-          diagnostic(
-            platform === undefined
-              ? "sql.debt-session-write"
-              : "sql.command-context-write",
-            object.file,
-            pointer,
-            {
-              name,
-              form: hit.form,
-              ...(hit.setting === undefined ? {} : { setting: hit.setting }),
-              ...(platform === undefined ? {} : { unit: "debt" }),
-            }
-          )
+          diagnostic("sql.expression-call-not-allowed", object.file, pointer, {
+            unit: name,
+            call,
+          })
         )
       }
-      const calls = new Set(
-        textCalls(sql, parse).flatMap((call) =>
+      const platform = new Set(
+        calls.flatMap((call) =>
           call.schema === PLATFORM_SCHEMA &&
           !allowed.has(`${call.schema}.${call.name}`)
             ? [`${call.schema}.${call.name}`]
             : []
         )
       )
-      for (const fn of calls) {
+      for (const fn of platform) {
         found.push(
           diagnostic("sql.platform-function-call", object.file, pointer, {
             unit: name,

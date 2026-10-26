@@ -1010,6 +1010,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "SQL застосунку кличе лише функції платформи, що читають, як-от simetra.current_user_id(), і лише згенеровані функції, що читають: пошук предвизначених, віртуальні таблиці регістрів і функції членства. Решта функцій платформи пишуть її таблиці й ідентичності, а решта згенерованих (save, post і unpost документа, перерахунок підсумків, обгортки рухів, тригерні функції) пишуть таблиці видів: викликані з SQL застосунку, вони діяли б повз команди й права.",
     },
   },
+  "sql.expression-call-not-allowed": {
+    en: (p) =>
+      `${p.unit}${p.line === undefined ? "" : ` at line ${p.line}`} calls ${p.call}, a function an expression may not call`,
+    uk: (p) =>
+      `${p.unit}${p.line === undefined ? "" : ` у рядку ${p.line}`} викликає ${p.call} — функцію, якої вираз кликати не може`,
+    hint: {
+      en: "Postgres evaluates a view, a policy expression and the default, generated, CHECK and index expressions of an adopted table on every read or write, also by the API role, so they call only allowlisted builtins (unqualified or pg_catalog.<name>), functions of the model by schema and name, and listed provider functions such as auth.uid(). A column default may also call nextval('<schema>.<sequence>') of a sequence of the model. set_config, functions that execute SQL text and other functions are refused in every file, debt included. Move the logic into a function of the model and call it by its qualified name, or into a command of the object.",
+      uk: "Postgres обчислює подання, вираз політики й вирази за замовчуванням, генеровані, CHECK та індексів прийнятої таблиці на кожному читанні чи записі, зокрема ролі API, тож вони кличуть лише вбудовані з переліку (некваліфіковані чи pg_catalog.<ім'я>), функції моделі за схемою й іменем і поіменні функції провайдера, як-от auth.uid(). Значення колонки за замовчуванням може ще кликати nextval('<схема>.<послідовність>') послідовності моделі. set_config, функції, що виконують текст SQL, та інші функції відмовляються в будь-якому файлі, борг включно. Перенесіть логіку у функцію моделі й кличте її кваліфікованим іменем або в команду об'єкта.",
+    },
+  },
   "sql.namespace-conflict": {
     en: (p) =>
       `${p.identity} at line ${p.line} takes ${p.key} in ${catalogOf(p.space)}, already taken by ${p.other}`,

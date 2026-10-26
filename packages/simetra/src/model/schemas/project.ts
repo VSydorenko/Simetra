@@ -189,6 +189,20 @@ export const PROVIDER_FUNCTIONS: Readonly<
   supabase: ["auth.uid", "auth.jwt", "auth.role"],
 }
 
+// Вирази прийнятих таблиць, подання й політики кличуть функції провайдера
+// поіменно (Р2c1-55): цей перелік доповнює `PROVIDER_FUNCTIONS` лише для них,
+// тож голова нових довірених функцій не дістає. Поповнення — з рев'ю.
+/**
+ * Provider functions that expression units (metadata expressions of adopted
+ * tables, views, verbatim policy expressions) may call in addition to
+ * `PROVIDER_FUNCTIONS`, as `schema.name`.
+ */
+export const PROVIDER_EXPRESSION_FUNCTIONS: Readonly<
+  Record<DatabaseProvider, readonly string[]>
+> = {
+  supabase: ["extensions.gen_random_bytes", "extensions.uuid_generate_v4"],
+}
+
 // Що саме виконає така функція, статично не відомо, тож її виклик з
 // вільного SQL — зміна сесії невідомою формою (Р2c1-32). Поіменно, а не
 // схемою: перелік поповнюється з рев'ю.

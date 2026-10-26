@@ -212,14 +212,13 @@ describe("checkHeads: Rule 3 — query functions", () => {
       expected: [["sql.function-body-statement"]],
     },
     {
-      // Борг без тіла — подання — лишається ланкою: виклик судить голова.
+      // Виклик подання, борг включно, судить ранній дозвільний перелік
+      // виразів (Р2c1-55): до голови справа не доходить.
       name: "builtin-excluded query_to_xml in a debt view link",
       sql:
         setFunction("SELECT v.id FROM public.helper v") +
         "CREATE VIEW public.helper AS SELECT NULL::uuid AS id WHERE pg_catalog.query_to_xml('select 1', true, true, '') IS NOT NULL;\n",
-      expected: [
-        found("call", "pg_catalog.query_to_xml", SET_FUNCTION, "public.helper"),
-      ],
+      expected: [["sql.expression-call-not-allowed"]],
     },
     {
       name: "provider auth.uid",

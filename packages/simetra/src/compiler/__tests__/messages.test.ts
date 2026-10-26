@@ -620,6 +620,42 @@ describe("messages catalog", () => {
   )
 
   it.each([
+    {
+      file: "sql/public/x.sql",
+      pointer: "",
+      params: {
+        unit: "view:public.v",
+        call: "query_to_xml",
+        line: 2,
+      } as DiagnosticParams,
+      en: "view:public.v at line 2 calls query_to_xml, a function an expression may not call",
+    },
+    // Вираз метаданих прийнятої таблиці: місце — вказівник поля, без рядка.
+    {
+      file: "custom-tables/Log/Log.meta.json",
+      pointer: "/columns/0/default",
+      params: {
+        unit: "public.log",
+        call: "pg_catalog.set_config",
+      } as DiagnosticParams,
+      en: "public.log calls pg_catalog.set_config, a function an expression may not call",
+    },
+  ])(
+    "sql.expression-call-not-allowed: $en",
+    ({ file, pointer, params, en }) => {
+      const d = diagnostic(
+        "sql.expression-call-not-allowed",
+        file,
+        pointer,
+        params
+      )
+      expect(d.message).toBe(en)
+      expect(localize(d, "uk").message).toContain(String(params.call))
+      expect(localize(d, "uk").message).not.toBe(en)
+    }
+  )
+
+  it.each([
     { level: "org", scope: "org" },
     { level: "global", scope: "none" },
   ])(

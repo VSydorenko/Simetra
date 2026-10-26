@@ -25,6 +25,7 @@ export const COMPILER_RULES = [
   "sql.kind-table-verbatim",
   "sql.function-body-statement",
   "sql.platform-function-call",
+  "sql.expression-call-not-allowed",
   "sql.dependency-cycle",
   "sql.closed-shell",
   "sql.command-context-write",
