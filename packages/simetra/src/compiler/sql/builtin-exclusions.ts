@@ -114,12 +114,31 @@ export const BUILTIN_EXCLUSIONS: readonly BuiltinExclusion[] = [
     names: ["setval", "nextval", "currval", "lastval"],
     prefixes: ["pg_sleep"],
   },
-  // Сповіщення, знімок для інших сесій і стан чужих сесій чи індексів —
-  // ефекти й читання поза рядками даних, яких права не судять.
+  // Сповіщення, знімок для інших сесій, стан чужих сесій (замки й хто кого
+  // блокує), знімок і скидання статистики сесії, позиція й файли WAL, стан
+  // індексів — ефекти й читання поза рядками даних, яких права не судять.
   {
     reason: "touches state outside data rows or other sessions",
-    names: ["pg_notify", "pg_export_snapshot"],
-    prefixes: ["pg_stat_get_", "pg_backend_", "brin_", "gin_clean_"],
+    names: [
+      "pg_notify",
+      "pg_export_snapshot",
+      "pg_lock_status",
+      "pg_blocking_pids",
+      "pg_safe_snapshot_blocking_pids",
+      "pg_isolation_test_session_is_blocked",
+      "pg_stat_clear_snapshot",
+      "pg_stat_force_next_flush",
+      "pg_current_wal_lsn",
+      "pg_current_wal_insert_lsn",
+      "pg_current_wal_flush_lsn",
+    ],
+    prefixes: [
+      "pg_stat_get_",
+      "pg_backend_",
+      "brin_",
+      "gin_clean_",
+      "pg_walfile_name",
+    ],
   },
   // Ввід значення за текстовим іменем типу виконує CHECK домену, тобто
   // вираз, якого голова не називає.

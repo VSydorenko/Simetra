@@ -16,6 +16,8 @@ const TASK_NOTE_MODULE = "custom-tables/TaskNote/TaskNote.sql"
 /** Спільний файл і модуль боргу прийнятої таблиці: правило однакове скрізь. */
 const PLACES = [EXTRA, TASK_NOTE_MODULE]
 const MATVIEW = "CREATE MATERIALIZED VIEW public.mv AS SELECT 1 AS x;\n"
+/** Тимчасова таблиця тіла, що зникає з транзакцією. */
+const TEMP = "CREATE TEMP TABLE t (a int) ON COMMIT DROP"
 
 /** Домен політик з прийнятою `TaskNote` і SQL-файлами; `debt` — перелік боргу. */
 function files(sql: Record<string, string>, debt?: string[]) {
@@ -95,6 +97,16 @@ const FORBIDDEN: readonly [string, string][] = [
   ["REFRESH MATERIALIZED VIEW mv", "RefreshMatViewStmt"],
   // Підготовлений оператор сесії виконує текст, якого тіло не несе.
   ["PREPARE q AS SELECT 1", "PrepareStmt"],
+  // Тимчасова таблиця тіла — лише `pg_temp.<ім'я>`: шлях пошуку сесії може
+  // ставити `pg_temp` після схеми застосунку, і голе ім'я влучить у неї.
+  [`${TEMP}; INSERT INTO t VALUES (2)`, "InsertStmt"],
+  [`${TEMP}; UPDATE t SET a = 1`, "UpdateStmt"],
+  [`${TEMP}; INSERT INTO pg_temp.t SELECT a FROM t`, "InsertStmt"],
+  [
+    `${TEMP}; CREATE TEMP TABLE u ON COMMIT DROP AS SELECT a FROM t`,
+    "CreateTableAsStmt",
+  ],
+  [`${TEMP}; DROP TABLE t`, "DropStmt"],
 ]
 
 /** Оператори, які тіло може виконувати (Р2c1-37). */
@@ -117,7 +129,7 @@ const ALLOWED: readonly [string, string][] = [
   ["REFRESH of a model view", "REFRESH MATERIALIZED VIEW public.mv"],
   [
     "a temporary table of the body",
-    "CREATE TEMP TABLE t ON COMMIT DROP AS SELECT 1; INSERT INTO t VALUES (2); DROP TABLE t",
+    "CREATE TEMP TABLE t ON COMMIT DROP AS SELECT 1; INSERT INTO pg_temp.t VALUES (2); PERFORM 1 FROM pg_temp.t; DROP TABLE pg_temp.t",
   ],
   [
     "a temporary table with columns",
@@ -204,6 +216,12 @@ describe("sql.function-body-statement: the body is an allowlist (Р2c1-37)", () 
           name: "an unread record initializer",
           sql: "CREATE FUNCTION public.f() RETURNS void LANGUAGE plpgsql AS $$ DECLARE r record; a bool := r.record = 1; BEGIN NULL; END $$",
           statement: "unread",
+        },
+        {
+          // Вираз plpgsql читається як `SELECT`.
+          name: "an unqualified temporary table read by PERFORM",
+          sql: plpgsql(`${TEMP}; PERFORM 1 FROM t`),
+          statement: "SelectStmt",
         },
         {
           name: "a prepared statement in a literal EXECUTE",
@@ -322,6 +340,42 @@ describe("sql.platform-function-call: only the reading platform functions (Р2c1
         params: { unit, function: fn, line: 1 },
       },
     ])
+  })
+})
+
+describe("RETURN expr is judged as the SELECT of the same body", () => {
+  // Тіло стандарту SQL `RETURN expr` — лише вираз: виклики, відношення й
+  // вкладені оператори судяться тими самими правилами, що й `SELECT expr`.
+  const select = (expr: string) =>
+    `CREATE FUNCTION public.f() RETURNS int LANGUAGE sql AS $$ SELECT ${expr} $$`
+  const returns = (expr: string) =>
+    `CREATE FUNCTION public.f() RETURNS int LANGUAGE sql RETURN ${expr}`
+
+  it.each([
+    {
+      name: "a platform function call",
+      expr: "(SELECT simetra.provision_user(NULL, NULL, NULL, NULL))",
+      codes: ["sql.platform-function-call"],
+    },
+    {
+      name: "a data-modifying CTE into a kind table",
+      expr: "(WITH d AS (DELETE FROM public.task RETURNING 1) SELECT 1)",
+      codes: ["sql.kind-table-verbatim"],
+    },
+    {
+      name: "a platform setting write",
+      expr: "length(pg_catalog.set_config('simetra.actor', 'x', false))",
+      codes: ["sql.command-context-write"],
+    },
+    { name: "a constant", expr: "1", codes: [] },
+  ])("$name → $codes", async ({ expr, codes }) => {
+    const judged = async (sql: string) =>
+      brief(
+        (await compile(await acceptDebt(files({ [EXTRA]: sql })))).diagnostics
+      )
+    const asSelect = await judged(select(expr))
+    expect(asSelect.map((d) => d.code)).toEqual(codes)
+    expect(await judged(returns(expr))).toEqual(asSelect)
   })
 })
 

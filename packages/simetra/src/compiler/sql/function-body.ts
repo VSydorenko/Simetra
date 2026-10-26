@@ -10,7 +10,12 @@ import {
   ruledFunctions,
 } from "./closed-forms"
 import { literalDynamicText } from "./command-context"
-import { textCalls, unitCalls, type ReferencedName } from "./dependencies"
+import {
+  textCalls,
+  unitCalls,
+  unitRelations,
+  type ReferencedName,
+} from "./dependencies"
 import type { SqlParser } from "./parse"
 import type { PlpgsqlParser } from "./plpgsql"
 import { splitAssignment } from "./rewrite/plpgsql-body"
@@ -300,9 +305,10 @@ function droppedAtCommit(into: IntoClauseLike | undefined): string | undefined {
  * REPLACE` голови, а кожна нова форма мови була б новим обходом. Тимчасова
  * таблиця — лише з `ON COMMIT DROP` і без батька: та, що пережила б
  * транзакцію, затіняла б у сесії пулу відношення й типи некваліфікованими
- * іменами, а дочірня підмішала б рядки в читання батька. `DROP` — лише
- * тимчасової таблиці того самого тіла, `REFRESH` — лише кваліфікованого
- * матеріалізованого подання моделі.
+ * іменами, а дочірня підмішала б рядки в читання батька. Кожне посилання на
+ * тимчасову таблицю тіла, крім її створення, — лише `pg_temp.<ім'я>`
+ * (`referencesUnqualified`). `DROP` — лише тимчасової таблиці того самого
+ * тіла, `REFRESH` — лише кваліфікованого матеріалізованого подання моделі.
  */
 export function bodyStatementProblem(
   unit: Pick<VerbatimUnit, "class" | "sql" | "tree">,
@@ -314,25 +320,66 @@ export function bodyStatementProblem(
   const body = routineBody(unit.tree as Node, unit.sql, parse, plpgsql)
   if (body.problem !== undefined) return body.problem
   const temporary = new Set<string>()
-  for (const { stmt, line } of body.statements) {
+  const nodes = body.statements.flatMap(({ stmt, line }) => {
     const [key] = Object.keys(stmt)
-    if (key === undefined || ALLOWED_STATEMENTS.has(key)) continue
+    if (key === undefined) return []
     const node = (stmt as Record<string, unknown>)[key] as Record<
       string,
       unknown
     >
+    return [{ key, node, line }]
+  })
+  for (const { key, node } of nodes) {
     const created = temporaryTable(key, node)
-    if (created !== undefined) {
-      temporary.add(created)
-      continue
-    }
+    if (created !== undefined) temporary.add(created)
+  }
+  for (const { key, node, line } of nodes) {
+    if (referencesUnqualified(createdOmitted(key, node), temporary, parse))
+      return { statement: key, line }
+    if (ALLOWED_STATEMENTS.has(key)) continue
+    if (temporaryTable(key, node) !== undefined) continue
     if (key === "SelectStmt" && node.intoClause === undefined) continue
     if (key === "DropStmt" && dropsTemporary(node, temporary)) continue
     if (key === "RefreshMatViewStmt" && refreshesModelView(node, views))
       continue
     return { statement: key, line }
   }
+  for (const { text, line } of body.values) {
+    const parsed = parse(text)
+    if (!parsed.ok) continue
+    for (const { stmt } of parsed.statements)
+      if (referencesUnqualified(stmt, temporary, parse))
+        return { statement: "SelectStmt", line }
+  }
   return undefined
+}
+
+/**
+ * Оператор без імені тимчасової таблиці, яку він створює: саме створення
+ * може бути некваліфікованим (`CREATE TEMP TABLE t …` кладе `t` у `pg_temp`).
+ */
+function createdOmitted(key: string, node: Record<string, unknown>): unknown {
+  if (key === "CreateStmt") return { [key]: { ...node, relation: undefined } }
+  if (key === "SelectStmt" && node.intoClause !== undefined)
+    return { [key]: { ...node, intoClause: undefined } }
+  return { [key]: node }
+}
+
+/**
+ * Некваліфіковане посилання на тимчасову таблицю тіла: читання, ціль DML.
+ * Шлях пошуку сесії може ставити `pg_temp` після схеми застосунку, і тоді
+ * таке ім'я Postgres розв'яже в однойменну таблицю цієї схеми — тож
+ * тимчасова таблиця тіла називається лише `pg_temp.<ім'я>`.
+ */
+function referencesUnqualified(
+  stmt: unknown,
+  temporary: ReadonlySet<string>,
+  parse: SqlParser
+): boolean {
+  if (temporary.size === 0) return false
+  return unitRelations({ tree: stmt }, parse).some(
+    (r) => r.schema === undefined && temporary.has(r.name)
+  )
 }
 
 /** Ім'я тимчасової таблиці, яку дозволено створити оператору, чи `undefined`. */
@@ -355,7 +402,7 @@ function temporaryTable(
   })
 }
 
-/** `DROP TABLE` лише тимчасових таблиць, створених тим самим тілом. */
+/** `DROP TABLE` лише тимчасових таблиць тіла, названих `pg_temp.<ім'я>`. */
 function dropsTemporary(
   node: Record<string, unknown>,
   temporary: ReadonlySet<string>
@@ -366,10 +413,10 @@ function dropsTemporary(
     const names = ("List" in object ? (object.List.items ?? []) : [object]).map(
       (n) => ("String" in n ? (n.String.sval ?? "") : "")
     )
-    const [schema, name] = names.length === 2 ? names : [undefined, names[0]]
+    const [schema, name] = names
     return (
-      names.length <= 2 &&
-      (schema === undefined || schema === "pg_temp") &&
+      names.length === 2 &&
+      schema === "pg_temp" &&
       name !== undefined &&
       temporary.has(name)
     )
