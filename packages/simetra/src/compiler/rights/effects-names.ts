@@ -1,5 +1,6 @@
 import { makeObjectName } from "simetra/model"
 import type { QualifiedName } from "../contracts"
+import { generatedTableFunctionName } from "./generated-names"
 
 // Листовий модуль (як `platform/names.ts`): імена потрібні й контрактам, і
 // генератору ефектів, і промоції; тип контрактів — лише як тип, тож
@@ -27,5 +28,8 @@ export function effectsTriggerNames(table: QualifiedName): {
 
 /** Функція ефектів у схемі таблиці — одна для обох її тригерів. */
 export function effectsFunctionName(table: QualifiedName): QualifiedName {
-  return { schema: table.schema, name: effectsTriggerNames(table).all }
+  return {
+    schema: table.schema,
+    name: generatedTableFunctionName(table.name, ALL_LABEL),
+  }
 }
