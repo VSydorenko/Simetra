@@ -1,5 +1,10 @@
 import type { Node } from "libpg-query"
-import { PROTECTED_SESSION_SETTINGS } from "simetra/model"
+import {
+  PROTECTED_SESSION_SETTINGS,
+  PROVIDER_SQL_TEXT_FUNCTIONS,
+  type DatabaseProvider,
+} from "simetra/model"
+import { executesSqlText } from "./builtin-exclusions"
 import { plpgsqlExpressionTrees } from "./rewrite/plpgsql-body"
 import type { SqlParser } from "./parse"
 import type { PlpgsqlParser } from "./plpgsql"
@@ -9,6 +14,8 @@ import type { PlpgsqlParser } from "./plpgsql"
  * Р2b1-19b). Зміна ролі (`SET ROLE`, `SET SESSION AUTHORIZATION` і їхні
  * `RESET`) окремої форми не має: розбирач дає їй той самий `VariableSetStmt`
  * з іменем `role` чи `session_authorization`, тож вона — `setStatement`.
+ * `dynamicText` — виклик функції, що виконує переданий текст SQL (Р2c1-32):
+ * що вона виконає, статично не відомо, тож це зміна сесії невідомою формою.
  */
 export type CommandContextWrite =
   | "setConfig"
@@ -16,6 +23,17 @@ export type CommandContextWrite =
   | "functionOption"
   | "nonLiteral"
   | "settingsTable"
+  | "dynamicText"
+
+/**
+ * Один запис захищеного налаштування: форма й ім'я налаштування, коли воно
+ * статично відоме (`RESET ALL` — `*`). Ім'я потрібне боргу прийнятих таблиць:
+ * платформний префікс там — помилка, решта — попередження (Р2c1-6).
+ */
+export interface CommandContextHit {
+  form: CommandContextWrite
+  setting?: string
+}
 
 /**
  * Захищені налаштування — з переліку T0, тож літерала імені поза T0 немає.
@@ -50,8 +68,24 @@ function selectedValue(stmt: unknown): unknown {
   return targets?.length === 1 ? targets[0]!.ResTarget?.val : undefined
 }
 
+/**
+ * Текст динамічного оператора plpgsql (`EXECUTE`, `OPEN … FOR EXECUTE`,
+ * `RETURN QUERY EXECUTE`, `FOR … IN EXECUTE`), коли він — рядковий літерал;
+ * зібраний під час виконання — `undefined`. Одне правило літерала для
+ * перевірки контексту команди й обходу досяжності (Р2c1-5).
+ */
+export function literalDynamicText(
+  query: string,
+  parse: SqlParser
+): string | undefined {
+  const wrapped = parse(`SELECT ${query}`)
+  return wrapped.ok
+    ? literalText(selectedValue(wrapped.statements[0]?.stmt))
+    : undefined
+}
+
 /** Пряме читання рядкового літерала (з можливим приведенням типу). */
-function literalText(arg: unknown): string | undefined {
+export function literalText(arg: unknown): string | undefined {
   const node = arg as Record<string, unknown> | undefined
   const cast = node?.TypeCast as { arg?: unknown } | undefined
   if (cast !== undefined) return literalText(cast.arg)
@@ -78,13 +112,18 @@ function setStatementWrite(set: SetStatement): boolean {
   return set.kind === "VAR_RESET_ALL" || isProtectedSetting(set.name)
 }
 
+/** Ім'я налаштування оператора `SET`/`RESET`; `RESET ALL` — усі (`*`). */
+function setStatementSetting(set: SetStatement): string | undefined {
+  return set.kind === "VAR_RESET_ALL" ? "*" : set.name
+}
+
 /**
  * Лише вбудований `set_config`: функція з тим самим іменем в іншій схемі —
  * чужий код, його судять його власні перевірки. Ім'я бази перед
  * `pg_catalog` Postgres приймає (`<база>.pg_catalog.set_config`), тож воно
  * не виводить виклик з-під перевірки.
  */
-function isBuiltinSetConfig(
+export function isBuiltinSetConfig(
   parts: readonly { String?: { sval?: string } }[] | undefined
 ): boolean {
   const names = (parts ?? []).map((f) => f.String?.sval?.toLowerCase())
@@ -94,13 +133,71 @@ function isBuiltinSetConfig(
   )
 }
 
-function callWrite(call: CallNode): CommandContextWrite | undefined {
+/**
+ * Чи кличе виклик функцію, що виконує текст SQL: вбудовану з класу
+ * виключень (некваліфіковану чи `pg_catalog.`, як `set_config`) або функцію
+ * провайдера з поіменного переліку. Некваліфікований виклик розв'язує шлях
+ * пошуку сесії, тож він судиться за голим ім'ям кожного елемента переліку.
+ */
+function sqlTextCall(
+  parts: readonly { String?: { sval?: string } }[] | undefined,
+  textFunctions: ReadonlySet<string>
+): boolean {
+  const names = (parts ?? []).map((f) => f.String?.sval?.toLowerCase())
+  const name = names.at(-1)
+  if (name === undefined) return false
+  const schema = names.length > 1 ? names.at(-2) : undefined
+  if (
+    (schema === undefined || (names.length <= 3 && schema === "pg_catalog")) &&
+    executesSqlText(name)
+  ) {
+    return true
+  }
+  if (schema !== undefined) return textFunctions.has(`${schema}.${name}`)
+  return [...textFunctions].some((fn) => fn.split(".").at(-1) === name)
+}
+
+/** Функції провайдера, що виконують текст SQL (`schema.name`, Р2c1-32). */
+export function providerTextFunctions(
+  provider: DatabaseProvider | undefined
+): ReadonlySet<string> {
+  return new Set(
+    provider === undefined ? [] : PROVIDER_SQL_TEXT_FUNCTIONS[provider]
+  )
+}
+
+/**
+ * Чи кличе дерево функцію, що виконує текст SQL, — те саме судження виклику,
+ * що форма `dynamicText`. Тілу функції воно потрібне окремо: там такий виклик
+ * — нелітеральний `EXECUTE`, помилка скрізь, борг включно (Р2c1-50).
+ */
+export function callsSqlText(
+  value: unknown,
+  textFunctions: ReadonlySet<string>
+): boolean {
+  if (Array.isArray(value))
+    return value.some((v) => callsSqlText(v, textFunctions))
+  if (typeof value !== "object" || value === null) return false
+  const node = value as Record<string, unknown>
+  const call = node.FuncCall as CallNode | undefined
+  if (call !== undefined && sqlTextCall(call.funcname, textFunctions))
+    return true
+  return Object.values(node).some((v) => callsSqlText(v, textFunctions))
+}
+
+function callWrite(
+  call: CallNode,
+  textFunctions: ReadonlySet<string>
+): CommandContextHit | undefined {
+  if (sqlTextCall(call.funcname, textFunctions)) return { form: "dynamicText" }
   if (!isBuiltinSetConfig(call.funcname)) return undefined
   const first = call.args?.[0]
   if (first === undefined) return undefined
   const text = literalText(first)
-  if (text === undefined) return "nonLiteral"
-  return isProtectedSetting(text) ? "setConfig" : undefined
+  if (text === undefined) return { form: "nonLiteral" }
+  return isProtectedSetting(text)
+    ? { form: "setConfig", setting: text }
+    : undefined
 }
 
 /**
@@ -170,34 +267,39 @@ function readsRelation(
   return Object.values(node).some((v) => readsRelation(v, match))
 }
 
-/** Обхід дерева розбору: перша заборонена форма чи `undefined`. */
-function treeWrite(value: unknown): CommandContextWrite | undefined {
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      const found = treeWrite(item)
-      if (found !== undefined) return found
-    }
-    return undefined
-  }
-  if (typeof value !== "object" || value === null) return undefined
+/**
+ * Обхід дерева розбору: кожна заборонена форма в порядку обходу (вузол —
+ * раніше за дітей), тож перший елемент — та сама форма, що бачила перевірка
+ * першого запису.
+ */
+function treeWrites(
+  value: unknown,
+  textFunctions: ReadonlySet<string>
+): CommandContextHit[] {
+  const walk = (v: unknown) => treeWrites(v, textFunctions)
+  if (Array.isArray(value)) return value.flatMap(walk)
+  if (typeof value !== "object" || value === null) return []
   const node = value as Record<string, unknown>
-  if (node.FuncCall !== undefined) {
-    const found = callWrite(node.FuncCall as CallNode)
-    if (found !== undefined) return found
-  }
-  if (settingsTableWrite(node) || settingsView(node)) return "settingsTable"
-  if (aggregateWrite(node)) return "nonLiteral"
-  if (
+  const own: CommandContextHit[] = []
+  const call =
+    node.FuncCall === undefined
+      ? undefined
+      : callWrite(node.FuncCall as CallNode, textFunctions)
+  if (call !== undefined) own.push(call)
+  else if (settingsTableWrite(node) || settingsView(node)) {
+    own.push({ form: "settingsTable" })
+  } else if (aggregateWrite(node)) own.push({ form: "nonLiteral" })
+  else if (
     node.VariableSetStmt !== undefined &&
     setStatementWrite(node.VariableSetStmt as SetStatement)
   ) {
-    return "setStatement"
+    const setting = setStatementSetting(node.VariableSetStmt as SetStatement)
+    own.push({
+      form: "setStatement",
+      ...(setting === undefined ? {} : { setting }),
+    })
   }
-  for (const inner of Object.values(node)) {
-    const found = treeWrite(inner)
-    if (found !== undefined) return found
-  }
-  return undefined
+  return [...own, ...Object.values(node).flatMap(walk)]
 }
 
 interface FunctionTree {
@@ -205,10 +307,11 @@ interface FunctionTree {
   sql_body?: unknown
 }
 
-/** Опція `SET <налаштування> …` функції (`CREATE` чи `ALTER FUNCTION`). */
-function optionWrite(
+/** Опції `SET <налаштування> …` функції (`CREATE` чи `ALTER FUNCTION`). */
+function optionWrites(
   options: readonly DefElemNode[] | undefined
-): CommandContextWrite | undefined {
+): CommandContextHit[] {
+  const found: CommandContextHit[] = []
   for (const def of (options ?? []).flatMap((o) =>
     o.DefElem === undefined ? [] : [o.DefElem]
   )) {
@@ -223,10 +326,13 @@ function optionWrite(
       set.kind !== "VAR_RESET_ALL" &&
       setStatementWrite(set)
     ) {
-      return "functionOption"
+      found.push({
+        form: "functionOption",
+        ...(set.name === undefined ? {} : { setting: set.name }),
+      })
     }
   }
-  return undefined
+  return found
 }
 
 /**
@@ -237,15 +343,22 @@ function optionWrite(
  * Р2b1-19b). Судиться кожна одиниця, а не лише функції (Р2b1-22): подання,
  * домен, політика чи опція `ALTER FUNCTION` виконують свій вираз у тій самій
  * сесії. Тіло `LANGUAGE sql` розбирається тут, тіло plpgsql — через вирази
- * його операторів; тіла інших мов не розбираються — те саме відоме
- * обмеження до 2c, що й нелітеральний `EXECUTE`. Перша знайдена форма.
+ * його операторів; тіла інших мов і нелітеральний `EXECUTE` не розбираються:
+ * їх відмовляє дозвільний перелік тіла (`sql.function-body-statement`,
+ * Р2c1-37). Форму `dynamicText` функції чи процедури теж судить перелік
+ * (Р2c1-50); тут вона лишається для одиниць без тіла.
+ * Усі записи одиниці, а не перший: у борговому SQL `SET ROLE` перед
+ * `set_config('simetra.…')` інакше сховав би помилку за попередженням
+ * (Р2c1-6). Порожній масив — записів немає. `textFunctions` — функції
+ * провайдера, що виконують текст SQL (`schema.name`, Р2c1-32).
  */
 export function commandContextWrite(
   tree: Node,
   sql: string,
   parse: SqlParser,
-  plpgsql: PlpgsqlParser
-): CommandContextWrite | undefined {
+  plpgsql: PlpgsqlParser,
+  textFunctions: ReadonlySet<string> = new Set()
+): CommandContextHit[] {
   const fn = (tree as { CreateFunctionStmt?: FunctionTree }).CreateFunctionStmt
   if (fn === undefined) {
     // Опції `ALTER FUNCTION … SET` — та сама форма, що й опції `CREATE`: до
@@ -253,12 +366,14 @@ export function commandContextWrite(
     const alter = (tree as { AlterFunctionStmt?: { actions?: DefElemNode[] } })
       .AlterFunctionStmt
     if (alter !== undefined) {
-      return optionWrite(alter.actions) ?? treeWrite({ ...alter, actions: [] })
+      return [
+        ...optionWrites(alter.actions),
+        ...treeWrites({ ...alter, actions: [] }, textFunctions),
+      ]
     }
-    return treeWrite(tree)
+    return treeWrites(tree, textFunctions)
   }
-  const option = optionWrite(fn.options)
-  if (option !== undefined) return option
+  const options = optionWrites(fn.options)
   const defs = (fn.options ?? []).flatMap((o) =>
     o.DefElem === undefined ? [] : [o.DefElem]
   )
@@ -268,41 +383,52 @@ export function commandContextWrite(
   )?.String?.sval?.toLowerCase()
   // Значення параметрів за замовчуванням обчислює виклик, а тіло
   // `BEGIN ATOMIC` уже розібране: обидва — частина дерева самого оператора.
-  // Опції судить `optionWrite`, тож у загальний обхід вони не входять.
-  const declared = treeWrite({ ...fn, options: [] })
-  if (declared !== undefined || fn.sql_body !== undefined) return declared
+  // Опції судить `optionWrites`, тож у загальний обхід вони не входять.
+  const declared = [
+    ...options,
+    ...treeWrites({ ...fn, options: [] }, textFunctions),
+  ]
+  if (fn.sql_body !== undefined) return declared
+  return [
+    ...declared,
+    ...bodyWrites(defs, language, sql, parse, plpgsql, textFunctions),
+  ]
+}
+
+/** Записи рядкового тіла `LANGUAGE sql` чи plpgsql. */
+function bodyWrites(
+  defs: NonNullable<DefElemNode["DefElem"]>[],
+  language: string | undefined,
+  sql: string,
+  parse: SqlParser,
+  plpgsql: PlpgsqlParser,
+  textFunctions: ReadonlySet<string>
+): CommandContextHit[] {
+  const walk = (v: unknown) => treeWrites(v, textFunctions)
   if (language === "sql") {
     const body = (
       defs.find((d) => d.defname === "as")?.arg as
         { List?: { items?: { String?: { sval?: string } }[] } } | undefined
     )?.List?.items?.[0]?.String?.sval
     const parsed = body === undefined ? undefined : parse(body)
-    return parsed?.ok === true
-      ? treeWrite(parsed.statements.map((s) => s.stmt))
-      : undefined
+    return parsed?.ok === true ? walk(parsed.statements.map((s) => s.stmt)) : []
   }
-  if (language !== "plpgsql") return undefined
+  if (language !== "plpgsql") return []
   const body = plpgsql(sql)
-  if (!body.ok || body.fn === undefined) return undefined
-  const found = treeWrite(plpgsqlExpressionTrees(body.fn, parse))
-  if (found !== undefined) return found
+  if (!body.ok || body.fn === undefined) return []
+  const found = walk(plpgsqlExpressionTrees(body.fn, parse))
   // Літеральний `EXECUTE '…'` — звичайний SQL, лише записаний рядком: його
   // розбираємо й судимо усіма формами. Нелітеральний текст перевірка дерев
-  // не бачить: у закритих модулях і обробниках його відмовлено оболонкою
-  // (`dynamicSql`), а в боргових функціях спільних файлів це відоме
-  // обмеження до 2c (Р2b1-19a).
+  // не бачить: його відмовляє дозвільний перелік тіла скрізь, борг теж
+  // (`sql.function-body-statement`, Р2c1-37).
   for (const statement of body.fn.statements) {
     for (const e of statement.expressions) {
       if (e.role !== "dynamic") continue
-      const wrapped = parse(`SELECT ${e.query}`)
-      const text = wrapped.ok
-        ? literalText(selectedValue(wrapped.statements[0]?.stmt))
-        : undefined
+      const text = literalDynamicText(e.query, parse)
       const inner = text === undefined ? undefined : parse(text)
       if (inner?.ok !== true) continue
-      const literal = treeWrite(inner.statements.map((s) => s.stmt))
-      if (literal !== undefined) return literal
+      found.push(...walk(inner.statements.map((s) => s.stmt)))
     }
   }
-  return undefined
+  return found
 }

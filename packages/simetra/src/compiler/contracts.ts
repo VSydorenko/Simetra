@@ -600,6 +600,18 @@ export interface DerivedFunction extends QualifiedName {
    * функцій контрактів.
    */
   movementQuery?: true
+  /**
+   * Функція лише читає (Р2c1-18 (б)): пошук предвизначеного чи віртуальна
+   * таблиця регістра. SQL застосунку кличе зі згенерованих лише такі й
+   * функції членства: оболонка проведення й перерахунок підсумків пишуть
+   * таблиці виду, щойно їх згенерують П3/П4 (Р2c1-38).
+   */
+  reads?: true
+  /**
+   * Функція членства: вона лише читає, але довіра — тільки дійсному
+   * членству (`validMembershipFunctions` конвеєра), тож окремий факт.
+   */
+  membership?: true
 }
 
 const TIMESTAMP = "timestamp with time zone"
@@ -867,8 +879,14 @@ export function derivedFunctions(
     object: ParsedObject,
     name: QualifiedName,
     description: string,
-    pointer = "/physicalName"
-  ) => result.push({ ...name, file: object.file, pointer, description })
+    pointer = "/physicalName",
+    fact: { reads?: true; membership?: true } = {}
+  ) =>
+    result.push({ ...name, file: object.file, pointer, description, ...fact })
+  const readLabels = new Set([
+    PREDEFINED_LABEL,
+    ...Object.values(VIRTUAL_TABLES).map((t) => t.label),
+  ])
 
   const byId = new Map(objects.map((o) => [o.id ?? "", o]))
   // Функції носіїв — згенеровані одиниці з іменами від таблиць (Р2a2-22): ТЧ
@@ -900,7 +918,13 @@ export function derivedFunctions(
     const table = mainTableOf(physical, object.id ?? "")
     if (table === undefined) continue
     for (const { label, description } of derivedFunctionLabels(object)) {
-      add(object, derived(table, label), `${description} of ${object.name}`)
+      add(
+        object,
+        derived(table, label),
+        `${description} of ${object.name}`,
+        undefined,
+        readLabels.has(label) ? { reads: true } : {}
+      )
     }
     // Функції членства — згенеровані одиниці, але RPC кличе їх за іменем,
     // тож і для них дослівна функція з тим самим іменем — колізія.
@@ -914,7 +938,8 @@ export function derivedFunctions(
         object,
         names.myMember,
         `member lookup of ${object.name}`,
-        "/membership"
+        "/membership",
+        { membership: true }
       )
       const kind = scopeKinds.find((k) => k.name === scope)
       if (kind !== undefined && choosesMembership(kind)) {
@@ -922,7 +947,8 @@ export function derivedFunctions(
           object,
           names.memberScopes,
           `membership set function of ${object.name}`,
-          "/membership"
+          "/membership",
+          { membership: true }
         )
       }
     }

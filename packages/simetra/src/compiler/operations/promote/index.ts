@@ -29,7 +29,11 @@ import { objectFiles } from "../target"
 import type { OperationResult } from "../types"
 import { cascadeReferences, type PromotedReferences } from "./cascade"
 import { fillStepKind, fillTargetKey, modelFunctions } from "./fill"
-import { providerUserProblems, writePathProblems } from "./gates"
+import {
+  debtWritesProblems,
+  providerUserProblems,
+  writePathProblems,
+} from "./gates"
 import { kindFile, type PromotedSection } from "./kind-file"
 import {
   missingFills,
@@ -434,6 +438,7 @@ export async function promoteObject(
     }
   })
   problems.push(...writePathProblems(model, unitTables, parse))
+  problems.push(...debtWritesProblems(model, unitTables, parse, plpgsql))
   problems.push(
     ...providerUserProblems(
       model,
@@ -597,8 +602,10 @@ export async function promoteObject(
   after.set(path, JSON.stringify(built.raw))
   for (const [file, text] of cascade.files) after.set(file, text)
   // SQL: класифіковане вирізано, функції модуля переїхали — ще в старих
-  // іменах: нові фізичні імена дає лише доповнення нижче.
-  const moved = sqlFileTexts(files, sql, new Map(), deleted, parse)
+  // іменах: нові фізичні імена дає лише доповнення нижче. Функція-запит
+  // поки лежить у спільному файлі (`staged`): у модулі виду її старі імена
+  // судив би суддя голів.
+  const moved = sqlFileTexts(files, sql, new Map(), deleted, parse, [], true)
   if (moved.problems.length > 0) return refused(files, moved.problems)
   setTexts(after, moved.files)
 
@@ -693,7 +700,10 @@ export async function promoteObject(
     ...sql.unscoped.map((u) => u.unit),
   ])
   if (final.problems.length > 0) return refused(files, final.problems)
-  if (changed.length > 0) {
+  // Фінальна компіляція судить і переписані тексти, і функції-запити вже в
+  // модулі виду — як голови (Р2c1-24 (б)): порушення Правила 3 там —
+  // відмова промоції.
+  if (changed.length > 0 || sql.moved.some((m) => m.staged !== undefined)) {
     const next = applyChanges(files, completed.result.changes)
     setTexts(next, final.files)
     renameDebt(next, sql, changed, rewrite.texts, parse, completed.model, o)
@@ -716,7 +726,9 @@ export async function promoteObject(
     identity: unit.identity,
     file: placed(unit).file,
   }))
-  const warnings: Diagnostic[] = []
+  // Вхідні каскади, переведені в `restrict` (Р2c1-34): крок з дозволом
+  // пункту `delete:` (on delete) чи `update:` (on update) плану застосування.
+  const warnings: Diagnostic[] = [...cascade.restricted]
   const contract = (
     unit: FileUnit,
     line: number,

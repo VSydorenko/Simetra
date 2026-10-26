@@ -1050,9 +1050,10 @@ describe("reverseGenerate", () => {
   it("a trigger function also called from a kept file is shared", async () => {
     // Тригер довідника — підписка: модуль виду тригерів не приймає. Обробник
     // лежить у `sql/app/` попередньої генерації, тож теку можна скомпілювати.
+    // Обробник — з порожнім `search_path` (Р2c1-19).
     const touch = TOUCH.split("\n")[0]!.replace(
       "LANGUAGE plpgsql",
-      "LANGUAGE plpgsql VOLATILE"
+      "LANGUAGE plpgsql VOLATILE SET search_path = ''"
     )
     const kept = keptCatalog({
       [SUBSCRIPTION_FILE]: {
@@ -1095,7 +1096,12 @@ describe("reverseGenerate", () => {
   it("a subscription handler re-introspected from catalog text stays closed and is not debt", async () => {
     // Текст каталогу (`pg_get_functiondef`) типової VOLATILE не друкує;
     // волатильність — факт, тож обробник після introspect лишається закритим.
-    const handler = TOUCH.split("\n")[0]!.replace(
+    // Обробник — з порожнім `search_path` (Р2c1-19).
+    const catalogText = TOUCH.split("\n")[0]!.replace(
+      "LANGUAGE plpgsql",
+      "LANGUAGE plpgsql SET search_path = ''"
+    )
+    const handler = catalogText.replace(
       "LANGUAGE plpgsql",
       "LANGUAGE plpgsql VOLATILE"
     )
@@ -1116,13 +1122,13 @@ describe("reverseGenerate", () => {
     const result = await reverseGenerate(
       model({
         tables: catalogFromSnapshot(compiled.model!.physical).tables,
-        units: units(TOUCH.split("\n")[0]!),
+        units: units(catalogText),
       }),
       options(kept)
     )
     expect(result.diagnostics).toEqual([])
     expect(result.files.get("sql/app/touch.sql")).toBe(
-      "CREATE FUNCTION app.touch() RETURNS trigger VOLATILE LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;\n"
+      "CREATE FUNCTION app.touch() RETURNS trigger VOLATILE LANGUAGE plpgsql SET search_path = '' AS $$ BEGIN RETURN NEW; END $$;\n"
     )
     expect(json(result, "sql-debt.json").units).toEqual([])
     expect((await compile(result.files)).diagnostics).toEqual([])
@@ -1319,7 +1325,20 @@ describe("reverseGenerate", () => {
       }),
       options()
     )
-    expect(errors(result)).toEqual([])
+    // Власний тригер пишеться дослівно, а виклик функції платформи, що не
+    // лише читає, — гучна помилка на ньому (Р2c1-38), а не тихий пропуск.
+    expect(
+      errors(result).map((d) => ({ code: d.code, params: d.params }))
+    ).toEqual([
+      {
+        code: "sql.platform-function-call",
+        params: {
+          unit: "trigger:app.note.note_stamp",
+          function: "simetra.touch",
+          line: 5,
+        },
+      },
+    ])
     const sidecar = result.files.get("custom-tables/Note/Note.sql")
     expect(sidecar).toContain("CREATE TRIGGER note_audit")
     expect(sidecar).toContain("CREATE FUNCTION app.audit()")
@@ -1626,9 +1645,15 @@ describe("reverseGenerate", () => {
       }),
       options()
     )
-    expect(result.diagnostics).toEqual([])
+    // Розширення без SCHEMA стає в схему застосунку (Р2c1-35).
+    const extension = [["sql.debt-extension-schema", "warning"]]
+    expect(result.diagnostics.map((d) => [d.code, d.severity])).toEqual(
+      extension
+    )
     const compiled = await compile(result.files)
-    expect(compiled.diagnostics).toEqual([])
+    expect(compiled.diagnostics.map((d) => [d.code, d.severity])).toEqual(
+      extension
+    )
     expect(compiled.ok).toBe(true)
     expect(
       result.files.get("custom-tables/AppCustomer/AppCustomer.sql")

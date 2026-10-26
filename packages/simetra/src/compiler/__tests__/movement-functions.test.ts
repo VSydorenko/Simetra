@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { compile } from "simetra/compiler"
+import { hasEmptySearchPath } from "../sql/closed-forms"
 import {
   expectClean,
   SALE_FILE,
@@ -68,10 +69,13 @@ describe("movement query functions", () => {
       "RETURNS TABLE (period timestamp with time zone, movement_type text, item_id uuid, qty numeric(15,3))"
     )
     expect(unit!.sql).toContain(`AS $simetra$\n${block}\n$simetra$;`)
+    // Без порожнього шляху некваліфікована вбудована в блоці могла б
+    // розв'язатися в перевантаження іншої схеми (Р2c1-22).
+    expect(hasEmptySearchPath(unit!.tree as never)).toBe(true)
     expect(unit!.sql).toMatchInlineSnapshot(`
       "CREATE OR REPLACE FUNCTION public.sale_stock_movements(p_document_id uuid)
       RETURNS TABLE (period timestamp with time zone, movement_type text, item_id uuid, qty numeric(15,3))
-      LANGUAGE sql STABLE
+      LANGUAGE sql STABLE SET search_path = ''
       AS $simetra$
       SELECT d.date, 'Expense', g.item_id, g.qty
       FROM public.goods g JOIN public.sale d ON d.id = g.parent_id
@@ -93,7 +97,7 @@ describe("movement query functions", () => {
     expect(unit!.sql).toMatchInlineSnapshot(`
       "CREATE OR REPLACE FUNCTION public.sale_stock_movements(p_document_id uuid)
       RETURNS TABLE (period timestamp with time zone, movement_type text, item_id uuid, qty numeric(15,3), note character varying(100))
-      LANGUAGE sql STABLE
+      LANGUAGE sql STABLE SET search_path = ''
       AS $simetra$
       SELECT m.period, m.movement_type, m.item_id, m.qty, m.note
       FROM (
@@ -121,7 +125,7 @@ describe("movement query functions", () => {
     expect(unit!.sql).toMatchInlineSnapshot(`
       "CREATE OR REPLACE FUNCTION public.sale_stock_movements(p_document_id uuid)
       RETURNS TABLE (period timestamp with time zone, movement_type text, item_id uuid, qty numeric(15,3), note character varying(100))
-      LANGUAGE sql STABLE
+      LANGUAGE sql STABLE SET search_path = ''
       AS $simetra$
       SELECT m.period, m.movement_type, m.item_id, m.qty, m.note
       FROM (
@@ -163,7 +167,7 @@ describe("movement query functions", () => {
     expect(unit!.sql).toMatchInlineSnapshot(`
       "CREATE OR REPLACE FUNCTION public.sale_stock_movements(p_document_id uuid)
       RETURNS TABLE (period timestamp with time zone, movement_type text, item_id uuid, qty numeric(15,3), note character varying(100))
-      LANGUAGE sql STABLE
+      LANGUAGE sql STABLE SET search_path = ''
       AS $simetra$
       SELECT m.period, m.movement_type, m.item_id, m.qty, m.note
       FROM (
@@ -240,7 +244,7 @@ describe("movement query functions", () => {
     expect(kyiv).toMatchInlineSnapshot(`
       "CREATE OR REPLACE FUNCTION public.sale_prices_movements(p_document_id uuid)
       RETURNS TABLE (period timestamp with time zone, item_id uuid, price numeric(15,2))
-      LANGUAGE sql STABLE
+      LANGUAGE sql STABLE SET search_path = ''
       AS $simetra$
       SELECT m.period, m.item_id, m.price
       FROM (

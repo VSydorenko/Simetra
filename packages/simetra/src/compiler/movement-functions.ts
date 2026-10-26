@@ -139,10 +139,12 @@ class Context {
       .join(", ")
     const text = body(columns, name)
     const tag = dollarTag(text)
+    // Порожній шлях (Р2c1-22): некваліфікована вбудована в блоці автора
+    // інакше могла б розв'язатися в перевантаження іншої схеми.
     const sql =
       `CREATE OR REPLACE FUNCTION ${quoteIdent(documentTable.schema)}.${quoteIdent(name)}(p_document_id uuid)\n` +
       `RETURNS TABLE (${signature})\n` +
-      `LANGUAGE sql STABLE\n` +
+      `LANGUAGE sql STABLE SET search_path = ''\n` +
       `AS ${tag}\n${text}\n${tag};`
     // Тіло — рядок у долар-лапках, тож розбір обгортки не залежить від
     // запиту автора; збій тут — помилка генератора, а не метаданих.

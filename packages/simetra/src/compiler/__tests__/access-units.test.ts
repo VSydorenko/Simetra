@@ -215,7 +215,7 @@ describe("accessContracts", () => {
         handler: { schema: "public", name: "stamp" },
       },
       "sql/public/stamp.sql":
-        "CREATE FUNCTION public.stamp() RETURNS trigger LANGUAGE plpgsql VOLATILE AS $$ BEGIN RETURN NEW; END $$;",
+        "CREATE FUNCTION public.stamp() RETURNS trigger LANGUAGE plpgsql VOLATILE SET search_path = '' AS $$ BEGIN RETURN NEW; END $$;",
     })
     const legacy = model.physical.tables.find((t) => t.name === "legacy")!
     expect(legacy.rowLevelSecurity).toBe("enabled")

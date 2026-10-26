@@ -445,7 +445,8 @@ function dollarBodyText(text: string, parse: SqlParser): string | undefined {
 /**
  * `search_path` з `SET search_path` функції (останній перемагає, як у
  * Postgres); `undefined` — функція його не задає, тож ім'я обирає
- * `search_path` викликача.
+ * `search_path` викликача. Ім'я налаштування Postgres шукає без огляду на
+ * регістр: `SET "SEARCH_PATH"` у лапках — той самий шлях.
  */
 function functionSearchPath(options: DefElem[]): string[] | undefined {
   const set = options
@@ -454,7 +455,7 @@ function functionSearchPath(options: DefElem[]): string[] | undefined {
         d.defname === "set" &&
         d.arg !== undefined &&
         "VariableSetStmt" in d.arg &&
-        d.arg.VariableSetStmt.name === "search_path"
+        d.arg.VariableSetStmt.name?.toLowerCase() === "search_path"
     )
     .at(-1)?.arg
   if (set === undefined || !("VariableSetStmt" in set)) return undefined

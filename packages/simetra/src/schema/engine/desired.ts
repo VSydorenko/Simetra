@@ -9,12 +9,12 @@ import {
   type SqlParser,
   type UnitTarget,
 } from "simetra/compiler"
-import { diffCatalogModels, type CatalogDifference } from "simetra/model"
 import {
-  SUPABASE_EXTENSIONS,
-  SUPABASE_SCHEMAS,
-  SUPABASE_SURFACES,
-} from "./provider/supabase"
+  diffCatalogModels,
+  PROVIDER_SCHEMAS,
+  type CatalogDifference,
+} from "simetra/model"
+import { SUPABASE_EXTENSIONS, SUPABASE_SURFACES } from "./provider/supabase"
 import type {
   EngineDiagnostic,
   EnginePlan,
@@ -216,7 +216,7 @@ function outOfScopeDiagnostics(
   model: Pick<CompiledModel, "physical" | "sqlUnits">,
   parse: SqlParser
 ): EngineDiagnostic[] {
-  const provider = new Set(SUPABASE_SCHEMAS)
+  const provider = new Set(PROVIDER_SCHEMAS.supabase)
   const extensions = new Set(SUPABASE_EXTENSIONS)
   const out: EngineDiagnostic[] = []
   for (const [kind, objects] of [
@@ -293,7 +293,7 @@ export async function engineScope(
   model: Pick<CompiledModel, "project" | "physical" | "sqlUnits">
 ): Promise<ModelScope> {
   const parse = await loadSqlParser()
-  const provider = new Set(SUPABASE_SCHEMAS)
+  const provider = new Set(PROVIDER_SCHEMAS.supabase)
   const schemas = new Set([
     model.project.defaultSchema,
     ...model.physical.tables.map((table) => table.schema),

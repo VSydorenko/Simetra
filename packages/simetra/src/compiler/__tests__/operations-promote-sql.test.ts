@@ -17,6 +17,12 @@ import {
   counterpartyMapping,
   promotionProject,
 } from "./fixtures/promotion"
+import {
+  TASK_NOTE_ADOPTED_TABLE,
+  policyDomain,
+  promotableTaskNote,
+  taskNoteMapping,
+} from "./fixtures/rights"
 import { acceptDebt, attribute, customTable, document, uuid } from "./helpers"
 
 // Шпигун викликає справжній розбір: решта тестів файлу розбирає plpgsql далі.
@@ -40,6 +46,7 @@ const COMPLETION = { schemaPath, newId: counter() }
 const KIND_MODULE = "catalogs/Counterparty/Counterparty.sql"
 const TOUCH = "function:app.counterparty_touch()"
 const NAMES = "function:app.counterparty_names()"
+const TOUCH_SHARED = "sql/app/counterparty_touch.sql"
 
 const errors = (result: { diagnostics: { severity: string }[] }) =>
   result.diagnostics.filter((d) => d.severity === "error")
@@ -103,11 +110,14 @@ const fn = (name: string, body: string, returns = "integer") =>
   `CREATE FUNCTION app.${name}() RETURNS ${returns} LANGUAGE sql STABLE AS $fn$\n  ${body}\n$fn$;\n`
 
 describe("promoteObject: SQL units", () => {
-  it("moves the closed trigger function into the kind module and rewrites it", async () => {
+  it("moves the closed trigger function on plpgsql to sql/<schema>/ and rewrites it", async () => {
     const files = await project()
     const { result, after } = await passes(files)
     expect(after.has(COUNTERPARTY_SQL)).toBe(false)
-    expect(after.get(KIND_MODULE)).toBe(
+    // У модуль виду йде лише функція-запит (Р2c1-24 (б)): функцію модуля
+    // виду судять як голову.
+    expect(after.has(KIND_MODULE)).toBe(false)
+    expect(after.get(TOUCH_SHARED)).toBe(
       `CREATE FUNCTION app.counterparty_touch() RETURNS trigger LANGUAGE plpgsql VOLATILE AS $fn$
 BEGIN
   NEW.description := btrim(NEW.description);
@@ -117,7 +127,7 @@ $fn$;
 `
     )
     expect(result.record?.movedUnits).toEqual([
-      { identity: TOUCH, from: COUNTERPARTY_SQL, to: KIND_MODULE },
+      { identity: TOUCH, from: COUNTERPARTY_SQL, to: TOUCH_SHARED },
     ])
     // Об'єкт класу одиниці — ключ предмета в старих іменах (рішення 7 П3-2a).
     const unit = (cls: string, name: string) => [
@@ -152,6 +162,43 @@ $fn$;
     for (const identity of Object.values(COUNTERPARTY_UNITS)) {
       expect(debt ?? "").not.toContain(identity)
     }
+  })
+
+  it("moves a query function of the module into the kind module", async () => {
+    const files = await project({}, (f) =>
+      f.set(
+        COUNTERPARTY_SQL,
+        `${f.get(COUNTERPARTY_SQL)}\nCREATE FUNCTION app.counterparty_count() RETURNS bigint LANGUAGE sql STABLE SET search_path = '' AS $fn$ SELECT count(*) FROM app.counterparties c $fn$;\n`
+      )
+    )
+    const { result, after } = await passes(files)
+    expect(after.get(KIND_MODULE)).toContain(
+      "FUNCTION app.counterparty_count()"
+    )
+    expect(after.get(KIND_MODULE)).not.toContain("counterparty_touch")
+    expect(result.record?.movedUnits.map((u) => [u.identity, u.to])).toEqual([
+      ["function:app.counterparty_count()", KIND_MODULE],
+      [TOUCH, TOUCH_SHARED],
+    ])
+  })
+
+  // Фінальна компіляція судить перенесену функцію-запит як голову модуля
+  // виду (Р2c1-24 (б)): форма запиту ще не означає дозволених викликів.
+  it("refuses a moved query function whose final text breaks Rule 3", async () => {
+    const files = await project({}, (f) =>
+      f.set(
+        COUNTERPARTY_SQL,
+        `${f.get(COUNTERPARTY_SQL)}\nCREATE FUNCTION app.counterparty_slow() RETURNS bigint LANGUAGE sql STABLE SET search_path = '' AS $fn$ SELECT count(*) FROM app.counterparties c WHERE pg_sleep(0) IS NOT NULL $fn$;\n`
+      )
+    )
+    // Обгортка операції пише лише результат без помилок (`ok`).
+    const { result } = await promoted(files)
+    expect(result.ok).toBe(false)
+    expect(
+      result.diagnostics
+        .filter((d) => d.severity === "error")
+        .map((d) => [d.code, d.file, d.params?.construct, d.params?.detail])
+    ).toEqual([["sql.head-not-allowed", KIND_MODULE, "call", "pg_sleep"]])
   })
 
   it("moves a function named in sharedFunctions to sql/<schema>/", async () => {
@@ -276,7 +323,12 @@ CREATE FUNCTION app.counterparty_raw() RETURNS integer LANGUAGE sql AS $$ SELECT
           "removed"
       })
     )
-    expect(classified.after.get(KIND_MODULE)).not.toContain("counterparty_raw")
+    expect(
+      [...classified.after].filter(
+        ([file, text]) =>
+          file.endsWith(".sql") && text.includes("counterparty_raw")
+      )
+    ).toEqual([])
   })
 
   it("refuses a view of another table that reads a promoted column", async () => {
@@ -416,30 +468,6 @@ CREATE POLICY counterparties_edit ON app.counterparties FOR UPDATE TO authentica
         code: "promote.debt-text-reference",
         file: "sql/app/views.sql",
         params: { identity: "view:app.labels", line: 1 },
-      },
-    ])
-  })
-
-  it("warns about out-of-scope debt functions with dynamic SQL", async () => {
-    const files = await project({
-      "sql/app/dyn.sql": `CREATE FUNCTION app.dyn(t text) RETURNS void LANGUAGE plpgsql VOLATILE AS $fn$
-BEGIN
-  EXECUTE format('delete from app.%I', t);
-END
-$fn$;
-`,
-    })
-    const { result } = await passes(files)
-    expect(
-      brief(result).filter((d) => d.code === "rewrite.dynamic-sql-unscoped")
-    ).toEqual([
-      {
-        code: "rewrite.dynamic-sql-unscoped",
-        file: "sql/app/dyn.sql",
-        params: expect.objectContaining({
-          function: "function:app.dyn(text)",
-          line: 3,
-        }),
       },
     ])
   })
@@ -635,7 +663,7 @@ CREATE TRIGGER touch_name BEFORE INSERT ON app.partners
   it("aggregates rewriter refusals and writes nothing", async () => {
     const dynamic = `CREATE FUNCTION app.purge() RETURNS void LANGUAGE plpgsql VOLATILE AS $fn$
 BEGIN
-  EXECUTE 'delete from app.counterparties';
+  EXECUTE 'select count(*) from app.counterparties';
 END
 $fn$;
 `
@@ -906,12 +934,15 @@ CREATE TRIGGER contact_touch BEFORE INSERT ON app.counterparty_contacts
       })
     )
     expect(after.has(module)).toBe(false)
-    const kindModule = after.get(KIND_MODULE)!
-    expect(kindModule).toContain("FUNCTION app.counterparty_touch()")
-    expect(kindModule).toContain("NEW.phone := btrim(NEW.phone);")
-    expect(result.record?.movedUnits.map((u) => [u.identity, u.from])).toEqual([
-      ["function:app.contact_touch()", module],
-      [TOUCH, COUNTERPARTY_SQL],
+    // Тригерні функції на plpgsql — не функції-запити: у спільні файли.
+    expect(after.get("sql/app/contact_touch.sql")).toContain(
+      "NEW.phone := btrim(NEW.phone);"
+    )
+    expect(
+      result.record?.movedUnits.map((u) => [u.identity, u.from, u.to])
+    ).toEqual([
+      ["function:app.contact_touch()", module, "sql/app/contact_touch.sql"],
+      [TOUCH, COUNTERPARTY_SQL, TOUCH_SHARED],
     ])
   })
 
@@ -1054,7 +1085,7 @@ ALTER PUBLICATION supabase_realtime ADD TABLE app.counterparties;
   it("refuses verbatim debt that names the promoted table in a string literal", async () => {
     for (const expression of [
       "to_regclass('app.counterparties')",
-      "pg_relation_size('app.counterparties')",
+      "pg_catalog.pg_get_serial_sequence('app.counterparties', 'id')",
       "has_table_privilege('app.counterparties', 'select')",
     ]) {
       const files = await project({
@@ -1099,5 +1130,72 @@ $fn$;
         }),
       },
     ])
+  })
+})
+
+describe("promoteObject: debt that writes the promoted table (Rule 4, Р2c1-24)", () => {
+  const TASK_NOTE_MODULE = "custom-tables/TaskNote/TaskNote.sql"
+  const SHARED = "sql/public/notes.sql"
+  const table = `public.${TASK_NOTE_ADOPTED_TABLE}`
+
+  async function taskNotes(sql: Record<string, string>) {
+    const files = policyDomain(promotableTaskNote())
+    for (const [path, text] of Object.entries(sql)) files.set(path, text)
+    const accepted = await acceptDebt(files)
+    expect(errors(await compile(accepted))).toEqual([])
+    return accepted
+  }
+
+  it("refuses with every unit that writes it, before any change", async () => {
+    // Після промоції такий запис був би SQL застосунку в таблиці виду
+    // (Правило 1): гейт називає кожну одиницю до змін, а не першу відмову
+    // переписувача чи компіляції результату.
+    const files = await taskNotes({
+      [SHARED]: `CREATE FUNCTION public.add_note() RETURNS void LANGUAGE sql AS $$ INSERT INTO ${table} (id) VALUES (NULL) $$;\n`,
+      [TASK_NOTE_MODULE]: `CREATE FUNCTION public.task_notes_touch() RETURNS trigger LANGUAGE plpgsql VOLATILE AS $$ BEGIN UPDATE ${table} SET name = name WHERE false; RETURN NEW; END $$;\n`,
+    })
+    const { result, after } = await promoted(files, taskNoteMapping())
+    expect(result.ok).toBe(false)
+    expect(result.changes).toEqual([])
+    expect(after).toEqual(files)
+    expect(
+      result.diagnostics
+        .filter((d) => d.severity === "error")
+        .map((d) => d.code)
+    ).toEqual(["promote.debt-writes-table", "promote.debt-writes-table"])
+    expect(
+      brief(result).filter((d) => d.code === "promote.debt-writes-table")
+    ).toEqual([
+      {
+        code: "promote.debt-writes-table",
+        file: TASK_NOTE_MODULE,
+        params: {
+          identity: "function:public.task_notes_touch()",
+          table,
+          statement: "UpdateStmt",
+          line: 1,
+        },
+      },
+      {
+        code: "promote.debt-writes-table",
+        file: SHARED,
+        params: {
+          identity: "function:public.add_note()",
+          table,
+          statement: "InsertStmt",
+          line: 1,
+        },
+      },
+    ])
+  })
+
+  it("does not refuse a function that only reads it", async () => {
+    const files = await taskNotes({
+      [SHARED]: `CREATE FUNCTION public.note_count() RETURNS bigint LANGUAGE sql STABLE AS $$ SELECT count(*) FROM ${table} $$;\n`,
+    })
+    const { result } = await promoted(files, taskNoteMapping())
+    expect(
+      result.diagnostics.filter((d) => d.code === "promote.debt-writes-table")
+    ).toEqual([])
   })
 })

@@ -6,11 +6,11 @@ import type pg from "pg"
 import {
   SUPABASE_EVENT_TRIGGERS,
   SUPABASE_EXTENSIONS,
-  SUPABASE_SCHEMAS,
   type CensusCount,
   type EngineScope,
   type PropertyCount,
 } from "simetra/schema"
+import { PROVIDER_SCHEMAS } from "simetra/model"
 
 /**
  * Простий запит до каталогу, що лише рахує об'єкти за класами в межі
@@ -136,7 +136,7 @@ export async function readCensus(
 ): Promise<CensusCount[]> {
   const { rows } = await db.query<CensusCount>(CENSUS_SQL, [
     scope.schemas,
-    SUPABASE_SCHEMAS,
+    PROVIDER_SCHEMAS.supabase,
     SUPABASE_EXTENSIONS,
     SUPABASE_EVENT_TRIGGERS,
   ])

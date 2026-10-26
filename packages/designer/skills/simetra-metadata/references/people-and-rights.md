@@ -9,6 +9,9 @@ Contents:
 - Rights sets and roles
 - Adopted membership and assignment sources
 - Who reads what
+- Who writes what
+- Generated privileges
+- Reading past row-level security
 - Carrier copies
 
 ## Users, authorship and membership
@@ -313,16 +316,45 @@ command role and nobody else.
 - A `beforeWrite` handler that, under a transition, changes another column makes
   the command fail. Put a computation done at posting into the command hook or
   into the effects of a custom action.
-- Any application SQL unit (subscription handlers wherever they live,
-  object-module functions, and every statement of shared `sql/` files:
-  functions, `ALTER FUNCTION`, views, domains, aggregates, policies) must not
-  change the platform's session settings — `simetra.*`, the request claims
-  (`request.jwt.*`) and the role (`SET ROLE`, `SET SESSION AUTHORIZATION` and
-  their `RESET`) — in any form (`set_config` however it is qualified, also as
-  an aggregate function, `SET`/`RESET`, a function option, a write to
-  `pg_settings` or a view over it, a literal `EXECUTE`): compiler error
-  `sql.command-context-write`. The command context, the user and the role
-  belong to the platform.
+- Application SQL never writes a table of a kind and never changes the
+  platform's session settings: `SKILL.md`, section "The SQL module: closed
+  forms only", names the reference with those rules.
+
+## Generated privileges
+
+Privileges on what the platform owns are generated: `EXECUTE` on a declared
+scope set function and on a subscription handler, and every grant on a kind's
+tables. In debt SQL (a `CustomTable` or `PgEnum` module, the shared
+`metadata/sql/`) a verbatim `GRANT`/`REVOKE` on them fails with
+`sql.generated-grant` (a kind's own module rejects any). `simetra fix` removes
+the statement (and its file, if left empty) only when every target belongs to
+the platform; one that also names other objects you split by hand. A grant
+on another overload of the same name is not affected.
+
+## Reading past row-level security
+
+`sql.definer-reads-rls` (a warning) marks a unit that reads a table under
+row-level security as its owner, so the caller's policies do not apply, while
+a role of the API (or `PUBLIC`) can run or read it:
+
+- a `SECURITY DEFINER` function that someone may `EXECUTE`;
+- a view without `security_invoker` that someone may `SELECT`;
+- a materialized view, which stores the rows its owner read at `REFRESH`.
+
+The diagnostic lists the tables it found. The compiler does not see the owner of a function,
+so one whose owner is itself subject to row-level security is flagged too.
+Convert in this order of preference:
+
+1. Read through a right and a policy: let the caller read the kind's table
+   itself, so the platform's policies decide, and make the unit
+   `SECURITY INVOKER` (a view: `WITH (security_invoker = true)` in
+   `CREATE VIEW`; a separate `ALTER VIEW` is not accepted in `.sql` files).
+2. If the unit must run as its owner, check the caller's membership or rights
+   inside it, or filter the rows with the rights functions in a view.
+3. If no API caller needs it, `REVOKE EXECUTE` (function) or `REVOKE SELECT`
+   (view, materialized view) from `PUBLIC` and from each API role. A
+   materialized view that serves callers is replaced by a view with
+   `security_invoker`.
 
 ## Carrier copies
 

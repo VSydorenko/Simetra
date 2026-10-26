@@ -590,7 +590,8 @@ export const DRIFT_PERMISSION = "drift"
 
 /**
  * Пункт дозволу промоції (рішення 8 плану П3-2a): токен `access:`,
- * `delete:` чи `remove:` і те, що людина переглядає перед дозволом.
+ * `delete:`, `update:`, `remove:` чи `repair:` і те, що людина переглядає
+ * перед дозволом.
  */
 export interface PermissionItem {
   token: string
@@ -606,9 +607,16 @@ export interface PermissionSubject {
 
 /**
  * Групи токенів промоції в порядку перегляду: спершу зміна доступу, потім
- * семантика видалення, далі видалене з дозволом і ремонт наявних значень.
+ * семантика видалення й оновлення, далі видалене з дозволом і ремонт наявних
+ * значень.
  */
-const PROMOTION_GROUPS = ["access:", "delete:", "remove:", "repair:"] as const
+const PROMOTION_GROUPS = [
+  "access:",
+  "delete:",
+  "update:",
+  "remove:",
+  "repair:",
+] as const
 
 const groupOf = (token: string): number =>
   PROMOTION_GROUPS.findIndex((prefix) => token.startsWith(prefix))
@@ -629,9 +637,9 @@ export function comparePermissionItems(
 /**
  * Пункти, яким потрібен явний дозвіл: дрейф першим — його переглядають до
  * кроків, бо кроки показують, що станеться з об'єктами, які дрейфнули, —
- * далі пункти промоції (`access:`, `delete:`, `remove:`, `repair:`), бо вони кажуть,
- * чим стане таблиця, а не як туди дійти, і насамкінець id кроків у порядку
- * плану.
+ * далі пункти промоції (`access:`, `delete:`, `update:`, `remove:`,
+ * `repair:`), бо вони кажуть, чим стане таблиця, а не як туди дійти, і
+ * насамкінець id кроків у порядку плану.
  */
 export function requiredPermissions(plan: PermissionSubject): string[] {
   const promotion = [...(plan.promotion?.permissionItems ?? [])]

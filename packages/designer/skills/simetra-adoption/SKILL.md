@@ -117,6 +117,12 @@ not express through metadata (CustomTable and PgEnum modules, shared
   `simetra-metadata`), then run `fix`: it removes the entry that became stale.
 - A project that already has a `sql/` folder but no list is seeded by running
   `introspect` again on the same directory.
+- Debt is not a free pass. A function with DDL, a non-literal `EXECUTE`
+  (partition maintenance, statistics through `EXECUTE format(…)`), a call of
+  a function that executes SQL text, or a body in another language fails
+  `compile` with `sql.function-body-statement`; SQL that writes a table of a
+  kind fails with `sql.kind-table-verbatim`. Rewrite such a function with
+  static SQL or remove it.
 
 ## Adopted triggers
 
@@ -129,7 +135,11 @@ class `platform` only when the kind replaces it, and `plan` refuses
   `updatedAt` → the row mechanics (`<table>_simetra_touch`). The mechanics also
   fires on insert, which only makes the date and the version right there too.
 - A trigger calling the same handler with the same timing, level and events →
-  an `EventSubscription` with that handler (see `simetra-metadata`).
+  an `EventSubscription` with that handler (see `simetra-metadata`), but only
+  when the handler only checks and assigns `NEW`. A handler that writes a
+  table, runs `EXECUTE` or calls a function that writes is refused
+  (`sql.head-not-allowed`): move the write into a command or a TypeScript
+  hook first, or keep the table a `CustomTable`.
 - `INSERT OR UPDATE OF <columns>` → a subscription with `whenChanged` on the
   same columns. The plan warns (`plan.update-of-narrowed`): the subscription
   fires only when a value actually changes, not on every `UPDATE` that sets

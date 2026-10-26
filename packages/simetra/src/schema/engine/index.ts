@@ -49,7 +49,6 @@ export {
   SUPABASE_LOCKS,
   SUPABASE_PUBLIC_SCHEMA_GRANTS,
   SUPABASE_ROLES,
-  SUPABASE_SCHEMAS,
   SUPABASE_SURFACES,
   type ProviderLocks,
   type ProviderLockSource,

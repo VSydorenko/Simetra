@@ -227,6 +227,42 @@ export function statementTargets(stmt: Node, schema: string): UnitTarget[] {
   return []
 }
 
+/** Оператори, що змінюють рядки: ціль — лише поле `relation`. */
+const DML_STATEMENTS = [
+  "InsertStmt",
+  "UpdateStmt",
+  "DeleteStmt",
+  "MergeStmt",
+] as const
+
+/**
+ * Відношення, у яке пише оператор тіла функції (Правило 1, Р2c1-16): лише
+ * `relation` DML. Відношення, які DML лише читає (`UPDATE … FROM`, `DELETE …
+ * USING`, `MERGE … USING`), ціллю не є — вони під RLS і правами, як запит
+ * команди; вкладений оператор, що змінює дані (CTE), судиться окремо. Решта
+ * операторів цілей не має: що тіло може виконувати, судить дозвільний
+ * перелік операторів (Р2c1-37), тож денайліст за ціллю (`ALTER TABLE`,
+ * `TRUNCATE`, `COMMENT`…) зайвий.
+ */
+export function bodyStatementTargets(stmt: Node, schema: string): UnitTarget[] {
+  for (const key of DML_STATEMENTS) {
+    const node = (stmt as Record<string, { relation?: RangeVar } | undefined>)[
+      key
+    ]
+    if (node !== undefined) return [table(node.relation, schema)]
+  }
+  return []
+}
+
+/**
+ * Ключ вузла оператора (`SelectStmt`, `CreatePolicyStmt`): вид вузла пишеться
+ * з великої літери, а поле з тим самим закінченням (`selectStmt` у
+ * `INSERT … SELECT`) — з малої.
+ */
+export function isStatementKey(key: string): boolean {
+  return key.endsWith("Stmt") && key[0] !== key[0]?.toLowerCase()
+}
+
 /** Ціль гранту чи коментаря за видом об'єкта в дереві розбору. */
 function objectTarget(
   node: Node,

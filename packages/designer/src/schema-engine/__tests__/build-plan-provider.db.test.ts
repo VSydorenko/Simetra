@@ -50,6 +50,32 @@ import {
 
 useBuildPlanRoles()
 
+/**
+ * Прийнята таблиця `app.notes` з рядковою колонкою `note`. Дослівні тригер і
+ * політика — лише на `CustomTable`, як прийнятий борг (Р2c1-1): на таблиці
+ * виду це помилка `sql.kind-table-verbatim`. Тести, чий предмет — дослівний
+ * тригер чи політика, ставлять їх сюди.
+ */
+const NOTES = "custom-tables/Notes/Notes.meta.json"
+const notes = (
+  type: Record<string, unknown> = { type: "String", length: 20 }
+) =>
+  customTable("Notes", {
+    id: uuid(9201),
+    physicalName: "notes",
+    columns: [
+      {
+        id: uuid(9202),
+        name: "id",
+        physicalName: "id",
+        type: "UUID",
+        notNull: true,
+      },
+      { id: uuid(9203), name: "note", physicalName: "note", ...type },
+    ],
+    primaryKey: { name: "notes_pkey", columns: ["id"] },
+  })
+
 // Конкурентно: ціль і копії кожного тесту — власні бази, ролі створює лише
 // `beforeAll`, а лічильники двигунів-шпигунів — локальні для тесту
 describe.concurrent("buildPlan", () => {
@@ -603,38 +629,42 @@ END $$;`
       ).toEqual({ step: "s1", reason: "using" })
     })
 
-    const TRIGGER_FN = `CREATE FUNCTION app.party_touch() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;`
+    /** Модель із прийнятою `app.notes` і дослівним тригером на ній. */
+    const withTrigger = (type: Record<string, unknown>, sql: string) =>
+      compiled({ [NOTES]: notes(type), "sql/app/dependent.sql": sql })
+
+    const TRIGGER_FN = `CREATE FUNCTION app.notes_touch() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;`
 
     it("refuses a type change under a trigger WHEN condition", async () => {
       const sql = `${TRIGGER_FN}
-CREATE TRIGGER party_note BEFORE UPDATE ON app.party FOR EACH ROW WHEN (NEW.note IS DISTINCT FROM OLD.note) EXECUTE FUNCTION app.party_touch();`
+CREATE TRIGGER notes_note BEFORE UPDATE ON app.notes FOR EACH ROW WHEN (NEW.note IS DISTINCT FROM OLD.note) EXECUTE FUNCTION app.notes_touch();`
       const outcome = await planChange(
-        await withUnit(LONG, sql),
-        await withUnit(SHORT, sql)
+        await withTrigger(LONG, sql),
+        await withTrigger(SHORT, sql)
       )
       expect(outcome.status).toBe("refused")
       expect(errors(outcome)).toEqual(["plan.type-change-dependent"])
       expect(
         outcome.diagnostics.find((d) => d.code === "plan.type-change-dependent")
           ?.params
-      ).toEqual({ objects: "trigger app.party.party_note" })
+      ).toEqual({ objects: "trigger app.notes.notes_note" })
     })
 
     it("refuses a type change under a trigger UPDATE OF list", async () => {
       // Зміна без втрат: детектор дивиться на кожну зміну типу, бо `ALTER …
       // TYPE` падає однаково
       const sql = `${TRIGGER_FN}
-CREATE TRIGGER party_note_of BEFORE UPDATE OF note ON app.party FOR EACH ROW EXECUTE FUNCTION app.party_touch();`
+CREATE TRIGGER notes_note_of BEFORE UPDATE OF note ON app.notes FOR EACH ROW EXECUTE FUNCTION app.notes_touch();`
       const outcome = await planChange(
-        await withUnit(SHORT, sql),
-        await withUnit(LONG, sql)
+        await withTrigger(SHORT, sql),
+        await withTrigger(LONG, sql)
       )
       expect(outcome.status).toBe("refused")
       expect(errors(outcome)).toEqual(["plan.type-change-dependent"])
       expect(
         outcome.diagnostics.find((d) => d.code === "plan.type-change-dependent")
           ?.params
-      ).toEqual({ objects: "trigger app.party.party_note_of" })
+      ).toEqual({ objects: "trigger app.notes.notes_note_of" })
     })
 
     it("refuses a type change under a BEGIN ATOMIC function", async () => {
@@ -653,13 +683,13 @@ CREATE TRIGGER party_note_of BEFORE UPDATE OF note ON app.party FOR EACH ROW EXE
     })
 
     const WHEN_TRIGGER = `${TRIGGER_FN}
-CREATE TRIGGER party_note BEFORE UPDATE ON app.party FOR EACH ROW WHEN (NEW.note IS DISTINCT FROM OLD.note) EXECUTE FUNCTION app.party_touch();`
+CREATE TRIGGER notes_note BEFORE UPDATE ON app.notes FOR EACH ROW WHEN (NEW.note IS DISTINCT FROM OLD.note) EXECUTE FUNCTION app.notes_touch();`
 
     it("lets a type change through when an earlier step drops the dependent trigger", async () => {
       const artifact = planned(
         await planChange(
-          await withUnit(LONG, WHEN_TRIGGER),
-          await withUnit(SHORT, TRIGGER_FN)
+          await withTrigger(LONG, WHEN_TRIGGER),
+          await withTrigger(SHORT, TRIGGER_FN)
         )
       )
       const ids = artifact.steps.map((s) => s.id)
@@ -669,8 +699,8 @@ CREATE TRIGGER party_note BEFORE UPDATE ON app.party FOR EACH ROW WHEN (NEW.note
     })
 
     it("refuses a type change when the dependent trigger is dropped only after it", async () => {
-      const before = await withUnit(LONG, WHEN_TRIGGER)
-      const after = await withUnit(SHORT, TRIGGER_FN)
+      const before = await withTrigger(LONG, WHEN_TRIGGER)
+      const after = await withTrigger(SHORT, TRIGGER_FN)
       // Двигун, що знімає тригер лише після зміни типу: на момент ALTER він
       // ще стоїть, тож відмова лишається
       const dropsLast: SchemaEngine = {
@@ -696,7 +726,7 @@ CREATE TRIGGER party_note BEFORE UPDATE ON app.party FOR EACH ROW WHEN (NEW.note
       expect(
         outcome.diagnostics.find((d) => d.code === "plan.type-change-dependent")
           ?.params
-      ).toEqual({ objects: "trigger app.party.party_note" })
+      ).toEqual({ objects: "trigger app.notes.notes_note" })
     })
 
     it("keeps refusing a dropped overloaded function it cannot tell apart", async () => {
@@ -1045,15 +1075,15 @@ CREATE TRIGGER party_note BEFORE UPDATE ON app.party FOR EACH ROW WHEN (NEW.note
     // Провайдер (supautils) бере ACCESS EXCLUSIVE на таблицях свого переліку
     // для операторів політик і зняття тригера ролі з переліку (R27)
     const POLICY =
-      "CREATE POLICY party_read ON app.party FOR SELECT TO authenticated USING (true);"
-    const TOUCH = `CREATE FUNCTION app.party_touch() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;`
+      "CREATE POLICY notes_read ON app.notes FOR SELECT TO authenticated USING (true);"
+    const TOUCH = `CREATE FUNCTION app.notes_touch() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;`
     const TRIGGER = `${TOUCH}
-CREATE TRIGGER party_touch BEFORE UPDATE ON app.party FOR EACH ROW EXECUTE FUNCTION app.party_touch();`
+CREATE TRIGGER notes_touch BEFORE UPDATE ON app.notes FOR EACH ROW EXECUTE FUNCTION app.notes_touch();`
     const SERVICES = "Auth, Storage, Realtime"
 
     const withSql = (sql: string | undefined) =>
       compiled({
-        [PARTY]: party(),
+        [NOTES]: notes(),
         ...(sql === undefined ? {} : { "sql/app/unit.sql": sql }),
       })
 
@@ -1095,7 +1125,7 @@ CREATE TRIGGER party_touch BEFORE UPDATE ON app.party FOR EACH ROW EXECUTE FUNCT
     }
 
     // Тригерна функція, що лишається без тригера, сліпа для `plpgsql_check`
-    const UNTRIGGERED = ["app.party_touch()"]
+    const UNTRIGGERED = ["app.notes_touch()"]
 
     it.each([
       [

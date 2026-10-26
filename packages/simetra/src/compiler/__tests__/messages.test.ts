@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest"
-import { SCHEMA_RULES } from "simetra/model"
+import {
+  COMMAND_SETTING,
+  SCHEMA_RULES,
+  SESSION_CLAIMS_SETTING,
+} from "simetra/model"
 import {
   COMPILER_RULES,
   MESSAGES,
@@ -8,8 +12,10 @@ import {
   type RuleCode,
 } from "simetra/compiler"
 import { metaFiles, project } from "./helpers"
-import { diagnostic } from "../diagnostics"
+import { diagnostic, type DiagnosticParams } from "../diagnostics"
 import type { CommandContextWrite } from "../sql/command-context"
+import type { DefinerReadsForm } from "../sql/definer-reads"
+import type { HeadConstruct } from "../sql/query-shape"
 import type { SetFunctionReason } from "../sql/function-shape"
 
 const ALL_RULES: RuleCode[] = [...SCHEMA_RULES, ...COMPILER_RULES]
@@ -161,6 +167,7 @@ describe("messages catalog", () => {
       functionOption: 0,
       nonLiteral: 0,
       settingsTable: 0,
+      dynamicText: 0,
     } satisfies Record<CommandContextWrite, 0>)
     for (const locale of ["en", "uk"] as const) {
       const messages = forms.map(
@@ -180,6 +187,185 @@ describe("messages catalog", () => {
       })
       expect(new Set(messages).size).toBe(forms.length)
     }
+  })
+
+  it("a session write of debt SQL names what to remove from the debt function", () => {
+    // Прийом реальної бази — перша зустріч споживача з правилом (Р2c1-6):
+    // текст називає оператор чи ім'я налаштування, а не лише форму.
+    const cases: DiagnosticParams[] = [
+      { form: "setConfig", setting: COMMAND_SETTING },
+      { form: "setStatement", setting: "role" },
+      { form: "setStatement", setting: "*" },
+      { form: "functionOption", setting: SESSION_CLAIMS_SETTING },
+      { form: "settingsTable" },
+      { form: "nonLiteral" },
+      { form: "dynamicText" },
+    ]
+    for (const code of [
+      "sql.command-context-write",
+      "sql.debt-session-write",
+    ] as const) {
+      for (const locale of ["en", "uk"] as const) {
+        const render = (p: DiagnosticParams) =>
+          localize(
+            diagnostic(code, "a.sql", "", {
+              name: "public.f",
+              unit: "debt",
+              ...p,
+            }),
+            locale
+          )
+        const messages = cases.map((p) => render(p).message)
+        cases.forEach((p, i) => {
+          expect(messages[i]).toContain("public.f")
+          if (p.setting !== undefined && p.setting !== "*") {
+            expect(messages[i]).toContain(String(p.setting))
+          }
+        })
+        expect(new Set(messages).size).toBe(cases.length)
+        if (code === "sql.command-context-write") {
+          // Борговий текст і підказка конверсії — не ті, що для закритого коду.
+          const plain = localize(
+            diagnostic(code, "a.sql", "", {
+              name: "public.f",
+              form: "setConfig",
+            }),
+            locale
+          )
+          expect(render(cases[0]!).message).not.toBe(plain.message)
+          expect(render(cases[0]!).hint).not.toBe(plain.hint)
+        }
+      }
+    }
+    expect(
+      diagnostic("sql.command-context-write", "a.sql", "", {
+        name: "public.f",
+        form: "setConfig",
+        setting: COMMAND_SETTING,
+        unit: "debt",
+      }).message
+    ).toBe(
+      `Debt SQL unit public.f changes a platform session setting: remove set_config('${COMMAND_SETTING}', …)`
+    )
+    const warning = diagnostic("sql.debt-session-write", "a.sql", "", {
+      name: "public.f",
+      form: "setStatement",
+      setting: "role",
+    })
+    expect(warning.severity).toBe("warning")
+    expect(warning.message).toBe(
+      "Debt SQL unit public.f changes a protected session setting: remove SET or RESET of role"
+    )
+  })
+
+  it("sql.head-not-allowed names the head, the construct, the detail and the chain", () => {
+    // Повнота за типом: нова конструкція без запису тут — помилка `tsc`.
+    const constructs = Object.keys({
+      language: 0,
+      searchPath: 0,
+      setting: 0,
+      sqlBody: 0,
+      query: 0,
+      statement: 0,
+      call: 0,
+      relation: 0,
+      unqualified: 0,
+      operator: 0,
+      unread: 0,
+    } satisfies Record<HeadConstruct, 0>)
+    for (const locale of ["en", "uk"] as const) {
+      const render = (construct: string) =>
+        localize(
+          diagnostic("sql.head-not-allowed", "a.sql", "", {
+            head: "public.h",
+            chain: "public.h → public.helper",
+            construct,
+            detail: "public.x",
+            line: 3,
+          }),
+          locale
+        ).message
+      const messages = constructs.map(render)
+      messages.forEach((message, i) => {
+        expect(message).toContain("public.h")
+        expect(message).toContain("public.h → public.helper")
+        expect(message).toContain("public.x")
+        // Сирий ідентифікатор конструкції на місці тексту — пропущений запис.
+        expect(message, `${constructs[i]} ${locale}`).not.toBe(
+          render("<construct>").replace("<construct>", constructs[i]!)
+        )
+      })
+      expect(new Set(messages).size).toBe(constructs.length)
+    }
+  })
+
+  it("sql.definer-reads-rls gives every form its own text and hint", () => {
+    // Повнота за типом: нова форма без запису тут — помилка `tsc`.
+    const forms = Object.keys({
+      function: 0,
+      view: 0,
+      materializedView: 0,
+    } satisfies Record<DefinerReadsForm, 0>)
+    const reads: DiagnosticParams[] = [
+      { tables: "public.task, public.task_checklist" },
+      { tables: "public.task" },
+    ]
+    for (const locale of ["en", "uk"] as const) {
+      const render = (params: DiagnosticParams) =>
+        localize(
+          diagnostic("sql.definer-reads-rls", "a.sql", "", {
+            object: "public.rpc",
+            roles: "PUBLIC, authenticated",
+            line: 3,
+            ...params,
+          }),
+          locale
+        )
+      const rendered = forms.flatMap((form) =>
+        reads.map((p) => render({ form, ...p }))
+      )
+      rendered.forEach(({ message }, i) => {
+        expect(message).toContain("public.rpc")
+        expect(message).toContain("PUBLIC, authenticated")
+        const tables = String(reads[i % reads.length]!.tables)
+        if (tables !== "") expect(message).toContain(tables)
+      })
+      expect(new Set(rendered.map((d) => d.message)).size).toBe(rendered.length)
+      expect(
+        new Set(forms.map((form) => render({ form, tables: "t" }).hint)).size
+      ).toBe(forms.length)
+    }
+    const warning = diagnostic("sql.definer-reads-rls", "a.sql", "", {
+      object: "public.rpc",
+      form: "function",
+      tables: "public.task",
+      roles: "PUBLIC, authenticated, anon",
+      line: 1,
+    })
+    expect(warning.severity).toBe("warning")
+    expect(warning.message).toBe(
+      "Function public.rpc at line 1 runs as its owner (SECURITY DEFINER), PUBLIC, authenticated, anon may have EXECUTE on it, and it reads tables under row-level security past the caller's rights: public.task"
+    )
+  })
+
+  it("sql.function-settings-shell names RESET ALL as every setting", () => {
+    const text = (setting: string, locale: "en" | "uk") =>
+      localize(
+        diagnostic("sql.function-settings-shell", "a.sql", "", {
+          function: "public.h",
+          setting,
+        }),
+        locale
+      ).message
+    expect(text("security", "en")).toBe(
+      "ALTER FUNCTION public.h changes security of a function whose shell only its CREATE sets"
+    )
+    expect(text("*", "en")).toBe(
+      "ALTER FUNCTION public.h changes every setting (RESET ALL) of a function whose shell only its CREATE sets"
+    )
+    expect(text("*", "uk")).toBe(
+      "ALTER FUNCTION public.h змінює усі налаштування (RESET ALL) функції, оболонку якої задає лише її CREATE"
+    )
   })
 
   it("rights.custom-action-effects gives every reason its own text and hint", () => {
@@ -209,13 +395,7 @@ describe("messages catalog", () => {
   })
 
   it("renders every closed-form reason of a scope set function as a sentence", () => {
-    const reasons: SetFunctionReason[] = [
-      "language",
-      "security",
-      "searchPath",
-      "unqualified",
-      "sqlBody",
-    ]
+    const reasons: SetFunctionReason[] = ["language", "security", "searchPath"]
     for (const locale of ["en", "uk"] as const) {
       for (const reason of reasons) {
         const { message } = localize(
@@ -362,6 +542,118 @@ describe("messages catalog", () => {
       "Приберіть оператор; simetra fix прибирає його, коли всі цілі належать платформі, — оператор, що називає й чужі об'єкти, ділять вручну."
     )
   })
+
+  it.each([
+    { form: "policy", en: "Verbatim policy", uk: "Дослівна політика" },
+    { form: "trigger", en: "Verbatim trigger", uk: "Дослівний тригер" },
+  ])(
+    "sql.kind-table-verbatim names the $form and its kind table",
+    ({ form, en, uk }) => {
+      const d = diagnostic("sql.kind-table-verbatim", "sql/public/x.sql", "", {
+        identity: `${form}:public.task.p`,
+        table: "public.task",
+        form,
+        line: 3,
+      })
+      expect(d.message).toBe(
+        `${en} ${form}:public.task.p at line 3 is on public.task, a table of a kind`
+      )
+      expect(localize(d, "uk").message).toBe(
+        `${uk} ${form}:public.task.p у рядку 3 стоїть на public.task — таблиці виду`
+      )
+      // Підказка веде до тієї самої заміни, що й модуль виду: політика —
+      // права, тригер — підписка.
+      expect(d.hint).toContain(
+        form === "policy" ? "Row access is declared" : "EventSubscription"
+      )
+    }
+  )
+
+  it("sql.kind-table-verbatim names the function and the statement of a body", () => {
+    const d = diagnostic("sql.kind-table-verbatim", "sql/public/x.sql", "", {
+      identity: "function:public.f()",
+      function: "public.f",
+      table: "public.task",
+      form: "functionBody",
+      statement: "InsertStmt",
+      line: 3,
+    })
+    expect(d.message).toBe(
+      "Function public.f at line 3 runs InsertStmt on public.task, a table of a kind"
+    )
+    expect(localize(d, "uk").message).toBe(
+      "Функція public.f у рядку 3 виконує InsertStmt над public.task — таблицею виду"
+    )
+    // Підказка називає, хто пише таблицю виду, а не заміну політики чи тригера.
+    expect(d.hint).toContain("Only the platform writes a table of a kind")
+    expect(localize(d, "uk").hint).toContain("Таблицю виду пише лише платформа")
+  })
+
+  it.each([
+    { statement: "AlterDatabaseSetStmt", en: "runs AlterDatabaseSetStmt" },
+    {
+      statement: "nonLiteralExecute",
+      en: "runs EXECUTE of a non-literal text",
+    },
+    {
+      statement: "dynamicText",
+      en: "calls a function that executes SQL text",
+    },
+    { statement: "language", en: "is written in a language" },
+    { statement: "unread", en: "has a part the compiler could not read" },
+  ])(
+    "sql.function-body-statement gives $statement its own text",
+    ({ statement, en }) => {
+      const d = diagnostic(
+        "sql.function-body-statement",
+        "sql/public/x.sql",
+        "",
+        {
+          function: "public.f",
+          statement,
+          line: 3,
+        }
+      )
+      expect(d.message).toContain(en)
+      expect(localize(d, "uk").message).not.toBe(d.message)
+    }
+  )
+
+  it.each([
+    {
+      file: "sql/public/x.sql",
+      pointer: "",
+      params: {
+        unit: "view:public.v",
+        call: "query_to_xml",
+        line: 2,
+      } as DiagnosticParams,
+      en: "view:public.v at line 2 calls query_to_xml, a function an expression may not call",
+    },
+    // Вираз метаданих прийнятої таблиці: місце — вказівник поля, без рядка.
+    {
+      file: "custom-tables/Log/Log.meta.json",
+      pointer: "/columns/0/default",
+      params: {
+        unit: "public.log",
+        call: "pg_catalog.set_config",
+      } as DiagnosticParams,
+      en: "public.log calls pg_catalog.set_config, a function an expression may not call",
+    },
+  ])(
+    "sql.expression-call-not-allowed: $en",
+    ({ file, pointer, params, en }) => {
+      const d = diagnostic(
+        "sql.expression-call-not-allowed",
+        file,
+        pointer,
+        params
+      )
+      expect(d.message).toBe(en)
+      expect(localize(d, "uk").message).toContain(String(params.call))
+      expect(localize(d, "uk").message).not.toBe(en)
+    }
+  )
 
   it.each([
     { level: "org", scope: "org" },
@@ -562,5 +854,52 @@ describe("messages catalog", () => {
     expect(uk.hint).toBe(
       "Якщо серверний код читає чи пише ці таблиці сервісним ключем, лишіть їх CustomTable до команд платформи (П4)."
     )
+  })
+
+  it("sql.domain-check-not-allowed names the domain, the construct and the chain", () => {
+    for (const locale of ["en", "uk"] as const) {
+      const message = localize(
+        diagnostic("sql.domain-check-not-allowed", "a.sql", "", {
+          domain: "public.d",
+          chain: "public.d → public.log_it",
+          construct: "language",
+          line: 2,
+        }),
+        locale
+      ).message
+      expect(message).toContain("public.d → public.log_it")
+      // Конструкція — текстом судді голів, а не сирим ідентифікатором.
+      expect(message).not.toMatch(/runs language|виконує language/)
+    }
+  })
+
+  it.each<{ params: DiagnosticParams; en: string }>([
+    { params: { extension: "pgcrypto" }, en: "without SCHEMA" },
+    {
+      params: { extension: "pgcrypto", schema: "public" },
+      en: "in schema public",
+    },
+  ])("sql.debt-extension-schema: $en", ({ params, en }) => {
+    const d = diagnostic("sql.debt-extension-schema", "a.sql", "", params)
+    expect(d.severity).toBe("warning")
+    expect(d.message).toContain(en)
+    expect(d.message).not.toContain("undefined")
+    expect(localize(d, "uk").message).not.toContain("undefined")
+  })
+
+  it("promote.cascade-to-restrict names the foreign key and the consequence", () => {
+    const d = diagnostic("promote.cascade-to-restrict", "a.meta.json", "", {
+      table: "app.contacts",
+      foreignKey: "contacts_fk",
+      columns: "counterparty_id",
+      action: "cascade",
+    })
+    expect(d.severity).toBe("warning")
+    for (const text of [d.message, localize(d, "uk").message]) {
+      expect(text).toContain("app.contacts")
+      expect(text).toContain("contacts_fk")
+      expect(text).toContain("counterparty_id")
+    }
+    expect(d.message).toContain("TypeScript hook")
   })
 })

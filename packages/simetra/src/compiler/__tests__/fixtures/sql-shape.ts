@@ -45,6 +45,13 @@ export function bodyShape(createFunction: string) {
   }))
 }
 
+/**
+ * Функція plpgsql з нелітеральним `EXECUTE` — недосудна для обходу
+ * досяжності (Р2c1-5) і поза закритою оболонкою, тож у спільному файлі — борг.
+ */
+export const dynamicFunction = (name: string, args = "", returns = "int") =>
+  `CREATE FUNCTION ${name}(${args}) RETURNS ${returns} LANGUAGE plpgsql VOLATILE AS $$ BEGIN EXECUTE format('SELECT %s', 1); RETURN NULL; END $$;\n`
+
 /** Очікувана функція-тригер з тілом `body`. */
 export const expectedFunction = (fn: string, body: string) =>
   `CREATE FUNCTION ${fn}() RETURNS trigger LANGUAGE plpgsql AS $$\n${body}\n$$;`

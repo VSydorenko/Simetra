@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { compile } from "simetra/compiler"
 import {
+  acceptDebt,
   attribute,
   catalog,
   customTable,
@@ -615,6 +616,253 @@ describe("stage 4: integrity", () => {
       expect(codes(result)).toEqual([
         ["physical.constraint-name-required", "error", LOG, "/checks/1"],
       ])
+    })
+
+    describe("fk action on a table of a kind (Р2c1-34)", () => {
+      // Каскад від таблиці виду до прийнятої таблиці виконував би посеред
+      // команди вирази й борговий код прийнятої таблиці.
+      const fkOn = (
+        references: Record<string, unknown>,
+        action: Record<string, string>
+      ) =>
+        compileWith({
+          [NOTE]: catalog("Note"),
+          "custom-tables/Other/Other.meta.json": customTable("Other"),
+          [LOG]: customTable("Log", {
+            columns,
+            foreignKeys: [
+              {
+                name: "log_fk",
+                columns: ["id"],
+                references,
+                ...action,
+              },
+            ],
+          }),
+        })
+      const kind = {
+        object: { kind: "Catalog", name: "Note" },
+        columns: ["ref"],
+      }
+      const other = {
+        object: { kind: "CustomTable", name: "Other" },
+        columns: ["id"],
+      }
+      const external = {
+        external: { schema: "auth", table: "users", columns: ["id"] },
+      }
+      const refused = (field: string) => [
+        [
+          "customTable.fk-action-on-kind-table",
+          "error",
+          LOG,
+          `/foreignKeys/0/${field}`,
+        ],
+      ]
+      it.each([
+        {
+          field: "onDelete",
+          action: "cascade",
+          target: kind,
+          expected: refused("onDelete"),
+        },
+        {
+          field: "onDelete",
+          action: "setNull",
+          target: kind,
+          expected: refused("onDelete"),
+        },
+        {
+          field: "onDelete",
+          action: "setDefault",
+          target: kind,
+          expected: refused("onDelete"),
+        },
+        {
+          field: "onUpdate",
+          action: "cascade",
+          target: kind,
+          expected: refused("onUpdate"),
+        },
+        { field: "onDelete", action: "noAction", target: kind, expected: [] },
+        { field: "onDelete", action: "restrict", target: kind, expected: [] },
+        { field: "onDelete", action: "cascade", target: other, expected: [] },
+        {
+          field: "onDelete",
+          action: "cascade",
+          target: external,
+          expected: [],
+        },
+      ])(
+        "$field $action → $target.object.kind",
+        async ({ field, action, target, expected }) => {
+          const result = await fkOn(target, { [field]: action })
+          expect(codes(result)).toEqual(expected)
+          if (expected.length > 0) {
+            expect(result.diagnostics[0]!.params).toEqual({
+              table: "public.log",
+              foreignKey: "log_fk",
+              action,
+            })
+          }
+        }
+      )
+    })
+
+    describe("metadata expressions of an adopted table (Р2c1-41, Р2c1-55)", () => {
+      // Postgres обчислює ці вирази на кожному записі в прийняту таблицю,
+      // зокрема записі ролі API, тож їхні виклики — дозвільний перелік
+      // виразів: запис сесії й виконання тексту SQL у нього не входять.
+      const NOT_ALLOWED = "sql.expression-call-not-allowed"
+      const SEQUENCE = "CREATE SEQUENCE public.log_seq;\n"
+      const amount = {
+        id: uuid(746),
+        name: "amount",
+        physicalName: "amount",
+        type: "Integer",
+      }
+      const at: Record<string, (e: string) => Record<string, unknown>> = {
+        default: (e) => ({
+          columns: [...columns, { ...amount, type: "Boolean", default: e }],
+        }),
+        generated: (e) => ({
+          columns: [
+            ...columns,
+            { ...amount, type: "Boolean", generated: { expression: e } },
+          ],
+        }),
+        checks: (e) => ({
+          columns: [...columns, amount],
+          checks: [{ name: "log_check", expression: e }],
+        }),
+        "index key": (e) => ({
+          columns: [...columns, amount],
+          indexes: [{ name: "log_idx", keys: [{ expression: `(${e})` }] }],
+        }),
+        "index where": (e) => ({
+          columns: [...columns, amount],
+          indexes: [{ name: "log_idx", keys: [{ column: "id" }], where: e }],
+        }),
+      }
+      const POINTERS: Record<string, string> = {
+        default: "/columns/2/default",
+        generated: "/columns/2/generated/expression",
+        checks: "/checks/0/expression",
+        "index key": "/indexes/0/keys/0/expression",
+        "index where": "/indexes/0/where",
+      }
+      const refused = (field: string, call: string) => ({
+        code: NOT_ALLOWED,
+        pointer: POINTERS[field],
+        call,
+      })
+      const cases = Object.keys(at).flatMap((field) => [
+        {
+          field,
+          expression:
+            "pg_catalog.set_config('simetra.actor', 'x', false) IS NOT NULL",
+          expected: [refused(field, "pg_catalog.set_config")],
+        },
+        {
+          field,
+          expression:
+            "pg_catalog.set_config('request.jwt.claims', '{}', false) IS NOT NULL",
+          expected: [refused(field, "pg_catalog.set_config")],
+        },
+        {
+          field,
+          expression: "query_to_xml('select 1', true, true, '') IS NOT NULL",
+          expected: [refused(field, "query_to_xml")],
+        },
+        {
+          field,
+          expression: "extensions.whatever() IS NOT NULL",
+          expected: [refused(field, "extensions.whatever")],
+        },
+        {
+          field,
+          expression: "simetra.provision_user(id, id) IS NOT NULL",
+          expected: [
+            {
+              code: "sql.platform-function-call",
+              pointer: POINTERS[field],
+              call: undefined,
+            },
+          ],
+        },
+        // `nextval` поза `DEFAULT` — поза переліком і над послідовністю моделі.
+        ...(field === "default"
+          ? []
+          : [
+              {
+                field,
+                expression: "nextval('public.log_seq') > 0",
+                expected: [refused(field, "nextval")],
+              },
+            ]),
+        { field, expression: "now() IS NOT NULL", expected: [] },
+        { field, expression: "gen_random_uuid() IS NOT NULL", expected: [] },
+        {
+          field,
+          expression: "extensions.uuid_generate_v4() IS NOT NULL",
+          expected: [],
+        },
+        { field, expression: "amount >= 0", expected: [] },
+      ])
+      // Таблиця колонки `serial`: `DEFAULT nextval(...)` послідовності моделі.
+      const serial = [
+        { expression: "nextval('public.log_seq'::regclass) > 0", expected: [] },
+        {
+          expression: "pg_catalog.nextval('public.log_seq') > 0",
+          expected: [],
+        },
+        {
+          expression: "nextval('public.' || 'log_seq') > 0",
+          expected: [refused("default", "nextval")],
+        },
+        {
+          expression: "nextval('public.other_seq'::regclass) > 0",
+          expected: [refused("default", "nextval")],
+        },
+        {
+          expression: "nextval('log_seq'::regclass) > 0",
+          expected: [refused("default", "nextval")],
+        },
+        {
+          expression: "nextval('public.log_seq'::text) > 0",
+          expected: [refused("default", "nextval")],
+        },
+      ].map((c) => ({ field: "default", ...c }))
+      it.each([...cases, ...serial])(
+        "$field: $expression",
+        async ({ field, expression, expected }) => {
+          // Послідовність — прийнятий борг модуля таблиці.
+          const result = await compile(
+            await acceptDebt(
+              metaFiles({
+                "project.meta.json": project(),
+                [LOG]: customTable("Log", {
+                  columns,
+                  ...at[field]!(expression),
+                }),
+                "custom-tables/Log/Log.sql": SEQUENCE,
+              })
+            )
+          )
+          expect(
+            result.diagnostics.map((d) => ({
+              code: d.code,
+              pointer: d.pointer,
+              call: d.params?.call,
+            }))
+          ).toEqual(expected)
+          expect(
+            result.diagnostics.every(
+              (d) => d.file === LOG && d.severity === "error"
+            )
+          ).toBe(true)
+        }
+      )
     })
 
     it("fk to a pg enum is not referenceable, not a table", async () => {

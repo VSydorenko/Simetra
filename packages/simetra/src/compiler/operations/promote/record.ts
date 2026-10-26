@@ -141,12 +141,17 @@ export interface PromotionRecord {
     to: "enabled"
   }[]
   /**
-   * Будь-який бік (§9.5, Пр8); для "incoming" дія не змінюється (to === from),
-   * але потребує дозволу. Імена — нові; `from: "none"` — FK у прийнятій
-   * таблиці не було, а вид додає його з каскадом.
+   * Будь-який бік (§9.5, Пр8); "incoming" від таблиці, що лишається
+   * `CustomTable`, промоція переводить у `restrict` (Р2c1-34), і зміна
+   * потребує дозволу. Імена — нові; `from: "none"` — FK у прийнятій
+   * таблиці не було, а вид додає його з каскадом. `event` — подія FK, чия дія
+   * змінилась: `update` буває лише вхідною — FK може посилатися на
+   * неключову унікальну колонку, а `id` таблиці виду поза командою не
+   * заморожено, тож `ON UPDATE CASCADE` спрацьовує так само, як видалення.
    */
   deleteSemantics: {
     direction: "own" | "incoming"
+    event: "delete" | "update"
     schema: string
     table: string
     constraint?: string
@@ -271,6 +276,7 @@ export const promotionRecordSchema: z.ZodType<PromotionRecord> = z.strictObject(
     deleteSemantics: z.array(
       z.strictObject({
         direction: z.enum(["own", "incoming"]),
+        event: z.enum(["delete", "update"]),
         ...at,
         constraint: z.string().optional(),
         columns: z.array(z.string()),
@@ -524,7 +530,12 @@ function derive(
       `the mapping names columns the adopted tables lack: ${unknown.join(", ")}`
     )
   }
-  facts.deleteSemantics = deleteSemantics(after.physical, objectId, pairs)
+  facts.deleteSemantics = deleteSemantics(
+    before,
+    after.physical,
+    objectId,
+    pairs
+  )
   return facts
 }
 
@@ -610,6 +621,12 @@ const WIDENING: ReadonlySet<string> = new Set([
   "setNull",
   "setDefault",
 ])
+
+/** Події вхідного FK, кожна з яких дає окремий елемент семантики. */
+const INCOMING_EVENTS = [
+  ["delete", "onDelete"],
+  ["update", "onUpdate"],
+] as const
 
 /**
  * Мапа одиниці з розміщених колонок: наступник кожної прийнятої колонки за
@@ -769,11 +786,16 @@ function targetColumn(
 /**
  * Зміни семантики видалення (рішення 5, §9.5) з двох знімків. Власні FK:
  * дія FK на ті самі колонки до й після, якщо вона змінилась, або новий FK з
- * каскадом, якого не було. Вхідні: FK з `CASCADE`/`SET NULL` таблиці поза
- * одиницею в сам об'єкт — дія та сама, але контроль посилань П3 мусить
- * її бачити.
+ * каскадом, якого не було. Вхідні: FK таблиці поза одиницею в сам об'єкт,
+ * що до промоції чи після неї має `CASCADE`/`SET NULL`/`SET DEFAULT` в
+ * `ON DELETE` чи `ON UPDATE` — окремим елементом на кожну подію. Від
+ * таблиці, що лишається `CustomTable`, промоція переводить такий FK у
+ * `restrict` (Р2c1-34) — дія «до» береться зі знімка до промоції (та сама
+ * таблиця за `objectId`, FK за ім'ям), і контроль посилань П3 мусить бачити
+ * зміну.
  */
 function deleteSemantics(
+  before: Pick<PhysicalSnapshot, "tables">,
   after: Pick<PhysicalSnapshot, "tables">,
   objectId: string,
   pairs: readonly TablePair[]
@@ -791,6 +813,7 @@ function deleteSemantics(
       if (old === undefined && !WIDENING.has(fk.onDelete)) continue
       found.push({
         direction: "own",
+        event: "delete",
         schema: now.schema,
         table: now.name,
         constraint: fk.name,
@@ -809,19 +832,31 @@ function deleteSemantics(
   )
   for (const table of after.tables) {
     if (table.origin.objectId === objectId) continue
+    const was = before.tables.find(
+      (t) =>
+        t.origin.objectId === table.origin.objectId &&
+        t.origin.tabularSectionId === table.origin.tabularSectionId &&
+        t.origin.part === table.origin.part
+    )
     for (const fk of table.foreignKeys) {
       const target = JSON.stringify([fk.references.schema, fk.references.table])
-      if (!unit.has(target) || !WIDENING.has(fk.onDelete)) continue
-      found.push({
-        direction: "incoming",
-        schema: table.schema,
-        table: table.name,
-        constraint: fk.name,
-        columns: fk.columns,
-        target: fk.references.table,
-        from: fk.onDelete,
-        to: fk.onDelete,
-      })
+      if (!unit.has(target)) continue
+      const old = was?.foreignKeys.find((o) => o.name === fk.name)
+      for (const [event, field] of INCOMING_EVENTS) {
+        const from = old?.[field] ?? fk[field]
+        if (!WIDENING.has(from) && !WIDENING.has(fk[field])) continue
+        found.push({
+          direction: "incoming",
+          event,
+          schema: table.schema,
+          table: table.name,
+          constraint: fk.name,
+          columns: fk.columns,
+          target: fk.references.table,
+          from,
+          to: fk[field],
+        })
+      }
     }
   }
   return found

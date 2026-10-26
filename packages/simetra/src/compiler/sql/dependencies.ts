@@ -153,9 +153,9 @@ export function unitTypes(
 }
 
 /**
- * Виклики функцій одиниці (простір `proc`): `FuncCall` дерева, функція
- * тригера й тіло `LANGUAGE sql`. Тіла plpgsql не читаються — їхні вирази
- * передає `textCalls`.
+ * Виклики функцій одиниці (простір `proc`): `FuncCall` дерева, `CALL`,
+ * функція тригера й тіло `LANGUAGE sql`. Тіла plpgsql не читаються — їхні
+ * вирази передає `textCalls`.
  */
 export function unitCalls(
   unit: Pick<SqlUnit, "tree">,
@@ -602,6 +602,12 @@ class ReferenceCollector {
         const sequence = this.sequenceArgument(call.args)
         if (sequence !== undefined) refs.push(sequence)
       }
+    }
+    // `CALL` несе виклик полем `funccall` без обгортки `FuncCall`: без цього
+    // процедура не була б ні залежністю, ні ланкою обходу досяжності.
+    const callStmt = node.CallStmt as { funccall?: { funcname?: unknown } }
+    if (callStmt?.funccall !== undefined) {
+      refs.push({ space: "proc", names: strings(callStmt.funccall.funcname) })
     }
     const cast = node.TypeCast as Record<string, unknown> | undefined
     if (cast !== undefined) {

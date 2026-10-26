@@ -490,7 +490,10 @@ describe("sql units", () => {
         "CREATE POLICY p ON storage.objects FOR SELECT USING (bucket_id = 'avatars');",
       ].join("\n")
     )
-    expect(result.diagnostics).toEqual([])
+    // Розширення без SCHEMA стає в схему застосунку (Р2c1-35).
+    expect(result.diagnostics.map((d) => [d.code, d.severity])).toEqual([
+      ["sql.debt-extension-schema", "warning"],
+    ])
     expect(result.model!.sqlUnits.map((u) => u.identity)).toEqual([
       "domain:public.d",
       "extension:pgcrypto",
@@ -670,7 +673,7 @@ describe("sql units", () => {
         "project.meta.json": project(),
         ...entries,
         "documents/Sale/Sale.sql":
-          "CREATE FUNCTION sale_total(p uuid) RETURNS numeric LANGUAGE sql STABLE AS $$ select 0 $$;\n" +
+          "CREATE FUNCTION sale_total(p uuid) RETURNS numeric LANGUAGE sql STABLE SET search_path = '' AS $$ select 0 $$;\n" +
           "-- @movements Stock\nSELECT now(), 'Expense', null::uuid, 1 ORDER BY 1\n-- @end\n",
       })
     )

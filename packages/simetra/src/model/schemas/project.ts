@@ -141,6 +141,93 @@ export const PROVIDER_API_ROLES: Readonly<
 }
 
 /**
+ * Схеми, які створює й наповнює провайдер (платформна спека §6.9): застосунок
+ * має в них лише поверхню пресету. Факт T0, бо його потребує і компілятор (T1:
+ * доступність недосудного SQL, `SECURITY DEFINER` над RLS), і схема (T2) та
+ * designer — один перелік замість копії по ярусах. Порядок зберігається:
+ * його читає й `SUPABASE_SURFACES`.
+ */
+export const PROVIDER_SCHEMAS: Readonly<
+  Record<DatabaseProvider, readonly string[]>
+> = {
+  supabase: [
+    "_analytics",
+    "_realtime",
+    "_supavisor",
+    "auth",
+    "cron",
+    "etl",
+    "extensions",
+    "graphql",
+    "graphql_public",
+    "information_schema",
+    "net",
+    "pgbouncer",
+    "pgmq",
+    "pgmq_public",
+    "pgsodium",
+    "pgsodium_masks",
+    "pgtle",
+    "realtime",
+    "storage",
+    "supabase_functions",
+    "supabase_migrations",
+    "vault",
+  ],
+}
+
+// Довіри до цілої схеми провайдера немає (Р2c1-21): голова кличе лише
+// поіменні функції, що читають; нова — поповнення переліку з рев'ю.
+/**
+ * Provider functions that application SQL running inside a command (kind
+ * module functions, subscription handlers, set and dimension functions,
+ * movement query blocks) may call, as `schema.name`.
+ */
+export const PROVIDER_FUNCTIONS: Readonly<
+  Record<DatabaseProvider, readonly string[]>
+> = {
+  supabase: ["auth.uid", "auth.jwt", "auth.role"],
+}
+
+// Вирази прийнятих таблиць, подання й політики кличуть функції провайдера
+// поіменно (Р2c1-55): цей перелік доповнює `PROVIDER_FUNCTIONS` лише для них,
+// тож голова нових довірених функцій не дістає. Поповнення — з рев'ю.
+/**
+ * Provider functions that expression units (metadata expressions of adopted
+ * tables, views, verbatim policy expressions) may call in addition to
+ * `PROVIDER_FUNCTIONS`, as `schema.name`.
+ */
+export const PROVIDER_EXPRESSION_FUNCTIONS: Readonly<
+  Record<DatabaseProvider, readonly string[]>
+> = {
+  supabase: ["extensions.gen_random_bytes", "extensions.uuid_generate_v4"],
+}
+
+// Що саме виконає така функція, статично не відомо, тож її виклик з
+// вільного SQL — зміна сесії невідомою формою (Р2c1-32). Поіменно, а не
+// схемою: перелік поповнюється з рев'ю.
+/**
+ * Provider functions that execute the SQL text passed to them, as
+ * `schema.name`.
+ */
+export const PROVIDER_SQL_TEXT_FUNCTIONS: Readonly<
+  Record<DatabaseProvider, readonly string[]>
+> = {
+  supabase: [
+    "extensions.dblink",
+    "extensions.dblink_exec",
+    "extensions.dblink_send_query",
+    "extensions.dblink_open",
+    "graphql.resolve",
+    "graphql_public.graphql",
+    "pgtle.install_extension",
+    "cron.schedule",
+    "cron.schedule_in_database",
+    "cron.alter_job",
+  ],
+}
+
+/**
  * Ролі платформи за призначенням (платформна спека §6.7, спека прав §5.1):
  * на відміну від ролей API їх не дає провайдер — на базі споживача їх
  * створює designer (`simetra roles`), тож ім'я одне для всіх провайдерів.
@@ -162,18 +249,26 @@ export const COMMAND_SETTING = "simetra.command"
  */
 export const SESSION_CLAIMS_SETTING = "request.jwt.claims"
 
+// `session_replication_role = replica` вимикає тригери платформи (носії,
+// ефекти, механіка, RI), а в сесії пулу — і для чужих команд (Р2c1-40).
 // Підміна будь-якого з них посеред оператора команди змінила б, кого й що
 // бачать політики запису (Р2b1-19, Р2b1-19b): claims визначають користувача,
 // а `RESET ROLE` вийшов би з ролі команд. Простори імен, а не окремі імена:
 // наступне налаштування платформи чи стара форма `request.jwt.claim.*` не
 // стають новою дірою.
 /**
+ * The namespace of the platform's own session settings: the command context
+ * and every later platform setting.
+ */
+export const PLATFORM_SETTING_PREFIX = "simetra."
+
+/**
  * Session settings that application SQL must never change: name prefixes
  * (case-insensitive) and exact names.
  */
 export const PROTECTED_SESSION_SETTINGS = {
-  prefixes: ["simetra.", "request.jwt."],
-  names: ["role", "session_authorization"],
+  prefixes: [PLATFORM_SETTING_PREFIX, "request.jwt."],
+  names: ["role", "session_authorization", "session_replication_role"],
 } as const
 
 /** The command context: the action, the root object's label and the root row's UUID. */

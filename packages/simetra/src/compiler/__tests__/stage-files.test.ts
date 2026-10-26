@@ -303,7 +303,7 @@ describe("stage 1: files", () => {
       metaFiles({
         "project.meta.json": project(),
         "sql/public/own.sql":
-          "CREATE FUNCTION public.me() RETURNS uuid LANGUAGE sql STABLE AS $$ select (select simetra.current_user_id()) $$;",
+          "CREATE FUNCTION public.me() RETURNS uuid LANGUAGE sql STABLE SET search_path = '' AS $$ select (select simetra.current_user_id()) $$;",
       })
     )
     expect(result.diagnostics).toEqual([])

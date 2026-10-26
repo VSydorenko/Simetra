@@ -11,3 +11,12 @@ export const CURRENT_USER_FUNCTION: QualifiedName = {
   schema: PLATFORM_SCHEMA,
   name: "current_user_id",
 }
+
+/**
+ * Функції схеми платформи, які SQL застосунку може кликати (Р2c1-38): лише
+ * поіменні, що читають. Решта пишуть таблиці платформи чи ідентичності, а
+ * виклик не є ціллю, тож Правило 1 його не бачить.
+ */
+export const PLATFORM_READ_FUNCTIONS: readonly QualifiedName[] = [
+  CURRENT_USER_FUNCTION,
+]

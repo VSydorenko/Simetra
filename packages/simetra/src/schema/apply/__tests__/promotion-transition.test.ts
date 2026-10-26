@@ -558,65 +558,31 @@ describe("promotionTransition: limits of P3-2a", () => {
   })
 
   it("derives incoming delete semantics from the desired model", async () => {
-    const { before, afterFiles, record } = await counterparty()
-    expect(record.deleteSemantics).toEqual([])
-    afterFiles.set(
-      "custom-tables/Note/Note.meta.json",
-      JSON.stringify({
-        id: uuid(7401),
-        kind: "CustomTable",
-        name: "Note",
-        physicalName: "notes",
-        kindLabel: "note",
-        schema: "app",
-        columns: [
-          {
-            id: uuid(7402),
-            name: "id",
-            physicalName: "id",
-            type: "UUID",
-            notNull: true,
-          },
-          {
-            id: uuid(7403),
-            name: "counterpartyId",
-            physicalName: "counterparty_id",
-            type: "UUID",
-          },
-        ],
-        primaryKey: { name: "notes_pkey", columns: ["id"] },
-        foreignKeys: [
-          {
-            name: "notes_counterparty_id_fkey",
-            columns: ["counterpartyId"],
-            references: {
-              object: { kind: "Catalog", name: "Counterparty" },
-              columns: ["ref"],
-            },
-            onDelete: "cascade",
-          },
-        ],
-      })
+    // Контакти лишаються `CustomTable`: їхній каскад на контрагента промоція
+    // переводить у `restrict` (Р2c1-34), а T2 виводить це з обох знімків.
+    const { before, after, record } = await promoted(
+      promotionProject({ ...PARTS, contacts: true }),
+      counterpartyMapping(NO_FILL)
     )
-    const later = await compiled(afterFiles)
+    const incoming = {
+      direction: "incoming",
+      event: "delete",
+      schema: "app",
+      table: "counterparty_contacts",
+      constraint: "counterparty_contacts_counterparty_id_fkey",
+      columns: ["counterparty_id"],
+      target: "counterparty",
+      from: "cascade",
+      to: "restrict",
+    }
+    expect(record.deleteSemantics).toEqual([incoming])
     const verdict = await transition({
       state: applied(before),
-      model: later,
+      model: after,
       records: [input(record)],
     })
     expect(verdict.status).toBe("promotion")
     if (verdict.status !== "promotion") return
-    expect(verdict.facts.deleteSemantics).toEqual([
-      {
-        direction: "incoming",
-        schema: "app",
-        table: "notes",
-        constraint: "notes_counterparty_id_fkey",
-        columns: ["counterparty_id"],
-        target: "counterparty",
-        from: "cascade",
-        to: "cascade",
-      },
-    ])
+    expect(verdict.facts.deleteSemantics).toEqual([incoming])
   })
 })

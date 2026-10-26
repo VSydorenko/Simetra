@@ -710,7 +710,8 @@ export function kitchenSink(): Map<string, string> {
           object: ref("Catalog", "Organization"),
           columns: ["ref"],
         },
-        onDelete: "cascade",
+        // Каскад від таблиці виду до прийнятої таблиці заборонено (Р2c1-34).
+        onDelete: "restrict",
         onUpdate: "restrict",
         deferrable: "initiallyDeferred",
       },
@@ -836,7 +837,7 @@ export function kitchenSink(): Map<string, string> {
   const handlers = ["stamp_item", "on_user_deleted"]
     .map(
       (name) =>
-        `CREATE FUNCTION public.${name}() RETURNS trigger LANGUAGE plpgsql VOLATILE AS $$ BEGIN RETURN NEW; END $$;`
+        `CREATE FUNCTION public.${name}() RETURNS trigger LANGUAGE plpgsql VOLATILE SET search_path = '' AS $$ BEGIN RETURN NEW; END $$;`
     )
     .join("\n")
 

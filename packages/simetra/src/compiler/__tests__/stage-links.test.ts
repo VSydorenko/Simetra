@@ -405,23 +405,6 @@ describe("stage 5: scope set functions", () => {
       ),
       "searchPath",
     ],
-    [
-      "unqualified relation in the body",
-      create("org_ids()", undefined, "SELECT m.org_id FROM org_member m"),
-      "unqualified",
-    ],
-    // Тіло стандарту SQL зв'язує некваліфіковане `org` за search_path сесії
-    // під час CREATE, тож перевірка відношень рядкового тіла його не бачить.
-    [
-      "a BEGIN ATOMIC body",
-      "CREATE FUNCTION public.org_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' BEGIN ATOMIC SELECT id FROM org; END;\n",
-      "sqlBody",
-    ],
-    [
-      "a RETURN body",
-      "CREATE FUNCTION public.org_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' RETURN (SELECT id FROM org LIMIT 1);\n",
-      "sqlBody",
-    ],
   ])("set function: %s", async (_name, bad, reason) => {
     const result = await buildScoped(bad + good("user_ids"))
     expect(codes(result)).toEqual([
@@ -434,13 +417,59 @@ describe("stage 5: scope set functions", () => {
     expect(result.diagnostics[0]!.params?.reason).toBe(reason)
   })
 
+  // Тіло оболонку не порушує: його судить суддя голів (Р2c1-18), без дубля
+  // `scope.set-function-signature`.
+  it.each([
+    [
+      "unqualified relation in the body",
+      create("org_ids()", undefined, "SELECT m.org_id FROM org_member m"),
+      "unqualified",
+      "org_member",
+    ],
+    // Тіло стандарту SQL зв'язує некваліфіковане `org` за search_path сесії
+    // під час CREATE, тож перевірка відношень рядкового тіла його не бачить.
+    [
+      "a BEGIN ATOMIC body",
+      "CREATE FUNCTION public.org_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' BEGIN ATOMIC SELECT id FROM org; END;\n",
+      "sqlBody",
+      undefined,
+    ],
+    [
+      "a RETURN body",
+      "CREATE FUNCTION public.org_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' RETURN (SELECT id FROM org LIMIT 1);\n",
+      "sqlBody",
+      undefined,
+    ],
+  ])("set function body: %s", async (_name, bad, construct, detail) => {
+    const result = await buildScoped(bad + good("user_ids"))
+    expect(
+      result.diagnostics.map((d) => [
+        d.code,
+        d.file,
+        d.params?.construct,
+        d.params?.detail,
+      ])
+    ).toEqual([["sql.head-not-allowed", FUNCTIONS, construct, detail]])
+  })
+
   it("set function with qualified relations, a CTE and calls passes", async () => {
-    const result = await buildScoped(
-      create(
-        "org_ids()",
-        undefined,
-        "WITH mine AS (SELECT m.org_id FROM app.org_member m WHERE m.user_id = auth.uid()) SELECT org_id FROM mine"
-      ) + good("user_ids")
+    const result = await compile(
+      metaFiles({
+        "project.meta.json": scopedProject(),
+        "catalogs/Organization/Organization.meta.json": organization(),
+        "custom-tables/OrgMember/OrgMember.meta.json": customTable(
+          "OrgMember",
+          {
+            scope: "none",
+          }
+        ),
+        [FUNCTIONS]:
+          create(
+            "org_ids()",
+            undefined,
+            "WITH mine AS (SELECT m.id FROM public.org_member m WHERE m.id = auth.uid()) SELECT id FROM mine"
+          ) + good("user_ids"),
+      })
     )
     expectClean(result, { allow: ["rights.scope-kind-unread"] })
   })
@@ -638,9 +667,13 @@ describe("stage 5: bare current user in a policy", () => {
   })
 
   it("a quoted name in another case is another function", async () => {
+    // Чужа функція — не поточний користувач: її відмовляє дозвільний
+    // перелік виразів (Р2c1-55), а не правило голого виклику.
     const result = await policy(
       'CREATE POLICY p ON public.t USING (owner_id = "Simetra".current_user_id());'
     )
-    expect(result.diagnostics).toEqual([])
+    expect(codes(result)).toEqual([
+      ["sql.expression-call-not-allowed", TABLE_SQL, ""],
+    ])
   })
 })

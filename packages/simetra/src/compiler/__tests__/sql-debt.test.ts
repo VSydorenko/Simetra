@@ -63,9 +63,10 @@ describe("debt ratchet: sql-debt.json", () => {
     ).toEqual([])
   })
 
-  it("moving a trigger from a kind module to a shared file is debt growth", async () => {
+  it("moving a trigger from a kind module to a shared file does not make it acceptable", async () => {
     // У модулі виду тригер — заборонений клас; перенесений у спільний `sql/`
-    // він не стає прийнятним, а стає новим боргом.
+    // він не стає ні прийнятним, ні боргом: тригер на таблиці виду —
+    // помилка в будь-якому файлі (Р2c1-1).
     const inModule = await diagnostics({
       [SALE_SQL]: TRIGGER.replace("public.t", "public.sale"),
       [SHARED_SQL]: HANDLER,
@@ -75,7 +76,7 @@ describe("debt ratchet: sql-debt.json", () => {
       [SHARED_SQL]: `${HANDLER}\n${TRIGGER.replace("public.t", "public.sale")}`,
     })
     expect(moved.map((d) => [d.code, d.file, d.params?.identity])).toEqual([
-      ["sql.debt-grows", SHARED_SQL, "trigger:public.sale.trg"],
+      ["sql.kind-table-verbatim", SHARED_SQL, "trigger:public.sale.trg"],
     ])
   })
 

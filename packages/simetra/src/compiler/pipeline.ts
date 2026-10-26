@@ -16,6 +16,7 @@ import { modelHash } from "./canonical"
 import { accessContracts, buildAccessUnits } from "./access-units"
 import {
   buildContracts,
+  derivedFunctions,
   eventSubscriptionContracts,
   membershipContracts,
   usersContractOf,
@@ -31,7 +32,7 @@ import {
   type ParsedObject,
 } from "./stages/files"
 import { checkIdentity } from "./stages/identity"
-import { checkIntegrity } from "./stages/integrity"
+import { checkDeclaredExpressions, checkIntegrity } from "./stages/integrity"
 import {
   accessDimensionContracts,
   rightsContracts,
@@ -47,7 +48,10 @@ import {
 } from "./rights/system-catalogs"
 import { checkLinks } from "./stages/links"
 import { buildModel, enumTypeOf, rowTypesOf } from "./stages/model"
-import { buildMovementFunctions } from "./movement-functions"
+import {
+  buildMovementFunctions,
+  movementWrapperName,
+} from "./movement-functions"
 import { buildMechanicsUnits } from "./mechanics-units"
 import { buildCarrierUnits } from "./rights/carrier-units"
 import { buildCommandUnits } from "./rights/command-units"
@@ -60,7 +64,19 @@ import { buildMembershipFunctions, membershipsOf } from "./membership-functions"
 import { buildPlatformUnits } from "./platform/units"
 import { checkSqlModules, closedModuleOwners } from "./sql/closed-forms"
 import { creationOrder } from "./sql/dependencies"
-import { checkDebt } from "./sql/debt"
+import { checkDebt, debtPredicate } from "./sql/debt"
+import {
+  checkFunctionBodies,
+  checkPlatformCalls,
+  modelViews,
+} from "./sql/function-body"
+import { checkFunctionSettingsShell } from "./sql/function-settings-shell"
+import {
+  checkExpressionCalls,
+  expressionScope,
+  type ExpressionScope,
+} from "./sql/expression-calls"
+import { checkKindTableVerbatim, kindTables } from "./sql/kind-table-verbatim"
 import { loadSqlParser, type SqlParser } from "./sql/parse"
 import { loadPlpgsqlParser } from "./sql/plpgsql"
 import { embedRowRules } from "./sql/row-rule"
@@ -141,6 +157,10 @@ export async function runStages(
           ),
           (ownerFile) => idByFile.get(ownerFile)
         )
+  // Таблиці видів — зі знімка стадії 3. Без неї компіляцію вже зупиняють
+  // помилки вище за течією, тож порожній знімок лише для судження запису
+  // сесії боргу (Р2c1-14): ратчет на ньому не судиться.
+  const kinds = kindTables(stage1.objects, stage3?.physical.tables ?? [])
   // Ратчет боргу судить лише повні одиниці: без стадії 3 ідентичності
   // функцій (типи рядків) неповні, і `sql.debt-grows` на вже зламаній
   // компіляції був би шумом.
@@ -151,10 +171,42 @@ export async function runStages(
           sql.units,
           stage1.objects,
           stage1.project,
+          kinds,
           stage1.sqlDebt,
           !sql.diagnostics.some((d) => d.code === "sql.parse"),
+          parse,
           plpgsql
         )
+  // Згенеровані функції схем застосунку відомі лише зі знімка. Подання й
+  // політики їх не судять дозвільним переліком виразів (Р2c1-55): ті, що
+  // пишуть, судить `sql.platform-function-call` стадії 5. Вирази прийнятих
+  // таблиць цієї стадії не мають, тож для них поза переліком лише ті, що
+  // читають.
+  const derived =
+    stage3 === undefined || stage1.project === undefined
+      ? undefined
+      : derivedFunctions(
+          stage1.objects,
+          stage2.references,
+          stage3.physical,
+          movementWrapperName,
+          stage1.project.scopeKinds
+        )
+  const expressions = (reading: boolean): ExpressionScope | undefined =>
+    derived === undefined || stage1.project === undefined
+      ? undefined
+      : expressionScope(
+          sql.units,
+          stage1.project.database.provider,
+          new Set(
+            derived
+              .filter(
+                (f) => !reading || f.reads === true || f.membership === true
+              )
+              .map((f) => `${f.schema}.${f.name}`)
+          )
+        )
+  const unitExpressions = expressions(false)
   // Модуль виду 1С звужено до закритих форм: вид власника одиниці — з її
   // `ownerFile`, тож перевірка не чекає моделі стадії 3.
   const early = [
@@ -162,13 +214,59 @@ export async function runStages(
     ...sql.diagnostics,
     ...checkSqlModules(
       stage1.objects,
-      stage1.project,
       sql.units,
       sql.rowRules,
+      debtPredicate(
+        stage1.objects,
+        stage1.project,
+        kinds,
+        parse,
+        plpgsql,
+        modelViews(sql.units)
+      ),
+      parse,
+      plpgsql,
+      stage1.project?.database.provider
+    ),
+    // Оболонку судимих функцій задає лише `CREATE` (Р2c1-10): набір судимих
+    // відомий до стадії 3, тож помилка стоїть поруч із формами модулів.
+    ...checkFunctionSettingsShell(
+      stage1.objects,
+      stage1.project,
+      sql.units,
       parse,
       plpgsql
     ),
     ...debt.grows,
+    // Дослівна політика чи тригер на таблиці виду і тіло функції, що її
+    // пише, — помилка раннього блоку поруч із ратчетом боргу (Р2c1-1,
+    // Правило 1): стадія 5 за нею не запускається, а знімок таблиць уже є —
+    // стадія 3 будує його до розбору `.sql`.
+    ...(stage3 === undefined
+      ? []
+      : checkKindTableVerbatim(
+          stage1.objects,
+          stage3.physical.tables,
+          sql.units,
+          parse,
+          plpgsql,
+          stage1.project?.database.provider
+        )),
+    // Дозвільний перелік операторів тіла (Р2c1-37) і виклики функцій
+    // платформи (Р2c1-38) знімка не потребують: стадія 5 після них судить
+    // лише прочитані тіла.
+    ...checkFunctionBodies(
+      stage1.objects,
+      stage1.project,
+      sql.units,
+      parse,
+      plpgsql
+    ),
+    ...checkPlatformCalls(sql.units, parse, plpgsql),
+    // Виклики подань і політик — дозвільний перелік виразів (Р2c1-55).
+    ...(unitExpressions === undefined
+      ? []
+      : checkExpressionCalls(sql.units, unitExpressions, parse)),
     ...(embedded?.diagnostics ?? []),
   ]
   if (
@@ -184,13 +282,21 @@ export async function runStages(
   }
   const physical = embedded.physical
 
-  const integrity = checkIntegrity(
-    stage1.objects,
-    stage2.references,
-    { ...stage3, physical },
-    stage1.project,
-    sql.units
-  )
+  const integrity = [
+    ...checkIntegrity(
+      stage1.objects,
+      stage2.references,
+      { ...stage3, physical },
+      stage1.project,
+      sql.units
+    ),
+    ...checkDeclaredExpressions(
+      stage1.objects,
+      stage1.project,
+      expressions(true)!,
+      parse
+    ),
+  ]
   const staged = sortDiagnostics([
     ...early,
     ...debt.stale,

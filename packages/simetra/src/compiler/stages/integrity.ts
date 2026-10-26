@@ -17,6 +17,7 @@ import {
   type DatabaseProvider,
   type Expr,
   NO_SCOPE,
+  PLATFORM_SCHEMA,
   type MetadataRef,
   type MovementDecl,
   type Project,
@@ -54,6 +55,14 @@ import { standardOverrideNames, type PresentationFields } from "../presentation"
 import { checkRights } from "../rights/checks"
 import { checkRoles } from "../rights/role-checks"
 import { checkSystemCatalogs } from "../rights/system-catalogs"
+import { PLATFORM_READ_FUNCTIONS } from "../platform/names"
+import {
+  expressionCallProblem,
+  modelSequenceDefault,
+  type ExpressionScope,
+} from "../sql/expression-calls"
+import { textCalls } from "../sql/dependencies"
+import type { SqlParser } from "../sql/parse"
 import { pgNamespaceKeys, type VerbatimUnit } from "../sql/units"
 import { PROJECT_FILE, objectKey, type ParsedObject } from "./files"
 import {
@@ -203,7 +212,9 @@ export function checkIntegrity(
 
   for (const object of objects) {
     if (isDeclaredTable(object)) {
-      diagnostics.push(...checkDeclaredTable(object, byKey))
+      diagnostics.push(
+        ...checkDeclaredTable(object, byKey, project.defaultSchema)
+      )
     }
   }
 
@@ -1018,7 +1029,8 @@ function byteLength(name: string): number {
  */
 function checkDeclaredTable(
   object: ParsedObject,
-  byKey: ReadonlyMap<string, ParsedObject>
+  byKey: ReadonlyMap<string, ParsedObject>,
+  defaultSchema: string
 ): Diagnostic[] {
   const table = object.data as CustomTable
   const found: Diagnostic[] = []
@@ -1091,6 +1103,28 @@ function checkDeclaredTable(
       const target = byKey.get(
         objectKey(references.object.kind, references.object.name)
       )
+      // Каскад від таблиці виду (Р2c1-34) виконував би посеред команди
+      // платформи вирази й борговий код прийнятої таблиці: таблицю виду
+      // змінює лише платформа. Між прийнятими таблицями каскад лишається.
+      if (target !== undefined && !isDeclaredTable(target)) {
+        for (const field of ["onDelete", "onUpdate"] as const) {
+          const action = foreignKey[field]
+          if (!CASCADING_ACTIONS.has(action)) continue
+          found.push(
+            diagnostic(
+              "customTable.fk-action-on-kind-table",
+              object.file,
+              `/foreignKeys/${i}/${field}`,
+              {
+                table: `${table.schema ?? defaultSchema}.${table.physicalName}`,
+                foreignKey:
+                  foreignKey.name ?? `(${foreignKey.columns.join(", ")})`,
+                action,
+              }
+            )
+          )
+        }
+      }
       if (
         target !== undefined &&
         isDeclaredTable(target) &&
@@ -1116,6 +1150,125 @@ function checkDeclaredTable(
       nameRequired(`/indexes/${i}`)
     }
   })
+  return found
+}
+
+/** Дії FK, що змінюють дочірні рядки разом з батьківським. */
+const CASCADING_ACTIONS: ReadonlySet<string> = new Set([
+  "cascade",
+  "setNull",
+  "setDefault",
+])
+
+/**
+ * Вирази метаданих прийнятих таблиць (Р2c1-41, Р2c1-55): значення за
+ * замовчуванням, генеровані колонки, CHECK, ключі-вирази й предикати
+ * індексів — довільний SQL, який Postgres обчислює на кожному записі в
+ * таблицю, зокрема записі ролі API. Тож їхні виклики — дозвільний перелік
+ * одиниць-виразів (`sql.expression-call-not-allowed`): `set_config` і
+ * виконання тексту SQL у нього не входять. Виклик функції платформи поза
+ * переліком, що читає, — `sql.platform-function-call`. Єдиний виняток —
+ * `nextval` послідовності моделі у `DEFAULT` (колонка `serial`). Вираз, що
+ * не розбирається, судить Postgres під час застосування.
+ */
+export function checkDeclaredExpressions(
+  objects: readonly ParsedObject[],
+  project: Project,
+  scope: ExpressionScope,
+  parse: SqlParser
+): Diagnostic[] {
+  const allowed = new Set(
+    PLATFORM_READ_FUNCTIONS.map((f) => `${f.schema}.${f.name}`)
+  )
+  const found: Diagnostic[] = []
+  for (const object of objects) {
+    if (!isDeclaredTable(object)) continue
+    const table = object.data as CustomTable
+    const name = `${table.schema ?? project.defaultSchema}.${table.physicalName}`
+    const expressions: { pointer: string; text: string; column?: true }[] = []
+    table.columns.forEach((column, i) => {
+      if (column.default !== undefined) {
+        expressions.push({
+          pointer: `/columns/${i}/default`,
+          text: column.default,
+          column: true,
+        })
+      }
+      if (column.generated !== undefined) {
+        expressions.push({
+          pointer: `/columns/${i}/generated/expression`,
+          text: column.generated.expression,
+        })
+      }
+    })
+    table.checks.forEach((check, i) =>
+      expressions.push({
+        pointer: `/checks/${i}/expression`,
+        text: check.expression,
+      })
+    )
+    table.indexes.forEach((index, i) => {
+      index.keys.forEach((key, k) => {
+        if ("expression" in key) {
+          expressions.push({
+            pointer: `/indexes/${i}/keys/${k}/expression`,
+            text: key.expression,
+          })
+        }
+      })
+      if (index.where !== undefined) {
+        expressions.push({ pointer: `/indexes/${i}/where`, text: index.where })
+      }
+    })
+    for (const { pointer, text, column } of expressions) {
+      const sql = `SELECT (${text})`
+      const parsed = parse(sql)
+      if (!parsed.ok) continue
+      const calls = textCalls(sql, parse)
+      const sequence =
+        column === true &&
+        modelSequenceDefault(
+          parsed.statements.map((s) => s.stmt),
+          scope,
+          parse
+        )
+      const problems = new Set(
+        calls.flatMap((call) => {
+          const problem = expressionCallProblem(call, scope)
+          return problem === undefined ||
+            (sequence &&
+              call.name === "nextval" &&
+              (call.schema === undefined || call.schema === "pg_catalog"))
+            ? []
+            : [problem]
+        })
+      )
+      for (const call of problems) {
+        found.push(
+          diagnostic("sql.expression-call-not-allowed", object.file, pointer, {
+            unit: name,
+            call,
+          })
+        )
+      }
+      const platform = new Set(
+        calls.flatMap((call) =>
+          call.schema === PLATFORM_SCHEMA &&
+          !allowed.has(`${call.schema}.${call.name}`)
+            ? [`${call.schema}.${call.name}`]
+            : []
+        )
+      )
+      for (const fn of platform) {
+        found.push(
+          diagnostic("sql.platform-function-call", object.file, pointer, {
+            unit: name,
+            function: fn,
+          })
+        )
+      }
+    }
+  }
   return found
 }
 
@@ -1190,6 +1343,36 @@ function checkScope(
   // (й від нього) — як на будь-який глобальний об'єкт.
   const rootKindOf = new Map<string, ScopeKind>()
   scopeKinds.forEach((kind, index) => {
+    // Каскад від кореня (Р2c1-36) — лише коли корінь — об'єкт виду: корінь,
+    // що лишається `CustomTable`, чи зовнішню таблицю видаляє SQL
+    // застосунку, і каскад видаляв би рядки таблиць виду повз Правило 1.
+    if (kind.onRootDelete === "cascade") {
+      const rootObject =
+        "object" in kind.root
+          ? byKey.get(objectKey(kind.root.object.kind, kind.root.object.name))
+          : undefined
+      // Невідомий корінь звітує стадія 2; зовнішній — не об'єкт виду.
+      const notKind =
+        "object" in kind.root
+          ? rootObject !== undefined && isDeclaredTable(rootObject)
+          : true
+      if (notKind) {
+        found.push(
+          diagnostic(
+            "scope.root-cascade-not-kind",
+            PROJECT_FILE,
+            `/scopeKinds/${index}/onRootDelete`,
+            {
+              kind: kind.name,
+              root:
+                "object" in kind.root
+                  ? kind.root.object.name
+                  : `${kind.root.external.schema}.${kind.root.external.table}`,
+            }
+          )
+        )
+      }
+    }
     if (!("object" in kind.root)) return
     const { root } = kind
     const key = objectKey(root.object.kind, root.object.name)

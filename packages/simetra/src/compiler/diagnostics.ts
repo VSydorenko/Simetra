@@ -22,9 +22,16 @@ export const COMPILER_RULES = [
   "sql.unit-duplicate",
   "sql.namespace-conflict",
   "sql.generated-grant",
+  "sql.kind-table-verbatim",
+  "sql.function-body-statement",
+  "sql.platform-function-call",
+  "sql.expression-call-not-allowed",
   "sql.dependency-cycle",
   "sql.closed-shell",
   "sql.command-context-write",
+  "sql.head-not-allowed",
+  "sql.domain-check-not-allowed",
+  "sql.function-settings-shell",
   "sql.function-overload",
   "sql.row-rule-grammar",
   "sql.row-rule-foreign-table",
@@ -33,6 +40,9 @@ export const COMPILER_RULES = [
   "sql.bare-current-user",
   "sql.debt-grows",
   "sql.debt-stale",
+  "sql.debt-session-write",
+  "sql.debt-extension-schema",
+  "sql.definer-reads-rls",
   "rewrite.ambiguous-name",
   "rewrite.unqualified-table",
   "rewrite.unsupported",
@@ -70,6 +80,7 @@ export const COMPILER_RULES = [
   "scope.root-hierarchy",
   "scope.root-declaration",
   "scope.root-self-reference",
+  "scope.root-cascade-not-kind",
   "scope.global-to-scoped",
   "scope.cross-kind",
   "scope.recorder-mismatch",
@@ -196,6 +207,7 @@ export const COMPILER_RULES = [
   "physical.constraint-name-required",
   "customTable.foreign-key-arity",
   "customTable.foreign-key-deferrable-target",
+  "customTable.fk-action-on-kind-table",
   "customTable.generated-conflict",
   "customTable.key-column-nullable",
   "presentation.unknown-standard-attribute",
@@ -212,6 +224,8 @@ export const COMPILER_RULES = [
   "promote.retired-referenced",
   "promote.unclassified",
   "promote.write-path",
+  "promote.debt-writes-table",
+  "promote.cascade-to-restrict",
   "promote.provider-user-reference",
   "promote.enum-labels",
   "promote.type-unsupported",
@@ -399,7 +413,16 @@ export interface Diagnostic {
  * не видно: попередження називає межу, а не порушення. Платформа лише читає
  * прийняте джерело членства чи призначень (`rights.adopted-source-writes`):
  * шляхи запису в нього — справа застосунку, тож це попередження про межу
- * відповідальності, а не відмова (Р2d1-9).
+ * відповідальності, а не відмова (Р2d1-9). Зміна ролі чи claims в
+ * одиниці боргу (`debtPredicate`: модуль прийнятого об'єкта `CustomTable`,
+ * `PgEnum` чи спільний `sql/`-файл) може лишатися, доки одиниця — борг:
+ * голова кличе лише функції-запити, у яких такого запису немає
+ * (`sql.head-not-allowed`), а новий неперелічений борг — `sql.debt-grows`
+ * (Р2c1-6, Р2c1-14); у закритій оболонці, закритому модулі, обробнику й
+ * функції множини такий запис — помилка `sql.command-context-write`. Власника
+ * `SECURITY DEFINER`-функції чи подання статично не видно, а подання може
+ * само фільтрувати рядки функціями прав, тож читання таблиці під RLS повз
+ * права викликача — попередження (Р2c1-8, Р2c1-13).
  */
 const WARNING_RULES: ReadonlySet<RuleCode> = new Set<RuleCode>([
   "physical.reserved-word",
@@ -413,6 +436,10 @@ const WARNING_RULES: ReadonlySet<RuleCode> = new Set<RuleCode>([
   "rewrite.dynamic-sql-unscoped",
   "rights.adopted-source-writes",
   "rights.scope-kind-unread",
+  "sql.debt-session-write",
+  "sql.debt-extension-schema",
+  "sql.definer-reads-rls",
+  "promote.cascade-to-restrict",
 ])
 
 /** Діагностика з каталогу повідомлень; серйозність — властивість правила. */

@@ -234,6 +234,59 @@ describe("loadPlpgsqlParser", () => {
     expect(f.statements[0]?.type).toBe("block")
   })
 
+  it("exposes the initializer of a record variable, which the tree drops", () => {
+    // Неініціалізований запис і запис циклу за курсором ініціалізатора не
+    // мають; однойменні оголошення в різних блоках — кожне своє.
+    const f = parsed(
+      fn(
+        `DECLARE -- записи\n  r record := ROW(app.f());\n  q RECORD;\n  c CURSOR FOR SELECT 1;\n  s CONSTANT record NOT NULL DEFAULT ROW(1);\nBEGIN\n  FOR k IN c LOOP NULL; END LOOP;\n  DECLARE r record = NEW; BEGIN NULL; END;\n  RETURN NEW;\nEND`
+      )
+    )
+    expect(
+      f.statements
+        .filter((s) => s.type === "declare")
+        .map((s) => [
+          s.lineno,
+          s.target,
+          s.expressions.map((e) => [e.role, e.query]),
+        ])
+    ).toEqual([
+      [3, { variable: "r" }, [["value", "ROW(app.f())"]]],
+      [5, { variable: "c" }, [["statement", "SELECT 1"]]],
+      [6, { variable: "s" }, [["value", "ROW(1)"]]],
+      [9, { variable: "r" }, [["value", "NEW"]]],
+    ])
+  })
+
+  // `downcase_identifier` Postgres знижує лише ASCII: неквотоване `Ж`
+  // лишається `Ж`, тож Unicode-зниження загубило б ініціалізатор.
+  it.each([
+    { name: "an unquoted non-ASCII", decl: "Ж", variable: "Ж" },
+    { name: "a quoted non-ASCII", decl: '"Ж"', variable: "Ж" },
+    { name: "an unquoted mixed-case", decl: "Rж", variable: "rж" },
+  ])("reads the record initializer of $name name", ({ decl, variable }) => {
+    const f = parsed(
+      fn(
+        `DECLARE ${decl} record := (SELECT public.f());\nBEGIN\n  RETURN NEW;\nEND`
+      )
+    )
+    expect(
+      f.statements
+        .filter((s) => s.type === "declare")
+        .map((s) => [s.target, s.expressions.map((e) => e.query)])
+    ).toEqual([[{ variable }, ["(SELECT public.f())"]]])
+    expect(f.unreadLines).toEqual([])
+  })
+
+  it("reports an initializer the scanner could not match as unread", () => {
+    // `r.record = 1` у значенні змінної `a` — для сканера «оголошення» `.`
+    // типу `record`, якому немає пари серед змінних: рядок не прочитано.
+    const f = parsed(
+      fn(`DECLARE r record; a bool := r.record = 1;\nBEGIN\n  RETURN NEW;\nEND`)
+    )
+    expect(f.unreadLines).toEqual([2])
+  })
+
   it("does not list unnamed INTO rows as variables", () => {
     const f = parsed(
       fn(

@@ -17,6 +17,7 @@ import {
   acceptDebt,
   attribute,
   catalog,
+  customTable,
   metaFiles,
   project,
   uuid,
@@ -206,14 +207,19 @@ describe("subscription triggers in the compiled model", () => {
   })
 
   it("a verbatim CREATE TRIGGER with the same name on the table is a duplicate", async () => {
+    // Дослівний тригер на таблиці виду — уже помилка раннього блоку
+    // (`sql.kind-table-verbatim`), тож збіг імен видно лише на прийнятій.
     const result = await compile(
       await acceptDebt(
         metaFiles(
           entries(
-            {},
+            { sources: [{ kind: "CustomTable", name: "Log" }] },
             {
+              "custom-tables/Log/Log.meta.json": customTable("Log", {
+                physicalName: "log",
+              }),
               "sql/app/units.sql":
-                "CREATE TRIGGER audit BEFORE UPDATE ON public.item FOR EACH ROW EXECUTE FUNCTION app.h();\n",
+                "CREATE TRIGGER audit BEFORE UPDATE ON public.log FOR EACH ROW EXECUTE FUNCTION app.h();\n",
             }
           )
         )
@@ -223,7 +229,7 @@ describe("subscription triggers in the compiled model", () => {
       (d) => d.code === "sql.unit-duplicate"
     )
     expect(duplicate?.params).toMatchObject({
-      identity: "trigger:public.item.audit",
+      identity: "trigger:public.log.audit",
       first: "the event subscription Audit",
     })
   })

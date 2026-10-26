@@ -7,33 +7,7 @@
  * контрактний тест адаптера.
  */
 
-import { quoteIdent } from "simetra/model"
-
-/** Схеми, які створює й наповнює провайдер; застосунок має в них лише поверхню пресету. */
-export const SUPABASE_SCHEMAS: readonly string[] = [
-  "_analytics",
-  "_realtime",
-  "_supavisor",
-  "auth",
-  "cron",
-  "etl",
-  "extensions",
-  "graphql",
-  "graphql_public",
-  "information_schema",
-  "net",
-  "pgbouncer",
-  "pgmq",
-  "pgmq_public",
-  "pgsodium",
-  "pgsodium_masks",
-  "pgtle",
-  "realtime",
-  "storage",
-  "supabase_functions",
-  "supabase_migrations",
-  "vault",
-]
+import { PROVIDER_SCHEMAS, quoteIdent } from "simetra/model"
 
 /**
  * Розширення, якими межа не керує: їх ставить провайдер, а не застосунок, тож
@@ -192,9 +166,13 @@ export const SUPABASE_SURFACES: readonly ProviderSurface[] = [
     table: "s3_multipart_uploads_parts",
     classes: ["policy"],
   },
-  ...SUPABASE_SCHEMAS.filter((schema) => schema !== "pgmq").map(
-    (schema): ProviderSurface => ({ schema, table: "*", classes: ["trigger"] })
-  ),
+  ...PROVIDER_SCHEMAS.supabase
+    .filter((schema) => schema !== "pgmq")
+    .map((schema): ProviderSurface => ({
+      schema,
+      table: "*",
+      classes: ["trigger"],
+    })),
 ]
 
 /**

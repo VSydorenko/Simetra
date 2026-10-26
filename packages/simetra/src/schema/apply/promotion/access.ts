@@ -278,7 +278,9 @@ export async function readAccessDependents(
  * кваліфіковані `quoteIdent`:
  * - `access:<таблиця>` — на кожну зміну доступу; втрата доступу сервісної
  *   ролі — окремим рядком (спека промоції §8 «Сервісна роль»);
- * - `delete:<таблиця>.<обмеження>` — на кожен елемент семантики видалення.
+ * - `delete:<таблиця>.<обмеження>` — на кожен елемент семантики видалення,
+ *   `update:<таблиця>.<обмеження>` — на зміну `ON UPDATE` вхідного FK:
+ *   окремий пункт, щоб дозвіл на одну подію не покривав мовчки іншу.
  *   Лише з виведених фактів (рішення 15, R3): власні звірено із записом під
  *   час виявлення переходу, вхідні — тільки виведені;
  * - `remove:<таблиця>` — на таблицю, де щось видаляється з класом
@@ -288,6 +290,14 @@ export async function readAccessDependents(
  *   кожна ремонтована колонка з виразом. Конверсія, розщеплення й
  *   дозаповнення наявних значень не змінюють, тож дозволу не просять.
  */
+/** Наслідок вхідного FK, переведеного в `restrict` (Р2c1-34), за подією. */
+const RESTRICTED = {
+  delete:
+    ": deleting a row of the promoted object that has child rows is refused",
+  update:
+    ": changing the referenced key of a row of the promoted object that has child rows is refused",
+} as const
+
 export function promotionPermissionItems(
   access: readonly AccessChange[],
   deleteSemantics: PromotionFacts["deleteSemantics"],
@@ -315,7 +325,7 @@ export function promotionPermissionItems(
     ])
   for (const d of deleteSemantics)
     add(
-      `delete:${qualified(d.schema, d.table)}.${
+      `${d.event}:${qualified(d.schema, d.table)}.${
         // У виведених фактах обмеження названо завжди; без імені пункт
         // адресує колонки FK, щоб токен лишився однозначним
         d.constraint === undefined
@@ -323,7 +333,11 @@ export function promotionPermissionItems(
           : quoteIdent(d.constraint)
       }`,
       [
-        `${d.direction} (${d.columns.map(quoteIdent).join(", ")}) → ${quoteIdent(d.target)}: on delete ${d.from} → ${d.to}`,
+        `${d.direction} (${d.columns.map(quoteIdent).join(", ")}) → ${quoteIdent(d.target)}: on ${d.event} ${d.from} → ${d.to}${
+          d.direction === "incoming" && d.to === "restrict"
+            ? RESTRICTED[d.event]
+            : ""
+        }`,
       ]
     )
   for (const r of removals)
