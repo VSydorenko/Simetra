@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto"
-import { describe, expect, it } from "vitest"
+import pg from "pg"
+import { describe, expect, it, vi } from "vitest"
 import {
   canonicalSnapshot,
   compile,
@@ -151,6 +152,71 @@ const effectsTriggers = (url: string, tables: string[]) =>
     [tables]
   )
 
+/** Повідомлення обробника підписки `CountComment` (`RAISE NOTICE`). */
+const handlerNotice = (message: { message?: string }): string | undefined =>
+  message.message?.startsWith("count_comment:") === true
+    ? message.message
+    : undefined
+
+/** Повідомлення обробника, що надходять клієнту `client`, — у `fired`. */
+function collect(client: pg.ClientBase, fired: string[]): void {
+  client.on("notice", (message) => {
+    const notice = handlerNotice(message)
+    if (notice !== undefined) fired.push(notice)
+  })
+}
+
+/** Повідомлення обробника за час одного запиту `sql` на власному з'єднанні. */
+async function noticesOf(url: string, sql: string): Promise<string[]> {
+  const fired: string[] = []
+  const client = new pg.Client({ connectionString: url })
+  collect(client, fired)
+  await client.connect()
+  try {
+    await client.query(sql)
+  } finally {
+    await client.end()
+  }
+  return fired
+}
+
+type Connect = typeof pg.Pool.prototype.connect
+
+/**
+ * Повідомлення обробника на з'єднаннях пулу порту застосування до `url` за
+ * час `fn`. Обробник лише перевіряє (Р2c1-29) й сповіщає сесію, що пише, —
+ * сесію раннера, тож збирач чіпляється до клієнтів пулу. Фільтр за `url`:
+ * ціль кожного тесту — власна база, а тести файлу конкурентні.
+ */
+async function poolNotices<T>(
+  url: string,
+  fn: () => Promise<T>
+): Promise<{ value: T; fired: string[]; connections: number }> {
+  const fired: string[] = []
+  let connections = 0
+  const connect: Connect = pg.Pool.prototype.connect
+  // Підміна прототипу — на весь файл, тож чужі виклики, зокрема `connect` зі
+  // зворотним викликом усередині `pool.query`, ідуть в оригінал як є
+  const observed = function (this: pg.Pool, ...args: unknown[]) {
+    if (args.length > 0 || this.options.connectionString !== url)
+      return Reflect.apply(connect, this, args) as unknown
+    const connected = Reflect.apply(connect, this, []) as Promise<pg.PoolClient>
+    return connected.then((client) => {
+      connections++
+      collect(client, fired)
+      return client
+    })
+  } as Connect
+  const spy = vi
+    .spyOn(pg.Pool.prototype, "connect")
+    .mockImplementation(observed)
+  try {
+    return { value: await fn(), fired, connections }
+  } finally {
+    spy.mockRestore()
+  }
+}
+
 const one = async <R extends Record<string, unknown>>(
   url: string,
   sql: string,
@@ -177,7 +243,7 @@ describe.concurrent("carrier copy steps on live rows", () => {
       await establish(url, before)
       // Кілька операторів в одному запиті не приймають параметрів, а id —
       // згенеровані uuid, тож літерали безпечні
-      await query(
+      const inserted = await noticesOf(
         url,
         `insert into public.organization (id) values ('${id.org}');
          insert into public.org_member (id, org_id)
@@ -201,17 +267,10 @@ describe.concurrent("carrier copy steps on live rows", () => {
           `select version::text from public.${COMMENT_TABLE} where id = $1`,
           [id.comment]
         )
-      const counter = () =>
-        one<{ n: number }>(
-          url,
-          "select count(*)::int as n from public.comment_counter",
-          []
-        )
       const versionBefore = await commentVersion()
-      const counterBefore = await counter()
-      // Позитивний контроль: підписка `onWrite` спрацювала на кожній вставці
-      // коментаря, тож «лічильник не зріс» нижче — не порожній висновок
-      expect(counterBefore).toEqual({ n: 2 })
+      // Позитивний контроль: підписка `onWrite` сповістила на кожній вставці
+      // коментаря, тож «повідомлень немає» нижче — не порожній висновок
+      expect(inserted).toEqual(["count_comment:INSERT", "count_comment:INSERT"])
 
       const artifact = planned(
         await buildPlan(engine, dbs, after, { target: { url } }, [])
@@ -265,7 +324,14 @@ describe.concurrent("carrier copy steps on live rows", () => {
           },
         ],
       })
-      const outcome = await apply(artifact.requiredPermissions)
+      const {
+        value: outcome,
+        fired,
+        connections,
+      } = await poolNotices(url, () => apply(artifact.requiredPermissions))
+      // Збирач справді слухав сесію раннера: інакше `fired` нижче порожній
+      // без доказу
+      expect(connections).toBeGreaterThan(0)
       expect(outcome.diagnostics).toEqual([])
       expect(outcome.status).toBe("committed")
 
@@ -322,7 +388,7 @@ describe.concurrent("carrier copy steps on live rows", () => {
       })
       // Зміна лише копій — не зміна змісту: механіка й підписка мовчать
       expect(await commentVersion()).toEqual(versionBefore)
-      expect(await counter()).toEqual(counterBefore)
+      expect(fired).toEqual([])
     })
   })
 
