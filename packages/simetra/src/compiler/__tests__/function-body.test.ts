@@ -261,6 +261,60 @@ describe("sql.function-body-statement: the body is an allowlist (Р2c1-37)", () 
   })
 })
 
+// Виклик функції, що виконує текст SQL, — той самий нелітеральний `EXECUTE`
+// (Р2c1-37): перелік тіла й Правило 1 обійшов би текст, тож це помилка
+// скрізь, борг включно, і функція з ним боргом не є.
+describe("sql.function-body-statement: a call that executes SQL text (Р2c1-50)", () => {
+  const QUERY_TO_XML = "pg_catalog.query_to_xml('SELECT 1', false, false, '')"
+  it.each(
+    PLACES.flatMap((file) =>
+      [
+        { name: "query_to_xml", sql: plpgsql(`PERFORM ${QUERY_TO_XML}`) },
+        { name: "ts_stat", sql: plpgsql("PERFORM ts_stat('SELECT 1')") },
+        {
+          name: "dblink_exec of the provider",
+          sql: plpgsql("PERFORM extensions.dblink_exec('c', 'SELECT 1')"),
+        },
+        {
+          name: "cron.schedule of the provider",
+          sql: plpgsql("PERFORM cron.schedule('j', '* * * * *', 'SELECT 1')"),
+        },
+        {
+          name: "a call in an assignment",
+          sql: plpgsql(`v := ${QUERY_TO_XML}`),
+        },
+        {
+          name: "a call in a DO block",
+          sql: doBlock(`PERFORM ${QUERY_TO_XML}`),
+        },
+        {
+          name: "a call in BEGIN ATOMIC",
+          sql: atomic(`SELECT ${QUERY_TO_XML}`),
+        },
+        {
+          // Значення параметра за замовчуванням обчислює виклик функції.
+          name: "a call in a parameter default",
+          sql: `CREATE FUNCTION public.f(a xml DEFAULT ${QUERY_TO_XML}) RETURNS void LANGUAGE sql AS $$ SELECT 1 $$`,
+        },
+      ].map((row) => ({ ...row, file }))
+    )
+  )("$name in $file → dynamicText", async ({ file, sql }) => {
+    const result = await compile(await acceptDebt(files({ [file]: sql })))
+    expect(brief(result.diagnostics)).toEqual([
+      bodyStatement(file, "dynamicText"),
+    ])
+  })
+
+  it.each(PLACES)("an ordinary builtin call in %s → no error", async (file) => {
+    const result = await compile(
+      await acceptDebt(
+        files({ [file]: plpgsql("PERFORM pg_catalog.lower('x')") })
+      )
+    )
+    expect(brief(result.diagnostics)).toEqual([])
+  })
+})
+
 describe("a body outside the allowlist is never debt", () => {
   const alterDatabase = plpgsql(
     "ALTER DATABASE postgres SET simetra.actor = 'x'"

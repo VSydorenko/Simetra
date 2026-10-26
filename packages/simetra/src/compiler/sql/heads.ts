@@ -196,21 +196,30 @@ function treeReferences(
   ]
 }
 
+type NameList = { String?: { sval?: string } }[] | undefined
+
 /**
  * Оператори з кваліфікацією поза `pg_catalog` (`OPERATOR(s.op)`): функцію
  * оператора компілятор не бачить. Некваліфікований оператор — вбудований чи
- * розширення (застосунок власних операторів не оголошує).
+ * розширення (застосунок власних операторів не оголошує). Оператор називає
+ * не лише вираз (`A_Expr`), а й `ORDER BY … USING` (`SortBy.useOp`) і
+ * порівняння з підзапитом `x OPERATOR(s.op) ANY (…)` (`SubLink.operName`).
  */
 function qualifiedOperators(value: unknown): string[] {
   if (Array.isArray(value)) return value.flatMap(qualifiedOperators)
   if (typeof value !== "object" || value === null) return []
   const node = value as Record<string, unknown>
-  const names = (
-    (node.A_Expr as { name?: { String?: { sval?: string } }[] } | undefined)
-      ?.name ?? []
-  ).map((n) => n.String?.sval ?? "")
-  const own =
-    names.length > 1 && names.at(-2) !== "pg_catalog" ? [names.join(".")] : []
+  const lists: NameList[] = [
+    (node.A_Expr as { name?: NameList } | undefined)?.name,
+    (node.SortBy as { useOp?: NameList } | undefined)?.useOp,
+    (node.SubLink as { operName?: NameList } | undefined)?.operName,
+  ]
+  const own = lists.flatMap((list) => {
+    const names = (list ?? []).map((n) => n.String?.sval ?? "")
+    return names.length > 1 && names.at(-2) !== "pg_catalog"
+      ? [names.join(".")]
+      : []
+  })
   return [...own, ...Object.values(node).flatMap(qualifiedOperators)]
 }
 

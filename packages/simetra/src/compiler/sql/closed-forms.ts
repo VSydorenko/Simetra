@@ -372,6 +372,21 @@ export function extensionSchemas(
 }
 
 /**
+ * Виклик, що виконує текст SQL, у функції чи процедурі судить дозвільний
+ * перелік тіла (`sql.function-body-statement`, Р2c1-50) — помилкою скрізь,
+ * борг включно; тут він дав би другу діагностику того самого виклику.
+ */
+function bodyJudged(
+  unit: Pick<VerbatimUnit, "class">,
+  hit: CommandContextHit
+): boolean {
+  return (
+    hit.form === "dynamicText" &&
+    (unit.class === "function" || unit.class === "procedure")
+  )
+}
+
+/**
  * Модуль об'єкта виду з фактом `sqlModule: "closed"` приймає лише функції в
  * закритій оболонці без перевантажень і правила рядка; блоки запиту рухів
  * вирізано до розбору, тож одиницями вони не стають. Решта класів —
@@ -384,7 +399,8 @@ export function extensionSchemas(
  * одиниця боргу (`isDebt` — `debtPredicate` ратчета) — лише платформним
  * префіксом, решта її записів — попередження `sql.debt-session-write`
  * (Р2c1-6, Р2c1-14). Функції провайдера `provider`, що виконують текст SQL,
- * судяться формою `dynamicText` (Р2c1-32); без проєкту провайдера немає.
+ * судяться формою `dynamicText` (Р2c1-32); без проєкту провайдера немає. У
+ * функції чи процедурі цю форму судить перелік тіла (`bodyJudged`).
  */
 export function checkSqlModules(
   objects: readonly ParsedObject[],
@@ -432,7 +448,7 @@ export function checkSqlModules(
       parse,
       plpgsql,
       textFunctions
-    )
+    ).filter((hit) => !bodyJudged(unit, hit))
     if (writes.length === 0) continue
     const name = unit.schema === "" ? unit.name : `${unit.schema}.${unit.name}`
     if (!isDebt(unit)) {
@@ -535,7 +551,7 @@ export function checkSqlModules(
             parse,
             plpgsql,
             textFunctions
-          )[0]
+          ).find((hit) => !bodyJudged(unit, hit))
         : undefined
     if (write !== undefined) {
       found.push(

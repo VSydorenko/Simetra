@@ -611,11 +611,17 @@ describe("kind module: closed forms only", () => {
       })
     })
 
-    // Функція, що виконує текст SQL, змінює сесію невідомою формою (Р2c1-32):
-    // поза боргом — помилка, у боргу — попередження, як нелітеральне ім'я.
-    // Боргова форма — без явної волатильності, закрита — `STABLE`.
+    // Функція, що виконує текст SQL, змінює сесію невідомою формою (Р2c1-32).
+    // У тілі функції це нелітеральний `EXECUTE`: помилка переліку тіла
+    // скрізь, борг включно, без другої діагностики запису сесії (Р2c1-50).
+    // Боргова форма — без явної волатильності, закрита — `STABLE`. Одиниця
+    // без тіла (подання) лишається записом сесії: у боргу — попередження.
     const closedShell = (body: string) => shell("LANGUAGE sql STABLE", body)
     const debtShell = (body: string) => shell("LANGUAGE sql", body)
+    const bodyStatements = (found: readonly Diagnostic[]) =>
+      found
+        .filter((d) => d.code === "sql.function-body-statement")
+        .map((d) => d.params?.statement)
     it.each([
       ["pg_catalog.query_to_xml('SELECT 1', false, false, '')"],
       ["ts_stat('SELECT 1')"],
@@ -624,14 +630,18 @@ describe("kind module: closed forms only", () => {
       ["dblink_exec('c', 'SELECT 1')"],
       ["cron.schedule('j', '* * * * *', 'SELECT 1')"],
     ])("a call of %s executes SQL text", async (call) => {
+      for (const wrap of [closedShell, debtShell]) {
+        const found = await diagnostics({
+          [SHARED_SQL]: wrap(`SELECT ${call}`),
+        })
+        expect(sessionWrites(found)).toEqual([])
+        expect(bodyStatements(found)).toEqual(["dynamicText"])
+      }
       expect(
         sessionWrites(
-          await diagnostics({ [SHARED_SQL]: closedShell(`SELECT ${call}`) })
-        )
-      ).toEqual([[ERROR, "dynamicText", undefined]])
-      expect(
-        sessionWrites(
-          await diagnostics({ [SHARED_SQL]: debtShell(`SELECT ${call}`) })
+          await diagnostics({
+            [SHARED_SQL]: `CREATE VIEW public.v AS SELECT ${call} AS x;`,
+          })
         )
       ).toEqual([[WARNING, "dynamicText", undefined]])
     })

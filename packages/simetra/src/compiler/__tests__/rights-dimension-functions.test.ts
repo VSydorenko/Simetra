@@ -309,12 +309,13 @@ describe("access dimension value function", () => {
     const head_ = (body: string) => fn("region_ids", CLOSED, body)
     const params = async (sql: string) =>
       rightsErrors(await errors(sql)).map((d) => [d.code, d.params])
-    // Функцію, що виконує текст SQL, відмовляє ранній блок форм модулів
-    // (`dynamicText`, Р2c1-32): до судження функції виміру справа не доходить.
+    // Виклик функції, що виконує текст SQL, у тілі відмовляє ранній блок —
+    // дозвільний перелік тіла (`dynamicText`, Р2c1-50): до судження функції
+    // виміру справа не доходить.
     const textWrites = async (sql: string) =>
       (await errors(sql))
-        .filter((d) => d.code === "sql.command-context-write")
-        .map((d) => d.params?.form)
+        .filter((d) => d.code === "sql.function-body-statement")
+        .map((d) => d.params?.statement)
 
     it("follows project views", async () => {
       const viewHead = head_("SELECT v.id FROM public.v v")

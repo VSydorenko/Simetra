@@ -595,6 +595,10 @@ describe("messages catalog", () => {
       statement: "nonLiteralExecute",
       en: "runs EXECUTE of a non-literal text",
     },
+    {
+      statement: "dynamicText",
+      en: "calls a function that executes SQL text",
+    },
     { statement: "language", en: "is written in a language" },
     { statement: "unread", en: "has a part the compiler could not read" },
   ])(

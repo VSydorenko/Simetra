@@ -978,22 +978,26 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     en: (p) =>
       p.statement === "nonLiteralExecute"
         ? `Function ${p.function} at line ${p.line} runs EXECUTE of a non-literal text`
-        : p.statement === "language"
-          ? `Function ${p.function} at line ${p.line} is written in a language other than sql and plpgsql`
-          : p.statement === "unread"
-            ? `Function ${p.function} at line ${p.line} has a part the compiler could not read`
-            : `Function ${p.function} at line ${p.line} runs ${p.statement}, which a function body may not run`,
+        : p.statement === "dynamicText"
+          ? `Function ${p.function} at line ${p.line} calls a function that executes SQL text`
+          : p.statement === "language"
+            ? `Function ${p.function} at line ${p.line} is written in a language other than sql and plpgsql`
+            : p.statement === "unread"
+              ? `Function ${p.function} at line ${p.line} has a part the compiler could not read`
+              : `Function ${p.function} at line ${p.line} runs ${p.statement}, which a function body may not run`,
     uk: (p) =>
       p.statement === "nonLiteralExecute"
         ? `Функція ${p.function} у рядку ${p.line} виконує EXECUTE нелітерального тексту`
-        : p.statement === "language"
-          ? `Функція ${p.function} у рядку ${p.line} написана мовою, іншою за sql і plpgsql`
-          : p.statement === "unread"
-            ? `Функція ${p.function} у рядку ${p.line} має частину, яку компілятор не прочитав`
-            : `Функція ${p.function} у рядку ${p.line} виконує ${p.statement}, якого тілу функції виконувати не можна`,
+        : p.statement === "dynamicText"
+          ? `Функція ${p.function} у рядку ${p.line} викликає функцію, що виконує текст SQL`
+          : p.statement === "language"
+            ? `Функція ${p.function} у рядку ${p.line} написана мовою, іншою за sql і plpgsql`
+            : p.statement === "unread"
+              ? `Функція ${p.function} у рядку ${p.line} має частину, яку компілятор не прочитав`
+              : `Функція ${p.function} у рядку ${p.line} виконує ${p.statement}, якого тілу функції виконувати не можна`,
     hint: {
-      en: "The body of a function or procedure, in any .sql file and in SQL debt too, runs only allowlisted statements: SELECT, INSERT, UPDATE, DELETE, MERGE, LOCK, SET and RESET, CALL, NOTIFY, REFRESH MATERIALIZED VIEW of a view of the model, DO, and temporary tables of the body itself (CREATE TEMP TABLE … ON COMMIT DROP and their DROP). The text of a literal EXECUTE and a DO block follow the same list. A non-literal EXECUTE, another language or a part the compiler cannot read cannot be judged, so they are refused too. Rewrite the function without the statement or move the change into metadata or a migration.",
-      uk: "Тіло функції чи процедури, у будь-якому файлі .sql і в боргу теж, виконує лише оператори з дозвільного переліку: SELECT, INSERT, UPDATE, DELETE, MERGE, LOCK, SET і RESET, CALL, NOTIFY, REFRESH MATERIALIZED VIEW подання моделі, DO і тимчасові таблиці самого тіла (CREATE TEMP TABLE … ON COMMIT DROP та їхній DROP). Текст літерального EXECUTE і блок DO — за тим самим переліком. Нелітеральний EXECUTE, іншу мову чи частину, яку компілятор не прочитав, судити неможливо, тож вони теж заборонені. Перепишіть функцію без цього оператора або перенесіть зміну в метадані чи міграцію.",
+      en: "The body of a function or procedure, in any .sql file and in SQL debt too, runs only allowlisted statements: SELECT, INSERT, UPDATE, DELETE, MERGE, LOCK, SET and RESET, CALL, NOTIFY, REFRESH MATERIALIZED VIEW of a view of the model, DO, and temporary tables of the body itself (CREATE TEMP TABLE … ON COMMIT DROP and their DROP). The text of a literal EXECUTE and a DO block follow the same list. A non-literal EXECUTE, a call of a function that executes SQL text (query_to_xml, ts_stat, dblink, cron.schedule and the like), another language or a part the compiler cannot read cannot be judged, so they are refused too. Rewrite the function without the statement or move the change into metadata or a migration.",
+      uk: "Тіло функції чи процедури, у будь-якому файлі .sql і в боргу теж, виконує лише оператори з дозвільного переліку: SELECT, INSERT, UPDATE, DELETE, MERGE, LOCK, SET і RESET, CALL, NOTIFY, REFRESH MATERIALIZED VIEW подання моделі, DO і тимчасові таблиці самого тіла (CREATE TEMP TABLE … ON COMMIT DROP та їхній DROP). Текст літерального EXECUTE і блок DO — за тим самим переліком. Нелітеральний EXECUTE, виклик функції, що виконує текст SQL (query_to_xml, ts_stat, dblink, cron.schedule тощо), іншу мову чи частину, яку компілятор не прочитав, судити неможливо, тож вони теж заборонені. Перепишіть функцію без цього оператора або перенесіть зміну в метадані чи міграцію.",
     },
   },
   "sql.platform-function-call": {

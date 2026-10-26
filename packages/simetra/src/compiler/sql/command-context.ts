@@ -1,5 +1,9 @@
 import type { Node } from "libpg-query"
-import { PROTECTED_SESSION_SETTINGS } from "simetra/model"
+import {
+  PROTECTED_SESSION_SETTINGS,
+  PROVIDER_SQL_TEXT_FUNCTIONS,
+  type DatabaseProvider,
+} from "simetra/model"
 import { executesSqlText } from "./builtin-exclusions"
 import { plpgsqlExpressionTrees } from "./rewrite/plpgsql-body"
 import type { SqlParser } from "./parse"
@@ -151,6 +155,34 @@ function sqlTextCall(
   }
   if (schema !== undefined) return textFunctions.has(`${schema}.${name}`)
   return [...textFunctions].some((fn) => fn.split(".").at(-1) === name)
+}
+
+/** Функції провайдера, що виконують текст SQL (`schema.name`, Р2c1-32). */
+export function providerTextFunctions(
+  provider: DatabaseProvider | undefined
+): ReadonlySet<string> {
+  return new Set(
+    provider === undefined ? [] : PROVIDER_SQL_TEXT_FUNCTIONS[provider]
+  )
+}
+
+/**
+ * Чи кличе дерево функцію, що виконує текст SQL, — те саме судження виклику,
+ * що форма `dynamicText`. Тілу функції воно потрібне окремо: там такий виклик
+ * — нелітеральний `EXECUTE`, помилка скрізь, борг включно (Р2c1-50).
+ */
+export function callsSqlText(
+  value: unknown,
+  textFunctions: ReadonlySet<string>
+): boolean {
+  if (Array.isArray(value))
+    return value.some((v) => callsSqlText(v, textFunctions))
+  if (typeof value !== "object" || value === null) return false
+  const node = value as Record<string, unknown>
+  const call = node.FuncCall as CallNode | undefined
+  if (call !== undefined && sqlTextCall(call.funcname, textFunctions))
+    return true
+  return Object.values(node).some((v) => callsSqlText(v, textFunctions))
 }
 
 function callWrite(
@@ -313,7 +345,8 @@ function optionWrites(
  * сесії. Тіло `LANGUAGE sql` розбирається тут, тіло plpgsql — через вирази
  * його операторів; тіла інших мов і нелітеральний `EXECUTE` не розбираються:
  * їх відмовляє дозвільний перелік тіла (`sql.function-body-statement`,
- * Р2c1-37).
+ * Р2c1-37). Форму `dynamicText` функції чи процедури теж судить перелік
+ * (Р2c1-50); тут вона лишається для одиниць без тіла.
  * Усі записи одиниці, а не перший: у борговому SQL `SET ROLE` перед
  * `set_config('simetra.…')` інакше сховав би помилку за попередженням
  * (Р2c1-6). Порожній масив — записів немає. `textFunctions` — функції

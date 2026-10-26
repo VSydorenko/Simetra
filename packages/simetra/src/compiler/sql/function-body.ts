@@ -9,7 +9,11 @@ import {
   routineLanguage,
   ruledFunctions,
 } from "./closed-forms"
-import { literalDynamicText } from "./command-context"
+import {
+  callsSqlText,
+  literalDynamicText,
+  providerTextFunctions,
+} from "./command-context"
 import {
   textCalls,
   unitCalls,
@@ -37,7 +41,7 @@ export function modelViews(
 /**
  * Оператор тіла поза переліком і рядок від початку тексту одиниці (1 —
  * перший рядок). `statement` — вузол дерева розбору або `language`,
- * `nonLiteralExecute`, `unread`.
+ * `nonLiteralExecute`, `dynamicText`, `unread`.
  */
 export interface BodyProblem {
   statement: string
@@ -309,12 +313,15 @@ function droppedAtCommit(into: IntoClauseLike | undefined): string | undefined {
  * тимчасову таблицю тіла, крім її створення, — лише `pg_temp.<ім'я>`
  * (`referencesUnqualified`). `DROP` — лише тимчасової таблиці того самого
  * тіла, `REFRESH` — лише кваліфікованого матеріалізованого подання моделі.
+ * Виклик функції, що виконує текст SQL (вбудованої чи провайдера з
+ * `textFunctions`), — `dynamicText` (Р2c1-50).
  */
 export function bodyStatementProblem(
   unit: Pick<VerbatimUnit, "class" | "sql" | "tree">,
   parse: SqlParser,
   plpgsql: PlpgsqlParser,
-  views: readonly ModelView[]
+  views: readonly ModelView[],
+  textFunctions: ReadonlySet<string>
 ): BodyProblem | undefined {
   if (unit.class !== "function" && unit.class !== "procedure") return undefined
   const body = routineBody(unit.tree as Node, unit.sql, parse, plpgsql)
@@ -351,6 +358,26 @@ export function bodyStatementProblem(
       if (referencesUnqualified(stmt, temporary, parse))
         return { statement: "SelectStmt", line }
   }
+  // Функція, що виконує текст SQL, — нелітеральний `EXECUTE` іншою формою:
+  // що вона виконає, статично не відомо, тож перелік і Правило 1 обійшов би
+  // текст (Р2c1-50). Дерево самої одиниці несе значення параметрів за
+  // замовчуванням, які обчислює виклик.
+  for (const { stmt, line } of body.statements)
+    if (callsSqlText(stmt, textFunctions))
+      return { statement: "dynamicText", line }
+  for (const { text, line } of body.values) {
+    const parsed = parse(text)
+    if (
+      parsed.ok &&
+      callsSqlText(
+        parsed.statements.map((s) => s.stmt),
+        textFunctions
+      )
+    )
+      return { statement: "dynamicText", line }
+  }
+  if (callsSqlText(unit.tree, textFunctions))
+    return { statement: "dynamicText", line: 1 }
   return undefined
 }
 
@@ -458,6 +485,7 @@ export function checkFunctionBodies(
   const views = modelViews(units)
   const closed = closedModuleOwners(objects)
   const ruled = ruledFunctions(objects, project)
+  const textFunctions = providerTextFunctions(project?.database.provider)
   return units.flatMap((unit) => {
     const shelled =
       (unit.ownerFile !== undefined && closed.has(unit.ownerFile)) ||
@@ -470,7 +498,13 @@ export function checkFunctionBodies(
       ) !== undefined
     )
       return []
-    const problem = bodyStatementProblem(unit, parse, plpgsql, views)
+    const problem = bodyStatementProblem(
+      unit,
+      parse,
+      plpgsql,
+      views,
+      textFunctions
+    )
     if (problem === undefined) return []
     if (shelled && SHELL_PROBLEMS.has(problem.statement)) return []
     return [

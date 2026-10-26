@@ -198,9 +198,10 @@ describe("checkHeads: Rule 3 — query functions", () => {
       ],
     },
     {
-      // Поза боргом виклик функції, що виконує текст SQL, уже відмовляє
-      // ранній блок (`dynamicText`), тож ланка — борг без волатильності.
-      name: "builtin-excluded query_to_xml in a debt link",
+      // У тілі функції виклик, що виконує текст SQL, відмовляє ранній блок
+      // скрізь, борг включно (`dynamicText`, Р2c1-50): до голови справа не
+      // доходить.
+      name: "builtin-excluded query_to_xml in a function link",
       sql:
         setFunction("SELECT public.helper()") +
         sqlFunction(
@@ -208,7 +209,17 @@ describe("checkHeads: Rule 3 — query functions", () => {
           "SELECT NULL::uuid WHERE query_to_xml('select 1', true, true, '') IS NOT NULL",
           EMPTY_PATH
         ),
-      expected: [found("call", "query_to_xml", SET_FUNCTION, "public.helper")],
+      expected: [["sql.function-body-statement"]],
+    },
+    {
+      // Борг без тіла — подання — лишається ланкою: виклик судить голова.
+      name: "builtin-excluded query_to_xml in a debt view link",
+      sql:
+        setFunction("SELECT v.id FROM public.helper v") +
+        "CREATE VIEW public.helper AS SELECT NULL::uuid AS id WHERE pg_catalog.query_to_xml('select 1', true, true, '') IS NOT NULL;\n",
+      expected: [
+        found("call", "pg_catalog.query_to_xml", SET_FUNCTION, "public.helper"),
+      ],
     },
     {
       name: "provider auth.uid",
@@ -344,6 +355,25 @@ describe("checkHeads: Rule 3 — query functions", () => {
       name: "operator",
       sql: selectWhere("1 OPERATOR(public.+) 1 = 2"),
       expected: [found("operator", "public.+", SET_FUNCTION)],
+    },
+    // Оператор називає не лише вираз: `ORDER BY … USING` і порівняння з
+    // підзапитом кличуть його функцію так само.
+    {
+      name: "operator of ORDER BY USING",
+      sql: setFunction(
+        "SELECT t.id FROM public.task t ORDER BY t.id USING OPERATOR(public.<)"
+      ),
+      expected: [found("operator", "public.<", SET_FUNCTION)],
+    },
+    {
+      name: "operator of a subquery comparison",
+      sql: selectWhere("t.id OPERATOR(public.=) ANY (SELECT t.id)"),
+      expected: [found("operator", "public.=", SET_FUNCTION)],
+    },
+    {
+      name: "pg_catalog operator of a subquery comparison",
+      sql: selectWhere("t.id OPERATOR(pg_catalog.=) ANY (SELECT t.id)"),
+      expected: [],
     },
   ])("$name", async ({ sql, layers = [], expected }) => {
     expect(await headErrors({ [SCOPE_FUNCTIONS_FILE]: sql }, layers)).toEqual(
