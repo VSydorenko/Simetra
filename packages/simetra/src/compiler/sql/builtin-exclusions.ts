@@ -10,7 +10,24 @@ export interface BuiltinExclusion {
   reason: string
   names: readonly string[]
   prefixes: readonly string[]
+  /**
+   * Клас, чиї імена виводить із каталогу генератор (`REGCLASS_BUILTINS`
+   * згенерованого переліку), а не перелічує рука.
+   */
+  derived?: "regclassParameter"
 }
+
+/**
+ * Імена вбудованих initdb, у яких хоч один аргумент (зокрема `OUT`) має тип
+ * `regclass`. Один запит для генератора й DB-тесту: клас — не ручний
+ * перелік, тож нова така функція нового мажора виключається сама.
+ */
+export const REGCLASS_PARAMETER_QUERY = `SELECT proname AS name
+FROM pg_proc
+WHERE pronamespace = 'pg_catalog'::regnamespace AND oid < 16384
+  AND ('regclass'::regtype = ANY (proargtypes::oid[])
+    OR 'regclass'::regtype = ANY (coalesce(proallargtypes, '{}')))
+GROUP BY proname`
 
 // Текст, який функція виконає, статично не відомий, тож її виклик —
 // зміна сесії невідомою формою (`dynamicText`, Р2c1-32), а в голові —
@@ -140,6 +157,15 @@ export const BUILTIN_EXCLUSIONS: readonly BuiltinExclusion[] = [
       "pg_walfile_name",
     ],
   },
+  // Аргумент `regclass` називає відношення текстом
+  // (`pg_relation_size('auth.users')`): збирач відношень його не бачить, тож
+  // така функція діяла б на таблицю повз судження відношень.
+  {
+    reason: "acts on a relation named by a regclass argument",
+    names: [],
+    prefixes: [],
+    derived: "regclassParameter",
+  },
   // Ввід значення за текстовим іменем типу виконує CHECK домену, тобто
   // вираз, якого голова не називає.
   {
@@ -149,16 +175,34 @@ export const BUILTIN_EXCLUSIONS: readonly BuiltinExclusion[] = [
   },
 ]
 
-const matches = (exclusion: BuiltinExclusion, name: string): boolean =>
+/**
+ * Імена класу `regclassParameter`: генератор — свіжі з каталогу, решта —
+ * `REGCLASS_BUILTINS` згенерованого переліку. Модуль без імпортів, тож
+ * імена приходять параметром.
+ */
+const matches = (
+  exclusion: BuiltinExclusion,
+  name: string,
+  regclass: ReadonlySet<string>
+): boolean =>
   exclusion.names.includes(name) ||
-  exclusion.prefixes.some((prefix) => name.startsWith(prefix))
+  exclusion.prefixes.some((prefix) => name.startsWith(prefix)) ||
+  (exclusion.derived === "regclassParameter" && regclass.has(name))
 
-/** Чи виключає ім'я вбудованої функції хоч один клас `BUILTIN_EXCLUSIONS`. */
-export function excludedBuiltin(name: string): boolean {
-  return BUILTIN_EXCLUSIONS.some((exclusion) => matches(exclusion, name))
+/**
+ * Чи виключає ім'я вбудованої функції хоч один клас `BUILTIN_EXCLUSIONS`;
+ * `regclass` — імена вбудованих з аргументом `regclass`.
+ */
+export function excludedBuiltin(
+  name: string,
+  regclass: ReadonlySet<string>
+): boolean {
+  return BUILTIN_EXCLUSIONS.some((exclusion) =>
+    matches(exclusion, name, regclass)
+  )
 }
 
 /** Чи виконує вбудована функція з цим ім'ям текст SQL (Р2c1-32). */
 export function executesSqlText(name: string): boolean {
-  return matches(SQL_TEXT, name)
+  return matches(SQL_TEXT, name, new Set())
 }

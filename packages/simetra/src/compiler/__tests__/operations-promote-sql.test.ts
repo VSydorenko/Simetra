@@ -1085,7 +1085,7 @@ ALTER PUBLICATION supabase_realtime ADD TABLE app.counterparties;
   it("refuses verbatim debt that names the promoted table in a string literal", async () => {
     for (const expression of [
       "to_regclass('app.counterparties')",
-      "pg_relation_size('app.counterparties')",
+      "pg_catalog.pg_get_serial_sequence('app.counterparties', 'id')",
       "has_table_privilege('app.counterparties', 'select')",
     ]) {
       const files = await project({

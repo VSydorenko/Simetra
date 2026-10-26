@@ -11,7 +11,10 @@
  */
 import { writeFileSync } from "node:fs"
 import pg from "pg"
-import { excludedBuiltin } from "../src/compiler/sql/builtin-exclusions.ts"
+import {
+  REGCLASS_PARAMETER_QUERY,
+  excludedBuiltin,
+} from "../src/compiler/sql/builtin-exclusions.ts"
 
 const OUTPUT = new URL(
   "../src/compiler/sql/builtin-functions.ts",
@@ -36,7 +39,15 @@ try {
     GROUP BY proname
     ORDER BY proname COLLATE "C"
   `)
-  const names = rows.map((row) => row.name).filter((n) => !excludedBuiltin(n))
+  // Клас «аргумент `regclass`» виводиться з каталогу, а не перелічується.
+  const derived = await client.query<{ name: string }>(
+    `${REGCLASS_PARAMETER_QUERY} ORDER BY proname COLLATE "C"`
+  )
+  const regclass = derived.rows.map((row) => row.name)
+  const regclassSet = new Set(regclass)
+  const names = rows
+    .map((row) => row.name)
+    .filter((n) => !excludedBuiltin(n, regclassSet))
   const text = `// Згенеровано \`pnpm --filter simetra builtin-functions\` над PostgreSQL ${version.rows[0]!.server_version}.
 // Не правити вручну: генератор — packages/simetra/scripts/builtin-functions.ts,
 // виключення — packages/simetra/src/compiler/sql/builtin-exclusions.ts.
@@ -47,6 +58,14 @@ try {
  */
 export const BUILTIN_FUNCTIONS: readonly string[] = [
 ${names.map((name) => `  ${JSON.stringify(name)},`).join("\n")}
+]
+
+/**
+ * Імена вбудованих з аргументом \`regclass\` — клас виключень, який генератор
+ * виводить із каталогу (\`REGCLASS_PARAMETER_QUERY\`), а не перелічує рука.
+ */
+export const REGCLASS_BUILTINS: readonly string[] = [
+${regclass.map((name) => `  ${JSON.stringify(name)},`).join("\n")}
 ]
 `
   writeFileSync(OUTPUT, text)

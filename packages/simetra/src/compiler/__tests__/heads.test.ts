@@ -189,6 +189,13 @@ describe("checkHeads: Rule 3 — query functions", () => {
       expected: [found("call", call.slice(0, call.indexOf("(")), SET_FUNCTION)],
     })),
     {
+      // Аргумент `regclass` називає відношення текстом, якого збирач
+      // відношень не бачить (Р2c1-56).
+      name: "builtin-excluded pg_relation_size of a relation named by text",
+      sql: selectWhere("pg_catalog.pg_relation_size('public.t') > 0"),
+      expected: [found("call", "pg_catalog.pg_relation_size", SET_FUNCTION)],
+    },
+    {
       // Аргумент `regclass` — ще й відношення, що його читає виклик.
       name: "builtin-excluded nextval('s')",
       sql: selectWhere("nextval('s') IS NOT NULL"),
