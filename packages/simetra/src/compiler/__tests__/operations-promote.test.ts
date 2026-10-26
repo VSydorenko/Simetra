@@ -2965,7 +2965,9 @@ describe("promoteObject: tabular sections, documents, registers, data steps", ()
     ])
   })
 
-  it("records a CASCADE foreign key changed to restrict", async () => {
+  it("records a restrict foreign key changed to the kind's noAction", async () => {
+    // Каскад контактів на `Counterparty` перша промоція переводить у
+    // `restrict` (Р2c1-34): власного каскаду на таблицю виду не буває.
     const files = promotionProject(WITH_CONTACTS)
     const first = await promoted(files, counterpartyMapping(PARTS))
     expect(errors(first.result)).toEqual([])
@@ -2994,7 +2996,7 @@ describe("promoteObject: tabular sections, documents, registers, data steps", ()
         constraint: expect.any(String),
         columns: ["counterparty_id"],
         target: "counterparty",
-        from: "cascade",
+        from: "restrict",
         to: "noAction",
       },
     ])
@@ -3024,21 +3026,73 @@ describe("promoteObject: tabular sections, documents, registers, data steps", ()
     ])
   })
 
-  it("records an incoming CASCADE from a table that stays CustomTable", async () => {
-    const files = promotionProject(WITH_CONTACTS)
-    const { result } = await promoted(files, counterpartyMapping(PARTS))
-    expect(errors(result)).toEqual([])
-    expect(result.record?.deleteSemantics).toEqual([
+  describe("incoming cascade from a table that stays CustomTable (Р2c1-34)", () => {
+    // Каскад від таблиці виду до прийнятої таблиці заборонено, тож промоція
+    // сама переводить вхідний FK у `restrict` окремим кроком з дозволом.
+    const cascadeSteps = (
+      result: Awaited<ReturnType<typeof promoted>>["result"]
+    ) =>
+      result.diagnostics
+        .filter((d) => d.code === "promote.cascade-to-restrict")
+        .map((d) => [d.severity, d.file, d.params])
+
+    it("rewrites the FK to restrict as a step with permission", async () => {
+      const files = promotionProject(WITH_CONTACTS)
+      const { result, after } = await promoted(
+        files,
+        counterpartyMapping(PARTS)
+      )
+      expect(errors(result)).toEqual([])
+      expect(cascadeSteps(result)).toEqual([
+        [
+          "warning",
+          CONTACT_FILE,
+          {
+            table: "app.counterparty_contacts",
+            foreignKey: "counterparty_contacts_counterparty_id_fkey",
+            columns: "counterparty_id",
+            action: "cascade",
+          },
+        ],
+      ])
+      expect(
+        (json(after, CONTACT_FILE).foreignKeys as Json[])[0]
+      ).toMatchObject({ onDelete: "restrict" })
+      expect(result.record?.deleteSemantics).toEqual([
+        {
+          direction: "incoming",
+          schema: "app",
+          table: "counterparty_contacts",
+          constraint: "counterparty_contacts_counterparty_id_fkey",
+          columns: ["counterparty_id"],
+          target: "counterparty",
+          from: "cascade",
+          to: "restrict",
+        },
+      ])
+    })
+
+    it.each([
       {
-        direction: "incoming",
-        schema: "app",
-        table: "counterparty_contacts",
-        constraint: "counterparty_contacts_counterparty_id_fkey",
-        columns: ["counterparty_id"],
-        target: "counterparty",
-        from: "cascade",
-        to: "cascade",
+        name: "a restrict FK",
+        files: () =>
+          edited(promotionProject(WITH_CONTACTS), CONTACT_FILE, (raw) => {
+            ;(raw.foreignKeys as Json[])[0]!.onDelete = "restrict"
+          }),
+        input: () => counterpartyMapping(PARTS),
       },
-    ])
+      {
+        name: "a table the promotion makes a tabular section",
+        files: () => promotionProject(WITH_CONTACTS),
+        input: () => withContacts(),
+      },
+    ])("no step for $name", async ({ files, input }) => {
+      const { result } = await promoted(files(), input())
+      expect(errors(result)).toEqual([])
+      expect(cascadeSteps(result)).toEqual([])
+      expect(
+        result.record?.deleteSemantics.filter((d) => d.direction === "incoming")
+      ).toEqual([])
+    })
   })
 })

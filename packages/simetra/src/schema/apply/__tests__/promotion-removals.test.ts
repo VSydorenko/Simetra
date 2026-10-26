@@ -1673,7 +1673,7 @@ describe("access and permission items", () => {
           columns: ["item_id"],
           target: "items",
           from: "cascade",
-          to: "cascade",
+          to: "restrict",
         },
         {
           direction: "own",
@@ -1694,7 +1694,7 @@ describe("access and permission items", () => {
       {
         // Ім'я з крапкою кваліфіковано `quoteIdent`: токен однозначний
         token: 'delete:app."orders.v2".orders_item_fkey',
-        summary: ["incoming (item_id) → items: on delete cascade → cascade"],
+        summary: ["incoming (item_id) → items: on delete cascade → restrict"],
       },
       {
         token: "delete:app.items.items_group_fkey",

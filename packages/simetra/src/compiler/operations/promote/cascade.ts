@@ -29,17 +29,32 @@ export interface PromotedReferences {
   columns: ReadonlyMap<string, { name: string; becomes: string | undefined }>
 }
 
+/** Дії FK, що змінюють дочірні рядки разом з батьківським. */
+const CASCADING: ReadonlySet<unknown> = new Set([
+  "cascade",
+  "setNull",
+  "setDefault",
+])
+
 /**
  * Каскад посилань індексу на промотовані таблиці з інших файлів (спека
  * промоції §7.1): `MetadataRef` отримує новий вид і ім'я, ім'я колонки — ім'я
  * реквізиту. Файли самих промотованих таблиць не правляться — їх замінює
- * файл виду. Повертає нові тексти змінених файлів.
+ * файл виду. Вхідний FK з `cascade`, `setNull` чи `setDefault` від таблиці,
+ * що лишається `CustomTable`, промоція переводить у `restrict` (Р2c1-34, §9.5):
+ * каскад від таблиці виду заборонено. Кожен такий FK — крок
+ * `promote.cascade-to-restrict`; дозвіл на нього дає пункт `delete:` плану
+ * застосування. Повертає нові тексти змінених файлів.
  */
 export function cascadeReferences(
   model: CompiledModel,
   files: ReadonlyMap<string, string>,
   promoted: readonly PromotedReferences[]
-): { files: Map<string, string>; problems: Diagnostic[] } {
+): {
+  files: Map<string, string>
+  problems: Diagnostic[]
+  restricted: Diagnostic[]
+} {
   const unitIds = new Set(promoted.map((p) => p.objectId))
   const byObject = new Map(promoted.map((p) => [p.objectId, p]))
   const byColumn = new Map(
@@ -69,6 +84,7 @@ export function cascadeReferences(
     Map<string, { name: string; kind?: string; places: Place[] }>
   >()
   const problems: Diagnostic[] = []
+  const restricted: Diagnostic[] = []
   const add = (file: string, place: Place, name: string, kind?: string) => {
     const perFile = edits.get(file) ?? new Map()
     edits.set(file, perFile)
@@ -94,6 +110,9 @@ export function cascadeReferences(
     if (object !== undefined) {
       if (object.becomes !== undefined) {
         add(file, place, object.becomes.name, object.becomes.kind)
+        if (ref.role === "customTable.foreignKey") {
+          restricted.push(...restrictForeignKey(model, rawOf(file), ref))
+        }
       } else {
         problems.push(
           diagnostic("promote.unit-unsupported", file, ref.from.pointer, {
@@ -133,5 +152,54 @@ export function cascadeReferences(
       file === PROJECT_FILE ? formatProjectFile(raw) : formatMetaFile(raw)
     )
   }
-  return { files: result, problems }
+  return { files: result, problems, restricted }
+}
+
+interface RawForeignKey {
+  name?: string
+  columns: string[]
+  onDelete?: string
+  onUpdate?: string
+}
+
+/**
+ * Переводить у `restrict` каскадні дії вхідного FK у сирому файлі дочірньої
+ * таблиці; кожна змінена дія — крок `promote.cascade-to-restrict` зі старою
+ * дією, колонками FK і назвою таблиці.
+ */
+function restrictForeignKey(
+  model: CompiledModel,
+  raw: Json,
+  ref: CompiledModel["references"][number]
+): Diagnostic[] {
+  const index = Number(ref.from.pointer.split("/")[2])
+  const fk = (raw.foreignKeys as RawForeignKey[] | undefined)?.[index]
+  if (fk === undefined) return []
+  const table = model.physical.tables.find(
+    (t) =>
+      t.origin.objectId === ref.from.objectId &&
+      t.origin.tabularSectionId === undefined &&
+      t.origin.part === undefined
+  )
+  const physical = new Map(
+    ((raw.columns as { name: string; physicalName?: string }[]) ?? []).map(
+      (c) => [c.name, c.physicalName ?? c.name]
+    )
+  )
+  const found: Diagnostic[] = []
+  for (const field of ["onDelete", "onUpdate"] as const) {
+    const action = fk[field]
+    if (!CASCADING.has(action)) continue
+    fk[field] = "restrict"
+    found.push(
+      diagnostic("promote.cascade-to-restrict", ref.from.file, "", {
+        table: table === undefined ? "" : `${table.schema}.${table.name}`,
+        foreignKey: fk.name ?? "",
+        columns: fk.columns.map((c) => physical.get(c) ?? c).join(", "),
+        action: String(action),
+        ...(field === "onUpdate" ? { event: "update" } : {}),
+      })
+    )
+  }
+  return found
 }

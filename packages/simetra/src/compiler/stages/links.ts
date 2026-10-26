@@ -24,6 +24,7 @@ import {
 } from "../sql/function-shape"
 import {
   blockHeadKey,
+  checkDomainChecks,
   checkHeads,
   headFunctionIdentities,
   headScope,
@@ -95,6 +96,7 @@ export function checkLinks(
     ...shells,
     ...checkPolicyCurrentUser(units),
     ...checkHeads(objects, project, units, scope, skip),
+    ...checkDomainChecks(units, scope),
     // У голові такий виклик — уже `call` судді голів: одна діагностика.
     ...checkGeneratedCalls(
       units.filter((u) => !heads.has(u.identity)),

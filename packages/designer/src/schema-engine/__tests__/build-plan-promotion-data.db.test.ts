@@ -673,7 +673,11 @@ describe.concurrent("buildPlan", () => {
           fill: fillLabel("code"),
         })
         const desired = withTypedLabel(
-          await recompiled(p, { [CODE_T]: domain("length(VALUE) < 100") })
+          // CHECK домену зв'язує імена за шляхом сесії: вбудована —
+          // кваліфікована (Р2c1-33)
+          await recompiled(p, {
+            [CODE_T]: domain("pg_catalog.length(VALUE) < 100"),
+          })
         )
         const outcome = await planPromotion(desired)
         expect(outcome.status).toBe("refused")

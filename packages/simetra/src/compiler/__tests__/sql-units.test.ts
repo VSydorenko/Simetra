@@ -490,7 +490,10 @@ describe("sql units", () => {
         "CREATE POLICY p ON storage.objects FOR SELECT USING (bucket_id = 'avatars');",
       ].join("\n")
     )
-    expect(result.diagnostics).toEqual([])
+    // Розширення без SCHEMA стає в схему застосунку (Р2c1-35).
+    expect(result.diagnostics.map((d) => [d.code, d.severity])).toEqual([
+      ["sql.debt-extension-schema", "warning"],
+    ])
     expect(result.model!.sqlUnits.map((u) => u.identity)).toEqual([
       "domain:public.d",
       "extension:pgcrypto",

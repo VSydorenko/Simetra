@@ -787,3 +787,30 @@ describe("kind module: closed forms only", () => {
     ).toEqual(["movementQuery", "function"])
   })
 })
+
+describe("extensions of application SQL (Р2c1-35)", () => {
+  // Розширення поза схемами провайдера ставить свої функції в схему
+  // застосунку: попередження боргу, бо поза боргом такої одиниці не буває.
+  it.each([
+    { sql: "CREATE EXTENSION pgcrypto SCHEMA extensions;", expected: [] },
+    {
+      sql: "CREATE EXTENSION pgcrypto;",
+      expected: [
+        ["sql.debt-extension-schema", "warning", { extension: "pgcrypto" }],
+      ],
+    },
+    {
+      sql: "CREATE EXTENSION pgcrypto SCHEMA public;",
+      expected: [
+        [
+          "sql.debt-extension-schema",
+          "warning",
+          { extension: "pgcrypto", schema: "public" },
+        ],
+      ],
+    },
+  ])("$sql", async ({ sql, expected }) => {
+    const found = await diagnostics({ "sql/public/extensions.sql": sql })
+    expect(found.map((d) => [d.code, d.severity, d.params])).toEqual(expected)
+  })
+})

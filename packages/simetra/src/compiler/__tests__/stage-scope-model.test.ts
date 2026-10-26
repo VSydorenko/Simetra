@@ -167,6 +167,78 @@ describe("stage 3: scope", () => {
     ])
   })
 
+  describe("onRootDelete cascade only for a root of a kind (Р2c1-36)", () => {
+    // Каскад від кореня-`CustomTable` чи зовнішнього кореня видаляв би рядки
+    // таблиць виду боргом повз Правило 1.
+    const TENANT = "custom-tables/Tenant/Tenant.meta.json"
+    const withKinds = (
+      user: Record<string, unknown>,
+      org: Record<string, unknown> = {}
+    ) => {
+      const base = scopedProjectWith(org)
+      return {
+        ...base,
+        scopeKinds: [base.scopeKinds[0], { ...base.scopeKinds[1], ...user }],
+      }
+    }
+    const tenantRoot = {
+      root: { object: { kind: "CustomTable", name: "Tenant" } },
+    }
+    const rootErrors = async (projectFile: unknown, tenant: boolean) => {
+      // Корінь-`CustomTable` оголошує власний вид скоупу, як будь-який корінь.
+      const entries = tenant
+        ? {
+            [TENANT]: customTable("Tenant", {
+              scope: "user",
+              primaryKey: { columns: ["id"] },
+            }),
+          }
+        : {}
+      const result = await compile(files(entries, projectFile))
+      return result.diagnostics
+        .filter((d) => d.severity === "error")
+        .map((d) => [d.code, d.file, d.pointer, d.params])
+    }
+    const refused = (root: string) => [
+      [
+        "scope.root-cascade-not-kind",
+        PROJECT,
+        "/scopeKinds/1/onRootDelete",
+        { kind: "user", root },
+      ],
+    ]
+    it.each([
+      {
+        name: "external root, cascade",
+        project: withKinds({ onRootDelete: "cascade" }),
+        expected: refused("auth.users"),
+      },
+      {
+        name: "custom table root, cascade",
+        project: withKinds({ ...tenantRoot, onRootDelete: "cascade" }),
+        expected: refused("Tenant"),
+      },
+      {
+        name: "catalog root, cascade",
+        project: withKinds({}, { onRootDelete: "cascade" }),
+        expected: [],
+      },
+      {
+        name: "external root, restrict",
+        project: withKinds({ onRootDelete: "restrict" }),
+        expected: [],
+      },
+      {
+        name: "custom table root, restrict",
+        project: withKinds({ ...tenantRoot, onRootDelete: "restrict" }),
+        expected: [],
+      },
+    ])("$name", async ({ project, expected }) => {
+      const tenant = "object" in (project.scopeKinds[1]!.root as object)
+      expect(await rootErrors(project, tenant)).toEqual(expected)
+    })
+  })
+
   it("external root", async () => {
     const physical = await compileScoped({
       "catalogs/Draft/Draft.meta.json": catalog("Draft", { scope: "user" }),

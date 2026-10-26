@@ -16,6 +16,7 @@ import type { ResolvedReference } from "../stages/identity"
 import { BUILTIN_FUNCTIONS } from "./builtin-functions"
 import {
   closedModuleOwners,
+  extensionSchemas,
   hasEffectiveEmptySearchPath,
   routineLanguage,
 } from "./closed-forms"
@@ -73,7 +74,8 @@ export interface HeadJudgement {
  * читають: поточний користувач платформи, згенеровані функції членства,
  * пошуку предвизначеного й віртуальних таблиць і поіменні функції провайдера
  * (Р2c1-18 (б), (в)); `builtins` — дозвільний перелік вбудованих;
- * `wrappers` — `схема.ім'я` обгортки блоку рухів за `blockHeadKey`.
+ * `wrappers` — `схема.ім'я` обгортки блоку рухів за `blockHeadKey`;
+ * `extensions` — схеми застосунку з функціями боргових розширень (Р2c1-35).
  */
 export interface HeadScope {
   units: readonly VerbatimUnit[]
@@ -81,6 +83,7 @@ export interface HeadScope {
   trusted: ReadonlySet<string>
   builtins: ReadonlySet<string>
   wrappers: ReadonlyMap<string, string>
+  extensions: { all: boolean; schemas: ReadonlySet<string> }
   parse: SqlParser
   plpgsql: PlpgsqlParser
 }
@@ -144,6 +147,7 @@ export function headScope(
     ]),
     builtins: new Set(BUILTIN_FUNCTIONS),
     wrappers,
+    extensions: extensionSchemas(units, project.database.provider),
     parse,
     plpgsql,
   }
@@ -524,7 +528,10 @@ class Walk {
     }
     const routines = this.index.routinesNamed(name, schema)
     if (routines.length > 0) {
-      if (routines.some((u) => u.class !== "function")) {
+      if (
+        routines.some((u) => u.class !== "function") ||
+        this.shadowed(schema)
+      ) {
         this.report(chain, "call", qualified)
       } else {
         for (const unit of routines) this.enqueue(unit, chain)
@@ -540,11 +547,23 @@ class Walk {
     const routines = this.index
       .routinesNamed(name)
       .filter((u) => u.class !== "function" || singleArgument(u))
-    if (routines.some((u) => u.class !== "function")) {
+    if (
+      routines.some((u) => u.class !== "function" || this.shadowed(u.schema))
+    ) {
       this.report(chain, "call", name)
       return
     }
     for (const unit of routines) this.enqueue(unit, chain)
+  }
+
+  /**
+   * Схема, де функція боргового розширення могла б перевантажити функцію
+   * моделі (Р2c1-35): функцій розширень серед одиниць немає, тож суддя не
+   * бачить, у котру з них Postgres розв'яже виклик.
+   */
+  private shadowed(schema: string): boolean {
+    const { all, schemas } = this.scope.extensions
+    return all || schemas.has(schema)
   }
 
   /**
@@ -613,6 +632,50 @@ export function judgeQuery(
   const walk = new Walk(scope)
   walk.trees(trees, chain, bound)
   return walk.run()
+}
+
+interface DomainTree {
+  constraints?: {
+    Constraint?: { contype?: string; raw_expr?: Node }
+  }[]
+}
+
+/**
+ * CHECK кожного домену моделі (Р2c1-33), борг теж: голова виконує його,
+ * коли приводить значення до домену (приведення, змінна, параметр, `NEW`), а
+ * типи в голові не відстежуються — тож CHECK судиться як вираз Правила 3,
+ * зв'язаний під час створення за шляхом сесії.
+ */
+export function checkDomainChecks(
+  units: readonly VerbatimUnit[],
+  scope: HeadScope
+): Diagnostic[] {
+  const found: Diagnostic[] = []
+  for (const unit of units) {
+    if (unit.class !== "domain") continue
+    const domain = (unit.tree as { CreateDomainStmt?: DomainTree })
+      .CreateDomainStmt
+    const checks = (domain?.constraints ?? []).flatMap((c) =>
+      c.Constraint?.contype === "CONSTR_CHECK" &&
+      c.Constraint.raw_expr !== undefined
+        ? [c.Constraint.raw_expr]
+        : []
+    )
+    if (checks.length === 0) continue
+    const label = `${unit.schema}.${unit.name}`
+    for (const finding of judgeQuery(checks, scope, [label], true).findings) {
+      found.push(
+        diagnostic("sql.domain-check-not-allowed", unit.file, "", {
+          domain: label,
+          chain: finding.chain.join(ARROW),
+          construct: finding.construct,
+          ...(finding.detail === undefined ? {} : { detail: finding.detail }),
+          line: unit.line,
+        })
+      )
+    }
+  }
+  return found
 }
 
 /**

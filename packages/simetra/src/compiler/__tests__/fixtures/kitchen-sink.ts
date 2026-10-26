@@ -710,7 +710,8 @@ export function kitchenSink(): Map<string, string> {
           object: ref("Catalog", "Organization"),
           columns: ["ref"],
         },
-        onDelete: "cascade",
+        // Каскад від таблиці виду до прийнятої таблиці заборонено (Р2c1-34).
+        onDelete: "restrict",
         onUpdate: "restrict",
         deferrable: "initiallyDeferred",
       },

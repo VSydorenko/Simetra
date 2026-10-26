@@ -71,7 +71,8 @@ function errors(diagnostics: readonly Diagnostic[]): Finding[] {
   return diagnostics
     .filter((d) => d.severity === "error")
     .map((d) =>
-      d.code === "sql.head-not-allowed"
+      d.code === "sql.head-not-allowed" ||
+      d.code === "sql.domain-check-not-allowed"
         ? [d.code, d.params?.construct, d.params?.detail, d.params?.chain]
         : [d.code]
     )
@@ -806,5 +807,69 @@ describe("judgeHandler: Rule 2 — a handler only checks", () => {
         [SHARED]: FORBIDDEN,
       })
     ).toEqual([found("language", undefined, HANDLER, "public.forbidden")])
+  })
+})
+
+describe("checkDomainChecks: CHECK of a domain (Р2c1-33)", () => {
+  // Голова виконує CHECK домену, коли приводить до нього значення, тож CHECK
+  // судиться як вираз Правила 3 у контексті зв'язування під час створення.
+  const TASK_NOTE_MODULE = TASK_NOTE_FILE.replace(".meta.json", ".sql")
+  const LOG_IT = plpgsqlFunction("public.log_it", "v text")
+  const domain = (check: string) =>
+    `CREATE DOMAIN public.d AS text CHECK (${check});\n`
+  const onDomain = (
+    construct: string,
+    detail: string | undefined,
+    ...names: string[]
+  ) => ["sql.domain-check-not-allowed", construct, detail, chain(...names)]
+
+  it.each<{ name: string; file: string; sql: string; expected: Finding[] }>([
+    {
+      name: "plain check",
+      file: SHARED,
+      sql: domain("VALUE <> ''"),
+      expected: [],
+    },
+    {
+      name: "plpgsql function",
+      file: SHARED,
+      sql: LOG_IT + domain("public.log_it(VALUE)"),
+      expected: [onDomain("language", undefined, "public.d", "public.log_it")],
+    },
+    {
+      name: "unqualified builtin",
+      file: SHARED,
+      sql: domain("lower(VALUE) = VALUE"),
+      expected: [onDomain("unqualified", "lower", "public.d")],
+    },
+    {
+      name: "in a debt module",
+      file: TASK_NOTE_MODULE,
+      sql: LOG_IT + domain("public.log_it(VALUE)"),
+      expected: [onDomain("language", undefined, "public.d", "public.log_it")],
+    },
+  ])("$name", async ({ file, sql, expected }) => {
+    expect(await headErrors({ [file]: sql })).toEqual(expected)
+  })
+})
+
+describe("checkHeads: model functions shadowed by a debt extension (Р2c1-35)", () => {
+  // Функція розширення в схемі застосунку перевантажила б функцію-запит з
+  // тим самим ім'ям, а функцій розширень серед одиниць немає.
+  const QUERY = sqlFunction("public.f", "SELECT NULL::uuid")
+  it.each<{ extension: string; expected: Finding[] }>([
+    { extension: "SCHEMA extensions", expected: [] },
+    {
+      extension: "SCHEMA public",
+      expected: [found("call", "public.f", SET_FUNCTION)],
+    },
+    { extension: "", expected: [found("call", "public.f", SET_FUNCTION)] },
+  ])("extension $extension", async ({ extension, expected }) => {
+    expect(
+      await headErrors({
+        [SCOPE_FUNCTIONS_FILE]: setFunction("SELECT public.f()") + QUERY,
+        "sql/public/extensions.sql": `CREATE EXTENSION pgcrypto ${extension};\n`,
+      })
+    ).toEqual(expected)
   })
 })

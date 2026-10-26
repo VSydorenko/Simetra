@@ -31,7 +31,7 @@ import {
   type ParsedObject,
 } from "./stages/files"
 import { checkIdentity } from "./stages/identity"
-import { checkIntegrity } from "./stages/integrity"
+import { checkDeclaredExpressions, checkIntegrity } from "./stages/integrity"
 import {
   accessDimensionContracts,
   rightsContracts,
@@ -239,13 +239,16 @@ export async function runStages(
   }
   const physical = embedded.physical
 
-  const integrity = checkIntegrity(
-    stage1.objects,
-    stage2.references,
-    { ...stage3, physical },
-    stage1.project,
-    sql.units
-  )
+  const integrity = [
+    ...checkIntegrity(
+      stage1.objects,
+      stage2.references,
+      { ...stage3, physical },
+      stage1.project,
+      sql.units
+    ),
+    ...checkDeclaredExpressions(stage1.objects, stage1.project, parse, plpgsql),
+  ]
   const staged = sortDiagnostics([
     ...early,
     ...debt.stale,

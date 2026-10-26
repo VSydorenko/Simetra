@@ -2,6 +2,7 @@ import type { Node } from "libpg-query"
 import {
   KIND_REGISTRY,
   PLATFORM_SETTING_PREFIX,
+  PROVIDER_SCHEMAS,
   PROVIDER_SQL_TEXT_FUNCTIONS,
   type DatabaseProvider,
   type Project,
@@ -278,7 +279,7 @@ export function firstDynamicSqlLine(
  * тригери (носії, ефекти, механіка, RI), а в сесії пулу — і для чужих команд,
  * тож у боргу він помилка, а не попередження.
  */
-function platformWrite(hit: CommandContextHit): boolean {
+export function platformWrite(hit: CommandContextHit): boolean {
   const setting = hit.setting?.toLowerCase()
   return (
     hit.form === "settingsTable" ||
@@ -328,6 +329,46 @@ export function closedModuleOwners(
       .filter((o) => KIND_REGISTRY[o.kind].sqlModule === "closed")
       .map((o) => o.file)
   )
+}
+
+/**
+ * Схема, куди `CREATE EXTENSION` ставить свої об'єкти (опція `SCHEMA`);
+ * без неї — `undefined`: розширення стає в першу схему `search_path` сесії,
+ * яка статично не відома.
+ */
+export function extensionSchema(tree: unknown): string | undefined {
+  const options = (
+    tree as {
+      CreateExtensionStmt?: {
+        options?: {
+          DefElem?: { defname?: string; arg?: { String?: { sval?: string } } }
+        }[]
+      }
+    }
+  ).CreateExtensionStmt?.options
+  return options?.find((o) => o.DefElem?.defname === "schema")?.DefElem?.arg
+    ?.String?.sval
+}
+
+/**
+ * Схеми застосунку, куди боргові розширення ставлять функції (Р2c1-35):
+ * явна `SCHEMA` поза схемами провайдера; `all` — є розширення без `SCHEMA`,
+ * тож воно могло стати в будь-яку схему застосунку.
+ */
+export function extensionSchemas(
+  units: readonly VerbatimUnit[],
+  provider: DatabaseProvider
+): { all: boolean; schemas: ReadonlySet<string> } {
+  const allowed = new Set(PROVIDER_SCHEMAS[provider])
+  const schemas = new Set<string>()
+  let all = false
+  for (const unit of units) {
+    if (unit.class !== "extension") continue
+    const schema = extensionSchema(unit.tree)
+    if (schema === undefined) all = true
+    else if (!allowed.has(schema)) schemas.add(schema)
+  }
+  return { all, schemas }
 }
 
 /**
@@ -432,6 +473,25 @@ export function checkSqlModules(
           ...(platform === undefined ? {} : { unit: "debt" }),
         }
       )
+    )
+  }
+  // Розширення лише в схемах провайдера (Р2c1-35): функція розширення в
+  // схемі застосунку перевантажила б функцію-запит з тим самим ім'ям. Поза
+  // боргом такої одиниці не буває — модуль виду `CREATE EXTENSION` відмовляє
+  // вище, а одиниця спільного файлу — борг, — тож це попередження.
+  const providerSchemas: ReadonlySet<string> = new Set(
+    provider === undefined ? [] : PROVIDER_SCHEMAS[provider]
+  )
+  for (const unit of units) {
+    if (provider === undefined || unit.class !== "extension" || closed(unit))
+      continue
+    const schema = extensionSchema(unit.tree)
+    if (schema !== undefined && providerSchemas.has(schema)) continue
+    found.push(
+      diagnostic("sql.debt-extension-schema", unit.file, "", {
+        extension: unit.name,
+        ...(schema === undefined ? {} : { schema }),
+      })
     )
   }
   for (const unit of units) {

@@ -617,6 +617,174 @@ describe("stage 4: integrity", () => {
       ])
     })
 
+    describe("fk action on a table of a kind (Р2c1-34)", () => {
+      // Каскад від таблиці виду до прийнятої таблиці виконував би посеред
+      // команди вирази й борговий код прийнятої таблиці.
+      const fkOn = (
+        references: Record<string, unknown>,
+        action: Record<string, string>
+      ) =>
+        compileWith({
+          [NOTE]: catalog("Note"),
+          "custom-tables/Other/Other.meta.json": customTable("Other"),
+          [LOG]: customTable("Log", {
+            columns,
+            foreignKeys: [
+              {
+                name: "log_fk",
+                columns: ["id"],
+                references,
+                ...action,
+              },
+            ],
+          }),
+        })
+      const kind = {
+        object: { kind: "Catalog", name: "Note" },
+        columns: ["ref"],
+      }
+      const other = {
+        object: { kind: "CustomTable", name: "Other" },
+        columns: ["id"],
+      }
+      const external = {
+        external: { schema: "auth", table: "users", columns: ["id"] },
+      }
+      const refused = (field: string) => [
+        [
+          "customTable.fk-action-on-kind-table",
+          "error",
+          LOG,
+          `/foreignKeys/0/${field}`,
+        ],
+      ]
+      it.each([
+        {
+          field: "onDelete",
+          action: "cascade",
+          target: kind,
+          expected: refused("onDelete"),
+        },
+        {
+          field: "onDelete",
+          action: "setNull",
+          target: kind,
+          expected: refused("onDelete"),
+        },
+        {
+          field: "onDelete",
+          action: "setDefault",
+          target: kind,
+          expected: refused("onDelete"),
+        },
+        {
+          field: "onUpdate",
+          action: "cascade",
+          target: kind,
+          expected: refused("onUpdate"),
+        },
+        { field: "onDelete", action: "noAction", target: kind, expected: [] },
+        { field: "onDelete", action: "restrict", target: kind, expected: [] },
+        { field: "onDelete", action: "cascade", target: other, expected: [] },
+        {
+          field: "onDelete",
+          action: "cascade",
+          target: external,
+          expected: [],
+        },
+      ])(
+        "$field $action → $target.object.kind",
+        async ({ field, action, target, expected }) => {
+          const result = await fkOn(target, { [field]: action })
+          expect(codes(result)).toEqual(expected)
+          if (expected.length > 0) {
+            expect(result.diagnostics[0]!.params).toEqual({
+              table: "public.log",
+              foreignKey: "log_fk",
+              action,
+            })
+          }
+        }
+      )
+    })
+
+    describe("metadata expressions of an adopted table (Р2c1-41)", () => {
+      // Postgres обчислює ці вирази на кожному записі в прийняту таблицю,
+      // зокрема записі ролі API, тож вони судяться як вільний SQL боргу.
+      const PLATFORM_WRITE =
+        "pg_catalog.set_config('simetra.actor', 'x', false) IS NOT NULL"
+      const CLAIMS_WRITE =
+        "set_config('request.jwt.claims', '{}', true) IS NOT NULL"
+      const PLATFORM_CALL = "simetra.provision_user(id, id) IS NOT NULL"
+      const amount = {
+        id: uuid(746),
+        name: "amount",
+        physicalName: "amount",
+        type: "Integer",
+      }
+      const at: Record<string, (e: string) => Record<string, unknown>> = {
+        default: (e) => ({
+          columns: [...columns, { ...amount, type: "Boolean", default: e }],
+        }),
+        generated: (e) => ({
+          columns: [
+            ...columns,
+            { ...amount, type: "Boolean", generated: { expression: e } },
+          ],
+        }),
+        checks: (e) => ({
+          columns: [...columns, amount],
+          checks: [{ name: "log_check", expression: e }],
+        }),
+        "index key": (e) => ({
+          columns: [...columns, amount],
+          indexes: [{ name: "log_idx", keys: [{ expression: `(${e})` }] }],
+        }),
+        "index where": (e) => ({
+          columns: [...columns, amount],
+          indexes: [{ name: "log_idx", keys: [{ column: "id" }], where: e }],
+        }),
+      }
+      const POINTERS: Record<string, string> = {
+        default: "/columns/2/default",
+        generated: "/columns/2/generated/expression",
+        checks: "/checks/0/expression",
+        "index key": "/indexes/0/keys/0/expression",
+        "index where": "/indexes/0/where",
+      }
+      const cases = Object.keys(at).flatMap((field) => [
+        {
+          field,
+          expression: PLATFORM_WRITE,
+          expected: [
+            ["sql.command-context-write", "error", LOG, POINTERS[field]],
+          ],
+        },
+        {
+          field,
+          expression: CLAIMS_WRITE,
+          expected: [
+            ["sql.debt-session-write", "warning", LOG, POINTERS[field]],
+          ],
+        },
+        {
+          field,
+          expression: PLATFORM_CALL,
+          expected: [
+            ["sql.platform-function-call", "error", LOG, POINTERS[field]],
+          ],
+        },
+        { field, expression: "now() IS NOT NULL", expected: [] },
+        { field, expression: "amount >= 0", expected: [] },
+      ])
+      it.each(cases)(
+        "$field: $expression",
+        async ({ field, expression, expected }) => {
+          expect(codes(await log(at[field]!(expression)))).toEqual(expected)
+        }
+      )
+    })
+
     it("fk to a pg enum is not referenceable, not a table", async () => {
       const result = await compileWith({
         "pg-enums/Mood/Mood.meta.json": {

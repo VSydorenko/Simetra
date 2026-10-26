@@ -815,4 +815,51 @@ describe("messages catalog", () => {
       "Якщо серверний код читає чи пише ці таблиці сервісним ключем, лишіть їх CustomTable до команд платформи (П4)."
     )
   })
+
+  it("sql.domain-check-not-allowed names the domain, the construct and the chain", () => {
+    for (const locale of ["en", "uk"] as const) {
+      const message = localize(
+        diagnostic("sql.domain-check-not-allowed", "a.sql", "", {
+          domain: "public.d",
+          chain: "public.d → public.log_it",
+          construct: "language",
+          line: 2,
+        }),
+        locale
+      ).message
+      expect(message).toContain("public.d → public.log_it")
+      // Конструкція — текстом судді голів, а не сирим ідентифікатором.
+      expect(message).not.toMatch(/runs language|виконує language/)
+    }
+  })
+
+  it.each<{ params: DiagnosticParams; en: string }>([
+    { params: { extension: "pgcrypto" }, en: "without SCHEMA" },
+    {
+      params: { extension: "pgcrypto", schema: "public" },
+      en: "in schema public",
+    },
+  ])("sql.debt-extension-schema: $en", ({ params, en }) => {
+    const d = diagnostic("sql.debt-extension-schema", "a.sql", "", params)
+    expect(d.severity).toBe("warning")
+    expect(d.message).toContain(en)
+    expect(d.message).not.toContain("undefined")
+    expect(localize(d, "uk").message).not.toContain("undefined")
+  })
+
+  it("promote.cascade-to-restrict names the foreign key and the consequence", () => {
+    const d = diagnostic("promote.cascade-to-restrict", "a.meta.json", "", {
+      table: "app.contacts",
+      foreignKey: "contacts_fk",
+      columns: "counterparty_id",
+      action: "cascade",
+    })
+    expect(d.severity).toBe("warning")
+    for (const text of [d.message, localize(d, "uk").message]) {
+      expect(text).toContain("app.contacts")
+      expect(text).toContain("contacts_fk")
+      expect(text).toContain("counterparty_id")
+    }
+    expect(d.message).toContain("TypeScript hook")
+  })
 })

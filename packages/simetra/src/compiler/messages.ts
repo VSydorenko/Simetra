@@ -998,9 +998,9 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "sql.platform-function-call": {
     en: (p) =>
-      `${p.unit} at line ${p.line} calls ${p.function}, a platform or generated function application SQL may not call`,
+      `${p.unit}${p.line === undefined ? "" : ` at line ${p.line}`} calls ${p.function}, a platform or generated function application SQL may not call`,
     uk: (p) =>
-      `${p.unit} у рядку ${p.line} викликає ${p.function} — функцію платформи чи згенеровану, якої SQL застосунку кликати не можна`,
+      `${p.unit}${p.line === undefined ? "" : ` у рядку ${p.line}`} викликає ${p.function} — функцію платформи чи згенеровану, якої SQL застосунку кликати не можна`,
     hint: {
       en: "Application SQL calls only the platform functions that read, such as simetra.current_user_id(), and only the generated functions that read: lookups of predefined items, virtual tables of registers and membership functions. The other platform functions write the platform's tables and identities, and the other generated functions (save, post and unpost of a document, totals recalculation, movement wrappers, trigger functions) write tables of kinds: called from application SQL they would act past the commands and the rights.",
       uk: "SQL застосунку кличе лише функції платформи, що читають, як-от simetra.current_user_id(), і лише згенеровані функції, що читають: пошук предвизначених, віртуальні таблиці регістрів і функції членства. Решта функцій платформи пишуть її таблиці й ідентичності, а решта згенерованих (save, post і unpost документа, перерахунок підсумків, обгортки рухів, тригерні функції) пишуть таблиці видів: викликані з SQL застосунку, вони діяли б повз команди й права.",
@@ -1068,6 +1068,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     hint: {
       en: "Functions of kind modules, subscription handlers, scope set functions, access dimension value functions and movement query blocks run in the middle of a command or of a policy, so the compiler accepts only what its allowlist names. A handler only checks: it reads with SELECT … INTO, assigns NEW and raises errors; it writes no table, runs no EXECUTE, CALL, SET or cursor. Every other head and every function it calls is a query function: LANGUAGE sql, a string body of exactly one SELECT, SET search_path = '' and no other SET option. They read only qualified tables of kinds, adopted tables and views of the model, and call only query functions of the model, simetra.current_user_id(), generated functions that read, the listed provider functions (auth.uid(), auth.jwt(), auth.role()) and allowlisted builtins; in a view or a policy a builtin is written as pg_catalog.<name>. Move a write into a command of the object or a TypeScript hook.",
       uk: "Функції модулів видів, обробники підписок, функції множини скоупу, функції значень вимірів доступу й блоки запиту рухів виконуються посеред команди чи політики, тож компілятор приймає лише те, що називає його дозвільний перелік. Обробник лише перевіряє: читає через SELECT … INTO, присвоює NEW і кидає помилки; він не пише таблиць, не виконує EXECUTE, CALL, SET чи курсорів. Кожна інша голова й кожна функція, яку вона кличе, — функція-запит: LANGUAGE sql, рядкове тіло рівно з одного SELECT, SET search_path = '' і жодної іншої опції SET. Вони читають лише кваліфіковані таблиці видів, прийняті таблиці й подання моделі та кличуть лише функції-запити моделі, simetra.current_user_id(), згенеровані функції, що читають, поіменні функції провайдера (auth.uid(), auth.jwt(), auth.role()) і вбудовані з переліку; у поданні чи політиці вбудовану пишуть як pg_catalog.<ім'я>. Перенесіть запис у команду об'єкта чи TypeScript-хук.",
+    },
+  },
+  "sql.domain-check-not-allowed": {
+    en: (p) =>
+      `CHECK of domain ${p.domain} at line ${p.line} runs ${headConstruct(p.construct)?.en ?? p.construct}${p.detail === undefined ? "" : ` (${p.detail})`}: ${p.chain}`,
+    uk: (p) =>
+      `CHECK домену ${p.domain} у рядку ${p.line} виконує ${headConstruct(p.construct)?.uk ?? p.construct}${p.detail === undefined ? "" : ` (${p.detail})`}: ${p.chain}`,
+    hint: {
+      en: "Postgres runs the CHECK of a domain whenever a value is cast to it, also in the middle of a command or of a policy, so the CHECK follows the rules of a query function: it calls only allowlisted builtins written as pg_catalog.<name> and query functions of the model, and reads only qualified tables of kinds, adopted tables and views of the model. Move other logic into a command of the object or a TypeScript hook.",
+      uk: "Postgres виконує CHECK домену щоразу, коли значення приводять до нього, зокрема посеред команди чи політики, тож CHECK підлягає правилам функції-запиту: він кличе лише вбудовані з переліку, записані як pg_catalog.<ім'я>, і функції-запити моделі та читає лише кваліфіковані таблиці видів, прийняті таблиці й подання моделі. Перенесіть іншу логіку в команду об'єкта чи TypeScript-хук.",
     },
   },
   "sql.function-settings-shell": {
@@ -1155,6 +1165,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     hint: {
       en: "Debt SQL (of an adopted table or of a shared sql/ file, listed in sql-debt.json) may change the role or the request claims (request.jwt.*) while it stays debt, but in the middle of a command such a change would swap the user the rights policies see: code that runs inside a command (kind module functions, subscription handlers, scope set functions) calls only query functions, which have no such write (sql.head-not-allowed). A function in the closed shell is not debt, and there the same write is an error. Remove the named statement when you convert the unit; a set_config name built at run time counts as such a change, so write the name as a literal; so does a call of a function that executes SQL text.",
       uk: "Борговий SQL (прийнятої таблиці чи спільного файлу sql/, перелічений у sql-debt.json) може змінювати роль чи claims запиту (request.jwt.*), поки лишається боргом, але посеред команди така зміна підмінила б користувача, якого бачать політики прав: код, що виконується посеред команди (функції модулів видів, обробники підписок, функції множини скоупу), кличе лише функції-запити, а в них такого запису немає (sql.head-not-allowed). Функція в закритій оболонці боргом не є, і там той самий запис — помилка. Приберіть названий оператор під час конверсії одиниці; ім'я set_config, зібране під час виконання, вважається такою зміною, тож пишіть ім'я літералом; так само — виклик функції, що виконує текст SQL.",
+    },
+  },
+  "sql.debt-extension-schema": {
+    en: (p) =>
+      `Extension ${p.extension} is created ${p.schema === undefined ? "without SCHEMA" : `in schema ${p.schema}`}, outside the schemas of the database provider`,
+    uk: (p) =>
+      `Розширення ${p.extension} створено ${p.schema === undefined ? "без SCHEMA" : `у схемі ${p.schema}`} — поза схемами провайдера бази`,
+    hint: {
+      en: "Functions of an extension in a schema of the application could overload a query function of the model with the same name, so code that runs inside a command (kind module functions, subscription handlers, scope set functions) calls no model function of that schema; an extension without SCHEMA lands in a schema of the session's search_path, so then it calls none. Create the extension with SCHEMA extensions.",
+      uk: "Функції розширення в схемі застосунку могли б перевантажити функцію-запит моделі з тим самим ім'ям, тож код, що виконується посеред команди (функції модулів видів, обробники підписок, функції множини скоупу), не кличе функцій моделі цієї схеми; розширення без SCHEMA стає в схему з search_path сесії, тож тоді — жодної. Створіть розширення з SCHEMA extensions.",
     },
   },
   "sql.definer-reads-rls": {
@@ -1536,6 +1556,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     hint: {
       en: 'Set "scope" of the root to its own scope kind.',
       uk: 'Задайте "scope" кореня як його власний вид скоупу.',
+    },
+  },
+  "scope.root-cascade-not-kind": {
+    en: (p) =>
+      `Scope kind "${p.kind}" deletes scoped rows in cascade from root ${p.root}, which is not an object of a kind`,
+    uk: (p) =>
+      `Вид скоупу "${p.kind}" каскадом видаляє рядки скоупу від кореня ${p.root}, що не є об'єктом виду`,
+    hint: {
+      en: 'Only the platform deletes the rows of tables of kinds. A root that stays CustomTable or an external table is deleted by application SQL, and a cascade from it would delete those rows past the commands, the rights and the movements. Set "onRootDelete": "restrict", or promote the root into a kind: then a command deletes it.',
+      uk: 'Рядки таблиць видів видаляє лише платформа. Корінь, що лишається CustomTable, чи зовнішню таблицю видаляє SQL застосунку, і каскад від нього видаляв би ці рядки повз команди, права й рухи. Задайте "onRootDelete": "restrict" або промотуйте корінь у вид: тоді його видаляє команда.',
     },
   },
   "scope.root-self-reference": {
@@ -2897,6 +2927,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Postgres відкидає зовнішній ключ на DEFERRABLE первинний ключ чи UNIQUE; посилайтеся на невідкладений ключ на тих самих колонках.",
     },
   },
+  "customTable.fk-action-on-kind-table": {
+    en: (p) =>
+      `Foreign key ${p.foreignKey} of ${p.table} references a table of a kind with action ${p.action}`,
+    uk: (p) =>
+      `Зовнішній ключ ${p.foreignKey} таблиці ${p.table} посилається на таблицю виду з дією ${p.action}`,
+    hint: {
+      en: "A cascade from a table of a kind would run the defaults, checks, index expressions and debt triggers of the adopted table in the middle of a platform command. Use restrict or noAction; remove the child rows in a TypeScript hook of the command or promote the adopted table.",
+      uk: "Каскад від таблиці виду виконував би значення за замовчуванням, CHECK, вирази індексів і боргові тригери прийнятої таблиці посеред команди платформи. Задайте restrict чи noAction; дочірні рядки прибирайте TypeScript-хуком команди або промоцією прийнятої таблиці.",
+    },
+  },
   "customTable.generated-conflict": {
     en: (p) => `Generated column cannot also have ${p.field}`,
     uk: (p) => `Генерована колонка не може мати ще й ${p.field}`,
@@ -3104,6 +3144,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     hint: {
       en: "Only the platform writes a table of a kind, so the promotion does not carry over code that writes the promoted table. Remove the write from each listed unit before promoting: run it as a command of the object after the promotion or write it in a TypeScript hook.",
       uk: "Таблицю виду пише лише платформа, тож промоція не переносить код, що пише промотовану таблицю. Приберіть запис з кожної названої одиниці до промоції: після неї виконайте його командою об'єкта або запишіть у TypeScript-хуку.",
+    },
+  },
+  "promote.cascade-to-restrict": {
+    en: (p) =>
+      `The promotion turns foreign key ${p.foreignKey} of ${p.table} (${p.columns}) from ${p.event === "update" ? "on update " : ""}${p.action} into restrict: deleting a row of the promoted object that has child rows is refused, and the child rows are removed by a TypeScript hook (P4) or by promoting the child table`,
+    uk: (p) =>
+      `Промоція переводить зовнішній ключ ${p.foreignKey} таблиці ${p.table} (${p.columns}) з ${p.event === "update" ? "on update " : ""}${p.action} у restrict: видалення рядка промотованого об'єкта з дочірніми рядками відмовляє, а дочірні рядки прибирає TypeScript-хук (П4) або промоція дочірньої таблиці`,
+    hint: {
+      en: "Only the platform writes a table of a kind, and a cascade from it would run the code of the adopted table in the middle of a command. The apply plan lists this change as a delete: item that needs explicit permission.",
+      uk: "Таблицю виду пише лише платформа, а каскад від неї виконував би код прийнятої таблиці посеред команди. План застосування показує цю зміну пунктом delete:, якому потрібен явний дозвіл.",
     },
   },
   "promote.provider-user-reference": {

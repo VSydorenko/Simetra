@@ -1645,9 +1645,15 @@ describe("reverseGenerate", () => {
       }),
       options()
     )
-    expect(result.diagnostics).toEqual([])
+    // Розширення без SCHEMA стає в схему застосунку (Р2c1-35).
+    const extension = [["sql.debt-extension-schema", "warning"]]
+    expect(result.diagnostics.map((d) => [d.code, d.severity])).toEqual(
+      extension
+    )
     const compiled = await compile(result.files)
-    expect(compiled.diagnostics).toEqual([])
+    expect(compiled.diagnostics.map((d) => [d.code, d.severity])).toEqual(
+      extension
+    )
     expect(compiled.ok).toBe(true)
     expect(
       result.files.get("custom-tables/AppCustomer/AppCustomer.sql")
