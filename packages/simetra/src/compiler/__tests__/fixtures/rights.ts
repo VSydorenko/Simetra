@@ -841,6 +841,12 @@ export function writableRegister(): Layer {
 export const TASK_WRITER_ID = uuid(6721)
 export const TASK_MARKER_ID = uuid(6722)
 export const PROJECT_WRITER_ID = uuid(6723)
+export const RIGHTS_ADMIN_ID = uuid(6740)
+export const TASK_VIEWER_ID = uuid(6741)
+export const TASK_EDITOR_ID = uuid(6742)
+export const PROJECT_READER_ID = uuid(6743)
+export const GLOBAL_ADMIN_ID = uuid(6744)
+export const MEMBER_EDITOR_ID = uuid(6745)
 export const REASSIGN_ACTION_ID = uuid(6720)
 export const BULLETIN_TABLE = "bulletin"
 export const BULLETIN_FILE = "catalogs/Bulletin/Bulletin.meta.json"
@@ -911,6 +917,63 @@ export function writeRoles(): Layer {
       "ProjectWriter",
       { container: ref("Catalog", "Project") },
       { grants: [grant(task, ["read", "create", "update"], "any")] }
+    ),
+  }
+}
+
+/**
+ * Окремий шар ролей для сценаріїв адміністрування: базові файли й попередні
+ * тести зберігають свої гранти, а перевірки запобіжників беруть рівно потрібних
+ * акторів поверх `policyDomain(writeRoles(), adminRoles())`.
+ */
+export function adminRoles(): Layer {
+  const task = objects(["Document", "Task"])
+  return {
+    [ROLE_FILE("RightsAdmin")]: role(
+      RIGHTS_ADMIN_ID,
+      "RightsAdmin",
+      { scopeKind: "org" },
+      {
+        grants: [
+          grant(
+            objects(["Catalog", "OrgRoles"], ["Catalog", "OrgRoleAssignments"]),
+            ["read", "administerRights"],
+            "any"
+          ),
+          grant(task, ["read"], "any"),
+        ],
+      }
+    ),
+    [ROLE_FILE("TaskViewer")]: role(
+      TASK_VIEWER_ID,
+      "TaskViewer",
+      { scopeKind: "org" },
+      { grants: [grant(task, ["read"], "any")] }
+    ),
+    [ROLE_FILE("TaskEditor")]: role(
+      TASK_EDITOR_ID,
+      "TaskEditor",
+      { scopeKind: "org" },
+      { grants: [grant(task, ["read", "update"], "any")] }
+    ),
+    [ROLE_FILE("ProjectReader")]: role(
+      PROJECT_READER_ID,
+      "ProjectReader",
+      { container: ref("Catalog", "Project") },
+      { grants: [grant(task, ["read"], "any")] }
+    ),
+    [ROLE_FILE("GlobalAdmin")]: role(GLOBAL_ADMIN_ID, "GlobalAdmin", "global", {
+      fullAccess: true,
+    }),
+    [ROLE_FILE("MemberEditor")]: role(
+      MEMBER_EDITOR_ID,
+      "MemberEditor",
+      { scopeKind: "org" },
+      {
+        grants: [
+          grant(objects(["Catalog", "OrgMember"]), ["read", "update"], "any"),
+        ],
+      }
     ),
   }
 }

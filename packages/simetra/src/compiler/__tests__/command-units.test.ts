@@ -170,6 +170,8 @@ describe("buildCommandUnits", () => {
     )
     expect(pairs).toEqual(expected)
     expect(pairs).toContainEqual(["task", REASSIGN_ACTION_ID])
+    expect(pairs).toContainEqual(["org_roles", "administerRights"])
+    expect(pairs).toContainEqual(["org_role_assignments", "administerRights"])
     expect(pairs).not.toContainEqual(["task", "read"])
     expect(unit.sql).toContain("DETAIL = 'unknown-action'")
   })

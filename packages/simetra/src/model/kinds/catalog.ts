@@ -1,4 +1,4 @@
-import { readAction, recordActions } from "./actions"
+import { administerRightsAction, readAction, recordActions } from "./actions"
 import { catalogSchema, type Catalog } from "../schemas/catalog"
 import {
   authorColumns,
@@ -291,10 +291,10 @@ interface CatalogRoleDefinition {
   /** Стандартна ТЧ, яку роль додає довіднику. */
   tabularSection?: StandardTabularSectionDef
   /**
-   * Лише `read` (Р2a1-8): запис системних довідників прав — дія
-   * адміністрування прав (Права-2c), а не стандартні дії запису.
+   * Системні довідники прав мають лише читання й окрему дію запису
+   * (Р2c2-1): природні дії запису відкрили б родину «решта».
    */
-  actions?: "read"
+  actions?: "read" | "rights"
   /** Роль системного довідника прав (Р2a1-23). */
   rightsSystem?: RightsSystemCatalog
 }
@@ -308,12 +308,12 @@ const CATALOG_ROLES: Record<
   rightsRoles: {
     columns: rightsRolesColumns,
     tabularSection: DELTA_SECTION,
-    actions: "read",
+    actions: "rights",
     rightsSystem: "rightsRoles",
   },
   roleAssignments: {
     columns: roleAssignmentsColumns,
-    actions: "read",
+    actions: "rights",
     rightsSystem: "roleAssignments",
   },
 }
@@ -345,10 +345,12 @@ export const catalogKind: KindDefinition = {
   referenceable: true,
   compositeIndexes: true,
   writePattern: "optimistic",
-  actions: (obj) =>
-    roleOf(obj).actions === "read"
-      ? [readAction]
-      : recordActions(catalogKind.tabularSectionColumns !== undefined),
+  actions(obj) {
+    const actions = roleOf(obj).actions
+    if (actions === "read") return [readAction]
+    if (actions === "rights") return [readAction, administerRightsAction]
+    return recordActions(catalogKind.tabularSectionColumns !== undefined)
+  },
   rightsExtents: ["any", "own", "dimension"],
   rightsContainer: true,
   rightsBinding: true,

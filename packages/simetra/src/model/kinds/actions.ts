@@ -1,6 +1,7 @@
 /** The platform's standard action vocabulary. */
 export const STANDARD_ACTIONS = [
   "read",
+  "administerRights",
   "create",
   "update",
   "markDeletion",
@@ -62,6 +63,17 @@ export const readAction: KindAction = {
   name: "read",
   requires: [],
   effects: NO_EFFECTS,
+}
+
+/** The action that writes platform rights catalogs. */
+export const administerRightsAction: KindAction = {
+  name: "administerRights",
+  requires: ["read"],
+  effects: {
+    dml: ["insert", "update", "delete"],
+    header: "all",
+    tabularSections: true,
+  },
 }
 
 export const deleteAction: KindAction = {

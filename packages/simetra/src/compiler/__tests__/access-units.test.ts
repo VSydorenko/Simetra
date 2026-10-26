@@ -956,6 +956,24 @@ describe("rights write policies", () => {
     )
   })
 
+  it("rights assignments write only the command root family", () => {
+    const expected = expectedWrites(
+      domain,
+      "org_role_assignments",
+      { key: "id", label: "org_role_assignments" },
+      {}
+    )
+    expect([...expected.keys()].sort()).toEqual([
+      "org_role_assignments_delete_root_any",
+      "org_role_assignments_insert_root_any",
+      "org_role_assignments_update_root_any",
+    ])
+    expect(writesOf(domain, "org_role_assignments")).toEqual(expected)
+    expect(policyNames(domain, "org_role_assignments")).toEqual(
+      allPolicies(domain, "org_role_assignments", expected)
+    )
+  })
+
   it("a tabular section binds to its owner", () => {
     // Р2b1-4, Р2b1-7: ключ родини — колонка власника з міткою власника;
     // природна дія ТЧ на будь-який DML — `update` власника.
@@ -1074,14 +1092,15 @@ describe("rights write policies", () => {
     expect(
       names.filter((name) => WRITE.test(name) || name.includes("_command_"))
     ).toEqual([])
-    // Системні довідники прав мають лише `read`.
+    // Системні довідники прав відкривають адміністративний запис лише на корені.
     for (const contract of domain.contracts.rights) {
       if (contract.system === undefined) continue
-      expect(
-        [...policiesOf(domain, contract.table.name).keys()].filter(
-          (name) => WRITE.test(name) || name.includes("_command_")
-        )
-      ).toEqual([])
+      const writes = [...policiesOf(domain, contract.table.name).keys()].filter(
+        (name) => WRITE.test(name)
+      )
+      expect(writes.length).toBeGreaterThan(0)
+      expect(writes.every((name) => name.includes("_root_"))).toBe(true)
+      expect(writes.some((name) => name.includes("_rest_"))).toBe(false)
     }
   })
 
