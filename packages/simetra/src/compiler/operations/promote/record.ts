@@ -144,10 +144,14 @@ export interface PromotionRecord {
    * Будь-який бік (§9.5, Пр8); "incoming" від таблиці, що лишається
    * `CustomTable`, промоція переводить у `restrict` (Р2c1-34), і зміна
    * потребує дозволу. Імена — нові; `from: "none"` — FK у прийнятій
-   * таблиці не було, а вид додає його з каскадом.
+   * таблиці не було, а вид додає його з каскадом. `event` — подія FK, чия дія
+   * змінилась: `update` буває лише вхідною — FK може посилатися на
+   * неключову унікальну колонку, а `id` таблиці виду поза командою не
+   * заморожено, тож `ON UPDATE CASCADE` спрацьовує так само, як видалення.
    */
   deleteSemantics: {
     direction: "own" | "incoming"
+    event: "delete" | "update"
     schema: string
     table: string
     constraint?: string
@@ -272,6 +276,7 @@ export const promotionRecordSchema: z.ZodType<PromotionRecord> = z.strictObject(
     deleteSemantics: z.array(
       z.strictObject({
         direction: z.enum(["own", "incoming"]),
+        event: z.enum(["delete", "update"]),
         ...at,
         constraint: z.string().optional(),
         columns: z.array(z.string()),
@@ -617,6 +622,12 @@ const WIDENING: ReadonlySet<string> = new Set([
   "setDefault",
 ])
 
+/** Події вхідного FK, кожна з яких дає окремий елемент семантики. */
+const INCOMING_EVENTS = [
+  ["delete", "onDelete"],
+  ["update", "onUpdate"],
+] as const
+
 /**
  * Мапа одиниці з розміщених колонок: наступник кожної прийнятої колонки за
  * її долею. Id виду скоупу дає знімок «до»: колонка `scopeColumn` несе його
@@ -776,7 +787,8 @@ function targetColumn(
  * Зміни семантики видалення (рішення 5, §9.5) з двох знімків. Власні FK:
  * дія FK на ті самі колонки до й після, якщо вона змінилась, або новий FK з
  * каскадом, якого не було. Вхідні: FK таблиці поза одиницею в сам об'єкт,
- * що до промоції чи після неї має `CASCADE`/`SET NULL`/`SET DEFAULT`. Від
+ * що до промоції чи після неї має `CASCADE`/`SET NULL`/`SET DEFAULT` в
+ * `ON DELETE` чи `ON UPDATE` — окремим елементом на кожну подію. Від
  * таблиці, що лишається `CustomTable`, промоція переводить такий FK у
  * `restrict` (Р2c1-34) — дія «до» береться зі знімка до промоції (та сама
  * таблиця за `objectId`, FK за ім'ям), і контроль посилань П3 мусить бачити
@@ -801,6 +813,7 @@ function deleteSemantics(
       if (old === undefined && !WIDENING.has(fk.onDelete)) continue
       found.push({
         direction: "own",
+        event: "delete",
         schema: now.schema,
         table: now.name,
         constraint: fk.name,
@@ -828,20 +841,22 @@ function deleteSemantics(
     for (const fk of table.foreignKeys) {
       const target = JSON.stringify([fk.references.schema, fk.references.table])
       if (!unit.has(target)) continue
-      const from =
-        was?.foreignKeys.find((o) => o.name === fk.name)?.onDelete ??
-        fk.onDelete
-      if (!WIDENING.has(from) && !WIDENING.has(fk.onDelete)) continue
-      found.push({
-        direction: "incoming",
-        schema: table.schema,
-        table: table.name,
-        constraint: fk.name,
-        columns: fk.columns,
-        target: fk.references.table,
-        from,
-        to: fk.onDelete,
-      })
+      const old = was?.foreignKeys.find((o) => o.name === fk.name)
+      for (const [event, field] of INCOMING_EVENTS) {
+        const from = old?.[field] ?? fk[field]
+        if (!WIDENING.has(from) && !WIDENING.has(fk[field])) continue
+        found.push({
+          direction: "incoming",
+          event,
+          schema: table.schema,
+          table: table.name,
+          constraint: fk.name,
+          columns: fk.columns,
+          target: fk.references.table,
+          from,
+          to: fk[field],
+        })
+      }
     }
   }
   return found

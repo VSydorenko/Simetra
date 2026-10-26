@@ -3152,12 +3152,12 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "promote.cascade-to-restrict": {
     en: (p) =>
-      `The promotion turns foreign key ${p.foreignKey} of ${p.table} (${p.columns}) from ${p.event === "update" ? "on update " : ""}${p.action} into restrict: deleting a row of the promoted object that has child rows is refused, and the child rows are removed by a TypeScript hook (P4) or by promoting the child table`,
+      `The promotion turns foreign key ${p.foreignKey} of ${p.table} (${p.columns}) from ${p.event === "update" ? "on update " : ""}${p.action} into restrict: ${p.event === "update" ? "changing the referenced key of a row of the promoted object that has child rows" : "deleting a row of the promoted object that has child rows"} is refused, and the child rows are removed by a TypeScript hook (P4) or by promoting the child table`,
     uk: (p) =>
-      `Промоція переводить зовнішній ключ ${p.foreignKey} таблиці ${p.table} (${p.columns}) з ${p.event === "update" ? "on update " : ""}${p.action} у restrict: видалення рядка промотованого об'єкта з дочірніми рядками відмовляє, а дочірні рядки прибирає TypeScript-хук (П4) або промоція дочірньої таблиці`,
+      `Промоція переводить зовнішній ключ ${p.foreignKey} таблиці ${p.table} (${p.columns}) з ${p.event === "update" ? "on update " : ""}${p.action} у restrict: ${p.event === "update" ? "зміна ключа, на який посилаються, у рядку промотованого об'єкта з дочірніми рядками" : "видалення рядка промотованого об'єкта з дочірніми рядками"} відмовляє, а дочірні рядки прибирає TypeScript-хук (П4) або промоція дочірньої таблиці`,
     hint: {
-      en: "Only the platform writes a table of a kind, and a cascade from it would run the code of the adopted table in the middle of a command. The apply plan lists this change as a delete: item that needs explicit permission.",
-      uk: "Таблицю виду пише лише платформа, а каскад від неї виконував би код прийнятої таблиці посеред команди. План застосування показує цю зміну пунктом delete:, якому потрібен явний дозвіл.",
+      en: "Only the platform writes a table of a kind, and a cascade from it would run the code of the adopted table in the middle of a command. The apply plan lists this change as a delete: item (on delete) or an update: item (on update) that needs explicit permission.",
+      uk: "Таблицю виду пише лише платформа, а каскад від неї виконував би код прийнятої таблиці посеред команди. План застосування показує цю зміну пунктом delete: (on delete) чи update: (on update), якому потрібен явний дозвіл.",
     },
   },
   "promote.provider-user-reference": {
@@ -3436,12 +3436,12 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "apply.permission-required": {
     en: (p) =>
-      `Plan items ${p.items} need explicit permission: a step that drops data or relaxes a guarantee, drift (a change made to the database outside the platform), or a promotion's access change, delete semantics, removal or repair of existing values`,
+      `Plan items ${p.items} need explicit permission: a step that drops data or relaxes a guarantee, drift (a change made to the database outside the platform), or a promotion's access change, delete or update semantics, removal or repair of existing values`,
     uk: (p) =>
-      `Пункти плану ${p.items} потребують явного дозволу: крок, що знищує дані чи знімає гарантію, дрейф (зміна бази повз платформу) або зміна доступу, семантика видалення, видалення чи ремонт наявних значень промоції`,
+      `Пункти плану ${p.items} потребують явного дозволу: крок, що знищує дані чи знімає гарантію, дрейф (зміна бази повз платформу) або зміна доступу, семантика видалення чи оновлення, видалення чи ремонт наявних значень промоції`,
     hint: {
-      en: "Review these items in the plan and allow each one: a step by its id, drift by the word drift, a promotion item by its access:, delete:, remove: or repair: token.",
-      uk: "Перегляньте ці пункти в плані й дозвольте кожен: крок — за його id, дрейф — словом drift, пункт промоції — його токеном access:, delete:, remove: чи repair:.",
+      en: "Review these items in the plan and allow each one: a step by its id, drift by the word drift, a promotion item by its access:, delete:, update:, remove: or repair: token.",
+      uk: "Перегляньте ці пункти в плані й дозвольте кожен: крок — за його id, дрейф — словом drift, пункт промоції — його токеном access:, delete:, update:, remove: чи repair:.",
     },
   },
   "apply.permission-unknown": {
@@ -3450,8 +3450,8 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     uk: (p) =>
       `Дозволені пункти ${p.items} відсутні в плані або не потребують дозволу`,
     hint: {
-      en: "Allow only the ids of destructive and relaxation steps of this plan, drift only when the plan reports drift, and only the promotion items (access:, delete:, remove:, repair:) the plan lists; a stale item means the permission was given for another plan.",
-      uk: "Дозволяйте лише id деструктивних кроків і послаблень цього плану, drift — лише коли план повідомляє дрейф, і лише ті пункти промоції (access:, delete:, remove:, repair:), які план перелічує; застарілий пункт означає, що дозвіл давали іншому плану.",
+      en: "Allow only the ids of destructive and relaxation steps of this plan, drift only when the plan reports drift, and only the promotion items (access:, delete:, update:, remove:, repair:) the plan lists; a stale item means the permission was given for another plan.",
+      uk: "Дозволяйте лише id деструктивних кроків і послаблень цього плану, drift — лише коли план повідомляє дрейф, і лише ті пункти промоції (access:, delete:, update:, remove:, repair:), які план перелічує; застарілий пункт означає, що дозвіл давали іншому плану.",
     },
   },
   "apply.first-apply": {

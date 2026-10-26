@@ -2957,6 +2957,7 @@ describe("promoteObject: tabular sections, documents, registers, data steps", ()
     expect(same.result.record?.deleteSemantics).toEqual([
       expect.objectContaining({
         direction: "own",
+        event: "delete",
         table: "counterparty_contacts",
         columns: ["org_id", "parent_id"],
         from: "none",
@@ -2991,6 +2992,7 @@ describe("promoteObject: tabular sections, documents, registers, data steps", ()
     expect(result.record?.deleteSemantics).toEqual([
       {
         direction: "own",
+        event: "delete",
         schema: "app",
         table: "contact",
         constraint: expect.any(String),
@@ -3015,6 +3017,7 @@ describe("promoteObject: tabular sections, documents, registers, data steps", ()
     expect(result.record?.deleteSemantics).toEqual([
       {
         direction: "own",
+        event: "delete",
         schema: "app",
         table: "counterparty_contacts",
         constraint: expect.any(String),
@@ -3061,6 +3064,55 @@ describe("promoteObject: tabular sections, documents, registers, data steps", ()
       expect(result.record?.deleteSemantics).toEqual([
         {
           direction: "incoming",
+          event: "delete",
+          schema: "app",
+          table: "counterparty_contacts",
+          constraint: "counterparty_contacts_counterparty_id_fkey",
+          columns: ["counterparty_id"],
+          target: "counterparty",
+          from: "cascade",
+          to: "restrict",
+        },
+      ])
+    })
+
+    it("rewrites ON UPDATE CASCADE alone as an update step", async () => {
+      // Вхідний FK може посилатися на неключову унікальну колонку, а `id`
+      // таблиці виду поза командою не заморожено: ON UPDATE теж каскад
+      const files = edited(
+        promotionProject(WITH_CONTACTS),
+        CONTACT_FILE,
+        (raw) => {
+          const fk = (raw.foreignKeys as Json[])[0]!
+          fk.onDelete = "restrict"
+          fk.onUpdate = "cascade"
+        }
+      )
+      const { result, after } = await promoted(
+        files,
+        counterpartyMapping(PARTS)
+      )
+      expect(errors(result)).toEqual([])
+      expect(cascadeSteps(result)).toEqual([
+        [
+          "warning",
+          CONTACT_FILE,
+          {
+            table: "app.counterparty_contacts",
+            foreignKey: "counterparty_contacts_counterparty_id_fkey",
+            columns: "counterparty_id",
+            action: "cascade",
+            event: "update",
+          },
+        ],
+      ])
+      expect(
+        (json(after, CONTACT_FILE).foreignKeys as Json[])[0]
+      ).toMatchObject({ onDelete: "restrict", onUpdate: "restrict" })
+      expect(result.record?.deleteSemantics).toEqual([
+        {
+          direction: "incoming",
+          event: "update",
           schema: "app",
           table: "counterparty_contacts",
           constraint: "counterparty_contacts_counterparty_id_fkey",

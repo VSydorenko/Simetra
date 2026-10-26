@@ -43,8 +43,8 @@ const CASCADING: ReadonlySet<unknown> = new Set([
  * файл виду. Вхідний FK з `cascade`, `setNull` чи `setDefault` від таблиці,
  * що лишається `CustomTable`, промоція переводить у `restrict` (Р2c1-34, §9.5):
  * каскад від таблиці виду заборонено. Кожен такий FK — крок
- * `promote.cascade-to-restrict`; дозвіл на нього дає пункт `delete:` плану
- * застосування. Повертає нові тексти змінених файлів.
+ * `promote.cascade-to-restrict`; дозвіл на нього дає пункт `delete:` чи
+ * `update:` плану застосування — за подією. Повертає нові тексти змінених файлів.
  */
 export function cascadeReferences(
   model: CompiledModel,

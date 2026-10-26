@@ -566,6 +566,7 @@ describe("promotionTransition: limits of P3-2a", () => {
     )
     const incoming = {
       direction: "incoming",
+      event: "delete",
       schema: "app",
       table: "counterparty_contacts",
       constraint: "counterparty_contacts_counterparty_id_fkey",

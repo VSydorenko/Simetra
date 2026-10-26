@@ -409,9 +409,9 @@ If the environment changes before the apply, it is refused
 (`apply.target-changed`); plan again. A plan file from an older tool version is
 refused too: rebuild it with `plan`.
 
-A promotion plan's `allow` also takes the `access:<table>`,
-`delete:<table>.<constraint>`, `remove:<table>` and `repair:<table>` items its
-output lists; a repair rewrites existing values with the fill expression shown.
+A promotion plan's `allow` also takes its listed `access:<table>`, `remove:<t>`,
+`repair:<t>`, `delete:<t>.<constraint>` and `update:<t>.<constraint>` items; a
+repair rewrites existing values with the fill expression shown.
 A promotion is applied only with a valid rehearsal report: rehearse the plan on
 a copy of the target with data first. Point the rehearsal at the copy through
 the connection variable: `simetra apply --rehearse --database-url-env <VAR>`

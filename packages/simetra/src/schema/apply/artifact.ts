@@ -97,7 +97,10 @@ export interface PromotionSection {
   /** `promotionRecordHash(record)`: те, що ledger запам'ятає як застосоване. */
   recordHash: string
   record: PromotionRecord
-  /** Пункти `access:`, `delete:`, `remove:`, `repair:` з тим, що людина переглядає. */
+  /**
+   * Пункти `access:`, `delete:`, `update:`, `remove:`, `repair:` з тим, що
+   * людина переглядає.
+   */
   permissionItems: PermissionItem[]
   preservation: PreservedTable[]
   /**

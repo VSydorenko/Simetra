@@ -727,7 +727,7 @@ export async function promoteObject(
     file: placed(unit).file,
   }))
   // Вхідні каскади, переведені в `restrict` (Р2c1-34): крок з дозволом
-  // пункту `delete:` плану застосування.
+  // пункту `delete:` (on delete) чи `update:` (on update) плану застосування.
   const warnings: Diagnostic[] = [...cascade.restricted]
   const contract = (
     unit: FileUnit,

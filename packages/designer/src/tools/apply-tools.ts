@@ -65,7 +65,7 @@ export interface PlanPromotion {
   tables: { schema: string; from: string; to: string }[]
   columns: PromotionSection["columns"]
   canonicalNames: PromotionSection["canonicalNames"]
-  /** Пункти `access:`, `delete:`, `remove:`, `repair:` з переліками. */
+  /** Пункти `access:`, `delete:`, `update:`, `remove:`, `repair:` з переліками. */
   permissionItems: PermissionItem[]
   /** Кроки даних за таблицями: їх людина переглядає разом із `repair:`. */
   data: PromotionSection["data"]
@@ -410,7 +410,7 @@ const timeoutMs = z.number().int().positive()
 export const applyTool = defineTool({
   name: "apply",
   description:
-    "Apply a reviewed plan file to the live database in one transaction, or rehearse it (rolled back; still takes the plan's locks). A rehearsal also builds the desired shadow and proves the resulting state with the engine on the same connection, holding the plan's locks a little longer; a successful rehearsal writes its report to plans/<from>-<to>.rehearsal.json next to the plan. Needs the plan's hash; destructive and relaxing steps need `allow` by id, drift needs `drift`, and a promotion needs its access:, delete:, remove: and repair: items and a valid report from a rehearsal on a copy of the target with data.",
+    "Apply a reviewed plan file to the live database in one transaction, or rehearse it (rolled back; still takes the plan's locks). A rehearsal also builds the desired shadow and proves the resulting state with the engine on the same connection, holding the plan's locks a little longer; a successful rehearsal writes its report to plans/<from>-<to>.rehearsal.json next to the plan. Needs the plan's hash; destructive and relaxing steps need `allow` by id, drift needs `drift`, and a promotion needs its access:, delete:, update:, remove: and repair: items and a valid report from a rehearsal on a copy of the target with data.",
   input: z.strictObject({
     plan: z.string().min(1).meta({
       description:

@@ -417,6 +417,7 @@ describe("classifyRemovals", () => {
         deleteSemantics: [
           {
             direction: "own",
+            event: "delete",
             schema: "app",
             table: "items",
             columns: ["group_id"],
@@ -1661,22 +1662,25 @@ describe("access and permission items", () => {
     ])
   })
 
-  it("emits delete tokens for own and incoming delete semantics", () => {
-    const items = promotionPermissionItems(
+  it("emits delete and update tokens for own and incoming semantics", () => {
+    const incoming = {
+      direction: "incoming" as const,
+      schema: "app",
+      table: "orders.v2",
+      constraint: "orders_item_fkey",
+      columns: ["item_id"],
+      target: "items",
+      from: "cascade",
+      to: "restrict",
+    }
+    const permissionItems = promotionPermissionItems(
       [],
       [
-        {
-          direction: "incoming",
-          schema: "app",
-          table: "orders.v2",
-          constraint: "orders_item_fkey",
-          columns: ["item_id"],
-          target: "items",
-          from: "cascade",
-          to: "restrict",
-        },
+        { ...incoming, event: "update" },
+        { ...incoming, event: "delete" },
         {
           direction: "own",
+          event: "delete",
           schema: "app",
           table: "items",
           constraint: "items_group_fkey",
@@ -1689,18 +1693,45 @@ describe("access and permission items", () => {
       [],
       []
     )
-    // Порядок — за кодовими одиницями токена: `"` іде перед літерами
-    expect(items).toEqual([
+    // Порядок — група (`delete:` перед `update:`), далі кодові одиниці
+    // токена: `"` іде перед літерами
+    expect(permissionItems).toEqual([
       {
         // Ім'я з крапкою кваліфіковано `quoteIdent`: токен однозначний
         token: 'delete:app."orders.v2".orders_item_fkey',
-        summary: ["incoming (item_id) → items: on delete cascade → restrict"],
+        summary: [
+          "incoming (item_id) → items: on delete cascade → restrict: deleting a row of the promoted object that has child rows is refused",
+        ],
       },
       {
         token: "delete:app.items.items_group_fkey",
         summary: ["own (group_id) → groups: on delete none → restrict"],
       },
+      {
+        token: 'update:app."orders.v2".orders_item_fkey',
+        summary: [
+          "incoming (item_id) → items: on update cascade → restrict: changing the referenced key of a row of the promoted object that has child rows is refused",
+        ],
+      },
     ])
+    // Дозвіл на `delete:` того самого FK не покриває зміну `ON UPDATE`
+    const subject = { steps: [], drift: null, promotion: { permissionItems } }
+    const deletes = [
+      'delete:app."orders.v2".orders_item_fkey',
+      "delete:app.items.items_group_fkey",
+    ]
+    expect(checkPermissions(subject, deletes)).toEqual([
+      expect.objectContaining({
+        code: "apply.permission-required",
+        params: { items: 'update:app."orders.v2".orders_item_fkey' },
+      }),
+    ])
+    expect(
+      checkPermissions(subject, [
+        ...deletes,
+        'update:app."orders.v2".orders_item_fkey',
+      ])
+    ).toEqual([])
   })
 
   it("requires remove: for objects classed removed", () => {
