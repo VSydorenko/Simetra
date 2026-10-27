@@ -23,10 +23,18 @@ import {
   ADOPTED_SUPPORT_KEY,
   adoptedSourcesDomain,
   GLOBAL_ADMIN_ID,
+  type Layer,
+  MEMBER_FILE,
+  ORG_ADMIN_ID,
+  ORG_ASSIGNMENTS_FILE,
+  ORG_KIND_ID,
+  ORGANIZATION_FILE,
   polymorphicGrants,
+  USERS_FILE,
   rightsFiles,
   withRoles,
 } from "../../../compiler/__tests__/fixtures/rights"
+import { uuid } from "../../../compiler/__tests__/helpers"
 
 let parse: SqlParser
 let adopted: CompiledModel
@@ -609,6 +617,95 @@ describe("readRightsSourceFacts", () => {
     )
     expect(rightsSourceDiagnostics(empty).refusal).toBeUndefined()
   })
+
+  it.each([
+    { case: "the same tables", layer: {} as Layer, after: 1, refused: false },
+    {
+      // Те саме фізичне ім'я, інший об'єкт: рядки носія зникнуть з таблицею
+      case: "an assignments catalog replaced by a new object",
+      layer: { [ORG_ASSIGNMENTS_FILE]: { id: uuid(6990) } },
+      after: 0,
+      refused: true,
+    },
+    {
+      case: "a membership catalog replaced by a new object",
+      layer: { [MEMBER_FILE]: { id: uuid(6991) } },
+      after: 0,
+      refused: true,
+    },
+    {
+      case: "a users catalog replaced by a new object",
+      layer: { [USERS_FILE]: { id: uuid(6992) } },
+      after: 0,
+      refused: true,
+    },
+  ])(
+    "counts a fullAccess holder after the plan only from kept tables: $case",
+    async ({ layer, after, refused }) => {
+      // Р2c2-27: носій «після» — лише з таблиць, що лишаються тією самою
+      // таблицею за походженням, а не за іменем.
+      const old = (await compile(withRoles())).model!
+      const desired = (await compile(withRoles(layer))).model!
+      const input = rightsSourceInput(
+        desired.contracts,
+        desired.physical,
+        canonicalSnapshot(old)
+      )
+      const facts = await readRightsSourceFacts(
+        fakeTarget(orgHolder(input)).tx,
+        input
+      )
+      expect(facts.fullAccess).toEqual([
+        { scope: `scope:${ORG_KIND_ID}:org-1`, before: 1, after },
+      ])
+      expect(rightsSourceDiagnostics(facts).refusal?.code).toBe(
+        refused ? "plan.rights-full-access-lost" : undefined
+      )
+    }
+  )
+
+  it("skips the fullAccess check of a level whose scope root object is removed", async () => {
+    // Р2c2-7: план знімає таблицю коренів, а з нею кожен скоуп рівня — як на
+    // COMMIT, коли корінь видалено, перевірки для такого скоупу немає, навіть
+    // коли зникає й таблиця призначень.
+    const old = (await compile(withRoles())).model!
+    const desired = (
+      await compile(
+        withRoles({
+          [ORGANIZATION_FILE]: { id: uuid(6993) },
+          [ORG_ASSIGNMENTS_FILE]: { id: uuid(6990) },
+        })
+      )
+    ).model!
+    const input = rightsSourceInput(
+      desired.contracts,
+      desired.physical,
+      canonicalSnapshot(old)
+    )
+    const facts = await readRightsSourceFacts(
+      fakeTarget(orgHolder(input)).tx,
+      input
+    )
+    expect(facts.fullAccess).toEqual([])
+    expect(rightsSourceDiagnostics(facts).refusal).toBeUndefined()
+  })
+
+  /** Ціль з одним прямим носієм `OrgAdmin` у скоупі `org-1`. */
+  function orgHolder(input: ReturnType<typeof rightsSourceInput>) {
+    return {
+      present: Object.fromEntries(
+        input.tables.map((table) => [`${table.schema}.${table.name}`, true])
+      ),
+      previousRoles: [
+        { role_id: ORG_ADMIN_ID, storage: "scope", storage_id: ORG_KIND_ID },
+      ],
+      holders: {
+        "public.org_role_assignments": [
+          { scope: "org-1", actor: "user-1", archetype: ORG_ADMIN_ID },
+        ],
+      },
+    }
+  }
 })
 
 describe("unknownKeysQuery", () => {

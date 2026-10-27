@@ -56,6 +56,14 @@ interface RightsCatalogInput {
   assignments: QualifiedName
   holdersSql: string
   holderTables: QualifiedName[]
+  /**
+   * Таблиця призначень і кожна з `holderTables` лишаються в бажаній моделі
+   * тією самою таблицею (Р2c2-27): інакше носій, прочитаний з них, після
+   * застосування зникне разом з таблицею.
+   */
+  holdersKept: boolean
+  /** Корінь скоупу рівня зник з бажаної моделі — разом з усіма скоупами. */
+  rootRemoved: boolean
   columns: {
     roles: Record<string, string>
     delta: Record<string, string>
@@ -68,7 +76,27 @@ const level = z.discriminatedUnion("level", [
   z.object({ level: z.literal("global") }),
   z.object({ level: z.literal("scope"), scopeKindId: z.string() }),
 ])
+const origin = z.object({
+  objectId: z.string(),
+  tabularSectionId: z.string().optional(),
+  part: z.string().optional(),
+})
 const appliedRightsSchema = z.object({
+  scopeKinds: z.array(
+    z.object({
+      id: z.string(),
+      root: z.union([
+        z.object({ id: z.string() }),
+        z.object({
+          external: z.object({
+            schema: z.string(),
+            table: z.string(),
+            column: z.string(),
+          }),
+        }),
+      ]),
+    })
+  ),
   contracts: z.object({
     rightsCatalogs: z.array(
       z.object({
@@ -119,6 +147,7 @@ const appliedRightsSchema = z.object({
       z.object({
         schema: z.string(),
         name: z.string(),
+        origin,
         columns: z.array(
           z.object({
             name: z.string(),
@@ -222,7 +251,7 @@ export function rightsSourceInput(
       }[]
     },
     holders: Pick<Contracts, "membership" | "membershipSources" | "users">
-  ): RightsCatalogInput => {
+  ): Omit<RightsCatalogInput, "holdersKept" | "rootRemoved"> => {
     const scopeKindId =
       catalog.level.level === "scope" ? catalog.level.scopeKindId : undefined
     return {
@@ -273,18 +302,56 @@ export function rightsSourceInput(
       },
     }
   }
-  const oldCatalogs = (old?.contracts.rightsCatalogs ?? []).map((catalog) =>
-    catalogInput(
-      catalog,
-      old!.physical,
-      old!.contracts as unknown as Pick<
-        Contracts,
-        "membership" | "membershipSources" | "users"
-      >
+  // Ідентичність таблиці — її походження в метаданих, як у звірці промоції
+  // (`transition.ts`): фізичне ім'я промоція перепризначає, а таблиця нового
+  // об'єкта з тим самим ім'ям — інша таблиця, і її рядки інші
+  const identity = (o: z.infer<typeof origin>) =>
+    JSON.stringify([o.objectId, o.tabularSectionId ?? null, o.part ?? null])
+  const desiredTables = new Set(physical.tables.map((t) => identity(t.origin)))
+  const kept = (table: QualifiedName) => {
+    const was = old!.physical.tables.find(
+      (t) => t.schema === table.schema && t.name === table.name
     )
+    return was !== undefined && desiredTables.has(identity(was.origin))
+  }
+  const oldCatalogs = (old?.contracts.rightsCatalogs ?? []).map(
+    (catalog): RightsCatalogInput => {
+      const input = catalogInput(
+        catalog,
+        old!.physical,
+        old!.contracts as unknown as Pick<
+          Contracts,
+          "membership" | "membershipSources" | "users"
+        >
+      )
+      const root =
+        catalog.level.level === "scope"
+          ? old!.scopeKinds.find(
+              (kind) =>
+                catalog.level.level === "scope" &&
+                kind.id === catalog.level.scopeKindId
+            )?.root
+          : undefined
+      return {
+        ...input,
+        holdersKept: [input.assignments, ...input.holderTables].every(kept),
+        // Корінь-об'єкт без основної таблиці в бажаній моделі — план знімає
+        // таблицю коренів, а з нею кожен скоуп рівня: перевірки для такого
+        // скоупу немає, як на COMMIT, коли корінь видалено (Р2c2-7). Зовнішній
+        // корінь план не знімає
+        rootRemoved:
+          root !== undefined &&
+          "id" in root &&
+          !desiredTables.has(identity({ objectId: root.id })),
+      }
+    }
   )
-  const desiredCatalogs = contracts.rightsCatalogs.map((catalog) =>
-    catalogInput(catalog, physical, contracts)
+  const desiredCatalogs = contracts.rightsCatalogs.map(
+    (catalog): RightsCatalogInput => ({
+      ...catalogInput(catalog, physical, contracts),
+      holdersKept: true,
+      rootRemoved: false,
+    })
   )
   const catalogs = [...oldCatalogs]
   for (const catalog of desiredCatalogs) {
@@ -572,12 +639,14 @@ function collectRightsFacts(
       )
         assignments.push(row.id)
     }
+    if (catalog.rootRemoved) continue
     for (const row of holders) {
       const key = scopeKey(catalog.level, row.scope)
       const count = fullAccess.get(key) ?? { scope: key, before: 0, after: 0 }
       if (beforeRoles?.has(`${row.archetype}|${storage}`)) count.before++
       const next = desired.get(row.archetype)
-      if (next?.fullAccess && next.storage === storage) count.after++
+      if (catalog.holdersKept && next?.fullAccess && next.storage === storage)
+        count.after++
       fullAccess.set(key, count)
     }
   }
