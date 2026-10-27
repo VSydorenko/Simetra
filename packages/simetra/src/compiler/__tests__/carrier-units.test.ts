@@ -246,10 +246,12 @@ describe("buildCarrierUnits", () => {
     expect(carriers((await compileRights(rightsFiles())).model!)).toEqual([])
   })
 
-  it("carrier function names collide like membership functions", async () => {
+  it("carrier function names collide like membership functions, effects ones do not", async () => {
     // Ім'я функції носіїв обрізає ім'я таблиці до тих самих 46 байтів: у
-    // довгої основної таблиці й її ТЧ вони однакові. Так само збігаються
-    // імена функцій ефектів (Р2b1-11) — друга колізія.
+    // довгої основної таблиці й її ТЧ вони однакові — колізію ловить
+    // компілятор. Функції ефектів на довгих іменах дістають стабільний хеш
+    // таблиці (Р2c2-20), тож другої колізії вже немає: перевірка тримає обидва
+    // факти — носії збігаються, ефекти ні.
     const long = "c".repeat(60)
     const result = await compileRights(
       policyDomain({
@@ -269,10 +271,14 @@ describe("buildCarrierUnits", () => {
     expect(
       result.diagnostics
         .filter((d) => d.severity === "error")
-        .map((d) => [d.code, d.file, d.pointer])
+        .map((d) => [d.code, d.file, d.pointer, d.params?.name])
     ).toEqual([
-      ["physical.function-duplicate", COMMENT_FILE, "/physicalName"],
-      ["physical.function-duplicate", COMMENT_FILE, "/physicalName"],
+      [
+        "physical.function-duplicate",
+        COMMENT_FILE,
+        "/physicalName",
+        expect.stringMatching(/_simetra_carriers$/),
+      ],
     ])
   })
 })
