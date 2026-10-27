@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-Статус: чернетка автора, на аудиті.
+Статус: виконано; повні гейти — після дозволу архітектора.
 Архітектор задачі — сесія `consumer-reconciliation2`; якщо її немає — власник.
 
 **Мета:** системні об'єкти прав («Ролі» з дельтою, «Призначення ролей») пише
@@ -194,13 +194,13 @@ true`). Наявні `OrgAdmin` (`fullAccess`) і `ProjectWriter` (2b1) — дл
 **Files:**
 - Modify: `docs/superpowers/specs/2026-10-17-rights-design.md` (Рх15, §4.6, §6.2, §7), `docs/superpowers/specs/2026-10-07-system-schema-users-design.md` (С1, §3, §8)
 
-- [ ] **Step 1:** Спека прав Рх15 — «лічильник на значення скоупу в системному об'єкті застосунку … розгортання зміненої проєкції підвищує всі» → «лічильник на значення скоупу в схемі `simetra` (`rights_versions`, одна функція підвищення — точка сигналу реального часу) … зміну коду несе версія проєкції — хеш згенерованих функцій прав» (Р2c2-11).
-- [ ] **Step 2:** §4.6: пункт «Версії прав» → «версії прав — у схемі `simetra` (Рх15)»; «Аудит змін прав — системний об'єкт «Журнал прав» у схемі застосунку» → «Аудит змін прав — журнал прав у схемі `simetra` з ключем скоупу, без FK на дані застосунку»; «Пишуться лише командами з дією адміністрування прав» → «… з дією `administerRights` (лише явний грант чи `fullAccess` рівня); без контексту команди — лише в режимі обслуговування платформи (§7)» (Р2c2-1, Р2c2-3, Р2c2-12).
-- [ ] **Step 3:** §6.2 — до переліку кодів причин додати `rights-context`, `escalation`, `role-in-use`, `last-full-access` (Р2c2-13).
-- [ ] **Step 4:** §7: (1) пункт ⊆ — «Перевіряється **результат** будь-якої зміни…» доповнити «— результат транзакції проти прав актора на її початок, на COMMIT; приріст — права після мінус права до, із замиканням вимог; адміністрування на рівні контейнера — з кастомними контейнерними ролями (§9)»; (2) пункт останнього носія — протокол замінити на «перевірка — на COMMIT: окремий оператор рахує дієвих носіїв свіжим знімком; замок — рядок версії прав скоупу (глобальний рівень — глобальний рядок), узятий першим кроком зміни; корінь не блокується; видалення скоупу в тій самій транзакції знімає перевірку; інша ізоляція чи зустрічний порядок замків — повтор; виняток — недійсність користувача поза командою (`invalid` `false → true`: видалення облікового запису провайдером; у базі її не відрізнити від SQL власника таблиць): її не блокують, відновлення — команда глобального `fullAccess`»; (3) новий пункт: «запис у системні об'єкти прав без контексту команди — відмова, крім режиму обслуговування платформи (`simetra.rights_maintenance`, SQL застосунку його не ставить; діє лише для сесії, чия роль входу не належить до ролей входу API провайдера — у переліку всі ролі входу недовірених запитів): у ньому не перевіряється лише ⊆, журнал пише актора `NULL` і причину; `TRUNCATE` системних об'єктів прав, членства й «Користувачів» і таблиць зв'язку вимірів — відмова завжди (таблицю, на яку посилається FK, Postgres відхиляє раніше сам); так само завжди — повторна вставка рядка членства чи «Користувачів» з id, на який уже є посилання, а зміна `id` рядка членства чи «Користувачів» — завжди»; (4) новий пункт: «користувач рядка членства незмінний, коли непорожній; порожній заповнює лише сам користувач (самоприйняття); `invalid` і `userKind` «Користувачів» пише лише платформа; це діє й для SQL поза командою, крім режиму обслуговування» (Р2c2-2, Р2c2-3, Р2c2-5, Р2c2-7, Р2c2-9, Р2c2-10, Р2c2-10a, Р2c2-10b, Р2c2-18).
-- [ ] **Step 5:** Спека системної схеми С1 і §3: у перелік вмісту `simetra` — «версії прав, журнал змін прав і службові таблиці перевірки прав транзакції — стан механізму прав платформи з ключем скоупу ([спека прав](2026-10-17-rights-design.md) Рх15, §7)»; §8: «користувача рядка членства, коли він непорожній, дія команди не змінює; порожній заповнює лише сам користувач (прийняття запрошення)».
-- [ ] **Step 6:** Run: `python3 scripts/check-doc-anchors.py && pnpm format:check` — код 0.
-- [ ] **Step 7: Commit**
+- [x] **Step 1:** Спека прав Рх15 — «лічильник на значення скоупу в системному об'єкті застосунку … розгортання зміненої проєкції підвищує всі» → «лічильник на значення скоупу в схемі `simetra` (`rights_versions`, одна функція підвищення — точка сигналу реального часу) … зміну коду несе версія проєкції — хеш згенерованих функцій прав» (Р2c2-11).
+- [x] **Step 2:** §4.6: пункт «Версії прав» → «версії прав — у схемі `simetra` (Рх15)»; «Аудит змін прав — системний об'єкт «Журнал прав» у схемі застосунку» → «Аудит змін прав — журнал прав у схемі `simetra` з ключем скоупу, без FK на дані застосунку»; «Пишуться лише командами з дією адміністрування прав» → «… з дією `administerRights` (лише явний грант чи `fullAccess` рівня); без контексту команди — лише в режимі обслуговування платформи (§7)» (Р2c2-1, Р2c2-3, Р2c2-12).
+- [x] **Step 3:** §6.2 — до переліку кодів причин додати `rights-context`, `escalation`, `role-in-use`, `last-full-access` (Р2c2-13).
+- [x] **Step 4:** §7: (1) пункт ⊆ — «Перевіряється **результат** будь-якої зміни…» доповнити «— результат транзакції проти прав актора на її початок, на COMMIT; приріст — права після мінус права до, із замиканням вимог; адміністрування на рівні контейнера — з кастомними контейнерними ролями (§9)»; (2) пункт останнього носія — протокол замінити на «перевірка — на COMMIT: окремий оператор рахує дієвих носіїв свіжим знімком; замок — рядок версії прав скоупу (глобальний рівень — глобальний рядок), узятий першим кроком зміни; корінь не блокується; видалення скоупу в тій самій транзакції знімає перевірку; інша ізоляція чи зустрічний порядок замків — повтор; виняток — недійсність користувача поза командою (`invalid` `false → true`: видалення облікового запису провайдером; у базі її не відрізнити від SQL власника таблиць): її не блокують, відновлення — команда глобального `fullAccess`»; (3) новий пункт: «запис у системні об'єкти прав без контексту команди — відмова, крім режиму обслуговування платформи (`simetra.rights_maintenance`, SQL застосунку його не ставить; діє лише для сесії, чия роль входу не належить до ролей входу API провайдера — у переліку всі ролі входу недовірених запитів): у ньому не перевіряється лише ⊆, журнал пише актора `NULL` і причину; `TRUNCATE` системних об'єктів прав, членства й «Користувачів» і таблиць зв'язку вимірів — відмова завжди (таблицю, на яку посилається FK, Postgres відхиляє раніше сам); так само завжди — повторна вставка рядка членства чи «Користувачів» з id, на який уже є посилання, а зміна `id` рядка членства чи «Користувачів» — завжди»; (4) новий пункт: «користувач рядка членства незмінний, коли непорожній; порожній заповнює лише сам користувач (самоприйняття); `invalid` і `userKind` «Користувачів» пише лише платформа; це діє й для SQL поза командою, крім режиму обслуговування» (Р2c2-2, Р2c2-3, Р2c2-5, Р2c2-7, Р2c2-9, Р2c2-10, Р2c2-10a, Р2c2-10b, Р2c2-18).
+- [x] **Step 5:** Спека системної схеми С1 і §3: у перелік вмісту `simetra` — «версії прав, журнал змін прав і службові таблиці перевірки прав транзакції — стан механізму прав платформи з ключем скоупу ([спека прав](2026-10-17-rights-design.md) Рх15, §7)»; §8: «користувача рядка членства, коли він непорожній, дія команди не змінює; порожній заповнює лише сам користувач (прийняття запрошення)».
+- [x] **Step 6:** Run: `python3 scripts/check-doc-anchors.py && pnpm format:check` — код 0.
+- [x] **Step 7: Commit**
 
 ```bash
 git add docs/superpowers/specs
@@ -218,15 +218,15 @@ git commit -m "docs(spec): адміністрування прав — пере�
 **Interfaces:**
 - Produces: `"administerRights"` у `STANDARD_ACTIONS`; `CatalogRoleDefinition.actions?: "read" | "rights"`; `RIGHTS_MAINTENANCE_SETTING = "simetra.rights_maintenance"`; `PROVIDER_LOGIN_ROLES` (Р2c2-18, перелік ролей — там).
 
-- [ ] **Step 1: Write the failing tests (unit):**
+- [x] **Step 1: Write the failing tests (unit):**
   - `it("system rights catalogs have read and administerRights, any only")` — контракт прав `OrgRoles` і `OrgRoleAssignments`.
   - `it.each` селекторів: `grantAll` у ролі `org` не дає `administerRights` на системних довідниках; `withAction: "administerRights"` — помилка схеми (`file.schema`); явний грант — дає; `fullAccess` `OrgAdmin` — дає на довідниках `org`, не на глобальних (Р2a1-20); контейнерна роль з явним грантом на `OrgRoleAssignments` — `rights.grant-level` (Р2c2-2).
   - політики запису `OrgRoleAssignments`: коренева родина дії контексту є, родини «решта» немає; `command_parsed` вшиває пари (`<мітка>`, `administerRights`).
   - Мутація: `natural: true` на `administerRights` — тест «родини решта немає» червоніє.
-- [ ] **Step 2:** Run: `pnpm --filter simetra test rights-catalogs rights-expand access command json-schema` — FAIL.
-- [ ] **Step 3: Implement** за Р2c2-1, Р2c2-2; `UPDATE_JSON_SCHEMAS=1 pnpm --filter simetra test json-schema`; коментар у `catalog.ts` біля `actions` оновити.
-- [ ] **Step 4:** Run: `pnpm --filter simetra test rights access command json-schema field-ratchet kitchen && pnpm --filter simetra typecheck` — PASS.
-- [ ] **Step 5: Commit**
+- [x] **Step 2:** Run: `pnpm --filter simetra test rights-catalogs rights-expand access command json-schema` — FAIL.
+- [x] **Step 3: Implement** за Р2c2-1, Р2c2-2; `UPDATE_JSON_SCHEMAS=1 pnpm --filter simetra test json-schema`; коментар у `catalog.ts` біля `actions` оновити.
+- [x] **Step 4:** Run: `pnpm --filter simetra test rights access command json-schema field-ratchet kitchen && pnpm --filter simetra typecheck` — PASS.
+- [x] **Step 5: Commit**
 
 ```bash
 git add packages/simetra/src packages/simetra/schemas
@@ -245,15 +245,15 @@ git commit -m "feat(model): дія адміністрування прав на 
 **Interfaces:**
 - Produces: `rightsAdminTables(objects: readonly ParsedObject[]): PhysicalTable[]` (чотири таблиці Р2c2-11, Р2c2-12, Р2c2-17, додаються в знімок після призначення імен, як `withIdentities`; `origin.objectId` — id першого за файлом системного довідника прав «Призначень», детермінований); `RIGHTS_FUNCTIONS.bump`, `.versions`, `.projectionVersion`, `.fullAccessRoles`, `.roleGrants`; помічник замикання з джерелом рядків і переліком колонок (спільний для `mineBody` і `rights_role_grants`; 2d2 додасть колонки походження).
 
-- [ ] **Step 1: Write the failing tests (unit):**
+- [x] **Step 1: Write the failing tests (unit):**
   - `it("adds rights platform tables to the snapshot of a project with rights catalogs")` — чотири таблиці в `simetra` з колонками, ключами, індексами `(xid, relation, row_id, seq)` журналу й `(xid)` знімка актора і `rowLevelSecurity: "off"`; без системних довідників — немає (Р2c2-16).
   - `it("the projection version changes with the generated rights functions only")` — різний грант → різний хеш; перейменування файлу без зміни прав → той самий.
   - `it("role grants reuse the closure of rights_mine")` — CTE замикання `rights_role_grants` і `rights_mine` дерево в дерево після заміни імені джерела.
   - `rights_full_access_roles` — архетипи з `fullAccess` з рівнем зберігання, без `EXECUTE`; `rights_versions`, `rights_projection_version` — `EXECUTE` `user`, `service`, `command`; `rights_bump`, `rights_role_grants` — нікому.
-- [ ] **Step 2:** Run: `pnpm --filter simetra test rights-admin-tables rights-functions` — FAIL.
-- [ ] **Step 3: Implement** за Р2c2-4, Р2c2-11, Р2c2-12, Р2c2-17.
-- [ ] **Step 4:** Run: `pnpm --filter simetra test rights render canonical && pnpm --filter simetra typecheck` — PASS.
-- [ ] **Step 5: Commit**
+- [x] **Step 2:** Run: `pnpm --filter simetra test rights-admin-tables rights-functions` — FAIL.
+- [x] **Step 3: Implement** за Р2c2-4, Р2c2-11, Р2c2-12, Р2c2-17.
+- [x] **Step 4:** Run: `pnpm --filter simetra test rights render canonical && pnpm --filter simetra typecheck` — PASS.
+- [x] **Step 5: Commit**
 
 ```bash
 git add packages/simetra/src
@@ -274,12 +274,12 @@ git commit -m "feat(compiler): платформні таблиці прав, в�
 - Consumes: `RIGHTS_MAINTENANCE_SETTING`, `PROVIDER_LOGIN_ROLES` (Задача 1).
 - Produces: `buildRightsGuardUnits(contracts, physical, provider, module, parse): SqlUnit[]` (генератор `"rightsGuards"`); `maintenanceSql(provider: DatabaseProvider): string` — вираз режиму обслуговування Р2c2-18, єдиний для всіх тригерів плану; `rightsGuardNames(table: QualifiedName)` — пари «тригер → функція» (`compiler/rights/guard-names.ts`, для Р2c2-15).
 
-- [ ] **Step 1: Write the failing tests (unit, дерева):** на кожній таблиці системних довідників — три `AFTER` тригери оператор-рівня з таблицями переходів за подією; функція `<t>_simetra_rights()`: перший крок — контекст і режим (`rights-context`), далі `rights_bump` раз на (`scope_kind_id`, `scope`) (`DISTINCT`), далі вставка журналу по рядку з `xid = txid_current()`, `relation` (кваліфіковане ім'я фізичної таблиці одним форматером — запис і читання першого образу; заголовок і ТЧ окремо), `row_id`, `parent_id` (дельта); довідники членства — `_members_*`; таблиця зв'язку виміру — `_relation_*`, нескоуплена — нульовий uuid; на таблиці зв'язку `CustomTable` — тригерів немає; `BEFORE TRUNCATE` тригер `<t>_simetra_rights_truncate` (Р2c2-10c) — на кожній з цих таблиць і на «Користувачах», без гілки режиму обслуговування; на довіднику членства й «Користувачах» — тригери оператора `_members_update`/`_users_update` з таблицями переходів (Р2c2-10b). Мутації: без `DISTINCT` — тест «раз на скоуп» червоніє; журнал раніше за версію — тест порядку червоніє.
-- [ ] **Step 2:** Run: `pnpm --filter simetra test rights-guards` — FAIL.
-- [ ] **Step 1a: Write the failing test (unit):** `it("maintenance mode requires a non-API login role")` — у дереві гілки режиму функції `<t>_simetra_rights()` є і `current_setting('simetra.rights_maintenance', true) = 'on'`, і `session_user::text <> ALL (ARRAY['authenticator'])` (значення з `PROVIDER_LOGIN_ROLES.supabase`, усі чотири ролі); вираз режиму в кожному тригері плану — той самий текст `maintenanceSql` (зокрема тригери Задач 4 і 6). Мутація: прибрати умову `session_user` — тест червоніє.
-- [ ] **Step 3: Implement** за Р2c2-3, Р2c2-6, Р2c2-11, Р2c2-12, Р2c2-18; імена функцій — у `derivedFunctions`.
-- [ ] **Step 4:** Run: `pnpm --filter simetra test rights-guards rights && pnpm --filter simetra typecheck` і `pnpm --filter simetra exec vitest run --project db rights-functions rights-policies rights-write access rights-sources` — PASS.
-- [ ] **Step 5: Commit**
+- [x] **Step 1: Write the failing tests (unit, дерева):** на кожній таблиці системних довідників — три `AFTER` тригери оператор-рівня з таблицями переходів за подією; функція `<t>_simetra_rights()`: перший крок — контекст і режим (`rights-context`), далі `rights_bump` раз на (`scope_kind_id`, `scope`) (`DISTINCT`), далі вставка журналу по рядку з `xid = txid_current()`, `relation` (кваліфіковане ім'я фізичної таблиці одним форматером — запис і читання першого образу; заголовок і ТЧ окремо), `row_id`, `parent_id` (дельта); довідники членства — `_members_*`; таблиця зв'язку виміру — `_relation_*`, нескоуплена — нульовий uuid; на таблиці зв'язку `CustomTable` — тригерів немає; `BEFORE TRUNCATE` тригер `<t>_simetra_rights_truncate` (Р2c2-10c) — на кожній з цих таблиць і на «Користувачах», без гілки режиму обслуговування; на довіднику членства й «Користувачах» — тригери оператора `_members_update`/`_users_update` з таблицями переходів (Р2c2-10b). Мутації: без `DISTINCT` — тест «раз на скоуп» червоніє; журнал раніше за версію — тест порядку червоніє.
+- [x] **Step 2:** Run: `pnpm --filter simetra test rights-guards` — FAIL.
+- [x] **Step 1a: Write the failing test (unit):** `it("maintenance mode requires a non-API login role")` — у дереві гілки режиму функції `<t>_simetra_rights()` є і `current_setting('simetra.rights_maintenance', true) = 'on'`, і `session_user::text <> ALL (ARRAY['authenticator'])` (значення з `PROVIDER_LOGIN_ROLES.supabase`, усі чотири ролі); вираз режиму в кожному тригері плану — той самий текст `maintenanceSql` (зокрема тригери Задач 4 і 6). Мутація: прибрати умову `session_user` — тест червоніє.
+- [x] **Step 3: Implement** за Р2c2-3, Р2c2-6, Р2c2-11, Р2c2-12, Р2c2-18; імена функцій — у `derivedFunctions`.
+- [x] **Step 4:** Run: `pnpm --filter simetra test rights-guards rights && pnpm --filter simetra typecheck` і `pnpm --filter simetra exec vitest run --project db rights-functions rights-policies rights-write access rights-sources` — PASS.
+- [x] **Step 5: Commit**
 
 ```bash
 git add packages/simetra/src packages/simetra/test/db
@@ -297,16 +297,16 @@ git commit -m "feat(compiler): тригери версій, журналу й к
 **Interfaces:**
 - Consumes: `rights_role_grants`, `rights_full_access_roles` (Задача 2), `command_current` (2b1), `maintenanceSql` (Задача 3).
 
-- [ ] **Step 1: Write the failing tests (unit, дерева):**
+- [x] **Step 1: Write the failing tests (unit, дерева):**
   - `BEFORE STATEMENT` тригер знімка на таблицях системних довідників і членства: вставка `rights_mine()` і маркера лише за відсутності рядків `xid = txid_current()`; інший `current_user_id()` у тій самій транзакції — `rights-context`;
   - черга: **один** оператор `INSERT … SELECT … ON CONFLICT (xid, kind, scope_kind_id, key) DO UPDATE SET maintenance = … AND …` на виклик тригера, разом із ключем `actor`; ключі `role` (зміни «Ролей» і дельти — за `parent_id`; зміни призначень — за `custom_role`), `assignment`; `scope_kind_id` кожного ключа — за Р2c2-5 (2) (`storage_id`, глобальний — нульовий uuid), а перевірка шукає рядок у таблиці рівня зберігання `scope_kind_id`; перший образ журналу — за (`xid`, `relation`, `row_id`); тригери `_members_*` ставлять ключ `actor` теж;
   - прибирання: перевірка видаляє свій рядок і, коли рядків транзакції не лишилося, — знімок;
   - `CONSTRAINT TRIGGER … DEFERRABLE INITIALLY DEFERRED` на `simetra.rights_tx_pending`; тіло `rights_tx_check()`: «до» — з журналу за `xid` (перший образ рядка за (`relation`, `row_id`)) плюс незмінені живі рядки, «після» — живі; `EXCEPT`; покриття зі знімка за частковим порядком і контейнерною формою (Р2c2-5); виняток — `full_access` знімка рівня; `maintenance` — пропуск; `role-in-use` для ключа `role`; видалення рядка черги й знімка.
   - Мутації (кожна червонить свій рядок тесту й свій DB-кейс Задачі 8): покриття з `rights_mine()` замість знімка (`self-assign`); перевірка оператор-рівня замість відкладеної (`create-with-deny`); призначення без умови «контейнер не змінився» (`container-move`); без гілки режиму (`maintenance`). Ідентичність ключа з `scope_kind_id` і ключ першого образу з `relation` тримають unit-дерева цього кроку (`it("keys the queue by storage level and the journal image by relation")`): колізія uuid між таблицями в DB-тесті потребує підставних id і бюджету не варта.
-- [ ] **Step 2:** Run: `pnpm --filter simetra test rights-guards` — FAIL.
-- [ ] **Step 3: Implement** за Р2c2-5, Р2c2-8, Р2c2-17. Коментарі «чому» — стан на початок транзакції (самопризначення), результат команди, `SET CONSTRAINTS` не вимикає.
-- [ ] **Step 4:** Run: `pnpm --filter simetra test rights-guards && pnpm --filter simetra typecheck` — PASS.
-- [ ] **Step 5: Commit**
+- [x] **Step 2:** Run: `pnpm --filter simetra test rights-guards` — FAIL.
+- [x] **Step 3: Implement** за Р2c2-5, Р2c2-8, Р2c2-17. Коментарі «чому» — стан на початок транзакції (самопризначення), результат команди, `SET CONSTRAINTS` не вимикає.
+- [x] **Step 4:** Run: `pnpm --filter simetra test rights-guards && pnpm --filter simetra typecheck` — PASS.
+- [x] **Step 5: Commit**
 
 ```bash
 git add packages/simetra/src
@@ -321,11 +321,11 @@ git commit -m "feat(compiler): перевірка приросту прав на
 - Modify: `packages/simetra/src/compiler/rights/guard-units.ts`
 - Test: `packages/simetra/src/compiler/__tests__/rights-guards.test.ts`
 
-- [ ] **Step 1: Write the failing tests (unit):** функція оператора ставить ключ `holders` скоупу, коли `OLD TABLE` має рядок форми носія (Р2c2-7); `rights_tx_check()` для `holders`: існування кореня через FK колонки скоупу (`fieldForeignKey`) — немає кореня → пропуск; таблиця без такого FK — гілки винятку немає; інакше окремий оператор підрахунку носіїв за визначенням Р2c2-7 (для цілі `subject` на прийнятому членстві — колонки джерела; без «Користувачів» — без умови дійсності); нуль — `last-full-access`. Мутації: без умови відсутності кореня (`restrict-tenant-delete`); підрахунок на операторі, а не на COMMIT (`concurrent-last`).
-- [ ] **Step 2:** Run: `pnpm --filter simetra test rights-guards` — FAIL.
-- [ ] **Step 3: Implement** за Р2c2-7; коментар «чому» — замок на версії, а не на корені; COMMIT знімає перевірку для видаленого скоупу.
-- [ ] **Step 4:** Run: `pnpm --filter simetra test rights-guards && pnpm --filter simetra typecheck` — PASS.
-- [ ] **Step 5: Commit**
+- [x] **Step 1: Write the failing tests (unit):** функція оператора ставить ключ `holders` скоупу, коли `OLD TABLE` має рядок форми носія (Р2c2-7); `rights_tx_check()` для `holders`: існування кореня через FK колонки скоупу (`fieldForeignKey`) — немає кореня → пропуск; таблиця без такого FK — гілки винятку немає; інакше окремий оператор підрахунку носіїв за визначенням Р2c2-7 (для цілі `subject` на прийнятому членстві — колонки джерела; без «Користувачів» — без умови дійсності); нуль — `last-full-access`. Мутації: без умови відсутності кореня (`restrict-tenant-delete`); підрахунок на операторі, а не на COMMIT (`concurrent-last`).
+- [x] **Step 2:** Run: `pnpm --filter simetra test rights-guards` — FAIL.
+- [x] **Step 3: Implement** за Р2c2-7; коментар «чому» — замок на версії, а не на корені; COMMIT знімає перевірку для видаленого скоупу.
+- [x] **Step 4:** Run: `pnpm --filter simetra test rights-guards && pnpm --filter simetra typecheck` — PASS.
+- [x] **Step 5: Commit**
 
 ```bash
 git add packages/simetra/src
@@ -343,11 +343,11 @@ git commit -m "feat(compiler): запобіжник останнього нос�
 **Interfaces:**
 - Consumes: `maintenanceSql` (Задача 3) — гілки режиму тригерів оператора Р2c2-10b.
 
-- [ ] **Step 1: Write the failing tests (unit, дерева тіла `<t>_simetra_effects()`):** таблиця довідника членства — `TG_OP = 'UPDATE' AND OLD.<user> IS NOT NULL AND OLD.<user> IS DISTINCT FROM NEW.<user>` → `effect`; `TG_OP = 'UPDATE' AND OLD.<user> IS NULL AND NEW.<user> IS NOT NULL AND (NEW.<user> IS DISTINCT FROM (SELECT simetra.current_user_id()) OR EXISTS (рядок членства того самого скоупу з цим користувачем, крім поточного))` → `effect`; на `INSERT` і `DELETE` умов немає; основна таблиця «Користувачів» — `invalid` і `userKind` у незмінних колонках (той самий механізм `immutableColumns`). Інші довідники — без змін. Мутації: прибрати умову «ще не учасник скоупу» (`member-claim`), прибрати `invalid` з незмінних (`users-invalid`).
-- [ ] **Step 2:** Run: `pnpm --filter simetra test effects` — FAIL.
-- [ ] **Step 3: Implement** за Р2c2-9, Р2c2-10, Р2c2-10a, Р2c2-10b (unit-дерева тригерів оператора — у `rights-guards.test.ts`: відмова повторної вставки за наявним призначенням — і в режимі обслуговування, row-level тригер `<t>_simetra_rights_id` (`BEFORE UPDATE OF id … WHEN (OLD.id IS DISTINCT FROM NEW.id)`) без гілки режиму, перевірки без контексту, винятки режиму обслуговування й `invalid` `false → true`): колонки — з `MembershipContract.userColumn`, `UsersContract.invalidColumn` і стандартної колонки `userKind` (`origin.standard`), без назв у коді генератора.
-- [ ] **Step 4:** Run: `pnpm --filter simetra test effects rights && pnpm --filter simetra typecheck` — PASS.
-- [ ] **Step 5: Commit**
+- [x] **Step 1: Write the failing tests (unit, дерева тіла `<t>_simetra_effects()`):** таблиця довідника членства — `TG_OP = 'UPDATE' AND OLD.<user> IS NOT NULL AND OLD.<user> IS DISTINCT FROM NEW.<user>` → `effect`; `TG_OP = 'UPDATE' AND OLD.<user> IS NULL AND NEW.<user> IS NOT NULL AND (NEW.<user> IS DISTINCT FROM (SELECT simetra.current_user_id()) OR EXISTS (рядок членства того самого скоупу з цим користувачем, крім поточного))` → `effect`; на `INSERT` і `DELETE` умов немає; основна таблиця «Користувачів» — `invalid` і `userKind` у незмінних колонках (той самий механізм `immutableColumns`). Інші довідники — без змін. Мутації: прибрати умову «ще не учасник скоупу» (`member-claim`), прибрати `invalid` з незмінних (`users-invalid`).
+- [x] **Step 2:** Run: `pnpm --filter simetra test effects` — FAIL.
+- [x] **Step 3: Implement** за Р2c2-9, Р2c2-10, Р2c2-10a, Р2c2-10b (unit-дерева тригерів оператора — у `rights-guards.test.ts`: відмова повторної вставки за наявним призначенням — і в режимі обслуговування, row-level тригер `<t>_simetra_rights_id` (`BEFORE UPDATE OF id … WHEN (OLD.id IS DISTINCT FROM NEW.id)`) без гілки режиму, перевірки без контексту, винятки режиму обслуговування й `invalid` `false → true`): колонки — з `MembershipContract.userColumn`, `UsersContract.invalidColumn` і стандартної колонки `userKind` (`origin.standard`), без назв у коді генератора.
+- [x] **Step 4:** Run: `pnpm --filter simetra test effects rights && pnpm --filter simetra typecheck` — PASS.
+- [x] **Step 5: Commit**
 
 ```bash
 git add packages/simetra/src
@@ -365,11 +365,11 @@ git commit -m "feat(compiler): користувач членства й плат
 **Interfaces:**
 - Produces: `RightsSourceFacts` (2d1) розширено полями `fullAccess: { scope: string; before: number; after: number }[]` і `orphans: { customRoles: string[]; assignments: string[]; more: number }`; коди `plan.rights-full-access-lost` (помилка) і `plan.rights-orphans` (попередження); параметри діагностик — рядки через кому й числа (`DiagnosticParams`).
 
-- [ ] **Step 1: Write the failing tests (unit):** розпізнавачі — таблицею (`it.each`) кожне ім'я тригера й функції Р2c2-6 (зокрема `_id`, `_truncate`, `_members_update`, `_users_update`) платформне, не заміна прийнятого тригера; `rightsSourceDiagnostics`: (до 1, після 0) → відмова; (до 0, після 0) → без відмови; (до 2, після 1) → без відмови; функції на цілі немає → пропуск; сироти → одне попередження з переліками й `more`; `plan.test.ts` — архетип втратив `fullAccess`, ціль має одного носія → `plan.rights-full-access-lost`; ціль без призначень → план будується.
-- [ ] **Step 2:** Run: `pnpm --filter simetra test reverse replacements rights-sources plan messages` — FAIL.
-- [ ] **Step 3: Implement** за Р2c2-14, Р2c2-15.
-- [ ] **Step 4:** Run: `pnpm --filter simetra test reverse promotion rights-sources plan messages && pnpm --filter simetra typecheck` — PASS.
-- [ ] **Step 5: Commit**
+- [x] **Step 1: Write the failing tests (unit):** розпізнавачі — таблицею (`it.each`) кожне ім'я тригера й функції Р2c2-6 (зокрема `_id`, `_truncate`, `_members_update`, `_users_update`) платформне, не заміна прийнятого тригера; `rightsSourceDiagnostics`: (до 1, після 0) → відмова; (до 0, після 0) → без відмови; (до 2, після 1) → без відмови; функції на цілі немає → пропуск; сироти → одне попередження з переліками й `more`; `plan.test.ts` — архетип втратив `fullAccess`, ціль має одного носія → `plan.rights-full-access-lost`; ціль без призначень → план будується.
+- [x] **Step 2:** Run: `pnpm --filter simetra test reverse replacements rights-sources plan messages` — FAIL.
+- [x] **Step 3: Implement** за Р2c2-14, Р2c2-15.
+- [x] **Step 4:** Run: `pnpm --filter simetra test reverse promotion rights-sources plan messages && pnpm --filter simetra typecheck` — PASS.
+- [x] **Step 5: Commit**
 
 ```bash
 git add packages/simetra/src
@@ -386,7 +386,7 @@ git commit -m "feat(schema): план не забирає останнього �
 
 Причина DB-рівня (шапки файлів): що Postgres виконає тригери оператор-рівня й відкладений constraint-тригер і відмовить кодом запобіжника на COMMIT, що свіжий знімок функції `VOLATILE` у `READ COMMITTED` побачить конкурентний `COMMIT`, і що замок рядка версії серіалізує дві сесії.
 
-- [ ] **Step 1: Write the tests.**
+- [x] **Step 1: Write the tests.**
   - Сіяння системних довідників прав у DB-тестах — у режимі обслуговування: будівник `insert` у `test/db/rights-seed.ts` для таблиць системних довідників вмикає режим (`set_config(RIGHTS_MAINTENANCE_SETTING, 'on', true)`) і **вимикає його одразу після вставки** (`set_config(…, 'off', true)`) — інакше режим тривав би до кінця транзакції опису й ⊆ мовчав би в усіх кейсах; засів іде в транзакції опису, тож його рядки журналу мають `reason = 'maintenance'` і входять у базу порівняння (Р2c2-5); так само — наявні засіви `rights-functions.db.test.ts`, `rights-policies.db.test.ts`, `rights-write.db.test.ts`, `access.db.test.ts`, `rights-sources.db.test.ts` (2d1) (у тому самому коміті, що Задача 3, інакше їх зламає `rights-context`).
   - `rights-guards.db.test.ts`, другий опис `maintenance-api` (Р2c2-18) — власне розгортання, бо `describeTransaction` — одне з'єднання `testDatabaseUrl()` під `postgres` з незакоміченим розгортанням, якого друге з'єднання не бачить, а `postgres` на стеку не суперкористувач (supautils) і `SET SESSION AUTHORIZATION` не має. Один `it` у `withRollback(fn, testSuperuserUrl())`: (1) `SET ROLE postgres` → розгортання й засів (власник таблиць — `postgres`) → сирим SQL функція `public.debt_grant(p_subject uuid)` `SECURITY DEFINER` (власник — `postgres`), що робить `set_config('simetra.rights_maintenance', 'on', true)` і вставляє призначення, `GRANT EXECUTE … TO authenticated` (поза метаданими: компілятор такий SQL відмовив би, Р2c1-6 — саме цей обхід і перевіряємо); (2) позитивний контроль: `RESET ROLE; SET SESSION AUTHORIZATION postgres`, виклик функції у точці збереження — вставка проходить (функція доходить до тригера, гранти власника не заважають), відкат точки; (3) `RESET ROLE; SET SESSION AUTHORIZATION authenticator; SET ROLE authenticated` (`session_user = authenticator`, `current_user = authenticated` — як запит API) і виклик → `42501` з `DETAIL` `rights-context` (не `permission denied`: `EXECUTE` надано, запис іде від власника). Повторити негативний контроль із `session_user = supabase_admin` та `SET ROLE authenticated`. Пароль `authenticator` не потрібен; CI — той самий образ стека з `supabase_admin`. Відкат `withRollback` прибирає все. Бюджет: +1 розгортання (Задача 9 перераховує приріст `test:db`).
   - `rights-guards.db.test.ts` — один опис, одне розгортання (`describeTransaction`), фікстура `policyDomain(writeRoles(), adminRoles())`. Кейс, що доводить відмову на COMMIT, виконує зміни в точці збереження й завершує їх `SET CONSTRAINTS ALL IMMEDIATE` (відкладений тригер спрацьовує на кінці цього оператора — у межах транзакції опису, без справжнього `COMMIT`). Запис — `commandAs` з контекстом `administerRights` (Р2b1-13). Кожна відмова перевіряється за `DETAIL` (ту саму `42501` дає RLS — урок Р2b1-14). Кейси `it.each`:
@@ -418,8 +418,8 @@ git commit -m "feat(schema): план не забирає останнього �
     - `snapshot-cleanup` — актор `OrgAdmin`: (а) дві команди над різними призначеннями (простий запит з двома операторами під `commandAs`), у кроці `after` — оператор режиму обслуговування, `SET CONSTRAINTS ALL IMMEDIATE` і `count(*)` рядків `simetra.rights_tx_actor` і `simetra.rights_tx_pending` з `xid = txid_current()` — 0; (б) режим `IMMEDIATE` **до** команди: `SET CONSTRAINTS ALL IMMEDIATE`, далі `RightsAdmin` призначає учаснику `TaskViewer` (покрите) — проходить, рядків — 0; (в) транзакція лише зі змінами членства (`MemberEditor`) — рядків — 0;
     - `journal` — рядки журналу з дією, міткою, `relation` (заголовок «Ролей» і ТЧ дельти — різні значення), `xid`, образами; `journal-failure` — `ALTER TABLE simetra.rights_journal ADD CONSTRAINT x CHECK (false) NOT VALID` у точці збереження → зміна призначення падає й рядка не лишає.
   - `rights-last-full-access.db.test.ts` (designer, `inTarget`, одна тінь на опис, Р2a2-17): `concurrent-last` — два носії в A; сесія 1 знімає першого (без `COMMIT`); сесія 2 знімає другого; тест чекає, доки сесія 2 справді стоїть на замку (`pg_stat_activity.wait_event_type = 'Lock'` для її pid), і лише тоді `COMMIT` сесії 1 → сесія 2 на `COMMIT` отримує `last-full-access`; те саме в `REPEATABLE READ` → `40001`.
-- [ ] **Step 2:** Run: `pnpm --filter simetra exec vitest run --project db rights-guards` і `pnpm --filter @simetrajs/designer exec vitest run --project db rights-last-full-access` — PASS. **Мутаційний доказ** (вручну, без коміту; до мутації кейс падає саме своїм `DETAIL`): покриття з `rights_mine()` замість знімка → `self-assign`; перевірка оператор-рівня → `create-with-deny` (позитивний рядок червоніє); без замикання в «до» чи «після» → `escalation-closure`; без контейнерної форми покриття → `container-assign` (позитив); без умови контейнера в прирості призначення → `container-move`; без гілки режиму → `maintenance`; без відмови без контексту → `no-context`; без `role-in-use` → `role-in-use`; підрахунок на операторі → `concurrent-last`; без умови відсутності кореня → `restrict-tenant-delete`; без незмінності користувача членства → `member-repoint`; без `invalid` у незмінних → `users-invalid`; без `rights_bump` у тригері членства → `versions`; без вставки журналу → `journal`; ключ `actor` окремим оператором `INSERT` **раніше** за ключі оператора → `snapshot-cleanup` (б) (`escalation`: ключі перевіряються вже без знімка); без ключа `actor` у тригерах членства → `snapshot-cleanup` (в) (знімок лишається); без ключа `role` від зміни призначення → `role-race`; перший образ за `seq DESC` → `journal-two-updates` (кейс будує дві зміни, з яких лише перша дає приріст); без умови «ще не учасник скоупу» → `member-claim`; умови членства без `TG_OP = 'UPDATE'` → `member-delete`; без тригера вставки членства → `member-reinsert`; пропуск повторної вставки в режимі обслуговування → `member-reinsert` (рядок режиму обслуговування); вираз режиму без умови `session_user` → `maintenance-api` (б) проходить без відмови (до мутації (б) падає саме `rights-context`, а (а) зелений — отже відмову дає тригер, не гранти чи RLS `authenticated`); без тригера `_simetra_rights_id` → `member-id-swap`; перевірка незмінності лише в тригері ефектів (без тригера оператора) → `owner-repoint`; база порівняння з усіх рядків журналу, а не лише `command` → `baseline-maintenance` (засіяна роль рахувалася б «вставленою в цій транзакції», приріст — уся роль); без тригера `TRUNCATE` → `truncate` (рядок таблиці призначень); тригер оператора членства перевіряє лише заповненого користувача → `owner-repoint` (рядок порожнього користувача).
-- [ ] **Step 3: Commit**
+- [x] **Step 2:** Run: `pnpm --filter simetra exec vitest run --project db rights-guards` і `pnpm --filter @simetrajs/designer exec vitest run --project db rights-last-full-access` — PASS. **Мутаційний доказ** (вручну, без коміту; до мутації кейс падає саме своїм `DETAIL`): покриття з `rights_mine()` замість знімка → `self-assign`; перевірка оператор-рівня → `create-with-deny` (позитивний рядок червоніє); без замикання в «до» чи «після» → `escalation-closure`; без контейнерної форми покриття → `container-assign` (позитив); без умови контейнера в прирості призначення → `container-move`; без гілки режиму → `maintenance`; без відмови без контексту → `no-context`; без `role-in-use` → `role-in-use`; підрахунок на операторі → `concurrent-last`; без умови відсутності кореня → `restrict-tenant-delete`; без незмінності користувача членства → `member-repoint`; без `invalid` у незмінних → `users-invalid`; без `rights_bump` у тригері членства → `versions`; без вставки журналу → `journal`; ключ `actor` окремим оператором `INSERT` **раніше** за ключі оператора → `snapshot-cleanup` (б) (`escalation`: ключі перевіряються вже без знімка); без ключа `actor` у тригерах членства → `snapshot-cleanup` (в) (знімок лишається); без ключа `role` від зміни призначення → `role-race`; перший образ за `seq DESC` → `journal-two-updates` (кейс будує дві зміни, з яких лише перша дає приріст); без умови «ще не учасник скоупу» → `member-claim`; умови членства без `TG_OP = 'UPDATE'` → `member-delete`; без тригера вставки членства → `member-reinsert`; пропуск повторної вставки в режимі обслуговування → `member-reinsert` (рядок режиму обслуговування); вираз режиму без умови `session_user` → `maintenance-api` (б) проходить без відмови (до мутації (б) падає саме `rights-context`, а (а) зелений — отже відмову дає тригер, не гранти чи RLS `authenticated`); без тригера `_simetra_rights_id` → `member-id-swap`; перевірка незмінності лише в тригері ефектів (без тригера оператора) → `owner-repoint`; база порівняння з усіх рядків журналу, а не лише `command` → `baseline-maintenance` (засіяна роль рахувалася б «вставленою в цій транзакції», приріст — уся роль); без тригера `TRUNCATE` → `truncate` (рядок таблиці призначень); тригер оператора членства перевіряє лише заповненого користувача → `owner-repoint` (рядок порожнього користувача).
+- [x] **Step 3: Commit**
 
 ```bash
 git add packages/simetra/test packages/designer/src
@@ -433,12 +433,12 @@ git commit -m "test(rights): запобіжники адмініструванн
 **Files:**
 - Modify: `packages/designer/skills/simetra-metadata/references/people-and-rights.md`, `docs/ROADMAP.md`, цей план (позначки)
 
-- [ ] **Step 1:** Скіл споживача (англійською): `administerRights` — як видати; ⊆ на COMMIT проти прав на початок транзакції; останній носій `fullAccess` і видалення тенанта; членство — самоприйняття; режим обслуговування — лише інструменти платформи; версії прав як ключ кешу; журнал прав; попередження плану про сиріт і відмова втрати носія.
+- [x] **Step 1:** Скіл споживача (англійською): `administerRights` — як видати; ⊆ на COMMIT проти прав на початок транзакції; останній носій `fullAccess` і видалення тенанта; членство — самоприйняття; режим обслуговування — лише інструменти платформи; версії прав як ключ кешу; журнал прав; попередження плану про сиріт і відмова втрати носія.
 - [ ] **Step 2:** Run: `pnpm format:check && pnpm lint && pnpm typecheck && pnpm test` — код 0.
 - [ ] **Step 3:** Run: `pnpm metadata:check && python3 scripts/check-doc-anchors.py && .agents/skills/codebase-research/scripts/orient --plan docs/superpowers/plans/2026-10-25-rights-2c2-rights-administration-guards.md` — код 0.
 - [ ] **Step 4:** Повний `pnpm test:db` на одному SHA (у фоні, таймаут не коротший за 45 хв): `/usr/bin/time -f %e pnpm test:db` — код 0 (або CI job `db`); приріст проти прогону після 2d1/2c1 ≤ 25 с (розгортання `rights-guards` і `maintenance-api`, одна тінь designer), інакше звіт архітектору з розкладом за файлами.
-- [ ] **Step 5:** ROADMAP — «Права-2c виконано»; позначки плану.
-- [ ] **Step 6: Commit**
+- [x] **Step 5:** ROADMAP — «Права-2c виконано»; позначки плану.
+- [x] **Step 6: Commit**
 
 ```bash
 git add packages/designer/skills docs/ROADMAP.md docs/superpowers/plans/2026-10-25-rights-2c2-rights-administration-guards.md
