@@ -690,13 +690,22 @@ export async function readRightsSourceFacts(
       return found
     }
   )
+  // Довідники прав, які роль застосування не читає, уже дали відмову
+  // доступу (`owners`); без жодного читаного довідника архетипи «до» не
+  // потрібні, а функція схеми `simetra` для чужої ролі впала б сирим `42501`.
+  const catalogs = input.catalogs.filter((catalog) =>
+    [catalog.roles, catalog.delta, catalog.assignments].every((table) =>
+      readable.has(tableText(table))
+    )
+  )
   const rights = await withLocalSettings(
     tx,
     [{ name: "row_security", value: "off" }],
     async () => {
-      const [exists] = await tx.query<{ present: boolean }>(
-        FULL_ACCESS_EXISTS_SQL
-      )
+      const [exists] =
+        catalogs.length === 0
+          ? []
+          : await tx.query<{ present: boolean }>(FULL_ACCESS_EXISTS_SQL)
       const previous = exists?.present
         ? await tx.query<{
             role_id: string
@@ -707,13 +716,7 @@ export async function readRightsSourceFacts(
           )
         : undefined
       const rows = []
-      for (const catalog of input.catalogs) {
-        if (
-          ![catalog.roles, catalog.delta, catalog.assignments].every((table) =>
-            readable.has(tableText(table))
-          )
-        )
-          continue
+      for (const catalog of catalogs) {
         rows.push({
           catalog,
           roles: await tx.query<CatalogRow>(catalogSql(catalog, "roles")),

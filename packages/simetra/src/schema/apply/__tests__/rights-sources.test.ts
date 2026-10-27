@@ -484,6 +484,27 @@ describe("readRightsSourceFacts", () => {
     expect(rightsSourceDiagnostics(fresh).refusal).toBeUndefined()
   })
 
+  it("does not call the simetra schema when no rights catalog is readable", async () => {
+    // Чужа роль застосування не має `USAGE` на схемі `simetra`: виклик функції
+    // архетипів дав би сирий `42501` замість відмови доступу до таблиць.
+    const model = (await compile(withRoles())).model!
+    const input = rightsSourceInput(model.contracts, model.physical)
+    const present = Object.fromEntries(
+      input.tables.map((table) => [`${table.schema}.${table.name}`, false])
+    )
+    const old = [
+      { role_id: GLOBAL_ADMIN_ID, storage: "global", storage_id: null },
+    ]
+    const target = fakeTarget({ present, previousRoles: old })
+    const facts = await readRightsSourceFacts(target.tx, input)
+    expect(
+      target.log.filter((q) => q.sql.includes("rights_full_access_roles"))
+    ).toEqual([])
+    expect(rightsSourceDiagnostics(facts).refusal?.code).toBe(
+      "plan.rights-source-access"
+    )
+  })
+
   it("finds invalid custom roles, deltas and direct assignments by row ID", async () => {
     const model = (await compile(withRoles())).model!
     const input = rightsSourceInput(model.contracts, model.physical)

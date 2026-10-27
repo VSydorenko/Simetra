@@ -374,7 +374,26 @@ describe("adopted sources", () => {
 
   it("source-plan-facts", async () => {
     const client = tx.client()
-    const input = rightsSourceInput(model.contracts, model.physical)
+    const full = rightsSourceInput(model.contracts, model.physical)
+    // Предмет кейсу — таблиці джерел: системні довідники прав (Р2c2-14)
+    // читач теж додає до `tables`, але їхні факти — окремий рядок нижче
+    const sourceTables = new Set(
+      [
+        ...model.contracts.membershipSources,
+        ...model.contracts.assignmentSources,
+      ].map((source) => `${source.table.schema}.${source.table.name}`)
+    )
+    const input: RightsSourceInput = {
+      ...full,
+      tables: full.tables.filter((t) =>
+        sourceTables.has(`${t.schema}.${t.name}`)
+      ),
+      catalogs: [],
+    }
+    const noRights = {
+      fullAccess: [],
+      orphans: { customRoles: [], assignments: [], more: 0 },
+    }
     const facts = (only: RightsSourceInput = input) => sourceFacts(client, only)
     const ownersOf = (...tables: [schema: string, name: string][]) =>
       facts({
@@ -393,7 +412,19 @@ describe("adopted sources", () => {
         { source: "grants", keys: ["nope", ADOPTED_SUPPORT_KEY], more: 0 },
         { source: "globalGrants", keys: [], more: 0 },
       ],
+      ...noRights,
     })
+    // Повний вхід: власник читає й системні довідники прав, факти прав
+    // обчислюються на живих таблицях — без сиріт і без втраченого носія
+    const rights = await facts(full)
+    expect(rights.owners.every((o) => o.owned)).toBe(true)
+    expect(rights.owners.map((o) => o.table)).toEqual(
+      expect.arrayContaining(["public.org_role_assignments", "public.users"])
+    )
+    expect(rights.orphans).toEqual(noRights.orphans)
+    expect(
+      rights.fullAccess.filter((row) => row.before > 0 && row.after === 0)
+    ).toEqual([])
     // Роль з `SELECT`, але не власник і без `BYPASSRLS`: таблиця з RLS —
     // відмова, і її дані не читаються; таблиці без RLS — без вимоги
     const role = testRoleName("source_reader")
@@ -425,6 +456,7 @@ describe("adopted sources", () => {
           { table: "public.global_grant", owned: true },
         ],
         unknownKeys: [{ source: "globalGrants", keys: [], more: 0 }],
+        ...noRights,
       })
       await client.query("RESET ROLE")
 
@@ -438,6 +470,7 @@ describe("adopted sources", () => {
         .toEqual({
           owners: [{ table: "public.role_grant", owned: true }],
           unknownKeys: [],
+          ...noRights,
         })
       await client.query("RESET ROLE")
 
@@ -457,6 +490,7 @@ describe("adopted sources", () => {
         .toEqual({
           owners: [{ table: `public.${ownedTable}`, owned: true }],
           unknownKeys: [],
+          ...noRights,
         })
       await client.query("RESET ROLE")
 
@@ -473,10 +507,12 @@ describe("adopted sources", () => {
         .toEqual({
           owners: [{ table: "public.membership", owned: false }],
           unknownKeys: [],
+          ...noRights,
         })
       expect.soft(await ownersOf([schema, "t"]), "no schema USAGE").toEqual({
         owners: [{ table: `${schema}.t`, owned: false }],
         unknownKeys: [],
+        ...noRights,
       })
     } finally {
       await client.query("ROLLBACK TO SAVEPOINT plan_facts")
