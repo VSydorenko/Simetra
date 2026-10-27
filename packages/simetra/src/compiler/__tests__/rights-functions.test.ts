@@ -3,12 +3,14 @@ import type { CompiledModel } from "simetra/compiler"
 import { compile } from "simetra/compiler"
 import { PLATFORM_ROLES, PROVIDER_API_ROLES } from "simetra/model"
 import type { RightsContract, SourceConditionContract } from "../contracts"
+import { compareStrings } from "../diagnostics"
 import {
   RIGHTS_FUNCTIONS,
   hasRightsFunctions,
   hasVisibleUsers,
   sourceConditions,
 } from "../rights/functions"
+import { sha256HexSync } from "../sha256"
 import { hasEmptySearchPath, routineLanguage } from "../sql/closed-forms"
 import { unitCalls, unitRelations } from "../sql/dependencies"
 import { loadSqlParser, type SqlParser } from "../sql/parse"
@@ -259,11 +261,18 @@ const DATA = [
   RIGHTS_FUNCTIONS.domain,
   RIGHTS_FUNCTIONS.roles,
   RIGHTS_FUNCTIONS.sourceKeys,
+  RIGHTS_FUNCTIONS.fullAccessRoles,
+  RIGHTS_FUNCTIONS.projectionVersion,
 ].map((fn) => fn.name)
 
 const SIGNATURES = [
   "function:simetra.has_right(text,text,text,uuid)",
   "function:simetra.rights_any(text,text)",
+  "function:simetra.rights_bump(uuid,uuid)",
+  "function:simetra.rights_full_access_roles()",
+  "function:simetra.rights_projection_version()",
+  "function:simetra.rights_role_grants(text,uuid,uuid,jsonb)",
+  "function:simetra.rights_versions()",
   "function:simetra.rights_container(text,text,text,uuid)",
   "function:simetra.rights_dim(text,text,uuid)",
   "function:simetra.rights_dimension_values(uuid)",
@@ -277,7 +286,7 @@ const SIGNATURES = [
   "function:simetra.rights_roles()",
   "function:simetra.rights_source_keys()",
   "function:simetra.rights_visible_users()",
-]
+].sort()
 
 /** Без довідника членства «Користувачів» не обмежує видимість (Р2a2-18). */
 const WITHOUT_MEMBERSHIP = SIGNATURES.filter(
@@ -317,17 +326,25 @@ describe("rights functions", () => {
       (u) => u.class === "function"
     )) {
       const data = DATA.includes(unit.name)
-      expect(routineLanguage(unit.tree as never), unit.name).toBe("sql")
+      expect(routineLanguage(unit.tree as never), unit.name).toBe(
+        unit.name === "rights_bump" ? "plpgsql" : "sql"
+      )
       expect(hasEmptySearchPath(unit.tree as never), unit.name).toBe(true)
       expect(createOf(unit).sql_body, unit.name).toBeUndefined()
       expect(option(unit, "volatility")?.String?.sval, unit.name).toBe(
-        data ? "immutable" : "stable"
+        data ? "immutable" : unit.name === "rights_bump" ? "volatile" : "stable"
       )
       expect(option(unit, "security")?.Boolean?.boolval, unit.name).toBe(
-        data ? undefined : true
+        data || unit.name === "rights_role_grants" ? undefined : true
       )
       expect(granted.get(unit.name) ?? [], unit.name).toEqual(
-        data ? [] : setRoles
+        unit.name === "rights_projection_version"
+          ? setRoles
+          : data ||
+              unit.name === "rights_bump" ||
+              unit.name === "rights_role_grants"
+            ? []
+            : setRoles
       )
       expect(revoked.get(unit.name), unit.name).toContain("PUBLIC")
     }
@@ -933,5 +950,88 @@ describe("rights functions over a polymorphic adopted source", () => {
 
   it("sourceConditions of an empty where is empty", () => {
     expect(sourceConditions("src", [])).toEqual([])
+  })
+})
+
+describe("rights administration functions", () => {
+  it("provides internal grants and version functions with closed privileges", async () => {
+    const model = await compiled(withRoles())
+    const { granted, revoked } = executeGrantees(model)
+    const publicRoles = [
+      PROVIDER_API_ROLES.supabase.user,
+      PROVIDER_API_ROLES.supabase.service,
+      PLATFORM_ROLES.command,
+    ].sort()
+    for (const [name, language, volatility, definer, visible] of [
+      ["rights_role_grants", "sql", "stable", false, false],
+      ["rights_full_access_roles", "sql", "immutable", false, false],
+      ["rights_bump", "plpgsql", "volatile", true, false],
+      ["rights_versions", "sql", "stable", true, true],
+      ["rights_projection_version", "sql", "immutable", false, true],
+    ] as const) {
+      const unit = functionUnit(model, name)
+      expect(routineLanguage(unit.tree as never)).toBe(language)
+      expect(hasEmptySearchPath(unit.tree as never)).toBe(true)
+      expect(option(unit, "volatility")?.String?.sval ?? "volatile").toBe(
+        volatility
+      )
+      expect(option(unit, "security")?.Boolean?.boolval === true).toBe(definer)
+      expect(granted.get(name) ?? []).toEqual(visible ? publicRoles : [])
+      expect(revoked.get(name)).toContain("PUBLIC")
+    }
+    expect(valuesRows(model, "rights_full_access_roles")).toEqual([
+      [ORG_ADMIN_ID, "scope", ORG_KIND_ID],
+    ])
+  })
+
+  it("changes projection version with grants but not a metadata file rename", async () => {
+    const files = withRoles()
+    const renamed = new Map(files)
+    const old = ROLE_FILE("OrgAdmin")
+    renamed.set(
+      ROLE_FILE("RenamedAdminFile"),
+      JSON.stringify({
+        ...JSON.parse(renamed.get(old)!),
+        name: "RenamedAdminFile",
+      })
+    )
+    renamed.delete(old)
+    const version = (model: CompiledModel) =>
+      bodyTree(functionUnit(model, "rights_projection_version"))
+    const before = version(await compiled(files))
+    const model = await compiled(files)
+    const hash = sha256HexSync(
+      rightsUnits(model)
+        .filter(
+          (unit) => !unit.sql.includes(RIGHTS_FUNCTIONS.projectionVersion.name)
+        )
+        .sort((a, b) => compareStrings(a.identity, b.identity))
+        .map((unit) => unit.sql)
+        .join("\n")
+    )
+    expect(nodes(before, "A_Const")).toContainEqual({ sval: { sval: hash } })
+    expect(version(await compiled(renamed))).toEqual(before)
+    expect(
+      version(
+        await compiled(
+          withRoles({
+            [SET_FILE("TaskReaders")]: {
+              grants: [grant(TASK, ["read"], "own")],
+            },
+            [TASK_FILE]: { ownership: ["assignee"] },
+          })
+        )
+      )
+    ).not.toEqual(before)
+  })
+
+  it("uses the same requirement closure for role definitions and held roles", async () => {
+    const model = await compiled(withRoles())
+    const closures = (name: string) =>
+      nodes(bodyTree(functionUnit(model, name)), "CommonTableExpr").filter(
+        (node) => (node as { ctename: string }).ctename.startsWith("closure_")
+      )
+    expect(closures("rights_mine")).toHaveLength(2)
+    expect(closures("rights_role_grants")).toEqual(closures("rights_mine"))
   })
 })

@@ -26,7 +26,14 @@ export interface PhysicalOrigin {
    * місячні обороти або зв'язок ідентичностей довідника «Користувачі» в схемі
    * платформи.
    */
-  part?: "totals" | "turnoversMonth" | "identities"
+  part?:
+    | "totals"
+    | "turnoversMonth"
+    | "identities"
+    | "rightsVersions"
+    | "rightsJournal"
+    | "rightsTxActor"
+    | "rightsTxPending"
 }
 
 export interface PhysicalEnumType {
