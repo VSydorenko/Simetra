@@ -208,11 +208,11 @@ describe("rights guard statement triggers", () => {
     }
   })
 
-  it("checks the context first, then bumps the version, then journals", () => {
+  it("checks the context first, then bumps the version, journals and queues", () => {
     for (const { table } of CATALOG_TABLES) {
       expect(steps(fnOf(domain, table, "simetra_rights").sql), table).toEqual([
         "context",
-        ...OPERATIONS.flatMap(() => ["bump", "journal"]),
+        ...OPERATIONS.flatMap(() => ["bump", "journal", "queue"]),
       ])
     }
   })
@@ -559,5 +559,353 @@ describe("rights guard statement triggers", () => {
         ).toBeDefined()
       }
     }
+  })
+})
+
+type Select = {
+  op: string
+  larg?: Select
+  rarg?: Select
+  targetList: { ResTarget: { name?: string; val: unknown } }[]
+  distinctClause?: unknown
+  sortClause?: unknown
+  fromClause: { RangeSubselect: { subquery: { SelectStmt: Select } } }[]
+}
+
+interface QueueInsert {
+  InsertStmt: {
+    cols: { ResTarget: { name: string } }[]
+    selectStmt: { SelectStmt: Select }
+    onConflictClause: unknown
+  }
+}
+
+/** Вставки черги тіла. */
+const queueInserts = (sql: string) =>
+  bodyShape(sql)
+    .map((s) => s.expressions[0]?.tree)
+    .filter((t) => insertInto(t) === "rights_tx_pending")
+    .map((t) => (t as QueueInsert).InsertStmt)
+
+/** Гілки `UNION ALL` як окремі SELECT. */
+const arms = (select: Select): Select[] =>
+  select.op === "SETOP_NONE"
+    ? [select]
+    : [...arms(select.larg!), ...arms(select.rarg!)]
+
+/** Ключі черги: (kind, key, scope_kind_id) кожної гілки. */
+const queueKeys = (insert: QueueInsert["InsertStmt"]) =>
+  arms(
+    insert.selectStmt.SelectStmt.fromClause[0]!.RangeSubselect.subquery
+      .SelectStmt
+  ).map((arm) => arm.targetList.slice(0, 3).map((t) => t.ResTarget.val))
+
+/** DETAIL відмови оператора `raise`. */
+const detailOf = (s: ReturnType<typeof bodyShape>[number]) =>
+  s.expressions[2]?.tree
+
+const CHECK = "function:simetra.rights_tx_check()"
+
+/** Дерева всіх виразів тіла функції. */
+const bodyTrees = (sql: string) =>
+  bodyShape(sql).map((s) => s.expressions.map((e) => e.tree))
+
+describe("rights guard transaction check", () => {
+  it("takes the actor snapshot before the first command write of the transaction", () => {
+    const tables = [...CATALOG_TABLES.map((t) => t.table), "org_member"]
+    const body = bodyShape(
+      fnOf(domain, "org_roles", "simetra_rights_snapshot").sql
+    )
+    for (const table of tables) {
+      expect(
+        triggerOf(domain, table, "simetra_rights_snapshot").tree,
+        table
+      ).toEqual(
+        tree(
+          `CREATE TRIGGER ${table}_simetra_rights_snapshot BEFORE INSERT OR UPDATE OR DELETE ON public.${table} FOR EACH STATEMENT EXECUTE FUNCTION public.${table}_simetra_rights_snapshot()`
+        )
+      )
+      // Знімок один для всіх таблиць: перша таблиця транзакції — будь-яка.
+      expect(
+        bodyShape(fnOf(domain, table, "simetra_rights_snapshot").sql),
+        table
+      ).toEqual(body)
+    }
+    // Оператори режиму обслуговування й без контексту знімка не беруть.
+    expect(body[2]!.expressions[0]!.tree).toEqual(
+      tree(`SELECT v_action IS NULL OR (${maintenanceSql("supabase")})`)
+    )
+    expect(body[3]!.type).toBe("return")
+    const taken = body.findIndex((s) =>
+      s.expressions.some((e) =>
+        isDeepStrictEqual(
+          e.tree,
+          tree(
+            "SELECT EXISTS (SELECT 1 FROM simetra.rights_tx_actor WHERE xid = txid_current())"
+          )
+        )
+      )
+    )
+    const inserts = body
+      .map((s, i) => [i, insertInto(s.expressions[0]?.tree)] as const)
+      .filter(([, target]) => target === "rights_tx_actor")
+      .map(([i]) => i)
+    expect(taken).toBeGreaterThan(0)
+    // Узятий знімок не переписується: вставки — лише після перевірки.
+    expect(inserts.length).toBeGreaterThan(1)
+    expect(inserts.every((i) => i > taken)).toBe(true)
+    // Знімок — права актора з rights_mine() на мить першого запису.
+    expect(funcNames(inserts.map((i) => body[i]!))).toContain("rights_mine")
+  })
+
+  it("refuses a second actor in the same transaction", () => {
+    const body = bodyShape(
+      fnOf(domain, "org_roles", "simetra_rights_snapshot").sql
+    )
+    const other = body.findIndex((s) =>
+      s.expressions.some((e) =>
+        isDeepStrictEqual(
+          e.tree,
+          tree(
+            "SELECT EXISTS (SELECT 1 FROM simetra.rights_tx_actor WHERE xid = txid_current() AND actor IS DISTINCT FROM v_actor)"
+          )
+        )
+      )
+    )
+    expect(other).toBeGreaterThan(0)
+    expect(body[other + 1]!.type).toBe("raise")
+    expect(detailOf(body[other + 1]!)).toEqual(tree("SELECT 'rights-context'"))
+  })
+
+  it("queues every key of a statement in one INSERT together with the actor key", () => {
+    const conflict = (
+      tree(
+        "INSERT INTO simetra.rights_tx_pending (xid, kind, key, scope_kind_id, scope, maintenance) SELECT 1 ON CONFLICT (xid, kind, scope_kind_id, key) DO UPDATE SET maintenance = rights_tx_pending.maintenance AND excluded.maintenance"
+      ) as QueueInsert
+    ).InsertStmt.onConflictClause
+    const actor = [expr("'actor'::text"), expr(ZERO), expr(ZERO)]
+    const functions = [
+      ...CATALOG_TABLES.map((t) => fnOf(domain, t.table, "simetra_rights")),
+      ...OPERATIONS.map((o) =>
+        fnOf(domain, "org_member", `simetra_rights_members_${o.toLowerCase()}`)
+      ),
+    ]
+    for (const fn of functions) {
+      const inserts = queueInserts(fn.sql)
+      // По одній вставці на гілку події.
+      expect(inserts.length, fn.identity).toBe(
+        fn.identity.includes("members") ? 1 : OPERATIONS.length
+      )
+      for (const insert of inserts) {
+        expect(insert.onConflictClause, fn.identity).toEqual(conflict)
+        expect(
+          queueKeys(insert).some((key) => isDeepStrictEqual(key, actor)),
+          fn.identity
+        ).toBe(true)
+      }
+    }
+  })
+
+  it("deduplicates the statement's keys by primary key, preferring the new image", () => {
+    const oracle = tree(
+      "SELECT DISTINCT ON (k.kind, k.scope_kind_id, k.key) 1 FROM t k ORDER BY k.kind, k.scope_kind_id, k.key, k.image"
+    ) as { SelectStmt: Select }
+    for (const { table } of CATALOG_TABLES) {
+      const [, update] = queueInserts(fnOf(domain, table, "simetra_rights").sql)
+      const select = update!.selectStmt.SelectStmt
+      expect(select.distinctClause, table).toEqual(
+        oracle.SelectStmt.distinctClause
+      )
+      expect(select.sortClause, table).toEqual(oracle.SelectStmt.sortClause)
+      // Новий образ — 0, старий — 1: при перенесенні в інший скоуп лишається новий.
+      for (const [image, source] of [
+        [0, "n.*, 0 AS image FROM new_rows n"],
+        [1, "o.*, 1 AS image FROM old_rows o"],
+      ] as const) {
+        expect(
+          contains(
+            select,
+            (tree(`SELECT ${source}`) as { SelectStmt: unknown }).SelectStmt
+          ),
+          `${table} ${image}`
+        ).toBe(true)
+      }
+    }
+  })
+
+  it("keys the queue by storage level and the journal image by relation", () => {
+    const check = unit(domain, CHECK)
+    const checkTrees = bodyTrees(check.sql)
+    for (const config of CATALOG_TABLES) {
+      const level = config.table.startsWith("org_") ? ORG : ZERO
+      const [insert] = queueInserts(
+        fnOf(domain, config.table, "simetra_rights").sql
+      )
+      const own = config.table.endsWith("_assignments")
+        ? [
+            [expr("'assignment'::text"), expr("r.id"), expr(level)],
+            [expr("'role'::text"), expr("r.custom_role"), expr(level)],
+          ]
+        : [
+            [
+              expr("'role'::text"),
+              expr("parent" in config ? "r.parent_id" : "r.id"),
+              expr(level),
+            ],
+          ]
+      expect(queueKeys(insert!).slice(0, own.length), config.table).toEqual(own)
+      // Перший образ — найменший seq рядка цієї таблиці серед командних записів.
+      expect(
+        contains(
+          checkTrees,
+          (
+            tree(
+              `SELECT DISTINCT ON (row_id) row_id, before FROM simetra.rights_journal WHERE xid = v_pending.xid AND reason = 'command' AND relation = 'public.${config.table}' ORDER BY row_id, seq`
+            ) as { SelectStmt: unknown }
+          ).SelectStmt
+        ),
+        config.table
+      ).toBe(true)
+      expect(
+        journalInserts(fnOf(domain, config.table, "simetra_rights").sql)[0]!
+          .values.relation,
+        config.table
+      ).toEqual(expr(`'public.${config.table}'`))
+    }
+    // Рядок ключа шукається в таблицях рівня його scope_kind_id.
+    const levels = bodyShape(check.sql)
+      .filter((s) => s.type === "if" && s.depth === 1)
+      .map((s) => s.expressions[0]!.tree)
+    for (const level of [ORG, ZERO]) {
+      expect(levels).toContainEqual(
+        tree(`SELECT v_pending.scope_kind_id = ${level}`)
+      )
+    }
+  })
+
+  it("checks the queue on COMMIT through a deferred constraint trigger", () => {
+    expect(
+      unit(domain, "trigger:simetra.rights_tx_pending.rights_tx_pending_check")
+        .tree
+    ).toEqual(
+      tree(
+        "CREATE CONSTRAINT TRIGGER rights_tx_pending_check AFTER INSERT ON simetra.rights_tx_pending DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION simetra.rights_tx_check()"
+      )
+    )
+    // Подія несе першу версію рядка: злиття ON CONFLICT перечитується.
+    const body = bodyShape(unit(domain, CHECK).sql)
+    expect(body[1]!.expressions[0]!.tree).toEqual(
+      tree(
+        "SELECT * FROM simetra.rights_tx_pending p WHERE p.xid = NEW.xid AND p.kind = NEW.kind AND p.scope_kind_id = NEW.scope_kind_id AND p.key = NEW.key FOR UPDATE"
+      )
+    )
+  })
+
+  it("removes its queue row and, when none is left, the actor snapshot", () => {
+    const body = bodyShape(unit(domain, CHECK).sql)
+    expect(body.slice(-4).map((s) => [s.type, s.depth])).toEqual([
+      ["execsql", 1],
+      ["if", 1],
+      ["execsql", 2],
+      ["return", 1],
+    ])
+    const [own, none, snapshot] = body
+      .slice(-4)
+      .map((s) => s.expressions[0]!.tree)
+    expect(own).toEqual(
+      tree(
+        "DELETE FROM simetra.rights_tx_pending p WHERE p.xid = v_pending.xid AND p.kind = v_pending.kind AND p.scope_kind_id = v_pending.scope_kind_id AND p.key = v_pending.key"
+      )
+    )
+    expect(none).toEqual(
+      tree(
+        "SELECT NOT EXISTS (SELECT 1 FROM simetra.rights_tx_pending WHERE xid = v_pending.xid)"
+      )
+    )
+    expect(snapshot).toEqual(
+      tree("DELETE FROM simetra.rights_tx_actor WHERE xid = v_pending.xid")
+    )
+  })
+
+  it("refuses an increment not covered by the actor's snapshot", () => {
+    const body = bodyShape(unit(domain, CHECK).sql)
+    const escalations = body.flatMap((s, i) =>
+      s.type === "raise" &&
+      isDeepStrictEqual(detailOf(s), tree("SELECT 'escalation'"))
+        ? [body[i - 1]!.expressions[0]!.tree]
+        : []
+    )
+    // Роль і призначення на кожному з двох рівнів.
+    expect(escalations).toHaveLength(4)
+    const coverage = expr(
+      "s.full_access OR (s.object = g.object AND s.action = g.action AND (s.extent = 'any' OR (s.extent = g.extent AND s.dimension_id IS NOT DISTINCT FROM g.dimension_id)))"
+    )
+    const container = expr(
+      `g.level = 'container' AND ((s.level = 'scope' AND s.level_id = ${ORG} AND s.scope = g.scope) OR (s.level = 'container' AND s.level_id = g.level_id AND s.container = g.container))`
+    )
+    for (const condition of escalations) {
+      const and = (
+        condition as {
+          SelectStmt: {
+            targetList: {
+              ResTarget: { val: { BoolExpr: { args: unknown[] } } }
+            }[]
+          }
+        }
+      ).SelectStmt.targetList[0]!.ResTarget.val.BoolExpr.args
+      // Режим обслуговування пропускає лише ⊆.
+      expect(and[0]).toEqual(expr("NOT v_pending.maintenance"))
+      expect(nodes(condition, "op")).toContain("SETOP_EXCEPT")
+      expect(contains(condition, coverage)).toBe(true)
+      // Покриття — знімок на початок транзакції, а не поточні права.
+      expect(relationsOf(condition).map((r) => r.relname)).toContain(
+        "rights_tx_actor"
+      )
+    }
+    expect(escalations.filter((c) => contains(c, container))).toHaveLength(2)
+    expect(funcNames(body)).not.toContain("rights_mine")
+    // Приріст ролі — тим самим замиканням, що rights_mine (rights_role_grants).
+    expect(funcNames(body)).toContain("rights_role_grants")
+  })
+
+  it("compares an assignment with its earlier image only for the same subject, container and scope", () => {
+    const check = bodyTrees(unit(domain, CHECK).sql)
+    for (const field of ["subject", "container", "org_id"]) {
+      expect(
+        contains(
+          check,
+          expr(
+            `(b.doc ->> '${field}') IS NOT DISTINCT FROM (a.doc ->> '${field}')`
+          )
+        ),
+        field
+      ).toBe(true)
+    }
+  })
+
+  it("refuses marking a custom role in use, in maintenance mode too", () => {
+    const body = bodyShape(unit(domain, CHECK).sql)
+    const inUse = body.flatMap((s, i) =>
+      s.type === "raise" &&
+      isDeepStrictEqual(detailOf(s), tree("SELECT 'role-in-use'"))
+        ? [body[i - 1]!.expressions[0]!.tree]
+        : []
+    )
+    expect(inUse).toEqual([
+      tree(
+        "SELECT EXISTS (SELECT 1 FROM public.global_roles r WHERE r.id = v_pending.key AND TRUE AND r.deletion_mark) AND EXISTS (SELECT 1 FROM public.global_role_assignments a WHERE a.custom_role = v_pending.key AND TRUE AND NOT a.deletion_mark)"
+      ),
+      tree(
+        "SELECT EXISTS (SELECT 1 FROM public.org_roles r WHERE r.id = v_pending.key AND r.org_id = v_pending.scope AND r.deletion_mark) AND EXISTS (SELECT 1 FROM public.org_role_assignments a WHERE a.custom_role = v_pending.key AND a.org_id = v_pending.scope AND NOT a.deletion_mark)"
+      ),
+    ])
+    // Перевірка лише ключа `role`: перша гілка розвилки за видом ключа.
+    const kinds = body.filter(
+      (s) =>
+        s.type === "if" &&
+        s.expressions.length === 2 &&
+        contains(s.expressions[0]!.tree, expr("v_pending.kind = 'role'"))
+    )
+    expect(kinds).toHaveLength(2)
   })
 })

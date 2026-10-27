@@ -26,6 +26,7 @@ import { COMMAND_FUNCTIONS } from "./command-units"
 import { RIGHTS_FUNCTIONS, ZERO_UUID, hasRightsFunctions } from "./functions"
 import { generatedTableFunctionName } from "./generated-names"
 import { rightsGuardNames } from "./guard-names"
+import { effectiveHolderRows } from "./holders"
 
 type GuardContracts = Pick<
   Contracts,
@@ -237,6 +238,7 @@ function transitionSql(
     `PERFORM ${ref(RIGHTS_FUNCTIONS.bump)}(s.scope_kind_id, s.scope) FROM (SELECT DISTINCT r.scope_kind_id, r.scope FROM (${versionRows}) r) s;`,
     `INSERT INTO ${ref(platform("rights_journal"))} (xid, scope_kind_id, scope, actor, reason, action, object, relation, operation, row_id, parent_id, before, after)`,
     `SELECT txid_current(), r.scope_kind_id, r.scope, CASE WHEN v_maintenance THEN NULL ELSE ${ref(platform("current_user_id"))}() END, CASE WHEN v_maintenance THEN 'maintenance' ELSE 'command' END, v_action, ${sqlLiteral(config.object)}, ${sqlLiteral(relation)}, ${sqlLiteral(operation)}, r.row_id, r.parent_id, r.before, r.after FROM (${rows}) r;`,
+    pendingSql(config, operation),
   ].join("\n")
 }
 
@@ -269,6 +271,290 @@ function truncateBody(table: PhysicalTable): string {
   return `BEGIN\n  ${refusal("rights-context", table)}\n  RETURN NULL;\nEND`
 }
 
+/**
+ * Знімок прав актора — до першої зміни командою в транзакції: перевірка
+ * порівнює приріст саме з ним, інакше актор, що призначив собі роль чи додав
+ * `allow` до своєї ролі, покрив би приріст власними новими правами.
+ */
+function snapshotBody(
+  provider: DatabaseProvider,
+  contracts: GuardContracts,
+  physical: PhysicalSnapshot
+): string {
+  const actor = ref(platform("rights_tx_actor"))
+  const currentUser = `${ref(platform("current_user_id"))}()`
+  return [
+    "DECLARE",
+    "  v_action text;",
+    "  v_actor uuid;",
+    "BEGIN",
+    `  SELECT c.action INTO v_action FROM ${ref(COMMAND_FUNCTIONS.current)}() c;`,
+    `  IF v_action IS NULL OR (${maintenanceSql(provider)}) THEN RETURN NULL; END IF;`,
+    `  v_actor := ${currentUser};`,
+    `  IF EXISTS (SELECT 1 FROM ${actor} WHERE xid = txid_current()) THEN`,
+    `    IF EXISTS (SELECT 1 FROM ${actor} WHERE xid = txid_current() AND actor IS DISTINCT FROM v_actor) THEN ${refusal("rights-context")} END IF;`,
+    "    RETURN NULL;",
+    "  END IF;",
+    `  INSERT INTO ${actor} (xid, actor, full_access) VALUES (txid_current(), v_actor, false);`,
+    `  INSERT INTO ${actor} (xid, actor, level, level_id, scope, container, object, action, extent, dimension_id, full_access)`,
+    `  SELECT txid_current(), v_actor, r.level, r.level_id, r.scope, r.container, r.object, r.action, r.extent, r.dimension_id, false FROM ${ref(RIGHTS_FUNCTIONS.mine)}() r;`,
+    ...contracts.rightsCatalogs.map((catalog) =>
+      [
+        `  INSERT INTO ${actor} (xid, actor, level, level_id, scope, full_access)`,
+        `  SELECT txid_current(), v_actor, ${sqlLiteral(catalog.level.level)}, ${catalog.level.level === "scope" ? `${sqlLiteral(catalog.level.scopeKindId)}::uuid` : "NULL::uuid"}, h.scope, true`,
+        `  FROM (${holderRows(catalog, contracts, physical)}) h WHERE h.actor = v_actor;`,
+      ].join("\n")
+    ),
+    "  RETURN NULL;",
+    "END",
+  ].join("\n")
+}
+
+/**
+ * Ключі одного оператора — одним `INSERT`: `ON CONFLICT` не зачіпає рядок
+ * двічі (21000), а старий і новий образи рядка, перенесеного в інший скоуп,
+ * дають той самий ключ. Тому ключі спершу зводяться за первинним ключем, і
+ * скоуп береться з нового образу (`image = 0`), коли він є: перевірка читає
+ * живий рядок. Ключ `holders` — сам скоуп, тож старий і новий скоупи
+ * лишаються різними ключами й перевіряються обидва.
+ */
+function pendingInsert(rows: readonly string[], maintenance: string): string {
+  return [
+    `INSERT INTO ${ref(platform("rights_tx_pending"))} (xid, kind, key, scope_kind_id, scope, maintenance)`,
+    `SELECT DISTINCT ON (k.kind, k.scope_kind_id, k.key) txid_current(), k.kind, k.key, k.scope_kind_id, k.scope, ${maintenance} FROM (${rows.join("\nUNION ALL\n")}) k`,
+    "ORDER BY k.kind, k.scope_kind_id, k.key, k.image",
+    "ON CONFLICT (xid, kind, scope_kind_id, key) DO UPDATE SET maintenance = rights_tx_pending.maintenance AND excluded.maintenance;",
+  ].join("\n")
+}
+
+/** Ключ `actor`: перевірка на COMMIT прибирає знімок і в транзакції без інших ключів. */
+function actorPending(): string {
+  return `SELECT 'actor'::text AS kind, ${sqlLiteral(ZERO_UUID)}::uuid AS key, ${sqlLiteral(ZERO_UUID)}::uuid AS scope_kind_id, NULL::uuid AS scope, 0 AS image WHERE EXISTS (SELECT 1 FROM ${ref(platform("rights_tx_actor"))} WHERE xid = txid_current())`
+}
+
+function pendingSql(
+  config: CatalogTable,
+  operation: "INSERT" | "UPDATE" | "DELETE"
+): string {
+  const before = operation !== "INSERT"
+  const after = operation !== "DELETE"
+  const [kind] = scopeSql(config, "r")
+  const events = [
+    ...(before ? [`SELECT o.*, 1 AS image FROM old_rows o`] : []),
+    ...(after ? [`SELECT n.*, 0 AS image FROM new_rows n`] : []),
+  ].join(" UNION ALL ")
+  const scope =
+    config.scope === undefined
+      ? `${sqlLiteral(ZERO_UUID)}::uuid`
+      : `r.${q(config.scope)}`
+  const roleKey =
+    config.kind === "delta" ? `r.${q(config.parent!)}` : `r.${q(config.key)}`
+  const kindKey = config.kind === "assignment" ? "assignment" : "role"
+  const rows = [
+    `SELECT ${sqlLiteral(kindKey)}::text AS kind, ${config.kind === "assignment" ? `r.${q(config.key)}` : roleKey} AS key, ${kind} AS scope_kind_id, ${scope} AS scope, r.image FROM (${events}) r`,
+    ...(config.kind === "assignment"
+      ? [
+          `SELECT 'role'::text, r.${q(column(config.table, "customRole"))}, ${kind}, ${scope}, r.image FROM (${events}) r WHERE r.${q(column(config.table, "customRole"))} IS NOT NULL`,
+        ]
+      : []),
+    actorPending(),
+  ]
+  return pendingInsert(rows, "v_maintenance")
+}
+
+/** Перший образ командної частини транзакції, а для незміненого рядка — живий стан. */
+function stateRows(table: PhysicalTable, state: "before" | "after"): string {
+  const name = ref(tableName(table))
+  if (state === "after") return `SELECT to_jsonb(l) AS doc FROM ${name} l`
+  const key = column(table, "ref")
+  const relation = journalRelation(table)
+  return [
+    `SELECT CASE WHEN j.row_id IS NOT NULL THEN j.before ELSE to_jsonb(l) END AS doc FROM ${name} l`,
+    `FULL JOIN (SELECT DISTINCT ON (row_id) row_id, before FROM ${ref(platform("rights_journal"))}`,
+    `  WHERE xid = v_pending.xid AND reason = 'command' AND relation = ${sqlLiteral(relation)} ORDER BY row_id, seq) j`,
+    `  ON j.row_id = l.${q(key)}`,
+  ].join("\n")
+}
+
+function scopedDoc(table: PhysicalTable, alias: string): string {
+  const scope = scopeColumn(table)
+  return scope === undefined
+    ? "TRUE"
+    : `(${alias}.doc ->> ${sqlLiteral(scope)})::uuid = v_pending.scope`
+}
+
+function deltaArray(
+  catalog: RightsCatalogContract,
+  physical: PhysicalSnapshot,
+  state: "before" | "after",
+  roleId: string
+): string {
+  const table = tableOf(physical, catalog.roles.delta)
+  const field = (name: string) => `d.doc ->> ${sqlLiteral(column(table, name))}`
+  return [
+    `SELECT coalesce(jsonb_agg(jsonb_build_object('object', ${field("object")}, 'action', ${field("action")}, 'extent', ${field("extent")}, 'dimension', ${field("dimension")}, 'effect', ${field("effect")})), '[]'::jsonb)`,
+    `FROM (${stateRows(table, state)}) d WHERE d.doc IS NOT NULL AND (${field("parent")})::uuid = ${roleId} AND ${scopedDoc(table, "d")}`,
+  ].join("\n")
+}
+
+function roleGrantSet(
+  catalog: RightsCatalogContract,
+  physical: PhysicalSnapshot,
+  state: "before" | "after"
+): string {
+  const table = tableOf(physical, catalog.roles.table)
+  const archetype = `r.doc ->> ${sqlLiteral(column(table, "archetype"))}`
+  const id = `(r.doc ->> ${sqlLiteral(column(table, "ref"))})::uuid`
+  return [
+    `SELECT g.object, g.action, g.extent, g.dimension_id, m.level, m.level_id, ${catalog.level.level === "scope" ? "v_pending.scope" : "NULL::uuid"} AS scope, NULL::uuid AS container FROM (${stateRows(table, state)}) r`,
+    `JOIN ${ref(RIGHTS_FUNCTIONS.roles)}() m ON m.role_id = (${archetype})::uuid`,
+    `CROSS JOIN LATERAL ${ref(RIGHTS_FUNCTIONS.roleGrants)}(m.level, m.level_id, m.role_id, (${deltaArray(catalog, physical, state, id)})) g`,
+    `WHERE r.doc IS NOT NULL AND ${id} = v_pending.key AND ${scopedDoc(table, "r")}`,
+    `  AND NOT (r.doc ->> ${sqlLiteral(column(table, "deletionMark"))})::boolean`,
+  ].join("\n")
+}
+
+function assignmentGrantSet(
+  catalog: RightsCatalogContract,
+  physical: PhysicalSnapshot,
+  state: "before" | "after"
+): string {
+  const table = tableOf(physical, catalog.assignments.table)
+  const roles = tableOf(physical, catalog.roles.table)
+  const refColumn = sqlLiteral(column(table, "ref"))
+  const custom = `(a.doc ->> ${sqlLiteral(column(table, "customRole"))})::uuid`
+  const direct = `(a.doc ->> ${sqlLiteral(column(table, "archetype"))})::uuid`
+  const archetype = `coalesce((r.doc ->> ${sqlLiteral(column(roles, "archetype"))})::uuid, ${direct})`
+  const delta = `CASE WHEN ${custom} IS NULL THEN '[]'::jsonb ELSE (${deltaArray(catalog, physical, state, custom)}) END`
+  return [
+    `SELECT g.object, g.action, g.extent, g.dimension_id, m.level, m.level_id, ${catalog.level.level === "scope" ? `(${`a.doc ->> ${sqlLiteral(scopeColumn(table)!)}`})::uuid` : "NULL::uuid"} AS scope, (a.doc ->> ${sqlLiteral(column(table, "container"))})::uuid AS container FROM (${stateRows(table, state)}) a`,
+    `LEFT JOIN (${stateRows(roles, state)}) r ON ${custom} IS NOT NULL AND (r.doc ->> ${sqlLiteral(column(roles, "ref"))})::uuid = ${custom} AND ${scopedDoc(roles, "r")}`,
+    `JOIN ${ref(RIGHTS_FUNCTIONS.roles)}() m ON m.role_id = ${archetype}`,
+    `CROSS JOIN LATERAL ${ref(RIGHTS_FUNCTIONS.roleGrants)}(m.level, m.level_id, m.role_id, ${delta}) g`,
+    `WHERE a.doc IS NOT NULL AND (a.doc ->> ${refColumn})::uuid = v_pending.key AND ${scopedDoc(table, "a")}`,
+    `  AND NOT (a.doc ->> ${sqlLiteral(column(table, "deletionMark"))})::boolean`,
+    `  AND (${custom} IS NULL OR (r.doc IS NOT NULL AND NOT (r.doc ->> ${sqlLiteral(column(roles, "deletionMark"))})::boolean))`,
+  ].join("\n")
+}
+
+function holderRows(
+  catalog: RightsCatalogContract,
+  contracts: GuardContracts,
+  physical: PhysicalSnapshot
+): string {
+  return `SELECT h.scope, h.actor FROM (${effectiveHolderRows(catalog, contracts, physical)}) h JOIN ${ref(RIGHTS_FUNCTIONS.fullAccessRoles)}() f ON f.role_id = h.archetype AND f.storage_id IS NOT DISTINCT FROM ${catalog.level.level === "scope" ? `${sqlLiteral(catalog.level.scopeKindId)}::uuid` : "NULL::uuid"}`
+}
+
+function assignmentBeforeSet(
+  catalog: RightsCatalogContract,
+  physical: PhysicalSnapshot
+): string {
+  const table = tableOf(physical, catalog.assignments.table)
+  const id = sqlLiteral(column(table, "ref"))
+  const same = ["subject", "container"].map((name) => {
+    const field = sqlLiteral(column(table, name))
+    return `(b.doc ->> ${field}) IS NOT DISTINCT FROM (a.doc ->> ${field})`
+  })
+  const scope = scopeColumn(table)
+  if (scope !== undefined)
+    same.push(
+      `(b.doc ->> ${sqlLiteral(scope)}) IS NOT DISTINCT FROM (a.doc ->> ${sqlLiteral(scope)})`
+    )
+  return [
+    `SELECT g.* FROM (${assignmentGrantSet(catalog, physical, "before")}) g`,
+    `WHERE EXISTS (SELECT 1 FROM (${stateRows(table, "before")}) b JOIN (${stateRows(table, "after")}) a`,
+    `  ON (b.doc ->> ${id}) = (a.doc ->> ${id}) WHERE (a.doc ->> ${id})::uuid = v_pending.key AND ${same.join(" AND ")})`,
+  ].join("\n")
+}
+
+function escalationSql(
+  after: string,
+  before: string,
+  catalog: RightsCatalogContract
+): string {
+  const actor = ref(platform("rights_tx_actor"))
+  const storageKind =
+    catalog.level.level === "scope"
+      ? `${sqlLiteral(catalog.level.scopeKindId)}::uuid`
+      : "NULL::uuid"
+  return [
+    "IF NOT v_pending.maintenance AND EXISTS (",
+    `  SELECT 1 FROM ((${after}) EXCEPT (${before})) g`,
+    `  WHERE NOT EXISTS (SELECT 1 FROM ${actor} s WHERE s.xid = v_pending.xid`,
+    "    AND (",
+    "      (g.level = 'global' AND s.level = 'global') OR",
+    "      (g.level = 'scope' AND s.level = 'scope' AND s.level_id = g.level_id AND s.scope = g.scope) OR",
+    `      (g.level = 'container' AND ((s.level = 'scope' AND s.level_id = ${storageKind} AND s.scope = g.scope) OR (s.level = 'container' AND s.level_id = g.level_id AND s.container = g.container)))`,
+    "    )",
+    "    AND (s.full_access OR (s.object = g.object AND s.action = g.action AND (s.extent = 'any' OR (s.extent = g.extent AND s.dimension_id IS NOT DISTINCT FROM g.dimension_id))))))",
+    `THEN ${refusal("escalation")} END IF;`,
+  ].join("\n")
+}
+
+function catalogCheck(
+  catalog: RightsCatalogContract,
+  physical: PhysicalSnapshot
+): string {
+  const roles = tableOf(physical, catalog.roles.table)
+  const assignments = tableOf(physical, catalog.assignments.table)
+  const scope =
+    catalog.level.level === "scope"
+      ? `${sqlLiteral(catalog.level.scopeKindId)}::uuid`
+      : `${sqlLiteral(ZERO_UUID)}::uuid`
+  const roleId = `r.${q(column(roles, "ref"))}`
+  const assignmentScope = scopeColumn(assignments)
+  const roleScope = scopeColumn(roles)
+  const sameRole =
+    roleScope === undefined ? "TRUE" : `r.${q(roleScope)} = v_pending.scope`
+  const sameAssignment =
+    assignmentScope === undefined
+      ? "TRUE"
+      : `a.${q(assignmentScope)} = v_pending.scope`
+  return [
+    `IF v_pending.scope_kind_id = ${scope} THEN`,
+    "  IF v_pending.kind = 'role' THEN",
+    `    IF EXISTS (SELECT 1 FROM ${ref(catalog.roles.table)} r WHERE ${roleId} = v_pending.key AND ${sameRole} AND r.${q(column(roles, "deletionMark"))})`,
+    `       AND EXISTS (SELECT 1 FROM ${ref(catalog.assignments.table)} a WHERE a.${q(column(assignments, "customRole"))} = v_pending.key AND ${sameAssignment} AND NOT a.${q(column(assignments, "deletionMark"))})`,
+    `    THEN ${refusal("role-in-use")} END IF;`,
+    `    ${escalationSql(roleGrantSet(catalog, physical, "after"), roleGrantSet(catalog, physical, "before"), catalog)}`,
+    "  ELSIF v_pending.kind = 'assignment' THEN",
+    `    ${escalationSql(assignmentGrantSet(catalog, physical, "after"), assignmentBeforeSet(catalog, physical), catalog)}`,
+    "  END IF;",
+    "END IF;",
+  ].join("\n")
+}
+
+/**
+ * Перевірка на COMMIT судить результат транзакції, а не оператор: команда
+ * створює роль і її `deny`-рядки окремими операторами, і проміжний стан дав
+ * би хибну ескалацію. `SET CONSTRAINTS … IMMEDIATE` лише переносить перевірку
+ * на кінець оператора (строгіше), а не вимикає її. Злиття `ON CONFLICT` нової
+ * події не ставить, а подія несе першу версію рядка черги, тож рядок
+ * перечитується за первинним ключем.
+ */
+function checkBody(
+  contracts: GuardContracts,
+  physical: PhysicalSnapshot
+): string {
+  return [
+    "DECLARE",
+    `  v_pending ${ref(platform("rights_tx_pending"))}%ROWTYPE;`,
+    "BEGIN",
+    `  SELECT * INTO v_pending FROM ${ref(platform("rights_tx_pending"))} p`,
+    "  WHERE p.xid = NEW.xid AND p.kind = NEW.kind AND p.scope_kind_id = NEW.scope_kind_id AND p.key = NEW.key FOR UPDATE;",
+    "  IF NOT FOUND THEN RETURN NULL; END IF;",
+    ...contracts.rightsCatalogs.map((catalog) =>
+      catalogCheck(catalog, physical)
+    ),
+    `  DELETE FROM ${ref(platform("rights_tx_pending"))} p WHERE p.xid = v_pending.xid AND p.kind = v_pending.kind AND p.scope_kind_id = v_pending.scope_kind_id AND p.key = v_pending.key;`,
+    `  IF NOT EXISTS (SELECT 1 FROM ${ref(platform("rights_tx_pending"))} WHERE xid = v_pending.xid) THEN`,
+    `    DELETE FROM ${ref(platform("rights_tx_actor"))} WHERE xid = v_pending.xid;`,
+    "  END IF;",
+    "  RETURN NULL;",
+    "END",
+  ].join("\n")
+}
+
 function eventRows(
   operation: "INSERT" | "UPDATE" | "DELETE",
   alias: string,
@@ -295,11 +581,15 @@ function bumpRows(
 
 function memberEventBody(
   member: Contracts["membership"][number],
-  operation: "INSERT" | "UPDATE" | "DELETE"
+  operation: "INSERT" | "UPDATE" | "DELETE",
+  provider: DatabaseProvider
 ): string {
   return [
+    "DECLARE v_maintenance boolean;",
     "BEGIN",
+    `  v_maintenance := (${maintenanceSql(provider)});`,
     `  ${bumpRows(operation, member.scopeKindId, member.scopeColumn)}`,
+    pendingInsert([actorPending()], "v_maintenance"),
     "  RETURN NULL; END",
   ].join("\n")
 }
@@ -355,6 +645,16 @@ export function buildRightsGuardUnits(
     const table = tableName(config.table)
     const owner = config.table.origin.objectId
     const fn = functionName(table, labels.rights)
+    const snapshot = functionName(table, labels.snapshot)
+    addFunction(snapshot, snapshotBody(provider, contracts, physical), owner, [
+      unitNode(COMMAND_FUNCTIONS.current),
+      unitNode(RIGHTS_FUNCTIONS.mine),
+      { type: "table", schema: PLATFORM_SCHEMA, name: "rights_tx_actor" },
+    ])
+    add(
+      `CREATE TRIGGER ${q(triggerName(table, labels.snapshot))} BEFORE INSERT OR UPDATE OR DELETE ON ${ref(table)} FOR EACH STATEMENT EXECUTE FUNCTION ${ref(snapshot)}();`,
+      owner
+    )
     addFunction(fn, catalogBody(config, provider), owner, [
       unitNode(COMMAND_FUNCTIONS.current),
       {
@@ -387,6 +687,16 @@ export function buildRightsGuardUnits(
     const table = tableOf(physical, member.table)
     const name = tableName(table)
     const owner = table.origin.objectId
+    const snapshot = functionName(name, labels.snapshot)
+    addFunction(snapshot, snapshotBody(provider, contracts, physical), owner, [
+      unitNode(COMMAND_FUNCTIONS.current),
+      unitNode(RIGHTS_FUNCTIONS.mine),
+      { type: "table", schema: PLATFORM_SCHEMA, name: "rights_tx_actor" },
+    ])
+    add(
+      `CREATE TRIGGER ${q(triggerName(name, labels.snapshot))} BEFORE INSERT OR UPDATE OR DELETE ON ${ref(name)} FOR EACH STATEMENT EXECUTE FUNCTION ${ref(snapshot)}();`,
+      owner
+    )
     for (const operation of ["INSERT", "UPDATE", "DELETE"] as const) {
       const label = `simetra_rights_members_${operation.toLowerCase()}`
       const fn = functionName(name, label)
@@ -396,7 +706,7 @@ export function buildRightsGuardUnits(
           : operation === "DELETE"
             ? "REFERENCING OLD TABLE AS old_rows"
             : "REFERENCING OLD TABLE AS old_rows NEW TABLE AS new_rows"
-      addFunction(fn, memberEventBody(member, operation), owner, [
+      addFunction(fn, memberEventBody(member, operation, provider), owner, [
         {
           type: "unit",
           identity: `function:${ref(RIGHTS_FUNCTIONS.bump)}(uuid,uuid)`,
@@ -470,5 +780,14 @@ export function buildRightsGuardUnits(
     }
     addTruncate(table)
   }
+  const check = platform("rights_tx_check")
+  addFunction(check, checkBody(contracts, physical), undefined, [
+    { type: "table", schema: PLATFORM_SCHEMA, name: "rights_tx_pending" },
+    { type: "table", schema: PLATFORM_SCHEMA, name: "rights_tx_actor" },
+    { type: "table", schema: PLATFORM_SCHEMA, name: "rights_journal" },
+  ])
+  add(
+    `CREATE CONSTRAINT TRIGGER ${q("rights_tx_pending_check")} AFTER INSERT ON ${ref(platform("rights_tx_pending"))} DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION ${ref(check)}();`
+  )
   return units.sort((a, b) => compareStrings(a.identity, b.identity))
 }
