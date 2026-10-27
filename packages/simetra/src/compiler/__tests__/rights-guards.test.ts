@@ -610,6 +610,16 @@ const detailOf = (s: ReturnType<typeof bodyShape>[number]) =>
 
 const CHECK = "function:simetra.rights_tx_check()"
 
+/** Вузли `EXCEPT` дерева: ліва вибірка — набір «після», права — «до». */
+function excepts(hay: unknown): { larg: unknown; rarg: unknown }[] {
+  if (Array.isArray(hay)) return hay.flatMap(excepts)
+  if (typeof hay !== "object" || hay === null) return []
+  const node = hay as { op?: unknown; larg?: unknown; rarg?: unknown }
+  const own =
+    node.op === "SETOP_EXCEPT" ? [{ larg: node.larg, rarg: node.rarg }] : []
+  return [...own, ...Object.values(hay).flatMap(excepts)]
+}
+
 /** Дерева всіх виразів тіла функції. */
 const bodyTrees = (sql: string) =>
   bodyShape(sql).map((s) => s.expressions.map((e) => e.tree))
@@ -893,28 +903,35 @@ describe("rights guard transaction check", () => {
   // «до» й «після» дали б ту саму множину, і порожній приріст пройшов би.
   it("grant sets leave out a marked role, a marked assignment and its marked custom role", () => {
     const check = bodyTrees(unit(domain, CHECK).sql)
-    const holding = (where: string) =>
-      check.filter((s) => contains(s, expr(where))).length
+    // Набори «після» й «до» стоять в одному операторі `(after) EXCEPT (before)`:
+    // фільтр перевіряється окремо на кожному боці, інакше втрата його на
+    // боці «до» лишається непомітною.
+    const sides = (where: string) => {
+      const filter = expr(where)
+      return excepts(check)
+        .filter((e) => contains(e.larg, filter) || contains(e.rarg, filter))
+        .map((e) => [contains(e.larg, filter), contains(e.rarg, filter)])
+    }
     for (const scope of [
       "(r.doc ->> 'org_id')::uuid = v_pending.scope",
       "TRUE",
     ])
       expect(
-        holding(
+        sides(
           `r.doc IS NOT NULL AND (r.doc ->> 'id')::uuid = v_pending.key AND ${scope} AND NOT (r.doc ->> 'deletion_mark')::boolean`
         ),
         scope
-      ).toBe(1)
+      ).toEqual([[true, true]])
     for (const scope of [
       "(a.doc ->> 'org_id')::uuid = v_pending.scope",
       "TRUE",
     ])
       expect(
-        holding(
+        sides(
           `a.doc IS NOT NULL AND (a.doc ->> 'id')::uuid = v_pending.key AND ${scope} AND NOT (a.doc ->> 'deletion_mark')::boolean AND ((a.doc ->> 'custom_role')::uuid IS NULL OR (r.doc IS NOT NULL AND NOT (r.doc ->> 'deletion_mark')::boolean))`
         ),
         scope
-      ).toBe(1)
+      ).toEqual([[true, true]])
   })
 
   it("refuses marking a custom role in use, in maintenance mode too", () => {
