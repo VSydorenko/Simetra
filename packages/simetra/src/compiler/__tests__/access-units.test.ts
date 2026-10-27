@@ -956,23 +956,29 @@ describe("rights write policies", () => {
     )
   })
 
-  it("rights assignments write only the command root family", () => {
-    const expected = expectedWrites(
-      domain,
-      "org_role_assignments",
-      { key: "id", label: "org_role_assignments" },
-      {}
-    )
-    expect([...expected.keys()].sort()).toEqual([
-      "org_role_assignments_delete_root_any",
-      "org_role_assignments_insert_root_any",
-      "org_role_assignments_update_root_any",
-    ])
-    expect(writesOf(domain, "org_role_assignments")).toEqual(expected)
-    expect(policyNames(domain, "org_role_assignments")).toEqual(
-      allPolicies(domain, "org_role_assignments", expected)
-    )
-  })
+  // Р2c2-1: `administerRights` без `natural`, тож обидва системні довідники
+  // прав пишуть лише кореневий рядок команди — родина «решта» дала б команді
+  // дописувати чужі ролі й призначення поза її коренем
+  it.each(["org_roles", "org_role_assignments"])(
+    "rights catalog %s writes only the command root family",
+    (table) => {
+      const expected = expectedWrites(
+        domain,
+        table,
+        { key: "id", label: table },
+        {}
+      )
+      expect([...expected.keys()].sort()).toEqual([
+        `${table}_delete_root_any`,
+        `${table}_insert_root_any`,
+        `${table}_update_root_any`,
+      ])
+      expect(writesOf(domain, table)).toEqual(expected)
+      expect(policyNames(domain, table)).toEqual(
+        allPolicies(domain, table, expected)
+      )
+    }
+  )
 
   it("a tabular section binds to its owner", () => {
     // Р2b1-4, Р2b1-7: ключ родини — колонка власника з міткою власника;
