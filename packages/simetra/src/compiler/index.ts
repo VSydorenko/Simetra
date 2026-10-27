@@ -81,17 +81,17 @@ export type {
 } from "libpg-query"
 export { mainTableOf, qualified } from "./contracts"
 export { roleTableJoin, sourceConditions } from "./rights/functions"
-export {
-  rightsGuardNames,
-  rightsGuardTriggerNames,
-  rightsGuardFunctionNames,
-} from "./rights/guard-names"
+export { rightsDomainRows } from "./rights/functions"
+export { rightsGuardNames } from "./rights/guard-names"
+export { effectiveHolderRows } from "./rights/holders"
+export { rightsLevelOf } from "./rights/system-catalogs"
 export type {
   AssignmentSourceContract,
   Contracts,
   MembershipSourceContract,
   PostingContract,
   QualifiedName,
+  RightsLevelKey,
   RegisterContract,
   ResourceMeasure,
   VirtualTableColumn,

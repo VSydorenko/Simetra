@@ -28,10 +28,14 @@ import {
   CHECKLIST_TABLE,
   TAG_ID,
   adoptedSourcesDomain,
+  adminRoles,
+  GLOBAL_ADMIN_ID,
   compileRights,
   policyDomain,
   promotableTag,
   promotedRights,
+  ROLE_FILE,
+  rightsFiles,
   tagMapping,
 } from "../../../compiler/__tests__/fixtures/rights"
 import { applyDiagnostic } from "../diagnostic"
@@ -41,6 +45,83 @@ import { applyDiagnostic } from "../diagnostic"
  * бази; решта — у `build-plan.db.test.ts` designer.
  */
 describe("buildPlan", () => {
+  // Без функції носіїв на цілі (база до цього запобіжника) «до» невідоме:
+  // план не вигадує втрати, а йде далі — запобіжник на COMMIT стане першим
+  // носієм цього знання після застосування
+  it.each([
+    { assigned: true, removeCatalogs: false, holdersFn: true, refusal: true },
+    { assigned: false, removeCatalogs: false, holdersFn: true, refusal: false },
+    { assigned: true, removeCatalogs: true, holdersFn: true, refusal: true },
+    { assigned: false, removeCatalogs: true, holdersFn: true, refusal: false },
+    { assigned: true, removeCatalogs: false, holdersFn: false, refusal: false },
+  ])(
+    "handles removal of fullAccess (assigned: $assigned, catalogs removed: $removeCatalogs, holders function: $holdersFn)",
+    async ({ assigned, removeCatalogs, holdersFn, refusal }) => {
+      const old = (await compile(policyDomain(adminRoles()))).model!
+      const compiledDesired = await compile(
+        removeCatalogs
+          ? rightsFiles()
+          : policyDomain(adminRoles(), {
+              [ROLE_FILE("GlobalAdmin")]: { fullAccess: false },
+            })
+      )
+      expect(
+        compiledDesired.diagnostics.filter((d) => d.severity === "error")
+      ).toEqual([])
+      const desired = compiledDesired.model!
+      const target = await fakeTarget(old, {
+        notCopies: [],
+        rights: {
+          holdersFn,
+          previousRoles: [
+            { role_id: GLOBAL_ADMIN_ID, storage: "global", storage_id: null },
+          ],
+          rows: assigned
+            ? {
+                "public.global_role_assignments": [
+                  {
+                    id: "a1",
+                    scope: null,
+                    archetype: GLOBAL_ADMIN_ID,
+                    custom_role: null,
+                    deleted: false,
+                  },
+                ],
+              }
+            : {},
+          holders: assigned
+            ? {
+                "public.global_role_assignments": [
+                  {
+                    scope: "00000000-0000-0000-0000-000000000000",
+                    actor: "user-1",
+                    archetype: GLOBAL_ADMIN_ID,
+                  },
+                ],
+              }
+            : {},
+        },
+      })
+      const outcome = await buildPlan(
+        shadowFailing(),
+        { reader: target.reader, scratch: emptyScratch },
+        desired,
+        { target: { url: "postgres://target" } },
+        []
+      )
+      expect(
+        outcome.diagnostics.some(
+          (d) => d.code === "plan.rights-full-access-lost"
+        )
+      ).toBe(refusal)
+      if (refusal) expect(outcome.status).toBe("refused")
+      else
+        expect(
+          outcome.diagnostics.some((d) => d.code === SHADOW_FAILED.code)
+        ).toBe(true)
+    }
+  )
+
   it("refuses a server older than Postgres 17 before reading its facts", async () => {
     // Платформна спека §1: Postgres 17 — мінімум; без цієї відмови читання
     // фактів упало б сирим `42703` на `datlocale`
@@ -335,6 +416,17 @@ async function fakeTarget(
      * якого не оголошує жодна роль, у кожному джерелі призначень.
      */
     sources?: { owned: boolean; unknownKey?: string }
+    rights?: {
+      /** Чи є на цілі `simetra.rights_full_access_roles()`. */
+      holdersFn: boolean
+      previousRoles: {
+        role_id: string
+        storage: string
+        storage_id: string | null
+      }[]
+      rows: Record<string, Record<string, unknown>[]>
+      holders: Record<string, Record<string, unknown>[]>
+    }
   }
 ) {
   const snapshot = JSON.parse(JSON.stringify(canonicalSnapshot(model))) as {
@@ -404,6 +496,17 @@ async function fakeTarget(
       return o.sources?.unknownKey === undefined
         ? []
         : [{ unknown_key: o.sources.unknownKey, total: "1" }]
+    if (sql.includes("AS present") && sql.includes("rights_full_access_roles"))
+      return [{ present: o.rights?.holdersFn === true }]
+    if (sql.includes("FROM simetra.rights_full_access_roles()"))
+      return o.rights?.previousRoles ?? []
+    if (sql.includes(" AS actor,") && sql.includes(" AS archetype")) {
+      const table = /FROM ([a-z_]+\.[a-z_]+)/.exec(sql)?.[1]
+      return table === undefined ? [] : (o.rights?.holders[table] ?? [])
+    }
+    const rightTable = /FROM ([a-z_]+\.[a-z_]+)/.exec(sql)?.[1]
+    if (rightTable !== undefined && o.rights?.rows[rightTable] !== undefined)
+      return o.rights.rows[rightTable]!
     // Факти `plpgsql_check`: розширення немає — план іде далі з
     // діагностикою, а не падає
     if (sql.includes('AS "checkSchemaTaken"')) return [{ installed: false }]

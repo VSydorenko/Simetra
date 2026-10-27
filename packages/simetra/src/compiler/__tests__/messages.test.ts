@@ -817,6 +817,11 @@ describe("messages catalog", () => {
       "plan.rights-source-unknown-keys",
       { source: "grants", keys: "boss, chief", more: 3 },
     ],
+    ["plan.rights-full-access-lost", { scopes: "global, scope:org:A" }],
+    [
+      "plan.rights-orphans",
+      { customRoles: "r1, d1", assignments: "a1", more: 3 },
+    ],
   ] as const)("%s names its parameters in both locales", (code, params) => {
     const d = diagnostic(code, "", "", params)
     for (const message of [d.message, localize(d, "uk").message]) {

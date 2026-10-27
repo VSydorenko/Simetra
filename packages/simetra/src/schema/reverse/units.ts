@@ -4,6 +4,7 @@ import {
   diagnostic,
   effectsFunctionName,
   effectsTriggerNames,
+  rightsGuardNames,
   grantTargetKeys,
   MECHANICS_FUNCTION,
   mechanicsTriggerName,
@@ -276,6 +277,11 @@ function platformTriggerFunction(
     const fn = effectsFunctionName(table)
     return qualified(fn.schema, fn.name)
   }
+  const guard = rightsGuardNames(table).find(
+    (entry) => entry.trigger === unit.name
+  )
+  if (guard !== undefined)
+    return qualified(guard.function.schema, guard.function.name)
   return undefined
 }
 

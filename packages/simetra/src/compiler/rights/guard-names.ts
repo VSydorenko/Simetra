@@ -30,20 +30,3 @@ export function rightsGuardNames(
     },
   }))
 }
-
-export function rightsGuardTriggerNames(table: QualifiedName): string[] {
-  return rightsGuardNames(table).map((entry) => entry.trigger)
-}
-
-export function rightsGuardFunctionNames(
-  table: QualifiedName
-): QualifiedName[] {
-  const seen = new Set<string>()
-  return rightsGuardNames(table)
-    .map((entry) => entry.function)
-    .filter((name) => {
-      if (seen.has(name.name)) return false
-      seen.add(name.name)
-      return true
-    })
-}

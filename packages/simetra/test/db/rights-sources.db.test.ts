@@ -374,10 +374,11 @@ describe("adopted sources", () => {
 
   it("source-plan-facts", async () => {
     const client = tx.client()
-    const input = rightsSourceInput(model.contracts)
+    const input = rightsSourceInput(model.contracts, model.physical)
     const facts = (only: RightsSourceInput = input) => sourceFacts(client, only)
     const ownersOf = (...tables: [schema: string, name: string][]) =>
       facts({
+        ...input,
         tables: tables.map(([schema, name]) => ({ schema, name })),
         assignments: [],
       })
@@ -630,7 +631,7 @@ describe("without users", () => {
   it("poly-plan-keys", async () => {
     const facts = await sourceFacts(
       tx.client(),
-      rightsSourceInput(model.contracts)
+      rightsSourceInput(model.contracts, model.physical)
     )
     const keysOf = (source: string) =>
       facts.unknownKeys.find((u) => u.source === source)?.keys
