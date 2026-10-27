@@ -140,6 +140,19 @@ export const PROVIDER_API_ROLES: Readonly<
   },
 }
 
+/** Provider login roles that can run untrusted API requests. */
+export const PROVIDER_LOGIN_ROLES: Readonly<
+  Record<DatabaseProvider, readonly string[]>
+> = {
+  supabase: [
+    "authenticator",
+    "supabase_auth_admin",
+    "supabase_storage_admin",
+    "supabase_realtime_admin",
+    "supabase_admin",
+  ],
+}
+
 /**
  * Схеми, які створює й наповнює провайдер (платформна спека §6.9): застосунок
  * має в них лише поверхню пресету. Факт T0, бо його потребує і компілятор (T1:
@@ -242,6 +255,9 @@ export const PLATFORM_ROLES = { command: "simetra_command" } as const
  * its value is a JSON `CommandContext`.
  */
 export const COMMAND_SETTING = "simetra.command"
+
+/** The session setting for platform rights maintenance. */
+export const RIGHTS_MAINTENANCE_SETTING = "simetra.rights_maintenance"
 
 /**
  * The session setting that carries the request claims: the platform layer

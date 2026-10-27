@@ -36,6 +36,7 @@ import {
 } from "./fixtures/rights"
 import { uuid } from "./helpers"
 import { rightsLevelOf } from "../rights/system-catalogs"
+import { expandedProjection } from "../rights/functions"
 
 /** Роль `OrgMember` лише з власними грантами, без включень. */
 const member = (...grants: unknown[]): Layer => ({
@@ -160,13 +161,33 @@ describe("system rights catalogs", () => {
     }
   )
 
-  it("system rights catalogs have only read and stay out of selectors", async () => {
+  it("system rights catalogs have read and administerRights at any only", async () => {
     const all = await compiled(member(grantAll("any")))
     const names = new Map(all.objects.map((o) => [o.id, o.name]))
-    const assignments = all.contracts.rights.find(
-      (c) => names.get(c.objectId) === "OrgRoleAssignments"
-    )
-    expect(assignments?.actions.map((a) => a.action)).toEqual(["read"])
+    const catalogs = all.contracts.rights.filter((c) => c.system !== undefined)
+    expect(catalogs.map((c) => names.get(c.objectId)).sort()).toEqual([
+      "GlobalRoleAssignments",
+      "GlobalRoles",
+      "OrgRoleAssignments",
+      "OrgRoles",
+    ])
+    for (const catalog of catalogs) {
+      expect(catalog.actions.map((a) => a.action)).toEqual([
+        "read",
+        "administerRights",
+      ])
+      for (const action of catalog.actions) {
+        expect(action.extents).toEqual([{ form: "any" }])
+      }
+      expect(catalog.actions[1]).toMatchObject({
+        requires: ["read"],
+        natural: [],
+        effects: {
+          dml: ["insert", "update", "delete"],
+          tabularSections: true,
+        },
+      })
+    }
     const projected = (model: typeof all) =>
       model.contracts.rightsProjection
         .map((row) => names.get(row.objectId))
@@ -178,9 +199,68 @@ describe("system rights catalogs", () => {
     expect(projected(selected)).toEqual([])
 
     const explicit = await compiled(
-      member(grant(objects(["Catalog", "OrgRoleAssignments"]), ["read"], "any"))
+      member(
+        grant(
+          objects(["Catalog", "OrgRoleAssignments"]),
+          ["read", "administerRights"],
+          "any"
+        )
+      )
     )
-    expect(projected(explicit)).toEqual(["OrgRoleAssignments"])
+    expect(
+      explicit.contracts.rightsProjection
+        .filter((row) => names.get(row.objectId) === "OrgRoleAssignments")
+        .map((row) => row.action)
+    ).toEqual(["administerRights", "read"])
+    const full = expandedProjection(all.contracts)
+      .filter((row) => row.roleId === ORG_ADMIN_ID)
+      .filter((row) => row.action === "administerRights")
+      .map((row) => names.get(row.objectId))
+      .sort()
+    expect(full).toEqual(["OrgRoleAssignments", "OrgRoles"])
+  })
+
+  it("rejects administerRights as a withAction selector", async () => {
+    const result = await compileRights(
+      withRoles(
+        member(
+          grant({ withAction: "administerRights" }, ["administerRights"], "any")
+        )
+      )
+    )
+    expect(result.diagnostics.filter((d) => d.severity === "error")).toEqual([
+      expect.objectContaining({
+        code: "file.schema",
+        file: ROLE_FILE("OrgMember"),
+      }),
+    ])
+  })
+
+  it("rejects a container role administering a scope rights catalog", async () => {
+    const result = await compileRights(
+      withRoles({
+        [ROLE_FILE("ProjectLead")]: {
+          grants: [
+            grant(
+              objects(["Catalog", "OrgRoleAssignments"]),
+              ["administerRights"],
+              "any"
+            ),
+          ],
+        },
+      })
+    )
+    expect(
+      result.diagnostics
+        .filter((d) => d.severity === "error")
+        .map(({ code, file, pointer }) => ({ code, file, pointer }))
+    ).toEqual([
+      {
+        code: "rights.grant-level",
+        file: ROLE_FILE("ProjectLead"),
+        pointer: "/grants/0/grant/actions/0",
+      },
+    ])
   })
 
   it("a rights catalog belongs only to its level", async () => {

@@ -466,10 +466,19 @@ export async function buildPlan(
   // застосування до таблиць-джерел і ключі ролей у їхніх даних — однією
   // читальною транзакцією до витягу й тіні і до розгалуження промоції, тож
   // перевірка діє в обох гілках
-  const sourceInput = rightsSourceInput(model.contracts)
+  const sourceInput = rightsSourceInput(
+    model.contracts,
+    model.physical,
+    state.status === "applied" ? state.marker.snapshot : undefined
+  )
   const sources = rightsSourceDiagnostics(
     sourceInput.tables.length === 0
-      ? { owners: [], unknownKeys: [] }
+      ? {
+          owners: [],
+          unknownKeys: [],
+          fullAccess: [],
+          orphans: { customRoles: [], assignments: [], more: 0 },
+        }
       : await dbs.reader.transaction(o.target, "rollback", (tx) =>
           readRightsSourceFacts(tx, sourceInput)
         )

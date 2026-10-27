@@ -1,12 +1,17 @@
 import {
   qualified,
   roleTableJoin,
+  rightsDomainRows,
+  rightsLevelOf,
+  effectiveHolderRows,
   sourceConditions,
   type AssignmentSourceContract,
   type Contracts,
   type QualifiedName,
+  type RightsLevelKey,
 } from "simetra/compiler"
-import { quoteIdent } from "simetra/model"
+import { quoteIdent, type PhysicalSnapshot } from "simetra/model"
+import { z } from "zod"
 import type { EngineDiagnostic } from "../engine"
 import { applyDiagnostic } from "./diagnostic"
 import type { ApplyTransaction } from "./port"
@@ -25,13 +30,137 @@ export interface RightsSourceFacts {
   owners: { table: string; owned: boolean }[]
   /** Джерела призначень, чиї ключі прочитано: ключі поза `sourceKeys`. */
   unknownKeys: { source: string; keys: string[]; more: number }[]
+  fullAccess: { scope: string; before: number; after: number }[]
+  orphans: { customRoles: string[]; assignments: string[]; more: number }
 }
 
 /** Вхід читача: таблиці без повторів і джерела призначень з відомими ключами. */
 export interface RightsSourceInput {
   tables: QualifiedName[]
   assignments: { source: AssignmentSourceContract; keys: string[] }[]
+  catalogs: RightsCatalogInput[]
+  desiredRoles: { id: string; storage: string; fullAccess: boolean }[]
+  domain: {
+    roleId: string
+    object: string
+    action: string
+    extent: string
+    dimensionId: string | null
+  }[]
 }
+
+interface RightsCatalogInput {
+  level: RightsLevelKey
+  roles: QualifiedName
+  delta: QualifiedName
+  assignments: QualifiedName
+  holdersSql: string
+  holderTables: QualifiedName[]
+  /**
+   * Таблиця призначень і кожна з `holderTables` лишаються в бажаній моделі
+   * тією самою таблицею (Р2c2-27): інакше носій, прочитаний з них, після
+   * застосування зникне разом з таблицею.
+   */
+  holdersKept: boolean
+  /** Корінь скоупу рівня зник з бажаної моделі — разом з усіма скоупами. */
+  rootRemoved: boolean
+  columns: {
+    roles: Record<string, string>
+    delta: Record<string, string>
+    assignments: Record<string, string>
+  }
+}
+
+const named = z.object({ schema: z.string(), name: z.string() })
+const level = z.discriminatedUnion("level", [
+  z.object({ level: z.literal("global") }),
+  z.object({ level: z.literal("scope"), scopeKindId: z.string() }),
+])
+const origin = z.object({
+  objectId: z.string(),
+  tabularSectionId: z.string().optional(),
+  part: z.string().optional(),
+})
+const appliedRightsSchema = z.object({
+  scopeKinds: z.array(
+    z.object({
+      id: z.string(),
+      root: z.union([
+        z.object({ id: z.string() }),
+        z.object({
+          external: z.object({
+            schema: z.string(),
+            table: z.string(),
+            column: z.string(),
+          }),
+        }),
+      ]),
+    })
+  ),
+  contracts: z.object({
+    rightsCatalogs: z.array(
+      z.object({
+        level,
+        roles: z.object({ table: named, delta: named }),
+        assignments: z.object({ table: named }),
+      })
+    ),
+    membership: z.array(
+      z.object({
+        scopeKindId: z.string(),
+        table: named,
+        keyColumn: z.string(),
+        scopeColumn: z.string(),
+        userColumn: z.string(),
+      })
+    ),
+    membershipSources: z.array(
+      z.object({
+        scopeKindId: z.string(),
+        table: named,
+        member: z.string(),
+        scope: z.string(),
+        user: z.string(),
+        active: z.string().optional(),
+        where: z.array(
+          z.union([
+            z.object({ column: z.string(), isNull: z.boolean() }),
+            z.object({
+              column: z.string(),
+              equals: z.union([z.string(), z.boolean(), z.number()]),
+              type: z.enum(["text", "uuid", "boolean", "integer"]),
+            }),
+          ])
+        ),
+      })
+    ),
+    users: z
+      .object({
+        table: named,
+        keyColumn: z.string(),
+        invalidColumn: z.string(),
+      })
+      .optional(),
+  }),
+  physical: z.object({
+    tables: z.array(
+      z.object({
+        schema: z.string(),
+        name: z.string(),
+        origin,
+        columns: z.array(
+          z.object({
+            name: z.string(),
+            origin: z.object({
+              standard: z.string().optional(),
+              scopeKindId: z.string().optional(),
+            }),
+          })
+        ),
+      })
+    ),
+  }),
+})
 
 const tableText = (t: QualifiedName) => `${t.schema}.${t.name}`
 
@@ -43,8 +172,16 @@ const tableText = (t: QualifiedName) => `${t.schema}.${t.name}`
 export function rightsSourceInput(
   contracts: Pick<
     Contracts,
-    "membershipSources" | "assignmentSources" | "roles"
-  >
+    | "membership"
+    | "membershipSources"
+    | "assignmentSources"
+    | "roles"
+    | "rightsCatalogs"
+    | "rights"
+    | "users"
+  >,
+  physical: PhysicalSnapshot,
+  applied?: unknown
 ): RightsSourceInput {
   const tables = new Map<string, QualifiedName>()
   const add = (t: QualifiedName) => {
@@ -54,6 +191,186 @@ export function rightsSourceInput(
   for (const source of contracts.assignmentSources) {
     add(source.table)
     if (source.roleTable !== undefined) add(source.roleTable.table)
+  }
+  const columns = (
+    source: {
+      tables: {
+        schema: string
+        name: string
+        columns: {
+          name: string
+          origin: { standard?: string; scopeKindId?: string }
+        }[]
+      }[]
+    },
+    table: QualifiedName,
+    names: readonly string[]
+  ) => {
+    const found = source.tables.find(
+      (candidate) =>
+        candidate.schema === table.schema && candidate.name === table.name
+    )
+    if (found === undefined)
+      throw new Error(`missing physical table ${tableText(table)}`)
+    return Object.fromEntries(
+      names
+        .map((name) => {
+          const column = found.columns.find(
+            (candidate) => candidate.origin.standard === name
+          )
+          if (column === undefined)
+            throw new Error(
+              `missing standard column ${name} on ${tableText(table)}`
+            )
+          return [name, column.name]
+        })
+        .concat(
+          found.columns
+            .filter((column) => column.origin.scopeKindId !== undefined)
+            .slice(0, 1)
+            .map((column) => ["scope", column.name])
+        )
+    )
+  }
+  const old =
+    applied === undefined ? undefined : appliedRightsSchema.parse(applied)
+  const catalogInput = (
+    catalog: {
+      level: RightsLevelKey
+      roles: { table: QualifiedName; delta: QualifiedName }
+      assignments: { table: QualifiedName }
+    },
+    source: {
+      tables: {
+        schema: string
+        name: string
+        columns: {
+          name: string
+          origin: { standard?: string; scopeKindId?: string }
+        }[]
+      }[]
+    },
+    holders: Pick<Contracts, "membership" | "membershipSources" | "users">
+  ): Omit<RightsCatalogInput, "holdersKept" | "rootRemoved"> => {
+    const scopeKindId =
+      catalog.level.level === "scope" ? catalog.level.scopeKindId : undefined
+    return {
+      level: catalog.level,
+      roles: catalog.roles.table,
+      delta: catalog.roles.delta,
+      assignments: catalog.assignments.table,
+      holdersSql: effectiveHolderRows(
+        catalog,
+        holders,
+        source as Pick<PhysicalSnapshot, "tables">
+      ),
+      holderTables: [
+        ...(scopeKindId !== undefined
+          ? [
+              holders.membership.find(
+                (entry) => entry.scopeKindId === scopeKindId
+              )?.table,
+              holders.membershipSources.find(
+                (entry) => entry.scopeKindId === scopeKindId
+              )?.table,
+            ]
+              .filter((table): table is QualifiedName => table !== undefined)
+              .slice(0, 1)
+          : []),
+        ...(holders.users === undefined ? [] : [holders.users.table]),
+      ],
+      columns: {
+        roles: columns(source, catalog.roles.table, [
+          "ref",
+          "archetype",
+          "deletionMark",
+        ]),
+        delta: columns(source, catalog.roles.delta, [
+          "ref",
+          "parent",
+          "object",
+          "action",
+          "extent",
+          "dimension",
+        ]),
+        assignments: columns(source, catalog.assignments.table, [
+          "ref",
+          "archetype",
+          "customRole",
+          "deletionMark",
+        ]),
+      },
+    }
+  }
+  // Ідентичність таблиці — її походження в метаданих, як у звірці промоції
+  // (`transition.ts`): фізичне ім'я промоція перепризначає, а таблиця нового
+  // об'єкта з тим самим ім'ям — інша таблиця, і її рядки інші
+  const identity = (o: z.infer<typeof origin>) =>
+    JSON.stringify([o.objectId, o.tabularSectionId ?? null, o.part ?? null])
+  const desiredTables = new Set(physical.tables.map((t) => identity(t.origin)))
+  const kept = (table: QualifiedName) => {
+    const was = old!.physical.tables.find(
+      (t) => t.schema === table.schema && t.name === table.name
+    )
+    return was !== undefined && desiredTables.has(identity(was.origin))
+  }
+  const oldCatalogs = (old?.contracts.rightsCatalogs ?? []).map(
+    (catalog): RightsCatalogInput => {
+      const input = catalogInput(
+        catalog,
+        old!.physical,
+        old!.contracts as unknown as Pick<
+          Contracts,
+          "membership" | "membershipSources" | "users"
+        >
+      )
+      const root =
+        catalog.level.level === "scope"
+          ? old!.scopeKinds.find(
+              (kind) =>
+                catalog.level.level === "scope" &&
+                kind.id === catalog.level.scopeKindId
+            )?.root
+          : undefined
+      return {
+        ...input,
+        holdersKept: [input.assignments, ...input.holderTables].every(kept),
+        // Корінь-об'єкт без основної таблиці в бажаній моделі — план знімає
+        // таблицю коренів, а з нею кожен скоуп рівня: перевірки для такого
+        // скоупу немає, як на COMMIT, коли корінь видалено (Р2c2-7). Зовнішній
+        // корінь план не знімає
+        rootRemoved:
+          root !== undefined &&
+          "id" in root &&
+          !desiredTables.has(identity({ objectId: root.id })),
+      }
+    }
+  )
+  const desiredCatalogs = contracts.rightsCatalogs.map(
+    (catalog): RightsCatalogInput => ({
+      ...catalogInput(catalog, physical, contracts),
+      holdersKept: true,
+      rootRemoved: false,
+    })
+  )
+  const catalogs = [...oldCatalogs]
+  for (const catalog of desiredCatalogs) {
+    if (
+      !catalogs.some(
+        (existing) =>
+          tableText(existing.assignments) === tableText(catalog.assignments)
+      )
+    )
+      catalogs.push(catalog)
+  }
+  for (const catalog of catalogs) {
+    for (const table of [
+      catalog.roles,
+      catalog.delta,
+      catalog.assignments,
+      ...catalog.holderTables,
+    ])
+      add(table)
   }
   return {
     tables: [...tables.values()],
@@ -65,8 +382,22 @@ export function rightsSourceInput(
           .map((k) => k.key)
       ),
     })),
+    catalogs,
+    desiredRoles: contracts.roles.map((role) => ({
+      id: role.roleId,
+      storage: storageKey(rightsLevelOf(role.assignedOn, contracts)),
+      fullAccess: role.fullAccess,
+    })),
+    domain: rightsDomainRows(contracts),
   }
 }
+
+const storageKey = (level: RightsLevelKey | undefined) =>
+  level === undefined
+    ? "none"
+    : level.level === "global"
+      ? "global"
+      : `scope:${level.scopeKindId}`
 
 /**
  * Запит ключів ролей джерела, яких немає серед відомих (`$1`, масив тексту).
@@ -172,6 +503,179 @@ JOIN pg_catalog.pg_attribute a
  AND a.attnum > 0
  AND NOT a.attisdropped`
 
+const FULL_ACCESS_EXISTS_SQL = `SELECT EXISTS (
+  SELECT 1 FROM pg_catalog.pg_proc p
+  JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+  WHERE n.nspname = 'simetra' AND p.proname = 'rights_full_access_roles'
+    AND p.pronargs = 0
+) AS present`
+
+interface CatalogRow extends Record<string, unknown> {
+  id: string
+  scope: string | null
+  archetype: string | null
+  custom_role: string | null
+  deleted: boolean
+}
+
+interface DeltaRow extends Record<string, unknown> {
+  id: string
+  parent: string
+  object: string
+  action: string
+  extent: string
+  dimension: string | null
+}
+
+interface HolderRow extends Record<string, unknown> {
+  scope: string
+  actor: string
+  archetype: string
+}
+
+const column = (columns: Record<string, string>, name: string) =>
+  quoteIdent(columns[name]!)
+
+function catalogSql(
+  catalog: RightsCatalogInput,
+  kind: "roles" | "assignments" | "delta"
+): string {
+  const table = catalog[kind]
+  const cols = catalog.columns[kind]
+  const c = (name: string) => column(cols, name)
+  const scope = catalog.level.level === "global" ? "NULL::uuid" : c("scope")
+  if (kind === "delta")
+    return [
+      `SELECT ${c("ref")} AS id, ${c("parent")} AS parent,`,
+      `  ${c("object")} AS object, ${c("action")} AS action,`,
+      `  ${c("extent")} AS extent, ${c("dimension")} AS dimension`,
+      `FROM ${qualified(table)}`,
+    ].join("\n")
+  return [
+    `SELECT ${c("ref")} AS id, ${scope} AS scope, ${c("archetype")} AS archetype,`,
+    `  ${kind === "roles" ? "NULL::uuid" : c("customRole")} AS custom_role,`,
+    `  ${c("deletionMark")} AS deleted`,
+    `FROM ${qualified(table)}`,
+  ].join("\n")
+}
+
+function scopeKey(level: RightsLevelKey, scope: string | null): string {
+  return level.level === "global"
+    ? "global"
+    : `scope:${level.scopeKindId}:${scope ?? ""}`
+}
+
+function collectRightsFacts(
+  input: RightsSourceInput,
+  catalogRows: {
+    catalog: RightsCatalogInput
+    roles: CatalogRow[]
+    assignments: CatalogRow[]
+    delta: DeltaRow[]
+    holders: HolderRow[]
+  }[],
+  previous:
+    | { role_id: string; storage: string; storage_id: string | null }[]
+    | undefined
+): Pick<RightsSourceFacts, "fullAccess" | "orphans"> {
+  const beforeRoles = new Set(
+    previous?.map(
+      (role) =>
+        `${role.role_id}|${role.storage === "global" ? "global" : `scope:${role.storage_id}`}`
+    )
+  )
+  const desired = new Map(input.desiredRoles.map((role) => [role.id, role]))
+  const domain = new Set(
+    input.domain.map((row) =>
+      JSON.stringify([
+        row.roleId,
+        row.object,
+        row.action,
+        row.extent,
+        row.dimensionId,
+      ])
+    )
+  )
+  const fullAccess = new Map<
+    string,
+    { scope: string; before: number; after: number }
+  >()
+  const customRoles: string[] = []
+  const assignments: string[] = []
+  for (const {
+    catalog,
+    roles,
+    assignments: assigned,
+    delta,
+    holders,
+  } of catalogRows) {
+    const storage = storageKey(catalog.level)
+    const customs = new Map(
+      roles.filter((role) => !role.deleted).map((role) => [role.id, role])
+    )
+    for (const role of roles) {
+      if (role.deleted) continue
+      const desiredRole = desired.get(role.archetype ?? "")
+      if (desiredRole === undefined || desiredRole.storage !== storage)
+        customRoles.push(role.id)
+    }
+    for (const row of delta) {
+      const parent = customs.get(row.parent)
+      if (parent === undefined) continue
+      const key = JSON.stringify([
+        parent.archetype,
+        row.object,
+        row.action,
+        row.extent,
+        row.dimension,
+      ])
+      if (!domain.has(key)) customRoles.push(row.id)
+    }
+    for (const row of assigned) {
+      if (row.deleted) continue
+      if (
+        row.custom_role === null &&
+        desired.get(row.archetype ?? "")?.storage !== storage
+      )
+        assignments.push(row.id)
+    }
+    if (catalog.rootRemoved) continue
+    for (const row of holders) {
+      const key = scopeKey(catalog.level, row.scope)
+      const count = fullAccess.get(key) ?? { scope: key, before: 0, after: 0 }
+      if (beforeRoles?.has(`${row.archetype}|${storage}`)) count.before++
+      const next = desired.get(row.archetype)
+      if (catalog.holdersKept && next?.fullAccess && next.storage === storage)
+        count.after++
+      fullAccess.set(key, count)
+    }
+  }
+  const sortedRoles = [...new Set(customRoles)].sort()
+  const sortedAssignments = [...new Set(assignments)].sort()
+  const limitedRoles = sortedRoles.slice(0, RIGHTS_SOURCE_LIMIT)
+  const limitedAssignments = sortedAssignments.slice(
+    0,
+    RIGHTS_SOURCE_LIMIT - limitedRoles.length
+  )
+  return {
+    fullAccess:
+      previous === undefined
+        ? []
+        : [...fullAccess.values()].sort((a, b) =>
+            a.scope.localeCompare(b.scope)
+          ),
+    orphans: {
+      customRoles: limitedRoles,
+      assignments: limitedAssignments,
+      more:
+        sortedRoles.length +
+        sortedAssignments.length -
+        limitedRoles.length -
+        limitedAssignments.length,
+    },
+  }
+}
+
 /**
  * Факти джерел прав з цілі — у транзакції `tx` (читальна транзакція
  * `dbs.reader`, Р2a1-2). Ключі читаються лише з джерел, чиї таблиця й
@@ -183,7 +687,12 @@ export async function readRightsSourceFacts(
   tx: ApplyTransaction,
   input: RightsSourceInput
 ): Promise<RightsSourceFacts> {
-  if (input.tables.length === 0) return { owners: [], unknownKeys: [] }
+  const empty = {
+    fullAccess: [],
+    orphans: { customRoles: [], assignments: [], more: 0 },
+  }
+  if (input.tables.length === 0)
+    return { owners: [], unknownKeys: [], ...empty }
   const owners = (
     await tx.query<{
       table_schema: string
@@ -206,29 +715,31 @@ export async function readRightsSourceFacts(
           readable.has(tableText(source.roleTable.table)))
     )
     .map((entry) => ({ ...entry, query: unknownKeysQuery(entry.source) }))
-  if (candidates.length === 0) return { owners, unknownKeys: [] }
-
   const asked = candidates.flatMap((c) => c.query.columns)
-  const present = new Set(
-    (
-      await tx.query<{
-        table_schema: string
-        table_name: string
-        source_column: string
-      }>(COLUMNS_SQL, [
-        asked.map((c) => c.table.schema),
-        asked.map((c) => c.table.name),
-        asked.map((c) => c.column),
-      ])
-    ).map((row) => `${row.table_schema}.${row.table_name}.${row.source_column}`)
-  )
+  const present =
+    candidates.length === 0
+      ? new Set<string>()
+      : new Set(
+          (
+            await tx.query<{
+              table_schema: string
+              table_name: string
+              source_column: string
+            }>(COLUMNS_SQL, [
+              asked.map((c) => c.table.schema),
+              asked.map((c) => c.table.name),
+              asked.map((c) => c.column),
+            ])
+          ).map(
+            (row) =>
+              `${row.table_schema}.${row.table_name}.${row.source_column}`
+          )
+        )
   const ready = candidates.filter((c) =>
     c.query.columns.every((col) =>
       present.has(`${tableText(col.table)}.${col.column}`)
     )
   )
-  if (ready.length === 0) return { owners, unknownKeys: [] }
-
   const unknownKeys = await withLocalSettings(
     tx,
     [{ name: "row_security", value: "off" }],
@@ -248,7 +759,51 @@ export async function readRightsSourceFacts(
       return found
     }
   )
-  return { owners, unknownKeys }
+  // Довідники прав, які роль застосування не читає, уже дали відмову
+  // доступу (`owners`); без жодного читаного довідника архетипи «до» не
+  // потрібні, а функція схеми `simetra` для чужої ролі впала б сирим `42501`.
+  const catalogs = input.catalogs.filter((catalog) =>
+    [catalog.roles, catalog.delta, catalog.assignments].every((table) =>
+      readable.has(tableText(table))
+    )
+  )
+  const rights = await withLocalSettings(
+    tx,
+    [{ name: "row_security", value: "off" }],
+    async () => {
+      const [exists] =
+        catalogs.length === 0
+          ? []
+          : await tx.query<{ present: boolean }>(FULL_ACCESS_EXISTS_SQL)
+      const previous = exists?.present
+        ? await tx.query<{
+            role_id: string
+            storage: string
+            storage_id: string | null
+          }>(
+            "SELECT role_id, storage, storage_id FROM simetra.rights_full_access_roles()"
+          )
+        : undefined
+      const rows = []
+      for (const catalog of catalogs) {
+        rows.push({
+          catalog,
+          roles: await tx.query<CatalogRow>(catalogSql(catalog, "roles")),
+          assignments: await tx.query<CatalogRow>(
+            catalogSql(catalog, "assignments")
+          ),
+          delta: await tx.query<DeltaRow>(catalogSql(catalog, "delta")),
+          holders: catalog.holderTables.every((table) =>
+            readable.has(tableText(table))
+          )
+            ? await tx.query<HolderRow>(catalog.holdersSql)
+            : [],
+        })
+      }
+      return collectRightsFacts(input, rows, previous)
+    }
+  )
+  return { owners, unknownKeys, ...rights }
 }
 
 /**
@@ -269,6 +824,35 @@ export function rightsSourceDiagnostics(facts: RightsSourceFacts): {
         more: u.more,
       })
     )
+  if (
+    facts.orphans.customRoles.length > 0 ||
+    facts.orphans.assignments.length > 0
+  )
+    warnings.push(
+      applyDiagnostic("plan.rights-orphans", "warning", {
+        customRoles: facts.orphans.customRoles.join(", "),
+        assignments: facts.orphans.assignments.join(", "),
+        more: facts.orphans.more,
+      })
+    )
+  const lost = facts.fullAccess.filter(
+    (row) => row.before > 0 && row.after === 0
+  )
+  if (lost.length > 0)
+    return {
+      refusal: applyDiagnostic("plan.rights-full-access-lost", "error", {
+        scopes: lost
+          .slice(0, RIGHTS_SOURCE_LIMIT)
+          .map((row) => row.scope)
+          .concat(
+            lost.length > RIGHTS_SOURCE_LIMIT
+              ? [`… (+${lost.length - RIGHTS_SOURCE_LIMIT})`]
+              : []
+          )
+          .join(", "),
+      }),
+      warnings,
+    }
   if (denied.length === 0) return { warnings }
   const rest = denied.length - RIGHTS_SOURCE_LIMIT
   return {

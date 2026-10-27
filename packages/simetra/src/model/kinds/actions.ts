@@ -1,6 +1,7 @@
 /** The platform's standard action vocabulary. */
 export const STANDARD_ACTIONS = [
   "read",
+  "administerRights",
   "create",
   "update",
   "markDeletion",
@@ -62,6 +63,20 @@ export const readAction: KindAction = {
   name: "read",
   requires: [],
   effects: NO_EFFECTS,
+}
+
+/**
+ * Запис у довідники прав — окрема дія, а не звичайні create/update: її видають
+ * явно, бо зміна прав сама є приростом прав.
+ */
+export const administerRightsAction: KindAction = {
+  name: "administerRights",
+  requires: ["read"],
+  effects: {
+    dml: ["insert", "update", "delete"],
+    header: "all",
+    tabularSections: true,
+  },
 }
 
 export const deleteAction: KindAction = {

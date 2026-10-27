@@ -6,6 +6,7 @@ import {
   contentChangeCondition,
   effectsFunctionName,
   effectsTriggerNames,
+  rightsGuardNames,
   mechanicsTriggerName,
   mechanicsUpdateTriggerName,
   statementTargets,
@@ -1165,8 +1166,14 @@ function triggerReplacement(
   const effect = (t: TriggerShape) =>
     (t.name === effects.all || t.name === effects.update) &&
     sameFunction(t.function, effectsFn)
+  const guards = rightsGuardNames({ schema: key.schema, name: table })
+  const guard = (t: TriggerShape) =>
+    guards.some(
+      (entry) =>
+        t.name === entry.trigger && sameFunction(t.function, entry.function)
+    )
   const platform = (t: TriggerShape) =>
-    touch(t) || touchUpdate(t) || carrier(t) || effect(t)
+    touch(t) || touchUpdate(t) || carrier(t) || effect(t) || guard(t)
 
   // Механіка спрацьовує й на вставку — ширше за `moddatetime`, і це
   // посилення: дата й версія правильні й на вставці (спека промоції §8).

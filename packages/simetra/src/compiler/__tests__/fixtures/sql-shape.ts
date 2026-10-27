@@ -39,8 +39,14 @@ export function bodyShape(createFunction: string) {
     expressions: s.expressions.map((e) => ({
       role: e.role,
       into: e.into,
-      // Вираз (`parseMode` 2) — без `SELECT`, запит — цілий оператор.
-      tree: tree(e.parseMode === 0 ? e.query : `SELECT ${e.query}`),
+      // Вираз (`parseMode` 2) — без `SELECT`, запит — цілий оператор;
+      // присвоєння (`parseMode` 3–5) несе `ціль := вираз`, а ціль уже є в
+      // `target`, тож розбирається лише права частина.
+      tree: tree(
+        e.parseMode === 0
+          ? e.query
+          : `SELECT ${e.parseMode >= 3 ? e.query.slice(e.query.indexOf(":=") + 2) : e.query}`
+      ),
     })),
   }))
 }

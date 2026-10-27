@@ -13,6 +13,8 @@ export {
   CHECKLIST_TABLE,
   COMMENT_FILE,
   COMMENT_TABLE,
+  ORG_ADMIN_ID,
+  adminRoles,
   policyDomain,
   promotableTaskNote,
   refAttribute,

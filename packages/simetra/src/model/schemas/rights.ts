@@ -402,10 +402,14 @@ export const objectSelectorSchema = z
     z.strictObject({
       // Лише слово словника: кастомна дія в різних об'єктах — різні UUID
       // (Р1b-10), тож описка тут — помилка схеми, а не тихий порожній вибір.
-      withAction: z.enum(STANDARD_ACTIONS).meta({
-        description:
-          "Standard action word; selects every object of the role level that has it.",
-      }),
+      withAction: z
+        .enum(
+          STANDARD_ACTIONS.filter((action) => action !== "administerRights")
+        )
+        .meta({
+          description:
+            "Standard action word; selects every object of the role level that has it.",
+        }),
     }),
   ])
   .meta({

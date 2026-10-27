@@ -3,6 +3,7 @@ import {
   compile,
   loadSqlParser,
   readSqlUnits,
+  rightsGuardNames,
   type SchemaPathResolver,
   type SqlParser,
   withoutLocations,
@@ -1487,6 +1488,59 @@ describe("reverseGenerate", () => {
     expect(result.files.get("custom-tables/Note/Note.sql")).toContain(
       NAMESAKE.slice(0, -1)
     )
+  })
+
+  it.each(rightsGuardNames({ schema: "app", name: "note" }))(
+    "recognizes rights guard $trigger and its function as platform",
+    async ({ trigger, function: fn }) => {
+      const sql = [
+        `CREATE FUNCTION app.${fn.name}() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;`,
+        `CREATE TRIGGER ${trigger} BEFORE INSERT ON app.note FOR EACH ROW EXECUTE FUNCTION app.${fn.name}();`,
+      ].join("\n")
+      const result = await reverseGenerate(
+        model({ tables: [table("app", "note")], units: units(sql) }),
+        options()
+      )
+      expect(errors(result)).toEqual([])
+      expect([...result.files.values()].join("\n")).not.toContain(trigger)
+      expect([...result.files.values()].join("\n")).not.toContain(fn.name)
+    }
+  )
+
+  it("keeps a rights guard namesake that calls another function", async () => {
+    const [{ trigger }] = rightsGuardNames({ schema: "app", name: "note" })
+    const sql = [
+      "CREATE FUNCTION app.stamp() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;",
+      `CREATE TRIGGER ${trigger} BEFORE INSERT ON app.note FOR EACH ROW EXECUTE FUNCTION app.stamp();`,
+    ].join("\n")
+    const result = await reverseGenerate(
+      model({ tables: [table("app", "note")], units: units(sql) }),
+      options()
+    )
+    expect(errors(result)).toEqual([])
+    expect(result.files.get("custom-tables/Note/Note.sql")).toContain(
+      `CREATE TRIGGER ${trigger}`
+    )
+  })
+
+  it("refuses the deferred rights check of the platform schema instead of adopting it", async () => {
+    // Схему `simetra` інтроспекція не читає; якщо її одиниці все ж дійшли,
+    // генератор не пише їх у модуль користувача мовчки, а відмовляє
+    const sql = [
+      "CREATE FUNCTION simetra.rights_tx_check() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;",
+      "CREATE CONSTRAINT TRIGGER rights_tx_pending_check AFTER INSERT ON simetra.rights_tx_pending DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION simetra.rights_tx_check();",
+    ].join("\n")
+    const result = await reverseGenerate(
+      model({ tables: [table("app", "note")], units: units(sql) }),
+      options()
+    )
+    expect(errors(result).map((d) => [d.code, d.file])).toEqual([
+      ["schema.reserved", "sql/simetra/rights_tx_check.sql"],
+      [
+        "schema.reserved",
+        "sql/simetra/rights_tx_pending__rights_tx_pending_check.sql",
+      ],
+    ])
   })
 
   it("a grant shared with another function and a mechanics-named trigger on another function are written", async () => {

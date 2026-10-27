@@ -48,6 +48,7 @@ import {
   type ValueType,
 } from "simetra/model"
 import { compareStrings, valueAt } from "../diagnostics"
+import { rightsAdminTables } from "../rights/admin-tables"
 import { identitiesTable } from "../platform/identities"
 import { carrierDeclarations } from "../rights/facts"
 import { objectKey, type ParsedObject } from "./files"
@@ -349,7 +350,16 @@ export function buildModel(
 ): ModelStageResult {
   const builder = new SnapshotBuilder(objects, project, references)
   for (const object of objects) builder.add(object)
-  return withIdentities(builder.finish(), objects)
+  const result = withIdentities(builder.finish(), objects)
+  return {
+    ...result,
+    physical: {
+      ...result.physical,
+      tables: [...result.physical.tables, ...rightsAdminTables(objects)].sort(
+        bySchemaAndName
+      ),
+    },
+  }
 }
 
 /**

@@ -2,6 +2,7 @@ import { beforeAll, describe, expect, it } from "vitest"
 import type pg from "pg"
 import { compile, type CompiledModel } from "simetra/compiler"
 import { renderDesiredState } from "simetra/schema"
+import { RIGHTS_MAINTENANCE_SETTING } from "simetra/model"
 import { accessPolicyNames } from "../../src/compiler/access-units"
 import {
   expectClean,
@@ -229,10 +230,16 @@ async function tenant(
     `INSERT INTO ${schema}.org_member (id, org_id, user_id) VALUES (gen_random_uuid(), $1, $2) RETURNING id`,
     [org, user]
   ))!
+  await client.query("SELECT set_config($1, 'on', true)", [
+    RIGHTS_MAINTENANCE_SETTING,
+  ])
   await client.query(
     `INSERT INTO ${schema}.org_role_assignments (id, org_id, subject, archetype) VALUES (gen_random_uuid(), $1, $2, $3)`,
     [org, member, ORG_READER_ID]
   )
+  await client.query("SELECT set_config($1, 'off', true)", [
+    RIGHTS_MAINTENANCE_SETTING,
+  ])
   const item = (await one(
     `INSERT INTO ${schema}.item (id, org_id) VALUES (gen_random_uuid(), $1) RETURNING id`,
     [org]
