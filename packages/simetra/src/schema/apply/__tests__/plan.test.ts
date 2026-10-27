@@ -3,6 +3,8 @@ import {
   canonicalSnapshot,
   compile,
   type CompiledModel,
+  effectsFunctionName,
+  effectsTriggerNames,
   type PromotionRecord,
 } from "simetra/compiler"
 import { PLATFORM_ROLES, type CatalogModel } from "simetra/model"
@@ -20,6 +22,7 @@ import {
 } from "simetra/schema"
 import {
   catalog,
+  expectClean,
   metaFiles,
   project,
 } from "../../../compiler/__tests__/helpers"
@@ -37,6 +40,7 @@ import {
   ROLE_FILE,
   rightsFiles,
   tagMapping,
+  TASK_FILE,
 } from "../../../compiler/__tests__/fixtures/rights"
 import { applyDiagnostic } from "../diagnostic"
 
@@ -121,6 +125,69 @@ describe("buildPlan", () => {
         ).toBe(true)
     }
   )
+
+  it("hands the engine the hashed effects function of a long table and no truncated one", async () => {
+    // Р2c2-20: до хешу ім'я функції ефектів довгої таблиці було іменем її
+    // тригера (обрізане алгоритмом Postgres). Сам перехід — DROP старої й
+    // CREATE нової — робить двигун: усе в межі схеми, чого немає в бажаному,
+    // він прибирає. Тож план мусить дати йому бажаний стан без старого
+    // імені й межу, що володіє схемою таблиці
+    const table = { schema: "public", name: "e".repeat(60) }
+    const fresh = await compileRights(
+      policyDomain({ [TASK_FILE]: { physicalName: table.name } })
+    )
+    expectClean(fresh)
+    const desired = fresh.model!
+    const hashed = effectsFunctionName(table).name
+    const truncated = effectsTriggerNames(table).all
+    expect(hashed).not.toBe(truncated)
+    // Застосований стан — та сама модель зі старим ім'ям функції в одиницях
+    // і в порядку створення
+    const renamed = <T>(value: T): T =>
+      JSON.parse(JSON.stringify(value).replaceAll(hashed, truncated)) as T
+    const applied: CompiledModel = {
+      ...desired,
+      sqlUnits: renamed(desired.sqlUnits),
+      creationOrder: renamed(desired.creationOrder),
+    }
+    expect(
+      applied.sqlUnits.some(
+        (u) => u.identity === `function:public.${truncated}()`
+      )
+    ).toBe(true)
+    const target = await fakeTarget(applied, { notCopies: [] })
+    const handed: { sql: string; schemas: readonly string[] }[] = []
+    const engine = new Proxy(fakeEngine([]), {
+      get: (target, name) =>
+        name === "withDesiredShadow"
+          ? (_o: unknown, sql: string, scope: { schemas: string[] }) => {
+              handed.push({ sql, schemas: scope.schemas })
+              return Promise.resolve({
+                status: "shadow-failed",
+                diagnostics: [SHADOW_FAILED],
+              })
+            }
+          : target[name as keyof SchemaEngine],
+    })
+    await buildPlan(
+      engine,
+      { reader: target.reader, scratch: emptyScratch },
+      desired,
+      { target: { url: "postgres://target" } },
+      []
+    )
+    expect(handed).toHaveLength(1)
+    const [{ sql, schemas }] = handed as [(typeof handed)[0]]
+    expect(sql).toContain(`CREATE OR REPLACE FUNCTION public.${hashed}()`)
+    // Тригер зберігає ім'я, але кличе нову функцію: двигун його замінює
+    expect(sql).toMatch(
+      new RegExp(
+        `CREATE TRIGGER ${truncated} [^;]* EXECUTE FUNCTION public\\.${hashed}\\(\\);`
+      )
+    )
+    expect(sql).not.toContain(`public.${truncated}()`)
+    expect(schemas).toContain(table.schema)
+  })
 
   it("refuses a server older than Postgres 17 before reading its facts", async () => {
     // Платформна спека §1: Postgres 17 — мінімум; без цієї відмови читання
