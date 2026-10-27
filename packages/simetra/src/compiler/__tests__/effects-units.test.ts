@@ -1,7 +1,6 @@
 import { parsePlPgSQLSync } from "@libpg-query/parser"
 import { beforeAll, describe, expect, it } from "vitest"
 import type { CompiledModel } from "simetra/compiler"
-import { makeObjectName } from "simetra/model"
 import { contentChangeCondition, contentColumns } from "../mechanics-units"
 import { effectsTables, writesByCommandContract } from "../contracts"
 import { writesByCommand } from "../rights/facts"
@@ -270,6 +269,32 @@ describe("buildEffectsUnits", () => {
     }
   })
 
+  it("protects membership acceptance and platform user fields on command updates", () => {
+    const conditions = (table: string) =>
+      bodyShape(fnOf(domain, table).sql)
+        .flatMap((statement) => statement.expressions)
+        .filter((expression) => expression.role === "condition")
+        .map((expression) => expression.tree)
+    expect(conditions("org_member")).toContainEqual(
+      tree(
+        "SELECT TG_OP = 'UPDATE' AND OLD.user_id IS DISTINCT FROM NEW.user_id AND (OLD.user_id IS NOT NULL OR NEW.user_id IS DISTINCT FROM (SELECT simetra.current_user_id()) OR EXISTS (SELECT 1 FROM public.org_member AS member WHERE member.org_id = NEW.org_id AND member.user_id = NEW.user_id AND member.id <> NEW.id))"
+      )
+    )
+    for (const column of ["invalid", "user_kind"]) {
+      expect(conditions("users")).toContainEqual(
+        tree(
+          `SELECT TG_OP = 'UPDATE' AND OLD.${column} IS DISTINCT FROM NEW.${column}`
+        )
+      )
+    }
+    expect(fnOf(domain, "org_member").requires).toEqual(
+      expect.arrayContaining([
+        { type: "table", schema: "public", name: "org_member" },
+        { type: "unit", identity: "function:simetra.current_user_id()" },
+      ])
+    )
+  })
+
   it("the registry and the contract forms of writing by command agree", async () => {
     // Стадія 4 судить за реєстром (`writesByCommand`), генератори — за
     // контрактом (`writesByCommandContract`): розбіжність дала б тригер без
@@ -369,30 +394,35 @@ describe("buildEffectsUnits", () => {
           .map((u) => u.sql)
           .sort()
       ).toEqual(executeGrants(signature, [], "supabase").sort())
-      // Єдине відношення тіла — власник у `NOT EXISTS`, лише у функції ТЧ.
-      const owner = tableOf(domain, fn.name.replace(/_simetra_effects$/, ""))
-        .origin.tabularSectionId
+      const table = tableOf(domain, fn.name.replace(/_simetra_effects$/, ""))
+      const membership = domain.contracts.membership.find(
+        (m) => m.objectId === table.origin.objectId
+      )
+      const parent =
+        table.origin.tabularSectionId === undefined
+          ? undefined
+          : domain.physical.tables.find(
+              (candidate) =>
+                candidate.origin.objectId === table.origin.objectId &&
+                candidate.origin.tabularSectionId === undefined &&
+                candidate.origin.part === undefined
+            )
+      const expected =
+        parent !== undefined
+          ? relationsOf(tree(`SELECT 1 FROM ${parent.schema}.${parent.name}`))
+          : membership !== undefined
+            ? relationsOf(
+                tree(
+                  `SELECT 1 FROM ${membership.table.schema}.${membership.table.name} AS member`
+                )
+              )
+            : []
       expect(
         relationsOf(
           bodyShape(fn.sql).map((s) => s.expressions.map((e) => e.tree))
         ),
         fn.identity
-      ).toEqual(
-        owner === undefined
-          ? []
-          : [
-              {
-                schemaname: "public",
-                relname: fn.name.startsWith("task_comment")
-                  ? COMMENT_TABLE
-                  : fn.name.startsWith("users")
-                    ? "users"
-                    : "task",
-                inh: true,
-                relpersistence: "p",
-              },
-            ]
-      )
+      ).toEqual(expected)
     }
     expect(
       units.filter((u) => u.class === "grant" && u.sql.startsWith("GRANT"))
@@ -531,10 +561,7 @@ describe("buildEffectsUnits", () => {
     expect(effects(plain.model!)).toEqual([])
   })
 
-  it("effects function names collide like carrier functions", async () => {
-    // Р2b1-11: ім'я функції ефектів обрізає ім'я таблиці, тож у довгої
-    // основної таблиці й її ТЧ воно однакове — як у функцій носіїв. У задачі
-    // копій немає, а мітки носіїв таблиці й ТЧ різні, тож колізія одна.
+  it("keeps long header and section effects functions distinct", async () => {
     const long = "e".repeat(60)
     const result = await compileRights(
       policyDomain({
@@ -551,17 +578,10 @@ describe("buildEffectsUnits", () => {
         },
       })
     )
-    expect(
-      result.diagnostics
-        .filter((d) => d.severity === "error")
-        .map((d) => [d.code, d.file, d.pointer, d.params?.name])
-    ).toEqual([
-      [
-        "physical.function-duplicate",
-        TASK_FILE,
-        "/physicalName",
-        makeObjectName(long, undefined, "simetra_effects"),
-      ],
-    ])
+    expectClean(result)
+    const identities = effects(result.model!)
+      .filter((unit) => unit.class === "function")
+      .map((unit) => unit.identity)
+    expect(new Set(identities).size).toBe(identities.length)
   })
 })

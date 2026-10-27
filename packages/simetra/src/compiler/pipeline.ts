@@ -559,7 +559,7 @@ export async function runStages(
       parse
     ),
     ...buildEffectsUnits(
-      { rights, roles, users, membershipSources: sources.membershipSources },
+      { rights, roles, users, membership, membershipSources: sources.membershipSources },
       physical,
       stage1.project.naming.attributeCase,
       stage1.project.database.provider,

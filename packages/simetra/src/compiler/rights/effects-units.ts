@@ -10,10 +10,13 @@ import {
   effectsTables,
   writesByCommandContract,
   type Contracts,
+  type MembershipContract,
   type QualifiedName,
   type RightsAction,
   type RightsContract,
 } from "../contracts"
+import { CURRENT_USER } from "../membership-functions"
+import { CURRENT_USER_FUNCTION } from "../platform/names"
 import { compareStrings } from "../diagnostics"
 import { contentChangeCondition, contentColumns } from "../mechanics-units"
 import { dollarTag } from "../movement-functions"
@@ -56,7 +59,7 @@ const ops = (dmls: readonly Dml[]) =>
 export function buildEffectsUnits(
   contracts: Pick<
     Contracts,
-    "rights" | "roles" | "users" | "membershipSources"
+    "rights" | "roles" | "users" | "membershipSources" | "membership"
   >,
   physical: PhysicalSnapshot,
   attributeCase: AttributeCase,
@@ -91,12 +94,29 @@ export function buildEffectsUnits(
     const fn = effectsFunctionName(table)
     const names = effectsTriggerNames(table)
     const section = table.origin.tabularSectionId !== undefined
+    const membership = contracts.membership.find(
+      (entry) => entry.objectId === table.origin.objectId
+    )
+    const users = contracts.users?.objectId === table.origin.objectId
     const body = section
       ? sectionBody(rights, table, main, key)
-      : mainBody(rights, table, key, attributeCase)
+      : mainBody(rights, table, key, attributeCase, membership, users)
     const requires: CreationNode[] = section
       ? [{ type: "table", schema: main.schema, name: main.name }, current]
       : [current]
+    if (!section && membership !== undefined) {
+      requires.push(
+        { type: "table", schema: table.schema, name: table.name },
+        {
+          type: "unit",
+          identity: functionIdentity(
+            CURRENT_USER_FUNCTION.schema,
+            CURRENT_USER_FUNCTION.name,
+            []
+          ),
+        }
+      )
+    }
     const execute = `FOR EACH ROW EXECUTE FUNCTION ${relation(fn)}();`
     const content = contentChangeCondition(table, attributeCase)
     units.push(
@@ -226,9 +246,19 @@ function actionChain(
  * скоупу (перенесення між тенантами — не правка змісту; складені FK скоупу ТЧ
  * і копій однаково не дали б зробити його цілісно). Порядок — колонок таблиці.
  */
-function immutableColumns(table: PhysicalTable, key: string): string[] {
+function immutableColumns(
+  table: PhysicalTable,
+  key: string,
+  users = false
+): string[] {
   return table.columns
-    .filter((c) => c.name === key || c.origin.scopeKindId !== undefined)
+    .filter(
+      (c) =>
+        c.name === key ||
+        c.origin.scopeKindId !== undefined ||
+        (users &&
+          (c.origin.standard === "invalid" || c.origin.standard === "userKind"))
+    )
     .map((c) => c.name)
 }
 
@@ -256,9 +286,11 @@ function mainBody(
   rights: RightsContract,
   table: PhysicalTable,
   key: string,
-  attributeCase: AttributeCase
+  attributeCase: AttributeCase,
+  membership: MembershipContract | undefined,
+  users: boolean
 ): string {
-  const immutable = immutableColumns(table, key)
+  const immutable = immutableColumns(table, key, users)
   const compared = contentColumns(table, attributeCase)
     .map((c) => c.name)
     .filter((name) => !immutable.includes(name))
@@ -269,6 +301,7 @@ function mainBody(
   const lines = [
     ...contextLines(),
     ...immutableChecks(table, immutable),
+    ...membershipChecks(table, membership),
     ...rights.transitions.flatMap(({ column, default: value }) => [
       `IF TG_OP = 'INSERT' AND NEW.${q(column)} IS DISTINCT FROM ${value} THEN`,
       `  ${refuse(table, column)}`,
@@ -309,6 +342,22 @@ function mainBody(
   return ["DECLARE", ...declarations(), "BEGIN", ...indent(lines), "END"].join(
     "\n"
   )
+}
+
+/** Самоприйняття не може перепризначити чинного учасника чи обійти унікальність членства. */
+function membershipChecks(
+  table: PhysicalTable,
+  membership: MembershipContract | undefined
+): string[] {
+  if (membership === undefined) return []
+  const user = q(membership.userColumn)
+  const scope = q(membership.scopeColumn)
+  const key = q(membership.keyColumn)
+  return [
+    `IF TG_OP = 'UPDATE' AND OLD.${user} IS DISTINCT FROM NEW.${user} AND (OLD.${user} IS NOT NULL OR NEW.${user} IS DISTINCT FROM ${CURRENT_USER} OR EXISTS (SELECT 1 FROM ${relation(table)} AS member WHERE member.${scope} = NEW.${scope} AND member.${user} = NEW.${user} AND member.${key} <> NEW.${key})) THEN`,
+    `  ${refuse(table, membership.userColumn)}`,
+    "END IF;",
+  ]
 }
 
 /**
