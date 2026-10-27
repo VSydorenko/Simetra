@@ -194,6 +194,22 @@ async function seed(client: pg.Client): Promise<Seed> {
     org_id: ids.A,
     ...assignmentRow(ids["invite@A"]!, { archetype: ORG_ADMIN_ID }),
   })
+  // Права в іншому тенанті не покривають приріст у цьому: повний доступ у B
+  // і лише адміністрування прав у A.
+  await assign("bAdminRightsRole", "bAdmin@A", RIGHTS_ADMIN_ID)
+  // Позначені рядки — база для зняття позначки, що дає повний приріст (Р2c2-5).
+  await row("markedRole", "org_role_assignments", {
+    org_id: ids.A,
+    ...assignmentRow(ids["target@A"]!, {
+      archetype: ORG_ADMIN_ID,
+      deletionMark: true,
+    }),
+  })
+  await row("markedCustom", "org_roles", {
+    org_id: ids.A,
+    archetype: TASK_EDITOR_ID,
+    deletion_mark: true,
+  })
   await row("targetRole", "org_role_assignments", {
     org_id: ids.A,
     ...assignmentRow(ids["target@A"]!, { archetype: TASK_VIEWER_ID }),
@@ -318,7 +334,8 @@ describe("rights administration guards", () => {
   }, 120_000)
   afterAll(() => tx.close())
 
-  // Review Focus 1 (`self-assign`) і покриття контейнерної форми
+  // Призначення собі, чужому й у контейнер судить той самий ⊆; контейнерна
+  // гілка покриття окрема, тож кожна форма має свій кейс.
   it.each([
     ["self-assign", "admin@A", ORG_ADMIN_ID, null],
     ["escalation-assign", "target@A", TASK_EDITOR_ID, null],
@@ -399,6 +416,42 @@ describe("rights administration guards", () => {
     }
   )
 
+  it("cross-scope: fullAccess in another tenant does not cover a grant here", async () => {
+    const here = randomUUID()
+    refusal(
+      await command(
+        "bAdmin",
+        admin("org_role_assignments", here),
+        assignSql(here, ORG_ADMIN_ID, "bAdmin@A")
+      ),
+      "escalation"
+    )
+    // Контроль: той самий знімок покриває приріст у тенанті повного доступу.
+    const there = randomUUID()
+    changed(
+      await command(
+        "bAdmin",
+        admin("org_role_assignments", there),
+        `INSERT INTO public.org_role_assignments (id, org_id, subject, archetype) VALUES ('${there}', {B}, {bAdmin@B}, '${TASK_EDITOR_ID}') RETURNING id`
+      )
+    )
+  })
+  it.each([
+    [
+      "restore-marked-assignment",
+      "admin",
+      "org_role_assignments",
+      "markedRole",
+    ],
+    ["restore-marked-role", "viewer", "org_roles", "markedCustom"],
+  ])(
+    "%s: un-marking is a full increment, covered only by fullAccess",
+    async (_, actor, table, row) => {
+      const restore = `UPDATE public.${table} SET deletion_mark = false WHERE id = {${row}} RETURNING id`
+      refusal(await command(actor, admin(table, row), restore), "escalation")
+      changed(await command("root", admin(table, row), restore))
+    }
+  )
   it("the same closure is covered by TaskEditor", async () => {
     changed(
       await command(
@@ -476,7 +529,8 @@ describe("rights administration guards", () => {
       )
     )
   })
-  // Review Focus 2 (`create-with-deny`): оператори окремі, судиться результат
+  // Команда пише роль і її `deny` окремими операторами: проміжний стан дав би
+  // хибну ескалацію, тож судиться результат транзакції.
   it("creating a role and a deny in separate statements is judged on the final state", async () => {
     const role = randomUUID()
     const denied =
@@ -499,7 +553,8 @@ describe("rights administration guards", () => {
       "escalation"
     )
   })
-  // Review Focus 4 (`restrict-tenant-delete`)
+  // Видалення кореня тенанта знімає й останнього носія: скоупу вже немає, і
+  // відмова `last-full-access` була б хибною.
   it("deleting the tenant root removes its last carrier without a false alarm", async () => {
     success(
       await owner(
@@ -542,7 +597,7 @@ describe("rights administration guards", () => {
       "last-full-access"
     )
   })
-  // Review Focus 5 (`member-repoint`, `member-claim`)
+  // Підміна користувача в членстві з призначенням підробила б носія прав.
   it.each([
     ["member-repoint", "target@A", "outsider"],
     ["member-repoint-invite", "invite@A", "outsider"],
@@ -568,7 +623,7 @@ describe("rights administration guards", () => {
       )
     ).toMatchObject({ code: "23505" })
   })
-  // Review Focus 5 (`member-delete`)
+  // Членство без призначень прав не несе — запобіжник його видалення не спиняє.
   it("deleting an unassigned member is allowed", async () => {
     changed(
       await command(
@@ -669,7 +724,8 @@ describe("rights administration guards", () => {
       )
     )
   })
-  // Review Focus 5 (`users-invalid`)
+  // `invalid` вимикає людину для прав, тож звичайна команда оновлення
+  // «Користувачів» його не змінює.
   it("a Users update command cannot change invalid", async () => {
     refusal(
       await command(

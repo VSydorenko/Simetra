@@ -841,12 +841,12 @@ describe("rights guard transaction check", () => {
     )
     // Роль і призначення на кожному з двох рівнів.
     expect(escalations).toHaveLength(4)
-    const coverage = expr(
-      "s.full_access OR (s.object = g.object AND s.action = g.action AND (s.extent = 'any' OR (s.extent = g.extent AND s.dimension_id IS NOT DISTINCT FROM g.dimension_id)))"
-    )
-    const container = expr(
-      `g.level = 'container' AND ((s.level = 'scope' AND s.level_id = ${ORG} AND s.scope = g.scope) OR (s.level = 'container' AND s.level_id = g.level_id AND s.container = g.container))`
-    )
+    // Усе покриття цілком, а не фрагмент: зникнення будь-якої умови гілки
+    // рівня (як-от `s.scope = g.scope` — права в іншому тенанті) змінює дерево.
+    const covered = (storage: string) =>
+      expr(
+        `NOT EXISTS (SELECT 1 FROM simetra.rights_tx_actor s WHERE s.xid = v_pending.xid AND ((g.level = 'global' AND s.level = 'global') OR (g.level = 'scope' AND s.level = 'scope' AND s.level_id = g.level_id AND s.scope = g.scope) OR (g.level = 'container' AND ((s.level = 'scope' AND s.level_id = ${storage} AND s.scope = g.scope) OR (s.level = 'container' AND s.level_id = g.level_id AND s.container = g.container)))) AND (s.full_access OR (s.object = g.object AND s.action = g.action AND (s.extent = 'any' OR (s.extent = g.extent AND s.dimension_id IS NOT DISTINCT FROM g.dimension_id)))))`
+      )
     for (const condition of escalations) {
       const and = (
         condition as {
@@ -860,13 +860,15 @@ describe("rights guard transaction check", () => {
       // Режим обслуговування пропускає лише ⊆.
       expect(and[0]).toEqual(expr("NOT v_pending.maintenance"))
       expect(nodes(condition, "op")).toContain("SETOP_EXCEPT")
-      expect(contains(condition, coverage)).toBe(true)
       // Покриття — знімок на початок транзакції, а не поточні права.
       expect(relationsOf(condition).map((r) => r.relname)).toContain(
         "rights_tx_actor"
       )
     }
-    expect(escalations.filter((c) => contains(c, container))).toHaveLength(2)
+    const holding = (oracle: unknown) =>
+      escalations.filter((c) => contains(c, oracle)).length
+    expect(holding(covered(ORG))).toBe(2)
+    expect(holding(covered("NULL::uuid"))).toBe(2)
     expect(funcNames(body)).not.toContain("rights_mine")
     // Приріст ролі — тим самим замиканням, що rights_mine (rights_role_grants).
     expect(funcNames(body)).toContain("rights_role_grants")
@@ -885,6 +887,34 @@ describe("rights guard transaction check", () => {
         field
       ).toBe(true)
     }
+  })
+
+  // Р2c2-5: зняття позначки — повний приріст. Без фільтра позначеного рядка
+  // «до» й «після» дали б ту саму множину, і порожній приріст пройшов би.
+  it("grant sets leave out a marked role, a marked assignment and its marked custom role", () => {
+    const check = bodyTrees(unit(domain, CHECK).sql)
+    const holding = (where: string) =>
+      check.filter((s) => contains(s, expr(where))).length
+    for (const scope of [
+      "(r.doc ->> 'org_id')::uuid = v_pending.scope",
+      "TRUE",
+    ])
+      expect(
+        holding(
+          `r.doc IS NOT NULL AND (r.doc ->> 'id')::uuid = v_pending.key AND ${scope} AND NOT (r.doc ->> 'deletion_mark')::boolean`
+        ),
+        scope
+      ).toBe(1)
+    for (const scope of [
+      "(a.doc ->> 'org_id')::uuid = v_pending.scope",
+      "TRUE",
+    ])
+      expect(
+        holding(
+          `a.doc IS NOT NULL AND (a.doc ->> 'id')::uuid = v_pending.key AND ${scope} AND NOT (a.doc ->> 'deletion_mark')::boolean AND ((a.doc ->> 'custom_role')::uuid IS NULL OR (r.doc IS NOT NULL AND NOT (r.doc ->> 'deletion_mark')::boolean))`
+        ),
+        scope
+      ).toBe(1)
   })
 
   it("refuses marking a custom role in use, in maintenance mode too", () => {
