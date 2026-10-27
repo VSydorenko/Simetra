@@ -3,7 +3,10 @@ import { sha256HexSync } from "../sha256"
 
 const encoder = new TextEncoder()
 
-/** Preserve distinct function names when PostgreSQL would truncate long table names alike. */
+/**
+ * Postgres мовчки обрізає ім'я до 63 байтів, і дві довгі таблиці зі спільним
+ * початком дали б одну функцію; хеш повної назви тримає імена різними.
+ */
 export function generatedTableFunctionName(
   table: string,
   label: string

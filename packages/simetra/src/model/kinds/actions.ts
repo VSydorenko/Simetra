@@ -65,7 +65,10 @@ export const readAction: KindAction = {
   effects: NO_EFFECTS,
 }
 
-/** The action that writes platform rights catalogs. */
+/**
+ * Запис у довідники прав — окрема дія, а не звичайні create/update: її видають
+ * явно, бо зміна прав сама є приростом прав.
+ */
 export const administerRightsAction: KindAction = {
   name: "administerRights",
   requires: ["read"],

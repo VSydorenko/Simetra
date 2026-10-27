@@ -65,7 +65,11 @@ const unitNode = (name: QualifiedName): CreationNode => ({
   identity: functionIdentity(name.schema, name.name, []),
 })
 
-/** Restricts maintenance mode to trusted database login roles. */
+/**
+ * Режим обслуговування оминає перевірку приросту, тож вмикати його може лише
+ * довірений вхід у базу: налаштування сесії ставить будь-хто, тож без цієї
+ * умови запит через логін API провайдера обійшов би запобіжник.
+ */
 export function maintenanceSql(provider: DatabaseProvider): string {
   const logins = PROVIDER_LOGIN_ROLES[provider].map(sqlLiteral).join(", ")
   return `coalesce(current_setting(${sqlLiteral(RIGHTS_MAINTENANCE_SETTING)}, true) = 'on', false) AND session_user::text <> ALL (ARRAY[${logins}]::text[])`
@@ -753,7 +757,11 @@ function usersEventBody(
     .join("\n")
 }
 
-/** Builds platform guards for rights tables and their access dependencies. */
+/**
+ * Запобіжники стоять на таблицях прав і на джерелах, з яких права виводяться
+ * (членство, користувачі, виміри): зміна будь-якого з них змінює права так
+ * само, як запис у довідник.
+ */
 export function buildRightsGuardUnits(
   contracts: GuardContracts,
   physical: PhysicalSnapshot,
