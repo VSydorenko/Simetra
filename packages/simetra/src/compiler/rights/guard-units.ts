@@ -331,7 +331,10 @@ function pendingInsert(rows: readonly string[], maintenance: string): string {
   ].join("\n")
 }
 
-/** Ключ `actor`: перевірка на COMMIT прибирає знімок і в транзакції без інших ключів. */
+/**
+ * Ключ `actor`: на COMMIT перевіряє приріст власних прав актора й прибирає
+ * знімок і в транзакції без інших ключів.
+ */
 function actorPending(): string {
   return `SELECT 'actor'::text AS kind, ${sqlLiteral(ZERO_UUID)}::uuid AS key, ${sqlLiteral(ZERO_UUID)}::uuid AS scope_kind_id, NULL::uuid AS scope, 0 AS image WHERE EXISTS (SELECT 1 FROM ${ref(platform("rights_tx_actor"))} WHERE xid = txid_current())`
 }
@@ -501,16 +504,25 @@ function assignmentBeforeSet(
   ].join("\n")
 }
 
+/** Вид скоупу, носій рівня скоупу якого покриває контейнерний грант довідника. */
+function catalogStorageKind(catalog: RightsCatalogContract): string {
+  return catalog.level.level === "scope"
+    ? `${sqlLiteral(catalog.level.scopeKindId)}::uuid`
+    : "NULL::uuid"
+}
+
+/**
+ * Єдина форма покриття приросту знімком актора. `storageKind` — вираз над
+ * рядком приросту `g`: вид скоупу, носій рівня скоупу якого покриває
+ * контейнерний грант. Для довідника він сталий, а для всіх прав актора
+ * залежить від контейнера, тож передається виразом, а не довідником.
+ */
 function escalationSql(
   after: string,
   before: string,
-  catalog: RightsCatalogContract
+  storageKind: string
 ): string {
   const actor = ref(platform("rights_tx_actor"))
-  const storageKind =
-    catalog.level.level === "scope"
-      ? `${sqlLiteral(catalog.level.scopeKindId)}::uuid`
-      : "NULL::uuid"
   return [
     "IF NOT v_pending.maintenance AND EXISTS (",
     `  SELECT 1 FROM ((${after}) EXCEPT (${before})) g`,
@@ -552,14 +564,56 @@ function catalogCheck(
     `    IF EXISTS (SELECT 1 FROM ${ref(catalog.roles.table)} r WHERE ${roleId} = v_pending.key AND ${sameRole} AND r.${q(column(roles, "deletionMark"))})`,
     `       AND EXISTS (SELECT 1 FROM ${ref(catalog.assignments.table)} a WHERE a.${q(column(assignments, "customRole"))} = v_pending.key AND ${sameAssignment} AND NOT a.${q(column(assignments, "deletionMark"))})`,
     `    THEN ${refusal("role-in-use")} END IF;`,
-    `    ${escalationSql(roleGrantSet(catalog, physical, "after"), roleGrantSet(catalog, physical, "before"), catalog)}`,
+    `    ${escalationSql(roleGrantSet(catalog, physical, "after"), roleGrantSet(catalog, physical, "before"), catalogStorageKind(catalog))}`,
     "  ELSIF v_pending.kind = 'assignment' THEN",
-    `    ${escalationSql(assignmentGrantSet(catalog, physical, "after"), assignmentBeforeSet(catalog, physical), catalog)}`,
+    `    ${escalationSql(assignmentGrantSet(catalog, physical, "after"), assignmentBeforeSet(catalog, physical), catalogStorageKind(catalog))}`,
     "  ELSIF v_pending.kind = 'holders' THEN",
     ...(root === undefined ? [] : [`    IF ${root} THEN`]),
     `    IF NOT EXISTS (SELECT 1 FROM (${holderRows(catalog, contracts, physical)}) h WHERE h.scope = v_pending.scope) THEN ${refusal("last-full-access")} END IF;`,
     ...(root === undefined ? [] : ["    END IF;"]),
     "  END IF;",
+    "END IF;",
+  ].join("\n")
+}
+
+/** Колонки рядка прав — один порядок для обох боків `EXCEPT`: він позиційний. */
+const GRANT_COLUMNS =
+  "object, action, extent, dimension_id, level, level_id, scope, container"
+
+/**
+ * Вид скоупу контейнерного рядка `rights_mine()` — за контейнером: `held`
+ * зіставляє вид скоупу контейнера з видом скоупу призначення, тож це той
+ * самий вид, що сталий вид довідника в перевірці призначення. Контейнер без
+ * виду скоупу носієм рівня скоупу не покривається (`NULL`).
+ */
+function containerStorageKind(contracts: GuardContracts): string {
+  const arms = contracts.rights
+    .filter((c) => c.container === true && c.scopeKindId !== undefined)
+    .map(
+      (c) =>
+        `WHEN ${sqlLiteral(c.objectId)}::uuid THEN ${sqlLiteral(c.scopeKindId!)}::uuid`
+    )
+  return arms.length === 0
+    ? "NULL::uuid"
+    : `CASE g.level_id ${arms.join(" ")} ELSE NULL::uuid END`
+}
+
+/**
+ * Ключ `actor` (Р2c2-26): права актора на COMMIT мінус знімок — той самий ⊆,
+ * що для ролі й призначення. Права ростуть і без зміни ролі чи призначення:
+ * самоприйняття запрошеного рядка членства з призначеннями ключа
+ * `assignment` не ставить. Ключ стоїть, доки є інші, тож знімок ще не
+ * прибрано. `rights_mine()` рахує права за поточними claims: інший актор на
+ * COMMIT дав би чужі права, тож відмова, як у знімку (fail-closed).
+ */
+function actorCheck(contracts: GuardContracts): string {
+  const actor = ref(platform("rights_tx_actor"))
+  const after = `SELECT ${GRANT_COLUMNS} FROM ${ref(RIGHTS_FUNCTIONS.mine)}()`
+  const before = `SELECT ${GRANT_COLUMNS} FROM ${actor} WHERE xid = v_pending.xid AND NOT full_access AND level IS NOT NULL`
+  return [
+    "IF v_pending.kind = 'actor' THEN",
+    `  IF NOT v_pending.maintenance AND EXISTS (SELECT 1 FROM ${actor} WHERE xid = v_pending.xid AND actor IS DISTINCT FROM ${ref(platform("current_user_id"))}()) THEN ${refusal("rights-context")} END IF;`,
+    `  ${escalationSql(after, before, containerStorageKind(contracts))}`,
     "END IF;",
   ].join("\n")
 }
@@ -586,6 +640,7 @@ function checkBody(
     ...contracts.rightsCatalogs.map((catalog) =>
       catalogCheck(catalog, contracts, physical)
     ),
+    actorCheck(contracts),
     `  DELETE FROM ${ref(platform("rights_tx_pending"))} p WHERE p.xid = v_pending.xid AND p.kind = v_pending.kind AND p.scope_kind_id = v_pending.scope_kind_id AND p.key = v_pending.key;`,
     `  IF NOT EXISTS (SELECT 1 FROM ${ref(platform("rights_tx_pending"))} WHERE xid = v_pending.xid) THEN`,
     `    DELETE FROM ${ref(platform("rights_tx_actor"))} WHERE xid = v_pending.xid;`,
@@ -1002,6 +1057,7 @@ export function buildRightsGuardUnits(
   }
   const check = platform("rights_tx_check")
   addFunction(check, checkBody(contracts, physical), undefined, [
+    unitNode(RIGHTS_FUNCTIONS.mine),
     { type: "table", schema: PLATFORM_SCHEMA, name: "rights_tx_pending" },
     { type: "table", schema: PLATFORM_SCHEMA, name: "rights_tx_actor" },
     { type: "table", schema: PLATFORM_SCHEMA, name: "rights_journal" },

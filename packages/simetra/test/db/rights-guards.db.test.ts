@@ -114,6 +114,8 @@ async function seed(client: pg.Client): Promise<Seed> {
   await member("bAdmin@B", "B", "bAdmin")
   await member("cAdmin@C", "C", "cAdmin")
   await member("invite@A", "A", null)
+  // Запрошений рядок без призначень: його самоприйняття прав не додає.
+  await member("bareInvite@A", "A", null)
   await row("P1", "project", { org_id: ids.A })
   await row("P2", "project", { org_id: ids.A })
   await row("R1", "region", { org_id: ids.A })
@@ -286,10 +288,16 @@ describe("rights administration guards", () => {
       COMMAND_SETTING,
       JSON.stringify({ action, object, root: idOf(root!) }),
     ])
+  /**
+   * Кроки однієї команди. `asOwner` лишає власника таблиць: RLS його не
+   * обмежує, а тригери прав і ефектів судять оператор так само — для
+   * конфігурацій, яких політики не відкривають (захист у глибину).
+   */
   const inCommand = async (
     user: string,
     first: [string, string, string],
-    steps: (client: pg.Client) => Promise<void>
+    steps: (client: pg.Client) => Promise<void>,
+    asOwner = false
   ): Promise<Result> => {
     const client = tx.client()
     await client.query("SAVEPOINT guard_command")
@@ -299,7 +307,8 @@ describe("rights administration guards", () => {
         JSON.stringify(claims(user)),
       ])
       await context(client, first)
-      await client.query(`SET LOCAL ROLE ${PLATFORM_ROLES.command}`)
+      if (!asOwner)
+        await client.query(`SET LOCAL ROLE ${PLATFORM_ROLES.command}`)
       await steps(client)
       return { rows: [] }
     } catch (error) {
@@ -622,6 +631,51 @@ describe("rights administration guards", () => {
         "UPDATE public.org_member SET user_id = {memberEditor} WHERE id = {invite@A}"
       )
     ).toMatchObject({ code: "23505" })
+  })
+  // Р2c2-26: самоприйняття рядка з призначеннями дає актору права без ключа
+  // `assignment`; їх судить ключ `actor`. Політики не-учаснику скоупу
+  // `update` на членстві не відкривають (права скоупу — лише в учасника, а в
+  // учасника самоприйняття спиняє UNIQUE), тож кейс іде від власника таблиць.
+  it.each([
+    ["member-claim-assigned", "invite@A", "escalation"],
+    ["member-claim-unassigned", "bareInvite@A", undefined],
+  ] as const)("%s judges the actor's own increment", async (_, row, detail) => {
+    const result = await inCommand(
+      "outsider",
+      ["update", "org_member", row],
+      async (client) => {
+        const { rowCount } = await client.query(
+          sql(
+            `UPDATE public.org_member SET user_id = {outsider} WHERE id = {${row}}`
+          )
+        )
+        expect(rowCount).toBe(1)
+        await client.query("SET CONSTRAINTS ALL IMMEDIATE")
+      },
+      true
+    )
+    if (detail === undefined) success(result)
+    else refusal(result, detail)
+  })
+  // rights_mine() на COMMIT рахує права за поточними claims: інший актор
+  // дав би чужий приріст, тож відмова, як у знімку.
+  it("the actor check refuses claims changed before COMMIT", async () => {
+    const id = randomUUID()
+    refusal(
+      await inCommand(
+        "root",
+        admin("org_role_assignments", id),
+        async (client) => {
+          await client.query(sql(assignSql(id, TASK_VIEWER_ID)))
+          await client.query("SELECT set_config($1, $2, true)", [
+            SESSION_CLAIMS_SETTING,
+            JSON.stringify(claims("target")),
+          ])
+          await client.query("SET CONSTRAINTS ALL IMMEDIATE")
+        }
+      ),
+      "rights-context"
+    )
   })
   // Членство без призначень прав не несе — запобіжник його видалення не спиняє.
   it("deleting an unassigned member is allowed", async () => {

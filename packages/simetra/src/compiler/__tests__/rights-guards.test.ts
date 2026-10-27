@@ -12,6 +12,7 @@ import {
   MEMBER_REGION_ID,
   ORG_KIND_ID,
   PROJECT_FILE,
+  PROJECT_ID,
   adoptedMembership,
   compileRights,
   membersSource,
@@ -624,6 +625,32 @@ function excepts(hay: unknown): { larg: unknown; rarg: unknown }[] {
 const bodyTrees = (sql: string) =>
   bodyShape(sql).map((s) => s.expressions.map((e) => e.tree))
 
+/** Імена функцій, які кличе дерево. */
+const callsIn = (hay: unknown) =>
+  nodes(hay, "FuncCall").flatMap((call) =>
+    (call as { funcname: { String: { sval: string } }[] }).funcname.map(
+      (n) => n.String.sval
+    )
+  )
+
+/** Умови відмов `escalation`: оператор перед кожним `raise` з цим DETAIL. */
+const escalationConditions = (body: ReturnType<typeof bodyShape>) =>
+  body.flatMap((s, i) =>
+    s.type === "raise" &&
+    isDeepStrictEqual(detailOf(s), tree("SELECT 'escalation'"))
+      ? [body[i - 1]!.expressions[0]!.tree]
+      : []
+  )
+
+/**
+ * Усе покриття цілком, а не фрагмент: зникнення будь-якої умови гілки рівня
+ * (як-от `s.scope = g.scope` — права в іншому тенанті) змінює дерево.
+ */
+const covered = (storage: string) =>
+  expr(
+    `NOT EXISTS (SELECT 1 FROM simetra.rights_tx_actor s WHERE s.xid = v_pending.xid AND ((g.level = 'global' AND s.level = 'global') OR (g.level = 'scope' AND s.level = 'scope' AND s.level_id = g.level_id AND s.scope = g.scope) OR (g.level = 'container' AND ((s.level = 'scope' AND s.level_id = ${storage} AND s.scope = g.scope) OR (s.level = 'container' AND s.level_id = g.level_id AND s.container = g.container)))) AND (s.full_access OR (s.object = g.object AND s.action = g.action AND (s.extent = 'any' OR (s.extent = g.extent AND s.dimension_id IS NOT DISTINCT FROM g.dimension_id)))))`
+  )
+
 describe("rights guard transaction check", () => {
   it("takes the actor snapshot before the first command write of the transaction", () => {
     const tables = [...CATALOG_TABLES.map((t) => t.table), "org_member"]
@@ -843,20 +870,12 @@ describe("rights guard transaction check", () => {
 
   it("refuses an increment not covered by the actor's snapshot", () => {
     const body = bodyShape(unit(domain, CHECK).sql)
-    const escalations = body.flatMap((s, i) =>
-      s.type === "raise" &&
-      isDeepStrictEqual(detailOf(s), tree("SELECT 'escalation'"))
-        ? [body[i - 1]!.expressions[0]!.tree]
-        : []
-    )
-    // Роль і призначення на кожному з двох рівнів.
+    const all = escalationConditions(body)
+    // Гілка ключа `actor` — окремий тест; тут роль і призначення на кожному
+    // з двох рівнів.
+    const escalations = all.filter((c) => !callsIn(c).includes("rights_mine"))
+    expect(all).toHaveLength(5)
     expect(escalations).toHaveLength(4)
-    // Усе покриття цілком, а не фрагмент: зникнення будь-якої умови гілки
-    // рівня (як-от `s.scope = g.scope` — права в іншому тенанті) змінює дерево.
-    const covered = (storage: string) =>
-      expr(
-        `NOT EXISTS (SELECT 1 FROM simetra.rights_tx_actor s WHERE s.xid = v_pending.xid AND ((g.level = 'global' AND s.level = 'global') OR (g.level = 'scope' AND s.level = 'scope' AND s.level_id = g.level_id AND s.scope = g.scope) OR (g.level = 'container' AND ((s.level = 'scope' AND s.level_id = ${storage} AND s.scope = g.scope) OR (s.level = 'container' AND s.level_id = g.level_id AND s.container = g.container)))) AND (s.full_access OR (s.object = g.object AND s.action = g.action AND (s.extent = 'any' OR (s.extent = g.extent AND s.dimension_id IS NOT DISTINCT FROM g.dimension_id)))))`
-      )
     for (const condition of escalations) {
       const and = (
         condition as {
@@ -879,9 +898,67 @@ describe("rights guard transaction check", () => {
       escalations.filter((c) => contains(c, oracle)).length
     expect(holding(covered(ORG))).toBe(2)
     expect(holding(covered("NULL::uuid"))).toBe(2)
-    expect(funcNames(body)).not.toContain("rights_mine")
     // Приріст ролі — тим самим замиканням, що rights_mine (rights_role_grants).
     expect(funcNames(body)).toContain("rights_role_grants")
+  })
+
+  // Р2c2-26: права актора ростуть і без ключа ролі чи призначення
+  // (самоприйняття запрошеного рядка з призначеннями), тож ключ `actor`
+  // судить увесь приріст rights_mine() тим самим покриттям знімком.
+  it("checks the actor's own increment on the actor key against the snapshot", () => {
+    const body = bodyShape(unit(domain, CHECK).sql)
+    const branch = body.findIndex(
+      (s) =>
+        s.type === "if" &&
+        s.depth === 1 &&
+        isDeepStrictEqual(
+          s.expressions[0]!.tree,
+          tree("SELECT v_pending.kind = 'actor'")
+        )
+    )
+    expect(branch).toBeGreaterThan(0)
+    const inside = body.slice(branch + 1).findIndex((s) => s.depth <= 1)
+    const own = body.slice(
+      branch + 1,
+      inside === -1 ? undefined : branch + 1 + inside
+    )
+    // Інший актор на COMMIT — відмова до порівняння: rights_mine() дав би
+    // права за чужими claims.
+    expect(own[0]!.expressions[0]!.tree).toEqual(
+      tree(
+        "SELECT NOT v_pending.maintenance AND EXISTS (SELECT 1 FROM simetra.rights_tx_actor WHERE xid = v_pending.xid AND actor IS DISTINCT FROM simetra.current_user_id())"
+      )
+    )
+    expect(own[1]!.type).toBe("raise")
+    expect(detailOf(own[1]!)).toEqual(tree("SELECT 'rights-context'"))
+    const [condition, ...rest] = escalationConditions(own)
+    expect(rest).toEqual([])
+    const [except, ...others] = excepts(condition)
+    expect(others).toEqual([])
+    const columns =
+      "object, action, extent, dimension_id, level, level_id, scope, container"
+    // «Після» — поточні права, «до» — лише рядки прав знімка цієї транзакції.
+    expect(except!.larg).toEqual(
+      select(`SELECT ${columns} FROM simetra.rights_mine()`)
+    )
+    expect(except!.rarg).toEqual(
+      select(
+        `SELECT ${columns} FROM simetra.rights_tx_actor WHERE xid = v_pending.xid AND NOT full_access AND level IS NOT NULL`
+      )
+    )
+    // Покриття — та сама форма, що в довідників; вид скоупу контейнера —
+    // за контейнером, і читає воно знімок, а не rights_mine().
+    expect(
+      contains(
+        condition,
+        covered(
+          `CASE g.level_id WHEN '${PROJECT_ID}'::uuid THEN ${ORG} ELSE NULL::uuid END`
+        )
+      )
+    ).toBe(true)
+    expect(callsIn(condition).filter((name) => name === "rights_mine")).toEqual(
+      ["rights_mine"]
+    )
   })
 
   it("compares an assignment with its earlier image only for the same subject, container and scope", () => {
