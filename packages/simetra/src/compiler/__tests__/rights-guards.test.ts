@@ -1138,3 +1138,114 @@ describe("rights guard last full-access holder", () => {
     })
   })
 })
+
+/** Умова `IF`, за якою стоїть відмова `rights-context`, — кожна в тілі. */
+function contextRefusals(sql: string): unknown[] {
+  const body = bodyShape(sql)
+  return body.flatMap((s, i) =>
+    s.type === "raise" &&
+    isDeepStrictEqual(detailOf(s), tree("SELECT 'rights-context'"))
+      ? [enclosing(body, i).expressions[0]!.tree]
+      : []
+  )
+}
+
+const membersFn = (operation: Operation) =>
+  fnOf(
+    domain,
+    "org_member",
+    `simetra_rights_members_${operation.toLowerCase()}`
+  )
+
+const usersFn = (operation: "INSERT" | "UPDATE") =>
+  fnOf(domain, "users", `simetra_rights_users_${operation.toLowerCase()}`)
+
+describe("rights guards of membership and users outside commands", () => {
+  it("refuses reinserting an id that rights rows still reference, in maintenance mode too", () => {
+    // Без умови режиму: FK `NO ACTION` перевіряється в кінці оператора, і
+    // `DELETE … RETURNING` + `INSERT` змінив би носія без ключа `holders`.
+    expect(contextRefusals(membersFn("INSERT").sql)).toEqual([
+      tree(
+        "SELECT EXISTS (SELECT 1 FROM new_rows n WHERE EXISTS (SELECT 1 FROM public.org_role_assignments a WHERE a.subject = n.id AND a.org_id = n.org_id))"
+      ),
+    ])
+    expect(contextRefusals(usersFn("INSERT").sql)).toEqual([
+      tree(
+        "SELECT EXISTS (SELECT 1 FROM new_rows n WHERE EXISTS (SELECT 1 FROM public.org_member m WHERE m.user_id = n.id) OR EXISTS (SELECT 1 FROM public.global_role_assignments a WHERE a.subject = n.id))"
+      ),
+    ])
+    expect(
+      triggerOf(domain, "users", "simetra_rights_users_insert").tree
+    ).toEqual(
+      tree(
+        "CREATE TRIGGER users_simetra_rights_users_insert AFTER INSERT ON public.users REFERENCING NEW TABLE AS new_rows FOR EACH STATEMENT EXECUTE FUNCTION public.users_simetra_rights_users_insert()"
+      )
+    )
+  })
+
+  it("refuses replacing the id of a membership or users row, without a maintenance branch", () => {
+    for (const table of ["org_member", "users"]) {
+      // Обмін id двох рядків тригер оператора не бачить — потрібен рядковий.
+      expect(triggerOf(domain, table, "simetra_rights_id").tree, table).toEqual(
+        tree(
+          `CREATE TRIGGER ${table}_simetra_rights_id BEFORE UPDATE OF id ON public.${table} FOR EACH ROW WHEN (OLD.id IS DISTINCT FROM NEW.id) EXECUTE FUNCTION public.${table}_simetra_rights_id()`
+        )
+      )
+      expect(
+        bodyShape(fnOf(domain, table, "simetra_rights_id").sql),
+        table
+      ).toEqual(
+        bodyShape(
+          expectedFunction(
+            `public.${table}_simetra_rights_id`,
+            `BEGIN\n${refusal("rights-context", table)}\nRETURN NULL;\nEND`
+          )
+        )
+      )
+    }
+  })
+
+  it("refuses changing a membership user outside a command, except self-acceptance", () => {
+    // Порівняння за ключем рядка; і заповнений, і порожній користувач
+    // незмінні, крім заповнення порожнього рядка собою, поки ще не учасник.
+    expect(contextRefusals(membersFn("UPDATE").sql)).toEqual([
+      tree(
+        "SELECT v_action IS NULL AND NOT v_maintenance AND EXISTS (SELECT 1 FROM old_rows o JOIN new_rows n ON n.id = o.id WHERE o.user_id IS DISTINCT FROM n.user_id AND NOT (o.user_id IS NULL AND n.user_id = simetra.current_user_id() AND NOT EXISTS (SELECT 1 FROM public.org_member other WHERE other.org_id = n.org_id AND other.user_id = n.user_id AND other.id <> n.id)))"
+      ),
+    ])
+    expect(contextRefusals(membersFn("DELETE").sql)).toEqual([])
+  })
+
+  it("refuses reactivating a user or changing its kind outside a command, allowing invalidation", () => {
+    expect(contextRefusals(usersFn("UPDATE").sql)).toEqual([
+      tree(
+        "SELECT v_action IS NULL AND NOT v_maintenance AND EXISTS (SELECT 1 FROM old_rows o JOIN new_rows n ON n.id = o.id WHERE o.user_kind IS DISTINCT FROM n.user_kind OR (o.invalid IS DISTINCT FROM n.invalid AND NOT (o.invalid = false AND n.invalid = true)))"
+      ),
+    ])
+  })
+
+  it("bumps the global version once per users statement that really changes validity or kind", () => {
+    const update = usersFn("UPDATE")
+    const body = bodyShape(update.sql)
+    const performs = body.flatMap((s, i) =>
+      s.type === "perform" && funcNames([s]).includes("rights_bump") ? [i] : []
+    )
+    expect(performs.map((i) => body[i]!.expressions[0]!.tree)).toEqual([
+      tree(`SELECT simetra.rights_bump(${ZERO}, ${ZERO})`),
+    ])
+    // Лише за справжньої зміни хоч одного рядка, і в будь-якому режимі.
+    expect(enclosing(body, performs[0]!).expressions[0]!.tree).toEqual(
+      tree(
+        "SELECT EXISTS (SELECT 1 FROM old_rows o JOIN new_rows n ON n.id = o.id WHERE o.invalid IS DISTINCT FROM n.invalid OR o.user_kind IS DISTINCT FROM n.user_kind)"
+      )
+    )
+    expect(update.requires).toContainEqual({
+      type: "unit",
+      identity: "function:simetra.rights_bump(uuid,uuid)",
+    })
+    // Новий користувач прав не має — вставка версії не підвищує.
+    expect(funcNames(bodyShape(usersFn("INSERT").sql))).not.toContain(
+      "rights_bump"
+    )
+  })
+})

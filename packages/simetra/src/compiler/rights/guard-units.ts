@@ -615,16 +615,53 @@ function bumpRows(
   return `PERFORM ${ref(RIGHTS_FUNCTIONS.bump)}(${sqlLiteral(scopeKindId)}::uuid, s.scope) FROM (SELECT DISTINCT ${value} AS scope FROM (${rows}) r) s;`
 }
 
+/**
+ * Тригер оператора довідника членства. Повторна вставка під id, на який уже
+ * посилаються призначення, — відмова завжди, і в режимі обслуговування: FK
+ * `NO ACTION` перевіряється в кінці оператора, тож `DELETE … RETURNING` +
+ * `INSERT` переписав би власника призначень без ключа `holders` (Р2c2-10a).
+ * Зміна користувача без контексту команди — та сама незмінність, що для
+ * команд (Р2c2-10b): боргова функція власника йде повз RLS; дозволено лише
+ * самоприйняття порожнього рядка й режим обслуговування. Порівняння — за
+ * ключем рядка: зміну самого ключа тримає row-level тригер `_id`.
+ */
 function memberEventBody(
   member: Contracts["membership"][number],
+  contracts: GuardContracts,
+  physical: PhysicalSnapshot,
   operation: "INSERT" | "UPDATE" | "DELETE",
   provider: DatabaseProvider
 ): string {
   const key = q(member.keyColumn)
   const scope = q(member.scopeColumn)
   const user = q(member.userColumn)
+  const assignments = contracts.rightsCatalogs
+    .filter(
+      (catalog) =>
+        catalog.level.level === "scope" &&
+        catalog.level.scopeKindId === member.scopeKindId
+    )
+    .map((catalog) => {
+      const table = catalog.assignments.table
+      const actual = tableOf(physical, table)
+      return `EXISTS (SELECT 1 FROM ${ref(table)} a WHERE a.${q(column(actual, "subject"))} = n.${key} AND a.${q(scopeColumn(actual)!)} = n.${scope})`
+    })
+  const repeated =
+    operation === "INSERT" && assignments.length > 0
+      ? `IF EXISTS (SELECT 1 FROM new_rows n WHERE ${assignments.join(" OR ")}) THEN ${refusal("rights-context")} END IF;`
+      : ""
+  const changed =
+    operation === "UPDATE"
+      ? [
+          `IF v_action IS NULL AND NOT v_maintenance AND EXISTS (SELECT 1 FROM old_rows o JOIN new_rows n ON n.${key} = o.${key}`,
+          `  WHERE o.${user} IS DISTINCT FROM n.${user} AND NOT (o.${user} IS NULL AND n.${user} = ${ref(platform("current_user_id"))}()`,
+          `    AND NOT EXISTS (SELECT 1 FROM ${ref(member.table)} other WHERE other.${scope} = n.${scope} AND other.${user} = n.${user} AND other.${key} <> n.${key})))`,
+          `THEN ${refusal("rights-context")} END IF;`,
+        ].join("\n")
+      : ""
   // Непорожній користувач змінився — носій міг зникнути; ключ ставиться в
-  // будь-якому режимі (Р2c2-7).
+  // будь-якому режимі: поза командою зміну вже відхилено вище, тож на
+  // практиці це режим обслуговування (Р2c2-7).
   const holder =
     operation === "UPDATE"
       ? [
@@ -633,16 +670,84 @@ function memberEventBody(
         ].join("\n")
       : undefined
   return [
-    "DECLARE v_maintenance boolean;",
+    "DECLARE v_action text; v_maintenance boolean;",
     "BEGIN",
     `  v_maintenance := (${maintenanceSql(provider)});`,
+    `  SELECT c.action INTO v_action FROM ${ref(COMMAND_FUNCTIONS.current)}() c;`,
+    repeated,
+    changed,
     `  ${bumpRows(operation, member.scopeKindId, member.scopeColumn)}`,
     pendingInsert(
       [...(holder === undefined ? [] : [holder]), actorPending()],
       "v_maintenance"
     ),
     "  RETURN NULL; END",
-  ].join("\n")
+  ]
+    .filter(Boolean)
+    .join("\n")
+}
+
+/**
+ * Тригер оператора «Користувачів» (Р2c2-10a, Р2c2-10b): повторна вставка
+ * під id з членством чи глобальним призначенням — відмова завжди; без
+ * контексту команди дозволено лише `invalid` `false → true` (платформне
+ * видалення облікового запису) і режим обслуговування.
+ */
+function usersEventBody(
+  users: NonNullable<Contracts["users"]>,
+  contracts: GuardContracts,
+  physical: PhysicalSnapshot,
+  operation: "INSERT" | "UPDATE",
+  provider: DatabaseProvider
+): string {
+  const key = q(users.keyColumn)
+  const invalid = q(users.invalidColumn)
+  const table = tableOf(physical, users.table)
+  const kind = q(column(table, "userKind"))
+  const repeated =
+    operation === "INSERT"
+      ? [
+          ...contracts.membership.map(
+            (member) =>
+              `EXISTS (SELECT 1 FROM ${ref(member.table)} m WHERE m.${q(member.userColumn)} = n.${key})`
+          ),
+          ...contracts.rightsCatalogs
+            .filter((catalog) => catalog.level.level === "global")
+            .map((catalog) => {
+              const assignment = tableOf(physical, catalog.assignments.table)
+              return `EXISTS (SELECT 1 FROM ${ref(catalog.assignments.table)} a WHERE a.${q(column(assignment, "subject"))} = n.${key})`
+            }),
+        ]
+      : []
+  const update =
+    operation === "UPDATE"
+      ? [
+          `IF v_action IS NULL AND NOT v_maintenance AND EXISTS (SELECT 1 FROM old_rows o JOIN new_rows n ON n.${key} = o.${key}`,
+          ` WHERE o.${kind} IS DISTINCT FROM n.${kind} OR (o.${invalid} IS DISTINCT FROM n.${invalid} AND NOT (o.${invalid} = false AND n.${invalid} = true)))`,
+          `THEN ${refusal("rights-context")} END IF;`,
+        ].join("\n")
+      : ""
+  // Недійсність і вид користувача змінюють дієвих носіїв глобально, тож
+  // кеш прав застаріває: версія підвищується раз на оператор і лише за
+  // справжньої зміни (Р2c2-21). Нова вставка прав не дає — версії не чіпає.
+  const bump =
+    operation === "UPDATE"
+      ? `IF EXISTS (SELECT 1 FROM old_rows o JOIN new_rows n ON n.${key} = o.${key} WHERE o.${invalid} IS DISTINCT FROM n.${invalid} OR o.${kind} IS DISTINCT FROM n.${kind}) THEN PERFORM ${ref(RIGHTS_FUNCTIONS.bump)}(${sqlLiteral(ZERO_UUID)}::uuid, ${sqlLiteral(ZERO_UUID)}::uuid); END IF;`
+      : ""
+  return [
+    "DECLARE v_action text; v_maintenance boolean;",
+    "BEGIN",
+    `  v_maintenance := (${maintenanceSql(provider)});`,
+    `  SELECT c.action INTO v_action FROM ${ref(COMMAND_FUNCTIONS.current)}() c;`,
+    repeated.length === 0
+      ? ""
+      : `  IF EXISTS (SELECT 1 FROM new_rows n WHERE ${repeated.join(" OR ")}) THEN ${refusal("rights-context")} END IF;`,
+    update,
+    bump,
+    "  RETURN NULL; END",
+  ]
+    .filter(Boolean)
+    .join("\n")
 }
 
 /** Builds platform guards for rights tables and their access dependencies. */
@@ -689,6 +794,18 @@ export function buildRightsGuardUnits(
     addFunction(fn, truncateBody(table), table.origin.objectId)
     add(
       `CREATE TRIGGER ${q(triggerName(name, labels.truncate))} BEFORE TRUNCATE ON ${ref(name)} FOR EACH STATEMENT EXECUTE FUNCTION ${ref(fn)}();`,
+      table.origin.objectId
+    )
+  }
+  // Обмін id двох рядків одним `UPDATE` тригер оператора не бачить (множини
+  // ключів старих і нових рядків однакові), а FK `NO ACTION` його пропускає;
+  // тому окремий row-level тригер, без винятку режиму обслуговування (Р2c2-10b).
+  const addIdGuard = (table: PhysicalTable, key: string) => {
+    const name = tableName(table)
+    const fn = functionName(name, labels.id)
+    addFunction(fn, truncateBody(table), table.origin.objectId)
+    add(
+      `CREATE TRIGGER ${q(triggerName(name, labels.id))} BEFORE UPDATE OF ${q(key)} ON ${ref(name)} FOR EACH ROW WHEN (OLD.${q(key)} IS DISTINCT FROM NEW.${q(key)}) EXECUTE FUNCTION ${ref(fn)}();`,
       table.origin.objectId
     )
   }
@@ -757,21 +874,62 @@ export function buildRightsGuardUnits(
           : operation === "DELETE"
             ? "REFERENCING OLD TABLE AS old_rows"
             : "REFERENCING OLD TABLE AS old_rows NEW TABLE AS new_rows"
-      addFunction(fn, memberEventBody(member, operation, provider), owner, [
-        {
-          type: "unit",
-          identity: `function:${ref(RIGHTS_FUNCTIONS.bump)}(uuid,uuid)`,
-        },
-      ])
+      addFunction(
+        fn,
+        memberEventBody(member, contracts, physical, operation, provider),
+        owner,
+        [
+          unitNode(COMMAND_FUNCTIONS.current),
+          {
+            type: "unit",
+            identity: `function:${ref(RIGHTS_FUNCTIONS.bump)}(uuid,uuid)`,
+          },
+        ]
+      )
       add(
         `CREATE TRIGGER ${q(triggerName(name, label))} AFTER ${operation} ON ${ref(name)} ${transition} FOR EACH STATEMENT EXECUTE FUNCTION ${ref(fn)}();`,
         owner
       )
     }
+    addIdGuard(table, member.keyColumn)
     addTruncate(table)
   }
-  if (contracts.users !== undefined)
-    addTruncate(tableOf(physical, contracts.users.table))
+  if (contracts.users !== undefined) {
+    const users = contracts.users
+    const table = tableOf(physical, users.table)
+    const name = tableName(table)
+    const owner = table.origin.objectId
+    for (const operation of ["INSERT", "UPDATE"] as const) {
+      const label = `simetra_rights_users_${operation.toLowerCase()}`
+      const fn = functionName(name, label)
+      const transition =
+        operation === "INSERT"
+          ? "REFERENCING NEW TABLE AS new_rows"
+          : "REFERENCING OLD TABLE AS old_rows NEW TABLE AS new_rows"
+      addFunction(
+        fn,
+        usersEventBody(users, contracts, physical, operation, provider),
+        owner,
+        [
+          unitNode(COMMAND_FUNCTIONS.current),
+          ...(operation === "UPDATE"
+            ? [
+                {
+                  type: "unit" as const,
+                  identity: `function:${ref(RIGHTS_FUNCTIONS.bump)}(uuid,uuid)`,
+                },
+              ]
+            : []),
+        ]
+      )
+      add(
+        `CREATE TRIGGER ${q(triggerName(name, label))} AFTER ${operation} ON ${ref(name)} ${transition} FOR EACH STATEMENT EXECUTE FUNCTION ${ref(fn)}();`,
+        owner
+      )
+    }
+    addIdGuard(table, users.keyColumn)
+    addTruncate(table)
+  }
   const relations = new Set<string>()
   for (const dimension of contracts.accessDimensions) {
     if (!("relation" in dimension.values)) continue
