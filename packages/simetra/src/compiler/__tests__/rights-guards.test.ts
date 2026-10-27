@@ -1208,9 +1208,11 @@ describe("rights guards of membership and users outside commands", () => {
   it("refuses changing a membership user outside a command, except self-acceptance", () => {
     // Порівняння за ключем рядка; і заповнений, і порожній користувач
     // незмінні, крім заповнення порожнього рядка собою, поки ще не учасник.
+    // Самоприйняття — `IS NOT DISTINCT FROM`: власник без claims має
+    // `current_user_id()` NULL, і `=` пропустив би заповнення будь-ким.
     expect(contextRefusals(membersFn("UPDATE").sql)).toEqual([
       tree(
-        "SELECT v_action IS NULL AND NOT v_maintenance AND EXISTS (SELECT 1 FROM old_rows o JOIN new_rows n ON n.id = o.id WHERE o.user_id IS DISTINCT FROM n.user_id AND NOT (o.user_id IS NULL AND n.user_id = simetra.current_user_id() AND NOT EXISTS (SELECT 1 FROM public.org_member other WHERE other.org_id = n.org_id AND other.user_id = n.user_id AND other.id <> n.id)))"
+        "SELECT v_action IS NULL AND NOT v_maintenance AND EXISTS (SELECT 1 FROM old_rows o JOIN new_rows n ON n.id = o.id WHERE o.user_id IS DISTINCT FROM n.user_id AND NOT (o.user_id IS NULL AND n.user_id IS NOT DISTINCT FROM simetra.current_user_id() AND NOT EXISTS (SELECT 1 FROM public.org_member other WHERE other.org_id = n.org_id AND other.user_id = n.user_id AND other.id <> n.id)))"
       ),
     ])
     expect(contextRefusals(membersFn("DELETE").sql)).toEqual([])

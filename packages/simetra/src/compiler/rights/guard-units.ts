@@ -650,11 +650,14 @@ function memberEventBody(
     operation === "INSERT" && assignments.length > 0
       ? `IF EXISTS (SELECT 1 FROM new_rows n WHERE ${assignments.join(" OR ")}) THEN ${refusal("rights-context")} END IF;`
       : ""
+  // Самоприйняття порівнюється NULL-безпечно: поза командою власник часто
+  // без claims (`current_user_id()` — NULL), і `=` дав би NULL замість
+  // «не самоприйняття» — запрошений рядок заповнювався б ким завгодно.
   const changed =
     operation === "UPDATE"
       ? [
           `IF v_action IS NULL AND NOT v_maintenance AND EXISTS (SELECT 1 FROM old_rows o JOIN new_rows n ON n.${key} = o.${key}`,
-          `  WHERE o.${user} IS DISTINCT FROM n.${user} AND NOT (o.${user} IS NULL AND n.${user} = ${ref(platform("current_user_id"))}()`,
+          `  WHERE o.${user} IS DISTINCT FROM n.${user} AND NOT (o.${user} IS NULL AND n.${user} IS NOT DISTINCT FROM ${ref(platform("current_user_id"))}()`,
           `    AND NOT EXISTS (SELECT 1 FROM ${ref(member.table)} other WHERE other.${scope} = n.${scope} AND other.${user} = n.${user} AND other.${key} <> n.${key})))`,
           `THEN ${refusal("rights-context")} END IF;`,
         ].join("\n")
