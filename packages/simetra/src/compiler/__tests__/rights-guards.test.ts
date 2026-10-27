@@ -2,19 +2,23 @@ import { isDeepStrictEqual } from "node:util"
 import { beforeAll, describe, expect, it } from "vitest"
 import type { CompiledModel } from "simetra/compiler"
 import { PROVIDER_LOGIN_ROLES } from "simetra/model"
-import { maintenanceSql } from "../rights/guard-units"
+import { buildRightsGuardUnits, maintenanceSql } from "../rights/guard-units"
 import { ZERO_UUID } from "../rights/functions"
 import { hasEmptySearchPath, routineLanguage } from "../sql/closed-forms"
+import { loadSqlParser } from "../sql/parse"
 import type { SqlUnit } from "../sql/units"
 import {
   MEMBER_REGION_FILE,
   MEMBER_REGION_ID,
   ORG_KIND_ID,
   PROJECT_FILE,
+  adoptedMembership,
   compileRights,
+  membersSource,
   policyDomain,
   regionDimension,
   singleTenantRights,
+  withRoles,
   writeRoles,
 } from "./fixtures/rights"
 import {
@@ -903,9 +907,234 @@ describe("rights guard transaction check", () => {
     const kinds = body.filter(
       (s) =>
         s.type === "if" &&
-        s.expressions.length === 2 &&
+        s.expressions.length >= 2 &&
         contains(s.expressions[0]!.tree, expr("v_pending.kind = 'role'"))
     )
     expect(kinds).toHaveLength(2)
+  })
+})
+
+/** Вибірка як вузол `SelectStmt` — для порівняння з гілкою `UNION ALL`. */
+const select = (sql: string) => (tree(sql) as { SelectStmt: Select }).SelectStmt
+
+/** Гілки ключа `holders` вставки черги. */
+const holdersArms = (insert: QueueInsert["InsertStmt"]) =>
+  arms(
+    insert.selectStmt.SelectStmt.fromClause[0]!.RangeSubselect.subquery
+      .SelectStmt
+  ).filter((arm) =>
+    isDeepStrictEqual(arm.targetList[0]!.ResTarget.val, expr("'holders'::text"))
+  )
+
+/** Найближчий попередній оператор на рівень вище — обгортка `IF` оператора `i`. */
+function enclosing(body: ReturnType<typeof bodyShape>, i: number) {
+  for (let j = i - 1; j >= 0; j--)
+    if (body[j]!.depth === body[i]!.depth - 1) return body[j]!
+  throw new Error(`no enclosing statement for ${i}`)
+}
+
+/**
+ * Перевірки останнього носія: умова підрахунку й обгортка, що її тримає, —
+ * у порядку рівнів тіла перевірки.
+ */
+function holderChecks(sql: string) {
+  const body = bodyShape(sql)
+  return body.flatMap((s, i) => {
+    if (
+      s.type !== "raise" ||
+      !isDeepStrictEqual(detailOf(s), tree("SELECT 'last-full-access'"))
+    )
+      return []
+    const count = enclosing(body, i)
+    return [
+      {
+        count: count.expressions[0]!.tree,
+        wrapper: enclosing(body, body.indexOf(count)).expressions.map(
+          (e) => e.tree
+        ),
+      },
+    ]
+  })
+}
+
+/** Підрахунок дієвих носіїв рівня: `join` — шлях від призначення до користувача. */
+const holderCount = (
+  assignments: string,
+  scope: string,
+  actor: string,
+  join: string,
+  storage: string
+) =>
+  tree(
+    `SELECT NOT EXISTS (SELECT 1 FROM (SELECT h.scope, h.actor FROM (SELECT ${scope} AS scope, ${actor} AS actor, a.archetype AS archetype FROM public.${assignments} a ${join} WHERE a.custom_role IS NULL AND NOT a.deletion_mark AND ${actor} IS NOT NULL) h JOIN simetra.rights_full_access_roles() f ON f.role_id = h.archetype AND f.storage_id IS NOT DISTINCT FROM ${storage}) h WHERE h.scope = v_pending.scope)`
+  )
+
+const VALID_USER = "JOIN public.users u ON u.id = m.user_id AND NOT u.invalid"
+const GLOBAL_COUNT = () =>
+  holderCount(
+    "global_role_assignments",
+    ZERO,
+    "a.subject",
+    "JOIN public.users u ON u.id = a.subject AND NOT u.invalid",
+    "NULL::uuid"
+  )
+const ORG_COUNT = () =>
+  holderCount(
+    "org_role_assignments",
+    "a.org_id",
+    "m.user_id",
+    `JOIN public.org_member m ON m.id = a.subject AND m.org_id = a.org_id ${VALID_USER}`,
+    ORG
+  )
+const ROOT = () =>
+  tree(
+    "SELECT EXISTS (SELECT 1 FROM public.organization root WHERE root.id = v_pending.scope)"
+  )
+
+/** Гілка розвилки за видом ключа — обгортка перевірки без кореня. */
+const HOLDERS_KIND = () => tree("SELECT v_pending.kind = 'holders'")
+
+/** Генератор над власним знімком: варіанти, яких не дає жоден фікстурний проєкт. */
+async function guardsOver(
+  model: CompiledModel,
+  contracts: Partial<CompiledModel["contracts"]>,
+  physical: CompiledModel["physical"] = model.physical
+) {
+  return buildRightsGuardUnits(
+    { ...model.contracts, ...contracts },
+    physical,
+    [],
+    "supabase",
+    unit(model, CHECK).module,
+    await loadSqlParser()
+  )
+}
+
+const checkOf = (units: readonly SqlUnit[]) =>
+  units.find((u) => u.identity === CHECK)!.sql
+
+describe("rights guard last full-access holder", () => {
+  it.each([
+    { table: "org_role_assignments", level: ORG, storage: ORG },
+    { table: "global_role_assignments", level: ZERO, storage: "NULL::uuid" },
+  ])(
+    "queues the scope of a changed direct fullAccess assignment from its old image ($table)",
+    ({ table, level, storage }) => {
+      const scope = table.startsWith("org_") ? "r.org_id" : ZERO
+      const [insert, update, remove] = queueInserts(
+        fnOf(domain, table, "simetra_rights").sql
+      )
+      // Ключ — сам скоуп старого образу: рядок, перенесений з A в B,
+      // ставить ключ A окремо від ключів інших скоупів (С3), а новий образ
+      // носія не прибирає — ключа від нього немає.
+      const oracle = select(
+        `SELECT 'holders'::text, ${scope}, ${level}, ${scope}, 1 FROM old_rows r WHERE r.custom_role IS NULL AND EXISTS (SELECT 1 FROM simetra.rights_full_access_roles() f WHERE f.role_id = r.archetype AND f.storage_id IS NOT DISTINCT FROM ${storage})`
+      )
+      expect(holdersArms(insert!)).toEqual([])
+      expect(holdersArms(update!)).toEqual([oracle])
+      expect(holdersArms(remove!)).toEqual([oracle])
+    }
+  )
+
+  it("queues the old scope when a membership row loses its filled user", () => {
+    const inserts = OPERATIONS.map(
+      (o) =>
+        queueInserts(
+          fnOf(
+            domain,
+            "org_member",
+            `simetra_rights_members_${o.toLowerCase()}`
+          ).sql
+        )[0]!
+    )
+    expect(inserts.map((insert) => holdersArms(insert))).toEqual([
+      [],
+      [
+        select(
+          `SELECT 'holders'::text AS kind, o.org_id AS key, ${ORG} AS scope_kind_id, o.org_id AS scope, 1 AS image FROM old_rows o JOIN new_rows n ON n.id = o.id WHERE o.user_id IS NOT NULL AND o.user_id IS DISTINCT FROM n.user_id`
+        ),
+      ],
+      // Видалення членства з призначеннями відхиляє FK `subject`.
+      [],
+    ])
+  })
+
+  it("counts effective holders on COMMIT, skipping a scope whose root is gone", () => {
+    expect(holderChecks(unit(domain, CHECK).sql)).toEqual([
+      // Глобальний рівень кореня не має — підрахунок безумовний.
+      {
+        count: GLOBAL_COUNT(),
+        wrapper: expect.arrayContaining([HOLDERS_KIND()]),
+      },
+      { count: ORG_COUNT(), wrapper: [ROOT()] },
+    ])
+    // Підрахунок — лише на COMMIT: оператор бачив би проміжний стан.
+    for (const fn of guards(domain).filter((u) => u.identity !== CHECK))
+      expect(fn.sql, fn.identity).not.toContain("last-full-access")
+  })
+
+  it("counts adopted membership through the source columns", async () => {
+    const result = await compileRights(
+      withRoles(adoptedMembership(), {
+        [PROJECT_FILE]: { membershipSources: [membersSource()] },
+      })
+    )
+    // Прийняте джерело членства пишеться повз команди — це попередження.
+    expectClean(result, { allow: ["rights.adopted-source-writes"] })
+    const [, org] = holderChecks(unit(result.model!, CHECK).sql)
+    expect(org!.count).toEqual(
+      holderCount(
+        "org_role_assignments",
+        "a.org_id",
+        "m.user_id",
+        `JOIN public.membership m ON m.id = a.subject AND m.org_id = a.org_id AND m.is_active IS TRUE ${VALID_USER}`,
+        ORG
+      )
+    )
+    // Без «Користувачів» умови дійсності немає: користувача дає джерело.
+    const [global, orgWithoutUsers] = holderChecks(
+      checkOf(await guardsOver(result.model!, { users: undefined }))
+    )
+    expect(global!.count).toEqual(
+      holderCount(
+        "global_role_assignments",
+        ZERO,
+        "a.subject",
+        "",
+        "NULL::uuid"
+      )
+    )
+    expect(orgWithoutUsers!.count).toEqual(
+      holderCount(
+        "org_role_assignments",
+        "a.org_id",
+        "m.user_id",
+        "JOIN public.membership m ON m.id = a.subject AND m.org_id = a.org_id AND m.is_active IS TRUE",
+        ORG
+      )
+    )
+  })
+
+  it("has no root exception when the scope column has no foreign key to the root", async () => {
+    const physical = {
+      ...domain.physical,
+      tables: domain.physical.tables.map((table) =>
+        table.name === "org_role_assignments"
+          ? {
+              ...table,
+              foreignKeys: table.foreignKeys.filter(
+                (fk) => fk.references.table !== "organization"
+              ),
+            }
+          : table
+      ),
+    }
+    const [, org] = holderChecks(
+      checkOf(await guardsOver(domain, {}, physical))
+    )
+    expect(org).toEqual({
+      count: ORG_COUNT(),
+      wrapper: expect.arrayContaining([HOLDERS_KIND()]),
+    })
   })
 })

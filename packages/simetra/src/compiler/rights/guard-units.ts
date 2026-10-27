@@ -20,7 +20,7 @@ import type { CreationNode } from "../sql/dependencies"
 import { executeGrants } from "../sql/execute-grants"
 import type { SqlParser } from "../sql/parse"
 import { functionIdentity, generatedUnit, type SqlUnit } from "../sql/units"
-import { sqlLiteral } from "../stages/model"
+import { fieldForeignKey, sqlLiteral } from "../stages/model"
 import type { ParsedObject } from "../stages/files"
 import { COMMAND_FUNCTIONS } from "./command-units"
 import { RIGHTS_FUNCTIONS, ZERO_UUID, hasRightsFunctions } from "./functions"
@@ -357,6 +357,14 @@ function pendingSql(
           `SELECT 'role'::text, r.${q(column(config.table, "customRole"))}, ${kind}, ${scope}, r.image FROM (${events}) r WHERE r.${q(column(config.table, "customRole"))} IS NOT NULL`,
         ]
       : []),
+    // Ключ `holders` — від будь-якої зміни старого прямого рядка архетипу з
+    // `fullAccess`, а не лише полів форми носія: надмножина не пропускає
+    // випадків (Р2c2-22). Новий образ носія не прибирає — він не потрібен.
+    ...(config.kind === "assignment" && before
+      ? [
+          `SELECT 'holders'::text, ${scope}, ${kind}, ${scope}, 1 FROM old_rows r WHERE r.${q(column(config.table, "customRole"))} IS NULL AND EXISTS (SELECT 1 FROM ${ref(RIGHTS_FUNCTIONS.fullAccessRoles)}() f WHERE f.role_id = r.${q(column(config.table, "archetype"))} AND f.storage_id IS NOT DISTINCT FROM ${config.catalog.level.level === "scope" ? kind : "NULL::uuid"})`,
+        ]
+      : []),
     actorPending(),
   ]
   return pendingInsert(rows, "v_maintenance")
@@ -445,6 +453,28 @@ function holderRows(
   return `SELECT h.scope, h.actor FROM (${effectiveHolderRows(catalog, contracts, physical)}) h JOIN ${ref(RIGHTS_FUNCTIONS.fullAccessRoles)}() f ON f.role_id = h.archetype AND f.storage_id IS NOT DISTINCT FROM ${catalog.level.level === "scope" ? `${sqlLiteral(catalog.level.scopeKindId)}::uuid` : "NULL::uuid"}`
 }
 
+/**
+ * Існування кореня скоупу для ключа `holders`. Перевірка на COMMIT, а не на
+ * операторі: скоуп, видалений цією ж транзакцією (призначення знято раніше
+ * за корінь, `onRootDelete: "restrict"`), носія вже не потребує. Замок —
+ * рядок версії скоупу, узятий першим кроком оператора, а не корінь: він
+ * однаковий і для глобального рівня й не блокує FK-вставки тенанта (Р2c2-7).
+ * Без FK скоупу на корінь винятку немає — перевірка безумовна.
+ */
+function rootExists(
+  catalog: RightsCatalogContract,
+  physical: PhysicalSnapshot
+): string | undefined {
+  if (catalog.level.level !== "scope") return undefined
+  const table = tableOf(physical, catalog.assignments.table)
+  const scope = scopeColumn(table)
+  if (scope === undefined) return undefined
+  const fk = fieldForeignKey(table, scope)
+  if (fk === undefined) return undefined
+  const index = fk.columns.indexOf(scope)
+  return `EXISTS (SELECT 1 FROM ${ref({ schema: fk.references.schema, name: fk.references.table })} root WHERE root.${q(fk.references.columns[index]!)} = v_pending.scope)`
+}
+
 function assignmentBeforeSet(
   catalog: RightsCatalogContract,
   physical: PhysicalSnapshot
@@ -493,6 +523,7 @@ function escalationSql(
 
 function catalogCheck(
   catalog: RightsCatalogContract,
+  contracts: GuardContracts,
   physical: PhysicalSnapshot
 ): string {
   const roles = tableOf(physical, catalog.roles.table)
@@ -510,6 +541,7 @@ function catalogCheck(
     assignmentScope === undefined
       ? "TRUE"
       : `a.${q(assignmentScope)} = v_pending.scope`
+  const root = rootExists(catalog, physical)
   return [
     `IF v_pending.scope_kind_id = ${scope} THEN`,
     "  IF v_pending.kind = 'role' THEN",
@@ -519,6 +551,10 @@ function catalogCheck(
     `    ${escalationSql(roleGrantSet(catalog, physical, "after"), roleGrantSet(catalog, physical, "before"), catalog)}`,
     "  ELSIF v_pending.kind = 'assignment' THEN",
     `    ${escalationSql(assignmentGrantSet(catalog, physical, "after"), assignmentBeforeSet(catalog, physical), catalog)}`,
+    "  ELSIF v_pending.kind = 'holders' THEN",
+    ...(root === undefined ? [] : [`    IF ${root} THEN`]),
+    `    IF NOT EXISTS (SELECT 1 FROM (${holderRows(catalog, contracts, physical)}) h WHERE h.scope = v_pending.scope) THEN ${refusal("last-full-access")} END IF;`,
+    ...(root === undefined ? [] : ["    END IF;"]),
     "  END IF;",
     "END IF;",
   ].join("\n")
@@ -544,7 +580,7 @@ function checkBody(
     "  WHERE p.xid = NEW.xid AND p.kind = NEW.kind AND p.scope_kind_id = NEW.scope_kind_id AND p.key = NEW.key FOR UPDATE;",
     "  IF NOT FOUND THEN RETURN NULL; END IF;",
     ...contracts.rightsCatalogs.map((catalog) =>
-      catalogCheck(catalog, physical)
+      catalogCheck(catalog, contracts, physical)
     ),
     `  DELETE FROM ${ref(platform("rights_tx_pending"))} p WHERE p.xid = v_pending.xid AND p.kind = v_pending.kind AND p.scope_kind_id = v_pending.scope_kind_id AND p.key = v_pending.key;`,
     `  IF NOT EXISTS (SELECT 1 FROM ${ref(platform("rights_tx_pending"))} WHERE xid = v_pending.xid) THEN`,
@@ -584,12 +620,27 @@ function memberEventBody(
   operation: "INSERT" | "UPDATE" | "DELETE",
   provider: DatabaseProvider
 ): string {
+  const key = q(member.keyColumn)
+  const scope = q(member.scopeColumn)
+  const user = q(member.userColumn)
+  // Непорожній користувач змінився — носій міг зникнути; ключ ставиться в
+  // будь-якому режимі (Р2c2-7).
+  const holder =
+    operation === "UPDATE"
+      ? [
+          `SELECT 'holders'::text AS kind, o.${scope} AS key, ${sqlLiteral(member.scopeKindId)}::uuid AS scope_kind_id, o.${scope} AS scope, 1 AS image`,
+          `FROM old_rows o JOIN new_rows n ON n.${key} = o.${key} WHERE o.${user} IS NOT NULL AND o.${user} IS DISTINCT FROM n.${user}`,
+        ].join("\n")
+      : undefined
   return [
     "DECLARE v_maintenance boolean;",
     "BEGIN",
     `  v_maintenance := (${maintenanceSql(provider)});`,
     `  ${bumpRows(operation, member.scopeKindId, member.scopeColumn)}`,
-    pendingInsert([actorPending()], "v_maintenance"),
+    pendingInsert(
+      [...(holder === undefined ? [] : [holder]), actorPending()],
+      "v_maintenance"
+    ),
     "  RETURN NULL; END",
   ].join("\n")
 }
