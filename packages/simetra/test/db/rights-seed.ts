@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto"
 import pg from "pg"
+import { RIGHTS_MAINTENANCE_SETTING } from "simetra/model"
 import { testDatabaseUrl } from "./connection"
 
 /**
@@ -18,10 +19,20 @@ export async function insert(
   values: Record<string, unknown>
 ): Promise<void> {
   const columns = Object.keys(values)
+  const rightsTable =
+    /^(?:org|global)_(?:roles(?:_delta)?|role_assignments)$/.test(table)
+  if (rightsTable)
+    await client.query("SELECT set_config($1, 'on', true)", [
+      RIGHTS_MAINTENANCE_SETTING,
+    ])
   await client.query(
     `INSERT INTO public.${table} (${columns.join(", ")}) VALUES (${columns.map((_, i) => `$${i + 1}`).join(", ")})`,
     Object.values(values)
   )
+  if (rightsTable)
+    await client.query("SELECT set_config($1, 'off', true)", [
+      RIGHTS_MAINTENANCE_SETTING,
+    ])
 }
 
 export interface Assignment {
@@ -45,7 +56,8 @@ export type Delta = [
   effect: "allow" | "deny",
   object: string,
   action: string,
-  extent: "any" | "own",
+  extent: "any" | "own" | "dimension",
+  dimensionId?: string,
 ]
 
 /** Рядок ТЧ дельт кастомної ролі рівня `org`. */
@@ -53,7 +65,7 @@ export const orgDeltaRow = (
   orgId: string,
   roleId: string,
   lineNumber: number,
-  [effect, object, action, extent]: Delta
+  [effect, object, action, extent, dimensionId]: Delta
 ) => ({
   id: randomUUID(),
   org_id: orgId,
@@ -62,6 +74,7 @@ export const orgDeltaRow = (
   object,
   action,
   extent,
+  dimension: dimensionId ?? null,
   effect,
 })
 

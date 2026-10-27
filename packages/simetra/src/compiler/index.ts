@@ -81,6 +81,11 @@ export type {
 } from "libpg-query"
 export { mainTableOf, qualified } from "./contracts"
 export { roleTableJoin, sourceConditions } from "./rights/functions"
+export {
+  rightsGuardNames,
+  rightsGuardTriggerNames,
+  rightsGuardFunctionNames,
+} from "./rights/guard-names"
 export type {
   AssignmentSourceContract,
   Contracts,
