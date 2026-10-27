@@ -50,3 +50,7 @@
   (`packages/simetra/src/compiler/diagnostics.ts`): після Р2c1-37 динамічний
   SQL у тілі функції — помилка компілятора раніше за переписувач. Довести
   недосяжність і видалити коди.
+- **Функції носіїв і членства на довгих назвах таблиць** дають
+  `physical.function-duplicate`; кандидат — `generatedTableFunctionName`
+  (`packages/simetra/src/compiler/rights/generated-names.ts`), як у функцій
+  ефектів.
