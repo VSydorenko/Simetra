@@ -10,3 +10,17 @@ BEGIN
   END IF;
 END
 $$;
+-- Роль входу рантайму (спека П4 §6.2): права бере лише через SET ROLE, тож
+-- членства — INHERIT FALSE, SET TRUE (з PG16 типове значення бере атрибут
+-- ролі, тому явно). Без пароля: його ставить оператор стенду, а DB-тест
+-- входить під неї через SET SESSION AUTHORIZATION від суперкористувача.
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'simetra_runtime') THEN
+    PERFORM pg_catalog.set_config('createrole_self_grant', '', true);
+    CREATE ROLE simetra_runtime LOGIN NOINHERIT;
+    GRANT simetra_command TO simetra_runtime WITH INHERIT FALSE, SET TRUE;
+    GRANT authenticated TO simetra_runtime WITH INHERIT FALSE, SET TRUE;
+  END IF;
+END
+$$;

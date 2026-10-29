@@ -1,7 +1,11 @@
 import { isDeepStrictEqual } from "node:util"
 import { beforeAll, describe, expect, it } from "vitest"
 import type { CompiledModel } from "simetra/compiler"
-import { PROVIDER_LOGIN_ROLES } from "simetra/model"
+import {
+  DATABASE_PROVIDERS,
+  PLATFORM_LOGIN_ROLES,
+  PROVIDER_LOGIN_ROLES,
+} from "simetra/model"
 import { buildRightsGuardUnits, maintenanceSql } from "../rights/guard-units"
 import { ZERO_UUID } from "../rights/functions"
 import { hasEmptySearchPath, routineLanguage } from "../sql/closed-forms"
@@ -501,8 +505,23 @@ describe("rights guard statement triggers", () => {
     }
   })
 
+  it.each(DATABASE_PROVIDERS)(
+    "maintenance mode never trusts the platform runtime login (%s)",
+    (provider) => {
+      const arrays = nodes(expr(maintenanceSql(provider)), "A_ArrayExpr")
+      const names = nodes(arrays, "sval").filter((v) => typeof v === "string")
+      expect(names).toContain(PLATFORM_LOGIN_ROLES.runtime)
+    }
+  )
+
   it("maintenance mode requires a non-API login role", () => {
-    const logins = PROVIDER_LOGIN_ROLES.supabase.map((r) => `'${r}'`).join(", ")
+    // Порядок: ролі входу провайдера, далі ролі входу платформи (Р-A1-6)
+    const logins = [
+      ...PROVIDER_LOGIN_ROLES.supabase,
+      ...Object.values(PLATFORM_LOGIN_ROLES),
+    ]
+      .map((r) => `'${r}'`)
+      .join(", ")
     const oracle = expr(
       `coalesce(current_setting('simetra.rights_maintenance', true) = 'on', false) AND session_user::text <> ALL (ARRAY[${logins}]::text[])`
     )

@@ -3,7 +3,13 @@ import { resolveView } from "@supabase/pg-delta/policy"
 import pg from "pg"
 import { describe, expect, it } from "vitest"
 import { compile } from "simetra/compiler"
-import { PLATFORM_ROLES, PROVIDER_SCHEMAS } from "simetra/model"
+import {
+  LOGIN_ROLE_REQUEST_PURPOSES,
+  PLATFORM_LOGIN_ROLES,
+  PLATFORM_ROLES,
+  PROVIDER_API_ROLES,
+  PROVIDER_SCHEMAS,
+} from "simetra/model"
 import {
   renderDesiredState,
   type CensusCount,
@@ -336,6 +342,7 @@ async function engineKindsAndCensus(
 ): Promise<{
   kinds: Set<string>
   roles: Set<string>
+  memberships: { role: string; member: string }[]
   census: CensusCount[]
   extracted: Extracted
 }> {
@@ -356,7 +363,17 @@ async function engineKindsAndCensus(
       const roles = new Set(
         managed.flatMap((f) => (f.id.kind === "role" ? [f.id.name] : []))
       )
-      return { kinds, roles, census: await readCensus(pool, shadowScope) }
+      const memberships = managed.flatMap((f) =>
+        f.id.kind === "membership"
+          ? [{ role: f.id.role, member: f.id.member }]
+          : []
+      )
+      return {
+        kinds,
+        roles,
+        memberships,
+        census: await readCensus(pool, shadowScope),
+      }
     })),
   }))
 }
@@ -379,19 +396,39 @@ describe("covered classes match the pinned engine", () => {
   for (const [name, load] of corpus) {
     it(name, async () => {
       const [desiredSql, shadowScope] = await load()
-      const { kinds, roles, census, extracted } = await engineKindsAndCensus(
-        desiredSql,
-        shadowScope
-      )
+      const { kinds, roles, memberships, census, extracted } =
+        await engineKindsAndCensus(desiredSql, shadowScope)
       // Роль — інфраструктура кластера (§6.9): факт двигуна з'являється, лише
       // коли грант називає платформну роль поза пресетом провайдера. Будь-яка
       // інша роль означала б, що бажаний стан створює роль сам, а ролі
-      // створює лише `simetra roles`
-      const platformRoles = new Set<string>(Object.values(PLATFORM_ROLES))
+      // створює лише `simetra roles`. Роль входу рантайму кластерна так само
+      const platformRoles = new Set<string>([
+        ...Object.values(PLATFORM_ROLES),
+        ...Object.values(PLATFORM_LOGIN_ROLES),
+      ])
       for (const role of roles)
         expect(
           platformRoles.has(role),
           `engine role fact ${role} is not a platform role a grant names`
+        ).toBe(true)
+      // Членство ролей платформи в ролях запиту провайдера — теж
+      // інфраструктура кластера: бажаний стан бази його не несе
+      const clusterRoles = new Set<string>([
+        ...platformRoles,
+        ...Object.entries(LOGIN_ROLE_REQUEST_PURPOSES).flatMap(
+          ([provider, purposes]) =>
+            purposes.map(
+              (p) =>
+                PROVIDER_API_ROLES[provider as keyof typeof PROVIDER_API_ROLES][
+                  p
+                ]
+            )
+        ),
+      ])
+      for (const { role, member } of memberships)
+        expect(
+          clusterRoles.has(role) && clusterRoles.has(member),
+          `engine membership fact ${member} -> ${role} is not between platform and request roles`
         ).toBe(true)
       // Без факту ролі перевірка вище порожня: бажаний стан кожної фікстури
       // грантує роль команд (гранти схеми `simetra`, Р2a1-2, Р2a1-4)
@@ -400,7 +437,7 @@ describe("covered classes match the pinned engine", () => {
       // Кожен інший вид факту, що трапився, перепис рахує як покритий клас
       // або він — частина такого класу
       for (const kind of kinds)
-        if (kind !== "role")
+        if (kind !== "role" && kind !== "membership")
           expect(
             coveredKinds.has(kind as never) || satellites.has(kind),
             `engine fact kind ${kind} is neither a covered census class nor a part of one`

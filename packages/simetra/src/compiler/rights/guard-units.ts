@@ -1,5 +1,6 @@
 import {
   PLATFORM_SCHEMA,
+  PLATFORM_LOGIN_ROLES,
   PROVIDER_LOGIN_ROLES,
   RIGHTS_MAINTENANCE_SETTING,
   quoteIdent,
@@ -68,10 +69,16 @@ const unitNode = (name: QualifiedName): CreationNode => ({
 /**
  * Режим обслуговування оминає перевірку приросту, тож вмикати його може лише
  * довірений вхід у базу: налаштування сесії ставить будь-хто, тож без цієї
- * умови запит через логін API провайдера обійшов би запобіжник.
+ * умови запит через логін API провайдера чи рантайм платформи (він виконує
+ * запити користувачів) обійшов би запобіжник.
  */
 export function maintenanceSql(provider: DatabaseProvider): string {
-  const logins = PROVIDER_LOGIN_ROLES[provider].map(sqlLiteral).join(", ")
+  const logins = [
+    ...PROVIDER_LOGIN_ROLES[provider],
+    ...Object.values(PLATFORM_LOGIN_ROLES),
+  ]
+    .map(sqlLiteral)
+    .join(", ")
   return `coalesce(current_setting(${sqlLiteral(RIGHTS_MAINTENANCE_SETTING)}, true) = 'on', false) AND session_user::text <> ALL (ARRAY[${logins}]::text[])`
 }
 

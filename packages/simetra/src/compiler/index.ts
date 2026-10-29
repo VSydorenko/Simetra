@@ -27,6 +27,7 @@ export {
   type CompiledScopeKind,
   type SourceObject,
 } from "./compile"
+export { readProjectFile } from "./stages/files"
 export type { ResolvedReference } from "./stages/identity"
 export type { CreationNode } from "./sql/dependencies"
 export {

@@ -252,6 +252,20 @@ function baseOf(fileName: string, suffix: string): string {
   return fileName.slice(0, -suffix.length)
 }
 
+/**
+ * Лише файл проєкту, тим самим читачем, що й стадія 1: інструмент, якому
+ * потрібен провайдер, а не модель (`roles`), відмовляє на зламаному файлі
+ * тими самими діагностиками, що й `compile`.
+ */
+export function readProjectFile(text: string): {
+  project?: Project
+  diagnostics: Diagnostic[]
+} {
+  const diagnostics: Diagnostic[] = []
+  const project = readProject(text, diagnostics)
+  return project === undefined ? { diagnostics } : { project, diagnostics }
+}
+
 function readProject(
   text: string,
   diagnostics: Diagnostic[]
