@@ -43,8 +43,10 @@ select is((SELECT rolcanlogin AND NOT rolinherit AND NOT rolsuper
   FROM pg_roles WHERE rolname = 'simetra_runtime'), true,
   'simetra_runtime has LOGIN and no INHERIT or privileged attribute');
 -- Рівно дві пари: роль команд і роль запиту, кожна лише через SET ROLE.
+-- `name::text` несе колацію "C", літерали VALUES — типову: без явного
+-- COLLATE results_eq не може порівняти рядки.
 select results_eq(
-  $$SELECT g.rolname::text, m.admin_option, m.inherit_option, m.set_option
+  $$SELECT g.rolname::text COLLATE "default", m.admin_option, m.inherit_option, m.set_option
     FROM pg_auth_members m JOIN pg_roles g ON g.oid = m.roleid
     WHERE m.member = to_regrole('simetra_runtime')
     ORDER BY 1$$,
