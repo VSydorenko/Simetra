@@ -1,6 +1,5 @@
 import {
   PLATFORM_SCHEMA,
-  makeObjectName,
   quoteIdent,
   serviceDateColumns,
   standardLogicalName,
@@ -11,6 +10,7 @@ import {
   type PhysicalSnapshot,
   type PhysicalTable,
 } from "simetra/model"
+import { platformBeforeTriggerName } from "./before-trigger-names"
 import type { QualifiedName } from "./contracts"
 import { compareStrings } from "./diagnostics"
 import { dollarTag } from "./movement-functions"
@@ -26,11 +26,12 @@ export const MECHANICS_FUNCTION: QualifiedName = {
 }
 
 /**
- * Ім'я тригера механіки на таблиці. Алгоритм Postgres тримає мітку цілою, тож
- * зворотна генерація й промоція впізнають тригер за іменем і на довгій таблиці.
+ * Ім'я тригера механіки на таблиці. Спільний префікс рядкових `BEFORE`-тригерів
+ * ставить механіку останньою на будь-якій довжині назви, а зворотна генерація
+ * й промоція впізнають тригер за тим самим іменем.
  */
 export function mechanicsTriggerName(table: string): string {
-  return makeObjectName(table, undefined, "simetra_touch")
+  return platformBeforeTriggerName(table, "simetra_touch")
 }
 
 /**
@@ -38,7 +39,7 @@ export function mechanicsTriggerName(table: string): string {
  * розділена на вставку й оновлення з умовою `contentChangeCondition`.
  */
 export function mechanicsUpdateTriggerName(table: string): string {
-  return makeObjectName(table, undefined, "simetra_touch_update")
+  return platformBeforeTriggerName(table, "simetra_touch_update")
 }
 
 /** Колонки механіки за реєстром — щоб тіло функції не тримало літералів. */

@@ -1,9 +1,12 @@
 import { beforeAll, describe, expect, it } from "vitest"
 import {
   applyChanges,
+  carrierFunctionNames,
+  carrierTriggerNames,
   compile,
   type CompiledModel,
   loadSqlParser,
+  mechanicsTriggerName,
   promoteObject,
   rightsGuardNames,
   type PromotionObject,
@@ -2895,6 +2898,65 @@ describe("platformReplacements", () => {
 
       it("is replaced by the row mechanics for moddatetime on updated_at", () => {
         expect(codesOf(moddatetime("updated_at"), [MECHANICS])).toEqual([])
+      })
+
+      describe("on a 50-byte table (Р-A1-7)", () => {
+        // Довше за межу 41: тригери платформи — під іменами спільного
+        // префікса з хешем, і промоція мусить впізнати їх як платформні
+        const LONG = `item_${"x".repeat(45)}`
+        const longTrigger = (name: string, sql: string) =>
+          unit("trigger", `trigger:app.${LONG}.${name}`, name, sql)
+        const TOUCH = longTrigger(
+          mechanicsTriggerName(LONG),
+          `CREATE TRIGGER ${mechanicsTriggerName(LONG)} BEFORE INSERT OR UPDATE ON app.${LONG} FOR EACH ROW EXECUTE FUNCTION simetra.touch()`
+        )
+        const derive = carrierTriggerNames({ schema: "app", name: LONG }).derive
+        const deriveFn = carrierFunctionNames({ schema: "app", name: LONG })
+          .derive.name
+        const CARRIERS = longTrigger(
+          derive,
+          `CREATE TRIGGER ${derive} BEFORE INSERT OR UPDATE ON app.${LONG} FOR EACH ROW EXECUTE FUNCTION app.${deriveFn}()`
+        )
+
+        function longCodes(sql: string, units: CatalogUnit[]): string[] {
+          const onClone = unit("trigger", "trigger:adopted", "a", sql)
+          const [key] = unitSubjectKeys(onClone, parse, "app")
+          return platformReplacements({
+            record: record({
+              tables: [{ id: OBJECT_ID, schema: "app", from: LONG, to: LONG }],
+              conversions: [
+                conversion("platform", { kind: "unit", ...key!, table: LONG }),
+              ],
+            }),
+            clone: model([table(LONG)], [onClone]),
+            desired: model([table(LONG)], units),
+            physical: { tables: [] },
+            attributeCase: "snake_case",
+            cloneEquivalence: [],
+            shadowEquivalence: [],
+            valueElementColumns: [],
+            provider: "supabase",
+            parse,
+          }).map((d) => d.code)
+        }
+
+        it("moddatetime is replaced by the row mechanics", () => {
+          expect(
+            longCodes(
+              `CREATE TRIGGER a BEFORE UPDATE ON app.${LONG} FOR EACH ROW EXECUTE FUNCTION extensions.moddatetime(updated_at)`,
+              [TOUCH]
+            )
+          ).toEqual([])
+        })
+
+        it("a carrier trigger does not stand in for an adopted trigger of the same function", () => {
+          expect(
+            longCodes(
+              `CREATE TRIGGER a BEFORE INSERT OR UPDATE ON app.${LONG} FOR EACH ROW EXECUTE FUNCTION app.${deriveFn}()`,
+              [TOUCH, CARRIERS]
+            )
+          ).toEqual(MISSING)
+        })
       })
 
       it("maps the moddatetime argument through the record's columns", () => {

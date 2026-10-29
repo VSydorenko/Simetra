@@ -246,12 +246,11 @@ describe("buildCarrierUnits", () => {
     expect(carriers((await compileRights(rightsFiles())).model!)).toEqual([])
   })
 
-  it("carrier function names collide like membership functions, effects ones do not", async () => {
-    // Ім'я функції носіїв обрізає ім'я таблиці до тих самих 46 байтів: у
-    // довгої основної таблиці й її ТЧ вони однакові — колізію ловить
-    // компілятор. Функції ефектів на довгих іменах дістають стабільний хеш
-    // таблиці (Р2c2-20), тож другої колізії вже немає: перевірка тримає обидва
-    // факти — носії збігаються, ефекти ні.
+  it("carrier and effects function names of long tables with a common start do not collide", async () => {
+    // Функція виведення носіїв бере ім'я тригера `derive`, а він іде спільним
+    // префіксом рядкових `BEFORE`-тригерів з хешем повної назви (Р-A1-7), як
+    // функції ефектів (Р2c2-20): у довгої основної таблиці й її ТЧ імена
+    // різні, тож компілятор не має колізії.
     const long = "c".repeat(60)
     const result = await compileRights(
       policyDomain({
@@ -272,14 +271,7 @@ describe("buildCarrierUnits", () => {
       result.diagnostics
         .filter((d) => d.severity === "error")
         .map((d) => [d.code, d.file, d.pointer, d.params?.name])
-    ).toEqual([
-      [
-        "physical.function-duplicate",
-        COMMENT_FILE,
-        "/physicalName",
-        expect.stringMatching(/_simetra_carriers$/),
-      ],
-    ])
+    ).toEqual([])
   })
 })
 

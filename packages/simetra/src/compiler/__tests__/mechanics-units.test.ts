@@ -11,6 +11,7 @@ import {
   mechanicsTriggerName,
 } from "../mechanics-units"
 import { loadSqlParser, type SqlParser } from "../sql/parse"
+import { platformBeforeTriggerName } from "../before-trigger-names"
 import { compileRights, policyDomain } from "./fixtures/rights"
 import {
   attribute,
@@ -166,10 +167,10 @@ describe("buildMechanicsUnits", () => {
     ).toThrow(/^internal:/)
   })
 
-  it("the trigger name of a 60-byte table is 63 bytes with the whole label", () => {
+  it("the trigger name of a 60-byte table goes by the shared BEFORE-trigger prefix", () => {
     const name = "t".repeat(60)
     const trigger = mechanicsTriggerName(name)
-    expect(new TextEncoder().encode(trigger).length).toBe(63)
+    expect(trigger).toBe(platformBeforeTriggerName(name, "simetra_touch"))
     expect(trigger.endsWith("_simetra_touch")).toBe(true)
     const units = buildMechanicsUnits(
       snapshot([table(name, ["updatedAt", "version"])]),

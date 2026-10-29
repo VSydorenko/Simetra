@@ -170,8 +170,7 @@ function functionName(table: QualifiedName, label: string): QualifiedName {
 }
 
 function triggerName(table: QualifiedName, label: string): string {
-  const name = generatedTableFunctionName(table.name, label)
-  const found = rightsGuardNames(table).find((entry) => entry.trigger === name)
+  const found = rightsGuardNames(table).find((entry) => entry.label === label)
   if (found === undefined)
     throw new Error(`internal: unknown rights trigger ${label}`)
   return found.trigger

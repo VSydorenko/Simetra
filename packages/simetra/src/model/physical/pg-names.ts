@@ -28,7 +28,7 @@ export function quoteIdent(name: string): string {
  * `pg_mbcliplen`): Postgres міряє ліміт у байтах, а розрізаний символ дав би
  * інше ім'я, ніж те, що збереже БД.
  */
-function clipBytes(bytes: Uint8Array, maxBytes: number): Uint8Array {
+export function clipBytes(bytes: Uint8Array, maxBytes: number): Uint8Array {
   let end = Math.min(maxBytes, bytes.length)
   // Байт-продовження (10xxxxxx) на межі означає, що ми всередині символу.
   while (end > 0 && end < bytes.length && (bytes[end]! & 0xc0) === 0x80) end--

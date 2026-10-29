@@ -6,12 +6,14 @@ import {
   PLATFORM_LOGIN_ROLES,
   PROVIDER_LOGIN_ROLES,
 } from "simetra/model"
+import { platformBeforeTriggerName } from "../before-trigger-names"
 import { buildRightsGuardUnits, maintenanceSql } from "../rights/guard-units"
 import { ZERO_UUID } from "../rights/functions"
 import { hasEmptySearchPath, routineLanguage } from "../sql/closed-forms"
 import { loadSqlParser } from "../sql/parse"
 import type { SqlUnit } from "../sql/units"
 import {
+  MEMBER_FILE,
   MEMBER_REGION_FILE,
   MEMBER_REGION_ID,
   ORG_KIND_ID,
@@ -1346,6 +1348,26 @@ describe("rights guards of membership and users outside commands", () => {
         )
       )
     }
+  })
+
+  it("names the id trigger of a 50-byte membership table by the shared BEFORE-trigger prefix", async () => {
+    // Р-A1-7: `simetra_rights_id` — рядковий `BEFORE`, тож на довгій назві
+    // його ім'я — спільний префікс групи, а функція лишається на хеші
+    // `generatedTableFunctionName`; генератор знаходить тригер за міткою.
+    const long = `org_member_${"x".repeat(39)}`
+    const result = await compileRights(
+      policyDomain(writeRoles(), { [MEMBER_FILE]: { physicalName: long } })
+    )
+    expectClean(result)
+    const trigger = guards(result.model!).find(
+      (u) =>
+        u.class === "trigger" &&
+        u.identity.startsWith(`trigger:public.${long}.`) &&
+        u.name.endsWith("_simetra_rights_id")
+    )
+    expect(trigger?.name).toBe(
+      platformBeforeTriggerName(long, "simetra_rights_id")
+    )
   })
 
   it("refuses changing a membership user outside a command, except self-acceptance", () => {

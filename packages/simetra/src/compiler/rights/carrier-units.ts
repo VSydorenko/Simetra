@@ -6,6 +6,7 @@ import {
   type PhysicalSnapshot,
   type PhysicalTable,
 } from "simetra/model"
+import { platformBeforeTriggerName } from "../before-trigger-names"
 import type { QualifiedName } from "../contracts"
 import { compareStrings } from "../diagnostics"
 import { dollarTag } from "../movement-functions"
@@ -22,9 +23,10 @@ const PROPAGATE_INSERT_LABEL = "simetra_carriers_out_insert"
 
 /**
  * Імена тригерів копій носіїв на таблиці: `derive` — на таблиці з копіями,
- * обидва тригери поширення — на таблиці-джерелі. Алгоритм Postgres тримає
- * мітку цілою, тож промоція й зворотна генерація впізнають їх за іменем і на
- * довгій таблиці.
+ * обидва тригери поширення — на таблиці-джерелі. `derive` — рядковий
+ * `BEFORE`, тож іде спільним префіксом групи: інакше на довгій назві він
+ * спрацював би не між авторством і механікою. Поширення — `AFTER`, на `NEW`
+ * не впливає, і лишається на алгоритмі Postgres, що тримає мітку цілою.
  */
 export function carrierTriggerNames(table: QualifiedName): {
   derive: string
@@ -32,7 +34,7 @@ export function carrierTriggerNames(table: QualifiedName): {
   propagateInsert: string
 } {
   return {
-    derive: makeObjectName(table.name, undefined, DERIVE_LABEL),
+    derive: platformBeforeTriggerName(table.name, DERIVE_LABEL),
     propagate: makeObjectName(table.name, undefined, PROPAGATE_LABEL),
     propagateInsert: makeObjectName(
       table.name,
