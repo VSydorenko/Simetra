@@ -3,6 +3,8 @@ import {
   canonicalSnapshot,
   compile,
   type CompiledModel,
+  effectsFunctionName,
+  effectsTriggerNames,
   type PromotionRecord,
 } from "simetra/compiler"
 import { PLATFORM_ROLES, type CatalogModel } from "simetra/model"
@@ -20,6 +22,7 @@ import {
 } from "simetra/schema"
 import {
   catalog,
+  expectClean,
   metaFiles,
   project,
 } from "../../../compiler/__tests__/helpers"
@@ -28,11 +31,16 @@ import {
   CHECKLIST_TABLE,
   TAG_ID,
   adoptedSourcesDomain,
+  adminRoles,
+  GLOBAL_ADMIN_ID,
   compileRights,
   policyDomain,
   promotableTag,
   promotedRights,
+  ROLE_FILE,
+  rightsFiles,
   tagMapping,
+  TASK_FILE,
 } from "../../../compiler/__tests__/fixtures/rights"
 import { applyDiagnostic } from "../diagnostic"
 
@@ -41,6 +49,146 @@ import { applyDiagnostic } from "../diagnostic"
  * бази; решта — у `build-plan.db.test.ts` designer.
  */
 describe("buildPlan", () => {
+  // Без функції носіїв на цілі (база до цього запобіжника) «до» невідоме:
+  // план не вигадує втрати, а йде далі — запобіжник на COMMIT стане першим
+  // носієм цього знання після застосування
+  it.each([
+    { assigned: true, removeCatalogs: false, holdersFn: true, refusal: true },
+    { assigned: false, removeCatalogs: false, holdersFn: true, refusal: false },
+    { assigned: true, removeCatalogs: true, holdersFn: true, refusal: true },
+    { assigned: false, removeCatalogs: true, holdersFn: true, refusal: false },
+    { assigned: true, removeCatalogs: false, holdersFn: false, refusal: false },
+  ])(
+    "handles removal of fullAccess (assigned: $assigned, catalogs removed: $removeCatalogs, holders function: $holdersFn)",
+    async ({ assigned, removeCatalogs, holdersFn, refusal }) => {
+      const old = (await compile(policyDomain(adminRoles()))).model!
+      const compiledDesired = await compile(
+        removeCatalogs
+          ? rightsFiles()
+          : policyDomain(adminRoles(), {
+              [ROLE_FILE("GlobalAdmin")]: { fullAccess: false },
+            })
+      )
+      expect(
+        compiledDesired.diagnostics.filter((d) => d.severity === "error")
+      ).toEqual([])
+      const desired = compiledDesired.model!
+      const target = await fakeTarget(old, {
+        notCopies: [],
+        rights: {
+          holdersFn,
+          previousRoles: [
+            { role_id: GLOBAL_ADMIN_ID, storage: "global", storage_id: null },
+          ],
+          rows: assigned
+            ? {
+                "public.global_role_assignments": [
+                  {
+                    id: "a1",
+                    scope: null,
+                    archetype: GLOBAL_ADMIN_ID,
+                    custom_role: null,
+                    deleted: false,
+                  },
+                ],
+              }
+            : {},
+          holders: assigned
+            ? {
+                "public.global_role_assignments": [
+                  {
+                    scope: "00000000-0000-0000-0000-000000000000",
+                    actor: "user-1",
+                    archetype: GLOBAL_ADMIN_ID,
+                  },
+                ],
+              }
+            : {},
+        },
+      })
+      const outcome = await buildPlan(
+        shadowFailing(),
+        { reader: target.reader, scratch: emptyScratch },
+        desired,
+        { target: { url: "postgres://target" } },
+        []
+      )
+      expect(
+        outcome.diagnostics.some(
+          (d) => d.code === "plan.rights-full-access-lost"
+        )
+      ).toBe(refusal)
+      if (refusal) expect(outcome.status).toBe("refused")
+      else
+        expect(
+          outcome.diagnostics.some((d) => d.code === SHADOW_FAILED.code)
+        ).toBe(true)
+    }
+  )
+
+  it("hands the engine the hashed effects function of a long table and no truncated one", async () => {
+    // Р2c2-20: до хешу ім'я функції ефектів довгої таблиці було іменем її
+    // тригера (обрізане алгоритмом Postgres). Сам перехід — DROP старої й
+    // CREATE нової — робить двигун: усе в межі схеми, чого немає в бажаному,
+    // він прибирає. Тож план мусить дати йому бажаний стан без старого
+    // імені й межу, що володіє схемою таблиці
+    const table = { schema: "public", name: "e".repeat(60) }
+    const fresh = await compileRights(
+      policyDomain({ [TASK_FILE]: { physicalName: table.name } })
+    )
+    expectClean(fresh)
+    const desired = fresh.model!
+    const hashed = effectsFunctionName(table).name
+    const truncated = effectsTriggerNames(table).all
+    expect(hashed).not.toBe(truncated)
+    // Застосований стан — та сама модель зі старим ім'ям функції в одиницях
+    // і в порядку створення
+    const renamed = <T>(value: T): T =>
+      JSON.parse(JSON.stringify(value).replaceAll(hashed, truncated)) as T
+    const applied: CompiledModel = {
+      ...desired,
+      sqlUnits: renamed(desired.sqlUnits),
+      creationOrder: renamed(desired.creationOrder),
+    }
+    expect(
+      applied.sqlUnits.some(
+        (u) => u.identity === `function:public.${truncated}()`
+      )
+    ).toBe(true)
+    const target = await fakeTarget(applied, { notCopies: [] })
+    const handed: { sql: string; schemas: readonly string[] }[] = []
+    const engine = new Proxy(fakeEngine([]), {
+      get: (target, name) =>
+        name === "withDesiredShadow"
+          ? (_o: unknown, sql: string, scope: { schemas: string[] }) => {
+              handed.push({ sql, schemas: scope.schemas })
+              return Promise.resolve({
+                status: "shadow-failed",
+                diagnostics: [SHADOW_FAILED],
+              })
+            }
+          : target[name as keyof SchemaEngine],
+    })
+    await buildPlan(
+      engine,
+      { reader: target.reader, scratch: emptyScratch },
+      desired,
+      { target: { url: "postgres://target" } },
+      []
+    )
+    expect(handed).toHaveLength(1)
+    const [{ sql, schemas }] = handed as [(typeof handed)[0]]
+    expect(sql).toContain(`CREATE OR REPLACE FUNCTION public.${hashed}()`)
+    // Тригер зберігає ім'я, але кличе нову функцію: двигун його замінює
+    expect(sql).toMatch(
+      new RegExp(
+        `CREATE TRIGGER ${truncated} [^;]* EXECUTE FUNCTION public\\.${hashed}\\(\\);`
+      )
+    )
+    expect(sql).not.toContain(`public.${truncated}()`)
+    expect(schemas).toContain(table.schema)
+  })
+
   it("refuses a server older than Postgres 17 before reading its facts", async () => {
     // Платформна спека §1: Postgres 17 — мінімум; без цієї відмови читання
     // фактів упало б сирим `42703` на `datlocale`
@@ -335,6 +483,17 @@ async function fakeTarget(
      * якого не оголошує жодна роль, у кожному джерелі призначень.
      */
     sources?: { owned: boolean; unknownKey?: string }
+    rights?: {
+      /** Чи є на цілі `simetra.rights_full_access_roles()`. */
+      holdersFn: boolean
+      previousRoles: {
+        role_id: string
+        storage: string
+        storage_id: string | null
+      }[]
+      rows: Record<string, Record<string, unknown>[]>
+      holders: Record<string, Record<string, unknown>[]>
+    }
   }
 ) {
   const snapshot = JSON.parse(JSON.stringify(canonicalSnapshot(model))) as {
@@ -404,6 +563,17 @@ async function fakeTarget(
       return o.sources?.unknownKey === undefined
         ? []
         : [{ unknown_key: o.sources.unknownKey, total: "1" }]
+    if (sql.includes("AS present") && sql.includes("rights_full_access_roles"))
+      return [{ present: o.rights?.holdersFn === true }]
+    if (sql.includes("FROM simetra.rights_full_access_roles()"))
+      return o.rights?.previousRoles ?? []
+    if (sql.includes(" AS actor,") && sql.includes(" AS archetype")) {
+      const table = /FROM ([a-z_]+\.[a-z_]+)/.exec(sql)?.[1]
+      return table === undefined ? [] : (o.rights?.holders[table] ?? [])
+    }
+    const rightTable = /FROM ([a-z_]+\.[a-z_]+)/.exec(sql)?.[1]
+    if (rightTable !== undefined && o.rights?.rows[rightTable] !== undefined)
+      return o.rights.rows[rightTable]!
     // Факти `plpgsql_check`: розширення немає — план іде далі з
     // діагностикою, а не падає
     if (sql.includes('AS "checkSchemaTaken"')) return [{ installed: false }]

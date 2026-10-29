@@ -256,9 +256,65 @@ key in such a table through `sourceKeys`.
 
 The system rights catalogs are Catalogs with `"role": "rightsRoles"` (custom
 roles; standard tabular section `delta`) or `"role": "roleAssignments"`. Their
-level is the catalog's own scope. They are read-only until rights
-administration exists: a custom action on one is `rights.system-catalog-custom-action`.
+level is the catalog's own scope. A custom action on one is
+`rights.system-catalog-custom-action`.
 Run `simetra roles` before the first `plan` on a new database.
+
+To administer rights, grant `read` and `administerRights` explicitly on the
+system catalog at extent `any`. Neither `grantAll` nor `withAction` selects
+system catalogs; a role with `fullAccess` includes their administration at
+its own level. A container role cannot administer a scope's rights catalogs.
+Use `administerRights` as the command's root action. It has no natural DML
+counterpart, so another command cannot write a rights catalog as a side effect.
+
+Rights changes are checked at transaction end against the actor's rights
+captured before its first command change. The effective rights added by a
+custom role or assignment must be covered by that snapshot. This includes
+rights enabled by removing a denial or satisfying an action's requirements.
+Changing an assignment's member or container checks the full new grant.
+A transaction can create a role and then add its restricting denials before
+the final check. A custom role that an assignment still references cannot be
+deleted: marking it for deletion fails with `command.forbidden`, detail
+`role-in-use`, and a physical delete fails with a foreign key violation
+(`23503`). Other failures use `command.forbidden` with detail `escalation`.
+
+Removing the last effective direct holder of a `fullAccess` archetype fails
+with detail `last-full-access`. Custom roles based on that archetype do not
+count as holders. Transfer the assignment within one transaction. Deleting
+the scope root in that transaction removes the check when the assignment's
+scope is bound to that root by a foreign key. Concurrent changes may need a
+transaction retry after a serialization failure or deadlock.
+
+An occupied membership row cannot be reassigned to another user. Only the
+invited user can fill an empty user reference, and only if that user does not
+already belong to the scope. Membership and user row ids cannot be changed.
+A row cannot be re-inserted under an id that a rights assignment still
+references; for a user, a membership row also blocks it. Other application
+references do not block re-insertion. Commands do not change the users
+catalog's `invalid` or `userKind`; provider provisioning and invalidation
+remain platform operations.
+
+Direct writes without command context fail with detail `rights-context`.
+Platform tools use a maintenance mode that bypasses only the actor's grant
+subset check, preserving the in-use-role and last-holder checks. Application
+SQL must not enable it, and provider service logins cannot enable it.
+`TRUNCATE` is refused for guarded rights, membership, user and dimension
+relation tables, including in maintenance mode.
+
+For a rights cache key, combine `simetra.rights_projection_version()` with
+`simetra.rights_versions()`: the former identifies the compiled rights rules,
+the latter tracks changes in the caller's scopes. Writes to adopted tables
+do not bump the rights version, because the platform puts no triggers on
+them: this covers adopted membership and assignment sources and a dimension
+relation that is an adopted `CustomTable`. The platform rights journal
+records changes to system rights catalogs in the same transaction, including
+the actor (null for maintenance), reason, and before/after images.
+
+When applying metadata changes, inspect the plan's `plan.rights-orphans`
+warnings about orphaned role, assignment and delta references; those rows
+grant no matching rights. The plan refuses a code change that would remove
+the last effective `fullAccess` holder with `plan.rights-full-access-lost`. Restore the holder or transfer administration before
+applying that change.
 
 ## Who reads what
 

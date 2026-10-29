@@ -1,4 +1,4 @@
-import type { MetadataKind, ReferenceRole } from "simetra/model"
+import type { MetadataKind, PhysicalOrigin, ReferenceRole } from "simetra/model"
 import type { CompiledModel } from "./compile"
 
 export interface Explanation {
@@ -12,8 +12,7 @@ export interface Explanation {
   tables: {
     schema: string
     name: string
-    part?:
-      "main" | "tabularSection" | "totals" | "turnoversMonth" | "identities"
+    part?: "main" | "tabularSection" | PhysicalOrigin["part"]
     columns: {
       name: string
       type: string

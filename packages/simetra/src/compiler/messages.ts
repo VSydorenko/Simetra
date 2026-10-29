@@ -4383,6 +4383,25 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Додайте ключ у sourceKeys архетипу, який він означає, або виправте рядки; доти рядок з невідомим ключем прав не дає.",
     },
   },
+  "plan.rights-full-access-lost": {
+    en: (p) =>
+      `The rights change would leave no fullAccess holder in ${p.scopes}`,
+    uk: (p) => `Зміна прав лишила б без носія fullAccess рівні ${p.scopes}`,
+    hint: {
+      en: "Keep a fullAccess archetype assigned in each affected scope before planning again.",
+      uk: "Залиште призначений архетип fullAccess у кожному зачепленому скоупі й побудуйте план знову.",
+    },
+  },
+  "plan.rights-orphans": {
+    en: (p) =>
+      `Rights rows no longer grant rights: custom roles ${p.customRoles}; assignments ${p.assignments}${Number(p.more) > 0 ? `; ${p.more} more` : ""}`,
+    uk: (p) =>
+      `Рядки прав більше не дають прав: кастомні ролі ${p.customRoles}; призначення ${p.assignments}${Number(p.more) > 0 ? `; ще ${p.more}` : ""}`,
+    hint: {
+      en: "Review these row IDs and remove or update them through rights administration commands.",
+      uk: "Перевірте id цих рядків і приберіть або оновіть їх командами адміністрування прав.",
+    },
+  },
   "plan.numbering-not-generated": {
     en: (p) =>
       `${p.object} (${p.table}) numbers rows on first write, but counters are not generated yet: the number stays empty`,

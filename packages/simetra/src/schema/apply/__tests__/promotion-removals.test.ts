@@ -5,6 +5,7 @@ import {
   type CompiledModel,
   loadSqlParser,
   promoteObject,
+  rightsGuardNames,
   type PromotionObject,
   type PromotionRecord,
   type SqlParser,
@@ -2723,6 +2724,50 @@ describe("platformReplacements", () => {
           codesOf(
             "CREATE TRIGGER a AFTER INSERT OR UPDATE OR DELETE ON app.item FOR EACH ROW EXECUTE FUNCTION app.item_simetra_effects()",
             [MECHANICS, trigger("item_simetra_effects", EFFECTS_NAME)]
+          )
+        ).toEqual(MISSING)
+      })
+
+      // Кожна пара сторожа прав — окремий рядок: пропущена в переліку
+      // платформних пара дала б прийнятому тригеру з тим самим викликом
+      // «заміну» і мовчки зняла б його на промоції
+      it.each(rightsGuardNames({ schema: "app", name: "item" }))(
+        "rights guard $trigger is not a replacement of an adopted trigger",
+        ({ trigger: name, function: fn }) => {
+          const call = `${fn.schema}.${fn.name}()`
+          expect(
+            codesOf(
+              `CREATE TRIGGER a BEFORE INSERT ON app.item FOR EACH ROW EXECUTE FUNCTION ${call}`,
+              [
+                MECHANICS,
+                trigger(
+                  name,
+                  `CREATE TRIGGER ${name} BEFORE INSERT ON app.item FOR EACH ROW EXECUTE FUNCTION ${call}`
+                ),
+              ]
+            )
+          ).toEqual(MISSING)
+        }
+      )
+
+      it("the deferred rights check on the platform queue is not a replacement of an adopted trigger", () => {
+        // Перевірка на COMMIT висить на черзі платформи, а не на таблиці виду:
+        // прийнятий тригер, що кличе ту саму функцію, нею не замінюється
+        const call = "simetra.rights_tx_check()"
+        expect(
+          codesOf(
+            `CREATE TRIGGER a AFTER INSERT ON app.item FOR EACH ROW EXECUTE FUNCTION ${call}`,
+            [
+              MECHANICS,
+              {
+                class: "trigger",
+                identity:
+                  "trigger:simetra.rights_tx_pending.rights_tx_pending_check",
+                schema: "simetra",
+                name: "rights_tx_pending_check",
+                sql: `CREATE CONSTRAINT TRIGGER rights_tx_pending_check AFTER INSERT ON simetra.rights_tx_pending DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION ${call}`,
+              },
+            ]
           )
         ).toEqual(MISSING)
       })

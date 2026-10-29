@@ -41,6 +41,7 @@ import {
   sourceContracts,
 } from "./rights/contracts"
 import { buildRightsUnits } from "./rights/functions"
+import { buildRightsGuardUnits } from "./rights/guard-units"
 import { scopeKindUnreadWarnings } from "./rights/scope-kind-warnings"
 import {
   rightsCatalogContracts,
@@ -552,6 +553,22 @@ export async function runStages(
       module,
       parse
     ),
+    ...buildRightsGuardUnits(
+      {
+        rights,
+        roles,
+        users,
+        membership,
+        membershipSources: sources.membershipSources,
+        rightsCatalogs,
+        accessDimensions,
+      },
+      physical,
+      stage1.objects,
+      stage1.project.database.provider,
+      module,
+      parse
+    ),
     ...buildCommandUnits(
       { rights, roles, users, membershipSources: sources.membershipSources },
       stage1.project.database.provider,
@@ -559,7 +576,13 @@ export async function runStages(
       parse
     ),
     ...buildEffectsUnits(
-      { rights, roles, users, membershipSources: sources.membershipSources },
+      {
+        rights,
+        roles,
+        users,
+        membership,
+        membershipSources: sources.membershipSources,
+      },
       physical,
       stage1.project.naming.attributeCase,
       stage1.project.database.provider,
@@ -590,6 +613,7 @@ export async function runStages(
       `the event subscription ${name(unit.ownerObjectId)}`,
     // Функції прав спільні для всіх об'єктів — власника немає.
     rights: (unit) => `the rights function ${unit.name}`,
+    rightsGuards: (unit) => `the rights guard of ${name(unit.ownerObjectId)}`,
     carriers: (unit) => `the carrier copies of ${name(unit.ownerObjectId)}`,
     // Функції контексту команди спільні для всіх об'єктів — власника немає.
     command: (unit) => `the command context function ${unit.name}`,

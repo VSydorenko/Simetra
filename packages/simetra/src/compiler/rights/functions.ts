@@ -29,6 +29,9 @@ import {
   closedFunction,
   type ClosedFunctionShape,
 } from "../membership-functions"
+import { sha256HexSync } from "../sha256"
+import { dollarTag } from "../movement-functions"
+import type { CreationNode } from "../sql/dependencies"
 import { executeGrants } from "../sql/execute-grants"
 import type { SqlParser } from "../sql/parse"
 import { generatedUnit, type SqlUnit } from "../sql/units"
@@ -49,6 +52,11 @@ const platform = (name: string): QualifiedName => ({
  */
 export const RIGHTS_FUNCTIONS = {
   projection: platform("rights_projection"),
+  bump: platform("rights_bump"),
+  versions: platform("rights_versions"),
+  projectionVersion: platform("rights_projection_version"),
+  fullAccessRoles: platform("rights_full_access_roles"),
+  roleGrants: platform("rights_role_grants"),
   requires: platform("rights_requires"),
   domain: platform("rights_domain"),
   roles: platform("rights_roles"),
@@ -92,7 +100,9 @@ interface Declaration {
   args: readonly [name: string, type: string][]
   returns: string
   body: string
-  shape: ClosedFunctionShape
+  shape: ClosedFunctionShape | "stable" | "write"
+  grants?: readonly GrantPurpose[]
+  requires?: readonly CreationNode[]
 }
 
 /**
@@ -262,25 +272,153 @@ export function buildRightsUnits(
       ? [definer(F.visibleUsers, [], "SETOF uuid", visibleUsersBody(contracts))]
       : []),
   ]
-  return declarations
-    .flatMap(({ fn, args, returns, body, shape }) => {
-      const named = args.map(([name, type]) => `${name} ${type}`).join(", ")
-      const types = args.map(([, type]) => type).join(", ")
-      return [
-        closedFunction(`${qualified(fn)}(${named})`, returns, body, shape),
-        ...executeGrants(
-          `${qualified(fn)}(${types})`,
-          shape === "definer" ? SET_ROLES : [],
-          provider
-        ),
-      ]
-    })
-    .map((sql): SqlUnit => ({
-      ...generatedUnit(sql, PLATFORM_SCHEMA, parse),
+  if (contracts.rightsCatalogs.length > 0) {
+    declarations.push(
+      data(
+        F.fullAccessRoles,
+        table([
+          ["role_id", "uuid"],
+          ["storage", "text"],
+          ["storage_id", "uuid"],
+        ]),
+        valuesBody(
+          [
+            ["role_id", "uuid"],
+            ["storage", "text"],
+            ["storage_id", "uuid"],
+          ],
+          contracts.roles
+            .filter((role) => role.fullAccess)
+            .map((role) => [
+              role.roleId,
+              ...storageValues(rightsLevelOf(role.assignedOn, contracts)),
+            ])
+        )
+      ),
+      {
+        fn: F.roleGrants,
+        args: [
+          text("p_level"),
+          uuid("p_level_id"),
+          uuid("p_archetype"),
+          ["p_delta", "jsonb"],
+        ],
+        returns: table(PROJECTION_COLUMNS.slice(1)),
+        body: roleGrantsBody(),
+        shape: "stable",
+      },
+      {
+        fn: F.bump,
+        args: [uuid("p_scope_kind"), uuid("p_scope")],
+        returns: "void",
+        shape: "write",
+        requires: [
+          { type: "table", schema: PLATFORM_SCHEMA, name: "rights_versions" },
+        ],
+        body: [
+          "BEGIN",
+          `  INSERT INTO ${qualified(F.versions)} AS v (scope_kind_id, scope, version)`,
+          "  VALUES (p_scope_kind, p_scope, 1)",
+          "  ON CONFLICT (scope_kind_id, scope) DO UPDATE SET version = v.version + 1;",
+          "END;",
+        ].join("\n"),
+      },
+      definer(
+        F.versions,
+        [],
+        "TABLE (scope_kind_id uuid, scope uuid, version bigint)",
+        [
+          `SELECT s.scope_kind_id, s.scope, coalesce(v.version, 0::bigint)`,
+          `FROM (SELECT DISTINCT m.scope_kind_id, m.scope FROM ${call(F.myScopes)} m`,
+          `      UNION SELECT '${ZERO_UUID}'::uuid, '${ZERO_UUID}'::uuid) s`,
+          `LEFT JOIN ${qualified(F.versions)} v USING (scope_kind_id, scope)`,
+        ].join("\n")
+      )
+    )
+  }
+  const render = ({
+    fn,
+    args,
+    returns,
+    body,
+    shape,
+    grants,
+    requires,
+  }: Declaration): SqlUnit[] => {
+    const named = args.map(([name, type]) => `${name} ${type}`).join(", ")
+    const types = args.map(([, type]) => type).join(", ")
+    const signature = `${qualified(fn)}(${named})`
+    const tag = dollarTag(body)
+    const sql =
+      shape === "write"
+        ? `CREATE OR REPLACE FUNCTION ${signature} RETURNS ${returns} LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = '' SET row_security = off AS ${tag}\n${body}\n${tag};`
+        : shape === "stable"
+          ? `CREATE OR REPLACE FUNCTION ${signature} RETURNS ${returns} LANGUAGE sql STABLE SET search_path = '' AS ${tag}\n${body}\n${tag};`
+          : closedFunction(signature, returns, body, shape)
+    return [
+      sql,
+      ...executeGrants(
+        `${qualified(fn)}(${types})`,
+        grants ?? (shape === "definer" ? SET_ROLES : []),
+        provider
+      ),
+    ].map((text, i): SqlUnit => ({
+      ...generatedUnit(text, PLATFORM_SCHEMA, parse),
       module,
       generator: "rights",
+      ...(i === 0 && requires !== undefined ? { requires } : {}),
     }))
+  }
+  const units = declarations
+    .flatMap(render)
     .sort((a, b) => compareStrings(a.identity, b.identity))
+  if (contracts.rightsCatalogs.length > 0) {
+    const version = sha256HexSync(units.map((unit) => unit.sql).join("\n"))
+    units.push(
+      ...render({
+        ...data(
+          F.projectionVersion,
+          "text",
+          `SELECT ${sqlLiteral(version)}::text`
+        ),
+        grants: SET_ROLES,
+      })
+    )
+  }
+  return units.sort((a, b) => compareStrings(a.identity, b.identity))
+}
+
+/** Нульовий ключ замінює NULL глобального рівня в ключах службових таблиць. */
+export const ZERO_UUID = "00000000-0000-0000-0000-000000000000"
+
+/**
+ * Та сама форма рядків і те саме замикання, що у власних правах: зміна
+ * вимог не може розійтися між перевіркою приросту й читанням прав актора.
+ */
+function roleGrantsBody(): string {
+  const F = RIGHTS_FUNCTIONS
+  const p = (name: string) => param(F.roleGrants, name)
+  const shape = `NULL::text AS storage, NULL::uuid AS storage_id, NULL::uuid AS scope, NULL::uuid AS container, NULL::uuid AS custom_role, ${p("p_archetype")} AS archetype, ${p("p_level")} AS level, ${p("p_level_id")} AS level_id`
+  return [
+    "WITH typed AS (",
+    `  SELECT r.role_id FROM ${call(F.roles)} r`,
+    `  WHERE r.role_id = ${p("p_archetype")} AND r.level = ${p("p_level")} AND r.level_id IS NOT DISTINCT FROM ${p("p_level_id")}`,
+    "), deltas AS (",
+    `  SELECT d.object, d.action, d.extent, d.dimension AS dimension_id, d.effect`,
+    `  FROM jsonb_to_recordset(${p("p_delta")}) AS d(object text, action text, extent text, dimension uuid, effect text)`,
+    "), role_rows AS (",
+    `  SELECT ${shape}, p.object, p.action, p.extent, p.dimension_id`,
+    `  FROM typed r JOIN ${call(F.projection)} p ON p.role_id = r.role_id`,
+    "  WHERE NOT EXISTS (SELECT 1 FROM deltas d WHERE d.effect = 'deny' AND d.object = p.object AND d.action = p.action AND d.extent = p.extent AND d.dimension_id IS NOT DISTINCT FROM p.dimension_id)",
+    "  UNION ALL",
+    `  SELECT ${shape}, d.object, d.action, d.extent, d.dimension_id`,
+    `  FROM typed r CROSS JOIN deltas d JOIN ${call(F.domain)} m`,
+    `    ON m.level = ${p("p_level")} AND m.level_id IS NOT DISTINCT FROM ${p("p_level_id")}`,
+    "   AND m.object = d.object AND m.action = d.action AND m.extent = d.extent AND m.dimension_id IS NOT DISTINCT FROM d.dimension_id",
+    "  WHERE d.effect = 'allow'",
+    `), closure_1 AS (\n${closurePass("role_rows", CLOSURE_COLUMNS)}\n), closure_2 AS (\n${closurePass("closure_1", CLOSURE_COLUMNS)}\n)`,
+    "SELECT DISTINCT object, action, extent, dimension_id FROM closure_2",
+  ].join("\n")
 }
 
 // --- Функції даних --------------------------------------------------------
@@ -389,6 +527,30 @@ function levelDomain(
         : []
     )
   })
+}
+
+/** The desired delta domain for each archetype, using the rights generator's level rules. */
+export function rightsDomainRows(
+  contracts: Pick<Contracts, "rights" | "roles">
+): {
+  roleId: string
+  object: string
+  action: string
+  extent: string
+  dimensionId: string | null
+}[] {
+  return contracts.roles.flatMap((role) =>
+    levelDomain(role.assignedOn, contracts.rights).map((entry) => {
+      const [extent, dimensionId] = extentValues(entry.extent)
+      return {
+        roleId: role.roleId,
+        object: entry.contract.kindLabel,
+        action: entry.action,
+        extent,
+        dimensionId,
+      }
+    })
+  )
 }
 
 /**
@@ -761,8 +923,8 @@ function mineBody(
     // обсягів: коли лишились `post@own`, `update@any` і `read@own`, прохід 1
     // знімає `update@any` (немає `read@any`), і лише прохід 2 — `post@own`,
     // що тримався на `update@any`. Рекурсивний CTE віднімання не виражає.
-    ["closure_1", closurePass("role_rows")],
-    ["closure_2", closurePass("closure_1")],
+    ["closure_1", closurePass("role_rows", CLOSURE_COLUMNS)],
+    ["closure_2", closurePass("closure_1", CLOSURE_COLUMNS)],
   ]
   return [
     `WITH ${ctes.map(([name, sql]) => `${name} AS (\n${indent(sql)}\n)`).join(",\n")}`,
@@ -780,9 +942,37 @@ function mineBody(
 }
 
 /** Один прохід замикання над попереднім: тримається лише рядок з усіма вимогами. */
-function closurePass(previous: string): string {
+const CLOSURE_COLUMNS = {
+  output: [
+    "storage",
+    "storage_id",
+    "scope",
+    "container",
+    "custom_role",
+    "archetype",
+    "level",
+    "level_id",
+    "object",
+    "action",
+    "extent",
+    "dimension_id",
+  ],
+  identity: [
+    "storage",
+    "storage_id",
+    "scope",
+    "container",
+    "custom_role",
+    "archetype",
+  ],
+} as const
+
+function closurePass(
+  previous: string,
+  columns: { output: readonly string[]; identity: readonly string[] }
+): string {
   return [
-    `SELECT g.storage, g.storage_id, g.scope, g.container, g.custom_role, g.archetype, g.level, g.level_id, g.object, g.action, g.extent, g.dimension_id`,
+    `SELECT ${columns.output.map((column) => `g.${column}`).join(", ")}`,
     `FROM ${previous} g`,
     `WHERE NOT EXISTS (`,
     `  SELECT 1`,
@@ -792,8 +982,8 @@ function closurePass(previous: string): string {
     `    AND NOT EXISTS (`,
     `      SELECT 1`,
     `      FROM ${previous} s`,
-    `      WHERE (s.storage, s.storage_id, s.scope, s.container, s.custom_role, s.archetype)`,
-    `            IS NOT DISTINCT FROM (g.storage, g.storage_id, g.scope, g.container, g.custom_role, g.archetype)`,
+    `      WHERE (${columns.identity.map((column) => `s.${column}`).join(", ")})`,
+    `            IS NOT DISTINCT FROM (${columns.identity.map((column) => `g.${column}`).join(", ")})`,
     `        AND s.object = q.object`,
     `        AND s.action = q.required`,
     `        AND (s.extent = 'any' OR (s.extent = g.extent AND s.dimension_id IS NOT DISTINCT FROM g.dimension_id))`,

@@ -333,6 +333,8 @@ export const COMPILER_RULES = [
   "plan.numbering-not-generated",
   "plan.rights-source-access",
   "plan.rights-source-unknown-keys",
+  "plan.rights-full-access-lost",
+  "plan.rights-orphans",
   "database.failed",
   "roles.create-role-denied",
   "introspect.unrepresentable",
