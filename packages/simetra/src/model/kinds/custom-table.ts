@@ -150,6 +150,7 @@ export const customTableKind: KindDefinition = {
   rightsExtents: [],
   sqlModule: "debt",
   materializes: "table",
+  rowLevelSecurity: "declared",
   scope: "required",
   declared: true,
   kindLabel: true,

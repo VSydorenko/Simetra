@@ -44,6 +44,18 @@ describe("KIND_REGISTRY", () => {
     expect(kindByDir("unknown")).toBeUndefined()
   })
 
+  // Рб1-6: RLS виду — явний факт реєстру, узгоджений із тим, чи є в виду
+  // таблиця і чи описує її файл метаданих.
+  it.each(Object.entries(KIND_REGISTRY))(
+    "%s states row-level security consistent with its table",
+    (_, def) => {
+      expect(def.rowLevelSecurity !== "none").toBe(def.materializes === "table")
+      expect(def.rowLevelSecurity === "declared").toBe(
+        def.declared && def.materializes === "table"
+      )
+    }
+  )
+
   it("key order starts with the header and covers every schema key", () => {
     for (const kind of METADATA_KINDS) {
       const def = KIND_REGISTRY[kind]

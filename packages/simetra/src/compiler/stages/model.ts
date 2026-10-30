@@ -2010,15 +2010,22 @@ function uniqueCarrier(
 }
 
 /**
- * Прийнята таблиця описує RLS полем файлу, решта видів — фактом реєстру.
+ * Прийнята таблиця описує RLS полем файлу, решта видів — фактом реєстру
+ * (Рб1-6). Таблицю тут будує лише вид із таблицею, тож `declared` без файлу
+ * чи `none` — розбіжність реєстру, а не метаданих: тихе значення дало б
+ * `undefined` чи таблицю без RLS під політиками.
  */
 function rowLevelSecurityOf(
   object: ParsedObject
 ): PhysicalTable["rowLevelSecurity"] {
-  if (isDeclaredTable(object)) {
+  const fact = KIND_REGISTRY[object.kind].rowLevelSecurity
+  if (fact === "declared" && isDeclaredTable(object)) {
     return (object.data as CustomTable).rowLevelSecurity
   }
-  return KIND_REGISTRY[object.kind].rowLevelSecurity ?? "off"
+  if (fact === "enabled" && !isDeclaredTable(object)) return fact
+  throw new Error(
+    `internal: kind ${object.kind} has a table with rowLevelSecurity ${fact}`
+  )
 }
 
 function physicalNameOf(object: ParsedObject): string {
