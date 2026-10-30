@@ -16,7 +16,7 @@ export type TableResolution =
 /**
  * Ім'я таблиці за схемою; некваліфіковане — за `search_path` функції, а без
  * нього промотоване ім'я — відмова: таблицю обирає `search_path` викликача
- * (рішення 13). Спільне для операторів і типів PL/pgSQL (`%TYPE`,
+ * (спека промоції §6). Спільне для операторів і типів PL/pgSQL (`%TYPE`,
  * `%ROWTYPE`), щоб одне ім'я не резолвилось двома правилами.
  */
 export function resolveTableName(
@@ -59,7 +59,7 @@ export function resolveTableName(
     const found = lookup(s)
     if (found.table !== undefined || found.known !== undefined) return found
     // Схема поза моделлю раніше за схему таблиці: відношення з тим самим
-    // ім'ям там статично не виключити (рішення 14).
+    // ім'ям там статично не виключити (спека промоції §6).
     if (!modelSchemas.has(s) && promoted) {
       return {
         failed: true,

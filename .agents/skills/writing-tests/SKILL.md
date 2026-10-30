@@ -46,6 +46,23 @@ Seed users only through provisioning or `signUp` (`packages/simetra/test/db/auth
 a bare row in the users catalog has no identity, so `current_user_id()` returns
 `NULL` and every command fails with a misleading `no-right`.
 
+Designer DB files run one after another (`fileParallelism: false` in
+`packages/designer/vitest.config.ts`: roles are cluster-wide and the catalog
+extract sees them). Inside a file, tests run concurrently only after the file
+passes an isolation audit; then it opts into `describe.concurrent`, capped by
+`maxConcurrency`. The audit checklist:
+
+- every test works in its own shadows or copies;
+- no mutable file-level state, and no shared `vi.spyOn` / `vi.mock` whose call
+  counts a test reads;
+- cluster state (roles, role grants, `alter system`) changes only in
+  `beforeAll`;
+- no `toMatchSnapshot`, `expect.assertions` or `expect.hasAssertions` through
+  the global `expect` — a concurrent test takes that `expect` from its context;
+- tests sensitive to timing or to other sessions (lock holders,
+  `pg_stat_activity`) sit in a separate sequential `describe`;
+- a file that is unstable in three runs in a row stays sequential.
+
 ## 3. Fixtures: builders, not inline metadata
 
 - Build metadata through the shared fixture modules next to the tests

@@ -44,8 +44,8 @@ async function apply(
 
 /**
  * Те саме для `promote`: запис промоції їде в `data` і артефактом у
- * `plans/<objectId>.promotion.json` — план бази читає його звідти (рішення 1
- * плану П3-2a), бо мапінг у `metadata/` не лишається.
+ * `plans/<objectId>.promotion.json` — план бази читає його звідти (спека
+ * промоції §7.1), бо мапінг у `metadata/` не лишається.
  */
 async function applyPromotion(
   dir: string,

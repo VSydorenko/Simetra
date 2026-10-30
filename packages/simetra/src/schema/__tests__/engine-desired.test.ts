@@ -8,7 +8,7 @@ import {
   project,
 } from "../../compiler/__tests__/helpers"
 
-/** Межа керування з моделі (план E2a, задача 6): рішення плану 3. */
+/** Межа керування з моделі (платформна спека §6.9). */
 
 async function scopeOf(
   sql: string,

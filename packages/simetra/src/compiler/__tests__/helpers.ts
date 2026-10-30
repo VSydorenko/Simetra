@@ -242,7 +242,7 @@ export function organization(overrides: Record<string, unknown> = {}) {
 }
 
 /**
- * Тека для форм цілі FK прийнятої таблиці (Рб1-10): проєкт `scopedProject()`,
+ * Тека для форм цілі FK прийнятої таблиці (спека прав §4.7): проєкт `scopedProject()`,
  * корінь `Organization`, скоуплений довідник `Note`, довідник без скоупу
  * `Plain`, прийнята `Other` і скоуплена прийнята `Log` (колонки `id`, `org`)
  * з одним FK `log_fk`.

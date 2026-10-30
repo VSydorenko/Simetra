@@ -216,7 +216,7 @@ describe("buildMechanicsUnits", () => {
   })
 
   it("a copy-only update does not touch the row", async () => {
-    // Поширення копій носіїв пише лише копії (Р2a2-19): умова оновлення —
+    // Поширення копій носіїв пише лише копії (спека прав §5.2): умова оновлення —
     // зміст (без механіки, копій і генерованих колонок) змінився, або копії
     // не змінилися.
     const model = (await compileRights(policyDomain())).model!
@@ -281,7 +281,7 @@ describe("buildMechanicsUnits", () => {
   })
 
   it("content columns are one list for the condition and the effects", async () => {
-    // Р2b1-9, Р2b1-15: умову механіки й порівняння тригера ефектів дає один
+    // спека прав §5.3: умову механіки й порівняння тригера ефектів дає один
     // перелік — без механіки, копій і генерованих колонок.
     const model = (await compileRights(policyDomain())).model!
     const report = model.physical.tables.find((t) => t.name === "task_report")!
@@ -303,7 +303,7 @@ describe("buildMechanicsUnits", () => {
     expect(contentChangeCondition(report, "camelCase")).toBe(
       `(${changed(content)}) OR NOT (${changed([{ name: "task_id_assignee_id" }])})`
     )
-    // Авторство — механіка (Р-A1-9): поза змістом таблиці з `trackAuthor`.
+    // Авторство — механіка (спека П4 §6.8): поза змістом таблиці з `trackAuthor`.
     const task = model.physical.tables.find((t) => t.name === "task")!
     expect(task.columns.map((c) => c.name)).toEqual(
       expect.arrayContaining(["created_by_id", "updated_by_id"])

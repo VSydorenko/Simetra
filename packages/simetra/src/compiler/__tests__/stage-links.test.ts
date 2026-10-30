@@ -346,8 +346,8 @@ describe("stage 5: scope set functions", () => {
     body = "SELECT NULL::uuid"
   ) => `CREATE FUNCTION public.${name}${tail} AS $$ ${body} $$;\n`
   const good = (name: string) => create(`${name}()`)
-  // Без переліку боргу: функція множини боргом не буває (рішення 8 плану
-  // промоції 2b), тож її форму звітує саме `scope.set-function-signature`.
+  // Без переліку боргу: функція множини боргом не буває (спека П2 §3),
+  // тож її форму звітує саме `scope.set-function-signature`.
   const buildScoped = async (sql?: string) =>
     await compile(
       metaFiles({
@@ -417,7 +417,7 @@ describe("stage 5: scope set functions", () => {
     expect(result.diagnostics[0]!.params?.reason).toBe(reason)
   })
 
-  // Тіло оболонку не порушує: його судить суддя голів (Р2c1-18), без дубля
+  // Тіло оболонку не порушує: його судить суддя голів (спека прав §5.3), без дубля
   // `scope.set-function-signature`.
   it.each([
     [
@@ -668,7 +668,7 @@ describe("stage 5: bare current user in a policy", () => {
 
   it("a quoted name in another case is another function", async () => {
     // Чужа функція — не поточний користувач: її відмовляє дозвільний
-    // перелік виразів (Р2c1-55), а не правило голого виклику.
+    // перелік виразів (спека прав §5.3), а не правило голого виклику.
     const result = await policy(
       'CREATE POLICY p ON public.t USING (owner_id = "Simetra".current_user_id());'
     )

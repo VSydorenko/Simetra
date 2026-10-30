@@ -35,7 +35,7 @@ import {
 import { inTarget } from "../../__tests__/support/db"
 
 /**
- * Стан застосування в схемі `simetra` (план П3-1, задача 5): DDL marker і
+ * Стан застосування в схемі `simetra`: DDL marker і
  * ledger, їх читання й запис. Ціль кожного тесту — окрема база від
  * `withDesiredShadow`; база стеку лише читається.
  */
@@ -411,7 +411,7 @@ describe("readAppliedPromotions", () => {
     ])
   })
 
-  // Рішення 11 плану П3-2a: колонку додає той самий план, що пише стан
+  // Платформна спека §6.1: колонку додає той самий план, що пише стан
   it("adds the column to an older ledger in the same plan that records the promotion", async () => {
     const model = await partyModel()
     const outcome = await inAppliedTarget(async (url) => {
@@ -431,8 +431,8 @@ describe("readAppliedPromotions", () => {
           `expected planned, got ${plan.status}: ${plan.diagnostics.map((d) => d.message).join("; ")}`
         )
       const { artifact } = plan
-      // `COMMIT` промоції до П3-2b відхиляється (рішення 12), а прогін
-      // `proof` комітить: ним рядок ledger і пишеться
+      // `COMMIT` промоції вимагає чинного звіту репетиції (спека промоції
+      // §8), а прогін `proof` комітить без нього: ним рядок ledger і пишеться
       const run = await executePlan(
         createApplyDatabase({ readOnly: false }),
         { url },
@@ -467,7 +467,7 @@ describe("readAppliedPromotions", () => {
     expect(outcome.hashes).toEqual(new Set([await promotionRecordHash(RECORD)]))
   })
 
-  // Рішення 7 плану П3-2b-3: колонку хешу звіту додає той самий план, що
+  // Спека промоції §8: колонку хешу звіту додає той самий план, що
   // пише стан; план без промоції пише SQL NULL
   it("adds the rehearsal column to an older ledger in an applied plan", async () => {
     const model = await partyModel()

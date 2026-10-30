@@ -94,7 +94,7 @@ export type SetFunctionReason = "language" | "security" | "searchPath"
  * для підміни імен. Оболонку `search_path` читає спільний
  * `closedShellProblem`, щоб не дублювати його. Тіло (рядкове, один `SELECT`,
  * кваліфіковані відношення) судить суддя голів (`sql.head-not-allowed`,
- * Р2c1-18): друга причина тут була б дублем.
+ * спека прав §5.3): друга причина тут була б дублем.
  */
 export function setFunctionClosedProblem(
   fn: FunctionNode,

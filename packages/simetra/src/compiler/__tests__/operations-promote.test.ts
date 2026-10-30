@@ -172,7 +172,7 @@ describe("promoteObject: catalog from one CustomTable", () => {
       kind: "Catalog",
       kindLabel: "counterparty",
       conversions: [
-        // Коментар таблиці дослівно став описом виду (R24)
+        // Коментар таблиці дослівно став описом виду (спека промоції §8)
         { subject: "Counterparty#comment", class: "metadata" },
         {
           subject: "Counterparty#uniques/counterparties_inn_key",
@@ -785,7 +785,7 @@ describe("promoteObject: catalog from one CustomTable", () => {
   })
 })
 
-/** Факти запису — те, що T2 виводить сам і звіряє (рішення 1 плану П3-2a). */
+/** Факти запису — те, що T2 виводить сам і звіряє (спека промоції §7.1). */
 const factsOf = (record: PromotionRecord) => ({
   tables: record.tables,
   columns: record.columns,
@@ -1082,7 +1082,7 @@ describe("promoteObject: the promotion record", () => {
   })
 })
 
-describe("promoteObject: decision 15 — NOT NULL, RLS, comments", () => {
+describe("promoteObject: NOT NULL, RLS, comments (спека промоції §7.1)", () => {
   it("refuses a nullable source of a notNull target without fill", async () => {
     const files = promotionProject(PARTS)
     const { result } = await promoted(
@@ -1285,7 +1285,7 @@ describe("promoteObject: decision 15 — NOT NULL, RLS, comments", () => {
     // Без опису коментар сам стає описом (наступний тест).
   })
 
-  // R24 плану П3-2a: дослівно перенесений коментар таблиця виду не несе,
+  // Дослівно перенесений коментар таблиця виду не несе,
   // тож `promote` сам записує його клас `metadata` — без вибору людини
   it("records a verbatim comment transfer itself with class metadata", async () => {
     const files = withCounterparty((raw) => {
@@ -1706,7 +1706,7 @@ describe("promoteObject: cascade through subscriptions and scope kinds", () => {
   })
 
   it("requires the removed class for a default of the scope column", async () => {
-    // Значення скоупу вид у базі не дає (R21): DEFAULT носія скоупу мапінг не
+    // Значення скоупу вид у базі не дає (спека промоції §8): DEFAULT носія скоупу мапінг не
     // покриває, тож він потребує класу, і лише «видалено»
     const counterparty = withCounterparty((raw) => {
       raw.scope = "org"
@@ -1806,7 +1806,7 @@ describe("promoteObject: cascade through subscriptions and scope kinds", () => {
     })
   })
 
-  describe("a foreign key on (scope, key) of the promoted table (Рб1-10)", () => {
+  describe("a foreign key on (scope, key) of the promoted table (спека прав §4.7)", () => {
     const PAYMENT = "custom-tables/Payment/Payment.meta.json"
     /** Скоуплена `Counterparty` і прийнята `Payment` з одним FK на неї. */
     const files = (local: string[], target: string[]) => {
@@ -2085,7 +2085,7 @@ describe("promoteObject: tabular sections, documents, registers, data steps", ()
       expression: LINE_NUMBER,
       kind: "backfill",
     })
-    // Таблиця контактів без RLS — рядки ТЧ беруть RLS власника (рішення 15).
+    // Таблиця контактів без RLS — рядки ТЧ беруть RLS власника (спека промоції §7.1).
     expect(record.rowLevelSecurity).toEqual([
       {
         schema: "app",
@@ -3071,7 +3071,7 @@ describe("promoteObject: tabular sections, documents, registers, data steps", ()
 
   it("records a restrict foreign key changed to the kind's noAction", async () => {
     // Каскад контактів на `Counterparty` перша промоція переводить у
-    // `restrict` (Р2c1-34): власного каскаду на таблицю виду не буває.
+    // `restrict` (спека прав §4.7): власного каскаду на таблицю виду не буває.
     const files = promotionProject(WITH_CONTACTS)
     const first = await promoted(files, counterpartyMapping(PARTS))
     expect(errors(first.result)).toEqual([])
@@ -3132,7 +3132,7 @@ describe("promoteObject: tabular sections, documents, registers, data steps", ()
     ])
   })
 
-  describe("incoming cascade from a table that stays CustomTable (Р2c1-34)", () => {
+  describe("incoming cascade from a table that stays CustomTable (спека прав §4.7)", () => {
     // Каскад від таблиці виду до прийнятої таблиці заборонено, тож промоція
     // сама переводить вхідний FK у `restrict` окремим кроком з дозволом.
     const cascadeSteps = (

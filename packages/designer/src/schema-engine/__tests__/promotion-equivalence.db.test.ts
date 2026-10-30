@@ -9,7 +9,7 @@ import { createApplyDatabase, createPgDeltaEngine } from ".."
 import { inTarget, query } from "../../__tests__/support/db"
 
 /**
- * SQL ключів канонічних імен (рішення 4 плану П3-2a) на справжній базі: копія
+ * SQL ключів канонічних імен (спека промоції §5) на справжній базі: копія
  * після перейменувань таблиць і колонок і бажана тінь дають рівні ключі для
  * еквівалентних об'єктів, а кроки `canonicalRenames` прибирають їх із diff
  * двигуна, зберігши лічильник послідовності. Ціль кожного тесту — окрема
@@ -119,7 +119,7 @@ describe("readEquivalenceObjects", () => {
         expect(named(cloneObjects, "legacy_owner_fk").key).toContain(
           "REFERENCES app.owners(id) ON DELETE CASCADE"
         )
-        // R10: колонка-власник і ознака, що DEFAULT вживає саме цю послідовність
+        // Колонка-власник і ознака, що DEFAULT вживає саме цю послідовність
         expect(named(cloneObjects, "legacy_id_seq").key).toBe(
           JSON.stringify(["id", true])
         )
@@ -160,7 +160,7 @@ describe("readEquivalenceObjects", () => {
   })
 
   it("keys whether the operator classes are the defaults", async () => {
-    // Форма `covered` (рішення 11 плану П3-3a1) покриває лише індекс з
+    // Форма `covered` (спека промоції §8) покриває лише індекс з
     // типовими класами, а ім'я класу типовості не каже: її несе остання частина
     await inTarget(
       `create schema app;

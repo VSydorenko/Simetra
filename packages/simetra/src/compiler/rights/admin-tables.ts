@@ -115,7 +115,7 @@ export function rightsAdminTables(
       [
         // Перший образ рядка в транзакції.
         asc("xid", "relation", "row_id", "seq"),
-        // Журнал скоупу новіші першими (`rights_journal_of`, Р2d2-12) — без
+        // Журнал скоупу новіші першими (`rights_journal_of`) — без
         // повного перебору з сортуванням.
         [...asc("scope_kind_id", "scope"), desc("at"), desc("seq")],
       ]

@@ -13,8 +13,8 @@ import {
 
 /**
  * Властивість факту, якої модель каталогу не виражає: адаптер робить із неї
- * діагностику `engine.unrepresentable`, а не мовчки її губить (план E2a,
- * рішення 5).
+ * діагностику `engine.unrepresentable`, а не мовчки її губить (спека П2
+ * §9).
  */
 export interface MappingIssue {
   object: StableId
@@ -262,7 +262,7 @@ function tableProperties(fact: Fact, issues: MappingIssue[]): void {
  * Таблиця моделі з факту двигуна і його дочірніх фактів: колонки за
  * `_position`, обмеження з `def`, індекси (окрім індексів PK/UNIQUE — окремих
  * фактів у них немає), коментарі. `REPLICA IDENTITY` — не поле, а одиниця
- * (рішення за спайком, 3), її мапить `map-units`.
+ * (спека П2 §9), її мапить `map-units`.
  */
 export function mapTable(
   view: FactBase,

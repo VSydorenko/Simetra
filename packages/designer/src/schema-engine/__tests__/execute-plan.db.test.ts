@@ -69,7 +69,7 @@ import {
 } from "../../__tests__/support/db"
 
 /**
- * Раннер транзакції `executePlan` на справжній базі (план П3-1, задача 8).
+ * Раннер транзакції `executePlan` на справжній базі.
  * Ціль кожного тесту — окрема база від `withDesiredShadow` із бажаним станом
  * застосування маленької моделі; база стеку лише читається. Відбитки цілі й
  * бажаного стану читаються з реальних баз, план складається вручну. Тести з
@@ -501,8 +501,7 @@ function afterEnd(
 
 /**
  * Порт, що до транзакції раннера лишає на з'єднанні сесійний стан `sql`, —
- * як попередній клієнт того самого backend за пулером (Review Focus 4 плану
- * П3-2b-2): `BEGIN` порту закомічено порожнім, `sql` іде поза транзакцією.
+ * як попередній клієнт того самого backend за пулером: `BEGIN` порту закомічено порожнім, `sql` іде поза транзакцією.
  */
 function sessionLeftover(db: ApplyDatabase, sql: string): ApplyDatabase {
   return {
@@ -914,7 +913,7 @@ describe.concurrent("executePlan", () => {
   })
 
   describe("foreign keys of the footprint", () => {
-    // Рішення 9 плану П3-2b-1: схема `other` поза межею, крок змінює тип
+    // Спека промоції §7.2: схема `other` поза межею, крок змінює тип
     // колонки, на яку FK з неї посилався б
     const setup = `${BASE};
       create schema other;`
@@ -981,7 +980,7 @@ describe.concurrent("executePlan", () => {
   })
 
   it("needs the right on the table itself only, its children are locked with it", async () => {
-    // Рішення 10 плану П3-2b-1: права нащадка LOCK без ONLY не перевіряє
+    // Спека промоції §7.2: права нащадка LOCK без ONLY не перевіряє
     const setup = `${BASE};
       create table app.it (id int);
       create table app.it_child () inherits (app.it);
@@ -1101,8 +1100,7 @@ describe.concurrent("executePlan", () => {
 
   /**
    * Перейменування наміром і крок двигуна, що називає таблицю вже новим
-   * іменем (рішення 9 плану П3-2a). Артефакт зібрано вручну: конвеєр плану
-   * з промоцією з'являється пізніше (R12).
+   * іменем (спека промоції §7.2). Артефакт зібрано вручну.
    */
   const renamePlan = (url: string) => {
     const steps: PlanStep[] = [
@@ -1135,7 +1133,6 @@ describe.concurrent("executePlan", () => {
     })
   })
 
-  // Review Focus 3 плану П3-2a
   it("refuses with target-changed when a renamed table vanished before apply", async () => {
     await inTarget(BASE, async (url) => {
       const plan = await renamePlan(url)
@@ -1191,7 +1188,7 @@ describe.concurrent("executePlan", () => {
         return Object.fromEntries(rows.map((r) => [r.at, r]))
       })
 
-    // R22 плану П3-2a, рішення 1 плану П3-2b-1: преамбула — лише навколо
+    // Спека промоції §7.2: преамбула — лише навколо
     // блоку кроків двигуна, бо тіла функцій після кроків перевіряє ревалідація
     it("runs engine steps under the preamble and the other steps under the transaction settings", async () => {
       const rows = await seen([
@@ -1214,7 +1211,7 @@ describe.concurrent("executePlan", () => {
 
     it("proves a SQL function whose body names a table of public without schema", async () => {
       // Під `search_path = pg_catalog` при ввімкненій валідації тіл
-      // `CREATE FUNCTION` упав би: `zz_rows` не знайшлася б (рев'ю I1)
+      // `CREATE FUNCTION` упав би: `zz_rows` не знайшлася б
       const setup = `${BASE};
         create table public.zz_rows (id int);
         insert into public.zz_rows values (1), (2);`
@@ -1244,7 +1241,7 @@ describe.concurrent("executePlan", () => {
 
   describe.each(["proof", "rehearse"] as const)("data steps (%s)", (mode) => {
     /**
-     * Промоція `app.dt` → `app.du` з кроками даних (план П3-2b-2, задача 5).
+     * Промоція `app.dt` → `app.du` з кроками даних.
      * Артефакт зібрано вручну, як у `preservation proof`: секцію `data`
      * будує план, а тут раннер має отримати саме її. Змаплені колонки
      * зберігають імена; незмаплена ціль з'являється кроком наміру.
@@ -1534,7 +1531,7 @@ describe.concurrent("executePlan", () => {
       })
     })
 
-    // Review Focus 3: двигун такої таблиці не планує (`engine.unrepresentable`),
+    // Двигун такої таблиці не планує (`engine.unrepresentable`),
     // тож артефакт зібрано вручну з відбитком цілі, де тригер уже `A`, і
     // раннер проходить усі перевірки
     it("restores an ENABLE ALWAYS trigger as always", async () => {
@@ -1599,7 +1596,7 @@ describe.concurrent("executePlan", () => {
       })
     })
 
-    // Review Focus 2: порушення відкладеного FK — одразу після запису, а не
+    // Порушення відкладеного FK — одразу після запису, а не
     // `55006 pending trigger events` на наступному кроці
     it("stops a deferred foreign key broken by the write", async () => {
       const setup = `${BASE};
@@ -1653,7 +1650,7 @@ describe.concurrent("executePlan", () => {
     const MODES = `select json_object_agg(tgname, tgenabled::text order by tgname)
       as modes from pg_trigger where tgname like '%_keep'`
 
-    // Рішення В17: увімкнення тригера — `ALTER TABLE`, а він неможливий, поки
+    // Спека промоції §7.2: увімкнення тригера — `ALTER TABLE`, а він неможливий, поки
     // на таблиці є відкладені події (`55006`). Вихідний відкладений FK ставить
     // подію на саму записувану таблицю
     it("restores the triggers of a table with a deferred outbound foreign key", async () => {
@@ -1738,7 +1735,7 @@ describe.concurrent("executePlan", () => {
     it.runIf(mode === "rehearse")(
       "times the deferred check of the data write apart from the end of the steps",
       async () => {
-        // Рішення В17: відкладений FK перевіряється одразу після запису
+        // Спека промоції §7.2: відкладений FK перевіряється одразу після запису
         // даних; цей оператор — окремий запис доказів, не фаза 13
         const setup = `${BASE}; ${KEEP}
           create table app.dp (id int primary key);
@@ -1813,7 +1810,7 @@ describe.concurrent("executePlan", () => {
       })
     })
 
-    // Вердикт архітектора до В17: проміжний стан між записами двох таблиць
+    // Спека промоції §7.2: проміжний стан між записами двох таблиць
     // одиниці порушує відкладений FK A → B, і перевірка не сміє настати
     // раніше за запис обох; вимкнення тригерів B після запису A не падає
     it("writes two tables of a unit before the deferred check and restores both", async () => {
@@ -1864,7 +1861,7 @@ describe.concurrent("executePlan", () => {
       })
     })
 
-    // Вердикт архітектора до задачі 5: відкладений тригер користувача фази 10
+    // Відкладений тригер користувача фази 10
     // спрацьовує під налаштуваннями транзакції. Подію ставить каскад FK на
     // іншу таблицю (тригери записуваної таблиці вимкнено), а тіло називає
     // таблицю `public` без схеми — під закріпленим `search_path` її немає
@@ -1904,7 +1901,7 @@ describe.concurrent("executePlan", () => {
       })
     })
 
-    // Review Focus 4: сесійна тимчасова таблиця попереднього клієнта на
+    // Сесійна тимчасова таблиця попереднього клієнта на
     // тому самому backend
     it("refuses a session temp table left on the backend", async () => {
       await inTarget(`${BASE}; ${BANG}`, async (url) => {
@@ -1953,7 +1950,7 @@ describe.concurrent("executePlan", () => {
       })
     })
 
-    // Review Focus 1: віконна функція в агрегаті заборонена
+    // Віконна функція в агрегаті заборонена
     it("measures a windowed expression", async () => {
       const setup = `${BASE};
         create table app.dt (id int primary key, c text);
@@ -2016,7 +2013,7 @@ describe.concurrent("executePlan", () => {
       })
     })
 
-    // Вердикт архітектора: переповнення приведення — крок, а не сира
+    // Переповнення приведення — крок, а не сира
     // помилка. Замір «до» приводить вираз до типу запису раніше за сторож,
     // тож переповнення ловить він
     it("names the step whose cast overflows", async () => {
@@ -2681,7 +2678,7 @@ describe.concurrent("executePlan", () => {
       ...NOT_VALID,
     })
 
-    // Review Focus 5 плану П3-2b-1: `ROLLBACK` не запускає відкладених
+    // `ROLLBACK` не запускає відкладених
     // перевірок, тож без `SET CONSTRAINTS ALL IMMEDIATE` репетиція мовчала б
     it("surfaces a deferred foreign key violation before a rehearsal rolls back", async () => {
       const setup = `${BASE};
@@ -2780,7 +2777,7 @@ describe.concurrent("executePlan", () => {
         })
 
       it("refuses a copy with the same chain and another head", async () => {
-        // Review Focus 1 плану П3-2b-3: staging того самого проєкту отримав ті
+        // Staging того самого проєкту отримав ті
         // самі плани окремими застосуваннями — ланцюжок, роль, відбиток і
         // сервер збігаються, голова ledger — ні
         await inTarget(BASE, (url) =>
@@ -2815,7 +2812,7 @@ describe.concurrent("executePlan", () => {
       })
 
       it("rehearses a copy restored under other owners", async () => {
-        // Review Focus 2 плану П3-2b-3 і вимір задачі 0: таблиця без явних
+        // Таблиця без явних
         // грантів (relacl IS NULL) у копії належить ролі, членом якої є роль
         // застосування. Фаза 6 репетиції порівнює без власника й пропускає;
         // повний доказ двигуна бачить дії ACL, і відмова називає причину
@@ -2889,7 +2886,7 @@ describe.concurrent("executePlan", () => {
       })
 
       it("refuses a copy on another server", async () => {
-        // Аудит Codex: копія з тією самою схемою й станом, але іншим
+        // Копія з тією самою схемою й станом, але іншим
         // упорядкуванням — інший факт сервера, відмова до першого кроку. Ціль і
         // копію будує той самий рецепт, різниться лише `LC_COLLATE`/`LC_CTYPE`
         const recipe = `${desired.sql};\n${BASE}`
@@ -3217,8 +3214,8 @@ describe.concurrent("executePlan", () => {
   describe("preservation proof", { concurrent: false }, () => {
     /**
      * Промоція `app.pt` → `app.pu` з перейменуванням `c` → `d` і зміною типу
-     * `x` (рішення 6 плану П3-2a). Артефакт зібрано вручну, як у
-     * `renamePlan`: конвеєр плану з промоцією з'являється пізніше.
+     * `x` (спека промоції §7.2). Артефакт зібрано вручну, як у
+     * `renamePlan`.
      */
     const OBJECT_ID = "00000000-0000-4000-8000-000000000001"
     const SETUP = `${BASE};
@@ -3422,7 +3419,7 @@ describe.concurrent("executePlan", () => {
     })
 
     it("takes the longest statement of a large table from its measure", async () => {
-      // Рішення 3–4 плану П3-2b-3: без повільного кроку двигуна найдовший
+      // Спека промоції §8: без повільного кроку двигуна найдовший
       // оператор репетиції — замір великої таблиці, і саме він, а не сума
       // фази, входить у формулу тайм-ауту застосування
       const record: PromotionRecord = { ...RECORD, typeChanges: [] }
@@ -3495,7 +3492,7 @@ describe.concurrent("executePlan", () => {
     })
 
     it("sets the statement timeout from the report", async () => {
-      // Review Focus 5 на базі: тригер на ledger бачить тайм-аут, з яким
+      // На базі: тригер на ledger бачить тайм-аут, з яким
       // йде транзакція після фази 6c, — стан пишеться після всіх кроків
       const record: PromotionRecord = { ...RECORD, typeChanges: [] }
       const setup = `${SETUP};

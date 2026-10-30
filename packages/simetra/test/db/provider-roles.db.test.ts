@@ -6,8 +6,7 @@ import { platformRoleRefusals, readPlatformRoles } from "simetra/schema"
 import { rollbackDatabase, testRoleName, withRollback } from "./connection"
 
 /**
- * `supabase/roles.sql` — роль команд і роль входу локального стеку (Р2a1-1,
- * Р-A1-4). DB-рівень, бо `CREATE ROLE`, грант творцеві за
+ * `supabase/roles.sql` — роль команд і роль входу локального стеку (спека П4 §6.2). DB-рівень, бо `CREATE ROLE`, грант творцеві за
  * `createrole_self_grant` і опції членства вирішує Postgres. Файл засіває
  * CLI під `postgres`, тож і тест — від нього.
  */

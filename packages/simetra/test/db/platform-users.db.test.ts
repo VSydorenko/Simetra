@@ -31,8 +31,7 @@ async function deploy(client: pg.Client): Promise<void> {
     metaFiles({
       "project.meta.json": project(),
       // Власний обов'язковий реквізит зі значенням заповнення: провізія
-      // вставляє лише ключ і найменування, тож решту мусить дати DEFAULT
-      // (Review Focus 1).
+      // вставляє лише ключ і найменування, тож решту мусить дати DEFAULT.
       "catalogs/Users/Users.meta.json": catalog("Users", {
         role: "users",
         scope: "none",

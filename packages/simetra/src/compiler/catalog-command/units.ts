@@ -109,7 +109,7 @@ export interface CatalogCommandInput {
 }
 
 /**
- * Генератор `catalogCommand` (спека П4 §6.6, план A2): `<t>_save` основної
+ * Генератор `catalogCommand` (спека П4 §6.6): `<t>_save` основної
  * таблиці довідника — замок, контекст, версія, перевірка права тими самими
  * предикатами, що й політики запису, посилання, ТЧ і рядок після запису.
  * Лише там, де є функції прав (як політики запису). `SECURITY INVOKER`:
@@ -117,8 +117,8 @@ export interface CatalogCommandInput {
  * дає кодовану відмову раніше за сиру. `EXECUTE` — лише роль команд.
  *
  * Зміна завжди виконує `UPDATE` шапки самоприсвоєнням колонок, яких немає в
- * `p_item` (Р-A2-6): так зміна лише ТЧ підвищує версію тим самим шляхом.
- * Колонки ключа самоприсвоєння не торкається (Ф14, `headerUpdate`).
+ * `p_item` (спека П4 §6.6): так зміна лише ТЧ підвищує версію тим самим шляхом.
+ * Колонки ключа самоприсвоєння не торкається (спека П4 §6.6, `headerUpdate`).
  * Тригери платформи на таблиці довідника, які бачать цей `UPDATE`, і їхні
  * умови (жоден не має `UPDATE OF <колонки>`, інакше самоприсвоєння запускало
  * б його хибно; тест тримає це на деревах):
@@ -167,7 +167,7 @@ export function buildCatalogCommandUnits(
       generator: "catalogCommand" as const,
       ...(requires === undefined ? {} : { requires }),
     })
-    // Функція є рівно для тих дій, що їх дав контракт (Р-A2-11): позначки
+    // Функція є рівно для тих дій, що їх дав контракт (спека П4 §6.6): позначки
     // немає в «Користувачів», видалення — лише в «Призначень».
     const { markDeletion, delete: remove } = contract.functions
     const functions: { fn: QualifiedName; args: string; sql: string }[] = [
@@ -438,13 +438,13 @@ function referenceViolations(
  * `mark_deletion` і `delete` не розходилися в умовах відмов.
  */
 /**
- * Сила замка рядка «до» (Р-A2-20). Зміна (`save`, `mark_deletion`) бере
+ * Сила замка рядка «до» (спека П4 §6.6). Зміна (`save`, `mark_deletion`) бере
  * `NO KEY UPDATE`: `FOR UPDATE` конфліктує з `FOR KEY SHARE`, який RI-перевірка
  * бере на ціль FK, тож дві команди з взаємно новими посиланнями (T1 зберігає X
  * з посиланням на P; T2 зберігає P з рядком ТЧ `related_id = X`) дали б
  * `40P01`. `NO KEY UPDATE` з `KEY SHARE` сумісний, так само вимагає права
  * `UPDATE` і застосовує політики `UPDATE USING`. Колонки ключа команда
- * називає в `SET` лише коли вхід справді змінює значення ключа (Ф14,
+ * називає в `SET` лише коли вхід справді змінює значення ключа (спека П4 §6.6,
  * `headerUpdate`), інакше `UPDATE` підняв би замок до `FOR UPDATE`. Видалення бере `UPDATE`: `DELETE` за природою
  * конфліктує з `KEY SHARE`, слабший замок лише відклав би конфлікт до `DELETE`.
  */
@@ -458,7 +458,7 @@ interface CoreParts {
   ownScopeKind: string | undefined
   authors: string[]
   updatedBy: string | undefined
-  /** Контекст фази (Р-A2-9): `root` — вираз id рядка функції. */
+  /** Контекст фази (спека П4 §6.6): `root` — вираз id рядка функції. */
   context: (action: string, root: string) => string[]
   lock: string
   copyRead: (link: CarrierLink) => string
@@ -466,8 +466,8 @@ interface CoreParts {
   relink: (links: readonly CarrierLink[]) => string[]
   rightsIf: (action: string, row: "v_old" | "v_new", reason: string) => string[]
   /**
-   * Рядок «до» під замком (Р-A2-18: після контексту) і версія. Сила замка —
-   * за дією функції (Р-A2-20): зміна — `NO KEY UPDATE`, видалення — `UPDATE`.
+   * Рядок «до» під замком (спека П4 §6.6: після контексту) і версія. Сила замка —
+   * за дією функції (спека П4 §6.6): зміна — `NO KEY UPDATE`, видалення — `UPDATE`.
    */
   lockedOld: (root: string, strength: RowLockStrength) => string[]
 }
@@ -493,8 +493,8 @@ function coreParts(
         a.column !== undefined
     )
   // Копії стану «після» — тими самими зв'язками, що й тригер носіїв
-  // (Р-A2-4), під командою; зв'язок через колонку авторства — з функції
-  // джерел поточного користувача (Р-A2-14), бо рядок «Користувачів» під
+  // (спека П4 §6.7), під командою; зв'язок через колонку авторства — з функції
+  // джерел поточного користувача (спека П4 §6.7), бо рядок «Користувачів» під
   // командою може бути невидимим.
   const copyRead = (link: CarrierLink) =>
     facts.authorLink(link)
@@ -580,7 +580,7 @@ function saveFunction(
           copies: contract.carrierLinks.map(parts.copyRead),
           rights: [
             ...rightsIf(contract.actions.create, "v_new", E.forbidden.noRight),
-            // Межа тенанта `scope_insert` (Р-A2-15): предикат контейнера
+            // Межа тенанта `scope_insert` (спека П4 §6.7): предикат контейнера
             // скоупу не має, а скоуп нового рядка задає клієнт.
             ...(facts.access?.scope === undefined || facts.access.root === true
               ? []
@@ -596,7 +596,7 @@ function saveFunction(
 
   const updateBranch: string[] = [
     ...context(contract.actions.update),
-    // Замок ієрархії до замка рядка (Р-A2-17): тригер ієрархії бере його
+    // Замок ієрархії до замка рядка (спека П4 §6.6): тригер ієрархії бере його
     // після `UPDATE`, і без цього порядок «рядок → advisory» проти іншої
     // команди «advisory → рядок» дав би `40P01`.
     ...(contract.hierarchy === undefined
@@ -655,7 +655,7 @@ function saveFunction(
 }
 
 /**
- * Перевірка входу (Р-A2-5, Р-A2-7): об'єкт, лише ключі гранту гілки, кожне
+ * Перевірка входу (спека П4 §6.6): об'єкт, лише ключі гранту гілки, кожне
  * значення приводиться до типу своєї колонки. Приведення — поколонково у
  * вузькому блоці: помилка класу `22` інакше не назвала б ключа.
  */
@@ -669,7 +669,7 @@ function inputLines(contract: CatalogCommandContract): string[] {
     ...ifThen("jsonb_typeof(p_item) IS DISTINCT FROM 'object'", [
       invalid("'p_item'"),
     ]),
-    // Без дії створення (Р-A2-10: «Користувачі», корінь скоупу) виклик без
+    // Без дії створення (спека П4 §6.6: «Користувачі», корінь скоупу) виклик без
     // версії — відмова `create` до перевірки ключів: інакше порожній перелік
     // ключів створення назвав би першим невідомим ключем `id`, а не причину.
     ...(contract.actions.create === undefined
@@ -728,7 +728,7 @@ function createLines(
     ...parts.references,
     ...parts.copies,
     ...parts.rights,
-    // Замок ієрархії до `INSERT` (Р-A2-17): RI-тригер бере `FOR KEY SHARE`
+    // Замок ієрархії до `INSERT` (спека П4 §6.6): RI-тригер бере `FOR KEY SHARE`
     // на батька раніше за тригер ієрархії.
     ...(contract.hierarchy === undefined
       ? []
@@ -739,7 +739,7 @@ function createLines(
           ])),
     // Блок лише навколо `INSERT`: підтранзакція відкочує лише його, тож
     // повторне читання після `23505` можливе — новий оператор у
-    // `READ COMMITTED` бачить коміт паралельного створення (Р-A2-8).
+    // `READ COMMITTED` бачить коміт паралельного створення (спека П4 §6.10).
     "BEGIN",
     ...indent([
       `INSERT INTO ${t} (${contract.createKeys.map(q).join(", ")}) VALUES (${contract.createKeys.map((c) => `v_new.${q(c)}`).join(", ")}) RETURNING * INTO v_row;`,
@@ -757,7 +757,7 @@ function createLines(
 }
 
 /**
- * Колонки ключа таблиці за правилом Postgres (Ф14): колонки первинного ключа,
+ * Колонки ключа таблиці за правилом Postgres (спека П4 §6.6): колонки первинного ключа,
  * UNIQUE-обмежень і UNIQUE-індексів без предиката й без виразів (`INCLUDE` —
  * ні). `UPDATE`, чий `SET` називає таку колонку, бере замок `FOR UPDATE`
  * навіть за незмінного значення (PG 17.6, проба `FOR KEY SHARE NOWAIT`:
@@ -780,11 +780,11 @@ export function keyColumns(table: PhysicalTable): Set<string> {
 }
 
 /**
- * `UPDATE` шапки: самоприсвоєння колонок, яких немає в `p_item` (Р-A2-6), у
- * двох статичних формах (Ф14). Колонка ключа в `SET` бере замок `FOR UPDATE`
+ * `UPDATE` шапки: самоприсвоєння колонок, яких немає в `p_item` (спека П4 §6.6), у
+ * двох статичних формах (спека П4 §6.6). Колонка ключа в `SET` бере замок `FOR UPDATE`
  * навіть за незмінного значення, тож форма з колонками ключа — лише коли вхід
  * справді змінює значення ключа; інакше `SET` без них, і замок лишається
- * `NO KEY UPDATE` (Р-A2-20), сумісний з `KEY SHARE` взаємних RI-перевірок.
+ * `NO KEY UPDATE` (спека П4 §6.6), сумісний з `KEY SHARE` взаємних RI-перевірок.
  */
 function headerUpdate(contract: CatalogCommandContract): string[] {
   if (contract.updateKeys.length === 0) {
@@ -978,14 +978,14 @@ function sectionLines(
     "END;",
     `v_ids := ARRAY(SELECT (x.e ->> ${sqlLiteral(section.key)})::uuid FROM jsonb_array_elements(${items}) AS x(e));`,
     // Видимий рядок іншого власника — та сама відмова, що невидимий
-    // (`23505` нижче, Р-A2-12).
+    // (`23505` нижче, спека П4 §6.6).
     ...ifThen(
       `EXISTS (SELECT 1 FROM ${ts} r WHERE r.${key} = ANY (v_ids) AND r.${parent} <> ${root})`,
       [noRight]
     ),
     ...materialize,
     ...references,
-    // Рядки ТЧ — той самий механізм, що шапка (Р-A2-21): замок рядків цього
+    // Рядки ТЧ — той самий механізм, що шапка (спека П4 §6.6): замок рядків цього
     // власника в сталому порядку ключа (дві команди не замкнуть їх навхрест)
     // і очікувані кількості. `DELETE` чи `UPDATE`, що зачепив менше рядків
     // (політика `DELETE`/`UPDATE` відсікла рядок, видимий замку), інакше
@@ -1079,12 +1079,12 @@ function markDeletionFunction(
 ): string {
   const { table, key } = contract
   const root = "p_id"
-  // Позначку пише лише ця функція (Р-A2-5); колонка — за `origin`.
+  // Позначку пише лише ця функція (спека П4 §6.6); колонка — за `origin`.
   const mark = q(
     standardColumn(table, deletionMarkColumn(), parts.facts.attributeCase).name
   )
   // Позначка змінює лише себе й автора зміни: перевиводяться лише зв'язки
-  // через ці колонки (зв'язок через автора — з функції джерел, Р-A2-14).
+  // через ці колонки (зв'язок через автора — з функції джерел, спека П4 §6.7).
   const changed = new Set([
     mark,
     ...(parts.updatedBy === undefined ? [] : [q(parts.updatedBy)]),
@@ -1094,7 +1094,7 @@ function markDeletionFunction(
     ...ifThen("p_expected_version IS NULL", [invalid("'p_expected_version'")]),
     ...parts.context(action, root),
     // Обробник `beforeWrite`, що присвоює батька, спрацьовує й на `UPDATE`
-    // позначки: замок ієрархії — до замка рядка (Р-A2-17).
+    // позначки: замок ієрархії — до замка рядка (спека П4 §6.6).
     ...(contract.hierarchy?.lockAlways === true ? [parts.lock] : []),
     ...parts.lockedOld(root, "NO KEY UPDATE"),
     ...parts.rightsIf(action, "v_old", E.forbidden.noRight),
@@ -1152,7 +1152,7 @@ function deleteFunction(
     // виклику, як у позначці видалення, а не конфлікт.
     ...ifThen("p_expected_version IS NULL", [invalid("'p_expected_version'")]),
     ...parts.context(action, root),
-    // `FOR UPDATE`, не `NO KEY UPDATE` (Р-A2-20): `DELETE` конфліктує з
+    // `FOR UPDATE`, не `NO KEY UPDATE` (спека П4 §6.6): `DELETE` конфліктує з
     // `KEY SHARE` RI-перевірок за природою, тож замок бере ту саму силу
     // одразу, а не підвищує її вже на `DELETE`.
     ...parts.lockedOld(root, "UPDATE"),

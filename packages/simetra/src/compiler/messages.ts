@@ -21,7 +21,7 @@ export interface MessageEntry {
 }
 
 /**
- * Поради правил прийнятих джерел за причиною (Р2d1-15…Р2d1-19): невідома
+ * Поради правил прийнятих джерел за причиною (спека прав §4.7): невідома
  * причина бере запасну — каталог не падає на параметрах.
  */
 function hintOf<K extends string>(
@@ -34,7 +34,7 @@ function hintOf<K extends string>(
 }
 
 /**
- * Поради цілі FK прийнятої таблиці (Рб1-8, Рб1-10) за причиною: ціль-вид
+ * Поради цілі FK прийнятої таблиці (спека прав §4.7) за причиною: ціль-вид
  * називає ключ (`key`), ціль `CustomTable` — колонки.
  */
 const FK_TARGET_HINTS: Record<
@@ -98,7 +98,7 @@ const SOURCE_ROLE_KEY_HINTS: Record<
 /**
  * Скоуп джерела — скоуп-колонка таблиці: для членства її тримає в межах
  * тенанта FK власника, для призначень скоуп рядка мусить дорівнювати скоупу
- * учасника (R1). Код один на обидва види джерел, тож порада називає обидві
+ * учасника. Код один на обидва види джерел, тож порада називає обидві
  * причини.
  */
 const SCOPE_COLUMN_HINT = {
@@ -132,7 +132,7 @@ const OWNER_RECIPE = {
 }
 
 /**
- * Причина `cause: "owners"` відмов репетиції (рішення 1 плану П3-2b-3):
+ * Причина `cause: "owners"` відмов репетиції (спека промоції §8):
  * копію відновлено під іншими власниками. Порада одна для фази 6
  * (`apply.target-changed`) і фази 18 (`apply.rehearsal-proof-failed`).
  */
@@ -145,7 +145,7 @@ const COPY_OWNERS_HINT = {
   uk: "Нічого не записано. Відновіть копію роллю плану з `pg_restore --no-owner`, щоб її об'єктами, як і на цілі, володіла роль плану, і повторіть репетицію.",
 }
 
-/** Що тримають рядки довідника, на якому `publicRead` заборонено (Р2a2-33). */
+/** Що тримають рядки довідника, на якому `publicRead` заборонено (спека прав §5.2). */
 const PEOPLE_ROWS: Record<string, { en: string; uk: string }> = {
   users: { en: "the users", uk: "користувачів" },
   membership: { en: "the members", uk: "учасників" },
@@ -156,7 +156,7 @@ const peopleRows = (holds: string | number | undefined, locale: Locale) =>
   PEOPLE_ROWS[String(holds)]?.[locale] ?? String(holds)
 
 /**
- * Перевірки ідентичності цілі фази 4e (рішення 1 плану П3-2b-3): це не секції
+ * Перевірки ідентичності цілі фази 4e (спека промоції §8): це не секції
  * відбитка каталогу, тож відмова `apply.target-changed` називає їх окремо.
  */
 const IDENTITY_CHECK: Readonly<Record<string, { en: string; uk: string }>> = {
@@ -171,7 +171,7 @@ const IDENTITY_CHECK: Readonly<Record<string, { en: string; uk: string }>> = {
 }
 
 /**
- * Причина `cause: "copy"` (рішення 1 плану П3-2b-3): репетиція на базі, що не
+ * Причина `cause: "copy"` (спека промоції §8): репетиція на базі, що не
  * є копією цілі плану. «Сплануйте знову» тут марне — план на цілі дасть ті
  * самі факти й голову, — тож порада переробити копію.
  */
@@ -437,7 +437,7 @@ const commandContextForm = (form: unknown) =>
   COMMAND_CONTEXT_FORM[String(form) as CommandContextWrite] as
     { en: string; uk: string } | undefined
 /**
- * Що прибрати з боргової одиниці (Р2c1-6, Р2c1-14): на прийомі
+ * Що прибрати з боргової одиниці (спека прав §5.3): на прийомі
  * реальної бази це перша зустріч споживача з правилом, тож текст називає
  * оператор чи ім'я налаштування, коли воно відоме, а не лише форму.
  */
@@ -533,7 +533,7 @@ const headConstruct = (construct: unknown) =>
   HEAD_CONSTRUCT[String(construct) as HeadConstruct] as
     { en: string; uk: string } | undefined
 /**
- * Форми `sql.definer-reads-rls` (Р2c1-8, Р2c1-13): чим одиниця читає від
+ * Форми `sql.definer-reads-rls` (платформна спека §6.7): чим одиниця читає від
  * імені власника, хто може її викликати чи читати і як це виправити.
  * Тип за формою робить перелік вичерпним.
  */
@@ -1081,7 +1081,7 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     },
     hint: CLOSED_SHELL_HINT,
   },
-  // Одиниця боргу (`unit: "debt"`, Р2c1-6, Р2c1-14) — модуля прийнятої
+  // Одиниця боргу (`unit: "debt"`, спека прав §5.3) — модуля прийнятої
   // таблиці чи спільного файлу — судиться лише платформним префіксом: текст
   // називає, що прибрати, і підказує конверсію.
   "sql.command-context-write": {
@@ -3953,8 +3953,8 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
             : p.statement === "trigger-enable"
               ? `Повторне ввімкнення тригерів користувача таблиці ${p.table} після запису значень кроків даних ${p.steps} завершилося помилкою SQLSTATE ${p.sqlstate}: ${p.error}. Транзакцію відкочено`
               : `${p.phase === "compute" ? "Обчислення" : "Запис"} значень кроків даних ${p.steps} таблиці ${p.table} завершився помилкою SQLSTATE ${p.sqlstate}: ${p.error}. Транзакцію відкочено`,
-    // Збій `ALTER TABLE` на тригері — не проблема даних чи виразу (рішення
-    // В17); запис іде під закріпленим `search_path`, тож функція обмеження,
+    // Збій `ALTER TABLE` на тригері — не проблема даних чи виразу (спека промоції §7.2);
+    // запис іде під закріпленим `search_path`, тож функція обмеження,
     // індексу чи згенерованої колонки без схеми в іменах падає саме тут
     hint: {
       en: (p) =>
@@ -4234,7 +4234,7 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   "plan.promotion-unsupported": {
     en: (p) =>
       p.reason === "labelTranslation"
-        ? `The promotion record ${p.file} translates kind labels, which plans support from P3-3 on`
+        ? `The promotion record ${p.file} translates kind labels, which plans do not support yet`
         : p.reason === "sequenceSchema"
           ? `Column ${p.column} of ${p.table} in the promotion ${p.file} depends on the sequence ${p.sequence} outside the table's schema, so the plan would recreate the sequence and reset its counter`
           : p.reason === "dataStepTable"
@@ -4256,7 +4256,7 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
                   : `Table ${p.table} of the promotion ${p.file} has no primary key, so the plan cannot prove that rows keep their values`,
     uk: (p) =>
       p.reason === "labelTranslation"
-        ? `Запис промоції ${p.file} перекладає мітки виду, які план підтримує з П3-3`
+        ? `Запис промоції ${p.file} перекладає мітки виду, а план їх ще не підтримує`
         : p.reason === "sequenceSchema"
           ? `Колонка ${p.column} таблиці ${p.table} промоції ${p.file} залежить від послідовності ${p.sequence} поза схемою таблиці, тож план перестворив би послідовність і скинув би її лічильник`
           : p.reason === "dataStepTable"
@@ -4456,7 +4456,7 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Якщо номер об'єкту не потрібен, задайте autonumber: false, а довіднику — codeLength: 0; інакше номер лишатиметься порожнім, доки платформа не генерує лічильників.",
     },
   },
-  // Попередження, не відмова: заміна законна (рішення 6 плану П3-3a2), але
+  // Попередження, не відмова: заміна законна (спека промоції §8), але
   // тригер звужується, і автор має це побачити
   "plan.update-of-narrowed": {
     en: (p) =>
@@ -4469,7 +4469,7 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     },
   },
   // `services` — таблиці провайдера, які займає сам провайдер для оператора
-  // кроку (R27 плану П3-2a): одне попередження на крок з переліком таблиць
+  // кроку (спека промоції §7.2): одне попередження на крок з переліком таблиць
   "plan.foreign-exclusive-lock": {
     en: (p) =>
       p.services === undefined

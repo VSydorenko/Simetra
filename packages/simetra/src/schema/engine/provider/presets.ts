@@ -30,13 +30,13 @@ export const PROVIDER_SYSTEM_ROLES: Readonly<
   Record<DatabaseProvider, readonly string[]>
 > = { supabase: SUPABASE_ROLES }
 
-/** Механізм провайдерських замків пресету (R27 плану П3-2a). */
+/** Механізм провайдерських замків пресету (спека промоції §7.2). */
 export const PROVIDER_LOCKS: Readonly<Record<DatabaseProvider, ProviderLocks>> =
   { supabase: SUPABASE_LOCKS }
 
 /**
  * Розширення, які роль застосування може поставити попри `trusted = false`
- * (рішення 4 плану П3-2b-1): так план виводить режим `transient` для
+ * (спека промоції §7.2): так план виводить режим `transient` для
  * `plpgsql_check`.
  */
 export const PROVIDER_INSTALLABLE_EXTENSIONS: Readonly<
@@ -44,8 +44,8 @@ export const PROVIDER_INSTALLABLE_EXTENSIONS: Readonly<
 > = { supabase: SUPABASE_INSTALLABLE_EXTENSIONS }
 
 /**
- * Сліпі функції базового стану провайдера поіменно (рішення 5 плану
- * П3-2b-1): замість попередження вивід плану називає їхню кількість.
+ * Сліпі функції базового стану провайдера поіменно (спека
+ * промоції §7.2): замість попередження вивід плану називає їхню кількість.
  */
 export const PROVIDER_EXPECTED_BLIND_FUNCTIONS: Readonly<
   Record<DatabaseProvider, readonly string[]>

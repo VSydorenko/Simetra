@@ -189,7 +189,7 @@ async function compiled(scenario: Scenario): Promise<CompiledModel> {
   let files = metaFiles(entries)
   if (scenario.schema === "app") {
     // Прийнятий грант схеми — дослівний борг, як у споживача з власною
-    // схемою: генерація a1 грантів схеми не дає й не відкликає.
+    // схемою: генерація грантів схеми не дає й не відкликає.
     files.set(
       "sql/app/usage.sql",
       "GRANT USAGE ON SCHEMA app TO authenticated;\nGRANT USAGE ON SCHEMA app TO anon;\n"
@@ -209,8 +209,8 @@ interface Tenant {
 /**
  * Організація з одним рядком у кожній таблиці, яку перевіряє тест, і
  * користувачем — учасником з роллю `OrgReader`: читання тепер дає право, а
- * межа тенанта лише звужує (Р2a2-1). Пише власник таблиць: RLS його не
- * обмежує, а запис від ролей API — поза a1.
+ * межа тенанта лише звужує (спека прав §5.2). Пише власник таблиць: RLS його не
+ * обмежує, а запис від ролей API тут не перевіряється.
  */
 async function tenant(
   client: pg.Client,

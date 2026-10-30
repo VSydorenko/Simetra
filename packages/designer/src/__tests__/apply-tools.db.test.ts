@@ -62,7 +62,7 @@ import { leftoverShadows, provisionedShadows } from "./support/shadows"
 import { snapshotOf } from "./helpers/catalog"
 
 /**
- * Інструменти `plan` і `apply` над живою базою (план П3-1, задача 10):
+ * Інструменти `plan` і `apply` над живою базою:
  * артефакт пишеться поруч із текою метаданих, `apply` перевіряє хеш, версії
  * й свіжість ще до підключення, а пише лише за підтвердженням. Ціль кожного
  * тесту — окрема база від `withDesiredShadow`; база стеку лише читається.
@@ -315,7 +315,7 @@ describe.concurrent("plan", () => {
       const before = await snapshotOf(dir)
       const root = dirname(dir)
 
-      // Перегляду в `plan` немає (рішення 10 плану П3-2b-3): `dryRun` —
+      // Перегляду в `plan` немає (спека designer §3.2): `dryRun` —
       // відмова до роботи, а не мовчазний запис
       const dry = await call("plan", {}, options(dir, url, { dryRun: true }))
       expect(dry.refusal?.reason).toBe("dry-run-unsupported")

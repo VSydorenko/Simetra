@@ -38,12 +38,12 @@ const SYSTEMS = Object.keys(SYSTEM_CATALOGS) as RightsSystemCatalog[]
 
 const GLOBAL: RightsLevelKey = { level: "global" }
 
-/** Роль системного довідника прав з хука реєстру (Р2a1-23); `undefined` — ні. */
+/** Роль системного довідника прав з хука реєстру; `undefined` — ні. */
 function systemOf(object: ParsedObject): RightsSystemCatalog | undefined {
   return KIND_REGISTRY[object.kind].rightsSystem?.(object.data)
 }
 
-/** Рівень системного довідника — його власний скоуп (Р2a1-5). */
+/** Рівень системного довідника — його власний скоуп (спека прав §4.6). */
 function catalogLevel(
   object: ParsedObject,
   references: readonly ResolvedReference[]
@@ -59,7 +59,7 @@ function storageKey(level: RightsLevelKey): string {
 
 /**
  * Рівень зберігання за рівнем призначення: контейнер — вид скоупу контейнера
- * (у нескоупленого — глобальний, Р2a1-7); «кожен користувач» призначень не
+ * (у нескоупленого — глобальний, спека прав §4.6); «кожен користувач» призначень не
  * має. `scopeOfContainer` — `undefined`, коли контейнера немає взагалі.
  */
 function storageOf(
@@ -84,7 +84,7 @@ function storageOf(
 }
 
 /**
- * Рівні призначення, покриті прийнятими джерелами (Р2a1-24): ключ — рівень
+ * Рівні призначення, покриті прийнятими джерелами (спека прав Рх14): ключ — рівень
  * призначення (`levelKey`: вид скоупу, контейнер за id, глобальний), а не
  * рівень зберігання, бо в одному виді скоупу джерело може покривати
  * контейнерний рівень поряд із довідниками рівня скоупу. Одне правило для
@@ -97,7 +97,7 @@ export function coveredAssignmentLevels(
 }
 
 /**
- * Рівень зберігання ролі (Р2a1-12): у довіднику якого рівня лежать її
+ * Рівень зберігання ролі (спека прав §4.6): у довіднику якого рівня лежать її
  * призначення. Контейнер — вид скоупу контейнера чи глобальний; «кожен
  * користувач» і рівень, покритий джерелом призначень, — `undefined`.
  */
@@ -116,16 +116,16 @@ export function rightsLevelOf(
 }
 
 /**
- * Правила системних довідників прав стадії 4 (спека прав §4.6, Р2a1-5,
- * Р2a1-21, Р2a1-24): один довідник на (роль, рівень); рівень із ролями, не
+ * Правила системних довідників прав стадії 4 (спека прав §4.6):
+ * один довідник на (роль, рівень); рівень із ролями, не
  * покритий прийнятим джерелом, має обидва довідники; довідник, чий суб'єкт —
  * учасник, скоуплено видом із членством — довідником чи прийнятим джерелом
- * (Р2d1-5); назва кастомної ролі —
+ * (спека прав §4.7); назва кастомної ролі —
  * найменування; рівень, весь покритий джерелами, довідників не має
  * (паралельна система, Рх14). Кастомна дія на довіднику прав — помилка: його
  * пише лише дія адміністрування прав. Прийняте джерело платформа лише читає,
  * тож межу відповідальності за шляхи запису в нього називає попередження на
- * кожне джерело (§4.7, Р2d1-9).
+ * кожне джерело (§4.7).
  */
 export function checkSystemCatalogs(ctx: RightsCheckContext): Diagnostic[] {
   const diagnostics: Diagnostic[] = []
@@ -172,7 +172,7 @@ export function checkSystemCatalogs(ctx: RightsCheckContext): Diagnostic[] {
         )
       )
     })
-    // Назва кастомної ролі — найменування «Ролей» (Р2a1-6): без нього роль
+    // Назва кастомної ролі — найменування «Ролей» (спека прав §4.6): без нього роль
     // нічим назвати в інтерфейсі адміністрування.
     if (
       system === "rightsRoles" &&
@@ -188,7 +188,7 @@ export function checkSystemCatalogs(ctx: RightsCheckContext): Diagnostic[] {
       )
     }
     // Суб'єкт — учасник рівня: ціль його FK — довідник членства чи таблиця
-    // прийнятого джерела членства (Р2d1-5); виду без членства цілі немає.
+    // прийнятого джерела членства (спека прав §4.7); виду без членства цілі немає.
     const subject = KIND_REGISTRY[object.kind]
       .standardColumns(object.data)
       .some((column) => column.ref === "member")
@@ -211,7 +211,7 @@ export function checkSystemCatalogs(ctx: RightsCheckContext): Diagnostic[] {
     sourceLevel(ctx.project, index, ctx.references)
   )
   // Рівень призначення, покритий джерелом, обслуговує прийнята таблиця
-  // (Р2a1-24, п. 1): системні довідники йому не потрібні.
+  // (спека прав Рх14): системні довідники йому не потрібні.
   const covered = coveredAssignmentLevels(
     sourceLevels.filter((level) => level !== undefined)
   )
@@ -237,7 +237,7 @@ export function checkSystemCatalogs(ctx: RightsCheckContext): Diagnostic[] {
     if (storage === undefined) continue
     const key = storageKey(storage)
     uncovered.add(key)
-    // Членство з прийнятого джерела довідників не скасовує (Р2d1-5): перша
+    // Членство з прийнятого джерела довідників не скасовує (спека прав §4.7): перша
     // міграція — прийняте членство й нові ролі в довідниках Simetra, суб'єкт
     // яких посилається на таблицю-джерело. Вид зовсім без членства — помилка
     // ролі, і довідники йому все одно потрібні.
@@ -255,7 +255,7 @@ export function checkSystemCatalogs(ctx: RightsCheckContext): Diagnostic[] {
   }
 
   // Рівень, усі призначення якого дають джерела, з довідниками — дві системи
-  // призначень на одному рівні (Р2a1-24, п. 3).
+  // призначень на одному рівні (спека прав Рх14).
   for (const object of catalogs) {
     const level = catalogLevel(object, ctx.references)
     const source = sourced.get(storageKey(level))
@@ -291,7 +291,7 @@ export function checkSystemCatalogs(ctx: RightsCheckContext): Diagnostic[] {
 
 /**
  * Таблиці системних довідників прав — основні й ТЧ — як `схема.ім'я`. Функція
- * значень виміру не читає їх (Р1a-14): множина значень залежала б від гранту.
+ * значень виміру не читає їх (спека прав §4.4): множина значень залежала б від гранту.
  */
 export function rightsCatalogTables(
   objects: readonly ParsedObject[],

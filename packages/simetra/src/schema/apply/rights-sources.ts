@@ -35,7 +35,7 @@ import { withLocalSettings } from "./settings"
  */
 export const RIGHTS_SOURCE_LIMIT = 20
 
-/** Що план прочитав на цілі про прийняті джерела прав (Р2d1-10, Р2d1-11). */
+/** Що план прочитав на цілі про прийняті джерела прав (спека прав §4.7). */
 export interface RightsSourceFacts {
   /** Таблиці, які є на цілі; `owned` — роль застосування читає кожен рядок. */
   owners: { table: string; owned: boolean }[]
@@ -69,7 +69,7 @@ interface RightsCatalogInput {
   holderTables: QualifiedName[]
   /**
    * Таблиця призначень і кожна з `holderTables` лишаються в бажаній моделі
-   * тією самою таблицею (Р2c2-27): інакше носій, прочитаний з них, після
+   * тією самою таблицею (спека прав Рх20): інакше носій, прочитаний з них, після
    * застосування зникне разом з таблицею.
    */
   holdersKept: boolean
@@ -94,7 +94,7 @@ const origin = z.object({
 })
 const appliedRightsSchema = z.object({
   // Стиль застосованого знімка: його колонки несуть `origin.standard` у
-  // стилі свого проєкту, а не бажаного (Рб1-1). Немає — типовий camelCase.
+  // стилі свого проєкту, а не бажаного. Немає — типовий camelCase.
   project: z
     .object({
       naming: z.object({ attributeCase: z.enum(ATTRIBUTE_CASES) }).optional(),
@@ -184,7 +184,7 @@ const tableText = (t: QualifiedName) => `${t.schema}.${t.name}`
 
 /**
  * Вхід читача з контрактів: таблиці-джерела членства й призначень і таблиці
- * ролей (Р2d1-17) — кожна рівно раз; відомі ключі джерела — `sourceKeys` усіх
+ * ролей (спека прав §4.7) — кожна рівно раз; відомі ключі джерела — `sourceKeys` усіх
  * ролей, що його називають.
  */
 export function rightsSourceInput(
@@ -236,7 +236,7 @@ export function rightsSourceInput(
       defs
         .map((def) => [
           def.logicalName,
-          // Ім'я в стилі знімка, з якого колонку читають (Рб1-1).
+          // Ім'я в стилі знімка, з якого колонку читають.
           standardColumn(
             { name: tableText(table), columns: found.columns },
             def,
@@ -358,7 +358,7 @@ export function rightsSourceInput(
         holdersKept: [input.assignments, ...input.holderTables].every(kept),
         // Корінь-об'єкт без основної таблиці в бажаній моделі — план знімає
         // таблицю коренів, а з нею кожен скоуп рівня: перевірки для такого
-        // скоупу немає, як на COMMIT, коли корінь видалено (Р2c2-7). Зовнішній
+        // скоупу немає, як на COMMIT, коли корінь видалено (спека прав §7). Зовнішній
         // корінь план не знімає
         rootRemoved:
           root !== undefined &&
@@ -423,10 +423,10 @@ const storageKey = (level: RightsLevelKey | undefined) =>
 /**
  * Запит ключів ролей джерела, яких немає серед відомих (`$1`, масив тексту).
  * З'єднання з таблицею ролей і умови `where` — ті самі, що в гілці джерела
- * `rights_mine` (Р2d1-18, спільний `sourceConditions`): рядок, який функції
+ * `rights_mine` (спека прав §4.7, спільний `sourceConditions`): рядок, який функції
  * прав не читають як призначення, план не називає. `columns` — колонки, які
  * запит читає: колонку, якої на цілі ще немає, додасть DDL плану, і читати
- * тоді нічого (Р2d1-11).
+ * тоді нічого (спека прав §4.7).
  */
 export function unknownKeysQuery(source: AssignmentSourceContract): {
   sql: string
@@ -438,7 +438,7 @@ export function unknownKeysQuery(source: AssignmentSourceContract): {
     roleTable === undefined
       ? src(source.role)
       : `sr.${quoteIdent(roleTable.key)}`
-  // З'єднання — те саме, що в гілці джерела `rights_mine` (Р2d1-18)
+  // З'єднання — те саме, що в гілці джерела `rights_mine` (спека прав §4.7)
   const join = roleTableJoin(source)
   const conditions = [
     `${key} IS NOT NULL`,
@@ -484,7 +484,7 @@ export function unknownKeysQuery(source: AssignmentSourceContract): {
 }
 
 /**
- * Доступ ролі застосування до таблиць (Р2d1-10). Функції прав —
+ * Доступ ролі застосування до таблиць (спека прав §4.7). Функції прав —
  * `SECURITY DEFINER` і виконуються від свого власника — ролі застосування
  * (`current_user` цієї транзакції). RLS таблиці Postgres пропускає лише для
  * ролі з правами власника (зокрема успадкованими через членство), з
@@ -557,7 +557,7 @@ interface HolderRow extends Record<string, unknown> {
 const column = (columns: Record<string, string>, name: string) =>
   quoteIdent(columns[name]!)
 
-// Визначення стандартних колонок з реєстру (Рб1-1).
+// Визначення стандартних колонок з реєстру.
 const R = RIGHTS_COLUMNS
 const KEY = keyColumn(false)
 const PARENT = tabularParentColumn()
@@ -707,7 +707,7 @@ function collectRightsFacts(
 
 /**
  * Факти джерел прав з цілі — у транзакції `tx` (читальна транзакція
- * `dbs.reader`, Р2a1-2). Ключі читаються лише з джерел, чиї таблиця й
+ * `dbs.reader`). Ключі читаються лише з джерел, чиї таблиця й
  * таблиця ролей є на цілі й доступні (інакше з'єднання впало б `42501`) і
  * мають кожну читану колонку; дані — під `row_security = off`: на RLS, яку
  * роль не обходить, це гучна помилка, а не тихий нуль рядків.
@@ -836,8 +836,8 @@ export async function readRightsSourceFacts(
 }
 
 /**
- * Відмова доступу (Р2d1-10) — таблиці, яких роль застосування не читає
- * повністю; попередження (Р2d1-11) — на кожне джерело з невідомими ключами.
+ * Відмова доступу (спека прав §4.7) — таблиці, яких роль застосування не читає
+ * повністю; попередження (спека прав §4.7) — на кожне джерело з невідомими ключами.
  */
 export function rightsSourceDiagnostics(facts: RightsSourceFacts): {
   refusal?: EngineDiagnostic

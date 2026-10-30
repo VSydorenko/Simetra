@@ -38,8 +38,8 @@ import {
 } from "../../__tests__/support/db"
 
 /**
- * Ревалідація тіл функцій раннером на справжній базі (рішення 1–5 плану
- * П3-2b-1): валідатори мов `sql` і `plpgsql` до кроків і після, під шляхом
+ * Ревалідація тіл функцій раннером на справжній базі (спека промоції
+ * §7.2): валідатори мов `sql` і `plpgsql` до кроків і після, під шляхом
  * ревалідації й власними налаштуваннями функції, проти базової лінії в тій
  * самій транзакції. Ціль кожного тесту — окрема база від `withDesiredShadow`,
  * як у `execute-plan.db.test.ts`.
@@ -244,7 +244,7 @@ describe("function body revalidation", () => {
     })
   })
 
-  // Review Focus 1: під преамбулою крок проходить, а валідатор `plpgsql`
+  // Під преамбулою крок проходить, а валідатор `plpgsql`
   // компілює тіло в ревалідації. Без `plpgsql_check`: інакше відмову дав би
   // і він, і тест не помітив би, що DO-блок пропустив мову `plpgsql`
   it("refuses a plpgsql body that does not compile although the preamble turned validation off", async () => {
@@ -327,7 +327,7 @@ describe("function body revalidation", () => {
     }
   })
 
-  // Review Focus 2: валідатор чекає на чужий замок таблиці поза слідом
+  // Валідатор чекає на чужий замок таблиці поза слідом
   it("retries instead of blaming a function when a table it names is locked", async () => {
     const setup = `create schema other;
       create table other.far (x int);
@@ -362,7 +362,7 @@ describe("function body revalidation", () => {
     })
   })
 
-  // Обмеження плану 2a «тіло функції з посиланням уперед» знято: під
+  // Тіло функції з посиланням уперед доводиться: під
   // преамбулою функція створюється до таблиці, а ревалідація після кроків
   // таблицю вже бачить
   it("proves a forward-referencing SQL function", async () => {
@@ -489,7 +489,7 @@ describe("function body revalidation", () => {
 })
 
 /**
- * `plpgsql_check` проти базової лінії (рішення 4 плану П3-2b-1): тимчасове
+ * `plpgsql_check` проти базової лінії (спека промоції §7.2): тимчасове
  * розширення в точці збереження, наявне — на місці.
  */
 describe("plpgsql_check", () => {
@@ -572,7 +572,7 @@ describe("plpgsql_check", () => {
     )
   })
 
-  // Review Focus 3: базова лінія поглинає наявну помилку функції чужої
+  // Базова лінія поглинає наявну помилку функції чужої
   // ролі, а нова помилка в тій самій функції однаково ловиться
   it("keeps an error of another role's function that was there before", async () => {
     const setup = `${TABLE_T};
@@ -598,7 +598,7 @@ describe("plpgsql_check", () => {
     )
   })
 
-  // Review Focus 4: oid перествореної функції інший — збіг за сигнатурою
+  // Oid перествореної функції інший — збіг за сигнатурою
   it("matches a function the plan recreates with the same error", async () => {
     const body = `RETURNS int LANGUAGE plpgsql AS $$ DECLARE x int; BEGIN SELECT nope INTO x FROM app.t; RETURN x; END $$`
     const setup = `${TABLE_T};

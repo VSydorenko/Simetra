@@ -145,7 +145,7 @@ describe("checkDefinerReads: functions", () => {
       expected: [warned(RPC, { roles: API.anonymous })],
     },
     {
-      // Грант PUBLIC повертає EXECUTE кожній ролі API (Р2c1-8).
+      // Грант PUBLIC повертає EXECUTE кожній ролі API (платформна спека §6.7).
       name: "EXECUTE revoked from all and granted back to PUBLIC",
       sql: {
         [RPC_FILE]:

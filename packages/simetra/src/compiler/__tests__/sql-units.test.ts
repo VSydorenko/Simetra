@@ -490,7 +490,7 @@ describe("sql units", () => {
         "CREATE POLICY p ON storage.objects FOR SELECT USING (bucket_id = 'avatars');",
       ].join("\n")
     )
-    // Розширення без SCHEMA стає в схему застосунку (Р2c1-35).
+    // Розширення без SCHEMA стає в схему застосунку (спека прав §5.3).
     expect(result.diagnostics.map((d) => [d.code, d.severity])).toEqual([
       ["sql.debt-extension-schema", "warning"],
     ])

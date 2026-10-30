@@ -347,7 +347,7 @@ export function customTables(): Map<string, string> {
       ],
       primaryKey: { name: "ledger_pk", columns: ["id"] },
     }),
-    // FK у межах тенанта на скоуплений довідник (Рб1-10): ціль — складений
+    // FK у межах тенанта на скоуплений довідник (спека прав §4.7): ціль — складений
     // `UNIQUE (<скоуп>, <ключ>)`, що його Postgres має прийняти як ціль FK.
     "catalogs/Partner/Partner.meta.json": catalog("Partner", { scope: "org" }),
     "custom-tables/PartnerNote/PartnerNote.meta.json": customTable(
@@ -472,7 +472,7 @@ export function movementQuery(): Map<string, string> {
       ],
     },
     // Функції множини скоупу — справжні одиниці з тілом: `LANGUAGE sql`
-    // перевіряє його при створенні. Голова не читає `auth.users` (Р2c1-18):
+    // перевіряє його при створенні. Голова не читає `auth.users` (спека прав §5.3):
     // поточного користувача дає поіменна функція провайдера.
     [SCOPE_FUNCTIONS_FILE]: [
       "CREATE FUNCTION app.org_ids() RETURNS SETOF uuid LANGUAGE sql STABLE",
@@ -495,9 +495,9 @@ export function movementQuery(): Map<string, string> {
 }
 
 /**
- * Фікстури E1 (спека П2 §10.4): кожна — проєкт, що компілюється без помилок і
+ * Фікстури розгортання (спека П2 §10.4): кожна — проєкт, що компілюється без помилок і
  * розгортається в Postgres. Спільні для звірки каталогу з рендером
- * (`deploy.db.test.ts`) і для мапера порту `SchemaEngine` (план E2a).
+ * (`deploy.db.test.ts`) і для мапера порту `SchemaEngine`.
  */
 export const FIXTURES: [string, () => Map<string, string>][] = [
   [

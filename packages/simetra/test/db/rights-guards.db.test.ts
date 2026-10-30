@@ -61,7 +61,7 @@ const changed = (value: Result) => {
   expect((value as { rows: pg.QueryResultRow[] }).rows).toHaveLength(1)
 }
 const ZERO = "00000000-0000-0000-0000-000000000000"
-/** Відмова тригера ключа (Рб1-4): та сама форма, що в тригера ефектів. */
+/** Відмова тригера ключа (спека прав §7): та сама форма, що в тригера ефектів. */
 const KEY_REFUSAL = {
   code: "42501",
   message: "command.forbidden",
@@ -87,7 +87,7 @@ describe("rights administration guards", () => {
     source.replace(/\{([^}]+)\}/g, (_, name: string) => `'${key(name)}'`)
   const claims = (user: string) => ({ sub: key(user), role: "authenticated" })
   /**
-   * Команда пише лише свій кореневий рядок і його ТЧ (Р2c2-1), тож корінь
+   * Команда пише лише свій кореневий рядок і його ТЧ (спека прав §4.6), тож корінь
    * контексту — id рядка, а не скоуп; `after` завершує її відкладену
    * перевірку в межах транзакції опису.
    */
@@ -437,7 +437,7 @@ describe("rights administration guards", () => {
       )
     )
   })
-  // Р2c2-23: один оператор режиму обслуговування переносить призначення між
+  // Один оператор режиму обслуговування переносить призначення між
   // скоупами — старий і новий образи дають той самий ключ `assignment`, а два
   // старі рядки — по ключу `holders` свого скоупу; без зведення ключів
   // `ON CONFLICT` зачепив би рядок черги двічі (`21000`).
@@ -497,7 +497,7 @@ describe("rights administration guards", () => {
       )
     ).toMatchObject({ code: "23505" })
   })
-  // Р2c2-26: самоприйняття рядка з призначеннями дає актору права без ключа
+  // Спека прав §7: самоприйняття рядка з призначеннями дає актору права без ключа
   // `assignment`; їх судить ключ `actor`. Політики не-учаснику скоупу
   // `update` на членстві не відкривають (права скоупу — лише в учасника, а в
   // учасника самоприйняття спиняє UNIQUE), тож кейс іде від власника таблиць.
@@ -559,7 +559,7 @@ describe("rights administration guards", () => {
         "UPDATE public.org_member SET id = CASE id WHEN {root@A} THEN {target@A}::uuid ELSE {root@A}::uuid END WHERE id IN ({root@A}, {target@A})"
       const usersSwap =
         "UPDATE public.users SET id = CASE id WHEN {root} THEN {target}::uuid ELSE {root}::uuid END WHERE id IN ({root}, {target})"
-      // Незмінність ключа — тригер ключа таблиці виду (Рб1-4), той самий
+      // Незмінність ключа — тригер ключа таблиці виду (спека прав §7), той самий
       // для членства, «Користувачів» і будь-якого довідника чи документа.
       expect(await owner(memberSwap, maintenance)).toEqual(KEY_REFUSAL)
       expect(await owner(usersSwap, maintenance)).toEqual(KEY_REFUSAL)

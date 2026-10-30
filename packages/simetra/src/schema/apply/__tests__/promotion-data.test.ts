@@ -35,7 +35,7 @@ import {
 } from "simetra/schema"
 
 /**
- * Секція кроків даних промоції (рішення 1–5, 12, 13 плану П3-2b-2): звірка
+ * Секція кроків даних промоції (спека промоції §4, §7.2): звірка
  * запису, ідентифікатори й тимчасові імена, межі кроку, рендер SQL, факти
  * цілі й відмови з них. Справжня база — у `build-plan.db.test.ts` designer.
  */
@@ -257,7 +257,7 @@ describe("dataPlan", () => {
   })
 
   it("types each column by the desired column, and a mapped type change by the old type", () => {
-    // Аудит Codex: у CTAS бажаний `varchar(20)` мовчки обрізав би наявні
+    // У CTAS бажаний `varchar(20)` мовчки обрізав би наявні
     // довгі коди, а старий тип несе їх до кроку двигуна з його сторожем
     const r = unitRecord({
       typeChanges: [
@@ -320,7 +320,7 @@ describe("dataPlan", () => {
         {
           objectId: OBJECT_ID,
           file: FILE,
-          // Рішення 2: `detail` — буквально `dataSteps`
+          // `detail` — буквально `dataSteps`
           detail: "dataSteps",
           step: "d1",
           reason: "derived repair, recorded conversion",
@@ -818,7 +818,7 @@ const withExpressions = (
 
 describe("readDataFacts", () => {
   it("exempts only the transaction time functions", async () => {
-    // Вердикт архітектора: час транзакції T1 уже допустив поза ремонтом,
+    // Час транзакції T1 уже допустив поза ремонтом (спека промоції §4),
     // а `STABLE`-функцію поза переліком план питає й відхиляє
     const tables = withExpressions(
       ["d1", "coalesce(created_at, now())", "timestamp with time zone"],
@@ -869,7 +869,7 @@ describe("readDataFacts", () => {
   })
 
   it("normalizes a bare type to pg_catalog and refuses a bare user type", async () => {
-    // Рішення В5: знімок адаптера кваліфікує кожен тип поза `pg_catalog`, тож
+    // Знімок адаптера кваліфікує кожен тип поза `pg_catalog`, тож
     // голе `citext` при `public.citext` у знімку — тип каталогу, якого немає
     expect(typeIdentity("citext", parse)).toEqual({
       schema: "pg_catalog",
@@ -1004,7 +1004,7 @@ describe("dataStepRefusals", () => {
   })
 
   it("refuses a create of an overload with the name of the fill function", () => {
-    // Вердикт R4: предмет оператора важить для будь-якої дії. Нове
+    // Предмет оператора (спека промоції §4): важить для будь-якої дії. Нове
     // перевантаження з тим самим ім'ям змінює те, що розв'яже виклик, навіть
     // коли `produced` його не називає
     expect(
@@ -1040,7 +1040,7 @@ describe("dataStepRefusals", () => {
   })
 
   it("lets through an alter of another table that only reads the domain", () => {
-    // Вердикт В7: `ALTER TABLE … ALTER COLUMN … TYPE <домен>` — теж `alter` із
+    // `ALTER TABLE … ALTER COLUMN … TYPE <домен>` — теж `alter` із
     // доменом у `consumed`, але предмет — таблиця
     expect(
       stepCodes(withExpressions(["d1", "code", "app.code_t"]), [

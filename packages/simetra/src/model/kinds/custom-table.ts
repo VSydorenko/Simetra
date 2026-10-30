@@ -81,7 +81,7 @@ function elementReferences(obj: unknown): FoundElementReference[] {
     const base = `/foreignKeys/${i}`
     own(foreignKey.columns, `${base}/columns`)
     const { references } = foreignKey
-    // Ціль-вид називає ключ, а не колонки (Рб1-10): імен для резолву немає.
+    // Ціль-вид називає ключ, а не колонки (спека прав §4.7): імен для резолву немає.
     if ("columns" in references) {
       references.columns.forEach((name, index) => {
         found.push({

@@ -5,7 +5,7 @@ import { BUILTIN_FUNCTIONS, REGCLASS_BUILTINS } from "../sql/builtin-functions"
 const REGCLASS = new Set(REGCLASS_BUILTINS)
 
 // Перелік генерують над живим каталогом, а виключення правлять руками: тест
-// ловить зміну виключень без регенерації переліку (Р2c1-20).
+// ловить зміну виключень без регенерації переліку (спека прав §5.3).
 describe("builtin function allowlist", () => {
   it.each(BUILTIN_EXCLUSIONS.map((e) => [e.reason, e] as const))(
     "lists no name of the %s class",
@@ -38,7 +38,7 @@ describe("builtin function allowlist", () => {
       "pg_sleep",
       "lo_import",
       "dblink",
-      // Аргумент `regclass` називає відношення текстом (Р2c1-56).
+      // Аргумент `regclass` називає відношення текстом.
       "pg_relation_size",
     ]) {
       expect(BUILTIN_FUNCTIONS, name).not.toContain(name)

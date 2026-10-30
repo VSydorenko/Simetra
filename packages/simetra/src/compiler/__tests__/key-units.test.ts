@@ -31,7 +31,7 @@ function keyTriggers(model: CompiledModel, schema: string, table: string) {
   )
 }
 
-/** Оракул — оператори за Рб1-4, а не вихід генератора. */
+/** Оракул — оператори за спекою прав §7, а не вихід генератора. */
 const expected = (schema: string, table: string, key = "id") => {
   const names = keyTriggerNames(table)
   return [

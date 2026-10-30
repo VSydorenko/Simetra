@@ -26,7 +26,7 @@ import {
 import { shadowServerRefusal } from "../schema-engine/pg-delta/adapter"
 
 /**
- * Облікові дані не витікають (план E2b, Review Focus 3): межа
+ * Облікові дані не витікають (спека designer §3.2): межа
  * `connectionErrorMessage` складає текст лише зі стабільних фраз, адреси
  * `host:port/db` і коду помилки. Рядки нижче досить незвичні, щоб пошук
  * підрядка доводив їхню відсутність.
@@ -42,7 +42,7 @@ function pgError(code: string, message: string): Error {
   return Object.assign(new Error(message), { code })
 }
 
-/** Підказка про режим з'єднання тіні (рішення 14.4 плану П3-1). */
+/** Підказка про режим з'єднання тіні (спека designer §3.2). */
 const SHADOW_MODE =
   "The shadow needs a direct or session-mode connection; a transaction-mode pooler is not guaranteed to support it."
 

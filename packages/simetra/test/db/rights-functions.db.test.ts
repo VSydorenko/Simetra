@@ -58,11 +58,11 @@ import {
 } from "./rights-seed"
 
 /**
- * Функції прав на справжньому Postgres (спека прав §5.1, план Права-2a1):
+ * Функції прав на справжньому Postgres (спека прав §5.1):
  * множини, які функції повертають під роллю запиту користувача, вирішує
  * Postgres над даними довідників прав — компілятор їх не бачить. Кожен опис
- * розгортає й засіває схему раз у власній транзакції й відкочує її в кінці
- * (Р2a1-18); кожен запит — від ролі API в точці збереження.
+ * розгортає й засіває схему раз у власній транзакції й відкочує її в кінці;
+ * кожен запит — від ролі API в точці збереження.
  */
 
 const TASK = objects(["Document", "Task"])
@@ -225,7 +225,7 @@ async function seedScopeKind(client: pg.Client): Promise<Seed> {
   await assign("u20", { archetype: TEAM_LEAD_ID })
   await assign("u21", { archetype: PROJECT_LEAD_ID, container: ids.P3 })
   await assign("x2", { customRole: ids.custom })
-  // Р2a1-11: u22 має кастомну роль без `read@any` і окремо простий
+  // Спека прав Рх9: u22 має кастомну роль без `read@any` і окремо простий
   // `OrgMember` з ним — вимога з іншого призначення дії не рятує.
   await assign("u22", { customRole: ids.custom })
   await assign("u22", { archetype: ORG_MEMBER_ROLE_ID })
@@ -245,7 +245,7 @@ async function seedScopeKind(client: pg.Client): Promise<Seed> {
   )
   await assignGlobal("u23", { customRole: ids.globalCustom })
 
-  // Р2a1-26: команда з `id` організації A, а учасники команди — з `id`
+  // Спека прав §5.1: команда з `id` організації A, а учасники команди — з `id`
   // учасників u3 (OrgAdmin в A) і u1 (виконавець задачі в A).
   await insert(client, "team", { id: ids.A })
   await insert(client, "team_member", {
@@ -287,7 +287,7 @@ async function seedScopeKind(client: pg.Client): Promise<Seed> {
 }
 
 /**
- * Додатковий засів еквівалентності замикання (Р2d2-22) поверх засіву опису:
+ * Додатковий засів еквівалентності замикання (спека прав §5.4) поверх засіву опису:
  * учасники A з кастомними ролями, де замикання знімає рядки обсягу
  * `dimension` (`d1`, `d2`), тримає їх тим самим обсягом (`d3`), і кастомна
  * роль контейнерного архетипу на P1 (`l1`). Повертає всіх користувачів
@@ -495,7 +495,7 @@ const CASES: [name: string, checks: (() => Check[]) | Check[]][] = [
       ["u18", containers, ["P1"]],
     ],
   ],
-  // Р2a1-28: позначка видалення контейнера прав не відкликає — мутації
+  // Спека прав §4.6: позначка видалення контейнера прав не відкликає — мутації
   // немає, бо це відсутність фільтра, а не запобіжник.
   ["container-deletion-mark", [["u21", containers, ["P3"]]]],
   [
@@ -589,7 +589,7 @@ describe("rights functions with a scope kind", () => {
     }
   })
 
-  // Р2d2-22: замикання після переписування дає рівно рядки тіла до нього.
+  // Спека прав §5.4: замикання після переписування дає рівно рядки тіла до нього.
   // Засів опису плюс кастомні ролі з дельтами виміру й кастомна контейнерна
   // роль: замикання знімає рядки й на обсязі `dimension`, і в контейнері.
   it("closure-equivalence: the rows of the closure before the rewrite", async () => {
@@ -696,7 +696,7 @@ describe("rights functions with a scope kind", () => {
 /**
  * Однотенантний проєкт, де глобальний рівень призначень покриває прийняте
  * джерело, а глобальні довідники лишаються за контейнерний рівень `Project`
- * (Р2a1-24): так поруч живуть глобальне призначення й архетип покритого
+ * (спека прав Рх14): так поруч живуть глобальне призначення й архетип покритого
  * рівня — обидва з `storage_id` `NULL`, і розрізняє їх лише рівень
  * зберігання.
  */
@@ -758,7 +758,7 @@ describe("rights functions without scope kinds", () => {
     expect.soft(outcome(await as(s1, containers))).toEqual([p1])
   })
 
-  // Р2a1-12/24: рядок глобального довідника не вмикає архетип рівня,
+  // Спека прав §4.6, Рх14: рядок глобального довідника не вмикає архетип рівня,
   // покритого джерелом, хоч `storage_id` обох — `NULL`.
   it("covered-level-archetype: a global catalog row does not enable it", async () => {
     expect.soft(outcome(await as(s2, hasRight("read", "task")))).toBe(false)

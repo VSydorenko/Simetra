@@ -34,8 +34,8 @@ import {
 } from "./rights-seed"
 
 /**
- * Ядро системних довідників прав і «Користувачів» (план П4-A2, Задача 9).
- * Запобіжники прав 2c2 (`role-in-use`, ⊆, останній `fullAccess`) — відкладені
+ * Ядро системних довідників прав і «Користувачів».
+ * Запобіжники прав (`role-in-use`, ⊆, останній `fullAccess`) — відкладені
  * тригери, що судять транзакцію на `COMMIT`; компілятор бачить лише текст
  * тіла, тож чи не спрацьовують вони хибно на порожньому `UPDATE` шапки, вирішує
  * Postgres. `COMMIT` тут — `SET CONSTRAINTS ALL IMMEDIATE` у точці збереження,
@@ -71,7 +71,7 @@ const nickname = (): Layer => ({
 const BLIND_RIGHTS_ADMIN_ID = uuid(6746)
 
 /**
- * Адміністратор прав і його «сліпий» двійник (рішення Ф11 (a)):
+ * Адміністратор прав і його «сліпий» двійник:
  * `administerRights` не дає неявного читання членства, тож призначення
  * адресує учасника лише з явним `read` на довіднику членства свого рівня.
  * `RightsAdmin` тут отримує цей `read` шаром моделі файлу, а не зміною
@@ -325,7 +325,7 @@ describe("catalog command core on rights system catalogs and Users", () => {
   )
 
   // Без `read` на членстві учасник власного тенанта невидимий так само, як
-  // чужий: `administerRights` не дає неявного читання (Ф11 (a)). Призначення
+  // чужий: `administerRights` не дає неявного читання. Призначення
   // `BlindRightsAdmin` засіває власник у точці збереження цього кейсу.
   it("rights admin without read on membership → command.invalid subject", async () => {
     const client = tx.client()

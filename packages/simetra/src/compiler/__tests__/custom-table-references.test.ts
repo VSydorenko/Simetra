@@ -77,7 +77,7 @@ function fullLog({
 
 /**
  * Цілі FK: ключ довідника й не-ключова колонка прийнятої таблиці (FK на
- * таблицю виду веде лише на ключ, Рб1-8).
+ * таблицю виду веде лише на ключ, спека прав §4.7).
  */
 function targets(skuName = "sku") {
   return {
@@ -358,7 +358,7 @@ describe("stage 2: custom table column names", () => {
   })
 
   it("fk target columns of a kind are a form error, not unknown columns", async () => {
-    // Ціль-вид називає ключ (Рб1-10): колонки на ній стадія 2 не резолвить,
+    // Ціль-вид називає ключ (спека прав §4.7): колонки на ній стадія 2 не резолвить,
     // тож і ключ, і реквізит, і невідоме ім'я дають одну помилку форми.
     const result = await compileWith({
       "catalogs/Currency/Currency.meta.json": catalog("Currency", {
@@ -386,7 +386,7 @@ describe("stage 2: custom table column names", () => {
   })
 })
 
-describe("fk target key of a kind (Рб1-10)", () => {
+describe("fk target key of a kind (спека прав §4.7)", () => {
   // Ключ цілі резолвиться за походженням колонок таблиці виду, тож фізичний
   // FK однаковий в обох стилях імен і веде на ключ, який ціль справді має.
   it.each([

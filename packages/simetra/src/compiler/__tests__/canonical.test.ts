@@ -350,7 +350,7 @@ describe("canonical snapshot and hash", () => {
     })
   })
 
-  it("snapshot carries the post-C3 physical and contract form", async () => {
+  it("snapshot carries the current physical and contract form", async () => {
     const model = await compileModel(metaFiles(fixture()))
     const snapshot = canonicalSnapshot(model) as {
       physical: unknown

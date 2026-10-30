@@ -37,7 +37,7 @@ export type Seed = Record<string, string>
 
 /**
  * Таблиці прав розгорнутої моделі за клієнтом: `insert` вмикає для них режим
- * обслуговування (Р2d2-14). Перелік — з контрактів прав моделі, а не з імені
+ * обслуговування. Перелік — з контрактів прав моделі, а не з імені
  * таблиці: регулярка за іменем мовчки пропустила б довідники прав нового виду
  * скоупу (`team_*`), і засів упав би на `rights-context`.
  */
@@ -316,7 +316,7 @@ export async function seedAdministration(client: pg.Client): Promise<Seed> {
   // Права в іншому тенанті не покривають приріст у цьому: повний доступ у B
   // і лише адміністрування прав у A.
   await assign("bAdminRightsRole", "bAdmin@A", RIGHTS_ADMIN_ID)
-  // Позначені рядки — база для зняття позначки, що дає повний приріст (Р2c2-5).
+  // Позначені рядки — база для зняття позначки, що дає повний приріст (спека прав §7).
   await row("markedRole", "org_role_assignments", {
     org_id: ids.A,
     ...assignmentRow(ids["target@A"]!, {
@@ -387,7 +387,7 @@ export const COMMAND_CORE_MEMBERS = [
 ] as const
 
 /**
- * Засів ядра команд (план A2) над `policyDomain(writeRoles(),
+ * Засів ядра команд над `policyDomain(writeRoles(),
  * commandCoreLayer())`: організації A і B; користувачі з ролями шару —
  * `tw` (`TicketWriter`), `to` (`TicketOwnWriter`), `tr` (`TicketRegionWriter`,
  * регіон r1 у `MemberRegion`), `tp` (`ProjectTicketWriter` на P1), `rd`

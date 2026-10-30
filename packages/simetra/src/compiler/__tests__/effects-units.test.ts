@@ -106,8 +106,8 @@ describe("buildEffectsUnits", () => {
   it("checks the root row against the effects of the command action", () => {
     const t = "task"
     // Колонки порівняння — змістові без ключа (тригери ключа) і скоупу
-    // (окрема умова, Р2b1-20). Авторство — механіка (Р-A1-9): поза змістом,
-    // а автор рядка — серед незмінних (Р-A1-10).
+    // (окрема умова, спека прав §5.3). Авторство — механіка (спека П4 §6.8): поза змістом,
+    // а автор рядка — серед незмінних (спека П4 §6.8).
     const content = contentColumns(tableOf(domain, t), "camelCase")
       .map((c) => c.name)
       .filter((c) => c !== "id" && c !== "org_id")
@@ -123,7 +123,7 @@ describe("buildEffectsUnits", () => {
     ])
     const except = (...columns: string[]) =>
       content.filter((c) => !columns.includes(c))
-    // Шапка `update` — уся шапка без колонок переходів (Р2b1-18), тож
+    // Шапка `update` — уся шапка без колонок переходів (спека прав §5.3), тож
     // оновлення порівнює саме їх.
     const updateCompared = ["posted", "deletion_mark"]
     const direction = (from: boolean, to: boolean) =>
@@ -136,8 +136,8 @@ describe("buildEffectsUnits", () => {
     const body = [
       ...PREAMBLE,
       // Незмінні колонки — лише на оновленні: вставка під `create` свій
-      // скоуп лише отримує (Р2b1-20). Ключ тут не перевіряється: його
-      // тримають тригери ключа для будь-якого автора (Рб1-4).
+      // скоуп лише отримує (спека прав §5.3). Ключ тут не перевіряється: його
+      // тримають тригери ключа для будь-якого автора (спека прав §7).
       ...raiseIf(
         "TG_OP = 'UPDATE' AND OLD.org_id IS DISTINCT FROM NEW.org_id",
         t,
@@ -211,7 +211,7 @@ describe("buildEffectsUnits", () => {
     expect(fk.columns).toEqual(["org_id", "parent_id"])
     const body = [
       ...PREAMBLE,
-      // Скоуп рядка ТЧ (Р2b1-20) і його власник (Р2b1-24) незмінні: рядок
+      // Скоуп рядка ТЧ (спека прав §5.3) і його власник (спека прав §5.3) незмінні: рядок
       // не переходить ні до іншого тенанта, ні до іншого документа.
       ...raiseIf(
         "TG_OP = 'UPDATE' AND OLD.org_id IS DISTINCT FROM NEW.org_id",
@@ -255,7 +255,7 @@ describe("buildEffectsUnits", () => {
   })
 
   it("the scope column is compared only on update", () => {
-    // Р2b1-20: на вставці `OLD` немає — новий рядок під `create` і рядок ТЧ
+    // спека прав §5.3: на вставці `OLD` немає — новий рядок під `create` і рядок ТЧ
     // свій скоуп лише отримують, тож жодна умова з `NEW.org_id` не діє поза
     // `UPDATE`.
     for (const table of ["task", CHECKLIST_TABLE]) {
@@ -376,7 +376,7 @@ describe("buildEffectsUnits", () => {
       ).toEqual({ Boolean: { boolval: true } })
       expect(hasEmptySearchPath(fn.tree as never), fn.identity).toBe(true)
       // `row_security = off`: власник під RLS дав би гучну помилку замість
-      // тихого «власника немає» (як кроки копій носіїв, Р2b2-9).
+      // тихого «власника немає» (як кроки копій носіїв, спека промоції §7.2).
       expect(
         nodes(create.options, "VariableSetStmt").map((v) => {
           const set = v as {
@@ -468,7 +468,7 @@ describe("buildEffectsUnits", () => {
   })
 
   it("a change of the author alone reaches the effects on a table with copies", async () => {
-    // Review Focus 4 (Р-A1-10): копія носія `Note` виводиться з `createdBy`,
+    // Копія носія `Note` виводиться з `createdBy`,
     // тож зміна лише `created_by_id` змінює й копію. Без авторства в
     // `watched` умова була б хибною, і незмінність автора тримав би лише
     // грант.
@@ -514,9 +514,9 @@ describe("buildEffectsUnits", () => {
   })
 
   it("a snake_case project finds the platform user fields and the author by its styled names", async () => {
-    // Близнюк у snake_case (Рб1-3): `origin.standard` несе ім'я в стилі
+    // Близнюк у snake_case: `origin.standard` несе ім'я в стилі
     // проєкту, тож порівняння з літералом `userKind` пропустило б `user_kind`
-    // (Р-A1-10), і тригер ефектів розійшовся б з camelCase.
+    // (спека П4 §6.8), і тригер ефектів розійшовся б з camelCase.
     const snake = await compileRights(
       snakeCaseTwin(policyDomain(writeRoles(), writableRegister()))
     )

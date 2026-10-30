@@ -50,7 +50,7 @@ async function errors(sql: string, overrides = {}) {
   return result.diagnostics.filter((d) => d.severity === "error")
 }
 
-/** `sql.head-not-allowed` судді голів (Р2c1-17): конструкція, деталь, ланцюжок. */
+/** `sql.head-not-allowed` судді голів (спека прав §5.3): конструкція, деталь, ланцюжок. */
 const heads = (found: Diagnostic[]) =>
   found
     .filter((d) => d.code === "sql.head-not-allowed")
@@ -310,7 +310,7 @@ describe("access dimension value function", () => {
     const params = async (sql: string) =>
       rightsErrors(await errors(sql)).map((d) => [d.code, d.params])
     // Виклик функції, що виконує текст SQL, у тілі відмовляє ранній блок —
-    // дозвільний перелік тіла (`dynamicText`, Р2c1-50): до судження функції
+    // дозвільний перелік тіла (`dynamicText`, спека прав §5.3): до судження функції
     // виміру справа не доходить.
     const textWrites = async (sql: string) =>
       (await errors(sql))
@@ -450,7 +450,7 @@ describe("access dimension value function", () => {
 
     it("rejects other platform functions and non-sql links, allows pg_catalog builtins", async () => {
       // Виклик функції платформи поза переліком, що читає, і тіло іншої мови
-      // відмовляє ранній блок (Р2c1-38, Р2c1-37): до судження функції виміру
+      // відмовляє ранній блок (спека прав §5.3, §6.1): до судження функції виміру
       // справа не доходить.
       const early = async (sql: string) =>
         (await errors(sql)).map((d) => [d.code, d.params])

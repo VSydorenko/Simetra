@@ -810,7 +810,7 @@ describe("publicRead", () => {
 
   it("the protected session settings cover the command context and the claims", () => {
     // Перевірка SQL застосунку судить за переліком: налаштування платформи
-    // поза ним стало б дірою межі довіри (Р2b1-19b).
+    // поза ним стало б дірою межі довіри (спека прав §5.3).
     for (const setting of [COMMAND_SETTING, SESSION_CLAIMS_SETTING]) {
       expect(
         PROTECTED_SESSION_SETTINGS.prefixes.some((p) => setting.startsWith(p)),

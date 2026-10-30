@@ -45,16 +45,15 @@ import {
 } from "./rights-seed"
 
 /**
- * Прийняті джерела прав на справжньому Postgres (спека прав §4.7, план
- * Права-2d1): що функції прав повертають під роллю `authenticated` для живих
+ * Прийняті джерела прав на справжньому Postgres (спека прав §4.7): що функції прав повертають під роллю `authenticated` для живих
  * рядків прийнятих таблиць (зокрема поліморфної таблиці призначень і таблиці
  * ролей), що пропускають політики читання, що regex і приведення `sub` без
  * «Користувачів» не кидають, і що читання власника й даних цілі планом
  * працює на справжньому каталозі — компілятор бачить лише текст. Одне
- * розгортання на опис (Р2a1-18); засів — у `beforeAll`, кейси лише читають.
+ * розгортання на опис; засів — у `beforeAll`, кейси лише читають.
  */
 
-/** Модель проєкту з компіляції; попередження — лише межа джерел (Р2d1-9). */
+/** Модель проєкту з компіляції; попередження — лише межа джерел (спека прав §4.7). */
 async function sourcesModel(
   files: ReadonlyMap<string, string>
 ): Promise<CompiledModel> {
@@ -160,10 +159,10 @@ function seeder(client: pg.Client, ids: Seed) {
 /**
  * Засів опису «adopted sources»: тенанти A і B, учасники `Membership` (ключ
  * `u@O`; `un` — з `is_active IS NULL`, `nouser@A` — без користувача),
- * проєкти P1 і P2 в A, задача P1, рядки `RoleGrant` і `GlobalGrant` з плану
+ * проєкти P1 і P2 в A, задача P1, рядки `RoleGrant` і `GlobalGrant`
  * (рядки `lead` учасників u10@A і u11@A — з `is_active` `false` і `NULL`),
  * призначення довідника `org` з учасником u7 і учасник `team` u6 з id
- * неактивного u2@A у команді з id A (Р2a1-26).
+ * неактивного u2@A у команді з id A (спека прав §5.1).
  */
 async function seedAdopted(client: pg.Client): Promise<Seed> {
   const ids: Seed = {}
@@ -217,7 +216,7 @@ async function seedAdopted(client: pg.Client): Promise<Seed> {
       is_active: active,
     })
   await roleGrant("u1@A", ADOPTED_LEAD_KEY, "P1")
-  // Учасник B на проєкті A — аналог R1 для контейнера (Review Focus 6)
+  // Учасник B на проєкті A — аналог `poly-scope-mismatch` для контейнера
   await roleGrant("u3@B", ADOPTED_LEAD_KEY, "P1")
   await roleGrant("u1@A", "nope", "P1")
   await roleGrant("u2@A", ADOPTED_LEAD_KEY, "P1")
@@ -345,7 +344,7 @@ describe("adopted sources", () => {
 
   afterAll(() => tx.close())
 
-  // Р2d2-22: рядки джерел (`storage = 'source'`, скоуп з моїх скоупів,
+  // Спека прав §5.4: рядки джерел (`storage = 'source'`, скоуп з моїх скоупів,
   // контейнер) поруч із рядками довідника — замикання після переписування
   // дає рівно рядки тіла до нього.
   it("closure-equivalence: the rows of the closure before the rewrite", async () => {
@@ -381,7 +380,7 @@ describe("adopted sources", () => {
     await runChecks(tx.client(), ids, () => [["u1", MINE, leadRows]])
   })
 
-  // Р2d1-5: `subject` довідника `org` посилається на прийняте членство, тож
+  // Спека прав §4.7: `subject` довідника `org` посилається на прийняте членство, тож
   // FK тримає і тенант учасника, і видалення учасника з призначенням
   it("source-subject", async () => {
     const client = tx.client()
@@ -410,7 +409,7 @@ describe("adopted sources", () => {
       model.physical,
       model.project.naming.attributeCase
     )
-    // Предмет кейсу — таблиці джерел: системні довідники прав (Р2c2-14)
+    // Предмет кейсу — таблиці джерел: системні довідники прав
     // читач теж додає до `tables`, але їхні факти — окремий рядок нижче
     const sourceTables = new Set(
       [
@@ -608,9 +607,9 @@ async function seedWithoutUsers(client: pg.Client): Promise<Seed> {
   await create("P_X", "project", { org_id: ids.B }, ids.A)
   for (const [member, role, scopeType, scope] of [
     ["u1@A", "R_sys", "org", "A"], // контроль
-    ["u3@B", "R_sys", "org", "A"], // R1
-    ["u8@B", "R_sys", "container", "B"], // R1'
-    ["u5@A", "R_cust", "org", "A"], // R2
+    ["u3@B", "R_sys", "org", "A"], // poly-scope-mismatch
+    ["u8@B", "R_sys", "container", "B"], // poly-other-level
+    ["u5@A", "R_cust", "org", "A"], // poly-custom-role
     ["u1@A", "R_ghost", "org", "A"],
     ["u1@A", "R_z", "org", "A"],
     ["u8@B", "R_lead", "container", "P_B"], // контейнерний контроль
@@ -683,7 +682,7 @@ describe("without users", () => {
     const client = await tx.open()
     await deploy(client, model)
     // Без «Користувачів» гранти схеми `simetra` дає стан застосування, а не
-    // платформний шар (Р2d1-6): без них роль API не дійде до жодної функції.
+    // платформний шар (спека користувачів §7): без них роль API не дійде до жодної функції.
     // Те саме поєднання, що застосування бере з `desiredForApply`
     // (`schema/apply/desired.ts`)
     await client.query(renderApplyState(model))
@@ -696,8 +695,8 @@ describe("without users", () => {
     runChecks(tx.client(), ids, checks)
   )
 
-  // Ключі — з тим самим з'єднанням і умовами, що функції прав (Р2d1-18):
-  // `zzz` відсікає `where` ролі, а `lead` рядка колізії і `member` рядка R1'
+  // Ключі — з тим самим з'єднанням і умовами, що функції прав (спека прав §4.7):
+  // `zzz` відсікає `where` ролі, а `lead` рядка колізії і `member` рядка `poly-other-level`
   // — ключі іншого рівня в джерелі над спільною таблицею
   it("poly-plan-keys", async () => {
     const facts = await sourceFacts(

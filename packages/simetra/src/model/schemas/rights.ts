@@ -10,7 +10,7 @@ import { appSchemaNameSchema } from "./pg-schema"
  * `physicalName` — у даних дію називає її UUID, а не ім'я. `dml` не
  * оголошується: компілятор виводить його з того, чи є що писати, тож
  * оголошення не може розійтися з ефектами. `title`/`description` відкладено
- * до плану зі споживачем (Р1a-23).
+ * до споживача (П4).
  */
 export const customActionSchema = z.strictObject({
   // Як у реквізиту: обов'язковість id дає стадія 2.
@@ -76,7 +76,7 @@ export const ownershipSchema = z.array(rightsCarrierSchema).min(1)
  * Вимір доступу проєкту (спека прав §4.4): скоуплений довідник значень і
  * джерело значень користувача — таблиця зв'язку чи дослівна функція. Вимір —
  * елемент проєкту з UUID, бо обсяг гранту називає його id, а ім'я може
- * змінитися. `title`/`description` відкладено до плану зі споживачем (Р1a-23).
+ * змінитися. `title`/`description` відкладено до споживача (П4).
  */
 export const accessDimensionSchema = z.strictObject({
   // Як у виду скоупу: обов'язковість id дає стадія 2.
@@ -189,7 +189,7 @@ export const assignedOnSchema = z
 export type AssignedOn = z.infer<typeof assignedOnSchema>
 
 /**
- * Кон'юнкт умови рядків прийнятого джерела (спека прав §4.7, Р2d1-15):
+ * Кон'юнкт умови рядків прийнятого джерела (спека прав §4.7):
  * рівність колонки літералу чи перевірка на `NULL`. Умова лише звужує рядки
  * джерела — рядок, що їй не відповідає, не належить джерелу (наприклад, рядок
  * іншого рівня поліморфної таблиці). Тип літерала звіряє з типом колонки
@@ -267,7 +267,7 @@ export type MembershipSource = z.infer<typeof membershipSourceSchema>
 
 /**
  * Прийняте джерело призначень (спека прав §4.7): `CustomTable`, чиї рядки
- * дають учаснику роль на одному рівні. Рівень — стала джерела (Р1a-16).
+ * дають учаснику роль на одному рівні. Рівень — стала джерела (спека прав §4.7).
  */
 export const assignmentSourceSchema = z.strictObject({
   id: metadataIdSchema.optional(),
@@ -285,7 +285,7 @@ export const assignmentSourceSchema = z.strictObject({
         description: "Column with the member (a user for the global level).",
       }),
       // Роль — ключ у колонці джерела або посилання на прийняту таблицю
-      // ролей (Р2d1-17): ключ системної ролі споживач тоді тримає в таблиці
+      // ролей (спека прав §4.7): ключ системної ролі споживач тоді тримає в таблиці
       // ролей, і `where` ролі відсікає кастомні ролі з тим самим ключем.
       role: z
         .union([
@@ -313,7 +313,7 @@ export const assignmentSourceSchema = z.strictObject({
           description:
             "Column with the role key declared by a role in sourceKeys, or a reference to an adopted role table with the key column.",
         }),
-      // Три стани (Р2d1-19): колонка, `null` — скоуп з учасника, пропуск
+      // Три стани (спека прав §4.7): колонка, `null` — скоуп з учасника, пропуск
       // — `scopeColumn` таблиці; без нього пропуск — помилка стадії 4.
       scope: elementNameSchema.nullable().optional().meta({
         description:
@@ -336,7 +336,7 @@ export type AssignmentSource = z.infer<typeof assignmentSourceSchema>
 /**
  * Рівень ролі (спека прав §4.1, Рх7): рівні джерела плюс «кожен дійсний
  * користувач» — без рядків призначень, тож джерелам ця форма не потрібна
- * (Р1b-3).
+ * (спека прав Рх7).
  */
 export const roleAssignedOnSchema = z
   .union([
@@ -355,8 +355,8 @@ export type RoleAssignedOn = z.infer<typeof roleAssignedOnSchema>
 /**
  * Шапка декларацій прав: без PG-схеми, скоупу й фізичного імені — у базі
  * набір і роль живуть лише в згенерованій проєкції, а в даних їх називає
- * UUID (Р1b-9). `title`/`description` відкладено до плану зі споживачем
- * (Р1b-14).
+ * UUID. `title`/`description` відкладено до матриці ролей (П4,
+ * спека прав §4.1).
  */
 const rightsDeclarationHeader = z.object(objectHeaderShape).omit({
   schema: true,
@@ -393,7 +393,7 @@ export const extentSchema = z
 export type Extent = z.infer<typeof extentSchema>
 
 /**
- * Об'єкти гранту (Р1b-6): явний перелік або «усі об'єкти рівня ролі, чиї
+ * Об'єкти гранту (спека прав §4.1): явний перелік або «усі об'єкти рівня ролі, чиї
  * дії мають цю» — щоб роль не перелічувала кожен документ заради `post`.
  */
 export const objectSelectorSchema = z
@@ -401,7 +401,7 @@ export const objectSelectorSchema = z
     z.array(metadataRefSchema).min(1),
     z.strictObject({
       // Лише слово словника: кастомна дія в різних об'єктах — різні UUID
-      // (Р1b-10), тож описка тут — помилка схеми, а не тихий порожній вибір.
+      // (спека прав §4.1), тож описка тут — помилка схеми, а не тихий порожній вибір.
       withAction: z
         .enum(
           STANDARD_ACTIONS.filter((action) => action !== "administerRights")
@@ -451,7 +451,7 @@ const denySchema = z
       "Remove the actions from what the grants of the role and its sets give.",
   })
 
-/** Запис гранту набору: без `deny` — віднімання належить ролі (Р1b-5). */
+/** Запис гранту набору: без `deny` — віднімання належить ролі (спека прав §4.1). */
 export const setGrantEntrySchema = z.union([
   z.strictObject({ grantAll: grantAllSchema }),
   z.strictObject({ grant: grantSchema }),
@@ -459,7 +459,7 @@ export const setGrantEntrySchema = z.union([
 
 export type SetGrantEntry = z.infer<typeof setGrantEntrySchema>
 
-/** Запис гранту ролі: `deny` віднімає з архетипу після розгортання (Р1b-5). */
+/** Запис гранту ролі: `deny` віднімає з архетипу після розгортання (спека прав §4.1). */
 export const grantEntrySchema = z.union([
   z.strictObject({ grantAll: grantAllSchema }),
   z.strictObject({ grant: grantSchema }),

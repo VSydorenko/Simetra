@@ -59,7 +59,7 @@ describe.concurrent("buildPlan", () => {
     describe("promotion data steps", () => {
       // Прийнята таблиця `app.items`: `inactive` виводиться з ужитку й стає
       // позначкою видалення кроком конверсії, `code` і `payload` лишаються
-      // реквізитами (рішення 1–5, 12, 13 плану П3-2b-2)
+      // реквізитами (спека промоції §7.2)
       const ITEM_ID = uuid(7401)
       const ITEM_FILE = "custom-tables/Item/Item.meta.json"
       const CODE_T = "sql/app/code_t.sql"
@@ -305,7 +305,7 @@ describe.concurrent("buildPlan", () => {
         })
       })
 
-      // Рішення В18: правило `UPDATE` — і `ALSO`, і `INSTEAD` — підмінило б
+      // Спека промоції §4: правило `UPDATE` — і `ALSO`, і `INSTEAD` — підмінило б
       // той `UPDATE`, чий лічильник звіряється з обчисленим
       it("refuses a table with an UPDATE rewrite rule", async () => {
         const outcome = await planPromotion(await promotedItems(), {
@@ -335,7 +335,7 @@ describe.concurrent("buildPlan", () => {
         )
         expect(outcome.status).toBe("refused")
         // `CREATE OR REPLACE FUNCTION` — дія `alter`: предмет оператора з
-        // дерева — сама функція (вердикт В7)
+        // дерева — сама функція (спека промоції §4)
         expect(params(outcome, "plan.data-step-function-changed")).toEqual([
           {
             step: "d2",
@@ -526,7 +526,7 @@ describe.concurrent("buildPlan", () => {
       })
 
       it("proves a windowed fill expression measured in a subquery", async () => {
-        // Review focus 1: віконна функція в агрегаті заборонена, тож замір
+        // Віконна функція в агрегаті заборонена, тож замір
         // «до» прогону-доказу рахує вираз у підзапиті
         const p = await promotedItems({
           attributes: [{ name: "position", type: "Integer" }],
@@ -555,7 +555,7 @@ describe.concurrent("buildPlan", () => {
         // Таблиця ТЧ уже має канонічні імена, тож намір її не займає. Таблиці,
         // яку займав би лише крок ремонту, тепер не буває: крок даних буває
         // лише на таблиці промоції (`recordedFillKind`), а кожна таблиця
-        // промоції дістає тригери незмінності ключа (Рб1-4) під тим самим
+        // промоції дістає тригери незмінності ключа (спека прав §7) під тим самим
         // SHARE ROW EXCLUSIVE. Тож `artifact.locks` замок кроку даних не
         // виокремлює — його доводить `implicitLocks` без права на явний LOCK.
         const files = contactsProject()
@@ -592,7 +592,7 @@ describe.concurrent("buildPlan", () => {
         // Гранти доступу таблиці виду — кроки двигуна без замка таблиці:
         // слід замків вони не змінюють. Поколонкові гранти ролі команд
         // (спека П4 §6.2) двигун пише по колонці, а власник рядка ТЧ
-        // `parent_id` — лише у вставці. Тригери незмінності ключа (Рб1-4)
+        // `parent_id` — лише у вставці. Тригери незмінності ключа (спека прав §7)
         // нові для кожної таблиці виду, тож двигун бере той самий замок;
         // неявний замок нижче все одно належить кроку даних.
         expect(touching.map((s) => [s.origin, s.lockClass, s.sql])).toEqual([
@@ -742,7 +742,7 @@ describe.concurrent("buildPlan", () => {
         })
         const desired = withTypedLabel(
           // CHECK домену зв'язує імена за шляхом сесії: вбудована —
-          // кваліфікована (Р2c1-33)
+          // кваліфікована (спека прав §5.3)
           await recompiled(p, {
             [CODE_T]: domain("pg_catalog.length(VALUE) < 100"),
           })
@@ -758,7 +758,7 @@ describe.concurrent("buildPlan", () => {
       })
 
       it("refuses an enum value an engine step adds", async () => {
-        // Вердикт архітектора (8): `ALTER TYPE … ADD VALUE` — предмет оператора
+        // `ALTER TYPE … ADD VALUE` — предмет оператора
         // — сам енам кроку даних
         // Енам — прийнятий `PgEnum`: SQL-файл енамів не створює
         const enumOf = (values: string[]) =>
@@ -791,7 +791,7 @@ describe.concurrent("buildPlan", () => {
       })
 
       it("lets through a type change of another table to the step's domain", async () => {
-        // Вердикт В7: `ALTER TABLE … ALTER COLUMN … TYPE <домен>` — теж `alter`
+        // Спека промоції §4: `ALTER TABLE … ALTER COLUMN … TYPE <домен>` — теж `alter`
         // із доменом у `consumed`, але предмет оператора — таблиця
         const DOMAIN = "CREATE DOMAIN app.code_t AS text;\n"
         const other = (column: Json) =>
@@ -834,7 +834,7 @@ describe.concurrent("buildPlan", () => {
       })
 
       it("refuses a preservation type the same plan creates", async () => {
-        // Вердикт (в): замір «до» приводить `code` до нового типу до будь-якого
+        // Спека промоції §4: замір «до» приводить `code` до нового типу до будь-якого
         // кроку, а домен створює сам план — відмова плану, а не сирий 42704
         // заміру на застосуванні
         const p = await promotedItems()
@@ -995,7 +995,7 @@ describe.concurrent("buildPlan", () => {
       })
 
       it("keeps a user type qualified in the snapshot and in typeChanges", async () => {
-        // Рішення В5: адаптер читає типи під `search_path = pg_catalog`, тож
+        // Адаптер читає типи під `search_path = pg_catalog`, тож
         // домен `public`, хоч `public` і в шляху сесії, приходить
         // кваліфікованим — і в колонці, і в зміні типу запису
         await inTarget(
@@ -1068,7 +1068,7 @@ describe.concurrent("buildPlan", () => {
       })
 
       it("reads desiredInvalid from the shadow in a promotion", async () => {
-        // Борг 2b-1: гілка промоції читає недійсні об'єкти з бажаної тіні
+        // Гілка промоції читає недійсні об'єкти з бажаної тіні
         const p = await promoted()
         const outcome = await inTarget(EMPTY, async (url) => {
           await establish(url, p.before)

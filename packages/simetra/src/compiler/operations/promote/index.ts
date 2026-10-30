@@ -106,7 +106,7 @@ const adoptedTable = (model: CompiledModel, object: SourceObject) =>
   )
 
 /**
- * Гейти одиниці (рішення 4, 6; §11), до будь-яких змін: ціль, яку
+ * Гейти одиниці (спека промоції §11), до будь-яких змін: ціль, яку
  * промоція вміє, — за фактами реєстру й даними виду, а не за його ім'ям.
  */
 function unitGates(
@@ -155,7 +155,7 @@ interface UnitTable {
 }
 
 /**
- * Кроки `fill` (рішення 12, 15): таблиця, ціль і вираз кожного кроку. Вид
+ * Кроки `fill` (спека промоції §4): таблиця, ціль і вираз кожного кроку. Вид
  * кроку виводиться з того, що читає вираз; порушення форми —
  * `promote.expression-invalid`.
  */
@@ -465,7 +465,7 @@ export async function promoteObject(
   ]
   problems.push(...structural.flatMap((s) => s.problems))
   // Клас предмета, який `promote` записує сам, вхід не обирає: такий ключ у
-  // `conversions` — невідомий (R24)
+  // `conversions` — невідомий (спека промоції §8)
   const chosen = subjects.filter((s) => s.implied === undefined)
   for (const s of chosen) {
     const given = input.conversions[s.subject]
@@ -499,7 +499,7 @@ export async function promoteObject(
     const at = toPointer(["conversions", key])
     const own = implied.get(key)
     // Ключ предмета, клас якого `promote` записує сам, щось називає: окремий
-    // текст каже прибрати ключ, а не шукати неіснуючу SQL-одиницю (R24)
+    // текст каже прибрати ключ, а не шукати неіснуючу SQL-одиницю (спека промоції §8)
     problems.push(
       diagnostic(
         "promote.mapping-unknown",
@@ -614,7 +614,7 @@ export async function promoteObject(
   if (moved.problems.length > 0) return refused(files, moved.problems)
   setTexts(after, moved.files)
 
-  // 7–8. Доповнення (канонічні фізичні імена, рішення 10), звуження боргу й
+  // 7–8. Доповнення (канонічні фізичні імена, спека промоції Пр18), звуження боргу й
   // компіляція результату.
   const only = new Set([path, ...cascade.files.keys()])
   let completed = await completeNarrowAndCompile(files, after, o, only)
@@ -649,7 +649,7 @@ export async function promoteObject(
       planned.steps
     )
 
-  // 8a. Переписування функцій в обсязі (рішення 13, 14) — над іменами, які
+  // 8a. Переписування функцій в обсязі (спека промоції §6) — над іменами, які
   // дала модель результату. Будь-яка відмова переписувача — нічого не пишеться.
   const early = record(completed.model)
   // Клас `property` чесний лише за еквівалентного відтворення видом; перевірка
@@ -706,7 +706,7 @@ export async function promoteObject(
   ])
   if (final.problems.length > 0) return refused(files, final.problems)
   // Фінальна компіляція судить і переписані тексти, і функції-запити вже в
-  // модулі виду — як голови (Р2c1-24 (б)): порушення Правила 3 там —
+  // модулі виду — як голови (спека промоції §9.4): порушення Правила 3 там —
   // відмова промоції.
   if (changed.length > 0 || sql.moved.some((m) => m.staged !== undefined)) {
     const next = applyChanges(files, completed.result.changes)
@@ -731,7 +731,7 @@ export async function promoteObject(
     identity: unit.identity,
     file: placed(unit).file,
   }))
-  // Вхідні каскади, переведені в `restrict` (Р2c1-34): крок з дозволом
+  // Вхідні каскади, переведені в `restrict` (спека прав §4.7): крок з дозволом
   // пункту `delete:` (on delete) чи `update:` (on update) плану застосування.
   const warnings: Diagnostic[] = [...cascade.restricted]
   const contract = (

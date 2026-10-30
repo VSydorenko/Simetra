@@ -311,7 +311,7 @@ function carrierRefKey(file: string, pointer: string, role: string): string {
 }
 
 /**
- * Ім'я копії носія шляху в основній таблиці (Р2a2-5): колонка першого кроку
+ * Ім'я копії носія шляху в основній таблиці: колонка першого кроку
  * й колонка цілі — копії двох шляхів через ту саму колонку не збігаються.
  */
 export function carrierCopyName(through: string, column: string): string {
@@ -426,7 +426,7 @@ class SnapshotBuilder {
   /** Об'єкти з носіями прав, чиї таблиці отримують копії носіїв у `finish`. */
   private readonly carrierHosts: CarrierHost[] = []
   /**
-   * FK прийнятих таблиць з ціллю-ключем виду (Рб1-10): колонки цілі — у
+   * FK прийнятих таблиць з ціллю-ключем виду (спека прав §4.7): колонки цілі — у
    * `finish`, коли таблицю цілі вже побудовано, бо колонку скоупу впізнають
    * за походженням (`origin.scopeKindId`), а не за іменем.
    */
@@ -696,7 +696,7 @@ class SnapshotBuilder {
       })
       sectionTables.push(built)
     }
-    // Регістр копій не має (Р2a2-4): носій `access` — лише його вимір, а
+    // Регістр копій не має (спека прав §5.2): носій `access` — лише його вимір, а
     // похідні таблиці несуть той самий вимір власною колонкою.
     if (def.rightsExtents.length > 0 && registerKeys === undefined) {
       this.carrierHosts.push({ object, main, scope, sections: sectionTables })
@@ -1056,7 +1056,7 @@ class SnapshotBuilder {
   // --- Копії носіїв прав ---------------------------------------------------
 
   /**
-   * Денормалізовані копії носіїв прав (спека прав §5.2, Рх21, Р2a2-5): шлях
+   * Денормалізовані копії носіїв прав (спека прав §5.2, Рх21): шлях
    * дає копію кінцевого значення в основній таблиці, а кожна ТЧ — копію
    * кінцевого значення кожного носія власника (прямого — його колонки,
    * шляху — копії шляху). Політики ТЧ і шляху тоді — ті самі некорельовані
@@ -1091,7 +1091,7 @@ class SnapshotBuilder {
             )
       const targetObject =
         target === undefined ? undefined : this.byId.get(target.origin.objectId)
-      // Тригер поширення лежав би на прийнятій таблиці (Р2a2-10).
+      // Тригер поширення лежав би на прийнятій таблиці (спека прав Рх21).
       if (targetObject === undefined || isDeclaredTable(targetObject)) continue
       const tail = this.carrierColumn(
         targetObject,
@@ -1681,7 +1681,7 @@ class SnapshotBuilder {
         // Ціль без таблиці звітує стадія 4 (`reference.not-referenceable`);
         // колонок у неї немає, тож і FK будувати нема на що.
         if (KIND_REGISTRY[object.kind].materializes !== "table") return
-        // Ціль-вид називає ключ, ціль `CustomTable` — колонки (Рб1-10);
+        // Ціль-вид називає ключ, ціль `CustomTable` — колонки (спека прав §4.7);
         // іншу форму звітує стадія 4 (`customTable.fk-target-not-key`).
         const declared = KIND_REGISTRY[object.kind].declared
         if (declared !== "columns" in references) return
@@ -1955,7 +1955,7 @@ export function standardRefTargets(
       rightsRoles.set(level, ref)
     }
   }
-  // Учасник виду з прийнятим членством — рядок таблиці-джерела (Р2d1-5):
+  // Учасник виду з прийнятим членством — рядок таблиці-джерела (спека прав §4.7):
   // так системні довідники прав такого виду посилаються на прийняту таблицю,
   // і ролі Simetra стають поряд із прийнятим членством (перша міграція).
   for (const source of project.membershipSources) {
@@ -2056,8 +2056,8 @@ function uniqueCarrier(
 }
 
 /**
- * Прийнята таблиця описує RLS полем файлу, решта видів — фактом реєстру
- * (Рб1-6). Таблицю тут будує лише вид із таблицею, тож `declared` без файлу
+ * Прийнята таблиця описує RLS полем файлу, решта видів — фактом реєстру.
+ * Таблицю тут будує лише вид із таблицею, тож `declared` без файлу
  * чи `none` — розбіжність реєстру, а не метаданих: тихе значення дало б
  * `undefined` чи таблицю без RLS під політиками.
  */
@@ -2187,7 +2187,7 @@ export function hasScopeKeyUnique(table: CustomTable): boolean {
   )
 }
 
-/** Форма ключа цілі FK на таблицю виду (Рб1-10). */
+/** Форма ключа цілі FK на таблицю виду (спека прав §4.7). */
 export type KindKey = Extract<
   CustomTable["foreignKeys"][number]["references"],
   { key: unknown }
@@ -2207,7 +2207,7 @@ export function mainTableIn<T extends { origin: PhysicalTable["origin"] }>(
 }
 
 /**
- * Фізичні колонки цілі FK на таблицю виду за формою ключа (Рб1-10): `ref` —
+ * Фізичні колонки цілі FK на таблицю виду за формою ключа (спека прав §4.7): `ref` —
  * uuid-ключ виду; `scopedRef` — власна колонка скоупу (за походженням
  * `origin.scopeKindId`, не за іменем) і ключ, у порядку складеного
  * `UNIQUE (<скоуп>, <ключ>)`, який стадія дає таблиці зі скоупом. Корінь

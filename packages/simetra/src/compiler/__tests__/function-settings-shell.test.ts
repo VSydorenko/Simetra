@@ -110,7 +110,7 @@ describe("sql.function-settings-shell", () => {
       layers: [dimensionFunction()],
       expected: [shell(SHARED, "public.region_link", "search_path")],
     },
-    // Ланки голів (`headLinks`, Р2c1-31) — судимі функції: окремий `ALTER`
+    // Ланки голів (`headLinks`, спека прав §5.3) — судимі функції: окремий `ALTER`
     // підмінив би claims чи шлях ланки повз судження голови.
     {
       name: "a link of a scope set function given request claims",

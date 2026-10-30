@@ -167,7 +167,7 @@ export async function runStages(
         )
   // Таблиці видів — зі знімка стадії 3. Без неї компіляцію вже зупиняють
   // помилки вище за течією, тож порожній знімок лише для судження запису
-  // сесії боргу (Р2c1-14): ратчет на ньому не судиться.
+  // сесії боргу (спека прав §5.3): ратчет на ньому не судиться.
   const kinds = kindTables(stage1.objects, stage3?.physical.tables ?? [])
   // Ратчет боргу судить лише повні одиниці: без стадії 3 ідентичності
   // функцій (типи рядків) неповні, і `sql.debt-grows` на вже зламаній
@@ -186,7 +186,7 @@ export async function runStages(
           plpgsql
         )
   // Згенеровані функції схем застосунку відомі лише зі знімка. Подання й
-  // політики їх не судять дозвільним переліком виразів (Р2c1-55): ті, що
+  // політики їх не судять дозвільним переліком виразів (спека прав §5.3): ті, що
   // пишуть, судить `sql.platform-function-call` стадії 5. Вирази прийнятих
   // таблиць цієї стадії не мають, тож для них поза переліком лише ті, що
   // читають.
@@ -237,7 +237,7 @@ export async function runStages(
       plpgsql,
       stage1.project?.database.provider
     ),
-    // Оболонку судимих функцій задає лише `CREATE` (Р2c1-10): набір судимих
+    // Оболонку судимих функцій задає лише `CREATE` (спека прав §5.3): набір судимих
     // відомий до стадії 3, тож помилка стоїть поруч із формами модулів.
     ...checkFunctionSettingsShell(
       stage1.objects,
@@ -248,7 +248,7 @@ export async function runStages(
     ),
     ...debt.grows,
     // Дослівна політика чи тригер на таблиці виду і тіло функції, що її
-    // пише, — помилка раннього блоку поруч із ратчетом боргу (Р2c1-1,
+    // пише, — помилка раннього блоку поруч із ратчетом боргу (спека прав §6.1,
     // Правило 1): стадія 5 за нею не запускається, а знімок таблиць уже є —
     // стадія 3 будує його до розбору `.sql`.
     ...(stage3 === undefined
@@ -261,8 +261,8 @@ export async function runStages(
           plpgsql,
           stage1.project?.database.provider
         )),
-    // Дозвільний перелік операторів тіла (Р2c1-37) і виклики функцій
-    // платформи (Р2c1-38) знімка не потребують: стадія 5 після них судить
+    // Дозвільний перелік операторів тіла (спека прав §6.1) і виклики функцій
+    // платформи (спека прав §5.3) знімка не потребують: стадія 5 після них судить
     // лише прочитані тіла.
     ...checkFunctionBodies(
       stage1.objects,
@@ -272,7 +272,7 @@ export async function runStages(
       plpgsql
     ),
     ...checkPlatformCalls(sql.units, parse, plpgsql),
-    // Виклики подань і політик — дозвільний перелік виразів (Р2c1-55).
+    // Виклики подань і політик — дозвільний перелік виразів (спека прав §5.3).
     ...(unitExpressions === undefined
       ? []
       : checkExpressionCalls(sql.units, unitExpressions, parse)),
@@ -353,7 +353,7 @@ export async function runStages(
       diagnostics: sortDiagnostics([...staged, ...projection.diagnostics]),
     }
   }
-  // Вид скоупу, об'єктів якого не читає жодна роль (Р2a2-13), видно лише на
+  // Вид скоупу, об'єктів якого не читає жодна роль (спека прав §5.2), видно лише на
   // проєкції ролей — тож попередження йде після неї й не зупиняє компіляції.
   const diagnostics = sortDiagnostics([
     ...staged,
@@ -363,7 +363,7 @@ export async function runStages(
     ),
   ])
   // Довідники прав потрібні і контрактам, і генератору прав серед SQL-одиниць:
-  // обчислюються до одиниць, тож `buildContracts` їх лише приймає (Р2a1-22).
+  // обчислюються до одиниць, тож `buildContracts` їх лише приймає.
   const rightsCatalogs = rightsCatalogContracts(
     stage1.objects,
     stage2.references,
@@ -417,7 +417,7 @@ export async function runStages(
     }))
     .sort((a, b) => compareStrings(a.name, b.name))
   // Один контракт «Користувачів» і для шару платформи, і для функцій прав, і
-  // для меж доступу: без нього всі мовчать (Р2a1-30).
+  // для меж доступу: без нього всі мовчать (спека прав §4.6).
   const users = usersContractOf(stage1.objects, physical)
   const access = accessContracts(
     stage1.objects,
@@ -553,7 +553,7 @@ export async function runStages(
       module,
       parse
     ),
-    // Незмінність ключа — для кожного проєкту, незалежно від прав (Рб1-4).
+    // Незмінність ключа — для кожного проєкту, незалежно від прав (спека прав §7).
     ...buildKeyUnits(
       physical,
       stage1.project.naming.attributeCase,
@@ -646,7 +646,7 @@ export async function runStages(
   ]
   // Ядро команд довідника — над рештою одиниць: функції, які кличе його
   // тіло (функції прав, множин, джерел копій), — ребра `requires`, а
-  // обробники `beforeWrite` вирішують замок ієрархії (Р-A2-17).
+  // обробники `beforeWrite` вирішують замок ієрархії (спека П4 §6.6).
   const sqlUnits = [
     ...baseUnits,
     ...buildCatalogCommandUnits({

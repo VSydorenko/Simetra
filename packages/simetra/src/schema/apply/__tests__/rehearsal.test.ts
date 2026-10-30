@@ -295,7 +295,7 @@ describe("statementTimeoutFromReport", () => {
   ]
 
   it("scales by the worst table, not the sum", () => {
-    // Review Focus 5: `a` у сто разів більша на цілі, `b` рівна — множник
+    // `a` у сто разів більша на цілі, `b` рівна — множник
     // 100, а не відношення сум (2000 / 1010)
     expect(timeoutMs(timed(100, copy), target)).toBe(60_000)
     expect(timeoutMs(timed(1000, copy), target)).toBe(300_000)
@@ -330,7 +330,7 @@ describe("statementTimeoutFromReport", () => {
   })
 
   it("caps the timeout at the Postgres limit", () => {
-    // Рішення R10: формула з L = 1 і копією в 3 рядки дає рівно рядки цілі
+    // Формула з L = 1 і копією в 3 рядки дає рівно рядки цілі
     const at = (rows: number) =>
       statementTimeoutFromReport(
         timed(1, [{ schema: "app", table: "a", rows: 3 }]),

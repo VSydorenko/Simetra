@@ -410,7 +410,7 @@ describe("stage 4: integrity", () => {
       "documents/B/B.meta.json": document("B", { physicalName: "shared" }),
     })
     // Імена похідних функцій від таблиці теж збігаються: функції ефектів
-    // (Р2b1-11) і `save` — ядра команд довідника й оболонки проведення.
+    // і `save` — ядра команд довідника й оболонки проведення.
     expect(
       result.diagnostics
         .filter((d) => d.code === "physical.function-duplicate")
@@ -631,7 +631,7 @@ describe("stage 4: integrity", () => {
       ])
     })
 
-    describe("fk action on a table of a kind (Р2c1-34)", () => {
+    describe("fk action on a table of a kind (спека прав §4.7)", () => {
       // Каскад від таблиці виду до прийнятої таблиці виконував би посеред
       // команди вирази й борговий код прийнятої таблиці.
       const fkOn = (
@@ -722,7 +722,7 @@ describe("stage 4: integrity", () => {
       )
     })
 
-    describe("fk target on a table of a kind is its key (Рб1-8, Рб1-10)", () => {
+    describe("fk target on a table of a kind is its key (спека прав §4.7)", () => {
       // Роль команд змінює унікальний реквізит таблиці виду, а перевірка FK
       // іде повз RLS: FK на нього блокував би команду й був би оракулом
       // наявності рядка в чужому тенанті. Ключ незмінний, тож ціль-вид
@@ -798,7 +798,7 @@ describe("stage 4: integrity", () => {
       })
     })
 
-    describe("metadata expressions of an adopted table (Р2c1-41, Р2c1-55)", () => {
+    describe("metadata expressions of an adopted table (спека прав §5.3)", () => {
       // Postgres обчислює ці вирази на кожному записі в прийняту таблицю,
       // зокрема записі ролі API, тож їхні виклики — дозвільний перелік
       // виразів: запис сесії й виконання тексту SQL у нього не входять.

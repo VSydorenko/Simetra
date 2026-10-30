@@ -54,7 +54,7 @@ const ref = (kind: string, name: string) => ({ kind, name })
 
 /**
  * Вид `org` без довідника членства: членство дає прийнята таблиця, тож
- * функція множини — дослівна (Р1a-17), а `OrgMember` і зв'язок над ним
+ * функція множини — дослівна (спека прав Рх7), а `OrgMember` і зв'язок над ним
  * прибрано. Виконавець задачі посилається на прийняту таблицю.
  */
 function adopted(
@@ -112,7 +112,7 @@ async function codes(files: Files) {
 describe("adopted sources", () => {
   it("compiles a membership source and an assignment source", async () => {
     // Три джерела над однією `RoleGrant` — лише з несумісними умовами
-    // дискримінатора `level` (Р2d1-19).
+    // дискримінатора `level` (спека прав §4.7).
     const level = (value: string) => [{ column: "level", equals: value }]
     const table = grantTable()
     const model = await compiled(
@@ -758,7 +758,7 @@ async function diagnosticsOf(files: Map<string, string>) {
 }
 
 describe("adopted source where, row scope and role table", () => {
-  // Рядок перевіряє наявність свого коду на своєму вказівнику (як у Задачі 1):
+  // Рядок перевіряє наявність свого коду на своєму вказівнику:
   // зламана умова тягне й супутні діагностики.
   it.each<{
     case: string
