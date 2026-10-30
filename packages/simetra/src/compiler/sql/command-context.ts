@@ -10,11 +10,11 @@ import type { SqlParser } from "./parse"
 import type { PlpgsqlParser } from "./plpgsql"
 
 /**
- * Чим SQL застосунку зачіпає захищене налаштування сесії (Р2b1-19,
- * Р2b1-19b). Зміна ролі (`SET ROLE`, `SET SESSION AUTHORIZATION` і їхні
+ * Чим SQL застосунку зачіпає захищене налаштування сесії (спека прав §5.3).
+ * Зміна ролі (`SET ROLE`, `SET SESSION AUTHORIZATION` і їхні
  * `RESET`) окремої форми не має: розбирач дає їй той самий `VariableSetStmt`
  * з іменем `role` чи `session_authorization`, тож вона — `setStatement`.
- * `dynamicText` — виклик функції, що виконує переданий текст SQL (Р2c1-32):
+ * `dynamicText` — виклик функції, що виконує переданий текст SQL (спека прав §5.3):
  * що вона виконає, статично не відомо, тож це зміна сесії невідомою формою.
  */
 export type CommandContextWrite =
@@ -28,7 +28,7 @@ export type CommandContextWrite =
 /**
  * Один запис захищеного налаштування: форма й ім'я налаштування, коли воно
  * статично відоме (`RESET ALL` — `*`). Ім'я потрібне боргу прийнятих таблиць:
- * платформний префікс там — помилка, решта — попередження (Р2c1-6).
+ * платформний префікс там — помилка, решта — попередження (спека прав §5.3).
  */
 export interface CommandContextHit {
   form: CommandContextWrite
@@ -72,7 +72,7 @@ function selectedValue(stmt: unknown): unknown {
  * Текст динамічного оператора plpgsql (`EXECUTE`, `OPEN … FOR EXECUTE`,
  * `RETURN QUERY EXECUTE`, `FOR … IN EXECUTE`), коли він — рядковий літерал;
  * зібраний під час виконання — `undefined`. Одне правило літерала для
- * перевірки контексту команди й обходу досяжності (Р2c1-5).
+ * перевірки контексту команди, дозвільного переліку тіла й обходу читань.
  */
 export function literalDynamicText(
   query: string,
@@ -97,7 +97,7 @@ const DML_STATEMENTS = ["UpdateStmt", "InsertStmt", "DeleteStmt", "MergeStmt"]
 
 /**
  * `UPDATE pg_settings` проходить правилом подання в `set_config`, а ім'я
- * налаштування в `WHERE` надійно не перевірити (Р2b1-19a), тож забороняється
+ * налаштування в `WHERE` надійно не перевірити (спека прав §5.3), тож забороняється
  * будь-який запис у відношення, незалежно від умови. Читання дозволене.
  */
 function settingsTableWrite(node: Record<string, unknown>): boolean {
@@ -157,7 +157,7 @@ function sqlTextCall(
   return [...textFunctions].some((fn) => fn.split(".").at(-1) === name)
 }
 
-/** Функції провайдера, що виконують текст SQL (`schema.name`, Р2c1-32). */
+/** Функції провайдера, що виконують текст SQL (`schema.name`, спека прав §5.3). */
 export function providerTextFunctions(
   provider: DatabaseProvider | undefined
 ): ReadonlySet<string> {
@@ -169,7 +169,7 @@ export function providerTextFunctions(
 /**
  * Чи кличе дерево функцію, що виконує текст SQL, — те саме судження виклику,
  * що форма `dynamicText`. Тілу функції воно потрібне окремо: там такий виклик
- * — нелітеральний `EXECUTE`, помилка скрізь, борг включно (Р2c1-50).
+ * — нелітеральний `EXECUTE`, помилка скрізь, борг включно (спека прав §5.3).
  */
 export function callsSqlText(
   value: unknown,
@@ -317,7 +317,7 @@ function optionWrites(
   )) {
     const set = (def.arg as { VariableSetStmt?: SetStatement } | undefined)
       ?.VariableSetStmt
-    // `RESET ALL` опції лише прибирає власні налаштування функції (Р2b1-25):
+    // `RESET ALL` опції лише прибирає власні налаштування функції:
     // у сесію він нічого не пише, тож не відмова. Оператор `RESET ALL` у тілі
     // судиться окремо і лишається забороненим.
     if (
@@ -339,18 +339,18 @@ function optionWrites(
  * Чи змінює одиниця SQL застосунку захищене налаштування сесії: `simetra.*`
  * (контекст команди), claims запиту чи роль. Їх ставить лише платформа;
  * обробник підписки спрацьовує посеред оператора команди, і змінене ним
- * налаштування побачили б політики наступних рядків (Р2b1-19, Р2b1-19a,
- * Р2b1-19b). Судиться кожна одиниця, а не лише функції (Р2b1-22): подання,
+ * налаштування побачили б політики наступних рядків (спека прав §5.3).
+ * Судиться кожна одиниця, а не лише функції: подання,
  * домен, політика чи опція `ALTER FUNCTION` виконують свій вираз у тій самій
  * сесії. Тіло `LANGUAGE sql` розбирається тут, тіло plpgsql — через вирази
  * його операторів; тіла інших мов і нелітеральний `EXECUTE` не розбираються:
  * їх відмовляє дозвільний перелік тіла (`sql.function-body-statement`,
- * Р2c1-37). Форму `dynamicText` функції чи процедури теж судить перелік
- * (Р2c1-50); тут вона лишається для одиниць без тіла.
+ * спека прав §6.1). Форму `dynamicText` функції чи процедури теж судить перелік
+ * (спека прав §5.3); тут вона лишається для одиниць без тіла.
  * Усі записи одиниці, а не перший: у борговому SQL `SET ROLE` перед
  * `set_config('simetra.…')` інакше сховав би помилку за попередженням
- * (Р2c1-6). Порожній масив — записів немає. `textFunctions` — функції
- * провайдера, що виконують текст SQL (`schema.name`, Р2c1-32).
+ * (спека прав §5.3). Порожній масив — записів немає. `textFunctions` — функції
+ * провайдера, що виконують текст SQL (`schema.name`, спека прав §5.3).
  */
 export function commandContextWrite(
   tree: Node,
@@ -420,7 +420,7 @@ function bodyWrites(
   // Літеральний `EXECUTE '…'` — звичайний SQL, лише записаний рядком: його
   // розбираємо й судимо усіма формами. Нелітеральний текст перевірка дерев
   // не бачить: його відмовляє дозвільний перелік тіла скрізь, борг теж
-  // (`sql.function-body-statement`, Р2c1-37).
+  // (`sql.function-body-statement`, спека прав §6.1).
   for (const statement of body.fn.statements) {
     for (const e of statement.expressions) {
       if (e.role !== "dynamic") continue

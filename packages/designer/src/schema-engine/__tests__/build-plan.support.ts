@@ -45,7 +45,7 @@ import {
 
 /**
  * Спільна підготовка файлів `build-plan*.db.test.ts`. Конвеєр плану `buildPlan`
- * на справжній базі (план П3-1, задача 9): гейт
+ * на справжній базі: гейт
  * дрейфу, план від живої цілі, класи й лінт, доказ на копії тим самим
  * раннером і детермінований артефакт. Ціль кожного тесту — окрема база від
  * `withDesiredShadow`; база стеку лише читається.
@@ -71,7 +71,7 @@ export const STRANGER = testRoleName("build_plan_stranger")
 /** Роль-група, членом якої є роль API: її привілеї роль API успадковує. */
 export const WRITERS = testRoleName("build_plan_writers")
 
-/** Роль адміністрування копії, інша за роль плану (R7 плану П3-2b-0). */
+/** Роль адміністрування копії, інша за роль плану. */
 export const COPIER = testRoleName("build_plan_copier")
 export const COPIER_PASSWORD = "simetra_build_plan_copier"
 
@@ -172,8 +172,8 @@ export const errors = (outcome: PlanOutcome): string[] =>
 
 /**
  * Попередження про сліпі функції, яке дає застосування чи репетиція: тригерна
- * plpgsql-функція без тригера сліпа для `plpgsql_check` (рішення 5 плану
- * П3-2b-1). Немає — порожньо.
+ * plpgsql-функція без тригера сліпа для `plpgsql_check` (спека промоції
+ * §7.2). Немає — порожньо.
  */
 export const blindDiagnostics = (functions: readonly string[]) =>
   functions.length === 0
@@ -273,7 +273,7 @@ export type Json = Record<string, unknown>
 /**
  * Тека фікстури без модуля й рахунку, з таблицею контактів як ТЧ. Коментар
  * таблиці фікстури й коментар колонки `inn` `promote` переносить в описи
- * дослівно й сам дає їм клас `metadata` (R24).
+ * дослівно й сам дає їм клас `metadata` (спека промоції §8).
  */
 export function contactsProject(): Map<string, string> {
   const files = promotionProject({

@@ -15,7 +15,7 @@ import {
 } from "../../../simetra/test/support"
 
 /**
- * Інструмент `roles` (Р2a1-3). DB-рівень, бо атрибути створеної ролі, грант
+ * Інструмент `roles` (спека designer §3.2). DB-рівень, бо атрибути створеної ролі, грант
  * творцеві й право `CREATEROLE` вирішує Postgres. Кожен кейс — в одній
  * транзакції тесту з роллю під тегом прогону: роль відкочується.
  */
@@ -155,7 +155,7 @@ describe("roles", () => {
 })
 
 /**
- * Роль входу (Р-A1-3, Р-A1-4). DB-рівень, бо рядки `pg_auth_members` кожного
+ * Роль входу (спека П4 §6.2). DB-рівень, бо рядки `pg_auth_members` кожного
  * grantor, право `ADMIN` на батьку й типові опції членства вирішує Postgres.
  * Справжні імена ролей платформи кластерні, тож кейси — на тегованих.
  */
@@ -220,7 +220,7 @@ describe("roles: the login role", () => {
 
   it("makes the login role a member of the real request role with INHERIT FALSE, SET TRUE", async () => {
     await withRollback(async (client) => {
-      // Виконавець — `postgres`: ADMIN на `authenticated` має лише він (Р-A1-1)
+      // Виконавець — `postgres`: ADMIN на `authenticated` має лише він (спека П4 §6.2)
       const dbs = rollbackDatabase(client)
       const login = { name: runtime, memberOf: [command, "authenticated"] }
       expect(
@@ -244,7 +244,7 @@ describe("roles: the login role", () => {
     })
   })
 
-  // Review Focus 3: другий grantor з INHERIT
+  // Другий grantor з INHERIT
   it("refuses a second grantor of the pair with INHERIT TRUE", async () => {
     await withRollback(async (client) => {
       const executor = await asExecutor(client)
@@ -372,7 +372,7 @@ describe("roles: the login role", () => {
   })
 
   /**
-   * Рб1-7: роль запиту → (SET) посередник з CREATEROLE → (членство без SET і
+   * Роль запиту → (SET) посередник з CREATEROLE → (членство без SET і
    * INHERIT) керівник з ADMIN на ролі команд. Що з PG16 право керівника йде
    * будь-яким членством, вирішує Postgres, тож і ланцюг, і його наслідок — тут.
    */
@@ -425,7 +425,7 @@ describe("roles: the login role", () => {
     })
   })
 
-  // Факт експлуатованості Рб1-7: посередник із CREATEROLE, звичайний член
+  // Факт експлуатованості цього ланцюга: посередник із CREATEROLE, звичайний член
   // керівника, у PG16+ — адміністратор ролі команд (`is_admin_of_role` іде
   // всіма членствами). Postgres стека дозволяє `ALTER ROLE` ролі команд;
   // `GRANT` проходить ту саму перевірку, але падає внутрішньою помилкою

@@ -517,7 +517,7 @@ describe("rights guard statement triggers", () => {
   )
 
   it("maintenance mode requires a non-API login role", () => {
-    // Порядок: ролі входу провайдера, далі ролі входу платформи (Р-A1-6)
+    // Порядок: ролі входу провайдера, далі ролі входу платформи (спека П4 §6.2)
     const logins = [
       ...PROVIDER_LOGIN_ROLES.supabase,
       ...Object.values(PLATFORM_LOGIN_ROLES),
@@ -818,7 +818,7 @@ describe("rights guard transaction check", () => {
       expect(queueKeys(insert!).slice(0, own.length), config.table).toEqual(own)
       // Перший образ — найменший seq рядка цієї таблиці серед командних
       // записів; рядок без запису в журналі — живий. Рядки ключа й дельти
-      // ролі звужуються до `to_jsonb` (Р2d2-25): гілка журналу — за ключем
+      // ролі звужуються до `to_jsonb`: гілка журналу — за ключем
       // рядка, а для дельти, що шукається за власником, — уся транзакція.
       const journal = `simetra.rights_journal j WHERE j.xid = v_pending.xid AND j.reason = 'command' AND j.relation = 'public.${config.table}'`
       const select = (sql: string) =>
@@ -931,7 +931,7 @@ describe("rights guard transaction check", () => {
     expect(funcNames(body)).toContain("rights_role_grants")
   })
 
-  // Р2c2-26: права актора ростуть і без ключа ролі чи призначення
+  // спека прав §7: права актора ростуть і без ключа ролі чи призначення
   // (самоприйняття запрошеного рядка з призначеннями), тож ключ `actor`
   // судить увесь приріст rights_mine() тим самим покриттям знімком.
   it("checks the actor's own increment on the actor key against the snapshot", () => {
@@ -1005,7 +1005,7 @@ describe("rights guard transaction check", () => {
     }
   })
 
-  // Р2c2-5: зняття позначки — повний приріст. Без фільтра позначеного рядка
+  // спека прав §7: зняття позначки — повний приріст. Без фільтра позначеного рядка
   // «до» й «після» дали б ту саму множину, і порожній приріст пройшов би.
   it("grant sets leave out a marked role, a marked assignment and its marked custom role", () => {
     const check = bodyTrees(unit(domain, CHECK).sql)
@@ -1360,8 +1360,8 @@ describe("rights guards of membership and users outside commands", () => {
   })
 
   it("finds the user kind by its styled name in a snake_case project", async () => {
-    // Близнюк у snake_case (Рб1-3): `origin.standard` несе ім'я в стилі
-    // проєкту (Р-A1-10), тож літерал `userKind` не знайшов би `user_kind`.
+    // Близнюк у snake_case: `origin.standard` несе ім'я в стилі
+    // проєкту (спека П4 §6.8), тож літерал `userKind` не знайшов би `user_kind`.
     const snake = await compileRights(snakeCaseTwin(policyDomain(writeRoles())))
     expectClean(snake)
     const sql = (model: CompiledModel) =>

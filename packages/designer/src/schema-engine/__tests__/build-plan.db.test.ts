@@ -92,8 +92,8 @@ describe.concurrent("buildPlan", () => {
   })
 
   it("carries no foreign keys of the target when no step needs them", async () => {
-    // Створення таблиць з ключами слідові FK цілі не потрібні (рішення 9
-    // плану П3-2b-1): раннерові звіряти нічого
+    // Створення таблиць з ключами слідові FK цілі не потрібні (спека
+    // промоції §7.2): раннерові звіряти нічого
     const model = await compiled({ [PARTY]: party() })
     await inTarget(EMPTY, async (url) => {
       expect(planned(await plan(url, model)).foreignKeys).toEqual({
@@ -180,7 +180,7 @@ describe.concurrent("buildPlan", () => {
     })
   })
 
-  // Рішення 5 плану П3-2b-1 і вердикт «(г)»: сліпа функція з переліку
+  // Спека промоції §7.2: сліпа функція з переліку
   // пресету провайдера — рядок виводу, а не попередження; сліпа функція
   // провайдера поза переліком і функція застосування — попередження
   it("warns about blind functions in the plan except the provider's expected ones", async () => {
@@ -249,7 +249,7 @@ describe.concurrent("buildPlan", () => {
     })
   })
 
-  // Згенеровані гранти ролі команд поколонкові (П4-A1): колонковий ACL
+  // Згенеровані гранти ролі команд поколонкові: колонковий ACL
   // живе в `pg_attribute.attacl`, і що гейт і рушій його читають, вирішує
   // каталог справжньої бази
   it("plans over drift of a column grant", async () => {
@@ -713,7 +713,7 @@ describe.concurrent("buildPlan", () => {
   })
 
   it("refuses a clone whose column order differs from the target", async () => {
-    // Порядок колонок копії ↔ ціль звіряється точно (R4): marker бере модель
+    // Порядок колонок копії ↔ ціль звіряється точно (платформна спека §6.9): marker бере модель
     // копії, тож копія мусить відтворювати порядок цілі
     const attributes = [
       attribute("first", { id: uuid(9050) }),

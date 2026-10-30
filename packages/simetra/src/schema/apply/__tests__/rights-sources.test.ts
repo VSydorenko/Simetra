@@ -310,7 +310,7 @@ describe("readRightsSourceFacts", () => {
       read: ["globalGrants"],
     },
     {
-      // Р2d1-11: з'єднання `sr` з недоступною таблицею ролей впало б `42501`
+      // З'єднання `sr` з недоступною таблицею ролей впало б `42501`
       case: "an unowned role table",
       poly: true,
       present: {
@@ -339,7 +339,7 @@ describe("readRightsSourceFacts", () => {
     "reads data with row security off and skips $case",
     async ({ present, missingColumns, read, ...o }) => {
       const model = "poly" in o && o.poly ? poly : adopted
-      // Р2d1-10, Р2d1-11: дані — лише під `row_security = off` (на RLS без
+      // Дані — лише під `row_security = off` (на RLS без
       // обходу — гучна помилка, не тихий нуль); таблиці, якої немає, чи якій
       // відмовлено, і колонки, якої ще немає, не читаються.
       const target = fakeTarget({ present, missingColumns })
@@ -393,7 +393,7 @@ describe("readRightsSourceFacts", () => {
   })
 
   it("refuses a table in a schema the apply role cannot use instead of missing it", async () => {
-    // Р2d1-10: `to_regclass` на схемі без `USAGE` кидає сирий `42501`, тож
+    // `to_regclass` на схемі без `USAGE` кидає сирий `42501`, тож
     // таблицю шукають за іменем у каталозі, а `USAGE` на схемі — частина
     // доступу: така таблиця — відмова, а не відсутня (фейк відповідає за
     // ціль, тож форма запиту перевіряється тут же).
@@ -672,7 +672,7 @@ describe("readRightsSourceFacts", () => {
   ])(
     "counts a fullAccess holder after the plan only from kept tables: $case",
     async ({ layer, after, refused }) => {
-      // Р2c2-27: носій «після» — лише з таблиць, що лишаються тією самою
+      // Носій «після» — лише з таблиць, що лишаються тією самою
       // таблицею за походженням, а не за іменем.
       const old = (await compile(withRoles())).model!
       const desired = (await compile(withRoles(layer))).model!
@@ -696,7 +696,7 @@ describe("readRightsSourceFacts", () => {
   )
 
   it("skips the fullAccess check of a level whose scope root object is removed", async () => {
-    // Р2c2-7: план знімає таблицю коренів, а з нею кожен скоуп рівня — як на
+    // План знімає таблицю коренів, а з нею кожен скоуп рівня — як на
     // COMMIT, коли корінь видалено, перевірки для такого скоупу немає, навіть
     // коли зникає й таблиця призначень.
     const old = (await compile(withRoles())).model!
@@ -745,8 +745,8 @@ describe("unknownKeysQuery", () => {
     `SELECT k.key AS unknown_key, pg_catalog.count(*) OVER () AS total FROM (SELECT DISTINCT ${key}::text AS key FROM ${from} WHERE ${key} IS NOT NULL${where} AND NOT (${key}::text = ANY ($1::text[]))) k ORDER BY k.key COLLATE "C" LIMIT ${RIGHTS_SOURCE_LIMIT}`
 
   it("the keys query reads the role table through the same join and conditions", () => {
-    // Р2d1-11, Р2d1-18: те саме з'єднання й ті самі умови, що в `rights_mine`
-    // (DB-кейс `poly-plan-keys`, Задача 5).
+    // Те саме з'єднання й ті самі умови, що в `rights_mine` (DB-кейс
+    // `poly-plan-keys` у test/db/rights-sources.db.test.ts).
     const query = unknownKeysQuery(sourceNamed(poly, "polyGrants"))
     expect(tree(query.sql)).toEqual(
       tree(
@@ -797,7 +797,7 @@ describe("unknownKeysQuery", () => {
 
 describe("rightsSourceInput", () => {
   it("checks the owner of a role table", () => {
-    // Р2d1-10, Р2d1-17: таблиця ролей підлягає тій самій перевірці доступу.
+    // Таблиця ролей підлягає тій самій перевірці доступу.
     const input = rightsSourceInput(
       poly.contracts,
       poly.physical,
@@ -826,7 +826,7 @@ describe("rightsSourceInput", () => {
 
 describe("rights source input of a snake_case project", () => {
   // Колонки довідників прав несуть `origin.standard` у стилі свого знімка
-  // (Рб1-1): `custom_role` у snake_case. Фізичні імена від стилю не залежать,
+  // `custom_role` у snake_case. Фізичні імена від стилю не залежать,
   // тож вхід читача мусить збігтися з camelCase.
   it("reads the catalog columns by the desired model's styled names", async () => {
     const camel = (await compile(withRoles())).model!

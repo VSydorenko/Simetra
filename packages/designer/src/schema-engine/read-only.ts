@@ -2,8 +2,7 @@ import pg from "pg"
 import { loadSqlParser, type Node, type SqlParser } from "simetra/compiler"
 
 /**
- * Читання бази лише в транзакціях `READ ONLY` (рішення 14.1 плану П3-1,
- * спека designer §3.2). Гарантія живе в транзакції, а не в з'єднанні: за
+ * Читання бази лише в транзакціях `READ ONLY` (спека designer §3.2). Гарантія живе в транзакції, а не в з'єднанні: за
  * пулером у режимі транзакцій сесійне налаштування губиться між
  * транзакціями або осідає на спільному backend чужого клієнта, тож на цілі
  * немає жодного сесійного стану.
@@ -105,7 +104,7 @@ function readOnlyOption(
  * - `READ WRITE` у `BEGIN`/`START TRANSACTION`/`SET TRANSACTION`, будь-який
  *   `SET` `transaction_read_only` чи `default_transaction_read_only` (навіть
  *   `LOCAL`) — відмова: транзакція перестала б бути лише для читання.
- * - `SET`/`RESET` без `LOCAL` — відмова: сесійний стан (рішення 14.1).
+ * - `SET`/`RESET` без `LOCAL` — відмова: сесійний стан (спека designer §3.2).
  * - `COMMIT`/`ROLLBACK AND CHAIN` — відмова.
  *
  * Модель загрози — випадковий запис нашим кодом чи двигуном, а не зловмисник.

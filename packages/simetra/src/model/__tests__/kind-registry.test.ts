@@ -45,7 +45,7 @@ describe("KIND_REGISTRY", () => {
     expect(kindByDir("unknown")).toBeUndefined()
   })
 
-  // Рб1-6: RLS виду — явний факт реєстру, узгоджений із тим, чи є в виду
+  // RLS виду — явний факт реєстру, узгоджений із тим, чи є в виду
   // таблиця і чи описує її файл метаданих.
   it("row-level security is a required registry fact", () => {
     // Необов'язкове поле тут дало б `undefined` у типі й червоний typecheck:
@@ -68,7 +68,7 @@ describe("KIND_REGISTRY", () => {
   it("key order starts with the header and covers every schema key", () => {
     for (const kind of METADATA_KINDS) {
       const def = KIND_REGISTRY[kind]
-      // Вид без фізичного імені (Р1b-9) має шапку без `physicalName`.
+      // Вид без фізичного імені має шапку без `physicalName`.
       const header = ["$schema", "id", "kind", "name", "physicalName"].slice(
         0,
         def.physicalName === false ? 4 : 5

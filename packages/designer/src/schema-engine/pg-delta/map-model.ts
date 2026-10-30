@@ -38,7 +38,7 @@ const TABLE_PARTS = new Set(["column", "default", "constraint", "index"])
 
 /**
  * Класи фактів, текст яких модель тримає дослівно: кожен дає SQL-одиницю
- * (план E2a, рішення 6).
+ * (спека П2 §9).
  */
 const UNIT_KINDS = new Set([
   "acl",

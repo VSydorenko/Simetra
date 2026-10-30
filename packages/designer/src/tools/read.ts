@@ -44,7 +44,7 @@ export const explainTool = defineTool({
   async run({ dir }, { kind, name }) {
     const result = await compile(await readMetadataDir(dir))
     if (result.model === undefined) {
-      // Пояснення потребує чистої компіляції (рішення плану 2).
+      // Пояснення потребує чистої компіляції.
       return { ok: false, changes: [], diagnostics: result.diagnostics }
     }
     const explanation: Explanation | undefined = explainObject(result.model, {

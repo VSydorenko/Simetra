@@ -2,7 +2,7 @@ import { quoteIdent } from "simetra/model"
 import type { ApplyTransaction } from "../port"
 
 /**
- * Шаблон тимчасових імен наміру (рішення 11 плану П3-2b-1): таблиці, колонки
+ * Шаблон тимчасових імен наміру: таблиці, колонки
  * й канонічні імена підоб'єктів ідуть через `simetra_tmp_<n>`, вилучені
  * колонки — через `simetra_retired_<n>`.
  */

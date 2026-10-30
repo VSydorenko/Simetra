@@ -481,7 +481,7 @@ export const diffTool = defineTool({
         if (membership.refusal !== undefined)
           return { refusal: [membership.refusal] }
         // Платформні ролі — до тіні, як у плані: тінь без ролі впала б
-        // сирою помилкою гранту (Р2a1-2)
+        // сирою помилкою гранту (спека designer §3.2)
         const roles = await checkPlatformRoles(
           reader,
           db.target,

@@ -76,7 +76,7 @@ async function promoted() {
     newId: () => uuid(++n),
   })
   // Контакти лишаються CustomTable, тож їхній каскад на промотований об'єкт
-  // промоція переводить у restrict із попередженням (Р2c1-34).
+  // промоція переводить у restrict із попередженням (спека прав §4.7).
   expect(result.diagnostics.map((d) => [d.code, d.params])).toEqual([
     [
       "promote.cascade-to-restrict",

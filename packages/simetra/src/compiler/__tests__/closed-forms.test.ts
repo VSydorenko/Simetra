@@ -95,7 +95,7 @@ describe("kind module: closed forms only", () => {
   })
 
   // Оболонку судить ранній блок, а тіло — суддя голів: функція модуля виду
-  // — функція-запит (Р2c1-18).
+  // — функція-запит (спека прав §5.3).
   it("a function in the closed shell is judged as a query function", async () => {
     const heads = async (files: Record<string, string>) =>
       (await diagnostics(files)).map((d) => [d.code, d.params?.construct])
@@ -191,7 +191,7 @@ describe("kind module: closed forms only", () => {
     })
 
     // Тригерна функція, яку жодна підписка не називає обробником, — теж
-    // функція-запит (Р2c1-18): оболонку вона проходить, тіло — ні.
+    // функція-запит (спека прав §5.3): оболонку вона проходить, тіло — ні.
     it("passes static plpgsql to the head judge", async () => {
       expect(
         (
@@ -269,7 +269,7 @@ describe("kind module: closed forms only", () => {
       ])
     })
 
-    // Claims запиту й роль захищені нарівні з контекстом (Р2b1-19b): claims
+    // Claims запиту й роль захищені нарівні з контекстом (спека прав §5.3): claims
     // визначають користувача в політиках запису, а зміна ролі виходить з ролі
     // команд. Стара форма claims — `request.jwt.claim.<ключ>`.
     const CLAIMS = SESSION_CLAIMS_SETTING
@@ -332,7 +332,7 @@ describe("kind module: closed forms only", () => {
     })
 
     // Допоміжна функція спільного `sql/`-файлу (не обробник, не модуль виду):
-    // її може викликати функція закритого модуля чи обробник (Р2b1-19a).
+    // її може викликати функція закритого модуля чи обробник (спека прав §5.3).
     const SHARED_SQL = "sql/public/helpers.sql"
     const sharedWrites = async (sql: string) =>
       (await diagnostics({ [SHARED_SQL]: sql }))
@@ -379,10 +379,10 @@ describe("kind module: closed forms only", () => {
       ])
     })
 
-    // Кожна одиниця спільного файлу, а не лише функції (Р2b1-22). Борг
+    // Кожна одиниця спільного файлу, а не лише функції (спека прав §5.3). Борг
     // фікстури прийнято (`acceptDebt`): `ALTER FUNCTION` у спільному файлі —
     // борг, і без прийняття його й так відхилив би ратчет. Борг пише
-    // `simetra.*` з помилкою, решту захищених — з попередженням (Р2c1-14);
+    // `simetra.*` з помилкою, решту захищених — з попередженням (спека прав §5.3);
     // функція в закритій оболонці боргом не є, тож її запис — помилка.
     const REFUSED = "sql.command-context-write"
     const WARNED = "sql.debt-session-write"
@@ -458,7 +458,7 @@ describe("kind module: closed forms only", () => {
       "CREATE VIEW public.v AS SELECT current_setting('app.x', true) AS x;",
       "CREATE DOMAIN public.d AS text CHECK (VALUE <> '');",
       `${HELPER} ALTER FUNCTION public.helper() SET search_path = '';`,
-      // `RESET ALL` опції прибирає лише власні налаштування функції (Р2b1-25).
+      // `RESET ALL` опції прибирає лише власні налаштування функції.
       `${HELPER} ALTER FUNCTION public.helper() RESET ALL;`,
       // `set_config` іншої схеми — не вбудований, навіть за трьох частин.
       plpgsqlBody(`PERFORM postgres.app.set_config('${C}', '{}', true);`),
@@ -468,7 +468,7 @@ describe("kind module: closed forms only", () => {
       ),
       plpgsqlBody("PERFORM set_config('app.x', '1', true);"),
       // Нелітеральний `EXECUTE` — не запис сесії: його відмовляє дозвільний
-      // перелік тіла (`sql.function-body-statement`, Р2c1-37).
+      // перелік тіла (`sql.function-body-statement`, спека прав §6.1).
       plpgsqlBody("EXECUTE v_sql;"),
       plpgsqlBody("EXECUTE format('delete from app.%I', v_table);"),
       plpgsqlBody("EXECUTE 'select 1';"),
@@ -482,7 +482,7 @@ describe("kind module: closed forms only", () => {
       ])
     })
 
-    // Борговий SQL (Р2c1-6, Р2c1-14): платформний префікс і форми, що
+    // Борговий SQL (спека прав §5.3): платформний префікс і форми, що
     // зачіпають його неминуче, — помилка; решта захищених — попередження,
     // доки одиниця — борг (`debtPredicate`), однаково в модулі прийнятої
     // таблиці й у спільному `sql/`-файлі. Боргова форма фікстури — функція без
@@ -605,11 +605,11 @@ describe("kind module: closed forms only", () => {
       })
     })
 
-    // Функція, що виконує текст SQL, змінює сесію невідомою формою (Р2c1-32).
+    // Функція, що виконує текст SQL, змінює сесію невідомою формою (спека прав §5.3).
     // У тілі функції це нелітеральний `EXECUTE`: помилка переліку тіла
-    // скрізь, борг включно, без другої діагностики запису сесії (Р2c1-50).
+    // скрізь, борг включно, без другої діагностики запису сесії (спека прав §5.3).
     // Боргова форма — без явної волатильності, закрита — `STABLE`. У
-    // поданні виклик судить дозвільний перелік виразів (Р2c1-55): помилка,
+    // поданні виклик судить дозвільний перелік виразів (спека прав §5.3): помилка,
     // без другої діагностики запису сесії.
     const closedShell = (body: string) => shell("LANGUAGE sql STABLE", body)
     const debtShell = (body: string) => shell("LANGUAGE sql", body)
@@ -654,7 +654,7 @@ describe("kind module: closed forms only", () => {
     })
 
     // `replica` вимикає тригери платформи, у сесії пулу — і для чужих команд
-    // (Р2c1-40): налаштування платформи, тож і в боргу помилка.
+    // (спека прав §5.3): налаштування платформи, тож і в боргу помилка.
     it("SET session_replication_role in debt is an error", async () => {
       expect(
         sessionWrites(
@@ -666,7 +666,7 @@ describe("kind module: closed forms only", () => {
     })
 
     it("a debt function called by closed code is a head error, its own write a warning", async () => {
-      // Функція модуля виду кличе лише функції-запити (Р2c1-18): боргова
+      // Функція модуля виду кличе лише функції-запити (спека прав §5.3): боргова
       // ланка на plpgsql — помилка голови; попередження боргу лишається на
       // самій одиниці.
       const found = await diagnostics({
@@ -795,7 +795,7 @@ describe("kind module: closed forms only", () => {
   })
 })
 
-describe("extensions of application SQL (Р2c1-35)", () => {
+describe("extensions of application SQL (спека прав §5.3)", () => {
   // Розширення поза схемами провайдера ставить свої функції в схему
   // застосунку: попередження боргу, бо поза боргом такої одиниці не буває.
   it.each([

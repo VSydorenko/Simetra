@@ -35,7 +35,7 @@ export const PLANS_DIR = "plans"
  * в `plans/`, без перегляду `dryRun` і без зміни теки метаданих (`plan`,
  * `apply`): перегляду нема чого захищати, а в `apply` `dryRun` обійшов би
  * підтвердження; `write` змінює теку метаданих і має перегляд `dryRun`.
- * `--read-only` забороняє і `artifact`, і `write` (рішення 10 плану П3-2b-3).
+ * `--read-only` забороняє і `artifact`, і `write` (спека designer §3.2).
  */
 export const FILES_ACCESS = ["read", "artifact", "write"] as const
 export type FilesAccess = (typeof FILES_ACCESS)[number]

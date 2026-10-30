@@ -454,7 +454,7 @@ describe("rights sets and roles", () => {
       }),
       ok: true,
     },
-    // `deny` віднімає з архетипу ролі, тож наборові він не належить (Р1b-5).
+    // `deny` віднімає з архетипу ролі, тож наборові він не належить (спека прав §4.1).
     {
       case: "a set that denies",
       schema: rightsSetSchema,
@@ -503,14 +503,14 @@ describe("rights sets and roles", () => {
       ok: true,
     },
     // Кастомна дія в різних об'єктах — різні UUID: селектор бере лише слово
-    // словника (Р1b-10).
+    // словника (спека прав §4.1).
     {
       case: "objects with a custom action",
       schema: objectSelectorSchema,
       input: { withAction: "reassign" },
       ok: false,
     },
-    // «Кожен дійсний користувач» — рівень лише ролі, не джерела (Р1b-3).
+    // «Кожен дійсний користувач» — рівень лише ролі, не джерела (спека прав Рх7).
     {
       case: "a source of every user",
       schema: assignmentSourceSchema,

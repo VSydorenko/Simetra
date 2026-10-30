@@ -40,9 +40,9 @@ const SQUAD_FILE = "catalogs/Squad/Squad.meta.json"
 /**
  * Джерела призначень контейнерного (`grants`, над `RoleGrant`) і глобального
  * рівня (над окремою `GlobalGrant`: таблиця під двома джерелами вимагала б
- * несумісних умов `where`, Р2d1-19). Глобальне
+ * несумісних умов `where`, спека прав §4.7). Глобальне
  * джерело покриває всі глобальні ролі, тож глобальних довідників прав немає
- * (Р2a1-24); рівень `org` змішаний — його довідники лишаються.
+ * (спека прав Рх14); рівень `org` змішаний — його довідники лишаються.
  */
 function withSources(overrides: Record<string, Record<string, unknown>> = {}) {
   return files(without(GLOBAL_ROLES_FILE, GLOBAL_ASSIGNMENTS_FILE), {
@@ -88,7 +88,7 @@ describe("roles and rights sets", () => {
       })
     )
     expect(result.diagnostics.filter((d) => d.severity === "error")).toEqual([])
-    // Межа відповідальності за запис у джерело (Р2d1-9): попередження на кожне.
+    // Межа відповідальності за запис у джерело (спека прав §4.7): попередження на кожне.
     expect(
       result.diagnostics.map(({ code, pointer }) => [code, pointer])
     ).toEqual([
@@ -199,7 +199,7 @@ describe("roles and rights sets", () => {
   }
 
   // Вид `team` без членства: довідників прав його рівня теж немає, тож роль
-  // рівня `team` отримує й `rights.system-catalog-missing` (Р2a1-5).
+  // рівня `team` отримує й `rights.system-catalog-missing` (спека прав §4.6).
   const teamCatalogsMissing = (file: string) =>
     (["rightsRoles", "roleAssignments"] as const).map((missing) => ({
       code: "rights.system-catalog-missing",
@@ -267,7 +267,7 @@ describe("roles and rights sets", () => {
       before: teamCatalogsMissing(ROLE_FILE("TeamLead")),
     },
     {
-      // Контейнерне призначення дістається учаснику виду контейнера (Р2a1-7).
+      // Контейнерне призначення дістається учаснику виду контейнера (спека прав §4.6).
       case: "is assigned on a container of a scope kind without membership",
       input: files({
         [PROJECT_FILE]: team,
@@ -431,7 +431,7 @@ describe("roles and rights sets", () => {
   it("needs no physical name and gets an id from fix", async () => {
     const declared = rightsFiles({
       // Рівень «кожного користувача» призначень не має, тож проєкт без
-      // системних довідників прав компілюється (Р2a1-5).
+      // системних довідників прав компілюється (спека прав §4.6).
       [ROLE_FILE("Support")]: {
         kind: "Role",
         name: "Support",

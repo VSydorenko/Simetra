@@ -3,7 +3,7 @@ import type { QualifiedName } from "../contracts"
 import { dollarTag } from "../movement-functions"
 
 /**
- * Тригерна функція `SECURITY DEFINER` платформи (Р2a2-8, Р2b1-8, Р-A1-8):
+ * Тригерна функція `SECURITY DEFINER` платформи (спека прав §5.3, спека П4 §6.8):
  * порожній `search_path` і кваліфіковані імена в тілі не лишають простору для
  * підміни імен. `rowSecurity: "off"` — для тіла, що читає таблиці під RLS
  * власника: там політика дала б гучну помилку замість тихої відповіді. Чому

@@ -257,8 +257,8 @@ describe("buildCarrierUnits", () => {
 
   it("carrier and effects function names of long tables with a common start do not collide", async () => {
     // Функція виведення носіїв бере ім'я тригера `derive`, а він іде спільним
-    // префіксом рядкових `BEFORE`-тригерів з хешем повної назви (Р-A1-7), як
-    // функції ефектів (Р2c2-20): у довгої основної таблиці й її ТЧ імена
+    // префіксом рядкових `BEFORE`-тригерів з хешем повної назви (спека П4 §6.8), як
+    // функції ефектів: у довгої основної таблиці й її ТЧ імена
     // різні, тож компілятор не має колізії.
     const long = "c".repeat(60)
     const result = await compileRights(
@@ -290,7 +290,7 @@ const reads = (createFunction: string) =>
     .filter((s) => s.type === "execsql")
     .map(({ type, target, expressions }) => ({ type, target, expressions }))
 
-/** Дерево без `FOR SHARE`: ядро читає джерело без замка (Р-A2-4). */
+/** Дерево без `FOR SHARE`: ядро читає джерело без замка (спека П4 §6.7). */
 function withoutLock<T>(value: T): T {
   return JSON.parse(
     JSON.stringify(value, (key, v: unknown) =>
@@ -321,7 +321,7 @@ describe("carrierCopyRead", () => {
           expectedFunction(
             "public.core",
             [
-              // `v_new` ядра — змінна `record` (Задача 5).
+              // `v_new` ядра — змінна `record` (ядро команд, спека П4 §6.7).
               "DECLARE",
               "  v_new record;",
               "BEGIN",
@@ -502,7 +502,7 @@ describe("carrierBackfillStatements", () => {
   it("a row without a link gets a NULL copy", async () => {
     // Підзапит у `SET`, а не `UPDATE … FROM`: внутрішнє з'єднання пропустило
     // б рядок з `NULL` у зв'язку, і старе значення лишилося б під іменем
-    // копії (Р2b2-2).
+    // копії.
     const [statement] = carrierBackfillStatements(await physicalOf(), [
       pending("task_comment", "task_id_assignee_id"),
     ])

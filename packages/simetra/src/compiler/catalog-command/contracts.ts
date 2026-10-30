@@ -48,7 +48,7 @@ export const CATALOG_COMMAND_LABELS = {
 } as const
 
 /**
- * Контракт ядра команд основної таблиці довідника (спека П4 §6.6, план A2):
+ * Контракт ядра команд основної таблиці довідника (спека П4 §6.6):
  * з нього генератор ядра будує `<t>_save`, `<t>_mark_deletion` і `<t>_delete`.
  * Колонки названо фізичними іменами, знайденими за `origin`, а не за іменем.
  */
@@ -64,14 +64,14 @@ export interface CatalogCommandContract {
     markDeletion?: QualifiedName
     delete?: QualifiedName
   }
-  /** Дія контексту кожної функції чи гілки (Р-A2-11); немає — немає й гілки. */
+  /** Дія контексту кожної функції чи гілки (спека П4 §6.6); немає — немає й гілки. */
   actions: {
     create?: string
     update: string
     markDeletion?: string
     delete?: string
   }
-  /** Ключі `p_item` створення й зміни (Р-A2-5) — з гранту ролі команд. */
+  /** Ключі `p_item` створення й зміни (спека П4 §6.6) — з гранту ролі команд. */
   createKeys: string[]
   updateKeys: string[]
   tabularSections: CatalogCommandSection[]
@@ -81,7 +81,7 @@ export interface CatalogCommandContract {
   carrierLinks: CarrierLink[]
   predefinedColumn?: string
   versionColumn: string
-  /** `lockAlways` — обробник `beforeWrite` може присвоїти батька (Р-A2-17). */
+  /** `lockAlways` — обробник `beforeWrite` може присвоїти батька (спека П4 §6.6). */
   hierarchy?: { parent: string; lockAlways: boolean }
 }
 
@@ -132,7 +132,7 @@ export type CommandReference =
     }
 
 /**
- * Контракти ядра (план A2, Задача 1): лише основні таблиці об'єктів виду з
+ * Контракти ядра (спека П4 §6.6): лише основні таблиці об'єктів виду з
  * `commandWrites`, що мають запис ролі команд (`AccessContract.command`) і хоч
  * одну дію з записом. Ключі `p_item` — з того самого `AccessContract.command`,
  * з якого рендеряться гранти: розсинхрон ключа й гранту неможливий побудовою.
@@ -187,7 +187,7 @@ export function catalogCommandContracts(input: {
       if (actions === undefined) return []
 
       const key = styleFreeColumn(table, keyColumn(false)).name
-      // Позначку пише лише `mark_deletion` (Р-A2-5), а переходи — лише
+      // Позначку пише лише `mark_deletion` (спека П4 §6.6), а переходи — лише
       // дія-перехід: обидва вилучаються з ключів однаково, хоч у системних
       // довідниках прав позначка й не перехід.
       const excluded = new Set([
@@ -288,10 +288,10 @@ export function catalogCommandContracts(input: {
 }
 
 /**
- * Дії функцій ядра з реєстру дій об'єкта (Р-A2-11): стандартна дія, коли
- * вона є, інакше `administerRights` (системні довідники прав, Р2c2-1). Без
+ * Дії функцій ядра з реєстру дій об'єкта (спека П4 §6.6): стандартна дія, коли
+ * вона є, інакше `administerRights` (системні довідники прав, спека прав §4.6). Без
  * дії зміни ядра немає зовсім; корінь скоупу й «Користувачі» не створюються
- * командою (Р-A2-10, спека П4 §6.6), «Користувачі» — лише `save`.
+ * командою (спека П4 §6.6), «Користувачі» — лише `save`.
  */
 function actionsOf(
   rights: RightsContract,
@@ -360,7 +360,7 @@ function standardReferences(
 ): CommandReference[] {
   // Авторство ставить платформа (`current_user_id()`), не вхід команди: оракула
   // видимості тут немає, а перевірка під RLS «Користувачів» відмовила б
-  // користувачу без права їх читати — тому, кого описує Р-A2-14.
+  // користувачу без права їх читати — тому, кого описує спека П4 §6.7.
   const author = new Set(authorColumns().map((a) => a.logicalName))
   const names = new Set(
     defs
@@ -545,7 +545,7 @@ function targetKeyOf(table: PhysicalTable): string {
 }
 
 /**
- * Чи присвоює батька хоч один обробник `beforeWrite` таблиці (Р-A2-17).
+ * Чи присвоює батька хоч один обробник `beforeWrite` таблиці (спека П4 §6.6).
  * Обробника без одиниці модель без помилок не має; якщо так сталося —
  * «присвоює» (fail-closed), як і нерозбірне тіло.
  */

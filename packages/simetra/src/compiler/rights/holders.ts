@@ -43,7 +43,7 @@ export function effectiveHolderRows(
 ): string {
   const table = tableOf(physical, catalog.assignments.table)
   const q = quoteIdent
-  // Колонки — за визначенням реєстру в стилі проєкту (Рб1-1).
+  // Колонки — за визначенням реєстру в стилі проєкту.
   const a = (def: StandardColumnDef) =>
     `a.${q(standardColumn(table, def, attributeCase).name)}`
   const R = RIGHTS_COLUMNS

@@ -341,7 +341,7 @@ describe("buildAccessUnits", () => {
   })
 
   it("scoped table gets restrictive scope policies for every command", async () => {
-    // Р2a2-1: межа тенанта — `RESTRICTIVE`, тож жодна `PERMISSIVE`-політика
+    // спека прав §5.2: межа тенанта — `RESTRICTIVE`, тож жодна `PERMISSIVE`-політика
     // прав її не розширює; `anon` її не отримує.
     expect(policySql(await units([contract({ scope: ORG_SCOPE })]))).toEqual([
       `CREATE POLICY item_scope_delete ON public.item AS RESTRICTIVE FOR DELETE ${BOUNDED} USING (${ORG_BOUNDARY});`,
@@ -353,7 +353,7 @@ describe("buildAccessUnits", () => {
 
   it("the scope root has no scope insert policy", async () => {
     // Скоуп нового кореня — його власний `id`: межу нового тенанта дасть
-    // право створення кореня (П4), а не множина моїх скоупів (Р2a2-1).
+    // право створення кореня (П4), а не множина моїх скоупів (спека прав §5.2).
     const model = await compiled({
       "project.meta.json": scopedProject(),
       "catalogs/Organization/Organization.meta.json": organization({
@@ -426,7 +426,7 @@ describe("buildAccessUnits", () => {
   })
 
   it("policy names stay within 63 bytes and never collide", async () => {
-    // Р2a2-2: довгі контейнер, вимір і колонка носія разом — мітка понад 40
+    // спека прав §5.2: довгі контейнер, вимір і колонка носія разом — мітка понад 40
     // байтів стає префіксом із хешем, тож імена однієї таблиці не збігаються
     // навіть тоді, коли від імені таблиці нічого не лишилось.
     const table = { schema: "public", name: "t".repeat(60) }
@@ -457,7 +457,7 @@ describe("buildAccessUnits", () => {
       names.commandUpdate,
       names.commandDelete,
       ...labels.map((label) => names.rights(label)),
-      // Р2b1-11: мітка запису — `<dml>_<родина>_<мітка>` з тією самою межею.
+      // мітка запису — `<dml>_<родина>_<мітка>` з тією самою межею.
       ...dmls.flatMap((dml) =>
         (["root", "rest"] as const).flatMap((family) =>
           labels.map((label) => names.write(dml, family, label))
@@ -572,7 +572,7 @@ describe("rights read and users visibility policies", () => {
   })
 
   it("rights read policies come from the predicate builder", () => {
-    // Кожна політика прав — рівно предикат будівника умов 2a1 (Р2a2-2):
+    // Кожна політика прав — рівно предикат будівника умов (`rightsPredicates`) (спека прав §5.2):
     // власних форм умов тут немає.
     const expected = new Map<string, string>()
     for (const access of domain.contracts.access) {
@@ -634,7 +634,7 @@ describe("rights read and users visibility policies", () => {
   })
 
   it("several ownership carriers are told apart by the carrier column", async () => {
-    // Р2a2-2: без суфікса колонки носія обидві власні політики мали б одне
+    // спека прав §5.2: без суфікса колонки носія обидві власні політики мали б одне
     // ім'я — дубль ідентичності без діагностики.
     const result = await compile(
       policyDomain({ [TASK_FILE]: { ownership: ["assignee", "createdBy"] } })
@@ -667,7 +667,7 @@ describe("rights read and users visibility policies", () => {
   const region = `'${REGION_DIMENSION_ID}'::uuid`
 
   it.each<[string, string, string]>([
-    // ТЧ — копії носіїв власника й власна колонка скоупу (Р2a2-4).
+    // ТЧ — копії носіїв власника й власна колонка скоупу (спека прав §5.2).
     [
       `${CHECKLIST_TABLE}_read_own`,
       CHECKLIST_TABLE,
@@ -683,7 +683,7 @@ describe("rights read and users visibility policies", () => {
       CHECKLIST_TABLE,
       "project_id = ANY (ARRAY(SELECT simetra.rights_container('read', 'task', 'any', NULL)))",
     ],
-    // Носій шляху — його копія в основній таблиці й у ТЧ (Р2a2-6).
+    // Носій шляху — його копія в основній таблиці й у ТЧ.
     [
       `${COMMENT_TABLE}_read_own`,
       COMMENT_TABLE,
@@ -728,7 +728,7 @@ describe("rights read and users visibility policies", () => {
   })
 
   it("public read keeps write scope policies and has no rights read", async () => {
-    // Р2a2-3: `publicRead` свідомо відкриває всі рядки на читання, а межа
+    // спека прав §5.2: `publicRead` свідомо відкриває всі рядки на читання, а межа
     // запису від форми прав не залежить.
     const result = await compile(
       policyDomain({ [TASK_FILE]: { publicRead: "authenticated" } })
@@ -764,12 +764,12 @@ describe("rights read and users visibility policies", () => {
   })
 
   it("rights read policies follow the rights functions without users", async () => {
-    // Р2a2-24, Р2d1-7: ролі й прийняте джерело членства без «Користувачів» —
-    // поточного користувача дає `sub` (Р2d1-6), тож функції прав є, а з ними
+    // ролі й прийняте джерело членства без «Користувачів» —
+    // поточного користувача дає `sub` (спека користувачів §7), тож функції прав є, а з ними
     // й політики, що їх кличуть; межа тенанта лишається. Без функцій прав
     // політик немає — це тримає таблиця предикатів (rights-functions).
     // Довідники прав `org` лишаються: рівень скоупу з ролями джерелом не
-    // покрито (Р2d1-5).
+    // покрито (спека прав §4.7).
     const result = await compile(
       withRoles(
         adoptedMembership(),
@@ -842,9 +842,9 @@ describe("rights write policies", () => {
   }
 
   /**
-   * Очікувані політики запису таблиці (Р2b1-4): кореневий рядок — предикати
+   * Очікувані політики запису таблиці (спека прав §5.3): кореневий рядок — предикати
    * дії контексту з умовою родини, решта — предикати природної дії за DML.
-   * Кожна умова — з будівника умов 2a1.
+   * Кожна умова — з будівника умов (`rightsPredicates`).
    */
   function expectedWrites(
     model: CompiledModel,
@@ -935,7 +935,7 @@ describe("rights write policies", () => {
     [...policiesOf(model, table).keys()].sort()
 
   it("guards every write command with the context", () => {
-    // Р2b1-3: порожній чи відсутній контекст — відмова й там, де кореневої
+    // спека прав §5.3: порожній чи відсутній контекст — відмова й там, де кореневої
     // родини немає (регістр).
     for (const table of ["task", CHECKLIST_TABLE, REGION_NOTES_TABLE]) {
       const policies = policiesOf(domain, table)
@@ -966,7 +966,7 @@ describe("rights write policies", () => {
     )
   })
 
-  // Р2c2-1: `administerRights` без `natural`, тож обидва системні довідники
+  // спека прав §4.6: `administerRights` без `natural`, тож обидва системні довідники
   // прав пишуть лише кореневий рядок команди — родина «решта» дала б команді
   // дописувати чужі ролі й призначення поза її коренем
   it.each(["org_roles", "org_role_assignments"])(
@@ -991,7 +991,7 @@ describe("rights write policies", () => {
   )
 
   it("a tabular section binds to its owner", () => {
-    // Р2b1-4, Р2b1-7: ключ родини — колонка власника з міткою власника;
+    // спека прав §5.3, §3: ключ родини — колонка власника з міткою власника;
     // природна дія ТЧ на будь-який DML — `update` власника.
     const expected = expectedWrites(
       domain,
@@ -1027,7 +1027,7 @@ describe("rights write policies", () => {
   })
 
   it("public read opens rows to the command role too", async () => {
-    // Р2b1-17: роль команд діє від імені користувача, якому рядки й так
+    // спека прав §5.2: роль команд діє від імені користувача, якому рядки й так
     // відкриті; без цього запис з `WHERE` чи `RETURNING` не бачив би рядків.
     const policies = policiesOf(domain, BULLETIN_TABLE)
     expect(policies.get(`${BULLETIN_TABLE}_public_read`)).toBe(
@@ -1067,9 +1067,9 @@ describe("rights write policies", () => {
   })
 
   it("a constant has no root family", async () => {
-    // Р2b1-4: ключ константи — `singleton` чи колонка скоупу, а не `ref`,
+    // спека прав §5.3: ключ константи — `singleton` чи колонка скоупу, а не `ref`,
     // тож умови родини немає (`boolean = uuid` зламав би розгортання);
-    // Р2b1-7: природна `update` константи покриває вставку й оновлення.
+    // спека прав §3: природна `update` константи покриває вставку й оновлення.
     const reference = await compile(readReferenceDomain())
     expectClean(reference)
     const currency = policiesOf(reference.model!, "default_currency")

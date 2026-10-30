@@ -114,7 +114,7 @@ describe("promoteObject: SQL units", () => {
     const files = await project()
     const { result, after } = await passes(files)
     expect(after.has(COUNTERPARTY_SQL)).toBe(false)
-    // У модуль виду йде лише функція-запит (Р2c1-24 (б)): функцію модуля
+    // У модуль виду йде лише функція-запит (спека промоції §9.4): функцію модуля
     // виду судять як голову.
     expect(after.has(KIND_MODULE)).toBe(false)
     expect(after.get(TOUCH_SHARED)).toBe(
@@ -129,7 +129,7 @@ $fn$;
     expect(result.record?.movedUnits).toEqual([
       { identity: TOUCH, from: COUNTERPARTY_SQL, to: TOUCH_SHARED },
     ])
-    // Об'єкт класу одиниці — ключ предмета в старих іменах (рішення 7 П3-2a).
+    // Об'єкт класу одиниці — ключ предмета в старих іменах (спека промоції §8).
     const unit = (cls: string, name: string) => [
       {
         kind: "unit",
@@ -183,7 +183,7 @@ $fn$;
   })
 
   // Фінальна компіляція судить перенесену функцію-запит як голову модуля
-  // виду (Р2c1-24 (б)): форма запиту ще не означає дозволених викликів.
+  // виду (спека промоції §9.4): форма запиту ще не означає дозволених викликів.
   it("refuses a moved query function whose final text breaks Rule 3", async () => {
     const files = await project({}, (f) =>
       f.set(
@@ -1133,7 +1133,7 @@ $fn$;
   })
 })
 
-describe("promoteObject: debt that writes the promoted table (Rule 4, Р2c1-24)", () => {
+describe("promoteObject: debt that writes the promoted table (Rule 4, спека промоції §9.4)", () => {
   const TASK_NOTE_MODULE = "custom-tables/TaskNote/TaskNote.sql"
   const SHARED = "sql/public/notes.sql"
   const table = `public.${TASK_NOTE_ADOPTED_TABLE}`

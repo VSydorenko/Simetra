@@ -10,7 +10,7 @@ import { testDatabaseUrl } from "../../../../simetra/test/support"
 import { boundaryViolations } from "./fixtures/engine-boundary"
 
 /**
- * Порт `SchemaEngine` на живому стеку (план E2a, задача 3): extract у межі,
+ * Порт `SchemaEngine` на живому стеку: extract у межі,
  * чистий plan і тінь бажаного стану з межею керування §6.9. Ціль — база
  * стеку, яку тести лише читають; пише порт тільки в тінь.
  */
@@ -72,7 +72,7 @@ async function baseStateOf(
 
 /**
  * Шум, якого засіяна тінь давати не має: неперевірене тіло функції (розширення
- * не засіяне) і попередження про недоступне пересортування (рішення 8).
+ * не засіяне) і попередження про недоступне пересортування (спека П2 §9).
  */
 const seedNoise = (diagnostics: readonly EngineDiagnostic[]) =>
   diagnostics.filter(
@@ -164,7 +164,7 @@ describe("SchemaEngine on pg-delta", () => {
 
   it("scope follows 6.9", async () => {
     // Керована `public` керується цілком: типові привілеї для ролей провайдера
-    // оголошено явно (рішення плану E2a за спайком, 6), а гранти самої схеми
+    // оголошено явно (платформна спека §6.9), а гранти самої схеми
     // дає засів пресету провайдера (спека промоції §9.9)
     const scope = scopeOf("public")
     const desired = `

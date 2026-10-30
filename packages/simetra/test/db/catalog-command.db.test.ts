@@ -32,7 +32,7 @@ import {
 
 /**
  * Ядро довідника `<t>_save` / `<t>_mark_deletion` на справжньому Postgres
- * (спека П4 §6.6, §6.7, §6.10; план П4-A2, Задача 7). Що бачить замок
+ * (спека П4 §6.6, §6.7, §6.10). Що бачить замок
  * `FOR UPDATE` під RLS, чи дає ключ `23505`, що пропускає колонковий грант і
  * від чиєї ролі виконується обробник — вирішує Postgres, компілятор бачить
  * лише текст тіла. Роль команд має лише згенеровані гранти: доказ — контракт
@@ -216,7 +216,7 @@ describe("catalog command core", () => {
   // Кожен рядок — один виклик ядра і точна відмова: код, повідомлення,
   // деталь (і підказка, коли вона є). Причина кожного — у назві.
   const CASES: [string, () => Promise<Outcome>, () => Promise<Refusal>][] = [
-    // Конфлікт версії несе поточну версію в `HINT` (Р-A2-8)
+    // Конфлікт версії несе поточну версію в `HINT` (спека П4 §6.10)
     [
       "conflict: stale version",
       () =>
@@ -241,7 +241,7 @@ describe("catalog command core", () => {
         run({ user: "tw", item: newTicket({ id: key("KB") }), version: null }),
       async () => NO_RIGHT,
     ],
-    // Межа `scope_insert` (Р-A2-15): контейнер P1 свій, скоуп — чужий.
+    // Межа `scope_insert` (спека П4 §6.7): контейнер P1 свій, скоуп — чужий.
     // `subject` і масиви порожні: інакше відмовила б умова скоупу `pair`.
     [
       "tenant boundary: ProjectTicketWriter creates in tenant B",
@@ -334,7 +334,7 @@ describe("catalog command core", () => {
       async () => NEW_CARRIER,
     ],
     // ТЧ: id рядка іншого власника — видимий (явна перевірка) і невидимий
-    // (`23505` на ключі ТЧ) — одна відмова (Р-A2-12)
+    // (`23505` на ключі ТЧ) — одна відмова (спека П4 §6.6)
     [
       "tabular: a visible row of another owner",
       () =>
@@ -406,7 +406,7 @@ describe("catalog command core", () => {
       },
       async () => INVALID("tabular"),
     ],
-    // Ключі поза гілкою (Р-A2-5) — відмова раніше за грант. На `Ticket`
+    // Ключі поза гілкою (спека П4 §6.6) — відмова раніше за грант. На `Ticket`
     // колонка переходу — сама позначка видалення.
     ...(
       [
@@ -591,7 +591,7 @@ describe("catalog command core", () => {
         }),
       async () => INVALID("subject_id"),
     ],
-    // Значення не приводиться до типу колонки (Р-A2-7): ключ у `DETAIL`
+    // Значення не приводиться до типу колонки (спека П4 §6.6): ключ у `DETAIL`
     [
       "cast: a value of the wrong type",
       () =>
@@ -618,7 +618,7 @@ describe("catalog command core", () => {
       () => mark("tw", "K1", null),
       async () => INVALID("p_mark"),
     ],
-    // Контекст фази звіряється до замка (Р-A2-9, Р-A2-18)
+    // Контекст фази звіряється до замка (спека П4 §6.6)
     [
       "context: root of another row",
       () =>
@@ -731,7 +731,7 @@ describe("catalog command core", () => {
   })
 
   // Колонку ключа (`code` під `UNIQUE (org_id, code)`) ядро називає в `SET`
-  // лише коли вхід змінює її значення (Ф14): форма без ключа загубила б зміну
+  // лише коли вхід змінює її значення (спека П4 §6.6): форма без ключа загубила б зміну
   it("update: changing a unique column by a command passes", async () => {
     const result = await save({
       user: "tw",
@@ -830,7 +830,7 @@ describe("catalog command core", () => {
   )
 
   // Обробник `beforeWrite` шапки на правці лише ТЧ — від ролі команд, не
-  // від власника таблиці: `UPDATE` шапки самоприсвоєнням (Р-A2-6) його будить
+  // від власника таблиці: `UPDATE` шапки самоприсвоєнням (спека П4 §6.6) його будить
   it("beforeWrite handler runs as the command role on a tabular-only change", async () => {
     notices.length = 0
     const result = await run({
@@ -847,9 +847,9 @@ describe("catalog command core", () => {
 })
 
 /**
- * Нескоуплений довідник `Note` з носієм `createdBy.mentor` (Р-A1-8): ядро
+ * Нескоуплений довідник `Note` з носієм `createdBy.mentor` (спека П4 §6.8): ядро
  * без колонки скоупу, і копія носія від авторства в стані «після» —
- * з функції джерел поточного користувача (Р-A2-14), а не з рядка
+ * з функції джерел поточного користувача (спека П4 §6.7), а не з рядка
  * «Користувачів» під командою.
  */
 describe("catalog command core: unscoped Note", () => {

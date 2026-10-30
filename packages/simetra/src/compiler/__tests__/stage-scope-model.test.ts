@@ -167,7 +167,7 @@ describe("stage 3: scope", () => {
     ])
   })
 
-  describe("onRootDelete cascade only for a root of a kind (Р2c1-36)", () => {
+  describe("onRootDelete cascade only for a root of a kind (спека П2 §6)", () => {
     // Каскад від кореня-`CustomTable` чи зовнішнього кореня видаляв би рядки
     // таблиць виду боргом повз Правило 1.
     const TENANT = "custom-tables/Tenant/Tenant.meta.json"

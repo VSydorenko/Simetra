@@ -151,7 +151,7 @@ describe("buildAuthorUnits", () => {
       )
       const changed = (columns: readonly string[]) =>
         columns.map((c) => `OLD.${c} IS DISTINCT FROM NEW.${c}`).join(" OR ")
-      // Зміна лише автора — теж зміна рядка (Р-A1-10), поширення копії — ні.
+      // Зміна лише автора — теж зміна рядка (спека П4 §6.8), поширення копії — ні.
       expect(tree(`SELECT ${condition}`)).toEqual(
         tree(
           `SELECT ((${changed(["id", "code", "description", "deletion_mark", "predefined_name", "created_at", "text"])}) OR (${changed(["created_by_id", "updated_by_id"])})) OR NOT (${changed(["created_by_id_mentor_id"])})`
@@ -232,7 +232,7 @@ describe("buildAuthorUnits", () => {
 
 describe("author triggers in a compiled project", () => {
   it("a snake_case project finds author columns by its styled names", async () => {
-    // Близнюк у snake_case (Рб1-3): фізичні імена ті самі, тож і тригери
+    // Близнюк у snake_case: фізичні імена ті самі, тож і тригери
     // авторства мусять збігтися з camelCase одиниця в одиницю.
     const snake = await compileRights(snakeCaseTwin(policyDomain(writeRoles())))
     expectClean(snake)

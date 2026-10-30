@@ -166,7 +166,7 @@ export type PlanOutcome =
       diagnostics: EngineDiagnostic[]
       /**
        * Скільки сліпих функцій цілі — очікувані пресетом провайдера
-       * (рішення 5 плану П3-2b-1): вивід їх лише лічить, без попередження.
+       * (спека промоції §7.2): вивід їх лише лічить, без попередження.
        */
       expectedBlindFunctions: number
     }
@@ -204,7 +204,7 @@ const hasError = (diagnostics: readonly EngineDiagnostic[]): boolean =>
  * `engine.unrepresentable` каже, що модель каталогу — проєкція для зворотної
  * генерації — не несе властивість бази (опції identity, власник). У плані
  * модель — лише деталь дрейфу й `resultCatalog`: властивість бачить відбиток
- * (рішення 2 і 3 плану П3-1), а збіжність перевіряє доказ. У `diff` і
+ * (платформна спека §6.2), а збіжність перевіряє доказ. У `diff` і
  * `introspect` модель і є результатом, тож там код лишається помилкою.
  */
 const PLAN_WARNINGS: ReadonlySet<RuleCode> = new Set<RuleCode>([
@@ -218,7 +218,7 @@ const byCodeUnit = (a: string, b: string): number =>
   a < b ? -1 : a > b ? 1 : 0
 
 /**
- * Межа плану — межа моделі ∪ межа з marker (рішення 2 плану П3-1): об'єкти
+ * Межа плану — межа моделі ∪ межа з marker (платформна спека §6.2): об'єкти
  * схеми, яку метадані покинули, стають кроками видалення з дозволом, а не
  * мовчазними сиротами поза межею.
  */
@@ -280,7 +280,7 @@ const PROVIDER_TRIGGER_GENERATORS: ReadonlySet<SqlUnit["generator"]> = new Set<
 
 /**
  * Згенерований тригер на таблиці провайдера, ім'я якого в цілі вже займає
- * чужий тригер (рішення 8 плану П3-3a2, спека промоції §9.2). Двигун замінив
+ * чужий тригер (спека промоції §9.2). Двигун замінив
  * би його мовчки: таблиця провайдера поза межею застосунку, тож гейт дрейфу
  * чужого тригера не помічає. `introspect` описує його боргом, але виходу це
  * не дає: підписка з тим самим ім'ям — тоді дублікат одиниці
@@ -344,8 +344,8 @@ export function providerTriggerConflicts(p: {
 }
 
 /**
- * Нумерація першим записом, якої платформа ще не генерує (рішення 7 плану
- * П3-3a2): лічильників немає, тож номер лишиться порожнім. Попередження —
+ * Нумерація першим записом, якої платформа ще не генерує (спека промоції
+ * §9.2): лічильників немає, тож номер лишиться порожнім. Попередження —
  * лише там, де таблиця з'являється вперше чи переходить у вид промоцією:
  * на вже наявній таблиці воно повторювалося б кожним планом.
  */
@@ -375,16 +375,16 @@ export function numberingNotGenerated(p: {
 }
 
 /**
- * Конвеєр плану (платформна спека §6.2 п.2–4, §6.6; задача 9 плану П3-1):
+ * Конвеєр плану (платформна спека §6.2 п.2–4, §6.6):
  * стан застосування, гейт дрейфу, план від живої цілі до бажаного стану,
  * класи, лінт і дозволи, доказ на жертовній копії тим самим раннером і
  * детермінований артефакт. Дрейф планування не зупиняє: він іде в артефакт
- * пунктом дозволу (рішення 16). Ціль і тіні лише читаються (`reader`), пише
+ * пунктом дозволу (платформна спека §6.2). Ціль і тіні лише читаються (`reader`), пише
  * тільки прогін-доказ у копію (`scratch`).
  *
  * `promotions` — записи промоції з `plans/`; порожній масив передається
  * явно: перехід виявляється з ідентичності, а записи з ним лише звіряються
- * (рішення 1 плану П3-2a). План із промоцією будує `planPromotion`.
+ * (спека промоції §7.1). План із промоцією будує `planPromotion`.
  */
 export async function buildPlan(
   engine: SchemaEngine,
@@ -410,7 +410,7 @@ export async function buildPlan(
   // вручну, а не дозволом
   const desired = await desiredForApply(model)
   // Факти сервера й голова ledger — тією самою транзакцією READ ONLY, що й
-  // стан: доказ копії репетиції (рішення 1 плану П3-2b-3) звіряє з ними базу
+  // стан: доказ копії репетиції (спека промоції §8) звіряє з ними базу
   // того самого моменту, що й ланцюжок. Сервер, старіший за мінімум
   // платформи, — відмова до версійно залежних читань (`readServerFacts` на
   // Postgres 16 упав би сирим `42703`)
@@ -438,7 +438,7 @@ export async function buildPlan(
   const scope = planScope(desired.scope, markerScope)
 
   // 1а. Платформні ролі, яким бажаний SQL дає гранти, — на цілі й на
-  // сервері тіні до будь-якої тіні й до гілки промоції (Р2a1-2): тінь без
+  // сервері тіні до будь-якої тіні й до гілки промоції (спека designer §3.2): тінь без
   // ролі впала б сирою помилкою гранту, а план промоції будує свої тіні
   const parse = await loadSqlParser()
   const roles = await checkPlatformRoles(
@@ -462,7 +462,7 @@ export async function buildPlan(
   if (membership.refusal !== undefined) return refused([membership.refusal])
   const targetOwners = membership.owners
 
-  // 2в. Прийняті джерела прав (Р2d1-10, Р2d1-11, Р2d1-13): доступ ролі
+  // 2в. Прийняті джерела прав (спека прав §4.7): доступ ролі
   // застосування до таблиць-джерел і ключі ролей у їхніх даних — однією
   // читальною транзакцією до витягу й тіні і до розгалуження промоції, тож
   // перевірка діє в обох гілках
@@ -488,8 +488,8 @@ export async function buildPlan(
 
   // 2б. Свідок цілі під межею плану. Чужий тригер з іменем згенерованого на
   // таблиці провайдера — до гейта й кроків: дрейф його не бачить (таблиця
-  // поза межею застосунку), а крок двигуна замінив би його мовчки (рішення 8
-  // плану П3-3a2)
+  // поза межею застосунку), а крок двигуна замінив би його мовчки (спека
+  // промоції §9.2)
   const live = await witness(o.target, scope)
   const taken = providerTriggerConflicts({
     desired: model.sqlUnits,
@@ -516,7 +516,7 @@ export async function buildPlan(
   const { drift, fromHash } = verdict
 
   // 3а. Перехід промоції — з ідентичності marker і бажаної моделі; записи
-  // звіряються з ним за таблицею рішень (рішення 1 плану П3-2a)
+  // звіряються з ним за таблицею рішень (спека промоції §7.1)
   const appliedHashes = await dbs.reader.transaction(
     o.target,
     "rollback",
@@ -637,7 +637,7 @@ export async function buildPlan(
   const guarded = guardedChanges(planSteps, live.extracted.model, parse)
   const lint = [...lintSteps(planSteps, parse), ...guarded.refusals]
   if (lint.length > 0) return refused([...diagnostics, ...lint])
-  // 7а. Кроки даних нових копій носіїв (Р2a2-11, Р2b2-1) — після кроків
+  // 7а. Кроки даних нових копій носіїв (спека прав §5.2, спека промоції §7.2) — після кроків
   // двигуна, що створюють колонки-копії: копію звіряємо зі знімком marker, а
   // не з живою колонкою
   const withCarriers = [
@@ -654,7 +654,7 @@ export async function buildPlan(
       planSteps.length
     ),
   ]
-  // 7б. Кроки середовища (рішення 5 плану П3-2b-0) — наприкінці плану; клас
+  // 7б. Кроки середовища (спека промоції §7.2) — наприкінці плану; клас
   // і дозволи рахуються вже з ними
   const collected = await collectEnvironment({
     engine,
@@ -672,7 +672,7 @@ export async function buildPlan(
   const { environment } = collected
   const steps = [...withCarriers, ...collected.steps]
   const permissions = requiredPermissions({ steps, drift, promotion: null })
-  // Слід кроків — те саме правило, що й для плану з промоцією (R26); без
+  // Слід кроків — те саме правило, що й для плану з промоцією (спека промоції §7.2); без
   // промоції імена вихідного стану й кроків збігаються
   const {
     locks,
@@ -790,7 +790,7 @@ export async function buildPlan(
   }
 }
 
-/** Що конвеєр П3-1 уже зібрав до гілки промоції. */
+/** Що конвеєр плану вже зібрав до гілки промоції. */
 interface PromotionContext {
   engine: SchemaEngine
   dbs: PlanDatabases
@@ -819,11 +819,11 @@ interface TableName {
 }
 
 /**
- * План із промоцією (рішення 2, 9, 10, 12 плану П3-2a). Ціль ще має старі
+ * План із промоцією (спека промоції §7.2, §8). Ціль ще має старі
  * імена, тож план будується з першої копії після кроків наміру
  * (перейменування таблиць і колонок, далі канонічні імена), а не з живої
  * цілі: двигун з `renames: "off"` перетворив би перейменування на DROP +
- * CREATE. Порядок на першій копії (R5): намір → канонічні імена → витяг →
+ * CREATE. Порядок на першій копії: намір → канонічні імена → витяг →
  * план двигуна з опціями живої цілі → класи й сторожі → детектор залежних і
  * приведення. Далі — класи видалень, доступ, блокування й збереження, доказ
  * усього плану на другій, свіжій копії й артефакт із секцією `promotion`.
@@ -841,8 +841,8 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
     name: t.to,
   }))
 
-  // Послідовність поза схемою таблиці (R17) і шлях запису через API
-  // (рішення 10) — на живій цілі, до тіні й копій: обидва — відмова з
+  // Послідовність поза схемою таблиці і шлях запису через API
+  // (спека промоції §8) — на живій цілі, до тіні й копій: обидва — відмова з
   // порадою, і жодна копія тут нічого не уточнить. Привілеї сервісної ролі
   // (спека промоції §8 «Сервісна роль») — тією самою транзакцією: вид їй
   // нічого не дає, тож усе прочитане промоція забирає
@@ -896,7 +896,7 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
   if (hasError(diagnostics)) return refused(diagnostics)
 
   // Власники тіні — у нових іменах, цілі — ще в старих: без перекладу
-  // перейменовані таблиці випали б із порівняння (рішення 9)
+  // перейменовані таблиці випали б із порівняння (спека промоції §7.2)
   const intent = renameIntent(record, c.model.physical)
   const mismatched = ownerMismatches(
     c.targetOwners,
@@ -910,7 +910,7 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
 
   const parse = await loadSqlParser()
 
-  // Секція кроків даних (рішення 2, 4 плану П3-2b-2): звірка запису й межі
+  // Секція кроків даних (спека промоції §4): звірка запису й межі
   // кроку — чисто, одразу після наміру. Факти цілі — окремою транзакцією
   // READ ONLY до копії: тип, якого на цілі немає, інакше впав би сирим
   // `42704` на `ADD COLUMN` наміру вже на копії
@@ -925,7 +925,7 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
   if ("refusal" in data)
     return refused(dedupe([...diagnostics, ...data.refusal]))
   // Нові типи замірів збереження — тією самою транзакцією: замір «до»
-  // приводить до них до будь-якого кроку (вердикт (в))
+  // приводить до них до будь-якого кроку (спека промоції §4)
   const read =
     data.tables.length === 0 && record.typeChanges.length === 0
       ? { facts: undefined, types: new Map<string, TypePresence>() }
@@ -989,8 +989,8 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
   const { steps: planSteps, model: cloneModel } = analysis
 
   // Типи й функції моделі кроків даних і нові типи замірів, які створює,
-  // змінює чи знищує крок плану, — лише за кроками двигуна (рішення 4, 5,
-  // вердикти В7 і (в)): обчислення й замір «до» йдуть до них
+  // змінює чи знищує крок плану, — лише за кроками двигуна (спека
+  // промоції §4): обчислення й замір «до» йдуть до них
   const stepRefusals = [
     ...dataStepRefusals(analysis.data, planSteps, parse, origin),
     ...preservationTypeStepRefusals(record, planSteps, parse),
@@ -1002,7 +1002,7 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
   )
 
   // Класи видалень і нереалізовані перейменування — копія після наміру
-  // проти бажаної тіні (рішення 2, 7)
+  // проти бажаної тіні (спека промоції §7.2, §8)
   const removals = classifyRemovals({
     record,
     intent: analysis.intent,
@@ -1010,8 +1010,8 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
     desired: target.extracted.model,
     parse,
   })
-  // Клас `platform` — лише за наявного механізму-заміни (рішення 7, R9 плану
-  // П3-2b-0): колонки `Ref` на перерахування — з бажаної моделі через реєстр
+  // Клас `platform` — лише за наявного механізму-заміни
+  // (спека промоції §8, §9.2): колонки `Ref` на перерахування — з бажаної моделі через реєстр
   const unclassified = [
     ...unrealizedRenames(planSteps, analysis.intent, record),
     ...unclassifiedRemovals(removals),
@@ -1020,8 +1020,8 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
       cloneEquivalence: analysis.equivalence,
       shadowEquivalence: target.equivalence,
       desired: target.extracted.model,
-      // Прийняті гранти й політики — з копії після наміру (рішення 10 плану
-      // П3-3a1): у ній таблиці вже в нових іменах, як у тіні
+      // Прийняті гранти й політики — з копії після наміру (спека промоції
+      // §8): у ній таблиці вже в нових іменах, як у тіні
       clone: cloneModel,
       valueElementColumns: valueElementColumns(c.model),
       provider: c.model.project.database.provider,
@@ -1029,8 +1029,8 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
       attributeCase: c.model.project.naming.attributeCase,
       parse,
     }),
-    // Клас `property` — лише за еквівалентного відтворення в тіні (R10):
-    // запис, метадані після `promote` чи ручна правка класу не доводять
+    // Клас `property` — лише за еквівалентного відтворення в тіні
+    // (спека промоції §8): запис, метадані після `promote` чи ручна правка класу не доводять
     ...propertyReproductions({
       record,
       cloneEquivalence: analysis.equivalence,
@@ -1040,7 +1040,7 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
   ]
   if (unclassified.length > 0) return refused([...withClone, ...unclassified])
   // Заміна `UPDATE OF` підпискою з `whenChanged` звужує тригер до справжньої
-  // зміни значення (рішення 6 плану П3-3a2): план можливий, але автор має це
+  // зміни значення (спека промоції §8): план можливий, але автор має це
   // побачити
   const narrowings = updateOfNarrowings({
     record,
@@ -1051,7 +1051,7 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
     parse,
   })
 
-  // Кроки даних нових копій носіїв (Р2a2-11, Р2b2-6) — після наміру й
+  // Кроки даних нових копій носіїв (спека прав §5.2) — після наміру й
   // двигуна, у нових іменах: знімок marker — у старих, тож промотовану
   // таблицю в ньому шукаємо за старим; прийнята колонка з ім'ям копії копією
   // не була
@@ -1076,7 +1076,7 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
     ),
   ]
 
-  // Кроки середовища (рішення 5 плану П3-2b-0): копія цілі в старих іменах
+  // Кроки середовища (спека промоції §7.2): копія цілі в старих іменах
   // проходить кроки наміру, двигуна й копій, тож залишок — у нових
   const collected = await collectEnvironment({
     engine,
@@ -1094,7 +1094,7 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
   const { environment } = collected
   const steps = [...withCarriers, ...collected.steps]
 
-  // Залежні доступу (рішення 8) — з живої цілі, у старих іменах, транзакцією
+  // Залежні доступу (спека промоції §8) — з живої цілі, у старих іменах, транзакцією
   // READ ONLY
   const dependents = await dbs.reader.transaction(o.target, "rollback", (tx) =>
     readAccessDependents(
@@ -1124,7 +1124,7 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
     provider: scope.provider,
     parse,
   })
-  // `delete:*` — лише з виведених фактів (R3), запис для них не читається
+  // `delete:*` — лише з виведених фактів, запис для них не читається
   const permissionItems = promotionPermissionItems(
     access,
     promotion.facts.deleteSemantics,
@@ -1132,7 +1132,7 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
     dataSection
   )
   // Слід кроків двигуна — від копії після наміру, у нових іменах, і
-  // перекладається в старі (R26)
+  // перекладається в старі (спека промоції §7.2)
   const {
     locks,
     implicitLocks,
@@ -1159,7 +1159,7 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
       columnsNewToOld: columnsNewToOld(analysis.intent.columns),
     },
   })
-  // Промоція без `plpgsql_check` — відмова до доказу (рішення 4 плану П3-2b-1)
+  // Промоція без `plpgsql_check` — відмова до доказу (спека промоції §7.2)
   if (hasError(checkDiagnostics))
     return refused([...withClone, ...checkDiagnostics])
   const typeChangeSteps = new Map(
@@ -1181,7 +1181,7 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
     ),
     columns: analysis.intent.columns,
     canonicalNames: analysis.canonicalNames,
-    // Лише показ (R6): дозволи й класи кроків від нього не залежать
+    // Лише показ: дозволи й класи кроків від нього не залежать
     conversions: [
       ...stepConversions(steps, record, analysis.intent, parse),
     ].map(([step, cls]) => ({ step, class: cls })),
@@ -1381,7 +1381,7 @@ async function runOnClone(
 }
 
 /**
- * Перша копія (рішення 2, R5 плану П3-2a): кроки наміру й канонічні імена
+ * Перша копія (спека промоції §7.2): кроки наміру й канонічні імена
  * виконуються на ній, план двигуна знімається з неї після них, а класи,
  * сторожі, залежні й приведення змін типу питають саме її — там уже нові
  * імена й старі типи. Опції плану — від живої цілі: план застосовують до неї.
@@ -1406,7 +1406,7 @@ async function analyseOnClone(p: {
   const { engine, scratch, clone, scope, parse } = p
   try {
     // Тимчасові імена наміру вже зайняті — відмова плану, а не сирий
-    // `42701`/`42P07` кроку наміру на копії (рішення 11 плану П3-2b-1)
+    // `42701`/`42P07` кроку наміру на копії
     const taken = await scratch.transaction(clone, "rollback", (tx) =>
       readReservedNames(tx, {
         schemas: [...new Set(p.oldTables.map((t) => t.schema))],
@@ -1422,7 +1422,7 @@ async function analyseOnClone(p: {
           }),
         ],
       }
-    // Форма сторожа приведення кроків даних (рішення 12 плану П3-2b-2) —
+    // Форма сторожа приведення кроків даних (спека промоції §7.2) —
     // до кроків наміру: вираз написано в старих іменах
     const forms =
       p.data.length === 0
@@ -1463,7 +1463,7 @@ async function analyseOnClone(p: {
     if (unparsable.length > 0)
       return { ok: false, diagnostics: [...diagnostics, ...unparsable] }
     // Виняток «заміна» не діє для прийнятого об'єкта таблиці одиниці
-    // (рішення 3): рахується з дій до класифікатора, бо він — його вхід
+    // (спека промоції §8): рахується з дій до класифікатора, бо він — його вхід
     const unitTables = new Set(
       p.newTables.map((t) => tableKey(t.schema, t.name))
     )
@@ -1564,14 +1564,14 @@ function columnsNewToOld(
 
 /**
  * Блокування плану за слідом кроків (спека промоції §7.2, «З'єднання й
- * блокування», R26 і R27 плану П3-2a): слід кожного кроку з провайдерськими
+ * блокування»): слід кожного кроку з провайдерськими
  * замками, право ролі на явний
  * `LOCK` кожної його таблиці на живій цілі (READ ONLY) і замки з неявними
  * замками. `ACCESS EXCLUSIVE` на таблиці поза межею двигуна — попередження:
  * її читання блоковані на всю транзакцію.
  *
  * Тією самою транзакцією READ ONLY — те, що ціль дає ревалідації тіл
- * (рішення 2, 5 плану П3-2b-1): шлях пошуку сесії, під яким раннер перевіряє
+ * (спека промоції §7.2): шлях пошуку сесії, під яким раннер перевіряє
  * тіла, і функції, яких перевірка не бачить, для попередження у виводі плану.
  */
 async function lockPlan(
@@ -1588,7 +1588,7 @@ async function lockPlan(
     platformFunctions: readonly string[]
     /**
      * Таблиці кроків даних: обчислення й запис займають таблицю запису в
-     * старому імені `SHARE ROW EXCLUSIVE` (рішення 2 плану П3-2b-2), окремим
+     * старому імені `SHARE ROW EXCLUSIVE`, окремим
      * слідом з першим `d<N>` таблиці.
      */
     data: readonly Pick<PlannedDataTable, "before" | "columns">[]
@@ -1628,7 +1628,7 @@ async function lockPlan(
       o.role,
       PROVIDER_LOCKS[scope.provider]
     )
-    // Таблиці й FK — в артефакт (рішення 9 плану П3-2b-1): раннер звіряє їх
+    // Таблиці й FK — в артефакт (спека промоції §7.2): раннер звіряє їх
     // тим самим читанням перед блокуваннями
     const subjects = footprintSubjects(steps, o.models)
     const live = await readLiveForeignKeys(tx, subjects)
@@ -1844,7 +1844,7 @@ const environmentFailed = (reason?: string): EngineDiagnostic =>
 
 /**
  * Засів копії глобальними типовими привілеями ролі плану й звірка засіву
- * тим самим запитом, що читав ціль (рішення 5(б)). Порожній перелік теж
+ * тим самим запитом, що читав ціль (спека промоції §7.2). Порожній перелік теж
  * звіряється: копія без засіву не має мати чужих глобальних ADP. Сіяти тоді
  * нічого, тож звірка — транзакцією лише читання: писати в копію нічого. Збій
  * оператора (скажімо, роль сесії копії не член ролі плану) — так само
@@ -1854,7 +1854,7 @@ const environmentFailed = (reason?: string): EngineDiagnostic =>
  * копії створює роль сесії копії (`shadowBase` — інший сервер з іншою роллю
  * адміністрування). Тож за іншої ролі копії засів для ролі плану нічого б не
  * дав, і доказ тихо позеленів би; так само власні глобальні ADP ролі копії
- * дали б її об'єктам права, яких на цілі не буде (R7 плану П3-2b-0). Інша
+ * дали б її об'єктам права, яких на цілі не буде. Інша
  * роль з глобальними ADP хоч з одного боку — гучна відмова, а без них —
  * допустима, як і раніше. Засів «для ролі копії» з мапою одержувачів
  * відхилено: друга мапа ролей розійшлася б із семантикою тихо.
@@ -1925,7 +1925,7 @@ type EnvironmentResult =
   | { ok: false; diagnostics: EngineDiagnostic[] }
 
 /**
- * Кроки середовища (рішення 5(а), (в) плану П3-2b-0). Глобальні типові
+ * Кроки середовища (спека промоції §7.2). Глобальні типові
  * привілеї ролі плану читаються з цілі (READ ONLY); є вони — перша копія
  * засівається ними, проходить усі кроки плану сирою транзакцією з `COMMIT`
  * (раннер у режимі `proof` звірив би відбиток і відкотився б раніше, ніж
@@ -2035,7 +2035,7 @@ type ProofResult =
   | { ok: false; diagnostics: EngineDiagnostic[] }
 
 /**
- * Доказ (рішення 4 плану П3-1). Копія поточного стану цілі, перевірена трьома
+ * Доказ (платформна спека §6.2). Копія поточного стану цілі, перевірена трьома
  * незалежними способами; той самий раннер у режимі `proof`; далі план
  * «копія → бажана тінь» порожній і відбиток копії = бажаний без `owner`.
  * Копія без даних доводить збіжність схеми, а не сумісність із даними.
@@ -2061,7 +2061,7 @@ async function prove(
     p.scope,
     async (clone): Promise<ProofResult> => {
       // Глобальні типові привілеї ролі — до прогону: Postgres застосує їх до
-      // кожного об'єкта кроків так само, як на цілі (рішення 5(г))
+      // кожного об'єкта кроків так само, як на цілі (спека промоції §7.2)
       const seeded = await seedEnvironment(
         dbs,
         clone,
@@ -2200,7 +2200,7 @@ function asProofRefusal(d: EngineDiagnostic): EngineDiagnostic {
 }
 
 /**
- * Точність копії трьома незалежними способами (рішення 4): план двигуна
+ * Точність копії трьома незалежними способами (платформна спека §6.2): план двигуна
  * «копія → ціль» порожній, моделі каталогу рівні, відбиток копії = відбиток
  * цілі без `owner`. Кожен спосіб сліпий до свого: двигун — до того, чого не
  * планує, модель — до того, чого не несе, відбиток — до того, що поза межею.

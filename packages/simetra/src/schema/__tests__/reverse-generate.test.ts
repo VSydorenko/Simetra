@@ -38,7 +38,7 @@ import {
   writeRoles,
 } from "../../compiler/__tests__/fixtures/rights"
 
-/** Зворотний генератор (план E2b, задача 3): рішення плану 3–8. */
+/** Зворотний генератор (спека П2 §9). */
 
 let parse: SqlParser
 beforeAll(async () => {
@@ -998,7 +998,7 @@ describe("reverseGenerate", () => {
     ).toBe(true)
   })
 
-  // FK на таблицю виду пишеться формою ключа (Рб1-10); пара колонок поза
+  // FK на таблицю виду пишеться формою ключа (спека прав §4.7); пара колонок поза
   // складеним ключем цілі (інший порядок, не ключ) — невиражена.
   it.each([
     [["org_id", "id"], { key: "scopedRef" }],
@@ -1142,7 +1142,7 @@ describe("reverseGenerate", () => {
   it("a trigger function also called from a kept file is shared", async () => {
     // Тригер довідника — підписка: модуль виду тригерів не приймає. Обробник
     // лежить у `sql/app/` попередньої генерації, тож теку можна скомпілювати.
-    // Обробник — з порожнім `search_path` (Р2c1-19).
+    // Обробник — з порожнім `search_path` (спека прав §5.3).
     const touch = TOUCH.split("\n")[0]!.replace(
       "LANGUAGE plpgsql",
       "LANGUAGE plpgsql VOLATILE SET search_path = ''"
@@ -1188,7 +1188,7 @@ describe("reverseGenerate", () => {
   it("a subscription handler re-introspected from catalog text stays closed and is not debt", async () => {
     // Текст каталогу (`pg_get_functiondef`) типової VOLATILE не друкує;
     // волатильність — факт, тож обробник після introspect лишається закритим.
-    // Обробник — з порожнім `search_path` (Р2c1-19).
+    // Обробник — з порожнім `search_path` (спека прав §5.3).
     const catalogText = TOUCH.split("\n")[0]!.replace(
       "LANGUAGE plpgsql",
       "LANGUAGE plpgsql SET search_path = ''"
@@ -1395,7 +1395,7 @@ describe("reverseGenerate", () => {
   })
 
   it("introspect without a kept folder writes no mechanics units, but keeps own triggers", async () => {
-    // Механікою володіє платформа (рішення 9 плану П3-3a2): без збереженої
+    // Механікою володіє платформа (спека промоції §9.2): без збереженої
     // теки її не описує жоден файл, але й модуль користувача нею не володіє.
     // Власний тригер, що кличе ту саму функцію, — уже не механіка.
     const mechanics = [
@@ -1418,7 +1418,7 @@ describe("reverseGenerate", () => {
       options()
     )
     // Власний тригер пишеться дослівно, а виклик функції платформи, що не
-    // лише читає, — гучна помилка на ньому (Р2c1-38), а не тихий пропуск.
+    // лише читає, — гучна помилка на ньому (спека прав §5.3), а не тихий пропуск.
     expect(
       errors(result).map((d) => ({ code: d.code, params: d.params }))
     ).toEqual([
@@ -1441,7 +1441,7 @@ describe("reverseGenerate", () => {
   })
 
   // 50 байтів — довше за межу 41, з якої імена рядкових `BEFORE`-тригерів
-  // ідуть спільним префіксом із хешем (Р-A1-7)
+  // ідуть спільним префіксом із хешем (спека П4 §6.8)
   const LONG_COMMENT = `task_comment_${"x".repeat(37)}`
   it.each([
     ["short names", "task_comment", {}],
@@ -1453,7 +1453,7 @@ describe("reverseGenerate", () => {
   ])(
     "recognizes carrier and split mechanics units as platform (%s)",
     async (_, comment, layer) => {
-      // Р2a2-20: розділена механіка й одиниці копій носіїв — платформні, як і
+      // Розділена механіка (спека промоції §9.3) й одиниці копій носіїв — платформні, як і
       // механіка рядка; без збереженої теки їх не пише жоден файл. Одиниці —
       // справжній вихід генераторів над доменом з копіями носіїв
       const compiled = await compile(policyDomain(layer))
@@ -1513,7 +1513,7 @@ describe("reverseGenerate", () => {
   )
 
   it("recognizes effects triggers and functions as platform", async () => {
-    // Р2b1-12: тригери ефектів дії й функції контексту команди — платформні
+    // Тригери ефектів дії й функції контексту команди — платформні
     // (генератори `effects` і `command`), як механіка й копії носіїв.
     // Одиниці — справжній вихід генераторів над доменом із правами запису
     const compiled = await compile(policyDomain(writeRoles()))
@@ -1555,7 +1555,7 @@ describe("reverseGenerate", () => {
   })
 
   it("recognizes author triggers and the author function as platform", async () => {
-    // Р-A1-8: тригери авторства (і розділені на таблиці з копіями, і під
+    // Тригери авторства (спека П4 §6.8) (і розділені на таблиці з копіями, і під
     // іменем спільного префікса на 60-байтній таблиці) й `simetra.author()`
     // — платформні, як механіка. Одиниці — справжній вихід генератора
     const compiled = await compile(
@@ -1601,7 +1601,7 @@ describe("reverseGenerate", () => {
   })
 
   it("recognizes hierarchy triggers and the hierarchy function as platform", async () => {
-    // Р-A2-1: тригери ієрархії й функція ієрархії таблиці — платформні, як
+    // Тригери ієрархії (спека П4 §6.6) й функція ієрархії таблиці — платформні, як
     // тригери носіїв. Одиниці — справжній вихід генератора
     const compiled = await compile(
       policyDomain(writeRoles(), commandCoreLayer())
@@ -1744,7 +1744,7 @@ describe("reverseGenerate", () => {
   })
 
   it("recognizes key triggers and simetra.key_immutable as platform", async () => {
-    // Рб1-4: тригери незмінності ключа й їхня функція — платформні, як
+    // Тригери незмінності (спека прав §7) ключа й їхня функція — платформні, як
     // механіка. Одиниці — справжній вихід генератора
     const compiled = await compile(
       metaFiles({
@@ -1823,7 +1823,7 @@ describe("reverseGenerate", () => {
   })
 
   it("a grant shared with another function and a mechanics-named trigger on another function are written", async () => {
-    // Межі рішення 9: пропускається лише одиниця, ціла належна механіці.
+    // Межі (спека промоції §9.2): пропускається лише одиниця, ціла належна механіці.
     // Грант зі спільною ціллю несе й чужий привілей, а тригер з ім'ям
     // механіки, що кличе іншу функцію, — власний тригер таблиці.
     const MIXED =
@@ -1978,7 +1978,7 @@ describe("reverseGenerate", () => {
       }),
       options()
     )
-    // Розширення без SCHEMA стає в схему застосунку (Р2c1-35).
+    // Розширення без SCHEMA стає в схему застосунку (спека прав §5.3).
     const extension = [["sql.debt-extension-schema", "warning"]]
     expect(result.diagnostics.map((d) => [d.code, d.severity])).toEqual(
       extension

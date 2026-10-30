@@ -68,7 +68,7 @@ import { must, objectTarget, projectTarget } from "./references"
 
 /**
  * Спільний набір обсягів дій об'єкта. Усі дії об'єкта мають один набір
- * (на цьому стоїть єдина умова політик запису, Р2b1-5): різні набори дали б
+ * (на цьому стоїть єдина умова політик запису): різні набори дали б
  * мовчазне розходження політик, тож це внутрішня помилка компілятора.
  */
 export function uniformExtents(
@@ -211,9 +211,9 @@ function rightsContract(
     .sort((a, b) => compareStrings(a.column, b.column))
   const transitionColumns = new Set(transitions.map((t) => t.column))
   // Колонки переходів змінює лише дія-перехід, тож `"all"` розгортається в
-  // явний перелік без них (Р2b1-18): тригер ефектів порівнює їх, як будь-які
+  // явний перелік без них (спека прав §5.3): тригер ефектів порівнює їх, як будь-які
   // колонки поза ефектом дії.
-  // Ключ `ref` незмінний за будь-якої дії (Р2b1-9): змінений ключ — зміна
+  // Ключ `ref` незмінний за будь-якої дії (спека прав §5.3): змінений ключ — зміна
   // ідентичності кореня, тож у шапку дії він не входить.
   const keyColumns = new Set(
     columnsOf.get(standardElementId(objectId, { logicalName: "ref" })) ?? []
@@ -279,7 +279,7 @@ function rightsContract(
     }),
   ]
   const label = must(kindLabelOf(object))
-  // На кожен DML — щонайбільше одна природна дія (Р2b1-7): інакше «решта
+  // На кожен DML — щонайбільше одна природна дія (спека прав §3): інакше «решта
   // рядків» мала б дві рівноправні умови.
   const naturalDml = new Set<Dml>()
   for (const action of actions) {
@@ -355,7 +355,7 @@ export function accessDimensionContracts(
         )
       const column = (name: "subject" | "value") => field(name).column
       // Ціль суб'єкта стадія 4 вже звузила до «Користувачів» чи довідника
-      // членства виду зв'язку (Р2a1-27).
+      // членства виду зв'язку.
       const subject = must(field("subject").target)
       return {
         dimensionId,
@@ -409,8 +409,8 @@ export function sourceContracts(
         column: must(data.columns.find((c) => c.id === id)),
       }
     }
-    // Одноколонковий uuid-ключ — учасник джерела членства (Р2d1-2) і ключ
-    // таблиці ролей (Р2d1-17); його перевірила стадія 4.
+    // Одноколонковий uuid-ключ — учасник джерела членства (спека прав §4.7) і ключ
+    // таблиці ролей (спека прав §4.7); його перевірила стадія 4.
     const key = () =>
       must(columns.get(must(singleUuidKeyColumn(data)?.id))?.[0])
     // Умова рядків з фізичними колонками; тип літерала — за колонкою, її
@@ -436,7 +436,7 @@ export function sourceContracts(
       conditions,
     }
   }
-  // Таблиця ролей джерела призначень (Р2d1-17): ключ — її uuid-ключ, роль —
+  // Таблиця ролей джерела призначень (спека прав §4.7): ключ — її uuid-ключ, роль —
   // колонка `key`, умова — над її колонками.
   const roleTableOf = (
     at: string,
@@ -496,7 +496,7 @@ export function sourceContracts(
       )
       const assignedOn = must(sourceLevel(project, index, references))
       const { role } = source.columns
-      // Колонка скоупу рядка (Р2d1-16, Р2d1-19): назва — її колонка, `null` —
+      // Колонка скоупу рядка (спека прав §4.7): назва — її колонка, `null` —
       // скоуп з учасника, пропуск — `scopeColumn` таблиці (на рівні скоупу
       // без нього пропуск відхилила стадія 4).
       const scope =

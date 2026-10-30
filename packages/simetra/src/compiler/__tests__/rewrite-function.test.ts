@@ -402,7 +402,7 @@ describe("rewriteFunction", () => {
     expect(r.sql).toBe(sql)
   })
 
-  // Повтори рецензента (раунд 1): кожне посилання або резолвиться точно,
+  // Кожне посилання або резолвиться точно,
   // або відмовляє — мовчки пропущене чи хибно переписане ім'я заборонене.
   describe("references the parse tree does not model", () => {
     const refused = (

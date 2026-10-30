@@ -57,7 +57,7 @@ const COVERAGE = {
 } as const satisfies EngineCoverage
 
 /**
- * Звірка лічильників перепису з фактами двигуна (план E2a, рішення 8):
+ * Звірка лічильників перепису з фактами двигуна (спека П2 §9):
  * пропуск окремих об'єктів покритого класу — помилка, а не тиша.
  */
 describe("census reconciliation with engine facts", () => {

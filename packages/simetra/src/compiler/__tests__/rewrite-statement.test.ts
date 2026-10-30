@@ -213,7 +213,8 @@ describe("rewriteStatementText", () => {
     expect(rw("SELECT 'app.invoice'::regclass").problems).toEqual([])
   })
 
-  // Нижче — межі, яких бриф не перелічує, але які випливають з рішення 13.
+  // Нижче — межі, яких правила переписувача (спека промоції §6) не
+  // перелічують прямо, але які з них випливають.
 
   it("renames a table name used as a column qualifier", () => {
     expect(
@@ -270,7 +271,7 @@ describe("rewriteStatementText", () => {
     ).toEqual(["rewrite.unsupported"])
   })
 
-  describe("captures (decision 14)", () => {
+  describe("captures (спека промоції §6)", () => {
     const CAPTURE = ["rewrite.ambiguous-name capture"]
 
     it("refuses an added kind column that captures an outer name", () => {
@@ -395,7 +396,7 @@ describe("rewriteStatementText", () => {
     })
   })
 
-  describe("search_path (decision 14)", () => {
+  describe("search_path (спека промоції §6)", () => {
     it("refuses when a schema outside the model precedes the promoted table", () => {
       expect(
         details("SELECT 1 FROM counterparties", {

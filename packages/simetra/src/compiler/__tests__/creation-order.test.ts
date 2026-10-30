@@ -784,7 +784,7 @@ describe("creation order", () => {
     const users = "policy:public.users.users_scope_read"
     const updateRoot = "policy:public.task.task_update_root_any"
     expectBefore(list, [
-      // Політики запису кличуть функції контексту команди (Р2b1-4, Р2b1-3).
+      // Політики запису кличуть функції контексту команди (спека прав §5.3).
       ["function:simetra.command_root(text)", updateRoot],
       ["function:simetra.command_action()", updateRoot],
       [

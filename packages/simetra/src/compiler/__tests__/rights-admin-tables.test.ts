@@ -84,7 +84,7 @@ describe("rights administration storage", () => {
           sequence: "rights_journal_seq_seq",
         })
         // Первинний образ рядка — за (xid, relation, row_id, seq); журнал
-        // скоупу новіші першими — за (вид, скоуп, at, seq) (Р2d2-12).
+        // скоупу новіші першими — за (вид, скоуп, at, seq).
         expect(
           Object.fromEntries(table!.indexes.map((i) => [i.name, i.keys]))
         ).toEqual({

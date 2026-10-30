@@ -188,7 +188,7 @@ describe("checkHeads: Rule 3 — query functions", () => {
       sql: selectWhere(`${call} IS NOT NULL`),
       expected: [found("call", call.slice(0, call.indexOf("(")), SET_FUNCTION)],
     })),
-    // Голова не називає відношення текстом (Р2c1-56): рядок, приведений до
+    // Голова не називає відношення текстом: рядок, приведений до
     // `regclass`, — відношення, а вбудовані з іменем відношення в тексті —
     // поза переліком голови.
     {
@@ -208,7 +208,7 @@ describe("checkHeads: Rule 3 — query functions", () => {
     })),
     {
       // Аргумент `regclass` називає відношення текстом, якого збирач
-      // відношень не бачить (Р2c1-56).
+      // відношень не бачить.
       name: "builtin-excluded pg_relation_size of a relation named by text",
       sql: selectWhere("pg_catalog.pg_relation_size('public.t') > 0"),
       expected: [found("call", "pg_catalog.pg_relation_size", SET_FUNCTION)],
@@ -224,7 +224,7 @@ describe("checkHeads: Rule 3 — query functions", () => {
     },
     {
       // У тілі функції виклик, що виконує текст SQL, відмовляє ранній блок
-      // скрізь, борг включно (`dynamicText`, Р2c1-50): до голови справа не
+      // скрізь, борг включно (`dynamicText`, спека прав §5.3): до голови справа не
       // доходить.
       name: "builtin-excluded query_to_xml in a function link",
       sql:
@@ -238,7 +238,7 @@ describe("checkHeads: Rule 3 — query functions", () => {
     },
     {
       // Виклик подання, борг включно, судить ранній дозвільний перелік
-      // виразів (Р2c1-55): до голови справа не доходить.
+      // виразів (спека прав §5.3): до голови справа не доходить.
       name: "builtin-excluded query_to_xml in a debt view link",
       sql:
         setFunction("SELECT v.id FROM public.helper v") +
@@ -512,7 +512,7 @@ describe("checkHeads: other heads", () => {
 
 describe("checkHeads: generated functions", () => {
   // Голова кличе лише згенеровані функції, що читають: оболонку проведення
-  // й обгортку рухів — ні (Р2c1-18 (б)); функцію пошуку предвизначеного — так.
+  // й обгортку рухів — ні (спека прав §5.3); функцію пошуку предвизначеного — так.
   // Діагностика одна — суддя голів; `sql.platform-function-call` — лише для
   // вільного SQL.
   const handlerFiles = (call: string) =>
@@ -716,7 +716,7 @@ describe("judgeHandler: Rule 2 — a handler only checks", () => {
       body: "INSERT INTO public.task_notes (id) VALUES (NEW.id);",
       expected: [statement("InsertStmt")],
     },
-    // Р2c1-39: тригери платформи переносять рядок провайдера в «Користувачі».
+    // спека прав §5.3: тригери платформи переносять рядок провайдера в «Користувачі».
     {
       name: "provider-assign",
       event: "beforeWrite",
@@ -786,7 +786,7 @@ describe("judgeHandler: Rule 2 — a handler only checks", () => {
     ).toEqual([found("unread", undefined, HANDLER)])
   })
 
-  // Review Focus 1 і 5: кожен слот виразу дозволеного оператора.
+  // Кожен слот виразу дозволеного оператора.
   it.each<{ slot: string; body: string; declare?: string }>([
     { slot: "if", body: "IF public.forbidden() = 1 THEN NULL; END IF;" },
     {
@@ -864,7 +864,7 @@ describe("judgeHandler: Rule 2 — a handler only checks", () => {
   })
 })
 
-describe("checkDomainChecks: CHECK of a domain (Р2c1-33)", () => {
+describe("checkDomainChecks: CHECK of a domain (спека прав §5.3)", () => {
   // Голова виконує CHECK домену, коли приводить до нього значення, тож CHECK
   // судиться як вираз Правила 3 у контексті зв'язування під час створення.
   const TASK_NOTE_MODULE = TASK_NOTE_FILE.replace(".meta.json", ".sql")
@@ -907,7 +907,7 @@ describe("checkDomainChecks: CHECK of a domain (Р2c1-33)", () => {
   })
 })
 
-describe("checkHeads: model functions shadowed by a debt extension (Р2c1-35)", () => {
+describe("checkHeads: model functions shadowed by a debt extension (спека прав §5.3)", () => {
   // Функція розширення в схемі застосунку перевантажила б функцію-запит з
   // тим самим ім'ям, а функцій розширень серед одиниць немає.
   const QUERY = sqlFunction("public.f", "SELECT NULL::uuid")

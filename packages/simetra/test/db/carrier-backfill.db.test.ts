@@ -5,7 +5,7 @@ import { runCarrierSteps } from "../../src/schema/apply/execute"
 import { rollbackDatabase, testRoleName, withRollback } from "./connection"
 
 /**
- * Фаза кроків копій носіїв (Р2b2-4, Р2b2-9) іде під `row_security = off`.
+ * Фаза кроків копій носіїв (спека промоції §7.2) іде під `row_security = off`.
  * DB-рівень, бо що бачить власник таблиці з `FORCE ROW LEVEL SECURITY` і чим
  * відповідає Postgres на `row_security = off` під політикою, вирішує сам
  * Postgres: без обходу власник без `BYPASSRLS` оновив би нуль рядків, і крок

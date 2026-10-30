@@ -28,7 +28,7 @@ async function restricted(code: string, file: string): Promise<number> {
 const GENERATOR = "src/compiler/rights/__fixture.ts"
 
 /**
- * Рб1-2: генератор знаходить стандартну колонку за визначенням реєстру, а не
+ * Генератор знаходить стандартну колонку за визначенням реєстру, а не
  * літералом імені, — у snake_case-проєкті літерал camelCase-імені колонки не
  * знаходить.
  */

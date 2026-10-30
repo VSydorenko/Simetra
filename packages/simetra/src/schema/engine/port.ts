@@ -112,7 +112,7 @@ export interface EngineSetting {
  * двигуна — діагностика `engine.preamble-unknown`, а не тихе виконання.
  * Перелік належить порту: його перевіряють і адаптер, і раннер. Раннер
  * виконує преамбулу навколо кроків двигуна лише разом із ревалідацією тіл
- * функцій (R22 плану П3-2a): `check_function_bodies = off` пропускає тіло,
+ * функцій (спека промоції §7.2): `check_function_bodies = off` пропускає тіло,
  * яке потім ловить валідатор мови.
  */
 export const ENGINE_PREAMBLE_ALLOWED: Readonly<Record<string, string>> = {

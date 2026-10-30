@@ -105,7 +105,7 @@ describe("rights.scope-kind-unread", () => {
       expected: [["/scopeKinds/0", "org"]],
     },
     {
-      // Р2a2-31: `read` системного довідника прав не відкриває даних виду.
+      // `read` системного довідника прав не відкриває даних виду.
       name: "read only on the kind's rights system catalog",
       files: withRoles(
         ...orgMemberOnly(

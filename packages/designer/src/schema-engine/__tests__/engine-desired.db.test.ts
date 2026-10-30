@@ -20,7 +20,7 @@ import { leftoverShadows } from "../../__tests__/support/shadows"
 import { boundaryViolations } from "./fixtures/engine-boundary"
 
 /**
- * Порівняння бази з бажаним станом через тінь (план E2a, задача 6). Ціль —
+ * Порівняння бази з бажаним станом через тінь (спека П2 §9). Ціль —
  * база стеку, яку тести лише читають; пише порт тільки в тінь.
  */
 

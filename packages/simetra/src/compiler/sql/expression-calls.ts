@@ -13,17 +13,17 @@ import type { SqlParser } from "./parse"
 import type { VerbatimUnit } from "./units"
 
 /*
- * Одиниці-вирази (Р2c1-55): вирази метаданих прийнятих таблиць, подання й
+ * Одиниці-вирази (спека прав §5.3): вирази метаданих прийнятих таблиць, подання й
  * вирази дослівних політик. Postgres обчислює їх на кожному записі чи
  * читанні, зокрема ролі API через PostgREST, тож виклики в них — дозвільний
  * перелік у будь-якому файлі, борг включно: денайліст записів сесії
  * (`set_config`, виконання тексту SQL) обходився б кожною новою функцією.
  */
 
-/** Що одиниця-вираз може кликати, крім функцій платформи (Р2c1-38). */
+/** Що одиниця-вираз може кликати, крім функцій платформи (спека прав §5.3). */
 export interface ExpressionScope {
   builtins: ReadonlySet<string>
-  /** `схема.ім'я` функцій моделі: їхні тіла судить перелік тіла (Р2c1-37). */
+  /** `схема.ім'я` функцій моделі: їхні тіла судить перелік тіла (спека прав §6.1). */
   models: ReadonlySet<string>
   /** `схема.ім'я` послідовностей моделі — для `nextval` у `DEFAULT`. */
   sequences: ReadonlySet<string>
@@ -31,7 +31,7 @@ export interface ExpressionScope {
   providerFunctions: ReadonlySet<string>
   /**
    * Згенеровані функції, яких це правило не судить: їх судить
-   * `sql.platform-function-call` (Р2c1-38), тож друга діагностика була б
+   * `sql.platform-function-call` (спека прав §5.3), тож друга діагностика була б
    * шумом.
    */
   generated: ReadonlySet<string>
@@ -63,7 +63,7 @@ export function expressionScope(
  * Ім'я виклику поза переліком або `undefined`: вбудована з переліку
  * (некваліфікована чи `pg_catalog.`), функція моделі за `схема.ім'я`,
  * поіменна функція провайдера. Схему платформи й згенеровані функції судить
- * Р2c1-38. Некваліфікований виклик не вбудованої — fail-closed: шлях
+ * `sql.platform-function-call` (спека прав §5.3). Некваліфікований виклик не вбудованої — fail-closed: шлях
  * пошуку, за яким Postgres його зв'язав, статично не відомий.
  */
 export function expressionCallProblem(
@@ -89,7 +89,7 @@ const EXPRESSION_CLASSES: ReadonlySet<VerbatimUnit["class"]> = new Set([
   "policy",
 ])
 
-/** Чи судить одиниця свої виклики як вираз (Р2c1-55). */
+/** Чи судить одиниця свої виклики як вираз (спека прав §5.3). */
 export function isExpressionUnit(unit: Pick<VerbatimUnit, "class">): boolean {
   return EXPRESSION_CLASSES.has(unit.class)
 }
@@ -163,7 +163,7 @@ function regclassLiteral(arg: unknown): string | undefined {
 
 /**
  * Чи кожен `nextval` дерева — `nextval('<схема>.<послідовність>'[::regclass])`
- * над послідовністю моделі поза схемою платформи (Р2c1-55). Лише для
+ * над послідовністю моделі поза схемою платформи (спека прав §5.3). Лише для
  * `columns[].default` прийнятої таблиці: так Postgres описує колонку
  * `serial`, а `nextval` загалом поза переліком вбудованих — він змінює
  * послідовність поза транзакцією і називає її текстом.

@@ -42,7 +42,7 @@ describe("deleteElement", () => {
     const currency = model.objects.find((o) => o.name === "Currency")!
     const doc = JSON.parse(files.get(currency.file)!) as Json
     const ids = idsIn(doc)
-    // Очікувані місця виводяться з індексу, а не списком руками (рішення R2).
+    // Очікувані місця виводяться з індексу, а не списком руками.
     const expected = model.references
       .filter((r) => ids.has(r.to.id) && r.from.objectId !== currency.id)
       .map((r) => `${r.from.file}#${r.from.pointer}`)

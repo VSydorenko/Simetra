@@ -25,8 +25,8 @@ import { COVERED_CLASSES, factKindOf } from "../pg-delta/census-facts"
 import { scopeProfile } from "../pg-delta/policy"
 
 /**
- * Перепис класів у межі керування (план E2a, рішення 8): клас, якого двигун
- * не бачить, дає помилку, а не тихе «порожньо» (Review Focus 5); стан
+ * Перепис класів у межі керування (спека П2 §9): клас, якого двигун
+ * не бачить, дає помилку, а не тихе «порожньо»; стан
  * заповнення подання extract віддає для звірки з тінню.
  */
 
@@ -431,7 +431,7 @@ describe("covered classes match the pinned engine", () => {
           `engine membership fact ${member} -> ${role} is not between platform and request roles`
         ).toBe(true)
       // Без факту ролі перевірка вище порожня: бажаний стан кожної фікстури
-      // грантує роль команд (гранти схеми `simetra`, Р2a1-2, Р2a1-4)
+      // грантує роль команд (гранти схеми `simetra`, спека прав §5.1)
       if (desiredSql !== BROAD_SQL)
         expect([...roles]).toContain(PLATFORM_ROLES.command)
       // Кожен інший вид факту, що трапився, перепис рахує як покритий клас

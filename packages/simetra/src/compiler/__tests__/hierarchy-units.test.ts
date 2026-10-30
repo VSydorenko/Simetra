@@ -158,7 +158,7 @@ describe("buildHierarchyUnits", () => {
   })
 
   it("reserves the function name against a verbatim function", async () => {
-    // Ім'я функції від таблиці (Р-A2-1, як функції носіїв): дослівна функція
+    // Ім'я функції від таблиці (спека П4 §6.6, як функції носіїв): дослівна функція
     // з тим самим іменем замінила б тіло тригера.
     const { diagnostics } = await compiledPolicyDomain(
       {

@@ -31,7 +31,7 @@ export type DataStepKind = (typeof DATA_STEP_KINDS)[number]
 export const DATA_TRIGGER_MODES = ["O", "A"] as const
 
 /**
- * Таблиця кроків даних секції промоції (рішення 2 плану П3-2b-2): одна
+ * Таблиця кроків даних секції промоції: одна
  * тимчасова таблиця й один `UPDATE` на таблицю одиниці. Кроки даних — не
  * `PlanStep`: між операторами є умови (звірка тригерів, рівність
  * лічильників), тож SQL рендерять функції нижче з цих полів — одне джерело
@@ -54,7 +54,7 @@ export interface DataTable {
     /** Вираз у старих іменах. */
     expression: string
     kind: DataStepKind
-    /** SQL сторожа приведення до `type` (рішення 12). */
+    /** SQL сторожа приведення до `type` (спека промоції §7.2). */
     guard: string
   }[]
   /** Тригери користувача, які запис вимикає, за іменем. */
@@ -83,7 +83,7 @@ export const castExpression = (
 ): string => `(${multiline(c.expression)}::${c.type})`
 
 /**
- * Форма сторожа приведення (рішення 12): `compare` — порівняння в типах, які
+ * Форма сторожа приведення (спека промоції §7.2): `compare` — порівняння в типах, які
  * розв'язує Postgres; `text` — текстова, коли такого оператора немає.
  */
 export type GuardForm = "compare" | "text"
@@ -91,7 +91,7 @@ export type GuardForm = "compare" | "text"
 /**
  * SQL сторожа приведення кроку: скільки ненульових значень виразу
  * приведення до типу запису змінює. Таблиця — у старих іменах, як CTAS.
- * Вираз рахується в підзапиті, як і в замірі (рішення 8): віконна функція в
+ * Вираз рахується в підзапиті, як і в замірі (спека промоції §7.2): віконна функція в
  * `WHERE` заборонена, а вираз кроку може бути віконним.
  */
 export function dataGuardSql(
@@ -112,7 +112,7 @@ export const dataTableStep = (t: Pick<DataTable, "columns">): string =>
 
 /**
  * Обчислення кроків таблиці в старих іменах: ключ і по колонці на крок у
- * тимчасову таблицю транзакції (рішення 1, 7).
+ * тимчасову таблицю транзакції (спека промоції §7.2).
  */
 export function dataComputeSql(t: PlannedDataTable): string {
   const values = t.columns.map((c, i) => `${castExpression(c)} AS v${i + 1}`)
@@ -166,7 +166,7 @@ const unsupported = (
  * Ідентичність типу структурно, за правилом `typeOf`: голе ім'я — тип
  * `pg_catalog`, бо типи запису й змін типу пише знімок адаптера чи
  * `pgTypeOf` під `search_path = pg_catalog`, і користувацький тип там завжди
- * кваліфікований (рішення В5). Масив — тип елемента. Тип, якого так не
+ * кваліфікований. Масив — тип елемента. Тип, якого так не
  * назвати, — `undefined`, і план відмовляє.
  */
 export function typeIdentity(
@@ -205,7 +205,7 @@ function desiredTableOf(
 }
 
 /**
- * Секція кроків даних із запису (рішення 2, 4 плану П3-2b-2). Запису T2 не
+ * Секція кроків даних із запису (спека промоції §4). Запису T2 не
  * вірить на слово: таблиця кроку — з `record.tables`, колонка — є в бажаній
  * таблиці, вид — той, що виводить T1 (`recordedFillKind`). Розбіжність —
  * `plan.promotion-record-mismatch`; межі кроку (ключ, тип запису) —
@@ -231,7 +231,7 @@ export function dataPlan(p: {
       error("plan.promotion-record-mismatch", {
         objectId: record.objectId,
         file: p.file,
-        // `detail` — буквально `dataSteps` (рішення 2): який крок і чому —
+        // `detail` — буквально `dataSteps`: який крок і чому —
         // окремими параметрами
         detail: "dataSteps",
         step: `d${i + 1}`,
@@ -408,7 +408,7 @@ export function dataPlan(p: {
 }
 
 /**
- * Факти цілі для кроків даних (рішення 4–6, 13), прочитані в `READ ONLY` до
+ * Факти цілі для кроків даних (спека промоції §4, §7.2), прочитані в `READ ONLY` до
  * копії. Ключі мап — `tableKey` старого імені; `types` — тип запису (текст
  * секції) → наявність у вихідному стані; `cascading` — id кроків, на колонку-ціль
  * яких посилається вхідний FK з `ON UPDATE CASCADE | SET NULL | SET DEFAULT`.
@@ -416,7 +416,7 @@ export function dataPlan(p: {
 export interface DataFacts {
   triggers: Map<string, DataTable["triggers"]>
   inherited: string[]
-  /** Таблиці з правилом перезапису `UPDATE` (рішення В18). */
+  /** Таблиці з правилом перезапису `UPDATE` (спека промоції §4). */
   ruled: string[]
   tempPrivilege: boolean
   replicationRole: string
@@ -471,7 +471,7 @@ where c.relkind = 'p'
 `
 
 // Будь-яке правило `UPDATE` — і `ALSO`, і `INSTEAD`: запис мусить бути саме
-// тим `UPDATE`, чий лічильник звіряється з обчисленим (рішення В18)
+// тим `UPDATE`, чий лічильник звіряється з обчисленим (спека промоції §4)
 const RULED_SQL = `
 select x.schema, x.name
 from pg_catalog.json_to_recordset($1::pg_catalog.json) as x(schema text, name text)
@@ -524,7 +524,7 @@ select pg_catalog.has_database_privilege(pg_catalog.current_database(), 'TEMP') 
 export type TypePresence = "found" | "missing" | "unparsed"
 
 /**
- * Наявність типів за текстом (рішення В5): ідентичність — `typeIdentity`,
+ * Наявність типів за текстом: ідентичність — `typeIdentity`,
  * пошук — структурно в `pg_type` за схемою й ім'ям. Викликач відкриває
  * транзакцію `READ ONLY` на цілі. Спільне для типів запису кроків даних і
  * нових типів замірів збереження.
@@ -681,7 +681,7 @@ const functionName = (f: { schema?: string; name: string }): string =>
   f.schema === undefined ? quoteIdent(f.name) : qualified(f.schema, f.name)
 
 /**
- * Відмови з фактів цілі — до копії (рішення 4–6, 13, В18): таблиця з
+ * Відмови з фактів цілі — до копії (спека промоції §4, §7.2): таблиця з
  * нащадками, партиціонована чи з правилом `UPDATE`, тип запису, якого
  * немає у вихідному стані, вхідний FK з каскадом оновлення, право `TEMP`,
  * `session_replication_role` і
@@ -754,8 +754,8 @@ export function dataFactRefusals(
 }
 
 /**
- * Відмови за кроками плану — після `analyseOnClone` (рішення 4, 5, вердикт
- * В7): обчислення й `ADD COLUMN` наміру йдуть до кроків двигуна, тож тип
+ * Відмови за кроками плану — після `analyseOnClone` (спека
+ * промоції §4): обчислення й `ADD COLUMN` наміру йдуть до кроків двигуна, тож тип
  * запису, який крок створює, змінює чи знищує, — `dataStepType`, а функція
  * моделі виразу — `plan.data-step-function-changed`: значення порахувало б
  * старе тіло. Чи змінює крок об'єкт — `planChange`; `detail` — `changed`
@@ -815,7 +815,7 @@ export function dataStepRefusals(
 const probeName = (index: number): string => `simetra_fill_probe_${index}`
 
 /**
- * Форма сторожа приведення кожної колонки (рішення 12): `PREPARE` на першій
+ * Форма сторожа приведення кожної колонки (спека промоції §7.2): `PREPARE` на першій
  * копії до кроків наміру — вираз у старих іменах — лише розбирає й аналізує
  * запит, нічого не обчислюючи. Порівняння в типах, коли є оператор, інакше
  * (`GUARD_PAIR_SQLSTATES`) текстова форма; жодна не готується —
