@@ -1963,7 +1963,7 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
           : p.reason === "transitionColumn"
             ? "Transition columns (posted, deletion mark) change only through their standard actions: drop the column from the header."
             : p.reason === "immutableColumn"
-              ? "The key (ref), the scope column and the author (createdBy) never change under any action, and the platform sets updatedBy: drop the column from the header."
+              ? "On a catalog the header names only the columns the command role may update (not the key, the scope column, row mechanics, authorship, predefinedName or the platform fields of users); on other kinds the key (ref) and authorship never change: drop the column from the header."
               : "Drop tabularSections: true or declare the action on a kind with tabular sections.",
       uk: (p) =>
         p.reason === "noWrite"
@@ -1971,7 +1971,7 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
           : p.reason === "transitionColumn"
             ? "Колонки переходів (проведення, позначка видалення) змінюють лише їхні стандартні дії: приберіть колонку з шапки."
             : p.reason === "immutableColumn"
-              ? "Ключ (ref), колонка скоупу й автор (createdBy) не змінюються за жодної дії, а updatedBy ставить платформа: приберіть колонку з шапки."
+              ? "На довіднику шапка називає лише колонки, які може змінювати роль команд (не ключ, колонку скоупу, механіку рядка, авторство, predefinedName чи платформні реквізити «Користувачів»); на інших видах ключ (ref) і авторство не змінюються: приберіть колонку з шапки."
               : "Приберіть tabularSections: true або оголосіть дію на виді з табличними частинами.",
     },
   },
