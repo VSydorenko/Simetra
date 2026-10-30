@@ -13,9 +13,12 @@ import {
   ORG_ADMIN_ID,
   PROJECT_READER_ID,
   PROJECT_WRITER_ID,
+  REASSIGN_ACTION_ID,
   REGION_DIMENSION_ID,
+  SUPPORT_ID,
   TASK_EDITOR_ID,
   TASK_VIEWER_ID,
+  TASK_WRITER_ID,
   adminRoles,
   compileRights,
   policyDomain,
@@ -35,8 +38,10 @@ import {
   closureRights,
   describeTransaction,
   insert,
+  insertOrphan,
   orgDeltaRow,
   seedAdministration,
+  type Delta,
   type Seed,
   deploy,
 } from "./rights-seed"
@@ -362,6 +367,265 @@ describe("rights administration guards", () => {
       )
     )
   })
+
+  // Спека прав §7: дельта поза доменом рівня архетипу мовчки не діє, тож
+  // COMMIT її відмовляє. Домен — дані функцій прав, а не форма рядка: чи
+  // з'єднується рядок з `rights_roles()` і `rights_domain()`, вирішує
+  // Postgres над розгорнутими функціями.
+  describe("a custom role delta stays in the domain of its level", () => {
+    const deltaSql = (
+      role: string,
+      line: number,
+      [effect, object, action, extent, dimension]: Delta
+    ) =>
+      `INSERT INTO public.org_roles_delta (id, org_id, parent_id, line_number, object, action, extent, effect, dimension) VALUES (gen_random_uuid(), {A}, ${role}, ${line}, '${object}', '${action}', '${extent}', '${effect}', ${dimension === undefined ? "NULL" : `'${dimension}'`})`
+    const roleSql = (role: string, archetype: string) =>
+      `INSERT INTO public.org_roles (id, org_id, archetype) VALUES ('${role}', {A}, '${archetype}')`
+    const OWN_REGION: Delta = ["deny", "region", "read", "own"]
+    const TASK_COMMENT: Delta = ["allow", "task_comment", "read", "any"]
+    /**
+     * Роль, записана до цієї транзакції. Засів опису — та сама транзакція, тож
+     * його рядки мають журнал цієї транзакції й судилися б як змінені;
+     * `insertOrphan` журналу не пише — як рядки з попередніх транзакцій.
+     */
+    const priorRole = async (
+      archetype: string,
+      deltas: Delta[],
+      body: (role: string) => Promise<void>,
+      deletionMark = false
+    ) => {
+      const client = tx.client()
+      const role = randomUUID()
+      await client.query("SAVEPOINT prior_role")
+      try {
+        await insertOrphan(client, "org_roles", {
+          id: role,
+          org_id: key("A"),
+          archetype,
+          deletion_mark: deletionMark,
+        })
+        for (const [i, delta] of deltas.entries())
+          await insertOrphan(
+            client,
+            "org_roles_delta",
+            orgDeltaRow(key("A"), role, i + 1, delta)
+          )
+        await body(role)
+      } finally {
+        await client.query("ROLLBACK TO SAVEPOINT prior_role")
+      }
+    }
+
+    it.each([
+      [
+        "a custom action id in a non-canonical form",
+        TASK_WRITER_ID,
+        ["deny", "task", REASSIGN_ACTION_ID.replaceAll("-", ""), "any"],
+      ],
+      [
+        "an action with a typo",
+        TASK_EDITOR_ID,
+        ["deny", "task", "reed", "any"],
+      ],
+      ["own on an object without ownership", TASK_EDITOR_ID, OWN_REGION],
+      [
+        "an archetype unknown to rights_roles",
+        randomUUID(),
+        ["deny", "task", "read", "any"],
+      ],
+      [
+        "a global archetype in the org catalog",
+        SUPPORT_ID,
+        ["allow", "announcement", "read", "any"],
+      ],
+    ] as [string, string, Delta][])(
+      "refuses %s",
+      async (_, archetype, delta) => {
+        const role = randomUUID()
+        refusal(
+          await command(
+            "root",
+            admin("org_roles", role),
+            `${roleSql(role, archetype)}; ${deltaSql(`'${role}'`, 1, delta)}`
+          ),
+          "delta-domain"
+        )
+      }
+    )
+
+    it("a canonical custom action id passes and its deny takes the right away", async () => {
+      const role = randomUUID()
+      const assignment = randomUUID()
+      let actions: string[] = []
+      success(
+        await inCommand(
+          "root",
+          admin("org_roles", role),
+          async (client) => {
+            await client.query(
+              sql(
+                `${roleSql(role, TASK_WRITER_ID)}; ${deltaSql(`'${role}'`, 1, ["deny", "task", REASSIGN_ACTION_ID, "any"])}`
+              )
+            )
+            await context(client, admin("org_role_assignments", assignment))
+            await client.query(
+              sql(
+                `INSERT INTO public.org_role_assignments (id, org_id, subject, custom_role) VALUES ('${assignment}', {A}, {other@A}, '${role}')`
+              )
+            )
+            await client.query("SET CONSTRAINTS ALL IMMEDIATE")
+            const mine = await queryAs<{ v: string[] }>(
+              client,
+              "authenticated",
+              claims("other"),
+              "SELECT coalesce(array_agg(DISTINCT m.action || '|' || m.extent), '{}') AS v FROM simetra.rights_mine() m WHERE m.object = 'task'"
+            )
+            if (!("rows" in mine)) throw new Error(`rights_mine: ${mine.code}`)
+            actions = mine.rows[0]!.v
+          },
+          true
+        )
+      )
+      // `read` — доказ, що призначення діє; `reassign any` архетипу знято
+      // `deny` (похідні обсяги `deny` того самого обсягу не знімає).
+      expect(actions).toContain("read|any")
+      expect(actions).toContain(`${REASSIGN_ACTION_ID}|own`)
+      expect(actions).not.toContain(`${REASSIGN_ACTION_ID}|any`)
+    })
+
+    it("refuses an out-of-domain delta inserted into a marked role", async () => {
+      refusal(
+        await command(
+          "root",
+          admin("org_roles", "markedCustom"),
+          deltaSql("{markedCustom}", 1, OWN_REGION)
+        ),
+        "delta-domain"
+      )
+    })
+
+    it("refuses an archetype change that leaves a marked role's deltas out of the domain", async () => {
+      await priorRole(
+        TASK_EDITOR_ID,
+        [TASK_COMMENT],
+        async (role) => {
+          refusal(
+            await command(
+              "root",
+              admin("org_roles", role),
+              `UPDATE public.org_roles SET archetype = '${PROJECT_WRITER_ID}' WHERE id = '${role}'`
+            ),
+            "delta-domain"
+          )
+        },
+        true
+      )
+    })
+
+    // `task_comment read any` — у домені `org`, але не контейнерного рівня.
+    it("judges every delta of a role whose archetype changes level", async () => {
+      await priorRole(TASK_EDITOR_ID, [TASK_COMMENT], async (role) => {
+        const archetype = (id: string) =>
+          command(
+            "root",
+            admin("org_roles", role),
+            `UPDATE public.org_roles SET archetype = '${id}' WHERE id = '${role}'`
+          )
+        refusal(await archetype(PROJECT_WRITER_ID), "delta-domain")
+        success(await archetype(TASK_VIEWER_ID))
+      })
+    })
+
+    // Каскад FK ТЧ видаляє дельти разом з роллю, тож перевставка тим самим
+    // id сиріт не лишає.
+    it("reinserting a role in one statement drops its deltas by cascade", async () => {
+      await priorRole(TASK_EDITOR_ID, [TASK_COMMENT], async (role) => {
+        success(
+          await command(
+            "root",
+            admin("org_roles", role),
+            `WITH d AS (DELETE FROM public.org_roles WHERE id = '${role}' RETURNING id, org_id) INSERT INTO public.org_roles (id, org_id, archetype) SELECT id, org_id, '${PROJECT_WRITER_ID}' FROM d`
+          )
+        )
+      })
+    })
+
+    it("refuses moving an out-of-domain delta to another role", async () => {
+      await priorRole(TASK_VIEWER_ID, [OWN_REGION], async (role) => {
+        await priorRole(TASK_VIEWER_ID, [], async (target) => {
+          refusal(
+            await owner(
+              `UPDATE public.org_roles_delta SET parent_id = '${target}' WHERE parent_id = '${role}'`,
+              true
+            ),
+            "delta-domain"
+          )
+        })
+      })
+    })
+
+    // Сирота від зміни коду не блокує непов'язаних операцій з роллю: судиться
+    // лише змінене в транзакції.
+    it("an orphan delta does not block unrelated operations on its role", async () => {
+      await priorRole(TASK_VIEWER_ID, [OWN_REGION], async (role) => {
+        const onRole = (statement: string) =>
+          command("root", admin("org_roles", role), statement)
+        success(
+          await onRole(
+            `DELETE FROM public.org_roles_delta WHERE parent_id = '${role}'`
+          )
+        )
+        const assignment = randomUUID()
+        success(
+          await command(
+            "root",
+            admin("org_role_assignments", assignment),
+            `INSERT INTO public.org_role_assignments (id, org_id, subject, custom_role) VALUES ('${assignment}', {A}, {target@A}, '${role}')`
+          )
+        )
+        changed(
+          await onRole(
+            `UPDATE public.org_roles SET deletion_mark = true WHERE id = '${role}' RETURNING id`
+          )
+        )
+        changed(
+          await onRole(
+            `UPDATE public.org_roles SET description = 'renamed' WHERE id = '${role}' RETURNING id`
+          )
+        )
+        // Перший образ транзакції — той самий архетип: A→B→A не зміна.
+        success(
+          await onRole(
+            `UPDATE public.org_roles SET archetype = '${TASK_EDITOR_ID}' WHERE id = '${role}'; UPDATE public.org_roles SET archetype = '${TASK_VIEWER_ID}' WHERE id = '${role}'`
+          )
+        )
+      })
+      await priorRole(
+        TASK_VIEWER_ID,
+        [OWN_REGION],
+        async (role) => {
+          changed(
+            await command(
+              "root",
+              admin("org_roles", role),
+              `UPDATE public.org_roles SET deletion_mark = false WHERE id = '${role}' RETURNING id`
+            )
+          )
+        },
+        true
+      )
+    })
+
+    it("refuses an out-of-domain delta in maintenance mode", async () => {
+      await priorRole(TASK_VIEWER_ID, [], async (role) => {
+        refusal(
+          await owner(deltaSql(`'${role}'`, 1, OWN_REGION), true),
+          "delta-domain"
+        )
+      })
+    })
+  })
+
   it("no-context refuses the owner but maintenance writes and journals", async () => {
     refusal(
       await owner(assignSql(randomUUID(), TASK_VIEWER_ID)),

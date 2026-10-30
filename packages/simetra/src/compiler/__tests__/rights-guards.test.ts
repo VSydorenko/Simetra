@@ -1057,6 +1057,75 @@ describe("rights guard transaction check", () => {
     )
     expect(kinds).toHaveLength(2)
   })
+
+  // спека прав §7: дельта поза доменом рівня архетипу мовчки не діє (для
+  // `deny` — більше прав, ніж задумано), тож COMMIT її відмовляє, зокрема в
+  // режимі обслуговування; судиться лише змінене в транзакції.
+  it("refuses at commit a role whose deltas leave the domain of its level", () => {
+    const body = bodyShape(unit(domain, CHECK).sql)
+    const raises = body.flatMap((s, i) =>
+      s.type === "raise" &&
+      isDeepStrictEqual(detailOf(s), tree("SELECT 'delta-domain'"))
+        ? [i]
+        : []
+    )
+    const deltaDomain = (
+      roles: string,
+      scope: string | undefined,
+      storage: string
+    ) =>
+      tree(
+        `SELECT EXISTS (SELECT 1 FROM public.${roles} r JOIN public.${roles}_delta l ON l.parent_id = r.id${scope === undefined ? "" : ` AND l.${scope} = v_pending.scope`}` +
+          ` WHERE r.id = v_pending.key${scope === undefined ? "" : ` AND r.${scope} = v_pending.scope`}` +
+          ` AND (EXISTS (SELECT 1 FROM simetra.rights_journal j WHERE j.xid = v_pending.xid AND j.relation = 'public.${roles}_delta' AND j.row_id = l.id AND j.after IS NOT NULL)` +
+          ` OR EXISTS (SELECT 1 FROM (SELECT DISTINCT ON (j.row_id) j.before FROM simetra.rights_journal j WHERE j.xid = v_pending.xid AND j.relation = 'public.${roles}' AND j.row_id = v_pending.key ORDER BY j.row_id, j.seq) f WHERE (f.before ->> 'archetype')::uuid IS DISTINCT FROM r.archetype))` +
+          ` AND NOT EXISTS (SELECT 1 FROM simetra.rights_roles() m JOIN simetra.rights_domain() d ON d.level = m.level AND d.level_id IS NOT DISTINCT FROM m.level_id` +
+          ` WHERE m.role_id = r.archetype AND ${storage} AND d.object = l.object AND d.action = l.action AND d.extent = l.extent AND d.dimension_id IS NOT DISTINCT FROM l.dimension))`
+      )
+    // Ціле дерево умови: втрата будь-якої рівності домену, умови сховища чи
+    // журналу змінює його; `rights_roles()` — усередині `NOT EXISTS`, тож
+    // невідомий архетип відмовляє, а не дає порожній збіг.
+    expect(raises.map((i) => body[i - 1]!.expressions[0]!.tree)).toEqual([
+      deltaDomain("global_roles", undefined, "m.storage = 'global'"),
+      deltaDomain(
+        "org_roles",
+        "org_id",
+        `m.storage = 'scope' AND m.storage_id = ${ORG}`
+      ),
+    ])
+    for (const i of raises) {
+      const condition = body[i - 1]!
+      // Безумовно — прямо в гілці ключа `role`, не під режимом
+      // обслуговування, і до перевірки приросту.
+      const branch = enclosing(body, i - 1)
+      expect(branch.expressions[0]!.tree).toEqual(
+        tree("SELECT v_pending.kind = 'role'")
+      )
+      expect(
+        contains(condition.expressions, expr("v_pending.maintenance"))
+      ).toBe(false)
+      const escalation = body.findIndex(
+        (s, j) =>
+          j > i &&
+          s.type === "raise" &&
+          isDeepStrictEqual(detailOf(s), tree("SELECT 'escalation'"))
+      )
+      expect(enclosing(body, escalation - 1)).toBe(branch)
+      // Режим обслуговування пише інший `reason`, тож журнал читається без
+      // нього.
+      expect(
+        nodes(condition.expressions, "ColumnRef").some((c) =>
+          JSON.stringify(c).includes('"reason"')
+        )
+      ).toBe(false)
+    }
+    const check = unit(domain, CHECK)
+    for (const fn of ["rights_roles", "rights_domain"])
+      expect(check.requires).toContainEqual({
+        type: "unit",
+        identity: `function:simetra.${fn}()`,
+      })
+  })
 })
 
 /** Вибірка як вузол `SelectStmt` — для порівняння з гілкою `UNION ALL`. */

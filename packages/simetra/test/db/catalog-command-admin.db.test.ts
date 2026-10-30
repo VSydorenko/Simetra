@@ -10,8 +10,10 @@ import {
 import { CATALOG_COMMAND_ERRORS } from "../../src/compiler/catalog-command/units"
 import { uuid } from "../../src/compiler/__tests__/helpers"
 import {
+  PROJECT_WRITER_ID,
   RIGHTS_ADMIN_ID,
   ROLE_FILE,
+  TASK_EDITOR_ID,
   TASK_VIEWER_ID,
   USERS_FILE,
   adminRoles,
@@ -30,6 +32,7 @@ import {
   assignmentRow,
   describeTransaction,
   insert,
+  orgDeltaRow,
   seedAdministration,
 } from "./rights-seed"
 
@@ -292,6 +295,58 @@ describe("catalog command core on rights system catalogs and Users", () => {
       [key("inUseCustom"), await versionOf(ROLES, "inUseCustom")]
     )
     expect(outcome).toMatchObject({ code: "42501", detail: "role-in-use" })
+  })
+
+  // Спека прав §7: `_save` пише шапку раніше за ТЧ, тож перевірка домену на
+  // операторі шапки відхилила б новий архетип з новими дельтами одним
+  // викликом; на COMMIT судиться результат. Роль засіває власник у точці
+  // збереження кейсу: `task_comment read any` — у домені `org`, але не
+  // контейнерного рівня, `task read any` — у домені обох.
+  it("save with a new archetype and deltas from the new level's domain passes", async () => {
+    const client = tx.client()
+    const id = randomUUID()
+    await client.query("SAVEPOINT level_change")
+    try {
+      await insert(client, ROLES, {
+        id,
+        org_id: key("A"),
+        archetype: TASK_EDITOR_ID,
+      })
+      await insert(
+        client,
+        DELTA,
+        orgDeltaRow(key("A"), id, 1, ["allow", "task_comment", "read", "any"])
+      )
+      await client.query("SET CONSTRAINTS ALL IMMEDIATE")
+      await client.query("SET CONSTRAINTS ALL DEFERRED")
+      const outcome = await save(
+        "root",
+        ROLES,
+        admin,
+        {
+          id,
+          archetype: PROJECT_WRITER_ID,
+          tabular: {
+            [DELTA]: [
+              {
+                id: randomUUID(),
+                object: "task",
+                action: "read",
+                extent: "any",
+                effect: "allow",
+              },
+            ],
+          },
+        },
+        await versionOf(ROLES, id),
+        `SELECT r.archetype, array_agg(d.object) AS objects FROM public.${ROLES} r JOIN public.${DELTA} d ON d.parent_id = r.id WHERE r.id = '${id}' GROUP BY r.archetype`
+      )
+      expect(outcome).toMatchObject({
+        probe: [{ archetype: PROJECT_WRITER_ID, objects: ["task"] }],
+      })
+    } finally {
+      await client.query("ROLLBACK TO SAVEPOINT level_change")
+    }
   })
 
   const assignCustom = (user: string) => {

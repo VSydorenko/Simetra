@@ -610,6 +610,50 @@ function escalationSql(
   ].join("\n")
 }
 
+/**
+ * Дельта кастомної ролі лише з домену рівня її архетипу (спека прав §7).
+ * Функції прав беруть дельту лише через `JOIN rights_domain()`, тож рядок
+ * поза доменом мовчки не діє — для `deny` це більше прав, ніж задумано.
+ * Домен — дані генератора, а не форма рядка, тож CHECK його не тримає.
+ * На COMMIT, а не на операторі: команда пише шапку раніше за ТЧ, і новий
+ * архетип з новими дельтами одним викликом інакше відмовив би. Судиться лише
+ * змінене в транзакції — записані дельти, а при зміні архетипу всі дельти
+ * ролі: сирота від зміни коду не блокує непов'язаних операцій з роллю.
+ * Журнал — без `reason`: режим обслуговування пише інший і винятку не дає.
+ * Зміну архетипу визначає перший образ ролі в транзакції, тож A→B→A — не
+ * зміна; ролі без запису в журналі транзакції архетип не міняли. Позначка
+ * видалення винятку не дає: інакше зміна архетипу під позначкою з наступним
+ * її зняттям лишила б дельти поза доменом. `rights_roles()` — усередині
+ * `NOT EXISTS`, щоб невідомий архетип давав відмову, а не порожній збіг.
+ */
+function deltaDomainSql(
+  catalog: RightsCatalogContract,
+  physical: PhysicalSnapshot,
+  style: AttributeCase
+): string {
+  const roles = tableOf(physical, catalog.roles.table)
+  const delta = tableOf(physical, catalog.roles.delta)
+  const r = (def: StandardColumnDef) => `r.${q(column(roles, def, style))}`
+  const l = (def: StandardColumnDef) => `l.${q(column(delta, def, style))}`
+  const roleScope = scopeColumn(roles)
+  const deltaScope = scopeColumn(delta)
+  const journal = (table: PhysicalTable) =>
+    `${ref(platform("rights_journal"))} j WHERE j.xid = v_pending.xid AND j.relation = ${sqlLiteral(journalRelation(table))}`
+  const storage =
+    catalog.level.level === "scope"
+      ? `m.storage = 'scope' AND m.storage_id = ${sqlLiteral(catalog.level.scopeKindId)}::uuid`
+      : "m.storage = 'global'"
+  return [
+    `IF EXISTS (SELECT 1 FROM ${ref(catalog.roles.table)} r JOIN ${ref(catalog.roles.delta)} l ON ${l(PARENT)} = ${r(KEY)}${deltaScope === undefined ? "" : ` AND l.${q(deltaScope)} = v_pending.scope`}`,
+    `  WHERE ${r(KEY)} = v_pending.key${roleScope === undefined ? "" : ` AND r.${q(roleScope)} = v_pending.scope`}`,
+    `    AND (EXISTS (SELECT 1 FROM ${journal(delta)} AND j.row_id = ${l(KEY)} AND j.after IS NOT NULL)`,
+    `      OR EXISTS (SELECT 1 FROM (SELECT DISTINCT ON (j.row_id) j.before FROM ${journal(roles)} AND j.row_id = v_pending.key ORDER BY j.row_id, j.seq) f WHERE (f.before ->> ${sqlLiteral(column(roles, R.archetype, style))})::uuid IS DISTINCT FROM ${r(R.archetype)}))`,
+    `    AND NOT EXISTS (SELECT 1 FROM ${ref(RIGHTS_FUNCTIONS.roles)}() m JOIN ${ref(RIGHTS_FUNCTIONS.domain)}() d ON d.level = m.level AND d.level_id IS NOT DISTINCT FROM m.level_id`,
+    `      WHERE m.role_id = ${r(R.archetype)} AND ${storage} AND d.object = ${l(R.object)} AND d.action = ${l(R.action)} AND d.extent = ${l(R.extent)} AND d.dimension_id IS NOT DISTINCT FROM ${l(R.dimension)}))`,
+    `THEN ${refusal("delta-domain")} END IF;`,
+  ].join("\n")
+}
+
 function catalogCheck(
   catalog: RightsCatalogContract,
   contracts: GuardContracts,
@@ -638,6 +682,7 @@ function catalogCheck(
     `    IF EXISTS (SELECT 1 FROM ${ref(catalog.roles.table)} r WHERE ${roleId} = v_pending.key AND ${sameRole} AND r.${q(column(roles, DELETION, style))})`,
     `       AND EXISTS (SELECT 1 FROM ${ref(catalog.assignments.table)} a WHERE a.${q(column(assignments, R.customRole, style))} = v_pending.key AND ${sameAssignment} AND NOT a.${q(column(assignments, DELETION, style))})`,
     `    THEN ${refusal("role-in-use")} END IF;`,
+    `    ${deltaDomainSql(catalog, physical, style)}`,
     `    ${escalationSql(roleGrantSet(catalog, physical, "after", style), roleGrantSet(catalog, physical, "before", style), catalogStorageKind(catalog))}`,
     "  ELSIF v_pending.kind = 'assignment' THEN",
     `    ${escalationSql(assignmentGrantSet(catalog, physical, "after", style), assignmentBeforeSet(catalog, physical, style), catalogStorageKind(catalog))}`,
@@ -1147,6 +1192,8 @@ export function buildRightsGuardUnits(
   const check = platform("rights_tx_check")
   addFunction(check, checkBody(contracts, physical, attributeCase), undefined, [
     unitNode(RIGHTS_FUNCTIONS.mine),
+    unitNode(RIGHTS_FUNCTIONS.roles),
+    unitNode(RIGHTS_FUNCTIONS.domain),
     { type: "table", schema: PLATFORM_SCHEMA, name: "rights_tx_pending" },
     { type: "table", schema: PLATFORM_SCHEMA, name: "rights_tx_actor" },
     { type: "table", schema: PLATFORM_SCHEMA, name: "rights_journal" },
