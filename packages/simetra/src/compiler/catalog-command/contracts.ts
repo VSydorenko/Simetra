@@ -37,7 +37,7 @@ import {
 } from "../standard-column"
 import { objectKey, type ParsedObject } from "../stages/files"
 import { handlerAssigns } from "../stages/links"
-import { kindLabelOf } from "../stages/model"
+import { fieldForeignKey, kindLabelOf } from "../stages/model"
 
 /** Мітки імен функцій ядра довідника: ім'я — `derived(<таблиця>, <мітка>)`. */
 export const CATALOG_COMMAND_LABELS = {
@@ -113,12 +113,15 @@ export type CommandReference =
       target: PhysicalTable
       targetKey: string
       array: boolean
+      /** Свідомо між тенантами: ядро не звіряє скоуп цілі. */
+      crossScope?: true
     }
   | {
       form: "pair"
       typeColumn: string
       idColumn: string
       array: boolean
+      crossScope?: true
       targets: {
         label: string
         table: PhysicalTable
@@ -250,17 +253,13 @@ export function catalogCommandContracts(input: {
               )
             ),
           references: [
-            ...(parent === undefined
-              ? []
-              : [
-                  {
-                    form: "single" as const,
-                    column: parent,
-                    target: table,
-                    targetKey: key,
-                    array: false,
-                  },
-                ]),
+            ...standardReferences(
+              physical,
+              table,
+              standard,
+              style,
+              scopeColumn
+            ),
             ...ownerReferences(object, table, standard, style, reference),
             ...reference.attributes((object.data as Catalog).attributes, table),
           ],
@@ -340,6 +339,56 @@ function sectionContract(
     updateColumns: command.update.filter((c) => c !== lineNumber),
     references: facts.reference.attributes(facts.attributes, table),
   }
+}
+
+/**
+ * Стандартні колонки-посилання шапки з однією ціллю (`ref` визначення
+ * реєстру: батько ієрархії, авторство, суб'єкт і кастомна роль призначень
+ * тощо) — кожне нове чи змінене значення `Ref` ядро перевіряє видимістю.
+ * Ціль і її ключ — з FK колонки: стадія 3 будує його для кожної такої
+ * колонки й резолвить ціль за рівнем таблиці, тож друга резолюція тут лише
+ * розійшлася б із нею. Власник (`owners`) — окремо (пара без FK); колонка
+ * скоупу — не посилання команди: її значення тримає межа тенанта.
+ */
+function standardReferences(
+  physical: PhysicalSnapshot,
+  table: PhysicalTable,
+  defs: readonly StandardColumnDef[],
+  style: AttributeCase,
+  scopeColumn: string | undefined
+): CommandReference[] {
+  const names = new Set(
+    defs
+      .filter((d) => d.ref !== undefined && d.ref !== "owners")
+      .map((d) => findStandardColumn(table, d, style)?.name)
+  )
+  return table.columns
+    .filter((c) => names.has(c.name) && c.name !== scopeColumn)
+    .flatMap((column): CommandReference[] => {
+      const fk = fieldForeignKey(table, column.name)
+      if (fk === undefined) {
+        throw new Error(
+          `internal: standard reference ${tableKey(table)}.${column.name} has no foreign key`
+        )
+      }
+      return [
+        {
+          form: "single",
+          column: column.name,
+          target: must(
+            physical.tables.find(
+              (t) =>
+                t.schema === fk.references.schema &&
+                t.name === fk.references.table
+            )
+          ),
+          targetKey: must(
+            fk.references.columns[fk.columns.indexOf(column.name)]
+          ),
+          array: false,
+        },
+      ]
+    })
 }
 
 /**
@@ -439,11 +488,21 @@ function referenceResolver(
           .filter((c) => c.origin.elementId === attribute.id)
           .map((c) => c.name)
         const array = attribute.array === true
+        const cross =
+          attribute.crossScope === true ? { crossScope: true as const } : {}
         if (attribute.ref !== undefined) {
           const target = single(attribute.ref)
           return target === undefined
             ? []
-            : [{ form: "single", column: must(columns[0]), ...target, array }]
+            : [
+                {
+                  form: "single",
+                  column: must(columns[0]),
+                  ...target,
+                  array,
+                  ...cross,
+                },
+              ]
         }
         const targets = pair(attribute.allowedTypes ?? [])
         return targets.length === 0
@@ -454,6 +513,7 @@ function referenceResolver(
                 typeColumn: must(columns[0]),
                 idColumn: must(columns[1]),
                 array,
+                ...cross,
                 targets,
               },
             ]

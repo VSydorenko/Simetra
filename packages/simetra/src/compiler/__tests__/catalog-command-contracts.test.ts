@@ -260,7 +260,7 @@ describe("catalogCommandContracts", () => {
     ])
   })
 
-  it("поліморфний Ref — pair з мітками цілей; масив і батько — single", () => {
+  it("поліморфний Ref — pair з мітками цілей; масив, батько й автори — single", () => {
     const single = (column: string, target: string, array = false) => ({
       form: "single",
       column,
@@ -270,6 +270,8 @@ describe("catalogCommandContracts", () => {
     })
     expect(named(contractOf(contracts, "ticket").references)).toEqual([
       single("parent_id", "ticket"),
+      single("created_by_id", "users"),
+      single("updated_by_id", "users"),
       single("assignee_id", "org_member"),
       single("region_id", "region"),
       single("project_id", "project"),
@@ -294,6 +296,30 @@ describe("catalogCommandContracts", () => {
         ],
       },
       single("watchers", "org_member", true),
+    ])
+  })
+
+  // Кожне стандартне посилання реєстру — посилання ядра (крім колонки
+  // скоупу й власника рядка ТЧ): інакше `subject` чи `custom_role`
+  // невидимого рядка свого тенанта розрізняли б «є» й «нема» відмовою FK.
+  it("стандартні посилання «Призначень» — subject і custom_role, без скоупу", () => {
+    const assignments = contractOf(contracts, "org_role_assignments")
+    expect(assignments.scopeColumn).toBeDefined()
+    expect(named(assignments.references)).toEqual([
+      {
+        form: "single",
+        column: "subject",
+        target: "org_member",
+        targetKey: "id",
+        array: false,
+      },
+      {
+        form: "single",
+        column: "custom_role",
+        target: "org_roles",
+        targetKey: "id",
+        array: false,
+      },
     ])
   })
 
