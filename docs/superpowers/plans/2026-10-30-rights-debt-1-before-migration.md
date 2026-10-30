@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-Статус: виконано задачі 0–7; Задача 8 — після відновлення сесій.
+Статус: виконано задачі 0–7; задачі 8–9 — після відновлення сесій.
 Архітекторка задачі — сесія `consumer-reconciliation2`; якщо її немає — власник.
 
 **Мета:** закрити пункти [боргу прав](2026-10-26-rights-residual-debt.md) §1,
@@ -227,6 +227,18 @@ git commit -m "fix(rights): snake_case-проєкт з довідниками п
 - [ ] **Step 4: Промоція** (якщо Step 1 підтвердив переписувач): unit `operations-promote*` — FK `(scope, id)` на `CustomTable`, що стає видом, переписано на ціль виду з колонкою скоупу.
 - [ ] **Step 5:** Run unit (повний simetra з логом у `scratchpad/unit-<sha>.txt`), typecheck, lint, `metadata:check`, scoped DB.
 - [ ] **Step 6: Commit** — `feat(compiler): ціль FK CustomTable — ключ або (скоуп, ключ) таблиці виду`.
+
+---
+
+### Задача 9: таймаут `operations-rename` (борг прав §3)
+
+Рішення архітекторки (2026-10-30): кейс kitchen-sink у `packages/simetra/src/compiler/__tests__/operations-rename.test.ts` триває ≈43–46 с при межі 60 с і вже падав за таймаутом під навантаженням. Таймаут не піднімати. Вплив на спеку: немає.
+
+- [ ] **Step 1:** Заміряти час кейсів файлу (`pnpm --filter simetra test operations-rename --reporter=verbose`, лог у scratchpad) і з'ясувати, що саме коштує: кількість операцій, розмір фікстури, повторні компіляції.
+- [ ] **Step 2:** Розбити кейс на незалежні за групою операцій (`it.each` над групами) або звузити фікстуру до мінімуму, що доводить кожну операцію (будівник у `fixtures/`, без інлайн-метаданих). Кожна операція, яку доводив старий кейс, лишається доведеною — перелік до й після у звіті.
+- [ ] **Step 3:** Критерій: найдовший кейс файлу ≤ 20 с на повному unit-прогоні simetra (лог `scratchpad/unit-<sha>.txt`). Мутація: зламати одну з операцій перейменування → відповідний кейс червоний.
+- [ ] **Step 4:** Зняти пункт «Таймаут `operations-rename`» з боргу прав §3.
+- [ ] **Step 5: Commit** — `test(compiler): operations-rename — незалежні кейси замість одного kitchen-sink`.
 
 ---
 
