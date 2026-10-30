@@ -1015,6 +1015,9 @@ function deleteFunction(
   const { table, key } = contract
   const root = "p_id"
   const statements = [
+    // Без версії `lockedOld` дав би `conflict`: вхід без версії — помилка
+    // виклику, як у позначці видалення, а не конфлікт.
+    ...ifThen("p_expected_version IS NULL", [invalid("'p_expected_version'")]),
     ...parts.context(action, root),
     ...parts.lockedOld(root),
     ...parts.rightsIf(action, "v_old", E.forbidden.noRight),

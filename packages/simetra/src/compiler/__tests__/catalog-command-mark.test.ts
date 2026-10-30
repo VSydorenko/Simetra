@@ -255,6 +255,8 @@ describe("<t>_delete", () => {
       `DELETE FROM public.${table} WHERE id = p_id`
     )
     const order = [
+      // Без версії — `command.invalid`, а не конфлікт, як у позначці.
+      ifAt(shape, "p_expected_version IS NULL"),
       ifAt(shape, context("administerRights", table)),
       at(shape, "execsql", forUpdate(table)),
       ifAt(shape, "v_old.version IS DISTINCT FROM p_expected_version"),
