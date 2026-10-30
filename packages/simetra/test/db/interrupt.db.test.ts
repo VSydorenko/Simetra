@@ -3,21 +3,25 @@
 // цей прогін); звірка стеку `stack-guard` після прогону — додатковий доказ.
 import { spawn, type ChildProcess } from "node:child_process"
 import { once } from "node:events"
+import { existsSync, mkdtempSync, rmSync } from "node:fs"
 import { createRequire } from "node:module"
-import { constants } from "node:os"
+import { constants, tmpdir } from "node:os"
+import { join } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import pg from "pg"
 import { describe, expect, it } from "vitest"
 import {
   newRunTag,
   RUN_TAG_ENV,
+  runApplicationName,
   runObjectPatterns,
+  runTag,
   SHADOW_PREFIX,
   shadowSuffix,
   testDatabaseUrl,
   testSuperuserUrl,
 } from "./connection"
-import { sweepRun } from "./sweep"
+import { stopRunBackends, sweepRun } from "./sweep"
 
 const TSX = pathToFileURL(createRequire(import.meta.url).resolve("tsx")).href
 const FIXTURE = fileURLToPath(
@@ -86,6 +90,94 @@ describe("an interrupted DB run", () => {
         // уміститися в таймаут тесту
         await cleanup(() => sweepRun(tag, { deadlineMs: 10_000 }))
         await cleanup(() => dropDatabase(foreign))
+      }
+    },
+    INTERRUPT_TIMEOUT_MS
+  )
+
+  // Тег у `application_name` ставить сторож через `PGAPPNAME`; що його
+  // успадкували воркери vitest і що node-postgres його читає, видно лише з
+  // боку сервера
+  it("tags every connection of the run with the run's application name", async () => {
+    const client = new pg.Client({ connectionString: testDatabaseUrl() })
+    await client.connect()
+    try {
+      const { rows } = await client.query<{ name: string }>(
+        "select current_setting('application_name') as name"
+      )
+      expect(rows).toEqual([{ name: runApplicationName(runTag()) }])
+    } finally {
+      await client.end()
+    }
+  })
+
+  // Сервер виконує запит і після смерті клієнта — це видно лише на стеку:
+  // замок не звільняється, поки бекенди прогону працюють
+  it(
+    "stops its own backends before releasing the lock on SIGINT",
+    async () => {
+      const tag = newRunTag()
+      const lockDir = mkdtempSync(join(tmpdir(), "simetra-interrupt-"))
+      const lock = join(lockDir, "lock")
+      // Бекенд іншого прогону посеред такого самого запиту: сторож фікстури
+      // не сміє його торкнутися
+      const foreignName = runApplicationName(newRunTag())
+      const foreign = new pg.Client({
+        connectionString: testDatabaseUrl(),
+        application_name: foreignName,
+      })
+      // Уборка завершує цей бекенд — обрив з'єднання тут очікуваний, а без
+      // слухача `error` він став би неперехопленим винятком
+      foreign.on("error", () => {})
+      await foreign.connect()
+      const [{ pid: foreignPid }] = (
+        await foreign.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")
+      ).rows as [{ pid: number }]
+      const foreignSleep = foreign
+        .query("SELECT pg_sleep(60)")
+        .catch(() => undefined)
+      let child: ChildProcess | undefined
+      try {
+        child = spawn(
+          process.execPath,
+          ["--import", TSX, FIXTURE, tag, "--sleep", lock],
+          { stdio: ["ignore", "pipe", "inherit"] }
+        )
+        const exited = once(child, "exit") as Promise<[number | null, string]>
+        await readyLine(child)
+        const sleeping = [expect.stringContaining("pg_sleep")]
+        await expect
+          .poll(() => backendQueries(runApplicationName(tag)), {
+            timeout: 5_000,
+          })
+          .toEqual(sleeping)
+        await expect
+          .poll(() => backendQueries(foreignName), { timeout: 5_000 })
+          .toEqual(sleeping)
+        expect(existsSync(lock)).toBe(true)
+
+        child.kill("SIGINT")
+        const [code] = await withDeadline(exited, 45_000)
+
+        expect(code).toBe(128 + constants.signals.SIGINT)
+        // Без опитування: обробник звільняє замок лише після того, як бекенди
+        // справді вийшли
+        expect(await backendQueries(runApplicationName(tag))).toEqual([])
+        expect(existsSync(lock)).toBe(false)
+        expect(await backendQueries(foreignName)).toEqual(sleeping)
+      } finally {
+        if (
+          child !== undefined &&
+          child.exitCode === null &&
+          child.signalCode === null
+        )
+          child.kill("SIGKILL")
+        // Обидва бекенди — цього тесту; збій не має лишати їх на стеку
+        await cleanup(() => stopRunBackends(tag, { graceMs: 1_000 }))
+        await cleanup(() => terminateBackend(foreignPid))
+        await foreignSleep
+        await cleanup(() => foreign.end())
+        rmSync(lockDir, { recursive: true, force: true })
       }
     },
     INTERRUPT_TIMEOUT_MS
@@ -169,6 +261,28 @@ async function taggedObjects(tag: string): Promise<string[]> {
   } finally {
     await client.end()
   }
+}
+
+// Запити бекендів з цим `application_name` у будь-якому стані; суперкористувач
+// бачить запити всіх ролей
+async function backendQueries(applicationName: string): Promise<string[]> {
+  const client = new pg.Client({ connectionString: testSuperuserUrl() })
+  await client.connect()
+  try {
+    const { rows } = await client.query<{ query: string }>(
+      "select query from pg_stat_activity where application_name = $1 and pid <> pg_backend_pid()",
+      [applicationName]
+    )
+    return rows.map((row) => row.query)
+  } finally {
+    await client.end()
+  }
+}
+
+async function terminateBackend(pid: number): Promise<void> {
+  await asSuperuser((client) =>
+    client.query("SELECT pg_terminate_backend($1)", [pid])
+  )
 }
 
 async function databaseExists(name: string): Promise<boolean> {

@@ -1,12 +1,14 @@
-// Прибиральник одного DB-прогону: видаляє зі спільного стеку лише об'єкти з
-// тегом цього прогону. Кличе його обробник сигналу (`interrupt.ts`) окремим
+// Прибиральник одного DB-прогону: завершує бекенди цього прогону й видаляє
+// зі спільного стеку лише об'єкти з його тегом. Кличе його обробник сигналу (`interrupt.ts`) окремим
 // процесом через `spawnSync`, а людина — тим самим CLI:
 // `node --import tsx sweep.ts <тег>`.
 import { realpathSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import pg from "pg"
 import {
+  GUARD_APPLICATION_NAME,
   isRunTag,
+  runApplicationName,
   runObjectPatterns,
   runObjectStatementPattern,
   testSuperuserUrl,
@@ -16,10 +18,72 @@ const DEFAULT_DEADLINE_MS = 30_000
 const PASS_PAUSE_MS = 1_000
 // Закритий фаєрволом порт інакше тримав би обробник сигналу до його межі
 const CONNECT_TIMEOUT_MS = 5_000
+// Скасований запит бекенд зазвичай кидає за мілісекунди; хто за цей час не
+// вийшов (живий клієнт у простої, глухий до скасування виклик), — завершується
+const CANCEL_GRACE_MS = 3_000
+const TERMINATE_WAIT_MS = 5_000
+const BACKEND_POLL_MS = 100
 
 /**
- * Drops every stack database and role tagged with `tag` and terminates the
- * backends still creating one, repeating the pass until one finds nothing or
+ * Stops every backend whose `application_name` is the run name of `tag`:
+ * cancels their queries, waits up to `graceMs` for them to go, terminates the
+ * rest and waits until they are gone. Returns how many stopped and the pids
+ * still there after the termination wait. Backends of other runs and untagged ones are
+ * never touched.
+ */
+export async function stopRunBackends(
+  tag: string,
+  o: { graceMs?: number } = {}
+): Promise<{ stopped: number; left: number[] }> {
+  checkTag(tag)
+  const client = new pg.Client({
+    connectionString: testSuperuserUrl(),
+    connectionTimeoutMillis: CONNECT_TIMEOUT_MS,
+    // Явне ім'я важить більше за `PGAPPNAME` прогону, успадкований
+    // прибиральником, — і `pid <> pg_backend_pid()` нижче лише страховка
+    application_name: GUARD_APPLICATION_NAME,
+  })
+  await client.connect()
+  try {
+    // Точний збіг імені: шаблон міг би зачепити бекенди іншого прогону
+    const running = async (): Promise<number[]> =>
+      (
+        await client.query<{ pid: number }>(
+          "select pid from pg_stat_activity where application_name = $1 and pid <> pg_backend_pid()",
+          [runApplicationName(tag)]
+        )
+      ).rows.map((row) => row.pid)
+    const signal = (fn: string, pids: number[]): Promise<unknown> =>
+      client.query(`select ${fn}(pid) from unnest($1::int[]) as pid`, [pids])
+    const waitGone = async (ms: number): Promise<number[]> => {
+      const deadline = Date.now() + ms
+      for (;;) {
+        const pids = await running()
+        if (pids.length === 0 || Date.now() > deadline) return pids
+        await new Promise((resolve) => setTimeout(resolve, BACKEND_POLL_MS))
+      }
+    }
+    const found = await running()
+    if (found.length === 0) return { stopped: 0, left: [] }
+    // Спершу скасування: запит відкочується штатно, а бекенд, чий клієнт
+    // уже мертвий, на відповіді помічає обрив і виходить сам
+    await signal("pg_cancel_backend", found)
+    const stubborn = await waitGone(o.graceMs ?? CANCEL_GRACE_MS)
+    if (stubborn.length === 0) return { stopped: found.length, left: [] }
+    await signal("pg_terminate_backend", stubborn)
+    // `pg_terminate_backend` лише надсилає сигнал: замок звільняється, коли
+    // бекенди справді вийшли, інакше наступний прогін отримав би їх навантаження
+    const left = await waitGone(TERMINATE_WAIT_MS)
+    return { stopped: found.length - left.length, left }
+  } finally {
+    await client.end()
+  }
+}
+
+/**
+ * Stops the backends of run `tag` ({@link stopRunBackends}), then drops every
+ * stack database and role tagged with `tag` and terminates the backends still
+ * creating one, repeating the pass until one finds nothing or
  * `deadlineMs` runs out. A failed DROP does not stop the pass; whatever is
  * still found at the end is returned in `left`.
  */
@@ -29,6 +93,12 @@ export async function sweepRun(
 ): Promise<{ dropped: string[]; left: string[] }> {
   checkTag(tag)
   const deadline = Date.now() + (o.deadlineMs ?? DEFAULT_DEADLINE_MS)
+  // Воркери вже вбиті, але сервер доводить їхні запити до кінця й без
+  // клієнта: важкий запит вантажив би стек наступному прогону після
+  // звільнення замка
+  const stuck = (await stopRunBackends(tag)).left.map(
+    (pid) => `backend ${pid} (did not stop)`
+  )
   const { databases, roles } = runObjectPatterns(tag)
   const creating = runObjectStatementPattern(tag)
   // Ролі видаляє лише supabase_admin; `DROP OWNED BY` діє в поточній базі,
@@ -38,6 +108,7 @@ export async function sweepRun(
   const client = new pg.Client({
     connectionString: url.href,
     connectionTimeoutMillis: CONNECT_TIMEOUT_MS,
+    application_name: GUARD_APPLICATION_NAME,
   })
   await client.connect()
   try {
@@ -74,8 +145,8 @@ export async function sweepRun(
           ({ pid, query }) => `backend ${pid} (${query.slice(0, 120)})`
         ),
       ]
-      if (all.length === 0) return { dropped, left: [] }
-      if (Date.now() > deadline) return { dropped, left: all }
+      if (all.length === 0) return { dropped, left: stuck }
+      if (Date.now() > deadline) return { dropped, left: [...stuck, ...all] }
       for (const { pid } of inFlight)
         await tryQuery(client, "SELECT pg_terminate_backend($1)", [pid])
       const id = (name: string): string => client.escapeIdentifier(name)

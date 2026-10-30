@@ -5,15 +5,20 @@
 //
 // `node --import tsx interrupted-run.ts <тег>` — головний процес;
 // `… --worker` — «воркер», що безперервно створює тегові бази.
+// `… <тег> --sleep <файл замка>` — головний процес, що тримає замок-файл
+// (обробник сигналу його видаляє), і `… --sleep-worker` — воркер посеред
+// довгого запиту, який сервер після смерті клієнта виконує й далі.
 import { fork } from "node:child_process"
+import { writeFileSync, rmSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import pg from "pg"
 import {
+  enterRun,
   isRunTag,
-  RUN_TAG_ENV,
   SHADOW_PREFIX,
   shadowSuffix,
   testDatabaseName,
+  testDatabaseUrl,
   testRoleName,
   testSuperuserUrl,
 } from "../connection"
@@ -24,24 +29,34 @@ import { installInterruptCleanup } from "../interrupt"
 const SELF_INTERRUPT_MS = 120_000
 const WORKER_PAUSE_MS = 200
 
-async function main(tag: string | undefined): Promise<void> {
-  if (tag === undefined || !isRunTag(tag))
-    throw new Error("Usage: interrupted-run.ts <run tag> | --worker")
-  process.env[RUN_TAG_ENV] = tag
-  installInterruptCleanup({ tag, release: () => {} })
+// Довший за будь-яке очікування тесту: запит, що завершився сам, нічого б не
+// довів про сторожа
+const SLEEP_SECONDS = 60
 
-  await asSuperuser(async (client) => {
-    const id = (name: string): string => client.escapeIdentifier(name)
-    await client.query(
-      `CREATE DATABASE ${id(testDatabaseName("interrupt_copy"))}`
+async function main(
+  tag: string | undefined,
+  lockPath: string | undefined
+): Promise<void> {
+  if (tag === undefined || !isRunTag(tag))
+    throw new Error(
+      "Usage: interrupted-run.ts <run tag> [--sleep <lock file>] | --worker | --sleep-worker"
     )
-    await client.query(`CREATE DATABASE ${id(SHADOW_PREFIX + shadowSuffix())}`)
-    await client.query(`CREATE ROLE ${id(testRoleName("interrupt_owner"))}`)
+  enterRun(tag)
+  if (lockPath !== undefined) writeFileSync(lockPath, `${process.pid}\n`)
+  installInterruptCleanup({
+    tag,
+    release: () => {
+      if (lockPath !== undefined) rmSync(lockPath, { force: true })
+    },
   })
 
-  // Воркер успадковує env (тег) і execArgv (`--import tsx`); `ready` — лише
-  // після його першої бази, щоб сигнал гарантовано застав воркер у роботі
-  const worker = fork(fileURLToPath(import.meta.url), ["--worker"])
+  if (lockPath === undefined) await createObjects()
+  // Воркер успадковує env (тег і `PGAPPNAME`) і execArgv (`--import tsx`);
+  // `ready` — лише після його першого кроку, щоб сигнал гарантовано застав
+  // воркер у роботі
+  const worker = fork(fileURLToPath(import.meta.url), [
+    lockPath === undefined ? "--worker" : "--sleep-worker",
+  ])
   await new Promise<void>((resolve, reject) => {
     worker.once("message", () => resolve())
     worker.once("exit", (code) =>
@@ -50,6 +65,17 @@ async function main(tag: string | undefined): Promise<void> {
   })
   process.stdout.write(`ready ${worker.pid}\n`)
   setTimeout(() => process.kill(process.pid, "SIGTERM"), SELF_INTERRUPT_MS)
+}
+
+async function createObjects(): Promise<void> {
+  await asSuperuser(async (client) => {
+    const id = (name: string): string => client.escapeIdentifier(name)
+    await client.query(
+      `CREATE DATABASE ${id(testDatabaseName("interrupt_copy"))}`
+    )
+    await client.query(`CREATE DATABASE ${id(SHADOW_PREFIX + shadowSuffix())}`)
+    await client.query(`CREATE ROLE ${id(testRoleName("interrupt_owner"))}`)
+  })
 }
 
 async function worker(): Promise<void> {
@@ -66,6 +92,16 @@ async function worker(): Promise<void> {
   }
 }
 
+async function sleepWorker(): Promise<void> {
+  process.on("disconnect", () => process.exit(1))
+  // Ім'я з'єднанню не задаємо: тег мусить дійти через успадкований
+  // `PGAPPNAME`, як до з'єднань тестів і designer
+  const client = new pg.Client({ connectionString: testDatabaseUrl() })
+  await client.connect()
+  process.send?.("connected")
+  await client.query(`SELECT pg_sleep(${SLEEP_SECONDS})`)
+}
+
 async function asSuperuser<T>(fn: (client: pg.Client) => Promise<T>) {
   const client = new pg.Client({ connectionString: testSuperuserUrl() })
   await client.connect()
@@ -76,5 +112,9 @@ async function asSuperuser<T>(fn: (client: pg.Client) => Promise<T>) {
   }
 }
 
-const arg = process.argv[2]
-await (arg === "--worker" ? worker() : main(arg))
+const [arg, mode, lockPath] = process.argv.slice(2)
+await (arg === "--worker"
+  ? worker()
+  : arg === "--sleep-worker"
+    ? sleepWorker()
+    : main(arg, mode === "--sleep" ? lockPath : undefined))
