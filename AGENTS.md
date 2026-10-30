@@ -220,9 +220,13 @@ pnpm db:stop
 - Every object a DB test creates on the stack (database, role, engine shadow)
   carries the run tag: name it through the run-tag helpers in
   `packages/simetra/test/db/connection.ts`; designer DB tests get tagged
-  shadows from their setup file. On SIGINT, SIGTERM or SIGHUP the guard kills
-  its workers and drops the objects of its own tag only; after a SIGKILL they
-  stay, and the next run names them. pnpm does not forward a signal sent to
+  shadows from their setup file. The guard passes the run tag to every
+  connection as `application_name` (`PGAPPNAME`); before it releases the lock,
+  at the end of a run and on SIGINT, SIGTERM or SIGHUP, it ends the Postgres
+  backends of its own tag, so an interrupted heavy query does not load the
+  stack for the next run. On those signals it also kills its workers and drops
+  the objects of its own tag only; after a SIGKILL they stay, and the next run
+  names them. pnpm does not forward a signal sent to
   its own pid: stop a DB run by signalling its process group (Ctrl-C, GNU
   `timeout` without `--foreground`) or the vitest pid.
 - CI (`.github/workflows/ci.yml`) runs the same four gates plus
