@@ -596,11 +596,11 @@ describe("rights administration guards", () => {
 
     it.each(
       cases.flatMap(([name, statement]) =>
-        [false, true].map((m) => [name, statement, m] as const)
+        [false, true].map((m) => [name, m, statement] as const)
       )
     )(
       "%s refuses the owner outside a command, maintenance=%s",
-      async (_, statement, maintenance) => {
+      async (_, maintenance, statement) => {
         expect(await owner(withRows(statement), maintenance)).toEqual(
           KEY_REFUSAL
         )
