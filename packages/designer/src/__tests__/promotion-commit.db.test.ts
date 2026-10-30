@@ -553,9 +553,11 @@ describe("promotion commit", () => {
       const r = await apply(dir, url, data)
       expect(errors(r), JSON.stringify(r.diagnostics)).toEqual([])
       expect((r.data as ApplyData).status).toBe("committed")
-      // Прийнятого тригера немає, механіка є, і обидва — увімкнені, як до
-      // плану: крок даних повертає стан тригерів
+      // Прийнятого тригера немає, механіка й тригери незмінності ключа є, і
+      // всі — увімкнені, як до плану: крок даних повертає стан тригерів
       expect(await triggersOf(url, "app.member")).toEqual([
+        { name: "member_simetra_key", enabled: "O" },
+        { name: "member_simetra_key_after", enabled: "O" },
         { name: "member_simetra_touch", enabled: "O" },
       ])
       // Колонку версії й механіку створює фаза двигуна після запису значень,

@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-Статус: план пройшов 5 раундів аудиту Opus і 2 проходи Codex; виконання — після «далі» архітекторки.
+Статус: виконано задачі 0–9; рев'ю й повні гейти — після дозволу архітекторки.
 Архітекторка задачі — сесія `consumer-reconciliation2`; якщо її немає — власник.
 
 **Мета:** закрити пункти [боргу прав](2026-10-26-rights-residual-debt.md) §1,
@@ -69,6 +69,8 @@
 | Рб1-6 | **RLS виду — обов'язкове поле реєстру.** `KindDefinition.rowLevelSecurity: "enabled" \| "declared" \| "none"` (обов'язкове): `enabled` — таблиці виду під RLS; `declared` — значення з файлу метаданих (`CustomTable`); `none` — вид без таблиці (`materializes` ≠ `"table"`). `rowLevelSecurityOf` (`compiler/stages/model.ts`) без `?? "off"`; невідповідність (`declared` без `isDeclaredTable`, `none` у виду з таблицею) — `internal:`. Тест реєстру в `model/__tests__/kind-registry.test.ts`: `it.each` над `KIND_REGISTRY` — `materializes === "table"` ⇔ `rowLevelSecurity !== "none"`; `rowLevelSecurity === "declared"` ⇔ `def.declared && def.materializes === "table"` (сьогодні лише `CustomTable`; `PgEnum` — `declared`, але без таблиці, тож `none`). Мутація: позначити один вид із таблицею `none` → тест червоний | новий вид без явного значення лишався б без RLS тихо; `declared` без файлу дав би `undefined` і політики на таблиці без RLS | немає (реалізує П2 §8.3) |
 | Рб1-7 | **Шлях до керівника ролі платформи.** `platformRoleGate` додатково читає рекурсивно (`WITH RECURSIVE … UNION`, щоб цикли завершувались) усі ролі, досяжні з ролей запиту (`requestNames`) **будь-яким** ребром `pg_auth_members` `member → roleid` (з PG16 `is_admin_of_role` іде всіма членствами, не лише `set`/`inherit`). Порушення (`plan.platform-role-shape` для ролі платформи): досяжна роль — керівник ролі платформи (член з `admin_option` ролі грантів чи ролі входу) → `request-path:<роль>`; досяжна роль із `rolsuper` → `request-path:<роль>`. Перевірити поведінку тегованими ролями в DB-тесті (Задача 6). Факт стека (2026-10-30): ролі запиту не мають жодного вихідного ребра; керівник обох ролей платформи — `postgres` — недосяжний; хибних відмов немає | кандидат архітекторки після C1; обхід лише `set`/`inherit` пропускав ADMIN через звичайне членство | немає |
 | Рб1-8 | **FK `CustomTable` на таблицю виду — пропозиція (Задача 5, на погодження).** Ціль FK на таблицю виду (не прийняту) — лише ключ `ref`; інша колонка — нова помилка компілятора `customTable.fk-target-not-key` у `checkDeclaredTable` (`compiler/stages/integrity.ts`) поруч із `fk-action-on-kind-table`; прийняті цілі — без змін. `promote.retired-referenced` для таблиць виду стає недосяжним лише для нових FK; наявний код лишається для прийнятих цілей | роль команд оновлює будь-який унікальний реквізит довідника (Р-A1-11), і FK `NO ACTION` мовчки блокував би команду дочірніми рядками; ключ незмінний (Рб1-4), тож FK на нього стабільний; у `examples/` єдиний такий FK веде на ключ | спека прав §4.7 (межа `CustomTable`) — «FK з `CustomTable` на таблицю виду — лише на ключ `ref`, лише `NO ACTION`/`RESTRICT`» |
+| Рб1-9 | **Ціль FK `(scope, id)` на таблицю виду** (рішення архітекторки 2026-10-30). Стадія 2 резолвить колонку скоупу таблиці виду в цілі FK `CustomTable` за `origin.scopeKindId` (помічником на кшталт `standardColumn`, не за іменем). `referencesKindKey` (`compiler/stages/integrity.ts`) дозволяє рівно дві форми: `[ref]` і `[колонка скоупу, ref]` — порядок як у складеному унікальному ключі, що його платформа дає таблиці виду зі скоупом (перевірити фактом, що такий ключ є, інакше FK не створиться). Промоція: `CustomTable` з таким FK на іншу `CustomTable`, яку промотують у вид, отримує FK на ціль виду з колонкою скоупу — перевірити фактом у переписувачі промоції (`compiler/operations/promote/cascade.ts`); якщо він цього не робить — розвилка архітекторці з оцінкою обсягу | перший споживач масово використовує складені FK у межах тенанта між своїми таблицями; промоція цілі такого FK у вид без резолву колонки скоупу не виразиться — блокер того самого класу, що snake_case | спека прав §4.7 — уже в цільовому стані (Задача 7) |
+| Рб1-10 | **Форма цілі FK на таблицю виду — ключ, а не колонки** (рішення архітекторки 2026-10-30, уточнює Рб1-9). `foreignKeySchema` (`model/schemas/custom-table.ts`): ціль — дискримінований union: ціль `CustomTable` — `{ object, columns: [...] }`, як зараз; ціль — вид: `{ object, key: "ref" \| "scopedRef" }`, без `columns`; `{ external }` — без змін. Локальні колонки — список: для `ref` одна, для `scopedRef` дві в порядку «скоуп, ключ». Стадія 2 резолвить `scopedRef` у фізичні колонки цілі за `origin.scopeKindId` і стандартним ключем (`UNIQUE (<скоуп>, <ключ>)`, `compiler/stages/model.ts`; лише для таблиці зі скоупом, не кореня). Невідповідність форми й цілі (`key` на `CustomTable`, `columns` на вид, `scopedRef` на вид без скоупу чи на корінь, неправильна кількість локальних колонок) — помилка компілятора (код `customTable.fk-target-not-key` з причиною). Промоція: FK на `CustomTable`, яку промотують у вид, переписується у форму `{ object: <вид>, key }`; локальні колонки переставляються в канонічний порядок; доля `{ to: "scope" }` для FK на пару (скоуп, ключ) більше не дає `promote.retired-referenced`, а посилання на саму колонку скоупу без ключа — і далі відмова. Наявні FK на вид (`examples/`, фікстури) переходять на `key: "ref"` без аліасів | маркер-рядок у масиві імен Zod не розрізнить, а правило іменування вводить ім'я, якого в моделі немає; форма ключа типобезпечна, однакова в обох стилях, і більшість неправильних цілей стає неможливою на рівні схеми | спека прав §4.7 — «ціль FK на вид — `key: ref \| scopedRef`»; опис форми FK `CustomTable` у спеці, де його описано (П2 чи промоції), — та сама форма |
 
 ## Рішення архітекторки (2026-10-30)
 
@@ -77,6 +79,7 @@
 - Рб1-1, Рб1-2, Рб1-3, Рб1-5, Рб1-6, Рб1-7 — так. Законна різниця SQL двох стилів — до архітекторки. Правило зупинки Рб1-7 (Postgres відхиляє і `ALTER ROLE`, і `GRANT`) — так.
 - Рб1-4 — так, з умовами: (1) обидва тригери мають `WHEN (NEW.<ключ> IS DISTINCT FROM OLD.<ключ>)`; (2) Задача 0 перевіряє фактом, що жоден шлях платформи законно не змінює ключ: кроки даних промоції, крок копій носіїв 2b2, засів копії доказу, `ON UPDATE CASCADE` з прийнятих таблиць на ключ таблиці виду — знайдено такий шлях → стоп і до архітекторки; (3) коди `member-id-swap`/`users-id-swap` → `effect` — так; правка спеки прав §7 — у Задачі 7.
 - Рб1-8 — так, з уточненням: дозволена ціль FK `CustomTable` на таблицю виду — ключ `ref` **або** складений унікальний ключ «колонка скоупу + ключ» `(scope, id)`, який дає платформа для FK у межах тенанта; будь-яка інша колонка-ціль — помилка `customTable.fk-target-not-key`. Друга підстава: перевірка FK іде повз RLS, тож FK на вгадуване не-ключове значення (код, номер) — оракул наявності рядка в чужому тенанті. Кейси: `ref` — ок; `(scope, id)` — ок; `(scope, code)` — помилка; ціль — `CustomTable` — правило не діє. Вплив: спека прав §4.7.
+- Рб1-8: ціль `(scope, id)` — Задача 8 (Рб1-9).
 
 ## Відомі обмеження
 
@@ -120,8 +123,8 @@
 
 ### Задача 0: факти (без змін коду)
 
-- [ ] **Step 1:** Підтвердити читанням механізми, на які спирається Рб1-4: відмова з причиною `fillTarget` у `schema/apply/promotion/data.ts` (крок даних не пише ключ), вимкнення тригерів на час запису даних, засів і рушій лише вставляють ключ; плюс `grep -rnE "SET[^;]*\bid\s*=" packages/simetra/src packages/designer/src --include=*.ts | grep -v __tests__`. Законне оновлення ключа — розвилка архітекторці до Задачі 2.
-- [ ] **Step 2:** `rg -n "origin\.standard\s*[!=]==|[!=]==\s*[a-zA-Z.]*origin\.standard|logicalName:\s*\"|\b[a-z]\(\"[a-z]+[A-Z]" packages/simetra/src --glob '!**/__tests__/**'` — перелік місць для Задачі 1 (будь-який операнд, замикання з рядком). Кожне — на помічник Рб1-1; правило лінту Рб1-2 це потім тримає.
+- [x] **Step 1:** Підтвердити читанням механізми, на які спирається Рб1-4: відмова з причиною `fillTarget` у `schema/apply/promotion/data.ts` (крок даних не пише ключ), вимкнення тригерів на час запису даних, засів і рушій лише вставляють ключ; плюс `grep -rnE "SET[^;]*\bid\s*=" packages/simetra/src packages/designer/src --include=*.ts | grep -v __tests__`. Законне оновлення ключа — розвилка архітекторці до Задачі 2.
+- [x] **Step 2:** `rg -n "origin\.standard\s*[!=]==|[!=]==\s*[a-zA-Z.]*origin\.standard|logicalName:\s*\"|\b[a-z]\(\"[a-z]+[A-Z]" packages/simetra/src --glob '!**/__tests__/**'` — перелік місць для Задачі 1 (будь-який операнд, замикання з рядком). Кожне — на помічник Рб1-1; правило лінту Рб1-2 це потім тримає.
 
 ---
 
@@ -132,14 +135,14 @@
 **Interfaces:**
 - Produces: `standardColumn(table, def, attributeCase): PhysicalColumn`, `findStandardColumn(table, def, attributeCase): PhysicalColumn | undefined` (`compiler/standard-column.ts`); `snakeCaseTwin(files)` (фікстури); `buildRightsUnits(..., attributeCase)`, `effectiveHolderRows(..., attributeCase)`, `rightsSourceInput(..., attributeCase)`.
 
-- [ ] **Step 1: Unit, червоний.** `snake-case-parity.test.ts`: `it.each` над фікстурами Рб1-3 — `compile(snakeCaseTwin(f))` → `diagnostics: []` і `sqlUnits` (identity → sql) дорівнює camelCase. Сьогодні — `internal: missing rights input`. `standard-column.test.ts`: колонка `custom_role` знаходиться визначенням реєстру в `snake_case` і `customRole` — у `camelCase`; відсутня — `internal: missing standard column`.
-- [ ] **Step 2:** Run `pnpm --filter simetra test snake-case-parity standard-column` — FAIL з очікуваних причин.
-- [ ] **Step 3: Реалізація** за Рб1-1 (кожне місце з Задачі 0 Step 2) і Рб1-3. Наявні ручні підміни `origin.standard` у `author-units.test.ts`, `effects-units.test.ts`, `rights-guards.test.ts` (кейси snake_case) замінити компіляцією близнюка — без ручних знімків.
-- [ ] **Step 4: Лінт** за Рб1-2 з негативним тестом. Мутація: прибрати правило → негативний тест червоний.
-- [ ] **Step 5: DB, повний цикл** (`packages/simetra/test/db/snake-case.db.test.ts`; причина DB — політики, тригери й функції прав виконує Postgres): спершу перенести локальний `seed()` з `rights-guards.db.test.ts` у `rights-seed.ts` (фізичні імена близнюка ті самі, тож SQL засіву спільний); розгорнути `snakeCaseTwin(policyDomain(writeRoles(), adminRoles()))` і засіяти; під `commandAs`: учасник з роллю запису вставляє й змінює рядок `task` — проходить; `rights_mine` дає ті самі права, що в camelCase-описі; самопризначення `OrgAdmin` — `escalation` на `COMMIT`. Одне розгортання на опис.
-- [ ] **Step 6: Мутації** (закомічене дерево): (a) `catalogColumns` знову порівнює з літералом → parity червоний; (b) `snakeCaseTwin` не перейменовує одне посилання → `diagnostics` непорожні (тест близнюка ловить, а не мовчить); (c) `rightsSourceInput` без стилю → unit у `schema/apply/__tests__/rights-sources.test.ts` (виклик на скомпільованому близнюку) червоний; (d) один стиль на обидва знімки → unit «застосований camelCase, бажаний snake_case тієї самої моделі» (`rightsSourceInput` проходить без `internal:`) червоний.
-- [ ] **Step 7:** Run `pnpm --filter simetra test` (увесь unit), `typecheck`, `lint` обох пакетів, `pnpm metadata:check`, scoped DB `pnpm --filter simetra test:db snake-case rights-guards rights-functions rights-sources`.
-- [ ] **Step 8: Commit** і SHA архітекторці одразу.
+- [x] **Step 1: Unit, червоний.** `snake-case-parity.test.ts`: `it.each` над фікстурами Рб1-3 — `compile(snakeCaseTwin(f))` → `diagnostics: []` і `sqlUnits` (identity → sql) дорівнює camelCase. Сьогодні — `internal: missing rights input`. `standard-column.test.ts`: колонка `custom_role` знаходиться визначенням реєстру в `snake_case` і `customRole` — у `camelCase`; відсутня — `internal: missing standard column`.
+- [x] **Step 2:** Run `pnpm --filter simetra test snake-case-parity standard-column` — FAIL з очікуваних причин.
+- [x] **Step 3: Реалізація** за Рб1-1 (кожне місце з Задачі 0 Step 2) і Рб1-3. Наявні ручні підміни `origin.standard` у `author-units.test.ts`, `effects-units.test.ts`, `rights-guards.test.ts` (кейси snake_case) замінити компіляцією близнюка — без ручних знімків.
+- [x] **Step 4: Лінт** за Рб1-2 з негативним тестом. Мутація: прибрати правило → негативний тест червоний.
+- [x] **Step 5: DB, повний цикл** (`packages/simetra/test/db/snake-case.db.test.ts`; причина DB — політики, тригери й функції прав виконує Postgres): спершу перенести локальний `seed()` з `rights-guards.db.test.ts` у `rights-seed.ts` (фізичні імена близнюка ті самі, тож SQL засіву спільний); розгорнути `snakeCaseTwin(policyDomain(writeRoles(), adminRoles()))` і засіяти; під `commandAs`: учасник з роллю запису вставляє й змінює рядок `task` — проходить; `rights_mine` дає ті самі права, що в camelCase-описі; самопризначення `OrgAdmin` — `escalation` на `COMMIT`. Одне розгортання на опис.
+- [x] **Step 6: Мутації** (закомічене дерево): (a) `catalogColumns` знову порівнює з літералом → parity червоний; (b) `snakeCaseTwin` не перейменовує одне посилання → `diagnostics` непорожні (тест близнюка ловить, а не мовчить); (c) `rightsSourceInput` без стилю → unit у `schema/apply/__tests__/rights-sources.test.ts` (виклик на скомпільованому близнюку) червоний; (d) один стиль на обидва знімки → unit «застосований camelCase, бажаний snake_case тієї самої моделі» (`rightsSourceInput` проходить без `internal:`) червоний.
+- [x] **Step 7:** Run `pnpm --filter simetra test` (увесь unit), `typecheck`, `lint` обох пакетів, `pnpm metadata:check`, scoped DB `pnpm --filter simetra test:db snake-case rights-guards rights-functions rights-sources`.
+- [x] **Step 8: Commit** і SHA архітекторці одразу.
 
 ```bash
 git add packages/simetra
@@ -152,9 +155,9 @@ git commit -m "fix(rights): snake_case-проєкт з довідниками п
 
 Архітекторка, мутації A1: фільтр `c.generated === undefined` у `commandWriteColumns` (`compiler/rights/command-columns.ts`) не має тесту — у фікстурах довідників немає генерованої колонки.
 
-- [ ] **Step 1:** У `access-units.test.ts`, поруч зі snake_case-кейсами, — кейс: довідник із генерованою колонкою (якщо метадані довідника генерованої колонки не дають — фізична таблиця з колонкою `generated` у вході `commandWriteColumns`; спосіб — за кодом, без інлайн-метаданих поза будівником) → колонки немає ні в `INSERT (…)`, ні в `UPDATE (…)` гранту. Мутація: прибрати `c.generated === undefined` → червоний.
-- [ ] **Step 2:** Run `pnpm --filter simetra test access-units`.
-- [ ] **Step 3: Commit** окремо — `test(rights): генерована колонка поза грантом ролі команд`. Вплив на спеку: немає.
+- [x] **Step 1:** У `access-units.test.ts`, поруч зі snake_case-кейсами, — кейс: довідник із генерованою колонкою (якщо метадані довідника генерованої колонки не дають — фізична таблиця з колонкою `generated` у вході `commandWriteColumns`; спосіб — за кодом, без інлайн-метаданих поза будівником) → колонки немає ні в `INSERT (…)`, ні в `UPDATE (…)` гранту. Мутація: прибрати `c.generated === undefined` → червоний.
+- [x] **Step 2:** Run `pnpm --filter simetra test access-units`.
+- [x] **Step 3: Commit** окремо — `test(rights): генерована колонка поза грантом ролі команд`. Вплив на спеку: немає.
 
 ---
 
@@ -162,56 +165,84 @@ git commit -m "fix(rights): snake_case-проєкт з довідниками п
 
 **Files:** `compiler/key-units.ts` (новий), `compiler/pipeline.ts`, `compiler/rights/{guard-units,guard-names,effects-units}.ts`, `compiler/before-trigger-names.ts`, `compiler/__tests__/rights-guards.test.ts` (кейси `simetra_rights_id` переходять на `key-units.test.ts`), `schema/reverse/units.ts`, `schema/apply/promotion/replacements.ts`; тести — нижче.
 
-- [ ] **Step 1: Unit** `key-units.test.ts`: `it.each` над таблицями фікстур (основна довідника, ТЧ, документ, членство, «Користувачі») — оператор тригера (дерево) за Рб1-4; регістр, константа, `CustomTable`, таблиці `simetra` — без тригера; проєкт **без** прав (kitchen-sink чи мінімальний довідник) — тригер є; функція — `INVOKER`, `search_path = ''`, `EXECUTE` нікому. Тригер ефектів основної таблиці більше не перевіряє ключ; власника рядка ТЧ — перевіряє. `reverse-generate.test.ts`: тригер і `simetra.key_immutable` — платформні; `promotion-removals.test.ts`: тригер із тим самим іменем на платформну функцію — платформний, на чужу — ні. Мутації: генератор лише за наявності прав → кейс «без прав» червоний; без `AFTER`-тригера → DB-кейс обробника червоний; без `BEFORE`-тригера → DB-кейс обміну дає `23505` замість `effect` (червоний).
-- [ ] **Step 2: DB** (`rights-guards.db.test.ts`, наявний опис `member-id-swap`): розширити на `task` і рядок ТЧ — від власника без контексту, у режимі обслуговування й під командою — `effect` з колонкою ключа; зміна одного ключа на вільний UUID — точна відмова `42501` / `command.forbidden` / `effect` з колонкою ключа; обмін ключів двох рядків одним `UPDATE` — та сама точна відмова, не порушення унікальності (Review Focus 2); обробник `beforeWrite` (сирий тригер у точці збереження, що сортується після інших і ставить `NEW.id := gen_random_uuid()`) — відмова. `root-rekey` (`rights-write`) — без змін; `member-id-swap`/`users-id-swap` — тепер `effect`. Рядки кейсів — без залежних рядків (інакше FK `NO ACTION` дає `23503` раніше за тригер, як уже зазначено в `root-rekey`).
-- [ ] **Step 3:** Run unit, typecheck, lint; scoped DB `pnpm --filter simetra test:db rights-guards rights-write carrier promote mechanics`. Тригер з'являється на кожній таблиці довідника й документа, тож designer-тести з точним переліком тригерів (`promotion-commit.db.test.ts`, `desired-state.test.ts` тощо) зміняться: unit — оновити тут; designer DB `pnpm --filter @simetrajs/designer test:db promotion build-plan round-trip` (≈10+ хв) — лише до 07:00 за Києвом, інакше — до архітекторки з переліком і без коміту задачі.
-- [ ] **Step 4: Commit** — `feat(compiler): ключ таблиці виду незмінний для будь-якого автора`.
+- [x] **Step 1: Unit** `key-units.test.ts`: `it.each` над таблицями фікстур (основна довідника, ТЧ, документ, членство, «Користувачі») — оператор тригера (дерево) за Рб1-4; регістр, константа, `CustomTable`, таблиці `simetra` — без тригера; проєкт **без** прав (kitchen-sink чи мінімальний довідник) — тригер є; функція — `INVOKER`, `search_path = ''`, `EXECUTE` нікому. Тригер ефектів основної таблиці більше не перевіряє ключ; власника рядка ТЧ — перевіряє. `reverse-generate.test.ts`: тригер і `simetra.key_immutable` — платформні; `promotion-removals.test.ts`: тригер із тим самим іменем на платформну функцію — платформний, на чужу — ні. Мутації: генератор лише за наявності прав → кейс «без прав» червоний; без `AFTER`-тригера → DB-кейс обробника червоний; без `BEFORE`-тригера → DB-кейс обміну дає `23505` замість `effect` (червоний).
+- [x] **Step 2: DB** (`rights-guards.db.test.ts`, наявний опис `member-id-swap`): розширити на `task` і рядок ТЧ — від власника без контексту, у режимі обслуговування й під командою — `effect` з колонкою ключа; зміна одного ключа на вільний UUID — точна відмова `42501` / `command.forbidden` / `effect` з колонкою ключа; обмін ключів двох рядків одним `UPDATE` — та сама точна відмова, не порушення унікальності (Review Focus 2); обробник `beforeWrite` (сирий тригер у точці збереження, що сортується після інших і ставить `NEW.id := gen_random_uuid()`) — відмова. `root-rekey` (`rights-write`) — без змін; `member-id-swap`/`users-id-swap` — тепер `effect`. Рядки кейсів — без залежних рядків (інакше FK `NO ACTION` дає `23503` раніше за тригер, як уже зазначено в `root-rekey`).
+- [x] **Step 3:** Run unit, typecheck, lint; scoped DB `pnpm --filter simetra test:db rights-guards rights-write carrier promote mechanics`. Тригер з'являється на кожній таблиці довідника й документа, тож designer-тести з точним переліком тригерів (`promotion-commit.db.test.ts`, `desired-state.test.ts` тощо) зміняться: unit — оновити тут; designer DB `pnpm --filter @simetrajs/designer test:db promotion build-plan round-trip` (≈10+ хв) — лише до 07:00 за Києвом, інакше — до архітекторки з переліком і без коміту задачі.
+- [x] **Step 4: Commit** — `feat(compiler): ключ таблиці виду незмінний для будь-якого автора`.
 
 ---
 
 ### Задача 3: `search_path` згенерованих функцій — інваріант
 
-- [ ] **Step 1: Unit** `pinned-search-path.test.ts`: (a) одиниця `CREATE FUNCTION … SET search_path = ''` з `generator` — проходить; без опції, з `search_path = public`, з `SET search_path = '' RESET ALL` — `internal:`; згенерований `ALTER FUNCTION … SET search_path = public`, `ALTER FUNCTION … RESET search_path` і `ALTER FUNCTION … RESET ALL` — `internal:`; (b) SQL застосунку (без `generator`) не перевіряється цим інваріантом (його судить гейт закритих форм); (c) компіляція kitchen-sink, фікстур прав обох стилів і `examples/reference` — без винятку. Мутація: прибрати `SET search_path` з `definerTrigger` (`compiler/rights/definer.ts`) → (c) кидає.
-- [ ] **Step 2:** Реалізація за Рб1-5; виклик у `pipeline.ts` після збирання одиниць.
-- [ ] **Step 3:** Run unit, typecheck, lint, `pnpm metadata:check`.
-- [ ] **Step 4: Commit** — `feat(compiler): кожна згенерована функція — з SET search_path = ''`.
+- [x] **Step 1: Unit** `pinned-search-path.test.ts`: (a) одиниця `CREATE FUNCTION … SET search_path = ''` з `generator` — проходить; без опції, з `search_path = public`, з `SET search_path = '' RESET ALL` — `internal:`; згенерований `ALTER FUNCTION … SET search_path = public`, `ALTER FUNCTION … RESET search_path` і `ALTER FUNCTION … RESET ALL` — `internal:`; (b) SQL застосунку (без `generator`) не перевіряється цим інваріантом (його судить гейт закритих форм); (c) компіляція kitchen-sink, фікстур прав обох стилів і `examples/reference` — без винятку. Мутація: прибрати `SET search_path` з `definerTrigger` (`compiler/rights/definer.ts`) → (c) кидає.
+- [x] **Step 2:** Реалізація за Рб1-5; виклик у `pipeline.ts` після збирання одиниць.
+- [x] **Step 3:** Run unit, typecheck, lint, `pnpm metadata:check`.
+- [x] **Step 4: Commit** — `feat(compiler): кожна згенерована функція — з SET search_path = ''`.
 
 ---
 
 ### Задача 4: RLS виду — обов'язкове поле реєстру
 
-- [ ] **Step 1: Unit** (`model/__tests__/kind-registry.test.ts`): інваріанти Рб1-6 через `it.each(Object.entries(KIND_REGISTRY))`. Мутація: позначити вид із таблицею `none` → червоний; поле необов'язкове → `typecheck` червоний.
-- [ ] **Step 2:** Реалізація за Рб1-6; оновити `creation-order.test.ts`, `kind-schemas.test.ts` та інші, що читають поле.
-- [ ] **Step 3:** Run unit, typecheck, lint, `pnpm metadata:check`.
-- [ ] **Step 4: Commit** — `feat(model): RLS виду — обов'язкове поле реєстру`.
+- [x] **Step 1: Unit** (`model/__tests__/kind-registry.test.ts`): інваріанти Рб1-6 через `it.each(Object.entries(KIND_REGISTRY))`. Мутація: позначити вид із таблицею `none` → червоний; поле необов'язкове → `typecheck` червоний.
+- [x] **Step 2:** Реалізація за Рб1-6; оновити `creation-order.test.ts`, `kind-schemas.test.ts` та інші, що читають поле.
+- [x] **Step 3:** Run unit, typecheck, lint, `pnpm metadata:check`.
+- [x] **Step 4: Commit** — `feat(model): RLS виду — обов'язкове поле реєстру`.
 
 ---
 
 ### Задача 5: FK `CustomTable` на не-ключову колонку — лише після «так»
 
-- [ ] **Step 1:** Надіслати архітекторці пропозицію Рб1-8 з фактами (розвідка: FK на будь-яку колонку дозволено, ключ цілі перевіряє лише тінь; `commandWriteColumns` дозволяє `UPDATE` унікального реквізиту; промоція переносить FK лише на колонку з `becomes`; у `examples/` FK лише на ключ). Чекати «так».
-- [ ] **Step 2 (після «так»):** unit у `stage-integrity.test.ts` — FK на `ref` таблиці виду — без діагностики; на унікальний реквізит таблиці виду — `customTable.fk-target-not-key`; на будь-яку колонку прийнятої таблиці — без змін. Мутація: прибрати перевірку → червоний. Реалізація; повідомлення en/uk; `metadata:check`.
-- [ ] **Step 3: Commit** — `feat(compiler): FK CustomTable на таблицю виду — лише на ключ`.
+- [x] **Step 1:** Надіслати архітекторці пропозицію Рб1-8 з фактами (розвідка: FK на будь-яку колонку дозволено, ключ цілі перевіряє лише тінь; `commandWriteColumns` дозволяє `UPDATE` унікального реквізиту; промоція переносить FK лише на колонку з `becomes`; у `examples/` FK лише на ключ). Чекати «так».
+- [x] **Step 2 (після «так»):** unit у `stage-integrity.test.ts` — FK на `ref` таблиці виду — без діагностики; на унікальний реквізит таблиці виду — `customTable.fk-target-not-key`; на будь-яку колонку прийнятої таблиці — без змін. Мутація: прибрати перевірку → червоний. Реалізація; повідомлення en/uk; `metadata:check`.
+- [x] **Step 3: Commit** — `feat(compiler): FK CustomTable на таблицю виду — лише на ключ`.
 
 ---
 
 ### Задача 6: шлях `SET` від ролі запиту до керівника ролі платформи
 
-- [ ] **Step 1: Unit** (`platform-roles.test.ts`): рядки з полем досяжності (нова форма читання) — керівник, досяжний з ролі запиту, → `request-path:<керівник>`; недосяжний — `[]`. Мутація: без перевірки досяжності → червоний.
-- [ ] **Step 2: DB** (`roles-tool.db.test.ts`, теговані імена, `withRollback`): тегована роль запиту → (SET) тегований посередник → (членство без `SET` і `INHERIT`) тегований керівник із `CREATEROLE` і `ADMIN` на тегованій ролі команд → `platformRoleGate(..., requestNames)` → `request-path:<керівник>`; тегована роль запиту, член ролі з `SUPERUSER` неможлива без суперкористувача — кейс `rolsuper` лише unit; цикл членств (A → B → A) — завершується; без ланцюга → `[]`. **Факт експлуатованості** (той самий опис, у точках збереження): `SET ROLE` на посередника (з `CREATEROLE`, звичайний член керівника) і спроба (a) `ALTER ROLE <тегована роль команд> CONNECTION LIMIT 1` (`AlterRole`: `CREATEROLE` + `is_admin_of_role`, що з PG16 іде всіма членствами) і (b) `GRANT <тегована роль команд> TO <тегований x>`. Записати, що Postgres дозволив. Якщо обидві відмовлено — зупинитись і написати архітекторці: обхід звузити лише після її рішення. Мутація: обхід лише `set`-ребер → кейс «без `SET` і `INHERIT`» червоний. Наявний кейс справжнього стека — `[]`.
-- [ ] **Step 3:** Реалізація за Рб1-7 (рекурсивний запит — одним оператором, параметри `$n`).
-- [ ] **Step 4:** Run unit, typecheck, lint обох пакетів; scoped DB `pnpm --filter @simetrajs/designer test:db roles-tool engine-census` (≈20 с) і `pnpm --filter simetra test:db provider-roles`.
-- [ ] **Step 5: Commit** — `fix(roles): гейт відхиляє шлях від ролі запиту до керівника ролі платформи`.
+- [x] **Step 1: Unit** (`platform-roles.test.ts`): рядки з полем досяжності (нова форма читання) — керівник, досяжний з ролі запиту, → `request-path:<керівник>`; недосяжний — `[]`. Мутація: без перевірки досяжності → червоний.
+- [x] **Step 2: DB** (`roles-tool.db.test.ts`, теговані імена, `withRollback`): тегована роль запиту → (SET) тегований посередник → (членство без `SET` і `INHERIT`) тегований керівник із `CREATEROLE` і `ADMIN` на тегованій ролі команд → `platformRoleGate(..., requestNames)` → `request-path:<керівник>`; тегована роль запиту, член ролі з `SUPERUSER` неможлива без суперкористувача — кейс `rolsuper` лише unit; цикл членств (A → B → A) — завершується; без ланцюга → `[]`. **Факт експлуатованості** (той самий опис, у точках збереження): `SET ROLE` на посередника (з `CREATEROLE`, звичайний член керівника) і спроба (a) `ALTER ROLE <тегована роль команд> CONNECTION LIMIT 1` (`AlterRole`: `CREATEROLE` + `is_admin_of_role`, що з PG16 іде всіма членствами) і (b) `GRANT <тегована роль команд> TO <тегований x>`. Записати, що Postgres дозволив. Якщо обидві відмовлено — зупинитись і написати архітекторці: обхід звузити лише після її рішення. Мутація: обхід лише `set`-ребер → кейс «без `SET` і `INHERIT`» червоний. Наявний кейс справжнього стека — `[]`.
+- [x] **Step 3:** Реалізація за Рб1-7 (рекурсивний запит — одним оператором, параметри `$n`).
+- [x] **Step 4:** Run unit, typecheck, lint обох пакетів; scoped DB `pnpm --filter @simetrajs/designer test:db roles-tool engine-census` (≈20 с) і `pnpm --filter simetra test:db provider-roles`.
+- [x] **Step 5: Commit** — `fix(roles): гейт відхиляє шлях від ролі запиту до керівника ролі платформи`.
 
 ---
 
 ### Задача 7: документи й борг
 
-- [ ] **Step 1:** Спека прав §7 — за Рб1-4; §4.7 — за Рб1-8 (лише після «так»).
-- [ ] **Step 2:** Борг прав §1 — зняти закриті пункти (snake_case, `id`, `search_path`, `rowLevelSecurity`, шлях `SET`, FK — якщо закрито); правило файлу — пункт знімається з посиланням на цей план.
-- [ ] **Step 3:** Скіл споживача `packages/designer/skills/simetra-metadata/*` — якщо зачеплено (FK на ключ; незмінний `id`); `docs/ROADMAP.md` — рядок прав, якщо стан змінився.
-- [ ] **Step 4:** Run `python3 scripts/check-doc-anchors.py && pnpm format:check`.
-- [ ] **Step 5: Commit** — `docs(rights): борг перед першою міграцією закрито`.
+- [x] **Step 1:** Спека прав §7 — за Рб1-4; §4.7 — за Рб1-8 (лише після «так»).
+- [x] **Step 2:** Борг прав §1 — зняти закриті пункти (snake_case, `id`, `search_path`, `rowLevelSecurity`, шлях `SET`, FK — якщо закрито); правило файлу — пункт знімається з посиланням на цей план.
+- [x] **Step 3:** Скіл споживача `packages/designer/skills/simetra-metadata/*` — якщо зачеплено (FK на ключ; незмінний `id`); `docs/ROADMAP.md` — рядок прав, якщо стан змінився.
+- [x] **Step 4:** Run `python3 scripts/check-doc-anchors.py && pnpm format:check`.
+- [x] **Step 5: Commit** — `docs(rights): борг перед першою міграцією закрито`.
+
+---
+
+### Задача 8: ціль FK на таблицю виду — форма ключа (Рб1-9, Рб1-10)
+
+Факт Step 1 (2026-10-30): складений ключ `UNIQUE (<скоуп>, <ключ>)` є на таблиці виду зі скоупом, крім кореня; колонка скоупу має лише фізичне ім'я й `origin.scopeKindId`; промоція свідомо відмовляє на посилання на колонку скоупу (`retired-referenced`).
+
+**Files:** `model/schemas/custom-table.ts` (+ регенерація `packages/simetra/schemas/*.schema.json`, якщо пакет їх генерує), `compiler/stages/identity.ts`, `compiler/stages/model.ts`, `compiler/stages/integrity.ts` (`referencesKindKey` → перевірка форми), `compiler/operations/promote/{index,cascade}.ts`, `compiler/operations/rename.ts` (якщо роль `customTable.foreignKeyTarget` зачіпає колонки цілі), `examples/reference/metadata/custom-tables/UserSettings/UserSettings.meta.json`, фікстури (`fixtures/kitchen-sink.ts`, `fixtures/promotion.ts`, інші з FK на вид), тести.
+
+- [x] **Step 2 (перший коміт): схема T0 і її тест.** Union цілі за Рб1-10; один table-driven тест схеми (`model/__tests__/`): `{ object, columns }`, `{ object, key: "ref" }`, `{ object, key: "scopedRef" }`, `{ external }` — приймаються; `key` разом із `columns`, невідомий `key` — відхиляються. Компілятор і фікстури — у тому самому коміті рівно настільки, щоб гейти були зелені (наявні FK на вид → `key: "ref"`). Commit — `feat(model): ціль FK CustomTable на вид — форма ключа`.
+- [x] **Step 3: компілятор.** Стадія 2/3 резолвить `key` у фізичні колонки цілі (`ref` — стандартний ключ; `scopedRef` — колонка з `origin.scopeKindId` і ключ). Перевірка форми — у `integrity.ts`. Unit (`stage-integrity.test.ts`, `custom-table-references.test.ts`, `it.each`): `key: "ref"` — ок; `scopedRef` на таблицю зі скоупом — ок, фізичний FK `(<скоуп>, id)`; `scopedRef` на корінь чи вид без скоупу — помилка; `columns` на вид — помилка; `key` на `CustomTable` — помилка; дві локальні колонки для `ref` — помилка; snake_case-близнюк — той самий SQL. Мутація: дозволити `columns` на вид → червоний.
+- [x] **Step 4: DB** (причина — FK створює Postgres): `CustomTable` з `scopedRef` на довідник зі скоупом розгортається; у `pg_constraint` — FK на `(<скоуп>, id)`.
+- [x] **Step 5: промоція.** Unit `operations-promote*`: FK `(scope, id)` у будь-якому порядку на `CustomTable`, що стає видом зі скоупом, переписано в `{ object: <вид>, key: "scopedRef" }`, локальні колонки — у порядку «скоуп, ключ»; FK лише на колонку скоупу — `promote.retired-referenced` (наявний тест переписати на цю форму); FK на ключ — `{ key: "ref" }`. Мутація: не переставляти колонки → червоний.
+- [x] **Step 6:** Спеки за Рб1-10 (§4.7 спеки прав; опис форми FK `CustomTable` там, де він є); скіл споживача (`references/sql-trust-boundary.md` та інші місця з формою FK); `metadata:check` — 0 помилок.
+- [x] **Step 7:** Run повний unit simetra з логом `scratchpad/unit-<sha>.txt`, designer unit, typecheck, lint обох пакетів, `metadata:check`, scoped DB (`custom-table`, `promote`).
+- [x] **Step 8: Commit** — `feat(compiler): ціль FK CustomTable — ключ або (скоуп, ключ) таблиці виду`.
+
+---
+
+### Задача 9: таймаут `operations-rename` (борг прав §3)
+
+Рішення архітекторки (2026-10-30): кейс kitchen-sink у `packages/simetra/src/compiler/__tests__/operations-rename.test.ts` триває ≈43–46 с при межі 60 с і вже падав за таймаутом під навантаженням. Таймаут не піднімати. Вплив на спеку: немає.
+
+- [x] **Step 1:** Заміряти час кейсів файлу (`pnpm --filter simetra test operations-rename --reporter=verbose`, лог у scratchpad) і з'ясувати, що саме коштує: кількість операцій, розмір фікстури, повторні компіляції.
+- [x] **Step 2:** Розбити кейс на незалежні за групою операцій (`it.each` над групами) або звузити фікстуру до мінімуму, що доводить кожну операцію (будівник у `fixtures/`, без інлайн-метаданих). Кожна операція, яку доводив старий кейс, лишається доведеною — перелік до й після у звіті.
+- [x] **Step 3:** Критерій: найдовший кейс файлу ≤ 20 с на повному unit-прогоні simetra (лог `scratchpad/unit-<sha>.txt`). Мутація: зламати одну з операцій перейменування → відповідний кейс червоний.
+- [x] **Step 4:** Зняти пункт «Таймаут `operations-rename`» з боргу прав §3.
+- [x] **Step 5: Commit** — `test(compiler): operations-rename — незалежні кейси замість одного kitchen-sink`.
 
 ---
 

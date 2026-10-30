@@ -4,14 +4,14 @@ import { sha256HexSync } from "./sha256"
 /**
  * Мітки рядкових `BEFORE`-тригерів платформи в порядку спрацювання.
  * Postgres запускає тригери одного часу за іменем (порівняння байтів), тож
- * порядок `author → carriers → touch` тримається, лише коли всі імена групи
+ * порядок `author → carriers → key → touch` тримається, лише коли всі імена групи
  * мають один префікс, а мітки сортуються як цей масив.
  */
 export const PLATFORM_BEFORE_ROW_LABELS = [
   "simetra_author",
   "simetra_author_update",
   "simetra_carriers",
-  "simetra_rights_id",
+  "simetra_key",
   "simetra_touch",
   "simetra_touch_update",
 ] as const

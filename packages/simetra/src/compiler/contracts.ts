@@ -39,6 +39,7 @@ import { effectsFunctionName } from "./rights/effects-names"
 import { writesByCommand } from "./rights/facts"
 import {
   kindLabelOf,
+  mainTableIn,
   usersCatalogOf,
   type ModelStageResult,
 } from "./stages/model"
@@ -673,12 +674,7 @@ export function mainTableOf(
   physical: PhysicalSnapshot,
   objectId: string
 ): PhysicalTable | undefined {
-  return physical.tables.find(
-    (t) =>
-      t.origin.objectId === objectId &&
-      t.origin.tabularSectionId === undefined &&
-      t.origin.part === undefined
-  )
+  return mainTableIn(physical.tables, objectId)
 }
 
 /**

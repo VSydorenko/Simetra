@@ -9,6 +9,7 @@ import {
 } from "../access-units"
 import { sha256Hex } from "../canonical"
 import { mainTableOf, type AccessContract } from "../contracts"
+import { commandWriteColumns } from "../rights/command-columns"
 import { RIGHTS_FUNCTIONS } from "../rights/functions"
 import {
   COMMAND_ACTION,
@@ -1286,6 +1287,43 @@ describe("simetra_command table grants", () => {
 
   it.each(cases)("%s", (_, model, table, expected) => {
     expect(commandGrants(model(), table)).toEqual([...expected].sort())
+  })
+
+  it("a generated column stays out of both insert and update", () => {
+    // Метадані довідника генерованої колонки не дають (вона є лише в
+    // документа, якого роль команд не пише), тож фільтр перевіряє фізична
+    // таблиця довідника з доданою генерованою колонкою: значення дає база,
+    // і грант на запис у неї був би відмовою Postgres на кожну команду.
+    const item = snake.physical.tables.find((t) => t.name === "item")!
+    const table = {
+      ...item,
+      columns: [
+        ...item.columns,
+        {
+          name: "code_upper",
+          type: "text",
+          notNull: false,
+          generated: { expression: "upper(code)" },
+          origin: { elementId: "00000000-0000-4000-8000-000000000c02" },
+        },
+      ],
+    }
+    const { base, update } = commandWriteColumns(table, {
+      attributeCase: "snake_case",
+      main: true,
+      users: false,
+    })
+    expect(base.map((c) => c.name)).toEqual([
+      "id",
+      "code",
+      "description",
+      "deletion_mark",
+    ])
+    expect(update.map((c) => c.name)).toEqual([
+      "code",
+      "description",
+      "deletion_mark",
+    ])
   })
 
   it("never grants truncate, references, trigger or all, nor on the simetra schema", () => {

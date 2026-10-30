@@ -670,12 +670,13 @@ INSERT OR UPDATE` лише на таблицях із `trackAuthor`, коли п
 й ламало б цей порядок. Тому імена рядкових `BEFORE`-тригерів платформи
 (`packages/simetra/src/compiler/before-trigger-names.ts`) мають спільний
 префікс для всіх міток групи, а порядок задає мітка: `simetra_author`,
-`simetra_author_update`, `simetra_carriers`, `simetra_rights_id`,
+`simetra_author_update`, `simetra_carriers`, `simetra_key`,
 `simetra_touch`, `simetra_touch_update` (порядок спрацювання). Таблиця, чия
 назва з міткою вміщається в 63 байти за найдовшою міткою групи (назва до 41
 байта), дає `<t>_<label>`; довша — обрізаний за байтами префікс назви, 8
 шістнадцяткових знаків хешу повної назви (той самий, що в
-`generatedTableFunctionName`) і мітку. Ім'я функції `rights_id`, `AFTER`- і
+`generatedTableFunctionName`) і мітку. `AFTER`-тригер ключа
+(`simetra_key_after`, ім'я — `generatedTableFunctionName`), інші `AFTER`- і
 операторні тригери цим правилом не будуються: `AFTER`-тригери на `NEW` не
 впливають, а операторні з рядковими не перемежовуються.
 Порядок тримають unit-тест на короткій і на 60-байтній назві таблиці (мутація

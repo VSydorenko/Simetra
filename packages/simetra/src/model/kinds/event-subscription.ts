@@ -52,6 +52,7 @@ export const eventSubscriptionKind: KindDefinition = {
   rightsExtents: [],
   sqlModule: "closed",
   materializes: "none",
+  rowLevelSecurity: "none",
   scope: "absent",
   declared: false,
   columnFields: [],

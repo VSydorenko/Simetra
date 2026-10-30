@@ -4,13 +4,14 @@ import {
   completeFiles,
   currentDebt,
   diagnostic,
+  kindKeyColumns,
   platformGrantTargets,
   sortDiagnostics,
   type CompiledModel,
   type Diagnostic,
-  type SourceObject,
   type FileChange,
   type IdSource,
+  type KindKey,
   type SchemaPathResolver,
   type SqlParser,
   sqlDebtText,
@@ -23,7 +24,6 @@ import {
   type CatalogModel,
   type CatalogTable,
   type DatabaseProvider,
-  type PhysicalColumn,
 } from "simetra/model"
 import {
   GENERATED_KINDS,
@@ -39,6 +39,8 @@ import {
   pgEnumData,
   unrepresentableEnum,
   unrepresentableTable,
+  columnsKey,
+  type KindTableNames,
   type TableNames,
   type TablesContext,
 } from "./tables"
@@ -81,7 +83,7 @@ interface Elsewhere {
   /** Ідентичності одиниць їхніх `.sql` і обгорток рухів. */
   units: Set<string>
   /** Основні таблиці збережених об'єктів — цілі `MetadataRef` для FK. */
-  targets: Map<string, TableNames>
+  targets: Map<string, KindTableNames>
   /** Обробники збережених підписок (`schema.name`): їх кличе збережений файл. */
   handlers: Set<string>
   /**
@@ -132,11 +134,12 @@ async function describedElsewhere(
     // на об'єкт — це його основна таблиця.
     if (table.origin.tabularSectionId !== undefined || table.origin.part)
       continue
-    found.targets.set(key, {
-      kind: object.kind,
-      object: object.name,
-      columns: keptColumns(object, table.columns),
-    })
+    const keys = new Map<string, KindKey>()
+    for (const form of ["ref", "scopedRef"] as const) {
+      const columns = kindKeyColumns(object, table, form)
+      if (columns !== undefined) keys.set(columnsKey(columns), form)
+    }
+    found.targets.set(key, { kind: object.kind, object: object.name, keys })
   }
   for (const unit of model.sqlUnits)
     if (unit.file === undefined || !isGeneratedPath(unit.file))
@@ -175,41 +178,15 @@ async function compiledExisting(
 }
 
 /**
- * Логічні імена колонок збереженого об'єкта: стандартна — за `origin.standard`
- * (уже в стилі проєкту), решта — ім'я елемента за `origin.elementId`. Колонка
- * без жодного (додана скоуп-колонка) імені не має, тож FK на неї невиражений.
- */
-function keptColumns(
-  object: SourceObject,
-  columns: readonly PhysicalColumn[]
-): Map<string, string> {
-  const elements = new Map<string, string>()
-  const data = object.data as Record<string, unknown>
-  for (const field of KIND_REGISTRY[object.kind].columnFields)
-    for (const element of (data[field] as Record<string, unknown>[]) ?? [])
-      if (typeof element.id === "string" && typeof element.name === "string")
-        elements.set(element.id, element.name)
-  const result = new Map<string, string>()
-  for (const column of columns) {
-    const name =
-      column.origin.standard ??
-      (column.origin.elementId === undefined
-        ? undefined
-        : elements.get(column.origin.elementId))
-    if (name !== undefined) result.set(column.name, name)
-  }
-  return result
-}
-
-/**
  * FK на таблицю моделі пишеться `MetadataRef` (одна форма посилання); ціль,
  * яку тека описує, але без такого посилання (таблиця ТЧ, похідна таблиця
- * регістра, колонка без логічного імені), — невиражена.
+ * регістра, колонка без логічного імені, колонки таблиці виду поза формою
+ * ключа `ref`/`scopedRef`), — невиражена.
  */
 function foreignKeyDiagnostics(
   table: CatalogTable,
   elsewhere: Elsewhere,
-  targets: ReadonlyMap<string, TableNames>
+  targets: ReadonlyMap<string, TableNames | KindTableNames>
 ): Diagnostic[] {
   const result: Diagnostic[] = []
   for (const fk of table.foreignKeys) {
@@ -219,7 +196,9 @@ function foreignKeyDiagnostics(
     const missing =
       target === undefined
         ? elsewhere.relations.has(key)
-        : columns.some((c) => !target.columns.has(c))
+        : "keys" in target
+          ? !target.keys.has(columnsKey(columns))
+          : columns.some((c) => !target.columns.has(c))
     if (missing)
       result.push(
         diagnostic("introspect.unrepresentable", "", "", {
@@ -414,7 +393,10 @@ export async function reverseGenerate(
     else enumNames.set(qualified(type.schema, type.name), name)
   }
 
-  const targets = new Map([...elsewhere.targets, ...tableNames])
+  const targets = new Map<string, TableNames | KindTableNames>([
+    ...elsewhere.targets,
+    ...tableNames,
+  ])
   for (const table of tables)
     diagnostics.push(...foreignKeyDiagnostics(table, elsewhere, targets))
   const ctx: TablesContext = {

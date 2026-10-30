@@ -13,6 +13,7 @@ import {
   attribute,
   catalog,
   customTable,
+  foreignKeyTargets,
   metaFiles,
   project,
   uuid,
@@ -21,6 +22,7 @@ import {
 const PROJECT = "project.meta.json"
 const LOG = "custom-tables/Log/Log.meta.json"
 const CURRENCY = "catalogs/Currency/Currency.meta.json"
+const STOCK = "custom-tables/Stock/Stock.meta.json"
 
 const LOG_ID = uuid(1)
 const COL_ID = uuid(2)
@@ -28,6 +30,7 @@ const COL_CODE = uuid(3)
 const COL_REF = uuid(4)
 const CURRENCY_ID = uuid(5)
 const SKU_ID = uuid(6)
+const STOCK_ID = uuid(7)
 
 const columns = [
   { id: COL_ID, name: "id", physicalName: "id", type: "UUID", notNull: true },
@@ -56,13 +59,13 @@ function fullLog({
         columns: ["currency"],
         references: {
           object: { kind: "Catalog", name: "Currency" },
-          columns: ["ref"],
+          key: "ref",
         },
       },
       {
         columns: ["code"],
         references: {
-          object: { kind: "Catalog", name: "Currency" },
+          object: { kind: "CustomTable", name: "Stock" },
           columns: [skuColumn],
         },
       },
@@ -72,18 +75,33 @@ function fullLog({
   })
 }
 
-function currency(skuName = "sku") {
-  return catalog("Currency", {
-    id: CURRENCY_ID,
-    attributes: [
-      attribute(skuName, {
-        id: SKU_ID,
-        physicalName: "sku",
-        type: "String",
-        length: 10,
-      }),
-    ],
-  })
+/**
+ * Цілі FK: ключ довідника й не-ключова колонка прийнятої таблиці (FK на
+ * таблицю виду веде лише на ключ, Рб1-8).
+ */
+function targets(skuName = "sku") {
+  return {
+    [CURRENCY]: catalog("Currency", { id: CURRENCY_ID }),
+    [STOCK]: customTable("Stock", {
+      id: STOCK_ID,
+      columns: [
+        {
+          id: uuid(8),
+          name: "id",
+          physicalName: "id",
+          type: "UUID",
+          notNull: true,
+        },
+        {
+          id: SKU_ID,
+          name: skuName,
+          physicalName: "sku",
+          type: "String",
+          length: 10,
+        },
+      ],
+    }),
+  }
 }
 
 function files(entries: Record<string, unknown>) {
@@ -102,18 +120,10 @@ function columnRefs(result: CompileResult) {
 
 describe("custom table column references", () => {
   it("custom table column lists are indexed", async () => {
-    const result = await compile(
-      files({ [CURRENCY]: currency(), [LOG]: fullLog() })
-    )
+    const result = await compile(files({ ...targets(), [LOG]: fullLog() }))
     expect(result.diagnostics).toEqual([])
     expect(columnRefs(result)).toEqual([
       ["/foreignKeys/0/columns/0", "customTable.column", "Element", COL_REF],
-      [
-        "/foreignKeys/0/references/columns/0",
-        "customTable.foreignKeyTarget",
-        "Element",
-        `${CURRENCY_ID}#ref`,
-      ],
       ["/foreignKeys/1/columns/0", "customTable.column", "Element", COL_CODE],
       [
         "/foreignKeys/1/references/columns/0",
@@ -137,13 +147,11 @@ describe("custom table column references", () => {
   })
 
   it("foreign key target columns map to physical names", async () => {
-    const result = await compile(
-      files({ [CURRENCY]: currency(), [LOG]: fullLog() })
-    )
+    const result = await compile(files({ ...targets(), [LOG]: fullLog() }))
     const table = result.model!.physical.tables.find((t) => t.name === "log")!
     // Знімок упорядковує FK за іменем, тож перший — за `code_col`.
     expect(table.foreignKeys.map((fk) => [fk.columns, fk.references])).toEqual([
-      [["code_col"], { schema: "public", table: "currency", columns: ["sku"] }],
+      [["code_col"], { schema: "public", table: "stock", columns: ["sku"] }],
       [
         ["currency_id"],
         { schema: "public", table: "currency", columns: ["id"] },
@@ -159,7 +167,7 @@ describe("custom table column references", () => {
   it("unknown column is reported by stage 2", () => {
     const stage1 = readFiles(
       files({
-        [CURRENCY]: currency(),
+        ...targets(),
         [LOG]: fullLog({
           primaryKey: { columns: ["nope"] },
           indexes: [{ keys: [{ column: "gone" }], include: [] }],
@@ -167,7 +175,7 @@ describe("custom table column references", () => {
             {
               columns: ["currency"],
               references: {
-                object: { kind: "Catalog", name: "Currency" },
+                object: { kind: "CustomTable", name: "Stock" },
                 columns: ["missing"],
               },
             },
@@ -194,7 +202,7 @@ describe("custom table column references", () => {
         "customTable.column-unknown",
         LOG,
         "/foreignKeys/0/references/columns/0",
-        'Currency has no column "missing"',
+        'Stock has no column "missing"',
       ],
       [
         "customTable.column-unknown",
@@ -205,12 +213,10 @@ describe("custom table column references", () => {
     ])
   })
 
-  it("renaming a catalog attribute keeps the custom table canonical fragment", async () => {
+  it("renaming a target column keeps the custom table canonical fragment", async () => {
     const fragment = async (skuName: string) => {
       const log = fullLog({ skuColumn: skuName })
-      const result = await compile(
-        files({ [CURRENCY]: currency(skuName), [LOG]: log })
-      )
+      const result = await compile(files({ ...targets(skuName), [LOG]: log }))
       expect(result.diagnostics).toEqual([])
       const snapshot = canonicalSnapshot(result.model!) as {
         objects: { id: string; data: unknown }[]
@@ -228,13 +234,13 @@ describe("custom table column references", () => {
             columns: [COL_REF],
             references: {
               object: { kind: "Catalog", id: CURRENCY_ID },
-              columns: [`${CURRENCY_ID}#ref`],
+              key: "ref",
             },
           }),
           expect.objectContaining({
             columns: [COL_CODE],
             references: {
-              object: { kind: "Catalog", id: CURRENCY_ID },
+              object: { kind: "CustomTable", id: STOCK_ID },
               columns: [SKU_ID],
             },
           }),
@@ -289,7 +295,7 @@ describe("custom table column references", () => {
     // стадії 4, а тут важить лише, чи кожне поле потрапило в індекс.
     const stage1 = readFiles(
       files({
-        [CURRENCY]: currency(),
+        ...targets(),
         [LOG]: fullLog({ scopeColumn: "id" }),
       })
     )
@@ -351,59 +357,78 @@ describe("stage 2: custom table column names", () => {
     ])
   })
 
-  it("fk target columns resolve as logical names of the target", async () => {
+  it("fk target columns of a kind are a form error, not unknown columns", async () => {
+    // Ціль-вид називає ключ (Рб1-10): колонки на ній стадія 2 не резолвить,
+    // тож і ключ, і реквізит, і невідоме ім'я дають одну помилку форми.
     const result = await compileWith({
       "catalogs/Currency/Currency.meta.json": catalog("Currency", {
         attributes: [attribute("isoCode", { physicalName: "iso_code" })],
       }),
-      "custom-tables/Other/Other.meta.json": customTable("Other"),
       [LOG]: customTable("Log", {
         columns,
-        foreignKeys: [
-          {
-            columns: ["id"],
-            references: {
-              object: { kind: "Catalog", name: "Currency" },
-              columns: ["ref"],
-            },
+        foreignKeys: ["ref", "isoCode", "missing"].map((name) => ({
+          columns: ["id"],
+          references: {
+            object: { kind: "Catalog", name: "Currency" },
+            columns: [name],
           },
-          {
-            columns: ["email"],
-            references: {
-              object: { kind: "Catalog", name: "Currency" },
-              columns: ["isoCode"],
-            },
-          },
-          {
-            columns: ["id"],
-            references: {
-              object: { kind: "Catalog", name: "Currency" },
-              columns: ["id"],
-            },
-          },
-          {
-            columns: ["id"],
-            references: {
-              object: { kind: "CustomTable", name: "Other" },
-              columns: ["missing"],
-            },
-          },
-        ],
+        })),
       }),
     })
-    expect(codes(result)).toEqual([
-      [
-        "customTable.column-unknown",
+    expect(codes(result)).toEqual(
+      [0, 1, 2].map((i) => [
+        "customTable.fk-target-not-key",
         "error",
         LOG,
-        "/foreignKeys/2/references/columns/0",
-      ],
-      [
-        "customTable.column-unknown",
-        "error",
-        LOG,
-        "/foreignKeys/3/references/columns/0",
-      ],
-    ])
+        `/foreignKeys/${i}/references/columns`,
+      ])
+    )
   })
+})
+
+describe("fk target key of a kind (Рб1-10)", () => {
+  // Ключ цілі резолвиться за походженням колонок таблиці виду, тож фізичний
+  // FK однаковий в обох стилях імен і веде на ключ, який ціль справді має.
+  it.each([
+    ["ref", ["id"], ["id"]],
+    ["scopedRef", ["org", "id"], ["org_id", "id"]],
+  ] as const)(
+    "%s compiles to a FK on the key of the target",
+    async (key, local, physical) => {
+      const tables = await Promise.all(
+        (["camelCase", "snake_case"] as const).map(async (attributeCase) => {
+          const result = await compile(
+            foreignKeyTargets(
+              {
+                columns: [...local],
+                references: { object: { kind: "Catalog", name: "Note" }, key },
+              },
+              { naming: { attributeCase } }
+            )
+          )
+          expect(
+            result.diagnostics.filter((d) => d.severity === "error")
+          ).toEqual([])
+          return result.model!.physical.tables
+        })
+      )
+      const [camel, snake] = tables.map((all) => ({
+        fk: all.find((t) => t.name === "log")!.foreignKeys,
+        note: all.find((t) => t.name === "note")!,
+      }))
+      expect(camel!.fk).toEqual([
+        expect.objectContaining({
+          columns: physical,
+          references: { schema: "public", table: "note", columns: physical },
+        }),
+      ])
+      expect(snake!.fk).toEqual(camel!.fk)
+      // Postgres прийме FK лише на унікальний набір колонок цілі.
+      const keys = [
+        camel!.note.primaryKey!.columns,
+        ...camel!.note.uniques.map((u) => u.columns),
+      ]
+      expect(keys).toContainEqual(physical)
+    }
+  )
 })

@@ -1,6 +1,7 @@
 import type { GrantStmt, Node, RoleSpec } from "libpg-query"
 import {
   AUTHOR_FUNCTION,
+  KEY_FUNCTION,
   MECHANICS_FUNCTION,
   authorTableColumns,
   authorTriggerName,
@@ -11,6 +12,7 @@ import {
   effectsFunctionName,
   effectsTriggerNames,
   hierarchyNames,
+  keyTriggerNames,
   rightsGuardNames,
   mechanicsTriggerName,
   mechanicsUpdateTriggerName,
@@ -1183,6 +1185,11 @@ function triggerReplacement(
     (t.name === authorUpdateTriggerName(table) &&
       sameFunction(t.function, AUTHOR_FUNCTION) &&
       contentUpdate(t))
+  // Тригери незмінності ключа (Рб1-4) — платформні за іменем і функцією
+  const keyNames = keyTriggerNames(table)
+  const keyGuard = (t: TriggerShape) =>
+    (t.name === keyNames.before || t.name === keyNames.after) &&
+    sameFunction(t.function, KEY_FUNCTION)
   const carriers = carrierTriggerNames({ schema: key.schema, name: table })
   const carrierFns = carrierFunctionNames({ schema: key.schema, name: table })
   // Тригери копій носіїв — платформні: прийнятого тригера вони не замінюють,
@@ -1214,6 +1221,7 @@ function triggerReplacement(
     touch(t) ||
     touchUpdate(t) ||
     author(t) ||
+    keyGuard(t) ||
     carrier(t) ||
     effect(t) ||
     guard(t) ||

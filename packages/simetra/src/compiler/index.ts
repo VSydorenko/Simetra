@@ -45,6 +45,7 @@ export {
   authorUpdateTriggerName,
 } from "./author-units"
 export { hierarchyNames } from "./hierarchy-units"
+export { KEY_FUNCTION, keyTriggerNames } from "./key-units"
 export {
   MECHANICS_FUNCTION,
   authorTableColumns,
@@ -93,6 +94,7 @@ export type {
   RangeVar,
 } from "libpg-query"
 export { mainTableOf, qualified } from "./contracts"
+export { kindKeyColumns, type KindKey } from "./stages/model"
 export { roleTableJoin, sourceConditions } from "./rights/functions"
 export { rightsDomainRows } from "./rights/functions"
 export { rightsGuardNames } from "./rights/guard-names"

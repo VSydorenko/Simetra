@@ -9,6 +9,7 @@ import {
 } from "simetra/model"
 import { renderDesiredState } from "simetra/schema"
 import {
+  CHECKLIST_TABLE,
   GLOBAL_ADMIN_ID,
   ORG_ADMIN_ID,
   PROJECT_READER_ID,
@@ -60,6 +61,13 @@ const changed = (value: Result) => {
   expect((value as { rows: pg.QueryResultRow[] }).rows).toHaveLength(1)
 }
 const ZERO = "00000000-0000-0000-0000-000000000000"
+/** Відмова тригера ключа (Рб1-4): та сама форма, що в тригера ефектів. */
+const KEY_REFUSAL = {
+  code: "42501",
+  message: "command.forbidden",
+  detail: "effect",
+  column: "id",
+}
 const PENDING_ROWS =
   "SELECT (SELECT count(*) FROM simetra.rights_tx_actor WHERE xid = txid_current())::int + (SELECT count(*) FROM simetra.rights_tx_pending WHERE xid = txid_current())::int AS n"
 
@@ -112,15 +120,19 @@ describe("rights administration guards", () => {
         await client.query("SELECT set_config($1, 'on', true)", [
           RIGHTS_MAINTENANCE_SETTING,
         ])
-      const result = await client.query(sql(statement))
+      const result: pg.QueryResult | pg.QueryResult[] = await client.query(
+        sql(statement)
+      )
       await client.query("SET CONSTRAINTS ALL IMMEDIATE")
-      return { rows: result.rows }
+      // Кілька операторів одним запитом дають масив: рядки — останнього.
+      return { rows: Array.isArray(result) ? result.at(-1)!.rows : result.rows }
     } catch (error) {
       if (!(error instanceof pg.DatabaseError)) throw error
       return {
         code: error.code ?? "",
         message: error.message,
         detail: error.detail,
+        column: error.column,
       }
     } finally {
       await client.query("ROLLBACK TO SAVEPOINT owner_probe")
@@ -161,6 +173,7 @@ describe("rights administration guards", () => {
         code: error.code ?? "",
         message: error.message,
         detail: error.detail,
+        column: error.column,
       }
     } finally {
       await client.query("ROLLBACK TO SAVEPOINT guard_command")
@@ -546,10 +559,97 @@ describe("rights administration guards", () => {
         "UPDATE public.org_member SET id = CASE id WHEN {root@A} THEN {target@A}::uuid ELSE {root@A}::uuid END WHERE id IN ({root@A}, {target@A})"
       const usersSwap =
         "UPDATE public.users SET id = CASE id WHEN {root} THEN {target}::uuid ELSE {root}::uuid END WHERE id IN ({root}, {target})"
-      refusal(await owner(memberSwap, maintenance), "rights-context")
-      refusal(await owner(usersSwap, maintenance), "rights-context")
+      // Незмінність ключа — тригер ключа таблиці виду (Рб1-4), той самий
+      // для членства, «Користувачів» і будь-якого довідника чи документа.
+      expect(await owner(memberSwap, maintenance)).toEqual(KEY_REFUSAL)
+      expect(await owner(usersSwap, maintenance)).toEqual(KEY_REFUSAL)
     }
   )
+
+  describe("the key of a kind table is immutable for any author", () => {
+    // Рядки кейсів — без залежних: FK `NO ACTION` на змінений ключ відмовив
+    // би `23503` раніше за тригер `AFTER` і сховав би, хто відмовляє. Задача
+    // `K3` має рядки ТЧ, але її ключ не змінюється — лише ключі рядків ТЧ.
+    const K1 = randomUUID()
+    const K2 = randomUUID()
+    const K3 = randomUUID()
+    const L1 = randomUUID()
+    const L2 = randomUUID()
+    const rows = [
+      `INSERT INTO public.task (id, org_id, project_id, date) VALUES ('${K1}', {A}, {P1}, now()), ('${K2}', {A}, {P1}, now()), ('${K3}', {A}, {P1}, now())`,
+      `INSERT INTO public.${CHECKLIST_TABLE} (id, org_id, parent_id, line_number) VALUES ('${L1}', {A}, '${K3}', 1), ('${L2}', {A}, '${K3}', 2)`,
+    ]
+    const swap = (table: string, a: string, b: string) =>
+      `UPDATE public.${table} SET id = CASE id WHEN '${a}'::uuid THEN '${b}'::uuid ELSE '${a}'::uuid END WHERE id IN ('${a}', '${b}')`
+    const rekey = (table: string, a: string) =>
+      `UPDATE public.${table} SET id = '${randomUUID()}' WHERE id = '${a}'`
+    const cases: [string, string][] = [
+      ["task-rekey", rekey("task", K1)],
+      // Обмін одним `UPDATE`: PK не відкладений, тож без `BEFORE`-тригера
+      // перший рядок дав би `23505`, а не названу відмову.
+      ["task-swap", swap("task", K1, K2)],
+      ["section-rekey", rekey(CHECKLIST_TABLE, L1)],
+      ["section-swap", swap(CHECKLIST_TABLE, L1, L2)],
+    ]
+    /** Рядки кейсів і оператор — одним запитом власника. */
+    const withRows = (statement: string) => [...rows, statement].join(";\n")
+
+    it.each(
+      cases.flatMap(([name, statement]) =>
+        [false, true].map((m) => [name, m, statement] as const)
+      )
+    )(
+      "%s refuses the owner outside a command, maintenance=%s",
+      async (_, maintenance, statement) => {
+        expect(await owner(withRows(statement), maintenance)).toEqual(
+          KEY_REFUSAL
+        )
+      }
+    )
+
+    it.each(cases)("%s refuses under a command too", async (_, statement) => {
+      // Рядки кейсу — до контексту: вставка під контекстом іншого кореня —
+      // відмова ефектів, а не предмет кейсу. Далі власник таблиць під
+      // контекстом: RLS і поколонковий грант (ключа в гранті `UPDATE` немає)
+      // не заступають тригера — відмовляє саме ключ.
+      const client = tx.client()
+      await client.query("SAVEPOINT key_command")
+      try {
+        await client.query(sql(rows.join(";\n")))
+        await client.query("SELECT set_config($1, $2, true)", [
+          SESSION_CLAIMS_SETTING,
+          JSON.stringify(claims("root")),
+        ])
+        await context(client, ["update", "task", K3])
+        await expect(client.query(sql(statement))).rejects.toMatchObject(
+          KEY_REFUSAL
+        )
+      } finally {
+        await client.query("ROLLBACK TO SAVEPOINT key_command")
+      }
+    })
+
+    it("a handler that rewrites NEW.id after the key trigger is refused", async () => {
+      // Обробник `beforeWrite` сортується після `simetra_key` (`zz_…`), тож
+      // `BEFORE`-тригер ключа бачить незмінений `id`; відмовляє `AFTER`.
+      const handler = [
+        "CREATE FUNCTION public.zz_rekey() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN NEW.id := gen_random_uuid(); RETURN NEW; END $$",
+        "CREATE TRIGGER task_zz_rekey BEFORE UPDATE ON public.task FOR EACH ROW EXECUTE FUNCTION public.zz_rekey()",
+        `UPDATE public.task SET date = now() WHERE id = '${K1}'`,
+      ]
+      expect(await owner(withRows(handler.join(";\n")))).toEqual(KEY_REFUSAL)
+    })
+
+    it("a row without a key change passes", async () => {
+      changed(
+        await owner(
+          withRows(
+            `UPDATE public.task SET date = now() WHERE id = '${K1}' RETURNING id`
+          )
+        )
+      )
+    })
+  })
   it.each([false, true])(
     "member-reinsert refuses user substitution in maintenance=%s",
     async (maintenance) => {

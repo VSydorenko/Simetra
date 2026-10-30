@@ -1,4 +1,3 @@
-import { platformBeforeTriggerName } from "../before-trigger-names"
 import type { QualifiedName } from "../contracts"
 import { generatedTableFunctionName } from "./generated-names"
 
@@ -13,7 +12,6 @@ const TABLE_GUARDS = [
   ["simetra_rights_members_delete", "simetra_rights_members_delete"],
   ["simetra_rights_users_insert", "simetra_rights_users_insert"],
   ["simetra_rights_users_update", "simetra_rights_users_update"],
-  ["simetra_rights_id", "simetra_rights_id"],
   ["simetra_rights_relation_insert", "simetra_rights_relation"],
   ["simetra_rights_relation_update", "simetra_rights_relation"],
   ["simetra_rights_relation_delete", "simetra_rights_relation"],
@@ -28,12 +26,9 @@ export function rightsGuardNames(
 ): readonly { label: string; trigger: string; function: QualifiedName }[] {
   return TABLE_GUARDS.map(([trigger, fn]) => ({
     label: trigger,
-    // `simetra_rights_id` — рядковий `BEFORE`, тож іде спільним префіксом
-    // групи; решта — операторні чи `AFTER` і з рядковими не перемежовуються.
-    trigger:
-      trigger === "simetra_rights_id"
-        ? platformBeforeTriggerName(table.name, trigger)
-        : generatedTableFunctionName(table.name, trigger),
+    // Запобіжники прав — операторні чи `AFTER`, тож з рядковими `BEFORE`
+    // платформи не перемежовуються й спільного префікса групи не потребують.
+    trigger: generatedTableFunctionName(table.name, trigger),
     function: {
       schema: table.schema,
       name: generatedTableFunctionName(table.name, fn),

@@ -58,6 +58,7 @@ import { catalogCommandContracts } from "./catalog-command/contracts"
 import { buildCatalogCommandUnits } from "./catalog-command/units"
 import { buildHierarchyUnits } from "./hierarchy-units"
 import { buildMechanicsUnits } from "./mechanics-units"
+import { buildKeyUnits } from "./key-units"
 import { buildCarrierUnits } from "./rights/carrier-units"
 import { buildCommandUnits } from "./rights/command-units"
 import { buildEffectsUnits } from "./rights/effects-units"
@@ -84,6 +85,7 @@ import {
 import { checkKindTableVerbatim, kindTables } from "./sql/kind-table-verbatim"
 import { loadSqlParser, type SqlParser } from "./sql/parse"
 import { loadPlpgsqlParser } from "./sql/plpgsql"
+import { assertPinnedSearchPath } from "./sql/pinned-search-path"
 import { embedRowRules } from "./sql/row-rule"
 import { withoutPlatformSchema } from "./sql/reserved-schema"
 import {
@@ -529,6 +531,14 @@ export async function runStages(
       module,
       parse
     ),
+    // Незмінність ключа — для кожного проєкту, незалежно від прав (Рб1-4).
+    ...buildKeyUnits(
+      physical,
+      stage1.project.naming.attributeCase,
+      stage1.project.database.provider,
+      module,
+      parse
+    ),
     ...buildAuthorUnits(
       physical,
       { roles, users, membershipSources: sources.membershipSources },
@@ -654,6 +664,7 @@ export async function runStages(
       plpgsql,
     }),
   ].sort((a, b) => compareStrings(a.identity, b.identity))
+  assertPinnedSearchPath(sqlUnits)
   const nameById = new Map(stage1.objects.map((o) => [o.id ?? "", o.name]))
   const name = (id: string | undefined) => nameById.get(id ?? "") ?? ""
   // Згенерована одиниця файлу не має: збіг із нею називає її походження.
@@ -673,6 +684,11 @@ export async function runStages(
       unit.ownerObjectId === undefined
         ? "the row mechanics of the platform"
         : `the row mechanics of ${name(unit.ownerObjectId)}`,
+    // Функція незмінності ключа й її гранти спільні — власника немає.
+    key: (unit) =>
+      unit.ownerObjectId === undefined
+        ? "the key immutability of the platform"
+        : `the key immutability of ${name(unit.ownerObjectId)}`,
     subscription: (unit) =>
       `the event subscription ${name(unit.ownerObjectId)}`,
     // Функції прав спільні для всіх об'єктів — власника немає.

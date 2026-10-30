@@ -26,7 +26,25 @@ export interface PromotedReferences {
    * id колонки → нове логічне ім'я, `undefined` — колонка не стає реквізитом
    * (виведена з ужитку чи носій скоупу), і посилання на неї — відмова.
    */
-  columns: ReadonlyMap<string, { name: string; becomes: string | undefined }>
+  columns: ReadonlyMap<
+    string,
+    {
+      name: string
+      becomes: string | undefined
+      /** Колонка стає ключем виду (`ref`) чи його колонкою скоупу (`scope`). */
+      key?: "ref" | "scope"
+    }
+  >
+}
+
+/** Колонка цілі FK на промотовану таблицю, що стає об'єктом. */
+interface TargetColumn {
+  place: Place
+  pointer: string
+  table: PromotedReferences
+  column: PromotedReferences["columns"] extends ReadonlyMap<string, infer C>
+    ? C
+    : never
 }
 
 /** Дії FK, що змінюють дочірні рядки разом з батьківським. */
@@ -85,6 +103,11 @@ export function cascadeReferences(
   >()
   const problems: Diagnostic[] = []
   const restricted: Diagnostic[] = []
+  // `файл\0/foreignKeys/<i>` → колонки цілі за їхнім індексом у FK.
+  const targetColumns = new Map<
+    string,
+    { file: string; index: number; columns: TargetColumn[] }
+  >()
   const add = (file: string, place: Place, name: string, kind?: string) => {
     const perFile = edits.get(file) ?? new Map()
     edits.set(file, perFile)
@@ -128,6 +151,21 @@ export function cascadeReferences(
       // Колонку таблиці ТЧ ззовні називають лише поруч із самою таблицею:
       // відмову дає посилання на об'єкт.
       continue
+    } else if (ref.role === "customTable.foreignKeyTarget") {
+      // Ціль FK судиться цілим FK, а не колонкою: див. нижче.
+      const [, , fk, , , at] = ref.from.pointer.split("/")
+      const key = `${file}\0${fk}`
+      const group = targetColumns.get(key) ?? {
+        file,
+        index: Number(fk),
+        columns: [],
+      }
+      group.columns[Number(at)] = {
+        place,
+        pointer: ref.from.pointer,
+        ...column!,
+      }
+      targetColumns.set(key, group)
     } else if (column!.column.becomes !== undefined) {
       add(file, place, column!.column.becomes)
     } else {
@@ -141,11 +179,59 @@ export function cascadeReferences(
     }
   }
 
+  // FK на таблицю, що стає видом, називає ключ виду, а не колонки (Рб1-10):
+  // ключ — `ref`, пара (скоуп, ключ) у будь-якому порядку — `scopedRef` з
+  // локальними колонками в порядку складеного ключа цілі. Посилання на
+  // колонку, що не стає реквізитом, без такої форми (сама колонка скоупу) —
+  // відмова; на реквізит — перейменування, а форму судить компіляція
+  // результату (`customTable.fk-target-not-key`).
+  const keyForms = new Map<
+    string,
+    { index: number; key: "ref" | "scopedRef"; scopeAt: number }[]
+  >()
+  for (const { file, index, columns } of targetColumns.values()) {
+    const roles = columns.map((c) => c.column.key)
+    const scopeAt = roles.indexOf("scope")
+    const key =
+      roles.length === 1 && roles[0] === "ref"
+        ? "ref"
+        : roles.length === 2 && roles.includes("ref") && scopeAt !== -1
+          ? "scopedRef"
+          : undefined
+    if (key !== undefined) {
+      keyForms.set(file, [
+        ...(keyForms.get(file) ?? []),
+        { index, key, scopeAt },
+      ])
+      continue
+    }
+    for (const { place, pointer, table, column } of columns) {
+      if (column.becomes !== undefined) {
+        add(file, place, column.becomes)
+      } else {
+        problems.push(
+          diagnostic("promote.retired-referenced", file, pointer, {
+            table: table.table,
+            column: column.name,
+            role: "customTable.foreignKeyTarget",
+          })
+        )
+      }
+    }
+  }
+
   const result = new Map<string, string>()
   for (const [file, groups] of edits) {
     const raw = rawOf(file)
     for (const { name, kind, places } of groups.values()) {
       renameJsonPlaces(raw, places, name, kind)
+    }
+    for (const { index, key, scopeAt } of keyForms.get(file) ?? []) {
+      const fk = (raw.foreignKeys as RawForeignKey[])[index]!
+      fk.references = { object: fk.references.object, key }
+      if (key === "scopedRef") {
+        fk.columns = [fk.columns[scopeAt]!, fk.columns[1 - scopeAt]!]
+      }
     }
     result.set(
       file,
@@ -158,6 +244,7 @@ export function cascadeReferences(
 interface RawForeignKey {
   name?: string
   columns: string[]
+  references: { object: unknown; columns?: string[]; key?: string }
   onDelete?: string
   onUpdate?: string
 }

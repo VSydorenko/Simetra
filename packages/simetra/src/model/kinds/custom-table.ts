@@ -81,7 +81,8 @@ function elementReferences(obj: unknown): FoundElementReference[] {
     const base = `/foreignKeys/${i}`
     own(foreignKey.columns, `${base}/columns`)
     const { references } = foreignKey
-    if ("object" in references) {
+    // Ціль-вид називає ключ, а не колонки (Рб1-10): імен для резолву немає.
+    if ("columns" in references) {
       references.columns.forEach((name, index) => {
         found.push({
           pointer: `${base}/references/columns/${index}`,
@@ -150,6 +151,7 @@ export const customTableKind: KindDefinition = {
   rightsExtents: [],
   sqlModule: "debt",
   materializes: "table",
+  rowLevelSecurity: "declared",
   scope: "required",
   declared: true,
   kindLabel: true,

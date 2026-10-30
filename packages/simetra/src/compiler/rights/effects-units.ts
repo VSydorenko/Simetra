@@ -196,7 +196,7 @@ function notRoot(label: string, key: string): string {
 
 /**
  * Перевірки оновлення під дією: жодна змістова колонка поза шапкою дії не
- * змінилася (ключ перевірено окремо), а колонка переходу змінюється лише у
+ * змінилася (ключ тримають тригери ключа), а колонка переходу змінюється лише у
  * своєму напрямку (Р2b1-18(3)).
  */
 function updateChecks(
@@ -258,18 +258,19 @@ const CREATED_BY = authorColumns().find((c) => c.logicalName === "createdBy")!
 
 /**
  * Незмінні колонки таблиці (Р2b1-9, Р2b1-20, Р2b1-24) — за будь-якої дії й
- * для будь-якого рядка: ключ таблиці — `ref` основної (змінений ключ — інша
- * ідентичність кореня) чи колонка власника ТЧ (рядок ТЧ належить своєму
+ * для будь-якого рядка: колонка власника ТЧ `owner` (рядок ТЧ належить своєму
  * документу так само, як корінь — своєму `ref`: перенесення рядка до іншого
  * власника не є ефектом дії над коренем, а законного шляху, що її змінює,
  * немає — ключ кореня незмінний, тож каскаду FK на неї не буває), і колонка
  * скоупу (перенесення між тенантами — не правка змісту; складені FK скоупу ТЧ
  * і копій однаково не дали б зробити його цілісно), автор рядка й
- * платформні поля «Користувачів». Порядок — колонок таблиці.
+ * платформні поля «Користувачів». Ключ `ref` тут не перевіряється: його
+ * незмінність для будь-якого автора, і поза командою, тримають тригери
+ * ключа (`key-units.ts`, Рб1-4). Порядок — колонок таблиці.
  */
 function immutableColumns(
   table: PhysicalTable,
-  key: string,
+  owner: string | undefined,
   attributeCase: AttributeCase,
   users = false
 ): string[] {
@@ -289,7 +290,7 @@ function immutableColumns(
   return table.columns
     .filter(
       (c) =>
-        c.name === key ||
+        c.name === owner ||
         c.origin.scopeKindId !== undefined ||
         standard.has(c.origin.standard ?? "")
     )
@@ -324,10 +325,11 @@ function mainBody(
   membership: MembershipContract | undefined,
   users: boolean
 ): string {
-  const immutable = immutableColumns(table, key, attributeCase, users)
+  const immutable = immutableColumns(table, undefined, attributeCase, users)
+  // Ключ поза порівнянням: його зміну відхиляє тригер ключа раніше.
   const compared = contentColumns(table, attributeCase)
     .map((c) => c.name)
-    .filter((name) => !immutable.includes(name))
+    .filter((name) => name !== key && !immutable.includes(name))
   const natural = (dml: Dml) =>
     rights.actions.find((action) => action.natural.includes(dml))
   const naturalUpdate = natural("update")

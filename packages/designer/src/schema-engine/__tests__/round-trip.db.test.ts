@@ -13,6 +13,7 @@ import {
   canonicalSnapshot,
   compile,
   loadSqlParser,
+  keyTriggerNames,
   mechanicsTriggerName,
   type CompiledModel,
   type SchemaPathResolver,
@@ -523,25 +524,30 @@ const tableKeys = (model: CompiledModel) =>
 /**
  * Механіка джерела, якої не буде після прийому з нуля: таблиця виду стає
  * `CustomTable` без стандартних колонок, а introspect механіки не пише
- * (рішення 9 плану П3-3a2). Повертає механіку лише промоція у вид.
+ * (рішення 9 плану П3-3a2). Повертає механіку лише промоція у вид. Тригери
+ * незмінності ключа (Рб1-4) — та сама платформна механіка таблиці виду:
+ * `CustomTable` їх не має, тож вони втрачаються так само.
  */
 async function mechanicsLoss(source: CompiledModel): Promise<Loss> {
+  const lost = (u: { generator?: string }) =>
+    u.generator === "mechanics" || u.generator === "key"
   const identities = new Set(
     source.sqlUnits
-      .filter((u) => u.generator === "mechanics" && u.class === "trigger")
+      .filter((u) => lost(u) && u.class === "trigger")
       .map((u) => u.identity)
   )
   const triggers = source.physical.tables
-    .map((t) => ({
-      schema: t.schema,
-      table: t.name,
-      name: mechanicsTriggerName(t.name),
-    }))
+    .flatMap((t) => {
+      const key = keyTriggerNames(t.name)
+      return [mechanicsTriggerName(t.name), key.before, key.after].map(
+        (name) => ({ schema: t.schema, table: t.name, name })
+      )
+    })
     .filter((t) => identities.has(`trigger:${t.schema}.${t.table}.${t.name}`))
   expect(triggers).toHaveLength(identities.size)
   const { scope } = await engineScope({
     ...source,
-    sqlUnits: source.sqlUnits.filter((u) => u.generator !== "mechanics"),
+    sqlUnits: source.sqlUnits.filter((u) => !lost(u)),
   })
   return { schemas: [...scope.schemas], triggers }
 }

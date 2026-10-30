@@ -371,6 +371,111 @@ describe("roles: the login role", () => {
     })
   })
 
+  /**
+   * Рб1-7: роль запиту → (SET) посередник з CREATEROLE → (членство без SET і
+   * INHERIT) керівник з ADMIN на ролі команд. Що з PG16 право керівника йде
+   * будь-яким членством, вирішує Postgres, тож і ланцюг, і його наслідок — тут.
+   */
+  async function requestPath(client: pg.Client) {
+    const request = testRoleName("request")
+    const middle = testRoleName("middle")
+    const manager = testRoleName("manager")
+    await client.query(`CREATE ROLE ${request} NOLOGIN`)
+    await client.query(`CREATE ROLE ${middle} NOLOGIN CREATEROLE`)
+    await client.query(`CREATE ROLE ${manager} NOLOGIN CREATEROLE`)
+    await client.query(
+      `GRANT ${middle} TO ${request} WITH INHERIT FALSE, SET TRUE`
+    )
+    await client.query(
+      `GRANT ${manager} TO ${middle} WITH ADMIN FALSE, INHERIT FALSE, SET FALSE`
+    )
+    await client.query(
+      `GRANT ${command} TO ${manager} WITH ADMIN TRUE, INHERIT FALSE, SET FALSE`
+    )
+    return { request, middle, manager }
+  }
+
+  const gateFor = (
+    dbs: ReturnType<typeof rollbackDatabase>,
+    requestNames: string[]
+  ) =>
+    dbs.transaction(TARGET[0]!.db, "rollback", (tx) =>
+      platformRoleGate(
+        tx,
+        [command],
+        [runtime],
+        "target",
+        undefined,
+        requestNames
+      )
+    )
+
+  it("the gate refuses a request role that reaches a manager of the command role through any membership", async () => {
+    await withRollback(async (client) => {
+      const dbs = rollbackDatabase(client)
+      await ensurePlatformRoles(dbs, TARGET, { names: [command] })
+      const { request, manager } = await requestPath(client)
+      expect((await gateFor(dbs, [request])).map(asCode)).toEqual([
+        `plan.platform-role-shape:${command}:request-path:${manager}`,
+      ])
+      // Роль запиту без ребер до керівника — без відмови.
+      const alone = testRoleName("alone")
+      await client.query(`CREATE ROLE ${alone} NOLOGIN`)
+      expect(await gateFor(dbs, [alone])).toEqual([])
+    })
+  })
+
+  // Факт експлуатованості Рб1-7: посередник із CREATEROLE, звичайний член
+  // керівника, у PG16+ — адміністратор ролі команд (`is_admin_of_role` іде
+  // всіма членствами). Postgres стека дозволяє `ALTER ROLE` ролі команд;
+  // `GRANT` проходить ту саму перевірку, але падає внутрішньою помилкою
+  // «no possible grantors» (XX000): грантора шукають лише ланцюгом INHERIT.
+  // Опора на цю помилку — не захист, тож шлях відхиляє гейт.
+  it("a CREATEROLE member of the manager administers the command role", async () => {
+    await withRollback(async (client) => {
+      const dbs = rollbackDatabase(client)
+      await ensurePlatformRoles(dbs, TARGET, { names: [command] })
+      const { request, middle } = await requestPath(client)
+      const x = testRoleName("x")
+      await client.query(`CREATE ROLE ${x} NOLOGIN`)
+      // Сесія входить як роль запиту, а з неї — `SET ROLE` на посередника.
+      await client.query(`GRANT ${request} TO postgres WITH SET TRUE`)
+      await client.query(`SET LOCAL ROLE ${middle}`)
+      const attempt = async (sql: string) => {
+        await client.query("SAVEPOINT attempt")
+        try {
+          await client.query(sql)
+          await client.query("RELEASE SAVEPOINT attempt")
+          return "allowed"
+        } catch (error) {
+          await client.query("ROLLBACK TO SAVEPOINT attempt")
+          return (error as { code?: string }).code
+        }
+      }
+      expect({
+        alter: await attempt(`ALTER ROLE ${command} CONNECTION LIMIT 1`),
+        grant: await attempt(`GRANT ${command} TO ${x}`),
+      }).toEqual({ alter: "allowed", grant: "XX000" })
+    })
+  })
+
+  // Цикл членств (A → B → A) Postgres відхиляє сам (`0LP01`), тож обхід на
+  // ньому не перевірити; `UNION` у запиті лишається запобіжником.
+  it("Postgres refuses a membership cycle the walk would have to end", async () => {
+    await withRollback(async (client) => {
+      const dbs = rollbackDatabase(client)
+      await ensurePlatformRoles(dbs, TARGET, { names: [command] })
+      const a = testRoleName("cycle_a")
+      const b = testRoleName("cycle_b")
+      await client.query(`CREATE ROLE ${a} NOLOGIN`)
+      await client.query(`CREATE ROLE ${b} NOLOGIN`)
+      await client.query(`GRANT ${b} TO ${a}`)
+      await expect(client.query(`GRANT ${a} TO ${b}`)).rejects.toMatchObject({
+        code: "0LP01",
+      })
+    })
+  })
+
   it("the gate refuses a request role membership with INHERIT TRUE", async () => {
     await withRollback(async (client) => {
       const dbs = rollbackDatabase(client)
