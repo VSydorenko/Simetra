@@ -879,10 +879,17 @@ function sectionLines(
     ),
   ]
   const afterValue = (c: string) => {
-    const given = `WHEN x.e ? ${sqlLiteral(c)} THEN v.${q(c)}`
-    const stored = `WHEN o.${key} IS NOT NULL THEN o.${q(c)}`
-    // Колонку поза `updateColumns` `UPDATE` не змінює й за наявного ключа.
-    return `CASE ${updatable.has(c) ? `${given} ${stored}` : `${stored} ${given}`} ELSE ${defaultOf(section.table, c)} END AS ${q(c)}`
+    // Колонка-посилання ТЧ завжди в гранті зміни: грант ТЧ відрізняє
+    // вставку від зміни лише ключем, власником і скоупом, а їх немає серед
+    // посилань (`commandWriteColumns`). Інша колонка тут означала б, що рядок
+    // «після» розійшовся з `UPDATE` нижче, — гучна відмова генератора краща
+    // за непротестований захисний SQL.
+    if (!updatable.has(c)) {
+      throw new Error(
+        `internal: tabular reference ${relation(section.table)}.${c} is not an update column`
+      )
+    }
+    return `CASE WHEN x.e ? ${sqlLiteral(c)} THEN v.${q(c)} WHEN o.${key} IS NOT NULL THEN o.${q(c)} ELSE ${defaultOf(section.table, c)} END AS ${q(c)}`
   }
   const afterRows = `${elements} LEFT JOIN ${ts} o ON o.${key} = v.${key} AND o.${parent} = ${root} CROSS JOIN LATERAL (SELECT ${afterColumns.map(afterValue).join(", ")}) AS n`
   const references = section.references.flatMap((reference) =>
