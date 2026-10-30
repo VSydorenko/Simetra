@@ -1,6 +1,7 @@
 import { beforeAll, describe, expect, it } from "vitest"
 import {
   compile,
+  keyTriggerNames,
   loadSqlParser,
   platformBeforeTriggerName,
   readSqlUnits,
@@ -1593,6 +1594,65 @@ describe("reverseGenerate", () => {
     expect(errors(result)).toEqual([])
     expect(result.files.get("custom-tables/Note/Note.sql")).toContain(
       `CREATE TRIGGER ${trigger}`
+    )
+  })
+
+  it("recognizes key triggers and simetra.key_immutable as platform", async () => {
+    // Рб1-4: тригери незмінності ключа й їхня функція — платформні, як
+    // механіка. Одиниці — справжній вихід генератора
+    const compiled = await compile(
+      metaFiles({
+        "project.meta.json": project(),
+        "catalogs/Note/Note.meta.json": catalog("Note"),
+      })
+    )
+    expectClean(compiled)
+    const platform = compiled.model!.sqlUnits.filter(
+      (u) => u.generator === "key"
+    )
+    const names = keyTriggerNames("note")
+    expect(platform.map((u) => u.name)).toEqual(
+      expect.arrayContaining([names.before, names.after, "key_immutable"])
+    )
+    const AUDIT_FN =
+      "CREATE FUNCTION public.audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;"
+    const AUDIT =
+      "CREATE TRIGGER note_audit AFTER UPDATE ON public.note FOR EACH ROW EXECUTE FUNCTION public.audit();"
+    const result = await reverseGenerate(
+      model({
+        units: [
+          ...platform.map((u) => ({
+            class: u.class,
+            identity: u.identity,
+            schema: u.schema,
+            name: u.name,
+            sql: u.sql,
+          })),
+          ...units([AUDIT_FN, AUDIT].join("\n")),
+        ],
+      }),
+      options(new Map(), { defaultSchema: "public" })
+    )
+    expect(errors(result)).toEqual([])
+    const written = [...result.files.values()].join("\n")
+    expect(written).toContain("CREATE TRIGGER note_audit")
+    expect(written).not.toContain("simetra_key")
+    expect(written).not.toContain("key_immutable")
+  })
+
+  it("keeps a key trigger namesake that calls another function", async () => {
+    const { before } = keyTriggerNames("note")
+    const sql = [
+      "CREATE FUNCTION app.stamp() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;",
+      `CREATE TRIGGER ${before} BEFORE UPDATE ON app.note FOR EACH ROW EXECUTE FUNCTION app.stamp();`,
+    ].join("\n")
+    const result = await reverseGenerate(
+      model({ tables: [table("app", "note")], units: units(sql) }),
+      options()
+    )
+    expect(errors(result)).toEqual([])
+    expect(result.files.get("custom-tables/Note/Note.sql")).toContain(
+      `CREATE TRIGGER ${before}`
     )
   })
 

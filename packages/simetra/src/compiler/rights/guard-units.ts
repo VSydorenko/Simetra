@@ -174,7 +174,6 @@ const labels = {
   rights: "simetra_rights",
   snapshot: "simetra_rights_snapshot",
   truncate: "simetra_rights_truncate",
-  id: "simetra_rights_id",
   check: "rights_tx_check",
 } as const
 
@@ -905,18 +904,6 @@ export function buildRightsGuardUnits(
       table.origin.objectId
     )
   }
-  // Обмін id двох рядків одним `UPDATE` тригер оператора не бачить (множини
-  // ключів старих і нових рядків однакові), а FK `NO ACTION` його пропускає;
-  // тому окремий row-level тригер, без винятку режиму обслуговування (Р2c2-10b).
-  const addIdGuard = (table: PhysicalTable, key: string) => {
-    const name = tableName(table)
-    const fn = functionName(name, labels.id)
-    addFunction(fn, truncateBody(table), table.origin.objectId)
-    add(
-      `CREATE TRIGGER ${q(triggerName(name, labels.id))} BEFORE UPDATE OF ${q(key)} ON ${ref(name)} FOR EACH ROW WHEN (OLD.${q(key)} IS DISTINCT FROM NEW.${q(key)}) EXECUTE FUNCTION ${ref(fn)}();`,
-      table.origin.objectId
-    )
-  }
   for (const config of catalogTables(contracts, physical, attributeCase)) {
     const table = tableName(config.table)
     const owner = config.table.origin.objectId
@@ -1016,7 +1003,6 @@ export function buildRightsGuardUnits(
         owner
       )
     }
-    addIdGuard(table, member.keyColumn)
     addTruncate(table)
   }
   if (contracts.users !== undefined) {
@@ -1059,7 +1045,6 @@ export function buildRightsGuardUnits(
         owner
       )
     }
-    addIdGuard(table, users.keyColumn)
     addTruncate(table)
   }
   const relations = new Set<string>()

@@ -588,8 +588,20 @@ describe.concurrent("buildPlan", () => {
         // Гранти доступу таблиці виду — кроки двигуна без замка таблиці:
         // слід замків вони не змінюють. Поколонкові гранти ролі команд
         // (спека П4 §6.2) двигун пише по колонці, а власник рядка ТЧ
-        // `parent_id` — лише у вставці.
+        // `parent_id` — лише у вставці. Тригери незмінності ключа (Рб1-4)
+        // нові для кожної таблиці виду, тож двигун бере той самий замок;
+        // неявний замок нижче все одно належить кроку даних.
         expect(touching.map((s) => [s.origin, s.lockClass, s.sql])).toEqual([
+          [
+            "engine",
+            "shareRowExclusive",
+            "CREATE TRIGGER counterparty_contacts_simetra_key_after AFTER UPDATE ON app.counterparty_contacts FOR EACH ROW WHEN ((new.id IS DISTINCT FROM old.id)) EXECUTE FUNCTION simetra.key_immutable('id')",
+          ],
+          [
+            "engine",
+            "shareRowExclusive",
+            "CREATE TRIGGER counterparty_contacts_simetra_key BEFORE UPDATE ON app.counterparty_contacts FOR EACH ROW WHEN ((new.id IS DISTINCT FROM old.id)) EXECUTE FUNCTION simetra.key_immutable('id')",
+          ],
           [
             "engine",
             "none",

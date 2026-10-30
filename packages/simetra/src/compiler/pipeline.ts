@@ -55,6 +55,7 @@ import {
 } from "./movement-functions"
 import { buildAuthorUnits } from "./author-units"
 import { buildMechanicsUnits } from "./mechanics-units"
+import { buildKeyUnits } from "./key-units"
 import { buildCarrierUnits } from "./rights/carrier-units"
 import { buildCommandUnits } from "./rights/command-units"
 import { buildEffectsUnits } from "./rights/effects-units"
@@ -525,6 +526,14 @@ export async function runStages(
       module,
       parse
     ),
+    // Незмінність ключа — для кожного проєкту, незалежно від прав (Рб1-4).
+    ...buildKeyUnits(
+      physical,
+      stage1.project.naming.attributeCase,
+      stage1.project.database.provider,
+      module,
+      parse
+    ),
     ...buildAuthorUnits(
       physical,
       { roles, users, membershipSources: sources.membershipSources },
@@ -621,6 +630,11 @@ export async function runStages(
       unit.ownerObjectId === undefined
         ? "the row mechanics of the platform"
         : `the row mechanics of ${name(unit.ownerObjectId)}`,
+    // Функція незмінності ключа й її гранти спільні — власника немає.
+    key: (unit) =>
+      unit.ownerObjectId === undefined
+        ? "the key immutability of the platform"
+        : `the key immutability of ${name(unit.ownerObjectId)}`,
     subscription: (unit) =>
       `the event subscription ${name(unit.ownerObjectId)}`,
     // Функції прав спільні для всіх об'єктів — власника немає.

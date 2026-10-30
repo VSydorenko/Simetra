@@ -105,8 +105,8 @@ const fnOf = (model: CompiledModel, table: string) =>
 describe("buildEffectsUnits", () => {
   it("checks the root row against the effects of the command action", () => {
     const t = "task"
-    // Колонки порівняння — змістові без незмінних (ключ і скоуп перевіряє
-    // окрема умова, Р2b1-20). Авторство — механіка (Р-A1-9): поза змістом,
+    // Колонки порівняння — змістові без ключа (тригери ключа) і скоупу
+    // (окрема умова, Р2b1-20). Авторство — механіка (Р-A1-9): поза змістом,
     // а автор рядка — серед незмінних (Р-A1-10).
     const content = contentColumns(tableOf(domain, t), "camelCase")
       .map((c) => c.name)
@@ -136,12 +136,8 @@ describe("buildEffectsUnits", () => {
     const body = [
       ...PREAMBLE,
       // Незмінні колонки — лише на оновленні: вставка під `create` свій
-      // скоуп лише отримує (Р2b1-20).
-      ...raiseIf(
-        "TG_OP = 'UPDATE' AND OLD.id IS DISTINCT FROM NEW.id",
-        t,
-        "id"
-      ),
+      // скоуп лише отримує (Р2b1-20). Ключ тут не перевіряється: його
+      // тримають тригери ключа для будь-якого автора (Рб1-4).
       ...raiseIf(
         "TG_OP = 'UPDATE' AND OLD.org_id IS DISTINCT FROM NEW.org_id",
         t,

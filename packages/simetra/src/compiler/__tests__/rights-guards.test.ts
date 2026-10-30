@@ -7,14 +7,12 @@ import {
   PROVIDER_LOGIN_ROLES,
   type AttributeCase,
 } from "simetra/model"
-import { platformBeforeTriggerName } from "../before-trigger-names"
 import { buildRightsGuardUnits, maintenanceSql } from "../rights/guard-units"
 import { ZERO_UUID } from "../rights/functions"
 import { hasEmptySearchPath, routineLanguage } from "../sql/closed-forms"
 import { loadSqlParser } from "../sql/parse"
 import type { SqlUnit } from "../sql/units"
 import {
-  MEMBER_FILE,
   MEMBER_REGION_FILE,
   MEMBER_REGION_ID,
   ORG_KIND_ID,
@@ -1329,48 +1327,6 @@ describe("rights guards of membership and users outside commands", () => {
       tree(
         "CREATE TRIGGER users_simetra_rights_users_insert AFTER INSERT ON public.users REFERENCING NEW TABLE AS new_rows FOR EACH STATEMENT EXECUTE FUNCTION public.users_simetra_rights_users_insert()"
       )
-    )
-  })
-
-  it("refuses replacing the id of a membership or users row, without a maintenance branch", () => {
-    for (const table of ["org_member", "users"]) {
-      // Обмін id двох рядків тригер оператора не бачить — потрібен рядковий.
-      expect(triggerOf(domain, table, "simetra_rights_id").tree, table).toEqual(
-        tree(
-          `CREATE TRIGGER ${table}_simetra_rights_id BEFORE UPDATE OF id ON public.${table} FOR EACH ROW WHEN (OLD.id IS DISTINCT FROM NEW.id) EXECUTE FUNCTION public.${table}_simetra_rights_id()`
-        )
-      )
-      expect(
-        bodyShape(fnOf(domain, table, "simetra_rights_id").sql),
-        table
-      ).toEqual(
-        bodyShape(
-          expectedFunction(
-            `public.${table}_simetra_rights_id`,
-            `BEGIN\n${refusal("rights-context", table)}\nRETURN NULL;\nEND`
-          )
-        )
-      )
-    }
-  })
-
-  it("names the id trigger of a 50-byte membership table by the shared BEFORE-trigger prefix", async () => {
-    // Р-A1-7: `simetra_rights_id` — рядковий `BEFORE`, тож на довгій назві
-    // його ім'я — спільний префікс групи, а функція лишається на хеші
-    // `generatedTableFunctionName`; генератор знаходить тригер за міткою.
-    const long = `org_member_${"x".repeat(39)}`
-    const result = await compileRights(
-      policyDomain(writeRoles(), { [MEMBER_FILE]: { physicalName: long } })
-    )
-    expectClean(result)
-    const trigger = guards(result.model!).find(
-      (u) =>
-        u.class === "trigger" &&
-        u.identity.startsWith(`trigger:public.${long}.`) &&
-        u.name.endsWith("_simetra_rights_id")
-    )
-    expect(trigger?.name).toBe(
-      platformBeforeTriggerName(long, "simetra_rights_id")
     )
   })
 
