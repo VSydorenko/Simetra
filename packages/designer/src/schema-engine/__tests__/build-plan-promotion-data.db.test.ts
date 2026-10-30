@@ -551,9 +551,13 @@ describe.concurrent("buildPlan", () => {
         })
       })
 
-      it("takes SHARE ROW EXCLUSIVE for a table only a repair touches", async () => {
-        // Вердикт (б): таблиця ТЧ уже має канонічні імена, тож ні намір, ні
-        // двигун її не займають — слід дає лише крок даних
+      it("the implicit lock of a repaired table belongs to the data step", async () => {
+        // Таблиця ТЧ уже має канонічні імена, тож намір її не займає. Таблиці,
+        // яку займав би лише крок ремонту, тепер не буває: крок даних буває
+        // лише на таблиці промоції (`recordedFillKind`), а кожна таблиця
+        // промоції дістає тригери незмінності ключа (Рб1-4) під тим самим
+        // SHARE ROW EXCLUSIVE. Тож `artifact.locks` замок кроку даних не
+        // виокремлює — його доводить `implicitLocks` без права на явний LOCK.
         const files = contactsProject()
         const raw = JSON.parse(files.get(CONTACT_FILE)!) as Json
         ;(raw.columns as Json[])[1]!.physicalName = "parent_id"
