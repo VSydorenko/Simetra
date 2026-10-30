@@ -118,6 +118,8 @@ interface Gate {
   fullPoint: string
   /** Тенант власника `fullAccess`: його учасник, кастомна роль і її дельта. */
   fullOrg: { id: string; member: string; role: string; delta: string }
+  /** Глобальна кастомна роль власника `fullAccess`. */
+  fullGlobalRole: string
   /** id видимого користувачу рядка таблиці — для точкового читання. */
   point: Record<string, string>
 }
@@ -335,6 +337,7 @@ async function seed(client: pg.Client): Promise<Gate> {
     full,
     fullPoint: fullTasks[0]!.id,
     fullOrg: fullOrgs[0]!,
+    fullGlobalRole,
     point: { [TASK]: visible.task, [CHECKLIST]: visible.line },
   }
 }
@@ -404,16 +407,27 @@ describe("rights plan gate", () => {
     await client.query(
       `ANALYZE public.organization, public.region, public.org_member, public.org_role_assignments, public.org_roles, public.org_roles_delta, public.users, public.global_role_assignments, public.global_roles, public.global_roles_delta, public.${TASK}, public.${CHECKLIST}, public.${HOURS}, simetra.${JOURNAL}`
     )
-    // Не порожній засів глобального довідника: інакше гейт зелений без
-    // глобальних дельт.
+    // Точний засів глобального довідника: інакше гейт зелений без глобальних
+    // дельт. Масовий засів дає по одній дельті на роль, роль власника
+    // `fullAccess` — дві (гілки `allow` і `deny`).
     const { rows: global } = await client.query<{
       roles: number
       deltas: number
     }>(
       "SELECT (SELECT count(*) FROM public.global_roles)::int AS roles, (SELECT count(*) FROM public.global_roles_delta)::int AS deltas"
     )
-    expect(global[0]!.roles).toBeGreaterThan(1)
-    expect(global[0]!.deltas).toBeGreaterThan(0)
+    expect(global[0]!.roles).toBe(GLOBAL_ROLES + 1)
+    expect(global[0]!.deltas).toBe(GLOBAL_ROLES + 2)
+    // Тіла функцій прав від імені `fullAccess` читають глобальні дельти лише
+    // через його призначення глобальної ролі.
+    const { rows: fullAssigned } = await client.query(
+      "SELECT 1 FROM public.global_role_assignments WHERE subject = $1 AND custom_role = $2",
+      [gate.full, gate.fullGlobalRole]
+    )
+    expect(
+      fullAssigned.length,
+      "gate.full has a global custom role assignment"
+    ).toBe(1)
     console.info(`rights plan gate: seed + ANALYZE ${Date.now() - started} ms`)
   }, 120_000)
 
@@ -576,6 +590,15 @@ describe("rights plan gate", () => {
           .length,
         "rights tables are read"
       ).toBeGreaterThan(0)
+      // Вузол у плані ще не доказ: `PlanNode` зберігає й вузли з loops = 0,
+      // що не виконувались. Глобальні дельти мають бути прочитані насправді
+      // (спека прав §7: глобальний домен дельт).
+      expect(
+        plans
+          .flatMap((p) => scansOf(p, "global_roles_delta"))
+          .some((n) => (n.loops ?? 0) > 0),
+        "global_roles_delta is actually scanned by the function bodies"
+      ).toBe(true)
       expect
         .soft(
           plans.flatMap((p) =>

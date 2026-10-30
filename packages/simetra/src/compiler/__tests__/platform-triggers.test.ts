@@ -10,7 +10,6 @@ import {
 import {
   SHARED_TRIGGER_FUNCTIONS,
   platformTriggers,
-  type PlatformTrigger,
   type PlatformTriggerFamily,
 } from "../platform-triggers"
 import {
@@ -34,13 +33,10 @@ const FAMILIES: readonly PlatformTriggerFamily[] = [
   "rightsGuards",
 ]
 
-const GENERATORS: ReadonlySet<string> = new Set<PlatformTrigger["generator"]>([
-  "mechanics",
-  "key",
-  "carriers",
-  "effects",
-  "rightsGuards",
-])
+// Тригери застосунку (генератор `subscription`) реєстр платформи не описує
+// свідомо: вони належать застосунку. Тригери шару платформи (`platformLayer`)
+// стоять на `auth.users`, якої немає в `physical.tables`, тож сюди не потрапляють.
+const APPLICATION_GENERATORS: ReadonlySet<string> = new Set(["subscription"])
 
 let models: CompiledModel[]
 beforeAll(async () => {
@@ -84,10 +80,13 @@ describe("platformTriggers", () => {
       for (const table of tables) {
         const registry = platformTriggers(table)
         const units = model.sqlUnits.filter(
+          // Інвертований фільтр: кожен згенерований тригер таблиці, окрім
+          // застосункових, мусить мати запис реєстру — новий генератор без
+          // запису не прослизне повз тест.
           (u) =>
             u.class === "trigger" &&
-            u.generator !== undefined &&
-            GENERATORS.has(u.generator) &&
+            u.file === undefined &&
+            !APPLICATION_GENERATORS.has(u.generator ?? "") &&
             u.identity.startsWith(`trigger:${table.schema}.${table.name}.`)
         )
         for (const unit of units) {

@@ -413,6 +413,10 @@ describe("rights administration guards", () => {
         await body(role)
       } finally {
         await client.query("ROLLBACK TO SAVEPOINT prior_role")
+        // Відкіт до точки лишає її живою: без RELEASE вкладений виклик
+        // перекрив б ім'я, і зовнішній finally відкотив би до внутрішньої
+        // точки — засів зовнішньої ролі протік би в решту транзакції.
+        await client.query("RELEASE SAVEPOINT prior_role")
       }
     }
 
