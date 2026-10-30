@@ -20,6 +20,7 @@ import {
   PLATFORM_SCHEMA,
   type MetadataRef,
   type MovementDecl,
+  type PhysicalTable,
   type Project,
   type ReferenceRole,
   type ScopeKind,
@@ -74,6 +75,8 @@ import {
   hasScopeKeyUnique,
   isDeclaredTable,
   keyColumnOf,
+  kindKeyColumns,
+  mainTableIn,
   membershipUserOf,
   usersCatalogOf,
   type ModelStageResult,
@@ -210,16 +213,15 @@ export function checkIntegrity(
   }
   diagnostics.push(...relationNameCollisions(model))
 
-  // Колонки цілей FK прийнятих таблиць, резолвлені стадією 2 в id елемента.
-  const fkTargets = new Map(
-    references
-      .filter((r) => r.role === "customTable.foreignKeyTarget")
-      .map((r) => [`${r.from.file}\0${r.from.pointer}`, r.to.id])
-  )
   for (const object of objects) {
     if (isDeclaredTable(object)) {
       diagnostics.push(
-        ...checkDeclaredTable(object, byKey, fkTargets, project.defaultSchema)
+        ...checkDeclaredTable(
+          object,
+          byKey,
+          model.physical.tables,
+          project.defaultSchema
+        )
       )
     }
   }
@@ -1038,7 +1040,7 @@ function byteLength(name: string): number {
 function checkDeclaredTable(
   object: ParsedObject,
   byKey: ReadonlyMap<string, ParsedObject>,
-  fkTargets: ReadonlyMap<string, string>,
+  tables: readonly PhysicalTable[],
   defaultSchema: string
 ): Diagnostic[] {
   const table = object.data as CustomTable
@@ -1093,8 +1095,15 @@ function checkDeclaredTable(
   table.foreignKeys.forEach((foreignKey, i) => {
     const { references } = foreignKey
     const referenced =
-      "object" in references ? references.columns : references.external.columns
-    if (referenced.length !== foreignKey.columns.length) {
+      "columns" in references
+        ? references.columns
+        : "external" in references
+          ? references.external.columns
+          : undefined
+    if (
+      referenced !== undefined &&
+      referenced.length !== foreignKey.columns.length
+    ) {
       found.push(
         diagnostic(
           "customTable.foreign-key-arity",
@@ -1134,28 +1143,29 @@ function checkDeclaredTable(
           )
         }
       }
-      if (
-        target !== undefined &&
-        !isDeclaredTable(target) &&
-        !referencesKindKey(
-          target,
-          references.columns,
-          `${object.file}\0/foreignKeys/${i}`,
-          fkTargets
-        )
-      ) {
+      const problem =
+        target === undefined
+          ? undefined
+          : foreignKeyTargetProblem(
+              target,
+              references,
+              foreignKey.columns.length,
+              tables
+            )
+      if (target !== undefined && problem !== undefined) {
         found.push(
           diagnostic(
             "customTable.fk-target-not-key",
             object.file,
-            `/foreignKeys/${i}/references/columns`,
-            { kind: target.kind, name: target.name }
+            `/foreignKeys/${i}${problem.pointer}`,
+            { kind: target.kind, name: target.name, reason: problem.reason }
           )
         )
       }
       if (
         target !== undefined &&
         isDeclaredTable(target) &&
+        "columns" in references &&
         onlyDeferrableKey(target.data as CustomTable, references.columns)
       ) {
         found.push(
@@ -1182,33 +1192,47 @@ function checkDeclaredTable(
 }
 
 /**
- * FK прийнятої таблиці на таблицю виду веде лише на ключ (Рб1-8). Роль команд
+ * FK прийнятої таблиці на таблицю виду веде лише на ключ (Рб1-8, Рб1-10): на
+ * `ref` чи на складений `(<скоуп>, <ключ>)` таблиці зі скоупом. Роль команд
  * змінює будь-який унікальний реквізит довідника, і FK `NO ACTION` мовчки
  * блокував би команду дочірніми рядками; ключ незмінний. До того ж перевірка
  * FK іде повз RLS: FK на вгадуване значення (код, номер) — оракул наявності
- * рядка в чужому тенанті. Складений `(scope, key)` назвати не можна: колонки
- * скоупу таблиці виду стадія 2 не резолвить (`customTable.column-unknown`).
- * Нерезолвлену колонку вже звітовано — другої помилки на тому ж FK не даємо.
+ * рядка в чужому тенанті. Тож ціль-вид називає ключ (`key`), а не колонки;
+ * ціль `CustomTable` — навпаки, колонки. Ціль без таблиці звітує
+ * `reference.not-referenceable`.
  */
-function referencesKindKey(
+function foreignKeyTargetProblem(
   target: ParsedObject,
-  columns: readonly string[],
-  pointer: string,
-  fkTargets: ReadonlyMap<string, string>
-): boolean {
-  const ids = columns.map((_, index) =>
-    fkTargets.get(`${pointer}/references/columns/${index}`)
-  )
-  if (ids.some((id) => id === undefined)) return true
-  const key = KIND_REGISTRY[target.kind]
-    .standardColumns(target.data)
-    .find((column) => column.primaryKey === true)
-  return (
-    key !== undefined &&
-    target.id !== undefined &&
-    ids.length === 1 &&
-    ids[0] === standardElementId(target.id, key)
-  )
+  references: Extract<
+    CustomTable["foreignKeys"][number]["references"],
+    { object: unknown }
+  >,
+  local: number,
+  tables: readonly PhysicalTable[]
+): { reason: string; pointer: string } | undefined {
+  if (isDeclaredTable(target)) {
+    return "key" in references
+      ? { reason: "keyOnCustomTable", pointer: "/references/key" }
+      : undefined
+  }
+  if (KIND_REGISTRY[target.kind].materializes !== "table") return undefined
+  if (!("key" in references)) {
+    return { reason: "columns", pointer: "/references/columns" }
+  }
+  const main = mainTableIn(tables, target.id)
+  const columns =
+    main === undefined
+      ? undefined
+      : kindKeyColumns(target, main, references.key)
+  if (columns === undefined) {
+    return {
+      reason: references.key === "ref" ? "noKey" : "noScope",
+      pointer: "/references/key",
+    }
+  }
+  return columns.length === local
+    ? undefined
+    : { reason: "arity", pointer: "/columns" }
 }
 
 /** Дії FK, що змінюють дочірні рядки разом з батьківським. */

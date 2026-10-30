@@ -428,7 +428,7 @@ describe("rights guard statement triggers", () => {
     const fk = (name: string, field: string, target: string) => ({
       name,
       columns: [field],
-      references: { object: ref("Catalog", target), columns: ["ref"] },
+      references: { object: ref("Catalog", target), key: "ref" },
     })
     const result = await compileRights(
       policyDomain(writeRoles(), {

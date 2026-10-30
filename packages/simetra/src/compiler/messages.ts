@@ -33,6 +33,36 @@ function hintOf<K extends string>(
   return Object.hasOwn(hints, reason) ? hints[reason as K] : hints[fallback]
 }
 
+/**
+ * Поради цілі FK прийнятої таблиці (Рб1-8, Рб1-10) за причиною: ціль-вид
+ * називає ключ (`key`), ціль `CustomTable` — колонки.
+ */
+const FK_TARGET_HINTS: Record<
+  "columns" | "keyOnCustomTable" | "noKey" | "noScope" | "arity",
+  { en: string; uk: string }
+> = {
+  columns: {
+    en: 'A foreign key to a table of a kind references its key, not columns: use key: "ref" or key: "scopedRef". The command role updates any unique attribute, so a foreign key on it would block the command through child rows, and a foreign key check bypasses row level security, so a key on a guessable value would reveal rows of another tenant; the key never changes.',
+    uk: 'Зовнішній ключ на таблицю виду посилається на ключ, а не на колонки: вкажіть key: "ref" або key: "scopedRef". Роль команд змінює будь-який унікальний реквізит, тож зовнішній ключ на нього блокував би команду дочірніми рядками, а перевірка зовнішнього ключа йде повз RLS, тож ключ на вгадуване значення видавав би рядки чужого тенанта; ключ не змінюється.',
+  },
+  keyOnCustomTable: {
+    en: "A CustomTable describes its keys itself: name the referenced columns in columns instead of key.",
+    uk: "CustomTable описує свої ключі сама: назвіть колонки цілі в columns замість key.",
+  },
+  noKey: {
+    en: "The object has no single uuid key to reference.",
+    uk: "Об'єкт не має єдиного uuid-ключа, на який можна посилатися.",
+  },
+  noScope: {
+    en: 'key: "scopedRef" references the pair (scope column, key) of a scoped object that is not the root of its scope; this object has no own scope column. Use key: "ref".',
+    uk: 'key: "scopedRef" посилається на пару (колонка скоупу, ключ) скоупленого об\'єкта, що не є коренем свого скоупу; цей об\'єкт власної колонки скоупу не має. Вкажіть key: "ref".',
+  },
+  arity: {
+    en: 'key: "ref" takes one local column; key: "scopedRef" takes two — the scope column, then the key.',
+    uk: 'key: "ref" бере одну локальну колонку; key: "scopedRef" — дві: колонку скоупу, потім ключ.',
+  },
+}
+
 const SOURCE_WHERE_HINTS: Record<
   "shared" | "type" | "literal",
   { en: string; uk: string }
@@ -2953,12 +2983,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "customTable.fk-target-not-key": {
     en: (p) =>
-      `Foreign key to ${p.kind} "${p.name}" must reference its key column`,
+      p.reason === "keyOnCustomTable"
+        ? `Foreign key to ${p.kind} "${p.name}" must name its columns, not a key`
+        : `Foreign key to ${p.kind} "${p.name}" must reference its key`,
     uk: (p) =>
-      `Зовнішній ключ на ${p.kind} "${p.name}" має посилатися на його колонку ключа`,
+      p.reason === "keyOnCustomTable"
+        ? `Зовнішній ключ на ${p.kind} "${p.name}" має називати його колонки, а не ключ`
+        : `Зовнішній ключ на ${p.kind} "${p.name}" має посилатися на його ключ`,
     hint: {
-      en: "The command role updates any unique attribute of a table of a kind, so a foreign key on it would block the command through child rows; the key never changes. A foreign key check also bypasses row level security, so a key on a guessable value would reveal rows of another tenant. Reference the key column.",
-      uk: "Роль команд змінює будь-який унікальний реквізит таблиці виду, тож зовнішній ключ на нього блокував би команду дочірніми рядками; ключ не змінюється. Перевірка зовнішнього ключа ще й іде повз RLS, тож ключ на вгадуване значення видавав би рядки чужого тенанта. Посилайтеся на колонку ключа.",
+      en: (p) => hintOf(FK_TARGET_HINTS, p, "columns").en,
+      uk: (p) => hintOf(FK_TARGET_HINTS, p, "columns").uk,
     },
   },
   "customTable.generated-conflict": {

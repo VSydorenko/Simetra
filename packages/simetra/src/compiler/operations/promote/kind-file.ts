@@ -1,7 +1,6 @@
 import {
   KIND_REGISTRY,
   singleUuidKeyColumn,
-  standardLogicalName,
   type CustomTable,
   type MetadataKind,
   type MetadataRef,
@@ -254,17 +253,23 @@ class References {
         found = null
         return
       }
+      // Ціль-вид FK називає ключем (Рб1-10): посиланням стає лише `ref`;
+      // `scopedRef` складений, тож сюди не доходить.
       const target = this.ctx.model.objects.find(
         (o) =>
           o.kind === references.object.kind && o.name === references.object.name
       )
-      if (
-        target === undefined ||
-        references.columns[0] !== this.keyColumnName(target)
-      ) {
+      const referenced =
+        "key" in references ? references.key : references.columns[0]
+      const onKey =
+        "key" in references
+          ? references.key === "ref"
+          : target !== undefined &&
+            references.columns[0] === this.keyColumnName(target)
+      if (!onKey) {
         this.unsupported(
           placed,
-          `its foreign key references ${references.columns[0]} of ${references.object.name}, not its key`
+          `its foreign key references ${referenced} of ${references.object.name}, not its key`
         )
         found = null
         return
@@ -406,22 +411,14 @@ class References {
   }
 
   /**
-   * Логічне ім'я ключа цілі FK: єдиний uuid-ключ прийнятої таблиці чи ключова
-   * стандартна колонка виду в стилі проєкту. `Ref` веде саме на ключ, тож FK на
-   * іншу колонку реквізитом-посиланням не стає.
+   * Логічне ім'я ключа цілі-`CustomTable`: її єдиний uuid-ключ. `Ref` веде
+   * саме на ключ, тож FK на іншу колонку реквізитом-посиланням не стає.
    */
   private keyColumnName(
     target: CompiledModel["objects"][number]
   ): string | undefined {
-    const def = KIND_REGISTRY[target.kind]
-    if (isAdoptedTable(target.kind)) {
-      return singleUuidKeyColumn(target.data as CustomTable)?.name
-    }
-    const key = def
-      .standardColumns(target.data)
-      .find((column) => column.primaryKey === true)
-    return key === undefined
-      ? undefined
-      : standardLogicalName(key, this.ctx.model.project.naming.attributeCase)
+    return isAdoptedTable(target.kind)
+      ? singleUuidKeyColumn(target.data as CustomTable)?.name
+      : undefined
   }
 }

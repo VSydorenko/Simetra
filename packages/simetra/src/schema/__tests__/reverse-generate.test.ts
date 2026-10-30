@@ -984,7 +984,7 @@ describe("reverseGenerate", () => {
         columns: ["currency_id"],
         references: {
           object: { kind: "Catalog", name: "Currency" },
-          columns: ["ref"],
+          key: "ref",
         },
       },
     ])

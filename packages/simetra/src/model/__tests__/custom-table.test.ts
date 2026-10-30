@@ -73,6 +73,28 @@ describe("customTableSchema", () => {
     expect(res.success).toBe(true)
   })
 
+  // Ціль FK (Рб1-10): колонки `CustomTable`, ключ таблиці виду або зовнішня
+  // таблиця; змішана форма й невідомий ключ — відмова схеми.
+  it.each([
+    [{ object: { kind: "CustomTable", name: "P" }, columns: ["id"] }, true],
+    [{ object: { kind: "Catalog", name: "P" }, key: "ref" }, true],
+    [{ object: { kind: "Catalog", name: "P" }, key: "scopedRef" }, true],
+    [{ external: { schema: "auth", table: "users", columns: ["id"] } }, true],
+    [
+      { object: { kind: "Catalog", name: "P" }, key: "ref", columns: ["id"] },
+      false,
+    ],
+    [{ object: { kind: "Catalog", name: "P" }, key: "code" }, false],
+  ])("foreign key target %j — accepted: %s", (references, accepted) => {
+    const res = customTableSchema.safeParse(
+      table({
+        columns: [{ name: "p", type: "UUID" }],
+        foreignKeys: [{ columns: ["p"], references }],
+      })
+    )
+    expect(res.success).toBe(accepted)
+  })
+
   it("an external foreign key into schema simetra is reserved", () => {
     expect(
       rules(

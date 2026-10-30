@@ -93,6 +93,7 @@ export type {
   RangeVar,
 } from "libpg-query"
 export { mainTableOf, qualified } from "./contracts"
+export { kindKeyColumns, type KindKey } from "./stages/model"
 export { roleTableJoin, sourceConditions } from "./rights/functions"
 export { rightsDomainRows } from "./rights/functions"
 export { rightsGuardNames } from "./rights/guard-names"

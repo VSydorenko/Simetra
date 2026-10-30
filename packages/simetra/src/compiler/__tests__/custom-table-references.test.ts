@@ -58,7 +58,7 @@ function fullLog({
         columns: ["currency"],
         references: {
           object: { kind: "Catalog", name: "Currency" },
-          columns: ["ref"],
+          key: "ref",
         },
       },
       {
@@ -123,12 +123,6 @@ describe("custom table column references", () => {
     expect(result.diagnostics).toEqual([])
     expect(columnRefs(result)).toEqual([
       ["/foreignKeys/0/columns/0", "customTable.column", "Element", COL_REF],
-      [
-        "/foreignKeys/0/references/columns/0",
-        "customTable.foreignKeyTarget",
-        "Element",
-        `${CURRENCY_ID}#ref`,
-      ],
       ["/foreignKeys/1/columns/0", "customTable.column", "Element", COL_CODE],
       [
         "/foreignKeys/1/references/columns/0",
@@ -180,7 +174,7 @@ describe("custom table column references", () => {
             {
               columns: ["currency"],
               references: {
-                object: { kind: "Catalog", name: "Currency" },
+                object: { kind: "CustomTable", name: "Stock" },
                 columns: ["missing"],
               },
             },
@@ -207,7 +201,7 @@ describe("custom table column references", () => {
         "customTable.column-unknown",
         LOG,
         "/foreignKeys/0/references/columns/0",
-        'Currency has no column "missing"',
+        'Stock has no column "missing"',
       ],
       [
         "customTable.column-unknown",
@@ -239,7 +233,7 @@ describe("custom table column references", () => {
             columns: [COL_REF],
             references: {
               object: { kind: "Catalog", id: CURRENCY_ID },
-              columns: [`${CURRENCY_ID}#ref`],
+              key: "ref",
             },
           }),
           expect.objectContaining({
@@ -362,59 +356,31 @@ describe("stage 2: custom table column names", () => {
     ])
   })
 
-  it("fk target columns resolve as logical names of the target", async () => {
+  it("fk target columns of a kind are a form error, not unknown columns", async () => {
+    // Ціль-вид називає ключ (Рб1-10): колонки на ній стадія 2 не резолвить,
+    // тож і ключ, і реквізит, і невідоме ім'я дають одну помилку форми.
     const result = await compileWith({
       "catalogs/Currency/Currency.meta.json": catalog("Currency", {
         attributes: [attribute("isoCode", { physicalName: "iso_code" })],
       }),
-      "custom-tables/Other/Other.meta.json": customTable("Other"),
       [LOG]: customTable("Log", {
         columns,
-        foreignKeys: [
-          {
-            columns: ["id"],
-            references: {
-              object: { kind: "Catalog", name: "Currency" },
-              columns: ["ref"],
-            },
+        foreignKeys: ["ref", "isoCode", "missing"].map((name) => ({
+          columns: ["id"],
+          references: {
+            object: { kind: "Catalog", name: "Currency" },
+            columns: [name],
           },
-          {
-            columns: ["email"],
-            references: {
-              object: { kind: "Catalog", name: "Currency" },
-              columns: ["isoCode"],
-            },
-          },
-          {
-            columns: ["id"],
-            references: {
-              object: { kind: "Catalog", name: "Currency" },
-              columns: ["id"],
-            },
-          },
-          {
-            columns: ["id"],
-            references: {
-              object: { kind: "CustomTable", name: "Other" },
-              columns: ["missing"],
-            },
-          },
-        ],
+        })),
       }),
     })
-    expect(codes(result)).toEqual([
-      [
-        "customTable.column-unknown",
+    expect(codes(result)).toEqual(
+      [0, 1, 2].map((i) => [
+        "customTable.fk-target-not-key",
         "error",
         LOG,
-        "/foreignKeys/2/references/columns/0",
-      ],
-      [
-        "customTable.column-unknown",
-        "error",
-        LOG,
-        "/foreignKeys/3/references/columns/0",
-      ],
-    ])
+        `/foreignKeys/${i}/references/columns`,
+      ])
+    )
   })
 })

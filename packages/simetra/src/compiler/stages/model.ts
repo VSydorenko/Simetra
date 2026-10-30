@@ -425,6 +425,17 @@ class SnapshotBuilder {
   private readonly carrierRefs: Map<string, string>
   /** Об'єкти з носіями прав, чиї таблиці отримують копії носіїв у `finish`. */
   private readonly carrierHosts: CarrierHost[] = []
+  /**
+   * FK прийнятих таблиць з ціллю-ключем виду (Рб1-10): колонки цілі — у
+   * `finish`, коли таблицю цілі вже побудовано, бо колонку скоупу впізнають
+   * за походженням (`origin.scopeKindId`), а не за іменем.
+   */
+  private readonly keyTargets: {
+    table: PendingTable
+    foreignKey: PendingTable["foreignKeys"][number]
+    target: ParsedObject
+    key: KindKey
+  }[] = []
 
   constructor(
     objects: readonly ParsedObject[],
@@ -1001,6 +1012,7 @@ class SnapshotBuilder {
   }
 
   finish(): ModelStageResult {
+    this.resolveKeyTargets()
     // Копії — після всіх таблиць: копія шляху бере тип колонки цілі, а та
     // могла бути побудована пізніше за об'єкт носія.
     for (const host of this.carrierHosts) this.addCarrierCopies(host)
@@ -1020,6 +1032,24 @@ class SnapshotBuilder {
       sources: this.sources,
       declaredNames: this.declaredNames,
       elementChecks,
+    }
+  }
+
+  /**
+   * Колонки цілі FK на ключ виду. Форму, якої ціль не має (`scopedRef` на
+   * корінь чи вид без скоупу), звітує стадія 4 (`customTable.fk-target-not-key`);
+   * тут такий FK просто не будується, як і FK на ціль без таблиці.
+   */
+  private resolveKeyTargets(): void {
+    for (const { table, foreignKey, target, key } of this.keyTargets) {
+      const main = mainTableIn(this.tables, target.id)
+      const columns =
+        main === undefined ? undefined : kindKeyColumns(target, main, key)
+      if (columns === undefined) {
+        table.foreignKeys.splice(table.foreignKeys.indexOf(foreignKey), 1)
+      } else {
+        foreignKey.references.columns = columns
+      }
     }
   }
 
@@ -1651,10 +1681,17 @@ class SnapshotBuilder {
         // Ціль без таблиці звітує стадія 4 (`reference.not-referenceable`);
         // колонок у неї немає, тож і FK будувати нема на що.
         if (KIND_REGISTRY[object.kind].materializes !== "table") return
+        // Ціль-вид називає ключ, ціль `CustomTable` — колонки (Рб1-10);
+        // іншу форму звітує стадія 4 (`customTable.fk-target-not-key`).
+        const declared = KIND_REGISTRY[object.kind].declared
+        if (declared !== "columns" in references) return
         target = {
           schema: this.schemaOf(object),
           table: physicalNameOf(object),
-          columns: map(references.columns, `${pointer}/references/columns`),
+          columns:
+            "columns" in references
+              ? map(references.columns, `${pointer}/references/columns`)
+              : [],
         }
       } else {
         // Поля цілі — поіменно: spread зарахував би ратчету полів кожен ключ
@@ -1662,14 +1699,23 @@ class SnapshotBuilder {
         const { schema, table, columns } = references.external
         target = { schema, table, columns }
       }
-      table.foreignKeys.push({
+      const pending = {
         ...explicit(foreignKey.name, `${pointer}/name`, false),
         columns: map(foreignKey.columns, `${pointer}/columns`),
         references: target,
         onDelete: foreignKey.onDelete,
         onUpdate: foreignKey.onUpdate,
         deferrable: foreignKey.deferrable,
-      })
+      }
+      table.foreignKeys.push(pending)
+      if ("key" in references) {
+        this.keyTargets.push({
+          table,
+          foreignKey: pending,
+          target: this.lookup(references.object),
+          key: references.key,
+        })
+      }
     })
     data.indexes.forEach((index, i) => {
       table.indexes.push({
@@ -2146,6 +2192,47 @@ export function hasScopeKeyUnique(table: CustomTable): boolean {
  * У видів ключ дає реєстр, у прийнятої таблиці — її опис; без такого ключа
  * `Ref` на ціль неможливий (стадія 4, `reference.custom-table-key`).
  */
+/** Форма ключа цілі FK на таблицю виду (Рб1-10). */
+export type KindKey = Extract<
+  CustomTable["foreignKeys"][number]["references"],
+  { key: unknown }
+>["key"]
+
+/** Основна таблиця об'єкта: не ТЧ і не похідна таблиця регістра. */
+export function mainTableIn<T extends { origin: PhysicalTable["origin"] }>(
+  tables: readonly T[],
+  objectId: string | undefined
+): T | undefined {
+  return tables.find(
+    (t) =>
+      t.origin.objectId === objectId &&
+      t.origin.tabularSectionId === undefined &&
+      t.origin.part === undefined
+  )
+}
+
+/**
+ * Фізичні колонки цілі FK на таблицю виду за формою ключа (Рб1-10): `ref` —
+ * uuid-ключ виду; `scopedRef` — власна колонка скоупу (за походженням
+ * `origin.scopeKindId`, не за іменем) і ключ, у порядку складеного
+ * `UNIQUE (<скоуп>, <ключ>)`, який стадія дає таблиці зі скоупом. Корінь
+ * власної колонки скоупу не має (носій — сам ключ), тож для нього, як і для
+ * виду без скоупу чи без uuid-ключа, — `undefined`.
+ */
+export function kindKeyColumns(
+  object: ParsedObject,
+  table: { columns: readonly Pick<PhysicalColumn, "name" | "origin">[] },
+  key: KindKey
+): string[] | undefined {
+  const ref = keyColumnOf(object)
+  if (ref === undefined) return undefined
+  if (key === "ref") return [ref]
+  const scope = table.columns.find(
+    (c) => c.origin.scopeKindId !== undefined && c.name !== ref
+  )
+  return scope === undefined ? undefined : [scope.name, ref]
+}
+
 export function keyColumnOf(object: ParsedObject): string | undefined {
   const def = KIND_REGISTRY[object.kind]
   const data = object.data as Element

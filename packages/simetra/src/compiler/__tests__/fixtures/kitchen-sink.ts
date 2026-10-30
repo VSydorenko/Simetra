@@ -708,7 +708,7 @@ export function kitchenSink(): Map<string, string> {
         columns: ["orgId"],
         references: {
           object: ref("Catalog", "Organization"),
-          columns: ["ref"],
+          key: "ref",
         },
         // Каскад від таблиці виду до прийнятої таблиці заборонено (Р2c1-34).
         onDelete: "restrict",

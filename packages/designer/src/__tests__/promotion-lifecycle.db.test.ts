@@ -109,7 +109,7 @@ function item(onDelete = "restrict") {
         columns: ["groupId"],
         references: {
           object: { kind: "Catalog", name: "Group" },
-          columns: ["ref"],
+          key: "ref",
         },
         onDelete,
       },

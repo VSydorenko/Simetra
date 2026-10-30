@@ -193,7 +193,7 @@ describe("promoteObject: catalog from one CustomTable", () => {
         columns: ["counterpartyId"],
         references: {
           object: { kind: "Catalog", name: "Counterparty" },
-          columns: ["ref"],
+          key: "ref",
         },
       }),
     ])
