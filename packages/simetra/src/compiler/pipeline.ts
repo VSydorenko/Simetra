@@ -54,6 +54,8 @@ import {
   movementWrapperName,
 } from "./movement-functions"
 import { buildAuthorUnits } from "./author-units"
+import { catalogCommandContracts } from "./catalog-command/contracts"
+import { buildCatalogCommandUnits } from "./catalog-command/units"
 import { buildHierarchyUnits } from "./hierarchy-units"
 import { buildMechanicsUnits } from "./mechanics-units"
 import { buildCarrierUnits } from "./rights/carrier-units"
@@ -474,7 +476,7 @@ export async function runStages(
     physical,
     stage1.project
   )
-  const sqlUnits = [
+  const baseUnits = [
     ...sql.units.map((unit) => verbatimUnit(unit, ownerId, module)),
     ...wrappers,
     ...buildMembershipFunctions(
@@ -612,6 +614,45 @@ export async function runStages(
       module,
       parse
     ),
+  ]
+  // Ядро команд довідника — над рештою одиниць: функції, які кличе його
+  // тіло (функції прав, множин, джерел копій), — ребра `requires`, а
+  // обробники `beforeWrite` вирішують замок ієрархії (Р-A2-17).
+  const sqlUnits = [
+    ...baseUnits,
+    ...buildCatalogCommandUnits({
+      catalogCommands: catalogCommandContracts({
+        access,
+        rights,
+        physical,
+        objects: stage1.objects,
+        attributeCase: stage1.project.naming.attributeCase,
+        usersObjectId: users?.objectId,
+        scopeRootIds: new Set(
+          scopeKinds.flatMap((k) =>
+            "objectId" in k.root ? [k.root.objectId] : []
+          )
+        ),
+        subscriptions: eventSubscriptions,
+        units: baseUnits,
+        parse,
+        plpgsql,
+      }),
+      contracts: {
+        rights,
+        access,
+        roles,
+        users,
+        membershipSources: sources.membershipSources,
+      },
+      physical,
+      attributeCase: stage1.project.naming.attributeCase,
+      provider: stage1.project.database.provider,
+      module,
+      units: baseUnits,
+      parse,
+      plpgsql,
+    }),
   ].sort((a, b) => compareStrings(a.identity, b.identity))
   const nameById = new Map(stage1.objects.map((o) => [o.id ?? "", o.name]))
   const name = (id: string | undefined) => nameById.get(id ?? "") ?? ""
@@ -642,6 +683,7 @@ export async function runStages(
     command: (unit) => `the command context function ${unit.name}`,
     effects: (unit) =>
       `the action effects check of ${name(unit.ownerObjectId)}`,
+    catalogCommand: (unit) => `the command core of ${name(unit.ownerObjectId)}`,
   }
   const fileById = new Map(stage1.objects.map((o) => [o.id ?? "", o.file]))
   const triggerConflicts = subscriptionTriggerConflicts(
