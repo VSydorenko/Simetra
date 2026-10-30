@@ -13,6 +13,7 @@ import {
   attribute,
   catalog,
   customTable,
+  foreignKeyTargets,
   metaFiles,
   project,
   uuid,
@@ -383,4 +384,51 @@ describe("stage 2: custom table column names", () => {
       ])
     )
   })
+})
+
+describe("fk target key of a kind (Рб1-10)", () => {
+  // Ключ цілі резолвиться за походженням колонок таблиці виду, тож фізичний
+  // FK однаковий в обох стилях імен і веде на ключ, який ціль справді має.
+  it.each([
+    ["ref", ["id"], ["id"]],
+    ["scopedRef", ["org", "id"], ["org_id", "id"]],
+  ] as const)(
+    "%s compiles to a FK on the key of the target",
+    async (key, local, physical) => {
+      const tables = await Promise.all(
+        (["camelCase", "snake_case"] as const).map(async (attributeCase) => {
+          const result = await compile(
+            foreignKeyTargets(
+              {
+                columns: [...local],
+                references: { object: { kind: "Catalog", name: "Note" }, key },
+              },
+              { naming: { attributeCase } }
+            )
+          )
+          expect(
+            result.diagnostics.filter((d) => d.severity === "error")
+          ).toEqual([])
+          return result.model!.physical.tables
+        })
+      )
+      const [camel, snake] = tables.map((all) => ({
+        fk: all.find((t) => t.name === "log")!.foreignKeys,
+        note: all.find((t) => t.name === "note")!,
+      }))
+      expect(camel!.fk).toEqual([
+        expect.objectContaining({
+          columns: physical,
+          references: { schema: "public", table: "note", columns: physical },
+        }),
+      ])
+      expect(snake!.fk).toEqual(camel!.fk)
+      // Postgres прийме FK лише на унікальний набір колонок цілі.
+      const keys = [
+        camel!.note.primaryKey!.columns,
+        ...camel!.note.uniques.map((u) => u.columns),
+      ]
+      expect(keys).toContainEqual(physical)
+    }
+  )
 })

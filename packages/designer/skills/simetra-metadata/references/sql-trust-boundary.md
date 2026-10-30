@@ -157,9 +157,12 @@ is closed by its own rule:
   `onUpdate` are only `restrict` or `noAction`
   (`customTable.fk-action-on-kind-table`): a cascade would write the child
   table from inside a command. Clean up the child rows in a TypeScript hook of
-  the command, or promote the child table. The target columns are only the
-  key `ref` or the in-tenant composite key `(<scope column>, id)`; any other
-  target is `customTable.fk-target-not-key`. A foreign key check bypasses row
+  the command, or promote the child table. The target names the key, not
+  columns: `references: { object, key: "ref" }` (one local column) or
+  `key: "scopedRef"` — the in-tenant composite key (scope column, key) of a
+  scoped object that is not the scope root (two local columns: scope, then
+  key). `columns` on a table of a kind, or `key` on a `CustomTable` target,
+  is `customTable.fk-target-not-key`. A foreign key check bypasses row
   level security, so a key on a guessable value (a code, a number) would
   reveal whether a row exists in another tenant; and the command role updates
   unique attributes, while the key never changes.

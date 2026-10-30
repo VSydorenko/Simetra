@@ -6,10 +6,9 @@ import {
   catalog,
   customTable,
   document,
+  foreignKeyTargets,
   metaFiles,
-  organization,
   project,
-  scopedProject,
   uuid,
 } from "./helpers"
 
@@ -717,34 +716,8 @@ describe("stage 4: integrity", () => {
       // наявності рядка в чужому тенанті. Ключ незмінний, тож ціль-вид
       // називає ключ (`ref` чи `scopedRef`), а ціль `CustomTable` — колонки.
       const NOT_KEY = "customTable.fk-target-not-key"
-      const ORG = "catalogs/Organization/Organization.meta.json"
-      const PLAIN = "catalogs/Plain/Plain.meta.json"
-      const OTHER = "custom-tables/Other/Other.meta.json"
       const fkTo = (references: Record<string, unknown>, local: string[]) =>
-        compile(
-          metaFiles({
-            "project.meta.json": scopedProject(),
-            [ORG]: organization(),
-            [NOTE]: catalog("Note", { scope: "org" }),
-            [PLAIN]: catalog("Plain", { scope: "none" }),
-            [OTHER]: customTable("Other", { scope: "none" }),
-            [LOG]: customTable("Log", {
-              scope: "org",
-              scopeColumn: "org",
-              columns: [
-                ...columns,
-                {
-                  id: uuid(772),
-                  name: "org",
-                  physicalName: "org_id",
-                  type: "UUID",
-                  notNull: true,
-                },
-              ],
-              foreignKeys: [{ name: "log_fk", columns: local, references }],
-            }),
-          })
-        )
+        compile(foreignKeyTargets({ columns: local, references }))
       const to = (name: string, kind = "Catalog") => ({ kind, name })
       it.each([
         {

@@ -1805,6 +1805,109 @@ describe("promoteObject: cascade through subscriptions and scope kinds", () => {
       to: "org_id",
     })
   })
+
+  describe("a foreign key on (scope, key) of the promoted table (Рб1-10)", () => {
+    const PAYMENT = "custom-tables/Payment/Payment.meta.json"
+    /** Скоуплена `Counterparty` і прийнята `Payment` з одним FK на неї. */
+    const files = (local: string[], target: string[]) => {
+      const counterparty = withCounterparty((raw) => {
+        raw.scope = "org"
+        raw.scopeColumn = "orgId"
+        ;(raw.columns as Json[]).push({
+          id: uuid(7010),
+          name: "orgId",
+          physicalName: "org_ref",
+          type: "UUID",
+          notNull: true,
+        })
+      })
+      const column = (n: number, name: string, physicalName: string) => ({
+        id: uuid(n),
+        name,
+        physicalName,
+        type: "UUID",
+        notNull: true,
+      })
+      return scoped({
+        [COUNTERPARTY_FILE]: json(counterparty, COUNTERPARTY_FILE),
+        [PAYMENT]: {
+          id: uuid(7601),
+          kind: "CustomTable",
+          name: "Payment",
+          physicalName: "payments",
+          kindLabel: "payment",
+          schema: "app",
+          scope: "org",
+          scopeColumn: "orgId",
+          columns: [
+            column(7602, "id", "id"),
+            column(7603, "orgId", "org_ref"),
+            column(7604, "counterpartyId", "counterparty_id"),
+          ],
+          primaryKey: { columns: ["id"] },
+          foreignKeys: [
+            {
+              name: "payments_counterparty_fkey",
+              columns: local,
+              references: {
+                object: { kind: "CustomTable", name: "Counterparty" },
+                columns: target,
+              },
+            },
+          ],
+        },
+      })
+    }
+    const scope = mapping((m) => {
+      m.columns.orgId = { to: "scope" }
+      m.conversions["Counterparty#uniques/counterparties_inn_key"] = "removed"
+    })
+
+    it.each([
+      [
+        ["orgId", "counterpartyId"],
+        ["orgId", "id"],
+      ],
+      [
+        ["counterpartyId", "orgId"],
+        ["id", "orgId"],
+      ],
+    ])(
+      "local %j on %j becomes scopedRef with local columns scope first",
+      async (local, target) => {
+        const before = files(local, target)
+        expect((await compile(before)).diagnostics).toEqual([])
+        const { result, after } = await promoted(before, scope)
+        expect(errors(result)).toEqual([])
+        expect(json(after, PAYMENT).foreignKeys).toEqual([
+          expect.objectContaining({
+            columns: ["orgId", "counterpartyId"],
+            references: {
+              object: { kind: "Catalog", name: "Counterparty" },
+              key: "scopedRef",
+            },
+          }),
+        ])
+      }
+    )
+
+    it("refuses a foreign key on the scope column alone", async () => {
+      const before = files(["orgId"], ["orgId"])
+      const { result } = await promoted(before, scope)
+      expect(brief(result)).toEqual([
+        {
+          code: "promote.retired-referenced",
+          file: PAYMENT,
+          pointer: "/foreignKeys/0/references/columns/0",
+          params: {
+            table: "Counterparty",
+            column: "orgId",
+            role: "customTable.foreignKeyTarget",
+          },
+        },
+      ])
+    })
+  })
 })
 
 describe("promoteObject: tabular sections, documents, registers, data steps", () => {

@@ -241,6 +241,48 @@ export function organization(overrides: Record<string, unknown> = {}) {
   return catalog("Organization", { scope: "org", ...overrides })
 }
 
+/**
+ * Тека для форм цілі FK прийнятої таблиці (Рб1-10): проєкт `scopedProject()`,
+ * корінь `Organization`, скоуплений довідник `Note`, довідник без скоупу
+ * `Plain`, прийнята `Other` і скоуплена прийнята `Log` (колонки `id`, `org`)
+ * з одним FK `log_fk`.
+ */
+export function foreignKeyTargets(
+  foreignKey: { columns: string[]; references: Record<string, unknown> },
+  projectOverrides: Record<string, unknown> = {}
+): Map<string, string> {
+  return metaFiles({
+    "project.meta.json": { ...scopedProject(), ...projectOverrides },
+    "catalogs/Organization/Organization.meta.json": organization(),
+    "catalogs/Note/Note.meta.json": catalog("Note", { scope: "org" }),
+    "catalogs/Plain/Plain.meta.json": catalog("Plain", { scope: "none" }),
+    "custom-tables/Other/Other.meta.json": customTable("Other", {
+      scope: "none",
+    }),
+    "custom-tables/Log/Log.meta.json": customTable("Log", {
+      scope: "org",
+      scopeColumn: "org",
+      columns: [
+        {
+          id: freshId(),
+          name: "id",
+          physicalName: "id",
+          type: "UUID",
+          notNull: true,
+        },
+        {
+          id: freshId(),
+          name: "org",
+          physicalName: "org_id",
+          type: "UUID",
+          notNull: true,
+        },
+      ],
+      foreignKeys: [{ name: "log_fk", ...foreignKey }],
+    }),
+  })
+}
+
 export const SALE_FILE = "documents/Sale/Sale.meta.json"
 export const STOCK_FILE = "accumulation-registers/Stock/Stock.meta.json"
 
