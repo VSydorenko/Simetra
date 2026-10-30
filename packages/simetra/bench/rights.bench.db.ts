@@ -392,8 +392,7 @@ describe("rights limits benchmark", () => {
           `ANALYZE public.${ORG}, public.${REGION}, public.${TASK}`
         )
         let exceeded = false
-        // 10 і 30 — поза Р2d2-9: на 100 скоупах читання вже хвилинне, а межа
-        // потрібна там, де воно ще прийнятне
+        // 10 і 30 — поза Р2d2-9: межа потрібна й там, де читання ще прийнятне
         for (const scopes of [10, 30, 100, 500, 2000]) {
           const label = `${scopes.toLocaleString("en")} scopes, 100,000 tasks`
           if (exceeded) {
@@ -578,7 +577,8 @@ describe("rights limits benchmark", () => {
    * `actor`; режим обслуговування їх пропускає, тож там лише довідковий
    * рядок. Команда пише лише свій кореневий рядок (Р2c2-1, тригер ефектів),
    * тож одного оператора на 1 000 призначень у команді не буває: міряється
-   * транзакція з 1 000 команд по рядку — блок `DO` за один виклик, щоб час
+   * одна команда у власній транзакції і транзакція з 1 000 команд по рядку —
+   * блок `DO` за один виклик, щоб час
    * був часом сервера, а не мережі. Час — блок і відкладені перевірки
    * (`SET CONSTRAINTS ALL IMMEDIATE`), які інакше заплатив би `COMMIT`. Фон —
    * 1 000 тенантів по 10 призначень.
@@ -636,6 +636,10 @@ describe("rights limits benchmark", () => {
             [org, TASK_VIEWER_ID]
           )
         )
+        // Відкладені перевірки засіву — тут, а не в замірах (Р2d2-27): інакше
+        // кожна точка збереження з відкатом платила б їх знову (~5 с).
+        await client.query("SET CONSTRAINTS ALL IMMEDIATE")
+        await client.query("SET CONSTRAINTS ALL DEFERRED")
         await client.query(
           `ANALYZE public.${ORG}, public.${MEMBER}, public.${ASSIGNMENTS}`
         )
@@ -646,26 +650,28 @@ describe("rights limits benchmark", () => {
         expect(targets[0]!.n).toBe("1000")
         // Рядок за рядком, кожен — команда зі своїм коренем: так їх пише
         // `runCommand`, і так їх судить тригер ефектів
-        const block = (context: boolean) => `DO $bench$
+        const block = (context: boolean, commands: number) => `DO $bench$
           DECLARE m record; v_id uuid;
           BEGIN
-            FOR m IN SELECT id FROM public.${MEMBER} WHERE org_id = '${org}' AND id <> '${adminMember}' ORDER BY id LOOP
+            FOR m IN SELECT id FROM public.${MEMBER} WHERE org_id = '${org}' AND id <> '${adminMember}' ORDER BY id LIMIT ${commands} LOOP
               v_id := gen_random_uuid();
               ${context ? `PERFORM set_config('${COMMAND_SETTING}', json_build_object('action', 'administerRights', 'object', '${ASSIGNMENTS}', 'root', v_id)::text, true);` : ""}
               INSERT INTO public.${ASSIGNMENTS} (id, org_id, subject, archetype, deletion_mark)
               VALUES (v_id, '${org}', m.id, '${TASK_VIEWER_ID}', false);
             END LOOP;
           END $bench$`
-        const written = async () => {
+        const written = async (commands: number) => {
           const { rows: n } = await client.query<{ n: string }>(
             `SELECT count(*) AS n FROM public.${ASSIGNMENTS} WHERE org_id = $1`,
             [org]
           )
-          // 1 000 нових і призначення самого адміністратора
-          expect(n[0]!.n, "every assignment is written").toBe("1001")
+          // Нові призначення і призначення самого адміністратора
+          expect(n[0]!.n, "every assignment is written").toBe(
+            String(commands + 1)
+          )
         }
 
-        const command = async (): Promise<number> => {
+        const command = async (commands: number): Promise<number> => {
           await client.query("SAVEPOINT command")
           try {
             await client.query("SELECT set_config($1, $2, true)", [
@@ -674,11 +680,11 @@ describe("rights limits benchmark", () => {
             ])
             await client.query(`SET LOCAL ROLE ${PLATFORM_ROLES.command}`)
             const time = await elapsed(async () => {
-              await client.query(block(true))
+              await client.query(block(true, commands))
               await client.query("SET CONSTRAINTS ALL IMMEDIATE")
             })
             await client.query("RESET ROLE")
-            await written()
+            await written(commands)
             return time
           } finally {
             await client.query("ROLLBACK TO SAVEPOINT command")
@@ -688,25 +694,33 @@ describe("rights limits benchmark", () => {
           await client.query("SAVEPOINT reference")
           try {
             const time = await elapsed(async () => {
-              await maintenance(client, () => client.query(block(false)))
+              await maintenance(client, () => client.query(block(false, 1000)))
               await client.query("SET CONSTRAINTS ALL IMMEDIATE")
             })
-            await written()
+            await written(1000)
             return time
           } finally {
             await client.query("ROLLBACK TO SAVEPOINT reference")
           }
         }
-        const runs = async (fn: () => Promise<number>) => {
+        const runs = async (fn: () => Promise<number>, n = RUNS) => {
           const times: number[] = []
-          for (let i = 0; i < RUNS; i++) times.push(await fn())
+          for (let i = 0; i < n; i++) times.push(await fn())
           return `${ms(median(times))} (runs ${times.map((t) => t.toFixed(0)).join(", ")} ms)`
         }
+        // Одна команда — так її платить API: точка збереження з відкатом
+        // стоїть за власну транзакцію, `SET CONSTRAINTS` — за її COMMIT.
+        rows.push({
+          scenario:
+            "5 guard triggers, 1 command with JWT actor in its own transaction",
+          volume: "1 assignment row, 11,000 in the table",
+          operator: await runs(() => command(1), 2 * RUNS - 1),
+        })
         rows.push({
           scenario:
             "5 guard triggers, 1,000 commands with JWT actor in one transaction",
           volume: "1,000 assignment rows",
-          operator: await runs(command),
+          operator: await runs(() => command(1000)),
         })
         rows.push({
           scenario: "5 same rows, maintenance mode (reference)",
