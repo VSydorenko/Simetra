@@ -361,7 +361,10 @@ describe("adopted sources", () => {
         Object.values(results).some((r) => r.rows > 1),
         "some user holds source rows"
       ).toBe(true)
-      expectEquivalent("rights_mine (adopted)", results, { drops: false })
+      expectEquivalent("rights_mine (adopted)", results, {
+        drops: false,
+        denies: false,
+      })
     } finally {
       await client.query("ROLLBACK TO SAVEPOINT closure_oracle")
     }

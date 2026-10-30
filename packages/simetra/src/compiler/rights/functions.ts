@@ -576,9 +576,16 @@ function roleGrantsBody(): string {
     `  SELECT d.object, d.action, d.extent, d.dimension AS dimension_id, d.effect`,
     `  FROM jsonb_to_recordset(${p("p_delta")}) AS d(object text, action text, extent text, dimension uuid, effect text)`,
     "), role_rows AS (",
-    `  SELECT ${shape}, p.object, p.action, p.extent, p.dimension_id`,
-    `  FROM typed r JOIN ${call(F.projection)} p ON p.role_id = r.role_id`,
-    "  WHERE NOT EXISTS (SELECT 1 FROM deltas d WHERE d.effect = 'deny' AND d.object = p.object AND d.action = p.action AND d.extent = p.extent AND d.dimension_id IS NOT DISTINCT FROM p.dimension_id)",
+    // Віднімання `deny` — `EXCEPT` (хеш, `NULL` виміру рівні нативно), а не
+    // корельований `NOT EXISTS` над CTE (Р2d2-26): рядки архетипу — дії з
+    // проєкції, без `NULL` в об'єкті, дії й обсязі, тож `=` і рівність
+    // `EXCEPT` збігаються; дублікати знімає `DISTINCT` результату.
+    `  SELECT ${shape}, k.object, k.action, k.extent, k.dimension_id`,
+    "  FROM (",
+    `    SELECT p.object, p.action, p.extent, p.dimension_id FROM typed r JOIN ${call(F.projection)} p ON p.role_id = r.role_id`,
+    "    EXCEPT",
+    "    SELECT d.object, d.action, d.extent, d.dimension_id FROM deltas d WHERE d.effect = 'deny'",
+    "  ) k",
     "  UNION ALL",
     `  SELECT ${shape}, d.object, d.action, d.extent, d.dimension_id`,
     `  FROM typed r CROSS JOIN deltas d JOIN ${call(F.domain)} m`,
@@ -1048,7 +1055,7 @@ function mineBody(
 ): string {
   const via = (source: string) => (detail ? `, '${source}'::text AS via` : "")
   const closure = detail ? DETAIL_CLOSURE_COLUMNS : CLOSURE_COLUMNS
-  const ctes: [string, string][] = [
+  const ctes: [string, string, string?][] = [
     [
       "my_scopes",
       `SELECT s.scope_kind_id, s.scope, s.member\nFROM ${user.scopes} s`,
@@ -1082,28 +1089,43 @@ function mineBody(
         `WHERE t.level = 'container'`,
       ].join("\n"),
     ],
-    ["deltas", deltasCte(contracts.rightsCatalogs, physical)],
+    // Дельти — не матеріалізований CTE (Р2d2-26): гілка `allow` з'єднує їх
+    // з призначеннями, і з оцінкою в кілька рядків планувальник бере
+    // вкладений цикл, що перечитує матеріалізовані дельти всіх тенантів на
+    // кожен рядок. Без матеріалізації умова кастомної ролі доходить до
+    // таблиці дельт — індекс власника рядка ТЧ, а не перебір.
+    [
+      "deltas",
+      deltasCte(contracts.rightsCatalogs, physical),
+      "NOT MATERIALIZED ",
+    ],
     [
       "role_rows",
       // Кастомна роль — рядки архетипу без збігів `deny` (з точністю до
       // обсягу й виміру) і дельти `allow` з домену рівня архетипу; невідома
       // мітка, дія, обсяг чи вимір у домен не входить і не діє (fail-closed).
+      // Збіг `deny` — вікно за ключем збігу над рядками архетипу й `deny`, а
+      // не корельований `NOT EXISTS` над CTE дельт усіх тенантів (Р2d2-26):
+      // той перечитував дельти на кожен рядок ролі. Розбиття вікна рівняє
+      // `NULL` — як `IS NOT DISTINCT FROM` для `storage_id` і виміру; для
+      // `storage` і `custom_role` збіг через `=`, тож рядки `deny` з `NULL`
+      // там у вікно не беруться: рядок архетипу без кастомної ролі не
+      // знімається.
       [
-        `SELECT h.storage, h.storage_id, h.scope, h.container, h.custom_role, h.archetype, h.level, h.level_id, p.object, p.action, p.extent, p.dimension_id${via("archetype")}`,
-        `FROM held h`,
-        `JOIN ${call(RIGHTS_FUNCTIONS.projection)} p ON p.role_id = h.archetype`,
-        `WHERE NOT EXISTS (`,
-        `  SELECT 1`,
-        `  FROM deltas d`,
-        `  WHERE d.storage = h.storage`,
-        `    AND d.storage_id IS NOT DISTINCT FROM h.storage_id`,
-        `    AND d.custom_role = h.custom_role`,
-        `    AND d.effect = 'deny'`,
-        `    AND d.object = p.object`,
-        `    AND d.action = p.action`,
-        `    AND d.extent = p.extent`,
-        `    AND d.dimension_id IS NOT DISTINCT FROM p.dimension_id`,
-        `)`,
+        `SELECT ${CLOSURE_COLUMNS.output.map((c) => `w.${c}`).join(", ")}${detail ? ", w.via" : ""}`,
+        `FROM (`,
+        `  SELECT c.*, bool_or(c.deny) OVER (PARTITION BY c.storage, c.storage_id, c.custom_role, c.object, c.action, c.extent, c.dimension_id) AS denied`,
+        `  FROM (`,
+        `    SELECT h.storage, h.storage_id, h.scope, h.container, h.custom_role, h.archetype, h.level, h.level_id, p.object, p.action, p.extent, p.dimension_id${via("archetype")}, false AS deny`,
+        `    FROM held h`,
+        `    JOIN ${call(RIGHTS_FUNCTIONS.projection)} p ON p.role_id = h.archetype`,
+        `    UNION ALL`,
+        `    SELECT d.storage, d.storage_id, NULL, NULL, d.custom_role, NULL, NULL, NULL, d.object, d.action, d.extent, d.dimension_id${detail ? ", NULL AS via" : ""}, true`,
+        `    FROM deltas d`,
+        `    WHERE d.effect = 'deny' AND d.storage IS NOT NULL AND d.custom_role IS NOT NULL`,
+        `  ) c`,
+        `) w`,
+        `WHERE NOT w.deny AND NOT w.denied`,
         `UNION ALL`,
         `SELECT h.storage, h.storage_id, h.scope, h.container, h.custom_role, h.archetype, h.level, h.level_id, d.object, d.action, d.extent, d.dimension_id${via("delta")}`,
         `FROM held h`,
@@ -1138,7 +1160,7 @@ function mineBody(
     ["closure_2", closurePass("closure_1", closure)],
   ]
   return [
-    `WITH ${ctes.map(([name, sql]) => `${name} AS (\n${indent(sql)}\n)`).join(",\n")}`,
+    `WITH ${ctes.map(([name, sql, materialized = ""]) => `${name} AS ${materialized}(\n${indent(sql)}\n)`).join(",\n")}`,
     `SELECT c.level, c.level_id, c.scope, c.container, c.object, c.action, c.extent, c.dimension_id${detail ? ", c.archetype AS role_id, c.custom_role AS custom_role, c.via AS via" : ""}`,
     `FROM closure_2 c`,
     `UNION`,

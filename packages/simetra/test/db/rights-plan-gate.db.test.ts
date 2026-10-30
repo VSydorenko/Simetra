@@ -22,8 +22,8 @@ import { signUp } from "./auth"
 import { asRole, queryAs } from "./connection"
 import {
   type PlanNode,
-  correlatedCteSubPlans,
   functionScans,
+  repeatedCteScans,
   scansOf,
   subPlans,
 } from "./explain-plan"
@@ -457,8 +457,9 @@ describe("rights plan gate", () => {
    * `FULL_ACCESS_SCOPES` тенантах читає `rights_mine()` напряму й через
    * функції множин політики (точкове читання задачі). Жоден оператор — ні
    * тіло `rights_mine`, ні тіла `rights_any` / `own` / `dim` / `container` —
-   * не має підплану з циклами > 1 над `CTE Scan`: так виглядало замикання,
-   * квадратичне за скоупами (Р2d2-22).
+   * не читає CTE більше одного разу (`CTE Scan` з циклами > 1): так виглядало
+   * замикання, квадратичне за скоупами (Р2d2-22), і віднімання дельт
+   * `NOT EXISTS` у `role_rows` (Р2d2-26) — вкладений цикл, а не підплан.
    */
   it.each([
     ["rights_mine()", () => "SELECT count(*) FROM simetra.rights_mine()"],
@@ -467,7 +468,7 @@ describe("rights plan gate", () => {
       () => `SELECT * FROM public.${TASK} WHERE id = '${gate.fullPoint}'::uuid`,
     ],
   ])(
-    "%s: rights function bodies have no correlated CTE subplan",
+    "%s: rights function bodies read no CTE more than once",
     async (_, sql) => {
       const { plans, rows } = await autoExplain(gate.full, sql())
       expect(rows.length, "the full-access holder reads").toBe(1)
@@ -482,12 +483,12 @@ describe("rights plan gate", () => {
       expect
         .soft(
           plans.flatMap((p) =>
-            correlatedCteSubPlans(p).map(
+            repeatedCteScans(p).map(
               (n) =>
-                `${n.type} x${n.loops}: ${String(p["Query Text"]).slice(0, 80)}`
+                `CTE Scan on ${n.cte} x${n.loops}: ${String(p["Query Text"]).slice(0, 80)}`
             )
           ),
-          "correlated subplans over a CTE scan"
+          "CTE scans repeated per outer row"
         )
         .toEqual([])
     }

@@ -12,7 +12,9 @@ import { queryAs } from "./connection"
  * не залежить; варіант
  * `*_unclosed` (те саме тіло, але результат — рядки до замикання) показує,
  * скільки рядків замикання зняло: без знятих рядків порівняння не перевіряло б
- * замикання взагалі. Порівняння — `EXCEPT` в обидва боки: `NULL` у колонках
+ * замикання взагалі. Так само варіант `*_undenied` (те саме тіло без
+ * віднімання `deny` кастомної ролі) показує, що засів перевіряє й віднімання
+ * дельт (Р2d2-26). Порівняння — `EXCEPT` в обидва боки: `NULL` у колонках
  * рівні, як у множинах рядків.
  */
 
@@ -31,9 +33,20 @@ function unclosed(sql: string, fn: string): string {
     .replaceAll(`${fn}_before`, `${fn}_unclosed`)
 }
 
+/** Збіг `deny` у `role_rows` тіла до переписування. */
+const DENY = "d.effect = 'deny'"
+
+/** Те саме тіло без віднімання `deny`: рядки архетипу лишаються всі. */
+function undenied(sql: string, fn: string): string {
+  // Рівно одне входження — фільтр `role_rows`: інакше заміна зачепила б
+  // іншу частину тіла, і лічильник знятих `deny` рядків брехав би.
+  expect(sql.split(DENY), `${fn}: one ${DENY}`).toHaveLength(2)
+  return sql.replace(DENY, "false").replaceAll(`${fn}_before`, `${fn}_undenied`)
+}
+
 /**
  * Створює в транзакції клієнта функції оракула (`rights_mine` моделі `model`
- * і `rights_role_grants`) і варіанти без замикання; `EXECUTE` варіантів
+ * і `rights_role_grants`) і варіанти без замикання й без `deny`; `EXECUTE` варіантів
  * `rights_mine` — ролі `authenticated`, бо `rights_mine` читається під claims
  * користувача.
  */
@@ -48,9 +61,10 @@ export async function installClosureOracle(
     const sql = readFileSync(new URL(file, FIXTURES), "utf8")
     await client.query(sql)
     await client.query(unclosed(sql, fn))
+    await client.query(undenied(sql, fn))
   }
   await client.query(
-    "GRANT EXECUTE ON FUNCTION simetra.rights_mine_before(), simetra.rights_mine_unclosed() TO authenticated"
+    "GRANT EXECUTE ON FUNCTION simetra.rights_mine_before(), simetra.rights_mine_unclosed(), simetra.rights_mine_undenied() TO authenticated"
   )
 }
 
@@ -60,14 +74,22 @@ export interface Equivalence {
   missing: number
   rows: number
   dropped: number
+  /** Рядки, які знімає віднімання `deny`. */
+  denied: number
 }
 
-const compare = (current: string, before: string, open: string) =>
+const compare = (
+  current: string,
+  before: string,
+  open: string,
+  undeniedRows: string
+) =>
   `SELECT
      (SELECT count(*) FROM (SELECT * FROM ${current} EXCEPT SELECT * FROM ${before}) x)::int AS extra,
      (SELECT count(*) FROM (SELECT * FROM ${before} EXCEPT SELECT * FROM ${current}) x)::int AS missing,
      (SELECT count(*) FROM (SELECT DISTINCT * FROM ${current}) x)::int AS rows,
-     (SELECT count(*) FROM (SELECT * FROM ${open} EXCEPT SELECT * FROM ${before}) x)::int AS dropped`
+     (SELECT count(*) FROM (SELECT * FROM ${open} EXCEPT SELECT * FROM ${before}) x)::int AS dropped,
+     (SELECT count(*) FROM (SELECT * FROM ${undeniedRows} EXCEPT SELECT * FROM ${before}) x)::int AS denied`
 
 /** `rights_mine()` проти оракула від імені кожного користувача. */
 export async function mineEquivalence(
@@ -83,7 +105,8 @@ export async function mineEquivalence(
       compare(
         "simetra.rights_mine()",
         "simetra.rights_mine_before()",
-        "simetra.rights_mine_unclosed()"
+        "simetra.rights_mine_unclosed()",
+        "simetra.rights_mine_undenied()"
       )
     )
     if (!("rows" in result)) throw new Error(`${key}: ${result.code}`)
@@ -121,7 +144,8 @@ export async function roleGrantsEquivalence(
       compare(
         `simetra.rights_role_grants(${args})`,
         `simetra.rights_role_grants_before(${args})`,
-        `simetra.rights_role_grants_unclosed(${args})`
+        `simetra.rights_role_grants_unclosed(${args})`,
+        `simetra.rights_role_grants_undenied(${args})`
       )
     )
     out[key] = rows[0]!
@@ -130,15 +154,16 @@ export async function roleGrantsEquivalence(
 }
 
 /**
- * Перевірка порівнянь: жодної розбіжності, а замикання хоч раз зняло рядок —
- * інакше порівняння не доводить нічого про замикання. `drops: false` — для
+ * Перевірка порівнянь: жодної розбіжності, а замикання хоч раз зняло рядок
+ * і `deny` хоч раз зняв рядок — інакше порівняння не доводить нічого про
+ * замикання чи віднімання дельт. `drops: false` / `denies: false` — для
  * моделі, де порівняння тримає інше (ідентичність рядків джерела), а ланцюгів
- * вимог, які замикання знімало б, засів не має.
+ * вимог чи дельт `deny` засів не має.
  */
 export function expectEquivalent(
   label: string,
   results: Record<string, Equivalence>,
-  { drops = true }: { drops?: boolean } = {}
+  { drops = true, denies = true }: { drops?: boolean; denies?: boolean } = {}
 ): void {
   for (const [key, r] of Object.entries(results)) {
     expect.soft(r.extra, `${label} ${key}: rows only in the new body`).toBe(0)
@@ -147,9 +172,12 @@ export function expectEquivalent(
   const dropped = Object.values(results).reduce((n, r) => n + r.dropped, 0)
   if (drops)
     expect(dropped, `${label}: the closure drops rows`).toBeGreaterThan(0)
+  const denied = Object.values(results).reduce((n, r) => n + r.denied, 0)
+  if (denies)
+    expect(denied, `${label}: deny deltas drop rows`).toBeGreaterThan(0)
   console.info(
     `${label}: ${Object.entries(results)
-      .map(([k, r]) => `${k} ${r.rows}/${r.dropped}`)
-      .join(", ")} (rows/dropped)`
+      .map(([k, r]) => `${k} ${r.rows}/${r.dropped}/${r.denied}`)
+      .join(", ")} (rows/dropped/denied)`
   )
 }

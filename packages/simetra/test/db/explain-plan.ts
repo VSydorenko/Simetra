@@ -106,25 +106,24 @@ export const scansOf = (plan: unknown, table: string): PlanNode[] =>
 const subtree = (node: Raw): Raw[] => [node, ...children(node).flatMap(subtree)]
 
 /**
- * Підплани, що виконуються більше одного разу й читають CTE (`CTE Scan` у
- * піддереві): корельований підзапит над матеріалізованим CTE перечитує його
- * на кожен зовнішній рядок — квадратично за обсягом CTE (Р2d2-22). Хешований
- * підплан виконується раз і сюди не потрапляє.
+ * Читання CTE, виконане більше одного разу (`CTE Scan` з `Actual Loops > 1`):
+ * матеріалізований CTE перечитується на кожен зовнішній рядок — квадратично
+ * за обсягом CTE (Р2d2-22, Р2d2-26). Так виглядає і корельований підплан
+ * над CTE, і внутрішній бік вкладеного циклу (`Nested Loop`, зокрема anti
+ * join `NOT EXISTS`), тож перевірка не залежить від форми вузла, що
+ * повторює читання. Хешований підплан і бік хеш-з'єднання читають CTE раз.
  */
-export function correlatedCteSubPlans(plan: unknown): PlanNode[] {
-  if (Array.isArray(plan)) return plan.flatMap(correlatedCteSubPlans)
-  if (!isObject(plan)) return []
-  if (isObject(plan.Plan)) return correlatedCteSubPlans(plan.Plan)
-  if (typeof plan["Node Type"] !== "string") return []
-  const loops = plan["Actual Loops"]
-  const own =
-    plan["Parent Relationship"] === "SubPlan" &&
-    typeof loops === "number" &&
-    loops > 1 &&
-    subtree(plan).some((n) => n["Node Type"] === "CTE Scan")
-      ? planNodes(plan).slice(0, 1)
+export function repeatedCteScans(
+  plan: unknown
+): { cte: string; loops: number }[] {
+  return rawNodes(plan).flatMap((n) => {
+    const loops = n["Actual Loops"]
+    return n["Node Type"] === "CTE Scan" &&
+      typeof loops === "number" &&
+      loops > 1
+      ? [{ cte: text(n["CTE Name"]) ?? "", loops }]
       : []
-  return [...own, ...children(plan).flatMap(correlatedCteSubPlans)]
+  })
 }
 
 /** Імена функцій, які план читає `Function Scan`. */
