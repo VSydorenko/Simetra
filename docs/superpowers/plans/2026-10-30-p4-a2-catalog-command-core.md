@@ -429,7 +429,7 @@ export function rightsCheck(contract: RightsContract, action: string,
 - створити кастомну роль `save` з ТЧ `delta` → журнал має рядок `command`;
 - правка лише ТЧ ролі з призначенням (порожній `UPDATE` шапки): `role-in-use` не спрацьовує, ⊆ не спрацьовує, версія ролі +1;
 - `mark_deletion` ролі з живим призначенням → `role-in-use`;
-- призначити (`save` «Призначень») і зняти (`<t>_delete`) — проходять; `<t>_delete` з хибною версією → `conflict`;
+- призначити (`save` «Призначень») і зняти (`<t>_delete`) — проходять; типовий адміністратор скоупу бачить учасника й роль свого скоупу: призначення ролі учаснику свого тенанта проходить без хибного `command.invalid` (перевірка видимості `subject` і `custom_role`), учасник чужого тенанта — `command.invalid` `subject`. Якщо фікстура адміністратора `subject` не бачить — до архітекторки, перевірку не послаблювати; `<t>_delete` з хибною версією → `conflict`;
 - «Користувачі» (шар додає «Користувачам» реквізит застосунку `nickname`; актор — `GlobalAdmin` з `fullAccess`, єдиний з `update` на них у цій моделі): `save` зміни `nickname` — проходить; ключ `invalid` → `command.invalid`; `save` без версії → `command.invalid` `create`.
 
 - [ ] **Крок 1:** написати обидва файли; `pnpm --filter @simetrajs/designer test:db catalog-command-concurrency` і `pnpm --filter simetra test:db catalog-command-admin` — PASS; час — у звіт; сторож стека не бачить сиріт.
