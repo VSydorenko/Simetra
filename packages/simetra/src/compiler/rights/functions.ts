@@ -1549,7 +1549,7 @@ const DELTA_COLUMNS: readonly Column[] = [
  * Ключ скоупу дельти глобального довідника: у глобальних призначень скоупу
  * немає (`NULL`), а `=` з `NULL` не збігається.
  */
-const GLOBAL_SCOPE_KEY = "'00000000-0000-0000-0000-000000000000'::uuid"
+const GLOBAL_SCOPE_KEY = uuidLiteral(ZERO_UUID)
 
 /**
  * Дельти кастомних ролей кожного рівня з рівнем зберігання. `scope_key` —
