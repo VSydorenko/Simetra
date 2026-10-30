@@ -730,6 +730,21 @@ describe("catalog command core", () => {
     })
   })
 
+  // Колонку ключа (`code` під `UNIQUE (org_id, code)`) ядро називає в `SET`
+  // лише коли вхід змінює її значення (Ф14): форма без ключа загубила б зміну
+  it("update: changing a unique column by a command passes", async () => {
+    const result = await save({
+      user: "tw",
+      item: { id: key("K1"), code: "renamed" },
+      version: "current",
+      after: `SELECT code FROM public.${TICKET_TABLE} WHERE id = '${key("K1")}'`,
+    })
+    expect(result).toEqual({
+      rows: [expect.anything()],
+      after: [{ code: "renamed" }],
+    })
+  })
+
   it("markDeletion: the mark is set", async () => {
     expect(await mark("tw", "K1", true)).toMatchObject({
       id: key("K1"),

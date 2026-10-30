@@ -528,7 +528,9 @@ describe("catalog command core: concurrency and hierarchy", () => {
   // Взаємно нові посилання (Р-A2-20): сесія 1 зберігає X з батьком P, сесія 2
   // — P з рядком ТЧ `related_id = X`. RI-перевірка кожної бере `KEY SHARE` на
   // рядок, який друга тримає замком ядра. Під `FOR UPDATE` це `40P01`; під
-  // `FOR NO KEY UPDATE` замки сумісні, і обидві команди завершуються.
+  // `FOR NO KEY UPDATE` замки сумісні, і обидві команди завершуються — лише
+  // коли й `UPDATE` шапки не називає колонок ключа (Ф14): самоприсвоєння
+  // `code` підняло б замок рядка до `FOR UPDATE`.
   // Модель — без обробника `beforeWrite`: з ним обидві команди брали б
   // advisory-замок ієрархії першими й серіалізувалися б і під `FOR UPDATE`
   it("does not deadlock on mutually new references", async () => {

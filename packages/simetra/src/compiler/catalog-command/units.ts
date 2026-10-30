@@ -118,6 +118,7 @@ export interface CatalogCommandInput {
  *
  * Зміна завжди виконує `UPDATE` шапки самоприсвоєнням колонок, яких немає в
  * `p_item` (Р-A2-6): так зміна лише ТЧ підвищує версію тим самим шляхом.
+ * Колонки ключа самоприсвоєння не торкається (Ф14, `headerUpdate`).
  * Тригери платформи на таблиці довідника, які бачать цей `UPDATE`, і їхні
  * умови (жоден не має `UPDATE OF <колонки>`, інакше самоприсвоєння запускало
  * б його хибно; тест тримає це на деревах):
@@ -442,8 +443,9 @@ function referenceViolations(
  * бере на ціль FK, тож дві команди з взаємно новими посиланнями (T1 зберігає X
  * з посиланням на P; T2 зберігає P з рядком ТЧ `related_id = X`) дали б
  * `40P01`. `NO KEY UPDATE` з `KEY SHARE` сумісний, так само вимагає права
- * `UPDATE` і застосовує політики `UPDATE USING`; ключа й унікальних ключів
- * команда не змінює ніколи. Видалення бере `UPDATE`: `DELETE` за природою
+ * `UPDATE` і застосовує політики `UPDATE USING`. Колонки ключа команда
+ * називає в `SET` лише коли вхід справді змінює значення ключа (Ф14,
+ * `headerUpdate`), інакше `UPDATE` підняв би замок до `FOR UPDATE`. Видалення бере `UPDATE`: `DELETE` за природою
  * конфліктує з `KEY SHARE`, слабший замок лише відклав би конфлікт до `DELETE`.
  */
 type RowLockStrength = "NO KEY UPDATE" | "UPDATE"
@@ -616,10 +618,8 @@ function saveFunction(
     // зв'язок лишає копію рядка.
     ...parts.relink(contract.carrierLinks),
     ...rightsIf(contract.actions.update, "v_new", E.forbidden.newCarrier),
-    headerUpdate(contract),
-    // Відкликання права між замком і `UPDATE` (`READ COMMITTED`): політики
-    // застосовуються знову й дають нуль рядків — це відмова, не успіх.
-    "GET DIAGNOSTICS v_count = ROW_COUNT;",
+    ...headerUpdate(contract),
+    // Нуль рядків після `UPDATE` будь-якої форми — відмова, не успіх.
     ...ifThen("v_count = 0", [noRight]),
   ]
 
@@ -755,20 +755,76 @@ function createLines(
   ]
 }
 
-/** `UPDATE` шапки: самоприсвоєння колонок, яких немає в `p_item` (Р-A2-6). */
-function headerUpdate(contract: CatalogCommandContract): string {
+/**
+ * Колонки ключа таблиці за правилом Postgres (Ф14): колонки первинного ключа,
+ * UNIQUE-обмежень і UNIQUE-індексів без предиката й без виразів (`INCLUDE` —
+ * ні). `UPDATE`, чий `SET` називає таку колонку, бере замок `FOR UPDATE`
+ * навіть за незмінного значення (PG 17.6, проба `FOR KEY SHARE NOWAIT`:
+ * `SET code = code` блокує, `SET predefined_name = predefined_name` під
+ * частковим UNIQUE — ні), а він конфліктує з `KEY SHARE` RI-перевірок.
+ */
+export function keyColumns(table: PhysicalTable): Set<string> {
+  return new Set([
+    ...(table.primaryKey?.columns ?? []),
+    ...table.uniques.flatMap((u) => u.columns),
+    ...table.indexes
+      .filter(
+        (i) =>
+          i.unique &&
+          i.where === undefined &&
+          i.keys.every((k) => "column" in k)
+      )
+      .flatMap((i) => i.keys.flatMap((k) => ("column" in k ? [k.column] : []))),
+  ])
+}
+
+/**
+ * `UPDATE` шапки: самоприсвоєння колонок, яких немає в `p_item` (Р-A2-6), у
+ * двох статичних формах (Ф14). Колонка ключа в `SET` бере замок `FOR UPDATE`
+ * навіть за незмінного значення, тож форма з колонками ключа — лише коли вхід
+ * справді змінює значення ключа; інакше `SET` без них, і замок лишається
+ * `NO KEY UPDATE` (Р-A2-20), сумісний з `KEY SHARE` взаємних RI-перевірок.
+ */
+function headerUpdate(contract: CatalogCommandContract): string[] {
   if (contract.updateKeys.length === 0) {
     throw new Error(
       `internal: command core of ${relation(contract.table)} has no update keys`
     )
   }
-  const set = contract.updateKeys
-    .map(
-      (c) =>
-        `${q(c)} = CASE WHEN p_item ? ${sqlLiteral(c)} THEN v_in.${q(c)} ELSE ${q(c)} END`
-    )
-    .join(", ")
-  return `UPDATE ${relation(contract.table)} SET ${set} WHERE ${q(contract.key)} = v_in.${q(contract.key)} RETURNING * INTO v_row;`
+  const keys = keyColumns(contract.table)
+  const form = (columns: readonly string[]) => [
+    `UPDATE ${relation(contract.table)} SET ${columns
+      .map(
+        (c) =>
+          `${q(c)} = CASE WHEN p_item ? ${sqlLiteral(c)} THEN v_in.${q(c)} ELSE ${q(c)} END`
+      )
+      .join(
+        ", "
+      )} WHERE ${q(contract.key)} = v_in.${q(contract.key)} RETURNING * INTO v_row;`,
+    // Одразу за `UPDATE`: відкликання права між замком і `UPDATE` (`READ
+    // COMMITTED`) — політики застосовуються знову й дають нуль рядків.
+    "GET DIAGNOSTICS v_count = ROW_COUNT;",
+  ]
+  const changed = contract.updateKeys.filter((c) => keys.has(c))
+  const rest = contract.updateKeys.filter((c) => !keys.has(c))
+  // Грант зміни без колонок ключа — одна форма. Грант лише з колонками ключа
+  // форми без ключа не має (`SET` порожній), а пропуск `UPDATE` пропустив би
+  // й тригери рядка — лишається одна форма з ключем.
+  if (changed.length === 0 || rest.length === 0) {
+    return form(contract.updateKeys)
+  }
+  return [
+    `IF ${changed
+      .map(
+        (c) =>
+          `(p_item ? ${sqlLiteral(c)} AND v_in.${q(c)} IS DISTINCT FROM v_old.${q(c)})`
+      )
+      .join(" OR ")} THEN`,
+    ...indent(form(contract.updateKeys)),
+    "ELSE",
+    ...indent(form(rest)),
+    "END IF;",
+  ]
 }
 
 /** ТЧ (спека П4 §6.6): після DML шапки, кожна — лише коли її названо в `p_item`. */

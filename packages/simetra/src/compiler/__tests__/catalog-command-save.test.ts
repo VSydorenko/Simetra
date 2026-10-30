@@ -6,6 +6,7 @@ import {
   type CatalogCommandContract,
 } from "../catalog-command/contracts"
 import { rightsCheck } from "../catalog-command/rights-check"
+import { buildCatalogCommandUnits, keyColumns } from "../catalog-command/units"
 import { HIERARCHY_LOCK_SPACE } from "../hierarchy-units"
 import { executeGrants } from "../sql/execute-grants"
 import { hasEmptySearchPath } from "../sql/closed-forms"
@@ -154,6 +155,13 @@ describe("buildCatalogCommandUnits — <t>_save", () => {
     const update = shape.findIndex(
       (s, i) => i > ctx && dmlKind(s) === "UpdateStmt"
     )
+    // Форма шапки без ключа (Ф14) — другий `UPDATE` шапки.
+    const lastUpdate = shape.findIndex(
+      (s, i) =>
+        i > update &&
+        dmlKind(s) === "UpdateStmt" &&
+        nodes(s.expressions[0]!.tree, "relname").includes("ticket")
+    )
     const order = [ctx, lockAt, version, before, after, update]
     expect(order.every((i) => i >= 0)).toBe(true)
     expect([...order].sort((a, b) => a - b)).toEqual(order)
@@ -168,12 +176,13 @@ describe("buildCatalogCommandUnits — <t>_save", () => {
     expect(lockStrengths(shape[lockAt]!.expressions[0]!.tree)).toEqual([
       "LCS_FORNOKEYUPDATE",
     ])
-    // `GET DIAGNOSTICS` іде одразу після `UPDATE`, за ним — відмова на нулі.
-    expect(shape[update + 1]).toMatchObject({
+    // `GET DIAGNOSTICS` іде одразу після `UPDATE` кожної форми (Ф14), за
+    // останньою — відмова на нулі.
+    expect(shape[lastUpdate + 1]).toMatchObject({
       type: "getdiag",
       target: { variable: "v_count" },
     })
-    expect(ifAt(shape, "v_count = 0", update + 2)).toBe(update + 2)
+    expect(ifAt(shape, "v_count = 0", lastUpdate + 2)).toBe(lastUpdate + 2)
   })
 
   it("порядок створення: контекст → exists → посилання → копії → право → INSERT", () => {
@@ -401,24 +410,130 @@ describe("buildCatalogCommandUnits — <t>_save", () => {
     ])
   })
 
-  it("UPDATE шапки — CASE за кожною колонкою updateKeys", () => {
-    const { updateKeys } = contractOf(domain, "ticket")
+  // Колонка ключа в `SET` бере замок `FOR UPDATE` навіть за незмінного
+  // значення (Ф14), тож форма з ключем — лише коли вхід змінює ключ.
+  it("UPDATE шапки — дві форми: з колонками ключа лише за зміни ключа", () => {
+    const { updateKeys, table } = contractOf(domain, "ticket")
     const shape = bodyShape(saveSql(domain, "ticket"))
-    const set = updateKeys
-      .map(
-        (c) => `${c} = CASE WHEN p_item ? '${c}' THEN v_in.${c} ELSE ${c} END`
-      )
-      .join(", ")
-    expect(
-      shape
-        .filter(
-          (s) =>
-            dmlKind(s) === "UpdateStmt" &&
-            nodes(s.expressions[0]!.tree, "relname").includes("ticket")
+    const keys = keyColumns(table)
+    const changed = updateKeys.filter((c) => keys.has(c))
+    // Без колонки ключа серед updateKeys кейс нічого не доводить.
+    expect(changed).toEqual(["code"])
+    const update = (columns: string[]) =>
+      `UPDATE public.ticket SET ${columns
+        .map(
+          (c) => `${c} = CASE WHEN p_item ? '${c}' THEN v_in.${c} ELSE ${c} END`
         )
-        .map((s) => s.expressions[0]!.tree)
-    ).toEqual([
-      tree(`UPDATE public.ticket SET ${set} WHERE id = v_in.id RETURNING *`),
+        .join(", ")} WHERE id = v_in.id RETURNING *`
+    const updates = shape.filter(
+      (s) =>
+        dmlKind(s) === "UpdateStmt" &&
+        nodes(s.expressions[0]!.tree, "relname").includes("ticket")
+    )
+    expect(updates.map((s) => s.expressions[0]!.tree)).toEqual([
+      tree(update(updateKeys)),
+      tree(update(updateKeys.filter((c) => !keys.has(c)))),
+    ])
+    // Обидві форми — гілки одного IF за умовою зміни ключа, з ключем — THEN.
+    const choice = ifAt(
+      shape,
+      "(p_item ? 'code' AND v_in.code IS DISTINCT FROM v_old.code)"
+    )
+    expect(choice).toBeGreaterThan(0)
+    const [withKeys, withoutKeys] = updates.map((s) => shape.indexOf(s))
+    expect(withKeys).toBe(choice + 1)
+    expect(shape[withKeys!]!.depth).toBe(shape[choice]!.depth + 1)
+    expect(shape[withoutKeys!]!.depth).toBe(shape[choice]!.depth + 1)
+    expect(shape[withKeys! + 1]!.type).toBe("getdiag")
+    expect(withoutKeys).toBe(withKeys! + 2)
+  })
+
+  it("UPDATE шапки без колонок ключа в updateKeys — одна форма без IF", () => {
+    const contract = contractOf(domain, "ticket")
+    const keys = keyColumns(contract.table)
+    const updateKeys = contract.updateKeys.filter((c) => !keys.has(c))
+    const [save] = buildCatalogCommandUnits({
+      catalogCommands: [{ ...contract, updateKeys }],
+      contracts: domain.contracts,
+      physical: domain.physical,
+      attributeCase: domain.project.naming.attributeCase,
+      provider: domain.project.database.provider,
+      module: "test",
+      units: domain.sqlUnits.filter((u) => u.generator !== "catalogCommand"),
+      parse,
+      plpgsql,
+    }).filter((u) => u.identity === "function:public.ticket_save(jsonb,int8)")
+    const shape = bodyShape(save!.sql)
+    const updates = shape.filter(
+      (s) =>
+        dmlKind(s) === "UpdateStmt" &&
+        nodes(s.expressions[0]!.tree, "relname").includes("ticket")
+    )
+    expect(updates.map((s) => s.expressions[0]!.tree)).toEqual([
+      tree(
+        `UPDATE public.ticket SET ${updateKeys
+          .map(
+            (c) =>
+              `${c} = CASE WHEN p_item ? '${c}' THEN v_in.${c} ELSE ${c} END`
+          )
+          .join(", ")} WHERE id = v_in.id RETURNING *`
+      ),
+    ])
+    // Без IF вибору: `UPDATE` на глибині гілки зміни, як замок рядка «до».
+    const update = shape.indexOf(updates[0]!)
+    expect(shape[update]!.depth).toBe(
+      shape.find((s) => s.target?.variable === "v_old")!.depth
+    )
+  })
+
+  it("колонки ключа — за правилом Postgres: без предиката й без виразів", () => {
+    const table = {
+      ...mainOf(domain, "ticket"),
+      primaryKey: { name: "t_pkey", columns: ["id"] },
+      uniques: [
+        { name: "t_u", columns: ["org_id", "code"], nullsNotDistinct: false },
+      ],
+      indexes: [
+        {
+          name: "t_plain",
+          unique: true,
+          method: "btree",
+          keys: [{ column: "plain" }],
+          include: ["included"],
+          nullsNotDistinct: false,
+        },
+        {
+          name: "t_partial",
+          unique: true,
+          method: "btree",
+          keys: [{ column: "predefined_name" }],
+          include: [],
+          where: "predefined_name IS NOT NULL",
+          nullsNotDistinct: false,
+        },
+        {
+          name: "t_expression",
+          unique: true,
+          method: "btree",
+          keys: [{ column: "mixed" }, { expression: "lower(description)" }],
+          include: [],
+          nullsNotDistinct: false,
+        },
+        {
+          name: "t_nonunique",
+          unique: false,
+          method: "btree",
+          keys: [{ column: "parent_id" }],
+          include: [],
+          nullsNotDistinct: false,
+        },
+      ],
+    }
+    expect([...keyColumns(table)].sort()).toEqual([
+      "code",
+      "id",
+      "org_id",
+      "plain",
     ])
   })
 
@@ -747,17 +862,31 @@ describe("buildCatalogCommandUnits — <t>_save", () => {
     const into = shape.filter(
       (s) => s.type === "execsql" && s.target?.variable === "v_row"
     )
-    expect(into.map(dmlKind)).toEqual(["InsertStmt", "UpdateStmt"])
+    expect(into.map(dmlKind)).toEqual([
+      "InsertStmt",
+      "UpdateStmt",
+      "UpdateStmt",
+    ])
     for (const s of into) {
       expect(nodes(s.expressions[0]!.tree, "returningList")).toHaveLength(1)
     }
-    const update = shape.indexOf(into[1]!)
-    expect(shape[update + 1]).toMatchObject({
-      type: "getdiag",
-      target: { variable: "v_count" },
-    })
-    expect(ifAt(shape, "v_count = 0", update + 2)).toBe(update + 2)
-    expect(ifAt(shape, "NOT FOUND", update)).toBe(-1)
+    // Кожна форма `UPDATE` (Ф14) — з `GET DIAGNOSTICS` одразу за нею;
+    // відмова на нулі — одна, після обох.
+    const updates = into.slice(1).map((s) => shape.indexOf(s))
+    for (const update of updates) {
+      expect(shape[update + 1]).toMatchObject({
+        type: "getdiag",
+        target: { variable: "v_count" },
+      })
+    }
+    const last = updates.at(-1)!
+    expect(ifAt(shape, "v_count = 0", last + 2)).toBe(last + 2)
+    expect(
+      shape.filter((s) =>
+        same(s.expressions[0]?.tree, tree("SELECT v_count = 0"))
+      )
+    ).toHaveLength(1)
+    expect(ifAt(shape, "NOT FOUND", updates[0])).toBe(-1)
   })
 
   it("кожна перевірка — NULL-безпечна", () => {
