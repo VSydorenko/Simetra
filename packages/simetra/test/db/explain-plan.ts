@@ -12,10 +12,22 @@ export interface PlanNode {
   indexes: string[]
   /** `Index Cond` і `Recheck Cond`; для `Bitmap Heap Scan` — і умови його бітових карт. */
   conditions: string[]
+  /**
+   * Гілки індексного доступу: кожен `Bitmap Index Scan` під `Bitmap Heap Scan`
+   * чи сам `Index Scan` / `Index Only Scan` — індекс і його `Index Cond`
+   * (порожня, якщо індекс читається без умови).
+   */
+  arms: IndexArm[]
   /** `Parent Relationship`: `InitPlan`, `SubPlan`, `Outer`, … */
   parent?: string
   loops?: number
   filter?: string
+}
+
+/** Одна гілка індексного доступу вузла таблиці. */
+export interface IndexArm {
+  index: string
+  condition: string
 }
 
 type Raw = Record<string, unknown>
@@ -37,7 +49,7 @@ function bitmapParts(node: Raw): Raw[] {
     .flatMap((c) => [c, ...bitmapParts(c)])
 }
 
-function access(node: Raw): Pick<PlanNode, "indexes" | "conditions"> {
+function access(node: Raw): Pick<PlanNode, "indexes" | "conditions" | "arms"> {
   const own = [node]
   // Умова межі на `Bitmap Heap Scan` стоїть у дочірніх `Bitmap Index Scan`:
   // без них вузол таблиці мав би лише `Recheck Cond`.
@@ -50,6 +62,14 @@ function access(node: Raw): Pick<PlanNode, "indexes" | "conditions"> {
     conditions: parts.flatMap((p) =>
       [text(p["Index Cond"]), text(p["Recheck Cond"])].flatMap((c) => c ?? [])
     ),
+    // Гілка — вузол, що сам читає індекс (має `Index Name`): `BitmapOr` /
+    // `BitmapAnd` лише зводять бітові карти своїх гілок.
+    arms: parts.flatMap((p) => {
+      const index = text(p["Index Name"])
+      return index === undefined
+        ? []
+        : [{ index, condition: text(p["Index Cond"]) ?? "" }]
+    }),
   }
 }
 

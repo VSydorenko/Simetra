@@ -182,16 +182,24 @@ function query(table: string, form: Form, gate: Gate): string {
 }
 
 /** Індексний вузол таблиці з умовою на колонку скоупу в умовах доступу. */
+/**
+ * Кожен вузол таблиці читає індекс, і кожна його гілка (кожен `Bitmap Index
+ * Scan` під `BitmapOr` / `BitmapAnd`, сам `Index Scan`) має колонку скоупу в
+ * `Index Cond`: гілка без скоупу — одна `PERMISSIVE`-умова, що йде індексом
+ * через усіх тенантів, навіть коли інші гілки обмежені межею.
+ */
 const scopedIndexAccess = (nodes: PlanNode[]) =>
-  nodes.some(
+  nodes.length > 0 &&
+  nodes.every(
     (n) =>
-      n.indexes.length > 0 && n.conditions.some((c) => SCOPE_COLUMN.test(c))
+      n.arms.length > 0 && n.arms.every((a) => SCOPE_COLUMN.test(a.condition))
   )
 
 /** Короткий опис вузлів для повідомлення перевірки. */
 const shape = (nodes: PlanNode[]) =>
   nodes.map(
-    (n) => `${n.type}[${n.indexes.join(",")}] ${n.conditions.join(" | ")}`
+    (n) =>
+      `${n.type}: ${n.arms.map((a) => `${a.index} (${a.condition})`).join("; ")}`
   )
 
 const CASES: [string, Form][] = [
