@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-Статус: чернетка автора, на аудиті.
+Статус: виконано (гілка `feat/rights-2d2`); повні гейти — на SHA коміту позначок.
 Архітектор задачі — сесія `consumer-reconciliation2`; якщо її немає — власник.
 
 **Мета:** база відповідає на питання аналізу прав (Рх17): «що може учасник»,
@@ -300,8 +300,8 @@ git commit -m "test(rights): бенчмарк меж прав поза test:db �
 - [ ] **Step 2:** Run: `pnpm format:check && pnpm lint && pnpm typecheck && pnpm test` — код 0.
 - [ ] **Step 3:** Run: `pnpm metadata:check && python3 scripts/check-doc-anchors.py && .agents/skills/codebase-research/scripts/orient --plan docs/superpowers/plans/2026-10-25-rights-2d2-analysis-plan-gate-benchmark.md` — код 0.
 - [ ] **Step 4:** Повний `pnpm test:db` на одному SHA (у фоні, таймаут не коротший за 45 хв): `/usr/bin/time -f %e pnpm test:db` — код 0 (або CI job `db`); приріст проти прогону після 2c2 ≤ 40 с (гейт ≤ 30 с, аналіз ≤ 10 с), інакше звіт архітектору з розкладом за файлами.
-- [ ] **Step 5:** ROADMAP — «Права-2 виконано»; позначки плану.
-- [ ] **Step 6: Commit**
+- [x] **Step 5:** ROADMAP — «Права-2 виконано»; позначки плану.
+- [x] **Step 6: Commit**
 
 ```bash
 git add packages/designer/skills docs/ROADMAP.md docs/superpowers/plans/2026-10-25-rights-2d2-analysis-plan-gate-benchmark.md
