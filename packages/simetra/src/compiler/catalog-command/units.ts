@@ -718,7 +718,7 @@ function createLines(
     // `READ COMMITTED` бачить коміт паралельного створення (Р-A2-8).
     "BEGIN",
     ...indent([
-      `INSERT INTO ${t} (${contract.createKeys.map(q).join(", ")}) VALUES (${contract.createKeys.map((c) => `v_new.${q(c)}`).join(", ")});`,
+      `INSERT INTO ${t} (${contract.createKeys.map(q).join(", ")}) VALUES (${contract.createKeys.map((c) => `v_new.${q(c)}`).join(", ")}) RETURNING * INTO v_row;`,
     ]),
     "EXCEPTION WHEN unique_violation THEN",
     ...indent([
@@ -745,7 +745,7 @@ function headerUpdate(contract: CatalogCommandContract): string {
         `${q(c)} = CASE WHEN p_item ? ${sqlLiteral(c)} THEN v_in.${q(c)} ELSE ${q(c)} END`
     )
     .join(", ")
-  return `UPDATE ${relation(contract.table)} SET ${set} WHERE ${q(contract.key)} = v_in.${q(contract.key)};`
+  return `UPDATE ${relation(contract.table)} SET ${set} WHERE ${q(contract.key)} = v_in.${q(contract.key)} RETURNING * INTO v_row;`
 }
 
 /** ТЧ (спека П4 §6.6): після DML шапки, кожна — лише коли її названо в `p_item`. */
@@ -880,21 +880,19 @@ function sectionLines(
 }
 
 /**
- * Результат (Р-A2-19): рядок читається після DML під командою — `RETURNING`
- * дав би сирий `42501` ролі, що пише, але рядка не бачить. Не видно —
- * ключ і `row: null`.
+ * Результат: рядок повертає `RETURNING`; що він видимий автору, гарантує
+ * замикання прав (запис ⊆ читання за обсягом, `rights.requires-missing`) —
+ * інакше `RETURNING` дав би сирий `42501`. Інваріант тримає тест
+ * `reports a missing requirement once per mistake and role` у
+ * `compiler/__tests__/rights-expand.test.ts`.
  */
 function resultLines(
   contract: CatalogCommandContract,
   root: string,
   tabular: boolean
 ): string[] {
-  const { table, key } = contract
+  const { table } = contract
   return [
-    `SELECT * INTO v_row FROM ${relation(table)} r WHERE r.${q(key)} = ${root};`,
-    ...ifThen("NOT FOUND", [
-      `RETURN jsonb_build_object(${sqlLiteral(key)}, ${root}, 'row', NULL)::text;`,
-    ]),
     `v_result := ${rowJson(table, "v_row")};`,
     ...(!tabular || contract.tabularSections.length === 0
       ? []
@@ -984,7 +982,7 @@ function markDeletionFunction(
       : ifThen(`v_old.${q(contract.predefinedColumn)} IS NOT NULL`, [
           invalid("'predefined'"),
         ])),
-    `UPDATE ${relation(table)} SET ${mark} = p_mark WHERE ${q(key)} = ${root};`,
+    `UPDATE ${relation(table)} SET ${mark} = p_mark WHERE ${q(key)} = ${root} RETURNING * INTO v_row;`,
     // Відкликання права між замком і `UPDATE` — нуль рядків, відмова.
     "GET DIAGNOSTICS v_count = ROW_COUNT;",
     ...ifThen("v_count = 0", [noRight]),

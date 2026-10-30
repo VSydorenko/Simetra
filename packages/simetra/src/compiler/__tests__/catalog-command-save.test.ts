@@ -304,7 +304,9 @@ describe("buildCatalogCommandUnits — <t>_save", () => {
             nodes(s.expressions[0]!.tree, "relname").includes("ticket")
         )
         .map((s) => s.expressions[0]!.tree)
-    ).toEqual([tree(`UPDATE public.ticket SET ${set} WHERE id = v_in.id`)])
+    ).toEqual([
+      tree(`UPDATE public.ticket SET ${set} WHERE id = v_in.id RETURNING *`),
+    ])
   })
 
   it("ключі поза createKeys/updateKeys відхиляє перевірка входу", () => {
@@ -593,29 +595,24 @@ describe("buildCatalogCommandUnits — <t>_save", () => {
     }
   })
 
-  it("DML без RETURNING; рядок читається після GET DIAGNOSTICS", () => {
+  // Видимість рядка автору гарантує замикання прав (Ф10), тож рядок дає
+  // сам DML, а повторного читання після нього немає.
+  it("рядок — з RETURNING у v_row: UPDATE → GET DIAGNOSTICS → v_count = 0", () => {
     const shape = bodyShape(saveSql(domain, "ticket"))
-    expect(
-      nodes(
-        shape.map((s) => s.expressions.map((e) => e.tree)),
-        "returningList"
-      )
-    ).toEqual([])
-    const diag = shape.findIndex(
-      (s) => s.type === "getdiag" && s.target?.variable === "v_count"
-    )
-    const read = shape.findIndex(
+    const into = shape.filter(
       (s) => s.type === "execsql" && s.target?.variable === "v_row"
     )
-    expect(diag).toBeGreaterThan(0)
-    expect(read).toBeGreaterThan(diag)
-    expect(shape[read]!.expressions[0]!.tree).toEqual(
-      tree("SELECT * FROM public.ticket r WHERE r.id = v_in.id")
-    )
-    expect(ifAt(shape, "NOT FOUND", read)).toBe(read + 1)
-    expect(shape[read + 2]!.expressions[0]!.tree).toEqual(
-      tree("SELECT jsonb_build_object('id', v_in.id, 'row', NULL)::text")
-    )
+    expect(into.map(dmlKind)).toEqual(["InsertStmt", "UpdateStmt"])
+    for (const s of into) {
+      expect(nodes(s.expressions[0]!.tree, "returningList")).toHaveLength(1)
+    }
+    const update = shape.indexOf(into[1]!)
+    expect(shape[update + 1]).toMatchObject({
+      type: "getdiag",
+      target: { variable: "v_count" },
+    })
+    expect(ifAt(shape, "v_count = 0", update + 2)).toBe(update + 2)
+    expect(ifAt(shape, "NOT FOUND", update)).toBe(-1)
   })
 
   it("кожна перевірка — NULL-безпечна", () => {

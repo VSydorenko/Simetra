@@ -106,7 +106,7 @@ describe("<t>_mark_deletion", () => {
     const update = at(
       shape,
       "execsql",
-      `UPDATE public.${table} SET deletion_mark = p_mark WHERE id = p_id`
+      `UPDATE public.${table} SET deletion_mark = p_mark WHERE id = p_id RETURNING *`
     )
     return {
       shape,
@@ -151,16 +151,10 @@ describe("<t>_mark_deletion", () => {
       target: { variable: "v_count" },
     })
     expect(ifAt(s.shape, "v_count = 0", s.update + 2)).toBe(s.update + 2)
-    const read = at(
-      s.shape,
-      "execsql",
-      "SELECT * FROM public.ticket r WHERE r.id = p_id",
-      s.update
-    )
-    expect(read).toBeGreaterThan(s.update + 2)
-    expect(s.shape[read]!.target).toEqual({ variable: "v_row" })
-    expect(s.shape[read + 2]!.expressions[0]!.tree).toEqual(
-      tree("SELECT jsonb_build_object('id', p_id, 'row', NULL)::text")
+    // Рядок дає сам `UPDATE` (Ф10): повторного читання після нього немає.
+    expect(s.shape[s.update]!.target).toEqual({ variable: "v_row" })
+    expect(s.shape.filter((x) => x.target?.variable === "v_row")).toHaveLength(
+      1
     )
     // Автор зміни — поточний користувач, як у `save`.
     expect(
@@ -190,14 +184,14 @@ describe("<t>_mark_deletion", () => {
     )
   })
 
-  it("DML без RETURNING; посилань на рядок не шукає (Рт12)", () => {
+  it("RETURNING лише в UPDATE; посилань на рядок не шукає (Рт12)", () => {
     const shape = bodyShape(markSql(domain, "ticket"))
     expect(
       nodes(
         shape.map((s) => s.expressions.map((e) => e.tree)),
         "returningList"
       )
-    ).toEqual([])
+    ).toHaveLength(1)
     // Відношення тіла — лише сама таблиця (плюс джерела копій, яких
     // у `ticket` через автора немає).
     const relations = new Set(
@@ -446,7 +440,7 @@ describe("обидва стилі: колонка позначки за origin",
       at(
         shape,
         "execsql",
-        "UPDATE public.ticket SET deletion_mark = p_mark WHERE id = p_id"
+        "UPDATE public.ticket SET deletion_mark = p_mark WHERE id = p_id RETURNING *"
       )
     ).toBeGreaterThan(0)
     expect(
