@@ -36,7 +36,18 @@ import {
 } from "../../src/compiler/rights/predicates"
 import { signUp } from "./auth"
 import { queryAs } from "./connection"
-import { type Assignment, type Delta, type Seed, assignmentRow, describeTransaction, insert, orgDeltaRow, outcome, set, deploy } from "./rights-seed"
+import {
+  type Assignment,
+  type Delta,
+  type Seed,
+  assignmentRow,
+  describeTransaction,
+  insert,
+  orgDeltaRow,
+  outcome,
+  set,
+  deploy,
+} from "./rights-seed"
 
 /**
  * Функції прав на справжньому Postgres (спека прав §5.1, план Права-2a1):

@@ -30,7 +30,14 @@ import {
   withRollback,
   type Refusal,
 } from "./connection"
-import { assignmentRow, describeTransaction, insert, orgDeltaRow, type Seed, deploy } from "./rights-seed"
+import {
+  assignmentRow,
+  describeTransaction,
+  insert,
+  orgDeltaRow,
+  type Seed,
+  deploy,
+} from "./rights-seed"
 
 /**
  * Відкладені тригери прав, журнал і версії перевіряє Postgres на справжніх

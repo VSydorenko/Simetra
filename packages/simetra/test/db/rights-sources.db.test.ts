@@ -29,7 +29,15 @@ import {
   rollbackDatabase,
   testRoleName,
 } from "./connection"
-import { type Seed, assignmentRow, describeTransaction, insert, outcome, set, deploy } from "./rights-seed"
+import {
+  type Seed,
+  assignmentRow,
+  describeTransaction,
+  insert,
+  outcome,
+  set,
+  deploy,
+} from "./rights-seed"
 
 /**
  * Прийняті джерела прав на справжньому Postgres (спека прав §4.7, план

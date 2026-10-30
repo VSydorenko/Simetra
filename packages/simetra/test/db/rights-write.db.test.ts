@@ -23,7 +23,14 @@ import {
 } from "../../src/compiler/__tests__/fixtures/rights"
 import { signUp } from "./auth"
 import { type Refusal, commandAs } from "./connection"
-import { type Assignment, type Seed, assignmentRow, describeTransaction, insert, deploy } from "./rights-seed"
+import {
+  type Assignment,
+  type Seed,
+  assignmentRow,
+  describeTransaction,
+  insert,
+  deploy,
+} from "./rights-seed"
 
 /**
  * Запис під роллю команд на справжньому Postgres (спека прав §5.3, §6.2,
