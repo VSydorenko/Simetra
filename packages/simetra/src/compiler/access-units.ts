@@ -1,11 +1,19 @@
 import {
+  KIND_REGISTRY,
   PLATFORM_ROLES,
   PROVIDER_API_ROLES,
   PUBLIC_READ_PURPOSES,
+  authorColumns,
   makeObjectName,
+  predefinedNameColumn,
   quoteIdent,
+  serviceDateColumns,
+  standardLogicalName,
   toSnakeCase,
+  userPlatformColumns,
+  versionColumn,
   type ApiRolePurpose,
+  type AttributeCase,
   type DatabaseProvider,
   type Dml,
   type PhysicalSnapshot,
@@ -39,6 +47,7 @@ import {
   type RightsPredicate,
 } from "./rights/predicates"
 import { sha256HexSync } from "./sha256"
+import { grantRole } from "./sql/execute-grants"
 import type { SqlParser } from "./sql/parse"
 import { generatedUnit, type SqlUnit } from "./sql/units"
 import { isDeclaredTable, sqlLiteral } from "./stages/model"
@@ -57,9 +66,11 @@ export function accessContracts(
   scopeKinds: readonly CompiledScopeKind[],
   scopeKindIdByFile: ReadonlyMap<string, string>,
   rights: readonly RightsContract[],
-  usersObjectId: string | undefined
+  usersObjectId: string | undefined,
+  attributeCase: AttributeCase
 ): AccessContract[] {
   const byId = new Map(objects.map((o) => [o.id ?? "", o]))
+  const rightsById = new Map(rights.map((r) => [r.objectId, r]))
   const roots = new Set(
     scopeKinds.flatMap((k) => ("objectId" in k.root ? [k.root.objectId] : []))
   )
@@ -87,6 +98,20 @@ export function accessContracts(
       const main =
         table.origin.tabularSectionId === undefined &&
         table.origin.part === undefined
+      const users = objectId === usersObjectId
+      const command = KIND_REGISTRY[object.kind].commandWrites
+        ? commandColumns(table, {
+            attributeCase,
+            main,
+            users,
+            transitions: main
+              ? (rightsById.get(objectId)?.transitions ?? [])
+              : [],
+            roleAssignments:
+              KIND_REGISTRY[object.kind].rightsSystem?.(object.data) ===
+              "roleAssignments",
+          })
+        : undefined
       return [
         {
           objectId,
@@ -98,8 +123,9 @@ export function accessContracts(
           root: main && roots.has(objectId),
           // Похідних таблиць «Користувачі» з RLS не мають: `identities` —
           // службова таблиця без RLS (спека системної схеми).
-          users: objectId === usersObjectId,
+          users,
           ...(withRights.has(objectId) ? { rights: { objectId } } : {}),
+          ...(command === undefined ? {} : { command }),
         },
       ]
     })
@@ -108,6 +134,75 @@ export function accessContracts(
         compareStrings(a.table.schema, b.table.schema) ||
         compareStrings(a.table.name, b.table.name)
     )
+}
+
+/**
+ * Колонки, яких роль команд не пише ніколи (спека П4 §6.2): механіку,
+ * авторство й `predefined_name` пишуть значення за замовчуванням і тригери.
+ * Імена — з визначень реєстру в стилі проєкту, як їх несе `origin.standard`.
+ */
+function platformWrittenNames(attributeCase: AttributeCase): Set<string> {
+  return new Set(
+    [
+      versionColumn(),
+      ...serviceDateColumns(),
+      ...authorColumns(),
+      predefinedNameColumn(),
+    ].map((def) => standardLogicalName(def, attributeCase))
+  )
+}
+
+/**
+ * Поколонковий запис ролі команд у таблицю довідника (спека П4 §6.2,
+ * Р-A1-11). Колонку визначає походження, а не фізичне ім'я: ієрархічний
+ * `parent_id` основної таблиці — зміст (перенесення між групами), а
+ * однойменна колонка власника рядка ТЧ — ні. Вставка не задає переходів
+ * (беруть значення за замовчуванням, змінює їх лише дія-перехід); зміна не
+ * чіпає ключа, скоупу, власника рядка ТЧ і платформних реквізитів
+ * «Користувачів». Колонковий грант — друга лінія за тригером ефектів.
+ */
+function commandColumns(
+  table: PhysicalTable,
+  facts: {
+    attributeCase: AttributeCase
+    main: boolean
+    users: boolean
+    transitions: readonly { column: string }[]
+    roleAssignments: boolean
+  }
+): NonNullable<AccessContract["command"]> {
+  const platform = platformWrittenNames(facts.attributeCase)
+  const base = table.columns.filter(
+    (c) =>
+      c.generated === undefined &&
+      c.origin.copyOf === undefined &&
+      !platform.has(c.origin.standard ?? "")
+  )
+  const transitions = new Set(facts.transitions.map((t) => t.column))
+  const section = table.origin.tabularSectionId !== undefined
+  const usersFixed = new Set(
+    facts.users && facts.main
+      ? userPlatformColumns().map((def) =>
+          standardLogicalName(def, facts.attributeCase)
+        )
+      : []
+  )
+  const update = base.filter(
+    (c) =>
+      c.origin.standard !== "ref" &&
+      c.origin.scopeKindId === undefined &&
+      !(section && c.origin.standard === "parent") &&
+      !usersFixed.has(c.origin.standard ?? "")
+  )
+  return {
+    // Користувача створює провізія (спека системної схеми), не команда.
+    insert:
+      facts.users && facts.main
+        ? []
+        : base.filter((c) => !transitions.has(c.name)).map((c) => c.name),
+    update: update.map((c) => c.name),
+    delete: section || (facts.main && facts.roleAssignments),
+  }
 }
 
 /** Гість бачить не більше за користувача: `anon` відкриває обидві ролі запиту. */
@@ -200,14 +295,23 @@ function clipUtf8(text: string, limit: number): string {
  * «відкликання, потім грант» дає граф створення (ребро за ціллю), а не
  * порядок цього масиву. Кожен оператор — на одного отримувача: так гранти
  * читає extract.
+ *
+ * Роль команд (спека П4 §6.2) читає кожну таблицю з RLS, а з `command` —
+ * ще пише перелічені колонки: окремий оператор на привілей, порожній перелік
+ * — без оператора. `REVOKE` їй не потрібен: типових привілеїв провайдера
+ * вона не має, а зайве знімає дифф ACL рушія.
  */
 export function tableGrants(
   table: QualifiedName,
   readers: readonly ApiRolePurpose[],
-  provider: DatabaseProvider
+  provider: DatabaseProvider,
+  command?: AccessContract["command"]
 ): string[] {
   const apiRoles = PROVIDER_API_ROLES[provider]
   const target = `TABLE ${qualified(table)}`
+  const commandRole = quoteIdent(grantRole("command", provider))
+  const columns = (names: readonly string[]) =>
+    names.map((name) => quoteIdent(name)).join(", ")
   return [
     `REVOKE ALL ON ${target} FROM PUBLIC;`,
     ...Object.values(apiRoles).map(
@@ -217,6 +321,24 @@ export function tableGrants(
       (purpose) =>
         `GRANT SELECT ON ${target} TO ${quoteIdent(apiRoles[purpose])};`
     ),
+    `GRANT SELECT ON ${target} TO ${commandRole};`,
+    ...(command === undefined
+      ? []
+      : [
+          ...(command.insert.length === 0
+            ? []
+            : [
+                `GRANT INSERT (${columns(command.insert)}) ON ${target} TO ${commandRole};`,
+              ]),
+          ...(command.update.length === 0
+            ? []
+            : [
+                `GRANT UPDATE (${columns(command.update)}) ON ${target} TO ${commandRole};`,
+              ]),
+          ...(command.delete
+            ? [`GRANT DELETE ON ${target} TO ${commandRole};`]
+            : []),
+        ]),
   ]
 }
 
@@ -385,14 +507,15 @@ export function buildAccessUnits(
           )
         }
       }
-      return [...tableGrants(table, readers, provider), ...policies].map(
-        (sql): SqlUnit => ({
-          ...generatedUnit(sql, table.schema, parse),
-          ownerObjectId: contract.objectId,
-          module,
-          generator: "access",
-        })
-      )
+      return [
+        ...tableGrants(table, readers, provider, contract.command),
+        ...policies,
+      ].map((sql): SqlUnit => ({
+        ...generatedUnit(sql, table.schema, parse),
+        ownerObjectId: contract.objectId,
+        module,
+        generator: "access",
+      }))
     })
     .sort((a, b) => compareStrings(a.identity, b.identity))
 }

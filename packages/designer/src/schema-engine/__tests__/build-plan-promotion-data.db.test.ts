@@ -586,7 +586,9 @@ describe.concurrent("buildPlan", () => {
           s.lockedTables.some((t) => t.name === contacts.name)
         )
         // Гранти доступу таблиці виду — кроки двигуна без замка таблиці:
-        // слід замків вони не змінюють
+        // слід замків вони не змінюють. Поколонкові гранти ролі команд
+        // (спека П4 §6.2) двигун пише по колонці, а власник рядка ТЧ
+        // `parent_id` — лише у вставці.
         expect(touching.map((s) => [s.origin, s.lockClass, s.sql])).toEqual([
           [
             "engine",
@@ -597,6 +599,56 @@ describe.concurrent("buildPlan", () => {
             "engine",
             "none",
             'GRANT SELECT ON TABLE "app"."counterparty_contacts" TO "authenticated"',
+          ],
+          [
+            "engine",
+            "none",
+            'REVOKE ALL ON TABLE "app"."counterparty_contacts" FROM "simetra_command"',
+          ],
+          [
+            "engine",
+            "none",
+            'REVOKE ALL ("id") ON TABLE "app"."counterparty_contacts" FROM "simetra_command"',
+          ],
+          [
+            "engine",
+            "none",
+            'GRANT INSERT ("id") ON TABLE "app"."counterparty_contacts" TO "simetra_command"',
+          ],
+          [
+            "engine",
+            "none",
+            'REVOKE ALL ("line_number") ON TABLE "app"."counterparty_contacts" FROM "simetra_command"',
+          ],
+          [
+            "engine",
+            "none",
+            'GRANT INSERT ("line_number"), UPDATE ("line_number") ON TABLE "app"."counterparty_contacts" TO "simetra_command"',
+          ],
+          [
+            "engine",
+            "none",
+            'REVOKE ALL ("parent_id") ON TABLE "app"."counterparty_contacts" FROM "simetra_command"',
+          ],
+          [
+            "engine",
+            "none",
+            'GRANT INSERT ("parent_id") ON TABLE "app"."counterparty_contacts" TO "simetra_command"',
+          ],
+          [
+            "engine",
+            "none",
+            'REVOKE ALL ("phone") ON TABLE "app"."counterparty_contacts" FROM "simetra_command"',
+          ],
+          [
+            "engine",
+            "none",
+            'GRANT INSERT ("phone"), UPDATE ("phone") ON TABLE "app"."counterparty_contacts" TO "simetra_command"',
+          ],
+          [
+            "engine",
+            "none",
+            'GRANT DELETE, SELECT ON TABLE "app"."counterparty_contacts" TO "simetra_command"',
           ],
         ])
         expect(artifact.promotion!.data.map((t) => t.columns[0]!.step)).toEqual(

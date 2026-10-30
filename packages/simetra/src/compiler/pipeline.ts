@@ -418,7 +418,8 @@ export async function runStages(
     scopeKinds,
     scopeKindIdByFile,
     rights,
-    users?.objectId
+    users?.objectId,
+    stage1.project.naming.attributeCase
   )
 
   const projectModule = stage1.project.name

@@ -704,7 +704,9 @@ describe.concurrent("buildPlan", () => {
         engine.withTargetClone(o, target, scope, async (clone) => {
           await query(
             clone.url,
-            "alter table app.party drop column first; alter table app.party add column first boolean"
+            // Колонка заново — без свого колонкового ACL: повертаємо грант
+            // ролі команд (спека П4 §6.2), щоб копія різнилася лише порядком.
+            "alter table app.party drop column first; alter table app.party add column first boolean; grant insert (first), update (first) on app.party to simetra_command"
           )
           return fn(clone)
         }),

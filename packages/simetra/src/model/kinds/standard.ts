@@ -363,6 +363,12 @@ export interface KindDefinition {
    * Only a set can be included; every declaration needs the users catalog.
    */
   rightsDeclaration?: "set" | "role"
+  /**
+   * Об'єкти виду пише роль команд (спека П4 §6.2, Рт10): таблиці отримують
+   * поколонкові `INSERT`/`UPDATE` і `DELETE` рядків ТЧ. Немає — роль команд
+   * лише читає: документи й регістри пише ядро команд через функції (A2+).
+   */
+  commandWrites?: true
   materializes: "table" | "enumType" | "none"
   /**
    * Що приймає `<Ім'я>.sql` об'єкта (спека П2 §3, «Дослівний SQL»):
