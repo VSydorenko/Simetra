@@ -575,6 +575,11 @@ export async function promoteObject(
               : fate.to === "attribute"
                 ? String(fate.element.name)
                 : undefined,
+          ...(fate.to === "scope"
+            ? { key: "scope" as const }
+            : fate.to === "standard" && fate.def.primaryKey === true
+              ? { key: "ref" as const }
+              : {}),
         },
       ])
     ),

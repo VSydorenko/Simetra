@@ -12,7 +12,9 @@ import {
 import {
   canonicalSnapshot,
   compile,
+  hierarchyNames,
   loadSqlParser,
+  keyTriggerNames,
   mechanicsTriggerName,
   type CompiledModel,
   type SchemaPathResolver,
@@ -233,20 +235,29 @@ interface Project {
 
 /**
  * Що round-trip свідомо втрачає: тригери механіки таблиць виду, повернутих
- * як `CustomTable`. Межа без них — межа джерела без одиниць механіки.
+ * як `CustomTable`, і функції таблиці, які кличуть лише вони (ієрархія,
+ * Р-A2-1), разом із їхніми грантами. Межа без них — межа джерела без одиниць
+ * механіки. `identities` — втрачені одиниці, які звірка бачить відсутніми.
  */
 interface Loss {
   schemas: string[]
   triggers: { schema: string; table: string; name: string }[]
+  functions: { schema: string; name: string }[]
+  identities: string[]
 }
 
 const NO_LOSS = (scope: EngineScope): Loss => ({
   schemas: [...scope.schemas],
   triggers: [],
+  functions: [],
+  identities: [],
 })
 
 const dropTrigger = (t: Loss["triggers"][number]) =>
   `DROP TRIGGER "${t.name}" ON "${t.schema}"."${t.table}"`
+
+const dropFunction = (f: Loss["functions"][number]) =>
+  `DROP FUNCTION "${f.schema}"."${f.name}"()`
 
 interface RoundTrip {
   extracted: Extracted
@@ -349,12 +360,15 @@ async function roundTripOf(
     ),
     errors: errors(comparison.diagnostics),
   }).toEqual({
-    actions: loss.triggers.map(dropTrigger).sort(),
-    differences: loss.triggers
-      .map((t) => ({
+    actions: [
+      ...loss.triggers.map(dropTrigger),
+      ...loss.functions.map(dropFunction),
+    ].sort(),
+    differences: loss.identities
+      .map((identity) => ({
         detail: "absent in second model",
         kind: "missing",
-        path: `units.trigger:${t.schema}.${t.table}.${t.name}`,
+        path: `units.${identity}`,
       }))
       .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0)),
     errors: [],
@@ -523,38 +537,96 @@ const tableKeys = (model: CompiledModel) =>
 /**
  * Механіка джерела, якої не буде після прийому з нуля: таблиця виду стає
  * `CustomTable` без стандартних колонок, а introspect механіки не пише
- * (рішення 9 плану П3-3a2). Повертає механіку лише промоція у вид.
+ * (рішення 9 плану П3-3a2). Повертає механіку лише промоція у вид. Тригери
+ * незмінності ключа (Рб1-4) — та сама платформна механіка таблиці виду:
+ * `CustomTable` їх не має, тож вони втрачаються так само. Так само й тригери
+ * ієрархії з функцією таблиці (Р-A2-1): генератор `mechanics`, впізнає їх
+ * reverse як платформні, повертає лише промоція.
  */
 async function mechanicsLoss(source: CompiledModel): Promise<Loss> {
-  const identities = new Set(
-    source.sqlUnits
-      .filter((u) => u.generator === "mechanics" && u.class === "trigger")
-      .map((u) => u.identity)
-  )
-  const triggers = source.physical.tables
-    .map((t) => ({
-      schema: t.schema,
-      table: t.name,
-      name: mechanicsTriggerName(t.name),
-    }))
-    .filter((t) => identities.has(`trigger:${t.schema}.${t.table}.${t.name}`))
-  expect(triggers).toHaveLength(identities.size)
+  const lost = (u: { generator?: string }) =>
+    u.generator === "mechanics" || u.generator === "key"
   const { scope } = await engineScope({
     ...source,
-    sqlUnits: source.sqlUnits.filter((u) => u.generator !== "mechanics"),
+    sqlUnits: source.sqlUnits.filter((u) => !lost(u)),
   })
-  return { schemas: [...scope.schemas], triggers }
+  // Спільні функції механіки (`simetra.touch()` тощо) — поза межею звірки:
+  // їх звірка не бачить, тож і втратою вони не є
+  const inScope = new Set(scope.schemas)
+  const lostUnits = source.sqlUnits.filter(lost)
+  const identities = new Set(
+    lostUnits.filter((u) => u.class === "trigger").map((u) => u.identity)
+  )
+  const triggers = source.physical.tables
+    .flatMap((t) => {
+      const key = keyTriggerNames(t.name)
+      const hierarchy = hierarchyNames(t)
+      return [
+        mechanicsTriggerName(t.name),
+        key.before,
+        key.after,
+        hierarchy.insert,
+        hierarchy.update,
+      ].map((name) => ({ schema: t.schema, table: t.name, name }))
+    })
+    .filter((t) => identities.has(`trigger:${t.schema}.${t.table}.${t.name}`))
+  expect(triggers).toHaveLength(identities.size)
+  // Функція ієрархії — у схемі таблиці, тож звірка бачить і її: прийом з нуля
+  // впізнає її як платформну й не пише, а повертає її, як і тригери, лише
+  // промоція
+  const fnIdentities = new Set(
+    lostUnits
+      .filter((u) => u.class === "function" && inScope.has(u.schema))
+      .map((u) => u.identity)
+  )
+  const functions = source.physical.tables
+    .map((t) => hierarchyNames(t).fn)
+    .filter((f) => fnIdentities.has(`function:${f.schema}.${f.name}()`))
+  expect(functions).toHaveLength(fnIdentities.size)
+  // З грантів функції каталог несе лише відкликання в PUBLIC: `EXECUTE` для
+  // PUBLIC є в `acldefault` будь-якої функції. Відкликання в ролей, яким
+  // типові привілеї схеми нічого не дали, — no-op, і introspect його не бачить
+  const grants = functions.map((f) =>
+    lostUnits.find(
+      (u) =>
+        u.identity ===
+        `grant:revoke:function:${f.schema}.${f.name}():public:execute`
+    )
+  )
+  expect(grants.every((u) => u !== undefined)).toBe(true)
+  return {
+    schemas: [...scope.schemas],
+    triggers,
+    functions,
+    identities: [
+      ...identities,
+      ...fnIdentities,
+      ...grants.map((u) => u!.identity),
+    ],
+  }
 }
 
 /** Кроки за текстом SQL: порядок кроків у плані тут не важить. */
 const byText = <T extends { sql: string }>(list: readonly T[]) =>
   [...list].sort((a, b) => (a.sql < b.sql ? -1 : a.sql > b.sql ? 1 : 0))
 
-/** Кроки, що знімають утрачену механіку, — за змістом, а не за позицією. */
+/**
+ * Кроки, що знімають утрачену механіку, — за змістом, а не за позицією.
+ * Зняття тригера — `relaxation` з дозволом; функція тримає не інваріант, а
+ * лише тіло тригера, тож її зняття — `catalogOnly` без дозволу.
+ */
 const lossSteps = (loss: Loss) =>
-  byText(
-    loss.triggers.map((t) => ({ sql: dropTrigger(t), class: "relaxation" }))
-  )
+  byText([
+    ...loss.triggers.map((t) => ({ sql: dropTrigger(t), class: "relaxation" })),
+    ...loss.functions.map((f) => ({
+      sql: dropFunction(f),
+      class: "catalogOnly",
+    })),
+  ])
+
+/** Кроки втрати, що просять дозволу. */
+const permittedLossSteps = (loss: Loss) =>
+  lossSteps(loss).filter((s) => s.class === "relaxation")
 
 /**
  * Втрата механіки гучна: кроки, що знімають тригери механіки, — клас
@@ -574,7 +646,7 @@ function expectLossNeedsPermission(trip: RoundTrip, loss: Loss): void {
     lossSteps(loss)
   )
   const subject = { steps, drift: null, promotion: null }
-  const ids = steps.map((s) => s.id)
+  const ids = steps.filter((s) => s.class === "relaxation").map((s) => s.id)
   expect(requiredPermissions(subject)).toEqual(ids)
   expect(checkPermissions(subject, [])).toEqual([
     expect.objectContaining({
@@ -586,14 +658,27 @@ function expectLossNeedsPermission(trip: RoundTrip, loss: Loss): void {
   expect(checkPermissions(subject, ids)).toEqual([])
 }
 
-/** Тригери оракула без втраченої механіки. */
+/** Тригери, функції та їхні ACL оракула без втраченої механіки. */
 const withoutLost = (shape: OracleShape, loss: Loss): OracleShape => {
   const lost = new Set(
     loss.triggers.map((t) => `${t.schema}.${t.table} ${t.name}`)
   )
+  const lostFunctions = new Set(
+    loss.functions.map((f) => `${f.schema}.${f.name}()`)
+  )
   return {
     ...shape,
+    catalog: {
+      ...shape.catalog,
+      functions: shape.catalog.functions.filter(
+        (f) => !lostFunctions.has(`${f.schema}.${f.name}(${f.arguments})`)
+      ),
+    },
     triggers: shape.triggers.filter((t) => !lost.has(`${t.table} ${t.name}`)),
+    functions: shape.functions.filter((f) => !lostFunctions.has(f.name)),
+    acls: shape.acls.filter(
+      (a) => !a.object.startsWith("f:") || !lostFunctions.has(a.object.slice(2))
+    ),
   }
 }
 
@@ -631,7 +716,7 @@ async function expectPlanAndApply(
         .filter((s) => permitted.has(s.id))
         .map((s) => ({ sql: s.sql, class: s.class }))
     )
-  ).toEqual(lossSteps(loss))
+  ).toEqual(permittedLossSteps(loss))
   // Пункт дозволу поза кроками (дрейф, промоція) фільтр вище не побачив би
   const stepIds = new Set(artifact.steps.map((s) => s.id))
   expect(artifact.requiredPermissions.filter((id) => !stepIds.has(id))).toEqual(

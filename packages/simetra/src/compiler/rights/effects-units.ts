@@ -1,5 +1,8 @@
 import {
+  authorColumns,
   quoteIdent,
+  standardLogicalName,
+  userPlatformColumns,
   type AttributeCase,
   type DatabaseProvider,
   type Dml,
@@ -11,15 +14,17 @@ import {
   writesByCommandContract,
   type Contracts,
   type MembershipContract,
-  type QualifiedName,
   type RightsAction,
   type RightsContract,
 } from "../contracts"
 import { CURRENT_USER } from "../membership-functions"
 import { CURRENT_USER_FUNCTION } from "../platform/names"
 import { compareStrings } from "../diagnostics"
-import { contentChangeCondition, contentColumns } from "../mechanics-units"
-import { dollarTag } from "../movement-functions"
+import {
+  authorTableColumns,
+  contentChangeCondition,
+  contentColumns,
+} from "../mechanics-units"
 import type { CreationNode } from "../sql/dependencies"
 import { executeGrants } from "../sql/execute-grants"
 import type { SqlParser } from "../sql/parse"
@@ -27,6 +32,7 @@ import { functionIdentity, generatedUnit, type SqlUnit } from "../sql/units"
 import { fieldForeignKey, sqlLiteral } from "../stages/model"
 import { COMMAND_FUNCTIONS } from "./command-units"
 import { effectsFunctionName, effectsTriggerNames } from "./effects-names"
+import { definerTrigger } from "./definer"
 import { hasRightsFunctions } from "./functions"
 
 const q = quoteIdent
@@ -99,7 +105,7 @@ export function buildEffectsUnits(
     )
     const users = contracts.users?.objectId === table.origin.objectId
     const body = section
-      ? sectionBody(rights, table, main, key)
+      ? sectionBody(rights, table, main, key, attributeCase)
       : mainBody(rights, table, key, attributeCase, membership, users)
     const requires: CreationNode[] = section
       ? [{ type: "table", schema: main.schema, name: main.name }, current]
@@ -118,9 +124,20 @@ export function buildEffectsUnits(
       )
     }
     const execute = `FOR EACH ROW EXECUTE FUNCTION ${relation(fn)}();`
-    const content = contentChangeCondition(table, attributeCase)
+    // Зміна автора — зміна рядка (Р-A1-10): без `watched` зміна лише
+    // `created_by_id` на таблиці з копією за `createdBy` не дійшла б до
+    // перевірки незмінності.
+    const content = contentChangeCondition(
+      table,
+      attributeCase,
+      authorTableColumns(table, attributeCase)
+    )
+    // `SECURITY DEFINER` (Р2b1-8): повз RLS функція читає лише існування
+    // власника рядка ТЧ, а в запит віддає лише `NULL` чи відмову — як функції
+    // носіїв (Р2a2-8). `row_security = off`: власник функції під RLS дав би
+    // гучну помилку замість тихого «власника немає».
     units.push(
-      unit(definerTrigger(fn, body), requires),
+      unit(definerTrigger(fn, body, { rowSecurity: "off" }), requires),
       ...executeGrants(`${relation(fn)}()`, [], provider).map((sql) =>
         unit(sql)
       ),
@@ -179,7 +196,7 @@ function notRoot(label: string, key: string): string {
 
 /**
  * Перевірки оновлення під дією: жодна змістова колонка поза шапкою дії не
- * змінилася (ключ перевірено окремо), а колонка переходу змінюється лише у
+ * змінилася (ключ тримають тригери ключа), а колонка переходу змінюється лише у
  * своєму напрямку (Р2b1-18(3)).
  */
 function updateChecks(
@@ -236,28 +253,46 @@ function actionChain(
   return lines
 }
 
+/** Колонка автора рядка — з реєстру, як і в тригера авторства. */
+const CREATED_BY = authorColumns().find((c) => c.logicalName === "createdBy")!
+
 /**
  * Незмінні колонки таблиці (Р2b1-9, Р2b1-20, Р2b1-24) — за будь-якої дії й
- * для будь-якого рядка: ключ таблиці — `ref` основної (змінений ключ — інша
- * ідентичність кореня) чи колонка власника ТЧ (рядок ТЧ належить своєму
+ * для будь-якого рядка: колонка власника ТЧ `owner` (рядок ТЧ належить своєму
  * документу так само, як корінь — своєму `ref`: перенесення рядка до іншого
  * власника не є ефектом дії над коренем, а законного шляху, що її змінює,
  * немає — ключ кореня незмінний, тож каскаду FK на неї не буває), і колонка
  * скоупу (перенесення між тенантами — не правка змісту; складені FK скоупу ТЧ
- * і копій однаково не дали б зробити його цілісно). Порядок — колонок таблиці.
+ * і копій однаково не дали б зробити його цілісно), автор рядка й
+ * платформні поля «Користувачів». Ключ `ref` тут не перевіряється: його
+ * незмінність для будь-якого автора, і поза командою, тримають тригери
+ * ключа (`key-units.ts`, Рб1-4). Порядок — колонок таблиці.
  */
 function immutableColumns(
   table: PhysicalTable,
-  key: string,
+  owner: string | undefined,
+  attributeCase: AttributeCase,
   users = false
 ): string[] {
+  // `origin.standard` несе ім'я в стилі проєкту (`user_kind` у snake_case).
+  const standard = new Set([
+    // Автор рядка незмінний (Рт7, Р-A1-10): під командою його примушує
+    // тригер авторства лише на вставці, а оновлення не переписує історії.
+    standardLogicalName(CREATED_BY, attributeCase),
+    // Платформні поля «Користувачів», яких команда не змінює (Р2b1-9), — з
+    // реєстру, а не переліком імен.
+    ...(users
+      ? userPlatformColumns().map((def) =>
+          standardLogicalName(def, attributeCase)
+        )
+      : []),
+  ])
   return table.columns
     .filter(
       (c) =>
-        c.name === key ||
+        c.name === owner ||
         c.origin.scopeKindId !== undefined ||
-        (users &&
-          (c.origin.standard === "invalid" || c.origin.standard === "userKind"))
+        standard.has(c.origin.standard ?? "")
     )
     .map((c) => c.name)
 }
@@ -290,10 +325,11 @@ function mainBody(
   membership: MembershipContract | undefined,
   users: boolean
 ): string {
-  const immutable = immutableColumns(table, key, users)
+  const immutable = immutableColumns(table, undefined, attributeCase, users)
+  // Ключ поза порівнянням: його зміну відхиляє тригер ключа раніше.
   const compared = contentColumns(table, attributeCase)
     .map((c) => c.name)
-    .filter((name) => !immutable.includes(name))
+    .filter((name) => name !== key && !immutable.includes(name))
   const natural = (dml: Dml) =>
     rights.actions.find((action) => action.natural.includes(dml))
   const naturalUpdate = natural("update")
@@ -400,7 +436,8 @@ function sectionBody(
   rights: RightsContract,
   table: PhysicalTable,
   main: PhysicalTable,
-  key: string
+  key: string,
+  attributeCase: AttributeCase
 ): string {
   const fk = fieldForeignKey(table, key)
   if (fk === undefined) {
@@ -417,7 +454,7 @@ function sectionBody(
   )
   const lines = [
     ...contextLines(),
-    ...immutableChecks(table, immutableColumns(table, key)),
+    ...immutableChecks(table, immutableColumns(table, key, attributeCase)),
     `IF TG_OP = 'DELETE' AND NOT EXISTS (SELECT 1 FROM ${relation(main)} WHERE ${owner}) THEN`,
     "  RETURN NULL;",
     "END IF;",
@@ -435,23 +472,4 @@ function sectionBody(
 
 function declarations(): string[] {
   return ["  v_action text;", "  v_object text;", "  v_root uuid;"]
-}
-
-/**
- * `SECURITY DEFINER` (Р2b1-8): повз RLS функція читає лише існування
- * власника рядка ТЧ, а в запит віддає лише `NULL` чи відмову — як функції
- * носіїв (Р2a2-8). `row_security = off`: власник функції під RLS дав би
- * гучну помилку замість тихого «власника немає». Порожній `search_path` і
- * кваліфіковані відношення не лишають простору для підміни імен.
- */
-function definerTrigger(fn: QualifiedName, text: string): string {
-  const tag = dollarTag(text)
-  return (
-    `CREATE OR REPLACE FUNCTION ${relation(fn)}()\n` +
-    `RETURNS trigger\n` +
-    `LANGUAGE plpgsql SECURITY DEFINER\n` +
-    `SET search_path = ''\n` +
-    `SET row_security = off\n` +
-    `AS ${tag}\n${text}\n${tag};`
-  )
 }

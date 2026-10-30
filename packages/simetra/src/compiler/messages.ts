@@ -33,6 +33,36 @@ function hintOf<K extends string>(
   return Object.hasOwn(hints, reason) ? hints[reason as K] : hints[fallback]
 }
 
+/**
+ * Поради цілі FK прийнятої таблиці (Рб1-8, Рб1-10) за причиною: ціль-вид
+ * називає ключ (`key`), ціль `CustomTable` — колонки.
+ */
+const FK_TARGET_HINTS: Record<
+  "columns" | "keyOnCustomTable" | "noKey" | "noScope" | "arity",
+  { en: string; uk: string }
+> = {
+  columns: {
+    en: 'A foreign key to a table of a kind references its key, not columns: use key: "ref" or key: "scopedRef". The command role updates any unique attribute, so a foreign key on it would block the command through child rows, and a foreign key check bypasses row level security, so a key on a guessable value would reveal rows of another tenant; the key never changes.',
+    uk: 'Зовнішній ключ на таблицю виду посилається на ключ, а не на колонки: вкажіть key: "ref" або key: "scopedRef". Роль команд змінює будь-який унікальний реквізит, тож зовнішній ключ на нього блокував би команду дочірніми рядками, а перевірка зовнішнього ключа йде повз RLS, тож ключ на вгадуване значення видавав би рядки чужого тенанта; ключ не змінюється.',
+  },
+  keyOnCustomTable: {
+    en: "A CustomTable describes its keys itself: name the referenced columns in columns instead of key.",
+    uk: "CustomTable описує свої ключі сама: назвіть колонки цілі в columns замість key.",
+  },
+  noKey: {
+    en: "The object has no single uuid key to reference.",
+    uk: "Об'єкт не має єдиного uuid-ключа, на який можна посилатися.",
+  },
+  noScope: {
+    en: 'key: "scopedRef" references the pair (scope column, key) of a scoped object that is not the root of its scope; this object has no own scope column. Use key: "ref".',
+    uk: 'key: "scopedRef" посилається на пару (колонка скоупу, ключ) скоупленого об\'єкта, що не є коренем свого скоупу; цей об\'єкт власної колонки скоупу не має. Вкажіть key: "ref".',
+  },
+  arity: {
+    en: 'key: "ref" takes one local column; key: "scopedRef" takes two — the scope column, then the key.',
+    uk: 'key: "ref" бере одну локальну колонку; key: "scopedRef" — дві: колонку скоупу, потім ключ.',
+  },
+}
+
 const SOURCE_WHERE_HINTS: Record<
   "shared" | "type" | "literal",
   { en: string; uk: string }
@@ -1793,9 +1823,9 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "subscription.handler-assigns-mechanics": {
     en: (p) =>
-      `Handler ${p.function} assigns a row-mechanics column or replaces the row (${p.problem}); the platform maintains updated_at and version`,
+      `Handler ${p.function} assigns a row-mechanics column or replaces the row (${p.problem}); the platform maintains updated_at, version and the author columns created_by_id, updated_by_id`,
     uk: (p) =>
-      `Обробник ${p.function} присвоює колонку механіки рядка або підміняє рядок (${p.problem}); updated_at і version веде платформа`,
+      `Обробник ${p.function} присвоює колонку механіки рядка або підміняє рядок (${p.problem}); updated_at, version і колонки авторства created_by_id, updated_by_id веде платформа`,
     hint: {
       en: "Change other columns of NEW and return NEW, or NULL to skip the write.",
       uk: "Змінюйте інші колонки NEW і повертайте NEW або NULL, щоб пропустити запис.",
@@ -1833,9 +1863,9 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "subscription.when-changed-mechanics": {
     en: (p) =>
-      `whenChanged lists ${p.column}, which the row mechanics maintains; the trigger condition would depend on trigger order`,
+      `whenChanged lists ${p.column}, which the platform maintains (row mechanics or authorship); the trigger condition would depend on trigger order`,
     uk: (p) =>
-      `whenChanged містить ${p.column}, яку веде механіка рядка; умова тригера залежала б від порядку тригерів`,
+      `whenChanged містить ${p.column}, яку веде платформа (механіка рядка чи авторство); умова тригера залежала б від порядку тригерів`,
     hint: {
       en: "List business attributes only.",
       uk: "Перелічіть лише бізнес-реквізити.",
@@ -1963,7 +1993,7 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
           : p.reason === "transitionColumn"
             ? "Transition columns (posted, deletion mark) change only through their standard actions: drop the column from the header."
             : p.reason === "immutableColumn"
-              ? "The key (ref) and the scope column never change, under any action: drop the column from the header."
+              ? "On a catalog the header names only the columns the command role may update (not the key, the scope column, row mechanics, authorship, predefinedName or the platform fields of users); on other kinds the key (ref) and authorship never change: drop the column from the header."
               : "Drop tabularSections: true or declare the action on a kind with tabular sections.",
       uk: (p) =>
         p.reason === "noWrite"
@@ -1971,7 +2001,7 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
           : p.reason === "transitionColumn"
             ? "Колонки переходів (проведення, позначка видалення) змінюють лише їхні стандартні дії: приберіть колонку з шапки."
             : p.reason === "immutableColumn"
-              ? "Ключ (ref) і колонка скоупу не змінюються за жодної дії: приберіть колонку з шапки."
+              ? "На довіднику шапка називає лише колонки, які може змінювати роль команд (не ключ, колонку скоупу, механіку рядка, авторство, predefinedName чи платформні реквізити «Користувачів»); на інших видах ключ (ref) і авторство не змінюються: приберіть колонку з шапки."
               : "Приберіть tabularSections: true або оголосіть дію на виді з табличними частинами.",
     },
   },
@@ -2949,6 +2979,20 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     hint: {
       en: "A cascade from a table of a kind would run the defaults, checks, index expressions and debt triggers of the adopted table in the middle of a platform command. Use restrict or noAction; remove the child rows in a TypeScript hook of the command or promote the adopted table.",
       uk: "Каскад від таблиці виду виконував би значення за замовчуванням, CHECK, вирази індексів і боргові тригери прийнятої таблиці посеред команди платформи. Задайте restrict чи noAction; дочірні рядки прибирайте TypeScript-хуком команди або промоцією прийнятої таблиці.",
+    },
+  },
+  "customTable.fk-target-not-key": {
+    en: (p) =>
+      p.reason === "keyOnCustomTable"
+        ? `Foreign key to ${p.kind} "${p.name}" must name its columns, not a key`
+        : `Foreign key to ${p.kind} "${p.name}" must reference its key`,
+    uk: (p) =>
+      p.reason === "keyOnCustomTable"
+        ? `Зовнішній ключ на ${p.kind} "${p.name}" має називати його колонки, а не ключ`
+        : `Зовнішній ключ на ${p.kind} "${p.name}" має посилатися на його ключ`,
+    hint: {
+      en: (p) => hintOf(FK_TARGET_HINTS, p, "columns").en,
+      uk: (p) => hintOf(FK_TARGET_HINTS, p, "columns").uk,
     },
   },
   "customTable.generated-conflict": {
@@ -4079,12 +4123,12 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "plan.platform-role-shape": {
     en: (p) =>
-      `The platform role ${p.role} on the ${p.server} server has an unsafe shape (${p.violation}): it must be NOLOGIN NOINHERIT with no other attribute, belong to no role, and its members may only administer it`,
+      `The platform role ${p.role} on the ${p.server} server has an unsafe shape (${p.violation}): a grant role must be NOLOGIN NOINHERIT with no other attribute and belong to no role; a login role must have LOGIN and no other attribute and belong only to its parents, each with INHERIT FALSE, SET TRUE and no ADMIN; members of either may only administer it, and no API request role may be a member of either`,
     uk: (p) =>
-      `Платформна роль ${p.role} на сервері ${p.server === "shadow" ? "тіні" : "цілі"} має небезпечну форму (${p.violation}): вона мусить бути NOLOGIN NOINHERIT без інших атрибутів, ні в що не входити, а її члени можуть лише керувати нею`,
+      `Платформна роль ${p.role} на сервері ${p.server === "shadow" ? "тіні" : "цілі"} має небезпечну форму (${p.violation}): роль грантів мусить бути NOLOGIN NOINHERIT без інших атрибутів і ні в що не входити; роль входу — мати LOGIN без інших атрибутів і входити лише у свої батьківські ролі, кожну з INHERIT FALSE, SET TRUE і без ADMIN; члени обох можуть лише керувати нею, а роль запиту API не може бути членом жодної з них`,
     hint: {
-      en: "Nothing was planned or created. `simetra roles` does not change an existing role: fix it by hand with `ALTER ROLE <role> NO<attribute>` for an attribute, or `REVOKE <role> FROM <member>` (or revoke the role it belongs to) for a membership, and run the command again.",
-      uk: "Нічого не сплановано й не створено. `simetra roles` наявну роль не змінює: виправте її вручну — `ALTER ROLE <роль> NO<атрибут>` для атрибута чи `REVOKE <роль> FROM <член>` (або відкличте роль, у яку вона входить) для членства — і повторіть команду.",
+      en: "Nothing was planned or created. `simetra roles` does not change an existing role: fix it by hand with `ALTER ROLE <role> NO<attribute>` for an attribute, `REVOKE <role> FROM <member>` (or revoke the role it belongs to) for a membership, or `GRANT <parent> TO <login role> WITH INHERIT FALSE, SET TRUE` for a missing or wrong membership of a login role, and run the command again.",
+      uk: "Нічого не сплановано й не створено. `simetra roles` наявну роль не змінює: виправте її вручну — `ALTER ROLE <роль> NO<атрибут>` для атрибута, `REVOKE <роль> FROM <член>` (або відкличте роль, у яку вона входить) для членства чи `GRANT <батько> TO <роль входу> WITH INHERIT FALSE, SET TRUE` для відсутнього чи хибного членства ролі входу — і повторіть команду.",
     },
   },
   "plan.type-guard-unsupported": {
@@ -4484,6 +4528,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     hint: {
       en: "Nothing was created on any server. Run `simetra roles` with a connection whose role has CREATEROLE, or ask the database administrator to create the role as NOLOGIN NOINHERIT.",
       uk: "Ні на одному сервері нічого не створено. Запустіть `simetra roles` з підключенням, роль якого має CREATEROLE, або попросіть адміністратора бази створити роль як NOLOGIN NOINHERIT.",
+    },
+  },
+  "roles.admin-option-missing": {
+    en: (p) =>
+      `The connecting role cannot make the platform login role a member of ${p.role} on the ${p.server} server: it lacks ADMIN OPTION on that role, or the role does not exist`,
+    uk: (p) =>
+      `Роль підключення не може зробити платформну роль входу членом ${p.role} на сервері ${p.server === "shadow" ? "тіні" : "цілі"}: у неї немає ADMIN OPTION на цій ролі або ролі немає`,
+    hint: {
+      en: "The grant roles were created or checked; the login role was not created, because a login role without its memberships would silently change how the runtime reads. Run `simetra roles` with a role that has ADMIN OPTION on every parent of the login role, or ask the database administrator to create it.",
+      uk: "Ролі грантів створено чи звірено; роль входу не створено, бо без своїх членств вона мовчки змінила б шлях читання рантайму. Запустіть `simetra roles` від ролі з ADMIN OPTION на кожній батьківській ролі ролі входу або попросіть адміністратора бази її створити.",
     },
   },
   "introspect.unrepresentable": {

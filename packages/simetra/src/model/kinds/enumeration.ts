@@ -16,6 +16,7 @@ export const enumerationKind: KindDefinition = {
   rightsExtents: [],
   sqlModule: "closed",
   materializes: "none",
+  rowLevelSecurity: "none",
   scope: "noneOnly",
   declared: false,
   columnFields: [],

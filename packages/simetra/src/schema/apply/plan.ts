@@ -469,6 +469,7 @@ export async function buildPlan(
   const sourceInput = rightsSourceInput(
     model.contracts,
     model.physical,
+    model.project.naming.attributeCase,
     state.status === "applied" ? state.marker.snapshot : undefined
   )
   const sources = rightsSourceDiagnostics(

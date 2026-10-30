@@ -95,16 +95,7 @@ function standardColumns(obj: unknown): StandardColumnDef[] {
   }
 
   columns.push(
-    {
-      logicalName: "predefinedName",
-      physicalName: "predefined_name",
-      type: { type: "Text" },
-      notNull: false,
-      // Фізична мітка предвизначеного елемента (`predefinedItems[].physicalName`)
-      // унікальна в межах скоупу, а звичайні елементи її не мають.
-      partialUnique: "predefined_name IS NOT NULL",
-      title: { uk: "Ім'я наперед визначеного елемента", en: "Predefined name" },
-    },
+    predefinedNameColumn(),
     versionColumn(),
     ...serviceDateColumns(),
     ...(catalog.trackAuthor ? authorColumns() : [])
@@ -113,11 +104,28 @@ function standardColumns(obj: unknown): StandardColumnDef[] {
 }
 
 /**
+ * Ім'я предвизначеного елемента: його пише платформа з `predefinedItems`, а
+ * не команда, тож грант ролі команд його оминає (спека П4 §6.2).
+ */
+export function predefinedNameColumn(): StandardColumnDef {
+  return {
+    logicalName: "predefinedName",
+    physicalName: "predefined_name",
+    type: { type: "Text" },
+    notNull: false,
+    // Фізична мітка предвизначеного елемента (`predefinedItems[].physicalName`)
+    // унікальна в межах скоупу, а звичайні елементи її не мають.
+    partialUnique: "predefined_name IS NOT NULL",
+    title: { uk: "Ім'я наперед визначеного елемента", en: "Predefined name" },
+  }
+}
+
+/**
  * Платформні реквізити «Користувачів» (спека користувачів §4): провізія
  * вставляє рядок лише з ключем і найменуванням, тож обидва мають DEFAULT.
  * Недійсність не видаляє рядок — на нього можуть посилатися дані застосунку.
  */
-function userColumns(): StandardColumnDef[] {
+export function userPlatformColumns(): StandardColumnDef[] {
   return [
     {
       logicalName: "userKind",
@@ -274,6 +282,34 @@ function roleAssignmentsColumns(catalog: Catalog): StandardColumnDef[] {
   ]
 }
 
+/**
+ * Визначення стандартних колонок довідників прав за логічним ім'ям: функції
+ * прав шукають за ними колонки в стилі проєкту (Рб1-1), а не літералом
+ * імені. Заголовок «Суб'єкта» залежить від скоупу, але пошук читає лише
+ * логічне ім'я.
+ */
+export const RIGHTS_COLUMNS = Object.fromEntries(
+  [
+    ...rightsRolesColumns(),
+    ...deltaColumns(),
+    ...roleAssignmentsColumns({ scope: "none" } as Catalog),
+  ].map((def) => [def.logicalName, def])
+) as Readonly<
+  Record<
+    | "archetype"
+    | "order"
+    | "object"
+    | "action"
+    | "extent"
+    | "dimension"
+    | "effect"
+    | "subject"
+    | "customRole"
+    | "container",
+    StandardColumnDef
+  >
+>
+
 /** Факти системної ролі довідника: що платформа виводить із ролі. */
 interface CatalogRoleDefinition {
   /**
@@ -304,7 +340,7 @@ const CATALOG_ROLES: Record<
   NonNullable<Catalog["role"]>,
   CatalogRoleDefinition
 > = {
-  users: { globalRoot: true, columns: userColumns },
+  users: { globalRoot: true, columns: userPlatformColumns },
   rightsRoles: {
     columns: rightsRolesColumns,
     tabularSection: DELTA_SECTION,
@@ -355,6 +391,7 @@ export const catalogKind: KindDefinition = {
   rightsContainer: true,
   rightsBinding: true,
   accessDimensionTarget: true,
+  commandWrites: true,
   sqlModule: "closed",
   materializes: "table",
   rowLevelSecurity: "enabled",

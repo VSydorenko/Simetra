@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from "vitest"
 import { compile, type CompiledModel } from "simetra/compiler"
-import { makeObjectName, type Dml } from "simetra/model"
+import { PLATFORM_ROLES, makeObjectName, type Dml } from "simetra/model"
 import {
   accessPolicyNames,
   buildAccessUnits,
@@ -9,6 +9,7 @@ import {
 } from "../access-units"
 import { sha256Hex } from "../canonical"
 import { mainTableOf, type AccessContract } from "../contracts"
+import { commandWriteColumns } from "../rights/command-columns"
 import { RIGHTS_FUNCTIONS } from "../rights/functions"
 import {
   COMMAND_ACTION,
@@ -24,6 +25,7 @@ import {
   BULLETIN_FILE,
   BULLETIN_TABLE,
   CHECKLIST_TABLE,
+  COMMENT_FILE,
   COMMENT_TABLE,
   GLOBAL_ASSIGNMENTS_FILE,
   GLOBAL_GRANT_FILE,
@@ -172,6 +174,11 @@ describe("accessContracts", () => {
         root: false,
         users: false,
         rights: { objectId },
+        command: {
+          insert: ["id", "code", "description"],
+          update: ["code", "description", "deletion_mark"],
+          delete: false,
+        },
       },
     ])
   })
@@ -308,7 +315,7 @@ const ORG_BOUNDARY = "org_id = ANY (ARRAY(SELECT public.org_member_scopes()))"
 const BOUNDED = "TO authenticated, simetra_command"
 
 describe("buildAccessUnits", () => {
-  it("user readers: revoke from PUBLIC and every API role, select to authenticated", () => {
+  it("user readers: revoke from PUBLIC and every API role, select to authenticated and the command role", () => {
     expect(tableGrants(ITEM, ["user"], "supabase").sort()).toEqual(
       [
         "REVOKE ALL ON TABLE public.item FROM PUBLIC;",
@@ -316,6 +323,7 @@ describe("buildAccessUnits", () => {
         "REVOKE ALL ON TABLE public.item FROM service_role;",
         "REVOKE ALL ON TABLE public.item FROM authenticated;",
         "GRANT SELECT ON TABLE public.item TO authenticated;",
+        "GRANT SELECT ON TABLE public.item TO simetra_command;",
       ].sort()
     )
   })
@@ -329,7 +337,7 @@ describe("buildAccessUnits", () => {
     expect(grants).toContain(
       "GRANT SELECT ON TABLE public.item TO authenticated;"
     )
-    expect(grants.filter((g) => g.startsWith("GRANT"))).toHaveLength(2)
+    expect(grants.filter((g) => g.startsWith("GRANT"))).toHaveLength(3)
   })
 
   it("scoped table gets restrictive scope policies for every command", async () => {
@@ -581,7 +589,9 @@ describe("rights read and users visibility policies", () => {
         table,
         mainTableOf(domain.physical, contract.objectId)!
       )) {
-        const using = predicate.conditions.map(renderCondition).join(" AND ")
+        const using = predicate.conditions
+          .map((c) => renderCondition(c))
+          .join(" AND ")
         expected.set(
           `${table.name}:${using}`,
           `ON ${table.schema}.${table.name} AS PERMISSIVE FOR SELECT ${BOUNDED} USING (${using});`
@@ -858,7 +868,7 @@ describe("rights write policies", () => {
         const name = `${tableName}_${dml}_${family}_${labelOf(predicate)}`
         const condition = [
           ...prefix,
-          ...predicate.conditions.map(renderCondition),
+          ...predicate.conditions.map((c) => renderCondition(c)),
         ].join(" AND ")
         expected.set(
           name,
@@ -1115,5 +1125,220 @@ describe("rights write policies", () => {
       .filter((u) => u.class === "policy")
       .map((u) => u.identity)
     expect(new Set(identities).size).toBe(identities.length)
+  })
+})
+
+describe("simetra_command table grants", () => {
+  const COMMAND = PLATFORM_ROLES.command
+  /**
+   * Оператори ролі команд на таблицю, відсортовані: повний перелік, тож
+   * зайвий привілей (`TRUNCATE`, колонка поза переліком) теж червоніє.
+   */
+  const commandGrants = (model: CompiledModel, table: string) =>
+    model.sqlUnits
+      .filter(
+        (u) =>
+          u.generator === "access" &&
+          u.class === "grant" &&
+          u.name === `public.${table}` &&
+          u.sql.endsWith(` TO ${COMMAND};`)
+      )
+      .map((u) => u.sql)
+      .sort()
+
+  const on = (table: string) => `ON TABLE public.${table} TO ${COMMAND};`
+  const select = (table: string) => `GRANT SELECT ${on(table)}`
+  const insert = (table: string, columns: string) =>
+    `GRANT INSERT (${columns}) ${on(table)}`
+  const update = (table: string, columns: string) =>
+    `GRANT UPDATE (${columns}) ${on(table)}`
+  const del = (table: string) => `GRANT DELETE ${on(table)}`
+
+  /**
+   * Домен політик з ієрархією й авторством на `TaskComment`: довідник зі
+   * скоупом, переходом `deletion_mark`, `predefined_name`, копією носія,
+   * ієрархічним `parent_id` і ТЧ; «Користувачі» з ТЧ; системні довідники
+   * прав; документ `Task` (вид без запису командою).
+   */
+  let camel: CompiledModel
+  /**
+   * Проєкт у стилі `snake_case`: `origin.standard` несе `user_kind`,
+   * `created_by`, `predefined_name`, тож літерал camelCase їх не відсік би.
+   */
+  let snake: CompiledModel
+  beforeAll(async () => {
+    const domain = await compile(
+      policyDomain({
+        [COMMENT_FILE]: { hierarchyType: "ItemsOnly", trackAuthor: true },
+      })
+    )
+    expectClean(domain)
+    camel = domain.model!
+    const devices = {
+      id: "00000000-0000-4000-8000-000000000c01",
+      name: "devices",
+      physicalName: "users_devices",
+      attributes: [attribute("label", { type: "String", length: 20 })],
+    }
+    snake = await compiled({
+      "project.meta.json": project({ naming: { attributeCase: "snake_case" } }),
+      "catalogs/Users/Users.meta.json": catalog("Users", {
+        role: "users",
+        scope: "none",
+        tabularSections: [devices],
+      }),
+      "catalogs/Item/Item.meta.json": catalog("Item", {
+        scope: "none",
+        trackAuthor: true,
+      }),
+    })
+  })
+
+  const cases: [string, () => CompiledModel, string, string[]][] = [
+    [
+      // Ієрархічний `parent_id` — зміст (перенесення між групами): власника
+      // рядка ТЧ розпізнають за походженням, не за фізичним ім'ям.
+      "catalog main table",
+      () => camel,
+      COMMENT_TABLE,
+      [
+        select(COMMENT_TABLE),
+        insert(
+          COMMENT_TABLE,
+          "id, org_id, code, description, parent_id, task_id"
+        ),
+        update(
+          COMMENT_TABLE,
+          "code, description, deletion_mark, parent_id, task_id"
+        ),
+      ],
+    ],
+    [
+      "catalog tabular section",
+      () => camel,
+      ATTACHMENTS_TABLE,
+      [
+        select(ATTACHMENTS_TABLE),
+        insert(ATTACHMENTS_TABLE, "id, org_id, parent_id, line_number, label"),
+        update(ATTACHMENTS_TABLE, "line_number, label"),
+        del(ATTACHMENTS_TABLE),
+      ],
+    ],
+    [
+      "role assignments main table also deletes",
+      () => camel,
+      "org_role_assignments",
+      [
+        select("org_role_assignments"),
+        insert(
+          "org_role_assignments",
+          "id, org_id, code, description, deletion_mark, subject, archetype, custom_role, container"
+        ),
+        update(
+          "org_role_assignments",
+          "code, description, deletion_mark, subject, archetype, custom_role, container"
+        ),
+        del("org_role_assignments"),
+      ],
+    ],
+    [
+      // Користувача створює провізія, а не команда; `invalid`, `userKind` —
+      // платформні реквізити.
+      "users main table: update only",
+      () => camel,
+      "users",
+      [select("users"), update("users", "code, description, deletion_mark")],
+    ],
+    [
+      "users tabular section as any catalog section",
+      () => camel,
+      "users_devices",
+      [
+        select("users_devices"),
+        insert("users_devices", "id, parent_id, line_number, label"),
+        update("users_devices", "line_number, label"),
+        del("users_devices"),
+      ],
+    ],
+    ["document main table: select only", () => camel, "task", [select("task")]],
+    [
+      "document tabular section: select only",
+      () => camel,
+      CHECKLIST_TABLE,
+      [select(CHECKLIST_TABLE)],
+    ],
+    [
+      "snake_case users main table",
+      () => snake,
+      "users",
+      [select("users"), update("users", "code, description, deletion_mark")],
+    ],
+    [
+      "snake_case catalog with authorship",
+      () => snake,
+      "item",
+      [
+        select("item"),
+        insert("item", "id, code, description"),
+        update("item", "code, description, deletion_mark"),
+      ],
+    ],
+  ]
+
+  it.each(cases)("%s", (_, model, table, expected) => {
+    expect(commandGrants(model(), table)).toEqual([...expected].sort())
+  })
+
+  it("a generated column stays out of both insert and update", () => {
+    // Метадані довідника генерованої колонки не дають (вона є лише в
+    // документа, якого роль команд не пише), тож фільтр перевіряє фізична
+    // таблиця довідника з доданою генерованою колонкою: значення дає база,
+    // і грант на запис у неї був би відмовою Postgres на кожну команду.
+    const item = snake.physical.tables.find((t) => t.name === "item")!
+    const table = {
+      ...item,
+      columns: [
+        ...item.columns,
+        {
+          name: "code_upper",
+          type: "text",
+          notNull: false,
+          generated: { expression: "upper(code)" },
+          origin: { elementId: "00000000-0000-4000-8000-000000000c02" },
+        },
+      ],
+    }
+    const { base, update } = commandWriteColumns(table, {
+      attributeCase: "snake_case",
+      main: true,
+      users: false,
+    })
+    expect(base.map((c) => c.name)).toEqual([
+      "id",
+      "code",
+      "description",
+      "deletion_mark",
+    ])
+    expect(update.map((c) => c.name)).toEqual([
+      "code",
+      "description",
+      "deletion_mark",
+    ])
+  })
+
+  it("never grants truncate, references, trigger or all, nor on the simetra schema", () => {
+    for (const model of [camel, snake]) {
+      const grants = model.sqlUnits.filter(
+        (u) => u.class === "grant" && u.sql.includes(` TO ${COMMAND}`)
+      )
+      const tableGrants = grants.filter((u) => u.sql.includes(" ON TABLE "))
+      expect(tableGrants.length).toBeGreaterThan(0)
+      for (const unit of tableGrants) {
+        expect(unit.sql).toMatch(
+          /^GRANT (SELECT|INSERT \([^)]+\)|UPDATE \([^)]+\)|DELETE) ON TABLE /
+        )
+        expect(unit.name.startsWith("simetra.")).toBe(false)
+      }
+    }
   })
 })

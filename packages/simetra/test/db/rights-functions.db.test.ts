@@ -537,7 +537,9 @@ describe("rights functions with a scope kind", () => {
       contract,
       "read",
       mainTableOf(model.physical, TASK_ID)!
-    ).map((p) => `(${p.conditions.map(renderCondition).join(" AND ")})`)
+    ).map(
+      (p) => `(${p.conditions.map((c) => renderCondition(c)).join(" AND ")})`
+    )
     readableTasks = `SELECT coalesce(array_agg(t.id::text), '{}') AS v FROM public.task t WHERE ${predicates.join(" OR ")}`
   })
 

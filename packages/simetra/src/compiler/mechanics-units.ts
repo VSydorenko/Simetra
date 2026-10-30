@@ -1,6 +1,6 @@
 import {
   PLATFORM_SCHEMA,
-  makeObjectName,
+  authorColumns,
   quoteIdent,
   serviceDateColumns,
   standardLogicalName,
@@ -11,6 +11,7 @@ import {
   type PhysicalSnapshot,
   type PhysicalTable,
 } from "simetra/model"
+import { platformBeforeTriggerName } from "./before-trigger-names"
 import type { QualifiedName } from "./contracts"
 import { compareStrings } from "./diagnostics"
 import { dollarTag } from "./movement-functions"
@@ -26,11 +27,12 @@ export const MECHANICS_FUNCTION: QualifiedName = {
 }
 
 /**
- * Ім'я тригера механіки на таблиці. Алгоритм Postgres тримає мітку цілою, тож
- * зворотна генерація й промоція впізнають тригер за іменем і на довгій таблиці.
+ * Ім'я тригера механіки на таблиці. Спільний префікс рядкових `BEFORE`-тригерів
+ * ставить механіку останньою на будь-якій довжині назви, а зворотна генерація
+ * й промоція впізнають тригер за тим самим іменем.
  */
 export function mechanicsTriggerName(table: string): string {
-  return makeObjectName(table, undefined, "simetra_touch")
+  return platformBeforeTriggerName(table, "simetra_touch")
 }
 
 /**
@@ -38,7 +40,7 @@ export function mechanicsTriggerName(table: string): string {
  * розділена на вставку й оновлення з умовою `contentChangeCondition`.
  */
 export function mechanicsUpdateTriggerName(table: string): string {
-  return makeObjectName(table, undefined, "simetra_touch_update")
+  return platformBeforeTriggerName(table, "simetra_touch_update")
 }
 
 /** Колонки механіки за реєстром — щоб тіло функції не тримало літералів. */
@@ -60,9 +62,41 @@ export function mechanicsStandardNames(
 }
 
 /**
- * Змістові колонки таблиці (Р2b1-9, Р2b1-15): поза механікою, копіями й
- * генерованими. Механіку платформа примушує за будь-якої дії, копії пише
- * лише вона, а генерована колонка випливає зі змістових (і умова
+ * Логічні імена колонок авторства в стилі проєкту (Р-A1-9). Авторство —
+ * механіка: під контекстом команди його примушує тригер авторства, тож ні
+ * обробник `beforeWrite`, ні шапка дії, ні `whenChanged` його не задають.
+ */
+export function authorStandardNames(
+  attributeCase: AttributeCase
+): ReadonlySet<string> {
+  return new Set(
+    authorColumns().map((def) => standardLogicalName(def, attributeCase))
+  )
+}
+
+/** Колонки, які пише платформа, а не зміст рядка: механіка й авторство. */
+export function nonContentStandardNames(
+  attributeCase: AttributeCase
+): ReadonlySet<string> {
+  return new Set([
+    ...mechanicsStandardNames(attributeCase),
+    ...authorStandardNames(attributeCase),
+  ])
+}
+
+/** Колонки авторства таблиці — за `origin.standard`, у порядку таблиці. */
+export function authorTableColumns(
+  table: Pick<PhysicalTable, "columns">,
+  attributeCase: AttributeCase
+): PhysicalColumn[] {
+  const author = authorStandardNames(attributeCase)
+  return table.columns.filter((c) => author.has(c.origin.standard ?? ""))
+}
+
+/**
+ * Змістові колонки таблиці (Р2b1-9, Р-A1-9): поза механікою, авторством,
+ * копіями й генерованими. Механіку й авторство примушує платформа, копії
+ * пише лише вона, а генерована колонка випливає зі змістових (і умова
  * `BEFORE`-тригера не може посилатися на її `NEW`). Одне джерело для умови
  * `contentChangeCondition` і порівнянь тригера ефектів.
  */
@@ -70,12 +104,12 @@ export function contentColumns(
   table: Pick<PhysicalTable, "columns">,
   attributeCase: AttributeCase
 ): PhysicalColumn[] {
-  const mechanics = mechanicsStandardNames(attributeCase)
+  const platform = nonContentStandardNames(attributeCase)
   return table.columns.filter(
     (c) =>
       c.origin.copyOf === undefined &&
       c.generated === undefined &&
-      !mechanics.has(c.origin.standard ?? "")
+      !platform.has(c.origin.standard ?? "")
   )
 }
 
@@ -88,10 +122,17 @@ export function contentColumns(
  * попередніх тригерів, але поширення пише лише копії за будь-якого порядку
  * тригерів, тож результат від порядку імен не залежить. Зміст —
  * `contentColumns`. Таблиця без копій умови не має.
+ *
+ * `watched` (Р-A1-10) — колонки поза змістом, зміна яких теж має спрацювати:
+ * авторство для тригерів механіки, авторства й ефектів. Копія носія може
+ * виводитися з `createdBy`, тож зміна лише `created_by_id` змінює й копію, і
+ * без `watched` умова була б хибною: ефекти не відмовили б незмінному
+ * автору, а механіка не підвищила б версію. Підписки `watched` не беруть.
  */
 export function contentChangeCondition(
   table: Pick<PhysicalTable, "columns">,
-  attributeCase: AttributeCase
+  attributeCase: AttributeCase,
+  watched: readonly PhysicalColumn[] = []
 ): string | undefined {
   const copies = carrierCopies(table)
   if (copies.length === 0) return undefined
@@ -102,7 +143,10 @@ export function contentChangeCondition(
           `(OLD.${quoteIdent(c.name)} IS DISTINCT FROM NEW.${quoteIdent(c.name)})`
       )
       .join(" OR ")
-  return `(${changed(contentColumns(table, attributeCase))}) OR NOT (${changed(copies)})`
+  const content = changed(contentColumns(table, attributeCase))
+  return watched.length === 0
+    ? `(${content}) OR NOT (${changed(copies)})`
+    : `((${content}) OR (${changed(watched)})) OR NOT (${changed(copies)})`
 }
 
 /**
@@ -171,9 +215,14 @@ export function buildMechanicsUnits(
     shared(touchFunction(fn)),
     ...executeGrants(`${fn}()`, [], provider).map(shared),
     ...tables.flatMap((table): SqlUnit[] => {
-      const content = contentChangeCondition(table, attributeCase)
       // Поширення копій носіїв не підвищує версію (Р2a2-19): оновлення —
-      // окремим тригером з умовою, бо на вставці `OLD` немає.
+      // окремим тригером з умовою, бо на вставці `OLD` немає. Зміна автора —
+      // зміна рядка: мігратор поза командою теж підвищує версію (Р-A1-10).
+      const content = contentChangeCondition(
+        table,
+        attributeCase,
+        authorTableColumns(table, attributeCase)
+      )
       return content === undefined
         ? [trigger(table, mechanicsTriggerName(table.name), "INSERT OR UPDATE")]
         : [

@@ -2,6 +2,7 @@ import type { Node } from "libpg-query"
 import {
   KIND_REGISTRY,
   PROVIDER_EVENT_SOURCES,
+  standardLogicalName,
   type MetadataRef,
   type StandardColumnDef,
 } from "simetra/model"
@@ -799,10 +800,16 @@ export function labelConsumers(
         if (!targets.some((t) => t.kind === ref.kind && t.name === ref.name)) {
           continue
         }
+        // `origin.standard` — ім'я в стилі проєкту результату, а не
+        // канонічне camelCase визначення (Рб1-1).
+        const standard = standardLogicalName(
+          column,
+          after.project.naming.attributeCase
+        )
         add(
           tables,
           (c) =>
-            c.origin.standard === column.logicalName &&
+            c.origin.standard === standard &&
             c.name === `${column.physicalName}_type`
         )
       }

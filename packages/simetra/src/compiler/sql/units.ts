@@ -80,6 +80,7 @@ export type UnitGenerator =
   | "access"
   | "functionExecute"
   | "mechanics"
+  | "key"
   | "subscription"
   | "rights"
   | "rightsGuards"
@@ -87,6 +88,7 @@ export type UnitGenerator =
   | "carriers"
   | "command"
   | "effects"
+  | "catalogCommand"
 
 /**
  * Чи тіло функцій генератора фіксоване платформою: таку функцію перевіряють
@@ -102,6 +104,7 @@ const FIXED_BODY: Readonly<Record<UnitGenerator, boolean>> = {
   access: true,
   functionExecute: true,
   mechanics: true,
+  key: true,
   // Лише тригери: тіло обробника — дослівна функція застосунку, не одиниця
   // генератора.
   subscription: true,
@@ -111,6 +114,7 @@ const FIXED_BODY: Readonly<Record<UnitGenerator, boolean>> = {
   carriers: true,
   command: true,
   effects: true,
+  catalogCommand: true,
 }
 
 /**

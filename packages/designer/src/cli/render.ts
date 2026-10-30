@@ -151,7 +151,7 @@ export function renderResult(
     }
   }
   if (tool.name === "roles" && r.data !== undefined) {
-    const { roles } = r.data as RolesData
+    const { roles, skipped } = r.data as RolesData
     return {
       stdout:
         o.format === "json"
@@ -159,12 +159,22 @@ export function renderResult(
               {
                 ok: r.ok,
                 roles,
+                skipped,
                 diagnostics: JSON.parse(report) as unknown,
               },
               null,
               2
             )
-          : roles.map((x) => `${x.server}: ${x.name} ${x.outcome}`).join("\n"),
+          : [
+              ...roles.map((x) => `${x.server}: ${x.name} ${x.outcome}`),
+              // Пропуск ролі входу не мовчазний: без провайдера невідомо,
+              // членом якої ролі запиту вона мусить бути
+              ...skipped.map(
+                (x) =>
+                  `target: ${x.name} skipped: the directory has no project.meta.json, so database.provider is unknown; run roles in a metadata directory with a project file to create it`
+              ),
+              ...(r.diagnostics.length > 0 ? [report] : []),
+            ].join("\n"),
     }
   }
   if (tool.files === "read") return { stdout: report }

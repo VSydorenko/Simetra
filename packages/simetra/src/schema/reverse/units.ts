@@ -1,11 +1,17 @@
 import {
+  AUTHOR_FUNCTION,
+  authorTriggerName,
+  authorUpdateTriggerName,
   carrierFunctionNames,
   carrierTriggerNames,
   diagnostic,
   effectsFunctionName,
   effectsTriggerNames,
+  hierarchyNames,
   rightsGuardNames,
   grantTargetKeys,
+  KEY_FUNCTION,
+  keyTriggerNames,
   MECHANICS_FUNCTION,
   mechanicsTriggerName,
   mechanicsUpdateTriggerName,
@@ -239,13 +245,19 @@ function ownerTable(unit: CatalogUnit, ctx: UnitsContext): string | undefined {
 }
 
 const MECHANICS = qualified(MECHANICS_FUNCTION.schema, MECHANICS_FUNCTION.name)
+const AUTHOR = qualified(AUTHOR_FUNCTION.schema, AUTHOR_FUNCTION.name)
+const KEY = qualified(KEY_FUNCTION.schema, KEY_FUNCTION.name)
 
 /**
  * Функція, яку платформний тригер таблиці мусить кликати за своїм іменем:
  * механіка рядка (`<t>_simetra_touch` і, на таблиці з копіями носіїв,
- * `<t>_simetra_touch_update`) — `simetra.touch()`, тригери копій носіїв —
+ * `<t>_simetra_touch_update`) — `simetra.touch()`, авторство
+ * (`<t>_simetra_author`, `<t>_simetra_author_update`) — `simetra.author()`
+ * (Р-A1-8), незмінність ключа (`<t>_simetra_key`, `<t>_simetra_key_after`) —
+ * `simetra.key_immutable()` (Рб1-4), тригери копій носіїв —
  * функції носіїв таблиці (Р2a2-20), тригери ефектів — функція ефектів таблиці
- * (Р2b1-12). Інше ім'я — не платформний тригер.
+ * (Р2b1-12), тригери ієрархії — функція ієрархії таблиці (Р-A2-1). Інше
+ * ім'я — не платформний тригер.
  */
 function platformTriggerFunction(
   unit: CatalogUnit,
@@ -262,6 +274,13 @@ function platformTriggerFunction(
     unit.name === mechanicsUpdateTriggerName(table.name)
   )
     return MECHANICS
+  if (
+    unit.name === authorTriggerName(table.name) ||
+    unit.name === authorUpdateTriggerName(table.name)
+  )
+    return AUTHOR
+  const key = keyTriggerNames(table.name)
+  if (unit.name === key.before || unit.name === key.after) return KEY
   const triggers = carrierTriggerNames(table)
   const functions = carrierFunctionNames(table)
   if (unit.name === triggers.derive)
@@ -271,6 +290,10 @@ function platformTriggerFunction(
     unit.name === triggers.propagateInsert
   )
     return qualified(functions.propagate.schema, functions.propagate.name)
+  // Тригери ієрархії (Р-A2-1): обидва кличуть одну функцію таблиці
+  const hierarchy = hierarchyNames(table)
+  if (unit.name === hierarchy.insert || unit.name === hierarchy.update)
+    return qualified(hierarchy.fn.schema, hierarchy.fn.name)
   // Тригери ефектів дії (Р2b1-12): обидва кличуть одну функцію таблиці
   const effects = effectsTriggerNames(table)
   if (unit.name === effects.all || unit.name === effects.update) {
@@ -286,7 +309,8 @@ function platformTriggerFunction(
 }
 
 /**
- * Функції платформних тригерів серед одиниць: механіка й ті функції носіїв,
+ * Функції платформних тригерів серед одиниць: механіка, авторство й
+ * незмінність ключа (по одній функції на проєкт) й ті функції носіїв,
  * які кличе тригер носіїв з відповідним іменем. Функцію носіїв за самим
  * іменем не впізнаємо: ім'я таблиці, від якого воно походить, дає лише
  * тригер.
@@ -295,7 +319,7 @@ function platformFunctions(
   units: readonly CatalogUnit[],
   ctx: UnitsContext
 ): ReadonlySet<string> {
-  const found = new Set([MECHANICS])
+  const found = new Set([MECHANICS, AUTHOR, KEY])
   for (const unit of units) {
     if (unit.class !== "trigger") continue
     const fn = platformTriggerFunction(unit, ctx)

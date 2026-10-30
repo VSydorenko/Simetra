@@ -241,10 +241,15 @@ export {
 export {
   checkPlatformRoles,
   ensurePlatformRoles,
+  platformRoleGate,
+  platformRoleSet,
   platformRoleRefusals,
   readPlatformRoles,
   requiredPlatformRoles,
+  type PlatformLoginRole,
+  type PlatformRoleOutcome,
   type PlatformRoleRow,
+  type PlatformRoleSet,
   type RoleServer,
 } from "./platform-roles"
 export {

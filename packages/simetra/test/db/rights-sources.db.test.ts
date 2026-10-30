@@ -405,7 +405,11 @@ describe("adopted sources", () => {
 
   it("source-plan-facts", async () => {
     const client = tx.client()
-    const full = rightsSourceInput(model.contracts, model.physical)
+    const full = rightsSourceInput(
+      model.contracts,
+      model.physical,
+      model.project.naming.attributeCase
+    )
     // Предмет кейсу — таблиці джерел: системні довідники прав (Р2c2-14)
     // читач теж додає до `tables`, але їхні факти — окремий рядок нижче
     const sourceTables = new Set(
@@ -698,7 +702,11 @@ describe("without users", () => {
   it("poly-plan-keys", async () => {
     const facts = await sourceFacts(
       tx.client(),
-      rightsSourceInput(model.contracts, model.physical)
+      rightsSourceInput(
+        model.contracts,
+        model.physical,
+        model.project.naming.attributeCase
+      )
     )
     const keysOf = (source: string) =>
       facts.unknownKeys.find((u) => u.source === source)?.keys

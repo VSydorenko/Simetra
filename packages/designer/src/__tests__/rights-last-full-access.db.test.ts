@@ -10,7 +10,7 @@ import {
   policyDomain,
   writeRoles,
 } from "../../../simetra/test/support"
-import { inTarget } from "./support/db"
+import { inTarget, waitForLock } from "./support/db"
 
 /**
  * Останнього носія перевіряємо двома з'єднаннями після реального COMMIT:
@@ -87,18 +87,6 @@ async function seedCarrier(client: pg.Client): Promise<Carrier> {
     targetOrg,
     targetMember,
   }
-}
-
-async function waitForLock(observer: pg.Client, pid: number): Promise<void> {
-  for (let waited = 0; waited < 10_000; waited += 50) {
-    const { rows } = await observer.query<{ wait_event_type: string | null }>(
-      "SELECT wait_event_type FROM pg_stat_activity WHERE pid = $1",
-      [pid]
-    )
-    if (rows[0]?.wait_event_type === "Lock") return
-    await new Promise((resolve) => setTimeout(resolve, 50))
-  }
-  throw new Error("the second COMMIT never waited on the rights version lock")
 }
 
 describe("concurrent last fullAccess carrier", () => {

@@ -267,6 +267,18 @@ describe("sql.generated-grant", () => {
     ])
   })
 
+  it("a verbatim column grant on a kind table is an error", async () => {
+    // Колонкові гранти таблиці виду теж належать платформі (Рт10): інакше
+    // дослівний `UPDATE (x)` розширив би колонки зміни ролі команд.
+    const diagnostics = await grantDiagnostics(
+      scopeEntries(),
+      `GRANT UPDATE (description) ON TABLE public.item TO ${PLATFORM_ROLES.command};`
+    )
+    expect(diagnostics.map((d) => [d.code, d.params?.object])).toEqual([
+      ["sql.generated-grant", "public.item"],
+    ])
+  })
+
   it("a verbatim copy of a generated membership grant is generated-grant, not unit-duplicate", async () => {
     const diagnostics = await grantDiagnostics(
       membershipEntries(),

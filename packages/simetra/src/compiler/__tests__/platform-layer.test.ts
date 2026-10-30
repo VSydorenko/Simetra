@@ -91,9 +91,11 @@ describe("platform layer", () => {
       PLATFORM_SCHEMA
     )
     // Механіка рядка лежить у `simetra` і без «Користувачів» — це не шар.
+    // Шукаємо кваліфіковане ім'я: роль команд `simetra_command` — не схема.
     expect(
       withoutMechanics(model.sqlUnits).filter(
-        (u) => u.schema === PLATFORM_SCHEMA || u.sql.includes(PLATFORM_SCHEMA)
+        (u) =>
+          u.schema === PLATFORM_SCHEMA || u.sql.includes(`${PLATFORM_SCHEMA}.`)
       )
     ).toEqual([])
   })
@@ -216,8 +218,8 @@ describe("platform layer", () => {
 
   it("generated SQL never manages the command role itself", async () => {
     // Роль кластерна (платформна спека §6.9): її створює `simetra roles`, а
-    // членство й DML-гранти — П4; згенерований SQL не створює, не змінює й
-    // не видає її, а таблиць їй не відкриває.
+    // згенерований SQL не створює, не змінює й не видає її. Таблиці їй
+    // відкриває лише генератор доступу (спека П4 §6.2) і лише DML-привілеями.
     const parse = await loadSqlParser()
     const models = [
       await compile(kitchenSink()),
@@ -243,7 +245,16 @@ describe("platform layer", () => {
           const grantees = (stmt.GrantStmt.grantees ?? []).map((g) =>
             "RoleSpec" in g ? g.RoleSpec.rolename : undefined
           )
-          expect(grantees, unit.identity).not.toContain(PLATFORM_ROLES.command)
+          if (!grantees.includes(PLATFORM_ROLES.command)) continue
+          expect(unit.generator, unit.identity).toBe("access")
+          const privileges = (stmt.GrantStmt.privileges ?? []).map((p) =>
+            "AccessPriv" in p ? p.AccessPriv.priv_name : undefined
+          )
+          expect(privileges.length, unit.identity).toBe(1)
+          expect(
+            ["select", "insert", "update", "delete"],
+            unit.identity
+          ).toContain(privileges[0])
         }
       }
     }

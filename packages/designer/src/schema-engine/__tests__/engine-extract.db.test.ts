@@ -146,6 +146,9 @@ function expandAll(type: string, privileges: string): string[] {
   return [...all]
 }
 
+/** Роздільник колонки в ключі пари: в ідентичність він не потрапляє. */
+const COLUMN_KEY = "\u0000"
+
 /**
  * Ідентичності одиниць компілятора у формі бази: оператор розгорнуто в пари
  * факту (рішення за спайком, 5), налаштування функції — у її ідентичність.
@@ -189,12 +192,20 @@ function databaseIdentities(units: CompiledModel["sqlUnits"]): string[] {
         }
         if (verb !== "grant")
           throw new Error(`fixture form not expanded: ${unit.identity}`)
+        // Колонковий привілей живе в ACL колонки (`pg_attribute.attacl`):
+        // запис на (об'єкт, отримувач, колонка), тож пара — на колонку
         for (const object of splitList(objects!))
           for (const role of roles!.split(","))
-            pair(
-              `grant:grant:${type}:${object}:${role}`,
-              expandAll(type!, privileges!)
-            )
+            for (const privilege of expandAll(type!, privileges!)) {
+              const key = `grant:grant:${type}:${object}:${role}`
+              const columns = /^(\w+)\((.*)\)$/.exec(privilege)
+              if (columns === null) pair(key, [privilege])
+              else
+                for (const column of columns[2]!.split(","))
+                  pair(`${key}${COLUMN_KEY}${column}`, [
+                    `${columns[1]}(${column})`,
+                  ])
+            }
         break
       }
       // pg_default_acl — запис на (роль, схема, тип об'єкта, отримувач)
@@ -224,7 +235,7 @@ function databaseIdentities(units: CompiledModel["sqlUnits"]): string[] {
     }
   }
   for (const [key, privileges] of pairs)
-    out.add(`${key}:${[...privileges].sort().join(",")}`)
+    out.add(`${key.split(COLUMN_KEY)[0]}:${[...privileges].sort().join(",")}`)
   return [...out].sort()
 }
 

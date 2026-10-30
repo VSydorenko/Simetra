@@ -18,7 +18,12 @@ import { roleKind } from "./role"
 import type { KindDefinition } from "./standard"
 
 export { isUuidColumn, singleUuidKeyColumn }
-export { RIGHTS_DELTA_SECTION } from "./catalog"
+export {
+  RIGHTS_COLUMNS,
+  RIGHTS_DELTA_SECTION,
+  predefinedNameColumn,
+  userPlatformColumns,
+} from "./catalog"
 
 export {
   STANDARD_ACTIONS,
@@ -32,10 +37,15 @@ export {
 } from "./actions"
 
 export {
+  authorColumns,
+  deletionMarkColumn,
+  keyColumn,
+  lineNumberColumn,
   monthColumn,
   serviceDateColumns,
   singletonColumn,
   standardLogicalName,
+  tabularParentColumn,
   versionColumn,
   type FoundElementReference,
   type FoundProjectReference,

@@ -11,6 +11,7 @@ import {
   mechanicsTriggerName,
 } from "../mechanics-units"
 import { loadSqlParser, type SqlParser } from "../sql/parse"
+import { platformBeforeTriggerName } from "../before-trigger-names"
 import { compileRights, policyDomain } from "./fixtures/rights"
 import {
   attribute,
@@ -166,10 +167,10 @@ describe("buildMechanicsUnits", () => {
     ).toThrow(/^internal:/)
   })
 
-  it("the trigger name of a 60-byte table is 63 bytes with the whole label", () => {
+  it("the trigger name of a 60-byte table goes by the shared BEFORE-trigger prefix", () => {
     const name = "t".repeat(60)
     const trigger = mechanicsTriggerName(name)
-    expect(new TextEncoder().encode(trigger).length).toBe(63)
+    expect(trigger).toBe(platformBeforeTriggerName(name, "simetra_touch"))
     expect(trigger.endsWith("_simetra_touch")).toBe(true)
     const units = buildMechanicsUnits(
       snapshot([table(name, ["updatedAt", "version"])]),
@@ -190,7 +191,9 @@ describe("buildMechanicsUnits", () => {
       "sql/public/f.sql":
         "CREATE FUNCTION public.f(n int4) RETURNS int4 LANGUAGE sql IMMUTABLE AS $$ SELECT n $$;",
     })
+    // Функція незмінності ключа — теж платформна (key-units.test.ts).
     expect(platformFunctionSignatures(model.sqlUnits)).toEqual([
+      "simetra.key_immutable()",
       "simetra.touch()",
     ])
   })
@@ -217,12 +220,15 @@ describe("buildMechanicsUnits", () => {
     // зміст (без механіки, копій і генерованих колонок) змінився, або копії
     // не змінилися.
     const model = (await compileRights(policyDomain())).model!
+    // Генератор `mechanics` дає й тригери авторства — тут лише механіка.
     const trees = (table: string) =>
       mechanics(model.sqlUnits)
         .filter(
           (u) =>
             u.class === "trigger" &&
-            u.identity.startsWith(`trigger:public.${table}.`)
+            u.identity.startsWith(
+              `trigger:public.${table}.${table}_simetra_touch`
+            )
         )
         .map((u) => u.tree)
     const tree = (sql: string) => {
@@ -297,6 +303,16 @@ describe("buildMechanicsUnits", () => {
     expect(contentChangeCondition(report, "camelCase")).toBe(
       `(${changed(content)}) OR NOT (${changed([{ name: "task_id_assignee_id" }])})`
     )
+    // Авторство — механіка (Р-A1-9): поза змістом таблиці з `trackAuthor`.
+    const task = model.physical.tables.find((t) => t.name === "task")!
+    expect(task.columns.map((c) => c.name)).toEqual(
+      expect.arrayContaining(["created_by_id", "updated_by_id"])
+    )
+    expect(
+      contentColumns(task, "camelCase").filter((c) =>
+        ["created_by_id", "updated_by_id"].includes(c.name)
+      )
+    ).toEqual([])
   })
 
   it("compile orders the trigger after its table and the function", async () => {

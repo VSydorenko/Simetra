@@ -66,9 +66,7 @@
           "kind": "Catalog",
           "name": "Users"
         },
-        "columns": [
-          "ref"
-        ]
+        "key": "ref"
       }
     }
   ],

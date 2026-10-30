@@ -21,13 +21,27 @@ export interface TableNames {
   columns: ReadonlyMap<string, string>
 }
 
+/**
+ * Основна таблиця збереженого об'єкта виду: FK на неї називає форму ключа, а
+ * не колонки (Рб1-10). `keys` — фізичні колонки цілі (`columnsKey`) → форма.
+ */
+export interface KindTableNames {
+  kind: string
+  object: string
+  keys: ReadonlyMap<string, "ref" | "scopedRef">
+}
+
+/** Ключ переліку фізичних колонок для `KindTableNames.keys`. */
+export const columnsKey = (columns: readonly string[]): string =>
+  columns.join("\0")
+
 export interface TablesContext {
   defaultSchema: string
   /**
    * Таблиці моделі за `schema.name`: згенеровані й основні таблиці збережених
    * об'єктів видів 1С. Ціль FK поза ними — зовнішня таблиця.
    */
-  tables: ReadonlyMap<string, TableNames>
+  tables: ReadonlyMap<string, TableNames | KindTableNames>
   /** Згенеровані енам-типи: `schema.name` → логічне ім'я. */
   enums: ReadonlyMap<string, string>
 }
@@ -221,10 +235,15 @@ function foreignKey(
     references:
       target === undefined
         ? { external: { schema, table, columns } }
-        : {
-            object: { kind: target.kind, name: target.object },
-            columns: logical(target, columns),
-          },
+        : "keys" in target
+          ? {
+              object: { kind: target.kind, name: target.object },
+              key: target.keys.get(columnsKey(columns)),
+            }
+          : {
+              object: { kind: target.kind, name: target.object },
+              columns: logical(target, columns),
+            },
     ...(fk.onDelete !== "noAction" ? { onDelete: fk.onDelete } : {}),
     ...(fk.onUpdate !== "noAction" ? { onUpdate: fk.onUpdate } : {}),
     ...(fk.deferrable !== "no" ? { deferrable: fk.deferrable } : {}),

@@ -489,12 +489,63 @@
                       "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
                       "description": "Logical element name (attribute, section, column). The casing style is checked against the project naming setting."
                     },
-                    "description": "Logical names of columns of the referenced object."
+                    "description": "Logical names of columns of the referenced CustomTable."
                   }
                 },
                 "required": [
                   "object",
                   "columns"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "object": {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "Catalog",
+                          "Document",
+                          "Enumeration",
+                          "InformationRegister",
+                          "AccumulationRegister",
+                          "Constant",
+                          "CustomTable",
+                          "PgEnum",
+                          "EventSubscription",
+                          "RightsSet",
+                          "Role"
+                        ],
+                        "description": "Kind of the referenced metadata object."
+                      },
+                      "name": {
+                        "type": "string",
+                        "pattern": "^[A-Z][A-Za-z0-9]*$",
+                        "description": "Logical name of the referenced object."
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "name"
+                    ],
+                    "additionalProperties": false,
+                    "description": "Referenced object of a kind (not a CustomTable)."
+                  },
+                  "key": {
+                    "type": "string",
+                    "enum": [
+                      "ref",
+                      "scopedRef"
+                    ],
+                    "description": "Referenced key of the kind table: \"ref\" is its key column (one local column); \"scopedRef\" is the pair (scope column, key) of a table with its own scope column (two local columns: scope, then key)."
+                  }
+                },
+                "required": [
+                  "object",
+                  "key"
                 ],
                 "additionalProperties": false
               },
@@ -539,7 +590,7 @@
                 "additionalProperties": false
               }
             ],
-            "description": "Referenced target: a metadata object or an external table."
+            "description": "Referenced target: columns of a CustomTable, the key of a kind table, or an external table."
           },
           "onDelete": {
             "default": "noAction",

@@ -1,4 +1,8 @@
-import { quoteIdent, type PhysicalTable } from "simetra/model"
+import {
+  quoteIdent,
+  tabularParentColumn,
+  type PhysicalTable,
+} from "simetra/model"
 import type {
   CarrierContract,
   OwnershipContract,
@@ -12,6 +16,7 @@ import { uniformExtents } from "./contracts"
 import { RIGHTS_FUNCTIONS, call, uuidLiteral } from "./functions"
 import { sqlLiteral } from "../stages/model"
 import { must } from "./references"
+import { styleFreeColumn } from "../standard-column"
 
 /**
  * Дія контексту команди (Р2b1-5): замість літерала дії предикат кличе
@@ -206,8 +211,7 @@ function carrierColumn(
     if (copy !== undefined) return copy.name
     const key = main.primaryKey?.columns
     if (key?.length === 1 && key[0] === carrier.value) {
-      return must(table.columns.find((c) => c.origin.standard === "parent"))
-        .name
+      return styleFreeColumn(table, tabularParentColumn()).name
     }
     throw new Error(`internal: no carrier copy of ${carrier.value}`)
   }
@@ -217,13 +221,22 @@ function carrierColumn(
   return must(table.columns.find((c) => c.origin.elementId === elementId)).name
 }
 
-/** Текст умови для `USING`/`WITH CHECK` політики. */
-export function renderCondition(condition: RightsCondition): string {
+/**
+ * Текст умови для `USING`/`WITH CHECK` політики. `row` — змінна рядка
+ * plpgsql (`v_old`, `v_new`): ядро команди перевіряє право тим самим текстом
+ * над станом «до» чи «після», а не другою реалізацією формули (Р-A2-2).
+ */
+export function renderCondition(
+  condition: RightsCondition,
+  row?: string
+): string {
+  const at = (column: string) =>
+    row === undefined ? quoteIdent(column) : `${row}.${quoteIdent(column)}`
   switch (condition.kind) {
     case "column":
-      return `${quoteIdent(condition.column)} = ANY (ARRAY(SELECT ${call(condition.set.fn, condition.set.args)}))`
+      return `${at(condition.column)} = ANY (ARRAY(SELECT ${call(condition.set.fn, condition.set.args)}))`
     case "currentUser":
-      return `${quoteIdent(condition.column)} = ${CURRENT_USER}`
+      return `${at(condition.column)} = ${CURRENT_USER}`
     case "boolean":
       return `(SELECT ${condition.expression})`
   }

@@ -1,7 +1,12 @@
 import { isDeepStrictEqual } from "node:util"
 import { beforeAll, describe, expect, it } from "vitest"
 import type { CompiledModel } from "simetra/compiler"
-import { PROVIDER_LOGIN_ROLES } from "simetra/model"
+import {
+  DATABASE_PROVIDERS,
+  PLATFORM_LOGIN_ROLES,
+  PROVIDER_LOGIN_ROLES,
+  type AttributeCase,
+} from "simetra/model"
 import { buildRightsGuardUnits, maintenanceSql } from "../rights/guard-units"
 import { ZERO_UUID } from "../rights/functions"
 import { hasEmptySearchPath, routineLanguage } from "../sql/closed-forms"
@@ -32,6 +37,7 @@ import {
   tree,
 } from "./fixtures/sql-shape"
 import { expectClean, uuid } from "./helpers"
+import { snakeCaseTwin } from "./fixtures/snake-case"
 
 const ref = (kind: string, name: string) => ({ kind, name })
 
@@ -422,7 +428,7 @@ describe("rights guard statement triggers", () => {
     const fk = (name: string, field: string, target: string) => ({
       name,
       columns: [field],
-      references: { object: ref("Catalog", target), columns: ["ref"] },
+      references: { object: ref("Catalog", target), key: "ref" },
     })
     const result = await compileRights(
       policyDomain(writeRoles(), {
@@ -501,8 +507,23 @@ describe("rights guard statement triggers", () => {
     }
   })
 
+  it.each(DATABASE_PROVIDERS)(
+    "maintenance mode never trusts the platform runtime login (%s)",
+    (provider) => {
+      const arrays = nodes(expr(maintenanceSql(provider)), "A_ArrayExpr")
+      const names = nodes(arrays, "sval").filter((v) => typeof v === "string")
+      expect(names).toContain(PLATFORM_LOGIN_ROLES.runtime)
+    }
+  )
+
   it("maintenance mode requires a non-API login role", () => {
-    const logins = PROVIDER_LOGIN_ROLES.supabase.map((r) => `'${r}'`).join(", ")
+    // Порядок: ролі входу провайдера, далі ролі входу платформи (Р-A1-6)
+    const logins = [
+      ...PROVIDER_LOGIN_ROLES.supabase,
+      ...Object.values(PLATFORM_LOGIN_ROLES),
+    ]
+      .map((r) => `'${r}'`)
+      .join(", ")
     const oracle = expr(
       `coalesce(current_setting('simetra.rights_maintenance', true) = 'on', false) AND session_user::text <> ALL (ARRAY[${logins}]::text[])`
     )
@@ -1130,12 +1151,14 @@ const HOLDERS_KIND = () => tree("SELECT v_pending.kind = 'holders'")
 async function guardsOver(
   model: CompiledModel,
   contracts: Partial<CompiledModel["contracts"]>,
-  physical: CompiledModel["physical"] = model.physical
+  physical: CompiledModel["physical"] = model.physical,
+  attributeCase: AttributeCase = "camelCase"
 ) {
   return buildRightsGuardUnits(
     { ...model.contracts, ...contracts },
     physical,
     [],
+    attributeCase,
     "supabase",
     unit(model, CHECK).module,
     await loadSqlParser()
@@ -1315,28 +1338,6 @@ describe("rights guards of membership and users outside commands", () => {
     )
   })
 
-  it("refuses replacing the id of a membership or users row, without a maintenance branch", () => {
-    for (const table of ["org_member", "users"]) {
-      // Обмін id двох рядків тригер оператора не бачить — потрібен рядковий.
-      expect(triggerOf(domain, table, "simetra_rights_id").tree, table).toEqual(
-        tree(
-          `CREATE TRIGGER ${table}_simetra_rights_id BEFORE UPDATE OF id ON public.${table} FOR EACH ROW WHEN (OLD.id IS DISTINCT FROM NEW.id) EXECUTE FUNCTION public.${table}_simetra_rights_id()`
-        )
-      )
-      expect(
-        bodyShape(fnOf(domain, table, "simetra_rights_id").sql),
-        table
-      ).toEqual(
-        bodyShape(
-          expectedFunction(
-            `public.${table}_simetra_rights_id`,
-            `BEGIN\n${refusal("rights-context", table)}\nRETURN NULL;\nEND`
-          )
-        )
-      )
-    }
-  })
-
   it("refuses changing a membership user outside a command, except self-acceptance", () => {
     // Порівняння за ключем рядка; і заповнений, і порожній користувач
     // незмінні, крім заповнення порожнього рядка собою, поки ще не учасник.
@@ -1356,6 +1357,18 @@ describe("rights guards of membership and users outside commands", () => {
         "SELECT v_action IS NULL AND NOT v_maintenance AND EXISTS (SELECT 1 FROM old_rows o JOIN new_rows n ON n.id = o.id WHERE o.user_kind IS DISTINCT FROM n.user_kind OR (o.invalid IS DISTINCT FROM n.invalid AND NOT (o.invalid = false AND n.invalid = true)))"
       ),
     ])
+  })
+
+  it("finds the user kind by its styled name in a snake_case project", async () => {
+    // Близнюк у snake_case (Рб1-3): `origin.standard` несе ім'я в стилі
+    // проєкту (Р-A1-10), тож літерал `userKind` не знайшов би `user_kind`.
+    const snake = await compileRights(snakeCaseTwin(policyDomain(writeRoles())))
+    expectClean(snake)
+    const sql = (model: CompiledModel) =>
+      model.sqlUnits
+        .filter((u) => u.generator === "rightsGuards")
+        .map((u) => [u.identity, u.sql])
+    expect(sql(snake.model!)).toEqual(sql(domain))
   })
 
   it("bumps the global version once per users statement that really changes validity or kind", () => {

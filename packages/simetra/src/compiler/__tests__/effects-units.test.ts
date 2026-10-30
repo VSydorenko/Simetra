@@ -1,7 +1,11 @@
 import { parsePlPgSQLSync } from "@libpg-query/parser"
 import { beforeAll, describe, expect, it } from "vitest"
 import type { CompiledModel } from "simetra/compiler"
-import { contentChangeCondition, contentColumns } from "../mechanics-units"
+import {
+  authorTableColumns,
+  contentChangeCondition,
+  contentColumns,
+} from "../mechanics-units"
 import { effectsTables, writesByCommandContract } from "../contracts"
 import { writesByCommand } from "../rights/facts"
 import { hasEmptySearchPath, routineLanguage } from "../sql/closed-forms"
@@ -15,10 +19,12 @@ import {
   REASSIGN_ACTION_ID,
   REGION_NOTES_TABLE,
   TASK_FILE,
+  authorCarrier,
   compileRights,
   globalConstant,
   policyDomain,
   rightsFiles,
+  singleTenantRights,
   writableRegister,
   writeRoles,
 } from "./fixtures/rights"
@@ -32,6 +38,7 @@ import {
   tree,
 } from "./fixtures/sql-shape"
 import { expectClean, uuid } from "./helpers"
+import { snakeCaseTwin } from "./fixtures/snake-case"
 import { kitchenSink } from "./fixtures/kitchen-sink"
 
 let domain: CompiledModel
@@ -98,9 +105,9 @@ const fnOf = (model: CompiledModel, table: string) =>
 describe("buildEffectsUnits", () => {
   it("checks the root row against the effects of the command action", () => {
     const t = "task"
-    // Колонки порівняння — змістові без незмінних (ключ і скоуп перевіряє
-    // окрема умова, Р2b1-20): авторство механіка не примушує, тож воно в
-    // переліку (Р2b1-15).
+    // Колонки порівняння — змістові без ключа (тригери ключа) і скоупу
+    // (окрема умова, Р2b1-20). Авторство — механіка (Р-A1-9): поза змістом,
+    // а автор рядка — серед незмінних (Р-A1-10).
     const content = contentColumns(tableOf(domain, t), "camelCase")
       .map((c) => c.name)
       .filter((c) => c !== "id" && c !== "org_id")
@@ -110,8 +117,6 @@ describe("buildEffectsUnits", () => {
       "posted",
       "deletion_mark",
       "created_at",
-      "created_by_id",
-      "updated_by_id",
       "assignee_id",
       "project_id",
       "region_id",
@@ -131,16 +136,17 @@ describe("buildEffectsUnits", () => {
     const body = [
       ...PREAMBLE,
       // Незмінні колонки — лише на оновленні: вставка під `create` свій
-      // скоуп лише отримує (Р2b1-20).
-      ...raiseIf(
-        "TG_OP = 'UPDATE' AND OLD.id IS DISTINCT FROM NEW.id",
-        t,
-        "id"
-      ),
+      // скоуп лише отримує (Р2b1-20). Ключ тут не перевіряється: його
+      // тримають тригери ключа для будь-якого автора (Рб1-4).
       ...raiseIf(
         "TG_OP = 'UPDATE' AND OLD.org_id IS DISTINCT FROM NEW.org_id",
         t,
         "org_id"
+      ),
+      ...raiseIf(
+        "TG_OP = 'UPDATE' AND OLD.created_by_id IS DISTINCT FROM NEW.created_by_id",
+        t,
+        "created_by_id"
       ),
       ...raiseIf(
         "TG_OP = 'INSERT' AND NEW.deletion_mark IS DISTINCT FROM false",
@@ -459,6 +465,65 @@ describe("buildEffectsUnits", () => {
         (u) => u.identity === "trigger:public.task.task_simetra_effects_update"
       )
     ).toBe(false)
+  })
+
+  it("a change of the author alone reaches the effects on a table with copies", async () => {
+    // Review Focus 4 (Р-A1-10): копія носія `Note` виводиться з `createdBy`,
+    // тож зміна лише `created_by_id` змінює й копію. Без авторства в
+    // `watched` умова була б хибною, і незмінність автора тримав би лише
+    // грант.
+    const result = await compileRights(singleTenantRights(authorCarrier()))
+    expectClean(result)
+    const model = result.model!
+    const changed = (columns: readonly string[]) =>
+      columns.map((c) => `OLD.${c} IS DISTINCT FROM NEW.${c}`).join(" OR ")
+    const when =
+      `((${changed(["id", "code", "description", "deletion_mark", "predefined_name", "created_at", "text"])}) ` +
+      `OR (${changed(["created_by_id", "updated_by_id"])})) ` +
+      `OR NOT (${changed(["created_by_id_mentor_id"])})`
+    expect(
+      unit(model, "trigger:public.note.note_simetra_effects_update").tree
+    ).toEqual(
+      tree(
+        `CREATE TRIGGER note_simetra_effects_update AFTER UPDATE ON public.note FOR EACH ROW WHEN (${when}) EXECUTE FUNCTION public.note_simetra_effects();`
+      )
+    )
+    expect(
+      unit(model, "trigger:public.note.note_simetra_touch_update").tree
+    ).toEqual(
+      tree(
+        `CREATE TRIGGER note_simetra_touch_update BEFORE UPDATE ON public.note FOR EACH ROW WHEN (${when}) EXECUTE FUNCTION simetra.touch();`
+      )
+    )
+    // Автор рядка — серед незмінних, автор зміни — ні (його примушує тригер).
+    const conditions = bodyShape(fnOf(model, "note").sql)
+      .flatMap((statement) => statement.expressions)
+      .filter((expression) => expression.role === "condition")
+      .map((expression) => expression.tree)
+    expect(conditions).toContainEqual(
+      tree(
+        "SELECT TG_OP = 'UPDATE' AND OLD.created_by_id IS DISTINCT FROM NEW.created_by_id"
+      )
+    )
+    expect(
+      JSON.stringify(conditions).includes('{"String":{"sval":"updated_by_id"}}')
+    ).toBe(false)
+    expect(
+      authorTableColumns(tableOf(model, "note"), "camelCase").map((c) => c.name)
+    ).toEqual(["created_by_id", "updated_by_id"])
+  })
+
+  it("a snake_case project finds the platform user fields and the author by its styled names", async () => {
+    // Близнюк у snake_case (Рб1-3): `origin.standard` несе ім'я в стилі
+    // проєкту, тож порівняння з літералом `userKind` пропустило б `user_kind`
+    // (Р-A1-10), і тригер ефектів розійшовся б з camelCase.
+    const snake = await compileRights(
+      snakeCaseTwin(policyDomain(writeRoles(), writableRegister()))
+    )
+    expectClean(snake)
+    const sql = (model: CompiledModel) =>
+      effects(model).map((u) => [u.identity, u.sql])
+    expect(sql(snake.model!)).toEqual(sql(domain))
   })
 
   it("refuses with the effect code and no row data", () => {

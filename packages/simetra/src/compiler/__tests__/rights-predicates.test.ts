@@ -245,14 +245,16 @@ describe("rights predicates", () => {
     expect(command.length).toBeGreaterThan(1)
     const context = "(SELECT simetra.command_action())"
     command.forEach((predicate, i) => {
-      expect(predicate.conditions.map(renderCondition)).toEqual(
+      expect(predicate.conditions.map((c) => renderCondition(c))).toEqual(
         update[i]!.conditions.map((condition) =>
           renderCondition(condition).replaceAll("('update', ", `(${context}, `)
         )
       )
     })
     expect(
-      command.flatMap((p) => p.conditions.map(renderCondition)).join(" ")
+      command
+        .flatMap((p) => p.conditions.map((c) => renderCondition(c)))
+        .join(" ")
     ).not.toContain("'update'")
   })
 
@@ -386,7 +388,9 @@ describe("rights predicates", () => {
         p.carrier === selector.carrier
     )
     expect(found).toHaveLength(1)
-    expect(found[0]!.conditions.map(renderCondition)).toEqual(expected)
+    expect(found[0]!.conditions.map((c) => renderCondition(c))).toEqual(
+      expected
+    )
   })
 
   it("gives one predicate per carrier at the scope and in the container", async () => {
@@ -442,11 +446,11 @@ describe("rights predicates", () => {
       [inProject("own"), "task_id_assignee_id"],
       [inProject(region), "task_id_region_id"],
     ])
-    expect(predicates[1]!.conditions.map(renderCondition)).toEqual([
+    expect(predicates[1]!.conditions.map((c) => renderCondition(c))).toEqual([
       `task_id_assignee_id = ANY (ARRAY(SELECT simetra.rights_my_members('${ORG_KIND_ID}'::uuid)))`,
       "org_id = ANY (ARRAY(SELECT simetra.rights_own('read', 'task_comment')))",
     ])
-    expect(predicates[3]!.conditions.map(renderCondition)).toEqual([
+    expect(predicates[3]!.conditions.map((c) => renderCondition(c))).toEqual([
       "task_id_project_id = ANY (ARRAY(SELECT simetra.rights_container('read', 'task_comment', 'any', NULL)))",
     ])
   })

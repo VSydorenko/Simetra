@@ -30,7 +30,7 @@ import {
   headScope,
 } from "../sql/heads"
 import type { SqlParser } from "../sql/parse"
-import { mechanicsStandardNames } from "../mechanics-units"
+import { nonContentStandardNames } from "../mechanics-units"
 import type { PlpgsqlFunction, PlpgsqlParser } from "../sql/plpgsql"
 import { sideEffectOf } from "../sql/query-shape"
 import { plpgsqlExpressionTrees } from "../sql/rewrite/plpgsql-body"
@@ -126,7 +126,8 @@ function writingGenerated(
       references,
       physical,
       movementWrapperName,
-      project.scopeKinds
+      project.scopeKinds,
+      project.naming.attributeCase
     )
       .filter((fn) => fn.reads !== true && fn.membership !== true)
       .map((fn) => `${fn.schema}.${fn.name}`)
@@ -508,7 +509,10 @@ function beforeWriteMechanics(
 ): ReadonlySet<string> {
   if (spec.event !== "beforeWrite") return new Set()
   const style = project.naming.attributeCase
-  const standard = mechanicsStandardNames(style)
+  // Авторство — механіка (Р-A1-9): під командою його примушує тригер
+  // авторства, тож присвоєння в обробнику або губилося б, або підмінило б
+  // автора поза командою.
+  const standard = nonContentStandardNames(style)
   const names = new Set<string>()
   for (const source of spec.sources) {
     if (!("ref" in source)) continue
@@ -668,6 +672,25 @@ function assignmentProblems(
     }
   }
   return problems
+}
+
+/**
+ * Чи може обробник `beforeWrite` змінити колонки `columns` рядка (Р-A2-17):
+ * той самий аналіз присвоєнь, що й діагностика механіки, з будь-якою
+ * проблемою як «присвоює» — `NEW :=` чи `RETURN` іншого запису теж підміняють
+ * колонку. Нерозбірне тіло — теж «присвоює» (fail-closed): ядро тоді бере
+ * замок ієрархії завжди, а не пропускає гонку. `sql` — `CREATE FUNCTION`
+ * обробника, `columns` — фізичні імена в нижньому регістрі.
+ */
+export function handlerAssigns(
+  sql: string,
+  columns: ReadonlySet<string>,
+  parse: SqlParser,
+  plpgsql: PlpgsqlParser
+): boolean {
+  const parsed = plpgsql(sql)
+  if (!parsed.ok || parsed.fn === undefined) return true
+  return assignmentProblems(parsed.fn, columns, parse).length > 0
 }
 
 /**

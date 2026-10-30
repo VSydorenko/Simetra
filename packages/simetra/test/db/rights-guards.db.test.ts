@@ -8,13 +8,12 @@ import {
   SESSION_CLAIMS_SETTING,
 } from "simetra/model"
 import {
+  CHECKLIST_TABLE,
   GLOBAL_ADMIN_ID,
-  MEMBER_EDITOR_ID,
   ORG_ADMIN_ID,
   PROJECT_READER_ID,
   PROJECT_WRITER_ID,
   REGION_DIMENSION_ID,
-  RIGHTS_ADMIN_ID,
   TASK_EDITOR_ID,
   TASK_VIEWER_ID,
   adminRoles,
@@ -32,9 +31,11 @@ import {
 } from "./connection"
 import {
   assignmentRow,
+  closureRights,
   describeTransaction,
   insert,
   orgDeltaRow,
+  seedAdministration,
   type Seed,
   deploy,
 } from "./rights-seed"
@@ -60,164 +61,15 @@ const changed = (value: Result) => {
   expect((value as { rows: pg.QueryResultRow[] }).rows).toHaveLength(1)
 }
 const ZERO = "00000000-0000-0000-0000-000000000000"
+/** Відмова тригера ключа (Рб1-4): та сама форма, що в тригера ефектів. */
+const KEY_REFUSAL = {
+  code: "42501",
+  message: "command.forbidden",
+  detail: "effect",
+  column: "id",
+}
 const PENDING_ROWS =
   "SELECT (SELECT count(*) FROM simetra.rights_tx_actor WHERE xid = txid_current())::int + (SELECT count(*) FROM simetra.rights_tx_pending WHERE xid = txid_current())::int AS n"
-
-async function seed(client: pg.Client): Promise<Seed> {
-  const ids: Seed = {}
-  const row = async (
-    key: string,
-    table: string,
-    values: Record<string, unknown> = {}
-  ) => {
-    ids[key] = randomUUID()
-    await insert(client, table, { ...values, id: ids[key] })
-  }
-  const member = (key: string, org: string, user: string | null) =>
-    row(key, "org_member", {
-      org_id: ids[org],
-      user_id: user === null ? null : ids[user],
-    })
-  const assign = (
-    key: string,
-    memberKey: string,
-    archetype: string,
-    container?: string
-  ) =>
-    row(key, "org_role_assignments", {
-      org_id: ids.A,
-      ...assignmentRow(ids[memberKey]!, {
-        archetype,
-        container: container === undefined ? null : ids[container],
-      }),
-    })
-  for (const org of ["A", "B", "C"]) await row(org, "organization")
-  for (const user of [
-    "root",
-    "root2",
-    "bAdmin",
-    "cAdmin",
-    "admin",
-    "editor",
-    "viewer",
-    "target",
-    "other",
-    "memberEditor",
-    "gAdmin",
-  ]) {
-    ids[user] = await signUp(client)
-    await member(`${user}@A`, "A", user)
-  }
-  // Люди без членства в A: членство тримає UNIQUE (скоуп, користувач), тож
-  // підставити в рядок A можна лише того, хто ще не учасник A.
-  ids.outsider = await signUp(client)
-  await member("bAdmin@B", "B", "bAdmin")
-  await member("cAdmin@C", "C", "cAdmin")
-  await member("invite@A", "A", null)
-  // Запрошений рядок без призначень: його самоприйняття прав не додає.
-  await member("bareInvite@A", "A", null)
-  await row("P1", "project", { org_id: ids.A })
-  await row("P2", "project", { org_id: ids.A })
-  await row("R1", "region", { org_id: ids.A })
-  await assign("rootRole", "root@A", ORG_ADMIN_ID)
-  await assign("root2Role", "root2@A", ORG_ADMIN_ID)
-  await row("bRole", "org_role_assignments", {
-    org_id: ids.B,
-    ...assignmentRow(ids["bAdmin@B"]!, { archetype: ORG_ADMIN_ID }),
-  })
-  await row("cRole", "org_role_assignments", {
-    org_id: ids.C,
-    ...assignmentRow(ids["cAdmin@C"]!, { archetype: ORG_ADMIN_ID }),
-  })
-  // «Користувачі» — глобальний рівень: `update` на них дає глобальний
-  // `fullAccess`, а бачить їх учасник спільного скоупу (членство в A).
-  await row(
-    "gAdminRole",
-    "global_role_assignments",
-    assignmentRow(ids.gAdmin!, { archetype: GLOBAL_ADMIN_ID })
-  )
-  await assign("adminRole", "admin@A", RIGHTS_ADMIN_ID)
-  await assign("editorRole", "editor@A", TASK_EDITOR_ID)
-  await assign("editorAdminRole", "editor@A", RIGHTS_ADMIN_ID)
-  await assign("viewerRole", "viewer@A", TASK_VIEWER_ID)
-  await assign("viewerAdminRole", "viewer@A", RIGHTS_ADMIN_ID)
-  await assign("memberEditorRole", "memberEditor@A", MEMBER_EDITOR_ID)
-  await row("heldCustom", "org_roles", {
-    org_id: ids.A,
-    archetype: TASK_VIEWER_ID,
-  })
-  await row("heldRole", "org_role_assignments", {
-    org_id: ids.A,
-    ...assignmentRow(ids["admin@A"]!, { customRole: ids.heldCustom }),
-  })
-  await row("closureCustom", "org_roles", {
-    org_id: ids.A,
-    archetype: TASK_VIEWER_ID,
-  })
-  await insert(
-    client,
-    "org_roles_delta",
-    orgDeltaRow(ids.A!, ids.closureCustom!, 1, ["deny", "task", "read", "any"])
-  )
-  await insert(
-    client,
-    "org_roles_delta",
-    orgDeltaRow(ids.A!, ids.closureCustom!, 2, [
-      "allow",
-      "task",
-      "update",
-      "any",
-    ])
-  )
-  await row("inUseCustom", "org_roles", {
-    org_id: ids.A,
-    archetype: TASK_VIEWER_ID,
-  })
-  await row("inUseRole", "org_role_assignments", {
-    org_id: ids.A,
-    ...assignmentRow(ids["target@A"]!, { customRole: ids.inUseCustom }),
-  })
-  await row("unusedCustom", "org_roles", {
-    org_id: ids.A,
-    archetype: TASK_VIEWER_ID,
-  })
-  await row("baselineCustom", "org_roles", {
-    org_id: ids.A,
-    archetype: TASK_EDITOR_ID,
-  })
-  await row("moveRole", "org_role_assignments", {
-    org_id: ids.A,
-    ...assignmentRow(ids["target@A"]!, {
-      archetype: PROJECT_WRITER_ID,
-      container: ids.P1,
-    }),
-  })
-  await row("inviteRole", "org_role_assignments", {
-    org_id: ids.A,
-    ...assignmentRow(ids["invite@A"]!, { archetype: ORG_ADMIN_ID }),
-  })
-  // Права в іншому тенанті не покривають приріст у цьому: повний доступ у B
-  // і лише адміністрування прав у A.
-  await assign("bAdminRightsRole", "bAdmin@A", RIGHTS_ADMIN_ID)
-  // Позначені рядки — база для зняття позначки, що дає повний приріст (Р2c2-5).
-  await row("markedRole", "org_role_assignments", {
-    org_id: ids.A,
-    ...assignmentRow(ids["target@A"]!, {
-      archetype: ORG_ADMIN_ID,
-      deletionMark: true,
-    }),
-  })
-  await row("markedCustom", "org_roles", {
-    org_id: ids.A,
-    archetype: TASK_EDITOR_ID,
-    deletion_mark: true,
-  })
-  await row("targetRole", "org_role_assignments", {
-    org_id: ids.A,
-    ...assignmentRow(ids["target@A"]!, { archetype: TASK_VIEWER_ID }),
-  })
-  return ids
-}
 
 describe("rights administration guards", () => {
   const tx = describeTransaction()
@@ -268,15 +120,19 @@ describe("rights administration guards", () => {
         await client.query("SELECT set_config($1, 'on', true)", [
           RIGHTS_MAINTENANCE_SETTING,
         ])
-      const result = await client.query(sql(statement))
+      const result: pg.QueryResult | pg.QueryResult[] = await client.query(
+        sql(statement)
+      )
       await client.query("SET CONSTRAINTS ALL IMMEDIATE")
-      return { rows: result.rows }
+      // Кілька операторів одним запитом дають масив: рядки — останнього.
+      return { rows: Array.isArray(result) ? result.at(-1)!.rows : result.rows }
     } catch (error) {
       if (!(error instanceof pg.DatabaseError)) throw error
       return {
         code: error.code ?? "",
         message: error.message,
         detail: error.detail,
+        column: error.column,
       }
     } finally {
       await client.query("ROLLBACK TO SAVEPOINT owner_probe")
@@ -317,6 +173,7 @@ describe("rights administration guards", () => {
         code: error.code ?? "",
         message: error.message,
         detail: error.detail,
+        column: error.column,
       }
     } finally {
       await client.query("ROLLBACK TO SAVEPOINT guard_command")
@@ -336,12 +193,20 @@ describe("rights administration guards", () => {
     await client.query(
       `GRANT ${PLATFORM_ROLES.command} TO CURRENT_USER WITH SET TRUE`
     )
-    ids = await seed(client)
+    ids = await seedAdministration(client)
     // Відкладені ключі засіву перевіряються зараз: кейси починають з порожньої черги
     await client.query("SET CONSTRAINTS ALL IMMEDIATE")
     await client.query("SET CONSTRAINTS ALL DEFERRED")
   }, 120_000)
   afterAll(() => tx.close())
+
+  // Той самий результат звіряє snake_case-опис (`snake-case.db.test.ts`).
+  it("rights_mine reads custom roles and their deltas", async () => {
+    expect(await closureRights(tx.client(), ids)).toEqual([
+      "task|read|dimension",
+      "task|read|own",
+    ])
+  })
 
   // Призначення собі, чужому й у контейнер судить той самий ⊆; контейнерна
   // гілка покриття окрема, тож кожна форма має свій кейс.
@@ -694,10 +559,97 @@ describe("rights administration guards", () => {
         "UPDATE public.org_member SET id = CASE id WHEN {root@A} THEN {target@A}::uuid ELSE {root@A}::uuid END WHERE id IN ({root@A}, {target@A})"
       const usersSwap =
         "UPDATE public.users SET id = CASE id WHEN {root} THEN {target}::uuid ELSE {root}::uuid END WHERE id IN ({root}, {target})"
-      refusal(await owner(memberSwap, maintenance), "rights-context")
-      refusal(await owner(usersSwap, maintenance), "rights-context")
+      // Незмінність ключа — тригер ключа таблиці виду (Рб1-4), той самий
+      // для членства, «Користувачів» і будь-якого довідника чи документа.
+      expect(await owner(memberSwap, maintenance)).toEqual(KEY_REFUSAL)
+      expect(await owner(usersSwap, maintenance)).toEqual(KEY_REFUSAL)
     }
   )
+
+  describe("the key of a kind table is immutable for any author", () => {
+    // Рядки кейсів — без залежних: FK `NO ACTION` на змінений ключ відмовив
+    // би `23503` раніше за тригер `AFTER` і сховав би, хто відмовляє. Задача
+    // `K3` має рядки ТЧ, але її ключ не змінюється — лише ключі рядків ТЧ.
+    const K1 = randomUUID()
+    const K2 = randomUUID()
+    const K3 = randomUUID()
+    const L1 = randomUUID()
+    const L2 = randomUUID()
+    const rows = [
+      `INSERT INTO public.task (id, org_id, project_id, date) VALUES ('${K1}', {A}, {P1}, now()), ('${K2}', {A}, {P1}, now()), ('${K3}', {A}, {P1}, now())`,
+      `INSERT INTO public.${CHECKLIST_TABLE} (id, org_id, parent_id, line_number) VALUES ('${L1}', {A}, '${K3}', 1), ('${L2}', {A}, '${K3}', 2)`,
+    ]
+    const swap = (table: string, a: string, b: string) =>
+      `UPDATE public.${table} SET id = CASE id WHEN '${a}'::uuid THEN '${b}'::uuid ELSE '${a}'::uuid END WHERE id IN ('${a}', '${b}')`
+    const rekey = (table: string, a: string) =>
+      `UPDATE public.${table} SET id = '${randomUUID()}' WHERE id = '${a}'`
+    const cases: [string, string][] = [
+      ["task-rekey", rekey("task", K1)],
+      // Обмін одним `UPDATE`: PK не відкладений, тож без `BEFORE`-тригера
+      // перший рядок дав би `23505`, а не названу відмову.
+      ["task-swap", swap("task", K1, K2)],
+      ["section-rekey", rekey(CHECKLIST_TABLE, L1)],
+      ["section-swap", swap(CHECKLIST_TABLE, L1, L2)],
+    ]
+    /** Рядки кейсів і оператор — одним запитом власника. */
+    const withRows = (statement: string) => [...rows, statement].join(";\n")
+
+    it.each(
+      cases.flatMap(([name, statement]) =>
+        [false, true].map((m) => [name, m, statement] as const)
+      )
+    )(
+      "%s refuses the owner outside a command, maintenance=%s",
+      async (_, maintenance, statement) => {
+        expect(await owner(withRows(statement), maintenance)).toEqual(
+          KEY_REFUSAL
+        )
+      }
+    )
+
+    it.each(cases)("%s refuses under a command too", async (_, statement) => {
+      // Рядки кейсу — до контексту: вставка під контекстом іншого кореня —
+      // відмова ефектів, а не предмет кейсу. Далі власник таблиць під
+      // контекстом: RLS і поколонковий грант (ключа в гранті `UPDATE` немає)
+      // не заступають тригера — відмовляє саме ключ.
+      const client = tx.client()
+      await client.query("SAVEPOINT key_command")
+      try {
+        await client.query(sql(rows.join(";\n")))
+        await client.query("SELECT set_config($1, $2, true)", [
+          SESSION_CLAIMS_SETTING,
+          JSON.stringify(claims("root")),
+        ])
+        await context(client, ["update", "task", K3])
+        await expect(client.query(sql(statement))).rejects.toMatchObject(
+          KEY_REFUSAL
+        )
+      } finally {
+        await client.query("ROLLBACK TO SAVEPOINT key_command")
+      }
+    })
+
+    it("a handler that rewrites NEW.id after the key trigger is refused", async () => {
+      // Обробник `beforeWrite` сортується після `simetra_key` (`zz_…`), тож
+      // `BEFORE`-тригер ключа бачить незмінений `id`; відмовляє `AFTER`.
+      const handler = [
+        "CREATE FUNCTION public.zz_rekey() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN NEW.id := gen_random_uuid(); RETURN NEW; END $$",
+        "CREATE TRIGGER task_zz_rekey BEFORE UPDATE ON public.task FOR EACH ROW EXECUTE FUNCTION public.zz_rekey()",
+        `UPDATE public.task SET date = now() WHERE id = '${K1}'`,
+      ]
+      expect(await owner(withRows(handler.join(";\n")))).toEqual(KEY_REFUSAL)
+    })
+
+    it("a row without a key change passes", async () => {
+      changed(
+        await owner(
+          withRows(
+            `UPDATE public.task SET date = now() WHERE id = '${K1}' RETURNING id`
+          )
+        )
+      )
+    })
+  })
   it.each([false, true])(
     "member-reinsert refuses user substitution in maintenance=%s",
     async (maintenance) => {

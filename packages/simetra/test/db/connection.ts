@@ -332,15 +332,17 @@ function isDatabaseError(
 }
 
 /**
- * Відмова запиту: код, повідомлення, деталь і колонка помилки Postgres.
- * Колонка розрізняє відмови з тим самим кодом і текстом: тригер ефектів
- * називає нею колонку, на якій відмовив.
+ * Відмова запиту: код, повідомлення, деталь, колонка й підказка помилки
+ * Postgres. Колонка розрізняє відмови з тим самим кодом і текстом: тригер
+ * ефектів називає нею колонку, на якій відмовив. Підказкою ядро команд
+ * віддає поточну версію при конфлікті (Р-A2-8).
  */
 export interface Refusal {
   code: string
   message: string
   detail?: string
   column?: string
+  hint?: string
 }
 
 /**
@@ -350,7 +352,7 @@ export interface Refusal {
  * ставиться) і `SET LOCAL ROLE` ролі команд. Членство з `SET` у ролі команд
  * дає собі опис (Р2b1-13). `after` виконує власник (`RESET ROLE`) у тій самій
  * точці збереження до відкату: каскад і поширення копій інакше не видно.
- * Відмова повертається кодом, повідомленням, деталлю й колонкою — `42501`
+ * Відмова повертається кодом, повідомленням, деталлю, колонкою й підказкою — `42501`
  * дають і RLS, і контекст, і тригер ефектів.
  */
 export async function commandAs<T extends pg.QueryResultRow>(
@@ -378,12 +380,13 @@ export async function commandAs<T extends pg.QueryResultRow>(
     return { rows, after: (await client.query(options.after)).rows }
   } catch (error) {
     if (!isDatabaseError(error)) throw error
-    const { code, message, detail, column } = error
+    const { code, message, detail, column, hint } = error
     return {
       code,
       message,
       ...(detail === undefined ? {} : { detail }),
       ...(column === undefined ? {} : { column }),
+      ...(hint === undefined ? {} : { hint }),
     }
   } finally {
     await client.query("ROLLBACK TO SAVEPOINT command_as")

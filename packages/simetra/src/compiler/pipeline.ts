@@ -54,7 +54,12 @@ import {
   buildMovementFunctions,
   movementWrapperName,
 } from "./movement-functions"
+import { buildAuthorUnits } from "./author-units"
+import { catalogCommandContracts } from "./catalog-command/contracts"
+import { buildCatalogCommandUnits } from "./catalog-command/units"
+import { buildHierarchyUnits } from "./hierarchy-units"
 import { buildMechanicsUnits } from "./mechanics-units"
+import { buildKeyUnits } from "./key-units"
 import { buildCarrierUnits } from "./rights/carrier-units"
 import { buildCommandUnits } from "./rights/command-units"
 import { buildEffectsUnits } from "./rights/effects-units"
@@ -81,6 +86,7 @@ import {
 import { checkKindTableVerbatim, kindTables } from "./sql/kind-table-verbatim"
 import { loadSqlParser, type SqlParser } from "./sql/parse"
 import { loadPlpgsqlParser } from "./sql/plpgsql"
+import { assertPinnedSearchPath } from "./sql/pinned-search-path"
 import { embedRowRules } from "./sql/row-rule"
 import { withoutPlatformSchema } from "./sql/reserved-schema"
 import {
@@ -192,7 +198,8 @@ export async function runStages(
           stage2.references,
           stage3.physical,
           movementWrapperName,
-          stage1.project.scopeKinds
+          stage1.project.scopeKinds,
+          stage1.project.naming.attributeCase
         )
   const expressions = (reading: boolean): ExpressionScope | undefined =>
     derived === undefined || stage1.project === undefined
@@ -418,7 +425,8 @@ export async function runStages(
     scopeKinds,
     scopeKindIdByFile,
     rights,
-    users?.objectId
+    users?.objectId,
+    stage1.project.naming.attributeCase
   )
 
   const projectModule = stage1.project.name
@@ -492,7 +500,7 @@ export async function runStages(
         : [[object.id, label] as const]
     })
   )
-  const sqlUnits = [
+  const baseUnits = [
     ...sql.units.map((unit) => verbatimUnit(unit, ownerId, module)),
     ...wrappers,
     ...buildMembershipFunctions(
@@ -545,6 +553,30 @@ export async function runStages(
       module,
       parse
     ),
+    // Незмінність ключа — для кожного проєкту, незалежно від прав (Рб1-4).
+    ...buildKeyUnits(
+      physical,
+      stage1.project.naming.attributeCase,
+      stage1.project.database.provider,
+      module,
+      parse
+    ),
+    ...buildAuthorUnits(
+      physical,
+      { roles, users, membershipSources: sources.membershipSources },
+      stage1.project.naming.attributeCase,
+      stage1.project.database.provider,
+      module,
+      parse
+    ),
+    ...buildHierarchyUnits(
+      physical,
+      stage1.objects,
+      stage1.project.naming.attributeCase,
+      stage1.project.database.provider,
+      module,
+      parse
+    ),
     ...buildSubscriptionUnits(
       eventSubscriptions,
       physical,
@@ -554,6 +586,7 @@ export async function runStages(
     ),
     ...buildCarrierUnits(
       physical,
+      stage1.project.naming.attributeCase,
       stage1.project.database.provider,
       module,
       parse
@@ -561,6 +594,7 @@ export async function runStages(
     ...buildRightsUnits(
       rightsInputs,
       physical,
+      stage1.project.naming.attributeCase,
       stage1.project.database.provider,
       module,
       parse
@@ -584,6 +618,7 @@ export async function runStages(
       },
       physical,
       stage1.objects,
+      stage1.project.naming.attributeCase,
       stage1.project.database.provider,
       module,
       parse
@@ -608,7 +643,47 @@ export async function runStages(
       module,
       parse
     ),
+  ]
+  // Ядро команд довідника — над рештою одиниць: функції, які кличе його
+  // тіло (функції прав, множин, джерел копій), — ребра `requires`, а
+  // обробники `beforeWrite` вирішують замок ієрархії (Р-A2-17).
+  const sqlUnits = [
+    ...baseUnits,
+    ...buildCatalogCommandUnits({
+      catalogCommands: catalogCommandContracts({
+        access,
+        rights,
+        physical,
+        objects: stage1.objects,
+        attributeCase: stage1.project.naming.attributeCase,
+        usersObjectId: users?.objectId,
+        scopeRootIds: new Set(
+          scopeKinds.flatMap((k) =>
+            "objectId" in k.root ? [k.root.objectId] : []
+          )
+        ),
+        subscriptions: eventSubscriptions,
+        units: baseUnits,
+        parse,
+        plpgsql,
+      }),
+      contracts: {
+        rights,
+        access,
+        roles,
+        users,
+        membershipSources: sources.membershipSources,
+      },
+      physical,
+      attributeCase: stage1.project.naming.attributeCase,
+      provider: stage1.project.database.provider,
+      module,
+      units: baseUnits,
+      parse,
+      plpgsql,
+    }),
   ].sort((a, b) => compareStrings(a.identity, b.identity))
+  assertPinnedSearchPath(sqlUnits)
   const nameById = new Map(stage1.objects.map((o) => [o.id ?? "", o.name]))
   const name = (id: string | undefined) => nameById.get(id ?? "") ?? ""
   // Згенерована одиниця файлу не має: збіг із нею називає її походження.
@@ -628,6 +703,11 @@ export async function runStages(
       unit.ownerObjectId === undefined
         ? "the row mechanics of the platform"
         : `the row mechanics of ${name(unit.ownerObjectId)}`,
+    // Функція незмінності ключа й її гранти спільні — власника немає.
+    key: (unit) =>
+      unit.ownerObjectId === undefined
+        ? "the key immutability of the platform"
+        : `the key immutability of ${name(unit.ownerObjectId)}`,
     subscription: (unit) =>
       `the event subscription ${name(unit.ownerObjectId)}`,
     // Функції прав спільні для всіх об'єктів — власника немає.
@@ -640,6 +720,7 @@ export async function runStages(
     command: (unit) => `the command context function ${unit.name}`,
     effects: (unit) =>
       `the action effects check of ${name(unit.ownerObjectId)}`,
+    catalogCommand: (unit) => `the command core of ${name(unit.ownerObjectId)}`,
   }
   const fileById = new Map(stage1.objects.map((o) => [o.id ?? "", o.file]))
   const triggerConflicts = subscriptionTriggerConflicts(

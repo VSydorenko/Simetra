@@ -114,12 +114,12 @@ describe("messages catalog", () => {
     )
     expect(localize(d, "en")).toEqual({
       message:
-        "Handler app.stamp assigns a row-mechanics column or replaces the row (RETURN OLD); the platform maintains updated_at and version",
+        "Handler app.stamp assigns a row-mechanics column or replaces the row (RETURN OLD); the platform maintains updated_at, version and the author columns created_by_id, updated_by_id",
       hint: "Change other columns of NEW and return NEW, or NULL to skip the write.",
     })
     expect(localize(d, "uk")).toEqual({
       message:
-        "Обробник app.stamp присвоює колонку механіки рядка або підміняє рядок (RETURN OLD); updated_at і version веде платформа",
+        "Обробник app.stamp присвоює колонку механіки рядка або підміняє рядок (RETURN OLD); updated_at, version і колонки авторства created_by_id, updated_by_id веде платформа",
       hint: "Змінюйте інші колонки NEW і повертайте NEW або NULL, щоб пропустити запис.",
     })
   })

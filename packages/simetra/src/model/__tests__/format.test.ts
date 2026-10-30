@@ -203,10 +203,18 @@ describe("formatMetaFile nested levels", () => {
           onDelete: "cascade",
           references: {
             columns: ["id"],
-            object: { name: "Item", kind: "Catalog" },
+            object: { name: "Item", kind: "CustomTable" },
           },
           columns: ["a"],
           name: "fk1",
+        },
+        {
+          references: {
+            key: "ref",
+            object: { name: "Item", kind: "Catalog" },
+          },
+          columns: ["a"],
+          name: "fk3",
         },
         {
           references: {
@@ -238,7 +246,11 @@ describe("formatMetaFile nested levels", () => {
       "kind",
       "name",
     ])
-    expect(keysAt(out, "foreignKeys", 1, "references", "external")).toEqual([
+    expect(keysAt(out, "foreignKeys", 1, "references")).toEqual([
+      "object",
+      "key",
+    ])
+    expect(keysAt(out, "foreignKeys", 2, "references", "external")).toEqual([
       "schema",
       "table",
       "columns",
@@ -335,7 +347,7 @@ describe("formatMetaFile nested levels", () => {
           onDelete: "setNull",
           references: {
             columns: ["id"],
-            object: { name: "Item", kind: "Catalog" },
+            object: { name: "Item", kind: "CustomTable" },
           },
           columns: ["a"],
           name: "fk",

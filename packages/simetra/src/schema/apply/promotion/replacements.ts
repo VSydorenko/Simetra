@@ -1,11 +1,18 @@
 import type { GrantStmt, Node, RoleSpec } from "libpg-query"
 import {
+  AUTHOR_FUNCTION,
+  KEY_FUNCTION,
   MECHANICS_FUNCTION,
+  authorTableColumns,
+  authorTriggerName,
+  authorUpdateTriggerName,
   carrierFunctionNames,
   carrierTriggerNames,
   contentChangeCondition,
   effectsFunctionName,
   effectsTriggerNames,
+  hierarchyNames,
+  keyTriggerNames,
   rightsGuardNames,
   mechanicsTriggerName,
   mechanicsUpdateTriggerName,
@@ -94,9 +101,15 @@ interface Context {
   newColumn(schema: string, table: string, column: string): string
   /**
    * Дерево `contentChangeCondition` бажаної таблиці (нове ім'я) з копіями
-   * носіїв; таблиця без копій умови не має.
+   * носіїв; таблиця без копій умови не має. `author` — з колонками
+   * авторства в `watched`, як у тригерів механіки й авторства (Р-A1-10);
+   * без нього — як у підписок.
    */
-  content(schema: string, table: string): Node | undefined
+  content(
+    schema: string,
+    table: string,
+    watched: "author" | "none"
+  ): Node | undefined
 }
 
 /**
@@ -454,14 +467,20 @@ function triggerContext(p: {
       record.columns.find(
         (m) => m.schema === schema && m.table === table && m.from === column
       )?.to ?? column,
-    content: (schema, table) => {
+    content: (schema, table, watched) => {
       const found = p.physical.tables.find(
         (t) => t.schema === schema && t.name === table
       )
       const when =
         found === undefined
           ? undefined
-          : contentChangeCondition(found, p.attributeCase)
+          : contentChangeCondition(
+              found,
+              p.attributeCase,
+              watched === "author"
+                ? authorTableColumns(found, p.attributeCase)
+                : []
+            )
       return when === undefined ? undefined : whenTree(when, p.parse)
     },
   }
@@ -1128,28 +1147,49 @@ function triggerReplacement(
   if (adopted === undefined) return { replaced: true }
   if (adopted.special || !adopted.row) return { replaced: false }
   const desired = triggersOn(c.desired, key.schema, table, c.parse)
-  const content = c.content(key.schema, table)
+  const content = c.content(key.schema, table, "none")
+  // Платформні тригери оновлення (механіка, авторство) стежать і за
+  // авторством (Р-A1-10), підписки — ні: дві різні умови
+  const authored = c.content(key.schema, table, "author")
   // Умова змісту таблиці з копіями носіїв еквівалентна «без `WHEN`»
   // (Р2a2-20): вона придушує лише поширення копій платформою. Впізнається
   // лише рівністю дерева з умовою бажаної таблиці — власна умова `… OR NOT
   // …` іншого набору колонок платформною не є
-  const isContent = (when: Node | undefined) =>
-    content !== undefined &&
-    when !== undefined &&
-    sameTree(withoutRowOperandCasts(when), content)
+  const sameCondition =
+    (expected: Node | undefined) => (when: Node | undefined) =>
+      expected !== undefined &&
+      when !== undefined &&
+      sameTree(withoutRowOperandCasts(when), expected)
+  const isContent = sameCondition(content)
+  const isAuthoredContent = sameCondition(authored)
   const touch = (t: TriggerShape) =>
     t.name === mechanicsTriggerName(table) &&
     sameFunction(t.function, MECHANICS_FUNCTION)
   // На таблиці з копіями механіка оновлення — окремий тригер з умовою змісту
-  const touchUpdate = (t: TriggerShape) =>
-    t.name === mechanicsUpdateTriggerName(table) &&
-    sameFunction(t.function, MECHANICS_FUNCTION) &&
+  const contentUpdate = (t: TriggerShape) =>
     t.timing === TRIGGER_BEFORE &&
     t.events === TRIGGER_UPDATE &&
     t.row &&
     !t.special &&
     t.columns.length === 0 &&
-    isContent(t.when)
+    isAuthoredContent(t.when)
+  const touchUpdate = (t: TriggerShape) =>
+    t.name === mechanicsUpdateTriggerName(table) &&
+    sameFunction(t.function, MECHANICS_FUNCTION) &&
+    contentUpdate(t)
+  // Тригер авторства (Р-A1-8) — платформний за іменем і функцією; на таблиці
+  // з копіями оновлення — окремий тригер з тією самою умовою, що в механіки
+  const author = (t: TriggerShape) =>
+    (t.name === authorTriggerName(table) &&
+      sameFunction(t.function, AUTHOR_FUNCTION)) ||
+    (t.name === authorUpdateTriggerName(table) &&
+      sameFunction(t.function, AUTHOR_FUNCTION) &&
+      contentUpdate(t))
+  // Тригери незмінності ключа (Рб1-4) — платформні за іменем і функцією
+  const keyNames = keyTriggerNames(table)
+  const keyGuard = (t: TriggerShape) =>
+    (t.name === keyNames.before || t.name === keyNames.after) &&
+    sameFunction(t.function, KEY_FUNCTION)
   const carriers = carrierTriggerNames({ schema: key.schema, name: table })
   const carrierFns = carrierFunctionNames({ schema: key.schema, name: table })
   // Тригери копій носіїв — платформні: прийнятого тригера вони не замінюють,
@@ -1172,8 +1212,20 @@ function triggerReplacement(
       (entry) =>
         t.name === entry.trigger && sameFunction(t.function, entry.function)
     )
+  // Тригери ієрархії (Р-A2-1) — платформні за іменем і функцією таблиці
+  const hierarchyFns = hierarchyNames({ schema: key.schema, name: table })
+  const hierarchy = (t: TriggerShape) =>
+    (t.name === hierarchyFns.insert || t.name === hierarchyFns.update) &&
+    sameFunction(t.function, hierarchyFns.fn)
   const platform = (t: TriggerShape) =>
-    touch(t) || touchUpdate(t) || carrier(t) || effect(t) || guard(t)
+    touch(t) ||
+    touchUpdate(t) ||
+    author(t) ||
+    keyGuard(t) ||
+    carrier(t) ||
+    effect(t) ||
+    guard(t) ||
+    hierarchy(t)
 
   // Механіка спрацьовує й на вставку — ширше за `moddatetime`, і це
   // посилення: дата й версія правильні й на вставці (спека промоції §8).

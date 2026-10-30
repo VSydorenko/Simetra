@@ -347,6 +347,32 @@ export function customTables(): Map<string, string> {
       ],
       primaryKey: { name: "ledger_pk", columns: ["id"] },
     }),
+    // FK у межах тенанта на скоуплений довідник (Рб1-10): ціль — складений
+    // `UNIQUE (<скоуп>, <ключ>)`, що його Postgres має прийняти як ціль FK.
+    "catalogs/Partner/Partner.meta.json": catalog("Partner", { scope: "org" }),
+    "custom-tables/PartnerNote/PartnerNote.meta.json": customTable(
+      "PartnerNote",
+      {
+        scope: "org",
+        scopeColumn: "org",
+        columns: [
+          column(121, "id", "id", { type: "UUID", notNull: true }),
+          column(122, "org", "org_id", { type: "UUID", notNull: true }),
+          column(123, "partner", "partner_id", { type: "UUID" }),
+        ],
+        primaryKey: { name: "partner_note_pk", columns: ["id"] },
+        foreignKeys: [
+          {
+            name: "partner_note_partner_fk",
+            columns: ["org", "partner"],
+            references: {
+              object: { kind: "Catalog", name: "Partner" },
+              key: "scopedRef",
+            },
+          },
+        ],
+      }
+    ),
   })
 }
 

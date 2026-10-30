@@ -1,11 +1,13 @@
 import {
   KIND_REGISTRY,
   PROVIDER_EVENT_SOURCES,
+  keyColumn,
   makeObjectName,
   quoteIdent,
   postsMovements,
   truncatedPeriodExpression,
   standardLogicalName,
+  tabularParentColumn,
   type Attribute,
   type DatabaseProvider,
   type Dml,
@@ -24,21 +26,25 @@ import {
   type SubscriptionEvent,
   type VirtualTableKind,
 } from "simetra/model"
+import { CATALOG_COMMAND_LABELS } from "./catalog-command/contracts"
 import { compareStrings } from "./diagnostics"
 import {
   choosesMembership,
   membershipFunctionNames,
   membershipsOf,
 } from "./membership-functions"
+import { hierarchyNames, hierarchyTables } from "./hierarchy-units"
 import { carrierFunctions } from "./rights/carrier-units"
 import { effectsFunctionName } from "./rights/effects-names"
 import { writesByCommand } from "./rights/facts"
 import {
   kindLabelOf,
+  mainTableIn,
   usersCatalogOf,
   type ModelStageResult,
 } from "./stages/model"
 import { isMovementQuery, type SqlUnit } from "./sql/units"
+import { findStyleFreeColumn } from "./standard-column"
 import { objectKey, type ParsedObject } from "./stages/files"
 import { standardElementId, type ResolvedReference } from "./stages/identity"
 
@@ -283,6 +289,12 @@ export interface AccessContract {
   users: boolean
   /** Контракт прав об'єкта таблиці — основної, ТЧ чи похідної (Р2a2-6). */
   rights?: { objectId: string }
+  /**
+   * Запис ролі команд (спека П4 §6.2, Р-A1-11) — лише таблиць виду з
+   * `commandWrites`: фізичні колонки вставки й зміни в порядку таблиці і чи
+   * можна видаляти рядки. Немає — роль команд лише читає таблицю.
+   */
+  command?: { insert: string[]; update: string[]; delete: boolean }
 }
 
 /** Обсяг, яким грант може обмежити дію (спека прав §3). */
@@ -662,12 +674,7 @@ export function mainTableOf(
   physical: PhysicalSnapshot,
   objectId: string
 ): PhysicalTable | undefined {
-  return physical.tables.find(
-    (t) =>
-      t.origin.objectId === objectId &&
-      t.origin.tabularSectionId === undefined &&
-      t.origin.part === undefined
-  )
+  return mainTableIn(physical.tables, objectId)
 }
 
 /**
@@ -683,12 +690,12 @@ export function rootFamilyKey(
   main: PhysicalTable
 ): string | undefined {
   const key = main.primaryKey?.columns
-  const ref = main.columns.find((c) => c.origin.standard === "ref")
+  const ref = findStyleFreeColumn(main, keyColumn(false))
   if (key?.length !== 1 || ref === undefined || key[0] !== ref.name) {
     return undefined
   }
   if (table.origin.tabularSectionId === undefined) return ref.name
-  const parent = table.columns.find((c) => c.origin.standard === "parent")
+  const parent = findStyleFreeColumn(table, tabularParentColumn())
   if (parent === undefined) {
     throw new Error(
       `internal: tabular section ${table.schema}.${table.name} has no parent column`
@@ -741,7 +748,7 @@ function maintainsDerivedTables(keys: RegisterKeySpec): boolean {
 }
 
 /** Ім'я похідної функції — алгоритм імен Postgres від таблиці власника. */
-function derived(table: PhysicalTable, label: string): QualifiedName {
+export function derived(table: PhysicalTable, label: string): QualifiedName {
   return {
     schema: table.schema,
     name: makeObjectName(table.name, undefined, label),
@@ -844,6 +851,27 @@ export function derivedFunctionLabels(
       { label: POSTING_LABELS.unpost, description: "unpost" }
     )
   }
+  // Функції ядра команд (спека П4 §6.6) — з надлишком, як функції ефектів
+  // (Р2b1-11): резервуються на кожен об'єкт виду з `commandWrites`, хоч би
+  // які дії й ролі він мав, — зайве резервування лише звужує простір імен.
+  if (KIND_REGISTRY[object.kind].commandWrites === true) {
+    labels.push(
+      { label: CATALOG_COMMAND_LABELS.save, description: "command save" },
+      {
+        label: CATALOG_COMMAND_LABELS.markDeletion,
+        description: "command mark deletion",
+      }
+    )
+    if (
+      KIND_REGISTRY[object.kind].rightsSystem?.(object.data) ===
+      "roleAssignments"
+    ) {
+      labels.push({
+        label: CATALOG_COMMAND_LABELS.delete,
+        description: "command delete",
+      })
+    }
+  }
   const keys = KIND_REGISTRY[object.kind].registerKeys?.(object.data)
   if (keys === undefined) return labels
   for (const kind of keys.virtualTables) {
@@ -872,7 +900,8 @@ export function derivedFunctions(
   references: readonly ResolvedReference[],
   physical: PhysicalSnapshot,
   wrapperName: (document: PhysicalTable, register: PhysicalTable) => string,
-  scopeKinds: readonly ScopeKind[]
+  scopeKinds: readonly ScopeKind[],
+  attributeCase: AttributeCase
 ): DerivedFunction[] {
   const result: DerivedFunction[] = []
   const add = (
@@ -898,6 +927,17 @@ export function derivedFunctions(
       object,
       fn,
       `${role === "derive" ? "carrier copies" : "carrier propagation"} of ${table.schema}.${table.name}`
+    )
+  }
+  // Функції ієрархії (Р-A2-1) — згенеровані одиниці з іменами від таблиць,
+  // як функції носіїв.
+  for (const { table } of hierarchyTables(physical, objects, attributeCase)) {
+    const object = byId.get(table.origin.objectId)
+    if (object === undefined) continue
+    add(
+      object,
+      hierarchyNames(table).fn,
+      `hierarchy check of ${table.schema}.${table.name}`
     )
   }
   // Функції ефектів (Р2b1-11) — з надлишком, на кожну таблицю з кореневою

@@ -57,6 +57,10 @@ are served by `simetra mcp` with the same input.
    `<table>_simetra_touch` triggers calling it) are never written, even into
    a directory without metadata: the platform generates them. Another trigger
    that calls `simetra.touch()` is the table's own and is written.
+   A foreign key to the table of an object of a kind is written by its key —
+   `references: { object, key: "ref" }` or `key: "scopedRef"` for the
+   in-tenant pair (scope column, key); a foreign key on other columns of such
+   a table is unrepresentable.
 5. **Diff.** Run `diff` on the same directory. **An empty diff right after
    introspect is the baseline; any non-empty result is a finding** — report it
    instead of editing the metadata until it disappears.
