@@ -27,6 +27,7 @@ import { compareStrings } from "../diagnostics"
 import {
   CURRENT_USER,
   closedFunction,
+  memberScopesBody,
   type ClosedFunctionShape,
 } from "../membership-functions"
 import { sha256HexSync } from "../sha256"
@@ -71,7 +72,68 @@ export const RIGHTS_FUNCTIONS = {
   myMembers: platform("rights_my_members"),
   dimensionValues: platform("rights_dimension_values"),
   visibleUsers: platform("rights_visible_users"),
+  scopesOf: platform("rights_scopes_of"),
+  detailOf: platform("rights_detail_of"),
+  membersOf: platform("rights_members_of"),
+  dimensionValuesOf: platform("rights_dimension_values_of"),
+  scopeSetOf: platform("rights_scope_set_of"),
+  visibleUsersOf: platform("rights_visible_users_of"),
+  member: platform("rights_member"),
+  who: platform("rights_who"),
+  journalOf: platform("rights_journal_of"),
 } as const satisfies Record<string, QualifiedName>
+
+/**
+ * Чиї права рахує шаблон (Р2d2-2): вираз користувача й функції його множин.
+ * Функції поточного користувача й варіанти аналізу `_of` — те саме тіло з
+ * іншим користувачем, тож друга реалізація призначень, дельт, замикання чи
+ * «моїх скоупів» неможлива.
+ */
+interface RightsUser {
+  /** Дійсний користувач чи `NULL` — некорельований вираз. */
+  user: string
+  /** Множина «мої скоупи» цього користувача. */
+  scopes: string
+  /** Учасники цього користувача виду скоупу `scopeKind`. */
+  members: (scopeKind: string) => string
+  /**
+   * Поточний користувач сесії: лише його множину знають дослівні функції
+   * проєкту (виміру, множини скоупу).
+   */
+  current: boolean
+}
+
+const CURRENT: RightsUser = {
+  user: CURRENT_USER,
+  scopes: call(RIGHTS_FUNCTIONS.myScopes),
+  members: (scopeKind) => call(RIGHTS_FUNCTIONS.myMembers, [scopeKind]),
+  current: true,
+}
+
+/**
+ * Користувач аргументу `p_user` варіанта `fn`. Діє лише дійсний — та сама
+ * умова, що в `current_user_id()`; інакше вираз — `NULL` і варіант порожній,
+ * як і права недійсного поточного користувача. Без «Користувачів» дійсність
+ * не визначена, тож аргумент — як є. Вкладені множини кличуть варіанти з
+ * тим самим аргументом: кожен перевіряє дійсність сам.
+ */
+function userOf(
+  fn: QualifiedName,
+  contracts: RightsFunctionContracts
+): RightsUser {
+  const p = param(fn, "p_user")
+  const { users } = contracts
+  const key = users === undefined ? "" : `u.${quoteIdent(users.keyColumn)}`
+  return {
+    user:
+      users === undefined
+        ? p
+        : `(SELECT ${key} FROM ${qualified(users.table)} u WHERE ${key} = ${p} AND NOT u.${quoteIdent(users.invalidColumn)})`,
+    scopes: call(RIGHTS_FUNCTIONS.scopesOf, [p]),
+    members: (scopeKind) => call(RIGHTS_FUNCTIONS.membersOf, [p, scopeKind]),
+    current: false,
+  }
+}
 
 /**
  * Хто виконує функції множини й помічники (Р2a1-14): роль запиту
@@ -79,6 +141,12 @@ export const RIGHTS_FUNCTIONS = {
  * даних не виконує ніхто, крім власника: їх кличуть лише функції `definer`.
  */
 const SET_ROLES: readonly GrantPurpose[] = ["user", "service", "command"]
+
+/**
+ * Хто виконує функції аналізу прав (Р2d2-1): без сервісної ролі — у неї немає
+ * користувача, а аналіз розкриває чужі права.
+ */
+const ANALYSIS_ROLES: readonly GrantPurpose[] = ["user", "command"]
 
 /** Контракти, з яких генератор будує функції (Р2a1-22, Р2a1-24). */
 export type RightsFunctionContracts = Pick<
@@ -184,6 +252,30 @@ export function buildRightsUnits(
     returns: string,
     body: string
   ): Declaration => ({ fn, args, returns, body, shape: "definer" })
+  // Варіант аналізу (Р2d2-2): без `EXECUTE`, його кличуть лише функції
+  // аналізу від власника.
+  const variant = (
+    fn: QualifiedName,
+    args: Declaration["args"],
+    returns: string,
+    body: string
+  ): Declaration => ({
+    fn,
+    args: [uuid("p_user"), ...args],
+    returns,
+    body,
+    shape: "stable",
+  })
+  const analysis = (
+    fn: QualifiedName,
+    args: Declaration["args"],
+    returns: string,
+    body: string
+  ): Declaration => ({
+    ...definer(fn, args, returns, body),
+    grants: ANALYSIS_ROLES,
+  })
+  const of = (fn: QualifiedName) => userOf(fn, contracts)
   const declarations: Declaration[] = [
     data(
       F.projection,
@@ -210,8 +302,30 @@ export function buildRightsUnits(
       table(SOURCE_KEYS_COLUMNS),
       valuesBody(SOURCE_KEYS_COLUMNS, sourceKeysRows(contracts))
     ),
-    definer(F.myScopes, [], table(MY_SCOPES_COLUMNS), myScopesBody(contracts)),
-    definer(F.mine, [], table(MINE_COLUMNS), mineBody(contracts, physical)),
+    definer(
+      F.myScopes,
+      [],
+      table(MY_SCOPES_COLUMNS),
+      myScopesBody(contracts, CURRENT)
+    ),
+    variant(
+      F.scopesOf,
+      [],
+      table(MY_SCOPES_COLUMNS),
+      myScopesBody(contracts, of(F.scopesOf))
+    ),
+    definer(
+      F.mine,
+      [],
+      table(MINE_COLUMNS),
+      mineBody(contracts, physical, CURRENT, false)
+    ),
+    variant(
+      F.detailOf,
+      [],
+      table(DETAIL_COLUMNS),
+      mineBody(contracts, physical, of(F.detailOf), true)
+    ),
     definer(
       F.any,
       [text("p_action"), text("p_object")],
@@ -256,21 +370,69 @@ export function buildRightsUnits(
       F.myMembers,
       [uuid("p_scope_kind")],
       "SETOF uuid",
-      [
-        `SELECT s.member`,
-        `FROM ${call(F.myScopes)} s`,
-        `WHERE s.scope_kind_id = ${param(F.myMembers, "p_scope_kind")}`,
-      ].join("\n")
+      membersBody(F.myMembers, CURRENT)
+    ),
+    variant(
+      F.membersOf,
+      [uuid("p_scope_kind")],
+      "SETOF uuid",
+      membersBody(F.membersOf, of(F.membersOf))
     ),
     definer(
       F.dimensionValues,
       [uuid("p_dimension")],
       "SETOF uuid",
-      dimensionValuesBody(contracts)
+      dimensionValuesBody(contracts, F.dimensionValues, CURRENT)
+    ),
+    variant(
+      F.dimensionValuesOf,
+      [uuid("p_dimension")],
+      "SETOF uuid",
+      dimensionValuesBody(
+        contracts,
+        F.dimensionValuesOf,
+        of(F.dimensionValuesOf)
+      )
+    ),
+    variant(
+      F.scopeSetOf,
+      [uuid("p_scope_kind")],
+      "SETOF uuid",
+      scopeSetOfBody(contracts, of(F.scopeSetOf))
     ),
     ...(hasVisibleUsers(contracts, provider)
-      ? [definer(F.visibleUsers, [], "SETOF uuid", visibleUsersBody(contracts))]
+      ? [
+          definer(
+            F.visibleUsers,
+            [],
+            "SETOF uuid",
+            visibleUsersBody(contracts, CURRENT)
+          ),
+          variant(
+            F.visibleUsersOf,
+            [],
+            "SETOF uuid",
+            visibleUsersBody(contracts, of(F.visibleUsersOf))
+          ),
+        ]
       : []),
+    analysis(
+      F.member,
+      [uuid("p_scope_kind"), uuid("p_scope"), uuid("p_member")],
+      table(MEMBER_COLUMNS),
+      memberBody(contracts)
+    ),
+    analysis(
+      F.who,
+      [
+        text("p_action"),
+        text("p_object"),
+        uuid("p_scope_kind"),
+        uuid("p_scope"),
+      ],
+      table(WHO_COLUMNS),
+      whoBody(contracts, physical)
+    ),
   ]
   if (contracts.rightsCatalogs.length > 0) {
     declarations.push(
@@ -323,6 +485,12 @@ export function buildRightsUnits(
           "END;",
         ].join("\n"),
       },
+      analysis(
+        F.journalOf,
+        [uuid("p_scope_kind"), uuid("p_scope"), ["p_limit", "integer"]],
+        table(journalColumns(physical)),
+        journalBody(contracts, physical)
+      ),
       definer(
         F.versions,
         [],
@@ -423,7 +591,7 @@ function roleGrantsBody(): string {
 
 // --- Функції даних --------------------------------------------------------
 
-type Column = readonly [name: string, type: "uuid" | "text"]
+type Column = readonly [name: string, type: string]
 type Value = string | null
 
 const PROJECTION_COLUMNS: readonly Column[] = [
@@ -472,6 +640,37 @@ const MINE_COLUMNS: readonly Column[] = [
   ["action", "text"],
   ["extent", "text"],
   ["dimension_id", "uuid"],
+]
+/**
+ * Рядки прав з походженням (Р2d2-2): архетип, кастомна роль і чи дав рядок
+ * архетип, чи дельта `allow`.
+ */
+const DETAIL_COLUMNS: readonly Column[] = [
+  ...MINE_COLUMNS,
+  ["role_id", "uuid"],
+  ["custom_role", "uuid"],
+  ["via", "text"],
+]
+/** Права учасника в скоупі запиту з походженням (Р2d2-4). */
+const MEMBER_COLUMNS: readonly Column[] = [
+  ["object", "text"],
+  ["action", "text"],
+  ["extent", "text"],
+  ["dimension_id", "uuid"],
+  ["container", "uuid"],
+  ["role_id", "uuid"],
+  ["custom_role", "uuid"],
+  ["via", "text"],
+]
+/** Хто має право через ролі рівня запиту (Р2d2-5). */
+const WHO_COLUMNS: readonly Column[] = [
+  ["user_id", "uuid"],
+  ["member", "uuid"],
+  ["role_id", "uuid"],
+  ["custom_role", "uuid"],
+  ["extent", "text"],
+  ["dimension_id", "uuid"],
+  ["container", "uuid"],
 ]
 
 /** Пара (обсяг, вимір) рядка: вимір — лише в обсягу `dimension`. */
@@ -670,7 +869,7 @@ function storageValues(level: RightsLevelKey | undefined): [Value, Value] {
 }
 
 function table(columns: readonly Column[]): string {
-  return `TABLE (${columns.map(([name, type]) => `${name} ${type}`).join(", ")})`
+  return `TABLE (${columns.map(([name, type]) => `${quoteIdent(name)} ${type}`).join(", ")})`
 }
 
 /**
@@ -706,14 +905,17 @@ function emptySet(columns: readonly Column[]): string {
  * видом скоупу, за тією самою умовою, що функція множини членства. Без
  * членства — порожня множина.
  */
-function myScopesBody(contracts: RightsFunctionContracts): string {
+function myScopesBody(
+  contracts: RightsFunctionContracts,
+  whose: RightsUser
+): string {
   const catalogs = contracts.membership.map((m) => {
     const user = `m.${quoteIdent(m.userColumn)}`
     return [
       `SELECT ${uuidLiteral(m.scopeKindId)} AS scope_kind_id, m.${quoteIdent(m.scopeColumn)} AS scope, m.${quoteIdent(m.keyColumn)} AS member`,
       `FROM ${qualified(m.table)} m`,
       `WHERE ${user} IS NOT NULL`,
-      `  AND ${user} = ${CURRENT_USER}`,
+      `  AND ${user} = ${whose.user}`,
     ].join("\n")
   })
   const sources = contracts.membershipSources.map((source) => {
@@ -722,7 +924,7 @@ function myScopesBody(contracts: RightsFunctionContracts): string {
       `SELECT ${uuidLiteral(source.scopeKindId)} AS scope_kind_id, s.${quoteIdent(source.scope)} AS scope, s.${quoteIdent(source.member)} AS member`,
       `FROM ${qualified(source.table)} s`,
       `WHERE ${user} IS NOT NULL`,
-      `  AND ${user} = ${CURRENT_USER}`,
+      `  AND ${user} = ${whose.user}`,
       ...activeCondition("s", source.active).map((c) => `  AND ${c}`),
       ...sourceConditions("s", source.where).map((c) => `  AND ${c}`),
     ].join("\n")
@@ -792,17 +994,20 @@ export function roleTableJoin(source: AssignmentSourceContract): string[] {
  * `rights_my_scopes()` того самого виду (Р2a1-26) — інакше учасник іншого
  * виду з тим самим значенням скоупу відкрив би чужих користувачів.
  */
-function visibleUsersBody(contracts: RightsFunctionContracts): string {
+function visibleUsersBody(
+  contracts: RightsFunctionContracts,
+  whose: RightsUser
+): string {
   return [
-    `SELECT ${CURRENT_USER}`,
-    `WHERE ${CURRENT_USER} IS NOT NULL`,
+    `SELECT ${whose.user}`,
+    `WHERE ${whose.user} IS NOT NULL`,
     ...contracts.membership.flatMap((m) => {
       const user = `m.${quoteIdent(m.userColumn)}`
       return [
         `UNION`,
         `SELECT ${user}`,
         `FROM ${qualified(m.table)} m`,
-        `JOIN ${call(RIGHTS_FUNCTIONS.myScopes)} s`,
+        `JOIN ${whose.scopes} s`,
         `  ON s.scope_kind_id = ${uuidLiteral(m.scopeKindId)}`,
         ` AND s.scope = m.${quoteIdent(m.scopeColumn)}`,
         `WHERE ${user} IS NOT NULL`,
@@ -816,7 +1021,7 @@ function visibleUsersBody(contracts: RightsFunctionContracts): string {
         `UNION`,
         `SELECT ${user}`,
         `FROM ${qualified(source.table)} m`,
-        `JOIN ${call(RIGHTS_FUNCTIONS.myScopes)} s`,
+        `JOIN ${whose.scopes} s`,
         `  ON s.scope_kind_id = ${uuidLiteral(source.scopeKindId)}`,
         ` AND s.scope = m.${quoteIdent(source.scope)}`,
         `WHERE ${user} IS NOT NULL`,
@@ -828,21 +1033,26 @@ function visibleUsersBody(contracts: RightsFunctionContracts): string {
 }
 
 /**
- * Права поточного користувача (спека прав §5.1): призначення з довідників
- * прав, рядки їхніх ролей, замикання вимог і рядки «кожного користувача».
- * Кожен запобіжник — окрема умова, яку мутаційний DB-сценарій прибирає
- * поодинці.
+ * Права користувача (спека прав §5.1): призначення з довідників прав, рядки
+ * їхніх ролей, замикання вимог і рядки «кожного користувача». Кожен
+ * запобіжник — окрема умова, яку мутаційний DB-сценарій прибирає поодинці.
+ * `detail` додає походження рядка (Р2d2-2) — лише вихідними колонками: тіло
+ * без них — рівно тіло `rights_mine`.
  */
 function mineBody(
   contracts: RightsFunctionContracts,
-  physical: PhysicalSnapshot
+  physical: PhysicalSnapshot,
+  user: RightsUser,
+  detail: boolean
 ): string {
+  const via = (source: string) => (detail ? `, '${source}'::text AS via` : "")
+  const closure = detail ? DETAIL_CLOSURE_COLUMNS : CLOSURE_COLUMNS
   const ctes: [string, string][] = [
     [
       "my_scopes",
-      `SELECT s.scope_kind_id, s.scope, s.member\nFROM ${call(RIGHTS_FUNCTIONS.myScopes)} s`,
+      `SELECT s.scope_kind_id, s.scope, s.member\nFROM ${user.scopes} s`,
     ],
-    ["assignments", assignmentsCte(contracts, physical)],
+    ["assignments", assignmentsCte(contracts, physical, user)],
     ["typed", typedCte(contracts.assignmentSources.length > 0)],
     ["containers", containersCte(contracts.rights, physical)],
     [
@@ -878,7 +1088,7 @@ function mineBody(
       // обсягу й виміру) і дельти `allow` з домену рівня архетипу; невідома
       // мітка, дія, обсяг чи вимір у домен не входить і не діє (fail-closed).
       [
-        `SELECT h.storage, h.storage_id, h.scope, h.container, h.custom_role, h.archetype, h.level, h.level_id, p.object, p.action, p.extent, p.dimension_id`,
+        `SELECT h.storage, h.storage_id, h.scope, h.container, h.custom_role, h.archetype, h.level, h.level_id, p.object, p.action, p.extent, p.dimension_id${via("archetype")}`,
         `FROM held h`,
         `JOIN ${call(RIGHTS_FUNCTIONS.projection)} p ON p.role_id = h.archetype`,
         `WHERE NOT EXISTS (`,
@@ -894,7 +1104,7 @@ function mineBody(
         `    AND d.dimension_id IS NOT DISTINCT FROM p.dimension_id`,
         `)`,
         `UNION ALL`,
-        `SELECT h.storage, h.storage_id, h.scope, h.container, h.custom_role, h.archetype, h.level, h.level_id, d.object, d.action, d.extent, d.dimension_id`,
+        `SELECT h.storage, h.storage_id, h.scope, h.container, h.custom_role, h.archetype, h.level, h.level_id, d.object, d.action, d.extent, d.dimension_id${via("delta")}`,
         `FROM held h`,
         `JOIN deltas d`,
         `  ON d.storage = h.storage`,
@@ -923,22 +1133,32 @@ function mineBody(
     // обсягів: коли лишились `post@own`, `update@any` і `read@own`, прохід 1
     // знімає `update@any` (немає `read@any`), і лише прохід 2 — `post@own`,
     // що тримався на `update@any`. Рекурсивний CTE віднімання не виражає.
-    ["closure_1", closurePass("role_rows", CLOSURE_COLUMNS)],
-    ["closure_2", closurePass("closure_1", CLOSURE_COLUMNS)],
+    ["closure_1", closurePass("role_rows", closure)],
+    ["closure_2", closurePass("closure_1", closure)],
   ]
   return [
     `WITH ${ctes.map(([name, sql]) => `${name} AS (\n${indent(sql)}\n)`).join(",\n")}`,
-    `SELECT c.level, c.level_id, c.scope, c.container, c.object, c.action, c.extent, c.dimension_id`,
+    `SELECT c.level, c.level_id, c.scope, c.container, c.object, c.action, c.extent, c.dimension_id${detail ? ", c.archetype AS role_id, c.custom_role AS custom_role, c.via AS via" : ""}`,
     `FROM closure_2 c`,
     `UNION`,
     // «Кожен користувач» призначень не має: його рядки — без скоупу й
     // контейнера, лише для дійсного користувача.
-    `SELECT r.level, r.level_id, NULL::uuid, NULL::uuid, p.object, p.action, p.extent, p.dimension_id`,
+    `SELECT r.level, r.level_id, NULL::uuid, NULL::uuid, p.object, p.action, p.extent, p.dimension_id${detail ? `, r.role_id AS role_id, NULL::uuid AS custom_role${via("archetype")}` : ""}`,
+    ...everyUserRows(),
+    `  AND ${user.user} IS NOT NULL`,
+  ].join("\n")
+}
+
+/**
+ * Рядки ролей «кожного користувача» — без призначень і замикання: одне місце
+ * для `rights_mine` і для «хто може» (Р2d2-5).
+ */
+function everyUserRows(): string[] {
+  return [
     `FROM ${call(RIGHTS_FUNCTIONS.roles)} r`,
     `JOIN ${call(RIGHTS_FUNCTIONS.projection)} p ON p.role_id = r.role_id`,
     `WHERE r.level = 'everyUser'`,
-    `  AND ${CURRENT_USER} IS NOT NULL`,
-  ].join("\n")
+  ]
 }
 
 /** Один прохід замикання над попереднім: тримається лише рядок з усіма вимогами. */
@@ -966,6 +1186,16 @@ const CLOSURE_COLUMNS = {
     "archetype",
   ],
 } as const
+
+/**
+ * Походження `via` проходить замикання лише вихідною колонкою (Р2d2-2): у
+ * ідентичності призначення його немає, інакше дія з дельти втратила б вимогу,
+ * яку дає рядок архетипу.
+ */
+const DETAIL_CLOSURE_COLUMNS = {
+  output: [...CLOSURE_COLUMNS.output, "via"],
+  identity: CLOSURE_COLUMNS.identity,
+}
 
 function closurePass(
   previous: string,
@@ -1012,14 +1242,15 @@ const ASSIGNMENT_COLUMNS: readonly Column[] = [
  */
 function assignmentsCte(
   contracts: RightsFunctionContracts,
-  physical: PhysicalSnapshot
+  physical: PhysicalSnapshot,
+  user: RightsUser
 ): string {
   const branches = [
     ...contracts.rightsCatalogs.map((catalog) =>
-      catalogAssignments(catalog, physical)
+      catalogAssignments(catalog, physical, user)
     ),
     ...contracts.assignmentSources.map((source) =>
-      sourceAssignments(source, contracts.rights)
+      sourceAssignments(source, contracts.rights, user)
     ),
   ]
   if (branches.length === 0) return emptySet(ASSIGNMENT_COLUMNS)
@@ -1035,7 +1266,8 @@ function assignmentsCte(
  */
 function catalogAssignments(
   catalog: RightsCatalogContract,
-  physical: PhysicalSnapshot
+  physical: PhysicalSnapshot,
+  user: RightsUser
 ): string {
   const assignments = catalogColumns(physical, catalog.assignments.table)
   const roles = catalogColumns(physical, catalog.roles.table)
@@ -1079,7 +1311,7 @@ function catalogAssignments(
     `  AND (${a("customRole")} IS NULL) = (${c("ref")} IS NULL)`,
     ...(level.level === "scope"
       ? []
-      : [`  AND ${a("subject")} = ${CURRENT_USER}`]),
+      : [`  AND ${a("subject")} = ${user.user}`]),
   ].join("\n")
 }
 
@@ -1092,7 +1324,8 @@ function catalogAssignments(
  */
 function sourceAssignments(
   source: AssignmentSourceContract,
-  rights: readonly RightsContract[]
+  rights: readonly RightsContract[],
+  user: RightsUser
 ): string {
   const src = (column: string) => `src.${quoteIdent(column)}`
   const scopeKindId = sourceScopeKind(source.assignedOn, rights)
@@ -1103,7 +1336,7 @@ function sourceAssignments(
       ? src(source.container)
       : "NULL::uuid"
   const conditions = [
-    ...(scoped ? [] : [`${src(source.member)} = ${CURRENT_USER}`]),
+    ...(scoped ? [] : [`${src(source.member)} = ${user.user}`]),
     ...activeCondition("src", source.active),
     // Умова рядків (R1'): рядок іншого рівня поліморфної таблиці інакше
     // читався б як призначення цього джерела.
@@ -1330,13 +1563,19 @@ function rightFilter(fn: QualifiedName): string[] {
 /**
  * Мої значення виміру (спека прав §4.4): від гранту не залежать. Зв'язок —
  * рядки, де суб'єкт — мій учасник виду суб'єкта (Р2a1-26) чи я сам; функція
- * — дослівна функція проєкту.
+ * — дослівна функція проєкту. Дослівна функція знає лише поточного
+ * користувача, тож у варіанті аналізу (Р2d2-2) її гілки немає.
  */
-function dimensionValuesBody(contracts: RightsFunctionContracts): string {
-  if (contracts.accessDimensions.length === 0)
-    return "SELECT NULL::uuid WHERE false"
-  const fn = RIGHTS_FUNCTIONS.dimensionValues
-  return contracts.accessDimensions
+function dimensionValuesBody(
+  contracts: RightsFunctionContracts,
+  fn: QualifiedName,
+  user: RightsUser
+): string {
+  const dimensions = contracts.accessDimensions.filter(
+    (dimension) => user.current || !("function" in dimension.values)
+  )
+  if (dimensions.length === 0) return "SELECT NULL::uuid WHERE false"
+  return dimensions
     .map((dimension) => {
       const guard = `${param(fn, "p_dimension")} = ${uuidLiteral(dimension.dimensionId)}`
       if ("function" in dimension.values) {
@@ -1350,8 +1589,8 @@ function dimensionValuesBody(contracts: RightsFunctionContracts): string {
       const subject = `v.${quoteIdent(relation.subject)}`
       const mine =
         "users" in relation.subjectTarget
-          ? `${subject} = ${CURRENT_USER}`
-          : `${subject} IN (SELECT ${call(RIGHTS_FUNCTIONS.myMembers, [uuidLiteral(relation.subjectTarget.membership)])})`
+          ? `${subject} = ${user.user}`
+          : `${subject} IN (SELECT ${user.members(uuidLiteral(relation.subjectTarget.membership))})`
       return [
         `SELECT v.${quoteIdent(relation.value)}`,
         `FROM ${qualified(relation.table)} v`,
@@ -1360,6 +1599,269 @@ function dimensionValuesBody(contracts: RightsFunctionContracts): string {
       ].join("\n")
     })
     .join("\nUNION ALL\n")
+}
+
+/** Мої учасники виду скоупу — лише з «моїх скоупів» (Р2a1-25). */
+function membersBody(fn: QualifiedName, user: RightsUser): string {
+  return [
+    `SELECT s.member`,
+    `FROM ${user.scopes} s`,
+    `WHERE s.scope_kind_id = ${param(fn, "p_scope_kind")}`,
+  ].join("\n")
+}
+
+/**
+ * Варіант функцій множини членства (Р2d2-2): тіло `<таблиця>_member_scopes`
+ * кожного виду з `setFunction: "membership"` під умовою виду — функції
+ * множини окремих видів тут зведено в одну. Дослівна функція множини знає
+ * лише поточного користувача, тож її виду тут немає.
+ */
+function scopeSetOfBody(
+  contracts: RightsFunctionContracts,
+  user: RightsUser
+): string {
+  const fn = RIGHTS_FUNCTIONS.scopeSetOf
+  const arms = contracts.membership
+    .filter((m) => m.setFunction !== undefined)
+    .map(
+      (m) =>
+        `${memberScopesBody(m, user.user)}\n  AND ${param(fn, "p_scope_kind")} = ${uuidLiteral(m.scopeKindId)}`
+    )
+  if (arms.length === 0) return "SELECT NULL::uuid WHERE false"
+  return arms.join("\nUNION ALL\n")
+}
+
+// --- Функції аналізу ------------------------------------------------------
+
+/** Аргументи скоупу запиту функції аналізу. */
+interface AnalysisScope {
+  kind: string
+  scope: string
+}
+
+const analysisScope = (fn: QualifiedName): AnalysisScope => ({
+  kind: param(fn, "p_scope_kind"),
+  scope: param(fn, "p_scope"),
+})
+
+/** Глобальний рівень запиту — нульові вид і скоуп (Р2d2-3). */
+function globalScope({ kind, scope }: AnalysisScope): string {
+  return `${kind} = ${uuidLiteral(ZERO_UUID)} AND ${scope} = ${uuidLiteral(ZERO_UUID)}`
+}
+
+/**
+ * Гейт аналізу (Р2d2-3, Ф13): рядки — лише коли власні права викликача мають
+ * `administerRights` на довіднику призначень ролей рівня запиту. Вид скоупу —
+ * явний аргумент: id скоупу задає той, хто пише (Р2a1-26), тож адміністратор
+ * одного виду не питає про скоуп іншого з тим самим id. Без права —
+ * порожньо, без помилки. Рівень без довідника призначень (його покриває
+ * прийняте джерело) гейта не проходить.
+ */
+function analysisGate(
+  contracts: RightsFunctionContracts,
+  request: AnalysisScope
+): string {
+  const labels = new Map(contracts.rights.map((c) => [c.objectId, c.kindLabel]))
+  const arms = contracts.rightsCatalogs.map((catalog) => {
+    const label = sqlLiteral(must(labels.get(catalog.assignments.objectId)))
+    if (catalog.level.level === "global") {
+      return `(${globalScope(request)} AND g.level = 'global' AND g.object = ${label})`
+    }
+    const kind = uuidLiteral(catalog.level.scopeKindId)
+    return `(${request.kind} = ${kind} AND g.level = 'scope' AND g.level_id = ${kind} AND g.scope = ${request.scope} AND g.object = ${label})`
+  })
+  if (arms.length === 0) return "false"
+  return [
+    `EXISTS (`,
+    `  SELECT 1`,
+    `  FROM ${call(RIGHTS_FUNCTIONS.mine)} g`,
+    `  WHERE g.action = 'administerRights'`,
+    `    AND (${arms.join("\n      OR ")})`,
+    `)`,
+  ].join("\n")
+}
+
+/**
+ * Учасники скоупу запиту з їхнім користувачем (Р2d2-4, Р2d2-5): довідники
+ * членства й прийняті джерела членства виду запиту — з тими самими умовами
+ * рядків, що «мої скоупи» (Р2d1-15). Учасник без користувача прав не має.
+ */
+function scopeMembers(
+  contracts: RightsFunctionContracts,
+  request: AnalysisScope,
+  member: string | undefined
+): string[] {
+  const catalogs = contracts.membership.map((m) => {
+    const column = (name: string) => `m.${quoteIdent(name)}`
+    return [
+      `SELECT ${column(m.keyColumn)} AS member, ${column(m.userColumn)} AS user_id`,
+      `FROM ${qualified(m.table)} m`,
+      `WHERE ${request.kind} = ${uuidLiteral(m.scopeKindId)}`,
+      `  AND ${column(m.scopeColumn)} = ${request.scope}`,
+      ...(member === undefined
+        ? []
+        : [`  AND ${column(m.keyColumn)} = ${member}`]),
+      `  AND ${column(m.userColumn)} IS NOT NULL`,
+    ].join("\n")
+  })
+  const sources = contracts.membershipSources.map((source) => {
+    const column = (name: string) => `s.${quoteIdent(name)}`
+    return [
+      `SELECT ${column(source.member)} AS member, ${column(source.user)} AS user_id`,
+      `FROM ${qualified(source.table)} s`,
+      `WHERE ${request.kind} = ${uuidLiteral(source.scopeKindId)}`,
+      `  AND ${column(source.scope)} = ${request.scope}`,
+      ...(member === undefined
+        ? []
+        : [`  AND ${column(source.member)} = ${member}`]),
+      `  AND ${column(source.user)} IS NOT NULL`,
+      ...activeCondition("s", source.active).map((c) => `  AND ${c}`),
+      ...sourceConditions("s", source.where).map((c) => `  AND ${c}`),
+    ].join("\n")
+  })
+  return [...catalogs, ...sources]
+}
+
+/**
+ * Рядки прав рівня запиту (Р2d2-3): рядок скоупу — свого виду й скоупу,
+ * контейнерний — за видом скоупу контейнера й тим самим скоупом; адміністратор
+ * виду `team` з підлаштованим id не бачить рядків `org`. Глобальний запит —
+ * глобальні рядки й, якщо `everyUser`, рядки «кожного користувача».
+ */
+function requestRows(
+  contracts: RightsFunctionContracts,
+  request: AnalysisScope,
+  everyUser: boolean
+): string {
+  const containerKinds = contracts.rights
+    .filter((c) => c.container === true && c.scopeKindId !== undefined)
+    .map(
+      (c) =>
+        `WHEN ${uuidLiteral(c.objectId)} THEN ${uuidLiteral(must(c.scopeKindId))}`
+    )
+  return [
+    `((d.level = 'scope' AND d.level_id = ${request.kind} AND d.scope = ${request.scope})`,
+    ...(containerKinds.length === 0
+      ? []
+      : [
+          ` OR (d.level = 'container' AND CASE d.level_id ${containerKinds.join(" ")} ELSE NULL::uuid END = ${request.kind} AND d.scope = ${request.scope})`,
+        ]),
+    ` OR (${globalScope(request)} AND d.level ${everyUser ? "IN ('global', 'everyUser')" : "= 'global'"}))`,
+  ].join("\n")
+}
+
+/**
+ * Права учасника в скоупі запиту (Р2d2-4): учасник мусить належати скоупу,
+ * інакше — порожньо, як і без користувача: адміністратор A не дізнається, чи
+ * учасник B — користувач в A. Глобальний запит — `p_member` і є користувач.
+ */
+function memberBody(contracts: RightsFunctionContracts): string {
+  const fn = RIGHTS_FUNCTIONS.member
+  const request = analysisScope(fn)
+  const member = param(fn, "p_member")
+  return [
+    `SELECT DISTINCT d.object, d.action, d.extent, d.dimension_id, d.container, d.role_id, d.custom_role, d.via`,
+    `FROM (`,
+    indent(
+      [
+        ...scopeMembers(contracts, request, member),
+        `SELECT ${member} AS member, ${member} AS user_id\nWHERE ${globalScope(request)}`,
+      ].join("\nUNION ALL\n")
+    ),
+    `) u`,
+    `CROSS JOIN LATERAL ${call(RIGHTS_FUNCTIONS.detailOf, ["u.user_id"])} d`,
+    `WHERE ${analysisGate(contracts, request)}`,
+    `  AND ${requestRows(contracts, request, true)}`,
+  ].join("\n")
+}
+
+/**
+ * Хто має право через ролі рівня запиту (Р2d2-5): учасники скоупу, а для
+ * глобального запиту — власники глобальних призначень і рядок «кожного
+ * користувача» (`user_id IS NULL`). Кандидатів лише перелічено: права кожного
+ * рахує той самий шаблон `rights_detail_of`.
+ */
+function whoBody(
+  contracts: RightsFunctionContracts,
+  physical: PhysicalSnapshot
+): string {
+  const fn = RIGHTS_FUNCTIONS.who
+  const request = analysisScope(fn)
+  const global = globalScope(request)
+  const owners = [
+    ...contracts.rightsCatalogs
+      .filter((catalog) => catalog.level.level === "global")
+      .map((catalog) => {
+        const subject = `a.${quoteIdent(catalogColumns(physical, catalog.assignments.table)("subject"))}`
+        return `SELECT NULL::uuid AS member, ${subject} AS user_id\nFROM ${qualified(catalog.assignments.table)} a\nWHERE ${global}\n  AND ${subject} IS NOT NULL`
+      }),
+    ...contracts.assignmentSources
+      .filter((source) => source.assignedOn.level === "global")
+      .map((source) => {
+        const member = `src.${quoteIdent(source.member)}`
+        return `SELECT NULL::uuid AS member, ${member} AS user_id\nFROM ${qualified(source.table)} src\nWHERE ${global}\n  AND ${member} IS NOT NULL`
+      }),
+  ]
+  const object = param(fn, "p_object")
+  const action = param(fn, "p_action")
+  const gate = analysisGate(contracts, request)
+  return [
+    `SELECT u.user_id, u.member, d.role_id, d.custom_role, d.extent, d.dimension_id, d.container`,
+    `FROM (`,
+    indent(
+      [...scopeMembers(contracts, request, undefined), ...owners].join(
+        "\nUNION\n"
+      ) || `SELECT NULL::uuid AS member, NULL::uuid AS user_id WHERE false`
+    ),
+    `) u`,
+    `CROSS JOIN LATERAL ${call(RIGHTS_FUNCTIONS.detailOf, ["u.user_id"])} d`,
+    `WHERE ${gate}`,
+    `  AND d.object = ${object}`,
+    `  AND d.action = ${action}`,
+    `  AND ${requestRows(contracts, request, false)}`,
+    `UNION`,
+    `SELECT NULL::uuid, NULL::uuid, r.role_id, NULL::uuid, p.extent, p.dimension_id, NULL::uuid`,
+    ...everyUserRows(),
+    `  AND ${global}`,
+    `  AND p.object = ${object}`,
+    `  AND p.action = ${action}`,
+    `  AND ${gate}`,
+  ].join("\n")
+}
+
+const JOURNAL = platform("rights_journal")
+
+/** Колонки журналу прав — з його фізичної таблиці, у її порядку (Р2d2-7). */
+function journalColumns(physical: PhysicalSnapshot): Column[] {
+  return tableOf(physical, JOURNAL).columns.map((column): Column => [
+    column.name,
+    column.type,
+  ])
+}
+
+/**
+ * Журнал прав скоупу запиту (Р2d2-7): пара (вид, скоуп), бо uuid скоупів
+ * різних видів спільно не унікальні (Р2a1-26); новіші першими, `seq` — у
+ * межах однієї транзакції, де `at` однаковий. Від'ємний ліміт — порожньо, а
+ * не помилка Postgres.
+ */
+function journalBody(
+  contracts: RightsFunctionContracts,
+  physical: PhysicalSnapshot
+): string {
+  const fn = RIGHTS_FUNCTIONS.journalOf
+  const request = analysisScope(fn)
+  return [
+    `SELECT ${journalColumns(physical)
+      .map(([name]) => `j.${quoteIdent(name)}`)
+      .join(", ")}`,
+    `FROM ${qualified(JOURNAL)} j`,
+    `WHERE ${analysisGate(contracts, request)}`,
+    `  AND j.scope_kind_id = ${request.kind}`,
+    `  AND j.scope = ${request.scope}`,
+    `ORDER BY j.at DESC, j.seq DESC`,
+    `LIMIT greatest(0, least(${param(fn, "p_limit")}, 1000))`,
+  ].join("\n")
 }
 
 // --- Допоміжне ------------------------------------------------------------
