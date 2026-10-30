@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-Статус: виконано задачі 0–7; задачі 8–9 — після відновлення сесій.
+Статус: виконано задачі 0–9; рев'ю й повні гейти — після дозволу архітекторки.
 Архітекторка задачі — сесія `consumer-reconciliation2`; якщо її немає — власник.
 
 **Мета:** закрити пункти [боргу прав](2026-10-26-rights-residual-debt.md) §1,
@@ -224,13 +224,13 @@ git commit -m "fix(rights): snake_case-проєкт з довідниками п
 
 **Files:** `model/schemas/custom-table.ts` (+ регенерація `packages/simetra/schemas/*.schema.json`, якщо пакет їх генерує), `compiler/stages/identity.ts`, `compiler/stages/model.ts`, `compiler/stages/integrity.ts` (`referencesKindKey` → перевірка форми), `compiler/operations/promote/{index,cascade}.ts`, `compiler/operations/rename.ts` (якщо роль `customTable.foreignKeyTarget` зачіпає колонки цілі), `examples/reference/metadata/custom-tables/UserSettings/UserSettings.meta.json`, фікстури (`fixtures/kitchen-sink.ts`, `fixtures/promotion.ts`, інші з FK на вид), тести.
 
-- [ ] **Step 2 (перший коміт): схема T0 і її тест.** Union цілі за Рб1-10; один table-driven тест схеми (`model/__tests__/`): `{ object, columns }`, `{ object, key: "ref" }`, `{ object, key: "scopedRef" }`, `{ external }` — приймаються; `key` разом із `columns`, невідомий `key` — відхиляються. Компілятор і фікстури — у тому самому коміті рівно настільки, щоб гейти були зелені (наявні FK на вид → `key: "ref"`). Commit — `feat(model): ціль FK CustomTable на вид — форма ключа`.
-- [ ] **Step 3: компілятор.** Стадія 2/3 резолвить `key` у фізичні колонки цілі (`ref` — стандартний ключ; `scopedRef` — колонка з `origin.scopeKindId` і ключ). Перевірка форми — у `integrity.ts`. Unit (`stage-integrity.test.ts`, `custom-table-references.test.ts`, `it.each`): `key: "ref"` — ок; `scopedRef` на таблицю зі скоупом — ок, фізичний FK `(<скоуп>, id)`; `scopedRef` на корінь чи вид без скоупу — помилка; `columns` на вид — помилка; `key` на `CustomTable` — помилка; дві локальні колонки для `ref` — помилка; snake_case-близнюк — той самий SQL. Мутація: дозволити `columns` на вид → червоний.
-- [ ] **Step 4: DB** (причина — FK створює Postgres): `CustomTable` з `scopedRef` на довідник зі скоупом розгортається; у `pg_constraint` — FK на `(<скоуп>, id)`.
-- [ ] **Step 5: промоція.** Unit `operations-promote*`: FK `(scope, id)` у будь-якому порядку на `CustomTable`, що стає видом зі скоупом, переписано в `{ object: <вид>, key: "scopedRef" }`, локальні колонки — у порядку «скоуп, ключ»; FK лише на колонку скоупу — `promote.retired-referenced` (наявний тест переписати на цю форму); FK на ключ — `{ key: "ref" }`. Мутація: не переставляти колонки → червоний.
-- [ ] **Step 6:** Спеки за Рб1-10 (§4.7 спеки прав; опис форми FK `CustomTable` там, де він є); скіл споживача (`references/sql-trust-boundary.md` та інші місця з формою FK); `metadata:check` — 0 помилок.
-- [ ] **Step 7:** Run повний unit simetra з логом `scratchpad/unit-<sha>.txt`, designer unit, typecheck, lint обох пакетів, `metadata:check`, scoped DB (`custom-table`, `promote`).
-- [ ] **Step 8: Commit** — `feat(compiler): ціль FK CustomTable — ключ або (скоуп, ключ) таблиці виду`.
+- [x] **Step 2 (перший коміт): схема T0 і її тест.** Union цілі за Рб1-10; один table-driven тест схеми (`model/__tests__/`): `{ object, columns }`, `{ object, key: "ref" }`, `{ object, key: "scopedRef" }`, `{ external }` — приймаються; `key` разом із `columns`, невідомий `key` — відхиляються. Компілятор і фікстури — у тому самому коміті рівно настільки, щоб гейти були зелені (наявні FK на вид → `key: "ref"`). Commit — `feat(model): ціль FK CustomTable на вид — форма ключа`.
+- [x] **Step 3: компілятор.** Стадія 2/3 резолвить `key` у фізичні колонки цілі (`ref` — стандартний ключ; `scopedRef` — колонка з `origin.scopeKindId` і ключ). Перевірка форми — у `integrity.ts`. Unit (`stage-integrity.test.ts`, `custom-table-references.test.ts`, `it.each`): `key: "ref"` — ок; `scopedRef` на таблицю зі скоупом — ок, фізичний FK `(<скоуп>, id)`; `scopedRef` на корінь чи вид без скоупу — помилка; `columns` на вид — помилка; `key` на `CustomTable` — помилка; дві локальні колонки для `ref` — помилка; snake_case-близнюк — той самий SQL. Мутація: дозволити `columns` на вид → червоний.
+- [x] **Step 4: DB** (причина — FK створює Postgres): `CustomTable` з `scopedRef` на довідник зі скоупом розгортається; у `pg_constraint` — FK на `(<скоуп>, id)`.
+- [x] **Step 5: промоція.** Unit `operations-promote*`: FK `(scope, id)` у будь-якому порядку на `CustomTable`, що стає видом зі скоупом, переписано в `{ object: <вид>, key: "scopedRef" }`, локальні колонки — у порядку «скоуп, ключ»; FK лише на колонку скоупу — `promote.retired-referenced` (наявний тест переписати на цю форму); FK на ключ — `{ key: "ref" }`. Мутація: не переставляти колонки → червоний.
+- [x] **Step 6:** Спеки за Рб1-10 (§4.7 спеки прав; опис форми FK `CustomTable` там, де він є); скіл споживача (`references/sql-trust-boundary.md` та інші місця з формою FK); `metadata:check` — 0 помилок.
+- [x] **Step 7:** Run повний unit simetra з логом `scratchpad/unit-<sha>.txt`, designer unit, typecheck, lint обох пакетів, `metadata:check`, scoped DB (`custom-table`, `promote`).
+- [x] **Step 8: Commit** — `feat(compiler): ціль FK CustomTable — ключ або (скоуп, ключ) таблиці виду`.
 
 ---
 
