@@ -184,7 +184,6 @@ describe("catalog command core: rights check ≡ RLS", () => {
   const tx = describeTransaction()
   let ids: Seed = {}
   let keyOf = new Map<string, string>()
-  const tally = { ok: 0, check: 0 }
 
   beforeAll(async () => {
     const result = await compileRights(
@@ -364,7 +363,10 @@ describe("catalog command core: rights check ≡ RLS", () => {
     return result.after?.[0]?.hit === true ? "ok" : "refused"
   }
 
-  it.each(POINTS)("%s", async (_, point) => {
+  // Одна точка сітки: перевіряє пару (ядро, RLS) і повертає результат ядра.
+  // Кожен виклик сам готує свій стан у точці збереження `commandAs`, тож
+  // кейси не залежать від порядку виконання.
+  const evaluate = async (point: Point): Promise<"ok" | "check"> => {
     const target = TARGETS.get(point.table)!
     const item =
       point.action === "create"
@@ -389,13 +391,34 @@ describe("catalog command core: rights check ≡ RLS", () => {
       target.rows[point.row] !== TENANT_OF_USER.get(point.user)
     )
       expect(core).toBe("check")
-    tally[core as "ok" | "check"] += 1
+    return core as "ok" | "check"
+  }
+
+  it.each(POINTS)("%s", async (_, point) => {
+    await evaluate(point)
   })
 
   // Сітка без жодного `ok` чи без жодної відмови нічого не порівнює: так
   // виглядав би збій засіву чи гранту, а не еквівалентність
-  it("grid has both permitted and refused points", () => {
-    expect(tally.ok).toBeGreaterThan(0)
-    expect(tally.check).toBeGreaterThan(0)
+  // Дві відомі точки проганяються тут же, а не читаються з попередніх кейсів:
+  // лічильник між `it` залежав би від порядку (`--shuffle`, паралель).
+  it("grid has both permitted and refused points", async () => {
+    const find = (match: (p: Point) => boolean) => {
+      const found = POINTS.find(([, p]) => match(p))
+      if (found === undefined) throw new Error("grid lacks a reference point")
+      return found[1]
+    }
+    const permitted = find(
+      (p) =>
+        p.user === "tw" &&
+        p.row === "K1" &&
+        p.action === "update" &&
+        p.state.label === "unchanged"
+    )
+    const refused = find(
+      (p) => p.user === "tp" && p.row === "KB" && p.action === "create"
+    )
+    expect(await evaluate(permitted)).toBe("ok")
+    expect(await evaluate(refused)).toBe("check")
   })
 })
