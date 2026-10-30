@@ -219,7 +219,11 @@ describe("rights plan gate", () => {
     await client.query("SET CONSTRAINTS ALL IMMEDIATE")
     await client.query("SET CONSTRAINTS ALL DEFERRED")
     // Без статистики планувальник оцінює таблиці за замовчуванням, а не за засівом.
-    await client.query("ANALYZE")
+    // Лише засіяні таблиці: ANALYZE усієї спільної бази тримав би блокування
+    // чужих таблиць до відкату й переписав би їхню статистику поза транзакцією.
+    await client.query(
+      `ANALYZE public.organization, public.region, public.${TASK}, public.${CHECKLIST}, public.${HOURS}, simetra.${JOURNAL}`
+    )
     console.info(`rights plan gate: seed + ANALYZE ${Date.now() - started} ms`)
   }, 120_000)
 
