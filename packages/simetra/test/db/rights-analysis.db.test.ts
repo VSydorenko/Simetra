@@ -53,6 +53,13 @@ import {
 
 const ZERO = "00000000-0000-0000-0000-000000000000"
 
+/**
+ * Звірка пояснення з RLS — десятки запитів на користувача й рядок. Типові 5 с
+ * на кейс під навантаженням спільного стеку не вистачає, а кейс, що впав за
+ * часом, лишає свої запити на спільному клієнті опису й ламає наступний кейс.
+ */
+const EQUIVALENCE_TIMEOUT = 60_000
+
 /** Рядок `rights_explain`. */
 interface Explained {
   row: string
@@ -116,7 +123,9 @@ const TASKS_A = TASKS.filter(([, org]) => org === "A").map(([key]) => key)
  * `ProjectReader` на P1 — контейнер), m6 (без ролей в A, `OrgMember` у B),
  * g (без ролей в A, глобальна `GlobalAdmin`). Учасники B: bAdmin
  * (`RightsAdmin`), m5 (`OrgMember`). Команда: tAdmin (`TeamRightsAdmin`) і u8,
- * чий id учасника команди дорівнює id учасника A. u9 без членства. Функцій
+ * чий id учасника команди дорівнює id учасника A. u9 без членства. ab —
+ * адміністратор прав A і водночас `OrgMember` у B: бачить рядки B, але
+ * адмініструє лише A (гейт пояснення за скоупом рядка). Функцій
  * множини дослівно засів не має: `carrier_match` ніде не `NULL`.
  */
 async function seed(client: pg.Client): Promise<Seed> {
@@ -147,7 +156,7 @@ async function seed(client: pg.Client): Promise<Seed> {
       )
   }
 
-  for (const user of USERS) ids[user] = await signUp(client)
+  for (const user of [...USERS, "ab"]) ids[user] = await signUp(client)
   await create("A", "organization")
   await create("B", "organization")
   await create("P1", "project", { org_id: ids.A })
@@ -165,6 +174,8 @@ async function seed(client: pg.Client): Promise<Seed> {
     ["m6", "A"],
     ["u8", "A"],
     ["g", "A"],
+    ["ab", "A"],
+    ["ab", "B"],
     ["bAdmin", "B"],
     ["m5", "B"],
     ["m6", "B"],
@@ -186,6 +197,8 @@ async function seed(client: pg.Client): Promise<Seed> {
   await assign("m2@A", { customRole: ids.custom })
   await assign("m3@A", { customRole: ids.denyRead })
   await assign("m4@A", { archetype: PROJECT_READER_ID, container: ids.P1 })
+  await assign("ab@A", { archetype: RIGHTS_ADMIN_ID })
+  await assign("ab@B", { archetype: ORG_MEMBER_ROLE_ID })
   await assign("bAdmin@B", { archetype: RIGHTS_ADMIN_ID })
   await assign("m5@B", { archetype: ORG_MEMBER_ROLE_ID })
   await assign("m6@B", { archetype: ORG_MEMBER_ROLE_ID })
@@ -485,27 +498,55 @@ describe("rights analysis", () => {
   it("who: members with the right; everyUser in the global form", async () => {
     expect
       .soft(usersOf(await who("admin", "read", "task", ORG_KIND_ID, key("A"))))
-      .toEqual(keys(["admin", "m1", "m2", "m3", "m4", "u8"]))
+      .toEqual(keys(["ab", "admin", "m1", "m2", "m3", "m4", "u8"]))
     // Нескоуплені «Користувачі» на рівні скоупу — лише ролі цього рівня.
     expect
       .soft(usersOf(await who("admin", "read", "users", ORG_KIND_ID, key("A"))))
       .toEqual(keys(["m1", "m2", "m3", "u8"]))
+    // Глобальна форма — рівно глобальні власники й рядок `everyUser`: рядки
+    // рівня `org` (m1, m2, m3, u8 читають «Користувачів») сюди не просочуються.
     const global = await who("g", "read", "users", ZERO, ZERO)
-    expect.soft(global).toContainEqual(
-      expect.objectContaining({
-        user_id: null,
-        member: null,
-        role_id: EVERYONE_ID,
-      })
-    )
-    expect.soft(usersOf(global)).toContain(key("g"))
+    expect
+      .soft(
+        [
+          ...new Set(
+            global.map((r) => JSON.stringify([r.user_id, r.member, r.role_id]))
+          ),
+        ].sort()
+      )
+      .toEqual(
+        [
+          [key("g"), null, GLOBAL_ADMIN_ID],
+          [null, null, EVERYONE_ID],
+        ]
+          .map((r) => JSON.stringify(r))
+          .sort()
+      )
   })
 
-  it("explain-equivalence: the explanation agrees with RLS for every user", async () => {
-    expect(
-      await equivalence("admin", "task", "task", TASKS_A.map(key))
-    ).toBeGreaterThan(0)
-  })
+  it(
+    "explain-equivalence: the explanation agrees with RLS for every user",
+    async () => {
+      // Засів дає кожен шлях доступу: без цієї матриці RLS і пояснення могли б
+      // погодитися на «нічого не видно», і звірка нічого б не доводила.
+      const rows = TASKS_A.map(key)
+      for (const [user, expected] of [
+        ["m1", ["t1", "t2", "t3", "t4"]],
+        ["m2", ["t2"]],
+        ["m3", ["t3", "t4"]],
+        ["m4", ["t1"]],
+        ["m6", []],
+        ["m5", []],
+      ] as const)
+        expect
+          .soft([...(await seenBy(user, "task", rows))].sort(), user)
+          .toEqual(keys([...expected]))
+      expect(
+        await equivalence("admin", "task", "task", TASKS_A.map(key))
+      ).toBeGreaterThan(0)
+    },
+    EQUIVALENCE_TIMEOUT
+  )
 
   it("explain-oracle: rows and users outside the caller's scope — empty", async () => {
     expect
@@ -514,6 +555,12 @@ describe("rights analysis", () => {
     expect
       .soft(await explain("admin", "task", [randomUUID()], key("m1")))
       .toEqual([])
+    // ab бачить tB (`OrgMember` у B) і m5 належить B, але адмініструє ab лише
+    // A: гейт пояснення береться зі скоупу рядка, а не з будь-якого скоупу.
+    expect.soft(await explain("ab", "task", [key("tB")], key("m5"))).toEqual([])
+    expect
+      .soft((await explain("bAdmin", "task", [key("tB")], key("m5"))).length)
+      .toBeGreaterThan(0)
     // m5 належить лише B: факти про нього в A адміністратор A не дізнається.
     expect
       .soft(await explain("admin", "task", [key("t1")], key("m5")))
@@ -598,11 +645,15 @@ describe("rights analysis", () => {
       .toEqual([])
   })
 
-  it("explain-users: the explanation of Users agrees with RLS", async () => {
-    expect(
-      await equivalence("g", "users", "users", USERS.map(key))
-    ).toBeGreaterThan(0)
-  })
+  it(
+    "explain-users: the explanation of Users agrees with RLS",
+    async () => {
+      expect(
+        await equivalence("g", "users", "users", USERS.map(key))
+      ).toBeGreaterThan(0)
+    },
+    EQUIVALENCE_TIMEOUT
+  )
 
   it("journal-of: a change in A is in A's journal only", async () => {
     await orgChange("admin", async (id) => {
@@ -621,22 +672,38 @@ describe("rights analysis", () => {
     })
   })
 
-  it("explain-caller-visibility: no read on the object — nothing to explain", async () => {
-    for (const user of USERS)
+  it(
+    "explain-caller-visibility: no read on the object — nothing to explain",
+    async () => {
+      // blind проходить гейт A: порожнеча нижче — від видимості рядка, не від гейта.
       expect
-        .soft(await explain("blind", "task", TASKS_A.map(key), key(user)), user)
-        .toEqual([])
-    expect(
-      (await explain("admin", "task", [key("t1")], key("m1"))).length
-    ).toBeGreaterThan(0)
-  })
+        .soft(
+          (await member("blind", ORG_KIND_ID, key("A"), key("m1@A"))).length
+        )
+        .toBeGreaterThan(0)
+      for (const user of USERS)
+        expect
+          .soft(
+            await explain("blind", "task", TASKS_A.map(key), key(user)),
+            user
+          )
+          .toEqual([])
+      expect(
+        (await explain("admin", "task", [key("t1")], key("m1"))).length
+      ).toBeGreaterThan(0)
+    },
+    EQUIVALENCE_TIMEOUT
+  )
 })
 
 /**
  * Нескоуплений контейнер (Р2d2-18) — лише в однотенантному проєкті: у проєкті
  * з видами скоупу носій контейнера мусить бути скоуплений
  * (`rights.carrier-cross-tenant`). Призначення контейнера лежать у
- * глобальному довіднику, тож їх бачить лише глобальний запит аналізу.
+ * глобальному довіднику, і їх бачить глобальний запит аналізу. Рівня скоупу
+ * в такому проєкті немає взагалі, тож кейс доводить лише глобальне плече
+ * (Р2d2-18); що форма скоупу цих рядків не бачить, у проєкті з видами скоупу
+ * недосяжно перевірити — нескоупленого контейнера там не буває.
  */
 describe("rights analysis of an unscoped container", () => {
   const tx = describeTransaction()
@@ -690,7 +757,7 @@ describe("rights analysis of an unscoped container", () => {
     return result.rows
   }
 
-  it("unscoped-container: the global request sees container rows, a scope request does not", async () => {
+  it("unscoped-container: the global request sees the container rows", async () => {
     const container = expect.objectContaining({
       object: "task",
       action: "read",
@@ -705,33 +772,19 @@ describe("rights analysis of an unscoped container", () => {
         ])
       )
       .toContainEqual(container)
-    expect
-      .soft(
-        await as("SELECT * FROM simetra.rights_who('read', 'task', $1, $1)", [
-          ZERO,
-        ])
-      )
-      .toContainEqual(
-        expect.objectContaining({ user_id: ids.lead, container: ids.P1 })
-      )
-    // Форма рівня скоупу цих рядків не бачить і для глобального адміністратора.
-    const scope = randomUUID()
-    expect
-      .soft(
-        await as("SELECT * FROM simetra.rights_member($1, $2, $3)", [
-          scope,
-          ids.P1,
-          ids.lead,
-        ])
-      )
-      .toEqual([])
-    expect
-      .soft(
-        await as("SELECT * FROM simetra.rights_who('read', 'task', $1, $2)", [
-          scope,
-          ids.P1,
-        ])
-      )
-      .toEqual([])
+    // Точна множина: глобальний власник і власник контейнера, нічого більше.
+    const who = (
+      await as("SELECT * FROM simetra.rights_who('read', 'task', $1, $1)", [
+        ZERO,
+      ])
+    ).map((r) => JSON.stringify([r.user_id, r.role_id, r.container]))
+    expect.soft([...new Set(who)].sort()).toEqual(
+      [
+        [ids.g, GLOBAL_ADMIN_ID, null],
+        [ids.lead, PROJECT_LEAD_ID, ids.P1],
+      ]
+        .map((r) => JSON.stringify(r))
+        .sort()
+    )
   })
 })
