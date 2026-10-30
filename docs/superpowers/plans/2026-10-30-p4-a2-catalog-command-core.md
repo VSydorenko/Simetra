@@ -46,8 +46,8 @@
 (Р2c2-1, Р2c2-8) і [A1](2026-10-29-p4-a1-roles-grants-authorship.md)
 (Р-A1-8…11) — їхні рішення діють.
 
-**Залежність:** A1 у `main`. Перед стартом:
-`git fetch origin && git merge origin/main` (злиттям), потім
+**Залежність:** A1, прийнятий архітекторкою (злиття в `main` не потрібне). Перед стартом:
+`git merge <фінальний SHA feat/p4-a1 від архітекторки>` (злиттям, без rebase; гілки спільні для всіх worktree). Коли A1 зіллється в `main`, `git merge origin/main` дасть ті самі коміти. Потім
 `.agents/skills/codebase-research/scripts/orient --plan docs/superpowers/plans/2026-10-30-p4-a2-catalog-command-core.md`.
 Розбіжність якорів із кодом — архітекторці до старту.
 
@@ -163,7 +163,7 @@ export const CATALOG_COMMAND_LABELS = { save: "save", markDeletion: "mark_deleti
   - `it("ключі не містять механіки, авторства, копій, predefined_name, deletion_mark")` — таблицею `it.each` за `origin.standard`;
   - `it.each` ролей: звичайний довідник → `{create, update, markDeletion}`; «Ролі» → `{create:"administerRights", update:"administerRights", markDeletion:"administerRights"}`; «Призначення» → ще `delete`; «Користувачі» → лише `update`; корінь скоупу → без `create`;
   - `it("ТЧ: rowKeys без key, parent, lineNumber і колонки скоупу")` — на ТЧ скоупленого некореневого довідника (у неї власна колонка скоупу `NOT NULL`, `stages/model.ts` `withScope`), `it("поліморфний Ref — pair з мітками цілей")` (новий шар фікстури, Крок 2);
-  - `it.each(["camelCase", "snake_case"])("%s: контракт за origin, не за іменем")` — та сама модель з `naming.attributeCase` обох стилів (будівник `withAttributeCase` у `fixtures/rights.ts`, якщо його немає): `createKeys`, `updateKeys`, колонка позначки (`deletion_mark`), колонки ТЧ (`parent_id`, `line_number`) і колонки гранту однакові за фізичними іменами в обох стилях. Поки snake_case-проєкт із довідниками прав не компілюється (борг прав §1 ще не в `main`), snake_case-рядок — `it.todo` з посиланням на борг прав §1; після злиття боргу — увімкнути. Мовчки не пропускати. Той самий двостильовий кейс — у тестах Задач 2, 5 і 6 (ключі `p_item`, `deletion_mark`, `parent_id` у дереві функції);
+  - `it.each(["camelCase", "snake_case"])("%s: контракт за origin, не за іменем")` — та сама модель з `naming.attributeCase` обох стилів (будівник `withAttributeCase` у `fixtures/rights.ts`, якщо його немає): `createKeys`, `updateKeys`, колонка позначки (`deletion_mark`), колонки ТЧ (`parent_id`, `line_number`) і колонки гранту однакові за фізичними іменами в обох стилях. Поки snake_case-проєкт із довідниками прав не компілюється (виправлення боргу прав §1 — гілка `feat/rights-debt-1` — ще не влито), snake_case-рядок — `it.todo` з посиланням на борг прав §1. Коли архітекторка надішле SHA коміту виправлення — `git merge <SHA>` і увімкнути всі snake_case-рядки окремим комітом. Мовчки не пропускати. Той самий двостильовий кейс — у тестах Задач 2, 5 і 6 (ключі `p_item`, `deletion_mark`, `parent_id` у дереві функції);
   - `it("ім'я save довідника, зайняте дослівною функцією, — physical.function-duplicate")` — дослівна `CREATE FUNCTION public.<t>_save()` у `.sql` дає діагностику (через `functionCollisions`).
 - [ ] **Крок 2: будівник фікстури.** `Task` у `policyDomain` — **документ**, а ядро генерується лише для довідника (`commandWrites` — лише в `Catalog`). У `fixtures/rights.ts` — шар `commandCoreLayer()` (наявні будівники `catalog`, `refAttribute`, `role`, `grant`; типові значення наявних шарів не змінюються):
   - довідник `Ticket` (`kindLabel: "ticket"`, `scope: "org"`, `trackAuthor: true`, `hierarchyType: "FoldersAndItems"`): `assignee` → `OrgMember` (`ownership: ["assignee"]`), `region` → `Region` (`access: [{ attribute: "region", dimension: "region" }]`), `project` → `Project` (`containerBinding: "project"`), `subject` — поліморфний `allowedTypes: [Project, Region]`; ТЧ `checklist` з реквізитом `region` → `Region`;
