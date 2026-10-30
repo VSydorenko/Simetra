@@ -343,8 +343,11 @@ export async function closureRights(
  * `command.invalid` раніше за перевірку права. Ієрархія `K1 → K2 → K3`: K2 і
  * K3 — свої для `to`, K1 — з чужим `assignee`, тож батько K2 для `to`
  * невидимий; K2 має рядок ТЧ `K2.l1`. `KR` — у регіоні r1 у P1, `KB` — рядок
- * тенанта B. Задачі `TO` (виконавець `cw`) і `TA` (чужий) з коментарями
- * `TO.c` і `TA.c`. Учасник `u` організації `O` — ключ `u@O`.
+ * тенанта B з рядком ТЧ `KB.l1`. `P2` — другий проєкт A (чужий контейнер
+ * для `tp`). `KW` — `watchers = [NULL]`; `KL` — два рядки ТЧ `KL.l1`, `KL.l2`;
+ * `KP` — предвизначений. Задачі `TO` (виконавець
+ * `cw`) і `TA` (чужий) з коментарями `TO.c` і `TA.c`. Учасник `u`
+ * організації `O` — ключ `u@O`.
  */
 export async function seedCommandCore(client: pg.Client): Promise<Seed> {
   const ids: Seed = {}
@@ -374,6 +377,7 @@ export async function seedCommandCore(client: pg.Client): Promise<Seed> {
     ["tb", "B", TICKET_WRITER_ID],
   ] as const
   await create("P1", "project", { org_id: ids.A })
+  await create("P2", "project", { org_id: ids.A })
   await create("PB", "project", { org_id: ids.B })
   await create("r1", "region", { org_id: ids.A })
   await create("r2", "region", { org_id: ids.A })
@@ -416,6 +420,20 @@ export async function seedCommandCore(client: pg.Client): Promise<Seed> {
     line_number: 1,
     related_id: ids.K1,
   })
+  await create("KB.l1", TICKET_CHECKLIST_TABLE, {
+    org_id: ids.B,
+    parent_id: ids.KB,
+    line_number: 1,
+  })
+  await ticket("KW", "A", { assignee_id: ids["tw@A"], watchers: [null] })
+  await ticket("KL", "A", { assignee_id: ids["tw@A"] })
+  for (const line of [1, 2])
+    await create(`KL.l${line}`, TICKET_CHECKLIST_TABLE, {
+      org_id: ids.A,
+      parent_id: ids.KL,
+      line_number: line,
+    })
+  await ticket("KP", "A", { predefined_name: "main" })
 
   const now = new Date()
   await create("TO", "task", {

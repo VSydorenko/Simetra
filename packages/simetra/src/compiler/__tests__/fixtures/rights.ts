@@ -991,6 +991,34 @@ export const TICKET_TARGETS_READER_ID = uuid(6925)
 export const TASK_COMMENT_OWN_WRITER_ID = uuid(6926)
 
 /**
+ * Реквізити `Ticket`: шар, що додає реквізит, повторює їх усі — `withRoles`
+ * зливає файли лише на верхньому рівні ключів.
+ */
+function ticketAttributes(): Record<string, unknown>[] {
+  return [
+    refAttribute(6902, "assignee", "assignee_id", ref("Catalog", "OrgMember")),
+    refAttribute(6903, "region", "region_id", ref("Catalog", "Region")),
+    refAttribute(6904, "project", "project_id", ref("Catalog", "Project")),
+    {
+      id: uuid(6905),
+      name: "subject",
+      physicalName: "subject",
+      type: "Ref",
+      allowedTypes: objects(["Catalog", "Project"], ["Catalog", "Region"]),
+    },
+    {
+      ...refAttribute(
+        6906,
+        "watchers",
+        "watchers",
+        ref("Catalog", "OrgMember")
+      ),
+      array: true,
+    },
+  ]
+}
+
+/**
  * Довідник ядра команд (план A2) поверх `policyDomain()`: `Task` домену —
  * документ, а ядро генерується лише для довідника. `Ticket` — ієрархічний,
  * з автором, з носієм власності `assignee`, виміром `region`, прив'язкою до
@@ -1020,32 +1048,7 @@ export function commandCoreLayer(): Layer {
       ownership: ["assignee"],
       access: [{ attribute: "region", dimension: "region" }],
       containerBinding: "project",
-      attributes: [
-        refAttribute(
-          6902,
-          "assignee",
-          "assignee_id",
-          ref("Catalog", "OrgMember")
-        ),
-        refAttribute(6903, "region", "region_id", ref("Catalog", "Region")),
-        refAttribute(6904, "project", "project_id", ref("Catalog", "Project")),
-        {
-          id: uuid(6905),
-          name: "subject",
-          physicalName: "subject",
-          type: "Ref",
-          allowedTypes: objects(["Catalog", "Project"], ["Catalog", "Region"]),
-        },
-        {
-          ...refAttribute(
-            6906,
-            "watchers",
-            "watchers",
-            ref("Catalog", "OrgMember")
-          ),
-          array: true,
-        },
-      ],
+      attributes: ticketAttributes(),
       tabularSections: [
         {
           id: uuid(6907),
@@ -1132,6 +1135,81 @@ export function commandCoreLayer(): Layer {
   }
 }
 
+/**
+ * Обробник підписки разом із SQL-файлом функції: шар `withRoles` зливає лише
+ * JSON, тож `sql` додається до файлів після `policyDomain(...)` (`withSql`),
+ * як `COUNT_COMMENT_SQL_FILE`.
+ */
+export interface HandlerFixture {
+  layer: Layer
+  sql: Record<string, string>
+}
+
+/** Файли моделі з SQL-файлами обробників. */
+export function withSql(
+  files: Map<string, string>,
+  ...handlers: HandlerFixture[]
+): Map<string, string> {
+  for (const handler of handlers)
+    for (const [path, sql] of Object.entries(handler.sql)) files.set(path, sql)
+  return files
+}
+
+const ticketBeforeWrite = (
+  id: number,
+  name: string,
+  physicalName: string
+): Layer => ({
+  [`event-subscriptions/${name}/${name}.meta.json`]: {
+    id: uuid(id),
+    kind: "EventSubscription",
+    name,
+    physicalName,
+    sources: objects(["Catalog", "Ticket"]),
+    event: "beforeWrite",
+    handler: { schema: "public", name: physicalName },
+  },
+})
+
+/**
+ * Підписка `beforeWrite` на `Ticket`, що лише сповіщає `RAISE NOTICE` з
+ * `current_user`: так видно, від чиєї ролі виконується обробник. Рядка не
+ * змінює — зміна шапки обробником ламала б `mark_deletion` (тригер ефектів —
+ * `AFTER` і бачить її).
+ */
+export function ticketNoticeHandler(): HandlerFixture {
+  return {
+    layer: ticketBeforeWrite(6950, "TicketNotice", "ticket_notice"),
+    sql: {
+      "sql/public/ticket-notice.sql":
+        "CREATE FUNCTION public.ticket_notice() RETURNS trigger LANGUAGE plpgsql VOLATILE SET search_path = '' AS $$ BEGIN RAISE NOTICE 'ticket-handler:%', current_user; RETURN NEW; END $$;",
+    },
+  }
+}
+
+/**
+ * Реквізит `moveTo` → `Ticket` і обробник `beforeWrite`, що переносить рядок
+ * під `move_to` (присвоює `NEW.parent_id`), коли значення задане й інше:
+ * зміна батька без ключа `parent_id` у команді (Р-A2-17).
+ */
+export function ticketMoveToHandler(): HandlerFixture {
+  return {
+    layer: {
+      ...ticketBeforeWrite(6952, "TicketMoveTo", "ticket_move_to"),
+      [TICKET_FILE]: {
+        attributes: [
+          ...ticketAttributes(),
+          refAttribute(6951, "moveTo", "move_to", ref("Catalog", "Ticket")),
+        ],
+      },
+    },
+    sql: {
+      "sql/public/ticket-move-to.sql":
+        "CREATE FUNCTION public.ticket_move_to() RETURNS trigger LANGUAGE plpgsql VOLATILE SET search_path = '' AS $$ BEGIN IF NEW.move_to IS NOT NULL AND NEW.move_to IS DISTINCT FROM NEW.parent_id THEN NEW.parent_id := NEW.move_to; END IF; RETURN NEW; END $$;",
+    },
+  }
+}
+
 export const NOTE_FILE = "catalogs/Note/Note.meta.json"
 export const NOTE_LONG_FILE = "catalogs/NoteLong/NoteLong.meta.json"
 export const NOTE_WRITER_ID = uuid(6810)
@@ -1201,6 +1279,29 @@ export function authorCarrier(
             ["read", "create", "update"],
             "any"
           ),
+        ],
+      }
+    ),
+  }
+}
+
+export const NOTE_OWN_CREATOR_ID = uuid(6830)
+
+/**
+ * Глобальна роль `NoteOwnCreator` — `read` і `create` `@own` на `Note`
+ * (носій `createdBy.mentor`), без права на «Користувачів»: копія носія під
+ * командою береться з функції джерел авторства (Р-A2-14). Перевизначення
+ * для `singleTenantRights` поряд з `authorCarrier()`.
+ */
+export function noteOwnCreator(): Record<string, Record<string, unknown>> {
+  return {
+    [ROLE_FILE("NoteOwnCreator")]: role(
+      NOTE_OWN_CREATOR_ID,
+      "NoteOwnCreator",
+      "global",
+      {
+        grants: [
+          grant(objects(["Catalog", "Note"]), ["read", "create"], "own"),
         ],
       }
     ),
