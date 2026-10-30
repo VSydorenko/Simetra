@@ -414,6 +414,10 @@ that runs `roles`. Without it `roles` still creates the grant roles, but
 refuses the login role with `roles.admin-option-missing` and does not create
 it. An existing role is only checked, never changed.
 
+`plan.platform-role-shape` with the violation `request-role:<role>` means an
+API request role (such as `authenticated`) and a platform role are members of
+each other in some form, even `ADMIN` alone; revoke that membership.
+
 ## Reading past row-level security
 
 `sql.definer-reads-rls` (a warning) marks a unit that reads a table under

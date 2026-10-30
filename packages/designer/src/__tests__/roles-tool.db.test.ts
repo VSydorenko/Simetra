@@ -350,6 +350,27 @@ describe("roles: the login role", () => {
     })
   })
 
+  // §6.16 п. 2: що член з ADMIN має CREATEROLE, бачить лише каталог Postgres
+  it("the gate refuses a request role with CREATEROLE that administers the command role", async () => {
+    await withRollback(async (client) => {
+      const dbs = rollbackDatabase(client)
+      await ensurePlatformRoles(dbs, TARGET, { names: [command] })
+      const request = testRoleName("request")
+      await client.query(`CREATE ROLE ${request} NOLOGIN CREATEROLE`)
+      await client.query(
+        `GRANT ${command} TO ${request} WITH ADMIN TRUE, INHERIT FALSE, SET FALSE`
+      )
+      const gate = await dbs.transaction(TARGET[0]!.db, "rollback", (tx) =>
+        platformRoleGate(tx, [command], [runtime], "target", undefined, [
+          request,
+        ])
+      )
+      expect(gate.map(asCode)).toEqual([
+        `plan.platform-role-shape:${command}:request-role:${request}`,
+      ])
+    })
+  })
+
   it("the gate refuses a request role membership with INHERIT TRUE", async () => {
     await withRollback(async (client) => {
       const dbs = rollbackDatabase(client)
