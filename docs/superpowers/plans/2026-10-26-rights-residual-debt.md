@@ -49,3 +49,10 @@
   не ловить порівняння через необов'язковий ланцюжок
   (`c.origin?.standard === "…"`, вузол `ChainExpression`). Кандидат — селектор
   і для цього вузла з кейсом у негативному тесті.
+- **Три ручні переліки платформних тригерів і функцій** — розпізнавач
+  зворотної генерації (`platformTriggerFunction`,
+  `packages/simetra/src/schema/reverse/units.ts`), фільтр промоції
+  (`packages/simetra/src/schema/apply/promotion/replacements.ts`) і тест
+  прийому з нуля (`mechanicsLoss`,
+  `packages/designer/src/schema-engine/__tests__/round-trip.db.test.ts`).
+  Кожна нова механіка ламає їх знову; потрібне одне джерело переліку.

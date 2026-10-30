@@ -42,6 +42,9 @@ resource (one run at a time on the machine); every DB case is paid by every
 later run of every session. Prefer one DB case that walks a scenario over
 several that each rebuild the same database. Name stack objects only through
 the run-tag helpers (`AGENTS.md` § "Commands and gates").
+Seed users only through provisioning or `signUp` (`packages/simetra/test/db/auth.ts`):
+a bare row in the users catalog has no identity, so `current_user_id()` returns
+`NULL` and every command fails with a misleading `no-right`.
 
 ## 3. Fixtures: builders, not inline metadata
 

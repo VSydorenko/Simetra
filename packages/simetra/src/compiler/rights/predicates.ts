@@ -206,13 +206,22 @@ function carrierColumn(
   return must(table.columns.find((c) => c.origin.elementId === elementId)).name
 }
 
-/** Текст умови для `USING`/`WITH CHECK` політики. */
-export function renderCondition(condition: RightsCondition): string {
+/**
+ * Текст умови для `USING`/`WITH CHECK` політики. `row` — змінна рядка
+ * plpgsql (`v_old`, `v_new`): ядро команди перевіряє право тим самим текстом
+ * над станом «до» чи «після», а не другою реалізацією формули (Р-A2-2).
+ */
+export function renderCondition(
+  condition: RightsCondition,
+  row?: string
+): string {
+  const at = (column: string) =>
+    row === undefined ? quoteIdent(column) : `${row}.${quoteIdent(column)}`
   switch (condition.kind) {
     case "column":
-      return `${quoteIdent(condition.column)} = ANY (ARRAY(SELECT ${condition.set}))`
+      return `${at(condition.column)} = ANY (ARRAY(SELECT ${condition.set}))`
     case "currentUser":
-      return `${quoteIdent(condition.column)} = ${CURRENT_USER}`
+      return `${at(condition.column)} = ${CURRENT_USER}`
     case "boolean":
       return `(SELECT ${condition.expression})`
   }

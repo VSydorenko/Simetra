@@ -1,15 +1,24 @@
 import { beforeAll, describe, expect, it } from "vitest"
 import type { CompiledModel } from "simetra/compiler"
-import { carrierBackfillStatements } from "../rights/carrier-units"
+import {
+  authorCarrierLinks,
+  authorCarrierSources,
+  carrierBackfillStatements,
+  carrierCopyRead,
+  carrierLinks,
+} from "../rights/carrier-units"
 import { hasEmptySearchPath, routineLanguage } from "../sql/closed-forms"
 import { executeGrants } from "../sql/execute-grants"
 import type { SqlUnit } from "../sql/units"
 import {
   COMMENT_FILE,
+  authorCarrier,
   compileRights,
   policyDomain,
   rightsFiles,
   scopeRootCarrier,
+  singleTenantRights,
+  writeRoles,
 } from "./fixtures/rights"
 import {
   bodyShape,
@@ -274,6 +283,162 @@ describe("buildCarrierUnits", () => {
     ).toEqual([])
   })
 })
+
+/** Оператори `SELECT … INTO` тіла plpgsql — без глибини вкладення. */
+const reads = (createFunction: string) =>
+  bodyShape(createFunction)
+    .filter((s) => s.type === "execsql")
+    .map(({ type, target, expressions }) => ({ type, target, expressions }))
+
+/** Дерево без `FOR SHARE`: ядро читає джерело без замка (Р-A2-4). */
+function withoutLock<T>(value: T): T {
+  return JSON.parse(
+    JSON.stringify(value, (key, v: unknown) =>
+      key === "lockingClause" ? undefined : v
+    )
+  ) as T
+}
+
+describe("carrierCopyRead", () => {
+  it("читання ядра й тригера — один будівник", async () => {
+    for (const [files, table] of [
+      // Шлях `task.assignee`: зв'язок через FK зі скоупом.
+      [policyDomain(), "task_comment"],
+      // Зв'язок через колонку авторства: `createdBy.mentor`.
+      [singleTenantRights(authorCarrier()), "note"],
+    ] as const) {
+      const model = (await compileRights(files)).model!
+      const links = carrierLinks(model.physical).filter(
+        (l) => l.table.name === table
+      )
+      expect(links.length, table).toBeGreaterThan(0)
+      // Гілка вставки й зміни зв'язку — оператори з `FOR SHARE`.
+      const trigger = reads(
+        unit(model, `function:public.${table}_simetra_carriers()`).sql
+      ).filter((s) => nodes(s.expressions, "lockingClause").length > 0)
+      const coreOf = (rename: (sql: string) => string) =>
+        reads(
+          expectedFunction(
+            "public.core",
+            [
+              // `v_new` ядра — змінна `record` (Задача 5).
+              "DECLARE",
+              "  v_new record;",
+              "BEGIN",
+              ...links.map((l) => rename(carrierCopyRead(l, "v_new", false))),
+              "  RETURN NEW;",
+              "END",
+            ].join("\n")
+          )
+        )
+      expect(
+        coreOf((sql) => sql.replaceAll("v_new", "NEW")),
+        table
+      ).toEqual(withoutLock(trigger))
+      // Ядро читає й пише лише `v_new`: жодного `NEW` ні в цілі, ні в умові.
+      const core = coreOf((sql) => sql)
+      expect(
+        nodes(core, "ColumnRef").filter(
+          (ref) =>
+            (ref as { fields: { String?: { sval: string } }[] }).fields[0]
+              ?.String?.sval === "new"
+        ),
+        table
+      ).toEqual([])
+      expect(
+        core.every((s) => s.target?.variable.startsWith("v_new.")),
+        table
+      ).toBe(true)
+      expect(trigger.length, table).toBe(links.length)
+    }
+  })
+})
+
+describe("authorCarrierSources", () => {
+  type CreateFunction = {
+    CreateFunctionStmt: {
+      options: { DefElem: { defname: string; arg?: unknown } }[]
+    }
+  }
+  const SOURCES = "simetra.current_user_carrier_sources()"
+
+  it("джерела авторства: лише колонки зв'язків через авторство, WHERE ключ = current_user_id(), DEFINER, row_security off, EXECUTE лише command", async () => {
+    const model = (await compileRights(singleTenantRights(authorCarrier())))
+      .model!
+    expect(
+      authorCarrierLinks(model.physical, "camelCase").map((l) => [
+        l.table.name,
+        l.through,
+      ])
+    ).toEqual([["note", "created_by_id"]])
+    expect(authorCarrierSources(model.physical, "camelCase")).toEqual({
+      fn: { schema: "simetra", name: "current_user_carrier_sources" },
+      columns: [{ name: "mentor_id", type: "uuid" }],
+    })
+    const fn = unit(model, `function:${SOURCES}`)
+    expect(fn.generator).toBe("carriers")
+    expect(fn.requires).toEqual([
+      { type: "table", schema: "public", name: "users" },
+      { type: "unit", identity: "function:simetra.current_user_id()" },
+    ])
+    // Форма цілком, крім тіла: лише колонки-джерела зв'язків авторства з
+    // їхніми типами, `sql STABLE DEFINER`, порожній `search_path` і
+    // `row_security = off`.
+    expect(withoutBody(fn.tree as CreateFunction)).toEqual(
+      withoutBody(
+        tree(
+          `CREATE OR REPLACE FUNCTION ${SOURCES} RETURNS TABLE (mentor_id uuid) LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' SET row_security = off AS 'SELECT 1';`
+        ) as CreateFunction
+      )
+    )
+    const create = (fn.tree as CreateFunction).CreateFunctionStmt
+    const option = (name: string) =>
+      create.options.find((o) => o.DefElem.defname === name)?.DefElem.arg
+    const body = (
+      option("as") as { List: { items: { String: { sval: string } }[] } }
+    ).List.items[0]!.String.sval
+    expect(tree(body)).toEqual(
+      tree(
+        "SELECT s.mentor_id FROM public.users s WHERE s.id = (SELECT simetra.current_user_id())"
+      )
+    )
+    expect(
+      carriers(model)
+        .filter((u) => u.class === "grant" && u.sql.includes(SOURCES))
+        .map((u) => u.sql)
+        .sort()
+    ).toEqual(executeGrants(SOURCES, ["command"], "supabase").sort())
+  })
+
+  it("без зв'язку через авторство — функції немає", async () => {
+    const model = (await compileRights(policyDomain(writeRoles()))).model!
+    // Копії є (шлях `task.assignee`), але жодна — не через авторство.
+    expect(carrierLinks(model.physical).length).toBeGreaterThan(0)
+    expect(authorCarrierSources(model.physical, "camelCase")).toBeUndefined()
+    expect(
+      model.sqlUnits.filter((u) =>
+        u.sql.includes("current_user_carrier_sources")
+      )
+    ).toEqual([])
+  })
+})
+
+/** Дерево `CREATE FUNCTION` без тіла: тіло порівнюється окремим деревом. */
+function withoutBody<
+  T extends {
+    CreateFunctionStmt: { options: { DefElem: { defname: string } }[] }
+  },
+>(fn: T): T {
+  return {
+    ...fn,
+    CreateFunctionStmt: {
+      ...fn.CreateFunctionStmt,
+      options: fn.CreateFunctionStmt.options.filter(
+        (o) => o.DefElem.defname !== "as"
+      ),
+    },
+  }
+}
 
 describe("carrierBackfillStatements", () => {
   const pending = (name: string, ...columns: string[]) => ({

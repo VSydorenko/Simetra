@@ -177,6 +177,30 @@ describe("rights projection", () => {
         },
       ]
     )
+    // Запис ⊆ читання за обсягом: `read@own` не покриває `create@any`. На
+    // цьому тримається повернення рядка командою ядра через `RETURNING`
+    // (Ф10) — стан «записав, але не бачу» відсікає компіляція. Замикання не
+    // залежить від виду, тож довідник і документ тут рівні.
+    expect(
+      await errors(
+        files(
+          member(grant(TASK, ["create"], "any"), grant(TASK, ["read"], "own"))
+        )
+      )
+    ).toEqual([
+      {
+        code: "rights.requires-missing",
+        file: ROLE_FILE("OrgMember"),
+        pointer: "/grants/0",
+        params: {
+          object: "Task",
+          action: "create",
+          requires: "read",
+          extent: "any",
+          role: "OrgMember",
+        },
+      },
+    ])
     // Набір під двома ролями: діагностика на місці набору — для кожної ролі.
     const shared = await errors(
       files({

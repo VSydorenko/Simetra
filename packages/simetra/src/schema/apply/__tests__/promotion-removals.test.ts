@@ -2732,6 +2732,22 @@ describe("platformReplacements", () => {
         ).toEqual(MISSING)
       })
 
+      it.each(["item_simetra_hierarchy", "item_simetra_hierarchy_update"])(
+        "hierarchy trigger %s is never a replacement of an adopted trigger",
+        (name) => {
+          // Р-A2-1: тригер ієрархії платформний, тож прийнятий тригер з тим
+          // самим викликом ним не замінюється (fail-closed)
+          const call =
+            "AFTER UPDATE ON app.item FOR EACH ROW EXECUTE FUNCTION app.item_simetra_hierarchy()"
+          expect(
+            codesOf(`CREATE TRIGGER a ${call}`, [
+              MECHANICS,
+              trigger(name, `CREATE TRIGGER ${name} ${call}`),
+            ])
+          ).toEqual(MISSING)
+        }
+      )
+
       // Кожна пара сторожа прав — окремий рядок: пропущена в переліку
       // платформних пара дала б прийнятому тригеру з тим самим викликом
       // «заміну» і мовчки зняла б його на промоції

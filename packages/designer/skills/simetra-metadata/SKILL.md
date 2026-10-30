@@ -225,7 +225,7 @@ Attribute properties (an element of `attributes`):
   `{ "empty": "object" | "array" }` on a scalar `Json`.
 - `unique`: `true`, or `"ignoreCase"` on a scalar String or Text. `uniqueWithin`: `"owner"` or `"parent"`,
   only on a catalog's own attributes and only when the catalog has owners or a
-  hierarchy.
+  hierarchy. Write no cycle check: the database rejects a `parent` cycle from any writer; a `parent` change needs `READ COMMITTED`.
 - Numbers (scalar only): `nonNegative`, `positive`, `minValue`, `maxValue`.
 - Strings and text (scalar only): `minLength`, `pattern`. The pattern must
   mean the same in JavaScript and Postgres: no named groups, `\p{}`, `\k<>`,

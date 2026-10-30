@@ -1,6 +1,9 @@
 import {
+  PLATFORM_SCHEMA,
+  authorColumns,
   makeObjectName,
   quoteIdent,
+  type AttributeCase,
   type DatabaseProvider,
   type PhysicalColumn,
   type PhysicalSnapshot,
@@ -9,11 +12,15 @@ import {
 import { platformBeforeTriggerName } from "../before-trigger-names"
 import type { QualifiedName } from "../contracts"
 import { compareStrings } from "../diagnostics"
+import { CURRENT_USER } from "../membership-functions"
+import { dollarTag } from "../movement-functions"
+import { CURRENT_USER_FUNCTION } from "../platform/names"
 import type { CreationNode } from "../sql/dependencies"
 import { executeGrants } from "../sql/execute-grants"
 import type { SqlParser } from "../sql/parse"
-import { generatedUnit, type SqlUnit } from "../sql/units"
+import { functionIdentity, generatedUnit, type SqlUnit } from "../sql/units"
 import { fieldForeignKey } from "../stages/model"
+import { findStandardColumn } from "../standard-column"
 import { definerTrigger } from "./definer"
 
 /** Мітки імен тригерів і функцій носіїв — алгоритм імен Postgres від таблиці. */
@@ -74,7 +81,7 @@ export function carrierCopies(
  * скоупі. У ТЧ кореня скоуп і є `parent_id`, тож FK — одна пара, і умова
  * скоупу не дублюється.
  */
-interface CarrierLink {
+export interface CarrierLink {
   table: PhysicalTable
   source: PhysicalTable
   through: string
@@ -88,9 +95,11 @@ const tableKey = (t: { schema: string; name: string }) =>
 
 /**
  * Зв'язки копій знімка. Копію будує стадія 1 лише там, де FK зв'язку й
- * таблиця джерела є, тож їхня відсутність — дефект компілятора.
+ * таблиця джерела є, тож їхня відсутність — дефект компілятора. Одне джерело
+ * для тригера носіїв і ядра команд (Р-A2-4): ядро читає стан «після» за тими
+ * самими зв'язками, що й тригер.
  */
-function carrierLinks(
+export function carrierLinks(
   physical: Pick<PhysicalSnapshot, "tables">
 ): CarrierLink[] {
   const byKey = new Map(physical.tables.map((t) => [tableKey(t), t]))
@@ -180,6 +189,131 @@ const q = quoteIdent
 const relation = (t: { schema: string; name: string }) =>
   `${q(t.schema)}.${q(t.name)}`
 
+/** Функція джерел копій від авторства (Р-A2-14). */
+export const AUTHOR_CARRIER_SOURCES_FUNCTION: QualifiedName = {
+  schema: PLATFORM_SCHEMA,
+  name: "current_user_carrier_sources",
+}
+
+/** Зв'язки копій через колонку авторства — за `origin.standard`, не за іменем. */
+export function authorCarrierLinks(
+  physical: Pick<PhysicalSnapshot, "tables">,
+  attributeCase: AttributeCase
+): CarrierLink[] {
+  return carrierLinks(physical).filter((link) =>
+    authorColumns().some(
+      (def) =>
+        findStandardColumn(link.table, def, attributeCase)?.name ===
+        link.through
+    )
+  )
+}
+
+/**
+ * Джерела копій носіїв від авторства (Р-A2-14): колонки «Користувачів», які
+ * читає хоч один зв'язок через колонку авторства, з їхніми типами. Ядро бере
+ * з функції значення для `v_new`, бо під командою рядок «Користувачів»
+ * невидимий без права `read` на них, і копія `NULL` дала б хибну відмову,
+ * тоді як тригер (`DEFINER`) пише справжнє значення. `undefined` — такого
+ * зв'язку немає, і функції теж.
+ */
+export function authorCarrierSources(
+  physical: Pick<PhysicalSnapshot, "tables">,
+  attributeCase: AttributeCase
+):
+  { fn: QualifiedName; columns: { name: string; type: string }[] } | undefined {
+  const links = authorCarrierLinks(physical, attributeCase)
+  if (links.length === 0) return undefined
+  const users = authorSource(links)
+  const read = new Set(links.flatMap((l) => l.copies.map((c) => c.column)))
+  return {
+    fn: AUTHOR_CARRIER_SOURCES_FUNCTION,
+    columns: users.columns
+      .filter((c) => read.has(c.name))
+      .map((c) => ({ name: c.name, type: c.type })),
+  }
+}
+
+/**
+ * Таблиця й ключ «Користувачів» зв'язків авторства: колонка авторства — FK
+ * на «Користувачів» без скоупу, тож джерело одне, а пара — одна. Інше —
+ * дефект компілятора.
+ */
+function authorSource(links: readonly CarrierLink[]): PhysicalTable & {
+  key: string
+} {
+  const source = links[0]!.source
+  for (const link of links) {
+    if (tableKey(link.source) !== tableKey(source) || link.pairs.length !== 1) {
+      throw new Error(
+        `internal: author carrier link ${tableKey(link.table)}.${link.through} is not a single-column link to ${tableKey(source)}`
+      )
+    }
+  }
+  const keys = new Set(links.map((l) => l.pairs[0]!.source))
+  if (keys.size !== 1) {
+    throw new Error(
+      `internal: author carrier links read ${tableKey(source)} by different keys`
+    )
+  }
+  return { ...source, key: [...keys][0]! }
+}
+
+/**
+ * Одиниці `simetra.current_user_carrier_sources()` (Р-A2-14). `DEFINER` з
+ * `row_security = off`: функція читає рядок «Користувачів» повз RLS, але
+ * лише рядок поточного користувача (`NULL` — жодного рядка) і лише колонки
+ * джерел копій, які тригер носіїв і так пише в рядок, що його пише
+ * викликач. `EXECUTE` — лише ролі команд: значення йде лише в `v_new` ядра
+ * для перевірки права. Тіло — рядок, граф його не читає, тож таблиця й
+ * функція користувача — явні ребра `requires`.
+ */
+function authorSourcesUnits(
+  physical: PhysicalSnapshot,
+  attributeCase: AttributeCase,
+  provider: DatabaseProvider,
+  module: string,
+  parse: SqlParser
+): SqlUnit[] {
+  const sources = authorCarrierSources(physical, attributeCase)
+  if (sources === undefined) return []
+  const users = authorSource(authorCarrierLinks(physical, attributeCase))
+  const fn = relation(sources.fn)
+  const body = [
+    `SELECT ${sources.columns.map((c) => `s.${q(c.name)}`).join(", ")}`,
+    `FROM ${relation(users)} s`,
+    `WHERE s.${q(users.key)} = ${CURRENT_USER}`,
+  ].join("\n")
+  const tag = dollarTag(body)
+  const create =
+    `CREATE OR REPLACE FUNCTION ${fn}()\n` +
+    `RETURNS TABLE (${sources.columns.map((c) => `${q(c.name)} ${c.type}`).join(", ")})\n` +
+    `LANGUAGE sql STABLE SECURITY DEFINER\n` +
+    `SET search_path = ''\n` +
+    `SET row_security = off\n` +
+    `AS ${tag}\n${body}\n${tag};`
+  const requires: CreationNode[] = [
+    { type: "table", schema: users.schema, name: users.name },
+    {
+      type: "unit",
+      identity: functionIdentity(
+        CURRENT_USER_FUNCTION.schema,
+        CURRENT_USER_FUNCTION.name,
+        []
+      ),
+    },
+  ]
+  return [create, ...executeGrants(`${fn}()`, ["command"], provider)].map(
+    (sql, i): SqlUnit => ({
+      ...generatedUnit(sql, PLATFORM_SCHEMA, parse),
+      ownerObjectId: users.origin.objectId,
+      module,
+      generator: "carriers",
+      ...(i === 0 ? { requires } : {}),
+    })
+  )
+}
+
 /**
  * Генератор `carriers` (спека прав §5.2, Р2a2-7): копії носіїв пише лише
  * платформа. На кожну таблицю з копіями — функція й `BEFORE INSERT OR
@@ -192,13 +326,20 @@ const relation = (t: { schema: string; name: string }) =>
  */
 export function buildCarrierUnits(
   physical: PhysicalSnapshot,
+  attributeCase: AttributeCase,
   provider: DatabaseProvider,
   module: string,
   parse: SqlParser
 ): SqlUnit[] {
   const links = carrierLinks(physical)
   if (links.length === 0) return []
-  const units: SqlUnit[] = []
+  const units: SqlUnit[] = authorSourcesUnits(
+    physical,
+    attributeCase,
+    provider,
+    module,
+    parse
+  )
   const unit = (
     table: PhysicalTable,
     sql: string,
@@ -282,11 +423,34 @@ function uniqueTables(tables: readonly PhysicalTable[]): PhysicalTable[] {
   )
 }
 
-/** `s.<джерело> = NEW.<локальна> AND …` за колонками FK зв'язку. */
-function sourceRow(link: CarrierLink): string {
+/** `s.<джерело> = <row>.<локальна> AND …` за колонками FK зв'язку. */
+function sourceRow(link: CarrierLink, row: CarrierRow): string {
   return link.pairs
-    .map((p) => `s.${q(p.source)} = NEW.${q(p.local)}`)
+    .map((p) => `s.${q(p.source)} = ${row}.${q(p.local)}`)
     .join(" AND ")
+}
+
+/** Рядок, у який читаються копії: `NEW` тригера чи змінна `record` ядра. */
+export type CarrierRow = "NEW" | "v_new"
+
+/**
+ * Читання всіх копій зв'язку з рядка джерела в `row` — один будівник для
+ * тригера носіїв (`NEW`, під `FOR SHARE` на вставці й зміні зв'язку) і ядра
+ * команд (`v_new` без `FOR SHARE`, під командою, Р-A2-4): ядро перевіряє
+ * право над тим самим станом «після», який потім запише тригер. Розриви
+ * рядків — ті самі, що в тілі тригера: текст тіла входить у хеш одиниці.
+ */
+export function carrierCopyRead(
+  link: CarrierLink,
+  row: CarrierRow,
+  lock: boolean
+): string {
+  return [
+    `SELECT ${link.copies.map((c) => `s.${q(c.column)}`).join(", ")}`,
+    `      INTO ${link.copies.map((c) => `${row}.${q(c.name)}`).join(", ")}`,
+    `      FROM ${relation(link.source)} s WHERE ${sourceRow(link, row)}${lock ? "" : ";"}`,
+    ...(lock ? ["      FOR SHARE;"] : []),
+  ].join("\n")
 }
 
 /**
@@ -303,16 +467,13 @@ function deriveFunction(
 ): string {
   const body: string[] = ["BEGIN"]
   for (const link of links) {
-    const from = `FROM ${relation(link.source)} s WHERE ${sourceRow(link)}`
+    const from = `FROM ${relation(link.source)} s WHERE ${sourceRow(link, "NEW")}`
     const linkChanged = link.pairs
       .map((p) => `NEW.${q(p.local)} IS DISTINCT FROM OLD.${q(p.local)}`)
       .join(" OR ")
     body.push(
       `  IF TG_OP = 'INSERT' OR ${linkChanged} THEN`,
-      `    SELECT ${link.copies.map((c) => `s.${q(c.column)}`).join(", ")}`,
-      `      INTO ${link.copies.map((c) => `NEW.${q(c.name)}`).join(", ")}`,
-      `      ${from}`,
-      "      FOR SHARE;",
+      `    ${carrierCopyRead(link, "NEW", true)}`,
       "  ELSE"
     )
     // Зв'язок не змінився: власника не блокуємо, тож `UPDATE` рядка ТЧ

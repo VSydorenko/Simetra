@@ -40,6 +40,7 @@ export {
   authorColumns,
   deletionMarkColumn,
   keyColumn,
+  lineNumberColumn,
   monthColumn,
   serviceDateColumns,
   singletonColumn,

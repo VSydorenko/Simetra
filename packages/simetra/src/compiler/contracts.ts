@@ -26,12 +26,14 @@ import {
   type SubscriptionEvent,
   type VirtualTableKind,
 } from "simetra/model"
+import { CATALOG_COMMAND_LABELS } from "./catalog-command/contracts"
 import { compareStrings } from "./diagnostics"
 import {
   choosesMembership,
   membershipFunctionNames,
   membershipsOf,
 } from "./membership-functions"
+import { hierarchyNames, hierarchyTables } from "./hierarchy-units"
 import { carrierFunctions } from "./rights/carrier-units"
 import { effectsFunctionName } from "./rights/effects-names"
 import { writesByCommand } from "./rights/facts"
@@ -746,7 +748,7 @@ function maintainsDerivedTables(keys: RegisterKeySpec): boolean {
 }
 
 /** Ім'я похідної функції — алгоритм імен Postgres від таблиці власника. */
-function derived(table: PhysicalTable, label: string): QualifiedName {
+export function derived(table: PhysicalTable, label: string): QualifiedName {
   return {
     schema: table.schema,
     name: makeObjectName(table.name, undefined, label),
@@ -849,6 +851,27 @@ export function derivedFunctionLabels(
       { label: POSTING_LABELS.unpost, description: "unpost" }
     )
   }
+  // Функції ядра команд (спека П4 §6.6) — з надлишком, як функції ефектів
+  // (Р2b1-11): резервуються на кожен об'єкт виду з `commandWrites`, хоч би
+  // які дії й ролі він мав, — зайве резервування лише звужує простір імен.
+  if (KIND_REGISTRY[object.kind].commandWrites === true) {
+    labels.push(
+      { label: CATALOG_COMMAND_LABELS.save, description: "command save" },
+      {
+        label: CATALOG_COMMAND_LABELS.markDeletion,
+        description: "command mark deletion",
+      }
+    )
+    if (
+      KIND_REGISTRY[object.kind].rightsSystem?.(object.data) ===
+      "roleAssignments"
+    ) {
+      labels.push({
+        label: CATALOG_COMMAND_LABELS.delete,
+        description: "command delete",
+      })
+    }
+  }
   const keys = KIND_REGISTRY[object.kind].registerKeys?.(object.data)
   if (keys === undefined) return labels
   for (const kind of keys.virtualTables) {
@@ -877,7 +900,8 @@ export function derivedFunctions(
   references: readonly ResolvedReference[],
   physical: PhysicalSnapshot,
   wrapperName: (document: PhysicalTable, register: PhysicalTable) => string,
-  scopeKinds: readonly ScopeKind[]
+  scopeKinds: readonly ScopeKind[],
+  attributeCase: AttributeCase
 ): DerivedFunction[] {
   const result: DerivedFunction[] = []
   const add = (
@@ -903,6 +927,17 @@ export function derivedFunctions(
       object,
       fn,
       `${role === "derive" ? "carrier copies" : "carrier propagation"} of ${table.schema}.${table.name}`
+    )
+  }
+  // Функції ієрархії (Р-A2-1) — згенеровані одиниці з іменами від таблиць,
+  // як функції носіїв.
+  for (const { table } of hierarchyTables(physical, objects, attributeCase)) {
+    const object = byId.get(table.origin.objectId)
+    if (object === undefined) continue
+    add(
+      object,
+      hierarchyNames(table).fn,
+      `hierarchy check of ${table.schema}.${table.name}`
     )
   }
   // Функції ефектів (Р2b1-11) — з надлишком, на кожну таблицю з кореневою

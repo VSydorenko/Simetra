@@ -87,6 +87,7 @@ export type UnitGenerator =
   | "carriers"
   | "command"
   | "effects"
+  | "catalogCommand"
 
 /**
  * Чи тіло функцій генератора фіксоване платформою: таку функцію перевіряють
@@ -111,6 +112,7 @@ const FIXED_BODY: Readonly<Record<UnitGenerator, boolean>> = {
   carriers: true,
   command: true,
   effects: true,
+  catalogCommand: true,
 }
 
 /**

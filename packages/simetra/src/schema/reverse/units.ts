@@ -7,6 +7,7 @@ import {
   diagnostic,
   effectsFunctionName,
   effectsTriggerNames,
+  hierarchyNames,
   rightsGuardNames,
   grantTargetKeys,
   KEY_FUNCTION,
@@ -255,7 +256,8 @@ const KEY = qualified(KEY_FUNCTION.schema, KEY_FUNCTION.name)
  * (Р-A1-8), незмінність ключа (`<t>_simetra_key`, `<t>_simetra_key_after`) —
  * `simetra.key_immutable()` (Рб1-4), тригери копій носіїв —
  * функції носіїв таблиці (Р2a2-20), тригери ефектів — функція ефектів таблиці
- * (Р2b1-12). Інше ім'я — не платформний тригер.
+ * (Р2b1-12), тригери ієрархії — функція ієрархії таблиці (Р-A2-1). Інше
+ * ім'я — не платформний тригер.
  */
 function platformTriggerFunction(
   unit: CatalogUnit,
@@ -288,6 +290,10 @@ function platformTriggerFunction(
     unit.name === triggers.propagateInsert
   )
     return qualified(functions.propagate.schema, functions.propagate.name)
+  // Тригери ієрархії (Р-A2-1): обидва кличуть одну функцію таблиці
+  const hierarchy = hierarchyNames(table)
+  if (unit.name === hierarchy.insert || unit.name === hierarchy.update)
+    return qualified(hierarchy.fn.schema, hierarchy.fn.name)
   // Тригери ефектів дії (Р2b1-12): обидва кличуть одну функцію таблиці
   const effects = effectsTriggerNames(table)
   if (unit.name === effects.all || unit.name === effects.update) {

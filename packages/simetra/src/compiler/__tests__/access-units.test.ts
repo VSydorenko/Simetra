@@ -589,7 +589,9 @@ describe("rights read and users visibility policies", () => {
         table,
         mainTableOf(domain.physical, contract.objectId)!
       )) {
-        const using = predicate.conditions.map(renderCondition).join(" AND ")
+        const using = predicate.conditions
+          .map((c) => renderCondition(c))
+          .join(" AND ")
         expected.set(
           `${table.name}:${using}`,
           `ON ${table.schema}.${table.name} AS PERMISSIVE FOR SELECT ${BOUNDED} USING (${using});`
@@ -866,7 +868,7 @@ describe("rights write policies", () => {
         const name = `${tableName}_${dml}_${family}_${labelOf(predicate)}`
         const condition = [
           ...prefix,
-          ...predicate.conditions.map(renderCondition),
+          ...predicate.conditions.map((c) => renderCondition(c)),
         ].join(" AND ")
         expected.set(
           name,

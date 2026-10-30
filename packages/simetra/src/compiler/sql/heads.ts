@@ -111,7 +111,8 @@ export function headScope(
     references,
     physical,
     movementWrapperName,
-    project.scopeKinds
+    project.scopeKinds,
+    project.naming.attributeCase
   )
   const mainTable = (objectId: string) =>
     physical.tables.find(

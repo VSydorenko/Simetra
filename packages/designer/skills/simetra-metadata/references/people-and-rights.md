@@ -274,6 +274,9 @@ To administer rights, grant `read` and `administerRights` explicitly on the
 system catalog at extent `any`. Neither `grantAll` nor `withAction` selects
 system catalogs; a role with `fullAccess` includes their administration at
 its own level. A container role cannot administer a scope's rights catalogs.
+A rights administrator role must also grant `read` on the membership catalog
+of its level; `administerRights` gives no implicit read, so without it an
+assignment cannot address a member.
 Use `administerRights` as the command's root action. It has no natural DML
 counterpart, so another command cannot write a rights catalog as a side effect.
 

@@ -169,6 +169,18 @@ export function textCalls(text: string, parse: SqlParser): ReferencedName[] {
   return names(new ReferenceCollector(parse).statementReferences(text), "proc")
 }
 
+/**
+ * Імена всіх просторів у тексті оператора: тіло plpgsql граф не читає, тож
+ * генератор, що знає тіло, називає ребра `requires` з виразів тіла.
+ */
+export function textNames(
+  text: string,
+  parse: SqlParser,
+  space: PgSpace
+): ReferencedName[] {
+  return names(new ReferenceCollector(parse).statementReferences(text), space)
+}
+
 function unitReferences(
   unit: Pick<SqlUnit, "tree">,
   parse: SqlParser
