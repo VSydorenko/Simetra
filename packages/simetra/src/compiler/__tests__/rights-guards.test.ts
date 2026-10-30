@@ -39,6 +39,7 @@ import {
   tree,
 } from "./fixtures/sql-shape"
 import { expectClean, uuid } from "./helpers"
+import { snakeCaseTwin } from "./fixtures/snake-case"
 
 const ref = (kind: string, name: string) => ({ kind, name })
 
@@ -1395,28 +1396,15 @@ describe("rights guards of membership and users outside commands", () => {
   })
 
   it("finds the user kind by its styled name in a snake_case project", async () => {
-    // `origin.standard` несе ім'я в стилі проєкту (Р-A1-10): літерал
-    // `userKind` не знайшов би `user_kind`.
-    const physical = {
-      ...domain.physical,
-      tables: domain.physical.tables.map((t) =>
-        t.name !== "users"
-          ? t
-          : {
-              ...t,
-              columns: t.columns.map((c) =>
-                c.origin.standard === "userKind"
-                  ? { ...c, origin: { ...c.origin, standard: "user_kind" } }
-                  : c
-              ),
-            }
-      ),
-    }
-    const units = await guardsOver(domain, {}, physical, "snake_case")
-    const update = units.find((u) => u.identity === usersFn("UPDATE").identity)!
-    expect(contextRefusals(update.sql)).toEqual(
-      contextRefusals(usersFn("UPDATE").sql)
-    )
+    // Близнюк у snake_case (Рб1-3): `origin.standard` несе ім'я в стилі
+    // проєкту (Р-A1-10), тож літерал `userKind` не знайшов би `user_kind`.
+    const snake = await compileRights(snakeCaseTwin(policyDomain(writeRoles())))
+    expectClean(snake)
+    const sql = (model: CompiledModel) =>
+      model.sqlUnits
+        .filter((u) => u.generator === "rightsGuards")
+        .map((u) => [u.identity, u.sql])
+    expect(sql(snake.model!)).toEqual(sql(domain))
   })
 
   it("bumps the global version once per users statement that really changes validity or kind", () => {

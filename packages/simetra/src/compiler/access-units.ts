@@ -5,6 +5,7 @@ import {
   PUBLIC_READ_PURPOSES,
   makeObjectName,
   quoteIdent,
+  tabularParentColumn,
   toSnakeCase,
   type ApiRolePurpose,
   type AttributeCase,
@@ -46,6 +47,7 @@ import { grantRole } from "./sql/execute-grants"
 import type { SqlParser } from "./sql/parse"
 import { generatedUnit, type SqlUnit } from "./sql/units"
 import { isDeclaredTable, sqlLiteral } from "./stages/model"
+import { styleFreeColumn } from "./standard-column"
 import type { ParsedObject } from "./stages/files"
 
 /**
@@ -625,7 +627,7 @@ function rightsLabel(
 /** Колонка id користувача: ключ основної таблиці, у рядку ТЧ — `parent_id`. */
 function usersKey(table: PhysicalTable, keyColumn: string): string {
   if (table.origin.tabularSectionId === undefined) return keyColumn
-  return must(table.columns.find((c) => c.origin.standard === "parent")).name
+  return styleFreeColumn(table, tabularParentColumn()).name
 }
 
 function tableOf(physical: PhysicalSnapshot, name: QualifiedName) {

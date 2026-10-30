@@ -19,6 +19,7 @@ import type { KindDefinition } from "./standard"
 
 export { isUuidColumn, singleUuidKeyColumn }
 export {
+  RIGHTS_COLUMNS,
   RIGHTS_DELTA_SECTION,
   predefinedNameColumn,
   userPlatformColumns,
@@ -38,11 +39,14 @@ export {
 
 export {
   authorColumns,
+  deletionMarkColumn,
+  keyColumn,
   lineNumberColumn,
   monthColumn,
   serviceDateColumns,
   singletonColumn,
   standardLogicalName,
+  tabularParentColumn,
   versionColumn,
   type FoundElementReference,
   type FoundProjectReference,

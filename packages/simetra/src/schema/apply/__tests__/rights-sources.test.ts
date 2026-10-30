@@ -35,6 +35,7 @@ import {
   withRoles,
 } from "../../../compiler/__tests__/fixtures/rights"
 import { uuid } from "../../../compiler/__tests__/helpers"
+import { snakeCaseTwin } from "../../../compiler/__tests__/fixtures/snake-case"
 
 let parse: SqlParser
 let adopted: CompiledModel
@@ -342,7 +343,11 @@ describe("readRightsSourceFacts", () => {
       // обходу — гучна помилка, не тихий нуль); таблиці, якої немає, чи якій
       // відмовлено, і колонки, якої ще немає, не читаються.
       const target = fakeTarget({ present, missingColumns })
-      const input = rightsSourceInput(model.contracts, model.physical)
+      const input = rightsSourceInput(
+        model.contracts,
+        model.physical,
+        model.project.naming.attributeCase
+      )
       const facts = await readRightsSourceFacts(target.tx, input)
 
       const setConfig = target.log.findIndex(
@@ -376,7 +381,11 @@ describe("readRightsSourceFacts", () => {
     })
     const facts = await readRightsSourceFacts(
       target.tx,
-      rightsSourceInput(adopted.contracts, adopted.physical)
+      rightsSourceInput(
+        adopted.contracts,
+        adopted.physical,
+        adopted.project.naming.attributeCase
+      )
     )
     expect(facts.unknownKeys).toEqual([
       { source: "grants", keys, more: 25 - RIGHTS_SOURCE_LIMIT },
@@ -397,7 +406,11 @@ describe("readRightsSourceFacts", () => {
     })
     const facts = await readRightsSourceFacts(
       target.tx,
-      rightsSourceInput(adopted.contracts, adopted.physical)
+      rightsSourceInput(
+        adopted.contracts,
+        adopted.physical,
+        adopted.project.naming.attributeCase
+      )
     )
     const catalog = target.log.filter(
       (q) =>
@@ -424,7 +437,11 @@ describe("readRightsSourceFacts", () => {
     })
     const facts = await readRightsSourceFacts(
       target.tx,
-      rightsSourceInput(adopted.contracts, adopted.physical)
+      rightsSourceInput(
+        adopted.contracts,
+        adopted.physical,
+        adopted.project.naming.attributeCase
+      )
     )
     expect(
       target.log
@@ -439,7 +456,11 @@ describe("readRightsSourceFacts", () => {
 
   it("reads existing fullAccess holders and skips the refusal on a fresh target", async () => {
     const model = (await compile(withRoles())).model!
-    const input = rightsSourceInput(model.contracts, model.physical)
+    const input = rightsSourceInput(
+      model.contracts,
+      model.physical,
+      model.project.naming.attributeCase
+    )
     const present = Object.fromEntries(
       input.tables.map((table) => [`${table.schema}.${table.name}`, true])
     )
@@ -496,7 +517,11 @@ describe("readRightsSourceFacts", () => {
     // Чужа роль застосування не має `USAGE` на схемі `simetra`: виклик функції
     // архетипів дав би сирий `42501` замість відмови доступу до таблиць.
     const model = (await compile(withRoles())).model!
-    const input = rightsSourceInput(model.contracts, model.physical)
+    const input = rightsSourceInput(
+      model.contracts,
+      model.physical,
+      model.project.naming.attributeCase
+    )
     const present = Object.fromEntries(
       input.tables.map((table) => [`${table.schema}.${table.name}`, false])
     )
@@ -515,7 +540,11 @@ describe("readRightsSourceFacts", () => {
 
   it("finds invalid custom roles, deltas and direct assignments by row ID", async () => {
     const model = (await compile(withRoles())).model!
-    const input = rightsSourceInput(model.contracts, model.physical)
+    const input = rightsSourceInput(
+      model.contracts,
+      model.physical,
+      model.project.naming.attributeCase
+    )
     const present = Object.fromEntries(
       input.tables.map((table) => [`${table.schema}.${table.name}`, true])
     )
@@ -571,6 +600,7 @@ describe("readRightsSourceFacts", () => {
     const input = rightsSourceInput(
       desired.contracts,
       desired.physical,
+      desired.project.naming.attributeCase,
       canonicalSnapshot(old)
     )
     const present = Object.fromEntries(
@@ -649,6 +679,7 @@ describe("readRightsSourceFacts", () => {
       const input = rightsSourceInput(
         desired.contracts,
         desired.physical,
+        desired.project.naming.attributeCase,
         canonicalSnapshot(old)
       )
       const facts = await readRightsSourceFacts(
@@ -680,6 +711,7 @@ describe("readRightsSourceFacts", () => {
     const input = rightsSourceInput(
       desired.contracts,
       desired.physical,
+      desired.project.naming.attributeCase,
       canonicalSnapshot(old)
     )
     const facts = await readRightsSourceFacts(
@@ -766,7 +798,11 @@ describe("unknownKeysQuery", () => {
 describe("rightsSourceInput", () => {
   it("checks the owner of a role table", () => {
     // Р2d1-10, Р2d1-17: таблиця ролей підлягає тій самій перевірці доступу.
-    const input = rightsSourceInput(poly.contracts, poly.physical)
+    const input = rightsSourceInput(
+      poly.contracts,
+      poly.physical,
+      poly.project.naming.attributeCase
+    )
     const names = input.tables.map((t) => `${t.schema}.${t.name}`)
     expect([...names].sort()).toEqual(
       [
@@ -785,5 +821,41 @@ describe("rightsSourceInput", () => {
       ["polyGrants", [ADOPTED_MEMBER_KEY]],
       ["polyContainerGrants", [ADOPTED_LEAD_KEY]],
     ])
+  })
+})
+
+describe("rights source input of a snake_case project", () => {
+  // Колонки довідників прав несуть `origin.standard` у стилі свого знімка
+  // (Рб1-1): `custom_role` у snake_case. Фізичні імена від стилю не залежать,
+  // тож вхід читача мусить збігтися з camelCase.
+  it("reads the catalog columns by the desired model's styled names", async () => {
+    const camel = (await compile(withRoles())).model!
+    const snake = (await compile(snakeCaseTwin(withRoles()))).model!
+    const input = (model: CompiledModel) =>
+      rightsSourceInput(
+        model.contracts,
+        model.physical,
+        model.project.naming.attributeCase
+      ).catalogs
+    expect(input(snake)).toEqual(input(camel))
+  })
+
+  it("reads the applied snapshot by its own style, not the desired one", async () => {
+    const camel = (await compile(withRoles())).model!
+    const snake = (await compile(snakeCaseTwin(withRoles()))).model!
+    const input = rightsSourceInput(
+      snake.contracts,
+      snake.physical,
+      "snake_case",
+      canonicalSnapshot(camel)
+    )
+    expect(input.catalogs).toEqual(
+      rightsSourceInput(
+        camel.contracts,
+        camel.physical,
+        "camelCase",
+        canonicalSnapshot(camel)
+      ).catalogs
+    )
   })
 })

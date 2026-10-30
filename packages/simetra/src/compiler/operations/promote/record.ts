@@ -565,6 +565,10 @@ function successor(
   }
   const prefix = `${ownerId}#`
   if (successorId.startsWith(prefix)) {
+    // Канонічне ім'я береться із синтетичного id елемента (`<власник>#<ім'я>`,
+    // власник — об'єкт чи ТЧ), а не літералом: визначення за видом тут не
+    // знайти, бо реєстр дає колонки лише за об'єктом.
+    // eslint-disable-next-line no-restricted-syntax
     const name = standardLogicalName(
       { logicalName: successorId.slice(prefix.length) },
       style

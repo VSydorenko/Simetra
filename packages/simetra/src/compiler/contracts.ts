@@ -1,11 +1,13 @@
 import {
   KIND_REGISTRY,
   PROVIDER_EVENT_SOURCES,
+  keyColumn,
   makeObjectName,
   quoteIdent,
   postsMovements,
   truncatedPeriodExpression,
   standardLogicalName,
+  tabularParentColumn,
   type Attribute,
   type DatabaseProvider,
   type Dml,
@@ -41,6 +43,7 @@ import {
   type ModelStageResult,
 } from "./stages/model"
 import { isMovementQuery, type SqlUnit } from "./sql/units"
+import { findStyleFreeColumn } from "./standard-column"
 import { objectKey, type ParsedObject } from "./stages/files"
 import { standardElementId, type ResolvedReference } from "./stages/identity"
 
@@ -691,12 +694,12 @@ export function rootFamilyKey(
   main: PhysicalTable
 ): string | undefined {
   const key = main.primaryKey?.columns
-  const ref = main.columns.find((c) => c.origin.standard === "ref")
+  const ref = findStyleFreeColumn(main, keyColumn(false))
   if (key?.length !== 1 || ref === undefined || key[0] !== ref.name) {
     return undefined
   }
   if (table.origin.tabularSectionId === undefined) return ref.name
-  const parent = table.columns.find((c) => c.origin.standard === "parent")
+  const parent = findStyleFreeColumn(table, tabularParentColumn())
   if (parent === undefined) {
     throw new Error(
       `internal: tabular section ${table.schema}.${table.name} has no parent column`

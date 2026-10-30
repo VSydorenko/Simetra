@@ -570,6 +570,7 @@ export async function runStages(
         users,
       },
       physical,
+      stage1.project.naming.attributeCase,
       stage1.project.database.provider,
       module,
       parse

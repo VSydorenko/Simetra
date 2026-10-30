@@ -1,4 +1,8 @@
-import { quoteIdent, type PhysicalTable } from "simetra/model"
+import {
+  quoteIdent,
+  tabularParentColumn,
+  type PhysicalTable,
+} from "simetra/model"
 import type {
   CarrierContract,
   OwnershipContract,
@@ -11,6 +15,7 @@ import { uniformExtents } from "./contracts"
 import { RIGHTS_FUNCTIONS, call, uuidLiteral } from "./functions"
 import { sqlLiteral } from "../stages/model"
 import { must } from "./references"
+import { styleFreeColumn } from "../standard-column"
 
 /**
  * Дія контексту команди (Р2b1-5): замість літерала дії предикат кличе
@@ -191,8 +196,7 @@ function carrierColumn(
     if (copy !== undefined) return copy.name
     const key = main.primaryKey?.columns
     if (key?.length === 1 && key[0] === carrier.value) {
-      return must(table.columns.find((c) => c.origin.standard === "parent"))
-        .name
+      return styleFreeColumn(table, tabularParentColumn()).name
     }
     throw new Error(`internal: no carrier copy of ${carrier.value}`)
   }

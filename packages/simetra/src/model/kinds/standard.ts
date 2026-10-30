@@ -732,20 +732,21 @@ export function lineNumberColumn(): StandardColumnDef {
 
 /** Рядок ТЧ живе й помирає разом із власником — звідси каскад. */
 export function tabularRowColumns(keyDefault: boolean): StandardColumnDef[] {
-  return [
-    keyColumn(keyDefault),
-    {
-      logicalName: "parent",
-      physicalName: "parent_id",
-      type: { type: "UUID" },
-      notNull: true,
-      ref: "owningObject",
-      onDelete: "cascade",
-      indexed: true,
-      title: { uk: "Власник рядка", en: "Owning object" },
-    },
-    lineNumberColumn(),
-  ]
+  return [keyColumn(keyDefault), tabularParentColumn(), lineNumberColumn()]
+}
+
+/** Власник рядка ТЧ: генератори знаходять його колонку за цим визначенням. */
+export function tabularParentColumn(): StandardColumnDef {
+  return {
+    logicalName: "parent",
+    physicalName: "parent_id",
+    type: { type: "UUID" },
+    notNull: true,
+    ref: "owningObject",
+    onDelete: "cascade",
+    indexed: true,
+    title: { uk: "Власник рядка", en: "Owning object" },
+  }
 }
 
 // --- Пошук посилань -------------------------------------------------------
