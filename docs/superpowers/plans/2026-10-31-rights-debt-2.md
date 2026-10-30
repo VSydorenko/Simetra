@@ -374,7 +374,9 @@ PostgreSQL 17 (локальний стек Supabase), libpg-query.
 - [ ] **Step 6: Перевести `mechanicsLoss`.** Втрачені тригери й функції — записи
   `platformTriggers(t)` з генератором `"mechanics"` чи `"key"`; функції —
   унікальні за `schema.name` і лише зі схем `scope.schemas` (спільні поза
-  межею). Перевірки `toHaveLength`
+  межею). Реєстр замінює лише ручний перелік **кандидатів**: фільтр за
+  ідентичностями фактично вилучених `lostUnits` (тригерів і функцій)
+  лишається, бо реєстр повертає й тригери, яких таблиця не має. Перевірки `toHaveLength`
   лишаються. Тест:
   `pnpm --filter @simetrajs/designer test:db round-trip` → PASS.
 - [ ] **Step 7: Коміт.**
