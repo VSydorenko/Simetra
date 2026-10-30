@@ -269,9 +269,8 @@ describe("catalogCommandContracts", () => {
       array,
     })
     expect(named(contractOf(contracts, "ticket").references)).toEqual([
+      // Без `created_by_id`/`updated_by_id`: їх ставить платформа, не вхід.
       single("parent_id", "ticket"),
-      single("created_by_id", "users"),
-      single("updated_by_id", "users"),
       single("assignee_id", "org_member"),
       single("region_id", "region"),
       single("project_id", "project"),

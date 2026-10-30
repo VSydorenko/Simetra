@@ -1,5 +1,6 @@
 import {
   KIND_REGISTRY,
+  authorColumns,
   deletionMarkColumn,
   keyColumn,
   lineNumberColumn,
@@ -357,9 +358,18 @@ function standardReferences(
   style: AttributeCase,
   scopeColumn: string | undefined
 ): CommandReference[] {
+  // Авторство ставить платформа (`current_user_id()`), не вхід команди: оракула
+  // видимості тут немає, а перевірка під RLS «Користувачів» відмовила б
+  // користувачу без права їх читати — тому, кого описує Р-A2-14.
+  const author = new Set(authorColumns().map((a) => a.logicalName))
   const names = new Set(
     defs
-      .filter((d) => d.ref !== undefined && d.ref !== "owners")
+      .filter(
+        (d) =>
+          d.ref !== undefined &&
+          d.ref !== "owners" &&
+          !author.has(d.logicalName)
+      )
       .map((d) => findStandardColumn(table, d, style)?.name)
   )
   return table.columns

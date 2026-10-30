@@ -571,7 +571,7 @@ describe("buildCatalogCommandUnits — <t>_save", () => {
       expect(
         ifAt(
           shape,
-          "EXISTS (SELECT 1 FROM unnest(v_new.watchers) AS a(v) WHERE a.v IS NOT NULL AND a.v <> ALL (coalesce(v_old.watchers, '{}')) AND NOT EXISTS (SELECT 1 FROM public.org_member g WHERE g.id = a.v AND g.org_id = v_new.org_id))"
+          "EXISTS (SELECT 1 FROM unnest(v_new.watchers) AS a(v) WHERE a.v IS NOT NULL AND (a.v = ANY (coalesce(v_old.watchers, '{}'))) IS NOT TRUE AND NOT EXISTS (SELECT 1 FROM public.org_member g WHERE g.id = a.v AND g.org_id = v_new.org_id))"
         )
       ).toBeGreaterThan(0)
     })

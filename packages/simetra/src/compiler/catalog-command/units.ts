@@ -379,7 +379,10 @@ function referenceViolations(
     return [
       {
         column: reference.column,
-        condition: `EXISTS (SELECT 1 FROM unnest(${value}) AS a(v) WHERE a.v IS NOT NULL${old === undefined ? "" : ` AND a.v <> ALL (coalesce(${old}, '{}'))`} AND NOT ${visible(reference.target, reference.targetKey, "a.v", true)})`,
+        // Новизна елемента — `IS NOT TRUE`: `<> ALL` над старим масивом з `NULL`
+        // дає `NULL`, і новий елемент мовчки пропустив би перевірку видимості й
+        // скоупу, а FK на елементи масиву немає — це єдиний захист.
+        condition: `EXISTS (SELECT 1 FROM unnest(${value}) AS a(v) WHERE a.v IS NOT NULL${old === undefined ? "" : ` AND (a.v = ANY (coalesce(${old}, '{}'))) IS NOT TRUE`} AND NOT ${visible(reference.target, reference.targetKey, "a.v", true)})`,
       },
     ]
   }
