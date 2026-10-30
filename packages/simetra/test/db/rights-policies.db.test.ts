@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import type pg from "pg"
 import type { CompiledModel } from "simetra/compiler"
-import { renderDesiredState } from "simetra/schema"
 import {
   ATTACHMENTS_TABLE,
   CHECKLIST_TABLE,
@@ -20,16 +19,7 @@ import {
 } from "../../src/compiler/__tests__/fixtures/rights"
 import { signUp } from "./auth"
 import { queryAs } from "./connection"
-import {
-  type Assignment,
-  type Seed,
-  assignmentRow,
-  describeTransaction,
-  insert,
-  orgDeltaRow,
-  outcome,
-  set,
-} from "./rights-seed"
+import { type Assignment, type Seed, assignmentRow, describeTransaction, insert, orgDeltaRow, outcome, set, deploy } from "./rights-seed"
 
 /**
  * Політики прав читання й копії носіїв на справжньому Postgres (спека прав
@@ -319,7 +309,7 @@ describe("policies", () => {
   beforeAll(async () => {
     const model = await policyModel()
     const client = await tx.open()
-    await client.query(renderDesiredState(model).sql)
+    await deploy(client, model)
     ids = await seedPolicies(client)
   })
 

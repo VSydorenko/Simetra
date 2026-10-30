@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto"
 import pg from "pg"
+import type { CompiledModel } from "simetra/compiler"
 import { RIGHTS_MAINTENANCE_SETTING } from "simetra/model"
+import { renderDesiredState } from "simetra/schema"
 import { testDatabaseUrl } from "./connection"
 
 /**
@@ -12,15 +14,45 @@ import { testDatabaseUrl } from "./connection"
 /** Ключі засіяних рядків → їхні id. */
 export type Seed = Record<string, string>
 
+/**
+ * Таблиці прав розгорнутої моделі за клієнтом: `insert` вмикає для них режим
+ * обслуговування (Р2d2-14). Перелік — з контрактів прав моделі, а не з імені
+ * таблиці: регулярка за іменем мовчки пропустила б довідники прав нового виду
+ * скоупу (`team_*`), і засів упав би на `rights-context`.
+ */
+const rightsTables = new WeakMap<pg.Client, ReadonlySet<string>>()
+
+/** Розгортання моделі в транзакції клієнта і перелік її таблиць прав для `insert`. */
+export async function deploy(
+  client: pg.Client,
+  model: CompiledModel
+): Promise<void> {
+  await client.query(renderDesiredState(model).sql)
+  rightsTables.set(
+    client,
+    new Set(
+      model.contracts.rightsCatalogs.flatMap((c) =>
+        [c.roles.table, c.roles.delta, c.assignments.table].map(
+          (t) => `${t.schema}.${t.name}`
+        )
+      )
+    )
+  )
+}
+
 /** Рядок у таблицю `public` від власника: RLS його не обмежує. */
 export async function insert(
   client: pg.Client,
   table: string,
   values: Record<string, unknown>
 ): Promise<void> {
+  const tables = rightsTables.get(client)
+  // Без `deploy` перелік невідомий: мовчазне «не таблиця прав» дало б
+  // відмову `rights-context` замість ясної причини.
+  if (tables === undefined)
+    throw new Error("insert: deploy the model on this client first")
   const columns = Object.keys(values)
-  const rightsTable =
-    /^(?:org|global)_(?:roles(?:_delta)?|role_assignments)$/.test(table)
+  const rightsTable = tables.has(`public.${table}`)
   if (rightsTable)
     await client.query("SELECT set_config($1, 'on', true)", [
       RIGHTS_MAINTENANCE_SETTING,

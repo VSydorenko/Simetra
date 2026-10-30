@@ -6,7 +6,6 @@ import {
   PROVIDER_API_ROLES,
   type CommandContext,
 } from "simetra/model"
-import { renderDesiredState } from "simetra/schema"
 import {
   BULLETIN_TABLE,
   CHECKLIST_TABLE,
@@ -24,13 +23,7 @@ import {
 } from "../../src/compiler/__tests__/fixtures/rights"
 import { signUp } from "./auth"
 import { type Refusal, commandAs } from "./connection"
-import {
-  type Assignment,
-  type Seed,
-  assignmentRow,
-  describeTransaction,
-  insert,
-} from "./rights-seed"
+import { type Assignment, type Seed, assignmentRow, describeTransaction, insert, deploy } from "./rights-seed"
 
 /**
  * Запис під роллю команд на справжньому Postgres (спека прав §5.3, §6.2,
@@ -650,7 +643,7 @@ describe("command writes", () => {
     )
     expect(result.diagnostics).toEqual([])
     const client = await tx.open()
-    await client.query(renderDesiredState(result.model!).sql)
+    await deploy(client, result.model!)
     // Р2b1-13: DML і членство з `SET` ролі команд — лише в цій транзакції;
     // згенерований SQL їх не дає (П4).
     await client.query(

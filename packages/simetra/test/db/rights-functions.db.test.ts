@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import type pg from "pg"
 import type { CompiledModel } from "simetra/compiler"
-import { renderDesiredState } from "simetra/schema"
 import {
   EVERYONE_ID,
   GRANT_FILE,
@@ -37,17 +36,7 @@ import {
 } from "../../src/compiler/rights/predicates"
 import { signUp } from "./auth"
 import { queryAs } from "./connection"
-import {
-  type Assignment,
-  type Delta,
-  type Seed,
-  assignmentRow,
-  describeTransaction,
-  insert,
-  orgDeltaRow,
-  outcome,
-  set,
-} from "./rights-seed"
+import { type Assignment, type Delta, type Seed, assignmentRow, describeTransaction, insert, orgDeltaRow, outcome, set, deploy } from "./rights-seed"
 
 /**
  * Функції прав на справжньому Postgres (спека прав §5.1, план Права-2a1):
@@ -440,7 +429,7 @@ describe("rights functions with a scope kind", () => {
   beforeAll(async () => {
     const model = await scopeKindModel()
     const client = await tx.open()
-    await client.query(renderDesiredState(model).sql)
+    await deploy(client, model)
     ids = await seedScopeKind(client)
     const contract = model.contracts.rights.find((c) => c.objectId === TASK_ID)!
     const predicates = rightsPredicates(
@@ -531,7 +520,7 @@ describe("rights functions without scope kinds", () => {
   beforeAll(async () => {
     const model = await singleTenantModel()
     const client = await tx.open()
-    await client.query(renderDesiredState(model).sql)
+    await deploy(client, model)
     s1 = await signUp(client)
     s2 = await signUp(client)
     p1 = randomUUID()

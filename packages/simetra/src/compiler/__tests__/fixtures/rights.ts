@@ -1024,6 +1024,52 @@ export function adminRoles(): Layer {
   }
 }
 
+export const TEAM_RIGHTS_ADMIN_ID = uuid(6750)
+export const RIGHTS_ONLY_ADMIN_ID = uuid(6751)
+
+/**
+ * Ролі аналізу прав поверх `policyDomain(writeRoles(), adminRoles(),
+ * secondScopeKind())`: `TeamRightsAdmin` адмініструє права виду `team` —
+ * адміністратор іншого виду з тим самим id скоупу; `RightsOnlyAdmin`
+ * адмініструє права `org` без `read` на задачах — пояснення рядка, якого
+ * викликач не бачить (Р2d2-19).
+ */
+export function analysisRoles(): Layer {
+  return {
+    [ROLE_FILE("TeamRightsAdmin")]: role(
+      TEAM_RIGHTS_ADMIN_ID,
+      "TeamRightsAdmin",
+      { scopeKind: "team" },
+      {
+        grants: [
+          grant(
+            objects(
+              ["Catalog", "TeamRoles"],
+              ["Catalog", "TeamRoleAssignments"]
+            ),
+            ["read", "administerRights"],
+            "any"
+          ),
+        ],
+      }
+    ),
+    [ROLE_FILE("RightsOnlyAdmin")]: role(
+      RIGHTS_ONLY_ADMIN_ID,
+      "RightsOnlyAdmin",
+      { scopeKind: "org" },
+      {
+        grants: [
+          grant(
+            objects(["Catalog", "OrgRoles"], ["Catalog", "OrgRoleAssignments"]),
+            ["read", "administerRights"],
+            "any"
+          ),
+        ],
+      }
+    ),
+  }
+}
+
 /**
  * Нескоупована константа `Rate`: у глобальній ролі `Support` її `update`
  * природний для вставки й оновлення (Р2b1-7).

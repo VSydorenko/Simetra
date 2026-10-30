@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import type pg from "pg"
 import type { CompiledModel } from "simetra/compiler"
-import { renderApplyState, renderDesiredState } from "simetra/schema"
+import { renderApplyState } from "simetra/schema"
 import {
   ADOPTED_LEAD_KEY,
   ADOPTED_MEMBER_KEY,
@@ -29,14 +29,7 @@ import {
   rollbackDatabase,
   testRoleName,
 } from "./connection"
-import {
-  type Seed,
-  assignmentRow,
-  describeTransaction,
-  insert,
-  outcome,
-  set,
-} from "./rights-seed"
+import { type Seed, assignmentRow, describeTransaction, insert, outcome, set, deploy } from "./rights-seed"
 
 /**
  * Прийняті джерела прав на справжньому Postgres (спека прав §4.7, план
@@ -322,7 +315,7 @@ describe("adopted sources", () => {
       adoptedSourcesDomain(adoptedCrossKind(), activeGrants())
     )
     const client = await tx.open()
-    await client.query(renderDesiredState(model).sql)
+    await deploy(client, model)
     ids = await seedAdopted(client)
     const projection = await client.query<{
       object: string
@@ -646,7 +639,7 @@ describe("without users", () => {
       adoptedSourcesDomain(withoutUsers(), polymorphicGrants())
     )
     const client = await tx.open()
-    await client.query(renderDesiredState(model).sql)
+    await deploy(client, model)
     // Без «Користувачів» гранти схеми `simetra` дає стан застосування, а не
     // платформний шар (Р2d1-6): без них роль API не дійде до жодної функції.
     // Те саме поєднання, що застосування бере з `desiredForApply`
