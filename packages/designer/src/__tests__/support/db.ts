@@ -98,3 +98,22 @@ export async function dropRoles(...names: string[]): Promise<void> {
       `drop role if exists "${name.replaceAll('"', '""')}"`
     )
 }
+
+/**
+ * Waits until backend `pid` blocks on a heavyweight lock (row, relation or
+ * advisory), observed through `pg_stat_activity` from another session.
+ */
+export async function waitForLock(
+  observer: pg.Client,
+  pid: number
+): Promise<void> {
+  for (let waited = 0; waited < 10_000; waited += 50) {
+    const { rows } = await observer.query<{ wait_event_type: string | null }>(
+      "SELECT wait_event_type FROM pg_stat_activity WHERE pid = $1",
+      [pid]
+    )
+    if (rows[0]?.wait_event_type === "Lock") return
+    await new Promise((resolve) => setTimeout(resolve, 50))
+  }
+  throw new Error(`backend ${pid} never waited on a lock`)
+}
