@@ -221,6 +221,23 @@ export function accessPolicyNames(table: { name: string }): {
   }
 }
 
+/**
+ * Межа тенанта скоупленої таблиці — вираз `RESTRICTIVE`-політик `scope_*`.
+ * `row` — змінна рядка plpgsql: ядро команди повторює `scope_insert` над
+ * `v_new` тим самим будівником (Р-A2-15), бо предикат контейнера скоупу не
+ * має, а скоуп нового рядка задає клієнт.
+ */
+export function tenantBoundary(
+  scope: NonNullable<AccessContract["scope"]>,
+  row?: string
+): string {
+  const carrier =
+    row === undefined
+      ? quoteIdent(scope.carrier)
+      : `${row}.${quoteIdent(scope.carrier)}`
+  return `${carrier} = ANY (ARRAY(SELECT ${qualified(scope.setFunction)}()))`
+}
+
 /** Родина політики запису (Р2b1-4): кореневий рядок команди чи решта рядків. */
 export type WriteFamily = "root" | "rest"
 
@@ -361,7 +378,7 @@ export function buildAccessUnits(
         // Некорельована форма: множину скоупів планувальник обчислює раз на
         // запит, а не викликає функцію на кожен рядок (§6.8). Межа —
         // `RESTRICTIVE`: жодна `PERMISSIVE`-політика прав її не розширює.
-        const boundary = `${quoteIdent(contract.scope.carrier)} = ANY (ARRAY(SELECT ${qualified(contract.scope.setFunction)}()))`
+        const boundary = tenantBoundary(contract.scope)
         const restrict = (name: string, command: Command, clauses: Clauses) =>
           policies.push(
             policy(name, table, "RESTRICTIVE", command, bounded, clauses)
