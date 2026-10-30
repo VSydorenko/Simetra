@@ -1793,9 +1793,9 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "subscription.handler-assigns-mechanics": {
     en: (p) =>
-      `Handler ${p.function} assigns a row-mechanics column or replaces the row (${p.problem}); the platform maintains updated_at and version`,
+      `Handler ${p.function} assigns a row-mechanics column or replaces the row (${p.problem}); the platform maintains updated_at, version and the author columns created_by_id, updated_by_id`,
     uk: (p) =>
-      `Обробник ${p.function} присвоює колонку механіки рядка або підміняє рядок (${p.problem}); updated_at і version веде платформа`,
+      `Обробник ${p.function} присвоює колонку механіки рядка або підміняє рядок (${p.problem}); updated_at, version і колонки авторства created_by_id, updated_by_id веде платформа`,
     hint: {
       en: "Change other columns of NEW and return NEW, or NULL to skip the write.",
       uk: "Змінюйте інші колонки NEW і повертайте NEW або NULL, щоб пропустити запис.",
@@ -1833,9 +1833,9 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "subscription.when-changed-mechanics": {
     en: (p) =>
-      `whenChanged lists ${p.column}, which the row mechanics maintains; the trigger condition would depend on trigger order`,
+      `whenChanged lists ${p.column}, which the platform maintains (row mechanics or authorship); the trigger condition would depend on trigger order`,
     uk: (p) =>
-      `whenChanged містить ${p.column}, яку веде механіка рядка; умова тригера залежала б від порядку тригерів`,
+      `whenChanged містить ${p.column}, яку веде платформа (механіка рядка чи авторство); умова тригера залежала б від порядку тригерів`,
     hint: {
       en: "List business attributes only.",
       uk: "Перелічіть лише бізнес-реквізити.",

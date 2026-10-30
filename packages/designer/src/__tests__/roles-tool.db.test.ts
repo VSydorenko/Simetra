@@ -265,12 +265,10 @@ describe("roles: the login role", () => {
         login,
       })
       expect(again.created).toEqual([])
-      expect(new Set((again.refusal ?? []).map(asCode))).toEqual(
-        new Set([
-          `plan.platform-role-shape:${runtime}:membership-option:${command}`,
-          `plan.platform-role-shape:${command}:member:${runtime}`,
-        ])
-      )
+      expect((again.refusal ?? []).map(asCode)).toEqual([
+        `plan.platform-role-shape:${command}:member:${runtime}`,
+        `plan.platform-role-shape:${runtime}:membership-option:${command}`,
+      ])
       expect(
         platformRoleRefusals([command], await at(dbs), "target", [runtime]).map(
           asCode
@@ -346,9 +344,9 @@ describe("roles: the login role", () => {
         names: [command],
         login,
       })
-      expect((again.refusal ?? []).map(asCode)).toContain(
-        `plan.platform-role-shape:${runtime}:member:${x}`
-      )
+      expect((again.refusal ?? []).map(asCode)).toEqual([
+        `plan.platform-role-shape:${runtime}:member:${x}`,
+      ])
     })
   })
 

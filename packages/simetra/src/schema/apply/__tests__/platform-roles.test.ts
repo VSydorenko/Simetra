@@ -524,6 +524,23 @@ describe("ensurePlatformRoles", () => {
     expect(writes).toEqual([])
   })
 
+  it("reports a violation of the present login role once", async () => {
+    // Роль входу звіряють і виняток пари ролі команд, і повна звірка `roles`
+    const { dbs } = fakeCluster({
+      canCreate: { [TARGET.url]: true },
+      roles: {
+        [TARGET.url]: [
+          commandWith(),
+          loginRow({ members: [member(), member({ role: "x", set: true })] }),
+        ],
+      },
+    })
+    const outcome = await ensurePlatformRoles(dbs, [BOTH[0]!], WITH_LOGIN)
+    expect(
+      (outcome.refusal ?? []).map((d) => [d.code, d.params?.violation])
+    ).toEqual([["plan.platform-role-shape", "member:x"]])
+  })
+
   it("creates once when target and shadow share a cluster", async () => {
     const { dbs, writes } = fakeCluster({
       canCreate: { [TARGET.url]: true, [SHADOW.url]: true },

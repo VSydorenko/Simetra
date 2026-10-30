@@ -40,7 +40,8 @@ People are platform data, not tables you write yourself:
   standard `createdBy` and `updatedBy` references to the users catalog;
   without a users catalog it is an error (`users.catalog-missing`). Under a
   command the platform forces `createdBy`/`updatedBy` to the current user;
-  `createdBy` never changes; a `beforeWrite` handler may not assign them.
+  `createdBy` never changes; a `beforeWrite` handler may not assign them,
+  and a subscription may not list them in `whenChanged`.
   Outside a command (an import, a migration) whoever writes the row sets
   them.
 - **Membership.** A scoped catalog with `membership: { "user": "<attribute>" }`
@@ -81,7 +82,7 @@ with a trigger on the target table, see "Carrier copies").
   register or a recorder-subordinate information register),
   `tabularSections: true` only on a kind with tabular sections, and never a
   transition column (`posted`, the deletion mark) or an immutable column (the
-  `ref` key) in `header` (`rights.custom-action-effects`, reasons
+  `ref` key, `createdBy`, `updatedBy`) in `header` (`rights.custom-action-effects`, reasons
   `transitionColumn` and `immutableColumn`).
 - **`ownership`** — carriers whose `Ref` names the owner of a row (a member
   or a user). `"ownership": ["<attribute>", ["<ref attribute>", "<attribute>"]]`
@@ -302,7 +303,8 @@ remain platform operations.
 Direct writes without command context fail with detail `rights-context`.
 Platform tools use a maintenance mode that bypasses only the actor's grant
 subset check, preserving the in-use-role and last-holder checks. Application
-SQL must not enable it, and provider service logins cannot enable it.
+SQL must not enable it, and neither provider service logins nor the
+platform's runtime login `simetra_runtime` can enable it.
 `TRUNCATE` is refused for guarded rights, membership, user and dimension
 relation tables, including in maintenance mode.
 

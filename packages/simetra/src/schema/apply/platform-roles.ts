@@ -252,8 +252,9 @@ function grantRoleViolations(
 /**
  * Відмови плану щодо потрібних ролей одного сервера. `loginNames` — ролі
  * входу, чия пара з роллю грантів допустима (типово — ролі входу
- * платформи; тест на тегованих іменах передає свої). `login` — повна
- * звірка ролі входу, коли вона серед `required` (лише `roles`).
+ * платформи; тест на тегованих іменах передає свої). `login` — роль входу
+ * `roles`: серед `required` її звіряють повністю, а виняток пари її вже не
+ * звіряє — повну звірку робить виклик, де вона серед `required`.
  */
 export function platformRoleRefusals(
   required: readonly string[],
@@ -267,9 +268,7 @@ export function platformRoleRefusals(
     ...REQUEST_ROLES,
     ...(login?.memberOf ?? []),
   ])
-  const checkedLogins = new Set(
-    login !== undefined && required.includes(login.name) ? [login.name] : []
-  )
+  const checkedLogins = new Set(login === undefined ? [] : [login.name])
   const seen = new Set<string>()
   return required.flatMap((role) => {
     const row = found.find((r) => r.name === role)
@@ -450,7 +449,15 @@ export async function ensurePlatformRoles(
       )
       const allowed = self?.allowed === true
       const found = await readPlatformRoles(tx, [...names, ...loginNames])
-      const shape = await platformRoleGate(tx, names, loginNames, server)
+      // На цілі роль входу звіряє повна перевірка нижче: передана `login`
+      // знімає її повтор з винятку пари, тож порушення звітується один раз
+      const shape = await platformRoleGate(
+        tx,
+        names,
+        loginNames,
+        server,
+        server === "target" ? login : undefined
+      )
       const missing = names.filter(
         (name) => !found.some((r) => r.name === name)
       )
