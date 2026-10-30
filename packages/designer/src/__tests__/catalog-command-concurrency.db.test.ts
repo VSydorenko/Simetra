@@ -20,6 +20,7 @@ import {
   withSql,
   writeRoles,
 } from "../../../simetra/test/support"
+import { signUp } from "../../../simetra/test/db/auth"
 import { inTarget, waitForLock } from "./support/db"
 
 /**
@@ -73,14 +74,17 @@ async function committed(
  */
 async function seedActor(owner: pg.Client): Promise<Actor> {
   const org = randomUUID()
-  const user = randomUUID()
   const member = randomUUID()
+  let user = ""
   await committed(owner, async () => {
+    // Користувач — реєстрацією в провайдері: провізія створює і рядок
+    // «Користувачів», і ідентичність, з якої `current_user_id()` читає `sub`.
+    // Прямий рядок `users` без ідентичності дав би `NULL` і порожні права
+    user = await signUp(owner)
     await owner.query("SELECT set_config($1, 'on', true)", [
       RIGHTS_MAINTENANCE_SETTING,
     ])
     await owner.query("INSERT INTO public.organization (id) VALUES ($1)", [org])
-    await owner.query("INSERT INTO public.users (id) VALUES ($1)", [user])
     await owner.query(
       "INSERT INTO public.org_member (id, org_id, user_id) VALUES ($1, $2, $3)",
       [member, org, user]
