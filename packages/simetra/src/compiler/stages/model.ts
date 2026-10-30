@@ -2187,11 +2187,6 @@ export function hasScopeKeyUnique(table: CustomTable): boolean {
   )
 }
 
-/**
- * Колонка, на яку може посилатися FK з `Ref`: одноколонковий uuid-ключ.
- * У видів ключ дає реєстр, у прийнятої таблиці — її опис; без такого ключа
- * `Ref` на ціль неможливий (стадія 4, `reference.custom-table-key`).
- */
 /** Форма ключа цілі FK на таблицю виду (Рб1-10). */
 export type KindKey = Extract<
   CustomTable["foreignKeys"][number]["references"],
@@ -2233,6 +2228,11 @@ export function kindKeyColumns(
   return scope === undefined ? undefined : [scope.name, ref]
 }
 
+/**
+ * Колонка, на яку може посилатися FK з `Ref`: одноколонковий uuid-ключ.
+ * У видів ключ дає реєстр, у прийнятої таблиці — її опис; без такого ключа
+ * `Ref` на ціль неможливий (стадія 4, `reference.custom-table-key`).
+ */
 export function keyColumnOf(object: ParsedObject): string | undefined {
   const def = KIND_REGISTRY[object.kind]
   const data = object.data as Element
