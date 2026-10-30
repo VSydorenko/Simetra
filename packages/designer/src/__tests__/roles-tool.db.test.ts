@@ -265,12 +265,10 @@ describe("roles: the login role", () => {
         login,
       })
       expect(again.created).toEqual([])
-      expect(new Set((again.refusal ?? []).map(asCode))).toEqual(
-        new Set([
-          `plan.platform-role-shape:${runtime}:membership-option:${command}`,
-          `plan.platform-role-shape:${command}:member:${runtime}`,
-        ])
-      )
+      expect((again.refusal ?? []).map(asCode)).toEqual([
+        `plan.platform-role-shape:${command}:member:${runtime}`,
+        `plan.platform-role-shape:${runtime}:membership-option:${command}`,
+      ])
       expect(
         platformRoleRefusals([command], await at(dbs), "target", [runtime]).map(
           asCode
@@ -346,9 +344,30 @@ describe("roles: the login role", () => {
         names: [command],
         login,
       })
-      expect((again.refusal ?? []).map(asCode)).toContain(
-        `plan.platform-role-shape:${runtime}:member:${x}`
+      expect((again.refusal ?? []).map(asCode)).toEqual([
+        `plan.platform-role-shape:${runtime}:member:${x}`,
+      ])
+    })
+  })
+
+  // §6.16 п. 2: що член з ADMIN має CREATEROLE, бачить лише каталог Postgres
+  it("the gate refuses a request role with CREATEROLE that administers the command role", async () => {
+    await withRollback(async (client) => {
+      const dbs = rollbackDatabase(client)
+      await ensurePlatformRoles(dbs, TARGET, { names: [command] })
+      const request = testRoleName("request")
+      await client.query(`CREATE ROLE ${request} NOLOGIN CREATEROLE`)
+      await client.query(
+        `GRANT ${command} TO ${request} WITH ADMIN TRUE, INHERIT FALSE, SET FALSE`
       )
+      const gate = await dbs.transaction(TARGET[0]!.db, "rollback", (tx) =>
+        platformRoleGate(tx, [command], [runtime], "target", undefined, [
+          request,
+        ])
+      )
+      expect(gate.map(asCode)).toEqual([
+        `plan.platform-role-shape:${command}:request-role:${request}`,
+      ])
     })
   })
 

@@ -101,6 +101,17 @@ const REQUEST_ROLES: readonly string[] = (
   )
 )
 
+/**
+ * Ролі запиту API усіх провайдерів (§6.16 п. 2): об'єднання, а не профіль
+ * одного провайдера, бо гейт `plan` провайдера не знає, а роль запиту будь-
+ * якого з них у платформній ролі небезпечна однаково.
+ */
+const DEFAULT_REQUEST_NAMES: readonly string[] = [
+  ...new Set(
+    Object.values(PROVIDER_API_ROLES).flatMap((roles) => Object.values(roles))
+  ),
+]
+
 const sortedNames = (names: Iterable<string>): string[] =>
   [...new Set(names)].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
 
@@ -194,7 +205,8 @@ const isPair = (m: {
 function loginViolation(
   found: PlatformRoleRow,
   allowed: ReadonlySet<string>,
-  expected: readonly string[]
+  expected: readonly string[],
+  requestNames: readonly string[]
 ): string | undefined {
   const attribute = ATTRIBUTES.find(
     (a) => found.attributes[a] !== (a === "login")
@@ -209,9 +221,24 @@ function loginViolation(
     found.memberOf.some((m) => m.role === p && !isPair(m))
   )
   if (option !== undefined) return `membership-option:${option}`
+  const request = requestMember(found, requestNames)
+  if (request !== undefined) return `request-role:${request}`
   const holder = found.members.find((m) => !managesOnly(m))
   return holder === undefined ? undefined : `member:${holder.role}`
 }
+
+/**
+ * Роль запиту серед членів платформної ролі в будь-якій формі (§6.16 п. 2).
+ * Навіть `ADMIN` без `INHERIT`/`SET` у ролі запиту з `CREATEROLE` дав би
+ * запиту видати членство в ролі платформи собі чи іншим.
+ */
+const requestMember = (
+  found: PlatformRoleRow,
+  requestNames: readonly string[]
+): string | undefined =>
+  sortedNames(found.members.map((m) => m.role)).find((m) =>
+    requestNames.includes(m)
+  )
 
 /**
  * Перше порушення безпечної форми ролі грантів (Р2a1-2): без жодного
@@ -227,13 +254,20 @@ function grantRoleViolations(
   found: PlatformRoleRow,
   rows: readonly PlatformRoleRow[],
   loginNames: readonly string[],
+  requestNames: readonly string[],
   allowedParents: ReadonlySet<string>,
   checkedLogins: ReadonlySet<string>
 ): { role: string; violation: string }[] {
   const role = found.name
   const attribute = ATTRIBUTES.find((a) => found.attributes[a])
   if (attribute !== undefined) return [{ role, violation: attribute }]
-  const [parent] = sortedNames(found.memberOf.map((m) => m.role))
+  const parents = sortedNames(found.memberOf.map((m) => m.role))
+  const request =
+    parents.find((p) => requestNames.includes(p)) ??
+    requestMember(found, requestNames)
+  if (request !== undefined)
+    return [{ role, violation: `request-role:${request}` }]
+  const [parent] = parents
   if (parent !== undefined) return [{ role, violation: `member-of:${parent}` }]
   const logins: { role: string; violation: string }[] = []
   for (const name of sortedNames(found.members.map((m) => m.role))) {
@@ -243,7 +277,7 @@ function grantRoleViolations(
     if (!loginNames.includes(name) || !own.every(isPair) || login === undefined)
       return [{ role, violation: `member:${name}` }]
     if (checkedLogins.has(name)) continue
-    const broken = loginViolation(login, allowedParents, [])
+    const broken = loginViolation(login, allowedParents, [], requestNames)
     if (broken !== undefined) logins.push({ role: name, violation: broken })
   }
   return logins
@@ -252,24 +286,26 @@ function grantRoleViolations(
 /**
  * Відмови плану щодо потрібних ролей одного сервера. `loginNames` — ролі
  * входу, чия пара з роллю грантів допустима (типово — ролі входу
- * платформи; тест на тегованих іменах передає свої). `login` — повна
- * звірка ролі входу, коли вона серед `required` (лише `roles`).
+ * платформи; тест на тегованих іменах передає свої). `login` — роль входу
+ * `roles`: серед `required` її звіряють повністю, а виняток пари її вже не
+ * звіряє — повну звірку робить виклик, де вона серед `required`.
+ * `requestNames` — ролі запиту API, які не можуть бути членами платформних
+ * ролей і мати їх членами (типово — усіх провайдерів; тест передає теговані).
  */
 export function platformRoleRefusals(
   required: readonly string[],
   found: readonly PlatformRoleRow[],
   server: RoleServer,
   loginNames: readonly string[] = DEFAULT_LOGIN_NAMES,
-  login?: PlatformLoginRole
+  login?: PlatformLoginRole,
+  requestNames: readonly string[] = DEFAULT_REQUEST_NAMES
 ): EngineDiagnostic[] {
   const allowedParents = new Set([
     ...required,
     ...REQUEST_ROLES,
     ...(login?.memberOf ?? []),
   ])
-  const checkedLogins = new Set(
-    login !== undefined && required.includes(login.name) ? [login.name] : []
-  )
+  const checkedLogins = new Set(login === undefined ? [] : [login.name])
   const seen = new Set<string>()
   return required.flatMap((role) => {
     const row = found.find((r) => r.name === role)
@@ -286,7 +322,8 @@ export function platformRoleRefusals(
             const violation = loginViolation(
               row,
               new Set(login.memberOf),
-              login.memberOf
+              login.memberOf,
+              requestNames
             )
             return violation === undefined ? [] : [{ role, violation }]
           })()
@@ -294,6 +331,7 @@ export function platformRoleRefusals(
             row,
             found,
             loginNames,
+            requestNames,
             allowedParents,
             checkedLogins
           )
@@ -324,14 +362,16 @@ export async function platformRoleGate(
   required: readonly string[],
   loginNames: readonly string[],
   server: RoleServer,
-  login?: PlatformLoginRole
+  login?: PlatformLoginRole,
+  requestNames: readonly string[] = DEFAULT_REQUEST_NAMES
 ): Promise<EngineDiagnostic[]> {
   return platformRoleRefusals(
     required,
     await readPlatformRoles(tx, [...required, ...loginNames]),
     server,
     loginNames,
-    login
+    login,
+    requestNames
   )
 }
 
@@ -450,7 +490,15 @@ export async function ensurePlatformRoles(
       )
       const allowed = self?.allowed === true
       const found = await readPlatformRoles(tx, [...names, ...loginNames])
-      const shape = await platformRoleGate(tx, names, loginNames, server)
+      // На цілі роль входу звіряє повна перевірка нижче: передана `login`
+      // знімає її повтор з винятку пари, тож порушення звітується один раз
+      const shape = await platformRoleGate(
+        tx,
+        names,
+        loginNames,
+        server,
+        server === "target" ? login : undefined
+      )
       const missing = names.filter(
         (name) => !found.some((r) => r.name === name)
       )

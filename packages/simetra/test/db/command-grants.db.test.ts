@@ -337,7 +337,7 @@ describe("runtime login role", () => {
       )
       if (present.length === 0)
         throw new Error(
-          `role ${RUNTIME} is missing: it comes from supabase/roles.sql, which applies when the local stack starts (pnpm db:stop && pnpm db:start)`
+          `role ${RUNTIME} is missing: it comes from supabase/roles.sql; apply it to the running stack as the header of that file says`
         )
       await client.query("SET ROLE postgres")
       await client.query(renderDesiredState(model).sql)

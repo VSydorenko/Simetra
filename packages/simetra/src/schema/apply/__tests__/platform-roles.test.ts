@@ -151,9 +151,9 @@ describe("platformRoleRefusals", () => {
     },
     {
       case: "member-of",
-      found: [row({ memberOf: [pair("authenticated")] })],
+      found: [row({ memberOf: [pair("pg_read_all_data")] })],
       codes: ["plan.platform-role-shape"],
-      violation: "member-of:authenticated",
+      violation: "member-of:pg_read_all_data",
     },
     {
       case: "set-member",
@@ -200,6 +200,61 @@ describe("platformRoleRefusals", () => {
         expect(refusals[0]?.params?.violation).toBe(violation)
     }
   )
+
+  // §6.16 п. 2: роль запиту й платформна роль не члени одна одної в жодній
+  // формі — навіть ADMIN-керівник з CREATEROLE видав би запиту членство
+  it.each([
+    {
+      case: "an ADMIN manager request role",
+      found: [row({ members: [member(), member({ role: "authenticated" })] })],
+      violation: "request-role:authenticated",
+    },
+    {
+      case: "a SET member request role",
+      found: [
+        row({
+          members: [
+            member(),
+            member({ role: "anon", admin: false, set: true, manager: false }),
+          ],
+        }),
+      ],
+      violation: "request-role:anon",
+    },
+    {
+      case: "a member of a request role",
+      found: [row({ memberOf: [pair("service_role", { set: false })] })],
+      violation: "request-role:service_role",
+    },
+  ])("refuses the command role with $case", ({ found, violation }) => {
+    expect(
+      platformRoleRefusals([COMMAND], found, "target").map((d) => [
+        d.code,
+        d.params?.role,
+        d.params?.violation,
+      ])
+    ).toEqual([["plan.platform-role-shape", COMMAND, violation]])
+  })
+
+  it("refuses a request role that manages the login role", () => {
+    const login = loginRow({
+      members: [member(), member({ role: "authenticated" })],
+    })
+    expect(
+      platformRoleRefusals([COMMAND], [commandWith(), login], "target").map(
+        (d) => [d.params?.role, d.params?.violation]
+      )
+    ).toEqual([[RUNTIME, "request-role:authenticated"]])
+  })
+
+  it("checks the request roles it is given instead of the provider ones", () => {
+    const found = [row({ members: [member(), member({ role: "tagged_req" })] })]
+    expect(
+      platformRoleRefusals([COMMAND], found, "target", undefined, undefined, [
+        "tagged_req",
+      ]).map((d) => d.params?.violation)
+    ).toEqual(["request-role:tagged_req"])
+  })
 
   it("names the first violation in a fixed order", () => {
     const refusals = platformRoleRefusals(
@@ -522,6 +577,23 @@ describe("ensurePlatformRoles", () => {
       ],
     })
     expect(writes).toEqual([])
+  })
+
+  it("reports a violation of the present login role once", async () => {
+    // Роль входу звіряють і виняток пари ролі команд, і повна звірка `roles`
+    const { dbs } = fakeCluster({
+      canCreate: { [TARGET.url]: true },
+      roles: {
+        [TARGET.url]: [
+          commandWith(),
+          loginRow({ members: [member(), member({ role: "x", set: true })] }),
+        ],
+      },
+    })
+    const outcome = await ensurePlatformRoles(dbs, [BOTH[0]!], WITH_LOGIN)
+    expect(
+      (outcome.refusal ?? []).map((d) => [d.code, d.params?.violation])
+    ).toEqual([["plan.platform-role-shape", "member:x"]])
   })
 
   it("creates once when target and shadow share a cluster", async () => {

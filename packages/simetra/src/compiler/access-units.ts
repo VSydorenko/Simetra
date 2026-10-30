@@ -3,15 +3,9 @@ import {
   PLATFORM_ROLES,
   PROVIDER_API_ROLES,
   PUBLIC_READ_PURPOSES,
-  authorColumns,
   makeObjectName,
-  predefinedNameColumn,
   quoteIdent,
-  serviceDateColumns,
-  standardLogicalName,
   toSnakeCase,
-  userPlatformColumns,
-  versionColumn,
   type ApiRolePurpose,
   type AttributeCase,
   type DatabaseProvider,
@@ -33,6 +27,7 @@ import {
   type RightsContract,
 } from "./contracts"
 import { compareStrings } from "./diagnostics"
+import { commandWriteColumns } from "./rights/command-columns"
 import { COMMAND_FUNCTIONS } from "./rights/command-units"
 import {
   RIGHTS_FUNCTIONS,
@@ -137,29 +132,11 @@ export function accessContracts(
 }
 
 /**
- * Колонки, яких роль команд не пише ніколи (спека П4 §6.2): механіку,
- * авторство й `predefined_name` пишуть значення за замовчуванням і тригери.
- * Імена — з визначень реєстру в стилі проєкту, як їх несе `origin.standard`.
- */
-function platformWrittenNames(attributeCase: AttributeCase): Set<string> {
-  return new Set(
-    [
-      versionColumn(),
-      ...serviceDateColumns(),
-      ...authorColumns(),
-      predefinedNameColumn(),
-    ].map((def) => standardLogicalName(def, attributeCase))
-  )
-}
-
-/**
  * Поколонковий запис ролі команд у таблицю довідника (спека П4 §6.2,
- * Р-A1-11). Колонку визначає походження, а не фізичне ім'я: ієрархічний
- * `parent_id` основної таблиці — зміст (перенесення між групами), а
- * однойменна колонка власника рядка ТЧ — ні. Вставка не задає переходів
- * (беруть значення за замовчуванням, змінює їх лише дія-перехід); зміна не
- * чіпає ключа, скоупу, власника рядка ТЧ і платформних реквізитів
- * «Користувачів». Колонковий грант — друга лінія за тригером ефектів.
+ * Р-A1-11): колонки — з `commandWriteColumns`, спільного з правилом шапки
+ * ефектів кастомної дії. Вставка не задає переходів (беруть значення за
+ * замовчуванням, змінює їх лише дія-перехід). Колонковий грант — друга лінія
+ * за тригером ефектів.
  */
 function commandColumns(
   table: PhysicalTable,
@@ -171,29 +148,9 @@ function commandColumns(
     roleAssignments: boolean
   }
 ): NonNullable<AccessContract["command"]> {
-  const platform = platformWrittenNames(facts.attributeCase)
-  const base = table.columns.filter(
-    (c) =>
-      c.generated === undefined &&
-      c.origin.copyOf === undefined &&
-      !platform.has(c.origin.standard ?? "")
-  )
+  const { base, update } = commandWriteColumns(table, facts)
   const transitions = new Set(facts.transitions.map((t) => t.column))
   const section = table.origin.tabularSectionId !== undefined
-  const usersFixed = new Set(
-    facts.users && facts.main
-      ? userPlatformColumns().map((def) =>
-          standardLogicalName(def, facts.attributeCase)
-        )
-      : []
-  )
-  const update = base.filter(
-    (c) =>
-      c.origin.standard !== "ref" &&
-      c.origin.scopeKindId === undefined &&
-      !(section && c.origin.standard === "parent") &&
-      !usersFixed.has(c.origin.standard ?? "")
-  )
   return {
     // Користувача створює провізія (спека системної схеми), не команда.
     insert:

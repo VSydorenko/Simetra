@@ -4,6 +4,7 @@ import type { RightsAction } from "../contracts"
 import { uniformExtents } from "../rights/contracts"
 import { kitchenSink } from "./fixtures/kitchen-sink"
 import {
+  COMMENT_FILE,
   MEMBER_REGION_ID,
   ORG_KIND_ID,
   TASK_FILE,
@@ -541,6 +542,63 @@ describe("rights contract", () => {
         expect(
           errors(result).map((d) => [d.code, d.pointer, d.params])
         ).toEqual([[code, "/customActions/0/effects/header/0", params]])
+      }
+    )
+
+    // Шапка кастомної дії довідника (вид з `commandWrites`) називає лише
+    // колонки зміни ролі команд — те саме джерело, що й грант (спека П4 §6.2).
+    // Колонка переходу — у гранті зміни, тож її відмовляє лише власне правило.
+    const headerErrors = async (file: string, name: string) =>
+      errors(
+        await compileRights(
+          policyDomain({
+            [file]: {
+              customActions: [
+                { id: uuid(7901), name: "stamp", effects: { header: [name] } },
+              ],
+            },
+          })
+        )
+      ).map((d) => [d.code, d.params])
+
+    it.each(["ref", "createdAt", "predefinedName", "updatedAt", "version"])(
+      "a catalog custom action naming %s outside the command update columns is refused",
+      async (name) => {
+        expect(await headerErrors(COMMENT_FILE, name)).toEqual([
+          [
+            "rights.custom-action-effects",
+            { action: "stamp", reason: "immutableColumn" },
+          ],
+        ])
+      }
+    )
+
+    it.each([
+      ["task", []],
+      [
+        "deletionMark",
+        [
+          [
+            "rights.custom-action-effects",
+            { action: "stamp", reason: "transitionColumn" },
+          ],
+        ],
+      ],
+    ])(
+      "a catalog custom action naming update column %s is not refused as immutable",
+      async (name, expected) => {
+        expect(await headerErrors(COMMENT_FILE, name)).toEqual(expected)
+      }
+    )
+
+    it.each(["createdAt", "predefinedName", "updatedAt", "version"])(
+      "a document custom action naming %s gets no immutable-column refusal",
+      async (name) => {
+        expect(
+          (await headerErrors(TASK_FILE, name)).filter(
+            ([code]) => code === "rights.custom-action-effects"
+          )
+        ).toEqual([])
       }
     )
 
