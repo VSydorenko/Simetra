@@ -637,6 +637,7 @@ function saveFunction(
       "v_ids uuid[];",
       "v_ts_delete bigint;",
       "v_ts_update bigint;",
+      "v_after jsonb;",
       "v_result jsonb;",
       "v_tabular jsonb;",
     ],
@@ -891,7 +892,19 @@ function sectionLines(
     }
     return `CASE WHEN x.e ? ${sqlLiteral(c)} THEN v.${q(c)} WHEN o.${key} IS NOT NULL THEN o.${q(c)} ELSE ${defaultOf(section.table, c)} END AS ${q(c)}`
   }
-  const afterRows = `${elements} LEFT JOIN ${ts} o ON o.${key} = v.${key} AND o.${parent} = ${root} CROSS JOIN LATERAL (SELECT ${afterColumns.map(afterValue).join(", ")}) AS n`
+  // Рядок «після» обчислюється один раз і зберігається у `v_after` (за
+  // порядковим номером елемента): і перевірки, і `INSERT` читають саме його.
+  // Обчислене в кожному операторі заново, нестабільне значення за
+  // замовчуванням дало б перевірці одне значення, а запису — інше.
+  const owned = `${elements} LEFT JOIN ${ts} o ON o.${key} = v.${key} AND o.${parent} = ${root}`
+  const afterOf = `CROSS JOIN LATERAL jsonb_populate_record(NULL::${ts}, v_after -> (x.ord - 1)::int) AS n`
+  const materialize =
+    afterColumns.length === 0
+      ? []
+      : [
+          `v_after := (SELECT coalesce(jsonb_agg(to_jsonb(n) ORDER BY x.ord), '[]') FROM ${owned} CROSS JOIN LATERAL (SELECT ${afterColumns.map(afterValue).join(", ")}) AS n);`,
+        ]
+  const afterRows = `${owned} ${afterOf}`
   const references = section.references.flatMap((reference) =>
     referenceViolations(reference, {
       value: (c) => `n.${q(c)}`,
@@ -920,11 +933,15 @@ function sectionLines(
     ...(section.scopeColumn === undefined
       ? []
       : [`v_new.${q(must(contract.scopeColumn))}`]),
-    ...section.rowKeys.map(
-      (c) =>
-        `CASE WHEN x.e ? ${sqlLiteral(c)} THEN v.${q(c)} ELSE ${defaultOf(section.table, c)} END`
+    // Колонки рядка «після» — рівно перевірені значення з `v_after`.
+    ...section.rowKeys.map((c) =>
+      afterColumns.includes(c)
+        ? `n.${q(c)}`
+        : `CASE WHEN x.e ? ${sqlLiteral(c)} THEN v.${q(c)} ELSE ${defaultOf(section.table, c)} END`
     ),
   ]
+  const insertRows =
+    afterColumns.length === 0 ? elements : `${elements} ${afterOf}`
   const set = [
     ...section.updateColumns.map(
       (c) =>
@@ -966,6 +983,7 @@ function sectionLines(
       `EXISTS (SELECT 1 FROM ${ts} r WHERE r.${key} = ANY (v_ids) AND r.${parent} <> ${root})`,
       [noRight]
     ),
+    ...materialize,
     ...references,
     // Рядки ТЧ — той самий механізм, що шапка (Р-A2-21): замок рядків цього
     // власника в сталому порядку ключа (дві команди не замкнуть їх навхрест)
@@ -981,7 +999,7 @@ function sectionLines(
     ...ifThen("v_count IS DISTINCT FROM v_ts_update", [noRight]),
     "BEGIN",
     ...indent([
-      `INSERT INTO ${ts} (${insertColumns.map(q).join(", ")}) SELECT ${insertValues.join(", ")} FROM ${elements} WHERE NOT EXISTS (SELECT 1 FROM ${ts} r WHERE r.${key} = v.${key} AND r.${parent} = ${root});`,
+      `INSERT INTO ${ts} (${insertColumns.map(q).join(", ")}) SELECT ${insertValues.join(", ")} FROM ${insertRows} WHERE NOT EXISTS (SELECT 1 FROM ${ts} r WHERE r.${key} = v.${key} AND r.${parent} = ${root});`,
     ]),
     "EXCEPTION WHEN unique_violation THEN",
     ...indent([

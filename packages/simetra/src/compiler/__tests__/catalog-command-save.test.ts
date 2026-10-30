@@ -270,7 +270,7 @@ describe("buildCatalogCommandUnits — <t>_save", () => {
     ])
     expect(dml("InsertStmt")).toEqual([
       tree(
-        `INSERT INTO ${ts} (id, parent_id, line_number, org_id, line_region_id, related_id, subject_type, subject_id) SELECT v.id, v_in.id, x.ord, v_new.org_id, CASE WHEN x.e ? 'line_region_id' THEN v.line_region_id ELSE NULL END, CASE WHEN x.e ? 'related_id' THEN v.related_id ELSE NULL END, CASE WHEN x.e ? 'subject_type' THEN v.subject_type ELSE NULL END, CASE WHEN x.e ? 'subject_id' THEN v.subject_id ELSE NULL END FROM ${elements} WHERE NOT EXISTS (SELECT 1 FROM ${ts} r WHERE r.id = v.id AND r.parent_id = v_in.id)`
+        `INSERT INTO ${ts} (id, parent_id, line_number, org_id, line_region_id, related_id, subject_type, subject_id) SELECT v.id, v_in.id, x.ord, v_new.org_id, n.line_region_id, n.related_id, n.subject_type, n.subject_id FROM ${elements} CROSS JOIN LATERAL jsonb_populate_record(NULL::${ts}, v_after -> (x.ord - 1)::int) AS n WHERE NOT EXISTS (SELECT 1 FROM ${ts} r WHERE r.id = v.id AND r.parent_id = v_in.id)`
       ),
     ])
     // Видимий рядок іншого власника — відмова до DML ТЧ (Р-A2-12).
@@ -361,7 +361,18 @@ describe("buildCatalogCommandUnits — <t>_save", () => {
     const items = `p_item -> 'tabular' -> '${TICKET_CHECKLIST_TABLE}'`
     const after = (c: string) =>
       `CASE WHEN x.e ? '${c}' THEN v.${c} WHEN o.id IS NOT NULL THEN o.${c} ELSE NULL END AS ${c}`
-    const rows = `jsonb_array_elements(${items}) WITH ORDINALITY AS x(e, ord) CROSS JOIN LATERAL jsonb_populate_record(NULL::${ts}, x.e) AS v LEFT JOIN ${ts} o ON o.id = v.id AND o.parent_id = v_in.id CROSS JOIN LATERAL (SELECT ${["line_region_id", "related_id", "subject_type", "subject_id"].map(after).join(", ")}) AS n`
+    const owned = `jsonb_array_elements(${items}) WITH ORDINALITY AS x(e, ord) CROSS JOIN LATERAL jsonb_populate_record(NULL::${ts}, x.e) AS v LEFT JOIN ${ts} o ON o.id = v.id AND o.parent_id = v_in.id`
+    // Рядок «після» обчислюється один раз (`v_after`) до перевірок; і
+    // перевірки, і `INSERT` читають його, а не обчислюють значення за
+    // замовчуванням заново.
+    const materialize = at(
+      shape,
+      "assign",
+      `SELECT (SELECT coalesce(jsonb_agg(to_jsonb(n) ORDER BY x.ord), '[]') FROM ${owned} CROSS JOIN LATERAL (SELECT ${["line_region_id", "related_id", "subject_type", "subject_id"].map(after).join(", ")}) AS n)`
+    )
+    expect(materialize).toBeGreaterThan(0)
+    expect(shape[materialize]!.target).toEqual({ variable: "v_after" })
+    const rows = `${owned} CROSS JOIN LATERAL jsonb_populate_record(NULL::${ts}, v_after -> (x.ord - 1)::int) AS n`
     const target = (table: string) =>
       `EXISTS (SELECT 1 FROM public.${table} g WHERE g.id = n.subject_id AND g.org_id = v_new.org_id)`
     const changed =
@@ -384,7 +395,7 @@ describe("buildCatalogCommandUnits — <t>_save", () => {
         shape,
         `EXISTS (SELECT 1 FROM ${rows} WHERE ${condition})`
       )
-      expect(check, column).toBeGreaterThan(0)
+      expect(check, column).toBeGreaterThan(materialize)
       expect(strings(shape[check + 1]!.expressions)).toEqual([
         "22023",
         "command.invalid",
