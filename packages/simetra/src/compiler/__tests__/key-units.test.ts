@@ -1,6 +1,8 @@
 import { beforeAll, describe, expect, it } from "vitest"
 import { compile, type CompiledModel } from "simetra/compiler"
+import { platformBeforeTriggerName } from "../before-trigger-names"
 import { KEY_FUNCTION, keyTriggerNames } from "../key-units"
+import { generatedTableFunctionName } from "../rights/generated-names"
 import { executeGrants } from "../sql/execute-grants"
 import type { SqlUnit } from "../sql/units"
 import {
@@ -8,6 +10,7 @@ import {
   CHECKLIST_TABLE,
   COMMENT_TABLE,
   HOURS_TABLES,
+  MEMBER_FILE,
   compileRights,
   policyDomain,
   writeRoles,
@@ -135,6 +138,28 @@ describe("buildKeyUnits", () => {
     expect(
       keyTriggers(result.model!, "public", "item").map((u) => tree(u.sql))
     ).toEqual(expected("public", "item"))
+  })
+
+  it("a long table name: BEFORE shares the platform group prefix, AFTER is clipped on its own", async () => {
+    // 50 байтів: `<t>_simetra_key` вміщується в 63, а спільний префікс групи
+    // BEFORE (за найдовшою міткою) — ні, тож дві схеми імен тут розходяться.
+    const long = "org_member_" + "x".repeat(39)
+    const result = await compileRights(
+      policyDomain(writeRoles(), { [MEMBER_FILE]: { physicalName: long } })
+    )
+    expectClean(result)
+    const before = platformBeforeTriggerName(long, "simetra_key")
+    const after = generatedTableFunctionName(long, "simetra_key_after")
+    expect(before).not.toBe(generatedTableFunctionName(long, "simetra_key"))
+    const key = "NEW.id IS DISTINCT FROM OLD.id"
+    expect(
+      keyTriggers(result.model!, "public", long).map((u) => tree(u.sql))
+    ).toEqual(
+      [
+        `CREATE TRIGGER ${before} BEFORE UPDATE ON public.${long} FOR EACH ROW WHEN (${key}) EXECUTE FUNCTION simetra.key_immutable('id')`,
+        `CREATE TRIGGER ${after} AFTER UPDATE ON public.${long} FOR EACH ROW WHEN (${key}) EXECUTE FUNCTION simetra.key_immutable('id')`,
+      ].map(tree)
+    )
   })
 
   it("one INVOKER function with an empty search_path, EXECUTE to nobody", () => {

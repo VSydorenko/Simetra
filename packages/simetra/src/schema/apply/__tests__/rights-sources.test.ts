@@ -858,4 +858,24 @@ describe("rights source input of a snake_case project", () => {
       ).catalogs
     )
   })
+
+  it("applied snake_case, desired snake_case", async () => {
+    const camel = (await compile(withRoles())).model!
+    const snake = (await compile(snakeCaseTwin(withRoles()))).model!
+    expect(
+      rightsSourceInput(
+        snake.contracts,
+        snake.physical,
+        "snake_case",
+        canonicalSnapshot(snake)
+      ).catalogs
+    ).toEqual(
+      rightsSourceInput(
+        camel.contracts,
+        camel.physical,
+        "camelCase",
+        canonicalSnapshot(camel)
+      ).catalogs
+    )
+  })
 })
