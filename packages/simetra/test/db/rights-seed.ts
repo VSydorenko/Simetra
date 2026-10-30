@@ -334,6 +334,21 @@ export async function closureRights(
 }
 
 /**
+ * Учасники засіву ядра команд: ключ користувача, організація, роль шару.
+ * Експорт — щоб сітка «ядро ≡ RLS» будувалась із того самого переліку, а не
+ * з копії.
+ */
+export const COMMAND_CORE_MEMBERS = [
+  ["tw", "A", TICKET_WRITER_ID],
+  ["to", "A", TICKET_OWN_WRITER_ID],
+  ["tr", "A", TICKET_REGION_WRITER_ID],
+  ["tp", "A", PROJECT_TICKET_WRITER_ID],
+  ["rd", "A", TICKET_READER_ID],
+  ["cw", "A", TASK_COMMENT_OWN_WRITER_ID],
+  ["tb", "B", TICKET_WRITER_ID],
+] as const
+
+/**
  * Засів ядра команд (план A2) над `policyDomain(writeRoles(),
  * commandCoreLayer())`: організації A і B; користувачі з ролями шару —
  * `tw` (`TicketWriter`), `to` (`TicketOwnWriter`), `tr` (`TicketRegionWriter`,
@@ -367,21 +382,12 @@ export async function seedCommandCore(client: pg.Client): Promise<Seed> {
 
   await create("A", "organization")
   await create("B", "organization")
-  const members = [
-    ["tw", "A", TICKET_WRITER_ID],
-    ["to", "A", TICKET_OWN_WRITER_ID],
-    ["tr", "A", TICKET_REGION_WRITER_ID],
-    ["tp", "A", PROJECT_TICKET_WRITER_ID],
-    ["rd", "A", TICKET_READER_ID],
-    ["cw", "A", TASK_COMMENT_OWN_WRITER_ID],
-    ["tb", "B", TICKET_WRITER_ID],
-  ] as const
   await create("P1", "project", { org_id: ids.A })
   await create("P2", "project", { org_id: ids.A })
   await create("PB", "project", { org_id: ids.B })
   await create("r1", "region", { org_id: ids.A })
   await create("r2", "region", { org_id: ids.A })
-  for (const [user, org, role] of members) {
+  for (const [user, org, role] of COMMAND_CORE_MEMBERS) {
     ids[user] = await signUp(client)
     const member = `${user}@${org}`
     await create(member, "org_member", { org_id: ids[org], user_id: ids[user] })
