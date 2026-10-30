@@ -41,3 +41,11 @@
   `physical.function-duplicate`; кандидат — `generatedTableFunctionName`
   (`packages/simetra/src/compiler/rights/generated-names.ts`), як у функцій
   ефектів.
+- **`USER_KIND = userPlatformColumns()[0]!`** у
+  `packages/simetra/src/compiler/rights/guard-units.ts` залежить від порядку
+  масиву реєстру: зміна порядку мовчки візьме інший реквізит. Кандидат —
+  пошук визначення за логічним іменем у реєстрі.
+- **Правило лінту стандартних імен** (`packages/simetra/eslint.standard-columns.js`)
+  не ловить порівняння через необов'язковий ланцюжок
+  (`c.origin?.standard === "…"`, вузол `ChainExpression`). Кандидат — селектор
+  і для цього вузла з кейсом у негативному тесті.
