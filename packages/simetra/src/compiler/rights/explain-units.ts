@@ -1,0 +1,411 @@
+import {
+  PLATFORM_SCHEMA,
+  quoteIdent,
+  type DatabaseProvider,
+  type PhysicalSnapshot,
+  type PhysicalTable,
+} from "simetra/model"
+import { accessPolicyNames, rightsPolicyLabel } from "../access-units"
+import {
+  mainTableOf,
+  qualified,
+  rootFamilyKey,
+  type AccessContract,
+  type Contracts,
+  type ProjectionExtent,
+  type QualifiedName,
+  type RightsContract,
+} from "../contracts"
+import { CURRENT_USER, closedFunction } from "../membership-functions"
+import { executeGrants } from "../sql/execute-grants"
+import type { SqlParser } from "../sql/parse"
+import { generatedUnit, type SqlUnit } from "../sql/units"
+import { sqlLiteral } from "../stages/model"
+import {
+  ANALYSIS_ROLES,
+  RIGHTS_FUNCTIONS,
+  ZERO_UUID,
+  analysisGate,
+  call,
+  hasRightsFunctions,
+  hasVisibleUsers,
+  param,
+  userOf,
+  uuidLiteral,
+  type AnalysisScope,
+  type RightsFunctionContracts,
+} from "./functions"
+import {
+  rightsPredicates,
+  type RightsCondition,
+  type RightsPredicate,
+} from "./predicates"
+import { must } from "./references"
+
+/** Контракти пояснення: функції прав і контракти доступу таблиць. */
+export type ExplainContracts = RightsFunctionContracts &
+  Pick<Contracts, "access">
+
+const F = RIGHTS_FUNCTIONS
+const FN = F.explain
+const USER = param(FN, "p_user")
+
+/** Рядок пояснення: стала політики й вирази без колонок рядка об'єкта. */
+interface ExplainRow {
+  policy: string
+  kind: "permissive" | "restrictive"
+  extent: string | null
+  hasRight: string
+  carrierMatch: string
+  roles: string
+}
+
+const OUTPUT: readonly [name: string, type: string][] = [
+  ["policy", "text"],
+  ["kind", "text"],
+  ["extent", "text"],
+  ["has_right", "boolean"],
+  ["carrier_match", "boolean"],
+  ["roles", "uuid[]"],
+]
+
+const NO_ROLES = "'{}'::uuid[]"
+
+/**
+ * «Чому рядок видно» (Р2d2-6, спека прав §5.1): `simetra.rights_explain` — по
+ * рядку на кожну політику читання основної таблиці об'єкта, яку бачить роль
+ * запиту користувача. Рядки будує той самий будівник предикатів і ті самі
+ * імена політик, що й `buildAccessUnits`, тож пояснення не розходиться з RLS:
+ * рядок видно ⇔ рядок межі (якщо є) має `carrier_match` і хоч один
+ * `permissive` рядок має `has_right AND carrier_match` — `RESTRICTIVE`
+ * складаються через AND, `PERMISSIVE` — через OR. Без функцій прав політик
+ * прав немає, тож і пояснювати нічого.
+ */
+export function buildExplainUnits(
+  contracts: ExplainContracts,
+  physical: PhysicalSnapshot,
+  provider: DatabaseProvider,
+  module: string,
+  parse: SqlParser
+): SqlUnit[] {
+  if (!hasRightsFunctions(contracts, provider)) return []
+  const named = OUTPUT.map(([name, type]) => `${quoteIdent(name)} ${type}`)
+  const sql = closedFunction(
+    `${qualified(FN)}(p_object text, p_row uuid, p_user uuid)`,
+    `TABLE (${named.join(", ")})`,
+    explainBody(contracts, physical, provider)
+  )
+  return [
+    sql,
+    ...executeGrants(
+      `${qualified(FN)}(text, uuid, uuid)`,
+      ANALYSIS_ROLES,
+      provider
+    ),
+  ].map((text): SqlUnit => ({
+    ...generatedUnit(text, PLATFORM_SCHEMA, parse),
+    module,
+    generator: "rightsExplain",
+  }))
+}
+
+/**
+ * Тіло: права `p_user` раз (`granted`), далі гілка на кожен підтриманий
+ * об'єкт. Гілка дає рядки, лише коли мітка збіглась, рядок є, гейт аналізу
+ * пройдено (Р2d2-3) і `p_user` належить скоупу рядка — інакше порожньо тієї
+ * самої форми, тож відповідь не каже, чи рядок існує.
+ */
+function explainBody(
+  contracts: ExplainContracts,
+  physical: PhysicalSnapshot,
+  provider: DatabaseProvider
+): string {
+  const rightsById = new Map(contracts.rights.map((c) => [c.objectId, c]))
+  const context: BranchContext = {
+    contracts,
+    label: rightsPolicyLabel(contracts),
+    visibleUsers: hasVisibleUsers(contracts, provider),
+  }
+  const branches = contracts.access.flatMap((access) => {
+    const rights =
+      access.rights === undefined
+        ? undefined
+        : rightsById.get(access.rights.objectId)
+    if (rights === undefined) return []
+    const main = must(mainTableOf(physical, rights.objectId))
+    if (main.schema !== access.table.schema || main.name !== access.table.name)
+      return []
+    // Рядок названо одним `p_row` лише за одноколонковим uuid-ключем `ref`:
+    // регістр (реєстратор і рядок) і константа пояснення не мають; рядок ТЧ
+    // пояснює рядок власника.
+    const key = rootFamilyKey(main, main)
+    if (key === undefined) return []
+    return branch(access, rights, main, key, context) ?? []
+  })
+  if (branches.length === 0) {
+    return `SELECT ${OUTPUT.map(([name, type]) => `NULL::${type} AS ${name}`).join(", ")} WHERE false`
+  }
+  return [
+    "WITH granted AS (",
+    "  SELECT d.level, d.scope, d.container, d.object, d.action, d.extent, d.dimension_id, d.role_id, d.custom_role",
+    `  FROM ${call(F.detailOf, [USER])} d`,
+    ")",
+    branches.join("\nUNION ALL\n"),
+  ].join("\n")
+}
+
+interface BranchContext {
+  contracts: ExplainContracts
+  label: (predicate: RightsPredicate, contract: RightsContract) => string
+  visibleUsers: boolean
+}
+
+/**
+ * Гілка об'єкта: рядки пояснення його основної таблиці під гейтом. Таблицю
+ * без жодної політики читання не відкриває ніщо — гілки немає, і пояснення
+ * порожнє, як для невідомої мітки.
+ */
+function branch(
+  access: AccessContract,
+  rights: RightsContract,
+  main: PhysicalTable,
+  key: string,
+  { contracts, label, visibleUsers }: BranchContext
+): string | undefined {
+  const names = accessPolicyNames(access.table)
+  const publicRead = access.publicRead.length > 0
+  const rows: ExplainRow[] = []
+  const { scope } = access
+  // Межі — ті самі умови, що вирішують, чи `buildAccessUnits` ставить
+  // політику межі: інакше пояснення назвало б політику, якої немає.
+  if (scope !== undefined && !publicRead) {
+    rows.push({
+      policy: names.scopeRead,
+      kind: "restrictive",
+      extent: null,
+      hasRight: "TRUE",
+      carrierMatch: scopeSetMatch(contracts, scope, row(scope.carrier)),
+      roles: NO_ROLES,
+    })
+  }
+  if (visibleUsers && access.users) {
+    rows.push({
+      policy: names.scopeRead,
+      kind: "restrictive",
+      extent: null,
+      hasRight: "TRUE",
+      carrierMatch: inSet(
+        call(F.visibleUsersOf, [USER]),
+        row(must(contracts.users).keyColumn)
+      ),
+      roles: NO_ROLES,
+    })
+  }
+  if (publicRead) {
+    rows.push({
+      policy: names.publicRead,
+      kind: "permissive",
+      extent: null,
+      hasRight: "TRUE",
+      carrierMatch: "TRUE",
+      roles: NO_ROLES,
+    })
+  } else if (rights.actions.some((a) => a.action === "read")) {
+    const dimensions = new Map(
+      contracts.accessDimensions.map((d) => [uuidLiteral(d.dimensionId), d])
+    )
+    for (const predicate of rightsPredicates(rights, "read", main, main)) {
+      rows.push(
+        predicateRow(
+          predicate,
+          rights,
+          names.rights(label(predicate, rights)),
+          contracts,
+          dimensions
+        )
+      )
+    }
+  }
+  if (rows.length === 0) return undefined
+  // Скоуп рядка задає вид скоупу об'єкта й колонка скоупу рядка;
+  // нескоуплений об'єкт питає лише глобальний адміністратор (Р2d2-3).
+  const request: AnalysisScope =
+    scope === undefined
+      ? { kind: uuidLiteral(ZERO_UUID), scope: uuidLiteral(ZERO_UUID) }
+      : { kind: uuidLiteral(scope.scopeKindId), scope: row(scope.carrier) }
+  const where = [
+    `${param(FN, "p_object")} = ${sqlLiteral(rights.kindLabel)}`,
+    `${row(key)} = ${param(FN, "p_row")}`,
+    analysisGate(contracts, request),
+    // `p_user` мусить належати скоупу рядка (Р2d2-6): адміністратор A не
+    // дізнається фактів користувача, що належить лише B. Рядок `publicRead`
+    // видно кожному — пояснення фактів `p_user` не розкриває.
+    ...(scope !== undefined && !publicRead
+      ? [
+          `EXISTS (SELECT 1 FROM ${call(F.scopesOf, [USER])} s WHERE s.scope_kind_id = ${uuidLiteral(scope.scopeKindId)} AND s.scope = ${row(scope.carrier)})`,
+        ]
+      : []),
+  ]
+  return [
+    "SELECT e.policy, e.kind, e.extent, e.has_right, e.carrier_match, e.roles",
+    `FROM ${qualified(access.table)} r`,
+    "CROSS JOIN LATERAL (",
+    rows.map(renderRow).join("\n  UNION ALL\n"),
+    ") e",
+    `WHERE ${where.join("\n  AND ")}`,
+  ].join("\n")
+}
+
+/**
+ * Рядок предиката: умова гранту — `has_right` і `roles`, решта умов —
+ * `carrier_match`. AND тих самих умов, що в політиці, лише розкладений на дві
+ * частини, тож `has_right AND carrier_match` = `USING` політики для `p_user`.
+ */
+function predicateRow(
+  predicate: RightsPredicate,
+  rights: RightsContract,
+  policy: string,
+  contracts: ExplainContracts,
+  dimensions: ReadonlyMap<string, ExplainContracts["accessDimensions"][number]>
+): ExplainRow {
+  const grants = predicate.conditions.filter(isGrant)
+  if (grants.length !== 1) throw new Error("internal: one grant per predicate")
+  const grant = must(grants[0])
+  const filter = grantFilter(predicate, grant, rights)
+  const mine = predicate.conditions.filter((c) => !isGrant(c))
+  const { inner } = extentOf(predicate)
+  return {
+    policy,
+    kind: "permissive",
+    extent: typeof inner === "string" ? inner : "dimension",
+    hasRight: `EXISTS (SELECT 1 FROM granted g WHERE ${filter})`,
+    carrierMatch:
+      mine.length === 0
+        ? "TRUE"
+        : mine
+            .map((condition) => carrierMatch(condition, contracts, dimensions))
+            .join(" AND "),
+    roles: `ARRAY(SELECT DISTINCT x.role FROM granted g CROSS JOIN LATERAL (VALUES (g.role_id), (g.custom_role)) AS x(role) WHERE ${filter} AND x.role IS NOT NULL ORDER BY x.role)`,
+  }
+}
+
+const isGrant = (condition: RightsCondition) =>
+  condition.kind === "boolean" ||
+  (condition.kind === "column" && condition.grantDependent)
+
+/**
+ * Рядки прав `p_user`, що дають грант предиката (Р2d2-6), — ті самі, що
+ * читає функція множини політики (Р2a1-19): скоуплений об'єкт — рядки рівня
+ * скоупу зі скоупом рядка (`rights_any`/`own`/`dim`), контейнерний предикат —
+ * рядки рівня контейнера з контейнером рядка (`rights_container`),
+ * нескоуплений — будь-які рядки, крім контейнерних (`has_right`).
+ */
+function grantFilter(
+  predicate: RightsPredicate,
+  grant: RightsCondition,
+  rights: RightsContract
+): string {
+  const { inner, container } = extentOf(predicate)
+  const [name, dimension] =
+    typeof inner === "string"
+      ? [inner, "NULL"]
+      : ["dimension", uuidLiteral(inner.dimensionId)]
+  const column = columnOf(grant)
+  const level =
+    column === undefined
+      ? "g.level <> 'container'"
+      : container
+        ? `g.level = 'container' AND g.container = ${row(column)}`
+        : `g.level = 'scope' AND g.scope = ${row(column)}`
+  return `${level} AND g.object = ${sqlLiteral(rights.kindLabel)} AND g.action = 'read' AND g.extent = ${sqlLiteral(name)} AND g.dimension_id IS NOT DISTINCT FROM ${dimension}`
+}
+
+/** Обсяг предиката без контейнера й чи це предикат у контейнері. */
+function extentOf(predicate: RightsPredicate): {
+  inner: ProjectionExtent
+  container: boolean
+} {
+  const { extent } = predicate
+  return typeof extent === "object" && "container" in extent
+    ? { inner: extent.inner, container: true }
+    : { inner: extent, container: false }
+}
+
+const columnOf = (condition: RightsCondition): string | undefined =>
+  condition.kind === "boolean" ? undefined : condition.column
+
+/**
+ * Носій рядка ∈ множини `p_user` (Р2d2-2): функцію множини поточного
+ * користувача замінює її варіант `_of` з `p_user`. Дослівна функція виміру
+ * знає лише поточного користувача: для себе — вона сама, для іншого —
+ * `NULL` (невідомо), а не FALSE.
+ */
+function carrierMatch(
+  condition: RightsCondition,
+  contracts: ExplainContracts,
+  dimensions: ReadonlyMap<string, ExplainContracts["accessDimensions"][number]>
+): string {
+  switch (condition.kind) {
+    case "currentUser":
+      // Носій на «Користувачів» — сам `p_user`, лише дійсний, як у
+      // `current_user_id()`; недійсний — FALSE, як і порожня множина.
+      return `COALESCE(${row(condition.column)} = ${userOf(FN, contracts).user}, FALSE)`
+    case "column": {
+      const { fn, args } = condition.set
+      const column = row(condition.column)
+      if (same(fn, F.myMembers)) {
+        return inSet(call(F.membersOf, [USER, ...args]), column)
+      }
+      if (same(fn, F.dimensionValues)) {
+        const dimension = must(dimensions.get(must(args[0])))
+        return "function" in dimension.values
+          ? currentOnly(inSet(call(fn, args), column))
+          : inSet(call(F.dimensionValuesOf, [USER, ...args]), column)
+      }
+      throw new Error(`internal: no analysis variant of ${qualified(fn)}`)
+    }
+    case "boolean":
+      throw new Error("internal: a boolean condition is always a grant")
+  }
+}
+
+/**
+ * Межа тенанта: скоуп рядка ∈ множини скоупів `p_user`. Функцію множини
+ * членства має варіант `rights_scope_set_of`; дослівна функція множини знає
+ * лише поточного користувача.
+ */
+function scopeSetMatch(
+  contracts: ExplainContracts,
+  scope: NonNullable<AccessContract["scope"]>,
+  column: string
+): string {
+  const membership = contracts.membership.some(
+    (m) =>
+      m.scopeKindId === scope.scopeKindId &&
+      m.setFunction !== undefined &&
+      same(m.setFunction, scope.setFunction)
+  )
+  return membership
+    ? inSet(call(F.scopeSetOf, [USER, uuidLiteral(scope.scopeKindId)]), column)
+    : currentOnly(inSet(call(scope.setFunction), column))
+}
+
+/** Для іншого користувача множина невідома — `NULL`, а не FALSE. */
+const currentOnly = (match: string) =>
+  `CASE WHEN ${USER} = ${CURRENT_USER} THEN ${match} ELSE NULL END`
+
+/**
+ * Значення ∈ множини — строго TRUE чи FALSE: `EXISTS` істинний рівно тоді,
+ * коли істинне `= ANY` політики, а `NULL` носія не робить відповідь невідомою.
+ */
+const inSet = (set: string, column: string) =>
+  `EXISTS (SELECT 1 FROM ${set} AS v(value) WHERE v.value = ${column})`
+
+const row = (column: string) => `r.${quoteIdent(column)}`
+
+const same = (a: QualifiedName, b: QualifiedName) =>
+  a.schema === b.schema && a.name === b.name
+
+function renderRow(r: ExplainRow): string {
+  return `  SELECT ${sqlLiteral(r.policy)}::text AS policy, ${sqlLiteral(r.kind)}::text AS kind, ${r.extent === null ? "NULL" : sqlLiteral(r.extent)}::text AS extent, ${r.hasRight} AS has_right, ${r.carrierMatch} AS carrier_match, ${r.roles} AS roles`
+}

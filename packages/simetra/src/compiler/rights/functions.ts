@@ -80,6 +80,7 @@ export const RIGHTS_FUNCTIONS = {
   visibleUsersOf: platform("rights_visible_users_of"),
   member: platform("rights_member"),
   who: platform("rights_who"),
+  explain: platform("rights_explain"),
   journalOf: platform("rights_journal_of"),
 } as const satisfies Record<string, QualifiedName>
 
@@ -89,7 +90,7 @@ export const RIGHTS_FUNCTIONS = {
  * іншим користувачем, тож друга реалізація призначень, дельт, замикання чи
  * «моїх скоупів» неможлива.
  */
-interface RightsUser {
+export interface RightsUser {
   /** Дійсний користувач чи `NULL` — некорельований вираз. */
   user: string
   /** Множина «мої скоупи» цього користувача. */
@@ -117,7 +118,7 @@ const CURRENT: RightsUser = {
  * не визначена, тож аргумент — як є. Вкладені множини кличуть варіанти з
  * тим самим аргументом: кожен перевіряє дійсність сам.
  */
-function userOf(
+export function userOf(
   fn: QualifiedName,
   contracts: RightsFunctionContracts
 ): RightsUser {
@@ -146,7 +147,7 @@ const SET_ROLES: readonly GrantPurpose[] = ["user", "service", "command"]
  * Хто виконує функції аналізу прав (Р2d2-1): без сервісної ролі — у неї немає
  * користувача, а аналіз розкриває чужі права.
  */
-const ANALYSIS_ROLES: readonly GrantPurpose[] = ["user", "command"]
+export const ANALYSIS_ROLES: readonly GrantPurpose[] = ["user", "command"]
 
 /** Контракти, з яких генератор будує функції (Р2a1-22, Р2a1-24). */
 export type RightsFunctionContracts = Pick<
@@ -1634,7 +1635,7 @@ function scopeSetOfBody(
 // --- Функції аналізу ------------------------------------------------------
 
 /** Аргументи скоупу запиту функції аналізу. */
-interface AnalysisScope {
+export interface AnalysisScope {
   kind: string
   scope: string
 }
@@ -1657,7 +1658,7 @@ function globalScope({ kind, scope }: AnalysisScope): string {
  * порожньо, без помилки. Рівень без довідника призначень (його покриває
  * прийняте джерело) гейта не проходить.
  */
-function analysisGate(
+export function analysisGate(
   contracts: RightsFunctionContracts,
   request: AnalysisScope
 ): string {
@@ -1933,7 +1934,7 @@ export function call(fn: QualifiedName, args: readonly string[] = []): string {
  * Параметр, кваліфікований іменем функції: колонка з тим самим іменем у
  * тілі SQL-функції перемогла б параметр.
  */
-function param(fn: QualifiedName, name: string): string {
+export function param(fn: QualifiedName, name: string): string {
   return `${quoteIdent(fn.name)}.${name}`
 }
 

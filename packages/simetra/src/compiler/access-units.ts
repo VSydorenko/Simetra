@@ -260,15 +260,7 @@ export function buildAccessUnits(
   const rightsOn = hasRightsFunctions(contracts, provider)
   const visibleUsers = hasVisibleUsers(contracts, provider)
   const rightsById = new Map(contracts.rights.map((c) => [c.objectId, c]))
-  const labels = {
-    container: new Map(contracts.rights.map((c) => [c.objectId, c.kindLabel])),
-    dimension: new Map(
-      contracts.accessDimensions.map((d) => [
-        d.dimensionId,
-        toSnakeCase(d.name),
-      ])
-    ),
-  }
+  const policyLabel = rightsPolicyLabel(contracts)
   return access
     .flatMap((contract) => {
       const { table } = contract
@@ -357,7 +349,7 @@ export function buildAccessUnits(
         )) {
           policies.push(
             policy(
-              names.rights(rightsLabel(predicate, rights, labels)),
+              names.rights(policyLabel(predicate, rights)),
               table,
               "PERMISSIVE",
               "SELECT",
@@ -380,7 +372,7 @@ export function buildAccessUnits(
               physicalTable,
               must(mainTableOf(physical, rights.objectId)),
               names,
-              (predicate) => rightsLabel(predicate, rights, labels)
+              (predicate) => policyLabel(predicate, rights)
             )
           )
         }
@@ -498,8 +490,24 @@ function writePolicies(
 /**
  * Мітка політики прав без `read_` (Р2a2-2): обсяг, у контейнері —
  * `in_<мітка контейнера>_<обсяг>`; кілька носіїв власності розрізняє колонка
- * носія в цій таблиці.
+ * носія в цій таблиці. Одне місце для політик і для пояснення видимості
+ * (Р2d2-6): ім'я рядка пояснення — рівно ім'я політики, яку він пояснює.
  */
+export function rightsPolicyLabel(
+  contracts: Pick<Contracts, "rights" | "accessDimensions">
+): (predicate: RightsPredicate, contract: RightsContract) => string {
+  const labels = {
+    container: new Map(contracts.rights.map((c) => [c.objectId, c.kindLabel])),
+    dimension: new Map(
+      contracts.accessDimensions.map((d) => [
+        d.dimensionId,
+        toSnakeCase(d.name),
+      ])
+    ),
+  }
+  return (predicate, contract) => rightsLabel(predicate, contract, labels)
+}
+
 function rightsLabel(
   predicate: RightsPredicate,
   contract: RightsContract,

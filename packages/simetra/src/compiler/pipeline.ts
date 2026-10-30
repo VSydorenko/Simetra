@@ -41,6 +41,7 @@ import {
   sourceContracts,
 } from "./rights/contracts"
 import { buildRightsUnits } from "./rights/functions"
+import { buildExplainUnits } from "./rights/explain-units"
 import { buildRightsGuardUnits } from "./rights/guard-units"
 import { scopeKindUnreadWarnings } from "./rights/scope-kind-warnings"
 import {
@@ -553,6 +554,24 @@ export async function runStages(
       module,
       parse
     ),
+    ...buildExplainUnits(
+      {
+        access,
+        rights,
+        roles,
+        rightsProjection: projection.rows,
+        rightsCatalogs,
+        accessDimensions,
+        membership,
+        membershipSources: sources.membershipSources,
+        assignmentSources: sources.assignmentSources,
+        users,
+      },
+      physical,
+      stage1.project.database.provider,
+      module,
+      parse
+    ),
     ...buildRightsGuardUnits(
       {
         rights,
@@ -614,6 +633,8 @@ export async function runStages(
     // Функції прав спільні для всіх об'єктів — власника немає.
     rights: (unit) => `the rights function ${unit.name}`,
     rightsGuards: (unit) => `the rights guard of ${name(unit.ownerObjectId)}`,
+    // Пояснення видимості спільне для всіх об'єктів — власника немає.
+    rightsExplain: (unit) => `the rights explain function ${unit.name}`,
     carriers: (unit) => `the carrier copies of ${name(unit.ownerObjectId)}`,
     // Функції контексту команди спільні для всіх об'єктів — власника немає.
     command: (unit) => `the command context function ${unit.name}`,

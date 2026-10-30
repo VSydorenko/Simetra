@@ -83,6 +83,7 @@ export type UnitGenerator =
   | "subscription"
   | "rights"
   | "rightsGuards"
+  | "rightsExplain"
   | "carriers"
   | "command"
   | "effects"
@@ -106,6 +107,7 @@ const FIXED_BODY: Readonly<Record<UnitGenerator, boolean>> = {
   subscription: true,
   rights: true,
   rightsGuards: true,
+  rightsExplain: true,
   carriers: true,
   command: true,
   effects: true,
