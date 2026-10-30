@@ -139,7 +139,7 @@ class Context {
       .join(", ")
     const text = body(columns, name)
     const tag = dollarTag(text)
-    // Порожній шлях (Р2c1-22): некваліфікована вбудована в блоці автора
+    // Порожній шлях (спека П2 §7): некваліфікована вбудована в блоці автора
     // інакше могла б розв'язатися в перевантаження іншої схеми.
     const sql =
       `CREATE OR REPLACE FUNCTION ${quoteIdent(documentTable.schema)}.${quoteIdent(name)}(p_document_id uuid)\n` +

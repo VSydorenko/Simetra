@@ -74,7 +74,7 @@ describe("renderApplyState", () => {
   })
 
   it("secures the schema once when the session user comes from the subject", async () => {
-    // Без «Користувачів» шар дає лише `current_user_id()` з `sub` (Р2d1-6):
+    // Без «Користувачів» шар дає лише `current_user_id()` з `sub` (спека користувачів §7):
     // безпеку схеми — стан застосування, і в бажаному SQL вона рівно одна.
     const result = await compileRights(
       adoptedSourcesDomain(withoutUsersLayer())

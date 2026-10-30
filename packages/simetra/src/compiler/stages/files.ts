@@ -69,8 +69,8 @@ export interface FilesStageResult {
   }[]
   moduleFiles: { file: string; ownerFile: string }[]
   /**
-   * Перелік боргу `sql-debt.json`; файла немає — порожній перелік (рішення
-   * 12 плану промоції 2b). `undefined` — файл зламаний: причину вже названо,
+   * Перелік боргу `sql-debt.json`; файла немає — порожній перелік (спека П2 §8.6).
+   * `undefined` — файл зламаний: причину вже названо,
    * а ратчет над невідомим переліком звітував би кожну одиницю боргу.
    */
   sqlDebt: string[] | undefined

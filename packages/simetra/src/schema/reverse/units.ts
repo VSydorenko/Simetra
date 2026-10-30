@@ -59,8 +59,8 @@ export interface UnitFiles {
 const qualified = (schema: string, name: string) => `${schema}.${name}`
 
 /**
- * Порядок операторів у `<Ім'я>.sql` таблиці — порядок створення (рішення
- * плану 7): функція раніше за тригер, що її викликає, далі решта.
+ * Порядок операторів у `<Ім'я>.sql` таблиці — порядок створення (спека
+ * П2 §3): функція раніше за тригер, що її викликає, далі решта.
  */
 const SIDECAR_ORDER: readonly SqlUnitClass[] = [
   "function",
@@ -169,7 +169,7 @@ function explicitVolatility(unit: CatalogUnit, parse: SqlParser): string {
   return sql
 }
 
-/** Функція, яку викликає тригер; некваліфіковане ім'я — схема проєкту (R3). */
+/** Функція, яку викликає тригер; некваліфіковане ім'я — схема проєкту. */
 function triggerFunction(
   unit: CatalogUnit,
   ctx: UnitsContext
@@ -253,10 +253,10 @@ const KEY = qualified(KEY_FUNCTION.schema, KEY_FUNCTION.name)
  * механіка рядка (`<t>_simetra_touch` і, на таблиці з копіями носіїв,
  * `<t>_simetra_touch_update`) — `simetra.touch()`, авторство
  * (`<t>_simetra_author`, `<t>_simetra_author_update`) — `simetra.author()`
- * (Р-A1-8), незмінність ключа (`<t>_simetra_key`, `<t>_simetra_key_after`) —
- * `simetra.key_immutable()` (Рб1-4), тригери копій носіїв —
- * функції носіїв таблиці (Р2a2-20), тригери ефектів — функція ефектів таблиці
- * (Р2b1-12), тригери ієрархії — функція ієрархії таблиці (Р-A2-1). Інше
+ * (спека П4 §6.8), незмінність ключа (`<t>_simetra_key`, `<t>_simetra_key_after`) —
+ * `simetra.key_immutable()` (спека прав §7), тригери копій носіїв —
+ * функції носіїв таблиці (спека промоції §9.3), тригери ефектів — функція ефектів таблиці,
+ * тригери ієрархії — функція ієрархії таблиці (спека П4 §6.6). Інше
  * ім'я — не платформний тригер.
  */
 function platformTriggerFunction(
@@ -290,11 +290,11 @@ function platformTriggerFunction(
     unit.name === triggers.propagateInsert
   )
     return qualified(functions.propagate.schema, functions.propagate.name)
-  // Тригери ієрархії (Р-A2-1): обидва кличуть одну функцію таблиці
+  // Тригери ієрархії (спека П4 §6.6): обидва кличуть одну функцію таблиці
   const hierarchy = hierarchyNames(table)
   if (unit.name === hierarchy.insert || unit.name === hierarchy.update)
     return qualified(hierarchy.fn.schema, hierarchy.fn.name)
-  // Тригери ефектів дії (Р2b1-12): обидва кличуть одну функцію таблиці
+  // Тригери ефектів дії: обидва кличуть одну функцію таблиці
   const effects = effectsTriggerNames(table)
   if (unit.name === effects.all || unit.name === effects.update) {
     const fn = effectsFunctionName(table)
@@ -329,7 +329,7 @@ function platformFunctions(
 }
 
 /**
- * Платформна одиниця тригерів таблиці (рішення 9 плану П3-3a2, Р2a2-20):
+ * Платформна одиниця тригерів таблиці (спека промоції §9.2, §9.3):
  * механіка рядка й копії носіїв — функція без аргументів, грант лише на такі
  * функції й тригер з платформним ім'ям, що кличе саме свою функцію. Ними
  * володіє платформа, тож вони не пишуться й без збереженого опису теки —
@@ -372,7 +372,7 @@ function slug(text: string): string {
 }
 
 /**
- * Ім'я файлу з повної ідентичності одиниці (рішення плану 7): функціям —
+ * Ім'я файлу з повної ідентичності одиниці (спека П2 §3): функціям —
  * типи аргументів, іменованим об'єктам — ім'я, решті (грант, коментар,
  * publication, типові привілеї) — уся ідентичність з ціллю й роллю.
  */
@@ -408,7 +408,7 @@ function schemaDir(unit: CatalogUnit, ctx: UnitsContext): string {
 }
 
 /**
- * Розкладка дослівних одиниць по файлах (спека П2 §3, рішення плану 7):
+ * Розкладка дослівних одиниць по файлах (спека П2 §3):
  * усе, що належить одній згенерованій таблиці, разом із тригерною функцією,
  * яку викликають лише її тригери, — у `<Ім'я>.sql` таблиці; решта — по
  * одній одиниці на файл у `sql/<схема>/`.

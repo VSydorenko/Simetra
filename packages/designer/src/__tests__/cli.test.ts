@@ -457,7 +457,7 @@ describe("cli adapter", () => {
       ])
         expect(flag in apply, flag).toBe(true)
       expect("dry-run" in apply).toBe(false)
-      // `plan` пише лише свій артефакт (рішення 10 плану П3-2b-3): перегляду
+      // `plan` пише лише свій артефакт (спека designer §3.2): перегляду
       // немає, а прапорець — помилка використання, не мовчазний запис
       expect("dry-run" in (toolCommand(tool("plan")).args ?? {})).toBe(false)
       const run = vi.fn<Tool["run"]>()
@@ -769,7 +769,7 @@ describe("cli adapter", () => {
     })
 
     it("the text of a plan shows the environment steps as their own group", () => {
-      // Рішення 5(е) плану П3-2b-0: пара REVOKE ALL + GRANT — вивід двигуна,
+      // Спека промоції §7.2: пара REVOKE ALL + GRANT — вивід двигуна,
       // обидва рядки лишаються
       const environment = (id: string, sql: string) => ({
         id,

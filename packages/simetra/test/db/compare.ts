@@ -27,7 +27,7 @@ const deferralOf = (constraint: CatalogConstraint): Deferral =>
 /**
  * Ключ індексу для звірки: вираз — лише на наявність, бо його канонічну форму
  * дає Postgres (спека §9), а знімок тримає авторську. Клас операторів і
- * колляцію ключа каталог тут не читає — вони поза звіркою E1.
+ * колляцію ключа каталог тут не читає — вони поза цією звіркою.
  */
 function keyShape(key: PhysicalIndexKey | CatalogIndexKey) {
   return {

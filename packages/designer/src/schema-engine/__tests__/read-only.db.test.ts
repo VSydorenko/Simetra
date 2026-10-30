@@ -34,7 +34,7 @@ import {
 import { inTarget as loadTarget, query } from "../../__tests__/support/db"
 
 /**
- * Читання цілі без сесійного стану (план П3-1, рішення 14.1): кожен запит до
+ * Читання цілі без сесійного стану (спека designer §3.2): кожен запит до
  * цілі — у транзакції `READ ONLY`, і після читання з'єднання лишається таким,
  * яким було. Ціль — окрема база від `withDesiredShadow`; база стеку лише
  * читається.
@@ -115,7 +115,7 @@ describe("readOnlyTransactionPool", () => {
             /session/
           )
           await client.query("SET LOCAL search_path TO app")
-          // Обхід, знайдений рев'ю: транзакцію не перемкнути на запис
+          // Обхід: транзакцію не перемкнути на запис
           await expect(
             client.query("SET LOCAL transaction_read_only = off")
           ).rejects.toThrow(/must stay read-only/)
@@ -215,7 +215,7 @@ const CREATE_N: PlanStep = {
 }
 
 /**
- * Пулер стеку в режимі транзакцій (рішення 14.5): `[db.pooler]` увімкнено в
+ * Пулер стеку в режимі транзакцій: `[db.pooler]` увімкнено в
  * `supabase/config.toml`, тож недоступний пулер — червоний тест, не пропуск.
  */
 describe("transaction-mode pooler", () => {

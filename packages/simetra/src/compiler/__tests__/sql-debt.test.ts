@@ -66,7 +66,7 @@ describe("debt ratchet: sql-debt.json", () => {
   it("moving a trigger from a kind module to a shared file does not make it acceptable", async () => {
     // У модулі виду тригер — заборонений клас; перенесений у спільний `sql/`
     // він не стає ні прийнятним, ні боргом: тригер на таблиці виду —
-    // помилка в будь-якому файлі (Р2c1-1).
+    // помилка в будь-якому файлі (спека прав §6.1).
     const inModule = await diagnostics({
       [SALE_SQL]: TRIGGER.replace("public.t", "public.sale"),
       [SHARED_SQL]: HANDLER,

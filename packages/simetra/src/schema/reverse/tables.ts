@@ -23,7 +23,7 @@ export interface TableNames {
 
 /**
  * Основна таблиця збереженого об'єкта виду: FK на неї називає форму ключа, а
- * не колонки (Рб1-10). `keys` — фізичні колонки цілі (`columnsKey`) → форма.
+ * не колонки (спека прав §4.7). `keys` — фізичні колонки цілі (`columnsKey`) → форма.
  */
 export interface KindTableNames {
   kind: string
@@ -80,7 +80,7 @@ const COLUMN_FIELDS: ReadonlySet<string> = new Set(
 )
 
 /**
- * Невиражене таблицею (план E2b, рішення 8): поле поза формою `CustomTable`
+ * Невиражене таблицею (спека П2 §9): поле поза формою `CustomTable`
  * і таблиця без колонок (`CustomTable` вимагає хоч одну).
  */
 export function unrepresentableTable(table: CatalogTable): Diagnostic[] {
@@ -128,7 +128,7 @@ export function unrepresentableEnum(type: CatalogEnumType): Diagnostic[] {
 /**
  * Типові класи операторів (`pg_opclass.opcdefault`) для типів, яких
  * найчастіше торкаються індекси: явний типовий клас дав би другу форму
- * знімка (борг F). Тип поза переліком лишає клас як є — це не втрата, лише
+ * знімка (спека П2 §9, «Лише нетипові значення»). Тип поза переліком лишає клас як є — це не втрата, лише
  * зайве поле.
  */
 const DEFAULT_OPCLASSES: Readonly<
@@ -175,7 +175,7 @@ function isDefaultOpclass(
   return DEFAULT_OPCLASSES[method]?.[base] === opclass.name
 }
 
-/** Тип колонки (рішення плану 5): логічний, посилання на PgEnum або `Raw`. */
+/** Тип колонки (спека П2 §9): логічний, посилання на PgEnum або `Raw`. */
 function columnType(type: string, ctx: TablesContext): Json {
   const enumSet = new Set(ctx.enums.keys())
   const enumRef = (schema: string, name: string) => ({
@@ -281,7 +281,7 @@ function indexKey(
 
 /**
  * Опис `CustomTable` з таблиці каталогу: імена обмежень явні, фізичні імена —
- * поточні, значення за замовчуванням схеми файлу не пишуться (рішення 8).
+ * поточні, значення за замовчуванням схеми файлу не пишуться (спека П2 §9).
  * З наявного опису беруться id і те, чого база не знає (заголовки, скоуп).
  */
 export function customTableData(

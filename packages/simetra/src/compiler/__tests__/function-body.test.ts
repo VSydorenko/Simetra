@@ -47,7 +47,7 @@ const bodyStatement = (file: string, statement: string) => ({
 })
 
 /**
- * Оператори поза дозвільним переліком тіла (Р2c1-37) і вузол, який називає
+ * Оператори поза дозвільним переліком тіла (спека прав §6.1) і вузол, який називає
  * діагностика. Кожен — те, що денайліст за ціллю пропускав: зміна бази,
  * ролі чи системи, створення об'єктів під час виконання, `TRUNCATE`.
  */
@@ -109,7 +109,7 @@ const FORBIDDEN: readonly [string, string][] = [
   [`${TEMP}; DROP TABLE t`, "DropStmt"],
 ]
 
-/** Оператори, які тіло може виконувати (Р2c1-37). */
+/** Оператори, які тіло може виконувати (спека прав §6.1). */
 const ALLOWED: readonly [string, string][] = [
   ["SELECT", "PERFORM 1 FROM public.task"],
   [
@@ -137,11 +137,11 @@ const ALLOWED: readonly [string, string][] = [
   ],
   ["a literal EXECUTE", "EXECUTE 'SELECT 1'"],
   ["a DO block", "DO $d$ BEGIN PERFORM 1; END $d$"],
-  // Виклик функції платформи, що лише читає (Р2c1-38).
+  // Виклик функції платформи, що лише читає (спека прав §5.3).
   ["the current user", "PERFORM (select simetra.current_user_id())"],
 ]
 
-describe("sql.function-body-statement: the body is an allowlist (Р2c1-37)", () => {
+describe("sql.function-body-statement: the body is an allowlist (спека прав §6.1)", () => {
   it.each(
     PLACES.flatMap((file) =>
       FORBIDDEN.map(([sql, node]) => ({ file, sql, node }))
@@ -262,9 +262,9 @@ describe("sql.function-body-statement: the body is an allowlist (Р2c1-37)", () 
 })
 
 // Виклик функції, що виконує текст SQL, — той самий нелітеральний `EXECUTE`
-// (Р2c1-37): перелік тіла й Правило 1 обійшов би текст, тож це помилка
+// (спека прав §6.1): перелік тіла й Правило 1 обійшов би текст, тож це помилка
 // скрізь, борг включно, і функція з ним боргом не є.
-describe("sql.function-body-statement: a call that executes SQL text (Р2c1-50)", () => {
+describe("sql.function-body-statement: a call that executes SQL text (спека прав §5.3)", () => {
   const QUERY_TO_XML = "pg_catalog.query_to_xml('SELECT 1', false, false, '')"
   it.each(
     PLACES.flatMap((file) =>
@@ -339,7 +339,7 @@ describe("a body outside the allowlist is never debt", () => {
 
   it("a listed function writing the provider's identity table is a kind-table error", async () => {
     // Тригери платформи переносять запис у `auth.users` в «Користувачі» й
-    // ідентичності (N7): для Правила 1 це таблиця виду.
+    // ідентичності (спека прав §6.1): для Правила 1 це таблиця виду.
     const result = await compile(
       files(
         { [EXTRA]: plpgsql("UPDATE auth.users SET email = NULL WHERE false") },
@@ -353,7 +353,7 @@ describe("a body outside the allowlist is never debt", () => {
   })
 })
 
-describe("sql.platform-function-call: only the reading platform functions (Р2c1-38)", () => {
+describe("sql.platform-function-call: only the reading platform functions (спека прав §5.3)", () => {
   it.each(
     PLACES.flatMap((file) => [
       {
@@ -433,7 +433,7 @@ describe("RETURN expr is judged as the SELECT of the same body", () => {
   })
 })
 
-describe("sql.platform-function-call: generated functions that write (Р2c1-38, stage 5)", () => {
+describe("sql.platform-function-call: generated functions that write (спека прав §5.3)", () => {
   // Документ з проведенням дає оболонку проведення, довідник із
   // предвизначеними — функцію пошуку, що лише читає.
   const generated = (call: string) =>
@@ -482,7 +482,7 @@ const sqlFn = (body: string) =>
 const TASK_MODULE = "documents/Task/Task.sql"
 const OTHER_SCHEMA = "sql/app/extra.sql"
 
-describe("sql.function-body-statement: forms the target denylist judged before (Р2c1-15)", () => {
+describe("sql.function-body-statement: forms the target denylist judged before (спека прав §6.1)", () => {
   // Колишні рядки `sql.kind-table-verbatim` з формою `functionBody` поза DML:
   // перелік операторів відмовляє їм незалежно від цілі, тож і на
   // `CustomTable` — теж.

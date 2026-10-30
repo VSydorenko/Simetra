@@ -312,7 +312,7 @@ describe("rights_explain", () => {
   })
 
   it("names every read policy of each explained object's main table, and only them", () => {
-    // Р2d2-6: рядок на кожен предикат читання й рядок межі — рівно політики
+    // спека прав §5.1: рядок на кожен предикат читання й рядок межі — рівно політики
     // `SELECT` основної таблиці, що діють на роль запиту користувача.
     const labels = branchLabels(model)
     expect(labels).toContain("task")
@@ -326,7 +326,7 @@ describe("rights_explain", () => {
   })
 
   it("a public read object without a rights contract gets its public_read branch", async () => {
-    // Р2d2-6: політику `<t>_public_read` `buildAccessUnits` ставить і без
+    // спека прав §5.1: політику `<t>_public_read` `buildAccessUnits` ставить і без
     // контракту прав — її рядок видно кожному, тож і пояснення є. Кожен вид
     // з RLS нині має обсяги прав, тож об'єкт без контракту — ті самі
     // контракти домену без контракту прав `Bulletin`.
@@ -378,7 +378,7 @@ describe("rights_explain", () => {
   })
 
   it("explains only a row the caller sees: the same rows for the current user under the RLS rule", () => {
-    // Р2d2-19: та сама побудова рядків, але для `current_user_id()` і його
+    // спека прав §5.1: та сама побудова рядків, але для `current_user_id()` і його
     // прав (`caller_granted`) — RESTRICTIVE через AND, PERMISSIVE через OR.
     const branch = branchOf(model, "task")!
     const caller = rowsOf(branch).map((r) => ({
@@ -413,8 +413,8 @@ describe("rights_explain", () => {
   })
 
   it("the task branch: gate of the row's scope, p_user a member of it, the row by key", () => {
-    // Р2d2-3: гейт — вид скоупу об'єкта й скоуп рядка; Р2d2-6: `p_user`
-    // мусить належати скоупу рядка, інакше порожньо.
+    // Гейт — вид скоупу об'єкта й скоуп рядка; `p_user` мусить належати
+    // скоупу рядка, інакше порожньо (спека прав §5.1).
     expect(conjuncts(branchOf(model, "task")!.whereClause).slice(0, 4)).toEqual(
       [
         `${P("p_object")} = 'task'`,
@@ -530,7 +530,7 @@ describe("rights_explain", () => {
   })
 
   it("a verbatim dimension function is known only for the current user", async () => {
-    // Р2d2-6: множина дослівної функції для іншого користувача невідома —
+    // спека прав §5.1: множина дослівної функції для іншого користувача невідома —
     // NULL; для себе — та сама функція, що в політиці.
     const verbatim = compiled(
       await compiledPolicyDomain(
@@ -577,7 +577,7 @@ describe("rights_explain", () => {
   })
 
   it("a public read object: one public_read row, no boundary, no membership check of p_user", async () => {
-    // Р2d2-6: рядок `publicRead` видно кожному, тож пояснення фактів
+    // спека прав §5.1: рядок `publicRead` видно кожному, тож пояснення фактів
     // `p_user` не розкриває; гейт лишається.
     const open = compiled(
       await compile(

@@ -275,7 +275,7 @@ const bodyVerbatim = (
   },
 })
 
-describe("sql.kind-table-verbatim: application SQL does not write a kind table (Rule 1, Р2c1-16)", () => {
+describe("sql.kind-table-verbatim: application SQL does not write a kind table (Rule 1, спека прав §6.1)", () => {
   // Таблицю виду пишуть лише ядро команд, оболонка проведення й тригери
   // платформи: DML застосунку в неї обійшов би права, рухи й перевірки
   // команди. Ціль — лише відношення, яке оператор змінює (`relation`), тож
@@ -322,7 +322,7 @@ describe("sql.kind-table-verbatim: application SQL does not write a kind table (
     },
     {
       // Тригери платформи переносять запис у джерело ідентичностей у
-      // «Користувачі» й `simetra.identities` (N7).
+      // «Користувачі» й `simetra.identities` (спека прав §6.1).
       name: "the identity source table of the provider",
       sql: plpgsqlFn("UPDATE auth.users SET email = NULL WHERE false"),
       expected: bodyVerbatim(EXTRA, "auth.users", "UpdateStmt"),
@@ -463,7 +463,7 @@ describe("sql.kind-table-verbatim: application SQL does not write a kind table (
   })
 })
 
-describe("other verbatim forms on a kind table keep their own codes (Р2c1-2)", () => {
+describe("other verbatim forms on a kind table keep their own codes", () => {
   it.each([
     "ALTER TABLE public.task DISABLE ROW LEVEL SECURITY",
     "ALTER TABLE public.task NO FORCE ROW LEVEL SECURITY",
@@ -500,7 +500,7 @@ describe("other verbatim forms on a kind table keep their own codes (Р2c1-2)", 
   })
 })
 
-describe("promotion and verbatim policies (Р2c1-3)", () => {
+describe("promotion and verbatim policies", () => {
   it("a promotion removes verbatim policies of the promoted table", async () => {
     const identity = `policy:public.${TASK_NOTE_ADOPTED_TABLE}.task_notes_read`
     const before = await acceptDebt(

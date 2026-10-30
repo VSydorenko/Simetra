@@ -46,7 +46,7 @@ export const objectKey = (kind: string, schema: string, physical: string) =>
 /**
  * Файл, яким володіє зворотний генератор: опис і супутні файли
  * `CustomTable`/`PgEnum` та спільний дослівний SQL. Файли видів 1С і решта
- * ручних файлів йому не належать (план E2b, рішення 6).
+ * ручних файлів йому не належать (спека П2 §9).
  */
 export function isGeneratedPath(path: string): boolean {
   const segments = path.split("/")
@@ -69,7 +69,7 @@ const physicalOf = (element: Json) =>
   typeof element.physicalName === "string" ? element.physicalName : undefined
 
 /**
- * Ідентичність наявної теки (рішення 6): об'єкти за `(kind, schema,
+ * Ідентичність наявної теки (спека П2 §9): об'єкти за `(kind, schema,
  * physicalName)`, колонки — за фізичним іменем у своїй таблиці. Дублікат
  * ключа — `introspect.identity-conflict`: котрий з двох id зберегти, вирішує
  * автор, а не порядок обходу.

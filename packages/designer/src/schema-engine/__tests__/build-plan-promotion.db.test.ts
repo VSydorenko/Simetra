@@ -94,7 +94,7 @@ describe.concurrent("buildPlan", () => {
       ])
 
       // Дослівно перенесені коментарі знімаються з бази з класом `metadata`
-      // від `promote` (R24), а не відмовою
+      // від `promote` (спека промоції §8), а не відмовою
       expect(
         p.record.conversions
           .filter((c) => c.subject.includes("#comment"))
@@ -184,7 +184,7 @@ describe.concurrent("buildPlan", () => {
           mode: "accessExclusive",
         },
       ])
-      // Межі 2a немає: план промоції не попереджає про відмову `COMMIT`
+      // План промоції не попереджає про відмову `COMMIT`
       expect(
         outcome.diagnostics
           .filter((d) => d.severity === "warning")
@@ -230,7 +230,7 @@ describe.concurrent("buildPlan", () => {
         (t) => t.origin.objectId === uuid(7301)
       )!
       // Перейменування колонки FK і самого FK займає лише власну таблицю
-      // (R26): ціль FK не блокується ні явно, ні неявно
+      // (спека промоції §7.2): ціль FK не блокується ні явно, ні неявно
       expect(
         stepMatching(artifact, /RENAME COLUMN region_id TO area_id$/)
       ).toHaveLength(1)
@@ -252,8 +252,8 @@ describe.concurrent("buildPlan", () => {
     })
 
     it("refuses a dropped comment that the record does not classify", async () => {
-      // Запис без класу перенесеного коментаря (зіпсований чи старший за
-      // R24): зникнення коментаря нічим не покрите — відмова, а не мовчки
+      // Запис без класу перенесеного коментаря (зіпсований чи записаний
+      // до появи цього класу, спека промоції §8): зникнення коментаря нічим не покрите — відмова, а не мовчки
       const p = await promoted()
       const record = {
         ...p.record,
@@ -285,7 +285,7 @@ describe.concurrent("buildPlan", () => {
       "plans a foreign key target outside the scope %s a lock privilege",
       async (_, drift, expected) => {
         // Вилучена колонка з FK на `storage.objects`: зняття FK бере ACCESS
-        // EXCLUSIVE на ціль, а явний замок — лише з правом на LOCK (R26)
+        // EXCLUSIVE на ціль, а явний замок — лише з правом на LOCK (спека промоції §7.2)
         const files = contactsProject()
         const party = JSON.parse(files.get(COUNTERPARTY_FILE)!) as Json
         ;(party.columns as Json[]).push({
@@ -347,7 +347,7 @@ describe.concurrent("buildPlan", () => {
     it("refuses a plan whose SQL function body is broken", async () => {
       // Тінь вантажить тіла без перевірки, і крок функції під преамбулою
       // двигуна теж: тіло читає колонку за старим ім'ям, і доказ на копії
-      // падає на ревалідації тіл (рішення 3 плану П3-2b-1)
+      // падає на ревалідації тіл (спека промоції §7.2)
       const p = await promoted()
       const files = await acceptDebt(
         new Map([
@@ -373,7 +373,7 @@ describe.concurrent("buildPlan", () => {
     })
 
     describe("reserved temporary names", () => {
-      // Рішення 11 плану П3-2b-1: намір перейменовує через simetra_tmp_<n> і
+      // Намір перейменовує через simetra_tmp_<n> і
       // simetra_retired_<n>, тож зайняте таке ім'я — відмова плану, а не
       // сирий 42701/42P07 кроку наміру на копії
       it.each([
@@ -456,7 +456,7 @@ describe.concurrent("buildPlan", () => {
     })
 
     it("collects environment steps after the intent and engine steps of a promotion", async () => {
-      // Рішення 5 плану П3-2b-0: копія збору проходить і кроки наміру, тож
+      // Спека промоції §7.2: копія збору проходить і кроки наміру, тож
       // залишок двигуна — у нових іменах, а доказ засіяний тим самим переліком
       const p = await promoted()
       const outcome = await planPromotion(p, {
@@ -671,7 +671,7 @@ describe.concurrent("buildPlan", () => {
     it("keeps a same-name redefinition of an adopted index a relaxation", async () => {
       // Прийнятий частковий унікальний індекс у бажаному стані стає повним
       // під тим самим ім'ям: для прийнятого об'єкта це не заміна, а зняття
-      // унікальності з дозволом і класом із запису (рішення 3)
+      // унікальності з дозволом і класом із запису (спека промоції §8)
       const INDEX = "counterparties_inn_active"
       const files = contactsProject()
       const party = JSON.parse(files.get(COUNTERPARTY_FILE)!) as Json
@@ -713,7 +713,7 @@ describe.concurrent("buildPlan", () => {
       })
     })
 
-    describe("class platform (decision 7, R9)", () => {
+    describe("class platform", () => {
       const INDEX = "counterparties_inn_idx"
 
       /** Прийнятий звичайний індекс (типово `inn`) з класом `platform`. */
@@ -746,7 +746,7 @@ describe.concurrent("buildPlan", () => {
       })
 
       it("plans an adopted index of the class platform that a key of the kind covers", async () => {
-        // Рішення 11 плану П3-3a1: простий індекс `(inn)` покриває
+        // Спека промоції §8: простий індекс `(inn)` покриває
         // `UNIQUE (tax_id)` реквізиту — той самий пошук, тож заміна є, а
         // індекс знімає двигун
         const outcome = await planPromotion(await platformIndex())
@@ -983,7 +983,7 @@ describe.concurrent("buildPlan", () => {
       })
 
       it("warns about a table in public whose service role access comes only from the schema ADP", async () => {
-        // Підстава архітектора П3-3a1: прийнятий грант, рівний ADP схеми,
+        // Спека промоції §8: прийнятий грант, рівний ADP схеми,
         // проходить промоцію без рядка класу лише тому, що втрату видно тут
         const files = contactsProject()
         for (const file of [COUNTERPARTY_FILE, CONTACT_FILE]) {
@@ -1014,7 +1014,7 @@ describe.concurrent("buildPlan", () => {
       })
     })
 
-    describe("class property (R10)", () => {
+    describe("class property", () => {
       /** Предмет UNIQUE `inn` фікстури має клас `property` (мапінг-зразок). */
       const SUBJECT = "Counterparty#uniques/counterparties_inn_key"
       const OBJECT = "constraint app.counterparties.counterparties_inn_key"

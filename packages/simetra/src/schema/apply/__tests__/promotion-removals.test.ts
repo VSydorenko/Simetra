@@ -56,7 +56,7 @@ import { enumerations } from "../../__tests__/fixtures/e1-fixtures"
 
 /**
  * Класи видалень промоції, нереалізоване оголошення й виняток «заміна»
- * (рішення 2, 3 і 7 плану П3-2a): копія після наміру проти бажаної тіні.
+ * (спека промоції §7.2, §8): копія після наміру проти бажаної тіні.
  */
 
 const OBJECT_ID = "00000000-0000-4000-8000-000000000001"
@@ -291,7 +291,7 @@ describe("classifyRemovals", () => {
   })
 
   it("still classifies an adopted column outside the intent's added columns", () => {
-    // Вердикт В8: пропуск — лише для колонок, які додав намір; перевизначення
+    // Пропуск — лише для колонок, які додав намір; перевизначення
     // прийнятої колонки поруч лишається видаленням без класу
     const fill = {
       names: "beforeRenames" as const,
@@ -531,7 +531,7 @@ describe("classifyRemovals", () => {
 
   it("needs a class for a lost default of the scope column", () => {
     // Носій скоупу: id запису — UUID виду скоупу, не синтетичний id
-    // стандартного реквізиту, тож мапінг значення не покриває (R21)
+    // стандартного реквізиту, тож мапінг значення не покриває
     const scopeColumn = {
       id: "00000000-0000-4000-8000-000000000301",
       sourceId: "00000000-0000-4000-8000-000000000302",
@@ -605,7 +605,7 @@ describe("classifyRemovals", () => {
     ])
   })
 
-  // R24: дослівно перенесений коментар таблиці покриває лише клас `metadata`
+  // Дослівно перенесений коментар таблиці покриває лише клас `metadata`
   // на саме цей об'єкт, а не мапінг
   it("covers a table comment only by a class on that comment", () => {
     const clone = model([table("items", { comment: "Items" })])
@@ -1150,7 +1150,7 @@ describe("unrealizedRenames", () => {
   })
 
   it("does not see an environment step", () => {
-    // Рішення 5 плану П3-2b-0: крок середовища — лише права об'єкта, який
+    // Крок середовища — лише права об'єкта, який
     // створює сам план; втратою перейменування він не буває
     const environment = step("s5", "DROP TABLE app.catalog_items", {
       origin: "environment",
@@ -1481,7 +1481,7 @@ describe("access and permission items", () => {
     })
 
     it("are listed under access", async () => {
-      // Р2b1-12: політики запису ролі команд, яких прийнята таблиця не мала, —
+      // Політики запису ролі команд, яких прийнята таблиця не мала, —
       // `extra … adds roles simetra_command` у пункті `access:<таблиця>`; код
       // `addedRoles` не змінено, тест фіксує поведінку над справжнім виходом
       expect(result.diagnostics).toEqual([])
@@ -1609,7 +1609,7 @@ describe("access and permission items", () => {
   })
 
   it("a restrictive generated policy opens no roles", () => {
-    // Межа тенанта лише звужує доступ (Р2a2-12): прийнятої політики `INSERT`
+    // Межа тенанта лише звужує доступ: прийнятої політики `INSERT`
     // немає, але нова `RESTRICTIVE` ролі `authenticated` нічого не відкриває
     const changes = access(
       record({}),
@@ -1799,7 +1799,7 @@ describe("access and permission items", () => {
   })
 
   it("requires remove: for a lost scope column default classed removed", () => {
-    // DEFAULT носія скоупу має лише клас «видалено» (R21); крок DROP DEFAULT
+    // DEFAULT носія скоупу має лише клас «видалено»; крок DROP DEFAULT
     // — `catalogOnly`, тож дозвіл дає тільки `remove:` нового імені таблиці
     const clone = model([
       table("catalog_items", {
@@ -1935,7 +1935,7 @@ describe("access and permission items", () => {
 
 describe("platformReplacements", () => {
   // Таблиця одиниці перейменовується: копія після наміру й тінь бачать нове
-  // ім'я, а запис — старе (рішення 7 плану П3-2b-0, R9)
+  // ім'я, а запис — старе
   const RENAMED = {
     tables: [{ id: OBJECT_ID, schema: "app", from: "items", to: "item" }],
   }
@@ -2251,7 +2251,7 @@ describe("platformReplacements", () => {
 
     it("does not accept a value-list CHECK of the shadow as the replacement", () => {
       // Сама форма `CHECK` у тіні не доводить перерахування: її міг дописати
-      // будь-хто (R9)
+      // будь-хто
       const def = "CHECK ((status = ANY (ARRAY['a'::text, 'b'::text])))"
       const out = adopted(def, [], [check("item_status_check", def)])
       expect(out.map((d) => d.code)).toEqual([
@@ -2606,7 +2606,7 @@ describe("platformReplacements", () => {
       })
 
       it("is replaced only by a permissive rights policy, not by the restrictive scope policy", () => {
-        // Межа тенанта читання не відкриває (Р2a2-12): без політики прав
+        // Межа тенанта читання не відкриває: без політики прав
         // прийняте читання зникло б мовчки
         const scopeOnly = GENERATED.filter(
           (u) => u.class === "grant" || u.name === "item_scope_read"
@@ -2720,7 +2720,7 @@ describe("platformReplacements", () => {
       ) => triggerGate(sql, units, over, tables).codes
 
       it("an effects trigger is never a replacement of an adopted trigger", () => {
-        // Р2b1-12: тригер ефектів дії платформний, тож прийнятий тригер на всі
+        // Тригер ефектів дії платформний, тож прийнятий тригер на всі
         // події з функцією того самого імені ним не замінюється (fail-closed)
         const EFFECTS_NAME =
           "CREATE TRIGGER item_simetra_effects AFTER INSERT OR UPDATE OR DELETE ON app.item FOR EACH ROW EXECUTE FUNCTION app.item_simetra_effects()"
@@ -2735,7 +2735,7 @@ describe("platformReplacements", () => {
       it.each(["item_simetra_hierarchy", "item_simetra_hierarchy_update"])(
         "hierarchy trigger %s is never a replacement of an adopted trigger",
         (name) => {
-          // Р-A2-1: тригер ієрархії платформний, тож прийнятий тригер з тим
+          // Тригер ієрархії (спека П4 §6.6) платформний, тож прийнятий тригер з тим
           // самим викликом ним не замінюється (fail-closed)
           const call =
             "AFTER UPDATE ON app.item FOR EACH ROW EXECUTE FUNCTION app.item_simetra_hierarchy()"
@@ -2770,7 +2770,7 @@ describe("platformReplacements", () => {
         }
       )
 
-      // Рб1-4: тригери незмінності ключа платформні за іменем і функцією —
+      // Тригери незмінності ключа (спека прав §7) платформні за іменем і функцією —
       // прийнятий тригер з тим самим викликом ними не замінюється; тригер
       // з тим самим іменем на чужу функцію — не платформний і заміною бути
       // може
@@ -2824,14 +2824,14 @@ describe("platformReplacements", () => {
         ).toEqual(MISSING)
       })
 
-      describe("on a table with carrier copies (Р2a2-20)", () => {
+      describe("on a table with carrier copies", () => {
         const physicalColumn = (
           name: string,
           type: string,
           origin: PhysicalColumn["origin"] = {}
         ): PhysicalColumn => ({ name, type, notNull: false, origin })
         // Бажана таблиця з копією носія власника: механіка й підписка без
-        // `whenChanged` на ній — з умовою змісту (Р2a2-19)
+        // `whenChanged` на ній — з умовою змісту (спека прав §5.2)
         const COPIES: PhysicalTable = {
           schema: "app",
           name: "item",
@@ -2927,7 +2927,7 @@ describe("platformReplacements", () => {
           }
         )
 
-        describe("with author columns (Р-A1-10)", () => {
+        describe("with author columns", () => {
           // Колонки авторства — поза змістом: тригери механіки й авторства
           // стежать за ними (`watched`), підписки — ні
           const AUTHORED: PhysicalTable = {
@@ -3047,7 +3047,7 @@ describe("platformReplacements", () => {
         expect(codesOf(moddatetime("updated_at"), [MECHANICS])).toEqual([])
       })
 
-      describe("on a 50-byte table (Р-A1-7)", () => {
+      describe("on a 50-byte table", () => {
         // Довше за межу 41: тригери платформи — під іменами спільного
         // префікса з хешем, і промоція мусить впізнати їх як платформні
         const LONG = `item_${"x".repeat(45)}`
@@ -3658,7 +3658,7 @@ describe("platformReplacements", () => {
 })
 
 describe("propertyReproductions", () => {
-  // Гейт плану класу `property` (R10 плану П3-2b-0): тінь мусить відтворити
+  // Гейт плану класу `property` (спека промоції §8): тінь мусить відтворити
   // прийнятий елемент еквівалентно, за тим самим порівнянням, що й клас
   // `platform`
   const RENAMED = {

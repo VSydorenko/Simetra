@@ -3,7 +3,7 @@
 
 /**
  * Клас вбудованих функцій `pg_catalog`, яких немає в дозвільному переліку
- * `BUILTIN_FUNCTIONS` (Р2c1-20): точні імена й префікси імен. Виключається
+ * `BUILTIN_FUNCTIONS` (спека прав §5.3): точні імена й префікси імен. Виключається
  * ціле ім'я: перевантаження компілятор не розрізняє.
  */
 export interface BuiltinExclusion {
@@ -30,7 +30,7 @@ WHERE pronamespace = 'pg_catalog'::regnamespace AND oid < 16384
 GROUP BY proname`
 
 // Текст, який функція виконає, статично не відомий, тож її виклик —
-// зміна сесії невідомою формою (`dynamicText`, Р2c1-32), а в голові —
+// зміна сесії невідомою формою (`dynamicText`, спека прав §5.3), а в голові —
 // виконання довільного SQL повз судження її тіла.
 const SQL_TEXT: BuiltinExclusion = {
   reason: "executes SQL text",
@@ -46,7 +46,7 @@ const SQL_TEXT: BuiltinExclusion = {
 
 export const BUILTIN_EXCLUSIONS: readonly BuiltinExclusion[] = [
   SQL_TEXT,
-  // Налаштування сесії ставить лише платформа (Р2b1-19): `set_config`
+  // Налаштування сесії ставить лише платформа (спека прав §5.3): `set_config`
   // голови підмінив би контекст команди чи claims посеред оператора.
   { reason: "writes a session setting", names: ["set_config"], prefixes: [] },
   // Сесійний замок переживає транзакцію в сесії пулу й тримає чужі команди;
@@ -175,7 +175,7 @@ export const BUILTIN_EXCLUSIONS: readonly BuiltinExclusion[] = [
   },
 ]
 
-// Голова читає лише відношення, які називає дерево (Р2c1-18), а ці вбудовані
+// Голова читає лише відношення, які називає дерево (спека прав §5.3), а ці вбудовані
 // називають відношення текстом (`has_table_privilege('auth.users', …)`,
 // `to_regclass('x.y')`): збирач відношень такого імені не бачить. Поза
 // головою вони лишаються в переліку — подання й політики прийнятих баз їх
@@ -224,7 +224,7 @@ export function excludedBuiltin(
   )
 }
 
-/** Чи виконує вбудована функція з цим ім'ям текст SQL (Р2c1-32). */
+/** Чи виконує вбудована функція з цим ім'ям текст SQL (спека прав §5.3). */
 export function executesSqlText(name: string): boolean {
   return matches(SQL_TEXT, name, new Set())
 }

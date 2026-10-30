@@ -39,7 +39,7 @@ import {
 } from "./build-plan.support"
 
 /**
- * Кроки копій носіїв на живих рядках (Р2b2-1…Р2b2-6, Р2b2-10). DB-рівень, бо
+ * Кроки копій носіїв на живих рядках (спека промоції §7.2). DB-рівень, бо
  * що двигун створить колонку копії до кроку, що тригери носіїв, механіки,
  * підписок і ефектів зроблять на `UPDATE` кроку і що промоція перейменує
  * таблицю до нього — вирішує Postgres на живих рядках, а не текст плану.
@@ -58,7 +58,7 @@ async function compiled(files: Map<string, string>): Promise<CompiledModel> {
  * Вихідна модель звичайного плану: `policyDomain()` без носіїв на `Task` і
  * без власності коментаря — тож у цільовій `task_checklist` отримує три копії
  * на одному зв'язку, а коментар і вкладення — копію шляху. Колонки з іменами
- * копій уже є з чужими значеннями (Р2b2-8): реквізит `legacyOwner` коментаря
+ * копій уже є з чужими значеннями (спека прав §5.2): реквізит `legacyOwner` коментаря
  * й `assignee` рядка ТЧ, яких цільова модель не має.
  */
 function sourceFiles(): Map<string, string> {
@@ -138,7 +138,7 @@ const carrierTables = (artifact: PlanArtifact) =>
     .filter((s) => s.origin === "carriers")
     .map((s) => s.lockedTables[0]!.name)
 
-/** Тригери ефектів 2b1 на таблицях, за іменами. */
+/** Тригери ефектів дії (спека прав §5.3) на таблицях, за іменами. */
 const effectsTriggers = (url: string, tables: string[]) =>
   query<{ table: string; trigger: string }>(
     url,
@@ -184,7 +184,7 @@ type Connect = typeof pg.Pool.prototype.connect
 
 /**
  * Повідомлення обробника на з'єднаннях пулу порту застосування до `url` за
- * час `fn`. Обробник лише перевіряє (Р2c1-29) й сповіщає сесію, що пише, —
+ * час `fn`. Обробник лише перевіряє й сповіщає сесію, що пише, —
  * сесію раннера, тож збирач чіпляється до клієнтів пулу. Фільтр за `url`:
  * ціль кожного тесту — власна база, а тести файлу конкурентні.
  */
@@ -279,14 +279,14 @@ describe.concurrent("carrier copy steps on live rows", () => {
       expect(artifact.steps.map((s) => s.id)).toEqual(
         artifact.steps.map((_, i) => `s${i + 1}`)
       )
-      // Р2b2-3: копія вкладення читає копію коментаря — її оператор пізніше;
+      // Копія вкладення читає копію коментаря — її оператор пізніше;
       // створена планом таблиця `links` кроку не має
       expect(carrierTables(artifact)).toEqual([
         CHECKLIST_TABLE,
         COMMENT_TABLE,
         ATTACHMENTS_TABLE,
       ])
-      // Р2b2-11: `legacyOwner` коментаря й `assignee` рядка ТЧ — звичайні
+      // Спека прав §5.2: `legacyOwner` коментаря й `assignee` рядка ТЧ — звичайні
       // колонки з даними під іменами копій, тож їхні оператори перезаписують
       // чужі дані: `destructive` з дозволом. Копія вкладення — чисте
       // заповнення без дозволу
@@ -347,7 +347,7 @@ describe.concurrent("carrier copy steps on live rows", () => {
         )
       ).toEqual([{ column_name: "task_id_assignee_id" }])
 
-      // Р2b2-10: тригери ефектів є на кожній таблиці кроку — інакше висновок
+      // Тригери ефектів є на кожній таблиці кроку — інакше висновок
       // «тригер мовчить» нижче доводився б порожньо
       const tables = [CHECKLIST_TABLE, COMMENT_TABLE, ATTACHMENTS_TABLE]
       expect(await effectsTriggers(url, tables)).toEqual(

@@ -133,7 +133,7 @@ describe("rightsCheck", () => {
       )
       const policies = expectedLabels.map((label) => {
         // Дія контексту в політиці — вираз `command_action()`; ядро
-        // підставляє літерал своєї дії, контекст звірено раніше (Р-A2-9).
+        // підставляє літерал своєї дії, контекст звірено раніше (спека П4 §6.6).
         const sql = policyOf(
           model,
           names.write("update", "root", label)

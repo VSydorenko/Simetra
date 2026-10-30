@@ -289,7 +289,7 @@ describe("plan artifact", () => {
     const bare = draft()
     bare.preamble = []
     expect((await stampPlan(bare)).planHash).not.toBe(stamped.planHash)
-    // Перелік провайдера — властивість цілі, з якою план побудовано (R27)
+    // Перелік провайдера — властивість цілі, з якою план побудовано (спека промоції §7.2)
     const provider = draft()
     provider.providerLocks[0]!.tables = []
     expect((await stampPlan(provider)).planHash).not.toBe(stamped.planHash)
@@ -732,7 +732,7 @@ describe("plan artifact", () => {
         ...section,
         columns: [{ table: { schema: "app", name: "party" }, from: "a" }],
       },
-      // Таблиця — структурний ключ нового імені (R23): голе ім'я неоднозначне
+      // Таблиця — структурний ключ нового імені: голе ім'я неоднозначне
       { ...section, columns: [{ table: "party", from: "a", to: "b" }] },
       {
         ...section,
@@ -758,7 +758,7 @@ describe("plan artifact", () => {
         ...section,
         preservation: [{ ...section.preservation[0]!, note: "x" }],
       },
-      // Неявні замки — поле артефакту, а не секції (R26): у секції воно чуже
+      // Неявні замки — поле артефакту, а не секції (спека промоції §7.2): у секції воно чуже
       { ...section, implicitLocks: [] },
     ]
     for (const promotion of variants)
@@ -783,7 +783,7 @@ describe("plan artifact", () => {
     )
   })
 
-  // План лише з дрейфом (рішення 16) не змінює знімок: from = to. Ім'я
+  // План лише з дрейфом (платформна спека §6.2) не змінює знімок: from = to. Ім'я
   // лишається звичайним і не збігається ні з першим застосуванням, ні з
   // планом, що веде до того самого знімка з іншого
   it("names a drift-only plan with the same hash on both sides", () => {

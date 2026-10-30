@@ -127,7 +127,7 @@ describe("buildPlan", () => {
   )
 
   it("hands the engine the hashed effects function of a long table and no truncated one", async () => {
-    // Р2c2-20: до хешу ім'я функції ефектів довгої таблиці було іменем її
+    // До хешу ім'я функції ефектів довгої таблиці було іменем її
     // тригера (обрізане алгоритмом Postgres). Сам перехід — DROP старої й
     // CREATE нової — робить двигун: усе в межі схеми, чого немає в бажаному,
     // він прибирає. Тож план мусить дати йому бажаний стан без старого
@@ -316,7 +316,7 @@ describe("buildPlan", () => {
   ])(
     "carrier copy steps reach the footprint without a read of the target ($case)",
     async ({ promotion }) => {
-      // Р2b2-7: у marker цілі колонки копій ТЧ `checklist` і `attachments` не
+      // У marker цілі колонки копій ТЧ `checklist` і `attachments` не
       // були копіями, а в кожній таблиці є рядок — план дає кроки даних
       // копій, а не відмову, і ціль на рядки не читає. Слід плану питає
       // право `LOCK` на таблиці кроків: `checklist` і її джерело є, а
@@ -350,7 +350,7 @@ describe("buildPlan", () => {
   ])(
     "refuses a plan when the apply role cannot bypass RLS of a source table ($case)",
     async ({ promotion }) => {
-      // Р2d1-10, Р2d1-13: відмова — до витягу й тіні, до розгалуження
+      // Відмова — до витягу й тіні, до розгалуження
       // промоції; двигун не кличеться зовсім
       const { before, desired, records } = promotion
         ? await promotedTag(adoptedSourcesDomain)
@@ -384,7 +384,7 @@ describe("buildPlan", () => {
   ])(
     "warns about unknown role keys in a source ($case)",
     async ({ promotion }) => {
-      // Р2d1-11: попередження, а не відмова — план іде далі, до бажаної тіні
+      // Попередження, а не відмова — план іде далі, до бажаної тіні
       // (тут вона падає, і відмова несе зібрані до неї діагностики)
       const { before, desired, records } = promotion
         ? await promotedTag(adoptedSourcesDomain)

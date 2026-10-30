@@ -450,7 +450,7 @@ describe("власник підпорядкованого довідника —
   })
 })
 
-describe("замок ієрархії від обробника beforeWrite (Р-A2-17)", () => {
+describe("замок ієрархії від обробника beforeWrite (спека П4 §6.6)", () => {
   it.each([
     ["присвоює parent_id", "NEW.parent_id := NULL;", true],
     ["не присвоює", "NEW.description := 'x';", false],

@@ -8,7 +8,7 @@ import { createApplyDatabase } from ".."
 import { inTarget, query } from "../../__tests__/support/db"
 
 /**
- * Порт виконання застосування (план П3-1, задача 3). Ціль кожного тесту —
+ * Порт виконання застосування. Ціль кожного тесту —
  * окрема база від `withDesiredShadow`; база стеку лише читається.
  */
 

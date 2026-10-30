@@ -34,7 +34,7 @@ import {
 import { uuid } from "../../../compiler/__tests__/helpers"
 
 /**
- * Виявлення переходу й звірка запису (рішення 1 плану П3-2a): кожен рядок
+ * Виявлення переходу й звірка запису (спека промоції §7.1): кожен рядок
  * таблиці рішень — окремий тест. Marker — канонічний знімок компіляції
  * «до», пропущений через JSON, як його повертає `jsonb`.
  */
@@ -429,7 +429,7 @@ describe("promotionTransition: the decision table", () => {
   })
 })
 
-describe("promotionTransition: limits of P3-2a", () => {
+describe("promotionTransition: unsupported promotions", () => {
   const PRICE_FILE = "custom-tables/Price/Price.meta.json"
   const price = {
     id: uuid(7301),
@@ -511,7 +511,7 @@ describe("promotionTransition: limits of P3-2a", () => {
     expect(codes(verdict)).toEqual([])
   })
 
-  it("refuses a label translation until P3-3", async () => {
+  it("refuses a label translation while it is unimplemented", async () => {
     const { before, after, record } = await counterparty()
     const verdict = await transition({
       state: applied(before),
@@ -559,7 +559,7 @@ describe("promotionTransition: limits of P3-2a", () => {
 
   it("derives incoming delete semantics from the desired model", async () => {
     // Контакти лишаються `CustomTable`: їхній каскад на контрагента промоція
-    // переводить у `restrict` (Р2c1-34), а T2 виводить це з обох знімків.
+    // переводить у `restrict` (спека прав §4.7), а T2 виводить це з обох знімків.
     const { before, after, record } = await promoted(
       promotionProject({ ...PARTS, contacts: true }),
       counterpartyMapping(NO_FILL)

@@ -13,7 +13,7 @@ import {
 
 const PROJECT = "Project"
 
-/** Ланцюжок логічних імен від об'єкта (рішення плану 3). */
+/** Ланцюжок логічних імен від об'єкта. */
 const elementChain = z.array(elementNameSchema).meta({
   description:
     'Chain of logical element names from the object, e.g. ["services", "amount"] for an attribute of a tabular section.',
@@ -43,7 +43,7 @@ export type ElementTarget = z.infer<typeof elementTarget>
 
 /**
  * Контейнер, у колекцію якого додають елемент: об'єкт, вкладений елемент або
- * корінь проєкту (рішення архітектора R12 — новий вид скоупу додається в
+ * корінь проєкту (новий вид скоупу додається в
  * колекцію кореня, якого `ElementTarget` навмисно не адресує).
  */
 export const containerTarget = z.discriminatedUnion("kind", [
@@ -116,8 +116,8 @@ export const conversionClass = z.enum([
 export type ConversionClass = z.infer<typeof conversionClass>
 
 /**
- * Тіло нового реквізиту. Id і `physicalName` дає операція (рішення плану
- * 10: фізичні імена завжди канонічні), тож `physicalName` відхиляє схема, а
+ * Тіло нового реквізиту. Id і `physicalName` дає операція (спека промоції Пр18:
+ * фізичні імена завжди канонічні), тож `physicalName` відхиляє схема, а
  * `id` — `refuseSuppliedId` з тим самим кодом, що в інших мутаціях.
  */
 const promotedElement = z
@@ -148,7 +148,7 @@ function physicalNamePath(
 
 /**
  * Дані нового об'єкта чи ТЧ промоції. Фізичні імена призначає операція
- * (рішення 10), а `assigned` — поля, які дає прийнята таблиця чи сама
+ * (спека промоції Пр18), а `assigned` — поля, які дає прийнята таблиця чи сама
  * операція: ідентичність, схема, скоуп і мітка призначені раз (Пр18). Мовчки
  * відкинуте поле сховало б від автора, що його не застосовано.
  */
@@ -184,7 +184,7 @@ const columnMapping = z
   .discriminatedUnion("to", [
     z.strictObject({
       to: z.literal("standard"),
-      // Канонічне camelCase-ім'я незалежно від стилю проєкту (рішення 11).
+      // Канонічне camelCase-ім'я незалежно від стилю проєкту.
       name: z.string().min(1),
     }),
     z.strictObject({ to: z.literal("scope") }),

@@ -36,7 +36,7 @@ beforeAll(async () => {
   parse = await loadSqlParser()
 })
 
-/** `Task` з усіма носіями 1a: учасник і «Користувачі», вимір, контейнер. */
+/** `Task` з усіма формами носіїв: учасник і «Користувачі», вимір, контейнер. */
 const allCarriers = () =>
   withRoles({
     [PROJECT_FILE]: { accessDimensions: [regionDimension()] },
@@ -168,7 +168,7 @@ describe("rights predicates", () => {
     async (_name, files, expectedShapes) => {
       // Правило — на кожній таблиці, на яку лягає політика прав: основній,
       // ТЧ (копії носіїв), з носієм шляху (копія шляху) і похідній таблиці
-      // регістра (Р2a2-6).
+      // регістра.
       const model = await compiled(files())
       let checked = 0
       const shapes = new Set<string>()
@@ -183,7 +183,7 @@ describe("rights predicates", () => {
           )
         for (const table of tables) {
           const names = new Set(table.columns.map((c) => c.name))
-          // Дія контексту команди (Р2b1-5) — під тим самим правилом.
+          // Дія контексту команди — під тим самим правилом.
           const actions: (string | typeof COMMAND_ACTION)[] = [
             ...contract.actions.map((a) => a.action),
             COMMAND_ACTION,
@@ -233,7 +233,7 @@ describe("rights predicates", () => {
   )
 
   it("the command action renders the context action, uncorrelated", async () => {
-    // Р2b1-5: дію бере вираз контексту, а обсяги й носії — спільний набір
+    // дію бере вираз контексту, а обсяги й носії — спільний набір
     // обсягів об'єкта, тож предикати збігаються з предикатами `update`
     // аж до першого аргументу функцій прав.
     const model = await compiled(policyDomain())
@@ -416,9 +416,8 @@ describe("rights predicates", () => {
     ])
   })
 
-  // Перевернутий тест 2a1 про пропуск носіїв шляху (Р2a2-6): носій шляху дає
-  // предикат на своїй копії в основній таблиці — власність, вимір і
-  // прив'язка до контейнера.
+  // Носій шляху дає предикат на своїй копії в основній таблиці — власність,
+  // вимір і прив'язка до контейнера.
   it("a via carrier gives its predicate on the path copy", async () => {
     const model = await compiled(viaCarriers())
     const comment = model.contracts.rights.find(

@@ -284,7 +284,7 @@ describe("system rights catalogs", () => {
   })
 
   // Контейнерний рівень — не рівень довідника: контейнерні призначення лише
-  // лежать у довіднику виду скоупу контейнера (Р2a1-20). «Кожен користувач»
+  // лежать у довіднику виду скоупу контейнера (спека прав §4.6). «Кожен користувач»
   // має лише вужчі обсяги, тож глобальні «Ролі» отримують власність.
   it.each([
     { role: "Support", target: "GlobalRoles", extent: "any" },
@@ -432,7 +432,7 @@ describe("system rights catalog checks", () => {
     },
     {
       // Контейнер `Project` лежить у виді `org`: його призначення — у
-      // довідниках рівня `org` (Р2a1-7).
+      // довідниках рівня `org` (спека прав §4.6).
       case: "missing-for-container",
       layers: [
         without(
@@ -511,7 +511,7 @@ describe("system rights catalog checks", () => {
       ],
     },
     {
-      // Запис довідників прав — дія адміністрування прав (Права-2c), тож
+      // Запис довідників прав — дія адміністрування прав (спека прав §4.6), тож
       // кастомна дія на них — помилка, а не мовчазний пропуск.
       case: "custom-action",
       layers: [
@@ -571,12 +571,12 @@ describe("system rights catalog checks", () => {
           GLOBAL_ASSIGNMENTS_FILE
         ),
       ],
-      // Роль «кожного користувача» скоуплених об'єктів не читає (Р2a2-13).
+      // Роль «кожного користувача» скоуплених об'єктів не читає (спека прав §5.2).
       expected: [unread("/scopeKinds/0", "org")],
     },
     {
       // Членство `org` дає джерело, а ролі рівня `org` джерелом призначень не
-      // покрито: довідники потрібні, як на будь-якому рівні (Р2d1-5).
+      // покрито: довідники потрібні, як на будь-якому рівні (спека прав §4.7).
       case: "source-membership-without-catalogs",
       layers: [
         adoptedMembership(),
@@ -622,14 +622,14 @@ describe("system rights catalog checks", () => {
     },
     {
       // Перша міграція: прийняті контейнерні призначення поряд із новими
-      // ролями рівня скоупу в тому самому виді (Р2a1-24).
+      // ролями рівня скоупу в тому самому виді (спека прав Рх14).
       case: "mixed-in-scope-kind",
       layers: [assignmentSources(grantsSource())],
       expected: [writes("/assignmentSources/0", "grants")],
     },
     {
       // Перша міграція: прийняте членство й ролі Simetra в довідниках, чий
-      // `subject` посилається на таблицю-джерело (Р2d1-5).
+      // `subject` посилається на таблицю-джерело (спека прав §4.7).
       case: "source-only-membership",
       layers: [
         adoptedMembership(),
@@ -666,7 +666,7 @@ describe("rights catalogs of a kind with an adopted membership", () => {
   })
 })
 
-// Рядки людей і їхніх прав не відкриваються `publicRead` (Р2a2-33): він
+// Рядки людей і їхніх прав не відкриваються `publicRead` (спека прав §5.2): він
 // зняв би межу тенанта й межу видимості «Користувачів».
 describe("publicRead on catalogs of people and their rights", () => {
   const publicCodes = async (file: string) => {
@@ -703,13 +703,13 @@ describe("rightsLevelOf", () => {
     id: uuid(6122),
     name: "orgGrants",
     assignedOn: { scopeKind: "org" },
-    // `RoleGrant` скоупу не несе: скоуп — з учасника (Р2d1-19).
+    // `RoleGrant` скоупу не несе: скоуп — з учасника (спека прав §4.7).
     columns: { member: "memberId", role: "roleKey", scope: null },
   })
   const ORG = { level: "scope", scopeKindId: ORG_KIND_ID }
 
   // Покриття — за рівнем призначення: сусід на тому самому рівні зберігання
-  // (`org`) без джерела лишається на ньому (Р2a1-24).
+  // (`org`) без джерела лишається на ньому (спека прав Рх14).
   it.each([
     {
       case: "a covered scope level",

@@ -405,7 +405,7 @@ const CASES: [string, EngineAction[], CatalogModel, StepClass[]][] = [
 
 /**
  * Зміна типу колонки. Двигун позначає її `rewriteRisk`; без втрат лишаються
- * лише переходи зі списку, решта — `destructive` (рішення 10).
+ * лише переходи зі списку, решта — `destructive` (платформна спека §6.6).
  */
 const TYPE_CASES: [string, string, StepClass][] = [
   [
@@ -629,7 +629,7 @@ describe("requiredPermissions", () => {
   })
 
   it("needs nothing for a carrier copy data step", () => {
-    // Р2b2-1: крок копій лише виводить значення з джерела, тож дозволу не
+    // Крок копій лише виводить значення з джерела, тож дозволу не
     // просить; дозвіл — лише для `destructive` і `relaxation`
     const [base] = classifySteps([addCheck], UNIQUE, parse)
     const carriers: PlanStep = {

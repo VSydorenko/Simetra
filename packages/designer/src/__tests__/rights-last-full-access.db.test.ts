@@ -124,7 +124,7 @@ describe("concurrent last fullAccess carrier", () => {
                 [carrier.first]
               )
               await first.query("SET CONSTRAINTS ALL IMMEDIATE")
-              // Замок рядка версії скоупу — перший крок оператора (Р2c2-6):
+              // Замок рядка версії скоупу — перший крок оператора (спека прав §7):
               // сесія 2 стає в чергу вже на своєму UPDATE, а не на COMMIT
               const pending = (async () => {
                 try {

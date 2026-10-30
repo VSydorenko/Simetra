@@ -339,7 +339,7 @@ describe("subscriptions on a table with carrier copies", () => {
     .join(" OR ")
 
   it("a subscription on a table with copies ignores copy-only updates", async () => {
-    // Поширення копій — не зміна змісту (Р2a2-19): без `whenChanged` пара
+    // Поширення копій — не зміна змісту (спека прав §5.2): без `whenChanged` пара
     // тригерів, оновлення — з умовою змісту.
     expect(await triggers()).toEqual([
       tree(

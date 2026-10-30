@@ -73,7 +73,7 @@ describe("customTableSchema", () => {
     expect(res.success).toBe(true)
   })
 
-  // Ціль FK (Рб1-10): колонки `CustomTable`, ключ таблиці виду або зовнішня
+  // Ціль FK (спека прав §4.7): колонки `CustomTable`, ключ таблиці виду або зовнішня
   // таблиця; змішана форма й невідомий ключ — відмова схеми.
   it.each([
     [{ object: { kind: "CustomTable", name: "P" }, columns: ["id"] }, true],

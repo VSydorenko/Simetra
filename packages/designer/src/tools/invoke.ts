@@ -181,7 +181,7 @@ export async function invoke<D>(
       // Артефакти — до змін теки: записаний запис промоції без змін теки
       // інертний (план відмовить, повторний `promote` перезапише його), а
       // зміни теки без запису не відновити — `promote` вдруге не запуститься,
-      // бо об'єкт уже вид (рішення 1 плану П3-2a).
+      // бо об'єкт уже вид (спека промоції §7.1).
       if (writeArtifacts) await writeChanges(root, artifacts)
       if (write) await writeChanges(o.dir, outcome.changes)
       return {

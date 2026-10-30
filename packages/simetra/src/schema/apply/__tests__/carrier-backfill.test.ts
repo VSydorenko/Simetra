@@ -21,8 +21,8 @@ import {
 } from "../../../compiler/__tests__/fixtures/rights"
 
 /**
- * Копії носіїв без значень (Р2a2-11) і кроки даних плану, що їх заповнюють
- * (Р2b2-1, Р2b2-6): яка копія чекає значень і який крок, SQL та замок її
+ * Копії носіїв без значень (спека прав §5.2) і кроки даних плану, що їх заповнюють
+ * (спека промоції §7.2): яка копія чекає значень і який крок, SQL та замок її
  * заповнюють.
  */
 
@@ -80,8 +80,8 @@ const created = (o: { tables?: string[]; columns?: string[] } = {}) =>
   ])
 
 describe("pendingCarrierCopies", () => {
-  // Р2b2-11: чим колонка копії була в `applied` — випадок 3 (звичайна
-  // колонка) перезаписує дані й іде в `overwrites`. Р2b2-12: колонку, яку
+  // Чим колонка копії була в `applied` — випадок 3 (звичайна колонка)
+  // перезаписує дані й іде в `overwrites` (спека прав §5.2). Колонку, яку
   // створює двигун цього плану, план заповнює, хоч би що казав `applied`
   it.each([
     {
@@ -137,7 +137,7 @@ describe("pendingCarrierCopies", () => {
       expected: [{ table: CHECKLIST, columns: COPIES, overwrites: [] }],
     },
     {
-      // Р2b2-13: без знімка наявна колонка з іменем копії — колонка з даними
+      // Без знімка (спека прав §5.2) наявна колонка з іменем копії — колонка з даними
       case: "fresh",
       applied: undefined,
       created: created(),
@@ -157,7 +157,7 @@ describe("pendingCarrierCopies", () => {
       ],
     },
     {
-      // Р2b2-12: колонку-копію вручну знято, дрейф прийнято — знімок каже
+      // Колонку-копію вручну знято, дрейф прийнято — знімок каже
       // «жива», а двигун відтворює її порожньою
       case: "recreated-copy",
       applied: (t: PhysicalTable) => [t],
@@ -187,7 +187,7 @@ describe("pendingCarrierCopies", () => {
   })
 
   it("promotion: an unmapped adopted column of the copy's name is overwritten, found under the old name", async () => {
-    // Р2b2-6, Р2b2-11: крок іде після кроків двигуна, коли таблиця вже в
+    // Крок іде після кроків двигуна, коли таблиця вже в
     // новому імені; старе ім'я лише шукає її в знімку `applied`. Прийнята
     // колонка `assignee_id`, яку мапінг не взяв, — випадок 3; решти копій у
     // прийнятій таблиці не було — випадок 1
@@ -259,7 +259,7 @@ describe("carrierBackfillSteps", () => {
   })
 
   it("a statement overwriting a plain column is destructive, the rest stay dataStep", async () => {
-    // Р2b2-11: колонка `assignee_id` ТЧ була звичайною колонкою з даними —
+    // Колонка `assignee_id` ТЧ була звичайною колонкою з даними —
     // оператор її зв'язку перезаписує чужі дані й потребує дозволу; копія
     // вкладення — чисте заповнення
     const physical = (await compileRights(policyDomain())).model!.physical
@@ -294,7 +294,7 @@ describe("carrierBackfillSteps", () => {
   })
 
   it("marker snapshot to footprint: a step for the table with rows, none for a table the plan creates", async () => {
-    // Ланцюг плану (Р2a2-11, Р2b2-1): у marker колонки копій `checklist` і
+    // Ланцюг плану (спека прав §5.2): у marker колонки копій `checklist` і
     // `attachments` не були копіями; `attachments` план створює наново
     const physical = (await compileRights(policyDomain())).model!.physical
     const applied = physical.tables.map((t) =>
@@ -323,7 +323,7 @@ describe("carrierBackfillSteps", () => {
   })
 
   it("a table renamed by the promotion gets its step in the new name", async () => {
-    // Р2b2-6: копія носія лягає на таблицю, яку промоція перейменовує;
+    // Копія носія лягає на таблицю, яку промоція перейменовує;
     // крок іде після кроків двигуна, тож SQL і `lockedTables` — у новому
     // імені, а слід (замок від початку транзакції) — у старому
     const { before, desired } = await promotedRights(

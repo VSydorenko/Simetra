@@ -296,7 +296,7 @@ describe("EventSubscription", () => {
   })
 
   it("whenChanged cannot list an author column either", async () => {
-    // Авторство — механіка (Р-A1-9): тригер авторства пише його незалежно
+    // Авторство — механіка (спека П4 §6.8): тригер авторства пише його незалежно
     // від порядку імен з підпискою, тож умова була б непевною.
     expect(
       await codes({
@@ -374,7 +374,7 @@ describe("EventSubscription", () => {
   })
 
   it("a handler outside the closed shell is an error even in a shared file", async () => {
-    // Обробник не буває боргом (рішення 8 плану промоції 2b): без переліку
+    // Обробник не буває боргом (спека П2 §3): без переліку
     // боргу звітує саме його правило, а не `sql.debt-grows`.
     const found = async (sql: string) =>
       (
@@ -461,7 +461,7 @@ describe("EventSubscription", () => {
       })
     ).toEqual([[TABLE_SQL, "setConfig"]])
     // Зміна ролі в обробнику з модуля боргу — теж помилка, а не попередження
-    // боргового SQL (Р2c1-6): обробник виконується посеред команди.
+    // боргового SQL (спека прав §5.3): обробник виконується посеред команди.
     expect(
       await forms({
         [HANDLER_FILE]: undefined,
@@ -480,7 +480,7 @@ describe("EventSubscription", () => {
     const handler = (body: string) =>
       `CREATE FUNCTION app.stamp() RETURNS trigger LANGUAGE plpgsql VOLATILE SET search_path = '' AS $$ ${body} $$;`
     // Процедури, які кличе обробник, — функції моделі; `CALL` обробнику
-    // заборонено (Р2c1-19), але присвоєння механіки через `INOUT` судиться
+    // заборонено (спека прав §5.3), але присвоєння механіки через `INOUT` судиться
     // окремо. Процедура — борг, тож перелік приймає його: предмет тут —
     // присвоєння, а не ратчет.
     const routines = {
@@ -514,7 +514,7 @@ describe("EventSubscription", () => {
         d.pointer,
         d.params?.problem ?? d.params?.detail,
       ])
-    // Оператор поза переліком обробника (Р2c1-19) — окрема перевірка голів:
+    // Оператор поза переліком обробника (спека прав §5.3) — окрема перевірка голів:
     // присвоєння механіки судиться й тоді.
     const head = (detail: string) => [
       "sql.head-not-allowed",
@@ -622,7 +622,7 @@ describe("EventSubscription", () => {
       }
     )
 
-    // Авторство — механіка (Р-A1-9): під командою його примушує тригер
+    // Авторство — механіка (спека П4 §6.8): під командою його примушує тригер
     // авторства, тож обробник його не присвоює.
     it.each([
       ["BEGIN NEW.created_by_id := NULL; RETURN NEW; END", "new.created_by_id"],
@@ -735,7 +735,7 @@ describe("EventSubscription", () => {
           `CREATE FUNCTION public.count_comment() RETURNS trigger LANGUAGE plpgsql VOLATILE SET search_path = '' AS $$ ${body} $$;`
         )
         // Викликані обробником — функції моделі: `log` — функція-запит
-        // (Р2c1-18), процедура — борг.
+        // (спека прав §5.3), процедура — борг.
         files.set(
           "sql/public/routines.sql",
           "CREATE PROCEDURE public.bump(INOUT v uuid) LANGUAGE plpgsql AS $$ BEGIN END $$;\n" +
@@ -760,7 +760,7 @@ describe("EventSubscription", () => {
       const reads = (column: string) => [
         at("subscription.handler-reads-carrier", column),
       ]
-      // `CALL` і `INSERT` обробнику заборонено (Р2c1-19) — окрема перевірка.
+      // `CALL` і `INSERT` обробнику заборонено (спека прав §5.3) — окрема перевірка.
       const statement = [
         "sql.head-not-allowed",
         COUNT_COMMENT_SQL_FILE,

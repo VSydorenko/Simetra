@@ -37,11 +37,11 @@ import {
 import { inTarget, query } from "./support/db"
 
 /**
- * Наскрізний цикл промоції інструментами (план П3-2a, задача 13): стан до
+ * Наскрізний цикл промоції інструментами: стан до
  * промоції застосовано з даними, `promote` пише запис у `plans/`, `plan`
  * читає його й будує план промоції, а `apply` репетирує його на цілі й
- * відкочує. Застосування з `COMMIT` — лише з чинним звітом репетиції (план
- * П3-2b-3): тут копією служить сама ціль. Фікстура синтетична.
+ * відкочує. Застосування з `COMMIT` — лише з чинним звітом репетиції (спека
+ * промоції §8): тут копією служить сама ціль. Фікстура синтетична.
  * Ціль кожного тесту — окрема база від `withDesiredShadow`; база стеку лише
  * читається.
  */
@@ -78,7 +78,7 @@ const column = (
 
 /**
  * Прийнята таблиця `Item` з ТЧ `ItemLine` і посиланням на довідник `Group`.
- * Коментар таблиці `promote` переносить в опис дослівно (R24).
+ * Коментар таблиці `promote` переносить в опис дослівно (спека промоції §8).
  */
 function item(onDelete = "restrict") {
   return {
@@ -235,7 +235,7 @@ function mapping(o: MappingOptions = {}): PromoteInput {
       // Вид не відтворює індекс опису, тож він лише знімається
       "Item#indexes/items_title_idx": "removed",
       // Генерованих політик і грантів ролям API вид ще не дає, тож клас
-      // `platform` для них відмовив би (рішення 7 плану П3-2b-0): читання
+      // `platform` для них відмовив би (спека промоції §8): читання
       // знімається класом `removed`
       ...(o.read === true
         ? { [READ_UNITS.policy]: "removed", [READ_UNITS.grant]: "removed" }
@@ -434,8 +434,8 @@ describe.concurrent("promotion lifecycle", () => {
         )
       ).toEqual([])
       // FK на `Group` з `restrict` не еквівалентний FK виду (`noAction`):
-      // інша дія видалення — інший ключ (рішення 4), тож DROP/ADD двигуна, а
-      // зміну семантики дозволяє пункт `delete:` (рішення 8)
+      // інша дія видалення — інший ключ (спека промоції §5), тож DROP/ADD двигуна, а
+      // зміну семантики дозволяє пункт `delete:` (спека промоції §8)
       expect(
         stepMatching(data, /group_id_fkey/).map((s) => [s.origin, s.sql])
       ).toEqual([
@@ -494,7 +494,7 @@ describe.concurrent("promotion lifecycle", () => {
         "delete:app.item.item_group_id_fkey",
       ])
       // Зняття FK бере ACCESS EXCLUSIVE на `groups` — наперед, у старому
-      // імені, а не посеред кроків (R26)
+      // імені, а не посеред кроків (спека промоції §7.2)
       expect(data.locks).toContainEqual({
         schema: "app",
         name: "groups",
@@ -633,7 +633,7 @@ describe.concurrent("promotion lifecycle", () => {
         "plan"
       )
       await stale(JSON.stringify({ ...report, format: 2 }), "format")
-      // Файл переписано, `planHash` той самий (аудит Codex, блокер)
+      // Файл переписано, `planHash` той самий
       await stale(JSON.stringify({ ...report, rows: [] }), "tables")
       await writeFile(path, "{")
       const broken = await apply(dir, url, data)
@@ -680,7 +680,7 @@ describe.concurrent("promotion lifecycle", () => {
   })
 
   it("stops a too-long title on rehearsal", async () => {
-    // Review Focus 4: значення, довше за `varchar(150)` опису виду
+    // Значення, довше за `varchar(150)` опису виду
     const long = "x".repeat(151)
     await inTarget(EMPTY, scope, async (url) => {
       const dir = await promoted(url, { title: long })
@@ -755,7 +755,7 @@ describe.concurrent("promotion lifecycle", () => {
     })
 
     it("rehearses a normalizing type change through a repair", async () => {
-      // Review Focus 5: ремонт пише нормалізований текст до кроку двигуна
+      // Ремонт пише нормалізований текст до кроку двигуна
       await inTarget(EMPTY, scope, async (url) => {
         const { dir, data } = await converted(url, {
           columns: asJson,
@@ -857,7 +857,7 @@ describe.concurrent("promotion lifecycle", () => {
   })
 
   it("swaps two attribute columns by identity", async () => {
-    // Review Focus 2: `code` → `legacy`, `legacy` → `code`; доказ збереження
+    // `code` → `legacy`, `legacy` → `code`; доказ збереження
     // в транзакції репетиції порівнює значення за ідентичністю колонок
     await inTarget(EMPTY, scope, async (url) => {
       const dir = await promoted(url, { swap: true })
@@ -884,7 +884,7 @@ describe.concurrent("promotion lifecycle", () => {
   })
 
   it("does not block a fresh environment with a record file", async () => {
-    // Review Focus 5: нова ціль без marker і таблиць, а запис лежить у репо
+    // Нова ціль без marker і таблиць, а запис лежить у репо
     await inTarget(EMPTY, scope, async (url) => {
       const dir = await projectWith(beforeEntries())
       const promote = await call("promote", mapping(), options(dir, url))

@@ -85,7 +85,7 @@ const rightsIf = (
 ) =>
   `(${rightsCheck(rightsOf(model, table), action, mainOf(model, table), row)}) IS NOT TRUE`
 /**
- * Замок рядка «до» (Р-A2-20): позначка — `NO KEY UPDATE` (сумісний з
+ * Замок рядка «до» (спека П4 §6.6): позначка — `NO KEY UPDATE` (сумісний з
  * `KEY SHARE` RI-перевірок), видалення — `UPDATE` (`DELETE` з ним конфліктує).
  */
 const lockedRow = (table: string, strength: "NO KEY UPDATE" | "UPDATE") =>
@@ -159,7 +159,7 @@ describe("<t>_mark_deletion", () => {
       target: { variable: "v_count" },
     })
     expect(ifAt(s.shape, "v_count = 0", s.update + 2)).toBe(s.update + 2)
-    // Рядок дає сам `UPDATE` (Ф10): повторного читання після нього немає.
+    // Рядок дає сам `UPDATE` (спека П4 §6.6): повторного читання після нього немає.
     expect(s.shape[s.update]!.target).toEqual({ variable: "v_row" })
     expect(s.shape.filter((x) => x.target?.variable === "v_row")).toHaveLength(
       1
@@ -253,7 +253,7 @@ describe("<t>_delete", () => {
       remove,
     ]
     expectOrder(order)
-    // Видалення лишає `FOR UPDATE` (Р-A2-20): `DELETE` конфліктує з
+    // Видалення лишає `FOR UPDATE` (спека П4 §6.6): `DELETE` конфліктує з
     // `KEY SHARE` за природою, на відміну від зміни.
     expect(lockStrengths(shape[order[2]!]!.expressions[0]!.tree)).toEqual([
       "LCS_FORUPDATE",
@@ -435,7 +435,7 @@ describe("функції за роллю довідника", () => {
   )
 })
 
-// Колонку позначки ядро бере за `origin` (Р-A2-5): у snake_case-проєкті
+// Колонку позначки ядро бере за `origin` (спека П4 §6.6): у snake_case-проєкті
 // літерал логічного імені її б не знайшов.
 describe("обидва стилі: колонка позначки за origin", () => {
   const files = () => policyDomain(writeRoles(), commandCoreLayer())

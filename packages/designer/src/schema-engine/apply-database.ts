@@ -51,7 +51,7 @@ function normalize(error: unknown): unknown {
 
 /**
  * Реалізація порту на `pg`. Гарантії живуть у транзакції, а не в сесії
- * (рішення 14 плану П3-1): жодного сесійного `SET`, ізоляцію й режим читання
+ * (спека промоції §7.2): жодного сесійного `SET`, ізоляцію й режим читання
  * задає `BEGIN`. Пул створюється на виклик і закривається в `finally`.
  */
 export function createApplyDatabase(o: { readOnly: boolean }): ApplyDatabase {

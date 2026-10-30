@@ -257,7 +257,7 @@ export function kitchenSink(): Map<string, string> {
       },
     ],
     // Три джерела над однією `RoleGrant` розділяє дискримінатор `level`
-    // (Р2d1-19); літерали не збігаються з жодним логічним іменем фікстури.
+    // (спека прав §4.7); літерали не збігаються з жодним логічним іменем фікстури.
     // `orgGrants` — рівень скоупу без колонки скоупу (скоуп з учасника) і
     // роль через таблицю ролей `SourceRole`.
     assignmentSources: [
@@ -492,7 +492,7 @@ export function kitchenSink(): Map<string, string> {
     writeMode: "RecorderSubordinate",
     // Підлеглий регістр пишуть лише рухи: кастомна дія без ефектів.
     customActions: customActions("read", [], false),
-    // Регістр мапить доступ лише на свій вимір (Р2a2-4): шлях — на об'єктах.
+    // Регістр мапить доступ лише на свій вимір (спека прав §5.2): шлях — на об'єктах.
     access: [{ attribute: "item", dimension: "item" }],
     recorderTypes: [ref("Document", "Sale")],
     standardAttributeOverrides: overrides("period"),
@@ -528,7 +528,7 @@ export function kitchenSink(): Map<string, string> {
     balanceControl: { resources: ["qty"] },
     // Регістр накопичення пишуть лише рухи: кастомна дія без ефектів.
     customActions: customActions("read", [], false),
-    // Регістр мапить доступ лише на свій вимір (Р2a2-4): шлях — на об'єктах.
+    // Регістр мапить доступ лише на свій вимір (спека прав §5.2): шлях — на об'єктах.
     access: [{ attribute: "item", dimension: "item" }],
     standardAttributeOverrides: overrides("period"),
     dimensions: [
@@ -710,7 +710,7 @@ export function kitchenSink(): Map<string, string> {
           object: ref("Catalog", "Organization"),
           key: "ref",
         },
-        // Каскад від таблиці виду до прийнятої таблиці заборонено (Р2c1-34).
+        // Каскад від таблиці виду до прийнятої таблиці заборонено (спека прав §4.7).
         onDelete: "restrict",
         onUpdate: "restrict",
         deferrable: "initiallyDeferred",
@@ -847,7 +847,7 @@ export function kitchenSink(): Map<string, string> {
     ...header("Catalog", "Users", "users"),
     scope: "none",
     role: "users",
-    // Ключ — власник лише рядка самих «Користувачів» (Р1a-11).
+    // Ключ — власник лише рядка самих «Користувачів» (спека прав §4.2).
     ownership: ["ref"],
   }
 
@@ -886,7 +886,7 @@ export function kitchenSink(): Map<string, string> {
     ],
     primaryKey: { name: "crew_pk", columns: ["id"] },
     // Скоуп джерела членства — скоуп таблиці, а `columns.scope` — її
-    // скоуп-колонка (Р1a-24).
+    // скоуп-колонка (спека прав §4.2).
     scope: "user",
     scopeColumn: "userRoot",
   }
@@ -1069,7 +1069,7 @@ export function kitchenSink(): Map<string, string> {
     "roles/PartnerManager/PartnerManager.meta.json": partnerManager,
     "roles/Visitor/Visitor.meta.json": visitor,
     "sql/public/subscription-handlers.sql": handlers,
-    // Функція значень виміру `partner` — у закритій формі (Р1a-14): читає
+    // Функція значень виміру `partner` — у закритій формі (спека прав §4.4): читає
     // лише таблицю застосунку й поточного користувача.
     "sql/public/access-dimensions.sql":
       "CREATE FUNCTION public.my_partner_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT p.id FROM public.partner p WHERE (SELECT simetra.current_user_id()) IS NOT NULL $$;",

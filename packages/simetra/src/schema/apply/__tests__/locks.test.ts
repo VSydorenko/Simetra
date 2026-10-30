@@ -23,7 +23,7 @@ import {
 
 /**
  * Слід кроків і блокування плану (спека промоції §7.2, «З'єднання й
- * блокування», R26 плану П3-2a):
+ * блокування»):
  * власна таблиця з класу кроку, наслідки для FK зі структурних об'єктів і
  * моделей, вихідні імена, найсильніший режим на таблицю й детермінований
  * порядок.
@@ -270,7 +270,7 @@ describe("stepFootprint", () => {
 })
 
 describe("environment steps", () => {
-  // Рішення 5 плану П3-2b-0, R2: об'єкти кроку середовища створює той самий
+  // Об'єкти кроку середовища створює той самий
   // план у тій самій транзакції, тож крок нікого на цілі не блокує
   const environment = engineStep("s3", "accessExclusive", [t("app", "new")], {
     origin: "environment",
@@ -414,7 +414,7 @@ describe("live foreign keys", () => {
 })
 
 describe("provider locks", () => {
-  /** Перелік, як його прочитав би план з цілі (R27). */
+  /** Перелік, як його прочитав би план з цілі. */
   const providerLocks: ProviderLockSet[] = [
     {
       setting: "supautils.policy_grants",
@@ -559,7 +559,7 @@ describe("provider locks", () => {
 
 describe("lockRightsSql", () => {
   it("checks the right on the table itself for every server version", () => {
-    // Рішення 10 плану П3-2b-1: LOCK без ONLY прав нащадків не перевіряє ні
+    // LOCK без ONLY прав нащадків не перевіряє ні
     // на 17+, ні на 14–16 (виміряно), тож рекурсії немає
     const sql = lockRightsSql()
     expect(sql).not.toContain("pg_inherits")

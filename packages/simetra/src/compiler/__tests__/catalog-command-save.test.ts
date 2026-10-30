@@ -155,7 +155,7 @@ describe("buildCatalogCommandUnits — <t>_save", () => {
     const update = shape.findIndex(
       (s, i) => i > ctx && dmlKind(s) === "UpdateStmt"
     )
-    // Форма шапки без ключа (Ф14) — другий `UPDATE` шапки.
+    // Форма шапки без ключа (спека П4 §6.6) — другий `UPDATE` шапки.
     const lastUpdate = shape.findIndex(
       (s, i) =>
         i > update &&
@@ -166,7 +166,7 @@ describe("buildCatalogCommandUnits — <t>_save", () => {
     expect(order.every((i) => i >= 0)).toBe(true)
     expect([...order].sort((a, b) => a - b)).toEqual(order)
     expect(new Set(order).size).toBe(order.length)
-    // Замок — `FOR NO KEY UPDATE` у дереві запиту рядка «до» (Р-A2-20):
+    // Замок — `FOR NO KEY UPDATE` у дереві запиту рядка «до» (спека П4 §6.6):
     // `FOR UPDATE` конфліктував би з `KEY SHARE` RI-перевірок.
     expect(shape[lockAt]!.expressions[0]!.tree).toEqual(
       tree(
@@ -176,7 +176,7 @@ describe("buildCatalogCommandUnits — <t>_save", () => {
     expect(lockStrengths(shape[lockAt]!.expressions[0]!.tree)).toEqual([
       "LCS_FORNOKEYUPDATE",
     ])
-    // `GET DIAGNOSTICS` іде одразу після `UPDATE` кожної форми (Ф14), за
+    // `GET DIAGNOSTICS` іде одразу після `UPDATE` кожної форми, за
     // останньою — відмова на нулі.
     expect(shape[lastUpdate + 1]).toMatchObject({
       type: "getdiag",
@@ -273,7 +273,7 @@ describe("buildCatalogCommandUnits — <t>_save", () => {
         `INSERT INTO ${ts} (id, parent_id, line_number, org_id, line_region_id, related_id, subject_type, subject_id) SELECT v.id, v_in.id, x.ord, v_new.org_id, n.line_region_id, n.related_id, n.subject_type, n.subject_id FROM ${elements} CROSS JOIN LATERAL jsonb_populate_record(NULL::${ts}, v_after -> (x.ord - 1)::int) AS n WHERE NOT EXISTS (SELECT 1 FROM ${ts} r WHERE r.id = v.id AND r.parent_id = v_in.id)`
       ),
     ])
-    // Видимий рядок іншого власника — відмова до DML ТЧ (Р-A2-12).
+    // Видимий рядок іншого власника — відмова до DML ТЧ (спека П4 §6.6).
     expect(
       ifAt(
         shape,
@@ -290,7 +290,7 @@ describe("buildCatalogCommandUnits — <t>_save", () => {
     )
   })
 
-  // Рядки ТЧ — той самий механізм, що шапка (Р-A2-21): замок рядків власника
+  // Рядки ТЧ — той самий механізм, що шапка (спека П4 §6.6): замок рядків власника
   // і звірка кількості рядків кожного DML, інакше рядок, який відсікла
   // політика `DELETE`/`UPDATE`, мовчки загубив би зміну.
   it("ТЧ: замок шапки → UPDATE шапки → замок рядків ТЧ → DELETE → звірка → UPDATE → звірка → INSERT", () => {
@@ -422,7 +422,7 @@ describe("buildCatalogCommandUnits — <t>_save", () => {
   })
 
   // Колонка ключа в `SET` бере замок `FOR UPDATE` навіть за незмінного
-  // значення (Ф14), тож форма з ключем — лише коли вхід змінює ключ.
+  // значення (спека П4 §6.6), тож форма з ключем — лише коли вхід змінює ключ.
   it("UPDATE шапки — дві форми: з колонками ключа лише за зміни ключа", () => {
     const { updateKeys, table } = contractOf(domain, "ticket")
     const shape = bodyShape(saveSql(domain, "ticket"))
@@ -607,7 +607,7 @@ describe("buildCatalogCommandUnits — <t>_save", () => {
   })
 
   it("значення, що не приводиться до типу колонки, — command.invalid з ключем", () => {
-    // Вузький блок навколо поколонкового приведення (Р-A2-7): клас `22`
+    // Вузький блок навколо поколонкового приведення (спека П4 §6.6): клас `22`
     // ловить лише він, а `DETAIL` — ключ, на якому впало приведення.
     const blocks = handlerBlocks(saveSql(domain, "ticket"), "data_exception")
     // Шапка і ТЧ — по блоку; тіло — лише цикл приведення.
@@ -866,7 +866,7 @@ describe("buildCatalogCommandUnits — <t>_save", () => {
     }
   })
 
-  // Видимість рядка автору гарантує замикання прав (Ф10), тож рядок дає
+  // Видимість рядка автору гарантує замикання прав (спека П4 §6.6), тож рядок дає
   // сам DML, а повторного читання після нього немає.
   it("рядок — з RETURNING у v_row: UPDATE → GET DIAGNOSTICS → v_count = 0", () => {
     const shape = bodyShape(saveSql(domain, "ticket"))
@@ -881,7 +881,7 @@ describe("buildCatalogCommandUnits — <t>_save", () => {
     for (const s of into) {
       expect(nodes(s.expressions[0]!.tree, "returningList")).toHaveLength(1)
     }
-    // Кожна форма `UPDATE` (Ф14) — з `GET DIAGNOSTICS` одразу за нею;
+    // Кожна форма `UPDATE` — з `GET DIAGNOSTICS` одразу за нею;
     // відмова на нулі — одна, після обох.
     const updates = into.slice(1).map((s) => shape.indexOf(s))
     for (const update of updates) {

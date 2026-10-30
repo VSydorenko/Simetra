@@ -33,7 +33,7 @@ import {
 } from "simetra/compiler"
 
 /**
- * Раннер транзакції на фейковому порті (план П3-1, задача 8): порядок
+ * Раннер транзакції на фейковому порті: порядок
  * операторів спроби, паузи між спробами й те, які помилки не повторюються.
  * Справжня база — у `execute-plan.db.test.ts` designer.
  */
@@ -755,7 +755,7 @@ describe("executePlan", () => {
   })
 
   it("refuses another server", async () => {
-    // Рішення 1–2 плану П3-2b-3: копія на сервері з іншим упорядкуванням —
+    // Копія на сервері з іншим упорядкуванням —
     // не копія цієї цілі, навіть коли схема й стан ті самі
     for (const mode of ["apply", "rehearse"] as const) {
       const { db, log } = fakeDb({ server: { collate: "C" } })
@@ -845,7 +845,7 @@ describe("executePlan", () => {
   })
 
   it("refuses another ledger head", async () => {
-    // Review Focus 1 плану П3-2b-3: той самий ланцюжок, але ціль отримала
+    // Той самий ланцюжок, але ціль отримала
     // застосування окремо — голова ledger інша
     const head = "00000000-0000-4000-8000-0000000000aa"
     for (const mode of ["apply", "rehearse"] as const) {
@@ -918,7 +918,7 @@ describe("executePlan", () => {
   })
 
   it("compares the target fingerprint without owners on a rehearsal", async () => {
-    // Review Focus 2 плану П3-2b-3: відновлена копія може мати інших
+    // Відновлена копія може мати інших
     // власників; з власником порівнює лише застосування
     const owners = { ...TARGET.sections, owner: "copy-owner" }
     const rehearsal = fakeDb({ targetSections: owners })
@@ -994,7 +994,7 @@ describe("executePlan", () => {
   })
 
   it("refuses before the locks when the global default privileges changed after the plan", async () => {
-    // Рішення 5(д) плану П3-2b-0: план доведено без глобальних ADP ролі, а на
+    // План доведено без глобальних ADP ролі, а на
     // цілі вони вже є
     const anon: GlobalDefaultPrivilege = {
       objtype: "S",
@@ -1035,7 +1035,7 @@ describe("executePlan", () => {
   })
 
   it("refuses before the locks when a foreign key of the footprint appeared after the plan", async () => {
-    // Рішення 9 плану П3-2b-1: план прочитав FK таблиці сліду, коли FK поза
+    // План прочитав FK таблиці сліду, коли FK поза
     // межею ще не було; на цілі він уже є
     const subjects = [{ schema: "app", name: "t" }]
     const r: LiveForeignKey = {
@@ -1059,7 +1059,7 @@ describe("executePlan", () => {
     expect(params["foreign-keys"]).toEqual([JSON.stringify(subjects)])
     expect(log.filter((l) => l === "BEGIN")).toHaveLength(1)
     expect(log.some((l) => l.startsWith("LOCK TABLE"))).toBe(false)
-    // Після переліку провайдера й глобальних ADP (рішення 1)
+    // Після переліку провайдера й глобальних ADP
     expect(log.indexOf("foreign-keys")).toBeGreaterThan(
       log.indexOf("environment")
     )
@@ -1309,7 +1309,7 @@ describe("executePlan", () => {
     })
   })
 
-  // R22 плану П3-2a і рішення 1 плану П3-2b-1: преамбула — лише навколо
+  // Преамбула — лише навколо
   // блоку кроків двигуна разом із їхніми сторожами
   it("runs engine steps and their guards under the preamble, the other steps under the transaction settings", async () => {
     const intent = step("s1", "ALTER TABLE app.t RENAME TO t2", {
@@ -1350,7 +1350,7 @@ describe("executePlan", () => {
     expect(seen.ledger).toEqual([SESSION])
   })
 
-  describe("carrier steps (Р2b2-4)", () => {
+  describe("carrier steps", () => {
     const intent = step("s1", "ALTER TABLE app.t RENAME TO t2", {
       origin: "intent",
     })
@@ -1371,7 +1371,7 @@ describe("executePlan", () => {
 
     // Колонку-копію створює двигун, тож крок копій — після нього й до
     // середовища; блоки вибираються за походженням, а не за позицією.
-    // Налаштування — лише `row_security = off` (Р2b2-9): закріплений
+    // Налаштування — лише `row_security = off`: закріплений
     // `search_path` зламав би тіло тригера, що називає об'єкти без схеми
     it("runs carrier steps with row security off only, after the engine", async () => {
       const fake = clocked()
@@ -1692,7 +1692,7 @@ describe("executePlan", () => {
   })
 
   it("fails, not refuses, when the role lost its rights on the installed extension", async () => {
-    // Рішення 4, крок 3: розширення на місці — ціль та сама, а взяти його
+    // Розширення на місці — ціль та сама, а взяти його
     // перевірка не може
     const { db, log } = fakeDb({
       plpgsql: {
@@ -2071,8 +2071,8 @@ describe("executePlan", () => {
     })
 
     it("names the owners as the cause of a failed proof", async () => {
-      // Рішення 1 плану П3-2b-3 і вимір задачі 0: двигун на копії з іншим
-      // власником бачить дії ACL, а не `OWNER TO`, тож причину називає
+      // Двигун на копії з іншим власником (привілеї несуть власника; спека
+      // промоції §8) бачить дії ACL, а не `OWNER TO`, тож причину називає
       // різниця секції власника відбитка (фаза 6), а не розбір SQL
       const revoke = 'REVOKE ALL ON TABLE "app"."t" FROM "copy_owner"'
       const owners = await executePlan(
@@ -2413,7 +2413,7 @@ describe("executePlan", () => {
     })
 
     it("refuses a report of another plan", async () => {
-      // Review Focus 3: той самий перехід, але план перебудовано
+      // Той самий перехід, але план перебудовано
       await refusedBefore(
         reported,
         withReport({ ...REPORT, planHash: "f".repeat(64) }),
@@ -2487,7 +2487,7 @@ describe("executePlan", () => {
     })
 
     it("refuses a table empty on the copy", async () => {
-      // Review Focus 4: відмова в транзакції до першого кроку
+      // Відмова в транзакції до першого кроку
       const { db, log } = fakeDb({ measured: "5" })
       const outcome = await executePlan(
         db,
@@ -2570,7 +2570,7 @@ describe("executePlan", () => {
     })
 
     describe("at the Postgres limit of the statement timeout", () => {
-      // Копія в 3 рядки й L = 1: формула дає рівно рядки цілі (рішення R10)
+      // Копія в 3 рядки й L = 1: формула дає рівно рядки цілі
       const atLimit = (
         measured: string,
         over: Partial<ExecuteOptions> = {}
@@ -2826,7 +2826,7 @@ describe("executePlan", () => {
       'ALTER TABLE app."x.y" ADD COLUMN e int',
       "set-settings",
       "set-constraints",
-      // Заміри «після» — до ревалідації (рішення 1 плану П3-2b-1)
+      // Заміри «після» — до ревалідації
       "get-settings",
       "set-settings",
       "measure app.u",
@@ -3113,7 +3113,7 @@ describe("executePlan", () => {
       columns: [COLUMN],
       triggers: [{ name: "tg", enabled: "O" }],
     }
-    /** Замір цілі за виразом — рендер рішення 8. */
+    /** Замір цілі за виразом — рендер замірів промоції. */
     const MEASURE = {
       before: "((\nupper(c)\n)::text)",
       after: "d",
@@ -3194,7 +3194,7 @@ describe("executePlan", () => {
         "write app.u",
         "set-settings",
         // Відкладене — вже під налаштуваннями транзакції, як у фазі 13, і
-        // до ввімкнення тригерів: інакше `55006` (рішення В17)
+        // до ввімкнення тригерів: інакше `55006` (спека промоції §7.2)
         "set-constraints",
         "ALTER TABLE app.u ENABLE TRIGGER tg",
         // 11. Кроки двигуна під преамбулою
@@ -3227,7 +3227,7 @@ describe("executePlan", () => {
     })
 
     it("collects rehearsal evidence", async () => {
-      // Рішення 3–4 плану П3-2b-3: кожен оператор — окремий запис, і
+      // Кожен оператор — окремий запис, і
       // кожен коштує 5 мс фейкового годинника
       const fake = clocked({
         triggers: LIVE,

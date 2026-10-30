@@ -303,7 +303,7 @@ const SIGNATURES = [
   "function:simetra.rights_journal_of(uuid,uuid,int4)",
 ].sort()
 
-/** Без довідника членства «Користувачів» не обмежує видимість (Р2a2-18). */
+/** Без довідника членства «Користувачів» не обмежує видимість (спека прав §5.2). */
 const WITHOUT_MEMBERSHIP = SIGNATURES.filter(
   (s) =>
     s !== "function:simetra.rights_visible_users()" &&
@@ -311,7 +311,7 @@ const WITHOUT_MEMBERSHIP = SIGNATURES.filter(
 )
 
 /**
- * Варіанти аналізу (Р2d2-2): кличуть їх лише функції аналізу від власника,
+ * Варіанти аналізу (спека прав §5.1): кличуть їх лише функції аналізу від власника,
  * тож без `SECURITY DEFINER` і без `EXECUTE`.
  */
 const VARIANTS = [
@@ -323,7 +323,7 @@ const VARIANTS = [
   RIGHTS_FUNCTIONS.visibleUsersOf,
 ].map((fn) => fn.name)
 
-/** Функції аналізу (Р2d2-1): `EXECUTE` — без сервісної ролі. */
+/** Функції аналізу (спека прав §5.1): `EXECUTE` — без сервісної ролі. */
 const ANALYSIS = [
   RIGHTS_FUNCTIONS.member,
   RIGHTS_FUNCTIONS.who,
@@ -347,7 +347,7 @@ describe("rights functions", () => {
   })
 
   it("renders rights functions without users from an adopted membership source", async () => {
-    // Р2d1-6, Р2d1-7: поточного користувача дає `sub`, тож функції прав є, а
+    // спека користувачів §7: поточного користувача дає `sub`, тож функції прав є, а
     // межі «Користувачів» без самих «Користувачів» немає.
     const sourced = await compiled(adoptedSourcesDomain(withoutUsers()))
     expect(sourced.contracts.users).toBeUndefined()
@@ -427,7 +427,7 @@ describe("rights functions", () => {
       expect(rows).toContain("users read any ")
       expect(rows).not.toContain("announcement create any ")
       // Розгортання — не селектор: адмін бачить довідники прав свого рівня,
-      // а глобальних не бачить (Р2a1-8, Р2a1-20).
+      // а глобальних не бачить (спека прав §4.6).
       expect(rows).toContain("org_roles read any ")
       expect(rows).toContain("org_role_assignments read any ")
       expect(rows.filter((r) => r.startsWith("global_"))).toEqual([])
@@ -444,7 +444,7 @@ describe("rights functions", () => {
       [EVERYONE_ID, "everyUser", null, null, null],
     ])
     // Рівень, покритий прийнятим джерелом, рядком довідника не вмикається
-    // (Р2a1-24).
+    // (спека прав Рх14).
     const sourced = await compiled(
       withRoles(BASE, {
         [PROJECT_FILE]: { assignmentSources: [grantsSource()] },
@@ -507,7 +507,7 @@ describe("rights functions", () => {
   ])(
     "the requires of every action are transitively closed: %s",
     async (_, build) => {
-      // Якір доказу двох проходів замикання (Р2a1-11).
+      // Якір доказу двох проходів замикання (спека прав Рх9).
       const result = await build()
       const rights: RightsContract[] = result.model!.contracts.rights
       expect(rights.length).toBeGreaterThan(0)
@@ -554,16 +554,16 @@ describe("rights functions", () => {
     [RIGHTS_FUNCTIONS.container.name, ["=", "level", "container"], undefined],
     [RIGHTS_FUNCTIONS.hasRight.name, ["<>", "level", "container"], undefined],
   ])("%s reads only the rows of its level", (name, level, extent) => {
-    // По одному запобіжнику рівня на функцію (Р2a1-19).
+    // По одному запобіжнику рівня на функцію.
     const found = comparisons(functionUnit(model, name))
     expect(found).toContainEqual(level)
     if (extent !== undefined) expect(found).toContainEqual(extent)
   })
 
   it("held compares the container kind with the row scope kind, not the storage", () => {
-    // Скоуп без виду нічого не означає (Р2a1-26): контейнер зіставляється з
+    // Скоуп без виду нічого не означає (спека прав §5.1): контейнер зіставляється з
     // видом скоупу рядка призначення, а не лише через рівень зберігання
-    // архетипу. `storage_id` рядка джерела — id джерела (Р2d1-4), тож вид
+    // архетипу. `storage_id` рядка джерела — id джерела (спека прав §4.7), тож вид
     // несе окрема колонка; рядок довідника дає в неї свій `storage_id`.
     for (const arm of unionArms(cteQuery(model, "assignments"))) {
       expect(target(arm, "scope_kind_id")).toEqual(target(arm, "storage_id"))
@@ -629,7 +629,7 @@ describe("rights functions", () => {
     }
     // Таблиці членства згадують лише шаблон «моїх скоупів» і межа
     // «Користувачів» — остання лише в з'єднанні з «моїми скоупами»
-    // (Р2a1-25, Р2a2-18) — разом з їхніми варіантами аналізу (Р2d2-2), шаблон
+    // (спека прав §5.2) — разом з їхніми варіантами аналізу (спека прав §5.1), шаблон
     // функції множини членства й функції аналізу (учасники скоупу запиту під
     // гейтом): мої скоупи обчислює одне місце.
     const readers = rightsUnits(model)
@@ -676,7 +676,7 @@ describe("rights functions", () => {
   })
 
   it("reads the members of every scope kind only in my scopes of that kind", async () => {
-    // Р2a1-26: учасники довідника членства виду K — лише за рядками
+    // спека прав §5.1: учасники довідника членства виду K — лише за рядками
     // `rights_my_scopes()` з `scope_kind_id = K`, інакше учасник іншого виду
     // з тим самим значенням скоупу відкрив би чужих користувачів.
     const two = await compiled(withRoles(BASE, secondScopeKind()))
@@ -746,7 +746,7 @@ describe("rights functions over adopted sources", () => {
   })
 
   it("my scopes include an adopted membership source, active rows only", async () => {
-    // Р2d1-3: та сама форма, що гілка довідника членства; `IS TRUE` —
+    // та сама форма, що гілка довідника членства; `IS TRUE` —
     // `NULL` в активності членства не дає.
     const branch = (active: string) =>
       tree(
@@ -783,7 +783,7 @@ describe("rights functions over adopted sources", () => {
   })
 
   it("an assignment source joins the key and is typed by kind", async () => {
-    // Р2d1-4: невідомий ключ — нуль рядків (внутрішнє з'єднання); учасник
+    // спека прав §4.7: невідомий ключ — нуль рядків (внутрішнє з'єднання); учасник
     // контейнерного джерела — лише мій учасник виду скоупу контейнера.
     const keys = (id: string) =>
       `JOIN simetra.rights_source_keys() k ON k.source_id = '${id}'::uuid AND k.key = src.role_key`
@@ -835,8 +835,8 @@ describe("rights functions over adopted sources", () => {
   })
 
   it("a source row passes only for a role of the source level", () => {
-    // Р2d1-4: рівень зберігання ролей, покритих джерелом, — `NULL`
-    // (Р2a1-12), тож рядок джерела типізує рівень джерела — стала генератора.
+    // спека прав §4.7: рівень зберігання ролей, покритих джерелом, — `NULL`
+    // (спека прав §4.6), тож рядок джерела типізує рівень джерела — стала генератора.
     const columns =
       "x.storage, x.storage_id, x.scope, x.container, x.custom_role, x.archetype, x.scope_kind_id, r.level, r.level_id"
     expect(cteQuery(model, "typed")).toEqual(
@@ -847,7 +847,7 @@ describe("rights functions over adopted sources", () => {
   })
 
   it("visible users include an adopted membership", () => {
-    // Р2d1-8: учасники джерела — лише за моїми скоупами того самого виду й
+    // спека прав §5.2: учасники джерела — лише за моїми скоупами того самого виду й
     // з тією самою умовою активності, що «мої скоупи».
     expect(
       bodyTree(functionUnit(model, RIGHTS_FUNCTIONS.visibleUsers.name))
@@ -859,7 +859,7 @@ describe("rights functions over adopted sources", () => {
   })
 
   it("a membership where narrows my scopes and visible users", async () => {
-    // Р2d1-15: умова рядків членства — та сама в «моїх скоупах» і в межі
+    // спека прав §4.7: умова рядків членства — та сама в «моїх скоупах» і в межі
     // «Користувачів».
     const narrowed = await compiled(
       adoptedSourcesDomain({
@@ -905,7 +905,7 @@ describe("rights functions over adopted sources", () => {
   ] as const)(
     "%s: rights functions and the users boundary",
     async (_, membership, users, rights, visible) => {
-      // Р2d1-7: одне місце правди для генератора функцій і політик.
+      // одне місце правди для генератора функцій і політик.
       const base = (await compiled(withRoles(BASE))).contracts
       const contracts = {
         roles: base.roles,
@@ -936,8 +936,9 @@ describe("rights functions over a polymorphic adopted source", () => {
     )
 
   it("a polymorphic source filters rows, checks the row scope and joins the role table", () => {
-    // R1: скоуп рядка — скоуп учасника; R1': рядок іншого рівня відсікає
-    // `where`; R2: кастомну роль із ключем системної — умова ролі.
+    // Скоуп рядка — скоуп учасника; рядок іншого рівня поліморфної таблиці
+    // відсікає `where`; кастомну роль із ключем системної — умова ролі
+    // (спека прав §4.7).
     expect(sourceArm(model, POLY_GRANTS_SOURCE_ID)).toEqual(
       polyArm(" AND s.scope = src.scope_id")
     )
@@ -1088,7 +1089,7 @@ describe("rights administration functions", () => {
 })
 
 /**
- * Фікстури шаблону прав (Р2d2-2, Р2d2-11): разом вони мають
+ * Фікстури шаблону прав (спека прав §5.1): разом вони мають
  * обидві форми гілки зв'язку виміру, функцію множини членства, прийняті й
  * поліморфні джерела, два види скоупу й однотенантний проєкт.
  */
@@ -1166,7 +1167,7 @@ function renamed(
 }
 
 /**
- * Користувач варіанта `fn` (Р2d2-2): дійсний — як у `current_user_id()`;
+ * Користувач варіанта `fn` (спека прав §5.1): дійсний — як у `current_user_id()`;
  * без «Користувачів» — аргумент як є.
  */
 function variantUser(model: CompiledModel, fn: string): string {
@@ -1181,7 +1182,7 @@ const qualifiedName = (fn: { schema: string; name: string }) =>
   `${fn.schema}.${fn.name}`
 
 /**
- * Відповідність Р2d2-2: поточний користувач → дійсний `p_user`, функції
+ * Відповідність шаблону прав (спека прав §5.1): поточний користувач → дійсний `p_user`, функції
  * множини поточного користувача → їхні варіанти з `p_user`, параметри
  * функції `from` → параметри варіанта.
  */
@@ -1218,7 +1219,7 @@ function toVariant(
   }
 }
 
-/** Відповідність Р2d2-2 у зворотний бік — для `rights_detail_of`. */
+/** Відповідність шаблону прав (спека прав §5.1) у зворотний бік — для `rights_detail_of`. */
 function toCurrent(
   model: CompiledModel,
   variant: { name: string }
@@ -1462,7 +1463,7 @@ const globalRequest = (fn: string) =>
   `${fn}.p_scope_kind = '${ZERO}'::uuid AND ${fn}.p_scope = '${ZERO}'::uuid`
 
 /**
- * Гейт Р2d2-3 фікстури прав: `administerRights` на довіднику призначень
+ * Гейт аналізу (спека прав §5.1) фікстури прав: `administerRights` на довіднику призначень
  * рівня запиту — глобальному чи `org`.
  */
 function gate(fn: string, levels: ("global" | "org")[]): string {
@@ -1474,7 +1475,7 @@ function gate(fn: string, levels: ("global" | "org")[]): string {
   return `EXISTS (SELECT 1 FROM simetra.rights_mine() g WHERE g.action = 'administerRights' AND (${arms.join(" OR ")}))`
 }
 
-/** Рядки рівня запиту (Р2d2-3): скоуп, контейнер `Project` цього скоупу, глобальні. */
+/** Рядки рівня запиту (спека прав §5.1): скоуп, контейнер `Project` цього скоупу, глобальні. */
 const requestRows = (fn: string, global: string) =>
   `((d.level = 'scope' AND d.level_id = ${fn}.p_scope_kind AND d.scope = ${fn}.p_scope) OR (d.level = 'container' AND CASE d.level_id WHEN '${PROJECT_ID}'::uuid THEN '${ORG_KIND_ID}'::uuid ELSE NULL::uuid END = ${fn}.p_scope_kind AND d.scope = ${fn}.p_scope) OR (${globalRequest(fn)} AND d.level ${global}))`
 
@@ -1504,7 +1505,7 @@ describe("rights analysis functions", () => {
   })
 
   it("rights_member reads only a member of the requested scope, behind the gate", () => {
-    // Р2d2-4: учасник — рядок членства виду й скоупу запиту з `id =
+    // спека прав §5.1: учасник — рядок членства виду й скоупу запиту з `id =
     // p_member`; глобальний запит — `p_member` і є користувач. Рядки прав —
     // лише рівня запиту.
     const fn = F.member.name
@@ -1526,7 +1527,7 @@ describe("rights analysis functions", () => {
   })
 
   it("rights_who lists the members of the requested scope and the global owners, behind the gate", () => {
-    // Р2d2-5: глобальний запит — власники глобальних призначень і рядок ролі
+    // спека прав §5.1: глобальний запит — власники глобальних призначень і рядок ролі
     // «кожного користувача» без користувача й учасника.
     const fn = F.who.name
     const right = `${fn}.p_object`
@@ -1549,7 +1550,7 @@ describe("rights analysis functions", () => {
   })
 
   it("rights_journal_of reads the journal of the scope kind and scope pair, newest first, bounded", () => {
-    // Р2d2-7: пара (вид, скоуп), а не лише скоуп; від'ємний ліміт — порожньо.
+    // пара (вид, скоуп), а не лише скоуп; від'ємний ліміт — порожньо.
     const fn = F.journalOf.name
     const columns =
       "id, seq, xid, at, scope_kind_id, scope, actor, reason, action, object, relation, operation, row_id, parent_id, before, after"
@@ -1598,7 +1599,7 @@ describe("rights analysis functions", () => {
     )
 
   it("an adopted membership source narrows the members of the requested scope by its where", async () => {
-    // Р2d2-4, Р2d1-15: рядок іншого рівня поліморфної таблиці членства не
+    // спека прав §5.1, §4.7: рядок іншого рівня поліморфної таблиці членства не
     // стає учасником скоупу запиту — ті самі умови, що в «моїх скоупах».
     const narrowed = await compiled(
       adoptedSourcesDomain({
@@ -1631,7 +1632,7 @@ describe("rights analysis functions", () => {
 
   it("the global request sees the rows of a container without a scope kind, a scope request does not", async () => {
     // Призначення контейнера без виду скоупу лежать на глобальному рівні
-    // (Р2a1-7): їх показує глобальний запит під глобальним гейтом, а рядок
+    // (спека прав §4.6): їх показує глобальний запит під глобальним гейтом, а рядок
     // скоупу їх не покриває. Власники — і з глобального довідника.
     const single = await compiled(singleTenantRights())
     const rows = (fn: string, levels: string) =>

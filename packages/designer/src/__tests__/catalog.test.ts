@@ -540,7 +540,7 @@ const mcpFields = (tool: Tool): string[] => {
 
 describe("files axis", () => {
   it("plan and apply write only their artifacts", () => {
-    // Рішення 10 плану П3-2b-3: одна вісь для «пише лише plans/»
+    // Спека designer §3.2: одна вісь для «пише лише plans/»
     expect(planTool.files).toBe("artifact")
     expect(applyTool.files).toBe("artifact")
     expect(toolByName("promote")!.files).toBe("write")

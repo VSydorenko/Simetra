@@ -380,7 +380,7 @@ describe("apply with an unknown outcome", () => {
         (a: PlanArtifact) =>
           JSON.stringify({ ...JSON.parse(reportOf(a)), format: 2 }),
       ],
-      // Файл переписано, `planHash` той самий (аудит Codex, блокер): без
+      // Файл переписано, `planHash` той самий: без
       // рядків звіт оминув би гейт порожньої копії
       ["tables", (a: PlanArtifact) => reportOf(a, { rows: [] })],
     ] as const)(

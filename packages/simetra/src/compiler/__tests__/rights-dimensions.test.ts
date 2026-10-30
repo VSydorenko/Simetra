@@ -56,7 +56,7 @@ async function codes(files: Files) {
   ])
 }
 
-/** Функція значень у закритій формі: без неї стадія 5 червоніє (Р1a-14). */
+/** Функція значень у закритій формі: без неї стадія 5 червоніє (спека прав §4.4). */
 function withValuesFunction(files: Files, name: string): Files {
   files.set(
     "sql/public/access-dimensions.sql",

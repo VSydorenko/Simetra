@@ -4,7 +4,7 @@ import { policyDomain, promotableTaskNote } from "./fixtures/rights"
 import { acceptDebt } from "./helpers"
 
 /*
- * Дозвільний перелік викликів одиниць-виразів (Р2c1-55): подання й вирази
+ * Дозвільний перелік викликів одиниць-виразів (спека прав §5.3): подання й вирази
  * дослівних політик кличуть лише вбудовані з переліку, функції моделі й
  * поіменні функції провайдера — у будь-якому файлі, борг включно.
  */
@@ -32,7 +32,7 @@ async function refusedCalls(file: string, sql: string) {
   }
 }
 
-describe("expression units call only allowlisted functions (Р2c1-55)", () => {
+describe("expression units call only allowlisted functions (спека прав §5.3)", () => {
   const SET_CLAIMS = "pg_catalog.set_config('request.jwt.claims', '{}', false)"
   it.each([
     {
@@ -76,7 +76,7 @@ describe("expression units call only allowlisted functions (Р2c1-55)", () => {
       expected: [],
     },
     // Вбудовані з іменем відношення в тексті поза головою дозволені:
-    // видно з них лише метадані (Р2c1-56, відомі обмеження плану).
+    // видно з них лише метадані.
     {
       name: "policy checking a table privilege",
       sql: policy("has_table_privilege('public.task_notes', 'select')"),

@@ -70,7 +70,7 @@ describe("movement query functions", () => {
     )
     expect(unit!.sql).toContain(`AS $simetra$\n${block}\n$simetra$;`)
     // Без порожнього шляху некваліфікована вбудована в блоці могла б
-    // розв'язатися в перевантаження іншої схеми (Р2c1-22).
+    // розв'язатися в перевантаження іншої схеми (спека П2 §7).
     expect(hasEmptySearchPath(unit!.tree as never)).toBe(true)
     expect(unit!.sql).toMatchInlineSnapshot(`
       "CREATE OR REPLACE FUNCTION public.sale_stock_movements(p_document_id uuid)

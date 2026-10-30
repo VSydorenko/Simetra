@@ -190,7 +190,7 @@ describe("messages catalog", () => {
   })
 
   it("a session write of debt SQL names what to remove from the debt function", () => {
-    // Прийом реальної бази — перша зустріч споживача з правилом (Р2c1-6):
+    // Прийом реальної бази — перша зустріч споживача з правилом (спека прав §5.3):
     // текст називає оператор чи ім'я налаштування, а не лише форму.
     const cases: DiagnosticParams[] = [
       { form: "setConfig", setting: COMMAND_SETTING },
@@ -449,8 +449,8 @@ describe("messages catalog", () => {
     }
   })
 
-  // Рішення В17: збій `ALTER TABLE` на тригері — не проблема даних, а запис
-  // іде під закріпленим `search_path`
+  // Збій `ALTER TABLE` на тригері — не проблема даних, а запис (спека
+  // промоції §7.2) іде під закріпленим `search_path`
   it("chooses the hint of apply.data-step-failed by the statement", () => {
     const hint = (params: Record<string, string>, locale: "en" | "uk") =>
       localize(
@@ -487,7 +487,7 @@ describe("messages catalog", () => {
     ).toMatch(/^Enabling the user triggers of app\.u/)
   })
 
-  // Рішення В19: тип, якого план не називає, не лікується «спершу зміною типу»
+  // Тип, якого план не називає, не лікується «спершу зміною типу»
   it("gives the unparsed type of a data step its own hint", () => {
     const hint = (detail: string, locale: "en" | "uk") =>
       localize(
@@ -505,7 +505,7 @@ describe("messages catalog", () => {
     expect(hint("missing", "en")).toMatch(/Apply the change of the type first/)
   })
 
-  // Рішення В18: правило `UPDATE` — своя причина й порада
+  // Правило `UPDATE` — своя причина й порада (спека промоції §4)
   it("renders the rewrite rule detail of dataStepTable", () => {
     const text = (detail: string | undefined, locale: "en" | "uk") =>
       localize(

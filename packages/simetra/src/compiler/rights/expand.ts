@@ -85,16 +85,16 @@ const supports = (contract: RightsContract, extent: ProjectionExtent) =>
 
 /**
  * Дії, які рівень ролі дозволяє на об'єкті; `undefined` — об'єкт поза
- * рівнем. Нескоуплений об'єкт роль скоупу лише читає (Р1b-1); глобальна
+ * рівнем. Нескоуплений об'єкт роль скоупу лише читає (спека прав Рх7); глобальна
  * роль і «кожен користувач» покривають нескоуплені об'єкти — в однотенантному
- * проєкті це всі; контейнерна — прив'язані до свого контейнера (Р1b-2).
+ * проєкті це всі; контейнерна — прив'язані до свого контейнера (спека прав §4.3).
  * Спільне правило рівня для розгортання ролі й домену рівня функцій прав.
  */
 export function allowedActions(
   level: CompiledRoleLevel,
   contract: RightsContract
 ): ReadonlySet<string> | undefined {
-  // Довідник прав належить лише своєму рівню (Р2a1-20): інакше роль скоупу
+  // Довідник прав належить лише своєму рівню (спека прав §4.6): інакше роль скоупу
   // через `read` нескоуплених бачила б, хто адмін платформи.
   if (contract.system !== undefined && !ownRightsLevel(level, contract)) {
     return undefined
@@ -115,7 +115,7 @@ export function allowedActions(
 }
 
 /**
- * Рівень системного довідника прав — його власний скоуп (Р2a1-5): вид скоупу
+ * Рівень системного довідника прав — його власний скоуп (спека прав §4.6): вид скоупу
  * — роль цього виду, без скоупу — глобальна роль.
  */
 function ownRightsLevel(
@@ -126,7 +126,7 @@ function ownRightsLevel(
   return level.level === "global" && contract.scopeKindId === undefined
 }
 
-/** «Кожен користувач» не має обсягу `any`: рядки відкриває лише власність чи вимір (Р1b-3). */
+/** «Кожен користувач» не має обсягу `any`: рядки відкриває лише власність чи вимір (спека прав Рх7). */
 export const levelAllowsExtent = (
   level: CompiledRoleLevel,
   extent: ProjectionExtent
@@ -135,11 +135,11 @@ export const levelAllowsExtent = (
 /**
  * Розгортання ролі в рядки проєкції (спека прав §3, §4.1): гранти ролі й
  * наборів її замикання в межах рівня, породження `any` → `own` і виміри
- * (Р1b-4), `deny` ролі з точністю до обсягу (Р1b-5), перевірка вимог і злиття
- * однакових рядків з об'єднанням джерел (Р1b-12). Перевірки, що не залежать
+ * (спека прав §4.4), `deny` ролі з точністю до обсягу (спека прав §4.1), перевірка вимог і злиття
+ * однакових рядків з об'єднанням джерел. Перевірки, що не залежать
  * від рівня, уже зробила стадія 4; тут — лише ті, яких без рівня не видно.
  * Роль з `fullAccess` рядки має так само: її обхід перевірок — справа
- * функцій Прав-2.
+ * функцій прав.
  */
 export function expandRole(
   role: RoleInput,
@@ -191,7 +191,7 @@ export function expandRole(
     for (const source of sources) row.sources.set(source.id, source)
   }
   // `X@any` дає й `X@own` та `X@<вимір>`: інакше `deny X@any` зняв би все, а
-  // грант `any` не покривав би рядків, які відкриває вужчий обсяг (Р1b-4).
+  // грант `any` не покривав би рядків, які відкриває вужчий обсяг (спека прав §4.4).
   const grantRow = (
     contract: RightsContract,
     action: string,
@@ -209,7 +209,7 @@ export function expandRole(
 
   // Пари (об'єкт, дія) запису `grant`/`deny`, які рівень дозволяє. Явний
   // перелік стадія 4 вже перевірила на дії й обсяги цілей, тож тут лишається
-  // рівень; селектор за дією непридатні пари пропускає (Р1b-7).
+  // рівень; селектор за дією непридатні пари пропускає (спека прав §4.1).
   const resolve = (grant: ResolvedGrant) => {
     if (grant.extent !== undefined && !levelAllowsExtent(level, grant.extent)) {
       diagnostics.push(extentLevelError(grant, grant.extent))
@@ -224,7 +224,7 @@ export function expandRole(
       // обсяг запису. Об'єкта запис не називав, тож непридатна пара — не
       // помилка, а просто не його пара; запис без рядків — теж не помилка.
       for (const contract of ctx.rights.values()) {
-        // Системні довідники прав дає лише явний грант (Р2a1-8).
+        // Системні довідники прав дає лише явний грант (спека прав §4.6).
         if (contract.system !== undefined) continue
         const allowed = allowedActions(level, contract)
         if (allowed?.has(selector.withAction) !== true) continue
@@ -288,17 +288,17 @@ export function expandRole(
         const extent = grant.extent!
         if (!levelAllowsExtent(level, extent)) {
           // Власний запис ролі суперечить її рівню — помилка; у наборі рівня
-          // немає, тож набір під такою роллю просто нічого не дає (Р1b-7).
+          // немає, тож набір під такою роллю просто нічого не дає (спека прав §4.1).
           if (declaration === role) {
             diagnostics.push(extentLevelError(grant, extent))
           }
           continue
         }
         // `grantAll` бере кожну дію, яку рівень дозволяє, і пропускає
-        // об'єкти без обсягу (Р1b-7); кастомні дії теж — об'єкт один, тож
+        // об'єкти без обсягу (спека прав §4.1); кастомні дії теж — об'єкт один, тож
         // UUID однозначний.
         for (const contract of ctx.rights.values()) {
-          // Системні довідники прав дає лише явний грант (Р2a1-8).
+          // Системні довідники прав дає лише явний грант (спека прав §4.6).
           if (contract.system !== undefined) continue
           const allowed = allowedActions(level, contract)
           if (allowed === undefined || !supports(contract, extent)) continue
@@ -317,7 +317,7 @@ export function expandRole(
   }
 
   // `deny` — лише власні записи ролі (набір його не має): перевіряється як
-  // грант і віднімає після розгортання й породження (Р1b-5, Р1b-13).
+  // грант і віднімає після розгортання й породження (спека прав §4.1).
   for (const grant of role.grants) {
     if (grant.form !== "deny") continue
     for (const { contract, action } of resolve(grant)) {
@@ -331,7 +331,7 @@ export function expandRole(
     }
   }
 
-  // Вимога `X ⇒ Y` для обсягу e виконана, коли є `Y@e` або `Y@any` (Р1b-4).
+  // Вимога `X ⇒ Y` для обсягу e виконана, коли є `Y@e` або `Y@any` (спека прав §4.4).
   for (const row of rows.values()) {
     // Поруч є `X@any`: якщо вимога не виконана тут, то й там (немає `Y@any`),
     // і помилка вже стоїть на `any` — одна на хибу, а не на кожен обсяг.
