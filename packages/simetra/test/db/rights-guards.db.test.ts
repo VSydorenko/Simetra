@@ -7,7 +7,6 @@ import {
   RIGHTS_MAINTENANCE_SETTING,
   SESSION_CLAIMS_SETTING,
 } from "simetra/model"
-import { renderDesiredState } from "simetra/schema"
 import {
   CHECKLIST_TABLE,
   GLOBAL_ADMIN_ID,
@@ -38,6 +37,7 @@ import {
   orgDeltaRow,
   seedAdministration,
   type Seed,
+  deploy,
 } from "./rights-seed"
 
 /**
@@ -186,7 +186,7 @@ describe("rights administration guards", () => {
     const result = await compileRights(policyDomain(writeRoles(), adminRoles()))
     expect(result.diagnostics).toEqual([])
     const client = await tx.open()
-    await client.query(renderDesiredState(result.model!).sql)
+    await deploy(client, result.model!)
     await client.query(
       `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ${PLATFORM_ROLES.command}`
     )
@@ -1035,7 +1035,7 @@ describe("maintenance from provider API logins", () => {
     expect(compiled.diagnostics).toEqual([])
     await withRollback(async (client) => {
       await client.query("SET ROLE postgres")
-      await client.query(renderDesiredState(compiled.model!).sql)
+      await deploy(client, compiled.model!)
       const org = randomUUID()
       const member = randomUUID()
       const user = await signUp(client)

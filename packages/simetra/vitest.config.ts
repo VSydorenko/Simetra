@@ -31,6 +31,21 @@ export default defineConfig({
           globalSetup: ["./test/db/stack-guard.ts"],
         },
       },
+      {
+        extends: true,
+        test: {
+          // Бенчмарк меж прав (Р2d2-9): той самий стек і сторож, що й `db`, але
+          // поза `test:db` і CI — прогін хвилинний, а результат — заміри машини
+          name: "bench",
+          include: ["bench/**/*.bench.db.ts"],
+          exclude: ["**/node_modules/**", "**/dist/**"],
+          fileParallelism: false,
+          globalSetup: ["./test/db/stack-guard.ts"],
+          // Засів і оператори на сотнях тисяч рядків — хвилини, не секунди
+          testTimeout: 30 * 60_000,
+          hookTimeout: 30 * 60_000,
+        },
+      },
     ],
   },
 })

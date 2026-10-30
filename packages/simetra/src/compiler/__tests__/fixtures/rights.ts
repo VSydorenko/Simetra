@@ -597,6 +597,52 @@ export function regionDimension() {
   }
 }
 
+export const USER_REGION_FILE =
+  "information-registers/UserRegion/UserRegion.meta.json"
+
+/**
+ * Однотенантний `Task` з виміром `region`: значення користувача — рядки
+ * зв'язку `UserRegion` на «Користувачів».
+ */
+export function unscopedDimension(): Map<string, string> {
+  return singleTenantRights({
+    [PROJECT_FILE]: {
+      accessDimensions: [
+        {
+          ...regionDimension(),
+          values: {
+            relation: {
+              object: ref("InformationRegister", "UserRegion"),
+              subject: "user",
+              value: "region",
+            },
+          },
+        },
+      ],
+    },
+    [REGION_FILE]: catalog(uuid(6040), "Region", "region", { scope: "none" }),
+    [USER_REGION_FILE]: {
+      id: uuid(6070),
+      kind: "InformationRegister",
+      name: "UserRegion",
+      physicalName: "user_region",
+      kindLabel: "user_region",
+      scope: "none",
+      dimensions: [
+        refAttribute(6071, "user", "user_id", ref("Catalog", "Users")),
+        refAttribute(6072, "region", "region_id", ref("Catalog", "Region")),
+      ],
+    },
+    [TASK_FILE]: {
+      attributes: [
+        refAttribute(6012, "project", "project_id", ref("Catalog", "Project")),
+        refAttribute(6013, "region", "region_id", ref("Catalog", "Region")),
+      ],
+      access: [{ attribute: "region", dimension: "region" }],
+    },
+  })
+}
+
 export const TASK_HOURS_FILE =
   "accumulation-registers/TaskHours/TaskHours.meta.json"
 export const TASK_REPORT_FILE = "documents/TaskReport/TaskReport.meta.json"
@@ -1328,6 +1374,52 @@ export function noteOwnCreator(): Record<string, Record<string, unknown>> {
       {
         grants: [
           grant(objects(["Catalog", "Note"]), ["read", "create"], "own"),
+        ],
+      }
+    ),
+  }
+}
+
+export const TEAM_RIGHTS_ADMIN_ID = uuid(6750)
+export const RIGHTS_ONLY_ADMIN_ID = uuid(6751)
+
+/**
+ * Ролі аналізу прав поверх `policyDomain(writeRoles(), adminRoles(),
+ * secondScopeKind())`: `TeamRightsAdmin` адмініструє права виду `team` —
+ * адміністратор іншого виду з тим самим id скоупу; `RightsOnlyAdmin`
+ * адмініструє права `org` без `read` на задачах — пояснення рядка, якого
+ * викликач не бачить (Р2d2-19).
+ */
+export function analysisRoles(): Layer {
+  return {
+    [ROLE_FILE("TeamRightsAdmin")]: role(
+      TEAM_RIGHTS_ADMIN_ID,
+      "TeamRightsAdmin",
+      { scopeKind: "team" },
+      {
+        grants: [
+          grant(
+            objects(
+              ["Catalog", "TeamRoles"],
+              ["Catalog", "TeamRoleAssignments"]
+            ),
+            ["read", "administerRights"],
+            "any"
+          ),
+        ],
+      }
+    ),
+    [ROLE_FILE("RightsOnlyAdmin")]: role(
+      RIGHTS_ONLY_ADMIN_ID,
+      "RightsOnlyAdmin",
+      { scopeKind: "org" },
+      {
+        grants: [
+          grant(
+            objects(["Catalog", "OrgRoles"], ["Catalog", "OrgRoleAssignments"]),
+            ["read", "administerRights"],
+            "any"
+          ),
         ],
       }
     ),

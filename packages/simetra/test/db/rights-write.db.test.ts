@@ -7,7 +7,6 @@ import {
   PROVIDER_API_ROLES,
   type CommandContext,
 } from "simetra/model"
-import { renderDesiredState } from "simetra/schema"
 import {
   BULLETIN_TABLE,
   CHECKLIST_TABLE,
@@ -31,6 +30,7 @@ import {
   assignmentRow,
   describeTransaction,
   insert,
+  deploy,
 } from "./rights-seed"
 
 /**
@@ -652,7 +652,7 @@ describe("command writes", () => {
     )
     expect(result.diagnostics).toEqual([])
     const client = await tx.open()
-    await client.query(renderDesiredState(result.model!).sql)
+    await deploy(client, result.model!)
     // Р2b1-13: DML і членство з `SET` ролі команд — лише в цій транзакції;
     // згенерований SQL їх не дає (П4).
     await client.query(

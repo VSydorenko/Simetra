@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import type pg from "pg"
 import type { CompiledModel } from "simetra/compiler"
-import { renderDesiredState } from "simetra/schema"
 import {
   ATTACHMENTS_TABLE,
   CHECKLIST_TABLE,
@@ -20,6 +19,7 @@ import {
 } from "../../src/compiler/__tests__/fixtures/rights"
 import { signUp } from "./auth"
 import { queryAs } from "./connection"
+import { planNodes, subPlans } from "./explain-plan"
 import {
   type Assignment,
   type Seed,
@@ -29,6 +29,7 @@ import {
   orgDeltaRow,
   outcome,
   set,
+  deploy,
 } from "./rights-seed"
 
 /**
@@ -298,20 +299,6 @@ const CASES: [name: string, checks: Check[]][] = [
   ],
 ]
 
-/** Вузли плану `EXPLAIN (FORMAT JSON)`: їхні «Parent Relationship». */
-function relationships(node: unknown, found = new Set<string>()): Set<string> {
-  if (Array.isArray(node)) {
-    for (const item of node) relationships(item, found)
-  } else if (typeof node === "object" && node !== null) {
-    for (const [key, value] of Object.entries(node)) {
-      if (key === "Parent Relationship" && typeof value === "string")
-        found.add(value)
-      else relationships(value, found)
-    }
-  }
-  return found
-}
-
 describe("policies", () => {
   const tx = describeTransaction()
   let ids: Seed = {}
@@ -319,7 +306,7 @@ describe("policies", () => {
   beforeAll(async () => {
     const model = await policyModel()
     const client = await tx.open()
-    await client.query(renderDesiredState(model).sql)
+    await deploy(client, model)
     ids = await seedPolicies(client)
   })
 
@@ -381,9 +368,9 @@ describe("policies", () => {
       `EXPLAIN (FORMAT JSON) SELECT * FROM public.${table}`
     )
     if (!("rows" in result)) throw new Error(`EXPLAIN failed: ${result.code}`)
-    const found = relationships(result.rows[0]!["QUERY PLAN"])
-    expect.soft(found.has("InitPlan")).toBe(true)
-    expect.soft(found.has("SubPlan")).toBe(false)
+    const plan = result.rows[0]!["QUERY PLAN"]
+    expect.soft(planNodes(plan).some((n) => n.parent === "InitPlan")).toBe(true)
+    expect.soft(subPlans(plan)).toEqual([])
   })
 
   it("forged-copy-update: a forged path copy is re-derived from its source", () =>

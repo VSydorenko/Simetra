@@ -3,6 +3,7 @@ import {
   PLATFORM_SCHEMA,
   makeObjectName,
   type PhysicalColumn,
+  type PhysicalIndexKey,
   type PhysicalOrigin,
   type PhysicalTable,
 } from "simetra/model"
@@ -36,7 +37,7 @@ export function rightsAdminTables(
     part: PhysicalOrigin["part"],
     columns: PhysicalColumn[],
     key?: string[],
-    index?: string[]
+    indexes: PhysicalIndexKey[][] = []
   ): PhysicalTable => ({
     schema: PLATFORM_SCHEMA,
     name,
@@ -54,19 +55,24 @@ export function rightsAdminTables(
     uniques: [],
     checks: [],
     foreignKeys: [],
-    indexes:
-      index === undefined
-        ? []
-        : [
-            {
-              name: makeObjectName(name, index.join("_"), "idx"),
-              unique: false,
-              method: "btree",
-              keys: index.map((column) => ({ column })),
-              include: [],
-              nullsNotDistinct: false,
-            },
-          ],
+    indexes: indexes.map((keys) => ({
+      name: makeObjectName(
+        name,
+        keys.map((k) => ("column" in k ? k.column : "")).join("_"),
+        "idx"
+      ),
+      unique: false,
+      method: "btree",
+      keys,
+      include: [],
+      nullsNotDistinct: false,
+    })),
+  })
+  const asc = (...columns: string[]): PhysicalIndexKey[] =>
+    columns.map((column) => ({ column }))
+  const desc = (column: string): PhysicalIndexKey => ({
+    column,
+    order: "desc",
   })
   return [
     table(
@@ -106,7 +112,13 @@ export function rightsAdminTables(
         column("after", "jsonb", false),
       ],
       ["id"],
-      ["xid", "relation", "row_id", "seq"]
+      [
+        // Перший образ рядка в транзакції.
+        asc("xid", "relation", "row_id", "seq"),
+        // Журнал скоупу новіші першими (`rights_journal_of`, Р2d2-12) — без
+        // повного перебору з сортуванням.
+        [...asc("scope_kind_id", "scope"), desc("at"), desc("seq")],
+      ]
     ),
     table(
       "rights_tx_actor",
@@ -125,7 +137,7 @@ export function rightsAdminTables(
         column("full_access", "boolean"),
       ],
       undefined,
-      ["xid"]
+      [asc("xid")]
     ),
     table(
       "rights_tx_pending",

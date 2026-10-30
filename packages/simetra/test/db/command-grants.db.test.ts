@@ -27,6 +27,7 @@ import {
 import {
   type Seed,
   assignmentRow,
+  deploy,
   describeTransaction,
   insert,
 } from "./rights-seed"
@@ -60,7 +61,7 @@ describe("generated grants of the command role", () => {
     const result = await NOTES_MODEL()
     expect(result.diagnostics).toEqual([])
     const client = await tx.open()
-    await client.query(renderDesiredState(result.model!).sql)
+    await deploy(client, result.model!)
     await client.query(
       `GRANT ${PLATFORM_ROLES.command} TO CURRENT_USER WITH SET TRUE`
     )

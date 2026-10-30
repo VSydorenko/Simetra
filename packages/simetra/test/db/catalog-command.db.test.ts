@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import { PLATFORM_ROLES, type CommandContext } from "simetra/model"
-import { renderDesiredState } from "simetra/schema"
 import { CATALOG_COMMAND_ERRORS } from "../../src/compiler/catalog-command/units"
 import {
   MEMBER_EDITOR_ID,
@@ -23,6 +22,7 @@ import {
 import { signUp } from "./auth"
 import { type Refusal, commandAs, queryAs } from "./connection"
 import {
+  deploy,
   type Seed,
   assignmentRow,
   describeTransaction,
@@ -101,7 +101,7 @@ describe("catalog command core", () => {
     )
     expect(result.diagnostics).toEqual([])
     const client = await tx.open()
-    await client.query(renderDesiredState(result.model!).sql)
+    await deploy(client, result.model!)
     // Лише згенеровані гранти: членство з `SET` потрібне `SET LOCAL ROLE`
     // у `commandAs`, повного DML-гранту таблиць немає.
     await client.query(
@@ -866,7 +866,7 @@ describe("catalog command core: unscoped Note", () => {
     )
     expect(result.diagnostics).toEqual([])
     const client = await tx.open()
-    await client.query(renderDesiredState(result.model!).sql)
+    await deploy(client, result.model!)
     await client.query(
       `GRANT ${PLATFORM_ROLES.command} TO CURRENT_USER WITH SET TRUE`
     )

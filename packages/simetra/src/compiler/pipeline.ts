@@ -41,6 +41,7 @@ import {
   sourceContracts,
 } from "./rights/contracts"
 import { buildRightsUnits } from "./rights/functions"
+import { buildExplainUnits } from "./rights/explain-units"
 import { buildRightsGuardUnits } from "./rights/guard-units"
 import { scopeKindUnreadWarnings } from "./rights/scope-kind-warnings"
 import {
@@ -48,7 +49,7 @@ import {
   rightsCatalogTables,
 } from "./rights/system-catalogs"
 import { checkLinks } from "./stages/links"
-import { buildModel, enumTypeOf, rowTypesOf } from "./stages/model"
+import { buildModel, enumTypeOf, kindLabelOf, rowTypesOf } from "./stages/model"
 import {
   buildMovementFunctions,
   movementWrapperName,
@@ -478,6 +479,27 @@ export async function runStages(
     physical,
     stage1.project
   )
+  // Один об'єкт контрактів для функцій прав і для пояснення видимості: поле,
+  // додане лише в одне місце, дало б двом генераторам різні контракти.
+  const rightsInputs = {
+    rights,
+    roles,
+    rightsProjection: projection.rows,
+    rightsCatalogs,
+    accessDimensions,
+    membership,
+    membershipSources: sources.membershipSources,
+    assignmentSources: sources.assignmentSources,
+    users,
+  }
+  const kindLabels = new Map(
+    stage1.objects.flatMap((object) => {
+      const label = kindLabelOf(object)
+      return object.id === undefined || label === undefined
+        ? []
+        : [[object.id, label] as const]
+    })
+  )
   const baseUnits = [
     ...sql.units.map((unit) => verbatimUnit(unit, ownerId, module)),
     ...wrappers,
@@ -570,19 +592,16 @@ export async function runStages(
       parse
     ),
     ...buildRightsUnits(
-      {
-        rights,
-        roles,
-        rightsProjection: projection.rows,
-        rightsCatalogs,
-        accessDimensions,
-        membership,
-        membershipSources: sources.membershipSources,
-        assignmentSources: sources.assignmentSources,
-        users,
-      },
+      rightsInputs,
       physical,
       stage1.project.naming.attributeCase,
+      stage1.project.database.provider,
+      module,
+      parse
+    ),
+    ...buildExplainUnits(
+      { ...rightsInputs, access, kindLabels },
+      physical,
       stage1.project.database.provider,
       module,
       parse
@@ -694,6 +713,8 @@ export async function runStages(
     // Функції прав спільні для всіх об'єктів — власника немає.
     rights: (unit) => `the rights function ${unit.name}`,
     rightsGuards: (unit) => `the rights guard of ${name(unit.ownerObjectId)}`,
+    // Пояснення видимості спільне для всіх об'єктів — власника немає.
+    rightsExplain: (unit) => `the rights explain function ${unit.name}`,
     carriers: (unit) => `the carrier copies of ${name(unit.ownerObjectId)}`,
     // Функції контексту команди спільні для всіх об'єктів — власника немає.
     command: (unit) => `the command context function ${unit.name}`,

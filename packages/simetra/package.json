@@ -36,6 +36,7 @@
     "test": "vitest run --project unit",
     "test:watch": "vitest --project unit",
     "test:db": "vitest run --project db",
+    "bench:rights": "vitest run --project bench",
     "catalog-functions": "node scripts/catalog-functions.ts",
     "builtin-functions": "node scripts/builtin-functions.ts"
   },

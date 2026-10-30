@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import { PLATFORM_ROLES, type CommandContext } from "simetra/model"
-import { renderDesiredState } from "simetra/schema"
 import { CATALOG_COMMAND_ERRORS } from "../../src/compiler/catalog-command/units"
 import {
   COMMENT_TABLE,
@@ -13,6 +12,7 @@ import {
 } from "../../src/compiler/__tests__/fixtures/rights"
 import { type Refusal, commandAs } from "./connection"
 import {
+  deploy,
   COMMAND_CORE_MEMBERS,
   type Seed,
   describeTransaction,
@@ -191,7 +191,7 @@ describe("catalog command core: rights check ≡ RLS", () => {
     )
     expect(result.diagnostics).toEqual([])
     const client = await tx.open()
-    await client.query(renderDesiredState(result.model!).sql)
+    await deploy(client, result.model!)
     // Р2b1-13: повний DML ролі команд і членство з `SET` — лише в цій
     // транзакції; базова лінія RLS не впирається в колонкові гранти.
     await client.query(

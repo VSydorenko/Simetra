@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import { PLATFORM_ROLES } from "simetra/model"
-import { renderDesiredState } from "simetra/schema"
 import {
   ORG_ADMIN_ID,
   TASK_WRITER_ID,
@@ -13,6 +12,7 @@ import {
 import { snakeCaseTwin } from "../../src/compiler/__tests__/fixtures/snake-case"
 import { commandAs } from "./connection"
 import {
+  deploy,
   assignmentRow,
   closureRights,
   describeTransaction,
@@ -48,7 +48,7 @@ describe("snake_case project with rights catalogs", () => {
     expect(result.diagnostics).toEqual([])
     expect(result.model!.project.naming.attributeCase).toBe("snake_case")
     const client = await tx.open()
-    await client.query(renderDesiredState(result.model!).sql)
+    await deploy(client, result.model!)
     // Як у `rights-guards`: документ роль команд пише через ядро команд, а
     // предмет тут — політики й тригери прав над прямим записом.
     await client.query(

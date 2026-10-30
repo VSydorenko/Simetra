@@ -15,14 +15,15 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import pg from "pg"
 import {
+  enterRun,
   newRunTag,
-  RUN_TAG_ENV,
   runTagOf,
   SHADOW_PREFIX,
   shadowAgeMinutes,
   testDatabaseUrl,
 } from "./connection"
 import { installInterruptCleanup } from "./interrupt"
+import { stopRunBackends } from "./sweep"
 
 // Замок у тимчасовій теці машини, а не в checkout: стек спільний і для інших
 // checkout чи worktree того самого репо
@@ -46,9 +47,10 @@ export default async function setup(): Promise<() => Promise<void>> {
   await acquireLock()
   let removeInterruptCleanup = (): void => {}
   try {
-    // Форки воркерів, які vitest стартує після globalSetup, успадковують env
+    // Форки воркерів, які vitest стартує після globalSetup, успадковують env:
+    // тег в іменах об'єктів і в `application_name` кожного з'єднання прогону
     const runTag = newRunTag()
-    process.env[RUN_TAG_ENV] = runTag
+    enterRun(runTag)
     removeInterruptCleanup = installInterruptCleanup({
       tag: runTag,
       release: releaseLock,
@@ -66,6 +68,15 @@ export default async function setup(): Promise<() => Promise<void>> {
       // Нормальне завершення не прибирає: що лишилось, показує звірка стеку
       removeInterruptCleanup()
       try {
+        // Запит, кинутий тестом без очікування (тайм-аут, незакритий пул),
+        // сервер виконує й далі: після звільнення замка він вантажив би стек
+        // наступному прогону. Завершуємо до звірки — `CREATE` такого бекенду
+        // інакше з'явився б у стеку вже після знімка
+        const backends = await stopRunBackends(runTag)
+        if (backends.stopped > 0 || backends.left.length > 0)
+          process.stderr.write(
+            `DB run ${runTag}: stopped ${backends.stopped} backend(s) still running after the tests${backends.left.length > 0 ? `; still running: ${backends.left.join(", ")}` : ""}\n`
+          )
         const after = await snapshot()
         const changed = treeState()
         if (tree !== undefined && changed?.summary !== tree.summary)

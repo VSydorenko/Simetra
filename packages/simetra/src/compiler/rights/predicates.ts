@@ -7,6 +7,7 @@ import type {
   CarrierContract,
   OwnershipContract,
   ProjectionExtent,
+  QualifiedName,
   RightsContract,
 } from "../contracts"
 import { CURRENT_USER } from "../membership-functions"
@@ -29,11 +30,25 @@ export const COMMAND_ACTION: unique symbol = Symbol("command action")
  * ANY(ARRAY(SELECT <множина>))`, `grantDependent` — множина з гранту (скоупи чи
  * контейнери з правом); `currentUser` — `<колонка> = (SELECT
  * current_user_id())`; `boolean` — `(SELECT <вираз>)`, завжди з гранту.
+ * Множина — виклик функції, а не готовий текст (Р2d2-13): пояснення прав
+ * бере ту саму умову й підставляє варіант функції для іншого користувача
+ * без текстової заміни в SQL.
  */
 export type RightsCondition =
-  | { kind: "column"; column: string; set: string; grantDependent: boolean }
+  | {
+      kind: "column"
+      column: string
+      set: SetCall
+      grantDependent: boolean
+    }
   | { kind: "currentUser"; column: string }
   | { kind: "boolean"; expression: string }
+
+/** Виклик функції множини з аргументами-сталими. */
+export interface SetCall {
+  fn: QualifiedName
+  args: readonly string[]
+}
 
 /**
  * Предикат прав: AND умов, з яких рівно одна залежить від гранту. Предикати
@@ -109,7 +124,7 @@ export function rightsPredicates(
           {
             kind: "column",
             column: column(carrier),
-            set: call(F.dimensionValues, [uuidLiteral(dimensionId)]),
+            set: { fn: F.dimensionValues, args: [uuidLiteral(dimensionId)] },
             grantDependent: false,
           },
         ],
@@ -158,7 +173,7 @@ export function rightsPredicates(
         {
           kind: "column",
           column: bound,
-          set: call(F.container, [...head, ...extentArgs(extent)]),
+          set: { fn: F.container, args: [...head, ...extentArgs(extent)] },
           grantDependent: true,
         },
       ],
@@ -219,7 +234,7 @@ export function renderCondition(
     row === undefined ? quoteIdent(column) : `${row}.${quoteIdent(column)}`
   switch (condition.kind) {
     case "column":
-      return `${at(condition.column)} = ANY (ARRAY(SELECT ${condition.set}))`
+      return `${at(condition.column)} = ANY (ARRAY(SELECT ${call(condition.set.fn, condition.set.args)}))`
     case "currentUser":
       return `${at(condition.column)} = ${CURRENT_USER}`
     case "boolean":
@@ -241,19 +256,20 @@ function ownerCondition(
     : {
         kind: "column",
         column,
-        set: call(RIGHTS_FUNCTIONS.myMembers, [
-          uuidLiteral(carrier.owner.membership),
-        ]),
+        set: {
+          fn: RIGHTS_FUNCTIONS.myMembers,
+          args: [uuidLiteral(carrier.owner.membership)],
+        },
         grantDependent: false,
       }
 }
 
 /** Скоупи з правом в обсязі: своя функція множини на кожну форму (§5.1). */
-function scopeSet(extent: ProjectionExtent, head: string[]): string {
+function scopeSet(extent: ProjectionExtent, head: string[]): SetCall {
   const F = RIGHTS_FUNCTIONS
-  if (extent === "any") return call(F.any, head)
-  if (extent === "own") return call(F.own, head)
-  return call(F.dim, [...head, uuidLiteral(extent.dimensionId)])
+  if (extent === "any") return { fn: F.any, args: head }
+  if (extent === "own") return { fn: F.own, args: head }
+  return { fn: F.dim, args: [...head, uuidLiteral(extent.dimensionId)] }
 }
 
 /** Обсяг і вимір — останні аргументи `has_right` і `rights_container`. */

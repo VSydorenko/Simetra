@@ -816,18 +816,26 @@ describe("rights guard transaction check", () => {
             ],
           ]
       expect(queueKeys(insert!).slice(0, own.length), config.table).toEqual(own)
-      // Перший образ — найменший seq рядка цієї таблиці серед командних записів.
-      expect(
-        contains(
-          checkTrees,
-          (
-            tree(
-              `SELECT DISTINCT ON (row_id) row_id, before FROM simetra.rights_journal WHERE xid = v_pending.xid AND reason = 'command' AND relation = 'public.${config.table}' ORDER BY row_id, seq`
-            ) as { SelectStmt: unknown }
-          ).SelectStmt
-        ),
-        config.table
-      ).toBe(true)
+      // Перший образ — найменший seq рядка цієї таблиці серед командних
+      // записів; рядок без запису в журналі — живий. Рядки ключа й дельти
+      // ролі звужуються до `to_jsonb` (Р2d2-25): гілка журналу — за ключем
+      // рядка, а для дельти, що шукається за власником, — уся транзакція.
+      const journal = `simetra.rights_journal j WHERE j.xid = v_pending.xid AND j.reason = 'command' AND j.relation = 'public.${config.table}'`
+      const select = (sql: string) =>
+        (tree(sql) as { SelectStmt: unknown }).SelectStmt
+      const [column, value] =
+        "parent" in config
+          ? ["parent_id", "(r.doc ->> 'id')::uuid"]
+          : ["id", "v_pending.key"]
+      for (const sql of [
+        `SELECT DISTINCT ON (j.row_id) j.before AS doc FROM ${journal}${"parent" in config ? "" : ` AND j.row_id = ${value}`} ORDER BY j.row_id, j.seq`,
+        `SELECT 1 FROM ${journal} AND j.row_id = l.id`,
+        `SELECT to_jsonb(l) AS doc FROM public.${config.table} l WHERE l.${column} = ${value}`,
+      ])
+        expect(
+          contains(checkTrees, select(sql)),
+          `${config.table}: ${sql}`
+        ).toBe(true)
       expect(
         journalInserts(fnOf(domain, config.table, "simetra_rights").sql)[0]!
           .values.relation,

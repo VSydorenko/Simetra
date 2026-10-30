@@ -74,6 +74,34 @@ export function isRunTag(value: string): boolean {
 }
 
 /**
+ * `application_name` з'єднань DB-прогону з тегом `tag`: за ним сторож
+ * знаходить бекенди свого прогону в `pg_stat_activity`, не чіпаючи чужих.
+ */
+export function runApplicationName(tag: string): string {
+  return `simetra_db_${tag}`
+}
+
+/**
+ * `application_name` адмінських з'єднань сторожа й прибиральника — не таке,
+ * як у з'єднань прогону: завершення бекендів прогону не зачепить з'єднання,
+ * яке їх завершує.
+ */
+export const GUARD_APPLICATION_NAME = "simetra_db_guard"
+
+/**
+ * Робить процес головним процесом DB-прогону з тегом `tag`: тег — в env для
+ * імен об'єктів, а `PGAPPNAME` — для `application_name`. node-postgres читає
+ * `PGAPPNAME`, коли з'єднання не задає імені саме; з'єднання прогону
+ * відкривають і тести, і продуктовий код designer, тож помічник у кожному
+ * тег не донесе, а env, успадковане воркерами й дочірніми процесами, —
+ * доносить. Ставити до старту воркерів.
+ */
+export function enterRun(tag: string): void {
+  process.env[RUN_TAG_ENV] = tag
+  process.env.PGAPPNAME = runApplicationName(tag)
+}
+
+/**
  * Тег поточного DB-прогону. Без нього кидає: ім'я без тегу прибиральник не
  * впізнає як своє.
  */

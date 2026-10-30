@@ -1,8 +1,12 @@
 import { beforeAll, describe, expect, it } from "vitest"
-import type { CompiledModel } from "simetra/compiler"
+import type { CompiledModel, CompileResult } from "simetra/compiler"
 import { compile } from "simetra/compiler"
 import { PLATFORM_ROLES, PROVIDER_API_ROLES } from "simetra/model"
-import type { RightsContract, SourceConditionContract } from "../contracts"
+import type {
+  QualifiedName,
+  RightsContract,
+  SourceConditionContract,
+} from "../contracts"
 import { compareStrings } from "../diagnostics"
 import {
   RIGHTS_FUNCTIONS,
@@ -40,6 +44,7 @@ import {
   activeGrants,
   adoptedSourcesDomain,
   compileRights,
+  compiledPolicyDomain,
   grant,
   grantTable,
   grantsSource,
@@ -52,6 +57,7 @@ import {
   role,
   secondScopeKind,
   singleTenantRights,
+  unscopedDimension,
   withRoles,
   withoutUsers,
   type Layer,
@@ -286,12 +292,43 @@ const SIGNATURES = [
   "function:simetra.rights_roles()",
   "function:simetra.rights_source_keys()",
   "function:simetra.rights_visible_users()",
+  "function:simetra.rights_scopes_of(uuid)",
+  "function:simetra.rights_detail_of(uuid)",
+  "function:simetra.rights_members_of(uuid,uuid)",
+  "function:simetra.rights_dimension_values_of(uuid,uuid)",
+  "function:simetra.rights_scope_set_of(uuid,uuid)",
+  "function:simetra.rights_visible_users_of(uuid)",
+  "function:simetra.rights_member(uuid,uuid,uuid)",
+  "function:simetra.rights_who(text,text,uuid,uuid)",
+  "function:simetra.rights_journal_of(uuid,uuid,int4)",
 ].sort()
 
 /** Без довідника членства «Користувачів» не обмежує видимість (Р2a2-18). */
 const WITHOUT_MEMBERSHIP = SIGNATURES.filter(
-  (s) => s !== "function:simetra.rights_visible_users()"
+  (s) =>
+    s !== "function:simetra.rights_visible_users()" &&
+    s !== "function:simetra.rights_visible_users_of(uuid)"
 )
+
+/**
+ * Варіанти аналізу (Р2d2-2): кличуть їх лише функції аналізу від власника,
+ * тож без `SECURITY DEFINER` і без `EXECUTE`.
+ */
+const VARIANTS = [
+  RIGHTS_FUNCTIONS.scopesOf,
+  RIGHTS_FUNCTIONS.detailOf,
+  RIGHTS_FUNCTIONS.membersOf,
+  RIGHTS_FUNCTIONS.dimensionValuesOf,
+  RIGHTS_FUNCTIONS.scopeSetOf,
+  RIGHTS_FUNCTIONS.visibleUsersOf,
+].map((fn) => fn.name)
+
+/** Функції аналізу (Р2d2-1): `EXECUTE` — без сервісної ролі. */
+const ANALYSIS = [
+  RIGHTS_FUNCTIONS.member,
+  RIGHTS_FUNCTIONS.who,
+  RIGHTS_FUNCTIONS.journalOf,
+].map((fn) => fn.name)
 
 const functionIdentities = (model: CompiledModel) =>
   rightsUnits(model)
@@ -321,6 +358,7 @@ describe("rights functions", () => {
     expect(functionIdentities(model)).toEqual(SIGNATURES)
     const api = PROVIDER_API_ROLES.supabase
     const setRoles = [api.user, api.service, PLATFORM_ROLES.command].sort()
+    const analysisRoles = [api.user, PLATFORM_ROLES.command].sort()
     const { granted, revoked } = executeGrantees(model)
     for (const unit of rightsUnits(model).filter(
       (u) => u.class === "function"
@@ -334,17 +372,21 @@ describe("rights functions", () => {
       expect(option(unit, "volatility")?.String?.sval, unit.name).toBe(
         data ? "immutable" : unit.name === "rights_bump" ? "volatile" : "stable"
       )
+      const variant = VARIANTS.includes(unit.name)
       expect(option(unit, "security")?.Boolean?.boolval, unit.name).toBe(
-        data || unit.name === "rights_role_grants" ? undefined : true
+        data || variant || unit.name === "rights_role_grants" ? undefined : true
       )
       expect(granted.get(unit.name) ?? [], unit.name).toEqual(
         unit.name === "rights_projection_version"
           ? setRoles
-          : data ||
-              unit.name === "rights_bump" ||
-              unit.name === "rights_role_grants"
-            ? []
-            : setRoles
+          : ANALYSIS.includes(unit.name)
+            ? analysisRoles
+            : data ||
+                variant ||
+                unit.name === "rights_bump" ||
+                unit.name === "rights_role_grants"
+              ? []
+              : setRoles
       )
       expect(revoked.get(unit.name), unit.name).toContain("PUBLIC")
     }
@@ -585,9 +627,11 @@ describe("rights functions", () => {
     ]) {
       expect(calls).toContain(`${fn.schema}.${fn.name}`)
     }
-    // Таблиці членства згадують лише `rights_my_scopes` і
-    // `rights_visible_users`, остання — лише в з'єднанні з
-    // `rights_my_scopes()` (Р2a1-25, Р2a2-18): мої скоупи обчислює одне місце.
+    // Таблиці членства згадують лише шаблон «моїх скоупів» і межа
+    // «Користувачів» — остання лише в з'єднанні з «моїми скоупами»
+    // (Р2a1-25, Р2a2-18) — разом з їхніми варіантами аналізу (Р2d2-2), шаблон
+    // функції множини членства й функції аналізу (учасники скоупу запиту під
+    // гейтом): мої скоупи обчислює одне місце.
     const readers = rightsUnits(model)
       .filter((unit) =>
         unitRelations(unit, parse).some(
@@ -598,9 +642,16 @@ describe("rights functions", () => {
       .sort()
     expect(readers).toEqual(
       [
-        RIGHTS_FUNCTIONS.myScopes.name,
-        RIGHTS_FUNCTIONS.visibleUsers.name,
-      ].sort()
+        RIGHTS_FUNCTIONS.myScopes,
+        RIGHTS_FUNCTIONS.scopesOf,
+        RIGHTS_FUNCTIONS.visibleUsers,
+        RIGHTS_FUNCTIONS.visibleUsersOf,
+        RIGHTS_FUNCTIONS.scopeSetOf,
+        RIGHTS_FUNCTIONS.member,
+        RIGHTS_FUNCTIONS.who,
+      ]
+        .map((fn) => fn.name)
+        .sort()
     )
     expect(membershipJoins(model)).toEqual([
       { scopeKind: ORG_KIND_ID, scope: "m.org_id" },
@@ -1033,5 +1084,577 @@ describe("rights administration functions", () => {
       )
     expect(closures("rights_mine")).toHaveLength(2)
     expect(closures("rights_role_grants")).toEqual(closures("rights_mine"))
+  })
+})
+
+/**
+ * Фікстури шаблону прав (Р2d2-2, Р2d2-11): разом вони мають
+ * обидві форми гілки зв'язку виміру, функцію множини членства, прийняті й
+ * поліморфні джерела, два види скоупу й однотенантний проєкт.
+ */
+const TEMPLATE_FIXTURES: [string, () => Promise<CompileResult>][] = [
+  ["base", () => compileRights(withRoles(BASE))],
+  ["policy-domain", () => compiledPolicyDomain({})],
+  ["adopted-sources", () => compileRights(adoptedSourcesDomain())],
+  ["polymorphic-grants", () => compileRights(polymorphicGrantsDomain())],
+  ["two-scope-kinds", () => compileRights(withRoles(BASE, secondScopeKind()))],
+  ["single-tenant", () => compileRights(singleTenantRights())],
+  ["user-dimension", () => compileRights(unscopedDimension())],
+  ["kitchen-sink", () => compile(kitchenSink())],
+]
+
+/** Дерево виразу SQL без позицій. */
+function exprTree(sql: string): unknown {
+  return selectOf(tree(`SELECT ${sql}`)).targetList![0]!.ResTarget.val
+}
+
+/** Канонічний текст дерева — ключі впорядковано, як у `toEqual`. */
+const canonical = (node: unknown): string =>
+  JSON.stringify(node, (_, value: unknown) =>
+    typeof value === "object" && value !== null && !Array.isArray(value)
+      ? Object.fromEntries(
+          Object.entries(value).sort(([a], [b]) => compareStrings(a, b))
+        )
+      : value
+  )
+
+const sameTree = (a: unknown, b: unknown) => canonical(a) === canonical(b)
+
+/**
+ * Переписує дерево зверху вниз: вузол, який `rule` замінив, далі не
+ * обходиться. Підстановка — на дереві, а не в тексті SQL.
+ */
+function rewrite(node: unknown, rule: (node: unknown) => unknown): unknown {
+  const replaced = rule(node)
+  if (replaced !== undefined) return replaced
+  if (Array.isArray(node)) return node.map((item) => rewrite(item, rule))
+  if (typeof node !== "object" || node === null) return node
+  return Object.fromEntries(
+    Object.entries(node).map(([key, value]) => [key, rewrite(value, rule)])
+  )
+}
+
+interface CallNode {
+  FuncCall: { funcname: { String: { sval: string } }[]; args?: unknown[] }
+}
+
+const callName = (node: unknown) =>
+  (node as Partial<CallNode>).FuncCall?.funcname
+    .map((n) => n.String.sval)
+    .join(".")
+
+/** Виклик з іншим ім'ям функції й аргументами `args(старі)`. */
+function renamed(
+  node: unknown,
+  fn: { schema: string; name: string },
+  args: (old: unknown[]) => unknown[]
+): unknown {
+  const { FuncCall } = node as CallNode
+  const next = args(FuncCall.args ?? [])
+  const rest = { ...FuncCall }
+  delete rest.args
+  return {
+    FuncCall: {
+      ...rest,
+      funcname: [
+        { String: { sval: fn.schema } },
+        { String: { sval: fn.name } },
+      ],
+      ...(next.length === 0 ? {} : { args: next }),
+    },
+  }
+}
+
+/**
+ * Користувач варіанта `fn` (Р2d2-2): дійсний — як у `current_user_id()`;
+ * без «Користувачів» — аргумент як є.
+ */
+function variantUser(model: CompiledModel, fn: string): string {
+  const users = model.contracts.users
+  if (users === undefined) return `${fn}.p_user`
+  const key = `u.${users.keyColumn}`
+  return `(SELECT ${key} FROM ${users.table.schema}.${users.table.name} u WHERE ${key} = ${fn}.p_user AND NOT u.${users.invalidColumn})`
+}
+
+const F = RIGHTS_FUNCTIONS
+const qualifiedName = (fn: { schema: string; name: string }) =>
+  `${fn.schema}.${fn.name}`
+
+/**
+ * Відповідність Р2d2-2: поточний користувач → дійсний `p_user`, функції
+ * множини поточного користувача → їхні варіанти з `p_user`, параметри
+ * функції `from` → параметри варіанта.
+ */
+function toVariant(
+  model: CompiledModel,
+  variant: { name: string },
+  from?: { name: string }
+): (node: unknown) => unknown {
+  const current = exprTree(CURRENT)
+  const user = exprTree(variantUser(model, variant.name))
+  const p = exprTree(`${variant.name}.p_user`)
+  return (node) => {
+    if (sameTree(node, current)) return user
+    const name = callName(node)
+    if (name === qualifiedName(F.myScopes))
+      return renamed(node, F.scopesOf, () => [p])
+    if (name === qualifiedName(F.myMembers))
+      return renamed(node, F.membersOf, (args) => [p, ...args])
+    const fields = (
+      node as { ColumnRef?: { fields: { String?: { sval: string } }[] } }
+    ).ColumnRef?.fields
+    if (
+      from !== undefined &&
+      fields?.length === 2 &&
+      fields[0]!.String?.sval === from.name
+    ) {
+      return {
+        ColumnRef: {
+          fields: [{ String: { sval: variant.name } }, fields[1]],
+        },
+      }
+    }
+    return undefined
+  }
+}
+
+/** Відповідність Р2d2-2 у зворотний бік — для `rights_detail_of`. */
+function toCurrent(
+  model: CompiledModel,
+  variant: { name: string }
+): (node: unknown) => unknown {
+  const current = exprTree(CURRENT)
+  const user = exprTree(variantUser(model, variant.name))
+  const p = exprTree(`${variant.name}.p_user`)
+  return (node) => {
+    if (sameTree(node, user)) return current
+    // Лише виклик саме з `p_user`: інакше підміна аргументу (сталий NULL,
+    // колонка) зійшлася б із `rights_mine` і тест її не помітив би.
+    if (callName(node) === qualifiedName(F.scopesOf)) {
+      const args = (node as CallNode).FuncCall.args ?? []
+      return args.length === 1 && sameTree(args[0], p)
+        ? renamed(node, F.myScopes, () => [])
+        : undefined
+    }
+    return undefined
+  }
+}
+
+const ORIGIN = ["role_id", "custom_role", "via"]
+
+/**
+ * Тіло `rights_detail_of` без колонок походження: `via` — з кожного списку
+ * цілей CTE, а `role_id`, `custom_role`, `via` — з гілок вихідного запиту.
+ */
+function withoutOrigin(detail: unknown): unknown {
+  const isVia = (t: { ResTarget: { name?: string; val: unknown } }) => {
+    const fields = (
+      t.ResTarget.val as {
+        ColumnRef?: { fields: { String?: { sval: string } }[] }
+      }
+    ).ColumnRef?.fields
+    return (
+      t.ResTarget.name === "via" ||
+      (t.ResTarget.name === undefined && fields?.at(-1)?.String?.sval === "via")
+    )
+  }
+  const strip = (node: unknown): unknown =>
+    rewrite(node, (child) => {
+      if (typeof child !== "object" || child === null) return undefined
+      if (!("targetList" in child)) return undefined
+      const { targetList, ...rest } = child as Select
+      return {
+        ...(strip(rest) as object),
+        targetList: targetList!.filter((t) => !isVia(t)),
+      }
+    })
+  const top = selectOf(strip(detail))
+  const arm = (select: Select | undefined): Select => ({
+    ...select,
+    targetList: select!.targetList!.filter(
+      (t) => !ORIGIN.includes(t.ResTarget.name ?? "")
+    ),
+  })
+  return { SelectStmt: { ...top, larg: arm(top.larg), rarg: arm(top.rarg) } }
+}
+
+/** Гілка з дослівної функції проєкту: `FROM <функція>(…)`. */
+const fromFunction = (arm: Select) =>
+  (arm as { fromClause?: { RangeFunction?: unknown }[] }).fromClause?.[0]
+    ?.RangeFunction !== undefined
+
+const EMPTY_SET = "SELECT NULL::uuid WHERE false"
+
+const membershipUnit = (model: CompiledModel, name: string): SqlUnit => {
+  const found = model.sqlUnits.filter(
+    (u) =>
+      u.generator === "membership" && u.class === "function" && u.name === name
+  )
+  expect(found).toHaveLength(1)
+  return found[0]!
+}
+
+/** Останній кон'юнкт `WHERE` гілки й гілка без нього. */
+function splitLastConjunct(arm: Select): [Select, unknown] {
+  const where = (arm as { whereClause: { BoolExpr: { args: unknown[] } } })
+    .whereClause.BoolExpr
+  return [
+    {
+      ...arm,
+      whereClause: { BoolExpr: { ...where, args: where.args.slice(0, -1) } },
+    } as Select,
+    where.args.at(-1),
+  ]
+}
+
+const VARIANT_FIXTURES: [string, () => Promise<CompileResult>][] = [
+  ...TEMPLATE_FIXTURES,
+  [
+    "adopted-without-users",
+    () => compileRights(adoptedSourcesDomain(withoutUsers())),
+  ],
+]
+
+describe("rights analysis templates", () => {
+  const models = new Map<string, CompiledModel>()
+  const modelOf = async (name: string, build: () => Promise<CompileResult>) => {
+    if (!models.has(name)) {
+      const result = await build()
+      expect(result.diagnostics.filter((d) => d.severity === "error")).toEqual(
+        []
+      )
+      models.set(name, result.model!)
+    }
+    return models.get(name)!
+  }
+
+  it.each(VARIANT_FIXTURES)(
+    "no _of body reads the current user: %s",
+    async (name, build) => {
+      const model = await modelOf(name, build)
+      // Усе, що рахує щось для поточного користувача, — з моделі, а не
+      // переліком: функції прав `SECURITY DEFINER` (функції поточного
+      // користувача й аналізу), функції членства, дослівні функції множини
+      // скоупу й виміру і сама `current_user_id()`.
+      const forbidden = [
+        "simetra.current_user_id",
+        ...rightsUnits(model)
+          .filter(
+            (u) =>
+              u.class === "function" &&
+              option(u, "security")?.Boolean?.boolval === true
+          )
+          .map((u) => `${u.schema}.${u.name}`),
+        ...model.sqlUnits
+          .filter((u) => u.generator === "membership" && u.class === "function")
+          .map((u) => `${u.schema}.${u.name}`),
+        ...model.contracts.access.flatMap((a) =>
+          a.scope === undefined ? [] : [qualifiedName(a.scope.setFunction)]
+        ),
+        ...model.contracts.accessDimensions.flatMap((d) =>
+          "function" in d.values ? [qualifiedName(d.values.function)] : []
+        ),
+      ]
+      for (const fn of [F.myScopes, F.myMembers, F.mine, F.visibleUsers]) {
+        if (functionIdentities(model).some((i) => i.includes(`.${fn.name}(`)))
+          expect(forbidden).toContain(qualifiedName(fn))
+      }
+      expect(forbidden).toContain(qualifiedName(F.dimensionValues))
+      const variants = rightsUnits(model).filter(
+        (u) => u.class === "function" && VARIANTS.includes(u.name)
+      )
+      expect(variants.length).toBeGreaterThanOrEqual(VARIANTS.length - 1)
+      for (const unit of variants) {
+        const calls = unitCalls(unit, parse).map((c) => `${c.schema}.${c.name}`)
+        expect(
+          calls.filter((c) => forbidden.includes(c)),
+          unit.name
+        ).toEqual([])
+      }
+    }
+  )
+
+  it.each(VARIANT_FIXTURES)(
+    "each _of variant is the same body with the user argument: %s",
+    async (name, build) => {
+      const model = await modelOf(name, build)
+      const variantOf = (fn: { name: string }, from: { name: string }) =>
+        rewrite(
+          bodyTree(functionUnit(model, from.name)),
+          toVariant(model, fn, from)
+        )
+      const pairs: [{ name: string }, { name: string }][] = [
+        [F.scopesOf, F.myScopes],
+        [F.membersOf, F.myMembers],
+        ...(model.contracts.users !== undefined &&
+        (model.contracts.membership.length > 0 ||
+          model.contracts.membershipSources.length > 0)
+          ? [
+              [F.visibleUsersOf, F.visibleUsers] as [
+                QualifiedName,
+                QualifiedName,
+              ],
+            ]
+          : []),
+      ]
+      for (const [fn, from] of pairs) {
+        expect(bodyTree(functionUnit(model, fn.name)), fn.name).toEqual(
+          variantOf(fn, from)
+        )
+      }
+      // Гілки зв'язку — ті самі; дослівна функція виміру варіанта не має.
+      const relations = unionArms(
+        variantOf(F.dimensionValuesOf, F.dimensionValues)
+      ).filter((arm) => !fromFunction(arm))
+      const dimensions = bodyTree(functionUnit(model, F.dimensionValuesOf.name))
+      if (relations.length === 0) expect(dimensions).toEqual(tree(EMPTY_SET))
+      else expect(unionArms(dimensions)).toEqual(relations)
+      // Тіло функції множини членства кожного виду з `membership` плюс умова
+      // виду; дослівна функція множини варіанта не має.
+      const sets = model.contracts.membership.filter(
+        (m) => m.setFunction !== undefined
+      )
+      const scopeSet = bodyTree(functionUnit(model, F.scopeSetOf.name))
+      if (sets.length === 0) {
+        expect(scopeSet).toEqual(tree(EMPTY_SET))
+        return
+      }
+      const arms = unionArms(scopeSet).map(splitLastConjunct)
+      expect(arms.map(([arm]) => arm)).toEqual(
+        sets.map((m) =>
+          selectOf(
+            rewrite(
+              bodyTree(membershipUnit(model, m.setFunction!.name)),
+              toVariant(model, F.scopeSetOf)
+            )
+          )
+        )
+      )
+      expect(arms.map(([, kind]) => kind)).toEqual(
+        sets.map((m) =>
+          exprTree(
+            `${F.scopeSetOf.name}.p_scope_kind = '${m.scopeKindId}'::uuid`
+          )
+        )
+      )
+    }
+  )
+
+  it.each(VARIANT_FIXTURES)(
+    "detail_of projects to mine: %s",
+    async (name, build) => {
+      // Два згенеровані тіла, а не знімок: походження — лише вихідні колонки.
+      const model = await modelOf(name, build)
+      expect(
+        rewrite(
+          withoutOrigin(bodyTree(functionUnit(model, F.detailOf.name))),
+          toCurrent(model, F.detailOf)
+        )
+      ).toEqual(bodyTree(functionUnit(model, F.mine.name)))
+    }
+  )
+})
+
+const ZERO = "00000000-0000-0000-0000-000000000000"
+
+/** Глобальний запит функції аналізу `fn` — нульові вид і скоуп. */
+const globalRequest = (fn: string) =>
+  `${fn}.p_scope_kind = '${ZERO}'::uuid AND ${fn}.p_scope = '${ZERO}'::uuid`
+
+/**
+ * Гейт Р2d2-3 фікстури прав: `administerRights` на довіднику призначень
+ * рівня запиту — глобальному чи `org`.
+ */
+function gate(fn: string, levels: ("global" | "org")[]): string {
+  const arms = levels.map((level) =>
+    level === "global"
+      ? `(${globalRequest(fn)} AND g.level = 'global' AND g.object = 'global_role_assignments')`
+      : `(${fn}.p_scope_kind = '${ORG_KIND_ID}'::uuid AND g.level = 'scope' AND g.level_id = '${ORG_KIND_ID}'::uuid AND g.scope = ${fn}.p_scope AND g.object = 'org_role_assignments')`
+  )
+  return `EXISTS (SELECT 1 FROM simetra.rights_mine() g WHERE g.action = 'administerRights' AND (${arms.join(" OR ")}))`
+}
+
+/** Рядки рівня запиту (Р2d2-3): скоуп, контейнер `Project` цього скоупу, глобальні. */
+const requestRows = (fn: string, global: string) =>
+  `((d.level = 'scope' AND d.level_id = ${fn}.p_scope_kind AND d.scope = ${fn}.p_scope) OR (d.level = 'container' AND CASE d.level_id WHEN '${PROJECT_ID}'::uuid THEN '${ORG_KIND_ID}'::uuid ELSE NULL::uuid END = ${fn}.p_scope_kind AND d.scope = ${fn}.p_scope) OR (${globalRequest(fn)} AND d.level ${global}))`
+
+/** Вихідні колонки функції: ім'я й останнє ім'я типу. */
+function tableColumns(unit: SqlUnit): [string, string][] {
+  const { parameters } = createOf(unit) as CreateFunction & {
+    parameters: {
+      FunctionParameter: {
+        name: string
+        mode: string
+        argType: { names: { String: { sval: string } }[] }
+      }
+    }[]
+  }
+  return parameters
+    .filter((p) => p.FunctionParameter.mode === "FUNC_PARAM_TABLE")
+    .map((p) => [
+      p.FunctionParameter.name,
+      p.FunctionParameter.argType.names.at(-1)!.String.sval,
+    ])
+}
+
+describe("rights analysis functions", () => {
+  let model: CompiledModel
+  beforeAll(async () => {
+    model = await compiled(withRoles(BASE))
+  })
+
+  it("rights_member reads only a member of the requested scope, behind the gate", () => {
+    // Р2d2-4: учасник — рядок членства виду й скоупу запиту з `id =
+    // p_member`; глобальний запит — `p_member` і є користувач. Рядки прав —
+    // лише рівня запиту.
+    const fn = F.member.name
+    expect(bodyTree(functionUnit(model, fn))).toEqual(
+      tree(
+        `SELECT DISTINCT d.object, d.action, d.extent, d.dimension_id, d.container, d.role_id, d.custom_role, d.via FROM (SELECT m.id AS member, m.user_id AS user_id FROM public.org_member m WHERE ${fn}.p_scope_kind = '${ORG_KIND_ID}'::uuid AND m.org_id = ${fn}.p_scope AND m.id = ${fn}.p_member AND m.user_id IS NOT NULL UNION ALL SELECT ${fn}.p_member AS member, ${fn}.p_member AS user_id WHERE ${globalRequest(fn)}) u CROSS JOIN LATERAL simetra.rights_detail_of(u.user_id) d WHERE ${gate(fn, ["global", "org"])} AND ${requestRows(fn, "IN ('global', 'everyUser')")}`
+      )
+    )
+    expect(tableColumns(functionUnit(model, fn))).toEqual([
+      ["object", "text"],
+      ["action", "text"],
+      ["extent", "text"],
+      ["dimension_id", "uuid"],
+      ["container", "uuid"],
+      ["role_id", "uuid"],
+      ["custom_role", "uuid"],
+      ["via", "text"],
+    ])
+  })
+
+  it("rights_who lists the members of the requested scope and the global owners, behind the gate", () => {
+    // Р2d2-5: глобальний запит — власники глобальних призначень і рядок ролі
+    // «кожного користувача» без користувача й учасника.
+    const fn = F.who.name
+    const right = `${fn}.p_object`
+    const action = `${fn}.p_action`
+    const g = gate(fn, ["global", "org"])
+    expect(bodyTree(functionUnit(model, fn))).toEqual(
+      tree(
+        `SELECT u.user_id, u.member, d.role_id, d.custom_role, d.extent, d.dimension_id, d.container FROM (SELECT m.id AS member, m.user_id AS user_id FROM public.org_member m WHERE ${fn}.p_scope_kind = '${ORG_KIND_ID}'::uuid AND m.org_id = ${fn}.p_scope AND m.user_id IS NOT NULL UNION SELECT NULL::uuid AS member, a.subject AS user_id FROM public.global_role_assignments a WHERE ${globalRequest(fn)} AND a.subject IS NOT NULL) u CROSS JOIN LATERAL simetra.rights_detail_of(u.user_id) d WHERE ${g} AND d.object = ${right} AND d.action = ${action} AND ${requestRows(fn, "= 'global'")} UNION SELECT NULL::uuid, NULL::uuid, r.role_id, NULL::uuid, p.extent, p.dimension_id, NULL::uuid FROM simetra.rights_roles() r JOIN simetra.rights_projection() p ON p.role_id = r.role_id WHERE r.level = 'everyUser' AND ${globalRequest(fn)} AND p.object = ${right} AND p.action = ${action} AND ${g}`
+      )
+    )
+    expect(tableColumns(functionUnit(model, fn))).toEqual([
+      ["user_id", "uuid"],
+      ["member", "uuid"],
+      ["role_id", "uuid"],
+      ["custom_role", "uuid"],
+      ["extent", "text"],
+      ["dimension_id", "uuid"],
+      ["container", "uuid"],
+    ])
+  })
+
+  it("rights_journal_of reads the journal of the scope kind and scope pair, newest first, bounded", () => {
+    // Р2d2-7: пара (вид, скоуп), а не лише скоуп; від'ємний ліміт — порожньо.
+    const fn = F.journalOf.name
+    const columns =
+      "id, seq, xid, at, scope_kind_id, scope, actor, reason, action, object, relation, operation, row_id, parent_id, before, after"
+    expect(bodyTree(functionUnit(model, fn))).toEqual(
+      tree(
+        `SELECT ${columns
+          .split(", ")
+          .map((c) => `j.${c}`)
+          .join(
+            ", "
+          )} FROM simetra.rights_journal j WHERE ${gate(fn, ["global", "org"])} AND j.scope_kind_id = ${fn}.p_scope_kind AND j.scope = ${fn}.p_scope ORDER BY j.at DESC, j.seq DESC LIMIT greatest(0, least(${fn}.p_limit, 1000))`
+      )
+    )
+    expect(tableColumns(functionUnit(model, fn)).map(([c]) => c)).toEqual(
+      columns.split(", ")
+    )
+  })
+
+  it("a level covered only by an adopted source has no analysis gate", async () => {
+    // Відоме обмеження Р2d2: глобальні призначення дає лише прийняте
+    // джерело, довідника призначень глобального рівня немає — гейт лише
+    // `org`. Власники глобальних призначень — з рядків джерела.
+    const adopted = await compiled(adoptedSourcesDomain())
+    const fn = F.who.name
+    const body = bodyTree(functionUnit(adopted, fn))
+    expect(
+      nodes(body, "SubLink").filter((link) =>
+        sameTree({ SubLink: link }, exprTree(gate(fn, ["org"])))
+      )
+    ).toHaveLength(2)
+    const candidates = unionArms(
+      (nodes(body, "RangeSubselect")[0] as { subquery: unknown }).subquery
+    )
+    expect(candidates).toEqual(
+      [
+        `SELECT s.id AS member, s.user_id AS user_id FROM public.membership s WHERE ${fn}.p_scope_kind = '${ORG_KIND_ID}'::uuid AND s.org_id = ${fn}.p_scope AND s.user_id IS NOT NULL AND s.is_active IS TRUE`,
+        `SELECT NULL::uuid AS member, src.member_id AS user_id FROM public.global_grant src WHERE ${globalRequest(fn)} AND src.member_id IS NOT NULL`,
+      ].map((sql) => selectOf(tree(sql)))
+    )
+  })
+
+  /** Гілки підзапиту кандидатів (`FROM (…) u`) функції аналізу. */
+  const candidatesOf = (body: unknown) =>
+    unionArms(
+      (nodes(body, "RangeSubselect")[0] as { subquery: unknown }).subquery
+    )
+
+  it("an adopted membership source narrows the members of the requested scope by its where", async () => {
+    // Р2d2-4, Р2d1-15: рядок іншого рівня поліморфної таблиці членства не
+    // стає учасником скоупу запиту — ті самі умови, що в «моїх скоупах».
+    const narrowed = await compiled(
+      adoptedSourcesDomain({
+        [PROJECT_FILE]: {
+          membershipSources: [
+            membersSource({
+              where: [
+                { column: "userId", isNull: false },
+                { column: "isActive", equals: true },
+              ],
+            }),
+          ],
+        },
+      })
+    )
+    const arm = (fn: string, member: string) =>
+      selectOf(
+        tree(
+          `SELECT s.id AS member, s.user_id AS user_id FROM public.membership s WHERE ${fn}.p_scope_kind = '${ORG_KIND_ID}'::uuid AND s.org_id = ${fn}.p_scope${member} AND s.user_id IS NOT NULL AND s.is_active IS TRUE AND s.user_id IS NOT NULL AND s.is_active = TRUE`
+        )
+      )
+    const member = F.member.name
+    expect(candidatesOf(bodyTree(functionUnit(narrowed, member)))[0]).toEqual(
+      arm(member, ` AND s.id = ${member}.p_member`)
+    )
+    expect(
+      candidatesOf(bodyTree(functionUnit(narrowed, F.who.name)))[0]
+    ).toEqual(arm(F.who.name, ""))
+  })
+
+  it("the global request sees the rows of a container without a scope kind, a scope request does not", async () => {
+    // Призначення контейнера без виду скоупу лежать на глобальному рівні
+    // (Р2a1-7): їх показує глобальний запит під глобальним гейтом, а рядок
+    // скоупу їх не покриває. Власники — і з глобального довідника.
+    const single = await compiled(singleTenantRights())
+    const rows = (fn: string, levels: string) =>
+      exprTree(
+        `((d.level = 'scope' AND d.level_id = ${fn}.p_scope_kind AND d.scope = ${fn}.p_scope) OR (${globalRequest(fn)} AND (d.level ${levels} OR (d.level = 'container' AND d.level_id IN ('${PROJECT_ID}'::uuid)))))`
+      )
+    const contains = (root: unknown, sub: unknown): boolean =>
+      sameTree(root, sub) ||
+      (typeof root === "object" &&
+        root !== null &&
+        Object.values(root).some((child) => contains(child, sub)))
+    const member = bodyTree(functionUnit(single, F.member.name))
+    expect(
+      contains(member, rows(F.member.name, "IN ('global', 'everyUser')"))
+    ).toBe(true)
+    const who = bodyTree(functionUnit(single, F.who.name))
+    expect(contains(who, rows(F.who.name, "= 'global'"))).toBe(true)
+    expect(candidatesOf(who)).toEqual([
+      selectOf(
+        tree(
+          `SELECT NULL::uuid AS member, a.subject AS user_id FROM public.global_role_assignments a WHERE ${globalRequest(F.who.name)} AND a.subject IS NOT NULL`
+        )
+      ),
+    ])
   })
 })

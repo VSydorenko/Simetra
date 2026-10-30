@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import type pg from "pg"
 import type { CompiledModel } from "simetra/compiler"
-import { renderApplyState, renderDesiredState } from "simetra/schema"
+import { renderApplyState } from "simetra/schema"
 import {
   ADOPTED_LEAD_KEY,
   ADOPTED_MEMBER_KEY,
@@ -24,6 +24,11 @@ import {
 } from "../../src/schema/apply/rights-sources"
 import { signUp } from "./auth"
 import {
+  expectEquivalent,
+  installClosureOracle,
+  mineEquivalence,
+} from "./closure-oracle"
+import {
   type ApiRole,
   queryAs,
   rollbackDatabase,
@@ -36,6 +41,7 @@ import {
   insert,
   outcome,
   set,
+  deploy,
 } from "./rights-seed"
 
 /**
@@ -322,7 +328,7 @@ describe("adopted sources", () => {
       adoptedSourcesDomain(adoptedCrossKind(), activeGrants())
     )
     const client = await tx.open()
-    await client.query(renderDesiredState(model).sql)
+    await deploy(client, model)
     ids = await seedAdopted(client)
     const projection = await client.query<{
       object: string
@@ -338,6 +344,31 @@ describe("adopted sources", () => {
   })
 
   afterAll(() => tx.close())
+
+  // Р2d2-22: рядки джерел (`storage = 'source'`, скоуп з моїх скоупів,
+  // контейнер) поруч із рядками довідника — замикання після переписування
+  // дає рівно рядки тіла до нього.
+  it("closure-equivalence: the rows of the closure before the rewrite", async () => {
+    const client = tx.client()
+    await client.query("SAVEPOINT closure_oracle")
+    try {
+      await installClosureOracle(client, "adopted")
+      const users = Object.fromEntries(
+        Object.entries(ids).filter(([key]) => /^u(\d+|n)$/.test(key))
+      )
+      const results = await mineEquivalence(client, users)
+      expect(
+        Object.values(results).some((r) => r.rows > 1),
+        "some user holds source rows"
+      ).toBe(true)
+      expectEquivalent("rights_mine (adopted)", results, {
+        drops: false,
+        denies: false,
+      })
+    } finally {
+      await client.query("ROLLBACK TO SAVEPOINT closure_oracle")
+    }
+  })
 
   it.each(ADOPTED_CASES)("%s", (_, checks) =>
     runChecks(tx.client(), ids, checks)
@@ -650,7 +681,7 @@ describe("without users", () => {
       adoptedSourcesDomain(withoutUsers(), polymorphicGrants())
     )
     const client = await tx.open()
-    await client.query(renderDesiredState(model).sql)
+    await deploy(client, model)
     // Без «Користувачів» гранти схеми `simetra` дає стан застосування, а не
     // платформний шар (Р2d1-6): без них роль API не дійде до жодної функції.
     // Те саме поєднання, що застосування бере з `desiredForApply`

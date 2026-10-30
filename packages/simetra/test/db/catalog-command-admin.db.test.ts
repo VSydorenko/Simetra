@@ -7,7 +7,6 @@ import {
   SESSION_CLAIMS_SETTING,
   type CommandContext,
 } from "simetra/model"
-import { renderDesiredState } from "simetra/schema"
 import { CATALOG_COMMAND_ERRORS } from "../../src/compiler/catalog-command/units"
 import { uuid } from "../../src/compiler/__tests__/helpers"
 import {
@@ -26,6 +25,7 @@ import {
 } from "../../src/compiler/__tests__/fixtures/rights"
 import type { Refusal } from "./connection"
 import {
+  deploy,
   type Seed,
   assignmentRow,
   describeTransaction,
@@ -129,7 +129,7 @@ describe("catalog command core on rights system catalogs and Users", () => {
     )
     expect(result.diagnostics).toEqual([])
     const client = await tx.open()
-    await client.query(renderDesiredState(result.model!).sql)
+    await deploy(client, result.model!)
     // Лише згенеровані гранти: членство з `SET` потрібне `SET LOCAL ROLE`,
     // повного DML-гранту таблиць немає.
     await client.query(

@@ -330,6 +330,61 @@ grant no matching rights. The plan refuses a code change that would remove
 the last effective `fullAccess` holder with `plan.rights-full-access-lost`. Restore the holder or transfer administration before
 applying that change.
 
+## Rights analysis
+
+The database answers rights questions with the same rights functions the
+policies use. `simetra.rights_mine()` returns the caller's own rights; any
+user may call it. The other analysis functions disclose someone else's
+rights, so they return rows only when the caller holds `administerRights` on
+the role assignments catalog of the requested level (scope kind and scope,
+or the global level with a zero uuid for both). Without that right they
+return nothing, never an error:
+
+- `simetra.rights_member(scope_kind, scope, member)` — the rights of a member
+  of that scope, with their origin (`via` is `archetype` or `delta`). The
+  member must belong to the scope; the global form takes a user id.
+- `simetra.rights_who(action, object, scope_kind, scope)` — members of that
+  scope whose roles grant the action on the object. It answers per scope or
+  for the global level; it does not merge tenants.
+- `simetra.rights_explain(object, row, user)` — one row per read policy of
+  the object with `has_right` and `carrier_match`. A row is visible to the
+  user when every `restrictive` row matches and at least one `permissive` row
+  has both flags. It explains only rows the caller can read, and only for a
+  user who belongs to the row's scope; an unknown row returns nothing. A
+  `publicRead` row is the exception: any user gets its single public-read
+  row, matching what row-level security shows.
+  `carrier_match` is null when the carrier set comes from a verbatim
+  function of yours and the user is not the caller. Register and constant
+  rows are not explained.
+- `simetra.rights_journal_of(scope_kind, scope, limit)` — the rights journal
+  of that scope, newest first, at most 1000 rows.
+
+The service role cannot execute these functions. They read claims, so they
+return nothing in maintenance mode or without a session user. Build a client
+rights snapshot from these functions and cache it by the rights cache key
+above.
+
+## Supported limits
+
+Measured on one developer machine (PostgreSQL 17.6, local Supabase stack,
+2026-10-31); treat them as orders of magnitude, not guarantees.
+
+| Scenario | Volume | Time |
+| --- | --- | --- |
+| Read a scoped table, dimension values per user | 20,000 values, 120,000 rows | list 0.57 s, point 19 ms |
+| Read a scoped table, `fullAccess` holder in N scopes | 100 / 500 / 2,000 scopes, 100,000 rows | list 0.71 / 3.9 / 12.6 s |
+| Owner carrier change, tabular section fan-out | 100,000 / 300,000 section rows | 2.5 / 8.0 s |
+| Carrier backfill plan step | 1,000,000 section rows | 36 s |
+| One rights command (assignment) in its own transaction | 11,000 assignments | 41 ms |
+| Rights commands in one transaction | 1,000 commands | 14 s |
+
+- A `fullAccess` holder costs about 7.5 ms per scope on every query: up to
+  about 100 scopes a read stays under a second. A user who operates hundreds
+  of tenants is a separate case the platform does not optimise yet. The
+  scope count is data, so no compiler warning covers it.
+- Split batch rights changes into transactions: one command takes about
+  40 ms, while a thousand commands in one transaction take about 14 s.
+
 ## Who reads what
 
 Rows are read through rights, not by default. In a project with at least one

@@ -83,14 +83,24 @@ describe("rights administration storage", () => {
           generation: "always",
           sequence: "rights_journal_seq_seq",
         })
-        expect(table!.indexes.map((i) => i.keys)).toEqual([
-          [
+        // Первинний образ рядка — за (xid, relation, row_id, seq); журнал
+        // скоупу новіші першими — за (вид, скоуп, at, seq) (Р2d2-12).
+        expect(
+          Object.fromEntries(table!.indexes.map((i) => [i.name, i.keys]))
+        ).toEqual({
+          rights_journal_xid_relation_row_id_seq_idx: [
             { column: "xid" },
             { column: "relation" },
             { column: "row_id" },
             { column: "seq" },
           ],
-        ])
+          rights_journal_scope_kind_id_scope_at_seq_idx: [
+            { column: "scope_kind_id" },
+            { column: "scope" },
+            { column: "at", order: "desc" },
+            { column: "seq", order: "desc" },
+          ],
+        })
       }
       if (name === "rights_tx_actor")
         expect(table!.indexes.map((i) => i.keys)).toEqual([[{ column: "xid" }]])

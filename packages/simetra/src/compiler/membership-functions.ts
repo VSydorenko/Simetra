@@ -204,17 +204,33 @@ function memberScopesFunction(
   membership: Membership,
   fn: QualifiedName
 ): string {
-  const user = `m.${quoteIdent(membership.userColumn)}`
   return closedFunction(
     `${qualified(fn)}()`,
     "SETOF uuid",
-    [
-      `SELECT m.${quoteIdent(membership.scopeColumn)}`,
-      `FROM ${qualified(membership.table)} m`,
-      `WHERE ${user} IS NOT NULL`,
-      `  AND ${user} = ${CURRENT_USER}`,
-    ].join("\n")
+    memberScopesBody(membership, CURRENT_USER)
   )
+}
+
+/**
+ * Тіло функції множини членства для користувача `user` — одне для функції
+ * поточного користувача й для її варіанта аналізу прав `rights_scope_set_of`
+ * (Р2d2-2): друга реалізація розійшлася б із політикою, яку пояснює.
+ */
+export function memberScopesBody(
+  membership: {
+    table: QualifiedName
+    scopeColumn: string
+    userColumn: string
+  },
+  user: string
+): string {
+  const column = `m.${quoteIdent(membership.userColumn)}`
+  return [
+    `SELECT m.${quoteIdent(membership.scopeColumn)}`,
+    `FROM ${qualified(membership.table)} m`,
+    `WHERE ${column} IS NOT NULL`,
+    `  AND ${column} = ${user}`,
+  ].join("\n")
 }
 
 /**
