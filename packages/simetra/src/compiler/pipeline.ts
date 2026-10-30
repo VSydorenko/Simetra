@@ -552,6 +552,7 @@ export async function runStages(
     ),
     ...buildCarrierUnits(
       physical,
+      stage1.project.naming.attributeCase,
       stage1.project.database.provider,
       module,
       parse
