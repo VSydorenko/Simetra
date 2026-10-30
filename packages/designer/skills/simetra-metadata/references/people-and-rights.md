@@ -336,7 +336,9 @@ return nothing, never an error:
   the object with `has_right` and `carrier_match`. A row is visible to the
   user when every `restrictive` row matches and at least one `permissive` row
   has both flags. It explains only rows the caller can read, and only for a
-  user who belongs to the row's scope; an unknown row returns nothing.
+  user who belongs to the row's scope; an unknown row returns nothing. A
+  `publicRead` row is the exception: any user gets its single public-read
+  row, matching what row-level security shows.
   `carrier_match` is null when the carrier set comes from a verbatim
   function of yours and the user is not the caller. Register and constant
   rows are not explained.
