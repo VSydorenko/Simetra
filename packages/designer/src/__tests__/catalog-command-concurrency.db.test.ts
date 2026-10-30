@@ -16,11 +16,11 @@ import {
   TICKET_WRITER_ID,
   commandCoreLayer,
   policyDomain,
+  signUp,
   ticketMoveToHandler,
   withSql,
   writeRoles,
 } from "../../../simetra/test/support"
-import { signUp } from "../../../simetra/test/db/auth"
 import { inTarget, waitForLock } from "./support/db"
 
 /**

@@ -35,6 +35,7 @@ export {
   type Layer,
 } from "../src/compiler/__tests__/fixtures/rights"
 export * from "../src/schema/__tests__/fixtures/e1-fixtures"
+export { signUp } from "./db/auth"
 export * from "./db/connection"
 export * from "./db/fingerprint"
 export { readCatalog, type CatalogShape, type CatalogTable } from "./db/catalog"
