@@ -1198,28 +1198,89 @@ const DETAIL_CLOSURE_COLUMNS = {
   identity: CLOSURE_COLUMNS.identity,
 }
 
+/** Ключ рядка в межах призначення: дія на обсязі (і вимірі). */
+const CLOSURE_KEY = ["object", "action", "extent", "dimension_id"] as const
+
+/**
+ * Прохід замикання множинами й сортуванням, без з'єднання двох похідних
+ * множин (Р2d2-22). Корельований `NOT EXISTS` з кортежем ідентичності через
+ * `IS NOT DISTINCT FROM` і `OR` обсягу Postgres не хешує, а оцінки рядків
+ * CTE тут на порядки менші за справжні, тож і хешоване з'єднання двох
+ * CTE планувальник міняє на вкладений цикл — обидва квадратичні за кількістю
+ * скоупів власника `fullAccess`. `EXCEPT` і віконні функції від оцінок не
+ * залежать: хеш чи сортування, O(n log n). З'єднання лишається лише з
+ * малою сталою множиною `rights_requires`.
+ *
+ * - Ідентичність призначення стискається в номер `assignment` — `dense_rank`
+ *   за її колонками: рівні колонки (і `NULL` у тих самих місцях) при
+ *   сортуванні рівні й дають той самий номер; сентинел замість `NULL` не
+ *   потрібен.
+ * - Вимога, не задоволена тим самим обсягом і виміром, — `EXCEPT` (`NULL`
+ *   виміру рівні нативно).
+ * - Вимогу рятує рядок `any` того самого призначення — вікно за
+ *   (призначення, об'єкт, дія, вимога): рядок `any` не має обсягу рядка, що
+ *   вимагає, тож множинами того самого складу це не виражається.
+ * - Рядок зі знятою вимогою знімається вікном за ключем рядка.
+ */
 function closurePass(
   previous: string,
   columns: { output: readonly string[]; identity: readonly string[] }
 ): string {
+  const list = (alias: string, names: readonly string[]) =>
+    names.map((column) => `${alias}.${column}`).join(", ")
+  const key = (alias: string) => list(alias, CLOSURE_KEY)
+  const requires = call(RIGHTS_FUNCTIONS.requires)
+  // Рядок знятого ключа — лише ключ; решту колонок `UNION ALL` дає `NULL`
+  // типу першої гілки. Ім'я колонки — щоб варіант з походженням відрізнявся
+  // від `rights_mine` лише колонками `via` (тест «detail_of projects to mine»).
+  const droppedRow = columns.output
+    .map((column) =>
+      (CLOSURE_KEY as readonly string[]).includes(column)
+        ? `u.${column}`
+        : `NULL AS ${column}`
+    )
+    .join(", ")
   return [
-    `SELECT ${columns.output.map((column) => `g.${column}`).join(", ")}`,
-    `FROM ${previous} g`,
-    `WHERE NOT EXISTS (`,
-    `  SELECT 1`,
-    `  FROM ${call(RIGHTS_FUNCTIONS.requires)} q`,
-    `  WHERE q.object = g.object`,
-    `    AND q.action = g.action`,
-    `    AND NOT EXISTS (`,
-    `      SELECT 1`,
-    `      FROM ${previous} s`,
-    `      WHERE (${columns.identity.map((column) => `s.${column}`).join(", ")})`,
-    `            IS NOT DISTINCT FROM (${columns.identity.map((column) => `g.${column}`).join(", ")})`,
-    `        AND s.object = q.object`,
-    `        AND s.action = q.required`,
-    `        AND (s.extent = 'any' OR (s.extent = g.extent AND s.dimension_id IS NOT DISTINCT FROM g.dimension_id))`,
-    `    )`,
+    `WITH ranked AS (`,
+    `  SELECT ${list("g", columns.output)},`,
+    `         dense_rank() OVER (ORDER BY ${list("g", columns.identity)}) AS assignment`,
+    `  FROM ${previous} g`,
+    `), unmet_extent AS (`,
+    `  SELECT g.assignment, ${key("g")}, q.required`,
+    `  FROM ranked g`,
+    `  JOIN ${requires} q ON q.object = g.object AND q.action = g.action`,
+    `  EXCEPT`,
+    `  SELECT s.assignment, s.object, q.action, s.extent, s.dimension_id, q.required`,
+    `  FROM ranked s`,
+    `  JOIN ${requires} q ON q.object = s.object AND q.required = s.action`,
+    `), unmet AS (`,
+    `  SELECT w.assignment, ${key("w")}`,
+    `  FROM (`,
+    `    SELECT c.*, bool_or(c.any_row) OVER (PARTITION BY c.assignment, c.object, c.action, c.required) AS rescued`,
+    `    FROM (`,
+    `      SELECT u.assignment, ${key("u")}, u.required, false AS any_row`,
+    `      FROM unmet_extent u`,
+    `      UNION ALL`,
+    `      SELECT s.assignment, s.object, q.action, s.extent, s.dimension_id, q.required, true`,
+    `      FROM ranked s`,
+    `      JOIN ${requires} q ON q.object = s.object AND q.required = s.action`,
+    `      WHERE s.extent = 'any'`,
+    `    ) c`,
+    `  ) w`,
+    `  WHERE NOT w.rescued`,
     `)`,
+    `SELECT ${list("k", columns.output)}`,
+    `FROM (`,
+    `  SELECT r.*, bool_or(r.unmet) OVER (PARTITION BY r.assignment, ${key("r")}) AS dropped`,
+    `  FROM (`,
+    `    SELECT ${list("g", columns.output)}, g.assignment, false AS unmet`,
+    `    FROM ranked g`,
+    `    UNION ALL`,
+    `    SELECT ${droppedRow}, u.assignment, true`,
+    `    FROM unmet u`,
+    `  ) r`,
+    `) k`,
+    `WHERE NOT k.dropped`,
   ].join("\n")
 }
 
