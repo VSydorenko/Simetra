@@ -127,9 +127,9 @@
 **Files:**
 - Modify: `docs/superpowers/specs/2026-10-17-rights-design.md` (§5.1)
 
-- [ ] **Step 1:** §5.1, абзац «Імена (остаточні)»: речення «`simetra.authorize` і `simetra.rights_explain` лишаються формою» → «функції аналізу — `rights_member`, `rights_who`, `rights_explain`, `rights_journal_of` (Рх17); `simetra.authorize` лишається формою (П4)»; абзац про `EXECUTE`: «… сервісна роль (для неї — порожня множина, як функції скоупу й членства)» доповнити «; функцій аналізу сервісна роль не виконує» (Р2d2-1); речення «аргументи — лише сталі; поточного користувача читають з claims, ніколи з аргументу» доповнити «— для функцій множини й політик; функції аналізу приймають користувача чи учасника аргументом лише під гейтом адміністрування прав, а їхні внутрішні варіанти без `EXECUTE` кличуть лише вони» (Р2d2-2). §5.4, пункт гейта планів: «скоуп і носій обмежують читання індексом» → «межа скоупу обмежує читання індексом зі скоупом першим (носій — у межах скоупу; окремий індекс носія гейт не вимагає), не фільтром після повного перебору» (Р2d2-8); «немає `SubPlan` з `loops > 1`» → «жодного вузла `SubPlan`» (Р2d2-16).
-- [ ] **Step 2:** Run: `python3 scripts/check-doc-anchors.py && pnpm format:check` — код 0.
-- [ ] **Step 3: Commit**
+- [x] **Step 1:** §5.1, абзац «Імена (остаточні)»: речення «`simetra.authorize` і `simetra.rights_explain` лишаються формою» → «функції аналізу — `rights_member`, `rights_who`, `rights_explain`, `rights_journal_of` (Рх17); `simetra.authorize` лишається формою (П4)»; абзац про `EXECUTE`: «… сервісна роль (для неї — порожня множина, як функції скоупу й членства)» доповнити «; функцій аналізу сервісна роль не виконує» (Р2d2-1); речення «аргументи — лише сталі; поточного користувача читають з claims, ніколи з аргументу» доповнити «— для функцій множини й політик; функції аналізу приймають користувача чи учасника аргументом лише під гейтом адміністрування прав, а їхні внутрішні варіанти без `EXECUTE` кличуть лише вони» (Р2d2-2). §5.4, пункт гейта планів: «скоуп і носій обмежують читання індексом» → «межа скоупу обмежує читання індексом зі скоупом першим (носій — у межах скоупу; окремий індекс носія гейт не вимагає), не фільтром після повного перебору» (Р2d2-8); «немає `SubPlan` з `loops > 1`» → «жодного вузла `SubPlan`» (Р2d2-16).
+- [x] **Step 2:** Run: `python3 scripts/check-doc-anchors.py && pnpm format:check` — код 0.
+- [x] **Step 3: Commit**
 
 ```bash
 git add docs/superpowers/specs
@@ -147,16 +147,16 @@ git commit -m "docs(spec): імена функцій аналізу прав"
 **Interfaces:**
 - Produces: `RIGHTS_FUNCTIONS.scopesOf`, `.detailOf`, `.membersOf`, `.dimensionValuesOf`, `.scopeSetOf`, `.visibleUsersOf`, `.member`, `.who`, `.journalOf`; внутрішній `mineBody(contracts, physical, user: string, detail: boolean): string`; помічник замикання з переліком колонок параметром (той самий, що бере `rights_role_grants` 2c2).
 
-- [ ] **Step 1: Write the failing tests (unit):**
+- [x] **Step 1: Write the failing tests (unit):**
   - `it("no _of body reads the current user")` — жодне тіло `_of` не кличе `current_user_id`, `rights_my_scopes`, `rights_my_members` (мутація: лишити вкладений `rights_my_scopes()` у `rights_detail_of` — тест червоніє);
   - `it("each _of variant is the same body with the user argument")` — для кожної пари (`rights_my_scopes` / `rights_scopes_of`, `rights_my_members` / `rights_members_of`, гілка зв'язку `rights_dimension_values` / `rights_dimension_values_of`, `<таблиця>_member_scopes` / `rights_scope_set_of`, `rights_visible_users` / `rights_visible_users_of`) дерево варіанта = дерево наявної функції після відповідності Р2d2-2 (вираз користувача й вкладені функції множини → варіанти `_of`; умова виду в `rights_scope_set_of` і умова дійсності `p_user` — дозволені різниці); дослівна функція виміру чи множини скоупу варіанта не має.
   - `it("detail_of projects to mine")` — дерево `rights_detail_of` без колонок походження, з відповідністю Р2d2-2 у зворотний бік = дерево `rights_mine` (порівняння двох згенерованих тіл, а не зі знімком з `main`).
   - `rights_member`, `rights_who`, `rights_journal_of`: гейт Р2d2-3 у дереві (умова `administerRights` на мітці довідника призначень рівня); `rights_member` з'єднує `p_member` з членством виду `p_scope_kind` і скоупом `p_scope` (Р2d2-4); `rights_journal_of` — `greatest(0, least(p_limit, 1000))` і фільтр за парою `scope_kind_id = p_scope_kind AND scope = p_scope` (мутація: лише `scope` — рядок червоніє); `EXECUTE` — `user` і `command`, не `service`; внутрішні — без `EXECUTE`.
   - Мутації: прибрати гейт — тест гейта червоніє; прибрати з'єднання учасника зі скоупом — тест `rights_member` червоніє.
-- [ ] **Step 2:** Run: `pnpm --filter simetra test rights-functions` — FAIL.
-- [ ] **Step 3: Implement** за Р2d2-1…Р2d2-5, Р2d2-7, Р2d2-11…Р2d2-13; тест «дерево `rights_mine` з `CURRENT_USER` = дерево до рефакторингу» і тест «політики наявних фікстур — те саме дерево» (Р2d2-13).
-- [ ] **Step 4:** Run: `pnpm --filter simetra test rights && pnpm --filter simetra typecheck` — PASS.
-- [ ] **Step 5: Commit**
+- [x] **Step 2:** Run: `pnpm --filter simetra test rights-functions` — FAIL.
+- [x] **Step 3: Implement** за Р2d2-1…Р2d2-5, Р2d2-7, Р2d2-11…Р2d2-13; тест «дерево `rights_mine` з `CURRENT_USER` = дерево до рефакторингу» і тест «політики наявних фікстур — те саме дерево» (Р2d2-13).
+- [x] **Step 4:** Run: `pnpm --filter simetra test rights && pnpm --filter simetra typecheck` — PASS.
+- [x] **Step 5: Commit**
 
 ```bash
 git add packages/simetra/src
@@ -176,11 +176,11 @@ git commit -m "feat(compiler): функції аналізу прав учасн
 - Consumes: `rightsPredicates`, `renderCondition` (`predicates.ts`), `accessPolicyNames` (`access-units.ts`), `RIGHTS_FUNCTIONS.detailOf` (Задача 1).
 - Produces: `buildExplainUnits(contracts, physical, provider, module, parse): SqlUnit[]` (генератор `"rightsExplain"`).
 
-- [ ] **Step 1: Write the failing tests (unit):** над `policyDomain()`: гілка `Task` має рівно по рядку на кожен предикат читання основної таблиці з ім'ям політики, що збігається з іменем згенерованої `<t>_read_*` (звірка з одиницями `buildAccessUnits`), і рядок межі тенанта (`kind = 'restrictive'`); `has_right` за формою обсягу (скоуп / контейнер / нескоуплений, Р2d2-6); предикат `any` — `carrier_match` = `TRUE`; зв'язок виміру `region` — через `rights_dimension_values_of(p_user, …)`; дослівна функція виміру (шар з дослівною функцією значень виміру — у `policyDomain()` вимір `region` має зв'язок) → `CASE WHEN p_user = current_user_id() THEN … ELSE NULL END`; гілка «Користувачів»: рядок межі з `carrier_match` через `rights_visible_users_of(p_user)`; гілка об'єкта з `publicRead` — без перевірки членства `p_user`; гілок для регістрів і констант немає; тіло не повертає колонок рядка. Мутація: пропустити один предикат — тест «по рядку на предикат» червоніє.
-- [ ] **Step 2:** Run: `pnpm --filter simetra test rights-explain` — FAIL.
-- [ ] **Step 3: Implement** за Р2d2-6.
-- [ ] **Step 4:** Run: `pnpm --filter simetra test rights-explain rights access && pnpm --filter simetra typecheck` — PASS.
-- [ ] **Step 5: Commit**
+- [x] **Step 1: Write the failing tests (unit):** над `policyDomain()`: гілка `Task` має рівно по рядку на кожен предикат читання основної таблиці з ім'ям політики, що збігається з іменем згенерованої `<t>_read_*` (звірка з одиницями `buildAccessUnits`), і рядок межі тенанта (`kind = 'restrictive'`); `has_right` за формою обсягу (скоуп / контейнер / нескоуплений, Р2d2-6); предикат `any` — `carrier_match` = `TRUE`; зв'язок виміру `region` — через `rights_dimension_values_of(p_user, …)`; дослівна функція виміру (шар з дослівною функцією значень виміру — у `policyDomain()` вимір `region` має зв'язок) → `CASE WHEN p_user = current_user_id() THEN … ELSE NULL END`; гілка «Користувачів»: рядок межі з `carrier_match` через `rights_visible_users_of(p_user)`; гілка об'єкта з `publicRead` — без перевірки членства `p_user`; гілок для регістрів і констант немає; тіло не повертає колонок рядка. Мутація: пропустити один предикат — тест «по рядку на предикат» червоніє.
+- [x] **Step 2:** Run: `pnpm --filter simetra test rights-explain` — FAIL.
+- [x] **Step 3: Implement** за Р2d2-6.
+- [x] **Step 4:** Run: `pnpm --filter simetra test rights-explain rights access && pnpm --filter simetra typecheck` — PASS.
+- [x] **Step 5: Commit**
 
 ```bash
 git add packages/simetra/src
@@ -197,7 +197,7 @@ git commit -m "feat(compiler): пояснення видимості рядка 
 
 Причина DB-рівня (шапка): що функції аналізу повернуть на живих призначеннях, дельтах і рядках під роллю `authenticated` і що пояснення збігається з тим, що пропускає RLS.
 
-- [ ] **Step 1: Write the test** — один опис, одне розгортання, фікстура `policyDomain(writeRoles(), adminRoles())`, засів — два тенанти, адміністратор прав A (`RightsAdmin`), учасники з `OrgMember`, кастомна роль з дельтою, контейнерне призначення, глобальне. Кейси (`it.each`):
+- [x] **Step 1: Write the test** — один опис, одне розгортання, фікстура `policyDomain(writeRoles(), adminRoles())`, засів — два тенанти, адміністратор прав A (`RightsAdmin`), учасники з `OrgMember`, кастомна роль з дельтою, контейнерне призначення, глобальне. Кейси (`it.each`):
   - `analysis-gate` — Review Focus 1;
   - `member-rights` — `rights_member` для учасника з кастомною роллю: рядки дельти мають `via = 'delta'`, архетипу — `via = 'archetype'`;
   - `who` — `rights_who('read', 'task', <org>, A)` = учасники A з правом; для «Користувачів» у глобальній формі (нульовий uuid) — рядок `everyUser` (Review Focus 5);
@@ -209,8 +209,8 @@ git commit -m "feat(compiler): пояснення видимості рядка 
   - `journal-of` — після зміни призначення адміністратором A — рядок журналу видно адміністратору A, не B;
   - `unscoped-container` — роль контейнерного рівня на нескоупленому контейнері видна глобальному адміністратору в `rights_member(0, 0, u)` і `rights_who(…, 0, 0)`, адміністратору скоупу — порожньо (Р2d2-18);
   - `explain-caller-visibility` — адміністратор прав скоупу A без `read` на об'єкт: `rights_explain(рядок A, u)` порожньо для будь-якого `u`; з `read` — пояснення є (Р2d2-19).
-- [ ] **Step 2:** Run: `pnpm --filter simetra exec vitest run --project db rights-analysis` — PASS. **Мутаційний доказ** (вручну): прибрати гейт `administerRights` → `analysis-gate`; прибрати `scope = p_scope` у гейті → `analysis-gate` (адмін A бачить B); прибрати фільтр `level_id = p_scope_kind` у `rights_who` → `cross-kind` (з'являються `org`-рядки u8); прибрати `scope_kind_id = p_scope_kind` у `rights_journal_of` → `cross-kind` (адміністратор `team` бачить журнал `org` A); `carrier_match` межі «Користувачів» = `TRUE` → `explain-users` (рядок користувача, що належить лише B, для учасника A з `read@any` на «Користувачах»); пропустити предикат контейнера в `rights_explain` → `explain-equivalence`; прибрати `container` з глобального плеча → `unscoped-container`; прибрати перевірку видимості рядка викликачу → `explain-caller-visibility`.
-- [ ] **Step 3: Commit**
+- [x] **Step 2:** Run: `pnpm --filter simetra exec vitest run --project db rights-analysis` — PASS. **Мутаційний доказ** (вручну): прибрати гейт `administerRights` → `analysis-gate`; прибрати `scope = p_scope` у гейті → `analysis-gate` (адмін A бачить B); прибрати фільтр `level_id = p_scope_kind` у `rights_who` → `cross-kind` (з'являються `org`-рядки u8); прибрати `scope_kind_id = p_scope_kind` у `rights_journal_of` → `cross-kind` (адміністратор `team` бачить журнал `org` A); `carrier_match` межі «Користувачів» = `TRUE` → `explain-users` (рядок користувача, що належить лише B, для учасника A з `read@any` на «Користувачах»); пропустити предикат контейнера в `rights_explain` → `explain-equivalence`; прибрати `container` з глобального плеча → `unscoped-container`; прибрати перевірку видимості рядка викликачу → `explain-caller-visibility`.
+- [x] **Step 3: Commit**
 
 ```bash
 git add packages/simetra/test/db
@@ -230,10 +230,10 @@ git commit -m "test(rights): функції аналізу прав на жив�
 **Interfaces:**
 - Produces: `planNodes(plan: unknown): PlanNode[]` (`PlanNode { type: string; relation?: string; indexes: string[]; conditions: string[]; parent?: string; loops?: number; filter?: string }` — `indexes` і `conditions` (`Index Cond`, `Recheck Cond`) для `Bitmap Heap Scan` збираються з дочірніх `Bitmap Index Scan` / `BitmapAnd` / `BitmapOr`), `subPlans(plan): PlanNode[]` (усі вузли з `Parent Relationship = 'SubPlan'`), `scansOf(plan, table): PlanNode[]`.
 
-- [ ] **Step 0: Probe** — засів Р2d2-8 і `EXPLAIN (ANALYZE, FORMAT JSON)` трьох форм над трьома таблицями вручну; плани — у позначку кроку. Якщо коректні політики дають `Seq Scan` — стоп і звіт архітектору.
-- [ ] **Step 1: Write the test** за Р2d2-8 і Р2d2-12 (плюс `rights_journal_of` на засіві з помітним журналом — жодного `Seq Scan` журналу): засів, `ANALYZE`, `it.each` над (таблиця × форма запиту): жодного вузла `SubPlan`; для точкового — жоден вузол `scansOf` не `Seq Scan`; для списку й підрахунку — жоден не `Seq Scan`, і колонка скоупу таблиці є в `conditions` індексного вузла. Записати час засіву й прогону в коментар-позначку кроку.
-- [ ] **Step 2:** Run: `/usr/bin/time -f %e pnpm --filter simetra exec vitest run --project db rights-plan-gate` — PASS і ≤ 30 с. **Мутаційний доказ** (вручну): замінити некорельовану форму `rights_own` на корельовану (`EXISTS` з посиланням на рядок) у згенерованій політиці — кейси червоніють на `SubPlan`; прибрати індекси, що починаються з колонки скоупу на `task` (`DROP CONSTRAINT … CASCADE` унікального `(org_id, id)` і індекси складених FK у тестовій транзакції, Р2d2-16) — кейси списку й підрахунку `task` червоніють на `Seq Scan` чи на відсутності умови скоупу в `conditions`.
-- [ ] **Step 3: Commit**
+- [x] **Step 0: Probe** — засів Р2d2-8 і `EXPLAIN (ANALYZE, FORMAT JSON)` трьох форм над трьома таблицями вручну; плани — у позначку кроку. Якщо коректні політики дають `Seq Scan` — стоп і звіт архітектору.
+- [x] **Step 1: Write the test** за Р2d2-8 і Р2d2-12 (плюс `rights_journal_of` на засіві з помітним журналом — жодного `Seq Scan` журналу): засів, `ANALYZE`, `it.each` над (таблиця × форма запиту): жодного вузла `SubPlan`; для точкового — жоден вузол `scansOf` не `Seq Scan`; для списку й підрахунку — жоден не `Seq Scan`, і колонка скоупу таблиці є в `conditions` індексного вузла. Записати час засіву й прогону в коментар-позначку кроку.
+- [x] **Step 2:** Run: `/usr/bin/time -f %e pnpm --filter simetra exec vitest run --project db rights-plan-gate` — PASS і ≤ 30 с. **Мутаційний доказ** (вручну): замінити некорельовану форму `rights_own` на корельовану (`EXISTS` з посиланням на рядок) у згенерованій політиці — кейси червоніють на `SubPlan`; прибрати індекси, що починаються з колонки скоупу на `task` (`DROP CONSTRAINT … CASCADE` унікального `(org_id, id)` і індекси складених FK у тестовій транзакції, Р2d2-16) — кейси списку й підрахунку `task` червоніють на `Seq Scan` чи на відсутності умови скоупу в `conditions`.
+- [x] **Step 3: Commit**
 
 ```bash
 git add packages/simetra/test/db
@@ -267,7 +267,7 @@ git commit -m "test(rights): бенчмарк меж прав поза test:db �
 **Files:**
 - Modify: `packages/designer/skills/simetra-metadata/references/people-and-rights.md`, `docs/ROADMAP.md`, цей план (позначки)
 
-- [ ] **Step 1:** Скіл споживача (англійською): функції аналізу, гейт `administerRights`, `carrier_match IS NULL` для дослівних функцій, знімок прав для клієнта — з функцій аналізу й версій (2c2).
+- [x] **Step 1:** Скіл споживача (англійською): функції аналізу, гейт `administerRights`, `carrier_match IS NULL` для дослівних функцій, знімок прав для клієнта — з функцій аналізу й версій (2c2).
 - [ ] **Step 2:** Run: `pnpm format:check && pnpm lint && pnpm typecheck && pnpm test` — код 0.
 - [ ] **Step 3:** Run: `pnpm metadata:check && python3 scripts/check-doc-anchors.py && .agents/skills/codebase-research/scripts/orient --plan docs/superpowers/plans/2026-10-25-rights-2d2-analysis-plan-gate-benchmark.md` — код 0.
 - [ ] **Step 4:** Повний `pnpm test:db` на одному SHA (у фоні, таймаут не коротший за 45 хв): `/usr/bin/time -f %e pnpm test:db` — код 0 (або CI job `db`); приріст проти прогону після 2c2 ≤ 40 с (гейт ≤ 30 с, аналіз ≤ 10 с), інакше звіт архітектору з розкладом за файлами.
