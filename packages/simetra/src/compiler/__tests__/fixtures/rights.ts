@@ -1025,7 +1025,7 @@ function ticketAttributes(): Record<string, unknown>[] {
  * контейнера `project`, поліморфним `subject` і масивом `watchers`; ТЧ
  * `checklist` посилається на `Region`, на сам `Ticket` (невидима ціль рядка
  * ТЧ під `TicketOwnWriter`) і поліморфно — `subject` (часткова зміна пари). Ролі запису мають `read` на тому самому обсязі,
- * що й запис: `read@any` змінив би видимість під `FOR UPDATE`. Цілі посилань
+ * що й запис: `read@any` змінив би видимість під замком рядка. Цілі посилань
  * відкриває окрема роль `TicketTargetsReader`. `TaskCommentOwnWriter` — носій
  * за шляхом `task.assignee`.
  */

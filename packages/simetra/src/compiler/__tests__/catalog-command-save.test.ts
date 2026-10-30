@@ -26,7 +26,13 @@ import {
   type Layer,
 } from "./fixtures/rights"
 import { snakeCaseTwin } from "./fixtures/snake-case"
-import { bodyShape, loadShapeParsers, nodes, tree } from "./fixtures/sql-shape"
+import {
+  bodyShape,
+  loadShapeParsers,
+  lockStrengths,
+  nodes,
+  tree,
+} from "./fixtures/sql-shape"
 import { uuid } from "./helpers"
 
 let parse: SqlParser
@@ -152,13 +158,16 @@ describe("buildCatalogCommandUnits — <t>_save", () => {
     expect(order.every((i) => i >= 0)).toBe(true)
     expect([...order].sort((a, b) => a - b)).toEqual(order)
     expect(new Set(order).size).toBe(order.length)
-    // Замок — `FOR UPDATE` у дереві запиту рядка «до».
+    // Замок — `FOR NO KEY UPDATE` у дереві запиту рядка «до» (Р-A2-20):
+    // `FOR UPDATE` конфліктував би з `KEY SHARE` RI-перевірок.
     expect(shape[lockAt]!.expressions[0]!.tree).toEqual(
-      tree("SELECT * FROM public.ticket r WHERE r.id = v_in.id FOR UPDATE")
+      tree(
+        "SELECT * FROM public.ticket r WHERE r.id = v_in.id FOR NO KEY UPDATE"
+      )
     )
-    expect(
-      nodes(shape[lockAt]!.expressions[0]!.tree, "lockingClause")
-    ).not.toEqual([])
+    expect(lockStrengths(shape[lockAt]!.expressions[0]!.tree)).toEqual([
+      "LCS_FORNOKEYUPDATE",
+    ])
     // `GET DIAGNOSTICS` іде одразу після `UPDATE`, за ним — відмова на нулі.
     expect(shape[update + 1]).toMatchObject({
       type: "getdiag",
@@ -514,7 +523,7 @@ describe("buildCatalogCommandUnits — <t>_save", () => {
     )
   })
 
-  it("ієрархічна таблиця: advisory-замок перед FOR UPDATE лише в гілці з parent_id", () => {
+  it("ієрархічна таблиця: advisory-замок перед замком рядка лише в гілці з parent_id", () => {
     const shape = bodyShape(saveSql(domain, "ticket"))
     const guarded = ifAt(shape, "p_item ? 'parent_id'")
     const locked = at(shape, "perform", lock("ticket"), guarded)

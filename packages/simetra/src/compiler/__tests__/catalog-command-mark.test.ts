@@ -15,7 +15,13 @@ import {
   writeRoles,
 } from "./fixtures/rights"
 import { snakeCaseTwin } from "./fixtures/snake-case"
-import { bodyShape, loadShapeParsers, nodes, tree } from "./fixtures/sql-shape"
+import {
+  bodyShape,
+  loadShapeParsers,
+  lockStrengths,
+  nodes,
+  tree,
+} from "./fixtures/sql-shape"
 
 let domain: CompiledModel
 beforeAll(async () => {
@@ -78,8 +84,12 @@ const rightsIf = (
   row: "v_old" | "v_new"
 ) =>
   `(${rightsCheck(rightsOf(model, table), action, mainOf(model, table), row)}) IS NOT TRUE`
-const forUpdate = (table: string) =>
-  `SELECT * FROM public.${table} r WHERE r.id = p_id FOR UPDATE`
+/**
+ * Замок рядка «до» (Р-A2-20): позначка — `NO KEY UPDATE` (сумісний з
+ * `KEY SHARE` RI-перевірок), видалення — `UPDATE` (`DELETE` з ним конфліктує).
+ */
+const lockedRow = (table: string, strength: "NO KEY UPDATE" | "UPDATE") =>
+  `SELECT * FROM public.${table} r WHERE r.id = p_id FOR ${strength}`
 const lock = (table: string) =>
   `SELECT pg_advisory_xact_lock(${HIERARCHY_LOCK_SPACE}, 'public.${table}'::regclass::oid::int)`
 /** `DETAIL` відмови оператора `raise` — рядкові константи його опцій. */
@@ -111,7 +121,7 @@ describe("<t>_mark_deletion", () => {
       mark: ifAt(shape, "p_mark IS NULL"),
       version0: ifAt(shape, "p_expected_version IS NULL"),
       ctx: ifAt(shape, context(action, table)),
-      locked: at(shape, "execsql", forUpdate(table)),
+      locked: at(shape, "execsql", lockedRow(table, "NO KEY UPDATE")),
       version: ifAt(shape, "v_old.version IS DISTINCT FROM p_expected_version"),
       before: ifAt(shape, rightsIf(model, table, action, "v_old")),
       assign: shape.findIndex(
@@ -141,9 +151,9 @@ describe("<t>_mark_deletion", () => {
       s.update,
     ])
     expect(s.shape[s.locked]!.target).toEqual({ variable: "v_old" })
-    expect(
-      nodes(s.shape[s.locked]!.expressions[0]!.tree, "lockingClause")
-    ).not.toEqual([])
+    expect(lockStrengths(s.shape[s.locked]!.expressions[0]!.tree)).toEqual([
+      "LCS_FORNOKEYUPDATE",
+    ])
     expect(s.shape[s.update + 1]).toMatchObject({
       type: "getdiag",
       target: { variable: "v_count" },
@@ -201,7 +211,7 @@ describe("<t>_mark_deletion", () => {
     expect([...relations]).toEqual(["ticket"])
   })
 
-  describe("обробник beforeWrite присвоює parent_id — замок до FOR UPDATE", () => {
+  describe("обробник beforeWrite присвоює parent_id — замок до замка рядка", () => {
     it.each([
       ["присвоює", "NEW.parent_id := NULL;", true],
       ["не присвоює", "NEW.description := 'x';", false],
@@ -214,7 +224,9 @@ describe("<t>_mark_deletion", () => {
       const locked = at(shape, "perform", lock("ticket"))
       if (always) {
         expect(locked).toBe(ifAt(shape, context("markDeletion", "ticket")) + 2)
-        expect(locked).toBeLessThan(at(shape, "execsql", forUpdate("ticket")))
+        expect(locked).toBeLessThan(
+          at(shape, "execsql", lockedRow("ticket", "NO KEY UPDATE"))
+        )
       } else {
         expect(locked).toBe(-1)
       }
@@ -235,12 +247,17 @@ describe("<t>_delete", () => {
       // Без версії — `command.invalid`, а не конфлікт, як у позначці.
       ifAt(shape, "p_expected_version IS NULL"),
       ifAt(shape, context("administerRights", table)),
-      at(shape, "execsql", forUpdate(table)),
+      at(shape, "execsql", lockedRow(table, "UPDATE")),
       ifAt(shape, "v_old.version IS DISTINCT FROM p_expected_version"),
       ifAt(shape, rightsIf(domain, table, "administerRights", "v_old")),
       remove,
     ]
     expectOrder(order)
+    // Видалення лишає `FOR UPDATE` (Р-A2-20): `DELETE` конфліктує з
+    // `KEY SHARE` за природою, на відміну від зміни.
+    expect(lockStrengths(shape[order[2]!]!.expressions[0]!.tree)).toEqual([
+      "LCS_FORUPDATE",
+    ])
     expect(shape[remove + 1]).toMatchObject({
       type: "getdiag",
       target: { variable: "v_count" },

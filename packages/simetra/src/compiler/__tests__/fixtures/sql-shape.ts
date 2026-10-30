@@ -73,6 +73,12 @@ export function nodes(value: unknown, key: string): unknown[] {
   ]
 }
 
+/**
+ * Сили замків рядка дерева (`LCS_FORUPDATE`, `LCS_FORNOKEYUPDATE`, …) в
+ * порядку обходу: ключ `strength` має лише `LockingClause`.
+ */
+export const lockStrengths = (value: unknown) => nodes(value, "strength")
+
 /** Відношення дерева: кожен вузол з `relname`. */
 export function relationsOf(
   value: unknown

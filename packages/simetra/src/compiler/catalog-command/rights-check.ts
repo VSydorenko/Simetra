@@ -2,7 +2,7 @@ import type { PhysicalTable } from "simetra/model"
 import type { RightsContract } from "../contracts"
 import { renderCondition, rightsPredicates } from "../rights/predicates"
 
-/** Змінна рядка ядра: стан під `FOR UPDATE` чи стан «після» запису. */
+/** Змінна рядка ядра: стан під замком рядка чи стан «після» запису. */
 export type CommandRow = "v_old" | "v_new"
 
 /**

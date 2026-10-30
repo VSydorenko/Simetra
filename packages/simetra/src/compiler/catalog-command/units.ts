@@ -436,6 +436,18 @@ function referenceViolations(
  * перевірка права, перевиведення копій, автори. Одне місце, щоб `save`,
  * `mark_deletion` і `delete` не розходилися в умовах відмов.
  */
+/**
+ * Сила замка рядка «до» (Р-A2-20). Зміна (`save`, `mark_deletion`) бере
+ * `NO KEY UPDATE`: `FOR UPDATE` конфліктує з `FOR KEY SHARE`, який RI-перевірка
+ * бере на ціль FK, тож дві команди з взаємно новими посиланнями (T1 зберігає X
+ * з посиланням на P; T2 зберігає P з рядком ТЧ `related_id = X`) дали б
+ * `40P01`. `NO KEY UPDATE` з `KEY SHARE` сумісний, так само вимагає права
+ * `UPDATE` і застосовує політики `UPDATE USING`; ключа й унікальних ключів
+ * команда не змінює ніколи. Видалення бере `UPDATE`: `DELETE` за природою
+ * конфліктує з `KEY SHARE`, слабший замок лише відклав би конфлікт до `DELETE`.
+ */
+type RowLockStrength = "NO KEY UPDATE" | "UPDATE"
+
 interface CoreParts {
   facts: CoreFacts
   label: string
@@ -451,8 +463,11 @@ interface CoreParts {
   /** Перевиведення копій лише змінених зв'язків — як тригер носіїв. */
   relink: (links: readonly CarrierLink[]) => string[]
   rightsIf: (action: string, row: "v_old" | "v_new", reason: string) => string[]
-  /** Рядок «до» під замком (Р-A2-18: після контексту) і версія. */
-  lockedOld: (root: string) => string[]
+  /**
+   * Рядок «до» під замком (Р-A2-18: після контексту) і версія. Сила замка —
+   * за дією функції (Р-A2-20): зміна — `NO KEY UPDATE`, видалення — `UPDATE`.
+   */
+  lockedOld: (root: string, strength: RowLockStrength) => string[]
 }
 
 function coreParts(
@@ -515,10 +530,10 @@ function coreParts(
       ifThen(`(${rightsCheck(facts.rights, action, table, row)}) IS NOT TRUE`, [
         forbidden(reason),
       ]),
-    lockedOld: (root) => [
-      `SELECT * INTO v_old FROM ${relation(table)} r WHERE r.${q(key)} = ${root} FOR UPDATE;`,
-      // Замок застосовує `UPDATE USING` (право дії над станом «до»), тож
-      // відсутній і чужий рядок — та сама відмова (Рт4).
+    lockedOld: (root, strength) => [
+      `SELECT * INTO v_old FROM ${relation(table)} r WHERE r.${q(key)} = ${root} FOR ${strength};`,
+      // Замок застосовує `UPDATE USING` (право дії над станом «до») за будь-
+      // якої сили, тож відсутній і чужий рядок — та сама відмова (Рт4).
       ...ifThen("NOT FOUND", [noRight]),
       ...ifThen(
         `v_old.${q(contract.versionColumn)} IS DISTINCT FROM p_expected_version`,
@@ -587,7 +602,7 @@ function saveFunction(
       : contract.hierarchy.lockAlways
         ? [lock]
         : ifThen(`p_item ? ${sqlLiteral(contract.hierarchy.parent)}`, [lock])),
-    ...parts.lockedOld(root),
+    ...parts.lockedOld(root, "NO KEY UPDATE"),
     ...rightsIf(contract.actions.update, "v_old", E.forbidden.noRight),
     "v_new := v_old;",
     ...contract.updateKeys.flatMap((c) =>
@@ -988,7 +1003,7 @@ function markDeletionFunction(
     // Обробник `beforeWrite`, що присвоює батька, спрацьовує й на `UPDATE`
     // позначки: замок ієрархії — до замка рядка (Р-A2-17).
     ...(contract.hierarchy?.lockAlways === true ? [parts.lock] : []),
-    ...parts.lockedOld(root),
+    ...parts.lockedOld(root, "NO KEY UPDATE"),
     ...parts.rightsIf(action, "v_old", E.forbidden.noRight),
     "v_new := v_old;",
     `v_new.${mark} := p_mark;`,
@@ -1044,7 +1059,10 @@ function deleteFunction(
     // виклику, як у позначці видалення, а не конфлікт.
     ...ifThen("p_expected_version IS NULL", [invalid("'p_expected_version'")]),
     ...parts.context(action, root),
-    ...parts.lockedOld(root),
+    // `FOR UPDATE`, не `NO KEY UPDATE` (Р-A2-20): `DELETE` конфліктує з
+    // `KEY SHARE` RI-перевірок за природою, тож замок бере ту саму силу
+    // одразу, а не підвищує її вже на `DELETE`.
+    ...parts.lockedOld(root, "UPDATE"),
     ...parts.rightsIf(action, "v_old", E.forbidden.noRight),
     `DELETE FROM ${relation(table)} WHERE ${q(key)} = ${root};`,
     // Відкликання права між замком і `DELETE` — нуль рядків, відмова.
