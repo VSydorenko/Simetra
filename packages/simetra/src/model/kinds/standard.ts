@@ -720,7 +720,7 @@ export function recorderColumns(): StandardColumnDef[] {
   ]
 }
 
-function lineNumberColumn(): StandardColumnDef {
+export function lineNumberColumn(): StandardColumnDef {
   return {
     logicalName: "lineNumber",
     physicalName: "line_number",

@@ -674,6 +674,25 @@ function assignmentProblems(
 }
 
 /**
+ * Чи може обробник `beforeWrite` змінити колонки `columns` рядка (Р-A2-17):
+ * той самий аналіз присвоєнь, що й діагностика механіки, з будь-якою
+ * проблемою як «присвоює» — `NEW :=` чи `RETURN` іншого запису теж підміняють
+ * колонку. Нерозбірне тіло — теж «присвоює» (fail-closed): ядро тоді бере
+ * замок ієрархії завжди, а не пропускає гонку. `sql` — `CREATE FUNCTION`
+ * обробника, `columns` — фізичні імена в нижньому регістрі.
+ */
+export function handlerAssigns(
+  sql: string,
+  columns: ReadonlySet<string>,
+  parse: SqlParser,
+  plpgsql: PlpgsqlParser
+): boolean {
+  const parsed = plpgsql(sql)
+  if (!parsed.ok || parsed.fn === undefined) return true
+  return assignmentProblems(parsed.fn, columns, parse).length > 0
+}
+
+/**
  * `CALL` згадує `NEW` чи псевдонім будь-де в аргументах. Параметр `INOUT` пише
  * в аргумент-змінну без цілі в дереві, а дістатися `NEW` можна й через
  * псевдонім (`r.version`), і через мітку функції (`f.new.version`): ціль

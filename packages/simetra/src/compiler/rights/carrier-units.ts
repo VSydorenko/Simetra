@@ -74,7 +74,7 @@ export function carrierCopies(
  * скоупі. У ТЧ кореня скоуп і є `parent_id`, тож FK — одна пара, і умова
  * скоупу не дублюється.
  */
-interface CarrierLink {
+export interface CarrierLink {
   table: PhysicalTable
   source: PhysicalTable
   through: string
@@ -88,9 +88,11 @@ const tableKey = (t: { schema: string; name: string }) =>
 
 /**
  * Зв'язки копій знімка. Копію будує стадія 1 лише там, де FK зв'язку й
- * таблиця джерела є, тож їхня відсутність — дефект компілятора.
+ * таблиця джерела є, тож їхня відсутність — дефект компілятора. Одне джерело
+ * для тригера носіїв і ядра команд (Р-A2-4): ядро читає стан «після» за тими
+ * самими зв'язками, що й тригер.
  */
-function carrierLinks(
+export function carrierLinks(
   physical: Pick<PhysicalSnapshot, "tables">
 ): CarrierLink[] {
   const byKey = new Map(physical.tables.map((t) => [tableKey(t), t]))

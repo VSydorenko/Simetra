@@ -978,6 +978,178 @@ export function adminRoles(): Layer {
   }
 }
 
+export const TICKET_FILE = "catalogs/Ticket/Ticket.meta.json"
+export const TICKET_ID = uuid(6901)
+export const TICKET_TABLE = "ticket"
+export const TICKET_CHECKLIST_TABLE = "ticket_checklist"
+export const TICKET_WRITER_ID = uuid(6920)
+export const TICKET_OWN_WRITER_ID = uuid(6921)
+export const TICKET_REGION_WRITER_ID = uuid(6922)
+export const PROJECT_TICKET_WRITER_ID = uuid(6923)
+export const TICKET_READER_ID = uuid(6924)
+export const TICKET_TARGETS_READER_ID = uuid(6925)
+export const TASK_COMMENT_OWN_WRITER_ID = uuid(6926)
+
+/**
+ * Довідник ядра команд (план A2) поверх `policyDomain()`: `Task` домену —
+ * документ, а ядро генерується лише для довідника. `Ticket` — ієрархічний,
+ * з автором, з носієм власності `assignee`, виміром `region`, прив'язкою до
+ * контейнера `project`, поліморфним `subject` і масивом `watchers`; ТЧ
+ * `checklist` посилається на `Region` і на сам `Ticket` (невидима ціль рядка
+ * ТЧ під `TicketOwnWriter`). Ролі запису мають `read` на тому самому обсязі,
+ * що й запис: `read@any` змінив би видимість під `FOR UPDATE`. Цілі посилань
+ * відкриває окрема роль `TicketTargetsReader`. `TaskCommentOwnWriter` — носій
+ * за шляхом `task.assignee`.
+ */
+export function commandCoreLayer(): Layer {
+  const ticket = objects(["Catalog", "Ticket"])
+  const writes = ["read", "create", "update", "markDeletion"]
+  const writer = (id: string, name: string, extent: unknown) =>
+    role(
+      id,
+      name,
+      { scopeKind: "org" },
+      {
+        grants: [grant(ticket, writes, extent)],
+      }
+    )
+  return {
+    [TICKET_FILE]: catalog(TICKET_ID, "Ticket", TICKET_TABLE, {
+      trackAuthor: true,
+      hierarchyType: "FoldersAndItems",
+      ownership: ["assignee"],
+      access: [{ attribute: "region", dimension: "region" }],
+      containerBinding: "project",
+      attributes: [
+        refAttribute(
+          6902,
+          "assignee",
+          "assignee_id",
+          ref("Catalog", "OrgMember")
+        ),
+        refAttribute(6903, "region", "region_id", ref("Catalog", "Region")),
+        refAttribute(6904, "project", "project_id", ref("Catalog", "Project")),
+        {
+          id: uuid(6905),
+          name: "subject",
+          physicalName: "subject",
+          type: "Ref",
+          allowedTypes: objects(["Catalog", "Project"], ["Catalog", "Region"]),
+        },
+        {
+          ...refAttribute(
+            6906,
+            "watchers",
+            "watchers",
+            ref("Catalog", "OrgMember")
+          ),
+          array: true,
+        },
+      ],
+      tabularSections: [
+        {
+          id: uuid(6907),
+          name: "checklist",
+          physicalName: TICKET_CHECKLIST_TABLE,
+          attributes: [
+            // Не `region_id`: це ім'я займає копія носія `region` шапки.
+            refAttribute(
+              6908,
+              "region",
+              "line_region_id",
+              ref("Catalog", "Region")
+            ),
+            refAttribute(
+              6909,
+              "related",
+              "related_id",
+              ref("Catalog", "Ticket")
+            ),
+          ],
+        },
+      ],
+    }),
+    [ROLE_FILE("TicketWriter")]: writer(
+      TICKET_WRITER_ID,
+      "TicketWriter",
+      "any"
+    ),
+    [ROLE_FILE("TicketOwnWriter")]: writer(
+      TICKET_OWN_WRITER_ID,
+      "TicketOwnWriter",
+      "own"
+    ),
+    [ROLE_FILE("TicketRegionWriter")]: writer(
+      TICKET_REGION_WRITER_ID,
+      "TicketRegionWriter",
+      { dimension: "region" }
+    ),
+    [ROLE_FILE("ProjectTicketWriter")]: role(
+      PROJECT_TICKET_WRITER_ID,
+      "ProjectTicketWriter",
+      { container: ref("Catalog", "Project") },
+      { grants: [grant(ticket, writes, "any")] }
+    ),
+    [ROLE_FILE("TicketReader")]: role(
+      TICKET_READER_ID,
+      "TicketReader",
+      { scopeKind: "org" },
+      { grants: [grant(ticket, ["read"], "any")] }
+    ),
+    [ROLE_FILE("TicketTargetsReader")]: role(
+      TICKET_TARGETS_READER_ID,
+      "TicketTargetsReader",
+      { scopeKind: "org" },
+      {
+        grants: [
+          grant(
+            objects(
+              ["Catalog", "OrgMember"],
+              ["Catalog", "Region"],
+              ["Catalog", "Project"],
+              ["Document", "Task"]
+            ),
+            ["read"],
+            "any"
+          ),
+        ],
+      }
+    ),
+    [ROLE_FILE("TaskCommentOwnWriter")]: role(
+      TASK_COMMENT_OWN_WRITER_ID,
+      "TaskCommentOwnWriter",
+      { scopeKind: "org" },
+      {
+        grants: [
+          grant(
+            objects(["Catalog", "TaskComment"]),
+            ["read", "create", "update"],
+            "own"
+          ),
+        ],
+      }
+    ),
+  }
+}
+
+/**
+ * Стиль логічних імен проєкту: контракт ядра мусить бути однаковим за
+ * фізичними іменами в обох стилях.
+ */
+export const withAttributeCase = (
+  attributeCase: "camelCase" | "snake_case"
+): Layer => ({
+  [PROJECT_FILE]: { naming: { attributeCase } },
+  // Єдине складене логічне ім'я домену політик — у стилі проєкту.
+  ...(attributeCase === "snake_case"
+    ? {
+        [COMMENT_COUNTER_FILE]: {
+          columns: [column(6551, "comment_id", "comment_id", "UUID")],
+        },
+      }
+    : {}),
+})
+
 export const NOTE_FILE = "catalogs/Note/Note.meta.json"
 export const NOTE_LONG_FILE = "catalogs/NoteLong/NoteLong.meta.json"
 export const NOTE_WRITER_ID = uuid(6810)

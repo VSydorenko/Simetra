@@ -15,6 +15,7 @@ export {
   COMMENT_TABLE,
   ORG_ADMIN_ID,
   adminRoles,
+  commandCoreLayer,
   policyDomain,
   promotableTaskNote,
   refAttribute,

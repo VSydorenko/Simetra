@@ -24,6 +24,7 @@ import {
   type SubscriptionEvent,
   type VirtualTableKind,
 } from "simetra/model"
+import { CATALOG_COMMAND_LABELS } from "./catalog-command/contracts"
 import { compareStrings } from "./diagnostics"
 import {
   choosesMembership,
@@ -747,7 +748,7 @@ function maintainsDerivedTables(keys: RegisterKeySpec): boolean {
 }
 
 /** Ім'я похідної функції — алгоритм імен Postgres від таблиці власника. */
-function derived(table: PhysicalTable, label: string): QualifiedName {
+export function derived(table: PhysicalTable, label: string): QualifiedName {
   return {
     schema: table.schema,
     name: makeObjectName(table.name, undefined, label),
@@ -849,6 +850,27 @@ export function derivedFunctionLabels(
       { label: POSTING_LABELS.post, description: "post" },
       { label: POSTING_LABELS.unpost, description: "unpost" }
     )
+  }
+  // Функції ядра команд (спека П4 §6.6) — з надлишком, як функції ефектів
+  // (Р2b1-11): резервуються на кожен об'єкт виду з `commandWrites`, хоч би
+  // які дії й ролі він мав, — зайве резервування лише звужує простір імен.
+  if (KIND_REGISTRY[object.kind].commandWrites === true) {
+    labels.push(
+      { label: CATALOG_COMMAND_LABELS.save, description: "command save" },
+      {
+        label: CATALOG_COMMAND_LABELS.markDeletion,
+        description: "command mark deletion",
+      }
+    )
+    if (
+      KIND_REGISTRY[object.kind].rightsSystem?.(object.data) ===
+      "roleAssignments"
+    ) {
+      labels.push({
+        label: CATALOG_COMMAND_LABELS.delete,
+        description: "command delete",
+      })
+    }
   }
   const keys = KIND_REGISTRY[object.kind].registerKeys?.(object.data)
   if (keys === undefined) return labels
