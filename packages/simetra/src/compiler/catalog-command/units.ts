@@ -792,20 +792,38 @@ function sectionLines(
   const parent = q(section.parent)
   const elements = `jsonb_array_elements(${items}) WITH ORDINALITY AS x(e, ord) CROSS JOIN LATERAL jsonb_populate_record(NULL::${ts}, x.e) AS v`
   const constraints = keyConstraints(section.table, section.key)
+  // Перевіряється те, що буде записано (як `v_new` шапки): рядок «після» —
+  // наявний рядок цього власника з накладеними ключами елемента, новий —
+  // значення за замовчуванням з накладеним входом, рівно як `UPDATE` і
+  // `INSERT` нижче. Над самим входом відсутній ключ читався б як `NULL`, і
+  // елемент лише з `id` пари пропустив би перевірку цілі за старим типом.
+  const updatable = new Set(section.updateColumns)
+  const afterColumns = [
+    ...new Set(
+      section.references.flatMap((r) =>
+        r.form === "single" ? [r.column] : [r.typeColumn, r.idColumn]
+      )
+    ),
+  ]
+  const afterValue = (c: string) => {
+    const given = `WHEN x.e ? ${sqlLiteral(c)} THEN v.${q(c)}`
+    const stored = `WHEN o.${key} IS NOT NULL THEN o.${q(c)}`
+    // Колонку поза `updateColumns` `UPDATE` не змінює й за наявного ключа.
+    return `CASE ${updatable.has(c) ? `${given} ${stored}` : `${stored} ${given}`} ELSE ${defaultOf(section.table, c)} END AS ${q(c)}`
+  }
+  const afterRows = `${elements} LEFT JOIN ${ts} o ON o.${key} = v.${key} AND o.${parent} = ${root} CROSS JOIN LATERAL (SELECT ${afterColumns.map(afterValue).join(", ")}) AS n`
   const references = section.references.flatMap((reference) =>
     referenceViolations(reference, {
-      value: (c) => `v.${q(c)}`,
+      value: (c) => `n.${q(c)}`,
+      // Новий рядок (`o` — `NULL`) перевіряє кожне значення, наявний рядок
+      // цього власника — лише змінене проти збереженого.
       old: (c) => `o.${q(c)}`,
       ...(scope === undefined ? {} : { scope }),
       ...(scopeKindId === undefined ? {} : { scopeKindId }),
     }).flatMap(({ column, condition }) =>
-      // Новий рядок (`o` — `NULL`) перевіряє кожне значення, наявний рядок
-      // цього власника — лише змінене; ключа немає в елементі — значення
-      // не змінюється.
-      ifThen(
-        `EXISTS (SELECT 1 FROM ${elements} LEFT JOIN ${ts} o ON o.${key} = v.${key} AND o.${parent} = ${root} WHERE x.e ? ${sqlLiteral(column)} AND ${condition})`,
-        [invalid(detail(column))]
-      )
+      ifThen(`EXISTS (SELECT 1 FROM ${afterRows} WHERE ${condition})`, [
+        invalid(detail(column)),
+      ])
     )
   )
   const insertColumns = [

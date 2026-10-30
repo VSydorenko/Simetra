@@ -239,8 +239,13 @@ describe("catalogCommandContracts", () => {
       parent: "parent_id",
       lineNumber: "line_number",
       scopeColumn: "org_id",
-      rowKeys: ["line_region_id", "related_id"],
-      updateColumns: ["line_region_id", "related_id"],
+      rowKeys: ["line_region_id", "related_id", "subject_type", "subject_id"],
+      updateColumns: [
+        "line_region_id",
+        "related_id",
+        "subject_type",
+        "subject_id",
+      ],
     })
     expect(named(references)).toEqual([
       {
@@ -256,6 +261,26 @@ describe("catalogCommandContracts", () => {
         target: "ticket",
         targetKey: "id",
         array: false,
+      },
+      {
+        form: "pair",
+        typeColumn: "subject_type",
+        idColumn: "subject_id",
+        array: false,
+        targets: [
+          {
+            label: "project",
+            table: "project",
+            key: "id",
+            scopeColumn: "org_id",
+          },
+          {
+            label: "region",
+            table: "region",
+            key: "id",
+            scopeColumn: "org_id",
+          },
+        ],
       },
     ])
   })
@@ -549,7 +574,14 @@ describe("обидва стилі: контракт за origin, не за ім�
         "watchers",
       ],
       deletionMark: "deletion_mark",
-      section: ["parent_id", "line_number", "line_region_id", "related_id"],
+      section: [
+        "parent_id",
+        "line_number",
+        "line_region_id",
+        "related_id",
+        "subject_type",
+        "subject_id",
+      ],
     })
   })
 

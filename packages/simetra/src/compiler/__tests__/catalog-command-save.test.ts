@@ -246,12 +246,12 @@ describe("buildCatalogCommandUnits — <t>_save", () => {
     ])
     expect(dml("UpdateStmt")).toEqual([
       tree(
-        `UPDATE ${ts} r SET line_region_id = CASE WHEN x.e ? 'line_region_id' THEN v.line_region_id ELSE r.line_region_id END, related_id = CASE WHEN x.e ? 'related_id' THEN v.related_id ELSE r.related_id END, line_number = x.ord FROM ${elements} WHERE r.id = v.id AND r.parent_id = v_in.id`
+        `UPDATE ${ts} r SET line_region_id = CASE WHEN x.e ? 'line_region_id' THEN v.line_region_id ELSE r.line_region_id END, related_id = CASE WHEN x.e ? 'related_id' THEN v.related_id ELSE r.related_id END, subject_type = CASE WHEN x.e ? 'subject_type' THEN v.subject_type ELSE r.subject_type END, subject_id = CASE WHEN x.e ? 'subject_id' THEN v.subject_id ELSE r.subject_id END, line_number = x.ord FROM ${elements} WHERE r.id = v.id AND r.parent_id = v_in.id`
       ),
     ])
     expect(dml("InsertStmt")).toEqual([
       tree(
-        `INSERT INTO ${ts} (id, parent_id, line_number, org_id, line_region_id, related_id) SELECT v.id, v_in.id, x.ord, v_new.org_id, CASE WHEN x.e ? 'line_region_id' THEN v.line_region_id ELSE NULL END, CASE WHEN x.e ? 'related_id' THEN v.related_id ELSE NULL END FROM ${elements} WHERE NOT EXISTS (SELECT 1 FROM ${ts} r WHERE r.id = v.id AND r.parent_id = v_in.id)`
+        `INSERT INTO ${ts} (id, parent_id, line_number, org_id, line_region_id, related_id, subject_type, subject_id) SELECT v.id, v_in.id, x.ord, v_new.org_id, CASE WHEN x.e ? 'line_region_id' THEN v.line_region_id ELSE NULL END, CASE WHEN x.e ? 'related_id' THEN v.related_id ELSE NULL END, CASE WHEN x.e ? 'subject_type' THEN v.subject_type ELSE NULL END, CASE WHEN x.e ? 'subject_id' THEN v.subject_id ELSE NULL END FROM ${elements} WHERE NOT EXISTS (SELECT 1 FROM ${ts} r WHERE r.id = v.id AND r.parent_id = v_in.id)`
       ),
     ])
     // Видимий рядок іншого власника — відмова до DML ТЧ (Р-A2-12).
@@ -269,6 +269,50 @@ describe("buildCatalogCommandUnits — <t>_save", () => {
           )
       )
     )
+  })
+
+  // Посилання рядка ТЧ перевіряються над рядком «після» (`n`): наявний рядок
+  // цього власника з накладеними ключами елемента, новий — значення за
+  // замовчуванням з накладеним входом. Над самим входом (`v`) відсутній
+  // ключ пари читався б як `NULL` і пропускав перевірку цілі. Змінене
+  // звіряється зі збереженим рядком (`o`): незмінене невидиме значення не
+  // перевіряється знову.
+  it("ТЧ: посилання рядка — над рядком «після», змінене — проти збереженого", () => {
+    const shape = bodyShape(saveSql(domain, "ticket"))
+    const ts = `public.${TICKET_CHECKLIST_TABLE}`
+    const items = `p_item -> 'tabular' -> '${TICKET_CHECKLIST_TABLE}'`
+    const after = (c: string) =>
+      `CASE WHEN x.e ? '${c}' THEN v.${c} WHEN o.id IS NOT NULL THEN o.${c} ELSE NULL END AS ${c}`
+    const rows = `jsonb_array_elements(${items}) WITH ORDINALITY AS x(e, ord) CROSS JOIN LATERAL jsonb_populate_record(NULL::${ts}, x.e) AS v LEFT JOIN ${ts} o ON o.id = v.id AND o.parent_id = v_in.id CROSS JOIN LATERAL (SELECT ${["line_region_id", "related_id", "subject_type", "subject_id"].map(after).join(", ")}) AS n`
+    const target = (table: string) =>
+      `EXISTS (SELECT 1 FROM public.${table} g WHERE g.id = n.subject_id AND g.org_id = v_new.org_id)`
+    const changed =
+      "(n.subject_type IS DISTINCT FROM o.subject_type OR n.subject_id IS DISTINCT FROM o.subject_id)"
+    for (const [column, condition] of [
+      [
+        "related_id",
+        "n.related_id IS NOT NULL AND n.related_id IS DISTINCT FROM o.related_id AND NOT EXISTS (SELECT 1 FROM public.ticket g WHERE g.id = n.related_id)",
+      ],
+      [
+        "subject_type",
+        `n.subject_type IS NOT NULL AND ${changed} AND n.subject_type <> ALL (ARRAY['project', 'region']::text[])`,
+      ],
+      [
+        "subject_id",
+        `n.subject_type IS NOT NULL AND ${changed} AND NOT (CASE n.subject_type WHEN 'project' THEN ${target("project")} WHEN 'region' THEN ${target("region")} ELSE true END)`,
+      ],
+    ] as const) {
+      const check = ifAt(
+        shape,
+        `EXISTS (SELECT 1 FROM ${rows} WHERE ${condition})`
+      )
+      expect(check, column).toBeGreaterThan(0)
+      expect(strings(shape[check + 1]!.expressions)).toEqual([
+        "22023",
+        "command.invalid",
+        `tabular.${TICKET_CHECKLIST_TABLE}.${column}`,
+      ])
+    }
   })
 
   it("ТЧ: дозволені ключі елемента — rowKeys і ключ ТЧ", () => {

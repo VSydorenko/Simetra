@@ -359,8 +359,9 @@ export const COMMAND_CORE_MEMBERS = [
  * K3 — свої для `to`, K1 — з чужим `assignee`, тож батько K2 для `to`
  * невидимий; K2 має рядок ТЧ `K2.l1`. `KR` — у регіоні r1 у P1, `KB` — рядок
  * тенанта B з рядком ТЧ `KB.l1`. `P2` — другий проєкт A (чужий контейнер
- * для `tp`). `KW` — `watchers = [NULL]`; `KL` — два рядки ТЧ `KL.l1`, `KL.l2`;
- * `KP` — предвизначений. Задачі `TO` (виконавець
+ * для `tp`). `KW` — `watchers = [NULL]`; `KL` — `subject` (project, P1) і
+ * два рядки ТЧ `KL.l1` (з тим самим `subject`, для часткової зміни пари),
+ * `KL.l2`; `KP` — предвизначений. Задачі `TO` (виконавець
  * `cw`) і `TA` (чужий) з коментарями `TO.c` і `TA.c`. Учасник `u`
  * організації `O` — ключ `u@O`.
  */
@@ -432,12 +433,14 @@ export async function seedCommandCore(client: pg.Client): Promise<Seed> {
     line_number: 1,
   })
   await ticket("KW", "A", { assignee_id: ids["tw@A"], watchers: [null] })
-  await ticket("KL", "A", { assignee_id: ids["tw@A"] })
+  const subject = { subject_type: "project", subject_id: ids.P1 }
+  await ticket("KL", "A", { assignee_id: ids["tw@A"], ...subject })
   for (const line of [1, 2])
     await create(`KL.l${line}`, TICKET_CHECKLIST_TABLE, {
       org_id: ids.A,
       parent_id: ids.KL,
       line_number: line,
+      ...(line === 1 ? subject : {}),
     })
   await ticket("KP", "A", { predefined_name: "main" })
 

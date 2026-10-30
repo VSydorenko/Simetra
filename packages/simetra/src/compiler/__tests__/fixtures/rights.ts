@@ -1023,8 +1023,8 @@ function ticketAttributes(): Record<string, unknown>[] {
  * документ, а ядро генерується лише для довідника. `Ticket` — ієрархічний,
  * з автором, з носієм власності `assignee`, виміром `region`, прив'язкою до
  * контейнера `project`, поліморфним `subject` і масивом `watchers`; ТЧ
- * `checklist` посилається на `Region` і на сам `Ticket` (невидима ціль рядка
- * ТЧ під `TicketOwnWriter`). Ролі запису мають `read` на тому самому обсязі,
+ * `checklist` посилається на `Region`, на сам `Ticket` (невидима ціль рядка
+ * ТЧ під `TicketOwnWriter`) і поліморфно — `subject` (часткова зміна пари). Ролі запису мають `read` на тому самому обсязі,
  * що й запис: `read@any` змінив би видимість під `FOR UPDATE`. Цілі посилань
  * відкриває окрема роль `TicketTargetsReader`. `TaskCommentOwnWriter` — носій
  * за шляхом `task.assignee`.
@@ -1068,6 +1068,16 @@ export function commandCoreLayer(): Layer {
               "related_id",
               ref("Catalog", "Ticket")
             ),
+            {
+              id: uuid(6910),
+              name: "subject",
+              physicalName: "subject",
+              type: "Ref",
+              allowedTypes: objects(
+                ["Catalog", "Project"],
+                ["Catalog", "Region"]
+              ),
+            },
           ],
         },
       ],

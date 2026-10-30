@@ -433,6 +433,53 @@ describe("catalog command core", () => {
         }),
       async () => INVALID(`tabular.${LINES}.related_id`),
     ],
+    // Пара перевіряється над рядком «після»: відсутній ключ пари — збережене
+    // значення, не `NULL`. Лише `id` — ціль за старим типом; лише тип —
+    // новий тип зі старим `id`. `KL` і `KL.l1` — (project, P1), PB — тенанта B
+    ...(
+      [
+        ["header", undefined],
+        ["tabular", `tabular.${LINES}.`],
+      ] as const
+    ).flatMap(
+      ([where, prefix]): [
+        string,
+        () => Promise<Outcome>,
+        () => Promise<Refusal>,
+      ][] =>
+        (
+          [
+            ["only the id, to a tenant B project", { subject_id: "PB" }],
+            ["only the type, with the stored id", { subject_type: "region" }],
+          ] as const
+        ).map(([name, change]) => {
+          const value =
+            "subject_id" in change
+              ? { subject_id: key(change.subject_id) }
+              : change
+          return [
+            `ref: ${where} pair — ${name}`,
+            () =>
+              run({
+                user: "tw",
+                item:
+                  prefix === undefined
+                    ? { id: key("KL"), ...value }
+                    : {
+                        id: key("KL"),
+                        tabular: {
+                          [LINES]: [
+                            { id: key("KL.l1"), ...value },
+                            { id: key("KL.l2") },
+                          ],
+                        },
+                      },
+                version: "current",
+              }),
+            async () => INVALID(`${prefix ?? ""}subject_id`),
+          ]
+        })
+    ),
     [
       "ref: polymorphic label outside allowed types",
       () =>
@@ -654,21 +701,58 @@ describe("catalog command core", () => {
   })
 
   // Незмінене невидиме значення не перевіряється: `parent_id` K2 (K1) і
-  // `related_id` рядка K2.l1 (K1) невидимі для `TicketOwnWriter`
+  // `related_id` рядка K2.l1 (K1) невидимі для `TicketOwnWriter`. Значення
+  // порівнюється зі збереженим рядком, тож і передане знову — незмінене
   it.each([
     ["header column changed", { description: "x" }],
     ["unchanged invisible parent passed again", { parent_id: "K1" }],
     ["tabular row kept without its ref key", { tabular: "K2.l1" }],
+    [
+      "unchanged invisible tabular ref passed again",
+      { tabular: "K2.l1", related_id: "K1" },
+    ],
   ] as const)("ref: %s — passes", async (_, change) => {
     const item: Record<string, unknown> = { id: key("K2") }
     if ("description" in change) item.description = change.description
     if ("parent_id" in change) item.parent_id = key(change.parent_id)
     if ("tabular" in change)
-      item.tabular = { [LINES]: [{ id: key(change.tabular) }] }
+      item.tabular = {
+        [LINES]: [
+          {
+            id: key(change.tabular),
+            ...("related_id" in change
+              ? { related_id: key(change.related_id) }
+              : {}),
+          },
+        ],
+      }
     expect(await run({ user: "to", item, version: "current" })).toMatchObject({
       id: key("K2"),
     })
   })
+
+  // Лише тип пари, рівний збереженому: рядок «після» — (project, P1), пара
+  // не змінилась і не перевіряється; над самим входом `id` був би `NULL`
+  it.each([
+    ["header", false],
+    ["tabular", true],
+  ] as const)(
+    "ref: %s pair — only the stored type passed again — passes",
+    async (_, tabular) => {
+      const value = { subject_type: "project" }
+      const item = tabular
+        ? {
+            id: key("KL"),
+            tabular: {
+              [LINES]: [{ id: key("KL.l1"), ...value }, { id: key("KL.l2") }],
+            },
+          }
+        : { id: key("KL"), ...value }
+      expect(await run({ user: "tw", item, version: "current" })).toMatchObject(
+        { id: key("KL"), subject_type: "project", subject_id: key("P1") }
+      )
+    }
+  )
 
   // Обробник `beforeWrite` шапки на правці лише ТЧ — від ролі команд, не
   // від власника таблиці: `UPDATE` шапки самоприсвоєнням (Р-A2-6) його будить
