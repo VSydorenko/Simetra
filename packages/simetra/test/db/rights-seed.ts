@@ -113,15 +113,13 @@ export type Delta = [
   dimensionId?: string,
 ]
 
-/** Рядок ТЧ дельт кастомної ролі рівня `org`. */
-export const orgDeltaRow = (
-  orgId: string,
+/** Рядок ТЧ дельт кастомної ролі глобального довідника. */
+export const globalDeltaRow = (
   roleId: string,
   lineNumber: number,
   [effect, object, action, extent, dimensionId]: Delta
 ) => ({
   id: randomUUID(),
-  org_id: orgId,
   parent_id: roleId,
   line_number: lineNumber,
   object,
@@ -130,6 +128,14 @@ export const orgDeltaRow = (
   dimension: dimensionId ?? null,
   effect,
 })
+
+/** Рядок ТЧ дельт кастомної ролі рівня `org`. */
+export const orgDeltaRow = (
+  orgId: string,
+  roleId: string,
+  lineNumber: number,
+  delta: Delta
+) => ({ org_id: orgId, ...globalDeltaRow(roleId, lineNumber, delta) })
 
 /** Множина як масив тексту: порядок вирівнює тест, не колація бази. */
 export const set = (call: string) =>

@@ -77,7 +77,7 @@ const TASK = "task"
 const CHECKLIST = CHECKLIST_TABLE
 const HOURS = HOURS_TABLES.movements
 const JOURNAL = "rights_journal"
-/** Таблиці прав, які перевірка на COMMIT читає за ключем черги. */
+/** Таблиці прав: довідники призначень, ролей і дельт, журнал прав. */
 const RIGHTS_TABLES = [
   "org_role_assignments",
   "org_roles",
@@ -460,6 +460,10 @@ describe("rights plan gate", () => {
    * не читає CTE більше одного разу (`CTE Scan` з циклами > 1): так виглядало
    * замикання, квадратичне за скоупами (Р2d2-22), і віднімання дельт
    * `NOT EXISTS` у `role_rows` (Р2d2-26) — вкладений цикл, а не підплан.
+   * І жоден не перебирає таблицю прав повторно (`Seq Scan` з циклами > 1):
+   * дельти — не матеріалізований CTE, тож їхнє перечитування в циклі — уже
+   * `Seq Scan` таблиці дельт, а не `CTE Scan`, і першого критерію не видно.
+   * Індексне читання з циклами лишається дозволеним — це точковий доступ.
    */
   it.each([
     ["rights_mine()", () => "SELECT count(*) FROM simetra.rights_mine()"],
@@ -468,7 +472,7 @@ describe("rights plan gate", () => {
       () => `SELECT * FROM public.${TASK} WHERE id = '${gate.fullPoint}'::uuid`,
     ],
   ])(
-    "%s: rights function bodies read no CTE more than once",
+    "%s: rights function bodies read no CTE or rights table more than once",
     async (_, sql) => {
       const { plans, rows } = await autoExplain(gate.full, sql())
       expect(rows.length, "the full-access holder reads").toBe(1)
@@ -489,6 +493,27 @@ describe("rights plan gate", () => {
             )
           ),
           "CTE scans repeated per outer row"
+        )
+        .toEqual([])
+      // Не порожній доказ другого критерію: тіла читають таблиці прав.
+      expect(
+        plans.flatMap((p) => RIGHTS_TABLES.flatMap((t) => scansOf(p, t)))
+          .length,
+        "rights tables are read"
+      ).toBeGreaterThan(0)
+      expect
+        .soft(
+          plans.flatMap((p) =>
+            RIGHTS_TABLES.flatMap((table) =>
+              scansOf(p, table)
+                .filter((n) => n.type === "Seq Scan" && (n.loops ?? 1) > 1)
+                .map(
+                  (n) =>
+                    `Seq Scan on ${n.relation} x${n.loops}: ${String(p["Query Text"]).slice(0, 80)}`
+                )
+            )
+          ),
+          "rights tables scanned per outer row"
         )
         .toEqual([])
     }

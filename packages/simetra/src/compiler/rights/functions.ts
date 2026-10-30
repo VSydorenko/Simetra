@@ -1102,7 +1102,10 @@ function mineBody(
     // з призначеннями, і з оцінкою в кілька рядків планувальник бере
     // вкладений цикл, що перечитує матеріалізовані дельти всіх тенантів на
     // кожен рядок. Без матеріалізації умова кастомної ролі доходить до
-    // таблиці дельт — індекс власника рядка ТЧ, а не перебір.
+    // таблиці дельт — індекс власника рядка ТЧ, а не перебір. Індекс ТЧ
+    // скоупленого виду веде колонкою скоупу, тож гілка `allow` рівняє і її
+    // (`scope_key` зі скоупом призначення): кастомна роль — того самого
+    // тенанта, що й призначення (Р2a1-7), тож умова лише відкриває індекс.
     [
       "deltas",
       deltasCte(contracts.rightsCatalogs, physical, style),
@@ -1142,6 +1145,7 @@ function mineBody(
         `  ON d.storage = h.storage`,
         ` AND d.storage_id IS NOT DISTINCT FROM h.storage_id`,
         ` AND d.custom_role = h.custom_role`,
+        ` AND d.scope_key = coalesce(h.scope, ${GLOBAL_SCOPE_KEY})`,
         `JOIN ${call(RIGHTS_FUNCTIONS.domain)} m`,
         `  ON m.level = h.level`,
         ` AND m.level_id IS NOT DISTINCT FROM h.level_id`,
@@ -1538,9 +1542,20 @@ const DELTA_COLUMNS: readonly Column[] = [
   ["extent", "text"],
   ["dimension_id", "uuid"],
   ["effect", "text"],
+  ["scope_key", "uuid"],
 ]
 
-/** Дельти кастомних ролей кожного рівня з рівнем зберігання. */
+/**
+ * Ключ скоупу дельти глобального довідника: у глобальних призначень скоупу
+ * немає (`NULL`), а `=` з `NULL` не збігається.
+ */
+const GLOBAL_SCOPE_KEY = "'00000000-0000-0000-0000-000000000000'::uuid"
+
+/**
+ * Дельти кастомних ролей кожного рівня з рівнем зберігання. `scope_key` —
+ * колонка скоупу таблиці дельт (глобальної — константа): нею гілка `allow`
+ * читає дельти індексом скоупу й власника, а не перебором.
+ */
 function deltasCte(
   catalogs: readonly RightsCatalogContract[],
   physical: PhysicalSnapshot,
@@ -1553,9 +1568,14 @@ function deltasCte(
       const d = (def: StandardColumnDef) => `d.${quoteIdent(delta(def))}`
       const R = RIGHTS_COLUMNS
       const storage = storageSql(catalog.level)
+      const scopeKey =
+        catalog.level.level === "scope"
+          ? `d.${quoteIdent(scopeColumn(physical, catalog.roles.delta))}`
+          : GLOBAL_SCOPE_KEY
       return [
         `SELECT ${storage.storage} AS storage, ${storage.storageId} AS storage_id, ${d(tabularParentColumn())} AS custom_role,`,
-        `       ${d(R.object)} AS object, ${d(R.action)} AS action, ${d(R.extent)} AS extent, ${d(R.dimension)} AS dimension_id, ${d(R.effect)} AS effect`,
+        `       ${d(R.object)} AS object, ${d(R.action)} AS action, ${d(R.extent)} AS extent, ${d(R.dimension)} AS dimension_id, ${d(R.effect)} AS effect,`,
+        `       ${scopeKey} AS scope_key`,
         `FROM ${qualified(catalog.roles.delta)} d`,
       ].join("\n")
     })

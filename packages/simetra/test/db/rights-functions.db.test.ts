@@ -50,6 +50,7 @@ import {
   assignmentRow,
   describeTransaction,
   insert,
+  globalDeltaRow,
   orgDeltaRow,
   outcome,
   set,
@@ -228,6 +229,21 @@ async function seedScopeKind(client: pg.Client): Promise<Seed> {
   // `OrgMember` з ним — вимога з іншого призначення дії не рятує.
   await assign("u22", { customRole: ids.custom })
   await assign("u22", { archetype: ORG_MEMBER_ROLE_ID })
+  // u23: кастомна роль глобального довідника з дельтою `allow` — у
+  // глобальних призначень скоупу немає, тож дельта знаходиться не за ним.
+  await users("u23")
+  await create("globalCustom", "global_roles", { archetype: SUPPORT_ID })
+  await insert(
+    client,
+    "global_roles_delta",
+    globalDeltaRow(ids.globalCustom!, 1, [
+      "allow",
+      "announcement",
+      "create",
+      "any",
+    ])
+  )
+  await assignGlobal("u23", { customRole: ids.globalCustom })
 
   // Р2a1-26: команда з `id` організації A, а учасники команди — з `id`
   // учасників u3 (OrgAdmin в A) і u1 (виконавець задачі в A).
@@ -498,6 +514,13 @@ const CASES: [name: string, checks: (() => Check[]) | Check[]][] = [
     [
       ["u5", hasRight("read", "announcement"), true],
       ["u5", any("read"), []],
+    ],
+  ],
+  [
+    "global-custom-allow",
+    [
+      ["u23", hasRight("create", "announcement"), true],
+      ["u5", hasRight("create", "announcement"), false],
     ],
   ],
   ["every-user", [["u4", hasRight("read", "users", "own"), true]]],
