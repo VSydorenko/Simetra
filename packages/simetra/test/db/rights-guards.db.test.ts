@@ -566,55 +566,69 @@ describe("rights administration guards", () => {
 
     // Сирота від зміни коду не блокує непов'язаних операцій з роллю: судиться
     // лише змінене в транзакції.
-    it("an orphan delta does not block unrelated operations on its role", async () => {
-      await priorRole(TASK_VIEWER_ID, [OWN_REGION], async (role) => {
-        const onRole = (statement: string) =>
-          command("root", admin("org_roles", role), statement)
-        success(
-          await onRole(
-            `DELETE FROM public.org_roles_delta WHERE parent_id = '${role}'`
-          )
-        )
-        const assignment = randomUUID()
-        success(
-          await command(
-            "root",
-            admin("org_role_assignments", assignment),
-            `INSERT INTO public.org_role_assignments (id, org_id, subject, custom_role) VALUES ('${assignment}', {A}, {target@A}, '${role}')`
-          )
-        )
-        changed(
-          await onRole(
-            `UPDATE public.org_roles SET deletion_mark = true WHERE id = '${role}' RETURNING id`
-          )
-        )
-        changed(
-          await onRole(
-            `UPDATE public.org_roles SET description = 'renamed' WHERE id = '${role}' RETURNING id`
-          )
-        )
-        // Перший образ транзакції — той самий архетип: A→B→A не зміна.
-        success(
-          await onRole(
-            `UPDATE public.org_roles SET archetype = '${TASK_EDITOR_ID}' WHERE id = '${role}'; UPDATE public.org_roles SET archetype = '${TASK_VIEWER_ID}' WHERE id = '${role}'`
-          )
-        )
-      })
-      await priorRole(
-        TASK_VIEWER_ID,
-        [OWN_REGION],
-        async (role) => {
-          changed(
-            await command(
-              "root",
-              admin("org_roles", role),
-              `UPDATE public.org_roles SET deletion_mark = false WHERE id = '${role}' RETURNING id`
+    it.each([
+      [
+        "deleting the orphan",
+        false,
+        (role: string) =>
+          `DELETE FROM public.org_roles_delta WHERE parent_id = '${role}'`,
+      ],
+      [
+        "assigning the role",
+        false,
+        (role: string, id: string) =>
+          `INSERT INTO public.org_role_assignments (id, org_id, subject, custom_role) VALUES ('${id}', {A}, {target@A}, '${role}')`,
+      ],
+      [
+        "marking the role",
+        false,
+        (role: string) =>
+          `UPDATE public.org_roles SET deletion_mark = true WHERE id = '${role}'`,
+      ],
+      [
+        "renaming the role",
+        false,
+        (role: string) =>
+          `UPDATE public.org_roles SET description = 'renamed' WHERE id = '${role}'`,
+      ],
+      // Перший образ транзакції — той самий архетип: A→B→A не зміна.
+      [
+        "changing the archetype back within one transaction",
+        false,
+        (role: string) =>
+          `UPDATE public.org_roles SET archetype = '${TASK_EDITOR_ID}' WHERE id = '${role}'; UPDATE public.org_roles SET archetype = '${TASK_VIEWER_ID}' WHERE id = '${role}'`,
+      ],
+      [
+        "unmarking the role",
+        true,
+        (role: string) =>
+          `UPDATE public.org_roles SET deletion_mark = false WHERE id = '${role}'`,
+      ],
+    ] as const)(
+      "an orphan delta does not block %s",
+      async (_, marked, statement) => {
+        await priorRole(
+          TASK_VIEWER_ID,
+          [OWN_REGION],
+          async (role) => {
+            // Корінь команди — нове призначення або сама роль.
+            const id = randomUUID()
+            const write = statement(role, id)
+            const object = write.includes("org_role_assignments")
+              ? "org_role_assignments"
+              : "org_roles"
+            success(
+              await command(
+                "root",
+                admin(object, object === "org_roles" ? role : id),
+                write
+              )
             )
-          )
-        },
-        true
-      )
-    })
+          },
+          marked
+        )
+      }
+    )
 
     it("refuses an out-of-domain delta in maintenance mode", async () => {
       await priorRole(TASK_VIEWER_ID, [], async (role) => {
