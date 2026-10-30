@@ -161,7 +161,9 @@ is closed by its own rule:
   columns: `references: { object, key: "ref" }` (one local column) or
   `key: "scopedRef"` — the in-tenant composite key (scope column, key) of a
   scoped object that is not the scope root (two local columns: scope, then
-  key). `columns` on a table of a kind, or `key` on a `CustomTable` target,
+  key). `scopedRef` guarantees that the target lies in the tenant named by the
+  local scope column; that this column is the row's own tenant is up to the
+  write policy of the `CustomTable`. `columns` on a table of a kind, or `key` on a `CustomTable` target,
   is `customTable.fk-target-not-key`. A foreign key check bypasses row
   level security, so a key on a guessable value (a code, a number) would
   reveal whether a row exists in another tenant; and the command role updates
