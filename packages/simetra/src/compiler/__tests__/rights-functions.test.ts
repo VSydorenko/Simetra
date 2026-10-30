@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it } from "vitest"
-import type { CompiledModel } from "simetra/compiler"
+import type { CompiledModel, CompileResult } from "simetra/compiler"
 import { compile } from "simetra/compiler"
 import { PLATFORM_ROLES, PROVIDER_API_ROLES } from "simetra/model"
 import type { RightsContract, SourceConditionContract } from "../contracts"
@@ -40,6 +40,7 @@ import {
   activeGrants,
   adoptedSourcesDomain,
   compileRights,
+  compiledPolicyDomain,
   grant,
   grantTable,
   grantsSource,
@@ -52,6 +53,7 @@ import {
   role,
   secondScopeKind,
   singleTenantRights,
+  unscopedDimension,
   withRoles,
   withoutUsers,
   type Layer,
@@ -1034,4 +1036,124 @@ describe("rights administration functions", () => {
     expect(closures("rights_mine")).toHaveLength(2)
     expect(closures("rights_role_grants")).toEqual(closures("rights_mine"))
   })
+})
+
+/**
+ * Фікстури інваріантів рефакторингу (Р2d2-11, Р2d2-13): разом вони мають
+ * обидві форми гілки зв'язку виміру, функцію множини членства, прийняті й
+ * поліморфні джерела, два види скоупу й однотенантний проєкт.
+ */
+const INVARIANT_FIXTURES: [string, () => Promise<CompileResult>][] = [
+  ["base", () => compileRights(withRoles(BASE))],
+  ["policy-domain", () => compiledPolicyDomain({})],
+  ["adopted-sources", () => compileRights(adoptedSourcesDomain())],
+  ["polymorphic-grants", () => compileRights(polymorphicGrantsDomain())],
+  ["two-scope-kinds", () => compileRights(withRoles(BASE, secondScopeKind()))],
+  ["single-tenant", () => compileRights(singleTenantRights())],
+  ["user-dimension", () => compileRights(unscopedDimension())],
+  ["kitchen-sink", () => compile(kitchenSink())],
+]
+
+/** Функції, тіла яких генерує параметризований шаблон (Р2d2-11). */
+const REFACTORED = new Set(
+  [
+    RIGHTS_FUNCTIONS.mine,
+    RIGHTS_FUNCTIONS.myScopes,
+    RIGHTS_FUNCTIONS.myMembers,
+    RIGHTS_FUNCTIONS.dimensionValues,
+    RIGHTS_FUNCTIONS.visibleUsers,
+  ].map((fn) => fn.name)
+)
+
+/**
+ * Хеш SQL одиниць фікстури до рефакторингу: функції шаблону й членства
+ * окремо від політик. Знімок — хеш, а не текст: текст тих самих одиниць —
+ * сотні кілобайт, а інваріант — «байт-у-байт той самий SQL».
+ */
+const BASELINE: Record<string, { functions: string; policies: string }> = {
+  base: {
+    functions:
+      "37afe4a01b1db06dc66d95f0a3bfe7f68e30c12a477516ebfaa9b879d667a89a",
+    policies:
+      "9ba4b87affb40fc3d722eb14f469a39e6987187d56e79dcf28aa695ca821815d",
+  },
+  "policy-domain": {
+    functions:
+      "89f993c109e86a686444f29bf9073a12488267db0293d8f5dae03f0c62c1334a",
+    policies:
+      "ddfd8ac9fdf043227dd4ab2f71e516a68111e0a921d444537e15e59fc030aec4",
+  },
+  "adopted-sources": {
+    functions:
+      "04e6ca7d9ef1fc95fa92e8e017661bfbc3d771c4e4812bf0a6adc4cfb8adb4ee",
+    policies:
+      "bb8d8e14467335f14c5c14111cf8bc6671c12c34b078f0e9ed6555deca9729ec",
+  },
+  "polymorphic-grants": {
+    functions:
+      "78e1eb7f7b1c5f6d078d6563eca6ac740f61fe12daa00e8d775f72cc63fecd3c",
+    policies:
+      "e494adbc9a6bcb24c46d5452682d0c8fed63a3e2b47677a56aefede7d0a97ae8",
+  },
+  "two-scope-kinds": {
+    functions:
+      "e1abee10de2d4958ab6f010b0024da04cab604e8857210281655bea141200237",
+    policies:
+      "07e606b76692d67e3dbd4bdca8f00c625328f507e99e9fe24394fb362a61478e",
+  },
+  "single-tenant": {
+    functions:
+      "6bb2cf84a84927b7a5c89083ffea69f872e5aa286122fc0f73e6cc4e2588f213",
+    policies:
+      "e0a51b3e8bae3135b16b3a4c7cd3b58c670d6dfe0ba1a9b1a21fda6feedea909",
+  },
+  "user-dimension": {
+    functions:
+      "40b38bb7f16a02c1136c2783a391c219c307f161a90c315bfa55c2f1ef932305",
+    policies:
+      "9b59b280e4e6040436b6a51e44047e6057922aebde0009503c73eb81c2354551",
+  },
+  "kitchen-sink": {
+    functions:
+      "20f5ed41298cc91ba4f3a4c8405b2aafb9162af19cb28e09d06192f5d7677bd4",
+    policies:
+      "0ad3bfcf23a029b06bc65dda839ded7df36f55184d84fbd28e7ac06a72054096",
+  },
+}
+
+/** Текст одиниць фікстури, відсортованих за ідентичністю. */
+function unitsText(units: readonly SqlUnit[]): string {
+  return [...units]
+    .sort((a, b) => compareStrings(a.identity, b.identity))
+    .map((unit) => unit.sql)
+    .join("\n\n")
+}
+
+describe("rights refactor invariants", () => {
+  it.each(INVARIANT_FIXTURES)(
+    "rights functions, membership functions and policies keep their SQL: %s",
+    async (name, build) => {
+      // Знімок записано до параметризації шаблону виразом користувача
+      // (Р2d2-11) і до структурованої множини умови (Р2d2-13): наявні функції
+      // й політики — байт-у-байт той самий SQL, тож і те саме дерево.
+      const result = await build()
+      expect(result.diagnostics.filter((d) => d.severity === "error")).toEqual(
+        []
+      )
+      const units = result.model!.sqlUnits
+      const functions = units.filter(
+        (unit) =>
+          unit.class === "function" &&
+          ((unit.generator === "rights" && REFACTORED.has(unit.name)) ||
+            unit.generator === "membership")
+      )
+      const policies = units.filter((unit) => unit.class === "policy")
+      expect(functions).not.toEqual([])
+      expect(policies).not.toEqual([])
+      expect({
+        functions: sha256HexSync(unitsText(functions)),
+        policies: sha256HexSync(unitsText(policies)),
+      }).toEqual(BASELINE[name])
+    }
+  )
 })
