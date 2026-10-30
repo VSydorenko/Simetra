@@ -6,11 +6,7 @@ import {
   type PhysicalSnapshot,
   type PhysicalTable,
 } from "simetra/model"
-import type {
-  AccessContract,
-  Contracts,
-  RightsContract,
-} from "../contracts"
+import type { AccessContract, Contracts, RightsContract } from "../contracts"
 import { compareStrings } from "../diagnostics"
 import { hierarchyLockSql } from "../hierarchy-units"
 import { CURRENT_USER } from "../membership-functions"
