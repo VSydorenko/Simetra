@@ -1,12 +1,18 @@
 import {
   authorColumns,
+  deletionMarkColumn,
   quoteIdent,
   type AttributeCase,
   type DatabaseProvider,
   type PhysicalSnapshot,
   type PhysicalTable,
 } from "simetra/model"
-import type { AccessContract, Contracts, RightsContract } from "../contracts"
+import type {
+  AccessContract,
+  Contracts,
+  QualifiedName,
+  RightsContract,
+} from "../contracts"
 import { compareStrings } from "../diagnostics"
 import { hierarchyLockSql } from "../hierarchy-units"
 import { CURRENT_USER } from "../membership-functions"
@@ -26,7 +32,7 @@ import type { SqlParser } from "../sql/parse"
 import type { PlpgsqlParser } from "../sql/plpgsql"
 import { generatedUnit, type SqlUnit } from "../sql/units"
 import { sqlLiteral } from "../stages/model"
-import { findStandardColumn } from "../standard-column"
+import { findStandardColumn, standardColumn } from "../standard-column"
 import { rightsCheck } from "./rights-check"
 import type {
   CatalogCommandContract,
@@ -146,8 +152,7 @@ export function buildCatalogCommandUnits(
   for (const contract of input.catalogCommands) {
     const rights = rightsById.get(contract.objectId)
     if (rights === undefined) continue
-    const fn = contract.functions.save
-    const create = saveFunction(contract, {
+    const parts = coreParts(contract, {
       rights,
       access: accessByTable.get(relation(contract.table)),
       attributeCase: input.attributeCase,
@@ -161,14 +166,53 @@ export function buildCatalogCommandUnits(
       generator: "catalogCommand" as const,
       ...(requires === undefined ? {} : { requires }),
     })
-    units.push(
-      unit(create, bodyRequires(create, input)),
-      ...executeGrants(
-        `${relation(fn)}(jsonb, bigint)`,
-        ["command"],
-        provider
-      ).map((sql) => unit(sql))
-    )
+    // Функція є рівно для тих дій, що їх дав контракт (Р-A2-11): позначки
+    // немає в «Користувачів», видалення — лише в «Призначень».
+    const { markDeletion, delete: remove } = contract.functions
+    const functions: { fn: QualifiedName; args: string; sql: string }[] = [
+      {
+        fn: contract.functions.save,
+        args: "jsonb, bigint",
+        sql: saveFunction(contract, parts),
+      },
+      ...(markDeletion === undefined ||
+      contract.actions.markDeletion === undefined
+        ? []
+        : [
+            {
+              fn: markDeletion,
+              args: "uuid, bigint, boolean",
+              sql: markDeletionFunction(
+                contract,
+                markDeletion,
+                contract.actions.markDeletion,
+                parts
+              ),
+            },
+          ]),
+      ...(remove === undefined || contract.actions.delete === undefined
+        ? []
+        : [
+            {
+              fn: remove,
+              args: "uuid, bigint",
+              sql: deleteFunction(
+                contract,
+                remove,
+                contract.actions.delete,
+                parts
+              ),
+            },
+          ]),
+    ]
+    for (const { fn, args, sql } of functions) {
+      units.push(
+        unit(sql, bodyRequires(sql, input)),
+        ...executeGrants(`${relation(fn)}(${args})`, ["command"], provider).map(
+          (grant) => unit(grant)
+        )
+      )
+    }
   }
   return units.sort((a, b) => compareStrings(a.identity, b.identity))
 }
@@ -226,7 +270,7 @@ function bodyRequires(
     .map(([, node]) => node)
 }
 
-interface SaveFacts {
+interface CoreFacts {
   rights: RightsContract
   access: AccessContract | undefined
   attributeCase: AttributeCase
@@ -384,23 +428,41 @@ function referenceViolations(
   ]
 }
 
-/** Тіло й оболонка `<t>_save`. */
-function saveFunction(
+/**
+ * Спільні частини функцій ядра одного довідника: контекст, замок ієрархії,
+ * перевірка права, перевиведення копій, автори. Одне місце, щоб `save`,
+ * `mark_deletion` і `delete` не розходилися в умовах відмов.
+ */
+interface CoreParts {
+  facts: CoreFacts
+  label: string
+  /** Колонка скоупу як вираз `v_new` і вид скоупу рядка. */
+  scope: string | undefined
+  ownScopeKind: string | undefined
+  authors: string[]
+  updatedBy: string | undefined
+  /** Контекст фази (Р-A2-9): `root` — вираз id рядка функції. */
+  context: (action: string, root: string) => string[]
+  lock: string
+  copyRead: (link: CarrierLink) => string
+  /** Перевиведення копій лише змінених зв'язків — як тригер носіїв. */
+  relink: (links: readonly CarrierLink[]) => string[]
+  rightsIf: (action: string, row: "v_old" | "v_new", reason: string) => string[]
+  /** Рядок «до» під замком (Р-A2-18: після контексту) і версія. */
+  lockedOld: (root: string) => string[]
+}
+
+function coreParts(
   contract: CatalogCommandContract,
-  facts: SaveFacts
-): string {
+  facts: CoreFacts
+): CoreParts {
   const { table, key } = contract
-  const t = relation(table)
   const label = sqlLiteral(contract.kindLabel)
   const ownScopeKind =
     contract.scopeColumn === undefined
       ? undefined
       : table.columns.find((c) => c.name === contract.scopeColumn)?.origin
           .scopeKindId
-  const scope =
-    contract.scopeColumn === undefined
-      ? undefined
-      : `v_new.${q(contract.scopeColumn)}`
   const authors = authorColumns()
     .map((def) => ({
       def,
@@ -410,15 +472,73 @@ function saveFunction(
       (a): a is { def: (typeof a)["def"]; column: string } =>
         a.column !== undefined
     )
-  const updatedBy = authors.find(
-    (a) => a.def.logicalName === "updatedBy"
-  )?.column
-  const context = (action: string) =>
-    ifThen(
-      `(SELECT ${relation(COMMAND_FUNCTIONS.action)}()) IS DISTINCT FROM ${sqlLiteral(action)} OR (SELECT ${relation(COMMAND_FUNCTIONS.root)}(${label})) IS DISTINCT FROM v_in.${q(key)}`,
-      [contextRefused]
-    )
-  const lock = `PERFORM ${hierarchyLockSql(table)};`
+  // Копії стану «після» — тими самими зв'язками, що й тригер носіїв
+  // (Р-A2-4), під командою; зв'язок через колонку авторства — з функції
+  // джерел поточного користувача (Р-A2-14), бо рядок «Користувачів» під
+  // командою може бути невидимим.
+  const copyRead = (link: CarrierLink) =>
+    facts.authorLink(link)
+      ? `SELECT ${link.copies.map((c) => `s.${q(c.column)}`).join(", ")} INTO ${link.copies.map((c) => `v_new.${q(c.name)}`).join(", ")} FROM ${relation(AUTHOR_CARRIER_SOURCES_FUNCTION)}() s;`
+      : carrierCopyRead(link, "v_new", false)
+  return {
+    facts,
+    label,
+    scope:
+      contract.scopeColumn === undefined
+        ? undefined
+        : `v_new.${q(contract.scopeColumn)}`,
+    ownScopeKind,
+    authors: authors.map((a) => a.column),
+    updatedBy: authors.find((a) => a.def.logicalName === "updatedBy")?.column,
+    context: (action, root) =>
+      ifThen(
+        `(SELECT ${relation(COMMAND_FUNCTIONS.action)}()) IS DISTINCT FROM ${sqlLiteral(action)} OR (SELECT ${relation(COMMAND_FUNCTIONS.root)}(${label})) IS DISTINCT FROM ${root}`,
+        [contextRefused]
+      ),
+    lock: `PERFORM ${hierarchyLockSql(table)};`,
+    copyRead,
+    relink: (links) =>
+      links.flatMap((link) =>
+        ifThen(
+          link.pairs
+            .map(
+              (p) => `v_new.${q(p.local)} IS DISTINCT FROM v_old.${q(p.local)}`
+            )
+            .join(" OR "),
+          [copyRead(link)]
+        )
+      ),
+    rightsIf: (action, row, reason) =>
+      ifThen(`(${rightsCheck(facts.rights, action, table, row)}) IS NOT TRUE`, [
+        forbidden(reason),
+      ]),
+    lockedOld: (root) => [
+      `SELECT * INTO v_old FROM ${relation(table)} r WHERE r.${q(key)} = ${root} FOR UPDATE;`,
+      // Замок застосовує `UPDATE USING` (право дії над станом «до»), тож
+      // відсутній і чужий рядок — та сама відмова (Рт4).
+      ...ifThen("NOT FOUND", [noRight]),
+      ...ifThen(
+        `v_old.${q(contract.versionColumn)} IS DISTINCT FROM p_expected_version`,
+        [
+          conflict(
+            E.conflict.version,
+            `v_old.${q(contract.versionColumn)}::text`
+          ),
+        ]
+      ),
+    ],
+  }
+}
+
+/** Тіло й оболонка `<t>_save`. */
+function saveFunction(
+  contract: CatalogCommandContract,
+  parts: CoreParts
+): string {
+  const { key } = contract
+  const { facts, label, scope, ownScopeKind, updatedBy, lock, rightsIf } = parts
+  const root = `v_in.${q(key)}`
+  const context = (action: string) => parts.context(action, root)
   const references = (old: boolean) =>
     contract.references.flatMap((reference) =>
       referenceViolations(reference, {
@@ -430,18 +550,6 @@ function saveFunction(
         ifThen(condition, [invalid(sqlLiteral(column))])
       )
     )
-  // Копії стану «після» — тими самими зв'язками, що й тригер носіїв
-  // (Р-A2-4), під командою; зв'язок через колонку авторства — з функції
-  // джерел поточного користувача (Р-A2-14), бо рядок «Користувачів» під
-  // командою може бути невидимим.
-  const copyRead = (link: CarrierLink) =>
-    facts.authorLink(link)
-      ? `SELECT ${link.copies.map((c) => `s.${q(c.column)}`).join(", ")} INTO ${link.copies.map((c) => `v_new.${q(c.name)}`).join(", ")} FROM ${relation(AUTHOR_CARRIER_SOURCES_FUNCTION)}() s;`
-      : carrierCopyRead(link, "v_new", false)
-  const rightsIf = (action: string, row: "v_old" | "v_new", reason: string) =>
-    ifThen(`(${rightsCheck(facts.rights, action, table, row)}) IS NOT TRUE`, [
-      forbidden(reason),
-    ])
 
   const createBranch: string[] =
     contract.actions.create === undefined
@@ -449,7 +557,7 @@ function saveFunction(
       : createLines(contract, {
           context: context(contract.actions.create),
           references: references(false),
-          copies: contract.carrierLinks.map(copyRead),
+          copies: contract.carrierLinks.map(parts.copyRead),
           rights: [
             ...rightsIf(contract.actions.create, "v_new", E.forbidden.noRight),
             // Межа тенанта `scope_insert` (Р-A2-15): предикат контейнера
@@ -461,7 +569,7 @@ function saveFunction(
                   [noRight]
                 )),
           ],
-          authors: authors.map((a) => a.column),
+          authors: parts.authors,
           lock,
           label,
         })
@@ -476,14 +584,7 @@ function saveFunction(
       : contract.hierarchy.lockAlways
         ? [lock]
         : ifThen(`p_item ? ${sqlLiteral(contract.hierarchy.parent)}`, [lock])),
-    `SELECT * INTO v_old FROM ${t} r WHERE r.${q(key)} = v_in.${q(key)} FOR UPDATE;`,
-    // Замок застосовує `UPDATE USING` (право дії над станом «до»), тож
-    // відсутній і чужий рядок — та сама відмова (Рт4).
-    ...ifThen("NOT FOUND", [noRight]),
-    ...ifThen(
-      `v_old.${q(contract.versionColumn)} IS DISTINCT FROM p_expected_version`,
-      [conflict(E.conflict.version, `v_old.${q(contract.versionColumn)}::text`)]
-    ),
+    ...parts.lockedOld(root),
     ...rightsIf(contract.actions.update, "v_old", E.forbidden.noRight),
     "v_new := v_old;",
     ...contract.updateKeys.flatMap((c) =>
@@ -495,16 +596,7 @@ function saveFunction(
     ...references(true),
     // Перевиведення лише змінених зв'язків — як тригер носіїв: незмінений
     // зв'язок лишає копію рядка.
-    ...contract.carrierLinks.flatMap((link) =>
-      ifThen(
-        link.pairs
-          .map(
-            (p) => `v_new.${q(p.local)} IS DISTINCT FROM v_old.${q(p.local)}`
-          )
-          .join(" OR "),
-        [copyRead(link)]
-      )
-    ),
+    ...parts.relink(contract.carrierLinks),
     ...rightsIf(contract.actions.update, "v_new", E.forbidden.newCarrier),
     headerUpdate(contract),
     // Відкликання права між замком і `UPDATE` (`READ COMMITTED`): політики
@@ -513,20 +605,22 @@ function saveFunction(
     ...ifThen("v_count = 0", [noRight]),
   ]
 
-  const body = [
-    "DECLARE",
-    "  v_in record;",
-    "  v_old record;",
-    "  v_new record;",
-    "  v_row record;",
-    "  v_count bigint;",
-    "  v_key text;",
-    "  v_constraint text;",
-    "  v_ids uuid[];",
-    "  v_result jsonb;",
-    "  v_tabular jsonb;",
-    "BEGIN",
-    ...indent([
+  return coreFunction(
+    contract.functions.save,
+    "p_item jsonb, p_expected_version bigint",
+    [
+      "v_in record;",
+      "v_old record;",
+      "v_new record;",
+      "v_row record;",
+      "v_count bigint;",
+      "v_key text;",
+      "v_constraint text;",
+      "v_ids uuid[];",
+      "v_result jsonb;",
+      "v_tabular jsonb;",
+    ],
+    [
       ...inputLines(contract),
       "IF p_expected_version IS NULL THEN",
       ...indent(createBranch),
@@ -534,17 +628,8 @@ function saveFunction(
       ...indent(updateBranch),
       "END IF;",
       ...tabularLines(contract, scope, ownScopeKind),
-      ...resultLines(contract),
-    ]),
-    "END",
-  ].join("\n")
-  const tag = dollarTag(body)
-  return (
-    `CREATE OR REPLACE FUNCTION ${relation(contract.functions.save)}(p_item jsonb, p_expected_version bigint)\n` +
-    `RETURNS text\n` +
-    `LANGUAGE plpgsql VOLATILE SECURITY INVOKER\n` +
-    `SET search_path = ''\n` +
-    `AS ${tag}\n${body}\n${tag};`
+      ...resultLines(contract, root, true),
+    ]
   )
 }
 
@@ -796,16 +881,19 @@ function sectionLines(
  * дав би сирий `42501` ролі, що пише, але рядка не бачить. Не видно —
  * ключ і `row: null`.
  */
-function resultLines(contract: CatalogCommandContract): string[] {
+function resultLines(
+  contract: CatalogCommandContract,
+  root: string,
+  tabular: boolean
+): string[] {
   const { table, key } = contract
-  const root = `v_in.${q(key)}`
   return [
     `SELECT * INTO v_row FROM ${relation(table)} r WHERE r.${q(key)} = ${root};`,
     ...ifThen("NOT FOUND", [
       `RETURN jsonb_build_object(${sqlLiteral(key)}, ${root}, 'row', NULL)::text;`,
     ]),
     `v_result := ${rowJson(table, "v_row")};`,
-    ...(contract.tabularSections.length === 0
+    ...(!tabular || contract.tabularSections.length === 0
       ? []
       : ifThen("p_item ? 'tabular'", [
           "v_tabular := '{}';",
@@ -818,6 +906,130 @@ function resultLines(contract: CatalogCommandContract): string[] {
         ])),
     "RETURN v_result::text;",
   ]
+}
+
+/** Оболонка функції ядра: `SECURITY INVOKER`, порожній `search_path`. */
+function coreFunction(
+  fn: QualifiedName,
+  args: string,
+  declarations: readonly string[],
+  statements: readonly string[]
+): string {
+  const body = [
+    "DECLARE",
+    ...indent(declarations),
+    "BEGIN",
+    ...indent(statements),
+    "END",
+  ].join("\n")
+  const tag = dollarTag(body)
+  return (
+    `CREATE OR REPLACE FUNCTION ${relation(fn)}(${args})\n` +
+    `RETURNS text\n` +
+    `LANGUAGE plpgsql VOLATILE SECURITY INVOKER\n` +
+    `SET search_path = ''\n` +
+    `AS ${tag}\n${body}\n${tag};`
+  )
+}
+
+/**
+ * `<t>_mark_deletion` (спека П4 §6.6): позначка — та сама зміна рядка, що й
+ * `save`, лише одна колонка. Посилань на рядок не шукає (Рт12): позначка не
+ * видаляє. Предвизначений рядок перевіряється після права — інакше відмова
+ * без права розкривала б, що рядок предвизначений (Рт4).
+ */
+function markDeletionFunction(
+  contract: CatalogCommandContract,
+  fn: QualifiedName,
+  action: string,
+  parts: CoreParts
+): string {
+  const { table, key } = contract
+  const root = "p_id"
+  // Позначку пише лише ця функція (Р-A2-5); колонка — за `origin`.
+  const mark = q(
+    standardColumn(table, deletionMarkColumn(), parts.facts.attributeCase).name
+  )
+  // Позначка змінює лише себе й автора зміни: перевиводяться лише зв'язки
+  // через ці колонки (зв'язок через автора — з функції джерел, Р-A2-14).
+  const changed = new Set([
+    mark,
+    ...(parts.updatedBy === undefined ? [] : [q(parts.updatedBy)]),
+  ])
+  const statements = [
+    ...ifThen("p_mark IS NULL", [invalid("'p_mark'")]),
+    ...ifThen("p_expected_version IS NULL", [invalid("'p_expected_version'")]),
+    ...parts.context(action, root),
+    // Обробник `beforeWrite`, що присвоює батька, спрацьовує й на `UPDATE`
+    // позначки: замок ієрархії — до замка рядка (Р-A2-17).
+    ...(contract.hierarchy?.lockAlways === true ? [parts.lock] : []),
+    ...parts.lockedOld(root),
+    ...parts.rightsIf(action, "v_old", E.forbidden.noRight),
+    "v_new := v_old;",
+    `v_new.${mark} := p_mark;`,
+    ...(parts.updatedBy === undefined
+      ? []
+      : [`v_new.${q(parts.updatedBy)} := ${CURRENT_USER};`]),
+    ...parts.relink(
+      contract.carrierLinks.filter((link) =>
+        link.pairs.some((p) => changed.has(q(p.local)))
+      )
+    ),
+    ...parts.rightsIf(action, "v_new", E.forbidden.newCarrier),
+    ...(contract.predefinedColumn === undefined
+      ? []
+      : ifThen(`v_old.${q(contract.predefinedColumn)} IS NOT NULL`, [
+          invalid("'predefined'"),
+        ])),
+    `UPDATE ${relation(table)} SET ${mark} = p_mark WHERE ${q(key)} = ${root};`,
+    // Відкликання права між замком і `UPDATE` — нуль рядків, відмова.
+    "GET DIAGNOSTICS v_count = ROW_COUNT;",
+    ...ifThen("v_count = 0", [noRight]),
+    ...resultLines(contract, root, false),
+  ]
+  return coreFunction(
+    fn,
+    "p_id uuid, p_expected_version bigint, p_mark boolean",
+    [
+      "v_old record;",
+      "v_new record;",
+      "v_row record;",
+      "v_count bigint;",
+      "v_result jsonb;",
+    ],
+    statements
+  )
+}
+
+/**
+ * `<t>_delete` — лише «Призначення» (спека П4 §6.6): призначення не має
+ * посилань на себе, тож видаляється фізично. Результат — ключ і версія
+ * видаленого рядка; читати рядок після `DELETE` нічого.
+ */
+function deleteFunction(
+  contract: CatalogCommandContract,
+  fn: QualifiedName,
+  action: string,
+  parts: CoreParts
+): string {
+  const { table, key } = contract
+  const root = "p_id"
+  const statements = [
+    ...parts.context(action, root),
+    ...parts.lockedOld(root),
+    ...parts.rightsIf(action, "v_old", E.forbidden.noRight),
+    `DELETE FROM ${relation(table)} WHERE ${q(key)} = ${root};`,
+    // Відкликання права між замком і `DELETE` — нуль рядків, відмова.
+    "GET DIAGNOSTICS v_count = ROW_COUNT;",
+    ...ifThen("v_count = 0", [noRight]),
+    `RETURN jsonb_build_object(${sqlLiteral(key)}, ${root}, ${sqlLiteral(contract.versionColumn)}, v_old.${q(contract.versionColumn)}::text)::text;`,
+  ]
+  return coreFunction(
+    fn,
+    "p_id uuid, p_expected_version bigint",
+    ["v_old record;", "v_count bigint;"],
+    statements
+  )
 }
 
 function must<T>(value: T | undefined): T {

@@ -387,11 +387,11 @@ describe("buildCatalogCommandUnits — <t>_save", () => {
         .map((t) => JSON.stringify(t))
         .sort()
     ).toEqual(
-      executeGrants(
+      [
         "public.ticket_save(jsonb, bigint)",
-        ["command"],
-        "supabase"
-      )
+        "public.ticket_mark_deletion(uuid, bigint, boolean)",
+      ]
+        .flatMap((fn) => executeGrants(fn, ["command"], "supabase"))
         .map((sql) => JSON.stringify(tree(sql)))
         .sort()
     )
