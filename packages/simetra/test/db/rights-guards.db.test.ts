@@ -25,6 +25,7 @@ import { signUp } from "./auth"
 import {
   commandAs,
   queryAs,
+  testRoleName,
   testSuperuserUrl,
   withRollback,
   type Refusal,
@@ -1027,65 +1028,115 @@ describe("rights administration guards", () => {
   })
 })
 
-describe("maintenance from provider API logins", () => {
-  it("a postgres-owned definer cannot enable maintenance through API sessions", async () => {
-    const compiled = await compileRights(
-      policyDomain(writeRoles(), adminRoles())
-    )
-    expect(compiled.diagnostics).toEqual([])
-    await withRollback(async (client) => {
-      await client.query("SET ROLE postgres")
-      await deploy(client, compiled.model!)
-      const org = randomUUID()
-      const member = randomUUID()
-      const user = await signUp(client)
-      await insert(client, "organization", { id: org })
-      await insert(client, "org_member", {
-        id: member,
-        org_id: org,
-        user_id: user,
-      })
-      await client.query(`CREATE FUNCTION public.debt_grant(p_subject uuid) RETURNS void
+describe("maintenance only from the owner login", () => {
+  // Хто власник функцій прав і під яким входом сесія, вирішує Postgres:
+  // `session_user = current_user` у `SECURITY DEFINER` юніт не доводить.
+  const compiled = () => compileRights(policyDomain(writeRoles(), adminRoles()))
+
+  /** Засів і функції-зонди: `debt_grant` вмикає режим, `debt_grant_plain` — ні. */
+  const seedProbes = async (client: pg.Client): Promise<string> => {
+    const org = randomUUID()
+    const member = randomUUID()
+    const user = await signUp(client)
+    await insert(client, "organization", { id: org })
+    await insert(client, "org_member", {
+      id: member,
+      org_id: org,
+      user_id: user,
+    })
+    const grant = `INSERT INTO public.org_role_assignments (id, org_id, subject, archetype)
+          VALUES (gen_random_uuid(), '${org}', p_subject, '${TASK_VIEWER_ID}');`
+    for (const [name, prelude] of [
+      [
+        "debt_grant",
+        `PERFORM set_config('${RIGHTS_MAINTENANCE_SETTING}', 'on', true);`,
+      ],
+      ["debt_grant_plain", ""],
+    ]) {
+      await client.query(`CREATE FUNCTION public.${name}(p_subject uuid) RETURNS void
         LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
         BEGIN
-          PERFORM set_config('${RIGHTS_MAINTENANCE_SETTING}', 'on', true);
-          INSERT INTO public.org_role_assignments (id, org_id, subject, archetype)
-          VALUES (gen_random_uuid(), '${org}', p_subject, '${TASK_VIEWER_ID}');
+          ${prelude}
+          ${grant}
         END $$`)
       await client.query(
-        "GRANT EXECUTE ON FUNCTION public.debt_grant(uuid) TO authenticated"
+        `GRANT EXECUTE ON FUNCTION public.${name}(uuid) TO authenticated`
       )
-      await client.query("RESET ROLE")
-      const probe = async (login: string, expected?: string) => {
-        await client.query("SAVEPOINT api_login")
-        try {
-          await client.query(`SET SESSION AUTHORIZATION ${login}`)
-          if (login !== "postgres") await client.query("SET ROLE authenticated")
-          const identity = await client.query<{ login: string; role: string }>(
-            "SELECT session_user AS login, current_user AS role"
-          )
-          expect(identity.rows[0]).toEqual({
-            login,
-            role: login === "postgres" ? "postgres" : "authenticated",
-          })
-          let failure: pg.DatabaseError | undefined
-          try {
-            await client.query("SELECT public.debt_grant($1)", [member])
-            await client.query("SET CONSTRAINTS ALL IMMEDIATE")
-          } catch (error) {
-            if (!(error instanceof pg.DatabaseError)) throw error
-            failure = error
-          }
-          if (expected === undefined) expect(failure).toBeUndefined()
-          else
-            expect(failure).toMatchObject({ code: "42501", detail: expected })
-        } finally {
-          await client.query("ROLLBACK TO SAVEPOINT api_login")
-        }
+    }
+    return member
+  }
+
+  const probe = async (
+    client: pg.Client,
+    member: string,
+    login: string,
+    expected?: string,
+    fn = "debt_grant"
+  ) => {
+    await client.query("SAVEPOINT api_login")
+    try {
+      await client.query(`SET SESSION AUTHORIZATION ${login}`)
+      if (login !== "postgres") await client.query("SET ROLE authenticated")
+      const identity = await client.query<{ login: string; role: string }>(
+        "SELECT session_user AS login, current_user AS role"
+      )
+      expect(identity.rows[0]).toEqual({
+        login,
+        role: login === "postgres" ? "postgres" : "authenticated",
+      })
+      let failure: pg.DatabaseError | undefined
+      try {
+        await client.query(`SELECT public.${fn}($1)`, [member])
+        await client.query("SET CONSTRAINTS ALL IMMEDIATE")
+      } catch (error) {
+        if (!(error instanceof pg.DatabaseError)) throw error
+        failure = error
       }
-      await probe("postgres")
-      await probe("authenticator", "rights-context")
-      await probe("supabase_admin", "rights-context")
+      if (expected === undefined) expect(failure).toBeUndefined()
+      else expect(failure).toMatchObject({ code: "42501", detail: expected })
+    } finally {
+      await client.query("ROLLBACK TO SAVEPOINT api_login")
+    }
+  }
+
+  it("a postgres-owned definer enables maintenance only for the postgres login", async () => {
+    const model = await compiled()
+    expect(model.diagnostics).toEqual([])
+    await withRollback(async (client) => {
+      await client.query("SET ROLE postgres")
+      await deploy(client, model.model!)
+      const member = await seedProbes(client)
+      await client.query("RESET ROLE")
+      // Логін поза переліками провайдера: заборонний список його пропускав.
+      const foreign = testRoleName("foreign_login")
+      await client.query(`CREATE ROLE ${foreign} LOGIN`)
+      await client.query(`GRANT authenticated TO ${foreign}`)
+      await probe(client, member, "postgres")
+      await probe(client, member, foreign, "rights-context")
+      await probe(client, member, "authenticator", "rights-context")
+      await probe(client, member, "supabase_admin", "rights-context")
+      await probe(
+        client,
+        member,
+        "postgres",
+        "rights-context",
+        "debt_grant_plain"
+      )
+    }, testSuperuserUrl())
+  }, 120_000)
+
+  it("a provider login that owns the rights functions never enables maintenance", async () => {
+    const model = await compiled()
+    expect(model.diagnostics).toEqual([])
+    await withRollback(async (client) => {
+      // Без `SET ROLE postgres`: власник функцій прав — сам `supabase_admin`.
+      await deploy(client, model.model!)
+      const member = await seedProbes(client)
+      const owner = await client.query<{ same: boolean }>(
+        "SELECT session_user = current_user AS same"
+      )
+      expect(owner.rows[0]).toEqual({ same: true })
+      await probe(client, member, "supabase_admin", "rights-context")
     }, testSuperuserUrl())
   }, 120_000)
 })

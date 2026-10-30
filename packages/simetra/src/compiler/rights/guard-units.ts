@@ -1,6 +1,5 @@
 import {
   PLATFORM_SCHEMA,
-  PLATFORM_LOGIN_ROLES,
   PROVIDER_LOGIN_ROLES,
   RIGHTS_COLUMNS,
   RIGHTS_MAINTENANCE_SETTING,
@@ -78,19 +77,22 @@ const unitNode = (name: QualifiedName): CreationNode => ({
 })
 
 /**
- * Режим обслуговування оминає перевірку приросту, тож вмикати його може лише
- * довірений вхід у базу: налаштування сесії ставить будь-хто, тож без цієї
- * умови запит через логін API провайдера чи рантайм платформи (він виконує
- * запити користувачів) обійшов би запобіжник.
+ * Режим обслуговування оминає перевірку приросту, а налаштування сесії ставить
+ * будь-хто, тож режим діє лише для входу власника функцій прав — мігратора, що
+ * застосував план (спека прав §7). Усі вживання виразу — у функціях
+ * `SECURITY DEFINER`, тож `current_user` там — власник функції, і
+ * `session_user = current_user` означає «увійшли під мігратором». Власник
+ * таблиць і так може вимкнути тригер, тож довіра до нього не додає поверхні
+ * атаки. Сторонній логін, рантайм платформи (він не власник) і
+ * суперкористувач, що не власник, відпадають. Залишковий перелік входів
+ * провайдера закриває план, помилково застосований під спільним входом, під
+ * яким працюють сервіси провайдера: тоді власник — цей вхід. Коли власник —
+ * групова `NOLOGIN`-роль, а мігратор лише її член, режим недоступний: членство
+ * пропустило б суперкористувача.
  */
 export function maintenanceSql(provider: DatabaseProvider): string {
-  const logins = [
-    ...PROVIDER_LOGIN_ROLES[provider],
-    ...Object.values(PLATFORM_LOGIN_ROLES),
-  ]
-    .map(sqlLiteral)
-    .join(", ")
-  return `coalesce(current_setting(${sqlLiteral(RIGHTS_MAINTENANCE_SETTING)}, true) = 'on', false) AND session_user::text <> ALL (ARRAY[${logins}]::text[])`
+  const logins = PROVIDER_LOGIN_ROLES[provider].map(sqlLiteral).join(", ")
+  return `coalesce(current_setting(${sqlLiteral(RIGHTS_MAINTENANCE_SETTING)}, true) = 'on', false) AND session_user = current_user AND session_user::text <> ALL (ARRAY[${logins}]::text[])`
 }
 
 // Визначення стандартних колонок з реєстру: ім'я в стилі проєкту дає

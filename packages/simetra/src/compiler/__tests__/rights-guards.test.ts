@@ -2,7 +2,6 @@ import { isDeepStrictEqual } from "node:util"
 import { beforeAll, describe, expect, it } from "vitest"
 import type { CompiledModel } from "simetra/compiler"
 import {
-  DATABASE_PROVIDERS,
   PLATFORM_LOGIN_ROLES,
   PROVIDER_LOGIN_ROLES,
   type AttributeCase,
@@ -507,27 +506,20 @@ describe("rights guard statement triggers", () => {
     }
   })
 
-  it.each(DATABASE_PROVIDERS)(
-    "maintenance mode never trusts the platform runtime login (%s)",
-    (provider) => {
-      const arrays = nodes(expr(maintenanceSql(provider)), "A_ArrayExpr")
-      const names = nodes(arrays, "sval").filter((v) => typeof v === "string")
-      expect(names).toContain(PLATFORM_LOGIN_ROLES.runtime)
-    }
-  )
-
-  it("maintenance mode requires a non-API login role", () => {
-    // Порядок: ролі входу провайдера, далі ролі входу платформи (спека П4 §6.2)
-    const logins = [
-      ...PROVIDER_LOGIN_ROLES.supabase,
-      ...Object.values(PLATFORM_LOGIN_ROLES),
-    ]
-      .map((r) => `'${r}'`)
-      .join(", ")
+  it("maintenance mode trusts only the owner login, never a provider login", () => {
+    // Вхід власника функцій прав поза входами провайдера (спека прав §7);
+    // порядок масиву — порядок переліку провайдера.
+    const logins = PROVIDER_LOGIN_ROLES.supabase.map((r) => `'${r}'`).join(", ")
     const oracle = expr(
-      `coalesce(current_setting('simetra.rights_maintenance', true) = 'on', false) AND session_user::text <> ALL (ARRAY[${logins}]::text[])`
+      `coalesce(current_setting('simetra.rights_maintenance', true) = 'on', false) AND session_user = current_user AND session_user::text <> ALL (ARRAY[${logins}]::text[])`
     )
     expect(expr(maintenanceSql("supabase"))).toEqual(oracle)
+    // Рантайм не власник функцій прав, тож у переліку виразу його немає.
+    const names = nodes(
+      nodes(expr(maintenanceSql("supabase")), "A_ArrayExpr"),
+      "sval"
+    ).filter((v) => typeof v === "string")
+    expect(names).not.toContain(PLATFORM_LOGIN_ROLES.runtime)
     // Кожна гілка режиму — той самий вираз: тригери не мають власних варіантів.
     let branches = 0
     for (const fn of guards(domain).filter((u) => u.class === "function")) {
