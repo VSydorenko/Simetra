@@ -442,7 +442,9 @@ export function buildAccessUnits(
               "SELECT",
               bounded,
               {
-                using: predicate.conditions.map(renderCondition).join(" AND "),
+                using: predicate.conditions
+                  .map((c) => renderCondition(c))
+                  .join(" AND "),
               }
             )
           )
@@ -540,7 +542,7 @@ function writePolicies(
       for (const predicate of rightsPredicates(rights, action, table, main)) {
         const condition = [
           ...prefix,
-          ...predicate.conditions.map(renderCondition),
+          ...predicate.conditions.map((c) => renderCondition(c)),
         ].join(" AND ")
         policies.push(
           policy(
