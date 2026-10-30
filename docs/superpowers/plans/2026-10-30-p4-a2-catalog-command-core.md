@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-Статус: план прийнято архітекторкою (283fe571, з умовами нижче); виконання — від `git merge fbd49194`.
+Статус: виконано; повні гейти зелені на 23604522; прийнято архітекторкою.
 Архітекторка задачі — сесія `consumer-reconciliation2`; якщо її немає — власник.
 
 **Мета:** кожна основна таблиця довідника, що пише командою, отримує
@@ -173,7 +173,7 @@ export const CATALOG_COMMAND_LABELS = { save: "save", markDeletion: "mark_deleti
 - `hierarchy` — для таблиці з тригером ієрархії; `lockAlways` = хоч один обробник `beforeWrite` таблиці має `handlerAssigns(fn, {parent}, parse)` — новий експорт `stages/links.ts` над `assignmentProblems` (`length > 0`; обробник, який не розбирається, — `true`). Вхід `catalogCommandContracts` додає `subscriptions` (обробники з їхніми одиницями SQL, як їх бачить стадія `links`), `parse` і `plpgsql` (`PlpgsqlParser` — `assignmentProblems` бере `PlpgsqlFunction`); усі три є в `pipeline.ts` після гейта стадій 4–5. Обробник, що не розбирається, через `compile` недосяжний (`subscription.handler-not-closed`), тож fail-closed перевіряє unit-тест `handlerAssigns` із заглушкою `plpgsql` (`ok: false`) → `true`.
 - Імена функцій — `derived(table, label)` (`contracts.ts`, той самий алгоритм, що `save` документа). `derivedFunctionLabels` резервує `save`, `mark_deletion` і (для призначень) `delete` для об'єктів з `commandWrites` — з надлишком, як функції ефектів (Р2b1-11).
 
-- [ ] **Крок 1: тести, що падають** — `catalog-command-contracts.test.ts` на `compileRights(policyDomain(writeRoles()))`, `compileRights(policyDomain(writeRoles(), adminRoles()))` і `compileRights(singleTenantRights(...))`:
+- [x] **Крок 1: тести, що падають** — `catalog-command-contracts.test.ts` на `compileRights(policyDomain(writeRoles()))`, `compileRights(policyDomain(writeRoles(), adminRoles()))` і `compileRights(singleTenantRights(...))`:
   - `it.each` «ключі = грант A1 мінус …» з очікуваною різницею за роллю: вставка звичайного довідника — `[]` (`command.insert` уже без переходів, а `deletion_mark` — колонка переходу `markDeletion`); зміна звичайного довідника — колонки переходів (зокрема `deletion_mark`); вставка й зміна «Ролей»/«Призначень» — `[deletion_mark]` (дії `markDeletion` там немає, тож колонка — не перехід);
   - `it("ключі не містять механіки, авторства, копій, predefined_name, deletion_mark")` — таблицею `it.each` за `origin.standard`;
   - `it.each` ролей: звичайний довідник → `{create, update, markDeletion}`; «Ролі» → `{create:"administerRights", update:"administerRights", markDeletion:"administerRights"}`; «Призначення» → ще `delete`; «Користувачі» → лише `update`; корінь скоупу → без `create`;
@@ -181,16 +181,16 @@ export const CATALOG_COMMAND_LABELS = { save: "save", markDeletion: "mark_deleti
   - `it("ТЧ: rowKeys без key, parent, lineNumber і колонки скоупу")` — на ТЧ скоупленого некореневого довідника (у неї власна колонка скоупу `NOT NULL`, `stages/model.ts` `withScope`), `it("поліморфний Ref — pair з мітками цілей")` (новий шар фікстури, Крок 2);
   - `it.each(["camelCase", "snake_case"])("%s: контракт за origin, не за іменем")` — та сама модель з `naming.attributeCase` обох стилів (будівник `withAttributeCase` у `fixtures/rights.ts`, якщо його немає): `createKeys`, `updateKeys`, колонка позначки (`deletion_mark`), колонки ТЧ (`parent_id`, `line_number`) і колонки гранту однакові за фізичними іменами в обох стилях. Поки snake_case-проєкт із довідниками прав не компілюється (виправлення боргу прав §1 — гілка `feat/rights-debt-1` — ще не влито), snake_case-рядок — `it.todo` з посиланням на борг прав §1. Коли архітекторка надішле SHA коміту виправлення — `git merge <SHA>` і увімкнути всі snake_case-рядки окремим комітом. Мовчки не пропускати. Той самий двостильовий кейс — у тестах Задач 2, 5 і 6 (ключі `p_item`, `deletion_mark`, `parent_id` у дереві функції);
   - `it("ім'я save довідника, зайняте дослівною функцією, — physical.function-duplicate")` — дослівна `CREATE FUNCTION public.<t>_save()` у `.sql` дає діагностику (через `functionCollisions`).
-- [ ] **Крок 2: будівник фікстури.** `Task` у `policyDomain` — **документ**, а ядро генерується лише для довідника (`commandWrites` — лише в `Catalog`). У `fixtures/rights.ts` — шар `commandCoreLayer()` (наявні будівники `catalog`, `refAttribute`, `role`, `grant`; типові значення наявних шарів не змінюються):
+- [x] **Крок 2: будівник фікстури.** `Task` у `policyDomain` — **документ**, а ядро генерується лише для довідника (`commandWrites` — лише в `Catalog`). У `fixtures/rights.ts` — шар `commandCoreLayer()` (наявні будівники `catalog`, `refAttribute`, `role`, `grant`; типові значення наявних шарів не змінюються):
   - довідник `Ticket` (`kindLabel: "ticket"`, `scope: "org"`, `trackAuthor: true`, `hierarchyType: "FoldersAndItems"`): `assignee` → `OrgMember` (`ownership: ["assignee"]`), `region` → `Region` (`access: [{ attribute: "region", dimension: "region" }]`), `project` → `Project` (`containerBinding: "project"`), `subject` — поліморфний `allowedTypes: [Project, Region]`, `watchers` — масив `Ref` (`array: true`) → `OrgMember`; ТЧ `checklist` з реквізитами `region` → `Region` і `related` → `Ticket` (невидима ціль рядка ТЧ під `TicketOwnWriter`);
   - ролі (кожна дія запису вимагає `read` — `actionRequires`; без нього `rights.requires-missing`): `TicketWriter` (`read`, `create`, `update`, `markDeletion` @ `any`), `TicketOwnWriter` (те саме @ `own`), `TicketRegionWriter` (те саме @ вимір `region`), `ProjectTicketWriter` (контейнерна роль на `Project`, те саме @ `any` у контейнері), `TicketReader` (лише `read` @ `any`). `read` — на тому самому обсязі, що й запис: `read@any` для всіх змінив би видимість під `FOR UPDATE`. Читання цілей посилань — окрема роль скоупу `org` `TicketTargetsReader` (`read@any` на `OrgMember`, `Region`, `Project` і документ `Task` — ціль `TaskComment.task`, без `Ticket` і `TaskComment`), яку `seedCommandCore` призначає кожному користувачеві засіву: жоден наявний шар цих довідників не відкриває, тож без неї кожне посилання дало б `command.invalid` раніше за перевірку права, а контейнерна роль `ProjectTicketWriter` не може дати їх сама (`rights.grant-level`: ці об'єкти не прив'язані до контейнера); ціль «невидимий рядок свого тенанта» для кейсів `Ref` — `parent_id` (шапка) і `checklist.related` (рядок ТЧ) → `Ticket` під `TicketOwnWriter` (`read@own`);
   - `TaskCommentOwnWriter` (`read`, `create`, `update` @ `own` на `TaskComment`) — для носія за шляхом `task.assignee` у сітці Задачі 8;
   - засів `seedCommandCore(client)` у `packages/simetra/test/db/rights-seed.ts` — організації A і B, користувачі з ролями вище, рядки `Ticket` з різними носіями, рядок B для чужого тенанта, ієрархія `K1 → K2 → K3` (K2 — з `assignee` = учасник `TicketOwnWriter`, K1 — з чужим `assignee`, тож батько K2 невидимий для `TicketOwnWriter`: кейс «незмінене невидиме значення при зміні іншої колонки — проходить»), рядки `Task` зі своїм і чужим `assignee` для `TaskCommentOwnWriter` і рядки `TaskComment` над ними.
   Носій за шляхом — наявний довідник `TaskComment` (`ownership: [["task", "assignee"]]`, ТЧ `attachments`).
-- [ ] **Крок 3:** запустити `pnpm --filter simetra test catalog-command-contracts` — FAIL (модуля немає).
-- [ ] **Крок 4:** реалізувати `catalogCommandContracts` і резервування імен; експортувати `carrierLinks`.
-- [ ] **Крок 5:** `pnpm --filter simetra test catalog-command-contracts` і `pnpm --filter simetra test carrier-units` — PASS; `pnpm --filter simetra typecheck`.
-- [ ] **Крок 6: коміт** — `feat(compiler): контракт ядра команд довідника — ключі з грантів A1`.
+- [x] **Крок 3:** запустити `pnpm --filter simetra test catalog-command-contracts` — FAIL (модуля немає).
+- [x] **Крок 4:** реалізувати `catalogCommandContracts` і резервування імен; експортувати `carrierLinks`.
+- [x] **Крок 5:** `pnpm --filter simetra test catalog-command-contracts` і `pnpm --filter simetra test carrier-units` — PASS; `pnpm --filter simetra typecheck`.
+- [x] **Крок 6: коміт** — `feat(compiler): контракт ядра команд довідника — ключі з грантів A1`.
 
 ### Задача 2: предикати права над змінними рядка
 
@@ -219,17 +219,17 @@ export function rightsCheck(contract: RightsContract, action: string,
 
 `rightsCheck` = `(<p1>) OR (<p2>) …` з `rightsPredicates(contract, action, main)`, кожна умова — `renderCondition(c, row)`: `v_new."col" = ANY (ARRAY(SELECT …))`, `v_new."col" = (SELECT simetra.current_user_id())`, булева — без змін. Порожній перелік предикатів — `false` (fail-closed).
 
-- [ ] **Крок 1: тести, що падають:**
+- [x] **Крок 1: тести, що падають:**
   - `it("дерево в дерево: предикати ядра = предикати політик запису кореневої родини")` — для `Ticket` (own, вимір, контейнер; `commandCoreLayer`) і `TaskComment` (носій за шляхом). Очікування: політики `UPDATE` кореневої родини таблиці з `sqlUnits` — імена з `accessPolicyNames(table).write("update", "root", <мітка>)` для кожного предиката; з дерева `USING` кожної викинути перший кон'юнкт — префікс родини `"<key>" = (SELECT simetra.command_root('<мітка>'))` — і замінити `(SELECT simetra.command_action())` літералом `'update'`. Фактичне: `rightsCheckPredicates(contract, "update", main, "v_new")`, кожен розібраний `tree("SELECT " + p)`, з `ColumnRef` `v_new.<col>` → `<col>`. Порівнюються **списки кон'юнктів** кожного предиката (аргументи `BoolExpr AND`, або сам вираз, коли кон'юнкт один), відсортовані (`toEqual`) — інакше `BoolExpr` з одним аргументом після викидання префікса не дорівнював би голому виразу;
   - `it("межа тенанта ядра = check політики scope_insert")` — дерево `tenantBoundary(scope, "v_new")` після `v_new.<col>` → `<col>` дорівнює дереву `WITH CHECK` політики `accessPolicyNames(table).scopeInsert` тієї самої таблиці;
   - `it("нескоуплений об'єкт — has_right")` на `singleTenantRights`;
   - `it("без предикатів — false")`;
   - `renderCondition` без `row` — дерево як до зміни (наявні тести політик лишаються зеленими; правка тестів — лише форма виклику `map`).
-- [ ] **Крок 2:** `pnpm --filter simetra test catalog-command-rights-check` — FAIL.
-- [ ] **Крок 3:** реалізувати двома комітами. Перший — лише `renderCondition(condition, row?)` у `predicates.ts` (мінімальний диф, без інших правок файлу: Права-2d2 змінює той самий файл) і в тому самому коміті місця виклику `access-units.ts`: `conditions.map(renderCondition)` → `conditions.map((c) => renderCondition(c))` — у `access-units.ts`, `__tests__/access-units.test.ts` і `__tests__/rights-predicates.test.ts` (`grep -rn "map(renderCondition)" packages/simetra`; `tsconfig` перевіряє й тести) (інакше індекс `map` прийде другим аргументом, і `strictFunctionTypes` зламає typecheck): `refactor(compiler): кваліфікатор рядка в renderCondition`. Другий — `rights-check.ts` з тестами (Крок 6).
-- [ ] **Крок 4:** `pnpm --filter simetra test catalog-command-rights-check` і `pnpm --filter simetra test rights-polic` — PASS.
-- [ ] **Крок 5: мутації** (на закоміченому дереві після Кроку 6): у `rightsCheckPredicates` передати в `rightsPredicates` літерал іншої дії (`'read'`) → тест «дерево в дерево» червоний; викинути предикати контейнера → червоний. Записати в журнал мутацій.
-- [ ] **Крок 6: коміт** — `feat(compiler): предикати права ядра з rightsPredicates над змінними рядка`.
+- [x] **Крок 2:** `pnpm --filter simetra test catalog-command-rights-check` — FAIL.
+- [x] **Крок 3:** реалізувати двома комітами. Перший — лише `renderCondition(condition, row?)` у `predicates.ts` (мінімальний диф, без інших правок файлу: Права-2d2 змінює той самий файл) і в тому самому коміті місця виклику `access-units.ts`: `conditions.map(renderCondition)` → `conditions.map((c) => renderCondition(c))` — у `access-units.ts`, `__tests__/access-units.test.ts` і `__tests__/rights-predicates.test.ts` (`grep -rn "map(renderCondition)" packages/simetra`; `tsconfig` перевіряє й тести) (інакше індекс `map` прийде другим аргументом, і `strictFunctionTypes` зламає typecheck): `refactor(compiler): кваліфікатор рядка в renderCondition`. Другий — `rights-check.ts` з тестами (Крок 6).
+- [x] **Крок 4:** `pnpm --filter simetra test catalog-command-rights-check` і `pnpm --filter simetra test rights-polic` — PASS.
+- [x] **Крок 5: мутації** (на закоміченому дереві після Кроку 6): у `rightsCheckPredicates` передати в `rightsPredicates` літерал іншої дії (`'read'`) → тест «дерево в дерево» червоний; викинути предикати контейнера → червоний. Записати в журнал мутацій.
+- [x] **Крок 6: коміт** — `feat(compiler): предикати права ядра з rightsPredicates над змінними рядка`.
 
 ### Задача 3: тригер ієрархії
 
@@ -256,11 +256,11 @@ export function rightsCheck(contract: RightsContract, action: string,
   5. `RETURN NULL`.
 - `EXECUTE` функції — нікому (`executeGrants(sig, [], provider)`); `requires` — таблиця тіла. Ім'я функції резервує `derivedFunctions` (як функції носіїв).
 
-- [ ] **Крок 1: тести, що падають:** `bodyShape` функції = еталон (`expectedFunction`) для фікстури з однією ієрархічною таблицею; дерева обох `CREATE TRIGGER` (`AFTER`, `WHEN`); `SECURITY DEFINER` + порожній `search_path` + `row_security = off`; таблиця без ієрархії тригера не має; зворотна генерація впізнає функцію й тригери ієрархії як платформні.
-- [ ] **Крок 2:** `pnpm --filter simetra test hierarchy-units` — FAIL.
-- [ ] **Крок 3:** реалізувати; підключити в `pipeline.ts`.
-- [ ] **Крок 4:** `pnpm --filter simetra test hierarchy-units`, `pnpm --filter simetra test desired-state`, `pnpm --filter simetra test reverse` — PASS; далі повні unit-набори обох пакетів `pnpm --filter simetra test` і `pnpm --filter @simetrajs/designer test` — ієрархічні довідники є в `creation-order.test.ts`, `kitchen-sink.ts`, `e1-fixtures.ts`, `operations-promote.test.ts`, `examples/reference` (`Counterparty`); оновити очікування лише на нові одиниці; `pnpm --filter simetra typecheck`.
-- [ ] **Крок 5: коміт** — `feat(compiler): тригер бази проти циклу ієрархії довідника`.
+- [x] **Крок 1: тести, що падають:** `bodyShape` функції = еталон (`expectedFunction`) для фікстури з однією ієрархічною таблицею; дерева обох `CREATE TRIGGER` (`AFTER`, `WHEN`); `SECURITY DEFINER` + порожній `search_path` + `row_security = off`; таблиця без ієрархії тригера не має; зворотна генерація впізнає функцію й тригери ієрархії як платформні.
+- [x] **Крок 2:** `pnpm --filter simetra test hierarchy-units` — FAIL.
+- [x] **Крок 3:** реалізувати; підключити в `pipeline.ts`.
+- [x] **Крок 4:** `pnpm --filter simetra test hierarchy-units`, `pnpm --filter simetra test desired-state`, `pnpm --filter simetra test reverse` — PASS; далі повні unit-набори обох пакетів `pnpm --filter simetra test` і `pnpm --filter @simetrajs/designer test` — ієрархічні довідники є в `creation-order.test.ts`, `kitchen-sink.ts`, `e1-fixtures.ts`, `operations-promote.test.ts`, `examples/reference` (`Counterparty`); оновити очікування лише на нові одиниці; `pnpm --filter simetra typecheck`.
+- [x] **Крок 5: коміт** — `feat(compiler): тригер бази проти циклу ієрархії довідника`.
 
 ### Задача 4: копії носіїв — одне джерело для тригера й ядра
 
@@ -273,12 +273,12 @@ export function rightsCheck(contract: RightsContract, action: string,
 
 - Produces також (Р-A2-14): `authorCarrierSources(physical, attributeCase): { fn: QualifiedName; columns: { name: string; type: string }[] } | undefined` і одиниці функції `simetra.current_user_carrier_sources()` (`RETURNS TABLE(<колонки>)`, генератор `carriers`); `undefined` і жодної одиниці — коли зв'язку через колонку авторства немає. Колонку авторства визначає `origin.standard` (стилізовані імена `authorColumns()`), не ім'я. Ядро бере з неї джерела для зв'язків, чия локальна колонка — авторство зі значенням поточного користувача (створення — обидві колонки авторства; зміна — `updated_by`, бо `created_by` незмінний і копія береться з `v_old`).
 
-- [ ] **Крок 1: тести.** Наявні тести `carrier-units.test.ts` — без змін очікувань (тіло тригера — те саме дерево). Новий `it("читання ядра й тригера — один будівник")`: для кожного зв'язку `TaskComment` (шлях `task.assignee`) і `Note` (`createdBy.mentor`, `singleTenantRights(authorCarrier())`) дерево `carrierCopyRead(link, "v_new", false)` після заміни `v_new` на `NEW` = дерево оператора `SELECT … INTO NEW…` тіла тригера без `FOR SHARE`.
-- [ ] **Крок 2:** `pnpm --filter simetra test carrier` — новий тест FAIL (функції немає).
+- [x] **Крок 1: тести.** Наявні тести `carrier-units.test.ts` — без змін очікувань (тіло тригера — те саме дерево). Новий `it("читання ядра й тригера — один будівник")`: для кожного зв'язку `TaskComment` (шлях `task.assignee`) і `Note` (`createdBy.mentor`, `singleTenantRights(authorCarrier())`) дерево `carrierCopyRead(link, "v_new", false)` після заміни `v_new` на `NEW` = дерево оператора `SELECT … INTO NEW…` тіла тригера без `FOR SHARE`.
+- [x] **Крок 2:** `pnpm --filter simetra test carrier` — новий тест FAIL (функції немає).
   Ще: `it("джерела авторства: лише колонки зв'язків через авторство, WHERE ключ = current_user_id(), DEFINER, row_security off, EXECUTE лише command")` на `singleTenantRights(authorCarrier())`; `it("без зв'язку через авторство — функції немає")` на `policyDomain(writeRoles())`.
-- [ ] **Крок 3:** винести `carrierCopyRead`; `deriveFunction` будує через нього оператор усього зв'язку (гілка вставки й зміни зв'язку); поодинокі перевиведення гілки `ELSE` лишаються як є; додати `authorCarrierSources` і її одиниці.
-- [ ] **Крок 4:** `pnpm --filter simetra test carrier` — PASS; typecheck.
-- [ ] **Крок 5: коміт** — `refactor(compiler): зв'язки копій носіїв — один будівник читання для тригера й ядра`.
+- [x] **Крок 3:** винести `carrierCopyRead`; `deriveFunction` будує через нього оператор усього зв'язку (гілка вставки й зміни зв'язку); поодинокі перевиведення гілки `ELSE` лишаються як є; додати `authorCarrierSources` і її одиниці.
+- [x] **Крок 4:** `pnpm --filter simetra test carrier` — PASS; typecheck.
+- [x] **Крок 5: коміт** — `refactor(compiler): зв'язки копій носіїв — один будівник читання для тригера й ядра`.
 
 ### Задача 5: `<t>_save` — створення, зміна, ТЧ, посилання
 
@@ -327,7 +327,7 @@ export function rightsCheck(contract: RightsContract, action: string,
 
 **Посилання** (`CommandReference`; побудова в Задачі 1 — з `objects`, не з FK: масив `Ref` FK не має, а дискримінатори пари в знімку лишаються лише текстом CHECK; ціль — `ref`/`allowedTypes` реквізиту → `kindLabelOf` + `mainTableOf`, масив — за `array: true` реквізиту; ціль може не мати контракту прав, наприклад документ): `single` — `IF v IS NOT NULL AND NOT EXISTS (SELECT 1 FROM <target> WHERE <targetKey> = v [AND <target scope> = v_new.<scope>])`; умова скоупу `[AND <target scope> = …]` — лише для масиву `single` з ціллю того самого виду скоупу (FK на елементи масиву немає); `pair` — умова скоупу завжди, коли ціль того самого виду; ціль — корінь того самого виду (колонки скоупу немає) — `AND <targetKey> = <scope рядка>`; реквізит з `crossScope: true` — без умови скоупу (складеного FK немає за задумом). Одиничний не-масив `single` — без умови скоупу: скоуп тримає складений FK (`stages/model.ts` `scopedKey`), крім прийнятої `CustomTable` без `UNIQUE (scope, key)` — там FK простий, а стадія 4 уже попереджає; ядро тут не суворіше за прямий запис під RLS; у ТЧ скоуп — з `v_row` → `22023` `command.invalid` `DETAIL '<колонка>'` (у ТЧ — `tabular.<ts>.<колонка>`); масив — кожен елемент. `pair` — мітка ∉ дозволених → та сама відмова; інакше гілка за міткою з тією самою перевіркою видимості й, коли ціль має колонку скоупу того самого виду, — `AND <target scope> = v_new.<scope>`.
 
-- [ ] **Крок 1: тести, що падають** (`catalog-command-save.test.ts`, `loadShapeParsers` у `beforeAll`):
+- [x] **Крок 1: тести, що падають** (`catalog-command-save.test.ts`, `loadShapeParsers` у `beforeAll`):
   - `it("порядок зміни: контекст → замок → версія → право «до» → право «після» → UPDATE → GET DIAGNOSTICS")` — індекси операторів у `bodyShape` (обхід углиб з `depth`) гілки зміни строго зростають; `FOR UPDATE` — у дереві запиту замка (`nodes(tree, "lockingClause")`); `GET DIAGNOSTICS` у `bodyShape` виразу не несе — перевіряти, що оператор `getdiag` іде одразу після `UPDATE`, а за ним `IF` з `v_count = 0`;
   - `it("порядок створення: контекст → exists → посилання → копії → право → INSERT")`;
   - `it("перевірка права — дерево rightsCheck")` для `v_old`/`v_new`;
@@ -345,12 +345,12 @@ export function rightsCheck(contract: RightsContract, action: string,
   - `it("кожна перевірка — NULL-безпечна")`: умови контексту — `IS DISTINCT FROM`, перевірки права — `IS NOT TRUE` (дерева `IF`);
   - `it("широка таблиця: результат без межі аргументів")` — довідник з 60 реквізитами компілюється, і `jsonb_build_object` результату має лише колонки `numeric`/`bigint`;
   - `it.each(["camelCase", "snake_case"])` — ключі `p_item` у дереві однакові (snake_case — `it.todo` до злиття боргу прав §1).
-- [ ] **Крок 2:** `pnpm --filter simetra test catalog-command-save` — FAIL.
-- [ ] **Крок 3:** реалізувати генератор і підключити в `pipeline.ts`.
-- [ ] **Крок 4:** `pnpm --filter simetra test catalog-command` — PASS. Повні unit-набори `pnpm --filter simetra test` і `pnpm --filter @simetrajs/designer test` (нові одиниці змінюють знімки `desired-state.test.ts`, `compile.test.ts`, `explain.test.ts` та інші); оновити очікування лише там, де нові одиниці додаються, без нових діагностик. `paper-test.db.test.ts` (`expected-diff.json`) — перевірити на DB-прогоні Задачі 7.
-- [ ] **Крок 5:** `pnpm --filter simetra typecheck`, `pnpm --filter simetra lint`.
-- [ ] **Крок 6: коміт** — `feat(compiler): ядро save довідника — замок, версія, право, ТЧ, посилання`.
-- [ ] **Крок 7: мутації дерева** (на закоміченому дереві; кожна — окремий прогін `pnpm --filter simetra test catalog-command-save`, відкат `git checkout`): прибрати `FOR UPDATE` → червоний «порядок зміни»; поставити перевірку права після `UPDATE` → червоний; прибрати `GET DIAGNOSTICS` → червоний; прибрати `parent = v_row.key` з `WHERE` `DELETE` ТЧ → червоний «ТЧ». Записати в журнал мутацій.
+- [x] **Крок 2:** `pnpm --filter simetra test catalog-command-save` — FAIL.
+- [x] **Крок 3:** реалізувати генератор і підключити в `pipeline.ts`.
+- [x] **Крок 4:** `pnpm --filter simetra test catalog-command` — PASS. Повні unit-набори `pnpm --filter simetra test` і `pnpm --filter @simetrajs/designer test` (нові одиниці змінюють знімки `desired-state.test.ts`, `compile.test.ts`, `explain.test.ts` та інші); оновити очікування лише там, де нові одиниці додаються, без нових діагностик. `paper-test.db.test.ts` (`expected-diff.json`) — перевірити на DB-прогоні Задачі 7.
+- [x] **Крок 5:** `pnpm --filter simetra typecheck`, `pnpm --filter simetra lint`.
+- [x] **Крок 6: коміт** — `feat(compiler): ядро save довідника — замок, версія, право, ТЧ, посилання`.
+- [x] **Крок 7: мутації дерева** (на закоміченому дереві; кожна — окремий прогін `pnpm --filter simetra test catalog-command-save`, відкат `git checkout`): прибрати `FOR UPDATE` → червоний «порядок зміни»; поставити перевірку права після `UPDATE` → червоний; прибрати `GET DIAGNOSTICS` → червоний; прибрати `parent = v_row.key` з `WHERE` `DELETE` ТЧ → червоний «ТЧ». Записати в журнал мутацій.
 
 ### Задача 6: `mark_deletion`, `delete`, «Користувачі», системні довідники прав
 
@@ -364,11 +364,11 @@ export function rightsCheck(contract: RightsContract, action: string,
 - Умови контексту й права — NULL-безпечні, як у Задачі 5.
 - «Користувачі», корінь скоупу — лише гілка зміни `save`; `p_expected_version IS NULL` → `22023` `command.invalid` `DETAIL 'create'`.
 
-- [ ] **Крок 1: тести, що падають:** порядок операторів обох функцій деревом; предвизначений — після перевірки права; `delete` лише на «Призначеннях» (`it.each` ролей довідника: наявність/відсутність функцій); «Користувачі» без гілки створення; дія контексту «Ролей» — `'administerRights'` у дереві `command_action()` = літерал.
-- [ ] **Крок 2:** `pnpm --filter simetra test catalog-command-mark` — FAIL.
-- [ ] **Крок 3:** реалізувати.
-- [ ] **Крок 4:** `pnpm --filter simetra test catalog-command` — PASS; typecheck.
-- [ ] **Крок 5: коміт** — `feat(compiler): позначка видалення, видалення призначення, зміна «Користувачів»`.
+- [x] **Крок 1: тести, що падають:** порядок операторів обох функцій деревом; предвизначений — після перевірки права; `delete` лише на «Призначеннях» (`it.each` ролей довідника: наявність/відсутність функцій); «Користувачі» без гілки створення; дія контексту «Ролей» — `'administerRights'` у дереві `command_action()` = літерал.
+- [x] **Крок 2:** `pnpm --filter simetra test catalog-command-mark` — FAIL.
+- [x] **Крок 3:** реалізувати.
+- [x] **Крок 4:** `pnpm --filter simetra test catalog-command` — PASS; typecheck.
+- [x] **Крок 5: коміт** — `feat(compiler): позначка видалення, видалення призначення, зміна «Користувачів»`.
 
 ### Задача 7: DB — ядро через `commandAs`
 
@@ -398,10 +398,10 @@ export function rightsCheck(contract: RightsContract, action: string,
 - підписка `beforeWrite` шапки на правці лише ТЧ виконується від `simetra_command`, не від власника таблиці (`NOTICE` обробника несе `current_user`; `pg` віддає його подією `notice` клієнта);
 - окремий `describe` нескоупленого довідника `Note` (`singleTenantRights(authorCarrier())`: ТЧ `lines`, роль `NoteWriter` — `read`, `create`, `update`): `create`/`update` з ТЧ `lines` — проходять; `markDeletion` — `no-right` (права немає); і в тому самому `describe` з моделлю `singleTenantRights(authorCarrier())` і `authorCarrier("long")` (60-байтна назва): роль `NoteOwnCreator` (`read`, `create` @ `own` на `Note`, будівник у `fixtures/rights.ts`), користувач **без** `read` на «Користувачах» і з `mentor_id` = власний id створює `Note` з рядками ТЧ і носієм `createdBy.mentor` — проходить, копія = значення з його рядка (з `NULL`-копією в `v_new` право `own` не виконалось би, тож кейс червоніє від мутації «читати джерело під командою»); виклик `simetra.current_user_carrier_sources()` від ролі API (`queryAs` `authenticated`) → `42501`.
 
-- [ ] **Крок 1:** написати файл з кейсами. Запуск: `pnpm --filter simetra test:db catalog-command` — FAIL лише якщо ядро ще не підключене; інакше зелений одразу, і доказом стають мутації Кроку 4.
-- [ ] **Крок 2:** зелений прогін; час прогону — у звіт.
-- [ ] **Крок 3: коміт** — `test(db): ядро довідника — відмови, конфлікти, ТЧ, посилання, ключі`.
-- [ ] **Крок 4: DB-мутації** (закомічене дерево, по одній, відкат `git checkout`): прибрати `FOR UPDATE` → червоний кейс `TicketReader` (без замка версія перевіряється раніше за RLS, і вилазить `conflict`); прибрати перевірку видимості `Ref` → червоний кейс `Ref`; прибрати `parent_id = <корінь>` з `WHERE` `DELETE` ТЧ → червоний кейс «ТЧ іншого власника» (твердження: рядки ТЧ іншого видимого `Ticket` лишилися цілими; для `UPDATE` ТЧ мутація DB-рівнем не червоніє — видимий чужий рядок відсікає явна перевірка, невидимий — RLS, тож її тримає деревна мутація Задачі 5); прибрати перевірку ключів `p_item` → червоний кейс ключів; читати джерело авторства під командою замість `current_user_carrier_sources()` → червоний кейс «без `read` на «Користувачах»» (хибне `no-right`); прибрати умову скоупу `pair` → червоний кейс `subject` тенанта A; перевіряти лише перший елемент масиву → червоний кейс `watchers`. У журнал мутацій.
+- [x] **Крок 1:** написати файл з кейсами. Запуск: `pnpm --filter simetra test:db catalog-command` — FAIL лише якщо ядро ще не підключене; інакше зелений одразу, і доказом стають мутації Кроку 4.
+- [x] **Крок 2:** зелений прогін; час прогону — у звіт.
+- [x] **Крок 3: коміт** — `test(db): ядро довідника — відмови, конфлікти, ТЧ, посилання, ключі`.
+- [x] **Крок 4: DB-мутації** (закомічене дерево, по одній, відкат `git checkout`): прибрати `FOR UPDATE` → червоний кейс `TicketReader` (без замка версія перевіряється раніше за RLS, і вилазить `conflict`); прибрати перевірку видимості `Ref` → червоний кейс `Ref`; прибрати `parent_id = <корінь>` з `WHERE` `DELETE` ТЧ → червоний кейс «ТЧ іншого власника» (твердження: рядки ТЧ іншого видимого `Ticket` лишилися цілими; для `UPDATE` ТЧ мутація DB-рівнем не червоніє — видимий чужий рядок відсікає явна перевірка, невидимий — RLS, тож її тримає деревна мутація Задачі 5); прибрати перевірку ключів `p_item` → червоний кейс ключів; читати джерело авторства під командою замість `current_user_carrier_sources()` → червоний кейс «без `read` на «Користувачах»» (хибне `no-right`); прибрати умову скоупу `pair` → червоний кейс `subject` тенанта A; перевіряти лише перший елемент масиву → червоний кейс `watchers`. У журнал мутацій.
 
 ### Задача 8: DB — перевірка права ядра ≡ RLS
 
@@ -415,9 +415,9 @@ export function rightsCheck(contract: RightsContract, action: string,
 - RLS: той самий стан прямим `INSERT`/`UPDATE … WHERE id = …` під `commandAs` з тим самим контекстом → `ok` | `refused` (0 рядків чи `42501`).
 - Твердження: ядро ніколи не дає `rls`; `ok` ядра ⇔ `ok` RLS. Точка «створення в чужому тенанті» очікує `check` (ядро повторює межу `scope_insert`, Р-A2-15). Сітка — лише видимі цілі посилань: невидима ціль дає `command.invalid` раніше за перевірку права, а прямий DML під RLS її пропускає (FK — повз RLS), тож вона не точка порівняння. Обсяги читання й запису ролей фікстури однакові; роль з `create@any` і `read@own` не компілюється (`rights.requires-missing`, Ф10).
 
-- [ ] **Крок 1:** написати; `pnpm --filter simetra test:db catalog-command-rights` — PASS; час — у звіт.
-- [ ] **Крок 2: коміт** — `test(db): перевірка права ядра збігається з RLS на фікстурах політик`.
-- [ ] **Крок 3: DB-мутації:** у `rightsCheckPredicates` викинути предикати контейнера → червоний (точки `ProjectTicketWriter`); не перевиводити копії зміненого зв'язку (лишати копії `v_old`) → червоні точки `TaskCommentOwnWriter` із заміною `task`. У журнал мутацій.
+- [x] **Крок 1:** написати; `pnpm --filter simetra test:db catalog-command-rights` — PASS; час — у звіт.
+- [x] **Крок 2: коміт** — `test(db): перевірка права ядра збігається з RLS на фікстурах політик`.
+- [x] **Крок 3: DB-мутації:** у `rightsCheckPredicates` викинути предикати контейнера → червоний (точки `ProjectTicketWriter`); не перевиводити копії зміненого зв'язку (лишати копії `v_old`) → червоні точки `TaskCommentOwnWriter` із заміною `task`. У журнал мутацій.
 
 ### Задача 9: DB — паралельність, ієрархія, системні довідники прав
 
@@ -436,9 +436,9 @@ export function rightsCheck(contract: RightsContract, action: string,
 - призначити (`save` «Призначень») і зняти (`<t>_delete`) — проходять; типовий адміністратор скоупу бачить учасника й роль свого скоупу: призначення ролі учаснику свого тенанта проходить без хибного `command.invalid` (перевірка видимості `subject` і `custom_role`), учасник чужого тенанта — `command.invalid` `subject`. Якщо фікстура адміністратора `subject` не бачить — до архітекторки, перевірку не послаблювати; `<t>_delete` з хибною версією → `conflict`;
 - «Користувачі» (шар додає «Користувачам» реквізит застосунку `nickname`; актор — `GlobalAdmin` з `fullAccess`, єдиний з `update` на них у цій моделі): `save` зміни `nickname` — проходить; ключ `invalid` → `command.invalid`; `save` без версії → `command.invalid` `create`.
 
-- [ ] **Крок 1:** написати обидва файли; `pnpm --filter @simetrajs/designer test:db catalog-command-concurrency` і `pnpm --filter simetra test:db catalog-command-admin` — PASS; час — у звіт; сторож стека не бачить сиріт.
-- [ ] **Крок 2: коміт** — `test(db): паралельні правки ТЧ, цикл ієрархії, ядро системних довідників прав`.
-- [ ] **Крок 3: DB-мутації:** прибрати `pg_advisory_xact_lock` з функції тригера → червоний паралельний кейс прямого `UPDATE`; повернути `BEFORE … UPDATE OF parent_id` → червоний кейс обробника `beforeWrite`; прибрати перевірку ізоляції → червоний кейс `REPEATABLE READ`; виконувати `UPDATE` шапки лише коли є ключі шапки → червоний кейс паралельних правок ТЧ. У журнал мутацій.
+- [x] **Крок 1:** написати обидва файли; `pnpm --filter @simetrajs/designer test:db catalog-command-concurrency` і `pnpm --filter simetra test:db catalog-command-admin` — PASS; час — у звіт; сторож стека не бачить сиріт.
+- [x] **Крок 2: коміт** — `test(db): паралельні правки ТЧ, цикл ієрархії, ядро системних довідників прав`.
+- [x] **Крок 3: DB-мутації:** прибрати `pg_advisory_xact_lock` з функції тригера → червоний паралельний кейс прямого `UPDATE`; повернути `BEFORE … UPDATE OF parent_id` → червоний кейс обробника `beforeWrite`; прибрати перевірку ізоляції → червоний кейс `REPEATABLE READ`; виконувати `UPDATE` шапки лише коли є ключі шапки → червоний кейс паралельних правок ТЧ. У журнал мутацій.
 
 ### Задача 10: документи
 
@@ -470,14 +470,14 @@ export function rightsCheck(contract: RightsContract, action: string,
 Платформна спека §4: інваріант ієрархії — база відхиляє цикл `parent_id` для будь-якого автора.
 ROADMAP, рядок «Ранній зріз П4»: «A2 (ядро довідника) виконано; далі A3».
 
-- [ ] **Крок 1:** внести правки; `python3 scripts/check-doc-anchors.py` — без нових помилок.
-- [ ] **Крок 2: коміт** — `docs(spec): П4-A2 — перевірка права в ядрі, ключі, ієрархія`.
+- [x] **Крок 1:** внести правки; `python3 scripts/check-doc-anchors.py` — без нових помилок.
+- [x] **Крок 2: коміт** — `docs(spec): П4-A2 — перевірка права в ядрі, ключі, ієрархія`.
 
 ### Задача 11: перевірка й звіт
 
-- [ ] **Крок 1:** `.claude/commands/виконай-задачу.md` — Workflow перевірки: лінзи `code-review` `correctness` (однакова відмова чужого й відсутнього рядка; `FOR UPDATE` і `READ COMMITTED`; відкликання права між замком і DML; ТЧ іншого власника; ключі поза грантом; видимість цілі `Ref`; перевірка права ≢ RLS) і `test-honesty` (кожна відмова червоніє від мутації); кожну знахідку — `code-review-verifier`.
-- [ ] **Крок 2:** контрольна точка архітекторці після DB-тестів: SHA і коміти, журнал мутацій, час scoped DB-прогонів, рішення з полем «вплив на спеку». Чекати «далі».
-- [ ] **Крок 3:** повні гейти на одному SHA — лише після «можна»: `pnpm format:check && pnpm lint && pnpm typecheck && pnpm test`, `pnpm metadata:check`, `python3 scripts/check-doc-anchors.py`, `pnpm test:db` (без зовнішнього тайм-ауту, коротшого за 45 хв).
+- [x] **Крок 1:** `.claude/commands/виконай-задачу.md` — Workflow перевірки: лінзи `code-review` `correctness` (однакова відмова чужого й відсутнього рядка; `FOR UPDATE` і `READ COMMITTED`; відкликання права між замком і DML; ТЧ іншого власника; ключі поза грантом; видимість цілі `Ref`; перевірка права ≢ RLS) і `test-honesty` (кожна відмова червоніє від мутації); кожну знахідку — `code-review-verifier`.
+- [x] **Крок 2:** контрольна точка архітекторці після DB-тестів: SHA і коміти, журнал мутацій, час scoped DB-прогонів, рішення з полем «вплив на спеку». Чекати «далі».
+- [x] **Крок 3:** повні гейти на одному SHA — лише після «можна»: `pnpm format:check && pnpm lint && pnpm typecheck && pnpm test`, `pnpm metadata:check`, `python3 scripts/check-doc-anchors.py`, `pnpm test:db` (без зовнішнього тайм-ауту, коротшого за 45 хв).
 
 ## Журнал мутацій (заповнює виконавець)
 
