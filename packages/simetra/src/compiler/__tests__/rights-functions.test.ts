@@ -1225,10 +1225,17 @@ function toCurrent(
 ): (node: unknown) => unknown {
   const current = exprTree(CURRENT)
   const user = exprTree(variantUser(model, variant.name))
+  const p = exprTree(`${variant.name}.p_user`)
   return (node) => {
     if (sameTree(node, user)) return current
-    if (callName(node) === qualifiedName(F.scopesOf))
-      return renamed(node, F.myScopes, () => [])
+    // Лише виклик саме з `p_user`: інакше підміна аргументу (сталий NULL,
+    // колонка) зійшлася б із `rights_mine` і тест її не помітив би.
+    if (callName(node) === qualifiedName(F.scopesOf)) {
+      const args = (node as CallNode).FuncCall.args ?? []
+      return args.length === 1 && sameTree(args[0], p)
+        ? renamed(node, F.myScopes, () => [])
+        : undefined
+    }
     return undefined
   }
 }
