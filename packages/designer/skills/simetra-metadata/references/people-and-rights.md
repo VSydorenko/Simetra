@@ -81,9 +81,13 @@ with a trigger on the target table, see "Carrier copies").
   Effects only on a kind with a writing standard action (not an accumulation
   register or a recorder-subordinate information register),
   `tabularSections: true` only on a kind with tabular sections, and never a
-  transition column (`posted`, the deletion mark) or an immutable column (the
-  `ref` key, `createdBy`, `updatedBy`) in `header` (`rights.custom-action-effects`, reasons
-  `transitionColumn` and `immutableColumn`).
+  transition column (`posted`, the deletion mark) or an immutable column in
+  `header` (`rights.custom-action-effects`, reasons `transitionColumn` and
+  `immutableColumn`). On a catalog an immutable column is any column the
+  command role cannot update (the `ref` key, `createdBy`, `updatedBy`,
+  `createdAt`, `updatedAt`, `version`, `predefinedName`, the platform
+  attributes of the users catalog); on other kinds it is the `ref` key,
+  `createdBy` and `updatedBy`.
 - **`ownership`** — carriers whose `Ref` names the owner of a row (a member
   or a user). `"ownership": ["<attribute>", ["<ref attribute>", "<attribute>"]]`
   The target is the users catalog, the membership catalog of the object's own
