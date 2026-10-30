@@ -66,6 +66,11 @@
   `physical.function-duplicate`; кандидат — `generatedTableFunctionName`
   (`packages/simetra/src/compiler/rights/generated-names.ts`), як у функцій
   ефектів.
+- **`RIGHTS_TABLES` гейта планів без `global_roles_delta`**
+  (`packages/simetra/test/db/rights-plan-gate.db.test.ts`): у фікстурі гейта
+  немає глобального довідника дельт, тож повторне читання глобальних дельт
+  гейт тіл функцій прав не побачить. Додати глобальний довідник у засів і
+  таблицю в перелік.
 - **`USER_KIND = userPlatformColumns()[0]!`** у
   `packages/simetra/src/compiler/rights/guard-units.ts` залежить від порядку
   масиву реєстру: зміна порядку мовчки візьме інший реквізит. Кандидат —
