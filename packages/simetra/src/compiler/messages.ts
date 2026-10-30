@@ -2951,6 +2951,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Каскад від таблиці виду виконував би значення за замовчуванням, CHECK, вирази індексів і боргові тригери прийнятої таблиці посеред команди платформи. Задайте restrict чи noAction; дочірні рядки прибирайте TypeScript-хуком команди або промоцією прийнятої таблиці.",
     },
   },
+  "customTable.fk-target-not-key": {
+    en: (p) =>
+      `Foreign key to ${p.kind} "${p.name}" must reference its key column`,
+    uk: (p) =>
+      `Зовнішній ключ на ${p.kind} "${p.name}" має посилатися на його колонку ключа`,
+    hint: {
+      en: "The command role updates any unique attribute of a table of a kind, so a foreign key on it would block the command through child rows; the key never changes. A foreign key check also bypasses row level security, so a key on a guessable value would reveal rows of another tenant. Reference the key column.",
+      uk: "Роль команд змінює будь-який унікальний реквізит таблиці виду, тож зовнішній ключ на нього блокував би команду дочірніми рядками; ключ не змінюється. Перевірка зовнішнього ключа ще й іде повз RLS, тож ключ на вгадуване значення видавав би рядки чужого тенанта. Посилайтеся на колонку ключа.",
+    },
+  },
   "customTable.generated-conflict": {
     en: (p) => `Generated column cannot also have ${p.field}`,
     uk: (p) => `Генерована колонка не може мати ще й ${p.field}`,

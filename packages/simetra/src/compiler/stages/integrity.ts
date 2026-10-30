@@ -210,10 +210,16 @@ export function checkIntegrity(
   }
   diagnostics.push(...relationNameCollisions(model))
 
+  // Колонки цілей FK прийнятих таблиць, резолвлені стадією 2 в id елемента.
+  const fkTargets = new Map(
+    references
+      .filter((r) => r.role === "customTable.foreignKeyTarget")
+      .map((r) => [`${r.from.file}\0${r.from.pointer}`, r.to.id])
+  )
   for (const object of objects) {
     if (isDeclaredTable(object)) {
       diagnostics.push(
-        ...checkDeclaredTable(object, byKey, project.defaultSchema)
+        ...checkDeclaredTable(object, byKey, fkTargets, project.defaultSchema)
       )
     }
   }
@@ -1032,6 +1038,7 @@ function byteLength(name: string): number {
 function checkDeclaredTable(
   object: ParsedObject,
   byKey: ReadonlyMap<string, ParsedObject>,
+  fkTargets: ReadonlyMap<string, string>,
   defaultSchema: string
 ): Diagnostic[] {
   const table = object.data as CustomTable
@@ -1129,6 +1136,25 @@ function checkDeclaredTable(
       }
       if (
         target !== undefined &&
+        !isDeclaredTable(target) &&
+        !referencesKindKey(
+          target,
+          references.columns,
+          `${object.file}\0/foreignKeys/${i}`,
+          fkTargets
+        )
+      ) {
+        found.push(
+          diagnostic(
+            "customTable.fk-target-not-key",
+            object.file,
+            `/foreignKeys/${i}/references/columns`,
+            { kind: target.kind, name: target.name }
+          )
+        )
+      }
+      if (
+        target !== undefined &&
         isDeclaredTable(target) &&
         onlyDeferrableKey(target.data as CustomTable, references.columns)
       ) {
@@ -1153,6 +1179,36 @@ function checkDeclaredTable(
     }
   })
   return found
+}
+
+/**
+ * FK прийнятої таблиці на таблицю виду веде лише на ключ (Рб1-8). Роль команд
+ * змінює будь-який унікальний реквізит довідника, і FK `NO ACTION` мовчки
+ * блокував би команду дочірніми рядками; ключ незмінний. До того ж перевірка
+ * FK іде повз RLS: FK на вгадуване значення (код, номер) — оракул наявності
+ * рядка в чужому тенанті. Складений `(scope, key)` назвати не можна: колонки
+ * скоупу таблиці виду стадія 2 не резолвить (`customTable.column-unknown`).
+ * Нерезолвлену колонку вже звітовано — другої помилки на тому ж FK не даємо.
+ */
+function referencesKindKey(
+  target: ParsedObject,
+  columns: readonly string[],
+  pointer: string,
+  fkTargets: ReadonlyMap<string, string>
+): boolean {
+  const ids = columns.map((_, index) =>
+    fkTargets.get(`${pointer}/references/columns/${index}`)
+  )
+  if (ids.some((id) => id === undefined)) return true
+  const key = KIND_REGISTRY[target.kind]
+    .standardColumns(target.data)
+    .find((column) => column.primaryKey === true)
+  return (
+    key !== undefined &&
+    target.id !== undefined &&
+    ids.length === 1 &&
+    ids[0] === standardElementId(target.id, key)
+  )
 }
 
 /** Дії FK, що змінюють дочірні рядки разом з батьківським. */

@@ -21,6 +21,7 @@ import {
 const PROJECT = "project.meta.json"
 const LOG = "custom-tables/Log/Log.meta.json"
 const CURRENCY = "catalogs/Currency/Currency.meta.json"
+const STOCK = "custom-tables/Stock/Stock.meta.json"
 
 const LOG_ID = uuid(1)
 const COL_ID = uuid(2)
@@ -28,6 +29,7 @@ const COL_CODE = uuid(3)
 const COL_REF = uuid(4)
 const CURRENCY_ID = uuid(5)
 const SKU_ID = uuid(6)
+const STOCK_ID = uuid(7)
 
 const columns = [
   { id: COL_ID, name: "id", physicalName: "id", type: "UUID", notNull: true },
@@ -62,7 +64,7 @@ function fullLog({
       {
         columns: ["code"],
         references: {
-          object: { kind: "Catalog", name: "Currency" },
+          object: { kind: "CustomTable", name: "Stock" },
           columns: [skuColumn],
         },
       },
@@ -72,18 +74,33 @@ function fullLog({
   })
 }
 
-function currency(skuName = "sku") {
-  return catalog("Currency", {
-    id: CURRENCY_ID,
-    attributes: [
-      attribute(skuName, {
-        id: SKU_ID,
-        physicalName: "sku",
-        type: "String",
-        length: 10,
-      }),
-    ],
-  })
+/**
+ * Цілі FK: ключ довідника й не-ключова колонка прийнятої таблиці (FK на
+ * таблицю виду веде лише на ключ, Рб1-8).
+ */
+function targets(skuName = "sku") {
+  return {
+    [CURRENCY]: catalog("Currency", { id: CURRENCY_ID }),
+    [STOCK]: customTable("Stock", {
+      id: STOCK_ID,
+      columns: [
+        {
+          id: uuid(8),
+          name: "id",
+          physicalName: "id",
+          type: "UUID",
+          notNull: true,
+        },
+        {
+          id: SKU_ID,
+          name: skuName,
+          physicalName: "sku",
+          type: "String",
+          length: 10,
+        },
+      ],
+    }),
+  }
 }
 
 function files(entries: Record<string, unknown>) {
@@ -102,9 +119,7 @@ function columnRefs(result: CompileResult) {
 
 describe("custom table column references", () => {
   it("custom table column lists are indexed", async () => {
-    const result = await compile(
-      files({ [CURRENCY]: currency(), [LOG]: fullLog() })
-    )
+    const result = await compile(files({ ...targets(), [LOG]: fullLog() }))
     expect(result.diagnostics).toEqual([])
     expect(columnRefs(result)).toEqual([
       ["/foreignKeys/0/columns/0", "customTable.column", "Element", COL_REF],
@@ -137,13 +152,11 @@ describe("custom table column references", () => {
   })
 
   it("foreign key target columns map to physical names", async () => {
-    const result = await compile(
-      files({ [CURRENCY]: currency(), [LOG]: fullLog() })
-    )
+    const result = await compile(files({ ...targets(), [LOG]: fullLog() }))
     const table = result.model!.physical.tables.find((t) => t.name === "log")!
     // Знімок упорядковує FK за іменем, тож перший — за `code_col`.
     expect(table.foreignKeys.map((fk) => [fk.columns, fk.references])).toEqual([
-      [["code_col"], { schema: "public", table: "currency", columns: ["sku"] }],
+      [["code_col"], { schema: "public", table: "stock", columns: ["sku"] }],
       [
         ["currency_id"],
         { schema: "public", table: "currency", columns: ["id"] },
@@ -159,7 +172,7 @@ describe("custom table column references", () => {
   it("unknown column is reported by stage 2", () => {
     const stage1 = readFiles(
       files({
-        [CURRENCY]: currency(),
+        ...targets(),
         [LOG]: fullLog({
           primaryKey: { columns: ["nope"] },
           indexes: [{ keys: [{ column: "gone" }], include: [] }],
@@ -205,12 +218,10 @@ describe("custom table column references", () => {
     ])
   })
 
-  it("renaming a catalog attribute keeps the custom table canonical fragment", async () => {
+  it("renaming a target column keeps the custom table canonical fragment", async () => {
     const fragment = async (skuName: string) => {
       const log = fullLog({ skuColumn: skuName })
-      const result = await compile(
-        files({ [CURRENCY]: currency(skuName), [LOG]: log })
-      )
+      const result = await compile(files({ ...targets(skuName), [LOG]: log }))
       expect(result.diagnostics).toEqual([])
       const snapshot = canonicalSnapshot(result.model!) as {
         objects: { id: string; data: unknown }[]
@@ -234,7 +245,7 @@ describe("custom table column references", () => {
           expect.objectContaining({
             columns: [COL_CODE],
             references: {
-              object: { kind: "Catalog", id: CURRENCY_ID },
+              object: { kind: "CustomTable", id: STOCK_ID },
               columns: [SKU_ID],
             },
           }),
@@ -289,7 +300,7 @@ describe("custom table column references", () => {
     // стадії 4, а тут важить лише, чи кожне поле потрапило в індекс.
     const stage1 = readFiles(
       files({
-        [CURRENCY]: currency(),
+        ...targets(),
         [LOG]: fullLog({ scopeColumn: "id" }),
       })
     )

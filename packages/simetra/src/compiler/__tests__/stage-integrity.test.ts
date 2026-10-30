@@ -7,7 +7,9 @@ import {
   customTable,
   document,
   metaFiles,
+  organization,
   project,
+  scopedProject,
   uuid,
 } from "./helpers"
 
@@ -707,6 +709,141 @@ describe("stage 4: integrity", () => {
           }
         }
       )
+    })
+
+    describe("fk target on a table of a kind is its key (Рб1-8)", () => {
+      // Роль команд змінює унікальний реквізит таблиці виду, а перевірка FK
+      // іде повз RLS: FK на нього блокував би команду й був би оракулом
+      // наявності рядка в чужому тенанті. Ключ незмінний.
+      const NOT_KEY = "customTable.fk-target-not-key"
+      const UNKNOWN = "customTable.column-unknown"
+      const fkFrom = (
+        targetColumns: string[],
+        target = { kind: "Catalog", name: "Note" }
+      ) =>
+        compileWith({
+          [NOTE]: catalog("Note"),
+          "custom-tables/Other/Other.meta.json": customTable("Other", {
+            columns: [
+              {
+                id: uuid(773),
+                name: "id",
+                physicalName: "id",
+                type: "UUID",
+                notNull: true,
+              },
+              {
+                id: uuid(770),
+                name: "code",
+                physicalName: "code",
+                type: "Text",
+              },
+            ],
+          }),
+          [LOG]: customTable("Log", {
+            columns: [
+              ...columns,
+              {
+                id: uuid(771),
+                name: "code",
+                physicalName: "code",
+                type: "Text",
+              },
+            ],
+            foreignKeys: [
+              {
+                name: "log_fk",
+                columns: targetColumns.map((c) =>
+                  c === "code" ? "code" : "id"
+                ),
+                references: { object: target, columns: targetColumns },
+              },
+            ],
+          }),
+        })
+      const errors = (result: Awaited<ReturnType<typeof compileWith>>) =>
+        result.diagnostics
+          .filter((d) => d.severity === "error")
+          .map((d) => [d.code, d.pointer])
+      it.each([
+        { name: "the key", columns: ["ref"], expected: [] },
+        {
+          name: "a unique attribute",
+          columns: ["code"],
+          expected: [[NOT_KEY, "/foreignKeys/0/references/columns"]],
+        },
+        {
+          name: "the key and another column",
+          columns: ["ref", "code"],
+          expected: [[NOT_KEY, "/foreignKeys/0/references/columns"]],
+        },
+        // Невідому колонку звітує стадія 2: правило ключа її не дублює.
+        {
+          name: "an unknown column",
+          columns: ["missing"],
+          expected: [[UNKNOWN, "/foreignKeys/0/references/columns/0"]],
+        },
+      ])("$name", async ({ columns: target, expected }) => {
+        const result = await fkFrom(target)
+        expect(errors(result)).toEqual(expected)
+        if (expected[0]?.[0] === NOT_KEY) {
+          expect(result.diagnostics[0]!.params).toEqual({
+            kind: "Catalog",
+            name: "Note",
+          })
+        }
+      })
+
+      it("adopted target keeps any column", async () => {
+        const result = await fkFrom(["code"], {
+          kind: "CustomTable",
+          name: "Other",
+        })
+        expect(errors(result)).toEqual([])
+      })
+
+      // Складений `(scope, key)` назвати не можна: колонку скоупу таблиці
+      // виду стадія 2 не резолвить, тож і `(scope, id)`, і `(scope, code)`
+      // відхиляє `customTable.column-unknown`, а не це правило.
+      it.each([
+        ["org", "ref"],
+        ["org", "code"],
+      ])("scoped pair (%s, %s) is an unknown column", async (scope, column) => {
+        const result = await compile(
+          metaFiles({
+            "project.meta.json": scopedProject(),
+            "catalogs/Organization/Organization.meta.json": organization(),
+            [NOTE]: catalog("Note", { scope: "org" }),
+            [LOG]: customTable("Log", {
+              scope: "org",
+              scopeColumn: "org",
+              columns: [
+                ...columns,
+                {
+                  id: uuid(772),
+                  name: "org",
+                  physicalName: "org_id",
+                  type: "UUID",
+                  notNull: true,
+                },
+              ],
+              foreignKeys: [
+                {
+                  name: "log_fk",
+                  columns: ["org", "id"],
+                  references: {
+                    object: { kind: "Catalog", name: "Note" },
+                    columns: [scope, column],
+                  },
+                },
+              ],
+            }),
+          })
+        )
+        expect(errors(result)).toEqual([
+          [UNKNOWN, "/foreignKeys/0/references/columns/0"],
+        ])
+      })
     })
 
     describe("metadata expressions of an adopted table (Р2c1-41, Р2c1-55)", () => {
