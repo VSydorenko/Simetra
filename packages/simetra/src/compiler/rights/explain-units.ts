@@ -42,13 +42,40 @@ import {
 } from "./predicates"
 import { must } from "./references"
 
-/** Контракти пояснення: функції прав і контракти доступу таблиць. */
+/**
+ * Контракти пояснення: функції прав, контракти доступу таблиць і мітки виду
+ * об'єктів за id — об'єкт з `publicRead` без контракту прав мітку бере звідси.
+ */
 export type ExplainContracts = RightsFunctionContracts &
-  Pick<Contracts, "access">
+  Pick<Contracts, "access"> & { kindLabels: ReadonlyMap<string, string> }
 
 const F = RIGHTS_FUNCTIONS
 const FN = F.explain
 const USER = param(FN, "p_user")
+
+/**
+ * Чиї права й множини підставляє гілка: `p_user` — для рядків пояснення,
+ * поточний користувач — для перевірки, що рядок бачить сам викликач
+ * (Р2d2-19). Одна побудова рядків для обох, тож перевірка — ті самі
+ * предикати, що й політики, а не друга реалізація.
+ */
+interface Subject {
+  /** Аргумент варіантів `_of` і порівняння з поточним користувачем. */
+  user: string
+  /** Дійсний користувач для носія на «Користувачів». */
+  valid: string
+  /** CTE рядків прав цього користувача. */
+  granted: string
+}
+
+const CALLER: Subject = {
+  user: CURRENT_USER,
+  valid: CURRENT_USER,
+  granted: "caller_granted",
+}
+
+const DETAIL_SELECT =
+  "SELECT d.level, d.scope, d.container, d.object, d.action, d.extent, d.dimension_id, d.role_id, d.custom_role"
 
 /** Рядок пояснення: стала політики й вирази без колонок рядка об'єкта. */
 interface ExplainRow {
@@ -125,14 +152,22 @@ function explainBody(
     contracts,
     label: rightsPolicyLabel(contracts),
     visibleUsers: hasVisibleUsers(contracts, provider),
+    subject: {
+      user: USER,
+      valid: userOf(FN, contracts).user,
+      granted: "granted",
+    },
   }
   const branches = contracts.access.flatMap((access) => {
     const rights =
       access.rights === undefined
         ? undefined
         : rightsById.get(access.rights.objectId)
-    if (rights === undefined) return []
-    const main = must(mainTableOf(physical, rights.objectId))
+    // Рядки об'єкта без контракту прав відкриває лише `publicRead`
+    // (`buildAccessUnits` ставить його політику незалежно від прав); без нього
+    // такого рядка не бачить ніхто — пояснювати нічого.
+    if (rights === undefined && access.publicRead.length === 0) return []
+    const main = must(mainTableOf(physical, access.objectId))
     if (main.schema !== access.table.schema || main.name !== access.table.name)
       return []
     // Рядок названо одним `p_row` лише за одноколонковим uuid-ключем `ref`:
@@ -140,15 +175,19 @@ function explainBody(
     // пояснює рядок власника.
     const key = rootFamilyKey(main, main)
     if (key === undefined) return []
-    return branch(access, rights, main, key, context) ?? []
+    const label = must(contracts.kindLabels.get(access.objectId))
+    return branch(access, rights, label, main, key, context) ?? []
   })
   if (branches.length === 0) {
     return `SELECT ${OUTPUT.map(([name, type]) => `NULL::${type} AS ${name}`).join(", ")} WHERE false`
   }
   return [
     "WITH granted AS (",
-    "  SELECT d.level, d.scope, d.container, d.object, d.action, d.extent, d.dimension_id, d.role_id, d.custom_role",
+    `  ${DETAIL_SELECT}`,
     `  FROM ${call(F.detailOf, [USER])} d`,
+    `), ${CALLER.granted} AS (`,
+    `  ${DETAIL_SELECT}`,
+    `  FROM ${call(F.detailOf, [CURRENT_USER])} d`,
     ")",
     branches.join("\nUNION ALL\n"),
   ].join("\n")
@@ -158,6 +197,8 @@ interface BranchContext {
   contracts: ExplainContracts
   label: (predicate: RightsPredicate, contract: RightsContract) => string
   visibleUsers: boolean
+  /** Користувач рядків пояснення — `p_user`. */
+  subject: Subject
 }
 
 /**
@@ -167,11 +208,75 @@ interface BranchContext {
  */
 function branch(
   access: AccessContract,
-  rights: RightsContract,
+  rights: RightsContract | undefined,
+  kindLabel: string,
   main: PhysicalTable,
   key: string,
-  { contracts, label, visibleUsers }: BranchContext
+  context: BranchContext
 ): string | undefined {
+  const rows = explainRows(access, rights, main, context, context.subject)
+  if (rows.length === 0) return undefined
+  const { contracts } = context
+  const { scope } = access
+  const publicRead = access.publicRead.length > 0
+  // Скоуп рядка задає вид скоупу об'єкта й колонка скоупу рядка;
+  // нескоуплений об'єкт питає лише глобальний адміністратор (Р2d2-3).
+  const request: AnalysisScope =
+    scope === undefined
+      ? { kind: uuidLiteral(ZERO_UUID), scope: uuidLiteral(ZERO_UUID) }
+      : { kind: uuidLiteral(scope.scopeKindId), scope: row(scope.carrier) }
+  const where = [
+    `${param(FN, "p_object")} = ${sqlLiteral(kindLabel)}`,
+    `${row(key)} = ${param(FN, "p_row")}`,
+    analysisGate(contracts, request),
+    // `p_user` мусить належати скоупу рядка (Р2d2-6): адміністратор A не
+    // дізнається фактів користувача, що належить лише B. Рядок `publicRead`
+    // видно кожному — пояснення фактів `p_user` не розкриває.
+    ...(scope !== undefined && !publicRead
+      ? [
+          `EXISTS (SELECT 1 FROM ${call(F.scopesOf, [USER])} s WHERE s.scope_kind_id = ${uuidLiteral(scope.scopeKindId)} AND s.scope = ${row(scope.carrier)})`,
+        ]
+      : []),
+    // Пояснюється лише рядок, який бачить сам викликач (Р2d2-19): інакше
+    // адміністратор без `read` дізнався б носії рядка з `carrier_match`.
+    visibility(explainRows(access, rights, main, context, CALLER)),
+  ]
+  return [
+    "SELECT e.policy, e.kind, e.extent, e.has_right, e.carrier_match, e.roles",
+    `FROM ${qualified(access.table)} r`,
+    "CROSS JOIN LATERAL (",
+    rows.map(renderRow).join("\n  UNION ALL\n"),
+    ") e",
+    `WHERE ${where.join("\n  AND ")}`,
+  ].join("\n")
+}
+
+/**
+ * Правило видимості над рядками пояснення — те саме, що RLS: кожен
+ * `restrictive` (AND) і хоч один `permissive` (OR) з `has_right AND
+ * carrier_match`. `NULL` у `WHERE` — не видно, як у політики.
+ */
+function visibility(rows: readonly ExplainRow[]): string {
+  const restrictive = rows
+    .filter((r) => r.kind === "restrictive")
+    .map((r) => `(${r.carrierMatch})`)
+  const permissive = rows
+    .filter((r) => r.kind === "permissive")
+    .map((r) => `(${r.hasRight} AND ${r.carrierMatch})`)
+  return [
+    ...restrictive,
+    permissive.length === 0 ? "FALSE" : `(${permissive.join(" OR ")})`,
+  ].join(" AND ")
+}
+
+/** Рядки пояснення основної таблиці для користувача `subject`. */
+function explainRows(
+  access: AccessContract,
+  rights: RightsContract | undefined,
+  main: PhysicalTable,
+  { contracts, label, visibleUsers }: BranchContext,
+  subject: Subject
+): ExplainRow[] {
   const names = accessPolicyNames(access.table)
   const publicRead = access.publicRead.length > 0
   const rows: ExplainRow[] = []
@@ -184,7 +289,12 @@ function branch(
       kind: "restrictive",
       extent: null,
       hasRight: "TRUE",
-      carrierMatch: scopeSetMatch(contracts, scope, row(scope.carrier)),
+      carrierMatch: scopeSetMatch(
+        contracts,
+        scope,
+        row(scope.carrier),
+        subject
+      ),
       roles: NO_ROLES,
     })
   }
@@ -195,7 +305,7 @@ function branch(
       extent: null,
       hasRight: "TRUE",
       carrierMatch: inSet(
-        call(F.visibleUsersOf, [USER]),
+        call(F.visibleUsersOf, [subject.user]),
         row(must(contracts.users).keyColumn)
       ),
       roles: NO_ROLES,
@@ -210,7 +320,10 @@ function branch(
       carrierMatch: "TRUE",
       roles: NO_ROLES,
     })
-  } else if (rights.actions.some((a) => a.action === "read")) {
+  } else if (
+    rights !== undefined &&
+    rights.actions.some((a) => a.action === "read")
+  ) {
     const dimensions = new Map(
       contracts.accessDimensions.map((d) => [uuidLiteral(d.dimensionId), d])
     )
@@ -220,40 +333,13 @@ function branch(
           predicate,
           rights,
           names.rights(label(predicate, rights)),
-          contracts,
-          dimensions
+          dimensions,
+          subject
         )
       )
     }
   }
-  if (rows.length === 0) return undefined
-  // Скоуп рядка задає вид скоупу об'єкта й колонка скоупу рядка;
-  // нескоуплений об'єкт питає лише глобальний адміністратор (Р2d2-3).
-  const request: AnalysisScope =
-    scope === undefined
-      ? { kind: uuidLiteral(ZERO_UUID), scope: uuidLiteral(ZERO_UUID) }
-      : { kind: uuidLiteral(scope.scopeKindId), scope: row(scope.carrier) }
-  const where = [
-    `${param(FN, "p_object")} = ${sqlLiteral(rights.kindLabel)}`,
-    `${row(key)} = ${param(FN, "p_row")}`,
-    analysisGate(contracts, request),
-    // `p_user` мусить належати скоупу рядка (Р2d2-6): адміністратор A не
-    // дізнається фактів користувача, що належить лише B. Рядок `publicRead`
-    // видно кожному — пояснення фактів `p_user` не розкриває.
-    ...(scope !== undefined && !publicRead
-      ? [
-          `EXISTS (SELECT 1 FROM ${call(F.scopesOf, [USER])} s WHERE s.scope_kind_id = ${uuidLiteral(scope.scopeKindId)} AND s.scope = ${row(scope.carrier)})`,
-        ]
-      : []),
-  ]
-  return [
-    "SELECT e.policy, e.kind, e.extent, e.has_right, e.carrier_match, e.roles",
-    `FROM ${qualified(access.table)} r`,
-    "CROSS JOIN LATERAL (",
-    rows.map(renderRow).join("\n  UNION ALL\n"),
-    ") e",
-    `WHERE ${where.join("\n  AND ")}`,
-  ].join("\n")
+  return rows
 }
 
 /**
@@ -265,8 +351,8 @@ function predicateRow(
   predicate: RightsPredicate,
   rights: RightsContract,
   policy: string,
-  contracts: ExplainContracts,
-  dimensions: ReadonlyMap<string, ExplainContracts["accessDimensions"][number]>
+  dimensions: ReadonlyMap<string, ExplainContracts["accessDimensions"][number]>,
+  subject: Subject
 ): ExplainRow {
   const grants = predicate.conditions.filter(isGrant)
   if (grants.length !== 1) throw new Error("internal: one grant per predicate")
@@ -278,14 +364,14 @@ function predicateRow(
     policy,
     kind: "permissive",
     extent: typeof inner === "string" ? inner : "dimension",
-    hasRight: `EXISTS (SELECT 1 FROM granted g WHERE ${filter})`,
+    hasRight: `EXISTS (SELECT 1 FROM ${subject.granted} g WHERE ${filter})`,
     carrierMatch:
       mine.length === 0
         ? "TRUE"
         : mine
-            .map((condition) => carrierMatch(condition, contracts, dimensions))
+            .map((condition) => carrierMatch(condition, dimensions, subject))
             .join(" AND "),
-    roles: `ARRAY(SELECT DISTINCT x.role FROM granted g CROSS JOIN LATERAL (VALUES (g.role_id), (g.custom_role)) AS x(role) WHERE ${filter} AND x.role IS NOT NULL ORDER BY x.role)`,
+    roles: `ARRAY(SELECT DISTINCT x.role FROM ${subject.granted} g CROSS JOIN LATERAL (VALUES (g.role_id), (g.custom_role)) AS x(role) WHERE ${filter} AND x.role IS NOT NULL ORDER BY x.role)`,
   }
 }
 
@@ -342,25 +428,25 @@ const columnOf = (condition: RightsCondition): string | undefined =>
  */
 function carrierMatch(
   condition: RightsCondition,
-  contracts: ExplainContracts,
-  dimensions: ReadonlyMap<string, ExplainContracts["accessDimensions"][number]>
+  dimensions: ReadonlyMap<string, ExplainContracts["accessDimensions"][number]>,
+  subject: Subject
 ): string {
   switch (condition.kind) {
     case "currentUser":
       // Носій на «Користувачів» — сам `p_user`, лише дійсний, як у
       // `current_user_id()`; недійсний — FALSE, як і порожня множина.
-      return `COALESCE(${row(condition.column)} = ${userOf(FN, contracts).user}, FALSE)`
+      return `COALESCE(${row(condition.column)} = ${subject.valid}, FALSE)`
     case "column": {
       const { fn, args } = condition.set
       const column = row(condition.column)
       if (same(fn, F.myMembers)) {
-        return inSet(call(F.membersOf, [USER, ...args]), column)
+        return inSet(call(F.membersOf, [subject.user, ...args]), column)
       }
       if (same(fn, F.dimensionValues)) {
         const dimension = must(dimensions.get(must(args[0])))
         return "function" in dimension.values
-          ? currentOnly(inSet(call(fn, args), column))
-          : inSet(call(F.dimensionValuesOf, [USER, ...args]), column)
+          ? currentOnly(inSet(call(fn, args), column), subject)
+          : inSet(call(F.dimensionValuesOf, [subject.user, ...args]), column)
       }
       throw new Error(`internal: no analysis variant of ${qualified(fn)}`)
     }
@@ -377,7 +463,8 @@ function carrierMatch(
 function scopeSetMatch(
   contracts: ExplainContracts,
   scope: NonNullable<AccessContract["scope"]>,
-  column: string
+  column: string,
+  subject: Subject
 ): string {
   const membership = contracts.membership.some(
     (m) =>
@@ -386,13 +473,16 @@ function scopeSetMatch(
       same(m.setFunction, scope.setFunction)
   )
   return membership
-    ? inSet(call(F.scopeSetOf, [USER, uuidLiteral(scope.scopeKindId)]), column)
-    : currentOnly(inSet(call(scope.setFunction), column))
+    ? inSet(
+        call(F.scopeSetOf, [subject.user, uuidLiteral(scope.scopeKindId)]),
+        column
+      )
+    : currentOnly(inSet(call(scope.setFunction), column), subject)
 }
 
 /** Для іншого користувача множина невідома — `NULL`, а не FALSE. */
-const currentOnly = (match: string) =>
-  `CASE WHEN ${USER} = ${CURRENT_USER} THEN ${match} ELSE NULL END`
+const currentOnly = (match: string, subject: Subject) =>
+  `CASE WHEN ${subject.user} = ${CURRENT_USER} THEN ${match} ELSE NULL END`
 
 /**
  * Значення ∈ множини — строго TRUE чи FALSE: `EXISTS` істинний рівно тоді,

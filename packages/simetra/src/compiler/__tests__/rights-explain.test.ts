@@ -2,11 +2,13 @@ import { beforeAll, describe, expect, it } from "vitest"
 import { compile, type CompiledModel } from "simetra/compiler"
 import { PLATFORM_ROLES, PROVIDER_API_ROLES } from "simetra/model"
 import { compareStrings } from "../diagnostics"
+import { buildExplainUnits } from "../rights/explain-units"
 import { RIGHTS_FUNCTIONS } from "../rights/functions"
 import { hasEmptySearchPath, routineLanguage } from "../sql/closed-forms"
 import { loadSqlParser, type SqlParser } from "../sql/parse"
 import { withoutLocations, type SqlUnit } from "../sql/units"
 import {
+  BULLETIN_TABLE,
   HOURS_TABLES,
   ORG_KIND_ID,
   PROJECT_FILE,
@@ -17,6 +19,7 @@ import {
   globalConstant,
   policyDomain,
   regionDimension,
+  writeRoles,
 } from "./fixtures/rights"
 
 const F = RIGHTS_FUNCTIONS
@@ -118,6 +121,34 @@ const branchLabels = (model: CompiledModel) =>
     }
     return first.A_Expr.rexpr.A_Const.sval.sval
   })
+
+/** Таблиця гілки — `FROM <таблиця> r`. */
+const tableOf = (branch: Select) =>
+  (
+    branch.fromClause![0] as {
+      JoinExpr: { larg: { RangeVar: { relname: string } } }
+    }
+  ).JoinExpr.larg.RangeVar.relname
+
+/**
+ * Вираз рядка пояснення для викликача: `p_user` → поточний користувач,
+ * права `granted` → `caller_granted`. Підстановка — на дереві.
+ */
+function asCaller(node: unknown): unknown {
+  const userRef = JSON.stringify(exprTree(P("p_user")))
+  const walk = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(walk)
+    if (typeof value !== "object" || value === null) return value
+    if (JSON.stringify(value) === userRef) return exprTree(CURRENT)
+    const node = value as Record<string, unknown>
+    if (node.relname === "granted")
+      return { ...node, relname: "caller_granted" }
+    return Object.fromEntries(
+      Object.entries(node).map(([key, child]) => [key, walk(child)])
+    )
+  }
+  return walk(node)
+}
 
 interface Row {
   policy: string
@@ -287,19 +318,104 @@ describe("rights_explain", () => {
     expect(labels).toContain("task")
     expect(labels).toContain("users")
     for (const label of labels) {
-      const contract = model.contracts.rights.find(
-        (c) => c.kindLabel === label
-      )!
-      expect(explained(rowsOf(branchOf(model, label)!)), label).toEqual(
-        selectPolicies(model, contract.table.name)
+      const branch = branchOf(model, label)!
+      expect(explained(rowsOf(branch)), label).toEqual(
+        selectPolicies(model, tableOf(branch))
       )
     }
+  })
+
+  it("a public read object without a rights contract gets its public_read branch", async () => {
+    // Р2d2-6: політику `<t>_public_read` `buildAccessUnits` ставить і без
+    // контракту прав — її рядок видно кожному, тож і пояснення є. Кожен вид
+    // з RLS нині має обсяги прав, тож об'єкт без контракту — ті самі
+    // контракти домену без контракту прав `Bulletin`.
+    const domain = compiled(await compile(policyDomain(writeRoles())))
+    const bulletin = domain.contracts.rights.find(
+      (c) => c.kindLabel === BULLETIN_TABLE
+    )!
+    const units = buildExplainUnits(
+      {
+        ...domain.contracts,
+        rights: domain.contracts.rights.filter((c) => c !== bulletin),
+        access: domain.contracts.access.map((a) =>
+          a.objectId === bulletin.objectId ? { ...a, rights: undefined } : a
+        ),
+        kindLabels: new Map(
+          domain.contracts.rights.map((c) => [c.objectId, c.kindLabel])
+        ),
+      },
+      domain.physical,
+      "supabase",
+      domain.project.name,
+      parse
+    )
+    const written = { ...domain, sqlUnits: units }
+    const branch = branchOf(written, BULLETIN_TABLE)!
+    expect(rowsOf(branch)).toEqual([
+      {
+        policy: `${BULLETIN_TABLE}_public_read`,
+        kind: "permissive",
+        extent: null,
+        hasRight: TRUE,
+        carrierMatch: TRUE,
+        roles: NO_ROLES,
+      },
+    ])
+    expect(explained(rowsOf(branch))).toEqual(
+      selectPolicies(domain, BULLETIN_TABLE)
+    )
+    // Гейт лишається (довідник скоуплений — гейт `org` зі скоупом рядка),
+    // перевірки членства `p_user` немає; видимість викликачу — `TRUE`.
+    expect(conjuncts(branch.whereClause)).toEqual(
+      [
+        `${P("p_object")} = '${BULLETIN_TABLE}'`,
+        `r.id = ${P("p_row")}`,
+        `EXISTS (SELECT 1 FROM simetra.rights_mine() g WHERE g.action = 'administerRights' AND (('${ORG_KIND_ID}'::uuid = '${ZERO}'::uuid AND r.org_id = '${ZERO}'::uuid AND g.level = 'global' AND g.object = 'global_role_assignments') OR ('${ORG_KIND_ID}'::uuid = '${ORG_KIND_ID}'::uuid AND g.level = 'scope' AND g.level_id = '${ORG_KIND_ID}'::uuid AND g.scope = r.org_id AND g.object = 'org_role_assignments')))`,
+        "(TRUE AND TRUE)",
+      ].map(exprTree)
+    )
+  })
+
+  it("explains only a row the caller sees: the same rows for the current user under the RLS rule", () => {
+    // Р2d2-19: та сама побудова рядків, але для `current_user_id()` і його
+    // прав (`caller_granted`) — RESTRICTIVE через AND, PERMISSIVE через OR.
+    const branch = branchOf(model, "task")!
+    const caller = rowsOf(branch).map((r) => ({
+      ...r,
+      hasRight: asCaller(r.hasRight),
+      carrierMatch: asCaller(r.carrierMatch),
+    }))
+    // `WHERE` складає кон'юнкти через AND, тож межі викликача — окремі
+    // кон'юнкти після членства `p_user`, далі OR предикатів.
+    const visibility = conjuncts(branch.whereClause).slice(4)
+    expect(visibility).toEqual([
+      ...caller
+        .filter((r) => r.kind === "restrictive")
+        .map((r) => r.carrierMatch),
+      {
+        BoolExpr: {
+          boolop: "OR_EXPR",
+          args: caller
+            .filter((r) => r.kind === "permissive")
+            .map((r) => ({
+              BoolExpr: {
+                boolop: "AND_EXPR",
+                args: [r.hasRight, r.carrierMatch],
+              },
+            })),
+        },
+      },
+    ])
+    const text = JSON.stringify(visibility)
+    expect(text).not.toContain('"p_user"')
+    expect(text).toContain('"current_user_id"')
   })
 
   it("the task branch: gate of the row's scope, p_user a member of it, the row by key", () => {
     // Р2d2-3: гейт — вид скоупу об'єкта й скоуп рядка; Р2d2-6: `p_user`
     // мусить належати скоупу рядка, інакше порожньо.
-    expect(conjuncts(branchOf(model, "task")!.whereClause)).toEqual(
+    expect(conjuncts(branchOf(model, "task")!.whereClause).slice(0, 4)).toEqual(
       [
         `${P("p_object")} = 'task'`,
         `r.id = ${P("p_row")}`,
@@ -382,7 +498,7 @@ describe("rights_explain", () => {
     const users = model.contracts.users!
     const key = users.keyColumn
     const branch = branchOf(model, "users")!
-    expect(conjuncts(branch.whereClause)).toEqual(
+    expect(conjuncts(branch.whereClause).slice(0, 3)).toEqual(
       [
         `${P("p_object")} = 'users'`,
         `r.${key} = ${P("p_row")}`,
@@ -480,7 +596,8 @@ describe("rights_explain", () => {
       },
     ])
     const where = conjuncts(branch.whereClause)
-    expect(where).toHaveLength(3)
+    expect(where).toHaveLength(4)
+    expect(where[3]).toEqual(exprTree("(TRUE AND TRUE)"))
     expect(JSON.stringify(where)).not.toContain("rights_scopes_of")
   })
 
