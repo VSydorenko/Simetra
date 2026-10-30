@@ -635,6 +635,8 @@ function saveFunction(
       "v_key text;",
       "v_constraint text;",
       "v_ids uuid[];",
+      "v_ts_delete bigint;",
+      "v_ts_update bigint;",
       "v_result jsonb;",
       "v_tabular jsonb;",
     ],
@@ -902,8 +904,18 @@ function sectionLines(
       [noRight]
     ),
     ...references,
+    // Рядки ТЧ — той самий механізм, що шапка (Р-A2-21): замок рядків цього
+    // власника в сталому порядку ключа (дві команди не замкнуть їх навхрест)
+    // і очікувані кількості. `DELETE` чи `UPDATE`, що зачепив менше рядків
+    // (політика `DELETE`/`UPDATE` відсікла рядок, видимий замку), інакше
+    // мовчки загубив би зміну — це відмова, як нуль рядків шапки.
+    `SELECT count(*) FILTER (WHERE l.${key} <> ALL (v_ids)), count(*) FILTER (WHERE l.${key} = ANY (v_ids)) INTO v_ts_delete, v_ts_update FROM (SELECT r.${key} FROM ${ts} r WHERE r.${parent} = ${root} ORDER BY r.${key} FOR NO KEY UPDATE) AS l;`,
     `DELETE FROM ${ts} r WHERE r.${parent} = ${root} AND r.${key} <> ALL (v_ids);`,
+    "GET DIAGNOSTICS v_count = ROW_COUNT;",
+    ...ifThen("v_count IS DISTINCT FROM v_ts_delete", [noRight]),
     `UPDATE ${ts} r SET ${set} FROM ${elements} WHERE r.${key} = v.${key} AND r.${parent} = ${root};`,
+    "GET DIAGNOSTICS v_count = ROW_COUNT;",
+    ...ifThen("v_count IS DISTINCT FROM v_ts_update", [noRight]),
     "BEGIN",
     ...indent([
       `INSERT INTO ${ts} (${insertColumns.map(q).join(", ")}) SELECT ${insertValues.join(", ")} FROM ${elements} WHERE NOT EXISTS (SELECT 1 FROM ${ts} r WHERE r.${key} = v.${key} AND r.${parent} = ${root});`,

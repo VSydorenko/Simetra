@@ -281,6 +281,63 @@ describe("buildCatalogCommandUnits — <t>_save", () => {
     )
   })
 
+  // Рядки ТЧ — той самий механізм, що шапка (Р-A2-21): замок рядків власника
+  // і звірка кількості рядків кожного DML, інакше рядок, який відсікла
+  // політика `DELETE`/`UPDATE`, мовчки загубив би зміну.
+  it("ТЧ: замок шапки → UPDATE шапки → замок рядків ТЧ → DELETE → звірка → UPDATE → звірка → INSERT", () => {
+    const shape = bodyShape(saveSql(domain, "ticket"))
+    const ts = `public.${TICKET_CHECKLIST_TABLE}`
+    const ofTs = (s: Shape[number]) =>
+      nodes(s.expressions[0]?.tree, "relname").includes(TICKET_CHECKLIST_TABLE)
+    const headerLock = shape.findIndex(
+      (s) => s.type === "execsql" && s.target?.variable === "v_old"
+    )
+    const headerUpdate = shape.findIndex(
+      (s, i) => i > headerLock && dmlKind(s) === "UpdateStmt" && !ofTs(s)
+    )
+    const rowsLock = at(
+      shape,
+      "execsql",
+      `SELECT count(*) FILTER (WHERE l.id <> ALL (v_ids)), count(*) FILTER (WHERE l.id = ANY (v_ids)) FROM (SELECT r.id FROM ${ts} r WHERE r.parent_id = v_in.id ORDER BY r.id FOR NO KEY UPDATE) AS l`
+    )
+    const dml = (kind: string) =>
+      shape.findIndex((s) => dmlKind(s) === kind && ofTs(s))
+    const remove = dml("DeleteStmt")
+    const update = dml("UpdateStmt")
+    const insert = dml("InsertStmt")
+    const order = [headerLock, headerUpdate, rowsLock, remove, update, insert]
+    expect(order.every((i) => i >= 0)).toBe(true)
+    expect([...order].sort((a, b) => a - b)).toEqual(order)
+    expect(shape[rowsLock]!.target).toEqual({
+      variable: expect.stringContaining("v_ts_delete"),
+    })
+    expect(lockStrengths(shape[rowsLock]!.expressions[0]!.tree)).toEqual([
+      "LCS_FORNOKEYUPDATE",
+    ])
+    // Кожен DML рядків ТЧ: одразу `GET DIAGNOSTICS`, звірка з очікуваною
+    // кількістю й відмова `no-right`, як нуль рядків шапки.
+    for (const [statement, expected] of [
+      [remove, "v_ts_delete"],
+      [update, "v_ts_update"],
+    ] as const) {
+      expect(shape[statement + 1], expected).toMatchObject({
+        type: "getdiag",
+        target: { variable: "v_count" },
+      })
+      const check = ifAt(
+        shape,
+        `v_count IS DISTINCT FROM ${expected}`,
+        statement + 2
+      )
+      expect(check, expected).toBe(statement + 2)
+      expect(strings(shape[check + 1]!.expressions)).toEqual([
+        "42501",
+        "command.forbidden",
+        "no-right",
+      ])
+    }
+  })
+
   // Посилання рядка ТЧ перевіряються над рядком «після» (`n`): наявний рядок
   // цього власника з накладеними ключами елемента, новий — значення за
   // замовчуванням з накладеним входом. Над самим входом (`v`) відсутній
