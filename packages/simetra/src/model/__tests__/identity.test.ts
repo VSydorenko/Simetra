@@ -20,6 +20,12 @@ describe("metadataIdSchema", () => {
     expect(metadataIdSchema.safeParse("not-a-uuid").success).toBe(false)
   })
 
+  it("відхиляє нульовий uuid: функції аналізу прав читають його як глобальну форму", () => {
+    expect(
+      metadataIdSchema.safeParse("00000000-0000-0000-0000-000000000000").success
+    ).toBe(false)
+  })
+
   it("відхиляє верхній регістр: інакше той самий UUID обійде identity.id-duplicate", () => {
     expect(
       metadataIdSchema.safeParse("3F0C2A7E-1B2D-4C3E-9F4A-5B6C7D8E9F01").success
