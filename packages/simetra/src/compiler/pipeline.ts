@@ -54,6 +54,7 @@ import {
   movementWrapperName,
 } from "./movement-functions"
 import { buildAuthorUnits } from "./author-units"
+import { buildHierarchyUnits } from "./hierarchy-units"
 import { buildMechanicsUnits } from "./mechanics-units"
 import { buildCarrierUnits } from "./rights/carrier-units"
 import { buildCommandUnits } from "./rights/command-units"
@@ -192,7 +193,8 @@ export async function runStages(
           stage2.references,
           stage3.physical,
           movementWrapperName,
-          stage1.project.scopeKinds
+          stage1.project.scopeKinds,
+          stage1.project.naming.attributeCase
         )
   const expressions = (reading: boolean): ExpressionScope | undefined =>
     derived === undefined || stage1.project === undefined
@@ -528,6 +530,14 @@ export async function runStages(
     ...buildAuthorUnits(
       physical,
       { roles, users, membershipSources: sources.membershipSources },
+      stage1.project.naming.attributeCase,
+      stage1.project.database.provider,
+      module,
+      parse
+    ),
+    ...buildHierarchyUnits(
+      physical,
+      stage1.objects,
       stage1.project.naming.attributeCase,
       stage1.project.database.provider,
       module,

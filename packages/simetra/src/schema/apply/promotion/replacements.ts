@@ -10,6 +10,7 @@ import {
   contentChangeCondition,
   effectsFunctionName,
   effectsTriggerNames,
+  hierarchyNames,
   rightsGuardNames,
   mechanicsTriggerName,
   mechanicsUpdateTriggerName,
@@ -1204,13 +1205,19 @@ function triggerReplacement(
       (entry) =>
         t.name === entry.trigger && sameFunction(t.function, entry.function)
     )
+  // Тригери ієрархії (Р-A2-1) — платформні за іменем і функцією таблиці
+  const hierarchyFns = hierarchyNames({ schema: key.schema, name: table })
+  const hierarchy = (t: TriggerShape) =>
+    (t.name === hierarchyFns.insert || t.name === hierarchyFns.update) &&
+    sameFunction(t.function, hierarchyFns.fn)
   const platform = (t: TriggerShape) =>
     touch(t) ||
     touchUpdate(t) ||
     author(t) ||
     carrier(t) ||
     effect(t) ||
-    guard(t)
+    guard(t) ||
+    hierarchy(t)
 
   // Механіка спрацьовує й на вставку — ширше за `moddatetime`, і це
   // посилення: дата й версія правильні й на вставці (спека промоції §8).

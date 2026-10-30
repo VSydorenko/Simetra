@@ -126,7 +126,8 @@ function writingGenerated(
       references,
       physical,
       movementWrapperName,
-      project.scopeKinds
+      project.scopeKinds,
+      project.naming.attributeCase
     )
       .filter((fn) => fn.reads !== true && fn.membership !== true)
       .map((fn) => `${fn.schema}.${fn.name}`)

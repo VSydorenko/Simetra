@@ -33,6 +33,7 @@ import {
   authorCarrier,
   policyDomain,
   singleTenantRights,
+  commandCoreLayer,
   writeRoles,
 } from "../../compiler/__tests__/fixtures/rights"
 
@@ -1511,6 +1512,66 @@ describe("reverseGenerate", () => {
     expect(written).toContain("CREATE TRIGGER note_audit")
     expect(written).not.toContain("simetra_author")
     expect(written).not.toContain('"author"')
+  })
+
+  it("recognizes hierarchy triggers and the hierarchy function as platform", async () => {
+    // Р-A2-1: тригери ієрархії й функція ієрархії таблиці — платформні, як
+    // тригери носіїв. Одиниці — справжній вихід генератора
+    const compiled = await compile(
+      policyDomain(writeRoles(), commandCoreLayer())
+    )
+    expectClean(compiled)
+    const platform = compiled.model!.sqlUnits.filter(
+      (u) => u.generator === "mechanics" && u.identity.includes("_hierarchy")
+    )
+    expect(
+      platform.filter((u) => u.class === "trigger").map((u) => u.name)
+    ).toEqual(["ticket_simetra_hierarchy", "ticket_simetra_hierarchy_update"])
+    expect(new Set(platform.map((u) => u.class))).toEqual(
+      new Set(["function", "grant", "trigger"])
+    )
+    const AUDIT_FN =
+      "CREATE FUNCTION public.audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;"
+    const AUDIT =
+      "CREATE TRIGGER ticket_audit AFTER UPDATE ON public.ticket FOR EACH ROW EXECUTE FUNCTION public.audit();"
+    const result = await reverseGenerate(
+      model({
+        units: [
+          ...platform.map((u) => ({
+            class: u.class,
+            identity: u.identity,
+            schema: u.schema,
+            name: u.name,
+            sql: u.sql,
+          })),
+          ...units([AUDIT_FN, AUDIT].join("\n")),
+        ],
+      }),
+      options(new Map(), { defaultSchema: "public" })
+    )
+    expect(errors(result)).toEqual([])
+    const written = [...result.files.values()].join("\n")
+    expect(written).toContain("CREATE TRIGGER ticket_audit")
+    expect(written).not.toContain("simetra_hierarchy")
+  })
+
+  it("a hierarchy-named trigger that calls another function is written", async () => {
+    // Fail-closed: ім'я тригера ієрархії без власної функції — тригер таблиці
+    const FN =
+      "CREATE FUNCTION app.stamp() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;"
+    const NAMESAKE =
+      "CREATE TRIGGER note_simetra_hierarchy AFTER UPDATE ON app.note FOR EACH ROW EXECUTE FUNCTION app.stamp();"
+    const result = await reverseGenerate(
+      model({
+        tables: [table("app", "note")],
+        units: units([FN, NAMESAKE].join("\n")),
+      }),
+      options()
+    )
+    expect(errors(result)).toEqual([])
+    expect([...result.files.values()].join("\n")).toContain(
+      "CREATE TRIGGER note_simetra_hierarchy"
+    )
   })
 
   it("introspect over a deployed write-rights layer writes nothing for command functions", async () => {

@@ -153,7 +153,8 @@ export function checkIntegrity(
         references,
         model.physical,
         movementWrapperName,
-        scopeKinds
+        scopeKinds,
+        style
       ),
       sqlUnits
     )

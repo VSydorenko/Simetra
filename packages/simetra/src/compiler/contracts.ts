@@ -31,6 +31,7 @@ import {
   membershipFunctionNames,
   membershipsOf,
 } from "./membership-functions"
+import { hierarchyNames, hierarchyTables } from "./hierarchy-units"
 import { carrierFunctions } from "./rights/carrier-units"
 import { effectsFunctionName } from "./rights/effects-names"
 import { writesByCommand } from "./rights/facts"
@@ -900,7 +901,8 @@ export function derivedFunctions(
   references: readonly ResolvedReference[],
   physical: PhysicalSnapshot,
   wrapperName: (document: PhysicalTable, register: PhysicalTable) => string,
-  scopeKinds: readonly ScopeKind[]
+  scopeKinds: readonly ScopeKind[],
+  attributeCase: AttributeCase
 ): DerivedFunction[] {
   const result: DerivedFunction[] = []
   const add = (
@@ -926,6 +928,17 @@ export function derivedFunctions(
       object,
       fn,
       `${role === "derive" ? "carrier copies" : "carrier propagation"} of ${table.schema}.${table.name}`
+    )
+  }
+  // Функції ієрархії (Р-A2-1) — згенеровані одиниці з іменами від таблиць,
+  // як функції носіїв.
+  for (const { table } of hierarchyTables(physical, objects, attributeCase)) {
+    const object = byId.get(table.origin.objectId)
+    if (object === undefined) continue
+    add(
+      object,
+      hierarchyNames(table).fn,
+      `hierarchy check of ${table.schema}.${table.name}`
     )
   }
   // Функції ефектів (Р2b1-11) — з надлишком, на кожну таблицю з кореневою

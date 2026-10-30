@@ -44,6 +44,7 @@ export {
   authorTriggerName,
   authorUpdateTriggerName,
 } from "./author-units"
+export { hierarchyNames } from "./hierarchy-units"
 export {
   MECHANICS_FUNCTION,
   authorTableColumns,
