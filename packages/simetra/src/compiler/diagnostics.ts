@@ -337,6 +337,7 @@ export const COMPILER_RULES = [
   "plan.rights-orphans",
   "database.failed",
   "roles.create-role-denied",
+  "roles.admin-option-missing",
   "introspect.unrepresentable",
   "introspect.identity-conflict",
   "introspect.project-mismatch",

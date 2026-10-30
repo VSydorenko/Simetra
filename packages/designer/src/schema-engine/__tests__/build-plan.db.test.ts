@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto"
 import { describe, expect, it } from "vitest"
 import { compile, loadSqlParser } from "simetra/compiler"
+import { PLATFORM_ROLES } from "simetra/model"
 import {
   buildPlan,
   reverseGenerate,
@@ -19,6 +20,7 @@ import {
 } from "../../../../simetra/test/support"
 import { asSuperuser, query } from "../../__tests__/support/db"
 import {
+  applyArtifact,
   BLIND_SETUP,
   codes,
   compiled,
@@ -244,6 +246,30 @@ describe.concurrent("buildPlan", () => {
       expect(artifact.requiredPermissions[0]).toBe("drift")
       expect(artifact.requiredPermissions).toContain(drop!.id)
       expect(artifact.fromHash).toBe(model.hash)
+    })
+  })
+
+  // Згенеровані гранти ролі команд поколонкові (П4-A1): колонковий ACL
+  // живе в `pg_attribute.attacl`, і що гейт і рушій його читають, вирішує
+  // каталог справжньої бази
+  it("plans over drift of a column grant", async () => {
+    const model = await compiled({ [PARTY]: party() })
+    await inTarget(EMPTY, async (url) => {
+      await establish(url, model)
+      await query(
+        url,
+        `grant update (version) on app.party to ${PLATFORM_ROLES.command}`
+      )
+      const outcome = await plan(url, model)
+      const artifact = planned(outcome)
+      expect(codes(outcome)).toContain("apply.drift")
+      expect(artifact.drift?.sections).toContain("acl")
+      expect(artifact.drift?.paths.some((p) => p.includes("version"))).toBe(
+        true
+      )
+      // План повертає ACL до бажаного: після нього дрейфу немає
+      await applyArtifact(url, artifact, model)
+      expect((await plan(url, model)).status).toBe("unchanged")
     })
   })
 
@@ -704,7 +730,9 @@ describe.concurrent("buildPlan", () => {
         engine.withTargetClone(o, target, scope, async (clone) => {
           await query(
             clone.url,
-            "alter table app.party drop column first; alter table app.party add column first boolean"
+            // Колонка заново — без свого колонкового ACL: повертаємо грант
+            // ролі команд (спека П4 §6.2), щоб копія різнилася лише порядком.
+            "alter table app.party drop column first; alter table app.party add column first boolean; grant insert (first), update (first) on app.party to simetra_command"
           )
           return fn(clone)
         }),

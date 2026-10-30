@@ -1,12 +1,15 @@
 import {
+  authorColumns,
   KIND_REGISTRY,
   isUuidColumn,
   singleUuidKeyColumn,
+  standardLogicalName,
   toSnakeCase,
   type CarrierCopyOf,
   type CustomAction,
   type AssignmentSource,
   type CustomTable,
+  type PhysicalColumn,
   type PhysicalTable,
   type Project,
   type RightsSystemCatalog,
@@ -17,7 +20,11 @@ import { mainTableOf } from "../contracts"
 import { diagnostic, type Diagnostic } from "../diagnostics"
 import { PROJECT_FILE, type ParsedObject } from "../stages/files"
 import { standardElementId, type ResolvedReference } from "../stages/identity"
-import { hasScopeKeyUnique, type ModelStageResult } from "../stages/model"
+import {
+  hasScopeKeyUnique,
+  usersCatalogOf,
+  type ModelStageResult,
+} from "../stages/model"
 import {
   carrierTarget,
   crossTenant,
@@ -44,6 +51,7 @@ import {
   sourceLiteralFits,
   sourceLiteralType,
 } from "./facts"
+import { commandWriteColumns } from "./command-columns"
 import { must, projectTarget } from "./references"
 
 /** Вхід правил прав стадії 4: усе, що вже знає цілісність. */
@@ -86,13 +94,20 @@ export function checkRights(ctx: RightsCheckContext): Diagnostic[] {
             ]
       )
     )
-    // Незмінні колонки (Р2b1-9, Р2b1-20) — ключ `ref` і колонка скоупу. Шапка
-    // може назвати лише ключ: у кореня виду скоупу колонка скоупу і є `ref`,
-    // а власну колонку скоупу платформа додає без імені елемента, тож її
-    // назва в шапці — `rights.attribute-unknown`.
-    const immutableIds = new Set([
-      standardElementId(must(object.id), { logicalName: "ref" }),
-    ])
+    // Незмінні для шапки колонки. Вид з `commandWrites` (довідник) — усе поза
+    // колонками зміни ролі команд (спека П4 §6.2): джерело те саме, що для
+    // гранту, тож шапка не обіцяє того, чого роль не змінить. Решта видів —
+    // ключ `ref` і авторство (Р2b1-9, Р2b1-20, Р-A1-9): колонку скоупу шапка
+    // назвати не може, бо у кореня виду скоупу вона і є `ref`, а власну
+    // колонку скоупу платформа додає без імені елемента
+    // (`rights.attribute-unknown`).
+    const immutableIds = def.commandWrites
+      ? outsideCommandUpdate(object, ctx)
+      : new Set(
+          [{ logicalName: "ref" }, ...authorColumns()].map((column) =>
+            standardElementId(must(object.id), column)
+          )
+        )
     // Вид, жодна стандартна дія якого не пише (регістр накопичення,
     // підлеглий регістр відомостей), пишуть лише рухи проведення (§5.3):
     // ефект кастомної дії там відкрив би запис в обхід оболонки.
@@ -1201,10 +1216,50 @@ function unknownHeader(
 }
 
 /**
+ * Id елементів основної таблиці, яких роль команд не змінює: усі її колонки
+ * поза `commandWriteColumns(...).update`. Колонку без елемента опису (скоуп,
+ * копія носія) шапка назвати не може, тож вона сюди не потрапляє. Таблиці
+ * немає лише на моделі з помилками — тоді правило мовчить.
+ */
+function outsideCommandUpdate(
+  object: ParsedObject,
+  ctx: RightsCheckContext
+): Set<string> {
+  const objectId = must(object.id)
+  const table = mainTableOf(ctx.model.physical, objectId)
+  if (table === undefined) return new Set()
+  const { attributeCase } = ctx.project.naming
+  // `origin.standard` — ім'я в стилі проєкту, а id елемента — канонічне.
+  const standardIds = new Map(
+    KIND_REGISTRY[object.kind]
+      .standardColumns(object.data)
+      .map((def) => [
+        standardLogicalName(def, attributeCase),
+        standardElementId(objectId, def),
+      ])
+  )
+  const idOf = (c: PhysicalColumn) =>
+    c.origin.elementId ?? standardIds.get(c.origin.standard ?? "")
+  const { update } = commandWriteColumns(table, {
+    attributeCase,
+    main: true,
+    users: usersCatalogOf(ctx.objects)?.id === objectId,
+  })
+  const updatable = new Set(update.map(idOf))
+  return new Set(
+    table.columns.flatMap((c) => {
+      const id = idOf(c)
+      return id === undefined || updatable.has(id) ? [] : [id]
+    })
+  )
+}
+
+/**
  * Кастомна дія не називає колонку переходу (Р2b1-18): інакше вона була б
  * обхідною дорогою повз право `post`/`markDeletion`. Не називає й незмінної
- * колонки (Р2b1-23): тригер ефектів однаково відмовив би її зміну, тож
- * декларація тихо нічого б не дала.
+ * колонки (Р2b1-23), а на виді з `commandWrites` — колонки поза колонками
+ * зміни ролі команд (спека П4 §6.2): тригер ефектів чи грант однаково
+ * відмовили б її зміну, тож декларація тихо нічого б не дала.
  */
 function forbiddenHeader(
   object: ParsedObject,

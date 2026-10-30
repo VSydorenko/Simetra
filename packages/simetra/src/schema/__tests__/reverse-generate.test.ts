@@ -2,6 +2,7 @@ import { beforeAll, describe, expect, it } from "vitest"
 import {
   compile,
   loadSqlParser,
+  platformBeforeTriggerName,
   readSqlUnits,
   rightsGuardNames,
   type SchemaPathResolver,
@@ -28,7 +29,10 @@ import {
   uuid,
 } from "../../compiler/__tests__/helpers"
 import {
+  COMMENT_FILE,
+  authorCarrier,
   policyDomain,
+  singleTenantRights,
   writeRoles,
 } from "../../compiler/__tests__/fixtures/rights"
 
@@ -1349,54 +1353,77 @@ describe("reverseGenerate", () => {
     expect(written).not.toContain("note_simetra_touch")
   })
 
-  it("recognizes carrier and split mechanics units as platform", async () => {
-    // Р2a2-20: розділена механіка й одиниці копій носіїв — платформні, як і
-    // механіка рядка; без збереженої теки їх не пише жоден файл. Одиниці —
-    // справжній вихід генераторів над доменом з копіями носіїв
-    const compiled = await compile(policyDomain())
-    const platform = compiled.model!.sqlUnits.filter(
-      (u) => u.generator === "carriers" || u.generator === "mechanics"
-    )
-    const names = new Set(platform.map((u) => u.name))
-    for (const label of [
-      "simetra_touch_update",
-      "simetra_carriers",
-      "simetra_carriers_out",
-      "simetra_carriers_out_insert",
-    ])
+  // 50 байтів — довше за межу 41, з якої імена рядкових `BEFORE`-тригерів
+  // ідуть спільним префіксом із хешем (Р-A1-7)
+  const LONG_COMMENT = `task_comment_${"x".repeat(37)}`
+  it.each([
+    ["short names", "task_comment", {}],
+    [
+      "a 50-byte table",
+      LONG_COMMENT,
+      { [COMMENT_FILE]: { physicalName: LONG_COMMENT } },
+    ],
+  ])(
+    "recognizes carrier and split mechanics units as platform (%s)",
+    async (_, comment, layer) => {
+      // Р2a2-20: розділена механіка й одиниці копій носіїв — платформні, як і
+      // механіка рядка; без збереженої теки їх не пише жоден файл. Одиниці —
+      // справжній вихід генераторів над доменом з копіями носіїв
+      const compiled = await compile(policyDomain(layer))
       expect(
-        [...names].some((n) => n.endsWith(`_${label}`)),
-        label
-      ).toBe(true)
-    expect(new Set(platform.map((u) => u.class))).toEqual(
-      new Set(["function", "grant", "trigger"])
-    )
-    const AUDIT_FN =
-      "CREATE FUNCTION public.audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;"
-    const AUDIT =
-      "CREATE TRIGGER task_audit AFTER UPDATE ON public.task FOR EACH ROW EXECUTE FUNCTION public.audit();"
-    const result = await reverseGenerate(
-      model({
-        units: [
-          ...platform.map((u) => ({
-            class: u.class,
-            identity: u.identity,
-            schema: u.schema,
-            name: u.name,
-            sql: u.sql,
-          })),
-          ...units([AUDIT_FN, AUDIT].join("\n")),
-        ],
-      }),
-      options(new Map(), { defaultSchema: "public" })
-    )
-    expect(errors(result)).toEqual([])
-    const written = [...result.files.values()].join("\n")
-    // Власний тригер таблиці пишеться, платформні — ні
-    expect(written).toContain("CREATE TRIGGER task_audit")
-    expect(written).not.toContain("simetra_carriers")
-    expect(written).not.toContain("simetra_touch")
-  })
+        compiled.diagnostics.filter((d) => d.severity === "error")
+      ).toEqual([])
+      const platform = compiled.model!.sqlUnits.filter(
+        (u) => u.generator === "carriers" || u.generator === "mechanics"
+      )
+      const names = new Set(platform.map((u) => u.name))
+      // Тригер виведення носіїв (і його функція) — під іменем спільного префікса
+      expect(names).toContain(
+        platformBeforeTriggerName(comment, "simetra_carriers")
+      )
+      expect(names).toContain(
+        platformBeforeTriggerName(comment, "simetra_touch_update")
+      )
+      for (const label of [
+        "simetra_touch_update",
+        "simetra_carriers",
+        "simetra_carriers_out",
+        "simetra_carriers_out_insert",
+      ])
+        expect(
+          [...names].some((n) => n.endsWith(`_${label}`)),
+          label
+        ).toBe(true)
+      expect(new Set(platform.map((u) => u.class))).toEqual(
+        new Set(["function", "grant", "trigger"])
+      )
+      const AUDIT_FN =
+        "CREATE FUNCTION public.audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;"
+      const AUDIT =
+        "CREATE TRIGGER task_audit AFTER UPDATE ON public.task FOR EACH ROW EXECUTE FUNCTION public.audit();"
+      const result = await reverseGenerate(
+        model({
+          units: [
+            ...platform.map((u) => ({
+              class: u.class,
+              identity: u.identity,
+              schema: u.schema,
+              name: u.name,
+              sql: u.sql,
+            })),
+            ...units([AUDIT_FN, AUDIT].join("\n")),
+          ],
+        }),
+        options(new Map(), { defaultSchema: "public" })
+      )
+      expect(errors(result)).toEqual([])
+      const written = [...result.files.values()].join("\n")
+      // Власний тригер таблиці пишеться, платформні — ні
+      expect(written).toContain("CREATE TRIGGER task_audit")
+      expect(written).not.toContain("simetra_carriers")
+      expect(written).not.toContain("simetra_touch")
+    }
+  )
 
   it("recognizes effects triggers and functions as platform", async () => {
     // Р2b1-12: тригери ефектів дії й функції контексту команди — платформні
@@ -1438,6 +1465,52 @@ describe("reverseGenerate", () => {
     expect(written).toContain("CREATE TRIGGER task_audit")
     expect(written).not.toContain("simetra_effects")
     expect(errors(result)).toEqual([])
+  })
+
+  it("recognizes author triggers and the author function as platform", async () => {
+    // Р-A1-8: тригери авторства (і розділені на таблиці з копіями, і під
+    // іменем спільного префікса на 60-байтній таблиці) й `simetra.author()`
+    // — платформні, як механіка. Одиниці — справжній вихід генератора
+    const compiled = await compile(
+      singleTenantRights({ ...authorCarrier(), ...authorCarrier("long") })
+    )
+    expectClean(compiled)
+    const platform = compiled.model!.sqlUnits.filter(
+      (u) => u.generator === "mechanics" && u.identity.includes("author")
+    )
+    const names = new Set(platform.map((u) => u.name))
+    for (const label of ["simetra_author", "simetra_author_update"])
+      expect(
+        [...names].filter((n) => n.endsWith(`_${label}`)).length,
+        label
+      ).toBe(2)
+    expect(new Set(platform.map((u) => u.class))).toEqual(
+      new Set(["function", "grant", "trigger"])
+    )
+    const AUDIT_FN =
+      "CREATE FUNCTION public.audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;"
+    const AUDIT =
+      "CREATE TRIGGER note_audit AFTER UPDATE ON public.note FOR EACH ROW EXECUTE FUNCTION public.audit();"
+    const result = await reverseGenerate(
+      model({
+        units: [
+          ...platform.map((u) => ({
+            class: u.class,
+            identity: u.identity,
+            schema: u.schema,
+            name: u.name,
+            sql: u.sql,
+          })),
+          ...units([AUDIT_FN, AUDIT].join("\n")),
+        ],
+      }),
+      options(new Map(), { defaultSchema: "public" })
+    )
+    expect(errors(result)).toEqual([])
+    const written = [...result.files.values()].join("\n")
+    expect(written).toContain("CREATE TRIGGER note_audit")
+    expect(written).not.toContain("simetra_author")
+    expect(written).not.toContain('"author"')
   })
 
   it("introspect over a deployed write-rights layer writes nothing for command functions", async () => {

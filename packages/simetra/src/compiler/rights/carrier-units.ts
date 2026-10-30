@@ -6,14 +6,15 @@ import {
   type PhysicalSnapshot,
   type PhysicalTable,
 } from "simetra/model"
+import { platformBeforeTriggerName } from "../before-trigger-names"
 import type { QualifiedName } from "../contracts"
 import { compareStrings } from "../diagnostics"
-import { dollarTag } from "../movement-functions"
 import type { CreationNode } from "../sql/dependencies"
 import { executeGrants } from "../sql/execute-grants"
 import type { SqlParser } from "../sql/parse"
 import { generatedUnit, type SqlUnit } from "../sql/units"
 import { fieldForeignKey } from "../stages/model"
+import { definerTrigger } from "./definer"
 
 /** Мітки імен тригерів і функцій носіїв — алгоритм імен Postgres від таблиці. */
 const DERIVE_LABEL = "simetra_carriers"
@@ -22,9 +23,10 @@ const PROPAGATE_INSERT_LABEL = "simetra_carriers_out_insert"
 
 /**
  * Імена тригерів копій носіїв на таблиці: `derive` — на таблиці з копіями,
- * обидва тригери поширення — на таблиці-джерелі. Алгоритм Postgres тримає
- * мітку цілою, тож промоція й зворотна генерація впізнають їх за іменем і на
- * довгій таблиці.
+ * обидва тригери поширення — на таблиці-джерелі. `derive` — рядковий
+ * `BEFORE`, тож іде спільним префіксом групи: інакше на довгій назві він
+ * спрацював би не між авторством і механікою. Поширення — `AFTER`, на `NEW`
+ * не впливає, і лишається на алгоритмі Postgres, що тримає мітку цілою.
  */
 export function carrierTriggerNames(table: QualifiedName): {
   derive: string
@@ -32,7 +34,7 @@ export function carrierTriggerNames(table: QualifiedName): {
   propagateInsert: string
 } {
   return {
-    derive: makeObjectName(table.name, undefined, DERIVE_LABEL),
+    derive: platformBeforeTriggerName(table.name, DERIVE_LABEL),
     propagate: makeObjectName(table.name, undefined, PROPAGATE_LABEL),
     propagateInsert: makeObjectName(
       table.name,
@@ -329,6 +331,12 @@ function deriveFunction(
     body.push("  END IF;")
   }
   body.push("  RETURN NEW;", "END")
+  // `SECURITY DEFINER` (Р2a2-8): `FOR SHARE` вимагає права `UPDATE` на
+  // джерело, а той, хто пише рядок, може не мати права навіть читати його;
+  // поширення ж пише залежні рядки, яких автор зміни джерела не бачить.
+  // Безпечно, бо значення копії береться лише з рядка, на який уже вказує
+  // складений FK у тому самому скоупі, а в запит функція нічого не віддає,
+  // крім `NEW` з виведеними копіями.
   return definerTrigger(fn, body.join("\n"))
 }
 
@@ -364,6 +372,7 @@ function propagateFunction(
     )
   }
   body.push("  RETURN NULL;", "END")
+  // `SECURITY DEFINER` — з тієї самої причини, що й виведення (Р2a2-8).
   return definerTrigger(fn, body.join("\n"))
 }
 
@@ -486,24 +495,4 @@ export function carrierBackfillStatements(
         `WHERE ${differs};`,
     }
   })
-}
-
-/**
- * `SECURITY DEFINER` (Р2a2-8): `FOR SHARE` вимагає права `UPDATE` на
- * джерело, а той, хто пише рядок, може не мати права навіть читати його;
- * поширення ж пише залежні рядки, яких автор зміни джерела не бачить.
- * Безпечно, бо значення копії береться лише з рядка, на який уже вказує
- * складений FK у тому самому скоупі, а в запит функція нічого не віддає,
- * крім `NEW` з виведеними копіями. Порожній `search_path` і кваліфіковані
- * відношення не лишають простору для підміни імен.
- */
-function definerTrigger(fn: QualifiedName, text: string): string {
-  const tag = dollarTag(text)
-  return (
-    `CREATE OR REPLACE FUNCTION ${relation(fn)}()\n` +
-    `RETURNS trigger\n` +
-    `LANGUAGE plpgsql SECURITY DEFINER\n` +
-    `SET search_path = ''\n` +
-    `AS ${tag}\n${text}\n${tag};`
-  )
 }

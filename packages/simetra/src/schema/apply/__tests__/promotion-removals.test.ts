@@ -1,9 +1,12 @@
 import { beforeAll, describe, expect, it } from "vitest"
 import {
   applyChanges,
+  carrierFunctionNames,
+  carrierTriggerNames,
   compile,
   type CompiledModel,
   loadSqlParser,
+  mechanicsTriggerName,
   promoteObject,
   rightsGuardNames,
   type PromotionObject,
@@ -2875,6 +2878,104 @@ describe("platformReplacements", () => {
           }
         )
 
+        describe("with author columns (Р-A1-10)", () => {
+          // Колонки авторства — поза змістом: тригери механіки й авторства
+          // стежать за ними (`watched`), підписки — ні
+          const AUTHORED: PhysicalTable = {
+            ...COPIES,
+            columns: [
+              ...COPIES.columns,
+              physicalColumn("created_by_id", "uuid", {
+                standard: "created_by",
+              }),
+              physicalColumn("updated_by_id", "uuid", {
+                standard: "updated_by",
+              }),
+            ],
+          }
+          const WATCHED =
+            "((old.id IS DISTINCT FROM new.id) OR (old.parent_id IS DISTINCT FROM new.parent_id) OR ((old.note)::text IS DISTINCT FROM (new.note)::text) OR ((old.created_by_id IS DISTINCT FROM new.created_by_id) OR (old.updated_by_id IS DISTINCT FROM new.updated_by_id)) OR (NOT (old.assignee_id IS DISTINCT FROM new.assignee_id)))"
+          const authorTrigger = (name: string, events: string, fn: string) =>
+            trigger(
+              name,
+              `CREATE TRIGGER ${name} BEFORE ${events} ON app.item FOR EACH ROW EXECUTE FUNCTION ${fn}()`
+            )
+          const AUTHOR = authorTrigger(
+            "item_simetra_author",
+            "INSERT",
+            "simetra.author"
+          )
+          const AUTHOR_UPDATE = trigger(
+            "item_simetra_author_update",
+            `CREATE TRIGGER item_simetra_author_update BEFORE UPDATE ON app.item FOR EACH ROW WHEN (${WATCHED}) EXECUTE FUNCTION simetra.author()`
+          )
+          const AUTHORED_SPLIT = [
+            TOUCH_INSERT,
+            touchUpdate(WATCHED),
+            AUTHOR,
+            AUTHOR_UPDATE,
+          ]
+
+          it("the subscription pair keeps the condition without authors, the mechanics watches them", () => {
+            expect(
+              triggerGate(
+                HANDLER,
+                [
+                  ...AUTHORED_SPLIT,
+                  ...pair(CONTENT).filter((u) => u.name.startsWith("s")),
+                ],
+                {},
+                [AUTHORED]
+              )
+            ).toEqual({ codes: [], narrowed: [] })
+            expect(
+              codesOf(moddatetime("updated_at"), AUTHORED_SPLIT, {}, [AUTHORED])
+            ).toEqual([])
+            // Механіка оновлення без `watched` на таблиці з авторством —
+            // не платформна умова
+            expect(
+              codesOf(
+                moddatetime("updated_at"),
+                [TOUCH_INSERT, touchUpdate(CONTENT)],
+                {},
+                [AUTHORED]
+              )
+            ).toEqual(MISSING)
+          })
+
+          it.each([
+            ["the insert trigger", "INSERT"],
+            ["the update trigger", "UPDATE"],
+          ])(
+            "%s of authorship does not stand in for an adopted trigger of the same function",
+            (_, events) => {
+              expect(
+                codesOf(
+                  `CREATE TRIGGER a BEFORE ${events} ON app.item FOR EACH ROW EXECUTE FUNCTION simetra.author()`,
+                  AUTHORED_SPLIT,
+                  {},
+                  [AUTHORED]
+                )
+              ).toEqual(MISSING)
+            }
+          )
+
+          it("a trigger under the author name with another function is not platform", () => {
+            expect(
+              codesOf(
+                "CREATE TRIGGER a BEFORE INSERT ON app.item FOR EACH ROW EXECUTE FUNCTION app.h()",
+                [
+                  TOUCH_INSERT,
+                  touchUpdate(WATCHED),
+                  authorTrigger("item_simetra_author", "INSERT", "app.h"),
+                ],
+                {},
+                [AUTHORED]
+              )
+            ).toEqual([])
+          })
+        })
+
         it("a carrier trigger does not stand in for an adopted trigger of the same function", () => {
           expect(
             codesOf(
@@ -2895,6 +2996,65 @@ describe("platformReplacements", () => {
 
       it("is replaced by the row mechanics for moddatetime on updated_at", () => {
         expect(codesOf(moddatetime("updated_at"), [MECHANICS])).toEqual([])
+      })
+
+      describe("on a 50-byte table (Р-A1-7)", () => {
+        // Довше за межу 41: тригери платформи — під іменами спільного
+        // префікса з хешем, і промоція мусить впізнати їх як платформні
+        const LONG = `item_${"x".repeat(45)}`
+        const longTrigger = (name: string, sql: string) =>
+          unit("trigger", `trigger:app.${LONG}.${name}`, name, sql)
+        const TOUCH = longTrigger(
+          mechanicsTriggerName(LONG),
+          `CREATE TRIGGER ${mechanicsTriggerName(LONG)} BEFORE INSERT OR UPDATE ON app.${LONG} FOR EACH ROW EXECUTE FUNCTION simetra.touch()`
+        )
+        const derive = carrierTriggerNames({ schema: "app", name: LONG }).derive
+        const deriveFn = carrierFunctionNames({ schema: "app", name: LONG })
+          .derive.name
+        const CARRIERS = longTrigger(
+          derive,
+          `CREATE TRIGGER ${derive} BEFORE INSERT OR UPDATE ON app.${LONG} FOR EACH ROW EXECUTE FUNCTION app.${deriveFn}()`
+        )
+
+        function longCodes(sql: string, units: CatalogUnit[]): string[] {
+          const onClone = unit("trigger", "trigger:adopted", "a", sql)
+          const [key] = unitSubjectKeys(onClone, parse, "app")
+          return platformReplacements({
+            record: record({
+              tables: [{ id: OBJECT_ID, schema: "app", from: LONG, to: LONG }],
+              conversions: [
+                conversion("platform", { kind: "unit", ...key!, table: LONG }),
+              ],
+            }),
+            clone: model([table(LONG)], [onClone]),
+            desired: model([table(LONG)], units),
+            physical: { tables: [] },
+            attributeCase: "snake_case",
+            cloneEquivalence: [],
+            shadowEquivalence: [],
+            valueElementColumns: [],
+            provider: "supabase",
+            parse,
+          }).map((d) => d.code)
+        }
+
+        it("moddatetime is replaced by the row mechanics", () => {
+          expect(
+            longCodes(
+              `CREATE TRIGGER a BEFORE UPDATE ON app.${LONG} FOR EACH ROW EXECUTE FUNCTION extensions.moddatetime(updated_at)`,
+              [TOUCH]
+            )
+          ).toEqual([])
+        })
+
+        it("a carrier trigger does not stand in for an adopted trigger of the same function", () => {
+          expect(
+            longCodes(
+              `CREATE TRIGGER a BEFORE INSERT OR UPDATE ON app.${LONG} FOR EACH ROW EXECUTE FUNCTION app.${deriveFn}()`,
+              [TOUCH, CARRIERS]
+            )
+          ).toEqual(MISSING)
+        })
       })
 
       it("maps the moddatetime argument through the record's columns", () => {

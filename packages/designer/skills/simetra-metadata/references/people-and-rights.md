@@ -11,6 +11,7 @@ Contents:
 - Who reads what
 - Who writes what
 - Generated privileges
+- Platform roles
 - Reading past row-level security
 - Carrier copies
 
@@ -37,7 +38,12 @@ People are platform data, not tables you write yourself:
   the provider's account table.
 - **Authorship.** `trackAuthor: true` on a Catalog or a Document adds the
   standard `createdBy` and `updatedBy` references to the users catalog;
-  without a users catalog it is an error (`users.catalog-missing`).
+  without a users catalog it is an error (`users.catalog-missing`). Under a
+  command the platform forces `createdBy`/`updatedBy` to the current user;
+  `createdBy` never changes; a `beforeWrite` handler may not assign them,
+  and a subscription may not list them in `whenChanged`.
+  Outside a command (an import, a migration) whoever writes the row sets
+  them.
 - **Membership.** A scoped catalog with `membership: { "user": "<attribute>" }`
   is the membership of its scope kind: the attribute is a scalar `Ref` to the
   users catalog, nullable for an invited member without an account. The
@@ -75,9 +81,13 @@ with a trigger on the target table, see "Carrier copies").
   Effects only on a kind with a writing standard action (not an accumulation
   register or a recorder-subordinate information register),
   `tabularSections: true` only on a kind with tabular sections, and never a
-  transition column (`posted`, the deletion mark) or an immutable column (the
-  `ref` key) in `header` (`rights.custom-action-effects`, reasons
-  `transitionColumn` and `immutableColumn`).
+  transition column (`posted`, the deletion mark) or an immutable column in
+  `header` (`rights.custom-action-effects`, reasons `transitionColumn` and
+  `immutableColumn`). On a catalog an immutable column is any column the
+  command role cannot update (the `ref` key, `createdBy`, `updatedBy`,
+  `createdAt`, `updatedAt`, `version`, `predefinedName`, the platform
+  attributes of the users catalog); on other kinds it is the `ref` key,
+  `createdBy` and `updatedBy`.
 - **`ownership`** — carriers whose `Ref` names the owner of a row (a member
   or a user). `"ownership": ["<attribute>", ["<ref attribute>", "<attribute>"]]`
   The target is the users catalog, the membership catalog of the object's own
@@ -297,7 +307,8 @@ remain platform operations.
 Direct writes without command context fail with detail `rights-context`.
 Platform tools use a maintenance mode that bypasses only the actor's grant
 subset check, preserving the in-use-role and last-holder checks. Application
-SQL must not enable it, and provider service logins cannot enable it.
+SQL must not enable it, and neither provider service logins nor the
+platform's runtime login `simetra_runtime` can enable it.
 `TRUNCATE` is refused for guarded rights, membership, user and dimension
 relation tables, including in maintenance mode.
 
@@ -386,6 +397,26 @@ tables. In debt SQL (a `CustomTable` or `PgEnum` module, the shared
 the statement (and its file, if left empty) only when every target belongs to
 the platform; one that also names other objects you split by hand. A grant
 on another overload of the same name is not affected.
+
+## Platform roles
+
+`simetra roles` creates the cluster roles the platform needs. It creates
+`simetra_command` (`NOLOGIN NOINHERIT`, on the target and the shadow server)
+and, when a project file is present, the runtime login role `simetra_runtime`
+on the target only (`LOGIN NOINHERIT`, a member of `simetra_command` and, for
+`supabase`, of `authenticated`, each `WITH INHERIT FALSE, SET TRUE`). It reads
+`database.provider` from the project file; without a project file it skips the
+login role, and the output says why. The operator sets the login role's
+password; the platform keeps no secrets.
+
+The login role needs `ADMIN OPTION` on each of its parent roles in the role
+that runs `roles`. Without it `roles` still creates the grant roles, but
+refuses the login role with `roles.admin-option-missing` and does not create
+it. An existing role is only checked, never changed.
+
+`plan.platform-role-shape` with the violation `request-role:<role>` means an
+API request role (such as `authenticated`) and a platform role are members of
+each other in some form, even `ADMIN` alone; revoke that membership.
 
 ## Reading past row-level security
 

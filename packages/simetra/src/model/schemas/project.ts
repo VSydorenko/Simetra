@@ -249,6 +249,24 @@ export const PROVIDER_SQL_TEXT_FUNCTIONS: Readonly<
  */
 export const PLATFORM_ROLES = { command: "simetra_command" } as const
 
+/**
+ * Ролі входу платформи (спека П4 §6.2): на відміну від `PLATFORM_ROLES` у
+ * них входять, а права вони беруть лише через `SET ROLE` — членства
+ * `INHERIT FALSE, SET TRUE`. Гранту згенерованого SQL вони не отримують
+ * (`GrantPurpose` їх не знає), а режим обслуговування прав для них не
+ * вмикається: рантайм виконує запити користувачів.
+ */
+export const PLATFORM_LOGIN_ROLES = { runtime: "simetra_runtime" } as const
+
+/**
+ * Ролі запиту, членом яких стає роль входу рантайму, за провайдером: профіль
+ * вирішує членство даними, а не гілкою за іменем провайдера. Новий провайдер
+ * додає свій рядок разом зі своїми ролями запиту.
+ */
+export const LOGIN_ROLE_REQUEST_PURPOSES: Readonly<
+  Record<DatabaseProvider, readonly RequestRolePurpose[]>
+> = { supabase: ["user"] }
+
 // Ім'я одне для всіх провайдерів, тож літерала поза T0 немає (спека прав §5.3).
 /**
  * The session setting through which `runCommand` passes the command context;

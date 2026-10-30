@@ -363,6 +363,12 @@ export interface KindDefinition {
    * Only a set can be included; every declaration needs the users catalog.
    */
   rightsDeclaration?: "set" | "role"
+  /**
+   * Об'єкти виду пише роль команд (спека П4 §6.2, Рт10): таблиці отримують
+   * поколонкові `INSERT`/`UPDATE` і `DELETE` рядків ТЧ. Немає — роль команд
+   * лише читає: документи й регістри пише ядро команд через функції (A2+).
+   */
+  commandWrites?: true
   materializes: "table" | "enumType" | "none"
   /**
    * Що приймає `<Ім'я>.sql` об'єкта (спека П2 §3, «Дослівний SQL»):
@@ -601,7 +607,8 @@ export function serviceDateColumns(): StandardColumnDef[] {
 /**
  * Авторство (спека П2 §5): посилання на «Користувачі», а не на учасника —
  * автор лишається автором і після виходу з тенанта. Nullable, бо рядок може
- * записати й не користувач (міграція, провізія); заповнює їх `runCommand`.
+ * записати й не користувач (міграція, провізія); під контекстом команди їх
+ * примушує тригер авторства.
  */
 export function authorColumns(): StandardColumnDef[] {
   return [

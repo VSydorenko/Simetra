@@ -30,7 +30,7 @@ import {
   headScope,
 } from "../sql/heads"
 import type { SqlParser } from "../sql/parse"
-import { mechanicsStandardNames } from "../mechanics-units"
+import { nonContentStandardNames } from "../mechanics-units"
 import type { PlpgsqlFunction, PlpgsqlParser } from "../sql/plpgsql"
 import { sideEffectOf } from "../sql/query-shape"
 import { plpgsqlExpressionTrees } from "../sql/rewrite/plpgsql-body"
@@ -508,7 +508,10 @@ function beforeWriteMechanics(
 ): ReadonlySet<string> {
   if (spec.event !== "beforeWrite") return new Set()
   const style = project.naming.attributeCase
-  const standard = mechanicsStandardNames(style)
+  // Авторство — механіка (Р-A1-9): під командою його примушує тригер
+  // авторства, тож присвоєння в обробнику або губилося б, або підмінило б
+  // автора поза командою.
+  const standard = nonContentStandardNames(style)
   const names = new Set<string>()
   for (const source of spec.sources) {
     if (!("ref" in source)) continue

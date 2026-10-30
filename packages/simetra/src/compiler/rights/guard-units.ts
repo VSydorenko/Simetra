@@ -1,8 +1,11 @@
 import {
   PLATFORM_SCHEMA,
+  PLATFORM_LOGIN_ROLES,
   PROVIDER_LOGIN_ROLES,
   RIGHTS_MAINTENANCE_SETTING,
   quoteIdent,
+  standardLogicalName,
+  type AttributeCase,
   type DatabaseProvider,
   type PhysicalSnapshot,
   type PhysicalTable,
@@ -68,10 +71,16 @@ const unitNode = (name: QualifiedName): CreationNode => ({
 /**
  * Режим обслуговування оминає перевірку приросту, тож вмикати його може лише
  * довірений вхід у базу: налаштування сесії ставить будь-хто, тож без цієї
- * умови запит через логін API провайдера обійшов би запобіжник.
+ * умови запит через логін API провайдера чи рантайм платформи (він виконує
+ * запити користувачів) обійшов би запобіжник.
  */
 export function maintenanceSql(provider: DatabaseProvider): string {
-  const logins = PROVIDER_LOGIN_ROLES[provider].map(sqlLiteral).join(", ")
+  const logins = [
+    ...PROVIDER_LOGIN_ROLES[provider],
+    ...Object.values(PLATFORM_LOGIN_ROLES),
+  ]
+    .map(sqlLiteral)
+    .join(", ")
   return `coalesce(current_setting(${sqlLiteral(RIGHTS_MAINTENANCE_SETTING)}, true) = 'on', false) AND session_user::text <> ALL (ARRAY[${logins}]::text[])`
 }
 
@@ -163,8 +172,7 @@ function functionName(table: QualifiedName, label: string): QualifiedName {
 }
 
 function triggerName(table: QualifiedName, label: string): string {
-  const name = generatedTableFunctionName(table.name, label)
-  const found = rightsGuardNames(table).find((entry) => entry.trigger === name)
+  const found = rightsGuardNames(table).find((entry) => entry.label === label)
   if (found === undefined)
     throw new Error(`internal: unknown rights trigger ${label}`)
   return found.trigger
@@ -760,12 +768,19 @@ function usersEventBody(
   contracts: GuardContracts,
   physical: PhysicalSnapshot,
   operation: "INSERT" | "UPDATE",
+  attributeCase: AttributeCase,
   provider: DatabaseProvider
 ): string {
   const key = q(users.keyColumn)
   const invalid = q(users.invalidColumn)
   const table = tableOf(physical, users.table)
-  const kind = q(column(table, "userKind"))
+  // `origin.standard` несе ім'я в стилі проєкту: `user_kind` у snake_case.
+  const kind = q(
+    column(
+      table,
+      standardLogicalName({ logicalName: "userKind" }, attributeCase)
+    )
+  )
   const repeated =
     operation === "INSERT"
       ? [
@@ -821,6 +836,7 @@ export function buildRightsGuardUnits(
   contracts: GuardContracts,
   physical: PhysicalSnapshot,
   objects: readonly Pick<ParsedObject, "id" | "kind">[],
+  attributeCase: AttributeCase,
   provider: DatabaseProvider,
   module: string,
   parse: SqlParser
@@ -974,7 +990,14 @@ export function buildRightsGuardUnits(
           : "REFERENCING OLD TABLE AS old_rows NEW TABLE AS new_rows"
       addFunction(
         fn,
-        usersEventBody(users, contracts, physical, operation, provider),
+        usersEventBody(
+          users,
+          contracts,
+          physical,
+          operation,
+          attributeCase,
+          provider
+        ),
         owner,
         [
           unitNode(COMMAND_FUNCTIONS.current),

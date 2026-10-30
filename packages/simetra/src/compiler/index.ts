@@ -27,6 +27,7 @@ export {
   type CompiledScopeKind,
   type SourceObject,
 } from "./compile"
+export { readProjectFile } from "./stages/files"
 export type { ResolvedReference } from "./stages/identity"
 export type { CreationNode } from "./sql/dependencies"
 export {
@@ -39,11 +40,22 @@ export {
 export { loadSqlParser, relationNameText, type SqlParser } from "./sql/parse"
 export { platformSchemaGrants } from "./platform/units"
 export {
+  AUTHOR_FUNCTION,
+  authorTriggerName,
+  authorUpdateTriggerName,
+} from "./author-units"
+export {
   MECHANICS_FUNCTION,
+  authorTableColumns,
   contentChangeCondition,
   mechanicsTriggerName,
   mechanicsUpdateTriggerName,
 } from "./mechanics-units"
+export {
+  PLATFORM_BEFORE_ROW_LABELS,
+  platformBeforeTriggerName,
+  type PlatformBeforeRowLabel,
+} from "./before-trigger-names"
 export {
   carrierBackfillStatements,
   carrierFunctionNames,

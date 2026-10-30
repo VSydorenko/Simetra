@@ -449,16 +449,32 @@ describe.concurrent("promotion lifecycle", () => {
         ],
       ])
       // Таблиці виду читає роль користувача (згенерований `GRANT SELECT`),
-      // а прийнята таблиця такого гранту не мала — новий доступ під `access:`
+      // а пише роль команд поколонково (спека П4 §6.2); прийнята таблиця
+      // таких грантів не мала — новий доступ під `access:`
+      const command = (table: string, privileges: string) =>
+        `extra grant:grant:table:app.${table}:simetra_command:${privileges}`
       expect(promotion.permissionItems).toEqual([
         {
           token: "access:app.item",
-          summary: ["extra grant:grant:table:app.item:authenticated:select"],
+          summary: [
+            "extra grant:grant:table:app.item:authenticated:select",
+            command("item", "insert(code),update(code)"),
+            command("item", "insert(description),update(description)"),
+            command("item", "insert(group_id),update(group_id)"),
+            command("item", "insert(id)"),
+            command("item", "select"),
+            command("item", "update(deletion_mark)"),
+          ],
         },
         {
           token: "access:app.item_lines",
           summary: [
             "extra grant:grant:table:app.item_lines:authenticated:select",
+            command("item_lines", "delete,select"),
+            command("item_lines", "insert(id)"),
+            command("item_lines", "insert(line_number),update(line_number)"),
+            command("item_lines", "insert(parent_id)"),
+            command("item_lines", "insert(qty),update(qty)"),
           ],
         },
         {

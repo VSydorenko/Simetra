@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import type pg from "pg"
 import {
+  COMMAND_SETTING,
   PLATFORM_ROLES,
   PROVIDER_API_ROLES,
   type CommandContext,
@@ -441,7 +442,8 @@ const CASES: [name: string, steps: Step[]][] = [
   [
     "forged-author",
     [
-      // Автора механіка не примушує (Р2b1-15): його зміна — зміст.
+      // `created_by_id` незмінний (Рт7): тригер авторства ставить його лише
+      // на вставці, а зміну на оновленні відмовляє тригер ефектів.
       step(
         "w1",
         ["post", "task", "T2"],
@@ -784,6 +786,32 @@ describe("command writes", () => {
       return { rows: byKey(rows), after: byKey(after.rows) }
     })
     expect(written).toEqual({ rows: ["r2"], after: ["r2"] })
+  })
+
+  // Р-A1-8: зіпсований контекст у сесії ролі API — відмова контракту §6.2,
+  // а не тихий запис «без контексту». Першим його читає `BEFORE`-тригер
+  // авторства (`SECURITY DEFINER`), і що функція контексту відмовляє саме
+  // так під роллю без `EXECUTE` на ній, вирішує Postgres.
+  it("provider-api-role-malformed-context", async () => {
+    const refusal = await probe(async (client) => {
+      await client.query(
+        `SET LOCAL ROLE ${PROVIDER_API_ROLES.supabase.service}`
+      )
+      await client.query("SELECT set_config($1, 'not json', true)", [
+        COMMAND_SETTING,
+      ])
+      try {
+        await client.query(
+          "UPDATE public.task SET region_id = $1 WHERE id = $2",
+          [key("r2"), key("T2")]
+        )
+        return undefined
+      } catch (error) {
+        const { code, message, detail } = error as Refusal
+        return { code, message, detail }
+      }
+    })
+    expect(refusal).toEqual(context("malformed"))
   })
 
   it.each(CASES)("%s", async (_, steps) => {

@@ -50,6 +50,15 @@ function entries(
   }
 }
 
+/** `Contract` з авторством: «Користувачі» й `trackAuthor`. */
+const AUTHORED: Record<string, unknown> = {
+  "catalogs/Users/Users.meta.json": catalog("Users", { role: "users" }),
+  "catalogs/Contract/Contract.meta.json": catalog("Contract", {
+    trackAuthor: true,
+    attributes: [attribute("number", { type: "String", length: 20 })],
+  }),
+}
+
 const codes = async (files: Record<string, unknown>) =>
   (await compile(metaFiles(files))).diagnostics.map((d) => [
     d.code,
@@ -283,6 +292,19 @@ describe("EventSubscription", () => {
       })
     ).toEqual([
       ["subscription.when-changed-mechanics", SUBSCRIPTION, "/whenChanged/0"],
+    ])
+  })
+
+  it("whenChanged cannot list an author column either", async () => {
+    // Авторство — механіка (Р-A1-9): тригер авторства пише його незалежно
+    // від порядку імен з підпискою, тож умова була б непевною.
+    expect(
+      await codes({
+        ...entries({ whenChanged: ["number", "updatedBy"] }),
+        ...AUTHORED,
+      })
+    ).toEqual([
+      ["subscription.when-changed-mechanics", SUBSCRIPTION, "/whenChanged/1"],
     ])
   })
 
@@ -599,6 +621,15 @@ describe("EventSubscription", () => {
         ])
       }
     )
+
+    // Авторство — механіка (Р-A1-9): під командою його примушує тригер
+    // авторства, тож обробник його не присвоює.
+    it.each([
+      ["BEGIN NEW.created_by_id := NULL; RETURN NEW; END", "new.created_by_id"],
+      ["BEGIN NEW.updated_by_id := NULL; RETURN NEW; END", "new.updated_by_id"],
+    ])("an authored source: %s", async (body, problem) => {
+      expect(await found(body, {}, AUTHORED)).toEqual(assigns(problem))
+    })
 
     it("dynamic SQL INTO NEW is stopped by the closed shell first", async () => {
       expect(

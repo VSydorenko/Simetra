@@ -978,6 +978,81 @@ export function adminRoles(): Layer {
   }
 }
 
+export const NOTE_FILE = "catalogs/Note/Note.meta.json"
+export const NOTE_LONG_FILE = "catalogs/NoteLong/NoteLong.meta.json"
+export const NOTE_WRITER_ID = uuid(6810)
+export const NOTE_LONG_WRITER_ID = uuid(6820)
+/** 60-байтна назва: літери в позиціях обрізання імен тригерів. */
+export const NOTE_LONG = "note_" + "a".repeat(55)
+
+/**
+ * Довідник з носієм прав за автором (Р-A1-8) поверх `singleTenantRights`:
+ * «Користувачі» отримують реквізит `mentor`, а `Note` (`trackAuthor`, ТЧ
+ * `lines`) — копію носія власності за шляхом `createdBy.mentor`, тож копія
+ * виводиться з примушеного автора. Шлях через автора можливий лише в проєкті
+ * без видів скоупу: «Користувачі» не скоуплені, а крок носія в проєкті зі
+ * скоупом мусить лишатися в тенанті (`rights.carrier-cross-tenant`).
+ * `long` — окремий файл і ідентичності з 60-байтною назвою таблиці: шари
+ * зливаються за шляхом файлу. Глобальна роль `NoteWriter` — `read`,
+ * `create`, `update` `@any`.
+ */
+export function authorCarrier(
+  variant: "short" | "long" = "short"
+): Record<string, Record<string, unknown>> {
+  const long = variant === "long"
+  const base = long ? 6820 : 6810
+  const name = long ? "NoteLong" : "Note"
+  return {
+    [USERS_FILE]: {
+      attributes: [
+        refAttribute(6800, "mentor", "mentor_id", ref("Catalog", "Users")),
+      ],
+    },
+    [long ? NOTE_LONG_FILE : NOTE_FILE]: catalog(
+      uuid(base + 1),
+      name,
+      long ? NOTE_LONG : "note",
+      {
+        kindLabel: long ? "note_long" : "note",
+        scope: "none",
+        trackAuthor: true,
+        ownership: [["createdBy", "mentor"]],
+        attributes: [
+          {
+            id: uuid(base + 2),
+            name: "text",
+            physicalName: "text",
+            type: "String",
+            length: 200,
+          },
+        ],
+        tabularSections: [
+          section(
+            base + 3,
+            "lines",
+            long ? "note_long_lines" : "note_lines",
+            "text"
+          ),
+        ],
+      }
+    ),
+    [ROLE_FILE(`${name}Writer`)]: role(
+      long ? NOTE_LONG_WRITER_ID : NOTE_WRITER_ID,
+      `${name}Writer`,
+      "global",
+      {
+        grants: [
+          grant(
+            objects(["Catalog", name]),
+            ["read", "create", "update"],
+            "any"
+          ),
+        ],
+      }
+    ),
+  }
+}
+
 /**
  * Нескоупована константа `Rate`: у глобальній ролі `Support` її `update`
  * природний для вставки й оновлення (Р2b1-7).

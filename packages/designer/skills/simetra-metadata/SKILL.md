@@ -30,7 +30,7 @@ diagnostics themselves.
 | Does the database match the metadata?                                             | `diff`       | `simetra diff [dir] --tables a,b`        | `diff` with `{tables?}`                     |
 | Plan bringing the database to the metadata (writes `plans/…plan.json`)            | `plan`       | `simetra plan [dir]`                     | `plan` with `{}`                            |
 | Apply a reviewed plan to the database                                             | `apply`      | `simetra apply <plan> [dir] --plan-hash <hex> --yes` | `apply` with `{plan, planHash, allow?, confirm}` |
-| Create the platform's cluster roles once per server (before the first `plan`)     | `roles`      | `simetra roles`                          | `roles` with `{}`                           |
+| Create the platform's cluster roles once per server (before the first `plan`); reads the project file | `roles`      | `simetra roles`                          | `roles` with `{}`                           |
 
 `compile`, `explain`, `diff`, `apply`, `roles` only read files. `fix`,
 `create`, `add`, `rename`, `delete`, `promote`, `introspect` change files;
@@ -380,9 +380,9 @@ The generated SQL grants to platform roles (`simetra_command`) that live in the
 cluster, not in the database, so `plan` does not create them. Without one on
 the target or the shadow server, `plan`, `diff` and `rehearse` refuse with
 `plan.platform-role-missing`: run `simetra roles` once with a role that has
-`CREATEROLE`. It creates a missing role as `NOLOGIN NOINHERIT` and only checks
-an existing one; a role of an unsafe shape (`plan.platform-role-shape`) is
-fixed by hand as the hint says, not by `roles`.
+`CREATEROLE` (with a project file it also creates the login role: "Platform
+roles" in `references/people-and-rights.md`). It only checks an existing role;
+an unsafe shape (`plan.platform-role-shape`) is fixed by hand, not by `roles`.
 
 `apply` applies exactly that file in one transaction. It needs the `planHash`
 of the reviewed plan, confirmation (`--yes`, MCP `confirm: true`), and in
