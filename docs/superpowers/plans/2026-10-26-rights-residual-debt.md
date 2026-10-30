@@ -30,6 +30,15 @@
   лише `runCommand`.** Оператор із кількома CTE під контекстом команди обходить
   умову «ще не учасник». Обмеження для П4 — TS-хуки команди без сирого SQL під
   контекстом.
+- **snake_case-проєкт з довідниками прав не компілюється.** Закрити до першої
+  міграції споживача — блокує проєкт зі `naming.attributeCase` snake_case.
+  Генератор функцій прав (`packages/simetra/src/compiler/rights/functions.ts`)
+  падає `internal: missing rights input` (`must` з
+  `packages/simetra/src/compiler/rights/references.ts`); `column()` у
+  `packages/simetra/src/compiler/rights/guard-units.ts` шукає `deletionMark` і
+  `customRole` літералами, а не стандартним іменем у стилі проєкту;
+  `USER_PLATFORM_FIELDS` у `packages/simetra/src/compiler/rights/effects-units.ts`
+  треба замінити на `userPlatformColumns()` реєстру.
 
 ## 2. Джерела членства й призначень (2d1)
 
