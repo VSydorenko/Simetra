@@ -1726,7 +1726,8 @@ function scopeMembers(
  * Рядки прав рівня запиту (Р2d2-3): рядок скоупу — свого виду й скоупу,
  * контейнерний — за видом скоупу контейнера й тим самим скоупом; адміністратор
  * виду `team` з підлаштованим id не бачить рядків `org`. Глобальний запит —
- * глобальні рядки й, якщо `everyUser`, рядки «кожного користувача».
+ * глобальні рядки, рядки контейнерів без виду скоупу й, якщо `everyUser`,
+ * рядки «кожного користувача».
  */
 function requestRows(
   contracts: RightsFunctionContracts,
@@ -1739,6 +1740,17 @@ function requestRows(
       (c) =>
         `WHEN ${uuidLiteral(c.objectId)} THEN ${uuidLiteral(must(c.scopeKindId))}`
     )
+  // Контейнер без виду скоупу зберігає призначення на глобальному рівні
+  // (Р2a1-7), тож його рядки бачить лише глобальний запит; рядок скоупу його
+  // не покриває: скоупу й виду в нього немає.
+  const unscoped = contracts.rights
+    .filter((c) => c.container === true && c.scopeKindId === undefined)
+    .map((c) => uuidLiteral(c.objectId))
+  const levels = `d.level ${everyUser ? "IN ('global', 'everyUser')" : "= 'global'"}`
+  const globalLevels =
+    unscoped.length === 0
+      ? `(${levels}`
+      : `(${levels} OR (d.level = 'container' AND d.level_id IN (${unscoped.join(", ")}))`
   return [
     `((d.level = 'scope' AND d.level_id = ${request.kind} AND d.scope = ${request.scope})`,
     ...(containerKinds.length === 0
@@ -1746,7 +1758,7 @@ function requestRows(
       : [
           ` OR (d.level = 'container' AND CASE d.level_id ${containerKinds.join(" ")} ELSE NULL::uuid END = ${request.kind} AND d.scope = ${request.scope})`,
         ]),
-    ` OR (${globalScope(request)} AND d.level ${everyUser ? "IN ('global', 'everyUser')" : "= 'global'"}))`,
+    ` OR (${globalScope(request)} AND ${globalLevels})))`,
   ].join("\n")
 }
 
@@ -1777,7 +1789,8 @@ function memberBody(contracts: RightsFunctionContracts): string {
 
 /**
  * Хто має право через ролі рівня запиту (Р2d2-5): учасники скоупу, а для
- * глобального запиту — власники глобальних призначень і рядок «кожного
+ * глобального запиту — власники глобальних призначень (зокрема призначень
+ * контейнера без виду скоупу) і рядок «кожного
  * користувача» (`user_id IS NULL`). Кандидатів лише перелічено: права кожного
  * рахує той самий шаблон `rights_detail_of`.
  */
@@ -1796,7 +1809,12 @@ function whoBody(
         return `SELECT NULL::uuid AS member, ${subject} AS user_id\nFROM ${qualified(catalog.assignments.table)} a\nWHERE ${global}\n  AND ${subject} IS NOT NULL`
       }),
     ...contracts.assignmentSources
-      .filter((source) => source.assignedOn.level === "global")
+      // Власники рівня, що зберігається глобально: глобальне джерело й
+      // джерело нескоупленого контейнера — учасник там і є користувач.
+      .filter(
+        (source) =>
+          sourceScopeKind(source.assignedOn, contracts.rights) === undefined
+      )
       .map((source) => {
         const member = `src.${quoteIdent(source.member)}`
         return `SELECT NULL::uuid AS member, ${member} AS user_id\nFROM ${qualified(source.table)} src\nWHERE ${global}\n  AND ${member} IS NOT NULL`

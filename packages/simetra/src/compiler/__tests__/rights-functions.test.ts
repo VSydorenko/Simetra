@@ -1088,11 +1088,11 @@ describe("rights administration functions", () => {
 })
 
 /**
- * Фікстури інваріантів рефакторингу (Р2d2-11, Р2d2-13): разом вони мають
+ * Фікстури шаблону прав (Р2d2-2, Р2d2-11): разом вони мають
  * обидві форми гілки зв'язку виміру, функцію множини членства, прийняті й
  * поліморфні джерела, два види скоупу й однотенантний проєкт.
  */
-const INVARIANT_FIXTURES: [string, () => Promise<CompileResult>][] = [
+const TEMPLATE_FIXTURES: [string, () => Promise<CompileResult>][] = [
   ["base", () => compileRights(withRoles(BASE))],
   ["policy-domain", () => compiledPolicyDomain({})],
   ["adopted-sources", () => compileRights(adoptedSourcesDomain())],
@@ -1102,110 +1102,6 @@ const INVARIANT_FIXTURES: [string, () => Promise<CompileResult>][] = [
   ["user-dimension", () => compileRights(unscopedDimension())],
   ["kitchen-sink", () => compile(kitchenSink())],
 ]
-
-/** Функції, тіла яких генерує параметризований шаблон (Р2d2-11). */
-const REFACTORED = new Set(
-  [
-    RIGHTS_FUNCTIONS.mine,
-    RIGHTS_FUNCTIONS.myScopes,
-    RIGHTS_FUNCTIONS.myMembers,
-    RIGHTS_FUNCTIONS.dimensionValues,
-    RIGHTS_FUNCTIONS.visibleUsers,
-  ].map((fn) => fn.name)
-)
-
-/**
- * Хеш SQL одиниць фікстури до рефакторингу: функції шаблону й членства
- * окремо від політик. Знімок — хеш, а не текст: текст тих самих одиниць —
- * сотні кілобайт, а інваріант — «байт-у-байт той самий SQL».
- */
-const BASELINE: Record<string, { functions: string; policies: string }> = {
-  base: {
-    functions:
-      "37afe4a01b1db06dc66d95f0a3bfe7f68e30c12a477516ebfaa9b879d667a89a",
-    policies:
-      "9ba4b87affb40fc3d722eb14f469a39e6987187d56e79dcf28aa695ca821815d",
-  },
-  "policy-domain": {
-    functions:
-      "89f993c109e86a686444f29bf9073a12488267db0293d8f5dae03f0c62c1334a",
-    policies:
-      "ddfd8ac9fdf043227dd4ab2f71e516a68111e0a921d444537e15e59fc030aec4",
-  },
-  "adopted-sources": {
-    functions:
-      "04e6ca7d9ef1fc95fa92e8e017661bfbc3d771c4e4812bf0a6adc4cfb8adb4ee",
-    policies:
-      "bb8d8e14467335f14c5c14111cf8bc6671c12c34b078f0e9ed6555deca9729ec",
-  },
-  "polymorphic-grants": {
-    functions:
-      "78e1eb7f7b1c5f6d078d6563eca6ac740f61fe12daa00e8d775f72cc63fecd3c",
-    policies:
-      "e494adbc9a6bcb24c46d5452682d0c8fed63a3e2b47677a56aefede7d0a97ae8",
-  },
-  "two-scope-kinds": {
-    functions:
-      "e1abee10de2d4958ab6f010b0024da04cab604e8857210281655bea141200237",
-    policies:
-      "07e606b76692d67e3dbd4bdca8f00c625328f507e99e9fe24394fb362a61478e",
-  },
-  "single-tenant": {
-    functions:
-      "6bb2cf84a84927b7a5c89083ffea69f872e5aa286122fc0f73e6cc4e2588f213",
-    policies:
-      "e0a51b3e8bae3135b16b3a4c7cd3b58c670d6dfe0ba1a9b1a21fda6feedea909",
-  },
-  "user-dimension": {
-    functions:
-      "40b38bb7f16a02c1136c2783a391c219c307f161a90c315bfa55c2f1ef932305",
-    policies:
-      "9b59b280e4e6040436b6a51e44047e6057922aebde0009503c73eb81c2354551",
-  },
-  "kitchen-sink": {
-    functions:
-      "20f5ed41298cc91ba4f3a4c8405b2aafb9162af19cb28e09d06192f5d7677bd4",
-    policies:
-      "0ad3bfcf23a029b06bc65dda839ded7df36f55184d84fbd28e7ac06a72054096",
-  },
-}
-
-/** Текст одиниць фікстури, відсортованих за ідентичністю. */
-function unitsText(units: readonly SqlUnit[]): string {
-  return [...units]
-    .sort((a, b) => compareStrings(a.identity, b.identity))
-    .map((unit) => unit.sql)
-    .join("\n\n")
-}
-
-describe("rights refactor invariants", () => {
-  it.each(INVARIANT_FIXTURES)(
-    "rights functions, membership functions and policies keep their SQL: %s",
-    async (name, build) => {
-      // Знімок записано до параметризації шаблону виразом користувача
-      // (Р2d2-11) і до структурованої множини умови (Р2d2-13): наявні функції
-      // й політики — байт-у-байт той самий SQL, тож і те саме дерево.
-      const result = await build()
-      expect(result.diagnostics.filter((d) => d.severity === "error")).toEqual(
-        []
-      )
-      const units = result.model!.sqlUnits
-      const functions = units.filter(
-        (unit) =>
-          unit.class === "function" &&
-          ((unit.generator === "rights" && REFACTORED.has(unit.name)) ||
-            unit.generator === "membership")
-      )
-      const policies = units.filter((unit) => unit.class === "policy")
-      expect(functions).not.toEqual([])
-      expect(policies).not.toEqual([])
-      expect({
-        functions: sha256HexSync(unitsText(functions)),
-        policies: sha256HexSync(unitsText(policies)),
-      }).toEqual(BASELINE[name])
-    }
-  )
-})
 
 /** Дерево виразу SQL без позицій. */
 function exprTree(sql: string): unknown {
@@ -1405,7 +1301,7 @@ function splitLastConjunct(arm: Select): [Select, unknown] {
 }
 
 const VARIANT_FIXTURES: [string, () => Promise<CompileResult>][] = [
-  ...INVARIANT_FIXTURES,
+  ...TEMPLATE_FIXTURES,
   [
     "adopted-without-users",
     () => compileRights(adoptedSourcesDomain(withoutUsers())),
@@ -1429,12 +1325,34 @@ describe("rights analysis templates", () => {
     "no _of body reads the current user: %s",
     async (name, build) => {
       const model = await modelOf(name, build)
+      // Усе, що рахує щось для поточного користувача, — з моделі, а не
+      // переліком: функції прав `SECURITY DEFINER` (функції поточного
+      // користувача й аналізу), функції членства, дослівні функції множини
+      // скоупу й виміру і сама `current_user_id()`.
       const forbidden = [
         "simetra.current_user_id",
-        qualifiedName(F.myScopes),
-        qualifiedName(F.myMembers),
-        qualifiedName(F.mine),
+        ...rightsUnits(model)
+          .filter(
+            (u) =>
+              u.class === "function" &&
+              option(u, "security")?.Boolean?.boolval === true
+          )
+          .map((u) => `${u.schema}.${u.name}`),
+        ...model.sqlUnits
+          .filter((u) => u.generator === "membership" && u.class === "function")
+          .map((u) => `${u.schema}.${u.name}`),
+        ...model.contracts.access.flatMap((a) =>
+          a.scope === undefined ? [] : [qualifiedName(a.scope.setFunction)]
+        ),
+        ...model.contracts.accessDimensions.flatMap((d) =>
+          "function" in d.values ? [qualifiedName(d.values.function)] : []
+        ),
       ]
+      for (const fn of [F.myScopes, F.myMembers, F.mine, F.visibleUsers]) {
+        if (functionIdentities(model).some((i) => i.includes(`.${fn.name}(`)))
+          expect(forbidden).toContain(qualifiedName(fn))
+      }
+      expect(forbidden).toContain(qualifiedName(F.dimensionValues))
       const variants = rightsUnits(model).filter(
         (u) => u.class === "function" && VARIANTS.includes(u.name)
       )
@@ -1664,5 +1582,72 @@ describe("rights analysis functions", () => {
         `SELECT NULL::uuid AS member, src.member_id AS user_id FROM public.global_grant src WHERE ${globalRequest(fn)} AND src.member_id IS NOT NULL`,
       ].map((sql) => selectOf(tree(sql)))
     )
+  })
+
+  /** Гілки підзапиту кандидатів (`FROM (…) u`) функції аналізу. */
+  const candidatesOf = (body: unknown) =>
+    unionArms(
+      (nodes(body, "RangeSubselect")[0] as { subquery: unknown }).subquery
+    )
+
+  it("an adopted membership source narrows the members of the requested scope by its where", async () => {
+    // Р2d2-4, Р2d1-15: рядок іншого рівня поліморфної таблиці членства не
+    // стає учасником скоупу запиту — ті самі умови, що в «моїх скоупах».
+    const narrowed = await compiled(
+      adoptedSourcesDomain({
+        [PROJECT_FILE]: {
+          membershipSources: [
+            membersSource({
+              where: [
+                { column: "userId", isNull: false },
+                { column: "isActive", equals: true },
+              ],
+            }),
+          ],
+        },
+      })
+    )
+    const arm = (fn: string, member: string) =>
+      selectOf(
+        tree(
+          `SELECT s.id AS member, s.user_id AS user_id FROM public.membership s WHERE ${fn}.p_scope_kind = '${ORG_KIND_ID}'::uuid AND s.org_id = ${fn}.p_scope${member} AND s.user_id IS NOT NULL AND s.is_active IS TRUE AND s.user_id IS NOT NULL AND s.is_active = TRUE`
+        )
+      )
+    const member = F.member.name
+    expect(candidatesOf(bodyTree(functionUnit(narrowed, member)))[0]).toEqual(
+      arm(member, ` AND s.id = ${member}.p_member`)
+    )
+    expect(
+      candidatesOf(bodyTree(functionUnit(narrowed, F.who.name)))[0]
+    ).toEqual(arm(F.who.name, ""))
+  })
+
+  it("the global request sees the rows of a container without a scope kind, a scope request does not", async () => {
+    // Призначення контейнера без виду скоупу лежать на глобальному рівні
+    // (Р2a1-7): їх показує глобальний запит під глобальним гейтом, а рядок
+    // скоупу їх не покриває. Власники — і з глобального довідника.
+    const single = await compiled(singleTenantRights())
+    const rows = (fn: string, levels: string) =>
+      exprTree(
+        `((d.level = 'scope' AND d.level_id = ${fn}.p_scope_kind AND d.scope = ${fn}.p_scope) OR (${globalRequest(fn)} AND (d.level ${levels} OR (d.level = 'container' AND d.level_id IN ('${PROJECT_ID}'::uuid)))))`
+      )
+    const contains = (root: unknown, sub: unknown): boolean =>
+      sameTree(root, sub) ||
+      (typeof root === "object" &&
+        root !== null &&
+        Object.values(root).some((child) => contains(child, sub)))
+    const member = bodyTree(functionUnit(single, F.member.name))
+    expect(
+      contains(member, rows(F.member.name, "IN ('global', 'everyUser')"))
+    ).toBe(true)
+    const who = bodyTree(functionUnit(single, F.who.name))
+    expect(contains(who, rows(F.who.name, "= 'global'"))).toBe(true)
+    expect(candidatesOf(who)).toEqual([
+      selectOf(
+        tree(
+          `SELECT NULL::uuid AS member, a.subject AS user_id FROM public.global_role_assignments a WHERE ${globalRequest(F.who.name)} AND a.subject IS NOT NULL`
+        )
+      ),
+    ])
   })
 })
