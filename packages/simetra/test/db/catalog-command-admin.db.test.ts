@@ -11,18 +11,25 @@ import { renderDesiredState } from "simetra/schema"
 import { CATALOG_COMMAND_ERRORS } from "../../src/compiler/catalog-command/units"
 import { uuid } from "../../src/compiler/__tests__/helpers"
 import {
+  RIGHTS_ADMIN_ID,
+  ROLE_FILE,
   TASK_VIEWER_ID,
   USERS_FILE,
   adminRoles,
   compileRights,
+  grant,
+  objects,
   policyDomain,
+  role,
   writeRoles,
   type Layer,
 } from "../../src/compiler/__tests__/fixtures/rights"
 import type { Refusal } from "./connection"
 import {
   type Seed,
+  assignmentRow,
   describeTransaction,
+  insert,
   seedAdministration,
 } from "./rights-seed"
 
@@ -61,6 +68,45 @@ const nickname = (): Layer => ({
   },
 })
 
+const BLIND_RIGHTS_ADMIN_ID = uuid(6746)
+
+/**
+ * Адміністратор прав і його «сліпий» двійник (рішення Ф11 (a)):
+ * `administerRights` не дає неявного читання членства, тож призначення
+ * адресує учасника лише з явним `read` на довіднику членства свого рівня.
+ * `RightsAdmin` тут отримує цей `read` шаром моделі файлу, а не зміною
+ * типового `adminRoles()`: інші тести покладаються на його гранти.
+ * `BlindRightsAdmin` — ті самі гранти без `read` на членстві: фіксує правило.
+ */
+const rightsAdmins = (): Layer => {
+  const rights = grant(
+    objects(["Catalog", "OrgRoles"], ["Catalog", "OrgRoleAssignments"]),
+    ["read", "administerRights"],
+    "any"
+  )
+  const task = grant(objects(["Document", "Task"]), ["read"], "any")
+  return {
+    [ROLE_FILE("RightsAdmin")]: role(
+      RIGHTS_ADMIN_ID,
+      "RightsAdmin",
+      { scopeKind: "org" },
+      {
+        grants: [
+          rights,
+          task,
+          grant(objects(["Catalog", "OrgMember"]), ["read"], "any"),
+        ],
+      }
+    ),
+    [ROLE_FILE("BlindRightsAdmin")]: role(
+      BLIND_RIGHTS_ADMIN_ID,
+      "BlindRightsAdmin",
+      { scopeKind: "org" },
+      { grants: [rights, task] }
+    ),
+  }
+}
+
 type Outcome =
   { result: Record<string, unknown>; probe: pg.QueryResultRow[] } | Refusal
 
@@ -79,7 +125,7 @@ describe("catalog command core on rights system catalogs and Users", () => {
 
   beforeAll(async () => {
     const result = await compileRights(
-      policyDomain(writeRoles(), adminRoles(), nickname())
+      policyDomain(writeRoles(), adminRoles(), rightsAdmins(), nickname())
     )
     expect(result.diagnostics).toEqual([])
     const client = await tx.open()
@@ -248,13 +294,10 @@ describe("catalog command core on rights system catalogs and Users", () => {
     expect(outcome).toMatchObject({ code: "42501", detail: "role-in-use" })
   })
 
-  // Типовий адміністратор скоупу (`OrgAdmin`, `fullAccess`) бачить учасника й
-  // кастомну роль свого тенанта: перевірка видимості `subject` і
-  // `custom_role` не дає хибного `command.invalid`.
-  it("assign a custom role to a member of the own tenant passes", async () => {
+  const assignCustom = (user: string) => {
     const id = randomUUID()
-    const outcome = await save(
-      "root",
+    return save(
+      user,
       ASSIGNMENTS,
       admin,
       {
@@ -266,10 +309,36 @@ describe("catalog command core on rights system catalogs and Users", () => {
       null,
       `SELECT subject, custom_role FROM public.${ASSIGNMENTS} WHERE id = '${id}'`
     )
-    expect(outcome).toMatchObject({
-      result: { id },
-      probe: [{ subject: key("target@A"), custom_role: key("unusedCustom") }],
-    })
+  }
+
+  // Перевірка видимості `subject` і `custom_role` не дає хибного
+  // `command.invalid` ні типовому адміністратору прав (`RightsAdmin` з явним
+  // `read` на членстві), ні адміністратору скоупу (`OrgAdmin`, `fullAccess`).
+  it.each(["admin", "root"])(
+    "assign a custom role to a member of the own tenant passes (%s)",
+    async (user) => {
+      const outcome = await assignCustom(user)
+      expect(outcome).toMatchObject({
+        probe: [{ subject: key("target@A"), custom_role: key("unusedCustom") }],
+      })
+    }
+  )
+
+  // Без `read` на членстві учасник власного тенанта невидимий так само, як
+  // чужий: `administerRights` не дає неявного читання (Ф11 (a)). Призначення
+  // `BlindRightsAdmin` засіває власник у точці збереження цього кейсу.
+  it("rights admin without read on membership → command.invalid subject", async () => {
+    const client = tx.client()
+    await client.query("SAVEPOINT blind_admin")
+    try {
+      await insert(client, ASSIGNMENTS, {
+        org_id: key("A"),
+        ...assignmentRow(key("other@A"), { archetype: BLIND_RIGHTS_ADMIN_ID }),
+      })
+      expect(await assignCustom("other")).toEqual(INVALID("subject"))
+    } finally {
+      await client.query("ROLLBACK TO SAVEPOINT blind_admin")
+    }
   })
 
   // Учасник чужого тенанта невидимий у скоупі рядка: та сама відмова, що й
