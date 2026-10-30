@@ -488,3 +488,19 @@ ROADMAP, рядок «Ранній зріз П4»: «A2 (ядро довідни
 | 6 | перевірка предвизначеного — перед правом «до» в `mark_deletion` | «порядок позначки», «предвизначений — після обох перевірок права» |
 | 6 | `FOR UPDATE` у читанні `v_old` у `mark_deletion` | «порядок позначки», «обробник присвоює parent_id» (позначка) |
 | 6 | `GET DIAGNOSTICS` після `DELETE` у `delete` | «порядок видалення» |
+| 7 | `FOR UPDATE` у замку рядка `v_old` | «refusal: reader: stale version without update is no-right» (`command.conflict` замість `no-right`) |
+| 7 | перевірка видимості `Ref` (`single`, не масив) | «ref: header parent invisible to TicketOwnWriter», «ref: header parent is a random id», «ref: tabular row points to an invisible ticket», «ref: tabular row points to a random id» |
+| 7 | `parent = корінь` у `WHERE` `DELETE` ТЧ | «tabular: rows of another owner stay intact; order and removal» |
+| 7 | відмова на невідомий ключ `p_item` | «keys: deletion_mark/version/created_by_id/predefined_name/no_such_key on update», «keys: deletion_mark on create» |
+| 7 | копія носія через автора — звичайним `SELECT` «Користувачів» замість `current_user_carrier_sources()` | «NoteOwnCreator without read on Users: author carrier copy» |
+| 7 | умова скоупу цілі `pair` | «scope refs: subject of tenant A with org_id of tenant B» |
+| 7 | масив `single` — лише перший елемент (`[1:1]`) | «scope refs: watchers with a tenant B member second», «scope refs: watchers [null] → [null, tenant B member]» |
+| 7 | новизна елемента масиву — `a.v <> ALL (…)` замість `IS NOT TRUE` | «scope refs: watchers [null] → [null, tenant B member]» |
+| 7 | межа тенанта на створенні | «tenant boundary: ProjectTicketWriter creates in tenant B» (сирий `42501` RLS `ticket_scope_insert`) |
+| 8 | предикати контейнера в `rightsCheckPredicates` | 35 точок `ticket tp …` (create / update / markDeletion, K1 і KR) |
+| 8 | перевиведення копій зміненого зв'язку в `save` | «task_comment cw update TO.c task_id=TA», «… task_id=NULL» |
+| 9 | `pg_advisory_xact_lock` у функції тригера ієрархії | паралельний прямий `UPDATE` (друга сесія не чекає на замок) |
+| 9 | `BEFORE UPDATE OF parent_id` замість `AFTER UPDATE` (функція — `RETURN NEW`) | кейс обробника `beforeWrite` (прямий `UPDATE … SET move_to`) |
+| 9 | перевірка ізоляції в тригері ієрархії | кейс `REPEATABLE READ` (перша ітерація циклу ізоляцій) |
+| 9 | `UPDATE` шапки лише за ключів шапки в `p_item` (інакше `v_row := v_old`) | паралельні правки лише ТЧ (обидві проходять, конфлікту немає) |
+| 9 | рання відмова `create` для контракту без створення | «Users › save without a version → command.invalid create» (`DETAIL` `id`) |
