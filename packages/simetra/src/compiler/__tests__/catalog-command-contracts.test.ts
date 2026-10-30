@@ -2,7 +2,7 @@ import { beforeAll, describe, expect, it } from "vitest"
 import type { CompileResult, CompiledModel } from "simetra/compiler"
 import {
   authorColumns,
-  markDeletionAction,
+  deletionMarkColumn,
   predefinedNameColumn,
   serviceDateColumns,
   standardLogicalName,
@@ -17,6 +17,7 @@ import {
 import { loadSqlParser, type SqlParser } from "../sql/parse"
 import { loadPlpgsqlParser, type PlpgsqlParser } from "../sql/plpgsql"
 import { handlerAssigns } from "../stages/links"
+import { findStandardColumn } from "../standard-column"
 import {
   TICKET_FILE,
   catalog,
@@ -28,13 +29,11 @@ import {
   policyDomain,
   scopeRootCarrier,
   singleTenantRights,
-  withAttributeCase,
   writeRoles,
   type Layer,
 } from "./fixtures/rights"
 import { uuid } from "./helpers"
-
-const deletionMark = { logicalName: markDeletionAction.transition!.column }
+import { snakeCaseTwin } from "./fixtures/snake-case"
 
 let parse: SqlParser
 let plpgsql: PlpgsqlParser
@@ -140,7 +139,7 @@ describe("catalogCommandContracts", () => {
     ["механіка", standardOf([versionColumn(), ...serviceDateColumns()])],
     ["авторство", standardOf(authorColumns())],
     ["predefined_name", standardOf([predefinedNameColumn()])],
-    ["позначка видалення", standardOf([deletionMark])],
+    ["позначка видалення", standardOf([deletionMarkColumn()])],
     ["копії носіїв", (c: PhysicalColumn) => c.origin.copyOf !== undefined],
   ] as const)("ключі не містять колонок: %s", (_, matches) => {
     const keys = (c: CatalogCommandContract) => [
@@ -443,36 +442,28 @@ describe("замок ієрархії від обробника beforeWrite (Р-
   })
 })
 
-// Контракт за `origin`, не за іменем: та сама модель в обох стилях дає ті
-// самі фізичні колонки ключів, позначки й ТЧ.
-for (const attributeCase of ["camelCase", "snake_case"] as const) {
-  const name = `${attributeCase}: контракт за origin, не за іменем`
-  if (attributeCase === "snake_case") {
-    // snake_case-проєкт із довідниками прав ще не компілюється: борг прав §1
-    // (docs/superpowers/plans/2026-10-26-rights-residual-debt.md). Увімкнути
-    // разом із виправленням боргу.
-    it.todo(name)
-    continue
-  }
-  it(name, async () => {
-    const model = await compiled(
-      compileRights(
-        policyDomain(
-          writeRoles(),
-          commandCoreLayer(),
-          withAttributeCase(attributeCase)
-        )
-      )
-    )
+// Контракт за `origin`, не за іменем: близнюк моделі в `snake_case`
+// (`snakeCaseTwin`) дає ті самі фізичні ключі, позначку, ТЧ і контракт загалом.
+describe("обидва стилі: контракт за origin, не за іменем", () => {
+  const files = () => policyDomain(writeRoles(), commandCoreLayer())
+  const styles = [
+    ["camelCase", () => files()],
+    ["snake_case", () => snakeCaseTwin(files())],
+  ] as const
+
+  it.each(styles)("%s: ключі й колонки з гранту", async (attributeCase, f) => {
+    const model = await compiled(compileRights(f()))
+    expect(model.project.naming.attributeCase).toBe(attributeCase)
     const ticket = contractOf(contractsOf(model), "ticket")
     const [section] = ticket.tabularSections
     expect({
       grant: grantOf(model, "ticket"),
       createKeys: ticket.createKeys,
       updateKeys: ticket.updateKeys,
-      deletionMark: ticket.table.columns.find(
-        (c) =>
-          c.origin.standard === standardLogicalName(deletionMark, attributeCase)
+      deletionMark: findStandardColumn(
+        ticket.table,
+        deletionMarkColumn(),
+        attributeCase
       )?.name,
       section: [section!.parent, section!.lineNumber, ...section!.rowKeys],
     }).toEqual({
@@ -536,6 +527,31 @@ for (const attributeCase of ["camelCase", "snake_case"] as const) {
       section: ["parent_id", "line_number", "line_region_id", "related_id"],
     })
   })
+
+  // Таблиці знімка несуть `origin.standard` у стилі проєкту, тож порівнюється
+  // контракт із таблицями, згорнутими до фізичного імені.
+  it("контракт snake_case-близнюка дорівнює camelCase за фізичними іменами", async () => {
+    const [camel, snake] = await Promise.all(
+      styles.map(async ([, f]) =>
+        physicalOf(contractsOf(await compiled(compileRights(f()))))
+      )
+    )
+    expect(snake).toEqual(camel)
+  })
+})
+
+function physicalOf(value: unknown): unknown {
+  return JSON.parse(
+    JSON.stringify(value, (_, v: unknown) =>
+      typeof v === "object" &&
+      v !== null &&
+      "schema" in v &&
+      "name" in v &&
+      "columns" in v
+        ? `${String(v.schema)}.${String(v.name)}`
+        : v
+    )
+  )
 }
 
 it("ім'я save довідника, зайняте дослівною функцією, — physical.function-duplicate", async () => {

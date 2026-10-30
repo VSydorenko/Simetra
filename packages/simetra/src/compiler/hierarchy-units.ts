@@ -2,7 +2,6 @@ import {
   KIND_REGISTRY,
   makeObjectName,
   quoteIdent,
-  standardLogicalName,
   type AttributeCase,
   type DatabaseProvider,
   type PhysicalSnapshot,
@@ -15,6 +14,7 @@ import { executeGrants } from "./sql/execute-grants"
 import type { SqlParser } from "./sql/parse"
 import { generatedUnit, type SqlUnit } from "./sql/units"
 import type { ParsedObject } from "./stages/files"
+import { findStandardColumn } from "./standard-column"
 import { fieldForeignKey, sqlLiteral } from "./stages/model"
 
 /**
@@ -70,8 +70,9 @@ export interface HierarchyTable {
 
 /**
  * Ієрархічні основні таблиці знімка: колонка батька — стандартна колонка
- * реєстру виду з ціллю `self`, знайдена за `origin.standard` у стилі проєкту
- * (не за літералом: snake_case-проєкт), з FK на саму таблицю. Колонка
+ * реєстру виду з ціллю `self`, знайдена спільним помічником за визначенням
+ * реєстру в стилі проєкту (не за літералом: snake_case-проєкт), з FK на саму
+ * таблицю. Колонка
  * `parent_id` ТЧ — власник рядка, не ієрархія, тож ТЧ сюди не входять.
  * Спільне для генератора й резервування імен функцій (`derivedFunctions`).
  */
@@ -90,13 +91,11 @@ export function hierarchyTables(
       continue
     const object = byId.get(table.origin.objectId)
     if (object === undefined) continue
-    const self = new Set(
-      KIND_REGISTRY[object.kind]
-        .standardColumns(object.data)
-        .filter((d) => d.ref === "self")
-        .map((d) => standardLogicalName(d, attributeCase))
-    )
-    const parent = table.columns.find((c) => self.has(c.origin.standard ?? ""))
+    const parent = KIND_REGISTRY[object.kind]
+      .standardColumns(object.data)
+      .filter((d) => d.ref === "self")
+      .map((d) => findStandardColumn(table, d, attributeCase))
+      .find((c) => c !== undefined)
     if (parent === undefined) continue
     const fk = fieldForeignKey(table, parent.name)
     // Ключ — колонка, на яку FK батька вказує в самій таблиці (у скоупленій

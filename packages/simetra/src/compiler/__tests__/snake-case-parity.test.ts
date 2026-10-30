@@ -3,6 +3,7 @@ import { compile } from "../compile"
 import {
   adminRoles,
   authorCarrier,
+  commandCoreLayer,
   policyDomain,
   singleTenantRights,
   writeRoles,
@@ -21,6 +22,10 @@ describe("snake_case twin of a rights project", () => {
     [
       "policy domain with write and admin roles",
       () => policyDomain(writeRoles(), adminRoles()),
+    ],
+    [
+      "command-core catalog with tabular section and hierarchy",
+      () => policyDomain(writeRoles(), commandCoreLayer()),
     ],
     [
       "single-tenant rights with author carriers",

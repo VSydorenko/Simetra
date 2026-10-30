@@ -1132,24 +1132,6 @@ export function commandCoreLayer(): Layer {
   }
 }
 
-/**
- * Стиль логічних імен проєкту: контракт ядра мусить бути однаковим за
- * фізичними іменами в обох стилях.
- */
-export const withAttributeCase = (
-  attributeCase: "camelCase" | "snake_case"
-): Layer => ({
-  [PROJECT_FILE]: { naming: { attributeCase } },
-  // Єдине складене логічне ім'я домену політик — у стилі проєкту.
-  ...(attributeCase === "snake_case"
-    ? {
-        [COMMENT_COUNTER_FILE]: {
-          columns: [column(6551, "comment_id", "comment_id", "UUID")],
-        },
-      }
-    : {}),
-})
-
 export const NOTE_FILE = "catalogs/Note/Note.meta.json"
 export const NOTE_LONG_FILE = "catalogs/NoteLong/NoteLong.meta.json"
 export const NOTE_WRITER_ID = uuid(6810)

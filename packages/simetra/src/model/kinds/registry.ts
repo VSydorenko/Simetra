@@ -29,7 +29,6 @@ export {
   STANDARD_ACTIONS,
   actionRequires,
   closeRequires,
-  markDeletionAction,
   type ActionEffects,
   type Dml,
   type KindAction,

@@ -1,9 +1,11 @@
 import {
   KIND_REGISTRY,
+  deletionMarkColumn,
+  keyColumn,
   lineNumberColumn,
-  markDeletionAction,
   predefinedNameColumn,
   standardLogicalName,
+  tabularParentColumn,
   versionColumn,
   type Attribute,
   type AttributeCase,
@@ -27,6 +29,12 @@ import { carrierLinks, type CarrierLink } from "../rights/carrier-units"
 import type { SqlParser } from "../sql/parse"
 import type { PlpgsqlParser } from "../sql/plpgsql"
 import { functionIdentity, type SqlUnit } from "../sql/units"
+import {
+  findStandardColumn,
+  findStyleFreeColumn,
+  standardColumn,
+  styleFreeColumn,
+} from "../standard-column"
 import { objectKey, type ParsedObject } from "../stages/files"
 import { handlerAssigns } from "../stages/links"
 import { kindLabelOf } from "../stages/model"
@@ -145,17 +153,6 @@ export function catalogCommandContracts(input: {
   const rightsById = new Map(input.rights.map((r) => [r.objectId, r]))
   const accessByTable = new Map(input.access.map((a) => [tableKey(a.table), a]))
   const links = carrierLinks(physical)
-  // Стилізовані імена реєстру: `origin.standard` несе логічне ім'я в стилі
-  // проєкту, тож порівняння з літералом зламало б snake_case-проєкт.
-  const names = {
-    deletionMark: standardLogicalName(
-      { logicalName: must(markDeletionAction.transition).column },
-      style
-    ),
-    lineNumber: standardLogicalName(lineNumberColumn(), style),
-    predefined: standardLogicalName(predefinedNameColumn(), style),
-    version: standardLogicalName(versionColumn(), style),
-  }
   const reference = referenceResolver(input.objects, physical)
 
   return input.access
@@ -185,22 +182,24 @@ export function catalogCommandContracts(input: {
       })
       if (actions === undefined) return []
 
-      const key = mustColumn(table, "ref")
+      const key = styleFreeColumn(table, keyColumn(false)).name
       // Позначку пише лише `mark_deletion` (Р-A2-5), а переходи — лише
       // дія-перехід: обидва вилучаються з ключів однаково, хоч у системних
       // довідниках прав позначка й не перехід.
       const excluded = new Set([
         ...rights.transitions.map((t) => t.column),
-        mustColumn(table, names.deletionMark),
+        standardColumn(table, deletionMarkColumn(), style).name,
       ])
       const standard = KIND_REGISTRY[object.kind].standardColumns(object.data)
-      const parent = standardColumnsOf(table, standard, style, "self")[0]
+      const parent = selfParentOf(table, standard, style)
       const scopeColumn = table.columns.find(
         (c) => c.origin.scopeKindId !== undefined
       )?.name
-      const predefinedColumn = columnOf(table, names.predefined)
-      const sectionDefs =
-        KIND_REGISTRY[object.kind].tabularSectionColumns?.(object.data) ?? []
+      const predefinedColumn = findStandardColumn(
+        table,
+        predefinedNameColumn(),
+        style
+      )?.name
       const sections = (object.data as Catalog).tabularSections
 
       return [
@@ -240,8 +239,6 @@ export function catalogCommandContracts(input: {
                 must(accessByTable.get(tableKey(section))?.command),
                 {
                   style,
-                  lineNumber: names.lineNumber,
-                  defs: sectionDefs,
                   // Стандартної ТЧ (дельта «Ролей») серед ТЧ файлу немає, а
                   // посилань-реквізитів вона не має.
                   attributes:
@@ -271,7 +268,7 @@ export function catalogCommandContracts(input: {
             (l) => tableKey(l.table) === tableKey(table)
           ),
           ...(predefinedColumn === undefined ? {} : { predefinedColumn }),
-          versionColumn: mustColumn(table, names.version),
+          versionColumn: standardColumn(table, versionColumn(), style).name,
           ...(parent === undefined
             ? {}
             : {
@@ -321,17 +318,13 @@ function sectionContract(
   command: NonNullable<AccessContract["command"]>,
   facts: {
     style: AttributeCase
-    lineNumber: string
-    defs: readonly StandardColumnDef[]
     attributes: readonly Attribute[]
     reference: ReferenceResolver
   }
 ): CatalogCommandSection {
-  const key = mustColumn(table, "ref")
-  const parent = must(
-    standardColumnsOf(table, facts.defs, facts.style, "owningObject")[0]
-  )
-  const lineNumber = mustColumn(table, facts.lineNumber)
+  const key = styleFreeColumn(table, keyColumn(false)).name
+  const parent = styleFreeColumn(table, tabularParentColumn()).name
+  const lineNumber = standardColumn(table, lineNumberColumn(), facts.style).name
   const scope = table.columns.find(
     (c) => c.origin.scopeKindId !== undefined
   )?.name
@@ -361,7 +354,7 @@ function ownerReferences(
   style: AttributeCase,
   reference: ReferenceResolver
 ): CommandReference[] {
-  const columns = standardColumnsOf(table, standard, style, "owners")
+  const columns = ownerColumnsOf(table, standard, style)
   if (columns.length === 0) return []
   const owners = (object.data as Catalog).owners
   if (columns.length === 1) {
@@ -470,7 +463,7 @@ function referenceResolver(
 
 /** Ключ цілі посилання: колонка `ref` виду чи єдиний первинний ключ таблиці. */
 function targetKeyOf(table: PhysicalTable): string {
-  const ref = columnOf(table, "ref")
+  const ref = findStyleFreeColumn(table, keyColumn(false))?.name
   if (ref !== undefined) return ref
   const [only, ...rest] = table.primaryKey?.columns ?? []
   if (only === undefined || rest.length > 0) {
@@ -519,37 +512,37 @@ function assignsParent(
   })
 }
 
-/**
- * Фізичні колонки стандартних колонок реєстру з ціллю `ref` у порядку таблиці:
- * поліморфна колонка дає пару `_type`, `_id`.
- */
-function standardColumnsOf(
+/** Колонка батька ієрархії: стандартна колонка реєстру виду з ціллю `self`. */
+function selfParentOf(
   table: PhysicalTable,
   defs: readonly StandardColumnDef[],
-  style: AttributeCase,
-  ref: NonNullable<StandardColumnDef["ref"]>
+  style: AttributeCase
+): string | undefined {
+  return defs
+    .filter((d) => d.ref === "self")
+    .map((d) => findStandardColumn(table, d, style)?.name)
+    .find((name) => name !== undefined)
+}
+
+/**
+ * Фізичні колонки власника (`ref: "owners"`) у порядку таблиці. Помічник
+ * `findStandardColumn` повертає одну колонку, а поліморфний власник — одне
+ * визначення на пару `_type`, `_id` з тим самим `origin.standard`, тож тут
+ * фільтр за стилізованим ім'ям визначення реєстру.
+ */
+function ownerColumnsOf(
+  table: PhysicalTable,
+  defs: readonly StandardColumnDef[],
+  style: AttributeCase
 ): string[] {
   const logical = new Set(
-    defs.filter((d) => d.ref === ref).map((d) => standardLogicalName(d, style))
+    defs
+      .filter((d) => d.ref === "owners")
+      .map((d) => standardLogicalName(d, style))
   )
   return table.columns
     .filter((c) => logical.has(c.origin.standard ?? ""))
     .map((c) => c.name)
-}
-
-function columnOf(table: PhysicalTable, standard: string): string | undefined {
-  return table.columns.find((c) => c.origin.standard === standard)?.name
-}
-
-/** Стандартна колонка, яку вид гарантує; відсутність — дефект компілятора. */
-function mustColumn(table: PhysicalTable, standard: string): string {
-  const name = columnOf(table, standard)
-  if (name === undefined) {
-    throw new Error(
-      `internal: ${tableKey(table)} has no standard column ${standard}`
-    )
-  }
-  return name
 }
 
 const tableKey = (t: { schema: string; name: string }) =>

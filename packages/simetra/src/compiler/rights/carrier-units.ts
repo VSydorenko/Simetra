@@ -3,7 +3,6 @@ import {
   authorColumns,
   makeObjectName,
   quoteIdent,
-  standardLogicalName,
   type AttributeCase,
   type DatabaseProvider,
   type PhysicalColumn,
@@ -21,6 +20,7 @@ import { executeGrants } from "../sql/execute-grants"
 import type { SqlParser } from "../sql/parse"
 import { functionIdentity, generatedUnit, type SqlUnit } from "../sql/units"
 import { fieldForeignKey } from "../stages/model"
+import { findStandardColumn } from "../standard-column"
 import { definerTrigger } from "./definer"
 
 /** Мітки імен тригерів і функцій носіїв — алгоритм імен Postgres від таблиці. */
@@ -200,13 +200,11 @@ export function authorCarrierLinks(
   physical: Pick<PhysicalSnapshot, "tables">,
   attributeCase: AttributeCase
 ): CarrierLink[] {
-  const author = new Set(
-    authorColumns().map((def) => standardLogicalName(def, attributeCase))
-  )
   return carrierLinks(physical).filter((link) =>
-    author.has(
-      link.table.columns.find((c) => c.name === link.through)?.origin
-        .standard ?? ""
+    authorColumns().some(
+      (def) =>
+        findStandardColumn(link.table, def, attributeCase)?.name ===
+        link.through
     )
   )
 }
