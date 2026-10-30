@@ -3,11 +3,11 @@ import {
   PROVIDER_LOGIN_ROLES,
   RIGHTS_COLUMNS,
   RIGHTS_MAINTENANCE_SETTING,
+  USER_PLATFORM_COLUMNS,
   deletionMarkColumn,
   keyColumn,
   quoteIdent,
   tabularParentColumn,
-  userPlatformColumns,
   type AttributeCase,
   type DatabaseProvider,
   type PhysicalSnapshot,
@@ -101,7 +101,6 @@ const R = RIGHTS_COLUMNS
 const KEY = keyColumn(false)
 const PARENT = tabularParentColumn()
 const DELETION = deletionMarkColumn()
-const USER_KIND = userPlatformColumns()[0]!
 
 function column(
   table: PhysicalTable,
@@ -888,7 +887,7 @@ function usersEventBody(
   const invalid = q(users.invalidColumn)
   const table = tableOf(physical, users.table)
   // `origin.standard` несе ім'я в стилі проєкту: `user_kind` у snake_case.
-  const kind = q(column(table, USER_KIND, attributeCase))
+  const kind = q(column(table, USER_PLATFORM_COLUMNS.userKind, attributeCase))
   const repeated =
     operation === "INSERT"
       ? [
