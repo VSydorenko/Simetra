@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import type pg from "pg"
+import { RIGHTS_MAINTENANCE_SETTING } from "simetra/model"
 import {
   CHECKLIST_TABLE,
   HOURS_TABLES,
+  ORG_ADMIN_ID,
   ORG_KIND_ID,
   ORG_MEMBER_ROLE_ID,
   RIGHTS_ADMIN_ID,
@@ -13,7 +15,13 @@ import {
 } from "../../src/compiler/__tests__/fixtures/rights"
 import { signUp } from "./auth"
 import { asRole, queryAs } from "./connection"
-import { type PlanNode, scansOf, subPlans } from "./explain-plan"
+import {
+  type PlanNode,
+  correlatedCteSubPlans,
+  functionScans,
+  scansOf,
+  subPlans,
+} from "./explain-plan"
 import {
   assignmentRow,
   deploy,
@@ -43,6 +51,12 @@ const TASKS_PER_TENANT = 20
 const LINES_PER_TASK = 5
 const MOVEMENTS_PER_TENANT = 10
 const JOURNAL_PER_SCOPE = 20
+/**
+ * Скоупи власника `fullAccess` (Р2d2-23): досить, щоб квадратичне замикання
+ * мало корельований підплан з тисячами циклів, і мало, щоб старе тіло не
+ * роздувало бюджет файлу.
+ */
+const FULL_ACCESS_SCOPES = 30
 
 /** Колонка скоупу (межа тенанта) таблиць гейта. */
 const SCOPE_COLUMN = /\borg_id\b/
@@ -65,6 +79,10 @@ interface Gate {
   org: string
   user: string
   admin: string
+  /** Власник `OrgAdmin` (`fullAccess`) у `FULL_ACCESS_SCOPES` інших тенантах. */
+  full: string
+  /** Задача одного з тенантів власника `fullAccess`. */
+  fullPoint: string
   /** id видимого користувачу рядка таблиці — для точкового читання. */
   point: Record<string, string>
 }
@@ -82,6 +100,7 @@ async function seed(client: pg.Client): Promise<Gate> {
   const role = randomUUID()
   const user = await signUp(client)
   const admin = await signUp(client)
+  const full = await signUp(client)
   await insert(client, "organization", { id: org })
   await insert(client, "region", { id: region, org_id: org })
   await insert(client, "org_member", { id: member, org_id: org, user_id: user })
@@ -157,6 +176,28 @@ async function seed(client: pg.Client): Promise<Gate> {
     [ORG_KIND_ID, JOURNAL_PER_SCOPE]
   )
 
+  await client.query(
+    `INSERT INTO public.org_member (id, org_id, user_id)
+     SELECT gen_random_uuid(), o.id, $1 FROM public.organization o WHERE o.id <> $2 ORDER BY o.id LIMIT $3`,
+    [full, org, FULL_ACCESS_SCOPES]
+  )
+  await client.query("SELECT set_config($1, 'on', true)", [
+    RIGHTS_MAINTENANCE_SETTING,
+  ])
+  await client.query(
+    `INSERT INTO public.org_role_assignments (id, org_id, subject, archetype, deletion_mark)
+     SELECT gen_random_uuid(), m.org_id, m.id, $2, false FROM public.org_member m WHERE m.user_id = $1`,
+    [full, ORG_ADMIN_ID]
+  )
+  await client.query("SELECT set_config($1, 'off', true)", [
+    RIGHTS_MAINTENANCE_SETTING,
+  ])
+  const { rows: fullTasks } = await client.query<{ id: string }>(
+    `SELECT t.id FROM public.${TASK} t JOIN public.org_member m ON m.org_id = t.org_id
+     WHERE m.user_id = $1 ORDER BY t.id LIMIT 1`,
+    [full]
+  )
+
   const { rows } = await client.query<{ task: string; line: string }>(
     `SELECT t.id AS task, c.id AS line FROM public.${TASK} t
      JOIN public.${CHECKLIST} c ON c.parent_id = t.id
@@ -169,6 +210,8 @@ async function seed(client: pg.Client): Promise<Gate> {
     org,
     user,
     admin,
+    full,
+    fullPoint: fullTasks[0]!.id,
     point: { [TASK]: visible.task, [CHECKLIST]: visible.line },
   }
 }
@@ -230,7 +273,7 @@ describe("rights plan gate", () => {
     // Лише засіяні таблиці: ANALYZE усієї спільної бази тримав би блокування
     // чужих таблиць до відкату й переписав би їхню статистику поза транзакцією.
     await client.query(
-      `ANALYZE public.organization, public.region, public.${TASK}, public.${CHECKLIST}, public.${HOURS}, simetra.${JOURNAL}`
+      `ANALYZE public.organization, public.region, public.org_member, public.org_role_assignments, public.${TASK}, public.${CHECKLIST}, public.${HOURS}, simetra.${JOURNAL}`
     )
     console.info(`rights plan gate: seed + ANALYZE ${Date.now() - started} ms`)
   }, 120_000)
@@ -273,15 +316,20 @@ describe("rights plan gate", () => {
   )
 
   /**
-   * `rights_journal_of` — `SECURITY DEFINER`: зовнішній план показує лише
-   * `Function Scan`. План справжнього виклику — з `auto_explain` (бібліотека
-   * в `shared_preload_libraries` стеку, параметри `auto_explain.*` дозволені
-   * ролі стеку через supautils), вкладений оператор тіла приходить
-   * повідомленням `LOG`.
+   * Плани операторів справжнього виклику `sql` від імені `user`, з
+   * вкладеними: функція прав `SECURITY DEFINER` не інлайниться, тож зовнішній
+   * план показує лише `Function Scan`. Плани дає `auto_explain` (бібліотека в
+   * `shared_preload_libraries` стеку, параметри `auto_explain.*` дозволені
+   * ролі стеку через supautils): кожен оператор, і вкладений оператор тіла
+   * функції теж, приходить повідомленням `LOG`.
    */
-  it("rights_journal_of reads the scope journal by index", async () => {
+  const autoExplain = async (
+    user: string,
+    sql: string,
+    params: unknown[] = []
+  ): Promise<{ plans: Record<string, unknown>[]; rows: unknown[] }> => {
     const client = tx.client()
-    const plans: unknown[] = []
+    const plans: Record<string, unknown>[] = []
     const onNotice = (notice: { severity?: string; message?: string }) => {
       const message = notice.message ?? ""
       // Повідомлення `auto_explain`: «duration: … plan:» і план JSON.
@@ -289,7 +337,7 @@ describe("rights plan gate", () => {
       if (notice.severity === "LOG" && start >= 0)
         plans.push(JSON.parse(message.slice(start + "plan:".length)))
     }
-    await client.query("SAVEPOINT journal_plan")
+    await client.query("SAVEPOINT auto_explain")
     client.on("notice", onNotice)
     try {
       for (const setting of [
@@ -301,22 +349,28 @@ describe("rights plan gate", () => {
       ])
         await client.query(`SET LOCAL ${setting}`)
       await asRole(client, "authenticated", {
-        sub: gate.admin,
+        sub: user,
         role: "authenticated",
       })
-      const { rows } = await client.query(
-        "SELECT * FROM simetra.rights_journal_of($1, $2, 100)",
-        [ORG_KIND_ID, gate.org]
-      )
-      // Засів плюс записи журналу від призначень тенанта гейта.
-      expect(rows.length, "the admin reads the journal").toBeGreaterThanOrEqual(
-        JOURNAL_PER_SCOPE
-      )
+      const { rows } = await client.query(sql, params)
+      return { plans, rows }
     } finally {
       client.off("notice", onNotice)
       // Відкат точки збереження скидає і `SET LOCAL`, і роль.
-      await client.query("ROLLBACK TO SAVEPOINT journal_plan")
+      await client.query("ROLLBACK TO SAVEPOINT auto_explain")
     }
+  }
+
+  it("rights_journal_of reads the scope journal by index", async () => {
+    const { plans, rows } = await autoExplain(
+      gate.admin,
+      "SELECT * FROM simetra.rights_journal_of($1, $2, 100)",
+      [ORG_KIND_ID, gate.org]
+    )
+    // Засів плюс записи журналу від призначень тенанта гейта.
+    expect(rows.length, "the admin reads the journal").toBeGreaterThanOrEqual(
+      JOURNAL_PER_SCOPE
+    )
     const scans = plans.flatMap((p) => scansOf(p, JOURNAL))
     expect(scans.length, "the journal is read").toBeGreaterThan(0)
     expect.soft(scans.filter((n) => n.type === "Seq Scan")).toEqual([])
@@ -333,4 +387,45 @@ describe("rights plan gate", () => {
       )
       .toBe(true)
   })
+
+  /**
+   * Тіла функцій прав (спека прав §5.4, Р2d2-23): власник `fullAccess` у
+   * `FULL_ACCESS_SCOPES` тенантах читає `rights_mine()` напряму й через
+   * функції множин політики (точкове читання задачі). Жоден оператор — ні
+   * тіло `rights_mine`, ні тіла `rights_any` / `own` / `dim` / `container` —
+   * не має підплану з циклами > 1 над `CTE Scan`: так виглядало замикання,
+   * квадратичне за скоупами (Р2d2-22).
+   */
+  it.each([
+    ["rights_mine()", () => "SELECT count(*) FROM simetra.rights_mine()"],
+    [
+      "set functions of a task policy",
+      () => `SELECT * FROM public.${TASK} WHERE id = '${gate.fullPoint}'::uuid`,
+    ],
+  ])(
+    "%s: rights function bodies have no correlated CTE subplan",
+    async (_, sql) => {
+      const { plans, rows } = await autoExplain(gate.full, sql())
+      expect(rows.length, "the full-access holder reads").toBe(1)
+      // Не порожній доказ: план тіла `rights_mine` захоплено, і він рахує
+      // замикання — читає `rights_requires`.
+      const bodies = plans.filter((p) =>
+        String(p["Query Text"]).includes("closure_1")
+      )
+      expect(bodies.length, "plans of the rights_mine body").toBeGreaterThan(0)
+      for (const body of bodies)
+        expect(functionScans(body)).toContain("rights_requires")
+      expect
+        .soft(
+          plans.flatMap((p) =>
+            correlatedCteSubPlans(p).map(
+              (n) =>
+                `${n.type} x${n.loops}: ${String(p["Query Text"]).slice(0, 80)}`
+            )
+          ),
+          "correlated subplans over a CTE scan"
+        )
+        .toEqual([])
+    }
+  )
 })
