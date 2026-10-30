@@ -82,6 +82,7 @@ import {
 import { checkKindTableVerbatim, kindTables } from "./sql/kind-table-verbatim"
 import { loadSqlParser, type SqlParser } from "./sql/parse"
 import { loadPlpgsqlParser } from "./sql/plpgsql"
+import { assertPinnedSearchPath } from "./sql/pinned-search-path"
 import { embedRowRules } from "./sql/row-rule"
 import { withoutPlatformSchema } from "./sql/reserved-schema"
 import {
@@ -611,6 +612,7 @@ export async function runStages(
       parse
     ),
   ].sort((a, b) => compareStrings(a.identity, b.identity))
+  assertPinnedSearchPath(sqlUnits)
   const nameById = new Map(stage1.objects.map((o) => [o.id ?? "", o.name]))
   const name = (id: string | undefined) => nameById.get(id ?? "") ?? ""
   // Згенерована одиниця файлу не має: збіг із нею називає її походження.

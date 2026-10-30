@@ -166,10 +166,12 @@ export function settingsTargets(
 }
 
 /** Одиниці `ALTER FUNCTION` функції чи процедури (Р2c1-10 (б)). */
-export function functionSettingsOf(
-  fn: VerbatimUnit,
-  units: readonly VerbatimUnit[]
-): VerbatimUnit[] {
+export function functionSettingsOf<
+  U extends Pick<VerbatimUnit, "class" | "tree">,
+>(
+  fn: Pick<VerbatimUnit, "class" | "schema" | "name">,
+  units: readonly U[]
+): U[] {
   return units.filter(
     (u) => u.class === "functionSettings" && settingsTargets(u, fn)
   )
@@ -187,28 +189,36 @@ export function functionSettingsOf(
  * на судиму функцію — окрема помилка (`function-settings-shell.ts`).
  */
 export function hasEffectiveEmptySearchPath(
-  unit: VerbatimUnit,
-  units: readonly VerbatimUnit[]
+  unit: Pick<VerbatimUnit, "class" | "schema" | "name" | "tree">,
+  units: readonly Pick<VerbatimUnit, "class" | "tree">[]
 ): boolean {
   const fn = (unit.tree as { CreateFunctionStmt?: FunctionNode })
     .CreateFunctionStmt
   if (fn === undefined || !foldedEmptySearchPath(functionOptions(fn).options)) {
     return false
   }
-  return functionSettingsOf(unit, units).every((settings) => {
-    const alter = alterFunction(settings.tree)
-    if (alter === undefined) return false
-    return !(alter.actions ?? []).some((action) => {
-      const set =
-        action.DefElem?.defname === "set"
-          ? action.DefElem.arg?.VariableSetStmt
-          : undefined
-      return (
-        set !== undefined &&
-        (set.kind === "VAR_RESET_ALL" ||
-          set.name?.toLowerCase() === "search_path")
-      )
-    })
+  return functionSettingsOf(unit, units).every(
+    (settings) =>
+      alterFunction(settings.tree) !== undefined &&
+      !alterTouchesSearchPath(settings.tree)
+  )
+}
+
+/**
+ * Чи `ALTER FUNCTION` зачіпає `search_path` (`SET`, `RESET`, `FROM CURRENT`)
+ * чи скидає всі налаштування (`RESET ALL`). Не `ALTER FUNCTION` — `false`.
+ */
+export function alterTouchesSearchPath(tree: unknown): boolean {
+  return (alterFunction(tree)?.actions ?? []).some((action) => {
+    const set =
+      action.DefElem?.defname === "set"
+        ? action.DefElem.arg?.VariableSetStmt
+        : undefined
+    return (
+      set !== undefined &&
+      (set.kind === "VAR_RESET_ALL" ||
+        set.name?.toLowerCase() === "search_path")
+    )
   })
 }
 
