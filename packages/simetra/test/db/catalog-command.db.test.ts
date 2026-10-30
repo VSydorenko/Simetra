@@ -4,11 +4,12 @@ import { PLATFORM_ROLES, type CommandContext } from "simetra/model"
 import { renderDesiredState } from "simetra/schema"
 import { CATALOG_COMMAND_ERRORS } from "../../src/compiler/catalog-command/units"
 import {
-  COMMENT_TABLE,
+  MEMBER_EDITOR_ID,
   NOTE_OWN_CREATOR_ID,
   NOTE_WRITER_ID,
   TICKET_CHECKLIST_TABLE,
   TICKET_TABLE,
+  adminRoles,
   authorCarrier,
   commandCoreLayer,
   compileRights,
@@ -91,6 +92,7 @@ describe("catalog command core", () => {
       withSql(
         policyDomain(
           writeRoles(),
+          adminRoles(),
           commandCoreLayer(),
           ticketNoticeHandler().layer
         ),
@@ -106,6 +108,26 @@ describe("catalog command core", () => {
       `GRANT ${PLATFORM_ROLES.command} TO CURRENT_USER WITH SET TRUE`
     )
     ids = await seedCommandCore(client)
+    // Довідник без ТЧ, який дає змінювати роль домену: `OrgMember` під
+    // `MemberEditor` (`adminRoles`). Засів ядра його не дає — сітка прав
+    // ділить засів і цієї ролі не компілює. Ціль — запрошений рядок без
+    // призначень: його зміна не зачіпає носіїв прав
+    ids.me = await signUp(client)
+    for (const [member, user] of [
+      ["me@A", ids.me],
+      ["invite@A", null],
+    ] as const) {
+      ids[member] = randomUUID()
+      await insert(client, "org_member", {
+        id: ids[member],
+        org_id: ids.A,
+        user_id: user,
+      })
+    }
+    await insert(client, "org_role_assignments", {
+      org_id: ids.A,
+      ...assignmentRow(ids["me@A"]!, { archetype: MEMBER_EDITOR_ID }),
+    })
     client.on("notice", (message) => {
       if (message.message?.startsWith("ticket-handler:") === true)
         notices.push(message.message)
@@ -363,19 +385,21 @@ describe("catalog command core", () => {
     [
       "shape: tabular on a catalog without tabular sections",
       async () => {
-        const id = key("TO.c")
+        // Не `TaskComment`: у домені прав він має ТЧ `attachments`, і
+        // `tabular: {}` там — чинна порожня зміна, а не відмова форми
+        const id = key("invite@A")
         const { rows } = await tx
           .client()
           .query<{ v: string }>(
-            `SELECT version::text AS v FROM public.${COMMENT_TABLE} WHERE id = $1`,
+            "SELECT version::text AS v FROM public.org_member WHERE id = $1",
             [id]
           )
         return outcomeOf(
           await commandAs<{ r: string }>(
             tx.client(),
-            claims("cw"),
-            { action: "update", object: COMMENT_TABLE, root: id },
-            `SELECT public.${COMMENT_TABLE}_save($1::jsonb, $2::bigint) AS r`,
+            claims("me"),
+            { action: "update", object: "org_member", root: id },
+            "SELECT public.org_member_save($1::jsonb, $2::bigint) AS r",
             { params: [JSON.stringify({ id, tabular: {} }), rows[0]!.v] }
           )
         )
@@ -487,33 +511,34 @@ describe("catalog command core", () => {
             ["only the id, to a tenant B project", { subject_id: "PB" }],
             ["only the type, with the stored id", { subject_type: "region" }],
           ] as const
-        ).map(([name, change]) => {
-          const value =
-            "subject_id" in change
-              ? { subject_id: key(change.subject_id) }
-              : change
-          return [
-            `ref: ${where} pair — ${name}`,
-            () =>
-              run({
-                user: "tw",
-                item:
-                  prefix === undefined
-                    ? { id: key("KL"), ...value }
-                    : {
-                        id: key("KL"),
-                        tabular: {
-                          [LINES]: [
-                            { id: key("KL.l1"), ...value },
-                            { id: key("KL.l2") },
-                          ],
-                        },
+        ).map(([name, change]) => [
+          `ref: ${where} pair — ${name}`,
+          () => {
+            // Ключ засіву розв'язується лише під час кейсу: CASES будується
+            // при збиранні тестів, раніше за `beforeAll` із засівом
+            const value =
+              "subject_id" in change
+                ? { subject_id: key(change.subject_id) }
+                : change
+            return run({
+              user: "tw",
+              item:
+                prefix === undefined
+                  ? { id: key("KL"), ...value }
+                  : {
+                      id: key("KL"),
+                      tabular: {
+                        [LINES]: [
+                          { id: key("KL.l1"), ...value },
+                          { id: key("KL.l2") },
+                        ],
                       },
-                version: "current",
-              }),
-            async () => INVALID(`${prefix ?? ""}subject_id`),
-          ]
-        })
+                    },
+              version: "current",
+            })
+          },
+          async () => INVALID(`${prefix ?? ""}subject_id`),
+        ])
     ),
     [
       "ref: polymorphic label outside allowed types",
