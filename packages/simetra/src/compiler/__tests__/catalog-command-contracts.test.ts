@@ -29,6 +29,7 @@ import {
   policyDomain,
   scopeRootCarrier,
   singleTenantRights,
+  ticketParentHandler,
   writeRoles,
   type Layer,
 } from "./fixtures/rights"
@@ -450,31 +451,13 @@ describe("власник підпорядкованого довідника —
 })
 
 describe("замок ієрархії від обробника beforeWrite (Р-A2-17)", () => {
-  const SUBSCRIPTION_FILE =
-    "event-subscriptions/TicketParent/TicketParent.meta.json"
-  const handler = (body: string) =>
-    `CREATE FUNCTION public.ticket_parent() RETURNS trigger LANGUAGE plpgsql VOLATILE SET search_path = '' AS $$ BEGIN ${body} RETURN NEW; END $$;`
-  const subscription: Layer = {
-    [SUBSCRIPTION_FILE]: {
-      id: uuid(6945),
-      kind: "EventSubscription",
-      name: "TicketParent",
-      physicalName: "ticket_parent",
-      sources: objects(["Catalog", "Ticket"]),
-      event: "beforeWrite",
-      handler: { schema: "public", name: "ticket_parent" },
-    },
-  }
-
   it.each([
     ["присвоює parent_id", "NEW.parent_id := NULL;", true],
     ["не присвоює", "NEW.description := 'x';", false],
   ])("обробник %s → lockAlways %s", async (_, body, lockAlways) => {
+    const handler = ticketParentHandler(body)
     const model = await compiled(
-      compiledPolicyDomain({ "sql/public/ticket-parent.sql": handler(body) }, [
-        commandCoreLayer(),
-        subscription,
-      ])
+      compiledPolicyDomain(handler.sql, [commandCoreLayer(), handler.layer])
     )
     expect(contractOf(contractsOf(model), "ticket").hierarchy).toEqual({
       parent: "parent_id",
@@ -487,7 +470,12 @@ describe("замок ієрархії від обробника beforeWrite (Р-
   it("нерозбірний обробник — «присвоює»", () => {
     const failing: PlpgsqlParser = () => ({ ok: false, message: "stub" })
     expect(
-      handlerAssigns(handler(""), new Set(["parent_id"]), parse, failing)
+      handlerAssigns(
+        Object.values(ticketParentHandler("").sql)[0]!,
+        new Set(["parent_id"]),
+        parse,
+        failing
+      )
     ).toBe(true)
   })
 })

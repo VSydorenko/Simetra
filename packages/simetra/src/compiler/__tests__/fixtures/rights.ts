@@ -1198,6 +1198,22 @@ export function ticketNoticeHandler(): HandlerFixture {
 }
 
 /**
+ * Підписка `beforeWrite` на `Ticket` з тілом обробника `body`: чи присвоює
+ * тіло `parent_id`, вирішує `lockAlways` замка ієрархії (Р-A2-17). За
+ * замовчуванням тіло присвоює батька.
+ */
+export function ticketParentHandler(
+  body = "NEW.parent_id := NULL;"
+): HandlerFixture {
+  return {
+    layer: ticketBeforeWrite(6945, "TicketParent", "ticket_parent"),
+    sql: {
+      "sql/public/ticket-parent.sql": `CREATE FUNCTION public.ticket_parent() RETURNS trigger LANGUAGE plpgsql VOLATILE SET search_path = '' AS $$ BEGIN ${body} RETURN NEW; END $$;`,
+    },
+  }
+}
+
+/**
  * Реквізит `moveTo` → `Ticket` і обробник `beforeWrite`, що переносить рядок
  * під `move_to` (присвоює `NEW.parent_id`), коли значення задане й інше:
  * зміна батька без ключа `parent_id` у команді (Р-A2-17).

@@ -21,6 +21,7 @@ import {
   objects,
   policyDomain,
   role,
+  ticketParentHandler,
   writeRoles,
   type Layer,
 } from "./fixtures/rights"
@@ -541,31 +542,13 @@ describe("buildCatalogCommandUnits — <t>_save", () => {
   })
 
   describe("обробник beforeWrite присвоює parent_id — замок без умови ключа", () => {
-    const SUBSCRIPTION_FILE =
-      "event-subscriptions/TicketParent/TicketParent.meta.json"
-    const handler = (body: string) =>
-      `CREATE FUNCTION public.ticket_parent() RETURNS trigger LANGUAGE plpgsql VOLATILE SET search_path = '' AS $$ BEGIN ${body} RETURN NEW; END $$;`
-    const subscription: Layer = {
-      [SUBSCRIPTION_FILE]: {
-        id: uuid(6945),
-        kind: "EventSubscription",
-        name: "TicketParent",
-        physicalName: "ticket_parent",
-        sources: objects(["Catalog", "Ticket"]),
-        event: "beforeWrite",
-        handler: { schema: "public", name: "ticket_parent" },
-      },
-    }
-
     it.each([
       ["присвоює", "NEW.parent_id := NULL;", true],
       ["не присвоює", "NEW.description := 'x';", false],
     ])("обробник %s parent_id", async (_, body, always) => {
+      const handler = ticketParentHandler(body)
       const model = await compiled(
-        compiledPolicyDomain(
-          { "sql/public/ticket-parent.sql": handler(body) },
-          [commandCoreLayer(), subscription]
-        )
+        compiledPolicyDomain(handler.sql, [commandCoreLayer(), handler.layer])
       )
       const shape = bodyShape(saveSql(model, "ticket"))
       const locks = shape

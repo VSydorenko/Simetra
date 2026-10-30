@@ -9,15 +9,13 @@ import {
   commandCoreLayer,
   compileRights,
   compiledPolicyDomain,
-  objects,
   policyDomain,
   scopeRootCarrier,
+  ticketParentHandler,
   writeRoles,
-  type Layer,
 } from "./fixtures/rights"
 import { snakeCaseTwin } from "./fixtures/snake-case"
 import { bodyShape, loadShapeParsers, nodes, tree } from "./fixtures/sql-shape"
-import { uuid } from "./helpers"
 
 let domain: CompiledModel
 beforeAll(async () => {
@@ -204,28 +202,13 @@ describe("<t>_mark_deletion", () => {
   })
 
   describe("обробник beforeWrite присвоює parent_id — замок до FOR UPDATE", () => {
-    const handler = (body: string) =>
-      `CREATE FUNCTION public.ticket_parent() RETURNS trigger LANGUAGE plpgsql VOLATILE SET search_path = '' AS $$ BEGIN ${body} RETURN NEW; END $$;`
-    const subscription: Layer = {
-      "event-subscriptions/TicketParent/TicketParent.meta.json": {
-        id: uuid(6945),
-        kind: "EventSubscription",
-        name: "TicketParent",
-        physicalName: "ticket_parent",
-        sources: objects(["Catalog", "Ticket"]),
-        event: "beforeWrite",
-        handler: { schema: "public", name: "ticket_parent" },
-      },
-    }
     it.each([
       ["присвоює", "NEW.parent_id := NULL;", true],
       ["не присвоює", "NEW.description := 'x';", false],
     ])("обробник %s parent_id", async (_, body, always) => {
+      const handler = ticketParentHandler(body)
       const model = await compiled(
-        compiledPolicyDomain(
-          { "sql/public/ticket-parent.sql": handler(body) },
-          [commandCoreLayer(), subscription]
-        )
+        compiledPolicyDomain(handler.sql, [commandCoreLayer(), handler.layer])
       )
       const shape = bodyShape(markSql(model, "ticket"))
       const locked = at(shape, "perform", lock("ticket"))
