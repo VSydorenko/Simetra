@@ -364,6 +364,27 @@ return nothing in maintenance mode or without a session user. Build a client
 rights snapshot from these functions and cache it by the rights cache key
 above.
 
+## Supported limits
+
+Measured on one developer machine (PostgreSQL 17.6, local Supabase stack,
+2026-10-31); treat them as orders of magnitude, not guarantees.
+
+| Scenario | Volume | Time |
+| --- | --- | --- |
+| Read a scoped table, dimension values per user | 20,000 values, 120,000 rows | list 0.57 s, point 19 ms |
+| Read a scoped table, `fullAccess` holder in N scopes | 100 / 500 / 2,000 scopes, 100,000 rows | list 0.71 / 3.9 / 12.6 s |
+| Owner carrier change, tabular section fan-out | 100,000 / 300,000 section rows | 2.5 / 8.0 s |
+| Carrier backfill plan step | 1,000,000 section rows | 36 s |
+| One rights command (assignment) in its own transaction | 11,000 assignments | 41 ms |
+| Rights commands in one transaction | 1,000 commands | 14 s |
+
+- A `fullAccess` holder costs about 7.5 ms per scope on every query: up to
+  about 100 scopes a read stays under a second. A user who operates hundreds
+  of tenants is a separate case the platform does not optimise yet. The
+  scope count is data, so no compiler warning covers it.
+- Split batch rights changes into transactions: one command takes about
+  40 ms, while a thousand commands in one transaction take about 14 s.
+
 ## Who reads what
 
 Rows are read through rights, not by default. In a project with at least one
