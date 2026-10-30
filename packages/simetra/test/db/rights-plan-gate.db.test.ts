@@ -1,7 +1,12 @@
 import { randomUUID } from "node:crypto"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import type pg from "pg"
-import { RIGHTS_MAINTENANCE_SETTING } from "simetra/model"
+import {
+  COMMAND_SETTING,
+  PLATFORM_ROLES,
+  RIGHTS_MAINTENANCE_SETTING,
+  SESSION_CLAIMS_SETTING,
+} from "simetra/model"
 import {
   CHECKLIST_TABLE,
   HOURS_TABLES,
@@ -40,7 +45,8 @@ import {
  * Засів (Р2d2-8): 1 000 тенантів по 20 задач — 20 000 `task`, 100 000
  * `task_checklist`, 10 000 рухів `task_hours`, кожна таблиця одним
  * `INSERT … SELECT`, упорядкованим за тенантом; журнал прав — 20 000 рядків
- * на 1 000 скоупів. Користувач гейта — учасник одного тенанта з роллю, що
+ * на 1 000 скоупів; довідник прав — 10 призначень, кастомна роль і її
+ * дельта на тенант (≥ 10 000 призначень, Р2d2-25). Користувач гейта — учасник одного тенанта з роллю, що
  * дає `own` і вимір: усі політики `PERMISSIVE` складаються через OR, а розмір
  * множин планувальнику невідомий (`InitPlan`), тож форма плану від ролі не
  * залежить.
@@ -57,6 +63,12 @@ const JOURNAL_PER_SCOPE = 20
  * роздувало бюджет файлу.
  */
 const FULL_ACCESS_SCOPES = 30
+/**
+ * Довідник прав помітного обсягу (Р2d2-25): учасники з призначеннями в кожному
+ * тенанті, кастомна роль з дельтою на тенант — тоді перевірка на COMMIT, що
+ * читає таблицю повним перебором, видна в плані як `Seq Scan`.
+ */
+const ASSIGNMENTS_PER_TENANT = 10
 
 /** Колонка скоупу (межа тенанта) таблиць гейта. */
 const SCOPE_COLUMN = /\borg_id\b/
@@ -65,6 +77,13 @@ const TASK = "task"
 const CHECKLIST = CHECKLIST_TABLE
 const HOURS = HOURS_TABLES.movements
 const JOURNAL = "rights_journal"
+/** Таблиці прав, які перевірка на COMMIT читає за ключем черги. */
+const RIGHTS_TABLES = [
+  "org_role_assignments",
+  "org_roles",
+  "org_roles_delta",
+  JOURNAL,
+]
 
 type Form = "list" | "count" | "point"
 
@@ -83,6 +102,8 @@ interface Gate {
   full: string
   /** Задача одного з тенантів власника `fullAccess`. */
   fullPoint: string
+  /** Тенант власника `fullAccess`: його учасник, кастомна роль і її дельта. */
+  fullOrg: { id: string; member: string; role: string; delta: string }
   /** id видимого користувачу рядка таблиці — для точкового читання. */
   point: Record<string, string>
 }
@@ -189,12 +210,48 @@ async function seed(client: pg.Client): Promise<Gate> {
      SELECT gen_random_uuid(), m.org_id, m.id, $2, false FROM public.org_member m WHERE m.user_id = $1`,
     [full, ORG_ADMIN_ID]
   )
+  // Обсяг довідника прав (Р2d2-25): запрошені учасники без користувача, по
+  // призначенню на кожного, і кастомна роль з дельтою в кожному тенанті, крім
+  // тенанта гейта — його форма задана вище.
+  await client.query(
+    `INSERT INTO public.org_member (id, org_id)
+     SELECT gen_random_uuid(), o.id FROM public.organization o CROSS JOIN generate_series(1, $2)
+     WHERE o.id <> $1 ORDER BY o.id`,
+    [org, ASSIGNMENTS_PER_TENANT]
+  )
+  await client.query(
+    `INSERT INTO public.org_role_assignments (id, org_id, subject, archetype, deletion_mark)
+     SELECT gen_random_uuid(), m.org_id, m.id, $2, false FROM public.org_member m
+     WHERE m.user_id IS NULL AND m.org_id <> $1 ORDER BY m.org_id`,
+    [org, ORG_MEMBER_ROLE_ID]
+  )
+  await client.query(
+    `INSERT INTO public.org_roles (id, org_id, archetype)
+     SELECT gen_random_uuid(), o.id, $2 FROM public.organization o WHERE o.id <> $1 ORDER BY o.id`,
+    [org, ORG_MEMBER_ROLE_ID]
+  )
+  await client.query(
+    `INSERT INTO public.org_roles_delta (id, org_id, parent_id, line_number, object, action, extent, effect)
+     SELECT gen_random_uuid(), r.org_id, r.id, 1, $2, 'read', 'any', 'deny' FROM public.org_roles r
+     WHERE r.org_id <> $1 ORDER BY r.org_id`,
+    [org, TASK]
+  )
   await client.query("SELECT set_config($1, 'off', true)", [
     RIGHTS_MAINTENANCE_SETTING,
   ])
   const { rows: fullTasks } = await client.query<{ id: string }>(
     `SELECT t.id FROM public.${TASK} t JOIN public.org_member m ON m.org_id = t.org_id
      WHERE m.user_id = $1 ORDER BY t.id LIMIT 1`,
+    [full]
+  )
+
+  const { rows: fullOrgs } = await client.query<Gate["fullOrg"]>(
+    `SELECT o.org_id AS id, m.id AS member, r.id AS role, d.id AS delta
+     FROM public.org_member o
+     JOIN public.org_member m ON m.org_id = o.org_id AND m.user_id IS NULL
+     JOIN public.org_roles r ON r.org_id = o.org_id
+     JOIN public.org_roles_delta d ON d.parent_id = r.id
+     WHERE o.user_id = $1 ORDER BY o.org_id, m.id LIMIT 1`,
     [full]
   )
 
@@ -212,6 +269,7 @@ async function seed(client: pg.Client): Promise<Gate> {
     admin,
     full,
     fullPoint: fullTasks[0]!.id,
+    fullOrg: fullOrgs[0]!,
     point: { [TASK]: visible.task, [CHECKLIST]: visible.line },
   }
 }
@@ -265,6 +323,12 @@ describe("rights plan gate", () => {
     expect(result.diagnostics).toEqual([])
     const client = await tx.open()
     await deploy(client, result.model!)
+    await client.query(
+      `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ${PLATFORM_ROLES.command}`
+    )
+    await client.query(
+      `GRANT ${PLATFORM_ROLES.command} TO CURRENT_USER WITH SET TRUE`
+    )
     const started = Date.now()
     gate = await seed(client)
     await client.query("SET CONSTRAINTS ALL IMMEDIATE")
@@ -273,7 +337,7 @@ describe("rights plan gate", () => {
     // Лише засіяні таблиці: ANALYZE усієї спільної бази тримав би блокування
     // чужих таблиць до відкату й переписав би їхню статистику поза транзакцією.
     await client.query(
-      `ANALYZE public.organization, public.region, public.org_member, public.org_role_assignments, public.${TASK}, public.${CHECKLIST}, public.${HOURS}, simetra.${JOURNAL}`
+      `ANALYZE public.organization, public.region, public.org_member, public.org_role_assignments, public.org_roles, public.org_roles_delta, public.${TASK}, public.${CHECKLIST}, public.${HOURS}, simetra.${JOURNAL}`
     )
     console.info(`rights plan gate: seed + ANALYZE ${Date.now() - started} ms`)
   }, 120_000)
@@ -424,6 +488,117 @@ describe("rights plan gate", () => {
             )
           ),
           "correlated subplans over a CTE scan"
+        )
+        .toEqual([])
+    }
+  )
+
+  /**
+   * Плани відкладеної перевірки прав однієї команди адміністрування (Р2d2-25):
+   * команда виконується як її виконає `runCommand` — роль команд, JWT-актор,
+   * контекст команди, — а плани операторів перевірки (тіло тригера черги
+   * посилається на `v_pending`) дає `auto_explain` на `SET CONSTRAINTS ALL
+   * IMMEDIATE`, тобто там, де їх платить COMMIT.
+   */
+  const commitPlans = async (
+    user: string,
+    context: { action: string; object: string; root: string },
+    sql: string
+  ): Promise<Record<string, unknown>[]> => {
+    const client = tx.client()
+    const plans: Record<string, unknown>[] = []
+    const onNotice = (notice: { severity?: string; message?: string }) => {
+      const message = notice.message ?? ""
+      const start = message.indexOf("plan:")
+      if (notice.severity === "LOG" && start >= 0)
+        plans.push(JSON.parse(message.slice(start + "plan:".length)))
+    }
+    await client.query("SAVEPOINT commit_plans")
+    try {
+      for (const setting of [
+        "auto_explain.log_min_duration = 0",
+        "auto_explain.log_nested_statements = on",
+        "auto_explain.log_analyze = on",
+        "auto_explain.log_format = 'json'",
+        "client_min_messages = log",
+      ])
+        await client.query(`SET LOCAL ${setting}`)
+      await client.query("SELECT set_config($1, $2, true)", [
+        SESSION_CLAIMS_SETTING,
+        JSON.stringify({ sub: user, role: "authenticated" }),
+      ])
+      await client.query("SELECT set_config($1, $2, true)", [
+        COMMAND_SETTING,
+        JSON.stringify(context),
+      ])
+      await client.query(`SET LOCAL ROLE ${PLATFORM_ROLES.command}`)
+      const { rowCount } = await client.query(sql)
+      expect(rowCount, "the command changes one row").toBe(1)
+      client.on("notice", onNotice)
+      try {
+        await client.query("SET CONSTRAINTS ALL IMMEDIATE")
+      } finally {
+        client.off("notice", onNotice)
+      }
+      return plans.filter((p) => String(p["Query Text"]).includes("v_pending"))
+    } finally {
+      await client.query("ROLLBACK TO SAVEPOINT commit_plans")
+    }
+  }
+
+  // Призначення кастомної ролі читає призначення, роль і її дельти; зміна
+  // дельти — роль і дельти: кожна таблиця прав звужується до `to_jsonb`.
+  it.each([
+    [
+      "assigning a custom role",
+      ["org_role_assignments", "org_roles", "org_roles_delta"],
+      (id: string) => ({
+        context: {
+          action: "administerRights",
+          object: "org_role_assignments",
+          root: id,
+        },
+        sql: `INSERT INTO public.org_role_assignments (id, org_id, subject, custom_role) VALUES ('${id}', '${gate.fullOrg.id}', '${gate.fullOrg.member}', '${gate.fullOrg.role}')`,
+      }),
+    ],
+    [
+      "changing a custom role delta",
+      ["org_roles", "org_roles_delta"],
+      () => ({
+        context: {
+          action: "administerRights",
+          object: "org_roles",
+          root: gate.fullOrg.role,
+        },
+        sql: `UPDATE public.org_roles_delta SET action = 'update' WHERE id = '${gate.fullOrg.delta}'`,
+      }),
+    ],
+  ] as const)(
+    "%s: the COMMIT check reads rights tables by index",
+    async (_, read, command) => {
+      const { context, sql } = command(randomUUID())
+      const plans = await commitPlans(gate.full, context, sql)
+      // Не порожній доказ: оператори перевірки захоплено, і вони читають
+      // кожну таблицю, яку судить ця команда.
+      expect(plans.length, "plans of the COMMIT check").toBeGreaterThan(0)
+      for (const table of read)
+        expect(
+          plans.flatMap((p) => scansOf(p, table)).length,
+          `${table} is read`
+        ).toBeGreaterThan(0)
+      expect
+        .soft(
+          plans.flatMap((p) =>
+            RIGHTS_TABLES.flatMap((table) =>
+              scansOf(p, table)
+                .filter((n) => n.type === "Seq Scan")
+                .map(
+                  (n) =>
+                    `${n.relation}: ${String(p["Query Text"]).slice(0, 80)}`
+                )
+            )
+          ),
+          "Seq Scan of rights tables"
         )
         .toEqual([])
     }

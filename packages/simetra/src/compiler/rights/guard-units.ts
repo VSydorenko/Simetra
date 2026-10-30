@@ -377,19 +377,54 @@ function pendingSql(
   return pendingInsert(rows, "v_maintenance")
 }
 
-/** Перший образ командної частини транзакції, а для незміненого рядка — живий стан. */
-function stateRows(table: PhysicalTable, state: "before" | "after"): string {
+/**
+ * Звуження рядків таблиці прав: колонка таблиці (з фізичного знімка) дорівнює
+ * виразу. Стоїть до `to_jsonb`, бо умова над `doc` індексом не читається —
+ * кожна перевірка на COMMIT перебирала б усю таблицю всіх тенантів (Р2d2-25).
+ */
+interface RowMatch {
+  column: string
+  value: string
+}
+
+/**
+ * Перший образ командної частини транзакції, а для незміненого рядка — живий
+ * стан; лише рядки `match`. Дві гілки замість FULL JOIN живих рядків із
+ * журналом: живі рядки звужуються до `to_jsonb` (індекс), а рядок, змінений
+ * транзакцією, береться з журналу — звуження за неключовою колонкою
+ * (`parent` дельти) до з'єднання загубило б рядок, у якого вона змінилась.
+ * Гілка журналу — лише ця транзакція (індекс за `xid`); для неключової
+ * колонки остаточний фільтр над `doc` робить викликач.
+ */
+function stateRows(
+  table: PhysicalTable,
+  state: "before" | "after",
+  match: RowMatch
+): string {
   const name = ref(tableName(table))
-  if (state === "after") return `SELECT to_jsonb(l) AS doc FROM ${name} l`
+  const live = `l.${q(match.column)} = ${match.value}`
+  if (state === "after")
+    return `SELECT to_jsonb(l) AS doc FROM ${name} l WHERE ${live}`
   const key = column(table, "ref")
-  const relation = journalRelation(table)
+  const journal = [
+    `${ref(platform("rights_journal"))} j WHERE j.xid = v_pending.xid AND j.reason = 'command'`,
+    `AND j.relation = ${sqlLiteral(journalRelation(table))}`,
+  ].join(" ")
+  const journalMatch =
+    match.column === key ? ` AND j.row_id = ${match.value}` : ""
   return [
-    `SELECT CASE WHEN j.row_id IS NOT NULL THEN j.before ELSE to_jsonb(l) END AS doc FROM ${name} l`,
-    `FULL JOIN (SELECT DISTINCT ON (row_id) row_id, before FROM ${ref(platform("rights_journal"))}`,
-    `  WHERE xid = v_pending.xid AND reason = 'command' AND relation = ${sqlLiteral(relation)} ORDER BY row_id, seq) j`,
-    `  ON j.row_id = l.${q(key)}`,
+    `(SELECT DISTINCT ON (j.row_id) j.before AS doc FROM ${journal}${journalMatch} ORDER BY j.row_id, j.seq)`,
+    "UNION ALL",
+    `SELECT to_jsonb(l) FROM ${name} l WHERE ${live}`,
+    `  AND NOT EXISTS (SELECT 1 FROM ${journal} AND j.row_id = l.${q(key)})`,
   ].join("\n")
 }
+
+/** Звуження за ключем рядка: перевірка судить один рядок черги. */
+const byKey = (table: PhysicalTable, value: string): RowMatch => ({
+  column: column(table, "ref"),
+  value,
+})
 
 function scopedDoc(table: PhysicalTable, alias: string): string {
   const scope = scopeColumn(table)
@@ -408,7 +443,7 @@ function deltaArray(
   const field = (name: string) => `d.doc ->> ${sqlLiteral(column(table, name))}`
   return [
     `SELECT coalesce(jsonb_agg(jsonb_build_object('object', ${field("object")}, 'action', ${field("action")}, 'extent', ${field("extent")}, 'dimension', ${field("dimension")}, 'effect', ${field("effect")})), '[]'::jsonb)`,
-    `FROM (${stateRows(table, state)}) d WHERE d.doc IS NOT NULL AND (${field("parent")})::uuid = ${roleId} AND ${scopedDoc(table, "d")}`,
+    `FROM (${stateRows(table, state, { column: column(table, "parent"), value: roleId })}) d WHERE d.doc IS NOT NULL AND (${field("parent")})::uuid = ${roleId} AND ${scopedDoc(table, "d")}`,
   ].join("\n")
 }
 
@@ -421,7 +456,7 @@ function roleGrantSet(
   const archetype = `r.doc ->> ${sqlLiteral(column(table, "archetype"))}`
   const id = `(r.doc ->> ${sqlLiteral(column(table, "ref"))})::uuid`
   return [
-    `SELECT g.object, g.action, g.extent, g.dimension_id, m.level, m.level_id, ${catalog.level.level === "scope" ? "v_pending.scope" : "NULL::uuid"} AS scope, NULL::uuid AS container FROM (${stateRows(table, state)}) r`,
+    `SELECT g.object, g.action, g.extent, g.dimension_id, m.level, m.level_id, ${catalog.level.level === "scope" ? "v_pending.scope" : "NULL::uuid"} AS scope, NULL::uuid AS container FROM (${stateRows(table, state, byKey(table, "v_pending.key"))}) r`,
     `JOIN ${ref(RIGHTS_FUNCTIONS.roles)}() m ON m.role_id = (${archetype})::uuid`,
     `CROSS JOIN LATERAL ${ref(RIGHTS_FUNCTIONS.roleGrants)}(m.level, m.level_id, m.role_id, (${deltaArray(catalog, physical, state, id)})) g`,
     `WHERE r.doc IS NOT NULL AND ${id} = v_pending.key AND ${scopedDoc(table, "r")}`,
@@ -442,8 +477,8 @@ function assignmentGrantSet(
   const archetype = `coalesce((r.doc ->> ${sqlLiteral(column(roles, "archetype"))})::uuid, ${direct})`
   const delta = `CASE WHEN ${custom} IS NULL THEN '[]'::jsonb ELSE (${deltaArray(catalog, physical, state, custom)}) END`
   return [
-    `SELECT g.object, g.action, g.extent, g.dimension_id, m.level, m.level_id, ${catalog.level.level === "scope" ? `(${`a.doc ->> ${sqlLiteral(scopeColumn(table)!)}`})::uuid` : "NULL::uuid"} AS scope, (a.doc ->> ${sqlLiteral(column(table, "container"))})::uuid AS container FROM (${stateRows(table, state)}) a`,
-    `LEFT JOIN (${stateRows(roles, state)}) r ON ${custom} IS NOT NULL AND (r.doc ->> ${sqlLiteral(column(roles, "ref"))})::uuid = ${custom} AND ${scopedDoc(roles, "r")}`,
+    `SELECT g.object, g.action, g.extent, g.dimension_id, m.level, m.level_id, ${catalog.level.level === "scope" ? `(${`a.doc ->> ${sqlLiteral(scopeColumn(table)!)}`})::uuid` : "NULL::uuid"} AS scope, (a.doc ->> ${sqlLiteral(column(table, "container"))})::uuid AS container FROM (${stateRows(table, state, byKey(table, "v_pending.key"))}) a`,
+    `LEFT JOIN LATERAL (${stateRows(roles, state, byKey(roles, custom))}) r ON ${custom} IS NOT NULL AND (r.doc ->> ${sqlLiteral(column(roles, "ref"))})::uuid = ${custom} AND ${scopedDoc(roles, "r")}`,
     `JOIN ${ref(RIGHTS_FUNCTIONS.roles)}() m ON m.role_id = ${archetype}`,
     `CROSS JOIN LATERAL ${ref(RIGHTS_FUNCTIONS.roleGrants)}(m.level, m.level_id, m.role_id, ${delta}) g`,
     `WHERE a.doc IS NOT NULL AND (a.doc ->> ${refColumn})::uuid = v_pending.key AND ${scopedDoc(table, "a")}`,
@@ -499,7 +534,7 @@ function assignmentBeforeSet(
     )
   return [
     `SELECT g.* FROM (${assignmentGrantSet(catalog, physical, "before")}) g`,
-    `WHERE EXISTS (SELECT 1 FROM (${stateRows(table, "before")}) b JOIN (${stateRows(table, "after")}) a`,
+    `WHERE EXISTS (SELECT 1 FROM (${stateRows(table, "before", byKey(table, "v_pending.key"))}) b JOIN (${stateRows(table, "after", byKey(table, "v_pending.key"))}) a`,
     `  ON (b.doc ->> ${id}) = (a.doc ->> ${id}) WHERE (a.doc ->> ${id})::uuid = v_pending.key AND ${same.join(" AND ")})`,
   ].join("\n")
 }
