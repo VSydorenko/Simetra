@@ -308,8 +308,10 @@ describe("buildCatalogCommandUnits — <t>_save", () => {
     const order = [headerLock, headerUpdate, rowsLock, remove, update, insert]
     expect(order.every((i) => i >= 0)).toBe(true)
     expect([...order].sort((a, b) => a - b)).toEqual(order)
+    // Точна ціль у порядку виразів: переставлені цілі звіряли б кожен DML з
+    // чужою кількістю, а `stringContaining` цього не бачив би.
     expect(shape[rowsLock]!.target).toEqual({
-      variable: expect.stringContaining("v_ts_delete"),
+      variable: "v_ts_delete, v_ts_update",
     })
     expect(lockStrengths(shape[rowsLock]!.expressions[0]!.tree)).toEqual([
       "LCS_FORNOKEYUPDATE",
