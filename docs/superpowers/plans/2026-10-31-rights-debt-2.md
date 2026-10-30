@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-Статус: план, до виконання.
+Статус: виконано (гейти й рецензія — у звіті виконання).
 
 **Goal:** закрити шість пунктів боргу прав: режим обслуговування за
 дозвільним списком, дельта лише з домену архетипу, одне джерело переліку платформних тригерів, пошук колонки
@@ -95,7 +95,7 @@ PostgreSQL 17 (локальний стек Supabase), libpg-query.
 **Interfaces:**
 - Produces: `maintenanceSql(provider: DatabaseProvider): string` (сигнатура та сама).
 
-- [ ] **Step 1: Переписати unit-тест.** У `rights-guards.test.ts` два кейси
+- [x] **Step 1: Переписати unit-тест.** У `rights-guards.test.ts` два кейси
   `maintenance mode never trusts the platform runtime login (%s)` і
   `maintenance mode requires a non-API login role` замінити одним
   `it("maintenance mode trusts only the owner login, never a provider login")`:
@@ -108,9 +108,9 @@ PostgreSQL 17 (локальний стек Supabase), libpg-query.
   `maintenanceSql("supabase")` лишається. Прибрати імпорти, що стали
   невживаними (`DATABASE_PROVIDERS` — після видалення
   `it.each(DATABASE_PROVIDERS)`).
-- [ ] **Step 2: Запустити — червоне.**
+- [x] **Step 2: Запустити — червоне.**
   `pnpm --filter simetra test rights-guards` → FAIL (вираз ще старий).
-- [ ] **Step 3: Реалізувати.** `maintenanceSql(provider)` будує вираз Рб2-1.
+- [x] **Step 3: Реалізувати.** `maintenanceSql(provider)` будує вираз Рб2-1.
   Коментар над ним: чому `session_user = current_user` у `SECURITY DEFINER`
   означає «вхід мігратора»; що власник і так може вимкнути тригер; що
   сторонній вхід, рантайм і суперкористувач-не-власник відпадають; навіщо
@@ -122,10 +122,10 @@ PostgreSQL 17 (локальний стек Supabase), libpg-query.
   входів провайдера, навіть коли вони власники. Коментар
   `PLATFORM_LOGIN_ROLES`: рантайм не вмикає режиму, бо він не власник
   функцій прав.
-- [ ] **Step 4: Запустити — зелене.**
+- [x] **Step 4: Запустити — зелене.**
   `pnpm --filter simetra test rights-guards` → PASS;
   `pnpm --filter simetra typecheck` → без помилок.
-- [ ] **Step 5: DB-кейси.** У `maintenance from provider API logins`
+- [x] **Step 5: DB-кейси.** У `maintenance from provider API logins`
   (перейменувати на `maintenance only from the owner login`):
   - створити від `supabase_admin` (суперкористувач, у тій самій транзакції
     з відкатом) роль `testRoleName("foreign_login")` з `LOGIN` і
@@ -143,14 +143,14 @@ PostgreSQL 17 (локальний стек Supabase), libpg-query.
   `SET ROLE postgres` (власник — справжній `supabase_admin`), засіяти й
   створити `debt_grant` так само; `probe("supabase_admin", "rights-context")`
   при `session_user = current_user`. Бюджет: +1 розгортання.
-- [ ] **Step 6: Запустити DB-тести прав.**
+- [x] **Step 6: Запустити DB-тести прав.**
   `pnpm --filter simetra test:db rights-guards` → PASS;
   `pnpm --filter simetra test:db access rights-plan-gate command-grants rights-functions rights-sources rights-policies rights-write`
   і `pnpm --filter @simetrajs/designer test:db rights-last-full-access catalog-command-concurrency` → PASS.
   Червоний кейс тут означає, що тест вмикає режим не з власника, — доповісти
   архітекторці, умову не послаблювати. Решту DB-тестів, що засівають у
   режимі обслуговування, покриває повний `test:db` на погодженому SHA.
-- [ ] **Step 7: Спека.** Спека прав §7, пункт режиму: «діє лише для сесії,
+- [x] **Step 7: Спека.** Спека прав §7, пункт режиму: «діє лише для сесії,
   що увійшла під власником функцій прав (мігратором): `session_user =
   current_user` у `SECURITY DEFINER`, і ніколи для ролі входу API
   провайдера, навіть коли вона власник». Речення Рб2-2. Спека П4 §6.2: абзац «Режим
@@ -169,9 +169,9 @@ PostgreSQL 17 (локальний стек Supabase), libpg-query.
   окремий довірений вхід» — переписати: довірений вхід — вхід власника
   функцій прав (мігратора), спільний вхід інструментів і рантайму ним не
   буває. Рядки таблиці правок спек та історію блоку A1 не переписувати.
-- [ ] **Step 8: Коміт** (код, тести й спеки — разом).
+- [x] **Step 8: Коміт** (код, тести й спеки — разом).
   `git commit -m "fix(rights): режим обслуговування лише для входу власника функцій прав"`
-- [ ] **Step 9: Мутації** (на закоміченому дереві, по одній, з відкатом):
+- [x] **Step 9: Мутації** (на закоміченому дереві, по одній, з відкатом):
   (а) прибрати `AND session_user = current_user` → червоніють unit-кейс і
   DB-кейс `foreign_login`; (б) прибрати залишковий перелік входів
   провайдера → червоніють unit-кейс і DB-кейс власника `supabase_admin`;
@@ -192,7 +192,7 @@ PostgreSQL 17 (локальний стек Supabase), libpg-query.
 - Consumes: `simetra.rights_journal` (`xid`, `relation`, `row_id`, `parent_id`, `seq`, `before`, `after`) і `journalRelation(table)`; `RIGHTS_FUNCTIONS.roles` (`simetra.rights_roles()`: `role_id`, `level`, `level_id`, `storage`, `storage_id`), `RIGHTS_FUNCTIONS.domain` (`simetra.rights_domain()`: `level`, `level_id`, `object`, `action`, `extent`, `dimension_id`), `v_pending.key` (id ролі) гілки `role`, `catalogStorageKind(catalog)`, `RIGHTS_COLUMNS` (`archetype`, `object`, `action`, `extent`, `dimension`).
 - Produces: `DETAIL` `delta-domain`; помічник `insertOrphan(client, table, row)` у `rights-seed.ts` — вставка з `ALTER TABLE … DISABLE TRIGGER USER` / `ENABLE TRIGGER USER` навколо (власник таблиць — сесія розгортання), для засіву сиріт.
 
-- [ ] **Step 1: Unit-тест.** У `rights-guards.test.ts`
+- [x] **Step 1: Unit-тест.** У `rights-guards.test.ts`
   `it("refuses at commit a role whose deltas leave the domain of its level")`:
   у гілці `kind = 'role'` тіла `rights_tx_check` кожного довідника «Ролей» є
   відмова `delta-domain` з `EXISTS` над дельтами ролі `v_pending.key`, де
@@ -218,8 +218,8 @@ PostgreSQL 17 (локальний стек Supabase), libpg-query.
   фрагмент `stateRows` з `reason = 'command'` не копіювати; unit-тест
   перевіряє, що `reason` в умові немає.
   Перевірити й ребра `requires` функції на `rights_roles` і `rights_domain`.
-- [ ] **Step 2: Запустити — червоне.** `pnpm --filter simetra test rights-guards` → FAIL.
-- [ ] **Step 3: Реалізувати** перевірку в гілці `role` (поряд із
+- [x] **Step 2: Запустити — червоне.** `pnpm --filter simetra test rights-guards` → FAIL.
+- [x] **Step 3: Реалізувати** перевірку в гілці `role` (поряд із
   `role-in-use`, безумовно) і явні ребра `requires`
   (`unitNode(RIGHTS_FUNCTIONS.roles)`, `unitNode(RIGHTS_FUNCTIONS.domain)`;
   табличних ребер `rights_tx_check` на довідники прав сьогодні немає, тож
@@ -229,15 +229,15 @@ PostgreSQL 17 (локальний стек Supabase), libpg-query.
   `escalationSql`. Дельти читати за батьком зі `scopedDoc`, як `deltaArray`,
   але журнал — без `reason`; роль — за PK: кейс гейта `the COMMIT check reads
   rights tables by index` забороняє `Seq Scan` таблиць прав.
-- [ ] **Step 4: Запустити — зелене.** `pnpm --filter simetra test rights-guards` → PASS.
-- [ ] **Step 5: Засів сиріт.** Помічник `insertOrphan` у `rights-seed.ts`;
+- [x] **Step 4: Запустити — зелене.** `pnpm --filter simetra test rights-guards` → PASS.
+- [x] **Step 5: Засів сиріт.** Помічник `insertOrphan` у `rights-seed.ts`;
   коментар у ньому: так можна лише в засіві тестової транзакції, бо відкат
   повертає тригери, а сирота імітує зміну коду після запису. У
   `rights-functions.db.test.ts` черга на COMMIT не скидається (опис
   відкочується без `SET CONSTRAINTS`), тож три дельти поза доменом ролі
   `custom` там не відмовляють; перевести їх на `insertOrphan` — лише захист
   від майбутнього скидання, кейси читання fail-closed лишаються.
-- [ ] **Step 6: DB-кейси** (`rights-guards.db.test.ts`, у наявному описі
+- [x] **Step 6: DB-кейси** (`rights-guards.db.test.ts`, у наявному описі
   адміністрування з одним розгортанням; засів — як у `rights-seed.ts`;
   `SET CONSTRAINTS ALL IMMEDIATE`, щоб перевірка спрацювала в межах кейсу):
   - `deny` з UUID кастомної дії фікстури в неканонічній формі
@@ -274,16 +274,16 @@ PostgreSQL 17 (локальний стек Supabase), libpg-query.
     транзакції проходять; на `markedCustom` — зняття позначки видалення
     проходить;
   - дельта поза доменом у режимі обслуговування → `delta-domain`.
-- [ ] **Step 7: Запустити.** `pnpm --filter simetra test:db rights-guards rights-functions rights-plan-gate catalog-command-admin snake-case rights-analysis`
+- [x] **Step 7: Запустити.** `pnpm --filter simetra test:db rights-guards rights-functions rights-plan-gate catalog-command-admin snake-case rights-analysis`
   і `pnpm --filter @simetrajs/designer test:db rights-last-full-access` → PASS.
   Інші засіви дельт аудит перевірив — вони в домені; якщо щось червоніє з
   `delta-domain`, доповісти архітекторці (засів виправляється, перевірка
   лишається).
-- [ ] **Step 8: Спека.** Спека прав §7 — пункт Рб2-7 (текст у полі «вплив
+- [x] **Step 8: Спека.** Спека прав §7 — пункт Рб2-7 (текст у полі «вплив
   на спеку»).
-- [ ] **Step 9: Коміт.**
+- [x] **Step 9: Коміт.**
   `git commit -m "fix(rights): дельта кастомної ролі лише з домену її рівня"`
-- [ ] **Step 10: Мутації** (на закоміченому дереві): (а) прибрати перевірку
+- [x] **Step 10: Мутації** (на закоміченому дереві): (а) прибрати перевірку
   → червоніють кейси відмови; (б) прибрати `extent` з рівності → червоніє
   кейс `deny region read own`; (д) прибрати умову сховища → червоніє кейс
   `SUPPORT_ID` в `org_roles`; (е) перевіряти всі дельти ролі без умови
@@ -332,7 +332,7 @@ PostgreSQL 17 (локальний стек Supabase), libpg-query.
   `hierarchyNames`, `effectsTriggerNames`, `effectsFunctionName`,
   `rightsGuardNames`) і `MECHANICS_FUNCTION`, `AUTHOR_FUNCTION`, `KEY_FUNCTION`.
 
-- [ ] **Step 1: Тест реєстру.** `platform-triggers.test.ts`:
+- [x] **Step 1: Тест реєстру.** `platform-triggers.test.ts`:
   - `it("names every platform trigger of compiled models")` — на двох
     моделях з `src/compiler/__tests__/fixtures/rights.ts`:
     `compileRights(policyDomain(writeRoles(), adminRoles(), commandCoreLayer()))`
@@ -352,14 +352,14 @@ PostgreSQL 17 (локальний стек Supabase), libpg-query.
     `authorUpdateTriggerName`;
   - `it("lists the shared functions")` — `SHARED_TRIGGER_FUNCTIONS` дорівнює
     `[MECHANICS_FUNCTION, AUTHOR_FUNCTION, KEY_FUNCTION]`.
-- [ ] **Step 2: Запустити — червоне.**
+- [x] **Step 2: Запустити — червоне.**
   `pnpm --filter simetra test platform-triggers` → FAIL (модуля немає).
-- [ ] **Step 3: Реалізувати `platformTriggers`** — список сімейств у порядку
+- [x] **Step 3: Реалізувати `platformTriggers`** — список сімейств у порядку
   типу; генератор: механіка, авторство й ієрархія — `"mechanics"`; ключ —
   `"key"`; носії — `"carriers"`; ефекти — `"effects"`; запобіжники —
   `"rightsGuards"`. Експорт з `compiler/index.ts`.
-- [ ] **Step 4: Запустити — зелене.** `pnpm --filter simetra test platform-triggers` → PASS.
-- [ ] **Step 5: Перевести reverse і промоцію.** Reverse:
+- [x] **Step 4: Запустити — зелене.** `pnpm --filter simetra test platform-triggers` → PASS.
+- [x] **Step 5: Перевести reverse і промоцію.** Reverse:
   `platformTriggerFunction` — запис реєстру з `trigger === unit.name`, його
   функція; `platformFunctions` стартує з `SHARED_TRIGGER_FUNCTIONS`.
   Промоція: предикат `platform(t)` у `triggerReplacement` — є запис з
@@ -371,7 +371,7 @@ PostgreSQL 17 (локальний стек Supabase), libpg-query.
   `keyGuard`, `carrier`, `effect`, `guard`, `hierarchy` і невживані
   імпорти. Тест:
   `pnpm --filter simetra test reverse-generate promotion` → PASS.
-- [ ] **Step 6: Перевести `mechanicsLoss`.** Втрачені тригери й функції — записи
+- [x] **Step 6: Перевести `mechanicsLoss`.** Втрачені тригери й функції — записи
   `platformTriggers(t)` з генератором `"mechanics"` чи `"key"`; функції —
   унікальні за `schema.name` і лише зі схем `scope.schemas` (спільні поза
   межею). Реєстр замінює лише ручний перелік **кандидатів**: фільтр за
@@ -379,9 +379,9 @@ PostgreSQL 17 (локальний стек Supabase), libpg-query.
   лишається, бо реєстр повертає й тригери, яких таблиця не має. Перевірки `toHaveLength`
   лишаються. Тест:
   `pnpm --filter @simetrajs/designer test:db round-trip` → PASS.
-- [ ] **Step 7: Коміт.**
+- [x] **Step 7: Коміт.**
   `git commit -m "refactor(compiler): один реєстр платформних тригерів для reverse, промоції й прийому з нуля"`
-- [ ] **Step 8: Мутації:** (а) прибрати запис ієрархії з реєстру → червоніють
+- [x] **Step 8: Мутації:** (а) прибрати запис ієрархії з реєстру → червоніють
   тест повноти й `reverse-generate`; (б) поставити `contentUpdate: false` для
   оновлення механіки → червоніє тест промоції чи реєстру.
 
@@ -396,15 +396,15 @@ PostgreSQL 17 (локальний стек Supabase), libpg-query.
 - Produces: `USER_PLATFORM_COLUMNS: Readonly<Record<"userKind" | "invalid", StandardColumnDef>>`
   (форма — як `RIGHTS_COLUMNS`: `Object.fromEntries(userPlatformColumns().map(…))`).
 
-- [ ] **Step 1: Мутація до правки:** переставити записи в
+- [x] **Step 1: Мутація до правки:** переставити записи в
   `userPlatformColumns()` → `pnpm --filter simetra test rights-guards` FAIL
   (кейс із `o.user_kind IS DISTINCT FROM n.user_kind`). Відкотити.
-- [ ] **Step 2: Реалізувати** константу й замінити `USER_KIND` на
+- [x] **Step 2: Реалізувати** константу й замінити `USER_KIND` на
   `USER_PLATFORM_COLUMNS.userKind`.
-- [ ] **Step 3: Запустити.** `pnpm --filter simetra test rights-guards` → PASS.
-- [ ] **Step 4: Мутація після правки:** та сама перестановка →
+- [x] **Step 3: Запустити.** `pnpm --filter simetra test rights-guards` → PASS.
+- [x] **Step 4: Мутація після правки:** та сама перестановка →
   `rights-guards` PASS. Відкотити.
-- [ ] **Step 5: Коміт.**
+- [x] **Step 5: Коміт.**
   `git commit -m "refactor(rights): колонка виду користувача за логічним ім'ям реєстру"`
 
 ### Задача 5: лінт стандартних імен і `?.` (Рб2-5)
@@ -413,18 +413,18 @@ PostgreSQL 17 (локальний стек Supabase), libpg-query.
 - Modify: `packages/simetra/eslint.standard-columns.js`
 - Test: `packages/simetra/test/standard-columns-lint.test.ts`
 
-- [ ] **Step 1: Тест.** До `rejects %s` додати
+- [x] **Step 1: Тест.** До `rejects %s` додати
   `["an optional chain on the right", 'c.origin?.standard === "customRole"']`
   і `["an optional chain on the left", '"customRole" !== c?.origin?.standard']`;
   до `allows %s` — `["an optional non-standard check", "c.origin?.standard === undefined"]`.
-- [ ] **Step 2: Запустити — червоне.** `pnpm --filter simetra test standard-columns-lint` → FAIL (два нові `rejects`).
-- [ ] **Step 3: Реалізувати.** Селектор першого правила доповнити варіантами,
+- [x] **Step 2: Запустити — червоне.** `pnpm --filter simetra test standard-columns-lint` → FAIL (два нові `rejects`).
+- [x] **Step 3: Реалізувати.** Селектор першого правила доповнити варіантами,
   де операнд — `ChainExpression` з `expression.property.name='standard'`
   (обидва боки). Повідомлення те саме — одна відмова на вираз.
-- [ ] **Step 4: Запустити.** `pnpm --filter simetra test standard-columns-lint` → PASS;
+- [x] **Step 4: Запустити.** `pnpm --filter simetra test standard-columns-lint` → PASS;
   `pnpm --filter simetra lint` → без помилок (у коді `?.standard ===` з
   літералом немає; якщо є — доповісти, не вимикати правило).
-- [ ] **Step 5: Коміт.**
+- [x] **Step 5: Коміт.**
   `git commit -m "fix(lint): правило стандартних імен ловить необов'язковий ланцюжок"`
 
 ### Задача 6: гейт планів і глобальні дельти (Рб2-6)
@@ -432,7 +432,7 @@ PostgreSQL 17 (локальний стек Supabase), libpg-query.
 **Files:**
 - Modify: `packages/simetra/test/db/rights-plan-gate.db.test.ts`
 
-- [ ] **Step 1: Засів.** Глобальний довідник — у тій самій формі, що
+- [x] **Step 1: Засів.** Глобальний довідник — у тій самій формі, що
   довідник `org` (вибірковий доступ за роллю, без неселективного індексу):
   - кілька сотень глобальних кастомних ролей (`archetype: SUPPORT_ID`) по
     одній дельті `allow announcement create any`, і стільки ж глобальних
@@ -454,12 +454,12 @@ PostgreSQL 17 (локальний стек Supabase), libpg-query.
   `"global_roles_delta"`; ці таблиці й `public.users` — і в наявний оператор
   `ANALYZE`. Після
   засіву — `count(global_roles) > 1` і `count(global_roles_delta) > 0`.
-- [ ] **Step 2: Запустити.** `pnpm --filter simetra test:db rights-plan-gate` → PASS.
+- [x] **Step 2: Запустити.** `pnpm --filter simetra test:db rights-plan-gate` → PASS.
   Якщо гейт червоніє на глобальних таблицях — це знайдений дефект: доповісти
   архітекторці з планом запиту, не вимикати перевірку.
-- [ ] **Step 3: Коміт.**
+- [x] **Step 3: Коміт.**
   `git commit -m "test(rights): гейт планів перевіряє й глобальні дельти"`
-- [ ] **Step 4: Мутація** (на закоміченому дереві): у генераторі
+- [x] **Step 4: Мутація** (на закоміченому дереві): у генераторі
   `rights_mine` (`packages/simetra/src/compiler/rights/functions.ts`) додати
   до архетипної гілки (`role_rows`, `JOIN rights_projection p`) скалярний
   підзапит, який планувальник не розкорелює: `AND (SELECT count(*) FROM
@@ -474,15 +474,15 @@ PostgreSQL 17 (локальний стек Supabase), libpg-query.
 **Files:**
 - Modify: `docs/superpowers/plans/2026-10-26-rights-residual-debt.md`
 
-- [ ] **Step 1:** Додати в §1 пункт (архітекторка): «`apply`/`plan` не
+- [x] **Step 1:** Додати в §1 пункт (архітекторка): «`apply`/`plan` не
   відмовляють, коли застосування йде під спільним входом провайдера чи
   суперкористувачем; власником об'єктів застосунку тоді стає вхід, під яким
   працюють сервіси провайдера. Кандидат — гейт застосування». Зняти з §3 пункти `RIGHTS_TABLES`, `USER_KIND`, правило
   лінту й три ручні переліки. Зняти з §1 пункт «Запобіжник режиму
   обслуговування — заборонний список логінів» (закрито Задачею 1).
-- [ ] **Step 2:** `python3 scripts/check-doc-anchors.py` → без помилок
+- [x] **Step 2:** `python3 scripts/check-doc-anchors.py` → без помилок
   (з дозволу архітекторки — разом з гейтами).
-- [ ] **Step 3: Коміт.**
+- [x] **Step 3: Коміт.**
   `git commit -m "docs(plan): борг прав — знято пункти борг-2"`
 
 ## Відомі обмеження
@@ -491,3 +491,11 @@ PostgreSQL 17 (локальний стек Supabase), libpg-query.
   не відмовляється (гейт застосування — новий пункт боргу, Задача 7).
 - Груповий `NOLOGIN`-власник функцій прав робить режим обслуговування
   недоступним (Рб2-2).
+- Роль, створена в тій самій транзакції, що й дельта поза доменом,
+  перевіряється повністю (перший образ ролі порожній). Це очікувано:
+  сирота від зміни коду з'являється в застосуванні плану, а не в транзакції
+  створення ролі; тому DB-кейси сироти засівають свіжу роль `insertOrphan`.
+- Мутація кроку 4 Задачі 6 у формі `x.object = p.object` червонить гейт і
+  без нових рядків `RIGHTS_TABLES` (через `CTE Scan on held`), тож доказом
+  нових рядків є форма `x.object = h.archetype::text`: з ними — `Seq Scan
+  on global_roles_delta` ×31, без них — гейт зелений.
