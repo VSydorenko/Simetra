@@ -9,6 +9,7 @@ import {
   ORG_KIND_ID,
   ORG_MEMBER_ROLE_ID,
   PROJECT_FILE,
+  PROJECT_ID,
   PROJECT_LEAD_ID,
   REGION_DIMENSION_ID,
   ROLE_FILE,
@@ -35,6 +36,12 @@ import {
   rightsPredicates,
 } from "../../src/compiler/rights/predicates"
 import { signUp } from "./auth"
+import {
+  expectEquivalent,
+  installClosureOracle,
+  mineEquivalence,
+  roleGrantsEquivalence,
+} from "./closure-oracle"
 import { queryAs } from "./connection"
 import {
   type Assignment,
@@ -263,6 +270,89 @@ async function seedScopeKind(client: pg.Client): Promise<Seed> {
   return ids
 }
 
+/**
+ * Додатковий засів еквівалентності замикання (Р2d2-22) поверх засіву опису:
+ * учасники A з кастомними ролями, де замикання знімає рядки обсягу
+ * `dimension` (`d1`, `d2`), тримає їх тим самим обсягом (`d3`), і кастомна
+ * роль контейнерного архетипу на P1 (`l1`). Повертає всіх користувачів
+ * засіву — ключ → id.
+ */
+async function seedClosureExtras(
+  client: pg.Client,
+  ids: Seed
+): Promise<Record<string, string>> {
+  const region: Delta = [
+    "deny",
+    "task",
+    "read",
+    "dimension",
+    REGION_DIMENSION_ID,
+  ]
+  const extras: [
+    user: string,
+    archetype: string,
+    deltas: Delta[],
+    container?: string,
+  ][] = [
+    ["d1", ORG_ADMIN_ID, [["deny", "task", "read", "any"], region]],
+    [
+      "d2",
+      ORG_MEMBER_ROLE_ID,
+      [
+        ["deny", "task", "read", "any"],
+        region,
+        ["allow", "task", "update", "dimension", REGION_DIMENSION_ID],
+      ],
+    ],
+    [
+      "d3",
+      ORG_MEMBER_ROLE_ID,
+      [
+        ["deny", "task", "read", "any"],
+        ["allow", "task", "update", "dimension", REGION_DIMENSION_ID],
+      ],
+    ],
+    [
+      "l1",
+      PROJECT_LEAD_ID,
+      [
+        ["deny", "task", "read", "any"],
+        ["allow", "task", "update", "any"],
+      ],
+      ids.P1,
+    ],
+  ]
+  const users: Record<string, string> = Object.fromEntries(
+    Object.entries(ids).filter(([key]) => /^[ux]\d+$/.test(key))
+  )
+  for (const [user, archetype, deltas, container] of extras) {
+    const sub = await signUp(client)
+    const member = randomUUID()
+    const role = randomUUID()
+    users[user] = sub
+    await insert(client, "org_member", {
+      id: member,
+      org_id: ids.A,
+      user_id: sub,
+    })
+    await insert(client, "org_roles", { id: role, org_id: ids.A, archetype })
+    for (const [i, delta] of deltas.entries())
+      await insert(
+        client,
+        "org_roles_delta",
+        orgDeltaRow(ids.A!, role, i + 1, delta)
+      )
+    await insert(client, "org_role_assignments", {
+      org_id: ids.A,
+      ...assignmentRow(member, {
+        customRole: role,
+        container: container ?? null,
+      }),
+    })
+  }
+  return users
+}
+
 const value = (expr: string) => `SELECT ${expr} AS v`
 const mineCount = (where: string) =>
   `SELECT count(*)::int AS v FROM simetra.rights_mine() WHERE ${where}`
@@ -471,6 +561,85 @@ describe("rights functions with a scope kind", () => {
         : expected
       // Мʼяка перевірка: червоні всі розбіжності кейсу, а не лише перша.
       expect.soft(outcome(result), `${user}: ${sql}`).toEqual(want)
+    }
+  })
+
+  // Р2d2-22: замикання після переписування дає рівно рядки тіла до нього.
+  // Засів опису плюс кастомні ролі з дельтами виміру й кастомна контейнерна
+  // роль: замикання знімає рядки й на обсязі `dimension`, і в контейнері.
+  it("closure-equivalence: the rows of the closure before the rewrite", async () => {
+    const client = tx.client()
+    await client.query("SAVEPOINT closure_oracle")
+    try {
+      await installClosureOracle(client, "scope-kind")
+      const users = await seedClosureExtras(client, ids)
+      expectEquivalent("rights_mine", await mineEquivalence(client, users))
+      const scope = { level: "scope", levelId: ORG_KIND_ID }
+      const dim = (effect: string, action: string) => ({
+        effect,
+        object: "task",
+        action,
+        extent: "dimension",
+        dimension: REGION_DIMENSION_ID,
+      })
+      const anyDelta = (effect: string, action: string) => ({
+        effect,
+        object: "task",
+        action,
+        extent: "any",
+        dimension: null,
+      })
+      expectEquivalent(
+        "rights_role_grants",
+        await roleGrantsEquivalence(client, {
+          admin: { ...scope, archetype: ORG_ADMIN_ID, delta: [] },
+          adminDimDeny: {
+            ...scope,
+            archetype: ORG_ADMIN_ID,
+            delta: [anyDelta("deny", "read"), dim("deny", "read")],
+          },
+          member: { ...scope, archetype: ORG_MEMBER_ROLE_ID, delta: [] },
+          memberUpdate: {
+            ...scope,
+            archetype: ORG_MEMBER_ROLE_ID,
+            delta: [anyDelta("deny", "read"), anyDelta("allow", "update")],
+          },
+          memberDim: {
+            ...scope,
+            archetype: ORG_MEMBER_ROLE_ID,
+            delta: [
+              anyDelta("deny", "read"),
+              dim("deny", "read"),
+              dim("allow", "update"),
+            ],
+          },
+          memberDimKept: {
+            ...scope,
+            archetype: ORG_MEMBER_ROLE_ID,
+            delta: [anyDelta("deny", "read"), dim("allow", "update")],
+          },
+          lead: {
+            level: "container",
+            levelId: PROJECT_ID,
+            archetype: PROJECT_LEAD_ID,
+            delta: [anyDelta("deny", "read"), anyDelta("allow", "update")],
+          },
+          support: {
+            level: "global",
+            levelId: null,
+            archetype: SUPPORT_ID,
+            delta: [],
+          },
+          everyone: {
+            level: "everyUser",
+            levelId: null,
+            archetype: EVERYONE_ID,
+            delta: [],
+          },
+        })
+      )
+    } finally {
+      await client.query("ROLLBACK TO SAVEPOINT closure_oracle")
     }
   })
 

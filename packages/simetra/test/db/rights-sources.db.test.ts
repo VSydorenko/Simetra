@@ -24,6 +24,11 @@ import {
 } from "../../src/schema/apply/rights-sources"
 import { signUp } from "./auth"
 import {
+  expectEquivalent,
+  installClosureOracle,
+  mineEquivalence,
+} from "./closure-oracle"
+import {
   type ApiRole,
   queryAs,
   rollbackDatabase,
@@ -339,6 +344,28 @@ describe("adopted sources", () => {
   })
 
   afterAll(() => tx.close())
+
+  // Р2d2-22: рядки джерел (`storage = 'source'`, скоуп з моїх скоупів,
+  // контейнер) поруч із рядками довідника — замикання після переписування
+  // дає рівно рядки тіла до нього.
+  it("closure-equivalence: the rows of the closure before the rewrite", async () => {
+    const client = tx.client()
+    await client.query("SAVEPOINT closure_oracle")
+    try {
+      await installClosureOracle(client, "adopted")
+      const users = Object.fromEntries(
+        Object.entries(ids).filter(([key]) => /^u(\d+|n)$/.test(key))
+      )
+      const results = await mineEquivalence(client, users)
+      expect(
+        Object.values(results).some((r) => r.rows > 1),
+        "some user holds source rows"
+      ).toBe(true)
+      expectEquivalent("rights_mine (adopted)", results, { drops: false })
+    } finally {
+      await client.query("ROLLBACK TO SAVEPOINT closure_oracle")
+    }
+  })
 
   it.each(ADOPTED_CASES)("%s", (_, checks) =>
     runChecks(tx.client(), ids, checks)
