@@ -1,6 +1,7 @@
 import { beforeAll, describe, expect, it } from "vitest"
 import {
   compile,
+  keyTriggerNames,
   loadSqlParser,
   platformBeforeTriggerName,
   readSqlUnits,
@@ -983,7 +984,7 @@ describe("reverseGenerate", () => {
         columns: ["currency_id"],
         references: {
           object: { kind: "Catalog", name: "Currency" },
-          columns: ["ref"],
+          key: "ref",
         },
       },
     ])
@@ -994,6 +995,91 @@ describe("reverseGenerate", () => {
         (r) => r.role === "customTable.foreignKey"
       )
     ).toBe(true)
+  })
+
+  // FK на таблицю виду пишеться формою ключа (Рб1-10); пара колонок поза
+  // складеним ключем цілі (інший порядок, не ключ) — невиражена.
+  it.each([
+    [["org_id", "id"], { key: "scopedRef" }],
+    [["id"], { key: "ref" }],
+    [["id", "org_id"], undefined],
+  ])("fk to a scoped kept object on %j", async (target, expected) => {
+    const kept = metaFiles({
+      "project.meta.json": project({
+        name: "App",
+        defaultSchema: "app",
+        naming: { attributeCase: "snake_case" },
+        scopeKinds: [
+          {
+            id: uuid(9411),
+            name: "org",
+            physicalName: "org_id",
+            root: { object: { kind: "Catalog", name: "Organization" } },
+            setFunction: { name: "my_orgs" },
+          },
+        ],
+      }),
+      "catalogs/Organization/Organization.meta.json": catalog("Organization", {
+        schema: "app",
+        scope: "org",
+      }),
+      "catalogs/Currency/Currency.meta.json": catalog("Currency", {
+        schema: "app",
+        scope: "org",
+      }),
+    })
+    const compiled = await compile(kept)
+    expectClean(compiled, { allow: ["rights.scope-kind-unread"] })
+    const local = target.map((c) => (c === "id" ? "currency_id" : c))
+    const result = await reverseGenerate(
+      model({
+        tables: [
+          ...catalogFromSnapshot(compiled.model!.physical).tables,
+          table("app", "price", {
+            columns: [
+              idColumn,
+              { name: "org_id", type: "uuid", notNull: true },
+              { name: "currency_id", type: "uuid", notNull: true },
+            ],
+            foreignKeys: [
+              {
+                name: "price_currency_fkey",
+                columns: local,
+                references: {
+                  schema: "app",
+                  table: "currency",
+                  columns: target,
+                },
+                onDelete: "noAction",
+                onUpdate: "noAction",
+                deferrable: "no",
+              },
+            ],
+          }),
+        ],
+      }),
+      options(kept)
+    )
+    const unrepresentable = result.diagnostics
+      .filter((d) => d.code === "introspect.unrepresentable")
+      .map((d) => d.params?.property)
+    if (expected === undefined) {
+      expect(unrepresentable).toEqual(["references"])
+      return
+    }
+    expect(unrepresentable).toEqual([])
+    expect(
+      json(result, "custom-tables/Price/Price.meta.json").foreignKeys
+    ).toEqual([
+      {
+        name: "price_currency_fkey",
+        columns: local,
+        references: {
+          object: { kind: "Catalog", name: "Currency" },
+          ...expected,
+        },
+      },
+    ])
   })
 
   it("fk to a tabular section of a kept 1C object is unrepresentable", async () => {
@@ -1593,6 +1679,65 @@ describe("reverseGenerate", () => {
     expect(errors(result)).toEqual([])
     expect(result.files.get("custom-tables/Note/Note.sql")).toContain(
       `CREATE TRIGGER ${trigger}`
+    )
+  })
+
+  it("recognizes key triggers and simetra.key_immutable as platform", async () => {
+    // Рб1-4: тригери незмінності ключа й їхня функція — платформні, як
+    // механіка. Одиниці — справжній вихід генератора
+    const compiled = await compile(
+      metaFiles({
+        "project.meta.json": project(),
+        "catalogs/Note/Note.meta.json": catalog("Note"),
+      })
+    )
+    expectClean(compiled)
+    const platform = compiled.model!.sqlUnits.filter(
+      (u) => u.generator === "key"
+    )
+    const names = keyTriggerNames("note")
+    expect(platform.map((u) => u.name)).toEqual(
+      expect.arrayContaining([names.before, names.after, "key_immutable"])
+    )
+    const AUDIT_FN =
+      "CREATE FUNCTION public.audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;"
+    const AUDIT =
+      "CREATE TRIGGER note_audit AFTER UPDATE ON public.note FOR EACH ROW EXECUTE FUNCTION public.audit();"
+    const result = await reverseGenerate(
+      model({
+        units: [
+          ...platform.map((u) => ({
+            class: u.class,
+            identity: u.identity,
+            schema: u.schema,
+            name: u.name,
+            sql: u.sql,
+          })),
+          ...units([AUDIT_FN, AUDIT].join("\n")),
+        ],
+      }),
+      options(new Map(), { defaultSchema: "public" })
+    )
+    expect(errors(result)).toEqual([])
+    const written = [...result.files.values()].join("\n")
+    expect(written).toContain("CREATE TRIGGER note_audit")
+    expect(written).not.toContain("simetra_key")
+    expect(written).not.toContain("key_immutable")
+  })
+
+  it("keeps a key trigger namesake that calls another function", async () => {
+    const { before } = keyTriggerNames("note")
+    const sql = [
+      "CREATE FUNCTION app.stamp() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;",
+      `CREATE TRIGGER ${before} BEFORE UPDATE ON app.note FOR EACH ROW EXECUTE FUNCTION app.stamp();`,
+    ].join("\n")
+    const result = await reverseGenerate(
+      model({ tables: [table("app", "note")], units: units(sql) }),
+      options()
+    )
+    expect(errors(result)).toEqual([])
+    expect(result.files.get("custom-tables/Note/Note.sql")).toContain(
+      `CREATE TRIGGER ${before}`
     )
   })
 

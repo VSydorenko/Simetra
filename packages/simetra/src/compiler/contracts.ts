@@ -1,11 +1,13 @@
 import {
   KIND_REGISTRY,
   PROVIDER_EVENT_SOURCES,
+  keyColumn,
   makeObjectName,
   quoteIdent,
   postsMovements,
   truncatedPeriodExpression,
   standardLogicalName,
+  tabularParentColumn,
   type Attribute,
   type DatabaseProvider,
   type Dml,
@@ -35,10 +37,12 @@ import { effectsFunctionName } from "./rights/effects-names"
 import { writesByCommand } from "./rights/facts"
 import {
   kindLabelOf,
+  mainTableIn,
   usersCatalogOf,
   type ModelStageResult,
 } from "./stages/model"
 import { isMovementQuery, type SqlUnit } from "./sql/units"
+import { findStyleFreeColumn } from "./standard-column"
 import { objectKey, type ParsedObject } from "./stages/files"
 import { standardElementId, type ResolvedReference } from "./stages/identity"
 
@@ -668,12 +672,7 @@ export function mainTableOf(
   physical: PhysicalSnapshot,
   objectId: string
 ): PhysicalTable | undefined {
-  return physical.tables.find(
-    (t) =>
-      t.origin.objectId === objectId &&
-      t.origin.tabularSectionId === undefined &&
-      t.origin.part === undefined
-  )
+  return mainTableIn(physical.tables, objectId)
 }
 
 /**
@@ -689,12 +688,12 @@ export function rootFamilyKey(
   main: PhysicalTable
 ): string | undefined {
   const key = main.primaryKey?.columns
-  const ref = main.columns.find((c) => c.origin.standard === "ref")
+  const ref = findStyleFreeColumn(main, keyColumn(false))
   if (key?.length !== 1 || ref === undefined || key[0] !== ref.name) {
     return undefined
   }
   if (table.origin.tabularSectionId === undefined) return ref.name
-  const parent = table.columns.find((c) => c.origin.standard === "parent")
+  const parent = findStyleFreeColumn(table, tabularParentColumn())
   if (parent === undefined) {
     throw new Error(
       `internal: tabular section ${table.schema}.${table.name} has no parent column`

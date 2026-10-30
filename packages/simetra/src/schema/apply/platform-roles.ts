@@ -46,6 +46,11 @@ export interface PlatformRoleRow {
     set: boolean
     manager: boolean
   }[]
+  /**
+   * Ролі, досяжні з ролей запиту будь-яким ребром `pg_auth_members`, що
+   * керують цією роллю (член з `ADMIN`) чи мають `SUPERUSER` (Рб1-7).
+   */
+  requestPath: string[]
 }
 
 /** Роль входу платформи і батьки, в які вона входить парою `INHERIT FALSE, SET TRUE`. */
@@ -149,13 +154,26 @@ export function requiredPlatformRoles(
   return sortedNames([...roles].filter((name) => PLATFORM_ROLE_NAMES.has(name)))
 }
 
-/** Форми названих ролей одним запитом. */
+/**
+ * Форми названих ролей одним запитом. `requestPath` обходить усі ребра
+ * `pg_auth_members`, а не лише `SET`/`INHERIT`: з PG16 `is_admin_of_role`
+ * іде всіма членствами, тож роль запиту, що звичайним членством дістається
+ * до керівника ролі платформи, може через `SET ROLE` на посередника з
+ * `CREATEROLE` змінювати роль платформи (Рб1-7). `UNION` завершує цикли.
+ */
 export async function readPlatformRoles(
   tx: ApplyTransaction,
-  names: readonly string[]
+  names: readonly string[],
+  requestNames: readonly string[] = DEFAULT_REQUEST_NAMES
 ): Promise<PlatformRoleRow[]> {
   return tx.query<PlatformRoleRow & Record<string, unknown>>(
     [
+      "WITH RECURSIVE reach(oid) AS (",
+      "  SELECT oid FROM pg_catalog.pg_roles WHERE rolname = ANY($2::text[])",
+      "  UNION",
+      "  SELECT m.roleid FROM pg_catalog.pg_auth_members m",
+      "    JOIN reach ON m.member = reach.oid",
+      ")",
       "SELECT r.rolname AS name,",
       "  jsonb_build_object('login', r.rolcanlogin, 'inherit', r.rolinherit,",
       "    'superuser', r.rolsuper, 'bypassRls', r.rolbypassrls,",
@@ -175,12 +193,16 @@ export async function readPlatformRoles(
       "       ORDER BY u.rolname), '[]'::jsonb)",
       "     FROM pg_catalog.pg_auth_members m",
       "     JOIN pg_catalog.pg_roles u ON u.oid = m.member",
-      "    WHERE m.roleid = r.oid) AS members",
+      "    WHERE m.roleid = r.oid) AS members,",
+      "  (SELECT COALESCE(jsonb_agg(x.rolname ORDER BY x.rolname), '[]'::jsonb)",
+      "     FROM reach JOIN pg_catalog.pg_roles x ON x.oid = reach.oid",
+      "    WHERE x.rolsuper OR EXISTS (SELECT 1 FROM pg_catalog.pg_auth_members a",
+      '      WHERE a.roleid = r.oid AND a.member = x.oid AND a.admin_option)) AS "requestPath"',
       "FROM pg_catalog.pg_roles r",
       "WHERE r.rolname = ANY($1::text[])",
       "ORDER BY r.rolname",
     ].join("\n"),
-    [[...names]]
+    [[...names], [...requestNames]]
   )
 }
 
@@ -223,6 +245,8 @@ function loginViolation(
   if (option !== undefined) return `membership-option:${option}`
   const request = requestMember(found, requestNames)
   if (request !== undefined) return `request-role:${request}`
+  const [path] = found.requestPath
+  if (path !== undefined) return `request-path:${path}`
   const holder = found.members.find((m) => !managesOnly(m))
   return holder === undefined ? undefined : `member:${holder.role}`
 }
@@ -267,6 +291,8 @@ function grantRoleViolations(
     requestMember(found, requestNames)
   if (request !== undefined)
     return [{ role, violation: `request-role:${request}` }]
+  const [path] = found.requestPath
+  if (path !== undefined) return [{ role, violation: `request-path:${path}` }]
   const [parent] = parents
   if (parent !== undefined) return [{ role, violation: `member-of:${parent}` }]
   const logins: { role: string; violation: string }[] = []
@@ -367,7 +393,7 @@ export async function platformRoleGate(
 ): Promise<EngineDiagnostic[]> {
   return platformRoleRefusals(
     required,
-    await readPlatformRoles(tx, [...required, ...loginNames]),
+    await readPlatformRoles(tx, [...required, ...loginNames], requestNames),
     server,
     loginNames,
     login,

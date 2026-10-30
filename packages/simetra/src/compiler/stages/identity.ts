@@ -943,6 +943,15 @@ function resolveElementReferences(
     ) {
       continue
     }
+    // Ціль-вид FK називає ключем, а не колонками (Рб1-10): колонки на ній —
+    // помилка форми стадії 4 (`customTable.fk-target-not-key`), а не
+    // невідома колонка, тож імена тут не резолвляться.
+    if (
+      role === "customTable.foreignKeyTarget" &&
+      !KIND_REGISTRY[target.kind].declared
+    ) {
+      continue
+    }
     const table = tableOf(target)
     if (table === undefined) continue
     if (!table.has(name)) {

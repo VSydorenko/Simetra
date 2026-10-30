@@ -6,8 +6,6 @@ import {
   contentChangeCondition,
   contentColumns,
 } from "../mechanics-units"
-import { buildEffectsUnits } from "../rights/effects-units"
-import { loadSqlParser } from "../sql/parse"
 import { effectsTables, writesByCommandContract } from "../contracts"
 import { writesByCommand } from "../rights/facts"
 import { hasEmptySearchPath, routineLanguage } from "../sql/closed-forms"
@@ -40,6 +38,7 @@ import {
   tree,
 } from "./fixtures/sql-shape"
 import { expectClean, uuid } from "./helpers"
+import { snakeCaseTwin } from "./fixtures/snake-case"
 import { kitchenSink } from "./fixtures/kitchen-sink"
 
 let domain: CompiledModel
@@ -106,8 +105,8 @@ const fnOf = (model: CompiledModel, table: string) =>
 describe("buildEffectsUnits", () => {
   it("checks the root row against the effects of the command action", () => {
     const t = "task"
-    // Колонки порівняння — змістові без незмінних (ключ і скоуп перевіряє
-    // окрема умова, Р2b1-20). Авторство — механіка (Р-A1-9): поза змістом,
+    // Колонки порівняння — змістові без ключа (тригери ключа) і скоупу
+    // (окрема умова, Р2b1-20). Авторство — механіка (Р-A1-9): поза змістом,
     // а автор рядка — серед незмінних (Р-A1-10).
     const content = contentColumns(tableOf(domain, t), "camelCase")
       .map((c) => c.name)
@@ -137,12 +136,8 @@ describe("buildEffectsUnits", () => {
     const body = [
       ...PREAMBLE,
       // Незмінні колонки — лише на оновленні: вставка під `create` свій
-      // скоуп лише отримує (Р2b1-20).
-      ...raiseIf(
-        "TG_OP = 'UPDATE' AND OLD.id IS DISTINCT FROM NEW.id",
-        t,
-        "id"
-      ),
+      // скоуп лише отримує (Р2b1-20). Ключ тут не перевіряється: його
+      // тримають тригери ключа для будь-якого автора (Рб1-4).
       ...raiseIf(
         "TG_OP = 'UPDATE' AND OLD.org_id IS DISTINCT FROM NEW.org_id",
         t,
@@ -519,54 +514,16 @@ describe("buildEffectsUnits", () => {
   })
 
   it("a snake_case project finds the platform user fields and the author by its styled names", async () => {
-    // `origin.standard` несе ім'я в стилі проєкту: порівняння з літералом
-    // `userKind` пропустило б `user_kind` (Р-A1-10).
-    const snake: Record<string, string> = {
-      userKind: "user_kind",
-      createdBy: "created_by",
-      updatedBy: "updated_by",
-    }
-    const physical = {
-      ...domain.physical,
-      tables: domain.physical.tables.map((t) => ({
-        ...t,
-        columns: t.columns.map((c) =>
-          c.origin.standard !== undefined && c.origin.standard in snake
-            ? {
-                ...c,
-                origin: { ...c.origin, standard: snake[c.origin.standard]! },
-              }
-            : c
-        ),
-      })),
-    }
-    const units = buildEffectsUnits(
-      domain.contracts,
-      physical,
-      "snake_case",
-      "supabase",
-      fnOf(domain, "users").module,
-      await loadSqlParser()
+    // Близнюк у snake_case (Рб1-3): `origin.standard` несе ім'я в стилі
+    // проєкту, тож порівняння з літералом `userKind` пропустило б `user_kind`
+    // (Р-A1-10), і тригер ефектів розійшовся б з camelCase.
+    const snake = await compileRights(
+      snakeCaseTwin(policyDomain(writeRoles(), writableRegister()))
     )
-    const conditions = (table: string) =>
-      bodyShape(
-        units.find(
-          (u) => u.identity === `function:public.${table}_simetra_effects()`
-        )!.sql
-      )
-        .flatMap((statement) => statement.expressions)
-        .filter((expression) => expression.role === "condition")
-        .map((expression) => expression.tree)
-    expect(conditions("users")).toContainEqual(
-      tree(
-        "SELECT TG_OP = 'UPDATE' AND OLD.user_kind IS DISTINCT FROM NEW.user_kind"
-      )
-    )
-    expect(conditions("task")).toContainEqual(
-      tree(
-        "SELECT TG_OP = 'UPDATE' AND OLD.created_by_id IS DISTINCT FROM NEW.created_by_id"
-      )
-    )
+    expectClean(snake)
+    const sql = (model: CompiledModel) =>
+      effects(model).map((u) => [u.identity, u.sql])
+    expect(sql(snake.model!)).toEqual(sql(domain))
   })
 
   it("refuses with the effect code and no row data", () => {

@@ -1,6 +1,7 @@
 import {
   authorColumns,
   KIND_REGISTRY,
+  keyColumn,
   isUuidColumn,
   singleUuidKeyColumn,
   standardLogicalName,
@@ -104,7 +105,7 @@ export function checkRights(ctx: RightsCheckContext): Diagnostic[] {
     const immutableIds = def.commandWrites
       ? outsideCommandUpdate(object, ctx)
       : new Set(
-          [{ logicalName: "ref" }, ...authorColumns()].map((column) =>
+          [keyColumn(false), ...authorColumns()].map((column) =>
             standardElementId(must(object.id), column)
           )
         )

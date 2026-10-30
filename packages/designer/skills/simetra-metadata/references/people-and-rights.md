@@ -297,7 +297,7 @@ transaction retry after a serialization failure or deadlock.
 
 An occupied membership row cannot be reassigned to another user. Only the
 invited user can fill an empty user reference, and only if that user does not
-already belong to the scope. Membership and user row ids cannot be changed.
+already belong to the scope.
 A row cannot be re-inserted under an id that a rights assignment still
 references; for a user, a membership row also blocks it. Other application
 references do not block re-insertion. Commands do not change the users
@@ -376,7 +376,10 @@ command role and nobody else.
   clears it, while `markDeletion` may set or clear the mark. A custom action is
   not a transition action and cannot name a transition column in its header
   effects (`rights.custom-action-effects`, reason `transitionColumn`).
-- The ref key and the scope column of a row cannot be changed by any command,
+- The ref key of a catalog, document or tabular-section row never changes —
+  not in a command, not in application SQL, not in maintenance mode, and also
+  in a project without rights (`42501` `command.forbidden`, detail `effect`,
+  the key column). The scope column of a row cannot be changed by any command,
   and a tabular-section row cannot be moved to another owner;
   a custom action that names the key in its header effects is refused
   (`rights.custom-action-effects`, reason `immutableColumn`).

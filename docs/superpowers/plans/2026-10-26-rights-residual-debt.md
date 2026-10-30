@@ -2,8 +2,9 @@
 
 Статус: беклог після приймання планів
 [Права-2b2](2026-10-24-rights-2b2-carrier-backfill.md),
-[Права-2d1](2026-10-25-rights-2d1-adopted-sources.md) і
-[Права-2c1](2026-10-25-rights-2c1-verbatim-ban-trust-boundary.md). Тут — те,
+[Права-2d1](2026-10-25-rights-2d1-adopted-sources.md),
+[Права-2c1](2026-10-25-rights-2c1-verbatim-ban-trust-boundary.md) і
+[Права, борг-1](2026-10-30-rights-debt-1-before-migration.md). Тут — те,
 що архітектор свідомо відклав на прийманні: кандидати поза планами й
 дрібниці з фінальних рецензій. «Відомі обмеження» живуть у самих планах і тут
 не повторюються. Пункт знімається звідси, коли його бере план (посилання на
@@ -11,34 +12,10 @@
 
 ## 1. Межа довіри й цілісність таблиць виду
 
-- **FK `CustomTable` на не-ключову колонку таблиці виду.** FK на унікальну
-  колонку, що не є `id`, дозволено, і він переживає промоцію. Вирішити:
-  обмежити ціль FK ключем виду або довести, що перейменування й зміна такої
-  колонки командою безпечні.
-- **`id` таблиці виду змінюваний поза командою.** Гард незмінності `id` стоїть
-  лише в тригері ефектів і діє за наявного контексту команди; власник і
-  міграції змінюють `id` без відмови. Кандидат — безумовний тригер чи
-  `CHECK` через порівняння з `OLD`.
-- **Закріплення `search_path` у рендері.** 2c1 закрив точкові місця
-  fail-closed; системне правило — рендер ставить `SET search_path = ''` на
-  кожну згенеровану функцію, а гейт це перевіряє.
-- **Типове `rowLevelSecurity` виду.** `rowLevelSecurityOf`
-  (`packages/simetra/src/compiler/stages/model.ts`) повертає `"off"`, коли
-  реєстр виду значення не задає: новий вид без явного значення лишається без
-  RLS. Кандидат — обов'язкове поле в реєстрі видів.
 - **Самоприйняття членства тримається на тому, що під `simetra_command` пише
   лише `runCommand`.** Оператор із кількома CTE під контекстом команди обходить
   умову «ще не учасник». Обмеження для П4 — TS-хуки команди без сирого SQL під
   контекстом.
-- **snake_case-проєкт з довідниками прав не компілюється.** Закрити до першої
-  міграції споживача — блокує проєкт зі `naming.attributeCase` snake_case.
-  Генератор функцій прав (`packages/simetra/src/compiler/rights/functions.ts`)
-  падає `internal: missing rights input` (`must` з
-  `packages/simetra/src/compiler/rights/references.ts`); `column()` у
-  `packages/simetra/src/compiler/rights/guard-units.ts` шукає `deletionMark` і
-  `customRole` літералами, а не стандартним іменем у стилі проєкту;
-  `USER_PLATFORM_FIELDS` у `packages/simetra/src/compiler/rights/effects-units.ts`
-  треба замінити на `userPlatformColumns()` реєстру.
 
 ## 2. Джерела членства й призначень (2d1)
 
@@ -54,9 +31,6 @@
 
 ## 3. Тести й гігієна
 
-- **Таймаут `operations-rename`.** Kitchen-sink кейс триває близько 46 с при
-  межі 60 с; зростання фікстури зробить його нестабільним. Розбити кейс або
-  зменшити фікстуру.
 - **`Number.isSafeInteger` у `packages/simetra/src/compiler/rights/facts.ts`
   без мутаційного тесту.** Додати кейс, що червоніє без перевірки.
 - **Мертвий код `rewrite.dynamic-sql*`** у переписувачі промоції
@@ -67,3 +41,11 @@
   `physical.function-duplicate`; кандидат — `generatedTableFunctionName`
   (`packages/simetra/src/compiler/rights/generated-names.ts`), як у функцій
   ефектів.
+- **`USER_KIND = userPlatformColumns()[0]!`** у
+  `packages/simetra/src/compiler/rights/guard-units.ts` залежить від порядку
+  масиву реєстру: зміна порядку мовчки візьме інший реквізит. Кандидат —
+  пошук визначення за логічним іменем у реєстрі.
+- **Правило лінту стандартних імен** (`packages/simetra/eslint.standard-columns.js`)
+  не ловить порівняння через необов'язковий ланцюжок
+  (`c.origin?.standard === "…"`, вузол `ChainExpression`). Кандидат — селектор
+  і для цього вузла з кейсом у негативному тесті.

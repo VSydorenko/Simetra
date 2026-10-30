@@ -533,59 +533,87 @@ const formOf = (r: ResolvedReference) =>
         ? "key"
         : "value"
 
-describe("rename cascade", () => {
-  it.each(CASCADE_FIXTURES)(
-    "%s: every role is renamed in every form it takes",
-    async (_, load) => {
-      const files = load()
-      const model = await modelOf(files)
-      const targets = [
-        ...new Set(renameable(model.references).map((r) => r.to.id)),
-      ]
-      for (const id of targets) {
-        const target = targetOf(model, id)
-        expect(target, id).toBeDefined()
-        const oldName =
-          target!.kind === "Project"
-            ? target!.element[0]
-            : (target!.element?.at(-1) ?? target!.name)
-        const newName = `${oldName}Renamed`
-        const before = model.references.filter((r) => r.to.id === id)
-        for (const r of before) {
-          expect(nameAt(files, r), `${r.role} ${r.from.pointer}`).toBe(oldName)
-        }
+/**
+ * Каскад — окремий кейс на кожну ціль посилань: один кейс на всю фікстуру
+ * тривав під межею таймауту й не казав, яка саме ціль зламалась. Фікстури
+ * компілюються один раз під час збору кейсів; кейси їх лише читають.
+ */
+const cascadeFixtures = await Promise.all(
+  CASCADE_FIXTURES.map(async ([fixture, load]) => {
+    const files = load()
+    return { fixture, files, compiled: await compile(files) }
+  })
+)
 
-        const result = await renameElement(files, { target: target!, newName })
-        expect(
-          result.diagnostics.filter((d) => d.severity === "error"),
-          `${oldName} → ${newName}`
-        ).toEqual([])
-        const renamedModel = await modelOf(applyChanges(files, result.changes))
-        const after = renamedModel.references.filter((r) => r.to.id === id)
-        expect(after.map((r) => r.role).sort()).toEqual(
-          before.map((r) => r.role).sort()
-        )
-        const afterFiles = applyChanges(files, result.changes)
-        for (const r of after) {
-          expect(nameAt(afterFiles, r), `${r.role} ${r.from.pointer}`).toBe(
-            newName
-          )
-        }
+const cascadeCases = cascadeFixtures.flatMap(({ fixture, files, compiled }) => {
+  // Фікстура з помилками дає нуль кейсів; її ловить перевірка покриття нижче.
+  const model = compiled.model
+  if (model === undefined) return []
+  return [...new Set(renameable(model.references).map((r) => r.to.id))].map(
+    (id) => {
+      const target = targetOf(model, id)
+      const label =
+        target === undefined
+          ? id
+          : target.kind === "Project"
+            ? ["Project", ...target.element].join(".")
+            : [target.kind, target.name, ...(target.element ?? [])].join(".")
+      // Кортеж, а не об'єкт: `$label` vitest обрізає довгі назви кейсів.
+      return [`${fixture}: ${label}`, { files, compiled, id, target }] as const
+    }
+  )
+})
+
+describe("rename cascade", () => {
+  it.each(cascadeCases)(
+    "%s — every role is renamed in every form it takes",
+    async (_, { files, compiled, id, target }) => {
+      expect(
+        compiled.diagnostics.filter((d) => d.severity === "error")
+      ).toEqual([])
+      const model = compiled.model as CompiledModel
+      expect(target, id).toBeDefined()
+      const oldName =
+        target!.kind === "Project"
+          ? target!.element[0]
+          : (target!.element?.at(-1) ?? target!.name)
+      const newName = `${oldName}Renamed`
+      const before = model.references.filter((r) => r.to.id === id)
+      for (const r of before) {
+        expect(nameAt(files, r), `${r.role} ${r.from.pointer}`).toBe(oldName)
       }
-    },
-    60_000
+
+      const result = await renameElement(files, { target: target!, newName })
+      expect(
+        result.diagnostics.filter((d) => d.severity === "error"),
+        `${oldName} → ${newName}`
+      ).toEqual([])
+      const afterFiles = applyChanges(files, result.changes)
+      const renamedModel = await modelOf(afterFiles)
+      const after = renamedModel.references.filter((r) => r.to.id === id)
+      expect(after.map((r) => r.role).sort()).toEqual(
+        before.map((r) => r.role).sort()
+      )
+      for (const r of after) {
+        expect(nameAt(afterFiles, r), `${r.role} ${r.from.pointer}`).toBe(
+          newName
+        )
+      }
+    }
   )
 
-  it("the cascade runs exercise every place form and the edge roles", async () => {
-    // Самодостатньо, без залежності від порядку тестів: форми й ролі
-    // рахуються з тих самих фікстур, які проходить каскад.
-    const refs = (
-      await Promise.all(
-        CASCADE_FIXTURES.map(async ([, load]) =>
-          renameable((await modelOf(load())).references)
-        )
-      )
-    ).flat()
+  it("the cascade runs exercise every place form and the edge roles", () => {
+    // Форми й ролі рахуються з тих самих компіляцій, з яких зібрано кейси
+    // каскаду, — без залежності від порядку тестів.
+    for (const { fixture, compiled } of cascadeFixtures) {
+      expect(
+        compiled.diagnostics.filter((d) => d.severity === "error"),
+        fixture
+      ).toEqual([])
+    }
+    const refs = cascadeFixtures.flatMap(({ compiled }) =>
+      renameable(compiled.model?.references ?? [])
+    )
     expect([...new Set(refs.map(formOf))].sort()).toEqual([
       "key",
       "marker",

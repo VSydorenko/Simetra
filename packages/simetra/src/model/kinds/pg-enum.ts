@@ -16,6 +16,7 @@ export const pgEnumKind: KindDefinition = {
   rightsExtents: [],
   sqlModule: "debt",
   materializes: "enumType",
+  rowLevelSecurity: "none",
   scope: "absent",
   declared: true,
   columnFields: [],

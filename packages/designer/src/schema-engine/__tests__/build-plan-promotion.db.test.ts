@@ -212,7 +212,7 @@ describe.concurrent("buildPlan", () => {
           columns: ["regionId"],
           references: {
             object: { kind: "Catalog", name: "Region" },
-            columns: ["ref"],
+            key: "ref",
           },
         },
       ]

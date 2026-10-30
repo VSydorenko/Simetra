@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest"
 import { compile, type CompileResult } from "simetra/compiler"
-import { KIND_REGISTRY } from "simetra/model"
 import {
   textCalls,
   unitCalls,
@@ -958,15 +957,6 @@ describe("creation order", () => {
       stock_totals: "enabled",
       stock_turnovers_month: "enabled",
     })
-  })
-
-  it("rls is a registry fact of every derived table kind", () => {
-    for (const def of Object.values(KIND_REGISTRY)) {
-      const derivedTable = def.materializes === "table" && !def.declared
-      expect(def.rowLevelSecurity, def.kind).toBe(
-        derivedTable ? "enabled" : undefined
-      )
-    }
   })
 })
 

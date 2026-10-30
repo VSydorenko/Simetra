@@ -24,15 +24,18 @@ export function withoutAccess<T extends Pick<SqlUnit, "generator">>(
 }
 
 /**
- * Одиниці без механіки рядка: функцію `simetra.touch()`, її гранти й тригер
- * дає кожна таблиця з колонками механіки (Catalog, Document), тож тест іншого
- * генератора звіряє свої одиниці без них; механіку звіряє
- * mechanics-units.test.ts.
+ * Одиниці без механіки рядка й незмінності ключа: функції `simetra.touch()`
+ * і `simetra.key_immutable()`, їхні гранти й тригери дає кожна таблиця з
+ * колонками механіки чи ключем `ref` (Catalog, Document, рядки ТЧ), тож тест
+ * іншого генератора звіряє свої одиниці без них; їх звіряють
+ * mechanics-units.test.ts і key-units.test.ts.
  */
 export function withoutMechanics<T extends Pick<SqlUnit, "generator">>(
   units: readonly T[]
 ): T[] {
-  return units.filter((u) => u.generator !== "mechanics")
+  return units.filter(
+    (u) => u.generator !== "mechanics" && u.generator !== "key"
+  )
 }
 
 /**
@@ -236,6 +239,48 @@ export function scopedProject(): {
 /** Довідник-корінь виду `org`: власний вид оголошує і він сам. */
 export function organization(overrides: Record<string, unknown> = {}) {
   return catalog("Organization", { scope: "org", ...overrides })
+}
+
+/**
+ * Тека для форм цілі FK прийнятої таблиці (Рб1-10): проєкт `scopedProject()`,
+ * корінь `Organization`, скоуплений довідник `Note`, довідник без скоупу
+ * `Plain`, прийнята `Other` і скоуплена прийнята `Log` (колонки `id`, `org`)
+ * з одним FK `log_fk`.
+ */
+export function foreignKeyTargets(
+  foreignKey: { columns: string[]; references: Record<string, unknown> },
+  projectOverrides: Record<string, unknown> = {}
+): Map<string, string> {
+  return metaFiles({
+    "project.meta.json": { ...scopedProject(), ...projectOverrides },
+    "catalogs/Organization/Organization.meta.json": organization(),
+    "catalogs/Note/Note.meta.json": catalog("Note", { scope: "org" }),
+    "catalogs/Plain/Plain.meta.json": catalog("Plain", { scope: "none" }),
+    "custom-tables/Other/Other.meta.json": customTable("Other", {
+      scope: "none",
+    }),
+    "custom-tables/Log/Log.meta.json": customTable("Log", {
+      scope: "org",
+      scopeColumn: "org",
+      columns: [
+        {
+          id: freshId(),
+          name: "id",
+          physicalName: "id",
+          type: "UUID",
+          notNull: true,
+        },
+        {
+          id: freshId(),
+          name: "org",
+          physicalName: "org_id",
+          type: "UUID",
+          notNull: true,
+        },
+      ],
+      foreignKeys: [{ name: "log_fk", ...foreignKey }],
+    }),
+  })
 }
 
 export const SALE_FILE = "documents/Sale/Sale.meta.json"

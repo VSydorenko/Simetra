@@ -5,12 +5,23 @@ import {
   rightsLevelOf,
   effectiveHolderRows,
   sourceConditions,
+  standardColumn,
   type AssignmentSourceContract,
   type Contracts,
   type QualifiedName,
   type RightsLevelKey,
 } from "simetra/compiler"
-import { quoteIdent, type PhysicalSnapshot } from "simetra/model"
+import {
+  ATTRIBUTE_CASES,
+  RIGHTS_COLUMNS,
+  deletionMarkColumn,
+  keyColumn,
+  quoteIdent,
+  tabularParentColumn,
+  type AttributeCase,
+  type PhysicalSnapshot,
+  type StandardColumnDef,
+} from "simetra/model"
 import { z } from "zod"
 import type { EngineDiagnostic } from "../engine"
 import { applyDiagnostic } from "./diagnostic"
@@ -82,6 +93,13 @@ const origin = z.object({
   part: z.string().optional(),
 })
 const appliedRightsSchema = z.object({
+  // Стиль застосованого знімка: його колонки несуть `origin.standard` у
+  // стилі свого проєкту, а не бажаного (Рб1-1). Немає — типовий camelCase.
+  project: z
+    .object({
+      naming: z.object({ attributeCase: z.enum(ATTRIBUTE_CASES) }).optional(),
+    })
+    .optional(),
   scopeKinds: z.array(
     z.object({
       id: z.string(),
@@ -181,6 +199,7 @@ export function rightsSourceInput(
     | "users"
   >,
   physical: PhysicalSnapshot,
+  attributeCase: AttributeCase,
   applied?: unknown
 ): RightsSourceInput {
   const tables = new Map<string, QualifiedName>()
@@ -204,7 +223,8 @@ export function rightsSourceInput(
       }[]
     },
     table: QualifiedName,
-    names: readonly string[]
+    defs: readonly StandardColumnDef[],
+    style: AttributeCase
   ) => {
     const found = source.tables.find(
       (candidate) =>
@@ -213,17 +233,16 @@ export function rightsSourceInput(
     if (found === undefined)
       throw new Error(`missing physical table ${tableText(table)}`)
     return Object.fromEntries(
-      names
-        .map((name) => {
-          const column = found.columns.find(
-            (candidate) => candidate.origin.standard === name
-          )
-          if (column === undefined)
-            throw new Error(
-              `missing standard column ${name} on ${tableText(table)}`
-            )
-          return [name, column.name]
-        })
+      defs
+        .map((def) => [
+          def.logicalName,
+          // Ім'я в стилі знімка, з якого колонку читають (Рб1-1).
+          standardColumn(
+            { name: tableText(table), columns: found.columns },
+            def,
+            style
+          ).name,
+        ])
         .concat(
           found.columns
             .filter((column) => column.origin.scopeKindId !== undefined)
@@ -250,7 +269,8 @@ export function rightsSourceInput(
         }[]
       }[]
     },
-    holders: Pick<Contracts, "membership" | "membershipSources" | "users">
+    holders: Pick<Contracts, "membership" | "membershipSources" | "users">,
+    style: AttributeCase
   ): Omit<RightsCatalogInput, "holdersKept" | "rootRemoved"> => {
     const scopeKindId =
       catalog.level.level === "scope" ? catalog.level.scopeKindId : undefined
@@ -262,7 +282,8 @@ export function rightsSourceInput(
       holdersSql: effectiveHolderRows(
         catalog,
         holders,
-        source as Pick<PhysicalSnapshot, "tables">
+        source as Pick<PhysicalSnapshot, "tables">,
+        style
       ),
       holderTables: [
         ...(scopeKindId !== undefined
@@ -280,25 +301,24 @@ export function rightsSourceInput(
         ...(holders.users === undefined ? [] : [holders.users.table]),
       ],
       columns: {
-        roles: columns(source, catalog.roles.table, [
-          "ref",
-          "archetype",
-          "deletionMark",
-        ]),
-        delta: columns(source, catalog.roles.delta, [
-          "ref",
-          "parent",
-          "object",
-          "action",
-          "extent",
-          "dimension",
-        ]),
-        assignments: columns(source, catalog.assignments.table, [
-          "ref",
-          "archetype",
-          "customRole",
-          "deletionMark",
-        ]),
+        roles: columns(
+          source,
+          catalog.roles.table,
+          [KEY, R.archetype, DELETION],
+          style
+        ),
+        delta: columns(
+          source,
+          catalog.roles.delta,
+          [KEY, PARENT, R.object, R.action, R.extent, R.dimension],
+          style
+        ),
+        assignments: columns(
+          source,
+          catalog.assignments.table,
+          [KEY, R.archetype, R.customRole, DELETION],
+          style
+        ),
       },
     }
   }
@@ -322,7 +342,8 @@ export function rightsSourceInput(
         old!.contracts as unknown as Pick<
           Contracts,
           "membership" | "membershipSources" | "users"
-        >
+        >,
+        old!.project?.naming?.attributeCase ?? "camelCase"
       )
       const root =
         catalog.level.level === "scope"
@@ -348,7 +369,7 @@ export function rightsSourceInput(
   )
   const desiredCatalogs = contracts.rightsCatalogs.map(
     (catalog): RightsCatalogInput => ({
-      ...catalogInput(catalog, physical, contracts),
+      ...catalogInput(catalog, physical, contracts, attributeCase),
       holdersKept: true,
       rootRemoved: false,
     })
@@ -536,25 +557,33 @@ interface HolderRow extends Record<string, unknown> {
 const column = (columns: Record<string, string>, name: string) =>
   quoteIdent(columns[name]!)
 
+// Визначення стандартних колонок з реєстру (Рб1-1).
+const R = RIGHTS_COLUMNS
+const KEY = keyColumn(false)
+const PARENT = tabularParentColumn()
+const DELETION = deletionMarkColumn()
+
 function catalogSql(
   catalog: RightsCatalogInput,
   kind: "roles" | "assignments" | "delta"
 ): string {
   const table = catalog[kind]
   const cols = catalog.columns[kind]
-  const c = (name: string) => column(cols, name)
-  const scope = catalog.level.level === "global" ? "NULL::uuid" : c("scope")
+  // Ключі запису колонок — канонічні імена визначень реєстру.
+  const c = (def: StandardColumnDef) => column(cols, def.logicalName)
+  const scope =
+    catalog.level.level === "global" ? "NULL::uuid" : column(cols, "scope")
   if (kind === "delta")
     return [
-      `SELECT ${c("ref")} AS id, ${c("parent")} AS parent,`,
-      `  ${c("object")} AS object, ${c("action")} AS action,`,
-      `  ${c("extent")} AS extent, ${c("dimension")} AS dimension`,
+      `SELECT ${c(KEY)} AS id, ${c(PARENT)} AS parent,`,
+      `  ${c(R.object)} AS object, ${c(R.action)} AS action,`,
+      `  ${c(R.extent)} AS extent, ${c(R.dimension)} AS dimension`,
       `FROM ${qualified(table)}`,
     ].join("\n")
   return [
-    `SELECT ${c("ref")} AS id, ${scope} AS scope, ${c("archetype")} AS archetype,`,
-    `  ${kind === "roles" ? "NULL::uuid" : c("customRole")} AS custom_role,`,
-    `  ${c("deletionMark")} AS deleted`,
+    `SELECT ${c(KEY)} AS id, ${scope} AS scope, ${c(R.archetype)} AS archetype,`,
+    `  ${kind === "roles" ? "NULL::uuid" : c(R.customRole)} AS custom_role,`,
+    `  ${c(DELETION)} AS deleted`,
     `FROM ${qualified(table)}`,
   ].join("\n")
 }

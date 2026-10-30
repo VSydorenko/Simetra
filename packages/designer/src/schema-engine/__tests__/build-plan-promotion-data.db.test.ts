@@ -551,9 +551,13 @@ describe.concurrent("buildPlan", () => {
         })
       })
 
-      it("takes SHARE ROW EXCLUSIVE for a table only a repair touches", async () => {
-        // Вердикт (б): таблиця ТЧ уже має канонічні імена, тож ні намір, ні
-        // двигун її не займають — слід дає лише крок даних
+      it("the implicit lock of a repaired table belongs to the data step", async () => {
+        // Таблиця ТЧ уже має канонічні імена, тож намір її не займає. Таблиці,
+        // яку займав би лише крок ремонту, тепер не буває: крок даних буває
+        // лише на таблиці промоції (`recordedFillKind`), а кожна таблиця
+        // промоції дістає тригери незмінності ключа (Рб1-4) під тим самим
+        // SHARE ROW EXCLUSIVE. Тож `artifact.locks` замок кроку даних не
+        // виокремлює — його доводить `implicitLocks` без права на явний LOCK.
         const files = contactsProject()
         const raw = JSON.parse(files.get(CONTACT_FILE)!) as Json
         ;(raw.columns as Json[])[1]!.physicalName = "parent_id"
@@ -588,8 +592,20 @@ describe.concurrent("buildPlan", () => {
         // Гранти доступу таблиці виду — кроки двигуна без замка таблиці:
         // слід замків вони не змінюють. Поколонкові гранти ролі команд
         // (спека П4 §6.2) двигун пише по колонці, а власник рядка ТЧ
-        // `parent_id` — лише у вставці.
+        // `parent_id` — лише у вставці. Тригери незмінності ключа (Рб1-4)
+        // нові для кожної таблиці виду, тож двигун бере той самий замок;
+        // неявний замок нижче все одно належить кроку даних.
         expect(touching.map((s) => [s.origin, s.lockClass, s.sql])).toEqual([
+          [
+            "engine",
+            "shareRowExclusive",
+            "CREATE TRIGGER counterparty_contacts_simetra_key_after AFTER UPDATE ON app.counterparty_contacts FOR EACH ROW WHEN ((new.id IS DISTINCT FROM old.id)) EXECUTE FUNCTION simetra.key_immutable('id')",
+          ],
+          [
+            "engine",
+            "shareRowExclusive",
+            "CREATE TRIGGER counterparty_contacts_simetra_key BEFORE UPDATE ON app.counterparty_contacts FOR EACH ROW WHEN ((new.id IS DISTINCT FROM old.id)) EXECUTE FUNCTION simetra.key_immutable('id')",
+          ],
           [
             "engine",
             "none",

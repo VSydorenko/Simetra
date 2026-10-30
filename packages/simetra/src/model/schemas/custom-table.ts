@@ -239,7 +239,21 @@ const foreignKeySchema = z
             description: "Referenced metadata object.",
           }),
           columns: columnList.meta({
-            description: "Logical names of columns of the referenced object.",
+            description:
+              "Logical names of columns of the referenced CustomTable.",
+          }),
+        }),
+        // Ціль — таблиця виду: форма ключа, а не колонки (Рб1-10). Колонки
+        // скоупу таблиця виду логічного імені не має, а ключ — це або `ref`,
+        // або складений `UNIQUE (<скоуп>, <ключ>)`, що його платформа дає
+        // таблиці зі скоупом; інших цілей FK на вид немає.
+        z.strictObject({
+          object: metadataRefSchema.meta({
+            description: "Referenced object of a kind (not a CustomTable).",
+          }),
+          key: z.enum(["ref", "scopedRef"]).meta({
+            description:
+              'Referenced key of the kind table: "ref" is its key column (one local column); "scopedRef" is the pair (scope column, key) of a table with its own scope column (two local columns: scope, then key).',
           }),
         }),
         z.strictObject({
@@ -261,7 +275,7 @@ const foreignKeySchema = z
       ])
       .meta({
         description:
-          "Referenced target: a metadata object or an external table.",
+          "Referenced target: columns of a CustomTable, the key of a kind table, or an external table.",
       }),
     onDelete: fkActionSchema
       .default("noAction")

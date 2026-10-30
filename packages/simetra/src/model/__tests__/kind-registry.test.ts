@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest"
+import { describe, it, expect, expectTypeOf } from "vitest"
 import { z } from "zod"
 import {
   KIND_REGISTRY,
@@ -6,6 +6,7 @@ import {
   kindByDir,
   postsMovements,
   standardLogicalName,
+  type KindDefinition,
   type StandardColumnDef,
 } from "../kinds/registry"
 import {
@@ -43,6 +44,26 @@ describe("KIND_REGISTRY", () => {
     expect(kindByDir("custom-tables")?.kind).toBe("CustomTable")
     expect(kindByDir("unknown")).toBeUndefined()
   })
+
+  // Рб1-6: RLS виду — явний факт реєстру, узгоджений із тим, чи є в виду
+  // таблиця і чи описує її файл метаданих.
+  it("row-level security is a required registry fact", () => {
+    // Необов'язкове поле тут дало б `undefined` у типі й червоний typecheck:
+    // вид, що забув факт, не має збиратися.
+    expectTypeOf<KindDefinition["rowLevelSecurity"]>().toEqualTypeOf<
+      "enabled" | "declared" | "none"
+    >()
+  })
+
+  it.each(Object.entries(KIND_REGISTRY))(
+    "%s states row-level security consistent with its table",
+    (_, def) => {
+      expect(def.rowLevelSecurity !== "none").toBe(def.materializes === "table")
+      expect(def.rowLevelSecurity === "declared").toBe(
+        def.declared && def.materializes === "table"
+      )
+    }
+  )
 
   it("key order starts with the header and covers every schema key", () => {
     for (const kind of METADATA_KINDS) {

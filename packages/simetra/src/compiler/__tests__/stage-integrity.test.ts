@@ -6,6 +6,7 @@ import {
   catalog,
   customTable,
   document,
+  foreignKeyTargets,
   metaFiles,
   project,
   uuid,
@@ -642,7 +643,7 @@ describe("stage 4: integrity", () => {
         })
       const kind = {
         object: { kind: "Catalog", name: "Note" },
-        columns: ["ref"],
+        key: "ref",
       }
       const other = {
         object: { kind: "CustomTable", name: "Other" },
@@ -707,6 +708,82 @@ describe("stage 4: integrity", () => {
           }
         }
       )
+    })
+
+    describe("fk target on a table of a kind is its key (Рб1-8, Рб1-10)", () => {
+      // Роль команд змінює унікальний реквізит таблиці виду, а перевірка FK
+      // іде повз RLS: FK на нього блокував би команду й був би оракулом
+      // наявності рядка в чужому тенанті. Ключ незмінний, тож ціль-вид
+      // називає ключ (`ref` чи `scopedRef`), а ціль `CustomTable` — колонки.
+      const NOT_KEY = "customTable.fk-target-not-key"
+      const fkTo = (references: Record<string, unknown>, local: string[]) =>
+        compile(foreignKeyTargets({ columns: local, references }))
+      const to = (name: string, kind = "Catalog") => ({ kind, name })
+      it.each([
+        {
+          name: "ref of a kind",
+          references: { object: to("Plain"), key: "ref" },
+          local: ["id"],
+          expected: [],
+        },
+        {
+          name: "scopedRef of a scoped kind",
+          references: { object: to("Note"), key: "scopedRef" },
+          local: ["org", "id"],
+          expected: [],
+        },
+        {
+          name: "columns of a CustomTable",
+          references: { object: to("Other", "CustomTable"), columns: ["id"] },
+          local: ["id"],
+          expected: [],
+        },
+        {
+          name: "columns of a kind",
+          references: { object: to("Plain"), columns: ["ref"] },
+          local: ["id"],
+          expected: [[NOT_KEY, "/foreignKeys/0/references/columns", "columns"]],
+        },
+        {
+          name: "key of a CustomTable",
+          references: { object: to("Other", "CustomTable"), key: "ref" },
+          local: ["id"],
+          expected: [
+            [NOT_KEY, "/foreignKeys/0/references/key", "keyOnCustomTable"],
+          ],
+        },
+        {
+          name: "scopedRef of the scope root",
+          references: { object: to("Organization"), key: "scopedRef" },
+          local: ["org", "id"],
+          expected: [[NOT_KEY, "/foreignKeys/0/references/key", "noScope"]],
+        },
+        {
+          name: "scopedRef of a kind without scope",
+          references: { object: to("Plain"), key: "scopedRef" },
+          local: ["org", "id"],
+          expected: [[NOT_KEY, "/foreignKeys/0/references/key", "noScope"]],
+        },
+        {
+          name: "ref with two local columns",
+          references: { object: to("Plain"), key: "ref" },
+          local: ["org", "id"],
+          expected: [[NOT_KEY, "/foreignKeys/0/columns", "arity"]],
+        },
+        {
+          name: "scopedRef with one local column",
+          references: { object: to("Note"), key: "scopedRef" },
+          local: ["id"],
+          expected: [[NOT_KEY, "/foreignKeys/0/columns", "arity"]],
+        },
+      ])("$name", async ({ references, local, expected }) => {
+        const result = await fkTo(references, local)
+        expect(
+          result.diagnostics
+            .filter((d) => d.severity === "error")
+            .map((d) => [d.code, d.pointer, d.params?.reason])
+        ).toEqual(expected)
+      })
     })
 
     describe("metadata expressions of an adopted table (Р2c1-41, Р2c1-55)", () => {

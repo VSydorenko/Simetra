@@ -80,6 +80,7 @@ export const rightsDeclarationFacts = {
   rightsExtents: [],
   sqlModule: "closed",
   materializes: "none",
+  rowLevelSecurity: "none",
   scope: "absent",
   declared: false,
   physicalName: false,

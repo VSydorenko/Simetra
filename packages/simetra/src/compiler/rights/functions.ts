@@ -1,11 +1,17 @@
 import {
   PLATFORM_SCHEMA,
   PROVIDER_IDENTITY_SOURCES,
+  RIGHTS_COLUMNS,
+  deletionMarkColumn,
+  keyColumn,
   quoteIdent,
+  tabularParentColumn,
+  type AttributeCase,
   type DatabaseProvider,
   type GrantPurpose,
   type PhysicalSnapshot,
   type PhysicalTable,
+  type StandardColumnDef,
 } from "simetra/model"
 import {
   mainTableOf,
@@ -40,6 +46,7 @@ import { levelKey } from "./facts"
 import { must } from "./references"
 import { rightsLevelOf } from "./system-catalogs"
 import { sqlLiteral } from "../stages/model"
+import { standardColumn } from "../standard-column"
 
 const platform = (name: string): QualifiedName => ({
   schema: PLATFORM_SCHEMA,
@@ -165,6 +172,7 @@ export function hasVisibleUsers(
 export function buildRightsUnits(
   contracts: RightsFunctionContracts,
   physical: PhysicalSnapshot,
+  attributeCase: AttributeCase,
   provider: DatabaseProvider,
   module: string,
   parse: SqlParser
@@ -211,7 +219,12 @@ export function buildRightsUnits(
       valuesBody(SOURCE_KEYS_COLUMNS, sourceKeysRows(contracts))
     ),
     definer(F.myScopes, [], table(MY_SCOPES_COLUMNS), myScopesBody(contracts)),
-    definer(F.mine, [], table(MINE_COLUMNS), mineBody(contracts, physical)),
+    definer(
+      F.mine,
+      [],
+      table(MINE_COLUMNS),
+      mineBody(contracts, physical, attributeCase)
+    ),
     definer(
       F.any,
       [text("p_action"), text("p_object")],
@@ -835,16 +848,17 @@ function visibleUsersBody(contracts: RightsFunctionContracts): string {
  */
 function mineBody(
   contracts: RightsFunctionContracts,
-  physical: PhysicalSnapshot
+  physical: PhysicalSnapshot,
+  style: AttributeCase
 ): string {
   const ctes: [string, string][] = [
     [
       "my_scopes",
       `SELECT s.scope_kind_id, s.scope, s.member\nFROM ${call(RIGHTS_FUNCTIONS.myScopes)} s`,
     ],
-    ["assignments", assignmentsCte(contracts, physical)],
+    ["assignments", assignmentsCte(contracts, physical, style)],
     ["typed", typedCte(contracts.assignmentSources.length > 0)],
-    ["containers", containersCte(contracts.rights, physical)],
+    ["containers", containersCte(contracts.rights, physical, style)],
     [
       "held",
       // Контейнер — лише в архетипу контейнерного рівня й лише існуючий
@@ -871,7 +885,7 @@ function mineBody(
         `WHERE t.level = 'container'`,
       ].join("\n"),
     ],
-    ["deltas", deltasCte(contracts.rightsCatalogs, physical)],
+    ["deltas", deltasCte(contracts.rightsCatalogs, physical, style)],
     [
       "role_rows",
       // Кастомна роль — рядки архетипу без збігів `deny` (з точністю до
@@ -1012,11 +1026,12 @@ const ASSIGNMENT_COLUMNS: readonly Column[] = [
  */
 function assignmentsCte(
   contracts: RightsFunctionContracts,
-  physical: PhysicalSnapshot
+  physical: PhysicalSnapshot,
+  style: AttributeCase
 ): string {
   const branches = [
     ...contracts.rightsCatalogs.map((catalog) =>
-      catalogAssignments(catalog, physical)
+      catalogAssignments(catalog, physical, style)
     ),
     ...contracts.assignmentSources.map((source) =>
       sourceAssignments(source, contracts.rights)
@@ -1035,12 +1050,16 @@ function assignmentsCte(
  */
 function catalogAssignments(
   catalog: RightsCatalogContract,
-  physical: PhysicalSnapshot
+  physical: PhysicalSnapshot,
+  style: AttributeCase
 ): string {
-  const assignments = catalogColumns(physical, catalog.assignments.table)
-  const roles = catalogColumns(physical, catalog.roles.table)
-  const a = (logical: string) => `a.${quoteIdent(assignments(logical))}`
-  const c = (logical: string) => `c.${quoteIdent(roles(logical))}`
+  const assignments = catalogColumns(physical, catalog.assignments.table, style)
+  const roles = catalogColumns(physical, catalog.roles.table, style)
+  const a = (def: StandardColumnDef) => `a.${quoteIdent(assignments(def))}`
+  const c = (def: StandardColumnDef) => `c.${quoteIdent(roles(def))}`
+  const R = RIGHTS_COLUMNS
+  const KEY = keyColumn(false)
+  const DELETION = deletionMarkColumn()
   const { level } = catalog
   const storage = storageSql(level)
   const scope =
@@ -1063,23 +1082,23 @@ function catalogAssignments(
           `JOIN my_scopes s`,
           `  ON s.scope_kind_id = ${uuidLiteral(level.scopeKindId)}`,
           ` AND s.scope = ${scope}`,
-          ` AND s.member = ${a("subject")}`,
+          ` AND s.member = ${a(R.subject)}`,
         ]
       : []
   return [
-    `SELECT ${storage.storage} AS storage, ${storage.storageId} AS storage_id, ${scope} AS scope, ${a("container")} AS container, ${a("customRole")} AS custom_role,`,
-    `       CASE WHEN ${a("customRole")} IS NULL THEN ${a("archetype")} ELSE ${c("archetype")} END AS archetype,`,
+    `SELECT ${storage.storage} AS storage, ${storage.storageId} AS storage_id, ${scope} AS scope, ${a(R.container)} AS container, ${a(R.customRole)} AS custom_role,`,
+    `       CASE WHEN ${a(R.customRole)} IS NULL THEN ${a(R.archetype)} ELSE ${c(R.archetype)} END AS archetype,`,
     `       ${storage.storageId} AS scope_kind_id, NULL::text AS source_level, NULL::uuid AS source_level_id`,
     `FROM ${qualified(catalog.assignments.table)} a`,
     ...mine,
     `LEFT JOIN ${qualified(catalog.roles.table)} c`,
-    `  ON ${[...sameTenant, `${c("ref")} = ${a("customRole")}`].join("\n AND ")}`,
-    ` AND NOT ${c("deletionMark")}`,
-    `WHERE NOT ${a("deletionMark")}`,
-    `  AND (${a("customRole")} IS NULL) = (${c("ref")} IS NULL)`,
+    `  ON ${[...sameTenant, `${c(KEY)} = ${a(R.customRole)}`].join("\n AND ")}`,
+    ` AND NOT ${c(DELETION)}`,
+    `WHERE NOT ${a(DELETION)}`,
+    `  AND (${a(R.customRole)} IS NULL) = (${c(KEY)} IS NULL)`,
     ...(level.level === "scope"
       ? []
-      : [`  AND ${a("subject")} = ${CURRENT_USER}`]),
+      : [`  AND ${a(R.subject)} = ${CURRENT_USER}`]),
   ].join("\n")
 }
 
@@ -1212,17 +1231,19 @@ const DELTA_COLUMNS: readonly Column[] = [
 /** Дельти кастомних ролей кожного рівня з рівнем зберігання. */
 function deltasCte(
   catalogs: readonly RightsCatalogContract[],
-  physical: PhysicalSnapshot
+  physical: PhysicalSnapshot,
+  style: AttributeCase
 ): string {
   if (catalogs.length === 0) return emptySet(DELTA_COLUMNS)
   return catalogs
     .map((catalog) => {
-      const delta = catalogColumns(physical, catalog.roles.delta)
-      const d = (logical: string) => `d.${quoteIdent(delta(logical))}`
+      const delta = catalogColumns(physical, catalog.roles.delta, style)
+      const d = (def: StandardColumnDef) => `d.${quoteIdent(delta(def))}`
+      const R = RIGHTS_COLUMNS
       const storage = storageSql(catalog.level)
       return [
-        `SELECT ${storage.storage} AS storage, ${storage.storageId} AS storage_id, ${d("parent")} AS custom_role,`,
-        `       ${d("object")} AS object, ${d("action")} AS action, ${d("extent")} AS extent, ${d("dimension")} AS dimension_id, ${d("effect")} AS effect`,
+        `SELECT ${storage.storage} AS storage, ${storage.storageId} AS storage_id, ${d(tabularParentColumn())} AS custom_role,`,
+        `       ${d(R.object)} AS object, ${d(R.action)} AS action, ${d(R.extent)} AS extent, ${d(R.dimension)} AS dimension_id, ${d(R.effect)} AS effect`,
         `FROM ${qualified(catalog.roles.delta)} d`,
       ].join("\n")
     })
@@ -1243,16 +1264,15 @@ const CONTAINER_COLUMNS: readonly Column[] = [
  */
 function containersCte(
   rights: readonly RightsContract[],
-  physical: PhysicalSnapshot
+  physical: PhysicalSnapshot,
+  style: AttributeCase
 ): string {
   const containers = rights.filter((c) => c.container === true)
   if (containers.length === 0) return emptySet(CONTAINER_COLUMNS)
   return containers
     .map((contract) => {
       const table = must(mainTableOf(physical, contract.objectId))
-      const key = must(
-        table.columns.find((c) => c.origin.standard === "ref")
-      ).name
+      const key = standardColumn(table, keyColumn(false), style).name
       const { scopeKindId } = contract
       const [kind, scope] =
         scopeKindId === undefined
@@ -1374,14 +1394,18 @@ function storageSql(level: RightsLevelKey): {
     : { storage: "'scope'::text", storageId: uuidLiteral(level.scopeKindId) }
 }
 
-/** Колонки таблиці довідника прав за логічним іменем стандартної колонки. */
+/**
+ * Колонки таблиці довідника прав за визначенням стандартної колонки реєстру
+ * в стилі проєкту: `origin.standard` у snake_case — `custom_role`, а не
+ * `customRole` (Рб1-1).
+ */
 function catalogColumns(
   physical: PhysicalSnapshot,
-  name: QualifiedName
-): (logical: string) => string {
+  name: QualifiedName,
+  style: AttributeCase
+): (def: StandardColumnDef) => string {
   const table = tableOf(physical, name)
-  return (logical) =>
-    must(table.columns.find((c) => c.origin.standard === logical)).name
+  return (def) => standardColumn(table, def, style).name
 }
 
 /** Колонка скоупу таблиці — позначена моделлю, а не вгадана за іменем. */

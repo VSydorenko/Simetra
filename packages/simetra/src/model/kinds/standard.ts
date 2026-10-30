@@ -451,11 +451,13 @@ export interface KindDefinition {
    */
   authorTracking?: true
   /**
-   * RLS таблиць виду 1С (спека П2 §8.3): дані застосунку за замовчуванням
-   * закриті, доступ відкривають політики. Немає — без RLS; прийнята таблиця
-   * задає його полем файлу, бо описана фізично повністю.
+   * RLS таблиць виду (спека П2 §8.3): `enabled` — дані застосунку за
+   * замовчуванням закриті, доступ відкривають політики; `declared` — прийнята
+   * таблиця задає його полем файлу, бо описана фізично повністю; `none` — у
+   * виду немає таблиці. Поле обов'язкове: новий вид із таблицею, що забув
+   * факт, інакше тихо лишився б без RLS.
    */
-  rowLevelSecurity?: "enabled"
+  rowLevelSecurity: "enabled" | "declared" | "none"
   /** Стандартні колонки основної таблиці для розібраного файлу виду. */
   standardColumns(obj: unknown): StandardColumnDef[]
   /**
@@ -732,20 +734,21 @@ function lineNumberColumn(): StandardColumnDef {
 
 /** Рядок ТЧ живе й помирає разом із власником — звідси каскад. */
 export function tabularRowColumns(keyDefault: boolean): StandardColumnDef[] {
-  return [
-    keyColumn(keyDefault),
-    {
-      logicalName: "parent",
-      physicalName: "parent_id",
-      type: { type: "UUID" },
-      notNull: true,
-      ref: "owningObject",
-      onDelete: "cascade",
-      indexed: true,
-      title: { uk: "Власник рядка", en: "Owning object" },
-    },
-    lineNumberColumn(),
-  ]
+  return [keyColumn(keyDefault), tabularParentColumn(), lineNumberColumn()]
+}
+
+/** Власник рядка ТЧ: генератори знаходять його колонку за цим визначенням. */
+export function tabularParentColumn(): StandardColumnDef {
+  return {
+    logicalName: "parent",
+    physicalName: "parent_id",
+    type: { type: "UUID" },
+    notNull: true,
+    ref: "owningObject",
+    onDelete: "cascade",
+    indexed: true,
+    title: { uk: "Власник рядка", en: "Owning object" },
+  }
 }
 
 // --- Пошук посилань -------------------------------------------------------

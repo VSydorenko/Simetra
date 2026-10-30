@@ -1100,7 +1100,7 @@ describe("stage 3: physical snapshot", () => {
             columns: ["currency"],
             references: {
               object: { kind: "Catalog", name: "Currency" },
-              columns: ["ref"],
+              key: "ref",
             },
           },
         ],

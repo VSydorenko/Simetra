@@ -8,6 +8,7 @@ import {
   loadSqlParser,
   mechanicsTriggerName,
   promoteObject,
+  keyTriggerNames,
   rightsGuardNames,
   type PromotionObject,
   type PromotionRecord,
@@ -2750,6 +2751,38 @@ describe("platformReplacements", () => {
               ]
             )
           ).toEqual(MISSING)
+        }
+      )
+
+      // Рб1-4: тригери незмінності ключа платформні за іменем і функцією —
+      // прийнятий тригер з тим самим викликом ними не замінюється; тригер
+      // з тим самим іменем на чужу функцію — не платформний і заміною бути
+      // може
+      it.each(["before", "after"] as const)(
+        "the %s key trigger is platform only with the platform function",
+        (which) => {
+          const name = keyTriggerNames("item")[which]
+          const timing = which === "before" ? "BEFORE" : "AFTER"
+          const keyCall = "simetra.key_immutable('id')"
+          const adoptedCall = `CREATE TRIGGER a ${timing} UPDATE ON app.item FOR EACH ROW WHEN (NEW.id IS DISTINCT FROM OLD.id) EXECUTE FUNCTION`
+          expect(
+            codesOf(`${adoptedCall} ${keyCall}`, [
+              MECHANICS,
+              trigger(
+                name,
+                `CREATE TRIGGER ${name} ${timing} UPDATE ON app.item FOR EACH ROW WHEN (NEW.id IS DISTINCT FROM OLD.id) EXECUTE FUNCTION ${keyCall}`
+              ),
+            ])
+          ).toEqual(MISSING)
+          expect(
+            codesOf(`${adoptedCall} app.h('id')`, [
+              MECHANICS,
+              trigger(
+                name,
+                `CREATE TRIGGER ${name} ${timing} UPDATE ON app.item FOR EACH ROW WHEN (NEW.id IS DISTINCT FROM OLD.id) EXECUTE FUNCTION app.h('id')`
+              ),
+            ])
+          ).toEqual([])
         }
       )
 
