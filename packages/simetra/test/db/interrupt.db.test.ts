@@ -183,6 +183,52 @@ describe("an interrupted DB run", () => {
     INTERRUPT_TIMEOUT_MS
   )
 
+  // Шлях `teardown` без вкладеного vitest: та сама функція, що й у сторожа.
+  // Бекенд «idle in transaction» глухий до `pg_cancel_backend` — його
+  // закінчує лише `pg_terminate_backend`, і це видно тільки на стеку
+  it("terminates its idle backends that a cancel does not stop", async () => {
+    const tag = newRunTag()
+    const connect = async (
+      applicationName: string
+    ): Promise<{
+      client: pg.Client
+      pid: number
+      closed: Promise<unknown>
+    }> => {
+      const client = new pg.Client({
+        connectionString: testDatabaseUrl(),
+        application_name: applicationName,
+      })
+      // Обрив з'єднання від сервера — очікуваний результат, а не збій тесту;
+      // `events.once` відхилився б на `error`, що передує `end`
+      const closed = new Promise((resolve) => client.once("end", resolve))
+      client.on("error", () => {})
+      await client.connect()
+      await client.query("BEGIN")
+      const [{ pid }] = (
+        await client.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")
+      ).rows as [{ pid: number }]
+      return { client, pid, closed }
+    }
+    const own = await connect(runApplicationName(tag))
+    const foreignName = runApplicationName(newRunTag())
+    const foreign = await connect(foreignName)
+    try {
+      const result = await stopRunBackends(tag, { graceMs: 500 })
+
+      expect(result).toEqual({ stopped: 1, left: [] })
+      expect(await backendQueries(runApplicationName(tag))).toEqual([])
+      await withDeadline(own.closed, 5_000)
+      expect(await backendQueries(foreignName)).toHaveLength(1)
+      await expect(foreign.client.query("SELECT 1")).resolves.toBeDefined()
+    } finally {
+      await cleanup(() => terminateBackend(own.pid))
+      await cleanup(() => terminateBackend(foreign.pid))
+      await cleanup(() => own.client.end())
+      await cleanup(() => foreign.client.end())
+    }
+  })
+
   it(
     "exits non-zero with the cleanup SQL when the stack is unreachable",
     async () => {
