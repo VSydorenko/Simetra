@@ -40,6 +40,7 @@ const row = (
     attributes?: Partial<PlatformRoleRow["attributes"]>
     memberOf?: Membership[]
     members?: Member[]
+    requestPath?: string[]
   } = {}
 ): PlatformRoleRow => ({
   name: over.name ?? PLATFORM_ROLES.command,
@@ -55,6 +56,7 @@ const row = (
   },
   memberOf: over.memberOf ?? [],
   members: over.members ?? [],
+  requestPath: over.requestPath ?? [],
 })
 
 const RUNTIME = PLATFORM_LOGIN_ROLES.runtime
@@ -76,6 +78,7 @@ const loginRow = (
     attributes?: Partial<PlatformRoleRow["attributes"]>
     memberOf?: Membership[]
     members?: Member[]
+    requestPath?: string[]
   } = {}
 ): PlatformRoleRow =>
   row({
@@ -83,6 +86,7 @@ const loginRow = (
     attributes: { login: true, ...over.attributes },
     memberOf: over.memberOf ?? [pair(COMMAND), pair("authenticated")],
     members: over.members ?? [member()],
+    requestPath: over.requestPath ?? [],
   })
 
 /** Роль команд, членом якої є роль входу з членствами `rows`. */
@@ -245,6 +249,43 @@ describe("platformRoleRefusals", () => {
         (d) => [d.params?.role, d.params?.violation]
       )
     ).toEqual([[RUNTIME, "request-role:authenticated"]])
+  })
+
+  // Рб1-7: роль запиту, з якої будь-яким ребром досяжний керівник ролі
+  // платформи чи суперкористувач, через `SET ROLE` на посередника змінює її.
+  it.each([
+    {
+      case: "a manager of the command role",
+      found: [row({ requestPath: ["tagged_manager"] })],
+      role: COMMAND,
+      violation: "request-path:tagged_manager",
+    },
+    {
+      case: "a manager of the login role",
+      found: [commandWith(), loginRow({ requestPath: ["tagged_manager"] })],
+      role: RUNTIME,
+      violation: "request-path:tagged_manager",
+    },
+    {
+      case: "a superuser",
+      found: [row({ requestPath: ["tagged_super"] })],
+      role: COMMAND,
+      violation: "request-path:tagged_super",
+    },
+  ])("refuses a request path to $case", ({ found, role, violation }) => {
+    expect(
+      platformRoleRefusals([COMMAND], found, "target").map((d) => [
+        d.code,
+        d.params?.role,
+        d.params?.violation,
+      ])
+    ).toEqual([["plan.platform-role-shape", role, violation]])
+  })
+
+  it("accepts a manager the request roles do not reach", () => {
+    expect(
+      platformRoleRefusals([COMMAND], [commandWith(), loginRow()], "target")
+    ).toEqual([])
   })
 
   it("checks the request roles it is given instead of the provider ones", () => {

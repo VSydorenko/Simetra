@@ -270,6 +270,7 @@ describe("buildPlan", () => {
                         attributes: {},
                         memberOf: [],
                         members: [],
+                        requestPath: [],
                       },
                     ]
                   : []) as unknown as R[],
@@ -538,6 +539,7 @@ async function fakeTarget(
         attributes: {},
         memberOf: [],
         members: [],
+        requestPath: [],
       }))
     if (sql.includes("AS session")) return [{ session: "app" }]
     if (sql.includes("surface_rel")) return [fingerprint]
