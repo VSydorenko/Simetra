@@ -4,6 +4,7 @@ import { PLATFORM_ROLES, type CommandContext } from "simetra/model"
 import { renderDesiredState } from "simetra/schema"
 import { CATALOG_COMMAND_ERRORS } from "../../src/compiler/catalog-command/units"
 import {
+  COMMENT_TABLE,
   NOTE_OWN_CREATOR_ID,
   NOTE_WRITER_ID,
   TICKET_CHECKLIST_TABLE,
@@ -346,6 +347,40 @@ describe("catalog command core", () => {
         })
       },
       async () => INVALID(`tabular.${LINES}`),
+    ],
+    // Форма входу ТЧ: невідома ТЧ і `tabular` у довідника без ТЧ — відмова
+    // з ключем, а не мовчазний пропуск
+    [
+      "shape: unknown tabular section",
+      () =>
+        run({
+          user: "tw",
+          item: { id: key("K1"), tabular: { no_such: [] } },
+          version: "current",
+        }),
+      async () => INVALID("tabular.no_such"),
+    ],
+    [
+      "shape: tabular on a catalog without tabular sections",
+      async () => {
+        const id = key("TO.c")
+        const { rows } = await tx
+          .client()
+          .query<{ v: string }>(
+            `SELECT version::text AS v FROM public.${COMMENT_TABLE} WHERE id = $1`,
+            [id]
+          )
+        return outcomeOf(
+          await commandAs<{ r: string }>(
+            tx.client(),
+            claims("cw"),
+            { action: "update", object: COMMENT_TABLE, root: id },
+            `SELECT public.${COMMENT_TABLE}_save($1::jsonb, $2::bigint) AS r`,
+            { params: [JSON.stringify({ id, tabular: {} }), rows[0]!.v] }
+          )
+        )
+      },
+      async () => INVALID("tabular"),
     ],
     // Ключі поза гілкою (Р-A2-5) — відмова раніше за грант. На `Ticket`
     // колонка переходу — сама позначка видалення.

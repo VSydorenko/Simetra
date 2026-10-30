@@ -361,6 +361,56 @@ describe("buildCatalogCommandUnits — <t>_save", () => {
     ])
   })
 
+  // Відмови форми входу: кожна умова — `IF`, за яким одразу `RAISE`
+  // `command.invalid` з ключем у `DETAIL`. Умова `v_key IS NOT NULL`
+  // повторюється, тож рядок проходить, коли хоч одне її входження веде до
+  // свого `DETAIL`.
+  const items = `p_item -> 'tabular' -> '${TICKET_CHECKLIST_TABLE}'`
+  it.each([
+    [
+      "p_item не об'єкт",
+      "ticket",
+      "jsonb_typeof(p_item) IS DISTINCT FROM 'object'",
+      ["p_item"],
+    ],
+    ["ключ NULL", "ticket", "v_in.id IS NULL", ["id"]],
+    [
+      "tabular не об'єкт",
+      "ticket",
+      "jsonb_typeof(p_item -> 'tabular') IS DISTINCT FROM 'object'",
+      ["tabular"],
+    ],
+    ["невідома ТЧ", "ticket", "v_key IS NOT NULL", ["tabular."]],
+    ["tabular у довідника без ТЧ", "region", "p_item ? 'tabular'", ["tabular"]],
+    [
+      "значення ТЧ не масив",
+      "ticket",
+      `jsonb_typeof(${items}) IS DISTINCT FROM 'array'`,
+      [`tabular.${TICKET_CHECKLIST_TABLE}`],
+    ],
+    [
+      "елемент ТЧ не об'єкт",
+      "ticket",
+      `EXISTS (SELECT 1 FROM jsonb_array_elements(${items}) AS x(e) WHERE jsonb_typeof(x.e) IS DISTINCT FROM 'object')`,
+      [`tabular.${TICKET_CHECKLIST_TABLE}`],
+    ],
+    [
+      "ключ елемента не uuid",
+      "ticket",
+      `EXISTS (SELECT 1 FROM jsonb_array_elements(${items}) AS x(e) WHERE NOT coalesce(pg_input_is_valid(x.e ->> 'id', 'uuid'), false))`,
+      [`tabular.${TICKET_CHECKLIST_TABLE}.id`],
+    ],
+  ] as const)("форма входу: %s", (_, table, condition, detail) => {
+    const shape = bodyShape(saveSql(domain, table))
+    const raises = shape.flatMap((s, i) =>
+      same(s.expressions[0]?.tree, tree(`SELECT ${condition}`)) &&
+      s.type === "if"
+        ? [strings(shape[i + 1]!.expressions)]
+        : []
+    )
+    expect(raises).toContainEqual(["22023", "command.invalid", ...detail])
+  })
+
   it("значення, що не приводиться до типу колонки, — command.invalid з ключем", () => {
     // Вузький блок навколо поколонкового приведення (Р-A2-7): клас `22`
     // ловить лише він, а `DETAIL` — ключ, на якому впало приведення.
