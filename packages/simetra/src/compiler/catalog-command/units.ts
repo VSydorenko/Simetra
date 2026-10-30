@@ -651,6 +651,12 @@ function inputLines(contract: CatalogCommandContract): string[] {
     ...ifThen("jsonb_typeof(p_item) IS DISTINCT FROM 'object'", [
       invalid("'p_item'"),
     ]),
+    // Без дії створення (Р-A2-10: «Користувачі», корінь скоупу) виклик без
+    // версії — відмова `create` до перевірки ключів: інакше порожній перелік
+    // ключів створення назвав би першим невідомим ключем `id`, а не причину.
+    ...(contract.actions.create === undefined
+      ? ifThen("p_expected_version IS NULL", [invalid("'create'")])
+      : []),
     "IF p_expected_version IS NULL THEN",
     ...indent([unknown(contract.createKeys)]),
     "ELSE",

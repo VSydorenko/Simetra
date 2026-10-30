@@ -326,8 +326,18 @@ describe("функції за роллю довідника", () => {
             tree("SELECT p_expected_version IS NULL")
           )
       )
-    // Перша — перевірка входу, друга — гілка створення.
-    const create = branches[1]!.i
+    // Перша — відмова `create` до перевірки ключів: інакше порожній перелік
+    // ключів створення назвав би причиною перший ключ (`id`), а не `create`.
+    const create = branches[0]!.i
+    expect(
+      shape.findIndex(
+        (s) =>
+          s.type === "execsql" &&
+          s.expressions.some((e) =>
+            JSON.stringify(e.tree).includes("jsonb_object_keys")
+          )
+      )
+    ).toBeGreaterThan(create)
     expect(shape[create + 1]!.type).toBe("raise")
     expect(raiseDetail(shape[create + 1]!)).toEqual(
       expect.arrayContaining(["command.invalid", "create"])
