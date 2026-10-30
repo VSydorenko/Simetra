@@ -48,7 +48,7 @@ import {
   subscriptionSourceTables,
   type DerivedFunction,
 } from "../contracts"
-import { mechanicsStandardNames } from "../mechanics-units"
+import { nonContentStandardNames } from "../mechanics-units"
 import { carrierCopies } from "../rights/carrier-units"
 import { movementWrapperName } from "../movement-functions"
 import { standardOverrideNames, type PresentationFields } from "../presentation"
@@ -541,7 +541,9 @@ function checkSubscriptions(
   provider: DatabaseProvider,
   style: AttributeCase
 ): Diagnostic[] {
-  const mechanics = mechanicsStandardNames(style)
+  // Авторство — теж механіка (Р-A1-9): тригер авторства пише його раніше
+  // за підписку чи пізніше залежно від імен, тож умова була б непевною.
+  const mechanics = nonContentStandardNames(style)
   const tablesByName = new Map(
     model.physical.tables.map((t) => [`${t.schema}.${t.name}`, t])
   )

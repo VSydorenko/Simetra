@@ -1963,7 +1963,7 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
           : p.reason === "transitionColumn"
             ? "Transition columns (posted, deletion mark) change only through their standard actions: drop the column from the header."
             : p.reason === "immutableColumn"
-              ? "The key (ref) and the scope column never change, under any action: drop the column from the header."
+              ? "The key (ref), the scope column and the author (createdBy) never change under any action, and the platform sets updatedBy: drop the column from the header."
               : "Drop tabularSections: true or declare the action on a kind with tabular sections.",
       uk: (p) =>
         p.reason === "noWrite"
@@ -1971,7 +1971,7 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
           : p.reason === "transitionColumn"
             ? "Колонки переходів (проведення, позначка видалення) змінюють лише їхні стандартні дії: приберіть колонку з шапки."
             : p.reason === "immutableColumn"
-              ? "Ключ (ref) і колонка скоупу не змінюються за жодної дії: приберіть колонку з шапки."
+              ? "Ключ (ref), колонка скоупу й автор (createdBy) не змінюються за жодної дії, а updatedBy ставить платформа: приберіть колонку з шапки."
               : "Приберіть tabularSections: true або оголосіть дію на виді з табличними частинами.",
     },
   },

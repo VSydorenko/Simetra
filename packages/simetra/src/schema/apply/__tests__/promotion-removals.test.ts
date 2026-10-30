@@ -2878,6 +2878,104 @@ describe("platformReplacements", () => {
           }
         )
 
+        describe("with author columns (Р-A1-10)", () => {
+          // Колонки авторства — поза змістом: тригери механіки й авторства
+          // стежать за ними (`watched`), підписки — ні
+          const AUTHORED: PhysicalTable = {
+            ...COPIES,
+            columns: [
+              ...COPIES.columns,
+              physicalColumn("created_by_id", "uuid", {
+                standard: "created_by",
+              }),
+              physicalColumn("updated_by_id", "uuid", {
+                standard: "updated_by",
+              }),
+            ],
+          }
+          const WATCHED =
+            "((old.id IS DISTINCT FROM new.id) OR (old.parent_id IS DISTINCT FROM new.parent_id) OR ((old.note)::text IS DISTINCT FROM (new.note)::text) OR ((old.created_by_id IS DISTINCT FROM new.created_by_id) OR (old.updated_by_id IS DISTINCT FROM new.updated_by_id)) OR (NOT (old.assignee_id IS DISTINCT FROM new.assignee_id)))"
+          const authorTrigger = (name: string, events: string, fn: string) =>
+            trigger(
+              name,
+              `CREATE TRIGGER ${name} BEFORE ${events} ON app.item FOR EACH ROW EXECUTE FUNCTION ${fn}()`
+            )
+          const AUTHOR = authorTrigger(
+            "item_simetra_author",
+            "INSERT",
+            "simetra.author"
+          )
+          const AUTHOR_UPDATE = trigger(
+            "item_simetra_author_update",
+            `CREATE TRIGGER item_simetra_author_update BEFORE UPDATE ON app.item FOR EACH ROW WHEN (${WATCHED}) EXECUTE FUNCTION simetra.author()`
+          )
+          const AUTHORED_SPLIT = [
+            TOUCH_INSERT,
+            touchUpdate(WATCHED),
+            AUTHOR,
+            AUTHOR_UPDATE,
+          ]
+
+          it("the subscription pair keeps the condition without authors, the mechanics watches them", () => {
+            expect(
+              triggerGate(
+                HANDLER,
+                [
+                  ...AUTHORED_SPLIT,
+                  ...pair(CONTENT).filter((u) => u.name.startsWith("s")),
+                ],
+                {},
+                [AUTHORED]
+              )
+            ).toEqual({ codes: [], narrowed: [] })
+            expect(
+              codesOf(moddatetime("updated_at"), AUTHORED_SPLIT, {}, [AUTHORED])
+            ).toEqual([])
+            // Механіка оновлення без `watched` на таблиці з авторством —
+            // не платформна умова
+            expect(
+              codesOf(
+                moddatetime("updated_at"),
+                [TOUCH_INSERT, touchUpdate(CONTENT)],
+                {},
+                [AUTHORED]
+              )
+            ).toEqual(MISSING)
+          })
+
+          it.each([
+            ["the insert trigger", "INSERT"],
+            ["the update trigger", "UPDATE"],
+          ])(
+            "%s of authorship does not stand in for an adopted trigger of the same function",
+            (_, events) => {
+              expect(
+                codesOf(
+                  `CREATE TRIGGER a BEFORE ${events} ON app.item FOR EACH ROW EXECUTE FUNCTION simetra.author()`,
+                  AUTHORED_SPLIT,
+                  {},
+                  [AUTHORED]
+                )
+              ).toEqual(MISSING)
+            }
+          )
+
+          it("a trigger under the author name with another function is not platform", () => {
+            expect(
+              codesOf(
+                "CREATE TRIGGER a BEFORE INSERT ON app.item FOR EACH ROW EXECUTE FUNCTION app.h()",
+                [
+                  TOUCH_INSERT,
+                  touchUpdate(WATCHED),
+                  authorTrigger("item_simetra_author", "INSERT", "app.h"),
+                ],
+                {},
+                [AUTHORED]
+              )
+            ).toEqual([])
+          })
+        })
+
         it("a carrier trigger does not stand in for an adopted trigger of the same function", () => {
           expect(
             codesOf(

@@ -1,4 +1,5 @@
 import {
+  authorColumns,
   KIND_REGISTRY,
   isUuidColumn,
   singleUuidKeyColumn,
@@ -89,10 +90,13 @@ export function checkRights(ctx: RightsCheckContext): Diagnostic[] {
     // Незмінні колонки (Р2b1-9, Р2b1-20) — ключ `ref` і колонка скоупу. Шапка
     // може назвати лише ключ: у кореня виду скоупу колонка скоупу і є `ref`,
     // а власну колонку скоупу платформа додає без імені елемента, тож її
-    // назва в шапці — `rights.attribute-unknown`.
-    const immutableIds = new Set([
-      standardElementId(must(object.id), { logicalName: "ref" }),
-    ])
+    // назва в шапці — `rights.attribute-unknown`. Авторство — так само
+    // (Р-A1-9): `createdBy` незмінний, `updatedBy` примушує тригер.
+    const immutableIds = new Set(
+      [{ logicalName: "ref" }, ...authorColumns()].map((column) =>
+        standardElementId(must(object.id), column)
+      )
+    )
     // Вид, жодна стандартна дія якого не пише (регістр накопичення,
     // підлеглий регістр відомостей), пишуть лише рухи проведення (§5.3):
     // ефект кастомної дії там відкрив би запис в обхід оболонки.

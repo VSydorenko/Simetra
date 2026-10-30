@@ -218,12 +218,15 @@ describe("buildMechanicsUnits", () => {
     // зміст (без механіки, копій і генерованих колонок) змінився, або копії
     // не змінилися.
     const model = (await compileRights(policyDomain())).model!
+    // Генератор `mechanics` дає й тригери авторства — тут лише механіка.
     const trees = (table: string) =>
       mechanics(model.sqlUnits)
         .filter(
           (u) =>
             u.class === "trigger" &&
-            u.identity.startsWith(`trigger:public.${table}.`)
+            u.identity.startsWith(
+              `trigger:public.${table}.${table}_simetra_touch`
+            )
         )
         .map((u) => u.tree)
     const tree = (sql: string) => {
@@ -298,6 +301,16 @@ describe("buildMechanicsUnits", () => {
     expect(contentChangeCondition(report, "camelCase")).toBe(
       `(${changed(content)}) OR NOT (${changed([{ name: "task_id_assignee_id" }])})`
     )
+    // Авторство — механіка (Р-A1-9): поза змістом таблиці з `trackAuthor`.
+    const task = model.physical.tables.find((t) => t.name === "task")!
+    expect(task.columns.map((c) => c.name)).toEqual(
+      expect.arrayContaining(["created_by_id", "updated_by_id"])
+    )
+    expect(
+      contentColumns(task, "camelCase").filter((c) =>
+        ["created_by_id", "updated_by_id"].includes(c.name)
+      )
+    ).toEqual([])
   })
 
   it("compile orders the trigger after its table and the function", async () => {

@@ -32,6 +32,7 @@ export {
 } from "./actions"
 
 export {
+  authorColumns,
   monthColumn,
   serviceDateColumns,
   singletonColumn,

@@ -129,7 +129,7 @@ describe("rights contract", () => {
           {
             id: uuid(7704),
             name: "stamp",
-            effects: { header: ["createdBy"] },
+            effects: { header: ["createdAt"] },
           },
         ],
       },
@@ -153,7 +153,7 @@ describe("rights contract", () => {
     expect(archive!.effects.header).toContain("assignee_id")
     expect(archive!.effects.header).not.toContain("deletion_mark")
     // Стандартні реквізити — за ім'ям у стилі проєкту.
-    expect(stamp!.effects.header).toEqual(["created_by_id"])
+    expect(stamp!.effects.header).toEqual(["created_at"])
     expect(stamp!.requires).toEqual(["read"])
   })
 
@@ -498,10 +498,21 @@ describe("rights contract", () => {
     // Незмінну колонку тригер ефектів відмовляє за будь-якої дії (Р2b1-9,
     // Р2b1-20), тож її назва в шапці — декларація, що тихо нічого не дає
     // (Р2b1-23). Колонку скоупу шапка назвати не може: платформа додає її без
-    // імені елемента, а в кореня виду скоупу вона і є `ref`.
+    // імені елемента, а в кореня виду скоупу вона і є `ref`. Авторство —
+    // механіка (Р-A1-9): `createdBy` незмінний, `updatedBy` примушує тригер.
     it.each([
       [
         "ref",
+        "rights.custom-action-effects",
+        { action: "stamp", reason: "immutableColumn" },
+      ],
+      [
+        "createdBy",
+        "rights.custom-action-effects",
+        { action: "stamp", reason: "immutableColumn" },
+      ],
+      [
+        "updatedBy",
         "rights.custom-action-effects",
         { action: "stamp", reason: "immutableColumn" },
       ],

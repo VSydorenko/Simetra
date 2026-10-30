@@ -5,6 +5,7 @@ import {
   DATABASE_PROVIDERS,
   PLATFORM_LOGIN_ROLES,
   PROVIDER_LOGIN_ROLES,
+  type AttributeCase,
 } from "simetra/model"
 import { platformBeforeTriggerName } from "../before-trigger-names"
 import { buildRightsGuardUnits, maintenanceSql } from "../rights/guard-units"
@@ -1143,12 +1144,14 @@ const HOLDERS_KIND = () => tree("SELECT v_pending.kind = 'holders'")
 async function guardsOver(
   model: CompiledModel,
   contracts: Partial<CompiledModel["contracts"]>,
-  physical: CompiledModel["physical"] = model.physical
+  physical: CompiledModel["physical"] = model.physical,
+  attributeCase: AttributeCase = "camelCase"
 ) {
   return buildRightsGuardUnits(
     { ...model.contracts, ...contracts },
     physical,
     [],
+    attributeCase,
     "supabase",
     unit(model, CHECK).module,
     await loadSqlParser()
@@ -1389,6 +1392,31 @@ describe("rights guards of membership and users outside commands", () => {
         "SELECT v_action IS NULL AND NOT v_maintenance AND EXISTS (SELECT 1 FROM old_rows o JOIN new_rows n ON n.id = o.id WHERE o.user_kind IS DISTINCT FROM n.user_kind OR (o.invalid IS DISTINCT FROM n.invalid AND NOT (o.invalid = false AND n.invalid = true)))"
       ),
     ])
+  })
+
+  it("finds the user kind by its styled name in a snake_case project", async () => {
+    // `origin.standard` несе ім'я в стилі проєкту (Р-A1-10): літерал
+    // `userKind` не знайшов би `user_kind`.
+    const physical = {
+      ...domain.physical,
+      tables: domain.physical.tables.map((t) =>
+        t.name !== "users"
+          ? t
+          : {
+              ...t,
+              columns: t.columns.map((c) =>
+                c.origin.standard === "userKind"
+                  ? { ...c, origin: { ...c.origin, standard: "user_kind" } }
+                  : c
+              ),
+            }
+      ),
+    }
+    const units = await guardsOver(domain, {}, physical, "snake_case")
+    const update = units.find((u) => u.identity === usersFn("UPDATE").identity)!
+    expect(contextRefusals(update.sql)).toEqual(
+      contextRefusals(usersFn("UPDATE").sql)
+    )
   })
 
   it("bumps the global version once per users statement that really changes validity or kind", () => {

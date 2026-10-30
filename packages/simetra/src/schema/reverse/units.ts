@@ -1,4 +1,7 @@
 import {
+  AUTHOR_FUNCTION,
+  authorTriggerName,
+  authorUpdateTriggerName,
   carrierFunctionNames,
   carrierTriggerNames,
   diagnostic,
@@ -239,11 +242,14 @@ function ownerTable(unit: CatalogUnit, ctx: UnitsContext): string | undefined {
 }
 
 const MECHANICS = qualified(MECHANICS_FUNCTION.schema, MECHANICS_FUNCTION.name)
+const AUTHOR = qualified(AUTHOR_FUNCTION.schema, AUTHOR_FUNCTION.name)
 
 /**
  * Функція, яку платформний тригер таблиці мусить кликати за своїм іменем:
  * механіка рядка (`<t>_simetra_touch` і, на таблиці з копіями носіїв,
- * `<t>_simetra_touch_update`) — `simetra.touch()`, тригери копій носіїв —
+ * `<t>_simetra_touch_update`) — `simetra.touch()`, авторство
+ * (`<t>_simetra_author`, `<t>_simetra_author_update`) — `simetra.author()`
+ * (Р-A1-8), тригери копій носіїв —
  * функції носіїв таблиці (Р2a2-20), тригери ефектів — функція ефектів таблиці
  * (Р2b1-12). Інше ім'я — не платформний тригер.
  */
@@ -262,6 +268,11 @@ function platformTriggerFunction(
     unit.name === mechanicsUpdateTriggerName(table.name)
   )
     return MECHANICS
+  if (
+    unit.name === authorTriggerName(table.name) ||
+    unit.name === authorUpdateTriggerName(table.name)
+  )
+    return AUTHOR
   const triggers = carrierTriggerNames(table)
   const functions = carrierFunctionNames(table)
   if (unit.name === triggers.derive)
@@ -286,7 +297,8 @@ function platformTriggerFunction(
 }
 
 /**
- * Функції платформних тригерів серед одиниць: механіка й ті функції носіїв,
+ * Функції платформних тригерів серед одиниць: механіка, авторство (одна
+ * функція на проєкт, як механіка) й ті функції носіїв,
  * які кличе тригер носіїв з відповідним іменем. Функцію носіїв за самим
  * іменем не впізнаємо: ім'я таблиці, від якого воно походить, дає лише
  * тригер.
@@ -295,7 +307,7 @@ function platformFunctions(
   units: readonly CatalogUnit[],
   ctx: UnitsContext
 ): ReadonlySet<string> {
-  const found = new Set([MECHANICS])
+  const found = new Set([MECHANICS, AUTHOR])
   for (const unit of units) {
     if (unit.class !== "trigger") continue
     const fn = platformTriggerFunction(unit, ctx)

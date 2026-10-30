@@ -30,7 +30,9 @@ import {
 } from "../../compiler/__tests__/helpers"
 import {
   COMMENT_FILE,
+  authorCarrier,
   policyDomain,
+  singleTenantRights,
   writeRoles,
 } from "../../compiler/__tests__/fixtures/rights"
 
@@ -1463,6 +1465,52 @@ describe("reverseGenerate", () => {
     expect(written).toContain("CREATE TRIGGER task_audit")
     expect(written).not.toContain("simetra_effects")
     expect(errors(result)).toEqual([])
+  })
+
+  it("recognizes author triggers and the author function as platform", async () => {
+    // Р-A1-8: тригери авторства (і розділені на таблиці з копіями, і під
+    // іменем спільного префікса на 60-байтній таблиці) й `simetra.author()`
+    // — платформні, як механіка. Одиниці — справжній вихід генератора
+    const compiled = await compile(
+      singleTenantRights({ ...authorCarrier(), ...authorCarrier("long") })
+    )
+    expectClean(compiled)
+    const platform = compiled.model!.sqlUnits.filter(
+      (u) => u.generator === "mechanics" && u.identity.includes("author")
+    )
+    const names = new Set(platform.map((u) => u.name))
+    for (const label of ["simetra_author", "simetra_author_update"])
+      expect(
+        [...names].filter((n) => n.endsWith(`_${label}`)).length,
+        label
+      ).toBe(2)
+    expect(new Set(platform.map((u) => u.class))).toEqual(
+      new Set(["function", "grant", "trigger"])
+    )
+    const AUDIT_FN =
+      "CREATE FUNCTION public.audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;"
+    const AUDIT =
+      "CREATE TRIGGER note_audit AFTER UPDATE ON public.note FOR EACH ROW EXECUTE FUNCTION public.audit();"
+    const result = await reverseGenerate(
+      model({
+        units: [
+          ...platform.map((u) => ({
+            class: u.class,
+            identity: u.identity,
+            schema: u.schema,
+            name: u.name,
+            sql: u.sql,
+          })),
+          ...units([AUDIT_FN, AUDIT].join("\n")),
+        ],
+      }),
+      options(new Map(), { defaultSchema: "public" })
+    )
+    expect(errors(result)).toEqual([])
+    const written = [...result.files.values()].join("\n")
+    expect(written).toContain("CREATE TRIGGER note_audit")
+    expect(written).not.toContain("simetra_author")
+    expect(written).not.toContain('"author"')
   })
 
   it("introspect over a deployed write-rights layer writes nothing for command functions", async () => {

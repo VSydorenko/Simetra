@@ -40,7 +40,13 @@ export {
 export { loadSqlParser, relationNameText, type SqlParser } from "./sql/parse"
 export { platformSchemaGrants } from "./platform/units"
 export {
+  AUTHOR_FUNCTION,
+  authorTriggerName,
+  authorUpdateTriggerName,
+} from "./author-units"
+export {
   MECHANICS_FUNCTION,
+  authorTableColumns,
   contentChangeCondition,
   mechanicsTriggerName,
   mechanicsUpdateTriggerName,
