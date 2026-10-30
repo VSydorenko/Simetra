@@ -157,7 +157,12 @@ is closed by its own rule:
   `onUpdate` are only `restrict` or `noAction`
   (`customTable.fk-action-on-kind-table`): a cascade would write the child
   table from inside a command. Clean up the child rows in a TypeScript hook of
-  the command, or promote the child table.
+  the command, or promote the child table. The target columns are only the
+  key `ref` or the in-tenant composite key `(<scope column>, id)`; any other
+  target is `customTable.fk-target-not-key`. A foreign key check bypasses row
+  level security, so a key on a guessable value (a code, a number) would
+  reveal whether a row exists in another tenant; and the command role updates
+  unique attributes, while the key never changes.
 - **Scope root** — `onRootDelete: "cascade"` only when the root is an object
   of a kind (`scope.root-cascade-not-kind`): a `CustomTable` root is deleted by
   your SQL, and its cascade would write tables of kinds. Promote the root, or
