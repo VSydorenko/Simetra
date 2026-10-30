@@ -1,10 +1,21 @@
 import { randomUUID } from "node:crypto"
 import pg from "pg"
 import { RIGHTS_MAINTENANCE_SETTING } from "simetra/model"
-import { testDatabaseUrl } from "./connection"
+import {
+  GLOBAL_ADMIN_ID,
+  MEMBER_EDITOR_ID,
+  ORG_ADMIN_ID,
+  PROJECT_WRITER_ID,
+  RIGHTS_ADMIN_ID,
+  TASK_EDITOR_ID,
+  TASK_VIEWER_ID,
+} from "../../src/compiler/__tests__/fixtures/rights"
+import { signUp } from "./auth"
+import { queryAs, testDatabaseUrl } from "./connection"
 
 /**
- * Спільний засів DB-сценаріїв прав (`rights-functions`, `rights-policies`):
+ * Спільний засів DB-сценаріїв прав (`rights-functions`, `rights-policies`,
+ * `rights-guards`, `snake-case`):
  * рядки довідників прав і транзакція опису. Засів іде від власника таблиць —
  * RLS його не обмежує.
  */
@@ -112,5 +123,202 @@ export function describeTransaction(): {
       await current.query("ROLLBACK").catch(() => undefined)
       await current.end()
     },
+  }
+}
+
+/**
+ * Засів сценаріїв адміністрування прав (`rights-guards`, `snake-case`) над
+ * `policyDomain(writeRoles(), adminRoles())`: тенанти A, B, C, учасники з
+ * призначеннями, кастомні ролі й дельти. Фізичні імена від стилю атрибутів не
+ * залежать, тож засів спільний для camelCase і snake_case-близнюка.
+ */
+export async function seedAdministration(client: pg.Client): Promise<Seed> {
+  const ids: Seed = {}
+  const row = async (
+    key: string,
+    table: string,
+    values: Record<string, unknown> = {}
+  ) => {
+    ids[key] = randomUUID()
+    await insert(client, table, { ...values, id: ids[key] })
+  }
+  const member = (key: string, org: string, user: string | null) =>
+    row(key, "org_member", {
+      org_id: ids[org],
+      user_id: user === null ? null : ids[user],
+    })
+  const assign = (
+    key: string,
+    memberKey: string,
+    archetype: string,
+    container?: string
+  ) =>
+    row(key, "org_role_assignments", {
+      org_id: ids.A,
+      ...assignmentRow(ids[memberKey]!, {
+        archetype,
+        container: container === undefined ? null : ids[container],
+      }),
+    })
+  for (const org of ["A", "B", "C"]) await row(org, "organization")
+  for (const user of [
+    "root",
+    "root2",
+    "bAdmin",
+    "cAdmin",
+    "admin",
+    "editor",
+    "viewer",
+    "target",
+    "other",
+    "memberEditor",
+    "gAdmin",
+  ]) {
+    ids[user] = await signUp(client)
+    await member(`${user}@A`, "A", user)
+  }
+  // Люди без членства в A: членство тримає UNIQUE (скоуп, користувач), тож
+  // підставити в рядок A можна лише того, хто ще не учасник A.
+  ids.outsider = await signUp(client)
+  await member("bAdmin@B", "B", "bAdmin")
+  await member("cAdmin@C", "C", "cAdmin")
+  await member("invite@A", "A", null)
+  // Запрошений рядок без призначень: його самоприйняття прав не додає.
+  await member("bareInvite@A", "A", null)
+  await row("P1", "project", { org_id: ids.A })
+  await row("P2", "project", { org_id: ids.A })
+  await row("R1", "region", { org_id: ids.A })
+  await assign("rootRole", "root@A", ORG_ADMIN_ID)
+  await assign("root2Role", "root2@A", ORG_ADMIN_ID)
+  await row("bRole", "org_role_assignments", {
+    org_id: ids.B,
+    ...assignmentRow(ids["bAdmin@B"]!, { archetype: ORG_ADMIN_ID }),
+  })
+  await row("cRole", "org_role_assignments", {
+    org_id: ids.C,
+    ...assignmentRow(ids["cAdmin@C"]!, { archetype: ORG_ADMIN_ID }),
+  })
+  // «Користувачі» — глобальний рівень: `update` на них дає глобальний
+  // `fullAccess`, а бачить їх учасник спільного скоупу (членство в A).
+  await row(
+    "gAdminRole",
+    "global_role_assignments",
+    assignmentRow(ids.gAdmin!, { archetype: GLOBAL_ADMIN_ID })
+  )
+  await assign("adminRole", "admin@A", RIGHTS_ADMIN_ID)
+  await assign("editorRole", "editor@A", TASK_EDITOR_ID)
+  await assign("editorAdminRole", "editor@A", RIGHTS_ADMIN_ID)
+  await assign("viewerRole", "viewer@A", TASK_VIEWER_ID)
+  await assign("viewerAdminRole", "viewer@A", RIGHTS_ADMIN_ID)
+  await assign("memberEditorRole", "memberEditor@A", MEMBER_EDITOR_ID)
+  await row("heldCustom", "org_roles", {
+    org_id: ids.A,
+    archetype: TASK_VIEWER_ID,
+  })
+  await row("heldRole", "org_role_assignments", {
+    org_id: ids.A,
+    ...assignmentRow(ids["admin@A"]!, { customRole: ids.heldCustom }),
+  })
+  await row("closureCustom", "org_roles", {
+    org_id: ids.A,
+    archetype: TASK_VIEWER_ID,
+  })
+  await insert(
+    client,
+    "org_roles_delta",
+    orgDeltaRow(ids.A!, ids.closureCustom!, 1, ["deny", "task", "read", "any"])
+  )
+  await insert(
+    client,
+    "org_roles_delta",
+    orgDeltaRow(ids.A!, ids.closureCustom!, 2, [
+      "allow",
+      "task",
+      "update",
+      "any",
+    ])
+  )
+  await row("inUseCustom", "org_roles", {
+    org_id: ids.A,
+    archetype: TASK_VIEWER_ID,
+  })
+  await row("inUseRole", "org_role_assignments", {
+    org_id: ids.A,
+    ...assignmentRow(ids["target@A"]!, { customRole: ids.inUseCustom }),
+  })
+  await row("unusedCustom", "org_roles", {
+    org_id: ids.A,
+    archetype: TASK_VIEWER_ID,
+  })
+  await row("baselineCustom", "org_roles", {
+    org_id: ids.A,
+    archetype: TASK_EDITOR_ID,
+  })
+  await row("moveRole", "org_role_assignments", {
+    org_id: ids.A,
+    ...assignmentRow(ids["target@A"]!, {
+      archetype: PROJECT_WRITER_ID,
+      container: ids.P1,
+    }),
+  })
+  await row("inviteRole", "org_role_assignments", {
+    org_id: ids.A,
+    ...assignmentRow(ids["invite@A"]!, { archetype: ORG_ADMIN_ID }),
+  })
+  // Права в іншому тенанті не покривають приріст у цьому: повний доступ у B
+  // і лише адміністрування прав у A.
+  await assign("bAdminRightsRole", "bAdmin@A", RIGHTS_ADMIN_ID)
+  // Позначені рядки — база для зняття позначки, що дає повний приріст (Р2c2-5).
+  await row("markedRole", "org_role_assignments", {
+    org_id: ids.A,
+    ...assignmentRow(ids["target@A"]!, {
+      archetype: ORG_ADMIN_ID,
+      deletionMark: true,
+    }),
+  })
+  await row("markedCustom", "org_roles", {
+    org_id: ids.A,
+    archetype: TASK_EDITOR_ID,
+    deletion_mark: true,
+  })
+  await row("targetRole", "org_role_assignments", {
+    org_id: ids.A,
+    ...assignmentRow(ids["target@A"]!, { archetype: TASK_VIEWER_ID }),
+  })
+  return ids
+}
+
+/** Права рівня скоупу `rights_mine()` як відсортовані `об'єкт|дія|обсяг`. */
+const SCOPE_MINE =
+  "SELECT coalesce(array_agg(m.object || '|' || m.action || '|' || m.extent ORDER BY m.object, m.action, m.extent), '{}') AS v FROM simetra.rights_mine() m WHERE m.level = 'scope'"
+
+/**
+ * Права учасника `other@A`, якому призначено кастомну роль `closureCustom`
+ * (архетип `TaskViewer`, дельти `deny task read any` і `allow task update`):
+ * лишаються похідні обсяги читання архетипу без `any`.
+ * Форма читає колонки кастомної ролі, позначки видалення й дельт — саме ті,
+ * що в snake_case мають інше логічне ім'я, тож описи обох стилів звіряють
+ * однаковий результат. Призначення відкочується разом з точкою збереження.
+ */
+export async function closureRights(
+  client: pg.Client,
+  ids: Seed
+): Promise<string[]> {
+  await client.query("SAVEPOINT closure_rights")
+  try {
+    await insert(client, "org_role_assignments", {
+      org_id: ids.A,
+      ...assignmentRow(ids["other@A"]!, { customRole: ids.closureCustom }),
+    })
+    const result = await queryAs<{ v: string[] }>(
+      client,
+      "authenticated",
+      { sub: ids.other, role: "authenticated" },
+      SCOPE_MINE
+    )
+    if (!("rows" in result)) throw new Error(`rights_mine: ${result.code}`)
+    return result.rows[0]!.v
+  } finally {
+    await client.query("ROLLBACK TO SAVEPOINT closure_rights")
   }
 }

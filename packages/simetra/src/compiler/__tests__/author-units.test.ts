@@ -7,7 +7,6 @@ import {
   mechanicsUpdateTriggerName,
 } from "../mechanics-units"
 import { executeGrants } from "../sql/execute-grants"
-import { loadSqlParser } from "../sql/parse"
 import { hasEmptySearchPath, routineLanguage } from "../sql/closed-forms"
 import {
   NOTE_LONG,
@@ -27,6 +26,7 @@ import {
   tree,
 } from "./fixtures/sql-shape"
 import { expectClean } from "./helpers"
+import { snakeCaseTwin } from "./fixtures/snake-case"
 
 let domain: CompiledModel
 let notes: CompiledModel
@@ -232,28 +232,14 @@ describe("buildAuthorUnits", () => {
 
 describe("author triggers in a compiled project", () => {
   it("a snake_case project finds author columns by its styled names", async () => {
-    const parse = await loadSqlParser()
-    const table = {
-      ...tableOf(domain, "task"),
-      columns: tableOf(domain, "task").columns.map((c) =>
-        c.origin.standard === "createdBy"
-          ? { ...c, origin: { ...c.origin, standard: "created_by" } }
-          : c.origin.standard === "updatedBy"
-            ? { ...c, origin: { ...c.origin, standard: "updated_by" } }
-            : c
-      ),
-    }
-    const units = buildAuthorUnits(
-      { ...domain.physical, tables: [table] },
-      domain.contracts,
-      "snake_case",
-      "supabase",
-      "app",
-      parse
-    )
-    expect(
-      units.filter((u) => u.class === "trigger").map((u) => u.tree)
-    ).toEqual([
+    // Близнюк у snake_case (Рб1-3): фізичні імена ті самі, тож і тригери
+    // авторства мусять збігтися з camelCase одиниця в одиницю.
+    const snake = await compileRights(snakeCaseTwin(policyDomain(writeRoles())))
+    expectClean(snake)
+    const sql = (model: CompiledModel) =>
+      authorUnits(model).map((u) => [u.identity, u.sql])
+    expect(sql(snake.model!)).toEqual(sql(domain))
+    expect(triggersOn(snake.model!, "task")).toEqual([
       tree(
         "CREATE TRIGGER task_simetra_author BEFORE INSERT OR UPDATE ON public.task FOR EACH ROW EXECUTE FUNCTION simetra.author();"
       ),

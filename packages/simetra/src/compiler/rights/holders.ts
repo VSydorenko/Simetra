@@ -1,7 +1,11 @@
 import {
+  RIGHTS_COLUMNS,
+  deletionMarkColumn,
   quoteIdent,
+  type AttributeCase,
   type PhysicalSnapshot,
   type PhysicalTable,
+  type StandardColumnDef,
 } from "simetra/model"
 import {
   qualified,
@@ -10,6 +14,7 @@ import {
   type RightsLevelKey,
 } from "../contracts"
 import { sqlLiteral } from "../stages/model"
+import { standardColumn } from "../standard-column"
 import { ZERO_UUID, sourceConditions } from "./functions"
 
 type HolderContracts = Pick<
@@ -29,24 +34,19 @@ function tableOf(
   return found
 }
 
-function standard(table: PhysicalTable, name: string): string {
-  const found = table.columns.find((column) => column.origin.standard === name)
-  if (found === undefined)
-    throw new Error(
-      `internal: ${table.schema}.${table.name} has no ${name} column`
-    )
-  return found.name
-}
-
 /** Return direct, active holder candidates so callers can apply their own full-access role set. */
 export function effectiveHolderRows(
   catalog: { level: RightsLevelKey; assignments: { table: QualifiedName } },
   contracts: HolderContracts,
-  physical: Pick<PhysicalSnapshot, "tables">
+  physical: Pick<PhysicalSnapshot, "tables">,
+  attributeCase: AttributeCase
 ): string {
   const table = tableOf(physical, catalog.assignments.table)
   const q = quoteIdent
-  const a = (name: string) => `a.${q(standard(table, name))}`
+  // Колонки — за визначенням реєстру в стилі проєкту (Рб1-1).
+  const a = (def: StandardColumnDef) =>
+    `a.${q(standardColumn(table, def, attributeCase).name)}`
+  const R = RIGHTS_COLUMNS
   const scope = table.columns.find(
     (column) => column.origin.scopeKindId !== undefined
   )?.name
@@ -72,12 +72,12 @@ export function effectiveHolderRows(
       ? `m.${q(member.userColumn)}`
       : source !== undefined
         ? `m.${q(source.user)}`
-        : a("subject")
+        : a(R.subject)
   const join =
     member !== undefined
-      ? `JOIN ${qualified(member.table)} m ON m.${q(member.keyColumn)} = ${a("subject")} AND m.${q(member.scopeColumn)} = a.${q(scope!)}`
+      ? `JOIN ${qualified(member.table)} m ON m.${q(member.keyColumn)} = ${a(R.subject)} AND m.${q(member.scopeColumn)} = a.${q(scope!)}`
       : source !== undefined
-        ? `JOIN ${qualified(source.table)} m ON m.${q(source.member)} = ${a("subject")} AND m.${q(source.scope)} = a.${q(scope!)}${source.active === undefined ? "" : ` AND m.${q(source.active)} IS TRUE`}${sourceConditions(
+        ? `JOIN ${qualified(source.table)} m ON m.${q(source.member)} = ${a(R.subject)} AND m.${q(source.scope)} = a.${q(scope!)}${source.active === undefined ? "" : ` AND m.${q(source.active)} IS TRUE`}${sourceConditions(
             "m",
             source.where
           )
@@ -89,10 +89,10 @@ export function effectiveHolderRows(
       ? ""
       : `JOIN ${qualified(contracts.users.table)} u ON u.${q(contracts.users.keyColumn)} = ${actor} AND NOT u.${q(contracts.users.invalidColumn)}`
   return [
-    `SELECT ${scope === undefined ? `${sqlLiteral(ZERO_UUID)}::uuid` : `a.${q(scope)}`} AS scope, ${actor} AS actor, ${a("archetype")} AS archetype FROM ${qualified(catalog.assignments.table)} a`,
+    `SELECT ${scope === undefined ? `${sqlLiteral(ZERO_UUID)}::uuid` : `a.${q(scope)}`} AS scope, ${actor} AS actor, ${a(R.archetype)} AS archetype FROM ${qualified(catalog.assignments.table)} a`,
     join,
     valid,
-    `WHERE ${a("customRole")} IS NULL AND NOT ${a("deletionMark")} AND ${actor} IS NOT NULL`,
+    `WHERE ${a(R.customRole)} IS NULL AND NOT ${a(deletionMarkColumn())} AND ${actor} IS NOT NULL`,
   ]
     .filter(Boolean)
     .join("\n")

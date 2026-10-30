@@ -96,6 +96,13 @@ export { roleTableJoin, sourceConditions } from "./rights/functions"
 export { rightsDomainRows } from "./rights/functions"
 export { rightsGuardNames } from "./rights/guard-names"
 export { effectiveHolderRows } from "./rights/holders"
+export {
+  findStandardColumn,
+  findStyleFreeColumn,
+  isStandard,
+  standardColumn,
+  styleFreeColumn,
+} from "./standard-column"
 export { rightsLevelOf } from "./rights/system-catalogs"
 export type {
   AssignmentSourceContract,

@@ -10,12 +10,10 @@ import {
 import { renderDesiredState } from "simetra/schema"
 import {
   GLOBAL_ADMIN_ID,
-  MEMBER_EDITOR_ID,
   ORG_ADMIN_ID,
   PROJECT_READER_ID,
   PROJECT_WRITER_ID,
   REGION_DIMENSION_ID,
-  RIGHTS_ADMIN_ID,
   TASK_EDITOR_ID,
   TASK_VIEWER_ID,
   adminRoles,
@@ -33,9 +31,11 @@ import {
 } from "./connection"
 import {
   assignmentRow,
+  closureRights,
   describeTransaction,
   insert,
   orgDeltaRow,
+  seedAdministration,
   type Seed,
 } from "./rights-seed"
 
@@ -62,162 +62,6 @@ const changed = (value: Result) => {
 const ZERO = "00000000-0000-0000-0000-000000000000"
 const PENDING_ROWS =
   "SELECT (SELECT count(*) FROM simetra.rights_tx_actor WHERE xid = txid_current())::int + (SELECT count(*) FROM simetra.rights_tx_pending WHERE xid = txid_current())::int AS n"
-
-async function seed(client: pg.Client): Promise<Seed> {
-  const ids: Seed = {}
-  const row = async (
-    key: string,
-    table: string,
-    values: Record<string, unknown> = {}
-  ) => {
-    ids[key] = randomUUID()
-    await insert(client, table, { ...values, id: ids[key] })
-  }
-  const member = (key: string, org: string, user: string | null) =>
-    row(key, "org_member", {
-      org_id: ids[org],
-      user_id: user === null ? null : ids[user],
-    })
-  const assign = (
-    key: string,
-    memberKey: string,
-    archetype: string,
-    container?: string
-  ) =>
-    row(key, "org_role_assignments", {
-      org_id: ids.A,
-      ...assignmentRow(ids[memberKey]!, {
-        archetype,
-        container: container === undefined ? null : ids[container],
-      }),
-    })
-  for (const org of ["A", "B", "C"]) await row(org, "organization")
-  for (const user of [
-    "root",
-    "root2",
-    "bAdmin",
-    "cAdmin",
-    "admin",
-    "editor",
-    "viewer",
-    "target",
-    "other",
-    "memberEditor",
-    "gAdmin",
-  ]) {
-    ids[user] = await signUp(client)
-    await member(`${user}@A`, "A", user)
-  }
-  // Люди без членства в A: членство тримає UNIQUE (скоуп, користувач), тож
-  // підставити в рядок A можна лише того, хто ще не учасник A.
-  ids.outsider = await signUp(client)
-  await member("bAdmin@B", "B", "bAdmin")
-  await member("cAdmin@C", "C", "cAdmin")
-  await member("invite@A", "A", null)
-  // Запрошений рядок без призначень: його самоприйняття прав не додає.
-  await member("bareInvite@A", "A", null)
-  await row("P1", "project", { org_id: ids.A })
-  await row("P2", "project", { org_id: ids.A })
-  await row("R1", "region", { org_id: ids.A })
-  await assign("rootRole", "root@A", ORG_ADMIN_ID)
-  await assign("root2Role", "root2@A", ORG_ADMIN_ID)
-  await row("bRole", "org_role_assignments", {
-    org_id: ids.B,
-    ...assignmentRow(ids["bAdmin@B"]!, { archetype: ORG_ADMIN_ID }),
-  })
-  await row("cRole", "org_role_assignments", {
-    org_id: ids.C,
-    ...assignmentRow(ids["cAdmin@C"]!, { archetype: ORG_ADMIN_ID }),
-  })
-  // «Користувачі» — глобальний рівень: `update` на них дає глобальний
-  // `fullAccess`, а бачить їх учасник спільного скоупу (членство в A).
-  await row(
-    "gAdminRole",
-    "global_role_assignments",
-    assignmentRow(ids.gAdmin!, { archetype: GLOBAL_ADMIN_ID })
-  )
-  await assign("adminRole", "admin@A", RIGHTS_ADMIN_ID)
-  await assign("editorRole", "editor@A", TASK_EDITOR_ID)
-  await assign("editorAdminRole", "editor@A", RIGHTS_ADMIN_ID)
-  await assign("viewerRole", "viewer@A", TASK_VIEWER_ID)
-  await assign("viewerAdminRole", "viewer@A", RIGHTS_ADMIN_ID)
-  await assign("memberEditorRole", "memberEditor@A", MEMBER_EDITOR_ID)
-  await row("heldCustom", "org_roles", {
-    org_id: ids.A,
-    archetype: TASK_VIEWER_ID,
-  })
-  await row("heldRole", "org_role_assignments", {
-    org_id: ids.A,
-    ...assignmentRow(ids["admin@A"]!, { customRole: ids.heldCustom }),
-  })
-  await row("closureCustom", "org_roles", {
-    org_id: ids.A,
-    archetype: TASK_VIEWER_ID,
-  })
-  await insert(
-    client,
-    "org_roles_delta",
-    orgDeltaRow(ids.A!, ids.closureCustom!, 1, ["deny", "task", "read", "any"])
-  )
-  await insert(
-    client,
-    "org_roles_delta",
-    orgDeltaRow(ids.A!, ids.closureCustom!, 2, [
-      "allow",
-      "task",
-      "update",
-      "any",
-    ])
-  )
-  await row("inUseCustom", "org_roles", {
-    org_id: ids.A,
-    archetype: TASK_VIEWER_ID,
-  })
-  await row("inUseRole", "org_role_assignments", {
-    org_id: ids.A,
-    ...assignmentRow(ids["target@A"]!, { customRole: ids.inUseCustom }),
-  })
-  await row("unusedCustom", "org_roles", {
-    org_id: ids.A,
-    archetype: TASK_VIEWER_ID,
-  })
-  await row("baselineCustom", "org_roles", {
-    org_id: ids.A,
-    archetype: TASK_EDITOR_ID,
-  })
-  await row("moveRole", "org_role_assignments", {
-    org_id: ids.A,
-    ...assignmentRow(ids["target@A"]!, {
-      archetype: PROJECT_WRITER_ID,
-      container: ids.P1,
-    }),
-  })
-  await row("inviteRole", "org_role_assignments", {
-    org_id: ids.A,
-    ...assignmentRow(ids["invite@A"]!, { archetype: ORG_ADMIN_ID }),
-  })
-  // Права в іншому тенанті не покривають приріст у цьому: повний доступ у B
-  // і лише адміністрування прав у A.
-  await assign("bAdminRightsRole", "bAdmin@A", RIGHTS_ADMIN_ID)
-  // Позначені рядки — база для зняття позначки, що дає повний приріст (Р2c2-5).
-  await row("markedRole", "org_role_assignments", {
-    org_id: ids.A,
-    ...assignmentRow(ids["target@A"]!, {
-      archetype: ORG_ADMIN_ID,
-      deletionMark: true,
-    }),
-  })
-  await row("markedCustom", "org_roles", {
-    org_id: ids.A,
-    archetype: TASK_EDITOR_ID,
-    deletion_mark: true,
-  })
-  await row("targetRole", "org_role_assignments", {
-    org_id: ids.A,
-    ...assignmentRow(ids["target@A"]!, { archetype: TASK_VIEWER_ID }),
-  })
-  return ids
-}
 
 describe("rights administration guards", () => {
   const tx = describeTransaction()
@@ -336,12 +180,20 @@ describe("rights administration guards", () => {
     await client.query(
       `GRANT ${PLATFORM_ROLES.command} TO CURRENT_USER WITH SET TRUE`
     )
-    ids = await seed(client)
+    ids = await seedAdministration(client)
     // Відкладені ключі засіву перевіряються зараз: кейси починають з порожньої черги
     await client.query("SET CONSTRAINTS ALL IMMEDIATE")
     await client.query("SET CONSTRAINTS ALL DEFERRED")
   }, 120_000)
   afterAll(() => tx.close())
+
+  // Той самий результат звіряє snake_case-опис (`snake-case.db.test.ts`).
+  it("rights_mine reads custom roles and their deltas", async () => {
+    expect(await closureRights(tx.client(), ids)).toEqual([
+      "task|read|dimension",
+      "task|read|own",
+    ])
+  })
 
   // Призначення собі, чужому й у контейнер судить той самий ⊆; контейнерна
   // гілка покриття окрема, тож кожна форма має свій кейс.

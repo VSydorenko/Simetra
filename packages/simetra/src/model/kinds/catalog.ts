@@ -282,6 +282,34 @@ function roleAssignmentsColumns(catalog: Catalog): StandardColumnDef[] {
   ]
 }
 
+/**
+ * Визначення стандартних колонок довідників прав за логічним ім'ям: функції
+ * прав шукають за ними колонки в стилі проєкту (Рб1-1), а не літералом
+ * імені. Заголовок «Суб'єкта» залежить від скоупу, але пошук читає лише
+ * логічне ім'я.
+ */
+export const RIGHTS_COLUMNS = Object.fromEntries(
+  [
+    ...rightsRolesColumns(),
+    ...deltaColumns(),
+    ...roleAssignmentsColumns({ scope: "none" } as Catalog),
+  ].map((def) => [def.logicalName, def])
+) as Readonly<
+  Record<
+    | "archetype"
+    | "order"
+    | "object"
+    | "action"
+    | "extent"
+    | "dimension"
+    | "effect"
+    | "subject"
+    | "customRole"
+    | "container",
+    StandardColumnDef
+  >
+>
+
 /** Факти системної ролі довідника: що платформа виводить із ролі. */
 interface CatalogRoleDefinition {
   /**

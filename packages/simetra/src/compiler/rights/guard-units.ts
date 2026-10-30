@@ -2,13 +2,18 @@ import {
   PLATFORM_SCHEMA,
   PLATFORM_LOGIN_ROLES,
   PROVIDER_LOGIN_ROLES,
+  RIGHTS_COLUMNS,
   RIGHTS_MAINTENANCE_SETTING,
+  deletionMarkColumn,
+  keyColumn,
   quoteIdent,
-  standardLogicalName,
+  tabularParentColumn,
+  userPlatformColumns,
   type AttributeCase,
   type DatabaseProvider,
   type PhysicalSnapshot,
   type PhysicalTable,
+  type StandardColumnDef,
   KIND_REGISTRY,
 } from "simetra/model"
 import {
@@ -24,6 +29,7 @@ import { executeGrants } from "../sql/execute-grants"
 import type { SqlParser } from "../sql/parse"
 import { functionIdentity, generatedUnit, type SqlUnit } from "../sql/units"
 import { fieldForeignKey, sqlLiteral } from "../stages/model"
+import { standardColumn } from "../standard-column"
 import type { ParsedObject } from "../stages/files"
 import { COMMAND_FUNCTIONS } from "./command-units"
 import { RIGHTS_FUNCTIONS, ZERO_UUID, hasRightsFunctions } from "./functions"
@@ -50,6 +56,9 @@ interface CatalogTable {
   key: string
   scope?: string
   parent?: string
+  /** Колонки кастомної ролі й архетипу — лише в призначень. */
+  customRole?: string
+  archetype?: string
   object: string
 }
 
@@ -84,15 +93,20 @@ export function maintenanceSql(provider: DatabaseProvider): string {
   return `coalesce(current_setting(${sqlLiteral(RIGHTS_MAINTENANCE_SETTING)}, true) = 'on', false) AND session_user::text <> ALL (ARRAY[${logins}]::text[])`
 }
 
-function column(table: PhysicalTable, standard: string): string {
-  const found = table.columns.find(
-    (entry) => entry.origin.standard === standard
-  )
-  if (found === undefined)
-    throw new Error(
-      `internal: ${table.schema}.${table.name} has no ${standard} column`
-    )
-  return found.name
+// Визначення стандартних колонок з реєстру: ім'я в стилі проєкту дає
+// `standardColumn`, а не літерал (Рб1-1).
+const R = RIGHTS_COLUMNS
+const KEY = keyColumn(false)
+const PARENT = tabularParentColumn()
+const DELETION = deletionMarkColumn()
+const USER_KIND = userPlatformColumns()[0]!
+
+function column(
+  table: PhysicalTable,
+  def: StandardColumnDef,
+  style: AttributeCase
+): string {
+  return standardColumn(table, def, style).name
 }
 
 function scopeColumn(table: PhysicalTable): string | undefined {
@@ -114,7 +128,8 @@ function tableOf(
 
 function catalogTables(
   contracts: GuardContracts,
-  physical: PhysicalSnapshot
+  physical: PhysicalSnapshot,
+  style: AttributeCase
 ): CatalogTable[] {
   const labels = new Map(
     contracts.rights.map((right) => [right.objectId, right.kindLabel])
@@ -128,7 +143,7 @@ function catalogTables(
         table: role,
         kind: "role",
         catalog,
-        key: column(role, "ref"),
+        key: column(role, KEY, style),
         scope: scopeColumn(role),
         object: labels.get(catalog.roles.objectId) ?? role.name,
       },
@@ -136,17 +151,19 @@ function catalogTables(
         table: delta,
         kind: "delta",
         catalog,
-        key: column(delta, "ref"),
+        key: column(delta, KEY, style),
         scope: scopeColumn(delta),
-        parent: column(delta, "parent"),
+        parent: column(delta, PARENT, style),
         object: labels.get(catalog.roles.objectId) ?? role.name,
       },
       {
         table: assignment,
         kind: "assignment",
         catalog,
-        key: column(assignment, "ref"),
+        key: column(assignment, KEY, style),
         scope: scopeColumn(assignment),
+        customRole: column(assignment, R.customRole, style),
+        archetype: column(assignment, R.archetype, style),
         object: labels.get(catalog.assignments.objectId) ?? assignment.name,
       },
     ]
@@ -291,7 +308,8 @@ function truncateBody(table: PhysicalTable): string {
 function snapshotBody(
   provider: DatabaseProvider,
   contracts: GuardContracts,
-  physical: PhysicalSnapshot
+  physical: PhysicalSnapshot,
+  style: AttributeCase
 ): string {
   const actor = ref(platform("rights_tx_actor"))
   const currentUser = `${ref(platform("current_user_id"))}()`
@@ -314,7 +332,7 @@ function snapshotBody(
       [
         `  INSERT INTO ${actor} (xid, actor, level, level_id, scope, full_access)`,
         `  SELECT txid_current(), v_actor, ${sqlLiteral(catalog.level.level)}, ${catalog.level.level === "scope" ? `${sqlLiteral(catalog.level.scopeKindId)}::uuid` : "NULL::uuid"}, h.scope, true`,
-        `  FROM (${holderRows(catalog, contracts, physical)}) h WHERE h.actor = v_actor;`,
+        `  FROM (${holderRows(catalog, contracts, physical, style)}) h WHERE h.actor = v_actor;`,
       ].join("\n")
     ),
     "  RETURN NULL;",
@@ -369,7 +387,7 @@ function pendingSql(
     `SELECT ${sqlLiteral(kindKey)}::text AS kind, ${config.kind === "assignment" ? `r.${q(config.key)}` : roleKey} AS key, ${kind} AS scope_kind_id, ${scope} AS scope, r.image FROM (${events}) r`,
     ...(config.kind === "assignment"
       ? [
-          `SELECT 'role'::text, r.${q(column(config.table, "customRole"))}, ${kind}, ${scope}, r.image FROM (${events}) r WHERE r.${q(column(config.table, "customRole"))} IS NOT NULL`,
+          `SELECT 'role'::text, r.${q(config.customRole!)}, ${kind}, ${scope}, r.image FROM (${events}) r WHERE r.${q(config.customRole!)} IS NOT NULL`,
         ]
       : []),
     // Ключ `holders` — від будь-якої зміни старого прямого рядка архетипу з
@@ -377,7 +395,7 @@ function pendingSql(
     // випадків (Р2c2-22). Новий образ носія не прибирає — він не потрібен.
     ...(config.kind === "assignment" && before
       ? [
-          `SELECT 'holders'::text, ${scope}, ${kind}, ${scope}, 1 FROM old_rows r WHERE r.${q(column(config.table, "customRole"))} IS NULL AND EXISTS (SELECT 1 FROM ${ref(RIGHTS_FUNCTIONS.fullAccessRoles)}() f WHERE f.role_id = r.${q(column(config.table, "archetype"))} AND f.storage_id IS NOT DISTINCT FROM ${config.catalog.level.level === "scope" ? kind : "NULL::uuid"})`,
+          `SELECT 'holders'::text, ${scope}, ${kind}, ${scope}, 1 FROM old_rows r WHERE r.${q(config.customRole!)} IS NULL AND EXISTS (SELECT 1 FROM ${ref(RIGHTS_FUNCTIONS.fullAccessRoles)}() f WHERE f.role_id = r.${q(config.archetype!)} AND f.storage_id IS NOT DISTINCT FROM ${config.catalog.level.level === "scope" ? kind : "NULL::uuid"})`,
         ]
       : []),
     actorPending(),
@@ -386,10 +404,14 @@ function pendingSql(
 }
 
 /** Перший образ командної частини транзакції, а для незміненого рядка — живий стан. */
-function stateRows(table: PhysicalTable, state: "before" | "after"): string {
+function stateRows(
+  table: PhysicalTable,
+  state: "before" | "after",
+  style: AttributeCase
+): string {
   const name = ref(tableName(table))
   if (state === "after") return `SELECT to_jsonb(l) AS doc FROM ${name} l`
-  const key = column(table, "ref")
+  const key = column(table, KEY, style)
   const relation = journalRelation(table)
   return [
     `SELECT CASE WHEN j.row_id IS NOT NULL THEN j.before ELSE to_jsonb(l) END AS doc FROM ${name} l`,
@@ -410,62 +432,67 @@ function deltaArray(
   catalog: RightsCatalogContract,
   physical: PhysicalSnapshot,
   state: "before" | "after",
-  roleId: string
+  roleId: string,
+  style: AttributeCase
 ): string {
   const table = tableOf(physical, catalog.roles.delta)
-  const field = (name: string) => `d.doc ->> ${sqlLiteral(column(table, name))}`
+  const field = (def: StandardColumnDef) =>
+    `d.doc ->> ${sqlLiteral(column(table, def, style))}`
   return [
-    `SELECT coalesce(jsonb_agg(jsonb_build_object('object', ${field("object")}, 'action', ${field("action")}, 'extent', ${field("extent")}, 'dimension', ${field("dimension")}, 'effect', ${field("effect")})), '[]'::jsonb)`,
-    `FROM (${stateRows(table, state)}) d WHERE d.doc IS NOT NULL AND (${field("parent")})::uuid = ${roleId} AND ${scopedDoc(table, "d")}`,
+    `SELECT coalesce(jsonb_agg(jsonb_build_object('object', ${field(R.object)}, 'action', ${field(R.action)}, 'extent', ${field(R.extent)}, 'dimension', ${field(R.dimension)}, 'effect', ${field(R.effect)})), '[]'::jsonb)`,
+    `FROM (${stateRows(table, state, style)}) d WHERE d.doc IS NOT NULL AND (${field(PARENT)})::uuid = ${roleId} AND ${scopedDoc(table, "d")}`,
   ].join("\n")
 }
 
 function roleGrantSet(
   catalog: RightsCatalogContract,
   physical: PhysicalSnapshot,
-  state: "before" | "after"
+  state: "before" | "after",
+  style: AttributeCase
 ): string {
   const table = tableOf(physical, catalog.roles.table)
-  const archetype = `r.doc ->> ${sqlLiteral(column(table, "archetype"))}`
-  const id = `(r.doc ->> ${sqlLiteral(column(table, "ref"))})::uuid`
+  const archetype = `r.doc ->> ${sqlLiteral(column(table, R.archetype, style))}`
+  const id = `(r.doc ->> ${sqlLiteral(column(table, KEY, style))})::uuid`
   return [
-    `SELECT g.object, g.action, g.extent, g.dimension_id, m.level, m.level_id, ${catalog.level.level === "scope" ? "v_pending.scope" : "NULL::uuid"} AS scope, NULL::uuid AS container FROM (${stateRows(table, state)}) r`,
+    `SELECT g.object, g.action, g.extent, g.dimension_id, m.level, m.level_id, ${catalog.level.level === "scope" ? "v_pending.scope" : "NULL::uuid"} AS scope, NULL::uuid AS container FROM (${stateRows(table, state, style)}) r`,
     `JOIN ${ref(RIGHTS_FUNCTIONS.roles)}() m ON m.role_id = (${archetype})::uuid`,
-    `CROSS JOIN LATERAL ${ref(RIGHTS_FUNCTIONS.roleGrants)}(m.level, m.level_id, m.role_id, (${deltaArray(catalog, physical, state, id)})) g`,
+    `CROSS JOIN LATERAL ${ref(RIGHTS_FUNCTIONS.roleGrants)}(m.level, m.level_id, m.role_id, (${deltaArray(catalog, physical, state, id, style)})) g`,
     `WHERE r.doc IS NOT NULL AND ${id} = v_pending.key AND ${scopedDoc(table, "r")}`,
-    `  AND NOT (r.doc ->> ${sqlLiteral(column(table, "deletionMark"))})::boolean`,
+    `  AND NOT (r.doc ->> ${sqlLiteral(column(table, DELETION, style))})::boolean`,
   ].join("\n")
 }
 
 function assignmentGrantSet(
   catalog: RightsCatalogContract,
   physical: PhysicalSnapshot,
-  state: "before" | "after"
+  state: "before" | "after",
+  style: AttributeCase
 ): string {
   const table = tableOf(physical, catalog.assignments.table)
   const roles = tableOf(physical, catalog.roles.table)
-  const refColumn = sqlLiteral(column(table, "ref"))
-  const custom = `(a.doc ->> ${sqlLiteral(column(table, "customRole"))})::uuid`
-  const direct = `(a.doc ->> ${sqlLiteral(column(table, "archetype"))})::uuid`
-  const archetype = `coalesce((r.doc ->> ${sqlLiteral(column(roles, "archetype"))})::uuid, ${direct})`
-  const delta = `CASE WHEN ${custom} IS NULL THEN '[]'::jsonb ELSE (${deltaArray(catalog, physical, state, custom)}) END`
+  const refColumn = sqlLiteral(column(table, KEY, style))
+  const custom = `(a.doc ->> ${sqlLiteral(column(table, R.customRole, style))})::uuid`
+  const direct = `(a.doc ->> ${sqlLiteral(column(table, R.archetype, style))})::uuid`
+  const archetype = `coalesce((r.doc ->> ${sqlLiteral(column(roles, R.archetype, style))})::uuid, ${direct})`
+  const delta = `CASE WHEN ${custom} IS NULL THEN '[]'::jsonb ELSE (${deltaArray(catalog, physical, state, custom, style)}) END`
   return [
-    `SELECT g.object, g.action, g.extent, g.dimension_id, m.level, m.level_id, ${catalog.level.level === "scope" ? `(${`a.doc ->> ${sqlLiteral(scopeColumn(table)!)}`})::uuid` : "NULL::uuid"} AS scope, (a.doc ->> ${sqlLiteral(column(table, "container"))})::uuid AS container FROM (${stateRows(table, state)}) a`,
-    `LEFT JOIN (${stateRows(roles, state)}) r ON ${custom} IS NOT NULL AND (r.doc ->> ${sqlLiteral(column(roles, "ref"))})::uuid = ${custom} AND ${scopedDoc(roles, "r")}`,
+    `SELECT g.object, g.action, g.extent, g.dimension_id, m.level, m.level_id, ${catalog.level.level === "scope" ? `(${`a.doc ->> ${sqlLiteral(scopeColumn(table)!)}`})::uuid` : "NULL::uuid"} AS scope, (a.doc ->> ${sqlLiteral(column(table, R.container, style))})::uuid AS container FROM (${stateRows(table, state, style)}) a`,
+    `LEFT JOIN (${stateRows(roles, state, style)}) r ON ${custom} IS NOT NULL AND (r.doc ->> ${sqlLiteral(column(roles, KEY, style))})::uuid = ${custom} AND ${scopedDoc(roles, "r")}`,
     `JOIN ${ref(RIGHTS_FUNCTIONS.roles)}() m ON m.role_id = ${archetype}`,
     `CROSS JOIN LATERAL ${ref(RIGHTS_FUNCTIONS.roleGrants)}(m.level, m.level_id, m.role_id, ${delta}) g`,
     `WHERE a.doc IS NOT NULL AND (a.doc ->> ${refColumn})::uuid = v_pending.key AND ${scopedDoc(table, "a")}`,
-    `  AND NOT (a.doc ->> ${sqlLiteral(column(table, "deletionMark"))})::boolean`,
-    `  AND (${custom} IS NULL OR (r.doc IS NOT NULL AND NOT (r.doc ->> ${sqlLiteral(column(roles, "deletionMark"))})::boolean))`,
+    `  AND NOT (a.doc ->> ${sqlLiteral(column(table, DELETION, style))})::boolean`,
+    `  AND (${custom} IS NULL OR (r.doc IS NOT NULL AND NOT (r.doc ->> ${sqlLiteral(column(roles, DELETION, style))})::boolean))`,
   ].join("\n")
 }
 
 function holderRows(
   catalog: RightsCatalogContract,
   contracts: GuardContracts,
-  physical: PhysicalSnapshot
+  physical: PhysicalSnapshot,
+  style: AttributeCase
 ): string {
-  return `SELECT h.scope, h.actor FROM (${effectiveHolderRows(catalog, contracts, physical)}) h JOIN ${ref(RIGHTS_FUNCTIONS.fullAccessRoles)}() f ON f.role_id = h.archetype AND f.storage_id IS NOT DISTINCT FROM ${catalog.level.level === "scope" ? `${sqlLiteral(catalog.level.scopeKindId)}::uuid` : "NULL::uuid"}`
+  return `SELECT h.scope, h.actor FROM (${effectiveHolderRows(catalog, contracts, physical, style)}) h JOIN ${ref(RIGHTS_FUNCTIONS.fullAccessRoles)}() f ON f.role_id = h.archetype AND f.storage_id IS NOT DISTINCT FROM ${catalog.level.level === "scope" ? `${sqlLiteral(catalog.level.scopeKindId)}::uuid` : "NULL::uuid"}`
 }
 
 /**
@@ -492,12 +519,13 @@ function rootExists(
 
 function assignmentBeforeSet(
   catalog: RightsCatalogContract,
-  physical: PhysicalSnapshot
+  physical: PhysicalSnapshot,
+  style: AttributeCase
 ): string {
   const table = tableOf(physical, catalog.assignments.table)
-  const id = sqlLiteral(column(table, "ref"))
-  const same = ["subject", "container"].map((name) => {
-    const field = sqlLiteral(column(table, name))
+  const id = sqlLiteral(column(table, KEY, style))
+  const same = [R.subject, R.container].map((def) => {
+    const field = sqlLiteral(column(table, def, style))
     return `(b.doc ->> ${field}) IS NOT DISTINCT FROM (a.doc ->> ${field})`
   })
   const scope = scopeColumn(table)
@@ -506,8 +534,8 @@ function assignmentBeforeSet(
       `(b.doc ->> ${sqlLiteral(scope)}) IS NOT DISTINCT FROM (a.doc ->> ${sqlLiteral(scope)})`
     )
   return [
-    `SELECT g.* FROM (${assignmentGrantSet(catalog, physical, "before")}) g`,
-    `WHERE EXISTS (SELECT 1 FROM (${stateRows(table, "before")}) b JOIN (${stateRows(table, "after")}) a`,
+    `SELECT g.* FROM (${assignmentGrantSet(catalog, physical, "before", style)}) g`,
+    `WHERE EXISTS (SELECT 1 FROM (${stateRows(table, "before", style)}) b JOIN (${stateRows(table, "after", style)}) a`,
     `  ON (b.doc ->> ${id}) = (a.doc ->> ${id}) WHERE (a.doc ->> ${id})::uuid = v_pending.key AND ${same.join(" AND ")})`,
   ].join("\n")
 }
@@ -548,7 +576,8 @@ function escalationSql(
 function catalogCheck(
   catalog: RightsCatalogContract,
   contracts: GuardContracts,
-  physical: PhysicalSnapshot
+  physical: PhysicalSnapshot,
+  style: AttributeCase
 ): string {
   const roles = tableOf(physical, catalog.roles.table)
   const assignments = tableOf(physical, catalog.assignments.table)
@@ -556,7 +585,7 @@ function catalogCheck(
     catalog.level.level === "scope"
       ? `${sqlLiteral(catalog.level.scopeKindId)}::uuid`
       : `${sqlLiteral(ZERO_UUID)}::uuid`
-  const roleId = `r.${q(column(roles, "ref"))}`
+  const roleId = `r.${q(column(roles, KEY, style))}`
   const assignmentScope = scopeColumn(assignments)
   const roleScope = scopeColumn(roles)
   const sameRole =
@@ -569,15 +598,15 @@ function catalogCheck(
   return [
     `IF v_pending.scope_kind_id = ${scope} THEN`,
     "  IF v_pending.kind = 'role' THEN",
-    `    IF EXISTS (SELECT 1 FROM ${ref(catalog.roles.table)} r WHERE ${roleId} = v_pending.key AND ${sameRole} AND r.${q(column(roles, "deletionMark"))})`,
-    `       AND EXISTS (SELECT 1 FROM ${ref(catalog.assignments.table)} a WHERE a.${q(column(assignments, "customRole"))} = v_pending.key AND ${sameAssignment} AND NOT a.${q(column(assignments, "deletionMark"))})`,
+    `    IF EXISTS (SELECT 1 FROM ${ref(catalog.roles.table)} r WHERE ${roleId} = v_pending.key AND ${sameRole} AND r.${q(column(roles, DELETION, style))})`,
+    `       AND EXISTS (SELECT 1 FROM ${ref(catalog.assignments.table)} a WHERE a.${q(column(assignments, R.customRole, style))} = v_pending.key AND ${sameAssignment} AND NOT a.${q(column(assignments, DELETION, style))})`,
     `    THEN ${refusal("role-in-use")} END IF;`,
-    `    ${escalationSql(roleGrantSet(catalog, physical, "after"), roleGrantSet(catalog, physical, "before"), catalogStorageKind(catalog))}`,
+    `    ${escalationSql(roleGrantSet(catalog, physical, "after", style), roleGrantSet(catalog, physical, "before", style), catalogStorageKind(catalog))}`,
     "  ELSIF v_pending.kind = 'assignment' THEN",
-    `    ${escalationSql(assignmentGrantSet(catalog, physical, "after"), assignmentBeforeSet(catalog, physical), catalogStorageKind(catalog))}`,
+    `    ${escalationSql(assignmentGrantSet(catalog, physical, "after", style), assignmentBeforeSet(catalog, physical, style), catalogStorageKind(catalog))}`,
     "  ELSIF v_pending.kind = 'holders' THEN",
     ...(root === undefined ? [] : [`    IF ${root} THEN`]),
-    `    IF NOT EXISTS (SELECT 1 FROM (${holderRows(catalog, contracts, physical)}) h WHERE h.scope = v_pending.scope) THEN ${refusal("last-full-access")} END IF;`,
+    `    IF NOT EXISTS (SELECT 1 FROM (${holderRows(catalog, contracts, physical, style)}) h WHERE h.scope = v_pending.scope) THEN ${refusal("last-full-access")} END IF;`,
     ...(root === undefined ? [] : ["    END IF;"]),
     "  END IF;",
     "END IF;",
@@ -636,7 +665,8 @@ function actorCheck(contracts: GuardContracts): string {
  */
 function checkBody(
   contracts: GuardContracts,
-  physical: PhysicalSnapshot
+  physical: PhysicalSnapshot,
+  style: AttributeCase
 ): string {
   return [
     "DECLARE",
@@ -646,7 +676,7 @@ function checkBody(
     "  WHERE p.xid = NEW.xid AND p.kind = NEW.kind AND p.scope_kind_id = NEW.scope_kind_id AND p.key = NEW.key FOR UPDATE;",
     "  IF NOT FOUND THEN RETURN NULL; END IF;",
     ...contracts.rightsCatalogs.map((catalog) =>
-      catalogCheck(catalog, contracts, physical)
+      catalogCheck(catalog, contracts, physical, style)
     ),
     actorCheck(contracts),
     `  DELETE FROM ${ref(platform("rights_tx_pending"))} p WHERE p.xid = v_pending.xid AND p.kind = v_pending.kind AND p.scope_kind_id = v_pending.scope_kind_id AND p.key = v_pending.key;`,
@@ -697,7 +727,8 @@ function memberEventBody(
   contracts: GuardContracts,
   physical: PhysicalSnapshot,
   operation: "INSERT" | "UPDATE" | "DELETE",
-  provider: DatabaseProvider
+  provider: DatabaseProvider,
+  style: AttributeCase
 ): string {
   const key = q(member.keyColumn)
   const scope = q(member.scopeColumn)
@@ -711,7 +742,7 @@ function memberEventBody(
     .map((catalog) => {
       const table = catalog.assignments.table
       const actual = tableOf(physical, table)
-      return `EXISTS (SELECT 1 FROM ${ref(table)} a WHERE a.${q(column(actual, "subject"))} = n.${key} AND a.${q(scopeColumn(actual)!)} = n.${scope})`
+      return `EXISTS (SELECT 1 FROM ${ref(table)} a WHERE a.${q(column(actual, R.subject, style))} = n.${key} AND a.${q(scopeColumn(actual)!)} = n.${scope})`
     })
   const repeated =
     operation === "INSERT" && assignments.length > 0
@@ -775,12 +806,7 @@ function usersEventBody(
   const invalid = q(users.invalidColumn)
   const table = tableOf(physical, users.table)
   // `origin.standard` несе ім'я в стилі проєкту: `user_kind` у snake_case.
-  const kind = q(
-    column(
-      table,
-      standardLogicalName({ logicalName: "userKind" }, attributeCase)
-    )
-  )
+  const kind = q(column(table, USER_KIND, attributeCase))
   const repeated =
     operation === "INSERT"
       ? [
@@ -792,7 +818,7 @@ function usersEventBody(
             .filter((catalog) => catalog.level.level === "global")
             .map((catalog) => {
               const assignment = tableOf(physical, catalog.assignments.table)
-              return `EXISTS (SELECT 1 FROM ${ref(catalog.assignments.table)} a WHERE a.${q(column(assignment, "subject"))} = n.${key})`
+              return `EXISTS (SELECT 1 FROM ${ref(catalog.assignments.table)} a WHERE a.${q(column(assignment, R.subject, attributeCase))} = n.${key})`
             }),
         ]
       : []
@@ -891,16 +917,21 @@ export function buildRightsGuardUnits(
       table.origin.objectId
     )
   }
-  for (const config of catalogTables(contracts, physical)) {
+  for (const config of catalogTables(contracts, physical, attributeCase)) {
     const table = tableName(config.table)
     const owner = config.table.origin.objectId
     const fn = functionName(table, labels.rights)
     const snapshot = functionName(table, labels.snapshot)
-    addFunction(snapshot, snapshotBody(provider, contracts, physical), owner, [
-      unitNode(COMMAND_FUNCTIONS.current),
-      unitNode(RIGHTS_FUNCTIONS.mine),
-      { type: "table", schema: PLATFORM_SCHEMA, name: "rights_tx_actor" },
-    ])
+    addFunction(
+      snapshot,
+      snapshotBody(provider, contracts, physical, attributeCase),
+      owner,
+      [
+        unitNode(COMMAND_FUNCTIONS.current),
+        unitNode(RIGHTS_FUNCTIONS.mine),
+        { type: "table", schema: PLATFORM_SCHEMA, name: "rights_tx_actor" },
+      ]
+    )
     add(
       `CREATE TRIGGER ${q(triggerName(table, labels.snapshot))} BEFORE INSERT OR UPDATE OR DELETE ON ${ref(table)} FOR EACH STATEMENT EXECUTE FUNCTION ${ref(snapshot)}();`,
       owner
@@ -938,11 +969,16 @@ export function buildRightsGuardUnits(
     const name = tableName(table)
     const owner = table.origin.objectId
     const snapshot = functionName(name, labels.snapshot)
-    addFunction(snapshot, snapshotBody(provider, contracts, physical), owner, [
-      unitNode(COMMAND_FUNCTIONS.current),
-      unitNode(RIGHTS_FUNCTIONS.mine),
-      { type: "table", schema: PLATFORM_SCHEMA, name: "rights_tx_actor" },
-    ])
+    addFunction(
+      snapshot,
+      snapshotBody(provider, contracts, physical, attributeCase),
+      owner,
+      [
+        unitNode(COMMAND_FUNCTIONS.current),
+        unitNode(RIGHTS_FUNCTIONS.mine),
+        { type: "table", schema: PLATFORM_SCHEMA, name: "rights_tx_actor" },
+      ]
+    )
     add(
       `CREATE TRIGGER ${q(triggerName(name, labels.snapshot))} BEFORE INSERT OR UPDATE OR DELETE ON ${ref(name)} FOR EACH STATEMENT EXECUTE FUNCTION ${ref(snapshot)}();`,
       owner
@@ -958,7 +994,14 @@ export function buildRightsGuardUnits(
             : "REFERENCING OLD TABLE AS old_rows NEW TABLE AS new_rows"
       addFunction(
         fn,
-        memberEventBody(member, contracts, physical, operation, provider),
+        memberEventBody(
+          member,
+          contracts,
+          physical,
+          operation,
+          provider,
+          attributeCase
+        ),
         owner,
         [
           unitNode(COMMAND_FUNCTIONS.current),
@@ -1079,7 +1122,7 @@ export function buildRightsGuardUnits(
     addTruncate(table)
   }
   const check = platform("rights_tx_check")
-  addFunction(check, checkBody(contracts, physical), undefined, [
+  addFunction(check, checkBody(contracts, physical, attributeCase), undefined, [
     unitNode(RIGHTS_FUNCTIONS.mine),
     { type: "table", schema: PLATFORM_SCHEMA, name: "rights_tx_pending" },
     { type: "table", schema: PLATFORM_SCHEMA, name: "rights_tx_actor" },

@@ -1,14 +1,17 @@
 import {
   authorColumns,
+  keyColumn,
   predefinedNameColumn,
   serviceDateColumns,
   standardLogicalName,
+  tabularParentColumn,
   userPlatformColumns,
   versionColumn,
   type AttributeCase,
   type PhysicalColumn,
   type PhysicalTable,
 } from "simetra/model"
+import { findStandardColumn } from "../standard-column"
 
 /**
  * Колонки, яких роль команд не пише ніколи (спека П4 §6.2): механіку,
@@ -55,11 +58,18 @@ export function commandWriteColumns(
         )
       : []
   )
+  // Ключ і власник рядка ТЧ — за визначенням реєстру в стилі проєкту.
+  const key = findStandardColumn(table, keyColumn(false), facts.attributeCase)
+  const parent = findStandardColumn(
+    table,
+    tabularParentColumn(),
+    facts.attributeCase
+  )
   const update = base.filter(
     (c) =>
-      c.origin.standard !== "ref" &&
+      c !== key &&
       c.origin.scopeKindId === undefined &&
-      !(section && c.origin.standard === "parent") &&
+      !(section && c === parent) &&
       !usersFixed.has(c.origin.standard ?? "")
   )
   return { base, update }

@@ -2,6 +2,7 @@ import {
   authorColumns,
   quoteIdent,
   standardLogicalName,
+  userPlatformColumns,
   type AttributeCase,
   type DatabaseProvider,
   type Dml,
@@ -255,9 +256,6 @@ function actionChain(
 /** Колонка автора рядка — з реєстру, як і в тригера авторства. */
 const CREATED_BY = authorColumns().find((c) => c.logicalName === "createdBy")!
 
-/** Платформні поля «Користувачів», яких команда не змінює (Р2b1-9). */
-const USER_PLATFORM_FIELDS = ["invalid", "userKind"] as const
-
 /**
  * Незмінні колонки таблиці (Р2b1-9, Р2b1-20, Р2b1-24) — за будь-якої дії й
  * для будь-якого рядка: ключ таблиці — `ref` основної (змінений ключ — інша
@@ -280,9 +278,11 @@ function immutableColumns(
     // Автор рядка незмінний (Рт7, Р-A1-10): під командою його примушує
     // тригер авторства лише на вставці, а оновлення не переписує історії.
     standardLogicalName(CREATED_BY, attributeCase),
+    // Платформні поля «Користувачів», яких команда не змінює (Р2b1-9), — з
+    // реєстру, а не переліком імен.
     ...(users
-      ? USER_PLATFORM_FIELDS.map((logicalName) =>
-          standardLogicalName({ logicalName }, attributeCase)
+      ? userPlatformColumns().map((def) =>
+          standardLogicalName(def, attributeCase)
         )
       : []),
   ])
