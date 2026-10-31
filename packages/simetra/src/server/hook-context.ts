@@ -128,7 +128,20 @@ function contextOf(tx: Transaction, phase: HookPhase, scope: Scope) {
       // Після першої відмови — жодного звернення до порту.
       promise = Promise.reject(tx.terminal.failure)
     } else {
-      promise = work()
+      // Сирий виняток `work` (не відмова черги) інакше лишив би чергу
+      // відкритою, і команда закомітилась би без цієї дії: закриваємо її
+      // `command.internal` з журналом — страховка на будь-який виняток.
+      promise = work().catch((error: unknown) => {
+        if (tx.terminal === undefined) {
+          tx.state.log({ kind: "hook", error })
+          tx.close({
+            failure: new CommandFailure(INTERNAL),
+            retry: false,
+            destroy: false,
+          })
+        }
+        throw error
+      })
       scope.pending.add(promise)
     }
     // Відмову вже записано в `tx.terminal` чи в журнал; хук, що не чекав

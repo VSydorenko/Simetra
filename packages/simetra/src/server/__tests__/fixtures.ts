@@ -183,3 +183,17 @@ export const catalog: RuntimeCatalog = runtimeCatalogSchema.parse({
   provider: "supabase",
   objects: [client, rightsRole],
 })
+
+/** Довідник із поліморфною парою `subject`: читання за парою в `where`. */
+export const TASK = { kind: "Catalog" as const, name: "Task" }
+export const task = commandObject({
+  name: "Task",
+  table: "task",
+  scopeKindId: undefined,
+  scopeColumn: undefined,
+  attributes: [SUBJECT],
+})
+export const taskCatalog: RuntimeCatalog = runtimeCatalogSchema.parse({
+  ...catalog,
+  objects: [...catalog.objects, task],
+})

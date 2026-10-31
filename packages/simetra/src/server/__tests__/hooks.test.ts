@@ -1,9 +1,19 @@
 import type { HookContext, ObjectModule, Operation } from "simetra/model"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { CommandFailure } from "../errors"
+import { prepareRead } from "../read"
 import { createCommandRuntime, type CommandRuntime } from "../runtime"
 import { fakeDatabase, failureOf } from "./fake-database"
-import { COMPANY, ID, OTHER, catalog, commandObject, sample } from "./fixtures"
+import {
+  COMPANY,
+  ID,
+  OTHER,
+  TASK,
+  catalog,
+  commandObject,
+  sample,
+  taskCatalog,
+} from "./fixtures"
 import {
   CLIENT,
   COMMIT,
@@ -21,6 +31,12 @@ import {
   setup,
   type Override,
 } from "./harness"
+
+// Справжній `prepareRead`; кейс неочікуваного винятку підміняє один виклик.
+vi.mock("../read", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../read")>()
+  return { ...actual, prepareRead: vi.fn(actual.prepareRead) }
+})
 
 type Modules = Record<string, ObjectModule<object>>
 type Row = Record<string, unknown>
@@ -704,6 +720,55 @@ describe("depth and queue", () => {
       { release: false },
     ])
     expect(log).not.toHaveBeenCalled()
+  })
+})
+
+describe("a ctx call rejected without a failure", () => {
+  // Хук не чекає `ctx.read`: відхилений проміс без відмови в черзі інакше
+  // дав би COMMIT (Р-A3-15).
+  const readsSubject = (subject: unknown) =>
+    setup(rightsCore, {
+      catalog: taskCatalog,
+      objectModules: {
+        "Catalog.Client": {
+          beforeWrite({ ctx, draft }) {
+            void ctx.read({ object: TASK, where: { subject }, limit: 1 })
+            return draft
+          },
+        },
+      },
+    })
+
+  it("fails the command with a logged command.internal on an unexpected exception", async () => {
+    const boom = new Error("boom")
+    vi.mocked(prepareRead).mockImplementationOnce(() => {
+      throw boom
+    })
+    const { db, runtime, log } = await readsSubject(null)
+    expect(await failureOf(runtime.run(session, create))).toEqual({
+      code: "command.internal",
+    })
+    expect(db.calls).toEqual(CLOSED)
+    expect(db.calls).not.toContainEqual(COMMIT)
+    expect(log.mock.calls).toEqual([[{ kind: "hook", error: boom }]])
+  })
+
+  it("fails the command when a where value getter throws", async () => {
+    const subject = {
+      id: OTHER,
+      get type(): string {
+        throw new Error("trap")
+      },
+    }
+    const { db, runtime, log } = await readsSubject(subject)
+    expect(await failureOf(runtime.run(session, create))).toEqual({
+      code: "command.internal",
+    })
+    expect(db.calls).toEqual(CLOSED)
+    expect(db.calls).not.toContainEqual(COMMIT)
+    expect(log.mock.calls).toEqual([
+      [{ kind: "hook", error: expect.any(Error) }],
+    ])
   })
 })
 
