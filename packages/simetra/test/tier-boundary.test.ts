@@ -87,6 +87,9 @@ describe("tier zones", () => {
     for (let i = 0; i < TIERS.length; i++) {
       for (let j = 0; j < i; j++) {
         const file = `src/${TIERS[i]}/__fixture.ts`
+        // data і ui не імпортують server попри нижчий ярус (A3-10)
+        if (TIERS[j] === "server" && (TIERS[i] === "data" || TIERS[i] === "ui"))
+          continue
         expect(
           await restricted(importOf(`simetra/${TIERS[j]}`), file),
           `${TIERS[i]} -> simetra/${TIERS[j]}`
@@ -247,6 +250,40 @@ describe("tier zones", () => {
     ).toEqual([])
     expect(
       await ruleIds(importOf("pg-query-emscripten"), "src/schema/engine/x.ts")
+    ).toEqual([])
+  })
+
+  it("data and ui do not import server", async () => {
+    for (const tier of ["data", "ui"])
+      for (const spec of ["simetra/server", "../server/x", "../server"]) {
+        const msgs = await restricted(
+          importOf(spec),
+          `src/${tier}/__fixture.ts`
+        )
+        expect(msgs, `${tier}: ${spec}`).toHaveLength(1)
+        expect(msgs[0]).toContain("must not import simetra/server")
+      }
+  })
+
+  it("server imports only local files, model, zod and async_hooks", async () => {
+    const file = "src/server/__fixture.ts"
+    for (const spec of [
+      "simetra/compiler",
+      "simetra/schema",
+      "../compiler/x",
+      "../schema/x",
+      "../model/x",
+      "node:fs",
+      "pg",
+    ]) {
+      const msgs = await ruleIds(importOf(spec), file)
+      expect(msgs, spec).toContain("@typescript-eslint/no-restricted-imports")
+    }
+    for (const spec of ["./x", "node:async_hooks", "zod", "simetra/model"]) {
+      expect(await purity(importOf(spec), file), spec).toEqual([])
+    }
+    expect(
+      await purity(importOf("node:fs"), "src/server/__tests__/__fixture.ts")
     ).toEqual([])
   })
 
