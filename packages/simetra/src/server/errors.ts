@@ -8,7 +8,6 @@ import {
   type RuntimeObject,
 } from "simetra/model"
 import type { DatabaseError } from "./port"
-import { INTEGER_TEXT } from "./values"
 
 /**
  * The rejection of `run` and `read`: `message` is the error code, no
@@ -25,11 +24,10 @@ export class CommandFailure extends Error {
   }
 }
 
-type Phase = {
-  object: RuntimeObject
-  /** Читання — фаза без операції. */
-  operation?: ObjectOperation
-}
+/** The phase a database error came from; `undefined` — `COMMIT`. */
+export type ErrorPhase =
+  | { kind: "write"; object: RuntimeObject; operation: ObjectOperation }
+  | { kind: "read"; object: RuntimeObject }
 
 /** Значення причин запису T0: усе, крім `errcode` і `message`. */
 const valuesOf = (entry: Record<string, string>): readonly string[] =>
@@ -92,7 +90,7 @@ function tablesOf(object: RuntimeObject): Table[] {
  */
 function tableOf(
   catalog: RuntimeCatalog,
-  phase: Phase | undefined,
+  phase: ErrorPhase | undefined,
   name: string | undefined
 ): Table | undefined {
   if (name === undefined) return undefined
@@ -146,8 +144,10 @@ function attributesOf(table: Table, columns: readonly string[]): string[] {
   return [...new Set(names)]
 }
 
-const isSafeInteger = (text: string) =>
-  INTEGER_TEXT.test(text) && Number.isSafeInteger(Number(text))
+// Версія рядка — ціле від 1 без знака: інший `HINT` ядро не пише.
+const VERSION_TEXT = /^[1-9]\d*$/
+const isVersion = (text: string) =>
+  VERSION_TEXT.test(text) && Number.isSafeInteger(Number(text))
 
 /**
  * Maps a database error to the error the outside sees (P4 spec §6.10).
@@ -159,17 +159,19 @@ const isSafeInteger = (text: string) =>
 export function mapDatabaseError(
   error: DatabaseError,
   catalog: RuntimeCatalog,
-  phase: Phase | undefined
+  phase: ErrorPhase | undefined
 ): CommandError {
   if (error.connectionLost) return { code: "command.unavailable" }
   const { code, message, detail } = error
+  // Контекст — до `switch` за власною парою код + повідомлення: збіг його
+  // `errcode` з відмовою прав (`42501`) — факт T0, а не припущення гілки.
+  if (code === E.context.errcode && message === E.context.message) {
+    return detail !== undefined && CONTEXT_DETAILS.includes(detail)
+      ? { code: "command.context", detail }
+      : INTERNAL
+  }
   switch (code) {
     case E.forbidden.errcode:
-      if (message === E.context.message) {
-        return detail !== undefined && CONTEXT_DETAILS.includes(detail)
-          ? { code: "command.context", detail }
-          : INTERNAL
-      }
       if (message === E.forbidden.message) {
         return detail !== undefined && FORBIDDEN_REASONS.includes(detail)
           ? { code: "command.forbidden", reason: detail }
@@ -184,7 +186,7 @@ export function mapDatabaseError(
       if (error.hint === undefined) {
         return { code: "command.conflict", reason: detail }
       }
-      return isSafeInteger(error.hint)
+      return isVersion(error.hint)
         ? {
             code: "command.conflict",
             reason: detail,
@@ -201,9 +203,7 @@ export function mapDatabaseError(
     case "22P02":
       // Читання передає значення `where` зв'язаними параметрами з приведенням:
       // невірний текст типу — вхід клієнта. У записі значення вже перевірене.
-      return phase !== undefined && phase.operation === undefined
-        ? { code: "command.invalid" }
-        : INTERNAL
+      return phase?.kind === "read" ? { code: "command.invalid" } : INTERNAL
     case "23503": {
       // Postgres не заповнює `column` для FK — реквізит за ім'ям обмеження (Р-A3-13).
       const table = tableOf(catalog, phase, error.table)
@@ -253,7 +253,7 @@ export function mapDatabaseError(
  */
 function rlsOf(
   catalog: RuntimeCatalog,
-  phase: Phase | undefined,
+  phase: ErrorPhase | undefined,
   tableName: string | undefined
 ): CommandError {
   const object = phase?.object ?? tableOf(catalog, undefined, tableName)?.object
@@ -263,6 +263,6 @@ function rlsOf(
     ...(object === undefined
       ? {}
       : { object: { kind: object.kind, name: object.name } }),
-    ...(phase?.operation === undefined ? {} : { operation: phase.operation }),
+    ...(phase?.kind === "write" ? { operation: phase.operation } : {}),
   }
 }

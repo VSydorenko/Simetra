@@ -1,10 +1,16 @@
 import {
   isTextEncodedType,
+  type BaseCastType,
   type CommandError,
   type ReadQuery,
   type RuntimeObject,
 } from "simetra/model"
 import { encodePair, encodeParam } from "./values"
+
+// Колонка мітки пари й ключ таблиці в каталозі без `castType`: їхній тип
+// задає платформа (мітка — текст, ключ — UUID).
+const LABEL_CAST: BaseCastType = "text"
+const KEY_CAST: BaseCastType = "uuid"
 
 const ident = (name: string) => `"${name.replaceAll('"', '""')}"`
 const literal = (text: string) => `'${text.replaceAll("'", "''")}'`
@@ -48,7 +54,7 @@ export function buildReadStatement(
   const conditions: string[] = []
   let limit: number
   if ("id" in query) {
-    conditions.push(`${key} = ${bind(query.id, "uuid")}`)
+    conditions.push(`${key} = ${bind(query.id, KEY_CAST)}`)
     limit = 1
   } else {
     // Порядок входу: перша помилка — перший невірний ключ `where`.
@@ -61,7 +67,7 @@ export function buildReadStatement(
         const pair = encodePair(attribute, value, name)
         if ("error" in pair) return pair
         conditions.push(
-          equals(attribute.pair.typeColumn, pair.value.label, "text"),
+          equals(attribute.pair.typeColumn, pair.value.label, LABEL_CAST),
           equals(attribute.column, pair.value.id, attribute.castType)
         )
         continue
@@ -73,7 +79,7 @@ export function buildReadStatement(
       )
     }
     if (query.after !== undefined) {
-      conditions.push(`${key} > ${bind(query.after, "uuid")}`)
+      conditions.push(`${key} > ${bind(query.after, KEY_CAST)}`)
     }
     limit = query.limit
   }

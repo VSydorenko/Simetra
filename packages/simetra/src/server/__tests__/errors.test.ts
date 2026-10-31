@@ -36,17 +36,23 @@ const object: RuntimeObject = runtimeObjectSchema.parse({
   })),
 })
 
-// Друга таблиця з тим самим ім'ям в іншій схемі: `TABLE` помилки — без схеми.
+// Друга ТЧ дзеркала має ім'я основної таблиці `sample` в іншій схемі:
+// `TABLE` помилки — без схеми, тож `sample` у каталозі неоднозначна.
 const mirror: RuntimeObject = runtimeObjectSchema.parse({
   ...sample,
   id: "00000000-0000-4000-8000-000000000002",
   name: "Mirror",
   kindLabel: "mirror",
-  table: { schema: "audit", name: "sample" },
+  table: { schema: "audit", name: "mirror" },
   tabularSections: [
     {
       ...sample.tabularSections[0],
       table: { schema: "audit", name: "mirror_lines" },
+    },
+    {
+      ...sample.tabularSections[0],
+      name: "copies",
+      table: { schema: "audit", name: "sample" },
     },
   ],
 })
@@ -58,7 +64,7 @@ const catalog: RuntimeCatalog = {
   objects: [object, mirror],
 }
 
-const phase = { object, operation: "update" as const }
+const phase = { kind: "write" as const, object, operation: "update" as const }
 const ref = { kind: "Catalog" as const, name: "Sample" }
 
 const db = (fields: Partial<DatabaseError>): DatabaseError => ({
@@ -121,9 +127,32 @@ describe("mapDatabaseError", () => {
     })
   })
 
+  it.each(["phase", "no-right"])(
+    "42501 with a foreign message and DETAIL %s is an RLS refusal",
+    (detail) => {
+      expect(map({ code: "42501", message: "app.error", detail })).toEqual({
+        code: "command.forbidden",
+        reason: "rls",
+        object: ref,
+        operation: "update",
+      })
+    }
+  )
+
+  it("an RLS refusal in a read names the object without an operation", () => {
+    expect(
+      mapDatabaseError(db({ code: "42501" }), catalog, { kind: "read", object })
+    ).toEqual({ code: "command.forbidden", reason: "rls", object: ref })
+  })
+
   it.each([
-    ["a main table", "sample_lines", { kind: "Catalog", name: "Sample" }],
-    ["a section table", "mirror_lines", { kind: "Catalog", name: "Mirror" }],
+    ["a main table", "mirror", { kind: "Catalog", name: "Mirror" }],
+    ["a section table", "sample_lines", { kind: "Catalog", name: "Sample" }],
+    [
+      "another section table",
+      "mirror_lines",
+      { kind: "Catalog", name: "Mirror" },
+    ],
   ])(
     "an RLS refusal on COMMIT names the object of %s",
     (_, table, expected) => {
@@ -181,6 +210,37 @@ describe("mapDatabaseError", () => {
       },
     ],
     ["invalid", { code: "22023", message: "command.invalid" }],
+    // Той самий код і `DETAIL` з переліку, але повідомлення не ядра: так може
+    // кинути SQL-обробник застосунку.
+    ["conflict", { code: "P0001", message: "app.error", detail: "version" }],
+    ["invalid", { code: "22023", message: "app.error", detail: "code_col" }],
+    [
+      "conflict",
+      {
+        code: "P0001",
+        message: "command.conflict",
+        detail: "version",
+        hint: "-5",
+      },
+    ],
+    [
+      "conflict",
+      {
+        code: "P0001",
+        message: "command.conflict",
+        detail: "version",
+        hint: "+7",
+      },
+    ],
+    [
+      "conflict",
+      {
+        code: "P0001",
+        message: "command.conflict",
+        detail: "version",
+        hint: "0",
+      },
+    ],
   ])(
     "command.%s outside the allowed T0 values is command.internal",
     (_, fields) => {
@@ -296,7 +356,7 @@ describe("mapDatabaseError", () => {
 
   it("22P02 in a read is command.invalid", () => {
     expect(
-      mapDatabaseError(db({ code: "22P02" }), catalog, { object })
+      mapDatabaseError(db({ code: "22P02" }), catalog, { kind: "read", object })
     ).toEqual({
       code: "command.invalid",
     })
