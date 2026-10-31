@@ -375,7 +375,7 @@ A2 в одній транзакції з claims, роллю, контексто�
 - [x] **Крок 1:** негативні тести: `src/data` і `src/ui` → `simetra/server` і `../server/x` — відмова; `src/server` → `simetra/compiler`, `simetra/schema`, `../compiler/x`, `../schema/x`, `../model/x`, `node:fs`, `pg` — відмова; `./x`, `node:async_hooks`, `zod`, `simetra/model` — дозволено. Тест «allows lower tiers» виключає лише пари `data|ui → server` (обмеження `src/server` — у правилі `@typescript-eslint/…`, яке `restricted()` не читає).
 - [x] **Крок 2:** `server-sources.test.ts`: рядкові літерали коду `src/server` поза `__tests__` не дорівнюють жодному значенню `PROVIDER_API_ROLES`, `PROVIDER_LOGIN_ROLES` і `DATABASE_PROVIDERS` (перелік виводиться з T0); код без коментарів не містить `process.env` (інваріанти 14, 15).
 - [x] **Крок 3:** пакування: `./server` у переліку `exports`, `dist/server/index.js` і `.d.ts` у tarball, регекс самодостатності з `server`, `import("simetra/server")` у скрипті Node.
-- [ ] **Крок 4:** FAIL → реалізувати → `pnpm --filter simetra test tier-boundary server-sources`, `lint`; `pnpm build:packages && pnpm test:packaging` — PASS. (Scoped тести й `lint` — зелені; `build:package` simetra — зібрано; `test:packaging` — у прогоні повних гейтів за дозволом архітекторки.)
+- [x] **Крок 4:** FAIL → реалізувати → `pnpm --filter simetra test tier-boundary server-sources`, `lint`; `pnpm build:packages && pnpm test:packaging` — PASS.
 - [x] **Крок 5: коміт** — `build(simetra): зона й публікація simetra/server`.
 
 ### Задача 12: DB-тести рантайму
@@ -413,7 +413,7 @@ A2 в одній транзакції з claims, роллю, контексто�
 
 - [x] **Крок 1:** рев'ю гілки за скілом `code-review` (лінзи correctness, test-honesty, drift, architecture), кожна знахідка — через `code-review-verifier`.
 - [x] **Крок 2:** контрольна точка архітекторці: SHA, журнал мутацій, час DB-прогонів.
-- [ ] **Крок 3:** після «можна»: `pnpm format:check && pnpm lint && pnpm typecheck && pnpm test`, `pnpm metadata:check`, `python3 scripts/check-doc-anchors.py`, `pnpm test:db`, `pnpm build:packages && pnpm test:packaging` — на одному SHA.
+- [x] **Крок 3:** після «можна»: `pnpm format:check && pnpm lint && pnpm typecheck && pnpm test`, `pnpm metadata:check`, `python3 scripts/check-doc-anchors.py`, `pnpm test:db`, `pnpm build:packages && pnpm test:packaging` — на одному SHA.
 
 ## Журнал мутацій
 
@@ -637,6 +637,9 @@ A2 в одній транзакції з claims, роллю, контексто�
 | Після контрольної точки | `textColumns` лише `version` | core-text-columns |
 | Після контрольної точки | CHECK знову з `columns: []` | runtime-catalog, errors.test; DB command-runtime (`nonNegative`, `-1`) |
 | Після контрольної точки | мапа CHECK у знімку / ім'я перераховане / лише з `elementId` | runtime-catalog (хеш, обрізання імені, покриття) |
+| Після контрольної точки | `./server` прибрано з `publishConfig.exports` | packaging: exposes only the built tiers; imports every tier in plain Node |
+| Аудит Codex | прибрано страховку відхиленого виклику `ctx` у `track` | hooks: a ctx call rejected without a failure (мок `prepareRead`; геттер у парі) |
+| Аудит Codex | прибрано `catch` в `encodePair` | hooks (геттер у парі); read-runtime: пара з геттером, відкликаний Proxy як пара |
 
 Не червоніють (з поясненням):
 
@@ -645,4 +648,3 @@ A2 в одній транзакції з claims, роллю, контексто�
 - T8 M5b (копія входу на кожну спробу прибрана): не червоніє в T8, бо вхід змінюють лише хуки, яких ще не було; ловить тест T9 (M8).
 - T9 M6c (`if (tx.terminal) throw` після хука): у початковому раунді зелено, бо закрита черга однаково відхиляє наступне; перевірку лишено як захист і закрито тестами у fix-раунді (F2).
 - T9 M14b (прибрати `outsideCommand` разом з M14a): тест `afterCommit` зелений, бо ланцюжок `afterCommit` стартує вже без `Frame`; захист за Р-A3-11 не спостерігається тестом.
-- T11 (прибрати `./server` з `publishConfig.exports`): не запускалась; за звітом її мали б зловити "exposes only the built tiers" і "imports every tier in plain Node".
