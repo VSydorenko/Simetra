@@ -166,6 +166,9 @@ describe("encodeParam", () => {
     expect(encodeParam(attributeOf("amount"), 1.5, "amount")).toEqual(
       invalid("amount")
     )
+    expect(encodeParam(attributeOf("note"), "a\u0000b", "note")).toEqual(
+      invalid("note")
+    )
   })
 })
 
@@ -211,6 +214,17 @@ describe("rejects lossy and invalid values", () => {
     ["blob", "\\xf"],
     ["note", 1],
     ["mood", 1],
+    // `\u0000` і непарний сурогат: `text` і `jsonb` їх не зберігають.
+    ["code", "a\u0000"],
+    ["note", "a\u0000b"],
+    ["note", "\uD800"],
+    ["note", "x\uDC00"],
+    ["owner", "\u0000"],
+    ["blob", "\\x00\u0000"],
+    ["mood", "\uDBFF"],
+    ["payload", "a\u0000"],
+    ["payload", { a: ["\uD83D"] }],
+    ["payload", { "k\u0000": 1 }],
     // Невідоме значення перерахування.
     ["status", "open"],
     ["status", "Pending"],
@@ -381,10 +395,99 @@ describe("encodeItem", () => {
     expect(encodeItem(sample, op, draft as never)).toEqual(invalid(path))
   })
 
-  it("reports the first error in catalog order", () => {
+  it("accepts a valid surrogate pair", () => {
     expect(
-      encodeItem(sample, create(), { values: { count: 1.5, code: "abcd" } })
-    ).toEqual(invalid("code"))
+      encodeItem(sample, create(), { values: { note: "😀", payload: ["😀"] } })
+    ).toEqual({ item: { id: ID, note_col: "😀", payload_col: ["😀"] } })
+  })
+
+  // Р-A3-8: реквізити каталогу — за його порядком, і поза грантом, і з
+  // невірним значенням; невідомі ключі — після них, за порядком входу.
+  it.each([
+    ["two invalid values", create(), { count: 1.5, code: "abcd" }, "code"],
+    [
+      "outside the grant after a value",
+      update(),
+      { frozen: "x", code: "abcd" },
+      "code",
+    ],
+    [
+      "a value after outside the grant",
+      update(),
+      { count: 1.5, frozen: "x" },
+      "count",
+    ],
+    [
+      "an unknown key last",
+      update(),
+      { nope: 1, zzz: 2, frozen: "x" },
+      "frozen",
+    ],
+    ["unknown keys in input order", update(), { nope: 1, zzz: 2 }, "nope"],
+  ])(
+    "reports the first error in catalog order: %s",
+    (_, op, draftValues, path) => {
+      expect(encodeItem(sample, op, { values: draftValues })).toEqual(
+        invalid(path)
+      )
+    }
+  )
+
+  describe("a draft that cannot be read", () => {
+    const revoked = () => {
+      const proxy = Proxy.revocable({}, {})
+      proxy.revoke()
+      return proxy.proxy
+    }
+    const throwing = (key: string, rest: Record<string, unknown> = {}) =>
+      Object.defineProperty({ ...rest }, key, {
+        enumerable: true,
+        get() {
+          throw new Error("getter")
+        },
+      })
+    it.each([
+      ["values", () => ({ values: revoked() }), "values"],
+      ["a values getter", () => throwing("values"), "values"],
+      ["a value getter", () => ({ values: throwing("code") }), "code"],
+      [
+        "tabularSections",
+        () => ({ tabularSections: revoked() }),
+        "tabularSections",
+      ],
+      [
+        "a tabularSections getter",
+        () => throwing("tabularSections"),
+        "tabularSections",
+      ],
+      [
+        "section rows",
+        () => ({ tabularSections: { lines: revoked() } }),
+        "lines",
+      ],
+      [
+        "a rows getter",
+        () => ({ tabularSections: throwing("lines") }),
+        "lines",
+      ],
+      ["a row", () => ({ tabularSections: { lines: [revoked()] } }), "lines.0"],
+      [
+        "a row key getter",
+        () => ({ tabularSections: { lines: [throwing("ref")] } }),
+        "lines.0.ref",
+      ],
+      [
+        "a row value getter",
+        () => ({
+          tabularSections: { lines: [throwing("qty", { ref: OTHER })] },
+        }),
+        "lines.0.qty",
+      ],
+    ])("%s", (_, draft, path) => {
+      expect(encodeItem(sample, create(), draft() as never)).toEqual(
+        invalid(path)
+      )
+    })
   })
 })
 

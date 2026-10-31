@@ -27,6 +27,12 @@ const invalid = (path: string): { error: CommandError } => ({
 // Рядок, який дає `bytea_output = hex`: кодоген теж читає `Bytes` рядком.
 const BYTES_TEXT = /^\\x(?:[0-9a-fA-F]{2})*$/
 export const INTEGER_TEXT = /^[+-]?\d+$/
+// `\u0000` і непарний сурогат: `text` і `jsonb` їх не зберігають, і база
+// відмовила б сирою помилкою вже в транзакції.
+const LONE_SURROGATE =
+  /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/
+const storable = (text: string) =>
+  !text.includes("\u0000") && !LONE_SURROGATE.test(text)
 
 export function isPlainObject(
   value: unknown
@@ -42,8 +48,8 @@ export function isPlainObject(
  * `JSON.stringify` мовчки змінив би їх (`{}`, рядок, пропуск), а не відмовив.
  */
 function pureJson(value: unknown, ancestors: Set<object>): unknown {
-  if (value === null || typeof value === "string") return value
-  if (typeof value === "boolean") return value
+  if (value === null || typeof value === "boolean") return value
+  if (typeof value === "string") return storable(value) ? value : undefined
   if (typeof value === "number") {
     return Number.isFinite(value) ? value : undefined
   }
@@ -65,6 +71,7 @@ function pureJson(value: unknown, ancestors: Set<object>): unknown {
     }
     const copy: Record<string, unknown> = {}
     for (const [key, item] of Object.entries(value)) {
+      if (!storable(key)) return undefined
       const element = pureJson(item, ancestors)
       if (element === undefined) return undefined
       // `defineProperty`: ключ `__proto__` з входу лишається даними.
@@ -84,6 +91,7 @@ function pureJson(value: unknown, ancestors: Set<object>): unknown {
 /** Скаляр у форму `p_item`; `undefined` — значення не цього типу. */
 function scalar(attribute: RuntimeAttribute, value: unknown): unknown {
   if (value === null) return null
+  if (typeof value === "string" && !storable(value)) return undefined
   switch (attribute.type) {
     case "Integer":
     case "SmallInt":
@@ -243,112 +251,146 @@ export function encodeParam(
   return { value: encoded.value === null ? null : String(encoded.value) }
 }
 
+/** Відмова входу на шляху; ловить її лише `encodeItem`. */
+class InvalidInput {
+  constructor(readonly path: string) {}
+}
+
+/**
+ * Читання чернетки: геттер, що кидає, чи відкликаний `Proxy` — помилка
+ * входу на цьому шляху, а не сирий виняток (чернетку міг повернути хук).
+ */
+function at<T>(path: string, read: () => T): T {
+  try {
+    return read()
+  } catch {
+    throw new InvalidInput(path)
+  }
+}
+
+/** Власні ключі простого об'єкта; інакше — відмова на `path`. */
+function keysOf(path: string, value: unknown): string[] {
+  const keys = at(path, () =>
+    isPlainObject(value) ? Object.keys(value) : undefined
+  )
+  if (keys === undefined) throw new InvalidInput(path)
+  return keys
+}
+
 /**
  * The `p_item` of a save: the table key from `op.id`, physical columns,
- * `tabular` by section table. Помилки: ключі поза каталогом — у порядку
- * входу, далі реквізити в порядку каталогу (Р-A3-8).
+ * `tabular` by section table. Перша помилка (Р-A3-8): реквізити — за
+ * порядком каталогу, і поза грантом, і з невірним значенням; невідомі
+ * ключі — після них, за порядком входу.
  */
 export function encodeItem(
   object: RuntimeObject,
   op: Operation,
   draft: Draft<object>
 ): { item: Record<string, unknown> } | { error: CommandError } {
+  try {
+    return { item: itemOf(object, op, draft) }
+  } catch (error) {
+    if (error instanceof InvalidInput) return invalid(error.path)
+    throw error
+  }
+}
+
+function itemOf(
+  object: RuntimeObject,
+  op: Operation,
+  draft: Draft<object>
+): Record<string, unknown> {
   const item: Record<string, unknown> = { [object.key]: op.id }
   // `create` пише ключі гранту вставки, решта — ключі гранту оновлення.
   const allowed = (a: RuntimeAttribute) =>
     op.action === "create" ? a.insert : a.update
-  const header = writeAttributes(
-    object.attributes,
-    draft.values,
-    allowed,
-    object.keyName,
-    "values",
-    "",
-    item
-  )
-  if (header !== undefined) return header
-  if (draft.tabularSections === undefined) return { item }
-  if (!isPlainObject(draft.tabularSections)) return invalid("tabularSections")
-  const sections = draft.tabularSections
-  const unknownSection = Object.keys(sections).find(
+  const values = at("values", () => draft.values)
+  if (values !== undefined) {
+    writeAttributes(object.attributes, values, allowed, "values", "", item)
+  }
+  const sections = at("tabularSections", () => draft.tabularSections)
+  if (sections === undefined) return item
+  const names = keysOf("tabularSections", sections)
+  const unknownSection = names.find(
     (name) => !object.tabularSections.some((s) => s.name === name)
   )
-  if (unknownSection !== undefined) return invalid(unknownSection)
+  if (unknownSection !== undefined) throw new InvalidInput(unknownSection)
   const tabular: Record<string, unknown> = {}
   for (const section of object.tabularSections) {
-    if (!Object.hasOwn(sections, section.name)) continue
-    const rows = encodeRows(section, sections[section.name])
-    if ("error" in rows) return rows
-    tabular[section.table.name] = rows.rows
+    if (!names.includes(section.name)) continue
+    const rows = at(section.name, () => sections[section.name])
+    tabular[section.table.name] = encodeRows(section, rows)
   }
   item.tabular = tabular
-  return { item }
+  return item
 }
 
 function encodeRows(
   section: RuntimeSection,
   rows: unknown
-): { rows: Record<string, unknown>[] } | { error: CommandError } {
-  if (!Array.isArray(rows)) return invalid(section.name)
+): Record<string, unknown>[] {
+  const length = at(section.name, () =>
+    Array.isArray(rows) ? rows.length : undefined
+  )
+  if (length === undefined) throw new InvalidInput(section.name)
   const encoded: Record<string, unknown>[] = []
-  for (let i = 0; i < rows.length; i++) {
+  for (let i = 0; i < length; i++) {
     const path = `${section.name}.${i}`
-    const row: unknown = rows[i]
-    if (!isPlainObject(row)) return invalid(path)
-    const key = row[section.keyName]
+    const row: unknown = at(path, () => (rows as unknown[])[i])
+    keysOf(path, row)
+    const keyPath = `${path}.${section.keyName}`
+    const key = at(
+      keyPath,
+      () => (row as Record<string, unknown>)[section.keyName]
+    )
     if (typeof key !== "string" || !UUID_TEXT.test(key)) {
-      return invalid(`${path}.${section.keyName}`)
+      throw new InvalidInput(keyPath)
     }
     const out: Record<string, unknown> = { [section.key]: key }
     // Ядро звіряє рядок ТЧ з ключами вставки на будь-якій операції (`rowKeys`):
     // рядок ТЧ записується заново цілком.
-    const error = writeAttributes(
+    writeAttributes(
       section.attributes,
       row,
       (a) => a.insert,
-      section.keyName,
       path,
       `${path}.`,
       out,
-      true
+      section.keyName
     )
-    if (error !== undefined) return error
     encoded.push(out)
   }
-  return { rows: encoded }
+  return encoded
 }
 
-/** Пише значення за каталогом у `out`; повертає першу помилку. */
+/** Пише значення за каталогом у `out`; перша помилка — `InvalidInput`. */
 function writeAttributes(
   attributes: readonly RuntimeAttribute[],
   values: unknown,
   allowed: (a: RuntimeAttribute) => boolean,
-  keyName: string,
   containerPath: string,
   prefix: string,
   out: Record<string, unknown>,
-  keyIncluded = false
-): { error: CommandError } | undefined {
-  if (values === undefined) return undefined
-  if (!isPlainObject(values)) return invalid(containerPath)
-  const writable = new Map(
-    attributes.filter(allowed).map((a) => [a.name, a] as const)
-  )
-  const outside = Object.keys(values).find(
-    (name) => !(keyIncluded && name === keyName) && !writable.has(name)
-  )
-  if (outside !== undefined) return invalid(`${prefix}${outside}`)
+  rowKey?: string
+): void {
+  const keys = new Set(keysOf(containerPath, values))
+  if (rowKey !== undefined) keys.delete(rowKey)
+  const source = values as Record<string, unknown>
   for (const attribute of attributes) {
-    if (!writable.has(attribute.name) || !Object.hasOwn(values, attribute.name))
-      continue
+    if (!keys.delete(attribute.name)) continue
     const path = `${prefix}${attribute.name}`
-    const encoded = encodeItemValue(attribute, values[attribute.name], path)
-    if ("error" in encoded) return encoded
+    if (!allowed(attribute)) throw new InvalidInput(path)
+    const value = at(path, () => source[attribute.name])
+    const encoded = encodeItemValue(attribute, value, path)
+    if ("error" in encoded) throw new InvalidInput(encoded.error.path ?? path)
     if (attribute.pair !== undefined) {
       Object.assign(out, encoded.value)
     } else {
       out[attribute.column] = encoded.value
     }
   }
-  return undefined
+  // Лишилися ключі поза каталогом (і ключ таблиці шапки) — за порядком входу.
+  const [unknown] = keys
+  if (unknown !== undefined) throw new InvalidInput(`${prefix}${unknown}`)
 }

@@ -31,15 +31,32 @@ describe("fromPgPool", () => {
     await client.query("BEGIN")
     client.release()
     client.release(true)
+    const types = expect.objectContaining({
+      getTypeParser: expect.any(Function),
+    })
     expect(calls).toEqual([
       "connect",
-      { query: { text: "SELECT $1::text AS r", values: ["a"] } },
-      { query: { text: "BEGIN", values: [] } },
+      { query: { text: "SELECT $1::text AS r", values: ["a"], types } },
+      { query: { text: "BEGIN", values: [], types } },
       { release: undefined },
       { release: true },
     ])
   })
+
+  // Парсери типів host-а не діють: рантайм читає текст Postgres, як є.
+  it("reads every column as Postgres text", async () => {
+    const { pool, calls } = fakePool()
+    await (await fromPgPool(pool).connect()).query("SELECT 1")
+    const { types } = (calls[1] as { query: { types: RawTypes } }).query
+    for (const oid of [16, 20, 25, 1700, 3802]) {
+      expect(types.getTypeParser(oid, "text")("t")).toBe("t")
+    }
+  })
 })
+
+type RawTypes = {
+  getTypeParser: (oid: number, format: string) => (value: string) => unknown
+}
 
 describe("normalizeError", () => {
   it.each([
@@ -88,6 +105,32 @@ describe("normalizeError", () => {
       table: "ticket",
       column: "code",
       connectionLost: false,
+    })
+  })
+
+  it("never throws, whatever was thrown", () => {
+    const revoked = Proxy.revocable({}, {})
+    revoked.revoke()
+    const throwing = Object.defineProperty({}, "code", {
+      get() {
+        throw new Error("getter")
+      },
+    })
+    expect(normalizeError(Object.create(null))).toEqual({
+      message: "unknown error",
+      connectionLost: true,
+    })
+    expect(normalizeError(revoked.proxy)).toEqual({
+      message: "unknown error",
+      connectionLost: true,
+    })
+    expect(normalizeError(throwing)).toEqual({
+      message: "[object Object]",
+      connectionLost: true,
+    })
+    expect(normalizeError(undefined)).toEqual({
+      message: "undefined",
+      connectionLost: true,
     })
   })
 

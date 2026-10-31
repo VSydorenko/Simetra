@@ -3,6 +3,7 @@
  * statements (P4 spec Рт19).
  */
 export interface DatabaseClient {
+  /** Column values are the Postgres text form (or `null`), whatever the pool parses. */
   query(
     text: string,
     params?: readonly (string | null)[]
@@ -26,9 +27,19 @@ export interface PgPoolLike {
     query(config: {
       text: string
       values: readonly (string | null)[]
+      types: typeof RAW_TYPES
     }): Promise<{ rows: Record<string, unknown>[]; command: string }>
     release(destroy?: boolean): void
   }>
+}
+
+/**
+ * Парсери типів на рівні запиту: текст Postgres без перетворень. Інакше
+ * парсери, які host поставив на пул (`types` у `pg.Pool`), змінили б рядок
+ * ядра ще до `decodeRow` — і значення залежали б від налаштувань host-а.
+ */
+const RAW_TYPES = {
+  getTypeParser: () => (value: string) => value,
 }
 
 /** Adapts a `pg` pool to the runtime port. */
@@ -43,6 +54,7 @@ export function fromPgPool(pool: PgPoolLike): CommandDatabase {
           const { rows, command } = await client.query({
             text,
             values: params ?? [],
+            types: RAW_TYPES,
           })
           return { rows, command }
         },
@@ -77,12 +89,19 @@ const ADMIN_SHUTDOWN = new Set(["57P01", "57P02", "57P03"])
  * збій драйвера до відповіді бази: з'єднанню вже не можна вірити.
  */
 export function normalizeError(error: unknown): DatabaseError {
-  const source: Record<string, unknown> =
-    typeof error === "object" && error !== null
-      ? (error as Record<string, unknown>)
-      : {}
-  const text = (key: string) =>
-    typeof source[key] === "string" ? (source[key] as string) : undefined
+  // Читання полів не має кидати: кинути можна будь-що, зокрема відкликаний
+  // `Proxy` чи об'єкт з геттером, що кидає.
+  const text = (key: string): string | undefined => {
+    try {
+      const value: unknown =
+        typeof error === "object" && error !== null
+          ? (error as Record<string, unknown>)[key]
+          : undefined
+      return typeof value === "string" ? value : undefined
+    } catch {
+      return undefined
+    }
+  }
   const raw = text("code")
   const code = raw !== undefined && SQLSTATE.test(raw) ? raw : undefined
   const fields = {
@@ -94,11 +113,20 @@ export function normalizeError(error: unknown): DatabaseError {
   }
   return {
     ...(code === undefined ? {} : { code }),
-    message: text("message") ?? String(error),
+    message: text("message") ?? describe(error),
     ...Object.fromEntries(
       Object.entries(fields).filter(([, value]) => value !== undefined)
     ),
     connectionLost:
       code === undefined || code.startsWith("08") || ADMIN_SHUTDOWN.has(code),
+  }
+}
+
+/** `String()` кидає на об'єкті без прототипу й на відкликаному `Proxy`. */
+function describe(error: unknown): string {
+  try {
+    return String(error)
+  } catch {
+    return "unknown error"
   }
 }
