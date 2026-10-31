@@ -2,7 +2,7 @@ import { afterAll, describe, expect, it } from "vitest"
 import pg from "pg"
 import { ID, sample } from "../../src/server/__tests__/fixtures"
 import { fromPgPool, normalizeError } from "../../src/server/port"
-import { decodeRow } from "../../src/server/values"
+import { decodeRow } from "../../src/server/decode"
 import { testDatabaseUrl } from "./connection"
 
 /**
