@@ -213,6 +213,14 @@ describe("applyStateOf", () => {
     ).toBe("absent")
   })
 
+  it("does not need the schema to be absent when the platform layer owns it", async () => {
+    // З шаром схема — його одиниця: стан відсутній, щойно немає таблиць і
+    // функції, хоч би схема й існувала
+    const m = await withUsers()
+    expect(applyStateOf(target([]), plan([FN]), m).state).toBe("absent")
+    expect(applyStateOf(target([FN]), plan([]), m).state).toBe("present")
+  })
+
   it("owns the function, its ACL and its grant units, not other platform functions", async () => {
     for (const m of [await withoutUsers(), await withUsers()]) {
       const state = applyStateOf(target([FN]), plan([]), m)

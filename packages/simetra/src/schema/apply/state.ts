@@ -1,5 +1,6 @@
 import {
   executeGrants,
+  platformFunctionSignatures,
   platformSchemaGrants,
   type CompiledModel,
   type PromotionRecord,
@@ -34,6 +35,21 @@ const MARKER = `${SCHEMA}.${quoteIdent("marker")}`
 const LEDGER = `${SCHEMA}.${quoteIdent("ledger")}`
 const SNAPSHOT_HASH_FUNCTION = `${PLATFORM_SCHEMA}.${APPLIED_SNAPSHOT_HASH_FUNCTION_NAME}()`
 const SNAPSHOT_HASH_SIGNATURE = `${SCHEMA}.${quoteIdent(APPLIED_SNAPSHOT_HASH_FUNCTION_NAME)}()`
+
+/**
+ * Функції платформи плану (`platformFunctions` артефакту): функції шару з
+ * фіксованим тілом і функція стану застосування. Її тіло теж фіксоване, а
+ * `EXECUTE` має лише роль команд, тож роль застосування, що не власник
+ * стану, інакше отримувала б `apply.function-check-blind` на кожному плані.
+ */
+export function planPlatformFunctions(
+  model: Pick<CompiledModel, "sqlUnits">
+): string[] {
+  return [
+    ...platformFunctionSignatures(model.sqlUnits),
+    SNAPSHOT_HASH_FUNCTION,
+  ].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
+}
 
 /**
  * DDL стану застосування (платформна спека §6.1, спека користувачів §3):

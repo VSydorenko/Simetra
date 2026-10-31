@@ -5,6 +5,7 @@ import {
   type CompiledModel,
   effectsFunctionName,
   effectsTriggerNames,
+  platformFunctionSignatures,
   type PromotionRecord,
 } from "simetra/compiler"
 import { PLATFORM_ROLES, type CatalogModel } from "simetra/model"
@@ -13,6 +14,7 @@ import {
   FINGERPRINT_SECTIONS,
   buildPlan,
   desiredForApply,
+  planPlatformFunctions,
   type ApplyDatabase,
   type ApplyTransaction,
   type EngineAction,
@@ -48,6 +50,30 @@ import { applyDiagnostic } from "../diagnostic"
  * Конвеєр плану на фейковому порті — лише те, що не потребує справжньої
  * бази; решта — у `build-plan.db.test.ts` designer.
  */
+describe("planPlatformFunctions", () => {
+  // Функцію стану застосування рендерить T2 з фіксованим тілом, тож для
+  // перевірки функцій вона платформна, як і функції шару: інакше роль
+  // застосування без `EXECUTE` на неї бачила б «сліпу» функцію на кожному плані
+  it("adds the apply state function to the platform functions of the model", async () => {
+    const m = (
+      await compile(
+        metaFiles({
+          "project.meta.json": project(),
+          "catalogs/Users/Users.meta.json": catalog("Users", {
+            role: "users",
+            scope: "none",
+          }),
+        })
+      )
+    ).model!
+    const layer = platformFunctionSignatures(m.sqlUnits)
+    expect(layer.length).toBeGreaterThan(0)
+    expect(planPlatformFunctions(m)).toEqual(
+      [...layer, "simetra.applied_snapshot_hash()"].sort()
+    )
+  })
+})
+
 describe("buildPlan", () => {
   // Без функції носіїв на цілі (база до цього запобіжника) «до» невідоме:
   // план не вигадує втрати, а йде далі — запобіжник на COMMIT стане першим
