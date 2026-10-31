@@ -488,6 +488,47 @@ describe("encodeItem", () => {
         invalid(path)
       )
     })
+
+    // Виняток усередині значення — помилка входу на шляху реквізиту.
+    it.each([
+      [
+        "a Json getter",
+        () => ({ values: { payload: throwing("a") } }),
+        "payload",
+      ],
+      [
+        "a nested revoked Proxy in Json",
+        () => ({ values: { payload: { a: [revoked()] } } }),
+        "payload",
+      ],
+      [
+        "an array element getter",
+        () => ({
+          values: {
+            tags: Object.defineProperty([1], 1, {
+              enumerable: true,
+              get() {
+                throw new Error("getter")
+              },
+            }),
+          },
+        }),
+        "tags",
+      ],
+      [
+        "a Json getter in a row",
+        () => ({
+          tabularSections: {
+            lines: [{ ref: OTHER, extra: throwing("v") }],
+          },
+        }),
+        "lines.0.extra",
+      ],
+    ])("inside a value: %s", (_, draft, path) => {
+      expect(encodeItem(sample, create(), draft() as never)).toEqual(
+        invalid(path)
+      )
+    })
   })
 })
 

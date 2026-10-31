@@ -108,6 +108,10 @@ describe("CommandDatabase over pg.Pool", () => {
           tags: [1, null, 3],
           status: "Open",
         })
+        // `bool` (16) перевизначено на пулі: порт однаково віддає текст Postgres.
+        expect((await client.query("SELECT true AS b")).rows).toEqual([
+          { b: "t" },
+        ])
         expect((await client.query("COMMIT")).command).toBe("COMMIT")
       } finally {
         client.release()

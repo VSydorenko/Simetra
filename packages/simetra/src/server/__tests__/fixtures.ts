@@ -94,6 +94,7 @@ export const sample: RuntimeObject = runtimeObjectSchema.parse({
       attributes: [
         attr("qty", "Integer"),
         attr("firstOnly", "Text", { insert: true, update: false }),
+        attr("extra", "Json"),
         attr("copy_id", "Raw", { insert: false, update: false }),
       ],
       constraints: [],
