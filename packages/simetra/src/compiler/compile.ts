@@ -7,6 +7,7 @@ import {
 import { assignedOnceDiagnostics } from "./assigned-once"
 import { sortDiagnostics, type Diagnostic } from "./diagnostics"
 import { withRanges } from "./locate"
+import type { CatalogCommandContract } from "./catalog-command/contracts"
 import type { Contracts } from "./contracts"
 import type { Presentation } from "./presentation"
 import type { ResolvedReference } from "./stages/identity"
@@ -58,6 +59,12 @@ export interface CompiledModel {
   physical: PhysicalSnapshot
   /** Дослівні одиниці `.sql` і обгортки запитів рухів; за `identity`. */
   sqlUnits: SqlUnit[]
+  /**
+   * Контракти ядра команд довідників — той самий набір, з якого згенеровано
+   * SQL ядра; за таблицею. Похідне від решти моделі, тож канонічний знімок
+   * його не читає і хеш від нього не залежить.
+   */
+  catalogCommands: CatalogCommandContract[]
   /**
    * Спільний порядок створення енам-типів, таблиць і одиниць: розширення
    * перші, далі топологічно з tie-break (тип вузла, схема, ім'я/ідентичність).

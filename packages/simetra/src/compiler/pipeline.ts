@@ -40,7 +40,7 @@ import {
   roleContracts,
   sourceContracts,
 } from "./rights/contracts"
-import { buildRightsUnits } from "./rights/functions"
+import { buildRightsUnits, hasRightsFunctions } from "./rights/functions"
 import { buildExplainUnits } from "./rights/explain-units"
 import { buildRightsGuardUnits } from "./rights/guard-units"
 import { scopeKindUnreadWarnings } from "./rights/scope-kind-warnings"
@@ -647,10 +647,13 @@ export async function runStages(
   // Ядро команд довідника — над рештою одиниць: функції, які кличе його
   // тіло (функції прав, множин, джерел копій), — ребра `requires`, а
   // обробники `beforeWrite` вирішують замок ієрархії (спека П4 §6.6).
-  const sqlUnits = [
-    ...baseUnits,
-    ...buildCatalogCommandUnits({
-      catalogCommands: catalogCommandContracts({
+  // Контракти ядра — рівно той набір, з якого генерується SQL: без функцій
+  // прав ядра немає, тож і каталог рантайму не обіцяє жодної команди.
+  const catalogCommands = hasRightsFunctions(
+    { roles, users, membershipSources: sources.membershipSources },
+    stage1.project.database.provider
+  )
+    ? catalogCommandContracts({
         access,
         rights,
         physical,
@@ -666,7 +669,12 @@ export async function runStages(
         units: baseUnits,
         parse,
         plpgsql,
-      }),
+      })
+    : []
+  const sqlUnits = [
+    ...baseUnits,
+    ...buildCatalogCommandUnits({
+      catalogCommands,
       contracts: {
         rights,
         access,
@@ -784,6 +792,7 @@ export async function runStages(
       .sort((a, b) => compareStrings(a.file, b.file)),
     physical,
     sqlUnits,
+    catalogCommands,
     creationOrder: ordered.order,
     contracts: buildContracts(
       stage1.objects,

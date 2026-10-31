@@ -1114,8 +1114,8 @@ function markDeletionFunction(
 
 /**
  * `<t>_delete` — лише «Призначення» (спека П4 §6.6): призначення не має
- * посилань на себе, тож видаляється фізично. Результат — ключ і версія
- * видаленого рядка; читати рядок після `DELETE` нічого.
+ * посилань на себе, тож видаляється фізично. Результат — ключ, версія й
+ * скоуп видаленого рядка; читати рядок після `DELETE` нічого.
  */
 function deleteFunction(
   contract: CatalogCommandContract,
@@ -1123,8 +1123,14 @@ function deleteFunction(
   action: string,
   parts: CoreParts
 ): string {
-  const { table, key } = contract
+  const { table, key, scopeColumn } = contract
   const root = "p_id"
+  // Скоуп рядка «до» потрібен набору змін для write-back (П4-B); у кореня
+  // виду скоупу скоуп — сам ключ, і другий запис його лише дублював би.
+  const scope =
+    scopeColumn === undefined || scopeColumn === key
+      ? ""
+      : `, ${sqlLiteral(scopeColumn)}, v_old.${q(scopeColumn)}`
   const statements = [
     // Без версії `lockedOld` дав би `conflict`: вхід без версії — помилка
     // виклику, як у позначці видалення, а не конфлікт.
@@ -1139,7 +1145,7 @@ function deleteFunction(
     // Відкликання права між замком і `DELETE` — нуль рядків, відмова.
     "GET DIAGNOSTICS v_count = ROW_COUNT;",
     ...ifThen("v_count = 0", [noRight]),
-    `RETURN jsonb_build_object(${sqlLiteral(key)}, ${root}, ${sqlLiteral(contract.versionColumn)}, v_old.${q(contract.versionColumn)}::text)::text;`,
+    `RETURN jsonb_build_object(${sqlLiteral(key)}, ${root}, ${sqlLiteral(contract.versionColumn)}, v_old.${q(contract.versionColumn)}::text${scope})::text;`,
   ]
   return coreFunction(
     fn,
