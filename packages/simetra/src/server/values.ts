@@ -174,20 +174,24 @@ export function encodePair(
 ): Encoded<{ label: string | null; id: string | null }> {
   if (value === null) return { value: { label: null, id: null } }
   const targets = attribute.pair?.targets ?? []
-  if (
-    !isPlainObject(value) ||
-    Object.keys(value).length !== 2 ||
-    typeof value.id !== "string" ||
-    !UUID_TEXT.test(value.id)
-  ) {
+  // Пару читає і `where` читання поза обгорткою `encodeItemValue`: геттер,
+  // що кидає, чи відкликаний проксі — помилка входу, а не сирий виняток.
+  try {
+    if (!isPlainObject(value) || Object.keys(value).length !== 2) {
+      return invalid(path)
+    }
+    // Кожне поле читається раз: геттер не підмінить перевірене значення.
+    const { id, type } = value
+    if (typeof id !== "string" || !UUID_TEXT.test(id)) return invalid(path)
+    const target = targets.find(
+      (t) => `${t.object.kind}.${t.object.name}` === type
+    )
+    return target === undefined
+      ? invalid(path)
+      : { value: { label: target.label, id } }
+  } catch {
     return invalid(path)
   }
-  const target = targets.find(
-    (t) => `${t.object.kind}.${t.object.name}` === value.type
-  )
-  return target === undefined
-    ? invalid(path)
-    : { value: { label: target.label, id: value.id } }
 }
 
 /**

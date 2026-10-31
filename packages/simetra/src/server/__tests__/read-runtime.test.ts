@@ -2,7 +2,7 @@ import type { ReadQuery } from "simetra/model"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { createCommandRuntime, type CommandRuntime } from "../runtime"
 import { fakeDatabase, failureOf, type Answer } from "./fake-database"
-import { ID, OTHER, catalog } from "./fixtures"
+import { ID, OTHER, TASK, catalog, taskCatalog } from "./fixtures"
 import {
   CLAIMS,
   OPEN,
@@ -73,6 +73,13 @@ const failed = (statement: unknown, end: unknown[]) => [
   ...end,
 ]
 
+/** Значення, будь-яке читання якого кидає. */
+function revoked(): object {
+  const { proxy, revoke } = Proxy.revocable({}, {})
+  revoke()
+  return proxy
+}
+
 describe("CommandRuntime.read", () => {
   it("reads under the request role of the profile and decodes the rows", async () => {
     const { db, runtime } = await setup(rows)
@@ -124,6 +131,32 @@ describe("CommandRuntime.read", () => {
         code: "command.invalid",
         ...extra,
       })
+      expect(db.calls).toEqual([])
+    }
+  )
+
+  it.each([
+    [
+      "a pair whose type getter throws",
+      "subject",
+      {
+        id: OTHER,
+        get type(): string {
+          throw new Error("trap")
+        },
+      },
+    ],
+    ["a revoked proxy as a pair", "subject", revoked()],
+    ["a revoked proxy as a scalar", "code", revoked()],
+  ])(
+    "rejects %s in where as command.invalid before the database",
+    async (_, name, value) => {
+      const { db, runtime } = await setup(undefined, { catalog: taskCatalog })
+      const where = { [name]: value }
+      const object = name === "code" ? RIGHTS : TASK
+      expect(
+        await failureOf(runtime.read(session, { object, where, limit: 1 }))
+      ).toEqual({ code: "command.invalid", path: name })
       expect(db.calls).toEqual([])
     }
   )

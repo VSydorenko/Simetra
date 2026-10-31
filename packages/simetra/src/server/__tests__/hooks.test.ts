@@ -762,13 +762,12 @@ describe("a ctx call rejected without a failure", () => {
     }
     const { db, runtime, log } = await readsSubject(subject)
     expect(await failureOf(runtime.run(session, create))).toEqual({
-      code: "command.internal",
+      code: "command.invalid",
+      path: "subject",
     })
     expect(db.calls).toEqual(CLOSED)
     expect(db.calls).not.toContainEqual(COMMIT)
-    expect(log.mock.calls).toEqual([
-      [{ kind: "hook", error: expect.any(Error) }],
-    ])
+    expect(log).not.toHaveBeenCalled()
   })
 })
 
