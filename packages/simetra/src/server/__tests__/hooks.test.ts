@@ -292,6 +292,38 @@ describe("draft of beforeWrite", () => {
     }
   )
 
+  it("maps a draft whose values getter throws, while then stays readable, to a logged command.internal", async () => {
+    // Пастка лише на `values`: `await` читає `then` і не спрацьовує першим,
+    // тож кидок трапляється саме в `checkDraft`.
+    const trap = new Proxy(
+      {},
+      {
+        get(_, key) {
+          if (key === "values") throw new Error("trap")
+          return undefined
+        },
+        ownKeys: () => ["values"],
+        getOwnPropertyDescriptor: () => ({
+          configurable: true,
+          enumerable: true,
+          value: undefined,
+        }),
+        getPrototypeOf: () => Object.prototype,
+      }
+    )
+    const { db, runtime, log } = await withModules({
+      "Catalog.Client": { beforeWrite: () => trap },
+    })
+    expect(await failureOf(runtime.run(session, create))).toEqual({
+      code: "command.internal",
+    })
+    expect(db.calls).toEqual([...OPEN, ROLLBACK, { release: false }])
+    expect(db.calls).not.toContainEqual(COMMIT)
+    expect(log.mock.calls).toEqual([
+      [{ kind: "hook", error: expect.any(Error) }],
+    ])
+  })
+
   it("gives each attempt the original input after a hook changed it", async () => {
     const seen: unknown[] = []
     let cores = 0

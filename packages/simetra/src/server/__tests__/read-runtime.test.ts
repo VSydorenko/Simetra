@@ -169,6 +169,21 @@ describe("CommandRuntime.read", () => {
     expect(log.mock.calls).toEqual([[{ kind: "database", error: raw }]])
   })
 
+  it.each(["40001", "40P01"])(
+    "maps %s of the read to command.internal, logs it and does not retry",
+    async (code) => {
+      const raw = { code, message: "conflict" }
+      const { db, runtime, log } = await setup((text) =>
+        text.startsWith(SELECT) ? { error: raw } : undefined
+      )
+      expect(
+        await failureOf(runtime.read(session, { object: RIGHTS, id: OTHER }))
+      ).toEqual({ code: "command.internal" })
+      expect(db.calls).toEqual(failed(byId, [ROLLBACK, { release: false }]))
+      expect(log.mock.calls).toEqual([[{ kind: "database", error: raw }]])
+    }
+  )
+
   it("destroys the connection on a lost connection without ROLLBACK", async () => {
     const { db, runtime, log } = await setup((text) =>
       text.startsWith(SELECT)
