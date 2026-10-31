@@ -17,6 +17,7 @@ import {
   adminRoles,
   commandCoreLayer,
   compileRights,
+  gaugeRowRule,
   policyDomain,
   refAttribute,
   runtimeValuesLayer,
@@ -274,12 +275,11 @@ describe("buildRuntimeCatalog", () => {
       kind: "unique",
       columns: index.keys.map((k) => ("column" in k ? k.column : "")),
     })
+    // Колонки CHECK — окремий тест на `Gauge` (Р-A3-21).
     for (const check of table.checks) {
-      expect(constraints).toContainEqual({
-        name: check.name,
-        kind: "check",
-        columns: [],
-      })
+      expect(constraints).toContainEqual(
+        expect.objectContaining({ name: check.name, kind: "check" })
+      )
     }
     for (const fk of table.foreignKeys) {
       expect(constraints).toContainEqual({
@@ -418,5 +418,80 @@ describe("buildRuntimeCatalog on runtime values", () => {
     expect(diagnostics.map((d) => d.code)).toEqual([
       "reference.not-referenceable",
     ])
+  })
+})
+
+/**
+ * Колонка CHECK (Р-A3-21) — побічний результат компілятора за фактично
+ * призначеним іменем, а не розбір імені обмеження: Postgres повертає лише ім'я,
+ * і мапінг `23514` на реквізит (спека П4 §6.10) бере колонку звідси.
+ */
+describe("buildRuntimeCatalog: CHECK columns", () => {
+  const checksOf = async (files: Map<string, string>) => {
+    const { model: m, diagnostics } = await compileRights(files)
+    expect(diagnostics).toEqual([])
+    return {
+      model: m!,
+      checks: buildRuntimeCatalog(m!)
+        .objects.find((o) => o.name === "Gauge")!
+        .constraints.filter((c) => c.kind === "check"),
+    }
+  }
+
+  it("bounds, an enumeration label and a pair type name their column; a row rule names none", async () => {
+    const { checks } = await checksOf(
+      withSql(policyDomain(runtimeValuesLayer()), gaugeRowRule())
+    )
+    expect(checks).toEqual([
+      { name: "gauge_level_check", kind: "check", columns: ["level"] },
+      { name: "gauge_reading_bounds", kind: "check", columns: ["reading"] },
+      { name: "gauge_span", kind: "check", columns: [] },
+      {
+        name: "gauge_subject_type_check",
+        kind: "check",
+        columns: ["subject_type"],
+      },
+    ])
+  })
+
+  // Ім'я CHECK довгої таблиці обрізане до 63 байтів: мапа йде за призначеним
+  // іменем, а не за перерахованим «таблиця_колонка_мітка».
+  it("follows the assigned name of a truncated CHECK", async () => {
+    const table = "gauge_log_" + "x".repeat(50)
+    const files = policyDomain(runtimeValuesLayer(), {
+      [GAUGE_LOG_FILE]: {
+        physicalName: table,
+        attributes: [
+          {
+            id: uuid(7517),
+            name: "level",
+            physicalName: "level",
+            type: "Integer",
+            positive: true,
+          },
+        ],
+      },
+    })
+    const { model: m, diagnostics } = await compileRights(files)
+    expect(diagnostics).toEqual([])
+    const [check] = m!.physical.tables.find((t) => t.name === table)!.checks
+    expect(check!.name).not.toBe(`${table}_level_bounds`)
+    expect(
+      buildRuntimeCatalog(m!)
+        .objects.find((o) => o.name === "GaugeLog")!
+        .constraints.filter((c) => c.kind === "check")
+    ).toEqual([{ name: check!.name, kind: "check", columns: ["level"] }])
+  })
+
+  // Мапа — не частина знімка: хеш фікстури той самий, що до появи мапи
+  // (обчислений на коміті до неї). Зміна фікстури змінює і цей літерал.
+  it("stays outside the canonical snapshot and the hash", async () => {
+    const { model: m } = await checksOf(policyDomain(runtimeValuesLayer()))
+    expect(m.checkColumns.length).toBeGreaterThan(0)
+    expect(canonicalSnapshot(m)).not.toHaveProperty("checkColumns")
+    expect(await modelHash({ ...m, checkColumns: [] })).toBe(m.hash)
+    expect(m.hash).toBe(
+      "fbecfe4d586609905aac5b0146cc73c1a0bd559f79756e1b89fe18ac89a64275"
+    )
   })
 })

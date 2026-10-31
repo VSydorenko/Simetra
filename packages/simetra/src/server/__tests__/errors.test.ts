@@ -5,18 +5,28 @@ import {
   type RuntimeCatalog,
   type RuntimeObject,
 } from "simetra/model"
-import { describe, expect, it } from "vitest"
+import { beforeAll, describe, expect, it } from "vitest"
+import { buildRuntimeCatalog } from "simetra/compiler"
+import {
+  GAUGE_TABLE,
+  compileRights,
+  gaugeRowRule,
+  policyDomain,
+  runtimeValuesLayer,
+  withSql,
+} from "../../compiler/__tests__/fixtures/rights"
 import { CommandFailure, mapDatabaseError } from "../errors"
 import type { DatabaseError } from "../port"
 import { sample } from "./fixtures"
 
 // Обмеження каталогу — лише те, що читає мапінг; решта об'єкта — `sample`.
+// CHECK тут немає: його колонку дає лише компілятор (Р-A3-21), тож мапінг
+// `23514` перевіряється на скомпільованому каталозі нижче.
 const object: RuntimeObject = runtimeObjectSchema.parse({
   ...sample,
   constraints: [
     { name: "sample_pkey", kind: "primaryKey", columns: ["id"] },
     { name: "sample_code_key", kind: "unique", columns: ["code_col"] },
-    { name: "sample_count_check", kind: "check", columns: ["count_col"] },
     { name: "sample_link_fkey", kind: "foreignKey", columns: ["link_col"] },
     {
       name: "sample_subject_key",
@@ -328,7 +338,6 @@ describe("mapDatabaseError", () => {
     ["23505", "sample", "sample_code_key", "unique", ["code"]],
     ["23505", "sample", "sample_subject_key", "unique", ["subject", "note"]],
     ["23505", "sample_lines", "sample_lines_qty_key", "unique", ["lines.qty"]],
-    ["23514", "sample", "sample_count_check", "check", ["count"]],
   ])(
     "%s on %s by %s is command.constraint",
     (code, table, constraint, kind, attributes) => {
@@ -342,7 +351,6 @@ describe("mapDatabaseError", () => {
 
   it.each([
     ["23505", "sample_pkey"],
-    ["23505", "sample_count_check"],
     ["23514", "sample_code_key"],
     ["23505", "missing_key"],
   ])("%s by a catalog constraint of another kind (%s) is internal", (c, n) => {
@@ -372,7 +380,6 @@ describe("mapDatabaseError", () => {
     ["23502", { table: "sample", column: "code_col" }],
     ["23503", { table: "sample", constraint: "sample_link_fkey" }],
     ["23505", { table: "sample", constraint: "sample_code_key" }],
-    ["23514", { table: "sample", constraint: "sample_count_check" }],
     ["23505", { table: "sample", constraint: "unknown" }],
     ["42501", {}],
     ["42501", { message: "command.forbidden" }],
@@ -395,5 +402,69 @@ describe("mapDatabaseError", () => {
       expect(text).not.toContain("secret-value")
       expect(text).not.toContain("Failing row")
     }
+  })
+})
+
+/**
+ * `23514` на каталозі з `buildRuntimeCatalog`: колонку CHECK дає компілятор
+ * (Р-A3-21), тож тест не тримає форми, якої компілятор не будує.
+ */
+describe("mapDatabaseError on a compiled CHECK", () => {
+  let compiled: RuntimeCatalog
+  let gauge: RuntimeObject
+  beforeAll(async () => {
+    const { model, diagnostics } = await compileRights(
+      withSql(policyDomain(runtimeValuesLayer()), gaugeRowRule())
+    )
+    expect(diagnostics).toEqual([])
+    compiled = buildRuntimeCatalog(model!)
+    gauge = compiled.objects.find((o) => o.name === "Gauge")!
+  })
+  const onGauge = (fields: Partial<DatabaseError>): CommandError =>
+    mapDatabaseError(db({ table: GAUGE_TABLE, ...fields }), compiled, {
+      kind: "write",
+      object: gauge,
+      operation: "update",
+    })
+
+  it.each([
+    ["gauge_reading_bounds", ["reading"]],
+    ["gauge_level_check", ["level"]],
+    ["gauge_subject_type_check", ["subject"]],
+  ])("23514 by %s is command.constraint check", (constraint, attributes) => {
+    expect(onGauge({ code: "23514", constraint })).toEqual({
+      code: "command.constraint",
+      kind: "check",
+      attributes,
+    })
+  })
+
+  // §6.10 дає `command.constraint` лише з реквізитами з каталогу: правило
+  // рядка над кількома колонками реквізиту не називає.
+  it("23514 by a row rule over two columns is command.internal", () => {
+    expect(onGauge({ code: "23514", constraint: "gauge_span" })).toEqual(
+      internal
+    )
+  })
+
+  it("23505 by a CHECK name is command.internal", () => {
+    expect(
+      onGauge({ code: "23505", constraint: "gauge_reading_bounds" })
+    ).toEqual(internal)
+  })
+
+  it("Postgres text of 23514 reaches no field", () => {
+    const leak = "Failing row contains (secret-value)."
+    const error = onGauge({
+      code: "23514",
+      constraint: "gauge_reading_bounds",
+      message: leak,
+      detail: leak,
+      hint: leak,
+    })
+    expect(error.attributes).toEqual(["reading"])
+    expect(JSON.stringify(new CommandFailure(error))).not.toContain(
+      "secret-value"
+    )
   })
 })

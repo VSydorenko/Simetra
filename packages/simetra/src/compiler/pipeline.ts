@@ -793,6 +793,7 @@ export async function runStages(
     physical,
     sqlUnits,
     catalogCommands,
+    checkColumns: stage3.checkColumns,
     creationOrder: ordered.order,
     contracts: buildContracts(
       stage1.objects,

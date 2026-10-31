@@ -11,6 +11,7 @@ import type { CatalogCommandContract } from "./catalog-command/contracts"
 import type { Contracts } from "./contracts"
 import type { Presentation } from "./presentation"
 import type { ResolvedReference } from "./stages/identity"
+import type { CheckColumn } from "./stages/model"
 import type { CreationNode } from "./sql/dependencies"
 import type { SqlUnit, VerbatimUnit } from "./sql/units"
 import { readFiles, runStages, sqlStage } from "./pipeline"
@@ -65,6 +66,12 @@ export interface CompiledModel {
    * його не читає і хеш від нього не залежить.
    */
   catalogCommands: CatalogCommandContract[]
+  /**
+   * Колонка CHECK з однією колонкою виразу за призначеним іменем — для
+   * мапінгу `23514` каталогом рантайму (Р-A3-21). Похідне від знімка, тож
+   * канонічний знімок його не читає і хеш від нього не залежить.
+   */
+  checkColumns: CheckColumn[]
   /**
    * Спільний порядок створення енам-типів, таблиць і одиниць: розширення
    * перші, далі топологічно з tie-break (тип вузла, схема, ім'я/ідентичність).

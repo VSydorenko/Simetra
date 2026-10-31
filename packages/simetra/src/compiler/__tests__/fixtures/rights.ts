@@ -1293,8 +1293,8 @@ export const GAUGE_WRITER_ID = uuid(7520)
  * Значення рантайму команд (Р-A3-7) поверх `policyDomain()`: скоуплений
  * довідник `Gauge` з типами, яких немає в довідниках A2, — `Numeric(30,10)`,
  * `BigInt`, `Json`, `Bytes`, посилання на перерахування `GaugeLevel` (логічне
- * ім'я значення ≠ мітка бази), поліморфний `subject`, масив `BigInt` і ТЧ
- * `lines`; `GaugeLog` — другий довідник, у який пише хук. `GaugeWriter` пише
+ * ім'я значення ≠ мітка бази), поліморфний `subject`, масив `BigInt`,
+ * `reading` з `nonNegative` (CHECK з колонкою) і ТЧ `lines`; `GaugeLog` — другий довідник, у який пише хук. `GaugeWriter` пише
  * обидва й читає цілі пари: без читання цілі ядро відмовило б раніше.
  */
 export function runtimeValuesLayer(): Layer {
@@ -1348,6 +1348,13 @@ export function runtimeValuesLayer(): Layer {
           type: "BigInt",
           array: true,
         },
+        {
+          id: uuid(7516),
+          name: "reading",
+          physicalName: "reading",
+          type: "Integer",
+          nonNegative: true,
+        },
       ],
       tabularSections: [
         {
@@ -1400,6 +1407,20 @@ export function runtimeValuesLayer(): Layer {
         ],
       }
     ),
+  }
+}
+
+/**
+ * Правило рядка `Gauge` (до `withSql` поверх `runtimeValuesLayer()`): CHECK
+ * над двома колонками, тобто без колонки реквізиту. Явне `name` резервується
+ * до похідних імен, тож ім'я похідного CHECK може його обійти.
+ */
+export function gaugeRowRule(name = "gauge_span"): HandlerFixture {
+  return {
+    layer: {},
+    sql: {
+      "catalogs/Gauge/Gauge.sql": `ALTER TABLE public.${GAUGE_TABLE} ADD CONSTRAINT ${name} CHECK (num_nonnulls(amount, reading) <= 1);`,
+    },
   }
 }
 

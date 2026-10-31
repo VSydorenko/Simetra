@@ -113,6 +113,19 @@ export interface ModelStageResult {
     /** `required` — обов'язковість шапки документа; `nonempty` — непорожній рядок. */
     label: "required" | "nonempty"
   }[]
+  /**
+   * Колонка кожного CHECK з однією колонкою виразу — за ФАКТИЧНО призначеним
+   * іменем (ім'я обрізається до 63 байтів, тож його не розбирають). Каталог
+   * рантайму мапить за нею `23514` на реквізит; у знімок не входить.
+   */
+  checkColumns: CheckColumn[]
+}
+
+/** CHECK таблиці та єдина колонка його виразу. */
+export interface CheckColumn {
+  table: { schema: string; name: string }
+  check: string
+  column: string
 }
 
 /**
@@ -1023,7 +1036,7 @@ class SnapshotBuilder {
     // виводить кожне ім'я явно зі знімка.
     for (const table of this.tables) materializeIndexes(table)
     const pending = [...this.tables].sort(bySchemaAndName)
-    const { tables, elementChecks } = assignNames(pending)
+    const { tables, elementChecks, checkColumns } = assignNames(pending)
     return {
       physical: {
         tables,
@@ -1032,6 +1045,7 @@ class SnapshotBuilder {
       sources: this.sources,
       declaredNames: this.declaredNames,
       elementChecks,
+      checkColumns,
     }
   }
 
@@ -2619,8 +2633,10 @@ interface SchemaNames {
 function assignNames(pending: readonly PendingTable[]): {
   tables: PhysicalTable[]
   elementChecks: ModelStageResult["elementChecks"]
+  checkColumns: CheckColumn[]
 } {
   const elementChecks: ModelStageResult["elementChecks"] = []
+  const checkColumns: CheckColumn[] = []
   const namespaces = new Map<string, SchemaNames>()
   const namesOf = (schema: string): SchemaNames => {
     let names = namespaces.get(schema)
@@ -2691,6 +2707,13 @@ function assignNames(pending: readonly PendingTable[]): {
         const assigned =
           name ??
           choose(column, label ?? "check", names.constraints, false, true)
+        if (column !== undefined) {
+          checkColumns.push({
+            table: { schema: table.schema, name: table.name },
+            check: assigned,
+            column,
+          })
+        }
         if (elementId !== undefined) {
           elementChecks.push({
             objectId: table.origin.objectId ?? "",
@@ -2768,7 +2791,7 @@ function assignNames(pending: readonly PendingTable[]): {
     }
     return result
   })
-  return { tables, elementChecks }
+  return { tables, elementChecks, checkColumns }
 }
 
 /** `NOT DEFERRABLE` у знімку не пишеться (див. `DeferredConstraint`). */

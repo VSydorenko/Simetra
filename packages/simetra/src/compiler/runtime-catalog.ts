@@ -38,6 +38,9 @@ export function buildRuntimeCatalog(model: CompiledModel): RuntimeCatalog {
   const byId = new Map(model.objects.map((o) => [o.id, o]))
   const facts: Facts = {
     model,
+    checkColumns: new Map(
+      model.checkColumns.map((c) => [checkKey(c.table, c.check), c.column])
+    ),
     enumValues: (ref) => {
       const target = byRef.get(refKey(ref))
       // Значення-елементи (мітка бази ≠ логічне ім'я) — факт реєстру.
@@ -71,6 +74,8 @@ export function buildRuntimeCatalog(model: CompiledModel): RuntimeCatalog {
 
 interface Facts {
   model: CompiledModel
+  /** Колонка CHECK за `checkKey`. */
+  checkColumns: ReadonlyMap<string, string>
   /** Значення перерахування-цілі `Ref`; `undefined` — ціль не перерахування. */
   enumValues: (ref: MetadataRef) => RuntimeAttribute["enumValues"]
   objectRef: (table: PhysicalTable) => MetadataRef
@@ -153,7 +158,7 @@ function runtimeObject(
           },
           facts
         ),
-        constraints: constraints(section.table),
+        constraints: constraints(section.table, facts),
       }
     }),
     operations: {
@@ -171,7 +176,7 @@ function runtimeObject(
         ? {}
         : { delete: target(functions.delete, actions.delete) }),
     },
-    constraints: constraints(table),
+    constraints: constraints(table, facts),
   }
 }
 
@@ -265,7 +270,7 @@ function pairOf(
  * Обмеження таблиці — для мапінгу помилок Postgres на реквізит за іменем
  * обмеження. Ключ-вираз унікального індексу колонки не має й пропускається.
  */
-function constraints(table: PhysicalTable): RuntimeConstraint[] {
+function constraints(table: PhysicalTable, facts: Facts): RuntimeConstraint[] {
   return [
     ...(table.primaryKey === undefined
       ? []
@@ -288,11 +293,16 @@ function constraints(table: PhysicalTable): RuntimeConstraint[] {
         kind: "unique" as const,
         columns: i.keys.flatMap((k) => ("column" in k ? [k.column] : [])),
       })),
-    ...table.checks.map((c) => ({
-      name: c.name,
-      kind: "check" as const,
-      columns: [],
-    })),
+    // Колонка — з компілятора за призначеним іменем (Р-A3-21); CHECK над
+    // кількома колонками (правило рядка) реквізиту не називає.
+    ...table.checks.map((c) => {
+      const column = facts.checkColumns.get(checkKey(table, c.name))
+      return {
+        name: c.name,
+        kind: "check" as const,
+        columns: column === undefined ? [] : [column],
+      }
+    }),
     ...table.foreignKeys.map((f) => ({
       name: f.name,
       kind: "foreignKey" as const,
@@ -326,6 +336,8 @@ function fieldOf(fields: readonly EntityField[], column: string): EntityField {
 }
 
 const refKey = (ref: MetadataRef) => `${ref.kind}.${ref.name}`
+const checkKey = (table: QualifiedName, check: string) =>
+  `${table.schema}.${table.name}.${check}`
 
 function must<T>(value: T | undefined, what: string): T {
   if (value === undefined) {

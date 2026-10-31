@@ -530,6 +530,22 @@ describe("command runtime over the engine target", () => {
     expect(await exists(GAUGE_TABLE, a)).toBe(false)
   })
 
+  // Межу `nonNegative` тримає лише CHECK бази: `23514` з іменем обмеження
+  // стає реквізитом за колонкою CHECK каталогу (Р-A3-21, спека П4 §6.10).
+  it("a value outside nonNegative is command.constraint check on the attribute", async () => {
+    const rt = await runtime(fromPgPool(env.direct))
+    const id = randomUUID()
+    const error = await refusal(
+      rt.run(env.me.session, createGauge(id, { reading: -1 }))
+    )
+    expect(error).toEqual({
+      code: "command.constraint",
+      kind: "check",
+      attributes: ["reading"],
+    })
+    expect(await exists(GAUGE_TABLE, id)).toBe(false)
+  })
+
   // Користувача claims без ідентичності знає лише `current_user_id()` бази:
   // `NULL` — жодної фази й жодного хука (інваріант 5).
   it("claims without a user: command.unauthenticated, no phase, no hook", async () => {
