@@ -1,4 +1,14 @@
-// Вміст ярусу з'явиться в наступних кроках П2 чи підпроєктах (платформна
-// спека §3.1); тека й subpath існують від початку, бо лінт-зони й експорти
-// покривають кожен ярус.
-export {}
+export {
+  createCommandRuntime,
+  readRoleOf,
+  type CommandRuntime,
+  type CommandRuntimeOptions,
+} from "./runtime"
+export type { LogEntry } from "./transaction"
+export { CommandFailure } from "./errors"
+export {
+  fromPgPool,
+  type CommandDatabase,
+  type DatabaseClient,
+  type PgPoolLike,
+} from "./port"

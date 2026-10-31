@@ -1,0 +1,500 @@
+import type { Operation } from "simetra/model"
+import { describe, expect, it, vi } from "vitest"
+import { createCommandRuntime, type CommandRuntimeOptions } from "../runtime"
+import { runAfterCommit, Transaction, type RuntimeState } from "../transaction"
+import {
+  fakeDatabase,
+  failureOf,
+  type Answer,
+  type Call,
+} from "./fake-database"
+import { COMPANY, ID, OTHER, catalog, client, rightsRole } from "./fixtures"
+
+const USER = "44444444-4444-4444-8444-444444444444"
+const session = { sub: "user-1", role: "authenticated" }
+const CLIENT = { kind: "Catalog" as const, name: "Client" }
+const RIGHTS = { kind: "Catalog" as const, name: "RightsRole" }
+
+const BEGIN = { text: "BEGIN ISOLATION LEVEL READ COMMITTED", params: [] }
+const CLAIMS = {
+  text:
+    "SELECT set_config('request.jwt.claims', $1, true), " +
+    "set_config('TimeZone', 'UTC', true), set_config('bytea_output', 'hex', true)",
+  params: [JSON.stringify(session)],
+}
+const ROLE = { text: 'SET LOCAL ROLE "simetra_command"', params: [] }
+const CURRENT_USER = {
+  text: 'SELECT "simetra"."current_user_id"() AS user_id',
+  params: [],
+}
+const COMMIT = { text: "COMMIT", params: [] }
+const ROLLBACK = { text: "ROLLBACK", params: [] }
+const OPEN: Call[] = [{ connect: true }, BEGIN, CLAIMS, ROLE, CURRENT_USER]
+
+const context = (action: string, object: string, root: string) => ({
+  text: "SELECT set_config('simetra.command', $1, true)",
+  params: [JSON.stringify({ action, object, root })],
+})
+const call = (fn: string, args: string, params: (string | null)[]) => ({
+  text: `SELECT "public"."${fn}"(${args}) AS r`,
+  params,
+})
+const SAVE = "$1::jsonb, $2::bigint"
+
+/** Рядок ядра клієнта: `version` — числом, як `to_jsonb` дає `integer`. */
+const coreRow = (id = ID, version = 1) =>
+  JSON.stringify({ id, version, code: "A", company_id: COMPANY })
+
+type Override = (
+  text: string,
+  params: readonly (string | null)[]
+) => Answer | undefined
+
+/** Відповіді бази за замовчуванням; `override` — лише те, про що кейс. */
+function answer(text: string): Answer {
+  if (text.includes("current_user_id")) return { rows: [{ user_id: USER }] }
+  if (text.includes("applied_snapshot_hash"))
+    return { rows: [{ hash: "hash-1" }] }
+  if (text.includes("pg_has_role")) return { rows: [{ member: "t" }] }
+  if (text.includes("rights_role_")) {
+    return { rows: [{ r: JSON.stringify({ id: ID, version: 1, code: "R" }) }] }
+  }
+  if (text.endsWith("AS r")) return { rows: [{ r: coreRow() }] }
+  return {}
+}
+
+async function setup(
+  override: Override = () => undefined,
+  options: Partial<CommandRuntimeOptions> = {},
+  connectError?: unknown
+) {
+  let connects = 0
+  const db = fakeDatabase({
+    query: (text, params) => override(text, params) ?? answer(text),
+    // Перше з'єднання — створення рантайму.
+    connect: () =>
+      connectError !== undefined && connects++ > 0
+        ? { error: connectError }
+        : undefined,
+  })
+  const log = vi.fn()
+  const runtime = await createCommandRuntime({
+    database: db.database,
+    catalog,
+    log,
+    ...options,
+  })
+  db.calls.splice(0)
+  return { db, runtime, log }
+}
+
+const create: Operation = {
+  action: "create",
+  object: CLIENT,
+  id: ID,
+  values: { code: "A", company: COMPANY },
+}
+const createCall = call("client_save", SAVE, [
+  JSON.stringify({ id: ID, code: "A", company_id: COMPANY }),
+  null,
+])
+
+describe("command transaction", () => {
+  it("runs a create as the exact statement sequence", async () => {
+    const { db, runtime } = await setup()
+    const result = await runtime.run(session, create)
+    expect(db.calls).toEqual([
+      ...OPEN,
+      context("create", "client", ID),
+      createCall,
+      COMMIT,
+      { release: false },
+    ])
+    expect(result).toEqual({
+      rows: [{ ref: ID, version: 1, code: "A", company: COMPANY }],
+      changes: [
+        {
+          object: CLIENT,
+          scopeKind: client.scopeKindId,
+          scope: COMPANY,
+          id: ID,
+          version: 1,
+          operation: "create",
+        },
+      ],
+    })
+  })
+
+  it("runs a batch of two phases with one row per operation", async () => {
+    const { db, runtime } = await setup((text) =>
+      text.includes("mark_deletion")
+        ? { rows: [{ r: coreRow(OTHER, 4) }] }
+        : text.endsWith("AS r")
+          ? { rows: [{ r: coreRow(ID, 3) }] }
+          : undefined
+    )
+    const result = await runtime.run(session, [
+      {
+        action: "update",
+        object: CLIENT,
+        id: ID,
+        expectedVersion: 2,
+        values: { code: "A" },
+      },
+      {
+        action: "markDeletion",
+        object: CLIENT,
+        id: OTHER,
+        expectedVersion: 3,
+        mark: true,
+      },
+    ])
+    expect(db.calls).toEqual([
+      ...OPEN,
+      context("update", "client", ID),
+      call("client_save", SAVE, [JSON.stringify({ id: ID, code: "A" }), "2"]),
+      context("markDeletion", "client", OTHER),
+      call("client_mark_deletion", "$1::uuid, $2::bigint, $3::boolean", [
+        OTHER,
+        "3",
+        "true",
+      ]),
+      COMMIT,
+      { release: false },
+    ])
+    expect(result.rows.map((r) => [r.ref, r.version])).toEqual([
+      [ID, 3],
+      [OTHER, 4],
+    ])
+    expect(result.changes.map((c) => [c.id, c.operation])).toEqual([
+      [ID, "update"],
+      [OTHER, "markDeletion"],
+    ])
+  })
+
+  it("calls delete with the id and the version", async () => {
+    const { db, runtime } = await setup()
+    await runtime.run(session, {
+      action: "delete",
+      object: CLIENT,
+      id: ID,
+      expectedVersion: 5,
+    })
+    expect(db.calls.slice(OPEN.length, -2)).toEqual([
+      context("delete", "client", ID),
+      call("client_delete", "$1::uuid, $2::bigint", [ID, "5"]),
+    ])
+  })
+
+  it("sets administerRights and a NULL version on a rights catalog create", async () => {
+    const { db, runtime } = await setup()
+    const result = await runtime.run(session, {
+      action: "create",
+      object: RIGHTS,
+      id: ID,
+      values: { code: "R" },
+    })
+    expect(db.calls.slice(OPEN.length, -2)).toEqual([
+      context("administerRights", "rights_role", ID),
+      call("rights_role_save", SAVE, [
+        JSON.stringify({ id: ID, code: "R" }),
+        null,
+      ]),
+    ])
+    // Нескоуплений об'єкт — без скоупу в наборі змін.
+    expect(result.changes).toEqual([
+      { object: RIGHTS, id: ID, version: 1, operation: "create" },
+    ])
+    expect(rightsRole.scopeColumn).toBeUndefined()
+  })
+
+  it.each<[string, unknown, string | undefined]>([
+    [
+      "create with expectedVersion",
+      { ...create, expectedVersion: 1 },
+      undefined,
+    ],
+    [
+      "update without expectedVersion",
+      { ...create, action: "update" },
+      "expectedVersion",
+    ],
+    [
+      "markDeletion without mark",
+      { action: "markDeletion", object: CLIENT, id: ID, expectedVersion: 1 },
+      "mark",
+    ],
+    [
+      "delete without id",
+      { action: "delete", object: CLIENT, expectedVersion: 1 },
+      "id",
+    ],
+    [
+      "an action outside the operations",
+      { ...create, action: "administerRights" },
+      "action",
+    ],
+    ["an unknown key", { ...create, extra: 1 }, undefined],
+    ["an id that is not a UUID", { ...create, id: "x" }, "id"],
+    ["an object as a string", { ...create, object: "Client" }, "object"],
+    ["an empty batch", [], undefined],
+    [
+      "an unknown object",
+      { ...create, object: { kind: "Catalog", name: "Nope" } },
+      "object",
+    ],
+    [
+      "an operation the catalog lacks",
+      { action: "delete", object: RIGHTS, id: ID, expectedVersion: 1 },
+      "action",
+    ],
+    [
+      "an invalid value",
+      { ...create, values: { code: "far too long code" } },
+      "code",
+    ],
+    [
+      "a key outside the grant",
+      {
+        action: "update",
+        object: CLIENT,
+        id: ID,
+        expectedVersion: 1,
+        values: { company: COMPANY },
+      },
+      "company",
+    ],
+  ])("rejects %s before the port", async (_, input, path) => {
+    const { db, runtime } = await setup()
+    const error = await failureOf(runtime.run(session, input as Operation))
+    expect(error.code).toBe("command.invalid")
+    if (path !== undefined) expect(error.path).toBe(path)
+    expect(db.calls).toEqual([])
+  })
+
+  it("rejects without a user before any phase or hook", async () => {
+    const beforeWrite = vi.fn()
+    const { db, runtime } = await setup(
+      (text) =>
+        text.includes("current_user_id")
+          ? { rows: [{ user_id: null }] }
+          : undefined,
+      { objectModules: { "Catalog.Client": { beforeWrite } } }
+    )
+    expect(await failureOf(runtime.run(session, create))).toEqual({
+      code: "command.unauthenticated",
+    })
+    expect(db.calls).toEqual([...OPEN, ROLLBACK, { release: false }])
+    expect(beforeWrite).not.toHaveBeenCalled()
+  })
+
+  it.each(["40001", "40P01"])(
+    "retries %s from step 1 on a copy of the input",
+    async (code) => {
+      let calls = 0
+      const input = {
+        ...create,
+        values: { ...create.values, extra: { n: 1 } },
+      }
+      const { db, runtime } = await setup((text) => {
+        if (!text.endsWith("AS r") || calls++ > 0) return undefined
+        // Викликач змінює вхід між спробами: повтор цього не бачить.
+        input.values.extra.n = 2
+        return { error: { code, message: "retry" } }
+      })
+      await runtime.run(session, input)
+      const item = JSON.stringify({
+        id: ID,
+        code: "A",
+        company_id: COMPANY,
+        extra: { n: 1 },
+      })
+      const phase = [
+        context("create", "client", ID),
+        call("client_save", SAVE, [item, null]),
+      ]
+      expect(db.calls).toEqual([
+        ...OPEN,
+        ...phase,
+        ROLLBACK,
+        { release: false },
+        ...OPEN,
+        ...phase,
+        COMMIT,
+        { release: false },
+      ])
+    }
+  )
+
+  it("gives command.retry-exhausted after the last failed attempt", async () => {
+    const { db, runtime } = await setup((text) =>
+      text.endsWith("AS r")
+        ? { error: { code: "40001", message: "retry" } }
+        : undefined
+    )
+    expect(await failureOf(runtime.run(session, create))).toEqual({
+      code: "command.retry-exhausted",
+    })
+    const attempt = [
+      ...OPEN,
+      context("create", "client", ID),
+      createCall,
+      ROLLBACK,
+      { release: false },
+    ]
+    expect(db.calls).toEqual([...attempt, ...attempt, ...attempt])
+  })
+
+  it("fails when COMMIT answers ROLLBACK", async () => {
+    let commits = 0
+    // Перший `COMMIT` — транзакція створення рантайму.
+    const { db, runtime, log } = await setup((text) =>
+      text === "COMMIT" && commits++ > 0 ? { command: "ROLLBACK" } : undefined
+    )
+    expect(await failureOf(runtime.run(session, create))).toEqual({
+      code: "command.internal",
+    })
+    expect(db.calls.slice(-2)).toEqual([COMMIT, { release: false }])
+    expect(log).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "database" })
+    )
+  })
+
+  it("maps connect failure", async () => {
+    const { db, runtime } = await setup(
+      undefined,
+      {},
+      new Error("ECONNREFUSED")
+    )
+    expect(await failureOf(runtime.run(session, create))).toEqual({
+      code: "command.unavailable",
+    })
+    expect(db.calls).toEqual([{ connect: true }])
+  })
+
+  it("destroys a lost connection", async () => {
+    const { db, runtime } = await setup((text) =>
+      text.endsWith("AS r")
+        ? { error: { code: "57P01", message: "terminating" } }
+        : undefined
+    )
+    expect(await failureOf(runtime.run(session, create))).toEqual({
+      code: "command.unavailable",
+    })
+    expect(db.calls).toEqual([
+      ...OPEN,
+      context("create", "client", ID),
+      createCall,
+      { release: true },
+    ])
+  })
+
+  it("sends only ROLLBACK after the first database error", async () => {
+    let contexts = 0
+    const raw = { code: "XX000", message: "secret row data" }
+    const { db, runtime, log } = await setup((text) =>
+      text.includes("simetra.command") && contexts++ === 0
+        ? { error: raw }
+        : undefined
+    )
+    const error = await failureOf(
+      runtime.run(session, [create, { ...create, id: OTHER }])
+    )
+    expect(error).toEqual({ code: "command.internal" })
+    // Пара неподільна: виклик ядра після відмови контексту не йде в порт.
+    expect(db.calls).toEqual([
+      ...OPEN,
+      context("create", "client", ID),
+      ROLLBACK,
+      { release: false },
+    ])
+    expect(log).toHaveBeenCalledWith({ kind: "database", error: raw })
+  })
+
+  it("decodes the row before COMMIT", async () => {
+    const { db, runtime } = await setup((text) =>
+      text.endsWith("AS r") ? { rows: [{ r: "not json" }] } : undefined
+    )
+    expect(await failureOf(runtime.run(session, create))).toEqual({
+      code: "command.internal",
+    })
+    expect(db.calls.slice(-2)).toEqual([ROLLBACK, { release: false }])
+  })
+
+  it("destroys the connection when ROLLBACK fails", async () => {
+    const { db, runtime } = await setup((text) =>
+      text.endsWith("AS r")
+        ? { error: { code: "23505", message: "dup" } }
+        : text === "ROLLBACK"
+          ? { error: { code: "XX000", message: "broken" } }
+          : undefined
+    )
+    await failureOf(runtime.run(session, create))
+    expect(db.calls.slice(-2)).toEqual([ROLLBACK, { release: true }])
+  })
+})
+
+describe("statement queue", () => {
+  it("closes at the first failure: later units never reach the port", async () => {
+    const db = fakeDatabase({
+      query: (text): Answer =>
+        text === "first" ? { error: { code: "XX000", message: "x" } } : {},
+    })
+    const connection = await db.database.connect()
+    const state = { catalog, log: () => {} } as unknown as RuntimeState
+    const tx = new Transaction(connection, state)
+    const first = tx.enqueue([{ text: "first", params: [] }])
+    const second = tx.enqueue([{ text: "second", params: [] }])
+    expect((await failureOf(first)).code).toBe("command.internal")
+    expect((await failureOf(second)).code).toBe("command.internal")
+    expect(db.calls).toEqual([{ connect: true }, { text: "first", params: [] }])
+  })
+
+  it("runs units one after another", async () => {
+    const db = fakeDatabase({ query: () => undefined })
+    const connection = await db.database.connect()
+    const tx = new Transaction(connection, {
+      catalog,
+    } as unknown as RuntimeState)
+    const done = Promise.all([
+      tx.enqueue([
+        { text: "a", params: [] },
+        { text: "b", params: [] },
+      ]),
+      tx.enqueue([{ text: "c", params: [] }]),
+    ])
+    for (const expected of ["a", "b", "c"]) {
+      const query = await db.next()
+      expect(db.pending.map((q) => q.text)).toEqual([expected])
+      query.answer()
+    }
+    await done
+  })
+})
+
+describe("runAfterCommit", () => {
+  it("runs every action even after a failing one and logs each failure", async () => {
+    const order: string[] = []
+    const log = vi.fn()
+    const boom = new Error("boom")
+    await runAfterCommit(
+      [
+        () => {
+          order.push("a")
+          throw boom
+        },
+        async () => {
+          order.push("b")
+          await Promise.reject(boom)
+        },
+        () => order.push("c"),
+      ],
+      log
+    )
+    expect(order).toEqual(["a", "b", "c"])
+    expect(log.mock.calls).toEqual([
+      [{ kind: "afterCommit", error: boom }],
+      [{ kind: "afterCommit", error: boom }],
+    ])
+  })
+})

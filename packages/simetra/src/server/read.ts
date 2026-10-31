@@ -12,8 +12,10 @@ import { encodePair, encodeParam } from "./values"
 const LABEL_CAST: BaseCastType = "text"
 const KEY_CAST: BaseCastType = "uuid"
 
-const ident = (name: string) => `"${name.replaceAll('"', '""')}"`
-const literal = (text: string) => `'${text.replaceAll("'", "''")}'`
+/** An identifier quoted for SQL text. */
+export const ident = (name: string) => `"${name.replaceAll('"', '""')}"`
+/** A string literal quoted for SQL text. */
+export const literal = (text: string) => `'${text.replaceAll("'", "''")}'`
 
 /**
  * Рядок читання — та сама форма, що й результат ядра (`to_jsonb` і

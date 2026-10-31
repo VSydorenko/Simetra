@@ -1,6 +1,8 @@
 import {
+  runtimeCatalogSchema,
   runtimeObjectSchema,
   type RuntimeAttribute,
+  type RuntimeCatalog,
   type RuntimeObject,
 } from "simetra/model"
 
@@ -106,3 +108,77 @@ export const sample: RuntimeObject = runtimeObjectSchema.parse({
 
 export const attributeOf = (name: string): RuntimeAttribute =>
   sample.attributes.find((a) => a.name === name)!
+
+const target = (table: string, fn: string, context: string) => ({
+  function: { schema: "public", name: `${table}_${fn}` },
+  context,
+})
+
+/**
+ * Об'єкт каталогу з командами: скоуплений довідник із ключем `ref` і
+ * реквізитами `code`, `company` (колонка скоупу). Перевизначення — лише те,
+ * про що кейс.
+ */
+export function commandObject(
+  overrides: Omit<Partial<RuntimeObject>, "table"> & {
+    name: string
+    table: string
+  }
+): RuntimeObject {
+  const { table, ...rest } = overrides
+  return runtimeObjectSchema.parse({
+    id: "00000000-0000-4000-8000-000000000002",
+    kind: "Catalog",
+    kindLabel: table,
+    key: "id",
+    keyName: "ref",
+    versionColumn: "version",
+    versionName: "version",
+    scopeKindId: "00000000-0000-4000-8000-0000000000aa",
+    scopeColumn: "company_id",
+    attributes: [
+      attr("code", "String", { column: "code", maxLength: 10 }),
+      attr("company", "Ref", {
+        column: "company_id",
+        pgType: "uuid",
+        castType: "uuid",
+        update: false,
+      }),
+      attr("extra", "Json", { column: "extra" }),
+    ],
+    tabularSections: [],
+    operations: {
+      create: target(table, "save", "create"),
+      update: target(table, "save", "update"),
+      markDeletion: target(table, "mark_deletion", "markDeletion"),
+      delete: target(table, "delete", "delete"),
+    },
+    constraints: [],
+    ...rest,
+    table: { schema: "public", name: table },
+  })
+}
+
+export const COMPANY = "33333333-3333-4333-8333-333333333333"
+export const client = commandObject({ name: "Client", table: "client" })
+
+/** Системний довідник прав: дія контексту — `administerRights` на кожній операції. */
+export const rightsRole = commandObject({
+  name: "RightsRole",
+  table: "rights_role",
+  scopeKindId: undefined,
+  scopeColumn: undefined,
+  attributes: [attr("code", "String", { column: "code" })],
+  operations: {
+    create: target("rights_role", "save", "administerRights"),
+    update: target("rights_role", "save", "administerRights"),
+    markDeletion: target("rights_role", "mark_deletion", "administerRights"),
+  },
+})
+
+export const catalog: RuntimeCatalog = runtimeCatalogSchema.parse({
+  format: 1,
+  snapshotHash: "hash-1",
+  provider: "supabase",
+  objects: [client, rightsRole],
+})
