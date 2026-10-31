@@ -15,6 +15,7 @@ import {
   type StandardColumnDef,
   KIND_REGISTRY,
   COMMAND_CORE_ERRORS,
+  CURRENT_USER_FUNCTION_NAME,
 } from "simetra/model"
 import {
   qualified,
@@ -267,7 +268,7 @@ function transitionSql(
   return [
     `PERFORM ${ref(RIGHTS_FUNCTIONS.bump)}(s.scope_kind_id, s.scope) FROM (SELECT DISTINCT r.scope_kind_id, r.scope FROM (${versionRows}) r) s;`,
     `INSERT INTO ${ref(platform("rights_journal"))} (xid, scope_kind_id, scope, actor, reason, action, object, relation, operation, row_id, parent_id, before, after)`,
-    `SELECT txid_current(), r.scope_kind_id, r.scope, CASE WHEN v_maintenance THEN NULL ELSE ${ref(platform("current_user_id"))}() END, CASE WHEN v_maintenance THEN 'maintenance' ELSE 'command' END, v_action, ${sqlLiteral(config.object)}, ${sqlLiteral(relation)}, ${sqlLiteral(operation)}, r.row_id, r.parent_id, r.before, r.after FROM (${rows}) r;`,
+    `SELECT txid_current(), r.scope_kind_id, r.scope, CASE WHEN v_maintenance THEN NULL ELSE ${ref(platform(CURRENT_USER_FUNCTION_NAME))}() END, CASE WHEN v_maintenance THEN 'maintenance' ELSE 'command' END, v_action, ${sqlLiteral(config.object)}, ${sqlLiteral(relation)}, ${sqlLiteral(operation)}, r.row_id, r.parent_id, r.before, r.after FROM (${rows}) r;`,
     pendingSql(config, operation),
   ].join("\n")
 }
@@ -313,7 +314,7 @@ function snapshotBody(
   style: AttributeCase
 ): string {
   const actor = ref(platform("rights_tx_actor"))
-  const currentUser = `${ref(platform("current_user_id"))}()`
+  const currentUser = `${ref(platform(CURRENT_USER_FUNCTION_NAME))}()`
   return [
     "DECLARE",
     "  v_action text;",
@@ -731,7 +732,7 @@ function actorCheck(contracts: GuardContracts): string {
   const before = `SELECT ${GRANT_COLUMNS} FROM ${actor} WHERE xid = v_pending.xid AND NOT full_access AND level IS NOT NULL`
   return [
     "IF v_pending.kind = 'actor' THEN",
-    `  IF NOT v_pending.maintenance AND EXISTS (SELECT 1 FROM ${actor} WHERE xid = v_pending.xid AND actor IS DISTINCT FROM ${ref(platform("current_user_id"))}()) THEN ${refusal("rights-context")} END IF;`,
+    `  IF NOT v_pending.maintenance AND EXISTS (SELECT 1 FROM ${actor} WHERE xid = v_pending.xid AND actor IS DISTINCT FROM ${ref(platform(CURRENT_USER_FUNCTION_NAME))}()) THEN ${refusal("rights-context")} END IF;`,
     `  ${escalationSql(after, before, containerStorageKind(contracts))}`,
     "END IF;",
   ].join("\n")
@@ -837,7 +838,7 @@ function memberEventBody(
     operation === "UPDATE"
       ? [
           `IF v_action IS NULL AND NOT v_maintenance AND EXISTS (SELECT 1 FROM old_rows o JOIN new_rows n ON n.${key} = o.${key}`,
-          `  WHERE o.${user} IS DISTINCT FROM n.${user} AND NOT (o.${user} IS NULL AND n.${user} IS NOT DISTINCT FROM ${ref(platform("current_user_id"))}()`,
+          `  WHERE o.${user} IS DISTINCT FROM n.${user} AND NOT (o.${user} IS NULL AND n.${user} IS NOT DISTINCT FROM ${ref(platform(CURRENT_USER_FUNCTION_NAME))}()`,
           `    AND NOT EXISTS (SELECT 1 FROM ${ref(member.table)} other WHERE other.${scope} = n.${scope} AND other.${user} = n.${user} AND other.${key} <> n.${key})))`,
           `THEN ${refusal("rights-context")} END IF;`,
         ].join("\n")
