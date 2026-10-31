@@ -1,9 +1,12 @@
+import { randomBytes } from "node:crypto"
 import pg from "pg"
 import type { EngineScope, SchemaEngine } from "simetra/schema"
 import { createPgDeltaEngine } from "../../schema-engine"
 import {
   testDatabaseName,
   testDatabaseUrl,
+  testPoolerUrl,
+  testRoleName,
   testSuperuserUrl,
 } from "../../../../simetra/test/support"
 
@@ -115,4 +118,83 @@ export async function waitForLock(
     await new Promise((resolve) => setTimeout(resolve, 50))
   }
   throw new Error(`backend ${pid} never waited on a lock`)
+}
+
+const quoted = (name: string) => `"${name.replaceAll('"', '""')}"`
+
+/**
+ * Runs `fn` with a run-tagged login role that has a password and the given
+ * memberships `WITH INHERIT FALSE, SET TRUE` — the shape of the runtime login
+ * role (`simetra_runtime`): it reaches a role only by `SET LOCAL ROLE`. `fn`
+ * gets the URL of the database `url` as that role. The role and its backends
+ * are removed on every path; `label` tells apart two such roles in one run.
+ */
+export async function withRuntimeLogin<T>(
+  url: string,
+  memberOf: readonly string[],
+  fn: (loginUrl: string) => Promise<T>,
+  label = "runtime"
+): Promise<T> {
+  const name = testRoleName(label)
+  const password = randomBytes(12).toString("hex")
+  // Створення — до `try`: невдале створення не видаляє чужої ролі з тим ім'ям
+  await query(
+    testSuperuserUrl(),
+    `create role ${quoted(name)} login noinherit password '${password}'`
+  )
+  try {
+    for (const role of memberOf)
+      await query(
+        testSuperuserUrl(),
+        `grant ${quoted(role)} to ${quoted(name)} with inherit false, set true`
+      )
+    const login = new URL(url)
+    login.username = name
+    login.password = password
+    return await fn(login.toString())
+  } finally {
+    // Пулер тримає серверні з'єднання ролі й після тесту: без завершення
+    // бекендів тінь не видалилася б, а роль лишила б сесії сторожу
+    await query(
+      testSuperuserUrl(),
+      "select pg_terminate_backend(pid) from pg_stat_activity where usename = $1",
+      [name]
+    )
+    await dropRoles(name)
+  }
+}
+
+/**
+ * The pooler URL (transaction mode) of the same login and database as
+ * `loginUrl`. Supavisor names the tenant after the first dot of the user
+ * (`<role>.<tenant>`); the tenant comes from `testPoolerUrl()` only — on a
+ * hosted project it is the project ref.
+ */
+export function throughPoolerAs(loginUrl: string): string {
+  const pooler = new URL(testPoolerUrl())
+  const user = decodeURIComponent(pooler.username)
+  const dot = user.indexOf(".")
+  if (dot < 0) throw new Error(`pooler user ${user} names no tenant`)
+  const login = new URL(loginUrl)
+  pooler.username = `${login.username}.${user.slice(dot + 1)}`
+  pooler.password = login.password
+  pooler.pathname = login.pathname
+  return pooler.toString()
+}
+
+/**
+ * Records `hash` as the applied snapshot in `simetra.marker` (every `NOT NULL`
+ * column of `renderApplyState`, placeholders elsewhere): the runtime compares
+ * only the hash. Replaces the row, so a test can switch the hash.
+ */
+export async function seedMarker(
+  client: pg.Client,
+  hash: string
+): Promise<void> {
+  await client.query(
+    `INSERT INTO simetra.marker (format, snapshot_hash, snapshot, scope, catalog, engine_name, engine_version, fingerprint, fingerprint_version, platform_version, plan_hash)
+     VALUES (1, $1, '{}', '{}', '{}', 'engine', '1', '{}', 1, '0', 'plan')
+     ON CONFLICT (singleton) DO UPDATE SET snapshot_hash = EXCLUDED.snapshot_hash`,
+    [hash]
+  )
 }
