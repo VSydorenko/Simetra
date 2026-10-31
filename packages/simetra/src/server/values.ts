@@ -133,7 +133,6 @@ function scalar(attribute: RuntimeAttribute, value: unknown): unknown {
         ? value
         : undefined
     case "Text":
-    case "PgEnum":
       return typeof value === "string" ? value : undefined
     case "UUID":
       return typeof value === "string" && UUID_TEXT.test(value)

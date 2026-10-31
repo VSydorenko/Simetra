@@ -2,7 +2,6 @@ import {
   CAST_TYPES,
   KIND_REGISTRY,
   type MetadataRef,
-  type PhysicalEnumType,
   type PhysicalTable,
   type RuntimeAttribute,
   type RuntimeCatalog,
@@ -10,7 +9,6 @@ import {
   type RuntimeObject,
   type RuntimeOperationTarget,
   type RuntimeSection,
-  pgEnumTypeName,
 } from "simetra/model"
 import type {
   CatalogCommandContract,
@@ -198,6 +196,11 @@ function attributes(
         ? { raw: column.type }
         : { type: "UUID" })
     const value = "raw" in source ? undefined : source
+    // Недосяжно з метаданих: на `PgEnum` посилається лише колонка
+    // `CustomTable`, а каталог будують лише види ядра команд.
+    if (value?.type === "PgEnum") {
+      throw new Error(`internal: catalog field ${field.name} is a PgEnum`)
+    }
     const insert = field.columns.every((c) => keys.insert.has(c))
     const update = field.columns.every((c) => keys.update.has(c))
     const enumValues =
@@ -208,7 +211,7 @@ function attributes(
       name: field.name,
       column: column.name,
       pgType: column.type,
-      castType: castTypeOf(column.type, facts.model.physical.enumTypes),
+      castType: castTypeOf(column.type),
       type: value?.type ?? "Raw",
       ...(value?.array === true ? { array: true as const } : {}),
       // Обов'язковість — лише для того, що команда сама вставляє: решту
@@ -301,26 +304,16 @@ const CASTS = new Set<string>(CAST_TYPES)
 /**
  * Тип приведення параметра: базовий тип колонки без typmod
  * (`character varying(10)` → `character varying`) — довжину й точність
- * перевіряє T3 до бази, а приведення з typmod мовчки обрізало б значення;
- * енам — ім'я типу в лапках.
+ * перевіряє T3 до бази, а приведення з typmod мовчки обрізало б значення.
  */
-function castTypeOf(
-  pgType: string,
-  enumTypes: readonly PhysicalEnumType[]
-): string {
+function castTypeOf(pgType: string): string {
   const array = pgType.endsWith("[]") ? "[]" : ""
   const base = (array === "" ? pgType : pgType.slice(0, -2)).replace(
     /\(\d+(?:,\d+)?\)/,
     ""
   )
   if (CASTS.has(base)) return `${base}${array}`
-  const enumType = enumTypes.find(
-    (e) => pgEnumTypeName(e.schema, e.name) === base
-  )
-  if (enumType === undefined) {
-    throw new Error(`internal: no cast type for column type ${pgType}`)
-  }
-  return `"${enumType.schema}"."${enumType.name}"${array}`
+  throw new Error(`internal: no cast type for column type ${pgType}`)
 }
 
 function fieldOf(fields: readonly EntityField[], column: string): EntityField {

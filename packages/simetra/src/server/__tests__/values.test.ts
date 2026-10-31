@@ -94,7 +94,6 @@ describe("encodeItemValue / decodeRow round trip", () => {
       ["Closed", null],
     ],
     ["link", OTHER, OTHER, OTHER, OTHER],
-    ["mood", "happy", "happy", "happy", "happy"],
     ["note", null, null, null, null],
   ])("%s: %s", (name, input, item, stored, decoded) => {
     const attribute = attributeOf(name)
@@ -213,7 +212,6 @@ describe("rejects lossy and invalid values", () => {
     ["blob", "ff"],
     ["blob", "\\xf"],
     ["note", 1],
-    ["mood", 1],
     // `\u0000` і непарний сурогат: `text` і `jsonb` їх не зберігають.
     ["code", "a\u0000"],
     ["note", "a\u0000b"],
@@ -221,7 +219,7 @@ describe("rejects lossy and invalid values", () => {
     ["note", "x\uDC00"],
     ["owner", "\u0000"],
     ["blob", "\\x00\u0000"],
-    ["mood", "\uDBFF"],
+    ["note", "\uDBFF"],
     ["payload", "a\u0000"],
     ["payload", { a: ["\uD83D"] }],
     ["payload", { "k\u0000": 1 }],

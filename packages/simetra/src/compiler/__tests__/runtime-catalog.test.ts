@@ -389,10 +389,10 @@ describe("buildRuntimeCatalog on runtime values", () => {
     })
   })
 
-  // Гілка `castTypeOf` для енам-типу (`"схема"."ім'я"`) у каталозі рантайму
-  // недосяжна з метаданих: на `PgEnum` посилається лише колонка `CustomTable`,
-  // а каталог містить лише довідники. Тест тримає цей факт: коли довідник
-  // зможе посилатися на `PgEnum`, він почервоніє й вимагатиме перевірки лапок.
+  // Каталог рантайму не знає енам-типів (`castTypeOf` їх не приводить):
+  // на `PgEnum` посилається лише колонка `CustomTable`, а каталог містить
+  // лише види ядра команд. Тест тримає цей факт: коли довідник зможе
+  // посилатися на `PgEnum`, він почервоніє й вимагатиме типу приведення.
   it("a catalog attribute cannot reference a PgEnum, so no quoted cast type comes from a catalog", async () => {
     const { diagnostics } = await compileRights(
       policyDomain(runtimeValuesLayer(), {

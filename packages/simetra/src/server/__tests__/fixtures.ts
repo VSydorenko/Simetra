@@ -80,7 +80,6 @@ export const sample: RuntimeObject = runtimeObjectSchema.parse({
     attr("statuses", "Ref", { array: true, enumValues: STATUS.enumValues }),
     SUBJECT,
     attr("link", "Ref"),
-    attr("mood", "PgEnum"),
     attr("frozen", "String", { insert: true, update: false }),
     attr("computed", "Integer", { insert: false, update: false }),
     attr("copy_id", "Raw", { insert: false, update: false }),

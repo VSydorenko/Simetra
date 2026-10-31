@@ -105,7 +105,9 @@ describe("castTypeSchema", () => {
     ["text", true],
     ["timestamp with time zone", true],
     ["numeric[]", true],
-    ['"public"."OrderStatus"[]', true],
+    // Тип користувача (енам) у каталог рантайму не потрапляє: лапок немає.
+    ['"public"."OrderStatus"[]', false],
+    ['"public"."OrderStatus"', false],
     ["text or true", false],
     ["numeric(12,2)", false],
     ["character", false],

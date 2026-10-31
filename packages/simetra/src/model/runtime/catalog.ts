@@ -30,10 +30,8 @@ export const CAST_TYPES = [
 ] as const
 
 // Тип приведення потрапляє в SQL без лапок, тож форма закрита: базовий тип
-// з переліку чи ідентифікатор у лапках без лапок усередині.
-const CAST_TYPE = new RegExp(
-  `^(?:${CAST_TYPES.join("|")}|"[^"]+"\\."[^"]+")(?:\\[\\])?$`
-)
+// з переліку, можливо масив.
+const CAST_TYPE = new RegExp(`^(?:${CAST_TYPES.join("|")})(?:\\[\\])?$`)
 
 export const castTypeSchema = z.string().regex(CAST_TYPE)
 
@@ -48,7 +46,7 @@ export const runtimeAttributeSchema = z.strictObject({
   /** Лише для `type` і декодування; у SQL не йде. */
   pgType: z.string(),
   castType: castTypeSchema,
-  type: z.enum([...LOGICAL_TYPES, "PgEnum", "Raw"]),
+  type: z.enum([...LOGICAL_TYPES, "Raw"]),
   array: z.literal(true).optional(),
   required: z.boolean(),
   maxLength: z.int().min(1).optional(),
@@ -124,7 +122,7 @@ export const runtimeCatalogSchema = z.strictObject({
   objects: z.array(runtimeObjectSchema),
 })
 
-/** A base cast type; `castTypeSchema` also accepts quoted user types and arrays. */
+/** A base cast type; `castTypeSchema` also accepts its array form. */
 export type BaseCastType = (typeof CAST_TYPES)[number]
 export type QualifiedName = z.infer<typeof qualifiedNameSchema>
 export type RuntimeAttribute = z.infer<typeof runtimeAttributeSchema>
