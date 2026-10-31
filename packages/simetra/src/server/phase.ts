@@ -136,18 +136,22 @@ function checkDraft(
   op: Operation,
   draft: unknown
 ): Draft<object> {
-  if (!isPlainObject(draft)) {
-    tx.state.log({
-      kind: "hook",
-      error: new Error("beforeWrite returned no draft object"),
-    })
+  const keys = op.action === "markDeletion" ? [] : ["values", "tabularSections"]
+  let bad: string | undefined
+  try {
+    if (!isPlainObject(draft)) {
+      throw new Error("beforeWrite returned no draft object")
+    }
+    bad = Object.keys(draft).find(
+      (key) => !keys.includes(key) || draft[key] === undefined
+    )
+  } catch (error) {
+    // Не об'єкт чи `Proxy`, що кидає, — дефект хука, а не бази.
+    tx.state.log({ kind: "hook", error })
     tx.abort({ code: "command.internal" })
   }
-  const keys = op.action === "markDeletion" ? [] : ["values", "tabularSections"]
-  for (const key of Object.keys(draft)) {
-    if (!keys.includes(key) || draft[key] === undefined) tx.abort(invalid(key))
-  }
-  return draft
+  if (bad !== undefined) tx.abort(invalid(bad))
+  return draft as Draft<object>
 }
 
 /** Фаза `ctx.run`: той самий вхід, що й у команди, — копія й перевірка. */

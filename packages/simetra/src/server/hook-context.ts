@@ -50,6 +50,9 @@ export function outsideCommand<T>(work: () => T): T {
  * команди — `command.nested` (спека П4 §6.5). Відмова закриває чергу тієї
  * команди: перехопивши її, хук не продовжить команду (Р-A3-15).
  */
+// `Frame` несе спробу, у якій виклик запланували: продовження спроби 1, що
+// спрацювало під час повтору, закриває вже завершену спробу 1. Сам виклик
+// однаково відхиляється, а спроба 2 від нього не залежить — це безпечно.
 export function rejectNested(): void {
   const frame = frames.getStore()
   if (frame?.command.active === true) {
@@ -107,7 +110,15 @@ function contextOf(tx: Transaction, phase: HookPhase, scope: Scope) {
       kind: "hook",
       error: new Error("hook context used outside its hook"),
     })
-    return new CommandFailure(INTERNAL)
+    const failure = new CommandFailure(INTERNAL)
+    // Відмова закриває чергу команди, у чиєму контексті стався виклик
+    // (Р-A3-15): перехопивши її, хук не закомітить команду без цієї дії.
+    // Після завершення команди — лише журнал.
+    const frame = frames.getStore()
+    if (frame?.command.active === true) {
+      frame.tx.close({ failure, retry: false, destroy: false })
+    }
+    return failure
   }
   const track = <R>(work: () => Promise<R>): Promise<R> => {
     let promise: Promise<R>

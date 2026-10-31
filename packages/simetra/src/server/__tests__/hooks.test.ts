@@ -249,6 +249,49 @@ describe("draft of beforeWrite", () => {
     }
   )
 
+  it.each<[string, ProxyHandler<object>]>([
+    [
+      "a prototype trap",
+      {
+        getPrototypeOf() {
+          throw new Error("trap")
+        },
+      },
+    ],
+    [
+      "an own-keys trap",
+      {
+        ownKeys() {
+          throw new Error("trap")
+        },
+      },
+    ],
+    [
+      "a getter trap",
+      {
+        get() {
+          throw new Error("trap")
+        },
+      },
+    ],
+  ])(
+    "maps a draft with %s to a logged command.internal",
+    async (_, handler) => {
+      const { db, runtime, log } = await withModules({
+        "Catalog.Client": {
+          beforeWrite: () => new Proxy({ values: { code: "A" } }, handler),
+        },
+      })
+      expect(await failureOf(runtime.run(session, create))).toEqual({
+        code: "command.internal",
+      })
+      expect(db.calls).toEqual(CLOSED)
+      expect(log.mock.calls).toEqual([
+        [{ kind: "hook", error: expect.any(Error) }],
+      ])
+    }
+  )
+
   it("gives each attempt the original input after a hook changed it", async () => {
     const seen: unknown[] = []
     let cores = 0
@@ -331,6 +374,75 @@ describe("hook failures", () => {
     expect(later).toEqual([{ code: "command.rejected", reason: "busy" }])
     expect(db.calls).toEqual(CLOSED)
     expect(action).not.toHaveBeenCalled()
+  })
+
+  it("stops a batch when onWrite caught a ctx.run rejection", async () => {
+    const before: string[] = []
+    const { db, runtime, log } = await withModules({
+      "Catalog.Client": {
+        beforeWrite({ ctx, draft }) {
+          before.push(ctx.id)
+          return draft
+        },
+        async onWrite({ ctx }) {
+          await ctx.run(rights()).catch(() => undefined)
+        },
+      },
+      "Catalog.RightsRole": {
+        beforeWrite: ({ ctx }) => ctx.reject("busy"),
+      },
+    })
+    const error = await failureOf(
+      runtime.run(session, [create, { ...create, id: OTHER }])
+    )
+    expect(error).toEqual({ code: "command.rejected", reason: "busy" })
+    // Фаза з перехопленою відмовою не йде далі: `beforeWrite` op2 не викликано.
+    expect(before).toEqual([ID])
+    expect(db.calls).toEqual([
+      ...OPEN,
+      ...clientPhase,
+      ROLLBACK,
+      { release: false },
+    ])
+    expect(log).not.toHaveBeenCalled()
+  })
+
+  it("does not check the draft after beforeWrite caught a rejection", async () => {
+    const { runtime, log } = await withModules({
+      "Catalog.Client": {
+        async beforeWrite({ ctx }) {
+          await ctx.run(rights()).catch(() => undefined)
+          return undefined as unknown as object
+        },
+      },
+      "Catalog.RightsRole": {
+        beforeWrite: ({ ctx }) => ctx.reject("busy"),
+      },
+    })
+    expect(await failureOf(runtime.run(session, create))).toEqual({
+      code: "command.rejected",
+      reason: "busy",
+    })
+    expect(log).not.toHaveBeenCalled()
+  })
+
+  it("releases once and keeps the code when the host log throws", async () => {
+    const { db, runtime } = await setup(rightsCore, {
+      log: () => {
+        throw new TypeError("log down")
+      },
+      objectModules: {
+        "Catalog.Client": {
+          beforeWrite() {
+            throw new Error("boom")
+          },
+        },
+      },
+    })
+    expect(await failureOf(runtime.run(session, create))).toEqual({
+      code: "command.internal",
+    })
+    expect(db.calls).toEqual(CLOSED)
   })
 
   it("retries when a hook caught a 40001 from ctx.run", async () => {
@@ -536,7 +648,7 @@ describe("depth and queue", () => {
   })
 
   it("maps 22P02 of ctx.read to command.invalid", async () => {
-    const { runtime } = await withModules(
+    const { db, runtime, log } = await withModules(
       {
         "Catalog.Client": {
           async beforeWrite({ ctx, draft }) {
@@ -553,6 +665,13 @@ describe("depth and queue", () => {
     expect(await failureOf(runtime.run(session, create))).toEqual({
       code: "command.invalid",
     })
+    expect(db.calls).toEqual([
+      ...OPEN,
+      readRights(OTHER),
+      ROLLBACK,
+      { release: false },
+    ])
+    expect(log).not.toHaveBeenCalled()
   })
 })
 
@@ -774,10 +893,11 @@ describe("ctx lifetime", () => {
         },
       },
     })
-    const { runtime: second } = await withModules({
+    const { db: b, runtime: second } = await withModules({
       "Catalog.Client": {
         async beforeWrite({ draft }) {
-          await kept!.read({ object: RIGHTS, id: THIRD })
+          // Перехоплена відмова однаково закриває чергу команди B.
+          await kept!.read({ object: RIGHTS, id: THIRD }).catch(() => undefined)
           return draft
         },
       },
@@ -788,6 +908,7 @@ describe("ctx lifetime", () => {
     expect(await failureOf(second.run(session, create))).toEqual({
       code: "command.internal",
     })
+    expect(b.calls).toEqual(CLOSED)
     read.answer()
     await running
     expect(a.calls).toEqual([
@@ -795,6 +916,56 @@ describe("ctx lifetime", () => {
       readRights(OTHER),
       ...clientPhase,
       COMMIT,
+      { release: false },
+    ])
+  })
+
+  it("fails the command when a hook continuation calls ctx after the hook returned", async () => {
+    const { db, runtime, log } = await withModules({
+      "Catalog.Client": {
+        beforeWrite({ ctx, draft }) {
+          ctx
+            .read({ object: RIGHTS, id: OTHER })
+            .then(() => ctx.run(rights()))
+            .catch(() => undefined)
+          return draft
+        },
+      },
+    })
+    expect(await failureOf(runtime.run(session, create))).toEqual({
+      code: "command.internal",
+    })
+    // Без `opB` команда не комітить частково.
+    expect(db.calls).toEqual([
+      ...OPEN,
+      readRights(OTHER),
+      ROLLBACK,
+      { release: false },
+    ])
+    expect(log.mock.calls).toEqual([
+      [{ kind: "hook", error: expect.any(Error) }],
+    ])
+  })
+
+  it("fails a batch whose second hook uses the ctx kept by the first", async () => {
+    let kept: HookContext | undefined
+    const { db, runtime } = await withModules({
+      "Catalog.Client": {
+        async beforeWrite({ ctx, draft }) {
+          if (kept === undefined) kept = ctx
+          else await kept.run(rights()).catch(() => undefined)
+          return draft
+        },
+      },
+    })
+    const error = await failureOf(
+      runtime.run(session, [create, { ...create, id: OTHER }])
+    )
+    expect(error).toEqual({ code: "command.internal" })
+    expect(db.calls).toEqual([
+      ...OPEN,
+      ...clientPhase,
+      ROLLBACK,
       { release: false },
     ])
   })
@@ -883,6 +1054,18 @@ describe("afterCommit", () => {
 })
 
 describe("command.nested", () => {
+  // Друга команда — окрема транзакція після звільнення з'єднання першої.
+  const TWO_COMMANDS = [
+    ...OPEN,
+    ...clientPhase,
+    COMMIT,
+    { release: false },
+    ...OPEN,
+    ...rightsPhase(),
+    COMMIT,
+    { release: false },
+  ]
+
   it.each(["the same", "another"])(
     "rejects run of %s runtime inside a hook and fails the command",
     async (which) => {
@@ -914,7 +1097,7 @@ describe("command.nested", () => {
   it("allows run from a continuation scheduled by a hook after the command", async () => {
     const gate = deferred()
     let continuation: Promise<unknown> | undefined
-    const { runtime } = await withModules({
+    const { db, runtime } = await withModules({
       "Catalog.Client": {
         beforeWrite({ draft }) {
           continuation ??= gate.promise.then(() =>
@@ -926,14 +1109,13 @@ describe("command.nested", () => {
     })
     await runtime.run(session, create)
     gate.resolve()
-    await expect(continuation).resolves.toMatchObject({
-      rows: [{ ref: OTHER }],
-    })
+    await continuation
+    expect(db.calls).toEqual(TWO_COMMANDS)
   })
 
   it("allows an afterCommit action to start a new command", async () => {
     let nested: Promise<unknown> | undefined
-    const { runtime } = await withModules({
+    const { db, runtime } = await withModules({
       "Catalog.Client": {
         beforeWrite({ ctx, draft }) {
           ctx.afterCommit(() => {
@@ -945,6 +1127,7 @@ describe("command.nested", () => {
       },
     })
     await runtime.run(session, create)
-    await expect(nested).resolves.toMatchObject({ rows: [{ ref: OTHER }] })
+    await nested
+    expect(db.calls).toEqual(TWO_COMMANDS)
   })
 })
