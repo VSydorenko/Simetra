@@ -6,6 +6,7 @@ import {
   OPERATION_EVENTS,
   operationSchema,
   readQuerySchema,
+  runtimeAttributeSchema,
   runtimeCatalogSchema,
   sessionClaimsSchema,
   type ObjectModule,
@@ -57,6 +58,11 @@ describe("operationSchema", () => {
       "a zero expectedVersion",
       { action: "delete", object, id, expectedVersion: 0 },
     ],
+    // Версія поза безпечним цілим втратила б точність у JS.
+    [
+      "an unsafe expectedVersion",
+      { action: "delete", object, id, expectedVersion: 2 ** 53 },
+    ],
   ])("rejects %s", (_, input) => {
     expect(operationSchema.safeParse(input).success).toBe(false)
   })
@@ -73,6 +79,8 @@ describe("readQuerySchema", () => {
     [{ object, id }, true],
     [{ object, where: { code: "A" }, limit: 200 }, true],
     [{ object, where: {}, after: id, limit: 1 }, true],
+    [{ object, id: nonRfcId }, true],
+    [{ object, where: {}, after: nonRfcId, limit: 1 }, true],
     [{ object, where: {}, limit: 201 }, false],
     [{ object, where: {}, limit: 0 }, false],
   ])("parses %j as %s", (input, ok) => {
@@ -104,6 +112,43 @@ describe("castTypeSchema", () => {
     ['"pub"lic"."X"', false],
   ])("parses %s as %s", (input, ok) => {
     expect(castTypeSchema.safeParse(input).success).toBe(ok)
+  })
+})
+
+describe("runtimeAttributeSchema", () => {
+  const attribute = {
+    name: "status",
+    column: "status",
+    pgType: "text",
+    castType: "text",
+    type: "Ref",
+    required: false,
+    insert: true,
+    update: true,
+  }
+
+  it.each([
+    ["the minimal form", true, attribute],
+    [
+      "minimal enumValues",
+      true,
+      { ...attribute, enumValues: [{ name: "Open", label: "open" }] },
+    ],
+    [
+      "a minimal pair",
+      true,
+      {
+        ...attribute,
+        pair: {
+          typeColumn: "status_type",
+          targets: [{ object, label: "client" }],
+        },
+      },
+    ],
+    ["an unknown key", false, { ...attribute, extra: 1 }],
+    ["a negative scale", false, { ...attribute, scale: -1 }],
+  ])("parses %s as %s", (_, ok, input) => {
+    expect(runtimeAttributeSchema.safeParse(input).success).toBe(ok)
   })
 })
 

@@ -124,7 +124,8 @@ export const runtimeCatalogSchema = z.strictObject({
   objects: z.array(runtimeObjectSchema),
 })
 
-export type CastType = (typeof CAST_TYPES)[number]
+/** A base cast type; `castTypeSchema` also accepts quoted user types and arrays. */
+export type BaseCastType = (typeof CAST_TYPES)[number]
 export type QualifiedName = z.infer<typeof qualifiedNameSchema>
 export type RuntimeAttribute = z.infer<typeof runtimeAttributeSchema>
 export type RuntimeConstraint = z.infer<typeof runtimeConstraintSchema>
