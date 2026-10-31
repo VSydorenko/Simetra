@@ -6,6 +6,8 @@ import {
   type DatabaseProvider,
   type PhysicalSnapshot,
   type PhysicalTable,
+  COMMAND_CORE_ERRORS,
+  isTextEncodedType,
 } from "simetra/model"
 import type {
   AccessContract,
@@ -44,29 +46,7 @@ const q = quoteIdent
 const relation = (t: { schema: string; name: string }) =>
   `${q(t.schema)}.${q(t.name)}`
 
-/**
- * Відмови ядра (спека П4 §6.10): `MESSAGE` — код, `DETAIL` — причина чи
- * ключ; даних рядка відмова не несе (Рт4). Одне місце для генератора й
- * тестів.
- */
-export const CATALOG_COMMAND_ERRORS = {
-  invalid: { errcode: "22023", message: "command.invalid" },
-  context: { errcode: "42501", message: "command.context", detail: "phase" },
-  forbidden: {
-    errcode: "42501",
-    message: "command.forbidden",
-    noRight: "no-right",
-    newCarrier: "new-carrier",
-  },
-  conflict: {
-    errcode: "P0001",
-    message: "command.conflict",
-    version: "version",
-    exists: "exists",
-  },
-} as const
-
-const E = CATALOG_COMMAND_ERRORS
+const E = COMMAND_CORE_ERRORS
 /** `DETAIL` — SQL-вираз: літерал ключа чи конкатенація з `v_key`. */
 const invalid = (detail: string) =>
   `RAISE EXCEPTION USING ERRCODE = '${E.invalid.errcode}', MESSAGE = '${E.invalid.message}', DETAIL = ${detail};`
@@ -285,9 +265,7 @@ function defaultOf(table: PhysicalTable, column: string): string {
 
 /** Колонки, які результат віддає текстом: `numeric` і `bigint` T3 читає рядками (Рт1). */
 function textColumns(table: PhysicalTable, row: string): string | undefined {
-  const columns = table.columns.filter((c) =>
-    /^(bigint|numeric)(\(.*\))?(\[\])?$/.test(c.type)
-  )
+  const columns = table.columns.filter((c) => isTextEncodedType(c.type))
   if (columns.length === 0) return undefined
   return `jsonb_build_object(${columns
     .map(

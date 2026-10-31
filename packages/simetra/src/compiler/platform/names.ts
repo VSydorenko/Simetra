@@ -1,4 +1,4 @@
-import { PLATFORM_SCHEMA } from "simetra/model"
+import { CURRENT_USER_FUNCTION_NAME, PLATFORM_SCHEMA } from "simetra/model"
 import type { QualifiedName } from "../contracts"
 
 /**
@@ -9,7 +9,7 @@ import type { QualifiedName } from "../contracts"
  */
 export const CURRENT_USER_FUNCTION: QualifiedName = {
   schema: PLATFORM_SCHEMA,
-  name: "current_user_id",
+  name: CURRENT_USER_FUNCTION_NAME,
 }
 
 /**

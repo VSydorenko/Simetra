@@ -14,6 +14,7 @@ import {
   type PhysicalTable,
   type StandardColumnDef,
   KIND_REGISTRY,
+  COMMAND_CORE_ERRORS,
 } from "simetra/model"
 import {
   qualified,
@@ -201,7 +202,7 @@ function definer(fn: QualifiedName, returns: string, body: string): string {
 }
 
 function refusal(detail: string, table?: PhysicalTable): string {
-  return `RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'command.forbidden', DETAIL = ${sqlLiteral(detail)}${table === undefined ? "" : `, TABLE = ${sqlLiteral(table.name)}`};`
+  return `RAISE EXCEPTION USING ERRCODE = '${COMMAND_CORE_ERRORS.forbidden.errcode}', MESSAGE = '${COMMAND_CORE_ERRORS.forbidden.message}', DETAIL = ${sqlLiteral(detail)}${table === undefined ? "" : `, TABLE = ${sqlLiteral(table.name)}`};`
 }
 
 /**

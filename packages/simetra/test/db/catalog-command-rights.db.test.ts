@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
-import { PLATFORM_ROLES, type CommandContext } from "simetra/model"
-import { CATALOG_COMMAND_ERRORS } from "../../src/compiler/catalog-command/units"
+import {
+  COMMAND_CORE_ERRORS,
+  PLATFORM_ROLES,
+  type CommandContext,
+} from "simetra/model"
 import {
   COMMENT_TABLE,
   TICKET_TABLE,
@@ -30,7 +33,7 @@ import {
  * колонкові гранти, бо порівнюється лише рядкове право.
  */
 
-const E = CATALOG_COMMAND_ERRORS
+const E = COMMAND_CORE_ERRORS
 /** Значення `description`, за яким власник бачить, що прямий `UPDATE` пройшов. */
 const MARK = "rights-grid"
 

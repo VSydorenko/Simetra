@@ -2,6 +2,7 @@ import {
   COMMAND_SETTING,
   PLATFORM_SCHEMA,
   type DatabaseProvider,
+  COMMAND_CORE_ERRORS,
 } from "simetra/model"
 import {
   isWriteAction,
@@ -155,7 +156,7 @@ export function buildCommandUnits(
  */
 function parsedBody(pairs: readonly [string, string][]): string {
   const raise = (detail: string) =>
-    `RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'command.context', DETAIL = '${detail}';`
+    `RAISE EXCEPTION USING ERRCODE = '${COMMAND_CORE_ERRORS.context.errcode}', MESSAGE = '${COMMAND_CORE_ERRORS.context.message}', DETAIL = '${detail}';`
   // Порожній перелік: пара з `NULL` нічому не дорівнює — відмова за будь-якої дії.
   const values =
     pairs.length === 0
@@ -168,16 +169,16 @@ function parsedBody(pairs: readonly [string, string][]): string {
     "BEGIN",
     "  IF v_raw IS NULL OR v_raw = '' THEN",
     "    IF p_strict THEN",
-    `      ${raise("missing")}`,
+    `      ${raise(COMMAND_CORE_ERRORS.context.missing)}`,
     "    END IF;",
     "    RETURN;",
     "  END IF;",
     "  IF NOT pg_input_is_valid(v_raw, 'jsonb') THEN",
-    `    ${raise("malformed")}`,
+    `    ${raise(COMMAND_CORE_ERRORS.context.malformed)}`,
     "  END IF;",
     "  v_ctx := v_raw::jsonb;",
     "  IF jsonb_typeof(v_ctx) IS DISTINCT FROM 'object' THEN",
-    `    ${raise("malformed")}`,
+    `    ${raise(COMMAND_CORE_ERRORS.context.malformed)}`,
     "  END IF;",
     // Ключі й типи — лише для об'єкта: порядок обчислення `OR` SQL не
     // гарантує, а `jsonb_object_keys` на масиві кидає 22023.
@@ -185,19 +186,19 @@ function parsedBody(pairs: readonly [string, string][]): string {
     "    OR jsonb_typeof(v_ctx -> 'action') IS DISTINCT FROM 'string'",
     "    OR jsonb_typeof(v_ctx -> 'object') IS DISTINCT FROM 'string'",
     "    OR jsonb_typeof(v_ctx -> 'root') IS DISTINCT FROM 'string' THEN",
-    `    ${raise("malformed")}`,
+    `    ${raise(COMMAND_CORE_ERRORS.context.malformed)}`,
     "  END IF;",
     // Текст — лише для рядків: `->>` на не-рядку не дав би значення для UUID.
     "  IF (v_ctx ->> 'action') = ''",
     "    OR (v_ctx ->> 'object') = ''",
     "    OR NOT pg_input_is_valid(v_ctx ->> 'root', 'uuid') THEN",
-    `    ${raise("malformed")}`,
+    `    ${raise(COMMAND_CORE_ERRORS.context.malformed)}`,
     "  END IF;",
     "  action := v_ctx ->> 'action';",
     "  object := v_ctx ->> 'object';",
     "  root := (v_ctx ->> 'root')::uuid;",
     `  IF NOT EXISTS (SELECT 1 FROM (VALUES ${values}) AS t (o, a) WHERE t.o = object AND t.a = action) THEN`,
-    `    ${raise("unknown-action")}`,
+    `    ${raise(COMMAND_CORE_ERRORS.context.unknownAction)}`,
     "  END IF;",
     "  RETURN;",
     "END",
