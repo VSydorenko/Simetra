@@ -293,6 +293,27 @@
   повторювати лише справжню недоступність, порт має розрізняти помилку
   драйвера чи мережі й виняток коду T3 (напр. `command.internal` для
   винятку, кинутого не драйвером).
+- **CHECK без колонки → `command.internal`.** CHECK над кількома
+  колонками (правило рядка) у каталозі рантайму має `columns: []` (рішення
+  Р-A3-21 плану П4-A3), і `23514` на ньому `mapDatabaseError`
+  (`packages/simetra/src/server/errors.ts`) віддає як `command.internal`:
+  спека П4 §6.10 не допускає `command.constraint` без реквізитів. Якщо
+  застосунку потрібна відмова за правилом рядка, спека має назвати форму
+  (напр. `kind: "check"` з іменем правила замість реквізитів).
+- **Кваліфікація `pg_catalog` у SQL рантайму.** `set_config`,
+  `pg_has_role`, `current_setting` в операторах `packages/simetra/src/server`
+  не кваліфіковані: підмінити їх можна лише `search_path` ролі входу, яку
+  налаштовує host (домен довіри рантайму). Захист у глибину — писати
+  `pg_catalog.<функція>`.
+- **Охоронець інваріанту 15.** «Імпорт `simetra/server` не виконує I/O»
+  (спека П4 §6.16) тримають лише заборона імпортів (`packages/simetra/eslint.tier-zones.js`)
+  і тест `process.env` (`packages/simetra/test/server-sources.test.ts`);
+  виклик глобального `fetch` чи `setTimeout` на рівні модуля не ловиться.
+  Потрібен тест джерел на виклики верхнього рівня модуля.
+- **Плоска тека `src/server`.** Правило плану «production-код `src/server` —
+  плоска тека» лінт не закріплює: шаблон дозволяє `./sub/x`, а
+  `server-sources.test.ts` сканує лише верхній рівень, тож файл у підтеці
+  обійшов би й тест джерел. Закріпити лінтом або тестом.
 
 ## 7. Тести
 
@@ -343,6 +364,14 @@
   повтор на тому самому SHA пройшов. Таймаут наосліп не піднімати: спершу
   знайти, що в кейсі повільне (компіляція фікстури, імпорт, I/O), і
   прибрати це.
+- **`23514` у ТЧ наскрізь.** Мапінг `23514` на реквізит перевірено лише
+  для основної таблиці (`packages/simetra/src/server/__tests__/errors.test.ts`,
+  DB `packages/designer/src/__tests__/command-runtime.db.test.ts`); CHECK
+  реквізиту ТЧ (`<ТЧ>.<реквізит>`) наскрізь не перевірено.
+- **Спільний помічник утримання замка.** `heldEnv` у
+  `packages/designer/src/__tests__/command-runtime.db.test.ts` дублює
+  `heldTarget` з `packages/designer/src/__tests__/carrier-locks.db.test.ts`;
+  винести в `packages/designer/src/__tests__/support/`.
 
 ## 8. Designer
 
