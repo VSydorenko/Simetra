@@ -284,21 +284,13 @@ Postgres»](2026-10-01-platform-in-postgres-design.md) §9, п. 1 і п. 4) на
 скомпільованої моделі. Zod-схема каталогу — у T0 (Рт11); будує каталог T1;
 T3 валідує каталог схемою при створенні рантайму. Host передає каталог
 об'єктом: збірка host-а імпортує `runtime-catalog.json`, T3 файлів не читає
-(Рт17). Форма (повна — Zod-схема `runtimeCatalogSchema`,
+(Рт17). Каркас форми (поля — Zod-схема `runtimeCatalogSchema`,
 `packages/simetra/src/model/runtime/catalog.ts`):
 
 ```text
 { format: 1, snapshotHash, provider,
-  objects: [{ id, name, kind, kindLabel, table: { schema, name }, key, keyName,
-    versionColumn, versionName, scopeKindId?, scopeColumn?,
-    attributes: [{ name, column, pgType, castType, type, array?, required,
-      maxLength?, precision?, scale?, insert, update, generated?,
-      enumValues?: [{ name, label }],
-      pair?: { typeColumn, targets: [{ object: { kind, name }, label }] } }],
-    tabularSections: [{ name, table, key, keyName, parent, lineNumber,
-      attributes: [...], constraints: [...] }],
-    operations: { create?, update?, markDeletion?, delete?: { function, context } },
-    constraints: [{ name, kind, columns }] }] }
+  objects: [{ …, attributes: [...], tabularSections: [...],
+    operations: { ... }, constraints: [...] }] }
 ```
 
 - Об'єкти — лише довідники з контрактом ядра команд (§6.6).
@@ -306,7 +298,9 @@ T3 валідує каталог схемою при створенні рант
   й зміни (у ТЧ — ключі рядка й колонки оновлення), тобто в колонковий грант
   `simetra_command`: T3 перевіряє вхід тими самими ключами, що й гранти. Ключ
   таблиці (`key`, `keyName`) стоїть поза реквізитами й береться лише з `id`
-  операції.
+  операції. Власник і номер рядка ТЧ (`parent`, `lineNumber`) теж поза
+  реквізитами й грантами; декодований рядок ТЧ несе їх під `parentName` і
+  `lineNumberName`, як тип рядка кодогену.
 - `operations.<операція>` — функція ядра й дія контексту `simetra.command`
   (на системних довідниках прав — `administerRights`, §6.12).
 - `castType` — тип приведення зв'язаного параметра: базовий тип з переліку
@@ -323,9 +317,7 @@ T3 валідує каталог схемою при створенні рант
 
 **Звірка хешу** (Рт11). `createCommandRuntime` (асинхронний) у транзакції під
 `simetra_command` читає хеш застосованого знімка згенерованою функцією
-`simetra.applied_snapshot_hash()` (`STABLE SECURITY DEFINER`,
-`search_path = ''`, `EXECUTE` лише `simetra_command`; її рендерить T2 разом
-із marker, `packages/simetra/src/schema/apply/state.ts`). Розбіжність —
+`simetra.applied_snapshot_hash()` (спека системної схеми §3). Розбіжність —
 відмова створення рантайму `command.model-mismatch` з обома хешами. Наслідок:
 будь-яка зміна моделі, навіть лише подання, вимагає `apply` до старту сервера
 з новим каталогом. Сумісність старого сервера з новою схемою під час
@@ -354,9 +346,10 @@ T3 валідує каталог схемою при створенні рант
   UUID об'єкта в каталозі;
 - **пакет** — непорожній упорядкований перелік операцій;
 - **результат** — рядки після запису за логічними іменами й набір змін
-  `{ object, scopeKind?, scope, id, version, operation }` у порядку фаз;
+  `{ object, scopeKind?, scope?, id, version, operation }` у порядку фаз;
   `scopeKind` — id мітки виду скоупу з каталогу: з виду й скоупу П4-B будує
-  канал сигналу, тож транспорт не шукає вид окремо;
+  канал сигналу, тож транспорт не шукає вид окремо; `scope?` і `scopeKind?`
+  є лише в об'єкта з видом скоупу;
 - **claims сесії** — `SessionClaims` (Рт19);
 - **порт ідентичності** — лише тип `verifySession(headers) → SessionClaims | null`
   (Рт19);
