@@ -28,4 +28,18 @@ describe("core error codes in the compiler", () => {
     })
     expect(offenders).toEqual([])
   })
+
+  // Причину відмови T3 пропускає назовні лише з переліку T0 (Р-A3-8): літерал
+  // у генераторі розійшовся б із ним мовчки. Ловимо форми, якими генератори
+  // кидають відмову; голе слово (`"effect"`) шукати не можна — хибні збіги.
+  it("takes every refusal reason from simetra/model, not from a literal", () => {
+    const offenders = sources(COMPILER_DIR).filter((path) => {
+      const code = stripComments(readFileSync(path, "utf8"))
+      return (
+        /\b(?:refusal|forbidden|conflict)\(\s*["'`]/.test(code) ||
+        /DETAIL = '[a-z]/.test(code)
+      )
+    })
+    expect(offenders).toEqual([])
+  })
 })

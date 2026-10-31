@@ -8,6 +8,7 @@ import {
   type RuntimeObject,
 } from "simetra/model"
 import type { DatabaseError } from "./port"
+import { INTEGER_TEXT } from "./values"
 
 /**
  * The rejection of `run` and `read`: `message` is the error code, no
@@ -49,7 +50,6 @@ const INVALID_REASONS = [
   "p_mark",
   "predefined",
 ]
-const SAFE_INTEGER = /^[+-]?\d+$/
 const INTERNAL: CommandError = { code: "command.internal" }
 
 /** Таблиця каталогу: основна об'єкта чи ТЧ (тоді шляхи — `<ТЧ>.<реквізит>`). */
@@ -147,7 +147,7 @@ function attributesOf(table: Table, columns: readonly string[]): string[] {
 }
 
 const isSafeInteger = (text: string) =>
-  SAFE_INTEGER.test(text) && Number.isSafeInteger(Number(text))
+  INTEGER_TEXT.test(text) && Number.isSafeInteger(Number(text))
 
 /**
  * Maps a database error to the error the outside sees (P4 spec §6.10).

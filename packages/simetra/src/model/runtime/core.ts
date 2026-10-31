@@ -19,6 +19,12 @@ export const COMMAND_CORE_ERRORS = {
     noRight: "no-right",
     newCarrier: "new-carrier",
     effect: "effect",
+    // Причини запобіжників прав (спека прав §7): відмови на `COMMIT`.
+    rightsContext: "rights-context",
+    escalation: "escalation",
+    deltaDomain: "delta-domain",
+    roleInUse: "role-in-use",
+    lastFullAccess: "last-full-access",
   },
   conflict: {
     errcode: "P0001",

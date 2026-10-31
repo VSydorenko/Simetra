@@ -95,14 +95,20 @@ describe("mapDatabaseError", () => {
     }
   )
 
-  it.each(["no-right", "new-carrier", "effect"])(
-    "command.forbidden keeps the allowed reason %s",
-    (reason) => {
-      expect(
-        map({ code: "42501", message: "command.forbidden", detail: reason })
-      ).toEqual({ code: "command.forbidden", reason })
-    }
-  )
+  it.each([
+    "no-right",
+    "new-carrier",
+    "effect",
+    "rights-context",
+    "escalation",
+    "delta-domain",
+    "role-in-use",
+    "last-full-access",
+  ])("command.forbidden keeps the allowed reason %s", (reason) => {
+    expect(
+      map({ code: "42501", message: "command.forbidden", detail: reason })
+    ).toEqual({ code: "command.forbidden", reason })
+  })
 
   it("a write refused by RLS is command.forbidden rls with the phase", () => {
     expect(
