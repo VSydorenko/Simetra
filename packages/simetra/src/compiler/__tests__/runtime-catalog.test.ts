@@ -12,12 +12,14 @@ import {
 import { modelHash } from "../canonical"
 import {
   BULLETIN_FILE,
+  GAUGE_LOG_FILE,
   STATUS_FILE,
   adminRoles,
   commandCoreLayer,
   compileRights,
   policyDomain,
   refAttribute,
+  runtimeValuesLayer,
   statusEnumeration,
   ticketNoticeHandler,
   withSql,
@@ -291,5 +293,128 @@ describe("buildRuntimeCatalog", () => {
         table.checks.length +
         table.foreignKeys.length
     )
+  })
+})
+
+/**
+ * Значення рантайму на справжньому каталозі (`runtimeValuesLayer()`): факти,
+ * за якими T3 кодує вхід і декодує рядок ядра, — з метаданих, а не з рукою
+ * зібраного об'єкта unit-тестів T3.
+ */
+describe("buildRuntimeCatalog on runtime values", () => {
+  let values: RuntimeCatalog
+  beforeAll(async () => {
+    const { model: m, diagnostics } = await compileRights(
+      policyDomain(runtimeValuesLayer())
+    )
+    expect(diagnostics).toEqual([])
+    values = buildRuntimeCatalog(m!)
+  })
+  const gauge = () => values.objects.find((o) => o.name === "Gauge")!
+  const attribute = (name: string) =>
+    gauge().attributes.find((a) => a.name === name)
+
+  it("Numeric(30,10), BigInt, Json, Bytes and a BigInt array", () => {
+    expect(attribute("amount")).toMatchObject({
+      pgType: "numeric(30,10)",
+      castType: "numeric",
+      type: "Numeric",
+      precision: 30,
+      scale: 10,
+    })
+    expect(attribute("counter")).toMatchObject({
+      castType: "bigint",
+      type: "BigInt",
+    })
+    expect(attribute("payload")).toMatchObject({
+      castType: "jsonb",
+      type: "Json",
+    })
+    expect(attribute("blob")).toMatchObject({
+      castType: "bytea",
+      type: "Bytes",
+    })
+    expect(attribute("marks")).toMatchObject({
+      pgType: "bigint[]",
+      castType: "bigint[]",
+      type: "BigInt",
+      array: true,
+    })
+  })
+
+  // Логічне ім'я значення — на вході й виході T3, мітку знає лише база.
+  it("an enumeration reference carries names and labels, cast as text", () => {
+    expect(attribute("level")).toMatchObject({
+      castType: "text",
+      type: "Ref",
+      enumValues: [
+        { name: "Low", label: "lvl_low" },
+        { name: "High", label: "lvl_high" },
+      ],
+    })
+  })
+
+  it("a polymorphic pair lists its targets with their labels", () => {
+    expect(attribute("subject")).toMatchObject({
+      column: "subject_id",
+      castType: "uuid",
+      pair: {
+        typeColumn: "subject_type",
+        targets: [
+          { object: { kind: "Catalog", name: "Project" }, label: "project" },
+          { object: { kind: "Catalog", name: "Region" }, label: "region" },
+        ],
+      },
+    })
+  })
+
+  it("a custom String attribute has maxLength, also in a tabular section", () => {
+    const log = values.objects.find((o) => o.name === "GaugeLog")!
+    expect(log.attributes.find((a) => a.name === "note")).toMatchObject({
+      pgType: "character varying(40)",
+      castType: "character varying",
+      type: "String",
+      maxLength: 40,
+    })
+    const [lines] = gauge().tabularSections
+    expect(lines!.name).toBe("lines")
+    expect(lines!.attributes.find((a) => a.name === "note")).toMatchObject({
+      castType: "character varying",
+      maxLength: 40,
+    })
+    expect(lines!.attributes.find((a) => a.name === "qty")).toMatchObject({
+      castType: "numeric",
+      precision: 30,
+      scale: 10,
+    })
+  })
+
+  // Гілка `castTypeOf` для енам-типу (`"схема"."ім'я"`) у каталозі рантайму
+  // недосяжна з метаданих: на `PgEnum` посилається лише колонка `CustomTable`,
+  // а каталог містить лише довідники. Тест тримає цей факт: коли довідник
+  // зможе посилатися на `PgEnum`, він почервоніє й вимагатиме перевірки лапок.
+  it("a catalog attribute cannot reference a PgEnum, so no quoted cast type comes from a catalog", async () => {
+    const { diagnostics } = await compileRights(
+      policyDomain(runtimeValuesLayer(), {
+        "pg-enums/Mood/Mood.meta.json": {
+          id: uuid(7590),
+          kind: "PgEnum",
+          name: "Mood",
+          physicalName: "mood",
+          values: ["calm"],
+        },
+        [GAUGE_LOG_FILE]: {
+          attributes: [
+            refAttribute(7591, "mood", "mood", {
+              kind: "PgEnum",
+              name: "Mood",
+            }),
+          ],
+        },
+      })
+    )
+    expect(diagnostics.map((d) => d.code)).toEqual([
+      "reference.not-referenceable",
+    ])
   })
 })
