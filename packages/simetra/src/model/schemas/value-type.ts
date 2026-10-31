@@ -175,7 +175,7 @@ function fitsType(type: LogicalType, value: DefaultValue): boolean {
  * Одиночний `Ref` бере логічне ім'я значення перерахування — його існування
  * перевіряє стадія 4.
  */
-function isWithinType(value: ValueType, raw: DefaultValue): boolean {
+export function isWithinType(value: ValueType, raw: DefaultValue): boolean {
   if (typeof raw === "number" && INTEGER_RANGES[value.type] !== undefined) {
     const [min, max] = INTEGER_RANGES[value.type]!
     return Number.isInteger(raw) && raw >= min && raw <= max
@@ -213,7 +213,7 @@ function isWithinType(value: ValueType, raw: DefaultValue): boolean {
  * (зайві дробові Postgres мовчки округлив би). Число JSON читається через
  * десятковий запис, зокрема експоненційний.
  */
-function fitsNumeric(
+export function fitsNumeric(
   text: string,
   precision: number | undefined,
   scale: number | undefined
@@ -239,7 +239,7 @@ function fitsNumeric(
 }
 
 /** Календарний день `YYYY-MM-DD`: `2026-02-30` Postgres відхилить. */
-function isDate(text: string): boolean {
+export function isDate(text: string): boolean {
   const match = DATE_TEXT.exec(text)
   if (match === null) return false
   const [year, month, day] = [match[1], match[2], match[3]].map(Number) as [
@@ -260,7 +260,7 @@ function isDate(text: string): boolean {
   )
 }
 
-function isDateTime(text: string): boolean {
+export function isDateTime(text: string): boolean {
   const match = DATE_TIME_TEXT.exec(text)
   if (match === null || !isDate(match[1]!)) return false
   const [hours, minutes, seconds, zoneHours, zoneMinutes] = [
