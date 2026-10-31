@@ -418,8 +418,9 @@ describe("rights plan gate", () => {
     )
     expect(global[0]!.roles).toBe(GLOBAL_ROLES + 1)
     expect(global[0]!.deltas).toBe(GLOBAL_ROLES + 2)
-    // Тіла функцій прав від імені `fullAccess` читають глобальні дельти лише
-    // через його призначення глобальної ролі.
+    // Гілка `allow` тіл функцій прав від імені `fullAccess` читає глобальні
+    // дельти через його призначення глобальної ролі; гілка `deny` читає їх
+    // усі незалежно від призначень.
     const { rows: fullAssigned } = await client.query(
       "SELECT 1 FROM public.global_role_assignments WHERE subject = $1 AND custom_role = $2",
       [gate.full, gate.fullGlobalRole]
@@ -591,13 +592,18 @@ describe("rights plan gate", () => {
         "rights tables are read"
       ).toBeGreaterThan(0)
       // Вузол у плані ще не доказ: `PlanNode` зберігає й вузли з loops = 0,
-      // що не виконувались. Глобальні дельти мають бути прочитані насправді
-      // (спека прав §7: глобальний домен дельт).
+      // що не виконувались. Гілка `deny` читає всі глобальні дельти без
+      // з'єднання з призначеннями, тож доказом є лише доступ гілки `allow`
+      // за власником рядка ТЧ — його дає глобальне призначення ролі.
       expect(
         plans
           .flatMap((p) => scansOf(p, "global_roles_delta"))
-          .some((n) => (n.loops ?? 0) > 0),
-        "global_roles_delta is actually scanned by the function bodies"
+          .some(
+            (n) =>
+              (n.loops ?? 0) > 0 &&
+              n.conditions.some((c) => /\bparent_id\b/.test(c))
+          ),
+        "global_roles_delta is read by owner through a global assignment"
       ).toBe(true)
       expect
         .soft(
