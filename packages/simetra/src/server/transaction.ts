@@ -76,6 +76,9 @@ export const COMMAND_ROLE = statement(
 const CLAIMS_TEXT =
   `SELECT set_config(${literal(SESSION_CLAIMS_SETTING)}, $1, true), ` +
   `set_config('TimeZone', 'UTC', true), set_config('bytea_output', 'hex', true)`
+/** Claims, `TimeZone` і `bytea_output` транзакції — і команди, і читання. */
+export const claimsStatement = (claims: string) =>
+  statement(CLAIMS_TEXT, claims)
 const CURRENT_USER = statement(
   `SELECT ${ident(PLATFORM_SCHEMA)}.${ident(CURRENT_USER_FUNCTION_NAME)}() AS user_id`
 )
@@ -224,7 +227,7 @@ async function attempt(
   try {
     tag = await inCommand({ command, tx, depth: 0 }, async () => {
       await tx.enqueue([BEGIN])
-      await tx.enqueue([statement(CLAIMS_TEXT, claims)])
+      await tx.enqueue([claimsStatement(claims)])
       await tx.enqueue([COMMAND_ROLE])
       const { rows: users } = await tx.enqueue([CURRENT_USER])
       const user = users[0]?.user_id

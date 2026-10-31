@@ -5,27 +5,32 @@ import {
   PLATFORM_SCHEMA,
   PROVIDER_API_ROLES,
   runtimeCatalogSchema,
+  sessionClaimsSchema,
   type CommandError,
   type CommandResult,
   type DatabaseProvider,
   type ObjectModule,
   type Operation,
   type ProviderApiRoles,
+  type ReadQuery,
   type RequestRolePurpose,
   type RuntimeCatalog,
   type SessionClaims,
 } from "simetra/model"
 import { z } from "zod"
-import { CommandFailure } from "./errors"
+import { decodeRow } from "./decode"
+import { CommandFailure, mapDatabaseError, type ErrorPhase } from "./errors"
+import { rejectNested } from "./hook-context"
 import {
   normalizeError,
   type CommandDatabase,
   type DatabaseClient,
 } from "./port"
-import { ident } from "./read"
+import { ident, prepareRead } from "./read"
 import {
   COMMAND_ROLE,
   COMMIT,
+  claimsStatement,
   endFailed,
   runCommand,
   type LogEntry,
@@ -58,6 +63,14 @@ export interface CommandRuntime {
     session: SessionClaims,
     input: Operation | readonly Operation[]
   ): Promise<CommandResult>
+  /**
+   * Reads rows under the request role of the profile, or through the
+   * fallback path (P4 spec §6.11); rejects with `CommandFailure`.
+   */
+  read(
+    session: SessionClaims,
+    query: ReadQuery
+  ): Promise<Record<string, unknown>[]>
 }
 
 /**
@@ -220,5 +233,90 @@ export async function createCommandRuntime(
     // Профіль без ролі запиту чи явний запасний шлях — читання під роллю команд.
     readRole: member ? role : undefined,
   }
-  return { run: (session, input) => runCommand(state, session, input) }
+  return {
+    run: (session, input) => runCommand(state, session, input),
+    read: (session, query) => readRows(state, session, query),
+  }
+}
+
+/**
+ * Серверне читання (спека П4 §6.11): одна транзакція `READ ONLY` під роллю
+ * запиту — політики бачать рівно те, що PostgREST з тими самими claims
+ * (інваріант 10). Без повтору: §6.11 його не передбачає, `40001` тут — `command.internal`.
+ */
+async function readRows(
+  state: RuntimeState,
+  session: SessionClaims,
+  query: unknown
+): Promise<Record<string, unknown>[]> {
+  // До будь-якого I/O: друге з'єднання в хуку чекало б на замок своєї ж
+  // команди (Р-A3-11).
+  rejectNested()
+  let claims: string
+  try {
+    // Без `sub` політики бачили б анонімний запит, а не користувача: читання
+    // не йде в базу, як і команда без користувача (Рт8).
+    if (!sessionClaimsSchema.safeParse(session).success) {
+      throw new CommandFailure({ code: "command.unauthenticated" })
+    }
+    claims = JSON.stringify(session)
+  } catch (error) {
+    if (error instanceof CommandFailure) throw error
+    throw new CommandFailure({ code: "command.internal" })
+  }
+  const prepared = prepareRead(state.catalog, query)
+  if ("error" in prepared) throw new CommandFailure(prepared.error)
+  const { object, statement } = prepared
+  const fail = (raw: unknown, phase: ErrorPhase | undefined) => {
+    const error = normalizeError(raw)
+    const mapped = mapDatabaseError(error, state.catalog, phase)
+    if (mapped.code === "command.internal") {
+      state.log({ kind: "database", error: raw })
+    }
+    return {
+      failure: new CommandFailure(mapped),
+      destroy: error.connectionLost,
+    }
+  }
+  let client: DatabaseClient
+  try {
+    client = await state.database.connect()
+  } catch (raw) {
+    throw fail(raw, undefined).failure
+  }
+  // Запасний шлях — роль команд одразу після claims, без `simetra.command`.
+  const role =
+    state.readRole === undefined
+      ? COMMAND_ROLE
+      : { text: `SET LOCAL ROLE ${ident(state.readRole)}`, params: [] }
+  let rows: Record<string, unknown>[]
+  let tag: string
+  // Фаза читання — лише для оператора будівника: `22P02` там — вхід клієнта.
+  let phase: ErrorPhase | undefined
+  try {
+    await client.query(BEGIN_READ_ONLY, [])
+    const claimsSet = claimsStatement(claims)
+    await client.query(claimsSet.text, claimsSet.params)
+    await client.query(role.text, role.params)
+    phase = { kind: "read", object }
+    ;({ rows } = await client.query(statement.text, statement.params))
+    phase = undefined
+    ;({ command: tag } = await client.query(COMMIT.text, COMMIT.params))
+  } catch (raw) {
+    const { failure, destroy } = fail(raw, phase)
+    await endFailed(client, destroy)
+    throw failure
+  }
+  client.release()
+  try {
+    // Перервана транзакція відповідає на `COMMIT` тегом `ROLLBACK`.
+    if (tag !== "COMMIT") throw new Error(`COMMIT answered ${tag}`)
+    return rows.map((r) => {
+      if (typeof r.row !== "string") throw new Error("read row is not text")
+      return decodeRow(object, r.row)
+    })
+  } catch (error) {
+    state.log({ kind: "database", error })
+    throw new CommandFailure({ code: "command.internal" })
+  }
 }
