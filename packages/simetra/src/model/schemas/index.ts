@@ -44,7 +44,6 @@ export {
   isScalarDefault,
   defaultMayRepeat,
   defaultViolatesValueChecks,
-  fitsNumeric,
   isDate,
   isDateTime,
   isWithinType,

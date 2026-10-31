@@ -213,7 +213,7 @@ export function isWithinType(value: ValueType, raw: DefaultValue): boolean {
  * (зайві дробові Postgres мовчки округлив би). Число JSON читається через
  * десятковий запис, зокрема експоненційний.
  */
-export function fitsNumeric(
+function fitsNumeric(
   text: string,
   precision: number | undefined,
   scale: number | undefined
