@@ -144,7 +144,7 @@ A2 в одній транзакції з claims, роллю, контексто�
   `supabase/config.toml` `[db.pooler]`; зразок — `throughPooler` у
   `packages/designer/src/schema-engine/__tests__/read-only.db.test.ts`) до
   тіні рушія. Записати форму URL чи причину відмови.
-- [ ] **Крок 3:** якщо вхід неможливий — запасна форма §7.3: вхід роллю пулера
+- [x] **Крок 3:** (не знадобився: вхід можливий, див. звіт нижче) якщо вхід неможливий — запасна форма §7.3: вхід роллю пулера
   й тестовий порт-обгортка, що ставить `SET LOCAL ROLE <тегована роль>`
   першим оператором кожної транзакції; записати, що тест тоді доводить
   семантику transaction-режиму, а не вхід. Вибір — архітекторці.
@@ -402,17 +402,17 @@ A2 в одній транзакції з claims, роллю, контексто�
 
 ### Задача 13: документи
 
-- [ ] **Крок 1:** спека П4: §6.3 — форма каталогу (Р-A3-5); §6.4 — операція (Р-A3-1, Р-A3-17, з реченням про перейменування й UUID), помилка (Р-A3-8) і речення «`bigint` — in-process API T3; формат передачі клієнтові — П4-B» (Р-A3-7); §6.5 — абзац «Помилка будь-якого кроку»: термінальна будь-яка відмова фази (Р-A3-15), крок 2 — claims, `TimeZone` = `UTC` і `bytea_output` = `hex` одним оператором (Р-A3-7); §6.6 — результат `<t>_delete` зі скоупом (Р-A3-14); Рт20 і §6.9 — `OPERATION_EVENTS`, «події видалення прийдуть разом із видаленням позначених» (Р-A3-2), час життя `ctx` (Р-A3-15); Рт21 і §6.9 — `ctx.action` як операція, `ctx.mark` (Р-A3-18); §6.10 — `23503` у `command.invalid` (Р-A3-13) і відмова RLS (Р-A3-19); §6.12 — операції адміністрування з полем `action` операції; §7.1 — рядки DB (Р-A3-9); Додаток А — рядки A3 позначити внесеними.
-- [ ] **Крок 2:** спека П2 (`docs/superpowers/specs/2026-09-28-p2-metamodel-compiler-design.md`), абзац «Кодоген»: `BigInt` → `bigint`, стандартна колонка версії → `number` (Р-A3-7); спека прав §5.3 — «API хуків П4» → посилання на §6.9 спеки П4; спека системної схеми §3 — `applied_snapshot_hash()` і правило грантів Р-A3-16.
-- [ ] **Крок 3:** борг прав §1 — зняти пункт «Самоприйняття членства…» з посиланням на Рт6 і §6.9 спеки П4.
-- [ ] **Крок 4:** ROADMAP — рядок «Ранній зріз П4»: A3 виконано. Скіл `packages/designer/skills/simetra-metadata/` — короткий розділ про модуль об'єкта: ключі `beforeWrite`/`onWrite`, правило без зовнішнього I/O, `afterCommit`, посилання на §6.9.
-- [ ] **Крок 5:** `python3 scripts/check-doc-anchors.py` — зелений.
-- [ ] **Крок 6: коміт** — `docs(spec): П4-A3 — рантайм команд у спеках і скілі`.
+- [x] **Крок 1:** спека П4: §6.3 — форма каталогу (Р-A3-5); §6.4 — операція (Р-A3-1, Р-A3-17, з реченням про перейменування й UUID), помилка (Р-A3-8) і речення «`bigint` — in-process API T3; формат передачі клієнтові — П4-B» (Р-A3-7); §6.5 — абзац «Помилка будь-якого кроку»: термінальна будь-яка відмова фази (Р-A3-15), крок 2 — claims, `TimeZone` = `UTC` і `bytea_output` = `hex` одним оператором (Р-A3-7); §6.6 — результат `<t>_delete` зі скоупом (Р-A3-14); Рт20 і §6.9 — `OPERATION_EVENTS`, «події видалення прийдуть разом із видаленням позначених» (Р-A3-2), час життя `ctx` (Р-A3-15); Рт21 і §6.9 — `ctx.action` як операція, `ctx.mark` (Р-A3-18); §6.10 — `23503` у `command.invalid` (Р-A3-13) і відмова RLS (Р-A3-19); §6.12 — операції адміністрування з полем `action` операції; §7.1 — рядки DB (Р-A3-9); Додаток А — рядки A3 позначити внесеними.
+- [x] **Крок 2:** спека П2 (`docs/superpowers/specs/2026-09-28-p2-metamodel-compiler-design.md`), абзац «Кодоген»: `BigInt` → `bigint`, стандартна колонка версії → `number` (Р-A3-7); спека прав §5.3 — «API хуків П4» → посилання на §6.9 спеки П4; спека системної схеми §3 — `applied_snapshot_hash()` і правило грантів Р-A3-16.
+- [x] **Крок 3:** борг прав §1 — зняти пункт «Самоприйняття членства…» з посиланням на Рт6 і §6.9 спеки П4.
+- [x] **Крок 4:** ROADMAP — рядок «Ранній зріз П4»: A3 виконано. Скіл `packages/designer/skills/simetra-metadata/` — короткий розділ про модуль об'єкта: ключі `beforeWrite`/`onWrite`, правило без зовнішнього I/O, `afterCommit`, посилання на §6.9.
+- [x] **Крок 5:** `python3 scripts/check-doc-anchors.py` — зелений.
+- [x] **Крок 6: коміт** — `docs(spec): П4-A3 — рантайм команд у спеках і скілі`.
 
 ### Задача 14: перевірка й звіт
 
-- [ ] **Крок 1:** рев'ю гілки за скілом `code-review` (лінзи correctness, test-honesty, drift, architecture), кожна знахідка — через `code-review-verifier`.
-- [ ] **Крок 2:** контрольна точка архітекторці: SHA, журнал мутацій, час DB-прогонів.
+- [x] **Крок 1:** рев'ю гілки за скілом `code-review` (лінзи correctness, test-honesty, drift, architecture), кожна знахідка — через `code-review-verifier`.
+- [x] **Крок 2:** контрольна точка архітекторці: SHA, журнал мутацій, час DB-прогонів.
 - [ ] **Крок 3:** після «можна»: `pnpm format:check && pnpm lint && pnpm typecheck && pnpm test`, `pnpm metadata:check`, `python3 scripts/check-doc-anchors.py`, `pnpm test:db`, `pnpm build:packages && pnpm test:packaging` — на одному SHA.
 
 ## Журнал мутацій
@@ -627,6 +627,16 @@ A2 в одній транзакції з claims, роллю, контексто�
 | T12 (unit) | мітка перерахування = логічне ім'я | value facts…; an enumeration reference carries names and labels |
 | Parked | `readRows.fail` мапить 40001/40P01 у `command.retry-exhausted` | обидва кейси нового тесту (40001, 40P01) |
 | Parked | `checkDraft`: читання `draft[key]` винесено з `try` | новий тест; an own-keys trap |
+| Після контрольної точки | `PgEnum` повернуто в `castTypeOf` | runtime-catalog: каталог без PgEnum |
+| Після контрольної точки | `planPlatformFunctions` → `platformFunctionSignatures` у `lockPlan` | plan.test: функція стану серед функцій плану |
+| Після контрольної точки | прибрано лог помилки без SQLSTATE | transaction/runtime/read-runtime: logs the original error |
+| Після контрольної точки | літерал причини `invalid` у генераторі (`"'p_item'"`, `sqlLiteral("create")`, `tabular.`) | core-error-source |
+| Після контрольної точки | прибрано причину з `COMMAND_CORE_ERRORS.invalid` | errors.test (22023) |
+| Після контрольної точки | `parent`/`lineNumber` ТЧ не декодуються | decode.test; DB command-runtime |
+| Після контрольної точки | ідентифікатор провайдера / `DATABASE_PROVIDERS` у `src/server` | server-sources |
+| Після контрольної точки | `textColumns` лише `version` | core-text-columns |
+| Після контрольної точки | CHECK знову з `columns: []` | runtime-catalog, errors.test; DB command-runtime (`nonNegative`, `-1`) |
+| Після контрольної точки | мапа CHECK у знімку / ім'я перераховане / лише з `elementId` | runtime-catalog (хеш, обрізання імені, покриття) |
 
 Не червоніють (з поясненням):
 
