@@ -159,6 +159,15 @@ export class Transaction {
     })
   }
 
+  /**
+   * Fails the attempt with `command.internal` for an anomaly — a database
+   * answer of the wrong shape or an unexpected exception — and logs it.
+   */
+  anomaly(error: unknown): never {
+    this.state.log({ kind: "database", error })
+    this.abort(INTERNAL)
+  }
+
   /** Resolves once no unit is running. */
   settled(): Promise<unknown> {
     return this.tail
@@ -216,14 +225,15 @@ async function attempt(
   } catch (error) {
     // Непередбачений виняток (не відмова черги) — теж термінальний.
     if (tx.terminal === undefined) {
-      tx.close({
-        failure:
-          error instanceof CommandFailure
-            ? error
-            : new CommandFailure(INTERNAL),
-        retry: false,
-        destroy: false,
-      })
+      if (error instanceof CommandFailure) {
+        tx.close({ failure: error, retry: false, destroy: false })
+      } else {
+        try {
+          tx.anomaly(error)
+        } catch {
+          // відмову вже записано в `tx.terminal`
+        }
+      }
     }
     await tx.settled()
     const terminal = tx.terminal!

@@ -15,6 +15,7 @@ import {
   type RuntimeCatalog,
   type SessionClaims,
 } from "simetra/model"
+import { z } from "zod"
 import { CommandFailure } from "./errors"
 import {
   normalizeError,
@@ -103,6 +104,10 @@ const APPLIED_HASH = `SELECT ${ident(PLATFORM_SCHEMA)}.${ident(APPLIED_SNAPSHOT_
 // База до функції хеша (`42883`) чи без схеми платформи (`3F000`) — модель
 // не застосована, а не збій.
 const NO_APPLIED_STATE = new Set(["42883", "3F000"])
+// `pg_has_role` на ролі, якої немає в базі.
+const UNDEFINED_OBJECT = "42704"
+// Межі повтору й глибини — помилка конфігурації host-а, як і каталог.
+const limitSchema = z.int().min(1).optional()
 
 /**
  * Створення рантайму — одна транзакція `READ ONLY` (Р-A3-12): членство в
@@ -151,6 +156,12 @@ async function inspect(
     if (step === APPLIED_HASH && NO_APPLIED_STATE.has(error.code ?? "")) {
       return mismatch(catalog, null)
     }
+    if (step === MEMBER && error.code === UNDEFINED_OBJECT) {
+      // Ролі запиту в базі немає — членства теж; транзакція перервана, тож
+      // хеш звіряє друга, уже без кроку членства.
+      const { applied } = await inspect(database, catalog, undefined, log)
+      return { member: false, applied }
+    }
     throw fail(raw, error.connectionLost)
   }
 }
@@ -176,6 +187,8 @@ export async function createCommandRuntime(
   const catalog = runtimeCatalogSchema.parse(options.catalog)
   const objectModules = options.objectModules ?? {}
   checkModules(catalog, objectModules)
+  const maxAttempts = limitSchema.parse(options.maxAttempts) ?? 3
+  const maxDepth = limitSchema.parse(options.maxDepth) ?? 8
   const sink = options.log ?? ((entry: LogEntry) => console.error(entry))
   // Журнал не має зламати шлях відмови: з'єднання звільняється після нього.
   const log = (entry: LogEntry) => {
@@ -202,8 +215,8 @@ export async function createCommandRuntime(
     objectModules,
     defer: options.defer,
     log,
-    maxAttempts: options.maxAttempts ?? 3,
-    maxDepth: options.maxDepth ?? 8,
+    maxAttempts,
+    maxDepth,
     // Профіль без ролі запиту чи явний запасний шлях — читання під роллю команд.
     readRole: member ? role : undefined,
   }

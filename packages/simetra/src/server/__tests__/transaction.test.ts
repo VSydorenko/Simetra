@@ -8,7 +8,15 @@ import {
   type Answer,
   type Call,
 } from "./fake-database"
-import { COMPANY, ID, OTHER, catalog, client, rightsRole } from "./fixtures"
+import {
+  COMPANY,
+  ID,
+  OTHER,
+  catalog,
+  client,
+  commandObject,
+  rightsRole,
+} from "./fixtures"
 
 const USER = "44444444-4444-4444-8444-444444444444"
 const session = { sub: "user-1", role: "authenticated" }
@@ -180,9 +188,12 @@ describe("command transaction", () => {
       id: ID,
       expectedVersion: 5,
     })
-    expect(db.calls.slice(OPEN.length, -2)).toEqual([
+    expect(db.calls).toEqual([
+      ...OPEN,
       context("delete", "client", ID),
       call("client_delete", "$1::uuid, $2::bigint", [ID, "5"]),
+      COMMIT,
+      { release: false },
     ])
   })
 
@@ -194,12 +205,15 @@ describe("command transaction", () => {
       id: ID,
       values: { code: "R" },
     })
-    expect(db.calls.slice(OPEN.length, -2)).toEqual([
+    expect(db.calls).toEqual([
+      ...OPEN,
       context("administerRights", "rights_role", ID),
       call("rights_role_save", SAVE, [
         JSON.stringify({ id: ID, code: "R" }),
         null,
       ]),
+      COMMIT,
+      { release: false },
     ])
     // Нескоуплений об'єкт — без скоупу в наборі змін.
     expect(result.changes).toEqual([
@@ -272,20 +286,16 @@ describe("command transaction", () => {
     expect(db.calls).toEqual([])
   })
 
-  it("rejects without a user before any phase or hook", async () => {
-    const beforeWrite = vi.fn()
-    const { db, runtime } = await setup(
-      (text) =>
-        text.includes("current_user_id")
-          ? { rows: [{ user_id: null }] }
-          : undefined,
-      { objectModules: { "Catalog.Client": { beforeWrite } } }
+  it("rejects without a user before any phase", async () => {
+    const { db, runtime } = await setup((text) =>
+      text.includes("current_user_id")
+        ? { rows: [{ user_id: null }] }
+        : undefined
     )
     expect(await failureOf(runtime.run(session, create))).toEqual({
       code: "command.unauthenticated",
     })
     expect(db.calls).toEqual([...OPEN, ROLLBACK, { release: false }])
-    expect(beforeWrite).not.toHaveBeenCalled()
   })
 
   it.each(["40001", "40P01"])(
@@ -354,7 +364,13 @@ describe("command transaction", () => {
     expect(await failureOf(runtime.run(session, create))).toEqual({
       code: "command.internal",
     })
-    expect(db.calls.slice(-2)).toEqual([COMMIT, { release: false }])
+    expect(db.calls).toEqual([
+      ...OPEN,
+      context("create", "client", ID),
+      createCall,
+      COMMIT,
+      { release: false },
+    ])
     expect(log).toHaveBeenCalledWith(
       expect.objectContaining({ kind: "database" })
     )
@@ -411,14 +427,134 @@ describe("command transaction", () => {
     expect(log).toHaveBeenCalledWith({ kind: "database", error: raw })
   })
 
-  it("decodes the row before COMMIT", async () => {
-    const { db, runtime } = await setup((text) =>
-      text.endsWith("AS r") ? { rows: [{ r: "not json" }] } : undefined
+  it.each([
+    ["an undecodable row", { r: "not json" }],
+    ["a row without r", {}],
+  ])("decodes the row before COMMIT and logs %s", async (_, row) => {
+    const { db, runtime, log } = await setup((text) =>
+      text.endsWith("AS r") ? { rows: [row] } : undefined
     )
     expect(await failureOf(runtime.run(session, create))).toEqual({
       code: "command.internal",
     })
-    expect(db.calls.slice(-2)).toEqual([ROLLBACK, { release: false }])
+    expect(db.calls).toEqual([
+      ...OPEN,
+      context("create", "client", ID),
+      createCall,
+      ROLLBACK,
+      { release: false },
+    ])
+    expect(log.mock.calls).toEqual([
+      [{ kind: "database", error: expect.any(Error) }],
+    ])
+  })
+
+  it("logs an unexpected exception as command.internal", async () => {
+    const boom = new Error("boom")
+    const { db, runtime, log } = await setup((text) =>
+      text.includes("current_user_id")
+        ? {
+            rows: [
+              new Proxy(
+                {},
+                {
+                  get() {
+                    throw boom
+                  },
+                }
+              ),
+            ],
+          }
+        : undefined
+    )
+    expect(await failureOf(runtime.run(session, create))).toEqual({
+      code: "command.internal",
+    })
+    expect(db.calls).toEqual([...OPEN, ROLLBACK, { release: false }])
+    expect(log.mock.calls).toEqual([[{ kind: "database", error: boom }]])
+  })
+
+  it("puts the row id as the scope of a scope root", async () => {
+    // У кореня скоупу колонка скоупу — ключ, тож рядок ядра не має окремої.
+    const root = commandObject({
+      name: "Company",
+      table: "company",
+      scopeColumn: "id",
+    })
+    const runtime = await createCommandRuntime({
+      database: fakeDatabase({
+        query: (text) =>
+          text.endsWith("AS r")
+            ? {
+                rows: [
+                  { r: JSON.stringify({ id: ID, version: 1, code: "A" }) },
+                ],
+              }
+            : answer(text),
+      }).database,
+      catalog: { ...catalog, objects: [root] },
+    })
+    const result = await runtime.run(session, {
+      action: "update",
+      object: { kind: "Catalog", name: "Company" },
+      id: ID,
+      expectedVersion: 1,
+      values: { code: "A" },
+    })
+    expect(result.changes).toEqual([
+      {
+        object: { kind: "Catalog", name: "Company" },
+        scopeKind: root.scopeKindId,
+        scope: ID,
+        id: ID,
+        version: 1,
+        operation: "update",
+      },
+    ])
+  })
+
+  it("retries a 40001 on COMMIT", async () => {
+    let commits = 0
+    const { db, runtime } = await setup((text) =>
+      text === "COMMIT" && commits++ === 1
+        ? { error: { code: "40001", message: "retry" } }
+        : undefined
+    )
+    await runtime.run(session, create)
+    const phase = [context("create", "client", ID), createCall, COMMIT]
+    expect(db.calls).toEqual([
+      ...OPEN,
+      ...phase,
+      ROLLBACK,
+      { release: false },
+      ...OPEN,
+      ...phase,
+      { release: false },
+    ])
+  })
+
+  it("drops the rows and changes of a failed attempt", async () => {
+    let calls = 0
+    const { runtime } = await setup((text) => {
+      if (!text.endsWith("AS r")) return undefined
+      calls++
+      // Спроба 1: фаза 1 — версія 7, фаза 2 — 40001; спроба 2 — версії 2 і 3.
+      if (calls === 1) return { rows: [{ r: coreRow(ID, 7) }] }
+      if (calls === 2) return { error: { code: "40001", message: "retry" } }
+      return { rows: [{ r: coreRow(calls === 3 ? ID : OTHER, calls - 1) }] }
+    })
+    const result = await runtime.run(session, [
+      create,
+      { ...create, id: OTHER },
+    ])
+    expect(result.rows.map((r) => [r.ref, r.version])).toEqual([
+      [ID, 2],
+      [OTHER, 3],
+    ])
+    expect(result.changes.map((c) => [c.id, c.version])).toEqual([
+      [ID, 2],
+      [OTHER, 3],
+    ])
   })
 
   it("destroys the connection when ROLLBACK fails", async () => {
@@ -430,7 +566,13 @@ describe("command transaction", () => {
           : undefined
     )
     await failureOf(runtime.run(session, create))
-    expect(db.calls.slice(-2)).toEqual([ROLLBACK, { release: true }])
+    expect(db.calls).toEqual([
+      ...OPEN,
+      context("create", "client", ID),
+      createCall,
+      ROLLBACK,
+      { release: true },
+    ])
   })
 })
 

@@ -1,5 +1,6 @@
 import { PROVIDER_API_ROLES } from "simetra/model"
 import { describe, expect, it, vi } from "vitest"
+import { ZodError } from "zod"
 import { createCommandRuntime, readRoleOf } from "../runtime"
 import { fakeDatabase, failureOf, type Answer } from "./fake-database"
 import { catalog } from "./fixtures"
@@ -81,11 +82,15 @@ describe("createCommandRuntime", () => {
       code: "command.model-mismatch",
       hashes: { catalog: "hash-1", applied: null },
     })
-    expect(db.calls.slice(-2)).toEqual(
-      "error" in answer
-        ? [ROLLBACK, { release: false }]
-        : [COMMIT, { release: false }]
-    )
+    expect(db.calls).toEqual([
+      { connect: true },
+      BEGIN,
+      MEMBER,
+      ROLE,
+      HASH,
+      "error" in answer ? ROLLBACK : COMMIT,
+      { release: false },
+    ])
   })
 
   it("rejects a missing request role membership with the role", async () => {
@@ -96,6 +101,35 @@ describe("createCommandRuntime", () => {
       code: "command.read-role-missing",
       role: "authenticated",
     })
+  })
+
+  it("treats a request role absent from the database (42704) as missing", async () => {
+    const absent = (text: string): Answer | undefined =>
+      text === MEMBER.text
+        ? { error: { code: "42704", message: "x" } }
+        : undefined
+    const { db, runtime } = create(absent)
+    expect(await failureOf(runtime)).toEqual({
+      code: "command.read-role-missing",
+      role: "authenticated",
+    })
+    // Перервана транзакція — хеш звіряє друга, без кроку членства.
+    expect(db.calls).toEqual([
+      { connect: true },
+      BEGIN,
+      MEMBER,
+      ROLLBACK,
+      { release: false },
+      { connect: true },
+      BEGIN,
+      ROLE,
+      HASH,
+      COMMIT,
+      { release: false },
+    ])
+    await expect(
+      create(absent, { readFallback: true }).runtime
+    ).resolves.toHaveProperty("run")
   })
 
   it("lets readFallback replace the missing membership", async () => {
@@ -114,7 +148,14 @@ describe("createCommandRuntime", () => {
     )
     expect(await failureOf(runtime)).toEqual({ code: "command.internal" })
     expect(log).toHaveBeenCalledWith({ kind: "database", error: raw })
-    expect(db.calls.slice(-2)).toEqual([ROLLBACK, { release: false }])
+    expect(db.calls).toEqual([
+      { connect: true },
+      BEGIN,
+      MEMBER,
+      ROLE,
+      ROLLBACK,
+      { release: false },
+    ])
   })
 
   it.each([
@@ -142,7 +183,19 @@ describe("createCommandRuntime", () => {
         database: db.database,
         catalog: { ...catalog, format: 2 },
       })
-    ).rejects.toThrow()
+    ).rejects.toBeInstanceOf(ZodError)
+    expect(db.calls).toEqual([])
+  })
+
+  it.each([
+    ["maxAttempts", 0],
+    ["maxAttempts", 1.5],
+    ["maxDepth", 0],
+  ])("rejects %s = %s before the database", async (option, value) => {
+    const db = fakeDatabase({ query: () => ({}) })
+    await expect(
+      createCommandRuntime({ database: db.database, catalog, [option]: value })
+    ).rejects.toBeInstanceOf(ZodError)
     expect(db.calls).toEqual([])
   })
 })

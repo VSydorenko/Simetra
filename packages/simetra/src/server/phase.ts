@@ -147,7 +147,15 @@ export async function runPhase(
     { kind: "write", object, operation: op.action }
   )
   const text = rows[0]?.r
-  if (typeof text !== "string") tx.abort({ code: "command.internal" })
+  // Відповідь бази не тієї форми — аномалія: назовні код, у журнал — подробиці.
+  const anomaly: (cause?: unknown) => never = (cause) =>
+    tx.anomaly(
+      new Error(
+        `core row of ${object.kind}.${object.name} does not match the catalog`,
+        { cause }
+      )
+    )
+  if (typeof text !== "string") anomaly()
   let row: Record<string, unknown>
   let scope: unknown
   try {
@@ -157,11 +165,7 @@ export async function runPhase(
         ? undefined
         : (JSON.parse(text) as Record<string, unknown>)[object.scopeColumn]
   } catch (error) {
-    tx.abort(
-      error instanceof CommandFailure
-        ? error.error
-        : { code: "command.internal" }
-    )
+    anomaly(error)
   }
   const id = row[object.keyName]
   const version = row[object.versionName]
@@ -170,7 +174,7 @@ export async function runPhase(
     typeof version !== "number" ||
     (object.scopeColumn !== undefined && typeof scope !== "string")
   ) {
-    tx.abort({ code: "command.internal" })
+    anomaly()
   }
   tx.changes.push({
     object: { kind: object.kind, name: object.name },
