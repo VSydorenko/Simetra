@@ -263,6 +263,15 @@ describe("command runtime over the engine target", () => {
     (await env.owner.query(`SELECT 1 FROM public.${table} WHERE id = $1`, [id]))
       .rowCount === 1
 
+  /** Рядки ТЧ `lines` у базі — читанням власника, повз рантайм. */
+  const linesOf = async (id: string) =>
+    (
+      await env.owner.query(
+        "SELECT id, line_number, qty::text AS qty, note FROM public.gauge_lines WHERE parent_id = $1 ORDER BY line_number",
+        [id]
+      )
+    ).rows
+
   const createGauge = (id: string, extra: Record<string, unknown> = {}) =>
     ({
       action: "create",
@@ -278,6 +287,7 @@ describe("command runtime over the engine target", () => {
     const rt = await runtime(fromPgPool(env.direct))
     const id = randomUUID()
     const line = randomUUID()
+    const second = randomUUID()
     const payload = { a: [1, "x", null, { b: true }] }
     const created = await rt.run(env.me.session, {
       ...createGauge(id, {
@@ -305,8 +315,18 @@ describe("command runtime over the engine target", () => {
       deletionMark: false,
       version: expect.any(Number),
     })
+    // Рядки ТЧ — точно, за іменами каталогу: ключ рядка під `keyName` ТЧ,
+    // `Numeric` з повним масштабом колонки.
+    expect(row!.lines).toEqual([
+      { ref: line, org: env.me.org, qty: "1.5000000000", note: "first" },
+    ])
     const read = async () => rt.read(env.me.session, { object: GAUGE, id })
     expect(await read()).toEqual([header(row!)])
+    // Серверне читання повертає лише шапку (§6.11: `to_jsonb` рядка таблиці
+    // об'єкта), тож ТЧ у базі звіряє незалежний `SELECT` власника.
+    expect(await linesOf(id)).toEqual([
+      { id: line, line_number: 1, qty: "1.5000000000", note: "first" },
+    ])
     expect(created.changes).toEqual([
       {
         object: GAUGE,
@@ -325,8 +345,22 @@ describe("command runtime over the engine target", () => {
       id,
       expectedVersion: row!.version as number,
       values: { amount: "-0.5", counter: -BIG, level: "Low", marks: [] },
+      tabularSections: {
+        lines: [
+          { ref: second, qty: AMOUNT, note: "second" },
+          { ref: line, qty: "-2.25", note: "edited" },
+        ],
+      },
     })
     const [next] = updated.rows
+    expect(next!.lines).toEqual([
+      { ref: second, org: env.me.org, qty: AMOUNT, note: "second" },
+      { ref: line, org: env.me.org, qty: "-2.2500000000", note: "edited" },
+    ])
+    expect(await linesOf(id)).toEqual([
+      { id: second, line_number: 1, qty: AMOUNT, note: "second" },
+      { id: line, line_number: 2, qty: "-2.2500000000", note: "edited" },
+    ])
     expect(next).toMatchObject({
       amount: "-0.5000000000",
       counter: -BIG,
@@ -467,7 +501,10 @@ describe("command runtime over the engine target", () => {
         },
       ])
     )
-    expect(error.code).toBe("command.forbidden")
+    expect(error).toMatchObject({
+      code: "command.forbidden",
+      reason: "no-right",
+    })
     expect(await exists(GAUGE_TABLE, a)).toBe(false)
   })
 
