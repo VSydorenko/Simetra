@@ -91,7 +91,7 @@ describe("simetra compile", () => {
     expect(r.stderr).toContain("error:")
   })
 
-  it("--out writes snapshot, sql and types", async () => {
+  it("--out writes snapshot, sql, types and runtime catalog", async () => {
     const out = await outDir()
     const r = await compileCli({
       _: [REFERENCE],
@@ -103,6 +103,7 @@ describe("simetra compile", () => {
     expect((await readdir(out)).sort()).toEqual([
       "desired-state.sql",
       "entities.d.ts",
+      "runtime-catalog.json",
       "snapshot.json",
     ])
     const model = (await compile(await readMetadataDir(REFERENCE))).model!

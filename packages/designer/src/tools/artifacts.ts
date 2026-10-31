@@ -1,4 +1,5 @@
 import {
+  buildRuntimeCatalog,
   canonicalSnapshot,
   emitEntityTypes,
   type CompiledModel,
@@ -18,5 +19,9 @@ export function compileArtifacts(model: CompiledModel): FileChange[] {
     },
     { path: "desired-state.sql", content: renderDesiredState(model).sql },
     { path: "entities.d.ts", content: emitEntityTypes(model) },
+    {
+      path: "runtime-catalog.json",
+      content: `${JSON.stringify(buildRuntimeCatalog(model), null, 2)}\n`,
+    },
   ]
 }

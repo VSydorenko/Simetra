@@ -186,7 +186,8 @@ offending field (for example `target.kind`); nothing is written.
 - `--locale en|uk` picks the message language (default `en`); code and
   location are identical in both.
 - Start from the first error: one root cause often produces several follow-ups.
-- Artifacts (`snapshot.json`, `desired-state.sql`, `entities.d.ts`) are written
+- Artifacts (`snapshot.json`, `desired-state.sql`, `entities.d.ts`,
+  `runtime-catalog.json`) are written
   only with `compile --out <dir>`, and `--out` takes one metadata directory per run.
 
 ## Mutations are checked, never raw

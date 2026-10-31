@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs"
 import { readFile, writeFile } from "node:fs/promises"
 import { dirname, join, resolve } from "node:path"
-import { compile, type FileChange } from "simetra/compiler"
+import { buildRuntimeCatalog, compile, type FileChange } from "simetra/compiler"
 import { z } from "zod"
 import { describe, expect, it, vi } from "vitest"
 import { runTool, toolCommand } from "../cli/command"
@@ -205,7 +205,7 @@ describe("tool catalog", () => {
     }
   })
 
-  it("compileArtifacts emits snapshot, desired state and entity types", async () => {
+  it("compileArtifacts emits snapshot, desired state, entity types and runtime catalog", async () => {
     const dir = await project()
     const { model } = await compile(await readMetadataDir(dir))
     const changes = compileArtifacts(model!)
@@ -213,7 +213,11 @@ describe("tool catalog", () => {
       "snapshot.json",
       "desired-state.sql",
       "entities.d.ts",
+      "runtime-catalog.json",
     ])
+    expect(
+      changes.find((c) => c.path === "runtime-catalog.json")?.content
+    ).toBe(`${JSON.stringify(buildRuntimeCatalog(model!), null, 2)}\n`)
     expect(changes.every((c) => typeof c.content === "string")).toBe(true)
   })
 })
