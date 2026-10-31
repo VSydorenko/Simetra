@@ -248,6 +248,19 @@ export function mapDatabaseError(
 }
 
 /**
+ * Whether the full database error goes to the log: every `command.internal`
+ * and every error without SQLSTATE. Без SQLSTATE назовні — недоступність, але
+ * під нею може бути власна вада T3 чи драйвера (`TypeError`), не лише обрив:
+ * без журналу вона зникла б.
+ */
+export function logsDatabaseError(
+  error: DatabaseError,
+  mapped: CommandError
+): boolean {
+  return mapped.code === "command.internal" || error.code === undefined
+}
+
+/**
  * Відмова RLS на записі (Р-A3-19): таблицю Postgres називає лише в тексті,
  * тож об'єкт — з фази, а на `COMMIT` — з однозначного `TABLE`.
  */

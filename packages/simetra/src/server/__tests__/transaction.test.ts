@@ -298,16 +298,33 @@ describe("command transaction", () => {
     )
   })
 
-  it("maps connect failure", async () => {
-    const { db, runtime } = await setup(
-      undefined,
-      {},
-      new Error("ECONNREFUSED")
-    )
+  // Помилка без SQLSTATE — обрив чи власна вада T3/драйвера: назовні
+  // `command.unavailable`, але оригінал іде в журнал, інакше вада зникла б.
+  it("maps connect failure and logs the original error", async () => {
+    const raw = new Error("ECONNREFUSED")
+    const { db, runtime, log } = await setup(undefined, {}, raw)
     expect(await failureOf(runtime.run(session, create))).toEqual({
       code: "command.unavailable",
     })
     expect(db.calls).toEqual([{ connect: true }])
+    expect(log.mock.calls).toEqual([[{ kind: "database", error: raw }]])
+  })
+
+  it("destroys the connection on a statement error without SQLSTATE and logs it", async () => {
+    const raw = new TypeError("driver bug")
+    const { db, runtime, log } = await setup((text) =>
+      text.endsWith("AS r") ? { error: raw } : undefined
+    )
+    expect(await failureOf(runtime.run(session, create))).toEqual({
+      code: "command.unavailable",
+    })
+    expect(db.calls).toEqual([
+      ...OPEN,
+      context("create", "client", ID),
+      createCall,
+      { release: true },
+    ])
+    expect(log.mock.calls).toEqual([[{ kind: "database", error: raw }]])
   })
 
   it("destroys a lost connection", async () => {

@@ -11,7 +11,12 @@ import {
   type RuntimeCatalog,
   type SessionClaims,
 } from "simetra/model"
-import { CommandFailure, mapDatabaseError, type ErrorPhase } from "./errors"
+import {
+  CommandFailure,
+  logsDatabaseError,
+  mapDatabaseError,
+  type ErrorPhase,
+} from "./errors"
 import { inCommand, outsideCommand, rejectNested } from "./hook-context"
 import { prepareInput, runPhase } from "./phase"
 import {
@@ -101,7 +106,7 @@ export function terminalOf(
     }
   }
   const mapped = mapDatabaseError(error, state.catalog, phase)
-  if (mapped.code === "command.internal") {
+  if (logsDatabaseError(error, mapped)) {
     state.log({ kind: "database", error: raw })
   }
   return {

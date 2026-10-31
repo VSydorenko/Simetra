@@ -141,6 +141,40 @@ describe("createCommandRuntime", () => {
     await expect(runtime).resolves.toHaveProperty("run")
   })
 
+  it("maps a failed connect to command.unavailable and logs the original error", async () => {
+    const raw = new Error("refused")
+    const db = fakeDatabase({
+      query: () => ({}),
+      connect: () => ({ error: raw }),
+    })
+    const log = vi.fn()
+    const runtime = createCommandRuntime({
+      database: db.database,
+      catalog,
+      log,
+    })
+    expect(await failureOf(runtime)).toEqual({ code: "command.unavailable" })
+    expect(db.calls).toEqual([{ connect: true }])
+    expect(log.mock.calls).toEqual([[{ kind: "database", error: raw }]])
+  })
+
+  it("destroys the connection on an error without SQLSTATE and logs it", async () => {
+    const raw = new TypeError("driver bug")
+    const { db, runtime, log } = create((text) =>
+      text === HASH.text ? { error: raw } : undefined
+    )
+    expect(await failureOf(runtime)).toEqual({ code: "command.unavailable" })
+    expect(db.calls).toEqual([
+      { connect: true },
+      BEGIN,
+      MEMBER,
+      ROLE,
+      HASH,
+      { release: true },
+    ])
+    expect(log.mock.calls).toEqual([[{ kind: "database", error: raw }]])
+  })
+
   it("maps a refused SET LOCAL ROLE to command.internal and logs it", async () => {
     const raw = { code: "42501", message: "permission denied to set role" }
     const { db, runtime, log } = create((text) =>

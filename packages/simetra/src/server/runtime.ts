@@ -19,7 +19,12 @@ import {
 } from "simetra/model"
 import { z } from "zod"
 import { decodeRow } from "./decode"
-import { CommandFailure, mapDatabaseError, type ErrorPhase } from "./errors"
+import {
+  CommandFailure,
+  logsDatabaseError,
+  mapDatabaseError,
+  type ErrorPhase,
+} from "./errors"
 import { rejectNested } from "./hook-context"
 import {
   normalizeError,
@@ -132,16 +137,18 @@ async function inspect(
   role: string | undefined,
   log: (entry: LogEntry) => void
 ): Promise<{ member: boolean; applied: string | null }> {
-  const fail = (raw: unknown, lost: boolean): CommandFailure => {
-    if (lost) return new CommandFailure({ code: "command.unavailable" })
-    log({ kind: "database", error: raw })
-    return new CommandFailure({ code: "command.internal" })
+  const fail = (raw: unknown, error = normalizeError(raw)): CommandFailure => {
+    const mapped: CommandError = {
+      code: error.connectionLost ? "command.unavailable" : "command.internal",
+    }
+    if (logsDatabaseError(error, mapped)) log({ kind: "database", error: raw })
+    return new CommandFailure(mapped)
   }
   let client: DatabaseClient
   try {
     client = await database.connect()
   } catch (raw) {
-    throw fail(raw, normalizeError(raw).connectionLost)
+    throw fail(raw)
   }
   let step = BEGIN_READ_ONLY
   try {
@@ -159,7 +166,11 @@ async function inspect(
     const { command } = await client.query(COMMIT.text, COMMIT.params)
     client.release()
     if (command !== "COMMIT" || (typeof hash !== "string" && hash !== null)) {
-      throw fail(new Error(`runtime check answered ${command}`), false)
+      log({
+        kind: "database",
+        error: new Error(`runtime check answered ${command}`),
+      })
+      throw new CommandFailure({ code: "command.internal" })
     }
     return { member, applied: hash }
   } catch (raw) {
@@ -175,7 +186,7 @@ async function inspect(
       const { applied } = await inspect(database, catalog, undefined, log)
       return { member: false, applied }
     }
-    throw fail(raw, error.connectionLost)
+    throw fail(raw, error)
   }
 }
 
@@ -270,7 +281,7 @@ async function readRows(
   const fail = (raw: unknown, phase: ErrorPhase | undefined) => {
     const error = normalizeError(raw)
     const mapped = mapDatabaseError(error, state.catalog, phase)
-    if (mapped.code === "command.internal") {
+    if (logsDatabaseError(error, mapped)) {
       state.log({ kind: "database", error: raw })
     }
     return {

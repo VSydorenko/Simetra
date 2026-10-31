@@ -209,12 +209,26 @@ describe("CommandRuntime.read", () => {
     expect(db.calls).toEqual(failed(byId, [ROLLBACK, { release: true }]))
   })
 
-  it("maps a failed connect to command.unavailable", async () => {
-    const { db, runtime } = await setup(undefined, {}, new Error("refused"))
+  it("maps a failed connect to command.unavailable and logs the original error", async () => {
+    const raw = new Error("refused")
+    const { db, runtime, log } = await setup(undefined, {}, raw)
     expect(
       await failureOf(runtime.read(session, { object: RIGHTS, id: OTHER }))
     ).toEqual({ code: "command.unavailable" })
     expect(db.calls).toEqual([{ connect: true }])
+    expect(log.mock.calls).toEqual([[{ kind: "database", error: raw }]])
+  })
+
+  it("destroys the connection on a read error without SQLSTATE and logs it", async () => {
+    const raw = new TypeError("driver bug")
+    const { db, runtime, log } = await setup((text) =>
+      text.startsWith(SELECT) ? { error: raw } : undefined
+    )
+    expect(
+      await failureOf(runtime.read(session, { object: RIGHTS, id: OTHER }))
+    ).toEqual({ code: "command.unavailable" })
+    expect(db.calls).toEqual(failed(byId, [{ release: true }]))
+    expect(log.mock.calls).toEqual([[{ kind: "database", error: raw }]])
   })
 
   it.each([
