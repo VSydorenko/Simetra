@@ -319,6 +319,14 @@
   оновити `packages/simetra/schemas/*.schema.json`; команду
   (`UPDATE_JSON_SCHEMAS=1 pnpm --filter simetra test json-schema`) знає лише
   код тесту. Підказка в повідомленні `expect` або скрипт пакета.
+- **Тайм-аути 5 с у юнітах designer під навантаженням.** Кейси
+  `packages/designer/src/__tests__/apply-outcome.test.ts` «reports the outcome
+  as unknown, never as nothing written» і
+  `packages/designer/src/__tests__/catalog-mutations.test.ts` «rename writes
+  on ok» перевищили 5000 мс у повному `pnpm test` під навантаженням машини;
+  повтор на тому самому SHA пройшов. Таймаут наосліп не піднімати: спершу
+  знайти, що в кейсі повільне (компіляція фікстури, імпорт, I/O), і
+  прибрати це.
 
 ## 8. Designer
 

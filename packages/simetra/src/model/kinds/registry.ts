@@ -21,6 +21,7 @@ export { isUuidColumn, singleUuidKeyColumn }
 export {
   RIGHTS_COLUMNS,
   RIGHTS_DELTA_SECTION,
+  USER_PLATFORM_COLUMNS,
   predefinedNameColumn,
   userPlatformColumns,
 } from "./catalog"

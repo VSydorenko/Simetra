@@ -14,6 +14,7 @@ import {
   ORG_KIND_ID,
   ORG_MEMBER_ROLE_ID,
   RIGHTS_ADMIN_ID,
+  SUPPORT_ID,
   adminRoles,
   compileRights,
   policyDomain,
@@ -31,6 +32,7 @@ import {
   assignmentRow,
   deploy,
   describeTransaction,
+  globalDeltaRow,
   insert,
   orgDeltaRow,
 } from "./rights-seed"
@@ -46,7 +48,9 @@ import {
  * `task_checklist`, 10 000 рухів `task_hours`, кожна таблиця одним
  * `INSERT … SELECT`, упорядкованим за тенантом; журнал прав — 20 000 рядків
  * на 1 000 скоупів; довідник прав — 10 призначень, кастомна роль і її
- * дельта на тенант (≥ 10 000 призначень). Користувач гейта — учасник одного тенанта з роллю, що
+ * дельта на тенант (≥ 10 000 призначень); глобальний довідник — у тій самій
+ * формі: кастомна роль з дельтою й призначення на кожного з
+ * `GLOBAL_ROLES` користувачів. Користувач гейта — учасник одного тенанта з роллю, що
  * дає `own` і вимір: усі політики `PERMISSIVE` складаються через OR, а розмір
  * множин планувальнику невідомий (`InitPlan`), тож форма плану від ролі не
  * залежить.
@@ -69,6 +73,13 @@ const FULL_ACCESS_SCOPES = 30
  * читає таблицю повним перебором, видна в плані як `Seq Scan`.
  */
 const ASSIGNMENTS_PER_TENANT = 10
+/**
+ * Глобальні кастомні ролі, кожна з дельтою й призначенням своєму
+ * користувачу: доступ до глобального довідника вибірковий за роллю, як і до
+ * довідника `org`, тож повторне читання глобальних дельт у тілі функції прав
+ * видно як `Seq Scan` з циклами.
+ */
+const GLOBAL_ROLES = 500
 
 /** Колонка скоупу (межа тенанта) таблиць гейта. */
 const SCOPE_COLUMN = /\borg_id\b/
@@ -82,6 +93,9 @@ const RIGHTS_TABLES = [
   "org_role_assignments",
   "org_roles",
   "org_roles_delta",
+  "global_role_assignments",
+  "global_roles",
+  "global_roles_delta",
   JOURNAL,
 ]
 
@@ -104,6 +118,8 @@ interface Gate {
   fullPoint: string
   /** Тенант власника `fullAccess`: його учасник, кастомна роль і її дельта. */
   fullOrg: { id: string; member: string; role: string; delta: string }
+  /** Глобальна кастомна роль власника `fullAccess`. */
+  fullGlobalRole: string
   /** id видимого користувачу рядка таблиці — для точкового читання. */
   point: Record<string, string>
 }
@@ -236,9 +252,60 @@ async function seed(client: pg.Client): Promise<Gate> {
      WHERE r.org_id <> $1 ORDER BY r.org_id`,
     [org, TASK]
   )
+  // Глобальний довідник: користувачі без членства (лише ключ у
+  // «Користувачах») раніше за їхні призначення; дельта — з глобального домену
+  // архетипу, інакше COMMIT відмовить `delta-domain` (спека прав §7).
+  await client.query(
+    `INSERT INTO public.users (id) SELECT gen_random_uuid() FROM generate_series(1, $1)`,
+    [GLOBAL_ROLES]
+  )
+  await client.query(
+    `INSERT INTO public.global_roles (id, archetype) SELECT gen_random_uuid(), $2 FROM generate_series(1, $1)`,
+    [GLOBAL_ROLES, SUPPORT_ID]
+  )
+  await client.query(
+    `INSERT INTO public.global_roles_delta (id, parent_id, line_number, object, action, extent, effect)
+     SELECT gen_random_uuid(), r.id, 1, 'announcement', 'create', 'any', 'allow' FROM public.global_roles r`
+  )
+  await client.query(
+    `INSERT INTO public.global_role_assignments (id, subject, custom_role, deletion_mark)
+     SELECT gen_random_uuid(), u.id, r.id, false
+     FROM (SELECT id, row_number() OVER (ORDER BY id) AS n FROM public.users x
+           WHERE NOT EXISTS (SELECT 1 FROM public.org_member m WHERE m.user_id = x.id)) u
+     JOIN (SELECT id, row_number() OVER (ORDER BY id) AS n FROM public.global_roles) r USING (n)`
+  )
   await client.query("SELECT set_config($1, 'off', true)", [
     RIGHTS_MAINTENANCE_SETTING,
   ])
+  // Власник `fullAccess` має й глобальну кастомну роль з обома гілками
+  // дельт, `allow` і `deny`, обидві на `announcement`: `task` скоуплений і
+  // поза глобальним доменом (спека прав §7). Тіла функцій прав від його імені
+  // читають глобальні дельти в обох гілках.
+  const fullGlobalRole = randomUUID()
+  await insert(client, "global_roles", {
+    id: fullGlobalRole,
+    archetype: SUPPORT_ID,
+  })
+  await insert(
+    client,
+    "global_roles_delta",
+    globalDeltaRow(fullGlobalRole, 1, [
+      "allow",
+      "announcement",
+      "create",
+      "any",
+    ])
+  )
+  await insert(
+    client,
+    "global_roles_delta",
+    globalDeltaRow(fullGlobalRole, 2, ["deny", "announcement", "read", "any"])
+  )
+  await insert(
+    client,
+    "global_role_assignments",
+    assignmentRow(full, { customRole: fullGlobalRole })
+  )
   const { rows: fullTasks } = await client.query<{ id: string }>(
     `SELECT t.id FROM public.${TASK} t JOIN public.org_member m ON m.org_id = t.org_id
      WHERE m.user_id = $1 ORDER BY t.id LIMIT 1`,
@@ -270,6 +337,7 @@ async function seed(client: pg.Client): Promise<Gate> {
     full,
     fullPoint: fullTasks[0]!.id,
     fullOrg: fullOrgs[0]!,
+    fullGlobalRole,
     point: { [TASK]: visible.task, [CHECKLIST]: visible.line },
   }
 }
@@ -337,8 +405,30 @@ describe("rights plan gate", () => {
     // Лише засіяні таблиці: ANALYZE усієї спільної бази тримав би блокування
     // чужих таблиць до відкату й переписав би їхню статистику поза транзакцією.
     await client.query(
-      `ANALYZE public.organization, public.region, public.org_member, public.org_role_assignments, public.org_roles, public.org_roles_delta, public.${TASK}, public.${CHECKLIST}, public.${HOURS}, simetra.${JOURNAL}`
+      `ANALYZE public.organization, public.region, public.org_member, public.org_role_assignments, public.org_roles, public.org_roles_delta, public.users, public.global_role_assignments, public.global_roles, public.global_roles_delta, public.${TASK}, public.${CHECKLIST}, public.${HOURS}, simetra.${JOURNAL}`
     )
+    // Точний засів глобального довідника: інакше гейт зелений без глобальних
+    // дельт. Масовий засів дає по одній дельті на роль, роль власника
+    // `fullAccess` — дві (гілки `allow` і `deny`).
+    const { rows: global } = await client.query<{
+      roles: number
+      deltas: number
+    }>(
+      "SELECT (SELECT count(*) FROM public.global_roles)::int AS roles, (SELECT count(*) FROM public.global_roles_delta)::int AS deltas"
+    )
+    expect(global[0]!.roles).toBe(GLOBAL_ROLES + 1)
+    expect(global[0]!.deltas).toBe(GLOBAL_ROLES + 2)
+    // Гілка `allow` тіл функцій прав від імені `fullAccess` читає глобальні
+    // дельти через його призначення глобальної ролі; гілка `deny` читає їх
+    // усі незалежно від призначень.
+    const { rows: fullAssigned } = await client.query(
+      "SELECT 1 FROM public.global_role_assignments WHERE subject = $1 AND custom_role = $2",
+      [gate.full, gate.fullGlobalRole]
+    )
+    expect(
+      fullAssigned.length,
+      "gate.full has a global custom role assignment"
+    ).toBe(1)
     console.info(`rights plan gate: seed + ANALYZE ${Date.now() - started} ms`)
   }, 120_000)
 
@@ -501,6 +591,22 @@ describe("rights plan gate", () => {
           .length,
         "rights tables are read"
       ).toBeGreaterThan(0)
+      // Вузол у плані ще не доказ: `PlanNode` зберігає й вузли з loops = 0,
+      // що не виконувались. Гілка `deny` читає всі глобальні дельти без
+      // з'єднання з призначеннями, тож тут вимагається доступ гілки `allow`
+      // за власником рядка ТЧ. Він виконується на кожен рядок `held`, тож
+      // прив'язку до призначення `gate.full` форма плану не доводить — її
+      // тримає перевірка призначення в `beforeAll`.
+      expect(
+        plans
+          .flatMap((p) => scansOf(p, "global_roles_delta"))
+          .some(
+            (n) =>
+              (n.loops ?? 0) > 0 &&
+              n.conditions.some((c) => /\bparent_id\b/.test(c))
+          ),
+        "global_roles_delta is read by owner in the allow branch"
+      ).toBe(true)
       expect
         .soft(
           plans.flatMap((p) =>

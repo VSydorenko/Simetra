@@ -45,6 +45,12 @@ export {
   authorUpdateTriggerName,
 } from "./author-units"
 export { hierarchyNames } from "./hierarchy-units"
+export {
+  SHARED_TRIGGER_FUNCTIONS,
+  platformTriggers,
+  type PlatformTrigger,
+  type PlatformTriggerFamily,
+} from "./platform-triggers"
 export { KEY_FUNCTION, keyTriggerNames } from "./key-units"
 export {
   MECHANICS_FUNCTION,

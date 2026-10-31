@@ -12,10 +12,8 @@ import {
 import {
   canonicalSnapshot,
   compile,
-  hierarchyNames,
   loadSqlParser,
-  keyTriggerNames,
-  mechanicsTriggerName,
+  platformTriggers,
   type CompiledModel,
   type SchemaPathResolver,
   type SqlParser,
@@ -557,18 +555,20 @@ async function mechanicsLoss(source: CompiledModel): Promise<Loss> {
   const identities = new Set(
     lostUnits.filter((u) => u.class === "trigger").map((u) => u.identity)
   )
-  const triggers = source.physical.tables
-    .flatMap((t) => {
-      const key = keyTriggerNames(t.name)
-      const hierarchy = hierarchyNames(t)
-      return [
-        mechanicsTriggerName(t.name),
-        key.before,
-        key.after,
-        hierarchy.insert,
-        hierarchy.update,
-      ].map((name) => ({ schema: t.schema, table: t.name, name }))
-    })
+  // Кандидати — платформні тригери таблиці з генераторами втраченого; реєстр
+  // називає й тригери, яких таблиця не має, тож лишаються лише фактично
+  // вилучені
+  const candidates = source.physical.tables.flatMap((t) =>
+    platformTriggers(t)
+      .filter((e) => lost(e))
+      .map((e) => ({ table: t, entry: e }))
+  )
+  const triggers = candidates
+    .map(({ table, entry }) => ({
+      schema: table.schema,
+      table: table.name,
+      name: entry.trigger,
+    }))
     .filter((t) => identities.has(`trigger:${t.schema}.${t.table}.${t.name}`))
   expect(triggers).toHaveLength(identities.size)
   // Функція ієрархії — у схемі таблиці, тож звірка бачить і її: прийом з нуля
@@ -579,9 +579,14 @@ async function mechanicsLoss(source: CompiledModel): Promise<Loss> {
       .filter((u) => u.class === "function" && inScope.has(u.schema))
       .map((u) => u.identity)
   )
-  const functions = source.physical.tables
-    .map((t) => hierarchyNames(t).fn)
-    .filter((f) => fnIdentities.has(`function:${f.schema}.${f.name}()`))
+  const functions = [
+    ...new Map(
+      candidates
+        .map(({ entry }) => entry.function)
+        .filter((f) => inScope.has(f.schema))
+        .map((f) => [`${f.schema}.${f.name}`, f])
+    ).values(),
+  ].filter((f) => fnIdentities.has(`function:${f.schema}.${f.name}()`))
   expect(functions).toHaveLength(fnIdentities.size)
   // З грантів функції каталог несе лише відкликання в PUBLIC: `EXECUTE` для
   // PUBLIC є в `acldefault` будь-якої функції. Відкликання в ролей, яким

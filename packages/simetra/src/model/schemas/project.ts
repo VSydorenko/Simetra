@@ -140,7 +140,11 @@ export const PROVIDER_API_ROLES: Readonly<
   },
 }
 
-/** Provider login roles that can run untrusted API requests. */
+/**
+ * Provider login roles that can run untrusted API requests. Rights maintenance
+ * mode is never enabled for them, even when one owns the rights functions:
+ * provider services work under these shared logins.
+ */
 export const PROVIDER_LOGIN_ROLES: Readonly<
   Record<DatabaseProvider, readonly string[]>
 > = {
@@ -254,7 +258,7 @@ export const PLATFORM_ROLES = { command: "simetra_command" } as const
  * них входять, а права вони беруть лише через `SET ROLE` — членства
  * `INHERIT FALSE, SET TRUE`. Гранту згенерованого SQL вони не отримують
  * (`GrantPurpose` їх не знає), а режим обслуговування прав для них не
- * вмикається: рантайм виконує запити користувачів.
+ * вмикається: рантайм не власник функцій прав (спека прав §7).
  */
 export const PLATFORM_LOGIN_ROLES = { runtime: "simetra_runtime" } as const
 

@@ -148,6 +148,15 @@ export function userPlatformColumns(): StandardColumnDef[] {
 }
 
 /**
+ * Платформні колонки «Користувачів» за логічним ім'ям: споживачі беруть
+ * колонку за ім'ям, а не за позицією в масиві, щоб зміна порядку реквізитів
+ * не підміняла їх мовчки.
+ */
+export const USER_PLATFORM_COLUMNS = Object.fromEntries(
+  userPlatformColumns().map((def) => [def.logicalName, def])
+) as Readonly<Record<"userKind" | "invalid", StandardColumnDef>>
+
+/**
  * «Ролі» рівня (спека прав §4.6): базовий архетип — UUID ролі
  * метаданих без FK (ролі метаданих таблиць не мають), назва — стандартне
  * найменування, порядок — для показу.
