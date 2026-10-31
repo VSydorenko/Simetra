@@ -28,7 +28,7 @@ export function decodeRow(
     row
   )
   if (Object.hasOwn(row, object.versionColumn)) {
-    out[object.versionName] = decodeVersion(row[object.versionColumn])
+    out[object.versionName] = decodeSafeInteger(row[object.versionColumn])
   }
   const tabular = row.tabular
   if (isPlainObject(tabular)) {
@@ -38,12 +38,23 @@ export function decodeRow(
       if (!Array.isArray(rows)) throw internal()
       out[section.name] = rows.map((r: unknown) => {
         if (!isPlainObject(r)) throw internal()
-        return decodeAttributes(
+        const line = decodeAttributes(
           section.attributes,
           section.key,
           section.keyName,
           r
         )
+        // Власник і номер рядка — поля типу рядка ТЧ кодогену (Р-A3-7), хоч
+        // реквізитами входу вони не є.
+        if (Object.hasOwn(r, section.parent)) {
+          line[section.parentName] = r[section.parent]
+        }
+        if (Object.hasOwn(r, section.lineNumber)) {
+          line[section.lineNumberName] = decodeSafeInteger(
+            r[section.lineNumber]
+          )
+        }
+        return line
       })
     }
   }
@@ -103,8 +114,11 @@ function decodeScalar(attribute: RuntimeAttribute, value: unknown): unknown {
   return value
 }
 
-/** Версія — `number` типу сутності; поза безпечним цілим клієнт її спотворив би. */
-function decodeVersion(value: unknown): number {
+/**
+ * Версія й номер рядка — `number` типу сутності; поза безпечним цілим клієнт
+ * їх спотворив би.
+ */
+function decodeSafeInteger(value: unknown): number {
   const version =
     typeof value === "string" && INTEGER_TEXT.test(value)
       ? Number(value)

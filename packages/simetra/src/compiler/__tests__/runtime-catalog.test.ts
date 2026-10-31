@@ -181,7 +181,9 @@ describe("buildRuntimeCatalog", () => {
       key: "id",
       keyName: "ref",
       parent: "parent_id",
+      parentName: "parent",
       lineNumber: "line_number",
+      lineNumberName: "lineNumber",
     })
     expect(
       section!.attributes.filter((a) =>

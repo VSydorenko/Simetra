@@ -316,9 +316,17 @@ describe("command runtime over the engine target", () => {
       version: expect.any(Number),
     })
     // Рядки ТЧ — точно, за іменами каталогу: ключ рядка під `keyName` ТЧ,
-    // `Numeric` з повним масштабом колонки.
+    // власник і номер рядка — як у типі рядка кодогену, `Numeric` з повним
+    // масштабом колонки.
     expect(row!.lines).toEqual([
-      { ref: line, org: env.me.org, qty: "1.5000000000", note: "first" },
+      {
+        ref: line,
+        parent: id,
+        lineNumber: 1,
+        org: env.me.org,
+        qty: "1.5000000000",
+        note: "first",
+      },
     ])
     const read = async () => rt.read(env.me.session, { object: GAUGE, id })
     expect(await read()).toEqual([header(row!)])
@@ -354,8 +362,22 @@ describe("command runtime over the engine target", () => {
     })
     const [next] = updated.rows
     expect(next!.lines).toEqual([
-      { ref: second, org: env.me.org, qty: AMOUNT, note: "second" },
-      { ref: line, org: env.me.org, qty: "-2.2500000000", note: "edited" },
+      {
+        ref: second,
+        parent: id,
+        lineNumber: 1,
+        org: env.me.org,
+        qty: AMOUNT,
+        note: "second",
+      },
+      {
+        ref: line,
+        parent: id,
+        lineNumber: 2,
+        org: env.me.org,
+        qty: "-2.2500000000",
+        note: "edited",
+      },
     ])
     expect(await linesOf(id)).toEqual([
       { id: second, line_number: 1, qty: AMOUNT, note: "second" },

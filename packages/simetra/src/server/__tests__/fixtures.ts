@@ -91,7 +91,9 @@ export const sample: RuntimeObject = runtimeObjectSchema.parse({
       key: "id",
       keyName: "ref",
       parent: "parent_id",
+      parentName: "parent",
       lineNumber: "line_number",
+      lineNumberName: "lineNumber",
       attributes: [
         attr("qty", "Integer"),
         attr("firstOnly", "Text", { insert: true, update: false }),

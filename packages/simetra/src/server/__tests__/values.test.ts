@@ -568,7 +568,7 @@ describe("on the compiled catalog", () => {
       code: "T-1",
       subject: { type: "Catalog.Region", id: OTHER },
       watchers: [OTHER],
-      checklist: [{ ref: OTHER, region_id: ID }],
+      checklist: [{ ref: OTHER, parent: ID, lineNumber: 1, region_id: ID }],
     })
   })
 

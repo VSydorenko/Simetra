@@ -140,7 +140,9 @@ function runtimeObject(
         key: section.key,
         keyName: fieldOf(rows, section.key).name,
         parent: section.parent,
+        parentName: fieldOf(rows, section.parent).name,
         lineNumber: section.lineNumber,
+        lineNumberName: fieldOf(rows, section.lineNumber).name,
         attributes: attributes(
           rows.filter((f) => !fixed.has(f.columns[0])),
           section.table,

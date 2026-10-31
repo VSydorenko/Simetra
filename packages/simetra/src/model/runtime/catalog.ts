@@ -81,7 +81,9 @@ export const runtimeSectionSchema = z.strictObject({
   key: z.string(),
   keyName: z.string(),
   parent: z.string(),
+  parentName: z.string(),
   lineNumber: z.string(),
+  lineNumberName: z.string(),
   attributes: z.array(runtimeAttributeSchema),
   constraints: z.array(runtimeConstraintSchema),
 })
