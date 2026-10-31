@@ -184,7 +184,7 @@ describe("emitEntityTypes", { timeout: 30_000 }, () => {
         /** Predefined name */
         predefinedName: string | null
         /** Version */
-        version: string
+        version: number
         /** Created at */
         createdAt: string
         /** Updated at */
@@ -197,7 +197,7 @@ describe("emitEntityTypes", { timeout: 30_000 }, () => {
     expect(diagnosticsOf(code)).toEqual([])
   })
 
-  it("numeric and bigint are strings", async () => {
+  it("numeric is a string, bigint a bigint and the version a number", async () => {
     const code = await emit({
       "project.meta.json": project(),
       "catalogs/Item/Item.meta.json": catalog("Item", {
@@ -222,13 +222,13 @@ describe("emitEntityTypes", { timeout: 30_000 }, () => {
         /** Predefined name */
         predefinedName: string | null
         /** Version */
-        version: string
+        version: number
         /** Created at */
         createdAt: string
         /** Updated at */
         updatedAt: string
         price: string | null
-        big: string
+        big: bigint
         count: number
         payload: Json_ | null
       }"
@@ -292,7 +292,7 @@ describe("emitEntityTypes", { timeout: 30_000 }, () => {
         /** Predefined name */
         predefinedName: string | null
         /** Version */
-        version: string
+        version: number
         /** Created at */
         createdAt: string
         /** Updated at */
@@ -573,7 +573,7 @@ describe("emitEntityTypes", { timeout: 30_000 }, () => {
         /** Deletion mark */
         deletionMark: boolean
         /** Version */
-        version: string
+        version: number
         /** Created at */
         createdAt: string
         /** Updated at */
@@ -640,7 +640,7 @@ describe("emitEntityTypes", { timeout: 30_000 }, () => {
         /** Deletion mark */
         deletionMark: boolean
         /** Version */
-        version: string
+        version: number
         /** Created at */
         createdAt: string
         /** Updated at */
@@ -674,7 +674,7 @@ describe("emitEntityTypes", { timeout: 30_000 }, () => {
         /** Predefined name */
         predefinedName: string | null
         /** Version */
-        version: string
+        version: number
         /** Created at */
         createdAt: string
         /** Updated at */
@@ -767,7 +767,7 @@ describe("emitEntityTypes", { timeout: 30_000 }, () => {
         /** Predefined name */
         predefined_name: string | null
         /** Version */
-        version: string
+        version: number
         /** Created at */
         created_at: string
         /** Updated at */
@@ -799,7 +799,7 @@ describe("emitEntityTypes", { timeout: 30_000 }, () => {
         /** Predefined name */
         predefinedName: string | null
         /** Version */
-        version: string
+        version: number
         /** Created at */
         createdAt: string
         /** Updated at */

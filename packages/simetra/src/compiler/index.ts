@@ -128,6 +128,13 @@ export type {
 export type { Presentation, PresentationBlock } from "./presentation"
 export { emitEntityTypes } from "./codegen"
 export {
+  entityFields,
+  type ElementSource,
+  type EntityContext,
+  type EntityField,
+} from "./entity-fields"
+export { buildRuntimeCatalog } from "./runtime-catalog"
+export {
   canonicalSnapshot,
   canonicalize,
   serializeCanonical,
