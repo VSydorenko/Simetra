@@ -37,8 +37,11 @@ describe("core error codes in the compiler", () => {
       const code = stripComments(readFileSync(path, "utf8"))
       return (
         /\b(?:refusal|forbidden|conflict)\(\s*["'`]/.test(code) ||
-        // `invalid` бере SQL-вираз: літерал-причина в лапках SQL (`"'p_item'"`).
-        /\binvalid\(\s*["'`]'/.test(code) ||
+        // `invalid` бере SQL-вираз: причина-літерал у лапках SQL (`"'p_item'"`)
+        // чи в `sqlLiteral("…")`; шаблон `${…}` — вираз з T0, не літерал.
+        /\binvalid\(\s*(?:["'`]'|sqlLiteral\(\s*["'`](?!\$\{))/.test(code) ||
+        // Префікс протоколу ТЧ (`tabular.<таблиця>`) — теж причина з T0.
+        /["'`]tabular\./.test(code) ||
         /DETAIL = '[a-z]/.test(code)
       )
     })
