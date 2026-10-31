@@ -1,10 +1,13 @@
 import {
   isTextEncodedType,
+  readQuerySchema,
   type BaseCastType,
   type CommandError,
   type ReadQuery,
+  type RuntimeCatalog,
   type RuntimeObject,
 } from "simetra/model"
+import type { z } from "zod"
 import { encodePair, encodeParam } from "./values"
 
 // Колонка мітки пари й ключ таблиці в каталозі без `castType`: їхній тип
@@ -95,4 +98,52 @@ export function buildReadStatement(
       ` ORDER BY ${key} LIMIT $${params.length}`,
     params,
   }
+}
+
+/** The input path of the first Zod issue; `undefined` — the input root. */
+export function issuePath(error: z.ZodError): string | undefined {
+  const [issue] = error.issues
+  return issue === undefined || issue.path.length === 0
+    ? undefined
+    : issue.path.join(".")
+}
+
+/**
+ * Checks a read query against the catalog and builds its statement; every
+ * failure is `command.invalid` before the database.
+ */
+export function prepareRead(
+  catalog: RuntimeCatalog,
+  query: unknown
+):
+  | {
+      object: RuntimeObject
+      statement: { text: string; params: (string | null)[] }
+    }
+  | { error: CommandError } {
+  let parsed: ReturnType<typeof readQuerySchema.safeParse>
+  try {
+    parsed = readQuerySchema.safeParse(query)
+  } catch {
+    // Геттер, що кидає, чи відкликаний `Proxy` у запиті.
+    return { error: { code: "command.invalid" } }
+  }
+  if (!parsed.success) {
+    const path = issuePath(parsed.error)
+    return {
+      error: {
+        code: "command.invalid",
+        ...(path === undefined ? {} : { path }),
+      },
+    }
+  }
+  const { object: ref } = parsed.data
+  const object = catalog.objects.find(
+    (o) => o.kind === ref.kind && o.name === ref.name
+  )
+  if (object === undefined) {
+    return { error: { code: "command.invalid", path: "object" } }
+  }
+  const statement = buildReadStatement(object, parsed.data)
+  return "error" in statement ? statement : { object, statement }
 }

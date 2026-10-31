@@ -1,20 +1,23 @@
 import {
   COMMAND_SETTING,
+  OPERATION_EVENTS,
   batchSchema,
   operationSchema,
   type CommandContext,
   type CommandError,
+  type Draft,
+  type ObjectModule,
   type Operation,
   type RuntimeCatalog,
   type RuntimeObject,
   type RuntimeOperationTarget,
 } from "simetra/model"
-import type { z } from "zod"
 import { decodeRow } from "./decode"
 import { CommandFailure } from "./errors"
-import { ident, literal } from "./read"
+import { callHook, type HookPhase } from "./hook-context"
+import { ident, issuePath, literal } from "./read"
 import type { Statement, Transaction } from "./transaction"
-import { encodeItem } from "./values"
+import { encodeItem, isPlainObject } from "./values"
 
 /** The catalog entries an operation addresses. */
 interface Target {
@@ -42,17 +45,17 @@ function targetOf(
   return { object, target }
 }
 
-const draftOf = (op: Operation) =>
+// Без ключів зі значенням `undefined`: чернетку, яку хук повернув як є,
+// перевірка не відкине.
+const draftOf = (op: Operation): Draft<object> =>
   op.action === "create" || op.action === "update"
-    ? { values: op.values, tabularSections: op.tabularSections }
+    ? {
+        ...(op.values === undefined ? {} : { values: op.values }),
+        ...(op.tabularSections === undefined
+          ? {}
+          : { tabularSections: op.tabularSections }),
+      }
     : {}
-
-function issuePath(error: z.ZodError): string | undefined {
-  const [issue] = error.issues
-  return issue === undefined || issue.path.length === 0
-    ? undefined
-    : issue.path.join(".")
-}
 
 /**
  * Перевірка до транзакції (спека П4 §6.5): схема операції, об'єкт і операція
@@ -91,12 +94,13 @@ const fn = (target: RuntimeOperationTarget) =>
 /** Виклик функції ядра фази зі зв'язаними параметрами. */
 function callOf(
   { object, target }: Target,
-  op: Operation
+  op: Operation,
+  draft: Draft<object>
 ): Statement | { error: CommandError } {
   switch (op.action) {
     case "create":
     case "update": {
-      const encoded = encodeItem(object, op, draftOf(op))
+      const encoded = encodeItem(object, op, draft)
       if ("error" in encoded) return encoded
       return {
         text: `SELECT ${fn(target)}($1::jsonb, $2::bigint) AS r`,
@@ -123,8 +127,49 @@ function callOf(
 const CONTEXT_TEXT = `SELECT set_config(${literal(COMMAND_SETTING)}, $1, true)`
 
 /**
- * One phase: the command context and the core call as one queue unit, then
- * the row decoded before `COMMIT`. Повертає рядок фази за логічними іменами.
+ * Чернетка хука «до» — та сама перевірка, що й вхід (спека П4 §6.5): ключі
+ * поза чернеткою — `command.invalid`; значення перевіряє `encodeItem`.
+ * Чернетка `markDeletion` порожня: позначку хук бачить у `ctx.mark` (Р-A3-18).
+ */
+function checkDraft(
+  tx: Transaction,
+  op: Operation,
+  draft: unknown
+): Draft<object> {
+  if (!isPlainObject(draft)) {
+    tx.state.log({
+      kind: "hook",
+      error: new Error("beforeWrite returned no draft object"),
+    })
+    tx.abort({ code: "command.internal" })
+  }
+  const keys = op.action === "markDeletion" ? [] : ["values", "tabularSections"]
+  for (const key of Object.keys(draft)) {
+    if (!keys.includes(key) || draft[key] === undefined) tx.abort(invalid(key))
+  }
+  return draft
+}
+
+/** Фаза `ctx.run`: той самий вхід, що й у команди, — копія й перевірка. */
+async function runNested(
+  tx: Transaction,
+  operation: unknown
+): Promise<Record<string, unknown>> {
+  let op: Operation
+  try {
+    // Пакет — не операція; копія — щоб хук не змінив входу після перевірки.
+    if (Array.isArray(operation)) throw new CommandFailure(invalid())
+    ;[op] = prepareInput(tx.state.catalog, structuredClone(operation))
+  } catch (error) {
+    tx.abort(error instanceof CommandFailure ? error.error : invalid())
+  }
+  return runPhase(tx, op)
+}
+
+/**
+ * One phase: `beforeWrite`, the command context and the core call as one
+ * queue unit, the row decoded before `COMMIT`, then `onWrite`. Повертає
+ * рядок фази за логічними іменами.
  */
 export async function runPhase(
   tx: Transaction,
@@ -133,7 +178,28 @@ export async function runPhase(
   const found = targetOf(tx.state.catalog, op)
   if ("error" in found) tx.abort(found.error)
   const { object, target } = found
-  const call = callOf(found, op)
+  // Подію визначає операція (Р-A3-2): `delete` хуків не викликає.
+  const module: ObjectModule<object> | undefined =
+    OPERATION_EVENTS[op.action] === "write"
+      ? tx.state.objectModules[`${object.kind}.${object.name}`]
+      : undefined
+  const phase: HookPhase = {
+    object,
+    op,
+    additionalProperties: new Map(),
+    runNested: (operation) => runNested(tx, operation),
+  }
+  let draft = draftOf(op)
+  if (module?.beforeWrite !== undefined) {
+    const beforeWrite = module.beforeWrite.bind(module)
+    // Контекст фази ставиться після хука «до» (Рт5): фаза його `ctx.run`
+    // ставить свій раніше.
+    const returned: unknown = await callHook(tx, phase, (ctx) =>
+      beforeWrite({ ctx, draft })
+    )
+    draft = checkDraft(tx, op, returned)
+  }
+  const call = callOf(found, op, draft)
   if ("error" in call) tx.abort(call.error)
   const context: CommandContext = {
     action: target.context,
@@ -186,5 +252,12 @@ export async function runPhase(
     version,
     operation: op.action,
   })
+  if (module?.onWrite !== undefined) {
+    const onWrite = module.onWrite.bind(module)
+    // Копія: зміна рядка хуком не змінює результату команди (Р-A3-15).
+    await callHook(tx, phase, (ctx) =>
+      onWrite({ ctx, row: structuredClone(row) })
+    )
+  }
   return row
 }

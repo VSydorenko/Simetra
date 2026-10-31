@@ -12,6 +12,7 @@ import {
   type SessionClaims,
 } from "simetra/model"
 import { CommandFailure, mapDatabaseError, type ErrorPhase } from "./errors"
+import { inCommand, outsideCommand, rejectNested } from "./hook-context"
 import { prepareInput, runPhase } from "./phase"
 import {
   normalizeError,
@@ -116,6 +117,9 @@ export class Transaction {
   terminal: Terminal | undefined
   readonly changes: Change[] = []
   readonly afterCommit: (() => unknown)[] = []
+  /** The current user of the attempt (step 4 of §6.5). */
+  user = ""
+  act: { sub: string } | undefined
   private tail: Promise<unknown> = Promise.resolve()
 
   constructor(
@@ -201,7 +205,9 @@ type Outcome =
 /** Кроки 1–7 транзакції команди (спека П4 §6.5). */
 async function attempt(
   state: RuntimeState,
+  command: { active: boolean },
   claims: string,
+  act: { sub: string } | undefined,
   ops: readonly Operation[]
 ): Promise<Outcome> {
   let client: DatabaseClient
@@ -210,18 +216,25 @@ async function attempt(
   } catch (raw) {
     return { terminal: terminalOf(raw, state, undefined) }
   }
-  const tx = new Transaction(client, state)
+  // Явний тип: виклики `never` звужують типи лише так.
+  const tx: Transaction = new Transaction(client, state)
+  tx.act = act
   const rows: Record<string, unknown>[] = []
   let tag: string
   try {
-    await tx.enqueue([BEGIN])
-    await tx.enqueue([statement(CLAIMS_TEXT, claims)])
-    await tx.enqueue([COMMAND_ROLE])
-    const { rows: users } = await tx.enqueue([CURRENT_USER])
-    // Без дійсного користувача — жодної фази (Рт8).
-    if (users[0]?.user_id == null) tx.abort({ code: "command.unauthenticated" })
-    for (const op of ops) rows.push(await runPhase(tx, op))
-    tag = (await tx.enqueue([COMMIT])).command
+    tag = await inCommand({ command, tx, depth: 0 }, async () => {
+      await tx.enqueue([BEGIN])
+      await tx.enqueue([statement(CLAIMS_TEXT, claims)])
+      await tx.enqueue([COMMAND_ROLE])
+      const { rows: users } = await tx.enqueue([CURRENT_USER])
+      const user = users[0]?.user_id
+      // Без дійсного користувача — жодної фази (Рт8).
+      if (user == null) tx.abort({ code: "command.unauthenticated" })
+      if (typeof user !== "string") tx.anomaly(new Error("user id is not text"))
+      tx.user = user
+      for (const op of ops) rows.push(await runPhase(tx, op))
+      return (await tx.enqueue([COMMIT])).command
+    })
   } catch (error) {
     // Непередбачений виняток (не відмова черги) — теж термінальний.
     if (tx.terminal === undefined) {
@@ -278,6 +291,7 @@ export async function runCommand(
   session: SessionClaims,
   input: unknown
 ): Promise<CommandResult> {
+  rejectNested()
   const ops = prepareInput(state.catalog, input)
   let claims: string
   try {
@@ -288,25 +302,41 @@ export async function runCommand(
   // Знімок входу одразу й копія на кожну спробу: ні викликач після виклику,
   // ні невдала спроба не змінюють того, що виконує наступна.
   const snapshot = structuredClone(ops)
-  for (let n = 0; n < state.maxAttempts; n++) {
-    const outcome = await attempt(state, claims, structuredClone(snapshot))
-    if ("terminal" in outcome) {
-      if (outcome.terminal.retry) continue
-      throw outcome.terminal.failure
+  const act =
+    typeof session.act?.sub === "string" ? { sub: session.act.sub } : undefined
+  const command = { active: true }
+  // `maxAttempts` ≥ 1, тож хоч одна спроба відбудеться.
+  let outcome: Outcome | undefined
+  try {
+    for (let n = 0; n < state.maxAttempts; n++) {
+      outcome = await attempt(
+        state,
+        command,
+        claims,
+        act,
+        structuredClone(snapshot)
+      )
+      if (!("terminal" in outcome) || !outcome.terminal.retry) break
     }
-    if (outcome.afterCommit.length > 0) {
-      const chain = runAfterCommit(outcome.afterCommit, state.log)
-      if (state.defer === undefined) {
-        await chain
-      } else {
-        try {
-          state.defer(chain)
-        } catch (error) {
-          state.log({ kind: "defer", error })
-        }
+  } finally {
+    // Команда завершена: продовження, які запланував хук, — не вкладені.
+    command.active = false
+  }
+  // Вичерпаний повтор несе `command.retry-exhausted` (`terminalOf`).
+  if ("terminal" in outcome!) throw outcome.terminal.failure
+  const { result, afterCommit } = outcome!
+  if (afterCommit.length > 0) {
+    // Поза сховищем: команда, яку запускає дія, не вкладена (Р-A3-11).
+    const chain = outsideCommand(() => runAfterCommit(afterCommit, state.log))
+    if (state.defer === undefined) {
+      await chain
+    } else {
+      try {
+        state.defer(chain)
+      } catch (error) {
+        state.log({ kind: "defer", error })
       }
     }
-    return outcome.result
   }
-  throw new CommandFailure({ code: "command.retry-exhausted" })
+  return result
 }
