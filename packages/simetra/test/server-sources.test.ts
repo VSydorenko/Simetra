@@ -44,16 +44,22 @@ describe("src/server sources", () => {
     expect(FORBIDDEN.size).toBeGreaterThan(0)
   })
 
-  it("names no provider or provider role in string literals", () => {
+  // Ідентифікатор — теж назва: `.supabase`, ключ `{ supabase: … }`; перелік
+  // провайдерів T3 не читає взагалі — гілка за провайдером належить T2.
+  it("names no provider or provider role in literals or identifiers", () => {
     const hits: string[] = []
     for (const f of files) {
       const sf = parse(f)
       walk(sf, (n) => {
         if (
-          (ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n)) &&
+          (ts.isStringLiteral(n) ||
+            ts.isNoSubstitutionTemplateLiteral(n) ||
+            ts.isIdentifier(n)) &&
           FORBIDDEN.has(n.text)
         )
-          hits.push(`${f}: "${n.text}"`)
+          hits.push(`${f}: ${n.text}`)
+        if (ts.isIdentifier(n) && n.text === "DATABASE_PROVIDERS")
+          hits.push(`${f}: DATABASE_PROVIDERS`)
       })
     }
     expect(hits).toEqual([])
