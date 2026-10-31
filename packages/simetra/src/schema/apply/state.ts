@@ -1,9 +1,15 @@
 import {
+  executeGrants,
   platformSchemaGrants,
   type CompiledModel,
   type PromotionRecord,
 } from "simetra/compiler"
-import { PLATFORM_SCHEMA, quoteIdent, type CatalogModel } from "simetra/model"
+import {
+  APPLIED_SNAPSHOT_HASH_FUNCTION_NAME,
+  PLATFORM_SCHEMA,
+  quoteIdent,
+  type CatalogModel,
+} from "simetra/model"
 import type {
   EngineDiagnostic,
   EngineIdentity,
@@ -26,6 +32,8 @@ export const APPLY_STATE_FORMAT = 1
 const SCHEMA = quoteIdent(PLATFORM_SCHEMA)
 const MARKER = `${SCHEMA}.${quoteIdent("marker")}`
 const LEDGER = `${SCHEMA}.${quoteIdent("ledger")}`
+const SNAPSHOT_HASH_FUNCTION = `${PLATFORM_SCHEMA}.${APPLIED_SNAPSHOT_HASH_FUNCTION_NAME}()`
+const SNAPSHOT_HASH_SIGNATURE = `${SCHEMA}.${quoteIdent(APPLIED_SNAPSHOT_HASH_FUNCTION_NAME)}()`
 
 /**
  * DDL стану застосування (платформна спека §6.1, спека користувачів §3):
@@ -33,7 +41,10 @@ const LEDGER = `${SCHEMA}.${quoteIdent("ledger")}`
  * метаданих від них не залежить. Безпеку схеми дає та сама функція, що й
  * платформному шару, і лише коли шару в моделі немає — інакше одиниці
  * задублювалися б. Таблицям стану грантів немає: їх читає й пише лише роль,
- * що застосовує.
+ * що застосовує. Єдиний виняток — `applied_snapshot_hash()` для ролі команд
+ * (рішення Р-A3-16): рантайм звіряє хеш знімка з базою, не отримуючи права
+ * читати marker, тож функція — `SECURITY DEFINER`, а її `EXECUTE` — лише
+ * ролі команд і в обох випадках, бо функцію платформний шар не дає.
  */
 export function renderApplyState(
   model: Pick<CompiledModel, "project" | "contracts">
@@ -90,6 +101,19 @@ export function renderApplyState(
       "  applied_by text NOT NULL DEFAULT current_user,",
       "  applied_at timestamptz NOT NULL DEFAULT now()",
       ");",
+    ].join("\n"),
+    // Після marker: тіло SQL-функції Postgres перевіряє при створенні
+    [
+      `CREATE OR REPLACE FUNCTION ${SNAPSHOT_HASH_SIGNATURE}`,
+      "RETURNS text",
+      "LANGUAGE sql STABLE SECURITY DEFINER",
+      "SET search_path = ''",
+      `AS $$SELECT snapshot_hash FROM ${MARKER}$$;`,
+      ...executeGrants(
+        SNAPSHOT_HASH_SIGNATURE,
+        ["command"],
+        model.project.database.provider
+      ),
     ].join("\n"),
   ].join("\n\n")
 }
@@ -385,8 +409,8 @@ const STATE_TABLES = ["marker", "ledger"] as const
 /** Стан застосування цілі для звірки та розпізнавач його об'єктів. */
 export interface ApplyStateObjects {
   /**
-   * `absent` — немає жодного об'єкта стану: обох таблиць, а без платформного
-   * шару й схеми `simetra` (разом з її грантами). Будь-що часткове —
+   * `absent` — немає жодного об'єкта стану: обох таблиць, функції хешу знімка,
+   * а без платформного шару й схеми `simetra` (разом з її грантами). Будь-що часткове —
    * `present` (спека П2 §8.6).
    */
   state: "absent" | "present"
@@ -417,6 +441,10 @@ export function applyStateOf(
       t.schema === PLATFORM_SCHEMA &&
       (STATE_TABLES as readonly string[]).includes(t.name)
   )
+  const functionId = `function:${SNAPSHOT_HASH_FUNCTION}`
+  const functionAbsent = !target.model.units.some(
+    (u) => u.identity === functionId
+  )
   const schemaAbsent = plan.actions.some((a) => a.produces.includes(schemaId))
   const sub = /^(?:column|constraint|trigger|rule|policy|default):(.*)$/
   // Одиниця гранту компілятора: `grant:<grant|revoke>:<клас>:<об'єкти>:…`;
@@ -424,10 +452,19 @@ export function applyStateOf(
   const schemaGrant = new RegExp(
     `^grant:(?:grant|revoke):schema:${PLATFORM_SCHEMA}:`
   )
+  // Гранти функції хешу — стану завжди: шар її не дає
+  const functionGrant = `grant:grant:function:${SNAPSHOT_HASH_FUNCTION}:`
+  const functionRevoke = `grant:revoke:function:${SNAPSHOT_HASH_FUNCTION}:`
   const owns = (identity: string): boolean => {
     const wrapped = /^(?:comment|acl|securityLabel):\((.*)\)/.exec(identity)
     if (wrapped !== null) return owns(wrapped[1]!)
     if (tables.some((t) => identity === `table:${t}`)) return true
+    if (
+      identity === functionId ||
+      identity.startsWith(functionGrant) ||
+      identity.startsWith(functionRevoke)
+    )
+      return true
     const m = sub.exec(identity)
     if (m !== null && tables.some((t) => m[1]!.startsWith(`${t}.`))) return true
     return (
@@ -436,7 +473,9 @@ export function applyStateOf(
   }
   return {
     state:
-      tablesAbsent && (!schemaIsState || schemaAbsent) ? "absent" : "present",
+      tablesAbsent && functionAbsent && (!schemaIsState || schemaAbsent)
+        ? "absent"
+        : "present",
     owns,
     ownsPath: (path) =>
       tables.some(

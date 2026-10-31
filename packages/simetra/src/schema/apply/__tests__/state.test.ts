@@ -1,13 +1,18 @@
 import { describe, expect, it } from "vitest"
 import {
   compile,
+  executeGrants,
+  platformSchemaGrants,
   type CompiledModel,
   type PromotionRecord,
 } from "simetra/compiler"
 import { PLATFORM_ROLES, PROVIDER_API_ROLES, quoteIdent } from "simetra/model"
 import {
   FINGERPRINT_SECTIONS,
+  applyStateOf,
   renderApplyState,
+  type EnginePlan,
+  type Extracted,
   writeApplyStateStatements,
   type CatalogFingerprint,
   type DriftReport,
@@ -47,6 +52,12 @@ const usage = Object.values(PROVIDER_API_ROLES.supabase).map(
   (role) => `GRANT USAGE ON SCHEMA simetra TO ${quoteIdent(role)};`
 )
 
+const snapshotHashGrants = executeGrants(
+  "simetra.applied_snapshot_hash()",
+  ["command"],
+  "supabase"
+)
+
 describe("renderApplyState", () => {
   it("creates the schema with marker and ledger", async () => {
     const sql = renderApplyState(await withoutUsers())
@@ -64,9 +75,11 @@ describe("renderApplyState", () => {
 
   it("leaves schema grants to the platform layer when it is present", async () => {
     const m = await withUsers()
-    const sql = renderApplyState(m)
-    expect(sql).not.toContain("REVOKE")
-    expect(sql).not.toContain("GRANT")
+    const lines = renderApplyState(m).split("\n")
+    // Рішення Р-A3-16: стан дає лише гранти своєї функції, а схему — шар
+    expect(lines.filter((l) => /^(GRANT|REVOKE)\b/.test(l))).toEqual(
+      snapshotHashGrants
+    )
     // Ті самі одиниці вже дає платформний шар — дубля не буде
     const layer = m.sqlUnits.map((u) => u.sql)
     expect(layer).toContain("REVOKE ALL ON SCHEMA simetra FROM PUBLIC;")
@@ -112,11 +125,113 @@ describe("renderApplyState", () => {
   })
 
   it("grants nothing on the state tables", async () => {
+    // Рішення Р-A3-16: поза гранти схеми — лише EXECUTE функції хешу
+    for (const [m, schema] of [
+      [await withoutUsers(), platformSchemaGrants("supabase")],
+      [await withUsers(), []],
+    ] as const) {
+      const lines = renderApplyState(m).split("\n")
+      expect(lines.filter((l) => /^(GRANT|REVOKE)\b/.test(l))).toEqual([
+        ...schema,
+        ...snapshotHashGrants,
+      ])
+      expect(lines.join("\n")).not.toMatch(/ON\s+(ALL\s+)?TABLES?\b/i)
+    }
+  })
+
+  it("reads the applied snapshot hash through a definer function", async () => {
     for (const m of [await withoutUsers(), await withUsers()]) {
       const sql = renderApplyState(m)
-      expect(sql).not.toMatch(/ON\s+TABLE/i)
-      expect(sql).not.toMatch(/ON\s+ALL\s+TABLES/i)
-      expect(sql).not.toMatch(/GRANT\s+(?!USAGE ON SCHEMA)/i)
+      const fn = [
+        "CREATE OR REPLACE FUNCTION simetra.applied_snapshot_hash()",
+        "RETURNS text",
+        "LANGUAGE sql STABLE SECURITY DEFINER",
+        "SET search_path = ''",
+        "AS $$SELECT snapshot_hash FROM simetra.marker$$;",
+      ].join("\n")
+      expect(sql).toContain(fn)
+      // Тіло SQL-функції Postgres перевіряє при створенні: marker — раніше
+      expect(sql.indexOf(fn)).toBeGreaterThan(
+        sql.indexOf("CREATE TABLE simetra.marker (")
+      )
+      expect(sql.indexOf(snapshotHashGrants[0]!)).toBeGreaterThan(
+        sql.indexOf(fn)
+      )
+    }
+  })
+})
+
+describe("applyStateOf", () => {
+  const FN = "function:simetra.applied_snapshot_hash()"
+  const target = (units: string[]): Extracted => ({
+    model: {
+      tables: [],
+      enumTypes: [],
+      units: units.map((identity) => ({
+        class: "function",
+        identity,
+        schema: "simetra",
+        name: identity,
+        sql: "",
+      })),
+    },
+    catalog: { engine: "test" },
+    diagnostics: [],
+    unpopulated: [],
+  })
+  const plan = (produces: string[]): EnginePlan => ({
+    actions: produces.map((id) => ({
+      sql: "",
+      verb: "create",
+      produces: [id],
+      consumes: [],
+      destroys: [],
+      produced: [],
+      destroyed: [],
+      consumed: [],
+      transactionality: "transactional",
+      newSegmentBefore: false,
+      lockedTables: [],
+      lockClass: "none",
+      dataLoss: false,
+      rewriteRisk: false,
+    })),
+    empty: produces.length === 0,
+    preamble: [],
+    diagnostics: [],
+  })
+
+  it("sees the state as present when only the function is left", async () => {
+    for (const m of [await withoutUsers(), await withUsers()])
+      expect(applyStateOf(target([FN]), plan([]), m).state).toBe("present")
+  })
+
+  it("sees the state as absent without the function, tables and schema", async () => {
+    const m = await withoutUsers()
+    expect(
+      applyStateOf(target([]), plan(["schema:simetra", FN]), m).state
+    ).toBe("absent")
+  })
+
+  it("owns the function, its ACL and its grant units, not other platform functions", async () => {
+    for (const m of [await withoutUsers(), await withUsers()]) {
+      const state = applyStateOf(target([FN]), plan([]), m)
+      for (const id of [
+        FN,
+        `acl:(${FN}).simetra_command`,
+        `acl:(${FN}).anon`,
+        "grant:grant:function:simetra.applied_snapshot_hash():simetra_command:execute",
+        "grant:revoke:function:simetra.applied_snapshot_hash():public:execute",
+      ])
+        expect(state.owns(id), id).toBe(true)
+      expect(state.ownsPath(`units.${FN}`)).toBe(true)
+      for (const id of [
+        "function:simetra.current_user_id()",
+        "acl:(function:simetra.current_user_id()).authenticated",
+        "grant:grant:function:simetra.current_user_id():authenticated:execute",
+        "function:simetra.applied_snapshot_hash_x()",
+      ])
+        expect(state.owns(id), id).toBe(false)
     }
   })
 })

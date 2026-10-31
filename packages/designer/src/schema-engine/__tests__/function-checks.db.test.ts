@@ -717,11 +717,14 @@ describe("plpgsql_check", () => {
             await query(url, "select to_regclass('app.n') is null as absent")
           ).toEqual([{ absent: true }])
           // Контроль: з тим самим планом, але з `USAGE` на схему розширення
-          // роль застосовує, тож причина відмови саме в `USAGE`
+          // роль застосовує, тож причина відмови саме в `USAGE`. `EXECUTE`
+          // функцій стану — як і права на його таблиці: функцію без нього
+          // перевірка після кроків не бачить (`apply.function-check-blind`)
           await query(
             asSuperuser(url),
             `grant usage on schema simetra_locked_ext to ${NOUSAGE};
-             grant insert, update, delete on all tables in schema simetra to ${NOUSAGE}`
+             grant insert, update, delete on all tables in schema simetra to ${NOUSAGE};
+             grant execute on all functions in schema simetra to ${NOUSAGE}`
           )
           expect(
             await executePlan(
