@@ -3,7 +3,6 @@ import {
   loadSqlParser,
   mainTableOf,
   modelFunctions,
-  platformFunctionSignatures,
   withoutLocations,
   type CompiledModel,
   type Node,
@@ -135,7 +134,12 @@ import {
 } from "./promotion"
 import { readSessionSearchPath } from "./settings"
 import { readServerFacts, serverVersionRefusal } from "./server"
-import { readAppliedPromotions, readApplyState, readLedgerHead } from "./state"
+import {
+  planPlatformFunctions,
+  readAppliedPromotions,
+  readApplyState,
+  readLedgerHead,
+} from "./state"
 import {
   classifySteps,
   lintSteps,
@@ -690,7 +694,7 @@ export async function buildPlan(
     steps,
     parse,
     promotion: false,
-    platformFunctions: platformFunctionSignatures(model.sqlUnits),
+    platformFunctions: planPlatformFunctions(model),
     data: [],
     models: {
       source: live.extracted.model,
@@ -727,7 +731,7 @@ export async function buildPlan(
       preamble,
       revalidationSearchPath,
       plpgsqlCheck,
-      platformFunctions: platformFunctionSignatures(model.sqlUnits),
+      platformFunctions: planPlatformFunctions(model),
       desiredInvalid: target.desiredInvalid,
       promotion: null,
       environment,
@@ -763,7 +767,7 @@ export async function buildPlan(
     preamble,
     revalidationSearchPath,
     plpgsqlCheck,
-    platformFunctions: platformFunctionSignatures(model.sqlUnits),
+    platformFunctions: planPlatformFunctions(model),
     desiredInvalid: target.desiredInvalid,
     promotion: null,
     environment,
@@ -1149,7 +1153,7 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
     steps,
     parse,
     promotion: true,
-    platformFunctions: platformFunctionSignatures(c.model.sqlUnits),
+    platformFunctions: planPlatformFunctions(c.model),
     data: dataSection,
     models: {
       source: cloneModel,
@@ -1219,7 +1223,7 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
       preamble: analysis.preamble,
       revalidationSearchPath,
       plpgsqlCheck,
-      platformFunctions: platformFunctionSignatures(c.model.sqlUnits),
+      platformFunctions: planPlatformFunctions(c.model),
       desiredInvalid: target.desiredInvalid,
       promotion: section,
       environment,
@@ -1252,7 +1256,7 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
     preamble: analysis.preamble,
     revalidationSearchPath,
     plpgsqlCheck,
-    platformFunctions: platformFunctionSignatures(c.model.sqlUnits),
+    platformFunctions: planPlatformFunctions(c.model),
     desiredInvalid: target.desiredInvalid,
     promotion: section,
     environment,
@@ -1584,7 +1588,7 @@ async function lockPlan(
     parse: SqlParser
     /** План несе промоцію: без `plpgsql_check` — відмова, а не попередження. */
     promotion: boolean
-    /** `platformFunctionSignatures` бажаної моделі. */
+    /** `planPlatformFunctions` бажаної моделі. */
     platformFunctions: readonly string[]
     /**
      * Таблиці кроків даних: обчислення й запис займають таблицю запису в

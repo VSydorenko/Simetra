@@ -6,6 +6,8 @@ import {
   type DatabaseProvider,
   type PhysicalSnapshot,
   type PhysicalTable,
+  COMMAND_CORE_ERRORS,
+  isTextEncodedType,
 } from "simetra/model"
 import type {
   AccessContract,
@@ -44,29 +46,7 @@ const q = quoteIdent
 const relation = (t: { schema: string; name: string }) =>
   `${q(t.schema)}.${q(t.name)}`
 
-/**
- * Відмови ядра (спека П4 §6.10): `MESSAGE` — код, `DETAIL` — причина чи
- * ключ; даних рядка відмова не несе (Рт4). Одне місце для генератора й
- * тестів.
- */
-export const CATALOG_COMMAND_ERRORS = {
-  invalid: { errcode: "22023", message: "command.invalid" },
-  context: { errcode: "42501", message: "command.context", detail: "phase" },
-  forbidden: {
-    errcode: "42501",
-    message: "command.forbidden",
-    noRight: "no-right",
-    newCarrier: "new-carrier",
-  },
-  conflict: {
-    errcode: "P0001",
-    message: "command.conflict",
-    version: "version",
-    exists: "exists",
-  },
-} as const
-
-const E = CATALOG_COMMAND_ERRORS
+const E = COMMAND_CORE_ERRORS
 /** `DETAIL` — SQL-вираз: літерал ключа чи конкатенація з `v_key`. */
 const invalid = (detail: string) =>
   `RAISE EXCEPTION USING ERRCODE = '${E.invalid.errcode}', MESSAGE = '${E.invalid.message}', DETAIL = ${detail};`
@@ -285,9 +265,7 @@ function defaultOf(table: PhysicalTable, column: string): string {
 
 /** Колонки, які результат віддає текстом: `numeric` і `bigint` T3 читає рядками (Рт1). */
 function textColumns(table: PhysicalTable, row: string): string | undefined {
-  const columns = table.columns.filter((c) =>
-    /^(bigint|numeric)(\(.*\))?(\[\])?$/.test(c.type)
-  )
+  const columns = table.columns.filter((c) => isTextEncodedType(c.type))
   if (columns.length === 0) return undefined
   return `jsonb_build_object(${columns
     .map(
@@ -573,7 +551,7 @@ function saveFunction(
 
   const createBranch: string[] =
     contract.actions.create === undefined
-      ? [invalid(sqlLiteral("create"))]
+      ? [invalid(sqlLiteral(E.invalid.create))]
       : createLines(contract, {
           context: context(contract.actions.create),
           references: references(false),
@@ -667,13 +645,15 @@ function inputLines(contract: CatalogCommandContract): string[] {
     `SELECT k.k INTO v_key FROM jsonb_object_keys(p_item) AS k(k) WHERE k.k <> ALL (${allowed(keys)}) ORDER BY k.k LIMIT 1;`
   return [
     ...ifThen("jsonb_typeof(p_item) IS DISTINCT FROM 'object'", [
-      invalid("'p_item'"),
+      invalid(sqlLiteral(E.invalid.item)),
     ]),
     // Без дії створення (спека П4 §6.6: «Користувачі», корінь скоупу) виклик без
     // версії — відмова `create` до перевірки ключів: інакше порожній перелік
     // ключів створення назвав би першим невідомим ключем `id`, а не причину.
     ...(contract.actions.create === undefined
-      ? ifThen("p_expected_version IS NULL", [invalid("'create'")])
+      ? ifThen("p_expected_version IS NULL", [
+          invalid(sqlLiteral(E.invalid.create)),
+        ])
       : []),
     "IF p_expected_version IS NULL THEN",
     ...indent([unknown(contract.createKeys)]),
@@ -835,15 +815,19 @@ function tabularLines(
   scopeKindId: string | undefined
 ): string[] {
   if (contract.tabularSections.length === 0) {
-    return ifThen("p_item ? 'tabular'", [invalid("'tabular'")])
+    return ifThen("p_item ? 'tabular'", [
+      invalid(sqlLiteral(E.invalid.tabular)),
+    ])
   }
   const names = contract.tabularSections.map((s) => s.table.name)
   return ifThen("p_item ? 'tabular'", [
     ...ifThen("jsonb_typeof(p_item -> 'tabular') IS DISTINCT FROM 'object'", [
-      invalid("'tabular'"),
+      invalid(sqlLiteral(E.invalid.tabular)),
     ]),
     `SELECT k.k INTO v_key FROM jsonb_object_keys(p_item -> 'tabular') AS k(k) WHERE k.k <> ALL (${textArray(names)}) ORDER BY k.k LIMIT 1;`,
-    ...ifThen("v_key IS NOT NULL", [invalid("'tabular.' || v_key")]),
+    ...ifThen("v_key IS NOT NULL", [
+      invalid(`${sqlLiteral(`${E.invalid.tabular}.`)} || v_key`),
+    ]),
     ...contract.tabularSections.flatMap((section) =>
       sectionLines(contract, section, scope, scopeKindId)
     ),
@@ -860,7 +844,9 @@ function sectionLines(
   const name = section.table.name
   const items = `p_item -> 'tabular' -> ${sqlLiteral(name)}`
   const detail = (suffix?: string) =>
-    sqlLiteral(`tabular.${name}${suffix === undefined ? "" : `.${suffix}`}`)
+    sqlLiteral(
+      `${E.invalid.tabular}.${name}${suffix === undefined ? "" : `.${suffix}`}`
+    )
   const root = `v_in.${q(contract.key)}`
   const key = q(section.key)
   const parent = q(section.parent)
@@ -1090,8 +1076,10 @@ function markDeletionFunction(
     ...(parts.updatedBy === undefined ? [] : [q(parts.updatedBy)]),
   ])
   const statements = [
-    ...ifThen("p_mark IS NULL", [invalid("'p_mark'")]),
-    ...ifThen("p_expected_version IS NULL", [invalid("'p_expected_version'")]),
+    ...ifThen("p_mark IS NULL", [invalid(sqlLiteral(E.invalid.mark))]),
+    ...ifThen("p_expected_version IS NULL", [
+      invalid(sqlLiteral(E.invalid.expectedVersion)),
+    ]),
     ...parts.context(action, root),
     // Обробник `beforeWrite`, що присвоює батька, спрацьовує й на `UPDATE`
     // позначки: замок ієрархії — до замка рядка (спека П4 §6.6).
@@ -1112,7 +1100,7 @@ function markDeletionFunction(
     ...(contract.predefinedColumn === undefined
       ? []
       : ifThen(`v_old.${q(contract.predefinedColumn)} IS NOT NULL`, [
-          invalid("'predefined'"),
+          invalid(sqlLiteral(E.invalid.predefined)),
         ])),
     `UPDATE ${relation(table)} SET ${mark} = p_mark WHERE ${q(key)} = ${root} RETURNING * INTO v_row;`,
     // Відкликання права між замком і `UPDATE` — нуль рядків, відмова.
@@ -1136,8 +1124,8 @@ function markDeletionFunction(
 
 /**
  * `<t>_delete` — лише «Призначення» (спека П4 §6.6): призначення не має
- * посилань на себе, тож видаляється фізично. Результат — ключ і версія
- * видаленого рядка; читати рядок після `DELETE` нічого.
+ * посилань на себе, тож видаляється фізично. Результат — ключ, версія й
+ * скоуп видаленого рядка; читати рядок після `DELETE` нічого.
  */
 function deleteFunction(
   contract: CatalogCommandContract,
@@ -1145,12 +1133,20 @@ function deleteFunction(
   action: string,
   parts: CoreParts
 ): string {
-  const { table, key } = contract
+  const { table, key, scopeColumn } = contract
   const root = "p_id"
+  // Скоуп рядка «до» потрібен набору змін для write-back (П4-B); у кореня
+  // виду скоупу скоуп — сам ключ, і другий запис його лише дублював би.
+  const scope =
+    scopeColumn === undefined || scopeColumn === key
+      ? ""
+      : `, ${sqlLiteral(scopeColumn)}, v_old.${q(scopeColumn)}`
   const statements = [
     // Без версії `lockedOld` дав би `conflict`: вхід без версії — помилка
     // виклику, як у позначці видалення, а не конфлікт.
-    ...ifThen("p_expected_version IS NULL", [invalid("'p_expected_version'")]),
+    ...ifThen("p_expected_version IS NULL", [
+      invalid(sqlLiteral(E.invalid.expectedVersion)),
+    ]),
     ...parts.context(action, root),
     // `FOR UPDATE`, не `NO KEY UPDATE` (спека П4 §6.6): `DELETE` конфліктує з
     // `KEY SHARE` RI-перевірок за природою, тож замок бере ту саму силу
@@ -1161,7 +1157,7 @@ function deleteFunction(
     // Відкликання права між замком і `DELETE` — нуль рядків, відмова.
     "GET DIAGNOSTICS v_count = ROW_COUNT;",
     ...ifThen("v_count = 0", [noRight]),
-    `RETURN jsonb_build_object(${sqlLiteral(key)}, ${root}, ${sqlLiteral(contract.versionColumn)}, v_old.${q(contract.versionColumn)}::text)::text;`,
+    `RETURN jsonb_build_object(${sqlLiteral(key)}, ${root}, ${sqlLiteral(contract.versionColumn)}, v_old.${q(contract.versionColumn)}::text${scope})::text;`,
   ]
   return coreFunction(
     fn,

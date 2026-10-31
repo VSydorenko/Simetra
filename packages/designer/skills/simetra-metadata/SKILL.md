@@ -172,11 +172,10 @@ offending field (for example `target.kind`); nothing is written.
 - Exit code: `0` ok (warnings allowed), `1` the result has error diagnostics
   (this includes refused operations such as `operation.delete-referenced`)
   or, for `diff`, differences or errors — `0` from `diff` means the database
-  matches the metadata,
-  `2` the call itself was refused: input that does not match the tool's schema
-  (bad JSON, unknown field), a missing `--yes`, a usage or I/O error (bad flag,
-  missing directory) or an unknown `explain` target. In MCP the same cases are
-  `isError`, with diagnostics for the exit-1 ones.
+  matches the metadata, `2` the call itself was refused: input that does not match
+  the tool's schema (bad JSON, unknown field), a missing `--yes`, a usage or I/O
+  error (bad flag, missing directory) or an unknown `explain` target. In MCP the
+  same cases are `isError`, with diagnostics for the exit-1 ones.
 - Text diagnostics look like `path/File.meta.json:LINE:COL severity code message`.
   A diagnostic without a position (the input as a whole, a missing file) has no
   `LINE:COL`. The code (`file.kind-mismatch`, …) is the stable handle; do not
@@ -186,7 +185,8 @@ offending field (for example `target.kind`); nothing is written.
 - `--locale en|uk` picks the message language (default `en`); code and
   location are identical in both.
 - Start from the first error: one root cause often produces several follow-ups.
-- Artifacts (`snapshot.json`, `desired-state.sql`, `entities.d.ts`) are written
+- Artifacts (`snapshot.json`, `desired-state.sql`, `entities.d.ts`,
+  `runtime-catalog.json`) are written
   only with `compile --out <dir>`, and `--out` takes one metadata directory per run.
 
 ## Mutations are checked, never raw
@@ -196,8 +196,7 @@ offending field (for example `target.kind`); nothing is written.
 - `create`, `add`, `rename`, `delete` also need the current metadata to compile
   cleanly (`operation.input-invalid` otherwise): run `fix` or repair the file by
   hand first.
-- `--dry-run` (MCP: `dryRun: true`) reports the changes without writing. Use it
-  before the real run.
+- `--dry-run` (MCP: `dryRun: true`) reports the changes without writing. Use it first.
 - `delete` is destructive: it needs `--yes` (MCP: `confirm: true`) and is refused
   while anything references the target: the result then carries
   `operation.delete-referenced` listing every reference (exit 1, nothing
@@ -269,7 +268,8 @@ is `BEFORE`, `on*` is `AFTER`, `*Write` is `INSERT OR UPDATE`, `*Delete` is
 a listed column (`IS DISTINCT FROM`), `<physicalName>_insert` on every `INSERT`;
 on a table with carrier copies (below) a subscription without `whenChanged`
 gets the same pair, its `UPDATE` trigger firing on a content change only.
-No event is insert-only; `TG_OP` tells insert from update.
+No event is insert-only; `TG_OP` tells insert from update. The same events as
+TypeScript hooks of a command (object modules): `references/object-modules.md`.
 
 Catalogs and Documents get the row mechanics trigger `<table>_simetra_touch`
 (the single platform function `simetra.touch()`): an insert sets `version` to 1,

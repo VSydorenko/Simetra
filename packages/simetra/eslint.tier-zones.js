@@ -24,6 +24,9 @@ const FRAMEWORK_PATTERN =
 const FRAMEWORK_MESSAGE =
   "Framework boundary: T5 ui imports only React, T4 contracts and the navigation adapter interface (platform spec §3.1)."
 
+const SERVER_MESSAGE =
+  "Tier zone: src/data and src/ui must not import simetra/server; they depend on T4 contracts and T0 metadata only (P4 A3 decision A3-10)."
+
 function tierMessage(tier, index) {
   return (
     `Tier zone: src/${tier} is T${index}; import only lower tiers (platform spec §3.1). ` +
@@ -44,6 +47,11 @@ const tierConfigs = TIERS.flatMap((tier, index) => {
   // замінює опції правила цілком, тож окремий блок затер би ярусну групу.
   if (tier === "ui") {
     patterns.push({ regex: FRAMEWORK_PATTERN, message: FRAMEWORK_MESSAGE })
+  }
+  // data і ui читають лише контракти T0: серверний рантайм (з'єднання,
+  // транзакції) — не їхня залежність, хоч ярус server нижчий.
+  if (tier === "data" || tier === "ui") {
+    patterns.push({ regex: tierPattern(["server"]), message: SERVER_MESSAGE })
   }
   // У shell (T6) заборон немає — блок без патернів не створюється.
   if (patterns.length === 0) return []
@@ -96,6 +104,29 @@ export const purityConfigs = [
               regex: "^(?!zod(?:/|$)|\\.|simetra/model(?:/|$))",
               message:
                 "T0 purity: src/model imports only zod at runtime (AGENTS.md, metamodel rules).",
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    // Відносний `../model` вбудував би в dist/server другу копію T0, а
+    // `pg`/`node:fs` зробили б рантайм залежним від I/O: порт бази приходить
+    // ззовні (A3-10). Дозволено `./…`, simetra/model, zod, node:async_hooks.
+    files: PURITY_FILES("server"),
+    ignores: PURITY_IGNORES,
+    rules: {
+      "@typescript-eslint/no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            DB_ENGINE_PATTERN,
+            {
+              regex:
+                "^(?!\\./|zod(?:/|$)|simetra/model(?:/|$)|node:async_hooks$)",
+              message:
+                "T3 purity: src/server imports only ./…, simetra/model, zod and node:async_hooks (P4 A3 decision A3-10).",
             },
           ],
         },

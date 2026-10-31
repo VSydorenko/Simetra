@@ -8,6 +8,7 @@ import {
   type Dml,
   type PhysicalSnapshot,
   type PhysicalTable,
+  COMMAND_CORE_ERRORS,
 } from "simetra/model"
 import {
   effectsTables,
@@ -163,7 +164,7 @@ export function buildEffectsUnits(
 /** Відмова тригера (спека прав §6.2): без даних рядка. */
 function refuse(table: PhysicalTable, column?: string): string {
   return (
-    `RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'command.forbidden', DETAIL = 'effect', TABLE = ${sqlLiteral(table.name)}` +
+    `RAISE EXCEPTION USING ERRCODE = '${COMMAND_CORE_ERRORS.forbidden.errcode}', MESSAGE = '${COMMAND_CORE_ERRORS.forbidden.message}', DETAIL = '${COMMAND_CORE_ERRORS.forbidden.effect}', TABLE = ${sqlLiteral(table.name)}` +
     (column === undefined ? "" : `, COLUMN = ${sqlLiteral(column)}`) +
     ";"
   )

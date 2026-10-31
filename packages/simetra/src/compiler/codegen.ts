@@ -1,47 +1,22 @@
 import {
   KIND_REGISTRY,
-  standardLogicalName,
+  versionColumn,
   type LocalizedString,
   type LogicalType,
   type MetadataRef,
-  type PhysicalColumn,
   type PhysicalTable,
   type KindDefinition,
   type StandardColumnDef,
-  type TabularSection,
 } from "simetra/model"
 import type { CompiledModel } from "./compile"
 import { compareStrings } from "./diagnostics"
-import { standardElementId } from "./stages/identity"
 import {
-  registerSingletonOf,
-  standardRefTargets,
-  standardTargetRefs,
-} from "./stages/model"
-
-/**
- * Типи значення колонки: логічні плюс дві форми `CustomTable`. Закритий
- * перелік, щоб відображення в TS було вичерпним на етапі компіляції, а не
- * мовчазним запасним варіантом.
- */
-type SourceType = LogicalType | "PgEnum" | "Raw"
-
-/** Тип значення, спільний для реквізиту, константи й колонки `CustomTable`. */
-interface ValueSource {
-  type: SourceType
-  ref?: MetadataRef
-  allowedTypes?: MetadataRef[]
-  array?: boolean
-  enum?: MetadataRef
-  title?: LocalizedString
-  description?: LocalizedString
-}
-
-/** Елемент з ідентичністю: реквізит, вимір, ресурс чи колонка `CustomTable`. */
-interface ElementSource extends ValueSource {
-  id?: string
-  name: string
-}
+  entityFields,
+  objectEntity,
+  type EntityContext,
+  type ValueSource,
+} from "./entity-fields"
+import { standardRefTargets, standardTargetRefs } from "./stages/model"
 
 /** Джерело поля колонки: логічний опис або `{ raw }` стандартного реквізиту. */
 type Source = ValueSource | { raw: string }
@@ -58,8 +33,9 @@ const TS_OF_LOGICAL: Record<LogicalType, string> = {
   Bytes: "string",
   Integer: "number",
   SmallInt: "number",
-  // BigInt і Numeric не вміщуються в number без втрати точності.
-  BigInt: "string",
+  // Не вміщуються в number без втрати точності: `BigInt` рантайм віддає
+  // JS `bigint`, `Numeric` — десятковим рядком (спека П4 §6.4).
+  BigInt: "bigint",
   Numeric: "string",
   Boolean: "boolean",
   // Через псевдонім `Json_`: голе `Json` у просторі імен може затінити
@@ -83,6 +59,12 @@ const STEP = "  "
 const IDENTIFIER = /^[A-Za-z_$][A-Za-z0-9_$]*$/
 
 /**
+ * Стандартна колонка версії — за визначенням реєстру: рантайм віддає її
+ * числом (поза безпечним цілим — відмова), а не `bigint` її логічного типу.
+ */
+const VERSION = versionColumn().logicalName
+
+/**
  * Логічні TS-типи сутностей (спека §8.5) — вміст файлу оголошень `.d.ts`:
  * простір імен на кожен вид з таблицею (`Catalogs`, `Documents`, …), у ньому
  * інтерфейс на кожен об'єкт і кожну ТЧ. Простір імен знімає зіткнення
@@ -94,14 +76,11 @@ const IDENTIFIER = /^[A-Za-z_$][A-Za-z0-9_$]*$/
  * об'єкта не зсуває чужі інтерфейси.
  */
 export function emitEntityTypes(model: CompiledModel): string {
-  const style = model.project.naming.attributeCase
-
   const byRef = new Map(
     model.objects.map((object) => [`${object.kind}.${object.name}`, object])
   )
   const lookup = (ref: MetadataRef) => byRef.get(`${ref.kind}.${ref.name}`)
   const refTargets = standardRefTargets(model.objects, model.project)
-  const scopeNames = new Map(model.scopeKinds.map((k) => [k.id, k.name]))
   // Заголовок виду скоупу живе лише в проєкті, а не в знімку скоупів.
   const scopeTitles = new Map(
     model.project.scopeKinds.map((k) => [k.id, k.title])
@@ -198,8 +177,7 @@ export function emitEntityTypes(model: CompiledModel): string {
 
   const emitFields = (
     table: PhysicalTable,
-    standard: ReadonlyMap<string, StandardColumnDef>,
-    elements: ReadonlyMap<string, ElementSource>,
+    context: EntityContext,
     targetsOf: (def: StandardColumnDef) => readonly MetadataRef[],
     overrides: ReadonlyMap<
       string,
@@ -208,64 +186,46 @@ export function emitEntityTypes(model: CompiledModel): string {
     member: string
   ): string[] => {
     const lines: string[] = []
-    const keyOf = (column: PhysicalColumn) => JSON.stringify(column.origin)
-    table.columns.forEach((column, index) => {
-      const key = keyOf(column)
-      // Поліморфне поле — пара колонок з одним походженням; поле одне.
-      if (index > 0 && keyOf(table.columns[index - 1]!) === key) return
-      const paired =
-        index + 1 < table.columns.length &&
-        keyOf(table.columns[index + 1]!) === key
-      const { standard: standardName, elementId, scopeKindId } = column.origin
-
-      let name: string
+    for (const field of entityFields(model, table, context)) {
+      const { standard: def, element, scopeKindId } = field
+      const paired = field.columns.length === 2
       let source: Source
       let targets: readonly MetadataRef[] | undefined
       let title: LocalizedString | undefined
       let description: LocalizedString | undefined
-      const def =
-        standardName === undefined ? undefined : standard.get(standardName)
-      const element =
-        elementId === undefined ? undefined : elements.get(elementId)
       if (def !== undefined) {
-        // Ключ-одинак — службовий ключ рядка-одинака (завжди `true`, значення
-        // дає DEFAULT): у скоупленій формі його немає взагалі, тож і в
-        // логічному типі він не відкривається.
-        if (def.singleton === true) return
-        name = standardName!
         source = def.type
         targets = def.ref === undefined ? undefined : targetsOf(def)
         const override = overrides.get(def.logicalName)
         title = override?.title ?? def.title
         description = override?.description
       } else if (element !== undefined) {
-        name = element.name
         source = element
         title = element.title
         description = element.description
       } else if (scopeKindId !== undefined) {
-        // Носій скоупу: логічне ім'я — ім'я виду, тип — ключ кореня. Ім'я
-        // виду з моделі без помилок завжди знайдеться; фізичне ім'я лише
-        // страхує від напівмоделі.
-        const kind = scopeNames.get(scopeKindId) ?? column.name
-        name = kind
+        // Носій скоупу: логічне ім'я — ім'я виду, тип — ключ кореня.
         source = { type: "UUID" }
         title = scopeTitles.get(scopeKindId)
-        description = { en: `Value of the \`${kind}\` scope kind.` }
+        description = { en: `Value of the \`${field.name}\` scope kind.` }
       } else {
         // Колонка без походження в метаданих (не трапляється для видів 1С);
         // тип відомий лише фізично.
-        name = column.name
-        source = { raw: column.type }
+        source = {
+          raw: table.columns.find((c) => c.name === field.columns[0])!.type,
+        }
       }
 
-      const { ts, nullable } = valueType(source, targets, paired)
-      const readonly = column.generated === undefined ? "" : "readonly "
+      const { ts, nullable } =
+        def?.logicalName === VERSION
+          ? { ts: "number", nullable: true }
+          : valueType(source, targets, paired)
+      const readonly = field.generated ? "readonly " : ""
       lines.push(
         ...doc(member, title, description),
-        `${member}${readonly}${fieldName(name)}: ${ts}${nullable && !column.notNull ? " | null" : ""}`
+        `${member}${readonly}${fieldName(field.name)}: ${ts}${nullable && !field.notNull ? " | null" : ""}`
       )
-    })
+    }
     return lines
   }
 
@@ -398,68 +358,14 @@ export function emitEntityTypes(model: CompiledModel): string {
     const items: { name: string; text: string }[] = []
     for (const object of model.objects) {
       if (object.kind !== def.kind) continue
-      // Основна таблиця — без `part` і без ТЧ; похідні таблиці регістрів
-      // інтерфейсів не мають.
-      const main = model.physical.tables.find(
-        (table) =>
-          table.origin.objectId === object.id &&
-          table.origin.part === undefined &&
-          table.origin.tabularSectionId === undefined
-      )
-      if (main === undefined) continue
+      const entity = objectEntity(model, object)
+      if (entity === undefined) continue
+      const { main, elements, sections } = entity
 
       const data = object.data as {
         title?: LocalizedString
         description?: LocalizedString
-        tabularSections?: TabularSection[]
-      } & Record<string, unknown>
-
-      const styled = (columns: readonly StandardColumnDef[]) =>
-        new Map(
-          columns.map((column) => [standardLogicalName(column, style), column])
-        )
-      const singleton = registerSingletonOf(object)
-      const mainStandard = styled([
-        ...(singleton === undefined ? [] : [singleton]),
-        ...def.standardColumns(object.data),
-      ])
-      const rowColumns = def.tabularSectionColumns?.(object.data) ?? []
-
-      const elements = new Map<string, ElementSource>()
-      const addElement = (element: ElementSource) => {
-        if (element.id !== undefined) elements.set(element.id, element)
       }
-      for (const field of def.columnFields) {
-        for (const element of (data[field] ?? []) as ElementSource[]) {
-          addElement(element)
-        }
-      }
-      const fileSections =
-        def.tabularSectionColumns === undefined
-          ? []
-          : (data.tabularSections ?? [])
-      for (const section of fileSections) {
-        for (const attribute of section.attributes) addElement(attribute)
-      }
-      // Стандартна ТЧ (дельта «Ролей») — тим самим шляхом, що ТЧ з файлу:
-      // поле-масив і вкладений інтерфейс рядка; колонки — стандартні колонки
-      // рядка виду й власні колонки ТЧ, id — як у стадії 3.
-      const sections = [
-        ...fileSections.map((section) => ({
-          id: section.id ?? "",
-          name: section.name,
-          title: section.title,
-          standard: styled(rowColumns),
-        })),
-        ...(def.standardTabularSections?.(object.data) ?? []).map(
-          (section) => ({
-            id: standardElementId(object.id ?? "", section),
-            name: standardLogicalName(section, style),
-            title: section.title,
-            standard: styled([...rowColumns, ...section.columns()]),
-          })
-        ),
-      ]
 
       const targetsOf = (column: StandardColumnDef) =>
         standardTargetRefs(column, object.data, refTargets)
@@ -479,10 +385,10 @@ export function emitEntityTypes(model: CompiledModel): string {
         }
       })
 
+      // ТЧ — поле-масив і вкладений інтерфейс рядка, і з файлу, і стандартна.
       const body = emitFields(
         main,
-        mainStandard,
-        elements,
+        { standard: entity.standard, elements },
         targetsOf,
         overrides,
         STEP.repeat(2)
@@ -528,8 +434,7 @@ export function emitEntityTypes(model: CompiledModel): string {
               `${inner}export interface ${name} {`,
               ...emitFields(
                 table,
-                section.standard,
-                elements,
+                { standard: section.standard, elements },
                 targetsOf,
                 new Map(
                   Object.entries(

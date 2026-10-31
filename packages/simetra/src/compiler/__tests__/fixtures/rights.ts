@@ -1282,6 +1282,148 @@ export function ticketMoveToHandler(): HandlerFixture {
   }
 }
 
+export const GAUGE_FILE = "catalogs/Gauge/Gauge.meta.json"
+export const GAUGE_LOG_FILE = "catalogs/GaugeLog/GaugeLog.meta.json"
+export const GAUGE_LEVEL_FILE = "enumerations/GaugeLevel/GaugeLevel.meta.json"
+export const GAUGE_TABLE = "gauge"
+export const GAUGE_LOG_TABLE = "gauge_log"
+export const GAUGE_WRITER_ID = uuid(7520)
+
+/**
+ * Значення рантайму команд (Р-A3-7) поверх `policyDomain()`: скоуплений
+ * довідник `Gauge` з типами, яких немає в довідниках A2, — `Numeric(30,10)`,
+ * `BigInt`, `Json`, `Bytes`, посилання на перерахування `GaugeLevel` (логічне
+ * ім'я значення ≠ мітка бази), поліморфний `subject`, масив `BigInt`,
+ * `reading` з `nonNegative` (CHECK з колонкою) і ТЧ `lines`; `GaugeLog` — другий довідник, у який пише хук. `GaugeWriter` пише
+ * обидва й читає цілі пари: без читання цілі ядро відмовило б раніше.
+ */
+export function runtimeValuesLayer(): Layer {
+  const gauges = objects(["Catalog", "Gauge"], ["Catalog", "GaugeLog"])
+  return {
+    [GAUGE_LEVEL_FILE]: {
+      id: uuid(7500),
+      kind: "Enumeration",
+      name: "GaugeLevel",
+      physicalName: "gauge_level",
+      values: [
+        { id: uuid(7501), name: "Low", physicalName: "lvl_low" },
+        { id: uuid(7502), name: "High", physicalName: "lvl_high" },
+      ],
+    },
+    [GAUGE_FILE]: catalog(uuid(7503), "Gauge", GAUGE_TABLE, {
+      attributes: [
+        {
+          id: uuid(7504),
+          name: "amount",
+          physicalName: "amount",
+          type: "Numeric",
+          precision: 30,
+          scale: 10,
+        },
+        {
+          id: uuid(7505),
+          name: "counter",
+          physicalName: "counter",
+          type: "BigInt",
+        },
+        {
+          id: uuid(7506),
+          name: "payload",
+          physicalName: "payload",
+          type: "Json",
+        },
+        { id: uuid(7507), name: "blob", physicalName: "blob", type: "Bytes" },
+        refAttribute(7508, "level", "level", ref("Enumeration", "GaugeLevel")),
+        {
+          id: uuid(7509),
+          name: "subject",
+          physicalName: "subject",
+          type: "Ref",
+          allowedTypes: objects(["Catalog", "Project"], ["Catalog", "Region"]),
+        },
+        {
+          id: uuid(7510),
+          name: "marks",
+          physicalName: "marks",
+          type: "BigInt",
+          array: true,
+        },
+        {
+          id: uuid(7516),
+          name: "reading",
+          physicalName: "reading",
+          type: "Integer",
+          nonNegative: true,
+        },
+      ],
+      tabularSections: [
+        {
+          id: uuid(7511),
+          name: "lines",
+          physicalName: "gauge_lines",
+          attributes: [
+            {
+              id: uuid(7512),
+              name: "qty",
+              physicalName: "qty",
+              type: "Numeric",
+              precision: 30,
+              scale: 10,
+            },
+            {
+              id: uuid(7513),
+              name: "note",
+              physicalName: "note",
+              type: "String",
+              length: 40,
+            },
+          ],
+        },
+      ],
+    }),
+    [GAUGE_LOG_FILE]: catalog(uuid(7514), "GaugeLog", GAUGE_LOG_TABLE, {
+      attributes: [
+        {
+          id: uuid(7515),
+          name: "note",
+          physicalName: "note",
+          type: "String",
+          length: 40,
+        },
+      ],
+    }),
+    [ROLE_FILE("GaugeWriter")]: role(
+      GAUGE_WRITER_ID,
+      "GaugeWriter",
+      { scopeKind: "org" },
+      {
+        grants: [
+          grant(gauges, ["read", "create", "update", "markDeletion"], "any"),
+          grant(
+            objects(["Catalog", "Project"], ["Catalog", "Region"]),
+            ["read"],
+            "any"
+          ),
+        ],
+      }
+    ),
+  }
+}
+
+/**
+ * Правило рядка `Gauge` (до `withSql` поверх `runtimeValuesLayer()`): CHECK
+ * над двома колонками, тобто без колонки реквізиту. Явне `name` резервується
+ * до похідних імен, тож ім'я похідного CHECK може його обійти.
+ */
+export function gaugeRowRule(name = "gauge_span"): HandlerFixture {
+  return {
+    layer: {},
+    sql: {
+      "catalogs/Gauge/Gauge.sql": `ALTER TABLE public.${GAUGE_TABLE} ADD CONSTRAINT ${name} CHECK (num_nonnulls(amount, reading) <= 1);`,
+    },
+  }
+}
+
 export const NOTE_FILE = "catalogs/Note/Note.meta.json"
 export const NOTE_LONG_FILE = "catalogs/NoteLong/NoteLong.meta.json"
 export const NOTE_WRITER_ID = uuid(6810)

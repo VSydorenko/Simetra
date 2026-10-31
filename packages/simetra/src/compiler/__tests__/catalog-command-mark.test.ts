@@ -235,7 +235,7 @@ describe("<t>_mark_deletion", () => {
 })
 
 describe("<t>_delete", () => {
-  it("порядок: контекст → замок → версія → право «до» → DELETE → GET DIAGNOSTICS → ключ і версія", () => {
+  it("порядок: контекст → замок → версія → право «до» → DELETE → GET DIAGNOSTICS → ключ, версія й скоуп", () => {
     const table = "org_role_assignments"
     const shape = bodyShape(deleteSql(domain, table))
     const remove = at(
@@ -266,7 +266,7 @@ describe("<t>_delete", () => {
     expect(shape[remove + 4]!.type).toBe("return")
     expect(shape[remove + 4]!.expressions[0]!.tree).toEqual(
       tree(
-        "SELECT jsonb_build_object('id', p_id, 'version', v_old.version::text)::text"
+        "SELECT jsonb_build_object('id', p_id, 'version', v_old.version::text, 'org_id', v_old.org_id)::text"
       )
     )
     expect(shape).toHaveLength(remove + 5)

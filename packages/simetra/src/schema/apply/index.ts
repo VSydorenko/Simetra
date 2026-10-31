@@ -16,6 +16,7 @@ export {
   APPLY_STATE_FORMAT,
   applyStateOf,
   findApply,
+  planPlatformFunctions,
   readApplyState,
   readAppliedPromotions,
   readLedgerHead,

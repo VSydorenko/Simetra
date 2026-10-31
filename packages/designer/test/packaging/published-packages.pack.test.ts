@@ -52,6 +52,7 @@ describe("simetra", () => {
       "./model",
       "./schema",
       "./schemas/*",
+      "./server",
     ])
     expect(manifest.private).toBeUndefined()
     expect(JSON.stringify(manifest)).not.toContain("workspace:")
@@ -64,6 +65,8 @@ describe("simetra", () => {
       "dist/model/index.d.ts",
       "dist/compiler/index.js",
       "dist/schema/index.js",
+      "dist/server/index.js",
+      "dist/server/index.d.ts",
       "schemas/catalogs.schema.json",
       "LICENSE",
       "README.md",
@@ -81,7 +84,7 @@ describe("simetra", () => {
       f.endsWith(".js")
     )
     expect(
-      js.filter((f) => !/^dist\/(model|compiler|schema)\//.test(f))
+      js.filter((f) => !/^dist\/(model|compiler|schema|server)\//.test(f))
     ).toEqual([])
   })
 
@@ -90,14 +93,15 @@ describe("simetra", () => {
       'const model = await import("simetra/model")',
       'const compiler = await import("simetra/compiler")',
       'const schema = await import("simetra/schema")',
-      "console.log([model, compiler, schema].map((m) => Object.keys(m).length > 0).join())",
+      'const server = await import("simetra/server")',
+      "console.log([model, compiler, schema, server].map((m) => Object.keys(m).length > 0).join())",
     ].join("\n")
     const { stdout } = await exec(
       process.execPath,
       ["--input-type=module", "-e", script],
       { cwd: consumer }
     )
-    expect(stdout.trim()).toBe("true,true,true")
+    expect(stdout.trim()).toBe("true,true,true,true")
   })
 
   it("passes publint", async () => {

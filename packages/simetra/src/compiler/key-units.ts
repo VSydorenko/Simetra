@@ -6,6 +6,7 @@ import {
   type DatabaseProvider,
   type PhysicalSnapshot,
   type PhysicalTable,
+  COMMAND_CORE_ERRORS,
 } from "simetra/model"
 import { platformBeforeTriggerName } from "./before-trigger-names"
 import type { QualifiedName } from "./contracts"
@@ -133,7 +134,7 @@ export function buildKeyUnits(
 function keyFunction(fn: string): string {
   const text = [
     "BEGIN",
-    "  RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'command.forbidden', DETAIL = 'effect', TABLE = TG_TABLE_NAME, COLUMN = TG_ARGV[0];",
+    `  RAISE EXCEPTION USING ERRCODE = '${COMMAND_CORE_ERRORS.forbidden.errcode}', MESSAGE = '${COMMAND_CORE_ERRORS.forbidden.message}', DETAIL = '${COMMAND_CORE_ERRORS.forbidden.effect}', TABLE = TG_TABLE_NAME, COLUMN = TG_ARGV[0];`,
     "  RETURN NULL;",
     "END",
   ].join("\n")

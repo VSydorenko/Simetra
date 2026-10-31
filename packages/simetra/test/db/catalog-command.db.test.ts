@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
-import { PLATFORM_ROLES, type CommandContext } from "simetra/model"
-import { CATALOG_COMMAND_ERRORS } from "../../src/compiler/catalog-command/units"
+import {
+  COMMAND_CORE_ERRORS,
+  PLATFORM_ROLES,
+  type CommandContext,
+} from "simetra/model"
 import {
   MEMBER_EDITOR_ID,
   NOTE_OWN_CREATOR_ID,
@@ -40,7 +43,7 @@ import {
  * `commandAs`, тож порядок кейсів нічого не змінює.
  */
 
-const E = CATALOG_COMMAND_ERRORS
+const E = COMMAND_CORE_ERRORS
 const INVALID = (detail: string): Refusal => ({
   code: E.invalid.errcode,
   message: E.invalid.message,

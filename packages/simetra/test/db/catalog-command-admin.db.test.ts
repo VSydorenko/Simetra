@@ -2,12 +2,12 @@ import { randomUUID } from "node:crypto"
 import pg from "pg"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import {
+  COMMAND_CORE_ERRORS,
   COMMAND_SETTING,
   PLATFORM_ROLES,
   SESSION_CLAIMS_SETTING,
   type CommandContext,
 } from "simetra/model"
-import { CATALOG_COMMAND_ERRORS } from "../../src/compiler/catalog-command/units"
 import { uuid } from "../../src/compiler/__tests__/helpers"
 import {
   PROJECT_WRITER_ID,
@@ -46,7 +46,7 @@ import {
  * доказ — контракт ролі, а не повний DML.
  */
 
-const E = CATALOG_COMMAND_ERRORS
+const E = COMMAND_CORE_ERRORS
 const INVALID = (detail: string): Refusal => ({
   code: E.invalid.errcode,
   message: E.invalid.message,
@@ -425,10 +425,12 @@ describe("catalog command core on rights system catalogs and Users", () => {
       `SELECT count(*)::int AS n FROM public.${ASSIGNMENTS} WHERE id = '${key("targetRole")}'`
     )
 
-  it("delete of an assignment passes", async () => {
+  // Скоуп у результаті читається з рядка «до», видимого лише через RLS ролі
+  // команд, — це вирішує Postgres, не текст тіла.
+  it("delete of an assignment passes and returns the assignment's scope", async () => {
     const version = await versionOf(ASSIGNMENTS, "targetRole")
-    expect(await remove(version)).toMatchObject({
-      result: { id: key("targetRole"), version },
+    expect(await remove(version)).toEqual({
+      result: { id: key("targetRole"), version, org_id: key("A") },
       probe: [{ n: 0 }],
     })
   })

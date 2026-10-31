@@ -39,6 +39,7 @@ export {
 } from "./sql/units"
 export { loadSqlParser, relationNameText, type SqlParser } from "./sql/parse"
 export { platformSchemaGrants } from "./platform/units"
+export { executeGrants } from "./sql/execute-grants"
 export {
   AUTHOR_FUNCTION,
   authorTriggerName,
@@ -127,6 +128,13 @@ export type {
 } from "./contracts"
 export type { Presentation, PresentationBlock } from "./presentation"
 export { emitEntityTypes } from "./codegen"
+export {
+  entityFields,
+  type ElementSource,
+  type EntityContext,
+  type EntityField,
+} from "./entity-fields"
+export { buildRuntimeCatalog } from "./runtime-catalog"
 export {
   canonicalSnapshot,
   canonicalize,

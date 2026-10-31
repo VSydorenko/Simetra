@@ -14,6 +14,8 @@ import {
   type PhysicalTable,
   type StandardColumnDef,
   KIND_REGISTRY,
+  COMMAND_CORE_ERRORS,
+  CURRENT_USER_FUNCTION_NAME,
 } from "simetra/model"
 import {
   qualified,
@@ -201,7 +203,7 @@ function definer(fn: QualifiedName, returns: string, body: string): string {
 }
 
 function refusal(detail: string, table?: PhysicalTable): string {
-  return `RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'command.forbidden', DETAIL = ${sqlLiteral(detail)}${table === undefined ? "" : `, TABLE = ${sqlLiteral(table.name)}`};`
+  return `RAISE EXCEPTION USING ERRCODE = '${COMMAND_CORE_ERRORS.forbidden.errcode}', MESSAGE = '${COMMAND_CORE_ERRORS.forbidden.message}', DETAIL = ${sqlLiteral(detail)}${table === undefined ? "" : `, TABLE = ${sqlLiteral(table.name)}`};`
 }
 
 /**
@@ -266,7 +268,7 @@ function transitionSql(
   return [
     `PERFORM ${ref(RIGHTS_FUNCTIONS.bump)}(s.scope_kind_id, s.scope) FROM (SELECT DISTINCT r.scope_kind_id, r.scope FROM (${versionRows}) r) s;`,
     `INSERT INTO ${ref(platform("rights_journal"))} (xid, scope_kind_id, scope, actor, reason, action, object, relation, operation, row_id, parent_id, before, after)`,
-    `SELECT txid_current(), r.scope_kind_id, r.scope, CASE WHEN v_maintenance THEN NULL ELSE ${ref(platform("current_user_id"))}() END, CASE WHEN v_maintenance THEN 'maintenance' ELSE 'command' END, v_action, ${sqlLiteral(config.object)}, ${sqlLiteral(relation)}, ${sqlLiteral(operation)}, r.row_id, r.parent_id, r.before, r.after FROM (${rows}) r;`,
+    `SELECT txid_current(), r.scope_kind_id, r.scope, CASE WHEN v_maintenance THEN NULL ELSE ${ref(platform(CURRENT_USER_FUNCTION_NAME))}() END, CASE WHEN v_maintenance THEN 'maintenance' ELSE 'command' END, v_action, ${sqlLiteral(config.object)}, ${sqlLiteral(relation)}, ${sqlLiteral(operation)}, r.row_id, r.parent_id, r.before, r.after FROM (${rows}) r;`,
     pendingSql(config, operation),
   ].join("\n")
 }
@@ -289,7 +291,7 @@ function catalogBody(config: CatalogTable, provider: DatabaseProvider): string {
     "BEGIN",
     `  v_maintenance := (${maintenanceSql(provider)});`,
     `  SELECT c.action INTO v_action FROM ${ref(COMMAND_FUNCTIONS.current)}() c;`,
-    `  IF v_action IS NULL AND NOT v_maintenance THEN ${refusal("rights-context", config.table)} END IF;`,
+    `  IF v_action IS NULL AND NOT v_maintenance THEN ${refusal(COMMAND_CORE_ERRORS.forbidden.rightsContext, config.table)} END IF;`,
     `  ${branches.join("\n  ")}\n  END IF;`,
     "  RETURN NULL;",
     "END",
@@ -297,7 +299,7 @@ function catalogBody(config: CatalogTable, provider: DatabaseProvider): string {
 }
 
 function truncateBody(table: PhysicalTable): string {
-  return `BEGIN\n  ${refusal("rights-context", table)}\n  RETURN NULL;\nEND`
+  return `BEGIN\n  ${refusal(COMMAND_CORE_ERRORS.forbidden.rightsContext, table)}\n  RETURN NULL;\nEND`
 }
 
 /**
@@ -312,7 +314,7 @@ function snapshotBody(
   style: AttributeCase
 ): string {
   const actor = ref(platform("rights_tx_actor"))
-  const currentUser = `${ref(platform("current_user_id"))}()`
+  const currentUser = `${ref(platform(CURRENT_USER_FUNCTION_NAME))}()`
   return [
     "DECLARE",
     "  v_action text;",
@@ -322,7 +324,7 @@ function snapshotBody(
     `  IF v_action IS NULL OR (${maintenanceSql(provider)}) THEN RETURN NULL; END IF;`,
     `  v_actor := ${currentUser};`,
     `  IF EXISTS (SELECT 1 FROM ${actor} WHERE xid = txid_current()) THEN`,
-    `    IF EXISTS (SELECT 1 FROM ${actor} WHERE xid = txid_current() AND actor IS DISTINCT FROM v_actor) THEN ${refusal("rights-context")} END IF;`,
+    `    IF EXISTS (SELECT 1 FROM ${actor} WHERE xid = txid_current() AND actor IS DISTINCT FROM v_actor) THEN ${refusal(COMMAND_CORE_ERRORS.forbidden.rightsContext)} END IF;`,
     "    RETURN NULL;",
     "  END IF;",
     `  INSERT INTO ${actor} (xid, actor, full_access) VALUES (txid_current(), v_actor, false);`,
@@ -605,7 +607,7 @@ function escalationSql(
     `      (g.level = 'container' AND ((s.level = 'scope' AND s.level_id = ${storageKind} AND s.scope = g.scope) OR (s.level = 'container' AND s.level_id = g.level_id AND s.container = g.container)))`,
     "    )",
     "    AND (s.full_access OR (s.object = g.object AND s.action = g.action AND (s.extent = 'any' OR (s.extent = g.extent AND s.dimension_id IS NOT DISTINCT FROM g.dimension_id))))))",
-    `THEN ${refusal("escalation")} END IF;`,
+    `THEN ${refusal(COMMAND_CORE_ERRORS.forbidden.escalation)} END IF;`,
   ].join("\n")
 }
 
@@ -649,7 +651,7 @@ function deltaDomainSql(
     `      OR EXISTS (SELECT 1 FROM (SELECT DISTINCT ON (j.row_id) j.before FROM ${journal(roles)} AND j.row_id = v_pending.key ORDER BY j.row_id, j.seq) f WHERE (f.before ->> ${sqlLiteral(column(roles, R.archetype, style))})::uuid IS DISTINCT FROM ${r(R.archetype)}))`,
     `    AND NOT EXISTS (SELECT 1 FROM ${ref(RIGHTS_FUNCTIONS.roles)}() m JOIN ${ref(RIGHTS_FUNCTIONS.domain)}() d ON d.level = m.level AND d.level_id IS NOT DISTINCT FROM m.level_id`,
     `      WHERE m.role_id = ${r(R.archetype)} AND ${storage} AND d.object = ${l(R.object)} AND d.action = ${l(R.action)} AND d.extent = ${l(R.extent)} AND d.dimension_id IS NOT DISTINCT FROM ${l(R.dimension)}))`,
-    `THEN ${refusal("delta-domain")} END IF;`,
+    `THEN ${refusal(COMMAND_CORE_ERRORS.forbidden.deltaDomain)} END IF;`,
   ].join("\n")
 }
 
@@ -680,14 +682,14 @@ function catalogCheck(
     "  IF v_pending.kind = 'role' THEN",
     `    IF EXISTS (SELECT 1 FROM ${ref(catalog.roles.table)} r WHERE ${roleId} = v_pending.key AND ${sameRole} AND r.${q(column(roles, DELETION, style))})`,
     `       AND EXISTS (SELECT 1 FROM ${ref(catalog.assignments.table)} a WHERE a.${q(column(assignments, R.customRole, style))} = v_pending.key AND ${sameAssignment} AND NOT a.${q(column(assignments, DELETION, style))})`,
-    `    THEN ${refusal("role-in-use")} END IF;`,
+    `    THEN ${refusal(COMMAND_CORE_ERRORS.forbidden.roleInUse)} END IF;`,
     `    ${deltaDomainSql(catalog, physical, style)}`,
     `    ${escalationSql(roleGrantSet(catalog, physical, "after", style), roleGrantSet(catalog, physical, "before", style), catalogStorageKind(catalog))}`,
     "  ELSIF v_pending.kind = 'assignment' THEN",
     `    ${escalationSql(assignmentGrantSet(catalog, physical, "after", style), assignmentBeforeSet(catalog, physical, style), catalogStorageKind(catalog))}`,
     "  ELSIF v_pending.kind = 'holders' THEN",
     ...(root === undefined ? [] : [`    IF ${root} THEN`]),
-    `    IF NOT EXISTS (SELECT 1 FROM (${holderRows(catalog, contracts, physical, style)}) h WHERE h.scope = v_pending.scope) THEN ${refusal("last-full-access")} END IF;`,
+    `    IF NOT EXISTS (SELECT 1 FROM (${holderRows(catalog, contracts, physical, style)}) h WHERE h.scope = v_pending.scope) THEN ${refusal(COMMAND_CORE_ERRORS.forbidden.lastFullAccess)} END IF;`,
     ...(root === undefined ? [] : ["    END IF;"]),
     "  END IF;",
     "END IF;",
@@ -730,7 +732,7 @@ function actorCheck(contracts: GuardContracts): string {
   const before = `SELECT ${GRANT_COLUMNS} FROM ${actor} WHERE xid = v_pending.xid AND NOT full_access AND level IS NOT NULL`
   return [
     "IF v_pending.kind = 'actor' THEN",
-    `  IF NOT v_pending.maintenance AND EXISTS (SELECT 1 FROM ${actor} WHERE xid = v_pending.xid AND actor IS DISTINCT FROM ${ref(platform("current_user_id"))}()) THEN ${refusal("rights-context")} END IF;`,
+    `  IF NOT v_pending.maintenance AND EXISTS (SELECT 1 FROM ${actor} WHERE xid = v_pending.xid AND actor IS DISTINCT FROM ${ref(platform(CURRENT_USER_FUNCTION_NAME))}()) THEN ${refusal(COMMAND_CORE_ERRORS.forbidden.rightsContext)} END IF;`,
     `  ${escalationSql(after, before, containerStorageKind(contracts))}`,
     "END IF;",
   ].join("\n")
@@ -827,7 +829,7 @@ function memberEventBody(
     })
   const repeated =
     operation === "INSERT" && assignments.length > 0
-      ? `IF EXISTS (SELECT 1 FROM new_rows n WHERE ${assignments.join(" OR ")}) THEN ${refusal("rights-context")} END IF;`
+      ? `IF EXISTS (SELECT 1 FROM new_rows n WHERE ${assignments.join(" OR ")}) THEN ${refusal(COMMAND_CORE_ERRORS.forbidden.rightsContext)} END IF;`
       : ""
   // Самоприйняття порівнюється NULL-безпечно: поза командою власник часто
   // без claims (`current_user_id()` — NULL), і `=` дав би NULL замість
@@ -836,9 +838,9 @@ function memberEventBody(
     operation === "UPDATE"
       ? [
           `IF v_action IS NULL AND NOT v_maintenance AND EXISTS (SELECT 1 FROM old_rows o JOIN new_rows n ON n.${key} = o.${key}`,
-          `  WHERE o.${user} IS DISTINCT FROM n.${user} AND NOT (o.${user} IS NULL AND n.${user} IS NOT DISTINCT FROM ${ref(platform("current_user_id"))}()`,
+          `  WHERE o.${user} IS DISTINCT FROM n.${user} AND NOT (o.${user} IS NULL AND n.${user} IS NOT DISTINCT FROM ${ref(platform(CURRENT_USER_FUNCTION_NAME))}()`,
           `    AND NOT EXISTS (SELECT 1 FROM ${ref(member.table)} other WHERE other.${scope} = n.${scope} AND other.${user} = n.${user} AND other.${key} <> n.${key})))`,
-          `THEN ${refusal("rights-context")} END IF;`,
+          `THEN ${refusal(COMMAND_CORE_ERRORS.forbidden.rightsContext)} END IF;`,
         ].join("\n")
       : ""
   // Непорожній користувач змінився — носій міг зникнути; ключ ставиться в
@@ -908,7 +910,7 @@ function usersEventBody(
       ? [
           `IF v_action IS NULL AND NOT v_maintenance AND EXISTS (SELECT 1 FROM old_rows o JOIN new_rows n ON n.${key} = o.${key}`,
           ` WHERE o.${kind} IS DISTINCT FROM n.${kind} OR (o.${invalid} IS DISTINCT FROM n.${invalid} AND NOT (o.${invalid} = false AND n.${invalid} = true)))`,
-          `THEN ${refusal("rights-context")} END IF;`,
+          `THEN ${refusal(COMMAND_CORE_ERRORS.forbidden.rightsContext)} END IF;`,
         ].join("\n")
       : ""
   // Недійсність і вид користувача змінюють дієвих носіїв глобально, тож
@@ -925,7 +927,7 @@ function usersEventBody(
     `  SELECT c.action INTO v_action FROM ${ref(COMMAND_FUNCTIONS.current)}() c;`,
     repeated.length === 0
       ? ""
-      : `  IF EXISTS (SELECT 1 FROM new_rows n WHERE ${repeated.join(" OR ")}) THEN ${refusal("rights-context")} END IF;`,
+      : `  IF EXISTS (SELECT 1 FROM new_rows n WHERE ${repeated.join(" OR ")}) THEN ${refusal(COMMAND_CORE_ERRORS.forbidden.rightsContext)} END IF;`,
     update,
     bump,
     "  RETURN NULL; END",

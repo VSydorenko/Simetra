@@ -1,12 +1,13 @@
 import pg from "pg"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
-import { compile, platformFunctionSignatures } from "simetra/compiler"
+import { compile } from "simetra/compiler"
 import {
   desiredForApply,
   executePlan,
   footprintTables,
   planFootprint,
   planLocks,
+  planPlatformFunctions,
   readFingerprint,
   readLedgerHead,
   readProviderLocks,
@@ -78,7 +79,7 @@ beforeAll(async () => {
   )
   expect(compiled.diagnostics).toEqual([])
   desired = await desiredForApply(compiled.model!)
-  platformFunctions = platformFunctionSignatures(compiled.model!.sqlUnits)
+  platformFunctions = planPlatformFunctions(compiled.model!)
   await query(testSuperuserUrl(), `create role ${STRANGER} nologin`)
 })
 afterAll(() => dropRoles(STRANGER))

@@ -5,6 +5,7 @@ import {
   type CompiledModel,
   effectsFunctionName,
   effectsTriggerNames,
+  platformFunctionSignatures,
   type PromotionRecord,
 } from "simetra/compiler"
 import { PLATFORM_ROLES, type CatalogModel } from "simetra/model"
@@ -13,6 +14,7 @@ import {
   FINGERPRINT_SECTIONS,
   buildPlan,
   desiredForApply,
+  planPlatformFunctions,
   type ApplyDatabase,
   type ApplyTransaction,
   type EngineAction,
@@ -48,6 +50,30 @@ import { applyDiagnostic } from "../diagnostic"
  * Конвеєр плану на фейковому порті — лише те, що не потребує справжньої
  * бази; решта — у `build-plan.db.test.ts` designer.
  */
+describe("planPlatformFunctions", () => {
+  // Функцію стану застосування рендерить T2 з фіксованим тілом, тож для
+  // перевірки функцій вона платформна, як і функції шару: інакше роль
+  // застосування без `EXECUTE` на неї бачила б «сліпу» функцію на кожному плані
+  it("adds the apply state function to the platform functions of the model", async () => {
+    const m = (
+      await compile(
+        metaFiles({
+          "project.meta.json": project(),
+          "catalogs/Users/Users.meta.json": catalog("Users", {
+            role: "users",
+            scope: "none",
+          }),
+        })
+      )
+    ).model!
+    const layer = platformFunctionSignatures(m.sqlUnits)
+    expect(layer.length).toBeGreaterThan(0)
+    expect(planPlatformFunctions(m)).toEqual(
+      [...layer, "simetra.applied_snapshot_hash()"].sort()
+    )
+  })
+})
+
 describe("buildPlan", () => {
   // Без функції носіїв на цілі (база до цього запобіжника) «до» невідоме:
   // план не вигадує втрати, а йде далі — запобіжник на COMMIT стане першим
@@ -348,6 +374,37 @@ describe("buildPlan", () => {
     { case: "plan", promotion: false },
     { case: "plan with a promotion", promotion: true },
   ])(
+    "hands the blind-function read the apply state function as a platform one ($case)",
+    async ({ promotion }) => {
+      // Проводка `planPlatformFunctions` у слід плану: без функції стану
+      // роль застосування без `EXECUTE` на неї бачила б «сліпу» функцію
+      const { before, desired, records } = promotion
+        ? await promotedTag()
+        : await samePolicyDomain()
+      const target = await fakeTarget(before, {
+        notCopies: [],
+        toBlindFunctions: true,
+      })
+      await expect(
+        buildPlan(
+          fakeEngine([createTable(ATTACHMENTS_TABLE)]),
+          { reader: target.reader, scratch: emptyScratch },
+          desired,
+          { target: { url: "postgres://target" } },
+          records
+        )
+      ).rejects.toBeInstanceOf(ReachedBlindFunctions)
+      expect(target.platformFunctions).toEqual([planPlatformFunctions(desired)])
+      expect(target.platformFunctions[0]).toContain(
+        "simetra.applied_snapshot_hash()"
+      )
+    }
+  )
+
+  it.each([
+    { case: "plan", promotion: false },
+    { case: "plan with a promotion", promotion: true },
+  ])(
     "refuses a plan when the apply role cannot bypass RLS of a source table ($case)",
     async ({ promotion }) => {
       // Відмова — до витягу й тіні, до розгалуження
@@ -466,6 +523,9 @@ const emptyScratch: ApplyDatabase = {
 /** Фейкова ціль дійшла до читання права `LOCK` на таблиці сліду плану. */
 class ReachedLockRights extends Error {}
 
+/** Фейкова ціль дійшла до читання «сліпих» функцій (`readBlindFunctions`). */
+class ReachedBlindFunctions extends Error {}
+
 const EMPTY_CATALOG: CatalogModel = { tables: [], enumTypes: [], units: [] }
 
 /**
@@ -484,6 +544,12 @@ async function fakeTarget(
      * якого не оголошує жодна роль, у кожному джерелі призначень.
      */
     sources?: { owned: boolean; unknownKey?: string }
+    /**
+     * Право `LOCK` є на всіх таблицях сліду, і план іде до читання «сліпих»
+     * функцій: воно кидає `ReachedBlindFunctions`, а `platformFunctions`
+     * збирає передані йому платформні сигнатури.
+     */
+    toBlindFunctions?: true
     rights?: {
       /** Чи є на цілі `simetra.rights_full_access_roles()`. */
       holdersFn: boolean
@@ -525,6 +591,7 @@ async function fakeTarget(
     plan_hash: "p",
   }
   const lockTables: Named[] = []
+  const platformFunctions: string[][] = []
   const answer = (sql: string, params: readonly unknown[] = []): unknown[] => {
     if (sql.includes("pg_database"))
       return [{ major: 17, encoding: "UTF8", collate: "C", ctype: "C" }]
@@ -582,8 +649,16 @@ async function fakeTarget(
     // Право `LOCK` на таблиці сліду читається вже після збору середовища:
     // кроки копій до нього дійшли, далі план фейкам не потрібен
     if (sql.includes("AS lockable")) {
-      lockTables.push(...(JSON.parse(params[0] as string) as Named[]))
-      throw new ReachedLockRights()
+      const tables = JSON.parse(params[0] as string) as Named[]
+      lockTables.push(...tables)
+      if (o.toBlindFunctions === undefined) throw new ReachedLockRights()
+      return tables.map((t) => ({ ...t, lockable: true }))
+    }
+    if (sql.includes("current_setting('search_path') AS path"))
+      return [{ path: "public" }]
+    if (sql.includes("AS signature") && sql.includes("pg_proc")) {
+      platformFunctions.push(params[2] as string[])
+      throw new ReachedBlindFunctions()
     }
     return []
   }
@@ -595,7 +670,7 @@ async function fakeTarget(
     extract: () => Promise.reject(new Error("no extract expected")),
   }
   const reader: ApplyDatabase = { transaction: (_db, _end, fn) => fn(tx) }
-  return { reader, lockTables }
+  return { reader, lockTables, platformFunctions }
 }
 
 type Named = { schema: string; name: string }

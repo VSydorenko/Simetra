@@ -10,7 +10,7 @@
 `bin/simetra.mjs`. Пакет збирається tsdown у `dist/`, і `pnpm pack` бере поля
 `publishConfig`, тож споживач отримує лише зібране:
 
-- `simetra` — по entry на ярус (`model`, `compiler`, `schema`) з `.d.ts`,
+- `simetra` — по entry на ярус (`model`, `compiler`, `schema`, `server`) з `.d.ts`,
   плюс `schemas/` для `$schema` файлів метаданих. Самопосилання
   `simetra/<ярус>` у `dist` лишаються зовнішніми: ярус існує в одному
   екземплярі. Заглушки ярусів без API в пакет не входять.

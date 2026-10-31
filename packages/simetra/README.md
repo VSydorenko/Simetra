@@ -29,6 +29,7 @@ Node.js 24 or newer. The package is ESM only.
 | `simetra/model` | Zod schemas and types of the metamodel, the kind registry |
 | `simetra/compiler` | The compiler: metadata files in, contracts and diagnostics out |
 | `simetra/schema` | Desired database state and the schema-engine port |
+| `simetra/server` | The command runtime: `createCommandRuntime` over a database port, `fromPgPool` for a `pg` pool |
 | `simetra/schemas/*` | JSON Schema files for editor support of metadata files |
 
 Most projects start with the command line from

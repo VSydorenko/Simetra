@@ -6,6 +6,8 @@ import {
   type DatabaseProvider,
   type PhysicalSnapshot,
   type PhysicalTable,
+  COMMAND_CORE_ERRORS,
+  HIERARCHY_ISOLATION_ERROR,
 } from "simetra/model"
 import type { QualifiedName } from "./contracts"
 import { compareStrings } from "./diagnostics"
@@ -189,7 +191,7 @@ export function buildHierarchyUnits(
  * тримав замок; `STABLE` обходив би знімок до очікування й пропустив би цикл.
  */
 function hierarchyBody({ table, parent, key }: HierarchyTable): string {
-  const invalid = `RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'command.invalid', DETAIL = ${sqlLiteral(parent)};`
+  const invalid = `RAISE EXCEPTION USING ERRCODE = '${COMMAND_CORE_ERRORS.invalid.errcode}', MESSAGE = '${COMMAND_CORE_ERRORS.invalid.message}', DETAIL = ${sqlLiteral(parent)};`
   return [
     "BEGIN",
     // Лише `READ COMMITTED` (спека П4 §6.6): у `REPEATABLE READ` і `SERIALIZABLE`
@@ -197,7 +199,7 @@ function hierarchyBody({ table, parent, key }: HierarchyTable): string {
     // переміщення; SSI ловить гонку лише між двома `SERIALIZABLE`. Перевірка
     // — до замка: відмова не чекає на чужу транзакцію.
     "  IF current_setting('transaction_isolation') <> 'read committed' THEN",
-    "    RAISE EXCEPTION USING ERRCODE = '0A000', MESSAGE = 'hierarchy.isolation';",
+    `    RAISE EXCEPTION USING ERRCODE = '${HIERARCHY_ISOLATION_ERROR.errcode}', MESSAGE = '${HIERARCHY_ISOLATION_ERROR.message}';`,
     "  END IF;",
     `  IF NEW.${q(parent)} = NEW.${q(key)} THEN`,
     `    ${invalid}`,

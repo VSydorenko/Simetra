@@ -8,6 +8,7 @@ export default defineConfig({
     "model/index": "src/model/index.ts",
     "compiler/index": "src/compiler/index.ts",
     "schema/index": "src/schema/index.ts",
+    "server/index": "src/server/index.ts",
   },
   format: "esm",
   platform: "node",
