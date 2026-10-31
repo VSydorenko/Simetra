@@ -37,6 +37,8 @@ describe("core error codes in the compiler", () => {
       const code = stripComments(readFileSync(path, "utf8"))
       return (
         /\b(?:refusal|forbidden|conflict)\(\s*["'`]/.test(code) ||
+        // `invalid` бере SQL-вираз: літерал-причина в лапках SQL (`"'p_item'"`).
+        /\binvalid\(\s*["'`]'/.test(code) ||
         /DETAIL = '[a-z]/.test(code)
       )
     })

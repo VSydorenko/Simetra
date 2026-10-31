@@ -1,4 +1,5 @@
 import {
+  COMMAND_CORE_ERRORS,
   runtimeObjectSchema,
   type CommandError,
   type RuntimeCatalog,
@@ -248,7 +249,7 @@ describe("mapDatabaseError", () => {
     }
   )
 
-  it.each([
+  it.each<[string, { path: string } | { reason: string }]>([
     ["code_col", { path: "code" }],
     ["subject_type", { path: "subject" }],
     ["subject_col", { path: "subject" }],
@@ -256,12 +257,15 @@ describe("mapDatabaseError", () => {
     ["tabular.sample_lines", { path: "lines" }],
     ["tabular.sample_lines.qty_col", { path: "lines.qty" }],
     ["tabular.sample_lines.id", { path: "lines.ref" }],
-    ["create", { reason: "create" }],
-    ["p_item", { reason: "p_item" }],
-    ["tabular", { reason: "tabular" }],
-    ["p_expected_version", { reason: "p_expected_version" }],
-    ["p_mark", { reason: "p_mark" }],
-    ["predefined", { reason: "predefined" }],
+    // Причини — з T0: прибрана з переліку причина ламає свій рядок таблиці.
+    ...[
+      COMMAND_CORE_ERRORS.invalid.create,
+      COMMAND_CORE_ERRORS.invalid.item,
+      COMMAND_CORE_ERRORS.invalid.tabular,
+      COMMAND_CORE_ERRORS.invalid.expectedVersion,
+      COMMAND_CORE_ERRORS.invalid.mark,
+      COMMAND_CORE_ERRORS.invalid.predefined,
+    ].map((reason): [string, { reason: string }] => [reason, { reason }]),
     ["missing_col", { reason: "unknown" }],
     ["tabular.sample_lines.missing_col", { reason: "unknown" }],
     ["tabular.mirror_lines", { reason: "unknown" }],

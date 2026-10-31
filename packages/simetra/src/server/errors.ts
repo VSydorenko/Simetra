@@ -39,15 +39,7 @@ const E = COMMAND_CORE_ERRORS
 const FORBIDDEN_REASONS = valuesOf(E.forbidden)
 const CONFLICT_REASONS = valuesOf(E.conflict)
 const CONTEXT_DETAILS = valuesOf(E.context)
-// Аргументи й гілки ядра, які `DETAIL` `22023` називає замість колонки.
-const INVALID_REASONS = [
-  "create",
-  "p_item",
-  "tabular",
-  "p_expected_version",
-  "p_mark",
-  "predefined",
-]
+const INVALID_REASONS = valuesOf(E.invalid)
 const INTERNAL: CommandError = { code: "command.internal" }
 
 /** Таблиця каталогу: основна об'єкта чи ТЧ (тоді шляхи — `<ТЧ>.<реквізит>`). */
@@ -118,7 +110,7 @@ function invalidOf(object: RuntimeObject, detail: string): CommandError {
   const column = pathOf(main, detail)
   if (column !== undefined) return { code: "command.invalid", path: column }
   for (const section of sections) {
-    const head = `tabular.${section.name}`
+    const head = `${E.invalid.tabular}.${section.name}`
     if (detail === head) {
       return { code: "command.invalid", path: section.prefix.slice(0, -1) }
     }

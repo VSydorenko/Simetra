@@ -4,7 +4,20 @@
  * SQL (T1) і рантайму команд (T3): T3 не імпортує T1.
  */
 export const COMMAND_CORE_ERRORS = {
-  invalid: { errcode: "22023", message: "command.invalid" },
+  // Решта `DETAIL` `22023` — фізична колонка, яку T3 перекладає в шлях
+  // каталогу; ці причини називають аргумент чи гілку ядра замість колонки.
+  invalid: {
+    errcode: "22023",
+    message: "command.invalid",
+    create: "create",
+    item: "p_item",
+    // Водночас префікс протоколу `tabular.<таблиця>[.<колонка>]`: ТЧ і її
+    // колонку `DETAIL` називає під ним.
+    tabular: "tabular",
+    expectedVersion: "p_expected_version",
+    mark: "p_mark",
+    predefined: "predefined",
+  },
   context: {
     errcode: "42501",
     message: "command.context",

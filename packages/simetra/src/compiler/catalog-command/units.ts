@@ -551,7 +551,7 @@ function saveFunction(
 
   const createBranch: string[] =
     contract.actions.create === undefined
-      ? [invalid(sqlLiteral("create"))]
+      ? [invalid(sqlLiteral(E.invalid.create))]
       : createLines(contract, {
           context: context(contract.actions.create),
           references: references(false),
@@ -645,13 +645,15 @@ function inputLines(contract: CatalogCommandContract): string[] {
     `SELECT k.k INTO v_key FROM jsonb_object_keys(p_item) AS k(k) WHERE k.k <> ALL (${allowed(keys)}) ORDER BY k.k LIMIT 1;`
   return [
     ...ifThen("jsonb_typeof(p_item) IS DISTINCT FROM 'object'", [
-      invalid("'p_item'"),
+      invalid(sqlLiteral(E.invalid.item)),
     ]),
     // Без дії створення (спека П4 §6.6: «Користувачі», корінь скоупу) виклик без
     // версії — відмова `create` до перевірки ключів: інакше порожній перелік
     // ключів створення назвав би першим невідомим ключем `id`, а не причину.
     ...(contract.actions.create === undefined
-      ? ifThen("p_expected_version IS NULL", [invalid("'create'")])
+      ? ifThen("p_expected_version IS NULL", [
+          invalid(sqlLiteral(E.invalid.create)),
+        ])
       : []),
     "IF p_expected_version IS NULL THEN",
     ...indent([unknown(contract.createKeys)]),
@@ -813,15 +815,19 @@ function tabularLines(
   scopeKindId: string | undefined
 ): string[] {
   if (contract.tabularSections.length === 0) {
-    return ifThen("p_item ? 'tabular'", [invalid("'tabular'")])
+    return ifThen("p_item ? 'tabular'", [
+      invalid(sqlLiteral(E.invalid.tabular)),
+    ])
   }
   const names = contract.tabularSections.map((s) => s.table.name)
   return ifThen("p_item ? 'tabular'", [
     ...ifThen("jsonb_typeof(p_item -> 'tabular') IS DISTINCT FROM 'object'", [
-      invalid("'tabular'"),
+      invalid(sqlLiteral(E.invalid.tabular)),
     ]),
     `SELECT k.k INTO v_key FROM jsonb_object_keys(p_item -> 'tabular') AS k(k) WHERE k.k <> ALL (${textArray(names)}) ORDER BY k.k LIMIT 1;`,
-    ...ifThen("v_key IS NOT NULL", [invalid("'tabular.' || v_key")]),
+    ...ifThen("v_key IS NOT NULL", [
+      invalid(`${sqlLiteral(`${E.invalid.tabular}.`)} || v_key`),
+    ]),
     ...contract.tabularSections.flatMap((section) =>
       sectionLines(contract, section, scope, scopeKindId)
     ),
@@ -838,7 +844,9 @@ function sectionLines(
   const name = section.table.name
   const items = `p_item -> 'tabular' -> ${sqlLiteral(name)}`
   const detail = (suffix?: string) =>
-    sqlLiteral(`tabular.${name}${suffix === undefined ? "" : `.${suffix}`}`)
+    sqlLiteral(
+      `${E.invalid.tabular}.${name}${suffix === undefined ? "" : `.${suffix}`}`
+    )
   const root = `v_in.${q(contract.key)}`
   const key = q(section.key)
   const parent = q(section.parent)
@@ -1068,8 +1076,10 @@ function markDeletionFunction(
     ...(parts.updatedBy === undefined ? [] : [q(parts.updatedBy)]),
   ])
   const statements = [
-    ...ifThen("p_mark IS NULL", [invalid("'p_mark'")]),
-    ...ifThen("p_expected_version IS NULL", [invalid("'p_expected_version'")]),
+    ...ifThen("p_mark IS NULL", [invalid(sqlLiteral(E.invalid.mark))]),
+    ...ifThen("p_expected_version IS NULL", [
+      invalid(sqlLiteral(E.invalid.expectedVersion)),
+    ]),
     ...parts.context(action, root),
     // Обробник `beforeWrite`, що присвоює батька, спрацьовує й на `UPDATE`
     // позначки: замок ієрархії — до замка рядка (спека П4 §6.6).
@@ -1090,7 +1100,7 @@ function markDeletionFunction(
     ...(contract.predefinedColumn === undefined
       ? []
       : ifThen(`v_old.${q(contract.predefinedColumn)} IS NOT NULL`, [
-          invalid("'predefined'"),
+          invalid(sqlLiteral(E.invalid.predefined)),
         ])),
     `UPDATE ${relation(table)} SET ${mark} = p_mark WHERE ${q(key)} = ${root} RETURNING * INTO v_row;`,
     // Відкликання права між замком і `UPDATE` — нуль рядків, відмова.
@@ -1134,7 +1144,9 @@ function deleteFunction(
   const statements = [
     // Без версії `lockedOld` дав би `conflict`: вхід без версії — помилка
     // виклику, як у позначці видалення, а не конфлікт.
-    ...ifThen("p_expected_version IS NULL", [invalid("'p_expected_version'")]),
+    ...ifThen("p_expected_version IS NULL", [
+      invalid(sqlLiteral(E.invalid.expectedVersion)),
+    ]),
     ...parts.context(action, root),
     // `FOR UPDATE`, не `NO KEY UPDATE` (спека П4 §6.6): `DELETE` конфліктує з
     // `KEY SHARE` RI-перевірок за природою, тож замок бере ту саму силу
