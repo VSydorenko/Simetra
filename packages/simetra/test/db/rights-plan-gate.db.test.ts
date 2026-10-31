@@ -593,8 +593,10 @@ describe("rights plan gate", () => {
       ).toBeGreaterThan(0)
       // Вузол у плані ще не доказ: `PlanNode` зберігає й вузли з loops = 0,
       // що не виконувались. Гілка `deny` читає всі глобальні дельти без
-      // з'єднання з призначеннями, тож доказом є лише доступ гілки `allow`
-      // за власником рядка ТЧ — його дає глобальне призначення ролі.
+      // з'єднання з призначеннями, тож тут вимагається доступ гілки `allow`
+      // за власником рядка ТЧ. Він виконується на кожен рядок `held`, тож
+      // прив'язку до призначення `gate.full` форма плану не доводить — її
+      // тримає перевірка призначення в `beforeAll`.
       expect(
         plans
           .flatMap((p) => scansOf(p, "global_roles_delta"))
@@ -603,7 +605,7 @@ describe("rights plan gate", () => {
               (n.loops ?? 0) > 0 &&
               n.conditions.some((c) => /\bparent_id\b/.test(c))
           ),
-        "global_roles_delta is read by owner through a global assignment"
+        "global_roles_delta is read by owner in the allow branch"
       ).toBe(true)
       expect
         .soft(
