@@ -1,22 +1,10 @@
 import {
-  AUTHOR_FUNCTION,
-  authorTriggerName,
-  authorUpdateTriggerName,
-  carrierFunctionNames,
-  carrierTriggerNames,
   diagnostic,
-  effectsFunctionName,
-  effectsTriggerNames,
-  hierarchyNames,
-  rightsGuardNames,
   grantTargetKeys,
-  KEY_FUNCTION,
-  keyTriggerNames,
-  MECHANICS_FUNCTION,
-  mechanicsTriggerName,
-  mechanicsUpdateTriggerName,
   ownsTarget,
+  platformTriggers,
   readSqlUnits,
+  SHARED_TRIGGER_FUNCTIONS,
   unitPlacement,
   unitTarget,
   type Diagnostic,
@@ -244,20 +232,10 @@ function ownerTable(unit: CatalogUnit, ctx: UnitsContext): string | undefined {
   }
 }
 
-const MECHANICS = qualified(MECHANICS_FUNCTION.schema, MECHANICS_FUNCTION.name)
-const AUTHOR = qualified(AUTHOR_FUNCTION.schema, AUTHOR_FUNCTION.name)
-const KEY = qualified(KEY_FUNCTION.schema, KEY_FUNCTION.name)
-
 /**
- * Функція, яку платформний тригер таблиці мусить кликати за своїм іменем:
- * механіка рядка (`<t>_simetra_touch` і, на таблиці з копіями носіїв,
- * `<t>_simetra_touch_update`) — `simetra.touch()`, авторство
- * (`<t>_simetra_author`, `<t>_simetra_author_update`) — `simetra.author()`
- * (спека П4 §6.8), незмінність ключа (`<t>_simetra_key`, `<t>_simetra_key_after`) —
- * `simetra.key_immutable()` (спека прав §7), тригери копій носіїв —
- * функції носіїв таблиці (спека промоції §9.3), тригери ефектів — функція ефектів таблиці,
- * тригери ієрархії — функція ієрархії таблиці (спека П4 §6.6). Інше
- * ім'я — не платформний тригер.
+ * Функція, яку платформний тригер таблиці мусить кликати за своїм іменем, —
+ * з реєстру платформних тригерів таблиці (`platformTriggers`). Інше ім'я —
+ * не платформний тригер.
  */
 function platformTriggerFunction(
   unit: CatalogUnit,
@@ -265,47 +243,13 @@ function platformTriggerFunction(
 ): string | undefined {
   const target = unitTarget(unit, ctx.parse)
   if (target?.object === undefined) return undefined
-  const table = {
+  const entry = platformTriggers({
     schema: target.schema || ctx.defaultSchema,
     name: target.object,
-  }
-  if (
-    unit.name === mechanicsTriggerName(table.name) ||
-    unit.name === mechanicsUpdateTriggerName(table.name)
-  )
-    return MECHANICS
-  if (
-    unit.name === authorTriggerName(table.name) ||
-    unit.name === authorUpdateTriggerName(table.name)
-  )
-    return AUTHOR
-  const key = keyTriggerNames(table.name)
-  if (unit.name === key.before || unit.name === key.after) return KEY
-  const triggers = carrierTriggerNames(table)
-  const functions = carrierFunctionNames(table)
-  if (unit.name === triggers.derive)
-    return qualified(functions.derive.schema, functions.derive.name)
-  if (
-    unit.name === triggers.propagate ||
-    unit.name === triggers.propagateInsert
-  )
-    return qualified(functions.propagate.schema, functions.propagate.name)
-  // Тригери ієрархії (спека П4 §6.6): обидва кличуть одну функцію таблиці
-  const hierarchy = hierarchyNames(table)
-  if (unit.name === hierarchy.insert || unit.name === hierarchy.update)
-    return qualified(hierarchy.fn.schema, hierarchy.fn.name)
-  // Тригери ефектів дії: обидва кличуть одну функцію таблиці
-  const effects = effectsTriggerNames(table)
-  if (unit.name === effects.all || unit.name === effects.update) {
-    const fn = effectsFunctionName(table)
-    return qualified(fn.schema, fn.name)
-  }
-  const guard = rightsGuardNames(table).find(
-    (entry) => entry.trigger === unit.name
-  )
-  if (guard !== undefined)
-    return qualified(guard.function.schema, guard.function.name)
-  return undefined
+  }).find((e) => e.trigger === unit.name)
+  return entry === undefined
+    ? undefined
+    : qualified(entry.function.schema, entry.function.name)
 }
 
 /**
@@ -319,7 +263,9 @@ function platformFunctions(
   units: readonly CatalogUnit[],
   ctx: UnitsContext
 ): ReadonlySet<string> {
-  const found = new Set([MECHANICS, AUTHOR, KEY])
+  const found = new Set(
+    SHARED_TRIGGER_FUNCTIONS.map((fn) => qualified(fn.schema, fn.name))
+  )
   for (const unit of units) {
     if (unit.class !== "trigger") continue
     const fn = platformTriggerFunction(unit, ctx)

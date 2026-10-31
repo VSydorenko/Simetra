@@ -1,27 +1,15 @@
 import type { GrantStmt, Node, RoleSpec } from "libpg-query"
 import {
-  AUTHOR_FUNCTION,
-  KEY_FUNCTION,
-  MECHANICS_FUNCTION,
   authorTableColumns,
-  authorTriggerName,
-  authorUpdateTriggerName,
-  carrierFunctionNames,
-  carrierTriggerNames,
   contentChangeCondition,
-  effectsFunctionName,
-  effectsTriggerNames,
-  hierarchyNames,
-  keyTriggerNames,
-  rightsGuardNames,
-  mechanicsTriggerName,
-  mechanicsUpdateTriggerName,
+  platformTriggers,
   statementTargets,
   uniqueDifferences,
   unitSubjectKeys,
   valueAt,
   withoutLocations,
   type CompiledModel,
+  type PlatformTrigger,
   type PromotionObject,
   type PromotionRecord,
   type SqlParser,
@@ -1162,9 +1150,6 @@ function triggerReplacement(
       sameTree(withoutRowOperandCasts(when), expected)
   const isContent = sameCondition(content)
   const isAuthoredContent = sameCondition(authored)
-  const touch = (t: TriggerShape) =>
-    t.name === mechanicsTriggerName(table) &&
-    sameFunction(t.function, MECHANICS_FUNCTION)
   // На таблиці з копіями механіка оновлення — окремий тригер з умовою змісту
   const contentUpdate = (t: TriggerShape) =>
     t.timing === TRIGGER_BEFORE &&
@@ -1173,59 +1158,21 @@ function triggerReplacement(
     !t.special &&
     t.columns.length === 0 &&
     isAuthoredContent(t.when)
+  // Платформний тригер — за іменем і функцією з реєстру таблиці; тригер
+  // оновлення з копіями носіїв — лише разом з умовою змісту. Платформний
+  // тригер прийнятого не замінює, навіть коли той кличе функцію з тим самим
+  // іменем
+  const registry = platformTriggers({ schema: key.schema, name: table })
+  const matches = (e: PlatformTrigger) => (t: TriggerShape) =>
+    t.name === e.trigger &&
+    sameFunction(t.function, e.function) &&
+    (!e.contentUpdate || contentUpdate(t))
+  const platform = (t: TriggerShape) => registry.some((e) => matches(e)(t))
+  const mechanics = registry.filter((e) => e.family === "mechanics")
+  const touch = (t: TriggerShape) =>
+    mechanics.some((e) => !e.contentUpdate && matches(e)(t))
   const touchUpdate = (t: TriggerShape) =>
-    t.name === mechanicsUpdateTriggerName(table) &&
-    sameFunction(t.function, MECHANICS_FUNCTION) &&
-    contentUpdate(t)
-  // Тригер авторства (спека П4 §6.8) — платформний за іменем і функцією; на таблиці
-  // з копіями оновлення — окремий тригер з тією самою умовою, що в механіки
-  const author = (t: TriggerShape) =>
-    (t.name === authorTriggerName(table) &&
-      sameFunction(t.function, AUTHOR_FUNCTION)) ||
-    (t.name === authorUpdateTriggerName(table) &&
-      sameFunction(t.function, AUTHOR_FUNCTION) &&
-      contentUpdate(t))
-  // Тригери незмінності ключа (спека прав §7) — платформні за іменем і функцією
-  const keyNames = keyTriggerNames(table)
-  const keyGuard = (t: TriggerShape) =>
-    (t.name === keyNames.before || t.name === keyNames.after) &&
-    sameFunction(t.function, KEY_FUNCTION)
-  const carriers = carrierTriggerNames({ schema: key.schema, name: table })
-  const carrierFns = carrierFunctionNames({ schema: key.schema, name: table })
-  // Тригери копій носіїв — платформні: прийнятого тригера вони не замінюють,
-  // навіть коли той кличе функцію з тим самим іменем
-  const carrier = (t: TriggerShape) =>
-    (t.name === carriers.derive &&
-      sameFunction(t.function, carrierFns.derive)) ||
-    ((t.name === carriers.propagate || t.name === carriers.propagateInsert) &&
-      sameFunction(t.function, carrierFns.propagate))
-  // Тригери ефектів дії теж платформні: тригер з їхнім іменем, що
-  // кличе функцію ефектів, прийнятого тригера не замінює
-  const effects = effectsTriggerNames({ schema: key.schema, name: table })
-  const effectsFn = effectsFunctionName({ schema: key.schema, name: table })
-  const effect = (t: TriggerShape) =>
-    (t.name === effects.all || t.name === effects.update) &&
-    sameFunction(t.function, effectsFn)
-  const guards = rightsGuardNames({ schema: key.schema, name: table })
-  const guard = (t: TriggerShape) =>
-    guards.some(
-      (entry) =>
-        t.name === entry.trigger && sameFunction(t.function, entry.function)
-    )
-  // Тригери ієрархії (спека П4 §6.6) — платформні за іменем і функцією таблиці
-  const hierarchyFns = hierarchyNames({ schema: key.schema, name: table })
-  const hierarchy = (t: TriggerShape) =>
-    (t.name === hierarchyFns.insert || t.name === hierarchyFns.update) &&
-    sameFunction(t.function, hierarchyFns.fn)
-  const platform = (t: TriggerShape) =>
-    touch(t) ||
-    touchUpdate(t) ||
-    author(t) ||
-    keyGuard(t) ||
-    carrier(t) ||
-    effect(t) ||
-    guard(t) ||
-    hierarchy(t)
+    mechanics.some((e) => e.contentUpdate && matches(e)(t))
 
   // Механіка спрацьовує й на вставку — ширше за `moddatetime`, і це
   // посилення: дата й версія правильні й на вставці (спека промоції §8).

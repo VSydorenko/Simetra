@@ -88,6 +88,28 @@ export async function insert(
     ])
 }
 
+/**
+ * Сирота — рядок прав, який перевірка запису вже не пропустила б: так у базі
+ * лишається дельта після зміни коду, що звузила домен. Тригери прав
+ * вимикаються лише навколо вставки й лише в засіві тестової транзакції:
+ * відкат повертає їх, а FK — системні тригери — діють і далі. Без журналу й
+ * черги рядок не судиться на COMMIT — як і запис, зроблений до зміни коду.
+ * Вимкнути тригери може лише власник таблиць — сесія розгортання.
+ */
+export async function insertOrphan(
+  client: pg.Client,
+  table: string,
+  values: Record<string, unknown>
+): Promise<void> {
+  const columns = Object.keys(values)
+  await client.query(`ALTER TABLE public.${table} DISABLE TRIGGER USER`)
+  await client.query(
+    `INSERT INTO public.${table} (${columns.join(", ")}) VALUES (${columns.map((_, i) => `$${i + 1}`).join(", ")})`,
+    Object.values(values)
+  )
+  await client.query(`ALTER TABLE public.${table} ENABLE TRIGGER USER`)
+}
+
 export interface Assignment {
   archetype?: string
   customRole?: string

@@ -50,6 +50,7 @@ import {
   assignmentRow,
   describeTransaction,
   insert,
+  insertOrphan,
   globalDeltaRow,
   orgDeltaRow,
   outcome,
@@ -187,10 +188,20 @@ async function seedScopeKind(client: pg.Client): Promise<Seed> {
     ["deny", "task", "read", "any"],
     ["allow", "task", "update", "any"],
     ["allow", "announcement", "read", "any"],
+  ])
+  // Дельти поза доменом рівня `org` — сироти: перевірка запису на COMMIT
+  // їх уже не пропустила б, а читання мусить ігнорувати (fail-closed).
+  const orphans: Delta[] = [
     ["allow", "announcement", "create", "any"],
     ["allow", "global_role_assignments", "read", "any"],
     ["allow", "gone", "read", "any"],
-  ])
+  ]
+  for (const [i, delta] of orphans.entries())
+    await insertOrphan(
+      client,
+      "org_roles_delta",
+      orgDeltaRow(ids.A!, ids.custom!, i + 4, delta)
+    )
   await customRole("denyRead", ORG_ADMIN_ID, [["deny", "task", "read", "any"]])
   await customRole("extents", ORG_ADMIN_ID, [
     ["deny", "task", "read", "any"],

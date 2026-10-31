@@ -37,6 +37,8 @@ describe("standard column lookup rule", () => {
     ["a literal on the right", `c.origin.standard === "customRole"`],
     ["a literal on the left", `"customRole" !== c.origin.standard`],
     ["a one-word literal", `c.origin.standard == "ref"`],
+    ["an optional chain on the right", `c.origin?.standard === "customRole"`],
+    ["an optional chain on the left", `"customRole" !== c?.origin?.standard`],
     [
       "an object literal name",
       `standardLogicalName({ logicalName: "userKind" }, style)`,
@@ -57,6 +59,7 @@ describe("standard column lookup rule", () => {
 
   it.each([
     ["the non-standard check", `c.origin.standard === undefined`],
+    ["an optional non-standard check", `c.origin?.standard === undefined`],
     ["an element id", `standardElementId(id, { logicalName })`],
     ["a registry definition", `standardLogicalName(def, style)`],
     [
