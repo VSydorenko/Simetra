@@ -831,6 +831,34 @@ describe("messages catalog", () => {
     }
   })
 
+  it.each([
+    ["maintenance.model-mismatch", { applied: "h1", compiled: "h2" }],
+    ["maintenance.unknown-role", { role: "Admin" }],
+    ["maintenance.role-level", { role: "Admin", expected: "global" }],
+    ["maintenance.role-ambiguous", { roles: "Admin, Owner" }],
+    ["maintenance.unknown-scope-kind", { scopeKind: "org" }],
+    ["maintenance.no-catalog", { level: "global" }],
+    ["maintenance.scope-missing", { scope: "s1" }],
+    ["maintenance.unknown-user", { user: "u1" }],
+    ["maintenance.busy", {}],
+    ["maintenance.not-first", {}],
+    ["maintenance.holder-exists", { level: "scope:org" }],
+    ["maintenance.not-effective", { user: "u1" }],
+    ["maintenance.invalid-member", { path: "title" }],
+    ["maintenance.member-required", { attribute: "title" }],
+    ["maintenance.refused", { reason: "denied" }],
+    ["maintenance.outcome-unknown", {}],
+  ] as const)("%s names its parameters in both locales", (code, params) => {
+    const d = diagnostic(code, "", "", params)
+    expect(d.severity).toBe("error")
+    expect(d.hint).toBeDefined()
+    for (const message of [d.message, localize(d, "uk").message]) {
+      for (const value of Object.values(params)) {
+        expect(message).toContain(String(value))
+      }
+    }
+  })
+
   it("plan.rights-source-unknown-keys omits the rest when there is none", () => {
     const d = diagnostic("plan.rights-source-unknown-keys", "", "", {
       source: "grants",

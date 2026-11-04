@@ -96,6 +96,13 @@ export async function invoke<D>(
   input: unknown,
   o: InvokeOptions
 ): Promise<ToolResult<D>> {
+  // Перша перевірка: відмова каналу не залежить від входу, а розбір входу
+  // інструмента, якого на каналі немає, не повинен нічого про нього розкривати
+  if (tool.cliOnly && o.channel !== "cli")
+    return refused(
+      "cli-only",
+      `${tool.name} is available only from the command line. Nothing changed.`
+    )
   const parsed = tool.input.safeParse(input)
   if (!parsed.success) {
     const message = parsed.error.issues

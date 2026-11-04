@@ -8,7 +8,6 @@ import {
 } from "simetra/compiler"
 import {
   PLATFORM_ROLES,
-  RIGHTS_MAINTENANCE_SETTING,
   SESSION_CLAIMS_SETTING,
   defineObjectModule,
   type CommandError,
@@ -36,8 +35,10 @@ import {
   signUp,
 } from "../../../simetra/test/support"
 import {
+  heldResource,
   inTarget,
   seedMarker,
+  seedUnderMaintenance,
   throughPoolerAs,
   withRuntimeLogin,
 } from "./support/db"
@@ -90,21 +91,6 @@ const sessionOf = (user: string): SessionClaims => ({
   role: REQUEST_ROLE,
 })
 
-/** Транзакція засіву власником: закомічена, бо її читають інші сесії. */
-async function committed(
-  owner: pg.Client,
-  steps: () => Promise<void>
-): Promise<void> {
-  await owner.query("BEGIN")
-  try {
-    await steps()
-    await owner.query("COMMIT")
-  } catch (error) {
-    await owner.query("ROLLBACK").catch(() => undefined)
-    throw error
-  }
-}
-
 /**
  * Організація, користувач (реєстрацією: провізія дає ідентичність, з якої
  * `current_user_id()` читає `sub`), учасник і призначення `GaugeWriter`.
@@ -114,11 +100,8 @@ async function seedActor(owner: pg.Client): Promise<Actor> {
   const org = randomUUID()
   const member = randomUUID()
   let user = ""
-  await committed(owner, async () => {
+  await seedUnderMaintenance(owner, async () => {
     user = await signUp(owner)
-    await owner.query("SELECT set_config($1, 'on', true)", [
-      RIGHTS_MAINTENANCE_SETTING,
-    ])
     await owner.query("INSERT INTO public.organization (id) VALUES ($1)", [org])
     await owner.query(
       "INSERT INTO public.org_member (id, org_id, user_id) VALUES ($1, $2, $3)",
@@ -128,10 +111,6 @@ async function seedActor(owner: pg.Client): Promise<Actor> {
       "INSERT INTO public.org_role_assignments (id, org_id, subject, archetype) VALUES ($1, $2, $3, $4)",
       [randomUUID(), org, member, GAUGE_WRITER_ID]
     )
-    await owner.query("SET CONSTRAINTS ALL IMMEDIATE")
-    await owner.query("SELECT set_config($1, 'off', true)", [
-      RIGHTS_MAINTENANCE_SETTING,
-    ])
   })
   return { org, user, session: sessionOf(user) }
 }
@@ -153,80 +132,60 @@ async function seedRow(
  * Тінь з бажаним станом застосування (модель і `simetra.marker`), засів і дві
  * ролі входу; тримається, доки `close` не відпустить колбек `inTarget`.
  */
-function heldEnv() {
-  let release: (() => void) | undefined
-  let held: Promise<void> | undefined
-  return {
-    open: async (): Promise<Env> => {
-      const result = await compile(policyDomain(runtimeValuesLayer()))
-      expect(result.diagnostics).toEqual([])
-      const model = result.model!
-      const desired = await desiredForApply(model)
-      const released = new Promise<void>((resolve) => (release = resolve))
-      let loaded: ((env: Env) => void) | undefined
-      const ready = new Promise<Env>((resolve) => (loaded = resolve))
-      held = inTarget(desired.sql, desired.scope, async (url) => {
-        const owner = new pg.Client({ connectionString: url })
-        await owner.connect()
-        try {
-          await seedMarker(owner, model.hash)
-          const me = await seedActor(owner)
-          const other = await seedActor(owner)
-          const region = await seedRow(owner, "region", me.org)
-          const foreign = await seedRow(owner, GAUGE_TABLE, other.org)
-          await withRuntimeLogin(
-            url,
-            [PLATFORM_ROLES.command, REQUEST_ROLE],
-            (login) =>
-              withRuntimeLogin(
-                url,
-                [PLATFORM_ROLES.command],
-                async (commandOnly) => {
-                  const direct = new pg.Pool({ connectionString: login })
-                  const pooled = new pg.Pool({
-                    connectionString: throughPoolerAs(login),
+const heldEnv = () =>
+  heldResource<Env>(async (use) => {
+    const result = await compile(policyDomain(runtimeValuesLayer()))
+    expect(result.diagnostics).toEqual([])
+    const model = result.model!
+    const desired = await desiredForApply(model)
+    await inTarget(desired.sql, desired.scope, async (url) => {
+      const owner = new pg.Client({ connectionString: url })
+      await owner.connect()
+      try {
+        await seedMarker(owner, model.hash)
+        const me = await seedActor(owner)
+        const other = await seedActor(owner)
+        const region = await seedRow(owner, "region", me.org)
+        const foreign = await seedRow(owner, GAUGE_TABLE, other.org)
+        await withRuntimeLogin(
+          url,
+          [PLATFORM_ROLES.command, REQUEST_ROLE],
+          (login) =>
+            withRuntimeLogin(
+              url,
+              [PLATFORM_ROLES.command],
+              async (commandOnly) => {
+                const direct = new pg.Pool({ connectionString: login })
+                const pooled = new pg.Pool({
+                  connectionString: throughPoolerAs(login),
+                })
+                try {
+                  await use({
+                    model,
+                    catalog: buildRuntimeCatalog(model),
+                    owner,
+                    login,
+                    commandOnly,
+                    direct,
+                    pooled,
+                    me,
+                    other,
+                    region,
+                    foreign,
                   })
-                  try {
-                    loaded?.({
-                      model,
-                      catalog: buildRuntimeCatalog(model),
-                      owner,
-                      login,
-                      commandOnly,
-                      direct,
-                      pooled,
-                      me,
-                      other,
-                      region,
-                      foreign,
-                    })
-                    await released
-                  } finally {
-                    await direct.end()
-                    await pooled.end()
-                  }
-                },
-                "runtime_cmd"
-              )
-          )
-        } finally {
-          await owner.end()
-        }
-      })
-      // Ціль, що не завантажилась чи впала на засіві, завершує `held` раніше
-      return Promise.race([
-        ready,
-        held.then(() => {
-          throw new Error("target closed before the scenario")
-        }),
-      ])
-    },
-    close: async () => {
-      release?.()
-      await held
-    },
-  }
-}
+                } finally {
+                  await direct.end()
+                  await pooled.end()
+                }
+              },
+              "runtime_cmd"
+            )
+        )
+      } finally {
+        await owner.end()
+      }
+    })
+  })
 
 /** Відмова команди як `CommandError`; успіх — помилка тесту. */
 async function refusal(work: Promise<unknown>): Promise<CommandError> {

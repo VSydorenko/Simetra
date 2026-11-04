@@ -3,15 +3,32 @@ import type { DbConnection, EngineScope, Extracted } from "../engine"
 /**
  * Помилка оператора з SQLSTATE: з'єднання живе, транзакція відкочена. Клас
  * лежить у T2, а `pg` — лише в адаптері, тож раннер відрізняє збій кроку від
- * втрати з'єднання без залежності від драйвера.
+ * втрати з'єднання без залежності від драйвера. `detail` відрізняє причини
+ * одного коду (`42501`), а `column`/`constraint`/`table` називають, що саме
+ * порушено (`23502`, `23503`).
  */
 export class ApplyDbError extends Error {
+  readonly detail: string | undefined
+  readonly column: string | undefined
+  readonly constraint: string | undefined
+  readonly table: string | undefined
+
   constructor(
     message: string,
-    readonly sqlstate: string | undefined
+    readonly sqlstate: string | undefined,
+    extra: {
+      detail?: string
+      column?: string
+      constraint?: string
+      table?: string
+    } = {}
   ) {
     super(message)
     this.name = "ApplyDbError"
+    this.detail = extra.detail
+    this.column = extra.column
+    this.constraint = extra.constraint
+    this.table = extra.table
   }
 }
 

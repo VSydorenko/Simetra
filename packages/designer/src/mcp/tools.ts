@@ -9,7 +9,11 @@ import {
 } from "../io/report"
 import { TOOLS, type Tool, type ToolResult } from "../tools/catalog"
 import { invoke } from "../tools/invoke"
-import type { ApplyData, PlanData } from "../tools/apply-tools"
+import type {
+  ApplyData,
+  PlanData,
+  UnchangedPlanData,
+} from "../tools/apply-tools"
 import type { DiffData } from "../tools/database-tools"
 import type { DatabaseResource } from "../tools/types"
 
@@ -53,6 +57,9 @@ export function mcpInputSchema(tool: Tool): z.ZodType {
       previews = true
       break
   }
+  // Вхід `cliOnly` на MCP не доходить (`registerCatalog` його пропускає), а
+  // вхід-union не розширюється `extend`
+  if (tool.cliOnly) return tool.input
   if (!previews && !tool.destructive) return tool.input
   if (!(tool.input instanceof z.ZodObject)) {
     throw new Error(
@@ -112,7 +119,7 @@ function toResponse(
   // `planHash` — вхід `apply`: без нього в `structuredContent` агент не
   // підтвердить показаний план. Текст — той самий, що в CLI: дрейф першим
   if (tool.name === "plan") {
-    const data = result.data as PlanData | undefined
+    const data = result.data as PlanData | UnchangedPlanData | undefined
     return {
       isError: !ok,
       structuredContent: {
@@ -203,6 +210,8 @@ function toResponse(
 /** Реєструє весь каталог: транспорт лише переказує `confirm`/`dryRun` у `invoke`. */
 export function registerCatalog(server: McpServer, o: McpToolOptions): void {
   for (const tool of TOOLS) {
+    // Інструмент лише для командного рядка в MCP не реєструється
+    if (tool.cliOnly) continue
     server.registerTool(
       tool.name,
       {

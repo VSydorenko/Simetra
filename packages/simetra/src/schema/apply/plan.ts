@@ -148,9 +148,12 @@ import {
   type PlanStep,
 } from "./steps"
 import {
+  noRightsFacts,
+  objectRefs,
   readRightsSourceFacts,
   rightsSourceDiagnostics,
   rightsSourceInput,
+  type RightsOrphans,
 } from "./rights-sources"
 import { tableKey } from "./table-key"
 import { typeChangeRefusals, typeGuards, type TypeChange } from "./type-guard"
@@ -163,6 +166,11 @@ export interface PlanDatabases {
   scratch: ApplyDatabase
 }
 
+/**
+ * Результат плану. `rightsOrphans` — повний перелік сиріт прав цілі (П4
+ * §6.12): з нього клієнт складає пакет очистки, і саме по нього приходить
+ * повторним планом, коли застосовувати вже нічого. Відмова переліку не несе.
+ */
 export type PlanOutcome =
   | {
       status: "planned"
@@ -173,8 +181,13 @@ export type PlanOutcome =
        * (спека промоції §7.2): вивід їх лише лічить, без попередження.
        */
       expectedBlindFunctions: number
+      rightsOrphans: RightsOrphans
     }
-  | { status: "unchanged"; diagnostics: EngineDiagnostic[] }
+  | {
+      status: "unchanged"
+      diagnostics: EngineDiagnostic[]
+      rightsOrphans: RightsOrphans
+    }
   | { status: "refused"; diagnostics: EngineDiagnostic[] }
 
 /**
@@ -474,21 +487,18 @@ export async function buildPlan(
     model.contracts,
     model.physical,
     model.project.naming.attributeCase,
+    objectRefs(model.objects),
     state.status === "applied" ? state.marker.snapshot : undefined
   )
-  const sources = rightsSourceDiagnostics(
+  const rightsFacts =
     sourceInput.tables.length === 0
-      ? {
-          owners: [],
-          unknownKeys: [],
-          fullAccess: [],
-          orphans: { customRoles: [], assignments: [], more: 0 },
-        }
+      ? { owners: [], unknownKeys: [], ...noRightsFacts() }
       : await dbs.reader.transaction(o.target, "rollback", (tx) =>
           readRightsSourceFacts(tx, sourceInput)
         )
-  )
+  const sources = rightsSourceDiagnostics(rightsFacts)
   if (sources.refusal !== undefined) return refused([sources.refusal])
+  const rightsOrphans = rightsFacts.orphans
 
   // 2б. Свідок цілі під межею плану. Чужий тригер з іменем згенерованого на
   // таблиці провайдера — до гейта й кроків: дрейф його не бачить (таблиця
@@ -563,6 +573,7 @@ export async function buildPlan(
       fromHash,
       identity,
       targetOwners,
+      rightsOrphans,
       promotion: transition,
       file: input.file,
       diagnostics: dedupe([
@@ -629,7 +640,7 @@ export async function buildPlan(
   // знімка, ні дрейфу. Дрейф без кроків (зміна версій) — план із нулем кроків:
   // інакше дрейф не було б як прийняти, і кожен наступний план бачив би його
   if (actions.length === 0 && fromHash === model.hash && drift === null)
-    return { status: "unchanged", diagnostics }
+    return { status: "unchanged", diagnostics, rightsOrphans }
 
   // 7. Класи — від моделі вихідного стану плану, тобто живої цілі: з
   // порожньою моделлю кожна зміна типу стала б `destructive`
@@ -777,6 +788,7 @@ export async function buildPlan(
     status: "planned",
     artifact,
     expectedBlindFunctions: blindFunctions.expected.length,
+    rightsOrphans,
     diagnostics: dedupe([
       ...diagnostics,
       ...collected.diagnostics,
@@ -809,6 +821,8 @@ interface PromotionContext {
   /** Факти сервера й голова ledger цілі, прочитані разом зі станом. */
   identity: Pick<PlanArtifact, "server" | "ledgerHead">
   targetOwners: { session: string; owners: ObjectOwner[] }
+  /** Сироти прав цілі, прочитані до розгалуження промоції. */
+  rightsOrphans: RightsOrphans
   promotion: Extract<TransitionVerdict, { status: "promotion" }>
   /** Файл запису в `plans/`: його називають відмови виявлення. */
   file: string
@@ -1266,6 +1280,7 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
     status: "planned",
     artifact,
     expectedBlindFunctions: blindFunctions.expected.length,
+    rightsOrphans: c.rightsOrphans,
     diagnostics: dedupe([
       ...withClone,
       ...collected.diagnostics,

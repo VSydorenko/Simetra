@@ -2,7 +2,12 @@ import type { Diagnostic, Locale } from "simetra/compiler"
 import { localize } from "simetra/compiler"
 import { quoteIdent } from "simetra/model"
 import { LOCK_MODE_SQL } from "simetra/schema"
-import type { ApplyData, PlanData, PlanPromotion } from "../tools/apply-tools"
+import type {
+  ApplyData,
+  PlanData,
+  PlanPromotion,
+  UnchangedPlanData,
+} from "../tools/apply-tools"
 import type { DiffData } from "../tools/database-tools"
 
 export interface ReportOptions {
@@ -152,11 +157,13 @@ function promotionLines(p: PlanPromotion, needs: Set<string>): string[] {
  * SQL — у файлі плану; тут перший рядок.
  */
 export function renderPlan(
-  d: PlanData | undefined,
+  d: PlanData | UnchangedPlanData | undefined,
   report: string,
   o: { ok: boolean; written: boolean }
 ): string {
-  if (d === undefined)
+  // Сироти прав незмінного плану — у даних JSON-виводу й у попередженні
+  // звіту, тож текст лишається одним рядком
+  if (d === undefined || "unchanged" in d)
     return [
       o.ok
         ? "plan: nothing to apply; the database is at the metadata"

@@ -236,8 +236,10 @@ export type ExecuteOutcome =
  * Транзакційний, тож сесійного стану на цілі не лишається (спека промоції §7.2).
  * Спроба бере його без очікування: зайнятий замок — відмова, не черга. Пошук
  * після обриву з'єднання чекає на нього: так він не обганяє `COMMIT`.
+ * Експортовано, бо той самий ключ бере інструмент обслуговування прав
+ * (Р-A4-19): звірка хешу без TOCTOU і жодних двох запусків разом.
  */
-const ADVISORY_LOCK = "1397312837, 1"
+export const APPLY_ADVISORY_LOCK = "1397312837, 1"
 
 /**
  * Порядок блоків кроків за походженням (спека промоції §7.2):
@@ -679,7 +681,7 @@ async function runAttempt(
   // 1. Одне застосування на базу; зайнято — одразу відмова, без повторів
   phase("advisory")
   const [lock] = await tx.query<{ locked: boolean }>(
-    `SELECT pg_try_advisory_xact_lock(${ADVISORY_LOCK}) AS locked`
+    `SELECT pg_try_advisory_xact_lock(${APPLY_ADVISORY_LOCK}) AS locked`
   )
   if (lock?.locked !== true) throw stop("refused", "apply.busy")
 
@@ -2135,7 +2137,9 @@ async function afterLostConnection(
               "SELECT set_config('lock_timeout', $1, true), set_config('statement_timeout', $1, true)",
               [bound]
             )
-            await tx.query(`SELECT pg_advisory_xact_lock(${ADVISORY_LOCK})`)
+            await tx.query(
+              `SELECT pg_advisory_xact_lock(${APPLY_ADVISORY_LOCK})`
+            )
             return findApply(tx, applyId)
           })
           .catch(() => "unknown" as const)

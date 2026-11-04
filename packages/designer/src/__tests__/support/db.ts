@@ -1,6 +1,8 @@
 import { randomBytes } from "node:crypto"
 import pg from "pg"
+import { RIGHTS_MAINTENANCE_SETTING } from "simetra/model"
 import type { EngineScope, SchemaEngine } from "simetra/schema"
+import type { CommandDatabase } from "simetra/server"
 import { createPgDeltaEngine } from "../../schema-engine"
 import {
   testDatabaseName,
@@ -197,4 +199,119 @@ export async function seedMarker(
      ON CONFLICT (singleton) DO UPDATE SET snapshot_hash = EXCLUDED.snapshot_hash`,
     [hash]
   )
+}
+
+/** Транзакція засіву власником: закомічена, бо її читають інші сесії. */
+export async function committed(
+  owner: pg.Client,
+  steps: () => Promise<void>
+): Promise<void> {
+  await owner.query("BEGIN")
+  try {
+    await steps()
+    await owner.query("COMMIT")
+  } catch (error) {
+    await owner.query("ROLLBACK").catch(() => undefined)
+    throw error
+  }
+}
+
+/**
+ * Закомічений засів власником під режимом обслуговування прав: рядки
+ * довідників прав інакше відхилив би запобіжник `rights-context`. Відкладені
+ * запобіжники судяться ще в режимі — `SET CONSTRAINTS ALL IMMEDIATE` до
+ * вимкнення, а не на `COMMIT` уже без нього.
+ */
+export function seedUnderMaintenance(
+  owner: pg.Client,
+  steps: () => Promise<void>
+): Promise<void> {
+  return committed(owner, async () => {
+    await owner.query("SELECT set_config($1, 'on', true)", [
+      RIGHTS_MAINTENANCE_SETTING,
+    ])
+    await steps()
+    await owner.query("SET CONSTRAINTS ALL IMMEDIATE")
+    await owner.query("SELECT set_config($1, 'off', true)", [
+      RIGHTS_MAINTENANCE_SETTING,
+    ])
+  })
+}
+
+/** Оператор, який рантайм надіслав порту; `failed` — відповідь бази помилкою. */
+export interface RecordedStatement {
+  text: string
+  params: readonly (string | null)[]
+  failed?: { code?: string; detail?: string }
+}
+
+/**
+ * Порт команд, що записує кожен оператор і помилку, якою на нього відповіла
+ * база: так тест бачить, хто відмовив — T3 до надсилання чи база на
+ * конкретному операторі (`COMMIT`).
+ */
+export function recordingDatabase(inner: CommandDatabase): {
+  database: CommandDatabase
+  statements: RecordedStatement[]
+} {
+  const statements: RecordedStatement[] = []
+  return {
+    statements,
+    database: {
+      async connect() {
+        const client = await inner.connect()
+        return {
+          async query(text, params) {
+            const entry: RecordedStatement = { text, params: params ?? [] }
+            statements.push(entry)
+            try {
+              return await client.query(text, params)
+            } catch (error) {
+              const { code, detail } = error as {
+                code?: string
+                detail?: string
+              }
+              entry.failed = { code, detail }
+              throw error
+            }
+          },
+          release: (destroy) => client.release(destroy),
+        }
+      },
+    },
+  }
+}
+
+/**
+ * Ресурс колбек-помічника (`inTarget`, `withRuntimeLogin`), утриманий між
+ * `beforeAll` і `afterAll`: `open` чекає, доки `scope` віддасть значення, а
+ * `close` відпускає колбек і чекає його прибирання. Ресурс, що впав до
+ * значення, завершує `open` помилкою.
+ */
+export function heldResource<T>(
+  scope: (use: (value: T) => Promise<void>) => Promise<unknown>
+): { open: () => Promise<T>; close: () => Promise<void> } {
+  let release: (() => void) | undefined
+  let held: Promise<unknown> | undefined
+  return {
+    open: async () => {
+      const released = new Promise<void>((resolve) => (release = resolve))
+      let loaded: ((value: T) => void) | undefined
+      const ready = new Promise<T>((resolve) => (loaded = resolve))
+      held = scope(async (value) => {
+        loaded?.(value)
+        await released
+      })
+      return Promise.race([
+        ready,
+        held.then(() => {
+          throw new Error("the resource closed before the scenario")
+        }),
+      ])
+    },
+    close: async () => {
+      release?.()
+      await held
+    },
+  }
 }

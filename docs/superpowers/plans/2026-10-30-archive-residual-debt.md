@@ -323,6 +323,12 @@
   плоска тека» лінт не закріплює: шаблон дозволяє `./sub/x`, а
   `server-sources.test.ts` сканує лише верхній рівень, тож файл у підтеці
   обійшов би й тест джерел. Закріпити лінтом або тестом.
+- **Обхід реквізитів значень двічі.** `encodeMemberValues`
+  (`packages/simetra/src/model/runtime/values.ts`) і `writeAttributes`
+  (`packages/simetra/src/server/values.ts`) проходять набір реквізитів тим
+  самим алгоритмом (порядок каталогу, грант, пара, невідомі ключі після);
+  тест паритету порівнює лише успішний вихід. Злити в один обхід T0, коли A6
+  додасть третього споживача (`creatorMember`).
 
 ## 7. Тести
 
@@ -390,6 +396,11 @@
   `packages/designer/src/__tests__/command-runtime.db.test.ts` дублює
   `heldTarget` з `packages/designer/src/__tests__/carrier-locks.db.test.ts`;
   винести в `packages/designer/src/__tests__/support/`.
+- **Локальний будівник ролі адміністратора прав.** `rightsAdmins()` у
+  `packages/simetra/test/db/catalog-command-admin.db.test.ts` дублює
+  будівник `rightsAdminReadingMembers()`
+  (`packages/simetra/src/compiler/__tests__/fixtures/rights.ts`); перевести
+  файл на спільний будівник.
 
 ## 8. Designer
 

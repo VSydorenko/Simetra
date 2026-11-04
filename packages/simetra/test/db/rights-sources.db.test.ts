@@ -19,6 +19,8 @@ import {
 } from "../../src/compiler/__tests__/fixtures/rights"
 import {
   type RightsSourceInput,
+  noRightsFacts,
+  objectRefs,
   readRightsSourceFacts,
   rightsSourceInput,
 } from "../../src/schema/apply/rights-sources"
@@ -407,7 +409,8 @@ describe("adopted sources", () => {
     const full = rightsSourceInput(
       model.contracts,
       model.physical,
-      model.project.naming.attributeCase
+      model.project.naming.attributeCase,
+      objectRefs(model.objects)
     )
     // Предмет кейсу — таблиці джерел: системні довідники прав
     // читач теж додає до `tables`, але їхні факти — окремий рядок нижче
@@ -424,10 +427,7 @@ describe("adopted sources", () => {
       ),
       catalogs: [],
     }
-    const noRights = {
-      fullAccess: [],
-      orphans: { customRoles: [], assignments: [], more: 0 },
-    }
+    const noRights = noRightsFacts()
     const facts = (only: RightsSourceInput = input) => sourceFacts(client, only)
     const ownersOf = (...tables: [schema: string, name: string][]) =>
       facts({
@@ -704,7 +704,8 @@ describe("without users", () => {
       rightsSourceInput(
         model.contracts,
         model.physical,
-        model.project.naming.attributeCase
+        model.project.naming.attributeCase,
+        objectRefs(model.objects)
       )
     )
     const keysOf = (source: string) =>

@@ -17,6 +17,7 @@ export const TOOL_NAMES = [
   "plan",
   "apply",
   "roles",
+  "rights-maintenance",
 ] as const
 export type ToolName = (typeof TOOL_NAMES)[number]
 
@@ -97,6 +98,11 @@ export interface Tool<I extends z.ZodType = z.ZodType, D = unknown> {
   files: FilesAccess
   database: DatabaseAccess
   destructive: boolean
+  /**
+   * Лише командний рядок: інший канал отримує відмову `cli-only`, а новий
+   * канал не успадковує доступ до інструмента (Р-A4-7).
+   */
+  cliOnly?: true
   run(ctx: ToolContext, input: z.infer<I>): Promise<RunOutcome<D>>
 }
 
@@ -107,6 +113,7 @@ export type RefusalReason =
   | "no-database"
   | "unconfirmed"
   | "dry-run-unsupported"
+  | "cli-only"
   | "refused"
 
 export interface ToolResult<D = unknown> {
