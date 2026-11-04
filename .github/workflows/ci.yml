@@ -30,6 +30,10 @@ jobs:
           cache: pnpm
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+      # Одна політика версій для спільних залежностей пакетів (syncpack):
+      # розсинхрон тихо дає дві копії залежності в дереві споживача
+      - name: Dependency versions check
+        run: pnpm deps:check
       - name: Format check
         run: pnpm format:check
       - name: Lint
