@@ -1051,6 +1051,33 @@ export function rightsAdminReadingMembers(): Layer {
   }
 }
 
+/** Обов'язковий реквізит застосунку в рядку учасника `OrgMember`. */
+export const MEMBER_TITLE = "title"
+
+/**
+ * `OrgMember` з обов'язковим реквізитом застосунку без значення за
+ * замовчуванням: рядок учасника без нього база відхиляє (`23502`), тож нового
+ * учасника заводять лише з його значенням. Перевизначення повторює реквізит
+ * `user`: `withRoles` зливає файли лише на верхньому рівні ключів.
+ */
+export function requiredMemberAttribute(): Layer {
+  return {
+    [MEMBER_FILE]: {
+      attributes: [
+        refAttribute(6005, "user", "user_id", ref("Catalog", "Users")),
+        {
+          id: uuid(7530),
+          name: MEMBER_TITLE,
+          physicalName: MEMBER_TITLE,
+          type: "String",
+          length: 50,
+          required: true,
+        },
+      ],
+    },
+  }
+}
+
 export const TICKET_FILE = "catalogs/Ticket/Ticket.meta.json"
 export const TICKET_ID = uuid(6901)
 export const TICKET_TABLE = "ticket"
