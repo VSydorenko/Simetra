@@ -13,7 +13,7 @@ import {
   type MarkerRecord,
 } from "simetra/schema"
 
-const ENGINE: EngineIdentity = { name: "pg-delta", version: "1.0.0-alpha.56" }
+const ENGINE: EngineIdentity = { name: "pg-delta", version: "1.0.0-alpha.60" }
 const NEXT_ENGINE: EngineIdentity = {
   name: "pg-delta",
   version: "1.0.0-alpha.57",
@@ -294,7 +294,7 @@ describe("driftGate", () => {
         code: "apply.versions-changed",
         severity: "warning",
         params: {
-          engineFrom: "pg-delta 1.0.0-alpha.56",
+          engineFrom: "pg-delta 1.0.0-alpha.60",
           engineTo: "pg-delta 1.0.0-alpha.57",
           fingerprintFrom: FINGERPRINT_VERSION,
           fingerprintTo: FINGERPRINT_VERSION + 1,

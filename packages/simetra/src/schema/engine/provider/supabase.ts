@@ -17,6 +17,7 @@ import { PROVIDER_SCHEMAS, quoteIdent } from "simetra/model"
  * провайдера з цілі.
  */
 export const SUPABASE_EXTENSIONS: readonly string[] = [
+  "orioledb",
   "pg_graphql",
   "pg_stat_statements",
   "pgcrypto",

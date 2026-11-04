@@ -107,7 +107,7 @@ const record: ApplyRecord = {
       },
     ],
   },
-  engine: { name: "pg-delta", version: "1.0.0-alpha.56" },
+  engine: { name: "pg-delta", version: "1.0.0-alpha.60" },
   targetFingerprint: fingerprint("target"),
   resultFingerprint: fingerprint("result"),
   allow: ["drop:table:app.old"],

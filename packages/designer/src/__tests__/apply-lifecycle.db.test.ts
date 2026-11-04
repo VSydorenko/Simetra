@@ -437,10 +437,9 @@ describe("apply lifecycle", () => {
     ...type,
   })
 
-  // Порядок колонок — не властивість бажаного стану (платформна спека §6.9):
-  // колонка типу, який створює той самий план, на цілі стає останньою, бо
-  // двигун не вбудовує її в CREATE TABLE раніше за тип. Гейти «проєкт ↔ ціль»
-  // і `diff` цього не рахують
+  // Порядок колонок — не властивість бажаного стану (платформна спека §6.9),
+  // але колонку типу, який створює той самий план, двигун з pg-delta
+  // 1.0.0-alpha.60 лишає на її місці: ціль збігається з тінню
   it("applies a table that uses a type created in the same plan", async () => {
     await inTarget(EMPTY, scope, async (url) => {
       const dir = await newProject()
@@ -469,7 +468,7 @@ describe("apply lifecycle", () => {
         }),
       })
       expect(await appliedWithOrder(dir, url, "app.card")).toEqual({
-        target: ["1:id", "2:label", "3:hue"],
+        target: ["1:id", "2:hue", "3:label"],
         shadow: ["1:id", "2:hue", "3:label"],
       })
 
@@ -487,7 +486,7 @@ describe("apply lifecycle", () => {
         }),
       })
       expect(await appliedWithOrder(dir, url, "app.swatch")).toEqual({
-        target: ["1:id", "2:label", "3:c"],
+        target: ["1:id", "2:c", "3:label"],
         shadow: ["1:id", "2:c", "3:label"],
       })
     })
