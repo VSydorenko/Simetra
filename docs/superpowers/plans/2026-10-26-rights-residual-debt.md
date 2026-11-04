@@ -15,6 +15,15 @@
   обслуговування для цих входів закриває залишковий перелік
   `PROVIDER_LOGIN_ROLES` у `maintenanceSql`, але інші наслідки такого
   власника лишаються. Кандидат — гейт застосування.
+- **Інструмент обслуговування не перевіряє посилань у `member`.**
+  `rights-maintenance` вставляє рядок учасника від власника після
+  `encodeMemberValues` (`packages/simetra/src/schema/apply/rights-maintenance.ts`),
+  без перевірок видимості посилань ядра `<t>_save` (`referenceViolations`,
+  `packages/simetra/src/compiler/catalog-command/units.ts`); для масивів
+  `Ref` і поліморфних пар FK немає, тож висяче посилання чи посилання в
+  чужий скоуп проходить. Зробити разом з A6 одним механізмом: рендер умов
+  `referenceViolations` над рядком `jsonb_populate_record`, спільний для ядра,
+  `creatorMember` і інструмента.
 
 ## 2. Джерела членства й призначень
 
