@@ -48,6 +48,9 @@ const USER = uuid(9701)
 const SCOPE = uuid(9702)
 const MEMBER = uuid(9703)
 const NEW_ID = uuid(9704)
+// Другий згенерований id: різні id учасника й призначення відрізняють суб'єкта
+// призначення від його власного ключа
+const SECOND_ID = uuid(9705)
 const TARGET = { url: "postgres://maintenance.test/db" }
 
 const first: RightsMaintenanceRequest = {
@@ -114,6 +117,10 @@ const aliasOf = (sql: string): string | undefined =>
 function fakeDatabase(state: State, applied: string) {
   const log: (Sent | "BEGIN" | "COMMIT" | "ROLLBACK")[] = []
   let transactions = 0
+  // Кожен `AS id` дає наступний id: перший — учасник (якщо новий) або
+  // призначення, другий — призначення після учасника
+  const generated = [NEW_ID, SECOND_ID]
+  let generatedCount = 0
   const rows = (sql: string): Record<string, unknown>[] => {
     const yes = (flag: boolean | undefined) => (flag === true ? [{ x: 1 }] : [])
     switch (aliasOf(sql)) {
@@ -136,7 +143,7 @@ function fakeDatabase(state: State, applied: string) {
       case "effective":
         return yes(state.effective ?? true)
       case "id":
-        return [{ id: NEW_ID }]
+        return [{ id: generated[generatedCount++]! }]
       default:
         return []
     }
@@ -356,7 +363,7 @@ describe("runRightsMaintenance: the write sequence", () => {
         ok: true,
         done:
           request.action === "tenantFullAccess"
-            ? { assignment: NEW_ID, member: NEW_ID }
+            ? { assignment: SECOND_ID, member: NEW_ID }
             : { assignment: NEW_ID },
       })
       const sent = fake.statements()
@@ -397,9 +404,18 @@ describe("runRightsMaintenance: the write sequence", () => {
       expect(sent.filter(isMode)).toHaveLength(1)
       // Архетип — роль запиту, і він — лише параметр
       const assignment = sent.filter((s) => isWrite(s.sql)).at(-1)!
-      expect(assignment.params).toContain(roleId)
-      expect(assignment.params).toContain(
+      // Колонки вставки: ключ, [скоуп], суб'єкт, архетип — порядок параметрів
+      // той самий, тож суб'єкт — передостанній; `toContain` пропустив би
+      // підміну суб'єкта на id учасника, що вже є в параметрах як ключ
+      expect(assignment.params).toHaveLength(
+        request.action === "tenantFullAccess" ? 4 : 3
+      )
+      expect(assignment.params.at(-1)).toBe(roleId)
+      expect(assignment.params.at(-2)).toBe(
         request.action === "tenantFullAccess" ? NEW_ID : USER
+      )
+      expect(assignment.params[0]).toBe(
+        request.action === "tenantFullAccess" ? SECOND_ID : NEW_ID
       )
     }
   )
@@ -566,7 +582,7 @@ describe("runRightsMaintenance: refusals inside the transaction", () => {
     })
     const writes = fake.statements().filter((s) => isWrite(s.sql))
     expect(writes).toHaveLength(1)
-    expect(writes[0]!.params).toContain(MEMBER)
+    expect(writes[0]!.params.at(-2)).toBe(MEMBER)
   })
 
   it.each<[string, () => CompiledModel]>([
