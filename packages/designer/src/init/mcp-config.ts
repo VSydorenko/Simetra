@@ -87,12 +87,7 @@ export async function mcpLaunch(
   const manifest = JSON.parse(
     await readFile(join(pkgDir, "package.json"), "utf8")
   ) as { bin?: unknown }
-  const bin =
-    typeof manifest.bin === "string"
-      ? manifest.bin
-      : isTable(manifest.bin)
-        ? manifest.bin.simetra
-        : undefined
+  const bin = isTable(manifest.bin) ? manifest.bin.simetra : undefined
   if (typeof bin !== "string") {
     throw new UsageError(`${DESIGNER_PACKAGE} manifest has no simetra bin`)
   }
@@ -328,9 +323,32 @@ const HEADER = new RegExp(
 )
 const ANY_HEADER = /^\s*\[/
 const ARGS_KEY = /^\s*args\s*=/
-// Хвіст після масиву — лише пробіли й коментар, тож `]` у коментарі не
-// сплутається з кінцем масиву
-const ARGS_LINE = /^(\s*args\s*=\s*)\[.*\](\s*(?:#.*)?)$/
+const ARGS_LINE = /^(\s*args\s*=\s*)(\[.*)$/
+const TRAILER = /^\s*(?:#.*)?$/
+
+/**
+ * Межа масиву в рядку `args`: `]` може стояти і в елементі (`"a]#x"`), і в
+ * коментарі (`# see [docs]`), тож жоден регулярний вираз її не знайде. Кінець
+ * — перша `]`, після якої лише коментар і до якої текст розбирається як масив
+ * рядків.
+ */
+function splitArray(rest: string): [string, string] | undefined {
+  for (let i = rest.indexOf("]"); i !== -1; i = rest.indexOf("]", i + 1)) {
+    const candidate = rest.slice(0, i + 1)
+    const tail = rest.slice(i + 1)
+    if (TRAILER.test(tail) && isStringArray(candidate)) return [candidate, tail]
+  }
+  return undefined
+}
+
+function isStringArray(array: string): boolean {
+  try {
+    const { args } = parse(`args = ${array}`)
+    return Array.isArray(args) && args.every((a) => typeof a === "string")
+  } catch {
+    return false
+  }
+}
 
 /**
  * Замінює масив у єдиному однорядковому `args` єдиної таблиці
@@ -350,8 +368,9 @@ function replaceArgsLine(text: string, args: unknown[]): string | undefined {
     if (ARGS_KEY.test(lines[i])) argLines.push(i)
   const at = argLines.length === 1 ? argLines[0] : undefined
   const match = at === undefined ? null : ARGS_LINE.exec(lines[at])
-  if (at === undefined || !match) return undefined
-  lines[at] = `${match[1]}${array}${match[2]}`
+  const split = match ? splitArray(match[2]) : undefined
+  if (at === undefined || !match || !split) return undefined
+  lines[at] = `${match[1]}${array}${split[1]}`
   return lines.join("\n")
 }
 

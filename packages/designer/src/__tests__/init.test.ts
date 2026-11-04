@@ -3,17 +3,18 @@ import {
   lstat,
   mkdir,
   readFile,
+  readlink,
   rm,
   stat,
   symlink,
   utimes,
-  writeFile,
 } from "node:fs/promises"
-import { dirname, join } from "node:path"
+import { join } from "node:path"
 import { parseArgs } from "citty"
 import { afterEach, describe, expect, it } from "vitest"
 import { initArgs, runInit } from "../commands/init"
-import { initProject, PKG, projectTree } from "./helpers/init-project"
+import { applyInit, InitApplyError, planInit } from "../init/plan"
+import { initProject, PKG, projectTree, put } from "./helpers/init-project"
 
 const disposers: (() => Promise<void>)[] = []
 afterEach(async () => {
@@ -31,11 +32,6 @@ async function project(options?: Parameters<typeof initProject>[0]) {
 // ключі (зокрема camelCase-аліаси й невідомі прапорці), що й справжній запуск
 const run = (root: string, ...raw: string[]) =>
   runInit(parseArgs(raw, initArgs), root, "linux")
-
-async function put(root: string, rel: string, content: string): Promise<void> {
-  await mkdir(dirname(join(root, rel)), { recursive: true })
-  await writeFile(join(root, rel), content)
-}
 
 const exists = (path: string) =>
   lstat(path).then(
@@ -209,14 +205,73 @@ describe("simetra init", () => {
     }
   })
 
-  it("reports a file-system error while applying with code 2", async () => {
+  it.each([
+    {
+      name: "own stale link",
+      setup: (root: string) =>
+        symlink(
+          `../../../elsewhere/${PKG}/skills/a`,
+          join(root, ".claude/skills/a")
+        ),
+    },
+    {
+      // Так git на Windows без `core.symlinks` розгортає закомічений симлінк
+      name: "file with the link target",
+      setup: (root: string) =>
+        put(root, ".claude/skills/a", `../../${PKG}/skills/a`),
+    },
+  ])("relinks $name", async ({ setup }) => {
     const root = await project()
-    // Корінь лише для читання: план чистий, а перший же запис падає — так
-    // виглядає гонка з іншим процесом між планом і застосуванням
-    await chmod(root, 0o555)
-    disposers.push(() => chmod(root, 0o755))
+    await mkdir(join(root, ".claude/skills"), { recursive: true })
+    await setup(root)
     const result = await run(root)
-    expect(result.exitCode).toBe(2)
-    expect(result.stderr).toMatch(/^error: \.agents\/skills\/a: EACCES$/m)
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout).toContain("relink .claude/skills/a")
+    const path = join(root, ".claude/skills/a")
+    expect(await readlink(path)).toBe(`../../${PKG}/skills/a`)
+    expect(await readFile(join(path, "SKILL.md"), "utf8")).toBe("# a")
+    expect((await run(root, "--check")).exitCode).toBe(0)
   })
+
+  it("follows an ancestor symlink to the config directory", async () => {
+    const root = await project()
+    await mkdir(join(root, "real-vscode"))
+    await symlink("real-vscode", join(root, ".vscode"), "dir")
+    const result = await run(root, "--agents", "vscode")
+    expect(result).toMatchObject({ exitCode: 0, stderr: "" })
+    const config = JSON.parse(
+      await readFile(join(root, "real-vscode/mcp.json"), "utf8")
+    )
+    expect(config.servers.simetra.command).toBe("node")
+    expect((await lstat(join(root, ".vscode"))).isSymbolicLink()).toBe(true)
+  })
+
+  it("names the action path of a file-system error while applying", async () => {
+    const root = await project()
+    const plan = await planInit(root, ["claude"], "linux")
+    // Файл на місці теки між планом і застосуванням — гонка з іншим процесом;
+    // помилка не залежить від прав, тож тест чесний і під root
+    await put(root, ".agents", "not a dir")
+    const error = await applyInit(plan).catch((e: unknown) => e)
+    expect(error).toBeInstanceOf(InitApplyError)
+    expect(error).toMatchObject({
+      path: join(root, ".agents/skills/a"),
+      code: "ENOTDIR",
+    })
+  })
+
+  // root обходить права теки, тож під ним запис не впаде; мапінг помилки
+  // застосування на код 2 інакше перевіряти через `runInit` нічим
+  it.skipIf(process.getuid?.() === 0)(
+    "reports a file-system error while applying with code 2",
+    async () => {
+      const root = await project()
+      // Корінь лише для читання: план чистий, а перший же запис падає
+      await chmod(root, 0o555)
+      disposers.push(() => chmod(root, 0o755))
+      const result = await run(root)
+      expect(result.exitCode).toBe(2)
+      expect(result.stderr).toMatch(/^error: \.agents\/skills\/a: EACCES$/m)
+    }
+  )
 })

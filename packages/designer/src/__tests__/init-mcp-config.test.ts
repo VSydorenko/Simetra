@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { parse } from "smol-toml"
@@ -14,6 +14,7 @@ import {
 } from "../init/mcp-config"
 import { DESIGNER_PACKAGE } from "../init/skills"
 import type { InitAction, InitPlan } from "../init/types"
+import { projectTree, put } from "./helpers/init-project"
 
 const PKG = `node_modules/${DESIGNER_PACKAGE}`
 const BIN = `${PKG}/dist/main.js`
@@ -70,32 +71,16 @@ async function project(
   return { root, pkgDir: installedPackageDir(root, DESIGNER_PACKAGE) }
 }
 
-async function put(root: string, rel: string, content: string): Promise<void> {
-  await mkdir(dirname(join(root, rel)), { recursive: true })
-  await writeFile(join(root, rel), content)
-}
-
 const json = (v: unknown) => JSON.stringify(v, null, 2)
-
-async function tree(dir: string, prefix = ""): Promise<string[]> {
-  const out: string[] = []
-  for (const e of await readdir(dir, { withFileTypes: true })) {
-    if (e.name === "node_modules") continue
-    const rel = prefix + e.name
-    out.push(rel)
-    if (e.isDirectory()) out.push(...(await tree(join(dir, e.name), rel + "/")))
-  }
-  return out.sort()
-}
 
 /** План лише читає диск: дерево проєкту до й після однакове. */
 async function plan(
   root: string,
   agents: readonly Agent[] = AGENTS
 ): Promise<InitPlan> {
-  const before = await tree(root)
+  const before = await projectTree(root)
   const result = await planMcpConfigs(root, agents, LAUNCH)
-  expect(await tree(root)).toEqual(before)
+  expect(await projectTree(root)).toEqual(before)
   return result
 }
 
@@ -409,6 +394,17 @@ describe("planMcpConfigs: JSON clients", () => {
     ])
   })
 
+  it("follows an ancestor symlink to a directory", async () => {
+    const { root } = await project()
+    await mkdir(join(root, "real-vscode"))
+    await symlink("real-vscode", join(root, ".vscode"), "dir")
+    const action = onlyWrite(await plan(root, ["vscode"]))
+    expect(action).toMatchObject({
+      path: join(root, ".vscode/mcp.json"),
+      creates: true,
+    })
+  })
+
   it("writes only the selected agents", async () => {
     const { root } = await project()
     const p = await plan(root, ["claude"])
@@ -501,6 +497,22 @@ describe("planMcpConfigs: codex TOML", () => {
     await put(root, CODEX, head + line(OLD_BIN) + tail)
     const action = onlyWrite(await plan(root, ["codex"]))
     expect(action.content).toBe(head + line(BIN) + tail)
+    await applyAndReplan(root, action, ["codex"])
+  })
+
+  // `]` стоїть і в коментарі, і в елементі: межу масиву визначає розбір, а
+  // не перша чи остання дужка в рядку
+  it.each([
+    ["comment ending with ]", "", " # see [docs]"],
+    ["element with ]#", ', "a]#x"', " # mine"],
+    ["element with ] #x", ', "a] #x"', ""],
+  ])("fixes the codex args line: %s", async (_name, extra, comment) => {
+    const { root } = await project()
+    const head = '[mcp_servers.simetra]\ncommand = "node"\nargs = '
+    const line = (bin: string) => `${head}["${bin}", "mcp"${extra}]${comment}\n`
+    await put(root, CODEX, line(OLD_BIN))
+    const action = onlyWrite(await plan(root, ["codex"]))
+    expect(action.content).toBe(line(BIN))
     await applyAndReplan(root, action, ["codex"])
   })
 

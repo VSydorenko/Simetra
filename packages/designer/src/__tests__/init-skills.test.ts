@@ -138,6 +138,22 @@ describe("planSkillLinks", () => {
     expect(p.notes).toEqual([{ kind: "foreign-skill", path }])
   })
 
+  // Файл на місці скіла наш лише тоді, коли в ньому рівно ціль лінка
+  // (розгорнутий git-ом симлінк); нотатки власника не чіпаємо. Чуже ім'я поза
+  // пакетом — не сирота, тож і без нотатки
+  it.each([
+    { name: "a", notes: ["foreign-skill"] },
+    { name: "old", notes: [] },
+  ])("leaves a foreign plain file alone: $name", async ({ name, notes }) => {
+    const { root, pkgDir } = await project()
+    await mkdir(join(root, ".claude/skills"), { recursive: true })
+    await writeFile(join(root, ".claude/skills", name), "my notes")
+    const p = await plan(root, pkgDir)
+    const path = join(root, ".claude/skills", name)
+    expect(p.actions.filter((a) => a.path === path)).toEqual([])
+    expect(p.notes).toEqual(notes.map((kind) => ({ kind, path })))
+  })
+
   it("removes an own orphan link", async () => {
     const { root, pkgDir } = await project()
     await link(root, ".claude/skills/old", target("old"))

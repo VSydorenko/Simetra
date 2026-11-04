@@ -1,6 +1,6 @@
 import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import { DESIGNER_PACKAGE } from "../../init/skills"
 
 export const PKG = `node_modules/${DESIGNER_PACKAGE}`
@@ -40,4 +40,14 @@ export async function projectTree(dir: string, prefix = ""): Promise<string[]> {
       out.push(...(await projectTree(join(dir, e.name), rel + "/")))
   }
   return out.sort()
+}
+
+/** Файл проєкту разом із теками-предками. */
+export async function put(
+  root: string,
+  rel: string,
+  content: string
+): Promise<void> {
+  await mkdir(dirname(join(root, rel)), { recursive: true })
+  await writeFile(join(root, rel), content)
 }
