@@ -139,8 +139,8 @@ Postgres 17 локального стека Supabase, Supavisor (transaction-р�
 
 **Files:** лише читання; звіт — під цією задачею в плані.
 
-- [ ] **Крок 1:** `orient --plan` цього файлу; розбіжності — архітекторці.
-- [ ] **Крок 2:** записати фактом:
+- [x] **Крок 1:** `orient --plan` цього файлу; розбіжності — архітекторці.
+- [x] **Крок 2:** записати фактом:
   - склад `policyDomain(adminRoles(), commandCoreLayer())` (`fixtures/rights.ts`):
     довідники `OrgRoles`, `OrgRoleAssignments`, `GlobalRoles`,
     `GlobalRoleAssignments`, «Користувачі», `OrgMember`, `Ticket` з ядром;
@@ -163,8 +163,192 @@ Postgres 17 локального стека Supabase, Supavisor (transaction-р�
     ціль `inTarget` і які з'єднання закрити перед `CREATE DATABASE … TEMPLATE`;
   - де в T3 стан спроби транзакції (поле для ознаки Р-A4-17) і де
     `runPhase` / `runNested` / `ctx.read` беруть ціль каталогу.
-- [ ] **Крок 3:** якщо `postgres` через пулер дає інший `session_user` чи
+- [x] **Крок 3:** якщо `postgres` через пулер дає інший `session_user` чи
   тегований суперкористувач не входить — архітекторці до Задачі 9.
+
+#### Звіт Задачі 0
+
+Дерево: `feat/p4-a4` на `917e41e4`. Код не змінено; тимчасові проби (три
+файли `zz-probe0*`) видалено, `git status` чистий. DB-проби йшли лише крізь
+`pnpm --filter … test:db` (сторож стека, тег прогону), ролі й тіні — із тегом
+і прибрані самим прогоном; сторож стека не побачив різниці. Крок 3 не
+спрацював: `needsArchitect` не потрібен.
+
+**Крок 1. `orient --plan`:** ✓ 54, ✗ 9. Усі 9 `MISSING` — файли, які план
+створює (`values.ts`, `values.test.ts` у `model/runtime`, `rights-maintenance.ts`
+і його тест у `schema/apply`, `rights-maintenance-tool.ts`, його тест,
+`apply-database.test.ts`, `rights-admin-commands.db.test.ts`,
+`rights-maintenance.db.test.ts`). Серед символів `APPLY_ADVISORY_LOCK` і
+`RightsOrphans` ще не існують — так і заплановано (`ADVISORY_LOCK` лежить у
+`schema/apply/execute.ts` приватною сталою `"1397312837, 1"`, береться
+`pg_try_advisory_xact_lock`). Розбіжностей якорів, що міняють обсяг, немає;
+дрібні уточнення — у «Нотатках» нижче.
+
+**Крок 2. Факти.**
+
+- **Склад `policyDomain(adminRoles(), commandCoreLayer())`** (проба
+  `buildRuntimeCatalog` + `compile`, діагностик 0). Об'єкти ядра рантайму:
+  `GlobalRoleAssignments`, `GlobalRoles`, `OrgMember`, `OrgRoleAssignments`,
+  `OrgRoles`, `Organization`, `Project`, `Region`, `TaskComment`, `Ticket`,
+  `Users`. `Task` — документ, ядра не має. Контексти операцій: системні
+  довідники прав (`Org*`, `Global*`) — `administerRights` на кожній операції
+  (`create`, `update`, `markDeletion`; призначення ще й `delete`); решта —
+  `create`/`update`/`markDeletion` за іменем операції; `Users` — лише `update`,
+  `Organization` — `update`, `markDeletion`.
+  Ролі: `OrgAdmin` (`ORG_ADMIN_ID`, рівень `org`, `fullAccess`) — у
+  `rolesAndSets()`; `GlobalAdmin` (`GLOBAL_ADMIN_ID`, `global`, `fullAccess`) —
+  в `adminRoles()`; `RightsAdmin` (`RIGHTS_ADMIN_ID`, `org`): `read` +
+  `administerRights` на `OrgRoles` і `OrgRoleAssignments`, `read` `Task`;
+  **`read` на `OrgMember` у нього немає** (див. «Нотатки» п. 3);
+  `TicketWriter` (`TICKET_WRITER_ID`, `org`): `read`, `create`, `update`,
+  `markDeletion` на `Ticket`, обсяг `any`. Архетип для кастомної ролі ⊆ прав
+  `RightsAdmin`: `TaskViewer` (`TASK_VIEWER_ID`, `read` `Task` `any`) — його ж
+  беруть наявні тести (`catalog-command-admin.db.test.ts`). Також у шарі:
+  `TaskEditor`, `ProjectReader`, `MemberEditor` (`read`, `update` на `OrgMember`).
+  `OrgMember` **має ядро**: `create`/`update`/`markDeletion`, колонка скоупу
+  `org_id`; реквізити зі статусом «вставляє команда»: `org` (скоуп, обов'язковий),
+  `code`, `description`, `user` (`Ref`, не обов'язковий) — для `encodeMemberValues`
+  із `forced` = (ключ, скоуп, користувач) лишаються `code` і `description`.
+  Колонки `OrgRoleAssignments`: `org`, `subject` (UUID, обов'язковий),
+  `archetype`, `customRole`, `container`, `code`, `description`; `OrgRoles`:
+  `org`, `archetype` (обов'язковий), `order`, `code`, `description`.
+- **`RoleContract.assignable` є** (`packages/simetra/src/compiler/rights/contracts.ts`,
+  `assignable: role.assignable`; схема `packages/simetra/src/model/schemas/rights.ts`
+  — `z.boolean().default(true)`). Ролі лежать у `model.contracts.roles`
+  (`RoleContract[]`), каталоги прав рівня — `model.contracts.rightsCatalogs`
+  (`level`, `roles.{table,delta}`, `assignments.table`), членство —
+  `model.contracts.membership`.
+- **Вид скоупу:** `CompiledScopeKind.name` (`packages/simetra/src/compiler/compile.ts`):
+  у фікстурі `org`, `physicalName` `org_id`, `setFunction` `public.org_member_member_scopes`.
+  **Корінь:** `root: { objectId } | { external: { schema, table, column } }`.
+  У фікстурі — `{ objectId }` довідника `Organization` (таблиця `organization`,
+  ключ `id`); таблицю для `objectId` дає `mainTableOf(model.physical, objectId)`
+  (експортовано з `simetra/compiler`), для зовнішнього кореня — прямо
+  `schema.table.column`.
+- **`insertOrphan`** — `packages/simetra/test/db/rights-seed.ts`:
+  `insertOrphan(client, table, values)` вимикає `ALTER TABLE … DISABLE TRIGGER USER`
+  навколо вставки (потрібен власник таблиці). `packages/simetra/test/support.ts`
+  його **не реекспортує** (реекспорти — лише `./db/auth` `signUp`, `./db/connection`,
+  `./db/fingerprint`, `./db/catalog`). З ідентифікаторів ролей `support.ts` дає
+  лише `ORG_ADMIN_ID`, `TICKET_WRITER_ID`, `TICKET_TARGETS_READER_ID`,
+  `GAUGE_WRITER_ID`; **немає** `RIGHTS_ADMIN_ID`, `TASK_VIEWER_ID`, `TASK_EDITOR_ID`,
+  `GLOBAL_ADMIN_ID`, `TASK_WRITER_ID`, `MEMBER_EDITOR_ID`, а також `role`, `grant`,
+  `objects`, `ROLE_FILE`, `compileRights`. Також `rights-seed.insert()` для
+  таблиць прав потребує попереднього `deploy(client, model)` на тому самому
+  клієнті (інакше кидає) — на цілі, розгорнутій інструментами, `deploy` не
+  викликався, тож Задача 8 бере свій `seedUnderMaintenance`, а не `insert`.
+- **Розгортання моделі справжнім `plan`+`apply`:** зразок
+  `packages/designer/src/__tests__/apply-lifecycle.db.test.ts`:
+  `inTarget("select 1;", scope, url => …)` → тека метаданих (`mkdtemp`, у
+  `node_modules` симлінк на `packages/simetra`, файли з `acceptDebt(...)`) →
+  `databaseResource({ SIMETRA_DATABASE_URL: url }, { url: "SIMETRA_DATABASE_URL" })`
+  → `invoke(toolByName("plan"), {}, opts)` → `PlanData { file, planHash,
+  requiredPermissions, … }` → `invoke(toolByName("apply"), { plan: file, planHash,
+  allow: requiredPermissions }, opts)`; `opts` = `{ dir, readOnly: false,
+  allowDatabaseWrite: true, dryRun: false, confirmed: true, channel: "cli",
+  database }`. **Проба на справжній моделі `policyDomain(adminRoles(),
+  commandCoreLayer())`:** `compile` — 0 діагностик; `plan` 10,4 с (попередження
+  `apply.first-apply`, `plan.foreign-exclusive-lock`, `plan.numbering-not-generated`
+  ×14, `plan.schema-only-proof`; `requiredPermissions` порожній; 1261 крок);
+  `apply` `committed`, 2,3 с, `attempts: 1`; `simetra.marker.snapshot_hash` =
+  `model.hash`, `simetra.applied_snapshot_hash()` = `model.hash`, у `public` 25
+  таблиць; повторний `plan` — `ok`, `data` не задано (`unchanged` без даних, як
+  описує Задача 4). Модель з `defaultSchema` типовим `public` і `scope =
+  { schemas: ["public"], provider: "supabase" }` для `inTarget` працює; весь файл
+  з однією пробою — 25 с стінного часу. Отже «справжній marker» Задачі 8
+  здійсненний без `seedMarker`.
+- **`session_user` через пулер** (проба на локальному стеку): `SIMETRA_TEST_POOLER_URL`
+  за замовчуванням — користувач `postgres.pooler-dev`; запит через нього повертає
+  `session_user = current_user = postgres`, `application_name = Supavisor`,
+  `is_superuser = off`, `rolcreaterole`, `rolbypassrls` як у прямого входу.
+  Тобто режим обслуговування (`session_user = current_user`, не з
+  `PROVIDER_LOGIN_ROLES`) пулер не ламає; форма `postgres.<tenant>` — лише в
+  рядку підключення, не в `session_user`. Прямий вхід: `session_user = postgres`,
+  `application_name = simetra_db_<тег>`.
+- **Тегована `LOGIN SUPERUSER`:** `CREATE ROLE "simetra_<мітка>_<тег>" LOGIN
+  SUPERUSER PASSWORD '…'`, створена під `testSuperuserUrl()` (`supabase_admin`),
+  входить паролем **і прямим портом, і через `throughPoolerAs`**
+  (`session_user = current_user = <тегована роль>`, `is_superuser = on`).
+  Ім'я не з `PROVIDER_LOGIN_ROLES`. Прибиралася через `dropRoles` після
+  `pg_terminate_backend` її бекендів (як `withRuntimeLogin`); у проби не лишилось
+  слідів. Висновок для Задачі 9: умову `session_user = current_user`
+  `maintenanceSql` (`packages/simetra/src/compiler/rights/guard-units.ts`) перевіряють
+  `SECURITY DEFINER`-тригери; тегований суперкористувач має
+  `session_user` ≠ власник функцій (`postgres`) — це і є механізм відмови
+  (на цьому кроці не доводилось: його доведе саме тест Задачі 9).
+- **`withCopy`** (`packages/designer/src/__tests__/support/db.ts`):
+  `withCopy(clause, fn)` робить `CREATE DATABASE "<simetra_copy_<тег>_…>" OWNER
+  postgres <clause>` під суперкористувачем і `DROP DATABASE … WITH (FORCE)` у
+  `finally`; `fn(url, name)` бере URL копії для типової тестової ролі. Копію цілі
+  `inTarget` робить пункт `template "<ім'я бази цілі>"` (зразки:
+  `templateOf(url)` у `promotion-commit.db.test.ts`,
+  `` `template ${nameOf(url)}` `` в `execute-plan.db.test.ts`). `TEMPLATE` вимагає,
+  щоб до цілі не було відкритих з'єднань: інструменти `plan`/`apply` і
+  `query()` закривають пул/клієнта по виклику, але **тримані тестом `pg.Client`
+  (власник засіву, суперкористувач-спостерігач), `pg.Pool` ролі входу й
+  `withRuntimeLogin`-ролі треба закрити (`end()`) до `withCopy`**.
+- **Стан спроби в T3 і ціль каталогу:** клас `Transaction`
+  (`packages/simetra/src/server/transaction.ts`) — поля `terminal`, `changes`,
+  `afterCommit`, `user`, `act`; новий екземпляр на кожну спробу в `attempt(...)`
+  (`new Transaction(client, state)`), тож ознака бар'єру як поле `Transaction`
+  чиста на повторі. `runPhase(tx, op)`
+  (`packages/simetra/src/server/phase.ts`): `targetOf(catalog, op)` дає
+  `{ object, target }`, `target.context` — дія контексту фази; **точка постановки
+  виклику ядра** — `tx.enqueue([{ CONTEXT_TEXT… }, call], { kind: "write", … })`
+  одним блоком після хука `beforeWrite`; хук `onWrite` — після. Старт фази — на
+  початку `runPhase` (до `beforeWrite`) — місце для ознаки. `runNested`
+  (там само) валідує вхід (`prepareInput`) і викликає `runPhase`. Хуки:
+  `callHook`/`contextOf` у `packages/simetra/src/server/hook-context.ts`:
+  `ctx.run` → `track → phase.runNested(operation)` → `runPhase`; `ctx.read` →
+  `track → prepareRead(catalog, query)` (дає `object: RuntimeObject` цілі) →
+  `tx.enqueue([statement], { kind: "read", object })` — це **точка перевірки
+  ознаки для читань**. Черга — `Transaction.enqueue` (FIFO, `this.tail`).
+
+**Нотатки (уточнення якорів, обсяг не міняють).**
+
+1. `administerRightsAction` **не реекспортується** з `simetra/model`:
+   `packages/simetra/src/model/kinds/registry.ts` дає `STANDARD_ACTIONS` та
+   інше з `./actions`, але не сам об'єкт. Задача 6 додає реекспорт
+   (план це й передбачає: «якщо його немає»); T3 порівнює
+   `target.context === administerRightsAction.name`. Вплив на спеку: немає.
+2. Задача 6 крок 3 називає `Project` об'єктом застосунку «з роллю запису з
+   `writeRoles()`». У моделі `catalog-command-admin.db.test.ts`
+   (`policyDomain(writeRoles(), adminRoles(), rightsAdmins(), nickname())`)
+   `Project` має ядро (проба: `create`/`update`/`markDeletion`), **але жодна роль
+   не дає запису на `Project`** (`PROJECT_WRITER_ID` — контейнерна роль, що
+   пише `Task`). Придатний об'єкт — `Bulletin` (`BULLETIN_FILE`, реквізит `text`,
+   має ядро `create`/`update`/`markDeletion`): `TaskWriter`
+   (`TASK_WRITER_ID`, рівень `org`) дає на ньому `read`, `create`, `update`
+   `any`. Рядків `Bulletin` засів (`seedAdministration`) не створює: DB-кейс
+   вставляє його сам (`insert(client, "bulletin", { id, org_id, text })`).
+   Вплив на спеку: немає.
+3. Задачі 8–9 і `RightsAdmin` з `adminRoles()`: призначення адресує учасника
+   лише за явного `read` на довіднику членства, інакше `command.invalid`
+   `subject` (доведено `catalog-command-admin.db.test.ts` › `rights admin without
+   read on membership → command.invalid subject`; там `RightsAdmin` отримує
+   `read` на `OrgMember` локальним шаром `rightsAdmins()`, неекспортованим).
+   Задача 8 має дати актору `admin` `read` на `OrgMember` — або локальним шаром
+   у своєму тесті, або експортованим шаром у `fixtures/rights.ts`. Окремої ролі
+   «лише адміністрування» для сценарію передачі `fullAccess` у фікстурах немає
+   готової в `adminRoles()`; є `RIGHTS_ONLY_ADMIN_ID` (`analysisRoles()`, `org`,
+   `read`+`administerRights` на `OrgRoles`/`OrgRoleAssignments`, без `read` на
+   `OrgMember`) — теж потребує `read` на членстві для адресації учасника.
+   Вплив на спеку: немає.
+4. `support.ts` не віддає нічого з `rights-seed` і більшість id ролей (див.
+   вище) — Задача 8 «Modify `packages/simetra/test/support.ts`» має додати
+   `insertOrphan`, `RIGHTS_ADMIN_ID`, `TASK_VIEWER_ID`, `GLOBAL_ADMIN_ID`,
+   `TASK_WRITER_ID` (за потреби `TASK_EDITOR_ID`, `MEMBER_EDITOR_ID`, `role`,
+   `grant`, `objects`, `ROLE_FILE`) — реекспорт, без логіки.
+5. `encodeParam` (читання `where`) лишається в T3 `values.ts` і імпортує
+   `encodeItemValue`/`encodePair` з `simetra/model`; `read.ts` і `decode.ts`
+   переводяться на імпорт (план їх уже називає). Вплив на спеку: немає.
+6. У `hooks.test.ts` об'єкт `RIGHTS` (`rightsRole` з `fixtures.ts`) уже є
+   «другим об'єктом»; `read-runtime.test.ts` читає його публічним `runtime.read`
+   (поза командою) — бар'єр Р-A4-17 його не торкається. Які саме тести
+   `hooks.test.ts`/`transaction.test.ts` почервоніють після Задачі 6 (фаза
+   `RIGHTS` перед фазою чи `ctx.read` застосунку) — не перевірялося: це
+   визначить червоний прогін Задачі 6; план переводить їх на об'єкт застосунку
+   (`client`).
 
 ### Задача 1: T3 — відмова на `COMMIT` і самопризначення
 
