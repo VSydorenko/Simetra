@@ -3,9 +3,11 @@ import { readFile } from "node:fs/promises"
 import { resolve } from "node:path"
 import { promisify } from "node:util"
 import { expect, it } from "vitest"
+import { initProject } from "./helpers/init-project"
 
 const exec = promisify(execFile)
 const PACKAGE = resolve(__dirname, "../..")
+const BIN = resolve(PACKAGE, "bin/simetra.mjs")
 
 it("bin runs under node", async () => {
   const { stdout } = await exec(
@@ -47,4 +49,31 @@ it("--version prints the package version", async () => {
     }
   )
   expect(stdout.trim()).toBe(version)
+}, 60_000)
+
+it("init rejects an unknown agent with code 2", async () => {
+  await expect(
+    exec(process.execPath, [BIN, "init", "--agents", "bogus"], {
+      cwd: PACKAGE,
+    })
+  ).rejects.toMatchObject({ code: 2, stderr: expect.stringContaining("bogus") })
+}, 60_000)
+
+it("init --check exits with the code of its result", async () => {
+  const { root, dispose } = await initProject()
+  try {
+    // Пакет-фікстура є, лінків немає: розбіжність — код 1, не 0 і не 2
+    await expect(
+      exec(process.execPath, [BIN, "init", "--check"], { cwd: root })
+    ).rejects.toMatchObject({ code: 1 })
+  } finally {
+    await dispose()
+  }
+}, 60_000)
+
+it("--help lists init", async () => {
+  const { stdout } = await exec(process.execPath, [BIN, "--help"], {
+    cwd: PACKAGE,
+  })
+  expect(stdout).toMatch(/\binit\b/)
 }, 60_000)

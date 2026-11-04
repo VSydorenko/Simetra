@@ -34,12 +34,46 @@ options. Commands that work with the database (`introspect`, `diff`, `plan`,
 `apply` needs the hash of a reviewed plan file, and `roles` creates the
 platform's cluster roles once, before the first `plan`.
 
+## Start a project
+
+```bash
+pnpm add simetra
+pnpm add -D @simetrajs/designer
+pnpm exec simetra init [--agents claude,codex,cursor,vscode]
+```
+
+`init` is idempotent and writes only inside the project:
+
+- relative symlinks `.agents/skills/<skill>` and `.claude/skills/<skill>` to
+  the skills in `node_modules/@simetrajs/designer/skills/`, so an update of
+  the package updates the skills too (on Windows, junctions; a git checkout
+  without `core.symlinks` turns the committed links into files, and `init`
+  replaces them with junctions);
+- the MCP server entry `simetra` for each agent in `--agents` (default:
+  `claude`): `.mcp.json`, `.codex/config.toml` (`[mcp_servers.simetra]`),
+  `.cursor/mcp.json` or `.vscode/mcp.json`. The server starts as
+  `node <path to the installed bin> mcp`.
+
+Another directory or link with the same skill name, and another `simetra`
+entry in a config, stay as they are; `init` prints a note. `init --dry-run`
+prints the changes without writing; `init --check` exits with code 1 if
+`init` would change anything. If `init` refuses, it writes nothing; an I/O
+failure in the middle of writing may leave part of the changes done, and
+running `init` again completes them.
+
+Commit the links and the configs, and run `simetra init --check` in CI with
+the same `--agents`. The server writes metadata by default; to forbid writes,
+add `--read-only` to the `args` of the entry by hand. Codex reads
+`.codex/config.toml` only in a trusted project. In a monorepo, run `init` in
+the root the agent starts from, where the `metadata` directory lives.
+
 ## Agent skills
 
 The package ships skills for AI agents working in a Simetra project under
 `skills/`: `simetra-metadata` (editing metadata through the tools) and
 `simetra-adoption` (bringing an existing database under metadata). They
-match the installed version of the tools.
+match the installed version of the tools. `simetra init` links them into the
+project for the agents.
 
 ## License
 

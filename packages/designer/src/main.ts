@@ -18,6 +18,7 @@ const main = defineCommand({
       ])
     ),
     mcp: () => import("./commands/mcp").then((m) => m.default),
+    init: () => import("./commands/init").then((m) => m.default),
   },
 })
 
