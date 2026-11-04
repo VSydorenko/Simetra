@@ -373,6 +373,16 @@
   повтор на тому самому SHA пройшов. Таймаут наосліп не піднімати: спершу
   знайти, що в кейсі повільне (компіляція фікстури, імпорт, I/O), і
   прибрати це.
+- **Шаблонна база стану «до» для DB-тестів промоції.** Один конвеєр
+  промоції поодинці — 10–12 с, з них розгортання стану «до» (`establish` /
+  `promoted` у хелперах `packages/designer/src/schema-engine/__tests__/build-plan.support.ts`
+  і `packages/designer/src/__tests__/promotion-lifecycle.db.test.ts`) —
+  близько 4 с, тобто 35–40 %. У `build-plan-promotion.db.test.ts` близько 44
+  конвеєрів на файл. Кандидат: `CREATE DATABASE … TEMPLATE` з одного
+  розгорнутого стану на файл. Зачіпає run-tag, сторож і очищення
+  (`packages/simetra/test/db/`). Суміжні кандидати швидкодії DB-наборів —
+  [борг П3-2b](2026-10-15-p3-2b-residual-debt.md) § 3. Рішення про
+  виконання — окремо.
 - **`23514` у ТЧ наскрізь.** Мапінг `23514` на реквізит перевірено лише
   для основної таблиці (`packages/simetra/src/server/__tests__/errors.test.ts`,
   DB `packages/designer/src/__tests__/command-runtime.db.test.ts`); CHECK
