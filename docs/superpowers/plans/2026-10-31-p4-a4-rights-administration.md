@@ -391,10 +391,10 @@ Postgres 17 локального стека Supabase, Supavisor (transaction-р�
 - Produces: коди (усі `error`): `maintenance.model-mismatch { applied, compiled }`, `maintenance.unknown-role { role }`, `maintenance.role-level { role, expected }`, `maintenance.role-ambiguous { roles }`, `maintenance.unknown-scope-kind { scopeKind }`, `maintenance.no-catalog { level }`, `maintenance.scope-missing { scope }`, `maintenance.unknown-user { user }`, `maintenance.busy {}`, `maintenance.not-first {}`, `maintenance.holder-exists { level }`, `maintenance.not-effective { user }`, `maintenance.invalid-member { path }`, `maintenance.member-required { attribute }`, `maintenance.refused { reason }`, `maintenance.outcome-unknown {}`.
 - Produces: `new ApplyDbError(message, sqlstate, extra?: { detail?: string; column?: string; constraint?: string; table?: string })` з однойменними `readonly` полями.
 
-- [ ] **Крок 1:** `messages.test.ts` червоніє від кодів без текстів; додати тексти en/uk і підказки (`refused` — увійти роллю, що застосувала план, спека П4 §6.2; `outcome-unknown` — запустити ще раз).
-- [ ] **Крок 2:** тест `normalize keeps detail, column, constraint and table` → реалізувати.
-- [ ] **Крок 3:** `pnpm --filter simetra test messages`, `pnpm --filter @simetrajs/designer test apply-database`, `typecheck`, `lint`.
-- [ ] **Крок 4:** коміт `feat(schema): діагностики режиму обслуговування прав і поля помилки бази`.
+- [x] **Крок 1:** `messages.test.ts` червоніє від кодів без текстів; додати тексти en/uk і підказки (`refused` — увійти роллю, що застосувала план, спека П4 §6.2; `outcome-unknown` — запустити ще раз).
+- [x] **Крок 2:** тест `normalize keeps detail, column, constraint and table` → реалізувати.
+- [x] **Крок 3:** `pnpm --filter simetra test messages`, `pnpm --filter @simetrajs/designer test apply-database`, `typecheck`, `lint`.
+- [x] **Крок 4:** коміт `feat(schema): діагностики режиму обслуговування прав і поля помилки бази`.
 
 ### Задача 4: повний перелік сиріт у плані
 
