@@ -3,6 +3,7 @@ import { readFile, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import { serializeCanonical, type PromotionRecord } from "simetra/compiler"
 import { describe, expect, it, vi } from "vitest"
+import { TOOL_PIPELINE } from "./helpers/budget"
 import { writeChanges } from "../io/metadata-dir"
 import { toolByName } from "../tools/catalog"
 import {
@@ -36,7 +37,8 @@ const rename = {
   newName: "Money",
 }
 
-describe("mutation tools", () => {
+// Мутація через інструмент і компіляція результату: дві компіляції проєкту на тест — бюджет `TOOL_PIPELINE`
+describe("mutation tools", TOOL_PIPELINE, () => {
   it("only delete is destructive; every mutation writes files", () => {
     for (const name of ["create", "add", "rename", "delete", "promote"]) {
       const t = toolByName(name)!

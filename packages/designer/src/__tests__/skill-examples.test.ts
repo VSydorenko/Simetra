@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { describe, expect, it } from "vitest"
+import { TOOL_PIPELINE } from "./helpers/budget"
 import {
   addElement,
   addElementInput,
@@ -60,7 +61,8 @@ describe("simetra-adoption skill", () => {
   })
 })
 
-describe("simetra-metadata skill", () => {
+// Приклади скілу женуть промоцію: компіляція, промоція й компіляція результату — бюджет `TOOL_PIPELINE`
+describe("simetra-metadata skill", TOOL_PIPELINE, () => {
   useTmpProjects()
 
   it("the promote example promotes an adopted table", async () => {

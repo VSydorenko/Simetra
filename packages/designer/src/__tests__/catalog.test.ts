@@ -4,6 +4,7 @@ import { dirname, join, resolve } from "node:path"
 import { buildRuntimeCatalog, compile, type FileChange } from "simetra/compiler"
 import { z } from "zod"
 import { describe, expect, it, vi } from "vitest"
+import { TOOL_PIPELINE } from "./helpers/budget"
 import { runTool, toolCommand } from "../cli/command"
 import { readMetadataDir } from "../io/metadata-dir"
 import { mcpInputSchema } from "../mcp/tools"
@@ -46,7 +47,8 @@ async function brokenProject(): Promise<string> {
   return dir
 }
 
-describe("tool catalog", () => {
+// Інструменти компіляції й виправлення через `invoke`: компіляція проєкту на кожен виклик — бюджет `TOOL_PIPELINE`
+describe("tool catalog", TOOL_PIPELINE, () => {
   it("names every tool once", () => {
     expect(TOOLS.map((t) => t.name).sort()).toEqual([
       "add",
@@ -222,7 +224,8 @@ describe("tool catalog", () => {
   })
 })
 
-describe("invoke refusals", () => {
+// Відмови й попередній перегляд через `invoke`: дія з dry-run і компіляція проєкту — бюджет `TOOL_PIPELINE`
+describe("invoke refusals", TOOL_PIPELINE, () => {
   it("delete still needs confirm when writes are on", async () => {
     const dir = await project()
     await invoke(

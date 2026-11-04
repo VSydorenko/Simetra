@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs"
 import { join } from "node:path"
 import { describe, expect, it, vi } from "vitest"
+import { TOOL_PIPELINE } from "./helpers/budget"
 import { commandByName, runTool, toolCommand } from "../cli/command"
 import { cliInput } from "../cli/input"
 import { renderResult } from "../cli/render"
@@ -34,7 +35,8 @@ async function withScratch(): Promise<string> {
   return dir
 }
 
-describe("cli adapter", () => {
+// Команди через адаптер CLI: мутація й компіляція результату — бюджет `TOOL_PIPELINE`
+describe("cli adapter", TOOL_PIPELINE, () => {
   it("has a subcommand for every catalog tool", () => {
     expect(TOOLS.map((t) => t.name)).toEqual([...TOOL_NAMES])
     for (const name of TOOL_NAMES) {
