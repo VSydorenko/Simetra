@@ -365,14 +365,13 @@
   оновити `packages/simetra/schemas/*.schema.json`; команду
   (`UPDATE_JSON_SCHEMAS=1 pnpm --filter simetra test json-schema`) знає лише
   код тесту. Підказка в повідомленні `expect` або скрипт пакета.
-- **Тайм-аути 5 с у юнітах designer під навантаженням.** Кейси
-  `packages/designer/src/__tests__/apply-outcome.test.ts` «reports the outcome
-  as unknown, never as nothing written» і
-  `packages/designer/src/__tests__/catalog-mutations.test.ts` «rename writes
-  on ok» перевищили 5000 мс у повному `pnpm test` під навантаженням машини;
-  повтор на тому самому SHA пройшов. Таймаут наосліп не піднімати: спершу
-  знайти, що в кейсі повільне (компіляція фікстури, імпорт, I/O), і
-  прибрати це.
+- **Кеш скомпільованого референсного домену в тестах операцій.** Тести
+  операцій `simetra` компілюють референсний домен заново в більшості кейсів
+  (`packages/simetra/src/compiler/__tests__/operations-rename.test.ts`,
+  `operations-create.test.ts`, `operations-fix.test.ts`), бо операції
+  приймають файли й компілюють усередині. Кеш однієї компіляції на файл
+  потребує, щоб операція приймала вже скомпільовану модель, — це зміна API
+  операцій, тож окремим рішенням.
 - **Шаблонна база стану «до» для DB-тестів промоції.** Один конвеєр
   промоції поодинці — 10–12 с, з них розгортання стану «до» (`establish` /
   `promoted` у хелперах `packages/designer/src/schema-engine/__tests__/build-plan.support.ts`
