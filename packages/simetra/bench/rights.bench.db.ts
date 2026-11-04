@@ -10,6 +10,9 @@ import {
   SESSION_CLAIMS_SETTING,
 } from "simetra/model"
 import {
+  BENCH_TEAM_SEAT_TABLE,
+  BENCH_TEAM_SET_FUNCTION,
+  BENCH_ZONE_TABLE,
   CHECKLIST_TABLE,
   ORG_ADMIN_ID,
   ORG_MEMBER_ROLE_ID,
@@ -17,6 +20,7 @@ import {
   adminRoles,
   compileRights,
   policyDomain,
+  snapshotBenchDomain,
 } from "../src/compiler/__tests__/fixtures/rights"
 import { signUp } from "../test/db/auth"
 import { asRole, testDatabaseUrl } from "../test/db/connection"
@@ -236,10 +240,118 @@ async function readForms(
   return { cells, timedOut }
 }
 
-const compiled = async () => {
-  const result = await compileRights(policyDomain(adminRoles()))
+const compiled = async (files = policyDomain(adminRoles())) => {
+  const result = await compileRights(files)
   expect(result.diagnostics).toEqual([])
   return result.model!
+}
+
+/**
+ * Роль команд з повним DML і членством з SET, як у DB-тестах запобіжників:
+ * розгортання їх не дає, і без них `SET ROLE` ролі команд відмовляє.
+ */
+async function commandRole(client: pg.Client): Promise<void> {
+  await client.query(
+    `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ${PLATFORM_ROLES.command}`
+  )
+  await client.query(
+    `GRANT ${PLATFORM_ROLES.command} TO CURRENT_USER WITH SET TRUE`
+  )
+}
+
+/** Зразки серверного заміру на функцію (Р3-9 (а)): не менше 31. */
+const FACT_SAMPLES = 31
+/** Викликів функції в одному зразку. */
+const FACT_CALLS = 1000
+
+/**
+ * Рядок сценарію 6: функція факту, її варіант і медіана часу виклику з
+ * довірчим інтервалом. Варіант — окремий рядок, а не колонка: Задача 5 плану
+ * Права-3 додає варіанти «живий» і «зі знімком» тими самими рядками.
+ */
+interface FactRow {
+  fact: string
+  variant: string
+  volume: string
+  median: string
+  ci: string
+}
+const factRows: FactRow[] = []
+
+const us = (value: number) => `${value.toFixed(2)} µs`
+
+/**
+ * 95 % довірчий інтервал медіани за порядковими статистиками (без
+ * припущення про розподіл): ранги n/2 ∓ 1,96·√n/2. Зразки мікросекунд мають
+ * важкий правий хвіст піків стеку, тож нормальне наближення середнього тут
+ * збрехало б.
+ */
+function medianInterval(values: number[]): [number, number] {
+  const sorted = [...values].sort((a, b) => a - b)
+  const n = sorted.length
+  const half = (1.96 * Math.sqrt(n)) / 2
+  const low = Math.max(1, Math.floor(n / 2 - half))
+  const high = Math.min(n, Math.ceil(n / 2 + half))
+  return [sorted[low - 1]!, sorted[high - 1]!]
+}
+
+/**
+ * Функція, яку міряє сценарій 6: `from` — вираз `FROM` однієї форми для
+ * кожної сторони (`PERFORM count(*) FROM <from>`).
+ */
+interface FactCall {
+  fact: string
+  variant: string
+  from: string
+}
+
+/**
+ * Серверний замір функцій фактів (Р3-9 (а)): на кожну функцію — тимчасова
+ * plpgsql-функція з циклом `FACT_CALLS` викликів між двома
+ * `clock_timestamp()`, тож мережа й розбір запиту в замір не входять, а
+ * план `PERFORM` кешований. Зразки чергуються між функціями зі зсувом
+ * порядку на кожному колі: дрейф стеку лягає на всі функції порівну. Перше
+ * коло — прогрів, не зразок. Тимчасові функції зникають з відкатом сценарію.
+ */
+async function sampleFacts(
+  client: pg.Client,
+  calls: readonly FactCall[],
+  volume: string
+): Promise<void> {
+  for (const [i, call] of calls.entries()) {
+    await client.query(
+      `CREATE FUNCTION pg_temp.bench_fact_${i}(k int) RETURNS double precision LANGUAGE plpgsql AS $bench$
+       DECLARE t0 timestamptz;
+       BEGIN
+         t0 := clock_timestamp();
+         FOR i IN 1..k LOOP
+           PERFORM count(*) FROM ${call.from};
+         END LOOP;
+         RETURN extract(epoch FROM clock_timestamp() - t0) * 1e6 / k;
+       END $bench$`
+    )
+  }
+  const samples = calls.map((): number[] => [])
+  for (let round = 0; round <= FACT_SAMPLES; round++) {
+    for (let j = 0; j < calls.length; j++) {
+      const i = (j + round) % calls.length
+      const { rows: t } = await client.query<{ us: number }>(
+        `SELECT pg_temp.bench_fact_${i}($1) AS us`,
+        [FACT_CALLS]
+      )
+      if (round > 0) samples[i]!.push(t[0]!.us)
+    }
+  }
+  for (const [i, call] of calls.entries()) {
+    const [low, high] = medianInterval(samples[i]!)
+    factRows.push({
+      fact: call.fact,
+      variant: call.variant,
+      volume,
+      median: us(median(samples[i]!)),
+      ci: `${us(low)} – ${us(high)}`,
+    })
+  }
 }
 
 describe("rights limits benchmark", () => {
@@ -267,6 +379,19 @@ describe("rights limits benchmark", () => {
             `| ${r.scenario} | ${r.volume} | ${cell(r.list)} | ${cell(r.point)} | ${cell(r.count)} | ${cell(r.operator)} |`
         ),
         "",
+        ...(factRows.length === 0
+          ? []
+          : [
+              `6 fact functions, server-side: ${FACT_CALLS.toLocaleString("en")} calls per sample, ${FACT_SAMPLES} interleaved samples, median per call with 95% CI of the median`,
+              "",
+              "| Fact | Variant | Volume | Median per call | 95% CI |",
+              "| --- | --- | --- | --- | --- |",
+              ...factRows.map(
+                (r) =>
+                  `| ${r.fact} | ${r.variant} | ${r.volume} | ${r.median} | ${r.ci} |`
+              ),
+              "",
+            ]),
       ].join("\n")
     )
   })
@@ -587,14 +712,7 @@ describe("rights limits benchmark", () => {
     "5 guard trigger cost",
     async () => {
       await scenario(await compiled(), async (client) => {
-        // Роль команд і членство з SET, як у DB-тестах запобіжників: розгортання
-        // їх не дає, і без них `SET ROLE` ролі команд відмовляє
-        await client.query(
-          `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ${PLATFORM_ROLES.command}`
-        )
-        await client.query(
-          `GRANT ${PLATFORM_ROLES.command} TO CURRENT_USER WITH SET TRUE`
-        )
+        await commandRole(client)
         const org = randomUUID()
         const adminMember = randomUUID()
         const admin = await signUp(client)
@@ -727,6 +845,245 @@ describe("rights limits benchmark", () => {
           volume: "1,000 assignment rows",
           operator: await runs(reference),
         })
+      })
+    },
+    TIMEOUT
+  )
+
+  /**
+   * (6) Серверний замір публічних функцій фактів актора (план Права-3,
+   * Р3-9 (а)) на малому обсязі: користувач — учасник трьох тенантів
+   * (`OrgAdmin`, `OrgMember`, `TaskViewer`), 10 значень виміру `region`,
+   * 5 зон і 5 місць у командах. Функції кличе власник із claims
+   * користувача: вони `SECURITY DEFINER`, тож роль викликача змінила б лише
+   * перевірку `EXECUTE`. Перелік `calls` — дані: Задача 5 плану додає
+   * варіанти «живий» і «зі знімком» тими самими записами, а функцію множини
+   * виду — ще й обгорткою `rights_scope_set`, не змінюючи цих рядків.
+   */
+  it(
+    "6 fact function overhead",
+    async () => {
+      await scenario(await compiled(snapshotBenchDomain()), async (client) => {
+        const user = await signUp(client)
+        const tenants = [ORG_ADMIN_ID, ORG_MEMBER_ROLE_ID, TASK_VIEWER_ID].map(
+          (archetype) => ({
+            org: randomUUID(),
+            member: randomUUID(),
+            archetype,
+          })
+        )
+        for (const t of tenants) {
+          await insert(client, ORG, { id: t.org })
+          await insert(client, MEMBER, {
+            id: t.member,
+            org_id: t.org,
+            user_id: user,
+          })
+          await insert(client, ASSIGNMENTS, {
+            org_id: t.org,
+            ...assignmentRow(t.member, { archetype: t.archetype }),
+          })
+        }
+        const home = tenants[0]!
+        await client.query(
+          `INSERT INTO public.${REGION} (id, org_id) SELECT gen_random_uuid(), $1 FROM generate_series(1, 10)`,
+          [home.org]
+        )
+        await client.query(
+          `INSERT INTO public.member_region (org_id, member_id, region_id)
+           SELECT $1, $2, r.id FROM public.${REGION} r WHERE r.org_id = $1`,
+          [home.org, home.member]
+        )
+        await client.query(
+          `INSERT INTO public.${BENCH_ZONE_TABLE} (id, org_id, keeper_id) SELECT gen_random_uuid(), $1, $2 FROM generate_series(1, 5)`,
+          [home.org, user]
+        )
+        await client.query(
+          `INSERT INTO public.${BENCH_TEAM_SEAT_TABLE} (id, user_id, team) SELECT gen_random_uuid(), $1, gen_random_uuid() FROM generate_series(1, 5)`,
+          [user]
+        )
+        await client.query(
+          `ANALYZE public.${ORG}, public.${MEMBER}, public.${ASSIGNMENTS}, public.${REGION}, public.member_region, public.${BENCH_ZONE_TABLE}, public.${BENCH_TEAM_SEAT_TABLE}`
+        )
+        await client.query("SELECT set_config($1, $2, true)", [
+          SESSION_CLAIMS_SETTING,
+          JSON.stringify({ sub: user, role: "authenticated" }),
+        ])
+        const calls: FactCall[] = [
+          { fact: "rights_mine", from: "simetra.rights_mine()" },
+          { fact: "rights_my_scopes", from: "simetra.rights_my_scopes()" },
+          {
+            fact: `${MEMBER}_member_scopes`,
+            from: `public.${MEMBER}_member_scopes()`,
+          },
+          {
+            fact: `${MEMBER}_my_member(p_scope)`,
+            from: `public.${MEMBER}_my_member('${home.org}'::uuid)`,
+          },
+          {
+            fact: "scope set of team",
+            variant: `verbatim ${BENCH_TEAM_SET_FUNCTION}`,
+            from: `${BENCH_TEAM_SET_FUNCTION}()`,
+          },
+        ].map((c) => ({ variant: "public", ...c }))
+        // Кожна функція бачить засів: замір порожньої відповіді міряв би не те
+        for (const call of calls) {
+          const { rows: n } = await client.query<{ n: string }>(
+            `SELECT count(*) AS n FROM ${call.from} f WHERE NOT (f IS NULL)`
+          )
+          expect(Number(n[0]!.n), `${call.fact} returns rows`).toBeGreaterThan(
+            0
+          )
+        }
+        await sampleFacts(
+          client,
+          calls,
+          "3 scopes, 10 dimension values, 5 zones, 5 team seats"
+        )
+      })
+    },
+    TIMEOUT
+  )
+
+  /**
+   * (7) Перший запис команди (план Права-3, Р3-9 (в)) у моделі бенчмарку
+   * знімка: у контейнер (`project`), у таблицю, яку читає дослівна функція
+   * виміру (`zone`), і в довідник членства — для звичайного актора
+   * (`OrgAdmin` одного тенанта, одне значення виміру) і для актора
+   * найбільших обсягів сценаріїв 1 і 2 разом: `OrgAdmin` у 2 000 тенантів і
+   * 20 000 значень виміру в одному з них. Кожен прогін — точка збереження з
+   * відкатом замість окремої транзакції (розгортання моделі не комітиться):
+   * відкат прибирає й усе, що перший запис зробив у транзакції. Час —
+   * оператор, виміряний клієнтом.
+   */
+  it(
+    "7 first command write",
+    async () => {
+      await scenario(await compiled(snapshotBenchDomain()), async (client) => {
+        await commandRole(client)
+        const actor = async (scopes: number, values: number) => {
+          const user = await signUp(client)
+          const home = randomUUID()
+          await insert(client, ORG, { id: home })
+          await client.query(
+            `INSERT INTO public.${ORG} (id) SELECT gen_random_uuid() FROM generate_series(1, $1)`,
+            [scopes - 1]
+          )
+          // Тенанти актора — домашній і ще не зайняті іншим актором
+          await client.query(
+            `INSERT INTO public.${MEMBER} (id, org_id, user_id)
+             SELECT gen_random_uuid(), o.id, $1 FROM public.${ORG} o
+             WHERE o.id = $2 OR NOT EXISTS (SELECT 1 FROM public.${MEMBER} m WHERE m.org_id = o.id)`,
+            [user, home]
+          )
+          await maintenance(client, () =>
+            client.query(
+              `INSERT INTO public.${ASSIGNMENTS} (id, org_id, subject, archetype, deletion_mark)
+               SELECT gen_random_uuid(), m.org_id, m.id, $2, false
+               FROM public.${MEMBER} m WHERE m.user_id = $1`,
+              [user, ORG_ADMIN_ID]
+            )
+          )
+          const { rows: member } = await client.query<{ id: string }>(
+            `SELECT id FROM public.${MEMBER} WHERE org_id = $1 AND user_id = $2`,
+            [home, user]
+          )
+          await client.query(
+            `INSERT INTO public.${REGION} (id, org_id) SELECT gen_random_uuid(), $1 FROM generate_series(1, $2)`,
+            [home, values]
+          )
+          await client.query(
+            `INSERT INTO public.member_region (org_id, member_id, region_id)
+             SELECT $1, $2, r.id FROM public.${REGION} r WHERE r.org_id = $1`,
+            [home, member[0]!.id]
+          )
+          const project = randomUUID()
+          const zone = randomUUID()
+          await insert(client, "project", { id: project, org_id: home })
+          await insert(client, BENCH_ZONE_TABLE, {
+            id: zone,
+            org_id: home,
+            keeper_id: user,
+          })
+          await client.query(
+            `INSERT INTO public.${BENCH_TEAM_SEAT_TABLE} (id, user_id, team) VALUES (gen_random_uuid(), $1, gen_random_uuid())`,
+            [user]
+          )
+          return {
+            user,
+            label: `${scopes.toLocaleString("en")} fullAccess scopes, ${values.toLocaleString("en")} dimension values`,
+            targets: [
+              { name: "container", table: "project", id: project },
+              {
+                name: "verbatim dimension table",
+                table: BENCH_ZONE_TABLE,
+                id: zone,
+              },
+              { name: "membership catalog", table: MEMBER, id: member[0]!.id },
+            ],
+          }
+        }
+        const actors = [
+          { kind: "ordinary actor", ...(await actor(1, 1)) },
+          { kind: "largest actor", ...(await actor(2000, 20000)) },
+        ]
+        // Відкладені перевірки засіву — тут, а не в замірах (як у сценарії 5)
+        await client.query("SET CONSTRAINTS ALL IMMEDIATE")
+        await client.query("SET CONSTRAINTS ALL DEFERRED")
+        await client.query(
+          `ANALYZE public.${ORG}, public.${MEMBER}, public.${ASSIGNMENTS}, public.${REGION}, public.member_region, public.project, public.${BENCH_ZONE_TABLE}, public.${BENCH_TEAM_SEAT_TABLE}`
+        )
+
+        /** Перший оператор команди в «свіжій» транзакції — точці збереження. */
+        const firstWrite = async (
+          user: string,
+          target: { table: string; id: string }
+        ): Promise<number> => {
+          await client.query("SAVEPOINT first_write")
+          try {
+            await client.query("SELECT set_config($1, $2, true)", [
+              SESSION_CLAIMS_SETTING,
+              JSON.stringify({ sub: user, role: "authenticated" }),
+            ])
+            await client.query("SELECT set_config($1, $2, true)", [
+              COMMAND_SETTING,
+              JSON.stringify({
+                action: "update",
+                object: target.table,
+                root: target.id,
+              }),
+            ])
+            await client.query(`SET LOCAL ROLE ${PLATFORM_ROLES.command}`)
+            let written = 0
+            const time = await elapsed(async () => {
+              const result = await client.query(
+                `UPDATE public.${target.table} SET description = 'bench' WHERE id = $1`,
+                [target.id]
+              )
+              written = result.rowCount ?? 0
+            })
+            await client.query("RESET ROLE")
+            expect(written, `${target.table} row is written`).toBe(1)
+            // FACT_TIMING_HOOK (Задача 5 плану Права-3, Р3-9 (в)): тут, до
+            // відкату, — час знятих фактів (`total_time` верхніх викликів
+            // `*_live` з `pg_stat_xact_user_functions`) і N рядків знімка.
+            return time
+          } finally {
+            await client.query("ROLLBACK TO SAVEPOINT first_write")
+          }
+        }
+        for (const a of actors) {
+          for (const target of a.targets) {
+            const times: number[] = []
+            for (let i = 0; i < 2 * RUNS - 1; i++)
+              times.push(await firstWrite(a.user, target))
+            rows.push({
+              scenario: `7 first command write, ${target.name}, ${a.kind}`,
+              volume: a.label,
+              operator: `${ms(median(times))} (runs ${times.map((t) => t.toFixed(1)).join(", ")} ms)`,
+            })
+          }
+        }
       })
     },
     TIMEOUT

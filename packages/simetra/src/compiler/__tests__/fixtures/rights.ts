@@ -2230,3 +2230,88 @@ export function polymorphicGrantsDomain(
     ...layers
   )
 }
+
+/** Таблиця виду, яку читає дослівна функція множини виду `team` (бенчмарк знімка). */
+export const BENCH_TEAM_SEAT_FILE = "catalogs/TeamSeat/TeamSeat.meta.json"
+export const BENCH_TEAM_SEAT_TABLE = "team_seat"
+/** Функція множини виду `team` з `teamScopeKind()`. */
+export const BENCH_TEAM_SET_FUNCTION = "public.team_ids"
+/** Вимір `zone`: значення користувача дає дослівна функція над `Zone`. */
+export const BENCH_ZONE_DIMENSION_ID = uuid(6860)
+export const BENCH_ZONE_FILE = "catalogs/Zone/Zone.meta.json"
+export const BENCH_ZONE_TABLE = "zone"
+export const BENCH_ZONE_FUNCTION = "public.zone_ids"
+export const BENCH_ZONE_NOTE_FILE = "catalogs/ZoneNote/ZoneNote.meta.json"
+const BENCH_ZONE_SQL_FILE = "sql/public/zone-ids.sql"
+
+/**
+ * Шар моделі бенчмарку знімка актора (план Права-3, Р3-9) поверх
+ * `teamScopeKind()`: кожна форма джерела фактів, запис у яке міряє
+ * сценарій 7. Контейнер — `Project` домену; вимір `zone` бере значення
+ * дослівною функцією, що читає таблицю виду `Zone` і кличе функцію членства
+ * `_member_scopes`; дослівна функція множини виду `team` читає таблицю виду
+ * `TeamSeat` (місця користувачів у командах). `ZoneNote` мапить вимір на
+ * об'єкт, щоб вимір діяв у праві, а не лише в проєкті.
+ */
+function snapshotBenchLayer(): Layer {
+  return {
+    [PROJECT_FILE]: {
+      accessDimensions: [
+        regionDimension(),
+        {
+          id: BENCH_ZONE_DIMENSION_ID,
+          name: "zone",
+          target: ref("Catalog", "Zone"),
+          values: { function: { schema: "public", name: "zone_ids" } },
+        },
+      ],
+    },
+    [BENCH_TEAM_SEAT_FILE]: catalog(
+      uuid(6851),
+      "TeamSeat",
+      BENCH_TEAM_SEAT_TABLE,
+      {
+        scope: "none",
+        attributes: [
+          refAttribute(6852, "user", "user_id", ref("Catalog", "Users")),
+          { id: uuid(6853), name: "team", physicalName: "team", type: "UUID" },
+        ],
+      }
+    ),
+    [BENCH_ZONE_FILE]: catalog(uuid(6861), "Zone", BENCH_ZONE_TABLE, {
+      attributes: [
+        refAttribute(6862, "keeper", "keeper_id", ref("Catalog", "Users")),
+      ],
+    }),
+    [BENCH_ZONE_NOTE_FILE]: catalog(uuid(6863), "ZoneNote", "zone_note", {
+      access: [{ attribute: "zone", dimension: "zone" }],
+      attributes: [
+        refAttribute(6864, "zone", "zone_id", ref("Catalog", "Zone")),
+      ],
+    }),
+  }
+}
+
+/**
+ * Модель бенчмарку знімка: `policyDomain(adminRoles(), teamScopeKind())` з
+ * шаром `snapshotBenchLayer()` і дослівними функціями виміру й множини. SQL —
+ * не метадані: `withRoles` зливає лише JSON, тож файли ставляться поверх, а
+ * функція множини замінює заглушку `metaFiles`.
+ */
+export function snapshotBenchDomain(): Map<string, string> {
+  const files = policyDomain(
+    adminRoles(),
+    teamScopeKind(),
+    snapshotBenchLayer()
+  )
+  const shell = "LANGUAGE sql STABLE SECURITY DEFINER SET search_path = ''"
+  files.set(
+    SCOPE_FUNCTIONS_FILE,
+    `CREATE FUNCTION ${BENCH_TEAM_SET_FUNCTION}() RETURNS SETOF uuid ${shell} AS $$ SELECT s.team FROM public.${BENCH_TEAM_SEAT_TABLE} s WHERE s.user_id = (SELECT simetra.current_user_id()) $$;`
+  )
+  files.set(
+    BENCH_ZONE_SQL_FILE,
+    `CREATE FUNCTION ${BENCH_ZONE_FUNCTION}() RETURNS SETOF uuid ${shell} AS $$ SELECT z.id FROM public.${BENCH_ZONE_TABLE} z WHERE z.keeper_id = (SELECT simetra.current_user_id()) AND z.org_id IN (SELECT public.org_member_member_scopes()) $$;`
+  )
+  return files
+}
