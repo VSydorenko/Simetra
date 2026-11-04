@@ -497,4 +497,4 @@ pnpm exec simetra compile --all --staged
 
 A rejected commit means the staged content does not compile: run
 `simetra compile --all` for the working tree, fix, `git add`, commit again. Do
-not bypass the hook with `--no-verify`.
+not bypass the hook with `--no-verify`. Setup and CI: `references/project-setup.md`.

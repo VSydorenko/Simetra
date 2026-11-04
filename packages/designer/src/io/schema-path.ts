@@ -1,6 +1,6 @@
-import { dirname, join, posix, relative, resolve, sep } from "node:path"
+import { dirname, join, resolve } from "node:path"
 import type { SchemaPathResolver } from "simetra/compiler"
-import { installedPackageDir } from "./package-path"
+import { installedPackageDir, posixRelative } from "./package-path"
 
 /**
  * Резолвер `$schema` для теки метаданих: відносний POSIX-шлях від теки файлу
@@ -15,8 +15,6 @@ export function schemaPathResolver(metadataDir: string): SchemaPathResolver {
   let schemas: string | undefined
   return (file, schemaFile) => {
     schemas ??= join(installedPackageDir(root, "simetra"), "schemas")
-    return relative(dirname(join(root, file)), join(schemas, schemaFile))
-      .split(sep)
-      .join(posix.sep)
+    return posixRelative(dirname(join(root, file)), join(schemas, schemaFile))
   }
 }

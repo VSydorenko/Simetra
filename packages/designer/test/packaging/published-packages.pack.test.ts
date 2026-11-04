@@ -1,4 +1,11 @@
-import { cp, readFile, writeFile } from "node:fs/promises"
+import {
+  appendFile,
+  cp,
+  readdir,
+  readFile,
+  readlink,
+  writeFile,
+} from "node:fs/promises"
 import { dirname, join, resolve, sep } from "node:path"
 import { Client } from "@modelcontextprotocol/client"
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio"
@@ -12,6 +19,7 @@ import {
   packWorkspace,
   readPackedManifest,
   removeTemps,
+  repackWithVersion,
 } from "./support"
 
 // Гейт пакування: потребує свіжого `pnpm build:packages` (корінь репо).
@@ -22,6 +30,47 @@ beforeAll(async () => {
 })
 
 afterAll(removeTemps)
+
+const SKILL_DIRS = [".agents/skills", ".claude/skills"]
+const AGENTS = "claude,codex,cursor,vscode"
+const CONFIGS = [
+  ".mcp.json",
+  ".codex/config.toml",
+  ".cursor/mcp.json",
+  ".vscode/mcp.json",
+]
+
+/** Ціль лінку скіла, яку `init` мусить записати (спека designer §4.2). */
+const skillTarget = (name: string) =>
+  `../../node_modules/@simetrajs/designer/skills/${name}`
+
+async function packedSkills(tarball: string): Promise<string[]> {
+  return (await listPackedFiles(tarball))
+    .map((f) => /^skills\/([^/]+)\/SKILL\.md$/.exec(f)?.[1])
+    .filter((n): n is string => n !== undefined)
+    .sort()
+}
+
+/**
+ * Запускає MCP-сервер так, як його запустить агент: `command`/`args` із
+ * `.mcp.json`, робоча тека — корінь проєкту.
+ */
+async function configuredServerTools(consumer: string): Promise<string[]> {
+  const config = JSON.parse(
+    await readFile(join(consumer, ".mcp.json"), "utf8")
+  ) as { mcpServers: { simetra: { command: string; args: string[] } } }
+  const { command, args } = config.mcpServers.simetra
+  const client = new Client({ name: "packaging-gate", version: "0" })
+  await client.connect(
+    new StdioClientTransport({ command, args, cwd: consumer })
+  )
+  try {
+    const { tools } = await client.listTools()
+    return tools.map((t) => t.name)
+  } finally {
+    await client.close()
+  }
+}
 
 /** publint над tarball: повідомлення рівня warning і вище. */
 async function publintMessages(tarball: string): Promise<string[]> {
@@ -207,5 +256,98 @@ describe("@simetrajs/designer", () => {
 
   it("passes publint", async () => {
     expect(await publintMessages(tarballs.designer)).toEqual([])
+  })
+
+  // Тести `init` нижче йдуть по черзі над тим самим проєктом споживача
+  it("init links the skills and writes MCP configs", async () => {
+    await run(["init", "--agents", AGENTS])
+    const skills = await packedSkills(tarballs.designer)
+    expect(skills.length).toBeGreaterThan(0)
+    for (const dir of SKILL_DIRS)
+      for (const name of skills) {
+        const link = join(consumer, dir, name)
+        expect(await readlink(link)).toBe(skillTarget(name))
+        await expect(
+          readFile(join(link, "SKILL.md"), "utf8")
+        ).resolves.toContain(`name: ${name}`)
+      }
+    for (const file of CONFIGS)
+      await expect(readFile(join(consumer, file), "utf8")).resolves.toBeTruthy()
+  })
+
+  it("init --check is green and a second init changes nothing", async () => {
+    await run(["init", "--check", "--agents", AGENTS])
+    const read = () =>
+      Promise.all(CONFIGS.map((f) => readFile(join(consumer, f))))
+    const before = await read()
+    await run(["init", "--agents", AGENTS])
+    expect(await read()).toEqual(before)
+  })
+
+  it("the configured MCP server starts", async () => {
+    expect(await configuredServerTools(consumer)).toContain("compile")
+  })
+
+  it("a package update flows through the links", async () => {
+    const { version } = await readPackedManifest(tarballs.designer)
+    const marker = "<!-- packaging-gate update marker -->"
+    const updated = await repackWithVersion(
+      tarballs.designer,
+      `${version}-update.0`,
+      (dir) =>
+        appendFile(
+          join(dir, "skills/simetra-metadata/SKILL.md"),
+          `\n${marker}\n`
+        )
+    )
+    await exec("npm", ["install", "--no-audit", "--no-fund", updated], {
+      cwd: consumer,
+    })
+    for (const dir of SKILL_DIRS) {
+      const link = join(consumer, dir, "simetra-metadata")
+      expect(await readlink(link)).toBe(skillTarget("simetra-metadata"))
+      await expect(readFile(join(link, "SKILL.md"), "utf8")).resolves.toContain(
+        marker
+      )
+    }
+    await run(["init", "--check", "--agents", AGENTS])
+  })
+})
+
+describe("@simetrajs/designer under pnpm", () => {
+  let consumer: string
+
+  beforeAll(async () => {
+    consumer = await installConsumer(
+      [tarballs.simetra, tarballs.designer],
+      "pnpm"
+    )
+    await cp(
+      join(REPO, "examples/reference/metadata"),
+      join(consumer, "metadata"),
+      { recursive: true }
+    )
+  })
+
+  it("resolves simetra to the packed tarball, not the registry", async () => {
+    // Без override designer з tarball-а біг би проти опублікованого simetra
+    const entries = await readdir(join(consumer, "node_modules/.pnpm"))
+    expect(entries.some((e) => e.startsWith("simetra@file+"))).toBe(true)
+    expect(entries.filter((e) => /^simetra@\d/.test(e))).toEqual([])
+  })
+
+  it("init links through node_modules, not the .pnpm store", async () => {
+    await exec(join(consumer, "node_modules/.bin/simetra"), ["init"], {
+      cwd: consumer,
+    })
+    const link = join(consumer, ".claude/skills/simetra-metadata")
+    expect(await readlink(link)).toBe(skillTarget("simetra-metadata"))
+    await expect(readFile(join(link, "SKILL.md"), "utf8")).resolves.toContain(
+      "name: simetra-metadata"
+    )
+  })
+
+  it("the configured MCP server starts", async () => {
+    expect(await configuredServerTools(consumer)).toContain("compile")
   })
 })

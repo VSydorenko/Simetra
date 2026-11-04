@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
-import { installedPackageDir } from "../io/package-path"
+import { installedPackageDir, posixRelative } from "../io/package-path"
 import { schemaPathResolver } from "../io/schema-path"
 import { UsageError } from "../io/usage-error"
 import { toolByName } from "../tools/catalog"
@@ -61,5 +61,13 @@ describe("installedPackageDir", () => {
     const r = await invoke(toolByName("fix")!, {}, opts(dir))
     expect(r.refusal).toMatchObject({ reason: "refused" })
     expect(r.refusal?.message).toContain("simetra is not installed")
+  })
+})
+
+describe("posixRelative", () => {
+  it("gives a relative path with / separators", () => {
+    expect(
+      posixRelative("/p/.claude/skills", "/p/node_modules/x/skills/a")
+    ).toBe("../../node_modules/x/skills/a")
   })
 })

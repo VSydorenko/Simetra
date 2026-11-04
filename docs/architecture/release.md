@@ -26,7 +26,9 @@ pnpm build:packages && pnpm test:packaging
 Він пакує tarball-и, ставить їх через `npm install` у тимчасовий проєкт
 споживача і проганяє імпорт ярусів у чистому Node, `simetra --version`,
 `compile`, `fix` (шлях `$schema` у `node_modules/simetra/schemas/`), MCP,
-publint і arethetypeswrong. Той самий гейт іде job `packaging` у CI і кроком
+`simetra init` (лінки скілів, `init --check`, повторний запуск без змін,
+вміст скіла крізь лінк після оновлення пакета, запуск MCP-сервера з
+згенерованого конфігу, споживач на pnpm), publint і arethetypeswrong. Той самий гейт іде job `packaging` у CI і кроком
 перед публікацією.
 
 ## Як випустити версію

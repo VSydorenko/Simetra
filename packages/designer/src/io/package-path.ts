@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs"
-import { dirname, join, resolve } from "node:path"
+import { dirname, join, posix, relative, resolve, sep } from "node:path"
 import { UsageError } from "./usage-error"
 
 /**
@@ -23,4 +23,13 @@ export function installedPackageDir(fromDir: string, pkg: string): string {
     }
     current = parent
   }
+}
+
+/**
+ * Відносний шлях із роздільниками `/`: він потрапляє у файли, які комітять і
+ * читають на будь-якій ОС (`$schema`, ціль лінка скіла, шлях до бінарника в
+ * MCP-конфігу), тож форма не може залежати від машини, де його пораховано.
+ */
+export function posixRelative(fromDir: string, to: string): string {
+  return relative(fromDir, to).split(sep).join(posix.sep)
 }
