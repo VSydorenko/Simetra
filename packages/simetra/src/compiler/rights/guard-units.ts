@@ -334,7 +334,7 @@ function snapshotBody(
       [
         `  INSERT INTO ${actor} (xid, actor, level, level_id, scope, full_access)`,
         `  SELECT txid_current(), v_actor, ${sqlLiteral(catalog.level.level)}, ${catalog.level.level === "scope" ? `${sqlLiteral(catalog.level.scopeKindId)}::uuid` : "NULL::uuid"}, h.scope, true`,
-        `  FROM (${holderRows(catalog, contracts, physical, style)}) h WHERE h.actor = v_actor;`,
+        `  FROM (${fullAccessHolderRows(catalog, contracts, physical, style)}) h WHERE h.actor = v_actor;`,
       ].join("\n")
     ),
     "  RETURN NULL;",
@@ -524,7 +524,11 @@ function assignmentGrantSet(
   ].join("\n")
 }
 
-function holderRows(
+/**
+ * Effective `fullAccess` holders of a rights level as `SELECT scope, actor`:
+ * the one source of this SQL for the guards and the maintenance tool.
+ */
+export function fullAccessHolderRows(
   catalog: RightsCatalogContract,
   contracts: GuardContracts,
   physical: PhysicalSnapshot,
@@ -689,7 +693,7 @@ function catalogCheck(
     `    ${escalationSql(assignmentGrantSet(catalog, physical, "after", style), assignmentBeforeSet(catalog, physical, style), catalogStorageKind(catalog))}`,
     "  ELSIF v_pending.kind = 'holders' THEN",
     ...(root === undefined ? [] : [`    IF ${root} THEN`]),
-    `    IF NOT EXISTS (SELECT 1 FROM (${holderRows(catalog, contracts, physical, style)}) h WHERE h.scope = v_pending.scope) THEN ${refusal(COMMAND_CORE_ERRORS.forbidden.lastFullAccess)} END IF;`,
+    `    IF NOT EXISTS (SELECT 1 FROM (${fullAccessHolderRows(catalog, contracts, physical, style)}) h WHERE h.scope = v_pending.scope) THEN ${refusal(COMMAND_CORE_ERRORS.forbidden.lastFullAccess)} END IF;`,
     ...(root === undefined ? [] : ["    END IF;"]),
     "  END IF;",
     "END IF;",

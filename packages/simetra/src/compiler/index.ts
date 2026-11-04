@@ -106,6 +106,7 @@ export { roleTableJoin, sourceConditions } from "./rights/functions"
 export { rightsDomainRows } from "./rights/functions"
 export { rightsGuardNames } from "./rights/guard-names"
 export { effectiveHolderRows } from "./rights/holders"
+export { fullAccessHolderRows } from "./rights/guard-units"
 export {
   findStandardColumn,
   findStyleFreeColumn,

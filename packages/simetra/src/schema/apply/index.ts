@@ -152,6 +152,7 @@ export {
   type PlpgsqlCheckMode,
 } from "./function-checks"
 export {
+  APPLY_ADVISORY_LOCK,
   DEFAULT_APPLY_TIMEOUTS,
   executePlan,
   type ApplyTimeouts,
@@ -160,6 +161,11 @@ export {
   type ExecuteOutcome,
   type RehearsalProof,
 } from "./execute"
+export {
+  runRightsMaintenance,
+  type RightsMaintenanceDone,
+  type RightsMaintenanceRequest,
+} from "./rights-maintenance"
 export {
   countOf,
   parseRehearsal,

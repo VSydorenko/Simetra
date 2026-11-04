@@ -503,17 +503,19 @@ Postgres 17 локального стека Supabase, Supavisor (transaction-р�
 10. Дієвість (`actor` — завжди **користувач**): `restoreGlobalFullAccess` — рядок `fullAccessHolderRows` з `actor = user`; `tenantFullAccess` — з цим `scope` і `actor = user`; `firstGlobalAssignment` — рядок `effectiveHolderRows` глобального рівня з `actor = user` і `archetype = role`. Немає → виняток → відкат → `not-effective`.
 11. `COMMIT`. Мапінг помилок — Р-A4-5, Р-A4-11, Р-A4-20.
 
-- [ ] **Крок 1:** unit на порт-фейку `ApplyDatabase` (`rights-maintenance.test.ts`):
+- [x] **Крок 1:** unit на порт-фейку `ApplyDatabase` (`rights-maintenance.test.ts`):
   - `it.each` відмов кроку 1 (невідома роль, роль не того рівня, без `fullAccess`, неоднозначна, жодної `fullAccess`, контейнерна, невідомий вид скоупу, прийняте джерело членства, довідник членства поза каталогом рантайму, `member` з примушеним ключем) — порт не викликано;
   - `model-mismatch`: інший хеш → відмова, `set_config` режиму не надіслано; `unknown-user`: порожня відповідь читання користувача → відмова, запису немає; `busy`: `false` замка → відмова;
   - властивості: замок — перший оператор; хеш — до першого читання стану; `row_security` — до читання стану; `set_config` режиму має третій аргумент `true` і стоїть до першого `INSERT`; кожен оператор — один без CTE з одним цільовим відношенням (`libpg-query`); рядок з лапкою в `member` є лише в параметрах;
   - `it.each(actions)`: порожня відповідь перевірки дієвості → `not-effective`, `COMMIT` не надіслано;
   - мапінг: `ApplyDbError('command.forbidden','42501',{detail:'rights-context'})` → `refused { reason: "rights-context" }`; `42501` з `message` не з білого списку і `DETAIL 'escalation'` → `reason: "denied"`; `23502` з колонкою членства → `member-required` з реквізитом; `ApplyConnectionLost` після `fn` → `outcome-unknown`, до — вгору; інша помилка — вгору.
-- [ ] **Крок 2:** реалізувати `runRightsMaintenance` і `fullAccessHolderRows` (наявні unit-дерева запобіжника не змінюються).
-- [ ] **Крок 3:** інструмент: `readMetadataDir` → `compile`; помилки компіляції — відмова без з'єднання; `createApplyDatabase` — лінивим `import("../schema-engine")`, як `roles-tool.ts`; `withDatabase(required(database), "rights-maintenance", …)`; опис англійською (лише CLI, `--yes`, вхід мігратора, дії, відмови).
-- [ ] **Крок 4:** тести інструмента: `does not connect without confirmation` — `invoke(tool, input, { channel: "cli", confirmed: false, database: fake })`, `fake.connect` рахує виклики → `unconfirmed`, `connect` не викликано; `runTool` без `--yes` → код виходу 2; `is absent from MCP` — `tools/list` без `rights-maintenance`.
-- [ ] **Крок 5:** `pnpm --filter simetra test rights-maintenance guard-units`, `pnpm --filter @simetrajs/designer test rights-maintenance catalog skill-examples cli mcp`, `typecheck`, `lint` обох пакетів.
-- [ ] **Крок 6:** коміт `feat(designer): інструмент обслуговування прав rights-maintenance`.
+  - Відхилення при виконанні: кейси «прийняте джерело членства» і «довідник членства поза каталогом рантайму» не стоять серед відмов «порт не викликано»: за Р-A4-11 `no-catalog` членства — лише на гілці вставки, тож вони — окремий `it.each` (`no-catalog only on the insert branch`): учасника немає → `no-catalog`, режим і `INSERT` не надіслано; учасник є → призначення проходить. Формат параметрів: `level` — `global` чи `scope:<ім'я виду скоупу>` (і в `holder-exists`, і в `no-catalog`); `role-level.expected` — `assignable on the global level`, `assignable on the global level with fullAccess`, `assignable on scope:<вид> with fullAccess`; без кандидата `restoreGlobalFullAccess` дає `role-level { role: "(none)" }`. Наявного учасника прийнятого джерела ядро читає з таблиці джерела з умовами `active`/`where`. Вплив на спеку: немає.
+- [x] **Крок 2:** реалізувати `runRightsMaintenance` і `fullAccessHolderRows` (наявні unit-дерева запобіжника не змінюються).
+- [x] **Крок 3:** інструмент: `readMetadataDir` → `compile`; помилки компіляції — відмова без з'єднання; `createApplyDatabase` — лінивим `import("../schema-engine")`, як `roles-tool.ts`; `withDatabase(required(database), "rights-maintenance", …)`; опис англійською (лише CLI, `--yes`, вхід мігратора, дії, відмови).
+- [x] **Крок 4:** тести інструмента: `does not connect without confirmation` — `invoke(tool, input, { channel: "cli", confirmed: false, database: fake })`, `fake.connect` рахує виклики → `unconfirmed`, `connect` не викликано; `runTool` без `--yes` → код виходу 2; `is absent from MCP` — `tools/list` без `rights-maintenance`.
+- [x] **Крок 5:** `pnpm --filter simetra test rights-maintenance guard-units`, `pnpm --filter @simetrajs/designer test rights-maintenance catalog skill-examples cli mcp`, `typecheck`, `lint` обох пакетів.
+  - Відхилення при виконанні: шаблон `guard-units` не збігається з жодним файлом тестів; дерево запобіжника тримає `rights-guards.test.ts`, тож прогін — `pnpm --filter simetra test rights-guards rights-maintenance`. Вплив на спеку: немає.
+- [x] **Крок 6:** коміт `feat(designer): інструмент обслуговування прав rights-maintenance`.
 
 ### Задача 8: DB-тести команд адміністрування прав
 
