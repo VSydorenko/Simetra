@@ -15,7 +15,7 @@
     "test:db": "supabase test db && pnpm --filter simetra test:db && pnpm --filter @simetrajs/designer test:db",
     "format": "turbo format",
     "typecheck": "turbo typecheck",
-    "test": "turbo test",
+    "test": "turbo test --concurrency=1",
     "format:fix": "prettier --write .",
     "format:check": "prettier --check .",
     "deps:check": "syncpack lint",

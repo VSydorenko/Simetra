@@ -2,6 +2,7 @@ import { existsSync } from "node:fs"
 import { readFile, writeFile } from "node:fs/promises"
 import { dirname, join, resolve } from "node:path"
 import { describe, expect, it } from "vitest"
+import { TOOL_PIPELINE } from "./helpers/budget"
 import { runTool, type CliArgs } from "../cli/command"
 import { toolByName } from "../tools/catalog"
 import { project, snapshotOf, useTmpProjects } from "./helpers/catalog"
@@ -31,7 +32,8 @@ async function copyWithoutId(): Promise<string> {
   return dir
 }
 
-describe("simetra fix", () => {
+// Команда fix: компіляція, виправлення й компіляція результату — бюджет `TOOL_PIPELINE`
+describe("simetra fix", TOOL_PIPELINE, () => {
   it("--dry-run writes nothing", async () => {
     const dir = await copyWithoutId()
     const before = await snapshotOf(dir)

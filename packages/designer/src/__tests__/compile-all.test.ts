@@ -12,6 +12,7 @@ import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { promisify } from "node:util"
 import { afterEach, describe, expect, it, vi } from "vitest"
+import { TOOL_PIPELINE } from "./helpers/budget"
 import { runTool } from "../cli/command"
 import {
   findMetadataDirs,
@@ -55,7 +56,8 @@ const noStdin = async (): Promise<string> => ""
 const runAll = (cwd: string, extra: { staged?: boolean } = {}) =>
   runTool(compile, { _: [], all: true, ...extra }, noStdin, cwd)
 
-describe("compile --all / --staged", () => {
+// Компіляція кількох тек і робочих дерев git справжнім ланцюжком команди — бюджет `TOOL_PIPELINE`
+describe("compile --all / --staged", TOOL_PIPELINE, () => {
   it("finds a root metadata dir and nested ones", async () => {
     const root = await emptyDir()
     await git(root, "init", "-q")

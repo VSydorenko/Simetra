@@ -1,6 +1,7 @@
 import { readdir, readFile, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { describe, expect, it } from "vitest"
+import { TOOL_PIPELINE } from "./helpers/budget"
 import { compile, MESSAGES, type Locale } from "simetra/compiler"
 import { renderDesiredState } from "simetra/schema"
 import { readMetadataDir } from "../io/metadata-dir"
@@ -33,7 +34,8 @@ async function outDir(): Promise<string> {
   return join(await project(), "..", "out")
 }
 
-describe("simetra compile", () => {
+// Команда компіляції через адаптер, зокрема над цілим референсним доменом — бюджет `TOOL_PIPELINE`
+describe("simetra compile", TOOL_PIPELINE, () => {
   it("reference domain compiles", async () => {
     const r = await compileCli({ _: [REFERENCE], locale: "en", format: "text" })
     expect(r.exitCode).toBe(0)

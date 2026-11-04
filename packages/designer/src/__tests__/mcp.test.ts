@@ -6,6 +6,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/server"
 import type { Diagnostic } from "simetra/compiler"
 import { elementNameSchema, objectNameSchema } from "simetra/model"
 import { afterEach, describe, expect, it } from "vitest"
+import { TOOL_PIPELINE } from "./helpers/budget"
 import { z } from "zod"
 import { writeChanges } from "../io/metadata-dir"
 import { UsageError } from "../io/usage-error"
@@ -268,7 +269,8 @@ describe("apply over MCP", () => {
   })
 })
 
-describe("simetra mcp", () => {
+// Інструменти через сервер MCP: мутація й компіляція результату на виклик — бюджет `TOOL_PIPELINE`
+describe("simetra mcp", TOOL_PIPELINE, () => {
   it("lists every catalog tool in read-only mode", async () => {
     const client = await connect(await project(), true)
     expect((await client.listTools()).tools.map((t) => t.name).sort()).toEqual([

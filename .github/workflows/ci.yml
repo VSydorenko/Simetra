@@ -78,8 +78,21 @@ jobs:
           cache: pnpm
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+      # Повтор старту: невдалий `supabase start` (вичерпані повтори тягнення
+      # образів, порт, зайнятий напівствореним контейнером цього ж старту)
+      # лишає контейнери й мережу проєкту. `supabase stop --no-backup` прибирає
+      # їх за міткою проєкту; даних у свіжого раннера немає, тож нічого не
+      # губимо. Не більше двох повторів, щоб справжня поломка падала швидко
       - name: Start Supabase stack
-        run: pnpm db:start
+        run: |
+          for attempt in 1 2 3; do
+            if pnpm db:start; then exit 0; fi
+            if [ "$attempt" -eq 3 ]; then break; fi
+            echo "::warning::supabase start failed (attempt $attempt), cleaning up and retrying"
+            pnpm exec supabase stop --no-backup || true
+            sleep $((attempt * 30))
+          done
+          exit 1
       - name: Database tests
         run: ${{ matrix.run }}
 
