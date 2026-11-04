@@ -101,7 +101,7 @@ const plan: ExecutablePlan = {
   fromHash: null,
   toHash: "b".repeat(64),
   scope: { schemas: ["app", "simetra"], provider: "supabase" },
-  engine: { name: "pg-delta", version: "1.0.0-alpha.56" },
+  engine: { name: "pg-delta", version: "1.0.0-alpha.60" },
   steps: [
     step("s1", "ALTER TABLE app.t ADD COLUMN d int", {
       lockedTables: [{ schema: "app", name: "t" }],

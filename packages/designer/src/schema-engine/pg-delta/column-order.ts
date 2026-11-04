@@ -12,14 +12,21 @@ const edgeKey = (edge: DependencyEdge) =>
 /**
  * Бажаний стан плану копії доказу з порядком колонок нових таблиць: ціль
  * плюс ребра `c[k+1] → c[k]` між сусідніми за `_position` (`attnum`)
- * колонками кожної таблиці, якої копія ще не має.
+ * колонками кожної таблиці, якої копія ще не має і в якій DEFAULT якоїсь
+ * колонки викликає функцію користувача.
+ *
+ * Чому лише такі таблиці. Згенеровану колонку й колонку, що чекає на тип,
+ * двигун з pg-delta 1.0.0-alpha.60 сам лишає на її місці; DEFAULT з функцією
+ * користувача — ні: Postgres виконує функцію, коли додає колонку, тож двигун
+ * навмисно додає таку колонку окремо, після решти (реліз-ноти alpha.60,
+ * supabase/pg-toolbelt#518). Звуження — за формулюванням двигуна, а не за
+ * його внутрішніми правилами; контрольні тести двигуна в
+ * `column-order.test.ts` червоніють, коли він змінить поведінку.
  *
  * Чому ребра. Двигун створює таблицю порожньою й додає колонки окремо, а
  * компакція вбудовує в `CREATE TABLE` лише ті, чиї власні попередники вже
- * виконано. Згенерована колонка не вбудовується ніколи (вираз посилається на
- * інші колонки), а колонка, чий тип чи функція виразу створюється після
- * таблиці, — теж; колонки з більшим `attnum` компакція згортає повз них, і
- * невбудовна колонка опиняється в кінці. Ребро від наступної колонки до
+ * виконано; невбудовну колонку компакція обминає, згортаючи повз неї колонки
+ * з більшим `attnum`, і та опиняється в кінці. Ребро від наступної колонки до
  * попередньої — факт фізичної історії таблиці («колонку N+1 створено після
  * N»): `topoSort` не випустить колонку раніше за попередню, а компакція не
  * згорне її, поки попередня лишається окремим `ADD COLUMN`. Колонки до першої
@@ -63,6 +70,7 @@ export function withColumnOrder(source: FactBase, target: FactBase): FactBase {
       .childrenOf(table.id)
       .filter((c: Fact) => c.id.kind === "column")
       .sort((a, b) => Number(a.payload._position) - Number(b.payload._position))
+    if (!defaultCallsFunction(target, outgoing, columns)) continue
     if (forwardReference(target, outgoing, table.id, columns)) continue
     for (let k = 1; k < columns.length; k++) {
       add({ from: columns[k]!.id, to: columns[k - 1]!.id, kind: "depends" })
@@ -80,6 +88,29 @@ export function withColumnOrder(source: FactBase, target: FactBase): FactBase {
   // дописати після побудови, як `extract.ts` після перебудови бази
   ordered.diagnostics.push(...target.diagnostics)
   return ordered
+}
+
+/**
+ * Чи має якась колонка DEFAULT, що прямо залежить від функції. Функції
+ * `pg_catalog` не є фактами витягу, тож ребро до функції — це функція
+ * користувача.
+ */
+function defaultCallsFunction(
+  target: FactBase,
+  outgoing: ReadonlyMap<string, readonly StableId[]>,
+  columns: Fact[]
+): boolean {
+  return columns.some((c) =>
+    target
+      .childrenOf(c.id)
+      .some(
+        (d) =>
+          d.id.kind === "default" &&
+          (outgoing.get(encodeId(d.id)) ?? []).some(
+            (to) => to.kind === "function"
+          )
+      )
+  )
 }
 
 /**

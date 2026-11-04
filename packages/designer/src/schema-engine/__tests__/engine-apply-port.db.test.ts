@@ -506,44 +506,64 @@ describe("SchemaEngine apply port", () => {
     )
   })
 
-  it("reports a seed the engine cannot plan as engine.clone-failed", async () => {
-    // DEFAULT `a` викликає функцію, що читає таблицю: план засіву копії
-    // («ціль → засів») кидає виняток циклу двигуна на `DROP` функції й
-    // таблиці. Порт віддає його збоєм копії, а не винятком
-    await inTarget(
-      [
-        "create schema app;",
-        "create table app.t (a int, b int);",
+  // Функція читає таблицю, яка її викликає: план засіву копії («ціль →
+  // засів») до pg-delta 1.0.0-alpha.59 падав циклом дій на `DROP` функції й
+  // таблиці (supabase/pg-toolbelt#545). Кожна форма з issue тепер засівається
+  const readsItsTable = [
+    {
+      form: "a DEFAULT",
+      sql: [
         "create function app.f() returns int language sql begin atomic select max(b) from app.t; end;",
         "alter table app.t alter column a set default app.f();",
-      ].join("\n"),
-      scope,
-      async (url) => {
-        const mark = provisionedShadows().length
-        const target = await engine.extract({ url }, scope)
-        let called = false
-        const outcome = await engine.withTargetClone(
-          { target: { url } },
-          target,
-          scope,
-          async () => {
-            called = true
-          }
-        )
-        expect(called).toBe(false)
-        expect(outcome.status).toBe("shadow-failed")
-        expect(outcome.diagnostics.map((d) => d.code)).toEqual([
-          "engine.clone-failed",
-        ])
-        expect(outcome.diagnostics[0]!.severity).toBe("error")
-        expect(outcome.diagnostics[0]!.engineCode).toBe("seed_failed")
-        expect(outcome.diagnostics[0]!.params.detail).toMatch(
-          /^preparing the copy failed: dependency cycle/
-        )
-        expect(await leftoverShadows(mark)).toEqual([])
-      }
-    )
-  })
+      ],
+    },
+    {
+      form: "a generated column",
+      sql: [
+        "create function app.f() returns int language sql immutable begin atomic select max(b) from app.t; end;",
+        "alter table app.t add column g int generated always as (app.f()) stored;",
+      ],
+    },
+    {
+      form: "a domain CHECK",
+      sql: [
+        "create function app.f(v int) returns boolean language sql begin atomic select v is null or v > (select coalesce(min(b), 0) from app.t); end;",
+        "create domain app.d as int check (app.f(value));",
+        "alter table app.t add column c app.d;",
+      ],
+    },
+  ]
+
+  it.each(readsItsTable)(
+    "seeds a copy whose function reads its table through $form",
+    async ({ sql }) => {
+      await inTarget(
+        [
+          "create schema app;",
+          "create table app.t (a int, b int);",
+          ...sql,
+        ].join("\n"),
+        scope,
+        async (url) => {
+          const mark = provisionedShadows().length
+          const target = await engine.extract({ url }, scope)
+          let called = false
+          const outcome = await engine.withTargetClone(
+            { target: { url } },
+            target,
+            scope,
+            async () => {
+              called = true
+            }
+          )
+          expect(outcome.diagnostics).toEqual([])
+          expect(outcome.status).toBe("loaded")
+          expect(called).toBe(true)
+          expect(await leftoverShadows(mark)).toEqual([])
+        }
+      )
+    }
+  )
 
   it("drops the clone on success and on error", async () => {
     await inTarget(

@@ -70,9 +70,9 @@ const ENGINE = "pg-delta"
 /**
  * Версія встановленого пакета двигуна. Пакет не експортує свій
  * `package.json`, а його `ENGINE_VERSION` — версія формату плану, не пакета;
- * рівність встановленому пакету тримає тест адаптера.
+ * рівність встановленому пакету тримає `engine-identity.test.ts`.
  */
-const IDENTITY: EngineIdentity = { name: ENGINE, version: "1.0.0-alpha.56" }
+const IDENTITY: EngineIdentity = { name: ENGINE, version: "1.0.0-alpha.60" }
 
 /**
  * Секрети в дефініціях (наприклад, опції серверів) двигун редагує; той самий
@@ -701,28 +701,12 @@ function cloneFailed(
 }
 
 /**
- * Текст запобіжника двигуна, яким сортування дій відмовляє на циклі
- * (`src/plan/graph.ts` у `@supabase/pg-delta` 1.0.0-alpha.56). Класу чи коду
- * в цього винятку немає, тож розпізнаємо текст; оновлення двигуна мусить його
- * перевірити. Змінений текст дасть гучний червоний DB-тест засіву, а не тиху
- * хибну відмову.
- */
-const ENGINE_CYCLE_MESSAGE = /^dependency cycle among \d+ actions/
-
-/**
  * Збій засіву копії як діагностики копії; `undefined` — виняток не наш, його
- * кидають далі, як у `planAndRun`. Крім збоїв бажаного стану (`shadowFailure`),
- * результатом є цикл двигуна: план «ціль → засів» відкидаємо, але двигун будує
- * його повністю, і для цілі, де функція читає таблицю, що її викликає
- * (DEFAULT, вираз, CHECK домену), сортування дій падає циклом на `DROP`
- * функції й таблиці. Копії тоді немає — це безпечна відмова доказу, а не
- * виняток, що обірвав би `buildPlan`.
+ * кидають далі, як у `planAndRun`. Впізнаємо лише збої бажаного стану
+ * (`shadowFailure`): збій з'єднання чи виняток двигуна не ховається за
+ * відмовою доказу.
  */
 export function seedFailure(error: unknown): EngineDiagnostic[] | undefined {
-  if (error instanceof Error && ENGINE_CYCLE_MESSAGE.test(error.message))
-    return [
-      cloneFailed(`preparing the copy failed: ${error.message}`, "seed_failed"),
-    ]
   return shadowFailure(error)?.map((d) =>
     cloneFailed(
       `preparing the copy failed: ${String(d.params.detail)}`,
