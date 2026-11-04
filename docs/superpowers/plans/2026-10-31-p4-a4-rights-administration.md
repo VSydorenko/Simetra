@@ -78,7 +78,7 @@ Postgres 17 локального стека Supabase, Supavisor (transaction-р�
   (`standardColumn`, `quoteIdent`); значення — лише параметри `$n`.
 - 🔴 SQL носіїв `fullAccess` — лише будівник `fullAccessHolderRows`; копії
   JOIN з `rights_full_access_roles()` у T2 немає.
-- 🔴 Нові коди діагностик — у `RULE_CODES` (`packages/simetra/src/compiler/diagnostics.ts`)
+- 🔴 Нові коди діагностик — у `COMPILER_RULES` (`packages/simetra/src/compiler/diagnostics.ts`)
   і `messages.ts` (en, uk, підказка); тести перевіряють коди й параметри.
 - 🔴 `DETAIL` бази йде назовні лише значенням з білого списку пар
   (`message`, `detail`), як `mapDatabaseError` T3 (Р-A3-8).
@@ -383,7 +383,7 @@ Postgres 17 локального стека Supabase, Supavisor (transaction-р�
 ### Задача 3: діагностики `maintenance.*` і `ApplyDbError`
 
 **Files:**
-- Modify: `packages/simetra/src/compiler/diagnostics.ts` (`RULE_CODES`), `packages/simetra/src/compiler/messages.ts`, `packages/simetra/src/compiler/__tests__/messages.test.ts`
+- Modify: `packages/simetra/src/compiler/diagnostics.ts` (`COMPILER_RULES`), `packages/simetra/src/compiler/messages.ts`, `packages/simetra/src/compiler/__tests__/messages.test.ts`
 - Modify: `packages/simetra/src/schema/apply/port.ts` (`ApplyDbError`)
 - Modify: `packages/designer/src/schema-engine/apply-database.ts` (`normalize` — заповнення й експорт)
 - Create: `packages/designer/src/schema-engine/__tests__/apply-database.test.ts` (unit без бази, на об'єкті помилки `pg`)
