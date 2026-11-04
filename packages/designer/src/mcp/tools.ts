@@ -57,6 +57,9 @@ export function mcpInputSchema(tool: Tool): z.ZodType {
       previews = true
       break
   }
+  // Вхід `cliOnly` на MCP не доходить (`registerCatalog` його пропускає), а
+  // вхід-union не розширюється `extend`
+  if (tool.cliOnly) return tool.input
   if (!previews && !tool.destructive) return tool.input
   if (!(tool.input instanceof z.ZodObject)) {
     throw new Error(
@@ -207,6 +210,8 @@ function toResponse(
 /** Реєструє весь каталог: транспорт лише переказує `confirm`/`dryRun` у `invoke`. */
 export function registerCatalog(server: McpServer, o: McpToolOptions): void {
   for (const tool of TOOLS) {
+    // Інструмент лише для командного рядка в MCP не реєструється
+    if (tool.cliOnly) continue
     server.registerTool(
       tool.name,
       {

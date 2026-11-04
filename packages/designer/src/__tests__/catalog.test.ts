@@ -259,6 +259,34 @@ describe("invoke refusals", () => {
     expect(await snapshotOf(dir)).toEqual(before)
   })
 
+  it("refuses a cli-only tool outside the cli channel before parsing input", async () => {
+    const dir = await project()
+    const run = vi.fn(async () => ({
+      ok: true,
+      changes: [],
+      diagnostics: [],
+    }))
+    const cliOnly = defineTool({
+      name: "compile",
+      description: "Cli-only stub.",
+      input: z.strictObject({ value: z.string() }),
+      files: "read",
+      database: "none",
+      destructive: false,
+      cliOnly: true,
+      run,
+    }) as Tool
+    // Вхід невалідний навмисно: відмова каналу має випередити розбір входу
+    const refused = await invoke(cliOnly, {}, { ...opts(dir), channel: "mcp" })
+    expect(refused.refusal?.reason).toBe("cli-only")
+    expect(run).not.toHaveBeenCalled()
+    const ok = await invoke(cliOnly, { value: "x" }, opts(dir))
+    expect(ok.ok).toBe(true)
+    expect(run).toHaveBeenCalledOnce()
+    // Вхід-union не ламає схему MCP: для cliOnly вона лишається `tool.input`
+    expect(mcpInputSchema(cliOnly)).toBe(cliOnly.input)
+  })
+
   it("a nonexistent directory is a refusal with the message", async () => {
     const dir = join(await project(), "missing")
     const r = await invoke(toolByName("compile")!, {}, opts(dir))

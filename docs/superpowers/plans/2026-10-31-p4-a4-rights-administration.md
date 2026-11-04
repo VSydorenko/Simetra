@@ -430,10 +430,10 @@ Postgres 17 локального стека Supabase, Supavisor (transaction-р�
 
 **Interfaces:** `Tool.cliOnly?: true`; `RefusalReason` + `"cli-only"`.
 
-- [ ] **Крок 1:** тест `refuses a cli-only tool outside the cli channel before parsing input` — тестовий інструмент `cliOnly` з невалідним входом на каналі `mcp` → `cli-only`, `run` не викликано; на `cli` — звичайний шлях.
-- [ ] **Крок 2:** реалізувати (`o.channel !== "cli"`); `registerCatalog` пропускає `cliOnly`; `mcpInputSchema` повертає `tool.input` для `cliOnly`.
-- [ ] **Крок 3:** `pnpm --filter @simetrajs/designer test catalog mcp`, `typecheck`, `lint`.
-- [ ] **Крок 4:** коміт `feat(designer): інструменти лише для командного рядка`.
+- [x] **Крок 1:** тест `refuses a cli-only tool outside the cli channel before parsing input` — тестовий інструмент `cliOnly` з невалідним входом на каналі `mcp` → `cli-only`, `run` не викликано; на `cli` — звичайний шлях.
+- [x] **Крок 2:** реалізувати (`o.channel !== "cli"`); `registerCatalog` пропускає `cliOnly`; `mcpInputSchema` повертає `tool.input` для `cliOnly`.
+- [x] **Крок 3:** `pnpm --filter @simetrajs/designer test catalog mcp`, `typecheck`, `lint`.
+- [x] **Крок 4:** коміт `feat(designer): інструменти лише для командного рядка`.
 
 ### Задача 6: тимчасовий бар'єр T3 (Р-A4-17)
 
