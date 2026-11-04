@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-Статус: виконано (Task 1–5 і виправлення рецензії); повні гейти — на одному SHA з дозволу архітекторки.
+Статус: виконано; повні гейти зелені на 98beac81.
 
 **Goal:** команда `simetra init [--agents …] [--dry-run] [--check]` у проєкті
 споживача розкладає відносні симлінки скілів `@simetrajs/designer` і
@@ -347,7 +347,7 @@ MCP-конфіги агентів, ідемпотентно й без чужих
   designer з tarball-а біг би проти опублікованого `simetra`); `init` — код 0; `readlink` `.claude/skills/simetra-metadata` дорівнює
   `../../node_modules/@simetrajs/designer/skills/simetra-metadata` (не `.pnpm`);
   `SKILL.md` читається крізь лінк; сервер з `.mcp.json` стартує й віддає `compile`.
-- [ ] **Step 3: Прогін:** `pnpm build:packages && pnpm test:packaging` — PASS
+- [X] **Step 3: Прогін:** `pnpm build:packages && pnpm test:packaging` — PASS
   (для налагодження — локально; зарахований прогін — разом з повними гейтами).
 - [X] **Step 4: Коміт** `test(designer): гейт пакування для simetra init`.
 
