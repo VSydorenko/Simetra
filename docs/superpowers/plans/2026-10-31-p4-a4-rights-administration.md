@@ -448,7 +448,7 @@ Postgres 17 локального стека Supabase, Supavisor (transaction-р�
 - Consumes: `administerRightsAction` з `simetra/model` — назва дії; `operations.<операція>.context` каталогу.
 - Produces: ознака «фаза прав почалася» в стані спроби транзакції; відмова `{ code: "command.forbidden", reason: "rights-context" }` — значення вже є в `COMMAND_CORE_ERRORS.forbidden`.
 
-- [ ] **Крок 1:** unit (порт-фейк, точна послідовність):
+- [x] **Крок 1:** unit (порт-фейк, точна послідовність):
   - `refuses a non-rights phase after a rights phase in a batch` — `[create призначення, update Ticket]` → друга фаза не надсилає жодного оператора бази, результат `command.forbidden` `rights-context`, `ROLLBACK`, `release()` раз;
   - `refuses ctx.read and ctx.run of application data from a hook of a rights phase` — `it.each` (`beforeWrite`, `onWrite`) × (`ctx.read` `Ticket`, `ctx.run` `update Ticket`) → `rights-context`, оператора читання чи ядра `Ticket` не надіслано;
   - `allows rights phases after a rights phase` — `[create призначення, create призначення, delete призначення]` → усі три виклики ядра й `COMMIT`;
@@ -458,10 +458,11 @@ Postgres 17 локального стека Supabase, Supavisor (transaction-р�
   - `refuses a concurrent ctx.run queued after a rights phase` — хук запускає без очікування `ctx.run(create призначення)` і `ctx.run(update Ticket)` → ядро `Ticket` не надіслано;
   - `allows rights data from a hook of a rights phase` — `it.each`: `ctx.read` довідника призначень і `ctx.run` фази прав з `onWrite` фази прав → проходять;
   - `refuses a second member of a batch when the membership onWrite assigns a role` — `onWrite` довідника членства робить `ctx.run(create призначення)`; пакет `[create учасника A, create учасника B]` → друга фаза `rights-context` (фіксує компроміс Р-A4-17).
-- [ ] **Крок 2:** реалізувати.
-- [ ] **Крок 3:** DB-кейс фіксації бази в `catalog-command-admin.db.test.ts` (об'єкт — довідник застосунку моделі цього файлу з роллю запису з `writeRoles()`, напр. `Project`; Задача 0 підтверджує): `the database still lets a direct command use rights granted in its transaction (closed by Права-3)` — один багатокроковий помічник в **одній** точці збереження: claims адміністратора; контекст `administerRights` → `save` призначення собі ролі запису → контекст `update` → `save` рядка → контекст `administerRights` → `delete` призначення → `RESET ROLE` → `SET CONSTRAINTS ALL IMMEDIATE` → проходить, рядок змінено. Коментар: «стане червоним після Права-3 — тоді очікування міняється на `rights-context`».
-- [ ] **Крок 4:** `pnpm --filter simetra test transaction`, `pnpm --filter simetra test:db catalog-command-admin`, `typecheck`, `lint`.
-- [ ] **Крок 5:** коміт `fix(server): тимчасовий бар'єр — після фази прав команда не торкається даних застосунку`.
+- [x] **Крок 2:** реалізувати.
+- [x] **Крок 3:** DB-кейс фіксації бази в `catalog-command-admin.db.test.ts` (об'єкт — довідник застосунку моделі цього файлу з роллю запису з `writeRoles()`, напр. `Project`; Задача 0 підтверджує): `the database still lets a direct command use rights granted in its transaction (closed by Права-3)` — один багатокроковий помічник в **одній** точці збереження: claims адміністратора; контекст `administerRights` → `save` призначення собі ролі запису → контекст `update` → `save` рядка → контекст `administerRights` → `delete` призначення → `RESET ROLE` → `SET CONSTRAINTS ALL IMMEDIATE` → проходить, рядок змінено. Коментар: «стане червоним після Права-3 — тоді очікування міняється на `rights-context`».
+  - Відхилення при виконанні: об'єкт кейсу — `Bulletin` (`BULLETIN_TABLE`) з роллю `TaskWriter` (`TASK_WRITER_ID`), а не `Project`: у моделі файлу жодна роль не пише `Project` (Звіт Задачі 0, нотатка 2). Рядок `Bulletin` вставляє сам кейс; контрольний крок без призначення дає `command.forbidden` `no-right`. Вплив на спеку: немає.
+- [x] **Крок 4:** `pnpm --filter simetra test transaction`, `pnpm --filter simetra test:db catalog-command-admin`, `typecheck`, `lint`.
+- [x] **Крок 5:** коміт `fix(server): тимчасовий бар'єр — після фази прав команда не торкається даних застосунку`.
 
 ### Задача 7: ядро `runRightsMaintenance` (T2) і інструмент `rights-maintenance`
 

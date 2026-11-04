@@ -13,6 +13,11 @@ export const USER = "44444444-4444-4444-8444-444444444444"
 export const session = { sub: "user-1", role: "authenticated" }
 export const CLIENT = { kind: "Catalog" as const, name: "Client" }
 export const RIGHTS = { kind: "Catalog" as const, name: "RightsRole" }
+export const TICKET = { kind: "Catalog" as const, name: "Ticket" }
+export const ROLE_ASSIGNMENT = {
+  kind: "Catalog" as const,
+  name: "RoleAssignment",
+}
 
 export const BEGIN = {
   text: "BEGIN ISOLATION LEVEL READ COMMITTED",
@@ -106,3 +111,39 @@ export const createCall = call("client_save", SAVE, [
   JSON.stringify({ id: ID, code: "A", company_id: COMPANY }),
   null,
 ])
+
+/** `update` об'єкта застосунку `Ticket` і його фаза в черзі. */
+export const updateTicket = (id = ID) =>
+  ({
+    action: "update",
+    object: TICKET,
+    id,
+    expectedVersion: 1,
+    values: { code: "T" },
+  }) satisfies Operation
+export const ticketPhase = (id = ID) => [
+  context("update", "ticket", id),
+  call("ticket_save", SAVE, [JSON.stringify({ id, code: "T" }), "1"]),
+]
+
+/** `create` призначення — фаза прав — і її фаза в черзі. */
+export const assign = (id: string) =>
+  ({
+    action: "create",
+    object: ROLE_ASSIGNMENT,
+    id,
+    values: { code: "G", company: COMPANY },
+  }) satisfies Operation
+export const assignPhase = (id: string) => [
+  context("administerRights", "role_assignment", id),
+  call("role_assignment_save", SAVE, [
+    JSON.stringify({ id, code: "G", company_id: COMPANY }),
+    null,
+  ]),
+]
+
+/** Відмова бар'єру Р-A4-17. */
+export const RIGHTS_CONTEXT = {
+  code: "command.forbidden",
+  reason: "rights-context",
+}

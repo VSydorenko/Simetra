@@ -17,7 +17,11 @@ import { decodeRow } from "./decode"
 import { CommandFailure } from "./errors"
 import { callHook, type HookPhase } from "./hook-context"
 import { ident, issuePath, literal } from "./read"
-import type { Statement, Transaction } from "./transaction"
+import {
+  isRightsContext,
+  type Statement,
+  type Transaction,
+} from "./transaction"
 import { encodeItem } from "./values"
 
 /** The catalog entries an operation addresses. */
@@ -183,6 +187,8 @@ export async function runPhase(
   const found = targetOf(tx.state.catalog, op)
   if ("error" in found) tx.abort(found.error)
   const { object, target } = found
+  // Ознака бар'єру — до хука «до»: його `ctx` уже за бар'єром (Р-A4-17).
+  tx.startPhase(target.context)
   // Подію визначає операція (Р-A3-2): `delete` хуків не викликає.
   const module: ObjectModule<object> | undefined =
     OPERATION_EVENTS[op.action] === "write"
@@ -211,6 +217,10 @@ export async function runPhase(
     object: object.kindLabel,
     root: op.id,
   }
+  // Бар'єр — синхронно перед постановкою в чергу (FIFO), а не на старті
+  // фази: фаза прав, яку запустив `beforeWrite` цієї фази чи паралельний
+  // `ctx.run`, стає в чергу раніше за це ядро (Р-A4-17).
+  tx.checkBarrier(isRightsContext(target.context))
   // Контекст і виклик ядра — неподільна одиниця черги (Рт5, Р-A3-15): між
   // ними не стане оператор іншої фази.
   const { rows } = await tx.enqueue(

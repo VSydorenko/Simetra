@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { CommandFailure } from "../errors"
 import { prepareRead } from "../read"
 import { createCommandRuntime, type CommandRuntime } from "../runtime"
-import { fakeDatabase, failureOf } from "./fake-database"
+import { fakeDatabase, failureOf, type Call } from "./fake-database"
 import {
   COMPANY,
   ID,
@@ -19,16 +19,22 @@ import {
   COMMIT,
   OPEN,
   RIGHTS,
+  RIGHTS_CONTEXT,
+  ROLE_ASSIGNMENT,
   ROLLBACK,
   SAVE,
+  TICKET,
   USER,
   answer,
+  assign,
+  assignPhase,
   call,
   context,
   create,
   createCall,
   session,
   setup,
+  updateTicket,
   type Override,
 } from "./harness"
 
@@ -52,13 +58,26 @@ const rightsPhase = (id = OTHER, code = "R") => [
   context("administerRights", "rights_role", id),
   call("rights_role_save", SAVE, [JSON.stringify({ id, code }), null]),
 ]
-const readRights = (id: string) => ({
+const readOf = (table: string, id: string) => ({
   text:
-    'SELECT to_jsonb(t)::text AS row FROM "public"."rights_role" t' +
+    `SELECT to_jsonb(t)::text AS row FROM "public"."${table}" t` +
     ' WHERE "id" = $1::uuid ORDER BY "id" LIMIT $2',
   params: [id, "1"],
 })
+const readRights = (id: string) => readOf("rights_role", id)
 const clientPhase = [context("create", "client", ID), createCall]
+// Об'єкт застосунку — вкладена фаза кейсів, де після неї йде ядро
+// застосунку: фаза прав там дала б відмову бар'єру Р-A4-17.
+const createTicket = (id = OTHER, code = "R"): Operation => ({
+  action: "create",
+  object: TICKET,
+  id,
+  values: { code },
+})
+const ticketCreatePhase = (id = OTHER, code = "R") => [
+  context("create", "ticket", id),
+  call("ticket_save", SAVE, [JSON.stringify({ id, code }), null]),
+]
 const CLOSED: unknown[] = [...OPEN, ROLLBACK, { release: false }]
 
 /** Рядок ядра довідника прав — з ключем із `p_item` виклику. */
@@ -84,8 +103,29 @@ function deferred() {
   return { promise, resolve }
 }
 
+/** Рядок ядра `Ticket` — з ключем із `p_item` виклику. */
+const ticketCore: Override = (text, params) =>
+  text.includes("ticket_save")
+    ? {
+        rows: [
+          {
+            r: JSON.stringify({
+              id: (JSON.parse(params[0]!) as { id: string }).id,
+              version: 1,
+              code: "R",
+              company_id: COMPANY,
+            }),
+          },
+        ],
+      }
+    : undefined
+
 const withModules = (objectModules: Modules, override?: Override) =>
-  setup(override ?? rightsCore, { objectModules })
+  setup(
+    override ??
+      ((text, params) => rightsCore(text, params) ?? ticketCore(text, params)),
+    { objectModules }
+  )
 
 // Відхилений проміс, якого ніхто не чекав, — дефект T3, а не тесту.
 const unhandled = vi.fn()
@@ -104,7 +144,7 @@ describe("hook order", () => {
     const { db, runtime } = await withModules({
       "Catalog.Client": {
         async beforeWrite({ ctx, draft }) {
-          await ctx.run(rights())
+          await ctx.run(createTicket())
           return draft
         },
       },
@@ -113,14 +153,14 @@ describe("hook order", () => {
     // Інваріант 3: ядро кожної фази — одразу після свого контексту.
     expect(db.calls).toEqual([
       ...OPEN,
-      ...rightsPhase(),
+      ...ticketCreatePhase(),
       ...clientPhase,
       COMMIT,
       { release: false },
     ])
     // Набір змін — і фази `ctx.run`; рядки — лише операцій команди.
     expect(result.changes.map((c) => [c.object, c.id])).toEqual([
-      [RIGHTS, OTHER],
+      [TICKET, OTHER],
       [CLIENT, ID],
     ])
     expect(result.rows.map((r) => r.ref)).toEqual([ID])
@@ -169,6 +209,164 @@ describe("hook order", () => {
     })
     const result = await runtime.run(session, create)
     expect(result.rows[0]!.code).toBe("A")
+  })
+})
+
+// Тимчасовий бар'єр Р-A4-17 до блоку Права-3: після початку фази прав
+// команда не торкається даних застосунку ні фазою, ні `ctx.read`.
+describe("rights barrier in hooks", () => {
+  type Hook = "beforeWrite" | "onWrite"
+  const hooked = (
+    hook: Hook,
+    body: (ctx: HookContext) => Promise<unknown>
+  ): ObjectModule<object> =>
+    hook === "beforeWrite"
+      ? {
+          async beforeWrite({ ctx, draft }) {
+            await body(ctx)
+            return draft
+          },
+        }
+      : {
+          async onWrite({ ctx }) {
+            await body(ctx)
+          },
+        }
+  // І контекст фази, і виклик ядра, і читання `Ticket` називають його таблицю.
+  const touchesTicket = (call: Call) => JSON.stringify(call).includes("ticket")
+
+  it.each<[Hook, "ctx.read" | "ctx.run"]>([
+    ["beforeWrite", "ctx.read"],
+    ["beforeWrite", "ctx.run"],
+    ["onWrite", "ctx.read"],
+    ["onWrite", "ctx.run"],
+  ])(
+    "refuses ctx.read and ctx.run of application data from a hook of a rights phase (%s, %s)",
+    async (hook, method) => {
+      const seen: unknown[] = []
+      const { db, runtime } = await withModules({
+        "Catalog.RoleAssignment": hooked(hook, async (ctx) => {
+          const touch =
+            method === "ctx.read"
+              ? ctx.read({ object: TICKET, id: OTHER })
+              : ctx.run(updateTicket(OTHER))
+          // Перехоплена відмова однаково закриває чергу (Р-A3-15).
+          seen.push(await failureOf(touch))
+        }),
+      })
+      expect(await failureOf(runtime.run(session, assign(ID)))).toEqual(
+        RIGHTS_CONTEXT
+      )
+      expect(seen).toEqual([RIGHTS_CONTEXT])
+      expect(db.calls).toEqual([
+        ...OPEN,
+        ...(hook === "onWrite" ? assignPhase(ID) : []),
+        ROLLBACK,
+        { release: false },
+      ])
+    }
+  )
+
+  it("refuses the core call of an application phase whose beforeWrite ran a rights phase", async () => {
+    const { db, runtime } = await withModules({
+      "Catalog.Ticket": {
+        async beforeWrite({ ctx, draft }) {
+          await ctx.run(assign(OTHER))
+          return draft
+        },
+      },
+    })
+    expect(await failureOf(runtime.run(session, updateTicket()))).toEqual(
+      RIGHTS_CONTEXT
+    )
+    expect(db.calls).toEqual([
+      ...OPEN,
+      ...assignPhase(OTHER),
+      ROLLBACK,
+      { release: false },
+    ])
+  })
+
+  it.each([
+    ["the rights phase first", [assign(OTHER), updateTicket(OTHER)]],
+    // Ticket стартує раніше, але його ядро стає в чергу після фази прав:
+    // перевірка лише на старті фази цього не побачила б.
+    ["the application phase first", [updateTicket(OTHER), assign(OTHER)]],
+  ])(
+    "refuses a concurrent ctx.run queued after a rights phase (%s)",
+    async (_, ops) => {
+      const { db, runtime } = await withModules({
+        "Catalog.Client": {
+          beforeWrite({ ctx, draft }) {
+            for (const op of ops) void ctx.run(op)
+            return draft
+          },
+        },
+        "Catalog.Ticket": {
+          async beforeWrite({ draft }) {
+            await Promise.resolve()
+            return draft
+          },
+        },
+      })
+      expect(await failureOf(runtime.run(session, create))).toEqual(
+        RIGHTS_CONTEXT
+      )
+      expect(db.calls.filter(touchesTicket)).toEqual([])
+      expect(db.calls.slice(-2)).toEqual([ROLLBACK, { release: false }])
+    }
+  )
+
+  it.each<[string, (ctx: HookContext) => Promise<unknown>, unknown[]]>([
+    [
+      "ctx.read of the assignments",
+      (ctx) => ctx.read({ object: ROLE_ASSIGNMENT, id: OTHER }),
+      [readOf("role_assignment", OTHER)],
+    ],
+    [
+      "ctx.run of a rights phase",
+      (ctx) =>
+        ctx.id === ID ? ctx.run(assign(OTHER)) : Promise.resolve(undefined),
+      assignPhase(OTHER),
+    ],
+  ])(
+    "allows rights data from a hook of a rights phase (%s)",
+    async (_, body, sent) => {
+      const { db, runtime } = await withModules({
+        "Catalog.RoleAssignment": hooked("onWrite", body),
+      })
+      await runtime.run(session, assign(ID))
+      expect(db.calls).toEqual([
+        ...OPEN,
+        ...assignPhase(ID),
+        ...sent,
+        COMMIT,
+        { release: false },
+      ])
+    }
+  )
+
+  // Компроміс Р-A4-17 до Права-3: хук членства, що призначає роль, робить
+  // наступні фази пакета неможливими (fail-closed).
+  it("refuses a second member of a batch when the membership onWrite assigns a role", async () => {
+    const { db, runtime } = await withModules({
+      // Довідник членства — дані застосунку, як `Client`.
+      "Catalog.Client": {
+        async onWrite({ ctx }) {
+          await ctx.run(assign(THIRD))
+        },
+      },
+    })
+    expect(
+      await failureOf(runtime.run(session, [create, { ...create, id: OTHER }]))
+    ).toEqual(RIGHTS_CONTEXT)
+    expect(db.calls).toEqual([
+      ...OPEN,
+      ...clientPhase,
+      ...assignPhase(THIRD),
+      ROLLBACK,
+      { release: false },
+    ])
   })
 })
 
@@ -499,24 +697,24 @@ describe("hook failures", () => {
       {
         "Catalog.Client": {
           async beforeWrite({ ctx, draft }) {
-            await ctx.run(rights()).catch(() => undefined)
+            await ctx.run(createTicket()).catch(() => undefined)
             return draft
           },
         },
       },
       (text, params) =>
-        text.includes("rights_role_save") && cores++ === 0
+        text.includes("ticket_save") && cores++ === 0
           ? { error: { code: "40001", message: "retry" } }
-          : rightsCore(text, params)
+          : ticketCore(text, params)
     )
     await runtime.run(session, create)
     expect(db.calls).toEqual([
       ...OPEN,
-      ...rightsPhase(),
+      ...ticketCreatePhase(),
       ROLLBACK,
       { release: false },
       ...OPEN,
-      ...rightsPhase(),
+      ...ticketCreatePhase(),
       ...clientPhase,
       COMMIT,
       { release: false },
@@ -614,11 +812,11 @@ describe("depth and queue", () => {
     const { db, runtime } = await withModules({
       "Catalog.Client": {
         beforeWrite({ ctx, draft }) {
-          void ctx.run(rights())
+          void ctx.run(createTicket())
           return draft
         },
       },
-      "Catalog.RightsRole": {
+      "Catalog.Ticket": {
         async beforeWrite({ ctx, draft }) {
           await ctx.read({ object: RIGHTS, id: OTHER })
           return draft
@@ -629,7 +827,7 @@ describe("depth and queue", () => {
     expect(db.calls).toEqual([
       ...OPEN,
       readRights(OTHER),
-      ...rightsPhase(),
+      ...ticketCreatePhase(),
       ...clientPhase,
       COMMIT,
       { release: false },
@@ -640,11 +838,14 @@ describe("depth and queue", () => {
     const { db, runtime } = await withModules({
       "Catalog.Client": {
         async beforeWrite({ ctx, draft }) {
-          await Promise.all([ctx.run(rights()), ctx.run(rights(THIRD))])
+          await Promise.all([
+            ctx.run(createTicket()),
+            ctx.run(createTicket(THIRD)),
+          ])
           return draft
         },
       },
-      "Catalog.RightsRole": {
+      "Catalog.Ticket": {
         async beforeWrite({ ctx, draft }) {
           await ctx.read({ object: RIGHTS, id: ctx.id })
           return draft
@@ -656,8 +857,8 @@ describe("depth and queue", () => {
       ...OPEN,
       readRights(OTHER),
       readRights(THIRD),
-      ...rightsPhase(),
-      ...rightsPhase(THIRD),
+      ...ticketCreatePhase(),
+      ...ticketCreatePhase(THIRD),
       ...clientPhase,
       COMMIT,
       { release: false },
@@ -889,42 +1090,49 @@ describe("hook context", () => {
             sizes.push(["client", ctx.additionalProperties.size])
             ctx.additionalProperties.set("seen", n)
             ctx.afterCommit(() => ran.push(n))
-            await ctx.run(rights())
+            await ctx.run(createTicket())
             return draft
           },
           onWrite({ ctx }) {
             seen.push(ctx.additionalProperties.get("seen"))
           },
         },
-        "Catalog.RightsRole": {
+        "Catalog.Ticket": {
           beforeWrite({ ctx, draft }) {
-            sizes.push(["rights", ctx.additionalProperties.size])
-            ctx.additionalProperties.set("seen", "rights")
+            sizes.push(["ticket", ctx.additionalProperties.size])
+            ctx.additionalProperties.set("seen", "ticket")
             return draft
           },
         },
       },
-      (text, params) => {
-        if (text.includes("rights_role_save")) {
+      (text) => {
+        if (text.includes("ticket_save")) {
           cores++
           return {
             rows: [
-              { r: JSON.stringify({ id: OTHER, version: cores, code: "R" }) },
+              {
+                r: JSON.stringify({
+                  id: OTHER,
+                  version: cores,
+                  code: "R",
+                  company_id: COMPANY,
+                }),
+              },
             ],
           }
         }
         return text.includes("client_save") && cores === 1
           ? { error: { code: "40001", message: "retry" } }
-          : rightsCore(text, params)
+          : undefined
       }
     )
     const result = await runtime.run(session, create)
     // Інваріант 16: повтор — з порожніми `additionalProperties`.
     expect(sizes).toEqual([
       ["client", 0],
-      ["rights", 0],
+      ["ticket", 0],
       ["client", 0],
-      ["rights", 0],
+      ["ticket", 0],
     ])
     expect(seen).toEqual([2])
     expect(ran).toEqual([2])
