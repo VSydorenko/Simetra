@@ -11,7 +11,7 @@ import { join } from "node:path"
 import { startHost } from "./serve.mjs"
 
 const EXPECTED_IDS = {
-  ours: ["__root__", "/", "/heavy", "/tx", "/after"],
+  ours: ["__root__", "/", "/heavy", "/tx", "/after", "/defer"],
   synth: ["__root__", "/", "/heavy"],
 }
 const EXPECTED_SOURCE = { ours: "simetra/model", synth: "synthetic-registry" }

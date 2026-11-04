@@ -28,6 +28,10 @@ const packageRoutes = (sub: string) =>
 export const routes = rootRoute("__root.tsx", [
   physical("", packageRoutes(variant)),
   ...(variant === "ours"
-    ? [route("/tx", "tx.tsx"), route("/after", "after.tsx")]
+    ? [
+        route("/tx", "tx.tsx"),
+        route("/after", "after.tsx"),
+        route("/defer", "defer.tsx"),
+      ]
     : []),
 ])
