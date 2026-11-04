@@ -1,11 +1,13 @@
 import { readFile, stat } from "node:fs/promises"
 import { join } from "node:path"
+import { parseArgs } from "citty"
 import { parse } from "smol-toml"
+import { mcpArgs } from "../commands/mcp-args"
 import { DEFAULT_DIR } from "../io/default-dir"
 import { posixRelative } from "../io/package-path"
 import { UsageError } from "../io/usage-error"
 import { errorCode, probe } from "./fs-probe"
-import { DESIGNER_PACKAGE } from "./skills"
+import { DESIGNER_PACKAGE, packageSubpath } from "./own-path"
 import type { InitPlan, InitRefusal, InitRefusalReason } from "./types"
 
 export const AGENTS = ["claude", "codex", "cursor", "vscode"] as const
@@ -17,10 +19,6 @@ export const DEFAULT_AGENTS: readonly Agent[] = ["claude"]
 
 export const MCP_SERVER_NAME = "simetra"
 
-// Ознака власного запису — сегмент шляху, а не весь шлях: так запис зі
-// старим шляхом bin (оновлення пакета, інший `node_modules`) теж власний
-const OWN_SEGMENT = `node_modules/${DESIGNER_PACKAGE}/`
-
 // Проєктний `mcp.json` Cursor не має `cwd` і не документує робочої теки
 // сервера, тож шляхи абсолютизуються інтерполяцією в `args` (спека designer §4.2)
 const WORKSPACE = "${workspaceFolder}"
@@ -30,6 +28,8 @@ const CURSOR_METADATA_DIR = `${WORKSPACE}/${DEFAULT_DIR.replace(/^\.\//, "")}`
 type Launch = { command: string; args: string[] }
 type Entry = Record<string, unknown>
 type Verdict = "match" | "own-differs" | "foreign"
+/** Звідки резолвити `args[0]` запису: корінь проєкту і його ОС. */
+type Context = { root: string; platform: NodeJS.Platform }
 
 interface Client {
   file: string
@@ -101,28 +101,46 @@ export async function mcpLaunch(
  * Чи запис наш і чи він уже такий, як треба. Зайві ключі й `args[2..]`
  * (дописаний `--read-only`, тека) — воля власника, тож на збіг не впливають.
  */
-export function matchesOwn(entry: unknown, expected: Entry): Verdict {
-  if (!isTable(entry) || !isOwn(entry)) return "foreign"
+export function matchesOwn(
+  entry: unknown,
+  expected: Entry,
+  context: Context
+): Verdict {
+  if (!isTable(entry) || !isOwn(entry, context)) return "foreign"
   const args = entry.args as unknown[]
   const want = expected.args as string[]
   const same =
     args[0] === want[0] &&
     args[1] === "mcp" &&
-    (want.length <= 2 || args.slice(2).some(isPositional)) &&
+    (want.length <= 2 || hasDir(args.slice(2))) &&
     requiredKeys(expected).every(([k, v]) => entry[k] === v)
   return same ? "match" : "own-differs"
 }
 
-function isOwn(entry: Entry): boolean {
+/**
+ * Запис наш, коли `node` запускає файл усередині якоїсь теки
+ * `node_modules/@simetrajs/designer/` після нормалізації: старий шлях bin
+ * (оновлення пакета, інший `node_modules`) теж власний, а вихід через `..` —
+ * ні. Префікс Cursor `${workspaceFolder}/` — це корінь проєкту.
+ */
+function isOwn(entry: Entry, { root, platform }: Context): boolean {
   const first = Array.isArray(entry.args) ? entry.args[0] : undefined
-  return (
-    entry.command === "node" &&
-    typeof first === "string" &&
-    first.replaceAll("\\", "/").includes(OWN_SEGMENT)
-  )
+  if (entry.command !== "node" || typeof first !== "string") return false
+  const bin = first.startsWith(`${WORKSPACE}/`)
+    ? first.slice(WORKSPACE.length + 1)
+    : first
+  return packageSubpath(root, bin, platform) !== undefined
 }
 
-const isPositional = (a: unknown) => typeof a === "string" && !a.startsWith("-")
+/**
+ * Чи хвіст `args` уже називає теку метаданих. Розбір — за описом самої
+ * команди `mcp`: значення рядкового прапорця (`--database-url-env X`) інакше
+ * сприймалося б як тека.
+ */
+function hasDir(rest: unknown[]): boolean {
+  const strings = rest.filter((a): a is string => typeof a === "string")
+  return parseArgs(strings, mcpArgs).dir !== undefined
+}
 
 function requiredKeys(expected: Entry): [string, unknown][] {
   return Object.entries(expected).filter(
@@ -137,7 +155,7 @@ function requiredKeys(expected: Entry): [string, unknown][] {
 function fixEntry(entry: Entry, expected: Entry): Entry {
   const want = expected.args as string[]
   let rest = (entry.args as unknown[]).slice(2)
-  if (want.length > 2 && !rest.some(isPositional)) {
+  if (want.length > 2 && !hasDir(rest)) {
     rest = [...want.slice(2), ...rest]
   }
   const args = [want[0], "mcp", ...rest]
@@ -151,8 +169,10 @@ function fixEntry(entry: Entry, expected: Entry): Entry {
 export async function planMcpConfigs(
   root: string,
   agents: readonly Agent[],
-  launch: Launch
+  launch: Launch,
+  platform: NodeJS.Platform
 ): Promise<InitPlan> {
+  const context = { root, platform }
   const plan: InitPlan = { actions: [], notes: [], refusals: [] }
   for (const agent of AGENTS.filter((a) => agents.includes(a))) {
     const client = CLIENTS[agent]
@@ -165,8 +185,8 @@ export async function planMcpConfigs(
     const expected = client.entry(launch)
     const result =
       client.format === "json"
-        ? planJson(read.text, client.container, expected)
-        : planToml(read.text ?? "", expected)
+        ? planJson(read.text, client.container, expected, context)
+        : planToml(read.text ?? "", expected, context)
     if (result === "match") continue
     if (result === "foreign") {
       plan.notes.push({ kind: "foreign-mcp-entry", path })
@@ -234,7 +254,8 @@ type Outcome = "match" | "foreign" | InitRefusalReason | { content: string }
 function planJson(
   text: string | undefined,
   container: string,
-  expected: Entry
+  expected: Entry,
+  context: Context
 ): Outcome {
   let root: unknown = {}
   if (text !== undefined) {
@@ -250,7 +271,7 @@ function planJson(
   const current = servers[MCP_SERVER_NAME]
   let next = expected
   if (current !== undefined) {
-    const verdict = matchesOwn(current, expected)
+    const verdict = matchesOwn(current, expected, context)
     if (verdict !== "own-differs") return verdict
     next = fixEntry(current as Entry, expected)
   }
@@ -266,7 +287,7 @@ function planJson(
  * рядка зберігають коментарі й порядок споживача; повторний розбір після
  * правки доводить, що вона однозначна.
  */
-function planToml(text: string, expected: Entry): Outcome {
+function planToml(text: string, expected: Entry, context: Context): Outcome {
   const servers = parseToml(text)
   if (servers === "invalid-toml") return servers
   if (servers !== undefined && !isTable(servers)) return "servers-not-an-object"
@@ -274,10 +295,11 @@ function planToml(text: string, expected: Entry): Outcome {
   let content: string
   let want = expected
   if (current === undefined) {
-    const separator = text === "" ? "" : text.endsWith("\n") ? "\n" : "\n\n"
-    content = text + separator + tomlBlock(expected)
+    const eol = lineEnding(text)
+    const separator = text === "" ? "" : text.endsWith(eol) ? eol : eol + eol
+    content = text + separator + tomlBlock(expected, eol)
   } else {
-    const verdict = matchesOwn(current, expected)
+    const verdict = matchesOwn(current, expected, context)
     if (verdict !== "own-differs") return verdict
     want = fixEntry(current as Entry, expected)
     const fixed = replaceArgsLine(text, want.args as unknown[])
@@ -302,9 +324,20 @@ function parseToml(text: string): unknown {
   }
 }
 
-function tomlBlock(entry: Entry): string {
+function tomlBlock(entry: Entry, eol: string): string {
   const args = tomlArray(entry.args as unknown[])
-  return `[mcp_servers.${MCP_SERVER_NAME}]\ncommand = ${tomlString(entry.command as string)}\nargs = ${args}\n`
+  const lines = [
+    `[mcp_servers.${MCP_SERVER_NAME}]`,
+    `command = ${tomlString(entry.command as string)}`,
+    `args = ${args}`,
+  ]
+  return lines.join(eol) + eol
+}
+
+// Конфіг із Windows чи з `core.autocrlf` має CRLF: дописане й виправлене
+// мусить мати те саме закінчення рядків, що й решта файлу
+function lineEnding(text: string): "\r\n" | "\n" {
+  return text.includes("\r\n") ? "\r\n" : "\n"
 }
 
 // Рядок JSON — коректний базовий рядок TOML, крім сирого DEL, який TOML
@@ -357,9 +390,9 @@ function isStringArray(array: string): boolean {
  */
 function replaceArgsLine(text: string, args: unknown[]): string | undefined {
   const array = tomlArray(args)
-  // Конфіг із Windows чи з `core.autocrlf` має CRLF: `\r` у кінці рядка не дав
-  // би збігтися ні заголовку з коментарем, ні рядку `args`
-  const eol = text.includes("\r\n") ? "\r\n" : "\n"
+  // `\r` у кінці рядка не дав би збігтися ні заголовку з коментарем, ні
+  // рядку `args`
+  const eol = lineEnding(text)
   const lines = text.split(eol)
   const headers = lines.flatMap((l, i) => (HEADER.test(l) ? [i] : []))
   if (array === undefined || headers.length !== 1) return undefined

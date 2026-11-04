@@ -1,9 +1,20 @@
-import { mkdir, symlink, unlink, writeFile } from "node:fs/promises"
-import { dirname } from "node:path"
+import { randomUUID } from "node:crypto"
+import {
+  mkdir,
+  realpath,
+  rename,
+  rm,
+  stat,
+  symlink,
+  unlink,
+  writeFile,
+} from "node:fs/promises"
+import { basename, dirname, join } from "node:path"
 import { installedPackageDir } from "../io/package-path"
 import { errorCode } from "./fs-probe"
 import { type Agent, mcpLaunch, planMcpConfigs } from "./mcp-config"
-import { DESIGNER_PACKAGE, planSkillLinks } from "./skills"
+import { DESIGNER_PACKAGE } from "./own-path"
+import { isOwnSkillEntry, planSkillLinks } from "./skills"
 import type { InitAction, InitPlan } from "./types"
 
 /**
@@ -21,7 +32,8 @@ export async function planInit(
   const configs = await planMcpConfigs(
     root,
     agents,
-    await mcpLaunch(root, pkgDir)
+    await mcpLaunch(root, pkgDir),
+    platform
   )
   return {
     actions: [...skills.actions, ...configs.actions],
@@ -30,7 +42,11 @@ export async function planInit(
   }
 }
 
-/** Збій ФС посеред застосування чистого плану — гонка з іншим процесом. */
+/**
+ * Збій посеред застосування чистого плану — гонка з іншим процесом. `code` —
+ * код помилки ФС або `changed-since-plan`, коли власний лінк перед
+ * видаленням уже не наш.
+ */
 export class InitApplyError extends Error {
   override name = "InitApplyError"
   constructor(
@@ -43,30 +59,80 @@ export class InitApplyError extends Error {
 
 /**
  * Застосовує план без відмов. Кожна дія вже перевірена планом, тож тут лише
- * механіка; будь-який збій зупиняє застосування й називає шлях дії.
+ * механіка; будь-який збій зупиняє застосування й називає шлях дії. Уже
+ * виконані дії лишаються: повторний `init` доробить решту (спека designer
+ * §4.2).
  */
-export async function applyInit(plan: InitPlan): Promise<void> {
+export async function applyInit(
+  plan: InitPlan,
+  platform: NodeJS.Platform
+): Promise<void> {
   for (const action of plan.actions) {
     try {
-      await applyAction(action)
+      await applyAction(action, platform)
     } catch (e) {
+      if (e instanceof InitApplyError) throw e
       throw new InitApplyError(action.path, errorCode(e))
     }
   }
 }
 
-async function applyAction(action: InitAction): Promise<void> {
+async function applyAction(
+  action: InitAction,
+  platform: NodeJS.Platform
+): Promise<void> {
   switch (action.kind) {
     case "unlink":
+      await assertOwnSkill(action.path, platform)
       return unlink(action.path)
     case "link":
       // Застарілий власний лінк (чи розгорнутий git-ом файл) іде першим:
       // `symlink` поверх наявного шляху дав би `EEXIST`
-      if (action.replaces) await unlink(action.path)
+      if (action.replaces) {
+        await assertOwnSkill(action.path, platform)
+        await unlink(action.path)
+      }
       await mkdir(dirname(action.path), { recursive: true })
       return symlink(action.target, action.path, action.type)
     case "write":
       await mkdir(dirname(action.path), { recursive: true })
-      return writeFile(action.path, action.content)
+      return writeAtomic(action.path, action.content)
+  }
+}
+
+// План бачив власний лінк, але до видалення інший процес міг покласти на його
+// місце чуже — видаляємо лише те, що наше й зараз
+async function assertOwnSkill(
+  path: string,
+  platform: NodeJS.Platform
+): Promise<void> {
+  if (!(await isOwnSkillEntry(path, platform))) {
+    throw new InitApplyError(path, "changed-since-plan")
+  }
+}
+
+/**
+ * Запис через тимчасовий файл у тій самій теці й `rename`: обірваний запис не
+ * лишає напівконфігу. Симлінк конфігу резолвиться заздалегідь, бо `rename`
+ * поверх самого лінка замінив би його звичайним файлом; права файлу
+ * зберігаються.
+ */
+async function writeAtomic(path: string, content: string): Promise<void> {
+  const target = await realpath(path).catch((e: unknown) => {
+    if (errorCode(e) === "ENOENT") return path
+    throw e
+  })
+  const mode = await stat(target).then(
+    (s) => s.mode & 0o777,
+    () => undefined
+  )
+  const temp = join(dirname(target), `.${basename(target)}.${randomUUID()}.tmp`)
+  try {
+    const options = mode === undefined ? { flag: "wx" } : { flag: "wx", mode }
+    await writeFile(temp, content, options)
+    await rename(temp, target)
+  } catch (e) {
+    await rm(temp, { force: true })
+    throw e
   }
 }

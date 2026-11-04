@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
-import { DESIGNER_PACKAGE } from "../../init/skills"
+import { DESIGNER_PACKAGE } from "../../init/own-path"
 
 export const PKG = `node_modules/${DESIGNER_PACKAGE}`
 

@@ -77,7 +77,7 @@ export async function runInit(
         : "The project is up to date."
       return ok(drift ? 1 : 0, [...lines, ...notes, tail])
     }
-    if (mode === "init") await applyInit(plan)
+    if (mode === "init") await applyInit(plan, platform)
     const summary = lines.length === 0 ? ["Nothing to change."] : lines
     return ok(0, [...summary, ...notes, ...TRAILER])
   } catch (e) {

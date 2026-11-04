@@ -11,12 +11,8 @@ import { tmpdir } from "node:os"
 import { join, relative } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
 import { installedPackageDir } from "../io/package-path"
-import {
-  DESIGNER_PACKAGE,
-  linkSpec,
-  planSkillLinks,
-  sameDir,
-} from "../init/skills"
+import { DESIGNER_PACKAGE, packageSubpath } from "../init/own-path"
+import { linkSpec, planSkillLinks, sameDir } from "../init/skills"
 import type { InitPlan } from "../init/types"
 
 const PKG = `node_modules/${DESIGNER_PACKAGE}`
@@ -154,6 +150,24 @@ describe("planSkillLinks", () => {
     expect(p.notes).toEqual(notes.map((kind) => ({ kind, path })))
   })
 
+  // Ціль містить сегмент пакета, але після нормалізації веде за його межі:
+  // ні заміни скіла, ні видалення «сироти»
+  it.each([
+    { name: "a", notes: ["foreign-skill"] },
+    { name: "old", notes: [] },
+  ])("leaves a link escaping the package alone: $name", async (c) => {
+    const { root, pkgDir } = await project()
+    await link(
+      root,
+      `.claude/skills/${c.name}`,
+      `../../${PKG}/skills/../../other/x`
+    )
+    const p = await plan(root, pkgDir)
+    const path = join(root, ".claude/skills", c.name)
+    expect(p.actions.filter((a) => a.path === path)).toEqual([])
+    expect(p.notes).toEqual(c.notes.map((kind) => ({ kind, path })))
+  })
+
   it("removes an own orphan link", async () => {
     const { root, pkgDir } = await project()
     await link(root, ".claude/skills/old", target("old"))
@@ -289,6 +303,29 @@ describe("linkSpec", () => {
       type: "junction",
       target: dir,
     })
+  })
+})
+
+describe("packageSubpath", () => {
+  it.each([
+    ["/p/a", `../${PKG}/skills/a`, "linux", ["skills", "a"]],
+    ["/p/a", `../${PKG}/skills/../../other/x`, "linux", undefined],
+    ["/p", `${PKG}/../other/bin.js`, "linux", undefined],
+    ["/p", `/q/${PKG}/dist/main.js`, "linux", ["dist", "main.js"]],
+    [
+      "C:\\p\\.claude\\skills",
+      "C:\\P\\Node_Modules\\@simetrajs\\designer\\skills\\a\\",
+      "win32",
+      ["skills", "a"],
+    ],
+    [
+      "C:\\p",
+      `${PKG}\\skills\\..\\..\\x`.replaceAll("/", "\\"),
+      "win32",
+      undefined,
+    ],
+  ] as const)("%s + %s (%s)", (base, target, platform, expected) => {
+    expect(packageSubpath(base, target, platform)).toEqual(expected)
   })
 })
 

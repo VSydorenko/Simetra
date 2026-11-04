@@ -57,7 +57,9 @@ pnpm exec simetra init [--agents claude,codex,cursor,vscode]
 Another directory or link with the same skill name, and another `simetra`
 entry in a config, stay as they are; `init` prints a note. `init --dry-run`
 prints the changes without writing; `init --check` exits with code 1 if
-`init` would change anything.
+`init` would change anything. If `init` refuses, it writes nothing; an I/O
+failure in the middle of writing may leave part of the changes done, and
+running `init` again completes them.
 
 Commit the links and the configs, and run `simetra init --check` in CI with
 the same `--agents`. The server writes metadata by default; to forbid writes,

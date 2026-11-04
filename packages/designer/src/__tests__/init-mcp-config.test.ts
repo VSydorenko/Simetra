@@ -12,7 +12,7 @@ import {
   mcpLaunch,
   planMcpConfigs,
 } from "../init/mcp-config"
-import { DESIGNER_PACKAGE } from "../init/skills"
+import { DESIGNER_PACKAGE } from "../init/own-path"
 import type { InitAction, InitPlan } from "../init/types"
 import { projectTree, put } from "./helpers/init-project"
 
@@ -22,6 +22,9 @@ const OLD_BIN = `${PKG}/old/main.js`
 const WS = "${workspaceFolder}"
 const LAUNCH = { command: "node", args: [BIN, "mcp"] }
 const CURSOR_DIR = `${WS}/${DEFAULT_DIR.replace(/^\.\//, "")}`
+const CONTEXT = { root: "/p", platform: "linux" } as const
+// Шлях містить сегмент пакета, але після нормалізації веде за його межі
+const ESCAPED_BIN = `./${PKG}/../other/bin.js`
 
 const FILES: Record<Agent, string> = {
   claude: ".mcp.json",
@@ -79,7 +82,7 @@ async function plan(
   agents: readonly Agent[] = AGENTS
 ): Promise<InitPlan> {
   const before = await projectTree(root)
-  const result = await planMcpConfigs(root, agents, LAUNCH)
+  const result = await planMcpConfigs(root, agents, LAUNCH, "linux")
   expect(await projectTree(root)).toEqual(before)
   return result
 }
@@ -260,7 +263,7 @@ describe("planMcpConfigs: JSON clients", () => {
     try {
       const fresh = await import("../init/mcp-config")
       const { root } = await project()
-      const p = await fresh.planMcpConfigs(root, ["cursor"], LAUNCH)
+      const p = await fresh.planMcpConfigs(root, ["cursor"], LAUNCH, "linux")
       const entry = entryOf(onlyWrite(p).content, "cursor") as {
         args: string[]
       }
@@ -320,8 +323,30 @@ describe("planMcpConfigs: JSON clients", () => {
       "foreign",
     ],
     ["not an object", "simetra", EXPECTED.claude.entry, "foreign"],
+    [
+      "bin in another node_modules",
+      { command: "node", args: [`/elsewhere/${BIN}`, "mcp"] },
+      EXPECTED.claude.entry,
+      "own-differs",
+    ],
+    [
+      ".. escape from the package",
+      { command: "node", args: [ESCAPED_BIN, "mcp"] },
+      EXPECTED.claude.entry,
+      "foreign",
+    ],
+    [
+      "cursor .. escape from the package",
+      {
+        type: "stdio",
+        command: "node",
+        args: [`${WS}/${ESCAPED_BIN}`, "mcp", CURSOR_DIR],
+      },
+      EXPECTED.cursor.entry,
+      "foreign",
+    ],
   ])("matchesOwn: %s", (_name, entry, expected, verdict) => {
-    expect(matchesOwn(entry, expected)).toBe(verdict)
+    expect(matchesOwn(entry, expected, CONTEXT)).toBe(verdict)
   })
 
   it.each(["claude", "cursor", "vscode"] as const)(
@@ -340,6 +365,43 @@ describe("planMcpConfigs: JSON clients", () => {
         args: [entry.args[0], "mcp", ...tail],
       })
       await applyAndReplan(root, action, [agent])
+    }
+  )
+
+  // Значення рядкового прапорця — не тека: хвіст розбирається описом команди
+  // `mcp`, а не за відсутністю дефіса
+  it("cursor tells an option value from the dir", async () => {
+    const { root } = await project()
+    const option = ["--database-url-env", "CUSTOM_ENV"]
+    const entry = (tail: string[]) => ({
+      type: "stdio",
+      command: "node",
+      args: [`${WS}/${BIN}`, "mcp", ...tail],
+    })
+    const file = (tail: string[]) =>
+      json({ mcpServers: { simetra: entry(tail) } })
+    await put(root, FILES.cursor, file(option))
+    const action = onlyWrite(await plan(root, ["cursor"]))
+    expect(entryOf(action.content, "cursor")).toEqual(
+      entry([CURSOR_DIR, ...option])
+    )
+    await put(root, FILES.cursor, file([...option, `${WS}/meta`]))
+    expect(await plan(root, ["cursor"])).toEqual(EMPTY)
+  })
+
+  it.each(["claude", "cursor"] as const)(
+    "leaves an entry escaping the package alone for %s",
+    async (agent) => {
+      const { root } = await project()
+      const { container, entry } = EXPECTED[agent]
+      const bin = agent === "cursor" ? `${WS}/${ESCAPED_BIN}` : ESCAPED_BIN
+      const escaped = { ...entry, args: [bin, ...entry.args.slice(1)] }
+      await put(root, FILES[agent], json({ [container]: { simetra: escaped } }))
+      expect(await plan(root, [agent])).toEqual({
+        actions: [],
+        notes: [{ kind: "foreign-mcp-entry", path: join(root, FILES[agent]) }],
+        refusals: [],
+      })
     }
   )
 
@@ -428,13 +490,24 @@ describe("planMcpConfigs: codex TOML", () => {
     await applyAndReplan(root, action, ["codex"])
   })
 
+  it("appends to a CRLF codex config with CRLF", async () => {
+    const { root } = await project()
+    const existing = '# keep me\r\nmodel = "x"\r\n'
+    await put(root, CODEX, existing)
+    const action = onlyWrite(await plan(root, ["codex"]))
+    expect(action.content).toBe(
+      existing + "\r\n" + BLOCK.replaceAll("\n", "\r\n")
+    )
+    await applyAndReplan(root, action, ["codex"])
+  })
+
   it("serialises the bin path as a valid TOML string", async () => {
     const { root } = await project()
     const odd = {
       command: "node",
       args: ['node_modules/@simetrajs/designer/a "b"\\c\x7f.js', "mcp"],
     }
-    const p = await planMcpConfigs(root, ["codex"], odd)
+    const p = await planMcpConfigs(root, ["codex"], odd, "linux")
     const action = onlyWrite(p)
     const parsed = parse(action.content) as {
       mcp_servers: { simetra: { args: string[] } }

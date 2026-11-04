@@ -2,6 +2,7 @@ import {
   chmod,
   lstat,
   mkdir,
+  readdir,
   readFile,
   readlink,
   rm,
@@ -252,12 +253,75 @@ describe("simetra init", () => {
     // Файл на місці теки між планом і застосуванням — гонка з іншим процесом;
     // помилка не залежить від прав, тож тест чесний і під root
     await put(root, ".agents", "not a dir")
-    const error = await applyInit(plan).catch((e: unknown) => e)
+    const error = await applyInit(plan, "linux").catch((e: unknown) => e)
     expect(error).toBeInstanceOf(InitApplyError)
     expect(error).toMatchObject({
       path: join(root, ".agents/skills/a"),
       code: "ENOTDIR",
     })
+  })
+
+  // Між планом і застосуванням на місці власного лінка опинилося чуже: план
+  // ще каже «видалити», але застосування перевіряє власність на диску
+  it.each([
+    { name: "orphan", rel: "old", own: `../../${PKG}/skills/old`, via: "dir" },
+    {
+      name: "stale",
+      rel: "a",
+      own: `../../../elsewhere/${PKG}/skills/a`,
+      via: "link",
+    },
+  ])("does not delete a $name link replaced since the plan", async (c) => {
+    const root = await project()
+    const path = join(root, ".claude/skills", c.rel)
+    await mkdir(join(root, ".claude/skills"), { recursive: true })
+    await symlink(c.own, path)
+    const plan = await planInit(root, ["claude"], "linux")
+    expect(plan.actions).toContainEqual(expect.objectContaining({ path }))
+    await rm(path)
+    if (c.via === "dir") await mkdir(path)
+    else await symlink("../../vendor/a", path)
+    const error = await applyInit(plan, "linux").catch((e: unknown) => e)
+    expect(error).toMatchObject({ path, code: "changed-since-plan" })
+    expect(error).toBeInstanceOf(InitApplyError)
+    const kept = await lstat(path)
+    expect(c.via === "dir" ? kept.isDirectory() : kept.isSymbolicLink()).toBe(
+      true
+    )
+  })
+
+  it("writes a config atomically and leaves no temp file", async () => {
+    const root = await project()
+    await put(root, ".mcp.json", '{ "mcpServers": {} }\n')
+    await chmod(join(root, ".mcp.json"), 0o600)
+    const { ino } = await stat(join(root, ".mcp.json"))
+    expect((await run(root)).exitCode).toBe(0)
+    // Новий inode — файл підмінено `rename`, а не переписано на місці
+    expect((await stat(join(root, ".mcp.json"))).ino).not.toBe(ino)
+    const config = JSON.parse(await readFile(join(root, ".mcp.json"), "utf8"))
+    expect(config.mcpServers.simetra.command).toBe("node")
+    expect((await stat(join(root, ".mcp.json"))).mode & 0o777).toBe(0o600)
+    expect((await readdir(root)).filter((n) => n.endsWith(".tmp"))).toEqual([])
+  })
+
+  it("removes the temp file when the config write fails", async () => {
+    const root = await project()
+    const plan = await planInit(root, ["claude"], "linux")
+    // Тека на місці конфігу між планом і застосуванням: `rename` падає
+    await mkdir(join(root, ".mcp.json"))
+    const error = await applyInit(plan, "linux").catch((e: unknown) => e)
+    expect(error).toMatchObject({ path: join(root, ".mcp.json") })
+    expect((await readdir(root)).filter((n) => n.endsWith(".tmp"))).toEqual([])
+  })
+
+  it("writes through a config symlink and keeps the link", async () => {
+    const root = await project()
+    await put(root, "real.json", "{}\n")
+    await symlink("real.json", join(root, ".mcp.json"))
+    expect((await run(root)).exitCode).toBe(0)
+    expect((await lstat(join(root, ".mcp.json"))).isSymbolicLink()).toBe(true)
+    const config = JSON.parse(await readFile(join(root, "real.json"), "utf8"))
+    expect(config.mcpServers.simetra.command).toBe("node")
   })
 
   // root обходить права теки, тож під ним запис не впаде; мапінг помилки

@@ -1,17 +1,45 @@
-import { readFile, readdir, readlink } from "node:fs/promises"
+import { lstat, readFile, readdir, readlink } from "node:fs/promises"
 import { dirname, join, posix, resolve, win32 } from "node:path"
 import { posixRelative } from "../io/package-path"
 import { errorCode, probe, type Probe } from "./fs-probe"
+import { packageSubpath } from "./own-path"
 import type { InitPlan, InitRefusal } from "./types"
 
 /** Теки скілів у корені проєкту — у спеці не прив'язані до агента (§4.2). */
 export const SKILL_DIRS = [".agents/skills", ".claude/skills"] as const
 
-export const DESIGNER_PACKAGE = "@simetrajs/designer"
+/**
+ * Чи ціль лінка — тека скіла пакета: рівно один сегмент під
+ * `node_modules/@simetrajs/designer/skills/` після нормалізації. Будь-який
+ * `node_modules` годиться, тож застарілий лінк (перенесений проєкт, інший
+ * `node_modules`) теж власний і його можна виправити.
+ */
+export function isOwnSkillTarget(
+  linkPath: string,
+  target: string,
+  platform: NodeJS.Platform
+): boolean {
+  const sub = packageSubpath(dirname(linkPath), target, platform)
+  return sub?.length === 2 && sub[0] === "skills"
+}
 
-// Ознака власного лінка — сегмент цілі, а не вся ціль: так застарілий лінк
-// (перенесений проєкт, інший `node_modules`) теж власний і його можна виправити
-const OWN_SEGMENT = `node_modules/${DESIGNER_PACKAGE}/skills/`
+/**
+ * Перевірка власності на диску перед видаленням: між планом і застосуванням
+ * інший процес міг підмінити власний лінк чужим. Файл — розгорнутий git-ом
+ * симлінк, тож його вміст судиться як ціль.
+ */
+export async function isOwnSkillEntry(
+  path: string,
+  platform: NodeJS.Platform
+): Promise<boolean> {
+  const s = await lstat(path)
+  if (s.isSymbolicLink()) {
+    return isOwnSkillTarget(path, await readlink(path), platform)
+  }
+  if (!s.isFile()) return false
+  const content = (await readFile(path, "utf8")).trim()
+  return isOwnSkillTarget(path, content, platform)
+}
 
 type SkillDir = { rel: string; path: string; existing: boolean }
 type Entry =
@@ -220,9 +248,7 @@ async function classifyLink(
   platform: NodeJS.Platform
 ): Promise<Entry> {
   const target = await readlink(path)
-  if (!target.replaceAll("\\", "/").includes(OWN_SEGMENT)) {
-    return { kind: "foreign" }
-  }
+  if (!isOwnSkillTarget(path, target, platform)) return { kind: "foreign" }
   const same = sameDir(resolve(dirname(path), target), expected, platform)
   return { kind: same ? "match" : "stale" }
 }
