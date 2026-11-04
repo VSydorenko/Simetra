@@ -1,4 +1,5 @@
 import {
+  encodePair,
   isTextEncodedType,
   readQuerySchema,
   type BaseCastType,
@@ -8,7 +9,7 @@ import {
   type RuntimeObject,
 } from "simetra/model"
 import type { z } from "zod"
-import { encodePair, encodeParam } from "./values"
+import { encodeParam } from "./values"
 
 // Колонка мітки пари й ключ таблиці в каталозі без `castType`: їхній тип
 // задає платформа (мітка — текст, ключ — UUID).

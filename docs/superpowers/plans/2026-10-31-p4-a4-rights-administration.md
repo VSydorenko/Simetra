@@ -373,11 +373,11 @@ Postgres 17 локального стека Supabase, Supavisor (transaction-р�
 - Produces: `encodeItemValue(attribute: RuntimeAttribute, value: unknown, path: string): Encoded<unknown>`, `encodePair`, `isPlainObject`, `INTEGER_TEXT`, `type Encoded<T> = { value: T } | { error: CommandError }` — із `simetra/model`.
 - Produces: `encodeMemberValues(object: RuntimeObject, values: unknown, forced: readonly string[]): { columns: Record<string, unknown> } | { error: CommandError }` — `values` — простий об'єкт; кожен ключ — реквізит з `insert: true`, не з `forced` (логічні імена); значення — `encodeItemValue` (пара — обидві колонки); результат — фізичні колонки → JSON-значення. Порядок помилок — як `encodeItem` (Р-A3-8). `path` — логічне ім'я реквізиту.
 
-- [ ] **Крок 1:** перенести функції; тести T3 переводять імпорт на `simetra/model` і лишаються зеленими без зміни очікувань.
-- [ ] **Крок 2:** T0-тест на вручну зібраному `RuntimeObject`: `encodeMemberValues rejects forced, non-insert, unknown and undefined keys` (`it.each`: ключ із `forced`, `insert: false`, невідомий, `undefined`, не-об'єкт → `command.invalid` з `path`) і `encodes values and pairs by physical column`.
-- [ ] **Крок 3:** у `server/__tests__/values.test.ts` — `encodeMemberValues matches encodeItem for create`: ті самі колонки й значення для `Numeric`, пари й `null`.
-- [ ] **Крок 4:** реалізувати; `pnpm --filter simetra test values`, `typecheck`, `lint`.
-- [ ] **Крок 5:** коміт `refactor(model): кодування значень каталогу рантайму в T0 і encodeMemberValues`.
+- [x] **Крок 1:** перенести функції; тести T3 переводять імпорт на `simetra/model` і лишаються зеленими без зміни очікувань.
+- [x] **Крок 2:** T0-тест на вручну зібраному `RuntimeObject`: `encodeMemberValues rejects forced, non-insert, unknown and undefined keys` (`it.each`: ключ із `forced`, `insert: false`, невідомий, `undefined`, не-об'єкт → `command.invalid` з `path`) і `encodes values and pairs by physical column`.
+- [x] **Крок 3:** у `server/__tests__/values.test.ts` — `encodeMemberValues matches encodeItem for create`: ті самі колонки й значення для `Numeric`, пари й `null`.
+- [x] **Крок 4:** реалізувати; `pnpm --filter simetra test values`, `typecheck`, `lint`.
+- [x] **Крок 5:** коміт `refactor(model): кодування значень каталогу рантайму в T0 і encodeMemberValues`.
 
 ### Задача 3: діагностики `maintenance.*` і `ApplyDbError`
 

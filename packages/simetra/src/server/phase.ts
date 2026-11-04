@@ -2,6 +2,7 @@ import {
   COMMAND_SETTING,
   OPERATION_EVENTS,
   batchSchema,
+  isPlainObject,
   operationSchema,
   type CommandContext,
   type CommandError,
@@ -17,7 +18,7 @@ import { CommandFailure } from "./errors"
 import { callHook, type HookPhase } from "./hook-context"
 import { ident, issuePath, literal } from "./read"
 import type { Statement, Transaction } from "./transaction"
-import { encodeItem, isPlainObject } from "./values"
+import { encodeItem } from "./values"
 
 /** The catalog entries an operation addresses. */
 interface Target {

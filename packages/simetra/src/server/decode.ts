@@ -1,6 +1,10 @@
-import type { RuntimeAttribute, RuntimeObject } from "simetra/model"
+import {
+  INTEGER_TEXT,
+  isPlainObject,
+  type RuntimeAttribute,
+  type RuntimeObject,
+} from "simetra/model"
 import { CommandFailure } from "./errors"
-import { INTEGER_TEXT, isPlainObject } from "./values"
 
 const internal = () => new CommandFailure({ code: "command.internal" })
 
