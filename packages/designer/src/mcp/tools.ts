@@ -9,7 +9,11 @@ import {
 } from "../io/report"
 import { TOOLS, type Tool, type ToolResult } from "../tools/catalog"
 import { invoke } from "../tools/invoke"
-import type { ApplyData, PlanData } from "../tools/apply-tools"
+import type {
+  ApplyData,
+  PlanData,
+  UnchangedPlanData,
+} from "../tools/apply-tools"
 import type { DiffData } from "../tools/database-tools"
 import type { DatabaseResource } from "../tools/types"
 
@@ -112,7 +116,7 @@ function toResponse(
   // `planHash` — вхід `apply`: без нього в `structuredContent` агент не
   // підтвердить показаний план. Текст — той самий, що в CLI: дрейф першим
   if (tool.name === "plan") {
-    const data = result.data as PlanData | undefined
+    const data = result.data as PlanData | UnchangedPlanData | undefined
     return {
       isError: !ok,
       structuredContent: {

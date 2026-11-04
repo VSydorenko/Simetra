@@ -230,6 +230,7 @@ export {
   type CreatedByPlan,
   type PendingCarrierCopies,
 } from "./carrier-backfill"
+export type { RightsOrphans } from "./rights-sources"
 export {
   buildPlan,
   checkOwnerMembership,

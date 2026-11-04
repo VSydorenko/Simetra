@@ -5,7 +5,11 @@ import {
   renderDiff,
   renderPlan,
 } from "../io/report"
-import type { ApplyData, PlanData } from "../tools/apply-tools"
+import type {
+  ApplyData,
+  PlanData,
+  UnchangedPlanData,
+} from "../tools/apply-tools"
 import type { Tool, ToolResult } from "../tools/catalog"
 import type { DiffData } from "../tools/database-tools"
 import type { RolesData } from "../tools/roles-tool"
@@ -143,10 +147,14 @@ export function renderResult(
     return {
       stdout:
         tool.name === "plan"
-          ? renderPlan(r.data as PlanData | undefined, report, {
-              ok: r.ok,
-              written: r.written,
-            })
+          ? renderPlan(
+              r.data as PlanData | UnchangedPlanData | undefined,
+              report,
+              {
+                ok: r.ok,
+                written: r.written,
+              }
+            )
           : renderApply(r.data as ApplyData | undefined, r.diagnostics, report),
     }
   }

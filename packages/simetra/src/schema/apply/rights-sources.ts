@@ -18,7 +18,9 @@ import {
   keyColumn,
   quoteIdent,
   tabularParentColumn,
+  versionColumn,
   type AttributeCase,
+  type MetadataRef,
   type PhysicalSnapshot,
   type StandardColumnDef,
 } from "simetra/model"
@@ -29,11 +31,41 @@ import type { ApplyTransaction } from "./port"
 import { withLocalSettings } from "./settings"
 
 /**
- * Скільки таблиць називає відмова доступу й скільки невідомих ключів —
- * попередження джерела; решту дає кількість. Те саме число, що відмова
- * власників плану.
+ * Скільки таблиць називає відмова доступу, скільки невідомих ключів —
+ * попередження джерела і скільки сиріт — попередження сиріт; решту дає
+ * кількість. Те саме число, що відмова власників плану.
  */
 export const RIGHTS_SOURCE_LIMIT = 20
+
+/**
+ * Сироти прав (спека прав §7, П4 §6.12) — повний перелік без ліміту: з нього
+ * клієнт складає пакет очистки командами. `object` — довідник бажаної моделі;
+ * `version` — очікувана версія операції (у дельти — версія її ролі); `scope` —
+ * id скоупу рядка на рівні скоупу. Кожен перелік відсортовано за `id`.
+ */
+export interface RightsOrphans {
+  /** Кастомні ролі, чий архетип зник чи змінив рівень. */
+  roles: { object: MetadataRef; id: string; version: number; scope?: string }[]
+  /**
+   * Живі призначення ролі-сироти (`role` — її id) і прямі призначення
+   * архетипу, що зник чи змінив рівень.
+   */
+  assignments: {
+    object: MetadataRef
+    id: string
+    version: number
+    scope?: string
+    role?: string
+  }[]
+  /** Рядки дельти ролі поза `roles`, що вийшли з домену; `role` — id ролі. */
+  deltas: {
+    object: MetadataRef
+    role: string
+    id: string
+    version: number
+    scope?: string
+  }[]
+}
 
 /** Що план прочитав на цілі про прийняті джерела прав (спека прав §4.7). */
 export interface RightsSourceFacts {
@@ -42,7 +74,25 @@ export interface RightsSourceFacts {
   /** Джерела призначень, чиї ключі прочитано: ключі поза `sourceKeys`. */
   unknownKeys: { source: string; keys: string[]; more: number }[]
   fullAccess: { scope: string; before: number; after: number }[]
-  orphans: { customRoles: string[]; assignments: string[]; more: number }
+  orphans: RightsOrphans
+  /**
+   * Id сиріт довідників, яких бажана модель не має: план знімає їхні таблиці
+   * разом з рядками, тож очищати командами нічого — їх називає лише
+   * попередження. `customRoles` — ролі й рядки дельти.
+   */
+  droppedOrphans: { customRoles: string[]; assignments: string[] }
+}
+
+/** Факти прав цілі без довідників прав: ні носіїв, ні сиріт. */
+export function noRightsFacts(): Pick<
+  RightsSourceFacts,
+  "fullAccess" | "orphans" | "droppedOrphans"
+> {
+  return {
+    fullAccess: [],
+    orphans: { roles: [], assignments: [], deltas: [] },
+    droppedOrphans: { customRoles: [], assignments: [] },
+  }
 }
 
 /** Вхід читача: таблиці без повторів і джерела призначень з відомими ключами. */
@@ -65,6 +115,11 @@ interface RightsCatalogInput {
   roles: QualifiedName
   delta: QualifiedName
   assignments: QualifiedName
+  /**
+   * Довідники ролей і призначень у бажаній моделі — за id об'єкта, а не за
+   * іменем таблиці; немає — план знімає довідник разом з рядками.
+   */
+  objects: { roles?: MetadataRef; assignments?: MetadataRef }
   holdersSql: string
   holderTables: QualifiedName[]
   /**
@@ -119,8 +174,12 @@ const appliedRightsSchema = z.object({
     rightsCatalogs: z.array(
       z.object({
         level,
-        roles: z.object({ table: named, delta: named }),
-        assignments: z.object({ table: named }),
+        roles: z.object({
+          objectId: z.string(),
+          table: named,
+          delta: named,
+        }),
+        assignments: z.object({ objectId: z.string(), table: named }),
       })
     ),
     membership: z.array(
@@ -182,10 +241,21 @@ const appliedRightsSchema = z.object({
 
 const tableText = (t: QualifiedName) => `${t.schema}.${t.name}`
 
+/** Посилання на об'єкт бажаної моделі за id: вхід `rightsSourceInput`. */
+export function objectRefs(
+  objects: readonly { id: string; kind: MetadataRef["kind"]; name: string }[]
+): (objectId: string) => MetadataRef | undefined {
+  const byId = new Map(
+    objects.map((o) => [o.id, { kind: o.kind, name: o.name }] as const)
+  )
+  return (objectId) => byId.get(objectId)
+}
+
 /**
  * Вхід читача з контрактів: таблиці-джерела членства й призначень і таблиці
  * ролей (спека прав §4.7) — кожна рівно раз; відомі ключі джерела — `sourceKeys` усіх
- * ролей, що його називають.
+ * ролей, що його називають. `objectRef` — об'єкт бажаної моделі за id: ним
+ * сироти називають свій довідник.
  */
 export function rightsSourceInput(
   contracts: Pick<
@@ -200,6 +270,7 @@ export function rightsSourceInput(
   >,
   physical: PhysicalSnapshot,
   attributeCase: AttributeCase,
+  objectRef: (objectId: string) => MetadataRef | undefined,
   applied?: unknown
 ): RightsSourceInput {
   const tables = new Map<string, QualifiedName>()
@@ -256,8 +327,8 @@ export function rightsSourceInput(
   const catalogInput = (
     catalog: {
       level: RightsLevelKey
-      roles: { table: QualifiedName; delta: QualifiedName }
-      assignments: { table: QualifiedName }
+      roles: { objectId: string; table: QualifiedName; delta: QualifiedName }
+      assignments: { objectId: string; table: QualifiedName }
     },
     source: {
       tables: {
@@ -279,6 +350,10 @@ export function rightsSourceInput(
       roles: catalog.roles.table,
       delta: catalog.roles.delta,
       assignments: catalog.assignments.table,
+      objects: {
+        roles: objectRef(catalog.roles.objectId),
+        assignments: objectRef(catalog.assignments.objectId),
+      },
       holdersSql: effectiveHolderRows(
         catalog,
         holders,
@@ -304,7 +379,7 @@ export function rightsSourceInput(
         roles: columns(
           source,
           catalog.roles.table,
-          [KEY, R.archetype, DELETION],
+          [KEY, R.archetype, DELETION, VERSION],
           style
         ),
         delta: columns(
@@ -316,7 +391,7 @@ export function rightsSourceInput(
         assignments: columns(
           source,
           catalog.assignments.table,
-          [KEY, R.archetype, R.customRole, DELETION],
+          [KEY, R.archetype, R.customRole, DELETION, VERSION],
           style
         ),
       },
@@ -537,6 +612,8 @@ interface CatalogRow extends Record<string, unknown> {
   archetype: string | null
   custom_role: string | null
   deleted: boolean
+  /** `bigint`: `pg` віддає його рядком. */
+  version: string | number
 }
 
 interface DeltaRow extends Record<string, unknown> {
@@ -562,6 +639,7 @@ const R = RIGHTS_COLUMNS
 const KEY = keyColumn(false)
 const PARENT = tabularParentColumn()
 const DELETION = deletionMarkColumn()
+const VERSION = versionColumn()
 
 function catalogSql(
   catalog: RightsCatalogInput,
@@ -583,7 +661,7 @@ function catalogSql(
   return [
     `SELECT ${c(KEY)} AS id, ${scope} AS scope, ${c(R.archetype)} AS archetype,`,
     `  ${kind === "roles" ? "NULL::uuid" : c(R.customRole)} AS custom_role,`,
-    `  ${c(DELETION)} AS deleted`,
+    `  ${c(DELETION)} AS deleted, ${c(VERSION)} AS version`,
     `FROM ${qualified(table)}`,
   ].join("\n")
 }
@@ -593,6 +671,31 @@ function scopeKey(level: RightsLevelKey, scope: string | null): string {
     ? "global"
     : `scope:${level.scopeKindId}:${scope ?? ""}`
 }
+
+/** Сирота, чий довідник може бути відсутнім у бажаній моделі. */
+interface Found {
+  object: MetadataRef | undefined
+  id: string
+  version: number
+  scope?: string
+  role?: string
+}
+
+const byId = (a: { id: string }, b: { id: string }) =>
+  a.id < b.id ? -1 : a.id > b.id ? 1 : 0
+
+/** Сироти з довідником бажаної моделі — без дублів, за `id`. */
+function kept<T extends Found>(found: T[]): (T & { object: MetadataRef })[] {
+  const unique = new Map<string, T & { object: MetadataRef }>()
+  for (const item of found)
+    if (item.object !== undefined && !unique.has(item.id))
+      unique.set(item.id, { ...item, object: item.object })
+  return [...unique.values()].sort(byId)
+}
+
+/** Id сиріт довідників, яких бажана модель не має. */
+const dropped = (found: Found[]) =>
+  found.filter((item) => item.object === undefined).map((item) => item.id)
 
 function collectRightsFacts(
   input: RightsSourceInput,
@@ -606,7 +709,7 @@ function collectRightsFacts(
   previous:
     | { role_id: string; storage: string; storage_id: string | null }[]
     | undefined
-): Pick<RightsSourceFacts, "fullAccess" | "orphans"> {
+): Pick<RightsSourceFacts, "fullAccess" | "orphans" | "droppedOrphans"> {
   const beforeRoles = new Set(
     previous?.map(
       (role) =>
@@ -629,28 +732,39 @@ function collectRightsFacts(
     string,
     { scope: string; before: number; after: number }
   >()
-  const customRoles: string[] = []
-  const assignments: string[] = []
+  const roles: Found[] = []
+  const assignments: Found[] = []
+  const deltas: (Found & { role: string })[] = []
   for (const {
     catalog,
-    roles,
+    roles: roleRows,
     assignments: assigned,
     delta,
     holders,
   } of catalogRows) {
     const storage = storageKey(catalog.level)
-    const customs = new Map(
-      roles.filter((role) => !role.deleted).map((role) => [role.id, role])
+    const found = (object: MetadataRef | undefined, row: CatalogRow) => ({
+      object,
+      id: row.id,
+      version: Number(row.version),
+      ...(row.scope === null ? {} : { scope: row.scope }),
+    })
+    const live = new Map(
+      roleRows.filter((role) => !role.deleted).map((role) => [role.id, role])
     )
-    for (const role of roles) {
-      if (role.deleted) continue
+    const orphanRoles = new Set<string>()
+    for (const role of live.values()) {
       const desiredRole = desired.get(role.archetype ?? "")
-      if (desiredRole === undefined || desiredRole.storage !== storage)
-        customRoles.push(role.id)
+      if (desiredRole === undefined || desiredRole.storage !== storage) {
+        orphanRoles.add(role.id)
+        roles.push(found(catalog.objects.roles, role))
+      }
     }
+    // Дельту ролі-сироти знімає позначка самої ролі: окремого рядка в
+    // пакеті очистки вона не потребує
     for (const row of delta) {
-      const parent = customs.get(row.parent)
-      if (parent === undefined) continue
+      const parent = live.get(row.parent)
+      if (parent === undefined || orphanRoles.has(parent.id)) continue
       const key = JSON.stringify([
         parent.archetype,
         row.object,
@@ -658,15 +772,25 @@ function collectRightsFacts(
         row.extent,
         row.dimension,
       ])
-      if (!domain.has(key)) customRoles.push(row.id)
+      if (!domain.has(key))
+        deltas.push({
+          ...found(catalog.objects.roles, parent),
+          id: row.id,
+          role: parent.id,
+        })
     }
+    // Живе призначення ролі-сироти не дає позначити роль (`role-in-use`),
+    // тож воно — сирота разом з нею
     for (const row of assigned) {
       if (row.deleted) continue
-      if (
-        row.custom_role === null &&
-        desired.get(row.archetype ?? "")?.storage !== storage
-      )
-        assignments.push(row.id)
+      if (row.custom_role !== null) {
+        if (orphanRoles.has(row.custom_role))
+          assignments.push({
+            ...found(catalog.objects.assignments, row),
+            role: row.custom_role,
+          })
+      } else if (desired.get(row.archetype ?? "")?.storage !== storage)
+        assignments.push(found(catalog.objects.assignments, row))
     }
     if (catalog.rootRemoved) continue
     for (const row of holders) {
@@ -679,13 +803,6 @@ function collectRightsFacts(
       fullAccess.set(key, count)
     }
   }
-  const sortedRoles = [...new Set(customRoles)].sort()
-  const sortedAssignments = [...new Set(assignments)].sort()
-  const limitedRoles = sortedRoles.slice(0, RIGHTS_SOURCE_LIMIT)
-  const limitedAssignments = sortedAssignments.slice(
-    0,
-    RIGHTS_SOURCE_LIMIT - limitedRoles.length
-  )
   return {
     fullAccess:
       previous === undefined
@@ -694,13 +811,13 @@ function collectRightsFacts(
             a.scope.localeCompare(b.scope)
           ),
     orphans: {
-      customRoles: limitedRoles,
-      assignments: limitedAssignments,
-      more:
-        sortedRoles.length +
-        sortedAssignments.length -
-        limitedRoles.length -
-        limitedAssignments.length,
+      roles: kept(roles),
+      assignments: kept(assignments),
+      deltas: kept(deltas),
+    },
+    droppedOrphans: {
+      customRoles: [...dropped(roles), ...dropped(deltas)],
+      assignments: dropped(assignments),
     },
   }
 }
@@ -716,12 +833,8 @@ export async function readRightsSourceFacts(
   tx: ApplyTransaction,
   input: RightsSourceInput
 ): Promise<RightsSourceFacts> {
-  const empty = {
-    fullAccess: [],
-    orphans: { customRoles: [], assignments: [], more: 0 },
-  }
   if (input.tables.length === 0)
-    return { owners: [], unknownKeys: [], ...empty }
+    return { owners: [], unknownKeys: [], ...noRightsFacts() }
   const owners = (
     await tx.query<{
       table_schema: string
@@ -853,17 +966,35 @@ export function rightsSourceDiagnostics(facts: RightsSourceFacts): {
         more: u.more,
       })
     )
-  if (
-    facts.orphans.customRoles.length > 0 ||
-    facts.orphans.assignments.length > 0
+  const ids = (lists: { id: string }[][], extra: string[]) =>
+    [...new Set([...lists.flat().map((row) => row.id), ...extra])].sort()
+  const customRoles = ids(
+    [facts.orphans.roles, facts.orphans.deltas],
+    facts.droppedOrphans.customRoles
   )
+  const assignments = ids(
+    [facts.orphans.assignments],
+    facts.droppedOrphans.assignments
+  )
+  if (customRoles.length > 0 || assignments.length > 0) {
+    // Ліміт — лише тексту: структурний перелік (`orphans`) повний
+    const shownRoles = customRoles.slice(0, RIGHTS_SOURCE_LIMIT)
+    const shownAssignments = assignments.slice(
+      0,
+      RIGHTS_SOURCE_LIMIT - shownRoles.length
+    )
     warnings.push(
       applyDiagnostic("plan.rights-orphans", "warning", {
-        customRoles: facts.orphans.customRoles.join(", "),
-        assignments: facts.orphans.assignments.join(", "),
-        more: facts.orphans.more,
+        customRoles: shownRoles.join(", "),
+        assignments: shownAssignments.join(", "),
+        more:
+          customRoles.length +
+          assignments.length -
+          shownRoles.length -
+          shownAssignments.length,
       })
     )
+  }
   const lost = facts.fullAccess.filter(
     (row) => row.before > 0 && row.after === 0
   )

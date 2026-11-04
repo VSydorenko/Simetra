@@ -171,11 +171,17 @@ async function committed(
   expect(r.data).toMatchObject({ status: "committed" })
 }
 
-/** `plan` над станом, що вже збігається з метаданими: нічого застосовувати. */
+/**
+ * `plan` над станом, що вже збігається з метаданими: нічого застосовувати,
+ * сиріт прав немає.
+ */
 async function expectUnchanged(dir: string, url: string): Promise<void> {
   const r = await call("plan", {}, options(dir, url))
   expect(r.ok, JSON.stringify(r.diagnostics)).toBe(true)
-  expect(r.data).toBeUndefined()
+  expect(r.data).toEqual({
+    unchanged: true,
+    rightsOrphans: { roles: [], assignments: [], deltas: [] },
+  })
   expect(r.artifacts).toEqual([])
   expect(r.diagnostics.map((d) => d.code)).not.toContain("apply.drift")
 }

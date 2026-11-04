@@ -416,11 +416,11 @@ Postgres 17 локального стека Supabase, Supavisor (transaction-р�
   ```
   `object` — з об'єкта **бажаної** моделі за `objectId`; довідника немає в бажаній моделі → його рядки не потрапляють у `rightsOrphans`, лише в текст попередження: план видаляє таблицю такого довідника разом з рядками, тож очищати командами нічого (команд над ним уже немає). Сорти — Р-A4-3; кожен перелік відсортовано за `id`, без дублів. `PlanOutcome.rightsOrphans?` відсутній лише в ранніх відмовах до читання фактів. Параметри й текст `plan.rights-orphans` не змінюються (`customRoles` — id ролей і дельт, `assignments`, `more` — з `RightsOrphans` з лімітом).
 
-- [ ] **Крок 1:** переписати `finds invalid custom roles, deltas and direct assignments by row ID` під `RightsOrphans`: роль-сирота з дельтою й живим призначенням, дельта живої ролі поза доменом, пряме призначення зниклого архетипу, позначена роль → рівно очікувані переліки з версіями (дельта ролі-сироти — не в `deltas`; її призначення — у `assignments` з `role`).
-- [ ] **Крок 2:** переписати `warns once for capped orphan row IDs` → `rightsOrphans stays complete past the warning limit`: `RIGHTS_SOURCE_LIMIT + 5` сиріт → повний перелік; параметри попередження — перші `RIGHTS_SOURCE_LIMIT`, `more = 5`.
-- [ ] **Крок 3:** тест `renders an unchanged plan with orphans` (`report.ts`/`cli.test.ts`): `UnchangedPlanData` → текст «nothing to apply», JSON-вивід несе `unchanged` і `rightsOrphans`.
-- [ ] **Крок 4:** реалізувати; оновити літерали й очікування трьох DB-тестів `unchanged` (вони перевіряються scoped-прогоном у Задачі 8); `pnpm --filter simetra test rights-sources`, `pnpm --filter @simetrajs/designer test cli report mcp`, `typecheck`, `lint`.
-- [ ] **Крок 5:** коміт `feat(schema): повний структурований перелік сиріт прав у результаті плану`.
+- [x] **Крок 1:** переписати `finds invalid custom roles, deltas and direct assignments by row ID` під `RightsOrphans`: роль-сирота з дельтою й живим призначенням, дельта живої ролі поза доменом, пряме призначення зниклого архетипу, позначена роль → рівно очікувані переліки з версіями (дельта ролі-сироти — не в `deltas`; її призначення — у `assignments` з `role`).
+- [x] **Крок 2:** переписати `warns once for capped orphan row IDs` → `rightsOrphans stays complete past the warning limit`: `RIGHTS_SOURCE_LIMIT + 5` сиріт → повний перелік; параметри попередження — перші `RIGHTS_SOURCE_LIMIT`, `more = 5`.
+- [x] **Крок 3:** тест `renders an unchanged plan with orphans` (`report.ts`/`cli.test.ts`): `UnchangedPlanData` → текст «nothing to apply», JSON-вивід несе `unchanged` і `rightsOrphans`.
+- [x] **Крок 4:** реалізувати; оновити літерали й очікування трьох DB-тестів `unchanged` (вони перевіряються scoped-прогоном у Задачі 8); `pnpm --filter simetra test rights-sources`, `pnpm --filter @simetrajs/designer test cli report mcp`, `typecheck`, `lint`.
+- [x] **Крок 5:** коміт `feat(schema): повний структурований перелік сиріт прав у результаті плану`.
 
 ### Задача 5: `Tool.cliOnly` і відмова `cli-only`
 

@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest"
 import { commandByName, runTool, toolCommand } from "../cli/command"
 import { cliInput } from "../cli/input"
 import { renderResult } from "../cli/render"
-import type { PlanData } from "../tools/apply-tools"
+import type { PlanData, UnchangedPlanData } from "../tools/apply-tools"
 import { TOOLS, toolByName, type Tool } from "../tools/catalog"
 import { TOOL_NAMES } from "../tools/types"
 import {
@@ -341,6 +341,7 @@ describe("cli adapter", () => {
     const hash = "b".repeat(64)
     const env = { SIMETRA_DATABASE_URL: "postgres://u:p@db.example.test/app" }
     const REPORT = "plans/initial-0123456789ab.rehearsal.json"
+    const NO_ORPHANS = { roles: [], assignments: [], deltas: [] }
 
     it("plan takes its directory as a positional, not JSON", async () => {
       expect(await cliInput(tool("plan"), { _: ["meta/"] }, noStdin)).toEqual({
@@ -500,6 +501,7 @@ describe("cli adapter", () => {
         environment: { role: "postgres", defaultPrivileges: [] },
         plpgsqlCheck: "transient",
         expectedBlindFunctions: 1,
+        rightsOrphans: NO_ORPHANS,
       }
       const { stdout } = renderResult(
         tool("plan"),
@@ -632,6 +634,7 @@ describe("cli adapter", () => {
         environment: { role: "postgres", defaultPrivileges: [] },
         plpgsqlCheck: "installed",
         expectedBlindFunctions: 0,
+        rightsOrphans: NO_ORPHANS,
       }
       const { stdout } = renderResult(
         tool("plan"),
@@ -718,6 +721,7 @@ describe("cli adapter", () => {
         environment: { role: "postgres", defaultPrivileges: [] },
         plpgsqlCheck: "installed",
         expectedBlindFunctions: 0,
+        rightsOrphans: NO_ORPHANS,
       })
       const render = (data: PlanData) =>
         renderResult(
@@ -812,6 +816,7 @@ describe("cli adapter", () => {
         },
         plpgsqlCheck: "unavailable",
         expectedBlindFunctions: 0,
+        rightsOrphans: NO_ORPHANS,
       }
       const { stdout } = renderResult(
         tool("plan"),
@@ -836,6 +841,53 @@ describe("cli adapter", () => {
         '  s2 environment catalogOnly (lock none) REVOKE ALL ON FUNCTION "app"."f"() FROM PUBLIC',
         '  s3 environment catalogOnly (lock none) GRANT EXECUTE ON FUNCTION "app"."f"() TO PUBLIC',
       ])
+    })
+
+    it("renders an unchanged plan with orphans", () => {
+      // Артефакту немає, але сироти прав клієнт бере саме з незмінного плану
+      const data: UnchangedPlanData = {
+        unchanged: true,
+        rightsOrphans: {
+          roles: [
+            {
+              object: { kind: "Catalog", name: "GlobalRoles" },
+              id: "00000000-0000-4000-8000-000000000001",
+              version: 3,
+            },
+          ],
+          assignments: [],
+          deltas: [],
+        },
+      }
+      const result = {
+        ok: true,
+        written: false,
+        changes: [],
+        artifacts: [],
+        diagnostics: [],
+        data,
+      }
+      const text = renderResult(tool("plan"), result, {
+        dir: "metadata",
+        locale: "en",
+        format: "text",
+      }).stdout
+      expect(text.split("\n")[0]).toBe(
+        "plan: nothing to apply; the database is at the metadata"
+      )
+      const json = JSON.parse(
+        renderResult(tool("plan"), result, {
+          dir: "metadata",
+          locale: "en",
+          format: "json",
+        }).stdout
+      ) as Record<string, unknown>
+      expect(json).toMatchObject({
+        ok: true,
+        artifacts: [],
+        unchanged: true,
+        rightsOrphans: data.rightsOrphans,
+      })
     })
 
     it("the text of a rehearsal warns about the locks it took", () => {
