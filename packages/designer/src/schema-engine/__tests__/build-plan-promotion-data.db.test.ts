@@ -551,13 +551,11 @@ describe.concurrent("buildPlan", () => {
         })
       })
 
-      it("the implicit lock of a repaired table belongs to the data step", async () => {
-        // Таблиця ТЧ уже має канонічні імена, тож намір її не займає. Таблиці,
-        // яку займав би лише крок ремонту, тепер не буває: крок даних буває
-        // лише на таблиці промоції (`recordedFillKind`), а кожна таблиця
-        // промоції дістає тригери незмінності ключа (спека прав §7) під тим самим
-        // SHARE ROW EXCLUSIVE. Тож `artifact.locks` замок кроку даних не
-        // виокремлює — його доводить `implicitLocks` без права на явний LOCK.
+      // Ремонт телефону контактів: крок даних на таблиці ТЧ, що вже має
+      // канонічні імена. Два твердження нижче — окремі тести: кожне будує
+      // власну ціль, і двох конвеєрів промоції в одному тесті бюджет часу
+      // тесту під конкуренцією файлу не витримує
+      const repairedContacts = () => {
         const files = contactsProject()
         const raw = JSON.parse(files.get(CONTACT_FILE)!) as Json
         ;(raw.columns as Json[])[1]!.physicalName = "parent_id"
@@ -583,9 +581,18 @@ describe.concurrent("buildPlan", () => {
             expression: "btrim(phone)",
           },
         ]
-        const p = await promoted(files, mapping)
-        const contacts = { schema: "app", name: "counterparty_contacts" }
-        const artifact = planned(await planPromotion(p))
+        return promoted(files, mapping)
+      }
+      const contacts = { schema: "app", name: "counterparty_contacts" }
+
+      it("plans a repaired table under the explicit lock of its engine steps", async () => {
+        // Таблиця ТЧ уже має канонічні імена, тож намір її не займає. Таблиці,
+        // яку займав би лише крок ремонту, тепер не буває: крок даних буває
+        // лише на таблиці промоції (`recordedFillKind`), а кожна таблиця
+        // промоції дістає тригери незмінності ключа (спека прав §7) під тим самим
+        // SHARE ROW EXCLUSIVE. Тож `artifact.locks` замок кроку даних не
+        // виокремлює — його доводить `implicitLocks` без права на явний LOCK.
+        const artifact = planned(await planPromotion(await repairedContacts()))
         const touching = artifact.steps.filter((s) =>
           s.lockedTables.some((t) => t.name === contacts.name)
         )
@@ -674,7 +681,11 @@ describe.concurrent("buildPlan", () => {
           ...contacts,
           mode: "shareRowExclusive",
         })
+      })
+
+      it("the implicit lock of a repaired table belongs to the data step", async () => {
         // Без права на явний LOCK замок бере сам крок — і це крок даних
+        const p = await repairedContacts()
         const reader: ApplyDatabase = {
           transaction: (target, end, fn) =>
             dbs.reader.transaction(target, end, (tx) =>
