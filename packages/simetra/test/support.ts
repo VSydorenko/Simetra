@@ -19,6 +19,9 @@ export {
   GAUGE_LOG_TABLE,
   GAUGE_TABLE,
   GAUGE_WRITER_ID,
+  MEMBER_EDITOR_ID,
+  RIGHTS_ADMIN_ID,
+  rightsAdminReadingMembers,
   runtimeValuesLayer,
   policyDomain,
   ticketMoveToHandler,
@@ -29,6 +32,7 @@ export {
   refAttribute,
   TASK_FILE,
   TASK_NOTE_ADOPTED_TABLE,
+  TASK_VIEWER_ID,
   taskNoteMapping,
   TICKET_CHECKLIST_TABLE,
   TICKET_TABLE,
@@ -40,6 +44,7 @@ export {
 } from "../src/compiler/__tests__/fixtures/rights"
 export * from "../src/schema/__tests__/fixtures/e1-fixtures"
 export { signUp } from "./db/auth"
+export { insertOrphan } from "./db/rights-seed"
 export * from "./db/connection"
 export * from "./db/fingerprint"
 export { readCatalog, type CatalogShape, type CatalogTable } from "./db/catalog"

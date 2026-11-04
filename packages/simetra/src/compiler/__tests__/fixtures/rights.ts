@@ -1024,6 +1024,33 @@ export function adminRoles(): Layer {
   }
 }
 
+/**
+ * `RightsAdmin` поверх `adminRoles()` з явним `read` на довіднику членства:
+ * `administerRights` не дає неявного читання, тож без нього призначення не
+ * адресує учасника (`command.invalid` `subject`). Перевизначення, а не зміна
+ * `adminRoles()`: інші тести покладаються на його гранти.
+ */
+export function rightsAdminReadingMembers(): Layer {
+  return {
+    [ROLE_FILE("RightsAdmin")]: role(
+      RIGHTS_ADMIN_ID,
+      "RightsAdmin",
+      { scopeKind: "org" },
+      {
+        grants: [
+          grant(
+            objects(["Catalog", "OrgRoles"], ["Catalog", "OrgRoleAssignments"]),
+            ["read", "administerRights"],
+            "any"
+          ),
+          grant(objects(["Document", "Task"]), ["read"], "any"),
+          grant(objects(["Catalog", "OrgMember"]), ["read"], "any"),
+        ],
+      }
+    ),
+  }
+}
+
 export const TICKET_FILE = "catalogs/Ticket/Ticket.meta.json"
 export const TICKET_ID = uuid(6901)
 export const TICKET_TABLE = "ticket"
