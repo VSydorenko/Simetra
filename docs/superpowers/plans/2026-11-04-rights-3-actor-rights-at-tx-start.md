@@ -159,8 +159,8 @@
 
 **Produces:** `commandSteps(client: pg.Client, claims: Record<string, unknown>, steps: readonly CommandStep[], options?: { immediate?: boolean }): Promise<{ completed: unknown[]; refusal?: Refusal }>`, де `CommandStep = { context?: CommandContext; sql: string; params?: unknown[]; asOwner?: boolean } | { check: (client: pg.Client) => Promise<unknown> }`. Одна точка збереження на сценарій; claims — раз; контекст — перед кроком, що його має; крок `asOwner` — `RESET ROLE` (власник з контекстом команди), інакше `SET LOCAL ROLE simetra_command`; крок `check` — від власника, без зміни контексту, його результат — у `completed`; для кроку SQL у `completed` — `{ rows, rowCount }`; між кроками `SET CONSTRAINTS` немає; `immediate` — `SET CONSTRAINTS ALL IMMEDIATE` від власника після останнього кроку; перший `DatabaseError` — `refusal` (форма `Refusal` з `commandAs`), `completed` — кроки до нього; відкат точки збереження — у `finally`.
 
-- [ ] **Крок 1.** Реалізувати. `connection.test.ts` перевіряє лише чисті функції, тож перший тест помічника — перший кейс Задачі 6 (`keeps the effects of earlier steps visible to later steps`).
-- [ ] **Крок 2.** `pnpm --filter simetra typecheck`, `lint`; коміт `test(simetra): багатокрокова команда для DB-сценаріїв прав`.
+- [x] **Крок 1.** Реалізувати. `connection.test.ts` перевіряє лише чисті функції, тож перший тест помічника — перший кейс Задачі 6 (`keeps the effects of earlier steps visible to later steps`).
+- [x] **Крок 2.** `pnpm --filter simetra typecheck`, `lint`; коміт `test(simetra): багатокрокова команда для DB-сценаріїв прав`.
 
 ## Задача 2: живі варіанти
 
@@ -171,11 +171,11 @@
 
 **Produces:** `RIGHTS_FUNCTIONS.mineLive`, `myScopesLive`, `myMembersLive`, `dimensionValuesLive`; `const LIVE: RightsUser` (`user: CURRENT_USER`, `scopes: call(myScopesLive)`, `members: k => call(myMembersLive, [k])`, `current: true`); `myScopesBody(contracts, whose, withOrigin = false)` — з `withOrigin` колонка `catalog`.
 
-- [ ] **Крок 1. Тести:** `revokes execute on live variants` (одиниці кожного = `executeGrants("<сигнатура>", [], provider)`, цілими операторами); `renders live variants as stable invoker functions` (`LANGUAGE sql STABLE SET search_path = ''`, без `SECURITY DEFINER`); `computes the snapshot and the actor check from live variants` (тіла знімка й `rights_tx_check` кличуть `rights_mine_live()`, не `rights_mine()`; `requires` цих функцій — живий варіант).
-- [ ] **Крок 2.** Червоні: `pnpm --filter simetra test rights-functions rights-guards`.
-- [ ] **Крок 3.** Реалізувати; `snapshotBody`, `actorCheck` і їхні `requires` — на `mineLive`.
-- [ ] **Крок 4.** Зелені; `pnpm --filter simetra test:db rights-functions rights-guards`; `typecheck`, `lint`.
-- [ ] **Крок 5.** Коміт `feat(compiler): живі варіанти функцій фактів актора`.
+- [x] **Крок 1. Тести:** `revokes execute on live variants` (одиниці кожного = `executeGrants("<сигнатура>", [], provider)`, цілими операторами); `renders live variants as stable invoker functions` (`LANGUAGE sql STABLE SET search_path = ''`, без `SECURITY DEFINER`); `computes the snapshot and the actor check from live variants` (тіла знімка й `rights_tx_check` кличуть `rights_mine_live()`, не `rights_mine()`; `requires` цих функцій — живий варіант).
+- [x] **Крок 2.** Червоні: `pnpm --filter simetra test rights-functions rights-guards`.
+- [x] **Крок 3.** Реалізувати; `snapshotBody`, `actorCheck` і їхні `requires` — на `mineLive`.
+- [x] **Крок 4.** Зелені; `pnpm --filter simetra test:db rights-functions rights-guards`; `typecheck`, `lint`.
+- [x] **Крок 5.** Коміт `feat(compiler): живі варіанти функцій фактів актора`.
 
 ## Задача 3: сховище, джерела, тіла знімка
 

@@ -329,7 +329,7 @@ function snapshotBody(
     "  END IF;",
     `  INSERT INTO ${actor} (xid, actor, full_access) VALUES (txid_current(), v_actor, false);`,
     `  INSERT INTO ${actor} (xid, actor, level, level_id, scope, container, object, action, extent, dimension_id, full_access)`,
-    `  SELECT txid_current(), v_actor, r.level, r.level_id, r.scope, r.container, r.object, r.action, r.extent, r.dimension_id, false FROM ${ref(RIGHTS_FUNCTIONS.mine)}() r;`,
+    `  SELECT txid_current(), v_actor, r.level, r.level_id, r.scope, r.container, r.object, r.action, r.extent, r.dimension_id, false FROM ${ref(RIGHTS_FUNCTIONS.mineLive)}() r;`,
     ...contracts.rightsCatalogs.map((catalog) =>
       [
         `  INSERT INTO ${actor} (xid, actor, level, level_id, scope, full_access)`,
@@ -727,12 +727,12 @@ function containerStorageKind(contracts: GuardContracts): string {
  * що для ролі й призначення. Права ростуть і без зміни ролі чи призначення:
  * самоприйняття запрошеного рядка членства з призначеннями ключа
  * `assignment` не ставить. Ключ стоїть, доки є інші, тож знімок ще не
- * прибрано. `rights_mine()` рахує права за поточними claims: інший актор на
+ * прибрано. `rights_mine_live()` рахує права за поточними claims: інший актор на
  * COMMIT дав би чужі права, тож відмова, як у знімку (fail-closed).
  */
 function actorCheck(contracts: GuardContracts): string {
   const actor = ref(platform("rights_tx_actor"))
-  const after = `SELECT ${GRANT_COLUMNS} FROM ${ref(RIGHTS_FUNCTIONS.mine)}()`
+  const after = `SELECT ${GRANT_COLUMNS} FROM ${ref(RIGHTS_FUNCTIONS.mineLive)}()`
   const before = `SELECT ${GRANT_COLUMNS} FROM ${actor} WHERE xid = v_pending.xid AND NOT full_access AND level IS NOT NULL`
   return [
     "IF v_pending.kind = 'actor' THEN",
@@ -1003,7 +1003,7 @@ export function buildRightsGuardUnits(
       owner,
       [
         unitNode(COMMAND_FUNCTIONS.current),
-        unitNode(RIGHTS_FUNCTIONS.mine),
+        unitNode(RIGHTS_FUNCTIONS.mineLive),
         { type: "table", schema: PLATFORM_SCHEMA, name: "rights_tx_actor" },
       ]
     )
@@ -1050,7 +1050,7 @@ export function buildRightsGuardUnits(
       owner,
       [
         unitNode(COMMAND_FUNCTIONS.current),
-        unitNode(RIGHTS_FUNCTIONS.mine),
+        unitNode(RIGHTS_FUNCTIONS.mineLive),
         { type: "table", schema: PLATFORM_SCHEMA, name: "rights_tx_actor" },
       ]
     )
@@ -1196,7 +1196,7 @@ export function buildRightsGuardUnits(
   }
   const check = platform("rights_tx_check")
   addFunction(check, checkBody(contracts, physical, attributeCase), undefined, [
-    unitNode(RIGHTS_FUNCTIONS.mine),
+    unitNode(RIGHTS_FUNCTIONS.mineLive),
     unitNode(RIGHTS_FUNCTIONS.roles),
     unitNode(RIGHTS_FUNCTIONS.domain),
     { type: "table", schema: PLATFORM_SCHEMA, name: "rights_tx_pending" },

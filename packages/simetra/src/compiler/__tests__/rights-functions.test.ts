@@ -17,6 +17,7 @@ import {
 import { sha256HexSync } from "../sha256"
 import { hasEmptySearchPath, routineLanguage } from "../sql/closed-forms"
 import { unitCalls, unitRelations } from "../sql/dependencies"
+import { executeGrants } from "../sql/execute-grants"
 import { loadSqlParser, type SqlParser } from "../sql/parse"
 import { withoutLocations, type SqlUnit } from "../sql/units"
 import { kitchenSink } from "./fixtures/kitchen-sink"
@@ -182,6 +183,20 @@ function comparisons(unit: SqlUnit): [string, string, Value][] {
   })
 }
 
+/** Ім'я функції оператора `GRANT`/`REVOKE EXECUTE`; інший оператор — `undefined`. */
+function grantedFunction(unit: SqlUnit): string | undefined {
+  const grant = (
+    unit.tree as {
+      GrantStmt?: {
+        objects: {
+          ObjectWithArgs: { objname: { String: { sval: string } }[] }
+        }[]
+      }
+    }
+  ).GrantStmt
+  return grant?.objects[0]!.ObjectWithArgs.objname.at(-1)!.String.sval
+}
+
 /** Гранти й відкликання `EXECUTE` функцій прав: ім'я → отримувачі. */
 function executeGrantees(model: CompiledModel): {
   granted: Map<string, string[]>
@@ -283,9 +298,13 @@ const SIGNATURES = [
   "function:simetra.rights_dim(text,text,uuid)",
   "function:simetra.rights_dimension_values(uuid)",
   "function:simetra.rights_domain()",
+  "function:simetra.rights_dimension_values_live(uuid)",
   "function:simetra.rights_mine()",
+  "function:simetra.rights_mine_live()",
   "function:simetra.rights_my_members(uuid)",
+  "function:simetra.rights_my_members_live(uuid)",
   "function:simetra.rights_my_scopes()",
+  "function:simetra.rights_my_scopes_live()",
   "function:simetra.rights_own(text,text)",
   "function:simetra.rights_projection()",
   "function:simetra.rights_requires()",
@@ -309,6 +328,17 @@ const WITHOUT_MEMBERSHIP = SIGNATURES.filter(
     s !== "function:simetra.rights_visible_users()" &&
     s !== "function:simetra.rights_visible_users_of(uuid)"
 )
+
+/**
+ * Живі варіанти фактів актора (спека прав §5.1): кличуть їх лише функції від
+ * власника, тож без `EXECUTE` знімка не обійти. Аргументи — типи сигнатури.
+ */
+const LIVE_VARIANTS: readonly [QualifiedName, string][] = [
+  [RIGHTS_FUNCTIONS.mineLive, ""],
+  [RIGHTS_FUNCTIONS.myScopesLive, ""],
+  [RIGHTS_FUNCTIONS.myMembersLive, "uuid"],
+  [RIGHTS_FUNCTIONS.dimensionValuesLive, "uuid"],
+]
 
 /**
  * Варіанти аналізу (спека прав §5.1): кличуть їх лише функції аналізу від власника,
@@ -372,7 +402,9 @@ describe("rights functions", () => {
       expect(option(unit, "volatility")?.String?.sval, unit.name).toBe(
         data ? "immutable" : unit.name === "rights_bump" ? "volatile" : "stable"
       )
-      const variant = VARIANTS.includes(unit.name)
+      const variant =
+        VARIANTS.includes(unit.name) ||
+        LIVE_VARIANTS.some(([fn]) => fn.name === unit.name)
       expect(option(unit, "security")?.Boolean?.boolval, unit.name).toBe(
         data || variant || unit.name === "rights_role_grants" ? undefined : true
       )
@@ -627,7 +659,8 @@ describe("rights functions", () => {
     ]) {
       expect(calls).toContain(`${fn.schema}.${fn.name}`)
     }
-    // Таблиці членства згадують лише шаблон «моїх скоупів» і межа
+    // Таблиці членства згадують лише шаблон «моїх скоупів» (публічна функція
+    // й живий варіант) і межа
     // «Користувачів» — остання лише в з'єднанні з «моїми скоупами»
     // (спека прав §5.2) — разом з їхніми варіантами аналізу (спека прав §5.1), шаблон
     // функції множини членства й функції аналізу (учасники скоупу запиту під
@@ -643,6 +676,7 @@ describe("rights functions", () => {
     expect(readers).toEqual(
       [
         RIGHTS_FUNCTIONS.myScopes,
+        RIGHTS_FUNCTIONS.myScopesLive,
         RIGHTS_FUNCTIONS.scopesOf,
         RIGHTS_FUNCTIONS.visibleUsers,
         RIGHTS_FUNCTIONS.visibleUsersOf,
@@ -673,6 +707,69 @@ describe("rights functions", () => {
     expect(calls).toContain(
       `${RIGHTS_FUNCTIONS.myScopes.schema}.${RIGHTS_FUNCTIONS.myScopes.name}`
     )
+  })
+
+  it("revokes execute on live variants", () => {
+    for (const [fn, types] of LIVE_VARIANTS) {
+      const grants = rightsUnits(model)
+        .filter((u) => grantedFunction(u) === fn.name)
+        .map((u) => u.sql)
+        .sort()
+      expect(grants, fn.name).toEqual(
+        executeGrants(
+          `${fn.schema}.${fn.name}(${types})`,
+          [],
+          "supabase"
+        ).sort()
+      )
+    }
+  })
+
+  it("renders live variants as stable invoker functions", () => {
+    const facts = [
+      RIGHTS_FUNCTIONS.mine,
+      RIGHTS_FUNCTIONS.myScopes,
+      RIGHTS_FUNCTIONS.myMembers,
+      RIGHTS_FUNCTIONS.dimensionValues,
+    ].map((fn) => `${fn.schema}.${fn.name}`)
+    for (const [fn] of LIVE_VARIANTS) {
+      const unit = functionUnit(model, fn.name)
+      expect(routineLanguage(unit.tree as never), fn.name).toBe("sql")
+      expect(option(unit, "volatility")?.String?.sval, fn.name).toBe("stable")
+      expect(hasEmptySearchPath(unit.tree as never), fn.name).toBe(true)
+      expect(option(unit, "security"), fn.name).toBeUndefined()
+      // Живий варіант читає вкладені факти теж наживо: публічна функція
+      // після появи гілок повернула б знімок.
+      const calls = unitCalls(unit, parse).map((c) => `${c.schema}.${c.name}`)
+      expect(
+        calls.filter((c) => facts.includes(c)),
+        fn.name
+      ).toEqual([])
+    }
+    // Походження рядка мого скоупу — лише в живому варіанті.
+    expect(
+      tableColumns(functionUnit(model, RIGHTS_FUNCTIONS.myScopesLive.name))
+    ).toEqual([
+      ["scope_kind_id", "uuid"],
+      ["scope", "uuid"],
+      ["member", "uuid"],
+      ["catalog", "bool"],
+    ])
+    expect(
+      tableColumns(functionUnit(model, RIGHTS_FUNCTIONS.myScopes.name))
+    ).toEqual([
+      ["scope_kind_id", "uuid"],
+      ["scope", "uuid"],
+      ["member", "uuid"],
+    ])
+    // Рядок довідника членства — `catalog` істинний: лише такі читають
+    // функції членства виду.
+    const origin = target(selectOf(tree("SELECT true AS catalog")), "catalog")
+    const arms = unionArms(
+      bodyTree(functionUnit(model, RIGHTS_FUNCTIONS.myScopesLive.name))
+    )
+    expect(arms.length).toBeGreaterThan(0)
+    for (const arm of arms) expect(target(arm, "catalog")).toEqual(origin)
   })
 
   it("reads the members of every scope kind only in my scopes of that kind", async () => {
@@ -755,6 +852,15 @@ describe("rights functions over adopted sources", () => {
     expect(
       bodyTree(functionUnit(model, RIGHTS_FUNCTIONS.myScopes.name))
     ).toEqual(branch(" AND s.is_active IS TRUE"))
+    // Живий варіант — те саме тіло з походженням: рядок джерела — не
+    // довідника членства.
+    expect(
+      bodyTree(functionUnit(model, RIGHTS_FUNCTIONS.myScopesLive.name))
+    ).toEqual(
+      tree(
+        `SELECT '${ORG_KIND_ID}'::uuid AS scope_kind_id, s.org_id AS scope, s.id AS member, false AS catalog FROM public.membership s WHERE s.user_id IS NOT NULL AND s.user_id = ${CURRENT} AND s.is_active IS TRUE`
+      )
+    )
     const always = await compiled(
       adoptedSourcesDomain({
         [PROJECT_FILE]: {
@@ -1336,9 +1442,11 @@ describe("rights analysis templates", () => {
       // Усе, що рахує щось для поточного користувача, — з моделі, а не
       // переліком: функції прав `SECURITY DEFINER` (функції поточного
       // користувача й аналізу), функції членства, дослівні функції множини
-      // скоупу й виміру і сама `current_user_id()`.
+      // скоупу й виміру, живі варіанти фактів актора і сама
+      // `current_user_id()`.
       const forbidden = [
         "simetra.current_user_id",
+        ...LIVE_VARIANTS.map(([fn]) => qualifiedName(fn)),
         ...rightsUnits(model)
           .filter(
             (u) =>

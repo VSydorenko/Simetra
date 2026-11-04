@@ -708,8 +708,10 @@ describe("rights guard transaction check", () => {
     // Узятий знімок не переписується: вставки — лише після перевірки.
     expect(inserts.length).toBeGreaterThan(1)
     expect(inserts.every((i) => i > taken)).toBe(true)
-    // Знімок — права актора з rights_mine() на мить першого запису.
-    expect(funcNames(inserts.map((i) => body[i]!))).toContain("rights_mine")
+    // Знімок — права актора з rights_mine_live() на мить першого запису.
+    expect(funcNames(inserts.map((i) => body[i]!))).toContain(
+      "rights_mine_live"
+    )
   })
 
   it("refuses a second actor in the same transaction", () => {
@@ -894,7 +896,9 @@ describe("rights guard transaction check", () => {
     const all = escalationConditions(body)
     // Гілка ключа `actor` — окремий тест; тут роль і призначення на кожному
     // з двох рівнів.
-    const escalations = all.filter((c) => !callsIn(c).includes("rights_mine"))
+    const escalations = all.filter(
+      (c) => !callsIn(c).includes("rights_mine_live")
+    )
     expect(all).toHaveLength(5)
     expect(escalations).toHaveLength(4)
     for (const condition of escalations) {
@@ -960,7 +964,7 @@ describe("rights guard transaction check", () => {
       "object, action, extent, dimension_id, level, level_id, scope, container"
     // «Після» — поточні права, «до» — лише рядки прав знімка цієї транзакції.
     expect(except!.larg).toEqual(
-      select(`SELECT ${columns} FROM simetra.rights_mine()`)
+      select(`SELECT ${columns} FROM simetra.rights_mine_live()`)
     )
     expect(except!.rarg).toEqual(
       select(
@@ -977,9 +981,32 @@ describe("rights guard transaction check", () => {
         )
       )
     ).toBe(true)
-    expect(callsIn(condition).filter((name) => name === "rights_mine")).toEqual(
-      ["rights_mine"]
+    expect(
+      callsIn(condition).filter((name) => name.startsWith("rights_mine"))
+    ).toEqual(["rights_mine_live"])
+  })
+
+  // Р3-4, Р3-8: знімок і «після» на COMMIT рахують живі права — публічна
+  // функція після появи гілок повернула б сам знімок.
+  it("computes the snapshot and the actor check from live variants", () => {
+    const live = "function:simetra.rights_mine_live()"
+    const pub = "function:simetra.rights_mine()"
+    const requiresOf = (u: SqlUnit) =>
+      (u.requires ?? []).flatMap((node) =>
+        node.type === "unit" ? [node.identity] : []
+      )
+    const snapshots = guards(domain).filter(
+      (u) =>
+        u.class === "function" && u.name.endsWith("_simetra_rights_snapshot")
     )
+    expect(snapshots.length).toBeGreaterThan(0)
+    for (const u of [...snapshots, unit(domain, CHECK)]) {
+      const calls = funcNames(bodyShape(u.sql))
+      expect(calls, u.identity).toContain("rights_mine_live")
+      expect(calls, u.identity).not.toContain("rights_mine")
+      expect(requiresOf(u), u.identity).toContain(live)
+      expect(requiresOf(u), u.identity).not.toContain(pub)
+    }
   })
 
   it("compares an assignment with its earlier image only for the same subject, container and scope", () => {

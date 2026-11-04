@@ -70,14 +70,18 @@ export const RIGHTS_FUNCTIONS = {
   roles: platform("rights_roles"),
   sourceKeys: platform("rights_source_keys"),
   myScopes: platform("rights_my_scopes"),
+  myScopesLive: platform("rights_my_scopes_live"),
   mine: platform("rights_mine"),
+  mineLive: platform("rights_mine_live"),
   any: platform("rights_any"),
   own: platform("rights_own"),
   dim: platform("rights_dim"),
   container: platform("rights_container"),
   hasRight: platform("has_right"),
   myMembers: platform("rights_my_members"),
+  myMembersLive: platform("rights_my_members_live"),
   dimensionValues: platform("rights_dimension_values"),
+  dimensionValuesLive: platform("rights_dimension_values_live"),
   visibleUsers: platform("rights_visible_users"),
   scopesOf: platform("rights_scopes_of"),
   detailOf: platform("rights_detail_of"),
@@ -115,6 +119,18 @@ const CURRENT: RightsUser = {
   user: CURRENT_USER,
   scopes: call(RIGHTS_FUNCTIONS.myScopes),
   members: (scopeKind) => call(RIGHTS_FUNCTIONS.myMembers, [scopeKind]),
+  current: true,
+}
+
+/**
+ * Поточний користувач живих варіантів (спека прав §5.1): вкладені множини —
+ * теж живі варіанти, бо публічна функція в транзакції зі знімком повернула б
+ * знімок, а живий факт рахується лише з живих таблиць.
+ */
+const LIVE: RightsUser = {
+  user: CURRENT_USER,
+  scopes: call(RIGHTS_FUNCTIONS.myScopesLive),
+  members: (scopeKind) => call(RIGHTS_FUNCTIONS.myMembersLive, [scopeKind]),
   current: true,
 }
 
@@ -275,6 +291,14 @@ export function buildRightsUnits(
     body,
     shape: "stable",
   })
+  // Живий варіант факту актора (спека прав §5.1): без `EXECUTE`, його кличуть
+  // лише функції від власника — інакше роль запиту обійшла б знімок.
+  const live = (
+    fn: QualifiedName,
+    args: Declaration["args"],
+    returns: string,
+    body: string
+  ): Declaration => ({ fn, args, returns, body, shape: "stable" })
   const analysis = (
     fn: QualifiedName,
     args: Declaration["args"],
@@ -317,6 +341,12 @@ export function buildRightsUnits(
       table(MY_SCOPES_COLUMNS),
       myScopesBody(contracts, CURRENT)
     ),
+    live(
+      F.myScopesLive,
+      [],
+      table(MY_SCOPES_ORIGIN_COLUMNS),
+      myScopesBody(contracts, LIVE, true)
+    ),
     variant(
       F.scopesOf,
       [],
@@ -328,6 +358,12 @@ export function buildRightsUnits(
       [],
       table(MINE_COLUMNS),
       mineBody(contracts, physical, attributeCase, CURRENT, false)
+    ),
+    live(
+      F.mineLive,
+      [],
+      table(MINE_COLUMNS),
+      mineBody(contracts, physical, attributeCase, LIVE, false)
     ),
     variant(
       F.detailOf,
@@ -381,6 +417,12 @@ export function buildRightsUnits(
       "SETOF uuid",
       membersBody(F.myMembers, CURRENT)
     ),
+    live(
+      F.myMembersLive,
+      [uuid("p_scope_kind")],
+      "SETOF uuid",
+      membersBody(F.myMembersLive, LIVE)
+    ),
     variant(
       F.membersOf,
       [uuid("p_scope_kind")],
@@ -392,6 +434,12 @@ export function buildRightsUnits(
       [uuid("p_dimension")],
       "SETOF uuid",
       dimensionValuesBody(contracts, F.dimensionValues, CURRENT)
+    ),
+    live(
+      F.dimensionValuesLive,
+      [uuid("p_dimension")],
+      "SETOF uuid",
+      dimensionValuesBody(contracts, F.dimensionValuesLive, LIVE)
     ),
     variant(
       F.dimensionValuesOf,
@@ -646,6 +694,14 @@ const MY_SCOPES_COLUMNS: readonly Column[] = [
   ["scope_kind_id", "uuid"],
   ["scope", "uuid"],
   ["member", "uuid"],
+]
+/**
+ * Мої скоупи з походженням рядка: `catalog` — рядок довідника членства, бо
+ * функції членства виду читають лише такі, а не рядки прийнятих джерел.
+ */
+const MY_SCOPES_ORIGIN_COLUMNS: readonly Column[] = [
+  ...MY_SCOPES_COLUMNS,
+  ["catalog", "boolean"],
 ]
 const MINE_COLUMNS: readonly Column[] = [
   ["level", "text"],
@@ -923,12 +979,15 @@ function emptySet(columns: readonly Column[]): string {
  */
 function myScopesBody(
   contracts: RightsFunctionContracts,
-  whose: RightsUser
+  whose: RightsUser,
+  withOrigin = false
 ): string {
+  const origin = (catalog: boolean) =>
+    withOrigin ? `, ${catalog ? "true" : "false"} AS catalog` : ""
   const catalogs = contracts.membership.map((m) => {
     const user = `m.${quoteIdent(m.userColumn)}`
     return [
-      `SELECT ${uuidLiteral(m.scopeKindId)} AS scope_kind_id, m.${quoteIdent(m.scopeColumn)} AS scope, m.${quoteIdent(m.keyColumn)} AS member`,
+      `SELECT ${uuidLiteral(m.scopeKindId)} AS scope_kind_id, m.${quoteIdent(m.scopeColumn)} AS scope, m.${quoteIdent(m.keyColumn)} AS member${origin(true)}`,
       `FROM ${qualified(m.table)} m`,
       `WHERE ${user} IS NOT NULL`,
       `  AND ${user} = ${whose.user}`,
@@ -937,7 +996,7 @@ function myScopesBody(
   const sources = contracts.membershipSources.map((source) => {
     const user = `s.${quoteIdent(source.user)}`
     return [
-      `SELECT ${uuidLiteral(source.scopeKindId)} AS scope_kind_id, s.${quoteIdent(source.scope)} AS scope, s.${quoteIdent(source.member)} AS member`,
+      `SELECT ${uuidLiteral(source.scopeKindId)} AS scope_kind_id, s.${quoteIdent(source.scope)} AS scope, s.${quoteIdent(source.member)} AS member${origin(false)}`,
       `FROM ${qualified(source.table)} s`,
       `WHERE ${user} IS NOT NULL`,
       `  AND ${user} = ${whose.user}`,
@@ -946,7 +1005,8 @@ function myScopesBody(
     ].join("\n")
   })
   const branches = [...catalogs, ...sources]
-  if (branches.length === 0) return emptySet(MY_SCOPES_COLUMNS)
+  if (branches.length === 0)
+    return emptySet(withOrigin ? MY_SCOPES_ORIGIN_COLUMNS : MY_SCOPES_COLUMNS)
   return branches.join("\nUNION ALL\n")
 }
 
