@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-Статус: план.
+Статус: виконано (Task 1–5 і виправлення рецензії); повні гейти — на одному SHA з дозволу архітекторки.
 
 **Goal:** команда `simetra init [--agents …] [--dry-run] [--check]` у проєкті
 споживача розкладає відносні симлінки скілів `@simetrajs/designer` і
@@ -141,12 +141,12 @@ MCP-конфіги агентів, ідемпотентно й без чужих
   - `planSkillLinks(root: string, pkgDir: string, platform: NodeJS.Platform): Promise<InitPlan>` —
     скіли пакета = підтеки `<pkgDir>/skills` з `SKILL.md`.
 
-- [ ] **Step 1: Тест `posixRelative`.** У `package-path.test.ts`:
+- [X] **Step 1: Тест `posixRelative`.** У `package-path.test.ts`:
   `posixRelative("/p/.claude/skills", "/p/node_modules/x/skills/a")` →
   `"../../node_modules/x/skills/a"`. Наявний тест резолвера `$schema` лишається без змін.
-- [ ] **Step 2: Додати `posixRelative`, перевести на нього `schemaPathResolver`.**
+- [X] **Step 2: Додати `posixRelative`, перевести на нього `schemaPathResolver`.**
   Тести `package-path` зелені.
-- [ ] **Step 3: Тести `init-skills.test.ts`** (фікстура: тимчасовий корінь з
+- [X] **Step 3: Тести `init-skills.test.ts`** (фікстура: тимчасовий корінь з
   `node_modules/@simetrajs/designer/{package.json,skills/<n>/SKILL.md}`; у
   pnpm-варіанті пакет лежить у `store/`, а `node_modules/@simetrajs/designer` —
   симлінк на нього). Кожен тест перевіряє і план, і (де план порожній чи є
@@ -179,11 +179,11 @@ MCP-конфіги агентів, ідемпотентно й без чужих
     `win32` → `{ type: "junction", target: <абсолютний шлях targetDir> }`.
   - `sameDir`: `win32` — `C:\\P\\node_modules\\X\\skills\\a\\` і `c:\\p\\NODE_MODULES\\x\\skills\\a` → `true`;
     `linux` — різний регістр → `false`.
-- [ ] **Step 4: Перевірити, що тести падають** (`pnpm --filter @simetrajs/designer test init-skills`) — FAIL.
-- [ ] **Step 5: Реалізувати `init/types.ts`, `init/fs-probe.ts`, `init/skills.ts`.**
+- [X] **Step 4: Перевірити, що тести падають** (`pnpm --filter @simetrajs/designer test init-skills`) — FAIL.
+- [X] **Step 5: Реалізувати `init/types.ts`, `init/fs-probe.ts`, `init/skills.ts`.**
   Биті власні лінки — власні (класифікація за `readlink`, не за `stat`).
-- [ ] **Step 6: Тести зелені; `typecheck`, `lint` пакета.**
-- [ ] **Step 7: Коміт** `feat(designer): спільний резолв шляхів пакета й план лінків скілів`.
+- [X] **Step 6: Тести зелені; `typecheck`, `lint` пакета.**
+- [X] **Step 7: Коміт** `feat(designer): спільний резолв шляхів пакета й план лінків скілів`.
 
 ### Task 2: План MCP-конфігів агентів
 
@@ -214,7 +214,7 @@ MCP-конфіги агентів, ідемпотентно й без чужих
 
     Форми VS Code і Cursor звірено через context7 до реалізації (Рі-5).
 
-- [ ] **Step 1: Тести** (кожен — на тимчасовому корені з пакетом-фікстурою, чий
+- [X] **Step 1: Тести** (кожен — на тимчасовому корені з пакетом-фікстурою, чий
   `package.json` має `"bin": { "simetra": "./dist/main.js" }`):
   - `derives the launcher from the installed manifest`: `mcpLaunch` →
     `{ command: "node", args: ["node_modules/@simetrajs/designer/dist/main.js", "mcp"] }`;
@@ -252,10 +252,10 @@ MCP-конфіги агентів, ідемпотентно й без чужих
   - `refuses to fix an own codex entry it cannot locate`: власний запис з іншим `args[0]` у inline-таблиці чи з
     багаторядковим `args` — відмова `ambiguous-toml`.
   - `writes only the selected agents`: `["claude"]` — дія лише для `.mcp.json`.
-- [ ] **Step 2: Тести падають** (`pnpm --filter @simetrajs/designer test init-mcp-config`).
-- [ ] **Step 3: Додати `smol-toml` 1.9.1 у `dependencies` designer (`pnpm --filter @simetrajs/designer add smol-toml@1.9.1 --save-exact`); реалізувати `mcpLaunch`, `matchesOwn` і `planMcpConfigs`** (Рі-5, Рі-6, Рі-9).
-- [ ] **Step 4: Тести зелені; `typecheck`, `lint`.**
-- [ ] **Step 5: Коміт** `feat(designer): план MCP-конфігів агентів для init`.
+- [X] **Step 2: Тести падають** (`pnpm --filter @simetrajs/designer test init-mcp-config`).
+- [X] **Step 3: Додати `smol-toml` 1.9.1 у `dependencies` designer (`pnpm --filter @simetrajs/designer add smol-toml@1.9.1 --save-exact`); реалізувати `mcpLaunch`, `matchesOwn` і `planMcpConfigs`** (Рі-5, Рі-6, Рі-9).
+- [X] **Step 4: Тести зелені; `typecheck`, `lint`.**
+- [X] **Step 5: Коміт** `feat(designer): план MCP-конфігів агентів для init`.
 
 ### Task 3: Команда `simetra init`
 
@@ -279,7 +279,7 @@ MCP-конфіги агентів, ідемпотентно й без чужих
     приймає розібрані citty-аргументи як є (Рі-12 перевіряє ключі; citty 0.2.2 додає camelCase-аліаси — `--dry-run` дає `dry-run` і `dryRun`); не викликає `process.exit`.
   - citty-команда `init` з `--agents` (рядок через кому), `--dry-run`, `--check`.
 
-- [ ] **Step 1: Тести `init.test.ts`** (через `runInit` на тимчасовому корені з пакетом-фікстурою):
+- [X] **Step 1: Тести `init.test.ts`** (через `runInit` на тимчасовому корені з пакетом-фікстурою):
   - `init creates links and the default config`: код 0; `readFile(".claude/skills/a/SKILL.md")`
     крізь лінк читається; є `.mcp.json`, немає `.vscode/`, `.cursor/`, `.codex/`;
     stdout містить `--read-only` і `compile --all --staged`.
@@ -303,16 +303,16 @@ MCP-конфіги агентів, ідемпотентно й без чужих
     (а не `not installed`).
   - `removes an own orphan link on disk`: власний лінк `.claude/skills/old` (скіла `old` у пакеті немає) — після `init` його немає (`lstat` → `ENOENT`), `--check` — 0.
   - `does not touch AGENTS.md or CLAUDE.md`: наявні файли побайтово незмінні після `init`.
-- [ ] **Step 2: Тести падають** (`pnpm --filter @simetrajs/designer test init.test`).
-- [ ] **Step 3: Реалізувати `plan.ts`, `commands/init.ts`, рядок у `main.ts`.**
+- [X] **Step 2: Тести падають** (`pnpm --filter @simetrajs/designer test init.test`).
+- [X] **Step 3: Реалізувати `plan.ts`, `commands/init.ts`, рядок у `main.ts`.**
   Рендер: одна дія — один рядок з відносним шляхом (`link .claude/skills/a -> ../../node_modules/…`,
   `remove …`, `write .mcp.json`, `note: …`); відмови — у stderr (`error: <path>: <reason>`).
   `--check`: відмови — 2; порожній список дій — 0; інакше 1 з переліком розбіжностей.
-- [ ] **Step 4: Тести `bin.test.ts`** через `bin/simetra.mjs`: `init --agents bogus` —
+- [X] **Step 4: Тести `bin.test.ts`** через `bin/simetra.mjs`: `init --agents bogus` —
   код 2 і stderr містить `bogus`; `init --check` у тимчасовому корені з пакетом-фікстурою
   без лінків — код 1 (проброс `RunResult.exitCode`); `--help` перелічує `init`.
-- [ ] **Step 5: Тести зелені; `typecheck`, `lint`.**
-- [ ] **Step 6: Коміт** `feat(designer): команда simetra init`.
+- [X] **Step 5: Тести зелені; `typecheck`, `lint`.**
+- [X] **Step 6: Коміт** `feat(designer): команда simetra init`.
 
 ### Task 4: Гейт пакування
 
@@ -329,7 +329,7 @@ MCP-конфіги агентів, ідемпотентно й без чужих
     розпакувати tarball у tmp, змінити `version` маніфесту, застосувати `edit`,
     запакувати назад (`tar -czf`, корінь `package/`).
 
-- [ ] **Step 1: Тести в `describe("@simetrajs/designer")`** (npm-споживач; стан спільний,
+- [X] **Step 1: Тести в `describe("@simetrajs/designer")`** (npm-споживач; стан спільний,
   тести в файлі йдуть послідовно в цьому порядку):
   - `init links the skills and writes MCP configs`: `init --agents claude,codex,cursor,vscode` —
     код 0; для кожного скіла з tarball і кожної з двох тек `readlink` дорівнює
@@ -342,14 +342,14 @@ MCP-конфіги агентів, ідемпотентно й без чужих
   - `a package update flows through the links`: `repackWithVersion(designer, "<v>-update.0", …)`
     дописує рядок-маркер у `skills/simetra-metadata/SKILL.md`; `npm install <новий tarball>` —
     `readlink` лінків той самий, маркер читається крізь лінк, `--check` — 0.
-- [ ] **Step 2: Окремий `describe("@simetrajs/designer under pnpm")`**: `installConsumer(…, "pnpm")`;
+- [X] **Step 2: Окремий `describe("@simetrajs/designer under pnpm")`**: `installConsumer(…, "pnpm")`;
   `node_modules/.pnpm` містить запис `simetra@file+…`, а не `simetra@<версія з реєстру>` (інакше
   designer з tarball-а біг би проти опублікованого `simetra`); `init` — код 0; `readlink` `.claude/skills/simetra-metadata` дорівнює
   `../../node_modules/@simetrajs/designer/skills/simetra-metadata` (не `.pnpm`);
   `SKILL.md` читається крізь лінк; сервер з `.mcp.json` стартує й віддає `compile`.
 - [ ] **Step 3: Прогін:** `pnpm build:packages && pnpm test:packaging` — PASS
   (для налагодження — локально; зарахований прогін — разом з повними гейтами).
-- [ ] **Step 4: Коміт** `test(designer): гейт пакування для simetra init`.
+- [X] **Step 4: Коміт** `test(designer): гейт пакування для simetra init`.
 
 ### Task 5: Скіл, README і канон
 
@@ -362,7 +362,7 @@ MCP-конфіги агентів, ідемпотентно й без чужих
 - Modify: `docs/architecture/release.md` (перелік перевірок гейту)
 - Modify: `docs/ROADMAP.md` (рядок «П0 (а) і доставка пакета»)
 
-- [ ] **Step 1: README** (англійською): розділ «Start a project» —
+- [X] **Step 1: README** (англійською): розділ «Start a project» —
   `pnpm add simetra`, `pnpm add -D @simetrajs/designer`,
   `pnpm exec simetra init [--agents claude,codex,cursor,vscode]`; що створює `init`;
   лінки й конфіги комітяться, CI — `simetra init --check` з тими ж `--agents`;
@@ -371,23 +371,23 @@ MCP-конфіги агентів, ідемпотентно й без чужих
   там, де лежить тека `metadata`; на Windows без `core.symlinks` git розгортає
   лінки файлами — `init` замінює їх junction-ами. Розділ «Agent skills» — згадка,
   що `init` їх підключає.
-- [ ] **Step 2: Скіл `simetra-metadata`**: короткий розділ «Project setup» у кінці
+- [X] **Step 2: Скіл `simetra-metadata`**: короткий розділ «Project setup» у кінці
   файлу — `init`, `init --check` у CI, оновлення пакета не потребує повторного
   `init`, крім появи нового скіла чи агента (це ловить `--check`). Наявних рядків
   не міняти (A4). У sh-блоках — лише форми `pnpm exec simetra …` / `npx simetra …`
   (їх розбирає тест прикладів). Додати `"init"` у `known` тесту прикладів.
-- [ ] **Step 3: Спека designer** — правки з колонки «Вплив на спеку» Рі-1…Рі-5.
-- [ ] **Step 4: `docs/architecture/designer.md`** — рядок «Стан»: `simetra init` у коді;
+- [X] **Step 3: Спека designer** — правки з колонки «Вплив на спеку» Рі-1…Рі-5.
+- [X] **Step 4: `docs/architecture/designer.md`** — рядок «Стан»: `simetra init` у коді;
   пілот із host — разом із рештою доставки. Речення «симлінки підхоплюють новий
   скіл самі» → «симлінки підхоплюють новий вміст скілів самі; новий скіл
   додає повторний `init`, розбіжність ловить `init --check` у CI».
   **`release.md`** — у переліку гейту додати `init` (лінки, `--check`, повторний
   запуск, оновлення пакета крізь лінки, MCP з конфігу, pnpm-споживач).
-- [ ] **Step 5: ROADMAP** — у рядку «П0 (а) і доставка пакета», колонка стану:
+- [X] **Step 5: ROADMAP** — у рядку «П0 (а) і доставка пакета», колонка стану:
   «спайк П0 (а) виконано ([звіт](…)); `simetra init` виконано; решта доставки — не розпочато».
-- [ ] **Step 6: Перевірки:** `pnpm --filter @simetrajs/designer test skill-examples`,
+- [X] **Step 6: Перевірки:** `pnpm --filter @simetrajs/designer test skill-examples`,
   `python3 scripts/check-doc-anchors.py`, `pnpm format:check`.
-- [ ] **Step 7: Коміт** `docs(designer): simetra init у README, скілі й каноні`.
+- [X] **Step 7: Коміт** `docs(designer): simetra init у README, скілі й каноні`.
 
 ## Критерії приймання
 
