@@ -1051,6 +1051,32 @@ export function rightsAdminReadingMembers(): Layer {
   }
 }
 
+export const MEMBER_CREATOR_ID = uuid(6747)
+
+/**
+ * `MemberCreator` — роль скоупу, що заводить і позначає учасників `OrgMember`
+ * без жодного гранту на дані: доводить, що зміна членства командою не дає
+ * актору прав (Р-A4-17).
+ */
+export function memberCreator(): Layer {
+  return {
+    [ROLE_FILE("MemberCreator")]: role(
+      MEMBER_CREATOR_ID,
+      "MemberCreator",
+      { scopeKind: "org" },
+      {
+        grants: [
+          grant(
+            objects(["Catalog", "OrgMember"]),
+            ["read", "create", "markDeletion"],
+            "any"
+          ),
+        ],
+      }
+    ),
+  }
+}
+
 /** Обов'язковий реквізит застосунку в рядку учасника `OrgMember`. */
 export const MEMBER_TITLE = "title"
 

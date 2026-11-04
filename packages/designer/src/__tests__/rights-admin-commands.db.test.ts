@@ -36,16 +36,20 @@ import { toolByName } from "../tools/catalog"
 import { invoke } from "../tools/invoke"
 import type { InvokeOptions, ToolResult } from "../tools/types"
 import {
+  MEMBER_CREATOR_ID,
   MEMBER_EDITOR_ID,
   ORG_ADMIN_ID,
   RIGHTS_ADMIN_ID,
   TASK_VIEWER_ID,
+  TICKET_OWN_WRITER_ID,
+  TICKET_REGION_WRITER_ID,
   TICKET_TABLE,
   TICKET_WRITER_ID,
   acceptDebt,
   adminRoles,
   commandCoreLayer,
   insertOrphan,
+  memberCreator,
   policyDomain,
   rightsAdminReadingMembers,
   signUp,
@@ -124,7 +128,12 @@ async function writeProject(): Promise<string> {
   await symlink(SIMETRA, join(root, "node_modules", "simetra"), "dir")
   const dir = join(root, "metadata")
   const files = await acceptDebt(
-    policyDomain(adminRoles(), commandCoreLayer(), rightsAdminReadingMembers())
+    policyDomain(
+      adminRoles(),
+      commandCoreLayer(),
+      rightsAdminReadingMembers(),
+      memberCreator()
+    )
   )
   for (const [path, content] of files) {
     await mkdir(dirname(join(dir, path)), { recursive: true })
@@ -700,6 +709,139 @@ describe("rights administration commands over a planned and applied target", () 
           expect(await rowOf("org_member", peer)).toMatchObject({
             description: null,
             version,
+          })
+        })
+      })
+
+      // Членство для бар'єру — дані застосунку (Р-A4-17, «Підстава»): зміна
+      // членства командою не дає актору прав у тій самій транзакції. DB, бо
+      // це тримають ключ членства й RLS бази, а не T3.
+      describe("a membership change gives the actor no right", () => {
+        let home: Org
+        let away: { org: string; member: string; ticket: string }
+        /** Ticket-и `home`: без носіїв, свій за `assignee`, свій за виміром. */
+        let plain: string
+        let owned: string
+        let regional: string
+
+        const actor = () => home.people.actor!
+        const updateOf = async (id: string): Promise<Operation> => ({
+          action: "update",
+          object: TICKET,
+          id,
+          expectedVersion: (await rowOf(TICKET_TABLE, id))!.version as number,
+          values: { description: "changed" },
+        })
+
+        beforeAll(async () => {
+          home = await seedOrg(env.owner, {
+            actor: [
+              MEMBER_CREATOR_ID,
+              TICKET_OWN_WRITER_ID,
+              TICKET_REGION_WRITER_ID,
+            ],
+          })
+          const other = await seedOrg(env.owner, {})
+          away = {
+            org: other.id,
+            member: randomUUID(),
+            ticket: randomUUID(),
+          }
+          ;[plain, owned, regional] = [randomUUID(), randomUUID(), randomUUID()]
+          const [homeRegion, awayRegion] = [randomUUID(), randomUUID()]
+          const q = (sql: string, params: unknown[]) =>
+            env.owner.query(sql, params)
+          await seedUnderMaintenance(env.owner, async () => {
+            // Той самий користувач — учасник `away` без жодного призначення;
+            // вимір і власність там указують на цей рядок учасника.
+            await q(
+              "INSERT INTO public.org_member (id, org_id, user_id) VALUES ($1, $2, $3)",
+              [away.member, away.org, actor().user]
+            )
+            await q(
+              "INSERT INTO public.region (id, org_id) VALUES ($1, $2), ($3, $4)",
+              [homeRegion, home.id, awayRegion, away.org]
+            )
+            await q(
+              "INSERT INTO public.member_region (org_id, member_id, region_id) VALUES ($1, $2, $3), ($4, $5, $6)",
+              [
+                home.id,
+                actor().member,
+                homeRegion,
+                away.org,
+                away.member,
+                awayRegion,
+              ]
+            )
+            await q(
+              `INSERT INTO public.${TICKET_TABLE} (id, org_id, assignee_id, region_id) VALUES ($1, $2, NULL, NULL), ($3, $2, $4, NULL), ($5, $2, NULL, $6), ($7, $8, $9, $10)`,
+              [
+                plain,
+                home.id,
+                owned,
+                actor().member,
+                regional,
+                homeRegion,
+                away.ticket,
+                away.org,
+                away.member,
+                awayRegion,
+              ]
+            )
+          })
+        }, 60_000)
+
+        // Сценарій архітекторки: [учасник собі → X → позначити учасника]
+        // (`delete` команда має лише на призначеннях).
+        // Право `create` на членстві скоупу має лише його учасник, а ключ
+        // членства (скоуп, користувач) другого рядка не пускає.
+        it("cannot add himself to his own scope a second time", async () => {
+          const { rt, statements } = await runtime()
+          const second = randomUUID()
+          expect(
+            await refusal(
+              rt.run(actor().session, [
+                {
+                  action: "create",
+                  object: MEMBERS,
+                  id: second,
+                  values: { org: home.id, user: actor().user },
+                },
+                await updateOf(plain),
+                {
+                  action: "markDeletion",
+                  object: MEMBERS,
+                  id: second,
+                  expectedVersion: 1,
+                  mark: true,
+                },
+              ])
+            )
+          ).toEqual({
+            code: "command.constraint",
+            kind: "unique",
+            attributes: ["org", "user"],
+          })
+          expect(touching(statements, TICKET_TABLE)).toEqual([])
+          expect(await rowOf("org_member", second)).toBe(undefined)
+        })
+
+        // Рядок учасника без призначення — уже в «моїх скоупах» і серед моїх
+        // учасників, але роль скоупу тримає призначення, а `own` і вимір
+        // парують скоуп ролі; «кожен користувач» скоуплених об'єктів не
+        // відкриває. Контроль — ті самі ролі в `home` пишуть свої рядки.
+        it("a member row without an assignment opens no data of its scope", async () => {
+          const { rt } = await runtime()
+          await rt.run(actor().session, await updateOf(owned))
+          await rt.run(actor().session, await updateOf(regional))
+          expect(
+            await rt.read(actor().session, { object: TICKET, id: away.ticket })
+          ).toEqual([])
+          expect(
+            await refusal(rt.run(actor().session, await updateOf(away.ticket)))
+          ).toEqual({ code: "command.forbidden", reason: "no-right" })
+          expect(await rowOf(TICKET_TABLE, away.ticket)).toMatchObject({
+            description: null,
           })
         })
       })
