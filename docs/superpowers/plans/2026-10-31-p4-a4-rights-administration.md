@@ -569,8 +569,8 @@ Postgres 17 локального стека Supabase, Supavisor (transaction-р�
 
 ### Задача 10: мутації
 
-- [ ] **Крок 1:** на закоміченому дереві — кожна мутація журналу, названий scoped тест, «що прибрано → що почервоніло», відкат (`git checkout -- <файл>`). DB-мутації — по одній.
-- [ ] **Крок 2:** коміт `docs(plan): П4-A4 — журнал мутацій`.
+- [x] **Крок 1:** на закоміченому дереві — кожна мутація журналу, названий scoped тест, «що прибрано → що почервоніло», відкат (`git checkout -- <файл>`). DB-мутації — по одній.
+- [x] **Крок 2:** коміт `docs(plan): П4-A4 — журнал мутацій`.
 
 ### Задача 11: документи
 
@@ -594,34 +594,34 @@ Postgres 17 локального стека Supabase, Supavisor (transaction-р�
 
 | № | Мутація | Тест, що має почервоніти | Результат |
 | --- | --- | --- | --- |
-| М1 | `errors.ts`: прибрати `escalation` з `FORBIDDEN_REASONS` | Задача 1 `maps a guard refusal answered at COMMIT`; Задача 8 `refuses self-assignment…` | |
-| М2 | `phase.ts`: T3 відмовляє операції з `context = administerRights`, де `subject` — учасник сесії | Задача 1 `does not refuse a self-assignment on its own` | |
-| М3 | `guard-units.ts` `maintenanceSql`: прибрати `session_user = current_user` | Задача 9 `a superuser that is not the migrator…`; `command-grants` › `the runtime login cannot enable maintenance…` | |
-| М4 | `guard-units.ts` `maintenanceSql`: прибрати умову `PROVIDER_LOGIN_ROLES` | наявний `rights-guards` › `maintenance only from the owner login` | |
-| М5 | `guard-units.ts`: гілка `assignment` у `catalogCheck` без перевірки приросту | Задача 8 `refuses a non-holder granting fullAccess` | |
-| М6 | `guard-units.ts`: перевірку `holders` перенести з відкладеного тригера в оператор | Задача 8 `transfers fullAccess…, own assignment first` | |
-| М7 | T3: прибрати бар'єр Р-A4-17 | Задача 6 крок 1; Задача 8 кейси бар'єру | |
-| М7а | T3: ставити ознаку бар'єру після хука «до» фази прав, а не на її початку | Задача 6 `…from a hook of a rights phase` (`beforeWrite`) | |
-| М7б | T3: ознаку тримати в стані команди, а не спроби | Задача 6 `starts a retry without the mark` | |
-| М7в | T3: перевіряти ознаку лише на старті фази, не перед постановкою виклику ядра | Задача 6 `refuses the core call of an application phase whose beforeWrite ran a rights phase`, `refuses a concurrent ctx.run…` | |
-| М7г | T3: бар'єр відхиляє будь-який `ctx.read` після ознаки | Задача 6 `allows rights data from a hook of a rights phase` | |
-| М8 | `invoke.ts`: прибрати відмову `cli-only` | Задача 5 `refuses a cli-only tool…` | |
-| М9 | `registerCatalog`: не пропускати `cliOnly` | наявний `mcp.test.ts` › `lists every catalog tool in read-only mode`; Задача 7 `is absent from MCP` | |
-| М10 | інструмент: `destructive: false` | Задача 7 `does not connect without confirmation` | |
-| М11 | ядро: прибрати перевірку `not-first` | Задача 9 `first global` (повтор) | |
-| М12 | ядро: прибрати перевірку `holder-exists` | Задача 9 `restore`, `tenant` (повтор) | |
-| М13 | ядро: замок прибрати чи перенести після читання стану | Задача 7 властивість «замок — перший»; Задача 9 `first global` (`busy`) | |
-| М14 | ядро: прибрати пост-перевірку дієвості | Задача 7 `it.each(actions)` `not-effective` (DB-кейсу, де вирішує лише пост-перевірка, немає: недійсного користувача відсіює передперевірка) | |
-| М15 | ядро: `set_config(…, false)` чи без третього аргументу | Задача 7 властивість `LOCAL` | |
-| М16 | ядро: значення інтерполювати в текст | Задача 7 властивість «значення лише в параметрах» | |
-| М17 | ядро: прибрати звірку хешу | Задача 7 `model-mismatch` | |
-| М18 | ядро: білий список без пари (`message`, `detail`) | Задача 7 мапінг `reason: "denied"` | |
-| М19 | ядро: `23502` → `database.failed` | Задача 7 мапінг; Задача 9 `tenant` (`member-required`) | |
-| М20 | ядро: прибрати перевірку `scope-missing` | Задача 9 `scope missing` | |
-| М21 | ядро: прибрати перевірку `unknown-user` | Задача 7 `unknown-user` | |
-| М22 | ядро: прибрати `row_security = off` | Задача 7 властивість «`row_security` — до читання стану» | |
-| М23 | `normalize`: не заповнювати `detail` | Задача 3 `normalize keeps…`; Задача 9 `a superuser that is not the migrator…` | |
-| М24 | `encodeMemberValues`: не перевіряти `forced` | Задача 2 `…rejects forced…` | |
-| М25 | `collectRightsFacts`: обрізати `rightsOrphans` лімітом | Задача 4 `rightsOrphans stays complete…` | |
-| М26 | `collectRightsFacts`: не класти призначення ролей-сиріт | Задача 4 крок 1; Задача 8 сценарій сиріт | |
-| М27 | `apply-tools.ts`: не віддавати `rightsOrphans` для `unchanged` | Задача 4 `renders an unchanged plan…`; Задача 8 сценарій сиріт | |
+| М1 | `errors.ts`: прибрати `escalation` з `FORBIDDEN_REASONS` | Задача 1 `maps a guard refusal answered at COMMIT`; Задача 8 `refuses self-assignment…` | ✅ червоніє Задача 1 `maps a guard refusal answered at COMMIT`. Якір виправлено: причини — у `COMMAND_CORE_ERRORS.forbidden` (`model/runtime/core.ts`), не в `errors.ts`; DB-кейс Задачі 8 під М1 не ганявся |
+| М2 | `phase.ts`: T3 відмовляє операції з `context = administerRights`, де `subject` — учасник сесії | Задача 1 `does not refuse a self-assignment on its own` | ✅ червоніє `does not refuse a self-assignment on its own` |
+| М3 | `guard-units.ts` `maintenanceSql`: прибрати `session_user = current_user` | Задача 9 `a superuser that is not the migrator…`; `command-grants` › `the runtime login cannot enable maintenance…` | ✅ червоніють Задача 9 `cannot enable maintenance` (запис пройшов, 13 с), `command-grants` › `the runtime login cannot enable maintenance…` (5 с) і наявний `has no direct rights and cannot enable maintenance` |
+| М4 | `guard-units.ts` `maintenanceSql`: прибрати умову `PROVIDER_LOGIN_ROLES` | наявний `rights-guards` › `maintenance only from the owner login` | ✅ червоніє наявний `rights-guards` › `a provider login that owns the rights functions never enables maintenance` (77/78, 17 с) |
+| М5 | `guard-units.ts`: гілка `assignment` у `catalogCheck` без перевірки приросту | Задача 8 `refuses a non-holder granting fullAccess` | ✅ червоніє `refuses a non-holder granting fullAccess` (прямий порт і пулер, 15 с); `refuses self-assignment…` лишається зеленим — його окремо ловить перевірка `actor` |
+| М6 | `guard-units.ts`: перевірку `holders` перенести з відкладеного тригера в оператор | Задача 8 `transfers fullAccess…, own assignment first` | ✅ форма мутації: тригер `rights_tx_pending_check` — `INITIALLY IMMEDIATE` (окремої відкладеності лише для `holders` у коді немає); червоніє `transfers fullAccess…, own assignment first` (прямий порт і пулер, 16 с) |
+| М7 | T3: прибрати бар'єр Р-A4-17 | Задача 6 крок 1; Задача 8 кейси бар'єру | ✅ червоніють усі 9 відмовних unit-кейсів Задачі 6; DB-кейси бар'єру Задачі 8 під М7 не ганялися |
+| М7а | T3: ставити ознаку бар'єру після хука «до» фази прав, а не на її початку | Задача 6 `…from a hook of a rights phase` (`beforeWrite`) | ✅ червоніють `refuses ctx.read and ctx.run … (beforeWrite, ctx.read)` і `(beforeWrite, ctx.run)` |
+| М7б | T3: ознаку тримати в стані команди, а не спроби | Задача 6 `starts a retry without the mark` | ✅ червоніє `starts a retry without the mark` |
+| М7в | T3: перевіряти ознаку лише на старті фази, не перед постановкою виклику ядра | Задача 6 `refuses the core call of an application phase whose beforeWrite ran a rights phase`, `refuses a concurrent ctx.run…` | ✅ червоніють `refuses the core call of an application phase…` і `refuses a concurrent ctx.run … (the application phase first)`; варіант «спершу фаза прав» зелений, як і має бути |
+| М7г | T3: бар'єр відхиляє будь-який `ctx.read` після ознаки | Задача 6 `allows rights data from a hook of a rights phase` | ✅ червоніє `allows rights data from a hook of a rights phase (ctx.read of the assignments)` |
+| М8 | `invoke.ts`: прибрати відмову `cli-only` | Задача 5 `refuses a cli-only tool…` | ✅ червоніє `refuses a cli-only tool outside the cli channel before parsing input` |
+| М9 | `registerCatalog`: не пропускати `cliOnly` | наявний `mcp.test.ts` › `lists every catalog tool in read-only mode`; Задача 7 `is absent from MCP` | ✅ червоніє наявний `lists every catalog tool in read-only mode` (23 с) |
+| М10 | інструмент: `destructive: false` | Задача 7 `does not connect without confirmation` | ✅ червоніють `does not connect without confirmation`, `exits 2 without --yes` |
+| М11 | ядро: прибрати перевірку `not-first` | Задача 9 `first global` (повтор) | ✅ червоніє Задача 9 `first global` (повтор через CLI не відмовив); 1924 с — майже весь час очікування замка стека іншою сесією |
+| М12 | ядро: прибрати перевірку `holder-exists` | Задача 9 `restore`, `tenant` (повтор) | ✅ червоніють Задача 9 `restore` і `tenant` (87 с) |
+| М13 | ядро: замок прибрати чи перенести після читання стану | Задача 7 властивість «замок — перший»; Задача 9 `first global` (`busy`) | ✅ червоніють `busy…` і три властивості `…: lock first, hash and row_security before the state…` |
+| М14 | ядро: прибрати пост-перевірку дієвості | Задача 7 `it.each(actions)` `not-effective` (DB-кейсу, де вирішує лише пост-перевірка, немає: недійсного користувача відсіює передперевірка) | ✅ червоніють три unit `…: an assignment that is not effective rolls back as not-effective` |
+| М15 | ядро: `set_config(…, false)` чи без третього аргументу | Задача 7 властивість `LOCAL` | ✅ червоніють три властивості `lock first…` |
+| М16 | ядро: значення інтерполювати в текст | Задача 7 властивість «значення лише в параметрах» | ✅ червоніє `keeps a member value with a quote and every id in the parameters` |
+| М17 | ядро: прибрати звірку хешу | Задача 7 `model-mismatch` | ✅ червоніють чотири `model-mismatch on …` |
+| М18 | ядро: білий список без пари (`message`, `detail`) | Задача 7 мапінг `reason: "denied"` | ✅ червоніє `42501 — a reason detail under a message off the whitelist → maintenance.refused` |
+| М19 | ядро: `23502` → `database.failed` | Задача 7 мапінг; Задача 9 `tenant` (`member-required`) | ✅ червоніє Задача 9 `tenant` (`database.failed` замість `member-required`, 10 с) |
+| М20 | ядро: прибрати перевірку `scope-missing` | Задача 9 `scope missing` | ✅ червоніє Задача 9 `scope missing` (21 с) |
+| М21 | ядро: прибрати перевірку `unknown-user` | Задача 7 `unknown-user` | ✅ червоніє `unknown user: refused before any write` |
+| М22 | ядро: прибрати `row_security = off` | Задача 7 властивість «`row_security` — до читання стану» | ✅ червоніють три властивості `lock first…` |
+| М23 | `normalize`: не заповнювати `detail` | Задача 3 `normalize keeps…`; Задача 9 `a superuser that is not the migrator…` | ✅ червоніють Задача 3 `normalize keeps…`, `leaves fields the server did not send undefined`; Задача 9 `cannot enable maintenance` → `reason: "denied"` (24 с) |
+| М24 | `encodeMemberValues`: не перевіряти `forced` | Задача 2 `…rejects forced…` | ✅ червоніє Задача 2 `rejects a forced key` |
+| М25 | `collectRightsFacts`: обрізати `rightsOrphans` лімітом | Задача 4 `rightsOrphans stays complete…` | ✅ червоніє `rightsOrphans stays complete past the warning limit` |
+| М26 | `collectRightsFacts`: не класти призначення ролей-сиріт | Задача 4 крок 1; Задача 8 сценарій сиріт | ✅ червоніють Задача 4 крок 1 і Задача 8 `the plan lists every orphan…`, `cleans every orphan…`, `the plan then lists no orphans` (26 с) |
+| М27 | `apply-tools.ts`: не віддавати `rightsOrphans` для `unchanged` | Задача 4 `renders an unchanged plan…`; Задача 8 сценарій сиріт | ✅ червоніють ті самі три кейси Задачі 8 (27 с); тест Задачі 4 `renders an unchanged plan…` червонить окрема мутація `renderPlan` без гілки `unchanged` |
