@@ -305,6 +305,7 @@ const SIGNATURES = [
   "function:simetra.rights_my_members_live(uuid)",
   "function:simetra.rights_my_scopes()",
   "function:simetra.rights_my_scopes_live()",
+  "function:simetra.rights_scope_set_live(uuid)",
   "function:simetra.rights_own(text,text)",
   "function:simetra.rights_projection()",
   "function:simetra.rights_requires()",
@@ -338,6 +339,7 @@ const LIVE_VARIANTS: readonly [QualifiedName, string][] = [
   [RIGHTS_FUNCTIONS.myScopesLive, ""],
   [RIGHTS_FUNCTIONS.myMembersLive, "uuid"],
   [RIGHTS_FUNCTIONS.dimensionValuesLive, "uuid"],
+  [RIGHTS_FUNCTIONS.scopeSetLive, "uuid"],
 ]
 
 /**

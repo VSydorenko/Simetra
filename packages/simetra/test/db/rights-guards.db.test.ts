@@ -75,7 +75,10 @@ const KEY_REFUSAL = {
   column: "id",
 }
 const PENDING_ROWS =
-  "SELECT (SELECT count(*) FROM simetra.rights_tx_actor WHERE xid = txid_current())::int + (SELECT count(*) FROM simetra.rights_tx_pending WHERE xid = txid_current())::int AS n"
+  "SELECT count(*)::int AS n FROM simetra.rights_tx_pending WHERE xid = txid_current()"
+/** Знімок живе до кінця транзакції (спека прав §7): черга порожня, а заголовок прав лишається. */
+const RIGHTS_HEADERS =
+  "SELECT count(*)::int AS n FROM simetra.rights_tx_header WHERE xid = txid_current() AND fact = 'rights'"
 
 describe("rights administration guards", () => {
   const tx = describeTransaction()
@@ -1235,7 +1238,7 @@ describe("rights administration guards", () => {
     }
   })
 
-  it("the actor snapshot and pending keys are cleaned after two commands", async () => {
+  it("the pending keys are cleaned after two commands, the actor snapshot is kept", async () => {
     const [first, second] = [randomUUID(), randomUUID()]
     success(
       await inCommand(
@@ -1265,6 +1268,8 @@ describe("rights administration guards", () => {
           await client.query("SET CONSTRAINTS ALL IMMEDIATE")
           const { rows } = await client.query<{ n: number }>(PENDING_ROWS)
           expect(rows[0]?.n).toBe(0)
+          const headers = await client.query<{ n: number }>(RIGHTS_HEADERS)
+          expect(headers.rows[0]?.n).toBe(1)
         }
       )
     )
@@ -1282,12 +1287,14 @@ describe("rights administration guards", () => {
           await client.query("RESET ROLE")
           const { rows } = await client.query<{ n: number }>(PENDING_ROWS)
           expect(rows[0]?.n).toBe(0)
+          const headers = await client.query<{ n: number }>(RIGHTS_HEADERS)
+          expect(headers.rows[0]?.n).toBe(1)
         }
       )
     )
   })
 
-  it("membership-only transactions release their actor snapshot", async () => {
+  it("membership-only transactions release their queue and keep the actor snapshot", async () => {
     success(
       await inCommand(
         "memberEditor",
@@ -1304,6 +1311,8 @@ describe("rights administration guards", () => {
           await client.query("RESET ROLE")
           const { rows } = await client.query<{ n: number }>(PENDING_ROWS)
           expect(rows[0]?.n).toBe(0)
+          const headers = await client.query<{ n: number }>(RIGHTS_HEADERS)
+          expect(headers.rows[0]?.n).toBe(1)
         }
       )
     )

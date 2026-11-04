@@ -82,6 +82,7 @@ export const RIGHTS_FUNCTIONS = {
   myMembersLive: platform("rights_my_members_live"),
   dimensionValues: platform("rights_dimension_values"),
   dimensionValuesLive: platform("rights_dimension_values_live"),
+  scopeSetLive: platform("rights_scope_set_live"),
   visibleUsers: platform("rights_visible_users"),
   scopesOf: platform("rights_scopes_of"),
   detailOf: platform("rights_detail_of"),
@@ -172,6 +173,15 @@ const SET_ROLES: readonly GrantPurpose[] = ["user", "service", "command"]
  */
 export const ANALYSIS_ROLES: readonly GrantPurpose[] = ["user", "command"]
 
+/**
+ * Дослівна функція множини виду скоупу (`setFunction` об'єктом): її вихід —
+ * факт актора `scopeSets` (спека прав §5.2).
+ */
+export interface ScopeSetFunction {
+  scopeKindId: string
+  fn: QualifiedName
+}
+
 /** Контракти, з яких генератор будує функції. */
 export type RightsFunctionContracts = Pick<
   Contracts,
@@ -184,7 +194,7 @@ export type RightsFunctionContracts = Pick<
   | "membershipSources"
   | "assignmentSources"
   | "users"
->
+> & { scopeSetFunctions: readonly ScopeSetFunction[] }
 
 interface Declaration {
   fn: QualifiedName
@@ -450,6 +460,12 @@ export function buildRightsUnits(
         F.dimensionValuesOf,
         of(F.dimensionValuesOf)
       )
+    ),
+    live(
+      F.scopeSetLive,
+      [uuid("p_scope_kind")],
+      "SETOF uuid",
+      scopeSetLiveBody(contracts.scopeSetFunctions)
     ),
     variant(
       F.scopeSetOf,
@@ -1808,6 +1824,25 @@ function scopeSetOfBody(
     )
   if (arms.length === 0) return "SELECT NULL::uuid WHERE false"
   return arms.join("\nUNION ALL\n")
+}
+
+/**
+ * Живий факт `scopeSets` (спека прав §5.2): вихід дослівної функції множини
+ * виду під умовою виду. Дослівна функція знає лише поточного користувача,
+ * тож варіанта `_of` у неї немає.
+ */
+function scopeSetLiveBody(functions: readonly ScopeSetFunction[]): string {
+  const fn = RIGHTS_FUNCTIONS.scopeSetLive
+  if (functions.length === 0) return "SELECT NULL::uuid WHERE false"
+  return functions
+    .map((set) =>
+      [
+        `SELECT f.value`,
+        `FROM ${call(set.fn)} AS f(value)`,
+        `WHERE ${param(fn, "p_scope_kind")} = ${uuidLiteral(set.scopeKindId)}`,
+      ].join("\n")
+    )
+    .join("\nUNION ALL\n")
 }
 
 // --- Функції аналізу ------------------------------------------------------

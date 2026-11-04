@@ -33,21 +33,30 @@ import { fieldForeignKey, sqlLiteral } from "../stages/model"
 import { standardColumn } from "../standard-column"
 import type { ParsedObject } from "../stages/files"
 import { COMMAND_FUNCTIONS } from "./command-units"
-import { RIGHTS_FUNCTIONS, ZERO_UUID, hasRightsFunctions } from "./functions"
+import {
+  FACT_TABLE,
+  SNAPSHOT_TABLES,
+  hasActorSnapshot,
+  type SnapshotFact,
+} from "./actor-snapshot"
+import { RIGHTS_FUNCTIONS, ZERO_UUID, type ScopeSetFunction } from "./functions"
 import { generatedTableFunctionName } from "./generated-names"
 import { rightsGuardNames } from "./guard-names"
 import { effectiveHolderRows } from "./holders"
+import type { SnapshotSources } from "./snapshot-sources"
 
-type GuardContracts = Pick<
+/** Контракти запобіжників прав і аналізу джерел знімка. */
+export type GuardContracts = Pick<
   Contracts,
   | "roles"
   | "users"
   | "membershipSources"
+  | "assignmentSources"
   | "membership"
   | "rightsCatalogs"
   | "accessDimensions"
   | "rights"
->
+> & { scopeSetFunctions: readonly ScopeSetFunction[] }
 
 type CatalogKind = "role" | "delta" | "assignment"
 interface CatalogTable {
@@ -302,19 +311,104 @@ function truncateBody(table: PhysicalTable): string {
   return `BEGIN\n  ${refusal(COMMAND_CORE_ERRORS.forbidden.rightsContext, table)}\n  RETURN NULL;\nEND`
 }
 
+const HEADER = ref(SNAPSHOT_TABLES.header)
+
 /**
- * Знімок прав актора — до першої зміни командою в транзакції: перевірка
- * порівнює приріст саме з ним, інакше актор, що призначив собі роль чи додав
- * `allow` до своєї ролі, покрив би приріст власними новими правами.
+ * Рядки факту `rights` знімка: права актора з живого варіанта й рядки
+ * носіїв `fullAccess` цього актора. Одне місце форми факту: перевірка
+ * приросту читає ці рядки як «до», а `v_actor` — актор знімка.
+ */
+function rightsFactRows(
+  contracts: GuardContracts,
+  physical: PhysicalSnapshot,
+  style: AttributeCase
+): string[] {
+  const actor = ref(SNAPSHOT_TABLES.actor)
+  return [
+    `INSERT INTO ${actor} (xid, level, level_id, scope, container, object, action, extent, dimension_id, full_access)`,
+    `SELECT txid_current(), r.level, r.level_id, r.scope, r.container, r.object, r.action, r.extent, r.dimension_id, false FROM ${ref(RIGHTS_FUNCTIONS.mineLive)}() r;`,
+    ...contracts.rightsCatalogs.flatMap((catalog) => [
+      `INSERT INTO ${actor} (xid, level, level_id, scope, full_access)`,
+      `SELECT txid_current(), ${sqlLiteral(catalog.level.level)}, ${catalog.level.level === "scope" ? `${sqlLiteral(catalog.level.scopeKindId)}::uuid` : "NULL::uuid"}, h.scope, true`,
+      `FROM (${fullAccessHolderRows(catalog, contracts, physical, style)}) h WHERE h.actor IS NOT DISTINCT FROM v_actor;`,
+    ]),
+  ]
+}
+
+/**
+ * Рядки факту — вихід його живого варіанта (Р3-5): знімок успадковує фільтри
+ * живих функцій (активність і умови рядків прийнятих джерел, дієвість
+ * носіїв), тож гілка знімка повторно не фільтрує. Рядок скоупу з `NULL` у
+ * `scope` чи `member` живі функції не зіставляють — його немає й у знімку.
+ */
+function factRows(
+  fact: SnapshotFact,
+  contracts: GuardContracts,
+  physical: PhysicalSnapshot,
+  style: AttributeCase
+): string[] {
+  switch (fact) {
+    case "rights":
+      return rightsFactRows(contracts, physical, style)
+    case "scopes":
+      return [
+        `INSERT INTO ${ref(SNAPSHOT_TABLES.scopes)} (xid, scope_kind_id, scope, member, catalog)`,
+        `SELECT txid_current(), s.scope_kind_id, s.scope, s.member, s.catalog FROM ${ref(RIGHTS_FUNCTIONS.myScopesLive)}() s WHERE s.scope IS NOT NULL AND s.member IS NOT NULL;`,
+      ]
+    case "values": {
+      const arms = contracts.accessDimensions.map(
+        (dimension) =>
+          `SELECT ${sqlLiteral(dimension.dimensionId)}::uuid AS dimension_id, v.value FROM ${ref(RIGHTS_FUNCTIONS.dimensionValuesLive)}(${sqlLiteral(dimension.dimensionId)}::uuid) AS v(value)`
+      )
+      if (arms.length === 0) return []
+      return [
+        `INSERT INTO ${ref(SNAPSHOT_TABLES.values)} (xid, dimension_id, value)`,
+        `SELECT txid_current(), d.dimension_id, d.value FROM (${arms.join(" UNION ALL ")}) d;`,
+      ]
+    }
+    case "scopeSets": {
+      const arms = contracts.scopeSetFunctions.map(
+        (set) =>
+          `SELECT ${sqlLiteral(set.scopeKindId)}::uuid AS scope_kind_id, v.scope FROM ${ref(RIGHTS_FUNCTIONS.scopeSetLive)}(${sqlLiteral(set.scopeKindId)}::uuid) AS v(scope)`
+      )
+      if (arms.length === 0) return []
+      return [
+        `INSERT INTO ${ref(SNAPSHOT_TABLES.scopeSets)} (xid, scope_kind_id, scope)`,
+        `SELECT txid_current(), d.scope_kind_id, d.scope FROM (${arms.join(" UNION ALL ")}) d;`,
+      ]
+    }
+  }
+}
+
+/** Живі варіанти, які кличе тіло знімка факту. */
+const FACT_LIVE: Record<SnapshotFact, QualifiedName> = {
+  rights: RIGHTS_FUNCTIONS.mineLive,
+  scopes: RIGHTS_FUNCTIONS.myScopesLive,
+  values: RIGHTS_FUNCTIONS.dimensionValuesLive,
+  scopeSets: RIGHTS_FUNCTIONS.scopeSetLive,
+}
+
+const factPresent = (fact: SnapshotFact) =>
+  `EXISTS (SELECT 1 FROM ${HEADER} WHERE xid = txid_current() AND fact = ${sqlLiteral(fact)})`
+
+/**
+ * Знімок фактів актора — до першої зміни їхнього джерела в транзакції
+ * команди (спека прав §7): права, якими транзакція користується, — права її
+ * початку, і перевірка приросту на COMMIT порівнює з ними, інакше актор, що
+ * призначив собі роль, покрив би приріст власними новими правами. Тіло
+ * знімає лише відсутні факти своєї таблиці, і заголовок факту пишеться після
+ * його рядків: оператор, що бере знімок, сам читає живі факти, рівні знімку.
  */
 function snapshotBody(
   provider: DatabaseProvider,
+  facts: readonly SnapshotFact[],
   contracts: GuardContracts,
   physical: PhysicalSnapshot,
   style: AttributeCase
 ): string {
-  const actor = ref(platform("rights_tx_actor"))
   const currentUser = `${ref(platform(CURRENT_USER_FUNCTION_NAME))}()`
+  const missing = facts.map((fact) => `(${sqlLiteral(fact)})`).join(", ")
+  const indent = (lines: readonly string[]) => lines.map((l) => `    ${l}`)
   return [
     "DECLARE",
     "  v_action text;",
@@ -323,20 +417,24 @@ function snapshotBody(
     `  SELECT c.action INTO v_action FROM ${ref(COMMAND_FUNCTIONS.current)}() c;`,
     `  IF v_action IS NULL OR (${maintenanceSql(provider)}) THEN RETURN NULL; END IF;`,
     `  v_actor := ${currentUser};`,
-    `  IF EXISTS (SELECT 1 FROM ${actor} WHERE xid = txid_current()) THEN`,
-    `    IF EXISTS (SELECT 1 FROM ${actor} WHERE xid = txid_current() AND actor IS DISTINCT FROM v_actor) THEN ${refusal(COMMAND_CORE_ERRORS.forbidden.rightsContext)} END IF;`,
-    "    RETURN NULL;",
+    `  IF EXISTS (SELECT 1 FROM ${HEADER} WHERE xid = txid_current() AND actor IS DISTINCT FROM v_actor) THEN ${refusal(COMMAND_CORE_ERRORS.forbidden.rightsContext)} END IF;`,
+    `  IF NOT EXISTS (SELECT 1 FROM (VALUES ${missing}) f(fact) WHERE NOT EXISTS (SELECT 1 FROM ${HEADER} h WHERE h.xid = txid_current() AND h.fact = f.fact)) THEN RETURN NULL; END IF;`,
+    // Рядки завершених транзакцій прибирає наступний знімок (Р3-7): чужі
+    // видимі рядки — лише закомічені, а замок рядка й видалення — один
+    // оператор, тож прибиральники не чекають один одного. В інших рівнях
+    // ізоляції видно не всі закомічені рядки — прибирання пропускається.
+    "  IF current_setting('transaction_isolation') = 'read committed' THEN",
+    ...Object.values(SNAPSHOT_TABLES).map((table) => {
+      const name = ref(table)
+      return `    DELETE FROM ${name} WHERE ctid = ANY (ARRAY(SELECT ctid FROM ${name} WHERE xid <> txid_current() FOR UPDATE SKIP LOCKED));`
+    }),
     "  END IF;",
-    `  INSERT INTO ${actor} (xid, actor, full_access) VALUES (txid_current(), v_actor, false);`,
-    `  INSERT INTO ${actor} (xid, actor, level, level_id, scope, container, object, action, extent, dimension_id, full_access)`,
-    `  SELECT txid_current(), v_actor, r.level, r.level_id, r.scope, r.container, r.object, r.action, r.extent, r.dimension_id, false FROM ${ref(RIGHTS_FUNCTIONS.mineLive)}() r;`,
-    ...contracts.rightsCatalogs.map((catalog) =>
-      [
-        `  INSERT INTO ${actor} (xid, actor, level, level_id, scope, full_access)`,
-        `  SELECT txid_current(), v_actor, ${sqlLiteral(catalog.level.level)}, ${catalog.level.level === "scope" ? `${sqlLiteral(catalog.level.scopeKindId)}::uuid` : "NULL::uuid"}, h.scope, true`,
-        `  FROM (${fullAccessHolderRows(catalog, contracts, physical, style)}) h WHERE h.actor = v_actor;`,
-      ].join("\n")
-    ),
+    ...facts.flatMap((fact) => [
+      `  IF NOT ${factPresent(fact)} THEN`,
+      ...indent(factRows(fact, contracts, physical, style)),
+      `    INSERT INTO ${HEADER} (xid, fact, actor) VALUES (txid_current(), ${sqlLiteral(fact)}, v_actor);`,
+      "  END IF;",
+    ]),
     "  RETURN NULL;",
     "END",
   ].join("\n")
@@ -360,11 +458,12 @@ function pendingInsert(rows: readonly string[], maintenance: string): string {
 }
 
 /**
- * Ключ `actor`: на COMMIT перевіряє приріст власних прав актора й прибирає
- * знімок і в транзакції без інших ключів.
+ * Ключ `actor`: на COMMIT перевіряє приріст власних прав актора. Ставиться за
+ * заголовком факту `rights`, а не за рядком прав: у актора без прав рядків
+ * немає, а його самоприйняття з призначеннями ⊆ теж судить.
  */
 function actorPending(): string {
-  return `SELECT 'actor'::text AS kind, ${sqlLiteral(ZERO_UUID)}::uuid AS key, ${sqlLiteral(ZERO_UUID)}::uuid AS scope_kind_id, NULL::uuid AS scope, 0 AS image WHERE EXISTS (SELECT 1 FROM ${ref(platform("rights_tx_actor"))} WHERE xid = txid_current())`
+  return `SELECT 'actor'::text AS kind, ${sqlLiteral(ZERO_UUID)}::uuid AS key, ${sqlLiteral(ZERO_UUID)}::uuid AS scope_kind_id, NULL::uuid AS scope, 0 AS image WHERE ${factPresent("rights")}`
 }
 
 function pendingSql(
@@ -530,7 +629,7 @@ function assignmentGrantSet(
  */
 export function fullAccessHolderRows(
   catalog: RightsCatalogContract,
-  contracts: GuardContracts,
+  contracts: Pick<Contracts, "membership" | "membershipSources" | "users">,
   physical: PhysicalSnapshot,
   style: AttributeCase
 ): string {
@@ -600,7 +699,7 @@ function escalationSql(
   before: string,
   storageKind: string
 ): string {
-  const actor = ref(platform("rights_tx_actor"))
+  const actor = ref(SNAPSHOT_TABLES.actor)
   return [
     "IF NOT v_pending.maintenance AND EXISTS (",
     `  SELECT 1 FROM ((${after}) EXCEPT (${before})) g`,
@@ -726,17 +825,18 @@ function containerStorageKind(contracts: GuardContracts): string {
  * Ключ `actor` (спека прав §7): права актора на COMMIT мінус знімок — той самий ⊆,
  * що для ролі й призначення. Права ростуть і без зміни ролі чи призначення:
  * самоприйняття запрошеного рядка членства з призначеннями ключа
- * `assignment` не ставить. Ключ стоїть, доки є інші, тож знімок ще не
- * прибрано. `rights_mine_live()` рахує права за поточними claims: інший актор на
- * COMMIT дав би чужі права, тож відмова, як у знімку (fail-closed).
+ * `assignment` не ставить. Знімок живе до кінця транзакції. «Після» —
+ * `rights_mine_live()`: приріст судиться проти живого кінцевого стану, а
+ * публічна функція повернула б сам знімок. Живий варіант рахує права за
+ * поточними claims: інший актор на COMMIT дав би чужі права, тож відмова,
+ * як у знімку (fail-closed).
  */
 function actorCheck(contracts: GuardContracts): string {
-  const actor = ref(platform("rights_tx_actor"))
   const after = `SELECT ${GRANT_COLUMNS} FROM ${ref(RIGHTS_FUNCTIONS.mineLive)}()`
-  const before = `SELECT ${GRANT_COLUMNS} FROM ${actor} WHERE xid = v_pending.xid AND NOT full_access AND level IS NOT NULL`
+  const before = `SELECT ${GRANT_COLUMNS} FROM ${ref(SNAPSHOT_TABLES.actor)} WHERE xid = v_pending.xid AND NOT full_access`
   return [
     "IF v_pending.kind = 'actor' THEN",
-    `  IF NOT v_pending.maintenance AND EXISTS (SELECT 1 FROM ${actor} WHERE xid = v_pending.xid AND actor IS DISTINCT FROM ${ref(platform(CURRENT_USER_FUNCTION_NAME))}()) THEN ${refusal(COMMAND_CORE_ERRORS.forbidden.rightsContext)} END IF;`,
+    `  IF NOT v_pending.maintenance AND EXISTS (SELECT 1 FROM ${HEADER} WHERE xid = v_pending.xid AND actor IS DISTINCT FROM ${ref(platform(CURRENT_USER_FUNCTION_NAME))}()) THEN ${refusal(COMMAND_CORE_ERRORS.forbidden.rightsContext)} END IF;`,
     `  ${escalationSql(after, before, containerStorageKind(contracts))}`,
     "END IF;",
   ].join("\n")
@@ -767,9 +867,9 @@ function checkBody(
     ),
     actorCheck(contracts),
     `  DELETE FROM ${ref(platform("rights_tx_pending"))} p WHERE p.xid = v_pending.xid AND p.kind = v_pending.kind AND p.scope_kind_id = v_pending.scope_kind_id AND p.key = v_pending.key;`,
-    `  IF NOT EXISTS (SELECT 1 FROM ${ref(platform("rights_tx_pending"))} WHERE xid = v_pending.xid) THEN`,
-    `    DELETE FROM ${ref(platform("rights_tx_actor"))} WHERE xid = v_pending.xid;`,
-    "  END IF;",
+    // Знімок не прибирається (Р3-7): пройдена `SET CONSTRAINTS ALL
+    // IMMEDIATE` інакше відкрила б зміни, яких ⊆ не судить (виміри,
+    // членство без призначень), до COMMIT.
     "  RETURN NULL;",
     "END",
   ].join("\n")
@@ -952,13 +1052,10 @@ export function buildRightsGuardUnits(
   attributeCase: AttributeCase,
   provider: DatabaseProvider,
   module: string,
-  parse: SqlParser
+  parse: SqlParser,
+  sources: SnapshotSources
 ): SqlUnit[] {
-  if (
-    contracts.rightsCatalogs.length === 0 ||
-    !hasRightsFunctions(contracts, provider)
-  )
-    return []
+  if (!hasActorSnapshot(contracts, provider)) return []
   const units: SqlUnit[] = []
   const add = (
     sql: string,
@@ -992,25 +1089,36 @@ export function buildRightsGuardUnits(
       table.origin.objectId
     )
   }
+  // Тригер знімка — на кожному джерелі фактів (Р3-5, Р3-6): функція на
+  // таблицю, бо джерела живлять різні факти.
+  for (const { table, facts } of sources.sources) {
+    const name = tableName(table)
+    const owner = table.origin.objectId
+    const snapshot = functionName(name, labels.snapshot)
+    addFunction(
+      snapshot,
+      snapshotBody(provider, facts, contracts, physical, attributeCase),
+      owner,
+      [
+        unitNode(COMMAND_FUNCTIONS.current),
+        ...facts.map((fact) => ({
+          type: "unit" as const,
+          identity: `function:${ref(FACT_LIVE[fact])}(${fact === "rights" || fact === "scopes" ? "" : "uuid"})`,
+        })),
+        ...[SNAPSHOT_TABLES.header, ...facts.map((f) => FACT_TABLE[f])].map(
+          (t) => ({ type: "table" as const, ...t })
+        ),
+      ]
+    )
+    add(
+      `CREATE TRIGGER ${q(triggerName(name, labels.snapshot))} BEFORE INSERT OR UPDATE OR DELETE ON ${ref(name)} FOR EACH STATEMENT EXECUTE FUNCTION ${ref(snapshot)}();`,
+      owner
+    )
+  }
   for (const config of catalogTables(contracts, physical, attributeCase)) {
     const table = tableName(config.table)
     const owner = config.table.origin.objectId
     const fn = functionName(table, labels.rights)
-    const snapshot = functionName(table, labels.snapshot)
-    addFunction(
-      snapshot,
-      snapshotBody(provider, contracts, physical, attributeCase),
-      owner,
-      [
-        unitNode(COMMAND_FUNCTIONS.current),
-        unitNode(RIGHTS_FUNCTIONS.mineLive),
-        { type: "table", schema: PLATFORM_SCHEMA, name: "rights_tx_actor" },
-      ]
-    )
-    add(
-      `CREATE TRIGGER ${q(triggerName(table, labels.snapshot))} BEFORE INSERT OR UPDATE OR DELETE ON ${ref(table)} FOR EACH STATEMENT EXECUTE FUNCTION ${ref(snapshot)}();`,
-      owner
-    )
     addFunction(fn, catalogBody(config, provider), owner, [
       unitNode(COMMAND_FUNCTIONS.current),
       {
@@ -1043,21 +1151,6 @@ export function buildRightsGuardUnits(
     const table = tableOf(physical, member.table)
     const name = tableName(table)
     const owner = table.origin.objectId
-    const snapshot = functionName(name, labels.snapshot)
-    addFunction(
-      snapshot,
-      snapshotBody(provider, contracts, physical, attributeCase),
-      owner,
-      [
-        unitNode(COMMAND_FUNCTIONS.current),
-        unitNode(RIGHTS_FUNCTIONS.mineLive),
-        { type: "table", schema: PLATFORM_SCHEMA, name: "rights_tx_actor" },
-      ]
-    )
-    add(
-      `CREATE TRIGGER ${q(triggerName(name, labels.snapshot))} BEFORE INSERT OR UPDATE OR DELETE ON ${ref(name)} FOR EACH STATEMENT EXECUTE FUNCTION ${ref(snapshot)}();`,
-      owner
-    )
     for (const operation of ["INSERT", "UPDATE", "DELETE"] as const) {
       const label = `simetra_rights_members_${operation.toLowerCase()}`
       const fn = functionName(name, label)
@@ -1200,7 +1293,8 @@ export function buildRightsGuardUnits(
     unitNode(RIGHTS_FUNCTIONS.roles),
     unitNode(RIGHTS_FUNCTIONS.domain),
     { type: "table", schema: PLATFORM_SCHEMA, name: "rights_tx_pending" },
-    { type: "table", schema: PLATFORM_SCHEMA, name: "rights_tx_actor" },
+    { type: "table", ...SNAPSHOT_TABLES.header },
+    { type: "table", ...SNAPSHOT_TABLES.actor },
     { type: "table", schema: PLATFORM_SCHEMA, name: "rights_journal" },
   ])
   add(

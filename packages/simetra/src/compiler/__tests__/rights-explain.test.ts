@@ -337,6 +337,7 @@ describe("rights_explain", () => {
     const units = buildExplainUnits(
       {
         ...domain.contracts,
+        scopeSetFunctions: [],
         rights: domain.contracts.rights.filter((c) => c !== bulletin),
         access: domain.contracts.access.map((a) =>
           a.objectId === bulletin.objectId ? { ...a, rights: undefined } : a

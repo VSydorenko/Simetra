@@ -32,7 +32,11 @@ export interface PhysicalOrigin {
     | "identities"
     | "rightsVersions"
     | "rightsJournal"
+    | "rightsTxHeader"
     | "rightsTxActor"
+    | "rightsTxScopes"
+    | "rightsTxValues"
+    | "rightsTxScopeSets"
     | "rightsTxPending"
 }
 

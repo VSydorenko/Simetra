@@ -150,6 +150,85 @@ function formOf(
   return definer ? "function" : undefined
 }
 
+/**
+ * Чи функція чи процедура виконується від власника: `SECURITY DEFINER` у
+ * `CREATE` чи в окремому `ALTER FUNCTION` (порядок не моделюється —
+ * fail-closed).
+ */
+export function isSecurityDefiner(
+  unit: VerbatimUnit,
+  units: readonly VerbatimUnit[]
+): boolean {
+  if (unit.class !== "function" && unit.class !== "procedure") return false
+  const fn = (unit.tree as { CreateFunctionStmt?: FunctionTree })
+    .CreateFunctionStmt
+  if (fn === undefined) return false
+  return (
+    hasDefiner(fn.options ?? []) ||
+    functionSettingsOf(unit, units).some((settings) =>
+      hasDefiner(
+        (settings.tree as { AlterFunctionStmt?: { actions?: Options } })
+          .AlterFunctionStmt?.actions ?? []
+      )
+    )
+  )
+}
+
+/** Чи функція — тригерна: її кличе лише тригер. */
+export function isTriggerFunction(unit: VerbatimUnit): boolean {
+  const fn = (unit.tree as { CreateFunctionStmt?: FunctionTree })
+    .CreateFunctionStmt
+  return fn !== undefined && returnsTrigger(fn)
+}
+
+/** Чи подання читає й пише від імені викликача (`security_invoker`). */
+export function isSecurityInvoker(unit: VerbatimUnit): boolean {
+  const view = (unit.tree as { ViewStmt?: { options?: Options } }).ViewStmt
+  return securityInvoker(view?.options ?? [])
+}
+
+/**
+ * Чи `role` може виконати функцію чи процедуру за дослівними грантами:
+ * через `PUBLIC` (Postgres дає йому `EXECUTE` за замовчуванням, тож діє
+ * лише явний `REVOKE … FROM PUBLIC` без гранту `PUBLIC`) чи явним грантом
+ * ролі. Типові привілеї відкликанням не рахуються: вони діють лише на
+ * об'єкти, створені після них і названою роллю.
+ */
+export function executableBy(
+  unit: VerbatimUnit,
+  units: readonly VerbatimUnit[],
+  role: string,
+  parse: SqlParser
+): boolean {
+  const own = new Set([
+    `function|${unit.identity.slice(unit.identity.indexOf(":") + 1)}`,
+  ])
+  return (
+    privilegedRoles(
+      (key) => ownsTarget(own, key),
+      "execute",
+      grantFacts(units, parse),
+      []
+    ).length > 0 || explicitGrant(own, units, role, parse)
+  )
+}
+
+function explicitGrant(
+  own: ReadonlySet<string>,
+  units: readonly VerbatimUnit[],
+  role: string,
+  parse: SqlParser
+): boolean {
+  return grantFacts(units, parse).some(
+    (fact) =>
+      fact.grant &&
+      fact.roles.has(role) &&
+      fact.keys.some((key) => ownsTarget(own, key)) &&
+      (fact.privileges.length === 0 ||
+        fact.privileges.some((p) => p.name === "execute" || p.name === "all"))
+  )
+}
+
 function hasDefiner(options: Options): boolean {
   return options.some(
     (o) =>

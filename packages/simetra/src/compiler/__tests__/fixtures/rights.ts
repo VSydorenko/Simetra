@@ -2315,3 +2315,166 @@ export function snapshotBenchDomain(): Map<string, string> {
   )
   return files
 }
+
+/** Скоуплений регістр зв'язку виміру `region` з суб'єктом-«Користувачем». */
+export const SNAPSHOT_USER_REGION_TABLE = "user_region"
+/** Прийнятий зв'язок виміру `badge` з «Користувачем». */
+export const SNAPSHOT_USER_BADGE_TABLE = "user_badge"
+/** Таблиця виду, яку читає дослівна функція множини виду `org`. */
+export const SNAPSHOT_ORG_GUEST_TABLE = "org_guest"
+const SNAPSHOT_ORG_GUEST_FILE = "catalogs/OrgGuest/OrgGuest.meta.json"
+const SNAPSHOT_USER_BADGE_FILE = "custom-tables/UserBadge/UserBadge.meta.json"
+const SNAPSHOT_BADGE_FILE = "catalogs/Badge/Badge.meta.json"
+const SNAPSHOT_BADGE_DIMENSION_ID = uuid(6880)
+const SNAPSHOT_REGION_NOTE_FILE = "catalogs/RegionNote/RegionNote.meta.json"
+
+/**
+ * Модель аналізу джерел знімка (план Права-3, Р3-6): кожна форма джерела
+ * фактів актора поверх прийнятих джерел (`adoptedSourcesDomain`) і другого
+ * виду `team` з довідником членства (`adoptedCrossKind`). Довідник членства —
+ * `TeamMember`; прийняті джерела членства й призначень — `Membership`,
+ * `RoleGrant` і `GlobalGrant` з таблицею ролей `SourceRole`; контейнер —
+ * `Project`; вимір `region` — скоуплений регістр `UserRegion` з
+ * суб'єктом-«Користувачем»; вимір `zone` — дослівна функція над таблицею виду
+ * `Zone`, що кличе `team_member_member_scopes`; вимір `badge` — прийнятий
+ * зв'язок `UserBadge`; дослівна функція множини виду `org` читає прийняте
+ * членство й таблицю виду `OrgGuest`.
+ */
+export function snapshotSourcesDomain(): Map<string, string> {
+  const files = adoptedSourcesDomain(adoptedCrossKind(), {
+    [PROJECT_FILE]: {
+      accessDimensions: [
+        {
+          ...regionDimension(),
+          values: {
+            relation: {
+              object: ref("InformationRegister", "UserRegion"),
+              subject: "user",
+              value: "region",
+            },
+          },
+        },
+        {
+          id: BENCH_ZONE_DIMENSION_ID,
+          name: "zone",
+          target: ref("Catalog", "Zone"),
+          values: { function: { schema: "public", name: "zone_ids" } },
+        },
+        {
+          id: SNAPSHOT_BADGE_DIMENSION_ID,
+          name: "badge",
+          target: ref("Catalog", "Badge"),
+          values: {
+            relation: {
+              object: ref("CustomTable", "UserBadge"),
+              subject: "user",
+              value: "badge",
+            },
+          },
+        },
+      ],
+      membershipSources: [membersSource()],
+      assignmentSources: [
+        grantsSource(),
+        globalGrantsSource({
+          table: ref("CustomTable", "GlobalGrant"),
+          columns: { member: "memberId", role: sourceRoleRef() },
+        }),
+      ],
+    },
+    [USER_REGION_FILE]: {
+      id: uuid(6070),
+      kind: "InformationRegister",
+      name: "UserRegion",
+      physicalName: SNAPSHOT_USER_REGION_TABLE,
+      kindLabel: SNAPSHOT_USER_REGION_TABLE,
+      scope: "org",
+      dimensions: [
+        refAttribute(6071, "user", "user_id", ref("Catalog", "Users")),
+        refAttribute(6072, "region", "region_id", ref("Catalog", "Region")),
+      ],
+    },
+    [SNAPSHOT_REGION_NOTE_FILE]: catalog(
+      uuid(6881),
+      "RegionNote",
+      "region_note",
+      {
+        access: [
+          { attribute: "region", dimension: "region" },
+          { attribute: "zone", dimension: "zone" },
+          { attribute: "badge", dimension: "badge" },
+        ],
+        attributes: [
+          refAttribute(6882, "region", "region_id", ref("Catalog", "Region")),
+          refAttribute(6883, "zone", "zone_id", ref("Catalog", "Zone")),
+          refAttribute(6884, "badge", "badge_id", ref("Catalog", "Badge")),
+        ],
+      }
+    ),
+    [BENCH_ZONE_FILE]: catalog(uuid(6861), "Zone", BENCH_ZONE_TABLE, {
+      attributes: [
+        refAttribute(6862, "keeper", "keeper_id", ref("Catalog", "Users")),
+        { id: uuid(6893), name: "team", physicalName: "team_id", type: "UUID" },
+      ],
+    }),
+    [SNAPSHOT_BADGE_FILE]: catalog(uuid(6885), "Badge", "badge"),
+    [SNAPSHOT_USER_BADGE_FILE]: {
+      id: uuid(6886),
+      kind: "CustomTable",
+      name: "UserBadge",
+      physicalName: SNAPSHOT_USER_BADGE_TABLE,
+      scope: "org",
+      scopeColumn: "orgId",
+      columns: [
+        column(6892, "orgId", "org_id", "UUID"),
+        column(6887, "user", "user_id", "UUID"),
+        column(6888, "badge", "badge_id", "UUID"),
+      ],
+      foreignKeys: [
+        {
+          name: "user_badge_user_fk",
+          columns: ["user"],
+          references: { object: ref("Catalog", "Users"), key: "ref" },
+        },
+        {
+          name: "user_badge_badge_fk",
+          columns: ["badge"],
+          references: { object: ref("Catalog", "Badge"), key: "ref" },
+        },
+      ],
+    },
+    [SNAPSHOT_ORG_GUEST_FILE]: catalog(
+      uuid(6889),
+      "OrgGuest",
+      SNAPSHOT_ORG_GUEST_TABLE,
+      {
+        scope: "none",
+        attributes: [
+          refAttribute(6890, "user", "user_id", ref("Catalog", "Users")),
+          { id: uuid(6891), name: "org", physicalName: "org", type: "UUID" },
+        ],
+      }
+    ),
+    [GLOBAL_GRANT_FILE]: globalGrantTable({
+      columns: [
+        column(6116, "id", "id", "UUID"),
+        nullable(6117, "memberId", "member_id", "UUID"),
+        nullable(6119, "roleId", "role_id", "UUID"),
+      ],
+    }),
+    [SOURCE_ROLE_FILE]: sourceRoleTable(),
+    [ROLE_FILE("Support")]: {
+      sourceKeys: [{ source: "globalGrants", key: ADOPTED_SUPPORT_KEY }],
+    },
+  })
+  const shell = "LANGUAGE sql STABLE SECURITY DEFINER SET search_path = ''"
+  files.set(
+    SCOPE_FUNCTIONS_FILE,
+    `CREATE FUNCTION public.org_ids() RETURNS SETOF uuid ${shell} AS $$ SELECT m.org_id FROM public.membership m WHERE m.user_id = (SELECT simetra.current_user_id()) AND m.is_active IS TRUE UNION SELECT g.org FROM public.${SNAPSHOT_ORG_GUEST_TABLE} g WHERE g.user_id = (SELECT simetra.current_user_id()) $$;`
+  )
+  files.set(
+    BENCH_ZONE_SQL_FILE,
+    `CREATE FUNCTION ${BENCH_ZONE_FUNCTION}() RETURNS SETOF uuid ${shell} AS $$ SELECT z.id FROM public.${BENCH_ZONE_TABLE} z WHERE z.keeper_id = (SELECT simetra.current_user_id()) AND z.team_id IN (SELECT public.team_member_member_scopes()) $$;`
+  )
+  return files
+}

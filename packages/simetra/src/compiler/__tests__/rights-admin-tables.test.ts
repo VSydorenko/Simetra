@@ -33,11 +33,16 @@ const tables = [
     ["id"],
   ],
   [
+    "rights_tx_header",
+    "rightsTxHeader",
+    ["xid", "fact", "actor"],
+    ["xid", "fact"],
+  ],
+  [
     "rights_tx_actor",
     "rightsTxActor",
     [
       "xid",
-      "actor",
       "level",
       "level_id",
       "scope",
@@ -48,6 +53,24 @@ const tables = [
       "dimension_id",
       "full_access",
     ],
+    undefined,
+  ],
+  [
+    "rights_tx_scopes",
+    "rightsTxScopes",
+    ["xid", "scope_kind_id", "scope", "member", "catalog"],
+    undefined,
+  ],
+  [
+    "rights_tx_values",
+    "rightsTxValues",
+    ["xid", "dimension_id", "value"],
+    undefined,
+  ],
+  [
+    "rights_tx_scope_sets",
+    "rightsTxScopeSets",
+    ["xid", "scope_kind_id", "scope"],
     undefined,
   ],
   [
@@ -102,10 +125,44 @@ describe("rights administration storage", () => {
           ],
         })
       }
-      if (name === "rights_tx_actor")
-        expect(table!.indexes.map((i) => i.keys)).toEqual([[{ column: "xid" }]])
+      // Індекси знімка (спека прав §7): рядки факту — за xid і ключем
+      // точкового читання.
+      const indexes: Record<string, string[][]> = {
+        rights_tx_header: [],
+        rights_tx_actor: [["xid"]],
+        rights_tx_scopes: [["xid", "scope_kind_id", "scope"]],
+        rights_tx_values: [["xid", "dimension_id"]],
+        rights_tx_scope_sets: [["xid", "scope_kind_id"]],
+      }
+      if (name in indexes)
+        expect(
+          table!.indexes.map((i) =>
+            i.keys.map((k) => ("column" in k ? k.column : ""))
+          )
+        ).toEqual(indexes[name])
     }
   )
+
+  it("adds the snapshot tables", async () => {
+    const result = await compileRights(withRoles())
+    const snapshot = result
+      .model!.physical.tables.filter(
+        (t) => t.schema === PLATFORM_SCHEMA && t.name.startsWith("rights_tx_")
+      )
+      .map((t) => [t.name, t.primaryKey?.columns ?? null])
+    expect(snapshot).toEqual([
+      ["rights_tx_actor", null],
+      ["rights_tx_header", ["xid", "fact"]],
+      ["rights_tx_pending", ["xid", "kind", "scope_kind_id", "key"]],
+      ["rights_tx_scope_sets", null],
+      ["rights_tx_scopes", null],
+      ["rights_tx_values", null],
+    ])
+    const actor = result.model!.physical.tables.find(
+      (t) => t.schema === PLATFORM_SCHEMA && t.name === "rights_tx_actor"
+    )!
+    expect(actor.columns.map((c) => c.name)).not.toContain("actor")
+  })
 
   it("does not add rights storage without roles and system catalogs", async () => {
     const result = await compileRights(rightsFiles())

@@ -1,0 +1,100 @@
+import {
+  CURRENT_USER_FUNCTION_NAME,
+  PLATFORM_SCHEMA,
+  type DatabaseProvider,
+} from "simetra/model"
+import { qualified, type Contracts, type QualifiedName } from "../contracts"
+import { sqlLiteral } from "../stages/model"
+import { hasRightsFunctions } from "./functions"
+
+/**
+ * Факти актора, які знімок бере до першої зміни їхнього джерела (спека прав
+ * §5.1, §7): рядки прав, мої скоупи, мої значення вимірів і вихід дослівних
+ * функцій множини видів скоупу.
+ */
+export type SnapshotFact = "rights" | "scopes" | "values" | "scopeSets"
+
+export const SNAPSHOT_FACTS: readonly SnapshotFact[] = [
+  "rights",
+  "scopes",
+  "values",
+  "scopeSets",
+]
+
+const platform = (name: string): QualifiedName => ({
+  schema: PLATFORM_SCHEMA,
+  name,
+})
+
+/** Таблиці знімка (спека прав §7): заголовки фактів і рядки кожного факту. */
+export const SNAPSHOT_TABLES = {
+  header: platform("rights_tx_header"),
+  actor: platform("rights_tx_actor"),
+  scopes: platform("rights_tx_scopes"),
+  values: platform("rights_tx_values"),
+  scopeSets: platform("rights_tx_scope_sets"),
+} as const satisfies Record<string, QualifiedName>
+
+/** Таблиця рядків факту. */
+export const FACT_TABLE: Record<SnapshotFact, QualifiedName> = {
+  rights: SNAPSHOT_TABLES.actor,
+  scopes: SNAPSHOT_TABLES.scopes,
+  values: SNAPSHOT_TABLES.values,
+  scopeSets: SNAPSHOT_TABLES.scopeSets,
+}
+
+const CURRENT_USER = `(SELECT ${qualified(platform(CURRENT_USER_FUNCTION_NAME))}())`
+
+/**
+ * Охорона читання: без призначеного xid таблиць знімка не читає ніхто —
+ * `txid_current()` видав би xid кожному читанню (`READ ONLY`, PostgREST).
+ * `CASE`, а не `AND`: кон'юнкти верхнього рівня планувальник переставляє
+ * за ціною, і `EXISTS` виконувався б і без xid.
+ */
+function guarded(exists: string): string {
+  return `CASE WHEN txid_current_if_assigned() IS NULL THEN false ELSE ${exists} END`
+}
+
+function header(fact: SnapshotFact, extra = ""): string {
+  return `EXISTS (SELECT 1 FROM ${qualified(SNAPSHOT_TABLES.header)} h WHERE h.xid = txid_current_if_assigned() AND h.fact = ${sqlLiteral(fact)}${extra})`
+}
+
+/** Чи факт цієї транзакції вже знято (Р3-3). */
+export function snapshotPresent(fact: SnapshotFact): string {
+  return guarded(header(fact))
+}
+
+/** Чи факт цієї транзакції знято для поточного користувача (Р3-3). */
+export function snapshotOwned(fact: SnapshotFact): string {
+  return guarded(
+    header(fact, ` AND h.actor IS NOT DISTINCT FROM ${CURRENT_USER}`)
+  )
+}
+
+/**
+ * Чи транзакцію закріплено за іншим актором (Р3-3): будь-який знятий факт
+ * з іншим актором — і живих фактів він не отримує навіть тих, яких ще не
+ * знято (fail-closed).
+ */
+export function snapshotForeign(): string {
+  return guarded(
+    `EXISTS (SELECT 1 FROM ${qualified(SNAPSHOT_TABLES.header)} h WHERE h.xid = txid_current_if_assigned() AND h.actor IS DISTINCT FROM ${CURRENT_USER})`
+  )
+}
+
+/**
+ * Чи має проєкт знімок актора: без довідників прав команда прав не змінює,
+ * а без функцій прав знімати нічого.
+ */
+export function hasActorSnapshot(
+  contracts: Pick<
+    Contracts,
+    "rightsCatalogs" | "roles" | "users" | "membershipSources"
+  >,
+  provider: DatabaseProvider
+): boolean {
+  return (
+    contracts.rightsCatalogs.length > 0 &&
+    hasRightsFunctions(contracts, provider)
+  )
+}

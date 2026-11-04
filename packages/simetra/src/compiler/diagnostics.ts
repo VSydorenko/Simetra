@@ -173,6 +173,8 @@ export const COMPILER_RULES = [
   "rights.system-catalog-custom-action",
   "rights.adopted-source-writes",
   "rights.scope-kind-unread",
+  "rights.snapshot-source-unknown",
+  "rights.snapshot-exempt-writer",
   "reference.not-referenceable",
   "reference.custom-table-key",
   "reference.custom-table-deferrable-key",

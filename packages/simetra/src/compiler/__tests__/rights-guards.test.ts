@@ -525,10 +525,16 @@ describe("rights guard statement triggers", () => {
     for (const fn of guards(domain).filter((u) => u.class === "function")) {
       for (const s of bodyShape(fn.sql)) {
         for (const e of s.expressions) {
-          const settings = nodes(e.tree, "FuncCall").filter((call) =>
-            isDeepStrictEqual((call as { funcname: unknown }).funcname, [
-              { String: { sval: "current_setting" } },
-            ])
+          // Рівень ізоляції прибирання знімка — не режим обслуговування.
+          const settings = nodes(e.tree, "FuncCall").filter(
+            (call) =>
+              isDeepStrictEqual((call as { funcname: unknown }).funcname, [
+                { String: { sval: "current_setting" } },
+              ]) &&
+              !isDeepStrictEqual(
+                (call as { args: unknown[] }).args[0],
+                expr("'transaction_isolation'")
+              )
           )
           if (settings.length === 0) continue
           expect(contains(e.tree, oracle), fn.identity).toBe(true)
@@ -624,6 +630,27 @@ const detailOf = (s: ReturnType<typeof bodyShape>[number]) =>
 
 const CHECK = "function:simetra.rights_tx_check()"
 
+/**
+ * Блоки фактів тіла знімка: `IF NOT EXISTS (заголовок факту)` і оператори
+ * всередині — у порядку тіла.
+ */
+function factBlocks(body: ReturnType<typeof bodyShape>) {
+  return body.flatMap((s, i) => {
+    const fact = ["rights", "scopes", "values", "scopeSets"].find((f) =>
+      isDeepStrictEqual(
+        s.expressions[0]?.tree,
+        tree(
+          `SELECT NOT EXISTS (SELECT 1 FROM simetra.rights_tx_header WHERE xid = txid_current() AND fact = '${f}')`
+        )
+      )
+    )
+    if (s.type !== "if" || fact === undefined) return []
+    const after = body.slice(i + 1)
+    const end = after.findIndex((st) => st.depth <= s.depth)
+    return [{ fact, statements: end === -1 ? after : after.slice(0, end) }]
+  })
+}
+
 /** Вузли `EXCEPT` дерева: ліва вибірка — набір «після», права — «до». */
 function excepts(hay: unknown): { larg: unknown; rarg: unknown }[] {
   if (Array.isArray(hay)) return hay.flatMap(excepts)
@@ -665,12 +692,31 @@ const covered = (storage: string) =>
   )
 
 describe("rights guard transaction check", () => {
-  it("takes the actor snapshot before the first command write of the transaction", () => {
-    const tables = [...CATALOG_TABLES.map((t) => t.table), "org_member"]
-    const body = bodyShape(
-      fnOf(domain, "org_roles", "simetra_rights_snapshot").sql
+  // Р3-5, Р3-6: тригер знімка — на кожному джерелі фактів, і тіло знімає
+  // лише факти своєї таблиці. Мапа — рукописна для домену політик.
+  it("puts a snapshot trigger with its facts on every source", () => {
+    const expected: Record<string, readonly string[]> = {
+      global_role_assignments: ["rights"],
+      global_roles: ["rights"],
+      global_roles_delta: ["rights"],
+      member_region: ["values"],
+      org_member: ["rights", "scopes", "values"],
+      org_role_assignments: ["rights"],
+      org_roles: ["rights"],
+      org_roles_delta: ["rights"],
+      project: ["rights"],
+      users: ["rights", "scopes", "values"],
+    }
+    const snapshots = guards(domain).filter(
+      (u) =>
+        u.class === "function" && u.name.endsWith("_simetra_rights_snapshot")
     )
-    for (const table of tables) {
+    expect(snapshots.map((u) => u.name).sort()).toEqual(
+      Object.keys(expected)
+        .map((t) => `${t}_simetra_rights_snapshot`)
+        .sort()
+    )
+    for (const [table, facts] of Object.entries(expected)) {
       expect(
         triggerOf(domain, table, "simetra_rights_snapshot").tree,
         table
@@ -679,39 +725,32 @@ describe("rights guard transaction check", () => {
           `CREATE TRIGGER ${table}_simetra_rights_snapshot BEFORE INSERT OR UPDATE OR DELETE ON public.${table} FOR EACH STATEMENT EXECUTE FUNCTION public.${table}_simetra_rights_snapshot()`
         )
       )
-      // Знімок один для всіх таблиць: перша таблиця транзакції — будь-яка.
-      expect(
-        bodyShape(fnOf(domain, table, "simetra_rights_snapshot").sql),
-        table
-      ).toEqual(body)
-    }
-    // Оператори режиму обслуговування й без контексту знімка не беруть.
-    expect(body[2]!.expressions[0]!.tree).toEqual(
-      tree(`SELECT v_action IS NULL OR (${maintenanceSql("supabase")})`)
-    )
-    expect(body[3]!.type).toBe("return")
-    const taken = body.findIndex((s) =>
-      s.expressions.some((e) =>
+      const body = bodyShape(fnOf(domain, table, "simetra_rights_snapshot").sql)
+      // Оператори режиму обслуговування й без контексту знімка не беруть.
+      const context = body.findIndex((st) =>
         isDeepStrictEqual(
-          e.tree,
+          st.expressions[0]?.tree,
+          tree(`SELECT v_action IS NULL OR (${maintenanceSql("supabase")})`)
+        )
+      )
+      expect(context, table).toBeGreaterThanOrEqual(0)
+      expect(body[context + 1]!.type, table).toBe("return")
+      // Немає жодного відсутнього факту таблиці — знімка не бере.
+      const missing = body.findIndex((st) =>
+        isDeepStrictEqual(
+          st.expressions[0]?.tree,
           tree(
-            "SELECT EXISTS (SELECT 1 FROM simetra.rights_tx_actor WHERE xid = txid_current())"
+            `SELECT NOT EXISTS (SELECT 1 FROM (VALUES ${facts.map((f) => `('${f}')`).join(", ")}) f(fact) WHERE NOT EXISTS (SELECT 1 FROM simetra.rights_tx_header h WHERE h.xid = txid_current() AND h.fact = f.fact))`
           )
         )
       )
-    )
-    const inserts = body
-      .map((s, i) => [i, insertInto(s.expressions[0]?.tree)] as const)
-      .filter(([, target]) => target === "rights_tx_actor")
-      .map(([i]) => i)
-    expect(taken).toBeGreaterThan(0)
-    // Узятий знімок не переписується: вставки — лише після перевірки.
-    expect(inserts.length).toBeGreaterThan(1)
-    expect(inserts.every((i) => i > taken)).toBe(true)
-    // Знімок — права актора з rights_mine_live() на мить першого запису.
-    expect(funcNames(inserts.map((i) => body[i]!))).toContain(
-      "rights_mine_live"
-    )
+      expect(missing, table).toBeGreaterThan(context)
+      expect(body[missing + 1]!.type, table).toBe("return")
+      expect(
+        factBlocks(body).map((b) => b.fact),
+        table
+      ).toEqual(facts)
+    }
   })
 
   it("refuses a second actor in the same transaction", () => {
@@ -723,7 +762,7 @@ describe("rights guard transaction check", () => {
         isDeepStrictEqual(
           e.tree,
           tree(
-            "SELECT EXISTS (SELECT 1 FROM simetra.rights_tx_actor WHERE xid = txid_current() AND actor IS DISTINCT FROM v_actor)"
+            "SELECT EXISTS (SELECT 1 FROM simetra.rights_tx_header WHERE xid = txid_current() AND actor IS DISTINCT FROM v_actor)"
           )
         )
       )
@@ -731,6 +770,117 @@ describe("rights guard transaction check", () => {
     expect(other).toBeGreaterThan(0)
     expect(body[other + 1]!.type).toBe("raise")
     expect(detailOf(body[other + 1]!)).toEqual(tree("SELECT 'rights-context'"))
+    // Відмова — до перевірки відсутніх фактів: знятий іншим актором факт
+    // інакше дав би мовчазний вихід.
+    const missing = body.findIndex(
+      (st) => nodes(st.expressions[0]?.tree, "valuesLists").length > 0
+    )
+    expect(other).toBeLessThan(missing)
+  })
+
+  // Р3-5: оператор, що бере знімок, читає живі факти, рівні знімку, лише
+  // коли заголовок факту стоїть після його рядків.
+  it("writes the header of a fact after its rows", () => {
+    const body = bodyShape(fnOf(domain, "users", "simetra_rights_snapshot").sql)
+    const blocks = factBlocks(body)
+    const rows: Record<string, string> = {
+      rights: "rights_tx_actor",
+      scopes: "rights_tx_scopes",
+      values: "rights_tx_values",
+    }
+    expect(blocks.map((b) => b.fact)).toEqual(["rights", "scopes", "values"])
+    for (const { fact, statements } of blocks) {
+      const targets = statements.map((st) =>
+        insertInto(st.expressions[0]?.tree)
+      )
+      expect(targets.at(-1), fact).toBe("rights_tx_header")
+      expect(targets.slice(0, -1).length, fact).toBeGreaterThan(0)
+      expect(
+        targets.slice(0, -1).every((t) => t === rows[fact]),
+        fact
+      ).toBe(true)
+      expect(statements.at(-1)!.expressions[0]!.tree, fact).toEqual(
+        tree(
+          `INSERT INTO simetra.rights_tx_header (xid, fact, actor) VALUES (txid_current(), '${fact}', v_actor)`
+        )
+      )
+    }
+    // Рядки — вихід живого варіанта без NULL-скоупів.
+    expect(blocks[1]!.statements[0]!.expressions[0]!.tree).toEqual(
+      tree(
+        "INSERT INTO simetra.rights_tx_scopes (xid, scope_kind_id, scope, member, catalog) SELECT txid_current(), s.scope_kind_id, s.scope, s.member, s.catalog FROM simetra.rights_my_scopes_live() s WHERE s.scope IS NOT NULL AND s.member IS NOT NULL"
+      )
+    )
+    expect(funcNames(blocks[2]!.statements)).toContain(
+      "rights_dimension_values_live"
+    )
+  })
+
+  // Р3-7: прибирання — у read committed, окремим оператором на кожну з п'яти
+  // таблиць, замок і видалення разом, і до перших рядків знімка.
+  it("cleans finished snapshots only in read committed", () => {
+    const body = bodyShape(
+      fnOf(domain, "org_roles", "simetra_rights_snapshot").sql
+    )
+    const guard = body.findIndex((s) =>
+      isDeepStrictEqual(
+        s.expressions[0]?.tree,
+        tree(
+          "SELECT current_setting('transaction_isolation') = 'read committed'"
+        )
+      )
+    )
+    expect(guard).toBeGreaterThan(0)
+    expect(body[guard]!.type).toBe("if")
+    const tables = [
+      "rights_tx_header",
+      "rights_tx_actor",
+      "rights_tx_scopes",
+      "rights_tx_values",
+      "rights_tx_scope_sets",
+    ]
+    expect(
+      body
+        .slice(guard + 1, guard + 1 + tables.length)
+        .map((s) => [s.depth, s.expressions[0]!.tree])
+    ).toEqual(
+      tables.map((t) => [
+        body[guard]!.depth + 1,
+        tree(
+          `DELETE FROM simetra.${t} WHERE ctid = ANY (ARRAY(SELECT ctid FROM simetra.${t} WHERE xid <> txid_current() FOR UPDATE SKIP LOCKED))`
+        ),
+      ])
+    )
+    const firstRows = body.findIndex(
+      (s) => insertInto(s.expressions[0]?.tree) !== undefined
+    )
+    expect(firstRows).toBeGreaterThan(guard + tables.length)
+  })
+
+  it("keeps the snapshot to the end of the transaction", () => {
+    const deleted = relationsOf(
+      bodyTrees(unit(domain, CHECK).sql).flatMap((trees) =>
+        trees.flatMap((t) => nodes(t, "DeleteStmt"))
+      )
+    ).map((r) => r.relname)
+    expect(deleted).toEqual(["rights_tx_pending"])
+  })
+
+  it("queues the actor key by the rights header", () => {
+    const [insert] = queueInserts(
+      fnOf(domain, "org_roles", "simetra_rights").sql
+    )
+    const actor = arms(
+      insert!.selectStmt.SelectStmt.fromClause[0]!.RangeSubselect.subquery
+        .SelectStmt
+    ).at(-1)!
+    expect(actor).toEqual(
+      (
+        tree(
+          `SELECT 'actor'::text AS kind, ${ZERO} AS key, ${ZERO} AS scope_kind_id, NULL::uuid AS scope, 0 AS image WHERE EXISTS (SELECT 1 FROM simetra.rights_tx_header WHERE xid = txid_current() AND fact = 'rights')`
+        ) as { SelectStmt: Select }
+      ).SelectStmt
+    )
   })
 
   it("queues every key of a statement in one INSERT together with the actor key", () => {
@@ -865,29 +1015,16 @@ describe("rights guard transaction check", () => {
     )
   })
 
-  it("removes its queue row and, when none is left, the actor snapshot", () => {
+  it("removes its queue row", () => {
     const body = bodyShape(unit(domain, CHECK).sql)
-    expect(body.slice(-4).map((s) => [s.type, s.depth])).toEqual([
+    expect(body.slice(-2).map((s) => [s.type, s.depth])).toEqual([
       ["execsql", 1],
-      ["if", 1],
-      ["execsql", 2],
       ["return", 1],
     ])
-    const [own, none, snapshot] = body
-      .slice(-4)
-      .map((s) => s.expressions[0]!.tree)
-    expect(own).toEqual(
+    expect(body.at(-2)!.expressions[0]!.tree).toEqual(
       tree(
         "DELETE FROM simetra.rights_tx_pending p WHERE p.xid = v_pending.xid AND p.kind = v_pending.kind AND p.scope_kind_id = v_pending.scope_kind_id AND p.key = v_pending.key"
       )
-    )
-    expect(none).toEqual(
-      tree(
-        "SELECT NOT EXISTS (SELECT 1 FROM simetra.rights_tx_pending WHERE xid = v_pending.xid)"
-      )
-    )
-    expect(snapshot).toEqual(
-      tree("DELETE FROM simetra.rights_tx_actor WHERE xid = v_pending.xid")
     )
   })
 
@@ -951,7 +1088,7 @@ describe("rights guard transaction check", () => {
     // права за чужими claims.
     expect(own[0]!.expressions[0]!.tree).toEqual(
       tree(
-        "SELECT NOT v_pending.maintenance AND EXISTS (SELECT 1 FROM simetra.rights_tx_actor WHERE xid = v_pending.xid AND actor IS DISTINCT FROM simetra.current_user_id())"
+        "SELECT NOT v_pending.maintenance AND EXISTS (SELECT 1 FROM simetra.rights_tx_header WHERE xid = v_pending.xid AND actor IS DISTINCT FROM simetra.current_user_id())"
       )
     )
     expect(own[1]!.type).toBe("raise")
@@ -968,7 +1105,7 @@ describe("rights guard transaction check", () => {
     )
     expect(except!.rarg).toEqual(
       select(
-        `SELECT ${columns} FROM simetra.rights_tx_actor WHERE xid = v_pending.xid AND NOT full_access AND level IS NOT NULL`
+        `SELECT ${columns} FROM simetra.rights_tx_actor WHERE xid = v_pending.xid AND NOT full_access`
       )
     )
     // Покриття — та сама форма, що в довідників; вид скоупу контейнера —
@@ -995,9 +1132,12 @@ describe("rights guard transaction check", () => {
       (u.requires ?? []).flatMap((node) =>
         node.type === "unit" ? [node.identity] : []
       )
+    // Факт `rights` знімають лише джерела прав.
     const snapshots = guards(domain).filter(
       (u) =>
-        u.class === "function" && u.name.endsWith("_simetra_rights_snapshot")
+        u.class === "function" &&
+        u.name.endsWith("_simetra_rights_snapshot") &&
+        factBlocks(bodyShape(u.sql)).some((b) => b.fact === "rights")
     )
     expect(snapshots.length).toBeGreaterThan(0)
     for (const u of [...snapshots, unit(domain, CHECK)]) {
@@ -1243,13 +1383,14 @@ async function guardsOver(
   attributeCase: AttributeCase = "camelCase"
 ) {
   return buildRightsGuardUnits(
-    { ...model.contracts, ...contracts },
+    { scopeSetFunctions: [], ...model.contracts, ...contracts },
     physical,
     [],
     attributeCase,
     "supabase",
     unit(model, CHECK).module,
-    await loadSqlParser()
+    await loadSqlParser(),
+    { sources: [], exempt: [], unknown: [] }
   )
 }
 

@@ -194,7 +194,7 @@
 
 Діагностика Р3-13 (за Р-4) — у `pipeline.ts` після генерації.
 
-- [ ] **Крок 1. Тести:**
+- [x] **Крок 1. Тести:**
   - `rights-admin-tables.test.ts`: `adds the snapshot tables` — колонки, PK, індекси Р3-2; `rights_tx_actor` без `actor`.
   - `rights-snapshot-sources.test.ts`, фікстура з усіма видами джерел (довідник членства; прийняті джерела членства й призначень з таблицею ролей; вид-контейнер; вимір зі зв'язком у таблиці виду; скоуплений регістр зв'язку з суб'єктом-«Користувачем»; дослівна функція виміру над таблицею виду, що кличе `_member_scopes`; вимір зі зв'язком у `CustomTable`; вид скоупу з дослівною функцією множини над таблицею виду):
     - `maps the sources of the fixture to their facts` — **рукописна** очікувана мапа «таблиця → факти» і «виняток → причина» для фікстури;
@@ -204,10 +204,10 @@
     - `sees through a model view` — дослівна функція виміру читає подання моделі над таблицею виду → таблиця виду — джерело `values`, без помилки.
   - `rights-guards.test.ts`: `puts a snapshot trigger with its facts on every source`; `writes the header of a fact after its rows`; `cleans finished snapshots only in read committed`; `keeps the snapshot to the end of the transaction` (тіло `rights_tx_check` не видаляє з таблиць знімка); `queues the actor key by the rights header` (`actorPending`); наявні асерти старого знімка — оновити.
   - Діагностика (за Р-4): `accepts an adopted source without grants` (база: фікстура `adoptedSources` без жодного гранту — без помилки); `accepts a write policy on an exempt table without a grant`; `refuses a definer trigger function writing an exempt table` (з `REVOKE EXECUTE … FROM PUBLIC`, причеплена до таблиці); `refuses a definer function writing an exempt table through a data-modifying CTE`; `refuses a definer writer whose execute is revoked only in default privileges` (`ALTER DEFAULT PRIVILEGES … REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC` — і глобальні, і `IN SCHEMA` — помилка; контроль — явний `REVOKE EXECUTE ON FUNCTION` без помилки); `refuses a definer function writing an exempt table and executable by the command role` (контроль — з `REVOKE EXECUTE … FROM PUBLIC` без помилки); `refuses a grant of DML on an exempt table to public or the command role` (табличний, поколонковий, `TRUNCATE`, типові привілеї схеми; контроль — `SELECT`); `refuses a writable view over an exempt table`. Наявні тести гейту шляху запису промоції — зелені без змін очікувань.
-- [ ] **Крок 2.** Червоні: `pnpm --filter simetra test rights-admin-tables rights-snapshot-sources rights-guards`.
-- [ ] **Крок 3.** Реалізувати.
-- [ ] **Крок 4.** Зелені; `pnpm --filter simetra test:db rights-guards catalog-command-admin`; `pnpm --filter simetra typecheck lint`; `pnpm --filter @simetrajs/designer typecheck`.
-- [ ] **Крок 5.** Коміт `feat(compiler): знімок фактів актора до першої зміни їхнього джерела`.
+- [x] **Крок 2.** Червоні: `pnpm --filter simetra test rights-admin-tables rights-snapshot-sources rights-guards`.
+- [x] **Крок 3.** Реалізувати.
+- [x] **Крок 4.** Зелені; `pnpm --filter simetra test:db rights-guards catalog-command-admin`; `pnpm --filter simetra typecheck lint`; `pnpm --filter @simetrajs/designer typecheck`.
+- [x] **Крок 5.** Коміт `feat(compiler): знімок фактів актора до першої зміни їхнього джерела`.
 
 ## Задача 4: дві гілки
 

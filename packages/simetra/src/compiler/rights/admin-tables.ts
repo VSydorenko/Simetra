@@ -120,12 +120,23 @@ export function rightsAdminTables(
         [...asc("scope_kind_id", "scope"), desc("at"), desc("seq")],
       ]
     ),
+    // Знімок фактів актора (спека прав §7): заголовок факту окремо від рядків,
+    // бо серед рядків прав його шукали б перебором.
+    table(
+      "rights_tx_header",
+      "rightsTxHeader",
+      [
+        column("xid", "bigint"),
+        column("fact", "text"),
+        column("actor", "uuid", false),
+      ],
+      ["xid", "fact"]
+    ),
     table(
       "rights_tx_actor",
       "rightsTxActor",
       [
         column("xid", "bigint"),
-        column("actor", "uuid", false),
         column("level", "text", false),
         column("level_id", "uuid", false),
         column("scope", "uuid", false),
@@ -138,6 +149,45 @@ export function rightsAdminTables(
       ],
       undefined,
       [asc("xid")]
+    ),
+    // `catalog` — рядок довідника членства: функції членства виду читають
+    // лише такі. Індекс зі `scope` — для точкового `_my_member(p_scope)`.
+    table(
+      "rights_tx_scopes",
+      "rightsTxScopes",
+      [
+        column("xid", "bigint"),
+        column("scope_kind_id", "uuid"),
+        column("scope", "uuid"),
+        column("member", "uuid"),
+        column("catalog", "boolean"),
+      ],
+      undefined,
+      [asc("xid", "scope_kind_id", "scope")]
+    ),
+    // `value` — `NULL`, коли його дала дослівна функція виміру: факт —
+    // рівно вихід живого варіанта.
+    table(
+      "rights_tx_values",
+      "rightsTxValues",
+      [
+        column("xid", "bigint"),
+        column("dimension_id", "uuid"),
+        column("value", "uuid", false),
+      ],
+      undefined,
+      [asc("xid", "dimension_id")]
+    ),
+    table(
+      "rights_tx_scope_sets",
+      "rightsTxScopeSets",
+      [
+        column("xid", "bigint"),
+        column("scope_kind_id", "uuid"),
+        column("scope", "uuid", false),
+      ],
+      undefined,
+      [asc("xid", "scope_kind_id")]
     ),
     table(
       "rights_tx_pending",
