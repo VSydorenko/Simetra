@@ -357,10 +357,10 @@ Postgres 17 локального стека Supabase, Supavisor (transaction-р�
 
 **Interfaces:** споживає `createCommandRuntime`, порт-фейк файлу. Нічого не виробляє.
 
-- [ ] **Крок 1:** тест `maps a guard refusal answered at COMMIT` — один кейс: фейк відповідає успіхом на фази й `42501` `MESSAGE 'command.forbidden'` `DETAIL 'escalation'` на `COMMIT` → `command.forbidden` `reason: "escalation"` без `object`; послідовність завершується `COMMIT`; `release()` рівно раз. (Повний перелік причин тримає `errors.test.ts` › `command.forbidden keeps the allowed reason`.)
-- [ ] **Крок 2:** тест `does not refuse a self-assignment on its own` — каталог з довідником призначень (`context: "administerRights"`), `create` призначення з `subject` = учасник користувача сесії; фейк відповідає успіхом → результат з рядком; виклик ядра й `COMMIT` надіслано.
-- [ ] **Крок 3:** обидва зелені на поточному коді; мутації М1, М2 їх червонять.
-- [ ] **Крок 4:** коміт `test(server): відмова запобіжника на COMMIT і самопризначення без власних перевірок T3`.
+- [x] **Крок 1:** тест `maps a guard refusal answered at COMMIT` — один кейс: фейк відповідає успіхом на фази й `42501` `MESSAGE 'command.forbidden'` `DETAIL 'escalation'` на `COMMIT` → `command.forbidden` `reason: "escalation"` без `object`; послідовність завершується `COMMIT`; `release()` рівно раз. (Повний перелік причин тримає `errors.test.ts` › `command.forbidden keeps the allowed reason`.)
+- [x] **Крок 2:** тест `does not refuse a self-assignment on its own` — каталог з довідником призначень (`context: "administerRights"`), `create` призначення з `subject` = учасник користувача сесії; фейк відповідає успіхом → результат з рядком; виклик ядра й `COMMIT` надіслано.
+- [x] **Крок 3:** обидва зелені на поточному коді; мутації М1, М2 їх червонять.
+- [x] **Крок 4:** коміт `test(server): відмова запобіжника на COMMIT і самопризначення без власних перевірок T3`.
 
 ### Задача 2: кодування значень у T0 і `encodeMemberValues`
 

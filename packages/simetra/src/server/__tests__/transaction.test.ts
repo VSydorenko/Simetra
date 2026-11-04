@@ -1,4 +1,4 @@
-import type { Operation } from "simetra/model"
+import { runtimeCatalogSchema, type Operation } from "simetra/model"
 import { describe, expect, it, vi } from "vitest"
 import { createCommandRuntime } from "../runtime"
 import { runAfterCommit, Transaction, type RuntimeState } from "../transaction"
@@ -298,6 +298,37 @@ describe("command transaction", () => {
     )
   })
 
+  // Запобіжники бази судять кінцевий стан, тож їхня відмова приходить
+  // відповіддю на `COMMIT`; T3 лише мапить її (П4 §6.12).
+  it("maps a guard refusal answered at COMMIT", async () => {
+    let commits = 0
+    // Перший `COMMIT` — транзакція створення рантайму.
+    const { db, runtime } = await setup((text) =>
+      text === "COMMIT" && commits++ > 0
+        ? {
+            error: {
+              code: "42501",
+              message: "command.forbidden",
+              detail: "escalation",
+            },
+          }
+        : undefined
+    )
+    expect(await failureOf(runtime.run(session, create))).toEqual({
+      code: "command.forbidden",
+      reason: "escalation",
+    })
+    expect(db.calls).toEqual([
+      ...OPEN,
+      context("create", "client", ID),
+      createCall,
+      COMMIT,
+      ROLLBACK,
+      { release: false },
+    ])
+    expect(db.calls.filter((c) => "release" in c)).toHaveLength(1)
+  })
+
   // Помилка без SQLSTATE — обрив чи власна вада T3/драйвера: назовні
   // `command.unavailable`, але оригінал іде в журнал, інакше вада зникла б.
   it("maps connect failure and logs the original error", async () => {
@@ -511,6 +542,92 @@ describe("command transaction", () => {
       createCall,
       ROLLBACK,
       { release: true },
+    ])
+  })
+})
+
+describe("rights self-assignment", () => {
+  const MEMBER = "66666666-6666-4666-8666-666666666666"
+  const ROLE_ID = "77777777-7777-4777-8777-777777777777"
+  const ASSIGNMENT = { kind: "Catalog" as const, name: "RightsAssignment" }
+  const assignment = commandObject({
+    name: "RightsAssignment",
+    table: "rights_assignment",
+    scopeKindId: undefined,
+    scopeColumn: undefined,
+    attributes: [
+      {
+        name: "subject",
+        column: "subject_id",
+        pgType: "uuid",
+        castType: "uuid",
+        type: "Ref",
+        required: true,
+        insert: true,
+        update: false,
+      },
+      {
+        name: "role",
+        column: "role_id",
+        pgType: "uuid",
+        castType: "uuid",
+        type: "Ref",
+        required: true,
+        insert: true,
+        update: false,
+      },
+    ],
+    operations: {
+      create: {
+        function: { schema: "public", name: "rights_assignment_save" },
+        context: "administerRights",
+      },
+    },
+  })
+
+  // Самопризначення судить база (кінцевий стан ⊆); перевірка в T3 зробила б
+  // його відмову залежною від зліпка прав, який T3 не бачить (П4 §6.12).
+  it("does not refuse a self-assignment on its own", async () => {
+    const { db, runtime } = await setup(
+      (text) =>
+        text.includes("rights_assignment_save")
+          ? {
+              rows: [
+                {
+                  r: JSON.stringify({
+                    id: ID,
+                    version: 1,
+                    subject_id: MEMBER,
+                    role_id: ROLE_ID,
+                  }),
+                },
+              ],
+            }
+          : undefined,
+      {
+        catalog: runtimeCatalogSchema.parse({
+          ...catalog,
+          objects: [...catalog.objects, assignment],
+        }),
+      }
+    )
+    const result = await runtime.run(session, {
+      action: "create",
+      object: ASSIGNMENT,
+      id: ID,
+      // `subject` — учасник самого користувача сесії.
+      values: { subject: MEMBER, role: ROLE_ID },
+    })
+    expect(result.rows.map((r) => r.ref)).toEqual([ID])
+    expect(db.calls).toEqual([
+      ...OPEN,
+      context("administerRights", "rights_assignment", ID),
+      call("rights_assignment_save", SAVE, [
+        JSON.stringify({ id: ID, subject_id: MEMBER, role_id: ROLE_ID }),
+        null,
+      ]),
+      COMMIT,
+      { release: false },
     ])
   })
 })
