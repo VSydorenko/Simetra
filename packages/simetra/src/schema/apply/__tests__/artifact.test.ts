@@ -37,7 +37,7 @@ const SERVER = {
 const draft = (): Omit<PlanArtifact, "planHash"> => ({
   format: PLAN_FORMAT,
   platformVersion: PLATFORM_VERSION,
-  engine: { name: "pg-delta", version: "1.0.0-alpha.56" },
+  engine: { name: "pg-delta", version: "1.0.0-alpha.60" },
   fingerprintVersion: FINGERPRINT_VERSION,
   fromHash: null,
   toHash: "f".repeat(64),

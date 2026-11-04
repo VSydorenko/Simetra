@@ -49,6 +49,15 @@
   `FINGERPRINT_VERSION++`, повторний контракт покриття
   (`packages/designer/src/schema-engine/__tests__/fingerprint-coverage.db.test.ts`)
   і посекційні тести на стеку PG18.
+- **Перехід на Postgres 18** (тригер: Supabase переводить проєкти на PG18).
+  Робиться одним блоком, бо граматика парсера, стек і тінь мусять мати один
+  мажор: `libpg-query` і `@libpg-query/parser` 18 (у 18 обидва API в одному
+  пакеті, тож другий пакет зникає), `major_version` у `supabase/config.toml`,
+  відбиток каталогу (пункт вище). Відома зміна AST: у `INSERT`/`UPDATE`/
+  `DELETE` поле `returningList` замінено на `returningClause` (`RETURNING
+  OLD/NEW`) — правка в `packages/simetra/src/compiler/sql/rewrite/`
+  (`statement.ts`, `plpgsql-body.ts`); інші зміни AST — за diff
+  `@pgsql/types` 17 → 18.
 - **Механізми платформної спеки, яких немає в ядрі застосування:** режим
   запису `simetra.write_mode = 'import'` (§6.12), контроль DDL поза
   платформою тригером подій із журналом у схемі `simetra` (§6.12), видалення

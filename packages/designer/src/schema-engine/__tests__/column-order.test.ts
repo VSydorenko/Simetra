@@ -53,6 +53,23 @@ const newEdges = (target: FactBase, result: FactBase) => {
   return edgeKeys(result.edges.filter((e) => !old.has(key(e))))
 }
 
+/**
+ * DEFAULT колонки `name` таблиці `t`, що викликає функцію `fn`: лише таблиця
+ * з такою колонкою отримує ребра. Факт функції додає викликач.
+ */
+const callingDefault = (name: string, t = "t", fn = "f") => {
+  const id: StableId = { kind: "default", schema: "app", table: t, name }
+  const parent: StableId = { kind: "column", schema: "app", table: t, name }
+  const target: StableId = {
+    kind: "function",
+    schema: "app",
+    name: fn,
+    args: [],
+  }
+  const defaultFact: Fact = { id, parent, payload: { expr: `app.${fn}()` } }
+  return { fact: defaultFact, edge: depends(id, target) }
+}
+
 /** Колонки першого тесту — навмисне не в порядку `attnum`. */
 const generatedColumns = () => [
   column("note", 4),
@@ -64,9 +81,16 @@ const generatedColumns = () => [
 describe("withColumnOrder", () => {
   it("chains the columns of a new table in attnum order", () => {
     const source = new FactBase([fact(app)], [])
+    const dflt = callingDefault("note")
     const target = new FactBase(
-      [fact(app), fact(table, app), ...generatedColumns()],
-      [depends(table, app), depends(col("p"), col("d"))]
+      [
+        fact(app),
+        fact(f, app),
+        fact(table, app),
+        ...generatedColumns(),
+        dflt.fact,
+      ],
+      [depends(table, app), depends(col("p"), col("d")), dflt.edge]
     )
     const result = withColumnOrder(source, target)
     expect(newEdges(target, result)).toEqual(
@@ -77,6 +101,7 @@ describe("withColumnOrder", () => {
       edgeKeys([
         depends(table, app),
         depends(col("p"), col("d")),
+        dflt.edge,
         depends(col("d"), col("id")),
         depends(col("note"), col("p")),
       ])
@@ -84,17 +109,36 @@ describe("withColumnOrder", () => {
     expect(result.facts()).toEqual(target.facts())
   })
 
+  it("leaves a new table without a DEFAULT calling a function untouched", () => {
+    // Згенеровану колонку й колонку типу двигун з alpha.60 тримає на місці
+    // сам; DEFAULT без функції (літерал) двигун теж вбудовує
+    const source = new FactBase([fact(app)], [])
+    const literal: Fact = {
+      id: { kind: "default", schema: "app", table: "t", name: "note" },
+      parent: col("note"),
+      payload: { expr: "0" },
+    }
+    const target = new FactBase(
+      [fact(app), fact(table, app), ...generatedColumns(), literal],
+      [depends(table, app), depends(col("p"), col("d"))]
+    )
+    expect(newEdges(target, withColumnOrder(source, target))).toEqual([])
+  })
+
   it("follows attnum, not names, across dropped-column holes", () => {
     const source = new FactBase([fact(app)], [])
+    const dflt = callingDefault("a")
     const target = new FactBase(
       [
         fact(app),
+        fact(f, app),
         fact(table, app),
         column("m", 9),
         column("a", 4),
         column("z", 1),
+        dflt.fact,
       ],
-      []
+      [dflt.edge]
     )
     expect(newEdges(target, withColumnOrder(source, target))).toEqual(
       edgeKeys([depends(col("a"), col("z")), depends(col("m"), col("a"))])
@@ -191,29 +235,116 @@ describe("engine plan of a new table with a generated column", () => {
     },
   }
   const source = new FactBase([schemaFact], [])
-  const target = new FactBase(
-    [schemaFact, tableFact, ...generatedColumns()],
-    [depends(table, app), depends(col("p"), col("d"))]
-  )
   const columnSequence = (desired: FactBase) =>
     plan(source, desired).actions.flatMap((a) =>
       a.produces.flatMap((id) =>
         id.kind === "column" && id.table === "t" ? [id.name] : []
       )
     )
+  const typed = (name: string, position: number, type: string) => {
+    const c = column(name, position)
+    return { ...c, payload: { ...c.payload, type } }
+  }
+  const pub: StableId = { kind: "schema", name: "pub" }
+  const hue = (schema: string): StableId => ({
+    kind: "type",
+    schema,
+    name: "hue",
+  })
+  const hueFact = (schema: StableId & { kind: "schema" }): Fact => ({
+    id: hue(schema.name),
+    parent: schema,
+    payload: { variant: "enum", values: ["red"] },
+  })
+  const dflt: StableId = {
+    kind: "default",
+    schema: "app",
+    table: "t",
+    name: "d",
+  }
+  /** Таблиця `id, d, note`; колонка `d` чекає на об'єкт `waits`. */
+  const waiting = (d: Fact, waits: Fact[], edges: DependencyEdge[]) =>
+    new FactBase(
+      [schemaFact, tableFact, column("id", 1), d, column("note", 3), ...waits],
+      [depends(table, app), ...edges]
+    )
 
-  it("the engine alone puts the generated column last", () => {
-    // Документує дефект двигуна: почервоніє, коли upstream його виправить
-    expect(columnSequence(target)).toEqual(["id", "d", "note", "p"])
+  // Колонка з меншим `attnum` чекає на об'єкт, який план створює після
+  // таблиці. Обхід тримає порядок `attnum` у кожному випадку; двигун сам —
+  // лише там, де upstream це виправив (pg-delta 1.0.0-alpha.60, 63b3f65).
+  // Рядок, де `engineAlone` ставить колонку в кінець, документує живий дефект
+  // двигуна (supabase/pg-toolbelt#518): тест почервоніє, коли upstream його
+  // виправить, — умова зняття обходу в docs/dependency-monitoring.md
+  const cases: {
+    name: string
+    target: () => FactBase
+    engineAlone: string[]
+  }[] = [
+    {
+      name: "a generated column",
+      target: () =>
+        new FactBase(
+          [schemaFact, tableFact, ...generatedColumns()],
+          [depends(table, app), depends(col("p"), col("d"))]
+        ),
+      engineAlone: ["id", "d", "p", "note"],
+    },
+    {
+      name: "a column of a same-schema type",
+      target: () =>
+        waiting(
+          typed("d", 2, "app.hue"),
+          [hueFact({ kind: "schema", name: "app" })],
+          [depends(hue("app"), app), depends(col("d"), hue("app"))]
+        ),
+      engineAlone: ["id", "d", "note"],
+    },
+    {
+      name: "a column of a type from another schema",
+      target: () =>
+        waiting(
+          typed("d", 2, "pub.hue"),
+          [
+            { id: pub, payload: { owner: "postgres" } },
+            hueFact({ kind: "schema", name: "pub" }),
+          ],
+          [depends(hue("pub"), pub), depends(col("d"), hue("pub"))]
+        ),
+      engineAlone: ["id", "d", "note"],
+    },
+    {
+      name: "a column whose DEFAULT calls a user function",
+      target: () =>
+        waiting(
+          column("d", 2),
+          [
+            { id: dflt, parent: col("d"), payload: { expr: "app.f()" } },
+            {
+              id: f,
+              parent: app,
+              payload: {
+                def: "CREATE FUNCTION app.f() RETURNS int IMMUTABLE LANGUAGE sql BEGIN ATOMIC SELECT 1; END",
+              },
+            },
+          ],
+          [depends(f, app), depends(dflt, f), depends(dflt, col("d"))]
+        ),
+      engineAlone: ["id", "note", "d"],
+    },
+  ]
+
+  it.each(cases)("the engine alone orders $name", (c) => {
+    expect(columnSequence(c.target())).toEqual(c.engineAlone)
   })
 
-  it("the ordered target keeps attnum order", () => {
-    expect(columnSequence(withColumnOrder(source, target))).toEqual([
-      "id",
-      "d",
-      "p",
-      "note",
-    ])
+  it.each(cases)("the ordered target keeps attnum order for $name", (c) => {
+    const target = c.target()
+    const attnum = target
+      .childrenOf(table)
+      .filter((x) => x.id.kind === "column")
+      .sort((a, b) => Number(a.payload._position) - Number(b.payload._position))
+      .map((x) => (x.id.kind === "column" ? x.id.name : ""))
+    expect(columnSequence(withColumnOrder(source, target))).toEqual(attnum)
   })
 })
 
@@ -370,6 +501,12 @@ describe("withColumnOrder against engine action cycles", () => {
     expect(() => planSql(result)).not.toThrow()
   })
 
+  // Нейтральна функція для DEFAULT, без якого таблиця ребер не отримує:
+  // нічого не читає, тож досяжності сценарію не змінює
+  const neutral = fnFact("k", "SELECT 1")
+  const needsOrder = (t: string, column: string) =>
+    callingDefault(column, t, "k")
+
   // `a.a1` читає `b.b2` через `f`, `b.b1` читає `a.a2` через `g`: кожна
   // таблиця окремо проходить запобіжник, разом ланцюги замикають цикл
   const crossFacts = () => [
@@ -382,16 +519,22 @@ describe("withColumnOrder against engine action cycles", () => {
     columnOf("b", "b2", 2),
     fnFact("f", "SELECT max(b2) FROM app.b"),
     fnFact("g", "SELECT max(a2) FROM app.a"),
+    neutral,
+    needsOrder("a", "a2").fact,
+    needsOrder("b", "b2").fact,
   ]
   const crossEdges = [
     depends(tbl("a"), app),
     depends(tbl("b"), app),
     depends(fn("f"), app),
     depends(fn("g"), app),
+    depends(fn("k"), app),
     depends(colOf("a", "a1"), fn("f")),
     depends(fn("f"), colOf("b", "b2")),
     depends(colOf("b", "b1"), fn("g")),
     depends(fn("g"), colOf("a", "a2")),
+    needsOrder("a", "a2").edge,
+    needsOrder("b", "b2").edge,
   ]
 
   it("leaves the later of two cross-dependent new tables without edges", () => {
@@ -460,15 +603,19 @@ describe("withColumnOrder against engine action cycles", () => {
             def: "CREATE FUNCTION pub.f() RETURNS int LANGUAGE sql BEGIN ATOMIC SELECT max(b) FROM app.t; END",
           },
         },
+        neutral,
+        needsOrder("t", "b").fact,
       ],
       [
         depends(tbl("t"), app),
         depends(mood, pub),
         depends(pubF, pub),
+        depends(fn("k"), app),
         depends(colOf("t", "g"), colOf("t", "id")),
         depends(colOf("t", "a"), mood),
         depends(pubF, colOf("t", "b")),
         depends(pubF, tbl("t")),
+        needsOrder("t", "b").edge,
       ]
     )
     const result = withColumnOrder(source, target)
@@ -498,11 +645,17 @@ describe("withColumnOrder against engine action cycles", () => {
         columnOf("a", "h", 2),
         columnOf("b", "x", 1),
         columnOf("b", "y", 2),
+        neutral,
+        needsOrder("a", "h").fact,
+        needsOrder("b", "y").fact,
       ],
       [
         depends(tbl("a"), app),
         depends(tbl("b"), app),
+        depends(fn("k"), app),
         depends(colOf("a", "g"), colOf("a", "h")),
+        needsOrder("a", "h").edge,
+        needsOrder("b", "y").edge,
       ]
     )
     expect(newEdges(target, withColumnOrder(source, target))).toEqual(
