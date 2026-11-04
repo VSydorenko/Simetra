@@ -380,15 +380,88 @@ export async function commandAs<T extends pg.QueryResultRow>(
     return { rows, after: (await client.query(options.after)).rows }
   } catch (error) {
     if (!isDatabaseError(error)) throw error
-    const { code, message, detail, column, hint } = error
-    return {
-      code,
-      message,
-      ...(detail === undefined ? {} : { detail }),
-      ...(column === undefined ? {} : { column }),
-      ...(hint === undefined ? {} : { hint }),
-    }
+    return refusalOf(error)
   } finally {
     await client.query("ROLLBACK TO SAVEPOINT command_as")
+  }
+}
+
+/** Крок сценарію `commandSteps`: оператор SQL або перевірка від власника. */
+export type CommandStep =
+  | {
+      context?: CommandContext
+      sql: string
+      params?: unknown[]
+      asOwner?: boolean
+    }
+  | { check: (client: pg.Client) => Promise<unknown> }
+
+/**
+ * Кілька операторів однієї команди в одній точці збереження, як їх виконає
+ * `runCommand`: `commandAs` відкочує свою точку після одного оператора, тож
+ * ефект попереднього кроку (запис у джерело прав) наступному кроку не видно.
+ * Claims ставляться раз; контекст — перед кроком, що його має, і діє далі до
+ * наступного; крок `asOwner` виконує власник із тим самим контекстом команди
+ * (зміни, яких політики ролі команд не відкривають), інакше — роль команд.
+ * Крок `check` — від власника без зміни контексту, його результат — у
+ * `completed`. Між кроками `SET CONSTRAINTS` немає: відкладені перевірки
+ * судять кінцевий стан, як на COMMIT; `immediate` форсує їх після останнього
+ * кроку. Перша помилка Postgres — `refusal`, `completed` — кроки до неї.
+ */
+export async function commandSteps(
+  client: pg.Client,
+  claims: Record<string, unknown>,
+  steps: readonly CommandStep[],
+  options: { immediate?: boolean } = {}
+): Promise<{ completed: unknown[]; refusal?: Refusal }> {
+  const completed: unknown[] = []
+  await client.query("SAVEPOINT command_steps")
+  try {
+    await client.query("SELECT set_config($1, $2, true)", [
+      SESSION_CLAIMS_SETTING,
+      JSON.stringify(claims),
+    ])
+    for (const step of steps) {
+      if ("check" in step) {
+        await client.query("RESET ROLE")
+        completed.push(await step.check(client))
+        continue
+      }
+      if (step.context !== undefined)
+        await client.query("SELECT set_config($1, $2, true)", [
+          COMMAND_SETTING,
+          JSON.stringify(step.context),
+        ])
+      await client.query(
+        step.asOwner === true
+          ? "RESET ROLE"
+          : `SET LOCAL ROLE ${PLATFORM_ROLES.command}`
+      )
+      const { rows, rowCount } = await client.query(step.sql, step.params)
+      completed.push({ rows, rowCount })
+    }
+    if (options.immediate === true) {
+      await client.query("RESET ROLE")
+      await client.query("SET CONSTRAINTS ALL IMMEDIATE")
+    }
+    return { completed }
+  } catch (error) {
+    if (!isDatabaseError(error)) throw error
+    return { completed, refusal: refusalOf(error) }
+  } finally {
+    await client.query("ROLLBACK TO SAVEPOINT command_steps")
+  }
+}
+
+// Одна форма відмови для `commandAs` і `commandSteps`: кейси порівнюють їх
+// однаково, хоч би яким помічником ішов сценарій
+function refusalOf(error: pg.DatabaseError & { code: string }): Refusal {
+  const { code, message, detail, column, hint } = error
+  return {
+    code,
+    message,
+    ...(detail === undefined ? {} : { detail }),
+    ...(column === undefined ? {} : { column }),
+    ...(hint === undefined ? {} : { hint }),
   }
 }
