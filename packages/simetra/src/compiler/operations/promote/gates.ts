@@ -1,4 +1,4 @@
-import type { AccessPriv, GrantStmt, Node, RoleSpec } from "libpg-query"
+import type { Node } from "libpg-query"
 import {
   PROVIDER_API_ROLES,
   PROVIDER_IDENTITY_SOURCES,
@@ -10,22 +10,11 @@ import { modelViews } from "../../sql/function-body"
 import { bodyKindTable, type KindTables } from "../../sql/kind-table-verbatim"
 import type { SqlParser } from "../../sql/parse"
 import type { PlpgsqlParser } from "../../sql/plpgsql"
-import { unitTargets } from "../../sql/unit-target"
+import { writeGrantPaths, type QualifiedTable } from "../../sql/write-paths"
 import type { PromotedTable } from "./mapping"
 
 /** Таблиця у фізичних іменах до промоції. */
-export interface QualifiedTable {
-  schema: string
-  name: string
-}
-
-/** Привілеї, що відкривають запис у таблицю (`ALL` їх містить). */
-const WRITE_PRIVILEGES: ReadonlySet<string> = new Set([
-  "insert",
-  "update",
-  "delete",
-  "truncate",
-])
+export type { QualifiedTable }
 
 /** Команди політики, що пропускають запис; `ALL` — кожну з них. */
 const WRITE_COMMANDS: ReadonlySet<string> = new Set([
@@ -52,73 +41,42 @@ export function writePathProblems(
   parse: SqlParser
 ): Diagnostic[] {
   const unit = new Set(tables.map((t) => key(t.schema, t.name)))
-  const schemas = new Set(tables.map((t) => t.schema))
   const roles = new Set(
     Object.values(PROVIDER_API_ROLES[model.project.database.provider])
   )
+  const located = model.sqlUnits.filter(
+    (u) => u.file !== undefined && u.line !== undefined
+  )
+  // Порядок — порядок одиниць: грант і політика однієї одиниці не
+  // розходяться в переліку.
+  const grants = writeGrantPaths(located, tables, roles, parse)
   const problems: Diagnostic[] = []
-  for (const sqlUnit of model.sqlUnits) {
-    if (sqlUnit.file === undefined || sqlUnit.line === undefined) continue
-    const { file, line } = sqlUnit
-    const refuse = (table: string, detail: string) =>
+  for (const sqlUnit of located) {
+    for (const { table, detail } of grants.filter((g) => g.unit === sqlUnit))
       problems.push(
-        diagnostic("promote.write-path", file, "", {
-          table,
+        diagnostic("promote.write-path", sqlUnit.file!, "", {
+          table: key(table.schema, table.name),
           detail,
           identity: sqlUnit.identity,
-          line,
+          line: sqlUnit.line!,
         })
       )
     const tree = sqlUnit.tree as Node
-    if ("GrantStmt" in tree && sqlUnit.class === "grant") {
-      const grant = tree.GrantStmt
-      const written = writeGrant(grant, roles)
-      if (written === undefined || grant.objtype !== "OBJECT_TABLE") continue
-      for (const target of unitTargets(sqlUnit, parse)) {
-        // `ON ALL TABLES IN SCHEMA s` дає ціль-схему: вона охоплює таблицю.
-        const hit =
-          target.kind === "schema"
-            ? tables.filter((t) => t.schema === target.schema)
-            : tables.filter(
-                (t) => t.schema === target.schema && t.name === target.object
-              )
-        for (const t of hit) {
-          refuse(key(t.schema, t.name), `GRANT ${written}`)
-        }
-      }
-      continue
-    }
-    if ("AlterDefaultPrivilegesStmt" in tree) {
-      const stmt = tree.AlterDefaultPrivilegesStmt
-      const action = stmt.action
-      if (action === undefined || action.objtype !== "OBJECT_TABLE") continue
-      const written = writeGrant(action, roles)
-      if (written === undefined) continue
-      // Глобальні типові привілеї ролі (без `IN SCHEMA`) — поза межею гейта
-      // (спека промоції §9.9): вони належать ролі, а не схемі.
-      for (const target of unitTargets(sqlUnit, parse)) {
-        if (!schemas.has(target.schema)) continue
-        for (const t of tables.filter((t) => t.schema === target.schema)) {
-          refuse(
-            key(t.schema, t.name),
-            `default privileges of schema ${target.schema} GRANT ${written} ON TABLES`
-          )
-        }
-      }
-      continue
-    }
-    if ("CreatePolicyStmt" in tree) {
-      const policy = tree.CreatePolicyStmt
-      const command = policy.cmd_name ?? "all"
-      if (!WRITE_COMMANDS.has(command)) continue
-      const schema = policy.table?.schemaname ?? sqlUnit.schema
-      const table = policy.table?.relname ?? ""
-      if (!unit.has(key(schema, table))) continue
-      refuse(
-        key(schema, table),
-        `policy ${policy.policy_name ?? ""} FOR ${command.toUpperCase()}`
-      )
-    }
+    if (!("CreatePolicyStmt" in tree)) continue
+    const policy = tree.CreatePolicyStmt
+    const command = policy.cmd_name ?? "all"
+    if (!WRITE_COMMANDS.has(command)) continue
+    const schema = policy.table?.schemaname ?? sqlUnit.schema
+    const table = policy.table?.relname ?? ""
+    if (!unit.has(key(schema, table))) continue
+    problems.push(
+      diagnostic("promote.write-path", sqlUnit.file!, "", {
+        table: key(schema, table),
+        detail: `policy ${policy.policy_name ?? ""} FOR ${command.toUpperCase()}`,
+        identity: sqlUnit.identity,
+        line: sqlUnit.line!,
+      })
+    )
   }
   return problems
 }
@@ -161,42 +119,6 @@ export function debtWritesProblems(
       }),
     ]
   })
-}
-
-/**
- * Привілеї запису гранту ролям API чи `PUBLIC` у тексті для повідомлення;
- * `undefined` — грант не відкриває запису цим ролям. `REVOKE` запису не дає.
- */
-function writeGrant(
-  grant: GrantStmt,
-  roles: ReadonlySet<string>
-): string | undefined {
-  if (grant.is_grant !== true) return undefined
-  const grantees = (grant.grantees ?? []).flatMap((n) =>
-    "RoleSpec" in n ? [n.RoleSpec as RoleSpec] : []
-  )
-  const named = grantees.flatMap((r) =>
-    r.roletype === "ROLESPEC_PUBLIC"
-      ? ["PUBLIC"]
-      : r.rolename !== undefined && roles.has(r.rolename)
-        ? [r.rolename]
-        : []
-  )
-  if (named.length === 0) return undefined
-  const privileges = (grant.privileges ?? []).flatMap((n) =>
-    "AccessPriv" in n ? [n.AccessPriv as AccessPriv] : []
-  )
-  // Порожній перелік привілеїв — `ALL [PRIVILEGES]`.
-  const writes =
-    privileges.length === 0
-      ? ["ALL"]
-      : privileges
-          // `ALL (колонки)` — привілей без імені з переліком колонок.
-          .map((p) => p.priv_name ?? "all")
-          .filter((p) => p === "all" || WRITE_PRIVILEGES.has(p))
-          .map((p) => p.toUpperCase())
-  if (writes.length === 0) return undefined
-  return `${writes.join(", ")} TO ${named.join(", ")}`
 }
 
 /** Таблиця користувачів провайдера бази проєкту (§9.10). */
