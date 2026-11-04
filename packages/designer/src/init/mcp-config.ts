@@ -357,7 +357,10 @@ function isStringArray(array: string): boolean {
  */
 function replaceArgsLine(text: string, args: unknown[]): string | undefined {
   const array = tomlArray(args)
-  const lines = text.split("\n")
+  // Конфіг із Windows чи з `core.autocrlf` має CRLF: `\r` у кінці рядка не дав
+  // би збігтися ні заголовку з коментарем, ні рядку `args`
+  const eol = text.includes("\r\n") ? "\r\n" : "\n"
+  const lines = text.split(eol)
   const headers = lines.flatMap((l, i) => (HEADER.test(l) ? [i] : []))
   if (array === undefined || headers.length !== 1) return undefined
   const start = headers[0] + 1
@@ -371,7 +374,7 @@ function replaceArgsLine(text: string, args: unknown[]): string | undefined {
   const split = match ? splitArray(match[2]) : undefined
   if (at === undefined || !match || !split) return undefined
   lines[at] = `${match[1]}${array}${split[1]}`
-  return lines.join("\n")
+  return lines.join(eol)
 }
 
 function isTable(v: unknown): v is Record<string, unknown> {

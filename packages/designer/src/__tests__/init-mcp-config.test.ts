@@ -516,6 +516,19 @@ describe("planMcpConfigs: codex TOML", () => {
     await applyAndReplan(root, action, ["codex"])
   })
 
+  it.each([
+    ["without a comment", ""],
+    ["with a comment", " # mine"],
+  ])("fixes a CRLF codex args line %s", async (_name, comment) => {
+    const { root } = await project()
+    const text = (bin: string) =>
+      `[mcp_servers.simetra]${comment}\r\ncommand = "node"\r\nargs = ["${bin}", "mcp"]${comment}\r\n`
+    await put(root, CODEX, text(OLD_BIN))
+    const action = onlyWrite(await plan(root, ["codex"]))
+    expect(action.content).toBe(text(BIN))
+    await applyAndReplan(root, action, ["codex"])
+  })
+
   it("refuses to append to an inline servers table", async () => {
     const { root } = await project()
     await put(root, CODEX, 'mcp_servers = { other = { command = "x" } }\n')
