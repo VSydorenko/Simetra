@@ -39,8 +39,7 @@ MCP-конфіги агентів, ідемпотентно й без чужих
   спек («спека designer §4.2»), не на «Рі-n».
 - Тексти, що читає споживач (вивід команди, README, скіл, `description`
   citty), — англійською.
-- **Нових залежностей немає** (Рі-6): паралельно йде оновлення залежностей
-  (`chore/deps-refresh`), конфлікт `pnpm-lock.yaml` недоречний.
+- **Одна нова залежність** — `smol-toml` 1.9.1 (точний pin, BSD-3-Clause за `LICENSE` репо `squirrelchat/smol-toml`, без залежностей; Рі-6) у `dependencies` `@simetrajs/designer`. Конфлікт `pnpm-lock.yaml` з `chore/deps-refresh` розв'язується при зведенні.
 - Реєстр інструментів (`src/tools/*`), MCP-адаптер (`src/mcp/*`) і
   `src/cli/command.ts` план **не змінює** — їх змінює A4 (`Tool.cliOnly`,
   `rights-maintenance`). Єдина спільна з A4 поверхня —
@@ -70,8 +69,8 @@ MCP-конфіги агентів, ідемпотентно й без чужих
 | Рі-2 | **Один механізм шляхів**: `installedPackageDir(fromDir, pkg)` (наявний, без `realpath`) + новий `posixRelative(fromDir, to)` в `io/package-path.ts`. Резолвер `$schema` переходить на `posixRelative`; ціль лінків скілів і шлях до бінарника в MCP-конфігах будуються тими самими функціями від кореня проєкту — поточної теки запуску. Пошук іде вгору від кореня, тож піднятий (hoisted) `node_modules` дає довший, але відносний шлях (`../../../node_modules/…`) | Спека §4.2 вимагає одного механізму. Факт перевірено: борг `$schema` у коді вже закрито (`installedPackageDir`, `schemaPathResolver`, тест пакування «fix writes $schema…»); у спеці П2 §14 пункту про `$schema` немає, §8.5 описує цільове правило з посиланням на §4.2. Лишилось — повторно використати механізм і прибрати з канону наратив «борг закривається» | спека designer §4.2: ціль — відносний шлях до `node_modules/@simetrajs/designer/skills/<скіл>`, найближчого вгору від кореня (зазвичай `../../node_modules/…`); останнє речення — без «закриває борг»; §5.1 — пункт про П2 §14 прибрати як виконаний |
 | Рі-3 | **Власний лінк** — симлінк (junction), чий `readlink` після нормалізації роздільників містить сегмент `node_modules/@simetrajs/designer/skills/`; також звичайний файл, чий вміст (без пробілів по краях) дорівнює очікуваній POSIX-цілі (git на Windows без `core.symlinks` так розгортає закомічений симлінк). **Лінк збігається**, коли `resolve(dirname(link), readlink(link))` дорівнює очікуваній теці скіла — форма цілі (відносна чи абсолютна) не важить; порівняння — чиста функція `sameDir(a, b, platform)` (на `win32` без регістру й хвостового роздільника). Решта (тека, інший файл, симлінк кудись інде) — **чуже**: `init` не чіпає, друкує примітку; `--check` зелений з приміткою | Правило за ціллю ловить застарілі власні лінки (перенос проєкту, інший `node_modules`). Збіг за резолвом не дає вічного дрейфу між Windows (абсолютний junction) і POSIX (відносний лінк) у спільному репо. Чуже ім'я — свідомий форк скіла власником проєкту: `init` його ніколи не виправить, тож червоний `--check` був би вічним | спека designer §4.2: що таке «власний» і «чужий» лінк; `--check` на чужому імені зелений з приміткою |
 | Рі-4 | **Агенти за замовчуванням — `claude`** (лише `.mcp.json`). Скіли кладуться в обидві теки (`.agents/skills`, `.claude/skills`) незалежно від `--agents`. `--check` перевіряє той самий набір, що дав би `init` з тими ж `--agents`. **Лінки й конфіги комітяться**; `--check` у CI звіряє закомічене | `.mcp.json` — портативний мінімум (дослідження доставки §6); конфіги інших клієнтів без запиту — сміття в репо споживача. Теки скілів у спеці не прив'язані до агента. Без коміту `--check` у CI не мав би що звіряти | спека designer §4.2: «без `--agents` — `claude`»; лінки й конфіги — частина репо споживача; CI кличе `--check` з тими ж `--agents` |
-| Рі-5 | **Запис MCP** — ключ `simetra`; `command: "node"`, `args: [<bin>, "mcp"]`, де `<bin>` = `posixRelative(root, join(pkgDir, manifest.bin.simetra))` з маніфесту **встановленого** пакета (у зібраному пакеті — `node_modules/@simetrajs/designer/dist/main.js`). `.vscode/mcp.json` додає `"type": "stdio"`; `.vscode/mcp.json` і `.cursor/mcp.json` — `"cwd": "${workspaceFolder}"`; Claude Code і Codex запускають сервер у корені проєкту самі (Codex — тека сесії, перевірено за кодом Codex: `local_process_cwd`). **Власний запис** — `command === "node"` і `args[0]` містить `node_modules/@simetrajs/designer/`. **Збіг** — одна чиста функція `matchesOwn(entry, expected)`: `command === "node"`, `args[0]` дорівнює очікуваному шляху bin, `args[1] === "mcp"`, ключі, яких вимагає клієнт (`type`, `cwd` за таблицею Task 2), рівні очікуваним; зайві ключі (`env`) і `args[1..]` (дописаний `--read-only`, тека) не важать. Власний запис без збігу `init` оновлює: ставить `args[0]`, `args[1] = "mcp"` і обов'язкові ключі, решту (`args[2..]`, зайві ключі) лишає; `--check` для нього червоний. Запис `simetra` іншої форми — **чужий**: не переписується, примітка, `--check` зелений | `node` + шлях не залежить від ОС (`npx` на нативному Windows вимагає обгортки `cmd /c`, а конфіг спільний для всіх ОС) і від менеджера пакетів; шлях до bin бере той самий механізм, що й лінки, а оновлення пакета, яке змінить шлях bin, ловить `--check`. Тека метаданих — типова `./metadata` (без прапорців, §4.2) | спека designer §4.2: форма запису й правило власного/чужого запису |
-| Рі-6 | **`.codex/config.toml` без TOML-парсера**: присутність — рядок-заголовок `[mcp_servers.simetra]` (також `"simetra"`/`'simetra'`, пробіли всередині дужок, `# коментар` після `]`). Значення блоку — рядки `command = "…"` і однорядковий `args = [ … ]` (рядки в `"…"`/`'…'`) між заголовком і наступним `[`. Власний запис — `command = "node"` і перший елемент `args` містить `node_modules/@simetrajs/designer/`; збіг — лише за першим елементом (решта `args`, як дописаний `--read-only`, не важить, Codex `cwd` не вимагає; другий елемент — `"mcp"`). Розбір допускає пробіли навколо `=` чи їх відсутність і `# коментар` після значення. Розбіжність першого чи другого елемента `init` виправляє заміною лише цих елементів у рядку `args`; `--check` для неї червоний. Блок іншої форми (інша команда, багаторядковий чи нерозбірний `args`) — чужий запис: примітка, без дії. Якщо файл має іншу форму `mcp_servers` (рядок `[mcp_servers]` чи рядок, що починається з `mcp_servers.` / `mcp_servers =`), — відмова `ambiguous-toml`. Дописування: префікс — наявні байти без змін; роздільник `"\n"`, якщо файл закінчується `\n`, `"\n\n"` — якщо ні; порожній файл — без роздільника | Дописана в кінець таблиця завжди валідна для коректного TOML; неоднозначні форми, де дописування дало б дубль ключа, не вгадуються. Нова залежність конфліктувала б із паралельним оновленням залежностей | немає |
+| Рі-5 | **Запис MCP** — ключ `simetra`; `command: "node"`, `args: [<bin>, "mcp"]`, де `<bin>` = `posixRelative(root, join(pkgDir, manifest.bin.simetra))` з маніфесту **встановленого** пакета (у зібраному пакеті — `node_modules/@simetrajs/designer/dist/main.js`). `.vscode/mcp.json` додає `"type": "stdio"`; `.vscode/mcp.json` — `"cwd": "${workspaceFolder}"` (за документацією VS Code поле підтримується, типово — тека воркспейсу); `.cursor/mcp.json` — `"type": "stdio"` (обов'язкове) і `${workspaceFolder}` прямо в `args`: `["${workspaceFolder}/<bin>", "mcp", "${workspaceFolder}/metadata"]`, бо проєктний `mcp.json` Cursor поля `cwd` не має, інтерполює лише `command`/`args`/`env`/`url`/`headers`, а робочої теки сервера не документує (звірено через context7, 04.11); Claude Code і Codex запускають сервер у корені проєкту самі (Codex — тека сесії, перевірено за кодом Codex: `local_process_cwd`). **Власний запис** — `command === "node"` і `args[0]` містить `node_modules/@simetrajs/designer/`. **Збіг** — одна чиста функція `matchesOwn(entry, expected)`: `command === "node"`, `args[0]` дорівнює очікуваному шляху bin (для Cursor — з префіксом `${workspaceFolder}/`), `args[1] === "mcp"`, для Cursor — серед `args[2..]` є позиційний аргумент (не з `-`) як тека метаданих, ключі, яких вимагає клієнт (`type`, `cwd` за таблицею Task 2), рівні очікуваним; зайві ключі (`env`) і `args[1..]` (дописаний `--read-only`, тека) не важать. Власний запис без збігу `init` оновлює: ставить `args[0]`, `args[1] = "mcp"`, обов'язкові ключі, для Cursor без позиційної теки — вставляє `${workspaceFolder}/metadata` третім елементом; решту (`args[2..]`, зайві ключі) лишає; `--check` для нього червоний. Запис `simetra` іншої форми — **чужий**: не переписується, примітка, `--check` зелений | `node` + шлях не залежить від ОС (`npx` на нативному Windows вимагає обгортки `cmd /c`, а конфіг спільний для всіх ОС) і від менеджера пакетів; шлях до bin бере той самий механізм, що й лінки, а оновлення пакета, яке змінить шлях bin, ловить `--check`. Тека метаданих — типова `./metadata` (без прапорців, §4.2) | спека designer §4.2: форма запису й правило власного/чужого запису |
+| Рі-6 | **`.codex/config.toml` — розбір парсером `smol-toml`, запис — дописуванням тексту** (архітекторка, фаза 2). Нерозбірний TOML — відмова `invalid-toml`. Запис шукається в розібраному об'єкті як `mcp_servers.simetra` (будь-яка форма: заголовок, лапки, inline-таблиця, dotted keys). Немає — блок `[mcp_servers.simetra]` з `command`/`args` дописується в кінець файлу; префікс — наявні байти без змін; роздільник `"\n"`, якщо файл закінчується `\n`, `"\n\n"` — якщо ні; порожній файл — без роздільника. Є — класифікація `matchesOwn` (Codex `cwd` не вимагає). Власний без збігу `init` оновлює, лише якщо в тексті рівно один рядок-заголовок цієї таблиці (`[mcp_servers.simetra]` з будь-якими лапками й пробілами) і в її блоці (до наступного заголовка) рівно один однорядковий рядок `args = [ … ]`: цей рядок замінюється масивом з виправленими `args[0..1]` і збереженими `args[2..]`; результат знову розбирається, і він мусить дати очікуваний запис. Інакше — відмова `ambiguous-toml` (код 2) | Парсер не помиляється на багаторядкових рядках, inline-таблицях, лапках і коментарях; дописування й заміна одного рядка зберігають коментарі й порядок споживача; повторний розбір після правки — доказ, що правка однозначна | немає |
 | Рі-7 | **Все або нічого на рівні плану**: `planInit` повністю читає диск і повертає дії, примітки й відмови. Будь-яка помилка ФС, крім `ENOENT`, на шляху чи його предку (`ENOTDIR`, `EISDIR`, `EACCES`) — відмова, а не виняток. Відмови: непарсований JSON (напр. з коментарями), корінь не об'єкт, `mcpServers`/`servers` не об'єкт, неоднозначний TOML, предок шляху — не тека, шлях конфігу — тека, тека скілів чи її предок у корені — симлінк не на іншу теку скілів (Рі-11). За будь-якої відмови нічого не пишеться, код 2. Помилка ФС під час `applyInit` — код 2, `error: <path>: <code>`. `--check` разом із `--dry-run` — помилка використання, код 2 | Часткове застосування лишало б проєкт у стані, якого не описує жоден вивід; збій посеред застосування після чистого плану — лише гонка з іншим процесом | немає |
 | Рі-8 | **Windows**: `linkSpec(linkPath, targetDir, platform)` — на `win32` `{ type: "junction", target: <абсолютний> }`, інакше `{ type: "dir", target: posixRelative(...) }`. Вітки Windows (`linkSpec`, `sameDir`) покриті юніт-тестами чистих функцій, а не прогоном на Windows | Junction вимагає абсолютної цілі (дослідження доставки §4). CI — лише Linux; обмеження фіксується у звіті | немає (спека вже каже «на Windows — junction») |
 | Рі-9 | **JSON-конфіг переписується цілим**: `JSON.stringify(obj, null, 2) + "\n"`, порядок ключів збережено, новий сервер — останнім. Збіг запису — `matchesOwn` (Рі-5) проти очікуваного запису **цього клієнта**, без залежності від порядку ключів | Без коментарів і невідомих ключів (§4.2); форматування чужого файлу може змінитися — прийнятно для строгого JSON | немає |
@@ -125,7 +124,7 @@ MCP-конфіги агентів, ідемпотентно й без чужих
     | { kind: "foreign-mcp-entry"; path: string }
   export type InitRefusalReason =
     | "invalid-json" | "not-an-object" | "servers-not-an-object"
-    | "ambiguous-toml"
+    | "invalid-toml" | "ambiguous-toml"
     | "not-a-directory" | "not-a-file" | "skill-dir-is-a-link" | "unreadable"
   export interface InitRefusal { path: string; reason: InitRefusalReason; code?: string }
   export interface InitPlan { actions: InitAction[]; notes: InitNote[]; refusals: InitRefusal[] }
@@ -190,6 +189,7 @@ MCP-конфіги агентів, ідемпотентно й без чужих
 
 **Files:**
 - Create: `packages/designer/src/init/mcp-config.ts`
+- Modify: `packages/designer/package.json`, `pnpm-lock.yaml` (`smol-toml`)
 - Test: `packages/designer/src/__tests__/init-mcp-config.test.ts`
 
 **Interfaces:**
@@ -208,13 +208,11 @@ MCP-конфіги агентів, ідемпотентно й без чужих
     | Агент | Файл | Контейнер | Очікуваний запис |
     | --- | --- | --- | --- |
     | `claude` | `.mcp.json` | `mcpServers` | `{ command, args }` |
-    | `cursor` | `.cursor/mcp.json` | `mcpServers` | `{ command, args, cwd: "${workspaceFolder}" }` |
+    | `cursor` | `.cursor/mcp.json` | `mcpServers` | `{ type: "stdio", command, args: ["${workspaceFolder}/<bin>", "mcp", "${workspaceFolder}/metadata"] }` |
     | `vscode` | `.vscode/mcp.json` | `servers` | `{ type: "stdio", command, args, cwd: "${workspaceFolder}" }` |
     | `codex` | `.codex/config.toml` | `[mcp_servers.simetra]` | `command = "node"` / `args = ["<bin>", "mcp"]` |
 
-    Перед реалізацією виконавець звіряє через context7 (VS Code, Cursor), що
-    поле `cwd` і змінна `${workspaceFolder}` підтримуються у stdio-записі;
-    якщо ні — поле не пишеться, а розбіжність іде в звіт.
+    Форми VS Code і Cursor звірено через context7 до реалізації (Рі-5).
 
 - [ ] **Step 1: Тести** (кожен — на тимчасовому корені з пакетом-фікстурою, чий
   `package.json` має `"bin": { "simetra": "./dist/main.js" }`):
@@ -228,7 +226,7 @@ MCP-конфіги агентів, ідемпотентно й без чужих
   - `keeps foreign servers and keys`: `.mcp.json` з `{"mcpServers":{"other":{"command":"x"}},"extra":1}` —
     `other` і `extra` у `content` збережено, `simetra` додано.
   - `keeps extra args and keys of an own entry`: власний запис з `args: [<bin>, "mcp", "--read-only"]` і `env: { X: "1" }` — ні дії, ні примітки.
-  - `restores required keys of an own entry`: `cursor`, власний запис без `cwd`, з `env` і `--read-only` — дія `write`; у `content` є `cwd: "${workspaceFolder}"`, `env` і `--read-only` збережено. `content` записується на диск, повторний план — ні дій, ні приміток.
+  - `restores required keys of an own entry`: `vscode`, власний запис без `cwd`, з `env` і `--read-only` — дія `write`; у `content` є `cwd: "${workspaceFolder}"`, `env` і `--read-only` збережено. `cursor`, власний запис без теки (`args: ["${workspaceFolder}/<bin>", "mcp", "--read-only"]`) — `args === ["${workspaceFolder}/<bin>", "mcp", "${workspaceFolder}/metadata", "--read-only"]`. `content` записується на диск, повторний план — ні дій, ні приміток.
   - `restores mcp as the second arg`: власний запис `args: [<bin>, "bogus", "--read-only"]` — дія `write`, `args === [<bin>, "mcp", "--read-only"]`; повторний план порожній.
   - `matchesOwn` (table-driven): збіг / `own-differs` (інший `args[0]`, `args[1]` не `"mcp"`, брак `type` для vscode) / `foreign` (`command: "npx"`, `args[0]` поза пакетом).
   - `updates the bin path of an own entry` (table-driven: `claude`, `cursor`, `vscode`): власний запис з
@@ -240,17 +238,21 @@ MCP-конфіги агентів, ідемпотентно й без чужих
   - `refuses a non-object root or container`: `[]` → `not-an-object`; `{"mcpServers":[]}` → `servers-not-an-object`.
   - `refuses a config path that is a directory`: тека `.mcp.json` — відмова `not-a-file`; файл `.vscode` → `not-a-directory`.
   - `appends to an existing codex config`: TOML `model = "x"` без кінцевого `\n` —
-    `content === 'model = "x"\n\n[mcp_servers.simetra]\n…'`; з кінцевим `\n` — один порожній рядок.
-  - `parses codex values loosely`: `args=["<bin>","mcp"] # mine` і `command="node"` — збіг, без дії.
-  - `detects codex header variants`: `[mcp_servers."simetra"]`, `[ mcp_servers.simetra ] # mine` — без дії
-    (якщо рядки `command`/`args` блоку збігаються) або примітка `foreign-mcp-entry` (інша команда).
-  - `refuses ambiguous codex forms`: `[mcp_servers]` і `mcp_servers.simetra.command = "x"` — `ambiguous-toml`.
+    `content === 'model = "x"\n\n[mcp_servers.simetra]\n…'`; з кінцевим `\n` — один порожній рядок;
+    коментарі файлу збережено побайтово.
+  - `finds the codex entry in any form` (table-driven): `[mcp_servers."simetra"]`, inline-таблиця
+    `mcp_servers = { simetra = { command = "node", args = ["<bin>", "mcp"] } }`, dotted keys — збіг, без дії;
+    з `command = "npx"` — примітка `foreign-mcp-entry`.
+  - `refuses invalid toml`: `[mcp_servers` — відмова `invalid-toml`.
   - `keeps extra args of an own codex entry`: блок з `args = ["<bin>", "mcp", "--read-only"]` — без дії.
-  - `fixes the bin of an own codex entry`: блок з `args = ["node_modules/@simetrajs/designer/old/main.js", "mcp", "--read-only"]` — дія `write`, у `content` змінено лише перший елемент, решта файлу побайтово та сама. `content` записується на диск, повторний план — ні дій, ні приміток.
-  - `treats a multi-line codex args as foreign`: `args = [\n "x",\n]` — примітка `foreign-mcp-entry`, без дії.
+  - `fixes the bin of an own codex entry`: блок з `args = ["node_modules/@simetrajs/designer/old/main.js", "mcp", "--read-only"]  # mine` і коментарем вище —
+    дія `write`, змінено лише рядок `args` (`--read-only` збережено), решта файлу побайтово та сама;
+    `content` записується на диск, повторний план — ні дій, ні приміток.
+  - `refuses to fix an own codex entry it cannot locate`: власний запис з іншим `args[0]` у inline-таблиці чи з
+    багаторядковим `args` — відмова `ambiguous-toml`.
   - `writes only the selected agents`: `["claude"]` — дія лише для `.mcp.json`.
 - [ ] **Step 2: Тести падають** (`pnpm --filter @simetrajs/designer test init-mcp-config`).
-- [ ] **Step 3: Реалізувати `mcpLaunch`, `matchesOwn` і `planMcpConfigs`** (Рі-5, Рі-6, Рі-9).
+- [ ] **Step 3: Додати `smol-toml` 1.9.1 у `dependencies` designer (`pnpm --filter @simetrajs/designer add smol-toml@1.9.1 --save-exact`); реалізувати `mcpLaunch`, `matchesOwn` і `planMcpConfigs`** (Рі-5, Рі-6, Рі-9).
 - [ ] **Step 4: Тести зелені; `typecheck`, `lint`.**
 - [ ] **Step 5: Коміт** `feat(designer): план MCP-конфігів агентів для init`.
 
