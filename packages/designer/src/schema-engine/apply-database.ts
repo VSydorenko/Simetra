@@ -19,6 +19,25 @@ const TRANSPORT_MESSAGE =
 const NETWORK_CODE = /^E[A-Z]+$/
 
 /**
+ * Поля помилки сервера, які порт передає далі: лише рядкові значення, бо
+ * `pg` лишає неіснуючі поля відсутніми, а не `null`. Текст `message` і
+ * `detail` назовні ідуть тільки через білий список споживача.
+ */
+function errorFields(
+  error: Error
+): ConstructorParameters<typeof ApplyDbError>[2] {
+  const source = error as unknown as Record<string, unknown>
+  const pick = (key: string): string | undefined =>
+    typeof source[key] === "string" ? source[key] : undefined
+  return {
+    detail: pick("detail"),
+    column: pick("column"),
+    constraint: pick("constraint"),
+    table: pick("table"),
+  }
+}
+
+/**
  * Помилку з драйвера — у помилку порту. Втрата з'єднання — лише клас `08`,
  * `57P01` (адмін-завершення backend) і збій транспорту без SQLSTATE: тоді
  * результат транзакції невідомий, відкочувати нічим. Інша помилка без
@@ -26,7 +45,7 @@ const NETWORK_CODE = /^E[A-Z]+$/
  * серіалізується): вона летить як є, а не маскується під обрив, після якого
  * раннер шукав би застосування в ledger.
  */
-function normalize(error: unknown): unknown {
+export function normalize(error: unknown): unknown {
   if (!(error instanceof Error)) return error
   const code = (error as { code?: unknown }).code
   if (
@@ -36,7 +55,7 @@ function normalize(error: unknown): unknown {
   )
     return code.startsWith("08") || code === "57P01"
       ? new ApplyConnectionLost(error.message)
-      : new ApplyDbError(error.message, code)
+      : new ApplyDbError(error.message, code, errorFields(error))
   const transport =
     typeof code === "string"
       ? NETWORK_CODE.test(code)

@@ -10,11 +10,13 @@ import {
 } from "simetra/model"
 import { uuid } from "../../src/compiler/__tests__/helpers"
 import {
+  BULLETIN_TABLE,
   PROJECT_WRITER_ID,
   RIGHTS_ADMIN_ID,
   ROLE_FILE,
   TASK_EDITOR_ID,
   TASK_VIEWER_ID,
+  TASK_WRITER_ID,
   USERS_FILE,
   adminRoles,
   compileRights,
@@ -443,6 +445,88 @@ describe("catalog command core on rights system catalogs and Users", () => {
       detail: E.conflict.version,
       hint: version,
     })
+  })
+
+  // Діра бази до блоку Права-3: запобіжники прав судять кінцевий стан, а
+  // перевірка права ядра й RLS читають призначення наживо. Тож пряма
+  // команда (повз T3, Рт6) видає собі роль запису, пише нею рядок і знімає
+  // роль — і `COMMIT` це пропускає. T3 закриває вектор тимчасовим бар'єром
+  // Р-A4-17. Кейс стане червоним після Права-3 — тоді очікування міняється
+  // на `rights-context`.
+  it("the database still lets a direct command use rights granted in its transaction (closed by Права-3)", async () => {
+    const client = tx.client()
+    const bulletin = randomUUID()
+    const assignment = randomUUID()
+    await client.query("SAVEPOINT rights_hole")
+    try {
+      await insert(client, BULLETIN_TABLE, {
+        id: bulletin,
+        org_id: key("A"),
+        text: "before",
+      })
+      await client.query("SET CONSTRAINTS ALL IMMEDIATE")
+      await client.query("SET CONSTRAINTS ALL DEFERRED")
+      const version = await versionOf(BULLETIN_TABLE, bulletin)
+      await client.query("SELECT set_config($1, $2, true)", [
+        SESSION_CLAIMS_SETTING,
+        JSON.stringify({ sub: key("admin"), role: "authenticated" }),
+      ])
+      await client.query(`SET LOCAL ROLE ${PLATFORM_ROLES.command}`)
+      const step = async (
+        context: CommandContext,
+        sql: string,
+        params: unknown[]
+      ) => {
+        await client.query("SELECT set_config($1, $2, true)", [
+          COMMAND_SETTING,
+          JSON.stringify(context),
+        ])
+        const { rows } = await client.query<{ r: string }>(sql, params)
+        return JSON.parse(rows[0]!.r) as { version: string }
+      }
+      const write = () =>
+        step(
+          { action: "update", object: BULLETIN_TABLE, root: bulletin },
+          `SELECT public.${BULLETIN_TABLE}_save($1::jsonb, $2::bigint) AS r`,
+          [JSON.stringify({ id: bulletin, text: "after" }), version]
+        )
+      // Контроль: без призначення `RightsAdmin` рядок `Bulletin` не пише.
+      await client.query("SAVEPOINT without_role")
+      await expect(write()).rejects.toMatchObject({
+        code: E.forbidden.errcode,
+        message: E.forbidden.message,
+        detail: E.forbidden.noRight,
+      })
+      await client.query("ROLLBACK TO SAVEPOINT without_role")
+      const granted = await step(
+        { action: admin, object: ASSIGNMENTS, root: assignment },
+        `SELECT public.${ASSIGNMENTS}_save($1::jsonb, $2::bigint) AS r`,
+        [
+          JSON.stringify({
+            id: assignment,
+            org_id: key("A"),
+            subject: key("admin@A"),
+            archetype: TASK_WRITER_ID,
+          }),
+          null,
+        ]
+      )
+      await write()
+      await step(
+        { action: admin, object: ASSIGNMENTS, root: assignment },
+        `SELECT public.${ASSIGNMENTS}_delete($1::uuid, $2::bigint) AS r`,
+        [assignment, granted.version]
+      )
+      await client.query("RESET ROLE")
+      await client.query("SET CONSTRAINTS ALL IMMEDIATE")
+      const { rows } = await client.query<{ text: string }>(
+        `SELECT text FROM public.${BULLETIN_TABLE} WHERE id = $1`,
+        [bulletin]
+      )
+      expect(rows).toEqual([{ text: "after" }])
+    } finally {
+      await client.query("ROLLBACK TO SAVEPOINT rights_hole")
+    }
   })
 
   describe("Users", () => {

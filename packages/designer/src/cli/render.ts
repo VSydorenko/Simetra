@@ -5,9 +5,14 @@ import {
   renderDiff,
   renderPlan,
 } from "../io/report"
-import type { ApplyData, PlanData } from "../tools/apply-tools"
+import type {
+  ApplyData,
+  PlanData,
+  UnchangedPlanData,
+} from "../tools/apply-tools"
 import type { Tool, ToolResult } from "../tools/catalog"
 import type { DiffData } from "../tools/database-tools"
+import type { RightsMaintenanceData } from "../tools/rights-maintenance-tool"
 import type { RolesData } from "../tools/roles-tool"
 
 /** Текст пояснення об'єкта для терміналу; JSON-вигляд друкується як є. */
@@ -143,10 +148,14 @@ export function renderResult(
     return {
       stdout:
         tool.name === "plan"
-          ? renderPlan(r.data as PlanData | undefined, report, {
-              ok: r.ok,
-              written: r.written,
-            })
+          ? renderPlan(
+              r.data as PlanData | UnchangedPlanData | undefined,
+              report,
+              {
+                ok: r.ok,
+                written: r.written,
+              }
+            )
           : renderApply(r.data as ApplyData | undefined, r.diagnostics, report),
     }
   }
@@ -175,6 +184,19 @@ export function renderResult(
               ),
               ...(r.diagnostics.length > 0 ? [report] : []),
             ].join("\n"),
+    }
+  }
+  if (tool.name === "rights-maintenance" && r.data !== undefined) {
+    const done = r.data as RightsMaintenanceData
+    return {
+      stdout:
+        o.format === "json"
+          ? JSON.stringify(
+              { ok: r.ok, ...done, diagnostics: JSON.parse(report) as unknown },
+              null,
+              2
+            )
+          : `assigned ${done.assignment}${done.member === undefined ? "" : ` to member ${done.member}`}`,
     }
   }
   if (tool.files === "read") return { stdout: report }

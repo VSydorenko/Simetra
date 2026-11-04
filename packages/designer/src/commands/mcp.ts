@@ -2,43 +2,15 @@ import { defineCommand } from "citty"
 import { StdioServerTransport } from "@modelcontextprotocol/server/stdio"
 import { databaseResource } from "../io/database"
 import { DEFAULT_DIR, trimSlash } from "../io/default-dir"
-import { DEFAULT_DATABASE_URL_ENV } from "../tools/hints"
 import { createMcpServer } from "../mcp/server"
+import { mcpArgs } from "./mcp-args"
 
 export default defineCommand({
   meta: {
     name: "mcp",
     description: "Serve the compiler operations over MCP (stdio)",
   },
-  args: {
-    dir: {
-      type: "positional",
-      description: "Metadata directory (default: ./metadata)",
-      required: false,
-    },
-    "read-only": {
-      type: "boolean",
-      default: false,
-      description: "Refuse the tools that write",
-    },
-    "allow-database-write": {
-      type: "boolean",
-      default: false,
-      description:
-        "Let apply write to the database (it still needs confirm and the plan hash)",
-    },
-    "database-url-env": {
-      type: "string",
-      default: DEFAULT_DATABASE_URL_ENV,
-      description:
-        "Environment variable with the connection string of the target database",
-    },
-    "shadow-url-env": {
-      type: "string",
-      description:
-        "Environment variable with a connection string to another server of the same PostgreSQL major version for the shadow database",
-    },
-  },
+  args: mcpArgs,
   async run({ args }) {
     const dir = trimSlash(args.dir ?? DEFAULT_DIR)
     // Імена змінних фіксуються при запуску: агент не може спрямувати виклик

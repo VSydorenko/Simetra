@@ -326,9 +326,113 @@ the actor (null for maintenance), reason, and before/after images.
 
 When applying metadata changes, inspect the plan's `plan.rights-orphans`
 warnings about orphaned role, assignment and delta references; those rows
-grant no matching rights. The plan refuses a code change that would remove
+grant no matching rights. Clean them with commands ("Rights administration
+commands" below). The plan refuses a code change that would remove
 the last effective `fullAccess` holder with `plan.rights-full-access-lost`. Restore the holder or transfer administration before
 applying that change.
+
+## Rights administration commands
+
+Administer rights with the ordinary operations of the system rights
+catalogs through `runtime.run` (`simetra/server`). Every operation on them
+runs under `administerRights`:
+
+- custom role: `create`, `update` with `expectedVersion` (the `delta`
+  tabular section is replaced whole), `markDeletion` on the roles catalog;
+- assignment: `create`, and `delete` with `expectedVersion`, on the role
+  assignments catalog.
+
+Apart from the batch order below, the runtime adds no rights checks of its
+own. The database judges the transaction at `COMMIT`, and the runtime maps
+its refusals:
+`command.forbidden` with `escalation`, `role-in-use` or `last-full-access`,
+and `command.conflict` for a stale version. Assigning a role to yourself
+fails at `COMMIT` with `escalation`.
+
+**Order in a batch.** Put the phases on application data before the first
+rights phase. A rights phase marks the command when it starts, before its
+`beforeWrite`. After that mark, any phase, `ctx.run` or `ctx.read` on
+application data fails with `command.forbidden`, reason `rights-context`,
+and nothing for it reaches the database. More rights phases and reads of
+the rights catalogs still run. So a hook of a rights phase reads and runs
+only rights data. This runtime safeguard stops a command from using a right
+it granted itself before `COMMIT`. Host code that writes with the runtime
+login directly is not covered by it.
+
+**Membership hooks.** A membership catalog is application data: a member
+row without an assignment gives no rights. When its `onWrite` assigns a role
+with `ctx.run`, nothing on application data may follow in that command. A
+batch that creates two members with such a hook fails on the second. Make
+the assignment the last step of the hook and the member the last phase of
+the batch, or send one member per command. Alternatively, assign in a
+separate command from `ctx.afterCommit`.
+
+**Transfer `fullAccess`** in one batch: assign the archetype to the new
+holder first, then delete your own assignment. The last-holder check runs at
+`COMMIT`. Delete your own assignment first only when another role gives you
+the administration, because the command reads your assignments as they are
+at that moment.
+
+**Clean orphans.** `simetra plan --format json` returns `rightsOrphans` with
+`roles`, `assignments` and `deltas`, also when the status is `unchanged`.
+Each entry has the catalog `object`, the row `id`, the expected `version`
+and, on a scope level, the `scope`. A delta row and an assignment of an
+orphan role also have the `role` id; the version of a delta row is its
+role's version. The list is complete; the warning text shows only the first
+rows. Send one batch in this order:
+
+1. `delete` every entry of `assignments`;
+2. `markDeletion` every entry of `roles`;
+3. `update` every role named in `deltas`, with its delta without those rows.
+
+`update` replaces the whole delta, so send the rows that stay. The runtime
+does not read tabular sections yet: read them with your own query. A stale
+version fails with `command.conflict`; run `plan` again and rebuild the
+batch.
+
+## Rights maintenance tool
+
+`simetra rights-maintenance '<json>' [dir] --yes` writes one assignment
+outside commands, in the database maintenance mode. It is a command line
+tool only, not an MCP tool, and without `--yes` it does not connect. Connect
+as the migrator that applied the plan (`SIMETRA_DATABASE_URL`): maintenance
+mode works only for the login that owns the rights functions. The input has
+one action:
+
+- `{ "action": "firstGlobalAssignment", "user": "<uuid>", "role": "<role>" }`
+  — the first global assignment of a new database. Once any global
+  assignment exists, it fails with `maintenance.not-first`.
+- `{ "action": "restoreGlobalFullAccess", "user": "<uuid>", "role": "<role>" }`
+  — a global `fullAccess` holder when no effective one is left. Omit `role`
+  when the project has exactly one assignable global `fullAccess` role.
+- `{ "action": "tenantFullAccess", "scopeKind": "<scope kind>", "scope": "<uuid>", "user": "<uuid>", "role": "<role>", "member": { … } }`
+  — the `fullAccess` owner of one scope without an effective holder. Use it
+  for the first owner when an operator creates tenants (no `rootCreator`
+  role), and for a tenant whose only holder became invalid. If the user is
+  already a member, the member gets the role; do not pass `member` then.
+  Otherwise the tool inserts a member row with the `member` values,
+  attributes of your membership catalog that a command may insert. The tool
+  sets the key, the scope and the user itself.
+
+The role must be `assignable`. For `tenantFullAccess` it is a `fullAccess`
+role of exactly that scope kind. The tool refuses without writing and exits
+with a non-zero code when:
+
+- another `apply` or maintenance run holds the lock (`maintenance.busy`);
+- the applied model is not the compiled one (`maintenance.model-mismatch`):
+  run `plan` and `apply` first;
+- the user, the scope or the role is unknown, or the role does not fit the
+  action;
+- the level already has an effective holder (`maintenance.holder-exists`);
+- the user would not be an effective holder (`maintenance.not-effective`);
+- a required member attribute has no value (`maintenance.member-required`).
+
+`maintenance.refused` means that the database refused the write. Most often
+the login is not the migrator. `maintenance.outcome-unknown` means that the
+connection dropped after the write; run the tool again to see the state. The
+rights journal records the write with no actor and the reason
+`maintenance`. The tool is verified against the local Supabase stack,
+directly and through its pooler; the hosted pooler is not verified yet.
 
 ## Rights analysis
 

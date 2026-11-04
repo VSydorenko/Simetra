@@ -41,6 +41,7 @@ import {
   type PromotionInput,
   type PromotionSection,
   type RehearsalReport,
+  type RightsOrphans,
   type TableLock,
 } from "simetra/schema"
 import { z } from "zod"
@@ -111,6 +112,17 @@ export interface PlanData {
    * попередження, лише кількість у виводі.
    */
   expectedBlindFunctions: number
+  /** Повний перелік сиріт прав цілі: з нього складають пакет очистки (П4 §6.12). */
+  rightsOrphans: RightsOrphans
+}
+
+/**
+ * План, якому нічого застосовувати: артефакту немає, але сироти прав цілі
+ * клієнт отримує саме так — повторним планом після застосування (П4 §6.12).
+ */
+export interface UnchangedPlanData {
+  unchanged: true
+  rightsOrphans: RightsOrphans
 }
 
 /** Результат колбека `withDatabase`: застосування або відмова бажаної тіні. */
@@ -169,7 +181,8 @@ function planData(
   file: string,
   artifact: PlanArtifact,
   model: CompiledModel,
-  expectedBlindFunctions: number
+  expectedBlindFunctions: number,
+  rightsOrphans: RightsOrphans
 ): PlanData {
   const conversions = new Map(
     (artifact.promotion?.conversions ?? []).map((c) => [c.step, c.class])
@@ -204,6 +217,7 @@ function planData(
     },
     plpgsqlCheck: artifact.plpgsqlCheck,
     expectedBlindFunctions,
+    rightsOrphans,
   }
 }
 
@@ -284,7 +298,11 @@ export const planTool = defineTool({
   files: "artifact",
   database: "read",
   destructive: false,
-  async run({ dir, root, database }): Promise<RunOutcome<PlanData>> {
+  async run({
+    dir,
+    root,
+    database,
+  }): Promise<RunOutcome<PlanData | UnchangedPlanData>> {
     const compiled = await compile(await readMetadataDir(dir))
     const model = compiled.model
     if (model === undefined) return refusedWith(compiled.diagnostics)
@@ -327,6 +345,7 @@ export const planTool = defineTool({
           changes: [],
           diagnostics,
           artifacts: [],
+          data: { unchanged: true, rightsOrphans: outcome.rightsOrphans },
         }
       case "planned": {
         const { artifact } = outcome
@@ -336,7 +355,13 @@ export const planTool = defineTool({
           changes: [],
           diagnostics,
           artifacts: [{ path: file, content: serializePlan(artifact) }],
-          data: planData(file, artifact, model, outcome.expectedBlindFunctions),
+          data: planData(
+            file,
+            artifact,
+            model,
+            outcome.expectedBlindFunctions,
+            outcome.rightsOrphans
+          ),
         }
       }
     }

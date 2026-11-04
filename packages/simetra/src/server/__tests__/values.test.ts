@@ -1,6 +1,12 @@
 import { beforeAll, describe, expect, it } from "vitest"
 import { buildRuntimeCatalog } from "simetra/compiler"
-import type { Operation, RuntimeObject } from "simetra/model"
+import {
+  encodeItemValue,
+  encodeMemberValues,
+  encodePair,
+  type Operation,
+  type RuntimeObject,
+} from "simetra/model"
 import {
   commandCoreLayer,
   compileRights,
@@ -9,7 +15,7 @@ import {
 } from "../../compiler/__tests__/fixtures/rights"
 import { ID, OTHER, SUBJECT, attributeOf, sample } from "./fixtures"
 import { decodeRow } from "../decode"
-import { encodeItem, encodeItemValue, encodePair, encodeParam } from "../values"
+import { encodeItem, encodeParam } from "../values"
 
 const create = (): Operation => ({
   action: "create",
@@ -168,6 +174,25 @@ describe("encodeParam", () => {
     expect(encodeParam(attributeOf("note"), "a\u0000b", "note")).toEqual(
       invalid("note")
     )
+  })
+})
+
+describe("encodeMemberValues", () => {
+  // Одна колонкова форма з `create`: A6 перевикористовує перевірку для
+  // `creatorMember`, тож розбіжність двох шляхів кодування — дефект.
+  it("matches encodeItem for create", () => {
+    const values = {
+      amount: "12345678901234567890.0123456789",
+      subject: { type: "Catalog.Region", id: OTHER },
+      note: null,
+      count: 7,
+    }
+    const { item } = encodeItem(sample, create(), { values }) as {
+      item: Record<string, unknown>
+    }
+    // Ключ таблиці ставить команда, а не реквізити рядка учасника.
+    delete item.id
+    expect(encodeMemberValues(sample, values, [])).toEqual({ columns: item })
   })
 })
 

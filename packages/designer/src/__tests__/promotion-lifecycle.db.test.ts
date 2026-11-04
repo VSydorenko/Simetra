@@ -820,7 +820,10 @@ describe.concurrent("promotion lifecycle", () => {
       })
     })
 
-    it("rehearses a truncating repair", async () => {
+    // Відмова і ремонт — окремі тести: кожен будує власну ціль, і двох
+    // конвеєрів промоції в одному тесті бюджет часу тесту під конкуренцією
+    // файлу не витримує
+    it("refuses a truncating type change without a repair", async () => {
       await inTarget(EMPTY, scope, async (url) => {
         const without = await converted(url, { columns: asVarchar })
         const refused = await apply(without.dir, url, without.data, {
@@ -828,6 +831,9 @@ describe.concurrent("promotion lifecycle", () => {
         })
         expect(errors(refused)).toEqual(["apply.type-narrowing"])
       })
+    })
+
+    it("rehearses a truncating repair", async () => {
       await inTarget(EMPTY, scope, async (url) => {
         const { dir, data } = await converted(url, {
           columns: asVarchar,

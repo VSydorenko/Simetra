@@ -24,6 +24,7 @@ import {
   type RehearsalReport,
 } from "simetra/schema"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { TOOL_PIPELINE } from "./helpers/budget"
 import { runTool } from "../cli/command"
 import { databaseResource } from "../io/database"
 import { readMetadataDir } from "../io/metadata-dir"
@@ -130,7 +131,8 @@ async function writePlan(
 const HEAD =
   /^apply: outcome unknown — check simetra\.ledger for apply id ([0-9a-f-]{36})$/m
 
-describe("apply with an unknown outcome", () => {
+// Кожен тест пише план (компіляція й план) і жене apply через інструмент, частина — двічі — бюджет `TOOL_PIPELINE`
+describe("apply with an unknown outcome", TOOL_PIPELINE, () => {
   // Канал на кейс, а не три застосування в одному `it`: кожне компілює
   // метадані, і під паралельним `pnpm test` один кейс упирався в таймаут.
   const applyOptions = (dir: string) => ({

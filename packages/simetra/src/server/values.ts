@@ -1,10 +1,10 @@
 import {
   UUID_TEXT,
-  isDate,
-  isDateTime,
-  isWithinType,
+  encodeItemValue,
+  isPlainObject,
   type CommandError,
   type Draft,
+  type Encoded,
   type Operation,
   type RuntimeAttribute,
   type RuntimeObject,
@@ -13,225 +13,14 @@ import {
 
 /**
  * Значення команд (Р-A3-7): вхід за логічними іменами перевіряється за
- * каталогом до бази — тип, межі, довжина, точність, — щоб база не округлила
- * й не обрізала його мовчки; рядок результату ядра декодується назад у
- * логічні імена й типи сутності кодогену.
+ * каталогом до бази; кодування одного значення — у T0 (`simetra/model`),
+ * тут — збирання `p_item` команди й параметр `where`. Рядок результату ядра
+ * декодується назад у логічні імена й типи сутності кодогену.
  */
-
-type Encoded<T> = { value: T } | { error: CommandError }
 
 const invalid = (path: string): { error: CommandError } => ({
   error: { code: "command.invalid", path },
 })
-
-// Рядок, який дає `bytea_output = hex`: кодоген теж читає `Bytes` рядком.
-const BYTES_TEXT = /^\\x(?:[0-9a-fA-F]{2})*$/
-export const INTEGER_TEXT = /^[+-]?\d+$/
-// `\u0000` і непарний сурогат: `text` і `jsonb` їх не зберігають, і база
-// відмовила б сирою помилкою вже в транзакції.
-const LONE_SURROGATE =
-  /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/
-const storable = (text: string) =>
-  !text.includes("\u0000") && !LONE_SURROGATE.test(text)
-
-export function isPlainObject(
-  value: unknown
-): value is Record<string, unknown> {
-  if (typeof value !== "object" || value === null) return false
-  const proto: unknown = Object.getPrototypeOf(value)
-  return proto === Object.prototype || proto === null
-}
-
-/**
- * Копія чистого JSON-значення; `undefined` — значення не JSON. Копія, а не
- * саме значення: `jsonb` не має `Map`, `Date`, `bigint`, `undefined`, і
- * `JSON.stringify` мовчки змінив би їх (`{}`, рядок, пропуск), а не відмовив.
- */
-function pureJson(value: unknown, ancestors: Set<object>): unknown {
-  if (value === null || typeof value === "boolean") return value
-  if (typeof value === "string") return storable(value) ? value : undefined
-  if (typeof value === "number") {
-    return Number.isFinite(value) ? value : undefined
-  }
-  if (typeof value !== "object" || ancestors.has(value)) return undefined
-  ancestors.add(value)
-  try {
-    if (Array.isArray(value)) {
-      const copy: unknown[] = []
-      for (let i = 0; i < value.length; i++) {
-        if (!(i in value)) return undefined
-        const element = pureJson(value[i], ancestors)
-        if (element === undefined) return undefined
-        copy.push(element)
-      }
-      return copy
-    }
-    if (!isPlainObject(value) || Object.getOwnPropertySymbols(value).length) {
-      return undefined
-    }
-    const copy: Record<string, unknown> = {}
-    for (const [key, item] of Object.entries(value)) {
-      if (!storable(key)) return undefined
-      const element = pureJson(item, ancestors)
-      if (element === undefined) return undefined
-      // `defineProperty`: ключ `__proto__` з входу лишається даними.
-      Object.defineProperty(copy, key, {
-        value: element,
-        enumerable: true,
-        writable: true,
-        configurable: true,
-      })
-    }
-    return copy
-  } finally {
-    ancestors.delete(value)
-  }
-}
-
-/** Скаляр у форму `p_item`; `undefined` — значення не цього типу. */
-function scalar(attribute: RuntimeAttribute, value: unknown): unknown {
-  if (value === null) return null
-  if (typeof value === "string" && !storable(value)) return undefined
-  switch (attribute.type) {
-    case "Integer":
-    case "SmallInt":
-      return typeof value === "number" &&
-        isWithinType({ type: attribute.type }, value)
-        ? value
-        : undefined
-    case "BigInt": {
-      const text =
-        typeof value === "bigint"
-          ? String(value)
-          : typeof value === "string"
-            ? value
-            : undefined
-      // Рядок, а не число JSON: `jsonb` округлив би ціле понад 2^53.
-      return text !== undefined &&
-        INTEGER_TEXT.test(text) &&
-        isWithinType({ type: "BigInt" }, text)
-        ? text
-        : undefined
-    }
-    case "Numeric":
-      return typeof value === "string" &&
-        isWithinType(
-          {
-            type: "Numeric",
-            precision: attribute.precision,
-            scale: attribute.scale,
-          },
-          value
-        )
-        ? value
-        : undefined
-    case "Boolean":
-      return typeof value === "boolean" ? value : undefined
-    case "String":
-      return typeof value === "string" &&
-        isWithinType({ type: "String", length: attribute.maxLength }, value)
-        ? value
-        : undefined
-    case "Text":
-      return typeof value === "string" ? value : undefined
-    case "UUID":
-      return typeof value === "string" && UUID_TEXT.test(value)
-        ? value
-        : undefined
-    case "Ref":
-      if (attribute.enumValues !== undefined) {
-        // Мітку знає лише база: на вході — логічне ім'я значення.
-        return attribute.enumValues.find((v) => v.name === value)?.label
-      }
-      return typeof value === "string" && UUID_TEXT.test(value)
-        ? value
-        : undefined
-    case "Date":
-      return typeof value === "string" && isDate(value) ? value : undefined
-    case "DateTime":
-      // Лише зі зсувом: момент без поясу база прочитала б у поясі сесії.
-      return typeof value === "string" && isDateTime(value) ? value : undefined
-    case "Bytes":
-      return typeof value === "string" && BYTES_TEXT.test(value)
-        ? value
-        : undefined
-    case "Json":
-      return pureJson(value, new Set())
-    case "Raw":
-      // Копія носія прав: її пише платформа, не вхід.
-      return undefined
-  }
-}
-
-/**
- * A polymorphic pair `{ type: "<Kind>.<Name>", id }` as the label and the id
- * of its two columns.
- */
-export function encodePair(
-  attribute: RuntimeAttribute,
-  value: unknown,
-  path: string
-): Encoded<{ label: string | null; id: string | null }> {
-  if (value === null) return { value: { label: null, id: null } }
-  const targets = attribute.pair?.targets ?? []
-  // Пару читає і `where` читання поза обгорткою `encodeItemValue`: геттер,
-  // що кидає, чи відкликаний проксі — помилка входу, а не сирий виняток.
-  try {
-    if (!isPlainObject(value) || Object.keys(value).length !== 2) {
-      return invalid(path)
-    }
-    // Кожне поле читається раз: геттер не підмінить перевірене значення.
-    const { id, type } = value
-    if (typeof id !== "string" || !UUID_TEXT.test(id)) return invalid(path)
-    const target = targets.find(
-      (t) => `${t.object.kind}.${t.object.name}` === type
-    )
-    return target === undefined
-      ? invalid(path)
-      : { value: { label: target.label, id } }
-  } catch {
-    return invalid(path)
-  }
-}
-
-/**
- * A logical value as JSON for `p_item` (`jsonb_populate_record`); a pair
- * yields both of its columns.
- */
-export function encodeItemValue(
-  attribute: RuntimeAttribute,
-  value: unknown,
-  path: string
-): Encoded<unknown> {
-  try {
-    if (value === undefined) return invalid(path)
-    if (attribute.pair !== undefined) {
-      const pair = encodePair(attribute, value, path)
-      if ("error" in pair) return pair
-      return {
-        value: {
-          [attribute.pair.typeColumn]: pair.value.label,
-          [attribute.column]: pair.value.id,
-        },
-      }
-    }
-    if (attribute.array === true && value !== null) {
-      if (!Array.isArray(value)) return invalid(path)
-      const items: unknown[] = []
-      for (let i = 0; i < value.length; i++) {
-        const item = i in value ? scalar(attribute, value[i]) : undefined
-        if (item === undefined) return invalid(`${path}.${i}`)
-        items.push(item)
-      }
-      return { value: items }
-    }
-    const item = scalar(attribute, value)
-    return item === undefined ? invalid(path) : { value: item }
-  } catch {
-    // Геттер, що кидає, чи відкликаний проксі: значення не прочитати.
-    return invalid(path)
-  }
-}
 
 /**
  * A logical value as the text of a bound `where` parameter. Json and arrays

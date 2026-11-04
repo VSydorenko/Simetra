@@ -29,6 +29,7 @@ export {
 export {
   STANDARD_ACTIONS,
   actionRequires,
+  administerRightsAction,
   closeRequires,
   type ActionEffects,
   type Dml,

@@ -5,6 +5,7 @@ import {
   type EngineAction,
 } from "simetra/schema"
 import { describe, expect, it } from "vitest"
+import { TOOL_PIPELINE } from "./helpers/budget"
 import { narrow } from "../tools/database-tools"
 import { toolByName } from "../tools/catalog"
 import { invoke } from "../tools/invoke"
@@ -670,7 +671,8 @@ describe("diff narrowed to tables", () => {
   })
 })
 
-describe("database failures through the catalog", () => {
+// Збій бази через каталог інструментів: компіляція й план перед збоєм — бюджет `TOOL_PIPELINE`
+describe("database failures through the catalog", TOOL_PIPELINE, () => {
   const failing = (error: Error): DatabaseResource => ({
     describe: DESCRIBE,
     connect: () => Promise.reject(error),

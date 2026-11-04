@@ -431,7 +431,10 @@ describe("promotion commit", () => {
       const again = await call("plan", {}, options(dir, url))
       expect(again.ok, JSON.stringify(again.diagnostics)).toBe(true)
       expect(errors(again)).toEqual([])
-      expect(again.data).toBeUndefined()
+      expect(again.data).toEqual({
+        unchanged: true,
+        rightsOrphans: { roles: [], assignments: [], deltas: [] },
+      })
       expect(again.artifacts).toEqual([])
     })
   })

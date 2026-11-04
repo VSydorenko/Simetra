@@ -10,6 +10,8 @@ import {
 } from "simetra/compiler"
 import type { ApplyTransaction } from "../port"
 import {
+  noRightsFacts,
+  objectRefs,
   RIGHTS_SOURCE_LIMIT,
   readRightsSourceFacts,
   rightsSourceDiagnostics,
@@ -32,6 +34,7 @@ import {
   polymorphicGrants,
   USERS_FILE,
   rightsFiles,
+  SUPPORT_ID,
   withRoles,
 } from "../../../compiler/__tests__/fixtures/rights"
 import { uuid } from "../../../compiler/__tests__/helpers"
@@ -65,6 +68,16 @@ function tree(sql: string): unknown {
 
 const tables = (n: number) =>
   Array.from({ length: n }, (_, i) => `public.t${String(i).padStart(2, "0")}`)
+
+/** Вхід читача з моделі; `applied` — модель застосованого знімка. */
+const inputOf = (model: CompiledModel, applied?: CompiledModel) =>
+  rightsSourceInput(
+    model.contracts,
+    model.physical,
+    model.project.naming.attributeCase,
+    objectRefs(model.objects),
+    applied === undefined ? undefined : canonicalSnapshot(applied)
+  )
 
 describe("rightsSourceDiagnostics", () => {
   it.each([
@@ -121,11 +134,7 @@ describe("rightsSourceDiagnostics", () => {
     refusal: Record<string, string> | undefined
     warnings: Record<string, string | number>[]
   }[])("$case", ({ facts, refusal, warnings }) => {
-    const result = rightsSourceDiagnostics({
-      ...facts,
-      fullAccess: [],
-      orphans: { customRoles: [], assignments: [], more: 0 },
-    })
+    const result = rightsSourceDiagnostics({ ...facts, ...noRightsFacts() })
     if (refusal === undefined) expect(result.refusal).toBeUndefined()
     else
       expect(result.refusal).toMatchObject({
@@ -150,10 +159,10 @@ describe("rightsSourceDiagnostics", () => {
     "fullAccess holders $before to $after (refused: $refused)",
     ({ before, after, refused }) => {
       const result = rightsSourceDiagnostics({
+        ...noRightsFacts(),
         owners: [],
         unknownKeys: [],
         fullAccess: [{ scope: "global", before, after }],
-        orphans: { customRoles: [], assignments: [], more: 0 },
       })
       expect(result.refusal?.code === "plan.rights-full-access-lost").toBe(
         refused
@@ -166,10 +175,10 @@ describe("rightsSourceDiagnostics", () => {
     // Тенантів може бути тисячі: відмова називає першу двадцятку, решту — числом
     const scopes = tables(25).map((scope) => `scope:${scope}`)
     const result = rightsSourceDiagnostics({
+      ...noRightsFacts(),
       owners: [],
       unknownKeys: [],
       fullAccess: scopes.map((scope) => ({ scope, before: 1, after: 0 })),
-      orphans: { customRoles: [], assignments: [], more: 0 },
     })
     expect(result.refusal).toMatchObject({
       code: "plan.rights-full-access-lost",
@@ -177,22 +186,6 @@ describe("rightsSourceDiagnostics", () => {
         scopes: [...scopes.slice(0, RIGHTS_SOURCE_LIMIT), "… (+5)"].join(", "),
       },
     })
-  })
-
-  it("warns once for capped orphan row IDs", () => {
-    const result = rightsSourceDiagnostics({
-      owners: [],
-      unknownKeys: [],
-      fullAccess: [],
-      orphans: { customRoles: ["r1", "d1"], assignments: ["a1"], more: 4 },
-    })
-    expect(result.warnings).toMatchObject([
-      {
-        code: "plan.rights-orphans",
-        severity: "warning",
-        params: { customRoles: "r1, d1", assignments: "a1", more: 4 },
-      },
-    ])
   })
 })
 
@@ -343,11 +336,7 @@ describe("readRightsSourceFacts", () => {
       // обходу — гучна помилка, не тихий нуль); таблиці, якої немає, чи якій
       // відмовлено, і колонки, якої ще немає, не читаються.
       const target = fakeTarget({ present, missingColumns })
-      const input = rightsSourceInput(
-        model.contracts,
-        model.physical,
-        model.project.naming.attributeCase
-      )
+      const input = inputOf(model)
       const facts = await readRightsSourceFacts(target.tx, input)
 
       const setConfig = target.log.findIndex(
@@ -379,14 +368,7 @@ describe("readRightsSourceFacts", () => {
       present: { "public.membership": true, "public.role_grant": true },
       unknownKeys: keys.map((unknown_key) => ({ unknown_key, total: "25" })),
     })
-    const facts = await readRightsSourceFacts(
-      target.tx,
-      rightsSourceInput(
-        adopted.contracts,
-        adopted.physical,
-        adopted.project.naming.attributeCase
-      )
-    )
+    const facts = await readRightsSourceFacts(target.tx, inputOf(adopted))
     expect(facts.unknownKeys).toEqual([
       { source: "grants", keys, more: 25 - RIGHTS_SOURCE_LIMIT },
     ])
@@ -404,14 +386,7 @@ describe("readRightsSourceFacts", () => {
         "public.global_grant": false,
       },
     })
-    const facts = await readRightsSourceFacts(
-      target.tx,
-      rightsSourceInput(
-        adopted.contracts,
-        adopted.physical,
-        adopted.project.naming.attributeCase
-      )
-    )
+    const facts = await readRightsSourceFacts(target.tx, inputOf(adopted))
     const catalog = target.log.filter(
       (q) =>
         q.sql.includes("AS source_owned") || q.sql.includes("AS source_column")
@@ -435,14 +410,7 @@ describe("readRightsSourceFacts", () => {
         "public.global_grant": true,
       },
     })
-    const facts = await readRightsSourceFacts(
-      target.tx,
-      rightsSourceInput(
-        adopted.contracts,
-        adopted.physical,
-        adopted.project.naming.attributeCase
-      )
-    )
+    const facts = await readRightsSourceFacts(target.tx, inputOf(adopted))
     expect(
       target.log
         .filter((q) => q.sql.includes("AS unknown_key"))
@@ -456,11 +424,7 @@ describe("readRightsSourceFacts", () => {
 
   it("reads existing fullAccess holders and skips the refusal on a fresh target", async () => {
     const model = (await compile(withRoles())).model!
-    const input = rightsSourceInput(
-      model.contracts,
-      model.physical,
-      model.project.naming.attributeCase
-    )
+    const input = inputOf(model)
     const present = Object.fromEntries(
       input.tables.map((table) => [`${table.schema}.${table.name}`, true])
     )
@@ -517,11 +481,7 @@ describe("readRightsSourceFacts", () => {
     // Чужа роль застосування не має `USAGE` на схемі `simetra`: виклик функції
     // архетипів дав би сирий `42501` замість відмови доступу до таблиць.
     const model = (await compile(withRoles())).model!
-    const input = rightsSourceInput(
-      model.contracts,
-      model.physical,
-      model.project.naming.attributeCase
-    )
+    const input = inputOf(model)
     const present = Object.fromEntries(
       input.tables.map((table) => [`${table.schema}.${table.name}`, false])
     )
@@ -538,44 +498,70 @@ describe("readRightsSourceFacts", () => {
     )
   })
 
-  it("finds invalid custom roles, deltas and direct assignments by row ID", async () => {
+  /** Рядок довідника ролей чи призначень, як його читає `catalogSql`. */
+  const catalogRow = (
+    id: string,
+    o: {
+      archetype?: string
+      customRole?: string
+      scope?: string
+      deleted?: boolean
+      version?: string
+    } = {}
+  ) => ({
+    id,
+    scope: o.scope ?? null,
+    archetype: o.archetype ?? null,
+    custom_role: o.customRole ?? null,
+    deleted: o.deleted ?? false,
+    // `bigint` приходить з `pg` рядком
+    version: o.version ?? "1",
+  })
+  const deltaRow = (
+    id: string,
+    parent: string,
+    row: { object: string; action: string; extent: string }
+  ) => ({ id, parent, dimension: null, ...row })
+  const OUTSIDE = { object: "unknown", action: "read", extent: "any" }
+
+  it("finds orphan roles, assignments and deltas with versions by row ID", async () => {
     const model = (await compile(withRoles())).model!
-    const input = rightsSourceInput(
-      model.contracts,
-      model.physical,
-      model.project.naming.attributeCase
-    )
+    const input = inputOf(model)
     const present = Object.fromEntries(
       input.tables.map((table) => [`${table.schema}.${table.name}`, true])
     )
+    const inDomain = input.domain.find((row) => row.roleId === SUPPORT_ID)!
     const rows = {
       "public.global_roles": [
-        {
-          id: "role-1",
-          scope: null,
-          archetype: GLOBAL_ADMIN_ID,
-          custom_role: null,
-          deleted: false,
-        },
+        // Архетип зник з метаданих
+        catalogRow("role-gone", { archetype: GLOBAL_ADMIN_ID, version: "3" }),
+        // Архетип змінив рівень: роль скоупу в глобальному довіднику
+        catalogRow("role-moved", { archetype: ORG_ADMIN_ID }),
+        catalogRow("role-live", { archetype: SUPPORT_ID, version: "7" }),
+        catalogRow("role-marked", { archetype: "removed", deleted: true }),
       ],
       "public.global_roles_delta": [
-        {
-          id: "delta-1",
-          parent: "role-1",
-          object: "unknown",
-          action: "read",
-          extent: "any",
-          dimension: null,
-        },
+        deltaRow("delta-of-orphan", "role-gone", OUTSIDE),
+        deltaRow("delta-outside", "role-live", OUTSIDE),
+        deltaRow("delta-inside", "role-live", inDomain),
+        deltaRow("delta-of-marked", "role-marked", OUTSIDE),
       ],
       "public.global_role_assignments": [
-        {
-          id: "assignment-1",
-          scope: null,
+        catalogRow("assign-orphan", { customRole: "role-gone", version: "2" }),
+        catalogRow("assign-orphan-marked", {
+          customRole: "role-gone",
+          deleted: true,
+        }),
+        catalogRow("assign-live", { customRole: "role-live" }),
+        catalogRow("assign-direct-gone", { archetype: "removed" }),
+        catalogRow("assign-direct-live", { archetype: SUPPORT_ID }),
+      ],
+      "public.org_role_assignments": [
+        catalogRow("assign-org-gone", {
           archetype: "removed",
-          custom_role: null,
-          deleted: false,
-        },
+          scope: "org-1",
+          version: "4",
+        }),
       ],
     }
     const facts = await readRightsSourceFacts(
@@ -587,22 +573,75 @@ describe("readRightsSourceFacts", () => {
         ),
       }
     )
+    const roles = { kind: "Catalog", name: "GlobalRoles" }
+    const assignments = { kind: "Catalog", name: "GlobalRoleAssignments" }
     expect(facts.orphans).toEqual({
-      customRoles: ["delta-1", "role-1"],
-      assignments: ["assignment-1"],
-      more: 0,
+      roles: [
+        { object: roles, id: "role-gone", version: 3 },
+        { object: roles, id: "role-moved", version: 1 },
+      ],
+      assignments: [
+        { object: assignments, id: "assign-direct-gone", version: 1 },
+        {
+          object: { kind: "Catalog", name: "OrgRoleAssignments" },
+          id: "assign-org-gone",
+          version: 4,
+          scope: "org-1",
+        },
+        {
+          object: assignments,
+          id: "assign-orphan",
+          version: 2,
+          role: "role-gone",
+        },
+      ],
+      // Дельта ролі-сироти йде з її позначкою, а не окремим рядком
+      deltas: [
+        { object: roles, role: "role-live", id: "delta-outside", version: 7 },
+      ],
     })
+    expect(facts.droppedOrphans).toEqual({ customRoles: [], assignments: [] })
+  })
+
+  it("rightsOrphans stays complete past the warning limit", async () => {
+    // Ліміт обрізає лише текст попередження: пакет очистки будують з повного
+    // переліку
+    const model = (await compile(withRoles())).model!
+    const input = inputOf(model)
+    const present = Object.fromEntries(
+      input.tables.map((table) => [`${table.schema}.${table.name}`, true])
+    )
+    const ids = Array.from(
+      { length: RIGHTS_SOURCE_LIMIT + 5 },
+      (_, i) => `role-${String(i).padStart(2, "0")}`
+    )
+    const rows = {
+      "public.global_roles": ids.map((id) =>
+        catalogRow(id, { archetype: "removed" })
+      ),
+    }
+    const facts = await readRightsSourceFacts(
+      fakeTarget({ present, rows }).tx,
+      input
+    )
+    expect(facts.orphans.roles.map((role) => role.id)).toEqual(ids)
+    expect(rightsSourceDiagnostics(facts).warnings).toMatchObject([
+      {
+        code: "plan.rights-orphans",
+        severity: "warning",
+        params: {
+          customRoles: ids.slice(0, RIGHTS_SOURCE_LIMIT).join(", "),
+          assignments: "",
+          more: 5,
+        },
+      },
+    ])
   })
 
   it("uses the applied catalog when desired metadata removes all rights catalogs", async () => {
     const old = (await compile(withRoles())).model!
     const desired = (await compile(rightsFiles())).model!
-    const input = rightsSourceInput(
-      desired.contracts,
-      desired.physical,
-      desired.project.naming.attributeCase,
-      canonicalSnapshot(old)
-    )
+    const input = inputOf(desired, old)
     const present = Object.fromEntries(
       input.tables.map((table) => [`${table.schema}.${table.name}`, true])
     )
@@ -641,6 +680,14 @@ describe("readRightsSourceFacts", () => {
     expect(rightsSourceDiagnostics(occupied).refusal?.code).toBe(
       "plan.rights-full-access-lost"
     )
+    // Довідника призначень немає в бажаній моделі: план знімає його таблицю
+    // з рядками, тож сироту називає лише попередження
+    expect(occupied.orphans).toEqual(noRightsFacts().orphans)
+    expect(
+      rightsSourceDiagnostics(occupied).warnings.find(
+        (w) => w.code === "plan.rights-orphans"
+      )?.params
+    ).toEqual({ customRoles: "", assignments: "a1", more: 0 })
     const empty = await readRightsSourceFacts(
       fakeTarget({ present, previousRoles }).tx,
       input
@@ -676,12 +723,7 @@ describe("readRightsSourceFacts", () => {
       // таблицею за походженням, а не за іменем.
       const old = (await compile(withRoles())).model!
       const desired = (await compile(withRoles(layer))).model!
-      const input = rightsSourceInput(
-        desired.contracts,
-        desired.physical,
-        desired.project.naming.attributeCase,
-        canonicalSnapshot(old)
-      )
+      const input = inputOf(desired, old)
       const facts = await readRightsSourceFacts(
         fakeTarget(orgHolder(input)).tx,
         input
@@ -708,12 +750,7 @@ describe("readRightsSourceFacts", () => {
         })
       )
     ).model!
-    const input = rightsSourceInput(
-      desired.contracts,
-      desired.physical,
-      desired.project.naming.attributeCase,
-      canonicalSnapshot(old)
-    )
+    const input = inputOf(desired, old)
     const facts = await readRightsSourceFacts(
       fakeTarget(orgHolder(input)).tx,
       input
@@ -798,11 +835,7 @@ describe("unknownKeysQuery", () => {
 describe("rightsSourceInput", () => {
   it("checks the owner of a role table", () => {
     // Таблиця ролей підлягає тій самій перевірці доступу.
-    const input = rightsSourceInput(
-      poly.contracts,
-      poly.physical,
-      poly.project.naming.attributeCase
-    )
+    const input = inputOf(poly)
     const names = input.tables.map((t) => `${t.schema}.${t.name}`)
     expect([...names].sort()).toEqual(
       [
@@ -831,51 +864,22 @@ describe("rights source input of a snake_case project", () => {
   it("reads the catalog columns by the desired model's styled names", async () => {
     const camel = (await compile(withRoles())).model!
     const snake = (await compile(snakeCaseTwin(withRoles()))).model!
-    const input = (model: CompiledModel) =>
-      rightsSourceInput(
-        model.contracts,
-        model.physical,
-        model.project.naming.attributeCase
-      ).catalogs
+    const input = (model: CompiledModel) => inputOf(model).catalogs
     expect(input(snake)).toEqual(input(camel))
   })
 
   it("reads the applied snapshot by its own style, not the desired one", async () => {
     const camel = (await compile(withRoles())).model!
     const snake = (await compile(snakeCaseTwin(withRoles()))).model!
-    const input = rightsSourceInput(
-      snake.contracts,
-      snake.physical,
-      "snake_case",
-      canonicalSnapshot(camel)
-    )
-    expect(input.catalogs).toEqual(
-      rightsSourceInput(
-        camel.contracts,
-        camel.physical,
-        "camelCase",
-        canonicalSnapshot(camel)
-      ).catalogs
-    )
+    const input = inputOf(snake, camel)
+    expect(input.catalogs).toEqual(inputOf(camel, camel).catalogs)
   })
 
   it("applied snake_case, desired snake_case", async () => {
     const camel = (await compile(withRoles())).model!
     const snake = (await compile(snakeCaseTwin(withRoles()))).model!
-    expect(
-      rightsSourceInput(
-        snake.contracts,
-        snake.physical,
-        "snake_case",
-        canonicalSnapshot(snake)
-      ).catalogs
-    ).toEqual(
-      rightsSourceInput(
-        camel.contracts,
-        camel.physical,
-        "camelCase",
-        canonicalSnapshot(camel)
-      ).catalogs
+    expect(inputOf(snake, snake).catalogs).toEqual(
+      inputOf(camel, camel).catalogs
     )
   })
 })

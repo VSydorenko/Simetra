@@ -4,6 +4,7 @@ import { dirname, join, resolve } from "node:path"
 import { buildRuntimeCatalog, compile, type FileChange } from "simetra/compiler"
 import { z } from "zod"
 import { describe, expect, it, vi } from "vitest"
+import { TOOL_PIPELINE } from "./helpers/budget"
 import { runTool, toolCommand } from "../cli/command"
 import { readMetadataDir } from "../io/metadata-dir"
 import { mcpInputSchema } from "../mcp/tools"
@@ -46,7 +47,8 @@ async function brokenProject(): Promise<string> {
   return dir
 }
 
-describe("tool catalog", () => {
+// Інструменти компіляції й виправлення через `invoke`: компіляція проєкту на кожен виклик — бюджет `TOOL_PIPELINE`
+describe("tool catalog", TOOL_PIPELINE, () => {
   it("names every tool once", () => {
     expect(TOOLS.map((t) => t.name).sort()).toEqual([
       "add",
@@ -61,6 +63,7 @@ describe("tool catalog", () => {
       "plan",
       "promote",
       "rename",
+      "rights-maintenance",
       "roles",
     ])
   })
@@ -222,7 +225,8 @@ describe("tool catalog", () => {
   })
 })
 
-describe("invoke refusals", () => {
+// Відмови й попередній перегляд через `invoke`: дія з dry-run і компіляція проєкту — бюджет `TOOL_PIPELINE`
+describe("invoke refusals", TOOL_PIPELINE, () => {
   it("delete still needs confirm when writes are on", async () => {
     const dir = await project()
     await invoke(
@@ -257,6 +261,34 @@ describe("invoke refusals", () => {
     expect(r.written).toBe(false)
     expect(r.changes.length).toBeGreaterThan(0)
     expect(await snapshotOf(dir)).toEqual(before)
+  })
+
+  it("refuses a cli-only tool outside the cli channel before parsing input", async () => {
+    const dir = await project()
+    const run = vi.fn(async () => ({
+      ok: true,
+      changes: [],
+      diagnostics: [],
+    }))
+    const cliOnly = defineTool({
+      name: "compile",
+      description: "Cli-only stub.",
+      input: z.strictObject({ value: z.string() }),
+      files: "read",
+      database: "none",
+      destructive: false,
+      cliOnly: true,
+      run,
+    }) as Tool
+    // Вхід невалідний навмисно: відмова каналу має випередити розбір входу
+    const refused = await invoke(cliOnly, {}, { ...opts(dir), channel: "mcp" })
+    expect(refused.refusal?.reason).toBe("cli-only")
+    expect(run).not.toHaveBeenCalled()
+    const ok = await invoke(cliOnly, { value: "x" }, opts(dir))
+    expect(ok.ok).toBe(true)
+    expect(run).toHaveBeenCalledOnce()
+    // Вхід-union не ламає схему MCP: для cliOnly вона лишається `tool.input`
+    expect(mcpInputSchema(cliOnly)).toBe(cliOnly.input)
   })
 
   it("a nonexistent directory is a refusal with the message", async () => {

@@ -4540,6 +4540,146 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Ролі грантів створено чи звірено; роль входу не створено, бо без своїх членств вона мовчки змінила б шлях читання рантайму. Запустіть `simetra roles` від ролі з ADMIN OPTION на кожній батьківській ролі ролі входу або попросіть адміністратора бази її створити.",
     },
   },
+  // Режим обслуговування прав (інструмент `rights-maintenance`): усі відмови
+  // стоять до запису, окрім `outcome-unknown`, де результат транзакції невідомий
+  "maintenance.model-mismatch": {
+    en: (p) =>
+      `The applied model (${p.applied}) is not the compiled one (${p.compiled}): rights maintenance works only on the database state the project describes`,
+    uk: (p) =>
+      `Застосована модель (${p.applied}) не збігається зі скомпільованою (${p.compiled}): обслуговування прав працює лише зі станом бази, який описує проєкт`,
+    hint: {
+      en: "Nothing was written. Apply the project first (`simetra apply`), or point the tool at the metadata that was applied.",
+      uk: "Нічого не записано. Спершу застосуйте проєкт (`simetra apply`) або вкажіть метадані, які було застосовано.",
+    },
+  },
+  "maintenance.unknown-role": {
+    en: (p) => `The project has no rights role ${p.role}`,
+    uk: (p) => `У проєкті немає ролі прав ${p.role}`,
+    hint: {
+      en: "Use the logical name of a role declared in the project metadata.",
+      uk: "Вкажіть логічне ім'я ролі, оголошеної в метаданих проєкту.",
+    },
+  },
+  "maintenance.role-level": {
+    en: (p) =>
+      `The role ${p.role} does not fit this action: it must be ${p.expected}`,
+    uk: (p) =>
+      `Роль ${p.role} не підходить для цієї дії: вона має бути ${p.expected}`,
+    hint: {
+      en: "Nothing was written. Pick a role of the required level that carries fullAccess where the action restores an owner.",
+      uk: "Нічого не записано. Оберіть роль потрібного рівня, а для відновлення власника - з fullAccess.",
+    },
+  },
+  "maintenance.role-ambiguous": {
+    en: (p) =>
+      `More than one role fits this action (${p.roles}); the choice is not made for you`,
+    uk: (p) =>
+      `Дії відповідає кілька ролей (${p.roles}); вибір за вас не робиться`,
+    hint: {
+      en: "Name the role in the input.",
+      uk: "Вкажіть роль у вхідних даних.",
+    },
+  },
+  "maintenance.unknown-scope-kind": {
+    en: (p) => `The project has no scope kind ${p.scopeKind}`,
+    uk: (p) => `У проєкті немає виду скоупу ${p.scopeKind}`,
+    hint: {
+      en: "Use the name of a scope kind declared in the project metadata.",
+      uk: "Вкажіть ім'я виду скоупу, оголошеного в метаданих проєкту.",
+    },
+  },
+  "maintenance.no-catalog": {
+    en: (p) =>
+      `The project has no ${p.level} rights catalog the tool can write to`,
+    uk: (p) =>
+      `У проєкті немає довідника прав рівня ${p.level}, у який може писати інструмент`,
+    hint: {
+      en: "A membership catalog that the platform generates is required to add a new member; a source adopted from the application is written by the application.",
+      uk: "Щоб додати нового учасника, потрібен довідник членства, який генерує платформа; прийняте джерело пише сам застосунок.",
+    },
+  },
+  "maintenance.scope-missing": {
+    en: (p) => `The scope row ${p.scope} does not exist`,
+    uk: (p) => `Рядка скоупу ${p.scope} не існує`,
+    hint: {
+      en: "Nothing was written. Pass the id of an existing scope row.",
+      uk: "Нічого не записано. Вкажіть id наявного рядка скоупу.",
+    },
+  },
+  "maintenance.unknown-user": {
+    en: (p) => `The user ${p.user} is not in the users catalog`,
+    uk: (p) => `Користувача ${p.user} немає в довіднику користувачів`,
+    hint: {
+      en: "Nothing was written. The user must sign up first; use the id the platform assigned.",
+      uk: "Нічого не записано. Користувач має спершу зареєструватися; вкажіть id, який призначила платформа.",
+    },
+  },
+  "maintenance.busy": {
+    en: () => "Another apply or maintenance run holds the lock",
+    uk: () => "Замок тримає інше застосування чи інший запуск обслуговування",
+    hint: {
+      en: "Nothing was written. Wait for the other run to finish and run the tool again.",
+      uk: "Нічого не записано. Дочекайтеся завершення іншого запуску й запустіть інструмент знову.",
+    },
+  },
+  "maintenance.not-first": {
+    en: () => "The database already has a global role assignment",
+    uk: () => "У базі вже є глобальне призначення ролі",
+    hint: {
+      en: "Nothing was written. The first assignment is made only once; later ones go through the rights administration commands.",
+      uk: "Нічого не записано. Перше призначення робиться один раз; далі - командами адміністрування прав.",
+    },
+  },
+  "maintenance.holder-exists": {
+    en: (p) =>
+      `The ${p.level} level already has an effective fullAccess holder`,
+    uk: (p) => `Рівень ${p.level} уже має дієвого носія fullAccess`,
+    hint: {
+      en: "Nothing was written. The tool restores only a level that has no effective holder.",
+      uk: "Нічого не записано. Інструмент відновлює лише рівень, де немає дієвого носія.",
+    },
+  },
+  "maintenance.not-effective": {
+    en: (p) => `The user ${p.user} would not hold an effective assignment`,
+    uk: (p) => `Користувач ${p.user} не мав би дієвого призначення`,
+    hint: {
+      en: "The user or the membership row is invalid for rights; fix the row and run the tool again. If this appeared after the write, the transaction was rolled back.",
+      uk: "Користувач чи рядок членства недійсні для прав; виправте рядок і запустіть інструмент знову. Якщо це з'явилося після запису, транзакцію відкочено.",
+    },
+  },
+  "maintenance.invalid-member": {
+    en: (p) => `The member row is invalid at ${p.path}`,
+    uk: (p) => `Рядок учасника недійсний у ${p.path}`,
+    hint: {
+      en: "Nothing was written. Pass only attributes the membership catalog accepts on create; key, scope and user are set by the tool.",
+      uk: "Нічого не записано. Передайте лише реквізити, які довідник членства приймає при створенні; ключ, скоуп і користувача задає інструмент.",
+    },
+  },
+  "maintenance.member-required": {
+    en: (p) => `The membership catalog requires the attribute ${p.attribute}`,
+    uk: (p) => `Довідник членства вимагає реквізит ${p.attribute}`,
+    hint: {
+      en: "Nothing was written. Pass the attribute in member.",
+      uk: "Нічого не записано. Передайте реквізит у member.",
+    },
+  },
+  "maintenance.refused": {
+    en: (p) => `The database refused the maintenance write (${p.reason})`,
+    uk: (p) => `База відмовила в записі обслуговування (${p.reason})`,
+    hint: {
+      en: "Nothing was written. Connect with the role that applied the plan (SIMETRA_DATABASE_URL): only that login may enable the maintenance mode.",
+      uk: "Нічого не записано. Підключіться роллю, що застосувала план (SIMETRA_DATABASE_URL): режим обслуговування вмикає лише цей вхід.",
+    },
+  },
+  "maintenance.outcome-unknown": {
+    en: () =>
+      "The connection was lost after the write was sent: the outcome is unknown",
+    uk: () => "З'єднання втрачено після надсилання запису: результат невідомий",
+    hint: {
+      en: "Run the tool again: it reports the current state and refuses what is already done.",
+      uk: "Запустіть інструмент ще раз: він покаже поточний стан і відмовить у тому, що вже зроблено.",
+    },
+  },
   "introspect.unrepresentable": {
     en: (p) =>
       `${p.object}: ${p.property} cannot be represented in metadata files: ${p.detail}`,

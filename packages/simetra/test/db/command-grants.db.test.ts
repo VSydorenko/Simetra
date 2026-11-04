@@ -3,9 +3,11 @@ import pg from "pg"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import type { CompiledModel } from "simetra/compiler"
 import {
+  COMMAND_SETTING,
   PLATFORM_LOGIN_ROLES,
   PLATFORM_ROLES,
   RIGHTS_MAINTENANCE_SETTING,
+  SESSION_CLAIMS_SETTING,
   type CommandContext,
 } from "simetra/model"
 import { renderDesiredState } from "simetra/schema"
@@ -13,8 +15,13 @@ import {
   NOTE_LONG,
   NOTE_LONG_WRITER_ID,
   NOTE_WRITER_ID,
+  RIGHTS_ADMIN_ID,
+  TASK_EDITOR_ID,
+  adminRoles,
   authorCarrier,
   compileRights,
+  policyDomain,
+  rightsAdminReadingMembers,
   singleTenantRights,
 } from "../../src/compiler/__tests__/fixtures/rights"
 import { signUp } from "./auth"
@@ -426,6 +433,85 @@ describe("runtime login role", () => {
       }
       await probe(RUNTIME, "rights-context")
       await probe("postgres")
+    }, testSuperuserUrl())
+  }, 120_000)
+
+  // Справжня загроза рантайму: роль входу з контекстом команди вмикає режим
+  // і самопризначає ширшу роль ядром. Режим судить `session_user`, тож
+  // запис іде звичайним шляхом і ⊆ відмовляє `escalation`. Модель — з ядром
+  // призначень рівня `org` і адміністратором, що адресує учасника (`read` на
+  // членстві); у моделі файлу ні того, ні іншого немає.
+  it("the runtime login cannot enable maintenance even with a command context", async () => {
+    const result = await compileRights(
+      policyDomain(adminRoles(), rightsAdminReadingMembers())
+    )
+    expect(result.diagnostics).toEqual([])
+    await withRollback(async (client) => {
+      // Засів прав — під режимом обслуговування, а його дає лише сесія
+      // власника функцій: `SET ROLE` лишив би `session_user` суперкористувачем
+      await client.query("SET SESSION AUTHORIZATION postgres")
+      await deploy(client, result.model!)
+      const org = randomUUID()
+      const member = randomUUID()
+      const admin = await signUp(client)
+      await insert(client, "organization", { id: org })
+      await insert(client, "org_member", {
+        id: member,
+        org_id: org,
+        user_id: admin,
+      })
+      await insert(client, "org_role_assignments", {
+        org_id: org,
+        ...assignmentRow(member, { archetype: RIGHTS_ADMIN_ID }),
+      })
+      // Відкладені запобіжники засіву судяться зараз: далі — лише кейс
+      await client.query("SET CONSTRAINTS ALL IMMEDIATE")
+      await client.query("SET CONSTRAINTS ALL DEFERRED")
+
+      await client.query(`SET SESSION AUTHORIZATION ${RUNTIME}`)
+      await client.query("SELECT set_config($1, $2, true)", [
+        SESSION_CLAIMS_SETTING,
+        JSON.stringify({ sub: admin, role: "authenticated" }),
+      ])
+      await client.query("SELECT set_config($1, 'on', true)", [
+        RIGHTS_MAINTENANCE_SETTING,
+      ])
+      await client.query(`SET LOCAL ROLE ${PLATFORM_ROLES.command}`)
+      const assignment = randomUUID()
+      const context: CommandContext = {
+        action: "administerRights",
+        object: "org_role_assignments",
+        root: assignment,
+      }
+      await client.query("SELECT set_config($1, $2, true)", [
+        COMMAND_SETTING,
+        JSON.stringify(context),
+      ])
+      let failure: unknown
+      try {
+        await client.query(
+          "SELECT public.org_role_assignments_save($1::jsonb, NULL) AS r",
+          [
+            JSON.stringify({
+              id: assignment,
+              org_id: org,
+              subject: member,
+              archetype: TASK_EDITOR_ID,
+            }),
+          ]
+        )
+        // Лише в тесті: `COMMIT` у відкатній транзакції — відкладені
+        // запобіжники судять зараз (один оператор ядра без CTE)
+        await client.query("SET CONSTRAINTS ALL IMMEDIATE")
+      } catch (error) {
+        failure = error
+      }
+      expect(failure).toBeInstanceOf(pg.DatabaseError)
+      expect(failure).toMatchObject({
+        code: "42501",
+        message: "command.forbidden",
+        detail: "escalation",
+      })
     }, testSuperuserUrl())
   }, 120_000)
 })

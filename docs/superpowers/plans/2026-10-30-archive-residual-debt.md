@@ -49,6 +49,15 @@
   `FINGERPRINT_VERSION++`, повторний контракт покриття
   (`packages/designer/src/schema-engine/__tests__/fingerprint-coverage.db.test.ts`)
   і посекційні тести на стеку PG18.
+- **Перехід на Postgres 18** (тригер: Supabase переводить проєкти на PG18).
+  Робиться одним блоком, бо граматика парсера, стек і тінь мусять мати один
+  мажор: `libpg-query` і `@libpg-query/parser` 18 (у 18 обидва API в одному
+  пакеті, тож другий пакет зникає), `major_version` у `supabase/config.toml`,
+  відбиток каталогу (пункт вище). Відома зміна AST: у `INSERT`/`UPDATE`/
+  `DELETE` поле `returningList` замінено на `returningClause` (`RETURNING
+  OLD/NEW`) — правка в `packages/simetra/src/compiler/sql/rewrite/`
+  (`statement.ts`, `plpgsql-body.ts`); інші зміни AST — за diff
+  `@pgsql/types` 17 → 18.
 - **Механізми платформної спеки, яких немає в ядрі застосування:** режим
   запису `simetra.write_mode = 'import'` (§6.12), контроль DDL поза
   платформою тригером подій із журналом у схемі `simetra` (§6.12), видалення
@@ -314,6 +323,12 @@
   плоска тека» лінт не закріплює: шаблон дозволяє `./sub/x`, а
   `server-sources.test.ts` сканує лише верхній рівень, тож файл у підтеці
   обійшов би й тест джерел. Закріпити лінтом або тестом.
+- **Обхід реквізитів значень двічі.** `encodeMemberValues`
+  (`packages/simetra/src/model/runtime/values.ts`) і `writeAttributes`
+  (`packages/simetra/src/server/values.ts`) проходять набір реквізитів тим
+  самим алгоритмом (порядок каталогу, грант, пара, невідомі ключі після);
+  тест паритету порівнює лише успішний вихід. Злити в один обхід T0, коли A6
+  додасть третього споживача (`creatorMember`).
 
 ## 7. Тести
 
@@ -356,14 +371,23 @@
   оновити `packages/simetra/schemas/*.schema.json`; команду
   (`UPDATE_JSON_SCHEMAS=1 pnpm --filter simetra test json-schema`) знає лише
   код тесту. Підказка в повідомленні `expect` або скрипт пакета.
-- **Тайм-аути 5 с у юнітах designer під навантаженням.** Кейси
-  `packages/designer/src/__tests__/apply-outcome.test.ts` «reports the outcome
-  as unknown, never as nothing written» і
-  `packages/designer/src/__tests__/catalog-mutations.test.ts` «rename writes
-  on ok» перевищили 5000 мс у повному `pnpm test` під навантаженням машини;
-  повтор на тому самому SHA пройшов. Таймаут наосліп не піднімати: спершу
-  знайти, що в кейсі повільне (компіляція фікстури, імпорт, I/O), і
-  прибрати це.
+- **Кеш скомпільованого референсного домену в тестах операцій.** Тести
+  операцій `simetra` компілюють референсний домен заново в більшості кейсів
+  (`packages/simetra/src/compiler/__tests__/operations-rename.test.ts`,
+  `operations-create.test.ts`, `operations-fix.test.ts`), бо операції
+  приймають файли й компілюють усередині. Кеш однієї компіляції на файл
+  потребує, щоб операція приймала вже скомпільовану модель, — це зміна API
+  операцій, тож окремим рішенням.
+- **Шаблонна база стану «до» для DB-тестів промоції.** Один конвеєр
+  промоції поодинці — 10–12 с, з них розгортання стану «до» (`establish` /
+  `promoted` у хелперах `packages/designer/src/schema-engine/__tests__/build-plan.support.ts`
+  і `packages/designer/src/__tests__/promotion-lifecycle.db.test.ts`) —
+  близько 4 с, тобто 35–40 %. У `build-plan-promotion.db.test.ts` близько 44
+  конвеєрів на файл. Кандидат: `CREATE DATABASE … TEMPLATE` з одного
+  розгорнутого стану на файл. Зачіпає run-tag, сторож і очищення
+  (`packages/simetra/test/db/`). Суміжні кандидати швидкодії DB-наборів —
+  [борг П3-2b](2026-10-15-p3-2b-residual-debt.md) § 3. Рішення про
+  виконання — окремо.
 - **`23514` у ТЧ наскрізь.** Мапінг `23514` на реквізит перевірено лише
   для основної таблиці (`packages/simetra/src/server/__tests__/errors.test.ts`,
   DB `packages/designer/src/__tests__/command-runtime.db.test.ts`); CHECK
@@ -372,6 +396,11 @@
   `packages/designer/src/__tests__/command-runtime.db.test.ts` дублює
   `heldTarget` з `packages/designer/src/__tests__/carrier-locks.db.test.ts`;
   винести в `packages/designer/src/__tests__/support/`.
+- **Локальний будівник ролі адміністратора прав.** `rightsAdmins()` у
+  `packages/simetra/test/db/catalog-command-admin.db.test.ts` дублює
+  будівник `rightsAdminReadingMembers()`
+  (`packages/simetra/src/compiler/__tests__/fixtures/rights.ts`); перевести
+  файл на спільний будівник.
 
 ## 8. Designer
 

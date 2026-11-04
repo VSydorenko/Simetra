@@ -177,11 +177,30 @@ export const rightsRole = commandObject({
   },
 })
 
+/** Об'єкт застосунку, який бар'єр Р-A4-17 закриває після фази прав. */
+export const ticket = commandObject({ name: "Ticket", table: "ticket" })
+
+/** Довідник призначень: `administerRights` на кожній операції, з `delete`. */
+export const roleAssignment = commandObject({
+  name: "RoleAssignment",
+  table: "role_assignment",
+  operations: {
+    create: target("role_assignment", "save", "administerRights"),
+    update: target("role_assignment", "save", "administerRights"),
+    markDeletion: target(
+      "role_assignment",
+      "mark_deletion",
+      "administerRights"
+    ),
+    delete: target("role_assignment", "delete", "administerRights"),
+  },
+})
+
 export const catalog: RuntimeCatalog = runtimeCatalogSchema.parse({
   format: 1,
   snapshotHash: "hash-1",
   provider: "supabase",
-  objects: [client, rightsRole],
+  objects: [client, rightsRole, ticket, roleAssignment],
 })
 
 /** Довідник із поліморфною парою `subject`: читання за парою в `where`. */

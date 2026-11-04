@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { describe, expect, it } from "vitest"
+import { TOOL_PIPELINE } from "./helpers/budget"
 import {
   addElement,
   addElementInput,
@@ -38,7 +39,7 @@ describe.each([
   })
 
   it("every shell example names an existing subcommand", () => {
-    const known = new Set<string>([...TOOLS.map((t) => t.name), "mcp"])
+    const known = new Set<string>([...TOOLS.map((t) => t.name), "mcp", "init"])
     const blocks = [...text.matchAll(/```sh\n([\s\S]*?)```/g)]
     expect(blocks.length).toBeGreaterThan(0)
     for (const [, body] of blocks) {
@@ -60,7 +61,8 @@ describe("simetra-adoption skill", () => {
   })
 })
 
-describe("simetra-metadata skill", () => {
+// Приклади скілу женуть промоцію: компіляція, промоція й компіляція результату — бюджет `TOOL_PIPELINE`
+describe("simetra-metadata skill", TOOL_PIPELINE, () => {
   useTmpProjects()
 
   it("the promote example promotes an adopted table", async () => {

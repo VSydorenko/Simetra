@@ -366,7 +366,10 @@ describe.concurrent("plan", () => {
       await applied(dir, url, data, ["drift"])
       const next = await call("plan", {}, options(dir, url))
       expect(next.ok).toBe(true)
-      expect(next.data).toBeUndefined()
+      expect(next.data).toEqual({
+        unchanged: true,
+        rightsOrphans: { roles: [], assignments: [], deltas: [] },
+      })
       expect(next.artifacts).toEqual([])
     })
   })
