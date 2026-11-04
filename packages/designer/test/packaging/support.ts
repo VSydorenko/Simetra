@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process"
-import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises"
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { promisify } from "node:util"
@@ -72,23 +72,81 @@ export async function listPackedFiles(tarball: string): Promise<string[]> {
 }
 
 /**
- * Тимчасовий проєкт споживача, якому пакети ставить `npm`, а не pnpm: так
- * перевіряється розкладка `node_modules` без симлінків workspace. `overrides`
- * ведуть залежність designer на `simetra` у той самий tarball — до першої
- * публікації цієї версії в реєстрі немає.
+ * Тимчасовий проєкт споживача поза репо (у `os.tmpdir()`), тож ні npm, ні pnpm
+ * не бачать workspace репо. `npm` перевіряє розкладку `node_modules` без
+ * симлінків, `pnpm` — ізольовану розкладку `.pnpm`, у якій пакет видно лише
+ * крізь симлінк. Залежність designer на `simetra` ведеться в той самий
+ * tarball — до першої публікації цієї версії в реєстрі немає: npm — полем
+ * `overrides`, pnpm 11 — `overrides` у `pnpm-workspace.yaml` (поле `pnpm` у
+ * `package.json` він не читає, а `$`-посилання вважає застарілим).
  */
-export async function installConsumer(tarballs: string[]): Promise<string> {
+export async function installConsumer(
+  tarballs: string[],
+  manager: "npm" | "pnpm" = "npm"
+): Promise<string> {
   const dir = await tempDir("simetra-consumer-")
   const dependencies: Record<string, string> = {}
   for (const tarball of tarballs) {
     const manifest = await readPackedManifest(tarball)
     dependencies[manifest.name as string] = `file:${tarball}`
   }
-  const overrides = "simetra" in dependencies ? { simetra: "$simetra" } : {}
-  await writeFile(
-    join(dir, "package.json"),
-    JSON.stringify({ private: true, type: "module", dependencies, overrides })
-  )
-  await exec("npm", ["install", "--no-audit", "--no-fund"], { cwd: dir })
+  const manifest: Record<string, unknown> = {
+    private: true,
+    type: "module",
+    dependencies,
+  }
+  if (manager === "npm") {
+    manifest.overrides =
+      "simetra" in dependencies ? { simetra: "$simetra" } : {}
+  } else if ("simetra" in dependencies) {
+    await writeFile(
+      join(dir, "pnpm-workspace.yaml"),
+      `overrides:\n  simetra: ${JSON.stringify(dependencies.simetra)}\n`
+    )
+  }
+  await writeFile(join(dir, "package.json"), JSON.stringify(manifest))
+  if (manager === "npm") {
+    await exec("npm", ["install", "--no-audit", "--no-fund"], { cwd: dir })
+  } else {
+    await exec("pnpm", ["install"], { cwd: dir, env: consumerEnv() })
+  }
   return dir
+}
+
+// Гейт запускає `pnpm --filter … test:packaging`, і pnpm передає дочірнім
+// процесам свої `npm_config_*` і `pnpm_config_*` (теку workspace,
+// налаштування репо). pnpm споживача мусить читати лише налаштування його
+// власного кореня; `PNPM_HOME` — машинне, не репо, тож лишається
+function consumerEnv(): NodeJS.ProcessEnv {
+  return Object.fromEntries(
+    Object.entries(process.env).filter(
+      ([k]) => !/^(npm_|pnpm_(?!home$))/i.test(k)
+    )
+  )
+}
+
+/**
+ * Копія tarball-а з іншою версією і правкою вмісту — так гейт імітує
+ * оновлення пакета, не публікуючи його. Корінь архіву — `package/`, як у
+ * `npm pack`.
+ */
+export async function repackWithVersion(
+  tarball: string,
+  version: string,
+  edit: (dir: string) => Promise<void>
+): Promise<string> {
+  const work = await tempDir("simetra-repack-")
+  await exec("tar", ["-xzf", tarball, "-C", work])
+  const pkg = join(work, "package")
+  const manifestPath = join(pkg, "package.json")
+  const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as Record<
+    string,
+    unknown
+  >
+  manifest.version = version
+  await writeFile(manifestPath, JSON.stringify(manifest, null, 2) + "\n")
+  await edit(pkg)
+  const out = join(work, `repacked-${version}.tgz`)
+  await exec("tar", ["-czf", out, "-C", work, "package"])
+  return out
 }
