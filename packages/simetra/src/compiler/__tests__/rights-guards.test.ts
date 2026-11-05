@@ -1200,7 +1200,7 @@ describe("rights guard transaction check", () => {
       "t.storage, t.storage_id, t.scope_kind_id, t.scope, t.container, t.custom_role, t.archetype, t.level, t.level_id"
     const holders = domain.contracts.rightsCatalogs.map((catalog) =>
       tree(
-        `INSERT INTO simetra.rights_tx_holders (xid, level, level_id, scope) SELECT txid_current(), '${catalog.level.level}', ${catalog.level.level === "scope" ? `'${catalog.level.scopeKindId}'::uuid` : "NULL::uuid"}, h.scope FROM (${fullAccessHolderRows(catalog, domain.contracts, domain.physical, style)}) h WHERE h.actor IS NOT DISTINCT FROM v_actor`
+        `INSERT INTO simetra.rights_tx_holders (xid, level, level_id, scope) SELECT txid_current(), '${catalog.level.level}', ${catalog.level.level === "scope" ? `'${catalog.level.scopeKindId}'::uuid` : "NULL::uuid"}, h.scope FROM (${fullAccessHolderRows(catalog, domain.contracts, domain.physical, style)}) h WHERE h.actor = v_actor`
       )
     )
     expect(holders).toHaveLength(2)

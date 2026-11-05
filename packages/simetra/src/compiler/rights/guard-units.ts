@@ -333,7 +333,12 @@ const HEADER = ref(SNAPSHOT_TABLES.header)
  * гілки `scope_key` не читає, а збіг ключа скоупу точний лише за інваріантом
  * тенанта кастомної ролі — знімок на нього не спирається. Колонка `scope_key`
  * лишається: її рівняє гілка `allow` над знімком так само, як над живими.
- * Носії `fullAccess` — лише цього актора; `v_actor` — актор знімка.
+ * Носії `fullAccess` — лише цього актора; `v_actor` — актор знімка. Актор
+ * звужується рівністю, а не `IS NOT DISTINCT FROM`: друга форма не
+ * індексується, і план перебирав усі призначення рівня (на актора з одним
+ * носієм — тисячі рядків), а рівність іде індексом учасника за
+ * користувачем. Множина та сама: носії без актора відсіює сам генератор
+ * (`actor IS NOT NULL`), тож порожній `v_actor` і там, і тут дає нуль рядків.
  */
 function rightsFactRows(
   contracts: GuardContracts,
@@ -356,7 +361,7 @@ function rightsFactRows(
     ...contracts.rightsCatalogs.flatMap((catalog) => [
       `INSERT INTO ${ref(T.holders)} (xid, level, level_id, scope)`,
       `SELECT txid_current(), ${sqlLiteral(catalog.level.level)}, ${catalog.level.level === "scope" ? `${sqlLiteral(catalog.level.scopeKindId)}::uuid` : "NULL::uuid"}, h.scope`,
-      `FROM (${fullAccessHolderRows(catalog, contracts, physical, style)}) h WHERE h.actor IS NOT DISTINCT FROM v_actor;`,
+      `FROM (${fullAccessHolderRows(catalog, contracts, physical, style)}) h WHERE h.actor = v_actor;`,
     ]),
   ]
 }
