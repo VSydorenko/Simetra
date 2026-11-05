@@ -1,6 +1,7 @@
 import { dirname, resolve, sep } from "node:path"
 import type { FileChange } from "simetra/compiler"
 import type { z } from "zod"
+import { DataGuardRefusal } from "../io/data-guard-refusal"
 import { writeChanges } from "../io/metadata-dir"
 import { UsageError } from "../io/usage-error"
 import { queueFor } from "./queue"
@@ -11,6 +12,7 @@ import {
   noDataHint,
   noDatabaseHint,
   readOnlyHint,
+  rightsWriteHint,
 } from "./hints"
 import {
   PLANS_DIR,
@@ -97,13 +99,17 @@ function checkArtifacts(root: string, artifacts: readonly FileChange[]): void {
   }
 }
 
-function refused<D>(reason: RefusalReason, message: string): ToolResult<D> {
+function refused<D>(
+  reason: RefusalReason,
+  message: string,
+  detail?: string
+): ToolResult<D> {
   return {
     ok: false,
     written: false,
     changes: [],
     diagnostics: [],
-    refusal: { reason, message },
+    refusal: { reason, message, ...(detail === undefined ? {} : { detail }) },
   }
 }
 
@@ -195,6 +201,13 @@ export async function invoke<D>(
         },
         parsed.data
       )
+      // Відмову прав вирішує `run` (їй потрібна модель), а текст — тут: лише
+      // `invoke` знає argv запуску й канал. Інструмент даних нічого не пише
+      if (outcome.refusalReason === "rights-write-disabled")
+        return refused<D>(
+          "rights-write-disabled",
+          rightsWriteHint(o.launchArgs, o.channel)
+        )
       const artifacts = outcome.artifacts ?? []
       checkArtifacts(root, artifacts)
       // Вичерпно по осі файлів: зміни теки — лише `write` поза переглядом;
@@ -243,6 +256,10 @@ export async function invoke<D>(
           : { refusal: { reason: "refused", message: outcome.refusal } }),
       } satisfies ToolResult<D>
     } catch (error) {
+      // Відмова запобіжника — зі стабільною причиною: агент читає `detail`,
+      // а не текст. Перевіряється до `UsageError`, підкласом якого вона є
+      if (error instanceof DataGuardRefusal)
+        return refused("data-guard", error.message, error.detail)
       // Лише помилки використання; решта — баги й летять далі.
       if (error instanceof UsageError) return refused("refused", error.message)
       throw error

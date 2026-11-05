@@ -125,6 +125,8 @@ describe("tool catalog", TOOL_PIPELINE, () => {
       "apply",
       "compile",
       "create",
+      "data-command",
+      "data-read",
       "delete",
       "diff",
       "explain",

@@ -32,10 +32,14 @@ diagnostics themselves.
 | Apply a reviewed plan to the database                                             | `apply`      | `simetra apply <plan> [dir] --plan-hash <hex> --yes` | `apply` with `{plan, planHash, allow?, confirm}` |
 | Create the platform's cluster roles once per server (before the first `plan`); reads the project file | `roles`      | `simetra roles`                          | `roles` with `{}`                           |
 | Restore rights access outside commands: the first global assignment, a global or tenant `fullAccess` owner nobody holds (as the migrator) | `rights-maintenance` | `simetra rights-maintenance '<json>' [dir] --yes` | not available: command line only |
+| Read application data of the development database as a user, with that user's rights | `data-read` | `simetra data-read '<json>' [dir] --data-url-env <VAR> --as <uuid>` | `data-read` with `{query}` |
+| Change application data of the development database as a user (seed test data, reproduce a bug) | `data-command` | `simetra data-command '<json>' [dir] --data-url-env <VAR> --as <uuid>` | `data-command` with `{operations}` |
 
 `fix`, `create`, `add`, `rename`, `delete`, `promote`, `introspect` change files;
 `plan` writes only its plan file; others only read files. `introspect`, `diff`,
 `plan` read the database; `apply`, `roles`, `rights-maintenance` write to it.
+`data-read` and `data-command` read and change application data through the
+runtime, as the user given by `--as`.
 
 ## Examples
 
