@@ -189,7 +189,8 @@ export function buildCatalogCommandUnits(
         unitOf(root, PLATFORM_SCHEMA),
         `${relation(facts.fn)}(uuid, uuid, jsonb)`,
         rootCreatorFunction(facts),
-        input.units
+        // Функція гранту кличе перевірку членства цього генератора.
+        [...input.units, ...units]
       )
     )
   }
@@ -268,20 +269,20 @@ export function buildCatalogCommandUnits(
   return units.sort((a, b) => compareStrings(a.identity, b.identity))
 }
 
-/** Корінь виду з творцем: довідник членства, його перевірка й функція гранту. */
+/** Корінь виду з творцем: довідник членства й факти функції гранту. */
 interface RootCreator {
   root: CatalogCommandContract
   member: CatalogCommandContract
-  check: QualifiedName
   facts: RootCreatorFacts
 }
 
 /**
  * Факти функції гранту творцю на кожен вид скоупу з `rootCreator`
- * (`CompiledScopeKind.rootCreator`, спека П4 §6.13), за id кореня. Команди
- * кореня, членства й «Призначень ролей» гарантують діагностики
- * `rights.root-creator-*` (Р-A6-16, Р-A6-19); без них функції гранту немає, а
- * ядро кликало б неіснуючу — тож відсутність тут — дефект компілятора.
+ * (`CompiledScopeKind.rootCreator`, спека П4 §6.13), за id кореня. Корінь без
+ * ядра створення факту не має (`rootCreatedByCommand`), а команди членства й
+ * «Призначень ролей» гарантують діагностики `rights.root-creator-*`
+ * (Р-A6-16, Р-A6-19); без них функції гранту немає, а ядро кликало б
+ * неіснуючу — тож відсутність тут — дефект компілятора.
  */
 function rootCreators(
   input: Pick<
@@ -320,7 +321,6 @@ function rootCreators(
     result.set(root.objectId, {
       root,
       member,
-      check: memberCheckFunctionName(member.table),
       facts: {
         kindId: kind.id,
         fn: rootCreatorFunctionName(kind),
@@ -333,6 +333,7 @@ function rootCreators(
           key: membership.keyColumn,
           scope: membership.scopeColumn,
           user: membership.userColumn,
+          check: memberCheckFunctionName(member.table),
           columns: member.createKeys.map((name) => ({
             name,
             default: defaultOf(member.table, name),
@@ -1386,7 +1387,7 @@ function createRootFunction(
             "p_member IS NULL OR p_member_id IS NULL OR jsonb_typeof(p_member) IS DISTINCT FROM 'object'",
             [invalid(sqlLiteral(E.invalid.creatorMember))]
           ),
-          `v_column := ${relation(creator.check)}(p_member, ${root});`,
+          `v_column := ${relation(creator.facts.membership.check)}(p_member, ${root});`,
           ...ifThen("v_column IS NOT NULL", [
             invalid(`${sqlLiteral(`${E.invalid.creatorMember}.`)} || v_column`),
           ]),

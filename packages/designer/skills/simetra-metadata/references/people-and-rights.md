@@ -451,7 +451,10 @@ that grants it.
 A `rootCreator` role without `fullAccess` and without `administerRights` on
 the rights catalogs of its level gets the warning
 `rights.root-creator-no-admin`: the creator could not assign roles in the new
-tenant.
+tenant. A `rootCreator` role on a scope kind whose root no command creates
+(the root is `Users`: provisioning creates its rows) gets the warning
+`rights.root-creator-unreachable`: no tenant creation assigns the role, so
+assign the first role with the operator tool.
 
 **The operation** goes through `runtime.run` like any other:
 

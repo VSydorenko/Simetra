@@ -2584,6 +2584,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Дайте ролі fullAccess або administerRights на призначеннях ролей її виду скоупу.",
     },
   },
+  "rights.root-creator-unreachable": {
+    en: (p) =>
+      `Root creator role ${p.role} of scope kind "${p.scopeKind}" is unreachable: no command creates the root ${p.root}, so no tenant creation assigns the role`,
+    uk: (p) =>
+      `Роль творця кореня ${p.role} виду скоупу "${p.scopeKind}" недосяжна: корінь ${p.root} не створює жодна команда, тож жодне створення тенанта не призначить цю роль`,
+    hint: {
+      en: "Remove rootCreator and assign the first role with the operator tool, or make another catalog the root of the scope kind.",
+      uk: "Приберіть rootCreator і призначайте першу роль інструментом оператора або зробіть коренем виду скоупу інший довідник.",
+    },
+  },
   "rights.source-unknown": {
     en: (p) => `Assignment source "${p.source}" is not declared in the project`,
     uk: (p) => `Джерело призначень "${p.source}" не оголошено в проєкті`,

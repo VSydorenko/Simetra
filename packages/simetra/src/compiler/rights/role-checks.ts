@@ -9,7 +9,8 @@ import {
 import type { Contracts } from "../contracts"
 import { diagnostic, type Diagnostic } from "../diagnostics"
 import type { ParsedObject } from "../stages/files"
-import { standardElementId } from "../stages/identity"
+import { standardElementId, type ResolvedReference } from "../stages/identity"
+import { usersCatalogOf } from "../stages/model"
 import { membershipOfScopeKind, type RightsCheckContext } from "./checks"
 import {
   customActionsOf,
@@ -297,6 +298,54 @@ export function rootCreatorAdminWarnings(
       diagnostic("rights.root-creator-no-admin", file, "/rootCreator", {
         role: role.name,
         scopeKind: scopeKind.name,
+      }),
+    ]
+  })
+}
+
+/**
+ * Корінь виду скоупу створює команда `<корінь>_create_root` (спека П4 §6.13) —
+ * будь-який корінь-об'єкт, крім «Користувачів»: їхній рядок створює провізія
+ * (спека системної схеми), тож ядра створення в них немає. Один факт і для
+ * попередження нижче, і для `CompiledScopeKind.rootCreator`: інакше генератори
+ * ядра, маркера й каталогу рантайму розійшлися б із діагностикою.
+ */
+export function rootCreatedByCommand(
+  rootId: string,
+  objects: readonly ParsedObject[]
+): boolean {
+  return rootId !== usersCatalogOf(objects)?.id
+}
+
+/**
+ * Попередження на творця кореня, якого жодне створення тенанта не призначить
+ * (спека П4 §6.13): корінь виду не створює команда (`rootCreatedByCommand`).
+ * Модель валідна — створення тенанта просто недоступне, а першу роль
+ * призначає інструмент оператора, — тож це попередження, а функції гранту,
+ * маркера й `operations.create.root.membership` немає.
+ */
+export function rootCreatorUnreachableWarnings(
+  roles: Contracts["roles"],
+  objects: readonly ParsedObject[],
+  references: readonly ResolvedReference[],
+  scopeKinds: readonly Pick<ScopeKind, "id" | "name">[]
+): Diagnostic[] {
+  return roles.flatMap((role) => {
+    const level = role.assignedOn
+    if (!role.rootCreator || level.level !== "scope") return []
+    const index = scopeKinds.findIndex((k) => k.id === level.scopeKindId)
+    const root = references.find(
+      (r) =>
+        r.role === "scopeKind.root" &&
+        r.from.pointer === `/scopeKinds/${index}/root/object`
+    )?.to.id
+    if (root === undefined || rootCreatedByCommand(root, objects)) return []
+    const file = must(objects.find((o) => o.id === role.roleId)).file
+    return [
+      diagnostic("rights.root-creator-unreachable", file, "/rootCreator", {
+        role: role.name,
+        scopeKind: must(scopeKinds[index]).name,
+        root: must(objects.find((o) => o.id === root)).name,
       }),
     ]
   })

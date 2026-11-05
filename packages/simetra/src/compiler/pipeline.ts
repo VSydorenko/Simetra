@@ -56,7 +56,11 @@ import { buildRightsGuardUnits } from "./rights/guard-units"
 import { snapshotExemptWriters } from "./rights/snapshot-exempt-writers"
 import { snapshotSources } from "./rights/snapshot-sources"
 import { scopeKindUnreadWarnings } from "./rights/scope-kind-warnings"
-import { rootCreatorAdminWarnings } from "./rights/role-checks"
+import {
+  rootCreatedByCommand,
+  rootCreatorAdminWarnings,
+  rootCreatorUnreachableWarnings,
+} from "./rights/role-checks"
 import {
   rightsCatalogContracts,
   rightsCatalogTables,
@@ -380,6 +384,12 @@ export async function runStages(
       stage1.objects,
       stage1.project.scopeKinds
     ),
+    ...rootCreatorUnreachableWarnings(
+      roles,
+      stage1.objects,
+      stage2.references,
+      stage1.project.scopeKinds
+    ),
   ])
   // Довідники прав потрібні і контрактам, і генератору прав серед SQL-одиниць:
   // обчислюються до одиниць, тож `buildContracts` їх лише приймає.
@@ -410,12 +420,15 @@ export async function runStages(
   const { defaultSchema } = stage1.project
   const memberships = membershipsOf(stage1.objects, physical, stage1.project)
   // Факт «вид має творця кореня» — один для генераторів ядра, ефектів і
-  // каталогу рантайму. Довідник членства й «Призначення ролей» такого виду
-  // гарантують діагностики `rights.root-creator-*` (Р-A6-16, Р-A6-19), тож
-  // їх відсутність тут — дефект компілятора, а не моделі.
+  // каталогу рантайму. Корінь, якого не створює команда, факту не дає
+  // (попередження `rights.root-creator-unreachable`): інакше ядро кликало б
+  // функцію гранту, якої немає, а маркер ставився б на вставці без гранту.
+  // Довідник членства й «Призначення ролей» такого виду гарантують
+  // діагностики `rights.root-creator-*` (Р-A6-16, Р-A6-19), тож їх
+  // відсутність тут — дефект компілятора, а не моделі.
   const rootCreatorOf = (
     kindId: string,
-    objectRoot: boolean
+    rootId: string | undefined
   ): Pick<CompiledScopeKind, "rootCreator"> => {
     const creator = roles.find(
       (r) =>
@@ -423,7 +436,12 @@ export async function runStages(
         r.assignedOn.level === "scope" &&
         r.assignedOn.scopeKindId === kindId
     )
-    if (creator === undefined || !objectRoot) return {}
+    if (
+      creator === undefined ||
+      rootId === undefined ||
+      !rootCreatedByCommand(rootId, stage1.objects)
+    )
+      return {}
     const membership = memberships.find((m) => m.scopeKind.id === kindId)
       ?.object.id
     const assignments = rightsCatalogs.find(
@@ -462,7 +480,12 @@ export async function runStages(
               name: kind.setFunction.name,
             },
       onRootDelete: kind.onRootDelete,
-      ...rootCreatorOf(kind.id ?? "", "object" in kind.root),
+      ...rootCreatorOf(
+        kind.id ?? "",
+        "object" in kind.root
+          ? rootIdByPointer.get(`/scopeKinds/${index}/root/object`)
+          : undefined
+      ),
     }))
     .sort((a, b) => compareStrings(a.name, b.name))
   // Один контракт «Користувачів» і для шару платформи, і для функцій прав, і

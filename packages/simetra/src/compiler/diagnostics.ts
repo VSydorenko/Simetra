@@ -163,6 +163,7 @@ export const COMPILER_RULES = [
   "rights.root-creator-subscription",
   "rights.root-create-author",
   "rights.root-creator-no-admin",
+  "rights.root-creator-unreachable",
   "rights.source-unknown",
   "rights.source-key-level",
   "rights.source-key-duplicate",
@@ -454,7 +455,9 @@ export interface Diagnostic {
  * права викликача — попередження (платформна спека §6.7). Творець кореня без
  * `fullAccess` і без адміністрування прав рівня (`rights.root-creator-no-admin`)
  * може бути задумом застосунку — ролі в тенанті тоді призначає оператор, — тож
- * це попередження, а не відмова (спека П4 §6.13).
+ * це попередження, а не відмова (спека П4 §6.13). Так само творець кореня,
+ * чий корінь не створює команда (`rights.root-creator-unreachable`: корінь —
+ * «Користувачі»), — валідна модель без створення тенанта.
  */
 const WARNING_RULES: ReadonlySet<RuleCode> = new Set<RuleCode>([
   "physical.reserved-word",
@@ -469,6 +472,7 @@ const WARNING_RULES: ReadonlySet<RuleCode> = new Set<RuleCode>([
   "rights.adopted-source-writes",
   "rights.scope-kind-unread",
   "rights.root-creator-no-admin",
+  "rights.root-creator-unreachable",
   "sql.debt-session-write",
   "sql.debt-extension-schema",
   "sql.definer-reads-rls",

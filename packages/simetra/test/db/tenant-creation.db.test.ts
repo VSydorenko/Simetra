@@ -238,7 +238,10 @@ describe("tenant creation: self-service with a required member attribute and the
   // (`create@own`), `TenantOwner` — творець з `fullAccess`; `Branch` — вид
   // без творця, створює `TenantOperator`.
   const s = scenario(() =>
-    policyDomain(tenantSelfService({ requiredMember: true }), tenantOperator())
+    policyDomain(
+      tenantSelfService({ requiredMember: true, memberRegions: true }),
+      tenantOperator()
+    )
   )
   const { key, ids, steps } = s
   const MEMBER_VALUES = { title: "founder" }
@@ -260,6 +263,8 @@ describe("tenant creation: self-service with a required member attribute and the
         )
         ids.country = randomUUID()
         await insert(client, "country", { id: ids.country })
+        ids.region = randomUUID()
+        await insert(client, "region", { id: ids.region, org_id: ids.T })
       }),
     120_000
   )
@@ -630,6 +635,52 @@ describe("tenant creation: self-service with a required member attribute and the
       { id: member, org_id: root, user_id: key("creator") },
     ])
   })
+
+  // Прямий виклик функції гранту сирим SQL оминає перевірки посилань ядра:
+  // функція перевіряє рядок членства сама — від власника це «ціль існує й у
+  // тому самому скоупі» (Р-A6-12), тож рядок чужого тенанта — відмова, і
+  // жодного рядка членства не лишається
+  it.each([
+    [
+      "array Ref to a row of another scope",
+      () => ({ regions: [key("region")] }),
+      false,
+    ],
+    [
+      "polymorphic Ref to a row of another scope",
+      () => ({ focus_type: "region", focus_id: key("region") }),
+      false,
+    ],
+    [
+      "unscoped targets that exist",
+      () => ({
+        countries: [key("country")],
+        focus_type: "country",
+        focus_id: key("country"),
+      }),
+      true,
+    ],
+  ] as const)(
+    "direct grant call checks member references: %s",
+    async (_, values, passes) => {
+      const root = randomUUID()
+      const member = randomUUID()
+      const outcome = await steps("creator", [
+        rawRootStep(root),
+        grantStep(root, member, { ...MEMBER_VALUES, ...values() }),
+        query(
+          `SELECT count(*)::int AS n FROM public.${MEMBER} WHERE id = $1 OR org_id = $2`,
+          [member, root]
+        ),
+      ])
+      if (passes) {
+        expect(succeeded(outcome)[2]).toEqual([{ n: 1 }])
+      } else {
+        expect(outcome.completed).toHaveLength(1)
+        expect(outcome.refusal).toEqual(RIGHTS_CONTEXT)
+      }
+    }
+  )
 
   // Поліморфний і масивний `Ref` на невидимий рядок — та сама відмова, що й
   // на відсутній id; власний рядок творця видно за `read@own`

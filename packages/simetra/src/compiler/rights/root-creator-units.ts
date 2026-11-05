@@ -53,6 +53,8 @@ export interface RootCreatorFacts {
   role: Pick<RoleContract, "roleId" | "fullAccess">
   membership: Inserted & {
     user: string
+    /** `<членство>_simetra_member_check` довідника членства (Р-A6-12). */
+    check: QualifiedName
     /**
      * Колонки вставки зі списку компіляції (ті самі, що в гілці створення
      * `<членство>_save`) і значення за замовчуванням для відсутнього ключа.
@@ -130,7 +132,12 @@ export function rootCreatorFunction(facts: RootCreatorFacts): string {
       `EXISTS (SELECT 1 FROM ${qualified(m.table)} r WHERE r.${q(m.scope)} = p_root) OR EXISTS (SELECT 1 FROM ${qualified(a.table)} r WHERE r.${q(a.scope)} = p_root)`
     ),
     // (4) Рядок членства творця: лише колонки вставки, примушені ключ, скоуп і
-    // користувач. Вхід уже перевірило INVOKER-ядро.
+    // користувач. Вхід уже перевірило INVOKER-ядро, але прямий виклик сирим
+    // SQL під `simetra_command` його оминає — тож та сама перевірка рядка
+    // членства ще раз (захист у глибину, як Р-A6-23). Від власника з
+    // `row_security = off` вона означає «ціль існує й у тому самому скоупі», не
+    // видимість — як в інструменті обслуговування (Р-A6-12).
+    ...ifRefuse(`${qualified(m.check)}(p_member, p_root) IS NOT NULL`),
     `v_context := current_setting(${sqlLiteral(COMMAND_SETTING)}, true);`,
     context(m.action, m.kindLabel, "p_member_id"),
     `v_in := jsonb_populate_record(NULL::${qualified(m.table)}, p_member);`,

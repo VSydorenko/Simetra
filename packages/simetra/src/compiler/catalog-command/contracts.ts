@@ -224,9 +224,10 @@ export function catalogCommandContracts(input: {
       )?.name
       const sections = (object.data as Catalog).tabularSections
       const createKeys = command.insert.filter((c) => !excluded.has(c))
-      // Корінь без жодного гранту вставки (немає явного гранту `create`
-      // рівня `global` чи `everyUser`, спека прав Рх7) ядра створення не має:
-      // вставляти нема кому й нічого.
+      // Ядро створення кореня не залежить від грантів: право судить
+      // `has_right` під час виклику, а `create` кореня може дати й дельта
+      // глобальної кастомної ролі (спека прав Рх7). Ключ — серед колонок
+      // вставки, тож порожній список — лише запобіжник.
       const { createRoot, ...rest } = found
       const actions: CatalogCommandContract["actions"] =
         createRoot === undefined || createKeys.length === 0

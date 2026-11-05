@@ -13,6 +13,8 @@ import {
   rootCreationDomain,
   tenantOperator,
   tenantSelfService,
+  usersRootCreator,
+  withRoles,
 } from "./fixtures/rights"
 import { bodyShape, loadShapeParsers, nodes, tree } from "./fixtures/sql-shape"
 
@@ -134,7 +136,13 @@ function grantSteps(m: CompiledModel, fullAccess: boolean): Step[] {
       "EXISTS (SELECT 1 FROM public.org_member r WHERE r.org_id = p_root) OR EXISTS (SELECT 1 FROM public.org_role_assignments r WHERE r.org_id = p_root)",
     ],
     ["refuse"],
-    // (4) членство творця під власним контекстом
+    // (4) повторна перевірка рядка членства (прямий виклик оминає ядро),
+    // далі членство творця під власним контекстом
+    [
+      "if",
+      "public.org_member_simetra_member_check(p_member, p_root) IS NOT NULL",
+    ],
+    ["refuse"],
     ["assign", "v_context := current_setting('simetra.command', true)"],
     ["perform", context("create", "org_member", "p_member_id")],
     [
@@ -257,6 +265,10 @@ describe("root creator grant function", () => {
 
   it("requires the tables and functions its body names", () => {
     expect(unitOf(model).requires).toEqual([
+      {
+        type: "unit",
+        identity: "function:public.org_member_simetra_member_check(jsonb,uuid)",
+      },
       { type: "unit", identity: "function:simetra.command_current()" },
       { type: "unit", identity: "function:simetra.current_user_id()" },
       ...[
@@ -270,5 +282,44 @@ describe("root creator grant function", () => {
         ["simetra", "rights_tx_typed"],
       ].map(([schema, name]) => ({ type: "table", schema, name })),
     ])
+  })
+})
+
+describe("root creator whose root no command creates", () => {
+  /** Одиниці, що їх дає факт творця: функція гранту, ядро кореня, маркер. */
+  const creatorUnits = (m: CompiledModel) =>
+    m.sqlUnits
+      .filter((u) => u.class !== "grant")
+      .filter((u) =>
+        /_root_creator\(|_create_root\(|INSERT INTO simetra\.rights_tx_root_marker\b/.test(
+          u.sql
+        )
+      )
+      .map((u) => u.identity)
+
+  it("the creator units filter sees all three on a creatable root", () => {
+    expect(creatorUnits(model)).toEqual([
+      "function:public.branch_create_root(jsonb,jsonb,uuid)",
+      "function:public.organization_create_root(jsonb,jsonb,uuid)",
+      "function:public.organization_simetra_effects()",
+      SIGNATURE,
+    ])
+  })
+
+  // Корінь «Користувачі» створює провізія: творця не призначить жодне
+  // створення тенанта — попередження, і жодного генератора факту творця
+  it("compiles with the unreachable warning and no grant function, create core or marker", async () => {
+    const { model, diagnostics } = await compileRights(
+      withRoles(usersRootCreator())
+    )
+    expect(diagnostics.map((d) => [d.code, d.severity, d.file])).toEqual([
+      [
+        "rights.root-creator-unreachable",
+        "warning",
+        "roles/TenantOwner/TenantOwner.meta.json",
+      ],
+    ])
+    expect(model!.scopeKinds.map((k) => k.rootCreator)).toEqual([undefined])
+    expect(creatorUnits(model!)).toEqual([])
   })
 })

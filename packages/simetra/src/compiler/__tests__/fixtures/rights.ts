@@ -2823,6 +2823,9 @@ export const COUNTRY_ID = uuid(8210)
  * перезаписала б реквізити `OrgMember` (шари зливаються поверхнево).
  * `memberRead: false` (лише разом із `fullAccess: false`) знімає з `TenantOwner`
  * грант на `OrgMember`: рядок членства творця невидимий йому й після гранту.
+ * `memberRegions` додає `OrgMember` масив `Ref` і поліморфну пару на
+ * скоуплений `Region`: цілі, чий скоуп звіряє перевірка рядка членства у
+ * функції гранту (Р-A6-12).
  */
 export function tenantSelfService(
   options: {
@@ -2830,6 +2833,7 @@ export function tenantSelfService(
     requiredMember?: boolean
     founder?: boolean
     memberRead?: boolean
+    memberRegions?: boolean
   } = {}
 ): Layer {
   const {
@@ -2837,6 +2841,7 @@ export function tenantSelfService(
     requiredMember = false,
     founder = true,
     memberRead = true,
+    memberRegions = false,
   } = options
   const organization = objects(["Catalog", "Organization"])
   const members = objects(["Catalog", "OrgMember"])
@@ -2866,6 +2871,29 @@ export function tenantSelfService(
           ),
           array: true,
         },
+        ...(memberRegions
+          ? [
+              {
+                ...refAttribute(
+                  8240,
+                  MEMBER_REGIONS,
+                  MEMBER_REGIONS,
+                  ref("Catalog", "Region")
+                ),
+                array: true,
+              },
+              {
+                id: uuid(8241),
+                name: MEMBER_FOCUS,
+                physicalName: MEMBER_FOCUS,
+                type: "Ref",
+                allowedTypes: objects(
+                  ["Catalog", "Region"],
+                  ["Catalog", "Country"]
+                ),
+              },
+            ]
+          : []),
         ...(requiredMember
           ? [
               {
@@ -2925,6 +2953,27 @@ export function tenantSelfService(
       "TenantReader",
       { scopeKind: "org" },
       { grants: [grant(organization, ["read"], "any")] }
+    ),
+  }
+}
+
+/**
+ * Вид `org` з коренем «Користувачі» і творцем кореня `TenantOwner` (спека П4
+ * §6.13): рядок кореня створює провізія, а не команда, тож роль `rootCreator`
+ * недосяжна — валідна модель без створення тенанта.
+ */
+export function usersRootCreator(): Layer {
+  return {
+    [PROJECT_FILE]: {
+      scopeKinds: [
+        { ...ORG_SCOPE_KIND, root: { object: ref("Catalog", "Users") } },
+      ],
+    },
+    [ROLE_FILE("TenantOwner")]: role(
+      TENANT_OWNER_ID,
+      "TenantOwner",
+      { scopeKind: "org" },
+      { rootCreator: true, fullAccess: true }
     ),
   }
 }
