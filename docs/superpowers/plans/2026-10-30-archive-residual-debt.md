@@ -266,12 +266,12 @@
   доведено. Інакше режим обслуговування прав (`simetra.rights_maintenance`)
   діяв би в їхній сесії. Потрібен DB-тест чи проба `pg_stat_activity`. Код:
   `project.ts`, `maintenanceSql` у `compiler/rights/guard-units.ts`.
-- **Хибна `escalation` у `SET CONSTRAINTS ALL IMMEDIATE`**: перевірка ⊆
-  спрацьовує в кінці оператора, а знімок актора береться на кожному; один
-  оператор з CTE, що пише дві таблиці системних об'єктів прав, дає хибну
-  відмову (fail-closed). Записати в
-  `packages/designer/skills/simetra-metadata/references/people-and-rights.md`
-  або виправити в `guard-units.ts`.
+- **Один оператор з CTE, що пише дві таблиці системних об'єктів прав, під
+  `SET CONSTRAINTS ALL IMMEDIATE`.** Знімок актора береться раз на
+  транзакцію й живе до її кінця (спека прав §7), тож хибної `escalation` від
+  повторного знімка більше немає; перевірка ⊆ такого оператора судить його
+  кінцевий стан проти прав початку. DB-кейсом це не доведено — додати кейс у
+  `packages/simetra/test/db/catalog-command-admin.db.test.ts`.
 - **Прийняті джерела прав** (`packages/simetra/src/schema/apply/rights-sources.ts`):
   читання ключів ролей порівнює літерал умови з колонкою цілі ще до гейта
   дрейфу — якщо план змінює тип колонки, падає сира помилка приведення;

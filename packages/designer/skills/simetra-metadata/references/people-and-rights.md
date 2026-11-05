@@ -120,6 +120,13 @@ with a trigger on the target table, see "Carrier copies").
   functions it calls; a `plpgsql` function in that chain is refused), and no
   `simetra.*` object except `simetra.current_user_id()`
   (`rights.dimension-function-*`).
+  With system rights catalogs, every relation that this function or a
+  verbatim scope set function reads must be a table of a kind, an adopted
+  table (`CustomTable`) or a model view over them. Anything else fails with
+  `rights.snapshot-source-unknown`, which names the relation and the function
+  that reads it: the platform watches only those tables for the actor
+  snapshot ("Rights inside a transaction" below). Read the data from such a
+  table instead, or remove the read.
 - **`membershipSources`** (project) — an adopted table that holds the
   membership of a scope kind instead of a membership catalog.
   `{ "name": "<source>", "scopeKind": "<scope kind>", "table": <CustomTable ref>, "columns": { "scope": "<column>", "user": "<column>", "active": "<column>" }, "where": [<condition>] }`
@@ -258,6 +265,21 @@ key in such a table through `sourceKeys`.
   belongs to the application; the rights safeguards (last-holder guards,
   versions, the rights journal) do not apply to those writes, which the
   compiler notes as `rights.adopted-source-writes`.
+- **Commands do not write sources.** The platform puts no actor snapshot
+  trigger on an adopted source, its role table or another `CustomTable` that
+  the rights facts read. So application SQL must not let the command role
+  (`simetra_command`) or `PUBLIC` write such a table, or the compiler fails
+  with `rights.snapshot-exempt-writer`. The message names what opens the
+  write; fix it as follows:
+  - a write grant (also through `ALTER DEFAULT PRIVILEGES`) — remove it;
+  - a view with a write grant and without `security_invoker` — remove the
+    grant or create the view `WITH (security_invoker = true)`;
+  - a `SECURITY DEFINER` function or procedure that writes the table — add
+    `REVOKE EXECUTE ON FUNCTION <name>(<argument types>) FROM PUBLIC` after
+    it, grant it to no command role, or drop `SECURITY DEFINER`; default
+    privileges do not count as that revoke;
+  - a `SECURITY DEFINER` trigger function that writes the table — remove its
+    trigger or drop `SECURITY DEFINER`.
 - **Deleting a member.** A member of an adopted membership referenced by
   platform role assignments cannot be deleted until those assignments are
   removed (foreign key violation `23503`).
@@ -342,36 +364,31 @@ runs under `administerRights`:
 - assignment: `create`, and `delete` with `expectedVersion`, on the role
   assignments catalog.
 
-Apart from the batch order below, the runtime adds no rights checks of its
-own. The database judges the transaction at `COMMIT`, and the runtime maps
-its refusals:
+The runtime adds no rights checks of its own. The database judges the
+transaction at `COMMIT`, and the runtime maps its refusals:
 `command.forbidden` with `escalation`, `role-in-use` or `last-full-access`,
 and `command.conflict` for a stale version. Assigning a role to yourself
 fails at `COMMIT` with `escalation`.
 
-**Order in a batch.** Put the phases on application data before the first
-rights phase. A rights phase marks the command when it starts, before its
-`beforeWrite`. After that mark, any phase, `ctx.run` or `ctx.read` on
-application data fails with `command.forbidden`, reason `rights-context`,
-and nothing for it reaches the database. More rights phases and reads of
-the rights catalogs still run. So a hook of a rights phase reads and runs
-only rights data. This runtime safeguard stops a command from using a right
-it granted itself before `COMMIT`. Host code that writes with the runtime
-login directly is not covered by it.
-
-**Membership hooks.** A membership catalog is application data: a member
-row without an assignment gives no rights. When its `onWrite` assigns a role
-with `ctx.run`, nothing on application data may follow in that command. A
-batch that creates two members with such a hook fails on the second. Make
-the assignment the last step of the hook and the member the last phase of
-the batch, or send one member per command. Alternatively, assign in a
-separate command from `ctx.afterCommit`.
+**Rights inside a transaction.** A command uses the rights its actor had
+when its transaction started. Before the first change of a table that feeds
+the actor's rights (role assignments, custom roles, membership, users,
+dimension relations, tables read by verbatim dimension and scope set
+functions), the database takes a snapshot of those rights. The command core,
+row level security and the rights functions then read the snapshot until the
+transaction ends. So a right granted inside a command's transaction takes
+effect from the next transaction: a phase or hook that uses a role the batch
+has just assigned to its own actor fails with `command.forbidden`, reason
+`no-right`, and a read returns no rows. This also holds for host code that
+writes with the runtime login directly. Phases and hooks may run in any
+order: a membership `onWrite` that assigns a role with `ctx.run` does not
+limit the next phases of the batch. A read only transaction does not take a
+snapshot.
 
 **Transfer `fullAccess`** in one batch: assign the archetype to the new
-holder first, then delete your own assignment. The last-holder check runs at
-`COMMIT`. Delete your own assignment first only when another role gives you
-the administration, because the command reads your assignments as they are
-at that moment.
+holder and delete your own assignment, in either order. The last-holder check
+runs at `COMMIT`, and the command core reads your rights at the start of the
+transaction.
 
 **Clean orphans.** `simetra plan --format json` returns `rightsOrphans` with
 `roles`, `assignments` and `deltas`, also when the status is `unchanged`.
