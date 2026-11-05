@@ -7,9 +7,13 @@ import {
   GLOBAL_GRANT_FILE,
   GRANT_FILE,
   GRANTS_SOURCE_ID,
+  ORGANIZATION_FILE,
   ORG_ADMIN_ID,
+  ORG_ASSIGNMENTS_FILE,
   ORG_KIND_ID,
   ORG_MEMBER_ROLE_ID,
+  ORG_ROLES_FILE,
+  ORG_SCOPE_KIND,
   PROJECT_FILE,
   PROJECT_ID,
   PROJECT_LEAD_ID,
@@ -18,14 +22,19 @@ import {
   SUPPORT_ID,
   TASK_EDITORS_ID,
   TASK_READERS_ID,
+  adoptedSourcesDomain,
   catalog,
   compileRights,
   globalGrantTable,
+  grant,
   grantTable,
   grantsSource,
+  objects,
+  refAttribute,
   rightsFiles,
   rightsSet,
   role,
+  tenantSelfService,
   without,
   withRoles,
 } from "./fixtures/rights"
@@ -94,6 +103,9 @@ describe("roles and rights sets", () => {
     ).toEqual([
       ["rights.adopted-source-writes", "/assignmentSources/0"],
       ["rights.adopted-source-writes", "/assignmentSources/1"],
+      // Творець без `fullAccess` і без адміністрування прав рівня не дасть
+      // нікому ролі в новому тенанті (спека прав §4.1).
+      ["rights.root-creator-no-admin", "/rootCreator"],
     ])
     const roles = result.model!.contracts.roles
     expect(roles.find((r) => r.name === "OrgAdmin")).toEqual({
@@ -453,5 +465,153 @@ describe("roles and rights sets", () => {
       expect(written, path).not.toHaveProperty("physicalName")
     }
     expect(await errors(completed.files)).toEqual([])
+  })
+})
+
+describe("root creator rules", () => {
+  const ORGANIZATION = objects(["Catalog", "Organization"])
+  const owner = ROLE_FILE("TenantOwner")
+  const rootCreator = (
+    code: string,
+    file: string,
+    params: Record<string, string> = { scopeKind: "org" }
+  ) => ({ code, file, pointer: "/rootCreator", params })
+  const author = (file: string) => ({
+    code: "rights.root-create-author",
+    file,
+    pointer: "/grants/0/grant/extent",
+    params: { object: "Organization" },
+  })
+  // Правила творця кореня (спека прав §4.1, §4.6, П4 §6.13); інші діагностики
+  // тих самих проєктів — не предмет цих кейсів.
+  async function rootRules(input: Map<string, string>) {
+    const result = await compileRights(input)
+    return result.diagnostics
+      .filter((d) => d.code.startsWith("rights.root-"))
+      .map(({ code, file, pointer, params }) => ({
+        code,
+        file,
+        pointer,
+        params,
+      }))
+      .sort((a, b) => a.code.localeCompare(b.code))
+  }
+
+  it.each([
+    {
+      case: "a self-service tenant model",
+      input: withRoles(tenantSelfService()),
+      expected: [],
+    },
+    {
+      // Функція гранту вставляє рядок довідника членства — прийнятої таблиці
+      // вона не пише; дослівна функція множини теж іде разом з нею.
+      case: "a kind with an adopted membership source only",
+      input: adoptedSourcesDomain({
+        [ROLE_FILE("OrgAdmin")]: { rootCreator: true },
+      }),
+      expected: [
+        rootCreator("rights.root-creator-membership", ROLE_FILE("OrgAdmin")),
+        rootCreator("rights.root-creator-set-function", ROLE_FILE("OrgAdmin")),
+      ],
+    },
+    {
+      case: "a kind with a verbatim set function",
+      input: withRoles(tenantSelfService(), {
+        [PROJECT_FILE]: {
+          scopeKinds: [
+            {
+              ...ORG_SCOPE_KIND,
+              setFunction: { schema: "public", name: "org_ids" },
+            },
+          ],
+        },
+      }),
+      expected: [rootCreator("rights.root-creator-set-function", owner)],
+    },
+    {
+      case: "a kind whose assignments come from an adopted source",
+      input: withRoles(
+        tenantSelfService(),
+        // Роль контейнера `Project` лежить на рівні зберігання `org`, а
+        // `TenantAdmin` адресує довідник призначень, тож обидві — геть.
+        without(
+          ORG_ROLES_FILE,
+          ORG_ASSIGNMENTS_FILE,
+          ROLE_FILE("ProjectLead"),
+          ROLE_FILE("TenantAdmin")
+        ),
+        {
+          [PROJECT_FILE]: {
+            assignmentSources: [
+              grantsSource({
+                id: uuid(6122),
+                name: "orgGrants",
+                assignedOn: { scopeKind: "org" },
+                columns: { member: "memberId", role: "roleKey", scope: null },
+              }),
+            ],
+          },
+          [GRANT_FILE]: grantTable(),
+        }
+      ),
+      expected: [rootCreator("rights.root-creator-assignments", owner)],
+    },
+    {
+      case: "root create on own without an author",
+      input: withRoles(tenantSelfService(), {
+        [ORGANIZATION_FILE]: { trackAuthor: false },
+      }),
+      expected: [author(ROLE_FILE("TenantFounder"))],
+    },
+    {
+      case: "root create on own with an owner other than createdBy",
+      input: withRoles(tenantSelfService(), {
+        [ORGANIZATION_FILE]: {
+          ownership: ["owner"],
+          attributes: [
+            refAttribute(8241, "owner", "owner_id", ref("Catalog", "Users")),
+          ],
+        },
+      }),
+      expected: [author(ROLE_FILE("TenantFounder"))],
+    },
+    {
+      case: "root create on own in a global role without an author",
+      input: withRoles({
+        [ROLE_FILE("Support")]: {
+          grants: [grant(ORGANIZATION, ["create"], "own")],
+        },
+      }),
+      expected: [author(ROLE_FILE("Support"))],
+    },
+    {
+      case: "a root creator without full access and rights administration",
+      input: withRoles(tenantSelfService({ fullAccess: false }), {
+        [owner]: {
+          grants: [
+            grant(ORGANIZATION, ["read", "update"], "any"),
+            grant(
+              objects(["Catalog", "OrgMember"]),
+              ["read", "create", "update"],
+              "any"
+            ),
+          ],
+        },
+      }),
+      expected: [
+        rootCreator("rights.root-creator-no-admin", owner, {
+          role: "TenantOwner",
+          scopeKind: "org",
+        }),
+      ],
+    },
+    {
+      case: "a root creator administering rights without full access",
+      input: withRoles(tenantSelfService({ fullAccess: false })),
+      expected: [],
+    },
+  ])("reports $case", async ({ input, expected }) => {
+    expect(await rootRules(input)).toEqual(expected)
   })
 })

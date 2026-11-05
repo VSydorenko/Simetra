@@ -56,6 +56,7 @@ import { buildRightsGuardUnits } from "./rights/guard-units"
 import { snapshotExemptWriters } from "./rights/snapshot-exempt-writers"
 import { snapshotSources } from "./rights/snapshot-sources"
 import { scopeKindUnreadWarnings } from "./rights/scope-kind-warnings"
+import { rootCreatorAdminWarnings } from "./rights/role-checks"
 import {
   rightsCatalogContracts,
   rightsCatalogTables,
@@ -365,13 +366,19 @@ export async function runStages(
       diagnostics: sortDiagnostics([...staged, ...projection.diagnostics]),
     }
   }
-  // Вид скоупу, об'єктів якого не читає жодна роль (спека прав §5.2), видно лише на
-  // проєкції ролей — тож попередження йде після неї й не зупиняє компіляції.
+  // Вид скоупу, об'єктів якого не читає жодна роль (спека прав §5.2), і творця
+  // кореня без адміністрування прав рівня (спека прав §4.1) видно лише на
+  // проєкції ролей — тож попередження йдуть після неї й не зупиняють компіляції.
   const diagnostics = sortDiagnostics([
     ...staged,
     ...scopeKindUnreadWarnings(
       { rights, roles, rightsProjection: projection.rows },
       stage1.project
+    ),
+    ...rootCreatorAdminWarnings(
+      { rights, roles, rightsProjection: projection.rows },
+      stage1.objects,
+      stage1.project.scopeKinds
     ),
   ])
   // Довідники прав потрібні і контрактам, і генератору прав серед SQL-одиниць:

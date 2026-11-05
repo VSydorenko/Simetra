@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from "vitest"
 import type { CompiledModel, CompileResult } from "simetra/compiler"
-import { compile } from "simetra/compiler"
+import { compile, rightsDomainRows } from "simetra/compiler"
 import { PLATFORM_ROLES, PROVIDER_API_ROLES } from "simetra/model"
 import type {
   QualifiedName,
@@ -41,6 +41,8 @@ import {
   ADOPTED_LEAD_KEY,
   ADOPTED_SUPPORT_KEY,
   EVERYONE_ID,
+  GLOBAL_FOUNDER_ID,
+  GLOBAL_FULL_ID,
   GLOBAL_GRANTS_SOURCE_ID,
   GRANTS_SOURCE_ID,
   GRANT_FILE,
@@ -57,6 +59,8 @@ import {
   SUPPORT_ID,
   TASK_FILE,
   TEAM_KIND_ID,
+  TENANT_FOUNDER_ID,
+  TENANT_OWNER_ID,
   USERS_FILE,
   activeGrants,
   adoptedSourcesDomain,
@@ -64,6 +68,7 @@ import {
   compileRights,
   compiledPolicyDomain,
   grant,
+  grantAll,
   grantTable,
   grantsSource,
   membersSource,
@@ -75,6 +80,8 @@ import {
   role,
   secondScopeKind,
   singleTenantRights,
+  tenantOperator,
+  tenantSelfService,
   unscopedDimension,
   withRoles,
   withoutUsers,
@@ -901,6 +908,78 @@ function sourceArm(model: CompiledModel, sourceId: string): Select {
 }
 
 const CURRENT = "(SELECT simetra.current_user_id())"
+
+describe("root create is explicit only", () => {
+  // Розгортання (`fullAccess`, `grantAll`, `withAction`) `create` кореня не дає
+  // (спека прав Рх7, Р-A6-1); домен рівня `global`/`everyUser` пару містить —
+  // дельта глобальної кастомної ролі може її дати, ⊆ стримує.
+  let model: CompiledModel
+  beforeAll(async () => {
+    model = await compiled(
+      withRoles(tenantSelfService(), tenantOperator(), {
+        [ROLE_FILE("Support")]: {
+          grants: [
+            grantAll("any"),
+            grant({ withAction: "create" }, ["create"], "any"),
+          ],
+        },
+      })
+    )
+  })
+
+  const rootCreate = (row: Value[], at: number) =>
+    row[at] === "organization" && row[at + 1] === "create"
+
+  it("leaves root create out of the expanded projection", () => {
+    const holders = valuesRows(model, RIGHTS_FUNCTIONS.projection.name)
+      .filter((row) => rootCreate(row, 1))
+      .map(([roleId, , , extent]) => [roleId, extent])
+    expect(holders).toEqual(
+      [
+        [TENANT_FOUNDER_ID, "own"],
+        [GLOBAL_FOUNDER_ID, "any"],
+        [GLOBAL_FOUNDER_ID, "own"],
+      ].sort((a, b) => compareStrings(a[0]!, b[0]!))
+    )
+    // `fullAccess` рівня скоупу дає решту дій кореня.
+    expect(
+      valuesRows(model, RIGHTS_FUNCTIONS.projection.name).filter(
+        ([roleId, object, action]) =>
+          roleId === TENANT_OWNER_ID &&
+          object === "organization" &&
+          action === "read"
+      )
+    ).not.toEqual([])
+  })
+
+  it("keeps root create in the domain of the global and everyUser levels only", () => {
+    const domain = valuesRows(model, RIGHTS_FUNCTIONS.domain.name)
+      .filter((row) => rootCreate(row, 2))
+      .map(([level, , , , extent]) => [level, extent])
+    expect(domain).toEqual([
+      ["global", "any"],
+      ["global", "own"],
+      ["everyUser", "own"],
+    ])
+    const delta = rightsDomainRows(model.contracts)
+      .filter((row) => row.object === "organization" && row.action === "create")
+      .map((row) => [row.roleId, row.extent])
+    expect(new Set(delta.map(([roleId]) => roleId))).toEqual(
+      new Set(
+        model.contracts.roles
+          .filter(
+            (r) =>
+              r.assignedOn.level === "global" ||
+              r.assignedOn.level === "everyUser"
+          )
+          .map((r) => r.roleId)
+      )
+    )
+    expect(delta).toContainEqual([GLOBAL_FULL_ID, "any"])
+    expect(delta).toContainEqual([TENANT_FOUNDER_ID, "own"])
+    expect(delta).not.toContainEqual([TENANT_FOUNDER_ID, "any"])
+  })
+})
 
 describe("rights functions over adopted sources", () => {
   let model: CompiledModel

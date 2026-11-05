@@ -1,6 +1,14 @@
-import { KIND_REGISTRY, STANDARD_ACTIONS, type Role } from "simetra/model"
+import {
+  KIND_REGISTRY,
+  MEMBERSHIP_SET_FUNCTION,
+  STANDARD_ACTIONS,
+  type Role,
+  type ScopeKind,
+} from "simetra/model"
+import type { Contracts } from "../contracts"
 import { diagnostic, type Diagnostic } from "../diagnostics"
 import type { ParsedObject } from "../stages/files"
+import { standardElementId } from "../stages/identity"
 import { membershipOfScopeKind, type RightsCheckContext } from "./checks"
 import {
   customActionsOf,
@@ -10,6 +18,7 @@ import {
   isRightsContainer,
   isRightsDeclaration,
   levelKey,
+  ownershipOf,
   recordCustomAction,
   recordExtent,
   recordObjects,
@@ -112,6 +121,9 @@ export function checkRoles(ctx: RightsCheckContext): Diagnostic[] {
       if (kind !== "scope") {
         report("rights.root-creator-level", "/rootCreator", { level: kind })
       } else if (level?.level === "scope" && scopeKind !== undefined) {
+        for (const code of rootCreatorKindProblems(level.scopeKindId, ctx)) {
+          report(code, "/rootCreator", { scopeKind })
+        }
         const firstFile = rootCreators.get(level.scopeKindId)
         if (firstFile === undefined) {
           rootCreators.set(level.scopeKindId, object.file)
@@ -168,6 +180,104 @@ export function checkRoles(ctx: RightsCheckContext): Diagnostic[] {
   return diagnostics
 }
 
+/**
+ * Чого бракує виду скоупу для творця кореня (спека П4 §6.13, спека прав
+ * §4.1). Функція гранту вставляє рядок довідника членства й рядок довідника
+ * призначень свого рівня, тож прийняте джерело замість них не підходить:
+ * його платформа лише читає, а таблиць знімка й маркера без довідника прав
+ * немає. Межу тенанта виду з дослівною функцією множини читає знімок
+ * `scopeSets`, а вихід дослівної функції функція гранту дописати не може —
+ * новий тенант лишився б невидимим творцю.
+ */
+function rootCreatorKindProblems(
+  scopeKindId: string,
+  ctx: RightsCheckContext
+): (
+  | "rights.root-creator-membership"
+  | "rights.root-creator-set-function"
+  | "rights.root-creator-assignments"
+)[] {
+  const problems: ReturnType<typeof rootCreatorKindProblems> = []
+  // Вид зовсім без членства вже має `rights.scope-without-membership`.
+  if (membershipOfScopeKind(scopeKindId, ctx.objects, ctx) === "source") {
+    problems.push("rights.root-creator-membership")
+  }
+  const kind = ctx.scopeKinds.find((k) => k.id === scopeKindId)
+  if (kind !== undefined && kind.setFunction !== MEMBERSHIP_SET_FUNCTION) {
+    problems.push("rights.root-creator-set-function")
+  }
+  const assignments = ctx.objects.some(
+    (object) =>
+      KIND_REGISTRY[object.kind].rightsSystem?.(object.data) ===
+        "roleAssignments" && scopeKindOf(object, ctx.references) === scopeKindId
+  )
+  if (!assignments) problems.push("rights.root-creator-assignments")
+  return problems
+}
+
+/**
+ * Корінь скоупу має власника `createdBy` (стандартний реквізит авторства, сам
+ * носій, не шлях): `create@own` кореня інакше не відкрив би жодного рядка —
+ * іншого власника новий корінь ще не має (спека прав §4.1).
+ */
+function rootOwnedByAuthor(
+  object: ParsedObject,
+  references: RightsCheckContext["references"]
+): boolean {
+  const author = standardElementId(must(object.id), {
+    logicalName: "createdBy",
+  })
+  return ownershipOf(object).some(
+    (carrier, index) =>
+      typeof carrier === "string" &&
+      references.some(
+        (r) =>
+          r.from.file === object.file &&
+          r.from.pointer === `/ownership/${index}` &&
+          r.role === "rights.carrier" &&
+          r.to.id === author
+      )
+  )
+}
+
+/**
+ * Попередження на творця кореня без `fullAccess` і без `administerRights` на
+ * довідниках прав свого рівня (спека прав §4.1): творець не зможе призначити
+ * роль нікому в новому тенанті. Видно лише на проєкції — набори ролі вже
+ * розгорнуто.
+ */
+export function rootCreatorAdminWarnings(
+  contracts: Pick<Contracts, "rights" | "roles" | "rightsProjection">,
+  objects: readonly ParsedObject[],
+  scopeKinds: readonly Pick<ScopeKind, "id" | "name">[]
+): Diagnostic[] {
+  const rights = new Map(contracts.rights.map((c) => [c.objectId, c]))
+  return contracts.roles.flatMap((role) => {
+    const level = role.assignedOn
+    if (!role.rootCreator || role.fullAccess || level.level !== "scope") {
+      return []
+    }
+    const administers = contracts.rightsProjection.some((row) => {
+      const contract = rights.get(row.objectId)
+      return (
+        row.roleId === role.roleId &&
+        row.action === "administerRights" &&
+        contract?.system !== undefined &&
+        contract.scopeKindId === level.scopeKindId
+      )
+    })
+    if (administers) return []
+    const file = must(objects.find((o) => o.id === role.roleId)).file
+    const scopeKind = must(scopeKinds.find((k) => k.id === level.scopeKindId))
+    return [
+      diagnostic("rights.root-creator-no-admin", file, "/rootCreator", {
+        role: role.name,
+        scopeKind: scopeKind.name,
+      }),
+    ]
+  })
+}
+
 const STANDARD_WORDS: ReadonlySet<string> = new Set(STANDARD_ACTIONS)
 
 /**
@@ -179,6 +289,11 @@ const STANDARD_WORDS: ReadonlySet<string> = new Set(STANDARD_ACTIONS)
  */
 function checkGrants(ctx: RightsCheckContext): Diagnostic[] {
   const diagnostics: Diagnostic[] = []
+  const roots = new Set(
+    ctx.references
+      .filter((r) => r.role === "scopeKind.root")
+      .map((r) => r.to.id)
+  )
   for (const object of ctx.objects.filter(isRightsDeclaration)) {
     for (const record of grantRecords(object)) {
       const at = record.pointer
@@ -272,6 +387,15 @@ function checkGrants(ctx: RightsCheckContext): Diagnostic[] {
           })
         }
       })
+      if (extent === "own" && record.actions.includes("create")) {
+        for (const target of targets) {
+          if (!roots.has(must(target.id))) continue
+          if (rootOwnedByAuthor(target, ctx.references)) continue
+          report("rights.root-create-author", `${at}/extent`, {
+            object: target.name,
+          })
+        }
+      }
       if (extent === undefined || compiled === undefined) continue
       for (const target of targets) {
         const extents = supportedExtents(target, ctx.references)

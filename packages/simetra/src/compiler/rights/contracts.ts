@@ -129,8 +129,23 @@ function rightsContract(
   const customEffects = new Map(
     custom.map(({ action }) => [action, customActionEffects(action)])
   )
+  // Корінь виду скоупу — ціль посилання `scopeKind.root`; зовнішній корінь
+  // об'єкта не має.
+  const root = references.some(
+    (r) => r.role === "scopeKind.root" && r.to.id === objectId
+  )
+  // Ребро `create ⇒ read` кореня знято (спека прав Рх9): `read` кореня дає лише
+  // роль рівня скоупу, а `create` — лише `global` чи `everyUser` (Рх7), тож з
+  // ребром право створення не діяло б ніколи. Реєстр видів не знає, який об'єкт
+  // — корінь, тож ребро знімає контракт.
+  const standardRequires = (a: (typeof standard)[number]) => {
+    const edges = actionRequires(a)
+    return root && a.name === "create"
+      ? edges.filter((edge) => edge !== "read")
+      : edges
+  }
   const closed = closeRequires([
-    ...standard.map((a) => ({ name: a.name, requires: actionRequires(a) })),
+    ...standard.map((a) => ({ name: a.name, requires: standardRequires(a) })),
     ...custom.map(({ action }) => ({
       name: must(action.id),
       requires: actionRequires({
@@ -299,6 +314,7 @@ function rightsContract(
     kindLabel: label,
     table: { schema: table.schema, name: table.name },
     ...(scopeKindId === undefined ? {} : { scopeKindId }),
+    ...(root ? { root: true as const } : {}),
     actions,
     transitions,
     ownership,

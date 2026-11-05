@@ -381,6 +381,12 @@ export interface RightsContract {
   table: QualifiedName
   /** Немає — об'єкт без скоупу. */
   scopeKindId?: string
+  /**
+   * Об'єкт — корінь виду скоупу (`scopeKinds[].root.objectId`). `create` кореня
+   * дає лише явний грант ролі `global` чи `everyUser` і не вимагає `read`
+   * (спека прав Рх7, Рх9).
+   */
+  root?: true
   /** Стандартні дії в порядку реєстру, далі кастомні за `id`. */
   actions: RightsAction[]
   /**

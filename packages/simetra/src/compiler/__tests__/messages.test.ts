@@ -734,6 +734,49 @@ describe("messages catalog", () => {
     }
   )
 
+  it.each([
+    ["rights.root-creator-membership", { scopeKind: "org" }, "error"],
+    ["rights.root-creator-set-function", { scopeKind: "org" }, "error"],
+    ["rights.root-creator-assignments", { scopeKind: "org" }, "error"],
+    [
+      "rights.root-creator-subscription",
+      { source: "OrgMember", scopeKind: "org" },
+      "error",
+    ],
+    ["rights.root-create-author", { object: "Organization" }, "error"],
+    [
+      "rights.root-creator-no-admin",
+      { role: "TenantOwner", scopeKind: "org" },
+      "warning",
+    ],
+  ] as const)(
+    "%s names its parameters in both locales",
+    (code, params, severity) => {
+      const d = diagnostic(code, "", "", params)
+      expect(d.severity).toBe(severity)
+      for (const value of Object.values(params)) {
+        expect(d.message).toContain(value)
+        expect(localize(d, "uk").message).toContain(value)
+      }
+    }
+  )
+
+  it("rights.grant-level explains the root create rule on a scope root", () => {
+    const d = diagnostic("rights.grant-level", "", "", {
+      object: "Organization",
+      action: "create",
+      level: "scope",
+      role: "OrgMember",
+      root: "true",
+    })
+    expect(d.message).toBe(
+      'Role OrgMember cannot grant "create" on scope root Organization: only an explicit grant of a global or every-user role on the any or own extent gives create of a scope root, and a role of its scope kind gives the other actions'
+    )
+    expect(localize(d, "uk").message).toBe(
+      'Роль OrgMember не може дати "create" на корені скоупу Organization: create кореня скоупу дає лише явний грант глобальної ролі чи ролі кожного користувача з обсягом any чи own, а решту дій — роль його виду скоупу'
+    )
+  })
+
   it("rights.scope-without-membership names the container when there is one", () => {
     const d = diagnostic("rights.scope-without-membership", "", "", {
       scopeKind: "team",

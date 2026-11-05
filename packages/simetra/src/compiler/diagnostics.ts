@@ -156,6 +156,12 @@ export const COMPILER_RULES = [
   "rights.full-access-level",
   "rights.root-creator-level",
   "rights.root-creator-duplicate",
+  "rights.root-creator-membership",
+  "rights.root-creator-set-function",
+  "rights.root-creator-assignments",
+  "rights.root-creator-subscription",
+  "rights.root-create-author",
+  "rights.root-creator-no-admin",
   "rights.source-unknown",
   "rights.source-key-level",
   "rights.source-key-duplicate",
@@ -444,7 +450,10 @@ export interface Diagnostic {
  * функції множини такий запис — помилка `sql.command-context-write`. Власника
  * `SECURITY DEFINER`-функції чи подання статично не видно, а подання може
  * само фільтрувати рядки функціями прав, тож читання таблиці під RLS повз
- * права викликача — попередження (платформна спека §6.7).
+ * права викликача — попередження (платформна спека §6.7). Творець кореня без
+ * `fullAccess` і без адміністрування прав рівня (`rights.root-creator-no-admin`)
+ * може бути задумом застосунку — ролі в тенанті тоді призначає оператор, — тож
+ * це попередження, а не відмова (спека прав §4.1).
  */
 const WARNING_RULES: ReadonlySet<RuleCode> = new Set<RuleCode>([
   "physical.reserved-word",
@@ -458,6 +467,7 @@ const WARNING_RULES: ReadonlySet<RuleCode> = new Set<RuleCode>([
   "rewrite.dynamic-sql-unscoped",
   "rights.adopted-source-writes",
   "rights.scope-kind-unread",
+  "rights.root-creator-no-admin",
   "sql.debt-session-write",
   "sql.debt-extension-schema",
   "sql.definer-reads-rls",

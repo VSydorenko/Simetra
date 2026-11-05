@@ -100,7 +100,7 @@ export function catalog(
 }
 
 /** Вид скоупу `org` фікстури: членство дає довідник `OrgMember`. */
-const ORG_SCOPE_KIND = {
+export const ORG_SCOPE_KIND = {
   id: ORG_KIND_ID,
   name: "org",
   physicalName: "org_id",
@@ -2756,4 +2756,216 @@ export function adoptedSnapshotDomain(): Map<string, string> {
     `CREATE FUNCTION public.org_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT m.org_id FROM public.membership m WHERE m.user_id = (SELECT simetra.current_user_id()) AND m.is_active IS TRUE AND m.org_id IN (SELECT g.org FROM public.${SNAPSHOT_ORG_GUEST_TABLE} g WHERE g.user_id = (SELECT simetra.current_user_id())) $$;`
   )
   return files
+}
+
+export const TENANT_FOUNDER_ID = uuid(8201)
+export const TENANT_OWNER_ID = uuid(8202)
+export const TENANT_AUDITOR_ID = uuid(8203)
+export const TENANT_ADMIN_ID = uuid(8204)
+export const TENANT_READER_ID = uuid(8205)
+export const COUNTRY_FILE = "catalogs/Country/Country.meta.json"
+export const COUNTRY_ID = uuid(8210)
+
+/**
+ * Самообслуговування тенантів (спека П4 §6.13) поверх `withRoles`/`policyDomain`:
+ * `Organization` з авторством і власністю `createdBy`; «кожен користувач»
+ * `TenantFounder` створює корінь (`create@own`) і бачить власний профіль у
+ * «Користувачах» — видима ціль `Ref` для кейсів перевірки посилань.
+ * `TenantOwner` — творець кореня виду `org`; без `fullAccess` має рівно запис
+ * кореня й учасників та адміністрування призначень. `TenantAuditor` має
+ * `markDeletion` кореня, якого `TenantOwner` без `fullAccess` не має;
+ * `TenantAdmin` лише адмініструє призначення, `TenantReader` лише читає корінь
+ * (обидва ⊆ `TenantOwner`). `OrgMember` отримує поліморфний `Ref` і масив
+ * `Ref` на нескоуплені цілі (`Users`, `Country`); `requiredMember` додає
+ * обов'язковий `title` поруч із ними — композиція з `requiredMemberAttribute()`
+ * перезаписала б реквізити `OrgMember` (шари зливаються поверхнево).
+ */
+export function tenantSelfService(
+  options: {
+    fullAccess?: boolean
+    requiredMember?: boolean
+    founder?: boolean
+  } = {}
+): Layer {
+  const { fullAccess = true, requiredMember = false, founder = true } = options
+  const organization = objects(["Catalog", "Organization"])
+  const members = objects(["Catalog", "OrgMember"])
+  const assignments = objects(["Catalog", "OrgRoleAssignments"])
+  return {
+    [ORGANIZATION_FILE]: { trackAuthor: true, ownership: ["createdBy"] },
+    [USERS_FILE]: { ownership: ["ref"] },
+    [COUNTRY_FILE]: catalog(COUNTRY_ID, "Country", "country", {
+      scope: "none",
+    }),
+    [MEMBER_FILE]: {
+      attributes: [
+        refAttribute(6005, "user", "user_id", ref("Catalog", "Users")),
+        {
+          id: uuid(8211),
+          name: "contact",
+          physicalName: "contact",
+          type: "Ref",
+          allowedTypes: objects(["Catalog", "Users"], ["Catalog", "Country"]),
+        },
+        {
+          ...refAttribute(
+            8212,
+            "countries",
+            "countries",
+            ref("Catalog", "Country")
+          ),
+          array: true,
+        },
+        ...(requiredMember
+          ? [
+              {
+                id: uuid(7530),
+                name: MEMBER_TITLE,
+                physicalName: MEMBER_TITLE,
+                type: "String",
+                length: 50,
+                required: true,
+              },
+            ]
+          : []),
+      ],
+    },
+    [ROLE_FILE("TenantFounder")]: role(
+      TENANT_FOUNDER_ID,
+      "TenantFounder",
+      "everyUser",
+      {
+        grants: [
+          ...(founder ? [grant(organization, ["create"], "own")] : []),
+          grant(objects(["Catalog", "Users"]), ["read"], "own"),
+        ],
+      }
+    ),
+    [ROLE_FILE("TenantOwner")]: role(
+      TENANT_OWNER_ID,
+      "TenantOwner",
+      { scopeKind: "org" },
+      fullAccess
+        ? { rootCreator: true, fullAccess: true }
+        : {
+            rootCreator: true,
+            grants: [
+              grant(organization, ["read", "update"], "any"),
+              grant(members, ["read", "create", "update"], "any"),
+              grant(assignments, ["read", "administerRights"], "any"),
+            ],
+          }
+    ),
+    [ROLE_FILE("TenantAuditor")]: role(
+      TENANT_AUDITOR_ID,
+      "TenantAuditor",
+      { scopeKind: "org" },
+      { grants: [grant(organization, ["read", "markDeletion"], "any")] }
+    ),
+    [ROLE_FILE("TenantAdmin")]: role(
+      TENANT_ADMIN_ID,
+      "TenantAdmin",
+      { scopeKind: "org" },
+      { grants: [grant(assignments, ["read", "administerRights"], "any")] }
+    ),
+    [ROLE_FILE("TenantReader")]: role(
+      TENANT_READER_ID,
+      "TenantReader",
+      { scopeKind: "org" },
+      { grants: [grant(organization, ["read"], "any")] }
+    ),
+  }
+}
+
+export const BRANCH_KIND_ID = uuid(8220)
+export const BRANCH_FILE = "catalogs/Branch/Branch.meta.json"
+export const BRANCH_MEMBER_FILE = "catalogs/BranchMember/BranchMember.meta.json"
+export const BRANCH_ROLES_FILE = "catalogs/BranchRoles/BranchRoles.meta.json"
+export const BRANCH_ASSIGNMENTS_FILE =
+  "catalogs/BranchRoleAssignments/BranchRoleAssignments.meta.json"
+export const BRANCH_ADMIN_ID = uuid(8226)
+export const TENANT_OPERATOR_ID = uuid(8230)
+export const GLOBAL_FOUNDER_ID = uuid(8231)
+export const GLOBAL_FULL_ID = uuid(8232)
+
+/**
+ * Модель оператора (спека П4 §6.13): другий вид скоупу `branch` без
+ * `rootCreator` — корінь `Branch`, учасники `BranchMember`, власні довідники
+ * прав і роль `BranchAdmin` з `fullAccess`. Глобальні ролі: `TenantOperator`
+ * створює `Branch`, `GlobalFounder` — `Organization` (вид з творцем: творця
+ * отримує й глобальний актор, Р-A6-19), `GlobalFull` має `fullAccess` без явного
+ * гранту на корені (Р-A6-1), `GlobalAdmin` адмініструє глобальні призначення.
+ * `GlobalAdmin` — той самий файл, що в `adminRoles()`: `fullAccess: false`
+ * явно, тож шар поверх `adminRoles()` дає саме цю роль.
+ */
+export function tenantOperator(): Layer {
+  const branchKind = {
+    id: BRANCH_KIND_ID,
+    name: "branch",
+    physicalName: "branch_id",
+    root: { object: ref("Catalog", "Branch") },
+    setFunction: "membership",
+  }
+  return {
+    [PROJECT_FILE]: { scopeKinds: [ORG_SCOPE_KIND, branchKind] },
+    [BRANCH_FILE]: catalog(uuid(8221), "Branch", "branch", {
+      scope: "branch",
+    }),
+    [BRANCH_MEMBER_FILE]: catalog(uuid(8222), "BranchMember", "branch_member", {
+      scope: "branch",
+      membership: { user: "user" },
+      attributes: [
+        refAttribute(8223, "user", "user_id", ref("Catalog", "Users")),
+      ],
+    }),
+    [BRANCH_ROLES_FILE]: systemCatalog(
+      uuid(8224),
+      "BranchRoles",
+      "branch_roles",
+      "rightsRoles",
+      "branch"
+    ),
+    [BRANCH_ASSIGNMENTS_FILE]: systemCatalog(
+      uuid(8225),
+      "BranchRoleAssignments",
+      "branch_role_assignments",
+      "roleAssignments",
+      "branch"
+    ),
+    [ROLE_FILE("BranchAdmin")]: role(
+      BRANCH_ADMIN_ID,
+      "BranchAdmin",
+      { scopeKind: "branch" },
+      { fullAccess: true }
+    ),
+    [ROLE_FILE("TenantOperator")]: role(
+      TENANT_OPERATOR_ID,
+      "TenantOperator",
+      "global",
+      { grants: [grant(objects(["Catalog", "Branch"]), ["create"], "any")] }
+    ),
+    [ROLE_FILE("GlobalFounder")]: role(
+      GLOBAL_FOUNDER_ID,
+      "GlobalFounder",
+      "global",
+      {
+        grants: [
+          grant(objects(["Catalog", "Organization"]), ["create"], "any"),
+        ],
+      }
+    ),
+    [ROLE_FILE("GlobalFull")]: role(GLOBAL_FULL_ID, "GlobalFull", "global", {
+      fullAccess: true,
+    }),
+    [ROLE_FILE("GlobalAdmin")]: role(GLOBAL_ADMIN_ID, "GlobalAdmin", "global", {
+      fullAccess: false,
+      grants: [
+        grant(
+          objects(["Catalog", "GlobalRoleAssignments"]),
+          ["read", "administerRights"],
+          "any"
+        ),
+      ],
+    }),
+  }
 }

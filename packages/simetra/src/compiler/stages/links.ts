@@ -6,6 +6,7 @@ import {
   type MovementDecl,
   type PhysicalSnapshot,
   type Project,
+  type Role,
   type SubscriptionSpec,
 } from "simetra/model"
 import type { Node } from "libpg-query"
@@ -17,6 +18,12 @@ import { closedShellProblem } from "../sql/closed-forms"
 import { checkDefinerReads } from "../sql/definer-reads"
 import { checkGeneratedCalls } from "../sql/function-body"
 import { checkDimensionFunctions } from "../rights/dimension-functions"
+import {
+  declarationsOf,
+  isMembershipCatalog,
+  roleLevel,
+  scopeKindOf,
+} from "../rights/facts"
 import {
   nullaryFunction,
   setFunctionClosedProblem,
@@ -105,7 +112,71 @@ export function checkLinks(
       plpgsql
     ),
     ...checkDefinerReads(objects, project, physical, units, parse, plpgsql),
+    ...checkRootCreatorSubscriptions(objects, references, project),
   ]
+}
+
+/** Події, тригер яких завжди має `INSERT` (`compiler/subscription-units.ts`). */
+const WRITE_EVENTS: ReadonlySet<string> = new Set(["beforeWrite", "onWrite"])
+
+/**
+ * Підписка запису на довідник членства чи «Призначення ролей» виду з творцем
+ * кореня (спека П4 §6.13): функція гранту вставляє туди рядки творця від імені
+ * власника, тож SQL-обробник ішов би повз команду й бачив би рядок, якого
+ * команда не перевіряла. Хук команди довідника бачить ту саму чернетку до
+ * запису. Подія запису завжди має тригер `INSERT` (з `whenChanged` — окремий),
+ * а подія видалення вставки не зачіпає.
+ */
+function checkRootCreatorSubscriptions(
+  objects: readonly ParsedObject[],
+  references: readonly ResolvedReference[],
+  project: Project
+): Diagnostic[] {
+  const kinds = new Set(
+    declarationsOf(objects, "role").flatMap((object) => {
+      const level = roleLevel(object, references)
+      return (object.data as Role).rootCreator && level?.level === "scope"
+        ? [level.scopeKindId]
+        : []
+    })
+  )
+  if (kinds.size === 0) return []
+  const targets = new Map<string, { name: string; scopeKind: string }>()
+  for (const object of objects) {
+    const scopeKindId = scopeKindOf(object, references)
+    if (scopeKindId === undefined || !kinds.has(scopeKindId)) continue
+    const writtenByGrant =
+      isMembershipCatalog(object) ||
+      KIND_REGISTRY[object.kind].rightsSystem?.(object.data) ===
+        "roleAssignments"
+    const kind = project.scopeKinds.find((k) => k.id === scopeKindId)
+    if (writtenByGrant && object.id !== undefined && kind !== undefined) {
+      targets.set(object.id, { name: object.name, scopeKind: kind.name })
+    }
+  }
+  return objects.flatMap((object) => {
+    const spec = KIND_REGISTRY[object.kind].subscription?.(object.data)
+    if (spec === undefined || !WRITE_EVENTS.has(spec.event)) return []
+    return spec.sources.flatMap((source) => {
+      const id = references.find(
+        (r) =>
+          r.from.file === object.file &&
+          r.from.pointer === source.pointer &&
+          r.role === "eventSubscription.source"
+      )?.to.id
+      const target = id === undefined ? undefined : targets.get(id)
+      return target === undefined
+        ? []
+        : [
+            diagnostic(
+              "rights.root-creator-subscription",
+              object.file,
+              source.pointer,
+              { source: target.name, scopeKind: target.scopeKind }
+            ),
+          ]
+    })
+  })
 }
 
 /**

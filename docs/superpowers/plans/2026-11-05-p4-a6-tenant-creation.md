@@ -205,7 +205,7 @@
     `rights.root-creator-assignments`,
     `rights.root-creator-no-admin` (warning).
 
-- [ ] **Крок 1 (unit, червоні).** У `rights-expand.test.ts` — `describe.each`
+- [x] **Крок 1 (unit, червоні).** У `rights-expand.test.ts` — `describe.each`
   «root create by level»: явний `create` на `Organization` — `global` і
   `everyUser@own` проходять; рівень `org` і контейнер — `rights.grant-level`;
   `everyUser@any` — `rights.grant-level`; `create@<вимір>` кореня на будь-якому
@@ -218,9 +218,9 @@
   `RightsAction.requires` `create` кореня порожній, `create` іншого довідника
   — `["read"]`; роль `global` лише з `create` кореня — без
   `rights.requires-missing`.
-- [ ] **Крок 2.** Реалізація (факт кореня — `RightsContract.root`, не назва
+- [x] **Крок 2.** Реалізація (факт кореня — `RightsContract.root`, не назва
   виду).
-- [ ] **Крок 3 (unit, червоні).** `it.each` у `rights-roles.test.ts`: вид з
+- [x] **Крок 3 (unit, червоні).** `it.each` у `rights-roles.test.ts`: вид з
   `rootCreator` без довідника з `membership` (лише прийняте джерело) —
   `rights.root-creator-membership`; вид з `rootCreator` і дослівною функцією
   множини — `rights.root-creator-set-function`; вид з `rootCreator`,
@@ -234,7 +234,7 @@
   `INSERT` `OrgMember` і «Призначень ролей» рівня `org` у проєкті з
   `tenantSelfService()` — `rights.root-creator-subscription`; на `UPDATE` тих
   самих таблиць і на `INSERT` `BranchMember` (`tenantOperator()`) — без.
-- [ ] **Крок 4.** Реалізація діагностик, тексти en/uk. Фікстура `kitchen-sink`
+- [x] **Крок 4.** Реалізація діагностик, тексти en/uk. Фікстура `kitchen-sink`
   (`OrgOwner` з `rootCreator` і `sourceKeys` прийнятого джерела призначень,
   без довідника «Призначення ролей») тепер дає `rights.root-creator-assignments`:
   `rootCreator` з `OrgOwner` прибрати; твердження, що спирались на нього
@@ -245,7 +245,7 @@
   точному переліку діагностик.
   Наявні фікстури з грантом рівня скоупу на `create` кореня — переписати під
   Р-A6-1, перевірку не послаблювати.
-- [ ] **Крок 5.** `pnpm --filter simetra test rights-expand rights-roles rights-contract event-subscriptions messages platform-layer reference-index-completeness rights-functions key-units`
+- [x] **Крок 5.** `pnpm --filter simetra test rights-expand rights-roles rights-contract event-subscriptions messages platform-layer reference-index-completeness rights-functions key-units`
   (тести, що читають діагностики `kitchen-sink`; виконавець доповнює перелік за
   `grep -l kitchen-sink packages/simetra/src/compiler/__tests__`);
   lint, typecheck; коміт `feat(compiler): право create кореня скоупу — лише явний грант global чи everyUser`.
@@ -690,6 +690,32 @@ Postgres.
 ## Журнал рішень виконання
 
 (заповнює виконавець: рішення, відхилення, вплив на спеку)
+
+- **Задача 1, крок 3 — «підписка на `UPDATE`».** Подія запису
+  (`beforeWrite`/`onWrite`) завжди має тригер `INSERT` (`subscription-units.ts`;
+  `whenChanged` звужує лише тригер `UPDATE`), підписки лише на `UPDATE` у
+  метаданих немає. Негативні кейси — події видалення на тих самих таблицях і
+  `onWrite` на `BranchMember`. Вплив на спеку: немає.
+- **Задача 1, крок 1 — місце тестів «root create is explicit only».** Розгорнута
+  проєкція й домен рівня видно лише у `VALUES` функцій `rights_projection` і
+  `rights_domain`, тож тести — у `rights-functions.test.ts` (там помічник
+  `valuesRows`), `rightsDomainRows` — там само. Вплив на спеку: немає.
+- **`rights.grant-level` на корені** отримує параметр `root` і власний текст
+  (правило кореня, а не загальне правило рівня). Обсяг виміру на `create`
+  кореня — та сама діагностика на дії. Вплив на спеку: немає.
+- **`rights.root-creator-membership`** — лише коли членство виду з прийнятого
+  джерела: вид без членства вже має `rights.scope-without-membership`.
+  **`rights.root-creator-no-admin`** знімає `administerRights` на будь-якому
+  довіднику прав свого рівня («Ролі» чи «Призначення ролей»), як у §4.1.
+  **`rights.root-create-author`** — правило стадії 4 без рівня (і в наборах):
+  `create@own` кореня без `createdBy` не відкриває рядка на жодному рівні.
+  Вплив на спеку: немає.
+- **Фікстури.** `GlobalAdmin` з `tenantOperator()` — той самий файл і id, що в
+  `adminRoles()`, з явним `fullAccess: false`: шар поверх `adminRoles()` дає
+  роль плану. Нескоуплена ціль `Ref` учасника — новий довідник `Country`.
+  Літерал хешу моделі `policyDomain(runtimeValuesLayer())` у
+  `runtime-catalog.test.ts` оновлено: контракт прав отримав `root`, проєкція
+  `fullAccess` втратила `create` кореня. Вплив на спеку: немає.
 
 ## Журнал мутацій
 
