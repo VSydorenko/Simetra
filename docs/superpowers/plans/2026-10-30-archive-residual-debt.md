@@ -334,6 +334,15 @@
 
 ## 7. Тести
 
+- **Флейк входу тегованої ролі через локальний Supavisor.** Кейс пулера
+  `command-runtime.db.test.ts` («through the pooler: the same current user and
+  the same refusals») раз упав у повному `pnpm test:db` на
+  `createCommandRuntime`: `28P01 password authentication failed` для тегованої
+  ролі `simetra_runtime_<тег>`; повтор файла зелений. Імовірно — кеш
+  `auth_query` пулера щодо щойно створеної ролі. Кандидат: дочекатися входу
+  ролі через пулер (повтор із межею) у `throughPoolerAs`
+  (`packages/designer/src/__tests__/support/db.ts`) або перевірити налаштування
+  кешу автентифікації Supavisor локального стека.
 - **Таблиці схеми `simetra` під Правилом 1.** Що SQL застосунку не пише в
   `rights_versions`, `rights_journal`, таблиці знімка актора (`SNAPSHOT_TABLES`
   у `packages/simetra/src/compiler/rights/actor-snapshot.ts`),
