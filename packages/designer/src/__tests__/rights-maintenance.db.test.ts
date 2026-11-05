@@ -25,12 +25,14 @@ import {
 import type { ToolResult } from "../tools/types"
 import {
   GLOBAL_ADMIN_ID,
+  MEMBER_FOCUS,
+  MEMBER_REGIONS,
   MEMBER_TITLE,
   ORG_ADMIN_ID,
   acceptDebt,
   adminRoles,
+  memberScopedReferences,
   policyDomain,
-  requiredMemberAttribute,
   signUp,
   testSuperuserUrl,
 } from "../../../simetra/test/support"
@@ -72,7 +74,7 @@ async function writeProject(): Promise<string> {
   await symlink(SIMETRA, join(root, "node_modules", "simetra"), "dir")
   const dir = join(root, "metadata")
   const files = await acceptDebt(
-    policyDomain(adminRoles(), requiredMemberAttribute())
+    policyDomain(adminRoles(), memberScopedReferences())
   )
   for (const [path, content] of files) {
     await mkdir(dirname(join(dir, path)), { recursive: true })
@@ -444,6 +446,76 @@ describe("rights-maintenance tool over a real database", () => {
     const done = doneOf(await maintain(env.dir, env.url, tenant(org, user!)))
     expect(done.member).toBe(member)
     expect(await orgRows(org)).toEqual({ members: 2, assignments: 2 })
+    expect(await holders(env.url, "scope", org)).toEqual([user])
+  })
+
+  /** Рядок `Region` тенанта `org` — ціль посилань нового учасника. */
+  const seedRegion = (org: string) =>
+    asOwner(env.url, async (owner) => {
+      const id = randomUUID()
+      await owner.query(
+        "INSERT INTO public.region (id, org_id) VALUES ($1, $2)",
+        [id, org]
+      )
+      return id
+    })
+
+  // Масив і пара не мають FK зі скоупом: «ціль існує в тому самому скоупі»
+  // судить лише згенерована перевірка рядка членства (Р-A6-12) — до першого
+  // запису, тож відмова нічого не лишає.
+  it.each<[string, "missing" | "foreign", string]>([
+    ["an array Ref to a missing row", "missing", MEMBER_REGIONS],
+    ["an array Ref to a row of another scope", "foreign", MEMBER_REGIONS],
+    ["a polymorphic pair to a missing row", "missing", MEMBER_FOCUS],
+    ["a polymorphic pair to a row of another scope", "foreign", MEMBER_FOCUS],
+  ])("tenant: %s is invalid-member", async (_, target, attribute) => {
+    const [user] = await users(1)
+    const { org } = await seedOrg()
+    const region =
+      target === "missing"
+        ? randomUUID()
+        : await seedRegion((await seedOrg()).org)
+    const value =
+      attribute === MEMBER_REGIONS
+        ? [region]
+        : { type: "Catalog.Region", id: region }
+    expect(
+      refusalOf(
+        await maintain(
+          env.dir,
+          env.url,
+          tenant(org, user!, { [MEMBER_TITLE]: "Owner", [attribute]: value })
+        )
+      )
+    ).toEqual({
+      code: "maintenance.invalid-member",
+      params: { path: attribute },
+    })
+    expect(await orgRows(org)).toEqual({ members: 0, assignments: 0 })
+  })
+
+  it("tenant: an array Ref and a pair to rows of the same scope pass", async () => {
+    const [user] = await users(1)
+    const { org } = await seedOrg()
+    const region = await seedRegion(org)
+    const done = doneOf(
+      await maintain(
+        env.dir,
+        env.url,
+        tenant(org, user!, {
+          [MEMBER_TITLE]: "Owner",
+          [MEMBER_REGIONS]: [region],
+          [MEMBER_FOCUS]: { type: "Catalog.Region", id: region },
+        })
+      )
+    )
+    expect(
+      await query(
+        env.url,
+        `SELECT ${MEMBER_REGIONS}::text[] AS regions FROM public.org_member WHERE id = $1`,
+        [done.member]
+      )
+    ).toEqual([{ regions: [region] }])
     expect(await holders(env.url, "scope", org)).toEqual([user])
   })
 

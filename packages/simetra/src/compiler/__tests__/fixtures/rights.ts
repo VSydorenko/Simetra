@@ -1147,6 +1147,46 @@ export function requiredMemberAttribute(): Layer {
   }
 }
 
+/** Масив `Ref` і поліморфна пара `OrgMember` шару `memberScopedReferences()`. */
+export const MEMBER_REGIONS = "regions"
+export const MEMBER_FOCUS = "focus"
+
+/**
+ * `requiredMemberAttribute()` плюс масив `Ref` на скоуплений `Region` і
+ * поліморфна пара `Region`/`Users` в `OrgMember`: посилання нового учасника,
+ * для яких скоуп цілі звіряє перевірка рядка членства (спека П4 §6.6, §6.12),
+ * — одиничний не-масив тримає складений FK. Реквізити повторено цілком:
+ * `withRoles` зливає файли лише на верхньому рівні ключів.
+ */
+export function memberScopedReferences(): Layer {
+  const { attributes } = requiredMemberAttribute()[MEMBER_FILE] as {
+    attributes: unknown[]
+  }
+  return {
+    [MEMBER_FILE]: {
+      attributes: [
+        ...attributes,
+        {
+          ...refAttribute(
+            8240,
+            MEMBER_REGIONS,
+            MEMBER_REGIONS,
+            ref("Catalog", "Region")
+          ),
+          array: true,
+        },
+        {
+          id: uuid(8241),
+          name: MEMBER_FOCUS,
+          physicalName: MEMBER_FOCUS,
+          type: "Ref",
+          allowedTypes: objects(["Catalog", "Region"], ["Catalog", "Users"]),
+        },
+      ],
+    },
+  }
+}
+
 export const TICKET_FILE = "catalogs/Ticket/Ticket.meta.json"
 export const TICKET_ID = uuid(6901)
 export const TICKET_TABLE = "ticket"

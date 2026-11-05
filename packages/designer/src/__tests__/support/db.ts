@@ -1,8 +1,8 @@
 import { randomBytes } from "node:crypto"
 import pg from "pg"
-import { RIGHTS_MAINTENANCE_SETTING } from "simetra/model"
+import { RIGHTS_MAINTENANCE_SETTING, type CommandError } from "simetra/model"
 import type { EngineScope, SchemaEngine } from "simetra/schema"
-import type { CommandDatabase } from "simetra/server"
+import { CommandFailure, type CommandDatabase } from "simetra/server"
 import { createPgDeltaEngine } from "../../schema-engine"
 import {
   testDatabaseName,
@@ -314,4 +314,17 @@ export function heldResource<T>(
       await held
     },
   }
+}
+
+/** Відмова команди як `CommandError`; успіх — помилка тесту. */
+export async function commandRefusal(
+  work: Promise<unknown>
+): Promise<CommandError> {
+  try {
+    await work
+  } catch (error) {
+    if (error instanceof CommandFailure) return error.error
+    throw error
+  }
+  throw new Error("the command succeeded")
 }

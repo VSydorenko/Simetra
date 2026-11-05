@@ -549,7 +549,7 @@ Postgres.
 Причина DB-рівня: транзакція `runCommand` із закоміченими даними й пулер —
 лише над тінню (П4 §7.1).
 
-- [ ] **Крок 1.** Кейси, кожен — прямим портом і через `throughPoolerAs`
+- [x] **Крок 1.** Кейси, кожен — прямим портом і через `throughPoolerAs`
   (`describe.each`):
   - `self-service tenant` (`everyUser`): `run(create Organization, creatorMember)`
     — `rows[0]` — повний рядок кореня; наступна транзакція читає корінь;
@@ -571,11 +571,11 @@ Postgres.
     `onWrite` членства через `ctx.run` призначає творцю `TenantReader` у
     новому скоупі — пакет комітиться, журнал цього призначення — `command`;
     `TenantAuditor` — `escalation`.
-- [ ] **Крок 2.** `rights-maintenance.db.test.ts`: `tenantFullAccess` з
+- [x] **Крок 2.** `rights-maintenance.db.test.ts`: `tenantFullAccess` з
   `member`, де масивний `Ref` чи поліморфна пара вказує на відсутній рядок
   чи рядок іншого скоупу, — `maintenance.invalid-member` з `path`; на наявний
   рядок того самого скоупу — проходить.
-- [ ] **Крок 3.** `pnpm --filter @simetrajs/designer test:db tenant-creation rights-maintenance command-runtime`;
+- [x] **Крок 3.** `pnpm --filter @simetrajs/designer test:db tenant-creation rights-maintenance command-runtime`;
   коміт `test(designer): створення тенанта через runtime.run і пулер`.
 
 ## Задача 8: бенчмарк (Р-A6-17)
@@ -871,6 +871,37 @@ Postgres.
   колонками), інакше шлях `member`. Ім'я функції — `memberCheckFunctionName`,
   тепер експортоване з `simetra/compiler`. Відмова форми `member` (не
   об'єкт) — шлях `member` прямо з обходу T0. Вплив на спеку: немає.
+
+- **Задача 7 — `40001` у кейсі «retry keeps ids» (відхилення форми).** Власний
+  виняток хука T3 мапить у `command.internal` без повтору (`callHook`, спека
+  П4 §7.2), тож помилка з кодом `40001`, кинута хуком, повтору не дає. Хук
+  `onWrite` кореня на першій спробі лише «озброює» порт-обгортку
+  (`serializationFailureOnce` у тесті), і та замість першого `COMMIT`
+  виконує в тій самій транзакції `DO … RAISE … USING ERRCODE = '40001'`:
+  відмову повтору дає сама база, відкат прибирає корінь, членство й маркер.
+  Тест стверджує дві однакові пари параметрів ядра кореня, `ctx.id` хука
+  однаковий в обох спробах, `COMMIT` — `40001`, потім успіх, таблиця маркера
+  порожня, творець — дієвий носій `TenantOwner` рівно в новому скоупі.
+  Вплив на спеку: немає.
+- **Задача 7 — «parallel tenant creation does not block».** Окремий
+  `describe.each` за портами (той самий послідовний файл): перший `run` тримає
+  транзакцію в `onWrite` кореня до сигналу тесту, другий `run` іншого
+  користувача мусить закомітитися за 15 с, поки перший ще не завершився.
+  Детектор перевірено вручну: коли й другий `run` чекає на той самий сигнал,
+  обидва варіанти падають «the second creation waited». Блокувань механізм не
+  має. Вплив на спеку: немає.
+- **Задача 7 — фікстури.** Модель А й Б — спільні будівники
+  `tenantSelfService`/`tenantOperator`, реекспортовані через
+  `packages/simetra/test/support.ts` разом з id ролей і `ORG_KIND_ID`.
+  Посилання учасника на скоуплену ціль для інструмента обслуговування — новий
+  шар `memberScopedReferences()` (`requiredMemberAttribute()` плюс масив `Ref`
+  на `Region` і пара `Region`/`Users`); цілі `tenantSelfService` нескоуплені, а
+  «рядок іншого скоупу» вимагає скоупленої. Модель `rights-maintenance.db.test.ts`
+  тепер `policyDomain(adminRoles(), memberScopedReferences())` — наявні кейси без
+  змін. `commandRefusal` винесено в `support/db.ts` (локальні копії
+  `command-runtime` і `rights-admin-commands` не чіпав). Механізмних дефектів
+  DB не виявила. Scoped DB кроку 3 — 3 файли, 42 тести, 23 с.
+  Вплив на спеку: немає.
 
 ## Журнал мутацій
 
