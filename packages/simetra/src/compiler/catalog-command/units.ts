@@ -1,14 +1,18 @@
 import {
+  PLATFORM_SCHEMA,
+  RIGHTS_COLUMNS,
   authorColumns,
   deletionMarkColumn,
   quoteIdent,
   type AttributeCase,
   type DatabaseProvider,
+  type Dml,
   type PhysicalSnapshot,
   type PhysicalTable,
   COMMAND_CORE_ERRORS,
   isTextEncodedType,
 } from "simetra/model"
+import type { CompiledScopeKind } from "../compile"
 import type {
   AccessContract,
   Contracts,
@@ -28,6 +32,11 @@ import {
 } from "../rights/carrier-units"
 import { COMMAND_FUNCTIONS } from "../rights/command-units"
 import { hasRightsFunctions } from "../rights/functions"
+import {
+  rootCreatorFunction,
+  rootCreatorFunctionName,
+  type RootCreatorFacts,
+} from "../rights/root-creator-units"
 import { textNames, type CreationNode } from "../sql/dependencies"
 import { executeGrants } from "../sql/execute-grants"
 import type { SqlParser } from "../sql/parse"
@@ -36,11 +45,13 @@ import { generatedUnit, type SqlUnit } from "../sql/units"
 import { sqlLiteral } from "../stages/model"
 import { findStandardColumn, standardColumn } from "../standard-column"
 import { rightsCheck } from "./rights-check"
-import type {
-  CatalogCommandContract,
-  CatalogCommandSection,
-  CommandReference,
+import {
+  memberCheckFunctionName,
+  type CatalogCommandContract,
+  type CatalogCommandSection,
+  type CommandReference,
 } from "./contracts"
+import { memberCheckFunction } from "./member-check"
 
 const q = quoteIdent
 const relation = (t: { schema: string; name: string }) =>
@@ -76,8 +87,13 @@ export interface CatalogCommandInput {
   catalogCommands: readonly CatalogCommandContract[]
   contracts: Pick<
     Contracts,
-    "rights" | "access" | "roles" | "users" | "membershipSources"
+    "rights" | "access" | "roles" | "users" | "membershipSources" | "membership"
   >
+  /** Види скоупу: корінь і функція гранту творцю (спека П4 §6.13). */
+  scopeKinds: readonly Pick<
+    CompiledScopeKind,
+    "id" | "physicalName" | "root" | "rootCreator"
+  >[]
   physical: PhysicalSnapshot
   attributeCase: AttributeCase
   provider: DatabaseProvider
@@ -129,10 +145,59 @@ export function buildCatalogCommandUnits(
       (l) => `${relation(l.table)}\0${l.through}`
     )
   )
-  const units: SqlUnit[] = []
-  for (const contract of input.catalogCommands) {
-    const rights = rightsById.get(contract.objectId)
-    if (rights === undefined) continue
+  const unitOf =
+    (contract: CatalogCommandContract, schema = contract.table.schema) =>
+    (sql: string, requires?: readonly CreationNode[]): SqlUnit => ({
+      ...generatedUnit(sql, schema, parse),
+      ownerObjectId: contract.objectId,
+      module: input.module,
+      generator: "catalogCommand" as const,
+      ...(requires === undefined ? {} : { requires }),
+    })
+  const withGrants = (
+    unit: (sql: string, requires?: readonly CreationNode[]) => SqlUnit,
+    signature: string,
+    sql: string,
+    units: readonly Pick<SqlUnit, "class" | "identity">[]
+  ) => [
+    unit(sql, bodyRequires(sql, { ...input, units })),
+    ...executeGrants(signature, ["command"], provider).map((grant) =>
+      unit(grant)
+    ),
+  ]
+  const commands = input.catalogCommands.filter((c) =>
+    rightsById.has(c.objectId)
+  )
+  const byObject = new Map(commands.map((c) => [c.objectId, c]))
+  // Перевірка рядка членства — на кожному довіднику членства (спека П4
+  // §6.12, §6.13): її кличе ядро кореня й інструмент обслуговування.
+  const units: SqlUnit[] = contracts.membership.flatMap((membership) => {
+    const contract = byObject.get(membership.objectId)
+    if (contract === undefined) return []
+    return withGrants(
+      unitOf(contract),
+      `${relation(memberCheckFunctionName(contract.table))}(jsonb, uuid)`,
+      memberCheckFunction(contract, membership),
+      input.units
+    )
+  })
+  // Функція гранту творцю — на кожен вид скоупу з роллю `rootCreator`.
+  const creators = rootCreators(input, byObject)
+  for (const { root, facts } of creators.values()) {
+    units.push(
+      ...withGrants(
+        unitOf(root, PLATFORM_SCHEMA),
+        `${relation(facts.fn)}(uuid, uuid, jsonb)`,
+        rootCreatorFunction(facts),
+        // Функція гранту кличе перевірку членства цього генератора.
+        [...input.units, ...units]
+      )
+    )
+  }
+  // Ядро кореня кличе перевірку членства й функцію гранту цього генератора.
+  const known = [...input.units, ...units]
+  for (const contract of commands) {
+    const rights = rightsById.get(contract.objectId)!
     const parts = coreParts(contract, {
       rights,
       access: accessByTable.get(relation(contract.table)),
@@ -140,16 +205,10 @@ export function buildCatalogCommandUnits(
       authorLink: (link) =>
         authorLinks.has(`${relation(link.table)}\0${link.through}`),
     })
-    const unit = (sql: string, requires?: readonly CreationNode[]) => ({
-      ...generatedUnit(sql, contract.table.schema, parse),
-      ownerObjectId: contract.objectId,
-      module: input.module,
-      generator: "catalogCommand" as const,
-      ...(requires === undefined ? {} : { requires }),
-    })
     // Функція є рівно для тих дій, що їх дав контракт (спека П4 §6.6): позначки
-    // немає в «Користувачів», видалення — лише в «Призначень».
-    const { markDeletion, delete: remove } = contract.functions
+    // немає в «Користувачів», видалення — лише в «Призначень», ядро
+    // створення — лише в кореня виду скоупу (спека П4 §6.13).
+    const { markDeletion, delete: remove, createRoot } = contract.functions
     const functions: { fn: QualifiedName; args: string; sql: string }[] = [
       {
         fn: contract.functions.save,
@@ -185,17 +244,114 @@ export function buildCatalogCommandUnits(
               ),
             },
           ]),
+      ...(createRoot === undefined || contract.actions.createRoot === undefined
+        ? []
+        : [
+            {
+              fn: createRoot,
+              args: "jsonb, jsonb, uuid",
+              sql: createRootFunction(
+                contract,
+                createRoot,
+                contract.actions.createRoot,
+                parts,
+                creators.get(contract.objectId)
+              ),
+            },
+          ]),
     ]
     for (const { fn, args, sql } of functions) {
       units.push(
-        unit(sql, bodyRequires(sql, input)),
-        ...executeGrants(`${relation(fn)}(${args})`, ["command"], provider).map(
-          (grant) => unit(grant)
-        )
+        ...withGrants(unitOf(contract), `${relation(fn)}(${args})`, sql, known)
       )
     }
   }
   return units.sort((a, b) => compareStrings(a.identity, b.identity))
+}
+
+/** Корінь виду з творцем: довідник членства й факти функції гранту. */
+interface RootCreator {
+  root: CatalogCommandContract
+  member: CatalogCommandContract
+  facts: RootCreatorFacts
+}
+
+/**
+ * Факти функції гранту творцю на кожен вид скоупу з `rootCreator`
+ * (`CompiledScopeKind.rootCreator`, спека П4 §6.13), за id кореня. Корінь без
+ * ядра створення факту не має (`rootCreatedByCommand`), а команди членства й
+ * «Призначень ролей» гарантують діагностики `rights.root-creator-*`
+ * (Р-A6-16, Р-A6-19); без них функції гранту немає, а ядро кликало б
+ * неіснуючу — тож відсутність тут — дефект компілятора.
+ */
+function rootCreators(
+  input: Pick<
+    CatalogCommandInput,
+    "contracts" | "scopeKinds" | "attributeCase"
+  >,
+  byObject: ReadonlyMap<string, CatalogCommandContract>
+): Map<string, RootCreator> {
+  const { contracts } = input
+  const result = new Map<string, RootCreator>()
+  for (const kind of input.scopeKinds) {
+    const creator = kind.rootCreator
+    if (creator === undefined || !("objectId" in kind.root)) continue
+    const role = contracts.roles.find((r) => r.roleId === creator.role)
+    const membership = contracts.membership.find(
+      (m) => m.objectId === creator.membership
+    )
+    const root = byObject.get(kind.root.objectId)
+    const member = byObject.get(creator.membership)
+    const assignments = byObject.get(creator.assignments)
+    if (
+      role === undefined ||
+      membership === undefined ||
+      root?.actions.createRoot === undefined ||
+      member?.actions.create === undefined ||
+      assignments?.actions.create === undefined ||
+      assignments.scopeColumn === undefined
+    ) {
+      throw new Error(
+        `internal: scope kind ${kind.id} has a root creator without root, membership or assignments command`
+      )
+    }
+    const column = (
+      def: (typeof RIGHTS_COLUMNS)[keyof typeof RIGHTS_COLUMNS]
+    ) => standardColumn(assignments.table, def, input.attributeCase).name
+    result.set(root.objectId, {
+      root,
+      member,
+      facts: {
+        kindId: kind.id,
+        fn: rootCreatorFunctionName(kind),
+        root: { kindLabel: root.kindLabel, action: root.actions.createRoot },
+        role,
+        membership: {
+          table: member.table,
+          kindLabel: member.kindLabel,
+          action: member.actions.create,
+          key: membership.keyColumn,
+          scope: membership.scopeColumn,
+          user: membership.userColumn,
+          check: memberCheckFunctionName(member.table),
+          columns: member.createKeys.map((name) => ({
+            name,
+            default: defaultOf(member.table, name),
+          })),
+        },
+        assignments: {
+          table: assignments.table,
+          kindLabel: assignments.kindLabel,
+          action: assignments.actions.create,
+          key: assignments.key,
+          scope: assignments.scopeColumn,
+          subject: column(RIGHTS_COLUMNS.subject),
+          archetype: column(RIGHTS_COLUMNS.archetype),
+        },
+      },
+    })
+  }
+  return result
 }
 
 /**
@@ -259,7 +415,7 @@ interface CoreFacts {
 }
 
 /** Значення колонки за замовчуванням зі знімка чи `NULL`. */
-function defaultOf(table: PhysicalTable, column: string): string {
+export function defaultOf(table: PhysicalTable, column: string): string {
   return table.columns.find((c) => c.name === column)?.default ?? "NULL"
 }
 
@@ -301,7 +457,7 @@ function keyConstraints(table: PhysicalTable, key: string): string[] {
 }
 
 /** Значення й попереднє значення колонки посилання в одному рядку. */
-interface ReferenceRow {
+export interface ReferenceRow {
   value: (column: string) => string
   old?: (column: string) => string
   /** Значення скоупу рядка; немає — таблиця нескоуплена. */
@@ -318,7 +474,7 @@ interface ReferenceRow {
  * `crossScope`. Ціль — корінь того самого виду: колонка скоупу цілі — сам її
  * ключ, тож умова та сама.
  */
-function referenceViolations(
+export function referenceViolations(
   reference: CommandReference,
   row: ReferenceRow
 ): { column: string; condition: string }[] {
@@ -411,6 +567,23 @@ function referenceViolations(
 }
 
 /**
+ * Перевірки посилань рядка (спека П4 §6.6): `IF <порушення> THEN <відмова>` на
+ * кожну колонку. Одне джерело для гілки створення `save` і перевірки рядка
+ * членства (спека П4 §6.13): умови однакові, різниться лише відмова.
+ */
+export function referenceChecks(
+  references: readonly CommandReference[],
+  row: ReferenceRow,
+  fail: (detail: string) => string
+): string[] {
+  return references.flatMap((reference) =>
+    referenceViolations(reference, row).flatMap(({ column, condition }) =>
+      ifThen(condition, [fail(sqlLiteral(column))])
+    )
+  )
+}
+
+/**
  * Спільні частини функцій ядра одного довідника: контекст, замок ієрархії,
  * перевірка права, перевиведення копій, автори. Одне місце, щоб `save`,
  * `mark_deletion` і `delete` не розходилися в умовах відмов.
@@ -442,7 +615,12 @@ interface CoreParts {
   copyRead: (link: CarrierLink) => string
   /** Перевиведення копій лише змінених зв'язків — як тригер носіїв. */
   relink: (links: readonly CarrierLink[]) => string[]
-  rightsIf: (action: string, row: "v_old" | "v_new", reason: string) => string[]
+  rightsIf: (
+    action: string,
+    dml: Dml,
+    row: "v_old" | "v_new",
+    reason: string
+  ) => string[]
   /**
    * Рядок «до» під замком (спека П4 §6.6: після контексту) і версія. Сила замка —
    * за дією функції (спека П4 §6.6): зміна — `NO KEY UPDATE`, видалення — `UPDATE`.
@@ -506,10 +684,11 @@ function coreParts(
           [copyRead(link)]
         )
       ),
-    rightsIf: (action, row, reason) =>
-      ifThen(`(${rightsCheck(facts.rights, action, table, row)}) IS NOT TRUE`, [
-        forbidden(reason),
-      ]),
+    rightsIf: (action, dml, row, reason) =>
+      ifThen(
+        `(${rightsCheck(facts.rights, action, table, row, dml)}) IS NOT TRUE`,
+        [forbidden(reason)]
+      ),
     lockedOld: (root, strength) => [
       `SELECT * INTO v_old FROM ${relation(table)} r WHERE r.${q(key)} = ${root} FOR ${strength};`,
       // Замок застосовує `UPDATE USING` (право дії над станом «до») за будь-
@@ -528,48 +707,76 @@ function coreParts(
   }
 }
 
+/**
+ * Частини гілки створення, спільні для `save` і `<корінь>_create_root`:
+ * контекст, копії носіїв, перевірка права над станом «після» й межа тенанта.
+ */
+function createParts(
+  contract: CatalogCommandContract,
+  parts: CoreParts,
+  action: string,
+  root: string
+): Omit<CreateParts, "references" | "returning"> {
+  const { facts } = parts
+  return {
+    context: parts.context(action, root),
+    copies: contract.carrierLinks.map(parts.copyRead),
+    rights: [
+      ...parts.rightsIf(action, "insert", "v_new", E.forbidden.noRight),
+      // Межа тенанта `scope_insert` (спека П4 §6.7): предикат контейнера
+      // скоупу не має, а скоуп нового рядка задає клієнт.
+      ...(facts.access?.scope === undefined || facts.access.root === true
+        ? []
+        : ifThen(
+            `(${tenantBoundary(facts.access.scope, "v_new")}) IS NOT TRUE`,
+            [noRight]
+          )),
+    ],
+    authors: parts.authors,
+    lock: parts.lock,
+    label: parts.label,
+  }
+}
+
+/** Рядок «після» `v_new` для перевірки посилань: значення й скоуп рядка. */
+export function newRow(
+  parts: Pick<CoreParts, "scope" | "ownScopeKind">
+): ReferenceRow {
+  return {
+    value: (c) => `v_new.${q(c)}`,
+    ...(parts.scope === undefined ? {} : { scope: parts.scope }),
+    ...(parts.ownScopeKind === undefined
+      ? {}
+      : { scopeKindId: parts.ownScopeKind }),
+  }
+}
+
 /** Тіло й оболонка `<t>_save`. */
 function saveFunction(
   contract: CatalogCommandContract,
   parts: CoreParts
 ): string {
   const { key } = contract
-  const { facts, label, scope, ownScopeKind, updatedBy, lock, rightsIf } = parts
+  const { scope, ownScopeKind, updatedBy, lock, rightsIf } = parts
   const root = `v_in.${q(key)}`
   const context = (action: string) => parts.context(action, root)
   const references = (old: boolean) =>
-    contract.references.flatMap((reference) =>
-      referenceViolations(reference, {
-        value: (c) => `v_new.${q(c)}`,
+    referenceChecks(
+      contract.references,
+      {
+        ...newRow(parts),
         ...(old ? { old: (c: string) => `v_old.${q(c)}` } : {}),
-        ...(scope === undefined ? {} : { scope }),
-        ...(ownScopeKind === undefined ? {} : { scopeKindId: ownScopeKind }),
-      }).flatMap(({ column, condition }) =>
-        ifThen(condition, [invalid(sqlLiteral(column))])
-      )
+      },
+      invalid
     )
 
   const createBranch: string[] =
     contract.actions.create === undefined
       ? [invalid(sqlLiteral(E.invalid.create))]
       : createLines(contract, {
-          context: context(contract.actions.create),
+          ...createParts(contract, parts, contract.actions.create, root),
           references: references(false),
-          copies: contract.carrierLinks.map(parts.copyRead),
-          rights: [
-            ...rightsIf(contract.actions.create, "v_new", E.forbidden.noRight),
-            // Межа тенанта `scope_insert` (спека П4 §6.7): предикат контейнера
-            // скоупу не має, а скоуп нового рядка задає клієнт.
-            ...(facts.access?.scope === undefined || facts.access.root === true
-              ? []
-              : ifThen(
-                  `(${tenantBoundary(facts.access.scope, "v_new")}) IS NOT TRUE`,
-                  [noRight]
-                )),
-          ],
-          authors: parts.authors,
-          lock,
-          label,
+          returning: true,
         })
 
   const updateBranch: string[] = [
@@ -583,7 +790,12 @@ function saveFunction(
         ? [lock]
         : ifThen(`p_item ? ${sqlLiteral(contract.hierarchy.parent)}`, [lock])),
     ...parts.lockedOld(root, "NO KEY UPDATE"),
-    ...rightsIf(contract.actions.update, "v_old", E.forbidden.noRight),
+    ...rightsIf(
+      contract.actions.update,
+      "update",
+      "v_old",
+      E.forbidden.noRight
+    ),
     "v_new := v_old;",
     ...contract.updateKeys.flatMap((c) =>
       ifThen(`p_item ? ${sqlLiteral(c)}`, [`v_new.${q(c)} := v_in.${q(c)};`])
@@ -595,7 +807,12 @@ function saveFunction(
     // Перевиведення лише змінених зв'язків — як тригер носіїв: незмінений
     // зв'язок лишає копію рядка.
     ...parts.relink(contract.carrierLinks),
-    ...rightsIf(contract.actions.update, "v_new", E.forbidden.newCarrier),
+    ...rightsIf(
+      contract.actions.update,
+      "update",
+      "v_new",
+      E.forbidden.newCarrier
+    ),
     ...headerUpdate(contract),
     // Нуль рядків після `UPDATE` будь-якої форми — відмова, не успіх.
     ...ifThen("v_count = 0", [noRight]),
@@ -620,7 +837,7 @@ function saveFunction(
       "v_tabular jsonb;",
     ],
     [
-      ...inputLines(contract),
+      ...saveInputLines(contract),
       "IF p_expected_version IS NULL THEN",
       ...indent(createBranch),
       "ELSE",
@@ -633,62 +850,122 @@ function saveFunction(
 }
 
 /**
- * Перевірка входу (спека П4 §6.6): об'єкт, лише ключі гранту гілки, кожне
+ * Перевірка входу-об'єкта (спека П4 §6.6): об'єкт, лише дозволені ключі, кожне
  * значення приводиться до типу своєї колонки. Приведення — поколонково у
- * вузькому блоці: помилка класу `22` інакше не назвала б ключа.
+ * вузькому блоці: помилка класу `22` інакше не назвала б ключа. Одне джерело
+ * для `p_item` ядра й `p_member` перевірки рядка членства (спека П4 §6.13):
+ * відмова — `RAISE` ядра чи `RETURN` колонки перевірки.
  */
-function inputLines(contract: CatalogCommandContract): string[] {
-  const t = relation(contract.table)
+export interface InputSpec {
+  table: PhysicalTable
+  /** Параметр входу: `p_item` ядра чи `p_member` перевірки членства. */
+  param: string
+  /** `DETAIL` відмови форми параметра. */
+  shape: string
+  /** Дозволені ключі; гілки створення й зміни за версією — лише в `save`. */
+  keys:
+    readonly string[] | { create: readonly string[]; update: readonly string[] }
+  /** Ключ `tabular` дозволений і поза приведенням (ТЧ перевіряє свій блок). */
+  tabular: boolean
+  /** Відмови між формою й ключами: причина замість першого невідомого ключа. */
+  guard?: readonly string[]
+  /** Ключ, що мусить мати значення. */
+  key?: string
+  /** Відмова з `DETAIL` — SQL-вираз. */
+  fail: (detail: string) => string
+}
+
+export function inputLines(spec: InputSpec): string[] {
+  const t = relation(spec.table)
+  const p = spec.param
   const allowed = (keys: readonly string[]) =>
-    textArray([...new Set([...keys, "tabular"])])
+    textArray([...new Set([...keys, ...(spec.tabular ? ["tabular"] : [])])])
   const unknown = (keys: readonly string[]) =>
-    `SELECT k.k INTO v_key FROM jsonb_object_keys(p_item) AS k(k) WHERE k.k <> ALL (${allowed(keys)}) ORDER BY k.k LIMIT 1;`
+    `SELECT k.k INTO v_key FROM jsonb_object_keys(${p}) AS k(k) WHERE k.k <> ALL (${allowed(keys)}) ORDER BY k.k LIMIT 1;`
+  const { keys } = spec
   return [
-    ...ifThen("jsonb_typeof(p_item) IS DISTINCT FROM 'object'", [
-      invalid(sqlLiteral(E.invalid.item)),
+    ...ifThen(`jsonb_typeof(${p}) IS DISTINCT FROM 'object'`, [
+      spec.fail(sqlLiteral(spec.shape)),
     ]),
+    ...(spec.guard ?? []),
+    ...(isBranched(keys)
+      ? [
+          "IF p_expected_version IS NULL THEN",
+          ...indent([unknown(keys.create)]),
+          "ELSE",
+          ...indent([unknown(keys.update)]),
+          "END IF;",
+        ]
+      : [unknown(keys)]),
+    ...ifThen("v_key IS NOT NULL", [spec.fail("v_key")]),
+    "BEGIN",
+    ...indent([
+      `FOR v_key IN SELECT k.k FROM jsonb_object_keys(${p}) AS k(k)${spec.tabular ? " WHERE k.k <> 'tabular'" : ""} ORDER BY k.k LOOP`,
+      `  PERFORM jsonb_populate_record(NULL::${t}, jsonb_build_object(v_key, ${p} -> v_key));`,
+      "END LOOP;",
+    ]),
+    "EXCEPTION WHEN data_exception THEN",
+    ...indent([spec.fail("v_key")]),
+    "END;",
+    `v_in := jsonb_populate_record(NULL::${t}, ${p});`,
+    ...(spec.key === undefined
+      ? []
+      : ifThen(`v_in.${q(spec.key)} IS NULL`, [
+          spec.fail(sqlLiteral(spec.key)),
+        ])),
+  ]
+}
+
+const isBranched = (
+  keys: InputSpec["keys"]
+): keys is { create: readonly string[]; update: readonly string[] } =>
+  !Array.isArray(keys)
+
+/** Вхід `p_item` у `save`: гілки створення й зміни, ключ обов'язковий. */
+function saveInputLines(contract: CatalogCommandContract): string[] {
+  return inputLines({
+    table: contract.table,
+    param: "p_item",
+    shape: E.invalid.item,
+    keys: {
+      create: contract.createKeys,
+      update: [contract.key, ...contract.updateKeys],
+    },
+    tabular: true,
     // Без дії створення (спека П4 §6.6: «Користувачі», корінь скоупу) виклик без
     // версії — відмова `create` до перевірки ключів: інакше порожній перелік
     // ключів створення назвав би першим невідомим ключем `id`, а не причину.
     ...(contract.actions.create === undefined
-      ? ifThen("p_expected_version IS NULL", [
-          invalid(sqlLiteral(E.invalid.create)),
-        ])
-      : []),
-    "IF p_expected_version IS NULL THEN",
-    ...indent([unknown(contract.createKeys)]),
-    "ELSE",
-    ...indent([unknown([contract.key, ...contract.updateKeys])]),
-    "END IF;",
-    ...ifThen("v_key IS NOT NULL", [invalid("v_key")]),
-    "BEGIN",
-    ...indent([
-      "FOR v_key IN SELECT k.k FROM jsonb_object_keys(p_item) AS k(k) WHERE k.k <> 'tabular' ORDER BY k.k LOOP",
-      `  PERFORM jsonb_populate_record(NULL::${t}, jsonb_build_object(v_key, p_item -> v_key));`,
-      "END LOOP;",
-    ]),
-    "EXCEPTION WHEN data_exception THEN",
-    ...indent([invalid("v_key")]),
-    "END;",
-    `v_in := jsonb_populate_record(NULL::${t}, p_item);`,
-    ...ifThen(`v_in.${q(contract.key)} IS NULL`, [
-      invalid(sqlLiteral(contract.key)),
-    ]),
-  ]
+      ? {
+          guard: ifThen("p_expected_version IS NULL", [
+            invalid(sqlLiteral(E.invalid.create)),
+          ]),
+        }
+      : {}),
+    key: contract.key,
+    fail: invalid,
+  })
 }
 
-/** Гілка створення (`p_expected_version IS NULL`). */
+interface CreateParts {
+  context: string[]
+  references: string[]
+  copies: string[]
+  rights: string[]
+  authors: string[]
+  lock: string
+  label: string
+  /**
+   * `RETURNING` у `v_row`: ядро кореня вставляє без нього (спека П4 §6.13) —
+   * до гранту політика читання нового рядка не пропускає.
+   */
+  returning: boolean
+}
+
+/** Гілка створення (`p_expected_version IS NULL` у `save`, ядро кореня). */
 function createLines(
   contract: CatalogCommandContract,
-  parts: {
-    context: string[]
-    references: string[]
-    copies: string[]
-    rights: string[]
-    authors: string[]
-    lock: string
-    label: string
-  }
+  parts: CreateParts
 ): string[] {
   const { table, key } = contract
   const t = relation(table)
@@ -722,7 +999,7 @@ function createLines(
     // `READ COMMITTED` бачить коміт паралельного створення (спека П4 §6.10).
     "BEGIN",
     ...indent([
-      `INSERT INTO ${t} (${contract.createKeys.map(q).join(", ")}) VALUES (${contract.createKeys.map((c) => `v_new.${q(c)}`).join(", ")}) RETURNING * INTO v_row;`,
+      `INSERT INTO ${t} (${contract.createKeys.map(q).join(", ")}) VALUES (${contract.createKeys.map((c) => `v_new.${q(c)}`).join(", ")})${parts.returning ? " RETURNING * INTO v_row" : ""};`,
     ]),
     "EXCEPTION WHEN unique_violation THEN",
     ...indent([
@@ -1028,7 +1305,7 @@ function resultLines(
 }
 
 /** Оболонка функції ядра: `SECURITY INVOKER`, порожній `search_path`. */
-function coreFunction(
+export function coreFunction(
   fn: QualifiedName,
   args: string,
   declarations: readonly string[],
@@ -1048,6 +1325,104 @@ function coreFunction(
     `LANGUAGE plpgsql VOLATILE SECURITY INVOKER\n` +
     `SET search_path = ''\n` +
     `AS ${tag}\n${body}\n${tag};`
+  )
+}
+
+/**
+ * `<корінь>_create_root(p_item jsonb, p_member jsonb, p_member_id uuid)` (спека
+ * П4 §6.13): окреме ядро створення кореня виду скоупу. Порядок — перевірка
+ * `p_item` (ТЧ на створенні кореня не пишуться) → `p_member` (на виді з
+ * `rootCreator` — обов'язковий і перевірений функцією перевірки членства під
+ * RLS команди; на виді без — заборонений) → контекст → стан «після» з
+ * примушеним автором → перевірка права (булева форма політики `INSERT`
+ * кореня) → `INSERT` без `RETURNING` (до гранту політика читання нового рядка
+ * не пропускає) → функція гранту → читання кореня й рядка членства під
+ * командою. Невидимий після гранту рядок (модель оператора) — лише ключ і
+ * версія `1`: вставка дає версію 1.
+ */
+function createRootFunction(
+  contract: CatalogCommandContract,
+  fn: QualifiedName,
+  action: string,
+  parts: CoreParts,
+  creator: RootCreator | undefined
+): string {
+  const { table, key } = contract
+  const root = `v_in.${q(key)}`
+  // Рядок під командою (RLS читання): видимий — повний, як результат `save`.
+  const visible = (
+    target: CatalogCommandContract,
+    row: string,
+    id: string,
+    into: string
+  ) => [
+    `SELECT * INTO ${row} FROM ${relation(target.table)} r WHERE r.${q(target.key)} = ${id};`,
+    "IF FOUND THEN",
+    `  ${into} := ${rowJson(target.table, row)};`,
+    "ELSE",
+    `  ${into} := jsonb_build_object(${sqlLiteral(target.key)}, ${id}, ${sqlLiteral(target.versionColumn)}, '1'::text);`,
+    "END IF;",
+  ]
+  const statements = [
+    ...inputLines({
+      table,
+      param: "p_item",
+      shape: E.invalid.item,
+      keys: contract.createKeys,
+      tabular: false,
+      // ТЧ кореня заповнює наступна зміна, коли творець уже має права в
+      // скоупі (спека П4 §6.13); причина — до першого невідомого ключа.
+      guard: ifThen("p_item ? 'tabular'", [
+        invalid(sqlLiteral(E.invalid.tabular)),
+      ]),
+      key,
+      fail: invalid,
+    }),
+    ...(creator === undefined
+      ? ifThen("p_member IS NOT NULL OR p_member_id IS NOT NULL", [
+          invalid(sqlLiteral(E.invalid.creatorMember)),
+        ])
+      : [
+          ...ifThen(
+            "p_member IS NULL OR p_member_id IS NULL OR jsonb_typeof(p_member) IS DISTINCT FROM 'object'",
+            [invalid(sqlLiteral(E.invalid.creatorMember))]
+          ),
+          `v_column := ${relation(creator.facts.membership.check)}(p_member, ${root});`,
+          ...ifThen("v_column IS NOT NULL", [
+            invalid(`${sqlLiteral(`${E.invalid.creatorMember}.`)} || v_column`),
+          ]),
+        ]),
+    ...createLines(contract, {
+      ...createParts(contract, parts, action, root),
+      references: referenceChecks(contract.references, newRow(parts), invalid),
+      returning: false,
+    }),
+    ...(creator === undefined
+      ? []
+      : [
+          `PERFORM ${relation(creator.facts.fn)}(${root}, p_member_id, p_member);`,
+        ]),
+    ...visible(contract, "v_row", root, "v_result"),
+    ...(creator === undefined
+      ? ["v_member := NULL;"]
+      : visible(creator.member, "v_member_row", "p_member_id", "v_member")),
+    "RETURN jsonb_build_object('root', v_result, 'member', v_member)::text;",
+  ]
+  return coreFunction(
+    fn,
+    "p_item jsonb, p_member jsonb, p_member_id uuid",
+    [
+      "v_in record;",
+      "v_new record;",
+      "v_row record;",
+      "v_member_row record;",
+      "v_key text;",
+      "v_column text;",
+      "v_constraint text;",
+      "v_result jsonb;",
+      "v_member jsonb;",
+    ],
+    statements
   )
 }
 
@@ -1085,7 +1460,7 @@ function markDeletionFunction(
     // позначки: замок ієрархії — до замка рядка (спека П4 §6.6).
     ...(contract.hierarchy?.lockAlways === true ? [parts.lock] : []),
     ...parts.lockedOld(root, "NO KEY UPDATE"),
-    ...parts.rightsIf(action, "v_old", E.forbidden.noRight),
+    ...parts.rightsIf(action, "update", "v_old", E.forbidden.noRight),
     "v_new := v_old;",
     `v_new.${mark} := p_mark;`,
     ...(parts.updatedBy === undefined
@@ -1096,7 +1471,7 @@ function markDeletionFunction(
         link.pairs.some((p) => changed.has(q(p.local)))
       )
     ),
-    ...parts.rightsIf(action, "v_new", E.forbidden.newCarrier),
+    ...parts.rightsIf(action, "update", "v_new", E.forbidden.newCarrier),
     ...(contract.predefinedColumn === undefined
       ? []
       : ifThen(`v_old.${q(contract.predefinedColumn)} IS NOT NULL`, [
@@ -1152,7 +1527,7 @@ function deleteFunction(
     // `KEY SHARE` RI-перевірок за природою, тож замок бере ту саму силу
     // одразу, а не підвищує її вже на `DELETE`.
     ...parts.lockedOld(root, "UPDATE"),
-    ...parts.rightsIf(action, "v_old", E.forbidden.noRight),
+    ...parts.rightsIf(action, "delete", "v_old", E.forbidden.noRight),
     `DELETE FROM ${relation(table)} WHERE ${q(key)} = ${root};`,
     // Відкликання права між замком і `DELETE` — нуль рядків, відмова.
     "GET DIAGNOSTICS v_count = ROW_COUNT;",

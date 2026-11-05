@@ -5,7 +5,7 @@ import {
   RIGHTS_COLUMNS,
   RIGHTS_MAINTENANCE_SETTING,
   deletionMarkColumn,
-  encodeMemberValues,
+  encodeAttributes,
   keyColumn,
   quoteIdent,
   type PhysicalTable,
@@ -16,6 +16,7 @@ import {
   effectiveHolderRows,
   fullAccessHolderRows,
   mainTableOf,
+  memberCheckFunctionName,
   qualified,
   sourceConditions,
   standardColumn,
@@ -304,13 +305,15 @@ function prepare(
       nameOf(membership.scope),
       nameOf(membership.user),
     ].filter((name) => name !== undefined)
-    const encoded = encodeMemberValues(object, request.member, forced)
+    const encoded = encodeAttributes(object.attributes, request.member, {
+      allowed: (a) => a.insert,
+      forced,
+      path: "member",
+      prefix: "",
+    })
     if ("error" in encoded)
       return refusal("maintenance.invalid-member", {
-        path:
-          encoded.error.path === undefined || encoded.error.path === "values"
-            ? "member"
-            : encoded.error.path,
+        path: encoded.error.path ?? "member",
       })
     member = encoded
   }
@@ -441,6 +444,7 @@ async function maintain(
       } else {
         if (m.object === undefined)
           throw new Refusal(refusal("maintenance.no-catalog", { level }))
+        await checkMember(tx, m.table, m.object, scope)
         insertMember = true
       }
       break
@@ -506,6 +510,32 @@ async function maintain(
   if (!effective)
     throw new Refusal(refusal("maintenance.not-effective", { user: p.user }))
   return { assignment, ...(member === undefined ? {} : { member }) }
+}
+
+/**
+ * Посилання нового рядка членства (Р-A6-12): та сама згенерована функція
+ * перевірки, що кличе ядро кореня, окремим оператором. Від власника з
+ * `row_security = off` вона судить «ціль існує й у тому самому скоупі», а не
+ * видимість; повертає колонку першого порушення.
+ */
+async function checkMember(
+  tx: ApplyTransaction,
+  table: QualifiedName,
+  object: RuntimeObject,
+  scope: NonNullable<Prepared["scope"]>
+): Promise<void> {
+  const [row] = await tx.query<{ violation: string | null }>(
+    `SELECT ${qualified(memberCheckFunctionName(table))}($1::jsonb, $2::uuid) AS violation`,
+    [JSON.stringify(scope.member?.columns ?? {}), scope.id]
+  )
+  const violation = row?.violation ?? null
+  if (violation === null) return
+  // Не колонка реквізиту (форма аргументу) — шлях самого `member`.
+  const path =
+    object.attributes.find(
+      (a) => a.column === violation || a.pair?.typeColumn === violation
+    )?.name ?? "member"
+  throw new Refusal(refusal("maintenance.invalid-member", { path }))
 }
 
 /** Відмова бази, яку інструмент називає сам (Р-A4-5, Р-A4-11). */

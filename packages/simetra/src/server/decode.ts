@@ -24,6 +24,17 @@ export function decodeRow(
   } catch {
     throw internal()
   }
+  return decodeRecord(object, row)
+}
+
+/**
+ * Decodes a parsed core row; the root core returns two rows in one JSON
+ * (spec P4 §6.13).
+ */
+export function decodeRecord(
+  object: RuntimeObject,
+  row: unknown
+): Record<string, unknown> {
   if (!isPlainObject(row)) throw internal()
   const out = decodeAttributes(
     object.attributes,

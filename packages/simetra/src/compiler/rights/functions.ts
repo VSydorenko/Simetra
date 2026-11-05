@@ -42,7 +42,12 @@ import type { CreationNode } from "../sql/dependencies"
 import { executeGrants } from "../sql/execute-grants"
 import type { SqlParser } from "../sql/parse"
 import { generatedUnit, type SqlUnit } from "../sql/units"
-import { allowedActions, compareExtents, levelAllowsExtent } from "./expand"
+import {
+  actionAllowsExtent,
+  allowedActions,
+  compareExtents,
+  levelAllowsExtent,
+} from "./expand"
 import { levelKey } from "./facts"
 import { must } from "./references"
 import {
@@ -923,20 +928,28 @@ interface DomainEntry {
  * кожному підтриманому обсязі, який рівень має. Ті самі правила, що в
  * розгортанні ролі (`allowedActions`, `levelAllowsExtent`), тож дельта не
  * дасть кастомній ролі нічого, чого не дав би грант її архетипу; з них же
- * розгорнуто `fullAccess` (спека прав Рх5).
+ * розгорнуто `fullAccess` (спека прав Рх5). `explicit` — як у `allowedActions`:
+ * домен дельти (`domainRows`, `rightsDomainRows`) — явний грант, тож `create`
+ * кореня глобальна кастомна роль отримати може (⊆ стримує); розгортання
+ * `fullAccess` — ні (спека прав Рх7).
  */
 function levelDomain(
   level: CompiledRoleLevel,
-  rights: readonly RightsContract[]
+  rights: readonly RightsContract[],
+  explicit: boolean
 ): DomainEntry[] {
   return rights.flatMap((contract) => {
-    const allowed = allowedActions(level, contract)
+    const allowed = allowedActions(level, contract, explicit)
     if (allowed === undefined) return []
     return contract.actions.flatMap(({ action, extents }) =>
       allowed.has(action)
         ? extents
             .map(projectionExtent)
-            .filter((extent) => levelAllowsExtent(level, extent))
+            .filter(
+              (extent) =>
+                levelAllowsExtent(level, extent) &&
+                actionAllowsExtent(contract, action, extent)
+            )
             .map((extent) => ({ contract, action, extent }))
         : []
     )
@@ -954,7 +967,7 @@ export function rightsDomainRows(
   dimensionId: string | null
 }[] {
   return contracts.roles.flatMap((role) =>
-    levelDomain(role.assignedOn, contracts.rights).map((entry) => {
+    levelDomain(role.assignedOn, contracts.rights, true).map((entry) => {
       const [extent, dimensionId] = extentValues(entry.extent)
       return {
         roleId: role.roleId,
@@ -1003,7 +1016,7 @@ export function expandedProjection(
   }
   for (const role of contracts.roles) {
     if (!role.fullAccess) continue
-    for (const entry of levelDomain(role.assignedOn, contracts.rights)) {
+    for (const entry of levelDomain(role.assignedOn, contracts.rights, false)) {
       add(role.roleId, entry.contract.objectId, entry.action, entry.extent)
     }
   }
@@ -1042,12 +1055,14 @@ function domainRows(contracts: RightsFunctionContracts): Value[][] {
     levels.set(levelKey(role.assignedOn), role.assignedOn)
   }
   return [...levels.values()].flatMap((level) =>
-    levelDomain(level, contracts.rights).map(({ contract, action, extent }) => [
-      ...levelValues(level),
-      contract.kindLabel,
-      action,
-      ...extentValues(extent),
-    ])
+    levelDomain(level, contracts.rights, true).map(
+      ({ contract, action, extent }) => [
+        ...levelValues(level),
+        contract.kindLabel,
+        action,
+        ...extentValues(extent),
+      ]
+    )
   )
 }
 

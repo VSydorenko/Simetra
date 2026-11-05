@@ -26,7 +26,10 @@ import {
   type SubscriptionEvent,
   type VirtualTableKind,
 } from "simetra/model"
-import { CATALOG_COMMAND_LABELS } from "./catalog-command/contracts"
+import {
+  CATALOG_COMMAND_LABELS,
+  memberCheckFunctionName,
+} from "./catalog-command/contracts"
 import { compareStrings } from "./diagnostics"
 import {
   choosesMembership,
@@ -381,6 +384,17 @@ export interface RightsContract {
   table: QualifiedName
   /** Немає — об'єкт без скоупу. */
   scopeKindId?: string
+  /**
+   * Об'єкт — корінь виду скоупу (`scopeKinds[].root.objectId`). `create` кореня
+   * дає лише явний грант ролі `global` чи `everyUser` і не вимагає `read`
+   * (спека прав Рх7, Рх9).
+   */
+  root?: true
+  /**
+   * Корінь: колонка автора (`createdBy`), коли вона — власний носій
+   * власності. Лише її судить `create@own` кореня (спека прав §5.2, Р-A6-11).
+   */
+  rootAuthor?: string
   /** Стандартні дії в порядку реєстру, далі кастомні за `id`. */
   actions: RightsAction[]
   /**
@@ -870,6 +884,12 @@ export function derivedFunctionLabels(
       {
         label: CATALOG_COMMAND_LABELS.markDeletion,
         description: "command mark deletion",
+      },
+      // Ядро `create` кореня (спека П4 §6.13) — лише на корені виду скоупу,
+      // але корінь тут невідомий: резерв на кожен об'єкт, як і решта.
+      {
+        label: CATALOG_COMMAND_LABELS.createRoot,
+        description: "command create root",
       }
     )
     if (
@@ -991,6 +1011,16 @@ export function derivedFunctions(
         "/membership",
         { membership: true }
       )
+      // Перевірка рядка членства творця (спека П4 §6.13) — на кожному
+      // довіднику членства; її кличе ядро кореня й інструмент обслуговування.
+      if (KIND_REGISTRY[object.kind].commandWrites === true) {
+        add(
+          object,
+          memberCheckFunctionName(table),
+          `member check of ${object.name}`,
+          "/membership"
+        )
+      }
       const kind = scopeKinds.find((k) => k.name === scope)
       if (kind !== undefined && choosesMembership(kind)) {
         add(

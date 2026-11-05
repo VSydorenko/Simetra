@@ -296,7 +296,8 @@ used; the compiler checks them (rules `users.*`, `rights.*`) and `explain`
 shows the derived rights contract, a role's contract and the rows of the
 rights projection. Forms of each field, who reads what, and what carrier copies
 forbid a `beforeWrite` handler: `references/people-and-rights.md` (also the
-system rights catalogs).
+system rights catalogs and tenant creation: a scope root whose creator gets a
+`rootCreator` role, with `creatorMember`).
 
 ```json simetra:add
 {

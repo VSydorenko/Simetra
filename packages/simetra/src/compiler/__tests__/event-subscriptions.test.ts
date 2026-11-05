@@ -14,6 +14,8 @@ import {
   COUNT_COMMENT_FILE,
   COUNT_COMMENT_SQL_FILE,
   policyDomain,
+  tenantOperator,
+  tenantSelfService,
 } from "./fixtures/rights"
 
 const SUBSCRIPTION = "event-subscriptions/StampContract/StampContract.meta.json"
@@ -878,5 +880,70 @@ describe("EventSubscription", () => {
         "/attributes/1/ref",
       ],
     ])
+  })
+})
+
+describe("subscriptions on the tenant creation tables", () => {
+  // Функція гранту вставляє рядки членства й призначення творця від імені
+  // власника (спека П4 §6.13): SQL-підписка на цю вставку йшла б повз команду,
+  // а хук команди членства бачить ту саму чернетку. Подія запису завжди має
+  // тригер `INSERT` (з `whenChanged` — окремий), тож лише подія видалення
+  // вставки не зачіпає.
+  const tenantSubscription = (
+    source: [kind: string, name: string],
+    event: string
+  ) => {
+    const files = policyDomain(tenantSelfService(), tenantOperator(), {
+      [SUBSCRIPTION]: subscription({
+        sources: [{ kind: source[0], name: source[1] }],
+        event,
+        whenChanged: undefined,
+      }),
+    })
+    files.set(HANDLER_FILE, HANDLER_SQL)
+    return files
+  }
+  const rootCodes = async (files: Map<string, string>) =>
+    (await compile(await acceptDebt(files))).diagnostics
+      .filter((d) => d.code.startsWith("rights.root-"))
+      .map((d) => [d.code, d.file, d.pointer, d.params])
+
+  it.each([
+    ["the membership catalog", "OrgMember", "beforeWrite"],
+    ["the membership catalog", "OrgMember", "onWrite"],
+    ["the role assignments", "OrgRoleAssignments", "beforeWrite"],
+    ["the role assignments", "OrgRoleAssignments", "onWrite"],
+  ])(
+    "a write subscription on %s of a root creator kind is an error (%s, %s)",
+    async (_, name, event) => {
+      expect(
+        await rootCodes(tenantSubscription(["Catalog", name], event))
+      ).toEqual([
+        [
+          "rights.root-creator-subscription",
+          SUBSCRIPTION,
+          "/sources/0",
+          { source: name, scopeKind: "org" },
+        ],
+      ])
+    }
+  )
+
+  it.each([
+    ["a delete event on the membership catalog", "OrgMember", "onDelete"],
+    [
+      "a delete event on the role assignments",
+      "OrgRoleAssignments",
+      "beforeDelete",
+    ],
+    [
+      "a write event on the members of a kind without a root creator",
+      "BranchMember",
+      "onWrite",
+    ],
+  ])("%s is fine", async (_, name, event) => {
+    expect(
+      await rootCodes(tenantSubscription(["Catalog", name], event))
+    ).toEqual([])
   })
 })

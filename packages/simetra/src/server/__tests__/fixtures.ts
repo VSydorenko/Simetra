@@ -216,3 +216,56 @@ export const taskCatalog: RuntimeCatalog = runtimeCatalogSchema.parse({
   ...catalog,
   objects: [...catalog.objects, task],
 })
+
+/**
+ * Створення тенанта (спека П4 §6.13): корінь виду з творцем, його довідник
+ * членства й корінь виду без творця (модель оператора). Корінь — сам собі
+ * скоуп, тож колонка скоупу — ключ.
+ */
+export const orgMember = commandObject({
+  id: "00000000-0000-4000-8000-000000000010",
+  name: "OrgMember",
+  table: "org_member",
+  scopeColumn: "org_id",
+  membership: { userColumn: "user_id" },
+  attributes: [
+    attr("org", "UUID", {
+      column: "org_id",
+      pgType: "uuid",
+      castType: "uuid",
+      update: false,
+    }),
+    attr("user", "Ref", {
+      column: "user_id",
+      pgType: "uuid",
+      castType: "uuid",
+    }),
+    attr("title", "String", { column: "title", required: true }),
+  ],
+})
+const rootObject = (name: string, table: string, membership?: string) =>
+  commandObject({
+    id: `00000000-0000-4000-8000-0000000000${name === "Branch" ? "12" : "11"}`,
+    name,
+    table,
+    scopeColumn: "id",
+    attributes: [attr("code", "String", { column: "code", maxLength: 10 })],
+    tabularSections: sample.tabularSections,
+    operations: {
+      create: {
+        ...target(table, "create_root", "create"),
+        root: membership === undefined ? {} : { membership },
+      },
+      update: target(table, "save", "update"),
+    },
+  })
+export const organization = rootObject(
+  "Organization",
+  "organization",
+  orgMember.id
+)
+export const branch = rootObject("Branch", "branch")
+export const rootCatalog: RuntimeCatalog = runtimeCatalogSchema.parse({
+  ...catalog,
+  objects: [...catalog.objects, organization, orgMember, branch],
+})

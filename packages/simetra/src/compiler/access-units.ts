@@ -465,7 +465,8 @@ export function buildAccessUnits(
           rights,
           "read",
           physicalTable,
-          main
+          main,
+          "select"
         )) {
           policies.push(
             policy(
@@ -532,7 +533,8 @@ const DML_COMMAND = {
  * (fail-closed). Умова родини порівнює ключ зі скалярним підзапитом від
  * сталої мітки — некорельована, як множини прав (InitPlan, §5.4). Таблиця
  * без ключа-`ref` (регістр відомостей, константа) кореневої родини не має, і
- * «решта» там — без умови родини.
+ * «решта» там — без умови родини. `INSERT` основної таблиці кореня виду
+ * скоупу — лише коренева родина в булевій формі права створення (спека прав §5.2).
  */
 function writePolicies(
   rights: RightsContract,
@@ -566,13 +568,26 @@ function writePolicies(
   // Рядок ТЧ змінює зміст власника: на будь-який DML природна дія — `update`
   // власника (спека прав §3).
   const section = table.origin.tabularSectionId !== undefined
+  // Вставка кореня виду скоупу — лише рядок кореня команди (спека прав §5.2):
+  // «решта рядків» основної таблиці кореня — інші тенанти, і нового кореня
+  // повз команду його створення не буває.
+  const rootTable =
+    rights.root === true &&
+    table.schema === rights.table.schema &&
+    table.name === rights.table.name
   for (const dml of DMLS) {
     const add = (
       family: WriteFamily,
       action: string | typeof COMMAND_ACTION,
       prefix: string[]
     ) => {
-      for (const predicate of rightsPredicates(rights, action, table, main)) {
+      for (const predicate of rightsPredicates(
+        rights,
+        action,
+        table,
+        main,
+        dml
+      )) {
         const condition = [
           ...prefix,
           ...predicate.conditions.map((c) => renderCondition(c)),
@@ -599,7 +614,7 @@ function writePolicies(
     const natural = rights.actions.find((a) =>
       a.natural.includes(section ? "update" : dml)
     )
-    if (natural !== undefined) {
+    if (natural !== undefined && !(rootTable && dml === "insert")) {
       add(
         "rest",
         natural.action,

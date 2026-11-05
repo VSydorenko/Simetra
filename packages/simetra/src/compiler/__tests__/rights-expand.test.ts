@@ -3,6 +3,7 @@ import type { CompiledModel } from "simetra/compiler"
 import {
   COMMENT_FILE,
   GRANT_FILE,
+  ORGANIZATION_FILE,
   ORG_MEMBER_ROLE_ID,
   PROJECT_FILE,
   ROLE_FILE,
@@ -17,9 +18,11 @@ import {
   grantAll,
   grantTable,
   objects,
+  refAttribute,
   regionDimension,
   rightsSet,
   statusEnumeration,
+  tenantSelfService,
   withRoles,
 } from "./fixtures/rights"
 import { uuid } from "./helpers"
@@ -652,5 +655,177 @@ describe("rights projection", () => {
   ])("rejects a grant that $case", async (row) => {
     const { case: label, input, ...expected } = row
     expect(await errors(input), label).toEqual([expected])
+  })
+})
+
+const ORGANIZATION = objects(["Catalog", "Organization"])
+
+/**
+ * Корінь `Organization` з авторством, власністю `createdBy` (`tenantSelfService`)
+ * і мапінгом на вимір `region`: так кожен обсяг кореня підтримано, і відмова
+ * — від правила рівня, а не від `rights.extent-unsupported`.
+ */
+const rootFiles = (...layers: Layer[]) =>
+  withRoles(tenantSelfService(), ...layers, {
+    [PROJECT_FILE]: { accessDimensions: [regionDimension()] },
+    [ORGANIZATION_FILE]: {
+      attributes: [
+        refAttribute(8240, "region", "region_id", ref("Catalog", "Region")),
+      ],
+      access: [{ attribute: "region", dimension: "region" }],
+    },
+  })
+
+describe("root create by level", () => {
+  const rootLevel = (
+    file: string,
+    pointer: string,
+    params: Record<string, string>
+  ) => [{ code: "rights.grant-level", file, pointer, params }]
+  const onRoot = (role: string, level: string, action = "create") =>
+    rootLevel(ROLE_FILE(role), "/grants/0/grant/actions/0", {
+      object: "Organization",
+      action,
+      level,
+      role,
+      root: "true",
+    })
+  // Право `create` кореня — лише явний грант ролі `global` чи `everyUser`
+  // (спека прав Рх7): `has_right` рахує всі рівні, крім контейнера, тож грант
+  // рівня скоупу відкрив би створення тенантів.
+  it.each([
+    {
+      case: "a global role on any",
+      layer: {
+        [ROLE_FILE("Support")]: {
+          grants: [grant(ORGANIZATION, ["create"], "any")],
+        },
+      },
+      expected: [],
+    },
+    {
+      case: "a global role on own",
+      layer: {
+        [ROLE_FILE("Support")]: {
+          grants: [grant(ORGANIZATION, ["create"], "own")],
+        },
+      },
+      expected: [],
+    },
+    {
+      case: "an everyUser role on own",
+      layer: {
+        [ROLE_FILE("Everyone")]: {
+          grants: [grant(ORGANIZATION, ["create"], "own")],
+        },
+      },
+      expected: [],
+    },
+    {
+      case: "a scope role",
+      layer: member(grant(ORGANIZATION, ["read", "create"], "any")),
+      expected: rootLevel(ROLE_FILE("OrgMember"), "/grants/0/grant/actions/1", {
+        object: "Organization",
+        action: "create",
+        level: "scope",
+        role: "OrgMember",
+        root: "true",
+      }),
+    },
+    {
+      case: "a container role",
+      layer: {
+        [ROLE_FILE("ProjectLead")]: {
+          grants: [grant(ORGANIZATION, ["create"], "any")],
+        },
+      },
+      expected: onRoot("ProjectLead", "container"),
+    },
+    {
+      case: "an everyUser role on any",
+      layer: {
+        [ROLE_FILE("Everyone")]: {
+          grants: [grant(ORGANIZATION, ["create"], "any")],
+        },
+      },
+      expected: rootLevel(ROLE_FILE("Everyone"), "/grants/0/grant/extent", {
+        level: "everyUser",
+        extent: "any",
+        role: "Everyone",
+      }),
+    },
+    {
+      // Носія виміру нового кореня обирав би сам творець.
+      case: "a global role on a dimension",
+      layer: {
+        [ROLE_FILE("Support")]: {
+          grants: [grant(ORGANIZATION, ["create"], { dimension: "region" })],
+        },
+      },
+      expected: onRoot("Support", "global"),
+    },
+    {
+      case: "a scope role on a dimension",
+      layer: member(grant(ORGANIZATION, ["create"], { dimension: "region" })),
+      expected: onRoot("OrgMember", "scope"),
+    },
+    {
+      case: "update of the root on a global role",
+      layer: {
+        [ROLE_FILE("Support")]: {
+          grants: [grant(ORGANIZATION, ["update"], "any")],
+        },
+      },
+      expected: onRoot("Support", "global", "update"),
+    },
+    {
+      case: "read of the root on a global role",
+      layer: {
+        [ROLE_FILE("Support")]: {
+          grants: [grant(ORGANIZATION, ["read"], "any")],
+        },
+      },
+      expected: onRoot("Support", "global", "read"),
+    },
+  ])("grants create of a scope root in $case", async ({ layer, expected }) => {
+    expect(await errors(rootFiles(layer))).toEqual(expected)
+  })
+})
+
+describe("root create requires nothing", () => {
+  // Ребро `create ⇒ read` кореня знято (спека прав Рх9): `read` кореня дає лише
+  // роль рівня скоупу, а `create` — лише `global` чи `everyUser`.
+  it("closes the requires of root create to nothing and keeps them elsewhere", async () => {
+    const model = await compiled(
+      rootFiles({
+        [ROLE_FILE("Support")]: {
+          grants: [grant(ORGANIZATION, ["create"], "any")],
+        },
+      })
+    )
+    const requires = (name: string, action: string) => {
+      const id = model.objects.find((o) => o.name === name)!.id
+      return model.contracts.rights
+        .find((c) => c.objectId === id)!
+        .actions.find((a) => a.action === action)!.requires
+    }
+    expect(requires("Organization", "create")).toEqual([])
+    expect(requires("Organization", "update")).toEqual(["read"])
+    expect(requires("Project", "create")).toEqual(["read"])
+    expect(rows(model)).toContainEqual([
+      "Support",
+      "Organization",
+      "create",
+      "any",
+    ])
+    // Вимір кореня `create` не породжує, `own` — породжує.
+    expect(
+      rows(model).filter(
+        ([role, object]) => role === "Support" && object === "Organization"
+      )
+    ).toEqual([
+      ["Support", "Organization", "create", "any"],
+      ["Support", "Organization", "create", "own"],
+    ])
   })
 })

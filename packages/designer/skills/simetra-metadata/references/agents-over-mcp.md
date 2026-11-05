@@ -59,6 +59,10 @@ pnpm exec simetra data-read '{"query":{"object":{"kind":"Catalog","name":"Curren
 - An object with a module (`<Name>.module.ts` next to its `.meta.json`) is
   refused with `command.invalid`, reason `object-module`, until a later
   version: the tools do not load modules, so its hooks would not run.
+  Creating a scope root whose creator receives a role (with or without
+  `creatorMember`) also inserts the creator's membership row, so it needs both
+  `--allow-data-write` and `--allow-rights-write`, and it is refused the same
+  way when the membership catalog of that scope kind has a module.
 - Every call compiles the directory and checks it against the applied model.
   After a metadata change the call gets `command.model-mismatch` until you
   `plan` and `apply` it.

@@ -186,7 +186,7 @@ describe("catalogCommandContracts", () => {
     [
       "корінь скоупу",
       "organization",
-      { update: "update", markDeletion: "markDeletion" },
+      { update: "update", markDeletion: "markDeletion", createRoot: "create" },
     ],
   ])("дії: %s", (_, table, actions) => {
     const contract = contractOf(contracts, table)
@@ -197,6 +197,7 @@ describe("catalogCommandContracts", () => {
         "save",
         ...("markDeletion" in actions ? ["markDeletion"] : []),
         ...("delete" in actions ? ["delete"] : []),
+        ...("createRoot" in actions ? ["createRoot"] : []),
       ].sort()
     )
   })

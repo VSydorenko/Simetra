@@ -1,5 +1,5 @@
 import { runtimeCatalogSchema, type Operation } from "simetra/model"
-import { describe, expect, it, vi } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 import { createCommandRuntime } from "../runtime"
 import { runAfterCommit, Transaction, type RuntimeState } from "../transaction"
 import { fakeDatabase, failureOf, type Answer } from "./fake-database"
@@ -8,13 +8,20 @@ import {
   ID,
   OTHER,
   catalog,
+  branch,
   client,
   commandObject,
+  organization,
   rightsRole,
 } from "./fixtures"
 import {
+  BRANCH,
   CLIENT,
   COMMIT,
+  CREATE_ROOT,
+  MEMBER_ROW,
+  ORGANIZATION,
+  ROOT,
   OPEN,
   RIGHTS,
   ROLLBACK,
@@ -25,8 +32,12 @@ import {
   coreRow,
   create,
   createCall,
+  createOrganization,
+  generatedIds,
+  rootResult,
   session,
   setup,
+  setupRoots,
 } from "./harness"
 
 describe("command transaction", () => {
@@ -400,6 +411,8 @@ describe("command transaction", () => {
   it.each([
     ["an undecodable row", { r: "not json" }],
     ["a row without r", {}],
+    // Скоуп звичайного ядра обов'язковий; виняток — лише рядок членства ядра кореня.
+    ["a row without its scope", { r: JSON.stringify({ id: ID, version: 1 }) }],
   ])("decodes the row before COMMIT and logs %s", async (_, row) => {
     const { db, runtime, log } = await setup((text) =>
       text.endsWith("AS r") ? { rows: [row] } : undefined
@@ -543,6 +556,196 @@ describe("command transaction", () => {
       ROLLBACK,
       { release: true },
     ])
+  })
+})
+
+describe("scope root creation", () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  const rootCall = (item: unknown, member: string | null, id: string | null) =>
+    call("organization_create_root", CREATE_ROOT, [
+      JSON.stringify(item),
+      member,
+      id,
+    ])
+
+  it("creates a tenant root as the exact statement sequence", async () => {
+    generatedIds(ROOT, MEMBER_ROW)
+    const { db, runtime } = await setupRoots()
+    const result = await runtime.run(session, createOrganization)
+    expect(db.calls).toEqual([
+      ...OPEN,
+      context("create", "organization", ROOT),
+      rootCall(
+        { id: ROOT, code: "A" },
+        JSON.stringify({ title: "T" }),
+        MEMBER_ROW
+      ),
+      COMMIT,
+      { release: false },
+    ])
+    expect(result).toEqual({
+      rows: [{ ref: ROOT, version: 1, code: "A" }],
+      changes: [
+        {
+          object: ORGANIZATION,
+          scopeKind: organization.scopeKindId,
+          scope: ROOT,
+          id: ROOT,
+          version: 1,
+          operation: "create",
+        },
+      ],
+    })
+  })
+
+  it("passes an empty creatorMember when the input has none", async () => {
+    generatedIds(ROOT, MEMBER_ROW)
+    const { db, runtime } = await setupRoots()
+    await runtime.run(session, { action: "create", object: ORGANIZATION })
+    expect(db.calls).toContainEqual(rootCall({ id: ROOT }, "{}", MEMBER_ROW))
+  })
+
+  it("operator model: NULL member arguments, an invisible root row as id and version", async () => {
+    const ids = generatedIds(ROOT)
+    const { db, runtime } = await setupRoots((text) =>
+      text.includes("_create_root")
+        ? { rows: [{ r: rootResult({ id: ROOT, version: "1" }, null) }] }
+        : undefined
+    )
+    const result = await runtime.run(session, {
+      action: "create",
+      object: BRANCH,
+      values: { code: "B" },
+    })
+    expect(db.calls).toContainEqual(
+      call("branch_create_root", CREATE_ROOT, [
+        JSON.stringify({ id: ROOT, code: "B" }),
+        null,
+        null,
+      ])
+    )
+    expect(ids).toHaveBeenCalledTimes(1)
+    expect(result.rows).toEqual([{ ref: ROOT, version: 1 }])
+    expect(result.changes).toEqual([
+      {
+        object: BRANCH,
+        scopeKind: branch.scopeKindId,
+        scope: ROOT,
+        id: ROOT,
+        version: 1,
+        operation: "create",
+      },
+    ])
+  })
+
+  it.each<[string, unknown, string]>([
+    ["an id in a root create", { ...createOrganization, id: ID }, "id"],
+    ["a create without an id", { ...create, id: undefined }, "id"],
+    [
+      "tabularSections in a root create",
+      { ...createOrganization, tabularSections: { lines: [] } },
+      "tabularSections",
+    ],
+    [
+      "creatorMember on a root without a creator",
+      { action: "create", object: BRANCH, creatorMember: {} },
+      "creatorMember",
+    ],
+    [
+      "creatorMember outside a root",
+      { ...create, creatorMember: {} },
+      "creatorMember",
+    ],
+    [
+      "creatorMember that is not an object",
+      { ...createOrganization, creatorMember: [] },
+      "creatorMember",
+    ],
+    [
+      "the member key in creatorMember",
+      { ...createOrganization, creatorMember: { ref: OTHER } },
+      "creatorMember.ref",
+    ],
+    [
+      "the member scope in creatorMember",
+      { ...createOrganization, creatorMember: { org: OTHER } },
+      "creatorMember.org",
+    ],
+    [
+      "the member user in creatorMember",
+      { ...createOrganization, creatorMember: { user: OTHER } },
+      "creatorMember.user",
+    ],
+    [
+      "an unknown key in creatorMember",
+      { ...createOrganization, creatorMember: { nope: 1 } },
+      "creatorMember.nope",
+    ],
+    [
+      "an invalid creatorMember value",
+      { ...createOrganization, creatorMember: { title: 1 } },
+      "creatorMember.title",
+    ],
+  ])("rejects %s before the port", async (_, input, path) => {
+    const { db, runtime } = await setupRoots()
+    expect(await failureOf(runtime.run(session, input as Operation))).toEqual({
+      code: "command.invalid",
+      path,
+    })
+    expect(db.calls).toEqual([])
+  })
+
+  // Р-A6-20: id генерує `run`, не спроба; повтор бере ті самі.
+  it.each(["40001", "40P01"])(
+    "a %s retry reuses the root and member ids",
+    async (code) => {
+      const ids = generatedIds(ROOT, MEMBER_ROW, OTHER, ID)
+      let calls = 0
+      const { db, runtime } = await setupRoots((text) =>
+        text.includes("_create_root") && calls++ === 0
+          ? { error: { code, message: "retry" } }
+          : undefined
+      )
+      await runtime.run(session, createOrganization)
+      const phase = [
+        context("create", "organization", ROOT),
+        rootCall(
+          { id: ROOT, code: "A" },
+          JSON.stringify({ title: "T" }),
+          MEMBER_ROW
+        ),
+      ]
+      expect(db.calls).toEqual([
+        ...OPEN,
+        ...phase,
+        ROLLBACK,
+        { release: false },
+        ...OPEN,
+        ...phase,
+        COMMIT,
+        { release: false },
+      ])
+      expect(ids).toHaveBeenCalledTimes(2)
+    }
+  )
+
+  it.each<[string, string]>([
+    ["a root core answer that is not an object", JSON.stringify([1])],
+    ["a member row on a kind without a creator", rootResult()],
+  ])("%s is command.internal", async (_, r) => {
+    generatedIds(ROOT)
+    const { runtime, log } = await setupRoots((text) =>
+      text.includes("_create_root") ? { rows: [{ r }] } : undefined
+    )
+    expect(
+      await failureOf(
+        runtime.run(session, { action: "create", object: BRANCH })
+      )
+    ).toEqual({ code: "command.internal" })
+    expect(log).toHaveBeenCalled()
   })
 })
 

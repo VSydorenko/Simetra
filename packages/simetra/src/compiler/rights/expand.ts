@@ -89,8 +89,31 @@ const supports = (contract: RightsContract, extent: ProjectionExtent) =>
  * роль і «кожен користувач» покривають нескоуплені об'єкти — в однотенантному
  * проєкті це всі; контейнерна — прив'язані до свого контейнера (спека прав §4.3).
  * Спільне правило рівня для розгортання ролі й домену рівня функцій прав.
+ * `explicit` — пару називає явний грант (чи домен рівня для дельти), а не
+ * розгортання `grantAll`, `withAction` чи `fullAccess`.
  */
 export function allowedActions(
+  level: CompiledRoleLevel,
+  contract: RightsContract,
+  explicit: boolean
+): ReadonlySet<string> | undefined {
+  // Корінь скоупу (спека прав Рх7): `create` дає лише явний грант ролі `global`
+  // чи `everyUser`. `has_right` рахує всі рівні, крім контейнера, тож грант
+  // рівня скоупу (і його `fullAccess`) відкрив би носію створення тенантів;
+  // розгортання ж пару не дає, бо модель тенанта — явний вибір застосунку.
+  if (contract.root === true) {
+    if (level.level === "global" || level.level === "everyUser") {
+      return explicit ? new Set(["create"]) : undefined
+    }
+    const allowed = levelActions(level, contract)
+    return allowed === undefined
+      ? undefined
+      : new Set([...allowed].filter((action) => action !== "create"))
+  }
+  return levelActions(level, contract)
+}
+
+function levelActions(
   level: CompiledRoleLevel,
   contract: RightsContract
 ): ReadonlySet<string> | undefined {
@@ -131,6 +154,16 @@ export const levelAllowsExtent = (
   level: CompiledRoleLevel,
   extent: ProjectionExtent
 ) => level.level !== "everyUser" || extent !== "any"
+
+/**
+ * `create` кореня скоупу не має обсягу виміру (спека прав Рх7): носія виміру
+ * нового кореня обирав би сам творець, тож вимір нічого не обмежував би.
+ */
+export const actionAllowsExtent = (
+  contract: RightsContract,
+  action: string,
+  extent: ProjectionExtent
+) => contract.root !== true || action !== "create" || typeof extent === "string"
 
 /**
  * Розгортання ролі в рядки проєкції (спека прав §3, §4.1): гранти ролі й
@@ -203,6 +236,7 @@ export function expandRole(
     if (extent !== "any") return
     if (supports(contract, "own")) add(contract, action, "own", sources, origin)
     for (const { dimensionId } of contract.access) {
+      if (!actionAllowsExtent(contract, action, { dimensionId })) continue
       add(contract, action, { dimensionId }, sources, origin)
     }
   }
@@ -226,7 +260,7 @@ export function expandRole(
       for (const contract of ctx.rights.values()) {
         // Системні довідники прав дає лише явний грант (спека прав §4.6).
         if (contract.system !== undefined) continue
-        const allowed = allowedActions(level, contract)
+        const allowed = allowedActions(level, contract, false)
         if (allowed?.has(selector.withAction) !== true) continue
         if (grant.extent !== undefined && !supports(contract, grant.extent)) {
           continue
@@ -239,9 +273,13 @@ export function expandRole(
     }
     for (const id of selector.ids) {
       const contract = ctx.rights.get(id)!
-      const allowed = allowedActions(level, contract)
+      const allowed = allowedActions(level, contract, true)
       grant.actions.forEach((action, position) => {
-        if (allowed?.has(action) === true) {
+        if (
+          allowed?.has(action) === true &&
+          (grant.extent === undefined ||
+            actionAllowsExtent(contract, action, grant.extent))
+        ) {
           found.push({ contract, action })
           return
         }
@@ -255,6 +293,8 @@ export function expandRole(
               action: actionName(contract, action),
               level: level.level,
               role: roleName,
+              // Корінь скоупу має своє правило рівня — і свій текст.
+              ...(contract.root === true ? { root: "true" } : {}),
             }
           )
         )
@@ -300,7 +340,7 @@ export function expandRole(
         for (const contract of ctx.rights.values()) {
           // Системні довідники прав дає лише явний грант (спека прав §4.6).
           if (contract.system !== undefined) continue
-          const allowed = allowedActions(level, contract)
+          const allowed = allowedActions(level, contract, false)
           if (allowed === undefined || !supports(contract, extent)) continue
           for (const { action } of contract.actions) {
             if (allowed.has(action)) {

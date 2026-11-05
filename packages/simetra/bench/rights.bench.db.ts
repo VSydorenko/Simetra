@@ -24,9 +24,11 @@ import {
   compileRights,
   policyDomain,
   snapshotBenchDomain,
+  tenantSelfService,
 } from "../src/compiler/__tests__/fixtures/rights"
 import { SNAPSHOT_TABLES } from "../src/compiler/rights/actor-snapshot"
 import { RIGHTS_FUNCTIONS } from "../src/compiler/rights/functions"
+import { rootCreatorFunctionName } from "../src/compiler/rights/root-creator-units"
 import { signUp } from "../test/db/auth"
 import { asRole, testDatabaseUrl } from "../test/db/connection"
 import {
@@ -93,6 +95,10 @@ const median = (values: number[]) => {
 /** Медіана повторів і перший (холодний) прогін — кожен запит API іде окремою транзакцією. */
 const timing = (first: number, warm: number[]) =>
   `${ms(median(warm))} (first ${ms(first)})`
+
+/** Медіана прогонів і кожен прогін. */
+const runsCell = (times: number[]) =>
+  `${ms(median(times))} (runs ${times.map((t) => t.toFixed(1)).join(", ")} ms)`
 
 async function elapsed(fn: () => Promise<unknown>): Promise<number> {
   const started = performance.now()
@@ -290,6 +296,98 @@ async function commandRole(client: pg.Client): Promise<void> {
   )
 }
 
+/**
+ * Актор сценаріїв 7 і 8: `OrgAdmin` у `scopes` тенантах (домашній — перший)
+ * і `values` значень виміру `region` у домашньому, з контейнером, рядком
+ * таблиці дослівної функції виміру й місцем у команді — цілі першого запису.
+ */
+async function seedActor(client: pg.Client, scopes: number, values: number) {
+  const user = await signUp(client)
+  const home = randomUUID()
+  await insert(client, ORG, { id: home })
+  await client.query(
+    `INSERT INTO public.${ORG} (id) SELECT gen_random_uuid() FROM generate_series(1, $1)`,
+    [scopes - 1]
+  )
+  // Тенанти актора — домашній і ще не зайняті іншим актором
+  await client.query(
+    `INSERT INTO public.${MEMBER} (id, org_id, user_id)
+       SELECT gen_random_uuid(), o.id, $1 FROM public.${ORG} o
+       WHERE o.id = $2 OR NOT EXISTS (SELECT 1 FROM public.${MEMBER} m WHERE m.org_id = o.id)`,
+    [user, home]
+  )
+  await maintenance(client, () =>
+    client.query(
+      `INSERT INTO public.${ASSIGNMENTS} (id, org_id, subject, archetype, deletion_mark)
+         SELECT gen_random_uuid(), m.org_id, m.id, $2, false
+         FROM public.${MEMBER} m WHERE m.user_id = $1`,
+      [user, ORG_ADMIN_ID]
+    )
+  )
+  const { rows: member } = await client.query<{ id: string }>(
+    `SELECT id FROM public.${MEMBER} WHERE org_id = $1 AND user_id = $2`,
+    [home, user]
+  )
+  await client.query(
+    `INSERT INTO public.${REGION} (id, org_id) SELECT gen_random_uuid(), $1 FROM generate_series(1, $2)`,
+    [home, values]
+  )
+  await client.query(
+    `INSERT INTO public.member_region (org_id, member_id, region_id)
+       SELECT $1, $2, r.id FROM public.${REGION} r WHERE r.org_id = $1`,
+    [home, member[0]!.id]
+  )
+  const project = randomUUID()
+  const zone = randomUUID()
+  await insert(client, "project", { id: project, org_id: home })
+  await insert(client, BENCH_ZONE_TABLE, {
+    id: zone,
+    org_id: home,
+    keeper_id: user,
+  })
+  await client.query(
+    `INSERT INTO public.${BENCH_TEAM_SEAT_TABLE} (id, user_id, team) VALUES (gen_random_uuid(), $1, gen_random_uuid())`,
+    [user]
+  )
+  return {
+    user,
+    home,
+    label: `${scopes.toLocaleString("en")} fullAccess scopes, ${values.toLocaleString("en")} dimension values`,
+    targets: [
+      { name: "container", table: "project", id: project },
+      {
+        name: "verbatim dimension table",
+        table: BENCH_ZONE_TABLE,
+        id: zone,
+      },
+      { name: "membership catalog", table: MEMBER, id: member[0]!.id },
+    ],
+  }
+}
+
+/**
+ * Звичайний і найбільший актор сценаріїв 7 і 8 (обсяги сценаріїв 1 і 2
+ * разом) з відкладеними перевірками засіву й `ANALYZE` засіяних таблиць —
+ * тут, а не в замірах (як у сценарії 5).
+ */
+async function benchActors(client: pg.Client) {
+  const actors = [
+    { kind: "ordinary actor", ...(await seedActor(client, 1, 1)) },
+    {
+      kind: "largest actor",
+      ...(await (SMOKE
+        ? seedActor(client, 100, 1000)
+        : seedActor(client, 2000, 20000))),
+    },
+  ]
+  await client.query("SET CONSTRAINTS ALL IMMEDIATE")
+  await client.query("SET CONSTRAINTS ALL DEFERRED")
+  await client.query(
+    `ANALYZE public.${ORG}, public.${MEMBER}, public.${ASSIGNMENTS}, public.${REGION}, public.member_region, public.project, public.${BENCH_ZONE_TABLE}, public.${BENCH_TEAM_SEAT_TABLE}`
+  )
+  return actors
+}
+
 /** Зразки серверного заміру на функцію (Р3-9 (а)): не менше 31. */
 const FACT_SAMPLES = SMOKE ? 3 : 31
 /** Викликів функції в одному зразку. */
@@ -448,6 +546,51 @@ async function snapshotFillers(
     "values",
   ])
   return fillers
+}
+
+/**
+ * Σ операторів заповнення знімка (Р3-9 (в), розвилка (2)) з розбивкою за
+ * таблицями фактів — ті самі оператори, що в тілі тригера знімка, окремими
+ * запитами клієнта в точці збереження з відкатом, у стані до першого запису
+ * (знімка ще немає). `written` — рядки першого прогону.
+ */
+async function snapshotFill(
+  client: pg.Client,
+  fillers: { table: string; sql: string }[],
+  user: string
+): Promise<{
+  times: Map<string, number[]>
+  written: Map<string, number>
+  sums: number[]
+}> {
+  const times = new Map<string, number[]>()
+  const written = new Map<string, number>()
+  const sums: number[] = []
+  for (let i = 0; i < 2 * RUNS - 1; i++) {
+    await client.query("SAVEPOINT fill")
+    try {
+      await client.query("SELECT set_config($1, $2, true)", [
+        SESSION_CLAIMS_SETTING,
+        JSON.stringify({ sub: user, role: "authenticated" }),
+      ])
+      const run = new Map<string, number>()
+      for (const filler of fillers) {
+        let n = 0
+        const time = await elapsed(async () => {
+          n = (await client.query(filler.sql)).rowCount ?? 0
+        })
+        run.set(filler.table, (run.get(filler.table) ?? 0) + time)
+        if (i === 0)
+          written.set(filler.table, (written.get(filler.table) ?? 0) + n)
+      }
+      for (const [table, time] of run)
+        times.set(table, [...(times.get(table) ?? []), time])
+      sums.push([...run.values()].reduce((x, y) => x + y, 0))
+    } finally {
+      await client.query("ROLLBACK TO SAVEPOINT fill")
+    }
+  }
+  return { times, written, sums }
 }
 
 /** Тіла тригерів знімка кожного джерела й решта тригерів прав джерела. */
@@ -1230,81 +1373,7 @@ describe("rights limits benchmark", () => {
     async () => {
       await scenario(await compiled(snapshotBenchDomain()), async (client) => {
         await commandRole(client)
-        const actor = async (scopes: number, values: number) => {
-          const user = await signUp(client)
-          const home = randomUUID()
-          await insert(client, ORG, { id: home })
-          await client.query(
-            `INSERT INTO public.${ORG} (id) SELECT gen_random_uuid() FROM generate_series(1, $1)`,
-            [scopes - 1]
-          )
-          // Тенанти актора — домашній і ще не зайняті іншим актором
-          await client.query(
-            `INSERT INTO public.${MEMBER} (id, org_id, user_id)
-             SELECT gen_random_uuid(), o.id, $1 FROM public.${ORG} o
-             WHERE o.id = $2 OR NOT EXISTS (SELECT 1 FROM public.${MEMBER} m WHERE m.org_id = o.id)`,
-            [user, home]
-          )
-          await maintenance(client, () =>
-            client.query(
-              `INSERT INTO public.${ASSIGNMENTS} (id, org_id, subject, archetype, deletion_mark)
-               SELECT gen_random_uuid(), m.org_id, m.id, $2, false
-               FROM public.${MEMBER} m WHERE m.user_id = $1`,
-              [user, ORG_ADMIN_ID]
-            )
-          )
-          const { rows: member } = await client.query<{ id: string }>(
-            `SELECT id FROM public.${MEMBER} WHERE org_id = $1 AND user_id = $2`,
-            [home, user]
-          )
-          await client.query(
-            `INSERT INTO public.${REGION} (id, org_id) SELECT gen_random_uuid(), $1 FROM generate_series(1, $2)`,
-            [home, values]
-          )
-          await client.query(
-            `INSERT INTO public.member_region (org_id, member_id, region_id)
-             SELECT $1, $2, r.id FROM public.${REGION} r WHERE r.org_id = $1`,
-            [home, member[0]!.id]
-          )
-          const project = randomUUID()
-          const zone = randomUUID()
-          await insert(client, "project", { id: project, org_id: home })
-          await insert(client, BENCH_ZONE_TABLE, {
-            id: zone,
-            org_id: home,
-            keeper_id: user,
-          })
-          await client.query(
-            `INSERT INTO public.${BENCH_TEAM_SEAT_TABLE} (id, user_id, team) VALUES (gen_random_uuid(), $1, gen_random_uuid())`,
-            [user]
-          )
-          return {
-            user,
-            label: `${scopes.toLocaleString("en")} fullAccess scopes, ${values.toLocaleString("en")} dimension values`,
-            targets: [
-              { name: "container", table: "project", id: project },
-              {
-                name: "verbatim dimension table",
-                table: BENCH_ZONE_TABLE,
-                id: zone,
-              },
-              { name: "membership catalog", table: MEMBER, id: member[0]!.id },
-            ],
-          }
-        }
-        const actors = [
-          { kind: "ordinary actor", ...(await actor(1, 1)) },
-          {
-            kind: "largest actor",
-            ...(await (SMOKE ? actor(100, 1000) : actor(2000, 20000))),
-          },
-        ]
-        // Відкладені перевірки засіву — тут, а не в замірах (як у сценарії 5)
-        await client.query("SET CONSTRAINTS ALL IMMEDIATE")
-        await client.query("SET CONSTRAINTS ALL DEFERRED")
-        await client.query(
-          `ANALYZE public.${ORG}, public.${MEMBER}, public.${ASSIGNMENTS}, public.${REGION}, public.member_region, public.project, public.${BENCH_ZONE_TABLE}, public.${BENCH_TEAM_SEAT_TABLE}`
-        )
+        const actors = await benchActors(client)
 
         /** Перший оператор команди в «свіжій» транзакції — точці збереження. */
         const firstWrite = async (
@@ -1353,8 +1422,6 @@ describe("rights limits benchmark", () => {
             })
           }
         }
-        const runs = (times: number[]) =>
-          `${ms(median(times))} (runs ${times.map((t) => t.toFixed(1)).join(", ")} ms)`
         const claims = (user: string) =>
           client.query("SELECT set_config($1, $2, true)", [
             SESSION_CLAIMS_SETTING,
@@ -1362,48 +1429,24 @@ describe("rights limits benchmark", () => {
           ])
 
         // Р3-9 (в), розвилка (2): Σ операторів заповнення знімка з розбивкою
-        // за таблицями фактів — ті самі оператори, що в тілі тригера знімка,
-        // окремими запитами клієнта в точці збереження з відкатом, у стані до
-        // першого запису (знімка ще немає).
+        // за таблицями фактів (`snapshotFill`).
         const fillers = await snapshotFillers(client)
         for (const a of actors) {
-          const times = new Map<string, number[]>()
-          const written = new Map<string, number>()
-          const sums: number[] = []
-          for (let i = 0; i < 2 * RUNS - 1; i++) {
-            await client.query("SAVEPOINT fill")
-            try {
-              await claims(a.user)
-              const run = new Map<string, number>()
-              for (const filler of fillers) {
-                let n = 0
-                const time = await elapsed(async () => {
-                  n = (await client.query(filler.sql)).rowCount ?? 0
-                })
-                run.set(filler.table, (run.get(filler.table) ?? 0) + time)
-                if (i === 0)
-                  written.set(
-                    filler.table,
-                    (written.get(filler.table) ?? 0) + n
-                  )
-              }
-              for (const [table, time] of run)
-                times.set(table, [...(times.get(table) ?? []), time])
-              sums.push([...run.values()].reduce((x, y) => x + y, 0))
-            } finally {
-              await client.query("ROLLBACK TO SAVEPOINT fill")
-            }
-          }
+          const { times, written, sums } = await snapshotFill(
+            client,
+            fillers,
+            a.user
+          )
           for (const [table, values] of times)
             rows.push({
               scenario: `7 snapshot fill, ${table}, ${a.kind}`,
               volume: `${a.label}; ${(written.get(table) ?? 0).toLocaleString("en")} rows`,
-              operator: runs(values),
+              operator: runsCell(values),
             })
           rows.push({
             scenario: `7 snapshot fill, sum of statements, ${a.kind}`,
             volume: a.label,
-            operator: runs(sums),
+            operator: runsCell(sums),
           })
         }
 
@@ -1454,7 +1497,7 @@ describe("rights limits benchmark", () => {
             rows.push({
               scenario: `7 rights_any on the pair, largest actor, ${snapshot ? "with snapshot" : "no snapshot"}`,
               volume: largest.label,
-              operator: runs(times),
+              operator: runsCell(times),
             })
           } finally {
             await client.query("ROLLBACK TO SAVEPOINT any_pair")
@@ -1514,7 +1557,7 @@ describe("rights limits benchmark", () => {
             rows.push({
               scenario: "7 COMMIT of an assignment batch, largest actor",
               volume: `${commands.toLocaleString("en")} assignment rows, ${largest.label}`,
-              operator: runs(times),
+              operator: runsCell(times),
             })
           }
         } finally {
@@ -1573,12 +1616,12 @@ describe("rights limits benchmark", () => {
             {
               scenario: `7 first write with snapshot, largest actor, ${label}`,
               volume: largest.label,
-              operator: runs(results.map((r) => r.write)),
+              operator: runsCell(results.map((r) => r.write)),
             },
             {
               scenario: `7 point read with snapshot, largest actor, ${label}`,
               volume: largest.label,
-              operator: runs(results.map((r) => r.read)),
+              operator: runsCell(results.map((r) => r.read)),
             }
           )
         }
@@ -1608,6 +1651,251 @@ describe("rights limits benchmark", () => {
 
         sourceRows.push(...(await snapshotSources(client)))
       })
+    },
+    TIMEOUT
+  )
+
+  /**
+   * (8) Створення тенанта (план П4-A6, Р-A6-17): модель сценарію 7 плюс
+   * `tenantSelfService()` — «кожен користувач» створює `Organization`
+   * (`create@own`), творець отримує `TenantOwner` з `fullAccess`. Актори —
+   * сценарію 7. Ядро кореня — під контекстом `create` кореня від ролі команд,
+   * «COMMIT» — `SET CONSTRAINTS ALL IMMEDIATE` у транзакції сценарію, як у
+   * сценарії 7. Пороги погоджено архітекторкою: таблиця їх друкує поруч із
+   * заміром, а рішення про перевищення — за архітекторкою, як і решта меж
+   * бенчмарку (спека прав §5.4), тож це не перевірка тесту.
+   */
+  it(
+    "8 tenant creation",
+    async () => {
+      await scenario(
+        await compiled(snapshotBenchDomain(tenantSelfService())),
+        async (client) => {
+          await commandRole(client)
+          const actors = await benchActors(client)
+          const claims = (user: string) =>
+            client.query("SELECT set_config($1, $2, true)", [
+              SESSION_CLAIMS_SETTING,
+              JSON.stringify({ sub: user, role: "authenticated" }),
+            ])
+          const context = (action: string, object: string, root: string) =>
+            client.query("SELECT set_config($1, $2, true)", [
+              COMMAND_SETTING,
+              JSON.stringify({ action, object, root }),
+            ])
+          const limit = (median: number, max: number, label: string) =>
+            `limit ${label}: ${median <= max ? "within" : "EXCEEDED"}`
+          /** Сирий `INSERT` кореня під `create` (маркер ставить тригер ефектів). */
+          const rawRoot = async (user: string, root: string) => {
+            await claims(user)
+            await context("create", ORG, root)
+            await client.query(`SET LOCAL ROLE ${PLATFORM_ROLES.command}`)
+            await client.query(`INSERT INTO public.${ORG} (id) VALUES ($1)`, [
+              root,
+            ])
+            await client.query("RESET ROLE")
+            expect(
+              await snapshotFacts(client),
+              "the root insert takes no snapshot"
+            ).toEqual([])
+          }
+          const fillers = await snapshotFillers(client)
+          const grant = rootCreatorFunctionName({ physicalName: "org_id" })
+
+          for (const a of actors) {
+            // Σ операторів заповнення знімка того самого актора — орієнтир для
+            // розбивки ядра; межу ядра найбільшого актора задає архітекторка.
+            const { sums } = await snapshotFill(client, fillers, a.user)
+            rows.push({
+              scenario: `8 snapshot fill, sum of statements, ${a.kind}`,
+              volume: a.label,
+              operator: runsCell(sums),
+            })
+
+            const core: number[] = []
+            const commit: number[] = []
+            for (let i = 0; i < 2 * RUNS - 1; i++) {
+              await client.query("SAVEPOINT tenant")
+              try {
+                const root = randomUUID()
+                await claims(a.user)
+                await context("create", ORG, root)
+                await client.query(`SET LOCAL ROLE ${PLATFORM_ROLES.command}`)
+                let result: { root: unknown; member: unknown } | undefined
+                core.push(
+                  await elapsed(async () => {
+                    const { rows: r } = await client.query<{
+                      r: { root: unknown; member: unknown }
+                    }>(
+                      `SELECT public.${ORG}_create_root($1::jsonb, $2::jsonb, $3::uuid)::jsonb AS r`,
+                      [JSON.stringify({ id: root }), "{}", randomUUID()]
+                    )
+                    result = r[0]!.r
+                  })
+                )
+                await client.query("RESET ROLE")
+                expect(
+                  result?.member,
+                  "the creator member is written"
+                ).not.toBe(null)
+                commit.push(
+                  await elapsed(() =>
+                    client.query("SET CONSTRAINTS ALL IMMEDIATE")
+                  )
+                )
+                await client.query("SET CONSTRAINTS ALL DEFERRED")
+              } finally {
+                await client.query("ROLLBACK TO SAVEPOINT tenant")
+              }
+            }
+            const ordinary = a.kind === "ordinary actor"
+            const coreMax = ordinary ? 30 : 300
+            const commitMax = ordinary ? 30 : 6_000
+            rows.push(
+              {
+                scenario: `8 tenant creation, ${a.kind}`,
+                volume: a.label,
+                operator: `${runsCell(core)}; ${limit(median(core), coreMax, ordinary ? "≤ 30 ms" : "≤ 300 ms")}`,
+              },
+              {
+                scenario: `8 tenant creation COMMIT, ${a.kind}`,
+                volume: a.label,
+                operator: `${runsCell(commit)}; ${limit(median(commit), commitMax, ordinary ? "≤ 30 ms" : "≤ 6 s")}`,
+              }
+            )
+
+            // Розбивка ядра: (а) вставка членства із заповненням знімка — та
+            // сама вставка, що крок (4) функції гранту: від власника з
+            // `row_security = off` під контекстом `create` членства, у щойно
+            // вставлений корінь (знімка ще немає); (б) тіло функції гранту без
+            // знімка — виклик функції після знімка, взятого раніше в
+            // транзакції (Р-A6-3 це дозволяє): записом власника з контекстом
+            // команди в «Користувачів» на нулі рядків, як у сценарії 6, — він
+            // знімає факти, не чіпаючи кешу початку (перевірка (6) функції).
+            const membership: number[] = []
+            const body: number[] = []
+            for (let i = 0; i < 2 * RUNS - 1; i++) {
+              await client.query("SAVEPOINT breakdown")
+              try {
+                const root = randomUUID()
+                const member = randomUUID()
+                await rawRoot(a.user, root)
+                await context("create", MEMBER, member)
+                await client.query("SET LOCAL row_security = off")
+                membership.push(
+                  await elapsed(() =>
+                    client.query(
+                      `INSERT INTO public.${MEMBER} (id, org_id, user_id) VALUES ($1, $2, (SELECT ${PLATFORM_SCHEMA}.${CURRENT_USER_FUNCTION_NAME}()))`,
+                      [member, root]
+                    )
+                  )
+                )
+                expect(
+                  await snapshotFacts(client),
+                  "the membership insert takes the snapshot"
+                ).toEqual(["rights", "scopes", "values"])
+              } finally {
+                await client.query("ROLLBACK TO SAVEPOINT breakdown")
+              }
+              await client.query("SAVEPOINT breakdown")
+              try {
+                const root = randomUUID()
+                await rawRoot(a.user, root)
+                await context("update", "users", a.user)
+                await client.query(
+                  "UPDATE public.users SET id = id WHERE false"
+                )
+                expect(
+                  await snapshotFacts(client),
+                  "the snapshot is taken earlier"
+                ).toEqual(["rights", "scopeSets", "scopes", "values"])
+                const { rows: start } = await client.query<{ n: string }>(
+                  `SELECT count(*) AS n FROM ${SNAPSHOT_TABLES.start.schema}.${SNAPSHOT_TABLES.start.name} WHERE xid = txid_current()`
+                )
+                expect(start[0]!.n, "the start cache is empty").toBe("0")
+                await context("create", ORG, root)
+                await client.query(`SET LOCAL ROLE ${PLATFORM_ROLES.command}`)
+                body.push(
+                  await elapsed(() =>
+                    client.query(
+                      `SELECT ${grant.schema}.${grant.name}($1::uuid, $2::uuid, '{}'::jsonb)`,
+                      [root, randomUUID()]
+                    )
+                  )
+                )
+                await client.query("RESET ROLE")
+              } finally {
+                await client.query("ROLLBACK TO SAVEPOINT breakdown")
+              }
+            }
+            rows.push(
+              {
+                scenario: `8 tenant creation: membership insert with snapshot fill, ${a.kind}`,
+                volume: a.label,
+                operator: runsCell(membership),
+              },
+              {
+                scenario: `8 tenant creation: grant function body without snapshot fill, ${a.kind}`,
+                volume: a.label,
+                operator: runsCell(body),
+              }
+            )
+          }
+
+          // Звичайне призначення найбільшим актором (ціна гілки причини
+          // журналу Р-A6-5): запрошений учасник у домашньому тенанті —
+          // перший запис команди, він бере знімок; заміряний оператор —
+          // вставка призначення, «COMMIT» — окремо. Порівняння «до/після» —
+          // той самий замір на `main` до блоку A6, у звіті плану.
+          const largest = actors[1]!
+          const write: number[] = []
+          const writeCommit: number[] = []
+          for (let i = 0; i < 2 * RUNS - 1; i++) {
+            await client.query("SAVEPOINT assignment")
+            try {
+              const member = randomUUID()
+              const assignment = randomUUID()
+              await claims(largest.user)
+              await context("create", MEMBER, member)
+              await client.query(`SET LOCAL ROLE ${PLATFORM_ROLES.command}`)
+              await client.query(
+                `INSERT INTO public.${MEMBER} (id, org_id) VALUES ($1, $2)`,
+                [member, largest.home]
+              )
+              await context("administerRights", ASSIGNMENTS, assignment)
+              write.push(
+                await elapsed(() =>
+                  client.query(
+                    `INSERT INTO public.${ASSIGNMENTS} (id, org_id, subject, archetype, deletion_mark) VALUES ($1, $2, $3, $4, false)`,
+                    [assignment, largest.home, member, TASK_VIEWER_ID]
+                  )
+                )
+              )
+              await client.query("RESET ROLE")
+              writeCommit.push(
+                await elapsed(() =>
+                  client.query("SET CONSTRAINTS ALL IMMEDIATE")
+                )
+              )
+              await client.query("SET CONSTRAINTS ALL DEFERRED")
+            } finally {
+              await client.query("ROLLBACK TO SAVEPOINT assignment")
+            }
+          }
+          rows.push(
+            {
+              scenario: "8 assignment write, largest actor",
+              volume: `1 assignment row, ${largest.label}`,
+              operator: runsCell(write),
+            },
+            {
+              scenario: "8 assignment write COMMIT, largest actor",
+              volume: `1 assignment row, ${largest.label}`,
+              operator: runsCell(writeCommit),
+            }
+          )
+        }
+      )
     },
     TIMEOUT
   )

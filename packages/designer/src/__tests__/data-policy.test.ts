@@ -1,12 +1,20 @@
-import { compile, type CompiledModel } from "simetra/compiler"
+import {
+  buildRuntimeCatalog,
+  compile,
+  type CompiledModel,
+} from "simetra/compiler"
 import type { Batch, Operation } from "simetra/model"
 import { beforeAll, describe, expect, it } from "vitest"
 import {
   acceptDebt,
+  COMMENT_FILE,
   GAUGE_LOG_FILE,
+  MEMBER_FILE,
   policyDomain,
   ROLE_FILE,
   runtimeValuesLayer,
+  tenantOperator,
+  tenantSelfService,
 } from "../../../simetra/test/support"
 import { dataCommandRefusal } from "../tools/data-policy"
 import { withObjectModule } from "./helpers/object-module"
@@ -17,11 +25,22 @@ const LOG = { kind: "Catalog", name: "GaugeLog" } as const
 const ASSIGNMENTS = { kind: "Catalog", name: "OrgRoleAssignments" } as const
 const ROLES = { kind: "Catalog", name: "OrgRoles" } as const
 const ORGANIZATION = { kind: "Catalog", name: "Organization" } as const
+const MEMBERS = { kind: "Catalog", name: "OrgMember" } as const
+const BRANCH = { kind: "Catalog", name: "Branch" } as const
 
 const create = (object: Operation["object"]): Operation => ({
   action: "create",
   object,
   id: ID,
+})
+// Корінь виду скоупу: id генерує T3, учасника творця задає `creatorMember`
+const createRoot = (
+  object: Operation["object"],
+  creatorMember?: Record<string, unknown>
+): Operation => ({
+  action: "create",
+  object,
+  ...(creatorMember === undefined ? {} : { creatorMember }),
 })
 const update = (object: Operation["object"]): Operation => ({
   action: "update",
@@ -36,9 +55,16 @@ async function modelOf(files: ReadonlyMap<string, string>) {
   return result.model!
 }
 
-// Три моделі на файл: компіляція домену — найдорожча частина тесту
-const models: Record<"plain" | "module" | "rootCreator", CompiledModel> =
-  {} as never
+// Моделі на файл: компіляція домену — найдорожча частина тесту
+const models: Record<
+  | "plain"
+  | "module"
+  | "rootCreator"
+  | "tenant"
+  | "tenantMemberModule"
+  | "tenantOtherModule",
+  CompiledModel
+> = {} as never
 
 beforeAll(async () => {
   const base = policyDomain(runtimeValuesLayer())
@@ -51,6 +77,19 @@ beforeAll(async () => {
     policyDomain(runtimeValuesLayer(), {
       [ROLE_FILE("OrgAdmin")]: { rootCreator: true },
     })
+  )
+  // Модель А створення тенанта: `Organization` з творцем і довідником
+  // членства `OrgMember`, `Branch` оператора без творця
+  const tenant = policyDomain(
+    tenantSelfService({ requiredMember: true }),
+    tenantOperator()
+  )
+  models.tenant = await modelOf(tenant)
+  models.tenantMemberModule = await modelOf(
+    withObjectModule(tenant, MEMBER_FILE)
+  )
+  models.tenantOtherModule = await modelOf(
+    withObjectModule(tenant, COMMENT_FILE)
   )
 }, 60_000)
 
@@ -161,6 +200,69 @@ describe("dataCommandRefusal", () => {
       expected: undefined,
     },
     {
+      name: "tenant creation with creatorMember and the rights flag",
+      model: "tenant",
+      batch: [createRoot(ORGANIZATION, { title: "founder" })],
+      allowRightsWrite: true,
+      expected: undefined,
+    },
+    {
+      name: "tenant creation with creatorMember without the rights flag",
+      model: "tenant",
+      batch: [createRoot(ORGANIZATION, { title: "founder" })],
+      allowRightsWrite: false,
+      expected: { kind: "rights", object: ORGANIZATION },
+    },
+    {
+      name: "tenant creation when the membership catalog has a module",
+      model: "tenantMemberModule",
+      batch: [createRoot(ORGANIZATION, { title: "founder" })],
+      allowRightsWrite: true,
+      expected: {
+        kind: "command",
+        error: {
+          code: "command.invalid",
+          reason: "object-module",
+          object: MEMBERS,
+        },
+      },
+    },
+    {
+      name: "a second tenant creation in a batch when the membership catalog has a module",
+      model: "tenantMemberModule",
+      batch: [createRoot(BRANCH), createRoot(ORGANIZATION, { title: "x" })],
+      allowRightsWrite: true,
+      expected: {
+        kind: "command",
+        error: {
+          code: "command.invalid",
+          reason: "object-module",
+          object: MEMBERS,
+        },
+      },
+    },
+    {
+      name: "a second tenant creation in a batch without the rights flag",
+      model: "tenant",
+      batch: [createRoot(BRANCH), createRoot(ORGANIZATION, { title: "x" })],
+      allowRightsWrite: false,
+      expected: { kind: "rights", object: ORGANIZATION },
+    },
+    {
+      name: "tenant creation when only an unrelated object has a module",
+      model: "tenantOtherModule",
+      batch: [createRoot(ORGANIZATION, { title: "founder" })],
+      allowRightsWrite: true,
+      expected: undefined,
+    },
+    {
+      name: "operator root creation without a creator needs only data write",
+      model: "tenantMemberModule",
+      batch: [createRoot(BRANCH)],
+      allowRightsWrite: false,
+      expected: undefined,
+    },
+    {
       name: "an unknown object",
       model: "plain",
       batch: [update({ kind: "Catalog", name: "Missing" })],
@@ -169,7 +271,12 @@ describe("dataCommandRefusal", () => {
     },
   ])("$name", ({ model, batch, allowRightsWrite, expected }) => {
     expect(
-      dataCommandRefusal(models[model], batch, { allowRightsWrite })
+      dataCommandRefusal(
+        models[model],
+        buildRuntimeCatalog(models[model]),
+        batch,
+        { allowRightsWrite }
+      )
     ).toEqual(expected)
   })
 })

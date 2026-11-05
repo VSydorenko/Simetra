@@ -16,6 +16,7 @@ import {
   SNAPSHOT_USER_REGION_TABLE,
   adoptedSourcesDomain,
   compileRights,
+  rootCreationDomain,
   snapshotSourcesDomain,
 } from "./fixtures/rights"
 import { acceptDebt, expectClean } from "./helpers"
@@ -130,6 +131,25 @@ describe("actor snapshot sources", () => {
         fn.name
       ).toEqual([])
     }
+  })
+
+  // Р-A6-7: маркер кореня пише тригер ефектів кореня, а факти його не
+  // читають — ні джерелом, ні невідомим відношенням він не стає.
+  it("does not take the root marker for a snapshot source", async () => {
+    const result = await compileRights(rootCreationDomain())
+    expectClean(result)
+    const compiled = result.model!
+    expect(
+      compiled.physical.tables.some(
+        (t) =>
+          t.schema === PLATFORM_SCHEMA && t.name === "rights_tx_root_marker"
+      )
+    ).toBe(true)
+    const found = snapshotSources(inputOf(compiled))
+    expect(found.unknown).toEqual([])
+    expect([...found.sources, ...found.exempt].map(named)).not.toContain(
+      "simetra.rights_tx_root_marker"
+    )
   })
 
   it("maps the direct reads of every live variant", () => {

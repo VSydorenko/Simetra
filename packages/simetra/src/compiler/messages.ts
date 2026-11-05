@@ -2514,6 +2514,86 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Залиште rootCreator на одній ролі виду скоупу.",
     },
   },
+  "rights.root-creator-membership": {
+    en: (p) =>
+      `Scope kind "${p.scopeKind}" has a root creator role but no membership catalog: the creator's member row is written to a catalog with membership, not to an adopted table`,
+    uk: (p) =>
+      `Вид скоупу "${p.scopeKind}" має роль творця кореня, але не має довідника членства: рядок учасника творця пишеться в довідник з membership, а не в прийняту таблицю`,
+    hint: {
+      en: "Declare a membership catalog of the scope kind, or remove rootCreator and create roots as an operator.",
+      uk: "Оголосіть довідник членства виду скоупу або приберіть rootCreator і створюйте корені як оператор.",
+    },
+  },
+  "rights.root-creator-set-function": {
+    en: (p) =>
+      `Scope kind "${p.scopeKind}" has a root creator role but a verbatim set function: the creator would not see the new tenant until the function returns it`,
+    uk: (p) =>
+      `Вид скоупу "${p.scopeKind}" має роль творця кореня, але дослівну функцію множини: творець не бачив би нового тенанта, доки функція його не поверне`,
+    hint: {
+      en: 'Use setFunction "membership" on the scope kind, or remove rootCreator and create roots as an operator.',
+      uk: 'Задайте виду скоупу setFunction "membership" або приберіть rootCreator і створюйте корені як оператор.',
+    },
+  },
+  "rights.root-creator-assignments": {
+    en: (p) =>
+      `Scope kind "${p.scopeKind}" has a root creator role but no role assignments catalog of its level: the creator's role is assigned in that catalog, not in an adopted source`,
+    uk: (p) =>
+      `Вид скоупу "${p.scopeKind}" має роль творця кореня, але не має довідника призначень ролей свого рівня: роль творцю призначається в ньому, а не в прийнятому джерелі`,
+    hint: {
+      en: "Declare the role assignments catalog of the scope kind, or remove rootCreator.",
+      uk: "Оголосіть довідник призначень ролей виду скоупу або приберіть rootCreator.",
+    },
+  },
+  "rights.root-creator-assignment-required": {
+    en: (p) =>
+      `Scope kind "${p.scopeKind}" has a root creator role, but attribute ${p.attribute} of ${p.catalog} is required and has no default: the creator's assignment is inserted with the key, scope, subject and archetype only`,
+    uk: (p) =>
+      `Вид скоупу "${p.scopeKind}" має роль творця кореня, але реквізит ${p.attribute} довідника ${p.catalog} обов'язковий і не має значення за замовчуванням: призначення творця вставляється лише з ключем, скоупом, суб'єктом і архетипом`,
+    hint: {
+      en: "Make the attribute optional or give it a defaultValue.",
+      uk: "Зробіть реквізит необов'язковим або задайте йому defaultValue.",
+    },
+  },
+  "rights.root-creator-subscription": {
+    en: (p) =>
+      `A write subscription on ${p.source} of scope kind "${p.scopeKind}" fires when a root creator gets the member row and the role, which the platform writes as the owner`,
+    uk: (p) =>
+      `Підписка запису на ${p.source} виду скоупу "${p.scopeKind}" спрацьовує, коли творець кореня отримує рядок учасника й роль, які платформа пише від імені власника`,
+    hint: {
+      en: "Move the logic into a command hook of the catalog: it sees the creator's member row before the write.",
+      uk: "Перенесіть логіку в хук команди довідника: він бачить рядок учасника творця до запису.",
+    },
+  },
+  "rights.root-create-author": {
+    en: (p) =>
+      `Create on scope root ${p.object} with the own extent needs createdBy ownership: the new root has no other owner yet`,
+    uk: (p) =>
+      `Create на корені скоупу ${p.object} з обсягом own потребує власності createdBy: іншого власника новий корінь ще не має`,
+    hint: {
+      en: 'Set trackAuthor on the root and list "createdBy" in its ownership, or grant create on the any extent.',
+      uk: 'Увімкніть trackAuthor на корені й додайте "createdBy" до його ownership або дайте create з обсягом any.',
+    },
+  },
+  "rights.root-creator-no-admin": {
+    en: (p) =>
+      `Root creator role ${p.role} of scope kind "${p.scopeKind}" has neither fullAccess nor administerRights on the rights catalogs of its level: the creator cannot assign roles in the new tenant`,
+    uk: (p) =>
+      `Роль творця кореня ${p.role} виду скоупу "${p.scopeKind}" не має ні fullAccess, ні administerRights на довідниках прав свого рівня: творець не зможе призначати ролі в новому тенанті`,
+    hint: {
+      en: "Give the role fullAccess or administerRights on the role assignments of its scope kind.",
+      uk: "Дайте ролі fullAccess або administerRights на призначеннях ролей її виду скоупу.",
+    },
+  },
+  "rights.root-creator-unreachable": {
+    en: (p) =>
+      `Root creator role ${p.role} of scope kind "${p.scopeKind}" is unreachable: no command creates the root ${p.root}, so no tenant creation assigns the role`,
+    uk: (p) =>
+      `Роль творця кореня ${p.role} виду скоупу "${p.scopeKind}" недосяжна: корінь ${p.root} не створює жодна команда, тож жодне створення тенанта не призначить цю роль`,
+    hint: {
+      en: "Remove rootCreator and assign the first role with the operator tool, or make another catalog the root of the scope kind.",
+      uk: "Приберіть rootCreator і призначайте першу роль інструментом оператора або зробіть коренем виду скоупу інший довідник.",
+    },
+  },
   "rights.source-unknown": {
     en: (p) => `Assignment source "${p.source}" is not declared in the project`,
     uk: (p) => `Джерело призначень "${p.source}" не оголошено в проєкті`,
@@ -2546,23 +2626,27 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     en: (p) =>
       p.extent !== undefined
         ? `Role ${p.role} of every user cannot grant with the ${p.extent} extent: it covers unscoped objects with the own or a dimension extent only`
-        : p.level === "scope"
-          ? `Scope role ${p.role} cannot grant "${p.action}" on ${p.object}: it covers the objects of its scope kind and only reads unscoped ones`
-          : p.level === "global"
-            ? `Global role ${p.role} cannot grant "${p.action}" on ${p.object}: in a project with scope kinds it covers unscoped objects only`
-            : p.level === "container"
-              ? `Container role ${p.role} cannot grant "${p.action}" on ${p.object}: the object is not bound to the role container`
-              : `Role ${p.role} of every user cannot grant "${p.action}" on ${p.object}: it covers unscoped objects only`,
+        : p.root !== undefined
+          ? `Role ${p.role} cannot grant "${p.action}" on scope root ${p.object}: only an explicit grant of a global or every-user role on the any or own extent gives create of a scope root, and a role of its scope kind gives the other actions`
+          : p.level === "scope"
+            ? `Scope role ${p.role} cannot grant "${p.action}" on ${p.object}: it covers the objects of its scope kind and only reads unscoped ones`
+            : p.level === "global"
+              ? `Global role ${p.role} cannot grant "${p.action}" on ${p.object}: in a project with scope kinds it covers unscoped objects only`
+              : p.level === "container"
+                ? `Container role ${p.role} cannot grant "${p.action}" on ${p.object}: the object is not bound to the role container`
+                : `Role ${p.role} of every user cannot grant "${p.action}" on ${p.object}: it covers unscoped objects only`,
     uk: (p) =>
       p.extent !== undefined
         ? `Роль кожного користувача ${p.role} не може давати з обсягом ${p.extent}: вона покриває нескоуплені об'єкти лише з обсягом own чи виміру`
-        : p.level === "scope"
-          ? `Роль рівня скоупу ${p.role} не може дати "${p.action}" на ${p.object}: вона покриває об'єкти свого виду скоупу, а нескоуплені лише читає`
-          : p.level === "global"
-            ? `Глобальна роль ${p.role} не може дати "${p.action}" на ${p.object}: у проєкті з видами скоупу вона покриває лише нескоуплені об'єкти`
-            : p.level === "container"
-              ? `Контейнерна роль ${p.role} не може дати "${p.action}" на ${p.object}: об'єкт не прив'язаний до контейнера ролі`
-              : `Роль кожного користувача ${p.role} не може дати "${p.action}" на ${p.object}: вона покриває лише нескоуплені об'єкти`,
+        : p.root !== undefined
+          ? `Роль ${p.role} не може дати "${p.action}" на корені скоупу ${p.object}: create кореня скоупу дає лише явний грант глобальної ролі чи ролі кожного користувача з обсягом any чи own, а решту дій — роль його виду скоупу`
+          : p.level === "scope"
+            ? `Роль рівня скоупу ${p.role} не може дати "${p.action}" на ${p.object}: вона покриває об'єкти свого виду скоупу, а нескоуплені лише читає`
+            : p.level === "global"
+              ? `Глобальна роль ${p.role} не може дати "${p.action}" на ${p.object}: у проєкті з видами скоупу вона покриває лише нескоуплені об'єкти`
+              : p.level === "container"
+                ? `Контейнерна роль ${p.role} не може дати "${p.action}" на ${p.object}: об'єкт не прив'язаний до контейнера ролі`
+                : `Роль кожного користувача ${p.role} не може дати "${p.action}" на ${p.object}: вона покриває лише нескоуплені об'єкти`,
     hint: {
       en: "Grant the action on a role of the level that covers the object, or use the own or a dimension extent for every user.",
       uk: "Дайте дію на ролі того рівня, який покриває об'єкт, а кожному користувачу — з обсягом own чи виміру.",

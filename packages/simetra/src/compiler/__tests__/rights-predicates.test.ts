@@ -6,6 +6,7 @@ import {
   COMMAND_ACTION,
   renderCondition,
   rightsPredicates,
+  type PredicateDml,
   type RightsCondition,
   type RightsPredicate,
 } from "../rights/predicates"
@@ -23,6 +24,7 @@ import {
   TASK_ID,
   policyDomain,
   regionDimension,
+  rootCreationDomain,
   singleTenantRights,
   unscopedDimension,
   withRoles,
@@ -30,6 +32,7 @@ import {
 import { uuid } from "./helpers"
 
 const COMMENT_ID = uuid(6050)
+const DMLS: readonly PredicateDml[] = ["select", "insert", "update", "delete"]
 
 let parse: SqlParser
 beforeAll(async () => {
@@ -71,14 +74,12 @@ async function compiled(files: Map<string, string>): Promise<CompiledModel> {
 function predicatesOf(
   model: CompiledModel,
   objectId: string,
-  action: string | typeof COMMAND_ACTION
+  action: string | typeof COMMAND_ACTION,
+  dml: PredicateDml = "select"
 ): RightsPredicate[] {
   const contract = model.contracts.rights.find((c) => c.objectId === objectId)!
-  return rightsPredicates(
-    contract,
-    action,
-    mainTableOf(model.physical, objectId)!
-  )
+  const main = mainTableOf(model.physical, objectId)!
+  return rightsPredicates(contract, action, main, main, dml)
 }
 
 const grantDependent = (condition: RightsCondition) =>
@@ -163,6 +164,11 @@ describe("rights predicates", () => {
       () => policyDomain(),
       ["derived", "main", "path", "section"],
     ],
+    [
+      "rootCreationDomain",
+      rootCreationDomain,
+      ["derived", "main", "path", "section"],
+    ],
   ])(
     "every predicate of %s keeps at most one grant-dependent set (§5.4)",
     async (_name, files, expectedShapes) => {
@@ -188,12 +194,15 @@ describe("rights predicates", () => {
             ...contract.actions.map((a) => a.action),
             COMMAND_ACTION,
           ]
-          for (const action of actions) {
+          for (const [action, dml] of actions.flatMap((a) =>
+            DMLS.map((d) => [a, d] as const)
+          )) {
             for (const predicate of rightsPredicates(
               contract,
               action,
               table,
-              main
+              main,
+              dml
             )) {
               shapes.add(
                 table.origin.tabularSectionId !== undefined
@@ -452,5 +461,125 @@ describe("rights predicates", () => {
     expect(predicates[3]!.conditions.map((c) => renderCondition(c))).toEqual([
       "task_id_project_id = ANY (ARRAY(SELECT simetra.rights_container('read', 'task_comment', 'any', NULL)))",
     ])
+  })
+})
+
+describe("root insert is boolean", () => {
+  // Новий корінь ще не має скоупу серед моїх: `INSERT` кореня судить право
+  // створення булевою формою (спека прав §5.2, Р-A6-11), а не множиною скоупів.
+  let model: CompiledModel
+  beforeAll(async () => {
+    model = await compiled(rootCreationDomain())
+  })
+
+  const of = (
+    label: string,
+    action: string | typeof COMMAND_ACTION,
+    dml: PredicateDml
+  ) => {
+    const contract = model.contracts.rights.find((c) => c.kindLabel === label)!
+    expect(contract.root).toBe(true)
+    const main = mainTableOf(model.physical, contract.objectId)!
+    return rightsPredicates(contract, action, main, main, dml)
+  }
+  const hasRight = (label: string, extent: string) => ({
+    kind: "boolean",
+    expression: `simetra.has_right('create', '${label}', '${extent}', NULL)`,
+  })
+
+  // Дія — літерал `'create'` за будь-якої дії виклику: `has_right` рахує й
+  // рядки рівня скоупу будь-якого тенанта, тож із `command_action()` вставка
+  // під контекстом `update` пройшла б для власника `update` чужого кореня.
+  it.each<[string, string, string | typeof COMMAND_ACTION, RightsPredicate[]]>([
+    [
+      "own by the author only on the self-service root",
+      "organization",
+      COMMAND_ACTION,
+      [
+        { extent: "any", conditions: [hasRight("organization", "any")] },
+        {
+          extent: "own",
+          carrier: "created_by_id",
+          conditions: [
+            { kind: "currentUser", column: "created_by_id" },
+            hasRight("organization", "own"),
+          ],
+        },
+      ] as RightsPredicate[],
+    ],
+    [
+      "the core action gives the same predicates",
+      "organization",
+      "create",
+      [
+        { extent: "any", conditions: [hasRight("organization", "any")] },
+        {
+          extent: "own",
+          carrier: "created_by_id",
+          conditions: [
+            { kind: "currentUser", column: "created_by_id" },
+            hasRight("organization", "own"),
+          ],
+        },
+      ] as RightsPredicate[],
+    ],
+    [
+      "any on the operator root",
+      "branch",
+      COMMAND_ACTION,
+      [
+        { extent: "any", conditions: [hasRight("branch", "any")] },
+      ] as RightsPredicate[],
+    ],
+  ])("%s", (_, label, action, expected) => {
+    expect(of(label, action, "insert")).toEqual(expected)
+  })
+
+  it.each<PredicateDml>(["update", "delete"])(
+    "the root keeps the column form for %s",
+    (dml) => {
+      const predicates = of("organization", COMMAND_ACTION, dml)
+      expect(predicates).toEqual(of("organization", COMMAND_ACTION, "select"))
+      // Обсяги кореня — `any` і `own` за обома власниками, кожен на скоупі `id`.
+      expect(predicates.map((p) => [p.extent, p.carrier])).toEqual([
+        ["any", undefined],
+        ["own", "created_by_id"],
+        ["own", "owner_id"],
+      ])
+      for (const predicate of predicates) {
+        expect(predicate.conditions.at(-1)).toMatchObject({
+          kind: "column",
+          column: "id",
+          grantDependent: true,
+        })
+      }
+    }
+  )
+
+  it("a section of the root keeps the column form for insert", () => {
+    const contract = model.contracts.rights.find(
+      (c) => c.kindLabel === "organization"
+    )!
+    const main = mainTableOf(model.physical, contract.objectId)!
+    const sites = model.physical.tables.find(
+      (t) => t.name === "organization_sites"
+    )!
+    const predicates = rightsPredicates(
+      contract,
+      "update",
+      sites,
+      main,
+      "insert"
+    )
+    expect(predicates).toEqual(
+      rightsPredicates(contract, "update", sites, main, "select")
+    )
+    expect(
+      predicates.every((p) =>
+        p.conditions.some(
+          (c) => c.kind === "column" && c.column === "parent_id"
+        )
+      )
+    ).toBe(true)
   })
 })

@@ -57,6 +57,11 @@ import { snapshotExemptWriters } from "./rights/snapshot-exempt-writers"
 import { snapshotSources } from "./rights/snapshot-sources"
 import { scopeKindUnreadWarnings } from "./rights/scope-kind-warnings"
 import {
+  rootCreatedByCommand,
+  rootCreatorAdminWarnings,
+  rootCreatorUnreachableWarnings,
+} from "./rights/role-checks"
+import {
   rightsCatalogContracts,
   rightsCatalogTables,
 } from "./rights/system-catalogs"
@@ -365,13 +370,25 @@ export async function runStages(
       diagnostics: sortDiagnostics([...staged, ...projection.diagnostics]),
     }
   }
-  // Вид скоупу, об'єктів якого не читає жодна роль (спека прав §5.2), видно лише на
-  // проєкції ролей — тож попередження йде після неї й не зупиняє компіляції.
+  // Вид скоупу, об'єктів якого не читає жодна роль (спека прав §5.2), і творця
+  // кореня без адміністрування прав рівня (спека П4 §6.13) видно лише на
+  // проєкції ролей — тож попередження йдуть після неї й не зупиняють компіляції.
   const diagnostics = sortDiagnostics([
     ...staged,
     ...scopeKindUnreadWarnings(
       { rights, roles, rightsProjection: projection.rows },
       stage1.project
+    ),
+    ...rootCreatorAdminWarnings(
+      { rights, roles, rightsProjection: projection.rows },
+      stage1.objects,
+      stage1.project.scopeKinds
+    ),
+    ...rootCreatorUnreachableWarnings(
+      roles,
+      stage1.objects,
+      stage2.references,
+      stage1.project.scopeKinds
     ),
   ])
   // Довідники прав потрібні і контрактам, і генератору прав серед SQL-одиниць:
@@ -402,6 +419,43 @@ export async function runStages(
   }
   const { defaultSchema } = stage1.project
   const memberships = membershipsOf(stage1.objects, physical, stage1.project)
+  // Факт «вид має творця кореня» — один для генераторів ядра, ефектів і
+  // каталогу рантайму. Корінь, якого не створює команда, факту не дає
+  // (попередження `rights.root-creator-unreachable`): інакше ядро кликало б
+  // функцію гранту, якої немає, а маркер ставився б на вставці без гранту.
+  // Довідник членства й «Призначення ролей» такого виду гарантують
+  // діагностики `rights.root-creator-*` (Р-A6-16, Р-A6-19), тож їх
+  // відсутність тут — дефект компілятора, а не моделі.
+  const rootCreatorOf = (
+    kindId: string,
+    rootId: string | undefined
+  ): Pick<CompiledScopeKind, "rootCreator"> => {
+    const creator = roles.find(
+      (r) =>
+        r.rootCreator &&
+        r.assignedOn.level === "scope" &&
+        r.assignedOn.scopeKindId === kindId
+    )
+    if (
+      creator === undefined ||
+      rootId === undefined ||
+      !rootCreatedByCommand(rootId, stage1.objects)
+    )
+      return {}
+    const membership = memberships.find((m) => m.scopeKind.id === kindId)
+      ?.object.id
+    const assignments = rightsCatalogs.find(
+      (c) => c.level.level === "scope" && c.level.scopeKindId === kindId
+    )?.assignments.objectId
+    if (membership === undefined || assignments === undefined) {
+      throw new Error(
+        `internal: scope kind ${kindId} has a root creator without membership or assignments`
+      )
+    }
+    return {
+      rootCreator: { role: creator.roleId, membership, assignments },
+    }
+  }
   const scopeKinds = stage1.project.scopeKinds
     .map((kind, index): CompiledScopeKind => ({
       id: kind.id ?? "",
@@ -426,6 +480,12 @@ export async function runStages(
               name: kind.setFunction.name,
             },
       onRootDelete: kind.onRootDelete,
+      ...rootCreatorOf(
+        kind.id ?? "",
+        "object" in kind.root
+          ? rootIdByPointer.get(`/scopeKinds/${index}/root/object`)
+          : undefined
+      ),
     }))
     .sort((a, b) => compareStrings(a.name, b.name))
   // Один контракт «Користувачів» і для шару платформи, і для функцій прав, і
@@ -660,6 +720,7 @@ export async function runStages(
         membership,
         membershipSources: sources.membershipSources,
       },
+      scopeKinds,
       physical,
       stage1.project.naming.attributeCase,
       stage1.project.database.provider,
@@ -760,7 +821,9 @@ export async function runStages(
         roles,
         users,
         membershipSources: sources.membershipSources,
+        membership,
       },
+      scopeKinds,
       physical,
       attributeCase: stage1.project.naming.attributeCase,
       provider: stage1.project.database.provider,

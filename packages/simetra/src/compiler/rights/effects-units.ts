@@ -31,6 +31,8 @@ import { executeGrants } from "../sql/execute-grants"
 import type { SqlParser } from "../sql/parse"
 import { functionIdentity, generatedUnit, type SqlUnit } from "../sql/units"
 import { fieldForeignKey, sqlLiteral } from "../stages/model"
+import type { CompiledScopeKind } from "../compile"
+import { ROOT_MARKER_TABLE } from "./admin-tables"
 import { COMMAND_FUNCTIONS } from "./command-units"
 import { effectsFunctionName, effectsTriggerNames } from "./effects-names"
 import { definerTrigger } from "./definer"
@@ -68,6 +70,7 @@ export function buildEffectsUnits(
     Contracts,
     "rights" | "roles" | "users" | "membershipSources" | "membership"
   >,
+  scopeKinds: readonly Pick<CompiledScopeKind, "id" | "root" | "rootCreator">[],
   physical: PhysicalSnapshot,
   attributeCase: AttributeCase,
   provider: DatabaseProvider,
@@ -81,6 +84,14 @@ export function buildEffectsUnits(
     identity: functionIdentity(
       COMMAND_FUNCTIONS.current.schema,
       COMMAND_FUNCTIONS.current.name,
+      []
+    ),
+  }
+  const currentUser: CreationNode = {
+    type: "unit",
+    identity: functionIdentity(
+      CURRENT_USER_FUNCTION.schema,
+      CURRENT_USER_FUNCTION.name,
       []
     ),
   }
@@ -105,24 +116,39 @@ export function buildEffectsUnits(
       (entry) => entry.objectId === table.origin.objectId
     )
     const users = contracts.users?.objectId === table.origin.objectId
+    // Маркер кореня (Р-A6-7) — лише основній таблиці кореня виду, що має
+    // творця: вид оператора створює корінь без гранту.
+    const markerKind = section
+      ? undefined
+      : scopeKinds.find(
+          (kind) =>
+            "objectId" in kind.root &&
+            kind.root.objectId === table.origin.objectId &&
+            kind.rootCreator !== undefined
+        )?.id
     const body = section
       ? sectionBody(rights, table, main, key, attributeCase)
-      : mainBody(rights, table, key, attributeCase, membership, users)
+      : mainBody(
+          rights,
+          table,
+          key,
+          attributeCase,
+          membership,
+          users,
+          markerKind
+        )
     const requires: CreationNode[] = section
       ? [{ type: "table", schema: main.schema, name: main.name }, current]
       : [current]
     if (!section && membership !== undefined) {
       requires.push(
         { type: "table", schema: table.schema, name: table.name },
-        {
-          type: "unit",
-          identity: functionIdentity(
-            CURRENT_USER_FUNCTION.schema,
-            CURRENT_USER_FUNCTION.name,
-            []
-          ),
-        }
+        currentUser
       )
+    }
+    if (markerKind !== undefined) {
+      requires.push({ type: "table", ...ROOT_MARKER_TABLE })
+      if (membership === undefined) requires.push(currentUser)
     }
     const execute = `FOR EACH ROW EXECUTE FUNCTION ${relation(fn)}();`
     // Зміна автора — зміна рядка (спека П4 §6.8): без `watched` зміна лише
@@ -324,7 +350,8 @@ function mainBody(
   key: string,
   attributeCase: AttributeCase,
   membership: MembershipContract | undefined,
-  users: boolean
+  users: boolean,
+  markerKind: string | undefined
 ): string {
   const immutable = immutableColumns(table, undefined, attributeCase, users)
   // Ключ поза порівнянням: його зміну відхиляє тригер ключа раніше.
@@ -372,6 +399,15 @@ function mainBody(
           ]),
       ...(action.effects.dml.includes("update")
         ? updateChecks(action, table, compared)
+        : []),
+      // Вставка кореня під `create` ставить маркер, який мусить спожити
+      // функція гранту творцю в цій транзакції (спека П4 §6.13, Р-A6-23).
+      ...(markerKind !== undefined && action.action === "create"
+        ? [
+            "IF TG_OP = 'INSERT' THEN",
+            `  INSERT INTO ${relation(ROOT_MARKER_TABLE)} (xid, scope_kind_id, root, actor) VALUES (txid_current(), ${sqlLiteral(markerKind)}::uuid, NEW.${q(key)}, ${relation(CURRENT_USER_FUNCTION)}());`,
+            "END IF;",
+          ]
         : []),
     ]),
     "RETURN NULL;",

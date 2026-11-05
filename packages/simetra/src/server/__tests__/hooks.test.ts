@@ -15,9 +15,14 @@ import {
   taskCatalog,
 } from "./fixtures"
 import {
+  BRANCH,
   CLIENT,
   COMMIT,
+  MEMBER_ROW,
   OPEN,
+  ORGANIZATION,
+  ORG_MEMBER,
+  ROOT,
   RIGHTS,
   ROLLBACK,
   SAVE,
@@ -29,8 +34,12 @@ import {
   call,
   context,
   create,
+  createOrganization,
+  generatedIds,
+  rootResult,
   session,
   setup,
+  setupRoots,
   type Override,
 } from "./harness"
 
@@ -211,6 +220,178 @@ describe("hook order", () => {
     })
     const result = await runtime.run(session, create)
     expect(result.rows[0]!.code).toBe("A")
+  })
+})
+
+describe("tenant creation hooks", () => {
+  let ids: ReturnType<typeof generatedIds>
+  beforeEach(() => {
+    ids = generatedIds(ROOT, MEMBER_ROW)
+  })
+  afterEach(() => {
+    ids.mockRestore()
+  })
+  const isCore = (text: string) => text.includes("_create_root")
+
+  it("runs both beforeWrite hooks, the core, then both onWrite hooks (Р-A6-14)", async () => {
+    const events: string[] = []
+    const contexts: Record<string, unknown> = {}
+    const { db, runtime } = await setupRoots(
+      (text) => {
+        if (text.includes("simetra.command")) events.push("context")
+        if (isCore(text)) events.push("core")
+        return undefined
+      },
+      {
+        objectModules: {
+          "Catalog.Organization": {
+            beforeWrite: ({ ctx, draft }) => {
+              events.push("root.beforeWrite")
+              contexts.root = { object: ctx.object, id: ctx.id }
+              return draft
+            },
+            onWrite: ({ row }) => {
+              events.push("root.onWrite")
+              contexts.rootRow = row
+            },
+          },
+          "Catalog.OrgMember": {
+            beforeWrite: ({ ctx, draft }) => {
+              events.push("member.beforeWrite")
+              contexts.member = {
+                object: ctx.object,
+                id: ctx.id,
+                isNew: ctx.isNew,
+                action: ctx.action,
+                draft,
+              }
+              return { values: { ...draft.values, title: "U" } }
+            },
+            onWrite: ({ row }) => {
+              events.push("member.onWrite")
+              contexts.memberRow = row
+            },
+          },
+        },
+      }
+    )
+    await runtime.run(session, createOrganization)
+    expect(events).toEqual([
+      "root.beforeWrite",
+      "member.beforeWrite",
+      "context",
+      "core",
+      "root.onWrite",
+      "member.onWrite",
+    ])
+    expect(contexts).toEqual({
+      root: { object: ORGANIZATION, id: ROOT },
+      member: {
+        object: ORG_MEMBER,
+        id: MEMBER_ROW,
+        isNew: true,
+        action: "create",
+        draft: { values: { title: "T" } },
+      },
+      rootRow: { ref: ROOT, version: 1, code: "A" },
+      memberRow: {
+        ref: MEMBER_ROW,
+        version: 1,
+        org: ROOT,
+        user: USER,
+        title: "T",
+      },
+    })
+    // Чернетку хука членства бачить ядро.
+    expect(db.calls.find((c) => "text" in c && isCore(c.text))).toMatchObject({
+      params: [expect.any(String), '{"title":"U"}', MEMBER_ROW],
+    })
+  })
+
+  it("operator model: root onWrite gets the invisible row as id and version", async () => {
+    const onWrite = vi.fn()
+    const { runtime } = await setupRoots(
+      (text) =>
+        isCore(text)
+          ? { rows: [{ r: rootResult({ id: ROOT, version: "1" }, null) }] }
+          : undefined,
+      { objectModules: { "Catalog.Branch": { onWrite } } }
+    )
+    await runtime.run(session, { action: "create", object: BRANCH })
+    expect(onWrite).toHaveBeenCalledWith(
+      expect.objectContaining({ row: { ref: ROOT, version: 1 } })
+    )
+  })
+
+  // Членство без права читання творцю невидиме й після гранту: ядро віддає
+  // `{ключ, версія}` без скоупу, і це не аномалія (спека П4 §6.13).
+  it("membership onWrite gets an invisible member row as id and version", async () => {
+    const onWrite = vi.fn()
+    const { runtime } = await setupRoots(
+      (text) =>
+        isCore(text)
+          ? {
+              rows: [
+                {
+                  r: rootResult(undefined, { id: MEMBER_ROW, version: "1" }),
+                },
+              ],
+            }
+          : undefined,
+      { objectModules: { "Catalog.OrgMember": { onWrite } } }
+    )
+    const result = await runtime.run(session, createOrganization)
+    expect(onWrite).toHaveBeenCalledWith(
+      expect.objectContaining({ row: { ref: MEMBER_ROW, version: 1 } })
+    )
+    expect(result.changes.map((c) => c.object)).toEqual([ORGANIZATION])
+  })
+
+  it.each<[string, Modules, string]>([
+    [
+      "root beforeWrite returns tabularSections",
+      {
+        "Catalog.Organization": {
+          beforeWrite: ({ draft }) => ({ ...draft, tabularSections: {} }),
+        },
+      },
+      "tabularSections",
+    ],
+    [
+      "membership beforeWrite returns tabularSections",
+      {
+        "Catalog.OrgMember": {
+          beforeWrite: ({ draft }) => ({ ...draft, tabularSections: {} }),
+        },
+      },
+      "creatorMember",
+    ],
+    [
+      "membership beforeWrite returns a key outside the draft",
+      {
+        "Catalog.OrgMember": {
+          beforeWrite: ({ draft }) => ({ ...draft, id: OTHER }),
+        },
+      },
+      "creatorMember",
+    ],
+    [
+      "membership beforeWrite writes the forced user",
+      {
+        "Catalog.OrgMember": {
+          beforeWrite: () => ({ values: { user: OTHER } }),
+        },
+      },
+      "creatorMember.user",
+    ],
+  ])("%s: command.invalid before the core", async (_, objectModules, path) => {
+    const { db, runtime } = await setupRoots(undefined, { objectModules })
+    expect(await failureOf(runtime.run(session, createOrganization))).toEqual({
+      code: "command.invalid",
+      path,
+    })
+    expect(db.calls.some((c) => "text" in c && isCore(c.text))).toBe(false)
+    expect(db.calls).toEqual(CLOSED)
   })
 })
 

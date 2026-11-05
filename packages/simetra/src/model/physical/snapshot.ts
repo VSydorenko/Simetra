@@ -42,6 +42,7 @@ export interface PhysicalOrigin {
     | "rightsTxValues"
     | "rightsTxScopeSets"
     | "rightsTxPending"
+    | "rightsTxRootMarker"
 }
 
 export interface PhysicalEnumType {

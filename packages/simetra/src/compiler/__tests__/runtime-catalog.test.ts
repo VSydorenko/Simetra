@@ -20,6 +20,7 @@ import {
   gaugeRowRule,
   policyDomain,
   refAttribute,
+  rootCreationDomain,
   runtimeValuesLayer,
   statusEnumeration,
   ticketNoticeHandler,
@@ -491,7 +492,75 @@ describe("buildRuntimeCatalog: CHECK columns", () => {
     expect(canonicalSnapshot(m)).not.toHaveProperty("checkColumns")
     expect(await modelHash({ ...m, checkColumns: [] })).toBe(m.hash)
     expect(m.hash).toBe(
-      "422dd9e9bbc3f57afc49efbfd60a9698b607ed1b035d92a8c3c9caffe884f499"
+      "79a88a9c55d98e85b67d0755be1372e00a447fe23af7340cd14359f854c24f6a"
     )
+  })
+})
+
+/**
+ * Факти створення тенанта (спека П4 §6.3, §6.13): ядро кореня й довідник
+ * членства, з яких T3 генерує id і перевіряє `creatorMember`.
+ */
+describe("buildRuntimeCatalog: scope root creation", () => {
+  let roots: RuntimeCatalog
+  const compiledRoots = async () => {
+    const { model: m, diagnostics } = await compileRights(rootCreationDomain())
+    expect(diagnostics).toEqual([])
+    return buildRuntimeCatalog(m!)
+  }
+  beforeAll(async () => {
+    roots = await compiledRoots()
+  })
+  const object = (name: string) => roots.objects.find((o) => o.name === name)!
+
+  it("a root with a creator names its membership catalog; a root without one has none", () => {
+    expect(object("Organization").operations.create).toEqual({
+      function: { schema: "public", name: "organization_create_root" },
+      context: "create",
+      root: { membership: object("OrgMember").id },
+    })
+    expect(object("Branch").operations.create).toEqual({
+      function: { schema: "public", name: "branch_create_root" },
+      context: "create",
+      root: {},
+    })
+    expect(object("OrgMember").operations.create).not.toHaveProperty("root")
+    expect(object("OrgRoleAssignments").operations.create).not.toHaveProperty(
+      "root"
+    )
+  })
+
+  it("a membership catalog names its user column", () => {
+    expect(object("OrgMember").membership).toEqual({ userColumn: "user_id" })
+    expect(object("BranchMember").membership).toEqual({
+      userColumn: "user_id",
+    })
+    expect(object("OrgRoleAssignments")).not.toHaveProperty("membership")
+  })
+
+  it("is deterministic and passes the T0 schema", async () => {
+    expect(runtimeCatalogSchema.parse(roots)).toEqual(roots)
+    expect(JSON.stringify(await compiledRoots())).toBe(JSON.stringify(roots))
+  })
+
+  it.each<[string, (catalog: RuntimeCatalog) => RuntimeCatalog]>([
+    [
+      "a membership outside the catalog",
+      (c) => ({
+        ...c,
+        objects: c.objects.filter((o) => o.name !== "OrgMember"),
+      }),
+    ],
+    [
+      "a membership object without its membership facts",
+      (c) => ({
+        ...c,
+        objects: c.objects.map((o) =>
+          o.name === "OrgMember" ? { ...o, membership: undefined } : o
+        ),
+      }),
+    ],
+  ])("the T0 schema rejects %s", (_, broken) => {
+    expect(runtimeCatalogSchema.safeParse(broken(roots)).success).toBe(false)
   })
 })

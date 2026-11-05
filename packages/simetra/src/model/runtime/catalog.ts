@@ -93,6 +93,15 @@ export const runtimeOperationTargetSchema = z.strictObject({
   context: z.string(),
 })
 
+/**
+ * `create` кореня виду скоупу (спека П4 §6.13): T3 генерує id і відхиляє `id` і
+ * `tabularSections`; `membership` — id довідника членства каталогу, коли вид
+ * має роль з `rootCreator`: тоді `creatorMember` дозволений.
+ */
+export const runtimeRootCreateSchema = z.strictObject({
+  membership: z.string().optional(),
+})
+
 export const runtimeObjectSchema = z.strictObject({
   id: z.string(),
   name: z.string(),
@@ -105,10 +114,17 @@ export const runtimeObjectSchema = z.strictObject({
   versionName: z.string(),
   scopeKindId: z.string().optional(),
   scopeColumn: z.string().optional(),
+  /**
+   * Лише на довіднику членства: колонка користувача, яку разом із ключем і
+   * скоупом примушує платформа (`creatorMember`, спека П4 §6.13).
+   */
+  membership: z.strictObject({ userColumn: z.string() }).optional(),
   attributes: z.array(runtimeAttributeSchema),
   tabularSections: z.array(runtimeSectionSchema),
   operations: z.strictObject({
-    create: runtimeOperationTargetSchema.optional(),
+    create: runtimeOperationTargetSchema
+      .extend({ root: runtimeRootCreateSchema.optional() })
+      .optional(),
     update: runtimeOperationTargetSchema.optional(),
     markDeletion: runtimeOperationTargetSchema.optional(),
     delete: runtimeOperationTargetSchema.optional(),
@@ -117,12 +133,39 @@ export const runtimeObjectSchema = z.strictObject({
 })
 
 /** The runtime catalog: a projection of the compiled model (P4 spec §6.3). */
-export const runtimeCatalogSchema = z.strictObject({
-  format: z.literal(1),
-  snapshotHash: z.string(),
-  provider: z.enum(DATABASE_PROVIDERS),
-  objects: z.array(runtimeObjectSchema),
-})
+export const runtimeCatalogSchema = z
+  .strictObject({
+    format: z.literal(1),
+    snapshotHash: z.string(),
+    provider: z.enum(DATABASE_PROVIDERS),
+    objects: z.array(runtimeObjectSchema),
+  })
+  .superRefine((catalog, ctx) => {
+    // Довідник членства кореня — об'єкт цього каталогу з фактами членства:
+    // інакше T3 не мав би, за чим перевірити `creatorMember`.
+    catalog.objects.forEach((object, index) => {
+      const membership = object.operations.create?.root?.membership
+      if (membership === undefined) return
+      const target = catalog.objects.find((o) => o.id === membership)
+      if (
+        target?.membership === undefined ||
+        target.scopeColumn === undefined
+      ) {
+        ctx.addIssue({
+          code: "custom",
+          path: [
+            "objects",
+            index,
+            "operations",
+            "create",
+            "root",
+            "membership",
+          ],
+          message: "membership is not a membership catalog of this catalog",
+        })
+      }
+    })
+  })
 
 /** A base cast type; `castTypeSchema` also accepts its array form. */
 export type BaseCastType = (typeof CAST_TYPES)[number]
@@ -133,5 +176,6 @@ export type RuntimeSection = z.infer<typeof runtimeSectionSchema>
 export type RuntimeOperationTarget = z.infer<
   typeof runtimeOperationTargetSchema
 >
+export type RuntimeRootCreate = z.infer<typeof runtimeRootCreateSchema>
 export type RuntimeObject = z.infer<typeof runtimeObjectSchema>
 export type RuntimeCatalog = z.infer<typeof runtimeCatalogSchema>

@@ -181,7 +181,7 @@ export const dataReadTool = defineTool({
 export const dataCommandTool = defineTool({
   name: "data-command",
   description:
-    "Change application data of the development database as the user given by --as, with that user's rights: a batch of create, update, markDeletion and delete operations in one transaction (update, markDeletion and delete need expectedVersion). Rights catalogs need --allow-rights-write; objects with a module are refused. BigInt values may be passed as decimal strings. A runtime error comes as data.error with a code.",
+    "Change application data of the development database as the user given by --as, with that user's rights: a batch of create, update, markDeletion and delete operations in one transaction (update, markDeletion and delete need expectedVersion). Rights catalogs and create of a scope root whose creator gets a role need --allow-rights-write; objects with a module are refused, and for such a root also when its membership catalog has one. BigInt values may be passed as decimal strings. A runtime error comes as data.error with a code.",
   input: z.strictObject({ operations: batchSchema }),
   files: "read",
   database: "none",
@@ -192,9 +192,14 @@ export const dataCommandTool = defineTool({
     if ("failed" in compiled) return compiled.failed
     const { model } = compiled
     // Політика — до з'єднання: база не бачить пакета, якому відмовлено
-    const refusal = dataCommandRefusal(model, input.operations, {
-      allowRightsWrite: ctx.allowRightsWrite === true,
-    })
+    const refusal = dataCommandRefusal(
+      model,
+      buildRuntimeCatalog(model),
+      input.operations,
+      {
+        allowRightsWrite: ctx.allowRightsWrite === true,
+      }
+    )
     if (refusal?.kind === "command")
       return {
         ok: false,

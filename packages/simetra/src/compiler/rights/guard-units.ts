@@ -32,6 +32,7 @@ import { functionIdentity, generatedUnit, type SqlUnit } from "../sql/units"
 import { fieldForeignKey, sqlLiteral } from "../stages/model"
 import { standardColumn } from "../standard-column"
 import type { ParsedObject } from "../stages/files"
+import { ROOT_CREATOR_REASON, ROOT_MARKER_TABLE } from "./admin-tables"
 import { COMMAND_FUNCTIONS } from "./command-units"
 import {
   FACT_TABLE,
@@ -220,7 +221,7 @@ function definer(fn: QualifiedName, returns: string, body: string): string {
   return `CREATE OR REPLACE FUNCTION ${ref(fn)}() RETURNS ${returns} LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = '' SET row_security = off AS ${tag}\n${body}\n${tag};`
 }
 
-function refusal(detail: string, table?: PhysicalTable): string {
+export function refusal(detail: string, table?: PhysicalTable): string {
   return `RAISE EXCEPTION USING ERRCODE = '${COMMAND_CORE_ERRORS.forbidden.errcode}', MESSAGE = '${COMMAND_CORE_ERRORS.forbidden.message}', DETAIL = ${sqlLiteral(detail)}${table === undefined ? "" : `, TABLE = ${sqlLiteral(table.name)}`};`
 }
 
@@ -283,10 +284,17 @@ function transitionSql(
       ? `SELECT ${scopeKind} AS scope_kind_id, ${oldScope} AS scope FROM old_rows o UNION SELECT ${scopeKind}, ${newScope} FROM new_rows n`
       : `SELECT ${scopeKind} AS scope_kind_id, ${scope} AS scope FROM ${source}`
   const relation = journalRelation(config.table)
+  // Причина творця кореня (Р-A6-5) — лише першому образу вставки призначення,
+  // яке функція гранту записала входом знімка з походженням: зміна й
+  // видалення того самого рядка — уже дії творця командою.
+  const creator =
+    config.kind === "assignment" && operation === "INSERT"
+      ? ` WHEN EXISTS (SELECT 1 FROM ${ref(SNAPSHOT_TABLES.typed)} t WHERE t.xid = txid_current() AND t.provenance = ${sqlLiteral(ROOT_CREATOR_REASON)} AND t.assignment = r.row_id) AND NOT EXISTS (SELECT 1 FROM ${ref(platform("rights_journal"))} j WHERE j.xid = txid_current() AND j.relation = ${sqlLiteral(relation)} AND j.row_id = r.row_id) THEN ${sqlLiteral(ROOT_CREATOR_REASON)}`
+      : ""
   return [
     `PERFORM ${ref(RIGHTS_FUNCTIONS.bump)}(s.scope_kind_id, s.scope) FROM (SELECT DISTINCT r.scope_kind_id, r.scope FROM (${versionRows}) r) s;`,
     `INSERT INTO ${ref(platform("rights_journal"))} (xid, scope_kind_id, scope, actor, reason, action, object, relation, operation, row_id, parent_id, before, after)`,
-    `SELECT txid_current(), r.scope_kind_id, r.scope, CASE WHEN v_maintenance THEN NULL ELSE ${ref(platform(CURRENT_USER_FUNCTION_NAME))}() END, CASE WHEN v_maintenance THEN 'maintenance' ELSE 'command' END, v_action, ${sqlLiteral(config.object)}, ${sqlLiteral(relation)}, ${sqlLiteral(operation)}, r.row_id, r.parent_id, r.before, r.after FROM (${rows}) r;`,
+    `SELECT txid_current(), r.scope_kind_id, r.scope, CASE WHEN v_maintenance THEN NULL ELSE ${ref(platform(CURRENT_USER_FUNCTION_NAME))}() END, CASE WHEN v_maintenance THEN 'maintenance'${creator} ELSE 'command' END, v_action, ${sqlLiteral(config.object)}, ${sqlLiteral(relation)}, ${sqlLiteral(operation)}, r.row_id, r.parent_id, r.before, r.after FROM (${rows}) r;`,
     pendingSql(config, operation),
   ].join("\n")
 }
@@ -612,7 +620,9 @@ function stateRows(
     return `SELECT to_jsonb(l) AS doc FROM ${name} l WHERE ${live}`
   const key = column(table, KEY, style)
   const journal = [
-    `${ref(platform("rights_journal"))} j WHERE j.xid = v_pending.xid AND j.reason = 'command'`,
+    // Перший образ вставки творця — `NULL` (Р-A6-5): призначення функції
+    // гранту не стає «наявним на початку».
+    `${ref(platform("rights_journal"))} j WHERE j.xid = v_pending.xid AND j.reason IN ('command', ${sqlLiteral(ROOT_CREATOR_REASON)})`,
     `AND j.relation = ${sqlLiteral(journalRelation(table))}`,
   ].join(" ")
   const journalMatch =
@@ -971,6 +981,23 @@ function checkBody(
   ].join("\n")
 }
 
+/**
+ * Маркер кореня на COMMIT (Р-A6-7): функція гранту споживає маркер, тож
+ * рядок, що лежить, — корінь виду з `rootCreator` без творця (вставка повз
+ * ядро кореня). Подія несе вставлений рядок, а споживання його видаляє, тож
+ * рядок перечитується за ключем, як у `rights_tx_check`.
+ */
+function rootMarkerBody(): string {
+  return [
+    "BEGIN",
+    `  IF EXISTS (SELECT 1 FROM ${ref(ROOT_MARKER_TABLE)} m WHERE m.xid = NEW.xid AND m.scope_kind_id = NEW.scope_kind_id AND m.root = NEW.root) THEN`,
+    `    ${refusal(COMMAND_CORE_ERRORS.forbidden.rightsContext)}`,
+    "  END IF;",
+    "  RETURN NULL;",
+    "END",
+  ].join("\n")
+}
+
 function eventRows(
   operation: "INSERT" | "UPDATE" | "DELETE",
   alias: string,
@@ -1221,6 +1248,9 @@ export function buildRightsGuardUnits(
         identity: `function:${ref(RIGHTS_FUNCTIONS.bump)}(uuid,uuid)`,
       },
       { type: "table", schema: PLATFORM_SCHEMA, name: "rights_journal" },
+      ...(config.kind === "assignment"
+        ? [{ type: "table" as const, ...SNAPSHOT_TABLES.typed }]
+        : []),
     ])
     for (const operation of ["INSERT", "UPDATE", "DELETE"] as const) {
       const transition =
@@ -1399,6 +1429,13 @@ export function buildRightsGuardUnits(
   ])
   add(
     `CREATE CONSTRAINT TRIGGER ${q("rights_tx_pending_check")} AFTER INSERT ON ${ref(platform("rights_tx_pending"))} DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION ${ref(check)}();`
+  )
+  const markerCheck = platform("rights_tx_root_marker_check")
+  addFunction(markerCheck, rootMarkerBody(), undefined, [
+    { type: "table", ...ROOT_MARKER_TABLE },
+  ])
+  add(
+    `CREATE CONSTRAINT TRIGGER ${q(markerCheck.name)} AFTER INSERT ON ${ref(ROOT_MARKER_TABLE)} DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION ${ref(markerCheck)}();`
   )
   return units.sort((a, b) => compareStrings(a.identity, b.identity))
 }

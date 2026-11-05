@@ -9,7 +9,11 @@ import {
   type AccessPolicyContracts,
 } from "../access-units"
 import { sha256Hex } from "../canonical"
-import { mainTableOf, type AccessContract } from "../contracts"
+import {
+  mainTableOf,
+  type AccessContract,
+  type RightsContract,
+} from "../contracts"
 import { commandWriteColumns } from "../rights/command-columns"
 import { RIGHTS_FUNCTIONS } from "../rights/functions"
 import {
@@ -52,6 +56,7 @@ import {
   objects,
   policyDomain,
   rightsFiles,
+  rootCreationDomain,
   singleTenantRights,
   without,
   withRoles,
@@ -592,7 +597,8 @@ describe("rights read and users visibility policies", () => {
         contract,
         "read",
         table,
-        mainTableOf(domain.physical, contract.objectId)!
+        mainTableOf(domain.physical, contract.objectId)!,
+        "select"
       )) {
         const using = predicate.conditions
           .map((c) => renderCondition(c))
@@ -830,9 +836,18 @@ describe("rights write policies", () => {
   const rootOf = (label: string) => `(SELECT simetra.command_root('${label}'))`
   const WRITE = /_(insert|update|delete)_(root|rest)_/
 
-  /** Мітка політики за обсягом предиката: домен має один носій кожної форми. */
-  function labelOf(predicate: RightsPredicate): string {
+  /**
+   * Мітка політики за обсягом предиката: домен має один носій кожної форми,
+   * крім власності кореня з двома власниками — там мітку розрізняє носій.
+   */
+  function labelOf(
+    predicate: RightsPredicate,
+    contract: RightsContract
+  ): string {
     const inner = (extent: RightsPredicate["extent"]): string => {
+      if (extent === "own" && contract.ownership.length > 1) {
+        return `own_${predicate.carrier!}`
+      }
       if (extent === "any" || extent === "own") return extent
       if ("dimensionId" in extent) return "region"
       return `in_project_${inner(extent.inner)}`
@@ -869,8 +884,14 @@ describe("rights write policies", () => {
       action: string | typeof COMMAND_ACTION,
       prefix: string[]
     ) => {
-      for (const predicate of rightsPredicates(contract, action, table, main)) {
-        const name = `${tableName}_${dml}_${family}_${labelOf(predicate)}`
+      for (const predicate of rightsPredicates(
+        contract,
+        action,
+        table,
+        main,
+        dml
+      )) {
+        const name = `${tableName}_${dml}_${family}_${labelOf(predicate, contract)}`
         const condition = [
           ...prefix,
           ...predicate.conditions.map((c) => renderCondition(c)),
@@ -927,8 +948,8 @@ describe("rights write policies", () => {
       names.scopeInsert,
       names.scopeUpdate,
       names.scopeDelete,
-      ...rightsPredicates(contract, "read", table, main).map((p) =>
-        names.rights(labelOf(p))
+      ...rightsPredicates(contract, "read", table, main, "select").map((p) =>
+        names.rights(labelOf(p, contract))
       ),
       names.commandInsert,
       names.commandUpdate,
@@ -1123,6 +1144,70 @@ describe("rights write policies", () => {
       expect(writes.every((name) => name.includes("_root_"))).toBe(true)
       expect(writes.some((name) => name.includes("_rest_"))).toBe(false)
     }
+  })
+
+  it("the scope root inserts only its own row by the boolean create right", async () => {
+    // спека прав §5.2, Р-A6-11: новий id не входить у множину моїх скоупів,
+    // тож колонкова форма й родина «решти рядків» `INSERT` кореня не
+    // пропустили б нічого або пропустили б зайве — лишається булева форма
+    // над `has_right('create', …)`, `own` — лише автор.
+    const result = await compile(rootCreationDomain())
+    expectClean(result)
+    const model = result.model!
+    const root = rootOf("organization")
+    const insert = (label: string, condition: string) =>
+      `CREATE POLICY organization_insert_root_${label} ON public.organization AS PERMISSIVE FOR INSERT ${COMMAND} WITH CHECK (id = ${root} AND ${condition});`
+    const writes = writesOf(model, "organization")
+    const inserts = (map: ReadonlyMap<string, string>, keep: boolean) =>
+      new Map([...map].filter(([name]) => name.includes("_insert_") === keep))
+    expect(inserts(writes, true)).toEqual(
+      new Map([
+        [
+          "organization_insert_root_any",
+          insert(
+            "any",
+            "(SELECT simetra.has_right('create', 'organization', 'any', NULL))"
+          ),
+        ],
+        [
+          "organization_insert_root_own_created_by_id",
+          insert(
+            "own_created_by_id",
+            "created_by_id = (SELECT simetra.current_user_id()) AND (SELECT simetra.has_right('create', 'organization', 'own', NULL))"
+          ),
+        ],
+      ])
+    )
+    // `UPDATE`/`DELETE` кореня — колонкова форма обох родин, як були.
+    const updates = expectedWrites(
+      model,
+      "organization",
+      { key: "id", label: "organization" },
+      { update: "update", delete: "delete" }
+    )
+    expect([...inserts(updates, false).values()].join(" ")).not.toContain(
+      "has_right"
+    )
+    expect(inserts(writes, false)).toEqual(inserts(updates, false))
+    const names = accessPolicyNames(
+      model.physical.tables.find((t) => t.name === "organization")!
+    )
+    expect(policyNames(model, "organization")).toEqual(
+      allPolicies(model, "organization", writes).filter(
+        (name) => name !== names.scopeInsert
+      )
+    )
+    // ТЧ кореня — некоренева таблиця: `INSERT` колонковий, межа тенанта є.
+    const sites = expectedWrites(
+      model,
+      "organization_sites",
+      { key: "parent_id", label: "organization" },
+      { insert: "update", update: "update", delete: "update" }
+    )
+    expect(writesOf(model, "organization_sites")).toEqual(sites)
+    expect(policyNames(model, "organization_sites")).toEqual(
+      allPolicies(model, "organization_sites", sites)
+    )
   })
 
   it("policy identities stay unique with write policies", () => {

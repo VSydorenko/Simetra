@@ -1,5 +1,6 @@
 import { beforeAll, describe, expect, it } from "vitest"
 import type { CompileResult, CompiledModel } from "simetra/compiler"
+import type { Dml } from "simetra/model"
 import { rightsCheck } from "../catalog-command/rights-check"
 import { HIERARCHY_LOCK_SPACE } from "../hierarchy-units"
 import { executeGrants } from "../sql/execute-grants"
@@ -81,9 +82,10 @@ const rightsIf = (
   model: CompiledModel,
   table: string,
   action: string,
-  row: "v_old" | "v_new"
+  row: "v_old" | "v_new",
+  dml: Dml
 ) =>
-  `(${rightsCheck(rightsOf(model, table), action, mainOf(model, table), row)}) IS NOT TRUE`
+  `(${rightsCheck(rightsOf(model, table), action, mainOf(model, table), row, dml)}) IS NOT TRUE`
 /**
  * Замок рядка «до» (спека П4 §6.6): позначка — `NO KEY UPDATE` (сумісний з
  * `KEY SHARE` RI-перевірок), видалення — `UPDATE` (`DELETE` з ним конфліктує).
@@ -123,14 +125,14 @@ describe("<t>_mark_deletion", () => {
       ctx: ifAt(shape, context(action, table)),
       locked: at(shape, "execsql", lockedRow(table, "NO KEY UPDATE")),
       version: ifAt(shape, "v_old.version IS DISTINCT FROM p_expected_version"),
-      before: ifAt(shape, rightsIf(model, table, action, "v_old")),
+      before: ifAt(shape, rightsIf(model, table, action, "v_old", "update")),
       assign: shape.findIndex(
         (s) =>
           s.type === "assign" &&
           s.target?.variable.startsWith("v_new") === true &&
           same(s.expressions[0]?.tree, tree("SELECT p_mark"))
       ),
-      after: ifAt(shape, rightsIf(model, table, action, "v_new")),
+      after: ifAt(shape, rightsIf(model, table, action, "v_new", "update")),
       predefined: ifAt(shape, "v_old.predefined_name IS NOT NULL"),
       update,
     }
@@ -249,7 +251,10 @@ describe("<t>_delete", () => {
       ifAt(shape, context("administerRights", table)),
       at(shape, "execsql", lockedRow(table, "UPDATE")),
       ifAt(shape, "v_old.version IS DISTINCT FROM p_expected_version"),
-      ifAt(shape, rightsIf(domain, table, "administerRights", "v_old")),
+      ifAt(
+        shape,
+        rightsIf(domain, table, "administerRights", "v_old", "delete")
+      ),
       remove,
     ]
     expectOrder(order)
@@ -367,7 +372,16 @@ describe("функції за роллю довідника", () => {
         -1
       )
       expect(
-        ifAt(shape, rightsIf(domain, table, "administerRights", "v_old"))
+        ifAt(
+          shape,
+          rightsIf(
+            domain,
+            table,
+            "administerRights",
+            "v_old",
+            fn === "mark" ? "update" : "delete"
+          )
+        )
       ).toBeGreaterThan(-1)
     }
   )

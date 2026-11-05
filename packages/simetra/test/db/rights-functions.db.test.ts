@@ -567,10 +567,13 @@ describe("rights functions with a scope kind", () => {
     await deploy(client, model)
     ids = await seedScopeKind(client)
     const contract = model.contracts.rights.find((c) => c.objectId === TASK_ID)!
+    const main = mainTableOf(model.physical, TASK_ID)!
     const predicates = rightsPredicates(
       contract,
       "read",
-      mainTableOf(model.physical, TASK_ID)!
+      main,
+      main,
+      "select"
     ).map(
       (p) => `(${p.conditions.map((c) => renderCondition(c)).join(" AND ")})`
     )

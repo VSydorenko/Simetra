@@ -331,15 +331,18 @@
   плоска тека» лінт не закріплює: шаблон дозволяє `./sub/x`, а
   `server-sources.test.ts` сканує лише верхній рівень, тож файл у підтеці
   обійшов би й тест джерел. Закріпити лінтом або тестом.
-- **Обхід реквізитів значень двічі.** `encodeMemberValues`
-  (`packages/simetra/src/model/runtime/values.ts`) і `writeAttributes`
-  (`packages/simetra/src/server/values.ts`) проходять набір реквізитів тим
-  самим алгоритмом (порядок каталогу, грант, пара, невідомі ключі після);
-  тест паритету порівнює лише успішний вихід. Злити в один обхід T0, коли A6
-  додасть третього споживача (`creatorMember`).
 
 ## 7. Тести
 
+- **Флейк входу тегованої ролі через локальний Supavisor.** Кейс пулера
+  `command-runtime.db.test.ts` («through the pooler: the same current user and
+  the same refusals») раз упав у повному `pnpm test:db` на
+  `createCommandRuntime`: `28P01 password authentication failed` для тегованої
+  ролі `simetra_runtime_<тег>`; повтор файла зелений. Імовірно — кеш
+  `auth_query` пулера щодо щойно створеної ролі. Кандидат: дочекатися входу
+  ролі через пулер (повтор із межею) у `throughPoolerAs`
+  (`packages/designer/src/__tests__/support/db.ts`) або перевірити налаштування
+  кешу автентифікації Supavisor локального стека.
 - **Таблиці схеми `simetra` під Правилом 1.** Що SQL застосунку не пише в
   `rights_versions`, `rights_journal`, таблиці знімка актора (`SNAPSHOT_TABLES`
   у `packages/simetra/src/compiler/rights/actor-snapshot.ts`),

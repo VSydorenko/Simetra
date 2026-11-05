@@ -407,6 +407,91 @@ does not read tabular sections yet: read them with your own query. A stale
 version fails with `command.conflict`; run `plan` again and rebuild the
 batch.
 
+## Tenant creation
+
+A tenant is a row of a scope root: the catalog its scope kind is rooted on.
+The scope kind, not the creator's role, picks the model:
+
+- **Creator model**: the scope kind has a scope role with `rootCreator: true`.
+  The `create` of the root also inserts the creator's member row and assigns
+  the creator that role, in the same transaction. The creator holds the role
+  in exactly the new scope already inside this transaction; `COMMIT` judges
+  everything else as usual.
+- **Operator model**: no `rootCreator` role. The root is created without a
+  member, and the first owner comes from `tenantFullAccess` of the rights
+  maintenance tool.
+
+**The right to create a root** comes only from an explicit `create` grant on
+the root in a `global` or `everyUser` role. `grantAll`, `withAction` and
+`fullAccess` do not give it, and a scope or container role cannot grant it
+(`rights.grant-level`). Self-service is `everyUser` with `create@own`: the
+root needs `trackAuthor` and `"createdBy"` in its `ownership`
+(`rights.root-create-author`), because the new row has no other owner. An
+operator is a `global` role with `create@any`. Creating a root needs no
+`read` on it. A global `fullAccess` holder can still assign a global role
+that grants it.
+
+**A scope kind with `rootCreator`** needs (each is a compiler error):
+
+- a membership catalog with `membership`, not an adopted membership source
+  (`rights.root-creator-membership`);
+- `setFunction: "membership"` (`rights.root-creator-set-function`);
+- the system role assignments catalog of its level
+  (`rights.root-creator-assignments`), and no required attribute without a
+  `defaultValue` on that catalog (`rights.root-creator-assignment-required`):
+  the creator's assignment is inserted with the key, scope, member and role
+  only;
+- `rootCreator` on a scope role (`rights.root-creator-level`), on one role of
+  the scope kind (`rights.root-creator-duplicate`);
+- no SQL subscription (`beforeWrite`, `onWrite`) that fires on `INSERT` of
+  its membership catalog or role assignments catalog
+  (`rights.root-creator-subscription`): the platform writes the creator's
+  rows as the table owner. Put that logic in a command hook of the catalog.
+
+A `rootCreator` role without `fullAccess` and without `administerRights` on
+the rights catalogs of its level gets the warning
+`rights.root-creator-no-admin`: the creator could not assign roles in the new
+tenant. A `rootCreator` role on a scope kind whose root no command creates
+(the root is `Users`: provisioning creates its rows) gets the warning
+`rights.root-creator-unreachable`: no tenant creation assigns the role, so
+assign the first role with the operator tool.
+
+**The operation** goes through `runtime.run` like any other:
+
+```jsonc
+{
+  "action": "create",
+  "object": { "kind": "Catalog", "name": "<root>" },
+  "values": { … },
+  "creatorMember": { … }
+}
+```
+
+- Do not pass `id`: the runtime generates the root id (and the member row id)
+  once per `runtime.run`, and a retry reuses them. A `ctx.run` from a hook
+  generates new ids on each attempt, because the hook runs again. `id` or `tabularSections` on a root
+  `create` fails with `command.invalid`; fill tabular sections with a later
+  `update`.
+- `creatorMember` holds attributes of the creator's member row that a command
+  may insert; the platform sets the key, the scope and the user. It defaults
+  to `{}`. It is allowed only on the root of a kind with `rootCreator`. A
+  missing required attribute, or a reference to a row that is missing or that
+  the creator cannot read, fails with `command.invalid` and the path
+  `creatorMember.<attribute>`.
+- Hooks run in this order: `beforeWrite` of the root, `beforeWrite` of the
+  membership catalog (draft `{ values: creatorMember }`, `ctx.id` is the
+  member row id, `ctx.isNew`), `onWrite` of the root, `onWrite` of the
+  membership catalog. A membership `onWrite` may assign more roles with
+  `ctx.run`; `COMMIT` judges them as ordinary commands.
+- `rows[0]` of the result is the root row. In the operator model the creator
+  cannot read the new root, so the row has only its key and version (`1`).
+  The member row goes only to the membership `onWrite`. If the
+  `rootCreator` role cannot read the membership catalog, that row also has
+  only its key and version (`1`).
+
+The rights journal records the creator's assignment with the reason
+`root-creator`. A later change of that assignment is an ordinary command.
+
 ## Rights maintenance tool
 
 `simetra rights-maintenance '<json>' [dir] --yes` writes one assignment
@@ -429,7 +514,8 @@ one action:
   already a member, the member gets the role; do not pass `member` then.
   Otherwise the tool inserts a member row with the `member` values,
   attributes of your membership catalog that a command may insert. The tool
-  sets the key, the scope and the user itself.
+  sets the key, the scope and the user itself, and checks the references in
+  `member` like a command does: the target must exist in the same scope.
 
 The role must be `assignable`. For `tenantFullAccess` it is a `fullAccess`
 role of exactly that scope kind. The tool refuses without writing and exits
@@ -442,7 +528,10 @@ with a non-zero code when:
   action;
 - the level already has an effective holder (`maintenance.holder-exists`);
 - the user would not be an effective holder (`maintenance.not-effective`);
-- a required member attribute has no value (`maintenance.member-required`).
+- a required member attribute has no value (`maintenance.member-required`);
+- a reference in `member` (also an array `Ref` or a polymorphic pair) points
+  to a missing row or a row of another scope (`maintenance.invalid-member`,
+  with the `path` of the attribute).
 
 `maintenance.refused` means that the database refused the write. Most often
 the login is not the migrator. `maintenance.outcome-unknown` means that the
@@ -499,6 +588,7 @@ orders of magnitude, not guarantees.
 | Carrier backfill plan step | 1,000,000 section rows | 36 s |
 | One rights command (assignment) in its own transaction | 11,000 assignments | 28 ms |
 | Rights commands in one transaction | 1,000 commands | 7.1 s |
+| Create a tenant with its creator, actor in N scopes | 1 / 2,000 scopes | core 29 / 237 ms, `COMMIT` 30 ms / 5.8 s |
 
 - A `fullAccess` holder costs about 0.6 ms per scope on a list read: up to
   about 1,500 scopes a read stays under a second. The scope count is data, so

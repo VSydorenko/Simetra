@@ -1,6 +1,7 @@
 import {
   quoteIdent,
   tabularParentColumn,
+  type Dml,
   type PhysicalTable,
 } from "simetra/model"
 import type {
@@ -61,6 +62,12 @@ export interface RightsPredicate {
   conditions: RightsCondition[]
 }
 
+/**
+ * Команда SQL, яку судить предикат: читання чи DML запису. Форма предиката від
+ * неї залежить лише на `INSERT` кореня виду скоупу (спека прав §5.2).
+ */
+export type PredicateDml = "select" | Dml
+
 /** Умова обсягу без гранту: «мій» рядок за носієм; `any` — без неї. */
 interface Inner {
   extent: ProjectionExtent
@@ -80,13 +87,26 @@ interface Inner {
  * останніх `main` — основна таблиця об'єкта. Носій береться з колонки самої
  * таблиці (`carrierColumn`): політика ТЧ і похідної таблиці — та сама
  * некорельована форма, що й власника, без підзапиту до іншої таблиці (§5.2).
+ *
+ * `INSERT` основної таблиці кореня виду скоупу — булева форма права
+ * створення (`rootCreatePredicates`), бо новий id ще не входить у жодну
+ * множину скоупів.
  */
 export function rightsPredicates(
   contract: RightsContract,
   action: string | typeof COMMAND_ACTION,
   table: PhysicalTable,
-  main: PhysicalTable = table
+  main: PhysicalTable,
+  dml: PredicateDml
 ): RightsPredicate[] {
+  if (
+    dml === "insert" &&
+    contract.root === true &&
+    table.schema === contract.table.schema &&
+    table.name === contract.table.name
+  ) {
+    return rootCreatePredicates(contract)
+  }
   // Дія контексту має обсяги будь-якої дії об'єкта лише тому, що набір
   // обсягів у всіх дій один: інакше політика мовчки розійшлася б з
   // правом. Вираз контексту — скалярний підзапит без посилань на рядок, тож
@@ -180,6 +200,46 @@ export function rightsPredicates(
     })
   )
   return [...atScope, ...inContainer]
+}
+
+/**
+ * `INSERT` кореня виду скоупу (спека прав §5.2, Р-A6-11): булева форма над
+ * `has_right` без колонки скоупу. Дія — завжди літерал `'create'`, а не дія
+ * виклику чи `command_action()`: `has_right` рахує й рядки рівня скоупу
+ * будь-якого тенанта, тож з дією контексту вставку кореня під `update`
+ * пропустило б право `update` чужого кореня. `own` — лише автор рядка
+ * (`createdBy`, власний носій): інших власників новий корінь ще не має, а
+ * `create@own` без автора відхиляє стадія 4. Обсяг виміру кореня не дає
+ * жоден грант (стадія 4), тож його предиката немає.
+ */
+function rootCreatePredicates(contract: RightsContract): RightsPredicate[] {
+  const create = must(contract.actions.find((a) => a.action === "create"))
+  const grant = (extent: ProjectionExtent): RightsCondition => ({
+    kind: "boolean",
+    expression: call(RIGHTS_FUNCTIONS.hasRight, [
+      sqlLiteral("create"),
+      sqlLiteral(contract.kindLabel),
+      ...extentArgs(extent),
+    ]),
+  })
+  const author = create.extents.some((e) => e.form === "own")
+    ? contract.ownership.find(
+        (carrier) =>
+          carrier.via === undefined && carrier.value === contract.rootAuthor
+      )
+    : undefined
+  return [
+    { extent: "any", conditions: [grant("any")] },
+    ...(author === undefined
+      ? []
+      : [
+          {
+            extent: "own" as const,
+            carrier: author.value,
+            conditions: [ownerCondition(author, author.value), grant("own")],
+          },
+        ]),
+  ]
 }
 
 /**

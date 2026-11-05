@@ -7,7 +7,6 @@ import {
   type CommandError,
   type CommandResult,
   type ObjectModule,
-  type Operation,
   type RuntimeCatalog,
   type SessionClaims,
 } from "simetra/model"
@@ -18,7 +17,7 @@ import {
   type ErrorPhase,
 } from "./errors"
 import { inCommand, outsideCommand, rejectNested } from "./hook-context"
-import { prepareInput, runPhase } from "./phase"
+import { prepareInput, runPhase, type PreparedOperation } from "./phase"
 import {
   normalizeError,
   type CommandDatabase,
@@ -216,7 +215,7 @@ async function attempt(
   command: { active: boolean },
   claims: string,
   act: { sub: string } | undefined,
-  ops: readonly Operation[]
+  ops: readonly PreparedOperation[]
 ): Promise<Outcome> {
   let client: DatabaseClient
   try {
@@ -308,7 +307,8 @@ export async function runCommand(
     throw new CommandFailure(INTERNAL)
   }
   // Знімок входу одразу й копія на кожну спробу: ні викликач після виклику,
-  // ні невдала спроба не змінюють того, що виконує наступна.
+  // ні невдала спроба не змінюють того, що виконує наступна. Id, які
+  // згенерував `prepareInput`, — у знімку: повтор бере ті самі (Р-A6-20).
   const snapshot = structuredClone(ops)
   const act =
     typeof session.act?.sub === "string" ? { sub: session.act.sub } : undefined

@@ -1,6 +1,23 @@
 import { describe, expect, it } from "vitest"
 import { PLATFORM_SCHEMA } from "simetra/model"
-import { compileRights, rightsFiles, withRoles } from "./fixtures/rights"
+import { INPUT_COLUMNS } from "../rights/admin-tables"
+import { snapshotInputs } from "../rights/actor-snapshot"
+import { LIVE, liveInputs } from "../rights/functions"
+import {
+  compileRights,
+  policyDomain,
+  rightsFiles,
+  withRoles,
+} from "./fixtures/rights"
+import { bodyShape, loadShapeParsers, nodes, tree } from "./fixtures/sql-shape"
+import { expectClean } from "./helpers"
+
+interface TypedInsert {
+  InsertStmt: {
+    relation: { relname: string }
+    cols: { ResTarget: { name: string } }[]
+  }
+}
 
 const tables = [
   [
@@ -52,6 +69,8 @@ const tables = [
       "archetype",
       "level",
       "level_id",
+      "provenance",
+      "assignment",
     ],
     undefined,
   ],
@@ -125,6 +144,12 @@ const tables = [
     ["xid", "kind", "key", "scope_kind_id", "scope", "maintenance"],
     ["xid", "kind", "scope_kind_id", "key"],
   ],
+  [
+    "rights_tx_root_marker",
+    "rightsTxRootMarker",
+    ["xid", "scope_kind_id", "root", "actor"],
+    ["xid", "scope_kind_id", "root"],
+  ],
 ] as const
 
 describe("rights administration storage", () => {
@@ -175,7 +200,7 @@ describe("rights administration storage", () => {
       // точкового читання.
       const indexes: Record<string, string[][]> = {
         rights_tx_header: [],
-        rights_tx_typed: [["xid"]],
+        rights_tx_typed: [["xid"], ["xid", "assignment"]],
         rights_tx_containers: [["xid", "level_id", "container"]],
         rights_tx_deltas: [["xid", "storage", "custom_role", "scope_key"]],
         rights_tx_holders: [["xid"]],
@@ -183,6 +208,7 @@ describe("rights administration storage", () => {
         rights_tx_scopes: [["xid", "scope_kind_id", "scope"]],
         rights_tx_values: [["xid", "dimension_id"]],
         rights_tx_scope_sets: [["xid", "scope_kind_id"]],
+        rights_tx_root_marker: [],
       }
       if (name in indexes)
         expect(
@@ -206,6 +232,7 @@ describe("rights administration storage", () => {
       ["rights_tx_header", ["xid", "fact"]],
       ["rights_tx_holders", null],
       ["rights_tx_pending", ["xid", "kind", "scope_kind_id", "key"]],
+      ["rights_tx_root_marker", ["xid", "scope_kind_id", "root"]],
       ["rights_tx_scope_sets", null],
       ["rights_tx_scopes", null],
       ["rights_tx_start", null],
@@ -248,10 +275,24 @@ describe("rights administration storage", () => {
           ["archetype", "uuid"],
           ["level", "text"],
           ["level_id", "uuid"],
+          // Походження рядка функції гранту (Р-A6-5) — лише в DDL.
+          ["provenance", "text"],
+          ["assignment", "uuid"],
         ]),
       ],
-      indexes: [["rights_tx_typed_xid_idx", ["xid"]]],
+      indexes: [
+        ["rights_tx_typed_xid_idx", ["xid"]],
+        ["rights_tx_typed_xid_assignment_idx", ["xid", "assignment"]],
+      ],
     })
+    // Частковий: `EXISTS` причини журналу читає лише рядки з походженням, а
+    // не всі рядки `typed` актора.
+    expect(
+      of("rights_tx_typed")!.indexes.map((i) => [i.name, i.where])
+    ).toEqual([
+      ["rights_tx_typed_xid_idx", undefined],
+      ["rights_tx_typed_xid_assignment_idx", "provenance IS NOT NULL"],
+    ])
     expect(shape("rights_tx_containers")).toEqual({
       columns: [
         ["xid", "bigint", true],
@@ -324,6 +365,78 @@ describe("rights administration storage", () => {
         ],
       ],
     })
+  })
+
+  // Р-A6-5: походження й рядок призначення пише лише функція гранту; знімок,
+  // його читання й живі входи `rights_mine` колонок не бачать — інакше рядок
+  // функції відрізнявся б від живого рядка входу того самого призначення.
+  it("snapshot inputs do not see provenance", async () => {
+    await loadShapeParsers()
+    const result = await compileRights(policyDomain())
+    expectClean(result)
+    const model = result.model!
+    const names = (sql: string) =>
+      nodes(tree(sql), "sval").map((v) => (v as { sval: string }).sval)
+    const typedColumns = INPUT_COLUMNS.typed.map(([name]) => name)
+    // Літеральна перевірка: очікування нижче беруться з `INPUT_COLUMNS`, тож
+    // колонка походження, додана туди, змінила б обидві сторони порівняння.
+    expect(typedColumns).not.toContain("provenance")
+    expect(typedColumns).not.toContain("assignment")
+    expect(snapshotInputs("x").typed).not.toMatch(/provenance|assignment/)
+    expect(snapshotInputs("x").typed).toBe(
+      `SELECT ${typedColumns.map((c) => `i.${c}`).join(", ")} FROM simetra.rights_tx_typed i WHERE i.xid = x`
+    )
+    const live = liveInputs(
+      model.contracts,
+      model.physical,
+      model.project.naming.attributeCase,
+      LIVE
+    ).typed
+    expect(names(live)).not.toContain("provenance")
+    expect(names(live)).not.toContain("assignment")
+    const snapshot = model.sqlUnits.find(
+      (u) =>
+        u.identity ===
+        "function:public.org_role_assignments_simetra_rights_snapshot()"
+    )!
+    const inserts = bodyShape(snapshot.sql)
+      .map((s) => s.expressions[0]?.tree as TypedInsert | undefined)
+      .filter((t) => t?.InsertStmt?.relation.relname === "rights_tx_typed")
+    expect(
+      inserts.map((t) => t!.InsertStmt.cols.map((c) => c.ResTarget.name))
+    ).toEqual([["xid", ...typedColumns]])
+    expect(
+      inserts[0]!.InsertStmt.cols.map((c) => c.ResTarget.name)
+    ).not.toContain("provenance")
+  })
+
+  // Р-A6-7, Р-A6-23: маркер кореня — ключ транзакції, виду й кореня з
+  // актором вставки; закритий, як решта таблиць схеми платформи.
+  it("adds the root marker table without grants", async () => {
+    const result = await compileRights(withRoles())
+    const marker = result.model!.physical.tables.find(
+      (t) => t.schema === PLATFORM_SCHEMA && t.name === "rights_tx_root_marker"
+    )!
+    expect(marker.columns.map((c) => [c.name, c.type, c.notNull])).toEqual([
+      ["xid", "bigint", true],
+      ["scope_kind_id", "uuid", true],
+      ["root", "uuid", true],
+      ["actor", "uuid", true],
+    ])
+    expect(marker.indexes).toEqual([])
+    expect(
+      result.model!.contracts.access.filter(
+        (a) => a.table.schema === PLATFORM_SCHEMA
+      )
+    ).toEqual([])
+    expect(
+      result
+        // Функція перевірки маркера має лише відкликання `EXECUTE`.
+        .model!.sqlUnits.filter((u) =>
+          /rights_tx_root_marker(?!_check)/.test(u.sql)
+        )
+        .filter((u) => u.class === "grant" || u.class === "policy")
+    ).toEqual([])
   })
 
   it("does not add rights storage without roles and system catalogs", async () => {

@@ -985,7 +985,6 @@ export function kitchenSink(): Map<string, string> {
     order: 1,
     assignable: false,
     maxHolders: 1,
-    rootCreator: true,
     sourceKeys: [{ source: "orgGrants", key: "org_owner" }],
     include: [ref("RightsSet", "Viewers"), ref("RightsSet", "Posters")],
     // Вимір `partner` у грантах не названо: шлях його мапінгу йде через
