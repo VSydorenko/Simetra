@@ -131,8 +131,28 @@ const CONSTANT_FUNCTIONS = new Set(
 const fn = (name: { schema: string; name: string }) =>
   `${name.schema}.${name.name}`
 
-/** Випадок гейта тіл, де діють SQL-гілки решти фактів (Р3-3). */
+/** Випадок гейта тіл, де діють диспетчери решти фактів (Р3-3). */
 const SET_FUNCTIONS = "set functions of a task policy"
+
+/**
+ * Живі гілки диспетчерів фактів, які кличуть політики задачі: оператор гілки
+ * кличе живий варіант (`rights_my_scopes` — через `rights_my_members`).
+ */
+const LIVE_FACT_BRANCHES = [
+  RIGHTS_FUNCTIONS.myScopesLive,
+  RIGHTS_FUNCTIONS.dimensionValuesLive,
+]
+
+/** Чи оператор плану — жива гілка диспетчера, що кличе варіант `live`. */
+const liveBranch = (
+  plan: Record<string, unknown>,
+  live: { schema: string; name: string }
+) => {
+  const text = String(plan["Query Text"])
+  return (
+    text.trimStart().startsWith("SELECT l.") && text.includes(`${fn(live)}(`)
+  )
+}
 
 /** Цикли внутрішньої сторони у фікстурах правила циклів. */
 const LOOPS = 18
@@ -797,9 +817,9 @@ describe("rights plan gate", () => {
    * політики (точкове читання задачі). Без знімка диспетчер `rights_mine`
    * (Р3-15) виконує живу гілку: план її `RETURN QUERY` у журналі є
    * (`log_nested_statements`) і читає довідники призначень, а план гілки
-   * знімка не виконувався — вхідних таблиць знімка тіла не читають. SQL-гілки
-   * решти фактів (Р3-3) мають піддерево знімка в плані, але воно не
-   * виконувалось (`loops = 0`).
+   * знімка не виконувався — вхідних таблиць знімка тіла не читають. Решта
+   * функцій фактів (Р3-3) — той самий диспетчер: їхні живі гілки виконано, а
+   * таблиць рядків знімка не планує жоден оператор.
    */
   it.each(BODY_CASES())(
     "%s: rights function bodies read no CTE or rights table more than once",
@@ -821,17 +841,20 @@ describe("rights plan gate", () => {
           .toEqual([])
       }
       if (name === SET_FUNCTIONS) {
-        const branches = plans.flatMap((p) =>
-          FACT_TABLE_NAMES.flatMap((t) => scansOf(p, t))
-        )
         expect(
-          branches.length,
-          "snapshot subtrees of the fact functions"
-        ).toBeGreaterThan(0)
+          LIVE_FACT_BRANCHES.filter(
+            (branch) => !plans.some((p) => liveBranch(p, branch))
+          ),
+          "the live branches of the fact functions ran"
+        ).toEqual([])
         expect
           .soft(
-            branches.filter((n) => (n.loops ?? 0) > 0).map((n) => n.relation),
-            "snapshot subtrees do not run without a snapshot"
+            plans.flatMap((p) =>
+              FACT_TABLE_NAMES.flatMap((t) => scansOf(p, t)).map(
+                (n) => `${n.relation}: ${where(p)}`
+              )
+            ),
+            "the snapshot branches are not planned without a snapshot"
           )
           .toEqual([])
       }
@@ -875,29 +898,27 @@ describe("rights plan gate", () => {
 
   /**
    * Те саме зі знімком (план Права-3, Задача 5 крок 3): до читання запис
-   * власника з контекстом команди в довідник призначень — тригер оператора
-   * знімає факт `rights` і на нулі рядків. Диспетчер виконує гілку знімка:
-   * план її `RETURN QUERY` у журналі є, читає вхідні таблиці знімка за
-   * індексом (`Seq Scan` таблиці знімка — ні разу) і не читає довідників
-   * призначень. Критерії тіл — ті самі.
+   * власника з контекстом команди в «Користувачів» — тригер оператора знімає
+   * всі факти і на нулі рядків. Диспетчери виконують гілки знімка: план
+   * кожного `RETURN QUERY` у журналі є, читає таблиці знімка за індексом
+   * (`Seq Scan` таблиці знімка — ні разу), а живих гілок не планує жоден
+   * оператор. Критерії тіл — ті самі.
    */
   it.each(BODY_CASES())(
     "%s with a snapshot: fact functions read the snapshot by index",
-    async (_, sql, pair) => {
+    async (name, sql, pair) => {
       const { plans, rows, headers } = await autoExplain(gate.full, sql(), {
         before: {
-          sql: "UPDATE public.org_role_assignments SET subject = subject WHERE false",
-          context: {
-            action: "administerRights",
-            object: "org_role_assignments",
-            root: randomUUID(),
-          },
+          sql: "UPDATE public.users SET id = id WHERE false",
+          context: { action: "update", object: "users", root: randomUUID() },
         },
       })
-      expect(headers, "the write takes the rights fact").toContainEqual({
-        fact: "rights",
-        actor: gate.full,
-      })
+      expect(headers, "the write takes the facts").toEqual(
+        ["rights", "scopes", "values"].map((fact) => ({
+          fact,
+          actor: gate.full,
+        }))
+      )
       expect(rows.length, "the full-access holder reads").toBe(1)
       for (const body of mineBodies(plans)) {
         expect
@@ -917,6 +938,24 @@ describe("rights plan gate", () => {
         plans.some((p) => executes(p, SNAPSHOT_TABLES.header.name)),
         "the branch conditions read the header"
       ).toBe(true)
+      if (name === SET_FUNCTIONS) {
+        expect(
+          [SNAPSHOT_TABLES.scopes.name, SNAPSHOT_TABLES.values.name].filter(
+            (t) => !plans.some((p) => executes(p, t))
+          ),
+          "the snapshot branches of the fact functions ran"
+        ).toEqual([])
+        expect
+          .soft(
+            plans.flatMap((p) =>
+              LIVE_FACT_BRANCHES.some((branch) => liveBranch(p, branch))
+                ? [where(p)]
+                : []
+            ),
+            "the live branches are not planned with a snapshot"
+          )
+          .toEqual([])
+      }
       expect
         .soft(
           plans.flatMap((p) =>

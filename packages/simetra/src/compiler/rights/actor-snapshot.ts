@@ -1,5 +1,6 @@
 import { CURRENT_USER_FUNCTION_NAME, PLATFORM_SCHEMA } from "simetra/model"
 import { qualified, type QualifiedName } from "../contracts"
+import { dollarTag } from "../movement-functions"
 import { sqlLiteral } from "../stages/model"
 import { INPUT_COLUMNS } from "./admin-tables"
 import type { MineInputs } from "./functions"
@@ -116,32 +117,54 @@ export function snapshotForeign(): string {
 }
 
 /**
- * Дві гілки публічної функції факту (Р3-3): знімок — коли факт цієї
- * транзакції знято для поточного користувача; живий варіант — коли факту
- * ще немає й транзакцію не закріплено за іншим актором. Інакше — порожньо
- * (fail-closed). Гілки — повні запити тієї самої форми колонок.
+ * Тіло диспетчера публічної функції факту (Р3-3, Р3-15): гілка знімка — коли
+ * факт цієї транзакції знято для поточного користувача; жива гілка — коли
+ * факту ще немає й транзакцію не закріплено за іншим актором. Інакше —
+ * порожньо (fail-closed). Гілки — згенеровані запити тієї самої форми
+ * колонок. План кожного `RETURN QUERY` кешується на сесію, а мертву гілку не
+ * планує ніхто — на відміну від SQL-функції з `SET search_path`, яку Postgres
+ * планує на кожен виклик цілою разом з охоронами. Колонки результату —
+ * змінні plpgsql з тими самими іменами, що колонки гілок, тож
+ * неоднозначність вирішено на користь колонки.
+ *
+ * `scalar` — функція одного значення (`_my_member`): гілка — скалярний
+ * підзапит, порожньо — `NULL`. Більше одного рядка гілка не дає: учасник
+ * користувача в скоупі один (`UNIQUE (скоуп, користувач)`, спека
+ * користувачів §7).
  */
-export function snapshotBranches(
+export function snapshotDispatcher(
   fact: SnapshotFact,
   snapshot: string,
-  live: string
+  live: string,
+  scalar = false
 ): string {
+  const branch = (sql: string) =>
+    scalar ? `    RETURN (\n${sql}\n    );` : `    RETURN QUERY\n${sql};`
   return [
-    `SELECT * FROM (`,
-    indent(snapshot),
-    `) s`,
-    `WHERE ${snapshotOwned(fact)}`,
-    `UNION ALL`,
-    `SELECT * FROM (`,
-    indent(live),
-    `) l`,
-    `WHERE NOT ${snapshotPresent(fact)} AND NOT ${snapshotForeign()}`,
+    "#variable_conflict use_column",
+    "BEGIN",
+    // Умови — у дужках: `THEN` усередині `CASE` охорони Р3-3 інакше
+    // закінчив би умову `IF` plpgsql.
+    `  IF (${snapshotOwned(fact)}) THEN`,
+    branch(snapshot),
+    `  ELSIF (NOT ${snapshotPresent(fact)} AND NOT ${snapshotForeign()}) THEN`,
+    branch(live),
+    "  END IF;",
+    // Функція одного значення без `RETURN` закінчилась би помилкою.
+    ...(scalar ? ["  RETURN NULL;"] : []),
+    "END;",
   ].join("\n")
 }
 
-function indent(sql: string): string {
-  return sql
-    .split("\n")
-    .map((line) => `  ${line}`)
-    .join("\n")
+/**
+ * Оболонка диспетчера: `STABLE SECURITY DEFINER SET search_path = ''`, як у
+ * SQL-функцій фактів, і рядкове тіло під `$тег$`.
+ */
+export function dispatcherFunction(
+  signature: string,
+  returns: string,
+  body: string
+): string {
+  const tag = dollarTag(body)
+  return `CREATE OR REPLACE FUNCTION ${signature} RETURNS ${returns} LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = '' AS ${tag}\n${body}\n${tag};`
 }

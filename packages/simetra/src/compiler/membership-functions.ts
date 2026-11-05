@@ -15,7 +15,11 @@ import { CURRENT_USER_FUNCTION } from "./platform/names"
 import { executeGrants } from "./sql/execute-grants"
 import type { SqlParser } from "./sql/parse"
 import { generatedUnit, type SqlUnit } from "./sql/units"
-import { SNAPSHOT_TABLES, snapshotBranches } from "./rights/actor-snapshot"
+import {
+  SNAPSHOT_TABLES,
+  dispatcherFunction,
+  snapshotDispatcher,
+} from "./rights/actor-snapshot"
 import type { ParsedObject } from "./stages/files"
 import { keyColumnOf, membershipUserOf } from "./stages/model"
 
@@ -202,17 +206,21 @@ function myMemberFunction(membership: Membership, snapshot: boolean): string {
     `  AND ${user} IS NOT NULL`,
     `  AND ${user} = ${CURRENT_USER}`,
   ].join("\n")
-  return closedFunction(
-    `${qualified(myMember)}(p_scope uuid)`,
-    "uuid",
-    snapshot
-      ? snapshotBranches(
+  const signature = `${qualified(myMember)}(p_scope uuid)`
+  // Під знімком — диспетчер гілок (спека прав §5.1): SQL-функцію з двома
+  // гілками Postgres планував би на кожен виклик цілою.
+  return snapshot
+    ? dispatcherFunction(
+        signature,
+        "uuid",
+        snapshotDispatcher(
           "scopes",
           `${catalogScopes(membership, "s.member")}\n  AND s.scope = ${scope}`,
-          live
+          live,
+          true
         )
-      : live
-  )
+      )
+    : closedFunction(signature, "uuid", live)
 }
 
 /**
@@ -237,13 +245,14 @@ function memberScopesFunction(
   snapshot: boolean
 ): string {
   const live = memberScopesBody(membership, CURRENT_USER)
-  return closedFunction(
-    `${qualified(fn)}()`,
-    "SETOF uuid",
-    snapshot
-      ? snapshotBranches("scopes", catalogScopes(membership, "s.scope"), live)
-      : live
-  )
+  const signature = `${qualified(fn)}()`
+  return snapshot
+    ? dispatcherFunction(
+        signature,
+        "SETOF uuid",
+        snapshotDispatcher("scopes", catalogScopes(membership, "s.scope"), live)
+      )
+    : closedFunction(signature, "SETOF uuid", live)
 }
 
 /**

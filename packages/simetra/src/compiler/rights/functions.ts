@@ -47,11 +47,10 @@ import { levelKey } from "./facts"
 import { must } from "./references"
 import {
   SNAPSHOT_TABLES,
-  snapshotBranches,
-  snapshotForeign,
+  dispatcherFunction,
+  snapshotDispatcher,
   snapshotInputs,
-  snapshotOwned,
-  snapshotPresent,
+  type SnapshotFact,
 } from "./actor-snapshot"
 import { rightsLevelOf } from "./system-catalogs"
 import { sqlLiteral } from "../stages/model"
@@ -374,7 +373,7 @@ export function buildRightsUnits(
           args,
           returns: table(MINE_COLUMNS),
           shape: "dispatcher",
-          body: dispatcherBody(
+          body: snapshotDispatcher(
             "rights",
             mineBody(CURRENT, false, snapshotInputs(SNAPSHOT_XID), filter),
             mineBody(
@@ -396,6 +395,28 @@ export function buildRightsUnits(
             filter
           )
         )
+  // Решта публічних функцій фактів (Р3-3) — той самий диспетчер, що й
+  // `rights_mine`: SQL-функцію з двома гілками Postgres планував на кожен
+  // виклик цілою разом з охоронами. Без знімка — одне тіло `current`;
+  // функція без нього (`rights_scope_set`) існує лише під знімком.
+  const fact = (
+    fn: QualifiedName,
+    args: Declaration["args"],
+    returns: string,
+    which: SnapshotFact,
+    snapshotSql: string,
+    liveSql: string,
+    current: string | undefined
+  ): Declaration =>
+    snapshot || current === undefined
+      ? {
+          fn,
+          args,
+          returns,
+          shape: "dispatcher",
+          body: snapshotDispatcher(which, snapshotSql, liveSql),
+        }
+      : definer(fn, args, returns, current)
   const declarations: Declaration[] = [
     data(
       F.projection,
@@ -422,17 +443,14 @@ export function buildRightsUnits(
       table(SOURCE_KEYS_COLUMNS),
       valuesBody(SOURCE_KEYS_COLUMNS, sourceKeysRows(contracts))
     ),
-    definer(
+    fact(
       F.myScopes,
       [],
       table(MY_SCOPES_COLUMNS),
-      snapshot
-        ? snapshotBranches(
-            "scopes",
-            `SELECT s.scope_kind_id, s.scope, s.member\nFROM ${qualified(SNAPSHOT_TABLES.scopes)} s\nWHERE s.xid = ${SNAPSHOT_XID}`,
-            `SELECT l.scope_kind_id, l.scope, l.member\nFROM ${call(F.myScopesLive)} l`
-          )
-        : myScopesBody(contracts, CURRENT)
+      "scopes",
+      `SELECT s.scope_kind_id, s.scope, s.member\nFROM ${qualified(SNAPSHOT_TABLES.scopes)} s\nWHERE s.xid = ${SNAPSHOT_XID}`,
+      `SELECT l.scope_kind_id, l.scope, l.member\nFROM ${call(F.myScopesLive)} l`,
+      myScopesBody(contracts, CURRENT)
     ),
     live(
       F.myScopesLive,
@@ -526,17 +544,14 @@ export function buildRightsUnits(
       "SETOF uuid",
       membersBody(F.membersOf, of(F.membersOf))
     ),
-    definer(
+    fact(
       F.dimensionValues,
       [uuid("p_dimension")],
       "SETOF uuid",
-      snapshot
-        ? snapshotBranches(
-            "values",
-            `SELECT v.value\nFROM ${qualified(SNAPSHOT_TABLES.values)} v\nWHERE v.xid = ${SNAPSHOT_XID}\n  AND v.dimension_id = ${param(F.dimensionValues, "p_dimension")}`,
-            `SELECT l.value\nFROM ${call(F.dimensionValuesLive, [param(F.dimensionValues, "p_dimension")])} AS l(value)`
-          )
-        : dimensionValuesBody(contracts, F.dimensionValues, CURRENT)
+      "values",
+      `SELECT v.value\nFROM ${qualified(SNAPSHOT_TABLES.values)} v\nWHERE v.xid = ${SNAPSHOT_XID}\n  AND v.dimension_id = ${param(F.dimensionValues, "p_dimension")}`,
+      `SELECT l.value\nFROM ${call(F.dimensionValuesLive, [param(F.dimensionValues, "p_dimension")])} AS l(value)`,
+      dimensionValuesBody(contracts, F.dimensionValues, CURRENT)
     ),
     live(
       F.dimensionValuesLive,
@@ -559,15 +574,14 @@ export function buildRightsUnits(
     // транзакції.
     ...(snapshot
       ? [
-          definer(
+          fact(
             F.scopeSet,
             [uuid("p_scope_kind")],
             "SETOF uuid",
-            snapshotBranches(
-              "scopeSets",
-              `SELECT s.scope\nFROM ${qualified(SNAPSHOT_TABLES.scopeSets)} s\nWHERE s.xid = ${SNAPSHOT_XID}\n  AND s.scope_kind_id = ${param(F.scopeSet, "p_scope_kind")}`,
-              `SELECT l.value\nFROM ${call(F.scopeSetLive, [param(F.scopeSet, "p_scope_kind")])} AS l(value)`
-            )
+            "scopeSets",
+            `SELECT s.scope\nFROM ${qualified(SNAPSHOT_TABLES.scopeSets)} s\nWHERE s.xid = ${SNAPSHOT_XID}\n  AND s.scope_kind_id = ${param(F.scopeSet, "p_scope_kind")}`,
+            `SELECT l.value\nFROM ${call(F.scopeSetLive, [param(F.scopeSet, "p_scope_kind")])} AS l(value)`,
+            undefined
           ),
         ]
       : []),
@@ -706,7 +720,7 @@ export function buildRightsUnits(
         : shape === "stable"
           ? `CREATE OR REPLACE FUNCTION ${signature} RETURNS ${returns} LANGUAGE sql STABLE SET search_path = '' AS ${tag}\n${body}\n${tag};`
           : shape === "dispatcher"
-            ? `CREATE OR REPLACE FUNCTION ${signature} RETURNS ${returns} LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = '' AS ${tag}\n${body}\n${tag};`
+            ? dispatcherFunction(signature, returns, body)
             : closedFunction(signature, returns, body, shape)
     return [
       sql,
@@ -1456,35 +1470,6 @@ function everyUserRows(): string[] {
     `JOIN ${call(RIGHTS_FUNCTIONS.projection)} p ON p.role_id = r.role_id`,
     `WHERE r.level = 'everyUser'`,
   ]
-}
-
-/**
- * Тіло диспетчера факту (Р3-15): `RETURN QUERY` гілки знімка чи живої
- * гілки. План кожного `RETURN QUERY` кешується на сесію, а мертву гілку не
- * планує ніхто — на відміну від SQL-функції з `SET search_path`, яку Postgres
- * планує на кожен виклик цілою. Колонки результату — змінні plpgsql з тими
- * самими іменами, що колонки тіл, тож неоднозначність вирішено на користь
- * колонки.
- */
-function dispatcherBody(
-  fact: "rights",
-  snapshot: string,
-  live: string
-): string {
-  return [
-    "#variable_conflict use_column",
-    "BEGIN",
-    // Умови — у дужках: `THEN` усередині `CASE` охорони Р3-3 інакше
-    // закінчив би умову `IF` plpgsql.
-    `  IF (${snapshotOwned(fact)}) THEN`,
-    `    RETURN QUERY`,
-    `${snapshot};`,
-    `  ELSIF (NOT ${snapshotPresent(fact)} AND NOT ${snapshotForeign()}) THEN`,
-    `    RETURN QUERY`,
-    `${live};`,
-    "  END IF;",
-    "END;",
-  ].join("\n")
 }
 
 /** Один прохід замикання над попереднім: тримається лише рядок з усіма вимогами. */

@@ -9,11 +9,11 @@ import type {
 } from "../contracts"
 import { compareStrings } from "../diagnostics"
 import {
-  snapshotBranches,
   snapshotForeign,
   snapshotInputs,
   snapshotOwned,
   snapshotPresent,
+  type SnapshotFact,
 } from "../rights/actor-snapshot"
 import {
   LIVE,
@@ -32,7 +32,11 @@ import { executeGrants } from "../sql/execute-grants"
 import { loadSqlParser, type SqlParser } from "../sql/parse"
 import { withoutLocations, type SqlUnit } from "../sql/units"
 import { kitchenSink } from "./fixtures/kitchen-sink"
-import { bodyShape, loadShapeParsers } from "./fixtures/sql-shape"
+import {
+  bodyShape,
+  dispatcherQueries,
+  loadShapeParsers,
+} from "./fixtures/sql-shape"
 import {
   ADOPTED_LEAD_KEY,
   ADOPTED_SUPPORT_KEY,
@@ -101,6 +105,7 @@ type Value = string | null
 let parse: SqlParser
 beforeAll(async () => {
   parse = await loadSqlParser()
+  await loadShapeParsers()
 })
 
 async function compiled(files: Map<string, string>): Promise<CompiledModel> {
@@ -371,6 +376,17 @@ const VARIANTS = [
   RIGHTS_FUNCTIONS.visibleUsersOf,
 ].map((fn) => fn.name)
 
+/**
+ * Диспетчери фактів актора (спека прав §5.1): у моделі зі знімком —
+ * `plpgsql`, а не SQL з гілками.
+ */
+const DISPATCHERS = [
+  RIGHTS_FUNCTIONS.mine,
+  RIGHTS_FUNCTIONS.myScopes,
+  RIGHTS_FUNCTIONS.dimensionValues,
+  RIGHTS_FUNCTIONS.scopeSet,
+].map((fn) => fn.name)
+
 /** Функції аналізу (спека прав §5.1): `EXECUTE` — без сервісної ролі. */
 const ANALYSIS = [
   RIGHTS_FUNCTIONS.member,
@@ -416,7 +432,7 @@ describe("rights functions", () => {
     )) {
       const data = DATA.includes(unit.name)
       expect(routineLanguage(unit.tree as never), unit.name).toBe(
-        unit.name === "rights_bump" || unit.name === RIGHTS_FUNCTIONS.mine.name
+        unit.name === "rights_bump" || DISPATCHERS.includes(unit.name)
           ? "plpgsql"
           : "sql"
       )
@@ -1453,17 +1469,14 @@ function withoutCatalog(body: unknown): unknown {
 }
 
 /**
- * Жива гілка тіла з гілками знімка (`snapshotBranches`): підзапит `l`;
- * тіло без гілок — як є.
+ * Жива гілка функції факту: другий `RETURN QUERY` диспетчера (спека прав
+ * §5.1); SQL-тіло без знімка — як є.
  */
-function liveArm(body: unknown): unknown {
-  const top = selectOf(body)
-  if (top.op !== "SETOP_UNION") return body
-  const from = (top.rarg as { fromClause?: unknown[] }).fromClause?.[0] as
-    | { RangeSubselect?: { subquery: unknown; alias: { aliasname: string } } }
-    | undefined
-  expect(from?.RangeSubselect?.alias.aliasname).toBe("l")
-  return from!.RangeSubselect!.subquery
+function liveArm(unit: SqlUnit): unknown {
+  if (routineLanguage(unit.tree as never) !== "plpgsql") return bodyTree(unit)
+  const queries = dispatcherQueries(unit.sql)
+  expect(queries, unit.identity).toHaveLength(2)
+  return tree(queries[1]!)
 }
 
 /** Гілка з дослівної функції проєкту: `FROM <функція>(…)`. */
@@ -1621,7 +1634,7 @@ describe("rights analysis templates", () => {
         sets.map((m) =>
           selectOf(
             rewrite(
-              liveArm(bodyTree(membershipUnit(model, m.setFunction!.name))),
+              liveArm(membershipUnit(model, m.setFunction!.name)),
               toVariant(model, F.scopeSetOf)
             )
           )
@@ -1902,6 +1915,40 @@ function callsTo(node: unknown, fn: QualifiedName): unknown[][] {
 const MINE = "function:simetra.rights_mine()"
 const MINE_PAIR = "function:simetra.rights_mine(text,text)"
 const XID = "txid_current_if_assigned()"
+
+/**
+ * Диспетчер факту `fact` (Р3-3, Р3-15): `plpgsql STABLE SECURITY DEFINER`,
+ * порожній `search_path`, `IF` гілки знімка — `RETURN QUERY snapshot`,
+ * `ELSIF` живої — `RETURN QUERY live`, інакше порожньо.
+ */
+function expectDispatcher(
+  unit: SqlUnit,
+  fact: SnapshotFact,
+  returns: string,
+  snapshot: string,
+  live: string
+): void {
+  const name = unit.identity
+  expect(routineLanguage(unit.tree as never), name).toBe("plpgsql")
+  expect(option(unit, "security")?.Boolean?.boolval, name).toBe(true)
+  expect(option(unit, "volatility")?.String?.sval, name).toBe("stable")
+  expect(hasEmptySearchPath(unit.tree as never), name).toBe(true)
+  expect(bodyText(unit).trimStart().split("\n")[0], name).toBe(
+    "#variable_conflict use_column"
+  )
+  const expected = [
+    `CREATE FUNCTION f() RETURNS ${returns} LANGUAGE plpgsql AS $x$`,
+    "BEGIN",
+    `IF (${snapshotOwned(fact)}) THEN`,
+    `RETURN QUERY ${snapshot};`,
+    `ELSIF (NOT ${snapshotPresent(fact)} AND NOT ${snapshotForeign()}) THEN`,
+    `RETURN QUERY ${live};`,
+    "END IF;",
+    "END;",
+    "$x$;",
+  ].join("\n")
+  expect(bodyShape(unit.sql), name).toEqual(bodyShape(expected))
+}
 const CURRENT_ACTOR = "(SELECT simetra.current_user_id())"
 
 describe("rights functions with an actor snapshot", () => {
@@ -1911,7 +1958,6 @@ describe("rights functions with an actor snapshot", () => {
   // Без довідників прав знімка немає (kitchen sink: ролі без довідників).
   let plain: CompiledModel
   beforeAll(async () => {
-    await loadShapeParsers()
     model = await compiled(withRoles(BASE))
     adopted = await compiled(adoptedSourcesDomain())
     const result = await compileRights(snapshotSourcesDomain())
@@ -1971,28 +2017,13 @@ describe("rights functions with an actor snapshot", () => {
         [MINE, undefined],
         [MINE_PAIR, pair],
       ] as const) {
-        const unit = signatureUnit(compiledModel, identity)
-        expect(routineLanguage(unit.tree as never), identity).toBe("plpgsql")
-        expect(option(unit, "security")?.Boolean?.boolval, identity).toBe(true)
-        expect(option(unit, "volatility")?.String?.sval, identity).toBe(
-          "stable"
+        expectDispatcher(
+          signatureUnit(compiledModel, identity),
+          "rights",
+          "TABLE (level text, level_id uuid, scope uuid, container uuid, object text, action text, extent text, dimension_id uuid)",
+          mineBody({ user: CURRENT_ACTOR }, false, snapshotInputs(XID), filter),
+          mineBody(LIVE, false, inputs, filter)
         )
-        expect(hasEmptySearchPath(unit.tree as never), identity).toBe(true)
-        expect(bodyText(unit).trimStart().split("\n")[0]).toBe(
-          "#variable_conflict use_column"
-        )
-        const expected = [
-          `CREATE FUNCTION f() RETURNS TABLE (level text, level_id uuid, scope uuid, container uuid, object text, action text, extent text, dimension_id uuid) LANGUAGE plpgsql AS $x$`,
-          "BEGIN",
-          `IF (${snapshotOwned("rights")}) THEN`,
-          `RETURN QUERY ${mineBody({ user: CURRENT_ACTOR }, false, snapshotInputs(XID), filter)};`,
-          `ELSIF (NOT ${snapshotPresent("rights")} AND NOT ${snapshotForeign()}) THEN`,
-          `RETURN QUERY ${mineBody(LIVE, false, inputs, filter)};`,
-          "END IF;",
-          "END;",
-          "$x$;",
-        ].join("\n")
-        expect(bodyShape(unit.sql), identity).toEqual(bodyShape(expected))
       }
       const { granted } = executeGrantees(compiledModel)
       expect(granted.get(RIGHTS_FUNCTIONS.mine.name)).toEqual(setRoles)
@@ -2135,34 +2166,36 @@ describe("rights functions with an actor snapshot", () => {
     ).toHaveLength(1)
   })
 
-  it.each<[string, string, string, string]>([
+  // Р3-3, Р3-15: решта функцій фактів — той самий диспетчер, що й
+  // `rights_mine`; гілки — згенеровані запити знімка й живого варіанта.
+  it.each<[string, SnapshotFact, string, string, string]>([
     [
       RIGHTS_FUNCTIONS.myScopes.name,
       "scopes",
+      "TABLE (scope_kind_id uuid, scope uuid, member uuid)",
       `SELECT s.scope_kind_id, s.scope, s.member FROM simetra.rights_tx_scopes s WHERE s.xid = ${XID}`,
       "SELECT l.scope_kind_id, l.scope, l.member FROM simetra.rights_my_scopes_live() l",
     ],
     [
       RIGHTS_FUNCTIONS.dimensionValues.name,
       "values",
+      "SETOF uuid",
       `SELECT v.value FROM simetra.rights_tx_values v WHERE v.xid = ${XID} AND v.dimension_id = rights_dimension_values.p_dimension`,
       "SELECT l.value FROM simetra.rights_dimension_values_live(rights_dimension_values.p_dimension) AS l(value)",
     ],
     [
       RIGHTS_FUNCTIONS.scopeSet.name,
       "scopeSets",
+      "SETOF uuid",
       `SELECT s.scope FROM simetra.rights_tx_scope_sets s WHERE s.xid = ${XID} AND s.scope_kind_id = rights_scope_set.p_scope_kind`,
       "SELECT l.value FROM simetra.rights_scope_set_live(rights_scope_set.p_scope_kind) AS l(value)",
     ],
   ])(
-    "renders %s as snapshot branches of its fact",
-    (name, fact, snapshot, live) => {
+    "dispatches %s between the snapshot and the live branch of its fact",
+    (name, fact, returns, snapshot, live) => {
       for (const compiledModel of [model, sources]) {
         const unit = functionUnit(compiledModel, name)
-        expect(option(unit, "security")?.Boolean?.boolval, name).toBe(true)
-        expect(bodyTree(unit), name).toEqual(
-          tree(snapshotBranches(fact as "scopes", snapshot, live))
-        )
+        expectDispatcher(unit, fact, returns, snapshot, live)
       }
     }
   )
