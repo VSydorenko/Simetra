@@ -1078,6 +1078,48 @@ export function memberCreator(): Layer {
   }
 }
 
+export const GLOBAL_USERS_READER_ID = uuid(6950)
+export const GLOBAL_RIGHTS_ADMIN_ID = uuid(6951)
+export const GLOBAL_RIGHTS_ONLY_ID = uuid(6952)
+
+/**
+ * Глобальні ролі без `fullAccess` поверх `adminRoles()`: приріст рівня
+ * `global` покривають лише глобальні права актора, а носія повного доступу
+ * тут немає — інакше покриття дав би `fullAccess`, а не право. `UsersReader`
+ * — право, яке призначають (`read` `any` на «Користувачах»: `own` дає кожному
+ * `Everyone`, і він `any` не покриває); `RightsAdmin` адмініструє глобальні ролі й має це
+ * право, `RightsOnly` — адмініструє без нього.
+ */
+export function globalRightsAdmins(): Layer {
+  const administer = grant(
+    objects(["Catalog", "GlobalRoles"], ["Catalog", "GlobalRoleAssignments"]),
+    ["read", "administerRights"],
+    "any"
+  )
+  // Об'єкт без скоупу: глобальна роль інших не покриває (`rights.grant-level`).
+  const usersRead = grant(objects(["Catalog", "Users"]), ["read"], "any")
+  return {
+    [ROLE_FILE("GlobalUsersReader")]: role(
+      GLOBAL_USERS_READER_ID,
+      "GlobalUsersReader",
+      "global",
+      { grants: [usersRead] }
+    ),
+    [ROLE_FILE("GlobalRightsAdmin")]: role(
+      GLOBAL_RIGHTS_ADMIN_ID,
+      "GlobalRightsAdmin",
+      "global",
+      { grants: [administer, usersRead] }
+    ),
+    [ROLE_FILE("GlobalRightsOnly")]: role(
+      GLOBAL_RIGHTS_ONLY_ID,
+      "GlobalRightsOnly",
+      "global",
+      { grants: [administer] }
+    ),
+  }
+}
+
 /** Обов'язковий реквізит застосунку в рядку учасника `OrgMember`. */
 export const MEMBER_TITLE = "title"
 

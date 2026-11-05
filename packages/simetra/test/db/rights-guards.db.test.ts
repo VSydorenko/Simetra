@@ -10,6 +10,9 @@ import {
 import {
   CHECKLIST_TABLE,
   GLOBAL_ADMIN_ID,
+  GLOBAL_RIGHTS_ADMIN_ID,
+  GLOBAL_RIGHTS_ONLY_ID,
+  GLOBAL_USERS_READER_ID,
   ORG_ADMIN_ID,
   PROJECT_READER_ID,
   PROJECT_WRITER_ID,
@@ -21,6 +24,7 @@ import {
   TASK_WRITER_ID,
   adminRoles,
   compileRights,
+  globalRightsAdmins,
   policyDomain,
   writeRoles,
 } from "../../src/compiler/__tests__/fixtures/rights"
@@ -193,7 +197,9 @@ describe("rights administration guards", () => {
     `INSERT INTO public.org_role_assignments (id, org_id, subject, archetype) VALUES ('${id}', {A}, {${subject}}, '${archetype}')`
 
   beforeAll(async () => {
-    const result = await compileRights(policyDomain(writeRoles(), adminRoles()))
+    const result = await compileRights(
+      policyDomain(writeRoles(), adminRoles(), globalRightsAdmins())
+    )
     expect(result.diagnostics).toEqual([])
     const client = await tx.open()
     await deploy(client, result.model!)
@@ -344,6 +350,48 @@ describe("rights administration guards", () => {
         "DELETE FROM public.org_roles_delta WHERE parent_id = {closureCustom} AND effect = 'deny' RETURNING id"
       )
     )
+  })
+  // Гілка `global` покриття приросту: глобальний рядок покриває лише
+  // глобальне право актора на початку, а скоупні права й інші гілки — ні.
+  // Без `fullAccess`: носій покрив би приріст сам, і гілка лишилася б
+  // неперевіреною. DB, бо покриття рахує тригер COMMIT над кешем початку.
+  it("judges a global grant by the global rights at the start", async () => {
+    const client = tx.client()
+    await client.query("SAVEPOINT global_grant")
+    try {
+      for (const [user, archetype] of [
+        ["gRightsAdmin", GLOBAL_RIGHTS_ADMIN_ID],
+        ["gRightsOnly", GLOBAL_RIGHTS_ONLY_ID],
+      ] as const) {
+        ids[user] = await signUp(client)
+        // Членство в A — щоб актор бачив користувача, якому призначає роль.
+        await insert(client, "org_member", {
+          id: randomUUID(),
+          org_id: key("A"),
+          user_id: ids[user],
+        })
+        await insert(
+          client,
+          "global_role_assignments",
+          assignmentRow(ids[user]!, { archetype })
+        )
+      }
+      const grantTo = (actor: string) => {
+        const id = randomUUID()
+        return command(
+          actor,
+          admin("global_role_assignments", id),
+          `INSERT INTO public.global_role_assignments (id, subject, archetype) VALUES ('${id}', {target}, '${GLOBAL_USERS_READER_ID}') RETURNING id`
+        )
+      }
+      changed(await grantTo("gRightsAdmin"))
+      // Контроль: той самий приріст без глобального права на початку.
+      refusal(await grantTo("gRightsOnly"), "escalation")
+    } finally {
+      await client.query("ROLLBACK TO SAVEPOINT global_grant")
+      delete ids.gRightsAdmin
+      delete ids.gRightsOnly
+    }
   })
   // Р3-15: права початку на COMMIT рахуються з входів знімка, а не з живих
   // таблиць: актор, що зняв власну роль після призначення, покриває
