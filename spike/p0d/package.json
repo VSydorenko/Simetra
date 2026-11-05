@@ -1,0 +1,18 @@
+{
+  "name": "p0d-probe",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "2.119.0",
+    "pg": "8.16.3"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.1",
+    "@types/pg": "8.15.6",
+    "tsx": "4.23.15",
+    "typescript": "npm:typescript@7.0.2"
+  }
+}
