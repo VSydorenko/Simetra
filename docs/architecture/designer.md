@@ -187,7 +187,7 @@ pnpm exec simetra init --agents claude,codex
 **Стан:** каталог інструментів (перелік — `simetra --help`), режими CLI і MCP,
 `compile --all`, скіл у пакеті й тест прикладів — у коді; збірка, гейт
 пакування й публікація — [release.md](release.md); `simetra init` — у коді.
-Пілот із host — разом із рештою доставки пакета (П0 (а),
+Пілот із host — разом із шаблоном host (П4-D,
 [ROADMAP](../ROADMAP.md)).
 
 ## 5. Що далі
