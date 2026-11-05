@@ -2379,13 +2379,15 @@ function snapshotBenchLayer(): Layer {
  * Модель бенчмарку знімка: `policyDomain(adminRoles(), teamScopeKind())` з
  * шаром `snapshotBenchLayer()` і дослівними функціями виміру й множини. SQL —
  * не метадані: `withRoles` зливає лише JSON, тож файли ставляться поверх, а
- * функція множини замінює заглушку `metaFiles`.
+ * функція множини замінює заглушку `metaFiles`. `layers` — поверх шару
+ * бенчмарку (сценарій створення тенанта додає `tenantSelfService()`).
  */
-export function snapshotBenchDomain(): Map<string, string> {
+export function snapshotBenchDomain(...layers: Layer[]): Map<string, string> {
   const files = policyDomain(
     adminRoles(),
     teamScopeKind(),
-    snapshotBenchLayer()
+    snapshotBenchLayer(),
+    ...layers
   )
   const shell = "LANGUAGE sql STABLE SECURITY DEFINER SET search_path = ''"
   files.set(
