@@ -2690,7 +2690,12 @@ export function adoptedSnapshotDomain(): Map<string, string> {
       { scopeKind: "org" },
       {
         grants: [
-          grant(objects(["Catalog", "TaskComment"]), ["read", "update"], "any"),
+          // `create` — межа тенанта ядра стоїть лише на створенні (`scope_insert`)
+          grant(
+            objects(["Catalog", "TaskComment"]),
+            ["create", "read", "update"],
+            "any"
+          ),
         ],
       }
     ),

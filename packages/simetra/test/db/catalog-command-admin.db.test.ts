@@ -2106,6 +2106,47 @@ describe("actor snapshot over adopted sources", () => {
       expect(twin.refusal).toBeUndefined()
       expect(twin.completed.map(rowCount)).toEqual([1, 1])
     })
+
+    // Межа тенанта ядра стоїть лише в гілці створення (`scope_insert`):
+    // оновлення вище її не доводить — його тримають інші перевірки.
+    it("refuses a verbatim scope set → create X → revert", async () => {
+      const id = randomUUID()
+      const comment = randomUUID()
+      const create = (): CommandStep => ({
+        context: { action: "create", object: "task_comment", root: comment },
+        sql: "SELECT public.task_comment_save($1::jsonb, NULL::bigint) AS r",
+        params: [
+          JSON.stringify({
+            id: comment,
+            org_id: key("A"),
+            description: "x",
+          }),
+        ],
+      })
+      const outcome = await steps("editor", [
+        guest(id),
+        opened(scopeSet("rights_scope_set_live"), scopeSet("rights_scope_set")),
+        create(),
+      ])
+      expect(rowCount(outcome.completed[0])).toBe(1)
+      expect(outcome.completed[1]).toEqual({ live: true, pub: false })
+      expect(outcome.refusal).toEqual({
+        code: E.forbidden.errcode,
+        message: E.forbidden.message,
+        detail: E.forbidden.noRight,
+      })
+      // Близнюк: рядок `OrgGuest` з початку транзакції — те саме створення
+      // проходить, тож відмову дає знімок межі, а не брак права `create`
+      await given(
+        (client) =>
+          insert(client, G, { id, user_id: key("editor"), org: key("A") }),
+        async () => {
+          const twin = await steps("editor", [create()], { immediate: true })
+          expect(twin.refusal).toBeUndefined()
+          expect(rowCount(twin.completed[0])).toBe(1)
+        }
+      )
+    })
   })
 
   it("keeps an inactive adopted member out of the snapshot", async () => {

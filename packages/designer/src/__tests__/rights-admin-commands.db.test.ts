@@ -52,6 +52,7 @@ import {
   commandCoreLayer,
   insertOrphan,
   memberCreator,
+  planNodes,
   policyDomain,
   rightsAdminReadingMembers,
   signUp,
@@ -881,6 +882,9 @@ describe("rights administration commands over a planned and applied target", () 
   // Читання без xid не платить за знімок (спека прав §7): гілку знімка
   // функції фактів обирають за `txid_current_if_assigned()`, тож без xid
   // таблиць знімка не торкається жоден оператор. DB, бо рахує Postgres.
+  // Судить план, а не лише лічильник сканів: btree з ключем `NULL`
+  // (`xid = txid_current_if_assigned()`) виходить до лічильника `idx_scan`,
+  // тож `EXISTS` по заголовку без охорони `CASE` лічильник не бачить.
   it("reads through rights functions in a read only transaction without an xid", async () => {
     const home = await seedOrg(env.owner, { reader: [TICKET_WRITER_ID] })
     const row = randomUUID()
@@ -891,17 +895,40 @@ describe("rights administration commands over a planned and applied target", () 
     const tables = Object.values(SNAPSHOT_TABLES).map((t) => t.name)
     const client = new pg.Client({ connectionString: env.url })
     await client.connect()
+    // Плани читання з вкладеними операторами тіл функцій прав (`auto_explain`
+    // з аналізом, як у гейті планів): вузол, якого не виконано, має 0 циклів.
+    const plans: unknown[] = []
+    const onNotice = (notice: { severity?: string; message?: string }) => {
+      const message = notice.message ?? ""
+      const start = message.indexOf("plan:")
+      if (notice.severity === "LOG" && start >= 0)
+        plans.push(JSON.parse(message.slice(start + "plan:".length)))
+    }
+    client.on("notice", onNotice)
     /** Читання `X` актором у поточній транзакції; скани таблиць знімка. */
     const readAs = async () => {
       await client.query("SELECT set_config($1, $2, true)", [
         SESSION_CLAIMS_SETTING,
         JSON.stringify(home.people.reader!.session),
       ])
+      for (const setting of [
+        "auto_explain.log_min_duration = 0",
+        "auto_explain.log_nested_statements = on",
+        "auto_explain.log_analyze = on",
+        "auto_explain.log_format = 'json'",
+        "client_min_messages = log",
+      ])
+        await client.query(`SET LOCAL ${setting}`)
+      plans.length = 0
       await client.query(`SET LOCAL ROLE ${REQUEST_ROLE}`)
       const read = await client.query(
         `SELECT id FROM public.${TICKET_TABLE} WHERE id = $1`,
         [row]
       )
+      // Вузли над таблицями знімка — до службових запитів нижче
+      const snapshotNodes = plans
+        .flatMap(planNodes)
+        .filter((n) => n.relation !== undefined && tables.includes(n.relation))
       const xid = await client.query<{ xid: string | null }>(
         "SELECT txid_current_if_assigned()::text AS xid"
       )
@@ -916,6 +943,7 @@ describe("rights administration commands over a planned and applied target", () 
         rows: read.rowCount,
         xid: xid.rows[0]!.xid,
         scans: stats.rows,
+        loops: snapshotNodes.map((n) => [n.relation, n.loops] as const),
       }
     }
     try {
@@ -926,6 +954,10 @@ describe("rights administration commands over a planned and applied target", () 
       expect(readOnly.xid).toBeNull()
       expect(readOnly.scans).toHaveLength(tables.length)
       expect(readOnly.scans.every((t) => t.scans === "0")).toBe(true)
+      // Вузли над таблицями знімка в плані є (гілки `CASE`), але жоден не
+      // виконаний
+      expect(readOnly.loops.length).toBeGreaterThan(0)
+      expect(readOnly.loops.filter(([, loops]) => loops !== 0)).toEqual([])
       // Контроль: з xid, призначеним до читання, гілка знімка читає його таблиці.
       await client.query("BEGIN")
       await client.query("SELECT txid_current()")
@@ -934,6 +966,9 @@ describe("rights administration commands over a planned and applied target", () 
       expect(assigned.rows).toBe(1)
       expect(assigned.xid).not.toBeNull()
       expect(assigned.scans.some((t) => t.scans !== "0")).toBe(true)
+      expect(
+        assigned.loops.some(([, loops]) => loops !== undefined && loops > 0)
+      ).toBe(true)
     } finally {
       await client.end()
     }
