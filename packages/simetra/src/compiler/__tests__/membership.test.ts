@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest"
 import { compile } from "simetra/compiler"
 import { PLATFORM_ROLES, type PhysicalTable } from "simetra/model"
+import {
+  snapshotForeign,
+  snapshotOwned,
+  snapshotPresent,
+} from "../rights/actor-snapshot"
+import { hasEmptySearchPath, routineLanguage } from "../sql/closed-forms"
+import { bodyShape, loadShapeParsers } from "./fixtures/sql-shape"
+import { ORG_KIND_ID, compiledPolicyDomain } from "./fixtures/rights"
 import { attribute, catalog, metaFiles, project, uuid } from "./helpers"
 
 const MEMBER_FILE = "catalogs/OrgMember/OrgMember.meta.json"
@@ -426,5 +434,63 @@ describe("membership", () => {
     const found = result.diagnostics.filter((d) => d.code === code)
     expect(found.map((d) => `${d.file} ${d.pointer}`)).toEqual([at])
     expect(found[0]!.severity).toBe("error")
+  })
+})
+
+describe("membership functions with an actor snapshot", () => {
+  // Зі знімком актора (довідники прав є) функції членства читають мої
+  // скоупи знімка — лише рядки довідника членства свого виду (спека прав §7);
+  // форма — диспетчер plpgsql, як у решти функцій фактів (§5.1).
+  it("dispatches the membership functions between the snapshot and the live branch", async () => {
+    await loadShapeParsers()
+    const result = await compiledPolicyDomain({})
+    expect(result.diagnostics.filter((d) => d.severity === "error")).toEqual([])
+    const model = result.model!
+    expect(model.contracts.rightsCatalogs).not.toEqual([])
+    const unit = (identity: string) =>
+      model.sqlUnits.find((u) => u.identity === identity)!
+    const mine = `FROM simetra.rights_tx_scopes s WHERE s.xid = txid_current_if_assigned() AND s.catalog AND s.scope_kind_id = '${ORG_KIND_ID}'::uuid`
+    const current = "(SELECT simetra.current_user_id())"
+    const owned = `IF (${snapshotOwned("scopes")}) THEN`
+    const live = `ELSIF (NOT ${snapshotPresent("scopes")} AND NOT ${snapshotForeign()}) THEN`
+    const dispatcher = (returns: string, lines: string[]) =>
+      bodyShape(
+        [
+          `CREATE FUNCTION f() RETURNS ${returns} LANGUAGE plpgsql AS $x$`,
+          "BEGIN",
+          ...lines,
+          "END;",
+          "$x$;",
+        ].join("\n")
+      )
+    const sets = unit("function:public.org_member_member_scopes()")
+    const member = unit("function:public.org_member_my_member(uuid)")
+    for (const fn of [sets, member]) {
+      expect(routineLanguage(fn.tree as never), fn.identity).toBe("plpgsql")
+      expect(hasEmptySearchPath(fn.tree as never), fn.identity).toBe(true)
+      expect(fn.sql, fn.identity).toMatch(
+        /LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = ''/
+      )
+    }
+    expect(bodyShape(sets.sql)).toEqual(
+      dispatcher("SETOF uuid", [
+        owned,
+        `RETURN QUERY SELECT s.scope ${mine};`,
+        live,
+        `RETURN QUERY SELECT m.org_id FROM public.org_member m WHERE m.user_id IS NOT NULL AND m.user_id = ${current};`,
+        "END IF;",
+      ])
+    )
+    // Функція одного значення: гілки — скалярні підзапити, порожньо — NULL.
+    expect(bodyShape(member.sql)).toEqual(
+      dispatcher("uuid", [
+        owned,
+        `RETURN (SELECT s.member ${mine} AND s.scope = org_member_my_member.p_scope);`,
+        live,
+        `RETURN (SELECT m.id FROM public.org_member m WHERE m.org_id = org_member_my_member.p_scope AND m.user_id IS NOT NULL AND m.user_id = ${current});`,
+        "END IF;",
+        "RETURN NULL;",
+      ])
+    )
   })
 })

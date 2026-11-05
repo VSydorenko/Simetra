@@ -104,3 +104,16 @@ export const funcNames = (shape: ReturnType<typeof bodyShape>) =>
       (n) => n.String.sval
     )
   )
+
+/**
+ * Запити гілок диспетчера факту (`RETURN QUERY`) у порядку тексту: гілка
+ * знімка, потім жива (спека прав §5.1).
+ */
+export function dispatcherQueries(createFunction: string): string[] {
+  const parsed = plpgsql!(createFunction)
+  if (!parsed.ok || parsed.fn === undefined)
+    throw new Error(`body does not parse: ${createFunction}`)
+  return parsed.fn.statements
+    .filter((s) => s.type === "return_query")
+    .map((s) => s.expressions[0]!.query)
+}

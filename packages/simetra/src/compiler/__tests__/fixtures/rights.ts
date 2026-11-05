@@ -1056,7 +1056,8 @@ export const MEMBER_CREATOR_ID = uuid(6747)
 /**
  * `MemberCreator` — роль скоупу, що заводить і позначає учасників `OrgMember`
  * без жодного гранту на дані: доводить, що зміна членства командою не дає
- * актору прав (Р-A4-17).
+ * актору прав у тій самій транзакції — права транзакції ті, що були на її
+ * початку (знімок актора, спека прав §7).
  */
 export function memberCreator(): Layer {
   return {
@@ -1073,6 +1074,48 @@ export function memberCreator(): Layer {
           ),
         ],
       }
+    ),
+  }
+}
+
+export const GLOBAL_USERS_READER_ID = uuid(6950)
+export const GLOBAL_RIGHTS_ADMIN_ID = uuid(6951)
+export const GLOBAL_RIGHTS_ONLY_ID = uuid(6952)
+
+/**
+ * Глобальні ролі без `fullAccess` поверх `adminRoles()`: приріст рівня
+ * `global` покривають лише глобальні права актора, а носія повного доступу
+ * тут немає — інакше покриття дав би `fullAccess`, а не право. `UsersReader`
+ * — право, яке призначають (`read` `any` на «Користувачах»: `own` дає кожному
+ * `Everyone`, і він `any` не покриває); `RightsAdmin` адмініструє глобальні ролі й має це
+ * право, `RightsOnly` — адмініструє без нього.
+ */
+export function globalRightsAdmins(): Layer {
+  const administer = grant(
+    objects(["Catalog", "GlobalRoles"], ["Catalog", "GlobalRoleAssignments"]),
+    ["read", "administerRights"],
+    "any"
+  )
+  // Об'єкт без скоупу: глобальна роль інших не покриває (`rights.grant-level`).
+  const usersRead = grant(objects(["Catalog", "Users"]), ["read"], "any")
+  return {
+    [ROLE_FILE("GlobalUsersReader")]: role(
+      GLOBAL_USERS_READER_ID,
+      "GlobalUsersReader",
+      "global",
+      { grants: [usersRead] }
+    ),
+    [ROLE_FILE("GlobalRightsAdmin")]: role(
+      GLOBAL_RIGHTS_ADMIN_ID,
+      "GlobalRightsAdmin",
+      "global",
+      { grants: [administer, usersRead] }
+    ),
+    [ROLE_FILE("GlobalRightsOnly")]: role(
+      GLOBAL_RIGHTS_ONLY_ID,
+      "GlobalRightsOnly",
+      "global",
+      { grants: [administer] }
     ),
   }
 }
@@ -2229,4 +2272,488 @@ export function polymorphicGrantsDomain(
     },
     ...layers
   )
+}
+
+/** Таблиця виду, яку читає дослівна функція множини виду `team` (бенчмарк знімка). */
+export const BENCH_TEAM_SEAT_FILE = "catalogs/TeamSeat/TeamSeat.meta.json"
+export const BENCH_TEAM_SEAT_TABLE = "team_seat"
+/** Функція множини виду `team` з `teamScopeKind()`. */
+export const BENCH_TEAM_SET_FUNCTION = "public.team_ids"
+/** Вимір `zone`: значення користувача дає дослівна функція над `Zone`. */
+export const BENCH_ZONE_DIMENSION_ID = uuid(6860)
+export const BENCH_ZONE_FILE = "catalogs/Zone/Zone.meta.json"
+export const BENCH_ZONE_TABLE = "zone"
+export const BENCH_ZONE_FUNCTION = "public.zone_ids"
+export const BENCH_ZONE_NOTE_FILE = "catalogs/ZoneNote/ZoneNote.meta.json"
+const BENCH_ZONE_SQL_FILE = "sql/public/zone-ids.sql"
+
+/**
+ * Шар моделі бенчмарку знімка актора (план Права-3, Р3-9) поверх
+ * `teamScopeKind()`: кожна форма джерела фактів, запис у яке міряє
+ * сценарій 7. Контейнер — `Project` домену; вимір `zone` бере значення
+ * дослівною функцією, що читає таблицю виду `Zone` і кличе функцію членства
+ * `_member_scopes`; дослівна функція множини виду `team` читає таблицю виду
+ * `TeamSeat` (місця користувачів у командах). `ZoneNote` мапить вимір на
+ * об'єкт, щоб вимір діяв у праві, а не лише в проєкті.
+ */
+function snapshotBenchLayer(): Layer {
+  return {
+    [PROJECT_FILE]: {
+      accessDimensions: [
+        regionDimension(),
+        {
+          id: BENCH_ZONE_DIMENSION_ID,
+          name: "zone",
+          target: ref("Catalog", "Zone"),
+          values: { function: { schema: "public", name: "zone_ids" } },
+        },
+      ],
+    },
+    [BENCH_TEAM_SEAT_FILE]: catalog(
+      uuid(6851),
+      "TeamSeat",
+      BENCH_TEAM_SEAT_TABLE,
+      {
+        scope: "none",
+        attributes: [
+          refAttribute(6852, "user", "user_id", ref("Catalog", "Users")),
+          { id: uuid(6853), name: "team", physicalName: "team", type: "UUID" },
+        ],
+      }
+    ),
+    [BENCH_ZONE_FILE]: catalog(uuid(6861), "Zone", BENCH_ZONE_TABLE, {
+      attributes: [
+        refAttribute(6862, "keeper", "keeper_id", ref("Catalog", "Users")),
+      ],
+    }),
+    [BENCH_ZONE_NOTE_FILE]: catalog(uuid(6863), "ZoneNote", "zone_note", {
+      access: [{ attribute: "zone", dimension: "zone" }],
+      attributes: [
+        refAttribute(6864, "zone", "zone_id", ref("Catalog", "Zone")),
+      ],
+    }),
+  }
+}
+
+/**
+ * Модель бенчмарку знімка: `policyDomain(adminRoles(), teamScopeKind())` з
+ * шаром `snapshotBenchLayer()` і дослівними функціями виміру й множини. SQL —
+ * не метадані: `withRoles` зливає лише JSON, тож файли ставляться поверх, а
+ * функція множини замінює заглушку `metaFiles`.
+ */
+export function snapshotBenchDomain(): Map<string, string> {
+  const files = policyDomain(
+    adminRoles(),
+    teamScopeKind(),
+    snapshotBenchLayer()
+  )
+  const shell = "LANGUAGE sql STABLE SECURITY DEFINER SET search_path = ''"
+  files.set(
+    SCOPE_FUNCTIONS_FILE,
+    `CREATE FUNCTION ${BENCH_TEAM_SET_FUNCTION}() RETURNS SETOF uuid ${shell} AS $$ SELECT s.team FROM public.${BENCH_TEAM_SEAT_TABLE} s WHERE s.user_id = (SELECT simetra.current_user_id()) $$;`
+  )
+  files.set(
+    BENCH_ZONE_SQL_FILE,
+    `CREATE FUNCTION ${BENCH_ZONE_FUNCTION}() RETURNS SETOF uuid ${shell} AS $$ SELECT z.id FROM public.${BENCH_ZONE_TABLE} z WHERE z.keeper_id = (SELECT simetra.current_user_id()) AND z.org_id IN (SELECT public.org_member_member_scopes()) $$;`
+  )
+  return files
+}
+
+/** Скоуплений регістр зв'язку виміру `region` з суб'єктом-«Користувачем». */
+export const SNAPSHOT_USER_REGION_TABLE = "user_region"
+/** Прийнятий зв'язок виміру `badge` з «Користувачем». */
+export const SNAPSHOT_USER_BADGE_TABLE = "user_badge"
+/** Таблиця виду, яку читає дослівна функція множини виду `org`. */
+export const SNAPSHOT_ORG_GUEST_TABLE = "org_guest"
+const SNAPSHOT_ORG_GUEST_FILE = "catalogs/OrgGuest/OrgGuest.meta.json"
+const SNAPSHOT_USER_BADGE_FILE = "custom-tables/UserBadge/UserBadge.meta.json"
+const SNAPSHOT_BADGE_FILE = "catalogs/Badge/Badge.meta.json"
+const SNAPSHOT_BADGE_DIMENSION_ID = uuid(6880)
+const SNAPSHOT_REGION_NOTE_FILE = "catalogs/RegionNote/RegionNote.meta.json"
+
+/**
+ * Модель аналізу джерел знімка (план Права-3, Р3-6): кожна форма джерела
+ * фактів актора поверх прийнятих джерел (`adoptedSourcesDomain`) і другого
+ * виду `team` з довідником членства (`adoptedCrossKind`). Довідник членства —
+ * `TeamMember`; прийняті джерела членства й призначень — `Membership`,
+ * `RoleGrant` і `GlobalGrant` з таблицею ролей `SourceRole`; контейнер —
+ * `Project`; вимір `region` — скоуплений регістр `UserRegion` з
+ * суб'єктом-«Користувачем»; вимір `zone` — дослівна функція над таблицею виду
+ * `Zone`, що кличе `team_member_member_scopes`; вимір `badge` — прийнятий
+ * зв'язок `UserBadge`; дослівна функція множини виду `org` читає прийняте
+ * членство й таблицю виду `OrgGuest`.
+ */
+export function snapshotSourcesDomain(): Map<string, string> {
+  const files = adoptedSourcesDomain(adoptedCrossKind(), {
+    [PROJECT_FILE]: {
+      accessDimensions: [
+        {
+          ...regionDimension(),
+          values: {
+            relation: {
+              object: ref("InformationRegister", "UserRegion"),
+              subject: "user",
+              value: "region",
+            },
+          },
+        },
+        {
+          id: BENCH_ZONE_DIMENSION_ID,
+          name: "zone",
+          target: ref("Catalog", "Zone"),
+          values: { function: { schema: "public", name: "zone_ids" } },
+        },
+        {
+          id: SNAPSHOT_BADGE_DIMENSION_ID,
+          name: "badge",
+          target: ref("Catalog", "Badge"),
+          values: {
+            relation: {
+              object: ref("CustomTable", "UserBadge"),
+              subject: "user",
+              value: "badge",
+            },
+          },
+        },
+      ],
+      membershipSources: [membersSource()],
+      assignmentSources: [
+        grantsSource(),
+        globalGrantsSource({
+          table: ref("CustomTable", "GlobalGrant"),
+          columns: { member: "memberId", role: sourceRoleRef() },
+        }),
+      ],
+    },
+    [USER_REGION_FILE]: {
+      id: uuid(6070),
+      kind: "InformationRegister",
+      name: "UserRegion",
+      physicalName: SNAPSHOT_USER_REGION_TABLE,
+      kindLabel: SNAPSHOT_USER_REGION_TABLE,
+      scope: "org",
+      dimensions: [
+        refAttribute(6071, "user", "user_id", ref("Catalog", "Users")),
+        refAttribute(6072, "region", "region_id", ref("Catalog", "Region")),
+      ],
+    },
+    [SNAPSHOT_REGION_NOTE_FILE]: catalog(
+      uuid(6881),
+      "RegionNote",
+      "region_note",
+      {
+        access: [
+          { attribute: "region", dimension: "region" },
+          { attribute: "zone", dimension: "zone" },
+          { attribute: "badge", dimension: "badge" },
+        ],
+        attributes: [
+          refAttribute(6882, "region", "region_id", ref("Catalog", "Region")),
+          refAttribute(6883, "zone", "zone_id", ref("Catalog", "Zone")),
+          refAttribute(6884, "badge", "badge_id", ref("Catalog", "Badge")),
+        ],
+      }
+    ),
+    [BENCH_ZONE_FILE]: catalog(uuid(6861), "Zone", BENCH_ZONE_TABLE, {
+      attributes: [
+        refAttribute(6862, "keeper", "keeper_id", ref("Catalog", "Users")),
+        { id: uuid(6893), name: "team", physicalName: "team_id", type: "UUID" },
+      ],
+    }),
+    [SNAPSHOT_BADGE_FILE]: catalog(uuid(6885), "Badge", "badge"),
+    [SNAPSHOT_USER_BADGE_FILE]: {
+      id: uuid(6886),
+      kind: "CustomTable",
+      name: "UserBadge",
+      physicalName: SNAPSHOT_USER_BADGE_TABLE,
+      scope: "org",
+      scopeColumn: "orgId",
+      columns: [
+        column(6892, "orgId", "org_id", "UUID"),
+        column(6887, "user", "user_id", "UUID"),
+        column(6888, "badge", "badge_id", "UUID"),
+      ],
+      foreignKeys: [
+        {
+          name: "user_badge_user_fk",
+          columns: ["user"],
+          references: { object: ref("Catalog", "Users"), key: "ref" },
+        },
+        {
+          name: "user_badge_badge_fk",
+          columns: ["badge"],
+          references: { object: ref("Catalog", "Badge"), key: "ref" },
+        },
+      ],
+    },
+    [SNAPSHOT_ORG_GUEST_FILE]: catalog(
+      uuid(6889),
+      "OrgGuest",
+      SNAPSHOT_ORG_GUEST_TABLE,
+      {
+        scope: "none",
+        attributes: [
+          refAttribute(6890, "user", "user_id", ref("Catalog", "Users")),
+          { id: uuid(6891), name: "org", physicalName: "org", type: "UUID" },
+        ],
+      }
+    ),
+    [GLOBAL_GRANT_FILE]: globalGrantTable({
+      columns: [
+        column(6116, "id", "id", "UUID"),
+        nullable(6117, "memberId", "member_id", "UUID"),
+        nullable(6119, "roleId", "role_id", "UUID"),
+      ],
+    }),
+    [SOURCE_ROLE_FILE]: sourceRoleTable(),
+    [ROLE_FILE("Support")]: {
+      sourceKeys: [{ source: "globalGrants", key: ADOPTED_SUPPORT_KEY }],
+    },
+  })
+  const shell = "LANGUAGE sql STABLE SECURITY DEFINER SET search_path = ''"
+  files.set(
+    SCOPE_FUNCTIONS_FILE,
+    `CREATE FUNCTION public.org_ids() RETURNS SETOF uuid ${shell} AS $$ SELECT m.org_id FROM public.membership m WHERE m.user_id = (SELECT simetra.current_user_id()) AND m.is_active IS TRUE UNION SELECT g.org FROM public.${SNAPSHOT_ORG_GUEST_TABLE} g WHERE g.user_id = (SELECT simetra.current_user_id()) $$;`
+  )
+  files.set(
+    BENCH_ZONE_SQL_FILE,
+    `CREATE FUNCTION ${BENCH_ZONE_FUNCTION}() RETURNS SETOF uuid ${shell} AS $$ SELECT z.id FROM public.${BENCH_ZONE_TABLE} z WHERE z.keeper_id = (SELECT simetra.current_user_id()) AND z.team_id IN (SELECT public.team_member_member_scopes()) $$;`
+  )
+  return files
+}
+
+/** Таблиці й ролі моделі DB-доказу знімка актора (`actorSnapshotDomain`). */
+export const ACTOR_SNAPSHOT = {
+  teamKindId: uuid(8101),
+  teamSeat: BENCH_TEAM_SEAT_TABLE,
+  teamSetFunction: "public.team_ids",
+  zone: BENCH_ZONE_TABLE,
+  zoneDimensionId: BENCH_ZONE_DIMENSION_ID,
+  userRegion: SNAPSHOT_USER_REGION_TABLE,
+  homeRegionDimensionId: uuid(8102),
+  regionNote: "region_note",
+  ownEditorId: uuid(8104),
+  regionNoteWriterId: uuid(8105),
+  zoneWriterId: uuid(8106),
+  commentUpdaterId: uuid(8108),
+} as const
+
+/**
+ * Шар DB-доказу знімка актора (план Права-3, Задача 6) поверх домену
+ * політик: кожна форма джерела, яку знімок має взяти до першої зміни. Вид
+ * скоупу `team` — дослівна функція множини над таблицею виду `TeamSeat`
+ * (місця користувачів; корінь зовнішній, як у бенчмарку: об'єктів виду
+ * немає, бо права на них дає лише рівень скоупу з членством); вимір `zone` —
+ * дослівна функція над таблицею виду `Zone`, що кличе функцію членства й
+ * дає ще й `NULL`; вимір `homeRegion` — скоуплений регістр зв'язку
+ * `UserRegion` з суб'єктом-«Користувачем»; `RegionNote` мапить обидва виміри.
+ * `Zone` прив'язана до контейнера `Project`. Ролі: `TaskOwnEditor` (запис
+ * власних коментарів задач), `ProjectZoneWriter` (контейнерна, запис `Zone`;
+ * у документів ядра команд немає) і `RegionNoteWriter` (обсяги обох вимірів).
+ */
+function actorSnapshotLayer(): Layer {
+  const S = ACTOR_SNAPSHOT
+  const regionNote = objects(["Catalog", "RegionNote"])
+  const comment = objects(["Catalog", "TaskComment"])
+  return {
+    [PROJECT_FILE]: {
+      scopeKinds: [
+        ORG_SCOPE_KIND,
+        {
+          id: S.teamKindId,
+          name: "team",
+          physicalName: "team_id",
+          root: {
+            external: { schema: "public", table: "teams", column: "id" },
+          },
+          setFunction: { schema: "public", name: "team_ids" },
+        },
+      ],
+      accessDimensions: [
+        regionDimension(),
+        {
+          id: S.zoneDimensionId,
+          name: "zone",
+          target: ref("Catalog", "Zone"),
+          values: { function: { schema: "public", name: "zone_ids" } },
+        },
+        {
+          id: S.homeRegionDimensionId,
+          name: "homeRegion",
+          target: ref("Catalog", "Region"),
+          values: {
+            relation: {
+              object: ref("InformationRegister", "UserRegion"),
+              subject: "user",
+              value: "region",
+            },
+          },
+        },
+      ],
+    },
+    [BENCH_TEAM_SEAT_FILE]: catalog(uuid(6851), "TeamSeat", S.teamSeat, {
+      scope: "none",
+      attributes: [
+        refAttribute(6852, "user", "user_id", ref("Catalog", "Users")),
+        { id: uuid(6853), name: "team", physicalName: "team", type: "UUID" },
+      ],
+    }),
+    [BENCH_ZONE_FILE]: catalog(uuid(6861), "Zone", S.zone, {
+      containerBinding: "project",
+      attributes: [
+        refAttribute(6862, "keeper", "keeper_id", ref("Catalog", "Users")),
+        refAttribute(8120, "project", "project_id", ref("Catalog", "Project")),
+      ],
+    }),
+    [USER_REGION_FILE]: {
+      id: uuid(6070),
+      kind: "InformationRegister",
+      name: "UserRegion",
+      physicalName: S.userRegion,
+      kindLabel: S.userRegion,
+      scope: "org",
+      dimensions: [
+        refAttribute(6071, "user", "user_id", ref("Catalog", "Users")),
+        refAttribute(6072, "region", "region_id", ref("Catalog", "Region")),
+      ],
+    },
+    [SNAPSHOT_REGION_NOTE_FILE]: catalog(
+      uuid(6881),
+      "RegionNote",
+      S.regionNote,
+      {
+        access: [
+          { attribute: "region", dimension: "homeRegion" },
+          { attribute: "zone", dimension: "zone" },
+        ],
+        attributes: [
+          refAttribute(6882, "region", "region_id", ref("Catalog", "Region")),
+          refAttribute(6883, "zone", "zone_id", ref("Catalog", "Zone")),
+        ],
+      }
+    ),
+    [ROLE_FILE("TaskOwnEditor")]: role(
+      S.ownEditorId,
+      "TaskOwnEditor",
+      { scopeKind: "org" },
+      {
+        grants: [
+          grant(comment, ["read"], "any"),
+          grant(comment, ["update"], "own"),
+        ],
+      }
+    ),
+    [ROLE_FILE("ProjectZoneWriter")]: role(
+      S.zoneWriterId,
+      "ProjectZoneWriter",
+      { container: ref("Catalog", "Project") },
+      {
+        grants: [
+          grant(objects(["Catalog", "Zone"]), ["read", "update"], "any"),
+        ],
+      }
+    ),
+    // Архетип лише власних коментарів: `read any` з `req(update)` кастомній
+    // ролі над ним дає лише дельта `allow` (розрізняльний рядок прав пари)
+    [ROLE_FILE("CommentUpdater")]: role(
+      S.commentUpdaterId,
+      "CommentUpdater",
+      { scopeKind: "org" },
+      { grants: [grant(comment, ["read", "update"], "own")] }
+    ),
+    [ROLE_FILE("RegionNoteWriter")]: role(
+      S.regionNoteWriterId,
+      "RegionNoteWriter",
+      { scopeKind: "org" },
+      {
+        grants: [
+          grant(regionNote, ["read", "update"], { dimension: "homeRegion" }),
+          grant(regionNote, ["read"], { dimension: "zone" }),
+        ],
+      }
+    ),
+  }
+}
+
+/**
+ * Модель DB-доказу знімка актора: домен політик з шарами `layers` і
+ * `actorSnapshotLayer()`; SQL дослівних функцій множини `team` і виміру
+ * `zone` — файли поверх (`withRoles` зливає лише JSON). Функція виміру дає
+ * й `NULL`: знімок значень береться з тією самою множиною, що й наживо.
+ */
+export function actorSnapshotDomain(...layers: Layer[]): Map<string, string> {
+  const files = policyDomain(...layers, actorSnapshotLayer())
+  const shell = "LANGUAGE sql STABLE SECURITY DEFINER SET search_path = ''"
+  const S = ACTOR_SNAPSHOT
+  files.set(
+    SCOPE_FUNCTIONS_FILE,
+    `CREATE FUNCTION ${S.teamSetFunction}() RETURNS SETOF uuid ${shell} AS $$ SELECT s.team FROM public.${S.teamSeat} s WHERE s.user_id = (SELECT simetra.current_user_id()) $$;`
+  )
+  files.set(
+    BENCH_ZONE_SQL_FILE,
+    `CREATE FUNCTION ${BENCH_ZONE_FUNCTION}() RETURNS SETOF uuid ${shell} AS $$ SELECT z.id FROM public.${S.zone} z WHERE z.keeper_id = (SELECT simetra.current_user_id()) AND z.org_id IN (SELECT public.org_member_member_scopes()) UNION ALL SELECT NULL::uuid WHERE (SELECT simetra.current_user_id()) IS NOT NULL $$;`
+  )
+  return files
+}
+
+/** Ідентифікатори моделі `adoptedSnapshotDomain`. */
+export const ADOPTED_SNAPSHOT = {
+  commentEditorId: uuid(8107),
+  orgGuest: SNAPSHOT_ORG_GUEST_TABLE,
+} as const
+
+/**
+ * Модель DB-доказу знімка над прийнятими джерелами (план Права-3, Задача 6):
+ * членство виду `org` — прийнята `Membership` з активністю, призначення
+ * `ProjectLead` — прийнята `RoleGrant` з активністю (`activeGrants`), вид
+ * `team` — довідник членства `TeamMember` з роллю `TeamLead`. Ролей кожного
+ * користувача немає: актор без призначень не має жодного рядка прав. Функція
+ * множини `org` — активне членство, підтверджене рядком таблиці виду
+ * `OrgGuest`: межа тенанта вужча за «мої скоупи», тож рядок `OrgGuest`
+ * відкриває скоуп, права в якому актор уже має (`CommentEditor`: у
+ * документів ядра команд немає, тож запис доводиться на довіднику). Колонка
+ * скоупу `Membership` — без `NOT NULL`, як буває в прийнятій таблиці: рядок
+ * без скоупу членства не дає ні наживо, ні в знімку.
+ */
+export function adoptedSnapshotDomain(): Map<string, string> {
+  const files = adoptedSourcesDomain(adoptedCrossKind(), activeGrants(), {
+    [MEMBERSHIP_FILE]: adoptedMembershipTable({
+      columns: adoptedMembershipTable().columns.map((c) =>
+        c.name === "orgId" ? nullable(6102, "orgId", "org_id", "UUID") : c
+      ),
+    }),
+    [SNAPSHOT_ORG_GUEST_FILE]: catalog(
+      uuid(6889),
+      "OrgGuest",
+      SNAPSHOT_ORG_GUEST_TABLE,
+      {
+        scope: "none",
+        attributes: [
+          refAttribute(6890, "user", "user_id", ref("Catalog", "Users")),
+          { id: uuid(6891), name: "org", physicalName: "org", type: "UUID" },
+        ],
+      }
+    ),
+    [ROLE_FILE("CommentEditor")]: role(
+      ADOPTED_SNAPSHOT.commentEditorId,
+      "CommentEditor",
+      { scopeKind: "org" },
+      {
+        grants: [
+          // `create` — межа тенанта ядра стоїть лише на створенні (`scope_insert`)
+          grant(
+            objects(["Catalog", "TaskComment"]),
+            ["create", "read", "update"],
+            "any"
+          ),
+        ],
+      }
+    ),
+    ...without(ROLE_FILE("Everyone")),
+  })
+  files.set(
+    SCOPE_FUNCTIONS_FILE,
+    `CREATE FUNCTION public.org_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT m.org_id FROM public.membership m WHERE m.user_id = (SELECT simetra.current_user_id()) AND m.is_active IS TRUE AND m.org_id IN (SELECT g.org FROM public.${SNAPSHOT_ORG_GUEST_TABLE} g WHERE g.user_id = (SELECT simetra.current_user_id())) $$;`
+  )
+  return files
 }

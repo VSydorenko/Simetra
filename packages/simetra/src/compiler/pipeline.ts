@@ -11,7 +11,12 @@ import type {
   CompiledScopeKind,
   SourceObject,
 } from "./compile"
-import { compareStrings, sortDiagnostics, type Diagnostic } from "./diagnostics"
+import {
+  compareStrings,
+  diagnostic,
+  sortDiagnostics,
+  type Diagnostic,
+} from "./diagnostics"
 import { modelHash } from "./canonical"
 import { accessContracts, buildAccessUnits } from "./access-units"
 import {
@@ -27,6 +32,7 @@ import {
 } from "./function-execute"
 import { buildPresentation } from "./presentation"
 import {
+  PROJECT_FILE,
   readFiles,
   type FilesStageResult,
   type ParsedObject,
@@ -40,9 +46,15 @@ import {
   roleContracts,
   sourceContracts,
 } from "./rights/contracts"
-import { buildRightsUnits, hasRightsFunctions } from "./rights/functions"
+import {
+  buildRightsUnits,
+  hasActorSnapshot,
+  hasRightsFunctions,
+} from "./rights/functions"
 import { buildExplainUnits } from "./rights/explain-units"
 import { buildRightsGuardUnits } from "./rights/guard-units"
+import { snapshotExemptWriters } from "./rights/snapshot-exempt-writers"
+import { snapshotSources } from "./rights/snapshot-sources"
 import { scopeKindUnreadWarnings } from "./rights/scope-kind-warnings"
 import {
   rightsCatalogContracts,
@@ -419,6 +431,29 @@ export async function runStages(
   // Один контракт «Користувачів» і для шару платформи, і для функцій прав, і
   // для меж доступу: без нього всі мовчать (спека прав §4.6).
   const users = usersContractOf(stage1.objects, physical)
+  // Дослівні функції множини видів скоупу — факт актора `scopeSets` (спека
+  // прав §5.2): той самий перелік, що гранти `setFunctions`, з видом.
+  const scopeSetFunctions = scopeKinds
+    .filter((kind) =>
+      stage1.project!.scopeKinds.some(
+        (declared) =>
+          declared.id === kind.id && typeof declared.setFunction !== "string"
+      )
+    )
+    .map((kind) => ({ scopeKindId: kind.id, fn: kind.setFunction }))
+    .sort((a, b) => compareStrings(a.scopeKindId, b.scopeKindId))
+  // Знімок актора (спека прав §7): з ним публічні функції фактів, функції
+  // членства й межа тенанта дослівної функції множини читають факти
+  // транзакції на її початок.
+  const actorSnapshot = hasActorSnapshot(
+    {
+      rightsCatalogs,
+      roles,
+      users,
+      membershipSources: sources.membershipSources,
+    },
+    stage1.project.database.provider
+  )
   const access = accessContracts(
     stage1.objects,
     physical,
@@ -426,7 +461,10 @@ export async function runStages(
     scopeKindIdByFile,
     rights,
     users?.objectId,
-    stage1.project.naming.attributeCase
+    stage1.project.naming.attributeCase,
+    new Set(
+      actorSnapshot ? scopeSetFunctions.map((set) => set.scopeKindId) : []
+    )
   )
 
   const projectModule = stage1.project.name
@@ -491,6 +529,7 @@ export async function runStages(
     membershipSources: sources.membershipSources,
     assignmentSources: sources.assignmentSources,
     users,
+    scopeSetFunctions,
   }
   const kindLabels = new Map(
     stage1.objects.flatMap((object) => {
@@ -507,7 +546,8 @@ export async function runStages(
       stage1.objects,
       physical,
       stage1.project,
-      parse
+      parse,
+      actorSnapshot
     ),
     ...buildPlatformUnits(
       {
@@ -606,23 +646,6 @@ export async function runStages(
       module,
       parse
     ),
-    ...buildRightsGuardUnits(
-      {
-        rights,
-        roles,
-        users,
-        membership,
-        membershipSources: sources.membershipSources,
-        rightsCatalogs,
-        accessDimensions,
-      },
-      physical,
-      stage1.objects,
-      stage1.project.naming.attributeCase,
-      stage1.project.database.provider,
-      module,
-      parse
-    ),
     ...buildCommandUnits(
       { rights, roles, users, membershipSources: sources.membershipSources },
       stage1.project.database.provider,
@@ -644,6 +667,62 @@ export async function runStages(
       parse
     ),
   ]
+  // Джерела знімка актора — аналізом тіл живих варіантів над усіма
+  // згенерованими й дослівними одиницями (спека прав §7, Р3-6): запобіжники
+  // ставлять тригер знімка на кожне джерело, тож рахуються раз до них.
+  const guardContracts = {
+    rights,
+    roles,
+    users,
+    membership,
+    membershipSources: sources.membershipSources,
+    assignmentSources: sources.assignmentSources,
+    rightsCatalogs,
+    accessDimensions,
+    scopeSetFunctions,
+  }
+  const snapshot = actorSnapshot
+    ? snapshotSources({
+        contracts: guardContracts,
+        physical,
+        objects: stage1.objects,
+        generated: baseUnits.filter((unit) => unit.generator !== undefined),
+        verbatim: sql.units,
+        attributeCase: stage1.project.naming.attributeCase,
+        parse,
+        plpgsql,
+      })
+    : { sources: [], exempt: [], unknown: [] }
+  const snapshotProblems = [
+    ...snapshot.unknown.map((entry) =>
+      diagnostic(
+        "rights.snapshot-source-unknown",
+        sql.units.find((unit) => unit.identity === entry.via)?.file ??
+          PROJECT_FILE,
+        "",
+        { ...entry }
+      )
+    ),
+    ...snapshotExemptWriters(snapshot, sql.units, parse, plpgsql),
+  ]
+  if (snapshotProblems.length > 0) {
+    return {
+      ok: false,
+      diagnostics: sortDiagnostics([...diagnostics, ...snapshotProblems]),
+    }
+  }
+  baseUnits.push(
+    ...buildRightsGuardUnits(
+      guardContracts,
+      physical,
+      stage1.objects,
+      stage1.project.naming.attributeCase,
+      stage1.project.database.provider,
+      module,
+      parse,
+      snapshot
+    )
+  )
   // Ядро команд довідника — над рештою одиниць: функції, які кличе його
   // тіло (функції прав, множин, джерел копій), — ребра `requires`, а
   // обробники `beforeWrite` вирішують замок ієрархії (спека П4 §6.6).

@@ -19,6 +19,7 @@ import {
   globalConstant,
   policyDomain,
   regionDimension,
+  snapshotSourcesDomain,
   writeRoles,
 } from "./fixtures/rights"
 
@@ -132,22 +133,55 @@ const tableOf = (branch: Select) =>
 
 /**
  * Вираз рядка пояснення для викликача: `p_user` → поточний користувач,
- * права `granted` → `caller_granted`. Підстановка — на дереві.
+ * права `granted` → `caller_granted`, варіанти `_of` → функції множини
+ * політики, які читає RLS (Р3-8): зі знімком актора вони судять знімком.
+ * Множина членства виду — `_member_scopes` виду з контракту. Підстановка — на
+ * дереві.
  */
-function asCaller(node: unknown): unknown {
+function asCaller(node: unknown, model: CompiledModel): unknown {
   const userRef = JSON.stringify(exprTree(P("p_user")))
+  const current = exprTree(CURRENT)
+  const publicOf: Record<string, (args: unknown[]) => unknown> = {
+    [F.membersOf.name]: (args) => call(F.myMembers, args),
+    [F.dimensionValuesOf.name]: (args) => call(F.dimensionValues, args),
+    [F.visibleUsersOf.name]: () => call(F.visibleUsers, []),
+    [F.scopeSetOf.name]: ([kind]) => {
+      const id = (
+        kind as { TypeCast: { arg: { A_Const: { sval: { sval: string } } } } }
+      ).TypeCast.arg.A_Const.sval.sval
+      const set = model.contracts.membership.find(
+        (m) => m.scopeKindId === id
+      )!.setFunction!
+      return call(set, [])
+    },
+  }
   const walk = (value: unknown): unknown => {
     if (Array.isArray(value)) return value.map(walk)
     if (typeof value !== "object" || value === null) return value
-    if (JSON.stringify(value) === userRef) return exprTree(CURRENT)
+    if (JSON.stringify(value) === userRef) return current
     const node = value as Record<string, unknown>
     if (node.relname === "granted")
       return { ...node, relname: "caller_granted" }
+    const fn = node.FuncCall as
+      { funcname: { String: { sval: string } }[]; args?: unknown[] } | undefined
+    const variant = fn?.funcname.at(-1)?.String.sval
+    if (fn !== undefined && variant !== undefined && variant in publicOf)
+      return publicOf[variant]!((fn.args ?? []).slice(1).map(walk))
     return Object.fromEntries(
       Object.entries(node).map(([key, child]) => [key, walk(child)])
     )
   }
   return walk(node)
+}
+
+/** Виклик функції як вузол дерева. */
+function call(fn: { schema: string; name: string }, args: unknown[]): unknown {
+  const node = exprTree(`${fn.schema}.${fn.name}()`) as {
+    FuncCall: Record<string, unknown>
+  }
+  return {
+    FuncCall: { ...node.FuncCall, ...(args.length > 0 ? { args } : {}) },
+  }
 }
 
 interface Row {
@@ -268,6 +302,16 @@ const right = (label: string, extent: string, dimension = "NULL") =>
 const member = (set: string, column: string) =>
   `EXISTS (SELECT 1 FROM ${set} AS v(value) WHERE v.value = r.${column})`
 
+/**
+ * Гейт аналізу запиту (вид, скоуп): пара `administerRights` на кожному
+ * довіднику призначень домену — глобальному й `org`.
+ */
+const gate = (kind: string, scope: string) =>
+  [
+    `(EXISTS (SELECT 1 FROM simetra.rights_mine('administerRights', 'global_role_assignments') g WHERE g.action = 'administerRights' AND g.object = 'global_role_assignments' AND ${kind} = '${ZERO}'::uuid AND ${scope} = '${ZERO}'::uuid AND g.level = 'global')`,
+    `EXISTS (SELECT 1 FROM simetra.rights_mine('administerRights', 'org_role_assignments') g WHERE g.action = 'administerRights' AND g.object = 'org_role_assignments' AND ${kind} = '${ORG_KIND_ID}'::uuid AND g.level = 'scope' AND g.level_id = '${ORG_KIND_ID}'::uuid AND g.scope = ${scope}))`,
+  ].join(" OR ")
+
 const REGION = `'${REGION_DIMENSION_ID}'::uuid`
 const NO_ROLES_SQL = "'{}'::uuid[]"
 
@@ -337,6 +381,7 @@ describe("rights_explain", () => {
     const units = buildExplainUnits(
       {
         ...domain.contracts,
+        scopeSetFunctions: [],
         rights: domain.contracts.rights.filter((c) => c !== bulletin),
         access: domain.contracts.access.map((a) =>
           a.objectId === bulletin.objectId ? { ...a, rights: undefined } : a
@@ -371,7 +416,7 @@ describe("rights_explain", () => {
       [
         `${P("p_object")} = '${BULLETIN_TABLE}'`,
         `r.id = ${P("p_row")}`,
-        `EXISTS (SELECT 1 FROM simetra.rights_mine() g WHERE g.action = 'administerRights' AND (('${ORG_KIND_ID}'::uuid = '${ZERO}'::uuid AND r.org_id = '${ZERO}'::uuid AND g.level = 'global' AND g.object = 'global_role_assignments') OR ('${ORG_KIND_ID}'::uuid = '${ORG_KIND_ID}'::uuid AND g.level = 'scope' AND g.level_id = '${ORG_KIND_ID}'::uuid AND g.scope = r.org_id AND g.object = 'org_role_assignments')))`,
+        gate(`'${ORG_KIND_ID}'::uuid`, "r.org_id"),
         "(TRUE AND TRUE)",
       ].map(exprTree)
     )
@@ -383,8 +428,8 @@ describe("rights_explain", () => {
     const branch = branchOf(model, "task")!
     const caller = rowsOf(branch).map((r) => ({
       ...r,
-      hasRight: asCaller(r.hasRight),
-      carrierMatch: asCaller(r.carrierMatch),
+      hasRight: asCaller(r.hasRight, model),
+      carrierMatch: asCaller(r.carrierMatch, model),
     }))
     // `WHERE` складає кон'юнкти через AND, тож межі викликача — окремі
     // кон'юнкти після членства `p_user`, далі OR предикатів.
@@ -409,7 +454,9 @@ describe("rights_explain", () => {
     ])
     const text = JSON.stringify(visibility)
     expect(text).not.toContain('"p_user"')
-    expect(text).toContain('"current_user_id"')
+    // Викликача судять функції множини політики, а не варіанти `_of`.
+    expect(text).not.toMatch(/_of"/)
+    expect(text).toContain(`"${F.myMembers.name}"`)
   })
 
   it("the task branch: gate of the row's scope, p_user a member of it, the row by key", () => {
@@ -419,7 +466,7 @@ describe("rights_explain", () => {
       [
         `${P("p_object")} = 'task'`,
         `r.id = ${P("p_row")}`,
-        `EXISTS (SELECT 1 FROM simetra.rights_mine() g WHERE g.action = 'administerRights' AND (('${ORG_KIND_ID}'::uuid = '${ZERO}'::uuid AND r.org_id = '${ZERO}'::uuid AND g.level = 'global' AND g.object = 'global_role_assignments') OR ('${ORG_KIND_ID}'::uuid = '${ORG_KIND_ID}'::uuid AND g.level = 'scope' AND g.level_id = '${ORG_KIND_ID}'::uuid AND g.scope = r.org_id AND g.object = 'org_role_assignments')))`,
+        gate(`'${ORG_KIND_ID}'::uuid`, "r.org_id"),
         `EXISTS (SELECT 1 FROM simetra.rights_scopes_of(${P("p_user")}) s WHERE s.scope_kind_id = '${ORG_KIND_ID}'::uuid AND s.scope = r.org_id)`,
       ].map(exprTree)
     )
@@ -502,7 +549,7 @@ describe("rights_explain", () => {
       [
         `${P("p_object")} = 'users'`,
         `r.${key} = ${P("p_row")}`,
-        `EXISTS (SELECT 1 FROM simetra.rights_mine() g WHERE g.action = 'administerRights' AND (('${ZERO}'::uuid = '${ZERO}'::uuid AND '${ZERO}'::uuid = '${ZERO}'::uuid AND g.level = 'global' AND g.object = 'global_role_assignments') OR ('${ZERO}'::uuid = '${ORG_KIND_ID}'::uuid AND g.level = 'scope' AND g.level_id = '${ORG_KIND_ID}'::uuid AND g.scope = '${ZERO}'::uuid AND g.object = 'org_role_assignments')))`,
+        gate(`'${ZERO}'::uuid`, `'${ZERO}'::uuid`),
       ].map(exprTree)
     )
     const rows = rowsOf(branch)
@@ -612,5 +659,54 @@ describe("rights_explain", () => {
     for (const c of constants) {
       expect(branchOf(withConstant, c.kindLabel), c.kindLabel).toBeUndefined()
     }
+  })
+})
+
+describe("rights_explain with an actor snapshot", () => {
+  // Р3-8: пояснення ≡ RLS викликача — його права й множини читають ті самі
+  // функції, що політики, тож у транзакції зі знімком — знімок.
+  it("judges caller visibility by snapshot-aware functions", async () => {
+    const result = await compile(snapshotSourcesDomain())
+    expect(
+      result.diagnostics.filter(
+        (d) =>
+          d.severity === "error" && d.code !== "rights.adopted-source-writes"
+      )
+    ).toEqual([])
+    const model = result.model!
+    const body = bodyTree(explainFunction(model)) as {
+      SelectStmt: {
+        withClause: {
+          ctes: { CommonTableExpr: { ctename: string; ctequery: unknown } }[]
+        }
+      }
+    }
+    const caller = body.SelectStmt.withClause.ctes.find(
+      (c) => c.CommonTableExpr.ctename === "caller_granted"
+    )!.CommonTableExpr.ctequery
+    expect(caller).toEqual(
+      tree(
+        "SELECT m.level, m.scope, m.container, m.object, m.action, m.extent, m.dimension_id, NULL::uuid AS role_id, NULL::uuid AS custom_role FROM simetra.rights_mine() m"
+      )
+    )
+    // Межа тенанта викликача — множина межі RLS (`rights_scope_set` для
+    // дослівної функції виду); для `p_user` дослівна функція відома лише
+    // поточному користувачу, як і була.
+    const branch = branchOf(model, "task")!
+    const boundary = conjuncts(branch.whereClause)[4]
+    expect(boundary).toEqual(
+      exprTree(
+        `EXISTS (SELECT 1 FROM simetra.rights_scope_set('${ORG_KIND_ID}'::uuid) AS v(value) WHERE v.value = r.org_id)`
+      )
+    )
+    expect(rowNamed(rowsOf(branch), "task_scope_read").carrierMatch).toEqual(
+      exprTree(
+        `CASE WHEN ${P("p_user")} = ${CURRENT} THEN ${member("public.org_ids()", "org_id")} ELSE NULL END`
+      )
+    )
+    // Жодного варіанта `_of` у перевірці викликача.
+    const visibility = JSON.stringify(conjuncts(branch.whereClause).slice(4))
+    expect(visibility).not.toMatch(/_of"/)
+    expect(visibility).not.toContain('"p_user"')
   })
 })

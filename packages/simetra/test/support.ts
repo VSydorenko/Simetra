@@ -50,6 +50,8 @@ export {
   type Layer,
 } from "../src/compiler/__tests__/fixtures/rights"
 export * from "../src/schema/__tests__/fixtures/e1-fixtures"
+export { SNAPSHOT_TABLES } from "../src/compiler/rights/actor-snapshot"
+export { planNodes } from "./db/explain-plan"
 export { signUp } from "./db/auth"
 export { insertOrphan } from "./db/rights-seed"
 export * from "./db/connection"

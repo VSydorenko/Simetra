@@ -2,12 +2,15 @@ import { randomUUID } from "node:crypto"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import {
   COMMAND_CORE_ERRORS,
+  COMMAND_SETTING,
   PLATFORM_ROLES,
+  SESSION_CLAIMS_SETTING,
   type CommandContext,
 } from "simetra/model"
 import {
   COMMENT_TABLE,
   TICKET_TABLE,
+  TICKET_WRITER_ID,
   commandCoreLayer,
   compileRights,
   policyDomain,
@@ -18,7 +21,9 @@ import {
   deploy,
   COMMAND_CORE_MEMBERS,
   type Seed,
+  assignmentRow,
   describeTransaction,
+  insert,
   seedCommandCore,
 } from "./rights-seed"
 
@@ -401,6 +406,82 @@ describe("catalog command core: rights check ≡ RLS", () => {
 
   it.each(POINTS)("%s", async (_, point) => {
     await evaluate(point)
+  })
+
+  /**
+   * Варіант `snapshot: "taken"` (план Права-3, Задача 6 крок 3): у зовнішній
+   * точці збереження під актором точки оператор, що знімає факти (запис у
+   * «Користувачів», що нічого не змінює), потім призначення `TicketWriter`,
+   * що відкрило б точку (режим обслуговування — без знімка). Обидва шляхи
+   * читають права на початок, тож результат — як без призначення. Без
+   * знімка те саме призначення точку відкриває — інакше варіант нічого не
+   * доводить.
+   */
+  const withWriter = async <T>(
+    point: Point,
+    snapshot: boolean,
+    body: () => Promise<T>
+  ): Promise<T> => {
+    const client = tx.client()
+    await client.query("SAVEPOINT snapshot_taken")
+    try {
+      if (snapshot) {
+        await client.query("SELECT set_config($1, $2, true)", [
+          SESSION_CLAIMS_SETTING,
+          JSON.stringify(claims(point.user)),
+        ])
+        await client.query("SELECT set_config($1, $2, true)", [
+          COMMAND_SETTING,
+          JSON.stringify(contextOf("update", "users", key(point.user))),
+        ])
+        await client.query(
+          "UPDATE public.users SET version = version WHERE false"
+        )
+        const { rows } = await client.query<{ n: number }>(
+          "SELECT count(*)::int AS n FROM simetra.rights_tx_header WHERE xid = txid_current() AND fact = 'rights'"
+        )
+        expect(rows).toEqual([{ n: 1 }])
+        // Засів у режимі обслуговування — без контексту команди
+        await client.query("SELECT set_config($1, '', true)", [COMMAND_SETTING])
+      }
+      const tenant = TENANT_OF_USER.get(point.user)!
+      await insert(client, "org_role_assignments", {
+        org_id: key(tenant),
+        ...assignmentRow(key(`${point.user}@${tenant}`), {
+          archetype: TICKET_WRITER_ID,
+        }),
+      })
+      return await body()
+    } finally {
+      await client.query("ROLLBACK TO SAVEPOINT snapshot_taken")
+    }
+  }
+  // По точці на обсяг (`any`, `own`, вимір, контейнер, без права) і дію
+  const SNAPSHOT_POINTS = POINTS.filter(
+    ([, p]) =>
+      p.table === TICKET_TABLE &&
+      ["tw", "to", "tr", "tp", "rd"].includes(p.user) &&
+      p.row === "K1" &&
+      p.state.label === "unchanged"
+  )
+
+  it.each(SNAPSHOT_POINTS)(
+    "snapshot taken: %s judges the rights at the start",
+    async (_, point) => {
+      const before = await evaluate(point)
+      expect(await withWriter(point, true, () => evaluate(point))).toBe(before)
+    }
+  )
+
+  it("without a snapshot the same assignment opens a refused point", async () => {
+    expect(SNAPSHOT_POINTS).toHaveLength(15)
+    const opened: string[] = []
+    for (const [name, point] of SNAPSHOT_POINTS) {
+      if ((await evaluate(point)) === "ok") continue
+      if ((await withWriter(point, false, () => evaluate(point))) === "ok")
+        opened.push(name)
+    }
+    expect(opened.length).toBeGreaterThan(0)
   })
 
   // Сітка без жодного `ok` чи без жодної відмови нічого не порівнює: так

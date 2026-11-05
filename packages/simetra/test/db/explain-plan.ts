@@ -114,16 +114,79 @@ const subtree = (node: Raw): Raw[] => [node, ...children(node).flatMap(subtree)]
  * повторює читання. Хешований підплан і бік хеш-з'єднання читають CTE раз.
  */
 export function repeatedCteScans(
-  plan: unknown
+  plan: unknown,
+  constants: ReadonlySet<string> = new Set()
 ): { cte: string; loops: number }[] {
-  return rawNodes(plan).flatMap((n) => {
-    const loops = n["Actual Loops"]
-    return n["Node Type"] === "CTE Scan" &&
+  return rawPaths(plan).flatMap(({ node, path }) => {
+    const loops = node["Actual Loops"]
+    return node["Node Type"] === "CTE Scan" &&
       typeof loops === "number" &&
-      loops > 1
-      ? [{ cte: text(n["CTE Name"]) ?? "", loops }]
+      loops > 1 &&
+      !(constants.size > 0 && loopsOverConstants(path, node, constants))
+      ? [{ cte: text(node["CTE Name"]) ?? "", loops }]
       : []
   })
+}
+
+/**
+ * Чи кожне повторення читання `node` дає зовнішня сторона `Nested Loop`,
+ * виведена лише зі сталих функцій `constants` (рішення архітекторки плану
+ * Права-3): тоді число циклів — розмір сталої компіляції, а не скоупів, і
+ * вартість лінійна за CTE. Судить дерево плану, а не текст: шлях від вузла
+ * до кореня не перетинає `SubPlan` (корельований підплан повторюється на
+ * рядок даних), кожен `Nested Loop`, у внутрішній стороні якого лежить
+ * вузол, має зовнішню сторону, всі листки якої — `Function Scan` сталих
+ * функцій чи `Result`, і такий цикл є хоч один — інакше повторення нічим не
+ * пояснене.
+ */
+function loopsOverConstants(
+  path: readonly Raw[],
+  node: Raw,
+  constants: ReadonlySet<string>
+): boolean {
+  let child = node
+  let looped = false
+  for (const ancestor of [...path].reverse()) {
+    const relation = text(child["Parent Relationship"])
+    if (relation === "SubPlan") return false
+    if (ancestor["Node Type"] === "Nested Loop" && relation === "Inner") {
+      const outer = children(ancestor).find(
+        (c) => c["Parent Relationship"] === "Outer"
+      )
+      if (outer === undefined || !constantSubtree(outer, constants))
+        return false
+      looped = true
+    }
+    child = ancestor
+  }
+  return looped
+}
+
+/**
+ * Піддерево виведене лише зі сталих функцій: кожен листок (з листками
+ * `InitPlan` / `SubPlan` теж — вони в `Plans`) — `Function Scan` однієї з
+ * `constants` чи `Result` без входів.
+ */
+function constantSubtree(node: Raw, constants: ReadonlySet<string>): boolean {
+  return subtree(node)
+    .filter((n) => children(n).length === 0)
+    .every((leaf) =>
+      leaf["Node Type"] === "Function Scan"
+        ? constants.has(text(leaf["Function Name"]) ?? "")
+        : leaf["Node Type"] === "Result"
+    )
+}
+
+/** Вузли плану з їхніми предками від кореня. */
+function rawPaths(plan: unknown): { node: Raw; path: Raw[] }[] {
+  const walk = (node: Raw, path: Raw[]): { node: Raw; path: Raw[] }[] => [
+    { node, path },
+    ...children(node).flatMap((c) => walk(c, [...path, node])),
+  ]
+  if (Array.isArray(plan)) return plan.flatMap(rawPaths)
+  if (!isObject(plan)) return []
+  if (isObject(plan.Plan)) return rawPaths(plan.Plan)
+  return typeof plan["Node Type"] === "string" ? walk(plan, []) : []
 }
 
 /** Імена функцій, які план читає `Function Scan`. */

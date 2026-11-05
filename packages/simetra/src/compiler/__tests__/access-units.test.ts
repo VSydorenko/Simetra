@@ -5,6 +5,7 @@ import {
   accessPolicyNames,
   buildAccessUnits,
   tableGrants,
+  tenantBoundary,
   type AccessPolicyContracts,
 } from "../access-units"
 import { sha256Hex } from "../canonical"
@@ -56,6 +57,8 @@ import {
   withRoles,
   writableRegister,
   writeRoles,
+  compileRights,
+  snapshotSourcesDomain,
 } from "./fixtures/rights"
 import { readReferenceDomain } from "./fixtures/reference-domain"
 import {
@@ -124,6 +127,7 @@ describe("accessContracts", () => {
         scopeKindId: org.id,
         carrier: "org_id",
         setFunction: model.scopeKinds[0]!.setFunction,
+        verbatim: false,
       })
       expect(record.publicRead).toEqual([])
     }
@@ -271,6 +275,7 @@ const ORG_SCOPE = {
   scopeKindId: "00000000-0000-4000-8000-000000000b02",
   carrier: "org_id",
   setFunction: { schema: "public", name: "org_member_scopes" },
+  verbatim: false,
 }
 
 /** Без ролей і «Користувачів»: генератор будує лише гранти й межі. */
@@ -1340,5 +1345,54 @@ describe("simetra_command table grants", () => {
         expect(unit.name.startsWith("simetra.")).toBe(false)
       }
     }
+  })
+})
+
+describe("tenant boundary with an actor snapshot", () => {
+  // Р3-11: дослівна функція множини виду може читати джерела прав, тож межа
+  // тенанта RLS і ядра команди під знімком читає її вихід на початок
+  // транзакції — через `rights_scope_set`; функція членства — напряму, бо
+  // сама має гілку знімка.
+  it("routes the tenant boundary of a verbatim set function through rights_scope_set", async () => {
+    const result = await compileRights(snapshotSourcesDomain())
+    expect(
+      result.diagnostics.filter(
+        (d) =>
+          d.severity === "error" && d.code !== "rights.adopted-source-writes"
+      )
+    ).toEqual([])
+    const model = result.model!
+    const set = `simetra.rights_scope_set('${ORG_KIND_ID}'::uuid)`
+    const task = model.contracts.access.find((a) => a.table.name === "task")!
+    expect(task.scope).toMatchObject({
+      scopeKindId: ORG_KIND_ID,
+      verbatim: true,
+    })
+    expect(policiesOf(model, "task").get("task_scope_read")).toBe(
+      `CREATE POLICY task_scope_read ON public.task AS RESTRICTIVE FOR SELECT ${BOUNDED} USING (org_id = ANY (ARRAY(SELECT ${set})));`
+    )
+    // Вид з функцією членства — як був.
+    const team = model.contracts.access.filter(
+      (a) => a.scope !== undefined && a.scope.scopeKindId !== ORG_KIND_ID
+    )
+    expect(team.length).toBeGreaterThan(0)
+    for (const access of team) expect(access.scope!.verbatim).toBe(false)
+    // Ядро команди кличе той самий будівник межі над `v_new`.
+    const cores = model.sqlUnits.filter(
+      (u) => u.generator === "catalogCommand" && u.class === "function"
+    )
+    const boundaries = cores.filter((u) =>
+      u.sql.includes(`= ANY (ARRAY(SELECT ${set}))`)
+    )
+    expect(boundaries.length).toBeGreaterThan(0)
+    for (const unit of cores)
+      expect(unit.sql, unit.identity).not.toContain("public.org_ids()")
+    // Без знімка (`verbatim: false`) — дослівна функція напряму.
+    expect(tenantBoundary({ ...task.scope!, verbatim: false }, "v_new")).toBe(
+      "v_new.org_id = ANY (ARRAY(SELECT public.org_ids()))"
+    )
+    expect(tenantBoundary(task.scope!, "v_new")).toBe(
+      `v_new.org_id = ANY (ARRAY(SELECT ${set}))`
+    )
   })
 })

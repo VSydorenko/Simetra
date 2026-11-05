@@ -5,7 +5,11 @@ import {
   type PhysicalSnapshot,
   type PhysicalTable,
 } from "simetra/model"
-import { accessPolicyNames, rightsPolicyLabel } from "../access-units"
+import {
+  accessPolicyNames,
+  rightsPolicyLabel,
+  scopeSetCall,
+} from "../access-units"
 import {
   mainTableOf,
   qualified,
@@ -66,12 +70,19 @@ interface Subject {
   valid: string
   /** CTE рядків прав цього користувача. */
   granted: string
+  /**
+   * Множини носіїв: варіанти `_of` з `user` чи публічні функції поточного
+   * користувача — ті самі, що читає RLS, тож у транзакції зі знімком
+   * актора видимість викликача судиться знімком (Р3-8).
+   */
+  sets: "of" | "current"
 }
 
 const CALLER: Subject = {
   user: CURRENT_USER,
   valid: CURRENT_USER,
   granted: "caller_granted",
+  sets: "current",
 }
 
 const DETAIL_SELECT =
@@ -156,6 +167,7 @@ function explainBody(
       user: USER,
       valid: userOf(FN, contracts).user,
       granted: "granted",
+      sets: "of",
     },
   }
   const branches = contracts.access.flatMap((access) => {
@@ -185,9 +197,11 @@ function explainBody(
     "WITH granted AS (",
     `  ${DETAIL_SELECT}`,
     `  FROM ${call(F.detailOf, [USER])} d`,
+    // Права викликача — ті самі, що читає RLS: `rights_mine()` зі знімком
+    // транзакції (Р3-8); походження ролі для перевірки видимості не потрібне.
     `), ${CALLER.granted} AS (`,
-    `  ${DETAIL_SELECT}`,
-    `  FROM ${call(F.detailOf, [CURRENT_USER])} d`,
+    `  SELECT m.level, m.scope, m.container, m.object, m.action, m.extent, m.dimension_id, NULL::uuid AS role_id, NULL::uuid AS custom_role`,
+    `  FROM ${call(F.mine)} m`,
     ")",
     branches.join("\nUNION ALL\n"),
   ].join("\n")
@@ -305,7 +319,9 @@ function explainRows(
       extent: null,
       hasRight: "TRUE",
       carrierMatch: inSet(
-        call(F.visibleUsersOf, [subject.user]),
+        subject.sets === "of"
+          ? call(F.visibleUsersOf, [subject.user])
+          : call(F.visibleUsers),
         row(must(contracts.users).keyColumn)
       ),
       roles: NO_ROLES,
@@ -439,6 +455,8 @@ function carrierMatch(
     case "column": {
       const { fn, args } = condition.set
       const column = row(condition.column)
+      // Викликач — функції множини політики як є (Р3-8).
+      if (subject.sets === "current") return inSet(call(fn, args), column)
       if (same(fn, F.myMembers)) {
         return inSet(call(F.membersOf, [subject.user, ...args]), column)
       }
@@ -458,7 +476,7 @@ function carrierMatch(
 /**
  * Межа тенанта: скоуп рядка ∈ множини скоупів `p_user`. Функцію множини
  * членства має варіант `rights_scope_set_of`; дослівна функція множини знає
- * лише поточного користувача.
+ * лише поточного користувача. Викликач — та сама множина, що в межі RLS.
  */
 function scopeSetMatch(
   contracts: ExplainContracts,
@@ -466,6 +484,7 @@ function scopeSetMatch(
   column: string,
   subject: Subject
 ): string {
+  if (subject.sets === "current") return inSet(scopeSetCall(scope), column)
   const membership = contracts.membership.some(
     (m) =>
       m.scopeKindId === scope.scopeKindId &&

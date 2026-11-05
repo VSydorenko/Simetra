@@ -213,13 +213,18 @@ describe("creation order", () => {
         ? node.identity
         : `${node.type}:${node.schema}.${node.name}`
     )
-    const mine = "function:simetra.rights_mine()"
+    // Тіло `rights_mine` — у живому варіанті (SQL); сама `rights_mine` зі
+    // знімком — диспетчер plpgsql, чиї імена Postgres зв'язує під час
+    // виконання. Функції множини — SQL над парою `rights_mine(text, text)`.
+    const live = "function:simetra.rights_mine_live()"
+    const pair = "function:simetra.rights_mine(text,text)"
     expectBefore(list, [
-      ["table:public.org_role_assignments", mine],
-      ["table:public.org_roles_delta", mine],
-      ["function:simetra.rights_my_scopes()", mine],
-      ["function:simetra.rights_projection()", mine],
-      [mine, "function:simetra.has_right(text,text,text,uuid)"],
+      ["table:public.org_role_assignments", live],
+      ["table:public.org_roles_delta", live],
+      ["function:simetra.rights_my_scopes_live()", live],
+      ["function:simetra.rights_projection()", live],
+      [pair, "function:simetra.has_right(text,text,text,uuid)"],
+      [pair, "function:simetra.rights_any(text,text)"],
     ])
   })
 

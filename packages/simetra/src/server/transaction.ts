@@ -1,17 +1,14 @@
 import {
-  COMMAND_CORE_ERRORS,
   PLATFORM_ROLES,
   PLATFORM_SCHEMA,
   CURRENT_USER_FUNCTION_NAME,
   SESSION_CLAIMS_SETTING,
-  administerRightsAction,
   type Change,
   type CommandError,
   type CommandResult,
   type ObjectModule,
   type Operation,
   type RuntimeCatalog,
-  type RuntimeObject,
   type SessionClaims,
 } from "simetra/model"
 import {
@@ -66,26 +63,6 @@ interface Terminal {
 // Серіалізація й взаємне блокування: повтор усієї транзакції (§6.5).
 const RETRY_CODES = new Set(["40001", "40P01"])
 const INTERNAL: CommandError = { code: "command.internal" }
-const RIGHTS_CONTEXT: CommandError = {
-  code: "command.forbidden",
-  reason: COMMAND_CORE_ERRORS.forbidden.rightsContext,
-}
-
-/** Дія контексту, з якою фаза — фаза прав (Р-A4-17). */
-export const isRightsContext = (context: string) =>
-  context === administerRightsAction.name
-
-/**
- * Довідник прав — кожна його операція має контекст `administerRights`;
- * об'єкт без операцій — не довідник прав (fail-closed).
- */
-export function isRightsObject(object: RuntimeObject): boolean {
-  const targets = Object.values(object.operations)
-  return (
-    targets.length > 0 &&
-    targets.every((t) => t !== undefined && isRightsContext(t.context))
-  )
-}
 
 const statement = (text: string, ...params: (string | null)[]) => ({
   text,
@@ -151,13 +128,6 @@ export class Transaction {
   /** The current user of the attempt (step 4 of §6.5). */
   user = ""
   act: { sub: string } | undefined
-  /**
-   * Тимчасовий бар'єр Р-A4-17 до блоку Права-3: у спробі почалася фаза прав.
-   * Запобіжники бази судять лише кінцевий стан, а перевірка права ядра й
-   * RLS читають призначення наживо: право, видане собі в цій транзакції,
-   * інакше діяло б до `COMMIT`. Поле спроби — повтор починає без ознаки.
-   */
-  private rightsPhase = false
   private tail: Promise<unknown> = Promise.resolve()
 
   constructor(
@@ -184,23 +154,6 @@ export class Transaction {
     })
     this.tail = result.catch(() => undefined)
     return result
-  }
-
-  /**
-   * Marks the start of a phase: a rights phase sets the barrier mark before
-   * its `beforeWrite`, so its own hooks are already behind the barrier.
-   */
-  startPhase(context: string): void {
-    if (isRightsContext(context)) this.rightsPhase = true
-  }
-
-  /**
-   * The barrier check: called synchronously right before a unit that
-   * touches data is queued. Після ознаки — лише дані прав; відмова закриває
-   * чергу, як будь-яка інша (Р-A3-15).
-   */
-  checkBarrier(rights: boolean): void {
-    if (this.rightsPhase && !rights) this.abort(RIGHTS_CONTEXT)
   }
 
   /** Closes the queue; the first failure decides the attempt. */

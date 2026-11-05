@@ -31,7 +31,7 @@ import {
   writeRoles,
 } from "../../src/compiler/__tests__/fixtures/rights"
 import { signUp } from "./auth"
-import { queryAs } from "./connection"
+import { commandSteps, queryAs, type CommandStep } from "./connection"
 import {
   type Assignment,
   type Delta,
@@ -547,6 +547,94 @@ describe("rights analysis", () => {
     },
     EQUIVALENCE_TIMEOUT
   )
+
+  // Пояснення ≡ RLS викликача (Р3-8): видимість рядка викликачем судять
+  // функції зі знімком, тож роль чи членство, узяті в транзакції, до COMMIT
+  // пояснення не відкривають.
+  it("explains only rows visible by the snapshot", async () => {
+    const explainStep = (subject: string): CommandStep => ({
+      check: async (client) =>
+        (
+          await client.query(
+            "SELECT count(*)::int AS n FROM simetra.rights_explain('task', $1, $2)",
+            [key("t1"), key(subject)]
+          )
+        ).rows[0]!.n,
+    })
+    const steps = (user: string, list: readonly CommandStep[]) =>
+      commandSteps(tx.client(), claims(user), list)
+    // `blind` адмініструє права A без `read` на задачах і самопризначає
+    // `TaskViewer`
+    const id = randomUUID()
+    const assigned = await steps("blind", [
+      {
+        context: {
+          action: "administerRights",
+          object: "org_role_assignments",
+          root: id,
+        },
+        sql: "INSERT INTO public.org_role_assignments (id, org_id, subject, archetype) VALUES ($1, $2, $3, $4)",
+        params: [id, key("A"), key("blind@A"), TASK_VIEWER_ID],
+      },
+      explainStep("m1"),
+    ])
+    expect(assigned.refusal).toBeUndefined()
+    expect(assigned.completed.slice(1)).toEqual([0])
+    // Контроль: та сама роль з початку транзакції — пояснення є
+    const client = tx.client()
+    await client.query("SAVEPOINT explain_control")
+    try {
+      await insert(client, "org_role_assignments", {
+        org_id: key("A"),
+        ...assignmentRow(key("blind@A"), { archetype: TASK_VIEWER_ID }),
+      })
+      const control = await steps("blind", [explainStep("m1")])
+      expect(control.completed[0]).toBeGreaterThan(0)
+    } finally {
+      await client.query("ROLLBACK TO SAVEPOINT explain_control")
+    }
+    // Межа тенанта: `u9` без членства бере запрошення A з `RightsAdmin`
+    await client.query("SAVEPOINT explain_invite")
+    try {
+      const invite = randomUUID()
+      await insert(client, "org_member", { id: invite, org_id: key("A") })
+      await insert(client, "org_role_assignments", {
+        org_id: key("A"),
+        ...assignmentRow(invite, { archetype: RIGHTS_ADMIN_ID }),
+      })
+      await client.query("SET CONSTRAINTS ALL IMMEDIATE")
+      await client.query("SET CONSTRAINTS ALL DEFERRED")
+      const accepted = await steps("u9", [
+        {
+          context: { action: "update", object: "org_member", root: invite },
+          sql: "UPDATE public.org_member SET user_id = $1 WHERE id = $2",
+          params: [key("u9"), invite],
+          asOwner: true,
+        },
+        explainStep("m1"),
+        {
+          // Наживо `u9` уже адміністратор прав A з читанням задач
+          check: async (client) =>
+            (
+              await client.query(
+                "SELECT count(*)::int AS n FROM simetra.rights_mine_live() m WHERE m.object = 'task' AND m.action = 'read'"
+              )
+            ).rows[0]!.n,
+        },
+      ])
+      expect(accepted.refusal).toBeUndefined()
+      const [claim, explained, live] = accepted.completed
+      expect((claim as { rowCount: number }).rowCount).toBe(1)
+      expect(explained).toBe(0)
+      expect(live).toBeGreaterThan(0)
+      // Контроль: `admin` з тією самою роллю з початку отримує пояснення
+      expect(
+        (await steps("admin", [explainStep("m1")])).completed[0]
+      ).toBeGreaterThan(0)
+    } finally {
+      await client.query("ROLLBACK TO SAVEPOINT explain_invite")
+    }
+  })
 
   it("explain-oracle: rows and users outside the caller's scope — empty", async () => {
     expect

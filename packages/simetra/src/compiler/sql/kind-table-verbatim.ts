@@ -165,6 +165,28 @@ export function bodyKindTable(
   return undefined
 }
 
+/**
+ * Таблиця з `tables`, у яку потрапляє запис у подання моделі `view`, — той
+ * самий обхід визначень, що й ціль DML тіла (Правило 1): автооновлюване
+ * подання Postgres переписує на базову таблицю, рекурсивно. `views` — подання,
+ * крізь які обхід іде, серед них і саме `view`.
+ */
+export function viewWrittenTable(
+  view: ModelView,
+  tables: KindTables,
+  views: readonly ModelView[],
+  parse: SqlParser
+): string | undefined {
+  return writtenKindTable(
+    { schema: view.schema, object: view.name, kind: "table" },
+    view.schema,
+    tables,
+    views,
+    parse,
+    new Set()
+  )
+}
+
 /** Таблиця виду, у яку потрапляє запис у ціль, зокрема через подання моделі. */
 function writtenKindTable(
   target: UnitTarget,

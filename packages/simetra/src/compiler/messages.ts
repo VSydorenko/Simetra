@@ -630,6 +630,64 @@ function catalogOf(space: string | number | undefined): string {
 }
 
 /**
+ * Що відкриває запис у таблицю-виняток знімка (`rights.snapshot-exempt-writer`):
+ * грант, подання чи функція `SECURITY DEFINER`.
+ */
+function exemptWriter(p: DiagnosticParams): { en: string; uk: string } {
+  switch (p.form) {
+    case "grant":
+      return {
+        en: `The grant at line ${p.line} (${p.detail})`,
+        uk: `Грант у рядку ${p.line} (${p.detail})`,
+      }
+    case "view":
+      return {
+        en: `A write grant on view ${p.object} without security_invoker at line ${p.line}`,
+        uk: `Грант запису на подання ${p.object} без security_invoker у рядку ${p.line}`,
+      }
+    case "trigger":
+      return {
+        en: `SECURITY DEFINER trigger function ${p.object} attached to a table`,
+        uk: `Тригерна функція SECURITY DEFINER ${p.object}, причеплена до таблиці,`,
+      }
+    default:
+      return {
+        en: `SECURITY DEFINER function ${p.object} executable by the command role`,
+        uk: `Функція SECURITY DEFINER ${p.object}, яку може виконати роль команд,`,
+      }
+  }
+}
+
+function exemptWriterHint(p: DiagnosticParams): { en: string; uk: string } {
+  const why = {
+    en: "A command takes the rights of its actor at the start of its transaction, and an adopted table gets no platform trigger.",
+    uk: "Команда бере права свого актора на початок транзакції, а на прийняту таблицю платформа тригерів не ставить.",
+  }
+  switch (p.form) {
+    case "grant":
+      return {
+        en: `${why.en} Remove this grant of ${p.table} to PUBLIC or simetra_command.`,
+        uk: `${why.uk} Приберіть цей грант на ${p.table} для PUBLIC чи simetra_command.`,
+      }
+    case "view":
+      return {
+        en: `${why.en} Remove the write grant on ${p.object} or create the view WITH (security_invoker = true).`,
+        uk: `${why.uk} Приберіть грант запису на ${p.object} або створіть подання WITH (security_invoker = true).`,
+      }
+    case "trigger":
+      return {
+        en: `${why.en} Remove the trigger that runs ${p.object} or drop SECURITY DEFINER from it.`,
+        uk: `${why.uk} Приберіть тригер, що запускає ${p.object}, або зніміть з неї SECURITY DEFINER.`,
+      }
+    default:
+      return {
+        en: `${why.en} Add REVOKE EXECUTE ON FUNCTION ${p.object}(…) FROM PUBLIC, grant it to no command role, or drop SECURITY DEFINER.`,
+        uk: `${why.uk} Додайте REVOKE EXECUTE ON FUNCTION ${p.object}(…) FROM PUBLIC, не давайте її ролі команд або зніміть SECURITY DEFINER.`,
+      }
+  }
+}
+
+/**
  * Каталог текстів за кодом правила (спека П2 §8.4): англійські обов'язкові,
  * українські стоять поруч в одному записі. Тип `Record<RuleCode, …>` робить
  * каталог вичерпним: нове правило без обох текстів не пройде typecheck.
@@ -3182,6 +3240,26 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     hint: {
       en: "Name it in conversions with a class: platform, property, rowRule, metadata, applicationCode or removed. The promotion removes it from the files and records the class. A comment that the kind has no place for is only removed: the kind describes its standard attributes itself.",
       uk: "Назвіть його в conversions із класом: platform, property, rowRule, metadata, applicationCode чи removed. Промоція знімає його з файлів і пише клас у запис. Коментар, якому у виді немає місця, лише знімається: стандартні реквізити описує сам вид.",
+    },
+  },
+  "rights.snapshot-source-unknown": {
+    en: (p) =>
+      `The actor facts "${p.fact}" read ${p.relation} (through ${p.via}), which is neither a table of a kind nor a known exemption, so the actor snapshot cannot watch its changes`,
+    uk: (p) =>
+      `Факти актора «${p.fact}» читають ${p.relation} (через ${p.via}) — ні таблицю виду, ні відомий виняток, тож знімок актора не стереже її змін`,
+    hint: {
+      en: "A command takes the rights of its actor at the start of its transaction: the platform snapshots the facts before the first change of a table they read. Read only tables of kinds, adopted tables (CustomTable) and model views over them in the functions that give dimension values and scope sets.",
+      uk: "Команда бере права свого актора на початок транзакції: платформа знімає факти до першої зміни таблиці, яку вони читають. У функціях значень виміру й множини скоупу читайте лише таблиці видів, прийняті таблиці (CustomTable) і подання моделі над ними.",
+    },
+  },
+  "rights.snapshot-exempt-writer": {
+    en: (p) =>
+      `${exemptWriter(p).en} lets commands write ${p.table}, which feeds the actor facts without an actor snapshot trigger`,
+    uk: (p) =>
+      `${exemptWriter(p).uk} дає командам писати ${p.table}, що живить факти актора без тригера знімка`,
+    hint: {
+      en: (p) => exemptWriterHint(p).en,
+      uk: (p) => exemptWriterHint(p).uk,
     },
   },
   "promote.write-path": {

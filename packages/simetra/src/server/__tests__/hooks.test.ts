@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { CommandFailure } from "../errors"
 import { prepareRead } from "../read"
 import { createCommandRuntime, type CommandRuntime } from "../runtime"
-import { fakeDatabase, failureOf, type Call } from "./fake-database"
+import { fakeDatabase, failureOf } from "./fake-database"
 import {
   COMPANY,
   ID,
@@ -19,8 +19,6 @@ import {
   COMMIT,
   OPEN,
   RIGHTS,
-  RIGHTS_CONTEXT,
-  ROLE_ASSIGNMENT,
   ROLLBACK,
   SAVE,
   TICKET,
@@ -31,10 +29,8 @@ import {
   call,
   context,
   create,
-  createCall,
   session,
   setup,
-  updateTicket,
   type Override,
 } from "./harness"
 
@@ -54,7 +50,7 @@ const rights = (id = OTHER, code = "R"): Operation => ({
   id,
   values: { code },
 })
-const rightsPhase = (id = OTHER, code = "R") => [
+const rightsRolePhase = (id = OTHER, code = "R") => [
   context("administerRights", "rights_role", id),
   call("rights_role_save", SAVE, [JSON.stringify({ id, code }), null]),
 ]
@@ -65,9 +61,15 @@ const readOf = (table: string, id: string) => ({
   params: [id, "1"],
 })
 const readRights = (id: string) => readOf("rights_role", id)
-const clientPhase = [context("create", "client", ID), createCall]
-// Об'єкт застосунку — вкладена фаза кейсів, де після неї йде ядро
-// застосунку: фаза прав там дала б відмову бар'єру Р-A4-17.
+const clientPhaseOf = (id: string) => [
+  context("create", "client", id),
+  call("client_save", SAVE, [
+    JSON.stringify({ id, code: "A", company_id: COMPANY }),
+    null,
+  ]),
+]
+const clientPhase = clientPhaseOf(ID)
+// Вкладена фаза об'єкта застосунку — для кейсів черги й повтору.
 const createTicket = (id = OTHER, code = "R"): Operation => ({
   action: "create",
   object: TICKET,
@@ -212,143 +214,10 @@ describe("hook order", () => {
   })
 })
 
-// Тимчасовий бар'єр Р-A4-17 до блоку Права-3: після початку фази прав
-// команда не торкається даних застосунку ні фазою, ні `ctx.read`.
-describe("rights barrier in hooks", () => {
-  type Hook = "beforeWrite" | "onWrite"
-  const hooked = (
-    hook: Hook,
-    body: (ctx: HookContext) => Promise<unknown>
-  ): ObjectModule<object> =>
-    hook === "beforeWrite"
-      ? {
-          async beforeWrite({ ctx, draft }) {
-            await body(ctx)
-            return draft
-          },
-        }
-      : {
-          async onWrite({ ctx }) {
-            await body(ctx)
-          },
-        }
-  // І контекст фази, і виклик ядра, і читання `Ticket` називають його таблицю.
-  const touchesTicket = (call: Call) => JSON.stringify(call).includes("ticket")
-
-  it.each<[Hook, "ctx.read" | "ctx.run"]>([
-    ["beforeWrite", "ctx.read"],
-    ["beforeWrite", "ctx.run"],
-    ["onWrite", "ctx.read"],
-    ["onWrite", "ctx.run"],
-  ])(
-    "refuses ctx.read and ctx.run of application data from a hook of a rights phase (%s, %s)",
-    async (hook, method) => {
-      const seen: unknown[] = []
-      const { db, runtime } = await withModules({
-        "Catalog.RoleAssignment": hooked(hook, async (ctx) => {
-          const touch =
-            method === "ctx.read"
-              ? ctx.read({ object: TICKET, id: OTHER })
-              : ctx.run(updateTicket(OTHER))
-          // Перехоплена відмова однаково закриває чергу (Р-A3-15).
-          seen.push(await failureOf(touch))
-        }),
-      })
-      expect(await failureOf(runtime.run(session, assign(ID)))).toEqual(
-        RIGHTS_CONTEXT
-      )
-      expect(seen).toEqual([RIGHTS_CONTEXT])
-      expect(db.calls).toEqual([
-        ...OPEN,
-        ...(hook === "onWrite" ? assignPhase(ID) : []),
-        ROLLBACK,
-        { release: false },
-      ])
-    }
-  )
-
-  it("refuses the core call of an application phase whose beforeWrite ran a rights phase", async () => {
-    const { db, runtime } = await withModules({
-      "Catalog.Ticket": {
-        async beforeWrite({ ctx, draft }) {
-          await ctx.run(assign(OTHER))
-          return draft
-        },
-      },
-    })
-    expect(await failureOf(runtime.run(session, updateTicket()))).toEqual(
-      RIGHTS_CONTEXT
-    )
-    expect(db.calls).toEqual([
-      ...OPEN,
-      ...assignPhase(OTHER),
-      ROLLBACK,
-      { release: false },
-    ])
-  })
-
-  it.each([
-    ["the rights phase first", [assign(OTHER), updateTicket(OTHER)]],
-    // Ticket стартує раніше, але його ядро стає в чергу після фази прав:
-    // перевірка лише на старті фази цього не побачила б.
-    ["the application phase first", [updateTicket(OTHER), assign(OTHER)]],
-  ])(
-    "refuses a concurrent ctx.run queued after a rights phase (%s)",
-    async (_, ops) => {
-      const { db, runtime } = await withModules({
-        "Catalog.Client": {
-          beforeWrite({ ctx, draft }) {
-            for (const op of ops) void ctx.run(op)
-            return draft
-          },
-        },
-        "Catalog.Ticket": {
-          async beforeWrite({ draft }) {
-            await Promise.resolve()
-            return draft
-          },
-        },
-      })
-      expect(await failureOf(runtime.run(session, create))).toEqual(
-        RIGHTS_CONTEXT
-      )
-      expect(db.calls.filter(touchesTicket)).toEqual([])
-      expect(db.calls.slice(-2)).toEqual([ROLLBACK, { release: false }])
-    }
-  )
-
-  it.each<[string, (ctx: HookContext) => Promise<unknown>, unknown[]]>([
-    [
-      "ctx.read of the assignments",
-      (ctx) => ctx.read({ object: ROLE_ASSIGNMENT, id: OTHER }),
-      [readOf("role_assignment", OTHER)],
-    ],
-    [
-      "ctx.run of a rights phase",
-      (ctx) =>
-        ctx.id === ID ? ctx.run(assign(OTHER)) : Promise.resolve(undefined),
-      assignPhase(OTHER),
-    ],
-  ])(
-    "allows rights data from a hook of a rights phase (%s)",
-    async (_, body, sent) => {
-      const { db, runtime } = await withModules({
-        "Catalog.RoleAssignment": hooked("onWrite", body),
-      })
-      await runtime.run(session, assign(ID))
-      expect(db.calls).toEqual([
-        ...OPEN,
-        ...assignPhase(ID),
-        ...sent,
-        COMMIT,
-        { release: false },
-      ])
-    }
-  )
-
-  // Компроміс Р-A4-17 до Права-3: хук членства, що призначає роль, робить
-  // наступні фази пакета неможливими (fail-closed).
-  it("refuses a second member of a batch when the membership onWrite assigns a role", async () => {
+describe("rights phases in a batch", () => {
+  // Права команди тримає знімок бази на початок транзакції (Права-3):
+  // хук членства, що призначає роль, не зупиняє наступні фази пакета.
+  it("runs a second member of a batch when the membership onWrite assigns a role", async () => {
     const { db, runtime } = await withModules({
       // Довідник членства — дані застосунку, як `Client`.
       "Catalog.Client": {
@@ -357,14 +226,14 @@ describe("rights barrier in hooks", () => {
         },
       },
     })
-    expect(
-      await failureOf(runtime.run(session, [create, { ...create, id: OTHER }]))
-    ).toEqual(RIGHTS_CONTEXT)
+    await runtime.run(session, [create, { ...create, id: OTHER }])
     expect(db.calls).toEqual([
       ...OPEN,
       ...clientPhase,
       ...assignPhase(THIRD),
-      ROLLBACK,
+      ...clientPhaseOf(OTHER),
+      ...assignPhase(THIRD),
+      COMMIT,
       { release: false },
     ])
   })
@@ -746,7 +615,7 @@ describe("hook failures", () => {
       })
       expect(db.calls).toEqual([
         ...OPEN,
-        ...rightsPhase(),
+        ...rightsRolePhase(),
         ROLLBACK,
         { release: false },
       ])
@@ -1365,7 +1234,7 @@ describe("command.nested", () => {
     COMMIT,
     { release: false },
     ...OPEN,
-    ...rightsPhase(),
+    ...rightsRolePhase(),
     COMMIT,
     { release: false },
   ]

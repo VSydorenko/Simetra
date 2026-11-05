@@ -17,13 +17,9 @@ import {
   COMMIT,
   OPEN,
   RIGHTS,
-  RIGHTS_CONTEXT,
-  ROLE_ASSIGNMENT,
   ROLLBACK,
   SAVE,
   answer,
-  assign,
-  assignPhase,
   call,
   context,
   coreRow,
@@ -31,8 +27,6 @@ import {
   createCall,
   session,
   setup,
-  ticketPhase,
-  updateTicket,
 } from "./harness"
 
 describe("command transaction", () => {
@@ -633,81 +627,6 @@ describe("rights self-assignment", () => {
         null,
       ]),
       COMMIT,
-      { release: false },
-    ])
-  })
-})
-
-// Тимчасовий бар'єр Р-A4-17 до блоку Права-3: ⊆ бази судить лише кінцевий
-// стан, тож право, видане собі фазою прав, інакше діяло б до кінця команди.
-describe("rights barrier in a batch", () => {
-  const SECOND = "88888888-8888-4888-8888-888888888888"
-
-  it("refuses a non-rights phase after a rights phase in a batch", async () => {
-    const { db, runtime } = await setup()
-    expect(
-      await failureOf(runtime.run(session, [assign(OTHER), updateTicket()]))
-    ).toEqual(RIGHTS_CONTEXT)
-    expect(db.calls).toEqual([
-      ...OPEN,
-      ...assignPhase(OTHER),
-      ROLLBACK,
-      { release: false },
-    ])
-  })
-
-  it("allows rights phases after a rights phase", async () => {
-    const { db, runtime } = await setup()
-    await runtime.run(session, [
-      assign(OTHER),
-      assign(SECOND),
-      {
-        action: "delete",
-        object: ROLE_ASSIGNMENT,
-        id: OTHER,
-        expectedVersion: 1,
-      },
-    ])
-    expect(db.calls).toEqual([
-      ...OPEN,
-      ...assignPhase(OTHER),
-      ...assignPhase(SECOND),
-      context("administerRights", "role_assignment", OTHER),
-      call("role_assignment_delete", "$1::uuid, $2::bigint", [OTHER, "1"]),
-      COMMIT,
-      { release: false },
-    ])
-  })
-
-  it("allows application phases before the first rights phase", async () => {
-    const { db, runtime } = await setup()
-    await runtime.run(session, [updateTicket(), assign(OTHER)])
-    expect(db.calls).toEqual([
-      ...OPEN,
-      ...ticketPhase(),
-      ...assignPhase(OTHER),
-      COMMIT,
-      { release: false },
-    ])
-  })
-
-  it("starts a retry without the mark", async () => {
-    let commits = 0
-    // Перший `COMMIT` — транзакція створення рантайму.
-    const { db, runtime } = await setup((text) =>
-      text === "COMMIT" && commits++ === 1
-        ? { error: { code: "40001", message: "retry" } }
-        : undefined
-    )
-    await runtime.run(session, [updateTicket(), assign(OTHER)])
-    const phases = [...ticketPhase(), ...assignPhase(OTHER), COMMIT]
-    expect(db.calls).toEqual([
-      ...OPEN,
-      ...phases,
-      ROLLBACK,
-      { release: false },
-      ...OPEN,
-      ...phases,
       { release: false },
     ])
   })

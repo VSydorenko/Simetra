@@ -10,6 +10,9 @@ import {
 import {
   CHECKLIST_TABLE,
   GLOBAL_ADMIN_ID,
+  GLOBAL_RIGHTS_ADMIN_ID,
+  GLOBAL_RIGHTS_ONLY_ID,
+  GLOBAL_USERS_READER_ID,
   ORG_ADMIN_ID,
   PROJECT_READER_ID,
   PROJECT_WRITER_ID,
@@ -21,12 +24,14 @@ import {
   TASK_WRITER_ID,
   adminRoles,
   compileRights,
+  globalRightsAdmins,
   policyDomain,
   writeRoles,
 } from "../../src/compiler/__tests__/fixtures/rights"
 import { signUp } from "./auth"
 import {
   commandAs,
+  commandSteps,
   queryAs,
   testRoleName,
   testSuperuserUrl,
@@ -75,7 +80,10 @@ const KEY_REFUSAL = {
   column: "id",
 }
 const PENDING_ROWS =
-  "SELECT (SELECT count(*) FROM simetra.rights_tx_actor WHERE xid = txid_current())::int + (SELECT count(*) FROM simetra.rights_tx_pending WHERE xid = txid_current())::int AS n"
+  "SELECT count(*)::int AS n FROM simetra.rights_tx_pending WHERE xid = txid_current()"
+/** Знімок живе до кінця транзакції (спека прав §7): черга порожня, а заголовок прав лишається. */
+const RIGHTS_HEADERS =
+  "SELECT count(*)::int AS n FROM simetra.rights_tx_header WHERE xid = txid_current() AND fact = 'rights'"
 
 describe("rights administration guards", () => {
   const tx = describeTransaction()
@@ -189,7 +197,9 @@ describe("rights administration guards", () => {
     `INSERT INTO public.org_role_assignments (id, org_id, subject, archetype) VALUES ('${id}', {A}, {${subject}}, '${archetype}')`
 
   beforeAll(async () => {
-    const result = await compileRights(policyDomain(writeRoles(), adminRoles()))
+    const result = await compileRights(
+      policyDomain(writeRoles(), adminRoles(), globalRightsAdmins())
+    )
     expect(result.diagnostics).toEqual([])
     const client = await tx.open()
     await deploy(client, result.model!)
@@ -341,6 +351,88 @@ describe("rights administration guards", () => {
       )
     )
   })
+  // Гілка `global` покриття приросту: глобальний рядок покриває лише
+  // глобальне право актора на початку, а скоупні права й інші гілки — ні.
+  // Без `fullAccess`: носій покрив би приріст сам, і гілка лишилася б
+  // неперевіреною. DB, бо покриття рахує тригер COMMIT над кешем початку.
+  it("judges a global grant by the global rights at the start", async () => {
+    const client = tx.client()
+    await client.query("SAVEPOINT global_grant")
+    try {
+      for (const [user, archetype] of [
+        ["gRightsAdmin", GLOBAL_RIGHTS_ADMIN_ID],
+        ["gRightsOnly", GLOBAL_RIGHTS_ONLY_ID],
+      ] as const) {
+        ids[user] = await signUp(client)
+        // Членство в A — щоб актор бачив користувача, якому призначає роль.
+        await insert(client, "org_member", {
+          id: randomUUID(),
+          org_id: key("A"),
+          user_id: ids[user],
+        })
+        await insert(
+          client,
+          "global_role_assignments",
+          assignmentRow(ids[user]!, { archetype })
+        )
+      }
+      const grantTo = (actor: string) => {
+        const id = randomUUID()
+        return command(
+          actor,
+          admin("global_role_assignments", id),
+          `INSERT INTO public.global_role_assignments (id, subject, archetype) VALUES ('${id}', {target}, '${GLOBAL_USERS_READER_ID}') RETURNING id`
+        )
+      }
+      changed(await grantTo("gRightsAdmin"))
+      // Контроль: той самий приріст без глобального права на початку.
+      refusal(await grantTo("gRightsOnly"), "escalation")
+    } finally {
+      await client.query("ROLLBACK TO SAVEPOINT global_grant")
+      delete ids.gRightsAdmin
+      delete ids.gRightsOnly
+    }
+  })
+  // Р3-15: права початку на COMMIT рахуються з входів знімка, а не з живих
+  // таблиць: актор, що зняв власну роль після призначення, покриває
+  // призначення правами, з якими почав транзакцію.
+  it("computes the commit cache from the snapshot inputs", async () => {
+    const steps = (actor: string, ownRole: string) => {
+      const id = randomUUID()
+      const [action, object] = admin("org_role_assignments", id)
+      return commandSteps(
+        tx.client(),
+        claims(actor),
+        [
+          {
+            context: { action, object, root: id },
+            sql: sql(assignSql(id, TASK_EDITOR_ID)),
+          },
+          {
+            context: { action, object, root: key(ownRole) },
+            sql: sql(
+              `UPDATE public.org_role_assignments SET deletion_mark = true WHERE id = {${ownRole}}`
+            ),
+          },
+        ],
+        { immediate: true }
+      )
+    }
+    // `editor` почав з TaskEditor і зняв його вже після призначення.
+    const covered = await steps("editor", "editorRole")
+    expect(covered.refusal).toBeUndefined()
+    expect(
+      covered.completed.map((c) => (c as pg.QueryResult).rowCount)
+    ).toEqual([1, 1])
+    // Контроль: без TaskEditor на початку та сама пара кроків — приріст.
+    const uncovered = await steps("admin", "heldRole")
+    expect(uncovered.completed).toHaveLength(2)
+    expect(uncovered.refusal).toMatchObject({
+      code: "42501",
+      detail: "escalation",
+    })
+  })
+
   it("fullAccess exempts an actor and removing one of two carriers succeeds", async () => {
     const id = randomUUID()
     success(
@@ -478,13 +570,13 @@ describe("rights administration guards", () => {
               )
             )
             await client.query("SET CONSTRAINTS ALL IMMEDIATE")
-            const mine = await queryAs<{ v: string[] }>(
-              client,
-              "authenticated",
-              claims("other"),
-              "SELECT coalesce(array_agg(DISTINCT m.action || '|' || m.extent), '{}') AS v FROM simetra.rights_mine() m WHERE m.object = 'task'"
+            // Права `other` — живим варіантом аналізу за параметром
+            // користувача: транзакцію закріплено за `root` першим знімком
+            // (Р3-3), і claims `other` у ній дали б порожні факти.
+            const mine = await client.query<{ v: string[] }>(
+              "SELECT coalesce(array_agg(DISTINCT m.action || '|' || m.extent), '{}') AS v FROM simetra.rights_detail_of($1) m WHERE m.object = 'task'",
+              [key("other")]
             )
-            if (!("rows" in mine)) throw new Error(`rights_mine: ${mine.code}`)
             actions = mine.rows[0]!.v
           },
           true
@@ -1235,7 +1327,7 @@ describe("rights administration guards", () => {
     }
   })
 
-  it("the actor snapshot and pending keys are cleaned after two commands", async () => {
+  it("the pending keys are cleaned after two commands, the actor snapshot is kept", async () => {
     const [first, second] = [randomUUID(), randomUUID()]
     success(
       await inCommand(
@@ -1265,6 +1357,8 @@ describe("rights administration guards", () => {
           await client.query("SET CONSTRAINTS ALL IMMEDIATE")
           const { rows } = await client.query<{ n: number }>(PENDING_ROWS)
           expect(rows[0]?.n).toBe(0)
+          const headers = await client.query<{ n: number }>(RIGHTS_HEADERS)
+          expect(headers.rows[0]?.n).toBe(1)
         }
       )
     )
@@ -1282,12 +1376,14 @@ describe("rights administration guards", () => {
           await client.query("RESET ROLE")
           const { rows } = await client.query<{ n: number }>(PENDING_ROWS)
           expect(rows[0]?.n).toBe(0)
+          const headers = await client.query<{ n: number }>(RIGHTS_HEADERS)
+          expect(headers.rows[0]?.n).toBe(1)
         }
       )
     )
   })
 
-  it("membership-only transactions release their actor snapshot", async () => {
+  it("membership-only transactions release their queue and keep the actor snapshot", async () => {
     success(
       await inCommand(
         "memberEditor",
@@ -1304,6 +1400,8 @@ describe("rights administration guards", () => {
           await client.query("RESET ROLE")
           const { rows } = await client.query<{ n: number }>(PENDING_ROWS)
           expect(rows[0]?.n).toBe(0)
+          const headers = await client.query<{ n: number }>(RIGHTS_HEADERS)
+          expect(headers.rows[0]?.n).toBe(1)
         }
       )
     )

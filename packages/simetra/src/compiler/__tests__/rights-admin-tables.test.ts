@@ -33,11 +33,62 @@ const tables = [
     ["id"],
   ],
   [
-    "rights_tx_actor",
-    "rightsTxActor",
+    "rights_tx_header",
+    "rightsTxHeader",
+    ["xid", "fact", "actor"],
+    ["xid", "fact"],
+  ],
+  [
+    "rights_tx_typed",
+    "rightsTxTyped",
     [
       "xid",
-      "actor",
+      "storage",
+      "storage_id",
+      "scope_kind_id",
+      "scope",
+      "container",
+      "custom_role",
+      "archetype",
+      "level",
+      "level_id",
+    ],
+    undefined,
+  ],
+  [
+    "rights_tx_containers",
+    "rightsTxContainers",
+    ["xid", "level_id", "container", "scope_kind_id", "scope"],
+    undefined,
+  ],
+  [
+    "rights_tx_deltas",
+    "rightsTxDeltas",
+    [
+      "xid",
+      "storage",
+      "storage_id",
+      "custom_role",
+      "scope_key",
+      "effect",
+      "object",
+      "action",
+      "extent",
+      "dimension_id",
+    ],
+    undefined,
+  ],
+  [
+    "rights_tx_holders",
+    "rightsTxHolders",
+    ["xid", "level", "level_id", "scope"],
+    undefined,
+  ],
+  [
+    "rights_tx_start",
+    "rightsTxStart",
+    [
+      "xid",
       "level",
       "level_id",
       "scope",
@@ -48,6 +99,24 @@ const tables = [
       "dimension_id",
       "full_access",
     ],
+    undefined,
+  ],
+  [
+    "rights_tx_scopes",
+    "rightsTxScopes",
+    ["xid", "scope_kind_id", "scope", "member", "catalog"],
+    undefined,
+  ],
+  [
+    "rights_tx_values",
+    "rightsTxValues",
+    ["xid", "dimension_id", "value"],
+    undefined,
+  ],
+  [
+    "rights_tx_scope_sets",
+    "rightsTxScopeSets",
+    ["xid", "scope_kind_id", "scope"],
     undefined,
   ],
   [
@@ -102,10 +171,160 @@ describe("rights administration storage", () => {
           ],
         })
       }
-      if (name === "rights_tx_actor")
-        expect(table!.indexes.map((i) => i.keys)).toEqual([[{ column: "xid" }]])
+      // Індекси знімка (спека прав §7): рядки факту — за xid і ключем
+      // точкового читання.
+      const indexes: Record<string, string[][]> = {
+        rights_tx_header: [],
+        rights_tx_typed: [["xid"]],
+        rights_tx_containers: [["xid", "level_id", "container"]],
+        rights_tx_deltas: [["xid", "storage", "custom_role", "scope_key"]],
+        rights_tx_holders: [["xid"]],
+        rights_tx_start: [["xid", "level", "level_id", "scope"]],
+        rights_tx_scopes: [["xid", "scope_kind_id", "scope"]],
+        rights_tx_values: [["xid", "dimension_id"]],
+        rights_tx_scope_sets: [["xid", "scope_kind_id"]],
+      }
+      if (name in indexes)
+        expect(
+          table!.indexes.map((i) =>
+            i.keys.map((k) => ("column" in k ? k.column : ""))
+          )
+        ).toEqual(indexes[name])
     }
   )
+
+  it("adds the snapshot tables", async () => {
+    const result = await compileRights(withRoles())
+    const snapshot = result
+      .model!.physical.tables.filter(
+        (t) => t.schema === PLATFORM_SCHEMA && t.name.startsWith("rights_tx_")
+      )
+      .map((t) => [t.name, t.primaryKey?.columns ?? null])
+    expect(snapshot).toEqual([
+      ["rights_tx_containers", null],
+      ["rights_tx_deltas", null],
+      ["rights_tx_header", ["xid", "fact"]],
+      ["rights_tx_holders", null],
+      ["rights_tx_pending", ["xid", "kind", "scope_kind_id", "key"]],
+      ["rights_tx_scope_sets", null],
+      ["rights_tx_scopes", null],
+      ["rights_tx_start", null],
+      ["rights_tx_typed", null],
+      ["rights_tx_values", null],
+    ])
+  })
+
+  // Р3-15: факт `rights` — входи `rights_mine`, а не її вихід, і кеш прав
+  // початку на COMMIT у формі колишнього рядка прав.
+  it("adds the input tables of the rights fact", async () => {
+    const result = await compileRights(withRoles())
+    const of = (name: string) =>
+      result.model!.physical.tables.find(
+        (t) => t.schema === PLATFORM_SCHEMA && t.name === name
+      )
+    expect(of("rights_tx_actor")).toBeUndefined()
+    const shape = (name: string) => {
+      const table = of(name)!
+      return {
+        columns: table.columns.map((c) => [c.name, c.type, c.notNull]),
+        indexes: table.indexes.map((i) => [
+          i.name,
+          i.keys.map((k) => ("column" in k ? k.column : "")),
+        ]),
+      }
+    }
+    const nullable = (columns: [string, string][]) =>
+      columns.map(([name, type]) => [name, type, false])
+    expect(shape("rights_tx_typed")).toEqual({
+      columns: [
+        ["xid", "bigint", true],
+        ...nullable([
+          ["storage", "text"],
+          ["storage_id", "uuid"],
+          ["scope_kind_id", "uuid"],
+          ["scope", "uuid"],
+          ["container", "uuid"],
+          ["custom_role", "uuid"],
+          ["archetype", "uuid"],
+          ["level", "text"],
+          ["level_id", "uuid"],
+        ]),
+      ],
+      indexes: [["rights_tx_typed_xid_idx", ["xid"]]],
+    })
+    expect(shape("rights_tx_containers")).toEqual({
+      columns: [
+        ["xid", "bigint", true],
+        ...nullable([
+          ["level_id", "uuid"],
+          ["container", "uuid"],
+          ["scope_kind_id", "uuid"],
+          ["scope", "uuid"],
+        ]),
+      ],
+      indexes: [
+        [
+          "rights_tx_containers_xid_level_id_container_idx",
+          ["xid", "level_id", "container"],
+        ],
+      ],
+    })
+    expect(shape("rights_tx_deltas")).toEqual({
+      columns: [
+        ["xid", "bigint", true],
+        ...nullable([
+          ["storage", "text"],
+          ["storage_id", "uuid"],
+          ["custom_role", "uuid"],
+          ["scope_key", "uuid"],
+          ["effect", "text"],
+          ["object", "text"],
+          ["action", "text"],
+          ["extent", "text"],
+          ["dimension_id", "uuid"],
+        ]),
+      ],
+      indexes: [
+        [
+          "rights_tx_deltas_xid_storage_custom_role_scope_key_idx",
+          ["xid", "storage", "custom_role", "scope_key"],
+        ],
+      ],
+    })
+    expect(shape("rights_tx_holders")).toEqual({
+      columns: [
+        ["xid", "bigint", true],
+        ...nullable([
+          ["level", "text"],
+          ["level_id", "uuid"],
+          ["scope", "uuid"],
+        ]),
+      ],
+      indexes: [["rights_tx_holders_xid_idx", ["xid"]]],
+    })
+    expect(shape("rights_tx_start")).toEqual({
+      columns: [
+        ["xid", "bigint", true],
+        ...nullable([
+          ["level", "text"],
+          ["level_id", "uuid"],
+          ["scope", "uuid"],
+          ["container", "uuid"],
+          ["object", "text"],
+          ["action", "text"],
+          ["extent", "text"],
+          ["dimension_id", "uuid"],
+        ]),
+        ["full_access", "boolean", true],
+      ],
+      indexes: [
+        [
+          "rights_tx_start_xid_level_level_id_scope_idx",
+          ["xid", "level", "level_id", "scope"],
+        ],
+      ],
+    })
+  })
 
   it("does not add rights storage without roles and system catalogs", async () => {
     const result = await compileRights(rightsFiles())

@@ -9,17 +9,34 @@ import type {
 } from "../contracts"
 import { compareStrings } from "../diagnostics"
 import {
+  snapshotForeign,
+  snapshotInputs,
+  snapshotOwned,
+  snapshotPresent,
+  type SnapshotFact,
+} from "../rights/actor-snapshot"
+import {
+  LIVE,
   RIGHTS_FUNCTIONS,
   hasRightsFunctions,
   hasVisibleUsers,
+  liveInputs,
+  mineBody,
   sourceConditions,
 } from "../rights/functions"
+import { startRights } from "../rights/guard-units"
 import { sha256HexSync } from "../sha256"
 import { hasEmptySearchPath, routineLanguage } from "../sql/closed-forms"
 import { unitCalls, unitRelations } from "../sql/dependencies"
+import { executeGrants } from "../sql/execute-grants"
 import { loadSqlParser, type SqlParser } from "../sql/parse"
 import { withoutLocations, type SqlUnit } from "../sql/units"
 import { kitchenSink } from "./fixtures/kitchen-sink"
+import {
+  bodyShape,
+  dispatcherQueries,
+  loadShapeParsers,
+} from "./fixtures/sql-shape"
 import {
   ADOPTED_LEAD_KEY,
   ADOPTED_SUPPORT_KEY,
@@ -43,6 +60,7 @@ import {
   USERS_FILE,
   activeGrants,
   adoptedSourcesDomain,
+  snapshotSourcesDomain,
   compileRights,
   compiledPolicyDomain,
   grant,
@@ -87,6 +105,7 @@ type Value = string | null
 let parse: SqlParser
 beforeAll(async () => {
   parse = await loadSqlParser()
+  await loadShapeParsers()
 })
 
 async function compiled(files: Map<string, string>): Promise<CompiledModel> {
@@ -182,6 +201,20 @@ function comparisons(unit: SqlUnit): [string, string, Value][] {
   })
 }
 
+/** Ім'я функції оператора `GRANT`/`REVOKE EXECUTE`; інший оператор — `undefined`. */
+function grantedFunction(unit: SqlUnit): string | undefined {
+  const grant = (
+    unit.tree as {
+      GrantStmt?: {
+        objects: {
+          ObjectWithArgs: { objname: { String: { sval: string } }[] }
+        }[]
+      }
+    }
+  ).GrantStmt
+  return grant?.objects[0]!.ObjectWithArgs.objname.at(-1)!.String.sval
+}
+
 /** Гранти й відкликання `EXECUTE` функцій прав: ім'я → отримувачі. */
 function executeGrantees(model: CompiledModel): {
   granted: Map<string, string[]>
@@ -207,7 +240,8 @@ function executeGrantees(model: CompiledModel): {
     for (const { RoleSpec } of grant.grantees) {
       const role =
         RoleSpec.roletype === "ROLESPEC_PUBLIC" ? "PUBLIC" : RoleSpec.rolename!
-      target.set(fn, [...(target.get(fn) ?? []), role].sort())
+      // Перевантаження (`rights_mine` і пара) мають ті самі гранти.
+      target.set(fn, [...new Set([...(target.get(fn) ?? []), role])].sort())
     }
   }
   return { granted, revoked }
@@ -283,9 +317,16 @@ const SIGNATURES = [
   "function:simetra.rights_dim(text,text,uuid)",
   "function:simetra.rights_dimension_values(uuid)",
   "function:simetra.rights_domain()",
+  "function:simetra.rights_dimension_values_live(uuid)",
   "function:simetra.rights_mine()",
+  "function:simetra.rights_mine(text,text)",
+  "function:simetra.rights_mine_live()",
   "function:simetra.rights_my_members(uuid)",
+  "function:simetra.rights_my_members_live(uuid)",
   "function:simetra.rights_my_scopes()",
+  "function:simetra.rights_my_scopes_live()",
+  "function:simetra.rights_scope_set(uuid)",
+  "function:simetra.rights_scope_set_live(uuid)",
   "function:simetra.rights_own(text,text)",
   "function:simetra.rights_projection()",
   "function:simetra.rights_requires()",
@@ -311,6 +352,18 @@ const WITHOUT_MEMBERSHIP = SIGNATURES.filter(
 )
 
 /**
+ * Живі варіанти фактів актора (спека прав §5.1): кличуть їх лише функції від
+ * власника, тож без `EXECUTE` знімка не обійти. Аргументи — типи сигнатури.
+ */
+const LIVE_VARIANTS: readonly [QualifiedName, string][] = [
+  [RIGHTS_FUNCTIONS.mineLive, ""],
+  [RIGHTS_FUNCTIONS.myScopesLive, ""],
+  [RIGHTS_FUNCTIONS.myMembersLive, "uuid"],
+  [RIGHTS_FUNCTIONS.dimensionValuesLive, "uuid"],
+  [RIGHTS_FUNCTIONS.scopeSetLive, "uuid"],
+]
+
+/**
  * Варіанти аналізу (спека прав §5.1): кличуть їх лише функції аналізу від власника,
  * тож без `SECURITY DEFINER` і без `EXECUTE`.
  */
@@ -321,6 +374,17 @@ const VARIANTS = [
   RIGHTS_FUNCTIONS.dimensionValuesOf,
   RIGHTS_FUNCTIONS.scopeSetOf,
   RIGHTS_FUNCTIONS.visibleUsersOf,
+].map((fn) => fn.name)
+
+/**
+ * Диспетчери фактів актора (спека прав §5.1): у моделі зі знімком —
+ * `plpgsql`, а не SQL з гілками.
+ */
+const DISPATCHERS = [
+  RIGHTS_FUNCTIONS.mine,
+  RIGHTS_FUNCTIONS.myScopes,
+  RIGHTS_FUNCTIONS.dimensionValues,
+  RIGHTS_FUNCTIONS.scopeSet,
 ].map((fn) => fn.name)
 
 /** Функції аналізу (спека прав §5.1): `EXECUTE` — без сервісної ролі. */
@@ -338,8 +402,11 @@ const functionIdentities = (model: CompiledModel) =>
 
 describe("rights functions", () => {
   let model: CompiledModel
+  // Прийняті джерела призначень і контейнер — гілки входів, яких `BASE` не має.
+  let adopted: CompiledModel
   beforeAll(async () => {
     model = await compiled(withRoles(BASE))
+    adopted = await compiled(adoptedSourcesDomain())
   })
 
   it("renders no rights functions without roles", async () => {
@@ -365,14 +432,18 @@ describe("rights functions", () => {
     )) {
       const data = DATA.includes(unit.name)
       expect(routineLanguage(unit.tree as never), unit.name).toBe(
-        unit.name === "rights_bump" ? "plpgsql" : "sql"
+        unit.name === "rights_bump" || DISPATCHERS.includes(unit.name)
+          ? "plpgsql"
+          : "sql"
       )
       expect(hasEmptySearchPath(unit.tree as never), unit.name).toBe(true)
       expect(createOf(unit).sql_body, unit.name).toBeUndefined()
       expect(option(unit, "volatility")?.String?.sval, unit.name).toBe(
         data ? "immutable" : unit.name === "rights_bump" ? "volatile" : "stable"
       )
-      const variant = VARIANTS.includes(unit.name)
+      const variant =
+        VARIANTS.includes(unit.name) ||
+        LIVE_VARIANTS.some(([fn]) => fn.name === unit.name)
       expect(option(unit, "security")?.Boolean?.boolval, unit.name).toBe(
         data || variant || unit.name === "rights_role_grants" ? undefined : true
       )
@@ -480,7 +551,7 @@ describe("rights functions", () => {
 
   it("closes requires in exactly two passes", () => {
     const ctes = nodes(
-      bodyTree(functionUnit(model, RIGHTS_FUNCTIONS.mine.name)),
+      bodyTree(functionUnit(model, RIGHTS_FUNCTIONS.mineLive.name)),
       "CommonTableExpr"
     ).map((cte) => (cte as { ctename: string }).ctename)
     expect(ctes.filter((name) => name.startsWith("closure"))).toEqual([
@@ -575,7 +646,7 @@ describe("rights functions", () => {
         .map((f) => f.String?.sval)
         .join(".")
     const notDistinct = nodes(
-      bodyTree(functionUnit(model, RIGHTS_FUNCTIONS.mine.name)),
+      bodyTree(functionUnit(model, RIGHTS_FUNCTIONS.mineLive.name)),
       "A_Expr"
     )
       .map((expr) => expr as { kind: string; lexpr: unknown; rexpr: unknown })
@@ -594,7 +665,9 @@ describe("rights functions", () => {
     )
     if (!empty.ok) throw new Error("expected SQL does not parse")
     expect(
-      bodyTree(functionUnit(single, RIGHTS_FUNCTIONS.myScopes.name))
+      withoutCatalog(
+        bodyTree(functionUnit(single, RIGHTS_FUNCTIONS.myScopesLive.name))
+      )
     ).toEqual(withoutLocations(empty.statements[0]!.stmt))
     expect(
       comparisons(functionUnit(single, RIGHTS_FUNCTIONS.hasRight.name))
@@ -602,7 +675,9 @@ describe("rights functions", () => {
   })
 
   it("reads every catalog it needs only through qualified relations", () => {
-    const mine = functionUnit(model, RIGHTS_FUNCTIONS.mine.name)
+    // Тіло `rights_mine` — генератор `mineBody`; його живий варіант читає
+    // живі таблиці, а публічна функція — ще й знімок.
+    const mine = functionUnit(model, RIGHTS_FUNCTIONS.mineLive.name)
     const relations = unitRelations(mine, parse).map(
       (r) => `${r.schema}.${r.name}`
     )
@@ -619,7 +694,7 @@ describe("rights functions", () => {
     }
     const calls = unitCalls(mine, parse).map((c) => `${c.schema}.${c.name}`)
     for (const fn of [
-      RIGHTS_FUNCTIONS.myScopes,
+      RIGHTS_FUNCTIONS.myScopesLive,
       RIGHTS_FUNCTIONS.projection,
       RIGHTS_FUNCTIONS.domain,
       RIGHTS_FUNCTIONS.requires,
@@ -627,7 +702,8 @@ describe("rights functions", () => {
     ]) {
       expect(calls).toContain(`${fn.schema}.${fn.name}`)
     }
-    // Таблиці членства згадують лише шаблон «моїх скоупів» і межа
+    // Таблиці членства згадують лише шаблон «моїх скоупів» (живий варіант;
+    // публічна функція читає його чи знімок) і межа
     // «Користувачів» — остання лише в з'єднанні з «моїми скоупами»
     // (спека прав §5.2) — разом з їхніми варіантами аналізу (спека прав §5.1), шаблон
     // функції множини членства й функції аналізу (учасники скоупу запиту під
@@ -642,7 +718,7 @@ describe("rights functions", () => {
       .sort()
     expect(readers).toEqual(
       [
-        RIGHTS_FUNCTIONS.myScopes,
+        RIGHTS_FUNCTIONS.myScopesLive,
         RIGHTS_FUNCTIONS.scopesOf,
         RIGHTS_FUNCTIONS.visibleUsers,
         RIGHTS_FUNCTIONS.visibleUsersOf,
@@ -675,6 +751,93 @@ describe("rights functions", () => {
     )
   })
 
+  it("revokes execute on live variants", () => {
+    for (const [fn, types] of LIVE_VARIANTS) {
+      const grants = rightsUnits(model)
+        .filter((u) => grantedFunction(u) === fn.name)
+        .map((u) => u.sql)
+        .sort()
+      expect(grants, fn.name).toEqual(
+        executeGrants(
+          `${fn.schema}.${fn.name}(${types})`,
+          [],
+          "supabase"
+        ).sort()
+      )
+    }
+  })
+
+  // Р3-15: живий варіант і знімок факту `rights` рахують входи тими самими
+  // генераторами — друга реалізація призначень чи дельт неможлива.
+  it("renders rights_mine_live with live inputs", () => {
+    for (const compiledModel of [model, adopted]) {
+      const style = compiledModel.project.naming.attributeCase
+      const expected = parse(
+        mineBody(
+          LIVE,
+          false,
+          liveInputs(
+            compiledModel.contracts,
+            compiledModel.physical,
+            style,
+            LIVE
+          )
+        )
+      )
+      if (!expected.ok) throw new Error("mineBody does not parse")
+      expect(
+        bodyTree(functionUnit(compiledModel, RIGHTS_FUNCTIONS.mineLive.name))
+      ).toEqual(withoutLocations(expected.statements[0]!.stmt))
+    }
+  })
+
+  it("renders live variants as stable invoker functions", () => {
+    const facts = [
+      RIGHTS_FUNCTIONS.mine,
+      RIGHTS_FUNCTIONS.myScopes,
+      RIGHTS_FUNCTIONS.myMembers,
+      RIGHTS_FUNCTIONS.dimensionValues,
+    ].map((fn) => `${fn.schema}.${fn.name}`)
+    for (const [fn] of LIVE_VARIANTS) {
+      const unit = functionUnit(model, fn.name)
+      expect(routineLanguage(unit.tree as never), fn.name).toBe("sql")
+      expect(option(unit, "volatility")?.String?.sval, fn.name).toBe("stable")
+      expect(hasEmptySearchPath(unit.tree as never), fn.name).toBe(true)
+      expect(option(unit, "security"), fn.name).toBeUndefined()
+      // Живий варіант читає вкладені факти теж наживо: публічна функція
+      // після появи гілок повернула б знімок.
+      const calls = unitCalls(unit, parse).map((c) => `${c.schema}.${c.name}`)
+      expect(
+        calls.filter((c) => facts.includes(c)),
+        fn.name
+      ).toEqual([])
+    }
+    // Походження рядка мого скоупу — лише в живому варіанті.
+    expect(
+      tableColumns(functionUnit(model, RIGHTS_FUNCTIONS.myScopesLive.name))
+    ).toEqual([
+      ["scope_kind_id", "uuid"],
+      ["scope", "uuid"],
+      ["member", "uuid"],
+      ["catalog", "bool"],
+    ])
+    expect(
+      tableColumns(functionUnit(model, RIGHTS_FUNCTIONS.myScopes.name))
+    ).toEqual([
+      ["scope_kind_id", "uuid"],
+      ["scope", "uuid"],
+      ["member", "uuid"],
+    ])
+    // Рядок довідника членства — `catalog` істинний: лише такі читають
+    // функції членства виду.
+    const origin = target(selectOf(tree("SELECT true AS catalog")), "catalog")
+    const arms = unionArms(
+      bodyTree(functionUnit(model, RIGHTS_FUNCTIONS.myScopesLive.name))
+    )
+    expect(arms.length).toBeGreaterThan(0)
+    for (const arm of arms) expect(target(arm, "catalog")).toEqual(origin)
+  })
+
   it("reads the members of every scope kind only in my scopes of that kind", async () => {
     // спека прав §5.1: учасники довідника членства виду K — лише за рядками
     // `rights_my_scopes()` з `scope_kind_id = K`, інакше учасник іншого виду
@@ -687,10 +850,10 @@ describe("rights functions", () => {
   })
 })
 
-/** Запит CTE `name` тіла `rights_mine`. */
+/** Запит CTE `name` тіла `rights_mine` — генератора його живого варіанта. */
 function cteQuery(model: CompiledModel, name: string): unknown {
   const found = nodes(
-    bodyTree(functionUnit(model, RIGHTS_FUNCTIONS.mine.name)),
+    bodyTree(functionUnit(model, RIGHTS_FUNCTIONS.mineLive.name)),
     "CommonTableExpr"
   ).filter((cte) => (cte as { ctename: string }).ctename === name)
   expect(found).toHaveLength(1)
@@ -745,15 +908,18 @@ describe("rights functions over adopted sources", () => {
     model = await compiled(adoptedSourcesDomain())
   })
 
-  it("my scopes include an adopted membership source, active rows only", async () => {
+  it("my scopes include an adopted membership source, active rows with a scope only", async () => {
     // та сама форма, що гілка довідника членства; `IS TRUE` —
-    // `NULL` в активності членства не дає.
+    // `NULL` в активності членства не дає, а рядок без скоупу членства не
+    // дає теж (fail-closed): інакше жива гілка розійшлася б зі знімком.
+    // Живий варіант — тіло «моїх скоупів» з походженням: рядок джерела —
+    // не довідника членства. Публічна функція читає його чи знімок.
     const branch = (active: string) =>
       tree(
-        `SELECT '${ORG_KIND_ID}'::uuid AS scope_kind_id, s.org_id AS scope, s.id AS member FROM public.membership s WHERE s.user_id IS NOT NULL AND s.user_id = ${CURRENT}${active}`
+        `SELECT '${ORG_KIND_ID}'::uuid AS scope_kind_id, s.org_id AS scope, s.id AS member, false AS catalog FROM public.membership s WHERE s.user_id IS NOT NULL AND s.user_id = ${CURRENT} AND s.org_id IS NOT NULL${active}`
       )
     expect(
-      bodyTree(functionUnit(model, RIGHTS_FUNCTIONS.myScopes.name))
+      bodyTree(functionUnit(model, RIGHTS_FUNCTIONS.myScopesLive.name))
     ).toEqual(branch(" AND s.is_active IS TRUE"))
     const always = await compiled(
       adoptedSourcesDomain({
@@ -765,7 +931,7 @@ describe("rights functions over adopted sources", () => {
       })
     )
     expect(
-      bodyTree(functionUnit(always, RIGHTS_FUNCTIONS.myScopes.name))
+      bodyTree(functionUnit(always, RIGHTS_FUNCTIONS.myScopesLive.name))
     ).toEqual(branch(""))
   })
 
@@ -839,7 +1005,12 @@ describe("rights functions over adopted sources", () => {
     // (спека прав §4.6), тож рядок джерела типізує рівень джерела — стала генератора.
     const columns =
       "x.storage, x.storage_id, x.scope, x.container, x.custom_role, x.archetype, x.scope_kind_id, r.level, r.level_id"
-    expect(cteQuery(model, "typed")).toEqual(
+    // Свої CTE `typed` (`my_scopes`, `assignments` — Р3-15) судять інші кейси.
+    const { withClause, ...typed } = (
+      cteQuery(model, "typed") as { SelectStmt: { withClause?: unknown } }
+    ).SelectStmt
+    expect(withClause).toBeDefined()
+    expect({ SelectStmt: typed }).toEqual(
       tree(
         `SELECT ${columns} FROM assignments x JOIN simetra.rights_roles() r ON r.role_id = x.archetype AND r.storage = x.storage AND r.storage_id IS NOT DISTINCT FROM x.storage_id UNION ALL SELECT ${columns} FROM assignments x JOIN simetra.rights_roles() r ON r.role_id = x.archetype AND r.level = x.source_level AND r.level_id IS NOT DISTINCT FROM x.source_level_id WHERE x.storage = 'source'`
       )
@@ -876,10 +1047,10 @@ describe("rights functions over adopted sources", () => {
       })
     )
     expect(
-      bodyTree(functionUnit(narrowed, RIGHTS_FUNCTIONS.myScopes.name))
+      bodyTree(functionUnit(narrowed, RIGHTS_FUNCTIONS.myScopesLive.name))
     ).toEqual(
       tree(
-        `SELECT '${ORG_KIND_ID}'::uuid AS scope_kind_id, s.org_id AS scope, s.id AS member FROM public.membership s WHERE s.user_id IS NOT NULL AND s.user_id = ${CURRENT} AND s.is_active IS TRUE AND s.user_id IS NOT NULL AND s.is_active = TRUE`
+        `SELECT '${ORG_KIND_ID}'::uuid AS scope_kind_id, s.org_id AS scope, s.id AS member, false AS catalog FROM public.membership s WHERE s.user_id IS NOT NULL AND s.user_id = ${CURRENT} AND s.org_id IS NOT NULL AND s.is_active IS TRUE AND s.user_id IS NOT NULL AND s.is_active = TRUE`
       )
     )
     expect(
@@ -1083,8 +1254,8 @@ describe("rights administration functions", () => {
       nodes(bodyTree(functionUnit(model, name)), "CommonTableExpr").filter(
         (node) => (node as { ctename: string }).ctename.startsWith("closure_")
       )
-    expect(closures("rights_mine")).toHaveLength(2)
-    expect(closures("rights_role_grants")).toEqual(closures("rights_mine"))
+    expect(closures("rights_mine_live")).toHaveLength(2)
+    expect(closures("rights_role_grants")).toEqual(closures("rights_mine_live"))
   })
 })
 
@@ -1199,7 +1370,10 @@ function toVariant(
     const name = callName(node)
     if (name === qualifiedName(F.myScopes))
       return renamed(node, F.scopesOf, () => [p])
-    if (name === qualifiedName(F.myMembers))
+    if (
+      name === qualifiedName(F.myMembers) ||
+      name === qualifiedName(F.myMembersLive)
+    )
       return renamed(node, F.membersOf, (args) => [p, ...args])
     const fields = (
       node as { ColumnRef?: { fields: { String?: { sval: string } }[] } }
@@ -1234,7 +1408,7 @@ function toCurrent(
     if (callName(node) === qualifiedName(F.scopesOf)) {
       const args = (node as CallNode).FuncCall.args ?? []
       return args.length === 1 && sameTree(args[0], p)
-        ? renamed(node, F.myScopes, () => [])
+        ? renamed(node, F.myScopesLive, () => [])
         : undefined
     }
     return undefined
@@ -1277,6 +1451,33 @@ function withoutOrigin(detail: unknown): unknown {
     ),
   })
   return { SelectStmt: { ...top, larg: arm(top.larg), rarg: arm(top.rarg) } }
+}
+
+/**
+ * Тіло «моїх скоупів» без колонки походження `catalog` — тіло живого
+ * варіанта в формі публічної функції без знімка.
+ */
+function withoutCatalog(body: unknown): unknown {
+  return rewrite(body, (child) => {
+    if (typeof child !== "object" || child === null) return undefined
+    if (!("targetList" in child)) return undefined
+    const { targetList, ...rest } = child as Select
+    return {
+      ...rest,
+      targetList: targetList!.filter((t) => t.ResTarget.name !== "catalog"),
+    }
+  })
+}
+
+/**
+ * Жива гілка функції факту: другий `RETURN QUERY` диспетчера (спека прав
+ * §5.1); SQL-тіло без знімка — як є.
+ */
+function liveArm(unit: SqlUnit): unknown {
+  if (routineLanguage(unit.tree as never) !== "plpgsql") return bodyTree(unit)
+  const queries = dispatcherQueries(unit.sql)
+  expect(queries, unit.identity).toHaveLength(2)
+  return tree(queries[1]!)
 }
 
 /** Гілка з дослівної функції проєкту: `FROM <функція>(…)`. */
@@ -1336,9 +1537,11 @@ describe("rights analysis templates", () => {
       // Усе, що рахує щось для поточного користувача, — з моделі, а не
       // переліком: функції прав `SECURITY DEFINER` (функції поточного
       // користувача й аналізу), функції членства, дослівні функції множини
-      // скоупу й виміру і сама `current_user_id()`.
+      // скоупу й виміру, живі варіанти фактів актора і сама
+      // `current_user_id()`.
       const forbidden = [
         "simetra.current_user_id",
+        ...LIVE_VARIANTS.map(([fn]) => qualifiedName(fn)),
         ...rightsUnits(model)
           .filter(
             (u) =>
@@ -1384,8 +1587,15 @@ describe("rights analysis templates", () => {
           bodyTree(functionUnit(model, from.name)),
           toVariant(model, fn, from)
         )
+      // Публічні функції фактів зі знімком — гілки; шаблон несе живий
+      // варіант (той самий генератор з живим користувачем).
+      expect(bodyTree(functionUnit(model, F.scopesOf.name))).toEqual(
+        rewrite(
+          withoutCatalog(bodyTree(functionUnit(model, F.myScopesLive.name))),
+          toVariant(model, F.scopesOf)
+        )
+      )
       const pairs: [{ name: string }, { name: string }][] = [
-        [F.scopesOf, F.myScopes],
         [F.membersOf, F.myMembers],
         ...(model.contracts.users !== undefined &&
         (model.contracts.membership.length > 0 ||
@@ -1405,7 +1615,7 @@ describe("rights analysis templates", () => {
       }
       // Гілки зв'язку — ті самі; дослівна функція виміру варіанта не має.
       const relations = unionArms(
-        variantOf(F.dimensionValuesOf, F.dimensionValues)
+        variantOf(F.dimensionValuesOf, F.dimensionValuesLive)
       ).filter((arm) => !fromFunction(arm))
       const dimensions = bodyTree(functionUnit(model, F.dimensionValuesOf.name))
       if (relations.length === 0) expect(dimensions).toEqual(tree(EMPTY_SET))
@@ -1425,7 +1635,7 @@ describe("rights analysis templates", () => {
         sets.map((m) =>
           selectOf(
             rewrite(
-              bodyTree(membershipUnit(model, m.setFunction!.name)),
+              liveArm(membershipUnit(model, m.setFunction!.name)),
               toVariant(model, F.scopeSetOf)
             )
           )
@@ -1451,7 +1661,7 @@ describe("rights analysis templates", () => {
           withoutOrigin(bodyTree(functionUnit(model, F.detailOf.name))),
           toCurrent(model, F.detailOf)
         )
-      ).toEqual(bodyTree(functionUnit(model, F.mine.name)))
+      ).toEqual(bodyTree(functionUnit(model, F.mineLive.name)))
     }
   )
 })
@@ -1467,12 +1677,16 @@ const globalRequest = (fn: string) =>
  * рівня запиту — глобальному чи `org`.
  */
 function gate(fn: string, levels: ("global" | "org")[]): string {
-  const arms = levels.map((level) =>
-    level === "global"
-      ? `(${globalRequest(fn)} AND g.level = 'global' AND g.object = 'global_role_assignments')`
-      : `(${fn}.p_scope_kind = '${ORG_KIND_ID}'::uuid AND g.level = 'scope' AND g.level_id = '${ORG_KIND_ID}'::uuid AND g.scope = ${fn}.p_scope AND g.object = 'org_role_assignments')`
-  )
-  return `EXISTS (SELECT 1 FROM simetra.rights_mine() g WHERE g.action = 'administerRights' AND (${arms.join(" OR ")}))`
+  const arms = levels.map((level) => {
+    const label =
+      level === "global" ? "global_role_assignments" : "org_role_assignments"
+    const where =
+      level === "global"
+        ? `${globalRequest(fn)} AND g.level = 'global'`
+        : `${fn}.p_scope_kind = '${ORG_KIND_ID}'::uuid AND g.level = 'scope' AND g.level_id = '${ORG_KIND_ID}'::uuid AND g.scope = ${fn}.p_scope`
+    return `EXISTS (SELECT 1 FROM simetra.rights_mine('administerRights', '${label}') g WHERE g.action = 'administerRights' AND g.object = '${label}' AND ${where})`
+  })
+  return `(${arms.join(" OR ")})`
 }
 
 /** Рядки рівня запиту (спека прав §5.1): скоуп, контейнер `Project` цього скоупу, глобальні. */
@@ -1657,5 +1871,378 @@ describe("rights analysis functions", () => {
         )
       ),
     ])
+  })
+})
+
+/** Функція прав за повною сигнатурою — перевантаження мають одне ім'я. */
+function signatureUnit(model: CompiledModel, identity: string): SqlUnit {
+  const found = rightsUnits(model).filter((u) => u.identity === identity)
+  expect(found, identity).toHaveLength(1)
+  return found[0]!
+}
+
+/** Текст тіла функції (рядок під `$тег$`). */
+const bodyText = (unit: SqlUnit) =>
+  option(unit, "as")!.List!.items![0]!.String!.sval!
+
+/** Скільки разів піддерево `needle` трапляється в `hay` (рівність дерев). */
+function occurrences(hay: unknown, needle: unknown): number {
+  const self = canonical(hay) === canonical(needle) ? 1 : 0
+  if (Array.isArray(hay))
+    return (
+      self + hay.reduce((n: number, item) => n + occurrences(item, needle), 0)
+    )
+  if (typeof hay !== "object" || hay === null) return self
+  return (
+    self +
+    Object.values(hay).reduce(
+      (n: number, child) => n + occurrences(child, needle),
+      0
+    )
+  )
+}
+
+/** Виклики `fn` у дереві з їхніми аргументами. */
+function callsTo(node: unknown, fn: QualifiedName): unknown[][] {
+  return nodes(node, "FuncCall")
+    .map((c) => c as CallNode["FuncCall"])
+    .filter(
+      (c) =>
+        c.funcname.map((n) => n.String.sval).join(".") === qualifiedName(fn)
+    )
+    .map((c) => c.args ?? [])
+}
+
+const MINE = "function:simetra.rights_mine()"
+const MINE_PAIR = "function:simetra.rights_mine(text,text)"
+const XID = "txid_current_if_assigned()"
+
+/**
+ * Диспетчер факту `fact` (Р3-3, Р3-15): `plpgsql STABLE SECURITY DEFINER`,
+ * порожній `search_path`, `IF` гілки знімка — `RETURN QUERY snapshot`,
+ * `ELSIF` живої — `RETURN QUERY live`, інакше порожньо.
+ */
+function expectDispatcher(
+  unit: SqlUnit,
+  fact: SnapshotFact,
+  returns: string,
+  snapshot: string,
+  live: string
+): void {
+  const name = unit.identity
+  expect(routineLanguage(unit.tree as never), name).toBe("plpgsql")
+  expect(option(unit, "security")?.Boolean?.boolval, name).toBe(true)
+  expect(option(unit, "volatility")?.String?.sval, name).toBe("stable")
+  expect(hasEmptySearchPath(unit.tree as never), name).toBe(true)
+  expect(bodyText(unit).trimStart().split("\n")[0], name).toBe(
+    "#variable_conflict use_column"
+  )
+  const expected = [
+    `CREATE FUNCTION f() RETURNS ${returns} LANGUAGE plpgsql AS $x$`,
+    "BEGIN",
+    `IF (${snapshotOwned(fact)}) THEN`,
+    `RETURN QUERY ${snapshot};`,
+    `ELSIF (NOT ${snapshotPresent(fact)} AND NOT ${snapshotForeign()}) THEN`,
+    `RETURN QUERY ${live};`,
+    "END IF;",
+    "END;",
+    "$x$;",
+  ].join("\n")
+  expect(bodyShape(unit.sql), name).toEqual(bodyShape(expected))
+}
+const CURRENT_ACTOR = "(SELECT simetra.current_user_id())"
+
+describe("rights functions with an actor snapshot", () => {
+  let model: CompiledModel
+  let adopted: CompiledModel
+  let sources: CompiledModel
+  // Без довідників прав знімка немає (kitchen sink: ролі без довідників).
+  let plain: CompiledModel
+  beforeAll(async () => {
+    model = await compiled(withRoles(BASE))
+    adopted = await compiled(adoptedSourcesDomain())
+    const result = await compileRights(snapshotSourcesDomain())
+    expect(
+      result.diagnostics.filter(
+        (d) =>
+          d.severity === "error" && d.code !== "rights.adopted-source-writes"
+      )
+    ).toEqual([])
+    sources = result.model!
+    const sink = await compile(kitchenSink())
+    expect(sink.diagnostics.filter((d) => d.severity === "error")).toEqual([])
+    plain = sink.model!
+    expect(model.contracts.rightsCatalogs).not.toEqual([])
+    expect(plain.contracts.rightsCatalogs).toEqual([])
+  })
+
+  // Р3-3 дослівно: охорона `CASE` без xid, заголовок факту цього xid і для
+  // власника — поточний користувач.
+  it("renders snapshotPresent and snapshotOwned literally", () => {
+    const head = `EXISTS (SELECT 1 FROM simetra.rights_tx_header h WHERE h.xid = txid_current_if_assigned() AND h.fact = 'rights'`
+    expect(exprTree(snapshotPresent("rights"))).toEqual(
+      exprTree(
+        `CASE WHEN txid_current_if_assigned() IS NULL THEN false ELSE ${head}) END`
+      )
+    )
+    expect(exprTree(snapshotOwned("rights"))).toEqual(
+      exprTree(
+        `CASE WHEN txid_current_if_assigned() IS NULL THEN false ELSE ${head} AND h.actor IS NOT DISTINCT FROM (SELECT simetra.current_user_id())) END`
+      )
+    )
+    expect(exprTree(snapshotForeign())).toEqual(
+      exprTree(
+        `CASE WHEN txid_current_if_assigned() IS NULL THEN false ELSE EXISTS (SELECT 1 FROM simetra.rights_tx_header h WHERE h.xid = txid_current_if_assigned() AND h.actor IS DISTINCT FROM (SELECT simetra.current_user_id())) END`
+      )
+    )
+  })
+
+  // Р3-15: обидві гілки — згенерований `mineBody`, без ручного SQL; план
+  // кожного `RETURN QUERY` кешується, мертву гілку не планує ніхто.
+  it("dispatches rights_mine between two generated branches", () => {
+    const api = PROVIDER_API_ROLES.supabase
+    const setRoles = [api.user, api.service, PLATFORM_ROLES.command].sort()
+    for (const compiledModel of [model, adopted]) {
+      const style = compiledModel.project.naming.attributeCase
+      const inputs = liveInputs(
+        compiledModel.contracts,
+        compiledModel.physical,
+        style,
+        LIVE
+      )
+      const pair = {
+        action: `${RIGHTS_FUNCTIONS.minePair.name}.p_action`,
+        object: `${RIGHTS_FUNCTIONS.minePair.name}.p_object`,
+      }
+      for (const [identity, filter] of [
+        [MINE, undefined],
+        [MINE_PAIR, pair],
+      ] as const) {
+        expectDispatcher(
+          signatureUnit(compiledModel, identity),
+          "rights",
+          "TABLE (level text, level_id uuid, scope uuid, container uuid, object text, action text, extent text, dimension_id uuid)",
+          mineBody({ user: CURRENT_ACTOR }, false, snapshotInputs(XID), filter),
+          mineBody(LIVE, false, inputs, filter)
+        )
+      }
+      const { granted } = executeGrantees(compiledModel)
+      expect(granted.get(RIGHTS_FUNCTIONS.mine.name)).toEqual(setRoles)
+    }
+  })
+
+  // Р3-16: фільтр пари — у рядках архетипу, `allow`, `deny` і «кожного
+  // користувача»; дія — пара ∪ її транзитивні вимоги з `rights_requires`.
+  it("filters role rows by the pair and its requirements", () => {
+    const style = model.project.naming.attributeCase
+    const inputs = liveInputs(model.contracts, model.physical, style, LIVE)
+    const pair = { action: "x.a", object: "x.o" }
+    const object = (alias: string) => exprTree(`${alias}.object = x.o`)
+    const action = (alias: string) =>
+      exprTree(
+        `${alias}.action = ANY (ARRAY[x.a] || ARRAY(SELECT q.required FROM simetra.rights_requires() q WHERE q.object = x.o AND q.action = x.a))`
+      )
+    const full = tree(mineBody(LIVE, false, inputs))
+    const paired = tree(mineBody(LIVE, false, inputs, pair))
+    // Архетип і «кожен користувач» — колонки проєкції `p`; `deny` і
+    // `allow` — дельти `d`.
+    for (const alias of ["p", "d"]) {
+      expect(occurrences(full, object(alias)), alias).toBe(0)
+      expect(occurrences(full, action(alias)), alias).toBe(0)
+      expect(occurrences(paired, object(alias)), alias).toBe(2)
+      expect(occurrences(paired, action(alias)), alias).toBe(2)
+    }
+    // Гілка архетипу: фільтр — уся її умова.
+    expect(
+      occurrences(paired, {
+        BoolExpr: { boolop: "AND_EXPR", args: [object("p"), action("p")] },
+      })
+    ).toBe(1)
+    // Без пари тіло — рівно повне: фільтр нічого іншого не змінює.
+    const strip = (node: unknown): unknown =>
+      rewrite(node, (child) => {
+        const where = (child as { whereClause?: unknown } | null)?.whereClause
+        if (where === undefined) return undefined
+        const { whereClause, ...rest } = child as Record<string, unknown>
+        const bool = (
+          whereClause as { BoolExpr?: { boolop: string; args: unknown[] } }
+        ).BoolExpr
+        const filtered = [object("p"), action("p"), object("d"), action("d")]
+        const keep = (arg: unknown) =>
+          !filtered.some((f) => canonical(f) === canonical(arg))
+        if (bool?.boolop === "AND_EXPR") {
+          const args = bool.args.filter(keep).map(strip)
+          return {
+            ...(strip(rest) as object),
+            ...(args.length === 0
+              ? {}
+              : {
+                  whereClause:
+                    args.length === 1
+                      ? args[0]
+                      : { BoolExpr: { ...bool, args } },
+                }),
+          }
+        }
+        return undefined
+      })
+    expect(strip(paired)).toEqual(strip(full))
+  })
+
+  it("routes the set functions through the pair variant", () => {
+    const pairOf = (fn: QualifiedName) => [
+      exprTree(`${fn.name}.p_action`),
+      exprTree(`${fn.name}.p_object`),
+    ]
+    for (const fn of [
+      RIGHTS_FUNCTIONS.any,
+      RIGHTS_FUNCTIONS.own,
+      RIGHTS_FUNCTIONS.dim,
+      RIGHTS_FUNCTIONS.container,
+      RIGHTS_FUNCTIONS.hasRight,
+    ]) {
+      expect(
+        callsTo(bodyTree(functionUnit(model, fn.name)), RIGHTS_FUNCTIONS.mine),
+        fn.name
+      ).toEqual([pairOf(fn)])
+    }
+    // Гейт аналізу — пара `administerRights` на мітці кожного довідника
+    // призначень.
+    for (const fn of [
+      RIGHTS_FUNCTIONS.member,
+      RIGHTS_FUNCTIONS.who,
+      RIGHTS_FUNCTIONS.journalOf,
+    ]) {
+      const calls = callsTo(
+        bodyTree(functionUnit(model, fn.name)),
+        RIGHTS_FUNCTIONS.mine
+      )
+      // Гейт може стояти в кількох гілках тіла — кожен виклик лише пара.
+      expect(
+        [...new Set(calls.map((args) => canonical(args)))].sort(),
+        fn.name
+      ).toEqual(
+        ["global_role_assignments", "org_role_assignments"]
+          .map((label) =>
+            canonical([exprTree("'administerRights'"), exprTree(`'${label}'`)])
+          )
+          .sort()
+      )
+    }
+    const explain = model.sqlUnits.find(
+      (u) => u.generator === "rightsExplain" && u.class === "function"
+    )!
+    const gates = callsTo(bodyTree(explain), RIGHTS_FUNCTIONS.mine).filter(
+      (args) => args.length === 2
+    )
+    expect(gates.length).toBeGreaterThan(0)
+    for (const args of gates)
+      expect(args[0]).toEqual(exprTree("'administerRights'"))
+  })
+
+  // Аналіз чужого користувача, пояснення й кеш COMMIT рахують усі права —
+  // без фільтра пари.
+  it("keeps the full rights_mine for analysis and the commit cache", () => {
+    const filter = /= ANY \(ARRAY\[/
+    expect(
+      bodyText(functionUnit(model, RIGHTS_FUNCTIONS.detailOf.name))
+    ).not.toMatch(filter)
+    expect(startRights("v_pending.xid")).not.toMatch(filter)
+    expect(startRights("v_pending.xid")).toBe(
+      mineBody(
+        {
+          user: "(SELECT h.actor FROM simetra.rights_tx_header h WHERE h.xid = v_pending.xid AND h.fact = 'rights')",
+        },
+        false,
+        snapshotInputs("v_pending.xid")
+      )
+    )
+    const explain = model.sqlUnits.find(
+      (u) => u.generator === "rightsExplain" && u.class === "function"
+    )!
+    expect(
+      callsTo(bodyTree(explain), RIGHTS_FUNCTIONS.mine).filter(
+        (args) => args.length === 0
+      )
+    ).toHaveLength(1)
+  })
+
+  // Р3-3, Р3-15: решта функцій фактів — той самий диспетчер, що й
+  // `rights_mine`; гілки — згенеровані запити знімка й живого варіанта.
+  it.each<[string, SnapshotFact, string, string, string]>([
+    [
+      RIGHTS_FUNCTIONS.myScopes.name,
+      "scopes",
+      "TABLE (scope_kind_id uuid, scope uuid, member uuid)",
+      `SELECT s.scope_kind_id, s.scope, s.member FROM simetra.rights_tx_scopes s WHERE s.xid = ${XID}`,
+      "SELECT l.scope_kind_id, l.scope, l.member FROM simetra.rights_my_scopes_live() l",
+    ],
+    [
+      RIGHTS_FUNCTIONS.dimensionValues.name,
+      "values",
+      "SETOF uuid",
+      `SELECT v.value FROM simetra.rights_tx_values v WHERE v.xid = ${XID} AND v.dimension_id = rights_dimension_values.p_dimension`,
+      "SELECT l.value FROM simetra.rights_dimension_values_live(rights_dimension_values.p_dimension) AS l(value)",
+    ],
+    [
+      RIGHTS_FUNCTIONS.scopeSet.name,
+      "scopeSets",
+      "SETOF uuid",
+      `SELECT s.scope FROM simetra.rights_tx_scope_sets s WHERE s.xid = ${XID} AND s.scope_kind_id = rights_scope_set.p_scope_kind`,
+      "SELECT l.value FROM simetra.rights_scope_set_live(rights_scope_set.p_scope_kind) AS l(value)",
+    ],
+  ])(
+    "dispatches %s between the snapshot and the live branch of its fact",
+    (name, fact, returns, snapshot, live) => {
+      for (const compiledModel of [model, sources]) {
+        const unit = functionUnit(compiledModel, name)
+        expectDispatcher(unit, fact, returns, snapshot, live)
+      }
+    }
+  )
+
+  it("grants rights_scope_set like a set function", () => {
+    const api = PROVIDER_API_ROLES.supabase
+    expect(
+      executeGrantees(model).granted.get(RIGHTS_FUNCTIONS.scopeSet.name)
+    ).toEqual([api.user, api.service, PLATFORM_ROLES.command].sort())
+  })
+
+  // Без довідників прав команда прав не змінює: тіла — як були, без гілок
+  // і без таблиць знімка.
+  it("renders no snapshot branch without rights catalogs", () => {
+    const ids = functionIdentities(plain)
+    expect(ids).toContain(MINE_PAIR)
+    expect(ids).not.toContain("function:simetra.rights_scope_set(uuid)")
+    for (const identity of [MINE, MINE_PAIR])
+      expect(
+        routineLanguage(signatureUnit(plain, identity).tree as never)
+      ).toBe("sql")
+    const snapshotReaders = plain.sqlUnits.filter((u) =>
+      /rights_tx_/.test(u.sql)
+    )
+    expect(snapshotReaders.map((u) => u.identity)).toEqual([])
+    for (const access of plain.contracts.access)
+      if (access.scope !== undefined) expect(access.scope.verbatim).toBe(false)
+  })
+
+  // Р3-3: читання без xid не видає xid — у функціях фактів лише
+  // `txid_current_if_assigned()`.
+  it("uses no txid_current() in fact functions", () => {
+    for (const compiledModel of [model, adopted, sources]) {
+      const facts = compiledModel.sqlUnits.filter(
+        (u) =>
+          u.class === "function" &&
+          (u.generator === "rights" ||
+            u.generator === "membership" ||
+            u.generator === "rightsExplain")
+      )
+      expect(facts.length).toBeGreaterThan(0)
+      for (const unit of facts)
+        expect(unit.sql, unit.identity).not.toMatch(/txid_current\(\)/)
+      expect(
+        facts.filter((u) => u.sql.includes("txid_current_if_assigned()")).length
+      ).toBeGreaterThan(0)
+    }
   })
 })
