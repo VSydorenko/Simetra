@@ -3,4 +3,4 @@
  * тримає тест, а не читання маніфесту під час виконання: ярус не звертається
  * до файлової системи.
  */
-export const PLATFORM_VERSION = "0.1.0"
+export const PLATFORM_VERSION = "0.2.0"
