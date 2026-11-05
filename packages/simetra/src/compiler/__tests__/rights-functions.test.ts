@@ -9,9 +9,12 @@ import type {
 } from "../contracts"
 import { compareStrings } from "../diagnostics"
 import {
+  LIVE,
   RIGHTS_FUNCTIONS,
   hasRightsFunctions,
   hasVisibleUsers,
+  liveInputs,
+  mineBody,
   sourceConditions,
 } from "../rights/functions"
 import { sha256HexSync } from "../sha256"
@@ -370,8 +373,11 @@ const functionIdentities = (model: CompiledModel) =>
 
 describe("rights functions", () => {
   let model: CompiledModel
+  // Прийняті джерела призначень і контейнер — гілки входів, яких `BASE` не має.
+  let adopted: CompiledModel
   beforeAll(async () => {
     model = await compiled(withRoles(BASE))
+    adopted = await compiled(adoptedSourcesDomain())
   })
 
   it("renders no rights functions without roles", async () => {
@@ -727,6 +733,30 @@ describe("rights functions", () => {
     }
   })
 
+  // Р3-15: живий варіант і знімок факту `rights` рахують входи тими самими
+  // генераторами — друга реалізація призначень чи дельт неможлива.
+  it("renders rights_mine_live with live inputs", () => {
+    for (const compiledModel of [model, adopted]) {
+      const style = compiledModel.project.naming.attributeCase
+      const expected = parse(
+        mineBody(
+          LIVE,
+          false,
+          liveInputs(
+            compiledModel.contracts,
+            compiledModel.physical,
+            style,
+            LIVE
+          )
+        )
+      )
+      if (!expected.ok) throw new Error("mineBody does not parse")
+      expect(
+        bodyTree(functionUnit(compiledModel, RIGHTS_FUNCTIONS.mineLive.name))
+      ).toEqual(withoutLocations(expected.statements[0]!.stmt))
+    }
+  })
+
   it("renders live variants as stable invoker functions", () => {
     const facts = [
       RIGHTS_FUNCTIONS.mine,
@@ -947,7 +977,12 @@ describe("rights functions over adopted sources", () => {
     // (спека прав §4.6), тож рядок джерела типізує рівень джерела — стала генератора.
     const columns =
       "x.storage, x.storage_id, x.scope, x.container, x.custom_role, x.archetype, x.scope_kind_id, r.level, r.level_id"
-    expect(cteQuery(model, "typed")).toEqual(
+    // Свої CTE `typed` (`my_scopes`, `assignments` — Р3-15) судять інші кейси.
+    const { withClause, ...typed } = (
+      cteQuery(model, "typed") as { SelectStmt: { withClause?: unknown } }
+    ).SelectStmt
+    expect(withClause).toBeDefined()
+    expect({ SelectStmt: typed }).toEqual(
       tree(
         `SELECT ${columns} FROM assignments x JOIN simetra.rights_roles() r ON r.role_id = x.archetype AND r.storage = x.storage AND r.storage_id IS NOT DISTINCT FROM x.storage_id UNION ALL SELECT ${columns} FROM assignments x JOIN simetra.rights_roles() r ON r.role_id = x.archetype AND r.level = x.source_level AND r.level_id IS NOT DISTINCT FROM x.source_level_id WHERE x.storage = 'source'`
       )

@@ -27,6 +27,7 @@ import {
 import { signUp } from "./auth"
 import {
   commandAs,
+  commandSteps,
   queryAs,
   testRoleName,
   testSuperuserUrl,
@@ -344,6 +345,46 @@ describe("rights administration guards", () => {
       )
     )
   })
+  // Р3-15: права початку на COMMIT рахуються з входів знімка, а не з живих
+  // таблиць: актор, що зняв власну роль після призначення, покриває
+  // призначення правами, з якими почав транзакцію.
+  it("computes the commit cache from the snapshot inputs", async () => {
+    const steps = (actor: string, ownRole: string) => {
+      const id = randomUUID()
+      const [action, object] = admin("org_role_assignments", id)
+      return commandSteps(
+        tx.client(),
+        claims(actor),
+        [
+          {
+            context: { action, object, root: id },
+            sql: sql(assignSql(id, TASK_EDITOR_ID)),
+          },
+          {
+            context: { action, object, root: key(ownRole) },
+            sql: sql(
+              `UPDATE public.org_role_assignments SET deletion_mark = true WHERE id = {${ownRole}}`
+            ),
+          },
+        ],
+        { immediate: true }
+      )
+    }
+    // `editor` почав з TaskEditor і зняв його вже після призначення.
+    const covered = await steps("editor", "editorRole")
+    expect(covered.refusal).toBeUndefined()
+    expect(
+      covered.completed.map((c) => (c as pg.QueryResult).rowCount)
+    ).toEqual([1, 1])
+    // Контроль: без TaskEditor на початку та сама пара кроків — приріст.
+    const uncovered = await steps("admin", "heldRole")
+    expect(uncovered.completed).toHaveLength(2)
+    expect(uncovered.refusal).toMatchObject({
+      code: "42501",
+      detail: "escalation",
+    })
+  })
+
   it("fullAccess exempts an actor and removing one of two carriers succeeds", async () => {
     const id = randomUUID()
     success(

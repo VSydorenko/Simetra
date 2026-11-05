@@ -228,7 +228,7 @@
 - `startRights(contracts, physical, style, xid: string): string` — `mineBody` над `snapshotInputs(xid)`, повний, `user` — `(SELECT h.actor FROM simetra.rights_tx_header h WHERE h.xid = <xid> AND h.fact = 'rights')`.
 - `startCache(xid: string): string` — оператор plpgsql-тіла `rights_tx_check`: коли рядків `rights_tx_start` цього xid ще немає — `INSERT … SELECT` зі `startRights` і `rights_tx_holders`; рядок-маркер `(xid, NULL…, full_access = false)` пишеться завжди, щоб порожні права актора теж були «закешовані».
 
-- [ ] **Крок 1. Тести:**
+- [x] **Крок 1. Тести:**
   - `rights-admin-tables.test.ts`: `adds the input tables of the rights fact` — колонки, індекси Р3-15 (`typed`, `containers`, `deltas`, `holders`, `start`); `rights_tx_actor` відсутня.
   - `rights-guards.test.ts`:
     - `snapshots the inputs of rights_mine with the shared generators` — тіло знімка вставляє в `rights_tx_typed` рівно `liveInputs(…, LIVE).typed` (цілий фрагмент), `containers` і `deltas` звужено до `typed` цього xid, `rights_tx_holders` — `fullAccessHolderRows`; `rights_mine_live` у тілі знімка не викликається;
@@ -237,10 +237,10 @@
   - `rights-functions.test.ts`: `renders rights_mine_live with live inputs` (тіло = `mineBody(…, LIVE, false, liveInputs(…, LIVE))`).
   - `rights-snapshot-sources.test.ts`: оновити рукописну мапу — таблиця членства лишається джерелом `rights` і `scopes`; таблиці ролей, ТЧ дельт, призначень і контейнерів — `rights`.
   - `rights-guards.db.test.ts`: `computes the commit cache from the snapshot inputs` — актор має на початку роль з правом `p`; у транзакції через `commandSteps`: призначає іншому користувачу роль з `p` (покривається станом початку), потім знімає власне призначення ролі; `immediate: true` — проходить; контроль — без власної ролі на початку та сама пара кроків — `escalation`.
-- [ ] **Крок 2.** Червоні: `pnpm --filter simetra test rights-admin-tables rights-functions rights-guards rights-snapshot-sources`.
-- [ ] **Крок 3.** Реалізувати; `rights_tx_actor` і його заповнення видалити (принцип 5).
-- [ ] **Крок 4.** Зелені; `pnpm --filter simetra test:db rights-guards catalog-command-admin rights-plan-gate`; `typecheck`, `lint`.
-- [ ] **Крок 5.** Коміт `feat(compiler): знімок входів факту прав актора й кеш прав початку на COMMIT`.
+- [x] **Крок 2.** Червоні: `pnpm --filter simetra test rights-admin-tables rights-functions rights-guards rights-snapshot-sources`.
+- [x] **Крок 3.** Реалізувати; `rights_tx_actor` і його заповнення видалити (принцип 5).
+- [x] **Крок 4.** Зелені; `pnpm --filter simetra test:db rights-guards catalog-command-admin rights-plan-gate`; `typecheck`, `lint`.
+- [x] **Крок 5.** Коміт `feat(compiler): знімок входів факту прав актора й кеш прав початку на COMMIT`.
 
 ## Задача 4: дві гілки
 

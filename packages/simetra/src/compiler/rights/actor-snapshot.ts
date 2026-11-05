@@ -5,7 +5,8 @@ import {
 } from "simetra/model"
 import { qualified, type Contracts, type QualifiedName } from "../contracts"
 import { sqlLiteral } from "../stages/model"
-import { hasRightsFunctions } from "./functions"
+import { INPUT_COLUMNS } from "./admin-tables"
+import { hasRightsFunctions, type MineInputs } from "./functions"
 
 /**
  * Факти актора, які знімок бере до першої зміни їхнього джерела (спека прав
@@ -26,21 +27,57 @@ const platform = (name: string): QualifiedName => ({
   name,
 })
 
-/** Таблиці знімка (спека прав §7): заголовки фактів і рядки кожного факту. */
+/**
+ * Таблиці знімка (спека прав §7): заголовки фактів, входи факту `rights`
+ * (Р3-15), кеш прав початку на COMMIT і рядки решти фактів.
+ */
 export const SNAPSHOT_TABLES = {
   header: platform("rights_tx_header"),
-  actor: platform("rights_tx_actor"),
+  typed: platform("rights_tx_typed"),
+  containers: platform("rights_tx_containers"),
+  deltas: platform("rights_tx_deltas"),
+  holders: platform("rights_tx_holders"),
+  start: platform("rights_tx_start"),
   scopes: platform("rights_tx_scopes"),
   values: platform("rights_tx_values"),
   scopeSets: platform("rights_tx_scope_sets"),
 } as const satisfies Record<string, QualifiedName>
 
-/** Таблиця рядків факту. */
-export const FACT_TABLE: Record<SnapshotFact, QualifiedName> = {
-  rights: SNAPSHOT_TABLES.actor,
-  scopes: SNAPSHOT_TABLES.scopes,
-  values: SNAPSHOT_TABLES.values,
-  scopeSets: SNAPSHOT_TABLES.scopeSets,
+/**
+ * Таблиці рядків факту. Кеш `start` — не рядки факту: його пише перевірка
+ * на COMMIT, а не знімок.
+ */
+export const FACT_TABLE: Record<SnapshotFact, readonly QualifiedName[]> = {
+  rights: [
+    SNAPSHOT_TABLES.typed,
+    SNAPSHOT_TABLES.containers,
+    SNAPSHOT_TABLES.deltas,
+    SNAPSHOT_TABLES.holders,
+  ],
+  scopes: [SNAPSHOT_TABLES.scopes],
+  values: [SNAPSHOT_TABLES.values],
+  scopeSets: [SNAPSHOT_TABLES.scopeSets],
+}
+
+/** Колонки входу з префіксом псевдоніма — для `SELECT` і списку `INSERT`. */
+export function inputColumns(input: keyof MineInputs, alias?: string): string {
+  return INPUT_COLUMNS[input]
+    .map(([name]) => (alias === undefined ? name : `${alias}.${name}`))
+    .join(", ")
+}
+
+/**
+ * Входи `rights_mine` зі знімка транзакції `xid` (Р3-15): та сама форма, що
+ * в живих генераторів, тож `mineBody` над ними — те саме тіло.
+ */
+export function snapshotInputs(xid: string): MineInputs {
+  const read = (input: keyof MineInputs) =>
+    `SELECT ${inputColumns(input, "i")} FROM ${qualified(SNAPSHOT_TABLES[input])} i WHERE i.xid = ${xid}`
+  return {
+    typed: read("typed"),
+    containers: read("containers"),
+    deltas: read("deltas"),
+  }
 }
 
 const CURRENT_USER = `(SELECT ${qualified(platform(CURRENT_USER_FUNCTION_NAME))}())`

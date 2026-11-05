@@ -168,10 +168,12 @@ describe("actor snapshot sources", () => {
       generated: [
         ...input.generated.filter((u) => !replaced.has(u.name)),
         fake(
-          `CREATE FUNCTION simetra.rights_mine_live() RETURNS SETOF uuid ${shell} AS $$ SELECT j.row_id FROM simetra.rights_journal j $$`
+          `CREATE FUNCTION simetra.rights_mine_live() RETURNS SETOF uuid ${shell} AS $$ SELECT NULL::uuid WHERE false $$`
         ),
+        // Мої скоупи читають і входи `rights_mine` (Р3-15), тож невідоме
+        // відношення в них — невідоме для обох фактів.
         fake(
-          `CREATE FUNCTION simetra.rights_my_scopes_live() RETURNS SETOF uuid ${shell} AS $$ SELECT NULL::uuid WHERE false $$`
+          `CREATE FUNCTION simetra.rights_my_scopes_live() RETURNS SETOF uuid ${shell} AS $$ SELECT j.row_id FROM simetra.rights_journal j $$`
         ),
         fake(
           `CREATE FUNCTION simetra.rights_dimension_values_live(p_dimension uuid) RETURNS SETOF uuid ${shell} AS $$ SELECT NULL::uuid WHERE false $$`
@@ -181,13 +183,13 @@ describe("actor snapshot sources", () => {
         ),
       ],
     })
-    expect(found.unknown).toEqual([
-      {
+    expect(found.unknown).toEqual(
+      (["rights", "scopes"] as const).map((fact) => ({
         relation: "simetra.rights_journal",
-        fact: "rights",
-        via: "function:simetra.rights_mine_live()",
-      },
-    ])
+        fact,
+        via: "function:simetra.rights_my_scopes_live()",
+      }))
+    )
 
     // Через конвеєр: матеріалізоване подання моделі над таблицею виду.
     const files = snapshotSourcesDomain()

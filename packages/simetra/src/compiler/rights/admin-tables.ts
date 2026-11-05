@@ -9,6 +9,42 @@ import {
 } from "simetra/model"
 import { compareStrings } from "../diagnostics"
 import type { ParsedObject } from "../stages/files"
+import type { MineInputs } from "./functions"
+
+/**
+ * Колонки входів `rights_mine` — виходи вхідних CTE `mineBody` (Р3-15): одне
+ * місце для таблиць знімка, їхнього заповнення й читання гілкою знімка.
+ */
+export const INPUT_COLUMNS = {
+  typed: [
+    ["storage", "text"],
+    ["storage_id", "uuid"],
+    ["scope_kind_id", "uuid"],
+    ["scope", "uuid"],
+    ["container", "uuid"],
+    ["custom_role", "uuid"],
+    ["archetype", "uuid"],
+    ["level", "text"],
+    ["level_id", "uuid"],
+  ],
+  containers: [
+    ["level_id", "uuid"],
+    ["container", "uuid"],
+    ["scope_kind_id", "uuid"],
+    ["scope", "uuid"],
+  ],
+  deltas: [
+    ["storage", "text"],
+    ["storage_id", "uuid"],
+    ["custom_role", "uuid"],
+    ["scope_key", "uuid"],
+    ["effect", "text"],
+    ["object", "text"],
+    ["action", "text"],
+    ["extent", "text"],
+    ["dimension_id", "uuid"],
+  ],
+} as const satisfies Record<keyof MineInputs, readonly [string, string][]>
 
 /**
  * Стан механізму прав належить платформі, а не довіднику застосунку:
@@ -68,6 +104,12 @@ export function rightsAdminTables(
       nullsNotDistinct: false,
     })),
   })
+  const inputColumns = (
+    input: keyof typeof INPUT_COLUMNS
+  ): PhysicalColumn[] => [
+    column("xid", "bigint"),
+    ...INPUT_COLUMNS[input].map(([name, type]) => column(name, type, false)),
+  ]
   const asc = (...columns: string[]): PhysicalIndexKey[] =>
     columns.map((column) => ({ column }))
   const desc = (column: string): PhysicalIndexKey => ({
@@ -132,9 +174,48 @@ export function rightsAdminTables(
       ],
       ["xid", "fact"]
     ),
+    // Входи факту `rights` (Р3-15) — рядки вхідних CTE `rights_mine`, а не її
+    // вихід: вихід множить скоупи на проєкцію ролі, а входи ∝ призначенням і
+    // дельтам актора. Індекси — ключі з'єднань `held` і гілки `allow`.
     table(
-      "rights_tx_actor",
-      "rightsTxActor",
+      "rights_tx_typed",
+      "rightsTxTyped",
+      inputColumns("typed"),
+      undefined,
+      [asc("xid")]
+    ),
+    table(
+      "rights_tx_containers",
+      "rightsTxContainers",
+      inputColumns("containers"),
+      undefined,
+      [asc("xid", "level_id", "container")]
+    ),
+    table(
+      "rights_tx_deltas",
+      "rightsTxDeltas",
+      inputColumns("deltas"),
+      undefined,
+      [asc("xid", "storage", "custom_role", "scope_key")]
+    ),
+    table(
+      "rights_tx_holders",
+      "rightsTxHolders",
+      [
+        column("xid", "bigint"),
+        column("level", "text", false),
+        column("level_id", "uuid", false),
+        column("scope", "uuid", false),
+      ],
+      undefined,
+      [asc("xid")]
+    ),
+    // Кеш прав початку на COMMIT (Р3-15): одна повна оцінка над входами на
+    // транзакцію, а не на кожну перевірку черги. Рядок-маркер без рівня
+    // відрізняє «закешовано порожні права» від «ще не рахували».
+    table(
+      "rights_tx_start",
+      "rightsTxStart",
       [
         column("xid", "bigint"),
         column("level", "text", false),

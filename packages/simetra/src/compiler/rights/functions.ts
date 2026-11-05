@@ -128,7 +128,7 @@ const CURRENT: RightsUser = {
  * теж живі варіанти, бо публічна функція в транзакції зі знімком повернула б
  * знімок, а живий факт рахується лише з живих таблиць.
  */
-const LIVE: RightsUser = {
+export const LIVE: RightsUser = {
   user: CURRENT_USER,
   scopes: call(RIGHTS_FUNCTIONS.myScopesLive),
   members: (scopeKind) => call(RIGHTS_FUNCTIONS.myMembersLive, [scopeKind]),
@@ -367,19 +367,31 @@ export function buildRightsUnits(
       F.mine,
       [],
       table(MINE_COLUMNS),
-      mineBody(contracts, physical, attributeCase, CURRENT, false)
+      mineBody(
+        CURRENT,
+        false,
+        liveInputs(contracts, physical, attributeCase, CURRENT)
+      )
     ),
     live(
       F.mineLive,
       [],
       table(MINE_COLUMNS),
-      mineBody(contracts, physical, attributeCase, LIVE, false)
+      mineBody(
+        LIVE,
+        false,
+        liveInputs(contracts, physical, attributeCase, LIVE)
+      )
     ),
     variant(
       F.detailOf,
       [],
       table(DETAIL_COLUMNS),
-      mineBody(contracts, physical, attributeCase, of(F.detailOf), true)
+      mineBody(
+        of(F.detailOf),
+        true,
+        liveInputs(contracts, physical, attributeCase, of(F.detailOf))
+      )
     ),
     definer(
       F.any,
@@ -1125,29 +1137,79 @@ function visibleUsersBody(
 }
 
 /**
+ * Входи `rights_mine` (спека прав §5.1, Р3-15): рядки CTE `typed` (мої
+ * призначення, типізовані рівнем ролі), `containers` і `deltas`. Кожен —
+ * самодостатній запит: його читає `mineBody`, а знімок пише в таблиці входів
+ * дослівно, тож гілки знімка й живої оцінки — те саме тіло.
+ */
+export interface MineInputs {
+  typed: string
+  containers: string
+  deltas: string
+}
+
+/** Контракти, з яких генератори рахують входи `rights_mine`. */
+export type MineInputContracts = Pick<
+  RightsFunctionContracts,
+  "rights" | "rightsCatalogs" | "assignmentSources"
+>
+
+/**
+ * Входи `rights_mine` з живих таблиць для користувача `user`: призначення
+ * читають його «мої скоупи», тож `my_scopes` і `assignments` — усередині
+ * `typed`, а не CTE тіла, що входи лише читає.
+ */
+export function liveInputs(
+  contracts: MineInputContracts,
+  physical: PhysicalSnapshot,
+  style: AttributeCase,
+  user: RightsUser
+): MineInputs {
+  return {
+    typed: withCtes(
+      [
+        [
+          "my_scopes",
+          `SELECT s.scope_kind_id, s.scope, s.member\nFROM ${user.scopes} s`,
+        ],
+        ["assignments", assignmentsCte(contracts, physical, style, user)],
+      ],
+      typedCte(contracts.assignmentSources.length > 0)
+    ),
+    containers: containersCte(contracts.rights, physical, style),
+    deltas: deltasCte(contracts.rightsCatalogs, physical, style),
+  }
+}
+
+/** `WITH` з CTE `[ім'я, тіло, матеріалізація?]` перед запитом `tail`. */
+function withCtes(
+  ctes: readonly (readonly [string, string, string?])[],
+  tail: string
+): string {
+  return [
+    `WITH ${ctes.map(([name, sql, materialized = ""]) => `${name} AS ${materialized}(\n${indent(sql)}\n)`).join(",\n")}`,
+    tail,
+  ].join("\n")
+}
+
+/**
  * Права користувача (спека прав §5.1): призначення з довідників прав, рядки
  * їхніх ролей, замикання вимог і рядки «кожного користувача». Кожен
  * запобіжник — окрема умова, яку мутаційний DB-сценарій прибирає поодинці.
  * `detail` додає походження рядка (спека прав §5.1) — лише вихідними колонками: тіло
- * без них — рівно тіло `rights_mine`.
+ * без них — рівно тіло `rights_mine`. Входи — живі (`liveInputs`) чи зі
+ * знімка транзакції; `user` тіла — лише для рядків «кожного користувача».
  */
-function mineBody(
-  contracts: RightsFunctionContracts,
-  physical: PhysicalSnapshot,
-  style: AttributeCase,
-  user: RightsUser,
-  detail: boolean
+export function mineBody(
+  user: Pick<RightsUser, "user">,
+  detail: boolean,
+  inputs: MineInputs
 ): string {
   const via = (source: string) => (detail ? `, '${source}'::text AS via` : "")
   const closure = detail ? DETAIL_CLOSURE_COLUMNS : CLOSURE_COLUMNS
   const ctes: [string, string, string?][] = [
-    [
-      "my_scopes",
-      `SELECT s.scope_kind_id, s.scope, s.member\nFROM ${user.scopes} s`,
-    ],
-    ["assignments", assignmentsCte(contracts, physical, style, user)],
-    ["typed", typedCte(contracts.assignmentSources.length > 0)],
-    ["containers", containersCte(contracts.rights, physical, style)],
+    ["typed", inputs.typed],
+    ["containers", inputs.containers],
     [
       "held",
       // Контейнер — лише в архетипу контейнерного рівня й лише існуючий
@@ -1182,11 +1244,7 @@ function mineBody(
     // скоупленого виду веде колонкою скоупу, тож гілка `allow` рівняє і її
     // (`scope_key` зі скоупом призначення): кастомна роль — того самого
     // тенанта, що й призначення (спека прав §4.6), тож умова лише відкриває індекс.
-    [
-      "deltas",
-      deltasCte(contracts.rightsCatalogs, physical, style),
-      "NOT MATERIALIZED ",
-    ],
+    ["deltas", inputs.deltas, "NOT MATERIALIZED "],
     [
       "role_rows",
       // Кастомна роль — рядки архетипу без збігів `deny` (з точністю до
@@ -1248,17 +1306,19 @@ function mineBody(
     ["closure_1", closurePass("role_rows", closure)],
     ["closure_2", closurePass("closure_1", closure)],
   ]
-  return [
-    `WITH ${ctes.map(([name, sql, materialized = ""]) => `${name} AS ${materialized}(\n${indent(sql)}\n)`).join(",\n")}`,
-    `SELECT c.level, c.level_id, c.scope, c.container, c.object, c.action, c.extent, c.dimension_id${detail ? ", c.archetype AS role_id, c.custom_role AS custom_role, c.via AS via" : ""}`,
-    `FROM closure_2 c`,
-    `UNION`,
-    // «Кожен користувач» призначень не має: його рядки — без скоупу й
-    // контейнера, лише для дійсного користувача.
-    `SELECT r.level, r.level_id, NULL::uuid, NULL::uuid, p.object, p.action, p.extent, p.dimension_id${detail ? `, r.role_id AS role_id, NULL::uuid AS custom_role${via("archetype")}` : ""}`,
-    ...everyUserRows(),
-    `  AND ${user.user} IS NOT NULL`,
-  ].join("\n")
+  return withCtes(
+    ctes,
+    [
+      `SELECT c.level, c.level_id, c.scope, c.container, c.object, c.action, c.extent, c.dimension_id${detail ? ", c.archetype AS role_id, c.custom_role AS custom_role, c.via AS via" : ""}`,
+      `FROM closure_2 c`,
+      `UNION`,
+      // «Кожен користувач» призначень не має: його рядки — без скоупу й
+      // контейнера, лише для дійсного користувача.
+      `SELECT r.level, r.level_id, NULL::uuid, NULL::uuid, p.object, p.action, p.extent, p.dimension_id${detail ? `, r.role_id AS role_id, NULL::uuid AS custom_role${via("archetype")}` : ""}`,
+      ...everyUserRows(),
+      `  AND ${user.user} IS NOT NULL`,
+    ].join("\n")
+  )
 }
 
 /**
@@ -1414,7 +1474,7 @@ const ASSIGNMENT_COLUMNS: readonly Column[] = [
  * `typed`), у рядка довідника — `NULL`.
  */
 function assignmentsCte(
-  contracts: RightsFunctionContracts,
+  contracts: MineInputContracts,
   physical: PhysicalSnapshot,
   style: AttributeCase,
   user: RightsUser

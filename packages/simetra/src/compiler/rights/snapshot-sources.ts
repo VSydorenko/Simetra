@@ -18,7 +18,12 @@ import {
   SNAPSHOT_TABLES,
   type SnapshotFact,
 } from "./actor-snapshot"
-import { RIGHTS_FUNCTIONS } from "./functions"
+import {
+  LIVE,
+  RIGHTS_FUNCTIONS,
+  liveInputs,
+  type MineInputs,
+} from "./functions"
 import { fullAccessHolderRows, type GuardContracts } from "./guard-units"
 
 /** Чому таблицю, яку читають факти, знімок не стереже тригером (Р3-6). */
@@ -52,9 +57,11 @@ export interface SnapshotSourcesInput {
   plpgsql: PlpgsqlParser
 }
 
-/** Живі варіанти, з яких знімок рахує кожен факт. */
-const LIVE_HEADS: Record<SnapshotFact, QualifiedName> = {
-  rights: RIGHTS_FUNCTIONS.mineLive,
+/**
+ * Живі варіанти, з яких знімок рахує факт; факт `rights` знімок рахує не
+ * варіантом, а запитами входів (`heads`).
+ */
+const LIVE_HEADS: Record<Exclude<SnapshotFact, "rights">, QualifiedName> = {
   scopes: RIGHTS_FUNCTIONS.myScopesLive,
   values: RIGHTS_FUNCTIONS.dimensionValuesLive,
   scopeSets: RIGHTS_FUNCTIONS.scopeSetLive,
@@ -91,7 +98,7 @@ type Classified =
 /**
  * Джерела фактів актора (спека прав §7, Р3-6) — аналізом тих самих тіл, що
  * рахують факти: замикання викликів живого варіанта факту (а для `rights` —
- * ще й рядків носіїв `fullAccess`) над повним переліком одиниць, бо
+ * запитів входів `rights_mine` і рядків носіїв `fullAccess`) над повним переліком одиниць, бо
  * `reachableUnits` мовчки пропускає нерозв'язаний виклик. Кожне відношення
  * класифікується: таблиця виду — джерело; подання моделі прозоре;
  * матеріалізоване подання — виняток, лише коли всі його базові відношення —
@@ -250,16 +257,51 @@ export function snapshotSources(input: SnapshotSourcesInput): SnapshotSources {
 }
 
 /**
- * Голови обходу факту: його живий варіант, а для `rights` — ще й рядки носіїв
- * `fullAccess` кожного довідника, які тіло знімка пише поруч із правами.
- * Рядки носіїв — не функція моделі, тож обгортаються в одиницю лише для
- * обходу.
+ * Голови обходу факту: його живий варіант, а для `rights` — запити входів
+ * `rights_mine` (Р3-15) і рядки носіїв `fullAccess` кожного довідника, які
+ * тіло знімка пише поруч. Запити входів і рядки носіїв — не функції моделі,
+ * тож обгортаються в одиницю лише для обходу; входи — без звуження до
+ * призначень знімка: їхні читання — надмножина, а таблиці знімка серед
+ * джерел не потрібні.
  */
 function heads(
   fact: SnapshotFact,
   input: SnapshotSourcesInput,
   units: readonly VerbatimUnit[]
 ): VerbatimUnit[] {
+  const wrap = (name: string, returns: string, body: string) =>
+    asVerbatim({
+      ...generatedUnit(
+        `CREATE FUNCTION ${PLATFORM_SCHEMA}.${name}() RETURNS ${returns} LANGUAGE sql STABLE SET search_path = '' AS $snapshot$\n${body}\n$snapshot$;`,
+        PLATFORM_SCHEMA,
+        input.parse
+      ),
+    })
+  if (fact === "rights") {
+    const inputs = liveInputs(
+      input.contracts,
+      input.physical,
+      input.attributeCase,
+      LIVE
+    )
+    return [
+      ...(Object.keys(inputs) as (keyof MineInputs)[]).map((name) =>
+        wrap(`rights_snapshot_input_${name}`, "SETOF record", inputs[name])
+      ),
+      ...input.contracts.rightsCatalogs.map((catalog, index) =>
+        wrap(
+          `rights_snapshot_holders_${index}`,
+          "TABLE (scope uuid, actor uuid)",
+          fullAccessHolderRows(
+            catalog,
+            input.contracts,
+            input.physical,
+            input.attributeCase
+          )
+        )
+      ),
+    ]
+  }
   const live = LIVE_HEADS[fact]
   const found = units.filter(
     (u) =>
@@ -267,17 +309,5 @@ function heads(
   )
   if (found.length === 0)
     throw new Error(`internal: missing live variant ${key(live)}`)
-  if (fact !== "rights") return found
-  return [
-    ...found,
-    ...input.contracts.rightsCatalogs.map((catalog, index) =>
-      asVerbatim({
-        ...generatedUnit(
-          `CREATE FUNCTION ${PLATFORM_SCHEMA}.rights_snapshot_holders_${index}() RETURNS TABLE (scope uuid, actor uuid) LANGUAGE sql STABLE SET search_path = '' AS $snapshot$\n${fullAccessHolderRows(catalog, input.contracts, input.physical, input.attributeCase)}\n$snapshot$;`,
-          PLATFORM_SCHEMA,
-          input.parse
-        ),
-      })
-    ),
-  ]
+  return found
 }

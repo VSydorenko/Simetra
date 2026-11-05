@@ -37,9 +37,19 @@ import {
   FACT_TABLE,
   SNAPSHOT_TABLES,
   hasActorSnapshot,
+  inputColumns,
+  snapshotInputs,
   type SnapshotFact,
 } from "./actor-snapshot"
-import { RIGHTS_FUNCTIONS, ZERO_UUID, type ScopeSetFunction } from "./functions"
+import {
+  LIVE,
+  RIGHTS_FUNCTIONS,
+  ZERO_UUID,
+  liveInputs,
+  mineBody,
+  uuidLiteral,
+  type ScopeSetFunction,
+} from "./functions"
 import { generatedTableFunctionName } from "./generated-names"
 import { rightsGuardNames } from "./guard-names"
 import { effectiveHolderRows } from "./holders"
@@ -314,24 +324,73 @@ function truncateBody(table: PhysicalTable): string {
 const HEADER = ref(SNAPSHOT_TABLES.header)
 
 /**
- * Рядки факту `rights` знімка: права актора з живого варіанта й рядки
- * носіїв `fullAccess` цього актора. Одне місце форми факту: перевірка
- * приросту читає ці рядки як «до», а `v_actor` — актор знімка.
+ * Рядки факту `rights` знімка (Р3-15): входи `rights_mine` тими самими
+ * генераторами, що й живий варіант, з живим користувачем — фільтри
+ * прийнятих джерел діють на заповненні самі. Контейнери й дельти — лише ті,
+ * на які посилаються призначення актора: інших `rights_mine` не читає
+ * (`held` з'єднує контейнер за рівнем і id, гілки дельт — за кастомною
+ * роллю), а повна копія множила б знімок на всіх тенантів. Умова
+ * `scope_key` — та сама, що в гілці `allow`: вона відкриває індекс ТЧ дельт.
+ * Носії `fullAccess` — лише цього актора; `v_actor` — актор знімка.
  */
 function rightsFactRows(
   contracts: GuardContracts,
   physical: PhysicalSnapshot,
   style: AttributeCase
 ): string[] {
-  const actor = ref(SNAPSHOT_TABLES.actor)
+  const inputs = liveInputs(contracts, physical, style, LIVE)
+  const T = SNAPSHOT_TABLES
+  const held = (condition: string) =>
+    `WHERE EXISTS (SELECT 1 FROM ${ref(T.typed)} t WHERE t.xid = txid_current() AND ${condition})`
   return [
-    `INSERT INTO ${actor} (xid, level, level_id, scope, container, object, action, extent, dimension_id, full_access)`,
-    `SELECT txid_current(), r.level, r.level_id, r.scope, r.container, r.object, r.action, r.extent, r.dimension_id, false FROM ${ref(RIGHTS_FUNCTIONS.mineLive)}() r;`,
+    `INSERT INTO ${ref(T.typed)} (xid, ${inputColumns("typed")})`,
+    `SELECT txid_current(), ${inputColumns("typed", "t")} FROM (${inputs.typed}) t;`,
+    `INSERT INTO ${ref(T.containers)} (xid, ${inputColumns("containers")})`,
+    `SELECT txid_current(), ${inputColumns("containers", "k")} FROM (${inputs.containers}) k`,
+    `${held("t.level = 'container' AND t.level_id = k.level_id AND t.container = k.container")};`,
+    `INSERT INTO ${ref(T.deltas)} (xid, ${inputColumns("deltas")})`,
+    `SELECT txid_current(), ${inputColumns("deltas", "d")} FROM (${inputs.deltas}) d`,
+    `${held(`t.storage = d.storage AND t.storage_id IS NOT DISTINCT FROM d.storage_id AND t.custom_role = d.custom_role AND d.scope_key = coalesce(t.scope, ${uuidLiteral(ZERO_UUID)})`)};`,
     ...contracts.rightsCatalogs.flatMap((catalog) => [
-      `INSERT INTO ${actor} (xid, level, level_id, scope, full_access)`,
-      `SELECT txid_current(), ${sqlLiteral(catalog.level.level)}, ${catalog.level.level === "scope" ? `${sqlLiteral(catalog.level.scopeKindId)}::uuid` : "NULL::uuid"}, h.scope, true`,
+      `INSERT INTO ${ref(T.holders)} (xid, level, level_id, scope)`,
+      `SELECT txid_current(), ${sqlLiteral(catalog.level.level)}, ${catalog.level.level === "scope" ? `${sqlLiteral(catalog.level.scopeKindId)}::uuid` : "NULL::uuid"}, h.scope`,
       `FROM (${fullAccessHolderRows(catalog, contracts, physical, style)}) h WHERE h.actor IS NOT DISTINCT FROM v_actor;`,
     ]),
+  ]
+}
+
+/**
+ * Права актора на початок транзакції `xid` (Р3-15): `mineBody` над входами
+ * знімка, повний; користувач — актор заголовка факту `rights`, тож рядки
+ * «кожного користувача» — його, хоч би хто виконував перевірку.
+ */
+export function startRights(xid: string): string {
+  return mineBody(
+    {
+      user: `(SELECT h.actor FROM ${HEADER} h WHERE h.xid = ${xid} AND h.fact = 'rights')`,
+    },
+    false,
+    snapshotInputs(xid)
+  )
+}
+
+/**
+ * Кеш прав початку на COMMIT (Р3-15): перша перевірка черги транзакції, що
+ * його читає, рахує права початку раз — замість повної оцінки в кожній
+ * перевірці. Рядки носіїв — `full_access`; маркер без рівня пишеться
+ * завжди, щоб порожні права теж були «закешовані». Кеш — рядки транзакції,
+ * тож відкат точки збереження, що його заповнила, прибирає і його.
+ */
+function startCache(xid: string): string[] {
+  const start = ref(SNAPSHOT_TABLES.start)
+  return [
+    `IF NOT EXISTS (SELECT 1 FROM ${start} WHERE xid = ${xid}) THEN`,
+    `  INSERT INTO ${start} (xid, level, level_id, scope, container, object, action, extent, dimension_id, full_access)`,
+    `  SELECT ${xid}, r.level, r.level_id, r.scope, r.container, r.object, r.action, r.extent, r.dimension_id, false FROM (${startRights(xid)}) r;`,
+    `  INSERT INTO ${start} (xid, level, level_id, scope, full_access)`,
+    `  SELECT ${xid}, h.level, h.level_id, h.scope, true FROM ${ref(SNAPSHOT_TABLES.holders)} h WHERE h.xid = ${xid};`,
+    `  INSERT INTO ${start} (xid, full_access) VALUES (${xid}, false);`,
+    "END IF;",
   ]
 }
 
@@ -380,12 +439,21 @@ function factRows(
   }
 }
 
-/** Живі варіанти, які кличе тіло знімка факту. */
-const FACT_LIVE: Record<SnapshotFact, QualifiedName> = {
-  rights: RIGHTS_FUNCTIONS.mineLive,
-  scopes: RIGHTS_FUNCTIONS.myScopesLive,
-  values: RIGHTS_FUNCTIONS.dimensionValuesLive,
-  scopeSets: RIGHTS_FUNCTIONS.scopeSetLive,
+/**
+ * Функції, які кличе тіло знімка факту: для `rights` — генератори входів
+ * (мої скоупи, ролі, ключі джерел) і носії `fullAccess`, для решти — живий
+ * варіант.
+ */
+const FACT_CALLS: Record<SnapshotFact, readonly string[]> = {
+  rights: [
+    `${ref(RIGHTS_FUNCTIONS.myScopesLive)}()`,
+    `${ref(RIGHTS_FUNCTIONS.roles)}()`,
+    `${ref(RIGHTS_FUNCTIONS.sourceKeys)}()`,
+    `${ref(RIGHTS_FUNCTIONS.fullAccessRoles)}()`,
+  ],
+  scopes: [`${ref(RIGHTS_FUNCTIONS.myScopesLive)}()`],
+  values: [`${ref(RIGHTS_FUNCTIONS.dimensionValuesLive)}(uuid)`],
+  scopeSets: [`${ref(RIGHTS_FUNCTIONS.scopeSetLive)}(uuid)`],
 }
 
 const factPresent = (fact: SnapshotFact) =>
@@ -699,11 +767,11 @@ function escalationSql(
   before: string,
   storageKind: string
 ): string {
-  const actor = ref(SNAPSHOT_TABLES.actor)
+  const start = ref(SNAPSHOT_TABLES.start)
   return [
     "IF NOT v_pending.maintenance AND EXISTS (",
     `  SELECT 1 FROM ((${after}) EXCEPT (${before})) g`,
-    `  WHERE NOT EXISTS (SELECT 1 FROM ${actor} s WHERE s.xid = v_pending.xid`,
+    `  WHERE NOT EXISTS (SELECT 1 FROM ${start} s WHERE s.xid = v_pending.xid`,
     "    AND (",
     "      (g.level = 'global' AND s.level = 'global') OR",
     "      (g.level = 'scope' AND s.level = 'scope' AND s.level_id = g.level_id AND s.scope = g.scope) OR",
@@ -833,7 +901,8 @@ function containerStorageKind(contracts: GuardContracts): string {
  */
 function actorCheck(contracts: GuardContracts): string {
   const after = `SELECT ${GRANT_COLUMNS} FROM ${ref(RIGHTS_FUNCTIONS.mineLive)}()`
-  const before = `SELECT ${GRANT_COLUMNS} FROM ${ref(SNAPSHOT_TABLES.actor)} WHERE xid = v_pending.xid AND NOT full_access`
+  // Маркер кешу рівня не має: рядком прав він не є.
+  const before = `SELECT ${GRANT_COLUMNS} FROM ${ref(SNAPSHOT_TABLES.start)} WHERE xid = v_pending.xid AND NOT full_access AND level IS NOT NULL`
   return [
     "IF v_pending.kind = 'actor' THEN",
     `  IF NOT v_pending.maintenance AND EXISTS (SELECT 1 FROM ${HEADER} WHERE xid = v_pending.xid AND actor IS DISTINCT FROM ${ref(platform(CURRENT_USER_FUNCTION_NAME))}()) THEN ${refusal(COMMAND_CORE_ERRORS.forbidden.rightsContext)} END IF;`,
@@ -862,6 +931,11 @@ function checkBody(
     `  SELECT * INTO v_pending FROM ${ref(platform("rights_tx_pending"))} p`,
     "  WHERE p.xid = NEW.xid AND p.kind = NEW.kind AND p.scope_kind_id = NEW.scope_kind_id AND p.key = NEW.key FOR UPDATE;",
     "  IF NOT FOUND THEN RETURN NULL; END IF;",
+    // Кеш — до гілок, що читають права початку; режим обслуговування ⊆ не
+    // судить, тож кешу не потребує.
+    "  IF v_pending.kind IN ('actor', 'role', 'assignment') AND NOT v_pending.maintenance THEN",
+    ...startCache("v_pending.xid").map((line) => `    ${line}`),
+    "  END IF;",
     ...contracts.rightsCatalogs.map((catalog) =>
       catalogCheck(catalog, contracts, physical, style)
     ),
@@ -1101,11 +1175,10 @@ export function buildRightsGuardUnits(
       owner,
       [
         unitNode(COMMAND_FUNCTIONS.current),
-        ...facts.map((fact) => ({
-          type: "unit" as const,
-          identity: `function:${ref(FACT_LIVE[fact])}(${fact === "rights" || fact === "scopes" ? "" : "uuid"})`,
-        })),
-        ...[SNAPSHOT_TABLES.header, ...facts.map((f) => FACT_TABLE[f])].map(
+        ...[...new Set(facts.flatMap((fact) => FACT_CALLS[fact]))].map(
+          (fn) => ({ type: "unit" as const, identity: `function:${fn}` })
+        ),
+        ...[SNAPSHOT_TABLES.header, ...facts.flatMap((f) => FACT_TABLE[f])].map(
           (t) => ({ type: "table" as const, ...t })
         ),
       ]
@@ -1292,9 +1365,14 @@ export function buildRightsGuardUnits(
     unitNode(RIGHTS_FUNCTIONS.mineLive),
     unitNode(RIGHTS_FUNCTIONS.roles),
     unitNode(RIGHTS_FUNCTIONS.domain),
+    unitNode(RIGHTS_FUNCTIONS.projection),
+    unitNode(RIGHTS_FUNCTIONS.requires),
     { type: "table", schema: PLATFORM_SCHEMA, name: "rights_tx_pending" },
-    { type: "table", ...SNAPSHOT_TABLES.header },
-    { type: "table", ...SNAPSHOT_TABLES.actor },
+    ...[
+      SNAPSHOT_TABLES.header,
+      ...FACT_TABLE.rights,
+      SNAPSHOT_TABLES.start,
+    ].map((t) => ({ type: "table" as const, ...t })),
     { type: "table", schema: PLATFORM_SCHEMA, name: "rights_journal" },
   ])
   add(
