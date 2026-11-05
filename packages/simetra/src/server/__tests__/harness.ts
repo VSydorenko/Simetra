@@ -2,7 +2,7 @@ import type { Operation } from "simetra/model"
 import { vi } from "vitest"
 import { createCommandRuntime, type CommandRuntimeOptions } from "../runtime"
 import { fakeDatabase, type Answer, type Call } from "./fake-database"
-import { COMPANY, ID, catalog } from "./fixtures"
+import { COMPANY, ID, catalog, rootCatalog } from "./fixtures"
 
 /**
  * Обв'язка тестів команд: оператори транзакції цілими рядками, відповіді
@@ -127,3 +127,54 @@ export const assignPhase = (id: string) => [
     null,
   ]),
 ]
+
+export const ORGANIZATION = { kind: "Catalog" as const, name: "Organization" }
+export const ORG_MEMBER = { kind: "Catalog" as const, name: "OrgMember" }
+export const BRANCH = { kind: "Catalog" as const, name: "Branch" }
+/** Id кореня й рядка членства, які генерує T3 (Р-A6-20). */
+export const ROOT = "55555555-5555-4555-8555-555555555555"
+export const MEMBER_ROW = "66666666-6666-4666-8666-666666666666"
+export const CREATE_ROOT = "$1::jsonb, $2::jsonb, $3::uuid"
+
+/** Id генерує T3: тест підставляє їх по черзі — корінь, далі рядок членства. */
+export const generatedIds = (...ids: string[]) => {
+  const spy = vi.spyOn(globalThis.crypto, "randomUUID")
+  for (const id of ids)
+    spy.mockReturnValueOnce(
+      id as `${string}-${string}-${string}-${string}-${string}`
+    )
+  return spy
+}
+
+/** Результат ядра кореня (Р-A6-10): обидва рядки видимі творцю. */
+export const rootResult = (
+  root: Record<string, unknown> = { id: ROOT, version: 1, code: "A" },
+  member: Record<string, unknown> | null = {
+    id: MEMBER_ROW,
+    version: 1,
+    org_id: ROOT,
+    user_id: USER,
+    title: "T",
+  }
+) => JSON.stringify({ root, member })
+
+/** Рантайм над каталогом із коренями; ядро кореня відповідає `rootResult`. */
+export const setupRoots = (
+  override: Override = () => undefined,
+  options: Partial<CommandRuntimeOptions> = {}
+) =>
+  setup(
+    (text, params) =>
+      override(text, params) ??
+      (text.includes("_create_root")
+        ? { rows: [{ r: rootResult() }] }
+        : undefined),
+    { catalog: rootCatalog, ...options }
+  )
+
+export const createOrganization = {
+  action: "create",
+  object: ORGANIZATION,
+  values: { code: "A" },
+  creatorMember: { title: "T" },
+} satisfies Operation

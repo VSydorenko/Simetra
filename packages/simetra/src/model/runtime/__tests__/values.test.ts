@@ -61,8 +61,8 @@ const { attributes } = runtimeObjectSchema.parse({
 /**
  * Три споживачі одного обходу (Р-A6-13): шапка `values` (грант вставки чи
  * оновлення), рядок ТЧ (ключ рядка пише викликач, шляхи з префіксом) і
- * `creatorMember` (примушені ключі, префікс). Очікування перенесено з тестів
- * `encodeMemberValues` і обходу `writeAttributes` до злиття.
+ * `creatorMember` (примушені ключі, префікс): шляхи й порядок помилок у
+ * всіх трьох однакові.
  */
 const HEADER: EncodeAttributesOptions = {
   allowed: (a) => a.update,

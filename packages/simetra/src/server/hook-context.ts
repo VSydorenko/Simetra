@@ -1,12 +1,8 @@
 import { AsyncLocalStorage } from "node:async_hooks"
-import type {
-  CommandError,
-  HookContext,
-  Operation,
-  RuntimeObject,
-} from "simetra/model"
+import type { CommandError, HookContext, RuntimeObject } from "simetra/model"
 import { decodeRow } from "./decode"
 import { CommandFailure } from "./errors"
+import type { PreparedOperation } from "./phase"
 import { prepareRead } from "./read"
 import type { Transaction } from "./transaction"
 
@@ -21,7 +17,7 @@ export interface Frame {
 /** A phase as its hooks see it. */
 export interface HookPhase {
   object: RuntimeObject
-  op: Operation
+  op: PreparedOperation
   /** Новий на кожну фазу: дані хуків не переходять у фазу `ctx.run` і в повтор. */
   additionalProperties: Map<string, unknown>
   /** Validates and runs a phase started by `ctx.run`. */

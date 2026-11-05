@@ -37,12 +37,16 @@ const tabularSectionsSchema = z.record(
 
 /** One operation of a command, by logical names. */
 export const operationSchema = z.discriminatedUnion("action", [
+  // `id` обов'язковий, крім кореня скоупу: його id генерує T3; а
+  // `creatorMember` — лише в кореня виду з творцем (спека П4 §6.13). Обидва
+  // факти — у каталозі, тож їх перевіряє T3, а не схема.
   z.strictObject({
     action: z.literal("create"),
     object: metadataRefSchema,
-    id: rowIdSchema,
+    id: rowIdSchema.optional(),
     values: valuesSchema.optional(),
     tabularSections: tabularSectionsSchema.optional(),
+    creatorMember: valuesSchema.optional(),
   }),
   z.strictObject({
     action: z.literal("update"),

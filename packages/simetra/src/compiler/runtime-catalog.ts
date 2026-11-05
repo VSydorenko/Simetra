@@ -8,6 +8,7 @@ import {
   type RuntimeConstraint,
   type RuntimeObject,
   type RuntimeOperationTarget,
+  type RuntimeRootCreate,
   type RuntimeSection,
 } from "simetra/model"
 import type {
@@ -93,6 +94,9 @@ function runtimeObject(
     elements: entity.elements,
   })
   const scope = table.columns.find((c) => c.name === contract.scopeColumn)
+  const membership = facts.model.contracts.membership.find(
+    (m) => m.objectId === object.id
+  )
   const target = (
     fn: QualifiedName,
     context: string
@@ -113,6 +117,9 @@ function runtimeObject(
     ...(scope?.origin.scopeKindId === undefined
       ? {}
       : { scopeKindId: scope.origin.scopeKindId, scopeColumn: scope.name }),
+    ...(membership === undefined
+      ? {}
+      : { membership: { userColumn: membership.userColumn } }),
     // Ключ — лише з `op.id`, версія — з `expectedVersion`: реквізитами вони не є.
     attributes: attributes(
       fields.filter(
@@ -165,6 +172,16 @@ function runtimeObject(
       ...(actions.create === undefined
         ? {}
         : { create: target(functions.save, actions.create) }),
+      // Корінь виду скоупу створює окреме ядро (спека П4 §6.13); `save`
+      // кореня гілки створення не має, тож обидві форми не збігаються.
+      ...(functions.createRoot === undefined || actions.createRoot === undefined
+        ? {}
+        : {
+            create: {
+              ...target(functions.createRoot, actions.createRoot),
+              root: rootCreate(object.id, facts.model),
+            },
+          }),
       update: target(functions.save, actions.update),
       ...(functions.markDeletion === undefined ||
       actions.markDeletion === undefined
@@ -178,6 +195,28 @@ function runtimeObject(
     },
     constraints: constraints(table, facts),
   }
+}
+
+/**
+ * Довідник членства кореня — лише на виді з роллю `rootCreator` (Рх19): на
+ * виді без неї ядро кореня відхиляє `creatorMember`.
+ */
+function rootCreate(rootId: string, model: CompiledModel): RuntimeRootCreate {
+  const kind = model.scopeKinds.find(
+    (k) => "objectId" in k.root && k.root.objectId === rootId
+  )
+  const creator = model.contracts.roles.some(
+    (r) =>
+      r.rootCreator &&
+      r.assignedOn.level === "scope" &&
+      r.assignedOn.scopeKindId === kind?.id
+  )
+  const membership = model.contracts.membership.find(
+    (m) => m.scopeKindId === kind?.id
+  )
+  return creator && membership !== undefined
+    ? { membership: membership.objectId }
+    : {}
 }
 
 function attributes(

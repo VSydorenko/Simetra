@@ -26,7 +26,13 @@ export class CommandFailure extends Error {
 
 /** The phase a database error came from; `undefined` — `COMMIT`. */
 export type ErrorPhase =
-  | { kind: "write"; object: RuntimeObject; operation: ObjectOperation }
+  | {
+      kind: "write"
+      object: RuntimeObject
+      operation: ObjectOperation
+      /** Довідник членства фази створення кореня: його рядок пише ядро кореня. */
+      membership?: RuntimeObject
+    }
   | { kind: "read"; object: RuntimeObject }
 
 /** Значення причин запису T0: усе, крім `errcode` і `message`. */
@@ -104,8 +110,30 @@ function pathOf(table: Table, column: string): string | undefined {
     : `${table.prefix}${attribute.name}`
 }
 
+const MEMBER = E.invalid.creatorMember
+
+/** Основна таблиця довідника членства під шляхом `creatorMember.` (спека П4 §6.13). */
+const memberTable = (membership: RuntimeObject): Table => ({
+  ...tablesOf(membership)[0]!,
+  prefix: `${MEMBER}.`,
+})
+
 /** Шлях за `DETAIL` `22023` ядра (таблиця брифу Задачі 7). */
-function invalidOf(object: RuntimeObject, detail: string): CommandError {
+function invalidOf(
+  object: RuntimeObject,
+  detail: string,
+  membership: RuntimeObject | undefined
+): CommandError {
+  // `creatorMember.<колонка>` — колонка рядка членства; сам аргумент і його
+  // форма (`p_member` перевірки) — шлях `creatorMember`.
+  if (detail === MEMBER || detail.startsWith(`${MEMBER}.`)) {
+    const column = detail.slice(MEMBER.length + 1)
+    const path =
+      membership === undefined || column === ""
+        ? undefined
+        : pathOf(memberTable(membership), column)
+    return { code: "command.invalid", path: path ?? MEMBER }
+  }
   const [main, ...sections] = tablesOf(object)
   const column = pathOf(main, detail)
   if (column !== undefined) return { code: "command.invalid", path: column }
@@ -190,7 +218,11 @@ export function mapDatabaseError(
       return message === E.invalid.message &&
         detail !== undefined &&
         phase !== undefined
-        ? invalidOf(phase.object, detail)
+        ? invalidOf(
+            phase.object,
+            detail,
+            phase.kind === "write" ? phase.membership : undefined
+          )
         : INTERNAL
     case "22P02":
       // Читання передає значення `where` зв'язаними параметрами з приведенням:
@@ -209,6 +241,17 @@ export function mapDatabaseError(
       return path === undefined ? INTERNAL : { code: "command.invalid", path }
     }
     case "23502": {
+      // Обов'язковий реквізит рядка членства, який вставляє ядро кореня, —
+      // вада `creatorMember`, а не обмеження таблиці (спека П4 §6.13).
+      const membership = phase?.kind === "write" ? phase.membership : undefined
+      if (
+        membership !== undefined &&
+        error.table === membership.table.name &&
+        error.column !== undefined
+      ) {
+        const path = pathOf(memberTable(membership), error.column)
+        return path === undefined ? INTERNAL : { code: "command.invalid", path }
+      }
       const table = tableOf(catalog, phase, error.table)
       const path =
         table === undefined || error.column === undefined

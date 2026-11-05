@@ -17,7 +17,7 @@ import {
 } from "../../compiler/__tests__/fixtures/rights"
 import { CommandFailure, mapDatabaseError } from "../errors"
 import type { DatabaseError } from "../port"
-import { sample } from "./fixtures"
+import { orgMember, organization, rootCatalog, sample } from "./fixtures"
 
 // Обмеження каталогу — лише те, що читає мапінг; решта об'єкта — `sample`.
 // CHECK тут немає: його колонку дає лише компілятор (Р-A3-21), тож мапінг
@@ -466,5 +466,60 @@ describe("mapDatabaseError on a compiled CHECK", () => {
     expect(JSON.stringify(new CommandFailure(error))).not.toContain(
       "secret-value"
     )
+  })
+})
+
+/**
+ * Відмови рядка членства, який вставляє ядро кореня (спека П4 §6.13): шлях —
+ * під `creatorMember.` за довідником членства фази, а не обмеження таблиці.
+ */
+describe("mapDatabaseError in a scope root phase", () => {
+  const rootPhase = {
+    kind: "write" as const,
+    object: organization,
+    operation: "create" as const,
+    membership: orgMember,
+  }
+  const mapRoot = (fields: Partial<DatabaseError>) =>
+    mapDatabaseError(db(fields), rootCatalog, rootPhase)
+  const invalidDetail = (detail: string) => ({
+    code: "22023",
+    message: "command.invalid",
+    detail,
+  })
+
+  it.each<[string, string]>([
+    ["creatorMember.title", "creatorMember.title"],
+    ["creatorMember.user_id", "creatorMember.user"],
+    ["creatorMember", "creatorMember"],
+    // Форма аргументу перевірки членства — сам `creatorMember`.
+    ["creatorMember.p_member", "creatorMember"],
+    // Колонка шапки кореня — шлях кореня, як і без членства.
+    ["code", "code"],
+  ])("22023 DETAIL %s is path %s", (detail, path) => {
+    expect(mapRoot(invalidDetail(detail))).toEqual({
+      code: "command.invalid",
+      path,
+    })
+  })
+
+  it("23502 on the membership table is command.invalid with the member path", () => {
+    expect(
+      mapRoot({ code: "23502", table: "org_member", column: "title" })
+    ).toEqual({ code: "command.invalid", path: "creatorMember.title" })
+  })
+
+  it("23502 on the membership table outside a root phase stays a constraint", () => {
+    expect(
+      mapDatabaseError(
+        db({ code: "23502", table: "org_member", column: "title" }),
+        rootCatalog,
+        { kind: "write", object: orgMember, operation: "create" }
+      )
+    ).toEqual({
+      code: "command.constraint",
+      kind: "notNull",
+      attributes: ["title"],
+    })
   })
 })

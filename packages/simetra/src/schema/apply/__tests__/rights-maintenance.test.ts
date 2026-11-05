@@ -90,6 +90,8 @@ interface State {
   root?: boolean
   member?: string | null
   effective?: boolean
+  /** Колонка першого порушення перевірки рядка членства; `null` — без порушень. */
+  violation?: string | null
   /** Помилка на операторі, що задовольняє `when`. */
   fail?: { when: (sql: string) => boolean; error: Error }
   commit?: Error
@@ -111,6 +113,7 @@ const aliasOf = (sql: string): string | undefined =>
     "root",
     "member",
     "effective",
+    "violation",
     "id",
   ].find((alias) => sql.includes(` AS ${alias}`))
 
@@ -142,6 +145,8 @@ function fakeDatabase(state: State, applied: string) {
         return state.member == null ? [] : [{ member: state.member }]
       case "effective":
         return yes(state.effective ?? true)
+      case "violation":
+        return [{ violation: state.violation ?? null }]
       case "id":
         return [{ id: generated[generatedCount++]! }]
       default:
@@ -574,6 +579,50 @@ describe("runRightsMaintenance: refusals inside the transaction", () => {
     }
   )
 
+  // Посилання `member` перевіряє та сама згенерована функція, що й ядро
+  // кореня (Р-A6-12): окремим оператором від власника з `row_security = off`.
+  const isCheck = (s: Sent) => s.sql.includes("_simetra_member_check")
+
+  it("checks the new member row by the generated function before the mode", async () => {
+    const { fake, result } = run(tenant({ member: { description: "x" } }))
+    expect((await result).ok).toBe(true)
+    const sent = fake.statements()
+    const membership = model.contracts.membership[0]!
+    const check = indexOf(sent, isCheck)
+    expect(sent[check]).toEqual({
+      sql: `SELECT ${membership.table.schema}.${membership.table.name}_simetra_member_check($1::jsonb, $2::uuid) AS violation`,
+      params: [JSON.stringify({ description: "x" }), SCOPE],
+    })
+    const rowSecurity = indexOf(sent, (s) => s.sql.includes("row_security"))
+    expect(check).toBeGreaterThan(rowSecurity)
+    expect(check).toBeLessThan(indexOf(sent, isMode))
+    // Без `member` перевіряється рядок за замовчуванням: типові значення теж
+    // можуть посилатися.
+    const bare = run(tenant())
+    expect((await bare.result).ok).toBe(true)
+    expect(bare.fake.statements().find(isCheck)?.params).toEqual(["{}", SCOPE])
+  })
+
+  it("a member reference violation is invalid-member with the attribute path, before any write", async () => {
+    const membership = model.contracts.membership[0]!
+    const object = buildRuntimeCatalog(model).objects.find(
+      (o) => o.id === membership.objectId
+    )!
+    const description = object.attributes.find((a) => a.name === "description")!
+    const { fake, result } = run(tenant(), { violation: description.column })
+    expect(await result).toMatchObject({
+      ok: false,
+      diagnostic: {
+        code: "maintenance.invalid-member",
+        params: { path: "description" },
+      },
+    })
+    const sent = fake.statements()
+    expect(sent.some(isMode)).toBe(false)
+    expect(sent.some((s) => isWrite(s.sql))).toBe(false)
+    expect(fake.log.at(-1)).toBe("ROLLBACK")
+  })
+
   it("assigns the role to an existing member without a new member row", async () => {
     const { fake, result } = run(tenant(), { member: MEMBER })
     expect(await result).toEqual({
@@ -583,6 +632,7 @@ describe("runRightsMaintenance: refusals inside the transaction", () => {
     const writes = fake.statements().filter((s) => isWrite(s.sql))
     expect(writes).toHaveLength(1)
     expect(writes[0]!.params.at(-2)).toBe(MEMBER)
+    expect(fake.statements().some(isCheck)).toBe(false)
   })
 
   it.each<[string, () => CompiledModel]>([

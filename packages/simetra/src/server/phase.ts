@@ -2,6 +2,7 @@ import {
   COMMAND_SETTING,
   OPERATION_EVENTS,
   batchSchema,
+  encodeAttributes,
   isPlainObject,
   operationSchema,
   type CommandContext,
@@ -13,7 +14,7 @@ import {
   type RuntimeObject,
   type RuntimeOperationTarget,
 } from "simetra/model"
-import { decodeRow } from "./decode"
+import { decodeRecord } from "./decode"
 import { CommandFailure } from "./errors"
 import { callHook, type HookPhase } from "./hook-context"
 import { ident, issuePath, literal } from "./read"
@@ -24,6 +25,22 @@ import { encodeItem } from "./values"
 interface Target {
   object: RuntimeObject
   target: RuntimeOperationTarget
+}
+
+/**
+ * An operation after {@link prepareInput}: `id` is always there; a scope
+ * root `create` also carries the member row id when its kind has a creator.
+ * Обидва id T3 генерує раз на `run` (Р-A6-20): повтор бере ті самі, тож
+ * `ctx.id` хуків між спробами не змінюється.
+ */
+export type PreparedOperation = Operation & { id: string; memberId?: string }
+
+/**
+ * Створення кореня виду скоупу (спека П4 §6.13); `membership` — довідник
+ * членства, коли вид має роль з `rootCreator`.
+ */
+interface RootCreate {
+  membership: RuntimeObject | undefined
 }
 
 const invalid = (path?: string): CommandError => ({
@@ -46,6 +63,82 @@ function targetOf(
   return { object, target }
 }
 
+/** `create` кореня скоупу; `undefined` — звичайна операція. */
+function rootCreateOf(
+  catalog: RuntimeCatalog,
+  object: RuntimeObject,
+  op: Operation
+): RootCreate | undefined {
+  const root =
+    op.action === "create" ? object.operations.create?.root : undefined
+  if (root === undefined) return undefined
+  return {
+    // Схема каталогу гарантує, що об'єкт є (`runtimeCatalogSchema`).
+    membership:
+      root.membership === undefined
+        ? undefined
+        : catalog.objects.find((o) => o.id === root.membership),
+  }
+}
+
+const MEMBER = "creatorMember"
+
+/**
+ * `creatorMember` тим самим обходом T0, що й `values` (Р-A6-13): дозволені —
+ * ключі вставки довідника членства, крім примушених скоупу й користувача
+ * (ключ таблиці поза реквізитами й так невідомий обходу).
+ */
+function encodeMember(membership: RuntimeObject, values: unknown) {
+  const forced = membership.attributes
+    .filter(
+      (a) =>
+        a.column === membership.scopeColumn ||
+        a.column === membership.membership?.userColumn
+    )
+    .map((a) => a.name)
+  return encodeAttributes(membership.attributes, values, {
+    allowed: (a) => a.insert,
+    forced,
+    path: MEMBER,
+    prefix: `${MEMBER}.`,
+  })
+}
+
+/**
+ * Вхід операції з урахуванням кореня скоупу: `id` — лише поза коренем,
+ * `tabularSections` кореня на створенні не пишуться, `creatorMember` — лише
+ * в кореня з довідником членства. Повертає id, які генерує T3.
+ */
+function rootInput(
+  catalog: RuntimeCatalog,
+  object: RuntimeObject,
+  op: Operation
+): { id: string; memberId?: string } | { error: CommandError } {
+  const creation = rootCreateOf(catalog, object, op)
+  if (op.action !== "create") return { id: op.id }
+  if (creation === undefined) {
+    if (op.id === undefined) return { error: invalid("id") }
+    if (op.creatorMember !== undefined) return { error: invalid(MEMBER) }
+    return { id: op.id }
+  }
+  if (op.id !== undefined) return { error: invalid("id") }
+  if (op.tabularSections !== undefined) {
+    return { error: invalid("tabularSections") }
+  }
+  const { membership } = creation
+  if (membership === undefined) {
+    return op.creatorMember === undefined
+      ? { id: globalThis.crypto.randomUUID() }
+      : { error: invalid(MEMBER) }
+  }
+  const member = encodeMember(membership, op.creatorMember ?? {})
+  if ("error" in member) return member
+  return {
+    id: globalThis.crypto.randomUUID(),
+    memberId: globalThis.crypto.randomUUID(),
+  }
+}
+
 // Без ключів зі значенням `undefined`: чернетку, яку хук повернув як є,
 // перевірка не відкине.
 const draftOf = (op: Operation): Draft<object> =>
@@ -65,7 +158,7 @@ const draftOf = (op: Operation): Draft<object> =>
 export function prepareInput(
   catalog: RuntimeCatalog,
   input: unknown
-): Operation[] {
+): PreparedOperation[] {
   let parsed: ReturnType<typeof batchSchema.safeParse>
   try {
     parsed = Array.isArray(input)
@@ -78,15 +171,18 @@ export function prepareInput(
   if (!parsed.success) {
     throw new CommandFailure(invalid(issuePath(parsed.error)))
   }
-  for (const op of parsed.data) {
+  return parsed.data.map((op) => {
     const found = targetOf(catalog, op)
     if ("error" in found) throw new CommandFailure(found.error)
-    if (op.action === "create" || op.action === "update") {
-      const encoded = encodeItem(found.object, op, draftOf(op))
+    const ids = rootInput(catalog, found.object, op)
+    if ("error" in ids) throw new CommandFailure(ids.error)
+    const prepared: PreparedOperation = { ...op, ...ids }
+    if (prepared.action === "create" || prepared.action === "update") {
+      const encoded = encodeItem(found.object, prepared, draftOf(prepared))
       if ("error" in encoded) throw new CommandFailure(encoded.error)
     }
-  }
-  return parsed.data
+    return prepared
+  })
 }
 
 const fn = (target: RuntimeOperationTarget) =>
@@ -95,7 +191,7 @@ const fn = (target: RuntimeOperationTarget) =>
 /** Виклик функції ядра фази зі зв'язаними параметрами. */
 function callOf(
   { object, target }: Target,
-  op: Operation,
+  op: PreparedOperation,
   draft: Draft<object>
 ): Statement | { error: CommandError } {
   switch (op.action) {
@@ -135,7 +231,8 @@ const CONTEXT_TEXT = `SELECT set_config(${literal(COMMAND_SETTING)}, $1, true)`
 function checkDraft(
   tx: Transaction,
   op: Operation,
-  draft: unknown
+  draft: unknown,
+  path: (key: string) => string = (key) => key
 ): Draft<object> {
   const keys = op.action === "markDeletion" ? [] : ["values", "tabularSections"]
   let bad: string | undefined
@@ -151,7 +248,7 @@ function checkDraft(
     tx.state.log({ kind: "hook", error })
     tx.abort({ code: "command.internal" })
   }
-  if (bad !== undefined) tx.abort(invalid(bad))
+  if (bad !== undefined) tx.abort(invalid(path(bad)))
   return draft as Draft<object>
 }
 
@@ -160,7 +257,7 @@ async function runNested(
   tx: Transaction,
   operation: unknown
 ): Promise<Record<string, unknown>> {
-  let op: Operation
+  let op: PreparedOperation
   try {
     // Пакет — не операція; копія — щоб хук не змінив входу після перевірки.
     if (Array.isArray(operation)) throw new CommandFailure(invalid())
@@ -171,6 +268,56 @@ async function runNested(
   return runPhase(tx, op)
 }
 
+/** Модуль об'єкта, коли операція піднімає подію запису (Р-A3-2). */
+function moduleOf(
+  tx: Transaction,
+  object: RuntimeObject,
+  op: Operation
+): ObjectModule<object> | undefined {
+  return OPERATION_EVENTS[op.action] === "write"
+    ? tx.state.objectModules[`${object.kind}.${object.name}`]
+    : undefined
+}
+
+const phaseOf = (
+  tx: Transaction,
+  object: RuntimeObject,
+  op: PreparedOperation
+): HookPhase => ({
+  object,
+  op,
+  additionalProperties: new Map(),
+  runNested: (operation) => runNested(tx, operation),
+})
+
+/** `beforeWrite` фази й перевірка повернутої чернетки. */
+async function beforeWrite(
+  tx: Transaction,
+  phase: HookPhase,
+  module: ObjectModule<object> | undefined,
+  draft: Draft<object>,
+  path?: (key: string) => string
+): Promise<Draft<object>> {
+  if (module?.beforeWrite === undefined) return draft
+  const hook = module.beforeWrite.bind(module)
+  const returned: unknown = await callHook(tx, phase, (ctx) =>
+    hook({ ctx, draft })
+  )
+  return checkDraft(tx, phase.op, returned, path)
+}
+
+/** `onWrite` фази над копією рядка: зміна копії не змінює результату (Р-A3-15). */
+async function onWrite(
+  tx: Transaction,
+  phase: HookPhase,
+  module: ObjectModule<object> | undefined,
+  row: Record<string, unknown>
+): Promise<void> {
+  if (module?.onWrite === undefined) return
+  const hook = module.onWrite.bind(module)
+  await callHook(tx, phase, (ctx) => hook({ ctx, row: structuredClone(row) }))
+}
+
 /**
  * One phase: `beforeWrite`, the command context and the core call as one
  * queue unit, the row decoded before `COMMIT`, then `onWrite`. Повертає
@@ -178,91 +325,210 @@ async function runNested(
  */
 export async function runPhase(
   tx: Transaction,
-  op: Operation
+  op: PreparedOperation
 ): Promise<Record<string, unknown>> {
   const found = targetOf(tx.state.catalog, op)
   if ("error" in found) tx.abort(found.error)
-  const { object, target } = found
+  const creation = rootCreateOf(tx.state.catalog, found.object, op)
+  if (creation !== undefined) return runRootPhase(tx, found, op, creation)
+  const { object } = found
   // Подію визначає операція (Р-A3-2): `delete` хуків не викликає.
-  const module: ObjectModule<object> | undefined =
-    OPERATION_EVENTS[op.action] === "write"
-      ? tx.state.objectModules[`${object.kind}.${object.name}`]
-      : undefined
-  const phase: HookPhase = {
-    object,
-    op,
-    additionalProperties: new Map(),
-    runNested: (operation) => runNested(tx, operation),
-  }
-  let draft = draftOf(op)
-  if (module?.beforeWrite !== undefined) {
-    const beforeWrite = module.beforeWrite.bind(module)
-    // Контекст фази ставиться після хука «до» (Рт5): фаза його `ctx.run`
-    // ставить свій раніше.
-    const returned: unknown = await callHook(tx, phase, (ctx) =>
-      beforeWrite({ ctx, draft })
-    )
-    draft = checkDraft(tx, op, returned)
-  }
+  const module = moduleOf(tx, object, op)
+  const phase = phaseOf(tx, object, op)
+  // Контекст фази ставиться після хука «до» (Рт5): фаза його `ctx.run`
+  // ставить свій раніше.
+  const draft = await beforeWrite(tx, phase, module, draftOf(op))
   const call = callOf(found, op, draft)
   if ("error" in call) tx.abort(call.error)
+  const text = await callCore(tx, found, op, call)
+  const row = decodeCoreRow(tx, object, () => JSON.parse(text) as unknown)
+  recordChange(tx, object, op, row)
+  await onWrite(tx, phase, module, row.row)
+  return row.row
+}
+
+/**
+ * Створення тенанта (спека П4 §6.13, Р-A6-14): `beforeWrite` кореня →
+ * `beforeWrite` довідника членства над `{ values: creatorMember }` → повторна
+ * перевірка обох чернеток → контекст кореня й ядро `<корінь>_create_root`
+ * однією одиницею черги → `onWrite` кореня → `onWrite` членства. Набір змін —
+ * один запис фази кореня, результат — рядок кореня.
+ */
+async function runRootPhase(
+  tx: Transaction,
+  found: Target,
+  op: PreparedOperation,
+  { membership }: RootCreate
+): Promise<Record<string, unknown>> {
+  const { object, target } = found
+  if (op.action !== "create") throw new Error("internal: root phase")
+  const module = moduleOf(tx, object, op)
+  const phase = phaseOf(tx, object, op)
+  const draft = await beforeWrite(tx, phase, module, draftOf(op))
+  let member:
+    | {
+        object: RuntimeObject
+        module: ObjectModule<object> | undefined
+        phase: HookPhase
+        draft: Draft<object>
+      }
+    | undefined
+  if (membership !== undefined) {
+    if (op.memberId === undefined) throw new Error("internal: member id")
+    const memberOp: PreparedOperation = {
+      action: "create",
+      object: { kind: membership.kind, name: membership.name },
+      id: op.memberId,
+      values: op.creatorMember ?? {},
+    }
+    const memberModule = moduleOf(tx, membership, memberOp)
+    const memberPhase = phaseOf(tx, membership, memberOp)
+    member = {
+      object: membership,
+      module: memberModule,
+      phase: memberPhase,
+      // Ключ поза чернеткою — дефект `creatorMember`, а не входу кореня.
+      draft: await beforeWrite(
+        tx,
+        memberPhase,
+        memberModule,
+        draftOf(memberOp),
+        () => MEMBER
+      ),
+    }
+  }
+  // Повторна перевірка обох чернеток: хук міг повернути ТЧ.
+  if (draft.tabularSections !== undefined) tx.abort(invalid("tabularSections"))
+  let memberColumns: Record<string, unknown> | undefined
+  if (member !== undefined) {
+    if (member.draft.tabularSections !== undefined) tx.abort(invalid(MEMBER))
+    const encoded = encodeMember(member.object, member.draft.values ?? {})
+    if ("error" in encoded) tx.abort(encoded.error)
+    memberColumns = encoded.columns
+  }
+  const encoded = encodeItem(object, op, draft)
+  if ("error" in encoded) tx.abort(encoded.error)
+  const call: Statement = {
+    text: `SELECT ${fn(target)}($1::jsonb, $2::jsonb, $3::uuid) AS r`,
+    params: [
+      JSON.stringify(encoded.item),
+      // Вид без творця: обидва аргументи членства — `NULL` (спека П4 §6.13).
+      memberColumns === undefined ? null : JSON.stringify(memberColumns),
+      op.memberId ?? null,
+    ],
+  }
+  const text = await callCore(tx, found, op, call, membership)
+  let result: unknown
+  const rootRow = decodeCoreRow(tx, object, () => {
+    result = JSON.parse(text)
+    if (!isPlainObject(result)) throw new Error("root core result")
+    return result.root
+  })
+  recordChange(tx, object, op, rootRow)
+  let memberRow: Record<string, unknown> | undefined
+  if (member !== undefined) {
+    const { object: memberObject } = member
+    memberRow = decodeCoreRow(
+      tx,
+      memberObject,
+      () => (result as Record<string, unknown>).member
+    ).row
+  } else if ((result as Record<string, unknown>).member !== null) {
+    coreAnomaly(tx, object)
+  }
+  await onWrite(tx, phase, module, rootRow.row)
+  if (member !== undefined) {
+    await onWrite(tx, member.phase, member.module, memberRow!)
+  }
+  return rootRow.row
+}
+
+/**
+ * Контекст і виклик ядра — неподільна одиниця черги (Рт5, Р-A3-15): між
+ * ними не стане оператор іншої фази. Повертає текст рядка ядра.
+ */
+async function callCore(
+  tx: Transaction,
+  { object, target }: Target,
+  op: PreparedOperation,
+  call: Statement,
+  membership?: RuntimeObject
+): Promise<string> {
   const context: CommandContext = {
     action: target.context,
     object: object.kindLabel,
     root: op.id,
   }
-  // Контекст і виклик ядра — неподільна одиниця черги (Рт5, Р-A3-15): між
-  // ними не стане оператор іншої фази.
   const { rows } = await tx.enqueue(
     [{ text: CONTEXT_TEXT, params: [JSON.stringify(context)] }, call],
-    { kind: "write", object, operation: op.action }
+    {
+      kind: "write",
+      object,
+      operation: op.action,
+      ...(membership === undefined ? {} : { membership }),
+    }
   )
   const text = rows[0]?.r
-  // Відповідь бази не тієї форми — аномалія: назовні код, у журнал — подробиці.
-  const anomaly: (cause?: unknown) => never = (cause) =>
-    tx.anomaly(
-      new Error(
-        `core row of ${object.kind}.${object.name} does not match the catalog`,
-        { cause }
-      )
+  if (typeof text !== "string") coreAnomaly(tx, object)
+  return text
+}
+
+/** Відповідь бази не тієї форми — аномалія: назовні код, у журнал — подробиці. */
+function coreAnomaly(
+  tx: Transaction,
+  object: RuntimeObject,
+  cause?: unknown
+): never {
+  tx.anomaly(
+    new Error(
+      `core row of ${object.kind}.${object.name} does not match the catalog`,
+      { cause }
     )
-  if (typeof text !== "string") anomaly()
+  )
+}
+
+/** Рядок ядра за каталогом: ключ, версія й скоуп мусять бути. */
+function decodeCoreRow(
+  tx: Transaction,
+  object: RuntimeObject,
+  parse: () => unknown
+): { row: Record<string, unknown>; scope: unknown } {
   let row: Record<string, unknown>
   let scope: unknown
   try {
-    row = decodeRow(object, text)
+    const raw = parse()
+    row = decodeRecord(object, raw)
     scope =
       object.scopeColumn === undefined
         ? undefined
-        : (JSON.parse(text) as Record<string, unknown>)[object.scopeColumn]
+        : (raw as Record<string, unknown>)[object.scopeColumn]
   } catch (error) {
-    anomaly(error)
+    coreAnomaly(tx, object, error)
   }
-  const id = row[object.keyName]
-  const version = row[object.versionName]
   if (
-    typeof id !== "string" ||
-    typeof version !== "number" ||
+    typeof row[object.keyName] !== "string" ||
+    typeof row[object.versionName] !== "number" ||
     (object.scopeColumn !== undefined && typeof scope !== "string")
   ) {
-    anomaly()
+    coreAnomaly(tx, object)
   }
+  return { row, scope }
+}
+
+function recordChange(
+  tx: Transaction,
+  object: RuntimeObject,
+  op: Operation,
+  { row, scope }: { row: Record<string, unknown>; scope: unknown }
+): void {
   tx.changes.push({
     object: { kind: object.kind, name: object.name },
     ...(object.scopeKindId === undefined
       ? {}
       : { scopeKind: object.scopeKindId }),
     ...(typeof scope === "string" ? { scope } : {}),
-    id,
-    version,
+    id: row[object.keyName] as string,
+    version: row[object.versionName] as number,
     operation: op.action,
   })
-  if (module?.onWrite !== undefined) {
-    const onWrite = module.onWrite.bind(module)
-    // Копія: зміна рядка хуком не змінює результату команди (Р-A3-15).
-    await callHook(tx, phase, (ctx) =>
-      onWrite({ ctx, row: structuredClone(row) })
-    )
-  }
-  return row
 }
