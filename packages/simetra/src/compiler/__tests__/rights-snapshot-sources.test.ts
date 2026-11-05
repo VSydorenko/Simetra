@@ -7,7 +7,7 @@ import { snapshotSources } from "../rights/snapshot-sources"
 import { loadSqlParser, type SqlParser } from "../sql/parse"
 import { loadPlpgsqlParser, type PlpgsqlParser } from "../sql/plpgsql"
 import { unitRelations } from "../sql/dependencies"
-import { relationReads } from "../sql/reads"
+import { reachableUnits, relationReads } from "../sql/reads"
 import { generatedUnit, type SqlUnit, type VerbatimUnit } from "../sql/units"
 import {
   BENCH_ZONE_TABLE,
@@ -171,6 +171,91 @@ describe("actor snapshot sources", () => {
       }
     }
     expect(checked).toBeGreaterThan(0)
+  })
+
+  // Аналіз обходить свої голови (`heads`, `LIVE_HEADS`), а тригер знімка
+  // виконує власне заповнення (`factRows`): без цієї звірки читання, додане
+  // лише в заповнення, лишилося б без тригера знімка, і його зміна змінила б
+  // факт повз знімок. Заповнення факту — оператори тіла тригера між його
+  // `IF NOT EXISTS (… fact = '<факт>') THEN` і записом заголовка.
+  it("the source analysis covers every read of the snapshot fill", () => {
+    const found = snapshotSources(inputOf(model))
+    const units: VerbatimUnit[] = model.sqlUnits.map((u) => ({
+      ...u,
+      file: u.file ?? "",
+      line: u.line ?? 0,
+    }))
+    const views = new Set(
+      units
+        .filter((u) => u.class === "view")
+        .map((u) => `${u.schema}.${u.name}`)
+    )
+    const snapshot = Object.values(SNAPSHOT_TABLES).map(
+      (t) => `${t.schema}.${t.name}`
+    )
+    const exempt = found.exempt.map(named)
+    const triggers = units.filter(
+      (u) =>
+        u.class === "function" && u.name.endsWith("_simetra_rights_snapshot")
+    )
+    expect(triggers.length).toBe(found.sources.length)
+    const open =
+      /^ {2}IF NOT EXISTS \(SELECT 1 FROM \S+ WHERE xid = txid_current\(\) AND fact = '(\w+)'\) THEN$/
+    const close = /^ {4}INSERT INTO \S+ \(xid, fact, actor\)/
+    const checked = new Set<SnapshotFact>()
+    for (const trigger of triggers) {
+      const fills = new Map<SnapshotFact, string[]>()
+      let fact: SnapshotFact | undefined
+      for (const line of trigger.sql.split("\n")) {
+        const head = open.exec(line)
+        if (head !== null) {
+          fact = head[1] as SnapshotFact
+          fills.set(fact, [])
+        } else if (close.test(line)) fact = undefined
+        else if (fact !== undefined) fills.get(fact)!.push(line)
+      }
+      expect(fills.size, trigger.name).toBeGreaterThan(0)
+      for (const [fact, lines] of fills) {
+        const fill: VerbatimUnit = {
+          ...generatedUnit(
+            `CREATE FUNCTION ${PLATFORM_SCHEMA}.snapshot_fill() RETURNS void LANGUAGE plpgsql SET search_path = '' AS $fill$\nDECLARE v_actor uuid;\nBEGIN\n${lines.join("\n")}\nEND\n$fill$;`,
+            PLATFORM_SCHEMA,
+            parse
+          ),
+          file: "",
+          line: 0,
+        }
+        const allowed = [
+          ...found.sources.filter((s) => s.facts.includes(fact)).map(named),
+          ...exempt,
+          ...snapshot,
+        ]
+        for (const reader of [
+          fill,
+          ...reachableUnits(fill, units, parse, plpgsql),
+        ]) {
+          for (const ref of relationReads(reader, units, parse, plpgsql)) {
+            const relation =
+              ref.schema === undefined ? ref.name : `${ref.schema}.${ref.name}`
+            // Подання моделі прозоре: його базові відношення читає обхід.
+            if (views.has(relation)) continue
+            const covered = allowed.some((a) =>
+              ref.schema === undefined
+                ? a.endsWith(`.${ref.name}`)
+                : a === relation
+            )
+            expect(covered, `${trigger.name} ${fact} ${relation}`).toBe(true)
+          }
+        }
+        checked.add(fact)
+      }
+    }
+    expect([...checked].sort()).toEqual([
+      "rights",
+      "scopeSets",
+      "scopes",
+      "values",
+    ])
   })
 
   it("reports an unknown relation", async () => {
