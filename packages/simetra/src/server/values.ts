@@ -1,5 +1,6 @@
 import {
   UUID_TEXT,
+  encodeAttributes,
   encodeItemValue,
   isPlainObject,
   type CommandError,
@@ -99,7 +100,16 @@ function itemOf(
     op.action === "create" ? a.insert : a.update
   const values = at("values", () => draft.values)
   if (values !== undefined) {
-    writeAttributes(object.attributes, values, allowed, "values", "", item)
+    Object.assign(
+      item,
+      columnsOf(
+        encodeAttributes(object.attributes, values, {
+          allowed,
+          path: "values",
+          prefix: "",
+        })
+      )
+    )
   }
   const sections = at("tabularSections", () => draft.tabularSections)
   if (sections === undefined) return item
@@ -139,50 +149,25 @@ function encodeRows(
     if (typeof key !== "string" || !UUID_TEXT.test(key)) {
       throw new InvalidInput(keyPath)
     }
-    const out: Record<string, unknown> = { [section.key]: key }
     // Ядро звіряє рядок ТЧ з ключами вставки на будь-якій операції (`rowKeys`):
     // рядок ТЧ записується заново цілком.
-    writeAttributes(
-      section.attributes,
-      row,
-      (a) => a.insert,
-      path,
-      `${path}.`,
-      out,
-      section.keyName
+    const columns = columnsOf(
+      encodeAttributes(section.attributes, row, {
+        allowed: (a) => a.insert,
+        path,
+        prefix: `${path}.`,
+        rowKey: section.keyName,
+      })
     )
-    encoded.push(out)
+    encoded.push({ [section.key]: key, ...columns })
   }
   return encoded
 }
 
-/** Пише значення за каталогом у `out`; перша помилка — `InvalidInput`. */
-function writeAttributes(
-  attributes: readonly RuntimeAttribute[],
-  values: unknown,
-  allowed: (a: RuntimeAttribute) => boolean,
-  containerPath: string,
-  prefix: string,
-  out: Record<string, unknown>,
-  rowKey?: string
-): void {
-  const keys = new Set(keysOf(containerPath, values))
-  if (rowKey !== undefined) keys.delete(rowKey)
-  const source = values as Record<string, unknown>
-  for (const attribute of attributes) {
-    if (!keys.delete(attribute.name)) continue
-    const path = `${prefix}${attribute.name}`
-    if (!allowed(attribute)) throw new InvalidInput(path)
-    const value = at(path, () => source[attribute.name])
-    const encoded = encodeItemValue(attribute, value, path)
-    if ("error" in encoded) throw new InvalidInput(encoded.error.path ?? path)
-    if (attribute.pair !== undefined) {
-      Object.assign(out, encoded.value)
-    } else {
-      out[attribute.column] = encoded.value
-    }
-  }
-  // Лишилися ключі поза каталогом (і ключ таблиці шапки) — за порядком входу.
-  const [unknown] = keys
-  if (unknown !== undefined) throw new InvalidInput(`${prefix}${unknown}`)
+/** Колонки обходу T0; його відмова — `InvalidInput` на її шляху. */
+function columnsOf(
+  encoded: ReturnType<typeof encodeAttributes>
+): Record<string, unknown> {
+  if ("error" in encoded) throw new InvalidInput(encoded.error.path ?? "")
+  return encoded.columns
 }

@@ -5,7 +5,7 @@ import {
   RIGHTS_COLUMNS,
   RIGHTS_MAINTENANCE_SETTING,
   deletionMarkColumn,
-  encodeMemberValues,
+  encodeAttributes,
   keyColumn,
   quoteIdent,
   type PhysicalTable,
@@ -304,13 +304,15 @@ function prepare(
       nameOf(membership.scope),
       nameOf(membership.user),
     ].filter((name) => name !== undefined)
-    const encoded = encodeMemberValues(object, request.member, forced)
+    const encoded = encodeAttributes(object.attributes, request.member, {
+      allowed: (a) => a.insert,
+      forced,
+      path: "member",
+      prefix: "",
+    })
     if ("error" in encoded)
       return refusal("maintenance.invalid-member", {
-        path:
-          encoded.error.path === undefined || encoded.error.path === "values"
-            ? "member"
-            : encoded.error.path,
+        path: encoded.error.path ?? "member",
       })
     member = encoded
   }

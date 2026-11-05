@@ -2,7 +2,6 @@ import { beforeAll, describe, expect, it } from "vitest"
 import { buildRuntimeCatalog } from "simetra/compiler"
 import {
   encodeItemValue,
-  encodeMemberValues,
   encodePair,
   type Operation,
   type RuntimeObject,
@@ -174,25 +173,6 @@ describe("encodeParam", () => {
     expect(encodeParam(attributeOf("note"), "a\u0000b", "note")).toEqual(
       invalid("note")
     )
-  })
-})
-
-describe("encodeMemberValues", () => {
-  // Одна колонкова форма з `create`: A6 перевикористовує перевірку для
-  // `creatorMember`, тож розбіжність двох шляхів кодування — дефект.
-  it("matches encodeItem for create", () => {
-    const values = {
-      amount: "12345678901234567890.0123456789",
-      subject: { type: "Catalog.Region", id: OTHER },
-      note: null,
-      count: 7,
-    }
-    const { item } = encodeItem(sample, create(), { values }) as {
-      item: Record<string, unknown>
-    }
-    // Ключ таблиці ставить команда, а не реквізити рядка учасника.
-    delete item.id
-    expect(encodeMemberValues(sample, values, [])).toEqual({ columns: item })
   })
 })
 

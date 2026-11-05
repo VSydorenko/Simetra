@@ -4,7 +4,7 @@ import {
   isDateTime,
   isWithinType,
 } from "../schemas/value-type"
-import type { RuntimeAttribute, RuntimeObject } from "./catalog"
+import type { RuntimeAttribute } from "./catalog"
 import type { CommandError } from "./errors"
 
 /**
@@ -230,40 +230,59 @@ export function encodeItemValue(
   }
 }
 
+/** Options of {@link encodeAttributes}: who may write and how errors are named. */
+export interface EncodeAttributesOptions {
+  /** Чи пише вхід реквізит: грант вставки чи оновлення. */
+  allowed: (attribute: RuntimeAttribute) => boolean
+  /** Логічні імена, які примушує платформа (ключ, скоуп, користувач учасника). */
+  forced?: readonly string[]
+  /** Шлях самого контейнера: відмова, коли він не простий об'єкт. */
+  path: string
+  /** Префікс шляху реквізиту й невідомого ключа. */
+  prefix: string
+  /** Ключ рядка ТЧ: його пише викликач, а не обхід. */
+  rowKey?: string
+}
+
 /**
- * Значення рядка учасника (Р-A4-11): `values` — простий об'єкт, де кожен ключ —
- * реквізит каталогу з `insert`, окрім `forced` (логічні імена механіки:
- * ключ, скоуп, користувач). Результат — фізичні колонки → значення для
- * `jsonb_populate_record`. Порядок помилок — як у `encodeItem` T3 (Р-A3-8):
- * реквізити за порядком каталогу, невідомі ключі — після них.
+ * Один обхід реквізитів значень (Р-A6-13): шапка операції, рядок ТЧ,
+ * `creatorMember` і `member` інструмента обслуговування кодуються тут, тож
+ * шляхи не розходяться. `values` — простий об'єкт, де кожен ключ — реквізит
+ * каталогу, дозволений `allowed` і не примушений. Результат — фізичні
+ * колонки → значення для `jsonb_populate_record`. Перша помилка (Р-A3-8):
+ * реквізити — за порядком каталогу, невідомі ключі — після них, за порядком
+ * входу.
  */
-export function encodeMemberValues(
-  object: RuntimeObject,
+export function encodeAttributes(
+  attributes: readonly RuntimeAttribute[],
   values: unknown,
-  forced: readonly string[]
+  options: EncodeAttributesOptions
 ): { columns: Record<string, unknown> } | { error: CommandError } {
+  const { allowed, forced = [], path, prefix, rowKey } = options
   let keys: Set<string>
   try {
-    if (!isPlainObject(values)) return invalid("values")
+    if (!isPlainObject(values)) return invalid(path)
     keys = new Set(Object.keys(values))
   } catch {
     // Відкликаний проксі: ключів не прочитати.
-    return invalid("values")
+    return invalid(path)
   }
+  if (rowKey !== undefined) keys.delete(rowKey)
   const source = values as Record<string, unknown>
   const columns: Record<string, unknown> = {}
-  for (const attribute of object.attributes) {
+  for (const attribute of attributes) {
     if (!keys.delete(attribute.name)) continue
-    if (!attribute.insert || forced.includes(attribute.name)) {
-      return invalid(attribute.name)
+    const at = `${prefix}${attribute.name}`
+    if (!allowed(attribute) || forced.includes(attribute.name)) {
+      return invalid(at)
     }
     let value: unknown
     try {
       value = source[attribute.name]
     } catch {
-      return invalid(attribute.name)
+      return invalid(at)
     }
-    const encoded = encodeItemValue(attribute, value, attribute.name)
+    const encoded = encodeItemValue(attribute, value, at)
     if ("error" in encoded) return encoded
     if (attribute.pair !== undefined) {
       Object.assign(columns, encoded.value)
@@ -272,5 +291,5 @@ export function encodeMemberValues(
     }
   }
   const [unknown] = keys
-  return unknown === undefined ? { columns } : invalid(unknown)
+  return unknown === undefined ? { columns } : invalid(`${prefix}${unknown}`)
 }
