@@ -702,6 +702,8 @@ A5 уже в `main` (зведено в `feat/p4-a6`), тож повний кей
 | М26 | інструмент без функції перевірки членства | designer `rights-maintenance` |
 | М28 | `rights.root-creator-assignment-required` вимкнена | рядок `it.each` `a required assignment attribute without a default` (`rights-roles.test.ts`) |
 | М29 | `decodeCoreRow` (`server/phase.ts`) без перевірки скоупу взагалі, не лише для рядка членства ядра кореня | unit T3 `decodes the row before COMMIT and logs a row without its scope` |
+| М30 | функція гранту без повторної перевірки рядка членства | DB `direct grant call checks member references` |
+| М31 | (а) `rootCreatorOf` не знімає факт творця з кореня без ядра створення; (б) без попередження `rights.root-creator-unreachable` | unit `compiles with the unreachable warning and no grant function, create core or marker` |
 
 ## Задача 11: гейти, перевірка, зведення
 
@@ -1071,6 +1073,60 @@ A5 уже в `main` (зведено в `feat/p4-a6`), тож повний кей
   access`) — 8 файлів, 927 тестів, 55 с; designer (`tenant-creation
   command-runtime rights-maintenance data-tools`) — 4 файли, 60 тестів, 37 с.
   Вплив на спеку: немає.
+- **Знахідка Codex 1 — прямий виклик функції гранту оминає перевірки
+  посилань `p_member`.** Сирий SQL під `simetra_command` (вставка кореня під
+  `create`, потім виклик функції гранту) обходив `referenceViolations`, які
+  йшли лише в INVOKER-ядрі. Той самий механізм, що Р-A6-12: функція гранту
+  перед вставкою членства (крок 4) кличе
+  `<членство>_simetra_member_check(p_member - <примушені ключі>, p_root)`;
+  від власника з `row_security = off` це «ціль існує й у тому самому
+  скоупі». Код відмови — `rights-context`: це родина відмов функції гранту, а
+  до неї в шляху команд доходить лише вхід, який уже прийняло ядро (там
+  відмова — `command.invalid` `creatorMember.<колонка>`, видимість під RLS, без
+  змін), тож порушення тут — лише обхід ядра. Примушені ключі (ключ, скоуп,
+  користувач) з входу знято перед перевіркою: функція їх ігнорує й пише сама
+  (DB `forced member columns`, М19) — інакше перевірка відмовила б на
+  невідомому ключі й зробила б примушення неспостережним. Ребро `requires`
+  на функцію перевірки — з одиниць того самого генератора. Факт
+  `RootCreatorFacts.membership.check` — одне джерело і для ядра кореня, і для
+  функції гранту (`RootCreator.check` прибрано). Фікстура:
+  `tenantSelfService({ memberRegions: true })` — масив `Ref` і поліморфна
+  пара `OrgMember` на скоуплений `Region`. Тести: unit — крок у тілі й ребро
+  `requires`; DB — масив і поліморфна пара на `Region` тенанта `T` →
+  `rights-context`, контроль із наявними нескоупленими цілями проходить
+  (М30). Вплив на спеку: П4 §6.13 крок 4 — речення (внесено).
+- **Знахідка Codex 2 — `rootCreator` без ядра створення кореня давав
+  `internal`.** Як сформульовано («без явного гранту `create` на корені»),
+  знахідка не відтворюється: ядро `<корінь>_create_root` від грантів не
+  залежить (право судить `has_right` під час виклику, а `create` кореня може
+  дати й дельта глобальної кастомної ролі, Рх7, Р-A6-22), ключ завжди серед
+  колонок вставки, тож без гранту модель компілюється з ядром і функцією
+  гранту, а створення відмовляє `no-right`. Коментар у
+  `catalog-command/contracts.ts`, який стверджував протилежне, виправлено.
+  Відтворюється інший шлях: корінь виду — «Користувачі» (`actionsOf` не дає
+  `createRoot`: рядок створює провізія) — `rootCreators` падав `internal`.
+  Рішення: факт обрізає `rootCreatorOf` (`pipeline.ts`) через
+  `rootCreatedByCommand` (`rights/role-checks.ts`) — той самий предикат
+  читає попередження, тож ядро, маркер (`buildEffectsUnits`), каталог
+  рантайму (`operations.create.root.membership`), designer і діагностика
+  згодні; решта відсутніх передумов у `rootCreators` лишається `internal`.
+  Попередження `rights.root-creator-unreachable` (не помилка: модель валідна,
+  першу роль призначає інструмент оператора) — поруч із
+  `rights.root-creator-no-admin`, у `WARNING_RULES`, en/uk у `messages.ts`;
+  будівник `usersRootCreator()`. Тест: unit — компіляція з рівно цим
+  попередженням, без функції гранту, ядра кореня й вставки маркера; той
+  самий фільтр на `rootCreationDomain()` бачить усі чотири одиниці (М31).
+  Вплив на спеку: П4 §6.13, абзац «Компілятор» — речення (внесено). Спека
+  прав §4.1 перелічує лише відмови (і `rights.root-creator-no-admin` там
+  немає), тож рядка там немає — попередження належить П4 §6.13. Скіл
+  споживача — `people-and-rights.md`.
+- **Перевірка після знахідок Codex (2026-11-05, 6e25e38c).** Unit `simetra`
+  180 файлів, 5189 тестів, 1 хв 44 с; `@simetrajs/designer` 38 файлів, 763
+  тести, 16 с; typecheck і lint обох пакетів (13 с), `format:check`,
+  `metadata:check`, перевірка якорів — зелені. Scoped DB: `simetra`
+  (`tenant-creation catalog-command rights-guards`) — 5 файлів, 876 тестів,
+  48 с; designer (`tenant-creation data-tools`) — 2 файли, 36 тестів, 23 с.
+  Вплив на спеку: немає.
 
 ## Журнал мутацій
 
@@ -1130,3 +1186,5 @@ A5 уже в `main` (зведено в `feat/p4-a6`), тож повний кей
 | М27 | `dataCommandRefusal` (`designer/src/tools/data-policy.ts`): без перевірки модуля довідника членства кореня | `pnpm --filter @simetrajs/designer test data-policy` | червоні 2: `tenant creation when the membership cat…` і пакетний варіант — немає `object-module` на `OrgMember`; переповторено на закоміченому дереві | 14:31 |
 | М28 | `rootCreatorKindProblems`: умова `rights.root-creator-assignment-required` вимкнена | `S rights-roles -t "reports a required assignment attribute"` | червоний: `reports a required assignment attribute without…` — `[]` замість діагностики | 14:31 |
 | М29 | `decodeCoreRow` (`server/phase.ts`): перевірку скоупу вимкнено для всіх рядків (`false &&` замість `requireScope &&`) — виправлення рецензії C1, на закоміченому дереві 91fa008c | `S server/__tests__/transaction server/__tests__/hooks` | червоний 1: `decodes the row before COMMIT and logs a row without its scope` — рядок звичайного ядра без скоупу пройшов без аномалії; решта 119 зелені | 17:02 |
+| М30 | функція гранту (`rights/root-creator-units.ts`): без повторної перевірки `<членство>_simetra_member_check` — знахідка Codex 1, на закоміченому дереві 6e25e38c | `SDB -t "direct grant call checks member references"` | червоні 2: масив і поліморфна пара на `Region` чужого тенанта — рядок членства вставлено, відмови немає; контроль зелений | 17:25 |
+| М31 | (а) `rootCreatorOf` (`pipeline.ts`): умова `rootCreatedByCommand` вимкнена; (б) без `rootCreatorUnreachableWarnings` у діагностиках — знахідка Codex 2, 6e25e38c | `S rights-root-creator` | червоні обидва: (а) `internal: scope kind … has a root creator without root, membership or assignments command`; (б) `[]` замість попередження | 17:26 |
