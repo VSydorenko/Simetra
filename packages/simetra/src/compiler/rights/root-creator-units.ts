@@ -136,8 +136,11 @@ export function rootCreatorFunction(facts: RootCreatorFacts): string {
     // SQL під `simetra_command` його оминає — тож та сама перевірка рядка
     // членства ще раз (захист у глибину, як Р-A6-23). Від власника з
     // `row_security = off` вона означає «ціль існує й у тому самому скоупі», не
-    // видимість — як в інструменті обслуговування (Р-A6-12).
-    ...ifRefuse(`${qualified(m.check)}(p_member, p_root) IS NOT NULL`),
+    // видимість — як в інструменті обслуговування (Р-A6-12). Примушені ключі
+    // функція ігнорує (їх пише вона сама), тож перевірка їх не бачить.
+    ...ifRefuse(
+      `${qualified(m.check)}(p_member - ARRAY[${Object.keys(forced).map(sqlLiteral).join(", ")}]::text[], p_root) IS NOT NULL`
+    ),
     `v_context := current_setting(${sqlLiteral(COMMAND_SETTING)}, true);`,
     context(m.action, m.kindLabel, "p_member_id"),
     `v_in := jsonb_populate_record(NULL::${qualified(m.table)}, p_member);`,

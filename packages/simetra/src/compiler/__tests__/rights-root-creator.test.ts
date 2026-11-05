@@ -140,7 +140,7 @@ function grantSteps(m: CompiledModel, fullAccess: boolean): Step[] {
     // далі членство творця під власним контекстом
     [
       "if",
-      "public.org_member_simetra_member_check(p_member, p_root) IS NOT NULL",
+      "public.org_member_simetra_member_check(p_member - ARRAY['id', 'org_id', 'user_id']::text[], p_root) IS NOT NULL",
     ],
     ["refuse"],
     ["assign", "v_context := current_setting('simetra.command', true)"],
