@@ -1,12 +1,8 @@
-import {
-  CURRENT_USER_FUNCTION_NAME,
-  PLATFORM_SCHEMA,
-  type DatabaseProvider,
-} from "simetra/model"
-import { qualified, type Contracts, type QualifiedName } from "../contracts"
+import { CURRENT_USER_FUNCTION_NAME, PLATFORM_SCHEMA } from "simetra/model"
+import { qualified, type QualifiedName } from "../contracts"
 import { sqlLiteral } from "../stages/model"
 import { INPUT_COLUMNS } from "./admin-tables"
-import { hasRightsFunctions, type MineInputs } from "./functions"
+import type { MineInputs } from "./functions"
 
 /**
  * Факти актора, які знімок бере до першої зміни їхнього джерела (спека прав
@@ -120,18 +116,32 @@ export function snapshotForeign(): string {
 }
 
 /**
- * Чи має проєкт знімок актора: без довідників прав команда прав не змінює,
- * а без функцій прав знімати нічого.
+ * Дві гілки публічної функції факту (Р3-3): знімок — коли факт цієї
+ * транзакції знято для поточного користувача; живий варіант — коли факту
+ * ще немає й транзакцію не закріплено за іншим актором. Інакше — порожньо
+ * (fail-closed). Гілки — повні запити тієї самої форми колонок.
  */
-export function hasActorSnapshot(
-  contracts: Pick<
-    Contracts,
-    "rightsCatalogs" | "roles" | "users" | "membershipSources"
-  >,
-  provider: DatabaseProvider
-): boolean {
-  return (
-    contracts.rightsCatalogs.length > 0 &&
-    hasRightsFunctions(contracts, provider)
-  )
+export function snapshotBranches(
+  fact: SnapshotFact,
+  snapshot: string,
+  live: string
+): string {
+  return [
+    `SELECT * FROM (`,
+    indent(snapshot),
+    `) s`,
+    `WHERE ${snapshotOwned(fact)}`,
+    `UNION ALL`,
+    `SELECT * FROM (`,
+    indent(live),
+    `) l`,
+    `WHERE NOT ${snapshotPresent(fact)} AND NOT ${snapshotForeign()}`,
+  ].join("\n")
+}
+
+function indent(sql: string): string {
+  return sql
+    .split("\n")
+    .map((line) => `  ${line}`)
+    .join("\n")
 }

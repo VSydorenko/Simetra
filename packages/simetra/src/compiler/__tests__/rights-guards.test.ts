@@ -1190,7 +1190,9 @@ describe("rights guard transaction check", () => {
 
   // Р3-15: факт `rights` — входи `rights_mine` тими самими генераторами з
   // живим користувачем; контейнери й дельти — лише ті, на які посилаються
-  // призначення актора, бо інших `rights_mine` не читає.
+  // призначення актора, бо інших `rights_mine` не читає. Дельти — за
+  // кастомною роллю, без `scope_key`: вікно `deny` живої гілки його не
+  // читає, тож звуження за ключем скоупу спиралося б на інваріант тенанта.
   it("snapshots the inputs of rights_mine with the shared generators", () => {
     const style = domain.project.naming.attributeCase
     const inputs = liveInputs(domain.contracts, domain.physical, style, LIVE)
@@ -1218,7 +1220,7 @@ describe("rights guard transaction check", () => {
           `INSERT INTO simetra.rights_tx_containers (xid, level_id, container, scope_kind_id, scope) SELECT txid_current(), k.level_id, k.container, k.scope_kind_id, k.scope FROM (${inputs.containers}) k WHERE EXISTS (SELECT 1 FROM simetra.rights_tx_typed t WHERE t.xid = txid_current() AND t.level = 'container' AND t.level_id = k.level_id AND t.container = k.container)`
         ),
         tree(
-          `INSERT INTO simetra.rights_tx_deltas (xid, storage, storage_id, custom_role, scope_key, effect, object, action, extent, dimension_id) SELECT txid_current(), d.storage, d.storage_id, d.custom_role, d.scope_key, d.effect, d.object, d.action, d.extent, d.dimension_id FROM (${inputs.deltas}) d WHERE EXISTS (SELECT 1 FROM simetra.rights_tx_typed t WHERE t.xid = txid_current() AND t.storage = d.storage AND t.storage_id IS NOT DISTINCT FROM d.storage_id AND t.custom_role = d.custom_role AND d.scope_key = coalesce(t.scope, ${ZERO}))`
+          `INSERT INTO simetra.rights_tx_deltas (xid, storage, storage_id, custom_role, scope_key, effect, object, action, extent, dimension_id) SELECT txid_current(), d.storage, d.storage_id, d.custom_role, d.scope_key, d.effect, d.object, d.action, d.extent, d.dimension_id FROM (${inputs.deltas}) d WHERE EXISTS (SELECT 1 FROM simetra.rights_tx_typed t WHERE t.xid = txid_current() AND t.storage = d.storage AND t.storage_id IS NOT DISTINCT FROM d.storage_id AND t.custom_role = d.custom_role)`
         ),
         ...holders,
         tree(

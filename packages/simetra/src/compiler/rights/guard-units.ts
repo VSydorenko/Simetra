@@ -36,7 +36,6 @@ import { COMMAND_FUNCTIONS } from "./command-units"
 import {
   FACT_TABLE,
   SNAPSHOT_TABLES,
-  hasActorSnapshot,
   inputColumns,
   snapshotInputs,
   type SnapshotFact,
@@ -45,9 +44,9 @@ import {
   LIVE,
   RIGHTS_FUNCTIONS,
   ZERO_UUID,
+  hasActorSnapshot,
   liveInputs,
   mineBody,
-  uuidLiteral,
   type ScopeSetFunction,
 } from "./functions"
 import { generatedTableFunctionName } from "./generated-names"
@@ -329,8 +328,11 @@ const HEADER = ref(SNAPSHOT_TABLES.header)
  * прийнятих джерел діють на заповненні самі. Контейнери й дельти — лише ті,
  * на які посилаються призначення актора: інших `rights_mine` не читає
  * (`held` з'єднує контейнер за рівнем і id, гілки дельт — за кастомною
- * роллю), а повна копія множила б знімок на всіх тенантів. Умова
- * `scope_key` — та сама, що в гілці `allow`: вона відкриває індекс ТЧ дельт.
+ * роллю), а повна копія множила б знімок на всіх тенантів. Дельти звужено
+ * лише кастомною роллю призначення, без `scope_key`: вікно `deny` живої
+ * гілки `scope_key` не читає, а збіг ключа скоупу точний лише за інваріантом
+ * тенанта кастомної ролі — знімок на нього не спирається. Колонка `scope_key`
+ * лишається: її рівняє гілка `allow` над знімком так само, як над живими.
  * Носії `fullAccess` — лише цього актора; `v_actor` — актор знімка.
  */
 function rightsFactRows(
@@ -350,7 +352,7 @@ function rightsFactRows(
     `${held("t.level = 'container' AND t.level_id = k.level_id AND t.container = k.container")};`,
     `INSERT INTO ${ref(T.deltas)} (xid, ${inputColumns("deltas")})`,
     `SELECT txid_current(), ${inputColumns("deltas", "d")} FROM (${inputs.deltas}) d`,
-    `${held(`t.storage = d.storage AND t.storage_id IS NOT DISTINCT FROM d.storage_id AND t.custom_role = d.custom_role AND d.scope_key = coalesce(t.scope, ${uuidLiteral(ZERO_UUID)})`)};`,
+    `${held("t.storage = d.storage AND t.storage_id IS NOT DISTINCT FROM d.storage_id AND t.custom_role = d.custom_role")};`,
     ...contracts.rightsCatalogs.flatMap((catalog) => [
       `INSERT INTO ${ref(T.holders)} (xid, level, level_id, scope)`,
       `SELECT txid_current(), ${sqlLiteral(catalog.level.level)}, ${catalog.level.level === "scope" ? `${sqlLiteral(catalog.level.scopeKindId)}::uuid` : "NULL::uuid"}, h.scope`,

@@ -46,9 +46,12 @@ import {
   roleContracts,
   sourceContracts,
 } from "./rights/contracts"
-import { buildRightsUnits, hasRightsFunctions } from "./rights/functions"
+import {
+  buildRightsUnits,
+  hasActorSnapshot,
+  hasRightsFunctions,
+} from "./rights/functions"
 import { buildExplainUnits } from "./rights/explain-units"
-import { hasActorSnapshot } from "./rights/actor-snapshot"
 import { buildRightsGuardUnits } from "./rights/guard-units"
 import { snapshotExemptWriters } from "./rights/snapshot-exempt-writers"
 import { snapshotSources } from "./rights/snapshot-sources"
@@ -428,6 +431,29 @@ export async function runStages(
   // Один контракт «Користувачів» і для шару платформи, і для функцій прав, і
   // для меж доступу: без нього всі мовчать (спека прав §4.6).
   const users = usersContractOf(stage1.objects, physical)
+  // Дослівні функції множини видів скоупу — факт актора `scopeSets` (спека
+  // прав §5.2): той самий перелік, що гранти `setFunctions`, з видом.
+  const scopeSetFunctions = scopeKinds
+    .filter((kind) =>
+      stage1.project!.scopeKinds.some(
+        (declared) =>
+          declared.id === kind.id && typeof declared.setFunction !== "string"
+      )
+    )
+    .map((kind) => ({ scopeKindId: kind.id, fn: kind.setFunction }))
+    .sort((a, b) => compareStrings(a.scopeKindId, b.scopeKindId))
+  // Знімок актора (спека прав §7): з ним публічні функції фактів, функції
+  // членства й межа тенанта дослівної функції множини читають факти
+  // транзакції на її початок.
+  const actorSnapshot = hasActorSnapshot(
+    {
+      rightsCatalogs,
+      roles,
+      users,
+      membershipSources: sources.membershipSources,
+    },
+    stage1.project.database.provider
+  )
   const access = accessContracts(
     stage1.objects,
     physical,
@@ -435,7 +461,10 @@ export async function runStages(
     scopeKindIdByFile,
     rights,
     users?.objectId,
-    stage1.project.naming.attributeCase
+    stage1.project.naming.attributeCase,
+    new Set(
+      actorSnapshot ? scopeSetFunctions.map((set) => set.scopeKindId) : []
+    )
   )
 
   const projectModule = stage1.project.name
@@ -488,17 +517,6 @@ export async function runStages(
     physical,
     stage1.project
   )
-  // Дослівні функції множини видів скоупу — факт актора `scopeSets` (спека
-  // прав §5.2): той самий перелік, що гранти `setFunctions`, з видом.
-  const scopeSetFunctions = scopeKinds
-    .filter((kind) =>
-      stage1.project!.scopeKinds.some(
-        (declared) =>
-          declared.id === kind.id && typeof declared.setFunction !== "string"
-      )
-    )
-    .map((kind) => ({ scopeKindId: kind.id, fn: kind.setFunction }))
-    .sort((a, b) => compareStrings(a.scopeKindId, b.scopeKindId))
   // Один об'єкт контрактів для функцій прав і для пояснення видимості: поле,
   // додане лише в одне місце, дало б двом генераторам різні контракти.
   const rightsInputs = {
@@ -528,7 +546,8 @@ export async function runStages(
       stage1.objects,
       physical,
       stage1.project,
-      parse
+      parse,
+      actorSnapshot
     ),
     ...buildPlatformUnits(
       {
@@ -662,10 +681,7 @@ export async function runStages(
     accessDimensions,
     scopeSetFunctions,
   }
-  const snapshot = hasActorSnapshot(
-    guardContracts,
-    stage1.project.database.provider
-  )
+  const snapshot = actorSnapshot
     ? snapshotSources({
         contracts: guardContracts,
         physical,

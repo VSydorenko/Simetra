@@ -6,6 +6,7 @@ import { RIGHTS_FUNCTIONS } from "../rights/functions"
 import { snapshotSources } from "../rights/snapshot-sources"
 import { loadSqlParser, type SqlParser } from "../sql/parse"
 import { loadPlpgsqlParser, type PlpgsqlParser } from "../sql/plpgsql"
+import { unitRelations } from "../sql/dependencies"
 import { relationReads } from "../sql/reads"
 import { generatedUnit, type SqlUnit, type VerbatimUnit } from "../sql/units"
 import {
@@ -91,18 +92,44 @@ describe("actor snapshot sources", () => {
       "public.source_roles": "sourceRoleTable",
       [`public.${SNAPSHOT_USER_BADGE_TABLE}`]: "declared",
       "simetra.identities": "identities",
+      // Дослівна функція виміру кличе публічну функцію членства, а та зі
+      // знімком читає мої скоупи транзакції (Р3-6: таблиці знімка — виняток).
+      "simetra.rights_tx_header": "snapshot",
+      "simetra.rights_tx_scopes": "snapshot",
     })
     expect(found.unknown).toEqual([])
   })
 
+  // Живі варіанти самі знімка не читають; таблиця знімка досяжна лише через
+  // публічну функцію, яку кличе дослівна функція проєкту, — і тоді вона
+  // виняток, а не джерело.
   it("reads no snapshot table from live variants", () => {
     const snapshot = new Set(
       Object.values(SNAPSHOT_TABLES).map((t) => `${t.schema}.${t.name}`)
     )
-    const found = snapshotSources(inputOf(model))
-    expect(
-      [...found.sources, ...found.exempt].filter((e) => snapshot.has(named(e)))
-    ).toEqual([])
+    const input = inputOf(model)
+    const found = snapshotSources(input)
+    expect(found.sources.filter((e) => snapshot.has(named(e)))).toEqual([])
+    for (const e of found.exempt.filter((x) => snapshot.has(named(x))))
+      expect(e.reason, named(e)).toBe("snapshot")
+    for (const fn of [
+      RIGHTS_FUNCTIONS.mineLive,
+      RIGHTS_FUNCTIONS.myScopesLive,
+      RIGHTS_FUNCTIONS.myMembersLive,
+      RIGHTS_FUNCTIONS.dimensionValuesLive,
+      RIGHTS_FUNCTIONS.scopeSetLive,
+    ]) {
+      const unit = input.generated.find(
+        (u) => u.schema === fn.schema && u.name === fn.name
+      )!
+      const direct = unitRelations(unit, parse).map(
+        (r) => `${r.schema}.${r.name}`
+      )
+      expect(
+        direct.filter((r) => snapshot.has(r)),
+        fn.name
+      ).toEqual([])
+    }
   })
 
   it("maps the direct reads of every live variant", () => {

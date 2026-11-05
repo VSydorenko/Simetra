@@ -250,8 +250,8 @@
 
 Гілки (лише коли `hasActorSnapshot`): `rights_mine` і `rights_mine(p_object, p_action)` (`rights`; гілки — на вхідних CTE, Р3-15); `rights_my_scopes` (`scopes`; сигнатура та сама; обидві гілки проєктують рівно `scope_kind_id, scope, member` — живий варіант має ще `catalog`); `rights_dimension_values` (`values`); `_member_scopes`, `_my_member` (`scopes`, `catalog AND scope_kind_id = <вид>`, `_my_member` — ще `scope = p_scope`); `rights_scope_set` (`scopeSets`); `tenantBoundary` виду з дослівною функцією — `ARRAY(SELECT simetra.rights_scope_set('<вид>'))`; `rights_explain` — Р3-8.
 
-- [ ] **Крок 1. Тести:** `renders snapshotPresent and snapshotOwned literally` (рукописний очікуваний текст для `rights`); для кожної функції з гілками — тіло = `snapshotBranches(<факт>, …)` (цілий оператор); `renders no snapshot branch without rights catalogs`; `uses no txid_current() in fact functions` (лише `_if_assigned`); `routes the tenant boundary of a verbatim set function through rights_scope_set`; `judges caller visibility by snapshot-aware functions`.
-- [ ] **Крок 2.** Червоні. **Крок 3.** Реалізувати. **Крок 4.** Зелені unit; DB — Задача 6 (спільний коміт).
+- [x] **Крок 1. Тести:** `renders snapshotPresent and snapshotOwned literally` (рукописний очікуваний текст для `rights`); для кожної функції з гілками — тіло = `snapshotBranches(<факт>, …)` (цілий оператор); `renders no snapshot branch without rights catalogs`; `uses no txid_current() in fact functions` (лише `_if_assigned`); `routes the tenant boundary of a verbatim set function through rights_scope_set`; `judges caller visibility by snapshot-aware functions`.
+- [x] **Крок 2.** Червоні. **Крок 3.** Реалізувати. **Крок 4.** Зелені unit; DB — Задача 6 (спільний коміт).
 
 **Доповнення Р3-15/Р3-16:**
 

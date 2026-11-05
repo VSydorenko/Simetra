@@ -45,6 +45,14 @@ import { generatedUnit, type SqlUnit } from "../sql/units"
 import { allowedActions, compareExtents, levelAllowsExtent } from "./expand"
 import { levelKey } from "./facts"
 import { must } from "./references"
+import {
+  SNAPSHOT_TABLES,
+  snapshotBranches,
+  snapshotForeign,
+  snapshotInputs,
+  snapshotOwned,
+  snapshotPresent,
+} from "./actor-snapshot"
 import { rightsLevelOf } from "./system-catalogs"
 import { sqlLiteral } from "../stages/model"
 import { standardColumn } from "../standard-column"
@@ -72,6 +80,7 @@ export const RIGHTS_FUNCTIONS = {
   myScopes: platform("rights_my_scopes"),
   myScopesLive: platform("rights_my_scopes_live"),
   mine: platform("rights_mine"),
+  minePair: platform("rights_mine"),
   mineLive: platform("rights_mine_live"),
   any: platform("rights_any"),
   own: platform("rights_own"),
@@ -82,6 +91,7 @@ export const RIGHTS_FUNCTIONS = {
   myMembersLive: platform("rights_my_members_live"),
   dimensionValues: platform("rights_dimension_values"),
   dimensionValuesLive: platform("rights_dimension_values_live"),
+  scopeSet: platform("rights_scope_set"),
   scopeSetLive: platform("rights_scope_set_live"),
   visibleUsers: platform("rights_visible_users"),
   scopesOf: platform("rights_scopes_of"),
@@ -182,6 +192,12 @@ export interface ScopeSetFunction {
   fn: QualifiedName
 }
 
+/**
+ * Xid транзакції для читання знімка: без призначеного xid охорона Р3-3 не
+ * пускає до таблиць знімка, а `txid_current()` видав би xid читанню.
+ */
+const SNAPSHOT_XID = "txid_current_if_assigned()"
+
 /** Контракти, з яких генератор будує функції. */
 export type RightsFunctionContracts = Pick<
   Contracts,
@@ -202,7 +218,7 @@ interface Declaration {
   args: readonly [name: string, type: string][]
   returns: string
   body: string
-  shape: ClosedFunctionShape | "stable" | "write"
+  shape: ClosedFunctionShape | "stable" | "write" | "dispatcher"
   grants?: readonly GrantPurpose[]
   requires?: readonly CreationNode[]
 }
@@ -236,6 +252,23 @@ export function hasRightsFunctions(
   provider: DatabaseProvider
 ): boolean {
   return contracts.roles.length > 0 && hasSessionUser(contracts, provider)
+}
+
+/**
+ * Чи має проєкт знімок актора (спека прав §7): без довідників прав команда
+ * прав не змінює, а без функцій прав знімати нічого.
+ */
+export function hasActorSnapshot(
+  contracts: Pick<
+    Contracts,
+    "rightsCatalogs" | "roles" | "users" | "membershipSources"
+  >,
+  provider: DatabaseProvider
+): boolean {
+  return (
+    contracts.rightsCatalogs.length > 0 &&
+    hasRightsFunctions(contracts, provider)
+  )
 }
 
 /**
@@ -319,6 +352,50 @@ export function buildRightsUnits(
     grants: ANALYSIS_ROLES,
   })
   const of = (fn: QualifiedName) => userOf(fn, contracts)
+  // Знімок актора (спека прав §5.1, §7): публічні функції фактів мають дві
+  // гілки — знімок транзакції й живий варіант; без довідників прав знімати
+  // нічого, і тіла — як були.
+  const snapshot = contracts.rightsCatalogs.length > 0
+  const pair: MinePair = {
+    action: param(F.minePair, "p_action"),
+    object: param(F.minePair, "p_object"),
+  }
+  // Права актора (Р3-15): диспетчер між двома згенерованими тілами
+  // `mineBody` — над входами знімка й над живими входами; без знімка —
+  // одне живе тіло.
+  const mine = (
+    fn: QualifiedName,
+    args: Declaration["args"],
+    filter?: MinePair
+  ): Declaration =>
+    snapshot
+      ? {
+          fn,
+          args,
+          returns: table(MINE_COLUMNS),
+          shape: "dispatcher",
+          body: dispatcherBody(
+            "rights",
+            mineBody(CURRENT, false, snapshotInputs(SNAPSHOT_XID), filter),
+            mineBody(
+              LIVE,
+              false,
+              liveInputs(contracts, physical, attributeCase, LIVE),
+              filter
+            )
+          ),
+        }
+      : definer(
+          fn,
+          args,
+          table(MINE_COLUMNS),
+          mineBody(
+            CURRENT,
+            false,
+            liveInputs(contracts, physical, attributeCase, CURRENT),
+            filter
+          )
+        )
   const declarations: Declaration[] = [
     data(
       F.projection,
@@ -349,7 +426,13 @@ export function buildRightsUnits(
       F.myScopes,
       [],
       table(MY_SCOPES_COLUMNS),
-      myScopesBody(contracts, CURRENT)
+      snapshot
+        ? snapshotBranches(
+            "scopes",
+            `SELECT s.scope_kind_id, s.scope, s.member\nFROM ${qualified(SNAPSHOT_TABLES.scopes)} s\nWHERE s.xid = ${SNAPSHOT_XID}`,
+            `SELECT l.scope_kind_id, l.scope, l.member\nFROM ${call(F.myScopesLive)} l`
+          )
+        : myScopesBody(contracts, CURRENT)
     ),
     live(
       F.myScopesLive,
@@ -363,16 +446,8 @@ export function buildRightsUnits(
       table(MY_SCOPES_COLUMNS),
       myScopesBody(contracts, of(F.scopesOf))
     ),
-    definer(
-      F.mine,
-      [],
-      table(MINE_COLUMNS),
-      mineBody(
-        CURRENT,
-        false,
-        liveInputs(contracts, physical, attributeCase, CURRENT)
-      )
-    ),
+    mine(F.mine, []),
+    mine(F.minePair, [text("p_action"), text("p_object")], pair),
     live(
       F.mineLive,
       [],
@@ -455,7 +530,13 @@ export function buildRightsUnits(
       F.dimensionValues,
       [uuid("p_dimension")],
       "SETOF uuid",
-      dimensionValuesBody(contracts, F.dimensionValues, CURRENT)
+      snapshot
+        ? snapshotBranches(
+            "values",
+            `SELECT v.value\nFROM ${qualified(SNAPSHOT_TABLES.values)} v\nWHERE v.xid = ${SNAPSHOT_XID}\n  AND v.dimension_id = ${param(F.dimensionValues, "p_dimension")}`,
+            `SELECT l.value\nFROM ${call(F.dimensionValuesLive, [param(F.dimensionValues, "p_dimension")])} AS l(value)`
+          )
+        : dimensionValuesBody(contracts, F.dimensionValues, CURRENT)
     ),
     live(
       F.dimensionValuesLive,
@@ -473,6 +554,23 @@ export function buildRightsUnits(
         of(F.dimensionValuesOf)
       )
     ),
+    // Множина дослівної функції виду (Р3-11): межа тенанта й ядро команди
+    // читають її через обгортку, тож під знімком вона рахується на початок
+    // транзакції.
+    ...(snapshot
+      ? [
+          definer(
+            F.scopeSet,
+            [uuid("p_scope_kind")],
+            "SETOF uuid",
+            snapshotBranches(
+              "scopeSets",
+              `SELECT s.scope\nFROM ${qualified(SNAPSHOT_TABLES.scopeSets)} s\nWHERE s.xid = ${SNAPSHOT_XID}\n  AND s.scope_kind_id = ${param(F.scopeSet, "p_scope_kind")}`,
+              `SELECT l.value\nFROM ${call(F.scopeSetLive, [param(F.scopeSet, "p_scope_kind")])} AS l(value)`
+            )
+          ),
+        ]
+      : []),
     live(
       F.scopeSetLive,
       [uuid("p_scope_kind")],
@@ -607,12 +705,15 @@ export function buildRightsUnits(
         ? `CREATE OR REPLACE FUNCTION ${signature} RETURNS ${returns} LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = '' SET row_security = off AS ${tag}\n${body}\n${tag};`
         : shape === "stable"
           ? `CREATE OR REPLACE FUNCTION ${signature} RETURNS ${returns} LANGUAGE sql STABLE SET search_path = '' AS ${tag}\n${body}\n${tag};`
-          : closedFunction(signature, returns, body, shape)
+          : shape === "dispatcher"
+            ? `CREATE OR REPLACE FUNCTION ${signature} RETURNS ${returns} LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = '' AS ${tag}\n${body}\n${tag};`
+            : closedFunction(signature, returns, body, shape)
     return [
       sql,
       ...executeGrants(
         `${qualified(fn)}(${types})`,
-        grants ?? (shape === "definer" ? SET_ROLES : []),
+        grants ??
+          (shape === "definer" || shape === "dispatcher" ? SET_ROLES : []),
         provider
       ),
     ].map((text, i): SqlUnit => ({
@@ -1193,6 +1294,26 @@ function withCtes(
 }
 
 /**
+ * Пара права (спека прав §5.4, Р3-16): дія й мітка об'єкта — SQL-вирази.
+ * Тіло з парою рахує лише рядки цієї мітки з дією пари чи її вимогою.
+ */
+export interface MinePair {
+  action: string
+  object: string
+}
+
+/**
+ * Фільтр рядка `alias` за парою: дія пари ∪ її транзитивні вимоги. Контракт —
+ * рядки повного тіла з цією міткою й дією множини, точно: замикання з'єднує
+ * вимоги лише в межах мітки, а `rights_requires` транзитивно замкнене, тож
+ * кожна вимога рядка множини — теж у множині; вікно `deny` розбите за
+ * міткою й дією, тож фільтр бере розбиття цілими.
+ */
+function pairFilter(alias: string, pair: MinePair): string {
+  return `${alias}.object = ${pair.object} AND ${alias}.action = ANY (ARRAY[${pair.action}] || ARRAY(SELECT q.required FROM ${call(RIGHTS_FUNCTIONS.requires)} q WHERE q.object = ${pair.object} AND q.action = ${pair.action}))`
+}
+
+/**
  * Права користувача (спека прав §5.1): призначення з довідників прав, рядки
  * їхніх ролей, замикання вимог і рядки «кожного користувача». Кожен
  * запобіжник — окрема умова, яку мутаційний DB-сценарій прибирає поодинці.
@@ -1203,8 +1324,11 @@ function withCtes(
 export function mineBody(
   user: Pick<RightsUser, "user">,
   detail: boolean,
-  inputs: MineInputs
+  inputs: MineInputs,
+  pair?: MinePair
 ): string {
+  const also = (alias: string) =>
+    pair === undefined ? "" : ` AND ${pairFilter(alias, pair)}`
   const via = (source: string) => (detail ? `, '${source}'::text AS via` : "")
   const closure = detail ? DETAIL_CLOSURE_COLUMNS : CLOSURE_COLUMNS
   const ctes: [string, string, string?][] = [
@@ -1265,10 +1389,11 @@ export function mineBody(
         `    SELECT h.storage, h.storage_id, h.scope, h.container, h.custom_role, h.archetype, h.level, h.level_id, p.object, p.action, p.extent, p.dimension_id${via("archetype")}, false AS deny`,
         `    FROM held h`,
         `    JOIN ${call(RIGHTS_FUNCTIONS.projection)} p ON p.role_id = h.archetype`,
+        ...(pair === undefined ? [] : [`    WHERE ${pairFilter("p", pair)}`]),
         `    UNION ALL`,
         `    SELECT d.storage, d.storage_id, NULL, NULL, d.custom_role, NULL, NULL, NULL, d.object, d.action, d.extent, d.dimension_id${detail ? ", NULL AS via" : ""}, true`,
         `    FROM deltas d`,
-        `    WHERE d.effect = 'deny' AND d.storage IS NOT NULL AND d.custom_role IS NOT NULL`,
+        `    WHERE d.effect = 'deny' AND d.storage IS NOT NULL AND d.custom_role IS NOT NULL${also("d")}`,
         `  ) c`,
         `) w`,
         `WHERE NOT w.deny AND NOT w.denied`,
@@ -1287,7 +1412,7 @@ export function mineBody(
         ` AND m.action = d.action`,
         ` AND m.extent = d.extent`,
         ` AND m.dimension_id IS NOT DISTINCT FROM d.dimension_id`,
-        `WHERE d.effect = 'allow'`,
+        `WHERE d.effect = 'allow'${also("d")}`,
       ].join("\n"),
     ],
     // Замикання вимог у межах одного призначення (спека прав Рх9): рядок лишається,
@@ -1316,7 +1441,7 @@ export function mineBody(
       // контейнера, лише для дійсного користувача.
       `SELECT r.level, r.level_id, NULL::uuid, NULL::uuid, p.object, p.action, p.extent, p.dimension_id${detail ? `, r.role_id AS role_id, NULL::uuid AS custom_role${via("archetype")}` : ""}`,
       ...everyUserRows(),
-      `  AND ${user.user} IS NOT NULL`,
+      `  AND ${user.user} IS NOT NULL${also("p")}`,
     ].join("\n")
   )
 }
@@ -1331,6 +1456,35 @@ function everyUserRows(): string[] {
     `JOIN ${call(RIGHTS_FUNCTIONS.projection)} p ON p.role_id = r.role_id`,
     `WHERE r.level = 'everyUser'`,
   ]
+}
+
+/**
+ * Тіло диспетчера факту (Р3-15): `RETURN QUERY` гілки знімка чи живої
+ * гілки. План кожного `RETURN QUERY` кешується на сесію, а мертву гілку не
+ * планує ніхто — на відміну від SQL-функції з `SET search_path`, яку Postgres
+ * планує на кожен виклик цілою. Колонки результату — змінні plpgsql з тими
+ * самими іменами, що колонки тіл, тож неоднозначність вирішено на користь
+ * колонки.
+ */
+function dispatcherBody(
+  fact: "rights",
+  snapshot: string,
+  live: string
+): string {
+  return [
+    "#variable_conflict use_column",
+    "BEGIN",
+    // Умови — у дужках: `THEN` усередині `CASE` охорони Р3-3 інакше
+    // закінчив би умову `IF` plpgsql.
+    `  IF (${snapshotOwned(fact)}) THEN`,
+    `    RETURN QUERY`,
+    `${snapshot};`,
+    `  ELSIF (NOT ${snapshotPresent(fact)} AND NOT ${snapshotForeign()}) THEN`,
+    `    RETURN QUERY`,
+    `${live};`,
+    "  END IF;",
+    "END;",
+  ].join("\n")
 }
 
 /** Один прохід замикання над попереднім: тримається лише рядок з усіма вимогами. */
@@ -1767,7 +1921,7 @@ function scopesBody(
 ): string {
   return [
     `SELECT DISTINCT m.scope`,
-    `FROM ${call(RIGHTS_FUNCTIONS.mine)} m`,
+    `FROM ${minePairCall(fn)} m`,
     `WHERE m.level = 'scope'`,
     `  AND m.extent = ${sqlLiteral(extent)}`,
     `  AND m.object = ${param(fn, "p_object")}`,
@@ -1783,7 +1937,7 @@ function containerBody(): string {
   const fn = RIGHTS_FUNCTIONS.container
   return [
     `SELECT DISTINCT m.container`,
-    `FROM ${call(RIGHTS_FUNCTIONS.mine)} m`,
+    `FROM ${minePairCall(fn)} m`,
     `WHERE m.level = 'container'`,
     ...rightFilter(fn),
   ].join("\n")
@@ -1799,11 +1953,23 @@ function hasRightBody(): string {
   return [
     `SELECT EXISTS (`,
     `  SELECT 1`,
-    `  FROM ${call(RIGHTS_FUNCTIONS.mine)} m`,
+    `  FROM ${minePairCall(fn)} m`,
     `  WHERE m.level <> 'container'`,
     ...rightFilter(fn).map((line) => `  ${line}`),
     `)`,
   ].join("\n")
+}
+
+/**
+ * Права пари функції множини (спека прав §5.4): лише рядки її мітки й дії з
+ * вимогами, а не всі права актора. Дію фільтр тіла лишає — вихід пари
+ * містить і рядки вимог.
+ */
+function minePairCall(fn: QualifiedName): string {
+  return call(RIGHTS_FUNCTIONS.minePair, [
+    param(fn, "p_action"),
+    param(fn, "p_object"),
+  ])
 }
 
 function rightFilter(fn: QualifiedName): string[] {
@@ -1936,23 +2102,26 @@ export function analysisGate(
   request: AnalysisScope
 ): string {
   const labels = new Map(contracts.rights.map((c) => [c.objectId, c.kindLabel]))
+  // Кожен довідник призначень — своя пара (спека прав §5.4): права лише
+  // `administerRights` на його мітці, а не всі права викликача.
   const arms = contracts.rightsCatalogs.map((catalog) => {
     const label = sqlLiteral(must(labels.get(catalog.assignments.objectId)))
-    if (catalog.level.level === "global") {
-      return `(${globalScope(request)} AND g.level = 'global' AND g.object = ${label})`
-    }
-    const kind = uuidLiteral(catalog.level.scopeKindId)
-    return `(${request.kind} = ${kind} AND g.level = 'scope' AND g.level_id = ${kind} AND g.scope = ${request.scope} AND g.object = ${label})`
+    const level =
+      catalog.level.level === "global"
+        ? `${globalScope(request)} AND g.level = 'global'`
+        : `${request.kind} = ${uuidLiteral(catalog.level.scopeKindId)} AND g.level = 'scope' AND g.level_id = ${uuidLiteral(catalog.level.scopeKindId)} AND g.scope = ${request.scope}`
+    return [
+      `EXISTS (`,
+      `  SELECT 1`,
+      `  FROM ${call(RIGHTS_FUNCTIONS.minePair, ["'administerRights'", label])} g`,
+      `  WHERE g.action = 'administerRights'`,
+      `    AND g.object = ${label}`,
+      `    AND ${level}`,
+      `)`,
+    ].join("\n")
   })
   if (arms.length === 0) return "false"
-  return [
-    `EXISTS (`,
-    `  SELECT 1`,
-    `  FROM ${call(RIGHTS_FUNCTIONS.mine)} g`,
-    `  WHERE g.action = 'administerRights'`,
-    `    AND (${arms.join("\n      OR ")})`,
-    `)`,
-  ].join("\n")
+  return `(${arms.join("\nOR ")})`
 }
 
 /**

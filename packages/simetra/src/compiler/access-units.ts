@@ -35,6 +35,7 @@ import {
   call,
   hasRightsFunctions,
   hasVisibleUsers,
+  uuidLiteral,
 } from "./rights/functions"
 import {
   COMMAND_ACTION,
@@ -64,7 +65,12 @@ export function accessContracts(
   scopeKindIdByFile: ReadonlyMap<string, string>,
   rights: readonly RightsContract[],
   usersObjectId: string | undefined,
-  attributeCase: AttributeCase
+  attributeCase: AttributeCase,
+  /**
+   * Види, чию дослівну функцію множини межа читає через знімок актора
+   * (спека прав §7); без знімка — порожньо.
+   */
+  snapshotSets: ReadonlySet<string>
 ): AccessContract[] {
   const byId = new Map(objects.map((o) => [o.id ?? "", o]))
   const rightsById = new Map(rights.map((r) => [r.objectId, r]))
@@ -90,6 +96,7 @@ export function accessContracts(
               ).name,
               setFunction: must(scopeKinds.find((k) => k.id === kindId))
                 .setFunction,
+              verbatim: snapshotSets.has(kindId),
             }
       const { objectId } = table.origin
       const main =
@@ -237,7 +244,22 @@ export function tenantBoundary(
     row === undefined
       ? quoteIdent(scope.carrier)
       : `${row}.${quoteIdent(scope.carrier)}`
-  return `${carrier} = ANY (ARRAY(SELECT ${qualified(scope.setFunction)}()))`
+  return `${carrier} = ANY (ARRAY(SELECT ${scopeSetCall(scope)}))`
+}
+
+/**
+ * Множина скоупів межі тенанта (спека прав §5.2): функція членства чи —
+ * для дослівної функції виду під знімком актора — обгортка
+ * `simetra.rights_scope_set`, бо дослівна функція може читати джерела прав,
+ * і без знімка межа побачила б зміни власної транзакції. Одне місце для
+ * політик, ядра команди й пояснення видимості.
+ */
+export function scopeSetCall(
+  scope: NonNullable<AccessContract["scope"]>
+): string {
+  return scope.verbatim
+    ? call(RIGHTS_FUNCTIONS.scopeSet, [uuidLiteral(scope.scopeKindId)])
+    : `${qualified(scope.setFunction)}()`
 }
 
 /** Родина політики запису (спека прав §5.3): кореневий рядок команди чи решта рядків. */

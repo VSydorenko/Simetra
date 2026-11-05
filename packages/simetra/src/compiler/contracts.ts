@@ -276,8 +276,18 @@ export interface MembershipContract {
 export interface AccessContract {
   objectId: string
   table: QualifiedName
-  /** Скоупленої таблиці: колонка-носій і функція множини виду скоупу. */
-  scope?: { scopeKindId: string; carrier: string; setFunction: QualifiedName }
+  /**
+   * Скоупленої таблиці: колонка-носій і функція множини виду скоупу.
+   * `verbatim` — множину дослівної функції виду межа читає через
+   * `simetra.rights_scope_set` (спека прав §5.2, §7): лише коли в проєкті є
+   * знімок актора; інакше, як і для функції членства, — напряму.
+   */
+  scope?: {
+    scopeKindId: string
+    carrier: string
+    setFunction: QualifiedName
+    verbatim: boolean
+  }
   /** Ролі запиту, яким відкрито всі рядки: `anon` → обидві, `authenticated` → `user`. */
   publicRead: RequestRolePurpose[]
   /** Основна таблиця кореня виду скоупу: без межі тенанта на `INSERT` (спека прав §5.2). */

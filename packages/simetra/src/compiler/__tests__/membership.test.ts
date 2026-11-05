@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest"
 import { compile } from "simetra/compiler"
 import { PLATFORM_ROLES, type PhysicalTable } from "simetra/model"
+import { snapshotBranches } from "../rights/actor-snapshot"
+import { loadSqlParser } from "../sql/parse"
+import { withoutLocations, type SqlUnit } from "../sql/units"
+import { ORG_KIND_ID, compiledPolicyDomain } from "./fixtures/rights"
 import { attribute, catalog, metaFiles, project, uuid } from "./helpers"
 
 const MEMBER_FILE = "catalogs/OrgMember/OrgMember.meta.json"
@@ -426,5 +430,64 @@ describe("membership", () => {
     const found = result.diagnostics.filter((d) => d.code === code)
     expect(found.map((d) => `${d.file} ${d.pointer}`)).toEqual([at])
     expect(found[0]!.severity).toBe("error")
+  })
+})
+
+describe("membership functions with an actor snapshot", () => {
+  // Зі знімком актора (довідники прав є) функції членства читають мої
+  // скоупи знімка — лише рядки довідника членства свого виду (спека прав §7).
+  it("renders the membership functions as snapshot branches of my scopes", async () => {
+    const parse = await loadSqlParser()
+    const result = await compiledPolicyDomain({})
+    expect(result.diagnostics.filter((d) => d.severity === "error")).toEqual([])
+    const model = result.model!
+    expect(model.contracts.rightsCatalogs).not.toEqual([])
+    const body = (sql: string) => {
+      const parsed = parse(sql)
+      if (!parsed.ok) throw new Error(`does not parse: ${sql}`)
+      return withoutLocations(parsed.statements[0]!.stmt)
+    }
+    const unitBody = (unit: SqlUnit) => {
+      const tree = unit.tree as {
+        CreateFunctionStmt: {
+          options: {
+            DefElem: {
+              defname: string
+              arg: { List?: { items: { String: { sval: string } }[] } }
+            }
+          }[]
+        }
+      }
+      return body(
+        tree.CreateFunctionStmt.options.find((o) => o.DefElem.defname === "as")!
+          .DefElem.arg.List!.items[0]!.String.sval
+      )
+    }
+    const unit = (identity: string) =>
+      model.sqlUnits.find((u) => u.identity === identity)!
+    const mine = `FROM simetra.rights_tx_scopes s WHERE s.xid = txid_current_if_assigned() AND s.catalog AND s.scope_kind_id = '${ORG_KIND_ID}'::uuid`
+    const current = "(SELECT simetra.current_user_id())"
+    expect(
+      unitBody(unit("function:public.org_member_member_scopes()"))
+    ).toEqual(
+      body(
+        snapshotBranches(
+          "scopes",
+          `SELECT s.scope ${mine}`,
+          `SELECT m.org_id FROM public.org_member m WHERE m.user_id IS NOT NULL AND m.user_id = ${current}`
+        )
+      )
+    )
+    expect(
+      unitBody(unit("function:public.org_member_my_member(uuid)"))
+    ).toEqual(
+      body(
+        snapshotBranches(
+          "scopes",
+          `SELECT s.member ${mine} AND s.scope = org_member_my_member.p_scope`,
+          `SELECT m.id FROM public.org_member m WHERE m.org_id = org_member_my_member.p_scope AND m.user_id IS NOT NULL AND m.user_id = ${current}`
+        )
+      )
+    )
   })
 })

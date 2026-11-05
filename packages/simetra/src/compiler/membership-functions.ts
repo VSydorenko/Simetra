@@ -15,6 +15,7 @@ import { CURRENT_USER_FUNCTION } from "./platform/names"
 import { executeGrants } from "./sql/execute-grants"
 import type { SqlParser } from "./sql/parse"
 import { generatedUnit, type SqlUnit } from "./sql/units"
+import { SNAPSHOT_TABLES, snapshotBranches } from "./rights/actor-snapshot"
 import type { ParsedObject } from "./stages/files"
 import { keyColumnOf, membershipUserOf } from "./stages/model"
 
@@ -132,12 +133,15 @@ export function membershipsOf(
  * політику, а порожній `search_path` не лишає простору для підміни імен.
  * Виконання — лише `authenticated` і сервісній ролі: дефолт Postgres дає його `PUBLIC`, а
  * провайдер — своїм ролям типовими привілеями схеми (`executeGrants`).
+ * Зі знімком актора (`snapshot`, спека прав §7) обидві функції читають
+ * мої скоупи знімка транзакції, коли його знято, — факт `scopes`.
  */
 export function buildMembershipFunctions(
   objects: readonly ParsedObject[],
   physical: PhysicalSnapshot,
   project: Project,
-  parse: SqlParser
+  parse: SqlParser,
+  snapshot: boolean
 ): SqlUnit[] {
   const units: SqlUnit[] = []
   for (const membership of membershipsOf(objects, physical, project)) {
@@ -151,7 +155,7 @@ export function buildMembershipFunctions(
       {
         fn: membership.myMember,
         signature: `${qualified(membership.myMember)}(uuid)`,
-        sql: myMemberFunction(membership),
+        sql: myMemberFunction(membership, snapshot),
       },
       ...(membership.setFunction === undefined
         ? []
@@ -159,7 +163,11 @@ export function buildMembershipFunctions(
             {
               fn: membership.setFunction,
               signature: `${qualified(membership.setFunction)}()`,
-              sql: memberScopesFunction(membership, membership.setFunction),
+              sql: memberScopesFunction(
+                membership,
+                membership.setFunction,
+                snapshot
+              ),
             },
           ]),
     ]
@@ -183,31 +191,58 @@ export function buildMembershipFunctions(
  * учасником не є. Параметр кваліфіковано іменем функції: колонка з тим самим
  * іменем у тілі SQL-функції перемогла б параметр.
  */
-function myMemberFunction(membership: Membership): string {
+function myMemberFunction(membership: Membership, snapshot: boolean): string {
   const { myMember } = membership
   const user = `m.${quoteIdent(membership.userColumn)}`
+  const scope = `${quoteIdent(myMember.name)}.p_scope`
+  const live = [
+    `SELECT m.${quoteIdent(membership.keyColumn)}`,
+    `FROM ${qualified(membership.table)} m`,
+    `WHERE m.${quoteIdent(membership.scopeColumn)} = ${scope}`,
+    `  AND ${user} IS NOT NULL`,
+    `  AND ${user} = ${CURRENT_USER}`,
+  ].join("\n")
   return closedFunction(
     `${qualified(myMember)}(p_scope uuid)`,
     "uuid",
-    [
-      `SELECT m.${quoteIdent(membership.keyColumn)}`,
-      `FROM ${qualified(membership.table)} m`,
-      `WHERE m.${quoteIdent(membership.scopeColumn)} = ${quoteIdent(myMember.name)}.p_scope`,
-      `  AND ${user} IS NOT NULL`,
-      `  AND ${user} = ${CURRENT_USER}`,
-    ].join("\n")
+    snapshot
+      ? snapshotBranches(
+          "scopes",
+          `${catalogScopes(membership, "s.member")}\n  AND s.scope = ${scope}`,
+          live
+        )
+      : live
   )
+}
+
+/**
+ * Рядки моїх скоупів знімка з довідника членства виду (спека прав §7): лише
+ * рядки довідника — функції членства не бачать прийнятих джерел. Довідник
+ * членства один на вид, тож вид рядка називає й довідник.
+ */
+function catalogScopes(membership: Membership, column: string): string {
+  return [
+    `SELECT ${column}`,
+    `FROM ${qualified(SNAPSHOT_TABLES.scopes)} s`,
+    `WHERE s.xid = txid_current_if_assigned()`,
+    `  AND s.catalog`,
+    `  AND s.scope_kind_id = '${must(membership.scopeKind.id, "scope kind id")}'::uuid`,
+  ].join("\n")
 }
 
 /** Функція множини виду скоупу: значення скоупу, де поточний користувач — учасник. */
 function memberScopesFunction(
   membership: Membership,
-  fn: QualifiedName
+  fn: QualifiedName,
+  snapshot: boolean
 ): string {
+  const live = memberScopesBody(membership, CURRENT_USER)
   return closedFunction(
     `${qualified(fn)}()`,
     "SETOF uuid",
-    memberScopesBody(membership, CURRENT_USER)
+    snapshot
+      ? snapshotBranches("scopes", catalogScopes(membership, "s.scope"), live)
+      : live
   )
 }
 
