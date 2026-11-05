@@ -2821,15 +2821,23 @@ export const COUNTRY_ID = uuid(8210)
  * `Ref` на нескоуплені цілі (`Users`, `Country`); `requiredMember` додає
  * обов'язковий `title` поруч із ними — композиція з `requiredMemberAttribute()`
  * перезаписала б реквізити `OrgMember` (шари зливаються поверхнево).
+ * `memberRead: false` (лише разом із `fullAccess: false`) знімає з `TenantOwner`
+ * грант на `OrgMember`: рядок членства творця невидимий йому й після гранту.
  */
 export function tenantSelfService(
   options: {
     fullAccess?: boolean
     requiredMember?: boolean
     founder?: boolean
+    memberRead?: boolean
   } = {}
 ): Layer {
-  const { fullAccess = true, requiredMember = false, founder = true } = options
+  const {
+    fullAccess = true,
+    requiredMember = false,
+    founder = true,
+    memberRead = true,
+  } = options
   const organization = objects(["Catalog", "Organization"])
   const members = objects(["Catalog", "OrgMember"])
   const assignments = objects(["Catalog", "OrgRoleAssignments"])
@@ -2893,7 +2901,9 @@ export function tenantSelfService(
             rootCreator: true,
             grants: [
               grant(organization, ["read", "update"], "any"),
-              grant(members, ["read", "create", "update"], "any"),
+              ...(memberRead
+                ? [grant(members, ["read", "create", "update"], "any")]
+                : []),
               grant(assignments, ["read", "administerRights"], "any"),
             ],
           }

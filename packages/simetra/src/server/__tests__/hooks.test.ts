@@ -323,6 +323,30 @@ describe("tenant creation hooks", () => {
     )
   })
 
+  // Членство без права читання творцю невидиме й після гранту: ядро віддає
+  // `{ключ, версія}` без скоупу, і це не аномалія (спека П4 §6.13).
+  it("membership onWrite gets an invisible member row as id and version", async () => {
+    const onWrite = vi.fn()
+    const { runtime } = await setupRoots(
+      (text) =>
+        isCore(text)
+          ? {
+              rows: [
+                {
+                  r: rootResult(undefined, { id: MEMBER_ROW, version: "1" }),
+                },
+              ],
+            }
+          : undefined,
+      { objectModules: { "Catalog.OrgMember": { onWrite } } }
+    )
+    const result = await runtime.run(session, createOrganization)
+    expect(onWrite).toHaveBeenCalledWith(
+      expect.objectContaining({ row: { ref: MEMBER_ROW, version: 1 } })
+    )
+    expect(result.changes.map((c) => c.object)).toEqual([ORGANIZATION])
+  })
+
   it.each<[string, Modules, string]>([
     [
       "root beforeWrite returns tabularSections",

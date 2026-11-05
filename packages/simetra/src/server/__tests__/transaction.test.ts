@@ -411,6 +411,8 @@ describe("command transaction", () => {
   it.each([
     ["an undecodable row", { r: "not json" }],
     ["a row without r", {}],
+    // Скоуп звичайного ядра обов'язковий; виняток — лише рядок членства ядра кореня.
+    ["a row without its scope", { r: JSON.stringify({ id: ID, version: 1 }) }],
   ])("decodes the row before COMMIT and logs %s", async (_, row) => {
     const { db, runtime, log } = await setup((text) =>
       text.endsWith("AS r") ? { rows: [row] } : undefined

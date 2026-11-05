@@ -245,16 +245,27 @@ describe("tenant creation through runtime.run", () => {
     "tenant_b",
     (owner) => seedGlobal(owner, { founder: GLOBAL_FOUNDER_ID })
   )
+  // Модель В: `TenantOwner` без `fullAccess` і без гранту на `OrgMember` —
+  // рядок членства творця невидимий йому й після гранту.
+  const targetC = heldEnv(
+    () =>
+      policyDomain(tenantSelfService({ fullAccess: false, memberRead: false })),
+    "tenant_c",
+    async () => ({})
+  )
   let a: Env
   let b: Env
+  let c: Env
 
   beforeAll(async () => {
     a = await targetA.open()
     b = await targetB.open()
-  }, 240_000)
+    c = await targetC.open()
+  }, 360_000)
   afterAll(async () => {
     await targetA.close()
     await targetB.close()
+    await targetC.close()
   }, 60_000)
 
   const runtime = (
@@ -462,6 +473,49 @@ describe("tenant creation through runtime.run", () => {
       )
       expect(rows).toEqual([{ n: 0 }])
       expect(await fullAccessScopes(a, creator)).toEqual([id])
+    })
+
+    // Ядро віддає невидимий рядок членства формою `{ключ, версія}` без
+    // скоупу (спека П4 §6.13): T3 приймає його, `onWrite` членства отримує
+    // цю форму, а творець має права в новому скоупі після справжнього COMMIT.
+    it("invisible member row: membership onWrite gets { id, version: 1 }, the creator reads the root next", async () => {
+      const creator = await user(c)
+      const member = objectOf(c, { kind: "Catalog", name: "OrgMember" })
+      const seen: { id: string; row: unknown }[] = []
+      const module = defineObjectModule({
+        onWrite: ({ ctx, row }) => {
+          seen.push({ id: ctx.id, row })
+        },
+      })
+      const rt = await runtime(c, fromPgPool(port(c)), {
+        objectModules: { [MEMBER_KEY]: module as ObjectModule<object> },
+      })
+      const created = await rt.run(sessionOf(creator), createOrganization({}))
+      const [row] = created.rows
+      const id = row![objectOf(c, ORGANIZATION).keyName] as string
+      expect(seen).toEqual([
+        {
+          id: expect.any(String),
+          row: { [member.keyName]: seen[0]!.id, [member.versionName]: 1 },
+        },
+      ])
+      const { rows } = await c.owner.query(
+        "SELECT count(*)::int AS n FROM public.org_member WHERE id = $1 AND org_id = $2 AND user_id = $3",
+        [seen[0]!.id, id, creator]
+      )
+      expect(rows).toEqual([{ n: 1 }])
+      expect(
+        await rt.read(sessionOf(creator), { object: ORGANIZATION, id })
+      ).toEqual([row])
+      expect(await assignmentsOf(c, id)).toEqual([
+        {
+          id: expect.any(String),
+          user: creator,
+          archetype: TENANT_OWNER_ID,
+          reason: "root-creator",
+          actor: creator,
+        },
+      ])
     })
 
     // Хук членства пише командою в межах прав творця, що діють у тій самій

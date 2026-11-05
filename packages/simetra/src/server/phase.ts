@@ -428,10 +428,14 @@ async function runRootPhase(
   let memberRow: Record<string, unknown> | undefined
   if (member !== undefined) {
     const { object: memberObject } = member
+    // Рядок членства, невидимий творцю після гранту, ядро віддає формою
+    // `{ключ, версія}` без скоупу (спека П4 §6.13); у набір змін він не йде,
+    // тож скоуп тут не потрібен — лише в цьому шляху.
     memberRow = decodeCoreRow(
       tx,
       memberObject,
-      () => (result as Record<string, unknown>).member
+      () => (result as Record<string, unknown>).member,
+      false
     ).row
   } else if ((result as Record<string, unknown>).member !== null) {
     coreAnomaly(tx, object)
@@ -487,11 +491,15 @@ function coreAnomaly(
   )
 }
 
-/** Рядок ядра за каталогом: ключ, версія й скоуп мусять бути. */
+/**
+ * Рядок ядра за каталогом: ключ, версія й скоуп мусять бути. Без скоупу —
+ * лише рядок членства з результату ядра кореня (`requireScope = false`).
+ */
 function decodeCoreRow(
   tx: Transaction,
   object: RuntimeObject,
-  parse: () => unknown
+  parse: () => unknown,
+  requireScope = true
 ): { row: Record<string, unknown>; scope: unknown } {
   let row: Record<string, unknown>
   let scope: unknown
@@ -508,7 +516,9 @@ function decodeCoreRow(
   if (
     typeof row[object.keyName] !== "string" ||
     typeof row[object.versionName] !== "number" ||
-    (object.scopeColumn !== undefined && typeof scope !== "string")
+    (requireScope &&
+      object.scopeColumn !== undefined &&
+      typeof scope !== "string")
   ) {
     coreAnomaly(tx, object)
   }
