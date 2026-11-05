@@ -7,3 +7,6 @@ $sb db reset --workdir . >/dev/null 2>&1
 ./node_modules/.bin/tsc -p tsconfig.json --noEmit && echo "PROBE1 OK (tsc)"
 ./node_modules/.bin/tsx src/probe2-signal.ts | grep 'PROBE2'
 ./node_modules/.bin/tsx src/probe3-sync.ts | grep -A8 'PROBE3'
+$sb db reset --workdir . >/dev/null 2>&1
+./node_modules/.bin/tsx src/probe5-questions.ts | grep 'PROBE5'
+BURST=500 ./node_modules/.bin/tsx src/probe6-burst.ts | tr -d '\n' | grep -o 'BURST RESULT.*}'; echo

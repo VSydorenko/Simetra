@@ -57,6 +57,32 @@ isOneToOne: false
       referencedColumns: ["id"]
     }
                   ]
+                },"deal": {
+                  Row: {
+                    "amount": number | null,"company_id": string,"id": string,"org_id": string,"title": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "amount"?: number | null,"company_id": string,"id": string,"org_id": string,"title": string
+                  }
+                  Update: {
+                    "amount"?: number | null,"company_id"?: string,"id"?: string,"org_id"?: string,"title"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "deal_company_fk"
+      columns: ["org_id","company_id"]
+isOneToOne: false
+      referencedRelation: "company"
+      referencedColumns: ["org_id","id"]
+    },{
+      foreignKeyName: "deal_org_id_fkey"
+      columns: ["org_id"]
+isOneToOne: false
+      referencedRelation: "org"
+      referencedColumns: ["id"]
+    }
+                  ]
                 },"legacy_note": {
                   Row: {
                     "body": string,"id": string,"org_id": string,"prio": number | null,"prio_num": number | null
