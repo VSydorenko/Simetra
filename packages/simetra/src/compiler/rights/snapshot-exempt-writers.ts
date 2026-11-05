@@ -8,10 +8,14 @@ import {
   isTriggerFunction,
 } from "../sql/definer-reads"
 import { modelViews } from "../sql/function-body"
-import { bodyKindTable, type KindTables } from "../sql/kind-table-verbatim"
+import {
+  bodyKindTable,
+  viewWrittenTable,
+  type KindTables,
+} from "../sql/kind-table-verbatim"
 import type { SqlParser } from "../sql/parse"
 import type { PlpgsqlParser } from "../sql/plpgsql"
-import { reachableUnits, relationReads } from "../sql/reads"
+import { reachableUnits } from "../sql/reads"
 import type { VerbatimUnit } from "../sql/units"
 import { writeGrantPaths } from "../sql/write-paths"
 import type { SnapshotSources } from "./snapshot-sources"
@@ -86,36 +90,14 @@ export function snapshotExemptWriters(
     })
 
   // (б) Подання над винятком з грантом запису ролі команд чи `PUBLIC`.
-  const exemptKeys = new Set(tables.map(key))
-  const exemptNames = new Set(tables.map((t) => t.name))
+  const exempt = exemptKindTables(tables)
   const views = modelViews(units) as VerbatimUnit[]
-  const viewTable = (
-    view: VerbatimUnit,
-    visited: ReadonlySet<string>
-  ): string | undefined => {
-    for (const ref of relationReads(view, units, parse, plpgsql)) {
-      if (ref.schema !== undefined && exemptKeys.has(key(ref as QualifiedName)))
-        return key(ref as QualifiedName)
-      if (ref.schema === undefined && exemptNames.has(ref.name))
-        return [...exemptKeys].find((k) => k.endsWith(`.${ref.name}`))
-      for (const inner of views) {
-        const id = key(inner)
-        if (
-          inner.class !== "view" ||
-          visited.has(id) ||
-          inner.name !== ref.name ||
-          (ref.schema !== undefined && inner.schema !== ref.schema)
-        )
-          continue
-        const table = viewTable(inner, new Set([...visited, id]))
-        if (table !== undefined) return table
-      }
-    }
-    return undefined
-  }
+  // Запис через матеріалізоване подання неможливий — обхід іде лише крізь
+  // звичайні.
+  const plainViews = views.filter((v) => v.class === "view")
   const writableViews = views.flatMap((view) => {
     if (view.class !== "view" || isSecurityInvoker(view)) return []
-    const table = viewTable(view, new Set([key(view)]))
+    const table = viewWrittenTable(view, exempt, plainViews, parse)
     return table === undefined ? [] : [{ view, table }]
   })
   for (const { unit, table } of writeGrantPaths(
@@ -133,7 +115,6 @@ export function snapshotExemptWriters(
   }
 
   // (в), (г) Функції `SECURITY DEFINER`, замикання яких пише виняток.
-  const exempt = exemptKindTables(tables)
   const written = (fn: VerbatimUnit): string | undefined => {
     for (const reader of [fn, ...reachableUnits(fn, units, parse, plpgsql)]) {
       const body = bodyKindTable(reader, exempt, parse, plpgsql, views)
