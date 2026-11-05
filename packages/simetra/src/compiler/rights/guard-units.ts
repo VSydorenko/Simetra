@@ -768,6 +768,15 @@ function catalogStorageKind(catalog: RightsCatalogContract): string {
  * рядком приросту `g`: вид скоупу, носій рівня скоупу якого покриває
  * контейнерний грант. Для довідника він сталий, а для всіх прав актора
  * залежить від контейнера, тож передається виразом, а не довідником.
+ *
+ * Покриття — три `NOT EXISTS`, по одному на рівень приросту, а не одне з
+ * `OR` трьох рівнів: з `OR` рівень рядка кешу не стає умовою індексу, і
+ * кожен рядок приросту перебирав увесь кеш транзакції (у найбільшого актора
+ * — сотні тисяч рядків, ~75 мс на ключ). Окремий підзапит рівня має сталі
+ * `s.level`/`s.level_id`/`s.scope` — ключі індексу `rights_tx_start`.
+ * Семантика та сама: `EXISTS (P ∧ (A ∨ B ∨ C))` ≡ `EXISTS (P ∧ A) ∨
+ * EXISTS (P ∧ B) ∨ EXISTS (P ∧ C)`, а умова рівня `g` лишається всередині
+ * підзапиту, тож рядок з невідомим рівнем, як і раніше, не покритий.
  */
 function escalationSql(
   after: string,
@@ -775,16 +784,16 @@ function escalationSql(
   storageKind: string
 ): string {
   const start = ref(SNAPSHOT_TABLES.start)
+  const grant =
+    "(s.full_access OR (s.object = g.object AND s.action = g.action AND (s.extent = 'any' OR (s.extent = g.extent AND s.dimension_id IS NOT DISTINCT FROM g.dimension_id))))"
+  const uncovered = (level: string) =>
+    `NOT EXISTS (SELECT 1 FROM ${start} s WHERE s.xid = v_pending.xid AND ${level} AND ${grant})`
   return [
     "IF NOT v_pending.maintenance AND EXISTS (",
     `  SELECT 1 FROM ((${after}) EXCEPT (${before})) g`,
-    `  WHERE NOT EXISTS (SELECT 1 FROM ${start} s WHERE s.xid = v_pending.xid`,
-    "    AND (",
-    "      (g.level = 'global' AND s.level = 'global') OR",
-    "      (g.level = 'scope' AND s.level = 'scope' AND s.level_id = g.level_id AND s.scope = g.scope) OR",
-    `      (g.level = 'container' AND ((s.level = 'scope' AND s.level_id = ${storageKind} AND s.scope = g.scope) OR (s.level = 'container' AND s.level_id = g.level_id AND s.container = g.container)))`,
-    "    )",
-    "    AND (s.full_access OR (s.object = g.object AND s.action = g.action AND (s.extent = 'any' OR (s.extent = g.extent AND s.dimension_id IS NOT DISTINCT FROM g.dimension_id))))))",
+    `  WHERE ${uncovered("g.level = 'global' AND s.level = 'global'")}`,
+    `    AND ${uncovered("g.level = 'scope' AND s.level = 'scope' AND s.level_id = g.level_id AND s.scope = g.scope")}`,
+    `    AND ${uncovered(`g.level = 'container' AND ((s.level = 'scope' AND s.level_id = ${storageKind} AND s.scope = g.scope) OR (s.level = 'container' AND s.level_id = g.level_id AND s.container = g.container))`)})`,
     `THEN ${refusal(COMMAND_CORE_ERRORS.forbidden.escalation)} END IF;`,
   ].join("\n")
 }

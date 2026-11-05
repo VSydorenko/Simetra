@@ -179,7 +179,7 @@ describe("rights administration storage", () => {
         rights_tx_containers: [["xid", "level_id", "container"]],
         rights_tx_deltas: [["xid", "storage", "custom_role", "scope_key"]],
         rights_tx_holders: [["xid"]],
-        rights_tx_start: [["xid"]],
+        rights_tx_start: [["xid", "level", "level_id", "scope"]],
         rights_tx_scopes: [["xid", "scope_kind_id", "scope"]],
         rights_tx_values: [["xid", "dimension_id"]],
         rights_tx_scope_sets: [["xid", "scope_kind_id"]],
@@ -317,7 +317,12 @@ describe("rights administration storage", () => {
         ]),
         ["full_access", "boolean", true],
       ],
-      indexes: [["rights_tx_start_xid_idx", ["xid"]]],
+      indexes: [
+        [
+          "rights_tx_start_xid_level_level_id_scope_idx",
+          ["xid", "level", "level_id", "scope"],
+        ],
+      ],
     })
   })
 

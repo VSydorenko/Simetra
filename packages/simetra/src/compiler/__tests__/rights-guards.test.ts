@@ -702,12 +702,27 @@ const escalationConditions = (body: ReturnType<typeof bodyShape>) =>
 
 /**
  * Усе покриття цілком, а не фрагмент: зникнення будь-якої умови гілки рівня
- * (як-от `s.scope = g.scope` — права в іншому тенанті) змінює дерево.
+ * (як-от `s.scope = g.scope` — права в іншому тенанті) змінює дерево. Три
+ * `NOT EXISTS` — по одному на рівень приросту: з `OR` рівнів у одному
+ * підзапиті рівень рядка кешу не був ключем індексу `rights_tx_start`.
  */
-const covered = (storage: string) =>
-  expr(
-    `NOT EXISTS (SELECT 1 FROM simetra.rights_tx_start s WHERE s.xid = v_pending.xid AND ((g.level = 'global' AND s.level = 'global') OR (g.level = 'scope' AND s.level = 'scope' AND s.level_id = g.level_id AND s.scope = g.scope) OR (g.level = 'container' AND ((s.level = 'scope' AND s.level_id = ${storage} AND s.scope = g.scope) OR (s.level = 'container' AND s.level_id = g.level_id AND s.container = g.container)))) AND (s.full_access OR (s.object = g.object AND s.action = g.action AND (s.extent = 'any' OR (s.extent = g.extent AND s.dimension_id IS NOT DISTINCT FROM g.dimension_id)))))`
+const covered = (storage: string) => {
+  const grant =
+    "(s.full_access OR (s.object = g.object AND s.action = g.action AND (s.extent = 'any' OR (s.extent = g.extent AND s.dimension_id IS NOT DISTINCT FROM g.dimension_id))))"
+  const uncovered = (level: string) =>
+    `NOT EXISTS (SELECT 1 FROM simetra.rights_tx_start s WHERE s.xid = v_pending.xid AND ${level} AND ${grant})`
+  return expr(
+    [
+      uncovered("g.level = 'global' AND s.level = 'global'"),
+      uncovered(
+        "g.level = 'scope' AND s.level = 'scope' AND s.level_id = g.level_id AND s.scope = g.scope"
+      ),
+      uncovered(
+        `g.level = 'container' AND ((s.level = 'scope' AND s.level_id = ${storage} AND s.scope = g.scope) OR (s.level = 'container' AND s.level_id = g.level_id AND s.container = g.container))`
+      ),
+    ].join(" AND ")
   )
+}
 
 describe("rights guard transaction check", () => {
   // Р3-5, Р3-6: тригер знімка — на кожному джерелі фактів, і тіло знімає
