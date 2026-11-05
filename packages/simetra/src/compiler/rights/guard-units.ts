@@ -769,14 +769,16 @@ function catalogStorageKind(catalog: RightsCatalogContract): string {
  * контейнерний грант. Для довідника він сталий, а для всіх прав актора
  * залежить від контейнера, тож передається виразом, а не довідником.
  *
- * Покриття — три `NOT EXISTS`, по одному на рівень приросту, а не одне з
- * `OR` трьох рівнів: з `OR` рівень рядка кешу не стає умовою індексу, і
- * кожен рядок приросту перебирав увесь кеш транзакції (у найбільшого актора
- * — сотні тисяч рядків, ~75 мс на ключ). Окремий підзапит рівня має сталі
- * `s.level`/`s.level_id`/`s.scope` — ключі індексу `rights_tx_start`.
- * Семантика та сама: `EXISTS (P ∧ (A ∨ B ∨ C))` ≡ `EXISTS (P ∧ A) ∨
- * EXISTS (P ∧ B) ∨ EXISTS (P ∧ C)`, а умова рівня `g` лишається всередині
- * підзапиту, тож рядок з невідомим рівнем, як і раніше, не покритий.
+ * Покриття — `CASE` за рівнем рядка приросту з `EXISTS` у кожній гілці, а не
+ * `NOT EXISTS` у `WHERE`: планувальник розгортає `NOT EXISTS` верхнього рівня
+ * в anti join, а кеш транзакції за статистикою порожній (рядки живуть лише
+ * до кінця транзакції), тож план матеріалізує всі рядки кешу рівня й перебирає
+ * їх фільтром з'єднання для кожного рядка приросту (у найбільшого актора —
+ * ~90 тис. рядків, десятки мс на ключ). Підзапит у `CASE` не розгортається:
+ * він виконується на рядок приросту, і `g.level_id`/`g.scope` стають
+ * параметрами — ключами індексу `rights_tx_start`. Семантика та сама: рядок
+ * покритий, якщо є рядок кешу його рівня, а рядок з невідомим чи порожнім
+ * рівнем (`ELSE`) не покритий.
  */
 function escalationSql(
   after: string,
@@ -786,14 +788,16 @@ function escalationSql(
   const start = ref(SNAPSHOT_TABLES.start)
   const grant =
     "(s.full_access OR (s.object = g.object AND s.action = g.action AND (s.extent = 'any' OR (s.extent = g.extent AND s.dimension_id IS NOT DISTINCT FROM g.dimension_id))))"
-  const uncovered = (level: string) =>
-    `NOT EXISTS (SELECT 1 FROM ${start} s WHERE s.xid = v_pending.xid AND ${level} AND ${grant})`
+  const covered = (level: string) =>
+    `EXISTS (SELECT 1 FROM ${start} s WHERE s.xid = v_pending.xid AND ${level} AND ${grant})`
   return [
     "IF NOT v_pending.maintenance AND EXISTS (",
     `  SELECT 1 FROM ((${after}) EXCEPT (${before})) g`,
-    `  WHERE ${uncovered("g.level = 'global' AND s.level = 'global'")}`,
-    `    AND ${uncovered("g.level = 'scope' AND s.level = 'scope' AND s.level_id = g.level_id AND s.scope = g.scope")}`,
-    `    AND ${uncovered(`g.level = 'container' AND ((s.level = 'scope' AND s.level_id = ${storageKind} AND s.scope = g.scope) OR (s.level = 'container' AND s.level_id = g.level_id AND s.container = g.container))`)})`,
+    "  WHERE NOT CASE g.level",
+    `    WHEN 'global' THEN ${covered("s.level = 'global'")}`,
+    `    WHEN 'scope' THEN ${covered("s.level = 'scope' AND s.level_id = g.level_id AND s.scope = g.scope")}`,
+    `    WHEN 'container' THEN ${covered(`((s.level = 'scope' AND s.level_id = ${storageKind} AND s.scope = g.scope) OR (s.level = 'container' AND s.level_id = g.level_id AND s.container = g.container))`)}`,
+    "    ELSE false END)",
     `THEN ${refusal(COMMAND_CORE_ERRORS.forbidden.escalation)} END IF;`,
   ].join("\n")
 }
