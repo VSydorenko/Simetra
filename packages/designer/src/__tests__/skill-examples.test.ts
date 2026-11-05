@@ -16,14 +16,19 @@ import { addAdoptedTag, project, run, useTmpProjects } from "./helpers/catalog"
 import { expectClean } from "../../../simetra/test/support"
 
 const pkgDir = join(dirname(fileURLToPath(import.meta.url)), "../..")
-const read = (name: string) =>
-  readFileSync(join(pkgDir, `skills/${name}/SKILL.md`), "utf8")
+const read = (name: string, file = "SKILL.md") =>
+  readFileSync(join(pkgDir, `skills/${name}/${file}`), "utf8")
 const skill = read("simetra-metadata")
 
-// Скіли їдуть до споживача, тож приклади в них не мають розходитися з каталогом.
+// Скіли їдуть до споживача, тож приклади в них не мають розходитися з
+// каталогом; reference з прикладами інструментів перевіряється так само.
 describe.each([
   ["simetra-metadata", skill],
   ["simetra-adoption", read("simetra-adoption")],
+  [
+    "simetra-metadata agents-over-mcp",
+    read("simetra-metadata", "references/agents-over-mcp.md"),
+  ],
 ])("%s skill examples", (_name, text) => {
   it("every json example parses with its tool's input schema", () => {
     const examples = [...text.matchAll(/```json simetra:(\S+)\n([\s\S]*?)```/g)]

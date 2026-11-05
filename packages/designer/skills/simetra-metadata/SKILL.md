@@ -1,6 +1,6 @@
 ---
 name: simetra-metadata
-description: Use when you need to create, change, validate or explain Simetra metadata (a `metadata/` directory) with the `simetra` tools — compile it, read a compiler diagnostic (`file:line:col`, `--format json`, `--locale`), explain the compiled picture of an object, fix missing ids and `physicalName`, create, add, rename or delete elements, or promote an adopted table, through checked operations, compare a database with the metadata (`diff`), plan and apply the metadata to a database (`plan`, `apply`), or expose the tools to an agent with `simetra mcp` (`--read-only` to refuse writes). Also use when a pre-commit or CI metadata check fails. For bringing an existing database under metadata (`introspect`), use `simetra-adoption`.
+description: Use when you need to create, change, validate or explain Simetra metadata (a `metadata/` directory) with the `simetra` tools — compile it, read a compiler diagnostic (`file:line:col`, `--format json`, `--locale`), explain the compiled picture of an object, fix missing ids and `physicalName`, create, add, rename or delete elements, or promote an adopted table, through checked operations, compare a database with the metadata (`diff`), plan and apply the metadata to a database (`plan`, `apply`), or expose the tools to an agent with `simetra mcp` (`--read-only` to refuse writes), including application data of the development database as a user (`data-read`, `data-command`). Also use when a pre-commit or CI metadata check fails. For bringing an existing database under metadata (`introspect`), use `simetra-adoption`.
 ---
 
 # Simetra metadata — compile, explain, fix, create, add, rename, delete, promote, introspect, diff, plan, apply
@@ -38,8 +38,6 @@ diagnostics themselves.
 `fix`, `create`, `add`, `rename`, `delete`, `promote`, `introspect` change files;
 `plan` writes only its plan file; others only read files. `introspect`, `diff`,
 `plan` read the database; `apply`, `roles`, `rights-maintenance` write to it.
-`data-read` and `data-command` read and change application data through the
-runtime, as the user given by `--as`.
 
 ## Examples
 
@@ -469,23 +467,14 @@ pnpm exec simetra mcp
 pnpm exec simetra mcp --read-only
 pnpm exec simetra mcp --database-url-env STAGING_DATABASE_URL
 pnpm exec simetra mcp --allow-database-write
+pnpm exec simetra mcp --data-url-env SIMETRA_DEV_DATA_URL --as <user-uuid>
 ```
 
-- By default the write tools change files in the served directory, under the
-  same rules as the CLI: the metadata is in git, and nothing is written unless
-  the result compiles. `--read-only` is a flag of `simetra mcp` only; the CLI
-  has none (preview with `--dry-run`).
-- With `--read-only` every tool is still listed, but a write tool is refused
-  with a hint to remove `--read-only` from the server's args. Ask the owner
-  before restarting the server without it.
-- `apply` and `roles` write to the database only when the server runs with
-  `--allow-database-write`; without it they are refused with a hint to add
-  the flag. Ask the owner; never add it yourself. `--read-only` refuses
-  `plan` and `apply` too: they write their files under `plans/`.
-- `plan` and `apply` have no `dryRun`: review with `plan`, and check on the
-  database with `rehearse`.
-- The server reads the disk on every call, so edits made by hand between calls
-  are seen.
+`simetra mcp` serves the same tools as the CLI and reads the disk on every
+call. Its launch flags are the owner's decision: a refused call names the flag
+that would allow it; ask the owner, never change the server's args yourself.
+What each flag allows, and the data tools over the development database:
+`references/agents-over-mcp.md`.
 
 ## Pre-commit and CI
 
