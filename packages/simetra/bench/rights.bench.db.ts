@@ -1703,8 +1703,8 @@ describe("rights limits benchmark", () => {
           const grant = rootCreatorFunctionName({ physicalName: "org_id" })
 
           for (const a of actors) {
-            // Межа найбільшого актора — Σ операторів заповнення знімка того
-            // самого актора в цій моделі (як рядок `7 snapshot fill`).
+            // Σ операторів заповнення знімка того самого актора — орієнтир для
+            // розбивки ядра; межу ядра найбільшого актора задає архітекторка.
             const { sums } = await snapshotFill(client, fillers, a.user)
             rows.push({
               scenario: `8 snapshot fill, sum of statements, ${a.kind}`,
@@ -1749,13 +1749,13 @@ describe("rights limits benchmark", () => {
               }
             }
             const ordinary = a.kind === "ordinary actor"
-            const coreMax = ordinary ? 30 : median(sums) + 50
+            const coreMax = ordinary ? 30 : 300
             const commitMax = ordinary ? 30 : 6_000
             rows.push(
               {
                 scenario: `8 tenant creation, ${a.kind}`,
                 volume: a.label,
-                operator: `${runsCell(core)}; ${limit(median(core), coreMax, ordinary ? "≤ 30 ms" : `≤ Σ snapshot fill + 50 ms = ${ms(coreMax)}`)}`,
+                operator: `${runsCell(core)}; ${limit(median(core), coreMax, ordinary ? "≤ 30 ms" : "≤ 300 ms")}`,
               },
               {
                 scenario: `8 tenant creation COMMIT, ${a.kind}`,
