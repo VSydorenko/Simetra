@@ -465,7 +465,8 @@ tenant.
 ```
 
 - Do not pass `id`: the runtime generates the root id (and the member row id)
-  once per run, and a retry reuses them. `id` or `tabularSections` on a root
+  once per `runtime.run`, and a retry reuses them. A `ctx.run` from a hook
+  generates new ids on each attempt, because the hook runs again. `id` or `tabularSections` on a root
   `create` fails with `command.invalid`; fill tabular sections with a later
   `update`.
 - `creatorMember` holds attributes of the creator's member row that a command
@@ -481,7 +482,9 @@ tenant.
   `ctx.run`; `COMMIT` judges them as ordinary commands.
 - `rows[0]` of the result is the root row. In the operator model the creator
   cannot read the new root, so the row has only its key and version (`1`).
-  The member row goes only to the membership `onWrite`.
+  The member row goes only to the membership `onWrite`. If the
+  `rootCreator` role cannot read the membership catalog, that row also has
+  only its key and version (`1`).
 
 The rights journal records the creator's assignment with the reason
 `root-creator`. A later change of that assignment is an ordinary command.
