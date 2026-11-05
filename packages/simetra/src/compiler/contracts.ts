@@ -26,7 +26,10 @@ import {
   type SubscriptionEvent,
   type VirtualTableKind,
 } from "simetra/model"
-import { CATALOG_COMMAND_LABELS } from "./catalog-command/contracts"
+import {
+  CATALOG_COMMAND_LABELS,
+  memberCheckFunctionName,
+} from "./catalog-command/contracts"
 import { compareStrings } from "./diagnostics"
 import {
   choosesMembership,
@@ -881,6 +884,12 @@ export function derivedFunctionLabels(
       {
         label: CATALOG_COMMAND_LABELS.markDeletion,
         description: "command mark deletion",
+      },
+      // Ядро `create` кореня (спека П4 §6.13) — лише на корені виду скоупу,
+      // але корінь тут невідомий: резерв на кожен об'єкт, як і решта.
+      {
+        label: CATALOG_COMMAND_LABELS.createRoot,
+        description: "command create root",
       }
     )
     if (
@@ -1002,6 +1011,16 @@ export function derivedFunctions(
         "/membership",
         { membership: true }
       )
+      // Перевірка рядка членства творця (спека П4 §6.13) — на кожному
+      // довіднику членства; її кличе ядро кореня й інструмент обслуговування.
+      if (KIND_REGISTRY[object.kind].commandWrites === true) {
+        add(
+          object,
+          memberCheckFunctionName(table),
+          `member check of ${object.name}`,
+          "/membership"
+        )
+      }
       const kind = scopeKinds.find((k) => k.name === scope)
       if (kind !== undefined && choosesMembership(kind)) {
         add(

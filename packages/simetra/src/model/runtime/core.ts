@@ -17,6 +17,9 @@ export const COMMAND_CORE_ERRORS = {
     expectedVersion: "p_expected_version",
     mark: "p_mark",
     predefined: "predefined",
+    // Рядок членства творця кореня (спека П4 §6.13): сам аргумент і префікс
+    // протоколу `creatorMember.<колонка>`.
+    creatorMember: "creatorMember",
   },
   context: {
     errcode: "42501",

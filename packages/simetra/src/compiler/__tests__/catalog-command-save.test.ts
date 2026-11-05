@@ -6,7 +6,11 @@ import {
   type CatalogCommandContract,
 } from "../catalog-command/contracts"
 import { rightsCheck } from "../catalog-command/rights-check"
-import { buildCatalogCommandUnits, keyColumns } from "../catalog-command/units"
+import {
+  buildCatalogCommandUnits,
+  keyColumns,
+  referenceViolations,
+} from "../catalog-command/units"
 import { HIERARCHY_LOCK_SPACE } from "../hierarchy-units"
 import { executeGrants } from "../sql/execute-grants"
 import { hasEmptySearchPath } from "../sql/closed-forms"
@@ -22,6 +26,7 @@ import {
   objects,
   policyDomain,
   role,
+  rootCreationDomain,
   ticketParentHandler,
   writeRoles,
   type Layer,
@@ -469,6 +474,7 @@ describe("buildCatalogCommandUnits — <t>_save", () => {
     const [save] = buildCatalogCommandUnits({
       catalogCommands: [{ ...contract, updateKeys }],
       contracts: domain.contracts,
+      scopeKinds: domain.scopeKinds,
       physical: domain.physical,
       attributeCase: domain.project.naming.attributeCase,
       provider: domain.project.database.provider,
@@ -1035,6 +1041,164 @@ describe("обидва стилі: ключі p_item у дереві", () => {
       ],
     ])
     expect(ifAt(bodyShape(sql), "p_item ? 'parent_id'")).toBeGreaterThan(0)
+  })
+})
+
+describe("<membership>_simetra_member_check", () => {
+  let tenants: CompiledModel
+  beforeAll(async () => {
+    tenants = await compiled(compileRights(rootCreationDomain()))
+  })
+  const checkSql = (table: string) => {
+    const unit = tenants.sqlUnits.find(
+      (u) =>
+        u.identity ===
+        `function:public.${table}_simetra_member_check(jsonb,uuid)`
+    )
+    expect(unit, table).toBeDefined()
+    return unit!.sql
+  }
+  const memberSave = () => bodyShape(saveSql(tenants, "org_member"))
+  /** Вираз відмови одразу за `IF` з деревом `condition`, у кожному входженні. */
+  const failures = (shape: Shape, condition: string) =>
+    shape.flatMap((s, i) =>
+      s.type === "if" &&
+      same(s.expressions[0]?.tree, tree(`SELECT ${condition}`))
+        ? [shape[i + 1]!]
+        : []
+    )
+
+  it("exists on every membership catalog, SECURITY INVOKER, EXECUTE only command", () => {
+    for (const table of ["org_member", "branch_member"]) {
+      const unit = tenants.sqlUnits.find(
+        (u) =>
+          u.identity ===
+          `function:public.${table}_simetra_member_check(jsonb,uuid)`
+      )!
+      expect(hasEmptySearchPath(unit.tree as never)).toBe(true)
+      expect(
+        (
+          unit.tree as {
+            CreateFunctionStmt: {
+              options: { DefElem: { defname: string; arg?: unknown } }[]
+            }
+          }
+        ).CreateFunctionStmt.options.find(
+          (o) => o.DefElem.defname === "security"
+        )?.DefElem.arg
+      ).toEqual({ Boolean: { boolval: false } })
+      expect(
+        tenants.sqlUnits
+          .filter(
+            (u) =>
+              u.class === "grant" &&
+              u.identity.includes(`public.${table}_simetra_member_check(`)
+          )
+          .map((u) => JSON.stringify(u.tree))
+          .sort()
+      ).toEqual(
+        executeGrants(
+          `public.${table}_simetra_member_check(jsonb, uuid)`,
+          ["command"],
+          "supabase"
+        )
+          .map((sql) => JSON.stringify(tree(sql)))
+          .sort()
+      )
+    }
+  })
+
+  it("checks references with the very conditions of the save create branch", () => {
+    const member = contractOf(tenants, "org_member")
+    const save = memberSave()
+    const check = bodyShape(checkSql("org_member"))
+    const row = {
+      value: (c: string) => `v_new.${c}`,
+      scope: "v_new.org_id",
+      scopeKindId: tenants.scopeKinds.find((k) => k.name === "org")!.id,
+    }
+    const violations = member.references.flatMap((r) =>
+      referenceViolations(r, row)
+    )
+    const columns = violations.map((v) => v.column)
+    // Пара, масив і одиничний `Ref`: усі форми, крім примушеного користувача.
+    expect(columns).toEqual([
+      "user_id",
+      "contact_type",
+      "contact_id",
+      "countries",
+    ])
+    for (const { column, condition } of violations) {
+      expect(
+        failures(save, condition).map((s) => strings(s.expressions)),
+        column
+      ).toContainEqual(["22023", "command.invalid", column])
+      expect(
+        failures(check, condition).map((s) => [s.type, s.expressions[0]?.tree]),
+        column
+      ).toEqual(
+        column === "user_id" ? [] : [["return", tree(`SELECT '${column}'`)]]
+      )
+    }
+  })
+
+  it("runs shape → keys → casts → after-state with p_scope → references → NULL", () => {
+    const member = contractOf(tenants, "org_member")
+    const shape = bodyShape(checkSql("org_member"))
+    const keys = member.createKeys.filter(
+      (c) => !["id", "org_id", "user_id"].includes(c)
+    )
+    const formAt = ifAt(
+      shape,
+      "jsonb_typeof(p_member) IS DISTINCT FROM 'object'"
+    )
+    const keysAt = shape.findIndex(
+      (s) => s.type === "execsql" && s.target?.variable === "v_key"
+    )
+    const castAt = at(
+      shape,
+      "perform",
+      "SELECT jsonb_populate_record(NULL::public.org_member, jsonb_build_object(v_key, p_member -> v_key))"
+    )
+    const afterAt = at(
+      shape,
+      "assign",
+      "SELECT jsonb_populate_record(NULL::public.org_member, '{}')"
+    )
+    const scopeAt = at(shape, "assign", "SELECT p_scope")
+    const referenceAt = ifAt(
+      shape,
+      "v_new.contact_type IS NOT NULL AND v_new.contact_type <> ALL (ARRAY['users', 'country']::text[])"
+    )
+    const order = [formAt, keysAt, castAt, afterAt, scopeAt, referenceAt]
+    expect(order.every((i) => i >= 0)).toBe(true)
+    expect([...order].sort((a, b) => a - b)).toEqual(order)
+    expect(shape[formAt + 1]!.expressions[0]!.tree).toEqual(
+      tree("SELECT 'p_member'")
+    )
+    expect(arrayLiterals(shape[keysAt]!.expressions[0]!.tree)).toEqual(keys)
+    expect(shape[scopeAt]!.target).toEqual({ variable: "v_new.org_id" })
+    // Рядок «після» — як `v_new` гілки створення: значення за замовчуванням з
+    // накладеним входом, лише для дозволених ключів.
+    expect(
+      shape
+        .slice(afterAt + 1, scopeAt)
+        .map((s) => [s.target?.variable, s.expressions[0]!.tree])
+    ).toEqual(
+      keys.map((c) => [
+        `v_new.${c}`,
+        tree(`SELECT CASE WHEN p_member ? '${c}' THEN v_in.${c} ELSE NULL END`),
+      ])
+    )
+    const returns = shape.filter(
+      (s) => s.type === "return" && s.expressions.length > 0
+    )
+    expect(returns.at(-1)!.expressions[0]!.tree).toEqual(tree("SELECT NULL"))
+    expect(
+      handlerBlocks(checkSql("org_member"), "data_exception").map((b) =>
+        nodes(b.exceptions, "PLpgSQL_stmt_return")
+      )
+    ).toHaveLength(1)
   })
 })
 

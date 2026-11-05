@@ -340,7 +340,7 @@
   - деталі `invalid` для `p_member`: `creatorMember` (форма, `NULL`) і
     `creatorMember.<колонка>`.
 
-- [ ] **Крок 1 (unit, червоні).** `catalog-command-root.test.ts` — цілі
+- [x] **Крок 1 (unit, червоні).** `catalog-command-root.test.ts` — цілі
   оператори: тіло `<корінь>_create_root` у порядку: перевірка `p_item` (ключі
   вставки кореня, `tabular` — `command.invalid` `tabular`) → `p_member`: вид з
   `rootCreator` — `NULL` → `command.invalid` `creatorMember`, інакше виклик
@@ -356,12 +356,12 @@
   `p_member_id` — id рядка членства від T3 (Р-A6-6); на виді з `rootCreator`
   `NULL` — `command.invalid` `creatorMember`, на виді без — не `NULL` — та
   сама відмова.
-- [ ] **Крок 2 (unit, червоні).** `catalog-command-save.test.ts`: тіло
+- [x] **Крок 2 (unit, червоні).** `catalog-command-save.test.ts`: тіло
   `<членство>_simetra_member_check` збудоване тими самими будівниками, що й
   гілка створення `<членство>_save` (фрагменти умов `referenceViolations`
   однакові для тих самих колонок); функція є на кожному довіднику з
   `membership` (`OrgMember`, `BranchMember`).
-- [ ] **Крок 3 (unit, червоні).** `rights-root-creator.test.ts` — оператори
+- [x] **Крок 3 (unit, червоні).** `rights-root-creator.test.ts` — оператори
   функції гранту в порядку: (1) `command_action() = 'create'` і
   `command_root(<мітка кореня>) = p_root`, інакше `rights-context`; (2)
   `DELETE` маркера `(txid_current(), <вид>, p_root)` з
@@ -381,9 +381,9 @@
   `{administerRights, <мітка призначень>, v_assignment}`, `INSERT` призначення;
   (9) повернення збереженого контексту. «grant function has no EXECUTE except
   command», «no dynamic SQL».
-- [ ] **Крок 4.** Реалізація трьох генераторів; `contracts.ts` — `actionsOf`
+- [x] **Крок 4.** Реалізація трьох генераторів; `contracts.ts` — `actionsOf`
   лишає корінь без `create` у `save`, `functions.createRoot` додає.
-- [ ] **Крок 5.** `pnpm --filter simetra test catalog-command rights-root-creator rights-guards`;
+- [x] **Крок 5.** `pnpm --filter simetra test catalog-command rights-root-creator rights-guards`;
   коміт `feat(compiler): ядро create кореня й функція гранту root_creator`.
 
 ## Задача 5: DB-доказ ядра й функції гранту
@@ -755,6 +755,58 @@ Postgres.
   перевірки — спільна оболонка `definer` (з `row_security = off`, як
   `rights_tx_check`). Літерал хешу моделі в `runtime-catalog.test.ts` оновлено:
   таблиці схеми `simetra` і тригери журналу змінились. Вплив на спеку: немає.
+- **Задача 4 — будівники входу й посилань.** `inputLines` приймає `InputSpec`
+  (таблиця, параметр, `DETAIL` форми, ключі — один перелік чи гілки
+  створення/зміни `save`, `tabular`, `guard`, обов'язковий ключ і `fail` —
+  `RAISE` ядра чи `RETURN` перевірки); новий `referenceChecks` — одне джерело
+  умов посилань для гілки створення `save` і перевірки членства. SQL наявних
+  функцій ядра дослівно той самий (порівняння всіх одиниць двох доменів до й
+  після, окремий коміт рефакторингу). Вплив на спеку: немає.
+- **Задача 4 — перевірка членства над рядком «після».** Тіло
+  `<членство>_simetra_member_check` будує `v_new` так само, як гілка створення
+  `save`: значення за замовчуванням з накладеним `p_member`, скоуп — `p_scope`,
+  а не голий `jsonb_populate_record` (інакше колонка-посилання з типовим
+  значенням пройшла б перевірку в одному місці й ні в іншому). Посилання на
+  примушені колонки (ключ, скоуп, користувач) не перевіряються — їх пише
+  функція гранту. Форма не-об'єкт повертає `'p_member'` (ядро кореня
+  перевіряє форму раніше й відмовляє `creatorMember`). Функція гранту вставляє
+  відсутні ключі тим самим `CASE … ELSE <типове значення>`, тож рядок членства
+  дорівнює перевіреному. Вплив на спеку: немає.
+- **Задача 4 — ядро кореня.** `actions.createRoot` (дія `create` кореня) поруч
+  із `functions.createRoot`; ядра немає на «Користувачах»-корені (рядок
+  створює провізія) і на корені без жодної колонки гранту вставки (немає
+  явного гранту `create`). Порядок — як у плані, а гілка створення `save`
+  (`createLines`) спільна: після контексту ядро кореня, як `save`, перевіряє
+  `exists`, власні посилання кореня й копії носіїв (§6.6 вимагає перевірки
+  кожного нового `Ref`; без неї `owner_id` кореня був би оракулом). На виді з
+  творцем відмова `creatorMember` — і на `p_member_id IS NULL`, і на формі
+  `p_member` не-об'єкт (спека §6.13: обидва обов'язкові). Невидимий рядок —
+  `{<ключ>: id, <версія>: '1'}` (версія текстом, як у результаті `save`, Рт1).
+  T0 `COMMAND_CORE_ERRORS.invalid.creatorMember` — причина й префікс
+  `creatorMember.<колонка>` (мапу шляху робить Задача 6). Імена `create_root`
+  і перевірки членства — у `derivedFunctions` (колізії стадії 4). Вплив на
+  спеку: немає.
+- **Задача 4 — функція гранту, розвилки для архітекторки.** (а) Ім'я —
+  `simetra.<physicalName виду>_root_creator` (для фікстури —
+  `simetra.org_id_root_creator`), за брифом архітекторки: фізичне ім'я не
+  змінюється з перейменуванням виду; приклад Задачі 5
+  (`simetra.org_root_creator`) треба читати з цим іменем. (б) Крок (1) читає
+  контекст безвиняткою `command_current()`, а не суворими
+  `command_action()`/`command_root()`: без контексту чи з чужим об'єктом
+  перша відмова — `rights-context`, а не `command.context`. (в) Функція має
+  `SET row_security = off` поверх плану: перевірка (3) інакше за відсутнього
+  обходу RLS мовчки не побачила б рядків; так — гучна помилка (fail-closed),
+  як у `rights_tx_check` і перевірці маркера. Вплив на спеку: (а) — немає
+  (шаблон `<вид скоупу>`); (б), (в) — П4 §6.13 «Привілейований шлях» можна
+  уточнити реченням, якщо архітекторка погодить.
+- **Задача 4 — форма генераторів.** `memberCheckFunction` і
+  `rootCreatorFunction` повертають текст `CREATE FUNCTION`, а одиниці
+  (ребра `requires` з тіла, гранти `EXECUTE` лише `simetra_command`) збирає
+  `buildCatalogCommandUnits`: ядро кореня кличе обидві функції, і ребра на них
+  дає той самий обхід тіла. `refusal` експортовано з `guard-units.ts`;
+  контракт ядра для тестів — спільний будівник
+  `__tests__/fixtures/catalog-command.ts`. Літерал хешу моделі в
+  `runtime-catalog.test.ts` оновлено (нові одиниці). Вплив на спеку: немає.
 
 ## Журнал мутацій
 

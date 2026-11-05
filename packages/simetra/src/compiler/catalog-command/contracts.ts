@@ -27,6 +27,7 @@ import {
 } from "../contracts"
 import { compareStrings } from "../diagnostics"
 import { carrierLinks, type CarrierLink } from "../rights/carrier-units"
+import { generatedTableFunctionName } from "../rights/generated-names"
 import type { SqlParser } from "../sql/parse"
 import type { PlpgsqlParser } from "../sql/plpgsql"
 import { functionIdentity, type SqlUnit } from "../sql/units"
@@ -45,7 +46,21 @@ export const CATALOG_COMMAND_LABELS = {
   save: "save",
   markDeletion: "mark_deletion",
   delete: "delete",
+  createRoot: "create_root",
 } as const
+
+/**
+ * Перевірка рядка членства творця кореня (спека П4 §6.13):
+ * `<членство>_simetra_member_check` у схемі таблиці членства. Ім'я обрізає
+ * `generatedTableFunctionName`: довгі таблиці зі спільним початком інакше
+ * дали б одну функцію.
+ */
+export function memberCheckFunctionName(table: QualifiedName): QualifiedName {
+  return {
+    schema: table.schema,
+    name: generatedTableFunctionName(table.name, "simetra_member_check"),
+  }
+}
 
 /**
  * Контракт ядра команд основної таблиці довідника (спека П4 §6.6):
@@ -63,6 +78,8 @@ export interface CatalogCommandContract {
     save: QualifiedName
     markDeletion?: QualifiedName
     delete?: QualifiedName
+    /** Ядро `create` кореня виду скоупу (спека П4 §6.13) — лише на корені. */
+    createRoot?: QualifiedName
   }
   /** Дія контексту кожної функції чи гілки (спека П4 §6.6); немає — немає й гілки. */
   actions: {
@@ -70,6 +87,7 @@ export interface CatalogCommandContract {
     update: string
     markDeletion?: string
     delete?: string
+    createRoot?: string
   }
   /** Ключі `p_item` створення й зміни (спека П4 §6.6) — з гранту ролі команд. */
   createKeys: string[]
@@ -177,14 +195,14 @@ export function catalogCommandContracts(input: {
       if (table === undefined || tableKey(table) !== tableKey(access.table)) {
         return []
       }
-      const actions = actionsOf(rights, {
+      const found = actionsOf(rights, {
         users: access.objectId === input.usersObjectId,
         root: input.scopeRootIds.has(access.objectId),
         roleAssignments:
           KIND_REGISTRY[object.kind].rightsSystem?.(object.data) ===
           "roleAssignments",
       })
-      if (actions === undefined) return []
+      if (found === undefined) return []
 
       const key = styleFreeColumn(table, keyColumn(false)).name
       // Позначку пише лише `mark_deletion` (спека П4 §6.6), а переходи — лише
@@ -205,6 +223,15 @@ export function catalogCommandContracts(input: {
         style
       )?.name
       const sections = (object.data as Catalog).tabularSections
+      const createKeys = command.insert.filter((c) => !excluded.has(c))
+      // Корінь без жодного гранту вставки (немає явного гранту `create`
+      // рівня `global` чи `everyUser`, спека прав Рх7) ядра створення не має:
+      // вставляти нема кому й нічого.
+      const { createRoot, ...rest } = found
+      const actions: CatalogCommandContract["actions"] =
+        createRoot === undefined || createKeys.length === 0
+          ? rest
+          : { ...rest, createRoot }
 
       return [
         {
@@ -226,9 +253,14 @@ export function catalogCommandContracts(input: {
             ...(actions.delete === undefined
               ? {}
               : { delete: derived(table, CATALOG_COMMAND_LABELS.delete) }),
+            ...(actions.createRoot === undefined
+              ? {}
+              : {
+                  createRoot: derived(table, CATALOG_COMMAND_LABELS.createRoot),
+                }),
           },
           actions,
-          createKeys: command.insert.filter((c) => !excluded.has(c)),
+          createKeys,
           updateKeys: command.update.filter((c) => !excluded.has(c)),
           tabularSections: physical.tables
             .filter(
@@ -291,7 +323,9 @@ export function catalogCommandContracts(input: {
  * Дії функцій ядра з реєстру дій об'єкта (спека П4 §6.6): стандартна дія, коли
  * вона є, інакше `administerRights` (системні довідники прав, спека прав §4.6). Без
  * дії зміни ядра немає зовсім; корінь скоупу й «Користувачі» не створюються
- * командою (спека П4 §6.6), «Користувачі» — лише `save`.
+ * через `save` (спека П4 §6.6), «Користувачі» — лише `save`. Корінь
+ * створює окреме ядро `<корінь>_create_root` (спека П4 §6.13): одна функція —
+ * одна дія, а гілки створення `save` кореня не має.
  */
 function actionsOf(
   rights: RightsContract,
@@ -305,11 +339,15 @@ function actionsOf(
   const create = facts.users || facts.root ? undefined : pick("create")
   const markDeletion = facts.users ? undefined : pick("markDeletion")
   const remove = facts.roleAssignments ? pick("delete") : undefined
+  // «Користувачі» бувають коренем виду скоупу, але рядок створює
+  // провізія, а не команда.
+  const createRoot = facts.root && !facts.users ? pick("create") : undefined
   return {
     ...(create === undefined ? {} : { create }),
     update,
     ...(markDeletion === undefined ? {} : { markDeletion }),
     ...(remove === undefined ? {} : { delete: remove }),
+    ...(createRoot === undefined ? {} : { createRoot }),
   }
 }
 

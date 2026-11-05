@@ -221,7 +221,7 @@ function definer(fn: QualifiedName, returns: string, body: string): string {
   return `CREATE OR REPLACE FUNCTION ${ref(fn)}() RETURNS ${returns} LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = '' SET row_security = off AS ${tag}\n${body}\n${tag};`
 }
 
-function refusal(detail: string, table?: PhysicalTable): string {
+export function refusal(detail: string, table?: PhysicalTable): string {
   return `RAISE EXCEPTION USING ERRCODE = '${COMMAND_CORE_ERRORS.forbidden.errcode}', MESSAGE = '${COMMAND_CORE_ERRORS.forbidden.message}', DETAIL = ${sqlLiteral(detail)}${table === undefined ? "" : `, TABLE = ${sqlLiteral(table.name)}`};`
 }
 
