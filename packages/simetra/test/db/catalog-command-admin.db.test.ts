@@ -2181,6 +2181,48 @@ describe("actor snapshot over adopted sources", () => {
     })
   })
 
+  it("gives no membership for an adopted row without a scope, live or snapshot", async () => {
+    // Колонка скоупу прийнятої `Membership` — nullable: рядок без скоупу
+    // членства не дає (fail-closed), тож «мої скоупи» й версії однакові до
+    // і після знімка. `idle@B` — контроль: активний рядок зі скоупом.
+    const scopes = async (client: pg.Client) =>
+      (
+        await client.query(
+          `SELECT
+            ARRAY(SELECT coalesce(s.scope::text, 'null') FROM simetra.rights_my_scopes() s ORDER BY 1) AS my_scopes,
+            ARRAY(SELECT coalesce(v.scope::text, 'null') FROM simetra.rights_versions() v WHERE v.scope_kind_id = $1 ORDER BY 1) AS versions,
+            ARRAY(SELECT s.scope::text FROM simetra.rights_tx_scopes s WHERE s.xid = txid_current() ORDER BY 1) AS snapshot`,
+          [ORG_KIND_ID]
+        )
+      ).rows[0]
+    const outcome = await given(
+      (client) =>
+        insert(client, "membership", {
+          id: randomUUID(),
+          org_id: null,
+          user_id: key("idle"),
+          is_active: true,
+        }),
+      () =>
+        steps("idle", [
+          { check: scopes },
+          ownerStep(
+            ["update", "users", key("idle")],
+            "UPDATE public.users SET version = version WHERE false",
+            []
+          ),
+          { check: scopes },
+        ])
+    )
+    expect(outcome.refusal).toBeUndefined()
+    const scoped = { my_scopes: [key("B")], versions: [key("B")] }
+    // `snapshot` доводить, що друге читання — зі знімка, а не наживо
+    expect([outcome.completed[0], outcome.completed[2]]).toEqual([
+      { ...scoped, snapshot: [] },
+      { ...scoped, snapshot: [key("B")] },
+    ])
+  })
+
   // Review Focus 5: у актора без жодного рядка прав ключ `actor` ставить
   // заголовок факту `rights`, а не рядки входів, яких немає.
   it.each([

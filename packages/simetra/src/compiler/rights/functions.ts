@@ -1143,6 +1143,10 @@ function myScopesBody(
       `FROM ${qualified(source.table)} s`,
       `WHERE ${user} IS NOT NULL`,
       `  AND ${user} = ${whose.user}`,
+      // Колонка скоупу прийнятої таблиці може бути nullable: рядок без скоупу
+      // членства не дає (fail-closed, як `NULL` активності), інакше жива гілка
+      // «моїх скоупів» і версій розійшлася б зі знімком, де скоуп NOT NULL.
+      `  AND s.${quoteIdent(source.scope)} IS NOT NULL`,
       ...activeCondition("s", source.active).map((c) => `  AND ${c}`),
       ...sourceConditions("s", source.where).map((c) => `  AND ${c}`),
     ].join("\n")

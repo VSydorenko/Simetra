@@ -2711,10 +2711,17 @@ export const ADOPTED_SNAPSHOT = {
  * множини `org` — активне членство, підтверджене рядком таблиці виду
  * `OrgGuest`: межа тенанта вужча за «мої скоупи», тож рядок `OrgGuest`
  * відкриває скоуп, права в якому актор уже має (`CommentEditor`: у
- * документів ядра команд немає, тож запис доводиться на довіднику).
+ * документів ядра команд немає, тож запис доводиться на довіднику). Колонка
+ * скоупу `Membership` — без `NOT NULL`, як буває в прийнятій таблиці: рядок
+ * без скоупу членства не дає ні наживо, ні в знімку.
  */
 export function adoptedSnapshotDomain(): Map<string, string> {
   const files = adoptedSourcesDomain(adoptedCrossKind(), activeGrants(), {
+    [MEMBERSHIP_FILE]: adoptedMembershipTable({
+      columns: adoptedMembershipTable().columns.map((c) =>
+        c.name === "orgId" ? nullable(6102, "orgId", "org_id", "UUID") : c
+      ),
+    }),
     [SNAPSHOT_ORG_GUEST_FILE]: catalog(
       uuid(6889),
       "OrgGuest",

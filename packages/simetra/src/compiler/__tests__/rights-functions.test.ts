@@ -908,14 +908,15 @@ describe("rights functions over adopted sources", () => {
     model = await compiled(adoptedSourcesDomain())
   })
 
-  it("my scopes include an adopted membership source, active rows only", async () => {
+  it("my scopes include an adopted membership source, active rows with a scope only", async () => {
     // та сама форма, що гілка довідника членства; `IS TRUE` —
-    // `NULL` в активності членства не дає.
+    // `NULL` в активності членства не дає, а рядок без скоупу членства не
+    // дає теж (fail-closed): інакше жива гілка розійшлася б зі знімком.
     // Живий варіант — тіло «моїх скоупів» з походженням: рядок джерела —
     // не довідника членства. Публічна функція читає його чи знімок.
     const branch = (active: string) =>
       tree(
-        `SELECT '${ORG_KIND_ID}'::uuid AS scope_kind_id, s.org_id AS scope, s.id AS member, false AS catalog FROM public.membership s WHERE s.user_id IS NOT NULL AND s.user_id = ${CURRENT}${active}`
+        `SELECT '${ORG_KIND_ID}'::uuid AS scope_kind_id, s.org_id AS scope, s.id AS member, false AS catalog FROM public.membership s WHERE s.user_id IS NOT NULL AND s.user_id = ${CURRENT} AND s.org_id IS NOT NULL${active}`
       )
     expect(
       bodyTree(functionUnit(model, RIGHTS_FUNCTIONS.myScopesLive.name))
@@ -1049,7 +1050,7 @@ describe("rights functions over adopted sources", () => {
       bodyTree(functionUnit(narrowed, RIGHTS_FUNCTIONS.myScopesLive.name))
     ).toEqual(
       tree(
-        `SELECT '${ORG_KIND_ID}'::uuid AS scope_kind_id, s.org_id AS scope, s.id AS member, false AS catalog FROM public.membership s WHERE s.user_id IS NOT NULL AND s.user_id = ${CURRENT} AND s.is_active IS TRUE AND s.user_id IS NOT NULL AND s.is_active = TRUE`
+        `SELECT '${ORG_KIND_ID}'::uuid AS scope_kind_id, s.org_id AS scope, s.id AS member, false AS catalog FROM public.membership s WHERE s.user_id IS NOT NULL AND s.user_id = ${CURRENT} AND s.org_id IS NOT NULL AND s.is_active IS TRUE AND s.user_id IS NOT NULL AND s.is_active = TRUE`
       )
     )
     expect(
