@@ -4,9 +4,10 @@ import { randomUUID } from 'node:crypto';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import pg from 'pg';
 import type { Database } from './database.types.js';
+import type { Database as DatabaseV2 } from './database.v2.types.js';
 import { env } from './env.js';
 
-export type User = { id: string; db: SupabaseClient<Database, 'demo'> };
+export type User = { id: string; token: string; db: SupabaseClient<Database, 'demo'> };
 export type Fixture = { orgA: string; orgB: string; companyA: string; companyA2: string; userA: User; userB: User };
 
 async function makeUser(admin: SupabaseClient): Promise<User> {
@@ -21,7 +22,7 @@ async function makeUser(admin: SupabaseClient): Promise<User> {
   const signed = await db.auth.signInWithPassword({ email, password });
   if (signed.error) throw signed.error;
   await db.realtime.setAuth(signed.data.session.access_token);
-  return { id: created.data.user.id, db };
+  return { id: created.data.user.id, token: signed.data.session.access_token, db };
 }
 
 export async function makeFixture(): Promise<Fixture> {
@@ -44,4 +45,14 @@ export async function makeFixture(): Promise<Fixture> {
   ]);
   await client.end();
   return { orgA, orgB, companyA, companyA2, userA, userB };
+}
+
+// Клієнт тієї самої сесії, типізований під Database нової збірки:
+// кожна збірка компілюється зі своїм виходом typegen.
+export function clientV2(user: User): SupabaseClient<DatabaseV2, 'demo'> {
+  return createClient<DatabaseV2, 'demo'>(env.apiUrl, env.anonKey, {
+    db: { schema: 'demo' },
+    auth: { persistSession: false, autoRefreshToken: false },
+    global: { headers: { Authorization: `Bearer ${user.token}` } },
+  });
 }

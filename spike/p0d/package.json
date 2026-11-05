@@ -3,7 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "probe:all": "./run-all.sh"
   },
   "dependencies": {
     "@supabase/supabase-js": "2.119.0",
