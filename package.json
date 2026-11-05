@@ -29,7 +29,7 @@
     "husky": "9.1.7",
     "prettier": "^3.9.10",
     "simetra": "workspace:*",
-    "supabase": "2.118.0",
+    "supabase": "2.122.1",
     "syncpack": "^15.3.3",
     "turbo": "^2.11.10",
     "typescript": "npm:@typescript/typescript6@^6.0.2"
