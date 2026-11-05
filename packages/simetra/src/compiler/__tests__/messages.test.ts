@@ -739,6 +739,11 @@ describe("messages catalog", () => {
     ["rights.root-creator-set-function", { scopeKind: "org" }, "error"],
     ["rights.root-creator-assignments", { scopeKind: "org" }, "error"],
     [
+      "rights.root-creator-assignment-required",
+      { scopeKind: "org", catalog: "OrgRoleAssignments", attribute: "note" },
+      "error",
+    ],
+    [
       "rights.root-creator-subscription",
       { source: "OrgMember", scopeKind: "org" },
       "error",
