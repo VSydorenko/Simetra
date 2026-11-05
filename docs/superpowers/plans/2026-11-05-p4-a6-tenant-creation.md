@@ -295,7 +295,7 @@
   `rights_tx_root_marker_check`; колонки `rights_tx_typed.provenance`,
   `rights_tx_typed.assignment`; стала `ROOT_CREATOR_REASON = "root-creator"`.
 
-- [ ] **Крок 1 (unit, червоні).** `rights-admin-tables.test.ts`:
+- [x] **Крок 1 (unit, червоні).** `rights-admin-tables.test.ts`:
   `rights_tx_typed` = `xid` + `INPUT_COLUMNS.typed` + `provenance` +
   `assignment`, частковий індекс `(xid, assignment) WHERE provenance IS NOT NULL`; «snapshot inputs do not see provenance» — тіло знімка,
   `snapshotInputs(…)` і живий CTE `typed` без обох колонок; таблиця маркера з
@@ -309,9 +309,9 @@
   маркера — `DEFERRABLE INITIALLY DEFERRED`, тіло — перечитування за ключем і
   `rights-context`. `rights-snapshot-sources.test.ts`: маркер — не джерело
   знімка (`rights.snapshot-source-unknown` не виникає).
-- [ ] **Крок 2.** Реалізація; маркер — у `rightsAdminTables` з `origin`
+- [x] **Крок 2.** Реалізація; маркер — у `rightsAdminTables` з `origin`
   власника, як інші таблиці схеми `simetra`.
-- [ ] **Крок 3.** `pnpm --filter simetra test rights-admin-tables rights-guards rights-snapshot-sources`;
+- [x] **Крок 3.** `pnpm --filter simetra test rights-admin-tables rights-guards rights-snapshot-sources`;
   коміт `feat(compiler): маркер кореня й причина журналу root-creator`.
 
 ## Задача 4: перевірка членства, функція гранту, ядро кореня (Р-A6-6, Р-A6-8, Р-A6-12, Р-A6-15)
@@ -734,6 +734,27 @@ Postgres.
   оператор, другий власник і ТЧ кореня). Літерал хешу моделі в
   `runtime-catalog.test.ts` оновлено: політики `INSERT` кореня домену змінились.
   Вплив на спеку: немає.
+- **Задача 3 — вид скоупу кореня в генераторі ефектів.** Контракт прав
+  кореня `scopeKindId` не має (корінь не скоуплений), тож `buildEffectsUnits`
+  отримує `scopeKinds` (`CompiledScopeKind`: `root.objectId` → id виду), а факт
+  «вид має творця» — з `RoleContract.rootCreator` ролі рівня скоупу. Вставка
+  маркера стоїть у гілці дії `create` під `IF TG_OP = 'INSERT'`; ребра
+  `requires` — таблиця маркера й `current_user_id()`. Вплив на спеку: немає.
+- **Задача 3 — причина `root-creator` на кожному довіднику призначень.** Вираз
+  Р-A6-5 стоїть у тригері `INSERT` будь-якого довідника «Призначення ролей»
+  (і глобального, і виду без творця), а не лише виду з `rootCreator`: рядки з
+  походженням пише лише функція гранту, тож поза нею гілка не спрацьовує;
+  умовна генерація додала б розвилку без захисту. Ребро `rights_tx_typed` —
+  лише в функції довідника призначень. Вплив на спеку: немає.
+- **Задача 3 — частковий індекс і T0.** Будівник `table()` у
+  `admin-tables.ts` приймає індекс `{ keys, where }`; `PhysicalOrigin.part`
+  (T0 `model/physical/snapshot.ts`, поза переліком файлів плану) отримує
+  `rightsTxRootMarker`. `snapshot-sources.ts` і `guard-names.ts` не змінено:
+  факти маркер не читають (тест аналізу на `rootCreationDomain()`), а функція
+  перевірки маркера — платформна, не пара запобіжника таблиці. Функція
+  перевірки — спільна оболонка `definer` (з `row_security = off`, як
+  `rights_tx_check`). Літерал хешу моделі в `runtime-catalog.test.ts` оновлено:
+  таблиці схеми `simetra` і тригери журналу змінились. Вплив на спеку: немає.
 
 ## Журнал мутацій
 

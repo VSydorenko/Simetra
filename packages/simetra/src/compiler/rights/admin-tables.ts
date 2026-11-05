@@ -8,6 +8,7 @@ import {
   type PhysicalTable,
 } from "simetra/model"
 import { compareStrings } from "../diagnostics"
+import type { QualifiedName } from "../contracts"
 import type { ParsedObject } from "../stages/files"
 import type { MineInputs } from "./functions"
 
@@ -46,6 +47,15 @@ export const INPUT_COLUMNS = {
   ],
 } as const satisfies Record<keyof MineInputs, readonly [string, string][]>
 
+/** Таблиця маркера кореня (спека П4 §6.13, Р-A6-7). */
+export const ROOT_MARKER_TABLE = {
+  schema: PLATFORM_SCHEMA,
+  name: "rights_tx_root_marker",
+} as const satisfies QualifiedName
+
+/** Походження рядка входу й причина журналу функції гранту (Р-A6-5). */
+export const ROOT_CREATOR_REASON = "root-creator"
+
 /**
  * Стан механізму прав належить платформі, а не довіднику застосунку:
  * без FK журнал переживає видалення скоупу, без грантів API його не читає.
@@ -73,7 +83,9 @@ export function rightsAdminTables(
     part: PhysicalOrigin["part"],
     columns: PhysicalColumn[],
     key?: string[],
-    indexes: PhysicalIndexKey[][] = []
+    indexes: (
+      PhysicalIndexKey[] | { keys: PhysicalIndexKey[]; where: string }
+    )[] = []
   ): PhysicalTable => ({
     schema: PLATFORM_SCHEMA,
     name,
@@ -91,18 +103,24 @@ export function rightsAdminTables(
     uniques: [],
     checks: [],
     foreignKeys: [],
-    indexes: indexes.map((keys) => ({
-      name: makeObjectName(
-        name,
-        keys.map((k) => ("column" in k ? k.column : "")).join("_"),
-        "idx"
-      ),
-      unique: false,
-      method: "btree",
-      keys,
-      include: [],
-      nullsNotDistinct: false,
-    })),
+    indexes: indexes.map((index) => {
+      const { keys, where } = Array.isArray(index)
+        ? { keys: index, where: undefined }
+        : index
+      return {
+        name: makeObjectName(
+          name,
+          keys.map((k) => ("column" in k ? k.column : "")).join("_"),
+          "idx"
+        ),
+        unique: false,
+        method: "btree",
+        keys,
+        include: [],
+        ...(where === undefined ? {} : { where }),
+        nullsNotDistinct: false,
+      }
+    }),
   })
   const inputColumns = (
     input: keyof typeof INPUT_COLUMNS
@@ -177,12 +195,23 @@ export function rightsAdminTables(
     // Входи факту `rights` (Р3-15) — рядки вхідних CTE `rights_mine`, а не її
     // вихід: вихід множить скоупи на проєкцію ролі, а входи ∝ призначенням і
     // дельтам актора. Індекси — ключі з'єднань `held` і гілки `allow`.
+    // `provenance` і `assignment` — лише в DDL, не в `INPUT_COLUMNS` (Р-A6-5):
+    // їх пише функція гранту творцю кореня, а знімок і читання входів їх не
+    // бачать. Частковий індекс — для `EXISTS` причини журналу призначень: без
+    // нього кожен рядок журналу перебирав би всі рядки `typed` актора.
     table(
       "rights_tx_typed",
       "rightsTxTyped",
-      inputColumns("typed"),
+      [
+        ...inputColumns("typed"),
+        column("provenance", "text", false),
+        column("assignment", "uuid", false),
+      ],
       undefined,
-      [asc("xid")]
+      [
+        asc("xid"),
+        { keys: asc("xid", "assignment"), where: "provenance IS NOT NULL" },
+      ]
     ),
     table(
       "rights_tx_containers",
@@ -284,6 +313,21 @@ export function rightsAdminTables(
         column("maintenance", "boolean"),
       ],
       ["xid", "kind", "scope_kind_id", "key"]
+    ),
+    // Маркер кореня (спека П4 §6.13): вставку кореня виду з `rootCreator`
+    // мусить спожити функція гранту в тій самій транзакції, інакше відкладена
+    // перевірка відмовляє — корінь без творця не з'являється (fail-closed).
+    // Актор — той, чиє право `create` судила вставка (Р-A6-23).
+    table(
+      ROOT_MARKER_TABLE.name,
+      "rightsTxRootMarker",
+      [
+        column("xid", "bigint"),
+        column("scope_kind_id", "uuid"),
+        column("root", "uuid"),
+        column("actor", "uuid"),
+      ],
+      ["xid", "scope_kind_id", "root"]
     ),
   ]
 }

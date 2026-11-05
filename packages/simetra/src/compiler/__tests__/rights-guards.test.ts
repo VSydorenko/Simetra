@@ -27,6 +27,7 @@ import {
   membersSource,
   policyDomain,
   regionDimension,
+  rootCreationDomain,
   singleTenantRights,
   withRoles,
   writeRoles,
@@ -201,6 +202,10 @@ const image = (operation: Operation, column: string) =>
       ? `o.${column}`
       : `coalesce(n.${column}, o.${column})`
 
+/** Причина журналу вставки призначення (Р-A6-5) — оракул тесту. */
+const rootCreatorReason = (relation: string) =>
+  `CASE WHEN v_maintenance THEN 'maintenance' WHEN EXISTS (SELECT 1 FROM simetra.rights_tx_typed t WHERE t.xid = txid_current() AND t.provenance = 'root-creator' AND t.assignment = r.row_id) AND NOT EXISTS (SELECT 1 FROM simetra.rights_journal j WHERE j.xid = txid_current() AND j.relation = '${relation}' AND j.row_id = r.row_id) THEN 'root-creator' ELSE 'command' END`
+
 const refusal = (detail: string, table: string) =>
   `RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'command.forbidden', DETAIL = '${detail}', TABLE = '${table}';`
 
@@ -325,8 +330,15 @@ describe("rights guard statement triggers", () => {
             "parent" in config ? image(operation, config.parent) : "NULL::uuid"
           )
         )
+        // Р-A6-5: лише перший образ вставки призначення, яке функція гранту
+        // записала входом знімка з походженням `root-creator`, має причину
+        // творця; зміна й видалення — уже дії творця командою.
         expect(values.reason, at).toEqual(
-          expr("CASE WHEN v_maintenance THEN 'maintenance' ELSE 'command' END")
+          expr(
+            config.table.endsWith("_assignments") && operation === "INSERT"
+              ? rootCreatorReason(`public.${config.table}`)
+              : "CASE WHEN v_maintenance THEN 'maintenance' ELSE 'command' END"
+          )
         )
         expect(values.actor, at).toEqual(
           expr(
@@ -1006,7 +1018,9 @@ describe("rights guard transaction check", () => {
       // записів; рядок без запису в журналі — живий. Рядки ключа й дельти
       // ролі звужуються до `to_jsonb`: гілка журналу — за ключем
       // рядка, а для дельти, що шукається за власником, — уся транзакція.
-      const journal = `simetra.rights_journal j WHERE j.xid = v_pending.xid AND j.reason = 'command' AND j.relation = 'public.${config.table}'`
+      // Перший образ вставки творця — `NULL` (Р-A6-5): рядок призначення
+      // функції гранту не стає «наявним на початку».
+      const journal = `simetra.rights_journal j WHERE j.xid = v_pending.xid AND j.reason IN ('command', 'root-creator') AND j.relation = 'public.${config.table}'`
       const select = (sql: string) =>
         (tree(sql) as { SelectStmt: unknown }).SelectStmt
       const [column, value] =
@@ -1795,5 +1809,129 @@ describe("rights guards of membership and users outside commands", () => {
     expect(funcNames(bodyShape(usersFn("INSERT").sql))).not.toContain(
       "rights_bump"
     )
+  })
+})
+
+describe("rights guards of root creation", () => {
+  let model: CompiledModel
+  beforeAll(async () => {
+    const result = await compileRights(rootCreationDomain())
+    expectClean(result)
+    model = result.model!
+  })
+
+  const MARKER_CHECK = "function:simetra.rights_tx_root_marker_check()"
+
+  // Р-A6-7: корінь, маркер якого функція гранту не спожила до COMMIT, —
+  // відмова; подія несе вставлений рядок, тож рядок перечитується за ключем.
+  it("refuses at commit a root marker nobody consumed", () => {
+    expect(
+      unit(
+        model,
+        "trigger:simetra.rights_tx_root_marker.rights_tx_root_marker_check"
+      ).tree
+    ).toEqual(
+      tree(
+        "CREATE CONSTRAINT TRIGGER rights_tx_root_marker_check AFTER INSERT ON simetra.rights_tx_root_marker DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION simetra.rights_tx_root_marker_check()"
+      )
+    )
+    const fn = unit(model, MARKER_CHECK)
+    expect(bodyShape(fn.sql)).toEqual(
+      bodyShape(
+        expectedFunction(
+          "simetra.rights_tx_root_marker_check",
+          [
+            "BEGIN",
+            "  IF EXISTS (SELECT 1 FROM simetra.rights_tx_root_marker m WHERE m.xid = NEW.xid AND m.scope_kind_id = NEW.scope_kind_id AND m.root = NEW.root) THEN",
+            "    RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'command.forbidden', DETAIL = 'rights-context';",
+            "  END IF;",
+            "  RETURN NULL;",
+            "END",
+          ].join("\n")
+        )
+      )
+    )
+    expect(fn.requires).toContainEqual({
+      type: "table",
+      schema: "simetra",
+      name: "rights_tx_root_marker",
+    })
+    expect(
+      guards(model)
+        .filter(
+          (u) =>
+            u.class === "grant" && u.sql.includes("rights_tx_root_marker_check")
+        )
+        .every((u) => u.identity.startsWith("grant:revoke:"))
+    ).toBe(true)
+  })
+
+  it("reads the creator's provenance only in the INSERT trigger of assignments", () => {
+    for (const table of ["org_role_assignments", "branch_role_assignments"]) {
+      const fn = fnOf(model, table, "simetra_rights")
+      expect(
+        journalInserts(fn.sql).map(({ values }) => values.reason),
+        table
+      ).toEqual([
+        expr(rootCreatorReason(`public.${table}`)),
+        expr("CASE WHEN v_maintenance THEN 'maintenance' ELSE 'command' END"),
+        expr("CASE WHEN v_maintenance THEN 'maintenance' ELSE 'command' END"),
+      ])
+      expect(fn.requires, table).toContainEqual({
+        type: "table",
+        schema: "simetra",
+        name: "rights_tx_typed",
+      })
+    }
+    for (const table of ["org_roles", "org_roles_delta"]) {
+      const fn = fnOf(model, table, "simetra_rights")
+      expect(
+        journalInserts(fn.sql).map(({ values }) => values.reason),
+        table
+      ).toEqual(
+        OPERATIONS.map(() =>
+          expr("CASE WHEN v_maintenance THEN 'maintenance' ELSE 'command' END")
+        )
+      )
+    }
+  })
+
+  // Р-A6-7, Р-A6-23: маркер ставить вставка кореневого рядка під `create` на
+  // виді з `rootCreator`; вид оператора творця не має — маркера теж.
+  it("marks an inserted root of a kind with a root creator", () => {
+    const effects = (table: string) =>
+      model.sqlUnits.find(
+        (u) => u.identity === `function:public.${table}_simetra_effects()`
+      )!
+    const marker = (table: string) =>
+      bodyShape(effects(table).sql).flatMap((s, i, body) =>
+        s.type === "execsql" &&
+        insertInto(s.expressions[0]!.tree) === "rights_tx_root_marker"
+          ? [{ statement: s, at: i, body }]
+          : []
+      )
+    const [found, ...rest] = marker("organization")
+    expect(rest).toEqual([])
+    expect(found!.statement.expressions[0]!.tree).toEqual(
+      tree(
+        `INSERT INTO simetra.rights_tx_root_marker (xid, scope_kind_id, root, actor) VALUES (txid_current(), '${ORG_KIND_ID}'::uuid, NEW.id, simetra.current_user_id())`
+      )
+    )
+    const insert = enclosing(found!.body, found!.at)
+    expect(insert.expressions[0]!.tree).toEqual(tree("SELECT TG_OP = 'INSERT'"))
+    const branch = enclosing(found!.body, found!.body.indexOf(insert))
+    expect(branch.expressions.map((e) => e.tree)).toContainEqual(
+      tree("SELECT v_action = 'create'")
+    )
+    // Гілка `create` — перша в ланцюгу дій, тож її умова — перший вираз `IF`.
+    expect(branch.expressions[0]!.tree).toEqual(
+      tree("SELECT v_action = 'create'")
+    )
+    expect(marker("branch")).toEqual([])
+    expect(effects("organization").requires).toContainEqual({
+      type: "table",
+      schema: "simetra",
+      name: "rights_tx_root_marker",
+    })
   })
 })

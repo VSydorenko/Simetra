@@ -667,6 +667,7 @@ export async function runStages(
         membership,
         membershipSources: sources.membershipSources,
       },
+      scopeKinds,
       physical,
       stage1.project.naming.attributeCase,
       stage1.project.database.provider,
