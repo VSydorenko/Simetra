@@ -454,7 +454,7 @@ export interface Diagnostic {
  * права викликача — попередження (платформна спека §6.7). Творець кореня без
  * `fullAccess` і без адміністрування прав рівня (`rights.root-creator-no-admin`)
  * може бути задумом застосунку — ролі в тенанті тоді призначає оператор, — тож
- * це попередження, а не відмова (спека прав §4.1).
+ * це попередження, а не відмова (спека П4 §6.13).
  */
 const WARNING_RULES: ReadonlySet<RuleCode> = new Set<RuleCode>([
   "physical.reserved-word",

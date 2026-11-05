@@ -381,6 +381,7 @@ describe("tenant creation: self-service with a required member attribute and the
    * Відмови функції гранту: усі дають `rights-context`, тож кожен рядок
    * готує сценарій, де саме його перевірка — перша на шляху, а контроль
    * (`broken = false`) відрізняється лише цією умовою й доходить до COMMIT.
+   * Виняток — рядок «(2)+(3)»: його відмову дають дві перевірки поспіль.
    */
   const refusals: [
     name: string,
@@ -444,7 +445,9 @@ describe("tenant creation: self-service with a required member attribute and the
       ],
     ],
     [
-      "(2) second call in the same scope",
+      // Другий виклик відмовляє (2) — маркер уже спожито, — а без неї (3):
+      // скоуп уже має учасника. (2) окремо доводять два інші рядки «(2) …»
+      "(2)+(3) second call in the same scope",
       "creator",
       (root, member, broken) => [
         rawRootStep(root),
