@@ -15,6 +15,7 @@ import {
   commandCoreLayer,
   compileRights,
   policyDomain,
+  rootCreationDomain,
   singleTenantRights,
 } from "./fixtures/rights"
 
@@ -144,9 +145,13 @@ describe("rightsCheck", () => {
         expect(family).toEqual(prefix)
         return rest
       })
-      const core = rightsCheckPredicates(contract, "update", main, "v_new").map(
-        (p) => conjuncts(unqualified(expression(p), "v_new"))
-      )
+      const core = rightsCheckPredicates(
+        contract,
+        "update",
+        main,
+        "v_new",
+        "update"
+      ).map((p) => conjuncts(unqualified(expression(p), "v_new")))
       expect(core).toHaveLength(expectedLabels.length)
       expect(sorted(core)).toEqual(sorted(policies))
     }
@@ -154,8 +159,16 @@ describe("rightsCheck", () => {
 
   it("перевірка — OR предикатів над змінною рядка", () => {
     const { contract, main } = objectOf(model, TICKET_TABLE)
-    const predicates = rightsCheckPredicates(contract, "update", main, "v_old")
-    expect(expression(rightsCheck(contract, "update", main, "v_old"))).toEqual({
+    const predicates = rightsCheckPredicates(
+      contract,
+      "update",
+      main,
+      "v_old",
+      "update"
+    )
+    expect(
+      expression(rightsCheck(contract, "update", main, "v_old", "update"))
+    ).toEqual({
       BoolExpr: {
         boolop: "OR_EXPR",
         args: predicates.map((p) => expression(p)),
@@ -178,14 +191,61 @@ describe("rightsCheck", () => {
   })
 })
 
+describe("rightsCheck of the scope root create", () => {
+  // Ядро створення кореня судить право тією самою булевою формою, що й
+  // політика `INSERT` кореня (спека прав §5.2, Р-A6-11), лише над `v_new`.
+  let model: CompiledModel
+  beforeAll(async () => {
+    model = await compiled(compileRights(rootCreationDomain()))
+  })
+
+  it("the core renders the boolean create right over v_new", () => {
+    const { contract, main } = objectOf(model, "organization")
+    expect(
+      rightsCheckPredicates(contract, "create", main, "v_new", "insert").map(
+        (p) => expression(p)
+      )
+    ).toEqual(
+      [
+        "(SELECT simetra.has_right('create', 'organization', 'any', NULL))",
+        "v_new.created_by_id = (SELECT simetra.current_user_id()) AND (SELECT simetra.has_right('create', 'organization', 'own', NULL))",
+      ].map((p) => expression(p))
+    )
+  })
+
+  it("дерево в дерево: предикати ядра = предикати політик INSERT кореня", () => {
+    const { contract, main } = objectOf(model, "organization")
+    const names = accessPolicyNames(main)
+    const prefix = expression(
+      "id = (SELECT simetra.command_root('organization'))"
+    )
+    const policies = ["any", "own_created_by_id"].map((label) => {
+      const { with_check } = policyClauses(
+        policyOf(model, names.write("insert", "root", label))
+      )
+      const [family, ...rest] = conjuncts(with_check)
+      expect(family).toEqual(prefix)
+      return rest
+    })
+    const core = rightsCheckPredicates(
+      contract,
+      "create",
+      main,
+      "v_new",
+      "insert"
+    ).map((p) => conjuncts(unqualified(expression(p), "v_new")))
+    expect(sorted(core)).toEqual(sorted(policies))
+  })
+})
+
 describe("rightsCheck without scope", () => {
   it("нескоуплений об'єкт — has_right", async () => {
     const model = await compiled(compileRights(singleTenantRights()))
     const contract = model.contracts.rights.find((c) => c.objectId === TASK_ID)!
     const main = mainTableOf(model.physical, TASK_ID)!
     expect(
-      rightsCheckPredicates(contract, "read", main, "v_new").map((p) =>
-        expression(p)
+      rightsCheckPredicates(contract, "read", main, "v_new", "select").map(
+        (p) => expression(p)
       )
     ).toEqual(
       [
@@ -201,7 +261,9 @@ describe("rightsCheck without scope", () => {
     const main = mainTableOf(model.physical, TASK_ID)!
     builder.empty = true
     try {
-      expect(rightsCheck(contract, "read", main, "v_new")).toBe("false")
+      expect(rightsCheck(contract, "read", main, "v_new", "select")).toBe(
+        "false"
+      )
     } finally {
       builder.empty = false
     }

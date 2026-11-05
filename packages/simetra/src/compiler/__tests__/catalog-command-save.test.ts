@@ -146,11 +146,11 @@ describe("buildCatalogCommandUnits — <t>_save", () => {
     )
     const before = ifAt(
       shape,
-      `(${rightsCheck(rights, "update", main, "v_old")}) IS NOT TRUE`
+      `(${rightsCheck(rights, "update", main, "v_old", "update")}) IS NOT TRUE`
     )
     const after = ifAt(
       shape,
-      `(${rightsCheck(rights, "update", main, "v_new")}) IS NOT TRUE`
+      `(${rightsCheck(rights, "update", main, "v_new", "update")}) IS NOT TRUE`
     )
     const update = shape.findIndex(
       (s, i) => i > ctx && dmlKind(s) === "UpdateStmt"
@@ -212,7 +212,7 @@ describe("buildCatalogCommandUnits — <t>_save", () => {
     })
     const check = ifAt(
       shape,
-      `(${rightsCheck(rights, "create", main, "v_new")}) IS NOT TRUE`
+      `(${rightsCheck(rights, "create", main, "v_new", "insert")}) IS NOT TRUE`
     )
     const insert = shape.findIndex((s) => dmlKind(s) === "InsertStmt")
     const order = [ctx, exists, reference, copies, check, insert]
@@ -224,13 +224,16 @@ describe("buildCatalogCommandUnits — <t>_save", () => {
     const shape = bodyShape(saveSql(domain, "ticket"))
     const rights = rightsOf(domain, "ticket")
     const main = mainOf(domain, "ticket")
-    for (const [action, row] of [
-      ["create", "v_new"],
-      ["update", "v_old"],
-      ["update", "v_new"],
+    for (const [action, row, dml] of [
+      ["create", "v_new", "insert"],
+      ["update", "v_old", "update"],
+      ["update", "v_new", "update"],
     ] as const) {
       expect(
-        ifAt(shape, `(${rightsCheck(rights, action, main, row)}) IS NOT TRUE`),
+        ifAt(
+          shape,
+          `(${rightsCheck(rights, action, main, row, dml)}) IS NOT TRUE`
+        ),
         `${action} ${row}`
       ).toBeGreaterThan(0)
     }

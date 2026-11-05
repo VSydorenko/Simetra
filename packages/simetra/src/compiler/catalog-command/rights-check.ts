@@ -1,6 +1,10 @@
 import type { PhysicalTable } from "simetra/model"
 import type { RightsContract } from "../contracts"
-import { renderCondition, rightsPredicates } from "../rights/predicates"
+import {
+  renderCondition,
+  rightsPredicates,
+  type PredicateDml,
+} from "../rights/predicates"
 
 /** Змінна рядка ядра: стан під замком рядка чи стан «після» запису. */
 export type CommandRow = "v_old" | "v_new"
@@ -10,16 +14,19 @@ export type CommandRow = "v_old" | "v_new"
  * `rightsPredicates`, що й політики запису, лише з кваліфікатором рядка, тож
  * перевірка ядра й RLS не можуть розійтися другою реалізацією формули. Дія —
  * літерал функції ядра, а не `command_action()`: контекст звірено раніше
- * (спека П4 §6.6), а літерал не залежить від того, що поставив T3. Один рядок — AND
- * умов одного предиката.
+ * (спека П4 §6.6), а літерал не залежить від того, що поставив T3. `dml` —
+ * DML функції ядра, як у політики: створення кореня скоупу судить та сама
+ * булева форма, що й політика `INSERT` кореня (спека прав §5.2). Один рядок —
+ * AND умов одного предиката.
  */
 export function rightsCheckPredicates(
   contract: RightsContract,
   action: string,
   main: PhysicalTable,
-  row: CommandRow
+  row: CommandRow,
+  dml: PredicateDml
 ): string[] {
-  return rightsPredicates(contract, action, main).map((predicate) =>
+  return rightsPredicates(contract, action, main, main, dml).map((predicate) =>
     predicate.conditions.map((c) => renderCondition(c, row)).join(" AND ")
   )
 }
@@ -34,9 +41,10 @@ export function rightsCheck(
   contract: RightsContract,
   action: string,
   main: PhysicalTable,
-  row: CommandRow
+  row: CommandRow,
+  dml: PredicateDml
 ): string {
-  const predicates = rightsCheckPredicates(contract, action, main, row)
+  const predicates = rightsCheckPredicates(contract, action, main, row, dml)
   if (predicates.length === 0) return "false"
   return predicates.map((p) => `(${p})`).join(" OR ")
 }

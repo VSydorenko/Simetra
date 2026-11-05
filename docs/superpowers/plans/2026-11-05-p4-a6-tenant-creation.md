@@ -268,7 +268,7 @@
   тенанта: з `command_action()` вставка кореня під контекстом `update` пройшла б
   RLS для власника `update` кореня в іншому тенанті).
 
-- [ ] **Крок 1 (unit, червоні).** `rights-predicates.test.ts` «root insert is
+- [x] **Крок 1 (unit, червоні).** `rights-predicates.test.ts` «root insert is
   boolean» — дерево умов для `tenantSelfService()` (`own`) і
   `tenantOperator()` (`any` на `Branch`); `update`/`delete` кореня — колонкова
   форма без змін. `access-units.test.ts` (цілі оператори): на `Organization`
@@ -277,9 +277,9 @@
   `UPDATE`/`DELETE` кореня й `INSERT` некореневих таблиць — як були.
   `catalog-command-rights-check.test.ts`: перевірка ядра кореня = та сама
   булева форма над `v_new`.
-- [ ] **Крок 2.** Реалізація; `writePolicies` передає DML і не будує родину
+- [x] **Крок 2.** Реалізація; `writePolicies` передає DML і не будує родину
   «решта рядків» для `INSERT` кореня.
-- [ ] **Крок 3.** `pnpm --filter simetra test rights-predicates access-units catalog-command-rights-check`;
+- [x] **Крок 3.** `pnpm --filter simetra test rights-predicates access-units catalog-command-rights-check`;
   коміт `feat(compiler): булева політика INSERT кореня скоупу`.
 
 ## Задача 3: маркер, походження, причина журналу (Р-A6-5, Р-A6-7)
@@ -720,6 +720,20 @@ Postgres.
   Літерал хешу моделі `policyDomain(runtimeValuesLayer())` у
   `runtime-catalog.test.ts` оновлено: контракт прав отримав `root`, проєкція
   `fullAccess` втратила `create` кореня. Вплив на спеку: немає.
+- **Задача 2 — автор кореня в контракті.** Носій автора `own`-створення
+  кореня — новий факт `RightsContract.rootAuthor` (колонка `createdBy`, коли
+  вона — власний носій власності кореня), обчислений у `rights/contracts.ts`
+  через `findStandardColumn`: будівник умов не знає `attributeCase`, а
+  порівняння `origin.standard` з літералом імені забороняє lint. Інші власники
+  кореня в `create@own` не входять (тест із другим власником `owner`).
+  Вплив на спеку: немає.
+- **Задача 2 — DML у перевірці ядра.** `rightsCheck`/`rightsCheckPredicates`
+  отримують DML останнім аргументом, `rightsIf` ядра — DML функції: створення —
+  `insert`, зміна й позначка — `update` (і над `v_old`), видалення — `delete`.
+  Спільний будівник фікстури — `rootCreationDomain()` (самообслуговування,
+  оператор, другий власник і ТЧ кореня). Літерал хешу моделі в
+  `runtime-catalog.test.ts` оновлено: політики `INSERT` кореня домену змінились.
+  Вплив на спеку: немає.
 
 ## Журнал мутацій
 

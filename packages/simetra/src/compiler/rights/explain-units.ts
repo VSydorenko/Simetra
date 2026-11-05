@@ -343,7 +343,13 @@ function explainRows(
     const dimensions = new Map(
       contracts.accessDimensions.map((d) => [uuidLiteral(d.dimensionId), d])
     )
-    for (const predicate of rightsPredicates(rights, "read", main, main)) {
+    for (const predicate of rightsPredicates(
+      rights,
+      "read",
+      main,
+      main,
+      "select"
+    )) {
       rows.push(
         predicateRow(
           predicate,

@@ -4,6 +4,7 @@ import {
   quoteIdent,
   type AttributeCase,
   type DatabaseProvider,
+  type Dml,
   type PhysicalSnapshot,
   type PhysicalTable,
   COMMAND_CORE_ERRORS,
@@ -442,7 +443,12 @@ interface CoreParts {
   copyRead: (link: CarrierLink) => string
   /** Перевиведення копій лише змінених зв'язків — як тригер носіїв. */
   relink: (links: readonly CarrierLink[]) => string[]
-  rightsIf: (action: string, row: "v_old" | "v_new", reason: string) => string[]
+  rightsIf: (
+    action: string,
+    dml: Dml,
+    row: "v_old" | "v_new",
+    reason: string
+  ) => string[]
   /**
    * Рядок «до» під замком (спека П4 §6.6: після контексту) і версія. Сила замка —
    * за дією функції (спека П4 §6.6): зміна — `NO KEY UPDATE`, видалення — `UPDATE`.
@@ -506,10 +512,11 @@ function coreParts(
           [copyRead(link)]
         )
       ),
-    rightsIf: (action, row, reason) =>
-      ifThen(`(${rightsCheck(facts.rights, action, table, row)}) IS NOT TRUE`, [
-        forbidden(reason),
-      ]),
+    rightsIf: (action, dml, row, reason) =>
+      ifThen(
+        `(${rightsCheck(facts.rights, action, table, row, dml)}) IS NOT TRUE`,
+        [forbidden(reason)]
+      ),
     lockedOld: (root, strength) => [
       `SELECT * INTO v_old FROM ${relation(table)} r WHERE r.${q(key)} = ${root} FOR ${strength};`,
       // Замок застосовує `UPDATE USING` (право дії над станом «до») за будь-
@@ -557,7 +564,12 @@ function saveFunction(
           references: references(false),
           copies: contract.carrierLinks.map(parts.copyRead),
           rights: [
-            ...rightsIf(contract.actions.create, "v_new", E.forbidden.noRight),
+            ...rightsIf(
+              contract.actions.create,
+              "insert",
+              "v_new",
+              E.forbidden.noRight
+            ),
             // Межа тенанта `scope_insert` (спека П4 §6.7): предикат контейнера
             // скоупу не має, а скоуп нового рядка задає клієнт.
             ...(facts.access?.scope === undefined || facts.access.root === true
@@ -583,7 +595,12 @@ function saveFunction(
         ? [lock]
         : ifThen(`p_item ? ${sqlLiteral(contract.hierarchy.parent)}`, [lock])),
     ...parts.lockedOld(root, "NO KEY UPDATE"),
-    ...rightsIf(contract.actions.update, "v_old", E.forbidden.noRight),
+    ...rightsIf(
+      contract.actions.update,
+      "update",
+      "v_old",
+      E.forbidden.noRight
+    ),
     "v_new := v_old;",
     ...contract.updateKeys.flatMap((c) =>
       ifThen(`p_item ? ${sqlLiteral(c)}`, [`v_new.${q(c)} := v_in.${q(c)};`])
@@ -595,7 +612,12 @@ function saveFunction(
     // Перевиведення лише змінених зв'язків — як тригер носіїв: незмінений
     // зв'язок лишає копію рядка.
     ...parts.relink(contract.carrierLinks),
-    ...rightsIf(contract.actions.update, "v_new", E.forbidden.newCarrier),
+    ...rightsIf(
+      contract.actions.update,
+      "update",
+      "v_new",
+      E.forbidden.newCarrier
+    ),
     ...headerUpdate(contract),
     // Нуль рядків після `UPDATE` будь-якої форми — відмова, не успіх.
     ...ifThen("v_count = 0", [noRight]),
@@ -1085,7 +1107,7 @@ function markDeletionFunction(
     // позначки: замок ієрархії — до замка рядка (спека П4 §6.6).
     ...(contract.hierarchy?.lockAlways === true ? [parts.lock] : []),
     ...parts.lockedOld(root, "NO KEY UPDATE"),
-    ...parts.rightsIf(action, "v_old", E.forbidden.noRight),
+    ...parts.rightsIf(action, "update", "v_old", E.forbidden.noRight),
     "v_new := v_old;",
     `v_new.${mark} := p_mark;`,
     ...(parts.updatedBy === undefined
@@ -1096,7 +1118,7 @@ function markDeletionFunction(
         link.pairs.some((p) => changed.has(q(p.local)))
       )
     ),
-    ...parts.rightsIf(action, "v_new", E.forbidden.newCarrier),
+    ...parts.rightsIf(action, "update", "v_new", E.forbidden.newCarrier),
     ...(contract.predefinedColumn === undefined
       ? []
       : ifThen(`v_old.${q(contract.predefinedColumn)} IS NOT NULL`, [
@@ -1152,7 +1174,7 @@ function deleteFunction(
     // `KEY SHARE` RI-перевірок за природою, тож замок бере ту саму силу
     // одразу, а не підвищує її вже на `DELETE`.
     ...parts.lockedOld(root, "UPDATE"),
-    ...parts.rightsIf(action, "v_old", E.forbidden.noRight),
+    ...parts.rightsIf(action, "delete", "v_old", E.forbidden.noRight),
     `DELETE FROM ${relation(table)} WHERE ${q(key)} = ${root};`,
     // Відкликання права між замком і `DELETE` — нуль рядків, відмова.
     "GET DIAGNOSTICS v_count = ROW_COUNT;",

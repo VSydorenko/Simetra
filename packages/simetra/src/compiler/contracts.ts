@@ -387,6 +387,11 @@ export interface RightsContract {
    * (спека прав Рх7, Рх9).
    */
   root?: true
+  /**
+   * Корінь: колонка автора (`createdBy`), коли вона — власний носій
+   * власності. Лише її судить `create@own` кореня (спека прав §5.2, Р-A6-11).
+   */
+  rootAuthor?: string
   /** Стандартні дії в порядку реєстру, далі кастомні за `id`. */
   actions: RightsAction[]
   /**

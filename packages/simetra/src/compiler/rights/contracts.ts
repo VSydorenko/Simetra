@@ -1,6 +1,7 @@
 import {
   KIND_REGISTRY,
   actionRequires,
+  authorColumns,
   closeRequires,
   singleUuidKeyColumn,
   type ActionEffects,
@@ -65,6 +66,7 @@ import {
   type ResolvedGrant,
 } from "./expand"
 import { must, objectTarget, projectTarget } from "./references"
+import { findStandardColumn } from "../standard-column"
 
 /**
  * Спільний набір обсягів дій об'єкта. Усі дії об'єкта мають один набір
@@ -174,6 +176,20 @@ function rightsContract(
         : { membership: must(scopeKindId) },
     }
   })
+  // Автор кореня — власний носій `createdBy`: `create@own` кореня судить лише
+  // його, бо інших власників новий корінь ще не має (спека прав §5.2).
+  const authorColumn = findStandardColumn(
+    table,
+    must(authorColumns().find((c) => c.logicalName === "createdBy")),
+    ctx.project.naming.attributeCase
+  )?.name
+  const rootAuthor =
+    root && authorColumn !== undefined
+      ? ownership.find(
+          (carrier) =>
+            carrier.via === undefined && carrier.value === authorColumn
+        )?.value
+      : undefined
   const bindingCarrier = bindingOf(object)
   let binding: RightsContract["binding"]
   if (bindingCarrier !== undefined) {
@@ -315,6 +331,7 @@ function rightsContract(
     table: { schema: table.schema, name: table.name },
     ...(scopeKindId === undefined ? {} : { scopeKindId }),
     ...(root ? { root: true as const } : {}),
+    ...(rootAuthor === undefined ? {} : { rootAuthor }),
     actions,
     transitions,
     ownership,

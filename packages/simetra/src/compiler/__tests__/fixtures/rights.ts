@@ -2969,3 +2969,23 @@ export function tenantOperator(): Layer {
     }),
   }
 }
+
+/**
+ * Створення кореня (спека прав §5.2, Р-A6-11) поверх домену політик:
+ * самообслуговування й оператор разом; корінь `Organization` має другого
+ * власника `owner` і ТЧ `sites` (`scopeRootCarrier()`) — `create@own` кореня
+ * дає лише автор, а `INSERT` ТЧ кореня лишається колонковим.
+ */
+export function rootCreationDomain(): Map<string, string> {
+  return policyDomain(
+    scopeRootCarrier(),
+    tenantSelfService(),
+    tenantOperator(),
+    {
+      [ORGANIZATION_FILE]: {
+        trackAuthor: true,
+        ownership: ["createdBy", "owner"],
+      },
+    }
+  )
+}
