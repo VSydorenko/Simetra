@@ -1,6 +1,8 @@
 import { existsSync } from "node:fs"
 import { join } from "node:path"
-import { describe, expect, it, vi } from "vitest"
+import { runCommand } from "citty"
+import pg from "pg"
+import { afterEach, describe, expect, it, vi } from "vitest"
 import { TOOL_PIPELINE } from "./helpers/budget"
 import { commandByName, runTool, toolCommand } from "../cli/command"
 import { cliInput } from "../cli/input"
@@ -931,5 +933,132 @@ describe("cli adapter", TOOL_PIPELINE, () => {
         report: REPORT,
       })
     })
+  })
+})
+
+describe("data tools on the command line", TOOL_PIPELINE, () => {
+  const AS = "00000000-0000-4000-8000-0000000000a1"
+  /** Значення там, де чекають ім'я змінної: не мусить потрапити в stderr. */
+  const SECRET_URL = "postgresql://u:secret@h/x"
+  const REMOTE = { APP_DATA: "postgresql://u:p@db.example.com:5432/app" }
+  const query = JSON.stringify({
+    query: { object: { kind: "Catalog", name: "Currency" }, id: AS },
+  })
+  const operations = (name: string) =>
+    JSON.stringify({
+      operations: [
+        { action: "create", object: { kind: "Catalog", name }, id: AS },
+      ],
+    })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+    vi.unstubAllEnvs()
+  })
+
+  it("--as must be a UUID", async () => {
+    const r = await runTool(
+      tool("data-read"),
+      { _: [query, await project()], "data-url-env": "APP_DATA", as: "x" },
+      noStdin,
+      process.cwd(),
+      REMOTE
+    )
+    expect(r.exitCode).toBe(2)
+    expect(r.stderr).toContain("--as takes")
+  })
+
+  it("--data-url-env takes a name, and the value never reaches stderr", async () => {
+    const r = await runTool(
+      tool("data-read"),
+      { _: [query, await project()], "data-url-env": SECRET_URL, as: AS },
+      noStdin
+    )
+    expect(r.exitCode).toBe(2)
+    expect(r.stderr).toContain("--data-url-env takes")
+    expect(r.stderr).not.toContain("secret")
+  })
+
+  it("--database-url-env takes a name, and the value never reaches stderr", async () => {
+    const r = await runTool(
+      tool("diff"),
+      { _: [await project()], "database-url-env": SECRET_URL },
+      noStdin
+    )
+    expect(r.exitCode).toBe(2)
+    expect(r.stderr).not.toContain("secret")
+  })
+
+  it("the flags reach the tool through citty", async () => {
+    const pool = vi.spyOn(pg, "Pool")
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true)
+    vi.spyOn(process.stdout, "write").mockReturnValue(true)
+    vi.stubEnv("APP_DATA_CLI", REMOTE.APP_DATA)
+    const exitCode = process.exitCode
+    try {
+      await runCommand(toolCommand(tool("data-read")), {
+        rawArgs: [
+          query,
+          await project(),
+          "--data-url-env",
+          "APP_DATA_CLI",
+          "--as",
+          AS,
+        ],
+      })
+      expect(process.exitCode).toBe(2)
+    } finally {
+      process.exitCode = exitCode
+    }
+    const out = stderr.mock.calls.map((c) => String(c[0])).join("")
+    // Відмова запобіжника хоста, а не «немає даних»: прапорці дійшли
+    expect(out).toContain("on this machine")
+    expect(pool).not.toHaveBeenCalled()
+  })
+
+  it("data-command needs --as", async () => {
+    const r = await runTool(
+      tool("data-command"),
+      { _: [operations("Currency"), await project()] },
+      noStdin
+    )
+    expect(r.exitCode).toBe(2)
+    expect(r.stderr).toContain("--as")
+  })
+
+  it("data-command refuses a remote database before any pool", async () => {
+    const pool = vi.spyOn(pg, "Pool")
+    const r = await runTool(
+      tool("data-command"),
+      {
+        _: [operations("Currency"), await project()],
+        "data-url-env": "APP_DATA",
+        as: AS,
+      },
+      noStdin,
+      process.cwd(),
+      REMOTE
+    )
+    expect(r.exitCode).toBe(2)
+    expect(r.stderr).toContain("on this machine")
+    expect(pool).not.toHaveBeenCalled()
+  })
+
+  it("data-command refuses a rights catalog without --allow-rights-write", async () => {
+    const pool = vi.spyOn(pg, "Pool")
+    const r = await runTool(
+      tool("data-command"),
+      {
+        _: [operations("OrgRoleAssignments"), await project()],
+        "data-url-env": "APP_DATA",
+        as: AS,
+      },
+      noStdin,
+      process.cwd(),
+      REMOTE
+    )
+    expect(r.exitCode).toBe(2)
+    expect(r.stderr).toContain("--allow-rights-write")
+    expect(pool).not.toHaveBeenCalled()
   })
 })

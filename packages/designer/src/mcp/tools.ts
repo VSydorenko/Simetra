@@ -15,7 +15,13 @@ import type {
   UnchangedPlanData,
 } from "../tools/apply-tools"
 import type { DiffData } from "../tools/database-tools"
-import type { DatabaseResource } from "../tools/types"
+import {
+  summarizeData,
+  toJson,
+  type DataCommandData,
+  type DataReadData,
+} from "../tools/data-tools"
+import type { DataResource, DatabaseResource } from "../tools/types"
 
 export interface McpToolOptions {
   dir: string
@@ -26,6 +32,14 @@ export interface McpToolOptions {
   database?: DatabaseResource
   /** Ім'я змінної середовища з рядком підключення: його називає відмова. */
   databaseEnv?: string
+  /** Прапорець запуску `--allow-data-write`: без нього `data-command` відмовляє. */
+  allowDataWrite?: boolean
+  /** Прапорець запуску `--allow-rights-write`: запис довідників прав даними. */
+  allowRightsWrite?: boolean
+  /** Ресурс даних запуску; без нього інструменти даних відмовляють `no-data`. */
+  data?: DataResource
+  /** Ім'я змінної даних, зафіксоване при запуску: його називає відмова. */
+  dataEnv?: string
   /** Справжній argv запуску: потрапляє в підказку відмови запису. */
   launchArgs?: readonly string[]
 }
@@ -88,10 +102,37 @@ function toResponse(
 ): CallToolResult {
   const { ok, written, changes, diagnostics, refusal } = result
   if (refusal !== undefined) {
+    // Код відмови — і в `structuredContent`: агент читає причину, а не текст
     return {
       isError: true,
-      structuredContent: { ok, written, changes, diagnostics },
+      structuredContent: {
+        ok,
+        written,
+        changes,
+        diagnostics,
+        refusal: {
+          reason: refusal.reason,
+          ...(refusal.detail === undefined ? {} : { detail: refusal.detail }),
+        },
+      },
       content: [{ type: "text", text: refusal.message }],
+    }
+  }
+  // Дані рантайму — лише коли вони є: помилка компіляції чи збій бази даних
+  // не мають і йдуть загальною гілкою з діагностикою
+  if (
+    (tool.name === "data-read" || tool.name === "data-command") &&
+    result.data !== undefined
+  ) {
+    const data = result.data as DataReadData | DataCommandData
+    return {
+      isError: !ok,
+      structuredContent: {
+        ok,
+        diagnostics,
+        ...(toJson(data) as Record<string, unknown>),
+      },
+      content: [{ type: "text", text: summarizeData(tool.name, data) }],
     }
   }
   // `explain` віддає саме пояснення; решта — єдину обгортку результату.
@@ -219,8 +260,13 @@ export function registerCatalog(server: McpServer, o: McpToolOptions): void {
         description: tool.description,
         inputSchema: mcpInputSchema(tool),
         annotations: {
-          readOnlyHint: tool.files === "read" && tool.database !== "write",
-          destructiveHint: tool.destructive,
+          readOnlyHint:
+            tool.files === "read" &&
+            tool.database !== "write" &&
+            tool.data !== "write",
+          // `delete` даних незворотний: клієнт за анотацією може питати
+          // людину, хоча `confirm` інструмент не вимагає (Р-A5-17)
+          destructiveHint: tool.destructive || tool.data === "write",
         },
       },
       async (args: unknown) => {
@@ -233,6 +279,8 @@ export function registerCatalog(server: McpServer, o: McpToolOptions): void {
           dir: o.dir,
           readOnly: o.readOnly,
           allowDatabaseWrite: o.allowDatabaseWrite === true,
+          allowDataWrite: o.allowDataWrite === true,
+          allowRightsWrite: o.allowRightsWrite === true,
           dryRun: dry === true,
           confirmed: confirmed === true,
           channel: "mcp",
@@ -240,6 +288,8 @@ export function registerCatalog(server: McpServer, o: McpToolOptions): void {
           ...(o.databaseEnv === undefined
             ? {}
             : { databaseEnv: o.databaseEnv }),
+          ...(o.data === undefined ? {} : { data: o.data }),
+          ...(o.dataEnv === undefined ? {} : { dataEnv: o.dataEnv }),
           launchArgs: o.launchArgs,
         })
         return toResponse(tool, result, o, dry === true)

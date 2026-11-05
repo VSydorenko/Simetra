@@ -73,6 +73,7 @@ export const rolesTool = defineTool({
   input: z.strictObject({}),
   files: "read",
   database: "write",
+  data: "none",
   destructive: false,
   async run({ dir, database }) {
     const set = await projectRoleSet(dir)

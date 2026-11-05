@@ -116,6 +116,7 @@ export const introspectTool = defineTool({
   }),
   files: "write",
   database: "read",
+  data: "none",
   destructive: false,
   async run({ dir, database }, input) {
     const existing = await readFolder(dir)
@@ -454,6 +455,7 @@ export const diffTool = defineTool({
   }),
   files: "read",
   database: "read",
+  data: "none",
   destructive: false,
   async run({ dir, database }, input) {
     const compiled = await compile(await readMetadataDir(dir))

@@ -1,5 +1,6 @@
 import { applyTool, planTool } from "./apply-tools"
 import { diffTool, introspectTool } from "./database-tools"
+import { dataCommandTool, dataReadTool } from "./data-tools"
 import {
   addTool,
   createTool,
@@ -13,6 +14,9 @@ import { rolesTool } from "./roles-tool"
 import type { Tool } from "./types"
 
 export type {
+  DataAccess,
+  DataResource,
+  DataSession,
   DatabaseAccess,
   DatabaseContext,
   DatabaseResource,
@@ -42,6 +46,8 @@ export const TOOLS: readonly Tool[] = [
   applyTool,
   rolesTool,
   rightsMaintenanceTool,
+  dataReadTool,
+  dataCommandTool,
 ]
 
 export function toolByName(name: string): Tool | undefined {

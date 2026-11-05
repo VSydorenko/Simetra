@@ -10,10 +10,14 @@ import { TOOL_PIPELINE } from "./helpers/budget"
 import { z } from "zod"
 import { writeChanges } from "../io/metadata-dir"
 import { UsageError } from "../io/usage-error"
+import { parseArgs } from "citty"
+import { mcpArgs } from "../commands/mcp-args"
+import { mcpOptionsFrom } from "../commands/mcp"
 import { createMcpServer } from "../mcp/server"
-import { mcpInputSchema } from "../mcp/tools"
+import { mcpInputSchema, type McpToolOptions } from "../mcp/tools"
 import { applyTool, planTool } from "../tools/apply-tools"
 import {
+  ALLOW_DATA_WRITE_FLAG,
   ALLOW_DATABASE_WRITE_FLAG,
   databaseWriteHint,
   READ_ONLY_FLAG,
@@ -21,7 +25,7 @@ import {
 } from "../tools/hints"
 import { invoke } from "../tools/invoke"
 import { rolesTool } from "../tools/roles-tool"
-import type { DatabaseResource } from "../tools/types"
+import type { DataResource, DatabaseResource } from "../tools/types"
 import {
   addAdoptedTag,
   project,
@@ -34,12 +38,19 @@ import { expectClean } from "../../../simetra/test/support"
 const CURRENCY = "catalogs/Currency/Currency.meta.json"
 // Гейт розміру описів `tools/list` (спека designer §3.2). Правило бюджету:
 // колишній бюджет + приріст × 1,05; резерв — дубль мапінгу без `$defs`.
-// Останній замір: plan і apply разом з токенами access:/delete:/remove:/repair:
-// і звітом репетиції в описі apply — 17426 символів (попередній запис — 17328
-// за бюджету 20464): 20464 + ceil((17426 − 17328) × 1,05) = 20567.
+// Останній замір: інструменти даних data-read і data-command (вхід — схеми
+// запиту й пакета операцій T0) — 25460 символів; до них — 18238 (замір на
+// тому самому дереві перед зміною, бюджет 20567): 20567 + ceil((25460 −
+// 18238) × 1,05) = 28151.
+// Як заміряти: тимчасово поставити `TOOLS_LIST_BUDGET = 0` і запустити
+// `pnpm --filter @simetrajs/designer test mcp -t "within the size budget"` —
+// падіння друкує розмір («expected N to be less than or equal to 0»). Обидва
+// заміри — свіжі: «до» — на дереві без зміни (база гілки чи коміт перед
+// зміною), «після» — на дереві зі зміною; число «до» з цього коментаря не
+// брати: між замірами каталог міг вирости іншими змінами.
 // Вхід `promote` — 4728 символів із 15120: його визначає
 // структура мапінгу (колонки розгортаються в корені й у кожній ТЧ), а не описи
-const TOOLS_LIST_BUDGET = 20567
+const TOOLS_LIST_BUDGET = 28151
 const clients: Client[] = []
 
 useTmpProjects()
@@ -61,6 +72,16 @@ async function connect(
     launchArgs,
     database,
   })
+  const [clientEnd, serverEnd] = InMemoryTransport.createLinkedPair()
+  const client = new Client({ name: "test", version: "0.0.0" })
+  clients.push(client)
+  await server.connect(serverEnd)
+  await client.connect(clientEnd)
+  return client
+}
+
+async function connectWith(o: McpToolOptions): Promise<Client> {
+  const server = createMcpServer(o)
   const [clientEnd, serverEnd] = InMemoryTransport.createLinkedPair()
   const client = new Client({ name: "test", version: "0.0.0" })
   clients.push(client)
@@ -278,6 +299,8 @@ describe("simetra mcp", TOOL_PIPELINE, () => {
       "apply",
       "compile",
       "create",
+      "data-command",
+      "data-read",
       "delete",
       "diff",
       "explain",
@@ -393,6 +416,11 @@ describe("simetra mcp", TOOL_PIPELINE, () => {
     expect(by("apply")?.annotations?.destructiveHint).toBe(true)
     expect(by("apply")?.annotations?.readOnlyHint).toBe(false)
     expect(by("plan")?.annotations?.destructiveHint).toBe(false)
+    // `delete` даних незворотний, тож клієнт за анотацією може питати людину
+    expect(by("data-command")?.annotations?.destructiveHint).toBe(true)
+    expect(by("data-command")?.annotations?.readOnlyHint).toBe(false)
+    expect(by("data-read")?.annotations?.readOnlyHint).toBe(true)
+    expect(by("data-read")?.annotations?.destructiveHint).toBe(false)
   })
 
   it("fix is a write tool with dryRun", async () => {
@@ -691,4 +719,147 @@ it("server reports the package version", async () => {
   ) as { version: string }
   const client = await connect(".", true)
   expect(client.getServerVersion()?.version).toBe(version)
+})
+
+describe("data over MCP", TOOL_PIPELINE, () => {
+  const AS = "00000000-0000-4000-8000-0000000000a1"
+  /** Значення змінної середовища: не мусить потрапити ні в текст, ні в помилку. */
+  const SECRET_URL = "postgresql://u:secret@h/x"
+  const operations = [
+    {
+      action: "update",
+      object: { kind: "Catalog", name: "Currency" },
+      id: "00000000-0000-4000-8000-00000000d001",
+      expectedVersion: 1,
+    },
+  ]
+  /** Ресурс даних, що рахує `open`: відмова мусить лишити його нулем. */
+  function spyData(): { data: DataResource; opens: () => number } {
+    let opens = 0
+    return {
+      data: {
+        describe: "localhost:54322/app",
+        as: AS,
+        open: () => {
+          opens++
+          return Promise.reject(new Error("must not open"))
+        },
+      },
+      opens: () => opens,
+    }
+  }
+  const options = (argv: string[], env: NodeJS.ProcessEnv) =>
+    mcpOptionsFrom(parseArgs(argv, mcpArgs), env, argv)
+
+  it("data-command without --allow-data-write is refused with the flag hint", async () => {
+    const spy = spyData()
+    const client = await connectWith({
+      dir: await project(),
+      readOnly: false,
+      data: spy.data,
+    })
+    const r = await call(client, "data-command", { operations })
+    expect(r.isError).toBe(true)
+    expect(r.text).toContain(ALLOW_DATA_WRITE_FLAG)
+    expect(
+      (r.out as unknown as { refusal: { reason: string } }).refusal.reason
+    ).toBe("data-write-disabled")
+    expect(spy.opens()).toBe(0)
+  })
+
+  it("--read-only wins over --allow-data-write", async () => {
+    const spy = spyData()
+    const client = await connectWith({
+      dir: await project(),
+      readOnly: true,
+      allowDataWrite: true,
+      data: spy.data,
+    })
+    const r = await call(client, "data-command", { operations })
+    expect(
+      (r.out as unknown as { refusal: { reason: string } }).refusal.reason
+    ).toBe("read-only")
+    expect(spy.opens()).toBe(0)
+  })
+
+  it("an empty data variable is refused naming the variable", async () => {
+    const o = options(["--data-url-env", "APP_DATA", "--as", AS], {
+      APP_DATA: "",
+    })
+    expect(o.data).toBeUndefined()
+    const client = await connectWith({ ...o, dir: await project() })
+    const r = await call(client, "data-read", {
+      query: { object: { kind: "Catalog", name: "Currency" }, id: AS },
+    })
+    expect(
+      (r.out as unknown as { refusal: { reason: string } }).refusal.reason
+    ).toBe("no-data")
+    expect(r.text).toContain("APP_DATA")
+  })
+
+  it("instructions name the user and the database, never the connection string", async () => {
+    const o = options(["--data-url-env", "APP_DATA", "--as", AS], {
+      APP_DATA: "postgresql://login_marker:pw_marker@localhost:54322/app",
+    })
+    const client = await connectWith({ ...o, dir: await project() })
+    const text = client.getInstructions() ?? ""
+    expect(text).toContain(AS)
+    expect(text).toContain("localhost:54322/app")
+    expect(text).toContain(ALLOW_DATA_WRITE_FLAG)
+    expect(text).toContain("--allow-rights-write")
+    expect(text).not.toContain("login_marker")
+    expect(text).not.toContain("pw_marker")
+  })
+
+  it("read-only instructions do not advise the data write flag", async () => {
+    const client = await connectWith({
+      dir: await project(),
+      readOnly: true,
+      data: spyData().data,
+    })
+    expect(client.getInstructions()).not.toContain(ALLOW_DATA_WRITE_FLAG)
+  })
+
+  it.each([
+    [["--database-url-env", SECRET_URL], "--database-url-env"],
+    [["--shadow-url-env", SECRET_URL], "--shadow-url-env"],
+    [["--data-url-env", SECRET_URL, "--as", AS], "--data-url-env"],
+    [["--data-url-env", "APP_DATA", "--as", "not-a-uuid"], "--as"],
+  ])("launch flags %j are refused without the value", (argv, flag) => {
+    let error: unknown
+    try {
+      options(argv, {})
+    } catch (e) {
+      error = e
+    }
+    expect(error).toBeInstanceOf(UsageError)
+    expect((error as Error).message).toContain(flag)
+    expect((error as Error).message).not.toContain("secret")
+  })
+
+  it("a full data launch gives the data resource and its variable", () => {
+    const argv = [
+      "--data-url-env",
+      "APP_DATA",
+      "--as",
+      AS,
+      "--allow-data-write",
+      "--allow-rights-write",
+    ]
+    const o = options(argv, {
+      APP_DATA: "postgresql://u:p@localhost:54322/app",
+    })
+    expect(o).toMatchObject({
+      dataEnv: "APP_DATA",
+      allowDataWrite: true,
+      allowRightsWrite: true,
+      launchArgs: argv,
+    })
+    expect(o.data).toMatchObject({ as: AS, describe: "localhost:54322/app" })
+    expect(options([], {})).toMatchObject({
+      allowDataWrite: false,
+      allowRightsWrite: false,
+    })
+    expect(options([], {}).data).toBeUndefined()
+  })
 })

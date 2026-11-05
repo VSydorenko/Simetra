@@ -18,6 +18,7 @@ export const compileTool = defineTool({
   input: z.strictObject({}),
   files: "read",
   database: "none",
+  data: "none",
   destructive: false,
   async run({ dir, baseline }) {
     const result = await compile(
@@ -40,6 +41,7 @@ export const explainTool = defineTool({
   input: z.strictObject({ kind: metadataKindSchema, name: objectNameSchema }),
   files: "read",
   database: "none",
+  data: "none",
   destructive: false,
   async run({ dir }, { kind, name }) {
     const result = await compile(await readMetadataDir(dir))
@@ -75,6 +77,7 @@ export const fixTool = defineTool({
   input: z.strictObject({}),
   files: "write",
   database: "none",
+  data: "none",
   destructive: false,
   async run({ dir }) {
     const result = await fixFiles(await readMetadataDir(dir), {

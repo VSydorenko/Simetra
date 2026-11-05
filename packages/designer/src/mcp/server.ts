@@ -1,6 +1,11 @@
 import { McpServer } from "@modelcontextprotocol/server"
 import pkg from "../../package.json" with { type: "json" }
-import { databaseWriteHint, readOnlyHint } from "../tools/hints"
+import {
+  ALLOW_RIGHTS_WRITE_FLAG,
+  dataWriteHint,
+  databaseWriteHint,
+  readOnlyHint,
+} from "../tools/hints"
 import { registerCatalog, type McpToolOptions } from "./tools"
 
 /**
@@ -31,6 +36,26 @@ export function createMcpServer(o: McpToolOptions): McpServer {
               }),
         ]),
     "dryRun does not apply to apply: review with plan, and rehearse it before applying.",
+    // Речення про дані — лише з ресурсом даних. UUID користувача — не секрет,
+    // а рядок підключення сюди не потрапляє: лише `host:port/db`
+    ...(o.data === undefined
+      ? []
+      : [
+          `Data tools act as user ${o.data.as} on ${o.data.describe}, with that user's rights.`,
+          // Як і запис у базу: під `--read-only` порада про прапорець хибна
+          ...(o.readOnly
+            ? []
+            : [
+                ...(o.allowDataWrite === true
+                  ? []
+                  : [dataWriteHint(o.launchArgs, { refusal: false })]),
+                ...(o.allowRightsWrite === true
+                  ? []
+                  : [
+                      `Rights catalogs and creating a scope root whose creator receives a role are closed: data-command refuses them without ${ALLOW_RIGHTS_WRITE_FLAG}.`,
+                    ]),
+              ]),
+        ]),
   ].join(" ")
   const server = new McpServer(
     { name: "simetra", version: pkg.version },

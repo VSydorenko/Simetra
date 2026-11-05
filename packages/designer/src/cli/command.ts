@@ -4,6 +4,7 @@ import { defineCommand, type ArgsDef, type CommandDef } from "citty"
 import type { CompiledModel, Locale } from "simetra/compiler"
 import { ATTRIBUTE_CASES, DATABASE_PROVIDERS } from "simetra/model"
 import { DEFAULT_APPLY_TIMEOUTS } from "simetra/schema"
+import { checkEnvName, dataResource, parseDataLaunch } from "../io/data"
 import { databaseResource } from "../io/database"
 import { writeChanges } from "../io/metadata-dir"
 import { UsageError } from "../io/usage-error"
@@ -108,8 +109,12 @@ export async function runTool(
       : await cliInput(tool, argv, stdin)
     const { input } = parsed
     // Ім'я змінної — з прапорця запуску, значення — лише із середовища;
-    // інструмент без бази середовища не читає
+    // інструмент без бази середовища не читає. Ім'я перевіряється до
+    // будь-якої підказки: рядок підключення замість імені потрапив би в неї
     const databaseEnv = argv["database-url-env"] ?? DEFAULT_DATABASE_URL_ENV
+    checkEnvName("--database-url-env", databaseEnv)
+    if (argv["shadow-url-env"] !== undefined)
+      checkEnvName("--shadow-url-env", argv["shadow-url-env"])
     const database =
       tool.database === "none"
         ? undefined
@@ -119,6 +124,17 @@ export async function runTool(
               ? {}
               : { shadow: argv["shadow-url-env"] }),
           })
+    // Прапорці даних — лише в інструментів з віссю даних (citty інших не
+    // оголошує); середовище читає лише такий інструмент
+    const launch =
+      tool.data === "none"
+        ? undefined
+        : parseDataLaunch({
+            dataUrlEnv: argv["data-url-env"],
+            as: argv.as,
+            agent: argv.agent,
+          })
+    const data = launch === undefined ? undefined : dataResource(env, launch)
     let { dirs } = parsed
     const shown = dirs
     // Теки з `--all` відносні до `cwd`, а читання йде від процесу.
@@ -176,6 +192,12 @@ export async function runTool(
           readOnly: false,
           // Людина, що запускає `simetra apply --yes`, і є рішенням про запис
           allowDatabaseWrite: true,
+          // Так само із записом даних (Р-A5-10); права — окремим прапорцем,
+          // бо змінюють, хто що може, навіть коли запис даних — рішення людини
+          allowDataWrite: true,
+          allowRightsWrite: argv["allow-rights-write"] === true,
+          ...(data === undefined ? {} : { data }),
+          ...(launch === undefined ? {} : { dataEnv: launch.urlEnv }),
           dryRun: argv["dry-run"] === true,
           confirmed: argv.yes === true,
           channel: "cli",
@@ -359,6 +381,31 @@ function argsFor(tool: Tool): ArgsDef {
         "Environment variable with a connection string to another server of the same PostgreSQL major version for the shadow database",
     }
   }
+  if (tool.data !== "none") {
+    args["data-url-env"] = {
+      type: "string",
+      description:
+        "Environment variable with the connection string of the runtime login role to the development database",
+    }
+    args.as = {
+      type: "string",
+      description:
+        "UUID of the user the command acts as, with that user's rights",
+    }
+    args.agent = {
+      type: "string",
+      description:
+        "UUID of the agent, recorded as the act claim; it grants no rights",
+    }
+  }
+  if (tool.data === "write") {
+    args["allow-rights-write"] = {
+      type: "boolean",
+      default: false,
+      description:
+        "Write rights catalogs and create scope roots whose creator receives a role",
+    }
+  }
   if (tool.files === "write") {
     args["dry-run"] = {
       type: "boolean",
@@ -415,6 +462,10 @@ function toCliArgs(args: { _: string[] } & Record<string, unknown>): CliArgs {
     rehearse: args.rehearse === true,
     "lock-timeout-ms": str(args["lock-timeout-ms"]),
     "statement-timeout-ms": str(args["statement-timeout-ms"]),
+    "data-url-env": str(args["data-url-env"]),
+    as: str(args.as),
+    agent: str(args.agent),
+    "allow-rights-write": args["allow-rights-write"] === true,
   }
 }
 
