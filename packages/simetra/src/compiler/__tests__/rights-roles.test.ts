@@ -476,6 +476,18 @@ describe("root creator rules", () => {
     file: string,
     params: Record<string, string> = { scopeKind: "org" }
   ) => ({ code, file, pointer: "/rootCreator", params })
+  const assignmentNote = (
+    id: number,
+    name: string,
+    rest: Record<string, unknown>
+  ) => ({
+    id: uuid(id),
+    name,
+    physicalName: name,
+    type: "String",
+    length: 50,
+    ...rest,
+  })
   const author = (file: string) => ({
     code: "rights.root-create-author",
     file,
@@ -556,6 +568,30 @@ describe("root creator rules", () => {
         }
       ),
       expected: [rootCreator("rights.root-creator-assignments", owner)],
+    },
+    {
+      // Функція гранту вставляє призначення творця лише з ключем, скоупом,
+      // суб'єктом і архетипом; реквізит зі значенням за замовчуванням — проходить.
+      case: "a required assignment attribute without a default",
+      input: withRoles(tenantSelfService(), {
+        [ORG_ASSIGNMENTS_FILE]: {
+          attributes: [
+            assignmentNote(7541, "note", { required: true }),
+            assignmentNote(7542, "source", {
+              required: true,
+              defaultValue: "creator",
+            }),
+            assignmentNote(7543, "comment", {}),
+          ],
+        },
+      }),
+      expected: [
+        rootCreator("rights.root-creator-assignment-required", owner, {
+          scopeKind: "org",
+          catalog: "OrgRoleAssignments",
+          attribute: "note",
+        }),
+      ],
     },
     {
       case: "root create on own without an author",

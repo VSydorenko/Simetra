@@ -2544,6 +2544,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Оголосіть довідник призначень ролей виду скоупу або приберіть rootCreator.",
     },
   },
+  "rights.root-creator-assignment-required": {
+    en: (p) =>
+      `Scope kind "${p.scopeKind}" has a root creator role, but attribute ${p.attribute} of ${p.catalog} is required and has no default: the creator's assignment is inserted with the key, scope, subject and archetype only`,
+    uk: (p) =>
+      `Вид скоупу "${p.scopeKind}" має роль творця кореня, але реквізит ${p.attribute} довідника ${p.catalog} обов'язковий і не має значення за замовчуванням: призначення творця вставляється лише з ключем, скоупом, суб'єктом і архетипом`,
+    hint: {
+      en: "Make the attribute optional or give it a defaultValue.",
+      uk: "Зробіть реквізит необов'язковим або задайте йому defaultValue.",
+    },
+  },
   "rights.root-creator-subscription": {
     en: (p) =>
       `A write subscription on ${p.source} of scope kind "${p.scopeKind}" fires when a root creator gets the member row and the role, which the platform writes as the owner`,

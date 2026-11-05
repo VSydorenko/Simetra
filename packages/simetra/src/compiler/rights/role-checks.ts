@@ -2,6 +2,7 @@ import {
   KIND_REGISTRY,
   MEMBERSHIP_SET_FUNCTION,
   STANDARD_ACTIONS,
+  type Catalog,
   type Role,
   type ScopeKind,
 } from "simetra/model"
@@ -121,8 +122,11 @@ export function checkRoles(ctx: RightsCheckContext): Diagnostic[] {
       if (kind !== "scope") {
         report("rights.root-creator-level", "/rootCreator", { level: kind })
       } else if (level?.level === "scope" && scopeKind !== undefined) {
-        for (const code of rootCreatorKindProblems(level.scopeKindId, ctx)) {
-          report(code, "/rootCreator", { scopeKind })
+        for (const { code, params } of rootCreatorKindProblems(
+          level.scopeKindId,
+          ctx
+        )) {
+          report(code, "/rootCreator", { scopeKind, ...params })
         }
         const firstFile = rootCreators.get(level.scopeKindId)
         if (firstFile === undefined) {
@@ -187,31 +191,51 @@ export function checkRoles(ctx: RightsCheckContext): Diagnostic[] {
  * його платформа лише читає, а таблиць знімка й маркера без довідника прав
  * немає. Межу тенанта виду з дослівною функцією множини читає знімок
  * `scopeSets`, а вихід дослівної функції функція гранту дописати не може —
- * новий тенант лишився б невидимим творцю.
+ * новий тенант лишився б невидимим творцю. Призначення творця функція гранту
+ * вставляє лише з ключем, скоупом, суб'єктом і архетипом
+ * (`root-creator-units.ts`): обов'язковий реквізит застосунку без значення за
+ * замовчуванням зробив би кожне створення тенанта відмовою бази.
  */
 function rootCreatorKindProblems(
   scopeKindId: string,
   ctx: RightsCheckContext
-): (
-  | "rights.root-creator-membership"
-  | "rights.root-creator-set-function"
-  | "rights.root-creator-assignments"
-)[] {
+): {
+  code:
+    | "rights.root-creator-membership"
+    | "rights.root-creator-set-function"
+    | "rights.root-creator-assignments"
+    | "rights.root-creator-assignment-required"
+  params?: Record<string, string>
+}[] {
   const problems: ReturnType<typeof rootCreatorKindProblems> = []
   // Вид зовсім без членства вже має `rights.scope-without-membership`.
   if (membershipOfScopeKind(scopeKindId, ctx.objects, ctx) === "source") {
-    problems.push("rights.root-creator-membership")
+    problems.push({ code: "rights.root-creator-membership" })
   }
   const kind = ctx.scopeKinds.find((k) => k.id === scopeKindId)
   if (kind !== undefined && kind.setFunction !== MEMBERSHIP_SET_FUNCTION) {
-    problems.push("rights.root-creator-set-function")
+    problems.push({ code: "rights.root-creator-set-function" })
   }
-  const assignments = ctx.objects.some(
+  const assignments = ctx.objects.find(
     (object) =>
       KIND_REGISTRY[object.kind].rightsSystem?.(object.data) ===
         "roleAssignments" && scopeKindOf(object, ctx.references) === scopeKindId
   )
-  if (!assignments) problems.push("rights.root-creator-assignments")
+  if (assignments === undefined) {
+    problems.push({ code: "rights.root-creator-assignments" })
+  } else {
+    for (const attribute of (assignments.data as Catalog).attributes) {
+      if (attribute.required && attribute.defaultValue === undefined) {
+        problems.push({
+          code: "rights.root-creator-assignment-required",
+          params: {
+            catalog: (assignments.data as Catalog).name,
+            attribute: attribute.name,
+          },
+        })
+      }
+    }
+  }
   return problems
 }
 

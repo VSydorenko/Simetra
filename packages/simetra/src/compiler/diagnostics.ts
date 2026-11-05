@@ -159,6 +159,7 @@ export const COMPILER_RULES = [
   "rights.root-creator-membership",
   "rights.root-creator-set-function",
   "rights.root-creator-assignments",
+  "rights.root-creator-assignment-required",
   "rights.root-creator-subscription",
   "rights.root-create-author",
   "rights.root-creator-no-admin",
