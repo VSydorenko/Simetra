@@ -78,6 +78,7 @@ export const createTool = defineTool({
   input: createObjectInput,
   files: "write",
   database: "none",
+  data: "none",
   destructive: false,
   run: ({ dir }, input) =>
     apply(dir, (files) => createObject(files, input, completion(dir))),
@@ -90,6 +91,7 @@ export const addTool = defineTool({
   input: addElementInput,
   files: "write",
   database: "none",
+  data: "none",
   destructive: false,
   run: ({ dir }, input) =>
     apply(dir, (files) => addElement(files, input, completion(dir))),
@@ -102,6 +104,7 @@ export const renameTool = defineTool({
   input: renameInput,
   files: "write",
   database: "none",
+  data: "none",
   destructive: false,
   run: ({ dir }, input) => apply(dir, (files) => renameElement(files, input)),
 })
@@ -113,6 +116,7 @@ export const deleteTool = defineTool({
   input: deleteInput,
   files: "write",
   database: "none",
+  data: "none",
   destructive: true,
   run: ({ dir }, input) => apply(dir, (files) => deleteElement(files, input)),
 })
@@ -126,6 +130,7 @@ export const promoteTool = defineTool<typeof promoteInput, PromotionRecord>({
   input: promoteInput,
   files: "write",
   database: "none",
+  data: "none",
   destructive: false,
   run: ({ dir }, input) =>
     applyPromotion(dir, (files) =>

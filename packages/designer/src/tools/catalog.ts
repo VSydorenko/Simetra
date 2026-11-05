@@ -13,6 +13,9 @@ import { rolesTool } from "./roles-tool"
 import type { Tool } from "./types"
 
 export type {
+  DataAccess,
+  DataResource,
+  DataSession,
   DatabaseAccess,
   DatabaseContext,
   DatabaseResource,

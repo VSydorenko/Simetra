@@ -297,6 +297,7 @@ export const planTool = defineTool({
   input: z.strictObject({}),
   files: "artifact",
   database: "read",
+  data: "none",
   destructive: false,
   async run({
     dir,
@@ -462,6 +463,7 @@ export const applyTool = defineTool({
   }),
   files: "artifact",
   database: "write",
+  data: "none",
   destructive: true,
   async run({ dir, root, database }, input): Promise<RunOutcome<ApplyData>> {
     // 1–2. Артефакт лише з `plans/` і лише строгий

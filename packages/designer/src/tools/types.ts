@@ -1,5 +1,7 @@
 import type { Diagnostic, FileChange } from "simetra/compiler"
+import type { DatabaseProvider, SessionClaims } from "simetra/model"
 import type { DbConnection } from "simetra/schema"
+import type { CommandDatabase } from "simetra/server"
 import type { z } from "zod"
 
 /** Імена окремо від записів каталогу: `main.ts` реєструє лінощі підкоманди, не тягнучи компілятор. */
@@ -42,6 +44,14 @@ export const FILES_ACCESS = ["read", "artifact", "write"] as const
 export type FilesAccess = (typeof FILES_ACCESS)[number]
 export const DATABASE_ACCESS = ["none", "read", "write"] as const
 export type DatabaseAccess = (typeof DATABASE_ACCESS)[number]
+/**
+ * Третя вісь — дані застосунку в базі розробника через рантайм T3, окремо
+ * від схеми (`database`): запис схеми й запис даних вирішують різні
+ * прапорці запуску, бо агентові, що засіває тестові дані, не треба
+ * змінювати схему, і навпаки (спека П4 §6.14).
+ */
+export const DATA_ACCESS = ["none", "read", "write"] as const
+export type DataAccess = (typeof DATA_ACCESS)[number]
 
 /** Відкрите підключення одного виклику: ціль і, за потреби, база для тіні. */
 export interface DatabaseContext {
@@ -62,6 +72,30 @@ export interface DatabaseResource {
   connect(): Promise<DatabaseContext>
 }
 
+/** Відкрита сесія даних одного виклику: порт рантайму й claims користувача `--as`. */
+export interface DataSession {
+  database: CommandDatabase
+  session: SessionClaims
+  close(): Promise<void>
+}
+
+/**
+ * Дані — теж ресурс запуску: рядок підключення й користувач `--as`
+ * фіксуються при старті, тож агент не може ні змінити базу, ні діяти від
+ * чужого імені. Лінивий, як `DatabaseResource`: з'єднання — лише на виклик.
+ * Типи — лише `import type`: `main.ts` імпортує `TOOL_NAMES` звідси на
+ * старті й не повинен тягнути ярус сервера.
+ */
+export interface DataResource {
+  /** `host:port/db` без користувача й пароля. */
+  describe: string
+  /** UUID користувача, від імені якого діють інструменти даних. */
+  as: string
+  /** UUID агента для claim `act` (RFC 8693); прав не дає. */
+  agent?: string
+  open(provider: DatabaseProvider): Promise<DataSession>
+}
+
 /** Ресурс бази отримує лише інструмент, що оголосив вісь `database`. */
 export interface ToolContext {
   dir: string
@@ -71,6 +105,10 @@ export interface ToolContext {
    */
   root: string
   database?: DatabaseResource
+  /** Лише інструменту з віссю `data`. */
+  data?: DataResource
+  /** Лише інструменту з `data: "write"`: дозвіл писати довідники прав. */
+  allowRightsWrite?: boolean
   /** Вміст теки в `HEAD`: лише CLI його дає, MCP змін поза `fix` не перевіряє. */
   baseline?: ReadonlyMap<string, string>
 }
@@ -82,6 +120,11 @@ export interface RunOutcome<D> {
   diagnostics: Diagnostic[]
   data?: D
   refusal?: string
+  /**
+   * Відмова, яку вирішує `run` (їй потрібна модель), а текст будує `invoke`:
+   * лише він знає `launchArgs` і канал, з яких складається підказка.
+   */
+  refusalReason?: "rights-write-disabled"
   /**
    * Файли поза текою метаданих — лише артефакти в `plans/` кореня проєкту
    * (план, запис промоції, звіт репетиції; спека designer §3.2). Пише їх
@@ -97,6 +140,7 @@ export interface Tool<I extends z.ZodType = z.ZodType, D = unknown> {
   input: I
   files: FilesAccess
   database: DatabaseAccess
+  data: DataAccess
   destructive: boolean
   /**
    * Лише командний рядок: інший канал отримує відмову `cli-only`, а новий
@@ -114,6 +158,10 @@ export type RefusalReason =
   | "unconfirmed"
   | "dry-run-unsupported"
   | "cli-only"
+  | "data-write-disabled"
+  | "rights-write-disabled"
+  | "no-data"
+  | "data-guard"
   | "refused"
 
 export interface ToolResult<D = unknown> {
@@ -122,7 +170,8 @@ export interface ToolResult<D = unknown> {
   changes: { path: string; deleted: boolean }[]
   diagnostics: Diagnostic[]
   data?: D
-  refusal?: { reason: RefusalReason; message: string }
+  /** `detail` — стабільна причина відмови `data-guard`, щоб агент не розбирав текст. */
+  refusal?: { reason: RefusalReason; message: string; detail?: string }
   /** Шляхи артефактів відносно кореня проєкту: записані чи (dry-run) ні. */
   artifacts?: string[]
 }
@@ -136,6 +185,14 @@ export interface InvokeOptions {
    * `--allow-database-write`.
    */
   allowDatabaseWrite: boolean
+  /**
+   * Запис даних (`data: "write"`): як і запис у базу, CLI вмикає його
+   * завжди, а MCP — лише з `--allow-data-write`. Необов'язковий, `undefined`
+   * ≡ `false`: інструменти без осі даних прапорця не потребують.
+   */
+  allowDataWrite?: boolean
+  /** Запис довідників прав інструментом даних; `undefined` ≡ `false`. */
+  allowRightsWrite?: boolean
   dryRun: boolean
   confirmed: boolean
   /** Хто викликає: від цього залежить, як підказка радить дати підключення. */
@@ -148,6 +205,9 @@ export interface InvokeOptions {
    * відмова без підключення має назвати саме її. Типово `SIMETRA_DATABASE_URL`.
    */
   databaseEnv?: string
+  data?: DataResource
+  /** Ім'я змінної даних, зафіксоване при запуску: його називає відмова `no-data`. */
+  dataEnv?: string
   /** Argv запуску сервера: з нього будуються підказки про прапорці запуску. */
   launchArgs?: readonly string[]
 }
