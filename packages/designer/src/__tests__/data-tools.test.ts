@@ -296,6 +296,54 @@ describe("data tools", TOOL_PIPELINE, () => {
     ).rejects.toBe(refusal)
   })
 
+  describe("withData when closing the session fails", () => {
+    // Збій закриття пулу після закоміченої команди не підміняє результат і
+    // помилку `fn`: команда вже відбулася, а текст бази назовні не йде
+    const closing = new Error(`terminating connection for ${MARKER}`)
+    const failingClose: DataResource = {
+      describe: "localhost:54322/app",
+      as: AS,
+      open: () =>
+        Promise.resolve({
+          database: fakeDatabase({ query: answer }).database as CommandDatabase,
+          session: dataSession("supabase", { as: AS }),
+          close: () => Promise.reject(closing),
+        }),
+    }
+
+    it("returns the result of fn and logs the failure without its text", async () => {
+      const write = vi.spyOn(process.stderr, "write").mockReturnValue(true)
+      await expect(
+        withData(failingClose, "supabase", () => Promise.resolve(42))
+      ).resolves.toBe(42)
+      const out = write.mock.calls.map((c) => String(c[0])).join("")
+      expect(out).toContain("closing the data session failed")
+      expect(out).not.toContain(MARKER)
+    })
+
+    it("rethrows the error of fn, not the closing one", async () => {
+      vi.spyOn(process.stderr, "write").mockReturnValue(true)
+      const refusal = new DataGuardRefusal("not-development")
+      await expect(
+        withData(failingClose, "supabase", () => Promise.reject(refusal))
+      ).rejects.toBe(refusal)
+    })
+  })
+
+  it("the runtime log keeps a table name with a line break on one line", () => {
+    const write = vi.spyOn(process.stderr, "write").mockReturnValue(true)
+    logRuntimeEntry({
+      kind: "database",
+      error: Object.assign(new Error("boom"), {
+        code: "23505",
+        table: "gauge\nsimetra: forged line",
+      }),
+    })
+    const out = write.mock.calls.map((c) => String(c[0])).join("")
+    expect(out.split("\n").filter((line) => line !== "")).toHaveLength(1)
+    expect(out).toContain(JSON.stringify("gauge\nsimetra: forged line"))
+  })
+
   it.each([
     [{ development: false }, "not-development"],
     [{ rolbypassrls: true }, "login-refused"],

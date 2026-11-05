@@ -231,12 +231,27 @@ export async function withData<T>(
   } catch (error) {
     throw boundary(error, resource.describe)
   }
+  let result: T
   try {
-    return await fn(session)
+    result = await fn(session)
   } catch (error) {
+    await closeQuietly(session)
     throw boundary(error, resource.describe)
-  } finally {
+  }
+  await closeQuietly(session)
+  return result
+}
+
+/**
+ * Закриття пулу — поза межею результату: після успішного `fn` команда вже
+ * закомічена, тож збій закриття не має підміняти ні результат, ні помилку
+ * `fn`. У журнал — лише факт, без тексту драйвера (він несе ім'я входу).
+ */
+async function closeQuietly(session: DataSession): Promise<void> {
+  try {
     await session.close()
+  } catch {
+    process.stderr.write("simetra: closing the data session failed\n")
   }
 }
 

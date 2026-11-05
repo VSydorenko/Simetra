@@ -85,7 +85,12 @@ export function logRuntimeEntry(entry: LogEntry): void {
     typeof error?.code === "string" && SQLSTATE.test(error.code)
       ? ` SQLSTATE ${error.code}`
       : ""
-  const table = typeof error?.table === "string" ? ` table ${error.table}` : ""
+  // Ідентифікатор Postgres може містити перенос рядка: сирим він підробив би
+  // рядки журналу, тож — як рядок JSON
+  const table =
+    typeof error?.table === "string"
+      ? ` table ${JSON.stringify(error.table)}`
+      : ""
   process.stderr.write(`simetra: runtime ${entry.kind} error${code}${table}\n`)
 }
 
