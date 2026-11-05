@@ -378,6 +378,11 @@ describe("rights administration storage", () => {
     const names = (sql: string) =>
       nodes(tree(sql), "sval").map((v) => (v as { sval: string }).sval)
     const typedColumns = INPUT_COLUMNS.typed.map(([name]) => name)
+    // Літеральна перевірка: очікування нижче беруться з `INPUT_COLUMNS`, тож
+    // колонка походження, додана туди, змінила б обидві сторони порівняння.
+    expect(typedColumns).not.toContain("provenance")
+    expect(typedColumns).not.toContain("assignment")
+    expect(snapshotInputs("x").typed).not.toMatch(/provenance|assignment/)
     expect(snapshotInputs("x").typed).toBe(
       `SELECT ${typedColumns.map((c) => `i.${c}`).join(", ")} FROM simetra.rights_tx_typed i WHERE i.xid = x`
     )
@@ -400,6 +405,9 @@ describe("rights administration storage", () => {
     expect(
       inserts.map((t) => t!.InsertStmt.cols.map((c) => c.ResTarget.name))
     ).toEqual([["xid", ...typedColumns]])
+    expect(
+      inserts[0]!.InsertStmt.cols.map((c) => c.ResTarget.name)
+    ).not.toContain("provenance")
   })
 
   // Р-A6-7, Р-A6-23: маркер кореня — ключ транзакції, виду й кореня з
