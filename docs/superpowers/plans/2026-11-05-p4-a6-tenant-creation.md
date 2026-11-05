@@ -701,6 +701,7 @@ A5 уже в `main` (зведено в `feat/p4-a6`), тож повний кей
 | М25 | кожна діагностика Р-A6-16/Р-A6-19 вимкнена по черзі | відповідний рядок `it.each` |
 | М26 | інструмент без функції перевірки членства | designer `rights-maintenance` |
 | М28 | `rights.root-creator-assignment-required` вимкнена | рядок `it.each` `a required assignment attribute without a default` (`rights-roles.test.ts`) |
+| М29 | `decodeCoreRow` (`server/phase.ts`) без перевірки скоупу взагалі, не лише для рядка членства ядра кореня | unit T3 `decodes the row before COMMIT and logs a row without its scope` |
 
 ## Задача 11: гейти, перевірка, зведення
 
@@ -712,7 +713,8 @@ A5 уже в `main` (зведено в `feat/p4-a6`), тож повний кей
   `simetra_command` — домен довіри host-а, Рт6; права творця — рівно в
   новому скоупі; ⊆ ловить усе інше), `test-honesty`, `drift`, `architecture`;
   кожну знахідку — `code-review-verifier`.
-- [ ] **Крок 3.** Виправлення — scoped DB і швидкі гейти; фінальний звіт
+- [ ] **Крок 3.** Виправлення рецензії (C1, A1, T1, D1–D3) — виконано
+  2026-11-05 (журнал рішень, М29), scoped DB і швидкі гейти зелені; фінальний звіт
   архітекторці (SHA старту й фінальний, коміти, гейти з часом, мутації,
   бенчмарк, рішення з полем «вплив на спеку», обмеження, кандидати). Codex
   коду запускає архітекторка.
@@ -876,7 +878,9 @@ A5 уже в `main` (зведено в `feat/p4-a6`), тож повний кей
   тобто до циклу повторів, і лежать у знімку входу — повтор бере ті самі
   (Р-A6-20). Фаза `ctx.run` з `create` кореня генерує свої id на кожен
   виклик: хук і так виконується наново на кожній спробі. Вплив на спеку:
-  немає.
+  П4 §6.13 — «раз на `run`» уточнено: для операцій `runtime.run`, фаза
+  `ctx.run` — на кожній спробі (внесено виправленням рецензії D1; спочатку
+  тут стояло «немає»).
 - **Задача 6 — шляхи відмов.** Хук `beforeWrite` членства, що повертає
   `tabularSections` чи ключ поза чернеткою, — `command.invalid` з шляхом
   `creatorMember` (реквізиту з таким ім'ям немає, а шлях кореня вводив би в
@@ -1021,6 +1025,53 @@ A5 уже в `main` (зведено в `feat/p4-a6`), тож повний кей
   які закрив план, додано кандидата про `has_right` для `create` кореня.
   Вплив на спеку: немає.
 
+- **Виправлення рецензії C1 — невидимий рядок членства (рішення архітекторки,
+  варіант (а)).** Ядро кореня віддає рядок членства, невидимий творцю після
+  гранту, формою `{ключ, версія}` без скоупу; T3 вимагав скоуп і давав
+  `command.internal`. `decodeCoreRow` (`server/phase.ts`) отримав параметр
+  `requireScope` (типово `true`); `false` передає лише `runRootPhase` для
+  рядка членства з результату ядра кореня — рядок не йде в набір змін, тож
+  скоуп не потрібен. Решта ядер вимагає скоуп, як і раніше (unit
+  `a row without its scope`, М29). Тести: unit `membership onWrite gets an
+  invisible member row as id and version` (червоний без виправлення);
+  designer DB — модель В `tenantSelfService({ fullAccess: false, memberRead:
+  false })` (новий параметр будівника знімає грант `TenantOwner` на
+  `OrgMember`), обидва порти: `onWrite` членства отримує `{id, version: 1}`,
+  рядок членства в базі, творець читає корінь наступною транзакцією й має
+  `TenantOwner` з причиною `root-creator`. Вплив на спеку: П4 §6.13 — речення
+  про форму невидимого рядка членства (внесено); скіл споживача —
+  `people-and-rights.md`.
+- **Виправлення рецензії A1 — факт творця кореня в одному місці.**
+  `CompiledScopeKind.rootCreator?: { role, membership, assignments }`
+  обчислює `pipeline.ts` (`rootCreatorOf`) лише для виду з роллю
+  `rootCreator` і коренем-об'єктом; відсутність довідника членства чи
+  «Призначень ролей» там — захисний `internal` (раніше — у `rootCreators`;
+  мутація М25 (в) тепер упала б тим самим захистом із pipeline). Поле читають
+  `rootCreators` (`catalog-command/units.ts`), `rootCreate`
+  (`runtime-catalog.ts`) і маркер у `buildEffectsUnits`; `dataCommandRefusal`
+  designer отримав каталог рантайму й читає
+  `operations.create.root.membership`. У канонічний знімок поле не входить
+  (похідне від контрактів), тож хеш моделі й літерали тестів не змінились;
+  тести змінено лише в місці виклику `dataCommandRefusal`. Вплив на спеку:
+  немає.
+- **Виправлення рецензії T1.** Рядок `(2) second call in the same scope`
+  перейменовано на `(2)+(3) …`: відмову дає (2) (маркер спожито), а без неї —
+  (3); коментар таблиці називає цей виняток. Вплив на спеку: немає.
+- **Виправлення рецензії D1–D3.** П4 §6.13 і скіл споживача: id «раз на
+  `run`» — для операцій `runtime.run`, фаза `ctx.run` генерує свої на кожній
+  спробі. П4 §6.13 крок 2: ключ маркера — один, `(xid, вид скоупу, корінь)` з
+  актором. Коментарі `WARNING_RULES`, `rootCreatorAdminWarnings` і
+  `pipeline.ts` посилаються на П4 §6.13 замість спеки прав §4.1. Вплив на
+  спеку: П4 §6.13 (внесено).
+- **Перевірка після виправлень (2026-11-05, 91fa008c).** Unit `simetra`
+  180 файлів, 5187 тестів, 1 хв 44 с; `@simetrajs/designer` 38 файлів, 763
+  тести, 16 с; typecheck і lint обох пакетів, `format:check`,
+  `metadata:check`, перевірка якорів — зелені. Scoped DB: `simetra`
+  (`tenant-creation catalog-command rights-guards rights-write membership
+  access`) — 8 файлів, 927 тестів, 55 с; designer (`tenant-creation
+  command-runtime rights-maintenance data-tools`) — 4 файли, 60 тестів, 37 с.
+  Вплив на спеку: немає.
+
 ## Журнал мутацій
 
 Виконано 2026-11-05 на закоміченому дереві 149f61b2 (`feat/p4-a6`), кожна
@@ -1078,3 +1129,4 @@ A5 уже в `main` (зведено в `feat/p4-a6`), тож повний кей
 | М26 | `rights-maintenance.ts`: виклик `checkMember` прибрано | `DDB rights-maintenance -t "is invalid-member"` | червоні 4: інструмент повертає `ok: true` замість `maintenance.invalid-member` | 14:30 |
 | М27 | `dataCommandRefusal` (`designer/src/tools/data-policy.ts`): без перевірки модуля довідника членства кореня | `pnpm --filter @simetrajs/designer test data-policy` | червоні 2: `tenant creation when the membership cat…` і пакетний варіант — немає `object-module` на `OrgMember`; переповторено на закоміченому дереві | 14:31 |
 | М28 | `rootCreatorKindProblems`: умова `rights.root-creator-assignment-required` вимкнена | `S rights-roles -t "reports a required assignment attribute"` | червоний: `reports a required assignment attribute without…` — `[]` замість діагностики | 14:31 |
+| М29 | `decodeCoreRow` (`server/phase.ts`): перевірку скоупу вимкнено для всіх рядків (`false &&` замість `requireScope &&`) — виправлення рецензії C1, на закоміченому дереві 91fa008c | `S server/__tests__/transaction server/__tests__/hooks` | червоний 1: `decodes the row before COMMIT and logs a row without its scope` — рядок звичайного ядра без скоупу пройшов без аномалії; решта 119 зелені | 17:02 |
