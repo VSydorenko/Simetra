@@ -5,7 +5,9 @@ import pg from "pg"
 import { carrierBackfillStatements, type CompiledModel } from "simetra/compiler"
 import {
   COMMAND_SETTING,
+  CURRENT_USER_FUNCTION_NAME,
   PLATFORM_ROLES,
+  PLATFORM_SCHEMA,
   RIGHTS_MAINTENANCE_SETTING,
   SESSION_CLAIMS_SETTING,
 } from "simetra/model"
@@ -17,11 +19,14 @@ import {
   ORG_ADMIN_ID,
   ORG_MEMBER_ROLE_ID,
   TASK_VIEWER_ID,
+  TEAM_KIND_ID,
   adminRoles,
   compileRights,
   policyDomain,
   snapshotBenchDomain,
 } from "../src/compiler/__tests__/fixtures/rights"
+import { SNAPSHOT_TABLES } from "../src/compiler/rights/actor-snapshot"
+import { RIGHTS_FUNCTIONS } from "../src/compiler/rights/functions"
 import { signUp } from "../test/db/auth"
 import { asRole, testDatabaseUrl } from "../test/db/connection"
 import {
@@ -52,8 +57,14 @@ const ASSIGNMENTS = "org_role_assignments"
 const TASK = "task"
 const CHECKLIST = CHECKLIST_TABLE
 
+/**
+ * Димовий прогін (`RIGHTS_BENCH_SMOKE=1`): лише доказ, що рядки
+ * виконуються, — менші обсяги нових рядків і менше повторів. Типово —
+ * справжній замір; числа димового прогону не порівнюються ні з чим.
+ */
+const SMOKE = process.env.RIGHTS_BENCH_SMOKE === "1"
 /** Повтори запиту після прогріву: медіана відсіює випадкові піки стеку. */
-const RUNS = 5
+const RUNS = SMOKE ? 1 : 5
 /** Межа вільного місця перед сценарієм на мільйон рядків (з WAL і індексами). */
 const MIN_FREE_BYTES = 8 * 1024 ** 3
 const TIMEOUT = 30 * 60_000
@@ -110,6 +121,9 @@ async function scenario(
     try {
       await client.query(`SET LOCAL statement_timeout = '${SCENARIO_LIMIT}'`)
       await deploy(client, model)
+      // Таблиці знімка (план Права-3, Задача 5 крок 1): статистика порожніх
+      // таблиць, як між транзакціями застосунку, а не оцінка за замовчуванням.
+      await client.query(`ANALYZE ${SNAPSHOT_NAMES}`)
       await fn(client)
     } finally {
       // Відкат після збою сценарію може сам впасти — першопричину це не затирає
@@ -130,6 +144,23 @@ async function scenario(
   } finally {
     await admin.end()
   }
+}
+
+/** Таблиці знімка (план Права-3, Р3-2, Р3-15) для тексту запиту. */
+const SNAPSHOT_NAMES = Object.values(SNAPSHOT_TABLES)
+  .map((t) => `${t.schema}.${t.name}`)
+  .join(", ")
+const HEADER = `${SNAPSHOT_TABLES.header.schema}.${SNAPSHOT_TABLES.header.name}`
+/** Ім'я функції прав для тексту запиту. */
+const rightsFn = (name: keyof typeof RIGHTS_FUNCTIONS) =>
+  `${RIGHTS_FUNCTIONS[name].schema}.${RIGHTS_FUNCTIONS[name].name}`
+
+/** Зняті факти поточної транзакції (заголовки знімка). */
+async function snapshotFacts(client: pg.Client): Promise<string[]> {
+  const { rows: facts } = await client.query<{ fact: string }>(
+    `SELECT fact FROM ${HEADER} WHERE xid = txid_current_if_assigned()`
+  )
+  return facts.map((f) => f.fact).sort()
 }
 
 /** Масовий засів таблиць прав: поза режимом обслуговування — `rights-context`. */
@@ -260,14 +291,14 @@ async function commandRole(client: pg.Client): Promise<void> {
 }
 
 /** Зразки серверного заміру на функцію (Р3-9 (а)): не менше 31. */
-const FACT_SAMPLES = 31
+const FACT_SAMPLES = SMOKE ? 3 : 31
 /** Викликів функції в одному зразку. */
-const FACT_CALLS = 1000
+const FACT_CALLS = SMOKE ? 20 : 1000
 
 /**
  * Рядок сценарію 6: функція факту, її варіант і медіана часу виклику з
- * довірчим інтервалом. Варіант — окремий рядок, а не колонка: Задача 5 плану
- * Права-3 додає варіанти «живий» і «зі знімком» тими самими рядками.
+ * довірчим інтервалом. Варіант — окремий рядок, а не колонка: публічна
+ * функція без знімка й зі знімком, живий варіант і їхня парна різниця.
  */
 interface FactRow {
   fact: string
@@ -311,16 +342,21 @@ interface FactCall {
  * `clock_timestamp()`, тож мережа й розбір запиту в замір не входять, а
  * план `PERFORM` кешований. Зразки чергуються між функціями зі зсувом
  * порядку на кожному колі: дрейф стеку лягає на всі функції порівну. Перше
- * коло — прогрів, не зразок. Тимчасові функції зникають з відкатом сценарію.
+ * коло — прогрів, не зразок. Тимчасові функції зникають з відкатом сценарію;
+ * ім'я — з номером заміру, бо сценарій міряє кілька наборів. Повертає зразки
+ * кожної функції за колами — для парних різниць.
  */
+let sampling = 0
 async function sampleFacts(
   client: pg.Client,
   calls: readonly FactCall[],
   volume: string
-): Promise<void> {
+): Promise<number[][]> {
+  const set = sampling++
+  const name = (i: number) => `pg_temp.bench_fact_${set}_${i}`
   for (const [i, call] of calls.entries()) {
     await client.query(
-      `CREATE FUNCTION pg_temp.bench_fact_${i}(k int) RETURNS double precision LANGUAGE plpgsql AS $bench$
+      `CREATE FUNCTION ${name(i)}(k int) RETURNS double precision LANGUAGE plpgsql AS $bench$
        DECLARE t0 timestamptz;
        BEGIN
          t0 := clock_timestamp();
@@ -336,7 +372,7 @@ async function sampleFacts(
     for (let j = 0; j < calls.length; j++) {
       const i = (j + round) % calls.length
       const { rows: t } = await client.query<{ us: number }>(
-        `SELECT pg_temp.bench_fact_${i}($1) AS us`,
+        `SELECT ${name(i)}($1) AS us`,
         [FACT_CALLS]
       )
       if (round > 0) samples[i]!.push(t[0]!.us)
@@ -352,7 +388,113 @@ async function sampleFacts(
       ci: `${us(low)} – ${us(high)}`,
     })
   }
+  return samples
 }
+
+/**
+ * Парна різниця двох функцій одного заміру (Р3-9 (а)): різниця зразків
+ * одного кола — дрейф стеку між колами в неї не входить.
+ */
+function pairedDifference(
+  samples: number[][],
+  [a, b]: [number, number],
+  row: Omit<FactRow, "median" | "ci">
+): void {
+  const differences = samples[a]!.map((value, k) => value - samples[b]![k]!)
+  const [low, high] = medianInterval(differences)
+  factRows.push({
+    ...row,
+    median: us(median(differences)),
+    ci: `${us(low)} – ${us(high)}`,
+  })
+}
+
+/**
+ * Оператори заповнення знімка (Р3-9 (в)) — з тіл тригерів знімка, які
+ * розгорнуто, а не переписані тут: блок факту — між умовою його заголовка
+ * й записом заголовка, оператор — `INSERT` у таблицю знімка. Актора тіла
+ * (`v_actor`) замінює поточний користувач — його ж бере тіло. Факт
+ * береться з першого джерела, що його знімає: тіло факту в усіх джерел
+ * однакове.
+ */
+async function snapshotFillers(
+  client: pg.Client
+): Promise<{ table: string; sql: string }[]> {
+  const bodies = await snapshotBodies(client)
+  const seen = new Set<string>()
+  const fillers: { table: string; sql: string }[] = []
+  for (const { body } of bodies)
+    for (const [fact, block] of factBlocks(body)) {
+      if (seen.has(fact)) continue
+      seen.add(fact)
+      for (const sql of block.split(/;\s*(?:\n|$)/).map((s) => s.trim())) {
+        if (sql === "") continue
+        const target = /^INSERT INTO\s+(?:[\w"]+\.)?"?(\w+)"?/.exec(sql)
+        if (target === null)
+          throw new Error(`not a snapshot insert: ${sql.slice(0, 80)}`)
+        fillers.push({
+          table: target[1]!.replace(/^rights_tx_/, ""),
+          sql: sql.replace(
+            /\bv_actor\b/g,
+            `(SELECT ${PLATFORM_SCHEMA}.${CURRENT_USER_FUNCTION_NAME}())`
+          ),
+        })
+      }
+    }
+  expect([...seen].sort(), "every fact has a filler").toEqual([
+    "rights",
+    "scopeSets",
+    "scopes",
+    "values",
+  ])
+  return fillers
+}
+
+/** Тіла тригерів знімка кожного джерела й решта тригерів прав джерела. */
+async function snapshotBodies(
+  client: pg.Client
+): Promise<{ source: string; body: string; guards: string[] }[]> {
+  const { rows: bodies } = await client.query<{
+    source: string
+    body: string
+    guards: string[]
+  }>(
+    `SELECT n.nspname || '.' || c.relname AS source, p.prosrc AS body,
+            ARRAY(SELECT o.tgname::text FROM pg_trigger o WHERE o.tgrelid = c.oid AND NOT o.tgisinternal AND o.oid <> t.oid ORDER BY 1) AS guards
+     FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid
+     JOIN pg_namespace n ON n.oid = c.relnamespace JOIN pg_proc p ON p.oid = t.tgfoid
+     WHERE NOT t.tgisinternal AND t.tgname LIKE '%simetra_rights_snapshot%'
+     ORDER BY 1`
+  )
+  return bodies
+}
+
+/** Блоки фактів тіла знімка: факт і його оператори. */
+function factBlocks(body: string): [string, string][] {
+  const block =
+    /IF NOT EXISTS \(SELECT 1 FROM \S*rights_tx_header WHERE xid = txid_current\(\) AND fact = '(\w+)'\) THEN\n([\s\S]*?)\n\s*INSERT INTO \S*rights_tx_header/g
+  return [...body.matchAll(block)].map((m) => [m[1]!, m[2]!])
+}
+
+/**
+ * Джерела знімка (Р3-9 (в)): бізнес-дані — таблиці без власних
+ * запобіжників прав (довідників прав, членства, «Користувачів»): контейнери,
+ * зв'язки вимірів, таблиці дослівних функцій. Перший запис команди в них
+ * платить знімок, хоч права не змінює.
+ */
+async function snapshotSources(
+  client: pg.Client
+): Promise<{ table: string; facts: string; business: boolean }[]> {
+  const rightsGuard = /simetra_rights_(insert|update|delete|members_|users_)/
+  return (await snapshotBodies(client)).map(({ source, body, guards }) => ({
+    table: source,
+    facts: factBlocks(body)
+      .map(([fact]) => fact)
+      .join(", "),
+    business: !guards.some((g) => rightsGuard.test(g)),
+  }))
+}
+const sourceRows: { table: string; facts: string; business: boolean }[] = []
 
 describe("rights limits benchmark", () => {
   afterAll(async () => {
@@ -372,6 +514,11 @@ describe("rights limits benchmark", () => {
         "",
         `Postgres: ${version[0]?.version ?? "unknown"}`,
         "",
+        // План Права-3, Задача 5 крок 1: функції фактів читають заголовок
+        // знімка лише з призначеним xid, і транзакція сценарію його має.
+        "reads run with an assigned xid",
+        ...(SMOKE ? ["", "SMOKE RUN: reduced volumes, not a measurement"] : []),
+        "",
         "| Scenario | Volume | List | Point | Count | Operator |",
         "| --- | --- | --- | --- | --- | --- |",
         ...rows.map(
@@ -389,6 +536,19 @@ describe("rights limits benchmark", () => {
               ...factRows.map(
                 (r) =>
                   `| ${r.fact} | ${r.variant} | ${r.volume} | ${r.median} | ${r.ci} |`
+              ),
+              "",
+            ]),
+        ...(sourceRows.length === 0
+          ? []
+          : [
+              "7 snapshot sources: a business-data source pays the snapshot on an ordinary write",
+              "",
+              "| Source | Facts | Business data |",
+              "| --- | --- | --- |",
+              ...sourceRows.map(
+                (r) =>
+                  `| ${r.table} | ${r.facts} | ${r.business ? "yes" : "no"} |`
               ),
               "",
             ]),
@@ -856,9 +1016,10 @@ describe("rights limits benchmark", () => {
    * (`OrgAdmin`, `OrgMember`, `TaskViewer`), 10 значень виміру `region`,
    * 5 зон і 5 місць у командах. Функції кличе власник із claims
    * користувача: вони `SECURITY DEFINER`, тож роль викликача змінила б лише
-   * перевірку `EXECUTE`. Перелік `calls` — дані: Задача 5 плану додає
-   * варіанти «живий» і «зі знімком» тими самими записами, а функцію множини
-   * виду — ще й обгорткою `rights_scope_set`, не змінюючи цих рядків.
+   * перевірку `EXECUTE`. Перший замір — базова лінія тієї самої форми, що й
+   * до блоку Права-3 (`BENCH_BASE`); далі — публічна функція проти живого
+   * варіанта в одному чергуванні без знімка і зі знімком, з парною різницею,
+   * плюс права пари (Р3-16) і `rights_any` на ній.
    */
   it(
     "6 fact function overhead",
@@ -935,11 +1096,116 @@ describe("rights limits benchmark", () => {
             0
           )
         }
-        await sampleFacts(
-          client,
-          calls,
-          "3 scopes, 10 dimension values, 5 zones, 5 team seats"
+        const volume = "3 scopes, 10 dimension values, 5 zones, 5 team seats"
+        await sampleFacts(client, calls, volume)
+
+        // Р3-9 (а) після блоку Права-3: публічна функція проти живого
+        // варіанта в одному чергуванні. Без знімка xid уже призначено засівом
+        // — записом без контексту команди, тож знімка немає, а гілки читають
+        // заголовок за xid, як у транзакції команди.
+        const { rows: xid } = await client.query<{ assigned: boolean }>(
+          "SELECT txid_current_if_assigned() IS NOT NULL AS assigned"
         )
+        expect(xid[0]!.assigned, "reads run with an assigned xid").toBe(true)
+        expect(await snapshotFacts(client), "no snapshot yet").toEqual([])
+        // Функції членства не мають окремого живого варіанта: їхня жива
+        // гілка — тіло функції до блоку, тут — тим самим текстом (тіла
+        // `memberScopesFunction` і `myMemberFunction` без знімка), у формі
+        // живих варіантів `rights_*_live` (`STABLE`, від викликача).
+        const current = `(SELECT ${PLATFORM_SCHEMA}.${CURRENT_USER_FUNCTION_NAME}())`
+        await client.query(
+          `CREATE FUNCTION pg_temp.bench_live_member_scopes() RETURNS SETOF uuid LANGUAGE sql STABLE SET search_path = '' AS $live$
+           SELECT m.org_id FROM public.${MEMBER} m WHERE m.user_id IS NOT NULL AND m.user_id = ${current} $live$`
+        )
+        await client.query(
+          `CREATE FUNCTION pg_temp.bench_live_my_member(p_scope uuid) RETURNS uuid LANGUAGE sql STABLE SET search_path = '' AS $live$
+           SELECT m.id FROM public.${MEMBER} m WHERE m.org_id = bench_live_my_member.p_scope AND m.user_id IS NOT NULL AND m.user_id = ${current} $live$`
+        )
+        const team = `'${TEAM_KIND_ID}'::uuid`
+        const facts: [fact: string, publicFrom: string, liveFrom: string][] = [
+          ["rights_mine", `${rightsFn("mine")}()`, `${rightsFn("mineLive")}()`],
+          [
+            "rights_my_scopes",
+            `${rightsFn("myScopes")}()`,
+            `${rightsFn("myScopesLive")}()`,
+          ],
+          [
+            `${MEMBER}_member_scopes`,
+            `public.${MEMBER}_member_scopes()`,
+            "pg_temp.bench_live_member_scopes()",
+          ],
+          [
+            `${MEMBER}_my_member(p_scope)`,
+            `public.${MEMBER}_my_member('${home.org}'::uuid)`,
+            `pg_temp.bench_live_my_member('${home.org}'::uuid)`,
+          ],
+          [
+            "scope set of team",
+            `${rightsFn("scopeSet")}(${team})`,
+            `${rightsFn("scopeSetLive")}(${team})`,
+          ],
+        ]
+        // Права пари (Р3-16) і перевірка політики над нею: живого варіанта
+        // пари немає — її тіло та сама гілка диспетчера.
+        const pair = `'read', '${TASK}'`
+        const pairCalls = [
+          {
+            fact: "rights_mine(p_action, p_object)",
+            from: `${rightsFn("minePair")}(${pair})`,
+          },
+          {
+            fact: "rights_any on the pair",
+            from: `${rightsFn("any")}(${pair})`,
+          },
+        ]
+        const round = async (snapshot: boolean) => {
+          const variant = snapshot
+            ? "public, with snapshot"
+            : "public, no snapshot"
+          const live = snapshot ? "live, with-snapshot round" : "live"
+          const round: FactCall[] = [
+            ...facts.flatMap(([fact, from, liveFrom]) => [
+              { fact, variant, from },
+              { fact, variant: live, from: liveFrom },
+            ]),
+            ...pairCalls.map((c) => ({ ...c, variant })),
+          ]
+          for (const call of round) {
+            const { rows: n } = await client.query<{ n: string }>(
+              `SELECT count(*) AS n FROM ${call.from} f WHERE NOT (f IS NULL)`
+            )
+            expect(
+              Number(n[0]!.n),
+              `${call.fact} (${call.variant}) returns rows`
+            ).toBeGreaterThan(0)
+          }
+          const samples = await sampleFacts(client, round, volume)
+          facts.forEach(([fact], k) =>
+            pairedDifference(samples, [2 * k, 2 * k + 1], {
+              fact,
+              variant: `${variant} − live, paired`,
+              volume,
+            })
+          )
+        }
+        await round(false)
+        // Зі знімком: запис власника з контекстом команди в «Користувачів» —
+        // джерело всіх чотирьох фактів — знімає їх і на нулі рядків.
+        await client.query("SAVEPOINT snapshot")
+        try {
+          await client.query("SELECT set_config($1, $2, true)", [
+            COMMAND_SETTING,
+            JSON.stringify({ action: "update", object: "users", root: user }),
+          ])
+          await client.query("UPDATE public.users SET id = id WHERE false")
+          expect(
+            await snapshotFacts(client),
+            "the write takes every fact"
+          ).toEqual(["rights", "scopeSets", "scopes", "values"])
+          await round(true)
+        } finally {
+          await client.query("ROLLBACK TO SAVEPOINT snapshot")
+        }
       })
     },
     TIMEOUT
@@ -954,7 +1220,10 @@ describe("rights limits benchmark", () => {
    * 20 000 значень виміру в одному з них. Кожен прогін — точка збереження з
    * відкатом замість окремої транзакції (розгортання моделі не комітиться):
    * відкат прибирає й усе, що перший запис зробив у транзакції. Час —
-   * оператор, виміряний клієнтом.
+   * оператор, виміряний клієнтом. Після базових рядків — Σ операторів
+   * заповнення знімка з розбивкою за таблицями (Р3-9 (в)), `rights_any` на
+   * парі, COMMIT пакета призначень, оберт рядків знімка й джерела знімка,
+   * що є бізнес-даними, — для найбільшого актора.
    */
   it(
     "7 first command write",
@@ -1025,7 +1294,10 @@ describe("rights limits benchmark", () => {
         }
         const actors = [
           { kind: "ordinary actor", ...(await actor(1, 1)) },
-          { kind: "largest actor", ...(await actor(2000, 20000)) },
+          {
+            kind: "largest actor",
+            ...(await (SMOKE ? actor(100, 1000) : actor(2000, 20000))),
+          },
         ]
         // Відкладені перевірки засіву — тут, а не в замірах (як у сценарії 5)
         await client.query("SET CONSTRAINTS ALL IMMEDIATE")
@@ -1064,9 +1336,6 @@ describe("rights limits benchmark", () => {
             })
             await client.query("RESET ROLE")
             expect(written, `${target.table} row is written`).toBe(1)
-            // FACT_TIMING_HOOK (Задача 5 плану Права-3, Р3-9 (в)): тут, до
-            // відкату, — час знятих фактів (`total_time` верхніх викликів
-            // `*_live` з `pg_stat_xact_user_functions`) і N рядків знімка.
             return time
           } finally {
             await client.query("ROLLBACK TO SAVEPOINT first_write")
@@ -1084,6 +1353,260 @@ describe("rights limits benchmark", () => {
             })
           }
         }
+        const runs = (times: number[]) =>
+          `${ms(median(times))} (runs ${times.map((t) => t.toFixed(1)).join(", ")} ms)`
+        const claims = (user: string) =>
+          client.query("SELECT set_config($1, $2, true)", [
+            SESSION_CLAIMS_SETTING,
+            JSON.stringify({ sub: user, role: "authenticated" }),
+          ])
+
+        // Р3-9 (в), розвилка (2): Σ операторів заповнення знімка з розбивкою
+        // за таблицями фактів — ті самі оператори, що в тілі тригера знімка,
+        // окремими запитами клієнта в точці збереження з відкатом, у стані до
+        // першого запису (знімка ще немає).
+        const fillers = await snapshotFillers(client)
+        for (const a of actors) {
+          const times = new Map<string, number[]>()
+          const written = new Map<string, number>()
+          const sums: number[] = []
+          for (let i = 0; i < 2 * RUNS - 1; i++) {
+            await client.query("SAVEPOINT fill")
+            try {
+              await claims(a.user)
+              const run = new Map<string, number>()
+              for (const filler of fillers) {
+                let n = 0
+                const time = await elapsed(async () => {
+                  n = (await client.query(filler.sql)).rowCount ?? 0
+                })
+                run.set(filler.table, (run.get(filler.table) ?? 0) + time)
+                if (i === 0)
+                  written.set(
+                    filler.table,
+                    (written.get(filler.table) ?? 0) + n
+                  )
+              }
+              for (const [table, time] of run)
+                times.set(table, [...(times.get(table) ?? []), time])
+              sums.push([...run.values()].reduce((x, y) => x + y, 0))
+            } finally {
+              await client.query("ROLLBACK TO SAVEPOINT fill")
+            }
+          }
+          for (const [table, values] of times)
+            rows.push({
+              scenario: `7 snapshot fill, ${table}, ${a.kind}`,
+              volume: `${a.label}; ${(written.get(table) ?? 0).toLocaleString("en")} rows`,
+              operator: runs(values),
+            })
+          rows.push({
+            scenario: `7 snapshot fill, sum of statements, ${a.kind}`,
+            volume: a.label,
+            operator: runs(sums),
+          })
+        }
+
+        // Найбільший актор: перевірка політики на парі (Р3-16) без знімка й
+        // зі знімком, взятим першим записом у контейнер.
+        const largest = actors[1]!
+        const container = largest.targets[0]!
+        const anyPair = `SELECT count(*) AS n FROM ${rightsFn("any")}('update', 'project')`
+        for (const snapshot of [false, true]) {
+          await client.query("SAVEPOINT any_pair")
+          try {
+            await claims(largest.user)
+            if (snapshot) {
+              await client.query("SELECT set_config($1, $2, true)", [
+                COMMAND_SETTING,
+                JSON.stringify({
+                  action: "update",
+                  object: container.table,
+                  root: container.id,
+                }),
+              ])
+              await client.query(`SET LOCAL ROLE ${PLATFORM_ROLES.command}`)
+              await client.query(
+                `UPDATE public.${container.table} SET description = 'bench' WHERE id = $1`,
+                [container.id]
+              )
+              await client.query("RESET ROLE")
+            }
+            expect(
+              (await snapshotFacts(client)).includes("rights"),
+              "the snapshot state of the check"
+            ).toBe(snapshot)
+            const times: number[] = []
+            for (let i = 0; i < 2 * RUNS - 1; i++) {
+              let n = 0
+              times.push(
+                await elapsed(async () => {
+                  const { rows: found } = await client.query<{ n: string }>(
+                    anyPair
+                  )
+                  n = Number(found[0]!.n)
+                })
+              )
+              expect(n, "the largest actor updates its scopes").toBeGreaterThan(
+                0
+              )
+            }
+            rows.push({
+              scenario: `7 rights_any on the pair, largest actor, ${snapshot ? "with snapshot" : "no snapshot"}`,
+              volume: largest.label,
+              operator: runs(times),
+            })
+          } finally {
+            await client.query("ROLLBACK TO SAVEPOINT any_pair")
+          }
+        }
+
+        // COMMIT пакета призначень найбільшого актора (Р3-9 (в)): команда на
+        // рядок, як у сценарії 5; запрошені учасники — у його тенантах, у
+        // точці збереження: засів базових рядків сценарію не змінюється.
+        const batchSize = SMOKE ? 50 : 1000
+        await client.query("SAVEPOINT batch")
+        try {
+          await client.query(
+            `INSERT INTO public.${MEMBER} (id, org_id)
+             SELECT gen_random_uuid(), m.org_id FROM public.${MEMBER} m WHERE m.user_id = $1 ORDER BY m.org_id LIMIT $2`,
+            [largest.user, batchSize]
+          )
+          await client.query("SET CONSTRAINTS ALL IMMEDIATE")
+          await client.query("SET CONSTRAINTS ALL DEFERRED")
+          const block = (commands: number) => `DO $bench$
+            DECLARE m record; v_id uuid;
+            BEGIN
+              FOR m IN SELECT g.id, g.org_id FROM public.${MEMBER} g
+                JOIN public.${MEMBER} a ON a.org_id = g.org_id AND a.user_id = '${largest.user}'
+                WHERE g.user_id IS NULL ORDER BY g.id LIMIT ${commands} LOOP
+                v_id := gen_random_uuid();
+                PERFORM set_config('${COMMAND_SETTING}', json_build_object('action', 'administerRights', 'object', '${ASSIGNMENTS}', 'root', v_id)::text, true);
+                INSERT INTO public.${ASSIGNMENTS} (id, org_id, subject, archetype, deletion_mark)
+                VALUES (v_id, m.org_id, m.id, '${TASK_VIEWER_ID}', false);
+              END LOOP;
+            END $bench$`
+          for (const commands of [1, batchSize]) {
+            const times: number[] = []
+            for (let i = 0; i < (commands === 1 ? 2 * RUNS - 1 : RUNS); i++) {
+              await client.query("SAVEPOINT command")
+              try {
+                await claims(largest.user)
+                await client.query(`SET LOCAL ROLE ${PLATFORM_ROLES.command}`)
+                times.push(
+                  await elapsed(async () => {
+                    await client.query(block(commands))
+                    await client.query("SET CONSTRAINTS ALL IMMEDIATE")
+                  })
+                )
+                await client.query("RESET ROLE")
+                const { rows: n } = await client.query<{ n: string }>(
+                  `SELECT count(*) AS n FROM public.${ASSIGNMENTS} WHERE archetype = $1`,
+                  [TASK_VIEWER_ID]
+                )
+                expect(Number(n[0]!.n), "every assignment is written").toBe(
+                  commands
+                )
+              } finally {
+                await client.query("ROLLBACK TO SAVEPOINT command")
+              }
+            }
+            rows.push({
+              scenario: "7 COMMIT of an assignment batch, largest actor",
+              volume: `${commands.toLocaleString("en")} assignment rows, ${largest.label}`,
+              operator: runs(times),
+            })
+          }
+        } finally {
+          await client.query("ROLLBACK TO SAVEPOINT batch")
+        }
+
+        // Оберт рядків знімка (Review Focus 6): CHURN знімків найбільшого
+        // актора з відкатом без ANALYZE — мертві рядки в таблицях і
+        // індексах знімка, — потім перший запис і точкове читання зі знімком
+        // проти тих самих замірів до оберту.
+        const churn = SMOKE ? 3 : 100
+        const probe = async (): Promise<{ write: number; read: number }> => {
+          await client.query("SAVEPOINT probe")
+          try {
+            await claims(largest.user)
+            await client.query("SELECT set_config($1, $2, true)", [
+              COMMAND_SETTING,
+              JSON.stringify({
+                action: "update",
+                object: container.table,
+                root: container.id,
+              }),
+            ])
+            await client.query(`SET LOCAL ROLE ${PLATFORM_ROLES.command}`)
+            const write = await elapsed(() =>
+              client.query(
+                `UPDATE public.${container.table} SET description = 'bench' WHERE id = $1`,
+                [container.id]
+              )
+            )
+            await client.query("RESET ROLE")
+            await asRole(client, "authenticated", {
+              sub: largest.user,
+              role: "authenticated",
+            })
+            let found = 0
+            const read = await elapsed(async () => {
+              found =
+                (
+                  await client.query(
+                    `SELECT * FROM public.${container.table} WHERE id = $1`,
+                    [container.id]
+                  )
+                ).rowCount ?? 0
+            })
+            expect(found, "the point row is visible").toBe(1)
+            return { write, read }
+          } finally {
+            await client.query("ROLLBACK TO SAVEPOINT probe")
+          }
+        }
+        const probes = async (label: string) => {
+          const results: { write: number; read: number }[] = []
+          for (let i = 0; i < 2 * RUNS - 1; i++) results.push(await probe())
+          rows.push(
+            {
+              scenario: `7 first write with snapshot, largest actor, ${label}`,
+              volume: largest.label,
+              operator: runs(results.map((r) => r.write)),
+            },
+            {
+              scenario: `7 point read with snapshot, largest actor, ${label}`,
+              volume: largest.label,
+              operator: runs(results.map((r) => r.read)),
+            }
+          )
+        }
+        await probes("before churn")
+        for (let i = 0; i < churn; i++)
+          await firstWrite(largest.user, container)
+        await probes(`after ${churn} snapshots and rollbacks without ANALYZE`)
+        const { rows: tables } = await client.query<{
+          relname: string
+          bytes: string
+          inserted: string
+          deleted: string
+        }>(
+          `SELECT relname, pg_total_relation_size(relid) AS bytes, n_tup_ins AS inserted, n_tup_del AS deleted
+           FROM pg_stat_xact_user_tables WHERE schemaname = $1 AND relname = ANY ($2) ORDER BY relname`,
+          [
+            SNAPSHOT_TABLES.header.schema,
+            Object.values(SNAPSHOT_TABLES).map((t) => t.name),
+          ]
+        )
+        for (const t of tables)
+          rows.push({
+            scenario: `7 snapshot table after churn, ${t.relname}`,
+            volume: `${Number(t.inserted).toLocaleString("en")} inserted, ${Number(t.deleted).toLocaleString("en")} deleted in the transaction`,
+            operator: `${(Number(t.bytes) / 1024).toFixed(0)} KiB with indexes`,
+          })
+
+        sourceRows.push(...(await snapshotSources(client)))
       })
     },
     TIMEOUT

@@ -267,12 +267,12 @@
 
 **Files:** `test/db/rights-plan-gate.db.test.ts`, `test/db/explain-plan.ts`, `bench/rights.bench.db.ts`.
 
-- [ ] **Крок 1.** `ANALYZE` таблиць знімка (`SNAPSHOT_TABLES`) в `beforeAll` гейта й на початку кожного сценарію бенчмарку. Висновок бенчмарку — рядок «reads run with an assigned xid».
-- [ ] **Крок 2.** `autoExplain` — параметр `before?: string`: оператор від власника з контекстом команди, до підписки на повідомлення.
-- [ ] **Крок 3.** Окремий `it.each` `"%s with a snapshot: fact functions read the snapshot by index"` — `rights_mine()` і точкове читання задачі; `before`: `UPDATE <довідник членства> SET <колонка> = <колонка> WHERE false` (тригер оператора спрацьовує на нулі рядків; знімає всі факти). Критерії: тіла читають `rights_tx_header` і таблиці свого факту; піддерево живої гілки (виклик `*_live`) є в плані й має `Actual Loops = 0`; повторних `CTE Scan`/`Seq Scan` немає (`RIGHTS_TABLES` + таблиці знімка). Наявний `it.each` без знімка — без змін, плюс: піддерево гілки знімка є й має `loops = 0`.
-- [ ] **Крок 4.** `"rights_role_grants body reads no CTE more than once"` (борг прав §2): від власника `SELECT count(*) FROM simetra.rights_role_grants('scope', '<ORG_KIND_ID>', '<ORG_ADMIN_ID>', <jsonb з 200 рядків дельт allow/deny над доменом рівня>)` під `auto_explain`; рядків > 0; жодного `CTE Scan` з `loops > 1`.
-- [ ] **Крок 5.** Бенчмарк: у сценарій 6 — живі варіанти й «зі знімком» (Р3-9 (а)); у сценарії 7 — рядки часу знятих фактів, N і прибирання.
-- [ ] **Крок 6.** `pnpm --filter simetra test:db rights-plan-gate`; коміт `test(simetra): гейт тіл прав зі знімком і rights_role_grants; бенчмарк знімка`.
+- [x] **Крок 1.** `ANALYZE` таблиць знімка (`SNAPSHOT_TABLES`) в `beforeAll` гейта й на початку кожного сценарію бенчмарку. Висновок бенчмарку — рядок «reads run with an assigned xid». Гейт аналізує таблиці знімка з фоном 1 000 чужих знімків (від'ємні xid): на одній сторінці рядків `Seq Scan` — правильний план, і критерій «за індексом» нічого не доводив би.
+- [x] **Крок 2.** `autoExplain` — параметр `before?: string`: оператор від власника з контекстом команди, до підписки на повідомлення.
+- [x] **Крок 3.** Окремий `it.each` `"%s with a snapshot: fact functions read the snapshot by index"` — `rights_mine()` і точкове читання задачі; `before`: `UPDATE <довідник членства> SET <колонка> = <колонка> WHERE false` (тригер оператора спрацьовує на нулі рядків; знімає всі факти). Критерії: тіла читають `rights_tx_header` і таблиці свого факту; піддерево живої гілки (виклик `*_live`) є в плані й має `Actual Loops = 0`; повторних `CTE Scan`/`Seq Scan` немає (`RIGHTS_TABLES` + таблиці знімка). Наявний `it.each` без знімка — без змін, плюс: піддерево гілки знімка є й має `loops = 0`.
+- [x] **Крок 4.** `"rights_role_grants body reads no CTE more than once"` (борг прав §2): від власника `SELECT count(*) FROM simetra.rights_role_grants('scope', '<ORG_KIND_ID>', '<ORG_ADMIN_ID>', <jsonb з 200 рядків дельт allow/deny над доменом рівня>)` під `auto_explain`; рядків > 0; жодного `CTE Scan` з `loops > 1`.
+- [x] **Крок 5.** Бенчмарк: у сценарій 6 — живі варіанти й «зі знімком» (Р3-9 (а)); у сценарії 7 — рядки часу знятих фактів, N і прибирання.
+- [x] **Крок 6.** `pnpm --filter simetra test:db rights-plan-gate`; коміт `test(simetra): гейт тіл прав зі знімком і rights_role_grants; бенчмарк знімка`.
 
 **Доповнення Р3-15/Р3-16:**
 
@@ -319,7 +319,7 @@
   - кейс A4 → `the database refuses a direct command the rights granted in its transaction`: `E.forbidden.noRight`, як у контрольного запису (Р-1), плюс `proveOpened`; коментар про Права-3 прибрати.
 - [x] **Крок 3. Ядро ≡ RLS** (`catalog-command-rights.db.test.ts`): підмножина сітки (по точці на обсяг і дію) з варіантом `snapshot: "taken"` — у зовнішній точці збереження під актором точки оператор, що знімає факти (`… WHERE false`), додаткове призначення, що відкриває точку (режим обслуговування), обидва шляхи; результат = результат без призначення. Контроль: без знімка те саме призначення відкриває хоч одну відмовлену точку.
 - [x] **Крок 4. Пояснення** (`rights-analysis.db.test.ts`): `explains only rows visible by the snapshot` — самопризначення ролі, що відкриває рядок (`commandSteps`); `rights_explain` для рядка — порожньо; контроль — актор з цією роллю з початку отримує пояснення; варіант з межею тенанта — самоприйняття членства (`asOwner`).
-- [ ] **Крок 5.** Scoped DB: `pnpm --filter simetra test:db catalog-command-admin catalog-command-rights rights-analysis rights-guards rights-functions rights-plan-gate` — зелені, час записати.
+- [x] **Крок 5.** Scoped DB: `pnpm --filter simetra test:db catalog-command-admin catalog-command-rights rights-analysis rights-guards rights-functions rights-plan-gate` — зелені, час записати. Зелені після Задачі 5: 840 тестів, 65 с.
 - [x] **Крок 6. Ширший прогін перед комітом** (Review Focus 1): `pnpm --filter simetra test:db rights membership access command` і `pnpm --filter @simetrajs/designer test:db rights promotion apply database`. Червоний тест поза планом — розвилка.
 - [x] **Крок 7.** Коміт (Задачі 4 і 6) `feat(compiler): функції фактів актора читають знімок транзакції`.
 - [ ] **Крок 8.** Unit-мутації Задачі 10, чий тест уже є; DB-мутації — після Задачі 8 (Задача 10).
