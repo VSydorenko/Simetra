@@ -415,7 +415,7 @@ DB-мутації — для правил безпеки (М1–М7, М7а, М11
 | М34 | гілка `everyUser` поза умовою диспетчера (жива для чужого актора) | `returns empty facts to another actor of the transaction` (фікстура з `everyUser`) |
 | М35 | у тіло гілки знімка диспетчера — читання таблиці без індексу (`Seq Scan`) | гейт тіл зі знімком `"%s with a snapshot: fact functions read the snapshot by index"` |
 | М36 | `startRights` над живими входами | `computes the commit cache from the snapshot inputs` |
-| М37 | у гейті — зовнішня сторона циклу з CTE, залежним від скоупів (`held` чи `my_scopes`), рахується «сталою» | гейт тіл `set functions of a task policy …` на парі (фікстура з циклом над `held` зовні) |
+| М37 | у гейті — зовнішня сторона циклу з CTE, залежним від скоупів (`held` чи `my_scopes`), рахується «сталою» | unit `packages/simetra/test/explain-plan.test.ts`: `a loop over held is not constant`, `a loop over my_scopes is not constant` |
 
 М8 (тіло знімка кличе `rights_mine()`) замінюється на: тіло знімка пише в `rights_tx_typed` вихід `rights_mine_live()` замість входів — unit `snapshots the inputs of rights_mine with the shared generators`. М27а — неактивний рядок прийнятого джерела призначень при **активному** учасникові (інакше рядок знімає вже `my_scopes`, М27); асерт — `rights_tx_typed`. М21 — пошук заголовка, як і було; `rights_tx_actor` більше немає.
 
@@ -491,6 +491,30 @@ DB-мутації — для правил безпеки (М1–М7, М7а, М11
 | М38 | `rights_dimension_values`: гілки переставлено — жива під `owned`, знімок під «немає факту й не чужий» | unit + DB | `simetra test rights-functions`; `CCA` | unit `dispatches rights_dimension_values between the snapshot and the live branch of its fact`; DB `refuses users as a source → update X → revert`, `hides X in users as a source → read X → revert`, `reads live facts while no source changed`, `takes the snapshot equal to the live facts of the actor`, `keeps the snapshot after a passed immediate check` | 13 + 11 с |
 
 На V1 кейси «another actor» на М2–М6 зелені: мутація лишає `NOT snapshotForeign()` у `ELSIF`, тож чужий актор порожній і з живим запитом у гілці знімка; правило тримає М7а.
+
+**Перепрогін на фінальному коді** (`f581280e`: після V1 `b5386038` і змін COMMIT `44b80bf2`, `6b1128c0`, `a0596ffc`; ті самі правила). Гілки `snapshotBranches` більше немає: правило «знімок / жива / порожньо» — лише в `snapshotDispatcher` (`actor-snapshot.ts`), тож М1, М7а і М34 застосовано там. `RA` — `simetra test:db rights-analysis`.
+
+| № | мутація (як застосовано) | рівень | команда | червоний тест | час |
+| --- | --- | --- | --- | --- | --- |
+| М1 | `snapshotDispatcher`: `IF (false)` замість `snapshotOwned`, `ELSIF (true)` — усі функції фактів лише живі | DB | `CCA`; `DSG` | `CCA` 21: `takes the snapshot before the first change of own membership`, кейси кроку 2 (`refuses assign → update X → unassign`, `hides X in assign → read X → unassign`, …, `refuses a verbatim scope set → create X → revert`), «another actor» ×4, `keeps the snapshot after a passed immediate check`; `DSG` 9: `assign → update X → unassign in one batch`, `… through ctx.run in a hook`, `assign → update a member row → unassign`, `assign → read X → unassign through a hook`, `reads through rights functions in a read only transaction without an xid` | 11 + 26 с |
+| М7 | `snapshotOwned` без `h.actor IS NOT DISTINCT FROM …` | DB | `CCA` | `returns empty facts to another actor of the transaction` (+ `single-fact (rights)`, `(values)`) | 10 с |
+| М7а | `snapshotDispatcher`: `ELSIF` без `NOT snapshotForeign()` | DB | `CCA` | `returns empty facts to another actor after a single-fact snapshot` (усі три факти) (+ `… of the transaction`) | 10 с |
+| М11 | тригер знімка `AFTER INSERT OR UPDATE OR DELETE` | DB | `CCA` | `takes the snapshot before the first change of own membership` (+ 18: кейси кроку 2, «another actor», self-acceptance, `refuses capturing a member row…`) | 11 с |
+| М13 | `checkBody`: після видалення ключа — порожня черга xid → `DELETE` з усіх `SNAPSHOT_TABLES` цього xid | DB | `CCA` + `RG` | `keeps the snapshot after a passed immediate check`; `RG`: `the pending keys are cleaned …, the actor snapshot is kept`, `IMMEDIATE mode does not lose the actor snapshot`, `membership-only transactions … keep the actor snapshot` | 11 + 5 с |
+| М14 | прибирання Р3-7 у `snapshotBody` без `rights_tx_values` | DB | `CCA` | `cleans the snapshots of finished transactions` | 11 с |
+| М18 | `snapshotBody`: `IF v_action IS NULL THEN RETURN NULL` (без режиму обслуговування) | DB | `CCA` | `takes no snapshot in maintenance mode` | 11 с |
+| М20 | `rights_explain`: `caller_granted` — `DETAIL_SELECT` з `rights_detail_of(current_user_id())`, `CALLER.sets = "of"` | DB | `RA` | `explains only rows visible by the snapshot` | 8 с |
+| М21 | `actorPending`: `WHERE EXISTS (SELECT 1 FROM rights_tx_typed WHERE xid = txid_current())` замість заголовка `rights` | DB | `CCA` | `judges the self-acceptance of an actor without rights (invite@T)` (+ `refuses capturing a member row with full access`) | 11 с |
+| М31а | `rights_mine`, гілка знімка: `typed` — `liveInputs(…, LIVE).typed` | DB | `CCA` | `refuses assign → update X → unassign`, `hides X in assign → read X → unassign` (+ `refuses assign → update a member row`, `reads X by the start membership after leaving`, `the database refuses a direct command the rights granted in its transaction`) | 12 с |
+| М31б | те саме для `deltas` | DB | `CCA` | `refuses a custom role delta → update X → revert` | 11 с |
+| М31в | те саме для `containers` | DB | `CCA` | `refuses a new container → update X → revert` | 10 с |
+| М32 | `snapshotSources`: таблиця довідника членства (`contracts.membership`) не додається до факту `rights` | DB | `CCA` | `judges the self-acceptance of an actor without rights (invite@T)`, `refuses capturing a member row with full access (invite@A)` | 11 с |
+| М33 | `escalationSql`: покриття — `(SELECT m.*, false AS full_access, v_pending.xid AS xid FROM rights_mine_live() m)` замість `rights_tx_start` | unit + DB | `simetra test rights-guards`; `RG` + `CCA` | unit `caches the start rights on the first commit check` (+ 2); `RG`: `computes the commit cache from the snapshot inputs`, `self-assign …`, `self-held-role-delta …`, `cross-scope …`, `member-claim-assigned …`; `CCA`: self-acceptance, `refuses capturing …` | 4 + 5 + 11 с |
+| М34 | `snapshotDispatcher` факту `rights`: після `END IF` — `RETURN QUERY` рядків `everyUser` для будь-якого дійсного користувача | DB | `CCA` | `returns empty facts to another actor of the transaction` (+ «single-fact» ×3, контракт пари) | 12 с |
+| М36 | `startCache`: рядки — `rights_mine_live()` (живі входи) замість `startRights` над входами знімка | DB | `RG` | `computes the commit cache from the snapshot inputs` (+ 4 кейси ⊆ на COMMIT) | 6 с |
+| М37 | `constantSubtree` (`test/db/explain-plan.ts`): листок `CTE Scan` — «сталий» | unit | `simetra test explain-plan` | `a loop over held is not constant`, `a loop over my_scopes is not constant` (контроль перенесено з гейта в unit) | 2 с |
+
+Усі 17 червоні, зелених немає. Нові тести рецензії доведено мутаціями при написанні: звірку заповнення знімка з аналізом джерел — читанням `public.project` (джерело `rights`, не `values`) в обгортці `values` `factRows`; гілку `global` покриття — `WHEN 'global' THEN true` (червоний лише `judges a global grant by the global rights at the start`); правило циклів — ще й `SubPlan` на шляху, що не обриває обхід (`a SubPlan on the path is not constant`).
 
 Підсумок: 41 мутація (М1–М37 з М7а, М27а, М31а–в), усі червоні (М19 і М25 — після кейсів `301ce527`, первинно зелені), непридатних немає (М8, М21, М27а — у формі заміни Р3-15/Р3-16). Сумарний час прогонів ≈ 9 хв.
 
