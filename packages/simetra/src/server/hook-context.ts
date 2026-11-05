@@ -8,7 +8,7 @@ import type {
 import { decodeRow } from "./decode"
 import { CommandFailure } from "./errors"
 import { prepareRead } from "./read"
-import { isRightsObject, type Transaction } from "./transaction"
+import type { Transaction } from "./transaction"
 
 /** The async context of a running command: its attempt and phase depth. */
 export interface Frame {
@@ -172,8 +172,6 @@ function contextOf(tx: Transaction, phase: HookPhase, scope: Scope) {
         const prepared = prepareRead(tx.state.catalog, query)
         if ("error" in prepared) tx.abort(prepared.error)
         const { object: target, statement } = prepared
-        // Бар'єр Р-A4-17 — синхронно перед постановкою читання в чергу.
-        tx.checkBarrier(isRightsObject(target))
         // Та сама транзакція й роль команд: хук читає те, що бачить ядро.
         const { rows } = await tx.enqueue([statement], {
           kind: "read",

@@ -12,6 +12,7 @@ import {
 } from "simetra/compiler"
 import {
   PLATFORM_ROLES,
+  SESSION_CLAIMS_SETTING,
   defineObjectModule,
   type CommandError,
   type MetadataRef,
@@ -40,6 +41,7 @@ import {
   MEMBER_EDITOR_ID,
   ORG_ADMIN_ID,
   RIGHTS_ADMIN_ID,
+  SNAPSHOT_TABLES,
   TASK_VIEWER_ID,
   TICKET_OWN_WRITER_ID,
   TICKET_REGION_WRITER_ID,
@@ -84,10 +86,6 @@ const ASSIGNMENTS: MetadataRef = { kind: "Catalog", name: "OrgRoleAssignments" }
 const MEMBERS: MetadataRef = { kind: "Catalog", name: "OrgMember" }
 const TICKET: MetadataRef = { kind: "Catalog", name: "Ticket" }
 const ASSIGNMENTS_KEY = "Catalog.OrgRoleAssignments"
-const RIGHTS_CONTEXT: CommandError = {
-  code: "command.forbidden",
-  reason: "rights-context",
-}
 
 interface Env {
   dir: string
@@ -187,25 +185,34 @@ async function seedOrg(
     await owner.query("INSERT INTO public.organization (id) VALUES ($1)", [
       org.id,
     ])
-    for (const [name, archetypes] of Object.entries(people)) {
-      const user = await signUp(owner)
-      const member = randomUUID()
-      await owner.query(
-        "INSERT INTO public.org_member (id, org_id, user_id) VALUES ($1, $2, $3)",
-        [member, org.id, user]
-      )
-      org.people[name] = { user, member, session: sessionOf(user) }
-      for (const archetype of archetypes) {
-        const id = randomUUID()
-        await owner.query(
-          "INSERT INTO public.org_role_assignments (id, org_id, subject, archetype) VALUES ($1, $2, $3, $4)",
-          [id, org.id, member, archetype]
-        )
-        org.assignments[`${name}:${archetype}`] = id
-      }
-    }
+    await addPeople(owner, org, people)
   })
   return org
+}
+
+/** Люди в наявній організації; режим обслуговування тримає викликач. */
+async function addPeople(
+  owner: pg.Client,
+  org: Org,
+  people: Record<string, string[]>
+): Promise<void> {
+  for (const [name, archetypes] of Object.entries(people)) {
+    const user = await signUp(owner)
+    const member = randomUUID()
+    await owner.query(
+      "INSERT INTO public.org_member (id, org_id, user_id) VALUES ($1, $2, $3)",
+      [member, org.id, user]
+    )
+    org.people[name] = { user, member, session: sessionOf(user) }
+    for (const archetype of archetypes) {
+      const id = randomUUID()
+      await owner.query(
+        "INSERT INTO public.org_role_assignments (id, org_id, subject, archetype) VALUES ($1, $2, $3, $4)",
+        [id, org.id, member, archetype]
+      )
+      org.assignments[`${name}:${archetype}`] = id
+    }
+  }
 }
 
 /**
@@ -599,11 +606,11 @@ describe("rights administration commands over a planned and applied target", () 
         expect(await holdersOf(last.id)).toEqual([last.people.holder!.user])
       })
 
-      // Тимчасовий бар'єр T3 (Р-A4-17): після фази прав команда не торкається
-      // даних застосунку. Відмовляє T3 до надсилання — оператора по `X` чи
-      // учаснику немає в записі порту; без бар'єру база пропустила б кожен
-      // пакет (діра до Права-3).
-      describe("the T3 barrier after a rights phase", () => {
+      // Права команди — права початку її транзакції (спека прав §7): знімок
+      // фактів бере перший запис у джерело, тут — самопризначення, тож
+      // видане собі право не діє до COMMIT. Відмову дає ядро бази тією самою
+      // причиною, що й запис без ролі; DB, бо знімок і RLS — це база.
+      describe("the database judges a batch by the rights at the start of its transaction", () => {
         const ticketVersion = async () =>
           (await rowOf(TICKET_TABLE, ticket))!.version as number
         const updateTicket = async (): Promise<Operation> => ({
@@ -613,21 +620,39 @@ describe("rights administration commands over a planned and applied target", () 
           expectedVersion: await ticketVersion(),
           values: { description: "changed" },
         })
-        const selfGrant = (id: string, archetype = TICKET_WRITER_ID) =>
-          assign(org.id, admin().member, { archetype }, id)
+        const selfGrant = (
+          person: Person,
+          id: string,
+          archetype = TICKET_WRITER_ID
+        ) => assign(org.id, person.member, { archetype }, id)
 
-        /** Пакет відмовлено бар'єром; ні `X`, ні рядка учасника, ні призначення. */
-        const expectBarred = async (
+        beforeAll(async () => {
+          // Контроль читання: та сама роль — з початку транзакції.
+          await seedUnderMaintenance(env.owner, () =>
+            addPeople(env.owner, org, {
+              reader: [RIGHTS_ADMIN_ID, TICKET_WRITER_ID],
+            })
+          )
+        }, 60_000)
+
+        /**
+         * Пакет відмовило ядро бази `no-right` на записі `table`; відкат — ні
+         * `X`, ні призначення.
+         */
+        const expectRefused = async (
           rt: CommandRuntime,
           statements: RecordedStatement[],
           batch: Operation[],
-          grant: string
+          grant: string,
+          table: string
         ) => {
-          expect(await refusal(rt.run(admin().session, batch))).toEqual(
-            RIGHTS_CONTEXT
-          )
-          expect(touching(statements, TICKET_TABLE)).toEqual([])
-          expect(touching(statements, "org_member")).toEqual([])
+          expect(await refusal(rt.run(admin().session, batch))).toEqual({
+            code: "command.forbidden",
+            reason: "no-right",
+          })
+          const failed = statements.filter((s) => s.failed !== undefined)
+          expect(failed).toHaveLength(1)
+          expect(touching(failed, table)).toEqual(failed)
           expect(await rowOf(TICKET_TABLE, ticket)).toMatchObject({
             description: null,
           })
@@ -637,11 +662,12 @@ describe("rights administration commands over a planned and applied target", () 
         it("assign → update X → unassign in one batch", async () => {
           const { rt, statements } = await runtime()
           const grant = randomUUID()
-          await expectBarred(
+          await expectRefused(
             rt,
             statements,
-            [selfGrant(grant), await updateTicket(), unassign(grant)],
-            grant
+            [selfGrant(admin(), grant), await updateTicket(), unassign(grant)],
+            grant,
+            TICKET_TABLE
           )
         })
 
@@ -653,17 +679,19 @@ describe("rights administration commands over a planned and applied target", () 
                 seen = await ctx.read({ object: TICKET, id: ticket })
             },
           })
-          const { rt, statements } = await runtime({
+          const { rt } = await runtime({
             [ASSIGNMENTS_KEY]: module as ObjectModule<object>,
           })
+          const batch = (person: Person, grant: string) =>
+            rt.run(person.session, [selfGrant(person, grant), unassign(grant)])
           const grant = randomUUID()
-          await expectBarred(
-            rt,
-            statements,
-            [selfGrant(grant), unassign(grant)],
-            grant
-          )
-          expect(seen).toBe(undefined)
+          await batch(admin(), grant)
+          expect(seen).toEqual([])
+          expect(await rowOf("org_role_assignments", grant)).toBe(undefined)
+          // Контроль: актор з роллю з початку той самий хук бачить `X`.
+          seen = undefined
+          await batch(org.people.reader!, randomUUID())
+          expect(seen).toMatchObject([{ ref: ticket }])
         })
 
         it("assign → update X through ctx.run in a hook", async () => {
@@ -677,11 +705,12 @@ describe("rights administration commands over a planned and applied target", () 
             [ASSIGNMENTS_KEY]: module as ObjectModule<object>,
           })
           const grant = randomUUID()
-          await expectBarred(
+          await expectRefused(
             rt,
             statements,
-            [selfGrant(grant), unassign(grant)],
-            grant
+            [selfGrant(admin(), grant), unassign(grant)],
+            grant,
+            TICKET_TABLE
           )
         })
 
@@ -690,11 +719,11 @@ describe("rights administration commands over a planned and applied target", () 
           const grant = randomUUID()
           const peer = org.people.peer!.member
           const version = (await rowOf("org_member", peer))!.version as number
-          await expectBarred(
+          await expectRefused(
             rt,
             statements,
             [
-              selfGrant(grant, MEMBER_EDITOR_ID),
+              selfGrant(admin(), grant, MEMBER_EDITOR_ID),
               {
                 action: "update",
                 object: MEMBERS,
@@ -704,7 +733,8 @@ describe("rights administration commands over a planned and applied target", () 
               },
               unassign(grant),
             ],
-            grant
+            grant,
+            "org_member"
           )
           expect(await rowOf("org_member", peer)).toMatchObject({
             description: null,
@@ -713,8 +743,8 @@ describe("rights administration commands over a planned and applied target", () 
         })
       })
 
-      // Членство для бар'єру — дані застосунку (Р-A4-17, «Підстава»): зміна
-      // членства командою не дає актору прав у тій самій транзакції. DB, бо
+      // Членство — дані застосунку (Р-A4-17, «Підстава»): зміна членства
+      // командою не дає актору прав у тій самій транзакції. DB, бо
       // це тримають ключ членства й RLS бази, а не T3.
       describe("a membership change gives the actor no right", () => {
         let home: Org
@@ -846,6 +876,67 @@ describe("rights administration commands over a planned and applied target", () 
         })
       })
     })
+  })
+
+  // Читання без xid не платить за знімок (спека прав §7): гілку знімка
+  // функції фактів обирають за `txid_current_if_assigned()`, тож без xid
+  // таблиць знімка не торкається жоден оператор. DB, бо рахує Postgres.
+  it("reads through rights functions in a read only transaction without an xid", async () => {
+    const home = await seedOrg(env.owner, { reader: [TICKET_WRITER_ID] })
+    const row = randomUUID()
+    await env.owner.query(
+      `INSERT INTO public.${TICKET_TABLE} (id, org_id) VALUES ($1, $2)`,
+      [row, home.id]
+    )
+    const tables = Object.values(SNAPSHOT_TABLES).map((t) => t.name)
+    const client = new pg.Client({ connectionString: env.url })
+    await client.connect()
+    /** Читання `X` актором у поточній транзакції; скани таблиць знімка. */
+    const readAs = async () => {
+      await client.query("SELECT set_config($1, $2, true)", [
+        SESSION_CLAIMS_SETTING,
+        JSON.stringify(home.people.reader!.session),
+      ])
+      await client.query(`SET LOCAL ROLE ${REQUEST_ROLE}`)
+      const read = await client.query(
+        `SELECT id FROM public.${TICKET_TABLE} WHERE id = $1`,
+        [row]
+      )
+      const xid = await client.query<{ xid: string | null }>(
+        "SELECT txid_current_if_assigned()::text AS xid"
+      )
+      await client.query("RESET ROLE")
+      const stats = await client.query<{ relname: string; scans: string }>(
+        `SELECT relname, (COALESCE(seq_scan, 0) + COALESCE(idx_scan, 0))::text AS scans
+           FROM pg_stat_xact_user_tables
+          WHERE schemaname = $1 AND relname = ANY ($2)`,
+        [SNAPSHOT_TABLES.header.schema, tables]
+      )
+      return {
+        rows: read.rowCount,
+        xid: xid.rows[0]!.xid,
+        scans: stats.rows,
+      }
+    }
+    try {
+      await client.query("BEGIN READ ONLY")
+      const readOnly = await readAs()
+      await client.query("ROLLBACK")
+      expect(readOnly.rows).toBe(1)
+      expect(readOnly.xid).toBeNull()
+      expect(readOnly.scans).toHaveLength(tables.length)
+      expect(readOnly.scans.every((t) => t.scans === "0")).toBe(true)
+      // Контроль: з xid, призначеним до читання, гілка знімка читає його таблиці.
+      await client.query("BEGIN")
+      await client.query("SELECT txid_current()")
+      const assigned = await readAs()
+      await client.query("ROLLBACK")
+      expect(assigned.rows).toBe(1)
+      expect(assigned.xid).not.toBeNull()
+      expect(assigned.scans.some((t) => t.scans !== "0")).toBe(true)
+    } finally {
+      await client.end()
+    }
   })
 
   // Пакет очистки складається лише з переліку плану (Р-A4-3): плану не

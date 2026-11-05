@@ -112,20 +112,6 @@ export const createCall = call("client_save", SAVE, [
   null,
 ])
 
-/** `update` об'єкта застосунку `Ticket` і його фаза в черзі. */
-export const updateTicket = (id = ID) =>
-  ({
-    action: "update",
-    object: TICKET,
-    id,
-    expectedVersion: 1,
-    values: { code: "T" },
-  }) satisfies Operation
-export const ticketPhase = (id = ID) => [
-  context("update", "ticket", id),
-  call("ticket_save", SAVE, [JSON.stringify({ id, code: "T" }), "1"]),
-]
-
 /** `create` призначення — фаза прав — і її фаза в черзі. */
 export const assign = (id: string) =>
   ({
@@ -141,9 +127,3 @@ export const assignPhase = (id: string) => [
     null,
   ]),
 ]
-
-/** Відмова бар'єру Р-A4-17. */
-export const RIGHTS_CONTEXT = {
-  code: "command.forbidden",
-  reason: "rights-context",
-}

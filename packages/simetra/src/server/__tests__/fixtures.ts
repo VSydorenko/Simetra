@@ -177,7 +177,7 @@ export const rightsRole = commandObject({
   },
 })
 
-/** Об'єкт застосунку, який бар'єр Р-A4-17 закриває після фази прав. */
+/** Об'єкт застосунку поряд із довідниками прав — вкладена фаза хуків. */
 export const ticket = commandObject({ name: "Ticket", table: "ticket" })
 
 /** Довідник призначень: `administerRights` на кожній операції, з `delete`. */
