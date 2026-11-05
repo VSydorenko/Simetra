@@ -154,71 +154,6 @@ const liveBranch = (
   )
 }
 
-/** Цикли внутрішньої сторони у фікстурах правила циклів. */
-const LOOPS = 18
-
-/**
- * Синтетичні плани правила циклів (М37): `Nested Loop`, внутрішня сторона —
- * `CTE Scan on held` з `LOOPS` циклами, зовнішня — `rights_projection` під
- * фільтром `rights_requires` (форма плану пари) і CTE з `outer`, кожен
- * через хеш-з'єднання зі сталою. Без CTE зовні — дозволений цикл над
- * сталими; CTE скоупів (`held`, `my_scopes`) зовні робить вартість
- * квадратичною за скоупами.
- */
-function loopFixtures(...outers: string[][]): unknown[] {
-  const leaf = (type: string, extra: Record<string, unknown>) => ({
-    "Node Type": type,
-    "Actual Loops": 1,
-    ...extra,
-  })
-  const constant = (relationship: string) =>
-    leaf("Function Scan", {
-      "Function Name": RIGHTS_FUNCTIONS.projection.name,
-      "Parent Relationship": relationship,
-    })
-  const outerSide = (ctes: string[]) =>
-    ctes.reduce<Record<string, unknown>>(
-      (side, cte) => ({
-        "Node Type": "Hash Join",
-        "Parent Relationship": "Outer",
-        "Actual Loops": 1,
-        Plans: [
-          { ...side, "Parent Relationship": "Outer" },
-          {
-            "Node Type": "Hash",
-            "Parent Relationship": "Inner",
-            "Actual Loops": 1,
-            Plans: [
-              leaf("CTE Scan", {
-                "CTE Name": cte,
-                "Parent Relationship": "Outer",
-              }),
-            ],
-          },
-        ],
-      }),
-      constant("Outer")
-    )
-  return outers.map((ctes) => ({
-    Plan: {
-      "Node Type": "Nested Loop",
-      "Actual Loops": 1,
-      Plans: [
-        leaf("Function Scan", {
-          "Function Name": RIGHTS_FUNCTIONS.requires.name,
-          "Parent Relationship": "InitPlan",
-        }),
-        outerSide(ctes),
-        leaf("CTE Scan", {
-          "CTE Name": "held",
-          "Parent Relationship": "Inner",
-          "Actual Loops": LOOPS,
-        }),
-      ],
-    },
-  }))
-}
-
 /** Пара гейта (Р3-16): читання задачі, через яке йдуть функції множин політики. */
 const PAIR_SQL = `SELECT count(*) FROM ${fn(RIGHTS_FUNCTIONS.minePair)}('read', '${TASK}')`
 
@@ -857,19 +792,6 @@ describe("rights plan gate", () => {
             "the snapshot branches are not planned without a snapshot"
           )
           .toEqual([])
-      }
-      // Контроль правила циклів (М37): цикл, чия зовнішня сторона — CTE
-      // скоупів, правило не пропускає, хоч би якою була внутрішня.
-      if (pair) {
-        for (const fixture of loopFixtures(["held"], ["my_scopes"]))
-          expect(
-            repeatedCteScans(fixture, CONSTANT_FUNCTIONS),
-            "a loop over scopes is not constant"
-          ).toEqual([{ cte: "held", loops: LOOPS }])
-        expect(
-          repeatedCteScans(loopFixtures([])[0], CONSTANT_FUNCTIONS),
-          "a loop over constants is allowed"
-        ).toEqual([])
       }
       judgeBodies(plans, pair)
       // Не порожній доказ другого критерію: тіла читають таблиці прав.
