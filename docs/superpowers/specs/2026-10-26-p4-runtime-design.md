@@ -1126,7 +1126,9 @@ deltas }` (`RightsOrphans`, `packages/simetra/src/schema/apply/rights-sources.ts
    `simetra.rights_tx_typed` (з ознакою походження `root-creator`), рядок
    `simetra.rights_tx_holders`, коли архетип має `fullAccess`, і рядок
    `simetra.rights_tx_scopes` (новий скоуп, учасник-творець, рядок довідника
-   членства); права з них рахує те саме тіло `rights_mine` гілки знімка;
+   членства); права з них рахує те саме тіло `rights_mine` гілки знімка.
+   Колонки походження в `simetra.rights_tx_typed` немає — її додає A6
+   разом із цим кроком;
 7. вставляє призначення архетипу `rootCreator` учаснику-творцю; журнал прав
    пише причину `root-creator`. Джерело причини — рядок знімка актора з
    походженням `root-creator` (крок 6), не новий GUC-прапорець (спека прав §7); база
