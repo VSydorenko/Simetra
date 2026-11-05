@@ -202,21 +202,10 @@ function runtimeObject(
  * виді без неї ядро кореня відхиляє `creatorMember`.
  */
 function rootCreate(rootId: string, model: CompiledModel): RuntimeRootCreate {
-  const kind = model.scopeKinds.find(
+  const creator = model.scopeKinds.find(
     (k) => "objectId" in k.root && k.root.objectId === rootId
-  )
-  const creator = model.contracts.roles.some(
-    (r) =>
-      r.rootCreator &&
-      r.assignedOn.level === "scope" &&
-      r.assignedOn.scopeKindId === kind?.id
-  )
-  const membership = model.contracts.membership.find(
-    (m) => m.scopeKindId === kind?.id
-  )
-  return creator && membership !== undefined
-    ? { membership: membership.objectId }
-    : {}
+  )?.rootCreator
+  return creator === undefined ? {} : { membership: creator.membership }
 }
 
 function attributes(

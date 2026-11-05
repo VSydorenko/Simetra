@@ -1,4 +1,8 @@
-import { compile, type CompiledModel } from "simetra/compiler"
+import {
+  buildRuntimeCatalog,
+  compile,
+  type CompiledModel,
+} from "simetra/compiler"
 import type { Batch, Operation } from "simetra/model"
 import { beforeAll, describe, expect, it } from "vitest"
 import {
@@ -267,7 +271,12 @@ describe("dataCommandRefusal", () => {
     },
   ])("$name", ({ model, batch, allowRightsWrite, expected }) => {
     expect(
-      dataCommandRefusal(models[model], batch, { allowRightsWrite })
+      dataCommandRefusal(
+        models[model],
+        buildRuntimeCatalog(models[model]),
+        batch,
+        { allowRightsWrite }
+      )
     ).toEqual(expected)
   })
 })

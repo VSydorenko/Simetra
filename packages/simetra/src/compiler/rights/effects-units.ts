@@ -70,7 +70,7 @@ export function buildEffectsUnits(
     Contracts,
     "rights" | "roles" | "users" | "membershipSources" | "membership"
   >,
-  scopeKinds: readonly Pick<CompiledScopeKind, "id" | "root">[],
+  scopeKinds: readonly Pick<CompiledScopeKind, "id" | "root" | "rootCreator">[],
   physical: PhysicalSnapshot,
   attributeCase: AttributeCase,
   provider: DatabaseProvider,
@@ -87,13 +87,6 @@ export function buildEffectsUnits(
       []
     ),
   }
-  const creatorKinds = new Set(
-    contracts.roles.flatMap((role) =>
-      role.rootCreator && role.assignedOn.level === "scope"
-        ? [role.assignedOn.scopeKindId]
-        : []
-    )
-  )
   const currentUser: CreationNode = {
     type: "unit",
     identity: functionIdentity(
@@ -131,7 +124,7 @@ export function buildEffectsUnits(
           (kind) =>
             "objectId" in kind.root &&
             kind.root.objectId === table.origin.objectId &&
-            creatorKinds.has(kind.id)
+            kind.rootCreator !== undefined
         )?.id
     const body = section
       ? sectionBody(rights, table, main, key, attributeCase)

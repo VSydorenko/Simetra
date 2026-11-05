@@ -87,16 +87,13 @@ export interface CatalogCommandInput {
   catalogCommands: readonly CatalogCommandContract[]
   contracts: Pick<
     Contracts,
-    | "rights"
-    | "access"
-    | "roles"
-    | "users"
-    | "membershipSources"
-    | "membership"
-    | "rightsCatalogs"
+    "rights" | "access" | "roles" | "users" | "membershipSources" | "membership"
   >
   /** Види скоупу: корінь і функція гранту творцю (спека П4 §6.13). */
-  scopeKinds: readonly Pick<CompiledScopeKind, "id" | "physicalName" | "root">[]
+  scopeKinds: readonly Pick<
+    CompiledScopeKind,
+    "id" | "physicalName" | "root" | "rootCreator"
+  >[]
   physical: PhysicalSnapshot
   attributeCase: AttributeCase
   provider: DatabaseProvider
@@ -280,11 +277,11 @@ interface RootCreator {
 }
 
 /**
- * Факти функції гранту творцю на кожен вид скоупу з роллю `rootCreator`
- * (спека П4 §6.13), за id кореня. Корінь, довідник членства й «Призначення
- * ролей» рівня гарантують діагностики `rights.root-creator-*` (Р-A6-16,
- * Р-A6-19); без них функції гранту немає, а ядро кликало б неіснуючу — тож
- * відсутність тут — дефект компілятора, а не моделі.
+ * Факти функції гранту творцю на кожен вид скоупу з `rootCreator`
+ * (`CompiledScopeKind.rootCreator`, спека П4 §6.13), за id кореня. Команди
+ * кореня, членства й «Призначень ролей» гарантують діагностики
+ * `rights.root-creator-*` (Р-A6-16, Р-A6-19); без них функції гранту немає, а
+ * ядро кликало б неіснуючу — тож відсутність тут — дефект компілятора.
  */
 function rootCreators(
   input: Pick<
@@ -296,28 +293,17 @@ function rootCreators(
   const { contracts } = input
   const result = new Map<string, RootCreator>()
   for (const kind of input.scopeKinds) {
-    if (!("objectId" in kind.root)) continue
-    const role = contracts.roles.find(
-      (r) =>
-        r.rootCreator &&
-        r.assignedOn.level === "scope" &&
-        r.assignedOn.scopeKindId === kind.id
-    )
-    if (role === undefined) continue
+    const creator = kind.rootCreator
+    if (creator === undefined || !("objectId" in kind.root)) continue
+    const role = contracts.roles.find((r) => r.roleId === creator.role)
     const membership = contracts.membership.find(
-      (m) => m.scopeKindId === kind.id
-    )
-    const catalog = contracts.rightsCatalogs.find(
-      (c) => c.level.level === "scope" && c.level.scopeKindId === kind.id
+      (m) => m.objectId === creator.membership
     )
     const root = byObject.get(kind.root.objectId)
-    const member =
-      membership === undefined ? undefined : byObject.get(membership.objectId)
-    const assignments =
-      catalog === undefined
-        ? undefined
-        : byObject.get(catalog.assignments.objectId)
+    const member = byObject.get(creator.membership)
+    const assignments = byObject.get(creator.assignments)
     if (
+      role === undefined ||
       membership === undefined ||
       root?.actions.createRoot === undefined ||
       member?.actions.create === undefined ||

@@ -409,6 +409,35 @@ export async function runStages(
   }
   const { defaultSchema } = stage1.project
   const memberships = membershipsOf(stage1.objects, physical, stage1.project)
+  // Факт «вид має творця кореня» — один для генераторів ядра, ефектів і
+  // каталогу рантайму. Довідник членства й «Призначення ролей» такого виду
+  // гарантують діагностики `rights.root-creator-*` (Р-A6-16, Р-A6-19), тож
+  // їх відсутність тут — дефект компілятора, а не моделі.
+  const rootCreatorOf = (
+    kindId: string,
+    objectRoot: boolean
+  ): Pick<CompiledScopeKind, "rootCreator"> => {
+    const creator = roles.find(
+      (r) =>
+        r.rootCreator &&
+        r.assignedOn.level === "scope" &&
+        r.assignedOn.scopeKindId === kindId
+    )
+    if (creator === undefined || !objectRoot) return {}
+    const membership = memberships.find((m) => m.scopeKind.id === kindId)
+      ?.object.id
+    const assignments = rightsCatalogs.find(
+      (c) => c.level.level === "scope" && c.level.scopeKindId === kindId
+    )?.assignments.objectId
+    if (membership === undefined || assignments === undefined) {
+      throw new Error(
+        `internal: scope kind ${kindId} has a root creator without membership or assignments`
+      )
+    }
+    return {
+      rootCreator: { role: creator.roleId, membership, assignments },
+    }
+  }
   const scopeKinds = stage1.project.scopeKinds
     .map((kind, index): CompiledScopeKind => ({
       id: kind.id ?? "",
@@ -433,6 +462,7 @@ export async function runStages(
               name: kind.setFunction.name,
             },
       onRootDelete: kind.onRootDelete,
+      ...rootCreatorOf(kind.id ?? "", "object" in kind.root),
     }))
     .sort((a, b) => compareStrings(a.name, b.name))
   // Один контракт «Користувачів» і для шару платформи, і для функцій прав, і
@@ -769,7 +799,6 @@ export async function runStages(
         users,
         membershipSources: sources.membershipSources,
         membership,
-        rightsCatalogs,
       },
       scopeKinds,
       physical,

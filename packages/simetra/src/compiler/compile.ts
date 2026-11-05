@@ -42,6 +42,13 @@ export interface CompiledScopeKind {
     | { external: { schema: string; table: string; column: string } }
   setFunction: { schema: string; name: string }
   onRootDelete: "restrict" | "cascade"
+  /**
+   * Вид з роллю `rootCreator` і коренем-об'єктом (спека П4 §6.13): id цієї
+   * ролі, довідника членства й «Призначень ролей» рівня виду. Відсутній — модель
+   * оператора: корінь створюється без творця. Похідний від контрактів, тож у
+   * хеш моделі не входить.
+   */
+  rootCreator?: { role: string; membership: string; assignments: string }
 }
 
 export interface CompiledModel {

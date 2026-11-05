@@ -192,9 +192,14 @@ export const dataCommandTool = defineTool({
     if ("failed" in compiled) return compiled.failed
     const { model } = compiled
     // Політика — до з'єднання: база не бачить пакета, якому відмовлено
-    const refusal = dataCommandRefusal(model, input.operations, {
-      allowRightsWrite: ctx.allowRightsWrite === true,
-    })
+    const refusal = dataCommandRefusal(
+      model,
+      buildRuntimeCatalog(model),
+      input.operations,
+      {
+        allowRightsWrite: ctx.allowRightsWrite === true,
+      }
+    )
     if (refusal?.kind === "command")
       return {
         ok: false,
