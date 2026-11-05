@@ -522,13 +522,13 @@ describe("rights administration guards", () => {
               )
             )
             await client.query("SET CONSTRAINTS ALL IMMEDIATE")
-            const mine = await queryAs<{ v: string[] }>(
-              client,
-              "authenticated",
-              claims("other"),
-              "SELECT coalesce(array_agg(DISTINCT m.action || '|' || m.extent), '{}') AS v FROM simetra.rights_mine() m WHERE m.object = 'task'"
+            // Права `other` — живим варіантом аналізу за параметром
+            // користувача: транзакцію закріплено за `root` першим знімком
+            // (Р3-3), і claims `other` у ній дали б порожні факти.
+            const mine = await client.query<{ v: string[] }>(
+              "SELECT coalesce(array_agg(DISTINCT m.action || '|' || m.extent), '{}') AS v FROM simetra.rights_detail_of($1) m WHERE m.object = 'task'",
+              [key("other")]
             )
-            if (!("rows" in mine)) throw new Error(`rights_mine: ${mine.code}`)
             actions = mine.rows[0]!.v
           },
           true

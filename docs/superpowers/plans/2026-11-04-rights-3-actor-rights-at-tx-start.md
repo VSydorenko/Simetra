@@ -292,7 +292,7 @@
 публічній функції — `false`. **Близнюк читання** кожного кейсу «hides»: актор
 з тим самим фактом з початку транзакції той самий `SELECT X` — ≥ 1 рядок.
 
-- [ ] **Крок 1.** describe `"actor snapshot"`:
+- [x] **Крок 1.** describe `"actor snapshot"`:
   - `keeps the effects of earlier steps visible to later steps` — помічник Задачі 1.
   - `takes the snapshot equal to the live facts of the actor` — актор з правами рівня скоупу, `own`, виміру (регістр і дослівна функція, що дає й `NULL`) і контейнера; до запису публічні функції = живі; після оператора, що знімає всі факти й нічого не змінює, вміст таблиць знімка = живі множини (живу сторону — без `NULL` у `scope`/`member`), кожна непорожня; чотири заголовки.
   - `takes the snapshot before the first change of own membership` (вимога 1) — актор має глобальну роль з правом читання `X` і запрошений рядок членства в `S2` з призначенням; самоприйняття (`asOwner`); далі **без запису в довідники прав** `SELECT X` у `S2` під `simetra_command` — `0` рядків (тримає межа тенанта); `rights_my_scopes()`, `_member_scopes()`, `_my_member('<S2>')` — без `S2`; `proveOpened` (`S2` у `rights_my_scopes_live()`).
@@ -307,7 +307,7 @@
   - `keeps exempt sources out of reach of the command role` — для кожного винятку: `has_any_column_privilege('simetra_command', t, 'INSERT')`, `…'UPDATE'`, `has_table_privilege(…, 'DELETE')`, `…'TRUNCATE'` — `false`; контроль — таблиця виду-джерела: `true`; це DB-доказ, що згенерований SQL ролі команд винятків не відкриває.
   - `takes no snapshot in maintenance mode` — запис у джерело в режимі обслуговування: заголовків xid немає.
   - `revokes execute on live variants from every api role` — `has_function_privilege` для ролей `PROVIDER_API_ROLES` і `simetra_command` на живі варіанти — `false`.
-- [ ] **Крок 2.** describe `"the database judges a command by the rights at the start of its transaction"` (вимога 4), через `commandSteps`, без `COMMIT`; у кожному — `proveOpened`. Кейси «hides» закінчуються поверненням джерела й `immediate: true`, що проходить. Для кейсів «refuses» — близнюк без кроку `X`: зміна → повернення → `immediate: true` проходить (кінцевий стан проходить ⊆).
+- [x] **Крок 2.** describe `"the database judges a command by the rights at the start of its transaction"` (вимога 4), через `commandSteps`, без `COMMIT`; у кожному — `proveOpened`. Кейси «hides» закінчуються поверненням джерела й `immediate: true`, що проходить. Для кейсів «refuses» — близнюк без кроку `X`: зміна → повернення → `immediate: true` проходить (кінцевий стан проходить ⊆).
   - `refuses assign → update X → unassign` — `noRight`;
   - `hides X in assign → read X → unassign` — `0`;
   - `refuses assign → update a member row → unassign` — роль дає `own`; `noRight`;
@@ -317,11 +317,11 @@
   - `hides X in a verbatim scope set → read X → revert` і `refuses a verbatim scope set → update X → revert` — вид з дослівною функцією множини; зміна рядка таблиці виду, яку читає функція; `0` / відмова ядра (`rights_scope_set`);
   - `refuses users as a source → update X → revert`, `hides X in users as a source → read X → revert` — право з обсягом виміру з початку; актор міняє свій рядок регістру зв'язку; `noRight` / `0`;
   - кейс A4 → `the database refuses a direct command the rights granted in its transaction`: `E.forbidden.noRight`, як у контрольного запису (Р-1), плюс `proveOpened`; коментар про Права-3 прибрати.
-- [ ] **Крок 3. Ядро ≡ RLS** (`catalog-command-rights.db.test.ts`): підмножина сітки (по точці на обсяг і дію) з варіантом `snapshot: "taken"` — у зовнішній точці збереження під актором точки оператор, що знімає факти (`… WHERE false`), додаткове призначення, що відкриває точку (режим обслуговування), обидва шляхи; результат = результат без призначення. Контроль: без знімка те саме призначення відкриває хоч одну відмовлену точку.
-- [ ] **Крок 4. Пояснення** (`rights-analysis.db.test.ts`): `explains only rows visible by the snapshot` — самопризначення ролі, що відкриває рядок (`commandSteps`); `rights_explain` для рядка — порожньо; контроль — актор з цією роллю з початку отримує пояснення; варіант з межею тенанта — самоприйняття членства (`asOwner`).
+- [x] **Крок 3. Ядро ≡ RLS** (`catalog-command-rights.db.test.ts`): підмножина сітки (по точці на обсяг і дію) з варіантом `snapshot: "taken"` — у зовнішній точці збереження під актором точки оператор, що знімає факти (`… WHERE false`), додаткове призначення, що відкриває точку (режим обслуговування), обидва шляхи; результат = результат без призначення. Контроль: без знімка те саме призначення відкриває хоч одну відмовлену точку.
+- [x] **Крок 4. Пояснення** (`rights-analysis.db.test.ts`): `explains only rows visible by the snapshot` — самопризначення ролі, що відкриває рядок (`commandSteps`); `rights_explain` для рядка — порожньо; контроль — актор з цією роллю з початку отримує пояснення; варіант з межею тенанта — самоприйняття членства (`asOwner`).
 - [ ] **Крок 5.** Scoped DB: `pnpm --filter simetra test:db catalog-command-admin catalog-command-rights rights-analysis rights-guards rights-functions rights-plan-gate` — зелені, час записати.
-- [ ] **Крок 6. Ширший прогін перед комітом** (Review Focus 1): `pnpm --filter simetra test:db rights membership access command` і `pnpm --filter @simetrajs/designer test:db rights promotion apply database`. Червоний тест поза планом — розвилка.
-- [ ] **Крок 7.** Коміт (Задачі 4 і 6) `feat(compiler): функції фактів актора читають знімок транзакції`.
+- [x] **Крок 6. Ширший прогін перед комітом** (Review Focus 1): `pnpm --filter simetra test:db rights membership access command` і `pnpm --filter @simetrajs/designer test:db rights promotion apply database`. Червоний тест поза планом — розвилка.
+- [x] **Крок 7.** Коміт (Задачі 4 і 6) `feat(compiler): функції фактів актора читають знімок транзакції`.
 - [ ] **Крок 8.** Unit-мутації Задачі 10, чий тест уже є; DB-мутації — після Задачі 8 (Задача 10).
 
 **Доповнення Р3-15/Р3-16:**
