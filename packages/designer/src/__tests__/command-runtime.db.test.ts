@@ -29,16 +29,14 @@ import {
 } from "simetra/server"
 import {
   GAUGE_TABLE,
-  GAUGE_WRITER_ID,
   policyDomain,
   runtimeValuesLayer,
-  signUp,
 } from "../../../simetra/test/support"
 import {
   heldResource,
   inTarget,
   seedMarker,
-  seedUnderMaintenance,
+  seedRuntimeActor,
   throughPoolerAs,
   withRuntimeLogin,
 } from "./support/db"
@@ -91,28 +89,10 @@ const sessionOf = (user: string): SessionClaims => ({
   role: REQUEST_ROLE,
 })
 
-/**
- * Організація, користувач (реєстрацією: провізія дає ідентичність, з якої
- * `current_user_id()` читає `sub`), учасник і призначення `GaugeWriter`.
- * Призначення — довідник прав, тож засів під режимом обслуговування.
- */
+/** Актор фікстури з сесією запиту від його користувача. */
 async function seedActor(owner: pg.Client): Promise<Actor> {
-  const org = randomUUID()
-  const member = randomUUID()
-  let user = ""
-  await seedUnderMaintenance(owner, async () => {
-    user = await signUp(owner)
-    await owner.query("INSERT INTO public.organization (id) VALUES ($1)", [org])
-    await owner.query(
-      "INSERT INTO public.org_member (id, org_id, user_id) VALUES ($1, $2, $3)",
-      [member, org, user]
-    )
-    await owner.query(
-      "INSERT INTO public.org_role_assignments (id, org_id, subject, archetype) VALUES ($1, $2, $3, $4)",
-      [randomUUID(), org, member, GAUGE_WRITER_ID]
-    )
-  })
-  return { org, user, session: sessionOf(user) }
+  const actor = await seedRuntimeActor(owner)
+  return { ...actor, session: sessionOf(actor.user) }
 }
 
 async function seedRow(
