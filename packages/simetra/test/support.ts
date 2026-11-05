@@ -25,6 +25,7 @@ export {
   GLOBAL_ADMIN_ID,
   GLOBAL_FOUNDER_ID,
   MEMBER_CREATOR_ID,
+  MEMBER_FILE,
   MEMBER_FOCUS,
   MEMBER_REGIONS,
   memberScopedReferences,

@@ -1,4 +1,7 @@
 import { randomUUID } from "node:crypto"
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { dirname, join } from "node:path"
 import pg from "pg"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import {
@@ -37,10 +40,14 @@ import {
   tenantOperator,
   tenantSelfService,
 } from "../../../simetra/test/support"
+import { dataResource } from "../io/data"
+import { dataCommandTool, type DataCommandData } from "../tools/data-tools"
+import { invoke } from "../tools/invoke"
 import {
   commandRefusal as refusal,
   heldResource,
   inTarget,
+  markDevelopmentDatabase,
   recordingDatabase,
   seedMarker,
   seedUnderMaintenance,
@@ -70,6 +77,11 @@ const MEMBER_KEY = "Catalog.OrgMember"
 const REQUEST_ROLE = readRoleOf("supabase")!
 
 interface Env {
+  /** Тека метаданих моделі — для інструмента `data-command`. */
+  dir: string
+  /** Ціль від імені мігратора й роль входу форми `simetra_runtime`. */
+  url: string
+  login: string
   model: CompiledModel
   catalog: RuntimeCatalog
   owner: pg.Client
@@ -95,44 +107,57 @@ const heldEnv = (
   seed: (owner: pg.Client) => Promise<Record<string, string>>
 ) =>
   heldResource<Env>(async (use) => {
-    const result = await compile(files())
+    const metadata = files()
+    const result = await compile(metadata)
     expect(result.diagnostics).toEqual([])
     const model = result.model!
     const desired = await desiredForApply(model)
-    await inTarget(desired.sql, desired.scope, async (url) => {
-      const owner = new pg.Client({ connectionString: url })
-      await owner.connect()
-      try {
-        await seedMarker(owner, model.hash)
-        const users = await seed(owner)
-        await withRuntimeLogin(
-          url,
-          [PLATFORM_ROLES.command, REQUEST_ROLE],
-          async (login) => {
-            const direct = new pg.Pool({ connectionString: login })
-            const pooled = new pg.Pool({
-              connectionString: throughPoolerAs(login),
-            })
-            try {
-              await use({
-                model,
-                catalog: buildRuntimeCatalog(model),
-                owner,
-                direct,
-                pooled,
-                users,
+    const dir = join(await mkdtemp(join(tmpdir(), "simetra-tenant-")), "md")
+    for (const [path, content] of metadata) {
+      await mkdir(dirname(join(dir, path)), { recursive: true })
+      await writeFile(join(dir, path), content)
+    }
+    try {
+      await inTarget(desired.sql, desired.scope, async (url) => {
+        const owner = new pg.Client({ connectionString: url })
+        await owner.connect()
+        try {
+          await seedMarker(owner, model.hash)
+          const users = await seed(owner)
+          await withRuntimeLogin(
+            url,
+            [PLATFORM_ROLES.command, REQUEST_ROLE],
+            async (login) => {
+              const direct = new pg.Pool({ connectionString: login })
+              const pooled = new pg.Pool({
+                connectionString: throughPoolerAs(login),
               })
-            } finally {
-              await direct.end()
-              await pooled.end()
-            }
-          },
-          label
-        )
-      } finally {
-        await owner.end()
-      }
-    })
+              try {
+                await use({
+                  dir,
+                  url,
+                  login,
+                  model,
+                  catalog: buildRuntimeCatalog(model),
+                  owner,
+                  direct,
+                  pooled,
+                  users,
+                })
+              } finally {
+                await direct.end()
+                await pooled.end()
+              }
+            },
+            label
+          )
+        } finally {
+          await owner.end()
+        }
+      })
+    } finally {
+      await rm(dirname(dir), { recursive: true, force: true })
+    }
   })
 
 /** Користувачі з глобальними призначеннями `archetypes` (ім'я → архетип). */
@@ -504,6 +529,66 @@ describe("tenant creation through runtime.run", () => {
         [auditor]
       )
       expect(rows).toEqual([{ n: 0 }])
+    })
+  })
+
+  // MCP-кейс спеки П4 §6.14: `create` кореня з творцем пише членство й
+  // призначення, тож `data-command` вимагає обох прапорців запису
+  describe("through the MCP data-command tool", () => {
+    beforeAll(() => markDevelopmentDatabase(a.url))
+
+    const viaMcp = (creator: string, allowRightsWrite: boolean) =>
+      invoke(
+        dataCommandTool,
+        { operations: [createOrganization({ title: "via mcp" })] },
+        {
+          dir: a.dir,
+          readOnly: false,
+          allowDatabaseWrite: false,
+          allowDataWrite: true,
+          allowRightsWrite,
+          dryRun: false,
+          confirmed: false,
+          channel: "mcp",
+          data: dataResource(
+            { APP_DATA: a.login },
+            { urlEnv: "APP_DATA", as: creator }
+          ),
+          dataEnv: "APP_DATA",
+        }
+      )
+
+    const counts = async () =>
+      (
+        await a.owner.query<{ orgs: number; members: number }>(
+          "SELECT (SELECT count(*) FROM public.organization)::int AS orgs, (SELECT count(*) FROM public.org_member)::int AS members"
+        )
+      ).rows[0]!
+
+    it("creates a tenant with creatorMember under both write flags; without --allow-rights-write nothing is written", async () => {
+      const creator = await user(a)
+      const before = await counts()
+      const refused = await viaMcp(creator, false)
+      expect(refused.refusal?.reason).toBe("rights-write-disabled")
+      expect(await counts()).toEqual(before)
+
+      const r = await viaMcp(creator, true)
+      expect(r.ok, JSON.stringify(r)).toBe(true)
+      const { changes } = (
+        r.data as Extract<DataCommandData, { result: unknown }>
+      ).result
+      expect(changes).toHaveLength(1)
+      const id = changes[0]!.id
+      expect(await fullAccessScopes(a, creator)).toEqual([id])
+      expect(await assignmentsOf(a, id)).toEqual([
+        {
+          id: expect.any(String),
+          user: creator,
+          archetype: TENANT_OWNER_ID,
+          reason: "root-creator",
+          actor: creator,
+        },
+      ])
     })
   })
 

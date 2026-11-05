@@ -578,6 +578,41 @@ Postgres.
 - [x] **Крок 3.** `pnpm --filter @simetrajs/designer test:db tenant-creation rights-maintenance command-runtime`;
   коміт `test(designer): створення тенанта через runtime.run і пулер`.
 
+## Задача 7а: MCP `data-command` — створення тенанта з `creatorMember` (Р-A6-18)
+
+A5 уже в `main` (зведено в `feat/p4-a6`), тож повний кейс П4 §6.14 — у цьому
+блоці.
+
+**Files:** `packages/designer/src/tools/data-policy.ts`,
+`packages/designer/src/tools/data-tools.ts` (опис інструмента),
+`packages/designer/src/__tests__/data-policy.test.ts`,
+`packages/designer/src/__tests__/tenant-creation.db.test.ts`,
+`packages/simetra/test/support.ts` (реекспорт `MEMBER_FILE`),
+`packages/designer/skills/simetra-metadata/references/agents-over-mcp.md`.
+
+- [x] **Крок 1.** `dataCommandRefusal`: для `create` кореня виду з
+  `rootCreator` (довідник членства — той, який каталог рантайму називає
+  `operations.create.root.membership`) правило «об'єкт із модулем» діє й на
+  довідник членства — `command.invalid` `object-module` з `object` довідника
+  членства; без `--allow-rights-write` — відмова `rights` (як для довідників
+  прав). Кожна фаза пакета перевіряється окремо.
+- [x] **Крок 2.** Unit-рядки `data-policy.test.ts` на моделі А
+  (`tenantSelfService({ requiredMember: true })` + `tenantOperator()`):
+  обидва прапорці — проходить; без `--allow-rights-write` — відмова (і як
+  друга фаза пакета після `Branch`); модуль на `OrgMember` — `command.invalid`
+  (і як друга фаза пакета); модуль лише на непов'язаному `TaskComment` —
+  проходить; `create` кореня оператора `Branch` (без творця) — лише запис
+  даних.
+- [x] **Крок 3.** DB-кейс `tenant-creation.db.test.ts` (модель А, тека
+  метаданих і ознака бази розробника на тій самій тіні): `data-command`
+  `create Organization` з `creatorMember` без `--allow-rights-write` —
+  `rights-write-disabled`, кількість `organization` і `org_member` незмінна; з
+  обома прапорцями — тенант створено, творець — дієвий носій `TenantOwner`
+  рівно в новому скоупі, журнал `root-creator`.
+- [x] **Крок 4.** Мутація М27 (журнал мутацій); скіл споживача — рядок про
+  обидва прапорці й модуль довідника членства; коміт
+  `feat(designer): MCP data-command створює тенант з creatorMember`.
+
 ## Задача 8: бенчмарк (Р-A6-17)
 
 **Files:** `packages/simetra/bench/rights.bench.db.ts`.
@@ -606,15 +641,7 @@ Postgres.
 
 ## Задача 9: документи й борг
 
-- [ ] **Крок 0 (Р-A6-18).** `git fetch origin && git log origin/main --oneline | head`,
-  `git log origin/feat/p4-a5 --oneline -3`. A5 у `main` — повний кейс §6.14 у
-  цьому блоці: розширити `dataCommandRefusal`
-  (`packages/designer/src/tools/data-policy.ts`) перевіркою модуля довідника
-  членства для `create` кореня з `creatorMember`; unit-рядки (обидва прапорці;
-  без `--allow-rights-write` — відмова; модуль на довіднику членства —
-  `command.invalid`); DB-кейс designer з обома прапорцями; мутація «перевірка
-  модуля лише на об'єкті фази» — червоний unit-рядок. Вплив на спеку: немає.
-  Інакше — рядок у звіт «за A5 (задача 7a)».
+- [x] **Крок 0 (Р-A6-18).** Виконано в Задачі 7а.
 - [ ] **Крок 1.** Спека П4, Додаток А — рядки блоку A6 «внесено»; спека
   системної схеми §3 — `rights_tx_root_marker` і функція гранту.
 - [ ] **Крок 2.** Скіл споживача `people-and-rights.md`: створення тенанта
@@ -903,6 +930,21 @@ Postgres.
   DB не виявила. Scoped DB кроку 3 — 3 файли, 42 тести, 23 с.
   Вплив на спеку: немає.
 
+- **Задача 7а — MCP-кейс створення тенанта.** Ознака «корінь з творцем» у
+  політиці — та сама, що в `rootCreate` каталогу рантайму (роль `rootCreator`
+  рівня виду плюс контракт членства виду); політика читає скомпільовану
+  модель, бо каталог рантайму ознаки модуля не несе. Перевірка діє на кожен
+  `create` такого кореня, з `creatorMember` чи без: ядро кореня вставляє
+  членство творця й з `{}`. Відмова модуля називає довідник членства, а не
+  корінь. DB-кейс — у `tenant-creation.db.test.ts` (модель А вже розгорнута
+  там; `heldEnv` тепер пише теку метаданих і віддає `url`/`login`), а не в
+  `data-tools.db.test.ts`, щоб не розгортати третю тінь. Вплив на спеку:
+  немає.
+
 ## Журнал мутацій
 
 (заповнює виконавець після Задачі 10)
+
+| # | Мутація | Результат |
+| --- | --- | --- |
+| М27 | `dataCommandRefusal` перевіряє модуль лише на об'єкті фази (без перевірки довідника членства кореня) | червоні 2 unit-рядки `data-policy.test.ts`: `tenant creation when the membership catalog has a module` і його пакетний варіант; відкочено |
