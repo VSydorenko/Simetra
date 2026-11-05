@@ -316,6 +316,27 @@ describe("data tools", TOOL_PIPELINE, () => {
     }
   )
 
+  it("the real resource opens a new pool and checks the guards on every open", async () => {
+    // Ознака бази може зникнути між викликами: перший `open` її бачить,
+    // другий — ні, і відмова мусить прийти саме з другого
+    const answers = [SAFE_FACTS, { ...SAFE_FACTS, development: false }]
+    let queries = 0
+    fakePool(() => ({ rows: [answers[queries++]] }))
+    const resource = dataResource(
+      { APP_DATA: "postgresql://u:p@127.0.0.1:54322/app" },
+      { urlEnv: "APP_DATA", as: AS }
+    )!
+    const first = await resource.open("supabase")
+    await first.close()
+    const error: unknown = await resource
+      .open("supabase")
+      .catch((e: unknown) => e)
+    expect(error).toBeInstanceOf(DataGuardRefusal)
+    expect((error as DataGuardRefusal).detail).toBe("not-development")
+    expect(vi.mocked(pg.Pool)).toHaveBeenCalledTimes(2)
+    expect(queries).toBe(2)
+  })
+
   it("returns BigInt values as decimal strings", async () => {
     const stub = stubData()
     const r = await invoke(

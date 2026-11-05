@@ -52,6 +52,7 @@ import {
   query,
   seedMarker,
   seedRuntimeActor,
+  withCopy,
   withRuntimeLogin,
   type RuntimeActor,
 } from "./support/db"
@@ -301,6 +302,13 @@ describe("data tools over a real database", () => {
           `alter role ${quoted(role)} in database ${quoted(database)} reset simetra.environment`
         )
       }
+
+      // Ознака іншої бази кластера — не ознака цілі: `pg_db_role_setting`
+      // спільний для кластера, тож рядок чужої бази видно й з цілі
+      await withCopy("", async (otherUrl) => {
+        await markDevelopmentDatabase(otherUrl)
+        expect(await refusal(env.login)).toMatchObject(notDevelopment)
+      })
     })
 
     /**
