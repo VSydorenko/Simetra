@@ -26,6 +26,10 @@ export interface CliArgs {
   rehearse?: boolean
   "lock-timeout-ms"?: string
   "statement-timeout-ms"?: string
+  "data-url-env"?: string
+  as?: string
+  agent?: string
+  "allow-rights-write"?: boolean
 }
 
 /**

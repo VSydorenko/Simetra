@@ -10,7 +10,6 @@ import {
 import {
   COMMAND_SETTING,
   PLATFORM_ROLES,
-  RIGHTS_MAINTENANCE_SETTING,
   SESSION_CLAIMS_SETTING,
 } from "simetra/model"
 import { engineScope, renderDesiredState } from "simetra/schema"
@@ -21,12 +20,17 @@ import {
   TICKET_WRITER_ID,
   commandCoreLayer,
   policyDomain,
-  signUp,
   ticketMoveToHandler,
   withSql,
   writeRoles,
 } from "../../../simetra/test/support"
-import { inTarget, waitForLock } from "./support/db"
+import {
+  committed,
+  inTarget,
+  seedRuntimeActor,
+  waitForLock,
+  type RuntimeActor,
+} from "./support/db"
 
 /**
  * Паралельні правки ядра довідника й цикл ієрархії.
@@ -45,66 +49,12 @@ const INVALID_PARENT = {
 }
 const HIERARCHY = hierarchyNames({ schema: "public", name: TICKET_TABLE })
 
-interface Actor {
-  org: string
-  user: string
-}
+type Actor = RuntimeActor
 
 async function session(url: string): Promise<pg.Client> {
   const client = new pg.Client({ connectionString: url })
   await client.connect()
   return client
-}
-
-/** Транзакція засіву власником: закомічена, бо її читає інша сесія. */
-async function committed(
-  owner: pg.Client,
-  steps: () => Promise<void>
-): Promise<void> {
-  await owner.query("BEGIN")
-  try {
-    await steps()
-    await owner.query("COMMIT")
-  } catch (error) {
-    await owner.query("ROLLBACK").catch(() => undefined)
-    throw error
-  }
-}
-
-/**
- * Актор команд: організація, користувач і учасник із `TicketWriter` (`any`)
- * і `TicketTargetsReader` (без читання цілей `Ref` дав би `command.invalid`
- * раніше за ієрархію). Призначення — довідник прав, тож засів під режимом
- * обслуговування, а відкладені запобіжники перевіряються до його вимкнення.
- */
-async function seedActor(owner: pg.Client): Promise<Actor> {
-  const org = randomUUID()
-  const member = randomUUID()
-  let user = ""
-  await committed(owner, async () => {
-    // Користувач — реєстрацією в провайдері: провізія створює і рядок
-    // «Користувачів», і ідентичність, з якої `current_user_id()` читає `sub`.
-    // Прямий рядок `users` без ідентичності дав би `NULL` і порожні права
-    user = await signUp(owner)
-    await owner.query("SELECT set_config($1, 'on', true)", [
-      RIGHTS_MAINTENANCE_SETTING,
-    ])
-    await owner.query("INSERT INTO public.organization (id) VALUES ($1)", [org])
-    await owner.query(
-      "INSERT INTO public.org_member (id, org_id, user_id) VALUES ($1, $2, $3)",
-      [member, org, user]
-    )
-    for (const archetype of [TICKET_WRITER_ID, TICKET_TARGETS_READER_ID])
-      await owner.query(
-        "INSERT INTO public.org_role_assignments (id, org_id, subject, archetype) VALUES ($1, $2, $3, $4)",
-        [randomUUID(), org, member, archetype]
-      )
-    await owner.query("SET CONSTRAINTS ALL IMMEDIATE")
-    await owner.query("SELECT set_config($1, 'off', true)", [
-      RIGHTS_MAINTENANCE_SETTING,
-    ])
-  })
-  return { org, user }
 }
 
 /**
@@ -258,7 +208,10 @@ async function withCommandTarget(
         `GRANT ${PLATFORM_ROLES.command} TO CURRENT_USER WITH SET TRUE`
       )
       try {
-        const actor = await seedActor(owner)
+        const actor = await seedRuntimeActor(owner, [
+          TICKET_WRITER_ID,
+          TICKET_TARGETS_READER_ID,
+        ])
         const probe = await session(url)
         try {
           await body(url, owner, actor, probe)

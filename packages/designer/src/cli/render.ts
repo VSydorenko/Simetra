@@ -12,6 +12,11 @@ import type {
 } from "../tools/apply-tools"
 import type { Tool, ToolResult } from "../tools/catalog"
 import type { DiffData } from "../tools/database-tools"
+import {
+  summarizeData,
+  type DataCommandData,
+  type DataReadData,
+} from "../tools/data-tools"
 import type { RightsMaintenanceData } from "../tools/rights-maintenance-tool"
 import type { RolesData } from "../tools/roles-tool"
 
@@ -197,6 +202,20 @@ export function renderResult(
               2
             )
           : `assigned ${done.assignment}${done.member === undefined ? "" : ` to member ${done.member}`}`,
+    }
+  }
+  // Дані рантайму — лише коли вони є; помилка компіляції чи збій бази
+  // ідуть загальною гілкою з діагностикою
+  if (
+    (tool.name === "data-read" || tool.name === "data-command") &&
+    r.data !== undefined
+  ) {
+    const data = r.data as DataReadData | DataCommandData
+    return {
+      stdout:
+        o.format === "json"
+          ? JSON.stringify({ ok: r.ok, ...data }, null, 2)
+          : summarizeData(tool.name, data),
     }
   }
   if (tool.files === "read") return { stdout: report }

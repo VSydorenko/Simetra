@@ -245,7 +245,7 @@ export function connectionErrorMessage(
  * кидає `Error` чи `DatabaseError`, тож його текст сюди не потрапляє, а
  * баг не маскується під збій бази.
  */
-function isProgramBug(error: unknown): boolean {
+export function isProgramBug(error: unknown): boolean {
   return (
     (error instanceof TypeError ||
       error instanceof RangeError ||

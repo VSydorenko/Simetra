@@ -17,6 +17,8 @@ export {
   ORG_KIND_ID,
   adminRoles,
   commandCoreLayer,
+  GAUGE_FILE,
+  GAUGE_LOG_FILE,
   GAUGE_LOG_TABLE,
   GAUGE_TABLE,
   GAUGE_WRITER_ID,
@@ -34,6 +36,7 @@ export {
   runtimeValuesLayer,
   policyDomain,
   requiredMemberAttribute,
+  ROLE_FILE,
   ticketMoveToHandler,
   ticketNoticeHandler,
   withSql,
@@ -62,6 +65,11 @@ export {
 } from "../src/compiler/__tests__/fixtures/rights"
 export * from "../src/schema/__tests__/fixtures/e1-fixtures"
 export { SNAPSHOT_TABLES } from "../src/compiler/rights/actor-snapshot"
+export {
+  fakeDatabase,
+  type Answer,
+  type Script,
+} from "../src/server/__tests__/fake-database"
 export { planNodes } from "./db/explain-plan"
 export { signUp } from "./db/auth"
 export { insertOrphan } from "./db/rights-seed"

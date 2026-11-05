@@ -1,10 +1,12 @@
-import { randomBytes } from "node:crypto"
+import { randomBytes, randomUUID } from "node:crypto"
 import pg from "pg"
 import { RIGHTS_MAINTENANCE_SETTING, type CommandError } from "simetra/model"
 import type { EngineScope, SchemaEngine } from "simetra/schema"
 import { CommandFailure, type CommandDatabase } from "simetra/server"
 import { createPgDeltaEngine } from "../../schema-engine"
 import {
+  GAUGE_WRITER_ID,
+  signUp,
   testDatabaseName,
   testDatabaseUrl,
   testPoolerUrl,
@@ -130,19 +132,23 @@ const quoted = (name: string) => `"${name.replaceAll('"', '""')}"`
  * role (`simetra_runtime`): it reaches a role only by `SET LOCAL ROLE`. `fn`
  * gets the URL of the database `url` as that role. The role and its backends
  * are removed on every path; `label` tells apart two such roles in one run.
+ * `attributes` gives the role a fact the runtime login must not have
+ * (`BYPASSRLS`), for tests of the data-tool guards.
  */
 export async function withRuntimeLogin<T>(
   url: string,
   memberOf: readonly string[],
   fn: (loginUrl: string) => Promise<T>,
-  label = "runtime"
+  label = "runtime",
+  attributes: { bypassRls?: boolean } = {}
 ): Promise<T> {
   const name = testRoleName(label)
   const password = randomBytes(12).toString("hex")
+  const bypass = attributes.bypassRls === true ? " bypassrls" : ""
   // Створення — до `try`: невдале створення не видаляє чужої ролі з тим ім'ям
   await query(
     testSuperuserUrl(),
-    `create role ${quoted(name)} login noinherit password '${password}'`
+    `create role ${quoted(name)} login noinherit${bypass} password '${password}'`
   )
   try {
     for (const role of memberOf)
@@ -199,6 +205,55 @@ export async function seedMarker(
      ON CONFLICT (singleton) DO UPDATE SET snapshot_hash = EXCLUDED.snapshot_hash`,
     [hash]
   )
+}
+
+/**
+ * Ознака бази розробника (`simetra.environment = development`) на базі `url`
+ * — налаштуванням рівня бази від суперкористувача, як його ставить оператор.
+ * Окремого прибирання немає: налаштування зникає разом із тінню.
+ */
+export async function markDevelopmentDatabase(url: string): Promise<void> {
+  const name = decodeURIComponent(new URL(url).pathname.slice(1))
+  await query(
+    asSuperuser(url),
+    `alter database ${quoted(name)} set simetra.environment = 'development'`
+  )
+}
+
+/** Актор рантайму: організація, користувач, від якого діє сесія, і його учасник. */
+export interface RuntimeActor {
+  org: string
+  user: string
+  member: string
+}
+
+/**
+ * Організація, користувач (реєстрацією: провізія дає ідентичність, з якої
+ * `current_user_id()` читає `sub`), учасник і призначення ролей організації
+ * (типово `GaugeWriter`). Призначення — довідник прав, тож засів під режимом
+ * обслуговування.
+ */
+export async function seedRuntimeActor(
+  owner: pg.Client,
+  archetypes: readonly string[] = [GAUGE_WRITER_ID]
+): Promise<RuntimeActor> {
+  const org = randomUUID()
+  const member = randomUUID()
+  let user = ""
+  await seedUnderMaintenance(owner, async () => {
+    user = await signUp(owner)
+    await owner.query("INSERT INTO public.organization (id) VALUES ($1)", [org])
+    await owner.query(
+      "INSERT INTO public.org_member (id, org_id, user_id) VALUES ($1, $2, $3)",
+      [member, org, user]
+    )
+    for (const archetype of archetypes)
+      await owner.query(
+        "INSERT INTO public.org_role_assignments (id, org_id, subject, archetype) VALUES ($1, $2, $3, $4)",
+        [randomUUID(), org, member, archetype]
+      )
+  })
+  return { org, user, member }
 }
 
 /** Транзакція засіву власником: закомічена, бо її читають інші сесії. */

@@ -1,17 +1,22 @@
 import { dirname, resolve, sep } from "node:path"
 import type { FileChange } from "simetra/compiler"
 import type { z } from "zod"
+import { DataGuardRefusal } from "../io/data-guard-refusal"
 import { writeChanges } from "../io/metadata-dir"
 import { UsageError } from "../io/usage-error"
 import { queueFor } from "./queue"
 import {
   DEFAULT_DATABASE_URL_ENV,
+  dataWriteHint,
   databaseWriteHint,
+  noDataHint,
   noDatabaseHint,
   readOnlyHint,
+  rightsWriteHint,
 } from "./hints"
 import {
   PLANS_DIR,
+  type DataAccess,
   type DatabaseAccess,
   type FilesAccess,
   type InvokeOptions,
@@ -21,17 +26,23 @@ import {
 } from "./types"
 
 /**
- * Вичерпні switch по обох осях: нове значення осі не компілюється, доки не
+ * Вичерпні switch по всіх осях: нове значення осі не компілюється, доки не
  * вирішено його дозвіл. `--read-only` вимикає будь-який запис; запис у базу
- * ще й потребує рішення людини при запуску (`allowDatabaseWrite`), а власне
- * тертя (підтвердження з показаним планом) — ознака `destructive`.
+ * й запис даних ще й потребують рішення людини при запуску
+ * (`allowDatabaseWrite`, `allowDataWrite`), а власне тертя (підтвердження з
+ * показаним планом) — ознака `destructive`.
  */
 export function permits(
   tool: Tool,
-  o: { readOnly: boolean; allowDatabaseWrite: boolean }
+  o: {
+    readOnly: boolean
+    allowDatabaseWrite: boolean
+    allowDataWrite?: boolean
+  }
 ): boolean {
   const files: FilesAccess = tool.files
   const database: DatabaseAccess = tool.database
+  const data: DataAccess = tool.data
   let filesOk: boolean
   switch (files) {
     case "read":
@@ -55,7 +66,19 @@ export function permits(
       databaseOk = !o.readOnly && o.allowDatabaseWrite
       break
   }
-  return filesOk && databaseOk
+  let dataOk: boolean
+  switch (data) {
+    case "none":
+    case "read":
+      // Читання даних без дозволу: права — права користувача `--as`, а
+      // запобіжники бази розробника діють на кожен виклик (спека П4 §6.14).
+      dataOk = true
+      break
+    case "write":
+      dataOk = !o.readOnly && o.allowDataWrite === true
+      break
+  }
+  return filesOk && databaseOk && dataOk
 }
 
 /**
@@ -76,13 +99,17 @@ function checkArtifacts(root: string, artifacts: readonly FileChange[]): void {
   }
 }
 
-function refused<D>(reason: RefusalReason, message: string): ToolResult<D> {
+function refused<D>(
+  reason: RefusalReason,
+  message: string,
+  detail?: string
+): ToolResult<D> {
   return {
     ok: false,
     written: false,
     changes: [],
     diagnostics: [],
-    refusal: { reason, message },
+    refusal: { reason, message, ...(detail === undefined ? {} : { detail }) },
   }
 }
 
@@ -122,20 +149,29 @@ export async function invoke<D>(
         ? "apply has no dry run: it writes the database, not files. To run the plan and roll it back, rehearse it. Nothing changed."
         : `${tool.name} has no dry run: only tools that change the metadata directory preview their changes. Nothing changed.`
     )
-  if (!permits(tool, o))
-    // Коли заважає лише прапорець запису в базу, підказка називає саме його:
-    // `--read-only` вимикає запис у базу завжди, і тоді радити прапорець марно
-    return permits(tool, { ...o, allowDatabaseWrite: true })
-      ? refused(
-          "database-write-disabled",
-          databaseWriteHint(o.launchArgs, { tools: tool.name })
-        )
-      : refused("read-only", readOnlyHint(o.launchArgs))
+  if (!permits(tool, o)) {
+    // Коли заважає лише один прапорець запису, підказка називає саме його:
+    // `--read-only` вимикає будь-який запис завжди, і тоді радити прапорець
+    // марно. Інструмента з обома осями запису немає, тож прапорець один
+    if (permits(tool, { ...o, allowDatabaseWrite: true }))
+      return refused(
+        "database-write-disabled",
+        databaseWriteHint(o.launchArgs, { tools: tool.name })
+      )
+    if (permits(tool, { ...o, allowDataWrite: true }))
+      return refused(
+        "data-write-disabled",
+        dataWriteHint(o.launchArgs, { tools: tool.name })
+      )
+    return refused("read-only", readOnlyHint(o.launchArgs))
+  }
   if (tool.database !== "none" && o.database === undefined)
     return refused(
       "no-database",
       noDatabaseHint(o.databaseEnv ?? DEFAULT_DATABASE_URL_ENV, o.channel)
     )
+  if (tool.data !== "none" && o.data === undefined)
+    return refused("no-data", noDataHint(o.dataEnv, o.channel))
   // Dry-run нічого не пише, тож підтвердження там нічого не захищає, а агентові
   // перегляд потрібен саме до `confirm`. Сюди `dryRun` доходить лише в
   // інструмента запису файлів (відмова вище)
@@ -150,16 +186,28 @@ export async function invoke<D>(
   const root = dirname(resolve(o.dir))
   return queueFor(o.dir)(async () => {
     try {
-      // Інструмент без осі бази ресурсу не бачить, тож і не відкриє пулу.
+      // Інструмент без осі бази ресурсу не бачить, тож і не відкриє пулу;
+      // так само з даними. Прапорець прав — лише тому, хто пише дані.
       const outcome = await tool.run(
         {
           dir: o.dir,
           root,
           ...(tool.database === "none" ? {} : { database: o.database }),
+          ...(tool.data === "none" ? {} : { data: o.data }),
+          ...(tool.data === "write"
+            ? { allowRightsWrite: o.allowRightsWrite === true }
+            : {}),
           ...(o.baseline === undefined ? {} : { baseline: o.baseline }),
         },
         parsed.data
       )
+      // Відмову прав вирішує `run` (їй потрібна модель), а текст — тут: лише
+      // `invoke` знає argv запуску й канал. Інструмент даних нічого не пише
+      if (outcome.refusalReason === "rights-write-disabled")
+        return refused<D>(
+          "rights-write-disabled",
+          rightsWriteHint(o.launchArgs, o.channel)
+        )
       const artifacts = outcome.artifacts ?? []
       checkArtifacts(root, artifacts)
       // Вичерпно по осі файлів: зміни теки — лише `write` поза переглядом;
@@ -208,6 +256,10 @@ export async function invoke<D>(
           : { refusal: { reason: "refused", message: outcome.refusal } }),
       } satisfies ToolResult<D>
     } catch (error) {
+      // Відмова запобіжника — зі стабільною причиною: агент читає `detail`,
+      // а не текст. Перевіряється до `UsageError`, підкласом якого вона є
+      if (error instanceof DataGuardRefusal)
+        return refused("data-guard", error.message, error.detail)
       // Лише помилки використання; решта — баги й летять далі.
       if (error instanceof UsageError) return refused("refused", error.message)
       throw error

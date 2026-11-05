@@ -14,17 +14,22 @@ import { TOOLS, toolByName } from "../tools/catalog"
 import { invoke, permits } from "../tools/invoke"
 import { queueFor } from "../tools/queue"
 import {
+  ALLOW_DATA_WRITE_FLAG,
   DEFAULT_DATABASE_URL_ENV,
   noDatabaseHint,
+  noDataHint,
   READ_ONLY_FLAG,
   readOnlyHint,
 } from "../tools/hints"
 import {
+  DATA_ACCESS,
   DATABASE_ACCESS,
   defineTool,
   FILES_ACCESS,
+  type DataResource,
   type DatabaseResource,
   type Tool,
+  type ToolContext,
 } from "../tools/types"
 import { opts, project, snapshotOf, useTmpProjects } from "./helpers/catalog"
 
@@ -47,6 +52,71 @@ async function brokenProject(): Promise<string> {
   return dir
 }
 
+interface PermitCase {
+  files: (typeof FILES_ACCESS)[number]
+  database: (typeof DATABASE_ACCESS)[number]
+  data: (typeof DATA_ACCESS)[number]
+  readOnly: boolean
+  allowDatabaseWrite: boolean
+  allowDataWrite: boolean
+}
+
+const PERMIT_CASES: PermitCase[] = FILES_ACCESS.flatMap((files) =>
+  DATABASE_ACCESS.flatMap((database) =>
+    DATA_ACCESS.flatMap((data) =>
+      [false, true].flatMap((readOnly) =>
+        [false, true].flatMap((allowDatabaseWrite) =>
+          [false, true].map((allowDataWrite) => ({
+            files,
+            database,
+            data,
+            readOnly,
+            allowDatabaseWrite,
+            allowDataWrite,
+          }))
+        )
+      )
+    )
+  )
+)
+
+const expectedPermit = (c: PermitCase): boolean =>
+  (c.files === "read" || !c.readOnly) &&
+  (c.database !== "write" || (!c.readOnly && c.allowDatabaseWrite)) &&
+  (c.data !== "write" || (!c.readOnly && c.allowDataWrite))
+
+const label = (c: PermitCase): string =>
+  `${c.files}/${c.database}/${c.data} readOnly=${c.readOnly} allowDatabaseWrite=${c.allowDatabaseWrite} allowDataWrite=${c.allowDataWrite}`
+
+/** Заглушка з осями випадку: `run` рахує виклики, нічого не відкриває. */
+const stubOf = (
+  c: Pick<PermitCase, "files" | "database" | "data">,
+  run: Tool["run"] = async () => ({ ok: true, changes: [], diagnostics: [] })
+): Tool =>
+  defineTool({
+    name: "compile",
+    description: "Axes stub.",
+    input: z.strictObject({}),
+    files: c.files,
+    database: c.database,
+    data: c.data,
+    destructive: false,
+    run,
+  }) as Tool
+
+/** Ресурс бази, що не мусить відкриватися: заглушки його не чіпають. */
+const databaseStub: DatabaseResource = {
+  describe: "localhost:5432/app",
+  connect: () => Promise.reject(new Error("not in a unit test")),
+}
+
+/** Ресурс даних, що не мусить відкриватися: заглушки його не чіпають. */
+const dataStub: DataResource = {
+  describe: "localhost:5432/app",
+  as: "00000000-0000-4000-8000-000000000001",
+  open: () => Promise.reject(new Error("not in a unit test")),
+}
+
 // Інструменти компіляції й виправлення через `invoke`: компіляція проєкту на кожен виклик — бюджет `TOOL_PIPELINE`
 describe("tool catalog", TOOL_PIPELINE, () => {
   it("names every tool once", () => {
@@ -55,6 +125,8 @@ describe("tool catalog", TOOL_PIPELINE, () => {
       "apply",
       "compile",
       "create",
+      "data-command",
+      "data-read",
       "delete",
       "diff",
       "explain",
@@ -178,34 +250,34 @@ describe("tool catalog", TOOL_PIPELINE, () => {
     expect(after.attributes[0]!.physicalName).toBeTypeOf("string")
   })
 
-  it("every (files, database) pair has a permit rule", () => {
-    // Повний добуток осей, а не лише пари з TOOLS: правило для нової пари
-    // мусить існувати до того, як з'явиться інструмент із нею.
+  it("every (files, database, data) triple has a permit rule", () => {
+    // Повний добуток осей, а не лише трійки з TOOLS: правило для нової
+    // трійки мусить існувати до того, як з'явиться інструмент із нею.
     // Запис у базу — лише без `--read-only` і з прапорцем запуску
-    // `--allow-database-write`; запис файлів прапорця не потребує.
-    for (const files of FILES_ACCESS) {
-      for (const database of DATABASE_ACCESS) {
-        const t = { ...toolByName("compile")!, files, database }
-        for (const readOnly of [false, true]) {
-          for (const allowDatabaseWrite of [false, true]) {
-            const expected =
-              (files === "read" || !readOnly) &&
-              (database !== "write" || (!readOnly && allowDatabaseWrite))
-            expect(
-              permits(t, { readOnly, allowDatabaseWrite }),
-              `${files}/${database} readOnly=${readOnly} allowDatabaseWrite=${allowDatabaseWrite}`
-            ).toBe(expected)
-          }
-        }
-      }
+    // `--allow-database-write`, запис даних — з `--allow-data-write`;
+    // запис файлів прапорця не потребує.
+    for (const c of PERMIT_CASES) {
+      expect(permits(stubOf(c), c), label(c)).toBe(expectedPermit(c))
     }
     // `apply` пише лише свій артефакт і в базу: `--read-only` вимикає і його
     for (const t of TOOLS) {
       expect(
-        permits(t, { readOnly: true, allowDatabaseWrite: true }),
+        permits(t, {
+          readOnly: true,
+          allowDatabaseWrite: true,
+          allowDataWrite: true,
+        }),
         t.name
-      ).toBe(t.files === "read" && t.database !== "write")
+      ).toBe(t.files === "read" && t.database !== "write" && t.data !== "write")
     }
+  })
+
+  it("no tool writes both the schema and the data", () => {
+    // Матриця відмов `invoke` нижче не будує такої заглушки: відмова з двома
+    // хибними прапорцями запису не мала б одного прапорця для підказки
+    expect(
+      TOOLS.filter((t) => t.database === "write" && t.data === "write")
+    ).toEqual([])
   })
 
   it("compileArtifacts emits snapshot, desired state, entity types and runtime catalog", async () => {
@@ -276,6 +348,7 @@ describe("invoke refusals", TOOL_PIPELINE, () => {
       input: z.strictObject({ value: z.string() }),
       files: "read",
       database: "none",
+      data: "none",
       destructive: false,
       cliOnly: true,
       run,
@@ -378,6 +451,7 @@ const dbStub = defineTool({
   input: z.strictObject({}),
   files: "read",
   database: "read",
+  data: "none",
   destructive: false,
   async run(ctx) {
     await ctx.database!.connect()
@@ -469,6 +543,153 @@ describe("database as a launch resource", () => {
   })
 })
 
+// Каталог інструментів не має заглушки з обома осями запису (див. «no tool
+// writes both the schema and the data»), тож матриця її не будує
+const INVOKE_CASES = PERMIT_CASES.filter(
+  (c) => !(c.database === "write" && c.data === "write")
+)
+
+describe("invoke permits by every axis", () => {
+  it.each(INVOKE_CASES.map((c) => [label(c), c] as const))(
+    "%s",
+    async (_, c) => {
+      let runs = 0
+      const tool = stubOf(c, async () => {
+        runs++
+        return { ok: true, changes: [], diagnostics: [] }
+      })
+      // Тека не читається: заглушка нічого не пише й не компілює
+      const r = await invoke(
+        tool,
+        {},
+        {
+          ...opts("/nonexistent/simetra-axes/metadata"),
+          readOnly: c.readOnly,
+          allowDatabaseWrite: c.allowDatabaseWrite,
+          allowDataWrite: c.allowDataWrite,
+          database: databaseStub,
+          data: dataStub,
+        }
+      )
+      expect(runs === 1).toBe(expectedPermit(c))
+      if (expectedPermit(c)) {
+        expect(r.refusal).toBeUndefined()
+        return
+      }
+      const reason = permits(tool, { ...c, allowDatabaseWrite: true })
+        ? "database-write-disabled"
+        : permits(tool, { ...c, allowDataWrite: true })
+          ? "data-write-disabled"
+          : "read-only"
+      expect(r.refusal?.reason).toBe(reason)
+      if (reason === "read-only") expect(c.readOnly).toBe(true)
+    }
+  )
+})
+
+describe("data as a launch resource", () => {
+  const dir = "/nonexistent/simetra-data/metadata"
+  const reader = stubOf({ files: "read", database: "none", data: "read" })
+
+  it("a data tool without a data resource is refused with the hint", async () => {
+    const r = await invoke(reader, {}, opts(dir))
+    expect(r.refusal).toEqual({
+      reason: "no-data",
+      message: noDataHint(undefined, "cli"),
+    })
+  })
+
+  it("the hint names the variable chosen at launch", async () => {
+    const r = await invoke(reader, {}, { ...opts(dir), dataEnv: "APP_DATA" })
+    expect(r.refusal?.message).toBe(noDataHint("APP_DATA", "cli"))
+  })
+
+  it("read-only is decided before the missing data resource", async () => {
+    const writer = stubOf({ files: "read", database: "none", data: "write" })
+    const r = await invoke(
+      writer,
+      {},
+      { ...opts(dir), readOnly: true, allowDataWrite: true }
+    )
+    expect(r.refusal?.reason).toBe("read-only")
+  })
+
+  it("the data write flag is decided before the missing data resource", async () => {
+    const writer = stubOf({ files: "read", database: "none", data: "write" })
+    const r = await invoke(writer, {}, { ...opts(dir), channel: "mcp" })
+    expect(r.refusal?.reason).toBe("data-write-disabled")
+    expect(r.refusal?.message).toContain(ALLOW_DATA_WRITE_FLAG)
+  })
+
+  it("the missing database is decided before the missing data resource", async () => {
+    const both = stubOf({ files: "read", database: "read", data: "read" })
+    const r = await invoke(both, {}, opts(dir))
+    expect(r.refusal?.reason).toBe("no-database")
+  })
+
+  it("the missing data resource is decided before confirmation", async () => {
+    const destructive = { ...reader, destructive: true } as Tool
+    const r = await invoke(destructive, {}, opts(dir))
+    expect(r.refusal?.reason).toBe("no-data")
+  })
+
+  it("passes the resource only to a tool with the data axis", async () => {
+    const seen: Partial<ToolContext>[] = []
+    const record: Tool["run"] = async (ctx) => {
+      seen.push({ data: ctx.data, allowRightsWrite: ctx.allowRightsWrite })
+      return { ok: true, changes: [], diagnostics: [] }
+    }
+    const o = {
+      ...opts(dir),
+      allowDataWrite: true,
+      allowRightsWrite: true,
+      data: dataStub,
+    }
+    for (const data of DATA_ACCESS)
+      await invoke(
+        stubOf({ files: "read", database: "none", data }, record),
+        {},
+        o
+      )
+    // `allowRightsWrite` — лише інструменту, що пише дані: читанню прапорець
+    // прав нічого не дає
+    expect(seen).toEqual([
+      { data: undefined, allowRightsWrite: undefined },
+      { data: dataStub, allowRightsWrite: undefined },
+      { data: dataStub, allowRightsWrite: true },
+    ])
+  })
+
+  it("a data writer without the rights flag sees it off", async () => {
+    let seen: boolean | undefined
+    const writer = stubOf(
+      { files: "read", database: "none", data: "write" },
+      async (ctx) => {
+        seen = ctx.allowRightsWrite
+        return { ok: true, changes: [], diagnostics: [] }
+      }
+    )
+    await invoke(
+      writer,
+      {},
+      { ...opts(dir), allowDataWrite: true, data: dataStub }
+    )
+    expect(seen).toBe(false)
+  })
+})
+
+describe("noDataHint", () => {
+  it.each(["cli", "mcp"] as const)(
+    "names the launch flags on %s and the empty variable when given",
+    (channel) => {
+      const general = noDataHint(undefined, channel)
+      expect(general).toContain("--data-url-env")
+      expect(general).toContain("--as")
+      expect(noDataHint("MY_DATA_URL", channel)).toContain("MY_DATA_URL")
+    }
+  )
+})
+
 /** Заглушка `plan`: артефакт пише `invoke`, а не інструмент. */
 const artifactStub = (path: string) =>
   defineTool({
@@ -477,6 +698,7 @@ const artifactStub = (path: string) =>
     input: z.strictObject({}),
     files: "write",
     database: "none",
+    data: "none",
     destructive: false,
     async run(ctx) {
       return {
@@ -552,6 +774,7 @@ const artifactTool = (changes: FileChange[] = []) =>
     input: z.strictObject({}),
     files: "artifact",
     database: "none",
+    data: "none",
     destructive: false,
     async run() {
       return {

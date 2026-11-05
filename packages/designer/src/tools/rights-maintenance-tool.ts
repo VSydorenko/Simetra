@@ -52,6 +52,7 @@ export const rightsMaintenanceTool = defineTool({
   input,
   files: "read",
   database: "write",
+  data: "none",
   destructive: true,
   cliOnly: true,
   async run({ dir, database }, request) {
