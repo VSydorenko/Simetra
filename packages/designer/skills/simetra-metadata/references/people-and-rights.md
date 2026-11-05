@@ -487,24 +487,24 @@ above.
 
 ## Supported limits
 
-Measured on one developer machine (PostgreSQL 17.6, local Supabase stack,
-2026-10-31); treat them as orders of magnitude, not guarantees.
+Measured on one developer machine (PostgreSQL 17.6, local Supabase stack;
+reads and rights commands 2026-11-05, carrier rows 2026-10-31); treat them as
+orders of magnitude, not guarantees.
 
 | Scenario | Volume | Time |
 | --- | --- | --- |
-| Read a scoped table, dimension values per user | 20,000 values, 120,000 rows | list 0.57 s, point 19 ms |
-| Read a scoped table, `fullAccess` holder in N scopes | 100 / 500 / 2,000 scopes, 100,000 rows | list 0.71 / 3.9 / 12.6 s |
+| Read a scoped table, dimension values per user | 20,000 values, 120,000 rows | list 0.57 s, point 18 ms |
+| Read a scoped table, `fullAccess` holder in N scopes | 100 / 500 / 2,000 scopes, 100,000 rows | list 0.05 / 0.2 / 1.2 s |
 | Owner carrier change, tabular section fan-out | 100,000 / 300,000 section rows | 2.5 / 8.0 s |
 | Carrier backfill plan step | 1,000,000 section rows | 36 s |
-| One rights command (assignment) in its own transaction | 11,000 assignments | 41 ms |
-| Rights commands in one transaction | 1,000 commands | 14 s |
+| One rights command (assignment) in its own transaction | 11,000 assignments | 28 ms |
+| Rights commands in one transaction | 1,000 commands | 7.1 s |
 
-- A `fullAccess` holder costs about 7.5 ms per scope on every query: up to
-  about 100 scopes a read stays under a second. A user who operates hundreds
-  of tenants is a separate case the platform does not optimise yet. The
-  scope count is data, so no compiler warning covers it.
+- A `fullAccess` holder costs about 0.6 ms per scope on a list read: up to
+  about 1,500 scopes a read stays under a second. The scope count is data, so
+  no compiler warning covers it.
 - Split batch rights changes into transactions: one command takes about
-  40 ms, while a thousand commands in one transaction take about 14 s.
+  30 ms, while a thousand commands in one transaction take about 7 s.
 
 ## Who reads what
 

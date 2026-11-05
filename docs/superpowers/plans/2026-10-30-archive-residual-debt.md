@@ -333,8 +333,9 @@
 ## 7. Тести
 
 - **Таблиці схеми `simetra` під Правилом 1.** Що SQL застосунку не пише в
-  `rights_versions`, `rights_journal`, `rights_tx_actor`, `rights_tx_pending`,
-  `identities`, гарантує походження: `rightsAdminTables` дає їм
+  `rights_versions`, `rights_journal`, таблиці знімка актора (`SNAPSHOT_TABLES`
+  у `packages/simetra/src/compiler/rights/actor-snapshot.ts`),
+  `rights_tx_pending`, `identities`, гарантує походження: `rightsAdminTables` дає їм
   `origin.objectId` об'єкта виду, тож `kindTables`
   (`packages/simetra/src/compiler/sql/kind-table-verbatim.ts`) їх включає.
   Тесту немає — додати рядки з мутацією в `kind-table-verbatim.test.ts`.

@@ -744,9 +744,10 @@ describe("rights administration commands over a planned and applied target", () 
         })
       })
 
-      // Членство — дані застосунку (Р-A4-17, «Підстава»): зміна членства
-      // командою не дає актору прав у тій самій транзакції. DB, бо
-      // це тримають ключ членства й RLS бази, а не T3.
+      // Членство — дані застосунку: зміна членства командою не дає актору
+      // прав у тій самій транзакції — права транзакції ті, що були на її
+      // початку (знімок актора, спека прав §7). DB, бо це тримають знімок і
+      // RLS бази, а не T3.
       describe("a membership change gives the actor no right", () => {
         let home: Org
         let away: { org: string; member: string; ticket: string }

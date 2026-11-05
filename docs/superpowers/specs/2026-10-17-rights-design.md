@@ -371,8 +371,10 @@ xid (`READ ONLY`, PostgREST) таблиць знімка не читає ніх�
   повного `rights_mine()`, що мають мітку `p_object` і дію `p_action` чи її
   транзитивну вимогу (§5.4). Через пару читають `rights_any`, `rights_own`,
   `rights_dim`, `rights_container`, `has_right` і гейт аналізу (право
-  `administerRights` на мітці). Повний `rights_mine()` читають функції аналізу
-  й перевірка на COMMIT.
+  `administerRights` на мітці). Повний `rights_mine()` читає `rights_explain`
+  для викликача. Перевірка на COMMIT рахує права тим самим тілом: «після» —
+  через `rights_mine_live()`, «до» — над входами знімка (кеш
+  `rights_tx_start`, §7).
 - **Живі варіанти** — `rights_mine_live`, `rights_my_scopes_live`,
   `rights_my_members_live`, `rights_dimension_values_live`,
   `rights_scope_set_live`: `SECURITY INVOKER`, без `EXECUTE`, те саме тіло
