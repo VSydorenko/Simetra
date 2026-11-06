@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks"
+import { CommandFailure } from "simetra/model"
 import type { CommandError, HookContext, RuntimeObject } from "simetra/model"
 import { decodeRow } from "./decode"
-import { CommandFailure } from "./errors"
 import type { PreparedOperation } from "./phase"
 import { prepareRead } from "./read"
 import type { Transaction } from "./transaction"

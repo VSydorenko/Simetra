@@ -177,6 +177,32 @@ describe("tier zones", () => {
     ).toEqual([])
   })
 
+  // Межу data → server уже тримає `SERVER_MESSAGE`; кейс фіксує, що T4 бере
+  // клас саме з T0 і що імпорт із server лишається відмовою після переїзду.
+  it("data takes CommandFailure from model; from server it is refused", async () => {
+    expect(
+      await restricted(
+        `import { CommandFailure } from "simetra/model"`,
+        "src/data/__fixture.ts"
+      )
+    ).toEqual([])
+    const refused = await restricted(
+      `import { CommandFailure } from "simetra/server"`,
+      "src/data/__fixture.ts"
+    )
+    expect(refused).toHaveLength(1)
+  })
+
+  it("server no longer exports CommandFailure; model does", async () => {
+    expect("CommandFailure" in (await import("simetra/server"))).toBe(false)
+    expect(typeof (await import("simetra/model")).CommandFailure).toBe(
+      "function"
+    )
+    expect((await import("simetra/model")).ZERO_UUID).toBe(
+      "00000000-0000-0000-0000-000000000000"
+    )
+  })
+
   it("no zone is ignored", async () => {
     for (const t of TIERS) {
       expect(

@@ -1,5 +1,5 @@
+import { CommandFailure } from "simetra/model"
 import type { CommandDatabase } from "../port"
-import { CommandFailure } from "../errors"
 
 /** What the fake answers to one query: a result or a thrown error. */
 export type Answer =

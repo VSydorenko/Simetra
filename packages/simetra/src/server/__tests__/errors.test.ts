@@ -4,6 +4,7 @@ import {
   type CommandError,
   type RuntimeCatalog,
   type RuntimeObject,
+  CommandFailure,
 } from "simetra/model"
 import { beforeAll, describe, expect, it } from "vitest"
 import { buildRuntimeCatalog } from "simetra/compiler"
@@ -15,7 +16,7 @@ import {
   runtimeValuesLayer,
   withSql,
 } from "../../compiler/__tests__/fixtures/rights"
-import { CommandFailure, mapDatabaseError } from "../errors"
+import { mapDatabaseError } from "../errors"
 import type { DatabaseError } from "../port"
 import { orgMember, organization, rootCatalog, sample } from "./fixtures"
 

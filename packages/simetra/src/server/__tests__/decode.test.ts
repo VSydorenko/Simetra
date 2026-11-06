@@ -1,6 +1,6 @@
+import { CommandFailure } from "simetra/model"
 import { describe, expect, it } from "vitest"
 import { decodeRow } from "../decode"
-import { CommandFailure } from "../errors"
 import { ID, OTHER, sample } from "./fixtures"
 
 describe("decodeRow", () => {

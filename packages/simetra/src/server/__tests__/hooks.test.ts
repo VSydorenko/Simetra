@@ -1,6 +1,6 @@
+import { CommandFailure } from "simetra/model"
 import type { HookContext, ObjectModule, Operation } from "simetra/model"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { CommandFailure } from "../errors"
 import { prepareRead } from "../read"
 import { createCommandRuntime, type CommandRuntime } from "../runtime"
 import { fakeDatabase, failureOf } from "./fake-database"

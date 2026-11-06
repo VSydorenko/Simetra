@@ -4,6 +4,7 @@ import {
   RIGHTS_COLUMNS,
   RIGHTS_MAINTENANCE_SETTING,
   USER_PLATFORM_COLUMNS,
+  ZERO_UUID,
   deletionMarkColumn,
   keyColumn,
   quoteIdent,
@@ -44,7 +45,6 @@ import {
 import {
   LIVE,
   RIGHTS_FUNCTIONS,
-  ZERO_UUID,
   hasActorSnapshot,
   liveInputs,
   mineBody,

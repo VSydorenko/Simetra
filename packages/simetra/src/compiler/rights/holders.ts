@@ -1,5 +1,6 @@
 import {
   RIGHTS_COLUMNS,
+  ZERO_UUID,
   deletionMarkColumn,
   quoteIdent,
   type AttributeCase,
@@ -15,7 +16,7 @@ import {
 } from "../contracts"
 import { sqlLiteral } from "../stages/model"
 import { standardColumn } from "../standard-column"
-import { ZERO_UUID, sourceConditions } from "./functions"
+import { sourceConditions } from "./functions"
 
 type HolderContracts = Pick<
   Contracts,

@@ -13,9 +13,9 @@ import {
   type RuntimeCatalog,
   type RuntimeObject,
   type RuntimeOperationTarget,
+  CommandFailure,
 } from "simetra/model"
 import { decodeRecord } from "./decode"
-import { CommandFailure } from "./errors"
 import { callHook, type HookPhase } from "./hook-context"
 import { ident, issuePath, literal } from "./read"
 import type { Statement, Transaction } from "./transaction"

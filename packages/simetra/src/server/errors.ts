@@ -9,21 +9,6 @@ import {
 } from "simetra/model"
 import type { DatabaseError } from "./port"
 
-/**
- * The rejection of `run` and `read`: `message` is the error code, no
- * `cause` — текст Postgres не має виходити назовні навіть через ланцюжок
- * причин (Р-A3-8).
- */
-export class CommandFailure extends Error {
-  readonly error: CommandError
-
-  constructor(error: CommandError) {
-    super(error.code)
-    this.name = "CommandFailure"
-    this.error = error
-  }
-}
-
 /** The phase a database error came from; `undefined` — `COMMIT`. */
 export type ErrorPhase =
   | {

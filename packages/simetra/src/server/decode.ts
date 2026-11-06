@@ -3,8 +3,8 @@ import {
   isPlainObject,
   type RuntimeAttribute,
   type RuntimeObject,
+  CommandFailure,
 } from "simetra/model"
-import { CommandFailure } from "./errors"
 
 const internal = () => new CommandFailure({ code: "command.internal" })
 

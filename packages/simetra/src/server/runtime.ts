@@ -16,15 +16,11 @@ import {
   type RequestRolePurpose,
   type RuntimeCatalog,
   type SessionClaims,
+  CommandFailure,
 } from "simetra/model"
 import { z } from "zod"
 import { decodeRow } from "./decode"
-import {
-  CommandFailure,
-  logsDatabaseError,
-  mapDatabaseError,
-  type ErrorPhase,
-} from "./errors"
+import { logsDatabaseError, mapDatabaseError, type ErrorPhase } from "./errors"
 import { rejectNested } from "./hook-context"
 import {
   normalizeError,

@@ -1,8 +1,12 @@
 import { randomBytes, randomUUID } from "node:crypto"
 import pg from "pg"
-import { RIGHTS_MAINTENANCE_SETTING, type CommandError } from "simetra/model"
+import {
+  CommandFailure,
+  RIGHTS_MAINTENANCE_SETTING,
+  type CommandError,
+} from "simetra/model"
 import type { EngineScope, SchemaEngine } from "simetra/schema"
-import { CommandFailure, type CommandDatabase } from "simetra/server"
+import type { CommandDatabase } from "simetra/server"
 import { createPgDeltaEngine } from "../../schema-engine"
 import {
   GAUGE_WRITER_ID,

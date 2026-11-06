@@ -16,10 +16,10 @@ import {
   type Operation,
   type RuntimeCatalog,
   type SessionClaims,
+  CommandFailure,
 } from "simetra/model"
 import { desiredForApply } from "simetra/schema"
 import {
-  CommandFailure,
   createCommandRuntime,
   fromPgPool,
   readRoleOf,

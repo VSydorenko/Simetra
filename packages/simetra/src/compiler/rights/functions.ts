@@ -2,6 +2,7 @@ import {
   PLATFORM_SCHEMA,
   PROVIDER_IDENTITY_SOURCES,
   RIGHTS_COLUMNS,
+  ZERO_UUID,
   deletionMarkColumn,
   keyColumn,
   quoteIdent,
@@ -760,9 +761,6 @@ export function buildRightsUnits(
   }
   return units.sort((a, b) => compareStrings(a.identity, b.identity))
 }
-
-/** Нульовий ключ замінює NULL глобального рівня в ключах службових таблиць. */
-export const ZERO_UUID = "00000000-0000-0000-0000-000000000000"
 
 /**
  * Та сама форма рядків і те саме замикання, що у власних правах: зміна

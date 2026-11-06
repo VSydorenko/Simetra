@@ -20,10 +20,10 @@ import {
   type Operation,
   type RuntimeCatalog,
   type SessionClaims,
+  CommandFailure,
 } from "simetra/model"
 import type { RightsOrphans } from "simetra/schema"
 import {
-  CommandFailure,
   createCommandRuntime,
   fromPgPool,
   readRoleOf,

@@ -10,9 +10,9 @@ import {
   type Change,
   type CommandError,
   type SessionClaims,
+  CommandFailure,
 } from "simetra/model"
 import {
-  CommandFailure,
   createCommandRuntime,
   type CommandRuntime,
   type LogEntry,
