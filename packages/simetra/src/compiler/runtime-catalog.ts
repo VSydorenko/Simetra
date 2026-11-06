@@ -60,6 +60,17 @@ export function buildRuntimeCatalog(model: CompiledModel): RuntimeCatalog {
       const object = must(byId.get(table.origin.objectId), table.name)
       return { kind: object.kind, name: object.name }
     },
+    mainTable: (schema, name) => {
+      const table = model.physical.tables.find(
+        (t) => t.schema === schema && t.name === name
+      )
+      // Рядок ТЧ і похідна таблиця — не ціль `Ref`: у них немає об'єкта.
+      return table === undefined ||
+        table.origin.tabularSectionId !== undefined ||
+        table.origin.part !== undefined
+        ? undefined
+        : table
+    },
   }
   return {
     format: 1,
@@ -80,6 +91,8 @@ interface Facts {
   /** Значення перерахування-цілі `Ref`; `undefined` — ціль не перерахування. */
   enumValues: (ref: MetadataRef) => RuntimeAttribute["enumValues"]
   objectRef: (table: PhysicalTable) => MetadataRef
+  /** Основна таблиця об'єкта за іменем; `undefined` — таблиця не основна. */
+  mainTable: (schema: string, name: string) => PhysicalTable | undefined
 }
 
 function runtimeObject(
@@ -155,6 +168,11 @@ function runtimeObject(
         parentName: fieldOf(rows, section.parent).name,
         lineNumber: section.lineNumber,
         lineNumberName: fieldOf(rows, section.lineNumber).name,
+        parentConstraint: parentConstraint(
+          section.table,
+          section.parent,
+          table
+        ),
         attributes: attributes(
           rows.filter((f) => !fixed.has(f.columns[0])),
           section.table,
@@ -242,6 +260,13 @@ function attributes(
       value?.type === "Ref" && value.ref !== undefined
         ? facts.enumValues(value.ref)
         : undefined
+    const ref =
+      value?.type === "Ref" &&
+      enumValues === undefined &&
+      value.array !== true &&
+      field.columns.length === 1
+        ? refOf(table, column.name, facts)
+        : undefined
     return {
       name: field.name,
       column: column.name,
@@ -269,8 +294,47 @@ function attributes(
       ...(field.columns.length === 2
         ? { pair: pairOf(field.columns[0], keys.references, facts) }
         : {}),
+      ...(ref === undefined ? {} : { ref }),
     }
   })
+}
+
+/**
+ * Ціль `Ref` — з FK, чия остання колонка — колонка реквізиту: FK на ціль того
+ * самого виду скоупу складений `(скоуп, колонка)`, і його остання колонка
+ * цілі — ключ. Без такого FK (ціль без основної таблиці) `ref` немає.
+ */
+function refOf(
+  table: PhysicalTable,
+  column: string,
+  facts: Facts
+): RuntimeAttribute["ref"] {
+  for (const fk of table.foreignKeys) {
+    if (fk.columns.at(-1) !== column) continue
+    const target = facts.mainTable(fk.references.schema, fk.references.table)
+    if (target === undefined) continue
+    if (fk.references.columns.at(-1) !== target.primaryKey?.columns.at(-1)) {
+      continue
+    }
+    return { object: target.origin.objectId, constraint: fk.name }
+  }
+  return undefined
+}
+
+/** FK рядка ТЧ на основну таблицю власника — за останньою колонкою `parent`. */
+function parentConstraint(
+  section: PhysicalTable,
+  parent: string,
+  owner: PhysicalTable
+): string {
+  const fk = section.foreignKeys.find(
+    (f) =>
+      f.columns.at(-1) === parent &&
+      f.references.schema === owner.schema &&
+      f.references.table === owner.name
+  )
+  // ТЧ ядра завжди має FK власника; його відсутність — дефект компілятора.
+  return must(fk, `${section.name} owner foreign key`).name
 }
 
 /** Цілі пари — з посилання ядра: ті самі мітки, що їх звіряє `<t>_save`. */
@@ -335,6 +399,7 @@ function constraints(table: PhysicalTable, facts: Facts): RuntimeConstraint[] {
       name: f.name,
       kind: "foreignKey" as const,
       columns: [...f.columns],
+      references: [...f.references.columns],
     })),
   ]
 }

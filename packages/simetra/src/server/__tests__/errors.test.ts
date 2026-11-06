@@ -38,6 +38,7 @@ const object: RuntimeObject = runtimeObjectSchema.parse({
   tabularSections: sample.tabularSections.map((s) => ({
     ...s,
     constraints: [
+      ...s.constraints,
       { name: "sample_lines_qty_key", kind: "unique", columns: ["qty_col"] },
       {
         name: "sample_lines_qty_fkey",

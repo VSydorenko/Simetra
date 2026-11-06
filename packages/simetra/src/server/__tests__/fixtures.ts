@@ -94,13 +94,21 @@ export const sample: RuntimeObject = runtimeObjectSchema.parse({
       parentName: "parent",
       lineNumber: "line_number",
       lineNumberName: "lineNumber",
+      parentConstraint: "sample_lines_parent_id_fkey",
       attributes: [
         attr("qty", "Integer"),
         attr("firstOnly", "Text", { insert: true, update: false }),
         attr("extra", "Json"),
         attr("copy_id", "Raw", { insert: false, update: false }),
       ],
-      constraints: [],
+      constraints: [
+        {
+          name: "sample_lines_parent_id_fkey",
+          kind: "foreignKey",
+          columns: ["parent_id"],
+          references: ["id"],
+        },
+      ],
     },
   ],
   operations: {},

@@ -147,6 +147,16 @@ describe("runtimeAttributeSchema", () => {
         },
       },
     ],
+    [
+      "a ref with its constraint",
+      true,
+      { ...attribute, ref: { object: id, constraint: "t_status_fkey" } },
+    ],
+    [
+      "a ref without a constraint",
+      false,
+      { ...attribute, ref: { object: id } },
+    ],
     ["an unknown key", false, { ...attribute, extra: 1 }],
     ["a negative scale", false, { ...attribute, scale: -1 }],
   ])("parses %s as %s", (_, ok, input) => {

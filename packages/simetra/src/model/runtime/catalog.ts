@@ -67,26 +67,62 @@ export const runtimeAttributeSchema = z.strictObject({
       ),
     })
     .optional(),
+  /**
+   * Ціль одноцільового `Ref` на об'єкт: id об'єкта моделі й ім'я FK, за яким
+   * читання приєднує ціль (`include`). Перерахування, масив і пара FK не
+   * мають, тож і `ref` теж.
+   */
+  ref: z
+    .strictObject({ object: z.string(), constraint: z.string() })
+    .optional(),
 })
 
-export const runtimeConstraintSchema = z.strictObject({
-  name: z.string(),
-  kind: z.enum(["primaryKey", "unique", "check", "foreignKey"]),
-  columns: z.array(z.string()),
-})
+export const runtimeConstraintSchema = z
+  .strictObject({
+    name: z.string(),
+    kind: z.enum(["primaryKey", "unique", "check", "foreignKey"]),
+    columns: z.array(z.string()),
+    /** Колонки цілі FK у порядку `columns`; лише в `foreignKey`. */
+    references: z.array(z.string()).optional(),
+  })
+  .refine(
+    (c) =>
+      c.references === undefined ||
+      (c.kind === "foreignKey" && c.references.length === c.columns.length),
+    {
+      path: ["references"],
+      message: "references belong to a foreign key, one per column",
+    }
+  )
 
-export const runtimeSectionSchema = z.strictObject({
-  name: z.string(),
-  table: qualifiedNameSchema,
-  key: z.string(),
-  keyName: z.string(),
-  parent: z.string(),
-  parentName: z.string(),
-  lineNumber: z.string(),
-  lineNumberName: z.string(),
-  attributes: z.array(runtimeAttributeSchema),
-  constraints: z.array(runtimeConstraintSchema),
-})
+export const runtimeSectionSchema = z
+  .strictObject({
+    name: z.string(),
+    table: qualifiedNameSchema,
+    key: z.string(),
+    keyName: z.string(),
+    parent: z.string(),
+    parentName: z.string(),
+    lineNumber: z.string(),
+    lineNumberName: z.string(),
+    /** FK рядка ТЧ на власника: за всіма його колонками ТЧ корелює з рядком власника. */
+    parentConstraint: z.string(),
+    attributes: z.array(runtimeAttributeSchema),
+    constraints: z.array(runtimeConstraintSchema),
+  })
+  .refine(
+    (section) =>
+      section.constraints.some(
+        (c) =>
+          c.name === section.parentConstraint &&
+          c.kind === "foreignKey" &&
+          c.references !== undefined
+      ),
+    {
+      path: ["parentConstraint"],
+      message: "parentConstraint names no foreign key with references",
+    }
+  )
 
 export const runtimeOperationTargetSchema = z.strictObject({
   function: qualifiedNameSchema,
