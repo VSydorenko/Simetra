@@ -131,7 +131,8 @@ const quoted = (name: string) => `"${name.replaceAll('"', '""')}"`
  * memberships `WITH INHERIT FALSE, SET TRUE` — the shape of the runtime login
  * role (`simetra_runtime`): it reaches a role only by `SET LOCAL ROLE`. `fn`
  * gets the URL of the database `url` as that role. The role and its backends
- * are removed on every path; `label` tells apart two such roles in one run.
+ * are removed on every path; `label` is the readable part of the name, and a
+ * random tail makes every call's role name unique.
  * `attributes` gives the role a fact the runtime login must not have
  * (`BYPASSRLS`), for tests of the data-tool guards.
  */
@@ -142,7 +143,10 @@ export async function withRuntimeLogin<T>(
   label = "runtime",
   attributes: { bypassRls?: boolean } = {}
 ): Promise<T> {
-  const name = testRoleName(label)
+  // Supavisor кешує секрет ролі за ім'ям: роль, перестворена з тим самим
+  // ім'ям і новим паролем, через пулер не входить (`28P01`), доки кеш не
+  // скинеться. Тож ім'я — нове на кожен виклик, а не одне на мітку й прогін
+  const name = testRoleName(`${label}_${randomBytes(4).toString("hex")}`)
   const password = randomBytes(12).toString("hex")
   const bypass = attributes.bypassRls === true ? " bypassrls" : ""
   // Створення — до `try`: невдале створення не видаляє чужої ролі з тим ім'ям
