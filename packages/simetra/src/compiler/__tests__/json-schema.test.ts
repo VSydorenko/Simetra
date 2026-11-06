@@ -35,14 +35,20 @@ describe("buildJsonSchemas", () => {
         writeFileSync(path, text)
         continue
       }
-      expect(readFileSync(path, "utf8"), file).toBe(text)
+      expect(
+        readFileSync(path, "utf8"),
+        `${file} is stale: run pnpm --filter simetra schemas:update`
+      ).toBe(text)
     }
   })
 
   it("orphan json schema file fails the drift test", () => {
     // Схема, якої генератор більше не дає, лишилася б у пакеті мовчки.
     const files = readdirSync(SCHEMAS_DIR).filter((f) => f.endsWith(".json"))
-    expect(files.sort()).toEqual(Object.keys(buildJsonSchemas()).sort())
+    expect(
+      files.sort(),
+      "a schema file the generator no longer produces: delete it from packages/simetra/schemas/"
+    ).toEqual(Object.keys(buildJsonSchemas()).sort())
   })
 
   it("descriptions are present", () => {
