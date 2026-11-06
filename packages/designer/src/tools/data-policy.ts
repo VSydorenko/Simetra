@@ -49,7 +49,7 @@ export function dataCommandRefusal(
     // (спека П4 §6.14)
     const membershipId =
       op.action === "create"
-        ? catalog.objects.find((x) => x.id === object.id)?.operations.create
+        ? catalog.objects.find((x) => x.id === object.id)?.operations?.create
             ?.root?.membership
         : undefined
     const membership =

@@ -121,14 +121,16 @@ export const runtimeObjectSchema = z.strictObject({
   membership: z.strictObject({ userColumn: z.string() }).optional(),
   attributes: z.array(runtimeAttributeSchema),
   tabularSections: z.array(runtimeSectionSchema),
-  operations: z.strictObject({
-    create: runtimeOperationTargetSchema
-      .extend({ root: runtimeRootCreateSchema.optional() })
-      .optional(),
-    update: runtimeOperationTargetSchema.optional(),
-    markDeletion: runtimeOperationTargetSchema.optional(),
-    delete: runtimeOperationTargetSchema.optional(),
-  }),
+  operations: z
+    .strictObject({
+      create: runtimeOperationTargetSchema
+        .extend({ root: runtimeRootCreateSchema.optional() })
+        .optional(),
+      update: runtimeOperationTargetSchema.optional(),
+      markDeletion: runtimeOperationTargetSchema.optional(),
+      delete: runtimeOperationTargetSchema.optional(),
+    })
+    .optional(),
   constraints: z.array(runtimeConstraintSchema),
 })
 
@@ -144,7 +146,7 @@ export const runtimeCatalogSchema = z
     // Довідник членства кореня — об'єкт цього каталогу з фактами членства:
     // інакше T3 не мав би, за чим перевірити `creatorMember`.
     catalog.objects.forEach((object, index) => {
-      const membership = object.operations.create?.root?.membership
+      const membership = object.operations?.create?.root?.membership
       if (membership === undefined) return
       const target = catalog.objects.find((o) => o.id === membership)
       if (

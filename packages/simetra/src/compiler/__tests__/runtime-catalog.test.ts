@@ -162,7 +162,7 @@ describe("buildRuntimeCatalog", () => {
       },
     })
     // «Користувачів» команда не створює й не позначає (спека П4 §6.6).
-    expect(Object.keys(objectOf("Users").operations)).toEqual(["update"])
+    expect(Object.keys(objectOf("Users").operations ?? {})).toEqual(["update"])
   })
 
   it("keeps the key and the version out of attributes, under logical names", () => {
@@ -514,18 +514,18 @@ describe("buildRuntimeCatalog: scope root creation", () => {
   const object = (name: string) => roots.objects.find((o) => o.name === name)!
 
   it("a root with a creator names its membership catalog; a root without one has none", () => {
-    expect(object("Organization").operations.create).toEqual({
+    expect(object("Organization").operations?.create).toEqual({
       function: { schema: "public", name: "organization_create_root" },
       context: "create",
       root: { membership: object("OrgMember").id },
     })
-    expect(object("Branch").operations.create).toEqual({
+    expect(object("Branch").operations?.create).toEqual({
       function: { schema: "public", name: "branch_create_root" },
       context: "create",
       root: {},
     })
-    expect(object("OrgMember").operations.create).not.toHaveProperty("root")
-    expect(object("OrgRoleAssignments").operations.create).not.toHaveProperty(
+    expect(object("OrgMember").operations?.create).not.toHaveProperty("root")
+    expect(object("OrgRoleAssignments").operations?.create).not.toHaveProperty(
       "root"
     )
   })

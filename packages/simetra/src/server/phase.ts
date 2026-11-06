@@ -58,7 +58,7 @@ function targetOf(
   if (object === undefined) return { error: invalid("object") }
   // Функцію ядра й дію контексту дає каталог, а не вхід (Р-A3-1): операції
   // без функції в каталозі в цього об'єкта немає.
-  const target = object.operations[op.action]
+  const target = object.operations?.[op.action]
   if (target === undefined) return { error: invalid("action") }
   return { object, target }
 }
@@ -70,7 +70,7 @@ function rootCreateOf(
   op: Operation
 ): RootCreate | undefined {
   const root =
-    op.action === "create" ? object.operations.create?.root : undefined
+    op.action === "create" ? object.operations?.create?.root : undefined
   if (root === undefined) return undefined
   return {
     // Схема каталогу гарантує, що об'єкт є (`runtimeCatalogSchema`).

@@ -1,9 +1,13 @@
-import { PROVIDER_API_ROLES } from "simetra/model"
+import {
+  PROVIDER_API_ROLES,
+  runtimeCatalogSchema,
+  type RuntimeObject,
+} from "simetra/model"
 import { describe, expect, it, vi } from "vitest"
 import { ZodError } from "zod"
 import { createCommandRuntime, readRoleOf } from "../runtime"
 import { fakeDatabase, failureOf, type Answer } from "./fake-database"
-import { catalog } from "./fixtures"
+import { catalog, commandObject } from "./fixtures"
 
 const BEGIN = {
   text: "BEGIN ISOLATION LEVEL READ COMMITTED READ ONLY",
@@ -231,6 +235,44 @@ describe("createCommandRuntime", () => {
       createCommandRuntime({ database: db.database, catalog, [option]: value })
     ).rejects.toBeInstanceOf(ZodError)
     expect(db.calls).toEqual([])
+  })
+})
+
+describe("an object without operations", () => {
+  it("refuses any action with invalid(action) before the database", async () => {
+    const readOnly: RuntimeObject = {
+      ...commandObject({ name: "Report", table: "report" }),
+      operations: undefined,
+    }
+    const db = fakeDatabase({
+      query: (text) =>
+        text === HASH.text
+          ? { rows: [{ hash: "hash-1" }] }
+          : text === MEMBER.text
+            ? { rows: [{ member: "t" }] }
+            : {},
+    })
+    const runtime = await createCommandRuntime({
+      database: db.database,
+      catalog: runtimeCatalogSchema.parse({
+        ...catalog,
+        objects: [readOnly],
+      }),
+    })
+    const created = db.calls.length
+    const error = await failureOf(
+      runtime.run(
+        { sub: "user-1", role: "authenticated" },
+        {
+          action: "update",
+          object: { kind: "Catalog", name: "Report" },
+          id: "11111111-1111-4111-8111-111111111111",
+          expectedVersion: 1,
+        }
+      )
+    )
+    expect(error).toEqual({ code: "command.invalid", path: "action" })
+    expect(db.calls.slice(created)).toEqual([])
   })
 })
 
