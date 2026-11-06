@@ -266,6 +266,10 @@
   доведено. Інакше режим обслуговування прав (`simetra.rights_maintenance`)
   діяв би в їхній сесії. Потрібен DB-тест чи проба `pg_stat_activity`. Код:
   `project.ts`, `maintenanceSql` у `compiler/rights/guard-units.ts`.
+- **Кеш секретів ролей Supavisor.** Supavisor кешує секрет ролі за ім'ям;
+  зміна пароля ролі входу за пулером може дати `28P01` — перевірити на
+  хостованому стеку до першої доставки. Локально відтворено: роль,
+  перестворена з тим самим ім'ям і новим паролем, через пулер не входить.
 - **Один оператор з CTE, що пише дві таблиці системних об'єктів прав, під
   `SET CONSTRAINTS ALL IMMEDIATE`.** Знімок актора береться раз на
   транзакцію й живе до її кінця (спека прав §7), тож хибної `escalation` від
@@ -334,41 +338,14 @@
 
 ## 7. Тести
 
-- **Флейк входу тегованої ролі через локальний Supavisor.** Кейс пулера
-  `command-runtime.db.test.ts` («through the pooler: the same current user and
-  the same refusals») раз упав у повному `pnpm test:db` на
-  `createCommandRuntime`: `28P01 password authentication failed` для тегованої
-  ролі `simetra_runtime_<тег>`; повтор файла зелений. Імовірно — кеш
-  `auth_query` пулера щодо щойно створеної ролі. Кандидат: дочекатися входу
-  ролі через пулер (повтор із межею) у `throughPoolerAs`
-  (`packages/designer/src/__tests__/support/db.ts`) або перевірити налаштування
-  кешу автентифікації Supavisor локального стека.
-- **Таблиці схеми `simetra` під Правилом 1.** Що SQL застосунку не пише в
-  `rights_versions`, `rights_journal`, таблиці знімка актора (`SNAPSHOT_TABLES`
-  у `packages/simetra/src/compiler/rights/actor-snapshot.ts`),
-  `rights_tx_pending`, `identities`, гарантує походження: `rightsAdminTables` дає їм
-  `origin.objectId` об'єкта виду, тож `kindTables`
-  (`packages/simetra/src/compiler/sql/kind-table-verbatim.ts`) їх включає.
-  Тесту немає — додати рядки з мутацією в `kind-table-verbatim.test.ts`.
-- **Мутаційна перевірка політик читання й копій носіїв** не підтверджена —
-  повторити. Прогін: `pnpm --filter simetra exec vitest run --project db
-  rights-policies` і `pnpm --filter @simetrajs/designer exec vitest run
-  --project db carrier-locks`. Кожна мутація згенерованого SQL мусить
-  почервонити свій кейс: прибрати `task_read_own` — `own`; `_read_region` —
-  `dimension`; `_read_in_project_any` — `container`; `users_scope_read` —
-  `users-cross-tenant`; з'єднання `rights_visible_users` лише за скоупом —
-  `users-cross-kind`; `users_devices_scope_read` —
-  `users-devices-cross-tenant`; політику ТЧ — `tabular`; копію шляху з
-  предиката — `path`; поширення копії до ТЧ коментаря — `path-tabular`;
-  предикат ТЧ за `parent_id` для носія-ключа — `key-carrier`; політику
-  підсумків — `register-totals`; ігнорування значення з запиту в тригері
-  носіїв — `forged-copy`; гілку `INSERT` тригера поширення —
-  `source-after-dependent`; тригер поширення — `propagation-owner`;
-  `contentChangeCondition` механіки чи підписки — `propagation-path`;
-  `FOR SHARE` на `INSERT` — «inserting a tabular row waits…»; блокування
-  власника на `UPDATE` рядка ТЧ — «… does not deadlock»; `RESTRICTIVE` →
-  `PERMISSIVE` у `task_scope_read` — `member-without-role`. Мутація, після
-  якої все зелене, — дірка в тестах, а не в коді.
+- **Блокування власника на зміні зв'язку рядка ТЧ.** Тригер носіїв читає
+  копію під `FOR SHARE` і на вставці, і на `UPDATE` рядка ТЧ, що змінює
+  зв'язок (`parent_id` чи скоуп), — `deriveFunction` у
+  `packages/simetra/src/compiler/rights/carrier-units.ts`. Мутаційна
+  перевірка показала: без `FOR SHARE` на зміні зв'язку всі тести зелені.
+  Кейс `packages/designer/src/__tests__/carrier-locks.db.test.ts` перевіряє
+  лише вставку. Додати кейс: `UPDATE` рядка ТЧ зі зміною `parent_id` чекає
+  на блокування нового власника (`55P03` під `lock_timeout`).
 - **Кроки даних і механіка платформи.** Правило спеки промоції §7.2 «кроки
   даних вимикають і тригери механіки, тож `version` і `updated_at` не
   змінюються» не перевіряє жоден тест. Тест — з першим кроком даних, що пише
@@ -378,11 +355,6 @@
   DB-кейс у `packages/designer/src/schema-engine/__tests__/engine-apply-port.db.test.ts`
   і зафіксувати поведінку: відтворений порядок або чесна відмова
   `plan.clone-mismatch` / `engine.clone-failed`.
-- **Перегенерація JSON Schema.** Тест дрейфу
-  (`packages/simetra/src/compiler/__tests__/json-schema.test.ts`) не каже, як
-  оновити `packages/simetra/schemas/*.schema.json`; команду
-  (`UPDATE_JSON_SCHEMAS=1 pnpm --filter simetra test json-schema`) знає лише
-  код тесту. Підказка в повідомленні `expect` або скрипт пакета.
 - **Кеш скомпільованого референсного домену в тестах операцій.** Тести
   операцій `simetra` компілюють референсний домен заново в більшості кейсів
   (`packages/simetra/src/compiler/__tests__/operations-rename.test.ts`,
@@ -408,12 +380,6 @@
   `packages/designer/src/__tests__/command-runtime.db.test.ts` дублює
   `heldTarget` з `packages/designer/src/__tests__/carrier-locks.db.test.ts`;
   винести в `packages/designer/src/__tests__/support/`.
-- **Локальний будівник ролі адміністратора прав.** `rightsAdmins()` у
-  `packages/simetra/test/db/catalog-command-admin.db.test.ts` дублює
-  будівник `rightsAdminReadingMembers()`
-  (`packages/simetra/src/compiler/__tests__/fixtures/rights.ts`); перевести
-  файл на спільний будівник.
-
 ## 8. Designer
 
 - **Розмір `tools/list`.** JSON Schema входів MCP повторює схему мапінгу
