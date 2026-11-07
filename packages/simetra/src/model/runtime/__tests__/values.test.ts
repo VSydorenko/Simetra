@@ -265,6 +265,44 @@ describe("encodeAttributes: maxBytes", () => {
     })
   })
 
+  // Числа `Json` — шириною, з якою їх друкує `jsonb` (`numeric_out`):
+  // десятковий запис без експоненти; `numeric` не має від'ємного нуля.
+  it.each<[number, number]>([
+    [0, 1],
+    [-0, 1],
+    [1.5, 3],
+    [1e21, 22],
+    [1e-7, 9],
+    [1e300, 301],
+    [-1e-300, 303],
+    [123456789012345680000, 21],
+  ])("measures the Json number %d by its jsonb width %i", (value, bytes) => {
+    const at = (maxBytes: number) => [attr("big", "Json", { maxBytes })]
+    expect(encodeAttributes(at(bytes), { big: value }, INPUT)).toEqual({
+      columns: { big_col: value },
+    })
+    expect(encodeAttributes(at(bytes - 1), { big: value }, INPUT)).toEqual({
+      error: { code: "command.invalid", path: "big", reason: "too-large" },
+    })
+  })
+
+  it("refuses Json under maxBytes by JSON.stringify but over it by jsonb", () => {
+    const value = { a: Array.from({ length: 10 }, () => 1e300), b: "x" }
+    const big = [attr("big", "Json", { maxBytes: 1000 })]
+    expect(jsonBytes(value)).toBeLessThan(1000)
+    expect(encodeAttributes(big, { big: value }, INPUT)).toEqual({
+      error: { code: "command.invalid", path: "big", reason: "too-large" },
+    })
+  })
+
+  it("accepts a small Json value", () => {
+    const value = { n: 12.5, list: [1, -2, "в"], ok: true, none: null }
+    const big = [attr("big", "Json", { maxBytes: jsonBytes(value) })]
+    expect(encodeAttributes(big, { big: value }, INPUT)).toEqual({
+      columns: { big_col: value },
+    })
+  })
+
   it("names the row path of a tabular section value", () => {
     const row = [attr("memo", "Text", { maxBytes: 4 })]
     expect(

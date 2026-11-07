@@ -275,6 +275,54 @@ function wireMeasure(
   return Array.isArray(value) ? value.map(one) : one(value)
 }
 
+// Запис `String(n)` скінченного числа: та сама форма, що в `JSON.stringify`.
+const NUMBER_TEXT = /^(-?)(\d+)(?:\.(\d+))?(?:e([+-]\d+))?$/
+
+/**
+ * Ширина числа, яким його друкує `jsonb` (`numeric_out`): десятковий запис
+ * без експоненти, масштаб — дробові цифри мантиси мінус показник. Довжина
+ * рахується, а не будується рядок: `1e300` дав би 301 знак лише для міри.
+ * `String(-0)` — `"0"`: від'ємного нуля `numeric` не має.
+ */
+function jsonbNumberWidth(value: number): number {
+  const text = String(value)
+  const match = NUMBER_TEXT.exec(text)
+  if (match === null) return text.length
+  const [, sign = "", whole = "", fraction = "", exponent = "0"] = match
+  const shift = Number(exponent)
+  const integer = Math.max(1, whole.length + shift)
+  const scale = Math.max(0, fraction.length - shift)
+  return sign.length + integer + (scale > 0 ? 1 + scale : 0)
+}
+
+/** Скільки байтів `jsonb` додає числам значення понад `JSON.stringify`. */
+function jsonbNumbersSurplus(value: unknown): number {
+  if (typeof value === "number") {
+    return jsonbNumberWidth(value) - String(value).length
+  }
+  if (Array.isArray(value)) {
+    return value.reduce<number>((sum, v) => sum + jsonbNumbersSurplus(v), 0)
+  }
+  if (isPlainObject(value)) {
+    return Object.values(value).reduce<number>(
+      (sum, v) => sum + jsonbNumbersSurplus(v),
+      0
+    )
+  }
+  return 0
+}
+
+/**
+ * Байти значення у формі передачі — міра `maxBytes` (Р7, одна з бюджетом
+ * рядка). Числа `Json` — шириною друку `jsonb`: без цього вхід `1e300` (6
+ * байтів) база друкує 301 цифрою, і рядок, записаний у межах `maxBytes`,
+ * назавжди відповідав би `response-too-large` — отруєний для кожного читача.
+ */
+function wireBytes(attribute: CatalogEntryAttribute, value: unknown): number {
+  const bytes = jsonBytes(wireMeasure(attribute, value))
+  return attribute.type === "Json" ? bytes + jsonbNumbersSurplus(value) : bytes
+}
+
 /**
  * Options of {@link encodeAttributes}: who may write and how errors are named.
  * Generic over the attribute type, so `allowed` may read the caller's
@@ -346,7 +394,7 @@ export function encodeAttributes<A extends CatalogEntryAttribute>(
     if (
       maxBytes === true &&
       attribute.maxBytes !== undefined &&
-      jsonBytes(wireMeasure(attribute, encoded.value)) > attribute.maxBytes
+      wireBytes(attribute, encoded.value) > attribute.maxBytes
     ) {
       return {
         error: {
