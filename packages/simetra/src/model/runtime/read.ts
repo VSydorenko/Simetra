@@ -16,3 +16,154 @@ export const readQuerySchema = z.union([
 ])
 
 export type ReadQuery = z.infer<typeof readQuerySchema>
+
+/** Operators of a filter condition (P4-B spec §4.1). */
+export const FILTER_OPERATORS = [
+  "eq",
+  "ne",
+  "lt",
+  "lte",
+  "gt",
+  "gte",
+  "in",
+  "isNull",
+  "contains",
+  "startsWith",
+] as const
+
+export type FilterOperator = (typeof FILTER_OPERATORS)[number]
+
+/** Upper bound of values in one `in` condition. */
+export const FILTER_IN_MAX = 200
+/** Upper bound of filter tree depth; a condition alone has depth 1. */
+export const FILTER_DEPTH_MAX = 8
+/** Upper bound of filter tree nodes, combinators included. */
+export const FILTER_NODES_MAX = 64
+
+/** A leaf of the filter tree: one attribute, one operator. */
+export interface FilterCondition {
+  attribute: string
+  op: FilterOperator
+  value?: unknown
+}
+
+/** A read filter: a tree of `and`, `or`, `not` over conditions. */
+export type Filter =
+  { and: Filter[] } | { or: Filter[] } | { not: Filter } | FilterCondition
+
+const conditionSchema = z
+  .strictObject({
+    attribute: z.string(),
+    op: z.enum(FILTER_OPERATORS),
+    value: z.unknown().optional(),
+  })
+  .superRefine((condition, ctx) => {
+    const { op, value } = condition
+    const fail = (message: string) =>
+      ctx.addIssue({ code: "custom", path: ["value"], message })
+    if (op === "isNull") {
+      if (value !== undefined) fail("isNull takes no value")
+    } else if (op === "in") {
+      if (
+        !Array.isArray(value) ||
+        value.length === 0 ||
+        value.length > FILTER_IN_MAX
+      ) {
+        fail(`in takes an array of 1 to ${FILTER_IN_MAX} values`)
+      }
+    } else if (value === undefined) {
+      fail(`${op} takes a value`)
+    }
+  })
+
+const nodeSchema: z.ZodType<Filter> = z.lazy(() =>
+  z.union([
+    z.strictObject({ and: z.array(nodeSchema).min(1) }),
+    z.strictObject({ or: z.array(nodeSchema).min(1) }),
+    z.strictObject({ not: nodeSchema }),
+    conditionSchema,
+  ])
+)
+
+// Порядок гілок `nodeSchema`: гілку вузла обирає наявний ключ.
+const NODE_KEYS = ["and", "or", "not", "attribute"] as const
+
+const objectAt = (value: unknown): Record<string, unknown> | undefined =>
+  typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined
+
+/**
+ * Чи дерево в межах глибини й кількості вузлів. Рахує до розбору й
+ * зупиняється на першому перевищенні: вороже дерево глибиною в тисячі не
+ * доходить до рекурсивного розбору Zod.
+ */
+function withinLimits(root: unknown): boolean {
+  let nodes = 0
+  const walk = (value: unknown, depth: number): boolean => {
+    if (++nodes > FILTER_NODES_MAX || depth > FILTER_DEPTH_MAX) return false
+    const node = objectAt(value)
+    if (node === undefined) return true
+    for (const key of ["and", "or"] as const) {
+      const children = node[key]
+      if (Array.isArray(children)) {
+        return children.every((child) => walk(child, depth + 1))
+      }
+    }
+    return "not" in node ? walk(node.not, depth + 1) : true
+  }
+  return walk(root, 1)
+}
+
+const valueAt = (root: unknown, path: readonly PropertyKey[]): unknown =>
+  path.reduce<unknown>(
+    (value, key) =>
+      typeof value === "object" && value !== null
+        ? (value as Record<PropertyKey, unknown>)[key]
+        : undefined,
+    root
+  )
+
+/**
+ * Точне місце відмови. Суворий union Zod 4 на невідомому операторі чи полі
+ * дає `invalid_union` на самому вузлі й губить шлях усередині; гілку вузла
+ * обирає наявний ключ, тож шлях іде в помилки саме цієї гілки. Вузол без
+ * жодного з ключів — невідомий вузол: відмова на його шляху.
+ */
+function located(
+  issue: z.core.$ZodIssue,
+  root: unknown,
+  base: readonly PropertyKey[]
+): { path: PropertyKey[]; message: string } {
+  const path = [...base, ...issue.path]
+  if (issue.code !== "invalid_union") return { path, message: issue.message }
+  const node = objectAt(valueAt(root, path))
+  const branch =
+    node === undefined ? -1 : NODE_KEYS.findIndex((key) => key in node)
+  const [inner] = branch === -1 ? [] : (issue.errors[branch] ?? [])
+  return inner === undefined
+    ? { path, message: "unknown filter node" }
+    : located(inner, root, path)
+}
+
+/**
+ * A read filter tree (P4-B spec §4.1): `{ and }`, `{ or }`, `{ not }` and
+ * `{ attribute, op, value? }`, bounded in depth, nodes and `in` values.
+ */
+export const filterSchema: z.ZodType<Filter> = z.preprocess((value, ctx) => {
+  if (!withinLimits(value)) {
+    ctx.addIssue({
+      code: "custom",
+      message: `filter exceeds ${FILTER_DEPTH_MAX} levels or ${FILTER_NODES_MAX} nodes`,
+    })
+    return value
+  }
+  const parsed = nodeSchema.safeParse(value)
+  if (!parsed.success) {
+    const [issue] = parsed.error.issues
+    if (issue !== undefined) {
+      ctx.addIssue({ code: "custom", ...located(issue, value, []) })
+    }
+  }
+  return value
+}, nodeSchema)
