@@ -85,7 +85,7 @@ B1b-3 — у `main` після його мерджу.
 | Р5 | `version` і `serverHash` — з каталогу рантайму: `CommandRuntime.catalog` (заморожений) | автор | немає |
 | Р6 | Причина відмови схеми переноситься в `CommandError.reason`: перевірки меж — custom issue з `params: { reason }`; `issueReason(error)` поруч з `issuePath` (`server/read.ts`) | автор | немає |
 | Р7 | `maxBytes` і бюджет — одна міра: `jsonBytes` (UTF-8 байти `JSON.stringify`) закодованого значення форми передачі; `maxBytes` перевіряється лише на вході команди, читання ним не відмовляє | автор | Рд26, рядок П2 Додатку А — задача 13 |
-| Р8 | «Сторінка» для бюджету — форма списку чи сторінки ТЧ (`limit`), фільтр якої не має умови `eq` чи `in` за ключем; інакше — читання за ключами | автор (за §4.1) | немає |
+| Р8 | «Сторінка» для бюджету — форма списку чи сторінки ТЧ (`limit`), фільтр якої ніде в дереві не має умови `eq` чи `in` за ключем (fail-closed: такий запит — читання за ключами й не обрізається) | автор (за §4.1) | §4.1 — одне речення (задача 13): `orderBy` для сторінки необов'язковий — без нього будівник сортує за ключем |
 
 ## Review Focus
 
@@ -125,7 +125,11 @@ B1b-3 — у `main` після його мерджу.
   виконує `.max` масиву, коли вже є issue елемента): пакет довший за
   `BATCH_MAX` — custom issue `params: { reason: "batch-too-large" }`;
   масив рядків ТЧ довший за `TABULAR_LINES_MAX` — custom issue
-  `params: { reason: "tabular-too-large" }`.
+  `params: { reason: "tabular-too-large" }`. Механізм не змінює JSON Schema
+  інструмента `data-command` (`designer/src/tools/data-tools.ts` бере
+  `batchSchema`; тест дрейфу MCP) і не ламає `operationSchema.options`,
+  з яких B1b-1 виводить `wireOperationSchema`; `issueReason` віддає перевагу
+  issue з `reason`, навіть коли він не перший.
 - T3: `issueReason(error: z.ZodError): string | undefined` у `server/read.ts`;
   `prepareInput` (`phase.ts`) і `prepareRead` (`read.ts`) ставлять `reason` у
   `command.invalid`. Шлях `tabular-too-large` нормується до `<ТЧ>` (без
@@ -151,8 +155,10 @@ B1b-3 — у `main` після його мерджу.
 B1a (`git show c99068f1 --stat`).
 
 **Interfaces:**
-- метадані: `maxBytes?: z.int().positive()` для `Text`, `Json`, `Bytes`
-  (зокрема масивів цих типів) у шапці й ТЧ; інший тип — помилка схеми;
+- метадані: `maxBytes?: z.int().positive()` для `Text`, `Json`, `Bytes` і
+  для **будь-якого масиву** у шапці й ТЧ; інший тип — помилка схеми; масив
+  без явного `maxBytes` отримує типове значення масиву (П1), тож вхід
+  обмежує його так само, як `rowBytesOf` його рахує;
   типові значення — питання П1 (рекомендація: `Json` і `Bytes` — 1 МіБ,
   `Text` — 64 КіБ);
 - каталог: ефективне `maxBytes` у спільній частині запису;
@@ -180,10 +186,14 @@ B1a (`git show c99068f1 --stat`).
 **Interfaces:**
 - `rowBytesOf(columns)` — верхня межа `jsonBytes` рядка форми передачі:
   для кожної колонки — `jsonBytes` імені колонки з `:` і `,` плюс верхня
-  межа значення: `maxBytes` для `Text`/`Json`/`Bytes`, `6 × maxLength + 2`
-  для `String` (екранування `\u00XX` — 6 байтів на кодову точку), сталі для
-  фіксованих типів (UUID, числа, булеве, дата, версія), `Numeric` без
-  точності й масив без `maxBytes` — за типовим `maxBytes` `Json`;
+  межа значення: ефективне `maxBytes` для `Text`/`Json`/`Bytes` і масивів,
+  `6 × maxLength + 2` для `String` (екранування `\u00XX` — 6 байтів на
+  кодову точку); явні сталі в коді для UUID, одноцільового `Ref`, колонки
+  типу пари (найдовша мітка цілі), мітки перерахування (найдовша мітка),
+  чисел, булевого, дати, `DateTime`, версії; `Numeric` з точністю —
+  `precision + 3`, без точності — межа Postgres (131 072 + 16 383 + 2
+  символи); `Raw` — правило не рахує й не обіцяє (копії носіїв — UUID, сталою
+  UUID);
 - помилка `attribute.row-over-budget` — звичайні колонки шапки чи колонки
   рядка ТЧ понад `RESPONSE_BUDGET_BYTES`; попередження
   `attribute.lazy-over-budget` (у `WARNING_RULES`) — сума лінивих понад
@@ -206,13 +216,14 @@ B1a (`git show c99068f1 --stat`).
 — помилка створення рантайму. `runtime.run` перевіряє їх до бази: розмір
 пакета верхнього виклику — `batch-too-large`; рядки ТЧ кожної операції —
 верхнього виклику й кожної фази `ctx.run` — `tabular-too-large` з `path`
-`<ТЧ>` і `object`. Межу фаз `ctx.run` (B1b-3 рахує проти `BATCH_MAX`)
-рахувати проти ефективного `maxBatch`. `maxTabularLines` стелі читання ТЧ
+`<ТЧ>` і `object`. Межа фаз `ctx.run` лишається на сталій `BATCH_MAX`
+(B1b-3, Ф1): §7.1 — «фази `ctx.run` у межу пакета не рахуються», тож
+`maxBatch` хуків проведення не обмежує. `maxTabularLines` стелі читання ТЧ
 (`TABULAR_LINES_MAX` будівника) не змінює.
 
 - [ ] Step 1: тести порт-фейку: зменшені межі пакета й ТЧ відхиляють на
-  верхньому вході; ТЧ — і у фазі `ctx.run`; лік фаз `ctx.run` — проти
-  `maxBatch`; порт не викликано; опція понад сталу — відмова створення.
+  верхньому вході; ТЧ — і у фазі `ctx.run`; зменшений `maxBatch` не
+  обмежує ліку фаз `ctx.run`; порт не викликано; опція понад сталу — відмова створення.
 - [ ] Step 2–5; коміт `feat(server): зменшені межі пакета й ТЧ у runtime.run`.
 
 ### Задача 5: `object` на кожній помилці з `path` чи `attributes`
@@ -224,20 +235,29 @@ B1a (`git show c99068f1 --stat`).
 **Interfaces:** кожен `CommandError` з `path` чи `attributes` отримує
 `object: MetadataRef`:
 - вхід операції — `found.object` (`phase.ts`);
-- помилка бази `23502`/`23503`/`23505`/`23514`/`22023` — об'єкт **знайденої
+- помилка бази `23502`/`23503`/`23505`/`23514` — об'єкт **знайденої
   таблиці** (`tableOf` шукає й поза фазою), не об'єкт `ErrorPhase`; на
   `COMMIT` (фази немає) — так само за таблицею;
+- винятки з цього правила — шлях `creatorMember.*` (гілка `23502` членства
+  мапить його за таблицею довідника членства) і `22023` (`invalidOf` таблиці
+  не має, шлях — відносно фази): `object` — об'єкт фази (операції), бо
+  `path.ts` мапить `creatorMember.` через `creatorMembership` запису
+  власника;
 - читання і фільтр — об'єкт запиту;
 - `ctx.reject` — об'єкт фази хука;
 - у пакеті — об'єкт операції, що відмовила.
 Винятки (немає об'єкта, до якого прив'язати): `path: "object"` невідомого
-об'єкта (`prepareRead`, `targetOf`) і корінь вводу (`path` порожній чи
-`values` самої операції без об'єкта) — їх називає спільна перевірка.
+об'єкта (`prepareRead`, `targetOf`), корінь вводу і відмови схеми
+`prepareInput`/`prepareRead` до розбору операції (`expectedVersion`,
+`0.action`, …) — їх називає спільна перевірка. Для `tabular-too-large` зі
+схеми (задача 1) `object` читається з сирого `op.object` у `try`, проходить
+`metadataRefSchema` і пошук у каталозі; інакше — без `object`.
 
 - [ ] Step 1: таблиця `it.each` джерел помилок, зокрема «таблиця іншого
   об'єкта» й «відкладене обмеження на `COMMIT`»; спільна перевірка в
   `harness.ts`: жодна помилка з `path`/`attributes` без `object`, крім
-  названих винятків.
+  названих винятків; кейси `creatorMember.<реквізит>` з `23502` і `22023` —
+  `object` операції.
 - [ ] Step 2–5; коміт `feat(server): object на кожній помилці з path чи attributes`.
 
 ### Задача 6: декодер T3 на `decodeRow` T0
@@ -259,7 +279,20 @@ B1a (`git show c99068f1 --stat`).
   номер рядка ТЧ, які jsonb дає числом, — у рядок цілого; далі
   `decodeRow(…, { strict: true })`; `WireDecodeError` — `command.internal`.
 - `DateTime` у `runtime.read` і результаті `run` стає фіксованої ширини
-  (§4.4).
+  (§4.4); `timestamptz` `infinity` і роки поза 1–9999 на сервері в
+  режимі `strict` — `command.internal` (кейс у тесті й речення в §4.4,
+  задача 13).
+- **Форма рядків `run` змінюється** (питання П3): ТЧ рядка результату
+  переходить з верхнього рівня (`out[section.name]`, `decodeRecord`) у
+  `tabularSections` — як у рядку картки (`read.ts`). Зачеплені: значення
+  `CommandResult.rows`, результат `ctx.run` у хуку, вихід MCP
+  `data-command` (`packages/designer/src/tools/data-tools.ts`), тести
+  `decode.test.ts`, `hooks.test.ts`, designer `command-runtime.db.test.ts` і
+  сусідні, скіл споживача. Вплив на спеку — §4.4 і спека П4 §6.4 (через
+  Додаток А, задача 13).
+- Адаптер читання лишає перевірку `tabular-too-large` (`decodeSections`) до
+  виклику `decodeRow`. Фізичний ключ `tabularSections` у `to_jsonb(t)` не
+  трапляється: фізичні імена платформи — у `snake_case`.
 
 - [ ] Step 1: наявні тести `decode.test.ts` — на очікування T0 (`DateTime`
   фіксованої ширини); кейси: номер рядка ТЧ числом; ТЧ рядка ядра й рядка
@@ -283,7 +316,12 @@ B1a (`git show c99068f1 --stat`).
   `operation`/`batch`)
   | `{ type: "version" }`; `rights` — B5. Масив рядків ТЧ форми передачі —
   ≤ `TABULAR_LINES_MAX` з `reason: "tabular-too-large"`, `path` `<id ТЧ>`,
-  `object` — UUID операції. `deleteIds` форма передачі не несе (сувора схема).
+  `object` — UUID операції. `deleteIds` форма передачі не несе: схема
+  `update` передачі після rebase на B1b-3 — явний `omit({ deleteIds })` без
+  успадкованого `superRefine` (у Zod 4 `.extend` об'єкта з refinement кидає).
+  Відмову схеми конверта в `WireCommandError` перетворює обробник на кроці 1
+  (задача 10): `reason` через `issueReason`, `path` — як дав Zod без
+  префікса `request.`, `object` — UUID операції, якщо є.
 - `dataResponseSchema` = `{ ok: true, value, serverHash } | { ok: false, error: wireCommandErrorSchema, serverHash }`.
 - `wireReadResultSchema` (B1b-1) отримує `more?: true`; що `more` буває лише
   на сторінці, тримає обробник (задача 9), не схема.
@@ -331,14 +369,15 @@ B1a (`git show c99068f1 --stat`).
   сортування, `include`, ТЧ поза `read ∪ lazy`. Відмова —
   `command.stale-client` з `object` (UUID); пакет з однією несумісною
   операцією — відмова цілком. Фільтр `in` за ключем і за версією проходить.
-- `fitResponse(query: WireReadQuery, result: WireReadResult): WireReadResult | CommandError`
+- `fitResponse(index: CatalogIndex, query: WireReadQuery, result: WireReadResult): WireReadResult | CommandError`
+  (каталог — щоб знайти колонки `include` і ключ цілі)
   (Р8): сторінка — найдовший непорожній префікс рядків, `included` — лише
   цілі, на які посилаються лишені рядки, `more: true`, коли щось
   відкинуто; перший рядок понад бюджет — `response-too-large`; читання за
   ключами, картка, «ТЧ власника» — `response-too-large` без обрізання.
   Підрахунок лінійний: `jsonBytes` кожного рядка раз, без повторного
   `stringify` усієї відповіді.
-- `fitRunResult(result)` — рядки `run` без лінивих колонок і рядків ТЧ;
+- `fitRunResult(index, result)` — рядки `run` без лінивих колонок і рядків ТЧ;
   понад бюджет — результат без `rows`.
 
 - [ ] Step 1: `it.each` кожної гілки звірки §12 (зокрема ворожі імена,
@@ -355,7 +394,9 @@ B1a (`git show c99068f1 --stat`).
 
 **Interfaces:**
 - `CommandRuntime.catalog: RuntimeCatalog` — той самий розібраний каталог,
-  глибоко заморожений при створенні рантайму.
+  глибоко заморожений при створенні рантайму (власна копія після
+  `runtimeCatalogSchema.parse`); рукописні фейки `CommandRuntime` у тестах
+  отримують поле.
 - `createDataHandler(runtime: CommandRuntime, options?: { log?: (error: unknown) => void }): (session: SessionClaims, request: unknown, origin: RequestOrigin) => Promise<DataResponse>`
   (типовий `log` — `console.error`), кроки §4.5:
   0. `checkRequestOrigin(origin, request)`;
@@ -429,10 +470,18 @@ B1a (`git show c99068f1 --stat`).
    `RichText` як типу немає (`LOGICAL_TYPES`). З типовими 1 МБ для `Text`
    чотири звичайні `Text` шапки вже дають помилку бюджету рядка, а кожен
    наявний `Text` отримує межу запису. Пропоную: `Json` і `Bytes` — 1 МіБ,
-   `Text` — 64 КіБ, більше — явним `maxBytes`. Вплив: Рд26, рядок П2
-   Додатку А.
+   `Text` — 64 КіБ, масив — 64 КіБ, більше — явним `maxBytes`. Додатковий
+   аргумент: стандартна ТЧ дельти «Ролей» має чотири стандартні `Text`
+   (`kinds/catalog.ts`, `deltaColumns`), і їхній `maxBytes` з метаданих не
+   задати — з 1 МБ кожен застосунок із правами дістав би
+   `row-over-budget`. Вплив: Рд26, рядок П2 Додатку А.
 2. **П2. Міра бюджету й `maxBytes`** — `jsonBytes` значення форми передачі
    (Р7). Вплив: §4.5, Рд26 — по одному реченню.
+3. **П3. Форма рядків `run`.** Перехід на `decodeRow` T0 (Р4) кладе ТЧ рядка
+   результату в `tabularSections`, як у картки, замість верхнього рівня.
+   Пропоную прийняти: одна форма рядка для читання й запису. Альтернатива —
+   адаптер T3 повертає ТЧ на верхній рівень (дві форми рядка). Вплив: §4.4,
+   спека П4 §6.4; споживачі — задача 6.
 
 ## Підсумок аудиту плану
 
