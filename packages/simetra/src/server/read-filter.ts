@@ -1,6 +1,7 @@
 import {
   UUID_TEXT,
   encodePair,
+  isWithinType,
   type CommandError,
   type Filter,
   type FilterCondition,
@@ -95,9 +96,16 @@ function scalar(column: FilterColumn, value: unknown, path: string): string {
       return typeof value === "string" && UUID_TEXT.test(value)
         ? value
         : refuse(path)
+    // Версія — `bigint`: безпечне ціле JS у його межах.
     case "Version":
-    case "LineNumber":
       return Number.isSafeInteger(value) ? String(value) : refuse(path)
+    // Номер рядка — `$n::integer`: значення поза int4 дало б 22003, тобто
+    // command.internal замість відмови з шляхом.
+    case "LineNumber":
+      return typeof value === "number" &&
+        isWithinType({ type: "Integer" }, value)
+        ? String(value)
+        : refuse(path)
     default: {
       const encoded = encodeParam(column.attribute!, value, path)
       return "error" in encoded ? refuse(path) : (encoded.value ?? refuse(path))

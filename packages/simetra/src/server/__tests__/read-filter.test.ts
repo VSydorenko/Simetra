@@ -42,6 +42,16 @@ const columns: ReadonlyMap<string, FilterColumn> = new Map([
       lazy: false,
     },
   ],
+  [
+    "lineNumber",
+    {
+      name: "lineNumber",
+      column: "line_number",
+      castType: "integer",
+      type: "LineNumber",
+      lazy: false,
+    },
+  ],
   fromAttribute("code"),
   fromAttribute("note"),
   fromAttribute("owner", { pgType: "uuid", castType: "uuid" }),
@@ -219,6 +229,17 @@ describe("renderFilter", () => {
     ],
     ["a bad key", cond("ref", "eq", "nope"), "where.value"],
     ["a fractional version", cond("version", "eq", 1.5), "where.value"],
+    // Приведення `$n::integer`: значення поза int4 дало б 22003 і command.internal.
+    [
+      "a line number past int4",
+      cond("lineNumber", "gt", 2_147_483_648),
+      "where.value",
+    ],
+    [
+      "a line number below int4",
+      cond("lineNumber", "in", [1, -2_147_483_649]),
+      "where.value.1",
+    ],
     [
       "the second operand of and",
       { and: [cond("code", "eq", "a"), cond("ctid", "eq", 1)] },
