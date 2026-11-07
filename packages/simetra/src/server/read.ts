@@ -700,7 +700,9 @@ const reasonOf = (issue: z.core.$ZodIssue): string | undefined => {
 // кожного дістає префікс шляху об'єднання, бо відмова називає поле входу, а не
 // місце в гілці. Гілку, що не збіглася з дискримінатором (`invalid_value` на
 // одному сегменті від кореня гілки, тобто літерал `type`), відкидаємо: відправник
-// мав на увазі іншу форму, і її issue лише ховали б справжню відмову. Якщо
+// мав на увазі іншу форму, і її issue лише ховали б справжню відмову. Так само
+// відкидаємо гілку, що забороняє наявне поле (`z.never()` — `operation` чи
+// `batch` запиту `run`): пакет інакше звітував би відсутню `operation`. Якщо
 // відкинуто всі гілки, лишаємо всі.
 const withPath = (
   issue: z.core.$ZodIssue,
@@ -717,16 +719,29 @@ const leavesOf = (
       return [withPath(issue, prefix)]
     }
     const root = [...prefix, ...issue.path]
-    const branches = issue.errors.map((branch) => leavesOf(branch, root))
+    const branches = issue.errors.map((branch) => ({
+      leaves: leavesOf(branch, root),
+      // Заборонене поле — лише власна issue гілки: `never` вкладеного
+      // об'єднання відкидає його гілку, а не зовнішню.
+      forbids: branch.some(
+        (own) =>
+          own.code === "invalid_type" &&
+          own.expected === "never" &&
+          own.path.length === 1
+      ),
+    }))
     const matched = branches.filter(
-      (leaves) =>
+      ({ leaves, forbids }) =>
+        !forbids &&
         !leaves.some(
           (leaf) =>
             leaf.code === "invalid_value" &&
             leaf.path.length === root.length + 1
         )
     )
-    const kept = (matched.length > 0 ? matched : branches).flat()
+    const kept = (matched.length > 0 ? matched : branches).flatMap(
+      (branch) => branch.leaves
+    )
     return kept.length > 0 ? kept : [withPath(issue, prefix)]
   })
 

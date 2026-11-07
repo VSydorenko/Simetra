@@ -105,6 +105,11 @@ export interface CommandRunOptions {
 
 /** The command runtime of one catalog and database. */
 export interface CommandRuntime {
+  /**
+   * The runtime catalog the runtime was created with: parsed by
+   * `runtimeCatalogSchema`, the runtime's own deep-frozen copy.
+   */
+  readonly catalog: RuntimeCatalog
   /** Runs an operation or a batch in one transaction; rejects with `CommandFailure`. */
   run(
     session: SessionClaims,
@@ -260,7 +265,12 @@ function mismatch(catalog: RuntimeCatalog, applied: string | null): never {
 export async function createCommandRuntime(
   options: CommandRuntimeOptions
 ): Promise<CommandRuntime> {
-  const catalog = runtimeCatalogSchema.parse(options.catalog)
+  // Власна копія: обробник конверта бере з неї `serverHash` і `version`, тож
+  // зміна об'єкта host-а після створення не розвела б їх з тим, що рантайм
+  // перевірив проти бази.
+  const catalog = deepFreeze(
+    structuredClone(runtimeCatalogSchema.parse(options.catalog))
+  )
   const objectModules = options.objectModules ?? {}
   checkModules(catalog, objectModules)
   const maxAttempts = limitSchema.parse(options.maxAttempts) ?? 3
@@ -309,12 +319,22 @@ export async function createCommandRuntime(
     readRole: member ? role : undefined,
   }
   return {
+    catalog,
     run: (session, input, options) =>
       runCommand(state, session, input, options?.fullTabularArrays === true),
     // Форму результату задає форма запиту; `readRows` будує її з плану.
     read: <Q extends ReadQuery>(session: SessionClaims, query: Q) =>
       readRows(state, session, query) as Promise<ReadResultOf<Q>>,
   }
+}
+
+/** Заморожує дані каталогу до дна: каталог — чисті дані JSON, без циклів. */
+function deepFreeze<T>(value: T): T {
+  if (value !== null && typeof value === "object") {
+    for (const item of Object.values(value)) deepFreeze(item)
+    Object.freeze(value)
+  }
+  return value
 }
 
 /** Відмова бази в читанні, уже змапована; будь-що інше в транзакції — аномалія. */

@@ -200,6 +200,7 @@ export const checkedRuntime = (
   runtime: CommandRuntime,
   catalog: RuntimeCatalog
 ): CommandRuntime => ({
+  catalog: runtime.catalog,
   run: (session: SessionClaims, input, options) =>
     checked(catalog, input, runtime.run(session, input, options)),
   read: <Q extends ReadQuery>(session: SessionClaims, query: Q) =>

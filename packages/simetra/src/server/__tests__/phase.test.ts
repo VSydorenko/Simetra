@@ -170,6 +170,14 @@ describe("issueReason over the data envelope", () => {
       ["request", "batch"],
     ],
     [
+      // Гілка `operation` забороняє наявний `batch` (`never`): її відсутня
+      // `operation` не ховає відмови самої операції пакета.
+      "a batch with a bad operation",
+      run({ batch: [{ action: "update", object: OBJECT, id: OBJECT }] }),
+      undefined,
+      ["request", "batch", 0, "expectedVersion"],
+    ],
+    [
       "neither operation nor batch",
       run({}),
       undefined,
