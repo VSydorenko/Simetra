@@ -38,6 +38,10 @@ describe("filterSchema", () => {
   it.each<[string, unknown, string]>([
     ["depth 9", nested(9), "where"],
     ["65 nodes", { and: values(64).map(() => leaf()) }, "where"],
+    // Межу перевіряють усі ключі вузла: інакше глибина під другим ключем
+    // доходила б до рекурсії Zod і давала RangeError замість відмови.
+    ["deep or beside and", { and: [leaf()], or: [nested(5000)] }, "where"],
+    ["deep not beside and", { and: [leaf()], not: nested(5000) }, "where"],
     ["an empty and", { and: [] }, "where.and"],
     ["an empty or", { or: [] }, "where.or"],
     [

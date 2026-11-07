@@ -88,10 +88,15 @@ function withinLimits(root: unknown): boolean {
     if (++nodes > FILTER_NODES_MAX || depth > FILTER_DEPTH_MAX) return false
     const node = objectAt(value)
     if (node === undefined) return true
+    // Усі наявні ключі, а не перший: вузол з `and` і `or` (чи `not`) суворий
+    // union однаково відхилить, але лише після рекурсії Zod у глибину другого.
     for (const key of ["and", "or"] as const) {
       const children = node[key]
-      if (Array.isArray(children)) {
-        return children.every((child) => walk(child, depth + 1))
+      if (
+        Array.isArray(children) &&
+        !children.every((child) => walk(child, depth + 1))
+      ) {
+        return false
       }
     }
     return "not" in node ? walk(node.not, depth + 1) : true
