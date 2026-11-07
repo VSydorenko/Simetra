@@ -175,6 +175,16 @@ export const catalogEntrySchema = z.strictObject({
   scopeKindId: z.string().optional(),
   scopeColumn: z.string().optional(),
   /**
+   * The membership catalog of a scope root with a creator: `creatorMember`
+   * maps through it (P4-B spec §3). Equals `operations.create.root.membership`.
+   */
+  creatorMembership: z.guid().optional(),
+  /**
+   * The kernel contract hash (P4-B spec Рд12): SHA-256 of the canonical form
+   * of the entry's operations.
+   */
+  kernelHash: z.string().regex(/^[0-9a-f]{64}$/),
+  /**
    * Whether the object takes a change signal (P4-B spec §8.3): a single
    * `uuid` key and no read boundary but the tenant one.
    */
@@ -187,26 +197,42 @@ export const catalogEntrySchema = z.strictObject({
  * A runtime catalog object: the shared part plus what only T3 needs —
  * constraints, command functions and membership facts.
  */
-export const runtimeObjectSchema = catalogEntrySchema.extend({
-  /**
-   * Лише на довіднику членства: колонка користувача, яку разом із ключем і
-   * скоупом примушує платформа (`creatorMember`, спека П4 §6.13).
-   */
-  membership: z.strictObject({ userColumn: z.string() }).optional(),
-  attributes: z.array(runtimeAttributeSchema),
-  tabularSections: z.array(runtimeSectionSchema),
-  operations: z
-    .strictObject({
-      create: runtimeOperationTargetSchema
-        .extend({ root: runtimeRootCreateSchema.optional() })
-        .optional(),
-      update: runtimeOperationTargetSchema.optional(),
-      markDeletion: runtimeOperationTargetSchema.optional(),
-      delete: runtimeOperationTargetSchema.optional(),
-    })
-    .optional(),
-  constraints: z.array(runtimeConstraintSchema),
-})
+export const runtimeObjectSchema = catalogEntrySchema
+  .extend({
+    /**
+     * Лише на довіднику членства: колонка користувача, яку разом із ключем і
+     * скоупом примушує платформа (`creatorMember`, спека П4 §6.13).
+     */
+    membership: z.strictObject({ userColumn: z.string() }).optional(),
+    attributes: z.array(runtimeAttributeSchema),
+    tabularSections: z.array(runtimeSectionSchema),
+    operations: z
+      .strictObject({
+        create: runtimeOperationTargetSchema
+          .extend({ root: runtimeRootCreateSchema.optional() })
+          .optional(),
+        update: runtimeOperationTargetSchema.optional(),
+        markDeletion: runtimeOperationTargetSchema.optional(),
+        delete: runtimeOperationTargetSchema.optional(),
+      })
+      .optional(),
+    constraints: z.array(runtimeConstraintSchema),
+  })
+  .superRefine((object, ctx) => {
+    // Спільна частина несе довідник членства без `operations` (клієнтський
+    // каталог), тож обидва факти мусять збігатися, інакше клієнт мапив би
+    // `creatorMember` не тим довідником, що його перевіряє ядро.
+    if (
+      object.creatorMembership !== object.operations?.create?.root?.membership
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["creatorMembership"],
+        message:
+          "creatorMembership differs from operations.create.root.membership",
+      })
+    }
+  })
 
 /** The runtime catalog: a projection of the compiled model (P4 spec §6.3). */
 export const runtimeCatalogSchema = z

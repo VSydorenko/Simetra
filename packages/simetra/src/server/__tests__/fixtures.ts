@@ -5,6 +5,7 @@ import {
   type RuntimeCatalog,
   type RuntimeObject,
 } from "simetra/model"
+import { kernelHashOf } from "simetra/compiler"
 
 /**
  * Значення всіх логічних типів: у довідниках фікстури A2 немає `Json`,
@@ -57,6 +58,7 @@ export const sample: RuntimeObject = runtimeObjectSchema.parse({
   keyName: "ref",
   versionColumn: "version",
   versionName: "version",
+  kernelHash: kernelHashOf({}),
   signal: true,
   attributes: [
     attr("code", "String", { maxLength: 3 }),
@@ -137,6 +139,12 @@ export function commandObject(
   }
 ): RuntimeObject {
   const { table, ...rest } = overrides
+  const operations = rest.operations ?? {
+    create: target(table, "save", "create"),
+    update: target(table, "save", "update"),
+    markDeletion: target(table, "mark_deletion", "markDeletion"),
+    delete: target(table, "delete", "delete"),
+  }
   return runtimeObjectSchema.parse({
     id: "00000000-0000-4000-8000-000000000002",
     kind: "Catalog",
@@ -159,15 +167,11 @@ export function commandObject(
       attr("extra", "Json", { column: "extra" }),
     ],
     tabularSections: [],
-    operations: {
-      create: target(table, "save", "create"),
-      update: target(table, "save", "update"),
-      markDeletion: target(table, "mark_deletion", "markDeletion"),
-      delete: target(table, "delete", "delete"),
-    },
+    operations,
     constraints: [],
     ...rest,
     table: { schema: "public", name: table },
+    kernelHash: kernelHashOf(operations),
   })
 }
 
@@ -262,6 +266,7 @@ const rootObject = (name: string, table: string, membership?: string) =>
     scopeColumn: "id",
     attributes: [attr("code", "String", { column: "code", maxLength: 10 })],
     tabularSections: sample.tabularSections,
+    ...(membership === undefined ? {} : { creatorMembership: membership }),
     operations: {
       create: {
         ...target(table, "create_root", "create"),
