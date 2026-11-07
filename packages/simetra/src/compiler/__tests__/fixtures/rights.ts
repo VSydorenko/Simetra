@@ -1627,6 +1627,30 @@ export function readQueryLayer(): Layer {
 }
 
 /**
+ * `runtimeValuesLayer()` з `nonNegative` на `lines.qty`: CHECK з колонкою
+ * реквізиту ТЧ, тобто `23514` з шляхом `lines.qty`. Окремий шар, а не зміна
+ * типового: решта кейсів пише в `qty` будь-які числа.
+ */
+export function gaugeLineCheckLayer(): Layer {
+  const layer = runtimeValuesLayer()
+  const gauge = layer[GAUGE_FILE] as {
+    tabularSections: { attributes: { name: string }[] }[]
+  }
+  return {
+    ...layer,
+    [GAUGE_FILE]: {
+      ...gauge,
+      tabularSections: gauge.tabularSections.map((section) => ({
+        ...section,
+        attributes: section.attributes.map((a) =>
+          a.name === "qty" ? { ...a, nonNegative: true } : a
+        ),
+      })),
+    },
+  }
+}
+
+/**
  * Правило рядка `Gauge` (до `withSql` поверх `runtimeValuesLayer()`): CHECK
  * над двома колонками, тобто без колонки реквізиту. Явне `name` резервується
  * до похідних імен, тож ім'я похідного CHECK може його обійти.

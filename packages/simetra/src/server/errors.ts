@@ -214,9 +214,14 @@ export function mapDatabaseError(
       // невірний текст типу — вхід клієнта. У записі значення вже перевірене.
       return phase?.kind === "read" ? { code: "command.invalid" } : INTERNAL
     case "57014":
-      // `statement_timeout` читання — межа запиту клієнта, а не вада: клієнт
-      // звужує запит (В7). Мапінг фаз запису — разом із бюджетом часу команди.
-      return phase?.kind === "read" ? { code: "command.timeout" } : INTERNAL
+      // `statement_timeout` — межа часу, а не вада: у читанні клієнт звужує
+      // запит (В7), у команді стелю оператора ставить бюджет часу (спека
+      // П4-B §7.1), тож і на `COMMIT` це той самий тайм-аут.
+      return { code: "command.timeout" }
+    case "55P03":
+      // `lock_timeout`: рядок тримає інша транзакція — повтор пізніше може
+      // пройти, тож окремий код, а не збій.
+      return { code: "command.busy" }
     case "23503": {
       // Postgres не заповнює `column` для FK — реквізит за ім'ям обмеження (Р-A3-13).
       const table = tableOf(catalog, phase, error.table)
