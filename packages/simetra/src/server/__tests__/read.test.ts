@@ -148,7 +148,7 @@ describe("prepareRead", () => {
   it("a page without orderBy lists named columns ordered by key", () => {
     // Без `to_jsonb(t)` і без `COLLATE` (Рд29): лише перелік колонок.
     expect(statementOf({ object: ref, limit: 200 })).toEqual({
-      text: `${LIST} ORDER BY "id" LIMIT $1`,
+      text: `${LIST} ORDER BY t."id" LIMIT $1`,
       params: ["200"],
       result: "rows",
     })
@@ -166,7 +166,7 @@ describe("prepareRead", () => {
     ).toEqual({
       text:
         `${LIST} WHERE "code_col" = $1::text` +
-        ` ORDER BY "label_col" DESC NULLS LAST, "id" LIMIT $2 OFFSET $3`,
+        ` ORDER BY t."label_col" DESC NULLS LAST, t."id" LIMIT $2 OFFSET $3`,
       params: ["A", "50", "100"],
       result: "rows",
     })
@@ -183,7 +183,7 @@ describe("prepareRead", () => {
         limit: 1,
       })
     ).toEqual({
-      text: `${LIST} ORDER BY "count_col" NULLS FIRST, "id" DESC LIMIT $1`,
+      text: `${LIST} ORDER BY t."count_col" NULLS FIRST, t."id" DESC LIMIT $1`,
       params: ["1"],
       result: "rows",
     })
@@ -202,7 +202,7 @@ describe("prepareRead", () => {
         limit: 1,
       })
     ).toEqual({
-      text: `${LIST} WHERE ("id" > $1::uuid AND "version" >= $2::bigint) ORDER BY "id" LIMIT $3`,
+      text: `${LIST} WHERE ("id" > $1::uuid AND "version" >= $2::bigint) ORDER BY t."id" LIMIT $3`,
       params: [ID, "2", "1"],
       result: "rows",
     })
@@ -217,7 +217,7 @@ describe("prepareRead", () => {
         limit: 1,
       })
     ).toMatchObject({
-      text: `${LIST} WHERE "label_col" = $1::character varying ORDER BY "id" LIMIT $2`,
+      text: `${LIST} WHERE "label_col" = $1::character varying ORDER BY t."id" LIMIT $2`,
     })
   })
 
@@ -232,7 +232,7 @@ describe("prepareRead", () => {
   it("list omits a lazy text-encoded column, the card keeps it", () => {
     const listed = `jsonb_build_object('id', t."id", 'version', t."version", 'code_col', t."code_col")::text`
     expect(statementOf({ object: LAZY, limit: 1 })).toMatchObject({
-      text: `SELECT ${listed} ${FROM} ORDER BY "id" LIMIT $1`,
+      text: `SELECT ${listed} ${FROM} ORDER BY t."id" LIMIT $1`,
     })
     expect(statementOf({ object: LAZY, id: ID })).toMatchObject({
       text: `SELECT (to_jsonb(t) || jsonb_build_object('amount_col', t."amount_col"::text))::text ${FROM} WHERE "id" = $1::uuid LIMIT 1`,
@@ -247,7 +247,7 @@ describe("prepareRead", () => {
     expect(statementOf({ object: WIDE, limit: 1 })).toMatchObject({
       text:
         `SELECT (jsonb_build_object(${pairs.slice(0, 50).join(", ")}) || ` +
-        `jsonb_build_object(${pairs.slice(50).join(", ")}))::text ${FROM} ORDER BY "id" LIMIT $1`,
+        `jsonb_build_object(${pairs.slice(50).join(", ")}))::text ${FROM} ORDER BY t."id" LIMIT $1`,
     })
   })
 
@@ -452,7 +452,7 @@ describe("executeRead include", () => {
           `SELECT jsonb_build_object('id', t."id", 'version', t."version", ` +
           `'code', t."code", 'region_id', t."region_id", ` +
           `'backup_id', t."backup_id", 'ghost_id', t."ghost_id")::text ` +
-          `${LINK_FROM} ORDER BY "id" LIMIT $1`,
+          `${LINK_FROM} ORDER BY t."id" LIMIT $1`,
         params: ["10"],
         object: "Link",
       },
@@ -526,7 +526,7 @@ describe("tabular sections", () => {
     `'bigs_col', t."bigs_col"::text[]))::text`
   const PAGE = (
     where: string,
-    order = `"line_number", "id"`,
+    order = `t."line_number", t."id"`,
     tail = "LIMIT $3"
   ) =>
     `FROM (SELECT ${line("t")} AS r, row_number() OVER (ORDER BY ${order}) AS n` +
@@ -623,7 +623,7 @@ describe("tabular sections", () => {
         `SELECT ${AGG} ` +
         PAGE(
           `("parent_id" = $1::uuid OR "parent_id" = $2::uuid)`,
-          `"line_number" DESC, "id"`,
+          `t."line_number" DESC, t."id"`,
           "LIMIT $3 OFFSET $4"
         ),
       params: [OTHER, ID, "10", "5"],
@@ -767,5 +767,72 @@ describe("tabular sections", () => {
   ])("reads %s", async (_, query, rows, expected) => {
     const { result } = await execute(query, [rows])
     expect(result).toEqual(expected)
+  })
+})
+
+describe("ORDER BY names table columns, not output columns", () => {
+  // Голе ім'я в `ORDER BY` Postgres спершу шукає серед вихідних колонок:
+  // колонка `row` списку чи `r` сторінки ТЧ сортувала б за текстом jsonb.
+  const [section] = sample.tabularSections
+  const shadowing = runtimeObjectSchema.parse({
+    ...sample,
+    id: "00000000-0000-4000-8000-000000000006",
+    name: "Shadow",
+    table: { schema: "public", name: "shadow" },
+    attributes: [{ ...attributeOf("code"), name: "row", column: "row" }],
+    tabularSections: [
+      {
+        ...section,
+        attributes: [{ ...attributeOf("code"), name: "r", column: "r" }],
+      },
+    ],
+  })
+  const SHADOW = { kind: "Catalog" as const, name: "Shadow" }
+  const shadowCatalog = runtimeCatalogSchema.parse({
+    format: 1,
+    snapshotHash: "hash-1",
+    provider: "supabase",
+    objects: [shadowing],
+  })
+  const textOf = (query: unknown) => {
+    const prepared = prepareRead(shadowCatalog, query)
+    if ("error" in prepared) throw new Error(prepared.error.code)
+    return prepared.plan.statement.text
+  }
+
+  it("a list column named row", () => {
+    expect(
+      textOf({
+        object: SHADOW,
+        orderBy: [{ attribute: "row", direction: "desc" }],
+        limit: 10,
+      })
+    ).toBe(
+      `SELECT jsonb_build_object('id', t."id", 'version', t."version", 'row', t."row")::text` +
+        ` AS row FROM "public"."shadow" t ORDER BY t."row" DESC, t."id" LIMIT $1`
+    )
+  })
+
+  it("a section page column named r, by orderBy and by default", () => {
+    const line =
+      `jsonb_build_object('id', t."id", 'parent_id', t."parent_id", ` +
+      `'line_number', t."line_number", 'r', t."r")`
+    const page = (order: string) =>
+      `SELECT jsonb_build_object('sample_lines', coalesce(jsonb_agg(x.r ORDER BY x.n), '[]'))::text` +
+      ` AS tabular FROM (SELECT ${line} AS r, row_number() OVER (ORDER BY ${order}) AS n` +
+      ` FROM "public"."sample_lines" t WHERE "r" = $1::text ORDER BY ${order} LIMIT $2) x`
+    const where = { attribute: "r", op: "eq", value: "A" }
+    expect(
+      textOf({
+        object: SHADOW,
+        tabularSection: "lines",
+        where,
+        orderBy: [{ attribute: "r", direction: "asc" }],
+        limit: 10,
+      })
+    ).toBe(page(`t."r", t."id"`))
+    expect(
+      textOf({ object: SHADOW, tabularSection: "lines", where, limit: 10 })
+    ).toBe(page(`t."line_number", t."id"`))
   })
 })

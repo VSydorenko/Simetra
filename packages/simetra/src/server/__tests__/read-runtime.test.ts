@@ -57,7 +57,7 @@ const byId = {
   params: [OTHER],
 }
 const byCode = {
-  text: `${LIST} WHERE ("code" = $1::text AND "id" > $2::uuid) ORDER BY "id" LIMIT $3`,
+  text: `${LIST} WHERE ("code" = $1::text AND "id" > $2::uuid) ORDER BY t."id" LIMIT $3`,
   params: ["R", ID, "200"],
 }
 const page: ReadQuery = {

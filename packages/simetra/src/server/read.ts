@@ -287,7 +287,9 @@ interface OrderKey {
  * потім ключ (В4) — порядок сталий, і keyset-умові фільтра є на що
  * спертися. Без явного `COLLATE` (Рд29). Ключ не останнім і понад
  * `ORDER_BY_MAX` реквізитів відхиляє будівник, а не схема: ім'я ключа знає
- * лише каталог.
+ * лише каталог. Кожен член — з аліасом `t`: голе ім'я в `ORDER BY` Postgres
+ * спершу шукає серед вихідних колонок, і колонка `row` списку чи `r`
+ * сторінки ТЧ сортувала б за текстом jsonb, а `LIMIT` брав би чужу сторінку.
  */
 function orderClause(
   key: OrderKey,
@@ -303,7 +305,8 @@ function orderClause(
   if (entries.length - (keyAt === -1 ? 0 : 1) > ORDER_BY_MAX) {
     return invalid("orderBy")
   }
-  const terms: string[] = orderBy === undefined ? [...defaults] : []
+  const terms: string[] =
+    orderBy === undefined ? defaults.map((column) => `t.${ident(column)}`) : []
   for (const [i, entry] of entries.entries()) {
     const column = columns.get(entry.attribute)
     const path = `orderBy.${i}.attribute`
@@ -314,9 +317,9 @@ function orderClause(
     const direction = entry.direction === "desc" ? " DESC" : ""
     const nulls =
       entry.nulls === undefined ? "" : ` NULLS ${entry.nulls.toUpperCase()}`
-    terms.push(`${ident(column.column)}${direction}${nulls}`)
+    terms.push(`t.${ident(column.column)}${direction}${nulls}`)
   }
-  if (keyAt === -1) terms.push(ident(key.column))
+  if (keyAt === -1) terms.push(`t.${ident(key.column)}`)
   return { sql: terms.join(", ") }
 }
 
@@ -514,7 +517,7 @@ function buildSectionPlan(
     { name: section.keyName, column: section.key },
     columns,
     query.orderBy,
-    [ident(section.lineNumber)]
+    [section.lineNumber]
   )
   if ("error" in order) return order
   // Версія власника — тим самим оператором, тобто з того самого знімка.
