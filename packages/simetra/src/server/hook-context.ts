@@ -167,8 +167,8 @@ function contextOf(tx: Transaction, phase: HookPhase, scope: Scope) {
         const depth = frame.depth + 1
         if (depth > tx.state.maxDepth) tx.abort({ code: "command.depth" })
         // Глибина не обмежує ширини: хук у циклі інакше тримав би транзакцію
-        // й замки на будь-якій кількості фаз. Фази вхідного пакета обмежує
-        // його схема, тож тут лічаться лише фази `ctx.run`.
+        // й замки на будь-якій кількості фаз. Лічаться лише фази `ctx.run`:
+        // межа вхідного пакета — окремий вхідний контракт (B1b-2).
         if (++tx.nestedPhases > BATCH_MAX) {
           tx.abort({ code: "command.depth", reason: "phases" })
         }

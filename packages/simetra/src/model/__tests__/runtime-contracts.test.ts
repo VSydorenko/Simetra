@@ -168,8 +168,10 @@ describe("batchSchema", () => {
   it("rejects an empty batch", () => {
     expect(batchSchema.safeParse([]).success).toBe(false)
   })
+})
 
-  it("caps the phases of one transaction at 500", () => {
+describe("BATCH_MAX", () => {
+  it("is 500", () => {
     expect(BATCH_MAX).toBe(500)
   })
 })
