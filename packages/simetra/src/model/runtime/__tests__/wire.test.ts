@@ -164,6 +164,23 @@ describe("encodeRow / decodeRow values", () => {
     ["Integer as a string", attr("Integer"), "5"],
     ["Numeric as a number", attr("Numeric"), 10.5],
     ["DateTime infinity", attr("DateTime"), "infinity"],
+    ["DateTime on a missing day", attr("DateTime"), "2026-02-30T10:00:00Z"],
+    ["DateTime at hour 24", attr("DateTime"), "2026-11-07T24:00:00Z"],
+    ["DateTime at minute 60", attr("DateTime"), "2026-11-07T10:60:00Z"],
+    ["DateTime at second 60", attr("DateTime"), "2026-11-07T10:00:60Z"],
+    // Обидва в межах року локально, але поза 1–9999 в UTC.
+    [
+      "DateTime past year 9999 in UTC",
+      attr("DateTime"),
+      "9999-12-31T23:00:00-05:00",
+    ],
+    [
+      "DateTime before year 1 in UTC",
+      attr("DateTime"),
+      "0001-01-01T00:00:00+01:00",
+    ],
+    ["Integer as a fraction", attr("Integer"), 1.5],
+    ["SmallInt as a fraction", attr("SmallInt"), 1.5],
     ["array as a scalar", attr("Integer", { array: true }), 1],
   ])("rejects a wire %s with its column", (_, attribute, value) => {
     expect(() => decodeRow(only(attribute), { v_col: value })).toThrow(
@@ -174,9 +191,24 @@ describe("encodeRow / decodeRow values", () => {
     )
   })
 
+  it.each<[string, WireRow, string]>([
+    ["a non-string label", { v_type: 1, v_col: ID }, "v_type"],
+    ["only the label column", { v_type: "project" }, "v_col"],
+    ["only the value column", { v_col: ID }, "v_type"],
+  ])("rejects a wire pair with %s", (_, raw, column) => {
+    expect(() => decodeRow(only(EXTRA.pair!.attribute), raw)).toThrow(
+      expect.objectContaining({ name: "WireDecodeError", column }) as Error
+    )
+  })
+
   it("drops an unknown enumeration label and pair target (В9)", () => {
     expect(
       decodeRow(only(EXTRA.enumeration!.attribute), { v_col: "new" })
+    ).toEqual({})
+    expect(
+      decodeRow(only({ ...EXTRA.enumeration!.attribute, array: true }), {
+        v_col: ["open", "new"],
+      })
     ).toEqual({})
     expect(
       decodeRow(only(EXTRA.pair!.attribute), { v_type: "region", v_col: ID })
@@ -305,6 +337,18 @@ describe("encodeRow / decodeRow rows", () => {
         tabularSections: { [SECTION_ID]: [{ line_number: 1 }] },
       })
     ).toThrow(expect.objectContaining({ column: "line_number" }) as Error)
+  })
+
+  it.each([
+    ["lines that are not an array", { [SECTION_ID]: {} }],
+    ["a line that is not an object", { [SECTION_ID]: [5] }],
+  ])("rejects a card row with %s by the section id", (_, tabularSections) => {
+    expect(() => decodeRow(entry, { tabularSections })).toThrow(
+      expect.objectContaining({
+        name: "WireDecodeError",
+        column: SECTION_ID,
+      }) as Error
+    )
   })
 
   it("never lets __proto__ or constructor alter the prototype or add a field", () => {

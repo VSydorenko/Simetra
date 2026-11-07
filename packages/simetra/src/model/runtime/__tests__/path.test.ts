@@ -101,6 +101,28 @@ describe("pathToWire / pathFromWire", () => {
     expect(pathFromWire(index, OBJECT_ID, wire)).toBe(logical)
   })
 
+  // `id` не в таблиці: T3 досі видає структурний `id`, а `pathFromWire`
+  // читає його як колонку ключа. B1b-2 (задача 5 плану, рішення П4) лишає
+  // в шляху T3 лише `keyName`.
+  it.each([
+    "action",
+    "values",
+    "tabularSections",
+    "creatorMember",
+    "orderBy.0.attribute",
+    "include.0",
+    "tabularSections.0",
+    "tabularSection",
+    "expectedVersion",
+    "title",
+    "lines.0.qty",
+    "creatorMember.user",
+  ])("pathFromWire inverts pathToWire for %s", (path) => {
+    expect(
+      pathFromWire(index, OBJECT_ID, pathToWire(index, OBJECT_ID, path))
+    ).toBe(path)
+  })
+
   it("maps an attribute named like a structural word to its column", () => {
     expect(pathToWire(index, ODD_ID, "values")).toBe("values_col")
     expect(pathFromWire(index, ODD_ID, "values_col")).toBe("values")
