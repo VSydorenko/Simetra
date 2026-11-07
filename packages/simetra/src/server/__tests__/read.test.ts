@@ -69,6 +69,20 @@ const wideObject = runtimeObjectSchema.parse({
   })),
 })
 
+// Картка з понад 50 текстовими приведеннями (`bigint`): один
+// `jsonb_build_object` отримав би понад 100 аргументів.
+const WIDE_TEXT = { kind: "Catalog" as const, name: "WideText" }
+const wideTextObject = runtimeObjectSchema.parse({
+  ...sample,
+  id: "00000000-0000-4000-8000-000000000006",
+  name: "WideText",
+  attributes: wideColumns.map((column) => ({
+    ...attributeOf("big"),
+    name: column,
+    column,
+  })),
+})
+
 // ТЧ скоупленого власника: FK рядка — складений `(org_id, parent_id)`.
 const SCOPED = { kind: "Catalog" as const, name: "Scoped" }
 const [lines] = sample.tabularSections
@@ -99,7 +113,15 @@ const catalog = runtimeCatalogSchema.parse({
   format: 1,
   snapshotHash: "hash-1",
   provider: "supabase",
-  objects: [object, lazyObject, wideObject, region, link, scopedObject],
+  objects: [
+    object,
+    lazyObject,
+    wideObject,
+    wideTextObject,
+    region,
+    link,
+    scopedObject,
+  ],
 })
 
 const FROM = `AS row FROM "public"."sample" t`
@@ -248,6 +270,15 @@ describe("prepareRead", () => {
       text:
         `SELECT (jsonb_build_object(${pairs.slice(0, 50).join(", ")}) || ` +
         `jsonb_build_object(${pairs.slice(50).join(", ")}))::text ${FROM} ORDER BY t."id" LIMIT $1`,
+    })
+  })
+
+  it("a card with over 50 text casts projects them in chunks of 50 pairs", () => {
+    const pairs = wideColumns.map((c) => `'${c}', t."${c}"::text`)
+    expect(statementOf({ object: WIDE_TEXT, id: ID })).toMatchObject({
+      text:
+        `SELECT (to_jsonb(t) || (jsonb_build_object(${pairs.slice(0, 50).join(", ")}) || ` +
+        `jsonb_build_object(${pairs.slice(50).join(", ")})))::text ${FROM} WHERE "id" = $1::uuid LIMIT 1`,
     })
   })
 
