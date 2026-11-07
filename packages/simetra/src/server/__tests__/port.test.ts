@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest"
 import { fromPgPool, normalizeError, type PgPoolLike } from "../port"
 
+type ErrorListener = (error: Error) => void
+
 function fakePool() {
   const calls: unknown[] = []
+  // Емітер події `error` клієнта: лише те, що читає порт.
+  const listeners = new Set<ErrorListener>()
   const pool: PgPoolLike = {
     async connect() {
       calls.push("connect")
@@ -14,10 +18,21 @@ function fakePool() {
         release(destroy) {
           calls.push({ release: destroy })
         },
+        on(_event, listener) {
+          listeners.add(listener)
+        },
+        removeListener(_event, listener) {
+          listeners.delete(listener)
+        },
       }
     },
   }
-  return { pool, calls }
+  // Як `EventEmitter`: подія `error` без слухача кидає з `emit`, тобто з процесу.
+  const emitError = (error: Error) => {
+    if (listeners.size === 0) throw error
+    for (const listener of listeners) listener(error)
+  }
+  return { pool, calls, listeners, emitError }
 }
 
 describe("fromPgPool", () => {
@@ -52,6 +67,40 @@ describe("fromPgPool", () => {
       expect(types.getTypeParser(oid, "text")("t")).toBe("t")
     }
   })
+})
+
+// pg-pool знімає свого слухача простою при видачі: `FATAL` простоюючого
+// клієнта (`idle_in_transaction_session_timeout`) без слухача порту валив би
+// процес, а наступний запит `pg` відхилив би без SQLSTATE.
+describe("fromPgPool error listener", () => {
+  const fatal = () =>
+    Object.assign(new Error("terminating connection"), { code: "25P03" })
+
+  it("keeps the first error event and rejects the next query with it", async () => {
+    const { pool, calls, emitError } = fakePool()
+    const client = await fromPgPool(pool).connect()
+    await client.query("SELECT 1")
+    const first = fatal()
+    expect(() => emitError(first)).not.toThrow()
+    emitError(new Error("Connection terminated unexpectedly"))
+    await expect(client.query("ROLLBACK")).rejects.toBe(first)
+    await expect(client.query("ROLLBACK")).rejects.toMatchObject({
+      code: "25P03",
+    })
+    // Мертвому з'єднанню запит не надсилається.
+    expect(calls).toEqual(["connect", { query: expect.anything() }])
+  })
+
+  it.each([undefined, true])(
+    "release(%s) removes the listener",
+    async (destroy) => {
+      const { pool, listeners } = fakePool()
+      const client = await fromPgPool(pool).connect()
+      expect(listeners.size).toBe(1)
+      client.release(destroy)
+      expect(listeners.size).toBe(0)
+    }
+  )
 })
 
 type RawTypes = {

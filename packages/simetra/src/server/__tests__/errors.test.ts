@@ -11,12 +11,12 @@ import { buildRuntimeCatalog } from "simetra/compiler"
 import {
   GAUGE_TABLE,
   compileRights,
+  gaugeLineCheckLayer,
   gaugeRowRule,
   policyDomain,
-  runtimeValuesLayer,
   withSql,
 } from "../../compiler/__tests__/fixtures/rights"
-import { mapDatabaseError } from "../errors"
+import { logsDatabaseError, mapDatabaseError } from "../errors"
 import type { DatabaseError } from "../port"
 import { orgMember, organization, rootCatalog, sample } from "./fixtures"
 
@@ -368,20 +368,18 @@ describe("mapDatabaseError", () => {
     expect(map(fields)).toEqual(internal)
   })
 
-  // Межа часу читання — відповідь, а не збій (В7); у записі — B1b.
-  it("57014 in a read is command.timeout", () => {
-    expect(
-      mapDatabaseError(db({ code: "57014" }), catalog, { kind: "read", object })
-    ).toEqual({ code: "command.timeout" })
-  })
-
+  // Межі часу й замка — відповідь, а не збій (спека П4-B §7.1): клієнт
+  // повторює пізніше чи звужує запит; у будь-якій фазі й на `COMMIT`.
   it.each([
-    ["in a write", phase],
-    ["outside a phase", undefined],
-  ])("57014 %s is command.internal", (_, at) => {
-    expect(mapDatabaseError(db({ code: "57014" }), catalog, at)).toEqual(
-      internal
-    )
+    ["55P03", "a write", "command.busy", phase],
+    ["55P03", "a read", "command.busy", { kind: "read" as const, object }],
+    ["57014", "a write", "command.timeout", phase],
+    ["57014", "a read", "command.timeout", { kind: "read" as const, object }],
+    ["57014", "no phase", "command.timeout", undefined],
+  ])("%s in %s is %s and not logged", (code, _, expected, at) => {
+    const mapped = mapDatabaseError(db({ code }), catalog, at)
+    expect(mapped).toEqual({ code: expected })
+    expect(logsDatabaseError(db({ code }), mapped)).toBe(false)
   })
 
   it("22P02 in a read is command.invalid", () => {
@@ -432,7 +430,7 @@ describe("mapDatabaseError on a compiled CHECK", () => {
   let gauge: RuntimeObject
   beforeAll(async () => {
     const { model, diagnostics } = await compileRights(
-      withSql(policyDomain(runtimeValuesLayer()), gaugeRowRule())
+      withSql(policyDomain(gaugeLineCheckLayer()), gaugeRowRule())
     )
     expect(diagnostics).toEqual([])
     compiled = buildRuntimeCatalog(model!)
@@ -454,6 +452,21 @@ describe("mapDatabaseError on a compiled CHECK", () => {
       code: "command.constraint",
       kind: "check",
       attributes,
+    })
+  })
+
+  // Таблиця ТЧ: реквізит — під шляхом `<ТЧ>.<реквізит>`, як у `23502`/`23505`.
+  it("23514 by a section attribute CHECK names the section path", () => {
+    expect(
+      onGauge({
+        code: "23514",
+        table: "gauge_lines",
+        constraint: "gauge_lines_qty_bounds",
+      })
+    ).toEqual({
+      code: "command.constraint",
+      kind: "check",
+      attributes: ["lines.qty"],
     })
   })
 

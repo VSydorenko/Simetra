@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks"
-import { CommandFailure } from "simetra/model"
+import { BATCH_MAX, CommandFailure } from "simetra/model"
 import type {
   CommandError,
   HookContext,
@@ -166,6 +166,12 @@ function contextOf(tx: Transaction, phase: HookPhase, scope: Scope) {
         // кореневий `ctx` не обнуляє її.
         const depth = frame.depth + 1
         if (depth > tx.state.maxDepth) tx.abort({ code: "command.depth" })
+        // Глибина не обмежує ширини: хук у циклі інакше тримав би транзакцію
+        // й замки на будь-якій кількості фаз. Лічаться лише фази `ctx.run`:
+        // межа вхідного пакета — окремий вхідний контракт (B1b-2).
+        if (++tx.nestedPhases > BATCH_MAX) {
+          tx.abort({ code: "command.depth", reason: "phases" })
+        }
         return frames.run({ ...frame, depth }, () => phase.runNested(operation))
       }),
     // Форму результату задає форма запиту; `executeRead` будує її з плану.

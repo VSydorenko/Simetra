@@ -29,10 +29,31 @@ export const CLAIMS = {
     "set_config('TimeZone', 'UTC', true), set_config('bytea_output', 'hex', true)",
   params: [JSON.stringify(session)],
 }
-/** Межа часу серверного читання — перший оператор після `BEGIN`; типово 15 с. */
-export const readTimeout = (ms = "15000") => ({
+/** `statement_timeout` окремим оператором: межа читання, прелюдія бюджету команди. */
+export const statementTimeout = (ms: string) => ({
   text: "SELECT set_config('statement_timeout', $1, true)",
   params: [ms],
+})
+/** Межа часу серверного читання — перший оператор після `BEGIN`; типово 15 с. */
+export const readTimeout = (ms = "15000") => statementTimeout(ms)
+/**
+ * Claims команди: claims читання плюс межі часу транзакції. Типово — бюджет
+ * 60 с (стеля оператора 30 с, простій і `transaction_timeout` — 61 с) і
+ * `lock_timeout` 5 с.
+ */
+export const commandClaims = (
+  statement = "30000",
+  lock = "5000",
+  idle = "61000"
+) => ({
+  text:
+    CLAIMS.text +
+    ", set_config('statement_timeout', $2, true)" +
+    ", set_config('lock_timeout', $3, true)" +
+    ", set_config('idle_in_transaction_session_timeout', $4, true)" +
+    ", CASE WHEN current_setting('server_version_num')::int >= 170000" +
+    " THEN set_config('transaction_timeout', $4, true) END",
+  params: [JSON.stringify(session), statement, lock, idle],
 })
 export const READ_TIMEOUT = readTimeout()
 export const ROLE = { text: 'SET LOCAL ROLE "simetra_command"', params: [] }
@@ -45,7 +66,7 @@ export const ROLLBACK = { text: "ROLLBACK", params: [] }
 export const OPEN: Call[] = [
   { connect: true },
   BEGIN,
-  CLAIMS,
+  commandClaims(),
   ROLE,
   CURRENT_USER,
 ]

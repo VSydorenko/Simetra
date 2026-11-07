@@ -30,6 +30,8 @@ export interface PgPoolLike {
       types: typeof RAW_TYPES
     }): Promise<{ rows: Record<string, unknown>[]; command: string }>
     release(destroy?: boolean): void
+    on(event: "error", listener: (error: Error) => void): unknown
+    removeListener(event: "error", listener: (error: Error) => void): unknown
   }>
 }
 
@@ -47,8 +49,19 @@ export function fromPgPool(pool: PgPoolLike): CommandDatabase {
   return {
     async connect() {
       const client = await pool.connect()
+      // pg-pool знімає свого слухача `error` при видачі клієнта: `FATAL`
+      // простоюючого з'єднання (напр. `25P03` між операторами, поки хук
+      // чекає) без слухача став би необробленою подією й валив би процес.
+      // Після першої помилки `pg` відхиляє запити загальною «not queryable»
+      // без SQLSTATE — тож відхиляємо саму першу помилку з її кодом.
+      let failure: { error: Error } | undefined
+      const onError = (error: Error) => {
+        failure ??= { error }
+      }
+      client.on("error", onError)
       return {
         async query(text, params) {
+          if (failure !== undefined) throw failure.error
           // Без `name`: іменований оператор `pg` готує на з'єднанні, а
           // пулер у режимі транзакцій міняє з'єднання між транзакціями.
           const { rows, command } = await client.query({
@@ -59,6 +72,9 @@ export function fromPgPool(pool: PgPoolLike): CommandDatabase {
           return { rows, command }
         },
         release(destroy) {
+          // Повернений у пул клієнт знову слухає сам пул; наш слухач тримав
+          // би замикання порту й копився б з кожною видачею.
+          client.removeListener("error", onError)
           client.release(destroy)
         },
       }

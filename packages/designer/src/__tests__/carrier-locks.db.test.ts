@@ -4,7 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import { compile } from "simetra/compiler"
 import { engineScope, renderDesiredState } from "simetra/schema"
 import { CHECKLIST_TABLE, policyDomain } from "../../../simetra/test/support"
-import { inTarget } from "./support/db"
+import { heldResource, inTarget } from "./support/db"
 
 /**
  * Блокування тригерів копій носіїв (спека прав §5.2): чи
@@ -32,39 +32,17 @@ const errorCode = (pending: Promise<unknown>) =>
  * Ціль `policyDomain()`, відкрита на весь опис (одне розгортання на опис):
  * `inTarget` тримає тінь, доки `close` не відпустить колбек.
  */
-function heldTarget() {
-  let release: (() => void) | undefined
-  let held: Promise<void> | undefined
-  return {
-    open: async (): Promise<string> => {
-      const result = await compile(policyDomain())
-      expect(result.diagnostics).toEqual([])
-      const model = result.model!
-      const released = new Promise<void>((resolve) => (release = resolve))
-      let loaded: ((url: string) => void) | undefined
-      const ready = new Promise<string>((resolve) => (loaded = resolve))
-      held = inTarget(
-        renderDesiredState(model).sql,
-        (await engineScope(model)).scope,
-        async (url) => {
-          loaded?.(url)
-          await released
-        }
-      )
-      // Тінь, що не завантажилась, завершує `held` раніше за `ready`
-      return Promise.race([
-        ready,
-        held.then(() => {
-          throw new Error("target closed before the scenario")
-        }),
-      ])
-    },
-    close: async () => {
-      release?.()
-      await held
-    },
-  }
-}
+const heldTarget = () =>
+  heldResource<string>(async (use) => {
+    const result = await compile(policyDomain())
+    expect(result.diagnostics).toEqual([])
+    const model = result.model!
+    await inTarget(
+      renderDesiredState(model).sql,
+      (await engineScope(model)).scope,
+      use
+    )
+  })
 
 describe("carrier copy locks", () => {
   const target = heldTarget()
@@ -74,6 +52,7 @@ describe("carrier copy locks", () => {
     m1: randomUUID(),
     m2: randomUUID(),
     task: randomUUID(),
+    next: randomUUID(),
     row: randomUUID(),
   }
 
@@ -90,10 +69,12 @@ describe("carrier copy locks", () => {
           [member, ids.org]
         )
       }
-      await owner.query(
-        "INSERT INTO public.task (id, org_id, date, assignee_id) VALUES ($1, $2, now(), $3)",
-        [ids.task, ids.org, ids.m2]
-      )
+      for (const task of [ids.task, ids.next]) {
+        await owner.query(
+          "INSERT INTO public.task (id, org_id, date, assignee_id) VALUES ($1, $2, now(), $3)",
+          [task, ids.org, ids.m2]
+        )
+      }
       await owner.query(
         `INSERT INTO public.${CHECKLIST_TABLE} (id, org_id, parent_id, line_number, note) VALUES ($1, $2, $3, 1, 'a')`,
         [ids.row, ids.org, ids.task]
@@ -133,6 +114,35 @@ describe("carrier copy locks", () => {
           second.query(
             `INSERT INTO public.${CHECKLIST_TABLE} (org_id, parent_id, line_number) VALUES ($1, $2, 2)`,
             [ids.org, ids.task]
+          )
+        )
+      ).toBe("55P03")
+      await first.query("ROLLBACK")
+    } finally {
+      await first.end()
+      await second.end()
+    }
+  })
+
+  // Зміна зв'язку рядка ТЧ виводить копію з нового власника тим самим
+  // `FOR SHARE`, що й вставка: рядок не переїде до власника, якого змінює
+  // незакомічена транзакція. `lock_timeout` дає `55P03` — у рантаймі це
+  // `command.busy`. `FOR NO KEY UPDATE` сумісний з `FOR KEY SHARE` FK.
+  it("moving a tabular row to another owner waits for the new owner row lock", async () => {
+    const first = await session(url)
+    const second = await session(url)
+    try {
+      await first.query("BEGIN")
+      await first.query(
+        "SELECT id FROM public.task WHERE id = $1 FOR NO KEY UPDATE",
+        [ids.next]
+      )
+      await second.query("SET lock_timeout = '200ms'")
+      expect(
+        await errorCode(
+          second.query(
+            `UPDATE public.${CHECKLIST_TABLE} SET parent_id = $1 WHERE id = $2`,
+            [ids.next, ids.row]
           )
         )
       ).toBe("55P03")

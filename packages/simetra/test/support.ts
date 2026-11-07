@@ -18,6 +18,7 @@ export {
   adminRoles,
   commandCoreLayer,
   GAUGE_FILE,
+  gaugeLineCheckLayer,
   GAUGE_LOG_FILE,
   GAUGE_LOG_TABLE,
   GAUGE_TABLE,

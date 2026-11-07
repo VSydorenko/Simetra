@@ -413,19 +413,20 @@ describe("rights administration commands over a planned and applied target", () 
 
       const createRole = async (rt: CommandRuntime) => {
         const id = randomUUID()
+        const line = deltaLine("allow")
         const { rows } = await rt.run(admin().session, {
           action: "create",
           object: ROLES,
           id,
           values: { org: org.id, archetype: TASK_VIEWER_ID },
-          tabularSections: { delta: [deltaLine("allow")] },
+          tabularSections: { delta: [line] },
         })
-        return { id, version: rows[0]!.version as number }
+        return { id, version: rows[0]!.version as number, line: line.ref }
       }
 
       it("creates, updates and marks a custom role", async () => {
         const { rt } = await runtime()
-        const { id, version } = await createRole(rt)
+        const { id, version, line } = await createRole(rt)
         const journal = await env.owner.query(
           "SELECT DISTINCT actor::text AS actor, reason FROM simetra.rights_journal WHERE row_id = $1",
           [id]
@@ -440,6 +441,8 @@ describe("rights administration commands over a planned and applied target", () 
           id,
           expectedVersion: version,
           tabularSections: { delta: [deltaLine("deny")] },
+          // Масив ТЧ — повна заміна: рядок, що зникає, названо явно.
+          deleteIds: { delta: [line] },
         })
         expect(updated.rows[0]!.version).toBe(version + 1)
         const delta = await env.owner.query(
@@ -1156,6 +1159,12 @@ describe("rights administration commands over a planned and applied target", () 
                     effect,
                     ...(dimension === null ? {} : { dimension }),
                   })),
+              },
+              // Рядки-сироти видаляються явно: масив ТЧ — повна заміна.
+              deleteIds: {
+                delta: orphans.deltas
+                  .filter((o) => o.role === d.role)
+                  .map((o) => o.id),
               },
             })),
           ])

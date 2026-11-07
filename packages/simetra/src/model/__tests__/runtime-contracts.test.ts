@@ -1,5 +1,6 @@
 import { describe, expect, expectTypeOf, it } from "vitest"
 import {
+  BATCH_MAX,
   batchSchema,
   castTypeSchema,
   defineObjectModule,
@@ -7,6 +8,7 @@ import {
   operationSchema,
   readQuerySchema,
   runtimeAttributeSchema,
+  TABULAR_LINES_MAX,
   runtimeCatalogSchema,
   sessionClaimsSchema,
   type ObjectModule,
@@ -44,6 +46,10 @@ describe("operationSchema", () => {
       "create with expectedVersion",
       { action: "create", object, id, expectedVersion: 1 },
     ],
+    // Сторож умови безпеки `deleteIds` (Ф3): сувора перевірка ТЧ без замка
+    // покладається на обов'язковий `expectedVersion` у `update`. Якщо поле
+    // колись стане необов'язковим, перевірка без нього мусить відмовляти,
+    // а не пропускати (`checkTabularRows`, `server/phase.ts`).
     ["update without expectedVersion", { action: "update", object, id }],
     [
       "markDeletion without mark",
@@ -68,9 +74,105 @@ describe("operationSchema", () => {
   })
 })
 
+/** `n` різних UUID: номер у хвостовій групі. */
+const uniqueIds = (n: number) =>
+  Array.from(
+    { length: n },
+    (_, i) => `0f9a3c1e-5b7d-4e2a-9c8b-${i.toString(16).padStart(12, "0")}`
+  )
+
+describe("operationSchema deleteIds", () => {
+  const other = "1f9a3c1e-5b7d-4e2a-9c8b-1d2e3f4a5b6c"
+  const update = (extra: object) => ({
+    action: "update",
+    object,
+    id,
+    expectedVersion: 1,
+    tabularSections: { Lines: [] },
+    ...extra,
+  })
+
+  it("accepts deleteIds of a section the update carries", () => {
+    expect(
+      operationSchema.safeParse(
+        update({ deleteIds: { Lines: [id, nonRfcId] } })
+      ).success
+    ).toBe(true)
+  })
+
+  it.each<[string, object, string]>([
+    [
+      "a section outside tabularSections",
+      update({ deleteIds: { Other: [id] } }),
+      "deleteIds.Other",
+    ],
+    [
+      "deleteIds without tabularSections",
+      {
+        action: "update",
+        object,
+        id,
+        expectedVersion: 1,
+        deleteIds: { Lines: [id] },
+      },
+      "deleteIds.Lines",
+    ],
+    [
+      "a duplicate id",
+      update({ deleteIds: { Lines: [id, other, id] } }),
+      "deleteIds.Lines.2",
+    ],
+    // Postgres рівняє UUID без огляду на регістр: це той самий рядок.
+    [
+      "a duplicate id in another case",
+      update({ deleteIds: { Lines: [id, id.toUpperCase()] } }),
+      "deleteIds.Lines.1",
+    ],
+    [
+      "a non-UUID id",
+      update({ deleteIds: { Lines: ["x"] } }),
+      "deleteIds.Lines.0",
+    ],
+    [
+      "deleteIds of one section over TABULAR_LINES_MAX",
+      update({ deleteIds: { Lines: uniqueIds(TABULAR_LINES_MAX + 1) } }),
+      "deleteIds.Lines",
+    ],
+    [
+      "deleteIds on create",
+      { action: "create", object, id, deleteIds: { Lines: [id] } },
+      "",
+    ],
+  ])("rejects %s", (_, input, path) => {
+    const parsed = operationSchema.safeParse(input)
+    expect(parsed.success).toBe(false)
+    expect(parsed.error!.issues[0]!.path.join(".")).toBe(path)
+  })
+
+  // Пошук дублікатів через `indexOf` був квадратичним і блокував цикл подій
+  // ще до бюджету команди; межа й `Set` тримають розбір лінійним. Поріг
+  // щедрий: квадратичний пошук на межі — десятки мс, тож він ловить лише
+  // грубий регрес, зате не флейкає.
+  it("accepts TABULAR_LINES_MAX unique ids of one section fast", () => {
+    const input = update({
+      deleteIds: { Lines: uniqueIds(TABULAR_LINES_MAX) },
+    })
+    const started = performance.now()
+    const parsed = operationSchema.safeParse(input)
+    expect(performance.now() - started).toBeLessThan(200)
+    expect(parsed.success).toBe(true)
+  })
+})
+
 describe("batchSchema", () => {
   it("rejects an empty batch", () => {
     expect(batchSchema.safeParse([]).success).toBe(false)
+  })
+})
+
+describe("BATCH_MAX", () => {
+  it("is 500", () => {
+    expect(BATCH_MAX).toBe(500)
   })
 })
 

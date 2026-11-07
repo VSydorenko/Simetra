@@ -46,6 +46,10 @@ export interface RuntimeState {
   readTimeout: number
   /** The request role of reads; `undefined` — the fallback path (§6.11). */
   readRole: string | undefined
+  /** Time budget of one `run` call with its retries, ms (P4-B spec §7.1). */
+  budgetMs: number
+  /** `lock_timeout` of a command transaction, ms. */
+  lockTimeoutMs: number
 }
 
 type QueryResult = Awaited<ReturnType<DatabaseClient["query"]>>
@@ -55,16 +59,42 @@ interface Terminal {
   failure: CommandFailure
   retry: boolean
   destroy: boolean
+  /** SQLSTATE відмови бази, якщо вона є: за ним обирається пауза повтору. */
+  code?: string
 }
 
 // Серіалізація й взаємне блокування: повтор усієї транзакції (§6.5).
 const RETRY_CODES = new Set(["40001", "40P01"])
+// Запобіжники простою (`idle_in_transaction_session_timeout`) і транзакції
+// (`transaction_timeout`): сервер уже закрив сесію `FATAL`-ом.
+const SESSION_TIMEOUT_CODES = new Set(["25P03", "25P04"])
+// Взаємне блокування повторюється з паузою: дві транзакції, що одночасно
+// повторили той самий порядок замків, знову зійшлися б у ньому. Джитер
+// розводить їх у часі. `40001` — без паузи: конфлікт знімку не залежить від
+// того, коли почати знову.
+const DEADLOCK = "40P01"
+const DEADLOCK_PAUSE_BASE_MS = 20
+
+/** Пауза перед повтором після `n`-ї невдалої спроби, мс. */
+function pauseOf(code: string | undefined, n: number): number {
+  if (code !== DEADLOCK) return 0
+  const step = DEADLOCK_PAUSE_BASE_MS * 2 ** (n - 1)
+  return step + Math.random() * step
+}
 const INTERNAL: CommandError = { code: "command.internal" }
 
 const statement = (text: string, ...params: (string | null)[]) => ({
   text,
   params,
 })
+const TIMEOUT: CommandError = { code: "command.timeout" }
+// Стеля одного оператора команди (спека П4-B §7.1, Ф6).
+const STATEMENT_CEILING_MS = 30_000
+// Значення — зв'язаним параметром: текстовий `SET` не приймає `$1`.
+const STATEMENT_TIMEOUT = "SELECT set_config('statement_timeout', $1, true)"
+// Мілісекунди межі: округлення вгору й ≥ 1 — `statement_timeout = 0` вимкнув
+// би межу зовсім.
+const timeoutMs = (remaining: number) => Math.max(1, Math.ceil(remaining))
 
 const BEGIN = statement("BEGIN ISOLATION LEVEL READ COMMITTED")
 export const COMMIT = statement("COMMIT")
@@ -78,39 +108,80 @@ export const COMMAND_ROLE = statement(
 const CLAIMS_TEXT =
   `SELECT set_config(${literal(SESSION_CLAIMS_SETTING)}, $1, true), ` +
   `set_config('TimeZone', 'UTC', true), set_config('bytea_output', 'hex', true)`
-/** Claims, `TimeZone` і `bytea_output` транзакції — і команди, і читання. */
+/** Claims, `TimeZone` і `bytea_output` транзакції читання; команда додає межі часу. */
 export const claimsStatement = (claims: string) =>
   statement(CLAIMS_TEXT, claims)
+// Межі часу команди — у тому самому операторі claims, без кругового запиту
+// (Ф4, Ф6). Запобіжники простою й транзакції — бюджет + 1 с: бюджет
+// спрацьовує раніше, вони ловлять завислий хук чи обірваного клієнта.
+// `transaction_timeout` є лише з PostgreSQL 17; умова — у самому SQL, щоб
+// не питати версію окремо.
+const COMMAND_CLAIMS_TEXT =
+  `${CLAIMS_TEXT}, set_config('statement_timeout', $2, true), ` +
+  `set_config('lock_timeout', $3, true), ` +
+  `set_config('idle_in_transaction_session_timeout', $4, true), ` +
+  `CASE WHEN current_setting('server_version_num')::int >= 170000 ` +
+  `THEN set_config('transaction_timeout', $4, true) END`
 const CURRENT_USER = statement(
   `SELECT ${ident(PLATFORM_SCHEMA)}.${ident(CURRENT_USER_FUNCTION_NAME)}() AS user_id`
 )
 
 /**
  * Помилка порту як відмова спроби. Кожен `command.internal` мапінгу йде в
- * журнал з повною помилкою: назовні — лише код.
+ * журнал з повною помилкою: назовні — лише код. `commitSent` — помилка
+ * прийшла на `COMMIT`, уже надісланий базі.
  */
 export function terminalOf(
   raw: unknown,
   state: RuntimeState,
-  phase: ErrorPhase | undefined
+  phase: ErrorPhase | undefined,
+  commitSent: boolean
 ): Terminal {
   const error = normalizeError(raw)
-  if (!error.connectionLost && RETRY_CODES.has(error.code ?? "")) {
-    return {
+  const { code } = error
+  const sessionTimeout = SESSION_TIMEOUT_CODES.has(code ?? "")
+  // Сесія закрита після надсилання `COMMIT`: фіксацію могло бути виконано до
+  // обриву, тож результат невідомий — і `25P03`, збережений драйвером раніше,
+  // тут не доводить відкату. Відмова бази з іншим SQLSTATE на `COMMIT` —
+  // відомий відкат і мапиться як завжди.
+  const closed = error.connectionLost || sessionTimeout
+  let terminal: Omit<Terminal, "code">
+  if (commitSent && closed) {
+    const mapped: CommandError = { code: "command.unavailable" }
+    if (logsDatabaseError(error, mapped)) {
+      state.log({ kind: "database", error: raw })
+    }
+    terminal = {
+      failure: new CommandFailure(mapped),
+      retry: false,
+      destroy: true,
+    }
+  } else if (!error.connectionLost && RETRY_CODES.has(code ?? "")) {
+    terminal = {
       failure: new CommandFailure({ code: "command.retry-exhausted" }),
       retry: true,
       destroy: false,
     }
+  } else if (sessionTimeout) {
+    // До `COMMIT` транзакцію відкочено, але сесії вже немає: `ROLLBACK`
+    // слати нікуди, з'єднання — знищити.
+    terminal = {
+      failure: new CommandFailure(TIMEOUT),
+      retry: false,
+      destroy: true,
+    }
+  } else {
+    const mapped = mapDatabaseError(error, state.catalog, phase)
+    if (logsDatabaseError(error, mapped)) {
+      state.log({ kind: "database", error: raw })
+    }
+    terminal = {
+      failure: new CommandFailure(mapped),
+      retry: false,
+      destroy: error.connectionLost,
+    }
   }
-  const mapped = mapDatabaseError(error, state.catalog, phase)
-  if (logsDatabaseError(error, mapped)) {
-    state.log({ kind: "database", error: raw })
-  }
-  return {
-    failure: new CommandFailure(mapped),
-    retry: false,
-    destroy: error.connectionLost,
-  }
+  return code === undefined ? terminal : { ...terminal, code }
 }
 
 /**
@@ -125,11 +196,22 @@ export class Transaction {
   /** The current user of the attempt (step 4 of §6.5). */
   user = ""
   act: { sub: string } | undefined
+  /** Фази, які вже почав `ctx.run` у цій спробі (межа `BATCH_MAX`, Ф1). */
+  nestedPhases = 0
   private tail: Promise<unknown> = Promise.resolve()
+  /**
+   * `statement_timeout` у силі, мс; `undefined` — до claims: поза транзакцією
+   * `set_config(…, true)` нічого не дає, а claims ставить його сам.
+   */
+  private statementTimeout: number | undefined
+  /** `COMMIT` надіслано: обрив далі — невідомий результат, не відкат. */
+  private commitSent = false
 
+  /** `deadline` — мітка `performance.now()`, до якої має завершитися `run`. */
   constructor(
     private readonly client: DatabaseClient,
-    readonly state: RuntimeState
+    readonly state: RuntimeState,
+    private readonly deadline: number
   ) {}
 
   /** Runs a unit after the previous ones; resolves to its last result. */
@@ -141,16 +223,73 @@ export class Transaction {
       let last: QueryResult = { rows: [], command: "" }
       for (const { text, params } of unit) {
         if (this.terminal !== undefined) throw this.terminal.failure
-        try {
-          last = await this.client.query(text, params)
-        } catch (raw) {
-          throw this.close(terminalOf(raw, this.state, phase))
-        }
+        await this.budget(phase)
+        // Після бюджету й прелюдії: їхні відмови ще до `COMMIT`.
+        if (text === COMMIT.text) this.commitSent = true
+        last = await this.send(text, params, phase)
       }
       return last
     })
     this.tail = result.catch(() => undefined)
     return result
+  }
+
+  /**
+   * Claims команди з межами часу; `statement_timeout` — від залишку бюджету,
+   * тож повтор після витраченого часу не отримує повної стелі.
+   */
+  async claims(claims: string): Promise<void> {
+    const ms = timeoutMs(
+      Math.min(STATEMENT_CEILING_MS, this.deadline - performance.now())
+    )
+    const guard = String(this.state.budgetMs + 1000)
+    await this.enqueue([
+      statement(
+        COMMAND_CLAIMS_TEXT,
+        claims,
+        String(ms),
+        String(this.state.lockTimeoutMs),
+        guard
+      ),
+    ])
+    this.statementTimeout = ms
+  }
+
+  /**
+   * Перевірка бюджету перед оператором (єдина точка — `enqueue`): вичерпаний
+   * залишок — `command.timeout` без оператора; залишок, менший за чинну
+   * межу, — спершу нижча межа. Ціна — ще один круговий запит на оператор в
+   * останні 30 с бюджету.
+   */
+  private async budget(phase: ErrorPhase | undefined): Promise<void> {
+    const remaining = this.deadline - performance.now()
+    if (remaining <= 1) {
+      throw this.close({
+        failure: new CommandFailure(TIMEOUT),
+        retry: false,
+        destroy: false,
+      })
+    }
+    // Порівняння в цілих мілісекундах межі: дробовий залишок інакше завжди
+    // менший за своє ж округлення вгору й слав би прелюдію щоразу.
+    const ms = timeoutMs(remaining)
+    if (this.statementTimeout === undefined || ms >= this.statementTimeout) {
+      return
+    }
+    await this.send(STATEMENT_TIMEOUT, [String(ms)], phase)
+    this.statementTimeout = ms
+  }
+
+  private async send(
+    text: string,
+    params: readonly (string | null)[],
+    phase: ErrorPhase | undefined
+  ): Promise<QueryResult> {
+    try {
+      return await this.client.query(text, params)
+    } catch (raw) {
+      throw this.close(terminalOf(raw, this.state, phase, this.commitSent))
+    }
   }
 
   /** Closes the queue; the first failure decides the attempt. */
@@ -213,23 +352,25 @@ async function attempt(
   command: { active: boolean },
   claims: string,
   act: { sub: string } | undefined,
-  ops: readonly PreparedOperation[]
+  ops: readonly PreparedOperation[],
+  deadline: number,
+  fullTabularArrays: boolean
 ): Promise<Outcome> {
   let client: DatabaseClient
   try {
     client = await state.database.connect()
   } catch (raw) {
-    return { terminal: terminalOf(raw, state, undefined) }
+    return { terminal: terminalOf(raw, state, undefined, false) }
   }
   // Явний тип: виклики `never` звужують типи лише так.
-  const tx: Transaction = new Transaction(client, state)
+  const tx: Transaction = new Transaction(client, state, deadline)
   tx.act = act
   const rows: Record<string, unknown>[] = []
   let tag: string
   try {
     tag = await inCommand({ command, tx, depth: 0 }, async () => {
       await tx.enqueue([BEGIN])
-      await tx.enqueue([claimsStatement(claims)])
+      await tx.claims(claims)
       await tx.enqueue([COMMAND_ROLE])
       const { rows: users } = await tx.enqueue([CURRENT_USER])
       const user = users[0]?.user_id
@@ -237,7 +378,9 @@ async function attempt(
       if (user == null) tx.abort({ code: "command.unauthenticated" })
       if (typeof user !== "string") tx.anomaly(new Error("user id is not text"))
       tx.user = user
-      for (const op of ops) rows.push(await runPhase(tx, op))
+      for (const op of ops) {
+        rows.push(await runPhase(tx, op, fullTabularArrays))
+      }
       return (await tx.enqueue([COMMIT])).command
     })
   } catch (error) {
@@ -294,10 +437,19 @@ export async function runAfterCommit(
 export async function runCommand(
   state: RuntimeState,
   session: SessionClaims,
-  input: unknown
+  input: unknown,
+  fullTabularArrays = false
 ): Promise<CommandResult> {
   rejectNested()
   const ops = prepareInput(state.catalog, input)
+  // Повний масив сам видаляє пропущені рядки: `deleteIds` поруч із ним не
+  // діяв би, а мовчазний ігнор сховав би помилку викликача.
+  if (
+    fullTabularArrays &&
+    ops.some((op) => op.action === "update" && op.deleteIds !== undefined)
+  ) {
+    throw new CommandFailure({ code: "command.invalid", path: "deleteIds" })
+  }
   let claims: string
   try {
     claims = JSON.stringify(session)
@@ -311,18 +463,38 @@ export async function runCommand(
   const act =
     typeof session.act?.sub === "string" ? { sub: session.act.sub } : undefined
   const command = { active: true }
+  // Бюджет — на весь виклик `run`, разом із повторами (Ф2).
+  const deadline = performance.now() + state.budgetMs
   // `maxAttempts` ≥ 1, тож хоч одна спроба відбудеться.
   let outcome: Outcome | undefined
   try {
-    for (let n = 0; n < state.maxAttempts; n++) {
+    for (let n = 1; n <= state.maxAttempts; n++) {
       outcome = await attempt(
         state,
         command,
         claims,
         act,
-        structuredClone(snapshot)
+        structuredClone(snapshot),
+        deadline,
+        fullTabularArrays
       )
       if (!("terminal" in outcome) || !outcome.terminal.retry) break
+      if (n === state.maxAttempts) break
+      const pause = pauseOf(outcome.terminal.code, n)
+      if (pause === 0) continue
+      // Повтор після паузи не встиг би й першого оператора: це тайм-аут
+      // бюджету, а не вичерпаний повтор (бюджет — і на паузи, Ф2).
+      if (deadline - performance.now() - pause <= 1) {
+        outcome = {
+          terminal: {
+            failure: new CommandFailure(TIMEOUT),
+            retry: false,
+            destroy: false,
+          },
+        }
+        break
+      }
+      await new Promise((resolve) => setTimeout(resolve, pause))
     }
   } finally {
     // Команда завершена: продовження, які запланував хук, — не вкладені.

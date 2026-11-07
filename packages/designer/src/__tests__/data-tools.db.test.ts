@@ -440,6 +440,42 @@ describe("data tools over a real database", () => {
       })
     })
 
+    // MCP шле масив ТЧ без опції повного масиву: наявний рядок, якого агент
+    // не назвав, рантайм не видаляє мовчки (спека П4-B §7.1)
+    it("data-command with a tabular array leaving out an existing row is tabular-rows-missing; deleteIds names it", async () => {
+      const id = randomUUID()
+      const [kept, dropped] = [randomUUID(), randomUUID()]
+      const created = resultOf(
+        await command([
+          {
+            action: "create",
+            object: GAUGE,
+            id,
+            values: { org: env.me.org },
+            tabularSections: { lines: [{ ref: kept }, { ref: dropped }] },
+          },
+        ])
+      )
+      const update = {
+        action: "update",
+        object: GAUGE,
+        id,
+        expectedVersion: created.changes[0]!.version,
+        tabularSections: { lines: [{ ref: kept }] },
+      } satisfies Operation
+      expect(errorOf(await command([update]))).toEqual({
+        code: "command.invalid",
+        reason: "tabular-rows-missing",
+        path: "lines",
+      })
+      resultOf(await command([{ ...update, deleteIds: { lines: [dropped] } }]))
+      const { rows } = await env.owner.query<{ id: string }>(
+        "SELECT id FROM public.gauge_lines WHERE parent_id = $1",
+        [id]
+      )
+      expect(rows).toEqual([{ id: kept }])
+    })
+
     it("an update of a foreign row is command.forbidden no-right", async () => {
       const r = await command([
         {

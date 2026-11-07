@@ -9,6 +9,7 @@ import type { ReadQuery, ReadResultOf } from "./read"
  */
 export interface Draft<E> {
   values?: Partial<E>
+  /** Whole section arrays of the operation; `deleteIds` is not part of the draft. */
   tabularSections?: Record<string, Record<string, unknown>[]>
 }
 

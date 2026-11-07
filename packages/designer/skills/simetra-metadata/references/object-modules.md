@@ -43,6 +43,19 @@ export const client = defineObjectModule<Catalogs.Client>({
   that transaction. It takes the query of `data-read` and returns `{ rows }`
   or `{ count, capped? }`, e.g.
   `ctx.read({ object, where: { attribute: "code", op: "eq", value }, limit: 1 })`.
+- A tabular section array in an `update` passed to `ctx.run` replaces the
+  section: every existing row must be in the array or in `deleteIds`,
+  otherwise the command fails with `command.invalid`
+  `reason: "tabular-rows-missing"` — the same rule as `data-command`.
+  `ctx.run` always checks this. Build the array from a `ctx.read` of the
+  owner's lines.
+- One command transaction may start at most `BATCH_MAX` phases through
+  `ctx.run`; past it the command fails with `command.depth`
+  `reason: "phases"`. Nesting deeper than the runtime's depth limit is
+  `command.depth` too.
+- Hook time counts toward the command's time budget: a command past it
+  fails with `command.timeout`, and a lock wait past the lock timeout with
+  `command.busy`. Keep hooks short.
 - `ctx.reject(code, path?)` fails the command with `command.rejected`.
 - A `ctx` method works only while its hook runs. Never keep `ctx` for later:
   a late call fails the command (`command.internal`).
