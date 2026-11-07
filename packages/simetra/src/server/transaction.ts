@@ -59,10 +59,15 @@ interface Terminal {
   failure: CommandFailure
   retry: boolean
   destroy: boolean
+  /** SQLSTATE відмови бази, якщо вона є: за ним обирається пауза повтору. */
+  code?: string
 }
 
 // Серіалізація й взаємне блокування: повтор усієї транзакції (§6.5).
 const RETRY_CODES = new Set(["40001", "40P01"])
+// Запобіжники простою (`idle_in_transaction_session_timeout`) і транзакції
+// (`transaction_timeout`): сервер уже закрив сесію `FATAL`-ом.
+const SESSION_TIMEOUT_CODES = new Set(["25P03", "25P04"])
 const INTERNAL: CommandError = { code: "command.internal" }
 
 const statement = (text: string, ...params: (string | null)[]) => ({
@@ -110,30 +115,60 @@ const CURRENT_USER = statement(
 
 /**
  * Помилка порту як відмова спроби. Кожен `command.internal` мапінгу йде в
- * журнал з повною помилкою: назовні — лише код.
+ * журнал з повною помилкою: назовні — лише код. `commitSent` — помилка
+ * прийшла на `COMMIT`, уже надісланий базі.
  */
 export function terminalOf(
   raw: unknown,
   state: RuntimeState,
-  phase: ErrorPhase | undefined
+  phase: ErrorPhase | undefined,
+  commitSent: boolean
 ): Terminal {
   const error = normalizeError(raw)
-  if (!error.connectionLost && RETRY_CODES.has(error.code ?? "")) {
-    return {
+  const { code } = error
+  const sessionTimeout = SESSION_TIMEOUT_CODES.has(code ?? "")
+  // Сесія закрита після надсилання `COMMIT`: фіксацію могло бути виконано до
+  // обриву, тож результат невідомий — і `25P03`, збережений драйвером раніше,
+  // тут не доводить відкату. Відмова бази з іншим SQLSTATE на `COMMIT` —
+  // відомий відкат і мапиться як завжди.
+  const closed = error.connectionLost || sessionTimeout
+  let terminal: Omit<Terminal, "code">
+  if (commitSent && closed) {
+    const mapped: CommandError = { code: "command.unavailable" }
+    if (logsDatabaseError(error, mapped)) {
+      state.log({ kind: "database", error: raw })
+    }
+    terminal = {
+      failure: new CommandFailure(mapped),
+      retry: false,
+      destroy: true,
+    }
+  } else if (!error.connectionLost && RETRY_CODES.has(code ?? "")) {
+    terminal = {
       failure: new CommandFailure({ code: "command.retry-exhausted" }),
       retry: true,
       destroy: false,
     }
+  } else if (sessionTimeout) {
+    // До `COMMIT` транзакцію відкочено, але сесії вже немає: `ROLLBACK`
+    // слати нікуди, з'єднання — знищити.
+    terminal = {
+      failure: new CommandFailure(TIMEOUT),
+      retry: false,
+      destroy: true,
+    }
+  } else {
+    const mapped = mapDatabaseError(error, state.catalog, phase)
+    if (logsDatabaseError(error, mapped)) {
+      state.log({ kind: "database", error: raw })
+    }
+    terminal = {
+      failure: new CommandFailure(mapped),
+      retry: false,
+      destroy: error.connectionLost,
+    }
   }
-  const mapped = mapDatabaseError(error, state.catalog, phase)
-  if (logsDatabaseError(error, mapped)) {
-    state.log({ kind: "database", error: raw })
-  }
-  return {
-    failure: new CommandFailure(mapped),
-    retry: false,
-    destroy: error.connectionLost,
-  }
+  return code === undefined ? terminal : { ...terminal, code }
 }
 
 /**
@@ -154,6 +189,8 @@ export class Transaction {
    * `set_config(…, true)` нічого не дає, а claims ставить його сам.
    */
   private statementTimeout: number | undefined
+  /** `COMMIT` надіслано: обрив далі — невідомий результат, не відкат. */
+  private commitSent = false
 
   /** `deadline` — мітка `performance.now()`, до якої має завершитися `run`. */
   constructor(
@@ -172,6 +209,8 @@ export class Transaction {
       for (const { text, params } of unit) {
         if (this.terminal !== undefined) throw this.terminal.failure
         await this.budget(phase)
+        // Після бюджету й прелюдії: їхні відмови ще до `COMMIT`.
+        if (text === COMMIT.text) this.commitSent = true
         last = await this.send(text, params, phase)
       }
       return last
@@ -234,7 +273,7 @@ export class Transaction {
     try {
       return await this.client.query(text, params)
     } catch (raw) {
-      throw this.close(terminalOf(raw, this.state, phase))
+      throw this.close(terminalOf(raw, this.state, phase, this.commitSent))
     }
   }
 
@@ -305,7 +344,7 @@ async function attempt(
   try {
     client = await state.database.connect()
   } catch (raw) {
-    return { terminal: terminalOf(raw, state, undefined) }
+    return { terminal: terminalOf(raw, state, undefined, false) }
   }
   // Явний тип: виклики `never` звужують типи лише так.
   const tx: Transaction = new Transaction(client, state, deadline)

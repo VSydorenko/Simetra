@@ -970,6 +970,70 @@ describe("command time budget", () => {
   })
 })
 
+describe("COMMIT boundary", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["performance", "setTimeout"] })
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  const phase = [context("create", "client", ID), createCall]
+  /** Відповідь на `COMMIT` команди; перший `COMMIT` — створення рантайму. */
+  const atCommit = (error: unknown): Override => {
+    let commits = 0
+    return (text) =>
+      text === "COMMIT" && commits++ > 0 ? { error } : undefined
+  }
+
+  // Запобіжник простою чи транзакції до `COMMIT` — відкат відомий, а сесію
+  // сервер уже закрив: `ROLLBACK` слати нікуди.
+  it.each(["25P03", "25P04"])(
+    "maps %s on a phase statement to command.timeout and destroys the connection",
+    async (code) => {
+      const { db, runtime } = await setup((text) =>
+        text.endsWith("AS r") ? { error: { code, message: "x" } } : undefined
+      )
+      expect(await failureOf(runtime.run(session, create))).toEqual({
+        code: "command.timeout",
+      })
+      expect(db.calls).toEqual([...OPEN, ...phase, { release: true }])
+    }
+  )
+
+  // Після надсилання `COMMIT` результат невідомий: фіксацію могло бути
+  // виконано до обриву.
+  it.each<[string, unknown]>([
+    ["25P03", { code: "25P03", message: "x" }],
+    ["25P04", { code: "25P04", message: "x" }],
+    ["an error without SQLSTATE", new Error("ECONNRESET")],
+  ])("maps %s answered at COMMIT to command.unavailable", async (_, error) => {
+    const { db, runtime } = await setup(atCommit(error))
+    expect(await failureOf(runtime.run(session, create))).toEqual({
+      code: "command.unavailable",
+    })
+    expect(db.calls).toEqual([...OPEN, ...phase, COMMIT, { release: true }])
+  })
+
+  it("maps 25P03 on the statement_timeout prelude of COMMIT to command.timeout", async () => {
+    const { db, runtime } = await setup((text) => {
+      if (text.endsWith("AS r")) vi.advanceTimersByTime(50_000)
+      return text === "SELECT set_config('statement_timeout', $1, true)"
+        ? { error: { code: "25P03", message: "x" } }
+        : undefined
+    })
+    expect(await failureOf(runtime.run(session, create))).toEqual({
+      code: "command.timeout",
+    })
+    expect(db.calls).toEqual([
+      ...OPEN,
+      ...phase,
+      statementTimeout("10000"),
+      { release: true },
+    ])
+  })
+})
+
 describe("statement queue", () => {
   it("closes at the first failure: later units never reach the port", async () => {
     const db = fakeDatabase({
