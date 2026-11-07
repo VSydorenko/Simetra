@@ -204,6 +204,16 @@ A set of lines over the tabular section limit (5000 lines), or one that is
 edited in parts, does not belong in a tabular section: model it as a
 separate object or a register.
 
+Limits of one `data-command`, checked before the database is touched; each
+refusal is `command.invalid` with the `reason` below:
+
+- up to 500 operations (`batch-too-large`); split a larger seed into
+  several calls, each its own transaction;
+- up to 5000 lines in one tabular section of an operation
+  (`tabular-too-large`, `path` — the section);
+- a value within its attribute's `maxBytes` (`too-large`, `path` — the
+  attribute).
+
 The tools work only on a development database. Before connecting they check
 that the host is this machine (`localhost`, `127.0.0.0/8`, `::1` or a unix
 socket); after connecting, that the database itself carries
