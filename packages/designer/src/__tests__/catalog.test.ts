@@ -1,7 +1,12 @@
 import { existsSync } from "node:fs"
 import { readFile, writeFile } from "node:fs/promises"
 import { dirname, join, resolve } from "node:path"
-import { buildRuntimeCatalog, compile, type FileChange } from "simetra/compiler"
+import {
+  buildClientCatalog,
+  buildRuntimeCatalog,
+  compile,
+  type FileChange,
+} from "simetra/compiler"
 import { z } from "zod"
 import { describe, expect, it, vi } from "vitest"
 import { TOOL_PIPELINE } from "./helpers/budget"
@@ -280,7 +285,7 @@ describe("tool catalog", TOOL_PIPELINE, () => {
     ).toEqual([])
   })
 
-  it("compileArtifacts emits snapshot, desired state, entity types and runtime catalog", async () => {
+  it("compileArtifacts emits snapshot, desired state, entity types, runtime and client catalogs", async () => {
     const dir = await project()
     const { model } = await compile(await readMetadataDir(dir))
     const changes = compileArtifacts(model!)
@@ -289,10 +294,15 @@ describe("tool catalog", TOOL_PIPELINE, () => {
       "desired-state.sql",
       "entities.d.ts",
       "runtime-catalog.json",
+      "client-catalog.json",
     ])
+    const runtime = buildRuntimeCatalog(model!)
     expect(
       changes.find((c) => c.path === "runtime-catalog.json")?.content
-    ).toBe(`${JSON.stringify(buildRuntimeCatalog(model!), null, 2)}\n`)
+    ).toBe(`${JSON.stringify(runtime, null, 2)}\n`)
+    expect(changes.find((c) => c.path === "client-catalog.json")?.content).toBe(
+      `${JSON.stringify(buildClientCatalog(runtime), null, 2)}\n`
+    )
     expect(changes.every((c) => typeof c.content === "string")).toBe(true)
   })
 })
