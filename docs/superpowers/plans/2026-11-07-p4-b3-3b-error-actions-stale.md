@@ -78,8 +78,8 @@ Modify `packages/simetra/src/data/facade/transactions.ts`,
 `write-back.ts` (після B3-3a); Test `error-actions.test.ts`.
 
 **Interfaces:**
-- Consumes (після B3-3a): `runWrite`, `rereadKeys`, `reconcileOwnCreates`,
-  `fetchedOnce`, `ownCreatesOf`; (після B1b-3) коди `command.busy`,
+- Consumes (після B3-3a): `runWrite`, `rereadKeys`, `fetchedOnce`,
+  `ownCreatesOf`; (після B1b-3) коди `command.busy`,
   `command.timeout`.
 - `onWriteFailure(runtime, ops: PreparedOp[], failure: CommandFailure): Promise<void>`
   — викликається обробником перед відхиленням транзакції (відхилення —
@@ -164,8 +164,8 @@ B3-3a); Test `version.test.ts`.
     один хвостовий;
   - позначка: відповідь `version` з іншим `kernelHash` об'єкта — `isStale`
     true; без UUID — true; збіг — знято; Review Focus 1 — фейк чергує дві
-    відповіді `version` (A, A′, A, …): позначка йде слідом, кількість запитів
-    дорівнює кількості тригерів, запис після зняття проходить;
+    відповіді `version` (A, A′, A, …): позначка йде слідом, запитів не
+    більше, ніж тригерів, запис після зняття проходить;
   - Review Focus 2: `stale-client` колонки — `onStaleClient` один раз,
     позначки немає, повтору немає;
   - два `stale-client` поспіль для того самого об'єкта з `version`, що
