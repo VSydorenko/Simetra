@@ -325,4 +325,19 @@ describe("encodeRow / decodeRow rows", () => {
     expect(Object.getPrototypeOf(encoded)).toBe(Object.prototype)
     expect(Object.keys(encoded)).toEqual([])
   })
+
+  // Ім'я з прототипу (`constructor`) у каталозі: успадкована властивість
+  // рядка — не поле, тож відсутній ключ лишається відсутнім, а не стає
+  // функцією `Object`, яку кодек відхилив би.
+  it("treats an inherited name of a catalog attribute as absent", () => {
+    const entry = catalogEntry({
+      attributes: [
+        catalogEntryAttribute({ name: "constructor", column: "ctor_col" }),
+        catalogEntryAttribute({ name: "ctorName", column: "constructor" }),
+      ],
+      tabularSections: [],
+    })
+    expect(encodeRow(entry, { ref: ID })).toEqual({ id: ID })
+    expect(decodeRow(entry, { id: ID })).toEqual({ ref: ID })
+  })
 })
