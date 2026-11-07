@@ -1,62 +1,43 @@
 import { describe, expect, it } from "vitest"
-import { runtimeObjectSchema, type RuntimeAttribute } from "../catalog"
+import type { CatalogEntryAttribute } from "../catalog"
 import { encodeAttributes, type EncodeAttributesOptions } from "../values"
+import { catalogEntryAttribute } from "./entries"
 
-// Об'єкт каталогу збирається вручну: T0 не імпортує фікстури вищих ярусів.
+// Кодувальник читає лише спільну частину запису: реквізити — з будівника T0.
 const attr = (
   name: string,
-  type: RuntimeAttribute["type"],
-  extra: Partial<RuntimeAttribute> = {}
-): RuntimeAttribute => ({
-  name,
-  column: `${name}_col`,
-  pgType: "text",
-  castType: "text",
-  type,
-  required: false,
-  insert: true,
-  update: true,
-  ...extra,
-})
+  type: CatalogEntryAttribute["type"],
+  extra: Partial<CatalogEntryAttribute> = {}
+): CatalogEntryAttribute =>
+  catalogEntryAttribute({
+    name,
+    column: `${name}_col`,
+    type,
+    required: false,
+    maxLength: undefined,
+    insert: true,
+    update: true,
+    ...extra,
+  })
 
 const OTHER = "22222222-2222-4222-8222-222222222222"
 
-const { attributes } = runtimeObjectSchema.parse({
-  id: "00000000-0000-4000-8000-000000000001",
-  name: "Member",
-  kind: "Catalog",
-  kindLabel: "member",
-  table: { schema: "public", name: "member" },
-  key: "id",
-  keyName: "ref",
-  versionColumn: "version",
-  versionName: "version",
-  attributes: [
-    attr("user", "UUID", { pgType: "uuid", castType: "uuid" }),
-    attr("code", "String", { maxLength: 3 }),
-    attr("amount", "Numeric", {
-      pgType: "numeric(10,2)",
-      precision: 10,
-      scale: 2,
-    }),
-    attr("subject", "Ref", {
-      pgType: "uuid",
-      castType: "uuid",
-      pair: {
-        typeColumn: "subject_type",
-        targets: [
-          { object: { kind: "Catalog", name: "Project" }, label: "project" },
-        ],
-      },
-    }),
-    attr("tags", "Integer", { array: true }),
-    attr("frozen", "String", { update: false }),
-    attr("computed", "Integer", { insert: false, update: false }),
-  ],
-  tabularSections: [],
-  operations: {},
-  constraints: [],
-})
+const attributes: CatalogEntryAttribute[] = [
+  attr("user", "UUID"),
+  attr("code", "String", { maxLength: 3 }),
+  attr("amount", "Numeric", { precision: 10, scale: 2 }),
+  attr("subject", "Ref", {
+    pair: {
+      typeColumn: "subject_type",
+      targets: [
+        { object: { kind: "Catalog", name: "Project" }, label: "project" },
+      ],
+    },
+  }),
+  attr("tags", "Integer", { array: true }),
+  attr("frozen", "String", { update: false }),
+  attr("computed", "Integer", { insert: false, update: false }),
+]
 
 /**
  * Три споживачі одного обходу (Р-A6-13): шапка `values` (грант вставки чи

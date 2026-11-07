@@ -37,6 +37,11 @@ export {
   type AttributeCase,
 } from "./identity"
 export {
+  ELEMENT_ID_SEPARATOR,
+  elementIdSchema,
+  standardElementId,
+} from "./element-id"
+export {
   LOGICAL_TYPES,
   UUID_TEXT,
   valueTypeShape,

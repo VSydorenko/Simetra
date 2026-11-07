@@ -4,6 +4,7 @@ import { PLATFORM_ROLES, makeObjectName, type Dml } from "simetra/model"
 import {
   accessPolicyNames,
   buildAccessUnits,
+  readBoundaries,
   tableGrants,
   tenantBoundary,
   type AccessPolicyContracts,
@@ -323,6 +324,28 @@ function policiesOf(model: CompiledModel, table: string): Map<string, string> {
 
 const ORG_BOUNDARY = "org_id = ANY (ARRAY(SELECT public.org_member_scopes()))"
 const BOUNDED = "TO authenticated, simetra_command"
+
+describe("readBoundaries", () => {
+  it.each<[string, AccessContract, boolean, string[]]>([
+    [
+      "a scoped table without publicRead",
+      contract({ scope: ORG_SCOPE }),
+      true,
+      ["tenant"],
+    ],
+    [
+      "a scoped table with publicRead",
+      contract({ scope: ORG_SCOPE, publicRead: ["user"] }),
+      true,
+      [],
+    ],
+    ["an unscoped table", contract(), true, []],
+    ["Users with visible users", contract({ users: true }), true, ["users"]],
+    ["Users without visible users", contract({ users: true }), false, []],
+  ])("%s", (_, access, visibleUsers, expected) => {
+    expect(readBoundaries(access, visibleUsers)).toEqual(expected)
+  })
+})
 
 describe("buildAccessUnits", () => {
   it("user readers: revoke from PUBLIC and every API role, select to authenticated and the command role", () => {

@@ -4,13 +4,13 @@ import {
   isDateTime,
   isWithinType,
 } from "../schemas/value-type"
-import type { RuntimeAttribute } from "./catalog"
+import type { CatalogEntryAttribute } from "./catalog"
 import type { CommandError } from "./errors"
 
 /**
- * Кодування значень за каталогом рантайму (Р-A3-7, Р-A4-12): вхід за
- * логічними іменами перевіряється до бази — тип, межі, довжина, точність, —
- * щоб база не округлила й не обрізала його мовчки. Живе в T0, бо його
+ * Кодування значень за спільною частиною запису каталогу (Р-A3-7, Р-A4-12):
+ * вхід за логічними іменами перевіряється до бази — тип, межі, довжина,
+ * точність, — щоб база не округлила й не обрізала його мовчки. Живе в T0, бо його
  * споживають і T3 (команди), і T2 (інструмент обслуговування прав): T2 не
  * може імпортувати T3.
  */
@@ -86,7 +86,7 @@ function pureJson(value: unknown, ancestors: Set<object>): unknown {
 }
 
 /** Скаляр у форму `p_item`; `undefined` — значення не цього типу. */
-function scalar(attribute: RuntimeAttribute, value: unknown): unknown {
+function scalar(attribute: CatalogEntryAttribute, value: unknown): unknown {
   if (value === null) return null
   if (typeof value === "string" && !storable(value)) return undefined
   switch (attribute.type) {
@@ -165,7 +165,7 @@ function scalar(attribute: RuntimeAttribute, value: unknown): unknown {
  * of its two columns.
  */
 export function encodePair(
-  attribute: RuntimeAttribute,
+  attribute: CatalogEntryAttribute,
   value: unknown,
   path: string
 ): Encoded<{ label: string | null; id: string | null }> {
@@ -196,7 +196,7 @@ export function encodePair(
  * yields both of its columns.
  */
 export function encodeItemValue(
-  attribute: RuntimeAttribute,
+  attribute: CatalogEntryAttribute,
   value: unknown,
   path: string
 ): Encoded<unknown> {
@@ -230,10 +230,16 @@ export function encodeItemValue(
   }
 }
 
-/** Options of {@link encodeAttributes}: who may write and how errors are named. */
-export interface EncodeAttributesOptions {
+/**
+ * Options of {@link encodeAttributes}: who may write and how errors are named.
+ * Generic over the attribute type, so `allowed` may read the caller's
+ * catalog (runtime or shared).
+ */
+export interface EncodeAttributesOptions<
+  A extends CatalogEntryAttribute = CatalogEntryAttribute,
+> {
   /** Чи пише вхід реквізит: грант вставки чи оновлення. */
-  allowed: (attribute: RuntimeAttribute) => boolean
+  allowed: (attribute: A) => boolean
   /** Логічні імена, які примушує платформа (ключ, скоуп, користувач учасника). */
   forced?: readonly string[]
   /** Шлях самого контейнера: відмова, коли він не простий об'єкт. */
@@ -253,10 +259,10 @@ export interface EncodeAttributesOptions {
  * реквізити — за порядком каталогу, невідомі ключі — після них, за порядком
  * входу.
  */
-export function encodeAttributes(
-  attributes: readonly RuntimeAttribute[],
+export function encodeAttributes<A extends CatalogEntryAttribute>(
+  attributes: readonly A[],
   values: unknown,
-  options: EncodeAttributesOptions
+  options: EncodeAttributesOptions<A>
 ): { columns: Record<string, unknown> } | { error: CommandError } {
   const { allowed, forced = [], path, prefix, rowKey } = options
   let keys: Set<string>

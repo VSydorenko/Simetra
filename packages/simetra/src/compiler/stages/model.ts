@@ -21,6 +21,7 @@ import {
   singletonColumn,
   standardLogicalName,
   truncatedPeriodExpression,
+  standardElementId,
   type Attribute,
   type CatalogAttribute,
   type AttributeCase,
@@ -52,11 +53,7 @@ import { rightsAdminTables } from "../rights/admin-tables"
 import { identitiesTable } from "../platform/identities"
 import { carrierDeclarations } from "../rights/facts"
 import { objectKey, type ParsedObject } from "./files"
-import {
-  COLUMN_NAME_ROLES,
-  standardElementId,
-  type ResolvedReference,
-} from "./identity"
+import { COLUMN_NAME_ROLES, type ResolvedReference } from "./identity"
 
 type ForeignKey = PhysicalTable["foreignKeys"][number]
 type FkAction = ForeignKey["onDelete"]

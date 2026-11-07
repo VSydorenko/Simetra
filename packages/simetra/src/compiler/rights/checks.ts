@@ -6,6 +6,7 @@ import {
   singleUuidKeyColumn,
   standardLogicalName,
   toSnakeCase,
+  standardElementId,
   type CarrierCopyOf,
   type CustomAction,
   type AssignmentSource,
@@ -20,7 +21,7 @@ import {
 import { mainTableOf } from "../contracts"
 import { diagnostic, type Diagnostic } from "../diagnostics"
 import { PROJECT_FILE, type ParsedObject } from "../stages/files"
-import { standardElementId, type ResolvedReference } from "../stages/identity"
+import { type ResolvedReference } from "../stages/identity"
 import {
   hasScopeKeyUnique,
   usersCatalogOf,

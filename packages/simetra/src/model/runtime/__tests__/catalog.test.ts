@@ -1,5 +1,145 @@
-import { describe, expect, it } from "vitest"
-import { runtimeCatalogSchema, runtimeSectionSchema } from "../catalog"
+import { describe, expect, expectTypeOf, it } from "vitest"
+import {
+  catalogEntrySchema,
+  runtimeCatalogSchema,
+  runtimeObjectSchema,
+  runtimeSectionSchema,
+  type CatalogEntry,
+  type RuntimeObject,
+} from "../catalog"
+import { standardElementId } from "../../schemas/element-id"
+import {
+  KERNEL_HASH,
+  MEMBERSHIP_ID,
+  OBJECT_ID,
+  catalogEntry,
+  catalogEntrySection,
+  runtimeObject,
+} from "./entries"
+
+describe("catalog entries", () => {
+  const entry = runtimeObject()
+  const [section] = entry.tabularSections
+  // id ТЧ — її ідентичність у формі передачі (рішення В4, В12): ім'я ТЧ
+  // змінне; стандартна ТЧ має синтетичний id елемента.
+  it.each([
+    ["a runtime entry", runtimeObjectSchema, entry, true],
+    ["a shared entry", catalogEntrySchema, catalogEntry(), true],
+    [
+      "a runtime section without id",
+      runtimeObjectSchema,
+      { ...entry, tabularSections: [{ ...section, id: undefined }] },
+      false,
+    ],
+    [
+      "a standard section with a synthetic id",
+      runtimeObjectSchema,
+      {
+        ...entry,
+        tabularSections: [
+          {
+            ...section,
+            id: standardElementId(OBJECT_ID, { logicalName: "delta" }),
+          },
+        ],
+      },
+      true,
+    ],
+    [
+      "a runtime section with a non-element id",
+      runtimeObjectSchema,
+      { ...entry, tabularSections: [{ ...section, id: "lines" }] },
+      false,
+    ],
+    [
+      "a shared section with a non-element id",
+      catalogEntrySchema,
+      catalogEntry({ tabularSections: [catalogEntrySection({ id: "lines" })] }),
+      false,
+    ],
+    [
+      "a runtime object with a non-UUID id",
+      runtimeObjectSchema,
+      { ...entry, id: "Task" },
+      false,
+    ],
+    [
+      "a shared object with a non-UUID id",
+      catalogEntrySchema,
+      catalogEntry({ id: "Task" }),
+      false,
+    ],
+    // Спільна частина не несе розширень рантайму: строгий об'єкт їх відхиляє.
+    [
+      "a shared entry with runtime constraints",
+      catalogEntrySchema,
+      { ...catalogEntry(), constraints: [] },
+      false,
+    ],
+    [
+      "a kernelHash not in lowercase hex",
+      catalogEntrySchema,
+      catalogEntry({ kernelHash: "A".repeat(64) }),
+      false,
+    ],
+  ])("%s", (_, schema, input, ok) => {
+    expect(schema.safeParse(input).success).toBe(ok)
+  })
+
+  it("a runtime entry is a shared entry", () => {
+    expectTypeOf<RuntimeObject>().toExtend<CatalogEntry>()
+  })
+})
+
+describe("runtimeObjectSchema: creatorMembership", () => {
+  const withRoot = (membership?: string): RuntimeObject => {
+    const entry = runtimeObject()
+    return {
+      ...entry,
+      operations: {
+        ...entry.operations,
+        create: {
+          ...entry.operations!.create!,
+          root: membership === undefined ? {} : { membership },
+        },
+      },
+    }
+  }
+  const OTHER_ID = "00000000-0000-4000-8000-000000000106"
+
+  // Клієнт мапить `creatorMember` за полем спільної частини, ядро перевіряє
+  // за `operations`: розбіжність дала б запис не в той довідник членства.
+  it.each<[string, RuntimeObject, boolean]>([
+    [
+      "both name the same membership catalog",
+      { ...withRoot(MEMBERSHIP_ID), creatorMembership: MEMBERSHIP_ID },
+      true,
+    ],
+    ["a root without a creator and no field", withRoot(), true],
+    [
+      "the root names a membership the entry omits",
+      withRoot(MEMBERSHIP_ID),
+      false,
+    ],
+    [
+      "the entry names a membership the root lacks",
+      { ...withRoot(), creatorMembership: MEMBERSHIP_ID },
+      false,
+    ],
+    [
+      "a field on a non-root entry",
+      runtimeObject({ creatorMembership: MEMBERSHIP_ID }),
+      false,
+    ],
+    [
+      "different membership catalogs",
+      { ...withRoot(MEMBERSHIP_ID), creatorMembership: OTHER_ID },
+      false,
+    ],
+  ])("%s", (_, input, ok) => {
+    expect(runtimeObjectSchema.safeParse(input).success).toBe(ok)
+  })
+})
 
 describe("runtimeCatalogSchema", () => {
   it("accepts an object without the operations field", () => {
@@ -19,6 +159,8 @@ describe("runtimeCatalogSchema", () => {
           keyName: "ref",
           versionColumn: "version",
           versionName: "version",
+          kernelHash: KERNEL_HASH,
+          signal: true,
           attributes: [],
           tabularSections: [],
           constraints: [],
@@ -30,25 +172,8 @@ describe("runtimeCatalogSchema", () => {
 })
 
 describe("runtimeSectionSchema", () => {
-  const parentKey = {
-    name: "lines_org_id_parent_id_fkey",
-    kind: "foreignKey",
-    columns: ["org_id", "parent_id"],
-    references: ["org_id", "id"],
-  }
-  const section = {
-    name: "lines",
-    table: { schema: "public", name: "report_lines" },
-    key: "id",
-    keyName: "ref",
-    parent: "parent_id",
-    parentName: "parent",
-    lineNumber: "line_number",
-    lineNumberName: "lineNumber",
-    parentConstraint: parentKey.name,
-    attributes: [],
-    constraints: [parentKey],
-  }
+  const section = runtimeObject().tabularSections[0]!
+  const parentKey = section.constraints[0]!
 
   // Будівник корелює ТЧ з власником за всіма колонками FK власника: без
   // `references` чи з чужим іменем кореляції не з чого побудувати.

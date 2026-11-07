@@ -135,7 +135,8 @@ export {
   type EntityContext,
   type EntityField,
 } from "./entity-fields"
-export { buildRuntimeCatalog } from "./runtime-catalog"
+export { buildRuntimeCatalog, kernelHashOf } from "./runtime-catalog"
+export { buildClientCatalog } from "./client-catalog"
 export { memberCheckFunctionName } from "./catalog-command/contracts"
 export {
   canonicalSnapshot,

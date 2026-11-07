@@ -1,19 +1,33 @@
 import { beforeAll, describe, expect, it } from "vitest"
 import {
+  applyChanges,
   buildRuntimeCatalog,
   canonicalSnapshot,
+  kernelHashOf,
+  renameElement,
   type CompiledModel,
 } from "simetra/compiler"
 import {
+  objectColumns,
   runtimeCatalogSchema,
+  standardElementId,
   type RuntimeCatalog,
   type RuntimeObject,
 } from "simetra/model"
+import {
+  isSignalObject,
+  signalObject,
+  type ReadBoundary,
+} from "../access-units"
 import { modelHash } from "../canonical"
+import { hasVisibleUsers } from "../rights/functions"
 import {
   BULLETIN_FILE,
   GAUGE_LOG_FILE,
+  ROLE_FILE,
   STATUS_FILE,
+  TICKET_FILE,
+  TICKET_ID,
   adminRoles,
   commandCoreLayer,
   compileRights,
@@ -195,6 +209,25 @@ describe("buildRuntimeCatalog", () => {
     ).toEqual([])
   })
 
+  // id ТЧ — її ідентичність у формі передачі (рішення В4, В12): береться з
+  // походження фізичної таблиці, а не з імені, яке змінюється; стандартна ТЧ
+  // (дельта «Ролей») несе синтетичний id елемента.
+  it("a tabular section carries its UUID", () => {
+    const sections = catalog.objects.flatMap((o) => o.tabularSections)
+    const roles = objectOf("OrgRoles")
+    expect(roles.tabularSections.map((s) => s.id)).toContain(
+      standardElementId(roles.id, { logicalName: "delta" })
+    )
+    for (const section of sections) {
+      const table = model.physical.tables.find(
+        (t) =>
+          t.schema === section.table.schema && t.name === section.table.name
+      )
+      expect(table?.origin.tabularSectionId, section.table.name).toBeDefined()
+      expect(section.id).toBe(table!.origin.tabularSectionId)
+    }
+  })
+
   it("insert and update flags follow the command grant keys", () => {
     // Скоуп пишеться лише на створенні; колонка поза грантом не пишеться ніколи.
     expect(attributeOf("Ticket", "org")).toMatchObject({
@@ -306,6 +339,63 @@ describe("buildRuntimeCatalog", () => {
  * будівник читання робить `include` і корелює ТЧ з власником. FK скоупленої
  * таблиці на ціль того самого виду — складений `(скоуп, колонка)`.
  */
+describe("objectColumns of a compiled entry", () => {
+  it("a scoped catalog lists no column twice and reads key, version, scope and pair type", () => {
+    const { tabularSections, ...header } = objectColumns(objectOf("Ticket"))
+    const lists = [header, ...tabularSections.values()].flatMap((l) =>
+      Object.values(l)
+    )
+    for (const list of lists) expect(new Set(list).size).toBe(list.length)
+    expect(header.read).toEqual(
+      expect.arrayContaining(["id", "version", "org_id", "subject_type"])
+    )
+  })
+})
+
+describe("signalObject", () => {
+  it.each<[string, boolean, ReadBoundary[], boolean]>([
+    ["a single uuid key under the tenant boundary", true, ["tenant"], true],
+    ["a single uuid key without boundaries", true, [], true],
+    ["a key that is not a single uuid column", false, [], false],
+    ["the Users boundary", true, ["users"], false],
+    ["the tenant and the Users boundaries", true, ["tenant", "users"], false],
+  ])("%s", (_, keyIsSingleUuid, boundaries, expected) => {
+    expect(signalObject(keyIsSingleUuid, boundaries)).toBe(expected)
+  })
+})
+
+describe("buildRuntimeCatalog: signal", () => {
+  it("Users is not a signal object once its boundary is generated", () => {
+    // Передумова: без видимих користувачів межі «Користувачів» немає, і кейс
+    // нічого б не доводив.
+    expect(hasVisibleUsers(model.contracts, "supabase")).toBe(true)
+    expect(objectOf("Users").signal).toBe(false)
+  })
+
+  it.each(["Project", "OrgRoleAssignments", "GlobalRoles"])(
+    "%s is a signal object",
+    (name) => {
+      expect(objectOf(name).signal).toBe(true)
+    }
+  )
+
+  it("a scope root is a signal object", async () => {
+    const { model: roots } = await compileRights(rootCreationDomain())
+    const organization = buildRuntimeCatalog(roots!).objects.find(
+      (o) => o.name === "Organization"
+    )
+    expect(organization?.signal).toBe(true)
+  })
+
+  // Ознака не залежить від набору операцій запису: генератор ядра (B2)
+  // читає її тим самим входом.
+  it("every entry follows isSignalObject", () => {
+    for (const object of catalog.objects) {
+      expect(object.signal, object.name).toBe(isSignalObject(model, object.id))
+    }
+  })
+})
+
 describe("buildRuntimeCatalog: ref and parentConstraint", () => {
   const fkOf = (table: string, columns: string[]) => {
     const found = model.physical.tables
@@ -695,6 +785,19 @@ describe("buildRuntimeCatalog: scope root creation", () => {
     )
   })
 
+  // Клієнт мапить `creatorMember` записом довідника членства без
+  // `operations` (В8): UUID той самий, що в ядра кореня.
+  it("creatorMembership: a root with a creator names its membership catalog", () => {
+    expect(object("Organization").creatorMembership).toBe(
+      object("Organization").operations?.create?.root?.membership
+    )
+    expect(object("Organization").creatorMembership).toBe(
+      object("OrgMember").id
+    )
+    expect(object("Branch")).not.toHaveProperty("creatorMembership")
+    expect(object("OrgMember")).not.toHaveProperty("creatorMembership")
+  })
+
   it("a membership catalog names its user column", () => {
     expect(object("OrgMember").membership).toEqual({ userColumn: "user_id" })
     expect(object("BranchMember").membership).toEqual({
@@ -727,5 +830,170 @@ describe("buildRuntimeCatalog: scope root creation", () => {
     ],
   ])("the T0 schema rejects %s", (_, broken) => {
     expect(runtimeCatalogSchema.safeParse(broken(roots)).success).toBe(false)
+  })
+})
+
+/**
+ * Контракт ядра (Рд12, В5): `kernelHash` — хеш лише функцій і контекстів
+ * операцій. Сумісна зміна метаданих не робить стару збірку застарілою, а
+ * зміна форми ядра — робить.
+ */
+describe("kernelHash", () => {
+  type Json = Record<string, unknown>
+  type Files = Map<string, string>
+  const edit =
+    (path: string, change: (meta: Json) => void) =>
+    (files: Files): Files => {
+      const meta = JSON.parse(files.get(path)!) as Json
+      change(meta)
+      return new Map(files).set(path, JSON.stringify(meta))
+    }
+  const renamed =
+    (element: string[], newName: string) =>
+    async (files: Files): Promise<Files> => {
+      const result = await renameElement(files, {
+        target: { kind: "Catalog", name: "Ticket", element },
+        newName,
+      })
+      expect(result.diagnostics.filter((d) => d.severity === "error")).toEqual(
+        []
+      )
+      return applyChanges(files, result.changes)
+    }
+  const optional = (id: number, name: string) => ({
+    id: uuid(id),
+    name,
+    physicalName: name,
+    type: "String",
+    length: 20,
+  })
+  const attributesOf = (meta: Json) => meta.attributes as Json[]
+  const checklistOf = (meta: Json) =>
+    (meta.tabularSections as Json[]).find((s) => s.name === "checklist")!
+
+  it("every entry hashes its operations", () => {
+    for (const entry of catalog.objects) {
+      expect(entry.kernelHash, entry.name).toBe(kernelHashOf(entry.operations))
+    }
+  })
+
+  // Кожен довідник ядра має `update`, тож запису без `operations` у
+  // скомпільованому каталозі немає: хеш порожньої форми перевіряємо прямо.
+  // Літерал — sha256 тексту `{}`: від середовища й компіляції не залежить.
+  it("an entry without operations hashes the empty canonical form", () => {
+    expect(kernelHashOf(undefined)).toBe(kernelHashOf({}))
+    expect(kernelHashOf(undefined)).toBe(
+      "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+    )
+  })
+
+  it.each<[string, (files: Files) => Files | Promise<Files>]>([
+    [
+      "renaming the object",
+      async (f) => {
+        const result = await renameElement(f, {
+          target: { kind: "Catalog", name: "Ticket" },
+          newName: "Issue",
+        })
+        expect(result.ok).toBe(true)
+        return applyChanges(f, result.changes)
+      },
+    ],
+    ["renaming an attribute", renamed(["watchers"], "followers")],
+    ["renaming a tabular section", renamed(["checklist"], "todo")],
+    [
+      "a new optional header attribute",
+      edit(TICKET_FILE, (m) => {
+        m.attributes = [...attributesOf(m), optional(6990, "memo")]
+      }),
+    ],
+    [
+      "a new optional tabular section attribute",
+      edit(TICKET_FILE, (m) => {
+        const section = checklistOf(m)
+        section.attributes = [
+          ...(section.attributes as Json[]),
+          optional(6991, "memo"),
+        ]
+      }),
+    ],
+    [
+      "a presentation change",
+      edit(TICKET_FILE, (m) => {
+        m.standardAttributeOverrides = {
+          deletionMark: { description: { en: "Archived" } },
+        }
+      }),
+    ],
+    [
+      "a role's action grant",
+      edit(ROLE_FILE("TicketOwnWriter"), (m) => {
+        const [first] = m.grants as { grant: { actions: string[] } }[]
+        first!.grant.actions = ["read", "create", "update"]
+      }),
+    ],
+    [
+      "another object",
+      edit(BULLETIN_FILE, (m) => {
+        m.attributes = [...attributesOf(m), optional(6992, "memo")]
+      }),
+    ],
+    [
+      "a load change",
+      edit(TICKET_FILE, (m) => {
+        m.attributes = attributesOf(m).map((a) =>
+          a.name === "watchers" ? { ...a, load: "lazy" } : a
+        )
+      }),
+    ],
+  ])("%s keeps the catalog's kernelHash", async (_, change) => {
+    const { model: changed, diagnostics } = await compileRights(
+      await change(files())
+    )
+    expect(diagnostics.filter((d) => d.severity === "error")).toEqual([])
+    // Без цього кейс нічого б не доводив: зміна мусить дійти до моделі.
+    expect(changed!.hash).not.toBe(model.hash)
+    const ticket = buildRuntimeCatalog(changed!).objects.find(
+      (o) => o.id === TICKET_ID
+    )
+    expect(ticket?.kernelHash).toBe(objectOf("Ticket").kernelHash)
+  })
+
+  // Хеш покриває форму `operations`, а з нею — довідник членства кореня з
+  // творцем: без `rootCreator` контракт створення кореня інший.
+  it("adding rootCreator to a role changes the root's kernelHash", async () => {
+    const rootOf = async (files: Files) => {
+      const { model: m, diagnostics } = await compileRights(files)
+      expect(diagnostics.filter((d) => d.severity === "error")).toEqual([])
+      return buildRuntimeCatalog(m!).objects
+    }
+    const withCreator = await rootOf(rootCreationDomain())
+    const root = withCreator.find((o) => o.creatorMembership !== undefined)!
+    const without = await rootOf(
+      edit(ROLE_FILE("TenantOwner"), (m) => {
+        delete m.rootCreator
+      })(rootCreationDomain())
+    )
+    const before = without.find((o) => o.id === root.id)!
+    expect(before.creatorMembership).toBeUndefined()
+    expect(root.kernelHash).not.toBe(before.kernelHash)
+  })
+
+  it("other functions, contexts or actions give other hashes", () => {
+    const operations = objectOf("OrgRoleAssignments").operations!
+    const update = operations.update!
+    const variants = [
+      operations,
+      { ...operations, update: { ...update, context: "update" } },
+      {
+        ...operations,
+        update: {
+          ...update,
+          function: { ...update.function, name: "other_save" },
+        },
+      },
+      { ...operations, delete: undefined },
+    ]
+    expect(new Set(variants.map(kernelHashOf)).size).toBe(variants.length)
   })
 })
