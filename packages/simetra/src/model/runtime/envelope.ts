@@ -1,12 +1,15 @@
 import { z } from "zod"
 import { elementIdSchema } from "../schemas/element-id"
-import { COMMAND_ERROR_CODES } from "./errors"
+import { kernelHashSchema } from "./catalog"
+import { COMMAND_ERROR_CODES, LIMIT_REASONS } from "./errors"
 import {
+  BATCH_MAX,
+  lengthLimited,
   OBJECT_OPERATIONS,
   operationSchema,
   updateOperationObjectSchema,
 } from "./operation"
-import { queryFormSchema, readQuerySchema } from "./read"
+import { queryFormSchema, readQuerySchema, TABULAR_LINES_MAX } from "./read"
 import { INTEGER_TEXT } from "./values"
 
 /**
@@ -20,9 +23,15 @@ const wireObjectSchema = z.guid()
 
 // Рядок ТЧ — фізичні колонки; ключ запису ТЧ — її id (рішення В4, В12), бо
 // ім'я ТЧ змінює перейменування.
+// Межу рядків ставить `lengthLimited`, як і в логічній формі: шлях відмови —
+// `<id ТЧ>` (обробник прибирає префікс), причина — `tabular-too-large`.
 const wireTabularSectionsSchema = z.record(
   elementIdSchema,
-  z.array(z.record(z.string(), z.unknown()))
+  lengthLimited(
+    z.array(z.record(z.string(), z.unknown())),
+    TABULAR_LINES_MAX,
+    LIMIT_REASONS.tabularTooLarge
+  )
 )
 
 // Варіанти беруться з логічної схеми, щоб дві форми не розійшлися полями:
@@ -135,6 +144,9 @@ export const wireReadResultSchema = z.union([
     rows: z.array(wireRowSchema),
     included: z.record(wireObjectSchema, z.array(wireRowSchema)).optional(),
     ownerVersion: z.string().regex(INTEGER_TEXT).optional(),
+    // Сторінку обрізано за бюджетом відповіді: є ще рядки. Що `more` буває
+    // лише на сторінці, тримає обробник, а не схема.
+    more: z.literal(true).optional(),
   }),
   z.strictObject({
     count: z.int().min(0),
@@ -143,3 +155,67 @@ export const wireReadResultSchema = z.union([
 ])
 
 export type WireReadResult = z.infer<typeof wireReadResultSchema>
+
+// Хеші ядер за UUID об'єкта: клієнт каже, з якими контрактами він збирав
+// команду, і сервер відмовляє `stale-client`, якщо вони застаріли.
+const kernelsSchema = z.record(wireObjectSchema, kernelHashSchema).optional()
+
+// Рівно один з `operation`/`batch`. Одна форма з уточненням, а не `z.union`
+// двох форм: issue варіантів union ховаються у вкладені помилки, а обробник
+// читає причину межі з плоского списку issue (`issueReason`). `type: "rights"`
+// — B5.
+const runRequestSchema = z
+  .strictObject({
+    type: z.literal("run"),
+    operation: wireOperationSchema.optional(),
+    batch: lengthLimited(
+      z.array(wireOperationSchema).min(1),
+      BATCH_MAX,
+      LIMIT_REASONS.batchTooLarge
+    ).optional(),
+    kernels: kernelsSchema,
+  })
+  .superRefine((request, ctx) => {
+    if ((request.operation === undefined) === (request.batch === undefined)) {
+      ctx.addIssue({
+        code: "custom",
+        message: "exactly one of operation and batch",
+      })
+    }
+  })
+
+/** A request to the data transport: the session subject and one request. */
+export const dataRequestSchema = z.strictObject({
+  subject: z.string(),
+  request: z.discriminatedUnion("type", [
+    z.strictObject({ type: z.literal("read"), query: wireReadQuerySchema }),
+    runRequestSchema,
+    z.strictObject({ type: z.literal("version") }),
+  ]),
+})
+
+export type DataRequest = z.infer<typeof dataRequestSchema>
+
+/** The catalog version a `version` request returns. */
+export const versionValueSchema = z.strictObject({
+  snapshotHash: z.string(),
+  objects: z.record(wireObjectSchema, kernelHashSchema),
+})
+
+export type VersionValue = z.infer<typeof versionValueSchema>
+
+/** A response of the data transport; `serverHash` is the server's catalog hash. */
+export const dataResponseSchema = z.union([
+  z.strictObject({
+    ok: z.literal(true),
+    value: z.unknown(),
+    serverHash: z.string(),
+  }),
+  z.strictObject({
+    ok: z.literal(false),
+    error: wireCommandErrorSchema,
+    serverHash: z.string(),
+  }),
+])
+
+export type DataResponse = z.infer<typeof dataResponseSchema>

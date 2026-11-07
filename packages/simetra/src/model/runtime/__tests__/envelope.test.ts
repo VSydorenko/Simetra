@@ -1,6 +1,9 @@
 import { describe, expect, expectTypeOf, it } from "vitest"
 import { standardElementId } from "../../schemas/element-id"
 import {
+  dataRequestSchema,
+  dataResponseSchema,
+  versionValueSchema,
   wireChangeSchema,
   wireCommandErrorSchema,
   wireOperationSchema,
@@ -236,5 +239,152 @@ describe("wire schemas", () => {
     ["a negative count", false, { count: -1 }],
   ])("wireReadResultSchema: %s", (_, ok, value) => {
     expect(wireReadResultSchema.safeParse(value).success).toBe(ok)
+  })
+})
+
+describe("data envelope", () => {
+  const HASH = "a".repeat(64)
+  const op = { action: "create", object: OBJECT_ID }
+  const read = { type: "read", query: { object: OBJECT_ID, id: ID } }
+  const reasonOf = (r: { error?: { issues: readonly object[] } }) =>
+    r.error?.issues
+      .map((i) => (i as { params?: { reason?: string } }).params?.reason)
+      .find((x) => x !== undefined)
+
+  it.each([
+    ["a read", true, { subject: "s", request: read }],
+    ["a version", true, { subject: "s", request: { type: "version" } }],
+    [
+      "a run of one operation",
+      true,
+      { subject: "s", request: { type: "run", operation: op } },
+    ],
+    [
+      "a run of a batch",
+      true,
+      { subject: "s", request: { type: "run", batch: [op] } },
+    ],
+    [
+      "kernels on a run",
+      true,
+      {
+        subject: "s",
+        request: { type: "run", operation: op, kernels: { [OBJECT_ID]: HASH } },
+      },
+    ],
+    [
+      "kernels on a batch run",
+      true,
+      {
+        subject: "s",
+        request: { type: "run", batch: [op], kernels: { [OBJECT_ID]: HASH } },
+      },
+    ],
+    [
+      "operation and batch together",
+      false,
+      { subject: "s", request: { type: "run", operation: op, batch: [op] } },
+    ],
+    ["a run with neither", false, { subject: "s", request: { type: "run" } }],
+    [
+      "an empty batch",
+      false,
+      { subject: "s", request: { type: "run", batch: [] } },
+    ],
+    ["a rights request", false, { subject: "s", request: { type: "rights" } }],
+    [
+      "a bad kernel hash",
+      false,
+      {
+        subject: "s",
+        request: { type: "run", operation: op, kernels: { [OBJECT_ID]: "x" } },
+      },
+    ],
+    ["a missing subject", false, { request: { type: "version" } }],
+    [
+      "an update carrying deleteIds",
+      false,
+      {
+        subject: "s",
+        request: {
+          type: "run",
+          operation: {
+            action: "update",
+            object: OBJECT_ID,
+            id: ID,
+            expectedVersion: 1,
+            deleteIds: {},
+          },
+        },
+      },
+    ],
+  ])("request: %s -> %s", (_name, ok, value) => {
+    expect(dataRequestSchema.safeParse(value).success).toBe(ok)
+  })
+
+  it("refuses a batch over the limit with its reason, before the elements", () => {
+    const result = dataRequestSchema.safeParse({
+      subject: "s",
+      request: {
+        type: "run",
+        batch: Array.from({ length: 501 }, () => ({ bad: 1 })),
+      },
+    })
+    expect(result.success).toBe(false)
+    expect(reasonOf(result)).toBe("batch-too-large")
+  })
+
+  it("refuses a section over the line limit with the section id path", () => {
+    const result = dataRequestSchema.safeParse({
+      subject: "s",
+      request: {
+        type: "run",
+        operation: {
+          ...op,
+          tabularSections: {
+            [SECTION_ID]: Array.from({ length: 5001 }, () => ({})),
+          },
+        },
+      },
+    })
+    expect(result.success).toBe(false)
+    expect(reasonOf(result)).toBe("tabular-too-large")
+    expect(
+      result.error?.issues.find((i) => i.path.includes(SECTION_ID))
+    ).toBeDefined()
+  })
+
+  it.each([
+    ["ok", true, { ok: true, value: { rows: [] }, serverHash: HASH }],
+    [
+      "an error",
+      true,
+      { ok: false, error: { code: "command.invalid" }, serverHash: HASH },
+    ],
+    ["ok without serverHash", false, { ok: true, value: 1 }],
+    ["an error without error", false, { ok: false, serverHash: HASH }],
+  ])("response: %s -> %s", (_name, ok, value) => {
+    expect(dataResponseSchema.safeParse(value).success).toBe(ok)
+  })
+
+  it("accepts more on a read page and a version value", () => {
+    expect(
+      wireReadResultSchema.safeParse({ rows: [], more: true }).success
+    ).toBe(true)
+    expect(
+      wireReadResultSchema.safeParse({ rows: [], more: false }).success
+    ).toBe(false)
+    expect(
+      versionValueSchema.safeParse({
+        snapshotHash: "h",
+        objects: { [OBJECT_ID]: HASH },
+      }).success
+    ).toBe(true)
+    expect(
+      versionValueSchema.safeParse({
+        snapshotHash: "h",
+        objects: { [OBJECT_ID]: "x" },
+      }).success
+    ).toBe(false)
   })
 })

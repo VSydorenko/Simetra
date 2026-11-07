@@ -37,7 +37,7 @@ const valuesSchema = z.record(z.string(), z.unknown())
  * з входом. `preprocess`, а не `pipe` від `unknown[]`: JSON Schema входу (MCP
  * `data-command`) бере вихідну схему препроцесора й не губить форми елемента.
  */
-const lengthLimited = <T extends z.ZodArray>(
+export const lengthLimited = <T extends z.ZodArray>(
   schema: T,
   max: number,
   reason: string

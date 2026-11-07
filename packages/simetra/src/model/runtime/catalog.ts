@@ -167,6 +167,9 @@ export const runtimeRootCreateSchema = z.strictObject({
 })
 
 /** A catalog object of the shared catalog part. */
+/** SHA-256 hex of the canonical form of an entry's operations. */
+export const kernelHashSchema = z.string().regex(/^[0-9a-f]{64}$/)
+
 export const catalogEntrySchema = z.strictObject({
   id: z.guid(),
   name: z.string(),
@@ -188,7 +191,7 @@ export const catalogEntrySchema = z.strictObject({
    * The kernel contract hash (P4-B spec Рд12): SHA-256 of the canonical form
    * of the entry's operations.
    */
-  kernelHash: z.string().regex(/^[0-9a-f]{64}$/),
+  kernelHash: kernelHashSchema,
   /**
    * Whether the object takes a change signal (P4-B spec §8.3): a single
    * `uuid` key and no read boundary but the tenant one.
