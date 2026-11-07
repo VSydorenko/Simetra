@@ -63,6 +63,8 @@ export {
   tenantOperator,
   tenantSelfService,
   writableRegister,
+  wideBigintLayer,
+  wideBigintNames,
   writeRoles,
   type Layer,
 } from "../src/compiler/__tests__/fixtures/rights"

@@ -6,6 +6,7 @@ import {
   READ_COUNT_CAP,
   TABULAR_LINES_MAX,
   isPlainObject,
+  jsonbBuildObject,
   readQuerySchema,
   type BaseCastType,
   type CommandError,
@@ -67,9 +68,6 @@ export interface IncludeStep {
   attributes: string[]
 }
 
-// `jsonb_build_object` приймає до 100 аргументів: шматок — до 50 пар.
-const PAIRS_PER_CALL = 50
-
 const tableOf = (owner: { table: { schema: string; name: string } }) =>
   `${ident(owner.table.schema)}.${ident(owner.table.name)}`
 
@@ -98,17 +96,6 @@ function attributePairs(
   })
 }
 
-/** `jsonb` з пар, шматками по {@link PAIRS_PER_CALL}. */
-function jsonbOf(pairs: readonly string[]): string {
-  const calls: string[] = []
-  for (let i = 0; i < pairs.length; i += PAIRS_PER_CALL) {
-    calls.push(
-      `jsonb_build_object(${pairs.slice(i, i + PAIRS_PER_CALL).join(", ")})`
-    )
-  }
-  return calls.length === 1 ? calls[0]! : `(${calls.join(" || ")})`
-}
-
 /**
  * Рядок картки — та сама форма, що й результат ядра (`to_jsonb` і
  * `numeric`/`bigint` текстом, Рт1), тож декодує його той самий декодер шапки.
@@ -130,7 +117,7 @@ function cardProjection(object: RuntimeObject): string {
  * текстовим приведенням. Ключі ті самі, що в картки, тож декодер один.
  */
 function listProjection(object: RuntimeObject): string {
-  return `${jsonbOf([
+  return `${jsonbBuildObject([
     pairOf(object.key),
     pairOf(object.versionColumn),
     ...attributePairs(object.attributes, "t"),
@@ -139,7 +126,7 @@ function listProjection(object: RuntimeObject): string {
 
 /** Рядок ТЧ — той самий явний перелік; реквізити ТЧ лінивими не бувають. */
 function lineProjection(section: RuntimeSection, alias: string): string {
-  return jsonbOf([
+  return jsonbBuildObject([
     pairOf(section.key, undefined, alias),
     pairOf(section.parent, undefined, alias),
     pairOf(section.lineNumber, undefined, alias),
@@ -183,7 +170,7 @@ function linesOf(section: RuntimeSection, limit: string): string {
  * оператор, тобто один знімок (спека П4-B §4.2).
  */
 const tabularColumn = (sections: readonly RuntimeSection[], limit: string) =>
-  `${jsonbOf(sections.map((s) => `${literal(s.table.name)}, ${linesOf(s, limit)}`))}::text AS tabular`
+  `${jsonbBuildObject(sections.map((s) => `${literal(s.table.name)}, ${linesOf(s, limit)}`))}::text AS tabular`
 
 /**
  * Колонки, які запит може назвати: реквізити, ключ і версія об'єкта — лише з

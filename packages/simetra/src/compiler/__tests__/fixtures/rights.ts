@@ -1602,6 +1602,38 @@ export function gaugeLoadLayer(loads: Record<string, "eager" | "lazy">): Layer {
   }
 }
 
+/** Імена реквізитів `BigInt`, які додає {@link wideBigintLayer}: `wide01`, `wide02`, …. */
+export const wideBigintNames = (count: number): string[] =>
+  Array.from(
+    { length: count },
+    (_, i) => `wide${String(i + 1).padStart(2, "0")}`
+  )
+
+/**
+ * `runtimeValuesLayer()` з `count` додатковими реквізитами `BigInt` у шапці
+ * `Gauge`: понад 50 текстових колонок не вміщаються в один
+ * `jsonb_build_object` (ліміт 100 аргументів Postgres).
+ */
+export function wideBigintLayer(count = 60): Layer {
+  const layer = runtimeValuesLayer()
+  const gauge = layer[GAUGE_FILE] as { attributes: unknown[] }
+  return {
+    ...layer,
+    [GAUGE_FILE]: {
+      ...gauge,
+      attributes: [
+        ...gauge.attributes,
+        ...wideBigintNames(count).map((name, i) => ({
+          id: uuid(8400 + i),
+          name,
+          physicalName: name,
+          type: "BigInt",
+        })),
+      ],
+    },
+  }
+}
+
 /**
  * `runtimeValuesLayer()` з одноцільовим `Ref` `site` у `Gauge` на довідник
  * `Region` з `crossScope: true` — ціль `include` серверного читання. Простий

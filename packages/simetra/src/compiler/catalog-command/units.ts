@@ -11,6 +11,7 @@ import {
   type PhysicalTable,
   COMMAND_CORE_ERRORS,
   isTextEncodedType,
+  jsonbBuildObject,
 } from "simetra/model"
 import type { CompiledScopeKind } from "../compile"
 import type {
@@ -423,12 +424,14 @@ export function defaultOf(table: PhysicalTable, column: string): string {
 function textColumns(table: PhysicalTable, row: string): string | undefined {
   const columns = table.columns.filter((c) => isTextEncodedType(c.type))
   if (columns.length === 0) return undefined
-  return `jsonb_build_object(${columns
-    .map(
+  // Шматки по 50 пар: один виклик на широку таблицю перевищив би ліміт 100
+  // аргументів, і ядро впало б лише на першому виконанні.
+  return jsonbBuildObject(
+    columns.map(
       (c) =>
         `${sqlLiteral(c.name)}, ${row}.${q(c.name)}::${c.type.endsWith("[]") ? "text[]" : "text"}`
     )
-    .join(", ")})`
+  )
 }
 
 const rowJson = (table: PhysicalTable, row: string) => {
