@@ -8,6 +8,7 @@ import {
   type UnitSubjectKey,
 } from "simetra/compiler"
 import {
+  parseStandardElementId,
   quoteIdent,
   type CatalogColumn,
   type CatalogModel,
@@ -575,7 +576,7 @@ function columnChanges(
         c.schema === u.schema &&
         c.table === u.name &&
         c.to === from.name &&
-        c.id.includes("#")
+        parseStandardElementId(c.id) !== undefined
     )
     changed(
       "default",

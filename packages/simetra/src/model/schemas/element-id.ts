@@ -19,22 +19,32 @@ export function standardElementId(
 
 const ownerIdSchema = z.guid()
 
+/**
+ * Parses a synthetic id built by {@link standardElementId}; `undefined` for a
+ * declared element's UUID or a malformed id.
+ */
 // Розбір тим самим форматом, що будує `standardElementId`: рівно один
 // роздільник, власник — UUID, ім'я непорожнє й без крапки (крапка ділить
-// `path` форми передачі).
-const syntheticElementIdSchema = z.string().refine(
-  (id) => {
-    const parts = id.split(ELEMENT_ID_SEPARATOR)
-    if (parts.length !== 2) return false
-    const [owner, name] = parts as [string, string]
-    return (
-      ownerIdSchema.safeParse(owner).success &&
-      name.length > 0 &&
-      !name.includes(".")
-    )
-  },
-  { message: "not a synthetic element id" }
-)
+// `path` форми передачі). Одне місце розбору — інакше кожен викликач тримав
+// би власне уявлення про роздільник.
+export function parseStandardElementId(
+  id: string
+): { ownerId: string; name: string } | undefined {
+  const parts = id.split(ELEMENT_ID_SEPARATOR)
+  if (parts.length !== 2) return undefined
+  const [ownerId, name] = parts as [string, string]
+  return ownerIdSchema.safeParse(ownerId).success &&
+    name.length > 0 &&
+    !name.includes(".")
+    ? { ownerId, name }
+    : undefined
+}
+
+const syntheticElementIdSchema = z
+  .string()
+  .refine((id) => parseStandardElementId(id) !== undefined, {
+    message: "not a synthetic element id",
+  })
 
 /**
  * The id of a model element: the UUID of a declared element or the synthetic
