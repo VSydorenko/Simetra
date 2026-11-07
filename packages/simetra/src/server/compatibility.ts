@@ -1,7 +1,6 @@
 import {
   objectColumns,
   type CatalogEntryAttribute,
-  type ColumnLists,
   type DataRequest,
   type Filter,
   type CatalogEntry,
@@ -156,7 +155,7 @@ type QueryShape = Partial<{
 // називає: мапінг читання адресує пару її `column`. Без цього вирахування
 // звірка пропустила б колонку, яку мапінг назве `unknown`.
 const addressable = (
-  lists: ColumnLists,
+  lists: Pick<ObjectColumns, "read" | "lazy">,
   attributes: readonly CatalogEntryAttribute[]
 ): ReadonlySet<string> => {
   const typeColumns = new Set(

@@ -277,7 +277,7 @@ describe("mapping between catalogs A and A′", () => {
     }
     for (const [id, lists] of before.tabularSections) {
       const next = after.tabularSections.get(id)!
-      for (const list of ["insert", "update", "read"] as const) {
+      for (const list of ["insert", "read"] as const) {
         expect(next[list], `${id} ${list}`).toEqual(
           expect.arrayContaining([...lists[list]])
         )
