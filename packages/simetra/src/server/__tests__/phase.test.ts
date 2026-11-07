@@ -134,12 +134,18 @@ describe("issueReason over the data envelope", () => {
     request: { type: "run", ...body },
   })
 
-  it.each<[string, unknown, string | undefined, string | undefined]>([
+  it.each<[string, unknown, string | undefined, (string | number)[]]>([
+    [
+      "a read with a bad query",
+      { subject: "s", request: { type: "read", query: { bad: 1 } } },
+      undefined,
+      ["request", "query", "object"],
+    ],
     [
       "a batch over BATCH_MAX",
       run({ batch: Array.from({ length: BATCH_MAX + 1 }, () => op) }),
       "batch-too-large",
-      "batch",
+      ["request", "batch"],
     ],
     [
       "a section over TABULAR_LINES_MAX inside operation",
@@ -155,23 +161,28 @@ describe("issueReason over the data envelope", () => {
         },
       }),
       "tabular-too-large",
-      SECTION,
+      ["request", "operation", "tabularSections", SECTION],
     ],
     [
       "operation and batch together",
       run({ operation: op, batch: [op] }),
       undefined,
-      undefined,
+      ["request", "batch"],
     ],
-    ["neither operation nor batch", run({}), undefined, undefined],
-  ])("%s", (_, input, reason, pathPart) => {
+    [
+      "neither operation nor batch",
+      run({}),
+      undefined,
+      ["request", "operation"],
+    ],
+  ])("%s", (_, input, reason, path) => {
     const result = dataRequestSchema.safeParse(input)
     expect(result.success).toBe(false)
     if (result.success) return
     expect(issueReason(result.error)).toBe(reason)
-    if (pathPart !== undefined) {
-      expect(decidingIssue(result.error)?.path.map(String)).toContain(pathPart)
-    }
+    const issue = decidingIssue(result.error)
+    expect(issue?.path).toEqual(path)
+    expect(issue?.code).not.toBe("invalid_union")
   })
 
   it("picks the first limit reason in branch order, over an earlier plain one", () => {

@@ -695,35 +695,56 @@ const reasonOf = (issue: z.core.$ZodIssue): string | undefined => {
   return typeof reason === "string" ? reason : undefined
 }
 
-// Issue об'єднання (`invalid_union`) ховає помилки гілок у `errors`; розгортаємо
-// їх у плоский список у порядку гілок, щоб вибір не залежав від того, скільки
-// гілок відхилили вхід.
-const flattenIssues = (
-  issues: readonly z.core.$ZodIssue[]
+// Issue об'єднання (`invalid_union`) ховає помилки гілок у `errors` з шляхами
+// відносно самого об'єднання. Розгортаємо їх у плоский список листків: шлях
+// кожного дістає префікс шляху об'єднання, бо відмова називає поле входу, а не
+// місце в гілці. Гілку, що не збіглася з дискримінатором (`invalid_value` на
+// одному сегменті від кореня гілки, тобто літерал `type`), відкидаємо: відправник
+// мав на увазі іншу форму, і її issue лише ховали б справжню відмову. Якщо
+// відкинуто всі гілки, лишаємо всі.
+const withPath = (
+  issue: z.core.$ZodIssue,
+  prefix: readonly PropertyKey[]
+): z.core.$ZodIssue =>
+  prefix.length === 0 ? issue : { ...issue, path: [...prefix, ...issue.path] }
+
+const leavesOf = (
+  issues: readonly z.core.$ZodIssue[],
+  prefix: readonly PropertyKey[]
 ): z.core.$ZodIssue[] =>
-  issues.flatMap((issue) =>
-    issue.code === "invalid_union" && issue.errors.length > 0
-      ? flattenIssues(issue.errors.flat())
-      : [issue]
-  )
+  issues.flatMap((issue) => {
+    if (issue.code !== "invalid_union" || issue.errors.length === 0) {
+      return [withPath(issue, prefix)]
+    }
+    const root = [...prefix, ...issue.path]
+    const branches = issue.errors.map((branch) => leavesOf(branch, root))
+    const matched = branches.filter(
+      (leaves) =>
+        !leaves.some(
+          (leaf) =>
+            leaf.code === "invalid_value" &&
+            leaf.path.length === root.length + 1
+        )
+    )
+    const kept = (matched.length > 0 ? matched : branches).flat()
+    return kept.length > 0 ? kept : [withPath(issue, prefix)]
+  })
 
 /**
- * The issue a refusal reports: the first one (branches of a union included)
- * whose `params.reason` is a limit reason, else the first one with any
- * reason, else the first one.
+ * The issue a refusal reports, with its path from the parsed root. Branches
+ * of a union are searched in order, those that failed on their discriminator
+ * left out: the first issue whose `params.reason` is a limit reason, else the
+ * first with any reason, else the first issue.
  */
 export function decidingIssue(error: z.ZodError): z.core.$ZodIssue | undefined {
-  // Без причини лишається перша issue верхнього рівня, як і до розгортання:
-  // її шлях (напр. `action` невідомої дії) читають відмови.
   // Причина межі важливіша за порядок: issue сусідніх полів не мають ховати,
-  // що вхід завеликий. У `z.union` межу повідомляє лише гілка, у якій вона
-  // порушена, а решта гілок відхиляє вхід за форму; порядок гілок у схемі
-  // фіксований, тож перша issue з причиною межі (обхід углиб) — детермінована.
-  const all = flattenIssues(error.issues)
+  // що вхід завеликий. Порядок гілок у схемі фіксований, тож вибір
+  // детермінований. Без причини лишається перша issue, як і до розгортання.
+  const all = leavesOf(error.issues, [])
   return (
     all.find((issue) => LIMIT_REASON_VALUES.has(reasonOf(issue) ?? "")) ??
     all.find((issue) => reasonOf(issue) !== undefined) ??
-    error.issues[0]
+    all[0]
   )
 }
 
