@@ -106,10 +106,11 @@ rebase на `main`, `orient --plan` цього файла, звірка кожн
 2. **Невідомий UUID об'єкта чи ТЧ і невідома колонка** у формі передачі:
    мапінг повертає `{ ok: false, unknown }` з UUID об'єкта, а не кидає й не
    пропускає мовчки. Тест — задача 7.
-3. **Хибне значення від клієнта** (`BigInt: "abc"`, невідома мітка
-   перерахування в операції) на сервері — не виняток і не `unknown`: значення
-   проходить мапінг як є, і його відхиляє валідація `runtime.run`
-   (`command.invalid` з логічним `path`). Тест — задача 7.
+3. **Хибне значення від клієнта** на сервері — не виняток і не `unknown`:
+   `BigInt: "abc"` проходить мапінг як є, і його відхиляє валідація
+   `runtime.run`; невідома мітка перерахування чи цілі пари —
+   `{ ok: false, invalid }` мапінгу з логічним `path`. Обидва — `command.invalid`.
+   Тест — задача 7.
 4. **`bigint` поза безпечним цілим, `Numeric` з масштабом, `DateTime` з
    будь-яким зсувом і дробом** — без втрат і фіксованої ширини. Тест —
    задача 6.
@@ -428,8 +429,9 @@ function objectColumns(entry: CatalogObject): ObjectColumns
     номер рядка ТЧ — лише рядок цілого → безпечне ціле `number`; `Numeric`,
     `Date`, `Bytes` — рядок без змін; `DateTime` — рядок
     `YYYY-MM-DDTHH:MM:SS.ffffffZ` (UTC, рівно 6 знаків дробу) з будь-якого
-    зсуву й будь-якої довжини дробу, розбором рядка (не `Date`: він губить
-    мікросекунди); перерахування — логічне ім'я; пара — `{ type, id }`;
+    зсуву й 0–6 знаків дробу, розбором рядка (не `Date`: він губить
+    мікросекунди); понад 6 знаків — `WireDecodeError` (точність
+    `timestamptz` — мікросекунди, тож довший дріб — не значення бази); перерахування — логічне ім'я; пара — `{ type, id }`;
     `Json` — значення; фізичний ключ поза записом ігнорується; відсутній ключ
     — відсутнє поле; `tabularSections` за UUID ТЧ → за логічним ім'ям.
     Невідома мітка перерахування чи цілі пари — за рішенням В9 (на
@@ -449,7 +451,7 @@ function objectColumns(entry: CatalogObject): ObjectColumns
   передачі кожного (`toEqual` на літерал) і `decodeRow(encodeRow(x))` = `x`
   для нормалізованого `x`; `BigInt` 2^63−1; `Numeric` `10.50`; `DateTime`
   `+00:00`, `+05:30`, `-08:00` з 0, 3 і 6 знаками дробу → однаковий
-  нормалізований рядок; версія `"7"` → `7`, версія числом — `WireDecodeError`;
+  нормалізований рядок; 7 знаків дробу — `WireDecodeError`; версія `"7"` → `7`, версія числом — `WireDecodeError`;
   ключ поза записом ігнорується; відсутній ключ — немає поля; рядок картки з
   двома ТЧ; ключі `__proto__` і `constructor` у рядку — прототип результату
   `Object.prototype`, полів немає. `wire-catalog.test.ts`: `encodeRow` /
@@ -620,8 +622,9 @@ function objectColumns(entry: CatalogObject): ObjectColumns
   старою вкладкою нова колонка не називається (збереження її значення
   сервером доводить B1b-2); запит з видаленим реквізитом — `unknown` на боці
   `A′` (B1b-2 дасть `stale-client`); перейменування ТЧ не змінює форми
-  передачі; колонки `objectColumns(A)` без видаленої — підмножина
-  `objectColumns(A′)`.
+  передачі; `objectColumns(A)` без колонки видаленого реквізиту —
+  підмножина `objectColumns(A′)`, а колонка видаленого реквізиту в
+  `objectColumns(A′)` відсутня (окремий `expect`).
 - [ ] **Step 2:** червоні. **Step 3:** будівник. **Step 4:** зелені.
 - [ ] **Step 5: коміт** `test(model): мапінг між каталогами після перейменування й розширення`.
 
@@ -635,9 +638,11 @@ function objectColumns(entry: CatalogObject): ObjectColumns
 - Produces (T0) — лише типи (§5.1, §8.5):
 
 ```ts
-type WireRowsResult = Exclude<WireReadResult, { count: unknown }> // лічильник — через DataTransport (B1b-2)
+// лічильник — через DataTransport (B1b-2), тож порт його не бачить ні на вході, ні на виході
+type WireRowsQuery = Exclude<WireReadQuery, { count: true }>
+type WireRowsResult = Exclude<WireReadResult, { count: unknown }>
 interface SourceAdapter {
-  read(query: WireReadQuery): Promise<WireRowsResult>
+  read(query: WireRowsQuery): Promise<WireRowsResult>
   capabilities: { include: boolean }
 }
 type SignalErrorKind = "auth" | "transport"
@@ -649,7 +654,8 @@ interface SignalTransport {
 ```
 
 - [ ] **Step 1: тест типів** (`expectTypeOf`): фейкова реалізація
-  задовольняє обидва порти; `read` не приймає форми `{ count }`.
+  задовольняє обидва порти; `// @ts-expect-error` на виклику `read` із
+  запитом `{ count: true }` і на реалізації, що повертає `{ count }`.
 - [ ] **Step 2–4:** червоний → реалізація → зелений
   (`pnpm --filter simetra test ports`, `pnpm --filter simetra typecheck`).
 - [ ] **Step 5: коміт** `feat(model): порти SourceAdapter і SignalTransport`.
@@ -712,7 +718,11 @@ interface SignalTransport {
 - Конверт, `createDataHandler`, `DataTransport`, звірка сумісності,
   `stale-client`, межі й бюджет відповіді — B1b-2.
 - Бюджет часу, коди команди, масиви ТЧ і `deleteIds` — B1b-3.
-- Контракт прав у клієнтському каталозі — B6.
+- Контракт прав у клієнтському каталозі — B6 (рядок B6 §13), хоча §3 описує
+  його серед вмісту клієнтського каталогу: каталог B1b-1 — його частина без
+  контракту прав.
+- Лінива пара: колонки пари лінивими не бувають (Рд25, правило B1a), тож
+  `lazy` пари не містить.
 - Переведення декодера T3 (`server/decode.ts`) на кодек T0 — питання 4 нижче.
 - `object` на кожній помилці T3 — питання 2 (В10) нижче.
 
@@ -747,4 +757,20 @@ interface SignalTransport {
 
 ## Підсумок аудиту плану
 
-(заповнюється після аудиту)
+- **Раунд 1** (Opus, повний план): 0 blocker, 0 безпекових major; 6 major —
+  тести T0 під межею ярусів, неповна граматика `path`, `creatorMember` без
+  довідника в клієнтському каталозі, семантика збою мапінгу, дублі в
+  переліках, другий кодувальник поруч із `values.ts`; minor — внесено.
+  Наслідкові правки спеки — `1df170be`.
+- **Раунд 2** (Opus, дифф): 0 blocker, 0 безпекових major; 3 major — форми
+  `path` ТЧ без індексу й з `keyName`, об'єкт для мапінгу помилки (→ В10),
+  `Raw` у кодеку; minor — внесено. Перевірено: значення «як є» до SQL без
+  валідації не доходить (`parseInput`, `encodeMember`, `encodeParam`).
+- **Codex** (gpt-6-sol, вбудований контекст): 1 «blocker» і 5 major.
+  Спростовано: «blocker» про контракт прав (це B6 за §13), лінива пара
+  (заборонена Рд25), підмножина в задачі 9 (план уже виключав видалену
+  колонку — формулювання уточнено). Внесено: дріб `DateTime` понад 6 знаків,
+  узгодження Review Focus 3 із задачею 7, запит `count` поза портом
+  `SourceAdapter`.
+- Повторна перевірка правок третього раунду аудиту спеки (§14.3) для B1b-1
+  не потрібна: ті пункти — B1b-2, B1b-3 і B3.
