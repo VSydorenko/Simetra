@@ -1,4 +1,5 @@
 import {
+  BATCH_MAX,
   COMMAND_SETTING,
   LIMIT_REASONS,
   OPERATION_EVENTS,
@@ -18,6 +19,7 @@ import {
   type RuntimeOperationTarget,
   type RuntimeSection,
   CommandFailure,
+  TABULAR_LINES_MAX,
 } from "simetra/model"
 import { decodeRecord } from "./decode"
 import { callHook, type HookPhase } from "./hook-context"
@@ -217,12 +219,50 @@ function schemaRefusal(
 }
 
 /**
+ * Межі входу рантайму, не більші за сталі T0 (`CommandRuntimeOptions`): стала
+ * — це межа схеми, а host може звузити її під свою базу.
+ */
+export interface InputLimits {
+  maxBatch: number
+  maxTabularLines: number
+}
+
+const CONSTANT_LIMITS: InputLimits = {
+  maxBatch: BATCH_MAX,
+  maxTabularLines: TABULAR_LINES_MAX,
+}
+
+/**
+ * Перша ТЧ понад зменшену межу — та сама відмова, що й понад сталу в схемі,
+ * щоб викликач не розрізняв, яка з меж спрацювала.
+ */
+function tabularOverLimit(
+  object: RuntimeObject,
+  op: Operation,
+  max: number
+): CommandError | undefined {
+  if (op.action !== "create" && op.action !== "update") return undefined
+  for (const [name, rows] of Object.entries(op.tabularSections ?? {})) {
+    if (rows.length > max) {
+      return {
+        code: "command.invalid",
+        reason: LIMIT_REASONS.tabularTooLarge,
+        path: name,
+        object: { kind: object.kind, name: object.name },
+      }
+    }
+  }
+  return undefined
+}
+
+/**
  * Перевірка до транзакції (спека П4 §6.5): схема операції, об'єкт і операція
  * каталогу, значення за каталогом — без звернення до бази.
  */
 export function prepareInput(
   catalog: RuntimeCatalog,
-  input: unknown
+  input: unknown,
+  limits: InputLimits = CONSTANT_LIMITS
 ): PreparedOperation[] {
   let parsed: ReturnType<typeof batchSchema.safeParse>
   try {
@@ -236,9 +276,19 @@ export function prepareInput(
   if (!parsed.success) {
     throw new CommandFailure(schemaRefusal(catalog, input, parsed.error))
   }
+  // Пакет — лише вхід `run`: фаза `ctx.run` приходить однією операцією, тож
+  // зменшений `maxBatch` хуків не обмежує (їх тримає `BATCH_MAX`, §7.1).
+  if (Array.isArray(input) && parsed.data.length > limits.maxBatch) {
+    throw new CommandFailure({
+      code: "command.invalid",
+      reason: LIMIT_REASONS.batchTooLarge,
+    })
+  }
   return parsed.data.map((op) => {
     const found = targetOf(catalog, op)
     if ("error" in found) throw new CommandFailure(found.error)
+    const over = tabularOverLimit(found.object, op, limits.maxTabularLines)
+    if (over !== undefined) throw new CommandFailure(over)
     const ids = rootInput(catalog, found.object, op)
     if ("error" in ids) throw new CommandFailure(ids.error)
     const prepared: PreparedOperation = { ...op, ...ids }
@@ -453,7 +503,7 @@ async function runNested(
   try {
     // Пакет — не операція; копія — щоб хук не змінив входу після перевірки.
     if (Array.isArray(operation)) throw new CommandFailure(invalid())
-    ;[op] = prepareInput(tx.state.catalog, structuredClone(operation))
+    ;[op] = prepareInput(tx.state.catalog, structuredClone(operation), tx.state)
   } catch (error) {
     tx.abort(error instanceof CommandFailure ? error.error : invalid())
   }

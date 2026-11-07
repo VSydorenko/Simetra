@@ -1,9 +1,11 @@
 import {
   APPLIED_SNAPSHOT_HASH_FUNCTION_NAME,
+  BATCH_MAX,
   LOGIN_ROLE_REQUEST_PURPOSES,
   OBJECT_MODULE_KEYS,
   PLATFORM_SCHEMA,
   PROVIDER_API_ROLES,
+  TABULAR_LINES_MAX,
   runtimeCatalogSchema,
   sessionClaimsSchema,
   type CommandError,
@@ -65,6 +67,20 @@ export interface CommandRuntimeOptions {
    * with `command.timeout`.
    */
   commandBudgetMs?: number
+  /**
+   * Operations of one `run` batch (integer 1…`BATCH_MAX`); default
+   * `BATCH_MAX`. A longer batch rejects with `command.invalid`
+   * `reason: "batch-too-large"`. Phases started by `ctx.run` are not counted:
+   * they stay bound by `BATCH_MAX`.
+   */
+  maxBatch?: number
+  /**
+   * Rows of one tabular section of an operation, of `run` and of every
+   * `ctx.run` phase (integer 1…`TABULAR_LINES_MAX`); default
+   * `TABULAR_LINES_MAX`. More rows reject with `command.invalid`
+   * `reason: "tabular-too-large"`. Reads keep the `TABULAR_LINES_MAX` ceiling.
+   */
+  maxTabularLines?: number
   /**
    * `lock_timeout` of a command transaction in milliseconds (integer ≥ 1);
    * default 5 000. A lock wait past it rejects with `command.busy`.
@@ -156,6 +172,10 @@ const UNDEFINED_OBJECT = "42704"
 // Межі повтору, глибини й часу читання — помилка конфігурації host-а, як і
 // каталог; 0 для часу вимкнув би межу, тож теж відмова.
 const limitSchema = z.int().min(1).optional()
+// Зменшені межі входу — лише вниз від сталих T0: понад сталу вхід відмовила б
+// ще схема, тож така опція була б оманою конфігурації.
+const maxBatchSchema = z.int().min(1).max(BATCH_MAX).optional()
+const maxTabularLinesSchema = z.int().min(1).max(TABULAR_LINES_MAX).optional()
 // Бюджет менший за секунду не вміщує й одного кругового запиту з запасом.
 const budgetSchema = z.int().min(1000).optional()
 
@@ -249,6 +269,9 @@ export async function createCommandRuntime(
     limitSchema.parse(options.readStatementTimeoutMs) ?? 15_000
   const budgetMs = budgetSchema.parse(options.commandBudgetMs) ?? 60_000
   const lockTimeoutMs = limitSchema.parse(options.lockTimeoutMs) ?? 5_000
+  const maxBatch = maxBatchSchema.parse(options.maxBatch) ?? BATCH_MAX
+  const maxTabularLines =
+    maxTabularLinesSchema.parse(options.maxTabularLines) ?? TABULAR_LINES_MAX
   const sink = options.log ?? ((entry: LogEntry) => console.error(entry))
   // Журнал не має зламати шлях відмови: з'єднання звільняється після нього.
   const log = (entry: LogEntry) => {
@@ -277,6 +300,8 @@ export async function createCommandRuntime(
     log,
     maxAttempts,
     maxDepth,
+    maxBatch,
+    maxTabularLines,
     readTimeout,
     budgetMs,
     lockTimeoutMs,
