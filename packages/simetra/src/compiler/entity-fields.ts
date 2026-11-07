@@ -1,6 +1,7 @@
 import {
   KIND_REGISTRY,
   standardLogicalName,
+  standardElementId,
   type LocalizedString,
   type LogicalType,
   type MetadataRef,
@@ -9,7 +10,6 @@ import {
   type TabularSection,
 } from "simetra/model"
 import type { CompiledModel, SourceObject } from "./compile"
-import { standardElementId } from "./stages/identity"
 import { registerSingletonOf } from "./stages/model"
 
 /**

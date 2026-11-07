@@ -8,6 +8,7 @@ import {
   standardLogicalName,
   namedCollections,
   projectSchema,
+  standardElementId,
   type AccessDimension,
   type AttributeCase,
   type Expr,
@@ -1071,18 +1072,6 @@ function checkBalanceControl(
 
 /** Елемент усередині об'єкта, на який можна послатися у виразі за іменем. */
 type NameTable = Map<string, string>
-
-/**
- * Синтетичний id стандартного реквізиту: власник + канонічне ім'я, тож зміна
- * стилю проєкту id не міняє. Стандартний реквізит не має власного UUID, а
- * індекс посилань мусить називати його так само, як елемент.
- */
-export function standardElementId(
-  ownerId: string,
-  column: Pick<StandardColumnDef, "logicalName">
-): string {
-  return `${ownerId}#${column.logicalName}`
-}
 
 /**
  * Імена, доступні у виразі: власні елементи (за їх UUID) і стандартні

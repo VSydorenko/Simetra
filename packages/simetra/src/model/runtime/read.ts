@@ -252,48 +252,69 @@ const sectionCountQuerySchema = z.strictObject({
   count: z.literal(true),
 })
 
-const QUERY_FORMS = [
-  cardQuerySchema,
-  listQuerySchema,
-  countQuerySchema,
-  ownerLinesQuerySchema,
-  sectionListQuerySchema,
-  sectionCountQuerySchema,
-] as const
+/** The six forms of a read, in the order {@link queryFormSchema} expects. */
+export type QueryForms = readonly [
+  card: z.ZodType,
+  list: z.ZodType,
+  count: z.ZodType,
+  ownerLines: z.ZodType,
+  sectionList: z.ZodType,
+  sectionCount: z.ZodType,
+]
 
 /**
  * Форму обирає наявний ключ: `tabularSection` — форми ТЧ (`owner` — «ТЧ
  * власника», `count` — лічильник, інакше сторінка); `id` — картка, `count` —
- * лічильник, інакше список.
+ * лічильник, інакше список. Індекс — у порядку {@link QueryForms}.
  */
-function formOf(value: unknown): (typeof QUERY_FORMS)[number] {
+function formIndex(value: unknown): 0 | 1 | 2 | 3 | 4 | 5 {
   const query = objectAt(value) ?? {}
   if ("tabularSection" in query) {
-    if ("owner" in query) return ownerLinesQuerySchema
-    return "count" in query ? sectionCountQuerySchema : sectionListQuerySchema
+    if ("owner" in query) return 3
+    return "count" in query ? 5 : 4
   }
-  if ("id" in query) return cardQuerySchema
-  return "count" in query ? countQuerySchema : listQuerySchema
+  if ("id" in query) return 0
+  return "count" in query ? 2 : 1
+}
+
+/**
+ * A read query schema over its six forms: the form is picked by its keys
+ * before parsing, so a refusal keeps its path. Shared by the logical and the
+ * wire form of a read, so both pick a form by one rule.
+ */
+// Не суворий union: Zod 4 губить у ньому шлях відмови (`invalid_union` на
+// корені), тож union лишається лише для типу й JSON-схеми входу MCP.
+export function queryFormSchema<const F extends QueryForms>(forms: F) {
+  return z.preprocess((value, ctx) => {
+    const parsed = forms[formIndex(value)].safeParse(value)
+    if (!parsed.success) {
+      const [issue] = parsed.error.issues
+      if (issue !== undefined) {
+        ctx.addIssue({
+          code: "custom",
+          path: issue.path,
+          message: issue.message,
+        })
+      }
+    }
+    return value
+  }, z.union(forms))
 }
 
 /**
  * A server read (P4-B spec §4.1): a card by id (with its tabular sections),
  * a page by filter tree, or a capped count; a card and a page may include the
  * rows of `Ref` targets. A tabular section is read as the lines of one owner,
- * a page or a count. Суворий union Zod 4 губить шлях відмови (`invalid_union` на
- * корені), тож форму обирає ключ до розбору, а union лишається для типу й
- * JSON-схеми входу MCP.
+ * a page or a count.
  */
-export const readQuerySchema = z.preprocess((value, ctx) => {
-  const parsed = formOf(value).safeParse(value)
-  if (!parsed.success) {
-    const [issue] = parsed.error.issues
-    if (issue !== undefined) {
-      ctx.addIssue({ code: "custom", path: issue.path, message: issue.message })
-    }
-  }
-  return value
-}, z.union(QUERY_FORMS))
+export const readQuerySchema = queryFormSchema([
+  cardQuerySchema,
+  listQuerySchema,
+  countQuerySchema,
+  ownerLinesQuerySchema,
+  sectionListQuerySchema,
+  sectionCountQuerySchema,
+])
 
 export type ReadQuery = z.infer<typeof readQuerySchema>
 

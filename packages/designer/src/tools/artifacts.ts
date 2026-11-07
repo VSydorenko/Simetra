@@ -1,4 +1,5 @@
 import {
+  buildClientCatalog,
   buildRuntimeCatalog,
   canonicalSnapshot,
   emitEntityTypes,
@@ -12,6 +13,7 @@ import { renderDesiredState } from "simetra/schema"
  * адаптер (`compile --out`), тут лише вміст.
  */
 export function compileArtifacts(model: CompiledModel): FileChange[] {
+  const runtime = buildRuntimeCatalog(model)
   return [
     {
       path: "snapshot.json",
@@ -21,7 +23,11 @@ export function compileArtifacts(model: CompiledModel): FileChange[] {
     { path: "entities.d.ts", content: emitEntityTypes(model) },
     {
       path: "runtime-catalog.json",
-      content: `${JSON.stringify(buildRuntimeCatalog(model), null, 2)}\n`,
+      content: `${JSON.stringify(runtime, null, 2)}\n`,
+    },
+    {
+      path: "client-catalog.json",
+      content: `${JSON.stringify(buildClientCatalog(runtime), null, 2)}\n`,
     },
   ]
 }

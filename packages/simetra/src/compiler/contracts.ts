@@ -8,6 +8,7 @@ import {
   truncatedPeriodExpression,
   standardLogicalName,
   tabularParentColumn,
+  standardElementId,
   type Attribute,
   type DatabaseProvider,
   type Dml,
@@ -49,7 +50,7 @@ import {
 import { isMovementQuery, type SqlUnit } from "./sql/units"
 import { findStyleFreeColumn } from "./standard-column"
 import { objectKey, type ParsedObject } from "./stages/files"
-import { standardElementId, type ResolvedReference } from "./stages/identity"
+import { type ResolvedReference } from "./stages/identity"
 
 export interface QualifiedName {
   schema: string

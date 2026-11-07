@@ -11,6 +11,8 @@ import {
   type RuntimeRootCreate,
   type RuntimeSection,
 } from "simetra/model"
+import { isSignalObject } from "./access-units"
+import { canonicalize } from "./canonical"
 import type {
   CatalogCommandContract,
   CommandReference,
@@ -24,6 +26,7 @@ import {
   type EntityField,
   type ValueSource,
 } from "./entity-fields"
+import { sha256HexSync } from "./sha256"
 
 /**
  * Каталог рантайму (спека П4 §6.3) — проєкція скомпільованої моделі: лише
@@ -84,6 +87,17 @@ export function buildRuntimeCatalog(model: CompiledModel): RuntimeCatalog {
   }
 }
 
+/**
+ * The kernel contract hash of a catalog entry (P4-B spec Рд12): SHA-256 of
+ * the canonical form of its operations — command functions and contexts.
+ * An entry without operations hashes the empty form.
+ */
+export function kernelHashOf(operations: RuntimeObject["operations"]): string {
+  // Лише форма ядра: перейменування, подання, права й новий реквізит хешу не
+  // змінюють, тож стара збірка після сумісної зміни пише далі.
+  return sha256HexSync(canonicalize(operations ?? {}))
+}
+
 interface Facts {
   model: CompiledModel
   /** Колонка CHECK за `checkKey`. */
@@ -101,7 +115,7 @@ function runtimeObject(
   facts: Facts
 ): RuntimeObject {
   const entity = must(objectEntity(facts.model, object), object.name)
-  const { table, key, versionColumn, actions, functions } = contract
+  const { table, key, versionColumn } = contract
   const fields = entityFields(facts.model, table, {
     standard: entity.standard,
     elements: entity.elements,
@@ -110,13 +124,10 @@ function runtimeObject(
   const membership = facts.model.contracts.membership.find(
     (m) => m.objectId === object.id
   )
-  const target = (
-    fn: QualifiedName,
-    context: string
-  ): RuntimeOperationTarget => ({
-    function: { schema: fn.schema, name: fn.name },
-    context,
-  })
+  const operations = operationsOf(object.id, contract, facts.model)
+  // Той самий UUID, що в ядра кореня: клієнт мапить `creatorMember`
+  // записом довідника членства без `operations` (В8).
+  const creatorMembership = operations.create?.root?.membership
   return {
     id: object.id,
     name: object.name,
@@ -127,6 +138,7 @@ function runtimeObject(
     keyName: fieldOf(fields, key).name,
     versionColumn,
     versionName: fieldOf(fields, versionColumn).name,
+    signal: isSignalObject(facts.model, object.id),
     ...(scope?.origin.scopeKindId === undefined
       ? {}
       : { scopeKindId: scope.origin.scopeKindId, scopeColumn: scope.name }),
@@ -161,6 +173,7 @@ function runtimeObject(
       const rows = entityFields(facts.model, section.table, context)
       const fixed = new Set([section.key, section.parent, section.lineNumber])
       return {
+        id: must(section.table.origin.tabularSectionId, section.table.name),
         name: source.name,
         table: { schema: section.table.schema, name: section.table.name },
         key: section.key,
@@ -188,32 +201,51 @@ function runtimeObject(
         constraints: constraints(section.table, facts),
       }
     }),
-    operations: {
-      ...(actions.create === undefined
-        ? {}
-        : { create: target(functions.save, actions.create) }),
-      // Корінь виду скоупу створює окреме ядро (спека П4 §6.13); `save`
-      // кореня гілки створення не має, тож обидві форми не збігаються.
-      ...(functions.createRoot === undefined || actions.createRoot === undefined
-        ? {}
-        : {
-            create: {
-              ...target(functions.createRoot, actions.createRoot),
-              root: rootCreate(object.id, facts.model),
-            },
-          }),
-      update: target(functions.save, actions.update),
-      ...(functions.markDeletion === undefined ||
-      actions.markDeletion === undefined
-        ? {}
-        : {
-            markDeletion: target(functions.markDeletion, actions.markDeletion),
-          }),
-      ...(functions.delete === undefined || actions.delete === undefined
-        ? {}
-        : { delete: target(functions.delete, actions.delete) }),
-    },
+    ...(creatorMembership === undefined ? {} : { creatorMembership }),
+    kernelHash: kernelHashOf(operations),
+    operations,
     constraints: constraints(table, facts),
+  }
+}
+
+/** Операції запису — з функцій і дій контракту ядра команд. */
+function operationsOf(
+  objectId: string,
+  contract: CatalogCommandContract,
+  model: CompiledModel
+): NonNullable<RuntimeObject["operations"]> {
+  const { actions, functions } = contract
+  const target = (
+    fn: QualifiedName,
+    context: string
+  ): RuntimeOperationTarget => ({
+    function: { schema: fn.schema, name: fn.name },
+    context,
+  })
+  return {
+    ...(actions.create === undefined
+      ? {}
+      : { create: target(functions.save, actions.create) }),
+    // Корінь виду скоупу створює окреме ядро (спека П4 §6.13); `save`
+    // кореня гілки створення не має, тож обидві форми не збігаються.
+    ...(functions.createRoot === undefined || actions.createRoot === undefined
+      ? {}
+      : {
+          create: {
+            ...target(functions.createRoot, actions.createRoot),
+            root: rootCreate(objectId, model),
+          },
+        }),
+    update: target(functions.save, actions.update),
+    ...(functions.markDeletion === undefined ||
+    actions.markDeletion === undefined
+      ? {}
+      : {
+          markDeletion: target(functions.markDeletion, actions.markDeletion),
+        }),
+    ...(functions.delete === undefined || actions.delete === undefined
+      ? {}
+      : { delete: target(functions.delete, actions.delete) }),
   }
 }
 
