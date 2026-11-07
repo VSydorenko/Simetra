@@ -115,6 +115,18 @@ importers:
       '@eslint/js':
         specifier: ^10.0.1
         version: 10.0.1(eslint@10.14.0)
+      '@tanstack/db':
+        specifier: 1.0.0-rc.1.4
+        version: 1.0.0-rc.1.4(@typescript/typescript6@6.0.2)
+      '@tanstack/query-core':
+        specifier: 5.107.1
+        version: 5.107.1
+      '@tanstack/query-db-collection':
+        specifier: 1.5.1
+        version: 1.5.1(@tanstack/db@1.0.0-rc.1.4(@typescript/typescript6@6.0.2))(@tanstack/query-core@5.107.1)(@typescript/typescript6@6.0.2)
+      '@tanstack/react-db':
+        specifier: 1.0.0-rc.1.4
+        version: 1.0.0-rc.1.4(@typescript/typescript6@6.0.2)(react@19.3.1)
       '@types/node':
         specifier: ^24.19.2
         version: 24.19.2
@@ -130,6 +142,9 @@ importers:
       pg:
         specifier: 8.23.1
         version: 8.23.1
+      react:
+        specifier: 19.3.1
+        version: 19.3.1
       tsdown:
         specifier: 0.23.5
         version: 0.23.5(@arethetypeswrong/core@0.18.5)(@typescript/typescript6@6.0.2)(publint@0.3.25)(tsx@4.23.15)
@@ -559,6 +574,9 @@ packages:
     resolution: {integrity: sha512-t09vSN3MdfsyCHoFcTRCH/iUtG7OJ0CsjzB8cjAmKc/va/kIgeDI/TxsigdncE/4be734m0cvIYwNaV4i2XqAw==}
     engines: {node: '>=10'}
 
+  '@standard-schema/spec@1.1.0':
+    resolution: {integrity: sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w==}
+
   '@supabase/cli-darwin-arm64@2.122.1':
     resolution: {integrity: sha512-yttIyKa7QU+yB6oxdErlI7zHYn2ohHSMqjNWzuOiZrwoMfMTCTk4/pbRrTUrL81rj1E0kC3SYNy1o4x6449/kA==}
     cpu: [arm64]
@@ -612,6 +630,35 @@ packages:
     peerDependenciesMeta:
       '@supabase/pg-topo':
         optional: true
+
+  '@tanstack/db-ivm@1.0.0-rc.1.2':
+    resolution: {integrity: sha512-kF5XbkzNmDuJBr+p2//ijZO9CzAGp0fK8gRGRX6gzt9QZM9RNIizAPVLdXM9kcg+VlZC6xB28ZmScsX9j4LMuw==}
+    peerDependencies:
+      typescript: '>=4.7'
+
+  '@tanstack/db@1.0.0-rc.1.4':
+    resolution: {integrity: sha512-UaBXdnoACdauRb0tdav0TqwGE/viWWTHssnPKOC4sd3jiLdS5Jb2KFunW4wflfQpJHxSD+12wAIO7J8uMXQGgA==}
+    peerDependencies:
+      typescript: '>=4.7'
+
+  '@tanstack/pacer-lite@0.2.2':
+    resolution: {integrity: sha512-eQ1MyLKCHyXiH7NbdmB80W77OhiMgGBUb+qDx/8WMGbwg5Lf/NlfD0TfNYAqY77i8V3AxoDoYdICrQE5ADw4Yw==}
+    engines: {node: '>=18'}
+
+  '@tanstack/query-core@5.107.1':
+    resolution: {integrity: sha512-PSyAik11oQBEVOiVy5hjZWHmoUqOXqK1WYy4v55mcxozEfKaQgpUMsgnXhWjuESzSht8JfzqMS1m6M/9CpNgvg==}
+
+  '@tanstack/query-db-collection@1.5.1':
+    resolution: {integrity: sha512-KPEQHvbBm4BHpsKSoWAndCu/Xy21JyiYx/OISFj+TtPoN5o7ettoYaC8URDmqU5m1zGvji/nZv7SdVPipVcFRw==}
+    peerDependencies:
+      '@tanstack/db': ^1.0.0-rc.0
+      '@tanstack/query-core': ^5.90.15
+      typescript: '>=4.7'
+
+  '@tanstack/react-db@1.0.0-rc.1.4':
+    resolution: {integrity: sha512-lA5KrIHCwfuLLvcYMoUIc6biihiFBE4K6piAKsW4DdRC2I2qssxyzyeHyYcBdGFhia+fPAel7Iu8pjvgjlgqYA==}
+    peerDependencies:
+      react: '>=18.0.0'
 
   '@turbo/darwin-64@2.11.10':
     resolution: {integrity: sha512-By4idRap5+nLnMuRzLB4qkOPRlvNdyY1ne4VJYDyUoUB11H94k7uif9mbe3JT8JSNXs1D68uMcBj6hJ/jMQRvA==}
@@ -1147,6 +1194,10 @@ packages:
   flatted@3.4.4:
     resolution: {integrity: sha512-5+ybhBZANEJxaH3X5evAFatUxLfEHSr7n6kYJ+1Qd0mUqr4eu9gIf6GDbWHf8RJijHrjjO8G+la14SlL2SeS1Q==}
 
+  fractional-indexing@3.4.0:
+    resolution: {integrity: sha512-8J3glhz2rrpKG6KmI7wmJo3zH1VjeOpN+vTJSw1fOyO+Viqq3zX6/5NGh6oaZB2qIAYdOYuu5Dz9xp4faOO0Pg==}
+    engines: {node: ^14.13.1 || >=16.0.0}
+
   fsevents@2.3.3:
     resolution: {integrity: sha512-5xoDfX+fL7faATnagmWPpbFtwh/R77WmMMqqHGS65C3vvB0YHrgF+B1YmZ3441tMj5n63k0212XNoJwzlhffQw==}
     engines: {node: ^8.16.0 || ^10.6.0 || >=11.0.0}
@@ -1493,6 +1544,10 @@ packages:
 
   quansync@1.0.0:
     resolution: {integrity: sha512-5xZacEEufv3HSTPQuchrvV6soaiACMFnq1H8wkVioctoH3TRha9Sz66lOxRwPK/qZj7HPiSveih9yAyh98gvqA==}
+
+  react@19.3.1:
+    resolution: {integrity: sha512-QNhWdt7nrgVWWQG58QuGsAR3jv3Hbe4mb4vz7w2csnHavciZJgda1CPNaldF6eVxv90ud3jUXpKlHL69gO38yw==}
+    engines: {node: '>=0.10.0'}
 
   require-directory@2.1.1:
     resolution: {integrity: sha512-fGxEI7+wsG9xrvdjsrlmL22OMTTiHRwAMroiEeMgq8gzoLC/PQr7RsRDSTLUg/bZAZtF+TVIkHc6/4RIKrui+Q==}
@@ -2171,6 +2226,8 @@ snapshots:
 
   '@sindresorhus/is@4.6.0': {}
 
+  '@standard-schema/spec@1.1.0': {}
+
   '@supabase/cli-darwin-arm64@2.122.1':
     optional: true
 
@@ -2203,6 +2260,36 @@ snapshots:
     transitivePeerDependencies:
       - pg-native
       - supports-color
+
+  '@tanstack/db-ivm@1.0.0-rc.1.2(@typescript/typescript6@6.0.2)':
+    dependencies:
+      fractional-indexing: 3.4.0
+      typescript: '@typescript/typescript6@6.0.2'
+
+  '@tanstack/db@1.0.0-rc.1.4(@typescript/typescript6@6.0.2)':
+    dependencies:
+      '@standard-schema/spec': 1.1.0
+      '@tanstack/db-ivm': 1.0.0-rc.1.2(@typescript/typescript6@6.0.2)
+      '@tanstack/pacer-lite': 0.2.2
+      typescript: '@typescript/typescript6@6.0.2'
+
+  '@tanstack/pacer-lite@0.2.2': {}
+
+  '@tanstack/query-core@5.107.1': {}
+
+  '@tanstack/query-db-collection@1.5.1(@tanstack/db@1.0.0-rc.1.4(@typescript/typescript6@6.0.2))(@tanstack/query-core@5.107.1)(@typescript/typescript6@6.0.2)':
+    dependencies:
+      '@standard-schema/spec': 1.1.0
+      '@tanstack/db': 1.0.0-rc.1.4(@typescript/typescript6@6.0.2)
+      '@tanstack/query-core': 5.107.1
+      typescript: '@typescript/typescript6@6.0.2'
+
+  '@tanstack/react-db@1.0.0-rc.1.4(@typescript/typescript6@6.0.2)(react@19.3.1)':
+    dependencies:
+      '@tanstack/db': 1.0.0-rc.1.4(@typescript/typescript6@6.0.2)
+      react: 19.3.1
+    transitivePeerDependencies:
+      - typescript
 
   '@turbo/darwin-64@2.11.10':
     optional: true
@@ -2695,6 +2782,8 @@ snapshots:
 
   flatted@3.4.4: {}
 
+  fractional-indexing@3.4.0: {}
+
   fsevents@2.3.3:
     optional: true
 
@@ -2970,6 +3059,8 @@ snapshots:
       hookified: 2.2.0
 
   quansync@1.0.0: {}
+
+  react@19.3.1: {}
 
   require-directory@2.1.1: {}
 

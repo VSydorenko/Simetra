@@ -9,6 +9,7 @@ export default defineConfig({
     "compiler/index": "src/compiler/index.ts",
     "schema/index": "src/schema/index.ts",
     "server/index": "src/server/index.ts",
+    "data/index": "src/data/index.ts",
   },
   format: "esm",
   platform: "node",
@@ -21,6 +22,9 @@ export default defineConfig({
   dts: true,
   outDir: "dist",
   deps: {
+    // `react` і `@tanstack/*` — необов'язкові peer-залежності яруса T4: tsdown
+    // не вбудовує peer (`getProductionDeps` їх враховує), тож клієнтський
+    // host тримає одну копію бібліотек зі станом на рівні модуля
     // Ярус імпортує інший ярус лише через `simetra/<ярус>`; вбудований, він
     // дав би споживачу другу копію яруса (реєстр видів, схеми Zod)
     neverBundle: [/^simetra(\/|$)/],

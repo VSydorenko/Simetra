@@ -98,6 +98,7 @@ describe("simetra", () => {
     const manifest = await readPackedManifest(tarballs.simetra)
     expect(Object.keys(manifest.exports as object).sort()).toEqual([
       "./compiler",
+      "./data",
       "./model",
       "./schema",
       "./schemas/*",
@@ -113,6 +114,8 @@ describe("simetra", () => {
       "dist/model/index.js",
       "dist/model/index.d.ts",
       "dist/compiler/index.js",
+      "dist/data/index.js",
+      "dist/data/index.d.ts",
       "dist/schema/index.js",
       "dist/server/index.js",
       "dist/server/index.d.ts",
@@ -133,8 +136,43 @@ describe("simetra", () => {
       f.endsWith(".js")
     )
     expect(
-      js.filter((f) => !/^dist\/(model|compiler|schema|server)\//.test(f))
+      js.filter((f) => !/^dist\/(model|compiler|data|schema|server)\//.test(f))
     ).toEqual([])
+  })
+
+  it("declares the data-tier peers as exact optional RC pins", async () => {
+    const m = await readPackedManifest(tarballs.simetra)
+    // Точний pin лише для RC-пакетів; діапазони — для react і query-core
+    expect(m.peerDependencies).toEqual({
+      "@tanstack/db": "1.0.0-rc.1.4",
+      "@tanstack/query-core": "^5.90.15",
+      "@tanstack/query-db-collection": "1.5.1",
+      "@tanstack/react-db": "1.0.0-rc.1.4",
+      react: "^19.3.1",
+    })
+    // Серверний споживач peer не ставить
+    expect(
+      Object.values(
+        m.peerDependenciesMeta as Record<string, { optional?: boolean }>
+      ).map((v) => v.optional)
+    ).toEqual([true, true, true, true, true])
+    expect(Object.keys(m.peerDependenciesMeta as object).sort()).toEqual(
+      Object.keys(m.peerDependencies as object).sort()
+    )
+  })
+
+  it("imports every server-side tier in plain Node without the data peers", async () => {
+    // `simetra/data` тут не імпортується: його рантайм тягне `@tanstack/query-core`,
+    // і його вхід доводить споживач із peer
+    const { stdout } = await exec(
+      process.execPath,
+      ["--input-type=module", "-e", 'await import("simetra/server")'],
+      { cwd: consumer }
+    )
+    expect(stdout).toBe("")
+    await expect(
+      readFile(join(consumer, "node_modules/react/package.json"))
+    ).rejects.toThrow()
   })
 
   it("imports every tier in plain Node", async () => {

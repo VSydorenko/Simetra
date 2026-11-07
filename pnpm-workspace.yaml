@@ -2,3 +2,5 @@ packages:
   - "packages/*"
 allowBuilds:
   esbuild: false
+minimumReleaseAgeExclude:
+  - "@tanstack/query-core@5.107.1"
