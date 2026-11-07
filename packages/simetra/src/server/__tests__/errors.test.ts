@@ -368,6 +368,22 @@ describe("mapDatabaseError", () => {
     expect(map(fields)).toEqual(internal)
   })
 
+  // Межа часу читання — відповідь, а не збій (В7); у записі — B1b.
+  it("57014 in a read is command.timeout", () => {
+    expect(
+      mapDatabaseError(db({ code: "57014" }), catalog, { kind: "read", object })
+    ).toEqual({ code: "command.timeout" })
+  })
+
+  it.each([
+    ["in a write", phase],
+    ["outside a phase", undefined],
+  ])("57014 %s is command.internal", (_, at) => {
+    expect(mapDatabaseError(db({ code: "57014" }), catalog, at)).toEqual(
+      internal
+    )
+  })
+
   it("22P02 in a read is command.invalid", () => {
     expect(
       mapDatabaseError(db({ code: "22P02" }), catalog, { kind: "read", object })

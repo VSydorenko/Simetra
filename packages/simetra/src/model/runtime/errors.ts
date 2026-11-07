@@ -16,6 +16,7 @@ export const COMMAND_ERROR_CODES = [
   "command.model-mismatch",
   "command.read-role-missing",
   "command.unavailable",
+  "command.timeout",
   "command.internal",
 ] as const
 

@@ -42,6 +42,8 @@ export interface RuntimeState {
   log: (entry: LogEntry) => void
   maxAttempts: number
   maxDepth: number
+  /** `statement_timeout` of a server read, ms; `ctx.read` sets none (B1b budget). */
+  readTimeout: number
   /** The request role of reads; `undefined` — the fallback path (§6.11). */
   readRole: string | undefined
 }

@@ -29,6 +29,12 @@ export const CLAIMS = {
     "set_config('TimeZone', 'UTC', true), set_config('bytea_output', 'hex', true)",
   params: [JSON.stringify(session)],
 }
+/** Межа часу серверного читання — перший оператор після `BEGIN`; типово 15 с. */
+export const readTimeout = (ms = "15000") => ({
+  text: "SELECT set_config('statement_timeout', $1, true)",
+  params: [ms],
+})
+export const READ_TIMEOUT = readTimeout()
 export const ROLE = { text: 'SET LOCAL ROLE "simetra_command"', params: [] }
 export const CURRENT_USER = {
   text: 'SELECT "simetra"."current_user_id"() AS user_id',

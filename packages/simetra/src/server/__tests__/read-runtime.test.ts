@@ -21,8 +21,10 @@ import {
   ROLE,
   ROLLBACK,
   ORGANIZATION,
+  READ_TIMEOUT,
   answer,
   create,
+  readTimeout,
   session,
   setup,
   type Override,
@@ -80,6 +82,7 @@ const rows: Override = (text) =>
 const read = (statement: { text: string; params: string[] }, role = ROLE) => [
   { connect: true },
   BEGIN,
+  READ_TIMEOUT,
   CLAIMS,
   role,
   statement,
@@ -89,6 +92,7 @@ const read = (statement: { text: string; params: string[] }, role = ROLE) => [
 const failed = (statement: unknown, end: unknown[]) => [
   { connect: true },
   BEGIN,
+  READ_TIMEOUT,
   CLAIMS,
   REQUEST_ROLE,
   statement,
@@ -279,6 +283,25 @@ describe("CommandRuntime.read", () => {
     expect(log).not.toHaveBeenCalled()
   })
 
+  it("takes the read statement_timeout from readStatementTimeoutMs", async () => {
+    const { db, runtime } = await setup(rows, { readStatementTimeoutMs: 250 })
+    await runtime.read(session, { object: RIGHTS, id: OTHER })
+    expect(db.calls[2]).toEqual(readTimeout("250"))
+  })
+
+  it("maps 57014 of the read to command.timeout without logging", async () => {
+    const { db, runtime, log } = await setup((text) =>
+      isRead(text)
+        ? { error: { code: "57014", message: "canceling statement" } }
+        : undefined
+    )
+    expect(
+      await failureOf(runtime.read(session, { object: RIGHTS, id: OTHER }))
+    ).toEqual({ code: "command.timeout" })
+    expect(db.calls).toEqual(failed(byId, [ROLLBACK, { release: false }]))
+    expect(log).not.toHaveBeenCalled()
+  })
+
   it("maps an unknown database error to command.internal and logs it", async () => {
     const raw = { code: "XX000", message: "secret row data" }
     const { db, runtime, log } = await setup((text) =>
@@ -415,6 +438,7 @@ describe("CommandRuntime.read", () => {
     expect(db.calls).toEqual([
       { connect: true },
       BEGIN,
+      READ_TIMEOUT,
       CLAIMS,
       REQUEST_ROLE,
       expect.objectContaining({ params: [ID, "5001"] }),
@@ -462,6 +486,7 @@ describe("CommandRuntime.read", () => {
       expect(db.calls).toEqual([
         { connect: true },
         BEGIN,
+        READ_TIMEOUT,
         CLAIMS,
         REQUEST_ROLE,
         linkCard,

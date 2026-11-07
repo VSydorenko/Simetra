@@ -1080,7 +1080,12 @@ describe("depth and queue", () => {
     expect(counts).toEqual([{ count: 4 }])
   })
 
-  it("maps 22P02 of ctx.read to command.invalid", async () => {
+  // `57014` — межа часу читання й у транзакції команди (В7); сам `ctx.read`
+  // `statement_timeout` не ставить — оператори нижче це фіксують.
+  it.each([
+    ["22P02", "command.invalid"],
+    ["57014", "command.timeout"],
+  ])("maps %s of ctx.read to %s", async (code, mapped) => {
     const { db, runtime, log } = await withModules(
       {
         "Catalog.Client": {
@@ -1092,11 +1097,11 @@ describe("depth and queue", () => {
       },
       (text) =>
         text.includes(" AS row ")
-          ? { error: { code: "22P02", message: "bad input" } }
+          ? { error: { code, message: "bad input" } }
           : undefined
     )
     expect(await failureOf(runtime.run(session, create))).toEqual({
-      code: "command.invalid",
+      code: mapped,
     })
     expect(db.calls).toEqual([
       ...OPEN,

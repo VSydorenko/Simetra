@@ -54,6 +54,11 @@ export interface CommandRuntimeOptions {
   maxAttempts?: number
   /** Depth limit of phases started by hooks; default 8. */
   maxDepth?: number
+  /**
+   * `statement_timeout` of a server read in milliseconds (integer ≥ 1);
+   * default 15 000. A read past it rejects with `command.timeout`.
+   */
+  readStatementTimeoutMs?: number
   /** Receives errors that never leave the runtime; default `console.error`. */
   log?: (entry: LogEntry) => void
 }
@@ -114,6 +119,8 @@ function checkModules(
 }
 
 const BEGIN_READ_ONLY = "BEGIN ISOLATION LEVEL READ COMMITTED READ ONLY"
+// Значення — зв'язаним параметром: текстовий `SET` не приймає `$1`.
+const READ_TIMEOUT = "SELECT set_config('statement_timeout', $1, true)"
 const MEMBER = "SELECT pg_has_role(session_user, $1, 'SET') AS member"
 const APPLIED_HASH = `SELECT ${ident(PLATFORM_SCHEMA)}.${ident(APPLIED_SNAPSHOT_HASH_FUNCTION_NAME)}() AS hash`
 // База до функції хеша (`42883`) чи без схеми платформи (`3F000`) — модель
@@ -121,7 +128,8 @@ const APPLIED_HASH = `SELECT ${ident(PLATFORM_SCHEMA)}.${ident(APPLIED_SNAPSHOT_
 const NO_APPLIED_STATE = new Set(["42883", "3F000"])
 // `pg_has_role` на ролі, якої немає в базі.
 const UNDEFINED_OBJECT = "42704"
-// Межі повтору й глибини — помилка конфігурації host-а, як і каталог.
+// Межі повтору, глибини й часу читання — помилка конфігурації host-а, як і
+// каталог; 0 для часу вимкнув би межу, тож теж відмова.
 const limitSchema = z.int().min(1).optional()
 
 /**
@@ -210,6 +218,8 @@ export async function createCommandRuntime(
   checkModules(catalog, objectModules)
   const maxAttempts = limitSchema.parse(options.maxAttempts) ?? 3
   const maxDepth = limitSchema.parse(options.maxDepth) ?? 8
+  const readTimeout =
+    limitSchema.parse(options.readStatementTimeoutMs) ?? 15_000
   const sink = options.log ?? ((entry: LogEntry) => console.error(entry))
   // Журнал не має зламати шлях відмови: з'єднання звільняється після нього.
   const log = (entry: LogEntry) => {
@@ -238,6 +248,7 @@ export async function createCommandRuntime(
     log,
     maxAttempts,
     maxDepth,
+    readTimeout,
     // Профіль без ролі запиту чи явний запасний шлях — читання під роллю команд.
     readRole: member ? role : undefined,
   }
@@ -321,6 +332,9 @@ async function readRows(
   let tag: string
   try {
     await send({ text: BEGIN_READ_ONLY, params: [] })
+    // `SET LOCAL`-семантика (`true`): межа живе до кінця транзакції читання й
+    // не переходить на наступного користувача з'єднання пулу.
+    await send({ text: READ_TIMEOUT, params: [String(state.readTimeout)] })
     await send(claimsStatement(claims))
     await send(role)
     // Рядки декодуються до `COMMIT`: з них оператор `include` бере id.
