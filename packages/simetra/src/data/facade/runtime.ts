@@ -31,12 +31,17 @@ export interface DataRuntimeOptions {
   subject: string
   /** Called once when the server reports `session-changed`. */
   onSessionChanged?: () => void
-  /**
-   * Receives the original exception of the transport; the caller sees
-   * `command.unavailable` (default `console.error`).
-   */
-  log?: (error: unknown) => void
+  /** The runtime journal (default `console.warn`); see {@link DataLogEntry}. */
+  log?: (entry: DataLogEntry) => void
 }
+
+/**
+ * An entry of the runtime journal (P4-B spec §6.1). `transport-failed`: the
+ * transport threw or rejected; the caller saw `command.unavailable`.
+ */
+// Об'єднання з одного виду: наступні види (`full-truncated`, B3-2b)
+// додаються гілками, без перейменування опції.
+export type DataLogEntry = { kind: "transport-failed"; error: unknown }
 
 // Відмова рантайму після звичайного `dispose()` (вихід, зміна користувача з
 // боку host-а): сесії рантайму вже немає, а проміс викликача мусить
@@ -59,7 +64,14 @@ export function createDataRuntime(options: DataRuntimeOptions): DataRuntime {
   const catalog = clientCatalogSchema.parse(options.catalog)
   const index = catalogIndex(catalog.objects)
   const { transport, subject, onSessionChanged } = options
-  const log = options.log ?? ((error: unknown) => console.error(error))
+  const sink = options.log ?? ((entry: DataLogEntry) => console.warn(entry))
+  const log = (entry: DataLogEntry) => {
+    try {
+      sink(entry)
+    } catch {
+      // Журнал недоступний — результат запиту від нього не залежить.
+    }
+  }
   // Власний клієнт і nonce у префіксі ключів: кеш одного рантайму не видно
   // іншому, навіть з тим самим `subject` (спека §6.1, «Ізоляція кешу»).
   const queryClient = new QueryClient()
@@ -95,7 +107,7 @@ export function createDataRuntime(options: DataRuntimeOptions): DataRuntime {
       // Сирий виняток обійшов би таблицю §7.3: для `run` «недоступно» —
       // результат невідомий, і фасад перечитує ключі без повтору. Оригінал
       // іде в журнал, викликач бачить лише код.
-      log(error)
+      log({ kind: "transport-failed", error })
       throw new CommandFailure({ code: "command.unavailable" })
     }
     // Відповідь, що прийшла після закриття, нікуди не йде (спека §11, інв. 12).
@@ -106,7 +118,15 @@ export function createDataRuntime(options: DataRuntimeOptions): DataRuntime {
       // Спершу закрити, потім колбек: host у колбеку створює рантайм нового
       // користувача, і старий на цей момент уже не відповідає нікому.
       close(error)
-      onSessionChanged?.()
+      try {
+        onSessionChanged?.()
+      } catch (thrown) {
+        // Збій колбека host-а не підміняє відмову запиту: викликач однаково
+        // бачить `session-changed`, а збій виходить окремо, як неперехоплений.
+        queueMicrotask(() => {
+          throw thrown
+        })
+      }
     }
     throw new CommandFailure(error)
   }

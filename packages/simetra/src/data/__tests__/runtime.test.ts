@@ -5,7 +5,7 @@ import {
   jsonBytes,
   type DataRequest,
 } from "simetra/model"
-import { createDataRuntime } from "../index"
+import { createDataRuntime, type DataLogEntry } from "../index"
 import { facadeOf } from "../facade/handle"
 import {
   OBJECT_ID,
@@ -136,7 +136,7 @@ describe("runtime transport wrapper", () => {
     ] as const)(
       "%s: command.unavailable without a reason, the original to the log",
       async (_, fail) => {
-        const log = vi.fn()
+        const log = vi.fn<(entry: DataLogEntry) => void>()
         const { send } = facadeOf(
           createDataRuntime({
             catalog: clientCatalog(),
@@ -149,9 +149,30 @@ describe("runtime transport wrapper", () => {
           code: "command.unavailable",
         })
         expect(log).toHaveBeenCalledTimes(1)
-        expect(log.mock.calls[0]![0]).toEqual(new TypeError("network"))
+        expect(log).toHaveBeenCalledWith({
+          kind: "transport-failed",
+          error: new TypeError("network"),
+        })
       }
     )
+
+    it("keeps the outcome when the log sink throws", async () => {
+      const log = vi.fn(() => {
+        throw new Error("sink down")
+      })
+      const { send } = facadeOf(
+        createDataRuntime({
+          catalog: clientCatalog(),
+          transport: () => Promise.reject(new TypeError("network")),
+          subject: SUBJECT,
+          log,
+        })
+      )
+      expect(await failureOf(send(card()))).toEqual({
+        code: "command.unavailable",
+      })
+      expect(log).toHaveBeenCalledTimes(1)
+    })
   })
 
   describe("session-changed", () => {
@@ -179,6 +200,37 @@ describe("runtime transport wrapper", () => {
         reason: "session-changed",
       })
       expect(onSessionChanged).toHaveBeenCalledTimes(1)
+    })
+
+    it("rejects with session-changed and re-raises a throwing callback asynchronously", async () => {
+      // Підміна `queueMicrotask`: справжній кидок у мікрозадачі став би
+      // необробленою помилкою прогону.
+      const deferred: (() => void)[] = []
+      const queue = vi
+        .spyOn(globalThis, "queueMicrotask")
+        .mockImplementation((task) => {
+          deferred.push(task)
+        })
+      try {
+        const { transport, respond } = controlledTransport()
+        const thrown = new Error("callback failed")
+        const runtime = createDataRuntime({
+          catalog: clientCatalog(),
+          transport,
+          subject: SUBJECT,
+          onSessionChanged: () => {
+            throw thrown
+          },
+        })
+        const request = facadeOf(runtime).send(card())
+        respond(sessionChanged())
+        expect(await failureOf(request)).toEqual(SESSION_CHANGED)
+        expect(runtime.disposed).toBe(true)
+        expect(deferred).toHaveLength(1)
+        expect(() => deferred[0]!()).toThrow(thrown)
+      } finally {
+        queue.mockRestore()
+      }
     })
 
     it("rejects a later success with the session-changed code", async () => {

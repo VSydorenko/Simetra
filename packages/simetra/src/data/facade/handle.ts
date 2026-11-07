@@ -16,9 +16,9 @@ export interface Facade {
    * transport, handles `session-changed`. Resolves with `value`; rejects with
    * a `CommandFailure` carrying the logical error. A transport exception
    * becomes `command.unavailable` without a reason (the original goes to the
-   * runtime `log`); after `dispose()` every request rejects with
-   * `command.unavailable` `disposed`, after `session-changed` — with that
-   * error.
+   * runtime `log` as a `transport-failed` entry); after `dispose()` every
+   * request rejects with `command.unavailable` `disposed`, after
+   * `session-changed` — with that error.
    */
   send(request: RuntimeRequest): Promise<unknown>
 }
