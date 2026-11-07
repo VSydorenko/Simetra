@@ -9,7 +9,9 @@ import {
   wireOperationSchema,
   wireReadQuerySchema,
   wireReadResultSchema,
+  type DataRequest,
   type WireChange,
+  type WireOperation,
   type WireCommandError,
 } from "../envelope"
 import type { CommandError } from "../errors"
@@ -246,11 +248,6 @@ describe("data envelope", () => {
   const HASH = "a".repeat(64)
   const op = { action: "create", object: OBJECT_ID }
   const read = { type: "read", query: { object: OBJECT_ID, id: ID } }
-  const reasonOf = (r: { error?: { issues: readonly object[] } }) =>
-    r.error?.issues
-      .map((i) => (i as { params?: { reason?: string } }).params?.reason)
-      .find((x) => x !== undefined)
-
   it.each([
     ["a read", true, { subject: "s", request: read }],
     ["a version", true, { subject: "s", request: { type: "version" } }],
@@ -322,38 +319,6 @@ describe("data envelope", () => {
     expect(dataRequestSchema.safeParse(value).success).toBe(ok)
   })
 
-  it("refuses a batch over the limit with its reason, before the elements", () => {
-    const result = dataRequestSchema.safeParse({
-      subject: "s",
-      request: {
-        type: "run",
-        batch: Array.from({ length: 501 }, () => ({ bad: 1 })),
-      },
-    })
-    expect(result.success).toBe(false)
-    expect(reasonOf(result)).toBe("batch-too-large")
-  })
-
-  it("refuses a section over the line limit with the section id path", () => {
-    const result = dataRequestSchema.safeParse({
-      subject: "s",
-      request: {
-        type: "run",
-        operation: {
-          ...op,
-          tabularSections: {
-            [SECTION_ID]: Array.from({ length: 5001 }, () => ({})),
-          },
-        },
-      },
-    })
-    expect(result.success).toBe(false)
-    expect(reasonOf(result)).toBe("tabular-too-large")
-    expect(
-      result.error?.issues.find((i) => i.path.includes(SECTION_ID))
-    ).toBeDefined()
-  })
-
   it.each([
     ["ok", true, { ok: true, value: { rows: [] }, serverHash: HASH }],
     [
@@ -361,10 +326,24 @@ describe("data envelope", () => {
       true,
       { ok: false, error: { code: "command.invalid" }, serverHash: HASH },
     ],
+    [
+      "ok without value (the key is required)",
+      false,
+      { ok: true, serverHash: HASH },
+    ],
     ["ok without serverHash", false, { ok: true, value: 1 }],
     ["an error without error", false, { ok: false, serverHash: HASH }],
   ])("response: %s -> %s", (_name, ok, value) => {
     expect(dataResponseSchema.safeParse(value).success).toBe(ok)
+  })
+
+  it("types a run as exactly one of operation and batch", () => {
+    type Run = Extract<DataRequest["request"], { type: "run" }>
+    // @ts-expect-error both forms together
+    const both: Run = { type: "run", operation: op as WireOperation, batch: [] }
+    // @ts-expect-error neither form
+    const neither: Run = { type: "run" }
+    expect([both, neither]).toHaveLength(2)
   })
 
   it("accepts more on a read page and a version value", () => {

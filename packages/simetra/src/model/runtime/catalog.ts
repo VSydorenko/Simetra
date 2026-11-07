@@ -166,10 +166,10 @@ export const runtimeRootCreateSchema = z.strictObject({
   membership: z.string().optional(),
 })
 
-/** A catalog object of the shared catalog part. */
 /** SHA-256 hex of the canonical form of an entry's operations. */
 export const kernelHashSchema = z.string().regex(/^[0-9a-f]{64}$/)
 
+/** A catalog object of the shared catalog part. */
 export const catalogEntrySchema = z.strictObject({
   id: z.guid(),
   name: z.string(),

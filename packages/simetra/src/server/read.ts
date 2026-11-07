@@ -2,6 +2,7 @@ import {
   INTEGER_TEXT,
   UUID_TEXT,
   isTextEncodedType,
+  LIMIT_REASONS,
   ORDER_BY_MAX,
   READ_COUNT_CAP,
   TABULAR_LINES_MAX,
@@ -685,20 +686,43 @@ function readResult(
   return { rows: out }
 }
 
+const LIMIT_REASON_VALUES: ReadonlySet<string> = new Set(
+  Object.values(LIMIT_REASONS)
+)
+
 const reasonOf = (issue: z.core.$ZodIssue): string | undefined => {
   const reason = (issue as { params?: { reason?: unknown } }).params?.reason
   return typeof reason === "string" ? reason : undefined
 }
 
+// Issue об'єднання (`invalid_union`) ховає помилки гілок у `errors`; розгортаємо
+// їх у плоский список у порядку гілок, щоб вибір не залежав від того, скільки
+// гілок відхилили вхід.
+const flattenIssues = (
+  issues: readonly z.core.$ZodIssue[]
+): z.core.$ZodIssue[] =>
+  issues.flatMap((issue) =>
+    issue.code === "invalid_union" && issue.errors.length > 0
+      ? flattenIssues(issue.errors.flat())
+      : [issue]
+  )
+
 /**
- * The issue a refusal reports: the first one with a `params.reason`, else
- * the first one.
+ * The issue a refusal reports: the first one (branches of a union included)
+ * whose `params.reason` is a limit reason, else the first one with any
+ * reason, else the first one.
  */
 export function decidingIssue(error: z.ZodError): z.core.$ZodIssue | undefined {
+  // Без причини лишається перша issue верхнього рівня, як і до розгортання:
+  // її шлях (напр. `action` невідомої дії) читають відмови.
   // Причина межі важливіша за порядок: issue сусідніх полів не мають ховати,
-  // що вхід завеликий.
+  // що вхід завеликий. У `z.union` межу повідомляє лише гілка, у якій вона
+  // порушена, а решта гілок відхиляє вхід за форму; порядок гілок у схемі
+  // фіксований, тож перша issue з причиною межі (обхід углиб) — детермінована.
+  const all = flattenIssues(error.issues)
   return (
-    error.issues.find((issue) => reasonOf(issue) !== undefined) ??
+    all.find((issue) => LIMIT_REASON_VALUES.has(reasonOf(issue) ?? "")) ??
+    all.find((issue) => reasonOf(issue) !== undefined) ??
     error.issues[0]
   )
 }

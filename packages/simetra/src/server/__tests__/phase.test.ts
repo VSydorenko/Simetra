@@ -1,6 +1,7 @@
 import {
   BATCH_MAX,
   CommandFailure,
+  dataRequestSchema,
   TABULAR_LINES_MAX,
   readQuerySchema,
   type CommandError,
@@ -19,7 +20,7 @@ import {
   tenantSelfService,
 } from "../../compiler/__tests__/fixtures/rights"
 import { prepareInput } from "../phase"
-import { issueReason, prepareRead } from "../read"
+import { decidingIssue, issueReason, prepareRead } from "../read"
 import { catalog, rootCatalog } from "./fixtures"
 import { CLIENT, ORGANIZATION } from "./harness"
 
@@ -121,6 +122,76 @@ describe("issueReason", () => {
     ],
   ])("%s", (_, issues, reason) => {
     expect(issueReason(new z.ZodError(issues))).toBe(reason)
+  })
+})
+
+describe("issueReason over the data envelope", () => {
+  const OBJECT = "11111111-1111-4111-8111-111111111111"
+  const SECTION = "22222222-2222-4222-8222-222222222222"
+  const op = { action: "create", object: OBJECT }
+  const run = (body: object) => ({
+    subject: "s",
+    request: { type: "run", ...body },
+  })
+
+  it.each<[string, unknown, string | undefined, string | undefined]>([
+    [
+      "a batch over BATCH_MAX",
+      run({ batch: Array.from({ length: BATCH_MAX + 1 }, () => op) }),
+      "batch-too-large",
+      "batch",
+    ],
+    [
+      "a section over TABULAR_LINES_MAX inside operation",
+      run({
+        operation: {
+          ...op,
+          tabularSections: {
+            [SECTION]: Array.from(
+              { length: TABULAR_LINES_MAX + 1 },
+              () => ({})
+            ),
+          },
+        },
+      }),
+      "tabular-too-large",
+      SECTION,
+    ],
+    [
+      "operation and batch together",
+      run({ operation: op, batch: [op] }),
+      undefined,
+      undefined,
+    ],
+    ["neither operation nor batch", run({}), undefined, undefined],
+  ])("%s", (_, input, reason, pathPart) => {
+    const result = dataRequestSchema.safeParse(input)
+    expect(result.success).toBe(false)
+    if (result.success) return
+    expect(issueReason(result.error)).toBe(reason)
+    if (pathPart !== undefined) {
+      expect(decidingIssue(result.error)?.path.map(String)).toContain(pathPart)
+    }
+  })
+
+  it("picks the first limit reason in branch order, over an earlier plain one", () => {
+    const issue = (reason?: string): z.core.$ZodIssue => ({
+      code: "custom",
+      path: [],
+      message: "x",
+      ...(reason === undefined ? {} : { params: { reason } }),
+    })
+    const union: z.core.$ZodIssue = {
+      code: "invalid_union",
+      path: [],
+      message: "u",
+      errors: [
+        [issue("custom-reason")],
+        [issue("tabular-too-large")],
+        [issue("batch-too-large")],
+      ],
+    }
+    expect(issueReason(new z.ZodError([union]))).toBe("tabular-too-large")
   })
 })
 

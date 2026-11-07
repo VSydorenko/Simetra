@@ -160,34 +160,34 @@ export type WireReadResult = z.infer<typeof wireReadResultSchema>
 // команду, і сервер відмовляє `stale-client`, якщо вони застаріли.
 const kernelsSchema = z.record(wireObjectSchema, kernelHashSchema).optional()
 
-// Рівно один з `operation`/`batch`. Одна форма з уточненням, а не `z.union`
-// двох форм: issue варіантів union ховаються у вкладені помилки, а обробник
-// читає причину межі з плоского списку issue (`issueReason`). `type: "rights"`
+// Рівно один з `operation`/`batch`: дві суворі гілки, тож обидва разом чи жодне
+// відхиляє кожна гілка, а `z.infer` дає тип, де TypeScript вимагає рівно одне.
+// Причину межі з вкладених помилок гілок бере `decidingIssue`. `type: "rights"`
 // — B5.
-const runRequestSchema = z
-  .strictObject({
+const runRequestSchema = z.union([
+  z.strictObject({
     type: z.literal("run"),
-    operation: wireOperationSchema.optional(),
+    operation: wireOperationSchema,
+    // `never` лише для типу: без нього TypeScript пропустить обидва поля разом.
+    batch: z.never().optional(),
+    kernels: kernelsSchema,
+  }),
+  z.strictObject({
+    type: z.literal("run"),
+    operation: z.never().optional(),
     batch: lengthLimited(
       z.array(wireOperationSchema).min(1),
       BATCH_MAX,
       LIMIT_REASONS.batchTooLarge
-    ).optional(),
+    ),
     kernels: kernelsSchema,
-  })
-  .superRefine((request, ctx) => {
-    if ((request.operation === undefined) === (request.batch === undefined)) {
-      ctx.addIssue({
-        code: "custom",
-        message: "exactly one of operation and batch",
-      })
-    }
-  })
+  }),
+])
 
 /** A request to the data transport: the session subject and one request. */
 export const dataRequestSchema = z.strictObject({
   subject: z.string(),
-  request: z.discriminatedUnion("type", [
+  request: z.union([
     z.strictObject({ type: z.literal("read"), query: wireReadQuerySchema }),
     runRequestSchema,
     z.strictObject({ type: z.literal("version") }),
