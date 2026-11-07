@@ -1,4 +1,9 @@
-import type { WireReadQuery, WireReadResult } from "./envelope"
+import type {
+  DataRequest,
+  DataResponse,
+  WireReadQuery,
+  WireReadResult,
+} from "./envelope"
 
 /**
  * A wire read query a source adapter can serve: both count forms are left
@@ -31,3 +36,6 @@ export interface SignalTransport {
   /** Fires on every (re)subscription, so the client can resync. */
   onSubscribed(handler: () => void): Unsubscribe
 }
+
+/** Carries one request to the data handler and returns its response. */
+export type DataTransport = (request: DataRequest) => Promise<DataResponse>

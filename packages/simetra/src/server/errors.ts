@@ -1,6 +1,7 @@
 import {
   COMMAND_CORE_ERRORS,
   type CommandError,
+  type MetadataRef,
   type ObjectOperation,
   type RuntimeAttribute,
   type RuntimeCatalog,
@@ -25,6 +26,27 @@ const valuesOf = (entry: Record<string, string>): readonly string[] =>
   Object.entries(entry)
     .filter(([key]) => key !== "errcode" && key !== "message")
     .map(([, value]) => value)
+
+/** The reference of a catalog object, as an error names it. */
+export const refOf = (object: RuntimeObject): MetadataRef => ({
+  kind: object.kind,
+  name: object.name,
+})
+
+/**
+ * Adds `object` to an error that names a `path` or `attributes` (P4-B spec
+ * §6.10): шлях логічний лише відносно об'єкта, і форма передачі мапить його
+ * за записом цього об'єкта. Помилка без шляху лишається як є; наявний
+ * `object` не замінюється — його поставило джерело, що знало точніше.
+ */
+export function withObject(
+  error: CommandError,
+  object: RuntimeObject
+): CommandError {
+  if (error.object !== undefined) return error
+  if (error.path === undefined && error.attributes === undefined) return error
+  return { ...error, object: refOf(object) }
+}
 
 const E = COMMAND_CORE_ERRORS
 const FORBIDDEN_REASONS = valuesOf(E.forbidden)
@@ -203,10 +225,15 @@ export function mapDatabaseError(
       return message === E.invalid.message &&
         detail !== undefined &&
         phase !== undefined
-        ? invalidOf(
-            phase.object,
-            detail,
-            phase.kind === "write" ? phase.membership : undefined
+        ? // Шлях `22023` — відносно фази, і `creatorMember.` мапиться через
+          // членство її об'єкта: `object` — об'єкт операції, не таблиці.
+          withObject(
+            invalidOf(
+              phase.object,
+              detail,
+              phase.kind === "write" ? phase.membership : undefined
+            ),
+            phase.object
           )
         : INTERNAL
     case "22P02":
@@ -232,7 +259,11 @@ export function mapDatabaseError(
         table === undefined || fk === undefined
           ? []
           : attributesOf(table, fk.columns)
-      return path === undefined ? INTERNAL : { code: "command.invalid", path }
+      // Об'єкт — знайденої таблиці, не фази: FK міг порушити рядок іншого
+      // об'єкта (тригер, відкладене обмеження на `COMMIT`), і шлях — у ньому.
+      return path === undefined
+        ? INTERNAL
+        : { code: "command.invalid", path, object: refOf(table!.object) }
     }
     case "23502": {
       // Обов'язковий реквізит рядка членства, який вставляє ядро кореня, —
@@ -244,7 +275,11 @@ export function mapDatabaseError(
         error.column !== undefined
       ) {
         const path = pathOf(memberTable(membership), error.column)
-        return path === undefined ? INTERNAL : { code: "command.invalid", path }
+        // `creatorMember.<реквізит>` мапиться через членство кореня, тож
+        // `object` — об'єкт операції, а не довідника членства.
+        return path === undefined
+          ? INTERNAL
+          : { code: "command.invalid", path, object: refOf(phase!.object) }
       }
       const table = tableOf(catalog, phase, error.table)
       const path =
@@ -253,7 +288,12 @@ export function mapDatabaseError(
           : pathOf(table, error.column)
       return path === undefined
         ? INTERNAL
-        : { code: "command.constraint", kind: "notNull", attributes: [path] }
+        : {
+            code: "command.constraint",
+            kind: "notNull",
+            attributes: [path],
+            object: refOf(table!.object),
+          }
     }
     case "23505":
     case "23514": {
@@ -268,7 +308,12 @@ export function mapDatabaseError(
           : attributesOf(table, constraint.columns)
       return attributes.length === 0
         ? INTERNAL
-        : { code: "command.constraint", kind, attributes }
+        : {
+            code: "command.constraint",
+            kind,
+            attributes,
+            object: refOf(table!.object),
+          }
     }
     default:
       // `0A000` `hierarchy.isolation` і все непередбачене.
@@ -302,9 +347,7 @@ function rlsOf(
   return {
     code: "command.forbidden",
     reason: "rls",
-    ...(object === undefined
-      ? {}
-      : { object: { kind: object.kind, name: object.name } }),
+    ...(object === undefined ? {} : { object: refOf(object) }),
     ...(phase?.kind === "write" ? { operation: phase.operation } : {}),
   }
 }

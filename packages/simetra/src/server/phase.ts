@@ -1,9 +1,12 @@
 import {
+  BATCH_MAX,
   COMMAND_SETTING,
+  LIMIT_REASONS,
   OPERATION_EVENTS,
   batchSchema,
   encodeAttributes,
   isPlainObject,
+  metadataRefSchema,
   operationSchema,
   type CommandContext,
   type CommandError,
@@ -15,10 +18,19 @@ import {
   type RuntimeOperationTarget,
   type RuntimeSection,
   CommandFailure,
+  TABULAR_LINES_MAX,
 } from "simetra/model"
-import { decodeRecord } from "./decode"
+import { decodeCoreRow as decodeCore } from "./decode"
+import { refOf, withObject } from "./errors"
 import { callHook, type HookPhase } from "./hook-context"
-import { ident, issuePath, literal } from "./read"
+import type { z } from "zod"
+import {
+  decidingIssue,
+  ident,
+  issueReason,
+  literal,
+  operationRefusalPath,
+} from "./read"
 import type { Statement, Transaction } from "./transaction"
 import { encodeItem } from "./values"
 
@@ -56,11 +68,14 @@ function targetOf(
   const object = catalog.objects.find(
     (o) => o.kind === op.object.kind && o.name === op.object.name
   )
+  // Невідомий об'єкт — виняток правила `object`: прив'язати шлях нема до чого.
   if (object === undefined) return { error: invalid("object") }
   // Функцію ядра й дію контексту дає каталог, а не вхід (Р-A3-1): операції
   // без функції в каталозі в цього об'єкта немає.
   const target = object.operations?.[op.action]
-  if (target === undefined) return { error: invalid("action") }
+  if (target === undefined) {
+    return { error: withObject(invalid("action"), object) }
+  }
   return { object, target }
 }
 
@@ -102,6 +117,7 @@ function encodeMember(membership: RuntimeObject, values: unknown) {
     forced,
     path: MEMBER,
     prefix: `${MEMBER}.`,
+    maxBytes: true,
   })
 }
 
@@ -117,12 +133,15 @@ function rootInput(
 ): { id: string; memberId?: string } | { error: CommandError } {
   const creation = rootCreateOf(catalog, object, op)
   if (op.action !== "create") return { id: op.id }
+  // Ключ запису в шляху — `keyName` (спека П4-B §4.0): структурне `id` на
+  // дроті не відрізнити від колонки ключа `id`.
+  const key = invalid(object.keyName)
   if (creation === undefined) {
-    if (op.id === undefined) return { error: invalid("id") }
+    if (op.id === undefined) return { error: key }
     if (op.creatorMember !== undefined) return { error: invalid(MEMBER) }
     return { id: op.id }
   }
-  if (op.id !== undefined) return { error: invalid("id") }
+  if (op.id !== undefined) return { error: key }
   if (op.tabularSections !== undefined) {
     return { error: invalid("tabularSections") }
   }
@@ -153,12 +172,121 @@ const draftOf = (op: Operation): Draft<object> =>
     : {}
 
 /**
+ * Об'єкт операції, що відмовила, — лише відомий каталогу: сирий вхід не
+ * проходив схеми, тож назовні не йде нічого, чого не знає модель. Читання —
+ * у `try`: геттер чи `Proxy` у вході може кинути.
+ */
+function rejectedObject(
+  catalog: RuntimeCatalog,
+  op: unknown
+): RuntimeObject | undefined {
+  try {
+    const ref = metadataRefSchema.safeParse(
+      (op as { object?: unknown } | null | undefined)?.object
+    )
+    if (!ref.success) return undefined
+    return catalog.objects.find(
+      (o) => o.kind === ref.data.kind && o.name === ref.data.name
+    )
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * `command.invalid` відмови схеми з причиною межі. Шлях — від операції
+ * (`operationRefusalPath`), без `tabularSections`; операцію пакета називає
+ * `object`, а без нього — індекс на початку шляху. ТЧ понад межу — лише її
+ * логічне ім'я, пакет понад межу — без шляху: це корінь.
+ */
+function schemaRefusal(
+  catalog: RuntimeCatalog,
+  input: unknown,
+  error: z.ZodError
+): CommandError {
+  const reason = issueReason(error)
+  const path = decidingIssue(error)?.path ?? []
+  // Операція пакета — за першим сегментом шляху; поза пакетом — сам вхід.
+  const batch = Array.isArray(input)
+  const [index] = path
+  let op: unknown = input
+  if (batch) {
+    try {
+      op = typeof index === "number" ? (input as unknown[])[index] : undefined
+    } catch {
+      op = undefined
+    }
+  }
+  const object = rejectedObject(catalog, op)
+  if (reason === LIMIT_REASONS.tabularTooLarge) {
+    return {
+      code: "command.invalid",
+      reason,
+      path: String(path.at(-1)),
+      ...(object === undefined ? {} : { object: refOf(object) }),
+    }
+  }
+  // Сегмент `id` операції — її ключ (спека П4-B §4.0): за відомого об'єкта
+  // шлях називає `keyName`, як і решта помилок цього об'єкта.
+  const indexed = batch && typeof index === "number" && path.length > 1
+  const segments = operationRefusalPath(indexed ? path.slice(1) : path)
+  if (object !== undefined && segments[0] === "id") {
+    segments[0] = object.keyName
+  }
+  // Без `object` операцію пакета називає лише її індекс.
+  if (indexed && object === undefined) segments.unshift(String(index))
+  const refusal: CommandError = {
+    ...invalid(segments.length === 0 ? undefined : segments.join(".")),
+    ...(reason === undefined ? {} : { reason }),
+  }
+  return object === undefined ? refusal : withObject(refusal, object)
+}
+
+/**
+ * Межі входу рантайму, не більші за сталі T0 (`CommandRuntimeOptions`): стала
+ * — це межа схеми, а host може звузити її під свою базу.
+ */
+export interface InputLimits {
+  maxBatch: number
+  maxTabularLines: number
+}
+
+const CONSTANT_LIMITS: InputLimits = {
+  maxBatch: BATCH_MAX,
+  maxTabularLines: TABULAR_LINES_MAX,
+}
+
+/**
+ * Перша ТЧ понад зменшену межу — та сама відмова, що й понад сталу в схемі,
+ * щоб викликач не розрізняв, яка з меж спрацювала.
+ */
+function tabularOverLimit(
+  object: RuntimeObject,
+  op: Operation,
+  max: number
+): CommandError | undefined {
+  if (op.action !== "create" && op.action !== "update") return undefined
+  for (const [name, rows] of Object.entries(op.tabularSections ?? {})) {
+    if (rows.length > max) {
+      return {
+        code: "command.invalid",
+        reason: LIMIT_REASONS.tabularTooLarge,
+        path: name,
+        object: refOf(object),
+      }
+    }
+  }
+  return undefined
+}
+
+/**
  * Перевірка до транзакції (спека П4 §6.5): схема операції, об'єкт і операція
  * каталогу, значення за каталогом — без звернення до бази.
  */
 export function prepareInput(
   catalog: RuntimeCatalog,
-  input: unknown
+  input: unknown,
+  limits: InputLimits = CONSTANT_LIMITS
 ): PreparedOperation[] {
   let parsed: ReturnType<typeof batchSchema.safeParse>
   try {
@@ -170,19 +298,42 @@ export function prepareInput(
     throw new CommandFailure(invalid())
   }
   if (!parsed.success) {
-    throw new CommandFailure(invalid(issuePath(parsed.error)))
+    throw new CommandFailure(schemaRefusal(catalog, input, parsed.error))
   }
-  return parsed.data.map((op) => {
+  // Пакет — лише вхід `run`: фаза `ctx.run` приходить однією операцією, тож
+  // зменшений `maxBatch` хуків не обмежує (їх тримає `BATCH_MAX`, §7.1).
+  if (Array.isArray(input) && parsed.data.length > limits.maxBatch) {
+    throw new CommandFailure({
+      code: "command.invalid",
+      reason: LIMIT_REASONS.batchTooLarge,
+    })
+  }
+  const batch = Array.isArray(input)
+  return parsed.data.map((op, i) => {
     const found = targetOf(catalog, op)
-    if ("error" in found) throw new CommandFailure(found.error)
+    if ("error" in found) {
+      // Невідомий об'єкт `object` не дає: операцію пакета називає індекс.
+      const { error } = found
+      throw new CommandFailure(
+        batch && error.object === undefined && error.path !== undefined
+          ? { ...error, path: `${i}.${error.path}` }
+          : error
+      )
+    }
+    // У пакеті — об'єкт операції, що відмовила (спека П4-B §6.10).
+    const fail: (error: CommandError) => never = (error) => {
+      throw new CommandFailure(withObject(error, found.object))
+    }
+    const over = tabularOverLimit(found.object, op, limits.maxTabularLines)
+    if (over !== undefined) fail(over)
     const ids = rootInput(catalog, found.object, op)
-    if ("error" in ids) throw new CommandFailure(ids.error)
+    if ("error" in ids) fail(ids.error)
     const prepared: PreparedOperation = { ...op, ...ids }
     if (prepared.action === "create" || prepared.action === "update") {
       const encoded = encodeItem(found.object, prepared, draftOf(prepared))
-      if ("error" in encoded) throw new CommandFailure(encoded.error)
+      if ("error" in encoded) fail(encoded.error)
       const overlap = deleteOverlapOf(found.object, prepared)
-      if (overlap !== undefined) throw new CommandFailure(invalid(overlap))
+      if (overlap !== undefined) fail(invalid(overlap))
     }
     return prepared
   })
@@ -226,7 +377,8 @@ function callOf(
     case "create":
     case "update": {
       const encoded = encodeItem(object, op, draft)
-      if ("error" in encoded) return encoded
+      if ("error" in encoded)
+        return { error: withObject(encoded.error, object) }
       return {
         text: `SELECT ${fn(target)}($1::jsonb, $2::bigint) AS r`,
         params: [
@@ -346,6 +498,7 @@ async function checkTabularRows(
         code: "command.invalid",
         reason: "tabular-rows-missing",
         path: section.name,
+        object: refOf(object),
       })
     }
   }
@@ -360,7 +513,7 @@ function checkDraft(
   tx: Transaction,
   op: Operation,
   draft: unknown,
-  path: (key: string) => string = (key) => key
+  refusal: (key: string) => CommandError
 ): Draft<object> {
   const keys = op.action === "markDeletion" ? [] : ["values", "tabularSections"]
   let bad: string | undefined
@@ -376,7 +529,7 @@ function checkDraft(
     tx.state.log({ kind: "hook", error })
     tx.abort({ code: "command.internal" })
   }
-  if (bad !== undefined) tx.abort(invalid(path(bad)))
+  if (bad !== undefined) tx.abort(refusal(bad))
   return draft as Draft<object>
 }
 
@@ -389,7 +542,7 @@ async function runNested(
   try {
     // Пакет — не операція; копія — щоб хук не змінив входу після перевірки.
     if (Array.isArray(operation)) throw new CommandFailure(invalid())
-    ;[op] = prepareInput(tx.state.catalog, structuredClone(operation))
+    ;[op] = prepareInput(tx.state.catalog, structuredClone(operation), tx.state)
   } catch (error) {
     tx.abort(error instanceof CommandFailure ? error.error : invalid())
   }
@@ -425,14 +578,24 @@ async function beforeWrite(
   phase: HookPhase,
   module: ObjectModule<object> | undefined,
   draft: Draft<object>,
-  path?: (key: string) => string
+  root?: RuntimeObject
 ): Promise<Draft<object>> {
   if (module?.beforeWrite === undefined) return draft
   const hook = module.beforeWrite.bind(module)
   const returned: unknown = await callHook(tx, phase, (ctx) =>
     hook({ ctx, draft })
   )
-  return checkDraft(tx, phase.op, returned, path)
+  // Ключ поза чернеткою членства — дефект `creatorMember` операції кореня:
+  // і шлях, і `object` — її, а не довідника членства. `id` чернетки — ключ
+  // запису, тож у шляху — `keyName` (спека П4-B §4.0).
+  return checkDraft(tx, phase.op, returned, (key) =>
+    root === undefined
+      ? withObject(
+          invalid(key === "id" ? phase.object.keyName : key),
+          phase.object
+        )
+      : withObject(invalid(MEMBER), root)
+  )
 }
 
 /** `onWrite` фази над копією рядка: зміна копії не змінює результату (Р-A3-15). */
@@ -518,27 +681,29 @@ async function runRootPhase(
       object: membership,
       module: memberModule,
       phase: memberPhase,
-      // Ключ поза чернеткою — дефект `creatorMember`, а не входу кореня.
       draft: await beforeWrite(
         tx,
         memberPhase,
         memberModule,
         draftOf(memberOp),
-        () => MEMBER
+        object
       ),
     }
   }
-  // Повторна перевірка обох чернеток: хук міг повернути ТЧ.
-  if (draft.tabularSections !== undefined) tx.abort(invalid("tabularSections"))
+  // Повторна перевірка обох чернеток: хук міг повернути ТЧ. Відмова
+  // членства — теж шлях `creatorMember` операції кореня.
+  const abort: (error: CommandError) => never = (error) =>
+    tx.abort(withObject(error, object))
+  if (draft.tabularSections !== undefined) abort(invalid("tabularSections"))
   let memberColumns: Record<string, unknown> | undefined
   if (member !== undefined) {
-    if (member.draft.tabularSections !== undefined) tx.abort(invalid(MEMBER))
+    if (member.draft.tabularSections !== undefined) abort(invalid(MEMBER))
     const encoded = encodeMember(member.object, member.draft.values ?? {})
-    if ("error" in encoded) tx.abort(encoded.error)
+    if ("error" in encoded) abort(encoded.error)
     memberColumns = encoded.columns
   }
   const encoded = encodeItem(object, op, draft)
-  if ("error" in encoded) tx.abort(encoded.error)
+  if ("error" in encoded) abort(encoded.error)
   const call: Statement = {
     text: `SELECT ${fn(target)}($1::jsonb, $2::jsonb, $3::uuid) AS r`,
     params: [
@@ -628,7 +793,7 @@ function decodeCoreRow(
   let scope: unknown
   try {
     const raw = parse()
-    row = decodeRecord(object, raw)
+    row = decodeCore(object, raw)
     scope =
       object.scopeColumn === undefined
         ? undefined

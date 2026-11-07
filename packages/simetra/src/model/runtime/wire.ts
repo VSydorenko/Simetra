@@ -1,9 +1,9 @@
-import { isDate } from "../schemas/value-type"
 import type {
   CatalogEntry,
   CatalogEntryAttribute,
   CatalogEntrySection,
 } from "./catalog"
+import { normalDateTime } from "../schemas/value-type"
 import { INTEGER_TEXT, encodeItemValue, isPlainObject } from "./values"
 
 /**
@@ -93,6 +93,10 @@ function encodeValues(
     }
     const encoded = encodeItemValue(attribute, value, path)
     if ("error" in encoded) throw new WireEncodeError(path)
+    if (attribute.type === "DateTime") {
+      out.set(attribute.column, encodeDateTime(encoded.value, path))
+      continue
+    }
     if (attribute.pair !== undefined) {
       const columns = encoded.value as Record<string, unknown>
       out.set(attribute.pair.typeColumn, columns[attribute.pair.typeColumn])
@@ -101,6 +105,18 @@ function encodeValues(
       out.set(attribute.column, encoded.value)
     }
   }
+}
+
+function encodeDateTime(value: unknown, path: string): unknown {
+  // Вхід приймає будь-який зсув і дріб, а дріт — лише фіксовану ширину UTC:
+  // інакше порядок рядків на клієнті не збігався б із часовим.
+  const normal = (item: unknown) => {
+    if (item === null) return null
+    const text = normalDateTime(item as string)
+    if (text === undefined) throw new WireEncodeError(path)
+    return text
+  }
+  return Array.isArray(value) ? value.map(normal) : normal(value)
 }
 
 function encodeLine(
@@ -137,9 +153,13 @@ function encodeLine(
  * keyed by section id instead of logical name. Fields the entry does not
  * know are dropped; `Raw` values pass as is.
  *
+ * A `DateTime` becomes UTC `YYYY-MM-DDTHH:MM:SS.ffffffZ`, as `decodeRow`
+ * gives it.
+ *
  * Throws {@link WireEncodeError} for a value `encodeItemValue` rejects —
  * including database values outside the logical type, such as `infinity`
- * for `Date`/`DateTime` or `NaN` for `Numeric`.
+ * for `Date`/`DateTime` or `NaN` for `Numeric` — and for a `DateTime` with
+ * more than six fraction digits or outside years 1–9999 in UTC.
  */
 export function encodeRow(entry: CatalogEntry, row: LogicalRow): WireRow {
   const out = new Map<string, unknown>()
@@ -172,56 +192,6 @@ export function encodeRow(entry: CatalogEntry, row: LogicalRow): WireRow {
 }
 
 // ---------------------------------------------------------------- decode
-
-// Обидві форми джерел: `T` (JSON PostgREST) і пробіл (текст Postgres); зсув
-// `±hh`, `±hh:mm`, `±hhmm`, `±hh:mm:ss` (історичні пояси Postgres).
-const DATE_TIME_WIRE =
-  /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?(?:Z|([+-])(\d{2})(?::?(\d{2})(?::?(\d{2}))?)?)$/
-
-const pad = (value: number, width: number) => String(value).padStart(width, "0")
-
-/**
- * Момент у фіксованій ширині UTC з мікросекундами: лексикографічний порядок
- * рядків = часовий. Розбір рядка, а не `Date`: той губить мікросекунди.
- * Дріб від зсуву не залежить (зсув — цілі секунди), тож `Date` рахує лише
- * цілі секунди, а дріб переноситься рядком.
- */
-function normaliseDateTime(value: string, column: string): string {
-  const match = DATE_TIME_WIRE.exec(value)
-  if (match === null || !isDate(`${match[1]}-${match[2]}-${match[3]}`)) {
-    throw new WireDecodeError(column)
-  }
-  const [year, month, day, hours, minutes, seconds] = match
-    .slice(1, 7)
-    .map(Number) as [number, number, number, number, number, number]
-  const fraction = match[7] ?? ""
-  // `timestamptz` зберігає мікросекунди: довший дріб — не значення бази.
-  if (hours > 23 || minutes > 59 || seconds > 59 || fraction.length > 6) {
-    throw new WireDecodeError(column)
-  }
-  const sign = match[8] === "-" ? -1 : 1
-  const [zoneHours, zoneMinutes, zoneSeconds] = [
-    match[9],
-    match[10],
-    match[11],
-  ].map((part) => Number(part ?? 0)) as [number, number, number]
-  const date = new Date(0)
-  // `setUTCFullYear`, а не `Date.UTC`: той читає роки 0–99 як 1900+.
-  date.setUTCFullYear(year, month - 1, day)
-  date.setUTCHours(
-    hours - sign * zoneHours,
-    minutes - sign * zoneMinutes,
-    seconds - sign * zoneSeconds
-  )
-  const utcYear = date.getUTCFullYear()
-  if (utcYear < 1 || utcYear > 9999) throw new WireDecodeError(column)
-  return (
-    `${pad(utcYear, 4)}-${pad(date.getUTCMonth() + 1, 2)}-` +
-    `${pad(date.getUTCDate(), 2)}T${pad(date.getUTCHours(), 2)}:` +
-    `${pad(date.getUTCMinutes(), 2)}:${pad(date.getUTCSeconds(), 2)}.` +
-    `${fraction.padEnd(6, "0")}Z`
-  )
-}
 
 function decodeInteger(value: unknown, column: string): number {
   // Лише рядок цілого: число JSON означало б, що джерело не привело
@@ -258,9 +228,7 @@ function decodeScalar(
     case "Boolean":
       return typeof value === "boolean" ? value : fail()
     case "DateTime":
-      return typeof value === "string"
-        ? normaliseDateTime(value, column)
-        : fail()
+      return (typeof value === "string" && normalDateTime(value)) || fail()
     case "Ref":
       if (typeof value !== "string") return fail()
       if (attribute.enumValues !== undefined) {
@@ -306,7 +274,8 @@ function decodeValue(attribute: CatalogEntryAttribute, raw: WireRow): unknown {
 function decodeInto(
   attributes: readonly CatalogEntryAttribute[],
   raw: WireRow,
-  out: Map<string, unknown>
+  out: Map<string, unknown>,
+  strict: boolean
 ): void {
   for (const attribute of attributes) {
     const present =
@@ -316,6 +285,9 @@ function decodeInto(
     if (!present) continue
     const value = decodeValue(attribute, raw)
     if (value !== ABSENT) out.set(attribute.name, value)
+    else if (strict) {
+      throw new WireDecodeError(attribute.pair?.typeColumn ?? attribute.column)
+    }
   }
 }
 
@@ -330,11 +302,15 @@ export function decodeValues(
   raw: WireRow
 ): LogicalRow {
   const out = new Map<string, unknown>()
-  decodeInto(attributes, raw, out)
+  decodeInto(attributes, raw, out, false)
   return Object.fromEntries(out)
 }
 
-function decodeLine(section: CatalogEntrySection, line: unknown): LogicalRow {
+function decodeLine(
+  section: CatalogEntrySection,
+  line: unknown,
+  strict: boolean
+): LogicalRow {
   if (!isPlainObject(line)) throw new WireDecodeError(section.id)
   const out = new Map<string, unknown>()
   if (own(line, section.key)) out.set(section.keyName, line[section.key])
@@ -347,7 +323,7 @@ function decodeLine(section: CatalogEntrySection, line: unknown): LogicalRow {
       decodeInteger(line[section.lineNumber], section.lineNumber)
     )
   }
-  decodeInto(section.attributes, line, out)
+  decodeInto(section.attributes, line, out, strict)
   return Object.fromEntries(out)
 }
 
@@ -359,13 +335,21 @@ function decodeLine(section: CatalogEntrySection, line: unknown): LogicalRow {
  * an enumeration label becomes the value's logical name and a pair
  * `{ type: "<Kind>.<Name>", id }`; `Numeric`, `Date`, `Bytes`, `Json` and
  * `Raw` stay as they are. A card's `tabularSections` are keyed by logical
- * name instead of section id. Unknown keys, sections and labels are ignored
- * so an older client survives a model extension.
+ * name instead of section id. Unknown keys and sections are ignored so an
+ * older client survives a model extension; so is an unknown enumeration
+ * label or pair target, unless `options.strict` is set.
  *
  * Throws {@link WireDecodeError} with the physical column for a value of the
- * wrong form.
+ * wrong form, and with `strict` also for an unknown label or target.
  */
-export function decodeRow(entry: CatalogEntry, raw: WireRow): LogicalRow {
+export function decodeRow(
+  entry: CatalogEntry,
+  raw: WireRow,
+  options: { strict?: boolean } = {}
+): LogicalRow {
+  // Сервер читає рядок своєї ж бази: невідома мітка там — дефект моделі, а
+  // не новіша модель, тож мовчки губити поле не можна (В9 — лише клієнт).
+  const strict = options.strict === true
   if (!isPlainObject(raw)) throw new WireDecodeError(entry.key)
   const out = new Map<string, unknown>()
   if (own(raw, entry.key)) out.set(entry.keyName, raw[entry.key])
@@ -375,7 +359,7 @@ export function decodeRow(entry: CatalogEntry, raw: WireRow): LogicalRow {
       decodeInteger(raw[entry.versionColumn], entry.versionColumn)
     )
   }
-  decodeInto(entry.attributes, raw, out)
+  decodeInto(entry.attributes, raw, out, strict)
   if (own(raw, SECTIONS)) {
     const sections = raw[SECTIONS]
     if (!isPlainObject(sections)) throw new WireDecodeError(SECTIONS)
@@ -386,7 +370,7 @@ export function decodeRow(entry: CatalogEntry, raw: WireRow): LogicalRow {
       if (!Array.isArray(lines)) throw new WireDecodeError(section.id)
       logical.set(
         section.name,
-        lines.map((line: unknown) => decodeLine(section, line))
+        lines.map((line: unknown) => decodeLine(section, line, strict))
       )
     }
     out.set(SECTIONS, Object.fromEntries(logical))

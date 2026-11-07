@@ -42,6 +42,10 @@ export interface RuntimeState {
   log: (entry: LogEntry) => void
   maxAttempts: number
   maxDepth: number
+  /** Operations of a `run` batch, ≤ `BATCH_MAX`; `ctx.run` phases are not counted. */
+  maxBatch: number
+  /** Rows of one tabular section of an operation, `run` and `ctx.run` alike. */
+  maxTabularLines: number
   /** `statement_timeout` of a server read, ms; `ctx.read` sets none (B1b budget). */
   readTimeout: number
   /** The request role of reads; `undefined` — the fallback path (§6.11). */
@@ -441,14 +445,19 @@ export async function runCommand(
   fullTabularArrays = false
 ): Promise<CommandResult> {
   rejectNested()
-  const ops = prepareInput(state.catalog, input)
+  const ops = prepareInput(state.catalog, input, state)
   // Повний масив сам видаляє пропущені рядки: `deleteIds` поруч із ним не
   // діяв би, а мовчазний ігнор сховав би помилку викликача.
-  if (
-    fullTabularArrays &&
-    ops.some((op) => op.action === "update" && op.deleteIds !== undefined)
-  ) {
-    throw new CommandFailure({ code: "command.invalid", path: "deleteIds" })
+  const withDeletes = fullTabularArrays
+    ? ops.find((op) => op.action === "update" && op.deleteIds !== undefined)
+    : undefined
+  if (withDeletes !== undefined) {
+    // Об'єкт операції, що відмовила: `prepareInput` уже знайшов його в каталозі.
+    throw new CommandFailure({
+      code: "command.invalid",
+      path: "deleteIds",
+      object: withDeletes.object,
+    })
   }
   let claims: string
   try {

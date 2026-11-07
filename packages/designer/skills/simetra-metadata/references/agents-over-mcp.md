@@ -68,6 +68,10 @@ pnpm exec simetra data-read '{"query":{"object":{"kind":"Catalog","name":"Curren
   `plan` and `apply` it.
 - A runtime refusal comes back as `error` with a `code` (and a `reason`);
   `BigInt` values come as decimal strings and may be passed back as strings.
+  `DateTime` values come in UTC as `YYYY-MM-DDTHH:MM:SS.ffffffZ`.
+- `data-command` returns `{ rows, changes }`: one row per operation, in the
+  shape of a card read. The tabular sections that the operation wrote come
+  under `tabularSections.<name>`, not at the top level of the row.
 
 A query takes one of these forms:
 
@@ -199,6 +203,16 @@ ignored. Keep one line and delete another:
 A set of lines over the tabular section limit (5000 lines), or one that is
 edited in parts, does not belong in a tabular section: model it as a
 separate object or a register.
+
+Limits of one `data-command`, checked before the database is touched; each
+refusal is `command.invalid` with the `reason` below:
+
+- up to 500 operations (`batch-too-large`); split a larger seed into
+  several calls, each its own transaction;
+- up to 5000 lines in one tabular section of an operation
+  (`tabular-too-large`, `path` — the section);
+- a value within its attribute's `maxBytes` (`too-large`, `path` — the
+  attribute).
 
 The tools work only on a development database. Before connecting they check
 that the host is this machine (`localhost`, `127.0.0.0/8`, `::1` or a unix

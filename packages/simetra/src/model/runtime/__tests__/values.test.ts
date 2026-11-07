@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 import type { CatalogEntryAttribute } from "../catalog"
+import { jsonBytes } from "../limits"
 import { encodeAttributes, type EncodeAttributesOptions } from "../values"
 import { catalogEntryAttribute } from "./entries"
 
@@ -182,4 +183,176 @@ describe("encodeAttributes", () => {
   ])("encodes %s", (_, options, values, columns) => {
     expect(encodeAttributes(attributes, values, options)).toEqual({ columns })
   })
+})
+
+// `maxBytes` (Рд26, Р7): міра — `jsonBytes` закодованого значення форми
+// передачі, тож лапки JSON, екранування й UTF-8 кирилиці входять у межу.
+describe("encodeAttributes: maxBytes", () => {
+  const INPUT = { ...HEADER, maxBytes: true } as const
+  it.each<[string, CatalogEntryAttribute["type"], boolean, unknown, number]>([
+    ["Text", "Text", false, "abc", 5],
+    ["Cyrillic Text", "Text", false, "їж", 6],
+    ["Text with a quote and a backslash", "Text", false, 'a"\\', 7],
+    ["Json", "Json", false, { a: "в" }, 10],
+    ["Bytes as the \\x text", "Bytes", false, "\\xff00", 9],
+    ["a Text array as a whole", "Text", true, ["ab", "в"], 11],
+  ])(
+    "%s: the limit passes, one byte less refuses",
+    (_, type, array, value, bytes) => {
+      const at = (maxBytes: number) => [
+        attr("big", type, { maxBytes, ...(array ? { array: true } : {}) }),
+      ]
+      expect(encodeAttributes(at(bytes), { big: value }, INPUT)).toHaveProperty(
+        "columns.big_col"
+      )
+      expect(encodeAttributes(at(bytes - 1), { big: value }, INPUT)).toEqual({
+        error: { code: "command.invalid", path: "big", reason: "too-large" },
+      })
+    }
+  )
+
+  // Р7: міра — форма, якою значення піде дротом, а не форма входу.
+  // `Numeric(p, s)` база доповнює до `s` дробових цифр, `DateTime` кодек
+  // нормалізує до фіксованої ширини UTC; надісланий базі вхід — без змін.
+  it.each<[string, Partial<CatalogEntryAttribute>, unknown, number]>([
+    [
+      'a Numeric(20, 10) array of "0" by its padded scale',
+      { type: "Numeric", precision: 20, scale: 10, array: true },
+      ["0", "0", "0"],
+      jsonBytes(["0.0000000000", "0.0000000000", "0.0000000000"]),
+    ],
+    [
+      '"0" in Numeric(38, 10) as "0.0000000000"',
+      { type: "Numeric", precision: 38, scale: 10 },
+      "0",
+      jsonBytes("0.0000000000"),
+    ],
+    [
+      "a negative Numeric(5, 2) with its sign",
+      { type: "Numeric", precision: 5, scale: 2 },
+      "-5",
+      jsonBytes("-5.00"),
+    ],
+    [
+      "Numeric(5, 0) without a point or leading zeros",
+      { type: "Numeric", precision: 5, scale: 0 },
+      "+007",
+      jsonBytes("7"),
+    ],
+    // Дробових цифр понад `s` база округлює: перенос може додати цілу цифру.
+    [
+      "Numeric(10, 2) past its scale with a carry digit",
+      { type: "Numeric", precision: 10, scale: 2 },
+      "1.5000",
+      jsonBytes("01.50"),
+    ],
+    [
+      "a DateTime array by its fixed-width UTC form",
+      { type: "DateTime", array: true },
+      ["2026-01-01T00:00+02:00", null],
+      jsonBytes(["2025-12-31T22:00:00.000000Z", null]),
+    ],
+  ])("measures %s", (_, extra, value, bytes) => {
+    const at = (maxBytes: number) => [
+      attr("big", extra.type ?? "Text", { ...extra, maxBytes }),
+    ]
+    expect(jsonBytes(value)).not.toBe(bytes)
+    expect(encodeAttributes(at(bytes), { big: value }, INPUT)).toEqual({
+      columns: { big_col: value },
+    })
+    expect(encodeAttributes(at(bytes - 1), { big: value }, INPUT)).toEqual({
+      error: { code: "command.invalid", path: "big", reason: "too-large" },
+    })
+  })
+
+  // Числа `Json` — шириною, з якою їх друкує `jsonb` (`numeric_out`):
+  // десятковий запис без експоненти; `numeric` не має від'ємного нуля.
+  it.each<[number, number]>([
+    [0, 1],
+    [-0, 1],
+    [1.5, 3],
+    [1e21, 22],
+    [1e-7, 9],
+    [1e300, 301],
+    [-1e-300, 303],
+    [123456789012345680000, 21],
+  ])("measures the Json number %d by its jsonb width %i", (value, bytes) => {
+    const at = (maxBytes: number) => [attr("big", "Json", { maxBytes })]
+    expect(encodeAttributes(at(bytes), { big: value }, INPUT)).toEqual({
+      columns: { big_col: value },
+    })
+    expect(encodeAttributes(at(bytes - 1), { big: value }, INPUT)).toEqual({
+      error: { code: "command.invalid", path: "big", reason: "too-large" },
+    })
+  })
+
+  it("refuses Json under maxBytes by JSON.stringify but over it by jsonb", () => {
+    const value = { a: Array.from({ length: 10 }, () => 1e300), b: "x" }
+    const big = [attr("big", "Json", { maxBytes: 1000 })]
+    expect(jsonBytes(value)).toBeLessThan(1000)
+    expect(encodeAttributes(big, { big: value }, INPUT)).toEqual({
+      error: { code: "command.invalid", path: "big", reason: "too-large" },
+    })
+  })
+
+  it("accepts a small Json value", () => {
+    const value = { n: 12.5, list: [1, -2, "в"], ok: true, none: null }
+    const big = [attr("big", "Json", { maxBytes: jsonBytes(value) })]
+    expect(encodeAttributes(big, { big: value }, INPUT)).toEqual({
+      columns: { big_col: value },
+    })
+  })
+
+  it("names the row path of a tabular section value", () => {
+    const row = [attr("memo", "Text", { maxBytes: 4 })]
+    expect(
+      encodeAttributes(
+        row,
+        { ref: OTHER, memo: "abc" },
+        { ...ROW, maxBytes: true }
+      )
+    ).toEqual({
+      error: {
+        code: "command.invalid",
+        path: "lines.0.memo",
+        reason: "too-large",
+      },
+    })
+  })
+
+  // Без опції межі немає: обхід кличуть і не лише команди.
+  it("does not check without the option", () => {
+    const big = [attr("memo", "Text", { maxBytes: 1 })]
+    expect(encodeAttributes(big, { memo: "abc" }, HEADER)).toEqual({
+      columns: { memo_col: "abc" },
+    })
+  })
+})
+
+// Вхід `DateTime` перевіряється правилом дроту (`normalDateTime`): момент, що
+// в UTC виходить за роки 1–9999, суворий декодер не прочитав би з бази.
+describe("encodeAttributes: DateTime by the wire rule", () => {
+  const at = [attr("at", "DateTime"), attr("ats", "DateTime", { array: true })]
+  it.each<[string, unknown, string]>([
+    ["past 9999 in UTC", { at: "9999-12-31T23:59:59-05:00" }, "at"],
+    ["before 0001 in UTC", { at: "0001-01-01T00:30:00+01:00" }, "at"],
+    [
+      "an array element past 9999 in UTC",
+      { ats: ["9999-12-31T23:59:59Z", "9999-12-31T23:59:59-05:00"] },
+      "ats.1",
+    ],
+  ])("refuses %s", (_, values, path) => {
+    expect(encodeAttributes(at, values, HEADER)).toEqual({
+      error: { code: "command.invalid", path },
+    })
+  })
+
+  it.each(["9999-12-31T23:59:59Z", "0001-01-01T00:00:00Z"])(
+    "accepts the edge %s",
+    (value) => {
+      expect(encodeAttributes(at, { at: value, ats: [value] }, HEADER)).toEqual(
+        { columns: { at_col: value, ats_col: [value] } }
+      )
+    }
+  )
 })

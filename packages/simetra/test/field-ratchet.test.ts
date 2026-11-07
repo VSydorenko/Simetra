@@ -12,7 +12,12 @@ import {
   localizedStringSchema,
   projectSchema,
 } from "simetra/model"
-import { canonicalSnapshot, emitEntityTypes, localize } from "simetra/compiler"
+import {
+  buildRuntimeCatalog,
+  canonicalSnapshot,
+  emitEntityTypes,
+  localize,
+} from "simetra/compiler"
 import { engineScope } from "simetra/schema"
 // Внутрішній шов компілятора: з `simetra/compiler` навмисно не експортується.
 import { readFiles, runStages } from "../src/compiler/pipeline"
@@ -85,6 +90,20 @@ const EXCEPTIONS: Record<string, string> = Object.fromEntries([
   ...["AccumulationRegister", "InformationRegister"].map((kind) => [
     `${kind}.attributes.load`,
     "a register attribute cannot set load: registers are not in the runtime catalog yet (Рд1)",
+  ]),
+  // `maxBytes` (Рд26) — той самий випадок, що `load` регістра: правило
+  // `attribute.max-bytes-not-allowed` знімуть разом із цим винятком.
+  ...["AccumulationRegister", "InformationRegister"].map((kind) => [
+    `${kind}.attributes.maxBytes`,
+    "a register attribute cannot set maxBytes: registers are not in the runtime catalog yet (Рд1)",
+  ]),
+  // Документ ще не пишеться командами (`commandWrites` — лише в довідника),
+  // тож каталог рантайму його не має й `maxBytes` не читає. Межу документа
+  // схема приймає свідомо: поле має той самий зміст, щойно документ увійде в
+  // ядро команд, — тоді виняток знімуть.
+  ...["attributes", "tabularSections.attributes"].map((path) => [
+    `Document.${path}.maxBytes`,
+    "межа запису; документ ще не пишеться командами — каталог прочитає поле разом з ними",
   ]),
 ])
 
@@ -262,6 +281,9 @@ async function unreadPaths(
   ).toEqual([])
   const model = result.model!
   emitEntityTypes(model)
+  // Каталог рантайму — проєкція моделі для T3 і клієнта: поле подання, яке
+  // читає лише він (`maxBytes`, Рд26), має споживача саме тут.
+  buildRuntimeCatalog(model)
   await engineScope(model)
   recording.paused = true
   try {

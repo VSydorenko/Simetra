@@ -220,9 +220,12 @@ describe("CommandRuntime.read", () => {
     "rejects %s as command.invalid before the database",
     async (_, query, extra) => {
       const { db, runtime } = await setup(undefined, { catalog: docCatalog })
+      // Шлях — відносно об'єкта запиту; невідомий об'єкт — без `object`.
+      const { object } = query as { object: unknown }
       expect(await failureOf(runtime.read(session, query as never))).toEqual({
         code: "command.invalid",
         ...extra,
+        ...(extra.path === "object" ? {} : { object }),
       })
       expect(db.calls).toEqual([])
     }
@@ -249,7 +252,7 @@ describe("CommandRuntime.read", () => {
       const object = name === "code" ? RIGHTS : TASK
       expect(
         await failureOf(runtime.read(session, { object, where, limit: 1 }))
-      ).toEqual({ code: "command.invalid", path: "where.value" })
+      ).toEqual({ code: "command.invalid", path: "where.value", object })
       expect(db.calls).toEqual([])
     }
   )
@@ -434,6 +437,7 @@ describe("CommandRuntime.read", () => {
       code: "command.invalid",
       reason: "tabular-too-large",
       path: "lines",
+      object: ORGANIZATION,
     })
     expect(db.calls).toEqual([
       { connect: true },

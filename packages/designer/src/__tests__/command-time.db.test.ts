@@ -320,6 +320,7 @@ describe("command time limits, codes and tabular arrays over the engine target",
     const missing = {
       code: "command.invalid",
       reason: "tabular-rows-missing",
+      object: GAUGE,
       path: "lines",
     }
     const other = randomUUID()
@@ -400,6 +401,7 @@ describe("command time limits, codes and tabular arrays over the engine target",
     ).toEqual({
       code: "command.constraint",
       kind: "check",
+      object: GAUGE,
       attributes: ["lines.qty"],
     })
     expect(await exists(id)).toBe(false)

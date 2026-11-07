@@ -10,9 +10,18 @@ export interface ColumnLists {
   lazy: readonly string[]
 }
 
-/** Column lists of a header and of each tabular section, keyed by section id. */
+/**
+ * Column lists of one tabular section: the header lists without `update`.
+ */
+// Рядок ТЧ при кожній дії записується наново цілком (масив ТЧ переписує рядки),
+// тож і сумісність, і кодування рядків звіряють його лише з переліком вставки.
+export type SectionColumnLists = Omit<ColumnLists, "update">
+
+/**
+ * Column lists of a header and of each tabular section, keyed by section id.
+ */
 export interface ObjectColumns extends ColumnLists {
-  tabularSections: ReadonlyMap<string, ColumnLists>
+  tabularSections: ReadonlyMap<string, SectionColumnLists>
 }
 
 // Пара займає дві колонки: значення й тип цілі.
@@ -55,10 +64,6 @@ export function objectColumns(entry: CatalogEntry): ObjectColumns {
           insert: unique([
             section.key,
             ...flat(section.attributes.filter((a) => a.insert)),
-          ]),
-          update: unique([
-            section.key,
-            ...flat(section.attributes.filter((a) => a.update)),
           ]),
           read: unique([
             section.key,

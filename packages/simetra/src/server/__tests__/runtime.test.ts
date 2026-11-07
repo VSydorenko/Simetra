@@ -1,5 +1,7 @@
 import {
+  BATCH_MAX,
   PROVIDER_API_ROLES,
+  TABULAR_LINES_MAX,
   runtimeCatalogSchema,
   type RuntimeObject,
 } from "simetra/model"
@@ -234,6 +236,10 @@ describe("createCommandRuntime", () => {
     ["commandBudgetMs", 500],
     ["commandBudgetMs", 1000.5],
     ["lockTimeoutMs", 0],
+    ["maxBatch", 0],
+    ["maxBatch", BATCH_MAX + 1],
+    ["maxTabularLines", 0],
+    ["maxTabularLines", TABULAR_LINES_MAX + 1],
   ])("rejects %s = %s before the database", async (option, value) => {
     const db = fakeDatabase({ query: () => ({}) })
     await expect(
@@ -276,7 +282,11 @@ describe("an object without operations", () => {
         }
       )
     )
-    expect(error).toEqual({ code: "command.invalid", path: "action" })
+    expect(error).toEqual({
+      code: "command.invalid",
+      path: "action",
+      object: { kind: "Catalog", name: "Report" },
+    })
     expect(db.calls.slice(created)).toEqual([])
   })
 })

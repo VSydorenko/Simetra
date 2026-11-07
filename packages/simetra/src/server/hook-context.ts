@@ -7,6 +7,7 @@ import type {
   ReadResultOf,
   RuntimeObject,
 } from "simetra/model"
+import { withObject } from "./errors"
 import type { PreparedOperation } from "./phase"
 import { executeRead, prepareRead } from "./read"
 import type { Transaction } from "./transaction"
@@ -198,11 +199,17 @@ function contextOf(tx: Transaction, phase: HookPhase, scope: Scope) {
       }),
     reject(code, path) {
       if (!valid()) throw misuse()
-      tx.abort({
-        code: "command.rejected",
-        reason: code,
-        ...(path === undefined ? {} : { path }),
-      })
+      // Шлях застосунку — відносно об'єкта фази хука.
+      tx.abort(
+        withObject(
+          {
+            code: "command.rejected",
+            reason: code,
+            ...(path === undefined ? {} : { path }),
+          },
+          object
+        )
+      )
     },
     afterCommit(fn) {
       if (!valid()) throw misuse()

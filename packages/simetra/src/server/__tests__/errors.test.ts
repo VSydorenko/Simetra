@@ -16,7 +16,7 @@ import {
   policyDomain,
   withSql,
 } from "../../compiler/__tests__/fixtures/rights"
-import { logsDatabaseError, mapDatabaseError } from "../errors"
+import { logsDatabaseError, mapDatabaseError, type ErrorPhase } from "../errors"
 import type { DatabaseError } from "../port"
 import { orgMember, organization, rootCatalog, sample } from "./fixtures"
 
@@ -57,6 +57,9 @@ const mirror: RuntimeObject = runtimeObjectSchema.parse({
   name: "Mirror",
   kindLabel: "mirror",
   table: { schema: "audit", name: "mirror" },
+  constraints: [
+    { name: "mirror_code_key", kind: "unique", columns: ["code_col"] },
+  ],
   tabularSections: [
     {
       ...sample.tabularSections[0],
@@ -286,6 +289,7 @@ describe("mapDatabaseError", () => {
     expect(map({ code: "22023", message: "command.invalid", detail })).toEqual({
       code: "command.invalid",
       ...fields,
+      ...("path" in fields ? { object: ref } : {}),
     })
   })
 
@@ -308,6 +312,7 @@ describe("mapDatabaseError", () => {
       expect(map({ code: "23503", table, constraint })).toEqual({
         code: "command.invalid",
         ...f,
+        object: ref,
       })
     }
   )
@@ -328,6 +333,7 @@ describe("mapDatabaseError", () => {
       code: "command.constraint",
       kind: "notNull",
       attributes: attrs,
+      object: ref,
     })
   })
 
@@ -348,9 +354,86 @@ describe("mapDatabaseError", () => {
         code: "command.constraint",
         kind,
         attributes,
+        object: ref,
       })
     }
   )
+
+  // `object` — об'єкт знайденої таблиці, не фази: рядок іншого об'єкта
+  // (тригер фази) чи відкладене обмеження на `COMMIT`, де фази немає.
+  const MIRROR = { kind: "Catalog" as const, name: "Mirror" }
+  it.each<
+    [string, ErrorPhase | undefined, Partial<DatabaseError>, CommandError]
+  >([
+    [
+      "23502 on another object's table",
+      phase,
+      { code: "23502", table: "mirror", column: "code_col" },
+      {
+        code: "command.constraint",
+        kind: "notNull",
+        attributes: ["code"],
+        object: MIRROR,
+      },
+    ],
+    [
+      "23502 on another object's section",
+      phase,
+      { code: "23502", table: "mirror_lines", column: "qty_col" },
+      {
+        code: "command.constraint",
+        kind: "notNull",
+        attributes: ["lines.qty"],
+        object: MIRROR,
+      },
+    ],
+    [
+      "23505 on another object's table",
+      phase,
+      { code: "23505", table: "mirror", constraint: "mirror_code_key" },
+      {
+        code: "command.constraint",
+        kind: "unique",
+        attributes: ["code"],
+        object: MIRROR,
+      },
+    ],
+    [
+      "23503 deferred to COMMIT",
+      undefined,
+      {
+        code: "23503",
+        table: "sample_lines",
+        constraint: "sample_lines_qty_fkey",
+      },
+      { code: "command.invalid", path: "lines.qty", object: ref },
+    ],
+    [
+      "23505 deferred to COMMIT",
+      undefined,
+      { code: "23505", table: "mirror", constraint: "mirror_code_key" },
+      {
+        code: "command.constraint",
+        kind: "unique",
+        attributes: ["code"],
+        object: MIRROR,
+      },
+    ],
+    [
+      "23502 on COMMIT",
+      undefined,
+      // `sample` у каталозі неоднозначна (ТЧ дзеркала): лише таблиця ТЧ.
+      { code: "23502", table: "sample_lines", column: "qty_col" },
+      {
+        code: "command.constraint",
+        kind: "notNull",
+        attributes: ["lines.qty"],
+        object: ref,
+      },
+    ],
+  ])("%s names the object of the table", (_, at, fields, expected) => {
+    expect(mapDatabaseError(db(fields), catalog, at)).toEqual(expected)
+  })
 
   it.each([
     ["23505", "sample_pkey"],
@@ -453,6 +536,7 @@ describe("mapDatabaseError on a compiled CHECK", () => {
       code: "command.constraint",
       kind: "check",
       attributes,
+      object: { kind: "Catalog", name: "Gauge" },
     })
   })
 
@@ -468,6 +552,7 @@ describe("mapDatabaseError on a compiled CHECK", () => {
       code: "command.constraint",
       kind: "check",
       attributes: ["lines.qty"],
+      object: { kind: "Catalog", name: "Gauge" },
     })
   })
 
@@ -506,6 +591,7 @@ describe("mapDatabaseError on a compiled CHECK", () => {
  * під `creatorMember.` за довідником членства фази, а не обмеження таблиці.
  */
 describe("mapDatabaseError in a scope root phase", () => {
+  const ORGANIZATION = { kind: organization.kind, name: organization.name }
   const rootPhase = {
     kind: "write" as const,
     object: organization,
@@ -529,16 +615,23 @@ describe("mapDatabaseError in a scope root phase", () => {
     // Колонка шапки кореня — шлях кореня, як і без членства.
     ["code", "code"],
   ])("22023 DETAIL %s is path %s", (detail, path) => {
+    // Шлях — відносно фази: `object` — корінь операції, а не членство.
     expect(mapRoot(invalidDetail(detail))).toEqual({
       code: "command.invalid",
       path,
+      object: ORGANIZATION,
     })
   })
 
   it("23502 on the membership table is command.invalid with the member path", () => {
     expect(
       mapRoot({ code: "23502", table: "org_member", column: "title" })
-    ).toEqual({ code: "command.invalid", path: "creatorMember.title" })
+    ).toEqual({
+      code: "command.invalid",
+      path: "creatorMember.title",
+      // `creatorMember.` мапиться через членство кореня: об'єкт — операції.
+      object: ORGANIZATION,
+    })
   })
 
   it("23502 on the membership table outside a root phase stays a constraint", () => {
@@ -552,6 +645,7 @@ describe("mapDatabaseError in a scope root phase", () => {
       code: "command.constraint",
       kind: "notNull",
       attributes: ["title"],
+      object: { kind: "Catalog", name: "OrgMember" },
     })
   })
 })

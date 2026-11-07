@@ -52,6 +52,27 @@ describe("messages catalog", () => {
     )
   })
 
+  it("lists the row budget rules of Рд26: an error and a warning", () => {
+    const row = diagnostic("attribute.row-over-budget", "a.meta.json", "", {
+      row: "Gauge.lines",
+      bytes: "5000000",
+      budget: "4194304",
+    })
+    expect(row.severity).toBe("error")
+    expect(localize(row, "uk").message).toBe(
+      "Рядок Gauge.lines може займати 5000000 байтів, понад бюджет відповіді 4194304"
+    )
+    const lazy = diagnostic("attribute.lazy-over-budget", "a.meta.json", "", {
+      object: "Gauge",
+      bytes: "5000000",
+      budget: "4194304",
+    })
+    expect(lazy.severity).toBe("warning")
+    expect(localize(lazy, "en").message).toBe(
+      "Lazy attributes of Gauge may take 5000000 bytes together, over the response budget of 4194304"
+    )
+  })
+
   it("the catalog has no entries outside the rule lists", () => {
     expect(Object.keys(MESSAGES).sort()).toEqual([...ALL_RULES].sort())
   })

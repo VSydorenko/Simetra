@@ -985,6 +985,12 @@
               "eager",
               "lazy"
             ]
+          },
+          "maxBytes": {
+            "description": "Most UTF-8 bytes of the JSON wire value a command may write; Text, Json, Bytes or an array only (the whole array counts). Default 1 MiB for Json and Bytes, 64 KiB for Text and arrays. Not allowed on a register attribute.",
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
           }
         },
         "required": [

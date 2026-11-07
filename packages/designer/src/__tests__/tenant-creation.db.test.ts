@@ -389,7 +389,8 @@ describe("tenant creation through runtime.run", () => {
       [
         "an id in the input",
         { ...createOrganization({ title: "x" }), id: randomUUID() },
-        { path: "id" },
+        // Ключ запису в шляху — `keyName` об'єкта, не структурне `id` (П4).
+        { path: "ref" },
       ],
       [
         "tabularSections",
@@ -410,6 +411,7 @@ describe("tenant creation through runtime.run", () => {
       const rt = await runtime(a, fromPgPool(port(a)))
       expect(await refusal(rt.run(sessionOf(creator), op))).toEqual({
         code: "command.invalid",
+        object: ORGANIZATION,
         ...error,
       })
       const { rows } = await a.owner.query(

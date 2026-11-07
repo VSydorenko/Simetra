@@ -3,9 +3,11 @@ import {
   isDate,
   isDateTime,
   isWithinType,
+  normalDateTime,
 } from "../schemas/value-type"
 import type { CatalogEntryAttribute } from "./catalog"
-import type { CommandError } from "./errors"
+import { LIMIT_REASONS, type CommandError } from "./errors"
+import { jsonBytes } from "./limits"
 
 /**
  * Кодування значень за спільною частиною запису каталогу (Р-A3-7, Р-A4-12):
@@ -146,7 +148,8 @@ function scalar(attribute: CatalogEntryAttribute, value: unknown): unknown {
     case "Date":
       return typeof value === "string" && isDate(value) ? value : undefined
     case "DateTime":
-      // Лише зі зсувом: момент без поясу база прочитала б у поясі сесії.
+      // Лише зі зсувом: момент без поясу база прочитала б у поясі сесії;
+      // `isDateTime` тримає й правило дроту (рік 1–9999 в UTC).
       return typeof value === "string" && isDateTime(value) ? value : undefined
     case "Bytes":
       return typeof value === "string" && BYTES_TEXT.test(value)
@@ -230,6 +233,96 @@ export function encodeItemValue(
   }
 }
 
+// Число з дробом без експоненти: вхід `Numeric` рядком уже пройшов `scalar`.
+const DECIMAL_PARTS = /^([+-]?)0*(\d*)(?:\.(\d*))?$/
+
+/**
+ * Верхня межа рядка, яким база віддасть `Numeric(p, s)`: знак, ціла частина
+ * без провідних нулів, крапка й рівно `s` дробових цифр (масштаб типу, а не
+ * входу). Дробових цифр понад `s` база округлює, і перенос може додати цілу
+ * цифру — вона входить у межу.
+ */
+function numericWire(text: string, scale: number): string {
+  const match = DECIMAL_PARTS.exec(text)
+  if (match === null) return text
+  const [, sign = "", whole = "", fraction = ""] = match
+  const carry = fraction.length > scale ? "0" : ""
+  const integer = carry + (whole === "" ? "0" : whole)
+  return scale > 0
+    ? `${sign === "-" ? "-" : ""}${integer}.${"0".repeat(scale)}`
+    : `${sign === "-" ? "-" : ""}${integer}`
+}
+
+/**
+ * Значення в тій формі, якою воно піде дротом, — лише для міри `maxBytes`.
+ * Р7: `maxBytes` і бюджет рядка — одна міра, `jsonBytes` форми передачі;
+ * без цього масив `Numeric(20, 10)` з `"0"` пройшов би межу входу, а дротом
+ * виріс би вчетверо, і межа рядка компілятора не була б верхньою.
+ */
+function wireMeasure(
+  attribute: CatalogEntryAttribute,
+  value: unknown
+): unknown {
+  let wire: ((text: string) => string) | undefined
+  if (attribute.type === "DateTime") {
+    wire = (text) => normalDateTime(text) ?? text
+  } else if (attribute.type === "Numeric" && attribute.scale !== undefined) {
+    const { scale } = attribute
+    wire = (text) => numericWire(text, scale)
+  }
+  if (wire === undefined) return value
+  const one = (item: unknown) => (typeof item === "string" ? wire(item) : item)
+  return Array.isArray(value) ? value.map(one) : one(value)
+}
+
+// Запис `String(n)` скінченного числа: та сама форма, що в `JSON.stringify`.
+const NUMBER_TEXT = /^(-?)(\d+)(?:\.(\d+))?(?:e([+-]\d+))?$/
+
+/**
+ * Ширина числа, яким його друкує `jsonb` (`numeric_out`): десятковий запис
+ * без експоненти, масштаб — дробові цифри мантиси мінус показник. Довжина
+ * рахується, а не будується рядок: `1e300` дав би 301 знак лише для міри.
+ * `String(-0)` — `"0"`: від'ємного нуля `numeric` не має.
+ */
+function jsonbNumberWidth(value: number): number {
+  const text = String(value)
+  const match = NUMBER_TEXT.exec(text)
+  if (match === null) return text.length
+  const [, sign = "", whole = "", fraction = "", exponent = "0"] = match
+  const shift = Number(exponent)
+  const integer = Math.max(1, whole.length + shift)
+  const scale = Math.max(0, fraction.length - shift)
+  return sign.length + integer + (scale > 0 ? 1 + scale : 0)
+}
+
+/** Скільки байтів `jsonb` додає числам значення понад `JSON.stringify`. */
+function jsonbNumbersSurplus(value: unknown): number {
+  if (typeof value === "number") {
+    return jsonbNumberWidth(value) - String(value).length
+  }
+  if (Array.isArray(value)) {
+    return value.reduce<number>((sum, v) => sum + jsonbNumbersSurplus(v), 0)
+  }
+  if (isPlainObject(value)) {
+    return Object.values(value).reduce<number>(
+      (sum, v) => sum + jsonbNumbersSurplus(v),
+      0
+    )
+  }
+  return 0
+}
+
+/**
+ * Байти значення у формі передачі — міра `maxBytes` (Р7, одна з бюджетом
+ * рядка). Числа `Json` — шириною друку `jsonb`: без цього вхід `1e300` (6
+ * байтів) база друкує 301 цифрою, і рядок, записаний у межах `maxBytes`,
+ * назавжди відповідав би `response-too-large` — отруєний для кожного читача.
+ */
+function wireBytes(attribute: CatalogEntryAttribute, value: unknown): number {
+  const bytes = jsonBytes(wireMeasure(attribute, value))
+  return attribute.type === "Json" ? bytes + jsonbNumbersSurplus(value) : bytes
+}
+
 /**
  * Options of {@link encodeAttributes}: who may write and how errors are named.
  * Generic over the attribute type, so `allowed` may read the caller's
@@ -248,6 +341,11 @@ export interface EncodeAttributesOptions<
   prefix: string
   /** Ключ рядка ТЧ: його пише викликач, а не обхід. */
   rowKey?: string
+  /**
+   * Refuse a value over its attribute's `maxBytes` (`reason: "too-large"`).
+   * Only command input sets it: a stored value over the limit still reads.
+   */
+  maxBytes?: true
 }
 
 /**
@@ -264,7 +362,7 @@ export function encodeAttributes<A extends CatalogEntryAttribute>(
   values: unknown,
   options: EncodeAttributesOptions<A>
 ): { columns: Record<string, unknown> } | { error: CommandError } {
-  const { allowed, forced = [], path, prefix, rowKey } = options
+  const { allowed, forced = [], path, prefix, rowKey, maxBytes } = options
   let keys: Set<string>
   try {
     if (!isPlainObject(values)) return invalid(path)
@@ -290,6 +388,22 @@ export function encodeAttributes<A extends CatalogEntryAttribute>(
     }
     const encoded = encodeItemValue(attribute, value, at)
     if ("error" in encoded) return encoded
+    // Міра — закодоване значення форми передачі (Р7), та сама, якою бюджет
+    // відповіді рахує рядок: межа входу й межа читання не розходяться.
+    // Масив міряється цілком.
+    if (
+      maxBytes === true &&
+      attribute.maxBytes !== undefined &&
+      wireBytes(attribute, encoded.value) > attribute.maxBytes
+    ) {
+      return {
+        error: {
+          code: "command.invalid",
+          path: at,
+          reason: LIMIT_REASONS.tooLarge,
+        },
+      }
+    }
     if (attribute.pair !== undefined) {
       Object.assign(columns, encoded.value)
     } else {

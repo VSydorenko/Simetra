@@ -108,10 +108,13 @@ function attributes(prefix: string, { register = false } = {}) {
       type: "UUID",
       defaultValue: { fill: "newUuid" },
     },
+    // `maxBytes` реквізиту регістра схема відхиляє, як і `load`
+    // (`attribute.max-bytes-not-allowed`).
     {
       ...common(`${prefix}Payload`, `${prefix}_payload`),
       type: "Json",
       defaultValue: { empty: "object" },
+      ...(register ? {} : { maxBytes: 2048 }),
     },
     {
       ...common(`${prefix}Items`, `${prefix}_items`),
@@ -128,14 +131,15 @@ function attributes(prefix: string, { register = false } = {}) {
 }
 
 /**
- * Поля виміру чи ресурсу регістра: набір реквізиту без `personalData` і
- * `load` — на вимірах і ресурсах цих властивостей немає.
+ * Поля виміру чи ресурсу регістра: набір реквізиту без `personalData`,
+ * `load` і `maxBytes` — на вимірах і ресурсах цих властивостей немає.
  */
 function registerFields(prefix: string) {
   return attributes(prefix).map((field) =>
     Object.fromEntries(
       Object.entries(field).filter(
-        ([key]) => key !== "personalData" && key !== "load"
+        ([key]) =>
+          key !== "personalData" && key !== "load" && key !== "maxBytes"
       )
     )
   )

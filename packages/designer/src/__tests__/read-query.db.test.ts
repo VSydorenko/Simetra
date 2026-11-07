@@ -437,6 +437,7 @@ describe("server read of the second form over the engine target", () => {
     const tooLarge = {
       code: "command.invalid",
       reason: "tabular-too-large",
+      object: GAUGE,
       path: "lines",
     }
     expect(

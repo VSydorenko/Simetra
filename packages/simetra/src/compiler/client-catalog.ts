@@ -35,6 +35,7 @@ const attributeOf = (a: RuntimeAttribute): CatalogEntryAttribute => ({
   ...present("pair", a.pair),
   ...present("ref", a.ref),
   ...present("load", a.load),
+  ...present("maxBytes", a.maxBytes),
 })
 
 const sectionOf = (s: RuntimeSection): CatalogEntrySection => ({

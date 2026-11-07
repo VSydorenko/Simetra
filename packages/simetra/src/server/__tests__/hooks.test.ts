@@ -1,8 +1,12 @@
-import { BATCH_MAX, CommandFailure } from "simetra/model"
+import { BATCH_MAX, CommandFailure, TABULAR_LINES_MAX } from "simetra/model"
 import type { HookContext, ObjectModule, Operation } from "simetra/model"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { prepareRead } from "../read"
-import { createCommandRuntime, type CommandRuntime } from "../runtime"
+import {
+  createCommandRuntime,
+  type CommandRuntime,
+  type CommandRuntimeOptions,
+} from "../runtime"
 import { fakeDatabase, failureOf } from "./fake-database"
 import {
   COMPANY,
@@ -389,9 +393,11 @@ describe("tenant creation hooks", () => {
     ],
   ])("%s: command.invalid before the core", async (_, objectModules, path) => {
     const { db, runtime } = await setupRoots(undefined, { objectModules })
+    // Відмова чернетки членства — шлях `creatorMember` операції кореня.
     expect(await failureOf(runtime.run(session, createOrganization))).toEqual({
       code: "command.invalid",
       path,
+      object: ORGANIZATION,
     })
     expect(db.calls.some((c) => "text" in c && isCore(c.text))).toBe(false)
     expect(db.calls).toEqual(CLOSED)
@@ -446,7 +452,8 @@ describe("draft of beforeWrite", () => {
       { tabularSections: { lines: [{}] } },
       "lines.0.ref",
     ],
-    ["an id", { id: OTHER }, "id"],
+    // `id` чернетки — ключ запису: у шляху `keyName` (спека П4-B §4.0).
+    ["an id", { id: OTHER }, "ref"],
     ["an undefined key", { values: undefined }, "values"],
   ])(
     "revalidates the draft returned by beforeWrite: %s",
@@ -464,6 +471,7 @@ describe("draft of beforeWrite", () => {
       expect(await failureOf(runtime.run(session, target))).toEqual({
         code: "command.invalid",
         path,
+        object: target.object,
       })
       expect(db.calls).toEqual(CLOSED)
     }
@@ -490,7 +498,11 @@ describe("draft of beforeWrite", () => {
           mark: true,
         })
       )
-      expect(error).toEqual({ code: "command.invalid", path: key })
+      expect(error).toEqual({
+        code: "command.invalid",
+        path: key,
+        object: CLIENT,
+      })
       expect(seen).toEqual([{}])
       expect(db.calls).toEqual(CLOSED)
     }
@@ -792,10 +804,12 @@ describe("hook failures", () => {
           onWrite: ({ ctx }) => ctx.reject("nope", "code"),
         },
       })
+      // `ctx.reject` — об'єкт фази хука, а не операції команди.
       expect(await failureOf(runtime.run(session, create))).toEqual({
         code: "command.rejected",
         reason: "nope",
         path: "code",
+        object: RIGHTS,
       })
       expect(db.calls).toEqual([
         ...OPEN,
@@ -873,6 +887,23 @@ describe("depth and queue", () => {
       },
     })
     await runtime.run(session, [create, create])
+    expect(db.calls.slice(-2)).toEqual([COMMIT, { release: false }])
+  })
+
+  // `maxBatch` — межа вхідного пакета `run`; фази хуків тримає лише `BATCH_MAX`.
+  it("does not bound ctx.run phases by a reduced maxBatch", async () => {
+    const { db, runtime } = await setup(rightsCore, {
+      maxBatch: 1,
+      objectModules: {
+        "Catalog.Client": {
+          async beforeWrite({ ctx, draft }) {
+            for (let i = 0; i < 3; i++) await ctx.run(rights())
+            return draft
+          },
+        },
+      },
+    })
+    await runtime.run(session, create)
     expect(db.calls.slice(-2)).toEqual([COMMIT, { release: false }])
   })
 
@@ -1199,9 +1230,11 @@ describe("a ctx call rejected without a failure", () => {
       },
     }
     const { db, runtime, log } = await readsSubject(subject)
+    // Відмова `ctx.read` — об'єкт запиту.
     expect(await failureOf(runtime.run(session, create))).toEqual({
       code: "command.invalid",
       path: "where.value",
+      object: TASK,
     })
     expect(db.calls).toEqual(CLOSED)
     expect(db.calls).not.toContainEqual(COMMIT)
@@ -1764,6 +1797,51 @@ describe("tabular section arrays", () => {
     ])
   })
 
+  // П3: одна форма рядка для читання й запису — ТЧ рядка результату йдуть у
+  // `tabularSections`, як у картці, і в `runtime.run`, і в `ctx.run` хука.
+  it("puts the sections of a result row under tabularSections", async () => {
+    const core: Override = (text) =>
+      text.includes("order_save")
+        ? {
+            rows: [
+              {
+                r: JSON.stringify({
+                  id: ID,
+                  version: 2,
+                  company_id: COMPANY,
+                  tabular: {
+                    sample_lines: [{ id: LINE, parent_id: ID, line_number: 1 }],
+                  },
+                }),
+              },
+            ],
+          }
+        : undefined
+    const row = {
+      ref: ID,
+      version: 2,
+      company: COMPANY,
+      tabularSections: {
+        lines: [{ ref: LINE, parent: ID, lineNumber: 1 }],
+      },
+    }
+    const both: Override = (text, params) =>
+      fresh(text, params) ?? core(text, params)
+    const direct = await withOrder(both)
+    expect((await direct.runtime.run(session, update())).rows).toEqual([row])
+    let nested: Record<string, unknown> | undefined
+    const { runtime } = await withOrder(both, {
+      "Catalog.Client": {
+        async beforeWrite({ ctx, draft }) {
+          nested = await ctx.run(update())
+          return draft
+        },
+      },
+    })
+    await runtime.run(session, create)
+    expect(nested).toEqual(row)
+  })
+
   it("refuses an array that leaves out an existing row, before hooks and the core", async () => {
     const hook = vi.fn(({ draft }: { draft: object }) => draft)
     const { db, runtime } = await withOrder(
@@ -1778,6 +1856,7 @@ describe("tabular section arrays", () => {
       code: "command.invalid",
       reason: "tabular-rows-missing",
       path: "lines",
+      object: ORDER,
     })
     expect(hook).not.toHaveBeenCalled()
     expect(db.calls).toEqual([
@@ -1795,7 +1874,11 @@ describe("tabular section arrays", () => {
       await failureOf(
         runtime.run(session, update({ deleteIds: { lines: [OTHER, LINE] } }))
       )
-    ).toEqual({ code: "command.invalid", path: "deleteIds.lines.1" })
+    ).toEqual({
+      code: "command.invalid",
+      path: "deleteIds.lines.1",
+      object: ORDER,
+    })
     expect(db.calls).toEqual([])
   })
 
@@ -1832,7 +1915,7 @@ describe("tabular section arrays", () => {
           fullTabularArrays: true,
         })
       )
-    ).toEqual({ code: "command.invalid", path: "deleteIds" })
+    ).toEqual({ code: "command.invalid", path: "deleteIds", object: ORDER })
     expect(db.calls).toEqual([])
   })
 
@@ -1884,6 +1967,114 @@ describe("tabular section arrays", () => {
     })
     await runtime.run(session, update({ deleteIds: { lines: [OTHER] } }))
     expect(seen).toEqual([{ tabularSections: { lines: [{ ref: LINE }] } }])
+  })
+
+  describe("reduced input limits", () => {
+    const tooLarge = {
+      code: "command.invalid",
+      reason: "tabular-too-large",
+      path: "lines",
+      object: ORDER,
+    }
+    const twoLines = update({
+      tabularSections: { lines: [{ ref: LINE }, { ref: OTHER }] },
+    })
+
+    it.each<[string, Partial<CommandRuntimeOptions>, unknown, object]>([
+      [
+        "a batch over maxBatch",
+        { maxBatch: 2 },
+        [create, create, create],
+        { code: "command.invalid", reason: "batch-too-large" },
+      ],
+      [
+        "a section over maxTabularLines",
+        { maxTabularLines: 1 },
+        twoLines,
+        tooLarge,
+      ],
+      [
+        "a section over maxTabularLines in the second operation of a batch",
+        { maxTabularLines: 1 },
+        [update(), twoLines],
+        tooLarge,
+      ],
+    ])("refuses %s before the database", async (_, limits, input, error) => {
+      const { db, runtime } = await setup(fresh, {
+        catalog: orderCatalog,
+        ...limits,
+      })
+      expect(await failureOf(runtime.run(session, input as Operation))).toEqual(
+        error
+      )
+      expect(db.calls).toEqual([])
+    })
+
+    it("runs a batch and a section at the reduced limits", async () => {
+      const { db, runtime } = await setup(fresh, {
+        catalog: orderCatalog,
+        maxBatch: 2,
+        maxTabularLines: 1,
+      })
+      await runtime.run(session, [create, update()])
+      expect(db.calls.slice(-2)).toEqual([COMMIT, { release: false }])
+    })
+
+    it("refuses a ctx.run section over maxTabularLines before its statements", async () => {
+      const { db, runtime } = await setup(fresh, {
+        catalog: orderCatalog,
+        maxTabularLines: 1,
+        objectModules: {
+          "Catalog.Client": {
+            async beforeWrite({ ctx, draft }) {
+              await ctx.run(twoLines)
+              return draft
+            },
+          },
+        },
+      })
+      expect(await failureOf(runtime.run(session, create))).toEqual(tooLarge)
+      expect(db.calls).toEqual(CLOSED)
+    })
+
+    // Оператор перевірки шле параметр на кожен id: масив і `deleteIds` на
+    // сталій межі мусять уміститися в один оператор нижче межі Postgres.
+    const rowId = (variant: string, i: number) =>
+      `00000000-0000-4000-${variant}000-${String(i).padStart(12, "0")}`
+    const full = (lines: number) =>
+      update({
+        tabularSections: {
+          lines: Array.from({ length: lines }, (_, i) => ({
+            ref: rowId("8", i),
+          })),
+        },
+        deleteIds: {
+          lines: Array.from({ length: TABULAR_LINES_MAX }, (_, i) =>
+            rowId("9", i)
+          ),
+        },
+      })
+
+    it("checks TABULAR_LINES_MAX rows and as many deleteIds in one statement", async () => {
+      const { db, runtime } = await withOrder(fresh)
+      await runtime.run(session, full(TABULAR_LINES_MAX))
+      const checks = db.calls.filter(
+        (c) => "text" in c && c.text.includes(" AS missing ")
+      )
+      expect(checks).toHaveLength(1)
+      const [statement] = checks as { params: readonly unknown[] }[]
+      expect(statement!.params.length).toBeLessThanOrEqual(
+        2 * TABULAR_LINES_MAX + 1
+      )
+    })
+
+    it("refuses one row over TABULAR_LINES_MAX before the database", async () => {
+      const { db, runtime } = await withOrder(fresh)
+      expect(
+        await failureOf(runtime.run(session, full(TABULAR_LINES_MAX + 1)))
+      ).toEqual(tooLarge)
+      expect(db.calls).toEqual([])
+    })
   })
 
   it("correlates the section with its owner on every column of the foreign key", async () => {
