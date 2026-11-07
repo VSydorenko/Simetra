@@ -10,49 +10,44 @@ const eslint = new ESLint({ cwd: PKG })
 // `typescript` — разова ціна процесу (0,6 с у спокої, до 4,7 с під повним
 // `pnpm test`), а не перевірки межі. Тайм-аут тесту має міряти тест,
 // тому холодний старт винесено в хук зі своїм запасом.
+// Файл із src/data прогріває ще й projectService typescript-eslint.
 beforeAll(async () => {
-  await eslint.lintText("", {
-    filePath: join(PKG, "src/model/index.ts"),
-    warnIgnored: true,
-  })
+  for (const file of ["src/model/index.ts", "src/data/__fixture.ts"])
+    await eslint.lintText("", { filePath: join(PKG, file), warnIgnored: true })
 }, 60_000)
 // Таблицю ярусів тест тримає сам, а не імпортує з конфігу: інакше ярус,
 // що випав із конфігу, випав би й з тесту.
 const TIERS = ["model", "compiler", "schema", "server", "data", "ui", "shell"]
 
-async function restricted(code: string, file: string): Promise<string[]> {
+// Фікстура поза `allowDefaultProject` дає `Parsing error` з `ruleId: null`;
+// хелпер, що фільтрує за ruleId, тоді мовчки повертає [] — і кейс «дозволено»
+// зеленіє без жодної перевірки. Тому будь-яка фатальна помилка — виняток.
+async function lint(code: string, file: string) {
   const [result] = await eslint.lintText(code, {
     filePath: join(PKG, file),
     warnIgnored: true,
   })
-  return (result?.messages ?? [])
-    .filter((m) => m.ruleId === "no-restricted-imports")
+  const messages = result?.messages ?? []
+  const broken = messages.filter((m) => m.fatal || m.ruleId === null)
+  if (broken.length > 0)
+    throw new Error(
+      `${file}: lint did not run: ${broken.map((m) => m.message).join("; ")}`
+    )
+  return messages
+}
+async function byRule(rule: string, code: string, file: string) {
+  return (await lint(code, file))
+    .filter((m) => m.ruleId === rule)
     .map((m) => m.message)
 }
-async function purity(code: string, file: string): Promise<string[]> {
-  const [result] = await eslint.lintText(code, {
-    filePath: join(PKG, file),
-    warnIgnored: true,
-  })
-  return (result?.messages ?? [])
-    .filter((m) => m.ruleId === "@typescript-eslint/no-restricted-imports")
-    .map((m) => m.message)
-}
-async function props(code: string, file: string): Promise<string[]> {
-  const [result] = await eslint.lintText(code, {
-    filePath: join(PKG, file),
-    warnIgnored: true,
-  })
-  return (result?.messages ?? [])
-    .filter((m) => m.ruleId === "no-restricted-properties")
-    .map((m) => m.message)
-}
+const restricted = (code: string, file: string) =>
+  byRule("no-restricted-imports", code, file)
+const purity = (code: string, file: string) =>
+  byRule("@typescript-eslint/no-restricted-imports", code, file)
+const props = (code: string, file: string) =>
+  byRule("no-restricted-properties", code, file)
 async function ruleIds(code: string, file: string): Promise<string[]> {
-  const [result] = await eslint.lintText(code, {
-    filePath: join(PKG, file),
-    warnIgnored: true,
-  })
-  return (result?.messages ?? []).flatMap((m) => (m.ruleId ? [m.ruleId] : []))
+  return (await lint(code, file)).flatMap((m) => (m.ruleId ? [m.ruleId] : []))
 }
 const importOf = (s: string) =>
   `import { probe } from "${s}"\nexport const used = probe\n`
@@ -535,6 +530,53 @@ describe("tier zones", () => {
       expect(await ruleIds(code, "src/data/facade/__fixture.ts")).toContain(
         "no-restricted-syntax"
       )
+    })
+  })
+
+  // Спека П4-B §3: `no-floating-promises` потребує типів, тож src/data
+  // лінтується з projectService, а віртуальні фікстури — через
+  // `allowDefaultProject` (закритий перелік в eslint.config.js).
+  describe("T4 typed lint", () => {
+    const floating = "async function f() {}\nf()\n"
+
+    it.each([
+      "src/data/__fixture.ts",
+      "src/data/facade/__fixture.ts",
+      "src/data/nested/__fixture.ts",
+      "src/data/__tests__/__fixture.ts",
+      "src/data/a/b/__fixture.ts",
+    ])("%s reports a floating promise", async (file) => {
+      expect(await ruleIds(floating, file)).toContain(
+        "@typescript-eslint/no-floating-promises"
+      )
+    })
+
+    it("typed parser keeps tier refusals", async () => {
+      const code = `import "simetra/server"\n${floating}`
+      const ids = await ruleIds(code, "src/data/__fixture.ts")
+      expect(ids).toContain("no-restricted-imports")
+      expect(ids).toContain("@typescript-eslint/no-floating-promises")
+    })
+
+    it("other tiers stay on the untyped parser", async () => {
+      expect(await ruleIds(floating, "src/ui/__fixture.ts")).not.toContain(
+        "@typescript-eslint/no-floating-promises"
+      )
+    })
+
+    it("a fixture outside allowDefaultProject makes every helper throw", async () => {
+      const file = "src/data/unlisted/__fixture.ts"
+      const code = importOf("zod")
+      await expect(restricted(code, file)).rejects.toThrow(/lint did not run/)
+      await expect(purity(code, file)).rejects.toThrow(/lint did not run/)
+      await expect(props(code, file)).rejects.toThrow(/lint did not run/)
+      await expect(ruleIds(code, file)).rejects.toThrow(/lint did not run/)
+    })
+
+    it("a syntax error makes the helper throw", async () => {
+      await expect(
+        restricted("export const = 1\n", "src/model/__fixture.ts")
+      ).rejects.toThrow(/lint did not run/)
     })
   })
 

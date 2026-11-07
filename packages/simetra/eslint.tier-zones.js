@@ -106,9 +106,10 @@ const tierConfigs = TIERS.flatMap((tier, index) => {
   return configs
 })
 
-// Межі чистоти T0 і T1. Окреме правило `@typescript-eslint/no-restricted-imports`,
-// а не `no-restricted-imports`: flat config замінює опції правила цілком, тож
-// ті самі опції в ярусному блоці затерли б ярусну зону (і навпаки). Тести
+// Межі чистоти ярусів T0, T1, T3, T4, T5 і заборона рушія бази в усьому `src`.
+// Окреме правило `@typescript-eslint/no-restricted-imports`, а не
+// `no-restricted-imports`: flat config замінює опції правила цілком, тож ті
+// самі опції в ярусному блоці затерли б ярусну зону (і навпаки). Тести
 // виключено: за правилом AGENTS.md тести можуть читати фікстури через Node API.
 const PURITY_FILES = (tier) => [`src/${tier}/**/*.{ts,tsx,mts,cts}`]
 const PURITY_IGNORES = ["**/__tests__/**"]
