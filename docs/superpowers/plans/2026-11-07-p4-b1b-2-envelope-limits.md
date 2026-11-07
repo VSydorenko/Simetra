@@ -1,8 +1,9 @@
 # П4-B1b-2 — конверт, звірка й межі: план реалізації
 
-> **Статус:** прийнято архітекторкою П4-B 2026-11-07. Виконання — після
-> мерджу B1b-1 і B1b-3 в `main`: rebase на `main` і `orient --plan` перед
-> стартом. Підсумок аудиту — наприкінці файла.
+> **Статус:** прийнято архітекторкою П4-B 2026-11-07; **у виконанні** —
+> задачі 1–6 закомічено на `feat/p4-b1b-2`, далі задача 7. Перед продовженням
+> прочитай розділ «Стан виконання (передача сесії)» наприкінці файла.
+> Підсумок аудиту — наприкінці файла.
 >
 > **For agentic workers:** REQUIRED SUB-SKILL: Use
 > superpowers:subagent-driven-development (recommended) or
@@ -524,3 +525,79 @@ B1a (`git show c99068f1 --stat`).
   `ctx.run`» (`runNested` приймає одну операцію — уточнено текст);
   «типові `maxBytes` не визначені» — це питання П1, закривається рішенням
   архітекторки до старту.
+
+## Стан виконання (передача сесії)
+
+Гілка `feat/p4-b1b-2` (від `main` 3afc97c5: B1a, B1b-1, B1b-3), worktree
+`/home/vsydorenko/Simetra-b1b2`. Синхронізація з `main` — лише
+`git merge origin/main` (force-push і rebase у цьому середовищі
+заблоковано). У `main` очікується PR #48 (план B3-1, правки спеки П4-B §6,
+§7.1, §7.2, §12, §13, §4.4, Рд6, Рд27): у §4.4 там два окремі правила —
+`null` при читанні означає «порожньо», відсутнє поле при записі не стає
+`null`; при конфлікті їх не зливати.
+
+| Задача | Коміт | Стан |
+| --- | --- | --- |
+| 1 | `e1ffd1c3` | виконано |
+| 2 | `ae323a5b` | виконано |
+| 3 | `be131a11` | виконано |
+| 4 | `a28337c1` | виконано |
+| 5 | `8d35b32f` (+ DB-очікування `24b83b8a`) | виконано |
+| 6 | `5e3a36fc` | виконано |
+| 7–13 | — | лишилось |
+
+Гейти після задачі 6 — unit обох пакетів, typecheck, lint, format, якорі
+зелені; DB — лише scoped прогони змінених файлів (designer:
+`command-runtime`, `data-tools`, `rights-admin-commands`, `command-time`,
+`tenant-creation`, `read-query`; simetra: `command-port`). Повний
+`pnpm test:db` — один раз у задачі 13.
+
+**Рішення виконання, яких план не фіксував (погоджені чи в межах плану):**
+
+- Задача 1: межі довжини — `z.preprocess` (перевірка до розбору елементів;
+  JSON Schema `data-command` і `operationSchema.options` не змінились —
+  звірено знімками); сталі причин — `LIMIT_REASONS` (`model/runtime/errors.ts`);
+  `decidingIssue` у `server/read.ts` бере issue з `reason` для шляху й причини.
+  Межу ТЧ у **формі передачі** (`wireTabularSectionsSchema`, `envelope.ts`)
+  ще не поставлено — це задача 7.
+- Задача 2: коди правил `type.max-bytes-type` (`maxBytes` на іншому типі) і
+  `attribute.max-bytes-not-allowed` (на реквізиті регістра); типові межі —
+  `effectiveMaxBytes` у `model/schemas/attribute.ts`; стандартні атрибути
+  `Text`/`Json`/`Bytes`/масиви теж отримують типову межу. Ратчет полів:
+  `buildRuntimeCatalog` — записаний споживач; винятки `Document.*.maxBytes`
+  з причиною «межа запису; документ ще не пишеться командами — каталог
+  прочитає поле разом з ними» (рішення архітекторки). Шлях `ctx.run` іде
+  через ті самі `encodeItem`/`encodeMember`.
+- Задача 3: правило біжить над `buildRuntimeCatalog(compiled)` наприкінці
+  `runStages` (`compiler/row-budget.ts`); `Numeric` з точністю —
+  `precision + 5` (знак, крапка, провідний нуль, лапки), без точності —
+  `131072 + 16383 + 2 + 2`; сталі типів — у модулі.
+- Задача 4: перевірки зменшених меж — у `prepareInput` (`InputLimits`), тож
+  верхній вхід і `ctx.run` проходять одну перевірку; лік фаз `ctx.run`
+  лишився на `BATCH_MAX`.
+- Задача 5: змінено й `server/transaction.ts` (відмова `deleteIds` з
+  `fullTabularArrays` несе `object`); `checkDraft` дає `keyName` для ключа з
+  чернетки хука; `issuePath` видалено (не використовується); спільна
+  перевірка `object` — у `server/__tests__/harness.ts`.
+- Задача 6: `decodeRow(…, { strict })` у T0; адаптери T3 — `decodeCoreRow`,
+  `decodeReadRow` (`server/decode.ts`), `decodeRecord`/`decodeCardRow`/
+  `decodeLine` видалено; `encodeRow` нормалізує `DateTime`; розбір
+  `DateTime` приймає момент без секунд (і на клієнті). Форма рядка `run`
+  змінилась (ТЧ — у `tabularSections`): це видно зовнішнім хукам і
+  MCP-клієнтам (MetaHub) — задача 13 вносить це в §4.4 і спеку П4 §6.4 через
+  Додаток А.
+
+**Що лишилось, крім задач 7–13 як написано:**
+
+- задача 7: межа рядків ТЧ у `wireTabularSectionsSchema` (форма передачі) з
+  причиною `tabular-too-large`, `path` `<id ТЧ>`;
+- задача 13 (рішення архітекторки): подробиці полів метаданих (`load`,
+  `maxBytes`, межі пакета й ТЧ, форма рядка `run`) — у `references/` скілу
+  `packages/designer/skills/simetra-metadata/`; у `SKILL.md` — правило й
+  посилання; абзац `load` повернути до нормальної ширини (межа 500 рядків —
+  про обсяг; зараз файл рівно на межі через переформатований абзац);
+- інтерфейси для B3-1 (`DataTransport`, `DataRequest`, `DataResponse`,
+  `createDataHandler`) ще не створено (задачі 7, 10); будь-яке їх
+  відхилення від плану — одразу повідомлення архітекторці (на них пише план
+  B3-1 сесія simetra-2e).
+
