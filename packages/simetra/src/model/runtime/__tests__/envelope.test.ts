@@ -4,6 +4,8 @@ import {
   wireChangeSchema,
   wireCommandErrorSchema,
   wireOperationSchema,
+  wireReadQuerySchema,
+  wireReadResultSchema,
   type WireChange,
   type WireCommandError,
 } from "../envelope"
@@ -128,5 +130,97 @@ describe("wire schemas", () => {
     ],
   ])("wireChangeSchema: %s", (_, ok, value) => {
     expect(wireChangeSchema.safeParse(value).success).toBe(ok)
+  })
+
+  const where = { attribute: "title_col", op: "eq", value: "a" }
+
+  it.each([
+    [
+      "a card with section ids",
+      true,
+      {
+        object: OBJECT_ID,
+        id: ID,
+        tabularSections: [SECTION_ID],
+        include: ["org_id"],
+      },
+    ],
+    [
+      "a card with every section",
+      true,
+      { object: OBJECT_ID, id: ID, tabularSections: true },
+    ],
+    [
+      "a list",
+      true,
+      {
+        object: OBJECT_ID,
+        where,
+        orderBy: [{ attribute: "title_col", direction: "asc" }],
+        limit: 10,
+      },
+    ],
+    ["a count", true, { object: OBJECT_ID, where, count: true }],
+    [
+      "the lines of one owner",
+      true,
+      { object: OBJECT_ID, tabularSection: SECTION_ID, owner: ID },
+    ],
+    [
+      "a standard section page",
+      true,
+      {
+        object: OBJECT_ID,
+        tabularSection: standardElementId(OBJECT_ID, { logicalName: "roles" }),
+        limit: 1,
+      },
+    ],
+    [
+      "a section count",
+      true,
+      { object: OBJECT_ID, tabularSection: SECTION_ID, count: true },
+    ],
+    ["an object that is a reference", false, { object: REF, limit: 1 }],
+    [
+      "a section by name",
+      false,
+      { object: OBJECT_ID, tabularSection: "lines", owner: ID },
+    ],
+    [
+      "a card section by name",
+      false,
+      { object: OBJECT_ID, id: ID, tabularSections: ["lines"] },
+    ],
+    ["a list without a limit", false, { object: OBJECT_ID, where }],
+  ])("wireReadQuerySchema: %s", (_, ok, value) => {
+    expect(wireReadQuerySchema.safeParse(value).success).toBe(ok)
+  })
+
+  it("keeps the path of a refusal inside a wire query form", () => {
+    const parsed = wireReadQuerySchema.safeParse({
+      object: OBJECT_ID,
+      tabularSection: SECTION_ID,
+      limit: 0,
+    })
+    expect(parsed.error?.issues[0]?.path).toEqual(["limit"])
+  })
+
+  it.each([
+    [
+      "rows with included by object id",
+      true,
+      { rows: [{ id: ID }], included: { [OBJECT_ID]: [] } },
+    ],
+    ["owner lines with a version text", true, { rows: [], ownerVersion: "3" }],
+    ["a capped count", true, { count: 10, capped: true }],
+    [
+      "included by reference",
+      false,
+      { rows: [], included: { "Catalog.Task": [] } },
+    ],
+    ["a version that is a number", false, { rows: [], ownerVersion: 3 }],
+    ["a negative count", false, { count: -1 }],
+  ])("wireReadResultSchema: %s", (_, ok, value) => {
+    expect(wireReadResultSchema.safeParse(value).success).toBe(ok)
   })
 })

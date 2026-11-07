@@ -2,6 +2,8 @@ import { z } from "zod"
 import { elementIdSchema } from "../schemas/element-id"
 import { COMMAND_ERROR_CODES } from "./errors"
 import { OBJECT_OPERATIONS, operationSchema } from "./operation"
+import { queryFormSchema, readQuerySchema } from "./read"
+import { INTEGER_TEXT } from "./values"
 
 /**
  * Схеми форми передачі (спека П4-B §4.0): та сама операція, помилка й зміна,
@@ -74,3 +76,64 @@ export const wireChangeSchema = z.strictObject({
 })
 
 export type WireChange = z.infer<typeof wireChangeSchema>
+
+// Форми беруться з логічної схеми, як і варіанти операції: змінюються лише
+// `object` і поля ТЧ, а імена у фільтрі, сортуванні й `include` — ті самі
+// рядки, тепер фізичні колонки.
+const [card, list, count, ownerLines, sectionList, sectionCount] =
+  readQuerySchema.out.options
+
+// Повтор id тут не перевіряється: після мапінгу його відхиляє логічна схема
+// зі шляхом на дублі.
+const wireSectionIdsSchema = z.array(elementIdSchema).min(1)
+
+/**
+ * A read query in wire form: the logical forms with the object by UUID,
+ * physical columns in `where`, `orderBy` and `include`, and section ids in
+ * `tabularSection` and `tabularSections`.
+ */
+export const wireReadQuerySchema = queryFormSchema([
+  card.extend({
+    object: wireObjectSchema,
+    tabularSections: z
+      .union([z.literal(true), wireSectionIdsSchema])
+      .optional(),
+  }),
+  list.extend({ object: wireObjectSchema }),
+  count.extend({ object: wireObjectSchema }),
+  ownerLines.extend({
+    object: wireObjectSchema,
+    tabularSection: elementIdSchema,
+  }),
+  sectionList.extend({
+    object: wireObjectSchema,
+    tabularSection: elementIdSchema,
+  }),
+  sectionCount.extend({
+    object: wireObjectSchema,
+    tabularSection: elementIdSchema,
+  }),
+])
+
+export type WireReadQuery = z.infer<typeof wireReadQuerySchema>
+
+const wireRowSchema = z.record(z.string(), z.unknown())
+
+/**
+ * A read result in wire form: rows keyed by physical columns, `included`
+ * keyed by the target object's UUID, `ownerVersion` as integer text (a
+ * version, like the version column); or a count.
+ */
+export const wireReadResultSchema = z.union([
+  z.strictObject({
+    rows: z.array(wireRowSchema),
+    included: z.record(wireObjectSchema, z.array(wireRowSchema)).optional(),
+    ownerVersion: z.string().regex(INTEGER_TEXT).optional(),
+  }),
+  z.strictObject({
+    count: z.int().min(0),
+    capped: z.literal(true).optional(),
+  }),
+])
+
+export type WireReadResult = z.infer<typeof wireReadResultSchema>

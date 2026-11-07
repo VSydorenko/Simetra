@@ -10,11 +10,16 @@ import {
   operationToWire,
   pathFromWire,
   pathToWire,
+  readQueryFromWire,
+  readQueryToWire,
+  readResultFromWire,
+  readResultToWire,
   type CatalogEntry,
   type CatalogIndex,
   type CommandError,
   type LogicalRow,
   type Operation,
+  type ReadQuery,
   type RuntimeObject,
 } from "simetra/model"
 import {
@@ -232,6 +237,90 @@ describe("mapping on a compiled catalog", () => {
         object: root.id,
         creatorMember: { [attribute.column]: TARGET_ID },
       },
+    })
+  })
+})
+
+describe("read mapping on a compiled catalog", () => {
+  const object = () => ({ kind: runtime.kind, name: runtime.name })
+
+  // Обидва каталоги дають ту саму форму передачі запиту, і будь-який з них
+  // повертає її в логічну.
+  function sameRead(query: ReadQuery) {
+    const wire = readQueryToWire(core.runtime, query)
+    expect(wire.ok).toBe(true)
+    expect(readQueryToWire(core.client, query)).toEqual(wire)
+    if (!wire.ok) return undefined
+    for (const index of [core.runtime, core.client]) {
+      expect(readQueryFromWire(index, wire.value)).toEqual({
+        ok: true,
+        value: query,
+      })
+    }
+    return wire.value
+  }
+
+  it("maps a page by a pair and the version, a card and owner lines", () => {
+    const pair = runtime.attributes.find((a) => a.pair !== undefined)!
+    const target = pair.pair!.targets[0]!
+    const section = runtime.tabularSections[0]!
+    const include = runtime.attributes.find(
+      (a) => a.ref !== undefined && core.client.byId.has(a.ref.object)
+    )!
+    expect(include).toBeDefined()
+    const page = sameRead({
+      object: object(),
+      where: {
+        and: [
+          {
+            attribute: pair.name,
+            op: "eq",
+            value: {
+              type: `${target.object.kind}.${target.object.name}`,
+              id: TARGET_ID,
+            },
+          },
+          { attribute: runtime.versionName, op: "gt", value: 1 },
+        ],
+      },
+      orderBy: [{ attribute: runtime.keyName, direction: "asc" }],
+      limit: 5,
+      include: [include.name],
+    })
+    expect(page).toEqual({
+      object: runtime.id,
+      where: {
+        and: [
+          {
+            attribute: pair.column,
+            op: "eq",
+            value: { type: target.label, id: TARGET_ID },
+          },
+          { attribute: runtime.versionColumn, op: "gt", value: "1" },
+        ],
+      },
+      orderBy: [{ attribute: runtime.key, direction: "asc" }],
+      limit: 5,
+      include: [include.column],
+    })
+    expect(
+      sameRead({ object: object(), id: ID, tabularSections: [section.name] })
+    ).toMatchObject({ tabularSections: [section.id] })
+    expect(
+      sameRead({ object: object(), tabularSection: section.name, owner: ID })
+    ).toMatchObject({ tabularSection: section.id })
+  })
+
+  it("maps a card result the same way with both catalogs", () => {
+    const query: ReadQuery = { object: object(), id: ID, tabularSections: true }
+    const wire = readResultToWire(core.runtime, query, {
+      rows: [cardRow(runtime)],
+    })
+    expect(
+      readResultToWire(core.client, query, { rows: [cardRow(client)] })
+    ).toEqual(wire)
+    expect(readResultFromWire(core.client, query, wire)).toEqual({
+      rows: [cardRow(client)],
     })
   })
 })
