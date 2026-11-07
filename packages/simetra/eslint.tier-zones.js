@@ -27,6 +27,14 @@ const FRAMEWORK_MESSAGE =
 const SERVER_MESSAGE =
   "Tier zone: src/data and src/ui must not import simetra/server; they depend on T4 contracts and T0 metadata only (P4 A3 decision A3-10)."
 
+// Ярусний regex бачить лише `..` на початку шляху, тож `./a/../../server`
+// обходив би його. Нормалізований шлях — без `..` після звичайного сегмента.
+const NORMALIZED_PATTERN =
+  "^\\.\\.?/(?:[^/]+/)*?(?!\\.\\.?/)[^/]+/\\.\\.(?:/|$)"
+
+const NORMALIZED_MESSAGE =
+  "Tier zone: use a normalized relative path (no `..` after a regular segment); a non-normalized path bypasses the tier check."
+
 function tierMessage(tier, index) {
   return (
     `Tier zone: src/${tier} is T${index}; import only lower tiers (platform spec §3.1). ` +
@@ -36,7 +44,9 @@ function tierMessage(tier, index) {
 
 const tierConfigs = TIERS.flatMap((tier, index) => {
   const higher = TIERS.slice(index + 1)
-  const patterns = []
+  // Нормалізований шлях — у кожному ярусі, зокрема shell: опції правила flat
+  // config заміняються цілком, тож шаблон живе в тому самому блоці.
+  const patterns = [{ regex: NORMALIZED_PATTERN, message: NORMALIZED_MESSAGE }]
   if (higher.length > 0) {
     patterns.push({
       regex: tierPattern(higher),
@@ -53,8 +63,6 @@ const tierConfigs = TIERS.flatMap((tier, index) => {
   if (tier === "data" || tier === "ui") {
     patterns.push({ regex: tierPattern(["server"]), message: SERVER_MESSAGE })
   }
-  // У shell (T6) заборон немає — блок без патернів не створюється.
-  if (patterns.length === 0) return []
   return [
     {
       files: [`src/${tier}/**/*.{ts,tsx,mts,cts}`],
