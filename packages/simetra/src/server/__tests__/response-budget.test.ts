@@ -213,6 +213,46 @@ describe("fitResponse: без обрізання", () => {
   })
 })
 
+describe("fitResponse: точна межа обрізання", () => {
+  // Префікс із двох рядків і двох їхніх цілей — рівно бюджет: так тест
+  // тримає кому між рядками й кому між рядками `included` однієї цілі.
+  const targets = [1, 2, 3].map((n) => uuid(2000 + n))
+  const page = (filler: string): WireReadResult => ({
+    rows: [
+      { ...linkRow(1, 0, targets[0]), code: filler },
+      linkRow(2, 10, targets[1]),
+      linkRow(3, 10, targets[2]),
+    ],
+    included: { [region.id]: targets.map((id) => regionRow(id)) },
+  })
+  const prefix = (result: WireReadResult, kept: number) => {
+    if (!("rows" in result)) throw new Error("rows expected")
+    return {
+      rows: result.rows.slice(0, kept),
+      included: { [region.id]: result.included![region.id]!.slice(0, kept) },
+      more: true,
+    }
+  }
+  const sized = (extra: number) => {
+    const base = responseSize(prefix(page(""), 2))
+    return page("z".repeat(RESPONSE_BUDGET_BYTES - base + extra))
+  }
+
+  it("префікс рівно в бюджеті — 2 рядки з more", () => {
+    const result = sized(0)
+    const fitted = fitResponse(index, linkPage(), result, HASH)
+    expect(fitted).toStrictEqual(prefix(result, 2))
+    expect(responseSize(fitted)).toBe(RESPONSE_BUDGET_BYTES)
+  })
+
+  it("на байт понад бюджет — 1 рядок з more", () => {
+    const result = sized(1)
+    expect(fitResponse(index, linkPage(), result, HASH)).toStrictEqual(
+      prefix(result, 1)
+    )
+  })
+})
+
 describe("fitResponse: межу перетинають неповторні поля", () => {
   // Наповнювач рівно до межі з коротким значенням поля: на один байт
   // довше — понад бюджет. Так тест ловить і лінійний підрахунок, і поле,

@@ -4,9 +4,9 @@ import {
   type ColumnLists,
   type DataRequest,
   type Filter,
+  type CatalogEntry,
+  type CatalogIndex,
   type ObjectColumns,
-  type RuntimeCatalog,
-  type RuntimeObject,
   type WireCommandError,
   type WireOperation,
   type WireReadQuery,
@@ -37,29 +37,25 @@ const stale = (object: string): WireCommandError => ({
   object,
 })
 
-/** Колонки, які перевіряє звірка; набори — для лінійного пошуку. */
+/** Запис каталогу й його переліки колонок. */
 interface Contract {
-  entry: RuntimeObject
+  entry: CatalogEntry
   columns: ObjectColumns
 }
 
-class Catalog {
-  private readonly byId: ReadonlyMap<string, RuntimeObject>
-  private readonly contracts = new Map<string, Contract>()
+// Переліки виводяться із запису раз на його життя: індекс обробник будує раз
+// при створенні, тож звірка запиту не повторює виведення для кожного запиту.
+const columnsCache = new WeakMap<CatalogEntry, ObjectColumns>()
 
-  constructor(catalog: RuntimeCatalog) {
-    this.byId = new Map(catalog.objects.map((o) => [o.id, o]))
+function contractOf(index: CatalogIndex, id: string): Contract | undefined {
+  const entry = index.byId.get(id)
+  if (entry === undefined) return undefined
+  let columns = columnsCache.get(entry)
+  if (columns === undefined) {
+    columns = objectColumns(entry)
+    columnsCache.set(entry, columns)
   }
-
-  contract(id: string): Contract | undefined {
-    const known = this.contracts.get(id)
-    if (known !== undefined) return known
-    const entry = this.byId.get(id)
-    if (entry === undefined) return undefined
-    const contract = { entry, columns: objectColumns(entry) }
-    this.contracts.set(id, contract)
-    return contract
-  }
+  return { entry, columns }
 }
 
 /** Чи всі ключі запису — у дозволеному наборі; ключі — лише власні. */
@@ -78,19 +74,18 @@ const within = (record: object, allowed: ReadonlySet<string>): boolean =>
  * batch. Never throws on hostile names.
  */
 export function checkCompatibility(
-  catalog: RuntimeCatalog,
+  index: CatalogIndex,
   request: Request
 ): WireCommandError | undefined {
-  const contracts = new Catalog(catalog)
   if (request.type === "version") return undefined
-  if (request.type === "read") return checkRead(contracts, request.query)
-  return checkRun(contracts, request)
+  if (request.type === "read") return checkRead(index, request.query)
+  return checkRun(index, request)
 }
 
 // ------------------------------------------------------------------- run
 
 function checkRun(
-  contracts: Catalog,
+  index: CatalogIndex,
   request: RunRequest
 ): WireCommandError | undefined {
   const operations =
@@ -98,20 +93,20 @@ function checkRun(
     (request.operation === undefined ? [] : [request.operation])
   const { kernels } = request
   for (const op of operations) {
-    const contract = contracts.contract(op.object)
+    const contract = contractOf(index, op.object)
     if (contract === undefined) return stale(op.object)
     const hash =
       kernels !== undefined && Object.hasOwn(kernels, op.object)
         ? kernels[op.object]
         : undefined
     if (hash !== contract.entry.kernelHash) return stale(op.object)
-    if (!operationFits(contracts, contract, op)) return stale(op.object)
+    if (!operationFits(index, contract, op)) return stale(op.object)
   }
   return undefined
 }
 
 function operationFits(
-  contracts: Catalog,
+  index: CatalogIndex,
   { entry, columns }: Contract,
   op: WireOperation
 ): boolean {
@@ -137,7 +132,7 @@ function operationFits(
     // Без довідника членства `creatorMember` відхиляє мапінг як `invalid` —
     // це вада входу, а не застарілий клієнт.
     if (entry.creatorMembership === undefined) return true
-    const membership = contracts.contract(entry.creatorMembership)
+    const membership = contractOf(index, entry.creatorMembership)
     if (membership === undefined) return false
     if (!within(op.creatorMember, new Set(membership.columns.insert))) {
       return false
@@ -187,12 +182,12 @@ function filterColumns(filter: Filter, out: string[]): string[] {
 }
 
 function checkRead(
-  contracts: Catalog,
+  index: CatalogIndex,
   wire: WireReadQuery
 ): WireCommandError | undefined {
   const query = wire as QueryShape
   const object = query.object!
-  const contract = contracts.contract(object)
+  const contract = contractOf(index, object)
   if (contract === undefined) return stale(object)
   const { entry, columns } = contract
   const header = addressable(columns, entry.attributes)

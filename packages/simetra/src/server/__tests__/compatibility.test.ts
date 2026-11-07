@@ -16,6 +16,8 @@ const catalog = runtimeCatalogSchema.parse({
   objects: [sample, region, link, organization, orgMember],
 })
 
+const index = catalogIndex(catalog.objects)
+
 const UNKNOWN = "00000000-0000-4000-8000-0000000000ee"
 const SECTION = sample.tabularSections[0]!.id
 const LINE = { id: ID, qty_col: 1 }
@@ -91,7 +93,7 @@ describe("checkCompatibility: run", () => {
       }),
     ],
   ])("%s — сумісно", (_, body) => {
-    expect(checkCompatibility(catalog, body)).toBeUndefined()
+    expect(checkCompatibility(index, body)).toBeUndefined()
   })
 
   it.each<[string, DataRequest["request"], string]>([
@@ -191,7 +193,7 @@ describe("checkCompatibility: run", () => {
       UNKNOWN,
     ],
   ])("%s — stale-client", (_, body, object) => {
-    expect(checkCompatibility(catalog, body)).toStrictEqual(staleOf(object))
+    expect(checkCompatibility(index, body)).toStrictEqual(staleOf(object))
   })
 })
 
@@ -206,12 +208,9 @@ describe("checkCompatibility: values.__proto__", () => {
 
   it("__proto__ ігнорується розбором і в звірці, і в мапінгу", () => {
     const body = request(raw('{"__proto__":{"ctid":1},"code_col":"a"}'))
-    expect(checkCompatibility(catalog, body)).toBeUndefined()
+    expect(checkCompatibility(index, body)).toBeUndefined()
     if (body.type !== "run" || body.operation === undefined) throw new Error()
-    const mapped = operationFromWire(
-      catalogIndex(catalog.objects),
-      body.operation
-    )
+    const mapped = operationFromWire(index, body.operation)
     expect(mapped).toStrictEqual({
       ok: true,
       value: expect.objectContaining({ values: { code: "a" } }) as unknown,
@@ -220,7 +219,7 @@ describe("checkCompatibility: values.__proto__", () => {
 
   it("constructor розбір лишає — stale-client, як інша невідома колонка", () => {
     const body = request(raw('{"constructor":1}'))
-    expect(checkCompatibility(catalog, body)).toStrictEqual(staleOf(sample.id))
+    expect(checkCompatibility(index, body)).toStrictEqual(staleOf(sample.id))
   })
 })
 
@@ -303,7 +302,7 @@ describe("checkCompatibility: read", () => {
     ],
     ["version", request({ type: "version" })],
   ])("%s — сумісно", (_, body) => {
-    expect(checkCompatibility(catalog, body)).toBeUndefined()
+    expect(checkCompatibility(index, body)).toBeUndefined()
   })
 
   it.each<[string, DataRequest["request"], string]>([
@@ -393,6 +392,6 @@ describe("checkCompatibility: read", () => {
       sample.id,
     ],
   ])("%s — stale-client", (_, body, object) => {
-    expect(checkCompatibility(catalog, body)).toStrictEqual(staleOf(object))
+    expect(checkCompatibility(index, body)).toStrictEqual(staleOf(object))
   })
 })
