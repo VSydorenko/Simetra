@@ -1,5 +1,5 @@
 import { runtimeCatalogSchema, type Operation } from "simetra/model"
-import { afterEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { createCommandRuntime } from "../runtime"
 import { runAfterCommit, Transaction, type RuntimeState } from "../transaction"
 import { fakeDatabase, failureOf, type Answer } from "./fake-database"
@@ -23,6 +23,11 @@ import {
   ORGANIZATION,
   ROOT,
   OPEN,
+  BEGIN,
+  CURRENT_USER,
+  ROLE,
+  commandClaims,
+  statementTimeout,
   RIGHTS,
   ROLLBACK,
   SAVE,
@@ -38,6 +43,7 @@ import {
   session,
   setup,
   setupRoots,
+  type Override,
 } from "./harness"
 
 describe("command transaction", () => {
@@ -835,6 +841,135 @@ describe("rights self-assignment", () => {
   })
 })
 
+describe("command time budget", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["performance", "setTimeout"] })
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  /** Час «минає» в момент відповіді бази на оператор, що містить `marker`. */
+  const elapse =
+    (marker: string, ms: number): Override =>
+    (text) => {
+      if (text.includes(marker)) vi.advanceTimersByTime(ms)
+      return undefined
+    }
+  const opened = (claims = commandClaims()) => [
+    { connect: true },
+    BEGIN,
+    claims,
+    ROLE,
+    CURRENT_USER,
+  ]
+
+  it("sets the limits in the claims statement from the options", async () => {
+    const { db, runtime } = await setup(undefined, {
+      commandBudgetMs: 1000,
+      lockTimeoutMs: 250,
+    })
+    await runtime.run(session, create)
+    expect(db.calls).toEqual([
+      ...opened(commandClaims("1000", "250", "2000")),
+      context("create", "client", ID),
+      createCall,
+      COMMIT,
+      { release: false },
+    ])
+  })
+
+  it("lowers statement_timeout before a statement once the rest is under the value in force", async () => {
+    const { db, runtime } = await setup(elapse("current_user_id", 47_654.8))
+    await runtime.run(session, create)
+    // До `COMMIT` залишок не менший за чинні 12 346 мс — другої прелюдії немає.
+    expect(db.calls).toEqual([
+      ...OPEN,
+      statementTimeout("12346"),
+      context("create", "client", ID),
+      createCall,
+      COMMIT,
+      { release: false },
+    ])
+  })
+
+  it("never sets 0: a rest of 1.2 ms rounds up to 2", async () => {
+    const { db, runtime } = await setup(elapse("current_user_id", 59_998.8))
+    await runtime.run(session, create)
+    expect(db.calls[OPEN.length]).toEqual(statementTimeout("2"))
+  })
+
+  it.each([
+    ["0.4 ms", 59_999.6],
+    ["a negative rest", 60_010],
+  ])(
+    "fails with command.timeout without the statement at %s",
+    async (_, ms) => {
+      const { db, runtime } = await setup(elapse("current_user_id", ms))
+      expect(await failureOf(runtime.run(session, create))).toEqual({
+        code: "command.timeout",
+      })
+      expect(db.calls).toEqual([...OPEN, ROLLBACK, { release: false }])
+    }
+  )
+
+  it("takes the claims statement_timeout of a retry from the rest of the budget", async () => {
+    let calls = 0
+    const { db, runtime } = await setup((text) => {
+      if (!text.endsWith("AS r") || calls++ > 0) return undefined
+      vi.advanceTimersByTime(45_000)
+      return { error: { code: "40001", message: "retry" } }
+    })
+    await runtime.run(session, create)
+    const phase = [context("create", "client", ID), createCall]
+    expect(db.calls).toEqual([
+      ...OPEN,
+      ...phase,
+      ROLLBACK,
+      { release: false },
+      ...opened(commandClaims("15000")),
+      ...phase,
+      COMMIT,
+      { release: false },
+    ])
+  })
+
+  it("checks the budget after JS time of a hook: the phase sends nothing", async () => {
+    const { db, runtime } = await setup(undefined, {
+      objectModules: {
+        "Catalog.Client": {
+          beforeWrite: ({ draft }) => {
+            vi.advanceTimersByTime(60_000)
+            return draft
+          },
+        },
+      },
+    })
+    expect(await failureOf(runtime.run(session, create))).toEqual({
+      code: "command.timeout",
+    })
+    expect(db.calls).toEqual([...OPEN, ROLLBACK, { release: false }])
+  })
+
+  it("checks the budget before ctx.read in a hook", async () => {
+    const { db, runtime } = await setup(undefined, {
+      objectModules: {
+        "Catalog.Client": {
+          async beforeWrite({ ctx, draft }) {
+            vi.advanceTimersByTime(60_000)
+            await ctx.read({ object: RIGHTS, id: OTHER })
+            return draft
+          },
+        },
+      },
+    })
+    expect(await failureOf(runtime.run(session, create))).toEqual({
+      code: "command.timeout",
+    })
+    expect(db.calls).toEqual([...OPEN, ROLLBACK, { release: false }])
+  })
+})
+
 describe("statement queue", () => {
   it("closes at the first failure: later units never reach the port", async () => {
     const db = fakeDatabase({
@@ -843,7 +978,7 @@ describe("statement queue", () => {
     })
     const connection = await db.database.connect()
     const state = { catalog, log: () => {} } as unknown as RuntimeState
-    const tx = new Transaction(connection, state)
+    const tx = new Transaction(connection, state, Infinity)
     const first = tx.enqueue([{ text: "first", params: [] }])
     const second = tx.enqueue([{ text: "second", params: [] }])
     expect((await failureOf(first)).code).toBe("command.internal")
@@ -854,9 +989,11 @@ describe("statement queue", () => {
   it("runs units one after another", async () => {
     const db = fakeDatabase({ query: () => undefined })
     const connection = await db.database.connect()
-    const tx = new Transaction(connection, {
-      catalog,
-    } as unknown as RuntimeState)
+    const tx = new Transaction(
+      connection,
+      { catalog } as unknown as RuntimeState,
+      Infinity
+    )
     const done = Promise.all([
       tx.enqueue([
         { text: "a", params: [] },

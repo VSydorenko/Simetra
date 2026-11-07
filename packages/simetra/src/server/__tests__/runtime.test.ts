@@ -231,6 +231,9 @@ describe("createCommandRuntime", () => {
     ["maxDepth", 0],
     ["readStatementTimeoutMs", 0],
     ["readStatementTimeoutMs", 1.5],
+    ["commandBudgetMs", 500],
+    ["commandBudgetMs", 1000.5],
+    ["lockTimeoutMs", 0],
   ])("rejects %s = %s before the database", async (option, value) => {
     const db = fakeDatabase({ query: () => ({}) })
     await expect(

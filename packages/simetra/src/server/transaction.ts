@@ -46,6 +46,10 @@ export interface RuntimeState {
   readTimeout: number
   /** The request role of reads; `undefined` — the fallback path (§6.11). */
   readRole: string | undefined
+  /** Time budget of one `run` call with its retries, ms (P4-B spec §7.1). */
+  budgetMs: number
+  /** `lock_timeout` of a command transaction, ms. */
+  lockTimeoutMs: number
 }
 
 type QueryResult = Awaited<ReturnType<DatabaseClient["query"]>>
@@ -65,6 +69,14 @@ const statement = (text: string, ...params: (string | null)[]) => ({
   text,
   params,
 })
+const TIMEOUT: CommandError = { code: "command.timeout" }
+// Стеля одного оператора команди (спека П4-B §7.1, Ф6).
+const STATEMENT_CEILING_MS = 30_000
+// Значення — зв'язаним параметром: текстовий `SET` не приймає `$1`.
+const STATEMENT_TIMEOUT = "SELECT set_config('statement_timeout', $1, true)"
+// Мілісекунди межі: округлення вгору й ≥ 1 — `statement_timeout = 0` вимкнув
+// би межу зовсім.
+const timeoutMs = (remaining: number) => Math.max(1, Math.ceil(remaining))
 
 const BEGIN = statement("BEGIN ISOLATION LEVEL READ COMMITTED")
 export const COMMIT = statement("COMMIT")
@@ -81,6 +93,17 @@ const CLAIMS_TEXT =
 /** Claims, `TimeZone` і `bytea_output` транзакції — і команди, і читання. */
 export const claimsStatement = (claims: string) =>
   statement(CLAIMS_TEXT, claims)
+// Межі часу команди — у тому самому операторі claims, без кругового запиту
+// (Ф4, Ф6). Запобіжники простою й транзакції — бюджет + 1 с: бюджет
+// спрацьовує раніше, вони ловлять завислий хук чи обірваного клієнта.
+// `transaction_timeout` є лише з PostgreSQL 17; умова — у самому SQL, щоб
+// не питати версію окремо.
+const COMMAND_CLAIMS_TEXT =
+  `${CLAIMS_TEXT}, set_config('statement_timeout', $2, true), ` +
+  `set_config('lock_timeout', $3, true), ` +
+  `set_config('idle_in_transaction_session_timeout', $4, true), ` +
+  `CASE WHEN current_setting('server_version_num')::int >= 170000 ` +
+  `THEN set_config('transaction_timeout', $4, true) END`
 const CURRENT_USER = statement(
   `SELECT ${ident(PLATFORM_SCHEMA)}.${ident(CURRENT_USER_FUNCTION_NAME)}() AS user_id`
 )
@@ -126,10 +149,17 @@ export class Transaction {
   user = ""
   act: { sub: string } | undefined
   private tail: Promise<unknown> = Promise.resolve()
+  /**
+   * `statement_timeout` у силі, мс; `undefined` — до claims: поза транзакцією
+   * `set_config(…, true)` нічого не дає, а claims ставить його сам.
+   */
+  private statementTimeout: number | undefined
 
+  /** `deadline` — мітка `performance.now()`, до якої має завершитися `run`. */
   constructor(
     private readonly client: DatabaseClient,
-    readonly state: RuntimeState
+    readonly state: RuntimeState,
+    private readonly deadline: number
   ) {}
 
   /** Runs a unit after the previous ones; resolves to its last result. */
@@ -141,16 +171,71 @@ export class Transaction {
       let last: QueryResult = { rows: [], command: "" }
       for (const { text, params } of unit) {
         if (this.terminal !== undefined) throw this.terminal.failure
-        try {
-          last = await this.client.query(text, params)
-        } catch (raw) {
-          throw this.close(terminalOf(raw, this.state, phase))
-        }
+        await this.budget(phase)
+        last = await this.send(text, params, phase)
       }
       return last
     })
     this.tail = result.catch(() => undefined)
     return result
+  }
+
+  /**
+   * Claims команди з межами часу; `statement_timeout` — від залишку бюджету,
+   * тож повтор після витраченого часу не отримує повної стелі.
+   */
+  async claims(claims: string): Promise<void> {
+    const ms = timeoutMs(
+      Math.min(STATEMENT_CEILING_MS, this.deadline - performance.now())
+    )
+    const guard = String(this.state.budgetMs + 1000)
+    await this.enqueue([
+      statement(
+        COMMAND_CLAIMS_TEXT,
+        claims,
+        String(ms),
+        String(this.state.lockTimeoutMs),
+        guard
+      ),
+    ])
+    this.statementTimeout = ms
+  }
+
+  /**
+   * Перевірка бюджету перед оператором (єдина точка — `enqueue`): вичерпаний
+   * залишок — `command.timeout` без оператора; залишок, менший за чинну
+   * межу, — спершу нижча межа. Ціна — ще один круговий запит на оператор в
+   * останні 30 с бюджету.
+   */
+  private async budget(phase: ErrorPhase | undefined): Promise<void> {
+    const remaining = this.deadline - performance.now()
+    if (remaining <= 1) {
+      throw this.close({
+        failure: new CommandFailure(TIMEOUT),
+        retry: false,
+        destroy: false,
+      })
+    }
+    // Порівняння в цілих мілісекундах межі: дробовий залишок інакше завжди
+    // менший за своє ж округлення вгору й слав би прелюдію щоразу.
+    const ms = timeoutMs(remaining)
+    if (this.statementTimeout === undefined || ms >= this.statementTimeout) {
+      return
+    }
+    await this.send(STATEMENT_TIMEOUT, [String(ms)], phase)
+    this.statementTimeout = ms
+  }
+
+  private async send(
+    text: string,
+    params: readonly (string | null)[],
+    phase: ErrorPhase | undefined
+  ): Promise<QueryResult> {
+    try {
+      return await this.client.query(text, params)
+    } catch (raw) {
+      throw this.close(terminalOf(raw, this.state, phase))
+    }
   }
 
   /** Closes the queue; the first failure decides the attempt. */
@@ -213,7 +298,8 @@ async function attempt(
   command: { active: boolean },
   claims: string,
   act: { sub: string } | undefined,
-  ops: readonly PreparedOperation[]
+  ops: readonly PreparedOperation[],
+  deadline: number
 ): Promise<Outcome> {
   let client: DatabaseClient
   try {
@@ -222,14 +308,14 @@ async function attempt(
     return { terminal: terminalOf(raw, state, undefined) }
   }
   // Явний тип: виклики `never` звужують типи лише так.
-  const tx: Transaction = new Transaction(client, state)
+  const tx: Transaction = new Transaction(client, state, deadline)
   tx.act = act
   const rows: Record<string, unknown>[] = []
   let tag: string
   try {
     tag = await inCommand({ command, tx, depth: 0 }, async () => {
       await tx.enqueue([BEGIN])
-      await tx.enqueue([claimsStatement(claims)])
+      await tx.claims(claims)
       await tx.enqueue([COMMAND_ROLE])
       const { rows: users } = await tx.enqueue([CURRENT_USER])
       const user = users[0]?.user_id
@@ -311,6 +397,8 @@ export async function runCommand(
   const act =
     typeof session.act?.sub === "string" ? { sub: session.act.sub } : undefined
   const command = { active: true }
+  // Бюджет — на весь виклик `run`, разом із повторами (Ф2).
+  const deadline = performance.now() + state.budgetMs
   // `maxAttempts` ≥ 1, тож хоч одна спроба відбудеться.
   let outcome: Outcome | undefined
   try {
@@ -320,7 +408,8 @@ export async function runCommand(
         command,
         claims,
         act,
-        structuredClone(snapshot)
+        structuredClone(snapshot),
+        deadline
       )
       if (!("terminal" in outcome) || !outcome.terminal.retry) break
     }

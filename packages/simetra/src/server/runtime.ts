@@ -59,6 +59,17 @@ export interface CommandRuntimeOptions {
    * default 15 000. A read past it rejects with `command.timeout`.
    */
   readStatementTimeoutMs?: number
+  /**
+   * Time budget of one `run` call, retries and their pauses included, in
+   * milliseconds (integer ≥ 1000); default 60 000. A command past it rejects
+   * with `command.timeout`.
+   */
+  commandBudgetMs?: number
+  /**
+   * `lock_timeout` of a command transaction in milliseconds (integer ≥ 1);
+   * default 5 000. A lock wait past it rejects with `command.busy`.
+   */
+  lockTimeoutMs?: number
   /** Receives errors that never leave the runtime; default `console.error`. */
   log?: (entry: LogEntry) => void
 }
@@ -131,6 +142,8 @@ const UNDEFINED_OBJECT = "42704"
 // Межі повтору, глибини й часу читання — помилка конфігурації host-а, як і
 // каталог; 0 для часу вимкнув би межу, тож теж відмова.
 const limitSchema = z.int().min(1).optional()
+// Бюджет менший за секунду не вміщує й одного кругового запиту з запасом.
+const budgetSchema = z.int().min(1000).optional()
 
 /**
  * Створення рантайму — одна транзакція `READ ONLY` (Р-A3-12): членство в
@@ -220,6 +233,8 @@ export async function createCommandRuntime(
   const maxDepth = limitSchema.parse(options.maxDepth) ?? 8
   const readTimeout =
     limitSchema.parse(options.readStatementTimeoutMs) ?? 15_000
+  const budgetMs = budgetSchema.parse(options.commandBudgetMs) ?? 60_000
+  const lockTimeoutMs = limitSchema.parse(options.lockTimeoutMs) ?? 5_000
   const sink = options.log ?? ((entry: LogEntry) => console.error(entry))
   // Журнал не має зламати шлях відмови: з'єднання звільняється після нього.
   const log = (entry: LogEntry) => {
@@ -249,6 +264,8 @@ export async function createCommandRuntime(
     maxAttempts,
     maxDepth,
     readTimeout,
+    budgetMs,
+    lockTimeoutMs,
     // Профіль без ролі запиту чи явний запасний шлях — читання під роллю команд.
     readRole: member ? role : undefined,
   }
