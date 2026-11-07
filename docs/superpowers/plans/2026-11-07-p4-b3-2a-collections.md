@@ -314,14 +314,28 @@ designer — `eslint.zones.js` designer дозволяє `test/support` у `__te
 
 **Interfaces:** `peekRow(collection, key): Row | undefined` (після `cleanup` —
 `undefined`); `singleFlight(fn)`; `stateOf(collection): { status; health }` без
-типів бібліотеки; `dispose()` (синхронний, B3-1) кличе `cleanup()` кожної
-колекції без очікування й прибирає їх з кешу рантайму.
+типів бібліотеки; реєстр відкритих хендлів рантайму
+`trackHandle(runtime, handle: { close(): void }): () => void` — `liveRows`
+і `openCard` (з її `openOwnerSection`) реєструються при відкритті й
+знімаються при `close()`. `dispose()` (синхронний, B3-1): спершу `close()`
+кожного зареєстрованого хендла, потім `void c.cleanup({ dependents: true }).catch(…)` кожної
+колекції без очікування (проміс відхиляється першою помилкою залежного —
+без `.catch` це `unhandledrejection`; B3-2b додає журнал `log`) (з активним живим запитом RC rc.1.4 відхиляє
+`cleanup()` без `dependents` з `CollectionHasSubscribersError`,
+`collection/index.ts`, — рядки попереднього користувача лишилися б у
+пам'яті), і прибирає колекції з кешу рантайму. Пряму підписку на колекцію
+(`subscribeChanges`: стеження за версією шапки для `needsRefresh` ТЧ,
+правило 3 картки) фасад відкриває лише всередині хендла, і `close()` хендла
+її відписує: пряма підписка переживає `cleanup` і після нового старту
+синхронізації знову просить дані, тож без хендла її не буває.
 
 - [ ] **Step 1: Failing tests:** `peekRow` після спливу `gcTime` (малий у
   тесті) — `undefined`; single-flight: три виклики під час активного — один
   хвостовий; збій однієї колекції не зупиняє іншої (`stateOf`); `dispose()` —
   колекції прибрано з кешу, рядків немає, кеш запитів `QueryClient` порожній
-  (`getQueryCache().getAll()` — `[]`); ізоляція (§12): два рантайми з
+  (`getQueryCache().getAll()` — `[]`); `dispose()` з **відкритими** `liveRows`
+  і `openCard` — `size` 0 одразу, стан `cleaned-up` — після наступного тіку, прямих
+  підписок не лишилося, запиту транспорту після `dispose()` немає; ізоляція (§12): два рантайми з
   `collectionsOf(r, { keyPrefix: [] })` — однакові ключі запитів, одне
   фейкове сховище — рядки одного не видно в іншому (власний `QueryClient`).
 - [ ] **Step 2–4:** red → implement → green.
@@ -336,7 +350,8 @@ designer — `eslint.zones.js` designer дозволяє `test/support` у `__te
   `ownerVersion` до резолву промісу (задача 5); прибрати перевірку «літерал»
   у `contains` (задача 4); порівняння рядків кодовими точками (задача 4);
   писати рядки `include` прямим записом (задача 7); `dispose()` без
-  `cleanup()` колекцій (задача 8); `retry` типовий (задача 1). Повернути код.
+  `cleanup()` колекцій (задача 8); `cleanup()` без `dependents` у `dispose()`
+  (задача 8 — тест з відкритими хендлами червоніє); `retry` типовий (задача 1). Повернути код.
 - [ ] **Step 2:** спека П4-B — рядки Додатку А й §14.3, які закриває B3-2a,
   «внесено (B3-2a)»; `docs/ROADMAP.md` (рядок П4); `check-doc-anchors.py`.
 - [ ] **Step 3: Гейти:**
