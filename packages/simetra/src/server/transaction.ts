@@ -196,6 +196,8 @@ export class Transaction {
   /** The current user of the attempt (step 4 of §6.5). */
   user = ""
   act: { sub: string } | undefined
+  /** Фази, які вже почав `ctx.run` у цій спробі (межа `BATCH_MAX`, Ф1). */
+  nestedPhases = 0
   private tail: Promise<unknown> = Promise.resolve()
   /**
    * `statement_timeout` у силі, мс; `undefined` — до claims: поза транзакцією

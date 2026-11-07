@@ -73,6 +73,12 @@ export const operationSchema = z.discriminatedUnion("action", [
 
 export type Operation = z.infer<typeof operationSchema>
 
+/**
+ * The most phases of one batch, and the most phases `ctx.run` may start in
+ * one command transaction (P4-B spec §7.1).
+ */
+export const BATCH_MAX = 500
+
 /** A batch: a non-empty ordered list of operations run in one transaction. */
 export const batchSchema = z.array(operationSchema).min(1)
 

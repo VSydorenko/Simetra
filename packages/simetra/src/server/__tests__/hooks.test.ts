@@ -1,4 +1,4 @@
-import { CommandFailure } from "simetra/model"
+import { BATCH_MAX, CommandFailure } from "simetra/model"
 import type { HookContext, ObjectModule, Operation } from "simetra/model"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { prepareRead } from "../read"
@@ -830,6 +830,50 @@ describe("depth and queue", () => {
       code: "command.depth",
     })
     expect(db.calls).toEqual(CLOSED)
+  })
+
+  it("gives command.depth phases past BATCH_MAX ctx.run phases of one transaction", async () => {
+    let started = 0
+    const { db, runtime } = await setup(rightsCore, {
+      objectModules: {
+        "Catalog.Client": {
+          async beforeWrite({ ctx, draft }) {
+            for (let i = 0; i <= BATCH_MAX; i++) {
+              started++
+              await ctx.run(rights())
+            }
+            return draft
+          },
+        },
+      },
+    })
+    expect(await failureOf(runtime.run(session, create))).toEqual({
+      code: "command.depth",
+      reason: "phases",
+    })
+    expect(started).toBe(BATCH_MAX + 1)
+    // Перевищення — без оператора: остання фаза до бази не дійшла.
+    const cores = db.calls.filter(
+      (c) => "text" in c && c.text.includes("rights_role_save")
+    )
+    expect(cores).toHaveLength(BATCH_MAX)
+    expect(db.calls.slice(-2)).toEqual([ROLLBACK, { release: false }])
+  })
+
+  it("does not count the phases of the input batch against BATCH_MAX", async () => {
+    const half = BATCH_MAX / 2
+    const { db, runtime } = await setup(rightsCore, {
+      objectModules: {
+        "Catalog.Client": {
+          async beforeWrite({ ctx, draft }) {
+            for (let i = 0; i < half; i++) await ctx.run(rights())
+            return draft
+          },
+        },
+      },
+    })
+    await runtime.run(session, [create, create])
+    expect(db.calls.slice(-2)).toEqual([COMMIT, { release: false }])
   })
 
   it("counts depth from the async context when a captured root ctx recurses", async () => {

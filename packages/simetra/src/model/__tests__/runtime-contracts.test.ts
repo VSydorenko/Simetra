@@ -1,5 +1,6 @@
 import { describe, expect, expectTypeOf, it } from "vitest"
 import {
+  BATCH_MAX,
   batchSchema,
   castTypeSchema,
   defineObjectModule,
@@ -71,6 +72,10 @@ describe("operationSchema", () => {
 describe("batchSchema", () => {
   it("rejects an empty batch", () => {
     expect(batchSchema.safeParse([]).success).toBe(false)
+  })
+
+  it("caps the phases of one transaction at 500", () => {
+    expect(BATCH_MAX).toBe(500)
   })
 })
 
