@@ -747,6 +747,14 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Знеособлення ставить колонку в NULL: приберіть required або personalData.",
     },
   },
+  "attribute.load-not-allowed": {
+    en: () => "A register attribute cannot set load",
+    uk: () => "Реквізит регістра не може задавати load",
+    hint: {
+      en: "Remove load: the runtime does not read registers yet, so the field would have no effect.",
+      uk: "Приберіть load: рантайм ще не читає регістрів, тож поле нічого б не робило.",
+    },
+  },
   "attribute.lazy-not-allowed": {
     en: () => "A polymorphic Ref or a tabular section attribute cannot be lazy",
     uk: () => "Поліморфний Ref чи реквізит ТЧ не може бути лінивим",

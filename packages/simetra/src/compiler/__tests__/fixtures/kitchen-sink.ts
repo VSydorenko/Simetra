@@ -28,7 +28,7 @@ const ref = (kind: string, name: string) => ({ kind, name })
  * Повний набір полів реквізиту: кожен тип з його параметрами — окремим
  * елементом, бо `length`, `precision` і цілі `Ref` взаємно виключні.
  */
-function attributes(prefix: string) {
+function attributes(prefix: string, { register = false } = {}) {
   const common = (name: string, physicalName: string) => ({
     id: id(),
     name,
@@ -72,12 +72,13 @@ function attributes(prefix: string) {
       maxValue: "1000000",
     },
     // Носій прав (`access` товару й документа): правило лінивого носія читає
-    // його `load`. `"lazy"` тут — помилка і в носії, і в ТЧ.
+    // його `load`. `"lazy"` тут — помилка і в носії, і в ТЧ; реквізит регістра
+    // `load` не задає зовсім (`attribute.load-not-allowed`).
     {
       ...common(`${prefix}Item`, `${prefix}_item_id`),
       type: "Ref",
       ref: ref("Catalog", "Item"),
-      load: "eager",
+      ...(register ? {} : { load: "eager" as const }),
     },
     {
       ...common(`${prefix}Owner`, `${prefix}_owner`),
@@ -522,7 +523,7 @@ export function kitchenSink(): Map<string, string> {
       },
       ...registerFields("res"),
     ],
-    attributes: attributes("info"),
+    attributes: attributes("info", { register: true }),
   }
 
   const stock = {
@@ -558,7 +559,7 @@ export function kitchenSink(): Map<string, string> {
         scale: 3,
       },
     ],
-    attributes: attributes("stock"),
+    attributes: attributes("stock", { register: true }),
   }
 
   const constant = (

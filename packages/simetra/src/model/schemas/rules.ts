@@ -29,6 +29,7 @@ export const SCHEMA_RULES = [
   "attribute.unique-within-requires-unique",
   "attribute.personal-data-required",
   "attribute.lazy-not-allowed",
+  "attribute.load-not-allowed",
   "type.bound-type",
   "type.bound-conflict",
   "type.bound-order",

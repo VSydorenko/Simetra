@@ -84,7 +84,7 @@ const attributeShape = {
   }),
   load: z.enum(["eager", "lazy"]).optional().meta({
     description:
-      'Whether list reads omit the attribute ("lazy"; a card read returns it); default lazy for Bytes of the header, eager otherwise. Not allowed on a polymorphic Ref, a tabular section attribute or a rights carrier. Has no effect on register attributes yet.',
+      'Whether list reads omit the attribute ("lazy"; a card read returns it); default lazy for Bytes of the header, eager otherwise. Not allowed on a polymorphic Ref, a tabular section attribute, a register attribute or a rights carrier.',
   }),
 }
 
@@ -172,3 +172,23 @@ export const registerFieldSchema = z
 
 export type Attribute = z.infer<typeof attributeSchema>
 export type CatalogAttribute = z.infer<typeof catalogAttributeSchema>
+
+/**
+ * Реквізити регістра: рантайм регістрів ще не читає (Рд1), тож `load` на них
+ * нічого б не робив — споживач чекав би ефекту, якого немає. Правило знімуть
+ * разом із винятком ратчета полів, коли регістри ввійдуть у каталог рантайму.
+ */
+export const registerAttributesSchema = z
+  .array(attributeSchema)
+  .superRefine((attributes, ctx) => {
+    attributes.forEach((attribute, index) => {
+      if (attribute.load === undefined) return
+      ctx.addIssue({
+        code: "custom",
+        message:
+          "A register attribute cannot set load: the runtime does not read registers yet",
+        path: [index, "load"],
+        params: { rule: "attribute.load-not-allowed" satisfies SchemaRule },
+      })
+    })
+  })

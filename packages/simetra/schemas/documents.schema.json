@@ -784,7 +784,7 @@
             "const": true
           },
           "load": {
-            "description": "Whether list reads omit the attribute (\"lazy\"; a card read returns it); default lazy for Bytes of the header, eager otherwise. Not allowed on a polymorphic Ref, a tabular section attribute or a rights carrier. Has no effect on register attributes yet.",
+            "description": "Whether list reads omit the attribute (\"lazy\"; a card read returns it); default lazy for Bytes of the header, eager otherwise. Not allowed on a polymorphic Ref, a tabular section attribute, a register attribute or a rights carrier.",
             "type": "string",
             "enum": [
               "eager",
@@ -1172,7 +1172,7 @@
                   "const": true
                 },
                 "load": {
-                  "description": "Whether list reads omit the attribute (\"lazy\"; a card read returns it); default lazy for Bytes of the header, eager otherwise. Not allowed on a polymorphic Ref, a tabular section attribute or a rights carrier. Has no effect on register attributes yet.",
+                  "description": "Whether list reads omit the attribute (\"lazy\"; a card read returns it); default lazy for Bytes of the header, eager otherwise. Not allowed on a polymorphic Ref, a tabular section attribute, a register attribute or a rights carrier.",
                   "type": "string",
                   "enum": [
                     "eager",

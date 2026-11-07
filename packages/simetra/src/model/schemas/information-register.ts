@@ -1,7 +1,7 @@
 import { z } from "zod"
 import { publicReadSchema } from "./public-read"
 import { accessSchema, customActionsSchema } from "./rights"
-import { attributeSchema, registerFieldSchema } from "./attribute"
+import { registerAttributesSchema, registerFieldSchema } from "./attribute"
 import { physicalNameSchema } from "./identity"
 import { metadataRefSchema } from "./metadata-ref"
 import {
@@ -53,8 +53,7 @@ export const informationRegisterSchema = z.strictObject({
     .array(registerFieldSchema)
     .default([])
     .meta({ description: "Resources: the value fields of a record." }),
-  attributes: z
-    .array(attributeSchema)
+  attributes: registerAttributesSchema
     .default([])
     .meta({ description: "Attributes: extra information of a record." }),
 })

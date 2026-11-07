@@ -12,6 +12,7 @@ import {
 } from "../schemas/attribute"
 import { constantSchema } from "../schemas/constant"
 import { tabularSectionSchema } from "../schemas/tabular-section"
+import { registerAttributesSchema } from "../schemas/attribute"
 
 const schema = z.object(valueTypeShape).superRefine(refineValueType)
 
@@ -358,6 +359,10 @@ describe("attribute load", () => {
       path: i.path,
     }))
   const rule = "attribute.lazy-not-allowed"
+  // Поле `attributes` регістра — та сама схема, що в обох видах регістрів.
+  const informationRegisterLoadProbe = z.strictObject({
+    attributes: registerAttributesSchema,
+  })
 
   it.each<[string, z.ZodType, Record<string, unknown>, unknown[]]>([
     [
@@ -384,6 +389,12 @@ describe("attribute load", () => {
       catalogAttributeSchema,
       { ...pair, load: "lazy" },
       [{ rule, path: ["load"] }],
+    ],
+    [
+      "an eager register attribute",
+      informationRegisterLoadProbe,
+      { attributes: [{ name: "a", type: "Integer", load: "eager" }] },
+      [{ rule: "attribute.load-not-allowed", path: ["attributes", 0, "load"] }],
     ],
     [
       "a lazy tabular section attribute",

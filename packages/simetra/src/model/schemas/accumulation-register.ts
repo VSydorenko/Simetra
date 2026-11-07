@@ -1,7 +1,7 @@
 import { z } from "zod"
 import { publicReadSchema } from "./public-read"
 import { accessSchema, customActionsSchema } from "./rights"
-import { attributeSchema, registerFieldSchema } from "./attribute"
+import { registerAttributesSchema, registerFieldSchema } from "./attribute"
 import {
   elementNameSchema,
   metadataIdSchema,
@@ -99,8 +99,7 @@ export const accumulationRegisterSchema = z
       description:
         "Resources: the summed value fields of a record; Integer or Numeric only.",
     }),
-    attributes: z
-      .array(attributeSchema)
+    attributes: registerAttributesSchema
       .default([])
       .meta({ description: "Attributes: extra information of a record." }),
   })
