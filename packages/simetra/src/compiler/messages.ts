@@ -755,12 +755,28 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Приберіть load: рантайм ще не читає регістрів, тож поле нічого б не робило.",
     },
   },
+  "attribute.max-bytes-not-allowed": {
+    en: () => "A register attribute cannot set maxBytes",
+    uk: () => "Реквізит регістра не може задавати maxBytes",
+    hint: {
+      en: "Remove maxBytes: the runtime does not read registers yet, so the field would have no effect.",
+      uk: "Приберіть maxBytes: рантайм ще не читає регістрів, тож поле нічого б не робило.",
+    },
+  },
   "attribute.lazy-not-allowed": {
     en: () => "A polymorphic Ref or a tabular section attribute cannot be lazy",
     uk: () => "Поліморфний Ref чи реквізит ТЧ не може бути лінивим",
     hint: {
       en: 'Remove load: "lazy": a polymorphic pair is read as a whole, and a tabular section array without a lazy field would erase its values.',
       uk: 'Приберіть load: "lazy": поліморфна пара читається цілком, а масив ТЧ без лінивого поля стер би його значення.',
+    },
+  },
+  "type.max-bytes-type": {
+    en: () => "maxBytes applies only to Text, Json, Bytes or an array",
+    uk: () => "maxBytes застосовується лише до Text, Json, Bytes чи масиву",
+    hint: {
+      en: "Remove maxBytes: a String is limited by length, other types have a fixed size.",
+      uk: "Приберіть maxBytes: String обмежує length, решта типів має сталий розмір.",
     },
   },
   "type.bound-type": {

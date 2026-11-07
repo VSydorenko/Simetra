@@ -276,6 +276,13 @@ describe("encodeRow / decodeRow rows", () => {
     )
   })
 
+  // `maxBytes` — межа входу команди (Р7): збережене значення понад неї
+  // читання віддає, а не відхиляє.
+  it("encodes a stored value over maxBytes", () => {
+    const text = only(attr("Text", { maxBytes: 1 }))
+    expect(encodeRow(text, { v: "long" })).toEqual({ v_col: "long" })
+  })
+
   it("ignores an unknown key and leaves a missing key missing", () => {
     const row = decodeRow(entry, { title: "a", added_later: 1 })
     expect(row).toEqual({ title: "a" })

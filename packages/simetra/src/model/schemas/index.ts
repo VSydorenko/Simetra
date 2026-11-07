@@ -9,6 +9,7 @@ export { metadataRefSchema, type MetadataRef } from "./metadata-ref"
 export {
   attributeSchema,
   catalogAttributeSchema,
+  effectiveMaxBytes,
   type Attribute,
   type CatalogAttribute,
 } from "./attribute"

@@ -106,6 +106,7 @@ function encodeMember(membership: RuntimeObject, values: unknown) {
     forced,
     path: MEMBER,
     prefix: `${MEMBER}.`,
+    maxBytes: true,
   })
 }
 

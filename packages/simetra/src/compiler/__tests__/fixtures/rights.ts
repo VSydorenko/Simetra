@@ -1603,6 +1603,37 @@ export function gaugeLoadLayer(loads: Record<string, "eager" | "lazy">): Layer {
 }
 
 /**
+ * `runtimeValuesLayer()` з `Text` `body` у шапці й `Text` `memo` у ТЧ `lines`
+ * та явним `maxBytes` реквізитів за іменем (Рд26): решта бере типове за типом.
+ */
+export function gaugeMaxBytesLayer(maxBytes: Record<string, number>): Layer {
+  const layer = runtimeValuesLayer()
+  const gauge = layer[GAUGE_FILE] as {
+    attributes: { name: string }[]
+    tabularSections: { attributes: { name: string }[] }[]
+  }
+  const limited = <A extends { name: string }>(a: A) =>
+    a.name in maxBytes ? { ...a, maxBytes: maxBytes[a.name] } : a
+  return {
+    ...layer,
+    [GAUGE_FILE]: {
+      ...gauge,
+      attributes: [
+        ...gauge.attributes,
+        { id: uuid(7561), name: "body", physicalName: "body", type: "Text" },
+      ].map(limited),
+      tabularSections: gauge.tabularSections.map((section) => ({
+        ...section,
+        attributes: [
+          ...section.attributes,
+          { id: uuid(7562), name: "memo", physicalName: "memo", type: "Text" },
+        ].map(limited),
+      })),
+    },
+  }
+}
+
+/**
  * `runtimeValuesLayer()` з одноцільовим `Ref` `site` у `Gauge` на довідник
  * `Region` з `crossScope: true` — ціль `include` серверного читання. Простий
  * FK дає засіяти посилання на `Region` чужого скоупу: складений FK того

@@ -433,6 +433,75 @@ describe("attribute load", () => {
   })
 })
 
+// `maxBytes` (Рд26): лише для значень без межі типу; реквізит регістра його
+// не задає — регістрів у каталозі рантайму ще немає (Рд1).
+describe("attribute maxBytes", () => {
+  const issues = (
+    schema: z.ZodType,
+    input: Record<string, unknown>
+  ): { rule?: string; path: PropertyKey[] }[] =>
+    (schema.safeParse(input).error?.issues ?? []).map((i) => ({
+      rule: (i as { params?: { rule?: string } }).params?.rule,
+      path: i.path,
+    }))
+  const typeRule = "type.max-bytes-type"
+  const registerProbe = z.strictObject({ attributes: registerAttributesSchema })
+
+  it.each<[string, z.ZodType, Record<string, unknown>, unknown[]]>([
+    ["Text", attributeSchema, { name: "a", type: "Text", maxBytes: 1 }, []],
+    [
+      "Json",
+      catalogAttributeSchema,
+      { name: "a", type: "Json", maxBytes: 1 },
+      [],
+    ],
+    ["Bytes", attributeSchema, { name: "a", type: "Bytes", maxBytes: 1 }, []],
+    [
+      "an Integer array",
+      attributeSchema,
+      { name: "a", type: "Integer", array: true, maxBytes: 1 },
+      [],
+    ],
+    [
+      "a tabular section Text",
+      tabularSectionSchema,
+      { name: "lines", attributes: [{ name: "a", type: "Text", maxBytes: 9 }] },
+      [],
+    ],
+    [
+      "a scalar Integer",
+      attributeSchema,
+      { name: "a", type: "Integer", maxBytes: 1 },
+      [{ rule: typeRule, path: ["maxBytes"] }],
+    ],
+    [
+      "a scalar String of a catalog",
+      catalogAttributeSchema,
+      { name: "a", type: "String", length: 10, maxBytes: 1 },
+      [{ rule: typeRule, path: ["maxBytes"] }],
+    ],
+    [
+      "a register attribute",
+      registerProbe,
+      { attributes: [{ name: "a", type: "Text", maxBytes: 1 }] },
+      [
+        {
+          rule: "attribute.max-bytes-not-allowed",
+          path: ["attributes", 0, "maxBytes"],
+        },
+      ],
+    ],
+  ])("%s", (_, schema, input, expected) => {
+    expect(issues(schema, input)).toEqual(expected)
+  })
+
+  it.each([0, -1, 1.5])("refuses maxBytes %s", (maxBytes) => {
+    expect(
+      attributeSchema.safeParse({ name: "a", type: "Text", maxBytes }).success
+    ).toBe(false)
+  })
+})
+
 describe("attribute value checks", () => {
   const issues = (input: Record<string, unknown>) =>
     (

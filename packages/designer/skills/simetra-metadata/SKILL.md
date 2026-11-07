@@ -234,12 +234,12 @@ Attribute properties (an element of `attributes`):
   character as itself or as `\uXXXX`.
 - `personalData: true` marks personal data (a name, a phone, an address):
   anonymization sets it to `NULL`, so it cannot also be `required`.
-- `load`: `"lazy"` keeps a heavy value (a file, a long body) out of list reads;
-  a card read still returns it, but a list read cannot filter or sort by it.
-  Header `Bytes` is lazy by default; `"eager"` lists it. Emits no DDL. Not
-  allowed on a polymorphic `Ref`, a tabular section attribute, a rights carrier
-  (`ownership`, `containerBinding`, `access`) or register attributes
-  (`attribute.load-not-allowed`): the runtime does not read registers yet.
+- `load`: `"lazy"` keeps a heavy value (a file, a long body) out of list reads; a card read still returns it, but a list
+  read cannot filter or sort by it. Header `Bytes` is lazy by default; `"eager"` lists it. Emits no DDL. Not allowed on a
+  polymorphic `Ref`, a tabular section attribute, a rights carrier (`ownership`, `containerBinding`, `access`) or register attributes (`attribute.load-not-allowed`): the runtime does not read registers yet.
+- `maxBytes` (`Text`, `Json`, `Bytes`, arrays; not on registers): the most UTF-8 bytes of the JSON wire value (an array
+  as a whole, `Bytes` as `\x…` text) a command may write; default 1 MiB for `Json` and `Bytes`, 64 KiB for `Text` and arrays.
+  Over it: `command.invalid`, `reason: "too-large"`; a stored value still reads. Long `Text`: raise it, `"maxBytes": 1048576`.
 
 Object properties:
 

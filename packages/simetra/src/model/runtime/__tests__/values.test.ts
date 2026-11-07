@@ -183,3 +183,55 @@ describe("encodeAttributes", () => {
     expect(encodeAttributes(attributes, values, options)).toEqual({ columns })
   })
 })
+
+// `maxBytes` (Рд26, Р7): міра — `jsonBytes` закодованого значення форми
+// передачі, тож лапки JSON, екранування й UTF-8 кирилиці входять у межу.
+describe("encodeAttributes: maxBytes", () => {
+  const INPUT = { ...HEADER, maxBytes: true } as const
+  it.each<[string, CatalogEntryAttribute["type"], boolean, unknown, number]>([
+    ["Text", "Text", false, "abc", 5],
+    ["Cyrillic Text", "Text", false, "їж", 6],
+    ["Text with a quote and a backslash", "Text", false, 'a"\\', 7],
+    ["Json", "Json", false, { a: "в" }, 10],
+    ["Bytes as the \\x text", "Bytes", false, "\\xff00", 9],
+    ["a Text array as a whole", "Text", true, ["ab", "в"], 11],
+  ])(
+    "%s: the limit passes, one byte less refuses",
+    (_, type, array, value, bytes) => {
+      const at = (maxBytes: number) => [
+        attr("big", type, { maxBytes, ...(array ? { array: true } : {}) }),
+      ]
+      expect(encodeAttributes(at(bytes), { big: value }, INPUT)).toHaveProperty(
+        "columns.big_col"
+      )
+      expect(encodeAttributes(at(bytes - 1), { big: value }, INPUT)).toEqual({
+        error: { code: "command.invalid", path: "big", reason: "too-large" },
+      })
+    }
+  )
+
+  it("names the row path of a tabular section value", () => {
+    const row = [attr("memo", "Text", { maxBytes: 4 })]
+    expect(
+      encodeAttributes(
+        row,
+        { ref: OTHER, memo: "abc" },
+        { ...ROW, maxBytes: true }
+      )
+    ).toEqual({
+      error: {
+        code: "command.invalid",
+        path: "lines.0.memo",
+        reason: "too-large",
+      },
+    })
+  })
+
+  // Без опції межі немає: обхід кличуть і не лише команди.
+  it("does not check without the option", () => {
+    const big = [attr("memo", "Text", { maxBytes: 1 })]
+    expect(encodeAttributes(big, { memo: "abc" }, HEADER)).toEqual({
+      columns: { memo_col: "abc" },
+    })
+  })
+})

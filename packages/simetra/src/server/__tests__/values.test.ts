@@ -4,6 +4,7 @@ import {
   encodeItemValue,
   encodePair,
   type Operation,
+  type RuntimeAttribute,
   type RuntimeObject,
 } from "simetra/model"
 import {
@@ -320,6 +321,31 @@ describe("encodeItem", () => {
         code_col: "abc",
         tabular: { sample_lines: [{ id: OTHER, firstOnly_col: "f" }] },
       },
+    })
+  })
+
+  // Вхід команди міряє `maxBytes` (Рд26) і в шапці, і в рядку ТЧ; причина
+  // доходить до помилки, щоб клієнт відрізнив межу від хибного значення.
+  it.each<[string, Parameters<typeof encodeItem>[2], string]>([
+    ["a header value", { values: { note: "abcd" } }, "note"],
+    [
+      "a tabular section value",
+      { tabularSections: { lines: [{ ref: OTHER, firstOnly: "abcd" }] } },
+      "lines.0.firstOnly",
+    ],
+  ])("refuses %s over maxBytes as too-large", (_, draft, path) => {
+    const limited = (a: RuntimeAttribute) =>
+      a.type === "Text" ? { ...a, maxBytes: 5 } : a
+    const object: RuntimeObject = {
+      ...sample,
+      attributes: sample.attributes.map(limited),
+      tabularSections: sample.tabularSections.map((s) => ({
+        ...s,
+        attributes: s.attributes.map(limited),
+      })),
+    }
+    expect(encodeItem(object, create(), draft)).toEqual({
+      error: { code: "command.invalid", path, reason: "too-large" },
     })
   })
 

@@ -86,6 +86,59 @@ const attributeShape = {
     description:
       'Whether list reads omit the attribute ("lazy"; a card read returns it); default lazy for Bytes of the header, eager otherwise. Not allowed on a polymorphic Ref, a tabular section attribute, a register attribute or a rights carrier.',
   }),
+  maxBytes: z.int().positive().optional().meta({
+    description:
+      "Most UTF-8 bytes of the JSON wire value a command may write; Text, Json, Bytes or an array only (the whole array counts). Default 1 MiB for Json and Bytes, 64 KiB for Text and arrays. Not allowed on a register attribute.",
+  }),
+}
+
+/**
+ * Типові `maxBytes` (спека П4-B Рд26): `Json` і `Bytes` несуть документи й
+ * файли, `Text` і масиви — довгий текст; більше — лише явним `maxBytes`, щоб
+ * важке значення не проходило мовчки крізь бюджет відповіді.
+ */
+const MAX_BYTES_DEFAULTS = {
+  Json: 1024 * 1024,
+  Bytes: 1024 * 1024,
+  Text: 64 * 1024,
+} as const
+const ARRAY_MAX_BYTES = 64 * 1024
+
+/**
+ * The effective `maxBytes` of a value type: the explicit one or the default
+ * of its type; `undefined` for a type without a byte limit.
+ */
+export function effectiveMaxBytes(value: {
+  type: string
+  array?: boolean
+  maxBytes?: number
+}): number | undefined {
+  if (value.maxBytes !== undefined) return value.maxBytes
+  if (value.array === true) return ARRAY_MAX_BYTES
+  return Object.hasOwn(MAX_BYTES_DEFAULTS, value.type)
+    ? MAX_BYTES_DEFAULTS[value.type as keyof typeof MAX_BYTES_DEFAULTS]
+    : undefined
+}
+
+/**
+ * `maxBytes` — лише там, де значення росте без межі типу: `String` має
+ * `length`, решта скалярів — сталий розмір, тож межа в байтах їм нічого б
+ * не дала й лише ввела б в оману.
+ */
+function refineMaxBytes(
+  value: { type: string; array?: boolean; maxBytes?: number },
+  ctx: z.RefinementCtx
+): void {
+  if (value.maxBytes === undefined) return
+  if (value.array === true || Object.hasOwn(MAX_BYTES_DEFAULTS, value.type)) {
+    return
+  }
+  ctx.addIssue({
+    code: "custom",
+    message: "maxBytes applies only to Text, Json, Bytes or an array",
+    path: ["maxBytes"],
+    params: { rule: "type.max-bytes-type" satisfies SchemaRule },
+  })
 }
 
 /**
@@ -132,6 +185,7 @@ export const attributeSchema = z
     refineValueChecks(value, ctx)
     refinePersonalData(value, ctx)
     refineLoad(value, ctx)
+    refineMaxBytes(value, ctx)
   })
 
 /**
@@ -153,6 +207,7 @@ export const catalogAttributeSchema = z
     refineValueChecks(value, ctx)
     refinePersonalData(value, ctx)
     refineLoad(value, ctx)
+    refineMaxBytes(value, ctx)
     refineUniqueWithin(value, ctx)
   })
 
@@ -174,21 +229,34 @@ export type Attribute = z.infer<typeof attributeSchema>
 export type CatalogAttribute = z.infer<typeof catalogAttributeSchema>
 
 /**
- * Реквізити регістра: рантайм регістрів ще не читає (Рд1), тож `load` на них
- * нічого б не робив — споживач чекав би ефекту, якого немає. Правило знімуть
- * разом із винятком ратчета полів, коли регістри ввійдуть у каталог рантайму.
+ * Реквізити регістра: рантайм регістрів ще не читає (Рд1), тож `load` і
+ * `maxBytes` на них нічого б не робили — споживач чекав би ефекту, якого
+ * немає. Правила знімуть разом із винятками ратчета полів, коли регістри
+ * ввійдуть у каталог рантайму.
  */
 export const registerAttributesSchema = z
   .array(attributeSchema)
   .superRefine((attributes, ctx) => {
     attributes.forEach((attribute, index) => {
-      if (attribute.load === undefined) return
-      ctx.addIssue({
-        code: "custom",
-        message:
-          "A register attribute cannot set load: the runtime does not read registers yet",
-        path: [index, "load"],
-        params: { rule: "attribute.load-not-allowed" satisfies SchemaRule },
-      })
+      if (attribute.load !== undefined) {
+        ctx.addIssue({
+          code: "custom",
+          message:
+            "A register attribute cannot set load: the runtime does not read registers yet",
+          path: [index, "load"],
+          params: { rule: "attribute.load-not-allowed" satisfies SchemaRule },
+        })
+      }
+      if (attribute.maxBytes !== undefined) {
+        ctx.addIssue({
+          code: "custom",
+          message:
+            "A register attribute cannot set maxBytes: the runtime does not read registers yet",
+          path: [index, "maxBytes"],
+          params: {
+            rule: "attribute.max-bytes-not-allowed" satisfies SchemaRule,
+          },
+        })
+      }
     })
   })

@@ -5,7 +5,8 @@ import {
   isWithinType,
 } from "../schemas/value-type"
 import type { CatalogEntryAttribute } from "./catalog"
-import type { CommandError } from "./errors"
+import { LIMIT_REASONS, type CommandError } from "./errors"
+import { jsonBytes } from "./limits"
 
 /**
  * Кодування значень за спільною частиною запису каталогу (Р-A3-7, Р-A4-12):
@@ -248,6 +249,11 @@ export interface EncodeAttributesOptions<
   prefix: string
   /** Ключ рядка ТЧ: його пише викликач, а не обхід. */
   rowKey?: string
+  /**
+   * Refuse a value over its attribute's `maxBytes` (`reason: "too-large"`).
+   * Only command input sets it: a stored value over the limit still reads.
+   */
+  maxBytes?: true
 }
 
 /**
@@ -264,7 +270,7 @@ export function encodeAttributes<A extends CatalogEntryAttribute>(
   values: unknown,
   options: EncodeAttributesOptions<A>
 ): { columns: Record<string, unknown> } | { error: CommandError } {
-  const { allowed, forced = [], path, prefix, rowKey } = options
+  const { allowed, forced = [], path, prefix, rowKey, maxBytes } = options
   let keys: Set<string>
   try {
     if (!isPlainObject(values)) return invalid(path)
@@ -290,6 +296,22 @@ export function encodeAttributes<A extends CatalogEntryAttribute>(
     }
     const encoded = encodeItemValue(attribute, value, at)
     if ("error" in encoded) return encoded
+    // Міра — закодоване значення форми передачі (Р7), та сама, якою бюджет
+    // відповіді рахує рядок: межа входу й межа читання не розходяться.
+    // Масив міряється цілком.
+    if (
+      maxBytes === true &&
+      attribute.maxBytes !== undefined &&
+      jsonBytes(encoded.value) > attribute.maxBytes
+    ) {
+      return {
+        error: {
+          code: "command.invalid",
+          path: at,
+          reason: LIMIT_REASONS.tooLarge,
+        },
+      }
+    }
     if (attribute.pair !== undefined) {
       Object.assign(columns, encoded.value)
     } else {

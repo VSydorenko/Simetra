@@ -39,6 +39,8 @@ export interface ElementSource extends ValueSource {
   name: string
   /** `load` реквізиту з метаданих (Рд25); у колонки `CustomTable` немає. */
   load?: "eager" | "lazy"
+  /** Явний `maxBytes` реквізиту (Рд26); типове за типом дає `effectiveMaxBytes`. */
+  maxBytes?: number
 }
 
 /** Стандартні колонки (за логічним ім'ям у стилі проєкту) й елементи таблиці. */

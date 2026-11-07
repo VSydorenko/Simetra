@@ -79,6 +79,11 @@ export const catalogEntryAttributeSchema = z.strictObject({
     .optional(),
   /** Лише ефективно лінивий реквізит шапки (Рд25): списочне читання його не віддає. */
   load: z.literal("lazy").optional(),
+  /**
+   * The effective byte limit of a command input value (P4-B spec Рд26):
+   * UTF-8 bytes of its JSON wire form; Text, Json, Bytes and arrays only.
+   */
+  maxBytes: z.int().positive().optional(),
 })
 
 /** A runtime attribute: the shared part plus the database types of T3. */
