@@ -346,6 +346,30 @@ export function recordingDatabase(inner: CommandDatabase): {
 }
 
 /**
+ * Порт команд, що кличе `hook` перед кожним оператором клієнта; `index` —
+ * номер оператора на цьому з'єднанні від нуля. Так тест вклинює чужий коміт
+ * рівно між двома операторами однієї транзакції рантайму.
+ */
+export function beforeStatement(
+  inner: CommandDatabase,
+  hook: (index: number, text: string) => Promise<void>
+): CommandDatabase {
+  return {
+    async connect() {
+      const client = await inner.connect()
+      let index = 0
+      return {
+        async query(text, params) {
+          await hook(index++, text)
+          return client.query(text, params)
+        },
+        release: (destroy) => client.release(destroy),
+      }
+    },
+  }
+}
+
+/**
  * Ресурс колбек-помічника (`inTarget`, `withRuntimeLogin`), утриманий між
  * `beforeAll` і `afterAll`: `open` чекає, доки `scope` віддасть значення, а
  * `close` відпускає колбек і чекає його прибирання. Ресурс, що впав до

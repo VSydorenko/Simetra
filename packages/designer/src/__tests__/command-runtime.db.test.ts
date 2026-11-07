@@ -11,9 +11,11 @@ import {
   SESSION_CLAIMS_SETTING,
   defineObjectModule,
   type CommandError,
+  type Filter,
   type MetadataRef,
   type ObjectModule,
   type Operation,
+  type OrderBy,
   type RuntimeCatalog,
   type SessionClaims,
   CommandFailure,
@@ -512,9 +514,20 @@ describe("command runtime over the engine target", () => {
   it("runtime.read sees what a SELECT under the request role sees, the fallback too", async () => {
     const rt = await runtime(fromPgPool(env.direct))
     await rt.run(env.me.session, createGauge(randomUUID()))
+    await rt.run(env.me.session, createGauge(randomUUID(), { reading: 5 }))
+    await rt.run(env.me.session, createGauge(randomUUID(), { reading: 1 }))
+    // Друга форма: дерево з `or`/`not`, сортування й лічильник — та сама
+    // множина, що `WHERE` того самого змісту під роллю запиту.
+    const where: Filter = {
+      or: [
+        { attribute: "reading", op: "isNull" },
+        { not: { attribute: "reading", op: "gte", value: 3 } },
+      ],
+    }
     const client = new pg.Client({ connectionString: env.login })
     await client.connect()
     let visible: string[]
+    let filtered: string[]
     try {
       await client.query("BEGIN")
       await client.query("SELECT set_config($1, $2, true)", [
@@ -522,27 +535,50 @@ describe("command runtime over the engine target", () => {
         JSON.stringify(env.me.session),
       ])
       await client.query(`SET LOCAL ROLE ${REQUEST_ROLE}`)
-      visible = (
-        await client.query<{ id: string }>(
-          `SELECT id FROM public.${GAUGE_TABLE} ORDER BY id`
-        )
-      ).rows.map((r) => r.id)
+      const ids = async (condition: string) =>
+        (
+          await client.query<{ id: string }>(
+            `SELECT id FROM public.${GAUGE_TABLE}${condition} ORDER BY id`
+          )
+        ).rows.map((r) => r.id)
+      visible = await ids("")
+      filtered = await ids(" WHERE reading IS NULL OR NOT (reading >= 3)")
       await client.query("COMMIT")
     } finally {
       await client.end()
     }
     expect(visible.length).toBeGreaterThan(0)
     expect(visible).not.toContain(env.foreign)
+    expect(filtered.length).toBeGreaterThan(0)
+    expect(filtered.length).toBeLessThan(visible.length)
     const page = { object: GAUGE, limit: 200 }
-    const read = await rt.read(env.me.session, page)
-    expect(read.rows.map((r) => r.ref)).toEqual(visible)
+    const sortedPage = {
+      object: GAUGE,
+      where,
+      orderBy: [
+        { attribute: "reading", direction: "desc", nulls: "last" },
+      ] satisfies OrderBy,
+      limit: 200,
+    }
+    const counted = { object: GAUGE, where, count: true } as const
+    const reads = async (rt: CommandRuntime) => ({
+      page: await rt.read(env.me.session, page),
+      sorted: await rt.read(env.me.session, sortedPage),
+      count: await rt.read(env.me.session, counted),
+    })
+    const read = await reads(rt)
+    expect(read.page.rows.map((r) => r.ref)).toEqual(visible)
+    expect(read.sorted.rows.map((r) => r.ref as string).sort()).toEqual(
+      filtered
+    )
+    expect(read.count).toEqual({ count: filtered.length })
 
     const fallbackPool = new pg.Pool({ connectionString: env.commandOnly })
     try {
       const fallback = await runtime(fromPgPool(fallbackPool), {
         readFallback: true,
       })
-      expect(await fallback.read(env.me.session, page)).toEqual(read)
+      expect(await reads(fallback)).toEqual(read)
     } finally {
       await fallbackPool.end()
     }
