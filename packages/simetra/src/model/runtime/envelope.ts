@@ -1,7 +1,11 @@
 import { z } from "zod"
 import { elementIdSchema } from "../schemas/element-id"
 import { COMMAND_ERROR_CODES } from "./errors"
-import { OBJECT_OPERATIONS, operationSchema } from "./operation"
+import {
+  OBJECT_OPERATIONS,
+  operationSchema,
+  updateOperationObjectSchema,
+} from "./operation"
 import { queryFormSchema, readQuerySchema } from "./read"
 import { INTEGER_TEXT } from "./values"
 
@@ -22,8 +26,10 @@ const wireTabularSectionsSchema = z.record(
 )
 
 // Варіанти беруться з логічної схеми, щоб дві форми не розійшлися полями:
-// змінюються лише `object` і ключі ТЧ.
-const [createSchema, updateSchema, markDeletionSchema, deleteSchema] =
+// змінюються лише `object` і ключі ТЧ. `update` — без уточнення й без
+// `deleteIds`: форма передачі шле повні масиви ТЧ (фасад, `fullTabularArrays`),
+// а схему з уточненням Zod 4 розширити не дає.
+const [createSchema, , markDeletionSchema, deleteSchema] =
   operationSchema.options
 
 /** One operation of a command in wire form: object by UUID, physical columns. */
@@ -32,7 +38,7 @@ export const wireOperationSchema = z.discriminatedUnion("action", [
     object: wireObjectSchema,
     tabularSections: wireTabularSectionsSchema.optional(),
   }),
-  updateSchema.extend({
+  updateOperationObjectSchema.omit({ deleteIds: true }).extend({
     object: wireObjectSchema,
     tabularSections: wireTabularSectionsSchema.optional(),
   }),

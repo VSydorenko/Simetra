@@ -58,6 +58,27 @@ const deleteIdsSchema = z.record(
     })
 )
 
+/**
+ * The `update` operation without its cross-field refinement: the wire form
+ * derives its own `update` from it (a schema with refinements cannot be
+ * extended in Zod 4).
+ */
+export const updateOperationObjectSchema = z.strictObject({
+  action: z.literal("update"),
+  object: metadataRefSchema,
+  id: rowIdSchema,
+  expectedVersion: expectedVersionSchema,
+  values: valuesSchema.optional(),
+  tabularSections: tabularSectionsSchema.optional(),
+  /**
+   * Rows of a tabular section the update deletes, by row id. A section
+   * array replaces the section as a whole, so every existing row must be
+   * either in the array or here; the key is a section of `tabularSections`.
+   * At most `TABULAR_LINES_MAX` ids per section.
+   */
+  deleteIds: deleteIdsSchema.optional(),
+})
+
 /** One operation of a command, by logical names. */
 export const operationSchema = z.discriminatedUnion("action", [
   // `id` обов'язковий, крім кореня скоупу: його id генерує T3; а
@@ -71,33 +92,17 @@ export const operationSchema = z.discriminatedUnion("action", [
     tabularSections: tabularSectionsSchema.optional(),
     creatorMember: valuesSchema.optional(),
   }),
-  z
-    .strictObject({
-      action: z.literal("update"),
-      object: metadataRefSchema,
-      id: rowIdSchema,
-      expectedVersion: expectedVersionSchema,
-      values: valuesSchema.optional(),
-      tabularSections: tabularSectionsSchema.optional(),
-      /**
-       * Rows of a tabular section the update deletes, by row id. A section
-       * array replaces the section as a whole, so every existing row must be
-       * either in the array or here; the key is a section of `tabularSections`.
-       * At most `TABULAR_LINES_MAX` ids per section.
-       */
-      deleteIds: deleteIdsSchema.optional(),
-    })
-    .superRefine((op, ctx) => {
-      for (const name of Object.keys(op.deleteIds ?? {})) {
-        if (op.tabularSections?.[name] === undefined) {
-          ctx.addIssue({
-            code: "custom",
-            path: ["deleteIds", name],
-            message: "deleteIds names a section the update does not carry",
-          })
-        }
+  updateOperationObjectSchema.superRefine((op, ctx) => {
+    for (const name of Object.keys(op.deleteIds ?? {})) {
+      if (op.tabularSections?.[name] === undefined) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["deleteIds", name],
+          message: "deleteIds names a section the update does not carry",
+        })
       }
-    }),
+    }
+  }),
   z.strictObject({
     action: z.literal("markDeletion"),
     object: metadataRefSchema,
