@@ -16,6 +16,7 @@ export const COMMAND_ERROR_CODES = [
   "command.model-mismatch",
   "command.read-role-missing",
   "command.unavailable",
+  "command.timeout",
   "command.internal",
 ] as const
 
@@ -38,4 +39,19 @@ export interface CommandError {
   attributes?: string[]
   hashes?: { catalog: string; applied: string | null }
   role?: string
+}
+
+/**
+ * The rejection of `run` and `read`: `message` is the error code, no
+ * `cause` — текст Postgres не має виходити назовні навіть через ланцюжок
+ * причин (Р-A3-8).
+ */
+export class CommandFailure extends Error {
+  readonly error: CommandError
+
+  constructor(error: CommandError) {
+    super(error.code)
+    this.name = "CommandFailure"
+    this.error = error
+  }
 }

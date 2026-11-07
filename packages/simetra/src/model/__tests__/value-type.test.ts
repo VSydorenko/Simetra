@@ -5,8 +5,14 @@ import {
   valueTypeShape,
   refineValueType,
 } from "../schemas/value-type"
-import { attributeSchema, catalogAttributeSchema } from "../schemas/attribute"
+import {
+  attributeSchema,
+  catalogAttributeSchema,
+  registerFieldSchema,
+} from "../schemas/attribute"
 import { constantSchema } from "../schemas/constant"
+import { tabularSectionSchema } from "../schemas/tabular-section"
+import { registerAttributesSchema } from "../schemas/attribute"
 
 const schema = z.object(valueTypeShape).superRefine(refineValueType)
 
@@ -333,6 +339,97 @@ describe("attribute uniqueness", () => {
         uniqueWithin: "owner",
       }).success
     ).toBe(false)
+  })
+})
+
+// Лінивість (Рд25): колонки пари й реквізити ТЧ лінивими не бувають — фасад
+// звіряє пару цілком, а масив ТЧ без лінивого поля стер би його значення.
+describe("attribute load", () => {
+  const pair = {
+    name: "subject",
+    type: "Ref",
+    allowedTypes: [target, { kind: "Catalog", name: "Regions" }],
+  }
+  const issues = (
+    schema: z.ZodType,
+    input: Record<string, unknown>
+  ): { rule?: string; path: PropertyKey[] }[] =>
+    (schema.safeParse(input).error?.issues ?? []).map((i) => ({
+      rule: (i as { params?: { rule?: string } }).params?.rule,
+      path: i.path,
+    }))
+  const rule = "attribute.lazy-not-allowed"
+  // Поле `attributes` регістра — та сама схема, що в обох видах регістрів.
+  const informationRegisterLoadProbe = z.strictObject({
+    attributes: registerAttributesSchema,
+  })
+
+  it.each<[string, z.ZodType, Record<string, unknown>, unknown[]]>([
+    [
+      "a lazy scalar",
+      attributeSchema,
+      { name: "a", type: "Bytes", load: "lazy" },
+      [],
+    ],
+    ["an eager pair", attributeSchema, { ...pair, load: "eager" }, []],
+    [
+      "a lazy single Ref",
+      catalogAttributeSchema,
+      { name: "a", type: "Ref", ref: target, load: "lazy" },
+      [],
+    ],
+    [
+      "a lazy pair",
+      attributeSchema,
+      { ...pair, load: "lazy" },
+      [{ rule, path: ["load"] }],
+    ],
+    [
+      "a lazy pair of a catalog",
+      catalogAttributeSchema,
+      { ...pair, load: "lazy" },
+      [{ rule, path: ["load"] }],
+    ],
+    [
+      "an eager register attribute",
+      informationRegisterLoadProbe,
+      { attributes: [{ name: "a", type: "Integer", load: "eager" }] },
+      [{ rule: "attribute.load-not-allowed", path: ["attributes", 0, "load"] }],
+    ],
+    [
+      "a lazy tabular section attribute",
+      tabularSectionSchema,
+      {
+        name: "lines",
+        attributes: [
+          { name: "qty", type: "Integer" },
+          { name: "scan", type: "Bytes", load: "lazy" },
+        ],
+      },
+      [{ rule, path: ["attributes", 1, "load"] }],
+    ],
+    [
+      "an eager tabular section attribute",
+      tabularSectionSchema,
+      {
+        name: "lines",
+        attributes: [{ name: "scan", type: "Bytes", load: "eager" }],
+      },
+      [],
+    ],
+  ])("%s", (_, schema, input, expected) => {
+    expect(issues(schema, input)).toEqual(expected)
+  })
+
+  it("a register field has no load", () => {
+    const result = registerFieldSchema.safeParse({
+      name: "a",
+      type: "Integer",
+      load: "eager",
+    })
+    expect(result.error?.issues.map((i) => i.code)).toEqual([
+      "unrecognized_keys",
+    ])
   })
 })
 

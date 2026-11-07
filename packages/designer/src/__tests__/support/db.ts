@@ -1,8 +1,12 @@
 import { randomBytes, randomUUID } from "node:crypto"
 import pg from "pg"
-import { RIGHTS_MAINTENANCE_SETTING, type CommandError } from "simetra/model"
+import {
+  CommandFailure,
+  RIGHTS_MAINTENANCE_SETTING,
+  type CommandError,
+} from "simetra/model"
 import type { EngineScope, SchemaEngine } from "simetra/schema"
-import { CommandFailure, type CommandDatabase } from "simetra/server"
+import type { CommandDatabase } from "simetra/server"
 import { createPgDeltaEngine } from "../../schema-engine"
 import {
   GAUGE_WRITER_ID,
@@ -337,6 +341,30 @@ export function recordingDatabase(inner: CommandDatabase): {
           release: (destroy) => client.release(destroy),
         }
       },
+    },
+  }
+}
+
+/**
+ * Порт команд, що кличе `hook` перед кожним оператором клієнта; `index` —
+ * номер оператора на цьому з'єднанні від нуля. Так тест вклинює чужий коміт
+ * рівно між двома операторами однієї транзакції рантайму.
+ */
+export function beforeStatement(
+  inner: CommandDatabase,
+  hook: (index: number, text: string) => Promise<void>
+): CommandDatabase {
+  return {
+    async connect() {
+      const client = await inner.connect()
+      let index = 0
+      return {
+        async query(text, params) {
+          await hook(index++, text)
+          return client.query(text, params)
+        },
+        release: (destroy) => client.release(destroy),
+      }
     },
   }
 }

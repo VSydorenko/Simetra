@@ -4,6 +4,7 @@ import type { CompiledModel } from "simetra/compiler"
 import {
   PLATFORM_LOGIN_ROLES,
   PROVIDER_LOGIN_ROLES,
+  ZERO_UUID,
   type AttributeCase,
 } from "simetra/model"
 import {
@@ -12,7 +13,7 @@ import {
   maintenanceSql,
   startRights,
 } from "../rights/guard-units"
-import { LIVE, ZERO_UUID, liveInputs } from "../rights/functions"
+import { LIVE, liveInputs } from "../rights/functions"
 import { hasEmptySearchPath, routineLanguage } from "../sql/closed-forms"
 import { loadSqlParser } from "../sql/parse"
 import type { SqlUnit } from "../sql/units"

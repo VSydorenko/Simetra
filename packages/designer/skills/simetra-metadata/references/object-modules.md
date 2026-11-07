@@ -40,7 +40,9 @@ export const client = defineObjectModule<Catalogs.Client>({
 - `ctx.additionalProperties` is shared by the hooks of one phase only.
 - `ctx.run(operation)` runs a phase of another object in the same
   transaction, with its own rights check and hooks; `ctx.read(query)` reads in
-  that transaction.
+  that transaction. It takes the query of `data-read` and returns `{ rows }`
+  or `{ count, capped? }`, e.g.
+  `ctx.read({ object, where: { attribute: "code", op: "eq", value }, limit: 1 })`.
 - `ctx.reject(code, path?)` fails the command with `command.rejected`.
 - A `ctx` method works only while its hook runs. Never keep `ctx` for later:
   a late call fails the command (`command.internal`).

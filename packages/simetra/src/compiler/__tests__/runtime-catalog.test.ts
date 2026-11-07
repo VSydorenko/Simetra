@@ -17,6 +17,7 @@ import {
   adminRoles,
   commandCoreLayer,
   compileRights,
+  gaugeLoadLayer,
   gaugeRowRule,
   policyDomain,
   refAttribute,
@@ -162,7 +163,7 @@ describe("buildRuntimeCatalog", () => {
       },
     })
     // «Користувачів» команда не створює й не позначає (спека П4 §6.6).
-    expect(Object.keys(objectOf("Users").operations)).toEqual(["update"])
+    expect(Object.keys(objectOf("Users").operations ?? {})).toEqual(["update"])
   })
 
   it("keeps the key and the version out of attributes, under logical names", () => {
@@ -287,6 +288,7 @@ describe("buildRuntimeCatalog", () => {
         name: fk.name,
         kind: "foreignKey",
         columns: fk.columns,
+        references: fk.references.columns,
       })
     }
     expect(constraints).toHaveLength(
@@ -296,6 +298,126 @@ describe("buildRuntimeCatalog", () => {
         table.checks.length +
         table.foreignKeys.length
     )
+  })
+})
+
+/**
+ * Ціль одноцільового `Ref` і FK власника ТЧ (спека П4-B Рд1, В12): за ними
+ * будівник читання робить `include` і корелює ТЧ з власником. FK скоупленої
+ * таблиці на ціль того самого виду — складений `(скоуп, колонка)`.
+ */
+describe("buildRuntimeCatalog: ref and parentConstraint", () => {
+  const fkOf = (table: string, columns: string[]) => {
+    const found = model.physical.tables
+      .find((t) => t.name === table)!
+      .foreignKeys.find((f) => f.columns.join() === columns.join())
+    expect(found, `${table}(${columns.join()})`).toBeDefined()
+    return found!.name
+  }
+  const idOf = (name: string) => model.objects.find((o) => o.name === name)!.id
+
+  it.each([
+    [
+      "a composite same-scope FK",
+      "Ticket",
+      "region",
+      "Region",
+      ["org_id", "region_id"],
+    ],
+    [
+      "a simple FK to an unscoped target",
+      "OrgMember",
+      "user",
+      "Users",
+      ["user_id"],
+    ],
+    // Ціль поза каталогом (документ) — та сама: `object` — id моделі.
+    [
+      "a target outside the catalog",
+      "TaskComment",
+      "task",
+      "Task",
+      ["org_id", "task_id"],
+    ],
+  ])(
+    "a single-target Ref has its target and FK: %s",
+    (_, object, name, target, columns) => {
+      const table = objectOf(object).table.name
+      expect(attributeOf(object, name).ref).toEqual({
+        object: idOf(target),
+        constraint: fkOf(table, columns),
+      })
+    }
+  )
+
+  it.each([
+    // Колонка скоупу має FK на корінь, але її тип — `UUID`.
+    ["the scope column", "Ticket", "org"],
+    ["a UUID standard attribute with an FK", "Ticket", "createdBy"],
+    ["an enumeration reference", "Bulletin", "status"],
+    ["a reference array", "Ticket", "watchers"],
+    ["a polymorphic pair", "Ticket", "subject"],
+  ])("%s has no ref", (_, object, name) => {
+    expect(attributeOf(object, name)).not.toHaveProperty("ref")
+  })
+
+  it("a standard Ref attribute and a tabular section attribute have a ref", async () => {
+    const { model: roots } = await compileRights(rootCreationDomain())
+    const organization = buildRuntimeCatalog(roots!).objects.find(
+      (o) => o.name === "Organization"
+    )!
+    expect(
+      organization.attributes.find((a) => a.name === "owner")!.ref
+    ).toEqual({
+      object: roots!.objects.find((o) => o.name === "Users")!.id,
+      constraint: "organization_owner_id_fkey",
+    })
+    const related = objectOf("Ticket").tabularSections[0]!.attributes.find(
+      (a) => a.column === "related_id"
+    )
+    expect(related!.ref).toEqual({
+      object: idOf("Ticket"),
+      constraint: fkOf("ticket_checklist", ["org_id", "related_id"]),
+    })
+  })
+
+  it.each([
+    [
+      "a composite scoped parent",
+      "Ticket",
+      "ticket_checklist",
+      ["org_id", "parent_id"],
+    ],
+    ["a simple unscoped parent", "Users", "users_devices", ["parent_id"]],
+  ])(
+    "a tabular section names its owner FK: %s",
+    (_, object, table, columns) => {
+      const [section] = objectOf(object).tabularSections
+      expect(section!.parentConstraint).toBe(fkOf(table, columns))
+      expect(
+        section!.constraints.find((c) => c.name === section!.parentConstraint)
+      ).toMatchObject({
+        kind: "foreignKey",
+        columns,
+        references: [...columns.slice(0, -1), "id"],
+      })
+    }
+  )
+
+  it("the T0 schema rejects a section whose parentConstraint has no references", () => {
+    const broken = {
+      ...catalog,
+      objects: catalog.objects.map((o) => ({
+        ...o,
+        tabularSections: o.tabularSections.map((s) => ({
+          ...s,
+          constraints: s.constraints.map((c) =>
+            c.name === s.parentConstraint ? { ...c, references: undefined } : c
+          ),
+        })),
+      })),
+    }
+    expect(runtimeCatalogSchema.safeParse(broken).success).toBe(false)
   })
 })
 
@@ -371,6 +493,17 @@ describe("buildRuntimeCatalog on runtime values", () => {
     })
   })
 
+  it("a scoped tabular section names its composite owner FK", () => {
+    const [lines] = gauge().tabularSections
+    expect(lines!.parentConstraint).toBe("gauge_lines_org_id_parent_id_fkey")
+    expect(
+      lines!.constraints.find((c) => c.name === lines!.parentConstraint)
+    ).toMatchObject({
+      columns: ["org_id", "parent_id"],
+      references: ["org_id", "id"],
+    })
+  })
+
   it("a custom String attribute has maxLength, also in a tabular section", () => {
     const log = values.objects.find((o) => o.name === "GaugeLog")!
     expect(log.attributes.find((a) => a.name === "note")).toMatchObject({
@@ -419,6 +552,38 @@ describe("buildRuntimeCatalog on runtime values", () => {
     expect(diagnostics.map((d) => d.code)).toEqual([
       "reference.not-referenceable",
     ])
+  })
+})
+
+/**
+ * Лінивий атрибут (Рд25, В3): у каталозі лише ефективно лінивий реквізит
+ * шапки — явний `load: "lazy"` чи `Bytes` без `load`; у ТЧ лінивих немає.
+ */
+describe("buildRuntimeCatalog: lazy attributes", () => {
+  const gaugeOf = async (loads: Record<string, "eager" | "lazy">) => {
+    const { model: m, diagnostics } = await compileRights(
+      policyDomain(gaugeLoadLayer(loads))
+    )
+    expect(diagnostics).toEqual([])
+    return buildRuntimeCatalog(m!).objects.find((o) => o.name === "Gauge")!
+  }
+  const loadOf = (object: RuntimeObject, name: string) =>
+    object.attributes.find((a) => a.name === name)!.load
+
+  it("Bytes of the header defaults to lazy; load overrides it", async () => {
+    const defaults = await gaugeOf({ amount: "lazy" })
+    expect(loadOf(defaults, "blob")).toBe("lazy")
+    expect(loadOf(defaults, "amount")).toBe("lazy")
+    expect(loadOf(defaults, "counter")).toBeUndefined()
+    const eager = await gaugeOf({ blob: "eager" })
+    expect(eager.attributes.find((a) => a.name === "blob")).not.toHaveProperty(
+      "load"
+    )
+    const scan = defaults.tabularSections[0]!.attributes.find(
+      (a) => a.name === "scan"
+    )
+    expect(scan).toMatchObject({ type: "Bytes" })
+    expect(scan).not.toHaveProperty("load")
   })
 })
 
@@ -514,18 +679,18 @@ describe("buildRuntimeCatalog: scope root creation", () => {
   const object = (name: string) => roots.objects.find((o) => o.name === name)!
 
   it("a root with a creator names its membership catalog; a root without one has none", () => {
-    expect(object("Organization").operations.create).toEqual({
+    expect(object("Organization").operations?.create).toEqual({
       function: { schema: "public", name: "organization_create_root" },
       context: "create",
       root: { membership: object("OrgMember").id },
     })
-    expect(object("Branch").operations.create).toEqual({
+    expect(object("Branch").operations?.create).toEqual({
       function: { schema: "public", name: "branch_create_root" },
       context: "create",
       root: {},
     })
-    expect(object("OrgMember").operations.create).not.toHaveProperty("root")
-    expect(object("OrgRoleAssignments").operations.create).not.toHaveProperty(
+    expect(object("OrgMember").operations?.create).not.toHaveProperty("root")
+    expect(object("OrgRoleAssignments").operations?.create).not.toHaveProperty(
       "root"
     )
   })

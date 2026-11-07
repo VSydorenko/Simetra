@@ -9,13 +9,9 @@ import {
   type ObjectModule,
   type RuntimeCatalog,
   type SessionClaims,
-} from "simetra/model"
-import {
   CommandFailure,
-  logsDatabaseError,
-  mapDatabaseError,
-  type ErrorPhase,
-} from "./errors"
+} from "simetra/model"
+import { logsDatabaseError, mapDatabaseError, type ErrorPhase } from "./errors"
 import { inCommand, outsideCommand, rejectNested } from "./hook-context"
 import { prepareInput, runPhase, type PreparedOperation } from "./phase"
 import {
@@ -46,6 +42,8 @@ export interface RuntimeState {
   log: (entry: LogEntry) => void
   maxAttempts: number
   maxDepth: number
+  /** `statement_timeout` of a server read, ms; `ctx.read` sets none (B1b budget). */
+  readTimeout: number
   /** The request role of reads; `undefined` — the fallback path (§6.11). */
   readRole: string | undefined
 }

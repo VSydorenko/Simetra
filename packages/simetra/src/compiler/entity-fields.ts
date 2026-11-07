@@ -37,6 +37,8 @@ export interface ValueSource {
 export interface ElementSource extends ValueSource {
   id?: string
   name: string
+  /** `load` реквізиту з метаданих (Рд25); у колонки `CustomTable` немає. */
+  load?: "eager" | "lazy"
 }
 
 /** Стандартні колонки (за логічним ім'ям у стилі проєкту) й елементи таблиці. */

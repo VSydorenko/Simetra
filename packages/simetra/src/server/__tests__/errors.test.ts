@@ -4,6 +4,7 @@ import {
   type CommandError,
   type RuntimeCatalog,
   type RuntimeObject,
+  CommandFailure,
 } from "simetra/model"
 import { beforeAll, describe, expect, it } from "vitest"
 import { buildRuntimeCatalog } from "simetra/compiler"
@@ -15,7 +16,7 @@ import {
   runtimeValuesLayer,
   withSql,
 } from "../../compiler/__tests__/fixtures/rights"
-import { CommandFailure, mapDatabaseError } from "../errors"
+import { mapDatabaseError } from "../errors"
 import type { DatabaseError } from "../port"
 import { orgMember, organization, rootCatalog, sample } from "./fixtures"
 
@@ -37,6 +38,7 @@ const object: RuntimeObject = runtimeObjectSchema.parse({
   tabularSections: sample.tabularSections.map((s) => ({
     ...s,
     constraints: [
+      ...s.constraints,
       { name: "sample_lines_qty_key", kind: "unique", columns: ["qty_col"] },
       {
         name: "sample_lines_qty_fkey",
@@ -364,6 +366,22 @@ describe("mapDatabaseError", () => {
     ["no code", {}],
   ])("%s is command.internal", (_, fields) => {
     expect(map(fields)).toEqual(internal)
+  })
+
+  // Межа часу читання — відповідь, а не збій (В7); у записі — B1b.
+  it("57014 in a read is command.timeout", () => {
+    expect(
+      mapDatabaseError(db({ code: "57014" }), catalog, { kind: "read", object })
+    ).toEqual({ code: "command.timeout" })
+  })
+
+  it.each([
+    ["in a write", phase],
+    ["outside a phase", undefined],
+  ])("57014 %s is command.internal", (_, at) => {
+    expect(mapDatabaseError(db({ code: "57014" }), catalog, at)).toEqual(
+      internal
+    )
   })
 
   it("22P02 in a read is command.invalid", () => {

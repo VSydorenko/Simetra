@@ -8,6 +8,7 @@ import {
   physicalNameSchema,
 } from "./identity"
 import { standardAttributeOverridesSchema } from "./object-header"
+import type { SchemaRule } from "./rules"
 
 /** Таблична частина об'єкта. */
 export const tabularSectionSchema = z
@@ -26,6 +27,19 @@ export const tabularSectionSchema = z
     indexes: compositeIndexesSchema.meta({
       description: "Composite indexes over the section rows.",
     }),
+  })
+  .superRefine((section, ctx) => {
+    // Реквізит ТЧ лінивим не буває (Рд25): масив ТЧ — повна заміна, і рядок
+    // без лінивого поля стер би його значення.
+    section.attributes.forEach((attribute, index) => {
+      if (attribute.load !== "lazy") return
+      ctx.addIssue({
+        code: "custom",
+        message: "A tabular section attribute cannot be lazy",
+        path: ["attributes", index, "load"],
+        params: { rule: "attribute.lazy-not-allowed" satisfies SchemaRule },
+      })
+    })
   })
   .meta({ description: "Tabular section: a list of rows owned by an object." })
 

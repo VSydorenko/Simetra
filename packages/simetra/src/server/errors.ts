@@ -9,21 +9,6 @@ import {
 } from "simetra/model"
 import type { DatabaseError } from "./port"
 
-/**
- * The rejection of `run` and `read`: `message` is the error code, no
- * `cause` — текст Postgres не має виходити назовні навіть через ланцюжок
- * причин (Р-A3-8).
- */
-export class CommandFailure extends Error {
-  readonly error: CommandError
-
-  constructor(error: CommandError) {
-    super(error.code)
-    this.name = "CommandFailure"
-    this.error = error
-  }
-}
-
 /** The phase a database error came from; `undefined` — `COMMIT`. */
 export type ErrorPhase =
   | {
@@ -228,6 +213,10 @@ export function mapDatabaseError(
       // Читання передає значення `where` зв'язаними параметрами з приведенням:
       // невірний текст типу — вхід клієнта. У записі значення вже перевірене.
       return phase?.kind === "read" ? { code: "command.invalid" } : INTERNAL
+    case "57014":
+      // `statement_timeout` читання — межа запиту клієнта, а не вада: клієнт
+      // звужує запит (В7). Мапінг фаз запису — разом із бюджетом часу команди.
+      return phase?.kind === "read" ? { code: "command.timeout" } : INTERNAL
     case "23503": {
       // Postgres не заповнює `column` для FK — реквізит за ім'ям обмеження (Р-A3-13).
       const table = tableOf(catalog, phase, error.table)

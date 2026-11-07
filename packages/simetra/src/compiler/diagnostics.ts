@@ -124,6 +124,7 @@ export const COMPILER_RULES = [
   "rights.carrier-cross-tenant",
   "rights.carrier-column-taken",
   "rights.carrier-path-adopted",
+  "rights.carrier-lazy",
   "rights.register-access-dimension",
   "rights.dimension-name-reserved",
   "rights.ownership-target",

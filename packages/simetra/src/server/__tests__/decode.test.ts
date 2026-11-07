@@ -1,6 +1,6 @@
+import { CommandFailure } from "simetra/model"
 import { describe, expect, it } from "vitest"
-import { decodeRow } from "../decode"
-import { CommandFailure } from "../errors"
+import { decodeCardRow, decodeLine, decodeRow } from "../decode"
 import { ID, OTHER, sample } from "./fixtures"
 
 describe("decodeRow", () => {
@@ -57,5 +57,30 @@ describe("decodeRow", () => {
     expect((thrown as CommandFailure).error).toEqual({
       code: "command.internal",
     })
+  })
+})
+
+describe("decodeLine", () => {
+  it("decodes a line with its owner and line number", () => {
+    expect(
+      decodeLine(sample.tabularSections[0]!, {
+        id: OTHER,
+        parent_id: ID,
+        line_number: "2",
+        qty_col: 3,
+      })
+    ).toEqual({ ref: OTHER, parent: ID, lineNumber: 2, qty: 3 })
+  })
+})
+
+describe("decodeCardRow", () => {
+  it("does not take a tabular key of the row for sections", () => {
+    // Секції картки приходять окремою колонкою, а не ключем рядка.
+    expect(
+      decodeCardRow(
+        sample,
+        JSON.stringify({ id: ID, version: 1, tabular: { sample_lines: [] } })
+      )
+    ).toEqual({ ref: ID, version: 1 })
   })
 })

@@ -3,8 +3,9 @@ import {
   isPlainObject,
   type RuntimeAttribute,
   type RuntimeObject,
+  type RuntimeSection,
+  CommandFailure,
 } from "simetra/model"
-import { CommandFailure } from "./errors"
 
 const internal = () => new CommandFailure({ code: "command.internal" })
 
@@ -18,13 +19,27 @@ export function decodeRow(
   object: RuntimeObject,
   json: string
 ): Record<string, unknown> {
-  let row: unknown
+  return decodeRecord(object, parse(json))
+}
+
+/** Parses the JSON text of a result column; broken text is `command.internal`. */
+export function parse(json: string): unknown {
   try {
-    row = JSON.parse(json)
+    return JSON.parse(json) as unknown
   } catch {
     throw internal()
   }
-  return decodeRecord(object, row)
+}
+
+/**
+ * Decodes a read row of the head (card or page). ТЧ читання приходять
+ * окремою колонкою, тож ключ `tabular` рядка тут — не ТЧ (спека П4-B §4.2).
+ */
+export function decodeCardRow(
+  object: RuntimeObject,
+  json: string
+): Record<string, unknown> {
+  return decodeHead(object, parse(json))
 }
 
 /**
@@ -32,6 +47,23 @@ export function decodeRow(
  * (spec P4 §6.13).
  */
 export function decodeRecord(
+  object: RuntimeObject,
+  row: unknown
+): Record<string, unknown> {
+  const out = decodeHead(object, row)
+  const tabular = (row as Record<string, unknown>).tabular
+  if (isPlainObject(tabular)) {
+    for (const section of object.tabularSections) {
+      const rows = tabular[section.table.name]
+      if (rows === undefined) continue
+      if (!Array.isArray(rows)) throw internal()
+      out[section.name] = rows.map((r: unknown) => decodeLine(section, r))
+    }
+  }
+  return out
+}
+
+function decodeHead(
   object: RuntimeObject,
   row: unknown
 ): Record<string, unknown> {
@@ -45,35 +77,30 @@ export function decodeRecord(
   if (Object.hasOwn(row, object.versionColumn)) {
     out[object.versionName] = decodeSafeInteger(row[object.versionColumn])
   }
-  const tabular = row.tabular
-  if (isPlainObject(tabular)) {
-    for (const section of object.tabularSections) {
-      const rows = tabular[section.table.name]
-      if (rows === undefined) continue
-      if (!Array.isArray(rows)) throw internal()
-      out[section.name] = rows.map((r: unknown) => {
-        if (!isPlainObject(r)) throw internal()
-        const line = decodeAttributes(
-          section.attributes,
-          section.key,
-          section.keyName,
-          r
-        )
-        // Власник і номер рядка — поля типу рядка ТЧ кодогену (Р-A3-7), хоч
-        // реквізитами входу вони не є.
-        if (Object.hasOwn(r, section.parent)) {
-          line[section.parentName] = r[section.parent]
-        }
-        if (Object.hasOwn(r, section.lineNumber)) {
-          line[section.lineNumberName] = decodeSafeInteger(
-            r[section.lineNumber]
-          )
-        }
-        return line
-      })
-    }
-  }
   return out
+}
+
+/** Decodes a parsed line of a tabular section into logical names. */
+export function decodeLine(
+  section: RuntimeSection,
+  record: unknown
+): Record<string, unknown> {
+  if (!isPlainObject(record)) throw internal()
+  const line = decodeAttributes(
+    section.attributes,
+    section.key,
+    section.keyName,
+    record
+  )
+  // Власник і номер рядка — поля типу рядка ТЧ кодогену (Р-A3-7), хоч
+  // реквізитами входу вони не є.
+  if (Object.hasOwn(record, section.parent)) {
+    line[section.parentName] = record[section.parent]
+  }
+  if (Object.hasOwn(record, section.lineNumber)) {
+    line[section.lineNumberName] = decodeSafeInteger(record[section.lineNumber])
+  }
+  return line
 }
 
 function decodeAttributes(
@@ -133,7 +160,7 @@ function decodeScalar(attribute: RuntimeAttribute, value: unknown): unknown {
  * Версія й номер рядка — `number` типу сутності; поза безпечним цілим клієнт
  * їх спотворив би.
  */
-function decodeSafeInteger(value: unknown): number {
+export function decodeSafeInteger(value: unknown): number {
   const version =
     typeof value === "string" && INTEGER_TEXT.test(value)
       ? Number(value)

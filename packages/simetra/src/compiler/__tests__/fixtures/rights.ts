@@ -1574,6 +1574,59 @@ export function runtimeValuesLayer(): Layer {
 }
 
 /**
+ * `runtimeValuesLayer()` з `load` реквізитів шапки `Gauge` за іменем і
+ * реквізитом `Bytes` у ТЧ `lines` (Рд25): типова лінивість `Bytes` діє лише в
+ * шапці.
+ */
+export function gaugeLoadLayer(loads: Record<string, "eager" | "lazy">): Layer {
+  const layer = runtimeValuesLayer()
+  const gauge = layer[GAUGE_FILE] as {
+    attributes: { name: string }[]
+    tabularSections: { attributes: unknown[] }[]
+  }
+  return {
+    ...layer,
+    [GAUGE_FILE]: {
+      ...gauge,
+      attributes: gauge.attributes.map((a) =>
+        a.name in loads ? { ...a, load: loads[a.name] } : a
+      ),
+      tabularSections: gauge.tabularSections.map((section) => ({
+        ...section,
+        attributes: [
+          ...section.attributes,
+          { id: uuid(7560), name: "scan", physicalName: "scan", type: "Bytes" },
+        ],
+      })),
+    },
+  }
+}
+
+/**
+ * `runtimeValuesLayer()` з одноцільовим `Ref` `site` у `Gauge` на довідник
+ * `Region` з `crossScope: true` — ціль `include` серверного читання. Простий
+ * FK дає засіяти посилання на `Region` чужого скоупу: складений FK того
+ * самого виду це заборонив би.
+ */
+export function readQueryLayer(): Layer {
+  const layer = runtimeValuesLayer()
+  const gauge = layer[GAUGE_FILE] as { attributes: unknown[] }
+  return {
+    ...layer,
+    [GAUGE_FILE]: {
+      ...gauge,
+      attributes: [
+        ...gauge.attributes,
+        {
+          ...refAttribute(7517, "site", "site_id", ref("Catalog", "Region")),
+          crossScope: true,
+        },
+      ],
+    },
+  }
+}
+
+/**
  * Правило рядка `Gauge` (до `withSql` поверх `runtimeValuesLayer()`): CHECK
  * над двома колонками, тобто без колонки реквізиту. Явне `name` резервується
  * до похідних імен, тож ім'я похідного CHECK може його обійти.

@@ -11,15 +11,17 @@ import {
   SESSION_CLAIMS_SETTING,
   defineObjectModule,
   type CommandError,
+  type Filter,
   type MetadataRef,
   type ObjectModule,
   type Operation,
+  type OrderBy,
   type RuntimeCatalog,
   type SessionClaims,
+  CommandFailure,
 } from "simetra/model"
 import { desiredForApply } from "simetra/schema"
 import {
-  CommandFailure,
   createCommandRuntime,
   fromPgPool,
   readRoleOf,
@@ -268,7 +270,7 @@ describe("command runtime over the engine target", () => {
       },
     ])
     const read = async () => rt.read(env.me.session, { object: GAUGE, id })
-    expect(await read()).toEqual([header(row!)])
+    expect(await read()).toEqual({ rows: [header(row!)] })
     // Серверне читання повертає лише шапку (§6.11: `to_jsonb` рядка таблиці
     // об'єкта), тож ТЧ у базі звіряє незалежний `SELECT` власника.
     expect(await linesOf(id)).toEqual([
@@ -329,7 +331,7 @@ describe("command runtime over the engine target", () => {
       marks: [],
     })
     expect(next!.version).toBeGreaterThan(row!.version as number)
-    expect(await read()).toEqual([header(next!)])
+    expect(await read()).toEqual({ rows: [header(next!)] })
 
     const marked = await rt.run(env.me.session, {
       action: "markDeletion",
@@ -340,7 +342,7 @@ describe("command runtime over the engine target", () => {
     })
     const [last] = marked.rows
     expect(last).toMatchObject({ deletionMark: true })
-    expect(await read()).toEqual([header(last!)])
+    expect(await read()).toEqual({ rows: [header(last!)] })
   })
 
   // Чужий рядок RLS ховає так само, як відсутній: відмова не має розкрити,
@@ -512,9 +514,20 @@ describe("command runtime over the engine target", () => {
   it("runtime.read sees what a SELECT under the request role sees, the fallback too", async () => {
     const rt = await runtime(fromPgPool(env.direct))
     await rt.run(env.me.session, createGauge(randomUUID()))
+    await rt.run(env.me.session, createGauge(randomUUID(), { reading: 5 }))
+    await rt.run(env.me.session, createGauge(randomUUID(), { reading: 1 }))
+    // Друга форма: дерево з `or`/`not`, сортування й лічильник — та сама
+    // множина, що `WHERE` того самого змісту під роллю запиту.
+    const where: Filter = {
+      or: [
+        { attribute: "reading", op: "isNull" },
+        { not: { attribute: "reading", op: "gte", value: 3 } },
+      ],
+    }
     const client = new pg.Client({ connectionString: env.login })
     await client.connect()
     let visible: string[]
+    let filtered: string[]
     try {
       await client.query("BEGIN")
       await client.query("SELECT set_config($1, $2, true)", [
@@ -522,27 +535,50 @@ describe("command runtime over the engine target", () => {
         JSON.stringify(env.me.session),
       ])
       await client.query(`SET LOCAL ROLE ${REQUEST_ROLE}`)
-      visible = (
-        await client.query<{ id: string }>(
-          `SELECT id FROM public.${GAUGE_TABLE} ORDER BY id`
-        )
-      ).rows.map((r) => r.id)
+      const ids = async (condition: string) =>
+        (
+          await client.query<{ id: string }>(
+            `SELECT id FROM public.${GAUGE_TABLE}${condition} ORDER BY id`
+          )
+        ).rows.map((r) => r.id)
+      visible = await ids("")
+      filtered = await ids(" WHERE reading IS NULL OR NOT (reading >= 3)")
       await client.query("COMMIT")
     } finally {
       await client.end()
     }
     expect(visible.length).toBeGreaterThan(0)
     expect(visible).not.toContain(env.foreign)
-    const page = { object: GAUGE, where: {}, limit: 200 }
-    const read = await rt.read(env.me.session, page)
-    expect(read.map((r) => r.ref)).toEqual(visible)
+    expect(filtered.length).toBeGreaterThan(0)
+    expect(filtered.length).toBeLessThan(visible.length)
+    const page = { object: GAUGE, limit: 200 }
+    const sortedPage = {
+      object: GAUGE,
+      where,
+      orderBy: [
+        { attribute: "reading", direction: "desc", nulls: "last" },
+      ] satisfies OrderBy,
+      limit: 200,
+    }
+    const counted = { object: GAUGE, where, count: true } as const
+    const reads = async (rt: CommandRuntime) => ({
+      page: await rt.read(env.me.session, page),
+      sorted: await rt.read(env.me.session, sortedPage),
+      count: await rt.read(env.me.session, counted),
+    })
+    const read = await reads(rt)
+    expect(read.page.rows.map((r) => r.ref)).toEqual(visible)
+    expect(read.sorted.rows.map((r) => r.ref as string).sort()).toEqual(
+      filtered
+    )
+    expect(read.count).toEqual({ count: filtered.length })
 
     const fallbackPool = new pg.Pool({ connectionString: env.commandOnly })
     try {
       const fallback = await runtime(fromPgPool(fallbackPool), {
         readFallback: true,
       })
-      expect(await fallback.read(env.me.session, page)).toEqual(read)
+      expect(await reads(fallback)).toEqual(read)
     } finally {
       await fallbackPool.end()
     }
@@ -594,9 +630,9 @@ describe("command runtime over the engine target", () => {
     await direct.run(env.me.session, createGauge(randomUUID()))
     const created = await pooled.run(env.me.session, createGauge(id))
     expect(users).toEqual([env.me.user, env.me.user])
-    expect(await pooled.read(env.me.session, { object: GAUGE, id })).toEqual([
-      header(created.rows[0]!),
-    ])
+    expect(await pooled.read(env.me.session, { object: GAUGE, id })).toEqual({
+      rows: [header(created.rows[0]!)],
+    })
     const update: Operation = {
       action: "update",
       object: GAUGE,

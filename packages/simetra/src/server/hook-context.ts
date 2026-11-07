@@ -1,9 +1,14 @@
 import { AsyncLocalStorage } from "node:async_hooks"
-import type { CommandError, HookContext, RuntimeObject } from "simetra/model"
-import { decodeRow } from "./decode"
-import { CommandFailure } from "./errors"
+import { CommandFailure } from "simetra/model"
+import type {
+  CommandError,
+  HookContext,
+  ReadQuery,
+  ReadResultOf,
+  RuntimeObject,
+} from "simetra/model"
 import type { PreparedOperation } from "./phase"
-import { prepareRead } from "./read"
+import { executeRead, prepareRead } from "./read"
 import type { Transaction } from "./transaction"
 
 /** The async context of a running command: its attempt and phase depth. */
@@ -163,23 +168,25 @@ function contextOf(tx: Transaction, phase: HookPhase, scope: Scope) {
         if (depth > tx.state.maxDepth) tx.abort({ code: "command.depth" })
         return frames.run({ ...frame, depth }, () => phase.runNested(operation))
       }),
-    read: (query) =>
+    // Форму результату задає форма запиту; `executeRead` будує її з плану.
+    read: <Q extends ReadQuery>(query: Q) =>
       track(async () => {
         const prepared = prepareRead(tx.state.catalog, query)
         if ("error" in prepared) tx.abort(prepared.error)
-        const { object: target, statement } = prepared
-        // Та сама транзакція й роль команд: хук читає те, що бачить ядро.
-        const { rows } = await tx.enqueue([statement], {
-          kind: "read",
-          object: target,
-        })
+        const { object: target, plan } = prepared
         try {
-          return rows.map((r) => {
-            if (typeof r.row !== "string")
-              throw new Error("read row is not text")
-            return decodeRow(target, r.row)
-          })
+          // Та сама транзакція й роль команд: хук читає те, що бачить ядро.
+          const result = await executeRead(
+            target,
+            plan,
+            async (statement, object) =>
+              (await tx.enqueue([statement], { kind: "read", object })).rows
+          )
+          if ("error" in result) tx.abort(result.error)
+          return result as ReadResultOf<Q>
         } catch (error) {
+          // Відмова черги вже закрила спробу; інакше — відповідь не тієї форми.
+          if (tx.terminal !== undefined) throw error
           tx.anomaly(error)
         }
       }),

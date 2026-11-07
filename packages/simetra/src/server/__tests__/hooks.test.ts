@@ -1,16 +1,19 @@
+import { CommandFailure } from "simetra/model"
 import type { HookContext, ObjectModule, Operation } from "simetra/model"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { CommandFailure } from "../errors"
 import { prepareRead } from "../read"
 import { createCommandRuntime, type CommandRuntime } from "../runtime"
 import { fakeDatabase, failureOf } from "./fake-database"
 import {
   COMPANY,
   ID,
+  LINK,
   OTHER,
   TASK,
   catalog,
   commandObject,
+  linkCatalog,
+  rootCatalog,
   sample,
   taskCatalog,
 } from "./fixtures"
@@ -66,8 +69,8 @@ const rightsRolePhase = (id = OTHER, code = "R") => [
 const readOf = (table: string, id: string) => ({
   text:
     `SELECT to_jsonb(t)::text AS row FROM "public"."${table}" t` +
-    ' WHERE "id" = $1::uuid ORDER BY "id" LIMIT $2',
-  params: [id, "1"],
+    ' WHERE "id" = $1::uuid LIMIT 1',
+  params: [id],
 })
 const readRights = (id: string) => readOf("rights_role", id)
 const clientPhaseOf = (id: string) => [
@@ -921,7 +924,7 @@ describe("depth and queue", () => {
       {
         "Catalog.Client": {
           async beforeWrite({ ctx, draft }) {
-            rows.push(...(await ctx.read({ object: RIGHTS, id: OTHER })))
+            rows.push(...(await ctx.read({ object: RIGHTS, id: OTHER })).rows)
             return draft
           },
         },
@@ -946,7 +949,143 @@ describe("depth and queue", () => {
     expect(rows).toEqual([{ ref: OTHER, version: 2, code: "R" }])
   })
 
-  it("maps 22P02 of ctx.read to command.invalid", async () => {
+  it("runs ctx.read with include as two statements of the command transaction", async () => {
+    const results: unknown[] = []
+    const { db, runtime } = await setup(
+      (text) =>
+        text.includes('"public"."link"')
+          ? {
+              rows: [
+                {
+                  row: JSON.stringify({
+                    id: OTHER,
+                    version: 1,
+                    region_id: THIRD,
+                  }),
+                },
+              ],
+            }
+          : text.includes('"public"."region"')
+            ? {
+                rows: [
+                  { row: JSON.stringify({ id: THIRD, version: 2, code: "N" }) },
+                ],
+              }
+            : undefined,
+      {
+        catalog: linkCatalog,
+        objectModules: {
+          "Catalog.Client": {
+            async beforeWrite({ ctx, draft }) {
+              results.push(
+                await ctx.read({ object: LINK, id: OTHER, include: ["region"] })
+              )
+              return draft
+            },
+          },
+        },
+      }
+    )
+    await runtime.run(session, create)
+    expect(db.calls).toEqual([
+      ...OPEN,
+      readOf("link", OTHER),
+      {
+        text:
+          `SELECT jsonb_build_object('id', t."id", 'version', t."version", 'code', t."code")::text` +
+          ` AS row FROM "public"."region" t WHERE "id" = ANY(ARRAY[$1::uuid])`,
+        params: [THIRD],
+      },
+      ...clientPhase,
+      COMMIT,
+      { release: false },
+    ])
+    expect(results).toEqual([
+      {
+        rows: [{ ref: OTHER, version: 1, region: THIRD }],
+        included: { "Catalog.Region": [{ ref: THIRD, version: 2, code: "N" }] },
+      },
+    ])
+  })
+
+  it("runs ctx.read of the lines of an owner in the command transaction", async () => {
+    const results: unknown[] = []
+    const { runtime } = await setup(
+      (text) =>
+        text.includes("AS owner_version")
+          ? {
+              rows: [
+                {
+                  owner_version: "5",
+                  tabular: JSON.stringify({
+                    sample_lines: [
+                      { id: THIRD, parent_id: OTHER, line_number: 1 },
+                    ],
+                  }),
+                },
+              ],
+            }
+          : undefined,
+      {
+        catalog: rootCatalog,
+        objectModules: {
+          "Catalog.Client": {
+            async beforeWrite({ ctx, draft }) {
+              results.push(
+                await ctx.read({
+                  object: ORGANIZATION,
+                  tabularSection: "lines",
+                  owner: OTHER,
+                })
+              )
+              return draft
+            },
+          },
+        },
+      }
+    )
+    await runtime.run(session, create)
+    expect(results).toEqual([
+      {
+        rows: [{ ref: THIRD, parent: OTHER, lineNumber: 1 }],
+        ownerVersion: 5,
+      },
+    ])
+  })
+
+  it("runs a ctx.read count in the command transaction", async () => {
+    const counts: unknown[] = []
+    const { db, runtime } = await withModules(
+      {
+        "Catalog.Client": {
+          async beforeWrite({ ctx, draft }) {
+            counts.push(await ctx.read({ object: RIGHTS, count: true }))
+            return draft
+          },
+        },
+      },
+      (text) => (text.includes(" AS n ") ? { rows: [{ n: "4" }] } : undefined)
+    )
+    await runtime.run(session, create)
+    expect(db.calls).toEqual([
+      ...OPEN,
+      {
+        text: 'SELECT count(*) AS n FROM (SELECT 1 FROM "public"."rights_role" t LIMIT $1) c',
+        params: ["10001"],
+      },
+      ...clientPhase,
+      COMMIT,
+      { release: false },
+    ])
+    expect(counts).toEqual([{ count: 4 }])
+  })
+
+  // `57014` — межа часу читання й у транзакції команди (В7); сам `ctx.read`
+  // `statement_timeout` не ставить — оператори нижче це фіксують.
+  it.each([
+    ["22P02", "command.invalid"],
+    ["57014", "command.timeout"],
+  ])("maps %s of ctx.read to %s", async (code, mapped) => {
     const { db, runtime, log } = await withModules(
       {
         "Catalog.Client": {
@@ -958,11 +1097,11 @@ describe("depth and queue", () => {
       },
       (text) =>
         text.includes(" AS row ")
-          ? { error: { code: "22P02", message: "bad input" } }
+          ? { error: { code, message: "bad input" } }
           : undefined
     )
     expect(await failureOf(runtime.run(session, create))).toEqual({
-      code: "command.invalid",
+      code: mapped,
     })
     expect(db.calls).toEqual([
       ...OPEN,
@@ -983,7 +1122,11 @@ describe("a ctx call rejected without a failure", () => {
       objectModules: {
         "Catalog.Client": {
           beforeWrite({ ctx, draft }) {
-            void ctx.read({ object: TASK, where: { subject }, limit: 1 })
+            void ctx.read({
+              object: TASK,
+              where: { attribute: "subject", op: "eq", value: subject },
+              limit: 1,
+            })
             return draft
           },
         },
@@ -1014,7 +1157,7 @@ describe("a ctx call rejected without a failure", () => {
     const { db, runtime, log } = await readsSubject(subject)
     expect(await failureOf(runtime.run(session, create))).toEqual({
       code: "command.invalid",
-      path: "subject",
+      path: "where.value",
     })
     expect(db.calls).toEqual(CLOSED)
     expect(db.calls).not.toContainEqual(COMMIT)

@@ -9,9 +9,20 @@ import {
   metaFiles,
   organization,
   project,
+  diagnosticBrief,
   scopedProject,
   uuid,
 } from "./helpers"
+import {
+  COMMENT_FILE,
+  PROJECT_FILE,
+  TASK_FILE,
+  compileRights,
+  gaugeLoadLayer,
+  policyDomain,
+  regionDimension,
+  rightsFiles,
+} from "./fixtures/rights"
 
 async function compileWith(entries: Record<string, unknown>) {
   const result = await compile(
@@ -1625,5 +1636,138 @@ describe("stage 3: composite indexes", () => {
         keys: [{ column: "predefined_name" }],
       })
     )
+  })
+})
+
+/**
+ * Лінивість (Рд25) — подання: вона не змінює ні фізичного знімка, ні SQL ядра
+ * команд, а носій прав лінивим не буває — клієнтський обчислювач прав читає
+ * його зі списочного рядка.
+ */
+describe("attribute load", () => {
+  const compiledGauge = async (loads: Record<string, "eager" | "lazy">) => {
+    const { model, diagnostics } = await compileRights(
+      policyDomain(gaugeLoadLayer(loads))
+    )
+    expect(diagnostics).toEqual([])
+    return model!
+  }
+
+  it("a load change keeps the physical snapshot and the core SQL", async () => {
+    const before = await compiledGauge({})
+    const after = await compiledGauge({ amount: "lazy", blob: "eager" })
+    expect(after.physical).toEqual(before.physical)
+    const core = (m: typeof before) =>
+      m.sqlUnits.filter((u) => u.generator === "catalogCommand")
+    expect(core(before).length).toBeGreaterThan(0)
+    expect(core(after)).toEqual(core(before))
+  })
+
+  const lazy = (name: string) => ({ name, load: "lazy" })
+  const lazyTask = (...names: string[]) =>
+    ["assignee", "project", "region"].map((name, index) => ({
+      id: uuid(6011 + index),
+      name,
+      physicalName: `${name}_id`,
+      type: "Ref",
+      ref: {
+        kind: "Catalog",
+        name: { assignee: "OrgMember", project: "Project", region: "Region" }[
+          name
+        ]!,
+      },
+      ...(names.includes(name) ? lazy(name) : {}),
+    }))
+
+  it.each<
+    [
+      string,
+      Record<string, Record<string, unknown>>,
+      string,
+      string,
+      { attribute: string; field: string },
+    ]
+  >([
+    [
+      "an owner",
+      {
+        [TASK_FILE]: {
+          ownership: ["assignee"],
+          attributes: lazyTask("assignee"),
+        },
+      },
+      TASK_FILE,
+      "/attributes/0/load",
+      { attribute: "assignee", field: "ownership" },
+    ],
+    [
+      "a container binding",
+      {
+        [TASK_FILE]: {
+          containerBinding: "project",
+          attributes: lazyTask("project"),
+        },
+      },
+      TASK_FILE,
+      "/attributes/1/load",
+      { attribute: "project", field: "containerBinding" },
+    ],
+    [
+      "an access mapping",
+      {
+        [PROJECT_FILE]: { accessDimensions: [regionDimension()] },
+        [TASK_FILE]: {
+          access: [{ attribute: "region", dimension: "region" }],
+          attributes: lazyTask("region"),
+        },
+      },
+      TASK_FILE,
+      "/attributes/2/load",
+      { attribute: "region", field: "access" },
+    ],
+    [
+      "the head of a carrier path",
+      {
+        [COMMENT_FILE]: {
+          ownership: [["task", "assignee"]],
+          attributes: [
+            {
+              id: uuid(6051),
+              name: "task",
+              physicalName: "task_id",
+              type: "Ref",
+              ref: { kind: "Document", name: "Task" },
+              load: "lazy",
+            },
+          ],
+        },
+      },
+      COMMENT_FILE,
+      "/attributes/0/load",
+      { attribute: "task", field: "ownership" },
+    ],
+  ])(
+    "a lazy rights carrier is an error: %s",
+    async (_, overrides, file, pointer, params) => {
+      const { diagnostics } = await compileRights(rightsFiles(overrides))
+      expect(diagnosticBrief(diagnostics, ["rights.carrier-lazy"])).toEqual([
+        { code: "rights.carrier-lazy", file, params },
+      ])
+      expect(
+        diagnostics.find((d) => d.code === "rights.carrier-lazy")!.pointer
+      ).toBe(pointer)
+    }
+  )
+
+  it("a lazy attribute that carries no rights compiles", async () => {
+    const { diagnostics } = await compileRights(
+      rightsFiles({
+        [TASK_FILE]: {
+          ownership: ["assignee"],
+          attributes: lazyTask("region"),
+        },
+      })
+    )
+    expect(diagnostics.filter((d) => d.severity === "error")).toEqual([])
   })
 })

@@ -13,25 +13,22 @@ import {
   type Operation,
   type ProviderApiRoles,
   type ReadQuery,
+  type ReadResult,
+  type ReadResultOf,
   type RequestRolePurpose,
   type RuntimeCatalog,
   type SessionClaims,
+  CommandFailure,
 } from "simetra/model"
 import { z } from "zod"
-import { decodeRow } from "./decode"
-import {
-  CommandFailure,
-  logsDatabaseError,
-  mapDatabaseError,
-  type ErrorPhase,
-} from "./errors"
+import { logsDatabaseError, mapDatabaseError, type ErrorPhase } from "./errors"
 import { rejectNested } from "./hook-context"
 import {
   normalizeError,
   type CommandDatabase,
   type DatabaseClient,
 } from "./port"
-import { ident, prepareRead } from "./read"
+import { executeRead, ident, prepareRead } from "./read"
 import {
   COMMAND_ROLE,
   COMMIT,
@@ -57,6 +54,11 @@ export interface CommandRuntimeOptions {
   maxAttempts?: number
   /** Depth limit of phases started by hooks; default 8. */
   maxDepth?: number
+  /**
+   * `statement_timeout` of a server read in milliseconds (integer ≥ 1);
+   * default 15 000. A read past it rejects with `command.timeout`.
+   */
+  readStatementTimeoutMs?: number
   /** Receives errors that never leave the runtime; default `console.error`. */
   log?: (entry: LogEntry) => void
 }
@@ -72,10 +74,10 @@ export interface CommandRuntime {
    * Reads rows under the request role of the profile, or through the
    * fallback path (P4 spec §6.11); rejects with `CommandFailure`.
    */
-  read(
+  read<Q extends ReadQuery>(
     session: SessionClaims,
-    query: ReadQuery
-  ): Promise<Record<string, unknown>[]>
+    query: Q
+  ): Promise<ReadResultOf<Q>>
 }
 
 /**
@@ -117,6 +119,8 @@ function checkModules(
 }
 
 const BEGIN_READ_ONLY = "BEGIN ISOLATION LEVEL READ COMMITTED READ ONLY"
+// Значення — зв'язаним параметром: текстовий `SET` не приймає `$1`.
+const READ_TIMEOUT = "SELECT set_config('statement_timeout', $1, true)"
 const MEMBER = "SELECT pg_has_role(session_user, $1, 'SET') AS member"
 const APPLIED_HASH = `SELECT ${ident(PLATFORM_SCHEMA)}.${ident(APPLIED_SNAPSHOT_HASH_FUNCTION_NAME)}() AS hash`
 // База до функції хеша (`42883`) чи без схеми платформи (`3F000`) — модель
@@ -124,7 +128,8 @@ const APPLIED_HASH = `SELECT ${ident(PLATFORM_SCHEMA)}.${ident(APPLIED_SNAPSHOT_
 const NO_APPLIED_STATE = new Set(["42883", "3F000"])
 // `pg_has_role` на ролі, якої немає в базі.
 const UNDEFINED_OBJECT = "42704"
-// Межі повтору й глибини — помилка конфігурації host-а, як і каталог.
+// Межі повтору, глибини й часу читання — помилка конфігурації host-а, як і
+// каталог; 0 для часу вимкнув би межу, тож теж відмова.
 const limitSchema = z.int().min(1).optional()
 
 /**
@@ -213,6 +218,8 @@ export async function createCommandRuntime(
   checkModules(catalog, objectModules)
   const maxAttempts = limitSchema.parse(options.maxAttempts) ?? 3
   const maxDepth = limitSchema.parse(options.maxDepth) ?? 8
+  const readTimeout =
+    limitSchema.parse(options.readStatementTimeoutMs) ?? 15_000
   const sink = options.log ?? ((entry: LogEntry) => console.error(entry))
   // Журнал не має зламати шлях відмови: з'єднання звільняється після нього.
   const log = (entry: LogEntry) => {
@@ -241,13 +248,23 @@ export async function createCommandRuntime(
     log,
     maxAttempts,
     maxDepth,
+    readTimeout,
     // Профіль без ролі запиту чи явний запасний шлях — читання під роллю команд.
     readRole: member ? role : undefined,
   }
   return {
     run: (session, input) => runCommand(state, session, input),
-    read: (session, query) => readRows(state, session, query),
+    // Форму результату задає форма запиту; `readRows` будує її з плану.
+    read: <Q extends ReadQuery>(session: SessionClaims, query: Q) =>
+      readRows(state, session, query) as Promise<ReadResultOf<Q>>,
   }
+}
+
+/** Відмова бази в читанні, уже змапована; будь-що інше в транзакції — аномалія. */
+class Refused {
+  constructor(
+    readonly refusal: { failure: CommandFailure; destroy: boolean }
+  ) {}
 }
 
 /**
@@ -259,7 +276,7 @@ async function readRows(
   state: RuntimeState,
   session: SessionClaims,
   query: unknown
-): Promise<Record<string, unknown>[]> {
+): Promise<ReadResult> {
   // До будь-якого I/O: друге з'єднання в хуку чекало б на замок своєї ж
   // команди (Р-A3-11).
   rejectNested()
@@ -277,7 +294,7 @@ async function readRows(
   }
   const prepared = prepareRead(state.catalog, query)
   if ("error" in prepared) throw new CommandFailure(prepared.error)
-  const { object, statement } = prepared
+  const { object, plan } = prepared
   const fail = (raw: unknown, phase: ErrorPhase | undefined) => {
     const error = normalizeError(raw)
     const mapped = mapDatabaseError(error, state.catalog, phase)
@@ -300,34 +317,50 @@ async function readRows(
     state.readRole === undefined
       ? COMMAND_ROLE
       : { text: `SET LOCAL ROLE ${ident(state.readRole)}`, params: [] }
-  let rows: Record<string, unknown>[]
-  let tag: string
-  // Фаза читання — лише для оператора будівника: `22P02` там — вхід клієнта.
-  let phase: ErrorPhase | undefined
-  try {
-    await client.query(BEGIN_READ_ONLY, [])
-    const claimsSet = claimsStatement(claims)
-    await client.query(claimsSet.text, claimsSet.params)
-    await client.query(role.text, role.params)
-    phase = { kind: "read", object }
-    ;({ rows } = await client.query(statement.text, statement.params))
-    phase = undefined
-    ;({ command: tag } = await client.query(COMMIT.text, COMMIT.params))
-  } catch (raw) {
-    const { failure, destroy } = fail(raw, phase)
-    await endFailed(client, destroy)
-    throw failure
+  // Фаза читання — лише для операторів будівника: `22P02` там — вхід клієнта.
+  const send = async (
+    statement: { text: string; params: readonly (string | null)[] },
+    phase?: ErrorPhase
+  ) => {
+    try {
+      return await client.query(statement.text, statement.params)
+    } catch (raw) {
+      throw new Refused(fail(raw, phase))
+    }
   }
-  client.release()
+  let result: ReadResult | { error: CommandError }
+  let tag: string
   try {
-    // Перервана транзакція відповідає на `COMMIT` тегом `ROLLBACK`.
-    if (tag !== "COMMIT") throw new Error(`COMMIT answered ${tag}`)
-    return rows.map((r) => {
-      if (typeof r.row !== "string") throw new Error("read row is not text")
-      return decodeRow(object, r.row)
-    })
+    await send({ text: BEGIN_READ_ONLY, params: [] })
+    // `SET LOCAL`-семантика (`true`): межа живе до кінця транзакції читання й
+    // не переходить на наступного користувача з'єднання пулу.
+    await send({ text: READ_TIMEOUT, params: [String(state.readTimeout)] })
+    await send(claimsStatement(claims))
+    await send(role)
+    // Рядки декодуються до `COMMIT`: з них оператор `include` бере id.
+    result = await executeRead(
+      object,
+      plan,
+      async (statement, target) =>
+        (await send(statement, { kind: "read", object: target })).rows
+    )
+    ;({ command: tag } = await send(COMMIT))
   } catch (error) {
+    if (error instanceof Refused) {
+      await endFailed(client, error.refusal.destroy)
+      throw error.refusal.failure
+    }
+    // Відповідь не тієї форми: транзакцію відкочено, назовні — лише код.
     state.log({ kind: "database", error })
+    await endFailed(client, false)
     throw new CommandFailure({ code: "command.internal" })
   }
+  client.release()
+  // Перервана транзакція відповідає на `COMMIT` тегом `ROLLBACK`.
+  if (tag !== "COMMIT") {
+    state.log({ kind: "database", error: new Error(`COMMIT answered ${tag}`) })
+    throw new CommandFailure({ code: "command.internal" })
+  }
+  if ("error" in result) throw new CommandFailure(result.error)
+  return result
 }

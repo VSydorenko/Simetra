@@ -1,5 +1,6 @@
 import {
   PLATFORM_SCHEMA,
+  ZERO_UUID,
   quoteIdent,
   type DatabaseProvider,
   type PhysicalSnapshot,
@@ -28,7 +29,6 @@ import { sqlLiteral } from "../stages/model"
 import {
   ANALYSIS_ROLES,
   RIGHTS_FUNCTIONS,
-  ZERO_UUID,
   analysisGate,
   call,
   hasRightsFunctions,

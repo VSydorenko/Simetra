@@ -1,6 +1,6 @@
 import type { MetadataRef } from "../schemas/metadata-ref"
 import type { ObjectOperation, Operation } from "./operation"
-import type { ReadQuery } from "./read"
+import type { ReadQuery, ReadResultOf } from "./read"
 
 /**
  * The input of a phase a `beforeWrite` hook may change. Без `id` і `mark`:
@@ -25,7 +25,7 @@ export interface HookContext {
   readonly user: string
   readonly act?: { sub: string }
   run(operation: Operation): Promise<Record<string, unknown>>
-  read(query: ReadQuery): Promise<Record<string, unknown>[]>
+  read<Q extends ReadQuery>(query: Q): Promise<ReadResultOf<Q>>
   reject(code: string, path?: string): never
   afterCommit(fn: () => unknown): void
 }

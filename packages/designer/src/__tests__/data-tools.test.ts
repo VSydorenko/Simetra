@@ -30,6 +30,7 @@ import {
   dataCommandTool,
   dataReadTool,
   logRuntimeEntry,
+  summarizeData,
 } from "../tools/data-tools"
 import { invoke } from "../tools/invoke"
 import type { DataResource, InvokeOptions } from "../tools/types"
@@ -170,6 +171,23 @@ async function callMcp(
 }
 
 // Кожен виклик компілює домен прав — бюджет `TOOL_PIPELINE`
+describe("summarizeData", () => {
+  it.each([
+    [{ rows: [{}, {}] }, "data-read: 2 rows"],
+    [{ count: 1 }, "data-read: 1 row counted"],
+    [
+      { count: 10_000, capped: true as const },
+      "data-read: over 10000 rows counted",
+    ],
+    [
+      { error: { code: "command.invalid" as const, reason: "lazy" } },
+      "data-read: command.invalid: lazy",
+    ],
+  ])("summarizes %j", (data, text) => {
+    expect(summarizeData("data-read", data)).toBe(text)
+  })
+})
+
 describe("data tools", TOOL_PIPELINE, () => {
   it("refuses a batch with an object module before opening the data", async () => {
     const stub = stubData()
