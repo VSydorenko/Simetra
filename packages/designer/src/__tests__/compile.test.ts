@@ -2,7 +2,13 @@ import { readdir, readFile, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { describe, expect, it } from "vitest"
 import { TOOL_PIPELINE } from "./helpers/budget"
-import { compile, MESSAGES, type Locale } from "simetra/compiler"
+import {
+  buildClientCatalog,
+  buildRuntimeCatalog,
+  compile,
+  MESSAGES,
+  type Locale,
+} from "simetra/compiler"
 import { renderDesiredState } from "simetra/schema"
 import { readMetadataDir } from "../io/metadata-dir"
 import { runTool, type CliArgs } from "../cli/command"
@@ -93,7 +99,7 @@ describe("simetra compile", TOOL_PIPELINE, () => {
     expect(r.stderr).toContain("error:")
   })
 
-  it("--out writes snapshot, sql, types and runtime catalog", async () => {
+  it("--out writes snapshot, sql, types, runtime and client catalogs", async () => {
     const out = await outDir()
     const r = await compileCli({
       _: [REFERENCE],
@@ -103,6 +109,7 @@ describe("simetra compile", TOOL_PIPELINE, () => {
     })
     expect(r.exitCode).toBe(0)
     expect((await readdir(out)).sort()).toEqual([
+      "client-catalog.json",
       "desired-state.sql",
       "entities.d.ts",
       "runtime-catalog.json",
@@ -111,6 +118,9 @@ describe("simetra compile", TOOL_PIPELINE, () => {
     const model = (await compile(await readMetadataDir(REFERENCE))).model!
     expect(await readFile(join(out, "desired-state.sql"), "utf8")).toBe(
       renderDesiredState(model).sql
+    )
+    expect(await readFile(join(out, "client-catalog.json"), "utf8")).toBe(
+      `${JSON.stringify(buildClientCatalog(buildRuntimeCatalog(model)), null, 2)}\n`
     )
   })
 

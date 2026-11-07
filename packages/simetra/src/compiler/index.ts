@@ -136,6 +136,7 @@ export {
   type EntityField,
 } from "./entity-fields"
 export { buildRuntimeCatalog, kernelHashOf } from "./runtime-catalog"
+export { buildClientCatalog } from "./client-catalog"
 export { memberCheckFunctionName } from "./catalog-command/contracts"
 export {
   canonicalSnapshot,

@@ -273,7 +273,7 @@ function argsFor(tool: Tool): ArgsDef {
     args.out = {
       type: "string",
       description:
-        "Write snapshot.json, desired-state.sql, entities.d.ts, runtime-catalog.json here",
+        "Write snapshot.json, desired-state.sql, entities.d.ts, runtime-catalog.json, client-catalog.json here",
     }
   } else if (tool.name === "explain") {
     args.target = {
