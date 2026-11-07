@@ -1,5 +1,6 @@
 import { z } from "zod"
 import {
+  parseStandardElementId,
   SQL_UNIT_CLASSES,
   standardLogicalName,
   standardElementId,
@@ -563,16 +564,13 @@ function successor(
   if (successorId === sourceId) {
     return now.columns.find((c) => c.origin.elementId === sourceId)
   }
-  const prefix = `${ownerId}#`
-  if (successorId.startsWith(prefix)) {
+  const standard = parseStandardElementId(successorId)
+  if (standard?.ownerId === ownerId) {
     // Канонічне ім'я береться із синтетичного id елемента (`<власник>#<ім'я>`,
     // власник — об'єкт чи ТЧ), а не літералом: визначення за видом тут не
     // знайти, бо реєстр дає колонки лише за об'єктом.
     // eslint-disable-next-line no-restricted-syntax
-    const name = standardLogicalName(
-      { logicalName: successorId.slice(prefix.length) },
-      style
-    )
+    const name = standardLogicalName({ logicalName: standard.name }, style)
     return now.columns.find(
       (c) => c.origin.elementId === undefined && c.origin.standard === name
     )

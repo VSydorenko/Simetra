@@ -299,18 +299,54 @@ describe("tier zones", () => {
       "../compiler/x",
       "../schema/x",
       "../model/x",
+      // `./` з виходом угору — той самий вихід з теки, що й `../model`:
+      // вбудував би другу копію T0 у `dist/server`.
+      "./../model/x",
+      "./a/../../model/x",
+      "./a/../b",
       "node:fs",
       "pg",
     ]) {
       const msgs = await ruleIds(importOf(spec), file)
       expect(msgs, spec).toContain("@typescript-eslint/no-restricted-imports")
     }
-    for (const spec of ["./x", "node:async_hooks", "zod", "simetra/model"]) {
+    for (const spec of [
+      "./x",
+      "./a/b",
+      "./x.js",
+      "node:async_hooks",
+      "zod",
+      "simetra/model",
+    ]) {
       expect(await purity(importOf(spec), file), spec).toEqual([])
     }
     expect(
       await purity(importOf("node:fs"), "src/server/__tests__/__fixture.ts")
     ).toEqual([])
+  })
+
+  // Ненормалізований шлях (`..` після звичайного сегмента) обходив ярусний
+  // regex, що бачить лише `..` на початку.
+  it.each([
+    ["src/data/__fixture.ts", "./a/../../server/x"],
+    ["src/compiler/__fixture.ts", "./a/../../server/x"],
+    ["src/model/runtime/__fixture.ts", "./x/../../../compiler/x"],
+    ["src/shell/__fixture.ts", "./a/../b"],
+  ])("%s: non-normalized %s is refused", async (file, spec) => {
+    const msgs = await restricted(importOf(spec), file)
+    expect(msgs, spec).toHaveLength(1)
+    expect(msgs[0]).toContain("normalized relative path")
+  })
+
+  it("normalized relative paths within the allowed tiers pass", async () => {
+    for (const [file, spec] of [
+      ["src/data/__fixture.ts", "./x"],
+      ["src/data/facade/__fixture.ts", "../x"],
+      ["src/server/__fixture.ts", "../model/x"],
+      ["src/shell/__fixture.ts", "../ui/x"],
+    ]) {
+      expect(await restricted(importOf(spec), file), spec).toEqual([])
+    }
   })
 
   it("mts and cts are covered", async () => {
