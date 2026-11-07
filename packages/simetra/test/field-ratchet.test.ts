@@ -74,6 +74,18 @@ const EXCEPTIONS: Record<string, string> = Object.fromEntries([
     "InformationRegister.access.ref",
     "register path is an error (спека прав §5.2)",
   ],
+  // `load` — подання (спека П4-B Рд25, В3): реквізит ТЧ лінивим не буває, і це
+  // тримає схема (до шва); каталог рантайму `load` ТЧ не читає. Регістрів у
+  // каталозі ще немає (Рд1), тож `load` їхнього реквізиту поки не діє — так
+  // і сказано в описі поля.
+  ...["Catalog", "Document"].map((kind) => [
+    `${kind}.tabularSections.attributes.load`,
+    "a tabular section attribute is always eager (Рд25)",
+  ]),
+  ...["AccumulationRegister", "InformationRegister"].map((kind) => [
+    `${kind}.attributes.load`,
+    "registers are not in the runtime catalog yet (Рд1)",
+  ]),
 ])
 
 /**

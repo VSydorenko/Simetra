@@ -143,6 +143,7 @@ function runtimeObject(
         insert: new Set(contract.createKeys),
         update: new Set(contract.updateKeys),
         references: contract.references,
+        header: true,
       },
       facts
     ),
@@ -180,6 +181,7 @@ function runtimeObject(
             insert: new Set(section.rowKeys),
             update: new Set(section.updateColumns),
             references: section.references,
+            header: false,
           },
           facts
         ),
@@ -233,6 +235,8 @@ function attributes(
     insert: ReadonlySet<string>
     update: ReadonlySet<string>
     references: readonly CommandReference[]
+    /** Шапка, а не ТЧ: лише в шапці реквізит буває лінивим (Рд25). */
+    header: boolean
   },
   facts: Facts
 ): RuntimeAttribute[] {
@@ -260,6 +264,14 @@ function attributes(
       value?.type === "Ref" && value.ref !== undefined
         ? facts.enumValues(value.ref)
         : undefined
+    // Ефективна лінивість — лише реквізиту шапки: явний `load` чи типове за
+    // типом (`RichText` додасть блок метаданих разом із тим самим правилом).
+    // Стандартні атрибути (ключ, версія, скоуп) лінивими не бувають.
+    const load = field.element?.load
+    const lazy =
+      keys.header &&
+      field.element !== undefined &&
+      (load === "lazy" || (load === undefined && value?.type === "Bytes"))
     const ref =
       value?.type === "Ref" &&
       enumValues === undefined &&
@@ -295,6 +307,7 @@ function attributes(
         ? { pair: pairOf(field.columns[0], keys.references, facts) }
         : {}),
       ...(ref === undefined ? {} : { ref }),
+      ...(lazy ? { load: "lazy" as const } : {}),
     }
   })
 }

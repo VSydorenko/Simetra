@@ -747,6 +747,14 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Знеособлення ставить колонку в NULL: приберіть required або personalData.",
     },
   },
+  "attribute.lazy-not-allowed": {
+    en: () => "A polymorphic Ref or a tabular section attribute cannot be lazy",
+    uk: () => "Поліморфний Ref чи реквізит ТЧ не може бути лінивим",
+    hint: {
+      en: 'Remove load: "lazy": a polymorphic pair is read as a whole, and a tabular section array without a lazy field would erase its values.',
+      uk: 'Приберіть load: "lazy": поліморфна пара читається цілком, а масив ТЧ без лінивого поля стер би його значення.',
+    },
+  },
   "type.bound-type": {
     en: () =>
       "Numeric bounds apply only to a scalar Integer, SmallInt, BigInt or Numeric",
@@ -2132,6 +2140,14 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     hint: {
       en: "The step of a path must point to an object of a kind: the platform propagates the carrier copy with a trigger on the target table, and an adopted table carries no platform triggers.",
       uk: "Крок шляху мусить указувати на об'єкт виду: копію носія платформа поширює тригером на таблиці цілі, а прийнята таблиця платформних тригерів не несе.",
+    },
+  },
+  "rights.carrier-lazy": {
+    en: (p) => `Rights carrier "${p.attribute}" (${p.field}) cannot be lazy`,
+    uk: (p) => `Носій прав "${p.attribute}" (${p.field}) не може бути лінивим`,
+    hint: {
+      en: 'The client rights evaluator reads the carrier from list rows, and a list read omits a lazy attribute: remove load: "lazy".',
+      uk: 'Клієнтський обчислювач прав читає носій зі списочних рядків, а списочне читання лінивого атрибута не віддає: приберіть load: "lazy".',
     },
   },
   "rights.register-access-dimension": {

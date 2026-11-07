@@ -82,6 +82,10 @@ const attributeShape = {
     description:
       "Marks the attribute as personal data: anonymization sets its columns to NULL, so it cannot be required.",
   }),
+  load: z.enum(["eager", "lazy"]).optional().meta({
+    description:
+      'Whether list reads omit the attribute ("lazy"; a card read returns it); default lazy for Bytes of the header, eager otherwise. Not allowed on a polymorphic Ref, a tabular section attribute or a rights carrier. Has no effect on register attributes yet.',
+  }),
 }
 
 /**
@@ -102,6 +106,24 @@ function refinePersonalData(
   }
 }
 
+/**
+ * Поліморфна пара лінивою не буває (Рд25): фасад звіряє обидві колонки пари
+ * разом, а списочний рядок без однієї з них — напівпосилання.
+ */
+function refineLoad(
+  value: { load?: "eager" | "lazy"; allowedTypes?: unknown },
+  ctx: z.RefinementCtx
+): void {
+  if (value.load === "lazy" && value.allowedTypes !== undefined) {
+    ctx.addIssue({
+      code: "custom",
+      message: "A polymorphic Ref cannot be lazy",
+      path: ["load"],
+      params: { rule: "attribute.lazy-not-allowed" satisfies SchemaRule },
+    })
+  }
+}
+
 export const attributeSchema = z
   .strictObject(attributeShape)
   .superRefine((value, ctx) => {
@@ -109,6 +131,7 @@ export const attributeSchema = z
     refineUnique(value, ctx)
     refineValueChecks(value, ctx)
     refinePersonalData(value, ctx)
+    refineLoad(value, ctx)
   })
 
 /**
@@ -129,6 +152,7 @@ export const catalogAttributeSchema = z
     refineUnique(value, ctx)
     refineValueChecks(value, ctx)
     refinePersonalData(value, ctx)
+    refineLoad(value, ctx)
     refineUniqueWithin(value, ctx)
   })
 

@@ -234,6 +234,12 @@ Attribute properties (an element of `attributes`):
   character as itself or as `\uXXXX`.
 - `personalData: true` marks personal data (a name, a phone, an address):
   anonymization sets it to `NULL`, so it cannot also be `required`.
+- `load`: `"lazy"` keeps a heavy value (a file, a long body) out of list reads;
+  a card read still returns it, but a list read cannot filter or sort by it.
+  `Bytes` of the header is lazy by default; set `"eager"` to list it. Not
+  allowed on a polymorphic `Ref`, a tabular section attribute or a rights
+  carrier (`ownership`, `containerBinding`, `access`). Changing `load` emits no
+  DDL. On register attributes it has no effect yet.
 
 Object properties:
 

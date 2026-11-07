@@ -1183,6 +1183,14 @@
             "description": "Marks the attribute as personal data: anonymization sets its columns to NULL, so it cannot be required.",
             "type": "boolean",
             "const": true
+          },
+          "load": {
+            "description": "Whether list reads omit the attribute (\"lazy\"; a card read returns it); default lazy for Bytes of the header, eager otherwise. Not allowed on a polymorphic Ref, a tabular section attribute or a rights carrier. Has no effect on register attributes yet.",
+            "type": "string",
+            "enum": [
+              "eager",
+              "lazy"
+            ]
           }
         },
         "required": [

@@ -75,6 +75,8 @@ export const runtimeAttributeSchema = z.strictObject({
   ref: z
     .strictObject({ object: z.string(), constraint: z.string() })
     .optional(),
+  /** Лише ефективно лінивий реквізит шапки (Рд25): списочне читання його не віддає. */
+  load: z.literal("lazy").optional(),
 })
 
 export const runtimeConstraintSchema = z

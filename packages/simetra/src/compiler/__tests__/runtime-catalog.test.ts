@@ -17,6 +17,7 @@ import {
   adminRoles,
   commandCoreLayer,
   compileRights,
+  gaugeLoadLayer,
   gaugeRowRule,
   policyDomain,
   refAttribute,
@@ -551,6 +552,38 @@ describe("buildRuntimeCatalog on runtime values", () => {
     expect(diagnostics.map((d) => d.code)).toEqual([
       "reference.not-referenceable",
     ])
+  })
+})
+
+/**
+ * Лінивий атрибут (Рд25, В3): у каталозі лише ефективно лінивий реквізит
+ * шапки — явний `load: "lazy"` чи `Bytes` без `load`; у ТЧ лінивих немає.
+ */
+describe("buildRuntimeCatalog: lazy attributes", () => {
+  const gaugeOf = async (loads: Record<string, "eager" | "lazy">) => {
+    const { model: m, diagnostics } = await compileRights(
+      policyDomain(gaugeLoadLayer(loads))
+    )
+    expect(diagnostics).toEqual([])
+    return buildRuntimeCatalog(m!).objects.find((o) => o.name === "Gauge")!
+  }
+  const loadOf = (object: RuntimeObject, name: string) =>
+    object.attributes.find((a) => a.name === name)!.load
+
+  it("Bytes of the header defaults to lazy; load overrides it", async () => {
+    const defaults = await gaugeOf({ amount: "lazy" })
+    expect(loadOf(defaults, "blob")).toBe("lazy")
+    expect(loadOf(defaults, "amount")).toBe("lazy")
+    expect(loadOf(defaults, "counter")).toBeUndefined()
+    const eager = await gaugeOf({ blob: "eager" })
+    expect(eager.attributes.find((a) => a.name === "blob")).not.toHaveProperty(
+      "load"
+    )
+    const scan = defaults.tabularSections[0]!.attributes.find(
+      (a) => a.name === "scan"
+    )
+    expect(scan).toMatchObject({ type: "Bytes" })
+    expect(scan).not.toHaveProperty("load")
   })
 })
 

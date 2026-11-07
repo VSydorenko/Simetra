@@ -189,6 +189,7 @@ export function checkRights(ctx: RightsCheckContext): Diagnostic[] {
       diagnostics.push(...checkAccess(object, ctx, carriers))
     }
     diagnostics.push(...checkCarrierCopies(object, carriers))
+    diagnostics.push(...checkLazyCarriers(object, ctx.references))
   }
   diagnostics.push(...checkDimensions(ctx, carriers))
   diagnostics.push(...checkSources(ctx))
@@ -587,6 +588,42 @@ function checkCarrierCopies(
     }
   }
   return diagnostics
+}
+
+/**
+ * Носій прав лінивим не буває (спека П4-B Рд25): клієнтський обчислювач прав
+ * читає носій зі списочного рядка, а списочне читання лінивого реквізиту не
+ * віддає. Для шляху це перший крок — колонка самого об'єкта; кінцеве значення
+ * шляху лежить у платформній копії, яка реквізитом не є.
+ */
+function checkLazyCarriers(
+  object: ParsedObject,
+  references: readonly ResolvedReference[]
+): Diagnostic[] {
+  const { attributes = [] } = object.data as {
+    attributes?: { id?: string; name: string; load?: "eager" | "lazy" }[]
+  }
+  return carrierDeclarations(object).flatMap(
+    ({ carrier, pointer, field, role }) => {
+      const head = typeof carrier === "string" ? pointer : `${pointer}/0`
+      const id = references.find(
+        (r) =>
+          r.from.file === object.file &&
+          r.from.pointer === head &&
+          r.role === role
+      )?.to.id
+      const index = attributes.findIndex((a) => id !== undefined && a.id === id)
+      if (index < 0 || attributes[index]!.load !== "lazy") return []
+      return [
+        diagnostic(
+          "rights.carrier-lazy",
+          object.file,
+          `/attributes/${index}/load`,
+          { attribute: attributes[index]!.name, field }
+        ),
+      ]
+    }
+  )
 }
 
 /** Логічні імена вимірів регістра. */

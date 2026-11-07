@@ -71,10 +71,13 @@ function attributes(prefix: string) {
       nonNegative: true,
       maxValue: "1000000",
     },
+    // Носій прав (`access` товару й документа): правило лінивого носія читає
+    // його `load`. `"lazy"` тут — помилка і в носії, і в ТЧ.
     {
       ...common(`${prefix}Item`, `${prefix}_item_id`),
       type: "Ref",
       ref: ref("Catalog", "Item"),
+      load: "eager",
     },
     {
       ...common(`${prefix}Owner`, `${prefix}_owner`),
@@ -124,13 +127,15 @@ function attributes(prefix: string) {
 }
 
 /**
- * Поля виміру чи ресурсу регістра: набір реквізиту без `personalData` — на
- * вимірах і ресурсах цієї властивості немає.
+ * Поля виміру чи ресурсу регістра: набір реквізиту без `personalData` і
+ * `load` — на вимірах і ресурсах цих властивостей немає.
  */
 function registerFields(prefix: string) {
   return attributes(prefix).map((field) =>
     Object.fromEntries(
-      Object.entries(field).filter(([key]) => key !== "personalData")
+      Object.entries(field).filter(
+        ([key]) => key !== "personalData" && key !== "load"
+      )
     )
   )
 }

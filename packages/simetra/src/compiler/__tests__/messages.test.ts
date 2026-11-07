@@ -43,6 +43,15 @@ describe("messages catalog", () => {
     }
   })
 
+  it("lists the laziness rules of Рд25", () => {
+    expect(ALL_RULES as string[]).toEqual(
+      expect.arrayContaining([
+        "attribute.lazy-not-allowed",
+        "rights.carrier-lazy",
+      ])
+    )
+  })
+
   it("the catalog has no entries outside the rule lists", () => {
     expect(Object.keys(MESSAGES).sort()).toEqual([...ALL_RULES].sort())
   })
