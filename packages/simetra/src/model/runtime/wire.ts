@@ -27,10 +27,10 @@ export type LogicalRow = Record<string, unknown>
 const SECTIONS = "tabularSections"
 
 /**
- * A runtime row value the codec cannot put on the wire. Рядок рантайму вже
- * пройшов валідацію, тож це дефект сервера чи значення бази поза типом, а не
- * помилка входу.
+ * A runtime row value the codec cannot put on the wire: a server defect or a
+ * database value outside the logical type, not an input error.
  */
+// Не помилка входу: рядок рантайму вже пройшов валідацію.
 export class WireEncodeError extends Error {
   /** Logical path of the value: `<name>` or `<section>.<index>.<name>`. */
   readonly path: string

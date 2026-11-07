@@ -280,10 +280,10 @@ function formIndex(value: unknown): 0 | 1 | 2 | 3 | 4 | 5 {
 /**
  * A read query schema over its six forms: the form is picked by its keys
  * before parsing, so a refusal keeps its path. Shared by the logical and the
- * wire form of a read, so both pick a form by one rule. Суворий union Zod 4
- * губить шлях відмови (`invalid_union` на корені), тож union лишається для
- * типу й JSON-схеми входу MCP.
+ * wire form of a read, so both pick a form by one rule.
  */
+// Не суворий union: Zod 4 губить у ньому шлях відмови (`invalid_union` на
+// корені), тож union лишається лише для типу й JSON-схеми входу MCP.
 export function queryFormSchema<const F extends QueryForms>(forms: F) {
   return z.preprocess((value, ctx) => {
     const parsed = forms[formIndex(value)].safeParse(value)
