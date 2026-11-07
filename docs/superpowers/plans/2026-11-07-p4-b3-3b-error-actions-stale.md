@@ -48,7 +48,7 @@
 
 | № | Рішення | Вплив на спеку |
 | --- | --- | --- |
-| В1 | Трекер версії живе в обгортці транспорту B3-1: кожна відповідь (зокрема відмова) проходить `observe(response, request)`; зміна `serverHash` відносно останнього баченого (перший — відносно `snapshotHash` клієнтського каталогу) — запит `version` | §10 (примітка) |
+| В1 | Трекер версії живе в обгортці транспорту B3-1: кожна відповідь (зокрема відмова) проходить `observe(request, response)` — **після** обробки `session-changed` обгорткою (після `dispose()` трекер відповідей не бачить); зміна `serverHash` відносно останнього баченого (перший — відносно `snapshotHash` клієнтського каталогу) — запит `version`. Відповідь самого запиту `version` лише оновлює останній бачений хеш (`serverHash` і `snapshotHash` значення) і нового запиту не запускає: інакше чергування інстансів під час розкатки дало б пінг-понг запитів | §10 (примітка) |
 | В2 | Запит `version` — single-flight з одним хвостом; відповідь `version` переоцінює позначку **кожного** об'єкта каталогу клієнта: UUID відсутній у `objects` чи хеш ≠ — позначено, інакше — знято; відмова запиту `version` позначки не змінює | немає |
 | В3 | `onStaleClient(object: MetadataRef)` — на кожну відповідь `command.stale-client` (з `object` у помилці; без нього — для кожного об'єкта запиту), один виклик на відповідь; і на переході позначки об'єкта з `false` у `true` | §10 (`onStaleClient`) |
 | В4 | `navigated()` — не частіше `NAVIGATED_VERSION_MS` = 60 000 мс (час — `now` з опцій рантайму для тестів); `resume()` — без обмеження частоти | немає |
@@ -87,14 +87,20 @@ Modify `packages/simetra/src/data/facade/transactions.ts`,
 
 | Код | Дія |
 | --- | --- |
-| `command.conflict` | `rereadKeys` ключа `failure.object`/`id` операції (чи всіх ключів операцій, якщо `object` немає) і `fetchedOnce` активної підмножини «ТЧ власника» кожного з них, з межею `writeBackRefetchMs`; чернетку й дельту не накладає повторно |
+| `command.conflict` | `rereadKeys` усіх ключів операцій з об'єктом `failure.object` (помилка не несе `id`; без `object` — усіх ключів операцій) і `fetchedOnce` активної підмножини «ТЧ власника» кожного з них, з межею `writeBackRefetchMs`; чернетку й дельту не накладає повторно |
 | `command.forbidden` | `rereadKeys` ключів операцій (невидимий рядок прибирає `rereadKeys`); з `reason: "origin"` — нічого |
 | `command.unavailable` (без `reason: "schema"`) | `rereadKeys` ключів операцій; `create` без `id` — нічого (В5) |
 | `command.busy`, `command.timeout` | нічого |
 | решта (зокрема `command.invalid`) | нічого |
 
   Після дії — `reconcileOwnCreates` для ключів реєстру серед ключів
-  операцій (правило 1 §6.2: «конфлікт чи відмова запису»). Дії `stale-client`,
+  операцій, яких `rereadKeys` цієї дії не торкнувся (правило 1 §6.2:
+  «конфлікт чи відмова запису»; без подвійного перечитування).
+- `reconcileOwnCreates(runtime, object?, ids?): Promise<void>` (переїхало з
+  B3-3a разом із першим викликачем) — пакетне перечитування ключів реєстру
+  (`rereadKeys` B3-3a, `in` до 200); точка виклику й для B5 (`SUBSCRIBED`,
+  `invalidate`, зміна скоупів).
+- Кожна гілка дії після кожного `await` перевіряє `runtime.disposed`. Дії `stale-client`,
   `unavailable` `schema` і `session-changed` дає трекер (задача 2) і B3-1,
   тут — нічого. Виняток дії — у `log`, відхилення лишається вихідним
   `CommandFailure`.
@@ -108,7 +114,13 @@ Modify `packages/simetra/src/data/facade/transactions.ts`,
   `forbidden` — невидимий рядок прибрано, `origin` — нуль запитів;
   `unavailable` на `run` — перечитано ключі (Review Focus 3), повтору `run`
   немає; `busy`/`timeout` — відкат, нуль запитів; читання з будь-яким кодом —
-  нуль запитів рядків; Review Focus 4; мутації: повторити `run` після
+  нуль запитів рядків; Review Focus 4; `reconcileOwnCreates` 450 ключів —
+  три запити (200, 200, 50), рядок без відповіді прибрано;
+  `dispose()` посеред дії (матриця як задача 8 B3-3a: обгортка B3-1 і
+  адаптер-перевизначення з затримкою × точки `rereadKeys`, `fetchedOnce`,
+  `reconcileOwnCreates`) — після відповіді нуль `write*`, реєстр і знімки
+  порожні; `session-changed` іншої транзакції посеред дії — так само; мутації:
+  прибрати перевірку `runtime.disposed` в `onWriteFailure`; повторити `run` після
   `unavailable` автоматично; перечитування на `forbidden` `origin`.
 - [ ] **Step 2–4:** red → implement → green (`pnpm --filter simetra test error-actions`).
 - [ ] **Step 5: Commit** — `feat(data): дії фасаду за кодом помилки команди`.
@@ -122,7 +134,10 @@ B3-3a); Test `version.test.ts`.
 
 **Interfaces:**
 - Опція `createDataRuntime({ …, onStaleClient?: (object: MetadataRef) => void })`.
-- `versionOf(runtime): { observe(request, response): void; requestVersion(): Promise<void>; isStale(object: UUID): boolean; subscribe(listener: () => void): () => void }`
+  JSDoc (умова архітекторки): виклик повторюється — на кожну відповідь
+  `stale-client` і на кожен перехід позначки, тож host мусить бути
+  ідемпотентним (банер «потрібне оновлення» показує один раз).
+- `staleTrackerOf(runtime): { observe(request, response): void; requestVersion(): Promise<void>; isStale(object: UUID): boolean; subscribe(listener: () => void): () => void }`
   — В1–В3; `requestVersion` — через обгортку транспорту (`{ type: "version" }`),
   відповідь — `versionValueSchema` (після B1b-2); `observe` не бачить
   відповідей, що прийшли після `dispose()` (їх відкидає обгортка).
@@ -135,7 +150,9 @@ B3-3a); Test `version.test.ts`.
 
 - [ ] **Step 1: Failing tests:**
   - таблиця «подія → запит `version`»: зміна `serverHash` у відповіді
-    читання й `run` — один запит; той самий `serverHash` — нуль; перша
+    читання й `run` — один запит; фейк чергує `serverHash` двох каталогів і
+    на відповідях `version` — запитів не більше, ніж тригерів поза
+    відповідями `version` (без пінг-понгу); той самий `serverHash` — нуль; перша
     відповідь з хешем ≠ `snapshotHash` каталогу — запит; `stale-client` —
     запит; `unavailable` `schema` — запит; три тригери під час активного —
     один хвостовий;
@@ -145,6 +162,10 @@ B3-3a); Test `version.test.ts`.
     дорівнює кількості тригерів, запис після зняття проходить;
   - Review Focus 2: `stale-client` колонки — `onStaleClient` один раз,
     позначки немає, повтору немає;
+  - два `stale-client` поспіль для того самого об'єкта з `version`, що
+    позначає його, — два виклики `onStaleClient` за відповідями й один за
+    переходом позначки, позначка ставиться один раз (слухач `subscribe` —
+    одна подія);
   - запис позначеного об'єкта — `command.stale-client`, журнал транспорту
     порожній, оптимістичного стану немає; `batch` з одним позначеним —
     відмова цілком;
@@ -165,10 +186,14 @@ Test `version-events.test.ts`, `packages/simetra/src/data/__tests__/hooks-stale.
   `dispose()` — нічого. Опція `now?: () => number` (типово `Date.now`) —
   для тесту частоти.
 - `RowsResult` і `RowResult` (B3-2b) отримують `isStale: boolean` —
-  позначка об'єкта входу, оновлюється підпискою `versionOf(...).subscribe`
+  позначка об'єкта входу, оновлюється підпискою `staleTrackerOf(...).subscribe`
   через `useSyncExternalStore`.
 
-- [ ] **Step 1: Failing tests:** `resume()` двічі — два запити (single-flight
+- `dispose()` очищує трекер: слухачів, хвостовий запит і стан позначок.
+
+- [ ] **Step 1: Failing tests:** `requestVersion` у польоті з хвостом, потім
+  `dispose()` — хвостового запиту немає, позначка без змін, `onStaleClient`
+  не кликано, слухачі `isStale` не сповіщені; `resume()` двічі — два запити (single-flight
   з хвостом — не більше двох); `navigated()` тричі за 60 с — один запит,
   після 60 с — ще один; Review Focus 5 — `resume()` і `navigated()` після
   `dispose()` — нуль запитів, `onStaleClient` не кликано; jsdom: `useRows` і
