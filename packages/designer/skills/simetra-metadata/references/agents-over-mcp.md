@@ -69,11 +69,17 @@ pnpm exec simetra data-read '{"query":{"object":{"kind":"Catalog","name":"Curren
 - A runtime refusal comes back as `error` with a `code` (and a `reason`);
   `BigInt` values come as decimal strings and may be passed back as strings.
 
-A query takes one of three forms: a card `{ object, id, include? }` (the
-whole row), a page `{ object, where?, orderBy?, offset?, limit, include? }`
-and a count `{ object, where?, count: true }`. The result is
-`{ rows, included? }` or `{ count, capped? }`; a count stops at 10000 and
-then comes `capped`.
+A query takes one of these forms:
+
+- a card `{ object, id, tabularSections?, include? }` — the whole row;
+- a page `{ object, where?, orderBy?, offset?, limit, include? }`;
+- a count `{ object, where?, count: true }`;
+- the lines of an owner `{ object, tabularSection, owner }`;
+- a page of lines `{ object, tabularSection, where?, orderBy?, offset?, limit }`;
+- a count of lines `{ object, tabularSection, where?, count: true }`.
+
+The result is `{ rows, included?, ownerVersion? }` or `{ count, capped? }`;
+a count stops at 10000 and then comes `capped`.
 
 - `where` is a tree: `{ "and": [...] }`, `{ "or": [...] }`, `{ "not": ... }`
   and conditions `{ "attribute", "op", "value" }`. Operators: `eq`, `ne`,
@@ -93,6 +99,15 @@ then comes `capped`.
   reference, as the user may see them, come in `included` under
   `"<Kind>.<Name>"` of the target; an invisible target is just missing. A
   page cannot include a lazy `Ref` (reason `lazy`).
+- `tabularSections` (`true` or a list of names) puts the lines of a card
+  under `tabularSections.<name>`, ordered by line number. The lines of an
+  owner come with `ownerVersion`, read by the same statement; an invisible
+  owner gives `{ "rows": [] }` without it. A section over 5000 lines is
+  refused (reason `tabular-too-large`, `path` — the section), never cut.
+- A page of lines filters by the owner (`parent`), the line number and the
+  section attributes, ordered by line number by default. With a top-level
+  `parent eq <id>` it also returns `ownerVersion`, and its count is not
+  capped.
 
 Read a page of rows:
 
@@ -103,6 +118,18 @@ Read a page of rows:
     "where": { "attribute": "symbol", "op": "eq", "value": "$" },
     "orderBy": [{ "attribute": "description", "direction": "asc" }],
     "limit": 50
+  }
+}
+```
+
+Read the lines of one owner with the owner version:
+
+```json simetra:data-read
+{
+  "query": {
+    "object": { "kind": "Document", "name": "Invoice" },
+    "tabularSection": "lines",
+    "owner": "0b9d4c5e-8f1a-4c3b-9e2d-6a7f8b9c0d1e"
   }
 }
 ```

@@ -180,26 +180,37 @@ export type OrderBy = z.infer<typeof orderBySchema>
 
 /** Upper bound of `include` attributes in one read (P4-B decision В10). */
 export const INCLUDE_MAX = 16
+/**
+ * Upper bound of lines of one tabular section a read returns whole; past it
+ * the read is refused with `tabular-too-large`, never truncated.
+ */
+export const TABULAR_LINES_MAX = 5_000
+
+/** Непорожній перелік імен, кожне — один раз (шлях відмови — на дублі). */
+const uniqueNames = (max?: number) => {
+  const names = z.array(z.string()).min(1)
+  return (max === undefined ? names : names.max(max)).superRefine(
+    (list, ctx) => {
+      list.forEach((name, i) => {
+        if (list.indexOf(name) !== i) {
+          ctx.addIssue({ code: "custom", path: [i], message: "repeated name" })
+        }
+      })
+    }
+  )
+}
 
 /**
  * Single-target `Ref` attributes whose target rows come along with the read,
  * each named once.
  */
-export const includeSchema = z
-  .array(z.string())
-  .min(1)
-  .max(INCLUDE_MAX)
-  .superRefine((names, ctx) => {
-    names.forEach((name, i) => {
-      if (names.indexOf(name) !== i) {
-        ctx.addIssue({ code: "custom", path: [i], message: "repeated include" })
-      }
-    })
-  })
+export const includeSchema = uniqueNames(INCLUDE_MAX)
 
 const cardQuerySchema = z.strictObject({
   object: metadataRefSchema,
   id: z.guid(),
+  /** `true` — every section; otherwise the named ones. */
+  tabularSections: z.union([z.literal(true), uniqueNames()]).optional(),
   include: includeSchema.optional(),
 })
 const listQuerySchema = z.strictObject({
@@ -216,23 +227,55 @@ const countQuerySchema = z.strictObject({
   count: z.literal(true),
 })
 
+const ownerLinesQuerySchema = z.strictObject({
+  object: metadataRefSchema,
+  tabularSection: z.string(),
+  owner: z.guid(),
+})
+const sectionListQuerySchema = z.strictObject({
+  object: metadataRefSchema,
+  tabularSection: z.string(),
+  where: filterSchema.optional(),
+  orderBy: orderBySchema.optional(),
+  offset: z.int().min(0).max(READ_OFFSET_MAX).optional(),
+  limit: z.int().min(1).max(READ_LIMIT_MAX),
+})
+const sectionCountQuerySchema = z.strictObject({
+  object: metadataRefSchema,
+  tabularSection: z.string(),
+  where: filterSchema.optional(),
+  count: z.literal(true),
+})
+
 const QUERY_FORMS = [
   cardQuerySchema,
   listQuerySchema,
   countQuerySchema,
+  ownerLinesQuerySchema,
+  sectionListQuerySchema,
+  sectionCountQuerySchema,
 ] as const
 
-/** Форму обирає наявний ключ: `id` — картка, `count` — лічильник, інакше список. */
+/**
+ * Форму обирає наявний ключ: `tabularSection` — форми ТЧ (`owner` — «ТЧ
+ * власника», `count` — лічильник, інакше сторінка); `id` — картка, `count` —
+ * лічильник, інакше список.
+ */
 function formOf(value: unknown): (typeof QUERY_FORMS)[number] {
-  const query = objectAt(value)
-  if (query !== undefined && "id" in query) return cardQuerySchema
-  if (query !== undefined && "count" in query) return countQuerySchema
-  return listQuerySchema
+  const query = objectAt(value) ?? {}
+  if ("tabularSection" in query) {
+    if ("owner" in query) return ownerLinesQuerySchema
+    return "count" in query ? sectionCountQuerySchema : sectionListQuerySchema
+  }
+  if ("id" in query) return cardQuerySchema
+  return "count" in query ? countQuerySchema : listQuerySchema
 }
 
 /**
- * A server read (P4-B spec §4.1): a card by id, a page by filter tree, or a
- * capped count; a card and a page may include the rows of `Ref` targets. Суворий union Zod 4 губить шлях відмови (`invalid_union` на
+ * A server read (P4-B spec §4.1): a card by id (with its tabular sections),
+ * a page by filter tree, or a capped count; a card and a page may include the
+ * rows of `Ref` targets. A tabular section is read as the lines of one owner,
+ * a page or a count. Суворий union Zod 4 губить шлях відмови (`invalid_union` на
  * корені), тож форму обирає ключ до розбору, а union лишається для типу й
  * JSON-схеми входу MCP.
  */

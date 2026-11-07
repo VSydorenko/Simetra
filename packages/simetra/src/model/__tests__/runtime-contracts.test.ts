@@ -148,6 +148,78 @@ describe("readQuerySchema", () => {
       "include.2",
     ],
     ["a count with include", { object, count: true, include: ["a"] }, ""],
+    [
+      "a card with every section",
+      { object, id, tabularSections: true },
+      undefined,
+    ],
+    [
+      "a card with named sections and include",
+      { object, id, tabularSections: ["Lines"], include: ["region"] },
+      undefined,
+    ],
+    [
+      "an empty tabularSections",
+      { object, id, tabularSections: [] },
+      "tabularSections",
+    ],
+    [
+      "a repeated section",
+      { object, id, tabularSections: ["Lines", "Lines"] },
+      "tabularSections.1",
+    ],
+    [
+      "tabularSections false",
+      { object, id, tabularSections: false },
+      "tabularSections",
+    ],
+    [
+      "tabularSections in a page",
+      { object, tabularSections: true, limit: 1 },
+      "",
+    ],
+    [
+      "the lines of an owner",
+      { object, tabularSection: "Lines", owner: id },
+      undefined,
+    ],
+    [
+      "an owner that is not a UUID",
+      { object, tabularSection: "Lines", owner: "x" },
+      "owner",
+    ],
+    [
+      "the lines of an owner with a limit",
+      { object, tabularSection: "Lines", owner: id, limit: 1 },
+      "",
+    ],
+    [
+      "a section page",
+      {
+        object,
+        tabularSection: "Lines",
+        where: { attribute: "parent", op: "eq", value: id },
+        orderBy: [{ attribute: "qty", direction: "desc" }],
+        offset: 1,
+        limit: 200,
+      },
+      undefined,
+    ],
+    [
+      "a section page without limit",
+      { object, tabularSection: "Lines" },
+      "limit",
+    ],
+    [
+      "a section count",
+      { object, tabularSection: "Lines", where, count: true },
+      undefined,
+    ],
+    [
+      "include in a section page",
+      { object, tabularSection: "Lines", include: ["a"], limit: 1 },
+      "",
+    ],
   ])("%s", (_, input, path) => {
     const parsed = readQuerySchema.safeParse(input)
     expect(

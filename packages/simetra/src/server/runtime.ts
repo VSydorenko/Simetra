@@ -317,7 +317,7 @@ async function readRows(
       throw new Refused(fail(raw, phase))
     }
   }
-  let result: ReadResult
+  let result: ReadResult | { error: CommandError }
   let tag: string
   try {
     await send({ text: BEGIN_READ_ONLY, params: [] })
@@ -347,5 +347,6 @@ async function readRows(
     state.log({ kind: "database", error: new Error(`COMMIT answered ${tag}`) })
     throw new CommandFailure({ code: "command.internal" })
   }
+  if ("error" in result) throw new CommandFailure(result.error)
   return result
 }

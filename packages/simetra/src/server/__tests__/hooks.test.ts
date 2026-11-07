@@ -13,6 +13,7 @@ import {
   catalog,
   commandObject,
   linkCatalog,
+  rootCatalog,
   sample,
   taskCatalog,
 } from "./fixtures"
@@ -1003,6 +1004,51 @@ describe("depth and queue", () => {
       {
         rows: [{ ref: OTHER, version: 1, region: THIRD }],
         included: { "Catalog.Region": [{ ref: THIRD, version: 2, code: "N" }] },
+      },
+    ])
+  })
+
+  it("runs ctx.read of the lines of an owner in the command transaction", async () => {
+    const results: unknown[] = []
+    const { runtime } = await setup(
+      (text) =>
+        text.includes("AS owner_version")
+          ? {
+              rows: [
+                {
+                  owner_version: "5",
+                  tabular: JSON.stringify({
+                    sample_lines: [
+                      { id: THIRD, parent_id: OTHER, line_number: 1 },
+                    ],
+                  }),
+                },
+              ],
+            }
+          : undefined,
+      {
+        catalog: rootCatalog,
+        objectModules: {
+          "Catalog.Client": {
+            async beforeWrite({ ctx, draft }) {
+              results.push(
+                await ctx.read({
+                  object: ORGANIZATION,
+                  tabularSection: "lines",
+                  owner: OTHER,
+                })
+              )
+              return draft
+            },
+          },
+        },
+      }
+    )
+    await runtime.run(session, create)
+    expect(results).toEqual([
+      {
+        rows: [{ ref: THIRD, parent: OTHER, lineNumber: 1 }],
+        ownerVersion: 5,
       },
     ])
   })

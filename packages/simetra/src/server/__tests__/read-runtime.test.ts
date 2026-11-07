@@ -11,6 +11,7 @@ import {
   client,
   commandObject,
   linkCatalog,
+  rootCatalog,
   taskCatalog,
 } from "./fixtures"
 import {
@@ -19,6 +20,7 @@ import {
   RIGHTS,
   ROLE,
   ROLLBACK,
+  ORGANIZATION,
   answer,
   create,
   session,
@@ -377,6 +379,49 @@ describe("CommandRuntime.read", () => {
     expect(log.mock.calls).toEqual([
       [{ kind: "database", error: expect.any(Error) }],
     ])
+  })
+
+  it("refuses lines over TABULAR_LINES_MAX as command.invalid with the section path", async () => {
+    const line = { id: OTHER, parent_id: ID, line_number: 1 }
+    const { db, runtime, log } = await setup(
+      (text) =>
+        text.includes('"public"."organization"')
+          ? {
+              rows: [
+                {
+                  owner_version: "1",
+                  tabular: JSON.stringify({
+                    sample_lines: Array.from({ length: 5001 }, () => line),
+                  }),
+                },
+              ],
+            }
+          : undefined,
+      { catalog: rootCatalog }
+    )
+    expect(
+      await failureOf(
+        runtime.read(session, {
+          object: ORGANIZATION,
+          tabularSection: "lines",
+          owner: ID,
+        })
+      )
+    ).toEqual({
+      code: "command.invalid",
+      reason: "tabular-too-large",
+      path: "lines",
+    })
+    expect(db.calls).toEqual([
+      { connect: true },
+      BEGIN,
+      CLAIMS,
+      REQUEST_ROLE,
+      expect.objectContaining({ params: [ID, "5001"] }),
+      COMMIT,
+      { release: false },
+    ])
+    expect(log).not.toHaveBeenCalled()
   })
 
   describe("include", () => {

@@ -176,12 +176,14 @@ function contextOf(tx: Transaction, phase: HookPhase, scope: Scope) {
         const { object: target, plan } = prepared
         try {
           // Та сама транзакція й роль команд: хук читає те, що бачить ядро.
-          return (await executeRead(
+          const result = await executeRead(
             target,
             plan,
             async (statement, object) =>
               (await tx.enqueue([statement], { kind: "read", object })).rows
-          )) as ReadResultOf<Q>
+          )
+          if ("error" in result) tx.abort(result.error)
+          return result as ReadResultOf<Q>
         } catch (error) {
           // Відмова черги вже закрила спробу; інакше — відповідь не тієї форми.
           if (tx.terminal !== undefined) throw error
