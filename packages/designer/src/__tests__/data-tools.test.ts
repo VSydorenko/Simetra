@@ -215,6 +215,19 @@ describe("data tools", TOOL_PIPELINE, () => {
     expect(stub.counts.open).toBe(0)
   })
 
+  it("MCP data-command checks tabular arrays strictly", async () => {
+    const stub = stubData()
+    const mcp = await callMcp(stub.resource, "data-command", {
+      operations: [{ ...updateGauge, tabularSections: { lines: [] } }],
+    })
+    expect(mcp.isError).toBe(false)
+    // Сувора перевірка типова: без опції `fullTabularArrays` рантайм шле
+    // оператор перевірки ТЧ перед ядром.
+    expect(
+      stub.calls.some((c) => "text" in c && c.text.includes(" AS missing "))
+    ).toBe(true)
+  })
+
   it("MCP refuses a rights catalog without --allow-rights-write", async () => {
     const stub = stubData()
     const mcp = await callMcp(stub.resource, "data-command", {

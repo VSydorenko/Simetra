@@ -2,6 +2,7 @@ export {
   createCommandRuntime,
   readRoleOf,
   type CommandRuntime,
+  type CommandRunOptions,
   type CommandRuntimeOptions,
 } from "./runtime"
 export type { LogEntry } from "./transaction"

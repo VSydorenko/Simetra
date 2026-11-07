@@ -45,6 +45,10 @@ describe("operationSchema", () => {
       "create with expectedVersion",
       { action: "create", object, id, expectedVersion: 1 },
     ],
+    // Сторож умови безпеки `deleteIds` (Ф3): сувора перевірка ТЧ без замка
+    // покладається на обов'язковий `expectedVersion` у `update`. Якщо поле
+    // колись стане необов'язковим, перевірка без нього мусить відмовляти,
+    // а не пропускати (`checkTabularRows`, `server/phase.ts`).
     ["update without expectedVersion", { action: "update", object, id }],
     [
       "markDeletion without mark",
@@ -66,6 +70,64 @@ describe("operationSchema", () => {
     ],
   ])("rejects %s", (_, input) => {
     expect(operationSchema.safeParse(input).success).toBe(false)
+  })
+})
+
+describe("operationSchema deleteIds", () => {
+  const other = "1f9a3c1e-5b7d-4e2a-9c8b-1d2e3f4a5b6c"
+  const update = (extra: object) => ({
+    action: "update",
+    object,
+    id,
+    expectedVersion: 1,
+    tabularSections: { Lines: [] },
+    ...extra,
+  })
+
+  it("accepts deleteIds of a section the update carries", () => {
+    expect(
+      operationSchema.safeParse(
+        update({ deleteIds: { Lines: [id, nonRfcId] } })
+      ).success
+    ).toBe(true)
+  })
+
+  it.each<[string, object, string]>([
+    [
+      "a section outside tabularSections",
+      update({ deleteIds: { Other: [id] } }),
+      "deleteIds.Other",
+    ],
+    [
+      "deleteIds without tabularSections",
+      {
+        action: "update",
+        object,
+        id,
+        expectedVersion: 1,
+        deleteIds: { Lines: [id] },
+      },
+      "deleteIds.Lines",
+    ],
+    [
+      "a duplicate id",
+      update({ deleteIds: { Lines: [id, other, id] } }),
+      "deleteIds.Lines.2",
+    ],
+    [
+      "a non-UUID id",
+      update({ deleteIds: { Lines: ["x"] } }),
+      "deleteIds.Lines.0",
+    ],
+    [
+      "deleteIds on create",
+      { action: "create", object, id, deleteIds: { Lines: [id] } },
+      "",
+    ],
+  ])("rejects %s", (_, input, path) => {
+    const parsed = operationSchema.safeParse(input)
+    expect(parsed.success).toBe(false)
+    expect(parsed.error!.issues[0]!.path.join(".")).toBe(path)
   })
 })
 

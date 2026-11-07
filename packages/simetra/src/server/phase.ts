@@ -13,6 +13,7 @@ import {
   type RuntimeCatalog,
   type RuntimeObject,
   type RuntimeOperationTarget,
+  type RuntimeSection,
   CommandFailure,
 } from "simetra/model"
 import { decodeRecord } from "./decode"
@@ -180,9 +181,36 @@ export function prepareInput(
     if (prepared.action === "create" || prepared.action === "update") {
       const encoded = encodeItem(found.object, prepared, draftOf(prepared))
       if ("error" in encoded) throw new CommandFailure(encoded.error)
+      const overlap = deleteOverlapOf(found.object, prepared)
+      if (overlap !== undefined) throw new CommandFailure(invalid(overlap))
     }
     return prepared
   })
+}
+
+/** Ключ рядка ТЧ для порівняння: Postgres рівняє UUID без огляду на регістр. */
+const rowIdOf = (section: RuntimeSection, row: Record<string, unknown>) =>
+  String(row[section.keyName]).toLowerCase()
+
+/**
+ * Шлях першого id, що водночас у масиві ТЧ і в `deleteIds`: рядок не може
+ * лишитися й бути видаленим. Ключі рядків уже перевірив `encodeItem`.
+ */
+function deleteOverlapOf(
+  object: RuntimeObject,
+  op: Operation
+): string | undefined {
+  if (op.action !== "update" || op.deleteIds === undefined) return undefined
+  for (const [name, ids] of Object.entries(op.deleteIds)) {
+    const section = object.tabularSections.find((s) => s.name === name)
+    if (section === undefined) continue
+    const kept = new Set(
+      (op.tabularSections?.[name] ?? []).map((row) => rowIdOf(section, row))
+    )
+    const i = ids.findIndex((id) => kept.has(id.toLowerCase()))
+    if (i !== -1) return `deleteIds.${name}.${i}`
+  }
+  return undefined
 }
 
 const fn = (target: RuntimeOperationTarget) =>
@@ -222,6 +250,106 @@ function callOf(
 }
 
 const CONTEXT_TEXT = `SELECT set_config(${literal(COMMAND_SETTING)}, $1, true)`
+
+/** Оператор контексту команди фази (Рт5): той самий перед перевіркою ТЧ і ядром. */
+function contextOf(
+  { object, target }: Target,
+  op: PreparedOperation
+): Statement {
+  const context: CommandContext = {
+    action: target.context,
+    object: object.kindLabel,
+    root: op.id,
+  }
+  return { text: CONTEXT_TEXT, params: [JSON.stringify(context)] }
+}
+
+const tableOf = ({ schema, name }: { schema: string; name: string }) =>
+  `${ident(schema)}.${ident(name)}`
+
+/**
+ * Оператор перевірки однієї ТЧ: версія власника й перший наявний рядок, якого
+ * немає ні в масиві, ні в `deleteIds`. ТЧ корелює з власником за всіма
+ * колонками FK `parentConstraint`; параметр на id, порожній набір —
+ * `'{}'::uuid[]` (`ARRAY[]` без типу — синтаксична помилка).
+ */
+function tabularCheckOf(
+  object: RuntimeObject,
+  section: RuntimeSection,
+  op: PreparedOperation,
+  ids: readonly string[]
+): Statement {
+  // Схема каталогу гарантує FK з `references` (`runtimeSectionSchema`).
+  const fk = section.constraints.find(
+    (c) => c.name === section.parentConstraint
+  )!
+  const on = fk.columns
+    .map((c, i) => `s.${ident(c)} = o.${ident(fk.references![i]!)}`)
+    .join(" AND ")
+  const set =
+    ids.length === 0
+      ? "'{}'::uuid[]"
+      : `ARRAY[${ids.map((_, i) => `$${i + 2}::uuid`).join(", ")}]`
+  const key = `s.${ident(section.key)}`
+  return {
+    text:
+      `SELECT o.${ident(object.versionColumn)}::text AS version, ` +
+      `(SELECT ${key} FROM ${tableOf(section.table)} s WHERE ${on} AND ` +
+      `${key} <> ALL(${set}) LIMIT 1) AS missing ` +
+      `FROM ${tableOf(object.table)} o WHERE o.${ident(object.key)} = $1::uuid`,
+    params: [op.id, ...ids],
+  }
+}
+
+/**
+ * Сувора перевірка масивів ТЧ `update` (спека П4-B §7.1): кожен наявний
+ * рядок — у вхідному масиві чи в `deleteIds`, інакше `command.invalid`
+ * `reason: "tabular-rows-missing"` до хуків і ядра. Перевіряється вхід
+ * викликача; правка масиву хуком — свідома дія довіреного коду.
+ *
+ * Замка рядка немає: перевірка бачить надмножину рядків ядра — fail-closed;
+ * замок перевернув би порядок замків ієрархічного довідника. Коректність без
+ * замка тримається на двох умовах механіки:
+ * (1) `expectedVersion` обов'язковий для `update` (`operationSchema` T0) —
+ *     якщо поле стане необов'язковим, перевірка без нього мусить відмовляти,
+ *     а не пропускати;
+ * (2) кожна зміна змістових колонок рядків ТЧ підвищує версію власника (Рд27),
+ *     тож паралельна вставка між перевіркою й ядром дає `command.conflict`.
+ * Власника не видно чи версія інша — вердикт за ядром.
+ */
+async function checkTabularRows(
+  tx: Transaction,
+  found: Target,
+  op: PreparedOperation
+): Promise<void> {
+  if (op.action !== "update" || op.tabularSections === undefined) return
+  const { object } = found
+  for (const section of object.tabularSections) {
+    const rows = op.tabularSections[section.name]
+    if (rows === undefined) continue
+    const ids = [
+      ...rows.map((row) => row[section.keyName] as string),
+      ...(op.deleteIds?.[section.name] ?? []),
+    ]
+    const { rows: answer } = await tx.enqueue(
+      [contextOf(found, op), tabularCheckOf(object, section, op, ids)],
+      { kind: "write", object, operation: op.action }
+    )
+    const owner = answer[0]
+    if (owner === undefined) return
+    if (typeof owner.version !== "string" || !("missing" in owner)) {
+      coreAnomaly(tx, object)
+    }
+    if (owner.version !== String(op.expectedVersion)) return
+    if (owner.missing !== null) {
+      tx.abort({
+        code: "command.invalid",
+        reason: "tabular-rows-missing",
+        path: section.name,
+      })
+    }
+  }
+}
 
 /**
  * Чернетка хука «до» — та сама перевірка, що й вхід (спека П4 §6.5): ключі
@@ -265,6 +393,7 @@ async function runNested(
   } catch (error) {
     tx.abort(error instanceof CommandFailure ? error.error : invalid())
   }
+  // `ctx.run` завжди суворий: опція виклику `run` його не вимикає.
   return runPhase(tx, op)
 }
 
@@ -325,13 +454,15 @@ async function onWrite(
  */
 export async function runPhase(
   tx: Transaction,
-  op: PreparedOperation
+  op: PreparedOperation,
+  fullTabularArrays = false
 ): Promise<Record<string, unknown>> {
   const found = targetOf(tx.state.catalog, op)
   if ("error" in found) tx.abort(found.error)
   const creation = rootCreateOf(tx.state.catalog, found.object, op)
   if (creation !== undefined) return runRootPhase(tx, found, op, creation)
   const { object } = found
+  if (!fullTabularArrays) await checkTabularRows(tx, found, op)
   // Подію визначає операція (Р-A3-2): `delete` хуків не викликає.
   const module = moduleOf(tx, object, op)
   const phase = phaseOf(tx, object, op)
@@ -458,20 +589,12 @@ async function callCore(
   call: Statement,
   membership?: RuntimeObject
 ): Promise<string> {
-  const context: CommandContext = {
-    action: target.context,
-    object: object.kindLabel,
-    root: op.id,
-  }
-  const { rows } = await tx.enqueue(
-    [{ text: CONTEXT_TEXT, params: [JSON.stringify(context)] }, call],
-    {
-      kind: "write",
-      object,
-      operation: op.action,
-      ...(membership === undefined ? {} : { membership }),
-    }
-  )
+  const { rows } = await tx.enqueue([contextOf({ object, target }, op), call], {
+    kind: "write",
+    object,
+    operation: op.action,
+    ...(membership === undefined ? {} : { membership }),
+  })
   const text = rows[0]?.r
   if (typeof text !== "string") coreAnomaly(tx, object)
   return text

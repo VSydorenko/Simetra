@@ -74,12 +74,25 @@ export interface CommandRuntimeOptions {
   log?: (entry: LogEntry) => void
 }
 
+/** Options of one {@link CommandRuntime.run} call. */
+export interface CommandRunOptions {
+  /**
+   * A tabular section array of `update` replaces the section as given:
+   * existing rows it leaves out are deleted. Without it (the default) such
+   * rows must be named in `deleteIds`, or the phase fails with
+   * `command.invalid` `reason: "tabular-rows-missing"`. `ctx.run` is always
+   * strict.
+   */
+  fullTabularArrays?: true
+}
+
 /** The command runtime of one catalog and database. */
 export interface CommandRuntime {
   /** Runs an operation or a batch in one transaction; rejects with `CommandFailure`. */
   run(
     session: SessionClaims,
-    input: Operation | readonly Operation[]
+    input: Operation | readonly Operation[],
+    options?: CommandRunOptions
   ): Promise<CommandResult>
   /**
    * Reads rows under the request role of the profile, or through the
@@ -270,7 +283,8 @@ export async function createCommandRuntime(
     readRole: member ? role : undefined,
   }
   return {
-    run: (session, input) => runCommand(state, session, input),
+    run: (session, input, options) =>
+      runCommand(state, session, input, options?.fullTabularArrays === true),
     // Форму результату задає форма запиту; `readRows` будує її з плану.
     read: <Q extends ReadQuery>(session: SessionClaims, query: Q) =>
       readRows(state, session, query) as Promise<ReadResultOf<Q>>,

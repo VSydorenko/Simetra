@@ -353,7 +353,8 @@ async function attempt(
   claims: string,
   act: { sub: string } | undefined,
   ops: readonly PreparedOperation[],
-  deadline: number
+  deadline: number,
+  fullTabularArrays: boolean
 ): Promise<Outcome> {
   let client: DatabaseClient
   try {
@@ -377,7 +378,9 @@ async function attempt(
       if (user == null) tx.abort({ code: "command.unauthenticated" })
       if (typeof user !== "string") tx.anomaly(new Error("user id is not text"))
       tx.user = user
-      for (const op of ops) rows.push(await runPhase(tx, op))
+      for (const op of ops) {
+        rows.push(await runPhase(tx, op, fullTabularArrays))
+      }
       return (await tx.enqueue([COMMIT])).command
     })
   } catch (error) {
@@ -434,7 +437,8 @@ export async function runAfterCommit(
 export async function runCommand(
   state: RuntimeState,
   session: SessionClaims,
-  input: unknown
+  input: unknown,
+  fullTabularArrays = false
 ): Promise<CommandResult> {
   rejectNested()
   const ops = prepareInput(state.catalog, input)
@@ -463,7 +467,8 @@ export async function runCommand(
         claims,
         act,
         structuredClone(snapshot),
-        deadline
+        deadline,
+        fullTabularArrays
       )
       if (!("terminal" in outcome) || !outcome.terminal.retry) break
       if (n === state.maxAttempts) break

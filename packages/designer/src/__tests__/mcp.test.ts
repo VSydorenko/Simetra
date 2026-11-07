@@ -38,10 +38,10 @@ import { expectClean } from "../../../simetra/test/support"
 const CURRENCY = "catalogs/Currency/Currency.meta.json"
 // Гейт розміру описів `tools/list` (спека designer §3.2). Правило бюджету:
 // колишній бюджет + приріст × 1,05; резерв — дубль мапінгу без `$defs`.
-// Останній замір: форми ТЧ у вході й описі data-read (картка з ТЧ, «ТЧ
-// власника», сторінка й лічильник ТЧ) — 30435 символів; до нього — 27424
-// (замір на тому самому дереві перед зміною, бюджет 30000): 30000 +
-// ceil((30435 − 27424) × 1,05) = 33162.
+// Останній замір: `deleteIds` у схемі операції й речення про масив ТЧ в
+// описі data-command — 30786 символів; до нього — 30435 (замір на тому
+// самому дереві перед зміною, бюджет 33162): 33162 +
+// ceil((30786 − 30435) × 1,05) = 33531.
 // Як заміряти: тимчасово поставити `TOOLS_LIST_BUDGET = 0` і запустити
 // `pnpm --filter @simetrajs/designer test mcp -t "within the size budget"` —
 // падіння друкує розмір («expected N to be less than or equal to 0»). Обидва
@@ -50,7 +50,7 @@ const CURRENCY = "catalogs/Currency/Currency.meta.json"
 // брати: між замірами каталог міг вирости іншими змінами.
 // Вхід `promote` — 4728 символів із 15120: його визначає
 // структура мапінгу (колонки розгортаються в корені й у кожній ТЧ), а не описи
-const TOOLS_LIST_BUDGET = 33162
+const TOOLS_LIST_BUDGET = 33531
 const clients: Client[] = []
 
 useTmpProjects()

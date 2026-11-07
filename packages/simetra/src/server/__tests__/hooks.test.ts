@@ -1672,3 +1672,236 @@ describe("command.nested", () => {
     expect(db.calls).toEqual(TWO_COMMANDS)
   })
 })
+
+describe("tabular section arrays", () => {
+  const ORDER = { kind: "Catalog" as const, name: "Order" }
+  const LINE = "66666666-6666-4666-8666-666666666666"
+  const order = commandObject({
+    name: "Order",
+    table: "order",
+    tabularSections: sample.tabularSections,
+  })
+  const orderCatalog = { ...catalog, objects: [...catalog.objects, order] }
+  const update = (extra: object = {}): Operation =>
+    ({
+      action: "update",
+      object: ORDER,
+      id: ID,
+      expectedVersion: 1,
+      tabularSections: { lines: [{ ref: LINE }] },
+      ...extra,
+    }) as Operation
+  const ids = (n: number) =>
+    n === 0
+      ? "'{}'::uuid[]"
+      : `ARRAY[${Array.from({ length: n }, (_, i) => `$${i + 2}::uuid`).join(", ")}]`
+  const check = (rows: string[]) => ({
+    text:
+      'SELECT o."version"::text AS version, (SELECT s."id" FROM' +
+      ' "public"."sample_lines" s WHERE s."parent_id" = o."id" AND' +
+      ` s."id" <> ALL(${ids(rows.length)}) LIMIT 1) AS missing` +
+      ' FROM "public"."order" o WHERE o."id" = $1::uuid',
+    params: [ID, ...rows],
+  })
+  const orderContext = context("update", "order", ID)
+  const orderCore = (lines: string[]) =>
+    call("order_save", SAVE, [
+      JSON.stringify({
+        id: ID,
+        tabular: { sample_lines: lines.map((id) => ({ id })) },
+      }),
+      "1",
+    ])
+  /** Відповідь оператора перевірки; без рядка — власника не видно. */
+  const checked =
+    (row?: { version: string; missing: string | null }): Override =>
+    (text) =>
+      text.includes(" AS missing ")
+        ? { rows: row === undefined ? [] : [row] }
+        : undefined
+  const fresh = checked({ version: "1", missing: null })
+  const withOrder = (override: Override, objectModules: Modules = {}) =>
+    setup(override, { catalog: orderCatalog, objectModules })
+
+  it("checks the input arrays before beforeWrite in one unit with the context", async () => {
+    let before = -1
+    const { db, runtime } = await withOrder(fresh, {
+      "Catalog.Order": {
+        beforeWrite({ draft }) {
+          before = db.calls.length
+          return draft
+        },
+      },
+    })
+    await runtime.run(session, update({ deleteIds: { lines: [OTHER] } }))
+    expect(db.calls).toEqual([
+      ...OPEN,
+      orderContext,
+      check([LINE, OTHER]),
+      orderContext,
+      orderCore([LINE]),
+      COMMIT,
+      { release: false },
+    ])
+    expect(before).toBe(OPEN.length + 2)
+  })
+
+  it.each<[string, Override]>([
+    ["the owner is not visible", checked()],
+    ["the version differs", checked({ version: "2", missing: OTHER })],
+    ["no row is missing", fresh],
+  ])("leaves the verdict to the core when %s", async (_, override) => {
+    const { db, runtime } = await withOrder(override)
+    await runtime.run(session, update())
+    expect(db.calls).toEqual([
+      ...OPEN,
+      orderContext,
+      check([LINE]),
+      orderContext,
+      orderCore([LINE]),
+      COMMIT,
+      { release: false },
+    ])
+  })
+
+  it("refuses an array that leaves out an existing row, before hooks and the core", async () => {
+    const hook = vi.fn(({ draft }: { draft: object }) => draft)
+    const { db, runtime } = await withOrder(
+      checked({ version: "1", missing: OTHER }),
+      { "Catalog.Order": { beforeWrite: hook } }
+    )
+    expect(
+      await failureOf(
+        runtime.run(session, update({ tabularSections: { lines: [] } }))
+      )
+    ).toEqual({
+      code: "command.invalid",
+      reason: "tabular-rows-missing",
+      path: "lines",
+    })
+    expect(hook).not.toHaveBeenCalled()
+    expect(db.calls).toEqual([
+      ...OPEN,
+      orderContext,
+      check([]),
+      ROLLBACK,
+      { release: false },
+    ])
+  })
+
+  it("refuses an id both in the array and in deleteIds before the database", async () => {
+    const { db, runtime } = await withOrder(fresh)
+    expect(
+      await failureOf(
+        runtime.run(session, update({ deleteIds: { lines: [OTHER, LINE] } }))
+      )
+    ).toEqual({ code: "command.invalid", path: "deleteIds.lines.1" })
+    expect(db.calls).toEqual([])
+  })
+
+  it("checks the input array, not the array a hook returns", async () => {
+    const { db, runtime } = await withOrder(fresh, {
+      "Catalog.Order": {
+        beforeWrite: () => ({ tabularSections: { lines: [] } }),
+      },
+    })
+    await runtime.run(session, update())
+    expect(db.calls).toContainEqual(check([LINE]))
+    expect(db.calls).toContainEqual(orderCore([]))
+  })
+
+  it("sends no check with fullTabularArrays", async () => {
+    const { db, runtime } = await withOrder(fresh)
+    await runtime.run(session, update(), { fullTabularArrays: true })
+    expect(db.calls).toEqual([
+      ...OPEN,
+      orderContext,
+      orderCore([LINE]),
+      COMMIT,
+      { release: false },
+    ])
+  })
+
+  it("checks a ctx.run phase even when run has fullTabularArrays", async () => {
+    const { db, runtime } = await withOrder(fresh, {
+      "Catalog.Client": {
+        async beforeWrite({ ctx, draft }) {
+          await ctx.run(update())
+          return draft
+        },
+      },
+    })
+    await runtime.run(session, create, { fullTabularArrays: true })
+    expect(db.calls).toEqual([
+      ...OPEN,
+      orderContext,
+      check([LINE]),
+      orderContext,
+      orderCore([LINE]),
+      ...clientPhase,
+      COMMIT,
+      { release: false },
+    ])
+  })
+
+  it("does not check a create", async () => {
+    const { db, runtime } = await withOrder(fresh)
+    await runtime.run(session, {
+      action: "create",
+      object: ORDER,
+      id: ID,
+      values: { company: COMPANY },
+      tabularSections: { lines: [{ ref: LINE }] },
+    })
+    expect(
+      db.calls.some((c) => "text" in c && c.text.includes(" AS missing "))
+    ).toBe(false)
+  })
+
+  it("shows beforeWrite the whole input array without deleteIds", async () => {
+    const seen: unknown[] = []
+    const { runtime } = await withOrder(fresh, {
+      "Catalog.Order": {
+        beforeWrite({ draft }) {
+          seen.push(structuredClone(draft))
+          return draft
+        },
+      },
+    })
+    await runtime.run(session, update({ deleteIds: { lines: [OTHER] } }))
+    expect(seen).toEqual([{ tabularSections: { lines: [{ ref: LINE }] } }])
+  })
+
+  it("correlates the section with its owner on every column of the foreign key", async () => {
+    const [lines] = sample.tabularSections
+    const composite = commandObject({
+      name: "Order",
+      table: "order",
+      tabularSections: [
+        {
+          ...lines!,
+          constraints: [
+            {
+              name: lines!.parentConstraint,
+              kind: "foreignKey",
+              columns: ["parent_id", "company_id"],
+              references: ["id", "company_id"],
+            },
+          ],
+        },
+      ],
+    })
+    const { db, runtime } = await setup(fresh, {
+      catalog: { ...catalog, objects: [...catalog.objects, composite] },
+    })
+    await runtime.run(session, update())
+    const plain = check([LINE])
+    expect(db.calls).toContainEqual({
+      ...plain,
+      text: plain.text.replace(
+        's."parent_id" = o."id"',
+        's."parent_id" = o."id" AND s."company_id" = o."company_id"'
+      ),
+    })
+  })
+})
