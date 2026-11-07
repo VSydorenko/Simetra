@@ -6,6 +6,7 @@ import {
 } from "simetra/compiler"
 import {
   runtimeCatalogSchema,
+  standardElementId,
   type RuntimeCatalog,
   type RuntimeObject,
 } from "simetra/model"
@@ -193,6 +194,25 @@ describe("buildRuntimeCatalog", () => {
         ["id", "parent_id", "line_number"].includes(a.column)
       )
     ).toEqual([])
+  })
+
+  // id ТЧ — її ідентичність у формі передачі (рішення В4, В12): береться з
+  // походження фізичної таблиці, а не з імені, яке змінюється; стандартна ТЧ
+  // (дельта «Ролей») несе синтетичний id елемента.
+  it("a tabular section carries its UUID", () => {
+    const sections = catalog.objects.flatMap((o) => o.tabularSections)
+    const roles = objectOf("OrgRoles")
+    expect(roles.tabularSections.map((s) => s.id)).toContain(
+      standardElementId(roles.id, { logicalName: "delta" })
+    )
+    for (const section of sections) {
+      const table = model.physical.tables.find(
+        (t) =>
+          t.schema === section.table.schema && t.name === section.table.name
+      )
+      expect(table?.origin.tabularSectionId, section.table.name).toBeDefined()
+      expect(section.id).toBe(table!.origin.tabularSectionId)
+    }
   })
 
   it("insert and update flags follow the command grant keys", () => {

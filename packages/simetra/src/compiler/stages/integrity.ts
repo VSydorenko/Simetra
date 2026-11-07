@@ -9,6 +9,7 @@ import {
   walkExpr,
   defaultMayRepeat,
   defaultViolatesValueChecks,
+  standardElementId,
   type Attribute,
   type AttributeCase,
   type Catalog,
@@ -66,11 +67,7 @@ import { textCalls } from "../sql/dependencies"
 import type { SqlParser } from "../sql/parse"
 import { pgNamespaceKeys, type VerbatimUnit } from "../sql/units"
 import { PROJECT_FILE, objectKey, type ParsedObject } from "./files"
-import {
-  registerTargetError,
-  standardElementId,
-  type ResolvedReference,
-} from "./identity"
+import { registerTargetError, type ResolvedReference } from "./identity"
 import {
   hasScopeKeyUnique,
   isDeclaredTable,

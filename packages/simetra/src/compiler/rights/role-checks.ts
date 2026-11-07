@@ -2,6 +2,7 @@ import {
   KIND_REGISTRY,
   MEMBERSHIP_SET_FUNCTION,
   STANDARD_ACTIONS,
+  standardElementId,
   type Catalog,
   type Role,
   type ScopeKind,
@@ -9,7 +10,7 @@ import {
 import type { Contracts } from "../contracts"
 import { diagnostic, type Diagnostic } from "../diagnostics"
 import type { ParsedObject } from "../stages/files"
-import { standardElementId, type ResolvedReference } from "../stages/identity"
+import { type ResolvedReference } from "../stages/identity"
 import { usersCatalogOf } from "../stages/model"
 import { membershipOfScopeKind, type RightsCheckContext } from "./checks"
 import {

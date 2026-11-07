@@ -2,6 +2,7 @@ import { z } from "zod"
 import {
   SQL_UNIT_CLASSES,
   standardLogicalName,
+  standardElementId,
   type AttributeCase,
   type PhysicalColumn,
   type PhysicalSnapshot,
@@ -12,7 +13,6 @@ import { canonicalize, sha256Hex } from "../../canonical"
 import type { CompiledModel } from "../../compile"
 import { compareStrings } from "../../diagnostics"
 import type { UnitSubjectKey } from "../../sql/unit-target"
-import { standardElementId } from "../../stages/identity"
 import {
   conversionClass,
   type ConversionClass,

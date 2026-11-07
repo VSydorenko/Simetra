@@ -86,6 +86,7 @@ export const sample: RuntimeObject = runtimeObjectSchema.parse({
   ],
   tabularSections: [
     {
+      id: "00000000-0000-4000-8000-000000000051",
       name: "lines",
       table: { schema: "public", name: "sample_lines" },
       key: "id",

@@ -1,6 +1,7 @@
 import {
   KIND_REGISTRY,
   RIGHTS_DELTA_SECTION,
+  standardElementId,
   type Catalog,
   type PhysicalSnapshot,
   type RightsSystemCatalog,
@@ -16,7 +17,7 @@ import {
 } from "../contracts"
 import { compareStrings, diagnostic, type Diagnostic } from "../diagnostics"
 import { PROJECT_FILE, type ParsedObject } from "../stages/files"
-import { standardElementId, type ResolvedReference } from "../stages/identity"
+import { type ResolvedReference } from "../stages/identity"
 import { membershipOfScopeKind, type RightsCheckContext } from "./checks"
 import {
   customActionsOf,
