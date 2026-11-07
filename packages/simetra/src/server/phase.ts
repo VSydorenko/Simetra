@@ -11,7 +11,6 @@ import {
   type CommandContext,
   type CommandError,
   type Draft,
-  type MetadataRef,
   type ObjectModule,
   type Operation,
   type RuntimeCatalog,
@@ -22,9 +21,10 @@ import {
   TABULAR_LINES_MAX,
 } from "simetra/model"
 import { decodeRecord } from "./decode"
+import { refOf, withObject } from "./errors"
 import { callHook, type HookPhase } from "./hook-context"
 import type { z } from "zod"
-import { decidingIssue, ident, issuePath, issueReason, literal } from "./read"
+import { decidingIssue, ident, issueReason, literal } from "./read"
 import type { Statement, Transaction } from "./transaction"
 import { encodeItem } from "./values"
 
@@ -62,11 +62,14 @@ function targetOf(
   const object = catalog.objects.find(
     (o) => o.kind === op.object.kind && o.name === op.object.name
   )
+  // Невідомий об'єкт — виняток правила `object`: прив'язати шлях нема до чого.
   if (object === undefined) return { error: invalid("object") }
   // Функцію ядра й дію контексту дає каталог, а не вхід (Р-A3-1): операції
   // без функції в каталозі в цього об'єкта немає.
   const target = object.operations?.[op.action]
-  if (target === undefined) return { error: invalid("action") }
+  if (target === undefined) {
+    return { error: withObject(invalid("action"), object) }
+  }
   return { object, target }
 }
 
@@ -124,12 +127,15 @@ function rootInput(
 ): { id: string; memberId?: string } | { error: CommandError } {
   const creation = rootCreateOf(catalog, object, op)
   if (op.action !== "create") return { id: op.id }
+  // Ключ запису в шляху — `keyName` (спека П4-B §4.0): структурне `id` на
+  // дроті не відрізнити від колонки ключа `id`.
+  const key = invalid(object.keyName)
   if (creation === undefined) {
-    if (op.id === undefined) return { error: invalid("id") }
+    if (op.id === undefined) return { error: key }
     if (op.creatorMember !== undefined) return { error: invalid(MEMBER) }
     return { id: op.id }
   }
-  if (op.id !== undefined) return { error: invalid("id") }
+  if (op.id !== undefined) return { error: key }
   if (op.tabularSections !== undefined) {
     return { error: invalid("tabularSections") }
   }
@@ -167,16 +173,15 @@ const draftOf = (op: Operation): Draft<object> =>
 function rejectedObject(
   catalog: RuntimeCatalog,
   op: unknown
-): MetadataRef | undefined {
+): RuntimeObject | undefined {
   try {
     const ref = metadataRefSchema.safeParse(
       (op as { object?: unknown } | null | undefined)?.object
     )
     if (!ref.success) return undefined
-    const known = catalog.objects.some(
+    return catalog.objects.find(
       (o) => o.kind === ref.data.kind && o.name === ref.data.name
     )
-    return known ? ref.data : undefined
   } catch {
     return undefined
   }
@@ -193,29 +198,39 @@ function schemaRefusal(
   error: z.ZodError
 ): CommandError {
   const reason = issueReason(error)
-  if (reason === LIMIT_REASONS.tabularTooLarge) {
-    const path = decidingIssue(error)?.path ?? []
-    const [index] = path
-    let op: unknown = input
-    if (typeof index === "number") {
-      try {
-        op = (input as unknown[])[index]
-      } catch {
-        op = undefined
-      }
+  const path = decidingIssue(error)?.path ?? []
+  // Операція пакета — за першим сегментом шляху; поза пакетом — сам вхід.
+  const batch = Array.isArray(input)
+  const [index] = path
+  let op: unknown = input
+  if (batch) {
+    try {
+      op = typeof index === "number" ? (input as unknown[])[index] : undefined
+    } catch {
+      op = undefined
     }
-    const object = rejectedObject(catalog, op)
+  }
+  const object = rejectedObject(catalog, op)
+  if (reason === LIMIT_REASONS.tabularTooLarge) {
     return {
       code: "command.invalid",
       reason,
       path: String(path.at(-1)),
-      ...(object === undefined ? {} : { object }),
+      ...(object === undefined ? {} : { object: refOf(object) }),
     }
   }
-  return {
-    ...invalid(issuePath(error)),
+  // Сегмент `id` операції — її ключ (спека П4-B §4.0): за відомого об'єкта
+  // шлях називає `keyName`, як і решта помилок цього об'єкта.
+  const at = batch ? 1 : 0
+  const segments = path.map(String)
+  if (object !== undefined && segments[at] === "id") {
+    segments[at] = object.keyName
+  }
+  const refusal: CommandError = {
+    ...invalid(segments.length === 0 ? undefined : segments.join(".")),
     ...(reason === undefined ? {} : { reason }),
   }
+  return object === undefined ? refusal : withObject(refusal, object)
 }
 
 /**
@@ -248,7 +263,7 @@ function tabularOverLimit(
         code: "command.invalid",
         reason: LIMIT_REASONS.tabularTooLarge,
         path: name,
-        object: { kind: object.kind, name: object.name },
+        object: refOf(object),
       }
     }
   }
@@ -287,16 +302,20 @@ export function prepareInput(
   return parsed.data.map((op) => {
     const found = targetOf(catalog, op)
     if ("error" in found) throw new CommandFailure(found.error)
+    // У пакеті — об'єкт операції, що відмовила (спека П4-B §6.10).
+    const fail: (error: CommandError) => never = (error) => {
+      throw new CommandFailure(withObject(error, found.object))
+    }
     const over = tabularOverLimit(found.object, op, limits.maxTabularLines)
-    if (over !== undefined) throw new CommandFailure(over)
+    if (over !== undefined) fail(over)
     const ids = rootInput(catalog, found.object, op)
-    if ("error" in ids) throw new CommandFailure(ids.error)
+    if ("error" in ids) fail(ids.error)
     const prepared: PreparedOperation = { ...op, ...ids }
     if (prepared.action === "create" || prepared.action === "update") {
       const encoded = encodeItem(found.object, prepared, draftOf(prepared))
-      if ("error" in encoded) throw new CommandFailure(encoded.error)
+      if ("error" in encoded) fail(encoded.error)
       const overlap = deleteOverlapOf(found.object, prepared)
-      if (overlap !== undefined) throw new CommandFailure(invalid(overlap))
+      if (overlap !== undefined) fail(invalid(overlap))
     }
     return prepared
   })
@@ -340,7 +359,8 @@ function callOf(
     case "create":
     case "update": {
       const encoded = encodeItem(object, op, draft)
-      if ("error" in encoded) return encoded
+      if ("error" in encoded)
+        return { error: withObject(encoded.error, object) }
       return {
         text: `SELECT ${fn(target)}($1::jsonb, $2::bigint) AS r`,
         params: [
@@ -460,6 +480,7 @@ async function checkTabularRows(
         code: "command.invalid",
         reason: "tabular-rows-missing",
         path: section.name,
+        object: refOf(object),
       })
     }
   }
@@ -474,7 +495,7 @@ function checkDraft(
   tx: Transaction,
   op: Operation,
   draft: unknown,
-  path: (key: string) => string = (key) => key
+  refusal: (key: string) => CommandError
 ): Draft<object> {
   const keys = op.action === "markDeletion" ? [] : ["values", "tabularSections"]
   let bad: string | undefined
@@ -490,7 +511,7 @@ function checkDraft(
     tx.state.log({ kind: "hook", error })
     tx.abort({ code: "command.internal" })
   }
-  if (bad !== undefined) tx.abort(invalid(path(bad)))
+  if (bad !== undefined) tx.abort(refusal(bad))
   return draft as Draft<object>
 }
 
@@ -539,14 +560,24 @@ async function beforeWrite(
   phase: HookPhase,
   module: ObjectModule<object> | undefined,
   draft: Draft<object>,
-  path?: (key: string) => string
+  root?: RuntimeObject
 ): Promise<Draft<object>> {
   if (module?.beforeWrite === undefined) return draft
   const hook = module.beforeWrite.bind(module)
   const returned: unknown = await callHook(tx, phase, (ctx) =>
     hook({ ctx, draft })
   )
-  return checkDraft(tx, phase.op, returned, path)
+  // Ключ поза чернеткою членства — дефект `creatorMember` операції кореня:
+  // і шлях, і `object` — її, а не довідника членства. `id` чернетки — ключ
+  // запису, тож у шляху — `keyName` (спека П4-B §4.0).
+  return checkDraft(tx, phase.op, returned, (key) =>
+    root === undefined
+      ? withObject(
+          invalid(key === "id" ? phase.object.keyName : key),
+          phase.object
+        )
+      : withObject(invalid(MEMBER), root)
+  )
 }
 
 /** `onWrite` фази над копією рядка: зміна копії не змінює результату (Р-A3-15). */
@@ -632,27 +663,29 @@ async function runRootPhase(
       object: membership,
       module: memberModule,
       phase: memberPhase,
-      // Ключ поза чернеткою — дефект `creatorMember`, а не входу кореня.
       draft: await beforeWrite(
         tx,
         memberPhase,
         memberModule,
         draftOf(memberOp),
-        () => MEMBER
+        object
       ),
     }
   }
-  // Повторна перевірка обох чернеток: хук міг повернути ТЧ.
-  if (draft.tabularSections !== undefined) tx.abort(invalid("tabularSections"))
+  // Повторна перевірка обох чернеток: хук міг повернути ТЧ. Відмова
+  // членства — теж шлях `creatorMember` операції кореня.
+  const abort: (error: CommandError) => never = (error) =>
+    tx.abort(withObject(error, object))
+  if (draft.tabularSections !== undefined) abort(invalid("tabularSections"))
   let memberColumns: Record<string, unknown> | undefined
   if (member !== undefined) {
-    if (member.draft.tabularSections !== undefined) tx.abort(invalid(MEMBER))
+    if (member.draft.tabularSections !== undefined) abort(invalid(MEMBER))
     const encoded = encodeMember(member.object, member.draft.values ?? {})
-    if ("error" in encoded) tx.abort(encoded.error)
+    if ("error" in encoded) abort(encoded.error)
     memberColumns = encoded.columns
   }
   const encoded = encodeItem(object, op, draft)
-  if ("error" in encoded) tx.abort(encoded.error)
+  if ("error" in encoded) abort(encoded.error)
   const call: Statement = {
     text: `SELECT ${fn(target)}($1::jsonb, $2::jsonb, $3::uuid) AS r`,
     params: [

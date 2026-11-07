@@ -448,11 +448,16 @@ export async function runCommand(
   const ops = prepareInput(state.catalog, input, state)
   // Повний масив сам видаляє пропущені рядки: `deleteIds` поруч із ним не
   // діяв би, а мовчазний ігнор сховав би помилку викликача.
-  if (
-    fullTabularArrays &&
-    ops.some((op) => op.action === "update" && op.deleteIds !== undefined)
-  ) {
-    throw new CommandFailure({ code: "command.invalid", path: "deleteIds" })
+  const withDeletes = fullTabularArrays
+    ? ops.find((op) => op.action === "update" && op.deleteIds !== undefined)
+    : undefined
+  if (withDeletes !== undefined) {
+    // Об'єкт операції, що відмовила: `prepareInput` уже знайшов його в каталозі.
+    throw new CommandFailure({
+      code: "command.invalid",
+      path: "deleteIds",
+      object: withDeletes.object,
+    })
   }
   let claims: string
   try {

@@ -404,15 +404,43 @@ describe("prepareRead", () => {
   ])(
     "rejects %s as command.invalid with its path",
     (_, query, path, reason) => {
+      // Шлях — відносно об'єкта запиту; невідомий об'єкт — без `object`.
+      const { object } = query as { object: unknown }
       expect(prepareRead(catalog, query)).toEqual({
         error: {
           code: "command.invalid",
           path,
           ...(reason === undefined ? {} : { reason }),
+          ...(path === "object" ? {} : { object }),
         },
       })
     }
   )
+
+  // Ключ картки в шляху — `keyName` (спека П4-B §4.0): структурне `id` на
+  // дроті не відрізнити від колонки ключа `id`. Об'єкт поза каталогом —
+  // прив'язати шлях нема до чого: без `object`, шлях структурний.
+  it.each<[string, unknown, Record<string, unknown>]>([
+    [
+      "a card id that is not a UUID",
+      { object: ref, id: "nope" },
+      { path: "ref", object: ref },
+    ],
+    [
+      "a card id of an unknown object",
+      { object: { kind: "Catalog", name: "Nope" }, id: "nope" },
+      { path: "id" },
+    ],
+    [
+      "a bad object reference",
+      { object: { kind: "Nope", name: "Sample" }, id: ID },
+      { path: "object.kind" },
+    ],
+  ])("refuses %s by the schema", (_, query, fields) => {
+    expect(prepareRead(catalog, query)).toEqual({
+      error: { code: "command.invalid", ...fields },
+    })
+  })
 })
 
 describe("executeRead include", () => {
@@ -725,6 +753,7 @@ describe("tabular sections", () => {
           code: "command.invalid",
           reason: "tabular-too-large",
           path: "lines",
+          object: ref,
         },
       })
     }

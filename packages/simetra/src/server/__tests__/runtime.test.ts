@@ -282,7 +282,11 @@ describe("an object without operations", () => {
         }
       )
     )
-    expect(error).toEqual({ code: "command.invalid", path: "action" })
+    expect(error).toEqual({
+      code: "command.invalid",
+      path: "action",
+      object: { kind: "Catalog", name: "Report" },
+    })
     expect(db.calls.slice(created)).toEqual([])
   })
 })

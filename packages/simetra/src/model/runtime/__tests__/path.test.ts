@@ -101,9 +101,6 @@ describe("pathToWire / pathFromWire", () => {
     expect(pathFromWire(index, OBJECT_ID, wire)).toBe(logical)
   })
 
-  // `id` не в таблиці: T3 досі видає структурний `id`, а `pathFromWire`
-  // читає його як колонку ключа. B1b-2 (задача 5 плану, рішення П4) лишає
-  // в шляху T3 лише `keyName`.
   it.each([
     "action",
     "values",
@@ -117,6 +114,9 @@ describe("pathToWire / pathFromWire", () => {
     "title",
     "lines.0.qty",
     "creatorMember.user",
+    // Ключ запису: T3 називає його лише `keyName` (колонка `id` на дроті).
+    "ref",
+    "lines.0.ref",
   ])("pathFromWire inverts pathToWire for %s", (path) => {
     expect(
       pathFromWire(index, OBJECT_ID, pathToWire(index, OBJECT_ID, path))

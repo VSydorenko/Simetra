@@ -103,7 +103,7 @@ const EXCEPTIONS: Record<string, string> = Object.fromEntries([
   // ядро команд, — тоді виняток знімуть.
   ...["attributes", "tabularSections.attributes"].map((path) => [
     `Document.${path}.maxBytes`,
-    "documents are not command-written yet, so the runtime catalog has no document entry",
+    "межа запису; документ ще не пишеться командами — каталог прочитає поле разом з ними",
   ]),
 ])
 

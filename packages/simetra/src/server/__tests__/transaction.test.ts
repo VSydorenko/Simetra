@@ -1,4 +1,8 @@
-import { runtimeCatalogSchema, type Operation } from "simetra/model"
+import {
+  runtimeCatalogSchema,
+  type CommandError,
+  type Operation,
+} from "simetra/model"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { createCommandRuntime } from "../runtime"
 import { runAfterCommit, Transaction, type RuntimeState } from "../transaction"
@@ -180,7 +184,8 @@ describe("command transaction", () => {
     [
       "delete without id",
       { action: "delete", object: CLIENT, expectedVersion: 1 },
-      "id",
+      // Ключ запису в шляху — `keyName` (спека П4-B §4.0), не структурне `id`.
+      "ref",
     ],
     [
       "an action outside the operations",
@@ -188,7 +193,7 @@ describe("command transaction", () => {
       "action",
     ],
     ["an unknown key", { ...create, extra: 1 }, undefined],
-    ["an id that is not a UUID", { ...create, id: "x" }, "id"],
+    ["an id that is not a UUID", { ...create, id: "x" }, "ref"],
     ["an object as a string", { ...create, object: "Client" }, "object"],
     ["an empty batch", [], undefined],
     [
@@ -563,6 +568,75 @@ describe("command transaction", () => {
       { release: true },
     ])
   })
+
+  // У пакеті — об'єкт операції, що відмовила (спека П4-B §6.10); помилка
+  // бази — об'єкт знайденої таблиці, і на `COMMIT`, де фази немає.
+  const rights = {
+    action: "create",
+    object: RIGHTS,
+    id: OTHER,
+    values: { code: "R" },
+  } satisfies Operation
+  const NOPE = { kind: "Catalog" as const, name: "Nope" }
+  it.each<[string, unknown, Override, CommandError]>([
+    [
+      "a value of the second operation",
+      [create, { ...rights, values: { code: 1 } }],
+      () => undefined,
+      { code: "command.invalid", path: "code", object: RIGHTS },
+    ],
+    [
+      "a schema refusal of the second operation's key",
+      [create, { ...rights, id: "x" }],
+      () => undefined,
+      { code: "command.invalid", path: "1.ref", object: RIGHTS },
+    ],
+    [
+      // Об'єкта немає в каталозі: шлях лишається структурним, без `object`.
+      "a schema refusal of an operation of an unknown object",
+      [create, { ...rights, object: NOPE, id: "x" }],
+      () => undefined,
+      { code: "command.invalid", path: "1.id" },
+    ],
+    [
+      "a database error in the second phase",
+      [create, rights],
+      (text) =>
+        text.includes("rights_role_save")
+          ? { error: { code: "23502", table: "rights_role", column: "code" } }
+          : undefined,
+      {
+        code: "command.constraint",
+        kind: "notNull",
+        attributes: ["code"],
+        object: RIGHTS,
+      },
+    ],
+    [
+      "a deferred constraint at COMMIT",
+      [create, rights],
+      (text) =>
+        text === "COMMIT"
+          ? { error: { code: "23502", table: "client", column: "code" } }
+          : undefined,
+      {
+        code: "command.constraint",
+        kind: "notNull",
+        attributes: ["code"],
+        object: CLIENT,
+      },
+    ],
+  ])("names the object of %s", async (_, input, override, expected) => {
+    // Створення рантайму теж шле `COMMIT`: відповідь кейсу — лише на виклик.
+    let live = false
+    const { runtime } = await setup((text, params) =>
+      live ? override(text, params) : undefined
+    )
+    live = true
+    expect(await failureOf(runtime.run(session, input as Operation[]))).toEqual(
+      expected
+    )
+  })
 })
 
 describe("scope root creation", () => {
@@ -648,8 +722,8 @@ describe("scope root creation", () => {
   })
 
   it.each<[string, unknown, string]>([
-    ["an id in a root create", { ...createOrganization, id: ID }, "id"],
-    ["a create without an id", { ...create, id: undefined }, "id"],
+    ["an id in a root create", { ...createOrganization, id: ID }, "ref"],
+    ["a create without an id", { ...create, id: undefined }, "ref"],
     [
       "tabularSections in a root create",
       { ...createOrganization, tabularSections: { lines: [] } },
@@ -697,9 +771,11 @@ describe("scope root creation", () => {
     ],
   ])("rejects %s before the port", async (_, input, path) => {
     const { db, runtime } = await setupRoots()
+    // `creatorMember.*` теж мапиться через об'єкт операції, не членства.
     expect(await failureOf(runtime.run(session, input as Operation))).toEqual({
       code: "command.invalid",
       path,
+      object: (input as Operation).object,
     })
     expect(db.calls).toEqual([])
   })

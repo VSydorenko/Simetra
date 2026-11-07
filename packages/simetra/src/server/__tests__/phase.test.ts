@@ -5,17 +5,30 @@ import {
   readQuerySchema,
   type CommandError,
   type ReadQuery,
+  type RuntimeCatalog,
 } from "simetra/model"
-import { afterEach, describe, expect, it, vi } from "vitest"
+import { buildRuntimeCatalog } from "simetra/compiler"
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest"
 import { z } from "zod"
+import { uuid } from "../../compiler/__tests__/helpers"
+import {
+  MEMBER_FILE,
+  compileRights,
+  policyDomain,
+  refAttribute,
+  tenantSelfService,
+} from "../../compiler/__tests__/fixtures/rights"
 import { prepareInput } from "../phase"
 import { issueReason, prepareRead } from "../read"
 import { catalog, rootCatalog } from "./fixtures"
 import { CLIENT, ORGANIZATION } from "./harness"
 
-const refusalOf = (input: unknown): CommandError | undefined => {
+const refusalOf = (
+  input: unknown,
+  on: RuntimeCatalog = rootCatalog
+): CommandError | undefined => {
   try {
-    prepareInput(rootCatalog, input)
+    prepareInput(on, input)
   } catch (e) {
     if (e instanceof CommandFailure) return e.error
     throw e
@@ -131,6 +144,58 @@ describe("prepareRead reasons", () => {
     })
     expect(prepareRead(catalog, {})).toEqual({
       error: { code: "command.invalid", reason: "too-large", path: "keys" },
+    })
+  })
+})
+
+/**
+ * `creatorMember` проходить той самий обхід T0 з `maxBytes`, що й `values`
+ * (`encodeMember`): довге значення реквізиту членства — `too-large` до бази,
+ * а не обрізання чи відмова ядра.
+ */
+describe("creatorMember maxBytes", () => {
+  const MAX = 16
+  let compiled: RuntimeCatalog
+  beforeAll(async () => {
+    const { model, diagnostics } = await compileRights(
+      policyDomain(tenantSelfService(), {
+        [MEMBER_FILE]: {
+          attributes: [
+            refAttribute(6005, "user", "user_id", {
+              kind: "Catalog",
+              name: "Users",
+            }),
+            {
+              id: uuid(7590),
+              name: "note",
+              physicalName: "note",
+              type: "Text",
+              maxBytes: MAX,
+            },
+          ],
+        },
+      })
+    )
+    expect(diagnostics).toEqual([])
+    compiled = buildRuntimeCatalog(model!)
+  })
+  const createRoot = (note: string) => ({
+    action: "create",
+    object: ORGANIZATION,
+    creatorMember: { note },
+  })
+
+  // Міра — UTF-8 байти `JSON.stringify` значення (Р7): лапки входять у межу.
+  it("accepts a note at maxBytes", () => {
+    expect(refusalOf(createRoot("a".repeat(MAX - 2)), compiled)).toBeUndefined()
+  })
+
+  it("refuses a note over maxBytes as too-large on its member path", () => {
+    expect(refusalOf(createRoot("a".repeat(MAX - 1)), compiled)).toEqual({
+      code: "command.invalid",
+      reason: "too-large",
+      path: "creatorMember.note",
+      object: ORGANIZATION,
     })
   })
 })

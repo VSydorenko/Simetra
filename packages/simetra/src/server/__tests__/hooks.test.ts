@@ -393,9 +393,11 @@ describe("tenant creation hooks", () => {
     ],
   ])("%s: command.invalid before the core", async (_, objectModules, path) => {
     const { db, runtime } = await setupRoots(undefined, { objectModules })
+    // Відмова чернетки членства — шлях `creatorMember` операції кореня.
     expect(await failureOf(runtime.run(session, createOrganization))).toEqual({
       code: "command.invalid",
       path,
+      object: ORGANIZATION,
     })
     expect(db.calls.some((c) => "text" in c && isCore(c.text))).toBe(false)
     expect(db.calls).toEqual(CLOSED)
@@ -450,7 +452,8 @@ describe("draft of beforeWrite", () => {
       { tabularSections: { lines: [{}] } },
       "lines.0.ref",
     ],
-    ["an id", { id: OTHER }, "id"],
+    // `id` чернетки — ключ запису: у шляху `keyName` (спека П4-B §4.0).
+    ["an id", { id: OTHER }, "ref"],
     ["an undefined key", { values: undefined }, "values"],
   ])(
     "revalidates the draft returned by beforeWrite: %s",
@@ -468,6 +471,7 @@ describe("draft of beforeWrite", () => {
       expect(await failureOf(runtime.run(session, target))).toEqual({
         code: "command.invalid",
         path,
+        object: target.object,
       })
       expect(db.calls).toEqual(CLOSED)
     }
@@ -494,7 +498,11 @@ describe("draft of beforeWrite", () => {
           mark: true,
         })
       )
-      expect(error).toEqual({ code: "command.invalid", path: key })
+      expect(error).toEqual({
+        code: "command.invalid",
+        path: key,
+        object: CLIENT,
+      })
       expect(seen).toEqual([{}])
       expect(db.calls).toEqual(CLOSED)
     }
@@ -796,10 +804,12 @@ describe("hook failures", () => {
           onWrite: ({ ctx }) => ctx.reject("nope", "code"),
         },
       })
+      // `ctx.reject` — об'єкт фази хука, а не операції команди.
       expect(await failureOf(runtime.run(session, create))).toEqual({
         code: "command.rejected",
         reason: "nope",
         path: "code",
+        object: RIGHTS,
       })
       expect(db.calls).toEqual([
         ...OPEN,
@@ -1220,9 +1230,11 @@ describe("a ctx call rejected without a failure", () => {
       },
     }
     const { db, runtime, log } = await readsSubject(subject)
+    // Відмова `ctx.read` — об'єкт запиту.
     expect(await failureOf(runtime.run(session, create))).toEqual({
       code: "command.invalid",
       path: "where.value",
+      object: TASK,
     })
     expect(db.calls).toEqual(CLOSED)
     expect(db.calls).not.toContainEqual(COMMIT)
@@ -1799,6 +1811,7 @@ describe("tabular section arrays", () => {
       code: "command.invalid",
       reason: "tabular-rows-missing",
       path: "lines",
+      object: ORDER,
     })
     expect(hook).not.toHaveBeenCalled()
     expect(db.calls).toEqual([
@@ -1816,7 +1829,11 @@ describe("tabular section arrays", () => {
       await failureOf(
         runtime.run(session, update({ deleteIds: { lines: [OTHER, LINE] } }))
       )
-    ).toEqual({ code: "command.invalid", path: "deleteIds.lines.1" })
+    ).toEqual({
+      code: "command.invalid",
+      path: "deleteIds.lines.1",
+      object: ORDER,
+    })
     expect(db.calls).toEqual([])
   })
 
@@ -1853,7 +1870,7 @@ describe("tabular section arrays", () => {
           fullTabularArrays: true,
         })
       )
-    ).toEqual({ code: "command.invalid", path: "deleteIds" })
+    ).toEqual({ code: "command.invalid", path: "deleteIds", object: ORDER })
     expect(db.calls).toEqual([])
   })
 

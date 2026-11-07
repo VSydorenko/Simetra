@@ -6,6 +6,7 @@ import {
   READ_COUNT_CAP,
   TABULAR_LINES_MAX,
   isPlainObject,
+  metadataRefSchema,
   readQuerySchema,
   type BaseCastType,
   type CommandError,
@@ -20,6 +21,7 @@ import {
 } from "simetra/model"
 import type { z } from "zod"
 import { decodeCardRow, decodeLine, decodeSafeInteger, parse } from "./decode"
+import { withObject } from "./errors"
 import {
   renderFilter,
   topLevelParentEq,
@@ -585,6 +587,7 @@ const decodeRows = (
  * обрізання (Рд27): межу перевіряє T3 до повернення.
  */
 function decodeSections(
+  object: RuntimeObject,
   sections: readonly RuntimeSection[],
   column: unknown
 ):
@@ -597,7 +600,12 @@ function decodeSections(
     const lines = tabular[section.table.name]
     if (!Array.isArray(lines)) throw new Error("read lines are not an array")
     if (lines.length > TABULAR_LINES_MAX) {
-      return invalid(section.name, "tabular-too-large")
+      return {
+        error: withObject(
+          invalid(section.name, "tabular-too-large").error,
+          object
+        ),
+      }
     }
     out[section.name] = lines.map((line: unknown) => decodeLine(section, line))
   }
@@ -662,7 +670,7 @@ function readResult(
     const [row] = rows
     if (rows.length > 1) throw new Error("read lines answered several rows")
     if (row === undefined) return { rows: [] }
-    const decoded = decodeSections(sections, row.tabular)
+    const decoded = decodeSections(object, sections, row.tabular)
     if ("error" in decoded) return decoded
     const version = row.owner_version
     return {
@@ -676,7 +684,7 @@ function readResult(
   for (const row of rows) {
     const head = decodeCardRow(object, textOf(row.row, "row"))
     if (sections.length > 0) {
-      const decoded = decodeSections(sections, row.tabular)
+      const decoded = decodeSections(object, sections, row.tabular)
       if ("error" in decoded) return decoded
       head.tabularSections = decoded.lines
     }
@@ -709,14 +717,6 @@ export function issueReason(error: z.ZodError): string | undefined {
   return issue === undefined ? undefined : reasonOf(issue)
 }
 
-/** The input path of the deciding Zod issue; `undefined` — the input root. */
-export function issuePath(error: z.ZodError): string | undefined {
-  const issue = decidingIssue(error)
-  return issue === undefined || issue.path.length === 0
-    ? undefined
-    : issue.path.join(".")
-}
-
 /**
  * Checks a read query against the catalog and builds its plan; every
  * failure is `command.invalid` before the database.
@@ -732,24 +732,55 @@ export function prepareRead(
     // Геттер, що кидає, чи відкликаний `Proxy` у запиті.
     return { error: { code: "command.invalid" } }
   }
-  if (!parsed.success) {
-    const path = issuePath(parsed.error)
-    const reason = issueReason(parsed.error)
-    return {
-      error: {
-        code: "command.invalid",
-        ...(reason === undefined ? {} : { reason }),
-        ...(path === undefined ? {} : { path }),
-      },
-    }
-  }
-  const { object: ref } = parsed.data
-  const object = catalog.objects.find(
-    (o) => o.kind === ref.kind && o.name === ref.name
-  )
+  if (!parsed.success)
+    return { error: readRefusal(catalog, query, parsed.error) }
+  const object = objectOf(catalog, parsed.data.object)
+  // Невідомий об'єкт — виняток правила `object`: прив'язати шлях нема до чого.
   if (object === undefined) {
     return { error: { code: "command.invalid", path: "object" } }
   }
   const plan = buildReadPlan(catalog, object, parsed.data)
-  return "error" in plan ? plan : { object, plan }
+  // Шляхи будівника й фільтра — відносно об'єкта запиту.
+  return "error" in plan
+    ? { error: withObject(plan.error, object) }
+    : { object, plan }
+}
+
+const objectOf = (
+  catalog: RuntimeCatalog,
+  ref: { kind: string; name: string }
+): RuntimeObject | undefined =>
+  catalog.objects.find((o) => o.kind === ref.kind && o.name === ref.name)
+
+/**
+ * Відмова схеми запиту: `object` — лише коли сирий `object` відомий каталогу
+ * (читання — у `try`: геттер чи `Proxy` може кинути). Ключ картки `{ object,
+ * id }` у шляху — `keyName` об'єкта (спека П4-B §4.0): структурне `id` на
+ * дроті не відрізнити від колонки ключа `id`.
+ */
+function readRefusal(
+  catalog: RuntimeCatalog,
+  query: unknown,
+  error: z.ZodError
+): CommandError {
+  const reason = issueReason(error)
+  const segments = (decidingIssue(error)?.path ?? []).map(String)
+  let object: RuntimeObject | undefined
+  try {
+    const ref = metadataRefSchema.safeParse(
+      (query as { object?: unknown } | null | undefined)?.object
+    )
+    object = ref.success ? objectOf(catalog, ref.data) : undefined
+  } catch {
+    object = undefined
+  }
+  if (object !== undefined && segments[0] === "id") {
+    segments[0] = object.keyName
+  }
+  const refusal: CommandError = {
+    code: "command.invalid",
+    ...(reason === undefined ? {} : { reason }),
+    ...(segments.length === 0 ? {} : { path: segments.join(".") }),
+  }
+  return object === undefined ? refusal : withObject(refusal, object)
 }
