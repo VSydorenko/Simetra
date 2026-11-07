@@ -4,12 +4,32 @@ import type {
   CatalogEntryAttribute,
   CatalogEntrySection,
 } from "./catalog"
-import type { WireChange, WireCommandError, WireOperation } from "./envelope"
+import type {
+  WireChange,
+  WireCommandError,
+  WireOperation,
+  WireReadQuery,
+  WireReadResult,
+} from "./envelope"
 import type { CommandError } from "./errors"
 import type { Operation } from "./operation"
 import { pathFromWire, pathToWire } from "./path"
+import type { Filter, FilterCondition, ReadQuery, ReadResult } from "./read"
 import type { Change } from "./result"
-import { encodeItemValue, isPlainObject } from "./values"
+import {
+  INTEGER_TEXT,
+  encodeItemValue,
+  encodePair,
+  isPlainObject,
+} from "./values"
+import {
+  WireDecodeError,
+  WireEncodeError,
+  decodeRow,
+  encodeRow,
+  type LogicalRow,
+  type WireRow,
+} from "./wire"
 
 /**
  * Мапінг «логічне ↔ фізичне» операції, помилки й набору змін (спека П4-B
@@ -481,4 +501,411 @@ export function changesFromWire(
       return { ...change, object: { kind: entry.kind, name: entry.name } }
     })
   )
+}
+
+// ------------------------------------------------------------------ read
+
+/** Колонка, яку запит читання може назвати: шапки чи ТЧ-цілі. */
+interface ReadColumn {
+  name: string
+  column: string
+  /** Реквізит каталогу; без нього — ключ, версія, власник чи номер рядка. */
+  attribute?: CatalogEntryAttribute
+  /** Версія: логічна — `number`, у передачі — рядок цілого (§4.4). */
+  version?: true
+}
+
+/** Ціль імен запиту: шапка об'єкта чи ТЧ як ціль списку. */
+interface ReadTarget {
+  columns: readonly ReadColumn[]
+  where: { object: string; section?: string }
+}
+
+const attributeColumns = (
+  attributes: readonly CatalogEntryAttribute[]
+): ReadColumn[] =>
+  attributes.map((a) => ({ name: a.name, column: a.column, attribute: a }))
+
+// Ті самі набори, що й мапи колонок фільтра T3 (`server/read.ts`): пара —
+// одна колонка, її `column`; колонка мітки пари запитом не називається.
+const objectTarget = (entry: CatalogEntry): ReadTarget => ({
+  columns: [
+    { name: entry.keyName, column: entry.key },
+    { name: entry.versionName, column: entry.versionColumn, version: true },
+    ...attributeColumns(entry.attributes),
+  ],
+  where: { object: entry.id },
+})
+
+const sectionTarget = (
+  entry: CatalogEntry,
+  section: CatalogEntrySection
+): ReadTarget => ({
+  columns: [...linePlain(section), ...attributeColumns(section.attributes)],
+  where: { object: entry.id, section: section.id },
+})
+
+/** Напрям мапінгу запиту: що шукається, що виходить і як перекладається значення. */
+interface ReadWay {
+  entry(index: CatalogIndex, object: unknown): CatalogEntry
+  object(entry: CatalogEntry): unknown
+  section(entry: CatalogEntry, key: string): CatalogEntrySection
+  sectionOut(section: CatalogEntrySection): string
+  column(target: ReadTarget, key: string): ReadColumn
+  columnOut(column: ReadColumn): string
+  /** Одне значення умови (елемент `in` — окремо); `null` сюди не доходить. */
+  value(column: ReadColumn, value: unknown, path: string): unknown
+}
+
+const targetRef = (target: { object: MetadataRef }) =>
+  `${target.object.kind}.${target.object.name}`
+
+const toWire: ReadWay = {
+  entry: (index, object) =>
+    index.byRef.get(refKey(object as MetadataRef)) ??
+    refuseUnknown({ object: refKey(object as MetadataRef) }),
+  object: (entry) => entry.id,
+  section: (entry, name) =>
+    entry.tabularSections.find((s) => s.name === name) ??
+    refuseUnknown({ object: entry.id, name }),
+  sectionOut: (section) => section.id,
+  column: (target, name) =>
+    target.columns.find((c) => c.name === name) ??
+    refuseUnknown({ ...target.where, name }),
+  columnOut: (column) => column.column,
+  value: (column, value, path) => {
+    const { attribute } = column
+    if (column.version === true) {
+      return Number.isSafeInteger(value) ? String(value) : refuseInvalid(path)
+    }
+    if (attribute?.pair !== undefined) {
+      const pair = encodePair(attribute, value, path)
+      if ("error" in pair) return refuseInvalid(path)
+      return { type: pair.value.label, id: pair.value.id }
+    }
+    if (attribute?.enumValues !== undefined) {
+      return (
+        attribute.enumValues.find((v) => v.name === value)?.label ??
+        refuseInvalid(path)
+      )
+    }
+    // Решта — як є: значення перевіряє сервер тим самим кодуванням, що й
+    // команду; `bigint` JSON не несе, тож — рядком цілого.
+    return attribute?.type === "BigInt" && typeof value === "bigint"
+      ? String(value)
+      : value
+  },
+}
+
+const fromWire: ReadWay = {
+  entry: (index, object) =>
+    index.byId.get(object as string) ??
+    refuseUnknown({ object: object as string }),
+  object: (entry) => ({ kind: entry.kind, name: entry.name }),
+  section: (entry, id) =>
+    entry.tabularSections.find((s) => s.id === id) ??
+    refuseUnknown({ object: entry.id, section: id }),
+  sectionOut: (section) => section.name,
+  column: (target, column) =>
+    target.columns.find((c) => c.column === column) ??
+    refuseUnknown({ ...target.where, column }),
+  columnOut: (column) => column.name,
+  // Переклад суворий, як в операції: невідома мітка, число замість рядка
+  // версії чи пара не тієї форми — `invalid`, а не мовчазне значення, яке
+  // T3 прочитав би інакше, ніж мав на увазі клієнт.
+  value: (column, value, path) => {
+    const { attribute } = column
+    if (column.version === true) {
+      const number =
+        typeof value === "string" && INTEGER_TEXT.test(value)
+          ? Number(value)
+          : undefined
+      return number !== undefined && Number.isSafeInteger(number)
+        ? number
+        : refuseInvalid(path)
+    }
+    if (attribute?.pair !== undefined) {
+      if (
+        !isPlainObject(value) ||
+        Object.keys(value).length !== 2 ||
+        !own(value, "type") ||
+        !own(value, "id")
+      ) {
+        return refuseInvalid(path)
+      }
+      const target = attribute.pair.targets.find((t) => t.label === value.type)
+      return target === undefined
+        ? refuseInvalid(path)
+        : { type: targetRef(target), id: value.id }
+    }
+    if (attribute?.enumValues !== undefined) {
+      return (
+        attribute.enumValues.find((v) => v.label === value)?.name ??
+        refuseInvalid(path)
+      )
+    }
+    return value
+  },
+}
+
+function conditionMap(
+  node: FilterCondition,
+  target: ReadTarget,
+  way: ReadWay,
+  path: string
+): FilterCondition {
+  const column = way.column(target, node.attribute)
+  const out: FilterCondition = { attribute: way.columnOut(column), op: node.op }
+  if (node.value === undefined) return out
+  const valuePath = `${path}.value`
+  // `null` — як є: `eq null` відхиляє сервер підказкою `use-isNull`.
+  const one = (value: unknown, at: string) =>
+    value === null ? null : way.value(column, value, at)
+  out.value =
+    node.op === "in" && Array.isArray(node.value)
+      ? node.value.map((item: unknown, i) => one(item, `${valuePath}.${i}`))
+      : one(node.value, valuePath)
+  return out
+}
+
+function filterMap(
+  filter: Filter,
+  target: ReadTarget,
+  way: ReadWay,
+  path: string
+): Filter {
+  if ("not" in filter) {
+    return { not: filterMap(filter.not, target, way, `${path}.not`) }
+  }
+  if ("and" in filter) {
+    return {
+      and: filter.and.map((f, i) =>
+        filterMap(f, target, way, `${path}.and.${i}`)
+      ),
+    }
+  }
+  if ("or" in filter) {
+    return {
+      or: filter.or.map((f, i) => filterMap(f, target, way, `${path}.or.${i}`)),
+    }
+  }
+  return conditionMap(filter, target, way, path)
+}
+
+type QueryShape = Partial<{
+  object: unknown
+  tabularSection: string
+  tabularSections: true | string[]
+  where: Filter
+  orderBy: { attribute: string }[]
+  include: string[]
+}>
+
+function readQueryMap(
+  index: CatalogIndex,
+  query: QueryShape,
+  way: ReadWay
+): Row {
+  const entry = way.entry(index, query.object)
+  // Поля без імен (`id`, `owner`, `limit`, `offset`, `count`) — як є.
+  const out: Row = { ...query, object: way.object(entry) }
+  let target = objectTarget(entry)
+  if (query.tabularSection !== undefined) {
+    const section = way.section(entry, query.tabularSection)
+    out.tabularSection = way.sectionOut(section)
+    target = sectionTarget(entry, section)
+  }
+  if (Array.isArray(query.tabularSections)) {
+    out.tabularSections = query.tabularSections.map((key) =>
+      way.sectionOut(way.section(entry, key))
+    )
+  }
+  if (query.where !== undefined) {
+    out.where = filterMap(query.where, target, way, "where")
+  }
+  if (query.orderBy !== undefined) {
+    out.orderBy = query.orderBy.map((item) => ({
+      ...item,
+      attribute: way.columnOut(way.column(target, item.attribute)),
+    }))
+  }
+  if (query.include !== undefined) {
+    // `include` є лише в картці й списку об'єкта: ціль — шапка.
+    const header = objectTarget(entry)
+    out.include = query.include.map((key) =>
+      way.columnOut(way.column(header, key))
+    )
+  }
+  return out
+}
+
+/**
+ * Maps a logical read query to its wire form (T4): the object becomes its
+ * UUID, names in `where`, `orderBy` and `include` physical columns, sections
+ * their ids. Condition values: a version becomes integer text, an
+ * enumeration its label, a pair `{ type: <target label>, id }`, a `bigint`
+ * integer text; the rest stays as is. A name outside the catalog is
+ * `unknown`; an untranslatable value is `invalid` with the logical path.
+ */
+export function readQueryToWire(
+  index: CatalogIndex,
+  query: ReadQuery
+): Mapped<WireReadQuery> {
+  return mapped(
+    () => readQueryMap(index, query as QueryShape, toWire) as WireReadQuery
+  )
+}
+
+/**
+ * Maps a wire read query to its logical form (server). An unknown object,
+ * section id or column is `unknown`, never ignored; a version that is not
+ * safe integer text, an unknown enumeration label or pair target label is
+ * `invalid` with the logical path. Other values pass as they are, for
+ * `runtime.read` to validate. Never throws.
+ */
+export function readQueryFromWire(
+  index: CatalogIndex,
+  wire: WireReadQuery
+): Mapped<ReadQuery> {
+  return mapped(
+    () => readQueryMap(index, wire as QueryShape, fromWire) as ReadQuery
+  )
+}
+
+/**
+ * Рядки ТЧ-цілі кодує той самий кодек, що й ТЧ картки: рядок картки з однією
+ * ТЧ. Так у T0 одна точка кодування рядка ТЧ, і шлях відмови —
+ * `<ТЧ>.<i>.<реквізит>`, як у картці.
+ */
+function encodeLines(
+  entry: CatalogEntry,
+  section: CatalogEntrySection,
+  rows: readonly LogicalRow[]
+): WireRow[] {
+  const card = encodeRow(entry, {
+    tabularSections: Object.fromEntries([[section.name, rows]]),
+  })
+  return (card.tabularSections as Record<string, WireRow[]>)[section.id]!
+}
+
+function decodeLines(
+  entry: CatalogEntry,
+  section: CatalogEntrySection,
+  rows: readonly WireRow[]
+): LogicalRow[] {
+  const card = decodeRow(entry, {
+    tabularSections: Object.fromEntries([[section.id, rows]]),
+  })
+  return (card.tabularSections as Record<string, LogicalRow[]>)[section.name]!
+}
+
+/** Запис і ТЧ-ціль запиту; запит уже пройшов мапінг, тож невідоме — дефект. */
+function queryTarget(
+  index: CatalogIndex,
+  query: ReadQuery,
+  fail: (path: string) => Error
+): { entry: CatalogEntry; section?: CatalogEntrySection } {
+  const entry = index.byRef.get(refKey(query.object))
+  if (entry === undefined) throw fail("object")
+  if (!("tabularSection" in query)) return { entry }
+  const section = entry.tabularSections.find(
+    (s) => s.name === query.tabularSection
+  )
+  if (section === undefined) throw fail("tabularSection")
+  return { entry, section }
+}
+
+/**
+ * Encodes a read result for the wire (server): rows through `encodeRow` of
+ * the query's object (or its section, for a section read), `included` keyed
+ * by the target's UUID, `ownerVersion` as integer text. A count passes as
+ * is. Throws {@link WireEncodeError} for a value the codec rejects or an
+ * object outside the catalog — a server defect, not an input error.
+ */
+export function readResultToWire(
+  index: CatalogIndex,
+  query: ReadQuery,
+  result: ReadResult
+): WireReadResult {
+  if ("count" in result) return { ...result }
+  const { entry, section } = queryTarget(
+    index,
+    query,
+    (path) => new WireEncodeError(path)
+  )
+  const out: WireReadResult = {
+    rows:
+      section === undefined
+        ? result.rows.map((row) => encodeRow(entry, row))
+        : encodeLines(entry, section, result.rows),
+  }
+  if (result.included !== undefined) {
+    const included = new Map<string, WireRow[]>()
+    for (const [key, rows] of Object.entries(result.included)) {
+      const target = index.byRef.get(key)
+      if (target === undefined) throw new WireEncodeError(`included.${key}`)
+      included.set(
+        target.id,
+        rows.map((row) => encodeRow(target, row))
+      )
+    }
+    out.included = Object.fromEntries(included)
+  }
+  if (result.ownerVersion !== undefined) {
+    if (!Number.isSafeInteger(result.ownerVersion)) {
+      throw new WireEncodeError("ownerVersion")
+    }
+    out.ownerVersion = String(result.ownerVersion)
+  }
+  return out
+}
+
+/**
+ * Decodes a wire read result (T4) through `decodeRow`: rows of the query's
+ * object or section, `included` keyed `"<kind>.<name>"`, `ownerVersion` a
+ * safe integer. Included rows of an object the catalog does not know are
+ * dropped, as `decodeRow` drops unknown columns. Throws
+ * {@link WireDecodeError} for a value of the wrong form.
+ */
+export function readResultFromWire(
+  index: CatalogIndex,
+  query: ReadQuery,
+  wire: WireReadResult
+): ReadResult {
+  if ("count" in wire) return { ...wire }
+  const { entry, section } = queryTarget(
+    index,
+    query,
+    (path) => new WireDecodeError(path)
+  )
+  const out: ReadResult = {
+    rows:
+      section === undefined
+        ? wire.rows.map((row) => decodeRow(entry, row))
+        : decodeLines(entry, section, wire.rows),
+  }
+  if (wire.included !== undefined) {
+    const included = new Map<string, LogicalRow[]>()
+    for (const [id, rows] of Object.entries(wire.included)) {
+      const target = index.byId.get(id)
+      if (target === undefined) continue
+      included.set(
+        refKey(target),
+        rows.map((row) => decodeRow(target, row))
+      )
+    }
+    out.included = Object.fromEntries(included)
+  }
+  if (wire.ownerVersion !== undefined) {
+    const version: unknown = wire.ownerVersion
+    const number =
+      typeof version === "string" && INTEGER_TEXT.test(version)
+        ? Number(version)
+        : undefined
+    if (number === undefined || !Number.isSafeInteger(number)) {
+      throw new WireDecodeError("ownerVersion")
+    }
+    out.ownerVersion = number
+  }
+  return out
 }
