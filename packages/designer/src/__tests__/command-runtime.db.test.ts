@@ -482,6 +482,7 @@ describe("command runtime over the engine target", () => {
     expect(error).toEqual({
       code: "command.constraint",
       kind: "check",
+      object: GAUGE,
       attributes: ["reading"],
     })
     expect(await exists(GAUGE_TABLE, id)).toBe(false)

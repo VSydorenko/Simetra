@@ -466,6 +466,7 @@ describe("data tools over a real database", () => {
       expect(errorOf(await command([update]))).toEqual({
         code: "command.invalid",
         reason: "tabular-rows-missing",
+        object: GAUGE,
         path: "lines",
       })
       resultOf(await command([{ ...update, deleteIds: { lines: [dropped] } }]))
