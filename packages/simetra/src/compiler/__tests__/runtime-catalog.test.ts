@@ -959,6 +959,26 @@ describe("kernelHash", () => {
     expect(ticket?.kernelHash).toBe(objectOf("Ticket").kernelHash)
   })
 
+  // Хеш покриває форму `operations`, а з нею — довідник членства кореня з
+  // творцем: без `rootCreator` контракт створення кореня інший.
+  it("adding rootCreator to a role changes the root's kernelHash", async () => {
+    const rootOf = async (files: Files) => {
+      const { model: m, diagnostics } = await compileRights(files)
+      expect(diagnostics.filter((d) => d.severity === "error")).toEqual([])
+      return buildRuntimeCatalog(m!).objects
+    }
+    const withCreator = await rootOf(rootCreationDomain())
+    const root = withCreator.find((o) => o.creatorMembership !== undefined)!
+    const without = await rootOf(
+      edit(ROLE_FILE("TenantOwner"), (m) => {
+        delete m.rootCreator
+      })(rootCreationDomain())
+    )
+    const before = without.find((o) => o.id === root.id)!
+    expect(before.creatorMembership).toBeUndefined()
+    expect(root.kernelHash).not.toBe(before.kernelHash)
+  })
+
   it("other functions, contexts or actions give other hashes", () => {
     const operations = objectOf("OrgRoleAssignments").operations!
     const update = operations.update!
