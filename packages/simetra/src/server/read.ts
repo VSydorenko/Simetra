@@ -119,9 +119,11 @@ function cardProjection(object: RuntimeObject): string {
     const cast = textCast(a)
     return cast === undefined ? [] : [pairOf(a.column, cast)]
   })
+  // Приведень буває понад 50 — шматки, як у списку: інакше понад 100
+  // аргументів `jsonb_build_object`.
   return text.length === 0
     ? "to_jsonb(t)::text"
-    : `(to_jsonb(t) || jsonb_build_object(${text.join(", ")}))::text`
+    : `(to_jsonb(t) || ${jsonbOf(text)})::text`
 }
 
 /**
