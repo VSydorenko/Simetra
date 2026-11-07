@@ -5,8 +5,17 @@ import {
   type RuntimeObject,
 } from "simetra/model"
 import { describe, expect, it } from "vitest"
-import { prepareRead } from "../read"
-import { ID, SUBJECT, attributeOf, sample } from "./fixtures"
+import { executeRead, prepareRead } from "../read"
+import {
+  ID,
+  LINK,
+  OTHER,
+  SUBJECT,
+  attributeOf,
+  link,
+  region,
+  sample,
+} from "./fixtures"
 
 const ref = { kind: "Catalog" as const, name: "Sample" }
 
@@ -64,7 +73,7 @@ const catalog = runtimeCatalogSchema.parse({
   format: 1,
   snapshotHash: "hash-1",
   provider: "supabase",
-  objects: [object, lazyObject, wideObject],
+  objects: [object, lazyObject, wideObject, region, link],
 })
 
 const FROM = `AS row FROM "public"."sample" t`
@@ -283,6 +292,33 @@ describe("prepareRead", () => {
       "orderBy.0.attribute",
       "lazy",
     ],
+    [
+      "an include of an unknown attribute",
+      { object: LINK, id: ID, include: ["nope"] },
+      "include.0",
+    ],
+    [
+      "an include of an attribute without ref",
+      { object: LINK, id: ID, include: ["region", "code"] },
+      "include.1",
+    ],
+    [
+      "an include of a target outside the catalog",
+      { object: LINK, id: ID, include: ["ghost"] },
+      "include.0",
+    ],
+    [
+      "a repeated include",
+      { object: LINK, id: ID, include: ["region", "region"] },
+      "include.1",
+    ],
+    [
+      // Колонки немає в проєкції списку: `included` мовчки був би порожнім (В11).
+      "an include of a lazy Ref in a page",
+      { object: LINK, include: ["archive"], limit: 1 },
+      "include.0",
+      "lazy",
+    ],
   ])(
     "rejects %s as command.invalid with its path",
     (_, query, path, reason) => {
@@ -295,4 +331,113 @@ describe("prepareRead", () => {
       })
     }
   )
+})
+
+describe("executeRead include", () => {
+  const R1 = "77777777-7777-4777-8777-777777777777"
+  const R2 = "88888888-8888-4888-8888-888888888888"
+  const LINK_FROM = `AS row FROM "public"."link" t`
+  const REGION =
+    `SELECT jsonb_build_object('id', t."id", 'version', t."version", ` +
+    `'code', t."code")::text AS row FROM "public"."region" t`
+  const linkRow = (
+    id: string,
+    region: string | null,
+    backup: string | null
+  ) => ({
+    row: JSON.stringify({
+      id,
+      version: 1,
+      region_id: region,
+      backup_id: backup,
+    }),
+  })
+  const regionRow = (id: string) => ({
+    row: JSON.stringify({ id, version: 2, code: "N" }),
+  })
+
+  /** Виконує план на фейку: відповіді по черзі, оператори — з об'єктом фази. */
+  async function execute(query: unknown, answers: Record<string, unknown>[][]) {
+    const prepared = prepareRead(catalog, query)
+    if ("error" in prepared) throw new Error(prepared.error.code)
+    const calls: unknown[] = []
+    const result = await executeRead(
+      prepared.object,
+      prepared.plan,
+      (statement, target) => {
+        calls.push({ ...statement, object: target.name })
+        return Promise.resolve(answers.shift() ?? [])
+      }
+    )
+    return { calls, result }
+  }
+
+  it("reads every target once by the unique ids of the first statement", async () => {
+    const { calls, result } = await execute(
+      { object: LINK, include: ["region", "backup"], limit: 10 },
+      [
+        [linkRow(ID, R1, R2), linkRow(OTHER, R1, null)],
+        [regionRow(R1), regionRow(R2)],
+      ]
+    )
+    expect(calls).toEqual([
+      {
+        text:
+          `SELECT jsonb_build_object('id', t."id", 'version', t."version", ` +
+          `'code', t."code", 'region_id', t."region_id", ` +
+          `'backup_id', t."backup_id", 'ghost_id', t."ghost_id")::text ` +
+          `${LINK_FROM} ORDER BY "id" LIMIT $1`,
+        params: ["10"],
+        object: "Link",
+      },
+      {
+        text: `${REGION} WHERE "id" = ANY(ARRAY[$1::uuid, $2::uuid])`,
+        params: [R1, R2],
+        object: "Region",
+      },
+    ])
+    expect(result).toEqual({
+      rows: [
+        { ref: ID, version: 1, region: R1, backup: R2 },
+        { ref: OTHER, version: 1, region: R1, backup: null },
+      ],
+      included: {
+        "Catalog.Region": [
+          { ref: R1, version: 2, code: "N" },
+          { ref: R2, version: 2, code: "N" },
+        ],
+      },
+    })
+  })
+
+  it("a card includes a lazy Ref: the card carries lazy columns", async () => {
+    const { calls } = await execute(
+      { object: LINK, id: ID, include: ["archive"] },
+      [[{ row: JSON.stringify({ id: ID, version: 1, archive_id: R1 }) }]]
+    )
+    expect(calls).toEqual([
+      {
+        text: `SELECT to_jsonb(t)::text ${LINK_FROM} WHERE "id" = $1::uuid LIMIT 1`,
+        params: [ID],
+        object: "Link",
+      },
+      {
+        text: `${REGION} WHERE "id" = ANY(ARRAY[$1::uuid])`,
+        params: [R1],
+        object: "Region",
+      },
+    ])
+  })
+
+  it("without ids sends no include statement and includes an empty list", async () => {
+    const { calls, result } = await execute(
+      { object: LINK, id: ID, include: ["region"] },
+      [[linkRow(ID, null, R2)]]
+    )
+    expect(calls).toHaveLength(1)
+    expect(result).toEqual({
+      rows: [{ ref: ID, version: 1, region: null, backup: R2 }],
+      included: { "Catalog.Region": [] },
+    })
+  })
 })

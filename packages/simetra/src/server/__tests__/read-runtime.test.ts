@@ -4,11 +4,13 @@ import { createCommandRuntime, type CommandRuntime } from "../runtime"
 import { fakeDatabase, failureOf, type Answer } from "./fake-database"
 import {
   ID,
+  LINK,
   OTHER,
   TASK,
   catalog,
   client,
   commandObject,
+  linkCatalog,
   taskCatalog,
 } from "./fixtures"
 import {
@@ -352,13 +354,16 @@ describe("CommandRuntime.read", () => {
       "a COMMIT answered ROLLBACK",
       (text: string): Answer | undefined =>
         text === COMMIT.text ? { command: "ROLLBACK" } : rows(text, []),
+      read(byId, REQUEST_ROLE),
     ],
     [
+      // Рядки декодуються до `COMMIT`: з них `include` бере id.
       "a row of the wrong shape",
       (text: string): Answer | undefined =>
         isRead(text) ? { rows: [{ row: 42 }] } : undefined,
+      failed(byId, [ROLLBACK, { release: false }]),
     ],
-  ])("fails %s as command.internal and logs it", async (_, override) => {
+  ])("fails %s as command.internal and logs it", async (_, override, calls) => {
     // Відповідь діє лише на читання: створення рантайму теж має `COMMIT`.
     let armed = false
     const { db, runtime, log } = await setup((text) =>
@@ -368,10 +373,73 @@ describe("CommandRuntime.read", () => {
     expect(
       await failureOf(runtime.read(session, { object: RIGHTS, id: OTHER }))
     ).toEqual({ code: "command.internal" })
-    expect(db.calls).toEqual(read(byId, REQUEST_ROLE))
+    expect(db.calls).toEqual(calls)
     expect(log.mock.calls).toEqual([
       [{ kind: "database", error: expect.any(Error) }],
     ])
+  })
+
+  describe("include", () => {
+    const R1 = "77777777-7777-4777-8777-777777777777"
+    const linkCard = {
+      text: `SELECT to_jsonb(t)::text AS row FROM "public"."link" t WHERE "id" = $1::uuid LIMIT 1`,
+      params: [ID],
+    }
+    const regions = {
+      text:
+        `SELECT jsonb_build_object('id', t."id", 'version', t."version", 'code', t."code")::text` +
+        ` AS row FROM "public"."region" t WHERE "id" = ANY(ARRAY[$1::uuid])`,
+      params: [R1],
+    }
+    const answers =
+      (region: unknown): Override =>
+      (text) =>
+        text.includes('"public"."link"')
+          ? {
+              rows: [
+                { row: JSON.stringify({ id: ID, version: 1, region_id: R1 }) },
+              ],
+            }
+          : text.includes('"public"."region"')
+            ? { rows: [{ row: region }] }
+            : undefined
+    const query = { object: LINK, id: ID, include: ["region"] }
+
+    it("reads the targets by a second statement in the same transaction", async () => {
+      const { db, runtime } = await setup(
+        answers(JSON.stringify({ id: R1, version: 2, code: "N" })),
+        { catalog: linkCatalog }
+      )
+      expect(await runtime.read(session, query)).toEqual({
+        rows: [{ ref: ID, version: 1, region: R1 }],
+        included: { "Catalog.Region": [{ ref: R1, version: 2, code: "N" }] },
+      })
+      expect(db.calls).toEqual([
+        { connect: true },
+        BEGIN,
+        CLAIMS,
+        REQUEST_ROLE,
+        linkCard,
+        regions,
+        COMMIT,
+        { release: false },
+      ])
+    })
+
+    it("fails a target row of the wrong shape as a logged command.internal", async () => {
+      const { db, runtime, log } = await setup(answers(42), {
+        catalog: linkCatalog,
+      })
+      expect(await failureOf(runtime.read(session, query))).toEqual({
+        code: "command.internal",
+      })
+      expect(db.calls).toEqual(
+        failed(linkCard, [regions, ROLLBACK, { release: false }])
+      )
+      expect(log.mock.calls).toEqual([
+        [{ kind: "database", error: expect.any(Error) }],
+      ])
+    })
   })
 
   it.each(["the same", "another"])(

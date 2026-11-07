@@ -81,6 +81,7 @@ describe("readQuerySchema", () => {
       attribute: `a${i}`,
       direction: "asc",
     }))
+  const names = (n: number) => Array.from({ length: n }, (_, i) => `r${i}`)
   // `undefined` — запит проходить; інакше — шлях першої відмови: гілку форми
   // обирає наявний ключ (`id`, `count`), тож шлях не губиться в union.
   it.each<[string, unknown, string | undefined]>([
@@ -133,6 +134,20 @@ describe("readQuerySchema", () => {
     ["a count with limit", { object, count: true, limit: 1 }, ""],
     ["a card with where", { object, id, where }, ""],
     ["a card by a non-UUID", { object, id: "x" }, "id"],
+    ["a card with include", { object, id, include: ["region"] }, undefined],
+    [
+      "a page with 16 includes",
+      { object, include: names(16), limit: 1 },
+      undefined,
+    ],
+    ["an empty include", { object, id, include: [] }, "include"],
+    ["17 includes", { object, include: names(17), limit: 1 }, "include"],
+    [
+      "a repeated include",
+      { object, id, include: ["region", "owner", "region"] },
+      "include.2",
+    ],
+    ["a count with include", { object, count: true, include: ["a"] }, ""],
   ])("%s", (_, input, path) => {
     const parsed = readQuerySchema.safeParse(input)
     expect(

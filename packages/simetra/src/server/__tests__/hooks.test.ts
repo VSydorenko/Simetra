@@ -7,10 +7,12 @@ import { fakeDatabase, failureOf } from "./fake-database"
 import {
   COMPANY,
   ID,
+  LINK,
   OTHER,
   TASK,
   catalog,
   commandObject,
+  linkCatalog,
   sample,
   taskCatalog,
 } from "./fixtures"
@@ -944,6 +946,65 @@ describe("depth and queue", () => {
       { release: false },
     ])
     expect(rows).toEqual([{ ref: OTHER, version: 2, code: "R" }])
+  })
+
+  it("runs ctx.read with include as two statements of the command transaction", async () => {
+    const results: unknown[] = []
+    const { db, runtime } = await setup(
+      (text) =>
+        text.includes('"public"."link"')
+          ? {
+              rows: [
+                {
+                  row: JSON.stringify({
+                    id: OTHER,
+                    version: 1,
+                    region_id: THIRD,
+                  }),
+                },
+              ],
+            }
+          : text.includes('"public"."region"')
+            ? {
+                rows: [
+                  { row: JSON.stringify({ id: THIRD, version: 2, code: "N" }) },
+                ],
+              }
+            : undefined,
+      {
+        catalog: linkCatalog,
+        objectModules: {
+          "Catalog.Client": {
+            async beforeWrite({ ctx, draft }) {
+              results.push(
+                await ctx.read({ object: LINK, id: OTHER, include: ["region"] })
+              )
+              return draft
+            },
+          },
+        },
+      }
+    )
+    await runtime.run(session, create)
+    expect(db.calls).toEqual([
+      ...OPEN,
+      readOf("link", OTHER),
+      {
+        text:
+          `SELECT jsonb_build_object('id', t."id", 'version', t."version", 'code', t."code")::text` +
+          ` AS row FROM "public"."region" t WHERE "id" = ANY(ARRAY[$1::uuid])`,
+        params: [THIRD],
+      },
+      ...clientPhase,
+      COMMIT,
+      { release: false },
+    ])
+    expect(results).toEqual([
+      {
+        rows: [{ ref: OTHER, version: 1, region: THIRD }],
+        included: { "Catalog.Region": [{ ref: THIRD, version: 2, code: "N" }] },
+      },
+    ])
   })
 
   it("runs a ctx.read count in the command transaction", async () => {

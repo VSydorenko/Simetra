@@ -8,7 +8,7 @@ import type {
   RuntimeObject,
 } from "simetra/model"
 import type { PreparedOperation } from "./phase"
-import { prepareRead, readResult } from "./read"
+import { executeRead, prepareRead } from "./read"
 import type { Transaction } from "./transaction"
 
 /** The async context of a running command: its attempt and phase depth. */
@@ -168,20 +168,23 @@ function contextOf(tx: Transaction, phase: HookPhase, scope: Scope) {
         if (depth > tx.state.maxDepth) tx.abort({ code: "command.depth" })
         return frames.run({ ...frame, depth }, () => phase.runNested(operation))
       }),
-    // Форму результату задає форма запиту; `readResult` будує її з плану.
+    // Форму результату задає форма запиту; `executeRead` будує її з плану.
     read: <Q extends ReadQuery>(query: Q) =>
       track(async () => {
         const prepared = prepareRead(tx.state.catalog, query)
         if ("error" in prepared) tx.abort(prepared.error)
         const { object: target, plan } = prepared
-        // Та сама транзакція й роль команд: хук читає те, що бачить ядро.
-        const { rows } = await tx.enqueue([plan.statement], {
-          kind: "read",
-          object: target,
-        })
         try {
-          return readResult(target, plan, rows) as ReadResultOf<Q>
+          // Та сама транзакція й роль команд: хук читає те, що бачить ядро.
+          return (await executeRead(
+            target,
+            plan,
+            async (statement, object) =>
+              (await tx.enqueue([statement], { kind: "read", object })).rows
+          )) as ReadResultOf<Q>
         } catch (error) {
+          // Відмова черги вже закрила спробу; інакше — відповідь не тієї форми.
+          if (tx.terminal !== undefined) throw error
           tx.anomaly(error)
         }
       }),

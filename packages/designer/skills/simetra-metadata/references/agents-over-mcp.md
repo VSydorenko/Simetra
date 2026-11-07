@@ -69,10 +69,11 @@ pnpm exec simetra data-read '{"query":{"object":{"kind":"Catalog","name":"Curren
 - A runtime refusal comes back as `error` with a `code` (and a `reason`);
   `BigInt` values come as decimal strings and may be passed back as strings.
 
-A query takes one of three forms: a card `{ object, id }` (the whole row),
-a page `{ object, where?, orderBy?, offset?, limit }` and a count
-`{ object, where?, count: true }`. The result is `{ rows }` or
-`{ count, capped? }`; a count stops at 10000 and then comes `capped`.
+A query takes one of three forms: a card `{ object, id, include? }` (the
+whole row), a page `{ object, where?, orderBy?, offset?, limit, include? }`
+and a count `{ object, where?, count: true }`. The result is
+`{ rows, included? }` or `{ count, capped? }`; a count stops at 10000 and
+then comes `capped`.
 
 - `where` is a tree: `{ "and": [...] }`, `{ "or": [...] }`, `{ "not": ... }`
   and conditions `{ "attribute", "op", "value" }`. Operators: `eq`, `ne`,
@@ -88,6 +89,10 @@ a page `{ object, where?, orderBy?, offset?, limit }` and a count
 - A page leaves out lazy attributes (`load: "lazy"`, `Bytes` by default);
   a card returns them. Filter or sort by a lazy attribute is refused (reason
   `lazy`).
+- `include` names up to 16 single-target `Ref` attributes. The rows they
+  reference, as the user may see them, come in `included` under
+  `"<Kind>.<Name>"` of the target; an invisible target is just missing. A
+  page cannot include a lazy `Ref` (reason `lazy`).
 
 Read a page of rows:
 
@@ -98,6 +103,18 @@ Read a page of rows:
     "where": { "attribute": "symbol", "op": "eq", "value": "$" },
     "orderBy": [{ "attribute": "description", "direction": "asc" }],
     "limit": 50
+  }
+}
+```
+
+Read a card with the rows its references point to:
+
+```json simetra:data-read
+{
+  "query": {
+    "object": { "kind": "Document", "name": "Invoice" },
+    "id": "0b9d4c5e-8f1a-4c3b-9e2d-6a7f8b9c0d1e",
+    "include": ["customer", "currency"]
   }
 }
 ```

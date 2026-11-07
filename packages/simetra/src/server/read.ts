@@ -1,5 +1,6 @@
 import {
   INTEGER_TEXT,
+  UUID_TEXT,
   isTextEncodedType,
   ORDER_BY_MAX,
   READ_COUNT_CAP,
@@ -9,6 +10,7 @@ import {
   type OrderBy,
   type ReadQuery,
   type ReadResult,
+  type ReadRows,
   type RuntimeAttribute,
   type RuntimeCatalog,
   type RuntimeObject,
@@ -41,6 +43,15 @@ export interface ReadPlan {
   statement: ReadStatement
   /** `rows` — a `row` text column per row; `count` — one row with `n`. */
   result: "rows" | "count"
+  /** Targets read after the first statement by the ids its rows reference. */
+  include?: IncludeStep[]
+}
+
+/** One `include` target: the attributes whose ids its statement reads. */
+export interface IncludeStep {
+  target: RuntimeObject
+  /** Logical names of the `Ref` attributes of the read object. */
+  attributes: string[]
 }
 
 // `jsonb_build_object` приймає до 100 аргументів: шматок — до 50 пар.
@@ -184,10 +195,52 @@ function orderClause(
 }
 
 /**
+ * Кроки `include`: реквізит — одноцільовий `Ref` з ціллю в каталозі;
+ * реквізити з тією самою ціллю діляться одним оператором. Лінивий `Ref` у
+ * списку — відмова (В11): колонки немає в проєкції, тож `included` мовчки
+ * був би порожнім.
+ */
+function includeSteps(
+  catalog: RuntimeCatalog,
+  object: RuntimeObject,
+  names: readonly string[],
+  list: boolean
+): IncludeStep[] | { error: CommandError } {
+  const steps: IncludeStep[] = []
+  for (const [i, name] of names.entries()) {
+    const path = `include.${i}`
+    const attribute = object.attributes.find((a) => a.name === name)
+    if (attribute?.ref === undefined) return invalid(path)
+    const targetId = attribute.ref.object
+    const target = catalog.objects.find((o) => o.id === targetId)
+    if (target === undefined) return invalid(path)
+    if (list && attribute.load === "lazy") return invalid(path, "lazy")
+    const step = steps.find((s) => s.target === target)
+    if (step === undefined) steps.push({ target, attributes: [name] })
+    else step.attributes.push(name)
+  }
+  return steps
+}
+
+/**
  * Builds the plan of a read form (P4-B spec §4.2) from the catalog and bound
  * parameters only; every refusal is `command.invalid` with its input path.
  */
 function buildReadPlan(
+  catalog: RuntimeCatalog,
+  object: RuntimeObject,
+  query: ReadQuery
+): ReadPlan | { error: CommandError } {
+  const plan = buildFirst(object, query)
+  if ("error" in plan || !("include" in query) || query.include === undefined) {
+    return plan
+  }
+  const include = includeSteps(catalog, object, query.include, !("id" in query))
+  return "error" in include ? include : { ...plan, include }
+}
+
+/** Перший оператор форми. */
+function buildFirst(
   object: RuntimeObject,
   query: ReadQuery
 ): ReadPlan | { error: CommandError } {
@@ -233,10 +286,78 @@ function buildReadPlan(
 }
 
 /**
- * Turns the rows of a plan's statement into the result. Throws on a row of
- * the wrong shape; the caller maps it to `command.internal`.
+ * Оператор цілі `include`: id з декодованих рядків першого оператора,
+ * унікальні, без `null`; без id оператора немає. Параметр на id, як `in`
+ * фільтра. Рядок цілі — та сама проєкція, що й її власний список.
  */
-export function readResult(
+function includeStatement(
+  step: IncludeStep,
+  rows: readonly Record<string, unknown>[]
+): ReadStatement | undefined {
+  const ids: string[] = []
+  for (const row of rows) {
+    for (const name of step.attributes) {
+      const id = row[name]
+      if (id === null || id === undefined) continue
+      if (typeof id !== "string" || !UUID_TEXT.test(id)) {
+        throw new Error("include id is not a UUID")
+      }
+      if (!ids.includes(id)) ids.push(id)
+    }
+  }
+  if (ids.length === 0) return undefined
+  const { target } = step
+  const table = `${ident(target.table.schema)}.${ident(target.table.name)}`
+  const placeholders = ids.map((_, i) => `$${i + 1}::${KEY_CAST}`)
+  return {
+    text:
+      `SELECT ${listProjection(target)} AS row FROM ${table} t` +
+      ` WHERE ${ident(target.key)} = ANY(ARRAY[${placeholders.join(", ")}])`,
+    params: ids,
+  }
+}
+
+const decodeRows = (
+  object: RuntimeObject,
+  rows: readonly Record<string, unknown>[]
+): Record<string, unknown>[] =>
+  rows.map((r) => {
+    if (typeof r.row !== "string") throw new Error("read row is not text")
+    return decodeRow(object, r.row)
+  })
+
+/** Runs one statement of a read in its transaction; `object` — its phase. */
+export type ReadStatementRunner = (
+  statement: ReadStatement,
+  object: RuntimeObject
+) => Promise<readonly Record<string, unknown>[]>
+
+/**
+ * Executes a plan through `run` — the first statement, then one statement per
+ * `include` target, all in the caller's transaction — and builds the result.
+ * Throws what `run` throws, and on a row of the wrong shape; the caller maps
+ * the latter to `command.internal`.
+ */
+export async function executeRead(
+  object: RuntimeObject,
+  plan: ReadPlan,
+  run: ReadStatementRunner
+): Promise<ReadResult> {
+  const result = readResult(object, plan, await run(plan.statement, object))
+  if (plan.include === undefined || !("rows" in result)) return result
+  const included: NonNullable<ReadRows["included"]> = {}
+  for (const step of plan.include) {
+    const statement = includeStatement(step, result.rows)
+    const key = `${step.target.kind}.${step.target.name}`
+    included[key] =
+      statement === undefined
+        ? []
+        : decodeRows(step.target, await run(statement, step.target))
+  }
+  return { ...result, included }
+}
+
+function readResult(
   object: RuntimeObject,
   plan: ReadPlan,
   rows: readonly Record<string, unknown>[]
@@ -256,12 +377,7 @@ export function readResult(
       ? { count: READ_COUNT_CAP, capped: true }
       : { count }
   }
-  return {
-    rows: rows.map((r) => {
-      if (typeof r.row !== "string") throw new Error("read row is not text")
-      return decodeRow(object, r.row)
-    }),
-  }
+  return { rows: decodeRows(object, rows) }
 }
 
 /** The input path of the first Zod issue; `undefined` — the input root. */
@@ -303,6 +419,6 @@ export function prepareRead(
   if (object === undefined) {
     return { error: { code: "command.invalid", path: "object" } }
   }
-  const plan = buildReadPlan(object, parsed.data)
+  const plan = buildReadPlan(catalog, object, parsed.data)
   return "error" in plan ? plan : { object, plan }
 }

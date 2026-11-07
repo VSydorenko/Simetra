@@ -175,7 +175,7 @@ async function onRuntime<D>(
 export const dataReadTool = defineTool({
   name: "data-read",
   description:
-    "Reads rows under RLS as the user given by --as: a card by id, a page by filter tree (where, orderBy, offset, limit up to 200) or a capped count. BigInt values come as decimal strings. A runtime error comes as data.error with a code.",
+    "Reads rows under RLS as the user given by --as: a card by id, a page by filter tree (where, orderBy, offset, limit up to 200) or a capped count. A card or a page may include the target rows of Ref attributes. BigInt values come as decimal strings. A runtime error comes as data.error with a code.",
   input: z.strictObject({ query: readQuerySchema }),
   files: "read",
   database: "none",

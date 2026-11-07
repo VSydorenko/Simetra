@@ -277,3 +277,45 @@ export const rootCatalog: RuntimeCatalog = runtimeCatalogSchema.parse({
   ...catalog,
   objects: [...catalog.objects, organization, orgMember, branch],
 })
+
+/** Ціль посилань `link`: власний id, бо об'єкти `commandObject` ділять типовий. */
+export const REGION = { kind: "Catalog" as const, name: "Region" }
+export const region = commandObject({
+  id: "00000000-0000-4000-8000-000000000031",
+  name: "Region",
+  table: "region",
+  scopeKindId: undefined,
+  scopeColumn: undefined,
+  attributes: [attr("code", "String", { column: "code" })],
+})
+const refTo = (name: string, object: string) =>
+  attr(name, "Ref", {
+    column: `${name}_id`,
+    pgType: "uuid",
+    castType: "uuid",
+    ref: { object, constraint: `link_${name}_id_fkey` },
+  })
+
+/**
+ * Довідник з посиланнями для `include`: дві на ту саму ціль, лінива, ціль
+ * поза каталогом і реквізит без `ref`.
+ */
+export const LINK = { kind: "Catalog" as const, name: "Link" }
+export const link = commandObject({
+  id: "00000000-0000-4000-8000-000000000032",
+  name: "Link",
+  table: "link",
+  scopeKindId: undefined,
+  scopeColumn: undefined,
+  attributes: [
+    attr("code", "String", { column: "code" }),
+    refTo("region", region.id),
+    refTo("backup", region.id),
+    refTo("ghost", "00000000-0000-4000-8000-0000000000ff"),
+    { ...refTo("archive", region.id), load: "lazy" },
+  ],
+})
+export const linkCatalog: RuntimeCatalog = runtimeCatalogSchema.parse({
+  ...catalog,
+  objects: [...catalog.objects, region, link],
+})

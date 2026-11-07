@@ -178,9 +178,29 @@ export const orderBySchema = z
 
 export type OrderBy = z.infer<typeof orderBySchema>
 
+/** Upper bound of `include` attributes in one read (P4-B decision В10). */
+export const INCLUDE_MAX = 16
+
+/**
+ * Single-target `Ref` attributes whose target rows come along with the read,
+ * each named once.
+ */
+export const includeSchema = z
+  .array(z.string())
+  .min(1)
+  .max(INCLUDE_MAX)
+  .superRefine((names, ctx) => {
+    names.forEach((name, i) => {
+      if (names.indexOf(name) !== i) {
+        ctx.addIssue({ code: "custom", path: [i], message: "repeated include" })
+      }
+    })
+  })
+
 const cardQuerySchema = z.strictObject({
   object: metadataRefSchema,
   id: z.guid(),
+  include: includeSchema.optional(),
 })
 const listQuerySchema = z.strictObject({
   object: metadataRefSchema,
@@ -188,6 +208,7 @@ const listQuerySchema = z.strictObject({
   orderBy: orderBySchema.optional(),
   offset: z.int().min(0).max(READ_OFFSET_MAX).optional(),
   limit: z.int().min(1).max(READ_LIMIT_MAX),
+  include: includeSchema.optional(),
 })
 const countQuerySchema = z.strictObject({
   object: metadataRefSchema,
@@ -211,7 +232,7 @@ function formOf(value: unknown): (typeof QUERY_FORMS)[number] {
 
 /**
  * A server read (P4-B spec §4.1): a card by id, a page by filter tree, or a
- * capped count. Суворий union Zod 4 губить шлях відмови (`invalid_union` на
+ * capped count; a card and a page may include the rows of `Ref` targets. Суворий union Zod 4 губить шлях відмови (`invalid_union` на
  * корені), тож форму обирає ключ до розбору, а union лишається для типу й
  * JSON-схеми входу MCP.
  */

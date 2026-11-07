@@ -28,7 +28,7 @@ import {
   type CommandDatabase,
   type DatabaseClient,
 } from "./port"
-import { ident, prepareRead, readResult } from "./read"
+import { executeRead, ident, prepareRead } from "./read"
 import {
   COMMAND_ROLE,
   COMMIT,
@@ -249,6 +249,13 @@ export async function createCommandRuntime(
   }
 }
 
+/** Відмова бази в читанні, уже змапована; будь-що інше в транзакції — аномалія. */
+class Refused {
+  constructor(
+    readonly refusal: { failure: CommandFailure; destroy: boolean }
+  ) {}
+}
+
 /**
  * Серверне читання (спека П4 §6.11): одна транзакція `READ ONLY` під роллю
  * запиту — політики бачать рівно те, що PostgREST з тими самими claims
@@ -277,7 +284,6 @@ async function readRows(
   const prepared = prepareRead(state.catalog, query)
   if ("error" in prepared) throw new CommandFailure(prepared.error)
   const { object, plan } = prepared
-  const { statement } = plan
   const fail = (raw: unknown, phase: ErrorPhase | undefined) => {
     const error = normalizeError(raw)
     const mapped = mapDatabaseError(error, state.catalog, phase)
@@ -300,31 +306,46 @@ async function readRows(
     state.readRole === undefined
       ? COMMAND_ROLE
       : { text: `SET LOCAL ROLE ${ident(state.readRole)}`, params: [] }
-  let rows: Record<string, unknown>[]
-  let tag: string
-  // Фаза читання — лише для оператора будівника: `22P02` там — вхід клієнта.
-  let phase: ErrorPhase | undefined
-  try {
-    await client.query(BEGIN_READ_ONLY, [])
-    const claimsSet = claimsStatement(claims)
-    await client.query(claimsSet.text, claimsSet.params)
-    await client.query(role.text, role.params)
-    phase = { kind: "read", object }
-    ;({ rows } = await client.query(statement.text, statement.params))
-    phase = undefined
-    ;({ command: tag } = await client.query(COMMIT.text, COMMIT.params))
-  } catch (raw) {
-    const { failure, destroy } = fail(raw, phase)
-    await endFailed(client, destroy)
-    throw failure
+  // Фаза читання — лише для операторів будівника: `22P02` там — вхід клієнта.
+  const send = async (
+    statement: { text: string; params: readonly (string | null)[] },
+    phase?: ErrorPhase
+  ) => {
+    try {
+      return await client.query(statement.text, statement.params)
+    } catch (raw) {
+      throw new Refused(fail(raw, phase))
+    }
   }
-  client.release()
+  let result: ReadResult
+  let tag: string
   try {
-    // Перервана транзакція відповідає на `COMMIT` тегом `ROLLBACK`.
-    if (tag !== "COMMIT") throw new Error(`COMMIT answered ${tag}`)
-    return readResult(object, plan, rows)
+    await send({ text: BEGIN_READ_ONLY, params: [] })
+    await send(claimsStatement(claims))
+    await send(role)
+    // Рядки декодуються до `COMMIT`: з них оператор `include` бере id.
+    result = await executeRead(
+      object,
+      plan,
+      async (statement, target) =>
+        (await send(statement, { kind: "read", object: target })).rows
+    )
+    ;({ command: tag } = await send(COMMIT))
   } catch (error) {
+    if (error instanceof Refused) {
+      await endFailed(client, error.refusal.destroy)
+      throw error.refusal.failure
+    }
+    // Відповідь не тієї форми: транзакцію відкочено, назовні — лише код.
     state.log({ kind: "database", error })
+    await endFailed(client, false)
     throw new CommandFailure({ code: "command.internal" })
   }
+  client.release()
+  // Перервана транзакція відповідає на `COMMIT` тегом `ROLLBACK`.
+  if (tag !== "COMMIT") {
+    state.log({ kind: "database", error: new Error(`COMMIT answered ${tag}`) })
+    throw new CommandFailure({ code: "command.internal" })
+  }
+  return result
 }
