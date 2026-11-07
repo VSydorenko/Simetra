@@ -14,7 +14,11 @@ export interface Facade {
    * The transport wrapper: adds `subject`, refuses a body over
    * `PAYLOAD_MAX_BYTES` and any request after `dispose()` without calling the
    * transport, handles `session-changed`. Resolves with `value`; rejects with
-   * a `CommandFailure` carrying the logical error.
+   * a `CommandFailure` carrying the logical error. A transport exception
+   * becomes `command.unavailable` without a reason (the original goes to the
+   * runtime `log`); after `dispose()` every request rejects with
+   * `command.unavailable` `disposed`, after `session-changed` — with that
+   * error.
    */
   send(request: RuntimeRequest): Promise<unknown>
 }

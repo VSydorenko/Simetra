@@ -31,6 +31,11 @@ export interface DataRuntimeOptions {
   subject: string
   /** Called once when the server reports `session-changed`. */
   onSessionChanged?: () => void
+  /**
+   * Receives the original exception of the transport; the caller sees
+   * `command.unavailable` (default `console.error`).
+   */
+  log?: (error: unknown) => void
 }
 
 // Відмова рантайму після звичайного `dispose()` (вихід, зміна користувача з
@@ -54,6 +59,7 @@ export function createDataRuntime(options: DataRuntimeOptions): DataRuntime {
   const catalog = clientCatalogSchema.parse(options.catalog)
   const index = catalogIndex(catalog.objects)
   const { transport, subject, onSessionChanged } = options
+  const log = options.log ?? ((error: unknown) => console.error(error))
   // Власний клієнт і nonce у префіксі ключів: кеш одного рантайму не видно
   // іншому, навіть з тим самим `subject` (спека §6.1, «Ізоляція кешу»).
   const queryClient = new QueryClient()
@@ -83,8 +89,14 @@ export function createDataRuntime(options: DataRuntimeOptions): DataRuntime {
     try {
       response = await transport(body)
     } catch (error) {
+      // Закритий рантайм важить більше за збій: `AbortError` після
+      // `dispose()` чи пізня відмова — це «закрито», а не «недоступно».
       if (closedWith !== undefined) throw new CommandFailure(closedWith)
-      throw error
+      // Сирий виняток обійшов би таблицю §7.3: для `run` «недоступно» —
+      // результат невідомий, і фасад перечитує ключі без повтору. Оригінал
+      // іде в журнал, викликач бачить лише код.
+      log(error)
+      throw new CommandFailure({ code: "command.unavailable" })
     }
     // Відповідь, що прийшла після закриття, нікуди не йде (спека §11, інв. 12).
     if (closedWith !== undefined) throw new CommandFailure(closedWith)

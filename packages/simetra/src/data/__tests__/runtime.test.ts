@@ -124,6 +124,36 @@ describe("runtime transport wrapper", () => {
     })
   })
 
+  describe("transport exception", () => {
+    it.each([
+      ["rejects", () => Promise.reject(new TypeError("network"))],
+      [
+        "throws",
+        () => {
+          throw new TypeError("network")
+        },
+      ],
+    ] as const)(
+      "%s: command.unavailable without a reason, the original to the log",
+      async (_, fail) => {
+        const log = vi.fn()
+        const { send } = facadeOf(
+          createDataRuntime({
+            catalog: clientCatalog(),
+            transport: fail,
+            subject: SUBJECT,
+            log,
+          })
+        )
+        expect(await failureOf(send(card()))).toEqual({
+          code: "command.unavailable",
+        })
+        expect(log).toHaveBeenCalledTimes(1)
+        expect(log.mock.calls[0]![0]).toEqual(new TypeError("network"))
+      }
+    )
+  })
+
   describe("session-changed", () => {
     it("calls onSessionChanged once and disposes the runtime", async () => {
       const { transport, respond } = controlledTransport()
@@ -226,15 +256,18 @@ describe("runtime transport wrapper", () => {
 
     it("rejects an in-flight request whose transport fails after it", async () => {
       const { transport, pending } = controlledTransport()
+      const log = vi.fn()
       const runtime = createDataRuntime({
         catalog: clientCatalog(),
         transport,
         subject: SUBJECT,
+        log,
       })
       const request = facadeOf(runtime).send(card())
       runtime.dispose()
       pending[0]!.fail(new TypeError("network"))
       expect(await failureOf(request)).toEqual(DISPOSED)
+      expect(log).not.toHaveBeenCalled()
     })
 
     it("does not call onSessionChanged for a session-changed after it", async () => {
