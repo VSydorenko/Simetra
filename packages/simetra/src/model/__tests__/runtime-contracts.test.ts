@@ -8,6 +8,7 @@ import {
   operationSchema,
   readQuerySchema,
   runtimeAttributeSchema,
+  TABULAR_LINES_MAX,
   runtimeCatalogSchema,
   sessionClaimsSchema,
   type ObjectModule,
@@ -73,6 +74,13 @@ describe("operationSchema", () => {
   })
 })
 
+/** `n` різних UUID: номер у хвостовій групі. */
+const uniqueIds = (n: number) =>
+  Array.from(
+    { length: n },
+    (_, i) => `0f9a3c1e-5b7d-4e2a-9c8b-${i.toString(16).padStart(12, "0")}`
+  )
+
 describe("operationSchema deleteIds", () => {
   const other = "1f9a3c1e-5b7d-4e2a-9c8b-1d2e3f4a5b6c"
   const update = (extra: object) => ({
@@ -114,10 +122,21 @@ describe("operationSchema deleteIds", () => {
       update({ deleteIds: { Lines: [id, other, id] } }),
       "deleteIds.Lines.2",
     ],
+    // Postgres рівняє UUID без огляду на регістр: це той самий рядок.
+    [
+      "a duplicate id in another case",
+      update({ deleteIds: { Lines: [id, id.toUpperCase()] } }),
+      "deleteIds.Lines.1",
+    ],
     [
       "a non-UUID id",
       update({ deleteIds: { Lines: ["x"] } }),
       "deleteIds.Lines.0",
+    ],
+    [
+      "deleteIds of one section over TABULAR_LINES_MAX",
+      update({ deleteIds: { Lines: uniqueIds(TABULAR_LINES_MAX + 1) } }),
+      "deleteIds.Lines",
     ],
     [
       "deleteIds on create",
@@ -128,6 +147,20 @@ describe("operationSchema deleteIds", () => {
     const parsed = operationSchema.safeParse(input)
     expect(parsed.success).toBe(false)
     expect(parsed.error!.issues[0]!.path.join(".")).toBe(path)
+  })
+
+  // Пошук дублікатів через `indexOf` був квадратичним і блокував цикл подій
+  // ще до бюджету команди; межа й `Set` тримають розбір лінійним. Поріг
+  // щедрий: квадратичний пошук на межі — десятки мс, тож він ловить лише
+  // грубий регрес, зате не флейкає.
+  it("accepts TABULAR_LINES_MAX unique ids of one section fast", () => {
+    const input = update({
+      deleteIds: { Lines: uniqueIds(TABULAR_LINES_MAX) },
+    })
+    const started = performance.now()
+    const parsed = operationSchema.safeParse(input)
+    expect(performance.now() - started).toBeLessThan(200)
+    expect(parsed.success).toBe(true)
   })
 })
 

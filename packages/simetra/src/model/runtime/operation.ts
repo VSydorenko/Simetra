@@ -1,5 +1,6 @@
 import { z } from "zod"
 import { metadataRefSchema } from "../schemas/metadata-ref"
+import { TABULAR_LINES_MAX } from "./read"
 
 /** Operations on an object that a command accepts (P4 spec §6.4). */
 export const OBJECT_OPERATIONS = [
@@ -37,15 +38,24 @@ const tabularSectionsSchema = z.record(
 
 // Рядки ТЧ, які `update` видаляє явно: масив ТЧ — повна заміна, і без
 // переліку викликач, що не назвав наявного рядка, видалив би його мовчки.
+// Межа — та сама, що в ТЧ: без неї розбір і оператор перевірки (параметр на
+// id) росли б із входом. Дублікати — через `Set`, лінійно; регістр не
+// розрізняє, бо Postgres рівняє UUID без нього.
 const deleteIdsSchema = z.record(
   z.string(),
-  z.array(rowIdSchema).superRefine((ids, ctx) => {
-    ids.forEach((id, i) => {
-      if (ids.indexOf(id) !== i) {
-        ctx.addIssue({ code: "custom", path: [i], message: "duplicate id" })
-      }
+  z
+    .array(rowIdSchema)
+    .max(TABULAR_LINES_MAX)
+    .superRefine((ids, ctx) => {
+      const seen = new Set<string>()
+      ids.forEach((id, i) => {
+        const key = id.toLowerCase()
+        if (seen.has(key)) {
+          ctx.addIssue({ code: "custom", path: [i], message: "duplicate id" })
+        }
+        seen.add(key)
+      })
     })
-  })
 )
 
 /** One operation of a command, by logical names. */
@@ -73,6 +83,7 @@ export const operationSchema = z.discriminatedUnion("action", [
        * Rows of a tabular section the update deletes, by row id. A section
        * array replaces the section as a whole, so every existing row must be
        * either in the array or here; the key is a section of `tabularSections`.
+       * At most `TABULAR_LINES_MAX` ids per section.
        */
       deleteIds: deleteIdsSchema.optional(),
     })
