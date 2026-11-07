@@ -139,8 +139,8 @@ function rawObjectOf(
  * `attributes` називає відомий каталогу `object`, і ключ запису в її шляху —
  * `keyName`, а не структурне `id`. Винятки — немає об'єкта, до якого
  * прив'язати: `path: "object"` невідомого об'єкта і відмови схеми до розбору
- * операції, коли сирий `object` входу (у пакеті — операції за індексом
- * шляху) не знаходиться в каталозі.
+ * операції, коли сирий `object` входу (у пакеті — хоч однієї операції чи
+ * елемента за індексом шляху) не знаходиться в каталозі.
  */
 export function expectErrorObject(
   catalog: RuntimeCatalog,
@@ -150,14 +150,17 @@ export function expectErrorObject(
   if (error.path === undefined && error.attributes === undefined) return
   if (error.object === undefined) {
     if (error.path === "object") return
+    // Шлях операції пакета індексу не несе (операцію називає `object`), тож
+    // без `object` відома лише та, що в пакеті є операція невідомого
+    // об'єкта; індекс лишається лише в шляху хибного елемента пакета.
     const [head = ""] = (error.path ?? "").split(".")
-    const raws = !Array.isArray(input)
-      ? [input]
-      : /^\d+$/.test(head)
-        ? [(input as unknown[])[Number(head)]]
-        : (input as unknown[])
+    const unknown = (raw: unknown) => rawObjectOf(catalog, raw) === undefined
     expect(
-      raws.every((raw) => rawObjectOf(catalog, raw) === undefined),
+      !Array.isArray(input)
+        ? unknown(input)
+        : /^\d+$/.test(head)
+          ? unknown((input as unknown[])[Number(head)])
+          : (input as unknown[]).some(unknown),
       `error without object: ${JSON.stringify(error)}`
     ).toBe(true)
     return

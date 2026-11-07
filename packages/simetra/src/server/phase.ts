@@ -24,7 +24,13 @@ import { decodeCoreRow as decodeCore } from "./decode"
 import { refOf, withObject } from "./errors"
 import { callHook, type HookPhase } from "./hook-context"
 import type { z } from "zod"
-import { decidingIssue, ident, issueReason, literal } from "./read"
+import {
+  decidingIssue,
+  ident,
+  issueReason,
+  literal,
+  operationRefusalPath,
+} from "./read"
 import type { Statement, Transaction } from "./transaction"
 import { encodeItem } from "./values"
 
@@ -188,9 +194,10 @@ function rejectedObject(
 }
 
 /**
- * `command.invalid` відмови схеми з причиною межі. Шлях ТЧ понад межу — її
- * логічне ім'я, як у решти помилок ТЧ, без префікса й індексу пакета;
- * операцію пакета називає `object`. Пакет понад межу — без шляху: це корінь.
+ * `command.invalid` відмови схеми з причиною межі. Шлях — від операції
+ * (`operationRefusalPath`): без індексу пакета й без `tabularSections`;
+ * операцію пакета називає `object`. ТЧ понад межу — лише її логічне ім'я,
+ * пакет понад межу — без шляху: це корінь.
  */
 function schemaRefusal(
   catalog: RuntimeCatalog,
@@ -221,10 +228,9 @@ function schemaRefusal(
   }
   // Сегмент `id` операції — її ключ (спека П4-B §4.0): за відомого об'єкта
   // шлях називає `keyName`, як і решта помилок цього об'єкта.
-  const at = batch ? 1 : 0
-  const segments = path.map(String)
-  if (object !== undefined && segments[at] === "id") {
-    segments[at] = object.keyName
+  const segments = operationRefusalPath(path, batch)
+  if (object !== undefined && segments[0] === "id") {
+    segments[0] = object.keyName
   }
   const refusal: CommandError = {
     ...invalid(segments.length === 0 ? undefined : segments.join(".")),

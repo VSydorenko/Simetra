@@ -589,14 +589,15 @@ describe("command transaction", () => {
       "a schema refusal of the second operation's key",
       [create, { ...rights, id: "x" }],
       () => undefined,
-      { code: "command.invalid", path: "1.ref", object: RIGHTS },
+      { code: "command.invalid", path: "ref", object: RIGHTS },
     ],
     [
-      // Об'єкта немає в каталозі: шлях лишається структурним, без `object`.
+      // Об'єкта немає в каталозі: шлях лишається структурним (`id`, не
+      // `keyName`), без `object` і, як у конверті, без індексу операції.
       "a schema refusal of an operation of an unknown object",
       [create, { ...rights, object: NOPE, id: "x" }],
       () => undefined,
-      { code: "command.invalid", path: "1.id" },
+      { code: "command.invalid", path: "id" },
     ],
     [
       "a database error in the second phase",

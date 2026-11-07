@@ -26,7 +26,7 @@ import {
 import { z } from "zod"
 import { checkCompatibility } from "./compatibility"
 import { checkRequestOrigin, type RequestOrigin } from "./origin"
-import { decidingIssue, issueReason } from "./read"
+import { decidingIssue, issueReason, operationRefusalPath } from "./read"
 import { fitResponse, fitRunResult } from "./response-budget"
 import type { CommandRuntime } from "./runtime"
 
@@ -110,7 +110,8 @@ type Raw = { request?: Record<string, unknown> } | null | undefined
  * Відмова схеми конверта (крок 1) у формі передачі. Шлях — від операції чи
  * запиту, як у логічній формі (`schemaRefusal` у `phase.ts`, `readRefusal`
  * у `read.ts`): префікс `request` і `operation` / `batch.<i>` / `query`
- * прибирається, бо T4 мапить шлях записом об'єкта, а не конверта. ТЧ понад
+ * прибирається, бо T4 мапить шлях записом об'єкта, а не конверта; шлях
+ * операції — без `tabularSections`, перший сегмент — `<id ТЧ>`. ТЧ понад
  * межу — лише `<id ТЧ>`; пакет понад межу — без шляху й об'єкта.
  */
 function envelopeRefusal(
@@ -127,24 +128,32 @@ function envelopeRefusal(
   let object: string | undefined
   // Префікс прибирається, лише коли за ним щось лишається: відсутнє поле
   // самого конверта (`request`, `operation`) зберігає свій шлях.
+  // Шлях операції — тією самою нормалізацією, що й логічна відмова
+  // (`operationRefusalPath`); запит читання її не має: його `tabularSections`
+  // — перелік, а не ТЧ.
+  let operation = false
   const [root, field, at] = path
   if (root === "request" && path.length > 1) {
     if ((field === "operation" || field === "query") && path.length > 2) {
       object = rawObject(
         () => (request()?.[field] as { object?: unknown } | undefined)?.object
       )
+      operation = field === "operation"
       path = path.slice(2)
     } else if (field === "batch" && typeof at === "number" && path.length > 3) {
       object = rawObject(
         () =>
           (request()?.batch as { object?: unknown }[] | undefined)?.[at]?.object
       )
+      operation = true
       path = path.slice(3)
     } else {
       path = path.slice(1)
     }
   }
-  const segments = path.map(String)
+  const segments = operation
+    ? operationRefusalPath(path, false)
+    : path.map(String)
   if (reason === LIMIT_REASONS.tabularTooLarge) {
     return {
       code: "command.invalid",

@@ -3,10 +3,14 @@ import {
   CommandFailure,
   LIMIT_REASONS,
   TABULAR_LINES_MAX,
+  catalogIndex,
   dataResponseSchema,
+  pathFromWire,
+  pathToWire,
   runtimeCatalogSchema,
   versionValueSchema,
   wireReadResultSchema,
+  type CommandError,
   type DataResponse,
   type ObjectModule,
   type RuntimeCatalog,
@@ -14,6 +18,7 @@ import {
 import { describe, expect, it, vi } from "vitest"
 import { checkCompatibility } from "../compatibility"
 import { createDataHandler } from "../data-handler"
+import { prepareInput } from "../phase"
 import type { RequestOrigin } from "../origin"
 import type { CommandRuntime } from "../runtime"
 import {
@@ -705,6 +710,83 @@ describe("createDataHandler: steps 4–6", () => {
     })
     expect(spy).toHaveBeenCalledWith(failure)
     spy.mockRestore()
+  })
+})
+
+/**
+ * Шлях відмови схеми однаковий в обох шарах (спека П4-B §4.0): перший
+ * сегмент шляху ТЧ — сама ТЧ (без структурного `tabularSections`), а
+ * операцію пакета називає `object`, не індекс. Шлях конверта мапиться назад
+ * у логічний записом T0 (`pathFromWire`). Поля рядка ТЧ схема не перевіряє
+ * (рядок — `record`): їх шлях дає перевірка значень, не ця відмова.
+ */
+describe("schema refusal paths: the logical layer and the envelope agree", () => {
+  const SAMPLE = { kind: "Catalog", name: "Sample" }
+  const logicalUpdate = { action: "update", object: SAMPLE, id: ID }
+  const wireUpdate = { action: "update", object: sample.id, id: ID }
+  const logicalCreate = (lines: unknown[]) => ({
+    action: "create",
+    object: SAMPLE,
+    id: ID,
+    tabularSections: { lines },
+  })
+  const wireCreate = (lines: unknown[]) => ({
+    action: "create",
+    object: sample.id,
+    id: ID,
+    tabularSections: { [SECTION]: lines },
+  })
+  const logicalDelete = {
+    ...logicalUpdate,
+    action: "delete",
+    expectedVersion: 1,
+  }
+  const wireDelete = { ...wireUpdate, action: "delete", expectedVersion: 1 }
+
+  const logicalRefusal = (input: unknown): CommandError | undefined => {
+    try {
+      prepareInput(handlerCatalog, input)
+    } catch (e) {
+      if (e instanceof CommandFailure) return e.error
+      throw e
+    }
+    return undefined
+  }
+
+  it.each<[string, unknown, object, string]>([
+    ["a header field", logicalUpdate, runOf(wireUpdate), "expectedVersion"],
+    [
+      "a tabular line",
+      logicalCreate([{}, 1]),
+      runOf(wireCreate([{}, 1])),
+      "lines.1",
+    ],
+    [
+      "a header field of the second batch operation",
+      [logicalDelete, logicalUpdate],
+      batchOf([wireDelete, wireUpdate]),
+      "expectedVersion",
+    ],
+    [
+      "a tabular line of the second batch operation",
+      [logicalDelete, logicalCreate([{}, 1])],
+      batchOf([wireDelete, wireCreate([{}, 1])]),
+      "lines.1",
+    ],
+  ])("%s", async (_, logical, wire, path) => {
+    expect(logicalRefusal(logical)).toMatchObject({
+      code: "command.invalid",
+      path,
+    })
+    const { handle } = await harness()
+    const refusal = errorOf(await handle(session, wire, HTTP))
+    expect(refusal).toMatchObject({
+      code: "command.invalid",
+      object: sample.id,
+    })
+    const index = catalogIndex(handlerCatalog.objects)
+    expect(pathFromWire(index, sample.id, refusal.path ?? "")).toBe(path)
+    expect(pathToWire(index, sample.id, path)).toBe(refusal.path)
   })
 })
 

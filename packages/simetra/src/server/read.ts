@@ -763,6 +763,28 @@ export function decidingIssue(error: z.ZodError): z.core.$ZodIssue | undefined {
   )
 }
 
+/**
+ * Шлях відмови схеми операції — одна форма для логічного шару й конверта
+ * (спека П4-B §4.0): перший сегмент шляху ТЧ — сама ТЧ, тож структурний
+ * `tabularSections` прибирається, а провідний індекс операції пакета теж —
+ * операцію називає `object`. Обидва — лише коли за ними щось лишається:
+ * хибний сам контейнер зберігає свій шлях. Шлях — від операції; конверт
+ * відрізає свій префікс `request.operation` / `request.batch` до виклику.
+ */
+export function operationRefusalPath(
+  path: readonly PropertyKey[],
+  batch: boolean
+): string[] {
+  let segments = path.map(String)
+  if (batch && typeof path[0] === "number" && segments.length > 1) {
+    segments = segments.slice(1)
+  }
+  if (segments[0] === "tabularSections" && segments.length > 1) {
+    segments = segments.slice(1)
+  }
+  return segments
+}
+
 /** The `params.reason` of the first Zod issue that carries one. */
 export function issueReason(error: z.ZodError): string | undefined {
   const issue = decidingIssue(error)
