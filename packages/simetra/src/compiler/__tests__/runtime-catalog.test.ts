@@ -10,7 +10,13 @@ import {
   type RuntimeCatalog,
   type RuntimeObject,
 } from "simetra/model"
+import {
+  isSignalObject,
+  signalObject,
+  type ReadBoundary,
+} from "../access-units"
 import { modelHash } from "../canonical"
+import { hasVisibleUsers } from "../rights/functions"
 import {
   BULLETIN_FILE,
   GAUGE_LOG_FILE,
@@ -326,6 +332,50 @@ describe("buildRuntimeCatalog", () => {
  * будівник читання робить `include` і корелює ТЧ з власником. FK скоупленої
  * таблиці на ціль того самого виду — складений `(скоуп, колонка)`.
  */
+describe("signalObject", () => {
+  it.each<[string, boolean, ReadBoundary[], boolean]>([
+    ["a single uuid key under the tenant boundary", true, ["tenant"], true],
+    ["a single uuid key without boundaries", true, [], true],
+    ["a key that is not a single uuid column", false, [], false],
+    ["the Users boundary", true, ["users"], false],
+    ["the tenant and the Users boundaries", true, ["tenant", "users"], false],
+  ])("%s", (_, keyIsSingleUuid, boundaries, expected) => {
+    expect(signalObject(keyIsSingleUuid, boundaries)).toBe(expected)
+  })
+})
+
+describe("buildRuntimeCatalog: signal", () => {
+  it("Users is not a signal object once its boundary is generated", () => {
+    // Передумова: без видимих користувачів межі «Користувачів» немає, і кейс
+    // нічого б не доводив.
+    expect(hasVisibleUsers(model.contracts, "supabase")).toBe(true)
+    expect(objectOf("Users").signal).toBe(false)
+  })
+
+  it.each(["Project", "OrgRoleAssignments", "GlobalRoles"])(
+    "%s is a signal object",
+    (name) => {
+      expect(objectOf(name).signal).toBe(true)
+    }
+  )
+
+  it("a scope root is a signal object", async () => {
+    const { model: roots } = await compileRights(rootCreationDomain())
+    const organization = buildRuntimeCatalog(roots!).objects.find(
+      (o) => o.name === "Organization"
+    )
+    expect(organization?.signal).toBe(true)
+  })
+
+  // Ознака не залежить від набору операцій запису: генератор ядра (B2)
+  // читає її тим самим входом.
+  it("every entry follows isSignalObject", () => {
+    for (const object of catalog.objects) {
+      expect(object.signal, object.name).toBe(isSignalObject(model, object.id))
+    }
+  })
+})
+
 describe("buildRuntimeCatalog: ref and parentConstraint", () => {
   const fkOf = (table: string, columns: string[]) => {
     const found = model.physical.tables

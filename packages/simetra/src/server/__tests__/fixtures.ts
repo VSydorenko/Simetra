@@ -57,6 +57,7 @@ export const sample: RuntimeObject = runtimeObjectSchema.parse({
   keyName: "ref",
   versionColumn: "version",
   versionName: "version",
+  signal: true,
   attributes: [
     attr("code", "String", { maxLength: 3 }),
     attr("note", "Text"),
@@ -144,6 +145,7 @@ export function commandObject(
     keyName: "ref",
     versionColumn: "version",
     versionName: "version",
+    signal: true,
     scopeKindId: "00000000-0000-4000-8000-0000000000aa",
     scopeColumn: "company_id",
     attributes: [

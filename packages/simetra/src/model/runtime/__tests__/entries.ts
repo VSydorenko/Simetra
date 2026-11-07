@@ -146,6 +146,7 @@ const objectBase = () => ({
   versionName: "version",
   scopeKindId: SCOPE_KIND_ID,
   scopeColumn: "org_id",
+  signal: true,
 })
 
 /** An attribute of the shared catalog part; the default is a `String`. */

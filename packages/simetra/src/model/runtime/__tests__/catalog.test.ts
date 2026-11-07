@@ -101,6 +101,7 @@ describe("runtimeCatalogSchema", () => {
           keyName: "ref",
           versionColumn: "version",
           versionName: "version",
+          signal: true,
           attributes: [],
           tabularSections: [],
           constraints: [],
