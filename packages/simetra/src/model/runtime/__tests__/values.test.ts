@@ -235,3 +235,31 @@ describe("encodeAttributes: maxBytes", () => {
     })
   })
 })
+
+// Вхід `DateTime` перевіряється правилом дроту (`normalDateTime`): момент, що
+// в UTC виходить за роки 1–9999, суворий декодер не прочитав би з бази.
+describe("encodeAttributes: DateTime by the wire rule", () => {
+  const at = [attr("at", "DateTime"), attr("ats", "DateTime", { array: true })]
+  it.each<[string, unknown, string]>([
+    ["past 9999 in UTC", { at: "9999-12-31T23:59:59-05:00" }, "at"],
+    ["before 0001 in UTC", { at: "0001-01-01T00:30:00+01:00" }, "at"],
+    [
+      "an array element past 9999 in UTC",
+      { ats: ["9999-12-31T23:59:59Z", "9999-12-31T23:59:59-05:00"] },
+      "ats.1",
+    ],
+  ])("refuses %s", (_, values, path) => {
+    expect(encodeAttributes(at, values, HEADER)).toEqual({
+      error: { code: "command.invalid", path },
+    })
+  })
+
+  it.each(["9999-12-31T23:59:59Z", "0001-01-01T00:00:00Z"])(
+    "accepts the edge %s",
+    (value) => {
+      expect(encodeAttributes(at, { at: value, ats: [value] }, HEADER)).toEqual(
+        { columns: { at_col: value, ats_col: [value] } }
+      )
+    }
+  )
+})
