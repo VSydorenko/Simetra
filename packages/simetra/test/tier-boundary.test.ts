@@ -38,6 +38,15 @@ async function purity(code: string, file: string): Promise<string[]> {
     .filter((m) => m.ruleId === "@typescript-eslint/no-restricted-imports")
     .map((m) => m.message)
 }
+async function props(code: string, file: string): Promise<string[]> {
+  const [result] = await eslint.lintText(code, {
+    filePath: join(PKG, file),
+    warnIgnored: true,
+  })
+  return (result?.messages ?? [])
+    .filter((m) => m.ruleId === "no-restricted-properties")
+    .map((m) => m.message)
+}
 async function ruleIds(code: string, file: string): Promise<string[]> {
   const [result] = await eslint.lintText(code, {
     filePath: join(PKG, file),
@@ -347,6 +356,161 @@ describe("tier zones", () => {
     ]) {
       expect(await restricted(importOf(spec), file), spec).toEqual([])
     }
+  })
+
+  // Блок чистоти T4 (спека П4-B §3): ярусне правило й allow-list чистоти
+  // разом; кожен блок несе повний перелік, бо опції flat config заміщуються.
+  describe("T4 data zone", () => {
+    const refusedBoth = async (spec: string, file: string) => [
+      ...(await restricted(importOf(spec), file)),
+      ...(await purity(importOf(spec), file)),
+    ]
+    const OUTSIDE = [
+      "src/data/__fixture.ts",
+      "src/data/nested/__fixture.ts",
+      "src/data/__tests__/__fixture.ts",
+    ]
+    const ALLOWED = [
+      "simetra/model",
+      "zod",
+      "react",
+      "@tanstack/db",
+      "@tanstack/react-db",
+      "./x",
+    ]
+
+    it.each(OUTSIDE.flatMap((f) => ALLOWED.map((s) => [f, s])))(
+      "%s allows %s",
+      async (file, spec) => {
+        expect(await refusedBoth(spec, file)).toEqual([])
+      }
+    )
+
+    it.each([
+      ["src/data/__fixture.ts", "simetra/server"],
+      ["src/data/__fixture.ts", "simetra/compiler"],
+      ["src/data/__fixture.ts", "simetra/schema"],
+      ["src/data/__fixture.ts", "pg"],
+      ["src/data/__fixture.ts", "../model"],
+      ["src/data/__fixture.ts", "./../model"],
+      ["src/data/nested/__fixture.ts", "../../model"],
+      ["src/data/__fixture.ts", "./supabase/x"],
+      ["src/data/facade/__fixture.ts", "../supabase/x"],
+      ["src/data/__fixture.ts", "@supabase/realtime-js"],
+      ["src/data/__fixture.ts", "@tanstack/query-db-collection"],
+      ["src/data/__fixture.ts", "@tanstack/query-core"],
+      ["src/data/nested/__fixture.ts", "@tanstack/query-core"],
+      ["src/data/facade/__fixture.ts", "simetra/server"],
+      ["src/data/facade/__fixture.ts", "../../model"],
+      ["src/data/facade/__fixture.ts", "pg"],
+      ["src/data/facade/__fixture.ts", "@supabase/realtime-js"],
+      // ярусне правило діє й на тести: фасад не обходять з __tests__
+      ["src/data/__tests__/__fixture.ts", "@tanstack/query-core"],
+      ["src/data/__tests__/__fixture.ts", "@tanstack/query-db-collection"],
+    ])("%s refuses %s", async (file, spec) => {
+      expect(await refusedBoth(spec, file)).not.toEqual([])
+    })
+
+    it("facade allows query-core, query-db-collection and ../x", async () => {
+      const file = "src/data/facade/__fixture.ts"
+      for (const spec of [
+        "@tanstack/query-core",
+        "@tanstack/query-db-collection",
+        "@tanstack/db",
+        "../x",
+        "./y",
+      ])
+        expect(await refusedBoth(spec, file), spec).toEqual([])
+      expect(await refusedBoth("../x", "src/data/nested/__fixture.ts")).toEqual(
+        []
+      )
+    })
+
+    it("createTransaction and createOptimisticAction live in the facade", async () => {
+      for (const name of ["createTransaction", "createOptimisticAction"]) {
+        const code = `import { ${name} } from "@tanstack/db"\nexport const used = ${name}\n`
+        for (const file of OUTSIDE)
+          expect(await restricted(code, file), `${file}: ${name}`).toHaveLength(
+            1
+          )
+        expect(
+          await restricted(code, "src/data/facade/__fixture.ts"),
+          `facade: ${name}`
+        ).toEqual([])
+      }
+      // інші іменовані імпорти @tanstack/db дозволено всюди в T4
+      expect(
+        await restricted(
+          `import { createCollection } from "@tanstack/db"\nexport const used = createCollection\n`,
+          "src/data/__fixture.ts"
+        )
+      ).toEqual([])
+    })
+
+    it("utils.write* and refetch are refused outside the facade", async () => {
+      for (const name of [
+        "writeInsert",
+        "writeUpdate",
+        "writeDelete",
+        "writeUpsert",
+        "writeBatch",
+        "refetch",
+      ]) {
+        const forms = [
+          `export const r = c.utils.${name}(1)\n`,
+          `export const r = c.utils["${name}"](1)\n`,
+          `const { ${name} } = c.utils\nexport const r = ${name}\n`,
+        ]
+        for (const code of forms)
+          for (const file of OUTSIDE)
+            expect(await props(code, file), `${file}: ${code}`).toHaveLength(1)
+        for (const code of forms)
+          expect(
+            await props(code, "src/data/facade/__fixture.ts"),
+            `facade: ${code}`
+          ).toEqual([])
+      }
+      expect(
+        await props(
+          "export const r = c.utils.other(1)\n",
+          "src/data/__fixture.ts"
+        )
+      ).toEqual([])
+    })
+
+    it("a QueryClient cannot be built outside the facade: its import is refused", async () => {
+      const code = `import { QueryClient } from "@tanstack/query-core"\nexport const q = new QueryClient()\n`
+      expect(await restricted(code, "src/data/__fixture.ts")).toHaveLength(1)
+      expect(await restricted(code, "src/data/facade/__fixture.ts")).toEqual([])
+    })
+
+    it("standard-columns rules still apply in src/data", async () => {
+      const code = `export const r = (o: { standard: string }) => o.standard === "x"\n`
+      expect(await ruleIds(code, "src/data/__fixture.ts")).toContain(
+        "no-restricted-syntax"
+      )
+      expect(await ruleIds(code, "src/data/facade/__fixture.ts")).toContain(
+        "no-restricted-syntax"
+      )
+    })
+  })
+
+  it("ui does not import simetra/data/supabase or relative data", async () => {
+    for (const spec of [
+      "simetra/data/supabase",
+      "../data/supabase",
+      "./../data/x",
+      "../data",
+      "../data/x",
+      "../../data/x",
+    ]) {
+      const msgs = await purity(importOf(spec), "src/ui/__fixture.ts")
+      expect(msgs, spec).toHaveLength(1)
+    }
+    expect(
+      await purity(importOf("simetra/data"), "src/ui/__fixture.ts")
+    ).toEqual([])
+    expect(await purity(importOf("../x"), "src/ui/__fixture.ts")).toEqual([])
   })
 
   it("mts and cts are covered", async () => {

@@ -42,6 +42,23 @@ function tierMessage(tier, index) {
   )
 }
 
+const DATA_FACADE_ONLY_PATTERNS = [
+  {
+    regex: "^@tanstack/(?:query-db-collection|query-core)(?:/|$)",
+    message:
+      "Facade boundary: @tanstack/query-db-collection and @tanstack/query-core are imported only in src/data/facade (P4-B spec §3).",
+  },
+]
+
+const DATA_FACADE_ONLY_PATHS = [
+  {
+    name: "@tanstack/db",
+    importNames: ["createTransaction", "createOptimisticAction"],
+    message:
+      "Facade boundary: createTransaction and createOptimisticAction are used only in src/data/facade (P4-B spec §3).",
+  },
+]
+
 const tierConfigs = TIERS.flatMap((tier, index) => {
   const higher = TIERS.slice(index + 1)
   // Нормалізований шлях — у кожному ярусі, зокрема shell: опції правила flat
@@ -63,12 +80,28 @@ const tierConfigs = TIERS.flatMap((tier, index) => {
   if (tier === "data" || tier === "ui") {
     patterns.push({ regex: tierPattern(["server"]), message: SERVER_MESSAGE })
   }
-  return [
+  const options = { patterns }
+  if (tier === "data") {
+    // Транзакційний рантайм і QueryClient живуть лише у фасаді: решта T4
+    // не обходить його ні іменованим імпортом, ні `import *`.
+    options.patterns = [...patterns, ...DATA_FACADE_ONLY_PATTERNS]
+    options.paths = DATA_FACADE_ONLY_PATHS
+  }
+  const configs = [
     {
       files: [`src/${tier}/**/*.{ts,tsx,mts,cts}`],
-      rules: { "no-restricted-imports": ["error", { patterns }] },
+      rules: { "no-restricted-imports": ["error", options] },
     },
   ]
+  if (tier === "data") {
+    // Фасад — те саме без фасадних заборон: опції flat config заміщуються
+    // цілком, тож перелік повторено, а не успадковано.
+    configs.push({
+      files: ["src/data/facade/**/*.{ts,tsx,mts,cts}"],
+      rules: { "no-restricted-imports": ["error", { patterns }] },
+    })
+  }
+  return configs
 })
 
 // Межі чистоти T0 і T1. Окреме правило `@typescript-eslint/no-restricted-imports`,
@@ -86,6 +119,57 @@ const DB_ENGINE_PATTERN = {
   regex: "^(?:pg|@supabase/pg-delta)(?:/|$)",
   message:
     "Runtime boundary: simetra production sources import neither pg nor @supabase/pg-delta; the schema engine and database readers live in @simetrajs/designer (designer plan, decision 4).",
+}
+
+// Чистота T4 (спека П4-B §3). Allow-list: нерелятивні імпорти — лише
+// simetra/model, zod, react і бібліотеки рушія; фасад додатково бачить
+// query-core та query-db-collection. Відносні імпорти пропущено allow-list-ом
+// (`\\.`), а вихід з ярусу й `supabase/…` ловлять окремі патерни: `../x` з
+// `src/data/facade` — легальний шлях усередині T4, тож заборона іде за іменем
+// яруса, а не за самим `..`.
+function dataPurity(facade) {
+  const allowed = [
+    "zod",
+    "react",
+    "simetra/model",
+    "@tanstack/(?:react-)?db",
+    ...(facade
+      ? ["@tanstack/query-core", "@tanstack/query-db-collection"]
+      : []),
+  ]
+  return {
+    files: facade
+      ? ["src/data/facade/**/*.{ts,tsx,mts,cts}"]
+      : PURITY_FILES("data"),
+    ignores: PURITY_IGNORES,
+    rules: {
+      "@typescript-eslint/no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            DB_ENGINE_PATTERN,
+            {
+              regex: `^(?!\\.|(?:${allowed.join("|")})(?:/|$))`,
+              message:
+                "T4 purity: src/data imports only ./…, simetra/model, zod, react, @tanstack/db and @tanstack/react-db" +
+                (facade ? " plus the query libraries in the facade" : "") +
+                " (P4-B spec §3).",
+            },
+            {
+              regex: `^(?:\\./)?(?:\\.\\./)+(?:src/)?(?:${TIERS.filter((t) => t !== "data").join("|")})(?:/|$)`,
+              message:
+                "T4 purity: a relative path out of src/data embeds a second copy of another tier in dist/data (P4-B spec §3).",
+            },
+            {
+              regex: "^(?:\\./|(?:\\.\\./)+)(?:\\./)?supabase(?:/|$)",
+              message:
+                "T4 purity: only src/data/supabase imports its own folder; a relative supabase/… elsewhere pulls @supabase/realtime-js into simetra/data (P4-B spec §3).",
+            },
+          ],
+        },
+      ],
+    },
+  }
 }
 
 export const purityConfigs = [
@@ -143,6 +227,30 @@ export const purityConfigs = [
       ],
     },
   },
+  dataPurity(false),
+  dataPurity(true),
+  {
+    // T4 — контракт, а не реалізація: `simetra/data/supabase` підключає host
+    // чи T6, а відносний `../data` вбудував би другу копію T4 в `dist/ui`.
+    files: PURITY_FILES("ui"),
+    ignores: PURITY_IGNORES,
+    rules: {
+      "@typescript-eslint/no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            DB_ENGINE_PATTERN,
+            {
+              regex:
+                "^(?:simetra/data/supabase(?:/|$)|(?:\\./)?(?:\\.\\./)+(?:src/)?data(?:/|$))",
+              message:
+                "T5 purity: src/ui does not import simetra/data/supabase or a relative ../data; the transport is wired by the host or T6 (P4-B spec §3).",
+            },
+          ],
+        },
+      ],
+    },
+  },
   {
     files: PURITY_FILES("compiler"),
     ignores: PURITY_IGNORES,
@@ -165,4 +273,34 @@ export const purityConfigs = [
   },
 ]
 
-export const tierZoneConfigs = [...tierConfigs, ...purityConfigs]
+// Запис у колекцію в обхід фасаду: форма `{ property }` без `object`, бо лише
+// вона ловить `c.utils["writeUpdate"]` і `const { writeInsert } = c.utils`.
+const FACADE_PROPERTIES = [
+  "writeInsert",
+  "writeUpdate",
+  "writeDelete",
+  "writeUpsert",
+  "writeBatch",
+  "refetch",
+].map((property) => ({
+  property,
+  message:
+    "Facade boundary: utils.write* and refetch are called only in src/data/facade (P4-B spec §3).",
+}))
+
+export const facadeConfigs = [
+  {
+    files: ["src/data/**/*.{ts,tsx,mts,cts}"],
+    rules: { "no-restricted-properties": ["error", ...FACADE_PROPERTIES] },
+  },
+  {
+    files: ["src/data/facade/**/*.{ts,tsx,mts,cts}"],
+    rules: { "no-restricted-properties": "off" },
+  },
+]
+
+export const tierZoneConfigs = [
+  ...tierConfigs,
+  ...purityConfigs,
+  ...facadeConfigs,
+]
