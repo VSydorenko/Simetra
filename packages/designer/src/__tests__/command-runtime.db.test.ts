@@ -268,7 +268,7 @@ describe("command runtime over the engine target", () => {
       },
     ])
     const read = async () => rt.read(env.me.session, { object: GAUGE, id })
-    expect(await read()).toEqual([header(row!)])
+    expect(await read()).toEqual({ rows: [header(row!)] })
     // Серверне читання повертає лише шапку (§6.11: `to_jsonb` рядка таблиці
     // об'єкта), тож ТЧ у базі звіряє незалежний `SELECT` власника.
     expect(await linesOf(id)).toEqual([
@@ -329,7 +329,7 @@ describe("command runtime over the engine target", () => {
       marks: [],
     })
     expect(next!.version).toBeGreaterThan(row!.version as number)
-    expect(await read()).toEqual([header(next!)])
+    expect(await read()).toEqual({ rows: [header(next!)] })
 
     const marked = await rt.run(env.me.session, {
       action: "markDeletion",
@@ -340,7 +340,7 @@ describe("command runtime over the engine target", () => {
     })
     const [last] = marked.rows
     expect(last).toMatchObject({ deletionMark: true })
-    expect(await read()).toEqual([header(last!)])
+    expect(await read()).toEqual({ rows: [header(last!)] })
   })
 
   // Чужий рядок RLS ховає так само, як відсутній: відмова не має розкрити,
@@ -533,9 +533,9 @@ describe("command runtime over the engine target", () => {
     }
     expect(visible.length).toBeGreaterThan(0)
     expect(visible).not.toContain(env.foreign)
-    const page = { object: GAUGE, where: {}, limit: 200 }
+    const page = { object: GAUGE, limit: 200 }
     const read = await rt.read(env.me.session, page)
-    expect(read.map((r) => r.ref)).toEqual(visible)
+    expect(read.rows.map((r) => r.ref)).toEqual(visible)
 
     const fallbackPool = new pg.Pool({ connectionString: env.commandOnly })
     try {
@@ -594,9 +594,9 @@ describe("command runtime over the engine target", () => {
     await direct.run(env.me.session, createGauge(randomUUID()))
     const created = await pooled.run(env.me.session, createGauge(id))
     expect(users).toEqual([env.me.user, env.me.user])
-    expect(await pooled.read(env.me.session, { object: GAUGE, id })).toEqual([
-      header(created.rows[0]!),
-    ])
+    expect(await pooled.read(env.me.session, { object: GAUGE, id })).toEqual({
+      rows: [header(created.rows[0]!)],
+    })
     const update: Operation = {
       action: "update",
       object: GAUGE,

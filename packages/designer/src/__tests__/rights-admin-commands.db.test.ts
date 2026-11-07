@@ -677,7 +677,7 @@ describe("rights administration commands over a planned and applied target", () 
           const module = defineObjectModule({
             onWrite: async ({ ctx }) => {
               if (ctx.action === "create")
-                seen = await ctx.read({ object: TICKET, id: ticket })
+                seen = (await ctx.read({ object: TICKET, id: ticket })).rows
             },
           })
           const { rt } = await runtime({
@@ -868,7 +868,7 @@ describe("rights administration commands over a planned and applied target", () 
           await rt.run(actor().session, await updateOf(regional))
           expect(
             await rt.read(actor().session, { object: TICKET, id: away.ticket })
-          ).toEqual([])
+          ).toEqual({ rows: [] })
           expect(
             await refusal(rt.run(actor().session, await updateOf(away.ticket)))
           ).toEqual({ code: "command.forbidden", reason: "no-right" })

@@ -1,22 +1,6 @@
 import { z } from "zod"
 import { metadataRefSchema } from "../schemas/metadata-ref"
 
-/** Upper bound of one server read page (P4 spec §6.11). */
-export const READ_LIMIT_MAX = 200
-
-/** A server read: one row by id or a keyset page by equality filter. */
-export const readQuerySchema = z.union([
-  z.strictObject({ object: metadataRefSchema, id: z.guid() }),
-  z.strictObject({
-    object: metadataRefSchema,
-    where: z.record(z.string(), z.unknown()),
-    after: z.guid().optional(),
-    limit: z.int().min(1).max(READ_LIMIT_MAX),
-  }),
-])
-
-export type ReadQuery = z.infer<typeof readQuerySchema>
-
 /** Operators of a filter condition (P4-B spec §4.1). */
 export const FILTER_OPERATORS = [
   "eq",
@@ -167,3 +151,99 @@ export const filterSchema: z.ZodType<Filter> = z.preprocess((value, ctx) => {
   }
   return value
 }, nodeSchema)
+
+/** Upper bound of one server read page (P4-B spec §4.1). */
+export const READ_LIMIT_MAX = 200
+/** Upper bound of `offset`; deeper pages go by keyset. */
+export const READ_OFFSET_MAX = 10_000
+/** Upper bound of a count; past it the count comes `capped`. */
+export const READ_COUNT_CAP = 10_000
+/** Upper bound of `orderBy` attributes, the key aside: the key may follow last. */
+export const ORDER_BY_MAX = 4
+
+/**
+ * Sort order of a page: catalog attributes, then the key. The key goes only
+ * last; without it the server appends the key ascending.
+ */
+export const orderBySchema = z
+  .array(
+    z.strictObject({
+      attribute: z.string(),
+      direction: z.enum(["asc", "desc"]),
+      nulls: z.enum(["first", "last"]).optional(),
+    })
+  )
+  .min(1)
+  .max(ORDER_BY_MAX + 1)
+
+export type OrderBy = z.infer<typeof orderBySchema>
+
+const cardQuerySchema = z.strictObject({
+  object: metadataRefSchema,
+  id: z.guid(),
+})
+const listQuerySchema = z.strictObject({
+  object: metadataRefSchema,
+  where: filterSchema.optional(),
+  orderBy: orderBySchema.optional(),
+  offset: z.int().min(0).max(READ_OFFSET_MAX).optional(),
+  limit: z.int().min(1).max(READ_LIMIT_MAX),
+})
+const countQuerySchema = z.strictObject({
+  object: metadataRefSchema,
+  where: filterSchema.optional(),
+  count: z.literal(true),
+})
+
+const QUERY_FORMS = [
+  cardQuerySchema,
+  listQuerySchema,
+  countQuerySchema,
+] as const
+
+/** Форму обирає наявний ключ: `id` — картка, `count` — лічильник, інакше список. */
+function formOf(value: unknown): (typeof QUERY_FORMS)[number] {
+  const query = objectAt(value)
+  if (query !== undefined && "id" in query) return cardQuerySchema
+  if (query !== undefined && "count" in query) return countQuerySchema
+  return listQuerySchema
+}
+
+/**
+ * A server read (P4-B spec §4.1): a card by id, a page by filter tree, or a
+ * capped count. Суворий union Zod 4 губить шлях відмови (`invalid_union` на
+ * корені), тож форму обирає ключ до розбору, а union лишається для типу й
+ * JSON-схеми входу MCP.
+ */
+export const readQuerySchema = z.preprocess((value, ctx) => {
+  const parsed = formOf(value).safeParse(value)
+  if (!parsed.success) {
+    const [issue] = parsed.error.issues
+    if (issue !== undefined) {
+      ctx.addIssue({ code: "custom", path: issue.path, message: issue.message })
+    }
+  }
+  return value
+}, z.union(QUERY_FORMS))
+
+export type ReadQuery = z.infer<typeof readQuerySchema>
+
+/** Rows of a read in the logical form: decoded, keyed by logical names. */
+export interface ReadRows {
+  rows: Record<string, unknown>[]
+  /** Rows of included targets keyed `"<kind>.<name>"`. */
+  included?: Record<string, Record<string, unknown>[]>
+  /** The owner version read by the same statement as the tabular rows. */
+  ownerVersion?: number
+}
+
+/** A count under RLS; `capped` — there are more than {@link READ_COUNT_CAP}. */
+export interface ReadCount {
+  count: number
+  capped?: true
+}
+
+export type ReadResult = ReadRows | ReadCount
+
+/** The result shape of a query: a count query counts, any other reads rows. */
+export type ReadResultOf<Q> = Q extends { count: true } ? ReadCount : ReadRows

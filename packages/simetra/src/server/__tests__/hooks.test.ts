@@ -66,8 +66,8 @@ const rightsRolePhase = (id = OTHER, code = "R") => [
 const readOf = (table: string, id: string) => ({
   text:
     `SELECT to_jsonb(t)::text AS row FROM "public"."${table}" t` +
-    ' WHERE "id" = $1::uuid ORDER BY "id" LIMIT $2',
-  params: [id, "1"],
+    ' WHERE "id" = $1::uuid LIMIT 1',
+  params: [id],
 })
 const readRights = (id: string) => readOf("rights_role", id)
 const clientPhaseOf = (id: string) => [
@@ -921,7 +921,7 @@ describe("depth and queue", () => {
       {
         "Catalog.Client": {
           async beforeWrite({ ctx, draft }) {
-            rows.push(...(await ctx.read({ object: RIGHTS, id: OTHER })))
+            rows.push(...(await ctx.read({ object: RIGHTS, id: OTHER })).rows)
             return draft
           },
         },
@@ -944,6 +944,33 @@ describe("depth and queue", () => {
       { release: false },
     ])
     expect(rows).toEqual([{ ref: OTHER, version: 2, code: "R" }])
+  })
+
+  it("runs a ctx.read count in the command transaction", async () => {
+    const counts: unknown[] = []
+    const { db, runtime } = await withModules(
+      {
+        "Catalog.Client": {
+          async beforeWrite({ ctx, draft }) {
+            counts.push(await ctx.read({ object: RIGHTS, count: true }))
+            return draft
+          },
+        },
+      },
+      (text) => (text.includes(" AS n ") ? { rows: [{ n: "4" }] } : undefined)
+    )
+    await runtime.run(session, create)
+    expect(db.calls).toEqual([
+      ...OPEN,
+      {
+        text: 'SELECT count(*) AS n FROM (SELECT 1 FROM "public"."rights_role" t LIMIT $1) c',
+        params: ["10001"],
+      },
+      ...clientPhase,
+      COMMIT,
+      { release: false },
+    ])
+    expect(counts).toEqual([{ count: 4 }])
   })
 
   it("maps 22P02 of ctx.read to command.invalid", async () => {
@@ -983,7 +1010,11 @@ describe("a ctx call rejected without a failure", () => {
       objectModules: {
         "Catalog.Client": {
           beforeWrite({ ctx, draft }) {
-            void ctx.read({ object: TASK, where: { subject }, limit: 1 })
+            void ctx.read({
+              object: TASK,
+              where: { attribute: "subject", op: "eq", value: subject },
+              limit: 1,
+            })
             return draft
           },
         },
@@ -1014,7 +1045,7 @@ describe("a ctx call rejected without a failure", () => {
     const { db, runtime, log } = await readsSubject(subject)
     expect(await failureOf(runtime.run(session, create))).toEqual({
       code: "command.invalid",
-      path: "subject",
+      path: "where.value",
     })
     expect(db.calls).toEqual(CLOSED)
     expect(db.calls).not.toContainEqual(COMMIT)

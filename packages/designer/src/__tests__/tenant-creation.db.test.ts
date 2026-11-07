@@ -354,7 +354,7 @@ describe("tenant creation through runtime.run", () => {
       ])
       expect(
         await rt.read(sessionOf(creator), { object: ORGANIZATION, id })
-      ).toEqual([row])
+      ).toEqual({ rows: [row] })
       expect(await assignmentsOf(a, id)).toEqual([
         {
           id: expect.any(String),
@@ -506,7 +506,7 @@ describe("tenant creation through runtime.run", () => {
       expect(rows).toEqual([{ n: 1 }])
       expect(
         await rt.read(sessionOf(creator), { object: ORGANIZATION, id })
-      ).toEqual([row])
+      ).toEqual({ rows: [row] })
       expect(await assignmentsOf(c, id)).toEqual([
         {
           id: expect.any(String),

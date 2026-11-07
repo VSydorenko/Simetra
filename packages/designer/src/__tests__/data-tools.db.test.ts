@@ -246,7 +246,7 @@ describe("data tools over a real database", () => {
     })
 
   const readGauges = (o: Parameters<typeof call>[2] = {}) =>
-    call(dataReadTool, { query: { object: GAUGE, where: {}, limit: 200 } }, o)
+    call(dataReadTool, { query: { object: GAUGE, limit: 200 } }, o)
 
   const command = (
     operations: Operation[],

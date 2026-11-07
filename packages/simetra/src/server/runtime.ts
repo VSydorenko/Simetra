@@ -13,13 +13,14 @@ import {
   type Operation,
   type ProviderApiRoles,
   type ReadQuery,
+  type ReadResult,
+  type ReadResultOf,
   type RequestRolePurpose,
   type RuntimeCatalog,
   type SessionClaims,
   CommandFailure,
 } from "simetra/model"
 import { z } from "zod"
-import { decodeRow } from "./decode"
 import { logsDatabaseError, mapDatabaseError, type ErrorPhase } from "./errors"
 import { rejectNested } from "./hook-context"
 import {
@@ -27,7 +28,7 @@ import {
   type CommandDatabase,
   type DatabaseClient,
 } from "./port"
-import { ident, prepareRead } from "./read"
+import { ident, prepareRead, readResult } from "./read"
 import {
   COMMAND_ROLE,
   COMMIT,
@@ -68,10 +69,10 @@ export interface CommandRuntime {
    * Reads rows under the request role of the profile, or through the
    * fallback path (P4 spec §6.11); rejects with `CommandFailure`.
    */
-  read(
+  read<Q extends ReadQuery>(
     session: SessionClaims,
-    query: ReadQuery
-  ): Promise<Record<string, unknown>[]>
+    query: Q
+  ): Promise<ReadResultOf<Q>>
 }
 
 /**
@@ -242,7 +243,9 @@ export async function createCommandRuntime(
   }
   return {
     run: (session, input) => runCommand(state, session, input),
-    read: (session, query) => readRows(state, session, query),
+    // Форму результату задає форма запиту; `readRows` будує її з плану.
+    read: <Q extends ReadQuery>(session: SessionClaims, query: Q) =>
+      readRows(state, session, query) as Promise<ReadResultOf<Q>>,
   }
 }
 
@@ -255,7 +258,7 @@ async function readRows(
   state: RuntimeState,
   session: SessionClaims,
   query: unknown
-): Promise<Record<string, unknown>[]> {
+): Promise<ReadResult> {
   // До будь-якого I/O: друге з'єднання в хуку чекало б на замок своєї ж
   // команди (Р-A3-11).
   rejectNested()
@@ -273,7 +276,8 @@ async function readRows(
   }
   const prepared = prepareRead(state.catalog, query)
   if ("error" in prepared) throw new CommandFailure(prepared.error)
-  const { object, statement } = prepared
+  const { object, plan } = prepared
+  const { statement } = plan
   const fail = (raw: unknown, phase: ErrorPhase | undefined) => {
     const error = normalizeError(raw)
     const mapped = mapDatabaseError(error, state.catalog, phase)
@@ -318,10 +322,7 @@ async function readRows(
   try {
     // Перервана транзакція відповідає на `COMMIT` тегом `ROLLBACK`.
     if (tag !== "COMMIT") throw new Error(`COMMIT answered ${tag}`)
-    return rows.map((r) => {
-      if (typeof r.row !== "string") throw new Error("read row is not text")
-      return decodeRow(object, r.row)
-    })
+    return readResult(object, plan, rows)
   } catch (error) {
     state.log({ kind: "database", error })
     throw new CommandFailure({ code: "command.internal" })

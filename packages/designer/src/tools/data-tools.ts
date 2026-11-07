@@ -9,6 +9,7 @@ import {
   readQuerySchema,
   type Change,
   type CommandError,
+  type ReadCount,
   type SessionClaims,
   CommandFailure,
 } from "simetra/model"
@@ -36,7 +37,16 @@ export interface JsonCommandResult {
   changes: Change[]
 }
 
-export type DataReadData = { rows: JsonRow[] } | { error: CommandError }
+/** A read result for JSON: rows with `bigint` as decimal strings, or a count. */
+export type JsonReadResult =
+  | {
+      rows: JsonRow[]
+      included?: Record<string, JsonRow[]>
+      ownerVersion?: number
+    }
+  | ReadCount
+
+export type DataReadData = JsonReadResult | { error: CommandError }
 export type DataCommandData =
   { result: JsonCommandResult } | { error: CommandError }
 
@@ -66,6 +76,8 @@ export function summarizeData(
   if ("error" in data)
     return `${name}: ${data.error.code}${data.error.reason === undefined ? "" : `: ${data.error.reason}`}`
   const count = (n: number, what: string) => `${n} ${what}${n === 1 ? "" : "s"}`
+  if ("count" in data)
+    return `${name}: ${data.capped === true ? "over " : ""}${count(data.count, "row")} counted`
   return "rows" in data
     ? `${name}: ${count(data.rows.length, "row")}`
     : `${name}: ${count(data.result.changes.length, "change")}`
@@ -163,7 +175,7 @@ async function onRuntime<D>(
 export const dataReadTool = defineTool({
   name: "data-read",
   description:
-    "Read application data of the development database as the user given by --as, with that user's rights: one row by id, or a page of rows by equality filter (where, after, limit up to 200). BigInt values come as decimal strings. A runtime error comes as data.error with a code.",
+    "Reads rows under RLS as the user given by --as: a card by id, a page by filter tree (where, orderBy, offset, limit up to 200) or a capped count. BigInt values come as decimal strings. A runtime error comes as data.error with a code.",
   input: z.strictObject({ query: readQuerySchema }),
   files: "read",
   database: "none",
@@ -172,9 +184,13 @@ export const dataReadTool = defineTool({
   async run(ctx, input): Promise<RunOutcome<DataReadData>> {
     const compiled = await compileDir(ctx.dir)
     if ("failed" in compiled) return compiled.failed
-    return onRuntime("data-read", ctx, compiled.model, async (rt, session) => ({
-      rows: toJson(await rt.read(session, input.query)) as JsonRow[],
-    }))
+    return onRuntime(
+      "data-read",
+      ctx,
+      compiled.model,
+      async (rt, session) =>
+        toJson(await rt.read(session, input.query)) as JsonReadResult
+    )
   },
 })
 

@@ -1,9 +1,14 @@
 import { AsyncLocalStorage } from "node:async_hooks"
 import { CommandFailure } from "simetra/model"
-import type { CommandError, HookContext, RuntimeObject } from "simetra/model"
-import { decodeRow } from "./decode"
+import type {
+  CommandError,
+  HookContext,
+  ReadQuery,
+  ReadResultOf,
+  RuntimeObject,
+} from "simetra/model"
 import type { PreparedOperation } from "./phase"
-import { prepareRead } from "./read"
+import { prepareRead, readResult } from "./read"
 import type { Transaction } from "./transaction"
 
 /** The async context of a running command: its attempt and phase depth. */
@@ -163,22 +168,19 @@ function contextOf(tx: Transaction, phase: HookPhase, scope: Scope) {
         if (depth > tx.state.maxDepth) tx.abort({ code: "command.depth" })
         return frames.run({ ...frame, depth }, () => phase.runNested(operation))
       }),
-    read: (query) =>
+    // Форму результату задає форма запиту; `readResult` будує її з плану.
+    read: <Q extends ReadQuery>(query: Q) =>
       track(async () => {
         const prepared = prepareRead(tx.state.catalog, query)
         if ("error" in prepared) tx.abort(prepared.error)
-        const { object: target, statement } = prepared
+        const { object: target, plan } = prepared
         // Та сама транзакція й роль команд: хук читає те, що бачить ядро.
-        const { rows } = await tx.enqueue([statement], {
+        const { rows } = await tx.enqueue([plan.statement], {
           kind: "read",
           object: target,
         })
         try {
-          return rows.map((r) => {
-            if (typeof r.row !== "string")
-              throw new Error("read row is not text")
-            return decodeRow(target, r.row)
-          })
+          return readResult(target, plan, rows) as ReadResultOf<Q>
         } catch (error) {
           tx.anomaly(error)
         }

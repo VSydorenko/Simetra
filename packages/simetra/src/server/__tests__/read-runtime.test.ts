@@ -1,8 +1,16 @@
-import type { ReadQuery } from "simetra/model"
+import { runtimeCatalogSchema, type ReadQuery } from "simetra/model"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { createCommandRuntime, type CommandRuntime } from "../runtime"
 import { fakeDatabase, failureOf, type Answer } from "./fake-database"
-import { ID, OTHER, TASK, catalog, taskCatalog } from "./fixtures"
+import {
+  ID,
+  OTHER,
+  TASK,
+  catalog,
+  client,
+  commandObject,
+  taskCatalog,
+} from "./fixtures"
 import {
   CLAIMS,
   OPEN,
@@ -33,28 +41,38 @@ const BEGIN = {
 }
 const REQUEST_ROLE = { text: 'SET LOCAL ROLE "authenticated"', params: [] }
 const COMMIT = { text: "COMMIT", params: [] }
-const SELECT = 'SELECT to_jsonb(t)::text AS row FROM "public"."rights_role" t'
+// Оператор читання — за таблицею: створення рантайму теж шле `SELECT`.
+const READ = 'FROM "public"."rights_role" t'
+const isRead = (text: string) => text.includes(READ)
+const CARD = `SELECT to_jsonb(t)::text AS row ${READ}`
+const LIST = `SELECT jsonb_build_object('id', t."id", 'version', t."version", 'code', t."code")::text AS row ${READ}`
 const byId = {
-  text: `${SELECT} WHERE "id" = $1::uuid ORDER BY "id" LIMIT $2`,
-  params: [OTHER, "1"],
+  text: `${CARD} WHERE "id" = $1::uuid LIMIT 1`,
+  params: [OTHER],
 }
 const byCode = {
-  text: `${SELECT} WHERE "code" = $1::text AND "id" > $2::uuid ORDER BY "id" LIMIT $3`,
+  text: `${LIST} WHERE ("code" = $1::text AND "id" > $2::uuid) ORDER BY "id" LIMIT $3`,
   params: ["R", ID, "200"],
 }
 const page: ReadQuery = {
   object: RIGHTS,
-  where: { code: "R" },
-  after: ID,
+  where: {
+    and: [
+      { attribute: "code", op: "eq", value: "R" },
+      { attribute: "ref", op: "gt", value: ID },
+    ],
+  },
   limit: 200,
+}
+const counted = {
+  text: `SELECT count(*) AS n FROM (SELECT 1 ${READ} LIMIT $1) c`,
+  params: ["10001"],
 }
 const rowOf = (id: string, version: number) => ({
   row: JSON.stringify({ id, version, code: "R" }),
 })
 const rows: Override = (text) =>
-  text.startsWith(SELECT)
-    ? { rows: [rowOf(OTHER, 2), rowOf(ID, 3)] }
-    : undefined
+  isRead(text) ? { rows: [rowOf(OTHER, 2), rowOf(ID, 3)] } : undefined
 const read = (statement: { text: string; params: string[] }, role = ROLE) => [
   { connect: true },
   BEGIN,
@@ -73,6 +91,29 @@ const failed = (statement: unknown, end: unknown[]) => [
   ...end,
 ]
 
+// Довідник з лінивим реквізитом: фільтр за ним — відмова до бази (Рд25).
+const DOC = { kind: "Catalog" as const, name: "Doc" }
+const docCatalog = runtimeCatalogSchema.parse({
+  ...catalog,
+  objects: [
+    ...catalog.objects,
+    commandObject({
+      id: "00000000-0000-4000-8000-000000000020",
+      name: "Doc",
+      table: "doc",
+      attributes: [
+        {
+          ...client.attributes[0]!,
+          name: "body",
+          column: "body",
+          type: "Text",
+          load: "lazy",
+        },
+      ],
+    }),
+  ],
+})
+
 /** Значення, будь-яке читання якого кидає. */
 function revoked(): object {
   const { proxy, revoke } = Proxy.revocable({}, {})
@@ -83,11 +124,37 @@ function revoked(): object {
 describe("CommandRuntime.read", () => {
   it("reads under the request role of the profile and decodes the rows", async () => {
     const { db, runtime } = await setup(rows)
-    expect(await runtime.read(session, page)).toEqual([
-      { ref: OTHER, version: 2, code: "R" },
-      { ref: ID, version: 3, code: "R" },
-    ])
+    expect(await runtime.read(session, page)).toEqual({
+      rows: [
+        { ref: OTHER, version: 2, code: "R" },
+        { ref: ID, version: 3, code: "R" },
+      ],
+    })
     expect(db.calls).toEqual(read(byCode, REQUEST_ROLE))
+  })
+
+  it("reads a card as rows", async () => {
+    const { runtime } = await setup((text) =>
+      isRead(text) ? { rows: [rowOf(OTHER, 2)] } : undefined
+    )
+    expect(await runtime.read(session, { object: RIGHTS, id: OTHER })).toEqual({
+      rows: [{ ref: OTHER, version: 2, code: "R" }],
+    })
+  })
+
+  it.each<[string, string | number, object]>([
+    ["a count", "3", { count: 3 }],
+    ["a count at the cap", "10000", { count: 10_000 }],
+    ["a count past the cap", "10001", { count: 10_000, capped: true }],
+    ["a count as a number", 7, { count: 7 }],
+  ])("reads %s", async (_, n, expected) => {
+    const { db, runtime } = await setup((text) =>
+      isRead(text) ? { rows: [{ n }] } : undefined
+    )
+    expect(
+      await runtime.read(session, { object: RIGHTS, count: true })
+    ).toEqual(expected)
+    expect(db.calls).toEqual(read(counted, REQUEST_ROLE))
   })
 
   it("keeps the request role when readFallback is set but the membership exists", async () => {
@@ -117,7 +184,25 @@ describe("CommandRuntime.read", () => {
 
   it.each([
     ["a limit over 200", { ...page, limit: 201 }, { path: "limit" }],
-    ["an unknown attribute", { ...page, where: { nope: 1 } }, { path: "nope" }],
+    [
+      "an unknown attribute",
+      { ...page, where: { attribute: "nope", op: "eq", value: 1 } },
+      { path: "where.attribute" },
+    ],
+    [
+      "a filter by a lazy attribute",
+      {
+        object: DOC,
+        where: { attribute: "body", op: "eq", value: "x" },
+        limit: 1,
+      },
+      { path: "where.attribute", reason: "lazy" },
+    ],
+    [
+      "a P4-A query",
+      { object: RIGHTS, where: {}, after: ID, limit: 1 },
+      { path: "where" },
+    ],
     [
       "an unknown object",
       { object: { kind: "Catalog", name: "Nope" }, id: ID },
@@ -126,7 +211,7 @@ describe("CommandRuntime.read", () => {
   ])(
     "rejects %s as command.invalid before the database",
     async (_, query, extra) => {
-      const { db, runtime } = await setup()
+      const { db, runtime } = await setup(undefined, { catalog: docCatalog })
       expect(await failureOf(runtime.read(session, query as never))).toEqual({
         code: "command.invalid",
         ...extra,
@@ -152,11 +237,11 @@ describe("CommandRuntime.read", () => {
     "rejects %s in where as command.invalid before the database",
     async (_, name, value) => {
       const { db, runtime } = await setup(undefined, { catalog: taskCatalog })
-      const where = { [name]: value }
+      const where = { attribute: name, op: "eq" as const, value }
       const object = name === "code" ? RIGHTS : TASK
       expect(
         await failureOf(runtime.read(session, { object, where, limit: 1 }))
-      ).toEqual({ code: "command.invalid", path: name })
+      ).toEqual({ code: "command.invalid", path: "where.value" })
       expect(db.calls).toEqual([])
     }
   )
@@ -179,7 +264,7 @@ describe("CommandRuntime.read", () => {
 
   it("maps 22P02 of the read to command.invalid without logging", async () => {
     const { db, runtime, log } = await setup((text) =>
-      text.startsWith(SELECT)
+      isRead(text)
         ? { error: { code: "22P02", message: "bad input" } }
         : undefined
     )
@@ -193,7 +278,7 @@ describe("CommandRuntime.read", () => {
   it("maps an unknown database error to command.internal and logs it", async () => {
     const raw = { code: "XX000", message: "secret row data" }
     const { db, runtime, log } = await setup((text) =>
-      text.startsWith(SELECT) ? { error: raw } : undefined
+      isRead(text) ? { error: raw } : undefined
     )
     expect(
       await failureOf(runtime.read(session, { object: RIGHTS, id: OTHER }))
@@ -207,7 +292,7 @@ describe("CommandRuntime.read", () => {
     async (code) => {
       const raw = { code, message: "conflict" }
       const { db, runtime, log } = await setup((text) =>
-        text.startsWith(SELECT) ? { error: raw } : undefined
+        isRead(text) ? { error: raw } : undefined
       )
       expect(
         await failureOf(runtime.read(session, { object: RIGHTS, id: OTHER }))
@@ -219,9 +304,7 @@ describe("CommandRuntime.read", () => {
 
   it("destroys the connection on a lost connection without ROLLBACK", async () => {
     const { db, runtime, log } = await setup((text) =>
-      text.startsWith(SELECT)
-        ? { error: { code: "08006", message: "gone" } }
-        : undefined
+      isRead(text) ? { error: { code: "08006", message: "gone" } } : undefined
     )
     expect(
       await failureOf(runtime.read(session, { object: RIGHTS, id: OTHER }))
@@ -232,7 +315,7 @@ describe("CommandRuntime.read", () => {
 
   it("destroys the connection once when ROLLBACK fails too", async () => {
     const { db, runtime } = await setup((text) =>
-      text.startsWith(SELECT)
+      isRead(text)
         ? { error: { code: "XX000", message: "x" } }
         : text === ROLLBACK.text
           ? { error: { code: "XX000", message: "y" } }
@@ -255,7 +338,7 @@ describe("CommandRuntime.read", () => {
   it("destroys the connection on a read error without SQLSTATE and logs it", async () => {
     const raw = new TypeError("driver bug")
     const { db, runtime, log } = await setup((text) =>
-      text.startsWith(SELECT) ? { error: raw } : undefined
+      isRead(text) ? { error: raw } : undefined
     )
     expect(
       await failureOf(runtime.read(session, { object: RIGHTS, id: OTHER }))
@@ -273,7 +356,7 @@ describe("CommandRuntime.read", () => {
     [
       "a row of the wrong shape",
       (text: string): Answer | undefined =>
-        text.startsWith(SELECT) ? { rows: [{ row: 42 }] } : undefined,
+        isRead(text) ? { rows: [{ row: 42 }] } : undefined,
     ],
   ])("fails %s as command.internal and logs it", async (_, override) => {
     // Відповідь діє лише на читання: створення рантайму теж має `COMMIT`.

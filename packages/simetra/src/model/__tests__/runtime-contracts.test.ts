@@ -75,16 +75,69 @@ describe("batchSchema", () => {
 })
 
 describe("readQuerySchema", () => {
-  it.each([
-    [{ object, id }, true],
-    [{ object, where: { code: "A" }, limit: 200 }, true],
-    [{ object, where: {}, after: id, limit: 1 }, true],
-    [{ object, id: nonRfcId }, true],
-    [{ object, where: {}, after: nonRfcId, limit: 1 }, true],
-    [{ object, where: {}, limit: 201 }, false],
-    [{ object, where: {}, limit: 0 }, false],
-  ])("parses %j as %s", (input, ok) => {
-    expect(readQuerySchema.safeParse(input).success).toBe(ok)
+  const where = { attribute: "code", op: "eq", value: "A" }
+  const order = (n: number) =>
+    Array.from({ length: n }, (_, i) => ({
+      attribute: `a${i}`,
+      direction: "asc",
+    }))
+  // `undefined` — запит проходить; інакше — шлях першої відмови: гілку форми
+  // обирає наявний ключ (`id`, `count`), тож шлях не губиться в union.
+  it.each<[string, unknown, string | undefined]>([
+    ["a card", { object, id }, undefined],
+    ["a card by a non-RFC id", { object, id: nonRfcId }, undefined],
+    ["a bare page", { object, limit: 200 }, undefined],
+    [
+      "a page with every field",
+      {
+        object,
+        where,
+        orderBy: [
+          { attribute: "code", direction: "desc", nulls: "last" },
+          { attribute: "ref", direction: "asc" },
+        ],
+        offset: 10_000,
+        limit: 1,
+      },
+      undefined,
+    ],
+    [
+      "five orderBy entries",
+      { object, orderBy: order(5), limit: 1 },
+      undefined,
+    ],
+    ["a count", { object, where, count: true }, undefined],
+    ["a limit over 200", { object, limit: 201 }, "limit"],
+    ["a zero limit", { object, limit: 0 }, "limit"],
+    ["a page without limit", { object }, "limit"],
+    ["an offset over 10 000", { object, offset: 10_001, limit: 1 }, "offset"],
+    ["six orderBy entries", { object, orderBy: order(6), limit: 1 }, "orderBy"],
+    ["an empty orderBy", { object, orderBy: [], limit: 1 }, "orderBy"],
+    [
+      "an orderBy without direction",
+      { object, orderBy: [{ attribute: "code" }], limit: 1 },
+      "orderBy.0.direction",
+    ],
+    ["a P4-A after", { object, after: id, limit: 1 }, ""],
+    [
+      "a P4-A equality map",
+      { object, where: { code: "A" }, limit: 1 },
+      "where",
+    ],
+    [
+      "a bad filter node",
+      { object, where: { and: [where, { search: "x" }] }, count: true },
+      "where.and.1",
+    ],
+    ["a count false", { object, count: false }, "count"],
+    ["a count with limit", { object, count: true, limit: 1 }, ""],
+    ["a card with where", { object, id, where }, ""],
+    ["a card by a non-UUID", { object, id: "x" }, "id"],
+  ])("%s", (_, input, path) => {
+    const parsed = readQuerySchema.safeParse(input)
+    expect(
+      parsed.success ? undefined : parsed.error.issues[0]!.path.join(".")
+    ).toBe(path)
   })
 })
 

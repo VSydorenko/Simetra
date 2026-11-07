@@ -38,7 +38,7 @@ variable are the owner's choice. The CLI takes the same flags per call:
 ```sh
 pnpm exec simetra mcp --data-url-env SIMETRA_DEV_DATA_URL --as <user-uuid>
 pnpm exec simetra mcp --data-url-env SIMETRA_DEV_DATA_URL --as <user-uuid> --allow-data-write
-pnpm exec simetra data-read '{"query":{"object":{"kind":"Catalog","name":"Currency"},"where":{},"limit":50}}' --data-url-env SIMETRA_DEV_DATA_URL --as <user-uuid>
+pnpm exec simetra data-read '{"query":{"object":{"kind":"Catalog","name":"Currency"},"limit":50}}' --data-url-env SIMETRA_DEV_DATA_URL --as <user-uuid>
 ```
 
 - The variable holds the connection string of the runtime login role
@@ -69,13 +69,34 @@ pnpm exec simetra data-read '{"query":{"object":{"kind":"Catalog","name":"Curren
 - A runtime refusal comes back as `error` with a `code` (and a `reason`);
   `BigInt` values come as decimal strings and may be passed back as strings.
 
+A query takes one of three forms: a card `{ object, id }` (the whole row),
+a page `{ object, where?, orderBy?, offset?, limit }` and a count
+`{ object, where?, count: true }`. The result is `{ rows }` or
+`{ count, capped? }`; a count stops at 10000 and then comes `capped`.
+
+- `where` is a tree: `{ "and": [...] }`, `{ "or": [...] }`, `{ "not": ... }`
+  and conditions `{ "attribute", "op", "value" }`. Operators: `eq`, `ne`,
+  `lt`, `lte`, `gt`, `gte`, `in` (up to 200 values), `isNull` (no value),
+  `contains` and `startsWith` (strings, case-insensitive). `eq` or `ne` with
+  `null` is refused (reason `use-isNull`): use `isNull`.
+- An attribute is a logical name, the key name or the version name. A
+  polymorphic reference takes `{ "type": "<Kind>.<Name>", "id" }`.
+- `orderBy` takes up to 4 attributes; the key goes only last, and without it
+  the server adds the key ascending. `limit` is 1 to 200; `offset` is up to
+  10000, past it page by a key condition (`{ "attribute": "<key>", "op":
+  "gt", "value": <last key> }`).
+- A page leaves out lazy attributes (`load: "lazy"`, `Bytes` by default);
+  a card returns them. Filter or sort by a lazy attribute is refused (reason
+  `lazy`).
+
 Read a page of rows:
 
 ```json simetra:data-read
 {
   "query": {
     "object": { "kind": "Catalog", "name": "Currency" },
-    "where": { "symbol": "$" },
+    "where": { "attribute": "symbol", "op": "eq", "value": "$" },
+    "orderBy": [{ "attribute": "description", "direction": "asc" }],
     "limit": 50
   }
 }
