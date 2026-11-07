@@ -109,10 +109,10 @@ export const runtimeConstraintSchema = z
 /** A tabular section of the shared catalog part. */
 export const catalogEntrySectionSchema = z.strictObject({
   /**
-   * id ТЧ як елемента: UUID оголошеної ТЧ чи синтетичний id стандартної
-   * (дельта «Ролей»). Ним ТЧ названа у формі передачі (рішення В4, В12
-   * B1b-1), бо ім'я змінюється перейменуванням.
+   * The section id as a model element: the UUID of a declared section or
+   * the synthetic id of a standard one. The wire form names the section by it.
    */
+  // Id, а не ім'я: ім'я змінюється перейменуванням, форма передачі — ні.
   id: elementIdSchema,
   name: z.string(),
   table: qualifiedNameSchema,

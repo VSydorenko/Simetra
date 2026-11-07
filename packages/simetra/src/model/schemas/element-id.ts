@@ -4,11 +4,12 @@ import { z } from "zod"
 export const ELEMENT_ID_SEPARATOR = "#"
 
 /**
- * Синтетичний id стандартного елемента (реквізиту чи ТЧ): власник + канонічне
- * ім'я, тож зміна стилю проєкту id не міняє. Стандартний елемент не має
- * власного UUID, а індекс посилань і форма передачі мусять називати його так
- * само, як оголошений елемент.
+ * The synthetic id of a standard element (an attribute or a tabular
+ * section): `<owner UUID>#<canonical name>`.
  */
+// Стандартний елемент не має власного UUID, а індекс посилань і форма
+// передачі мусять називати його так само, як оголошений. Канонічне ім'я, а
+// не стильове: зміна стилю проєкту id не міняє.
 export function standardElementId(
   ownerId: string,
   element: { logicalName: string }
