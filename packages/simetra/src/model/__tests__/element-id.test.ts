@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest"
-import { elementIdSchema, standardElementId } from "../schemas/element-id"
+import {
+  elementIdSchema,
+  parseStandardElementId,
+  standardElementId,
+} from "../schemas/element-id"
 
 const OWNER = "00000000-0000-4000-8000-000000000101"
 
@@ -21,5 +25,25 @@ describe("elementIdSchema", () => {
     ["an empty string", "", false],
   ])("%s", (_, id, ok) => {
     expect(elementIdSchema.safeParse(id).success).toBe(ok)
+  })
+})
+
+describe("parseStandardElementId", () => {
+  // Розбір і будова — одна пара: те, що будує `standardElementId`, розбирається
+  // назад; UUID оголошеного елемента й зіпсований id — не стандартний елемент.
+  it.each([
+    [
+      "a synthetic id",
+      standardElementId(OWNER, { logicalName: "delta" }),
+      { ownerId: OWNER, name: "delta" },
+    ],
+    ["a UUID", OWNER, undefined],
+    ["a non-UUID owner", "lines#delta", undefined],
+    ["an empty name", `${OWNER}#`, undefined],
+    ["a dot in the name", `${OWNER}#a.b`, undefined],
+    ["two separators", `${OWNER}#a#b`, undefined],
+    ["an empty string", "", undefined],
+  ])("%s", (_, id, parsed) => {
+    expect(parseStandardElementId(id)).toEqual(parsed)
   })
 })

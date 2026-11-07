@@ -39,6 +39,7 @@ export {
 export {
   ELEMENT_ID_SEPARATOR,
   elementIdSchema,
+  parseStandardElementId,
   standardElementId,
 } from "./element-id"
 export {

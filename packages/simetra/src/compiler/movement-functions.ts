@@ -1,4 +1,5 @@
 import {
+  parseStandardElementId,
   KIND_REGISTRY,
   makeObjectName,
   parseExpression,
@@ -241,11 +242,11 @@ class Context {
     defs: readonly StandardColumnDef[],
     elementId: string
   ): PhysicalColumn[] {
-    const hash = elementId.indexOf("#")
+    const standard = parseStandardElementId(elementId)
     const columns =
-      hash < 0
+      standard === undefined
         ? table.columns.filter((c) => c.origin.elementId === elementId)
-        : this.standardColumns(table, defs, elementId.slice(hash + 1))
+        : this.standardColumns(table, defs, standard.name)
     if (columns.length === 0) throw new Error(`internal: column ${elementId}`)
     return columns
   }
@@ -451,9 +452,10 @@ class Context {
       expr.base === "row" ? "posting.rowField" : "posting.docField",
       expr.fieldSpan.start
     )
-    const hash = id.indexOf("#")
     // Стандартні посилання з однією ціллю — ключ документа й власник рядка.
-    if (hash >= 0) return literal(kindLabel(document))
+    if (parseStandardElementId(id) !== undefined) {
+      return literal(kindLabel(document))
+    }
     const attribute = findAttribute(document, id)
     const target = this.byKey.get(
       objectKey(attribute.ref!.kind, attribute.ref!.name)
