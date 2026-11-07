@@ -12,7 +12,7 @@
 переліків колонок, схему клієнтського каталогу, кодек `wire`, мапінг
 «логічне ↔ фізичне», схеми форми передачі, порти `SourceAdapter` і
 `SignalTransport`, формат каналу й схеми сигналу; T1 (`simetra/compiler`)
-заповнює UUID ТЧ, `signal`, `kernelHash`, `creatorMembership` і проєктує
+заповнює id ТЧ, `signal`, `kernelHash`, `creatorMembership` і проєктує
 клієнтський каталог; designer пише `client-catalog.json`.
 
 **Architecture:** обидва каталоги — рантайму (сервер) і клієнтський (T4) —
@@ -96,6 +96,8 @@ rebase на `main`, `orient --plan` цього файла, звірка кожн
 | В9 | Невідома мітка перерахування чи цілі пари в рядку читання — відсутнє поле, не помилка; відсутнє поле на дроті лишається відсутнім, а не `null` (ядро лишає старе значення для ключа, відсутнього в рядку, — `sectionLines`) | §4.4 — внесено |
 | В10 | T3 ставить `object` на кожну помилку з `path` чи `attributes` (у пакеті — об'єкт операції, що відмовила); виконання — B1b-2, B1b-1 мапить `error.object` | §4.0 «Поля помилки» — внесено; §6.10 П4 — через Додаток А в B1b-2 |
 | В11 | `server/decode.ts` переходить на `decodeRow` T0 у B1b-2 | §4.4 — внесено |
+| В12 | id ТЧ у записі й у формі передачі — id елемента: UUID оголошеної ТЧ, синтетичний `<UUID об'єкта>#<канонічне ім'я>` стандартної (`standardElementId`). Формат — одне місце в T0: `standardElementId` і `elementIdSchema` переїжджають у T0, T1 імпортує їх звідти; нового регулярного виразу немає | §3, §4.0, Додаток А — внесено із задачею 1 |
+| В13 | Імена спільної частини — `catalogEntry*` (`catalogAttributeSchema` і `CatalogAttribute` зайняті схемою реквізиту виду Catalog) | немає |
 
 ## Review Focus
 
@@ -123,7 +125,7 @@ rebase на `main`, `orient --plan` цього файла, звірка кожн
 | Файл | Що змінюється |
 | --- | --- |
 | `packages/simetra/src/model/runtime/catalog.ts` (після B1a) | спільна частина запису й розширення рантайму; `id` ТЧ, `signal`, `kernelHash`, `creatorMembership` |
-| `packages/simetra/src/model/runtime/values.ts` | кодувальник над `CatalogAttribute` замість `RuntimeAttribute` |
+| `packages/simetra/src/model/runtime/values.ts` | кодувальник над `CatalogEntryAttribute` замість `RuntimeAttribute` |
 | `packages/simetra/src/model/runtime/columns.ts` (новий) | `objectColumns` |
 | `packages/simetra/src/model/runtime/client-catalog.ts` (новий) | `clientCatalogSchema` |
 | `packages/simetra/src/model/runtime/wire.ts` (новий) | `encodeRow`, `decodeRow`, `decodeValues` |
@@ -147,7 +149,7 @@ rebase на `main`, `orient --plan` цього файла, звірка кожн
 
 ---
 
-### Задача 1: спільна частина запису каталогу й UUID ТЧ
+### Задача 1: спільна частина запису каталогу й id ТЧ
 
 **Files:**
 - Modify: `packages/simetra/src/model/runtime/catalog.ts`,
@@ -162,41 +164,54 @@ rebase на `main`, `orient --plan` цього файла, звірка кожн
 
 **Interfaces:**
 - Produces (T0):
-  - `catalogAttributeSchema` — поля реквізиту, спільні для обох каталогів:
+  - `catalogEntryAttributeSchema` — поля реквізиту, спільні для обох каталогів:
     `name`, `column`, `type`, `array?`, `required`, `maxLength?`,
     `precision?`, `scale?`, `insert`, `update`, `generated?`,
     `enumValues?`, `pair?`, `ref?` (з `constraint`), `load?`.
-    `runtimeAttributeSchema = catalogAttributeSchema.extend({ pgType, castType })`.
-  - `catalogSectionSchema` — `id` (UUID ТЧ, `z.guid()`), `name`, `table`,
+    `runtimeAttributeSchema = catalogEntryAttributeSchema.extend({ pgType, castType })`.
+  - `elementIdSchema` (T0, `packages/simetra/src/model/schemas/element-id.ts`,
+    новий) — UUID або синтетичний id стандартного елемента; разом із ним у
+    T0 переїжджає `standardElementId(ownerId, column)` з
+    `compiler/stages/identity.ts` (без реекспорту: імпорти T1 —
+    `entity-fields.ts`, `contracts.ts`, `rights/checks.ts`,
+    `rights/role-checks.ts`, `stages/identity.ts` — на T0). Схема розбирає
+    рядок тим самим форматом, що будує функція (роздільник — одна стала),
+    без окремого регулярного виразу; префікс — `z.guid()`, ім'я —
+    непорожнє, без роздільника й без крапки (крапка ділить `path`).
+  - `catalogEntrySectionSchema` — `id` (`elementIdSchema`), `name`, `table`,
     `key`, `keyName`, `parent`, `parentName`, `lineNumber`,
     `lineNumberName`, `parentConstraint`, `attributes`.
     `runtimeSectionSchema` розширює його `attributes: runtimeAttributeSchema[]`
     і `constraints`.
-  - `catalogObjectSchema` — `id` (`z.guid()`), `name`, `kind`, `kindLabel`,
+  - `catalogEntrySchema` — `id` (`z.guid()`), `name`, `kind`, `kindLabel`,
     `table`, `key`, `keyName`, `versionColumn`, `versionName`,
     `scopeKindId?`, `scopeColumn?`, `attributes`, `tabularSections`.
     `runtimeObjectSchema` розширює його `attributes`, `tabularSections`,
     `constraints`, `operations?`, `membership?`.
-  - Типи `CatalogObject`, `CatalogSection`, `CatalogAttribute`.
+  - Типи `CatalogEntry`, `CatalogEntrySection`, `CatalogEntryAttribute`.
   - `values.ts`: `encodePair`, `encodeItemValue`, `encodeAttributes` і
-    `scalar` приймають `CatalogAttribute` (вони читають лише спільні поля:
+    `scalar` приймають `CatalogEntryAttribute` (вони читають лише спільні поля:
     `type`, `array`, `precision`, `scale`, `maxLength`, `enumValues`,
     `pair`, `column`, `name`, `insert`, `update`). `EncodeAttributesOptions`
     — узагальнений за типом реквізиту (`allowed: (a: A) => boolean`), щоб
     явні анотації `(a: RuntimeAttribute) => …` у викликачах компілювалися;
     виклики — `rg -n "encodeAttributes" packages`.
-- Produces (T0 тести): `entries.ts` — `catalogAttribute(overrides)`,
-  `catalogSection(overrides)`, `catalogObject(overrides)`,
+- Produces (T0 тести): `entries.ts` — `catalogEntryAttribute(overrides)`,
+  `catalogEntrySection(overrides)`, `catalogEntry(overrides)`,
   `runtimeObject(overrides)` зі стабільними типовими значеннями (довідник
   зі скоупом, пара, перерахування, лінивий `Text`, ТЧ з двома реквізитами).
   Задачі 2–11 доповнюють їх лише перевизначеннями.
 
-- [ ] **Step 1: тести.** `catalog.test.ts`: `it.each` — запис будівника
-  проходить `runtimeObjectSchema`; ТЧ без `id` чи з `id` не-UUID, об'єкт з
-  `id` не-UUID — відмова; `expectTypeOf<RuntimeObject>().toExtend<CatalogObject>()`.
+- [ ] **Step 1: тести.** `element-id.test.ts` (T0): `it.each` —
+  `standardElementId(uuid, { logicalName: "delta" })` проходить
+  `elementIdSchema`; UUID проходить; `не-uuid#delta`, `<uuid>#`,
+  `<uuid>#a.b`, `<uuid>#a#b`, порожній рядок — відмова. `catalog.test.ts`:
+  `it.each` — запис будівника проходить `runtimeObjectSchema`; ТЧ без `id`
+  чи з хибним `id`, об'єкт з `id` не-UUID — відмова; стандартна ТЧ з
+  синтетичним `id` — проходить; `expectTypeOf<RuntimeObject>().toExtend<CatalogEntry>()`.
   `runtime-catalog.test.ts`: `it("a tabular section carries its UUID")` —
   `id` кожної ТЧ дорівнює `origin.tabularSectionId` її фізичної таблиці в
-  `model.physical`.
+  `model.physical`, зокрема синтетичний id дельти «Ролей».
 - [ ] **Step 2:** `pnpm --filter simetra test catalog` — червоні.
 - [ ] **Step 3:** розділити схеми; у `runtimeObject` (`runtime-catalog.ts`)
   — `id: section.table.origin.tabularSectionId` через наявний `must`;
@@ -205,7 +220,7 @@ rebase на `main`, `orient --plan` цього файла, звірка кожн
   будівнику, — перевести на `entries.ts`).
 - [ ] **Step 4:** `pnpm --filter simetra test` і
   `pnpm --filter simetra typecheck` — зелені.
-- [ ] **Step 5: коміт** `feat(model): спільна частина запису каталогу й UUID ТЧ`.
+- [ ] **Step 5: коміт** `feat(model): спільна частина запису каталогу й id ТЧ`.
 
 ### Задача 2: межі читання й ознака `signal`
 
@@ -236,7 +251,7 @@ rebase на `main`, `orient --plan` цього файла, звірка кожн
     `hasVisibleUsers(model.contracts, <провайдер проєкту>)`
     (`compiler/rights/functions.ts`). Немає контракту доступу (RLS вимкнено)
     — `false`: без політик межу читання не доведено.
-- Produces (T0): `catalogObjectSchema.signal: z.boolean()`.
+- Produces (T0): `catalogEntrySchema.signal: z.boolean()`.
 
 - [ ] **Step 1: тести.** `access-units.test.ts`: `it.each` над
   `readBoundaries` — скоуплена без `publicRead` → `["tenant"]`; скоуплена з
@@ -278,8 +293,8 @@ rebase на `main`, `orient --plan` цього файла, звірка кожн
 - Produces (T1): `kernelHashOf(operations: RuntimeObject["operations"]): string`
   = `sha256HexSync(canonicalize(operations ?? {}))` (`compiler/sha256.ts`,
   `compiler/canonical.ts`).
-- Produces (T0): `catalogObjectSchema.kernelHash: z.string().regex(/^[0-9a-f]{64}$/)`;
-  `catalogObjectSchema.creatorMembership?: z.guid()` — UUID довідника
+- Produces (T0): `catalogEntrySchema.kernelHash: z.string().regex(/^[0-9a-f]{64}$/)`;
+  `catalogEntrySchema.creatorMembership?: z.guid()` — UUID довідника
   членства кореня виду скоупу з творцем (те саме, що
   `operations.create.root.membership`): клієнт мапить `creatorMember` записом
   цього довідника без `operations` (В8). `superRefine`
@@ -324,9 +339,9 @@ interface ColumnLists {
   lazy: readonly string[]
 }
 interface ObjectColumns extends ColumnLists {
-  tabularSections: ReadonlyMap<string /* UUID ТЧ */, ColumnLists>
+  tabularSections: ReadonlyMap<string /* id ТЧ */, ColumnLists>
 }
-function objectColumns(entry: CatalogObject): ObjectColumns
+function objectColumns(entry: CatalogEntry): ObjectColumns
 ```
 
   - шапка: `insert`/`update` — `column` і `pair.typeColumn` реквізитів з
@@ -373,7 +388,7 @@ function objectColumns(entry: CatalogObject): ObjectColumns
 
 **Interfaces:**
 - Produces (T0): `clientCatalogSchema = z.strictObject({ format: z.literal(1),
-  snapshotHash, provider, objects: z.array(catalogObjectSchema) })`, тип
+  snapshotHash, provider, objects: z.array(catalogEntrySchema) })`, тип
   `ClientCatalog`. Контракт прав для обчислювача — B6.
 - Produces (T1): `buildClientCatalog(runtime: RuntimeCatalog): ClientCatalog`
   — явна проєкція кожного запису (поля спільної частини; реквізити й ТЧ без
@@ -412,18 +427,18 @@ function objectColumns(entry: CatalogObject): ObjectColumns
 - Consumes: `encodeItemValue`, `encodePair`, `INTEGER_TEXT`,
   `isPlainObject` з `values.ts` (задача 1). Логічна форма пари —
   `{ type: "<Kind>.<Name>", id }` (як в `encodePair`).
-- Produces (T0), над `CatalogObject`:
+- Produces (T0), над `CatalogEntry`:
   - `type WireRow = Record<string, unknown>` (фізичні ключі),
     `type LogicalRow = Record<string, unknown>` (логічні імена, як
     `CommandResult.rows`); рядок картки несе `tabularSections`.
-  - `encodeRow(entry: CatalogObject, row: LogicalRow): WireRow` (сервер) —
+  - `encodeRow(entry: CatalogEntry, row: LogicalRow): WireRow` (сервер) —
     значення реквізитів через `encodeItemValue` (пара — дві колонки,
     перерахування — мітка, `BigInt` — рядок); ключ, версія й номер рядка ТЧ
-    — рядок цілого; `tabularSections` за логічним ім'ям → за UUID ТЧ; поле
+    — рядок цілого; `tabularSections` за логічним ім'ям → за id ТЧ; поле
     рядка, якого немає в записі, не потрапляє в результат. Значення,
     яке `encodeItemValue` відхиляє, — `WireEncodeError` (клас T0): рядок
     рантайму вже пройшов валідацію, тож це дефект, а не вхід.
-  - `decodeRow(entry: CatalogObject, raw: WireRow): LogicalRow` (клієнт,
+  - `decodeRow(entry: CatalogEntry, raw: WireRow): LogicalRow` (клієнт,
     обидва адаптери) — за таблицею §4.4: `BigInt` — JS `bigint`; версія й
     номер рядка ТЧ — лише рядок цілого → безпечне ціле `number`; `Numeric`,
     `Date`, `Bytes` — рядок без змін; `DateTime` — рядок
@@ -432,7 +447,7 @@ function objectColumns(entry: CatalogObject): ObjectColumns
     мікросекунди); понад 6 знаків — `WireDecodeError` (точність
     `timestamptz` — мікросекунди, тож довший дріб — не значення бази); перерахування — логічне ім'я; пара — `{ type, id }`;
     `Json` — значення; фізичний ключ поза записом ігнорується; відсутній ключ
-    — відсутнє поле; `tabularSections` за UUID ТЧ → за логічним ім'ям.
+    — відсутнє поле; `tabularSections` за id ТЧ → за логічним ім'ям.
     Невідома мітка перерахування чи цілі пари — поле відсутнє, як колонка
     поза каталогом (В9).
     Значення не того типу (не рядок цілого для `BigInt`) — `WireDecodeError`
@@ -478,7 +493,8 @@ function objectColumns(entry: CatalogObject): ObjectColumns
   `hook-context.ts`): сегменти через крапку; мапиться за правилами нижче,
   решта сегментів — без змін:
   - ТЧ: `<ТЧ>[.<i>][.<реквізит ТЧ | keyName ТЧ>[.<j>]]` ↔
-    `<UUID ТЧ>[.<i>][.<колонка>[.<j>]]`; сегмент лише з цифр — індекс (без
+    `<id ТЧ>[.<i>][.<колонка>[.<j>]]` (id ТЧ — UUID чи синтетичний id
+    стандартної ТЧ, В12; крапки в ньому немає); сегмент лише з цифр — індекс (без
     змін), інакше ім'я. Так покрито `<ТЧ>`, `<ТЧ>.<i>`, `<ТЧ>.<i>.<реквізит>`,
     `<ТЧ>.<i>.<реквізит>.<j>` (масив), `<ТЧ>.<i>.<keyName ТЧ>` з
     `server/values.ts` і `<ТЧ>.<реквізит>` без індексу з `server/errors.ts`
@@ -501,14 +517,14 @@ function objectColumns(entry: CatalogObject): ObjectColumns
   B1b-2):
   - `wireOperationSchema` — як `operationSchema`, з `object: z.guid()`,
     `values`/`creatorMember` — записи фізичних колонок, `tabularSections` —
-    запис `UUID ТЧ → рядки фізичних колонок`; `expectedVersion` — як у
+    запис `id ТЧ → рядки фізичних колонок`; `expectedVersion` — як у
     логічній формі;
   - `wireCommandErrorSchema` — `CommandError` з `object?: z.guid()`,
     `path?` фізичним, `attributes?` фізичними (`<колонка>` шапки,
-    `<UUID ТЧ>.<колонка>` ТЧ; пара — її `column`);
+    `<id ТЧ>.<колонка>` ТЧ; пара — її `column`);
   - `wireChangeSchema` — `Change` з `object: z.guid()`.
 - Produces (T0, `mapping.ts`):
-  - `catalogIndex(objects: readonly CatalogObject[]): CatalogIndex` — пошук
+  - `catalogIndex(objects: readonly CatalogEntry[]): CatalogIndex` — пошук
     за UUID і за `MetadataRef` (`Map`).
   - `type Mapped<T> = { ok: true; value: T } | { ok: false; unknown: { object: string; section?: string; column?: string; name?: string } } | { ok: false; invalid: CommandError }`
     — `unknown.object` завжди UUID об'єкта (чи UUID з запиту, коли об'єкт
@@ -521,7 +537,7 @@ function objectColumns(entry: CatalogObject): ObjectColumns
     логічним `path`.
   - `operationFromWire(index, wire: WireOperation): Mapped<Operation>`
     (сервер): невідома фізична колонка в `values`, рядку ТЧ чи
-    `creatorMember`, невідомий UUID ТЧ — `unknown` (не ігнорується);
+    `creatorMember`, невідомий id ТЧ — `unknown` (не ігнорується);
     значення, що потребують перекладу, перекладаються суворо: мітка
     перерахування → ім'я, пара з двох колонок → `{ type, id }`; невідома
     мітка (зокрема логічне ім'я замість мітки) — `{ ok: false, invalid }` з
@@ -540,14 +556,14 @@ function objectColumns(entry: CatalogObject): ObjectColumns
 
 - [ ] **Step 1: тести.** `path.test.ts` (будівник): `it.each` кожної
   форми граматики туди й назад, зокрема `<ТЧ>.<i>.<реквізит>`, `<ТЧ>.<i>`,
-  `<ТЧ>`, `creatorMember.<реквізит>`, `keyName`, `values`, `orderBy.0.attribute`,
+  `<ТЧ>`, стандартна ТЧ із синтетичним id (туди й назад), `creatorMember.<реквізит>`, `keyName`, `values`, `orderBy.0.attribute`,
   довільний шлях застосунку; реквізит з ім'ям `values` — колонка;
   `__proto__` — без змін. `mapping.test.ts` (будівник): кожна дія операції
   туди й назад; `creatorMember` кореня мапиться записом довідника членства
   **клієнтського** каталогу; масив ТЧ з двома рядками; `errorToWire` /
   `errorFromWire` для `command.constraint` з `attributes` шапки, пари й ТЧ і
   `path` ТЧ (`<ТЧ>.<реквізит>` без індексу), помилка без `object` — `path`
-  без змін; набір змін; невідомий UUID об'єкта, невідомий UUID ТЧ, невідома
+  без змін; набір змін; невідомий UUID об'єкта, невідомий id ТЧ, невідома
   колонка, невідоме логічне ім'я — `unknown` з UUID об'єкта; ворожі імена
   (`__proto__`, `constructor`, `a.b`, `"x`) — `unknown`, прототип не змінено;
   відсутнє поле в `values` чи рядку ТЧ лишається відсутнім після
@@ -577,13 +593,13 @@ function objectColumns(entry: CatalogObject): ObjectColumns
 - Consumes: `ReadQuery`, `ReadResult`, `Filter` з `read.ts` B1a.
 - Produces (T0):
   - `wireReadQuerySchema` — `readQuerySchema` B1a з `object: z.guid()`,
-    фізичними колонками у фільтрі, сортуванні й `include`, UUID ТЧ у
+    фізичними колонками у фільтрі, сортуванні й `include`, id ТЧ у
     `tabularSection`/`tabularSections`;
   - `wireReadResultSchema` — `{ rows: WireRow[], included?: { "<UUID об'єкта>": WireRow[] }, more? }`,
     `{ rows, ownerVersion }`, `{ count, capped? }`;
   - `readQueryToWire(index, query: ReadQuery): Mapped<WireReadQuery>`,
     `readQueryFromWire(index, wire): Mapped<ReadQuery>` — невідома колонка
-    фільтра, сортування, `include` чи UUID ТЧ — `unknown`. Форми значень
+    фільтра, сортування, `include` чи id ТЧ — `unknown`. Форми значень
     умови фільтра в передачі: версія — рядок цілого (логічна — `number`,
     `read-filter.ts` вимагає безпечне ціле); перерахування — мітка; пара —
     умова над `column` пари зі значенням `{ type: <мітка цілі>, id }`
@@ -596,7 +612,7 @@ function objectColumns(entry: CatalogObject): ObjectColumns
 - [ ] **Step 1: тести:** `it.each` над кожною формою запиту B1a (список з
   `and`/`or`/`not` і кожним оператором, сортування, `include`, картка з ТЧ,
   «ТЧ власника», ТЧ як ціль списку, `count`) — туди й назад; фільтр за
-  невідомою колонкою — `unknown`; невідомий UUID ТЧ — `unknown`; результат
+  невідомою колонкою — `unknown`; невідомий id ТЧ — `unknown`; результат
   — `included` за UUID ↔ за `"<kind>.<name>"`, `ownerVersion`, `more`,
   `count`.
 - [ ] **Step 2:** червоні. **Step 3:** реалізація. **Step 4:** зелені.
