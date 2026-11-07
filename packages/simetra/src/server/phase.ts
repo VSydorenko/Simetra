@@ -20,7 +20,7 @@ import {
   CommandFailure,
   TABULAR_LINES_MAX,
 } from "simetra/model"
-import { decodeRecord } from "./decode"
+import { decodeCoreRow as decodeCore } from "./decode"
 import { refOf, withObject } from "./errors"
 import { callHook, type HookPhase } from "./hook-context"
 import type { z } from "zod"
@@ -775,7 +775,7 @@ function decodeCoreRow(
   let scope: unknown
   try {
     const raw = parse()
-    row = decodeRecord(object, raw)
+    row = decodeCore(object, raw)
     scope =
       object.scopeColumn === undefined
         ? undefined

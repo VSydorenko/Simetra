@@ -1797,6 +1797,51 @@ describe("tabular section arrays", () => {
     ])
   })
 
+  // П3: одна форма рядка для читання й запису — ТЧ рядка результату йдуть у
+  // `tabularSections`, як у картці, і в `runtime.run`, і в `ctx.run` хука.
+  it("puts the sections of a result row under tabularSections", async () => {
+    const core: Override = (text) =>
+      text.includes("order_save")
+        ? {
+            rows: [
+              {
+                r: JSON.stringify({
+                  id: ID,
+                  version: 2,
+                  company_id: COMPANY,
+                  tabular: {
+                    sample_lines: [{ id: LINE, parent_id: ID, line_number: 1 }],
+                  },
+                }),
+              },
+            ],
+          }
+        : undefined
+    const row = {
+      ref: ID,
+      version: 2,
+      company: COMPANY,
+      tabularSections: {
+        lines: [{ ref: LINE, parent: ID, lineNumber: 1 }],
+      },
+    }
+    const both: Override = (text, params) =>
+      fresh(text, params) ?? core(text, params)
+    const direct = await withOrder(both)
+    expect((await direct.runtime.run(session, update())).rows).toEqual([row])
+    let nested: Record<string, unknown> | undefined
+    const { runtime } = await withOrder(both, {
+      "Catalog.Client": {
+        async beforeWrite({ ctx, draft }) {
+          nested = await ctx.run(update())
+          return draft
+        },
+      },
+    })
+    await runtime.run(session, create)
+    expect(nested).toEqual(row)
+  })
+
   it("refuses an array that leaves out an existing row, before hooks and the core", async () => {
     const hook = vi.fn(({ draft }: { draft: object }) => draft)
     const { db, runtime } = await withOrder(

@@ -26,6 +26,8 @@ export const client = defineObjectModule<Catalogs.Client>({
   the draft `{ values?, tabularSections? }` the phase writes. It never adds
   `id` or `mark`; the runtime checks the returned draft again.
 - `onWrite` (1C `ПриЗаписи`) sees the written row in the same transaction.
+  The row has the shape of a card read: the tabular sections that the phase
+  wrote are under `row.tabularSections.<name>`.
 - Both run on the operations `create`, `update` and `markDeletion`;
   `delete` raises no module event. On `markDeletion` the draft is empty and
   the mark is `ctx.mark`.
@@ -39,7 +41,8 @@ export const client = defineObjectModule<Catalogs.Client>({
   `ctx.isNew` is `create`; `ctx.user` is the current user.
 - `ctx.additionalProperties` is shared by the hooks of one phase only.
 - `ctx.run(operation)` runs a phase of another object in the same
-  transaction, with its own rights check and hooks; `ctx.read(query)` reads in
+  transaction, with its own rights check and hooks, and returns the written
+  row in the same shape as `onWrite` sees it; `ctx.read(query)` reads in
   that transaction. It takes the query of `data-read` and returns `{ rows }`
   or `{ count, capped? }`, e.g.
   `ctx.read({ object, where: { attribute: "code", op: "eq", value }, limit: 1 })`.

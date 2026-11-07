@@ -975,6 +975,41 @@ describe("readResultToWire / readResultFromWire", () => {
     expect(readResultFromWire(readIndex, query, wire)).toEqual(logical)
   })
 
+  // Рядок рантайму може нести момент у формі входу (дріб і зсув): дріт однаковий
+  // для обох джерел — фіксованої ширини UTC, і в голові, і в рядку ТЧ.
+  it("normalises a DateTime of a runtime row on the wire", () => {
+    const at = catalogEntryAttribute({
+      name: "at",
+      column: "at_col",
+      type: "DateTime",
+    })
+    const stamp = catalogEntry({
+      name: "Stamp",
+      attributes: [at],
+      tabularSections: [catalogEntrySection({ attributes: [at] })],
+    })
+    const raw = "2026-11-07T15:30:00.5+05:30"
+    const normal = "2026-11-07T10:00:00.500000Z"
+    expect(
+      readResultToWire(
+        catalogIndex([stamp]),
+        {
+          object: { kind: "Catalog", name: "Stamp" },
+          id: ID,
+          tabularSections: true,
+        },
+        { rows: [{ at: raw, tabularSections: { lines: [{ at: raw }] } }] }
+      )
+    ).toEqual({
+      rows: [
+        {
+          at_col: normal,
+          tabularSections: { [SECTION_ID]: [{ at_col: normal }] },
+        },
+      ],
+    })
+  })
+
   // Старий клієнт переживає розширення моделі, як `decodeRow` з невідомою
   // колонкою: ціль, якої клієнтський каталог не знає, не валить читання.
   it("ignores included rows of an object the client does not know", () => {

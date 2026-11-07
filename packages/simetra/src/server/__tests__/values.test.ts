@@ -14,7 +14,7 @@ import {
   writeRoles,
 } from "../../compiler/__tests__/fixtures/rights"
 import { ID, OTHER, SUBJECT, attributeOf, sample } from "./fixtures"
-import { decodeRow } from "../decode"
+import { decodeCoreRow } from "../decode"
 import { encodeItem, encodeParam } from "../values"
 
 const create = (): Operation => ({
@@ -40,7 +40,7 @@ const invalid = (path: string) => ({
   error: { code: "command.invalid", path },
 })
 
-describe("encodeItemValue / decodeRow round trip", () => {
+describe("encodeItemValue / decodeCoreRow round trip", () => {
   // [реквізит, вхід, значення p_item, рядок результату ядра, декодоване]
   it.each([
     ["code", "abc", "abc", "abc", "abc"],
@@ -77,7 +77,8 @@ describe("encodeItemValue / decodeRow round trip", () => {
       "2026-10-31T10:00:00+02:00",
       "2026-10-31T10:00:00+02:00",
       "2026-10-31T08:00:00+00:00",
-      "2026-10-31T08:00:00+00:00",
+      // Момент на виході — фіксованої ширини UTC (спека П4-B §4.4).
+      "2026-10-31T08:00:00.000000Z",
     ],
     ["blob", "\\x00ff", "\\x00ff", "\\x00ff", "\\x00ff"],
     // `Json` — значенням, не JSON-рядком.
@@ -104,9 +105,9 @@ describe("encodeItemValue / decodeRow round trip", () => {
   ])("%s: %s", (name, input, item, stored, decoded) => {
     const attribute = attributeOf(name)
     expect(encodeItemValue(attribute, input, name)).toEqual({ value: item })
-    expect(
-      decodeRow(sample, JSON.stringify({ [attribute.column]: stored }))
-    ).toEqual({ [name]: decoded })
+    expect(decodeCoreRow(sample, { [attribute.column]: stored })).toEqual({
+      [name]: decoded,
+    })
   })
 
   it("a polymorphic pair: two columns in, { type, id } out", () => {
@@ -117,16 +118,10 @@ describe("encodeItemValue / decodeRow round trip", () => {
       value: { subject_type: null, subject_col: null },
     })
     expect(
-      decodeRow(
-        sample,
-        JSON.stringify({ subject_type: "project", subject_col: OTHER })
-      )
+      decodeCoreRow(sample, { subject_type: "project", subject_col: OTHER })
     ).toEqual({ subject: { type: "Catalog.Project", id: OTHER } })
     expect(
-      decodeRow(
-        sample,
-        JSON.stringify({ subject_type: null, subject_col: null })
-      )
+      decodeCoreRow(sample, { subject_type: null, subject_col: null })
     ).toEqual({ subject: null })
     expect(
       encodePair(SUBJECT, { type: "Catalog.Project", id: OTHER }, "subject")
@@ -134,7 +129,7 @@ describe("encodeItemValue / decodeRow round trip", () => {
   })
 
   it("a raw carrier copy decodes as is", () => {
-    expect(decodeRow(sample, JSON.stringify({ copy_id_col: OTHER }))).toEqual({
+    expect(decodeCoreRow(sample, { copy_id_col: OTHER })).toEqual({
       copy_id: OTHER,
     })
   })
@@ -575,23 +570,20 @@ describe("on the compiled catalog", () => {
 
   it("a result row has the key under ref and the version under version", () => {
     expect(
-      decodeRow(
-        ticket,
-        JSON.stringify({
-          id: ID,
-          version: "2",
-          org_id: OTHER,
-          code: "T-1",
-          subject_type: "region",
-          subject_id: OTHER,
-          watchers: [OTHER],
-          tabular: {
-            ticket_checklist: [
-              { id: OTHER, parent_id: ID, line_number: 1, region_id: ID },
-            ],
-          },
-        })
-      )
+      decodeCoreRow(ticket, {
+        id: ID,
+        version: "2",
+        org_id: OTHER,
+        code: "T-1",
+        subject_type: "region",
+        subject_id: OTHER,
+        watchers: [OTHER],
+        tabular: {
+          ticket_checklist: [
+            { id: OTHER, parent_id: ID, line_number: 1, region_id: ID },
+          ],
+        },
+      })
     ).toEqual({
       ref: ID,
       version: 2,
@@ -599,7 +591,9 @@ describe("on the compiled catalog", () => {
       code: "T-1",
       subject: { type: "Catalog.Region", id: OTHER },
       watchers: [OTHER],
-      checklist: [{ ref: OTHER, parent: ID, lineNumber: 1, region_id: ID }],
+      tabularSections: {
+        checklist: [{ ref: OTHER, parent: ID, lineNumber: 1, region_id: ID }],
+      },
     })
   })
 

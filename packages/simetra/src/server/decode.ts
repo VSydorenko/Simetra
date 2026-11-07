@@ -1,26 +1,23 @@
 import {
   INTEGER_TEXT,
   isPlainObject,
-  type RuntimeAttribute,
+  decodeRow,
+  type LogicalRow,
   type RuntimeObject,
   type RuntimeSection,
+  type WireRow,
   CommandFailure,
+  WireDecodeError,
 } from "simetra/model"
 
-const internal = () => new CommandFailure({ code: "command.internal" })
-
-/**
- * Decodes a result row of the core (`to_jsonb(row) || <numeric/bigint as
- * text>`) into logical names and entity types. Розбіжність з каталогом
- * (невідома мітка, версія поза безпечним цілим) — `command.internal`: база
- * не тієї моделі чи дані, яких клієнт не прочитає без втрат.
+/*
+ * Адаптер рядка бази до форми передачі (спека П4-B §4.4): значення декодує
+ * `decodeRow` T0, той самий, що й у клієнта, тож сервер і клієнт не
+ * розходяться в семантиці. Тут лише те, чим рядок бази відрізняється від
+ * дроту: ТЧ за `table.name` замість id ТЧ і цілі, які `jsonb` дає числом.
  */
-export function decodeRow(
-  object: RuntimeObject,
-  json: string
-): Record<string, unknown> {
-  return decodeRecord(object, parse(json))
-}
+
+const internal = () => new CommandFailure({ code: "command.internal" })
 
 /** Parses the JSON text of a result column; broken text is `command.internal`. */
 export function parse(json: string): unknown {
@@ -31,142 +28,93 @@ export function parse(json: string): unknown {
   }
 }
 
-/**
- * Decodes a read row of the head (card or page). ТЧ читання приходять
- * окремою колонкою, тож ключ `tabular` рядка тут — не ТЧ (спека П4-B §4.2).
- */
-export function decodeCardRow(
-  object: RuntimeObject,
-  json: string
-): Record<string, unknown> {
-  return decodeHead(object, parse(json))
-}
+/** Ціле, яке `jsonb` дав числом, — рядком цілого, як його чекає дріт. */
+const integerText = (value: unknown): unknown =>
+  typeof value === "number" ? String(value) : value
 
-/**
- * Decodes a parsed core row; the root core returns two rows in one JSON
- * (spec P4 §6.13).
- */
-export function decodeRecord(
-  object: RuntimeObject,
-  row: unknown
-): Record<string, unknown> {
-  const out = decodeHead(object, row)
-  const tabular = (row as Record<string, unknown>).tabular
-  if (isPlainObject(tabular)) {
-    for (const section of object.tabularSections) {
-      const rows = tabular[section.table.name]
-      if (rows === undefined) continue
-      if (!Array.isArray(rows)) throw internal()
-      out[section.name] = rows.map((r: unknown) => decodeLine(section, r))
-    }
-  }
-  return out
-}
-
-function decodeHead(
-  object: RuntimeObject,
-  row: unknown
-): Record<string, unknown> {
+function headWire(object: RuntimeObject, row: unknown): Map<string, unknown> {
   if (!isPlainObject(row)) throw internal()
-  const out = decodeAttributes(
-    object.attributes,
-    object.key,
-    object.keyName,
-    row
-  )
+  const wire = new Map(Object.entries(row))
   if (Object.hasOwn(row, object.versionColumn)) {
-    out[object.versionName] = decodeSafeInteger(row[object.versionColumn])
+    wire.set(object.versionColumn, integerText(row[object.versionColumn]))
   }
-  return out
-}
-
-/** Decodes a parsed line of a tabular section into logical names. */
-export function decodeLine(
-  section: RuntimeSection,
-  record: unknown
-): Record<string, unknown> {
-  if (!isPlainObject(record)) throw internal()
-  const line = decodeAttributes(
-    section.attributes,
-    section.key,
-    section.keyName,
-    record
-  )
-  // Власник і номер рядка — поля типу рядка ТЧ кодогену (Р-A3-7), хоч
-  // реквізитами входу вони не є.
-  if (Object.hasOwn(record, section.parent)) {
-    line[section.parentName] = record[section.parent]
-  }
-  if (Object.hasOwn(record, section.lineNumber)) {
-    line[section.lineNumberName] = decodeSafeInteger(record[section.lineNumber])
-  }
-  return line
-}
-
-function decodeAttributes(
-  attributes: readonly RuntimeAttribute[],
-  key: string,
-  keyName: string,
-  row: Record<string, unknown>
-): Record<string, unknown> {
-  const out: Record<string, unknown> = {}
-  if (Object.hasOwn(row, key)) out[keyName] = row[key]
-  for (const attribute of attributes) {
-    if (!Object.hasOwn(row, attribute.column)) continue
-    out[attribute.name] = decodeValue(attribute, row)
-  }
-  return out
-}
-
-function decodeValue(
-  attribute: RuntimeAttribute,
-  row: Record<string, unknown>
-): unknown {
-  const value = row[attribute.column]
-  if (attribute.pair !== undefined) {
-    const label = row[attribute.pair.typeColumn]
-    if (value === null && label === null) return null
-    const target = attribute.pair.targets.find((t) => t.label === label)
-    if (target === undefined) throw internal()
-    return { type: `${target.object.kind}.${target.object.name}`, id: value }
-  }
-  if (value === null) return null
-  if (attribute.array === true) {
-    if (!Array.isArray(value)) throw internal()
-    return value.map((v: unknown) =>
-      v === null ? null : decodeScalar(attribute, v)
-    )
-  }
-  return decodeScalar(attribute, value)
-}
-
-function decodeScalar(attribute: RuntimeAttribute, value: unknown): unknown {
-  if (attribute.type === "BigInt") {
-    // Ядро віддає `bigint` текстом (Рт1), рантайм — JS `bigint`.
-    if (typeof value !== "string" || !INTEGER_TEXT.test(value)) {
-      throw internal()
-    }
-    return BigInt(value)
-  }
-  if (attribute.type === "Ref" && attribute.enumValues !== undefined) {
-    const found = attribute.enumValues.find((v) => v.label === value)
-    if (found === undefined) throw internal()
-    return found.name
-  }
-  return value
+  return wire
 }
 
 /**
- * Версія й номер рядка — `number` типу сутності; поза безпечним цілим клієнт
- * їх спотворив би.
+ * Database lines of a tabular section in wire form: the line number as
+ * integer text. A value of the wrong form passes through for `decodeRow` to
+ * refuse.
+ */
+export function linesWire(section: RuntimeSection, lines: unknown): unknown {
+  if (!Array.isArray(lines)) return lines
+  return lines.map((line: unknown) =>
+    isPlainObject(line) && Object.hasOwn(line, section.lineNumber)
+      ? Object.fromEntries(
+          new Map(Object.entries(line)).set(
+            section.lineNumber,
+            integerText(line[section.lineNumber])
+          )
+        )
+      : line
+  )
+}
+
+function decodeStrict(object: RuntimeObject, wire: WireRow): LogicalRow {
+  try {
+    return decodeRow(object, wire, { strict: true })
+  } catch (error) {
+    // Рядок бази не відповідає каталогу — дефект, а не помилка входу.
+    if (error instanceof WireDecodeError) throw internal()
+    throw error
+  }
+}
+
+/**
+ * Decodes a parsed core row (`to_jsonb(row) || <numeric/bigint as text>`,
+ * sections under `tabular[<table.name>]`) into a runtime row; its sections
+ * go to `tabularSections`, as in a read card. A row that does not match the
+ * catalog is `command.internal`.
+ */
+export function decodeCoreRow(object: RuntimeObject, row: unknown): LogicalRow {
+  const wire = headWire(object, row)
+  const tabular = wire.get("tabular")
+  if (isPlainObject(tabular)) {
+    wire.delete("tabular")
+    const sections = new Map<string, unknown>()
+    for (const section of object.tabularSections) {
+      if (!Object.hasOwn(tabular, section.table.name)) continue
+      sections.set(section.id, linesWire(section, tabular[section.table.name]))
+    }
+    wire.set("tabularSections", Object.fromEntries(sections))
+  }
+  return decodeStrict(object, Object.fromEntries(wire))
+}
+
+/**
+ * Decodes a read row: the head from the `row` column and, when the read asks
+ * for them, sections already in wire form by section id. A key `tabular` of
+ * the head is not sections: read sections come in a separate column (P4-B
+ * spec §4.2).
+ */
+export function decodeReadRow(
+  object: RuntimeObject,
+  json: string,
+  sections?: Record<string, unknown>
+): LogicalRow {
+  const wire = headWire(object, parse(json))
+  if (sections !== undefined) wire.set("tabularSections", sections)
+  return decodeStrict(object, Object.fromEntries(wire))
+}
+
+/**
+ * An owner version for the client: a safe integer from integer text or a
+ * `jsonb` number, else `command.internal`.
  */
 export function decodeSafeInteger(value: unknown): number {
-  const version =
-    typeof value === "string" && INTEGER_TEXT.test(value)
-      ? Number(value)
-      : value
-  if (typeof version !== "number" || !Number.isSafeInteger(version)) {
-    throw internal()
-  }
-  return version
+  const text = integerText(value)
+  const number =
+    typeof text === "string" && INTEGER_TEXT.test(text) ? Number(text) : NaN
+  if (!Number.isSafeInteger(number)) throw internal()
+  return number
 }

@@ -20,7 +20,7 @@ import {
   type RuntimeSection,
 } from "simetra/model"
 import type { z } from "zod"
-import { decodeCardRow, decodeLine, decodeSafeInteger, parse } from "./decode"
+import { decodeReadRow, decodeSafeInteger, linesWire, parse } from "./decode"
 import { withObject } from "./errors"
 import {
   renderFilter,
@@ -580,22 +580,21 @@ const decodeRows = (
   object: RuntimeObject,
   rows: readonly Record<string, unknown>[]
 ): Record<string, unknown>[] =>
-  rows.map((r) => decodeCardRow(object, textOf(r.row, "row")))
+  rows.map((r) => decodeReadRow(object, textOf(r.row, "row")))
 
 /**
- * ТЧ з колонки `tabular`. Понад `TABULAR_LINES_MAX` рядків — відмова, а не
- * обрізання (Рд27): межу перевіряє T3 до повернення.
+ * ТЧ з колонки `tabular` у формі передачі (за id ТЧ) — декодує їх
+ * `decodeReadRow`. Понад `TABULAR_LINES_MAX` рядків — відмова, а не
+ * обрізання (Рд27): межу перевіряє T3 до декодування.
  */
 function decodeSections(
   object: RuntimeObject,
   sections: readonly RuntimeSection[],
   column: unknown
-):
-  | { lines: Record<string, Record<string, unknown>[]> }
-  | { error: CommandError } {
+): { wire: Record<string, unknown> } | { error: CommandError } {
   const tabular = parse(textOf(column, "tabular"))
   if (!isPlainObject(tabular)) throw new Error("read tabular is not an object")
-  const out: Record<string, Record<string, unknown>[]> = {}
+  const out = new Map<string, unknown>()
   for (const section of sections) {
     const lines = tabular[section.table.name]
     if (!Array.isArray(lines)) throw new Error("read lines are not an array")
@@ -607,9 +606,9 @@ function decodeSections(
         ),
       }
     }
-    out[section.name] = lines.map((line: unknown) => decodeLine(section, line))
+    out.set(section.id, linesWire(section, lines))
   }
-  return { lines: out }
+  return { wire: Object.fromEntries(out) }
 }
 
 /** Runs one statement of a read in its transaction; `object` — its phase. */
@@ -672,9 +671,13 @@ function readResult(
     if (row === undefined) return { rows: [] }
     const decoded = decodeSections(object, sections, row.tabular)
     if ("error" in decoded) return decoded
+    // Рядки ТЧ декодує той самий `decodeRow`, що й картку: власник без голови.
+    const { tabularSections } = decodeReadRow(object, "{}", decoded.wire) as {
+      tabularSections: Record<string, Record<string, unknown>[]>
+    }
     const version = row.owner_version
     return {
-      rows: decoded.lines[sections[0]!.name]!,
+      rows: tabularSections[sections[0]!.name]!,
       ...(version === null || version === undefined
         ? {}
         : { ownerVersion: decodeSafeInteger(version) }),
@@ -682,13 +685,13 @@ function readResult(
   }
   const out: Record<string, unknown>[] = []
   for (const row of rows) {
-    const head = decodeCardRow(object, textOf(row.row, "row"))
+    let wire: Record<string, unknown> | undefined
     if (sections.length > 0) {
       const decoded = decodeSections(object, sections, row.tabular)
       if ("error" in decoded) return decoded
-      head.tabularSections = decoded.lines
+      wire = decoded.wire
     }
-    out.push(head)
+    out.push(decodeReadRow(object, textOf(row.row, "row"), wire))
   }
   return { rows: out }
 }

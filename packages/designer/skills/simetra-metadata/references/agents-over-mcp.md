@@ -68,6 +68,10 @@ pnpm exec simetra data-read '{"query":{"object":{"kind":"Catalog","name":"Curren
   `plan` and `apply` it.
 - A runtime refusal comes back as `error` with a `code` (and a `reason`);
   `BigInt` values come as decimal strings and may be passed back as strings.
+  `DateTime` values come in UTC as `YYYY-MM-DDTHH:MM:SS.ffffffZ`.
+- `data-command` returns `{ rows, changes }`: one row per operation, in the
+  shape of a card read. The tabular sections that the operation wrote come
+  under `tabularSections.<name>`, not at the top level of the row.
 
 A query takes one of these forms:
 

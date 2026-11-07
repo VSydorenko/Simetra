@@ -214,6 +214,49 @@ describe("encodeRow / decodeRow values", () => {
       decodeRow(only(EXTRA.pair!.attribute), { v_type: "region", v_col: ID })
     ).toEqual({})
   })
+
+  // Сервер читає власну базу: невідома мітка там — дефект, а не новіша модель.
+  it.each<[string, CatalogEntryAttribute, WireRow, string]>([
+    [
+      "enumeration label",
+      EXTRA.enumeration!.attribute,
+      { v_col: "new" },
+      "v_col",
+    ],
+    [
+      "enumeration label in an array",
+      { ...EXTRA.enumeration!.attribute, array: true },
+      { v_col: ["open", "new"] },
+      "v_col",
+    ],
+    [
+      "pair target",
+      EXTRA.pair!.attribute,
+      { v_type: "region", v_col: ID },
+      "v_type",
+    ],
+  ])(
+    "strict refuses an unknown %s with its column",
+    (_, attribute, raw, column) => {
+      expect(() => decodeRow(only(attribute), raw, { strict: true })).toThrow(
+        expect.objectContaining({ name: "WireDecodeError", column }) as Error
+      )
+    }
+  )
+
+  it("strict refuses an unknown label in a section line", () => {
+    const section = catalogEntrySection({
+      attributes: [EXTRA.enumeration!.attribute],
+    })
+    const entry = catalogEntry({ attributes: [], tabularSections: [section] })
+    const raw = { tabularSections: { [section.id]: [{ v_col: "new" }] } }
+    expect(decodeRow(entry, raw)).toEqual({
+      tabularSections: { [section.name]: [{}] },
+    })
+    expect(() => decodeRow(entry, raw, { strict: true })).toThrow(
+      WireDecodeError
+    )
+  })
 })
 
 describe("DateTime normalisation", () => {
@@ -253,6 +296,31 @@ describe("DateTime normalisation", () => {
     expect(() =>
       decodeRow(entry, { v_col: "2026-11-07T10:00:00.1234567Z" })
     ).toThrow(WireDecodeError)
+  })
+
+  // Рядок рантайму може нести момент у формі входу команди: дріт — завжди
+  // фіксованої ширини, як його дає `decodeRow`.
+  it.each<[unknown, unknown]>([
+    ["2026-11-07T15:30:00.5+05:30", "2026-11-07T10:00:00.500000Z"],
+    ["2026-11-07T02:00-08:00", "2026-11-07T10:00:00.000000Z"],
+    [
+      ["2026-11-07T10:00:00.123Z", null],
+      ["2026-11-07T10:00:00.123000Z", null],
+    ],
+  ])("encodeRow writes %j as %j", (logical, wire) => {
+    const attribute = Array.isArray(logical)
+      ? attr("DateTime", { array: true })
+      : attr("DateTime")
+    expect(encodeRow(only(attribute), { v: logical })).toEqual({ v_col: wire })
+  })
+
+  it.each([
+    ["seven fraction digits", "2026-11-07T10:00:00.1234567Z"],
+    ["a UTC year past 9999", "9999-12-31T23:00:00-05:00"],
+  ])("encodeRow refuses a DateTime with %s", (_, value) => {
+    expect(() => encodeRow(entry, { v: value })).toThrow(
+      expect.objectContaining({ name: "WireEncodeError", path: "v" }) as Error
+    )
   })
 })
 
