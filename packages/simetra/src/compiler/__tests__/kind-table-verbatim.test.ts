@@ -15,6 +15,7 @@ import {
   promotableTaskNote,
   taskNoteMapping,
 } from "./fixtures/rights"
+import { SNAPSHOT_TABLES } from "../rights/actor-snapshot"
 import { acceptDebt, uuid } from "./helpers"
 
 const EXTRA = "sql/public/extra.sql"
@@ -416,6 +417,30 @@ describe("sql.kind-table-verbatim: application SQL does not write a kind table (
     const result = await compile(await acceptDebt(files({ [file]: sql })))
     expect(brief(result.diagnostics)).toEqual([expected])
   })
+
+  // Таблиці схеми `simetra` пише лише платформа: `rightsAdminTables` і
+  // `identities` дають їм походження об'єкта виду, тож Правило 1 судить і
+  // їх. Без походження функція застосунку переписала б знімок актора чи
+  // журнал прав повз команду.
+  it.each([
+    "simetra.rights_versions",
+    "simetra.rights_journal",
+    "simetra.rights_tx_pending",
+    "simetra.identities",
+    ...Object.values(SNAPSHOT_TABLES).map((t) => `${t.schema}.${t.name}`),
+  ])(
+    "%s → error: a platform table of the snapshot is a kind table",
+    async (table) => {
+      const result = await compile(
+        await acceptDebt(
+          files({ [EXTRA]: plpgsqlFn(`DELETE FROM ${table} WHERE false`) })
+        )
+      )
+      expect(brief(result.diagnostics)).toEqual([
+        bodyVerbatim(EXTRA, table, "DeleteStmt"),
+      ])
+    }
+  )
 
   it("a listed function with such a body is an error and a stale entry", async () => {
     const result = await compile(

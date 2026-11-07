@@ -34,6 +34,7 @@ import {
   compileRights,
   grant,
   objects,
+  rightsAdminReadingMembers,
   role,
   writeRoles,
   type Layer,
@@ -95,41 +96,28 @@ const nickname = (): Layer => ({
 const BLIND_RIGHTS_ADMIN_ID = uuid(6746)
 
 /**
- * Адміністратор прав і його «сліпий» двійник:
- * `administerRights` не дає неявного читання членства, тож призначення
- * адресує учасника лише з явним `read` на довіднику членства свого рівня.
- * `RightsAdmin` тут отримує цей `read` шаром моделі файлу, а не зміною
- * типового `adminRoles()`: інші тести покладаються на його гранти.
- * `BlindRightsAdmin` — ті самі гранти без `read` на членстві: фіксує правило.
+ * «Сліпий» двійник `RightsAdmin` (`rightsAdminReadingMembers()`): ті самі
+ * гранти без `read` на довіднику членства. `administerRights` не дає
+ * неявного читання членства, тож призначення адресує учасника лише з явним
+ * `read` — двійник фіксує це правило.
  */
-const rightsAdmins = (): Layer => {
-  const rights = grant(
-    objects(["Catalog", "OrgRoles"], ["Catalog", "OrgRoleAssignments"]),
-    ["read", "administerRights"],
-    "any"
-  )
-  const task = grant(objects(["Document", "Task"]), ["read"], "any")
-  return {
-    [ROLE_FILE("RightsAdmin")]: role(
-      RIGHTS_ADMIN_ID,
-      "RightsAdmin",
-      { scopeKind: "org" },
-      {
-        grants: [
-          rights,
-          task,
-          grant(objects(["Catalog", "OrgMember"]), ["read"], "any"),
-        ],
-      }
-    ),
-    [ROLE_FILE("BlindRightsAdmin")]: role(
-      BLIND_RIGHTS_ADMIN_ID,
-      "BlindRightsAdmin",
-      { scopeKind: "org" },
-      { grants: [rights, task] }
-    ),
-  }
-}
+const blindRightsAdmin = (): Layer => ({
+  [ROLE_FILE("BlindRightsAdmin")]: role(
+    BLIND_RIGHTS_ADMIN_ID,
+    "BlindRightsAdmin",
+    { scopeKind: "org" },
+    {
+      grants: [
+        grant(
+          objects(["Catalog", "OrgRoles"], ["Catalog", "OrgRoleAssignments"]),
+          ["read", "administerRights"],
+          "any"
+        ),
+        grant(objects(["Document", "Task"]), ["read"], "any"),
+      ],
+    }
+  ),
+})
 
 type Outcome =
   { result: Record<string, unknown>; probe: pg.QueryResultRow[] } | Refusal
@@ -188,7 +176,8 @@ describe("catalog command core on rights system catalogs and Users", () => {
       actorSnapshotDomain(
         writeRoles(),
         adminRoles(),
-        rightsAdmins(),
+        rightsAdminReadingMembers(),
+        blindRightsAdmin(),
         nickname()
       )
     )
