@@ -1,4 +1,5 @@
 import { z } from "zod"
+import { elementIdSchema } from "../schemas/element-id"
 import { metadataKindSchema } from "../schemas/metadata-kind"
 import { metadataRefSchema } from "../schemas/metadata-ref"
 import { DATABASE_PROVIDERS } from "../schemas/project"
@@ -40,12 +41,13 @@ export const qualifiedNameSchema = z.strictObject({
   name: z.string(),
 })
 
-export const runtimeAttributeSchema = z.strictObject({
+/**
+ * An attribute of the shared catalog part: what both the runtime catalog and
+ * the client catalog know about it (P4-B spec §3).
+ */
+export const catalogEntryAttributeSchema = z.strictObject({
   name: z.string(),
   column: z.string(),
-  /** Лише для `type` і декодування; у SQL не йде. */
-  pgType: z.string(),
-  castType: castTypeSchema,
   type: z.enum([...LOGICAL_TYPES, "Raw"]),
   array: z.literal(true).optional(),
   required: z.boolean(),
@@ -79,6 +81,13 @@ export const runtimeAttributeSchema = z.strictObject({
   load: z.literal("lazy").optional(),
 })
 
+/** A runtime attribute: the shared part plus the database types of T3. */
+export const runtimeAttributeSchema = catalogEntryAttributeSchema.extend({
+  /** Лише для `type` і декодування; у SQL не йде. */
+  pgType: z.string(),
+  castType: castTypeSchema,
+})
+
 export const runtimeConstraintSchema = z
   .strictObject({
     name: z.string(),
@@ -97,18 +106,30 @@ export const runtimeConstraintSchema = z
     }
   )
 
-export const runtimeSectionSchema = z
-  .strictObject({
-    name: z.string(),
-    table: qualifiedNameSchema,
-    key: z.string(),
-    keyName: z.string(),
-    parent: z.string(),
-    parentName: z.string(),
-    lineNumber: z.string(),
-    lineNumberName: z.string(),
-    /** FK рядка ТЧ на власника: за всіма його колонками ТЧ корелює з рядком власника. */
-    parentConstraint: z.string(),
+/** A tabular section of the shared catalog part. */
+export const catalogEntrySectionSchema = z.strictObject({
+  /**
+   * id ТЧ як елемента: UUID оголошеної ТЧ чи синтетичний id стандартної
+   * (дельта «Ролей»). Ним ТЧ названа у формі передачі (рішення В4, В12
+   * B1b-1), бо ім'я змінюється перейменуванням.
+   */
+  id: elementIdSchema,
+  name: z.string(),
+  table: qualifiedNameSchema,
+  key: z.string(),
+  keyName: z.string(),
+  parent: z.string(),
+  parentName: z.string(),
+  lineNumber: z.string(),
+  lineNumberName: z.string(),
+  /** FK рядка ТЧ на власника: за всіма його колонками ТЧ корелює з рядком власника. */
+  parentConstraint: z.string(),
+  attributes: z.array(catalogEntryAttributeSchema),
+})
+
+/** A runtime tabular section: the shared part plus its constraints. */
+export const runtimeSectionSchema = catalogEntrySectionSchema
+  .extend({
     attributes: z.array(runtimeAttributeSchema),
     constraints: z.array(runtimeConstraintSchema),
   })
@@ -140,8 +161,9 @@ export const runtimeRootCreateSchema = z.strictObject({
   membership: z.string().optional(),
 })
 
-export const runtimeObjectSchema = z.strictObject({
-  id: z.string(),
+/** A catalog object of the shared catalog part. */
+export const catalogEntrySchema = z.strictObject({
+  id: z.guid(),
   name: z.string(),
   kind: metadataKindSchema,
   kindLabel: z.string(),
@@ -152,6 +174,15 @@ export const runtimeObjectSchema = z.strictObject({
   versionName: z.string(),
   scopeKindId: z.string().optional(),
   scopeColumn: z.string().optional(),
+  attributes: z.array(catalogEntryAttributeSchema),
+  tabularSections: z.array(catalogEntrySectionSchema),
+})
+
+/**
+ * A runtime catalog object: the shared part plus what only T3 needs —
+ * constraints, command functions and membership facts.
+ */
+export const runtimeObjectSchema = catalogEntrySchema.extend({
   /**
    * Лише на довіднику членства: колонка користувача, яку разом із ключем і
    * скоупом примушує платформа (`creatorMember`, спека П4 §6.13).
@@ -210,6 +241,9 @@ export const runtimeCatalogSchema = z
 /** A base cast type; `castTypeSchema` also accepts its array form. */
 export type BaseCastType = (typeof CAST_TYPES)[number]
 export type QualifiedName = z.infer<typeof qualifiedNameSchema>
+export type CatalogEntryAttribute = z.infer<typeof catalogEntryAttributeSchema>
+export type CatalogEntrySection = z.infer<typeof catalogEntrySectionSchema>
+export type CatalogEntry = z.infer<typeof catalogEntrySchema>
 export type RuntimeAttribute = z.infer<typeof runtimeAttributeSchema>
 export type RuntimeConstraint = z.infer<typeof runtimeConstraintSchema>
 export type RuntimeSection = z.infer<typeof runtimeSectionSchema>

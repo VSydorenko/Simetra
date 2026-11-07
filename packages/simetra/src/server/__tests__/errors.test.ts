@@ -64,6 +64,7 @@ const mirror: RuntimeObject = runtimeObjectSchema.parse({
     },
     {
       ...sample.tabularSections[0],
+      id: "00000000-0000-4000-8000-000000000052",
       name: "copies",
       table: { schema: "audit", name: "sample" },
     },

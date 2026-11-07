@@ -161,6 +161,7 @@ function runtimeObject(
       const rows = entityFields(facts.model, section.table, context)
       const fixed = new Set([section.key, section.parent, section.lineNumber])
       return {
+        id: must(section.table.origin.tabularSectionId, section.table.name),
         name: source.name,
         table: { schema: section.table.schema, name: section.table.name },
         key: section.key,

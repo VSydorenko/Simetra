@@ -4,6 +4,7 @@ import {
   authorColumns,
   closeRequires,
   singleUuidKeyColumn,
+  standardElementId,
   type ActionEffects,
   type CustomTable,
   type Dml,
@@ -27,7 +28,7 @@ import {
 } from "../contracts"
 import { compareStrings, type Diagnostic } from "../diagnostics"
 import type { ParsedObject } from "../stages/files"
-import { standardElementId, type ResolvedReference } from "../stages/identity"
+import { type ResolvedReference } from "../stages/identity"
 import { elementColumns, kindLabelOf } from "../stages/model"
 import {
   carrierTarget,
