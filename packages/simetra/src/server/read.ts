@@ -2,11 +2,13 @@ import {
   INTEGER_TEXT,
   UUID_TEXT,
   isTextEncodedType,
+  LIMIT_REASONS,
   ORDER_BY_MAX,
   READ_COUNT_CAP,
   TABULAR_LINES_MAX,
   isPlainObject,
   jsonbBuildObject,
+  metadataRefSchema,
   readQuerySchema,
   type BaseCastType,
   type CommandError,
@@ -20,7 +22,8 @@ import {
   type RuntimeSection,
 } from "simetra/model"
 import type { z } from "zod"
-import { decodeCardRow, decodeLine, decodeSafeInteger, parse } from "./decode"
+import { decodeReadRow, decodeSafeInteger, linesWire, parse } from "./decode"
+import { withObject } from "./errors"
 import {
   renderFilter,
   topLevelParentEq,
@@ -567,30 +570,35 @@ const decodeRows = (
   object: RuntimeObject,
   rows: readonly Record<string, unknown>[]
 ): Record<string, unknown>[] =>
-  rows.map((r) => decodeCardRow(object, textOf(r.row, "row")))
+  rows.map((r) => decodeReadRow(object, textOf(r.row, "row")))
 
 /**
- * ТЧ з колонки `tabular`. Понад `TABULAR_LINES_MAX` рядків — відмова, а не
- * обрізання (Рд27): межу перевіряє T3 до повернення.
+ * ТЧ з колонки `tabular` у формі передачі (за id ТЧ) — декодує їх
+ * `decodeReadRow`. Понад `TABULAR_LINES_MAX` рядків — відмова, а не
+ * обрізання (Рд27): межу перевіряє T3 до декодування.
  */
 function decodeSections(
+  object: RuntimeObject,
   sections: readonly RuntimeSection[],
   column: unknown
-):
-  | { lines: Record<string, Record<string, unknown>[]> }
-  | { error: CommandError } {
+): { wire: Record<string, unknown> } | { error: CommandError } {
   const tabular = parse(textOf(column, "tabular"))
   if (!isPlainObject(tabular)) throw new Error("read tabular is not an object")
-  const out: Record<string, Record<string, unknown>[]> = {}
+  const out = new Map<string, unknown>()
   for (const section of sections) {
     const lines = tabular[section.table.name]
     if (!Array.isArray(lines)) throw new Error("read lines are not an array")
     if (lines.length > TABULAR_LINES_MAX) {
-      return invalid(section.name, "tabular-too-large")
+      return {
+        error: withObject(
+          invalid(section.name, "tabular-too-large").error,
+          object
+        ),
+      }
     }
-    out[section.name] = lines.map((line: unknown) => decodeLine(section, line))
+    out.set(section.id, linesWire(section, lines))
   }
-  return { lines: out }
+  return { wire: Object.fromEntries(out) }
 }
 
 /** Runs one statement of a read in its transaction; `object` — its phase. */
@@ -651,11 +659,15 @@ function readResult(
     const [row] = rows
     if (rows.length > 1) throw new Error("read lines answered several rows")
     if (row === undefined) return { rows: [] }
-    const decoded = decodeSections(sections, row.tabular)
+    const decoded = decodeSections(object, sections, row.tabular)
     if ("error" in decoded) return decoded
+    // Рядки ТЧ декодує той самий `decodeRow`, що й картку: власник без голови.
+    const { tabularSections } = decodeReadRow(object, "{}", decoded.wire) as {
+      tabularSections: Record<string, Record<string, unknown>[]>
+    }
     const version = row.owner_version
     return {
-      rows: decoded.lines[sections[0]!.name]!,
+      rows: tabularSections[sections[0]!.name]!,
       ...(version === null || version === undefined
         ? {}
         : { ownerVersion: decodeSafeInteger(version) }),
@@ -663,23 +675,112 @@ function readResult(
   }
   const out: Record<string, unknown>[] = []
   for (const row of rows) {
-    const head = decodeCardRow(object, textOf(row.row, "row"))
+    let wire: Record<string, unknown> | undefined
     if (sections.length > 0) {
-      const decoded = decodeSections(sections, row.tabular)
+      const decoded = decodeSections(object, sections, row.tabular)
       if ("error" in decoded) return decoded
-      head.tabularSections = decoded.lines
+      wire = decoded.wire
     }
-    out.push(head)
+    out.push(decodeReadRow(object, textOf(row.row, "row"), wire))
   }
   return { rows: out }
 }
 
-/** The input path of the first Zod issue; `undefined` — the input root. */
-export function issuePath(error: z.ZodError): string | undefined {
-  const [issue] = error.issues
-  return issue === undefined || issue.path.length === 0
-    ? undefined
-    : issue.path.join(".")
+const LIMIT_REASON_VALUES: ReadonlySet<string> = new Set(
+  Object.values(LIMIT_REASONS)
+)
+
+const reasonOf = (issue: z.core.$ZodIssue): string | undefined => {
+  const reason = (issue as { params?: { reason?: unknown } }).params?.reason
+  return typeof reason === "string" ? reason : undefined
+}
+
+// Issue об'єднання (`invalid_union`) ховає помилки гілок у `errors` з шляхами
+// відносно самого об'єднання. Розгортаємо їх у плоский список листків: шлях
+// кожного дістає префікс шляху об'єднання, бо відмова називає поле входу, а не
+// місце в гілці. Гілку, що не збіглася з дискримінатором (`invalid_value` на
+// одному сегменті від кореня гілки, тобто літерал `type`), відкидаємо: відправник
+// мав на увазі іншу форму, і її issue лише ховали б справжню відмову. Так само
+// відкидаємо гілку, що забороняє наявне поле (`z.never()` — `operation` чи
+// `batch` запиту `run`): пакет інакше звітував би відсутню `operation`. Якщо
+// відкинуто всі гілки, лишаємо всі.
+const withPath = (
+  issue: z.core.$ZodIssue,
+  prefix: readonly PropertyKey[]
+): z.core.$ZodIssue =>
+  prefix.length === 0 ? issue : { ...issue, path: [...prefix, ...issue.path] }
+
+const leavesOf = (
+  issues: readonly z.core.$ZodIssue[],
+  prefix: readonly PropertyKey[]
+): z.core.$ZodIssue[] =>
+  issues.flatMap((issue) => {
+    if (issue.code !== "invalid_union" || issue.errors.length === 0) {
+      return [withPath(issue, prefix)]
+    }
+    const root = [...prefix, ...issue.path]
+    const branches = issue.errors.map((branch) => ({
+      leaves: leavesOf(branch, root),
+      // Заборонене поле — лише власна issue гілки: `never` вкладеного
+      // об'єднання відкидає його гілку, а не зовнішню.
+      forbids: branch.some(
+        (own) =>
+          own.code === "invalid_type" &&
+          own.expected === "never" &&
+          own.path.length === 1
+      ),
+    }))
+    const matched = branches.filter(
+      ({ leaves, forbids }) =>
+        !forbids &&
+        !leaves.some(
+          (leaf) =>
+            leaf.code === "invalid_value" &&
+            leaf.path.length === root.length + 1
+        )
+    )
+    const kept = (matched.length > 0 ? matched : branches).flatMap(
+      (branch) => branch.leaves
+    )
+    return kept.length > 0 ? kept : [withPath(issue, prefix)]
+  })
+
+/**
+ * The issue a refusal reports, with its path from the parsed root. Branches
+ * of a union are searched in order, those that failed on their discriminator
+ * left out: the first issue whose `params.reason` is a limit reason, else the
+ * first with any reason, else the first issue.
+ */
+export function decidingIssue(error: z.ZodError): z.core.$ZodIssue | undefined {
+  // Причина межі важливіша за порядок: issue сусідніх полів не мають ховати,
+  // що вхід завеликий. Порядок гілок у схемі фіксований, тож вибір
+  // детермінований. Без причини лишається перша issue, як і до розгортання.
+  const all = leavesOf(error.issues, [])
+  return (
+    all.find((issue) => LIMIT_REASON_VALUES.has(reasonOf(issue) ?? "")) ??
+    all.find((issue) => reasonOf(issue) !== undefined) ??
+    all[0]
+  )
+}
+
+/**
+ * Шлях відмови схеми операції — одна форма для логічного шару й конверта
+ * (спека П4-B §4.0): перший сегмент шляху ТЧ — сама ТЧ, тож структурний
+ * `tabularSections` прибирається, лише коли за ним щось лишається (хибний
+ * сам контейнер зберігає шлях). Шлях — від операції: індекс операції пакета
+ * викликач відрізає сам і повертає, коли `object` назвати не може.
+ */
+export function operationRefusalPath(path: readonly PropertyKey[]): string[] {
+  const segments = path.map(String)
+  return segments[0] === "tabularSections" && segments.length > 1
+    ? segments.slice(1)
+    : segments
+}
+
+/** The `params.reason` of the first Zod issue that carries one. */
+export function issueReason(error: z.ZodError): string | undefined {
+  const issue = decidingIssue(error)
+  return issue === undefined ? undefined : reasonOf(issue)
 }
 
 /**
@@ -697,22 +798,55 @@ export function prepareRead(
     // Геттер, що кидає, чи відкликаний `Proxy` у запиті.
     return { error: { code: "command.invalid" } }
   }
-  if (!parsed.success) {
-    const path = issuePath(parsed.error)
-    return {
-      error: {
-        code: "command.invalid",
-        ...(path === undefined ? {} : { path }),
-      },
-    }
-  }
-  const { object: ref } = parsed.data
-  const object = catalog.objects.find(
-    (o) => o.kind === ref.kind && o.name === ref.name
-  )
+  if (!parsed.success)
+    return { error: readRefusal(catalog, query, parsed.error) }
+  const object = objectOf(catalog, parsed.data.object)
+  // Невідомий об'єкт — виняток правила `object`: прив'язати шлях нема до чого.
   if (object === undefined) {
     return { error: { code: "command.invalid", path: "object" } }
   }
   const plan = buildReadPlan(catalog, object, parsed.data)
-  return "error" in plan ? plan : { object, plan }
+  // Шляхи будівника й фільтра — відносно об'єкта запиту.
+  return "error" in plan
+    ? { error: withObject(plan.error, object) }
+    : { object, plan }
+}
+
+const objectOf = (
+  catalog: RuntimeCatalog,
+  ref: { kind: string; name: string }
+): RuntimeObject | undefined =>
+  catalog.objects.find((o) => o.kind === ref.kind && o.name === ref.name)
+
+/**
+ * Відмова схеми запиту: `object` — лише коли сирий `object` відомий каталогу
+ * (читання — у `try`: геттер чи `Proxy` може кинути). Ключ картки `{ object,
+ * id }` у шляху — `keyName` об'єкта (спека П4-B §4.0): структурне `id` на
+ * дроті не відрізнити від колонки ключа `id`.
+ */
+function readRefusal(
+  catalog: RuntimeCatalog,
+  query: unknown,
+  error: z.ZodError
+): CommandError {
+  const reason = issueReason(error)
+  const segments = (decidingIssue(error)?.path ?? []).map(String)
+  let object: RuntimeObject | undefined
+  try {
+    const ref = metadataRefSchema.safeParse(
+      (query as { object?: unknown } | null | undefined)?.object
+    )
+    object = ref.success ? objectOf(catalog, ref.data) : undefined
+  } catch {
+    object = undefined
+  }
+  if (object !== undefined && segments[0] === "id") {
+    segments[0] = object.keyName
+  }
+  const refusal: CommandError = {
+    code: "command.invalid",
+    ...(reason === undefined ? {} : { reason }),
+    ...(segments.length === 0 ? {} : { path: segments.join(".") }),
+  }
+  return object === undefined ? refusal : withObject(refusal, object)
 }

@@ -855,6 +855,7 @@ describe("rights administration commands over a planned and applied target", () 
           ).toEqual({
             code: "command.constraint",
             kind: "unique",
+            object: MEMBERS,
             attributes: ["org", "user"],
           })
           expect(touching(statements, TICKET_TABLE)).toEqual([])

@@ -234,12 +234,11 @@ Attribute properties (an element of `attributes`):
   character as itself or as `\uXXXX`.
 - `personalData: true` marks personal data (a name, a phone, an address):
   anonymization sets it to `NULL`, so it cannot also be `required`.
-- `load`: `"lazy"` keeps a heavy value (a file, a long body) out of list reads;
-  a card read still returns it, but a list read cannot filter or sort by it.
-  Header `Bytes` is lazy by default; `"eager"` lists it. Emits no DDL. Not
-  allowed on a polymorphic `Ref`, a tabular section attribute, a rights carrier
-  (`ownership`, `containerBinding`, `access`) or register attributes
-  (`attribute.load-not-allowed`): the runtime does not read registers yet.
+- `load`: `"lazy"` keeps a heavy value (a file, a long body) out of list
+  reads; a card read still returns it. `maxBytes` caps what a command may
+  write to a `Text`, `Json`, `Bytes` or array value; raise it for a long
+  `Text`. Details of both, the response budget and its compiler errors:
+  `references/attribute-load-and-size.md`.
 
 Object properties:
 

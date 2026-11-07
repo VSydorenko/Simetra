@@ -755,12 +755,28 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Приберіть load: рантайм ще не читає регістрів, тож поле нічого б не робило.",
     },
   },
+  "attribute.max-bytes-not-allowed": {
+    en: () => "A register attribute cannot set maxBytes",
+    uk: () => "Реквізит регістра не може задавати maxBytes",
+    hint: {
+      en: "Remove maxBytes: the runtime does not read registers yet, so the field would have no effect.",
+      uk: "Приберіть maxBytes: рантайм ще не читає регістрів, тож поле нічого б не робило.",
+    },
+  },
   "attribute.lazy-not-allowed": {
     en: () => "A polymorphic Ref or a tabular section attribute cannot be lazy",
     uk: () => "Поліморфний Ref чи реквізит ТЧ не може бути лінивим",
     hint: {
       en: 'Remove load: "lazy": a polymorphic pair is read as a whole, and a tabular section array without a lazy field would erase its values.',
       uk: 'Приберіть load: "lazy": поліморфна пара читається цілком, а масив ТЧ без лінивого поля стер би його значення.',
+    },
+  },
+  "type.max-bytes-type": {
+    en: () => "maxBytes applies only to Text, Json, Bytes or an array",
+    uk: () => "maxBytes застосовується лише до Text, Json, Bytes чи масиву",
+    hint: {
+      en: "Remove maxBytes: a String is limited by length, other types have a fixed size.",
+      uk: "Приберіть maxBytes: String обмежує length, решта типів має сталий розмір.",
     },
   },
   "type.bound-type": {
@@ -2882,6 +2898,26 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     hint: {
       en: "owner needs catalog owners, parent needs a hierarchy.",
       uk: "owner потребує власників довідника, parent — ієрархії.",
+    },
+  },
+  "attribute.row-over-budget": {
+    en: (p) =>
+      `A row of ${p.row} may take ${p.bytes} bytes, over the response budget of ${p.budget}`,
+    uk: (p) =>
+      `Рядок ${p.row} може займати ${p.bytes} байтів, понад бюджет відповіді ${p.budget}`,
+    hint: {
+      en: "A list row or a tabular section row past the budget never reaches the client: lower maxBytes or length of its attributes, or make header attributes lazy.",
+      uk: "Рядок списку чи рядок ТЧ понад бюджет ніколи не дійде до клієнта: зменште maxBytes чи length його реквізитів або зробіть реквізити шапки лінивими.",
+    },
+  },
+  "attribute.lazy-over-budget": {
+    en: (p) =>
+      `Lazy attributes of ${p.object} may take ${p.bytes} bytes together, over the response budget of ${p.budget}`,
+    uk: (p) =>
+      `Ліниві реквізити ${p.object} разом можуть займати ${p.bytes} байтів, понад бюджет відповіді ${p.budget}`,
+    hint: {
+      en: "A card read past the budget is refused, not cut: lower maxBytes of the lazy attributes if real values can reach it.",
+      uk: "Читання картки понад бюджет відхиляється, а не обрізається: зменште maxBytes лінивих реквізитів, якщо реальні значення можуть його досягти.",
     },
   },
   "index.attribute-unknown": {

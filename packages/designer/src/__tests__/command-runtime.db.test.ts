@@ -180,9 +180,11 @@ async function refusal(work: Promise<unknown>): Promise<CommandError> {
   throw new Error("the command succeeded")
 }
 
-/** Реквізити шапки результату: читання ТЧ не повертає. */
+/** Реквізити шапки результату: читання без `tabularSections` ТЧ не повертає. */
 function header(row: Record<string, unknown>): Record<string, unknown> {
-  return Object.fromEntries(Object.entries(row).filter(([k]) => k !== "lines"))
+  return Object.fromEntries(
+    Object.entries(row).filter(([k]) => k !== "tabularSections")
+  )
 }
 
 describe("command runtime over the engine target", () => {
@@ -259,16 +261,18 @@ describe("command runtime over the engine target", () => {
     // Рядки ТЧ — точно, за іменами каталогу: ключ рядка під `keyName` ТЧ,
     // власник і номер рядка — як у типі рядка кодогену, `Numeric` з повним
     // масштабом колонки.
-    expect(row!.lines).toEqual([
-      {
-        ref: line,
-        parent: id,
-        lineNumber: 1,
-        org: env.me.org,
-        qty: "1.5000000000",
-        note: "first",
-      },
-    ])
+    expect(row!.tabularSections).toEqual({
+      lines: [
+        {
+          ref: line,
+          parent: id,
+          lineNumber: 1,
+          org: env.me.org,
+          qty: "1.5000000000",
+          note: "first",
+        },
+      ],
+    })
     const read = async () => rt.read(env.me.session, { object: GAUGE, id })
     expect(await read()).toEqual({ rows: [header(row!)] })
     // Серверне читання повертає лише шапку (§6.11: `to_jsonb` рядка таблиці
@@ -302,24 +306,26 @@ describe("command runtime over the engine target", () => {
       },
     })
     const [next] = updated.rows
-    expect(next!.lines).toEqual([
-      {
-        ref: second,
-        parent: id,
-        lineNumber: 1,
-        org: env.me.org,
-        qty: AMOUNT,
-        note: "second",
-      },
-      {
-        ref: line,
-        parent: id,
-        lineNumber: 2,
-        org: env.me.org,
-        qty: "-2.2500000000",
-        note: "edited",
-      },
-    ])
+    expect(next!.tabularSections).toEqual({
+      lines: [
+        {
+          ref: second,
+          parent: id,
+          lineNumber: 1,
+          org: env.me.org,
+          qty: AMOUNT,
+          note: "second",
+        },
+        {
+          ref: line,
+          parent: id,
+          lineNumber: 2,
+          org: env.me.org,
+          qty: "-2.2500000000",
+          note: "edited",
+        },
+      ],
+    })
     expect(await linesOf(id)).toEqual([
       { id: second, line_number: 1, qty: AMOUNT, note: "second" },
       { id: line, line_number: 2, qty: "-2.2500000000", note: "edited" },
@@ -482,6 +488,7 @@ describe("command runtime over the engine target", () => {
     expect(error).toEqual({
       code: "command.constraint",
       kind: "check",
+      object: GAUGE,
       attributes: ["reading"],
     })
     expect(await exists(GAUGE_TABLE, id)).toBe(false)

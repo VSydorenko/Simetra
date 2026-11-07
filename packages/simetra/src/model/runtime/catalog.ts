@@ -79,6 +79,11 @@ export const catalogEntryAttributeSchema = z.strictObject({
     .optional(),
   /** Лише ефективно лінивий реквізит шапки (Рд25): списочне читання його не віддає. */
   load: z.literal("lazy").optional(),
+  /**
+   * The effective byte limit of a command input value (P4-B spec Рд26):
+   * UTF-8 bytes of its JSON wire form; Text, Json, Bytes and arrays only.
+   */
+  maxBytes: z.int().positive().optional(),
 })
 
 /** A runtime attribute: the shared part plus the database types of T3. */
@@ -161,6 +166,9 @@ export const runtimeRootCreateSchema = z.strictObject({
   membership: z.string().optional(),
 })
 
+/** SHA-256 hex of the canonical form of an entry's operations. */
+export const kernelHashSchema = z.string().regex(/^[0-9a-f]{64}$/)
+
 /** A catalog object of the shared catalog part. */
 export const catalogEntrySchema = z.strictObject({
   id: z.guid(),
@@ -183,7 +191,7 @@ export const catalogEntrySchema = z.strictObject({
    * The kernel contract hash (P4-B spec Рд12): SHA-256 of the canonical form
    * of the entry's operations.
    */
-  kernelHash: z.string().regex(/^[0-9a-f]{64}$/),
+  kernelHash: kernelHashSchema,
   /**
    * Whether the object takes a change signal (P4-B spec §8.3): a single
    * `uuid` key and no read boundary but the tenant one.

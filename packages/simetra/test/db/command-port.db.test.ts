@@ -2,11 +2,11 @@ import { afterAll, describe, expect, it } from "vitest"
 import pg from "pg"
 import { ID, sample } from "../../src/server/__tests__/fixtures"
 import { fromPgPool, normalizeError } from "../../src/server/port"
-import { decodeRow } from "../../src/server/decode"
+import { decodeCoreRow } from "../../src/server/decode"
 import { testDatabaseUrl } from "./connection"
 
 /**
- * Контракт порту команд (рішення Р19): що рядок ядра доходить до `decodeRow`
+ * Контракт порту команд (рішення Р19): що рядок ядра доходить до `decodeCoreRow`
  * незмінним за будь-яких парсерів типів `pg` host-а і за будь-яких
  * `bytea_output`/`TimeZone` сесії пулу, вирішують Postgres і драйвер — unit-фейк
  * цього не доводить. Таблиць не треба: рядок у формі ядра будується з літералів
@@ -16,7 +16,7 @@ import { testDatabaseUrl } from "./connection"
 // Типи, які host міг перевизначити на пулі. Серед них і `text` (25), у
 // якому ядро віддає рядок: порт, що покладається на парсер пулу (а не ставить
 // свої на рівні запиту), отримав би тут `{ custom }` замість рядка й
-// почервонів би. Тест доводить, що рядок ядра доходить до `decodeRow` текстом
+// почервонів би. Тест доводить, що рядок ядра доходить до `decodeCoreRow` текстом
 // Postgres за будь-яких парсерів host-а, а не лише за типових.
 const PARSED_OIDS = new Set([
   16, // bool
@@ -85,29 +85,32 @@ describe("CommandDatabase over pg.Pool", () => {
       const client = await fromPgPool(pool).connect()
       try {
         await client.query("BEGIN")
-        // Без кроку 2 — форма сесії: доводить, що крок 2 щось змінює.
+        // Без кроку 2 — форма сесії: доводить, що крок 2 щось змінює. Сирий
+        // текст, бо декодер нормалізує момент і різниця поясу в ньому зникає.
         const session = await client.query(ROW, [ID])
-        expect(decodeRow(sample, session.rows[0]!.r as string)).toMatchObject({
-          blob: "\\000\\377",
-          at: "2026-10-31T17:00:00+09:00",
+        expect(JSON.parse(session.rows[0]!.r as string)).toMatchObject({
+          blob_col: "\\000\\377",
+          at_col: "2026-10-31T17:00:00+09:00",
         })
         await client.query(STEP_2)
         const { rows, command } = await client.query(ROW, [ID])
         expect(command).toBe("SELECT")
         expect(typeof rows[0]!.r).toBe("string")
-        expect(decodeRow(sample, rows[0]!.r as string)).toEqual({
-          ref: ID,
-          version: 7,
-          amount: "12345678901234567890.0123456789",
-          big: 9007199254740993n,
-          bigs: [1n, 9007199254740993n],
-          payload: { a: [1, "x", null, { b: true }] },
-          blob: "\\x00ff",
-          at: "2026-10-31T08:00:00+00:00",
-          day: "2026-02-28",
-          tags: [1, null, 3],
-          status: "Open",
-        })
+        expect(decodeCoreRow(sample, JSON.parse(rows[0]!.r as string))).toEqual(
+          {
+            ref: ID,
+            version: 7,
+            amount: "12345678901234567890.0123456789",
+            big: 9007199254740993n,
+            bigs: [1n, 9007199254740993n],
+            payload: { a: [1, "x", null, { b: true }] },
+            blob: "\\x00ff",
+            at: "2026-10-31T08:00:00.000000Z",
+            day: "2026-02-28",
+            tags: [1, null, 3],
+            status: "Open",
+          }
+        )
         // `bool` (16) перевизначено на пулі: порт однаково віддає текст Postgres.
         expect((await client.query("SELECT true AS b")).rows).toEqual([
           { b: "t" },

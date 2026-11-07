@@ -1,9 +1,11 @@
 import {
   APPLIED_SNAPSHOT_HASH_FUNCTION_NAME,
+  BATCH_MAX,
   LOGIN_ROLE_REQUEST_PURPOSES,
   OBJECT_MODULE_KEYS,
   PLATFORM_SCHEMA,
   PROVIDER_API_ROLES,
+  TABULAR_LINES_MAX,
   runtimeCatalogSchema,
   sessionClaimsSchema,
   type CommandError,
@@ -66,6 +68,20 @@ export interface CommandRuntimeOptions {
    */
   commandBudgetMs?: number
   /**
+   * Operations of one `run` batch (integer 1…`BATCH_MAX`); default
+   * `BATCH_MAX`. A longer batch rejects with `command.invalid`
+   * `reason: "batch-too-large"`. Phases started by `ctx.run` are not counted:
+   * they stay bound by `BATCH_MAX`.
+   */
+  maxBatch?: number
+  /**
+   * Rows of one tabular section of an operation, of `run` and of every
+   * `ctx.run` phase (integer 1…`TABULAR_LINES_MAX`); default
+   * `TABULAR_LINES_MAX`. More rows reject with `command.invalid`
+   * `reason: "tabular-too-large"`. Reads keep the `TABULAR_LINES_MAX` ceiling.
+   */
+  maxTabularLines?: number
+  /**
    * `lock_timeout` of a command transaction in milliseconds (integer ≥ 1);
    * default 5 000. A lock wait past it rejects with `command.busy`.
    */
@@ -89,6 +105,11 @@ export interface CommandRunOptions {
 
 /** The command runtime of one catalog and database. */
 export interface CommandRuntime {
+  /**
+   * The runtime catalog the runtime was created with: parsed by
+   * `runtimeCatalogSchema`, the runtime's own deep-frozen copy.
+   */
+  readonly catalog: RuntimeCatalog
   /** Runs an operation or a batch in one transaction; rejects with `CommandFailure`. */
   run(
     session: SessionClaims,
@@ -156,6 +177,10 @@ const UNDEFINED_OBJECT = "42704"
 // Межі повтору, глибини й часу читання — помилка конфігурації host-а, як і
 // каталог; 0 для часу вимкнув би межу, тож теж відмова.
 const limitSchema = z.int().min(1).optional()
+// Зменшені межі входу — лише вниз від сталих T0: понад сталу вхід відмовила б
+// ще схема, тож така опція була б оманою конфігурації.
+const maxBatchSchema = z.int().min(1).max(BATCH_MAX).optional()
+const maxTabularLinesSchema = z.int().min(1).max(TABULAR_LINES_MAX).optional()
 // Бюджет менший за секунду не вміщує й одного кругового запиту з запасом.
 const budgetSchema = z.int().min(1000).optional()
 
@@ -240,7 +265,12 @@ function mismatch(catalog: RuntimeCatalog, applied: string | null): never {
 export async function createCommandRuntime(
   options: CommandRuntimeOptions
 ): Promise<CommandRuntime> {
-  const catalog = runtimeCatalogSchema.parse(options.catalog)
+  // Власна копія: обробник конверта бере з неї `serverHash` і `version`, тож
+  // зміна об'єкта host-а після створення не розвела б їх з тим, що рантайм
+  // перевірив проти бази.
+  const catalog = deepFreeze(
+    structuredClone(runtimeCatalogSchema.parse(options.catalog))
+  )
   const objectModules = options.objectModules ?? {}
   checkModules(catalog, objectModules)
   const maxAttempts = limitSchema.parse(options.maxAttempts) ?? 3
@@ -249,6 +279,9 @@ export async function createCommandRuntime(
     limitSchema.parse(options.readStatementTimeoutMs) ?? 15_000
   const budgetMs = budgetSchema.parse(options.commandBudgetMs) ?? 60_000
   const lockTimeoutMs = limitSchema.parse(options.lockTimeoutMs) ?? 5_000
+  const maxBatch = maxBatchSchema.parse(options.maxBatch) ?? BATCH_MAX
+  const maxTabularLines =
+    maxTabularLinesSchema.parse(options.maxTabularLines) ?? TABULAR_LINES_MAX
   const sink = options.log ?? ((entry: LogEntry) => console.error(entry))
   // Журнал не має зламати шлях відмови: з'єднання звільняється після нього.
   const log = (entry: LogEntry) => {
@@ -277,6 +310,8 @@ export async function createCommandRuntime(
     log,
     maxAttempts,
     maxDepth,
+    maxBatch,
+    maxTabularLines,
     readTimeout,
     budgetMs,
     lockTimeoutMs,
@@ -284,12 +319,22 @@ export async function createCommandRuntime(
     readRole: member ? role : undefined,
   }
   return {
+    catalog,
     run: (session, input, options) =>
       runCommand(state, session, input, options?.fullTabularArrays === true),
     // Форму результату задає форма запиту; `readRows` будує її з плану.
     read: <Q extends ReadQuery>(session: SessionClaims, query: Q) =>
       readRows(state, session, query) as Promise<ReadResultOf<Q>>,
   }
+}
+
+/** Заморожує дані каталогу до дна: каталог — чисті дані JSON, без циклів. */
+function deepFreeze<T>(value: T): T {
+  if (value !== null && typeof value === "object") {
+    for (const item of Object.values(value)) deepFreeze(item)
+    Object.freeze(value)
+  }
+  return value
 }
 
 /** Відмова бази в читанні, уже змапована; будь-що інше в транзакції — аномалія. */

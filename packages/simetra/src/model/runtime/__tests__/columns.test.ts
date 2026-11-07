@@ -35,7 +35,6 @@ describe("objectColumns", () => {
     })
     expect(columns.tabularSections.get(SECTION_ID)).toEqual({
       insert: ["id", "qty", "comment"],
-      update: ["id", "qty", "comment"],
       read: ["id", "parent_id", "line_number", "qty", "comment"],
       lazy: [],
     })
@@ -100,6 +99,8 @@ describe("objectColumns", () => {
       expect(after.header[key]).toEqual(
         expect.arrayContaining([...before.header[key]])
       )
+    }
+    for (const key of ["insert", "read", "lazy"] as const) {
       expect(after.section[key]).toEqual(
         expect.arrayContaining([...before.section[key]])
       )
@@ -112,7 +113,6 @@ describe("objectColumns", () => {
     const { section } = lists()
     expect(section.read.slice(0, 3)).toEqual(["id", "parent_id", "line_number"])
     expect(section.insert[0]).toBe("id")
-    expect(section.update[0]).toBe("id")
   })
 
   it("a generated attribute without insert and update is only read", () => {

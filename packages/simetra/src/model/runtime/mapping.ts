@@ -39,6 +39,11 @@ import {
  * Імена з даних не стають ключами напряму: вихід збирається через `Map` →
  * `Object.fromEntries`, а ім'я шукається перебором каталогу, тож `__proto__`
  * чи `constructor` — невідоме ім'я, а не зміна прототипу.
+ *
+ * На сервері `__proto__` у записах форми передачі сюди не доходить:
+ * `z.record` Zod викидає цей ключ під час розбору конверта, тож мапінг і
+ * звірка сумісності (`server/compatibility.ts`) бачать той самий розібраний
+ * вхід — ключ ігнорується розбором в обох місцях.
  */
 
 /** Catalog entries by UUID and by `{ kind, name }`. */
@@ -857,6 +862,9 @@ export function readResultToWire(
     }
     out.ownerVersion = String(result.ownerVersion)
   }
+  // Сервер ставить `more` на дроті сам (fitResponse), тож логічне поле тут
+  // недосяжне на сервері; проходить лише для симетрії з декодером.
+  if (result.more !== undefined) out.more = true
   return out
 }
 
@@ -907,5 +915,7 @@ export function readResultFromWire(
     }
     out.ownerVersion = number
   }
+  // Без цього обрізана за бюджетом сторінка на клієнті виглядала б повною.
+  if (wire.more !== undefined) out.more = true
   return out
 }

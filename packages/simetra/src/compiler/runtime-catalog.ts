@@ -1,6 +1,7 @@
 import {
   CAST_TYPES,
   KIND_REGISTRY,
+  effectiveMaxBytes,
   type MetadataRef,
   type PhysicalTable,
   type RuntimeAttribute,
@@ -304,6 +305,16 @@ function attributes(
       keys.header &&
       field.element !== undefined &&
       (load === "lazy" || (load === undefined && value?.type === "Bytes"))
+    // Межа входу — і стандартному атрибуту: його `Text` теж пише команда, а
+    // явної межі стандартному не задати, тож діє типова за типом (П1).
+    const maxBytes =
+      value === undefined
+        ? undefined
+        : effectiveMaxBytes({
+            type: value.type,
+            array: value.array,
+            maxBytes: field.element?.maxBytes,
+          })
     const ref =
       value?.type === "Ref" &&
       enumValues === undefined &&
@@ -340,6 +351,7 @@ function attributes(
         : {}),
       ...(ref === undefined ? {} : { ref }),
       ...(lazy ? { load: "lazy" as const } : {}),
+      ...(maxBytes === undefined ? {} : { maxBytes }),
     }
   })
 }

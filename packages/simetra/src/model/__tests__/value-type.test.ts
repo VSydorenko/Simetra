@@ -170,6 +170,19 @@ describe("default value (spec §5)", () => {
     ).toEqual(MISMATCH)
   })
 
+  // Правило дроту (спека П4-B §4.4): момент DDL `DEFAULT` поза роками
+  // 1–9999 в UTC база збереже, а суворий декодер рядка не прочитає.
+  it.each<[string, [string, string][]]>([
+    ["9999-12-31T23:59:59-05:00", INVALID],
+    ["0001-01-01T00:30:00+01:00", INVALID],
+    ["9999-12-31T23:59:59Z", []],
+    ["0001-01-01T00:00:00Z", []],
+  ])("DateTime default %s by the UTC year rule", (value, expected) => {
+    expect(defaultRules({ type: "DateTime", defaultValue: value })).toEqual(
+      expected
+    )
+  })
+
   it("UUID takes a UUID string", () => {
     expect(
       defaultRules({
@@ -430,6 +443,75 @@ describe("attribute load", () => {
     expect(result.error?.issues.map((i) => i.code)).toEqual([
       "unrecognized_keys",
     ])
+  })
+})
+
+// `maxBytes` (Рд26): лише для значень без межі типу; реквізит регістра його
+// не задає — регістрів у каталозі рантайму ще немає (Рд1).
+describe("attribute maxBytes", () => {
+  const issues = (
+    schema: z.ZodType,
+    input: Record<string, unknown>
+  ): { rule?: string; path: PropertyKey[] }[] =>
+    (schema.safeParse(input).error?.issues ?? []).map((i) => ({
+      rule: (i as { params?: { rule?: string } }).params?.rule,
+      path: i.path,
+    }))
+  const typeRule = "type.max-bytes-type"
+  const registerProbe = z.strictObject({ attributes: registerAttributesSchema })
+
+  it.each<[string, z.ZodType, Record<string, unknown>, unknown[]]>([
+    ["Text", attributeSchema, { name: "a", type: "Text", maxBytes: 1 }, []],
+    [
+      "Json",
+      catalogAttributeSchema,
+      { name: "a", type: "Json", maxBytes: 1 },
+      [],
+    ],
+    ["Bytes", attributeSchema, { name: "a", type: "Bytes", maxBytes: 1 }, []],
+    [
+      "an Integer array",
+      attributeSchema,
+      { name: "a", type: "Integer", array: true, maxBytes: 1 },
+      [],
+    ],
+    [
+      "a tabular section Text",
+      tabularSectionSchema,
+      { name: "lines", attributes: [{ name: "a", type: "Text", maxBytes: 9 }] },
+      [],
+    ],
+    [
+      "a scalar Integer",
+      attributeSchema,
+      { name: "a", type: "Integer", maxBytes: 1 },
+      [{ rule: typeRule, path: ["maxBytes"] }],
+    ],
+    [
+      "a scalar String of a catalog",
+      catalogAttributeSchema,
+      { name: "a", type: "String", length: 10, maxBytes: 1 },
+      [{ rule: typeRule, path: ["maxBytes"] }],
+    ],
+    [
+      "a register attribute",
+      registerProbe,
+      { attributes: [{ name: "a", type: "Text", maxBytes: 1 }] },
+      [
+        {
+          rule: "attribute.max-bytes-not-allowed",
+          path: ["attributes", 0, "maxBytes"],
+        },
+      ],
+    ],
+  ])("%s", (_, schema, input, expected) => {
+    expect(issues(schema, input)).toEqual(expected)
+  })
+
+  it.each([0, -1, 1.5])("refuses maxBytes %s", (maxBytes) => {
+    expect(
+      attributeSchema.safeParse({ name: "a", type: "Text", maxBytes }).success
+    ).toBe(false)
   })
 })
 

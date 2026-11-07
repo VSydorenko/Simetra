@@ -119,6 +119,7 @@ describe("buildClientCatalog", () => {
       [
         "ref",
         "load",
+        "maxBytes",
         "parentConstraint",
         "creatorMembership",
         "scopeKindId",

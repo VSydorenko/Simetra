@@ -1,5 +1,7 @@
 import { describe, expect, expectTypeOf, it } from "vitest"
+import type { DataRequest, DataResponse } from "../envelope"
 import type {
+  DataTransport,
   SignalErrorKind,
   SignalTransport,
   SourceAdapter,
@@ -55,5 +57,13 @@ describe("ports", () => {
       read: async () => ({ count: 1 }),
     }
     expect(bad).toBeDefined()
+  })
+})
+
+describe("DataTransport", () => {
+  it("maps a request to a response", () => {
+    expectTypeOf<DataTransport>().toEqualTypeOf<
+      (request: DataRequest) => Promise<DataResponse>
+    >()
   })
 })

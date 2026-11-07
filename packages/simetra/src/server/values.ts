@@ -44,9 +44,15 @@ export function encodeParam(
   return { value: encoded.value === null ? null : String(encoded.value) }
 }
 
-/** Відмова входу на шляху; ловить її лише `encodeItem`. */
+/**
+ * Відмова входу на шляху; ловить її лише `encodeItem`. Причина — від обходу
+ * T0 (`too-large`): без неї клієнт не відрізнив би межу від хибного значення.
+ */
 class InvalidInput {
-  constructor(readonly path: string) {}
+  constructor(
+    readonly path: string,
+    readonly reason?: string
+  ) {}
 }
 
 /**
@@ -84,7 +90,14 @@ export function encodeItem(
   try {
     return { item: itemOf(object, op, draft) }
   } catch (error) {
-    if (error instanceof InvalidInput) return invalid(error.path)
+    if (error instanceof InvalidInput) {
+      return {
+        error: {
+          ...invalid(error.path).error,
+          ...(error.reason === undefined ? {} : { reason: error.reason }),
+        },
+      }
+    }
     throw error
   }
 }
@@ -107,6 +120,7 @@ function itemOf(
           allowed,
           path: "values",
           prefix: "",
+          maxBytes: true,
         })
       )
     )
@@ -157,6 +171,7 @@ function encodeRows(
         path,
         prefix: `${path}.`,
         rowKey: section.keyName,
+        maxBytes: true,
       })
     )
     encoded.push({ [section.key]: key, ...columns })
@@ -168,6 +183,8 @@ function encodeRows(
 function columnsOf(
   encoded: ReturnType<typeof encodeAttributes>
 ): Record<string, unknown> {
-  if ("error" in encoded) throw new InvalidInput(encoded.error.path ?? "")
+  if ("error" in encoded) {
+    throw new InvalidInput(encoded.error.path ?? "", encoded.error.reason)
+  }
   return encoded.columns
 }

@@ -32,6 +32,7 @@ import {
   commandCoreLayer,
   compileRights,
   gaugeLoadLayer,
+  gaugeMaxBytesLayer,
   gaugeRowRule,
   policyDomain,
   refAttribute,
@@ -674,6 +675,60 @@ describe("buildRuntimeCatalog: lazy attributes", () => {
     )
     expect(scan).toMatchObject({ type: "Bytes" })
     expect(scan).not.toHaveProperty("load")
+  })
+})
+
+/**
+ * Межа входу (Рд26, П1): у каталозі — ефективне `maxBytes` кожного `Text`,
+ * `Json`, `Bytes` і масиву, шапки й ТЧ, явне чи типове за типом; у решти
+ * типів і в стандартних атрибутів без такого типу межі немає.
+ */
+describe("buildRuntimeCatalog: maxBytes", () => {
+  const gaugeOf = async (maxBytes: Record<string, number>) => {
+    const { model: m, diagnostics } = await compileRights(
+      policyDomain(gaugeMaxBytesLayer(maxBytes))
+    )
+    expect(diagnostics).toEqual([])
+    return buildRuntimeCatalog(m!).objects.find((o) => o.name === "Gauge")!
+  }
+  const KIB = 1024
+  const limits = (attributes: readonly { name: string; maxBytes?: number }[]) =>
+    Object.fromEntries(attributes.map((a) => [a.name, a.maxBytes]))
+
+  it("defaults by type: Json and Bytes 1 MiB, Text and arrays 64 KiB", async () => {
+    const gauge = await gaugeOf({})
+    expect(limits(gauge.attributes)).toMatchObject({
+      payload: 1024 * KIB,
+      blob: 1024 * KIB,
+      body: 64 * KIB,
+      marks: 64 * KIB,
+      amount: undefined,
+      level: undefined,
+      subject: undefined,
+    })
+    // Стандартний `Text` (`predefinedName`) теж має типову межу: явної
+    // стандартному не задати; ключ, версія й скоуп межі не мають.
+    expect(
+      gauge.attributes
+        .filter((a) => a.maxBytes !== undefined)
+        .map((a) => a.name)
+        .sort()
+    ).toEqual(["blob", "body", "marks", "payload", "predefinedName"])
+    expect(limits(gauge.tabularSections[0]!.attributes)).toEqual({
+      qty: undefined,
+      note: undefined,
+      memo: 64 * KIB,
+    })
+  })
+
+  it("an explicit maxBytes wins in the header and in a section", async () => {
+    const gauge = await gaugeOf({ body: 300 * KIB, marks: 10, memo: 7 })
+    expect(limits(gauge.attributes)).toMatchObject({
+      body: 300 * KIB,
+      marks: 10,
+      payload: 1024 * KIB,
+    })
+    expect(limits(gauge.tabularSections[0]!.attributes).memo).toBe(7)
   })
 })
 

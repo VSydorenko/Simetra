@@ -1,5 +1,6 @@
 import { z } from "zod"
 import { metadataRefSchema } from "../schemas/metadata-ref"
+import { LIMIT_REASONS } from "./errors"
 import { TABULAR_LINES_MAX } from "./read"
 
 /** Operations on an object that a command accepts (P4 spec §6.4). */
@@ -30,10 +31,36 @@ export const OPERATION_EVENTS: Readonly<
 const rowIdSchema = z.guid()
 const expectedVersionSchema = z.int().min(1)
 const valuesSchema = z.record(z.string(), z.unknown())
+/**
+ * Довжина масиву — до розбору елементів: Zod 4 не виконує `.max` масиву, коли
+ * елемент уже дав issue, тож хибні елементи сховали б причину, а розбір ріс би
+ * з входом. `preprocess`, а не `pipe` від `unknown[]`: JSON Schema входу (MCP
+ * `data-command`) бере вихідну схему препроцесора й не губить форми елемента.
+ */
+export const lengthLimited = <T extends z.ZodArray>(
+  schema: T,
+  max: number,
+  reason: string
+) =>
+  z.preprocess((value, ctx) => {
+    if (Array.isArray(value) && value.length > max) {
+      ctx.addIssue({
+        code: "custom",
+        message: `at most ${max} items`,
+        params: { reason },
+      })
+    }
+    return value
+  }, schema)
+
 // Рядок ТЧ — логічні реквізити й ключ рядка; їх перевіряє T3 за каталогом.
 const tabularSectionsSchema = z.record(
   z.string(),
-  z.array(z.record(z.string(), z.unknown()))
+  lengthLimited(
+    z.array(z.record(z.string(), z.unknown())),
+    TABULAR_LINES_MAX,
+    LIMIT_REASONS.tabularTooLarge
+  )
 )
 
 // Рядки ТЧ, які `update` видаляє явно: масив ТЧ — повна заміна, і без
@@ -126,7 +153,16 @@ export type Operation = z.infer<typeof operationSchema>
  */
 export const BATCH_MAX = 500
 
-/** A batch: a non-empty ordered list of operations run in one transaction. */
-export const batchSchema = z.array(operationSchema).min(1)
+/**
+ * A batch: a non-empty ordered list of at most `BATCH_MAX` operations run in
+ * one transaction; a longer one fails with `reason: "batch-too-large"`, and a
+ * tabular section over `TABULAR_LINES_MAX` lines with
+ * `reason: "tabular-too-large"`.
+ */
+export const batchSchema = lengthLimited(
+  z.array(operationSchema).min(1),
+  BATCH_MAX,
+  LIMIT_REASONS.batchTooLarge
+)
 
 export type Batch = z.infer<typeof batchSchema>

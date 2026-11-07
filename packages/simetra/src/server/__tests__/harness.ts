@@ -1,6 +1,19 @@
-import type { Operation } from "simetra/model"
-import { vi } from "vitest"
-import { createCommandRuntime, type CommandRuntimeOptions } from "../runtime"
+import {
+  CommandFailure,
+  metadataRefSchema,
+  type CommandError,
+  type Operation,
+  type ReadQuery,
+  type RuntimeCatalog,
+  type RuntimeObject,
+  type SessionClaims,
+} from "simetra/model"
+import { expect, vi } from "vitest"
+import {
+  createCommandRuntime,
+  type CommandRuntime,
+  type CommandRuntimeOptions,
+} from "../runtime"
 import { fakeDatabase, type Answer, type Call } from "./fake-database"
 import { COMPANY, ID, catalog, rootCatalog } from "./fixtures"
 
@@ -103,6 +116,97 @@ export function answer(text: string): Answer {
   return {}
 }
 
+/** Об'єкт каталогу за сирим `object` входу; кидаючий геттер — не відомий. */
+function rawObjectOf(
+  catalog: RuntimeCatalog,
+  raw: unknown
+): RuntimeObject | undefined {
+  try {
+    const ref = metadataRefSchema.safeParse(
+      (raw as { object?: unknown } | null | undefined)?.object
+    )
+    if (!ref.success) return undefined
+    return catalog.objects.find(
+      (o) => o.kind === ref.data.kind && o.name === ref.data.name
+    )
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Спільна перевірка правила `object` (спека П4-B §6.10): помилка з `path` чи
+ * `attributes` називає відомий каталогу `object`, і ключ запису в її шляху —
+ * `keyName`, а не структурне `id`. Винятки — немає об'єкта, до якого
+ * прив'язати: `path: "object"` невідомого об'єкта і відмови схеми до розбору
+ * операції, коли сирий `object` входу (у пакеті — операції за індексом
+ * шляху) не знаходиться в каталозі.
+ */
+export function expectErrorObject(
+  catalog: RuntimeCatalog,
+  input: unknown,
+  error: CommandError
+): void {
+  if (error.path === undefined && error.attributes === undefined) return
+  if (error.object === undefined) {
+    if (error.path === "object") return
+    const [head = ""] = (error.path ?? "").split(".")
+    const raws = !Array.isArray(input)
+      ? [input]
+      : /^\d+$/.test(head)
+        ? [(input as unknown[])[Number(head)]]
+        : (input as unknown[])
+    expect(
+      raws.every((raw) => rawObjectOf(catalog, raw) === undefined),
+      `error without object: ${JSON.stringify(error)}`
+    ).toBe(true)
+    return
+  }
+  const { kind, name } = error.object
+  const object = catalog.objects.find((o) => o.kind === kind && o.name === name)
+  expect(object, `object outside the catalog: ${kind}.${name}`).toBeDefined()
+  // Шлях застосунку з `ctx.reject` — довільний: правило ключа його не чіпає.
+  if (error.code === "command.rejected" || error.path === undefined) return
+  const keys = [
+    object!.keyName,
+    ...object!.tabularSections.map((s) => s.keyName),
+  ]
+  if (!keys.includes("id")) {
+    expect(
+      error.path.split("."),
+      `structural id in ${error.path}`
+    ).not.toContain("id")
+  }
+}
+
+/** Відмова виклику — через {@link expectErrorObject}, далі як була. */
+async function checked<T>(
+  catalog: RuntimeCatalog,
+  input: unknown,
+  call: Promise<T>
+): Promise<T> {
+  try {
+    return await call
+  } catch (error) {
+    if (error instanceof CommandFailure) {
+      expectErrorObject(catalog, input, error.error)
+    }
+    throw error
+  }
+}
+
+/** Рантайм, кожна відмова якого проходить спільну перевірку `object`. */
+export const checkedRuntime = (
+  runtime: CommandRuntime,
+  catalog: RuntimeCatalog
+): CommandRuntime => ({
+  catalog: runtime.catalog,
+  run: (session: SessionClaims, input, options) =>
+    checked(catalog, input, runtime.run(session, input, options)),
+  read: <Q extends ReadQuery>(session: SessionClaims, query: Q) =>
+    checked(catalog, query, runtime.read(session, query)),
+})
+
 export async function setup(
   override: Override = () => undefined,
   options: Partial<CommandRuntimeOptions> = {},
@@ -125,7 +229,15 @@ export async function setup(
     ...options,
   })
   db.calls.splice(0)
-  return { db, runtime, log }
+  return {
+    db,
+    // Каталог опцій — уже прийнятий рантаймом, тож тієї самої форми.
+    runtime: checkedRuntime(
+      runtime,
+      (options.catalog as RuntimeCatalog | undefined) ?? catalog
+    ),
+    log,
+  }
 }
 
 export const create = {
