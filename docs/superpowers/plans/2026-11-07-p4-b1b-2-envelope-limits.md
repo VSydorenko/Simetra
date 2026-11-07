@@ -11,28 +11,29 @@
 **Goal:** T3 дає `createDataHandler(runtime)` — обробник конверта даних
 (`read`, `run`, `version`) з перевіркою походження, звіркою сесії й
 сумісності, мапінгом форми передачі й бюджетом відповіді; T0 дає схеми
-конверта, порт `DataTransport`, сталі меж і новий код `command.stale-client`;
-метадані — `maxBytes` атрибута з валідацією й правилами бюджету компілятора;
-`runtime.run` перевіряє зменшені межі; кожна помилка з `path` чи
-`attributes` несе `object`; декодер T3 переходить на `decodeRow` T0.
+конверта, порт `DataTransport`, сталі меж і код `command.stale-client`;
+метадані — `maxBytes` атрибута з валідацією входу й правилами бюджету
+компілятора; `runtime.run` перевіряє зменшені межі; кожна помилка з `path`
+чи `attributes` несе `object`; декодер T3 переходить на `decodeRow` T0.
 
 **Architecture:** обробник — тонкий шар T3 над `runtime.read` і
-`runtime.run`: кроки 0–6 §4.5 спеки в тому самому порядку, усі відмови до
-порту — значення `{ ok: false, error }`. Звірка сумісності — чиста функція
-над каталогом рантайму й `objectColumns` T0 (B1b-1); переклад форми — мапінг
-T0 (B1b-1). Межі тіла запиту тримають host (П4-D) і фасад (B3): B1b-2 дає
-лише сталу й код.
+`runtime.run`: кроки 0–6 §4.5 спеки в тому самому порядку, усі відмови —
+значення `{ ok: false, error }`. Звірка сумісності, підгонка відповіді під
+бюджет і перевірка походження — окремі чисті функції T3 з власними тестами;
+переклад форми — мапінг T0 (B1b-1). Межу тіла запиту тримають host (П4-D) і
+фасад (B3): B1b-2 дає лише сталу й код.
 
 **Tech Stack:** TypeScript 7 (native `tsc`), Zod 4, Vitest; один DB-кейс
 через designer (`*.db.test.ts`).
 
 **Spec:** [спека П4-B](../specs/2026-11-05-p4-b-client-data-design.md) — §2
-(Рд4, Рд12, Рд13, Рд17, Рд26, Рд27), §4.0, §4.4, §4.5, §7.1 (межі), §7.3,
-§10, §11, §12 (кейси B1b-2: unit T0, unit T1, unit T3, unit T3 + мапінг), §13
-(рядок B1b-2), §14.3 (рядки B1b-2), Додаток А (рядки з B1b-2).
-[Спека П4](../specs/2026-10-26-p4-runtime-design.md) §6.4, §6.10, Рт11, Рт19.
-План B1b-1 — `docs/superpowers/plans/2026-11-07-p4-b1b-1-client-catalog-wire.md`;
-план B1b-3 — у `main` після його мерджу.
+(Рд4, Рд12, Рд13, Рд17, Рд26, Рд27), §4.0, §4.1 (читання за ключами), §4.4,
+§4.5, §7.1 (межі), §7.3, §10, §11, §12 (кейси B1b-2: unit T0, unit T1, unit
+T3, unit T3 + мапінг), §13 (рядок B1b-2), §14.3 (рядки B1b-2), Додаток А
+(рядки з B1b-2). [Спека П4](../specs/2026-10-26-p4-runtime-design.md) §6.4,
+§6.10, Рт11, Рт19. План B1b-1 —
+`docs/superpowers/plans/2026-11-07-p4-b1b-1-client-catalog-wire.md`; план
+B1b-3 — у `main` після його мерджу.
 
 ## Global Constraints
 
@@ -50,6 +51,8 @@ T0 (B1b-1). Межі тіла запиту тримають host (П4-D) і фа
   проєкт `db`; повний `pnpm test:db` — раз наприкінці блоку.
 - Коміти — Conventional Commits, опис українською, без трейлерів; коміт після
   кожної задачі. Перед кожним комітом `git diff --stat` — лише файли задачі.
+- Тимчасову правку відкочувати лише її фрагментом: `git checkout -- <файл>`
+  скидає всю незакомічену роботу файла. `git stash` не використовувати.
 - Робоча копія — власний worktree від `main`; основний checkout не чіпати.
 
 ## Якорі «після B1b-1» і «після B1b-3»
@@ -57,222 +60,292 @@ T0 (B1b-1). Межі тіла запиту тримають host (П4-D) і фа
 Перед стартом: rebase на `main`, `orient --plan` цього файла, звірка
 кожного якоря.
 
-- B1b-1: `catalogEntrySchema` і `kernelHash` (`model/runtime/catalog.ts`),
-  `objectColumns` (`model/runtime/columns.ts`), `clientCatalogSchema`,
-  `wire.ts` (`encodeRow`, `decodeRow`, `WireDecodeError`), `mapping.ts`
-  (`catalogIndex`, `Mapped`, `operationFromWire`, `readQueryFromWire`,
-  `readResultToWire`, `errorToWire`, `changesToWire`), `envelope.ts`
-  (`wireOperationSchema`, `wireCommandErrorSchema`, `wireChangeSchema`,
-  `wireReadQuerySchema`, `wireReadResultSchema`), `path.ts`.
+- B1b-1: `catalogEntrySchema`, `kernelHash`, `creatorMembership`
+  (`model/runtime/catalog.ts`), `objectColumns` (`columns.ts`),
+  `clientCatalogSchema`, `wire.ts` (`encodeRow`, `decodeRow`,
+  `decodeValues`, `WireDecodeError`), `mapping.ts` (`catalogIndex`,
+  `Mapped`, `operationFromWire`, `readQueryFromWire`, `readResultToWire`,
+  `errorToWire`, `changesToWire`), `envelope.ts` (`wireOperationSchema`,
+  `wireCommandErrorSchema`, `wireChangeSchema`, `wireReadQuerySchema`,
+  `wireReadResultSchema` без `more`), `path.ts`, `evolvedCatalogs()`.
 - B1b-3: `BATCH_MAX` (`model/runtime/operation.ts`), опція виклику
-  `{ fullTabularArrays: true }` `runtime.run` (Ф3 плану B1b-3), опції
-  `CommandRuntimeOptions` бюджету часу (`server/runtime.ts`), коди
-  `command.busy`/`command.timeout`.
+  `{ fullTabularArrays: true }` `runtime.run` (Ф3 плану B1b-3), межа фаз
+  `ctx.run` проти `BATCH_MAX` (Ф1), опції бюджету часу
+  `CommandRuntimeOptions`, коди `command.busy`/`command.timeout`.
+  `TABULAR_LINES_MAX` — у `model/runtime/read.ts` (B1a).
 
-## Рішення (до плану)
+## Рішення
 
 | № | Рішення | Хто | Вплив на спеку |
 | --- | --- | --- | --- |
-| Р1 | `BATCH_MAX` вводить B1b-3; B1b-2 обмежує ним схему пакета (`batch-too-large`) і додає зменшені межі `runtime.run` | архітекторка | §13 — вносить B1b-3 |
-| Р2 | Перевірка `deleteIds` — типова в `runtime.run`; `createDataHandler` кличе `run` з `{ fullTabularArrays: true }` (фасад шле повні масиви з `expectedVersion` = `ownerVersion`) | архітекторка | §13 — вносить B1b-3 |
-| Р3 | `object` на кожній помилці з `path` чи `attributes`; у пакеті — об'єкт операції, що відмовила (В10 B1b-1) | архітекторка | §6.10 П4 через Додаток А — тут |
-| Р4 | `server/decode.ts` — на `decodeRow` T0 (В11 B1b-1) | архітекторка | §4.4 — внесено |
-| Р5 | `version` і `serverHash` обробник бере з каталогу рантайму: `CommandRuntime` отримує `readonly catalog: RuntimeCatalog` | автор | немає |
+| Р1 | `BATCH_MAX` вводить B1b-3; B1b-2 обмежує ним схему пакета й конверта (`batch-too-large`) і додає зменшені межі `runtime.run` | архітекторка | §13 — вносить B1b-3 |
+| Р2 | Перевірка `deleteIds` — типова в `runtime.run`; `createDataHandler` кличе `run` з `{ fullTabularArrays: true }`; форма передачі `deleteIds` не несе | архітекторка | §13 — вносить B1b-3 |
+| Р3 | `object` на кожній помилці з `path` чи `attributes`; у пакеті — об'єкт операції, що відмовила (В10 B1b-1) | архітекторка | §6.10 П4 — рядок Додатку А додає задача 13 |
+| Р4 | `server/decode.ts` — на `decodeRow` T0 (В11 B1b-1); сервер лишається суворим (опція `strict`) | архітекторка + автор | §4.4 — внесено |
+| Р5 | `version` і `serverHash` — з каталогу рантайму: `CommandRuntime.catalog` (заморожений) | автор | немає |
+| Р6 | Причина відмови схеми переноситься в `CommandError.reason`: перевірки меж — custom issue з `params: { reason }`; `issueReason(error)` поруч з `issuePath` (`server/read.ts`) | автор | немає |
+| Р7 | `maxBytes` і бюджет — одна міра: `jsonBytes` (UTF-8 байти `JSON.stringify`) закодованого значення форми передачі; `maxBytes` перевіряється лише на вході команди, читання ним не відмовляє | автор | Рд26, рядок П2 Додатку А — задача 13 |
+| Р8 | «Сторінка» для бюджету — форма списку чи сторінки ТЧ (`limit`), фільтр якої не має умови `eq` чи `in` за ключем; інакше — читання за ключами | автор (за §4.1) | немає |
 
 ## Review Focus
 
-1. **Порядок кроків обробника** — походження → конверт → `subject` → звірка
-   → переклад → порт: жодна відмова кроків 0–3 не доходить до порту (тест
-   порту-фейку з лічильником викликів).
+1. **Порядок кроків обробника** — походження → конверт → сесія → звірка →
+   переклад → порт: жодна відмова кроків 0–3 не доходить до порту (тест
+   порту-фейку з лічильником викликів); відмова походження на невалідному
+   конверті — `command.forbidden`, не `command.invalid`.
 2. **Вороже фізичне ім'я** (поза каталогом, з лапками, крапкою, `;`,
    системна колонка `ctid`) — `command.stale-client`, порт не викликано.
-3. **Бюджет відповіді** — сторінка понад бюджет дає найдовший непорожній
-   префікс з `more: true`; читання за ключами, картка й «ТЧ власника» —
-   `response-too-large` без обрізання; `run` — без `rows`.
-4. **`inProcess`** не відкриває `run`: лише `read` і `version`.
+3. **Бюджет відповіді** — сторінка: найдовший непорожній префікс з
+   `more: true` і `included` лише для лишених рядків; читання за ключами,
+   картка й «ТЧ власника» — `response-too-large` без обрізання; `run` —
+   без `rows`.
+4. **`inProcess`** не відкриває `run`: лише `read` і `version`; тип запиту
+   читається з сирого входу без винятку.
 5. **Помилка без тексту** — будь-який виняток, крім `CommandFailure`, —
    `command.internal` без повідомлення назовні й запис у журнал.
 
 ---
 
-### Задача 1: сталі меж, коди й межі схем T0
+### Задача 1: сталі меж, коди, причини й межі схем T0
 
 **Files:** `packages/simetra/src/model/runtime/{errors,operation,limits}.ts`
-(`limits.ts` — новий), `index.ts`; тести `model/runtime/__tests__/`.
+(`limits.ts` — новий), `index.ts`; `packages/simetra/src/server/{read,phase}.ts`
+(`issueReason`); тести `model/runtime/__tests__/`, `server/__tests__/`.
 
 **Interfaces:**
 - `limits.ts`: `PAYLOAD_MAX_BYTES = 4 * 1024 * 1024`,
-  `RESPONSE_BUDGET_BYTES = 4 * 1024 * 1024`, `jsonBytes(value: unknown): number`
-  (UTF-8 байти `JSON.stringify` з серіалізацією `bigint` текстом — та сама
-  функція міряє тіло у фасаді й відповідь в обробнику).
+  `RESPONSE_BUDGET_BYTES = 4 * 1024 * 1024`,
+  `jsonBytes(value: unknown): number` — UTF-8 байти `JSON.stringify`
+  (`bigint` — текстом); одна функція міряє тіло у фасаді (B3), відповідь в
+  обробнику й `maxBytes`.
 - `errors.ts`: код `command.stale-client` у `COMMAND_ERROR_CODES`; сталі
   причин `batch-too-large`, `tabular-too-large`, `too-large`,
-  `payload-too-large`, `response-too-large`, `session-changed`, `origin`
-  (одне місце для рядків причин T0).
-- `operation.ts`: `batchSchema` — `.max(BATCH_MAX)` з причиною
-  `batch-too-large`; масив рядків ТЧ в операції — `.max(TABULAR_LINES_MAX)` з
-  причиною `tabular-too-large` і `path` ТЧ. Механізм причини — той, яким T3
-  уже переводить відмову схеми входу в `command.invalid` (виконавець
-  знаходить його в `server/phase.ts`; якщо причини з Zod-відмови не
-  переносяться — повідомлення автору плану, а не новий механізм).
+  `payload-too-large`, `response-too-large`, `session-changed`, `origin`.
+- `operation.ts`: перевірка довжини **до** розбору елементів (Zod 4 не
+  виконує `.max` масиву, коли вже є issue елемента): пакет довший за
+  `BATCH_MAX` — custom issue `params: { reason: "batch-too-large" }`;
+  масив рядків ТЧ довший за `TABULAR_LINES_MAX` — custom issue
+  `params: { reason: "tabular-too-large" }`.
+- T3: `issueReason(error: z.ZodError): string | undefined` у `server/read.ts`;
+  `prepareInput` (`phase.ts`) і `prepareRead` (`read.ts`) ставлять `reason` у
+  `command.invalid`. Шлях `tabular-too-large` нормується до `<ТЧ>` (без
+  префікса `tabularSections.` і без індексу операції пакета), `object` — з
+  `op.object` відхиленої операції; `batch-too-large` — без `path`.
 
-- [ ] Step 1: тести `it.each`: пакет `BATCH_MAX` — проходить, `BATCH_MAX + 1`
-  — `batch-too-large`; ТЧ `TABULAR_LINES_MAX + 1` рядків —
-  `tabular-too-large` з `path` ТЧ; `jsonBytes` — кирилиця й емодзі в байтах
-  UTF-8, `bigint` текстом. Step 2: червоні. Step 3: реалізація. Step 4:
-  `pnpm --filter simetra test`. Step 5: коміт
-  `feat(model): сталі меж, код stale-client і межі схем пакета й ТЧ`.
+- [ ] Step 1: тести: пакет `BATCH_MAX` валідних операцій — проходить,
+  `BATCH_MAX + 1` — `batch-too-large`; `BATCH_MAX + 1` з хибною операцією —
+  теж `batch-too-large`; ТЧ `TABULAR_LINES_MAX + 1` рядків —
+  `tabular-too-large`, `path` = `<ТЧ>`, `object` операції (і в другій
+  операції пакета); `jsonBytes` — кирилиця, емодзі, лапка й `\`, `bigint`.
+- [ ] Step 2–4: червоні → реалізація → `pnpm --filter simetra test`.
+- [ ] Step 5: коміт `feat(model): сталі меж, код stale-client і причини відмов схем`.
 
-### Задача 2: `maxBytes` атрибута — метадані, каталог, валідація
+### Задача 2: `maxBytes` атрибута — метадані, каталог, валідація входу
 
 **Files:** `model/schemas/attribute.ts`, `tabular-section.ts`, `rules.ts`;
 `packages/simetra/schemas/*.schema.json` (`pnpm --filter simetra schemas:update`);
 `compiler/entity-fields.ts`, `runtime-catalog.ts`, `client-catalog.ts`;
 `model/runtime/catalog.ts` (`catalogEntryAttributeSchema.maxBytes?`),
-`model/runtime/values.ts` (`scalar`); `test/field-ratchet.test.ts`;
-скіл `packages/designer/skills/simetra-metadata/SKILL.md`. Шаблон — поле
-`load` B1a (`git show c99068f1 --stat`).
+`model/runtime/values.ts`; `test/field-ratchet.test.ts`; скіл
+`packages/designer/skills/simetra-metadata/SKILL.md`. Шаблон — поле `load`
+B1a (`git show c99068f1 --stat`).
 
 **Interfaces:**
-- метадані: `maxBytes?: z.int().positive()` для `Text`, `Json`, `Bytes` у
-  шапці й ТЧ; інший тип — помилка схеми; типові значення — рішення П1
-  нижче;
-- каталог: `maxBytes` (ефективне значення) у спільній частині запису;
-- валідація: `scalar` у `values.ts` — значення понад `maxBytes` (байти
-  UTF-8 тексту, `jsonBytes` для `Json`, байти даних для `Bytes` `\x…`) —
-  `command.invalid` `reason: "too-large"` з `path`.
+- метадані: `maxBytes?: z.int().positive()` для `Text`, `Json`, `Bytes`
+  (зокрема масивів цих типів) у шапці й ТЧ; інший тип — помилка схеми;
+  типові значення — питання П1 (рекомендація: `Json` і `Bytes` — 1 МіБ,
+  `Text` — 64 КіБ);
+- каталог: ефективне `maxBytes` у спільній частині запису;
+- валідація лише на **вході команди**: `EncodeAttributesOptions.maxBytes:
+  true` (ставлять `encodeItem`/`encodeMember` T3), `scalar` без опції — без
+  перевірки, тож `encodeRow` (читання) збережене значення понад межу не
+  відхиляє. Міра — `jsonBytes` закодованого значення форми передачі (для
+  `Bytes` — рядок `\x…`); масив — увесь масив. Понад — `command.invalid`
+  `reason: "too-large"` з `path`.
 
-- [ ] Step 1: тести — схема (`maxBytes` на `Text`/`Json`/`Bytes` — так, на
-  `Integer` — відмова); каталог несе ефективне значення; `encodeItemValue`
-  межа й межа + 1 байт для кожного типу; кирилиця рахується байтами.
-  Step 2–4: червоні → реалізація → `pnpm --filter simetra test`,
-  `schemas:update`, `format:check`. Step 5: коміт
-  `feat(model): maxBytes атрибута й відмова too-large`.
+- [ ] Step 1: тести — схема (`Text`/`Json`/`Bytes` — так, `Integer` —
+  відмова); каталог несе ефективне значення; вхід: межа й межа + 1 байт для
+  кожного типу, кирилиця й лапки рахуються мірою `jsonBytes`, масив `Text`;
+  `encodeRow` значення понад `maxBytes` — проходить.
+- [ ] Step 2–4: червоні → реалізація → `pnpm --filter simetra test`,
+  `schemas:update`, `pnpm format:check`.
+- [ ] Step 5: коміт `feat(model): maxBytes атрибута й відмова too-large на вході`.
 
-### Задача 3: правила бюджету відповіді в компіляторі
+### Задача 3: правила бюджету рядка в компіляторі
 
-**Files:** `compiler/stages/model.ts` (чи модуль правил атрибутів, де B1a
-поставив `rights.carrier-lazy`), `diagnostics.ts`, `messages.ts`; тести
-`compiler/__tests__/`.
+**Files:** модуль правил атрибутів T1 (там, де B1a поставив
+`rights.carrier-lazy`), `compiler/diagnostics.ts` (`WARNING_RULES`),
+`compiler/messages.ts`; тести `compiler/__tests__/`.
 
 **Interfaces:**
-- `rowBytesOf(entry)`: оцінка верхньої межі рядка — сума `maxBytes`
-  (ефективних) звичайних колонок плюс стала оцінка фіксованих типів (UUID,
-  числа, дата) і `4 × maxLength` для `String`; рядок ТЧ — так само;
-- помилка `attribute.row-over-budget` — рядок списочної форми чи рядок ТЧ
-  може перевищити `RESPONSE_BUDGET_BYTES`; попередження
-  `attribute.lazy-over-budget` — сума лінивих `maxBytes` понад бюджет
-  картки.
+- `rowBytesOf(columns)` — верхня межа `jsonBytes` рядка форми передачі:
+  для кожної колонки — `jsonBytes` імені колонки з `:` і `,` плюс верхня
+  межа значення: `maxBytes` для `Text`/`Json`/`Bytes`, `6 × maxLength + 2`
+  для `String` (екранування `\u00XX` — 6 байтів на кодову точку), сталі для
+  фіксованих типів (UUID, числа, булеве, дата, версія), `Numeric` без
+  точності й масив без `maxBytes` — за типовим `maxBytes` `Json`;
+- помилка `attribute.row-over-budget` — звичайні колонки шапки чи колонки
+  рядка ТЧ понад `RESPONSE_BUDGET_BYTES`; попередження
+  `attribute.lazy-over-budget` (у `WARNING_RULES`) — сума лінивих понад
+  бюджет картки.
 
-- [ ] Step 1: тести — модель на межі (без діагностики), понад межу (помилка
-  з кодом і вказівником на об'єкт), ліниві понад межу (попередження);
-  каталог повідомлень (`messages.test.ts`). Step 2–4. Step 5: коміт
-  `feat(compiler): помилка й попередження бюджету рядка`.
+- [ ] Step 1: тести — модель на межі (без діагностики), понад межу (помилка з
+  кодом і вказівником на об'єкт), ліниві понад межу (попередження),
+  еталонний домен (`examples/reference`) — без діагностик; каталог
+  повідомлень (`messages.test.ts`).
+- [ ] Step 2–4. Step 5: коміт `feat(compiler): помилка й попередження бюджету рядка`.
 
 ### Задача 4: зменшені межі в `runtime.run`
 
-**Files:** `server/runtime.ts` (опції), `server/transaction.ts` /
-`phase.ts` (вхід і `ctx.run`), `server/hook-context.ts`; тести
-`server/__tests__/runtime.test.ts`, `hooks.test.ts`.
+**Files:** `server/runtime.ts` (опції), `server/phase.ts` /
+`transaction.ts` (вхід), `server/hook-context.ts` (межа фаз `ctx.run`);
+тести `server/__tests__/runtime.test.ts`, `hooks.test.ts`.
 
 **Interfaces:** `CommandRuntimeOptions.maxBatch?: number` (1…`BATCH_MAX`),
-`maxTabularLines?: number` (1…`TABULAR_LINES_MAX`); `runtime.run` перевіряє
-їх на кожному вході — верхній виклик (конверт, MCP, код host-а) і кожна фаза
-`ctx.run` — до бази: `batch-too-large`, `tabular-too-large` з `path`.
-Значення поза діапазоном — помилка створення рантайму.
+`maxTabularLines?: number` (1…`TABULAR_LINES_MAX`); значення поза діапазоном
+— помилка створення рантайму. `runtime.run` перевіряє їх до бази: розмір
+пакета верхнього виклику — `batch-too-large`; рядки ТЧ кожної операції —
+верхнього виклику й кожної фази `ctx.run` — `tabular-too-large` з `path`
+`<ТЧ>` і `object`. Межу фаз `ctx.run` (B1b-3 рахує проти `BATCH_MAX`)
+рахувати проти ефективного `maxBatch`. `maxTabularLines` стелі читання ТЧ
+(`TABULAR_LINES_MAX` будівника) не змінює.
 
-- [ ] Step 1: тести порт-фейку: зменшена межа пакета й ТЧ відхиляє на
-  верхньому вході й у `ctx.run`; порт не викликано; опція понад сталу —
-  відмова створення. Step 2–5; коміт
-  `feat(server): зменшені межі пакета й ТЧ у runtime.run`.
+- [ ] Step 1: тести порт-фейку: зменшені межі пакета й ТЧ відхиляють на
+  верхньому вході; ТЧ — і у фазі `ctx.run`; лік фаз `ctx.run` — проти
+  `maxBatch`; порт не викликано; опція понад сталу — відмова створення.
+- [ ] Step 2–5; коміт `feat(server): зменшені межі пакета й ТЧ у runtime.run`.
 
 ### Задача 5: `object` на кожній помилці з `path` чи `attributes`
 
 **Files:** `server/errors.ts`, `phase.ts`, `values.ts`, `read.ts`,
-`read-filter.ts`, `hook-context.ts`; тести `server/__tests__/`.
+`read-filter.ts`, `hook-context.ts`; тести `server/__tests__/` і спільна
+перевірка в `harness.ts`.
 
-**Interfaces:** кожен конструктор `CommandError` з `path` чи `attributes`
-отримує `object: MetadataRef` об'єкта, над яким відмова: вхід операції —
-`found.object` (`phase.ts`); помилка бази — об'єкт `ErrorPhase`; читання —
-об'єкт запиту; `ctx.reject` — об'єкт фази хука. У пакеті — об'єкт тієї
-операції, що відмовила.
+**Interfaces:** кожен `CommandError` з `path` чи `attributes` отримує
+`object: MetadataRef`:
+- вхід операції — `found.object` (`phase.ts`);
+- помилка бази `23502`/`23503`/`23505`/`23514`/`22023` — об'єкт **знайденої
+  таблиці** (`tableOf` шукає й поза фазою), не об'єкт `ErrorPhase`; на
+  `COMMIT` (фази немає) — так само за таблицею;
+- читання і фільтр — об'єкт запиту;
+- `ctx.reject` — об'єкт фази хука;
+- у пакеті — об'єкт операції, що відмовила.
+Винятки (немає об'єкта, до якого прив'язати): `path: "object"` невідомого
+об'єкта (`prepareRead`, `targetOf`) і корінь вводу (`path` порожній чи
+`values` самої операції без об'єкта) — їх називає спільна перевірка.
 
-- [ ] Step 1: таблиця `it.each` джерел помилок (`invalidOf`, `23502`,
-  `23505`, `23514`, `22023`, відмова входу, відмова читання, фільтр,
-  `ctx.reject`, друга операція пакета) — кожна несе `object`; інваріантний
-  тест: жодна помилка з `path`/`attributes` у тестах `server/__tests__` без
-  `object` (спільна перевірка в `harness.ts`). Step 2–5; коміт
-  `feat(server): object на кожній помилці з path чи attributes`.
+- [ ] Step 1: таблиця `it.each` джерел помилок, зокрема «таблиця іншого
+  об'єкта» й «відкладене обмеження на `COMMIT`»; спільна перевірка в
+  `harness.ts`: жодна помилка з `path`/`attributes` без `object`, крім
+  названих винятків.
+- [ ] Step 2–5; коміт `feat(server): object на кожній помилці з path чи attributes`.
 
 ### Задача 6: декодер T3 на `decodeRow` T0
 
-**Files:** `server/decode.ts`, його викликачі (`phase.ts`, `read.ts`);
-тести `decode.test.ts`, `values.test.ts`, designer DB-тести, що порівнюють
-`DateTime`.
+**Files:** `model/runtime/wire.ts` (опція `strict`), `server/decode.ts`, його
+викликачі (`phase.ts` — `decodeCoreRow` кореня, `read.ts`); тести
+`decode.test.ts`, `values.test.ts`, `wire.test.ts`; designer DB-тести, що
+порівнюють `DateTime`.
 
-**Interfaces:** `server/decode.ts` лишає лише адаптер рядка бази до форми
-передачі: версія й номер рядка ТЧ, які jsonb дає числом, — у рядок цілого;
-далі `decodeRow` T0. Помилка `WireDecodeError` — `command.internal` (рядок
-бази не відповідає каталогу — дефект). `DateTime` у `runtime.read` і
-результаті `run` стає фіксованої ширини (§4.4).
+**Interfaces:**
+- `decodeRow(entry, raw, options?: { strict?: boolean })`: `strict` —
+  невідома мітка перерахування чи цілі пари — `WireDecodeError` (сервер:
+  рядок бази не відповідає каталогу — дефект), без опції — відсутнє поле
+  (клієнт, В9).
+- `server/decode.ts` — лише адаптер рядка бази до форми передачі для обох
+  джерел: рядок ядра (`to_jsonb` з `tabular[<table.name>]`; корінь — два
+  рядки в одному JSON, `decodeCoreRow`) і рядок читання (колонки `row` і
+  `tabular`, ключ — `table.name`): ключі ТЧ `table.name` → id ТЧ; версія й
+  номер рядка ТЧ, які jsonb дає числом, — у рядок цілого; далі
+  `decodeRow(…, { strict: true })`; `WireDecodeError` — `command.internal`.
+- `DateTime` у `runtime.read` і результаті `run` стає фіксованої ширини
+  (§4.4).
 
-- [ ] Step 1: наявні тести `decode.test.ts` переводяться на очікування T0
-  (`DateTime` фіксованої ширини); кейс: номер рядка ТЧ числом з бази —
-  `number`. Step 2–4: `pnpm --filter simetra test`,
-  `pnpm --filter @simetrajs/designer test` (unit); DB-тести designer —
-  scoped прогоном тих, що порівнюють `DateTime`. Step 5: коміт
-  `refactor(server): декодер рядків бази — decodeRow T0`.
+- [ ] Step 1: наявні тести `decode.test.ts` — на очікування T0 (`DateTime`
+  фіксованої ширини); кейси: номер рядка ТЧ числом; ТЧ рядка ядра й рядка
+  читання; корінь; невідома мітка на сервері — `command.internal`.
+- [ ] Step 2–4: `pnpm --filter simetra test`,
+  `pnpm --filter @simetrajs/designer test`; designer DB-тести, що
+  порівнюють `DateTime`, — scoped прогоном.
+- [ ] Step 5: коміт `refactor(server): декодер рядків бази — decodeRow T0`.
 
 ### Задача 7: схеми конверта й порт `DataTransport`
 
 **Files:** `model/runtime/envelope.ts`, `ports.ts`; тести
 `envelope.test.ts`, `ports.test.ts`.
 
-**Interfaces:** `dataRequestSchema` — `{ subject, request }`, `request` —
-`{ type: "read", query: wireReadQuerySchema }` |
-`{ type: "run", operation | batch (wireOperationSchema), kernels?: Record<UUID, kernelHash> }`
-| `{ type: "version" }` (`rights` — B5); `dataResponseSchema` —
-`{ ok: true, value, serverHash } | { ok: false, error: wireCommandErrorSchema, serverHash }`;
-`wireReadResultSchema` отримує `more?: true` (лише сторінки);
-`type DataTransport = (request: DataRequest) => Promise<DataResponse>`;
-`versionValueSchema` — `{ snapshotHash, objects: Record<UUID, kernelHash> }`.
+**Interfaces:**
+- `dataRequestSchema` = `{ subject: string, request }`, `request`:
+  `{ type: "read", query: wireReadQuerySchema }`
+  | `{ type: "run", operation: wireOperationSchema }`
+  | `{ type: "run", batch: wireOperationSchema[] (≤ BATCH_MAX, reason batch-too-large) }`
+  (`kernels?: Record<UUID, kernelHash>` в обох формах `run`; рівно один з
+  `operation`/`batch`)
+  | `{ type: "version" }`; `rights` — B5. Масив рядків ТЧ форми передачі —
+  ≤ `TABULAR_LINES_MAX` з `reason: "tabular-too-large"`, `path` `<id ТЧ>`,
+  `object` — UUID операції. `deleteIds` форма передачі не несе (сувора схема).
+- `dataResponseSchema` = `{ ok: true, value, serverHash } | { ok: false, error: wireCommandErrorSchema, serverHash }`.
+- `wireReadResultSchema` (B1b-1) отримує `more?: true`; що `more` буває лише
+  на сторінці, тримає обробник (задача 9), не схема.
+- `versionValueSchema` = `{ snapshotHash, objects: Record<UUID, kernelHash> }`.
+- `type DataTransport = (request: DataRequest) => Promise<DataResponse>`.
 
-- [ ] Step 1: таблиця схем: `kernels` необов'язкові; `type: "rights"` —
-  відмова (ще не існує); `more` лише на формі сторінки. Step 2–5; коміт
-  `feat(model): схеми конверта й порт DataTransport`.
+- [ ] Step 1: таблиця схем: `kernels` необов'язкові; `operation` і `batch`
+  разом — відмова; `type: "rights"` — відмова; `deleteIds` — відмова;
+  межі пакета й ТЧ з причинами.
+- [ ] Step 2–5; коміт `feat(model): схеми конверта й порт DataTransport`.
 
 ### Задача 8: `checkRequestOrigin`
 
 **Files:** `server/origin.ts` (новий); тест `server/__tests__/origin.test.ts`.
 
-**Interfaces:** `type RequestOrigin = { secFetchSite?: string; origin?: string; expectedOrigin: string } | { inProcess: true }`;
-`checkRequestOrigin(origin: RequestOrigin, type: DataRequest["request"]["type"]): CommandError | undefined`
-— fail-closed (§4.5): `Sec-Fetch-Site` є і ≠ `same-origin` — відмова; інакше
-`Origin` є і ≠ `expectedOrigin` — відмова; обох немає — відмова;
-`inProcess` — лише `read` і `version`. Відмова — `command.forbidden`
-`reason: "origin"`.
+**Interfaces:**
+`type RequestOrigin = { secFetchSite?: string; origin?: string; expectedOrigin: string } | { inProcess: true }`;
+`checkRequestOrigin(origin: RequestOrigin, rawRequest: unknown): CommandError | undefined`:
+- HTTP-гілка — без типу запиту, до розбору: `Sec-Fetch-Site` є і ≠
+  `same-origin` — відмова; інакше `Origin` є і ≠ `expectedOrigin` — відмова;
+  обох немає — відмова; `expectedOrigin` іншої форми, ніж
+  `new URL(x).origin === x` (зокрема `"null"`), — відмова;
+- `inProcess` — тип читається один раз у `try` з сирого входу
+  (`rawRequest.request.type`): лише рядок `"read"` чи `"version"`, інакше чи
+  на винятку (геттер, Proxy) — відмова;
+- обробник після кроку 1 повторно звіряє розібраний тип з `inProcess`
+  (fail-closed).
+Відмова — `command.forbidden` `reason: "origin"`.
 
-- [ ] Step 1: `it.each` усіх гілок §12 і `inProcess` + `run` — відмова.
-  Step 2–5; коміт `feat(server): checkRequestOrigin`.
+- [ ] Step 1: `it.each` усіх гілок §12; `inProcess` з `run`, з не-рядковим
+  типом і з геттером, що кидає; хибний `expectedOrigin`.
+- [ ] Step 2–5; коміт `feat(server): checkRequestOrigin`.
 
-### Задача 9: звірка сумісності
+### Задача 9: звірка сумісності й підгонка відповіді під бюджет
 
-**Files:** `server/compatibility.ts` (новий); тест
-`server/__tests__/compatibility.test.ts`.
+**Files:** `server/compatibility.ts`, `server/response-budget.ts` (нові);
+тести `server/__tests__/compatibility.test.ts`, `response-budget.test.ts`.
 
 **Interfaces:**
-`checkCompatibility(catalog: RuntimeCatalog, request: DataRequest["request"]): CommandError | undefined`
-(§10): невідомий UUID об'єкта; для `run` — відсутній чи інший `kernelHash`
-об'єкта будь-якої операції; колонка операції (шапки, рядків ТЧ,
-`creatorMember` — проти запису довідника `creatorMembership`) поза
-`objectColumns` дії; невідомий id ТЧ; для `read` — колонка фільтра,
-сортування, `include`, ТЧ поза `read ∪ lazy`. Відмова —
-`command.stale-client` з `object` (UUID); пакет з однією несумісною
-операцією — відмова цілком. Фільтр `in` за ключем і версією проходить.
+- `checkCompatibility(catalog: RuntimeCatalog, request: DataRequest["request"]): CommandError | undefined`
+  (§10): невідомий UUID об'єкта; для `run` — відсутній чи інший
+  `kernelHash` об'єкта будь-якої операції; колонка операції (шапки, рядків
+  ТЧ, `creatorMember` — проти запису довідника `creatorMembership`) поза
+  `objectColumns` дії; невідомий id ТЧ; для `read` — колонка фільтра,
+  сортування, `include`, ТЧ поза `read ∪ lazy`. Відмова —
+  `command.stale-client` з `object` (UUID); пакет з однією несумісною
+  операцією — відмова цілком. Фільтр `in` за ключем і за версією проходить.
+- `fitResponse(query: WireReadQuery, result: WireReadResult): WireReadResult | CommandError`
+  (Р8): сторінка — найдовший непорожній префікс рядків, `included` — лише
+  цілі, на які посилаються лишені рядки, `more: true`, коли щось
+  відкинуто; перший рядок понад бюджет — `response-too-large`; читання за
+  ключами, картка, «ТЧ власника» — `response-too-large` без обрізання.
+  Підрахунок лінійний: `jsonBytes` кожного рядка раз, без повторного
+  `stringify` усієї відповіді.
+- `fitRunResult(result)` — рядки `run` без лінивих колонок і рядків ТЧ;
+  понад бюджет — результат без `rows`.
 
-- [ ] Step 1: `it.each` кожної гілки §12 (зокрема ворожі імена й системна
-  колонка); прохід сумісного запиту; пакет. Step 2–5; коміт
-  `feat(server): звірка сумісності запиту з каталогом сервера`.
+- [ ] Step 1: `it.each` кожної гілки звірки §12 (зокрема ворожі імена,
+  системна колонка, `creatorMember`); `fitResponse` — сторінка з префіксом і
+  `included`, перший рядок понад бюджет, читання за ключем, `in` за ключем,
+  картка, «ТЧ власника»; `fitRunResult`.
+- [ ] Step 2–5; коміт `feat(server): звірка сумісності й бюджет відповіді`.
 
 ### Задача 10: `createDataHandler`
 
@@ -281,26 +354,35 @@ T0 (B1b-1). Межі тіла запиту тримають host (П4-D) і фа
 `server/__tests__/data-handler.test.ts`.
 
 **Interfaces:**
-`createDataHandler(runtime: CommandRuntime): (session: SessionClaims, request: unknown, origin: RequestOrigin) => Promise<DataResponse>`
-— кроки §4.5: 0 `checkRequestOrigin`; 1 `dataRequestSchema`
-(`command.invalid`); 2 `subject` ≠ `session.sub` —
-`command.unauthenticated` `session-changed`; 3 `checkCompatibility`; 4
-`*FromWire` мапінгу (`unknown` після звірки — `command.internal` і журнал:
-дефект); 5 `runtime.read` / `runtime.run(…, { fullTabularArrays: true })` /
-`version`; 6 кодування й бюджет: сторінка — найдовший непорожній префікс з
-`more: true`, перший рядок понад бюджет — `response-too-large`; читання за
-ключами, картка, «ТЧ власника» — `response-too-large`; `run` — рядки без
-лінивих колонок і без рядків ТЧ, понад бюджет — без `rows`. `CommandFailure`
-— `{ ok: false, error: errorToWire(…) }`; інший виняток — `command.internal`
-без тексту й `runtime` log. Кожна відповідь — `serverHash` =
-`runtime.catalog.snapshotHash`. Обробник безстановий.
+- `CommandRuntime.catalog: RuntimeCatalog` — той самий розібраний каталог,
+  глибоко заморожений при створенні рантайму.
+- `createDataHandler(runtime: CommandRuntime, options?: { log?: (error: unknown) => void }): (session: SessionClaims, request: unknown, origin: RequestOrigin) => Promise<DataResponse>`
+  (типовий `log` — `console.error`), кроки §4.5:
+  0. `checkRequestOrigin(origin, request)`;
+  1. `dataRequestSchema` (`command.invalid` з `reason`); повторна звірка
+     типу з `inProcess`;
+  2. `sessionClaimsSchema` сесії (невалідна — `command.unauthenticated`);
+     `subject` ≠ `session.sub` — `command.unauthenticated` `session-changed`;
+  3. `checkCompatibility`;
+  4. `*FromWire` мапінгу: `invalid` — `errorToWire(invalid)` з `object`;
+     `unknown` після звірки — `command.internal` і `log` (дефект);
+  5. `runtime.read` / `runtime.run(…, { fullTabularArrays: true })` /
+     `version` з `runtime.catalog`;
+  6. `fitResponse` / `fitRunResult`; `CommandFailure` —
+     `{ ok: false, error: errorToWire(…) }`; інший виняток —
+     `command.internal` без тексту й `log`.
+  Кожна відповідь — `serverHash` = `runtime.catalog.snapshotHash`.
+  Обробник безстановий.
 
 - [ ] Step 1: тести порт-фейку: порядок кроків (лічильник викликів порту);
-  `session-changed` до звірки; `BATCH_MAX` у конверті; `inProcess` + `run`;
-  `version`; бюджет (порт-фейк з великими рядками); помилка як значення з
-  фізичними полями; `command.internal` без тексту; виклик без
-  `origin` не компілюється (`@ts-expect-error`) і в рантаймі —
-  `command.forbidden`. Step 2–5; коміт `feat(server): createDataHandler`.
+  відмова походження на невалідному конверті — `forbidden`;
+  `session-changed` до звірки; невалідна сесія; `BATCH_MAX` у конверті;
+  `inProcess` + `run`; `version`; фільтр за лінивим атрибутом —
+  `command.invalid`, не `stale-client`; фази `ctx.run` не звіряються; помилка
+  як значення з фізичними полями; `command.internal` без тексту й виклик
+  `log`; виклик без `origin` не компілюється (`@ts-expect-error`), у
+  рантаймі — `command.forbidden`; `runtime.catalog` заморожений.
+- [ ] Step 2–5; коміт `feat(server): createDataHandler`.
 
 ### Задача 11: перейменування й розширення через обробник
 
@@ -308,22 +390,33 @@ T0 (B1b-1). Межі тіла запиту тримають host (П4-D) і фа
 (порт-фейк); DB-тест
 `packages/designer/src/__tests__/data-handler.db.test.ts` (новий, один кейс).
 
-- [ ] Step 1: unit (порт-фейк, клієнт — каталог A, сервер — A′ з
-  `evolvedCatalogs()` B1b-1): `read`, `include`, ТЧ картки, `run`,
-  `command.constraint` з `attributes` і `changes` декодуються в імена A без
-  `stale-client`; запит з видаленим реквізитом чи прибраною ТЧ —
-  `stale-client`; запис без нього проходить.
-- [ ] Step 2: DB (причина рівня — збереження значення нової колонки ядром,
-  `sectionLines`, видно лише на базі): стара вкладка повністю замінює рядки
-  ТЧ через обробник, нова колонка рядків зберігає значення.
+- [ ] Step 1: unit (порт-фейк; клієнт — `buildClientCatalog(a)`, сервер —
+  рантайм над `aPrime` з `evolvedCatalogs()` B1b-1): `read`, `include`, ТЧ
+  картки, `run`, `command.constraint` з `attributes` і `changes`
+  декодуються в імена A без `stale-client`; запит з видаленим реквізитом чи
+  прибраною ТЧ — `stale-client`; запис без нього проходить.
+- [ ] Step 2: DB (причина рівня — значення нової колонки береже `sectionLines`
+  ядра, видно лише на базі): одна модель (A′), обробник отримує `update` з
+  повним масивом рядків ТЧ у формі передачі без нової колонки рядків —
+  значення нової колонки збережено.
 - [ ] Step 3: коміт `test(server): обробник між каталогами після перейменування й розширення`.
 
-### Задача 12: документація, гейти, PR
+### Задача 12: повторна перевірка правок третього раунду спеки
 
-- [ ] Додаток А з блоком B1b-2 — у спеку П4 (§6.4, §6.10 — `stale-client`,
-  `session-changed`, `origin`, `object` на помилках, Рт11, Рт19) і
-  платформну (§7, §9); ROADMAP; скіл споживача — `maxBytes`, межі пакета й
-  ТЧ у `data-write`. `check-doc-anchors.py` — чисто.
+- [ ] Адверсарійна перевірка (окремий аудитор Opus) реалізації проти правок
+  третього раунду аудиту редакції 2 спеки в частині B1b-2 (§14.3): бюджет
+  відповіді й читання за ключами без обрізання. Результат — рядок у
+  «Підсумку аудиту виконання» цього плану; знахідки — виправлення в тому
+  самому блоці.
+
+### Задача 13: документація, гейти, PR
+
+- [ ] Додаток А: додати рядок «спека П4 §6.10 — `object` на кожній помилці з
+  `path` чи `attributes`» (Р3); Рд26 і рядок П2 — `maxBytes` (Р7, рішення
+  П1); внести рядки з блоком B1b-2 у спеку П4 (§6.4, §6.10 — `stale-client`,
+  `session-changed`, `origin`, Рт11, Рт19) і платформну (§7, §9); ROADMAP;
+  скіл споживача — `maxBytes`, межі пакета й ТЧ у `data-write`.
+  `check-doc-anchors.py` — чисто.
 - [ ] Гейти: `pnpm format:check && pnpm lint && pnpm typecheck && pnpm test`,
   `pnpm metadata:check`, один повний `pnpm test:db`. PR у `main`; звіт
   архітекторці.
@@ -332,17 +425,14 @@ T0 (B1b-1). Межі тіла запиту тримають host (П4-D) і фа
 
 ## Відкриті питання до архітекторки
 
-1. **П1. Типові `maxBytes`.** Спека дає орієнтир «1 МБ для `Json` і
-   `RichText`», а `RichText` як типу немає (`LOGICAL_TYPES`). Пропоную: типове
-   1 МБ для `Json`, `Text` і `Bytes`; з таким типовим довідник з чотирма
-   звичайними `Text` дає помилку бюджету рядка (задача 3) — тому `Text` без
-   явного `maxBytes` у правилі бюджету рахується за типовим, а помилка
-   підказує або `maxBytes`, або `load: "lazy"`. Альтернатива — типове лише для
-   `Json` і `Bytes`, а `Text` без `maxBytes` у бюджеті не рахується (тоді
-   помилка компілятора нічого не гарантує для `Text`). Вплив на спеку:
-   Рд26 і рядок П2 Додатку А.
-2. **П2. Міра бюджету** — UTF-8 байти `JSON.stringify` значення відповіді
-   (`jsonBytes`), без обгортки Server Function. Вплив: §4.5 — одне речення.
+1. **П1. Типові `maxBytes`.** Спека дає «1 МБ для `Json` і `RichText`»;
+   `RichText` як типу немає (`LOGICAL_TYPES`). З типовими 1 МБ для `Text`
+   чотири звичайні `Text` шапки вже дають помилку бюджету рядка, а кожен
+   наявний `Text` отримує межу запису. Пропоную: `Json` і `Bytes` — 1 МіБ,
+   `Text` — 64 КіБ, більше — явним `maxBytes`. Вплив: Рд26, рядок П2
+   Додатку А.
+2. **П2. Міра бюджету й `maxBytes`** — `jsonBytes` значення форми передачі
+   (Р7). Вплив: §4.5, Рд26 — по одному реченню.
 
 ## Підсумок аудиту плану
 
