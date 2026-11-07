@@ -68,6 +68,19 @@ const RETRY_CODES = new Set(["40001", "40P01"])
 // Запобіжники простою (`idle_in_transaction_session_timeout`) і транзакції
 // (`transaction_timeout`): сервер уже закрив сесію `FATAL`-ом.
 const SESSION_TIMEOUT_CODES = new Set(["25P03", "25P04"])
+// Взаємне блокування повторюється з паузою: дві транзакції, що одночасно
+// повторили той самий порядок замків, знову зійшлися б у ньому. Джитер
+// розводить їх у часі. `40001` — без паузи: конфлікт знімку не залежить від
+// того, коли почати знову.
+const DEADLOCK = "40P01"
+const DEADLOCK_PAUSE_BASE_MS = 20
+
+/** Пауза перед повтором після `n`-ї невдалої спроби, мс. */
+function pauseOf(code: string | undefined, n: number): number {
+  if (code !== DEADLOCK) return 0
+  const step = DEADLOCK_PAUSE_BASE_MS * 2 ** (n - 1)
+  return step + Math.random() * step
+}
 const INTERNAL: CommandError = { code: "command.internal" }
 
 const statement = (text: string, ...params: (string | null)[]) => ({
@@ -95,7 +108,7 @@ export const COMMAND_ROLE = statement(
 const CLAIMS_TEXT =
   `SELECT set_config(${literal(SESSION_CLAIMS_SETTING)}, $1, true), ` +
   `set_config('TimeZone', 'UTC', true), set_config('bytea_output', 'hex', true)`
-/** Claims, `TimeZone` і `bytea_output` транзакції — і команди, і читання. */
+/** Claims, `TimeZone` і `bytea_output` транзакції читання; команда додає межі часу. */
 export const claimsStatement = (claims: string) =>
   statement(CLAIMS_TEXT, claims)
 // Межі часу команди — у тому самому операторі claims, без кругового запиту
@@ -441,7 +454,7 @@ export async function runCommand(
   // `maxAttempts` ≥ 1, тож хоч одна спроба відбудеться.
   let outcome: Outcome | undefined
   try {
-    for (let n = 0; n < state.maxAttempts; n++) {
+    for (let n = 1; n <= state.maxAttempts; n++) {
       outcome = await attempt(
         state,
         command,
@@ -451,6 +464,22 @@ export async function runCommand(
         deadline
       )
       if (!("terminal" in outcome) || !outcome.terminal.retry) break
+      if (n === state.maxAttempts) break
+      const pause = pauseOf(outcome.terminal.code, n)
+      if (pause === 0) continue
+      // Повтор після паузи не встиг би й першого оператора: це тайм-аут
+      // бюджету, а не вичерпаний повтор (бюджет — і на паузи, Ф2).
+      if (deadline - performance.now() - pause <= 1) {
+        outcome = {
+          terminal: {
+            failure: new CommandFailure(TIMEOUT),
+            retry: false,
+            destroy: false,
+          },
+        }
+        break
+      }
+      await new Promise((resolve) => setTimeout(resolve, pause))
     }
   } finally {
     // Команда завершена: продовження, які запланував хук, — не вкладені.

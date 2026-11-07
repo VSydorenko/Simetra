@@ -1034,6 +1034,63 @@ describe("COMMIT boundary", () => {
   })
 })
 
+describe("retry pause", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["performance", "setTimeout"] })
+    // Джитер — половина межі: пауза n-ї спроби = 1,5 · 20 мс · 2^(n−1).
+    vi.spyOn(Math, "random").mockReturnValue(0.5)
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+  })
+
+  /** Перші `failures` викликів ядра відповідають `code`; решта — успіх. */
+  const failing = (code: string, failures: number, ms = 0): Override => {
+    let calls = 0
+    return (text) => {
+      if (!text.endsWith("AS r") || calls++ >= failures) return undefined
+      vi.advanceTimersByTime(ms)
+      return { error: { code, message: "retry" } }
+    }
+  }
+  const connects = (calls: readonly object[]) =>
+    calls.filter((c) => "connect" in c).length
+
+  it("pauses base·2^(n−1) plus jitter before each 40P01 retry", async () => {
+    const { db, runtime } = await setup(failing("40P01", 2))
+    const run = runtime.run(session, create)
+    await vi.advanceTimersByTimeAsync(29)
+    expect(connects(db.calls)).toBe(1)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(connects(db.calls)).toBe(2)
+    await vi.advanceTimersByTimeAsync(59)
+    expect(connects(db.calls)).toBe(2)
+    await vi.advanceTimersByTimeAsync(1)
+    await run
+    expect(connects(db.calls)).toBe(3)
+  })
+
+  it("retries a 40001 without a pause", async () => {
+    const { db, runtime } = await setup(failing("40001", 1))
+    const run = runtime.run(session, create)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(connects(db.calls)).toBe(2)
+    await run
+  })
+
+  // Повтор після паузи впав би на бюджеті — це тайм-аут, а не вичерпаний повтор.
+  it("fails with command.timeout when the pause crosses the deadline", async () => {
+    const { db, runtime } = await setup(failing("40P01", 1, 990), {
+      commandBudgetMs: 1000,
+    })
+    expect(await failureOf(runtime.run(session, create))).toEqual({
+      code: "command.timeout",
+    })
+    expect(connects(db.calls)).toBe(1)
+  })
+})
+
 describe("statement queue", () => {
   it("closes at the first failure: later units never reach the port", async () => {
     const db = fakeDatabase({
