@@ -31,6 +31,8 @@ import {
   generatedGrantConflicts,
 } from "./function-execute"
 import { buildPresentation } from "./presentation"
+import { rowBudgetDiagnostics } from "./row-budget"
+import { buildRuntimeCatalog } from "./runtime-catalog"
 import {
   PROJECT_FILE,
   readFiles,
@@ -960,7 +962,21 @@ export async function runStages(
       stage1.project.defaultLocale
     ),
   }
-  return { ok, diagnostics, model: { ...model, hash: await modelHash(model) } }
+  const compiled = { ...model, hash: await modelHash(model) }
+  // Бюджет рядка рахується за формою передачі, а її дає лише каталог
+  // рантайму — проєкція готової моделі, тож правило йде останнім.
+  const budget = rowBudgetDiagnostics(buildRuntimeCatalog(compiled), objects)
+  if (hasErrors(budget)) {
+    return {
+      ok: false,
+      diagnostics: sortDiagnostics([...diagnostics, ...budget]),
+    }
+  }
+  return {
+    ok,
+    diagnostics: sortDiagnostics([...diagnostics, ...budget]),
+    model: compiled,
+  }
 }
 
 /**

@@ -191,6 +191,8 @@ export const COMPILER_RULES = [
   "reference.default-unknown-value",
   "reference.polymorphic-target-kind",
   "attribute.unique-within-place",
+  "attribute.row-over-budget",
+  "attribute.lazy-over-budget",
   "index.attribute-unknown",
   "index.attribute-duplicate",
   "catalog.owner-kind",
@@ -458,7 +460,10 @@ export interface Diagnostic {
  * може бути задумом застосунку — ролі в тенанті тоді призначає оператор, — тож
  * це попередження, а не відмова (спека П4 §6.13). Так само творець кореня,
  * чий корінь не створює команда (`rights.root-creator-unreachable`: корінь —
- * «Користувачі»), — валідна модель без створення тенанта.
+ * «Користувачі»), — валідна модель без створення тенанта. Сума лінивих полів
+ * понад бюджет картки (`attribute.lazy-over-budget`) — межа, а не порушення:
+ * реальні значення зазвичай далекі від `maxBytes`, а картку понад бюджет
+ * сервер відхиляє явною відмовою, не обрізаючи (спека П4-B Рд26).
  */
 const WARNING_RULES: ReadonlySet<RuleCode> = new Set<RuleCode>([
   "physical.reserved-word",
@@ -478,6 +483,7 @@ const WARNING_RULES: ReadonlySet<RuleCode> = new Set<RuleCode>([
   "sql.debt-extension-schema",
   "sql.definer-reads-rls",
   "promote.cascade-to-restrict",
+  "attribute.lazy-over-budget",
 ])
 
 /** Діагностика з каталогу повідомлень; серйозність — властивість правила. */

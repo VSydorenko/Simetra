@@ -2900,6 +2900,26 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "owner потребує власників довідника, parent — ієрархії.",
     },
   },
+  "attribute.row-over-budget": {
+    en: (p) =>
+      `A row of ${p.row} may take ${p.bytes} bytes, over the response budget of ${p.budget}`,
+    uk: (p) =>
+      `Рядок ${p.row} може займати ${p.bytes} байтів, понад бюджет відповіді ${p.budget}`,
+    hint: {
+      en: "A list row or a tabular section row past the budget never reaches the client: lower maxBytes or length of its attributes, or make header attributes lazy.",
+      uk: "Рядок списку чи рядок ТЧ понад бюджет ніколи не дійде до клієнта: зменште maxBytes чи length його реквізитів або зробіть реквізити шапки лінивими.",
+    },
+  },
+  "attribute.lazy-over-budget": {
+    en: (p) =>
+      `Lazy attributes of ${p.object} may take ${p.bytes} bytes together, over the response budget of ${p.budget}`,
+    uk: (p) =>
+      `Ліниві реквізити ${p.object} разом можуть займати ${p.bytes} байтів, понад бюджет відповіді ${p.budget}`,
+    hint: {
+      en: "A card read past the budget is refused, not cut: lower maxBytes of the lazy attributes if real values can reach it.",
+      uk: "Читання картки понад бюджет відхиляється, а не обрізається: зменште maxBytes лінивих реквізитів, якщо реальні значення можуть його досягти.",
+    },
+  },
   "index.attribute-unknown": {
     en: (p) =>
       p.section === undefined
