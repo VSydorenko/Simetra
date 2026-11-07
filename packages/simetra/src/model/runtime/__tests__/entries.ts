@@ -20,6 +20,12 @@ export const OBJECT_ID = "00000000-0000-4000-8000-000000000101"
 export const SECTION_ID = "00000000-0000-4000-8000-000000000102"
 export const SCOPE_KIND_ID = "00000000-0000-4000-8000-000000000103"
 export const ORGANIZATION_ID = "00000000-0000-4000-8000-000000000104"
+export const MEMBERSHIP_ID = "00000000-0000-4000-8000-000000000105"
+/**
+ * `kernelHash` за формою: T0 не імпортує `kernelHashOf` T1, а схема перевіряє
+ * лише форму хешу, не його відповідність `operations`.
+ */
+export const KERNEL_HASH = "0".repeat(64)
 
 const PARENT_KEY = "task_lines_org_id_parent_id_fkey"
 
@@ -146,6 +152,7 @@ const objectBase = () => ({
   versionName: "version",
   scopeKindId: SCOPE_KIND_ID,
   scopeColumn: "org_id",
+  kernelHash: KERNEL_HASH,
   signal: true,
 })
 

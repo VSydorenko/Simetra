@@ -1,7 +1,10 @@
 import { beforeAll, describe, expect, it } from "vitest"
 import {
+  applyChanges,
   buildRuntimeCatalog,
   canonicalSnapshot,
+  kernelHashOf,
+  renameElement,
   type CompiledModel,
 } from "simetra/compiler"
 import {
@@ -20,7 +23,10 @@ import { hasVisibleUsers } from "../rights/functions"
 import {
   BULLETIN_FILE,
   GAUGE_LOG_FILE,
+  ROLE_FILE,
   STATUS_FILE,
+  TICKET_FILE,
+  TICKET_ID,
   adminRoles,
   commandCoreLayer,
   compileRights,
@@ -765,6 +771,19 @@ describe("buildRuntimeCatalog: scope root creation", () => {
     )
   })
 
+  // Клієнт мапить `creatorMember` записом довідника членства без
+  // `operations` (В8): UUID той самий, що в ядра кореня.
+  it("creatorMembership: a root with a creator names its membership catalog", () => {
+    expect(object("Organization").creatorMembership).toBe(
+      object("Organization").operations?.create?.root?.membership
+    )
+    expect(object("Organization").creatorMembership).toBe(
+      object("OrgMember").id
+    )
+    expect(object("Branch")).not.toHaveProperty("creatorMembership")
+    expect(object("OrgMember")).not.toHaveProperty("creatorMembership")
+  })
+
   it("a membership catalog names its user column", () => {
     expect(object("OrgMember").membership).toEqual({ userColumn: "user_id" })
     expect(object("BranchMember").membership).toEqual({
@@ -797,5 +816,150 @@ describe("buildRuntimeCatalog: scope root creation", () => {
     ],
   ])("the T0 schema rejects %s", (_, broken) => {
     expect(runtimeCatalogSchema.safeParse(broken(roots)).success).toBe(false)
+  })
+})
+
+/**
+ * Контракт ядра (Рд12, В5): `kernelHash` — хеш лише функцій і контекстів
+ * операцій. Сумісна зміна метаданих не робить стару збірку застарілою, а
+ * зміна форми ядра — робить.
+ */
+describe("kernelHash", () => {
+  type Json = Record<string, unknown>
+  type Files = Map<string, string>
+  const edit =
+    (path: string, change: (meta: Json) => void) =>
+    (files: Files): Files => {
+      const meta = JSON.parse(files.get(path)!) as Json
+      change(meta)
+      return new Map(files).set(path, JSON.stringify(meta))
+    }
+  const renamed =
+    (element: string[], newName: string) =>
+    async (files: Files): Promise<Files> => {
+      const result = await renameElement(files, {
+        target: { kind: "Catalog", name: "Ticket", element },
+        newName,
+      })
+      expect(result.diagnostics.filter((d) => d.severity === "error")).toEqual(
+        []
+      )
+      return applyChanges(files, result.changes)
+    }
+  const optional = (id: number, name: string) => ({
+    id: uuid(id),
+    name,
+    physicalName: name,
+    type: "String",
+    length: 20,
+  })
+  const attributesOf = (meta: Json) => meta.attributes as Json[]
+  const checklistOf = (meta: Json) =>
+    (meta.tabularSections as Json[]).find((s) => s.name === "checklist")!
+
+  it("every entry hashes its operations", () => {
+    for (const entry of catalog.objects) {
+      expect(entry.kernelHash, entry.name).toBe(kernelHashOf(entry.operations))
+    }
+  })
+
+  // Кожен довідник ядра має `update`, тож запису без `operations` у
+  // скомпільованому каталозі немає: хеш порожньої форми перевіряємо прямо.
+  // Літерал — sha256 тексту `{}`: від середовища й компіляції не залежить.
+  it("an entry without operations hashes the empty canonical form", () => {
+    expect(kernelHashOf(undefined)).toBe(kernelHashOf({}))
+    expect(kernelHashOf(undefined)).toBe(
+      "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+    )
+  })
+
+  it.each<[string, (files: Files) => Files | Promise<Files>]>([
+    [
+      "renaming the object",
+      async (f) => {
+        const result = await renameElement(f, {
+          target: { kind: "Catalog", name: "Ticket" },
+          newName: "Issue",
+        })
+        expect(result.ok).toBe(true)
+        return applyChanges(f, result.changes)
+      },
+    ],
+    ["renaming an attribute", renamed(["watchers"], "followers")],
+    ["renaming a tabular section", renamed(["checklist"], "todo")],
+    [
+      "a new optional header attribute",
+      edit(TICKET_FILE, (m) => {
+        m.attributes = [...attributesOf(m), optional(6990, "memo")]
+      }),
+    ],
+    [
+      "a new optional tabular section attribute",
+      edit(TICKET_FILE, (m) => {
+        const section = checklistOf(m)
+        section.attributes = [
+          ...(section.attributes as Json[]),
+          optional(6991, "memo"),
+        ]
+      }),
+    ],
+    [
+      "a presentation change",
+      edit(TICKET_FILE, (m) => {
+        m.standardAttributeOverrides = {
+          deletionMark: { description: { en: "Archived" } },
+        }
+      }),
+    ],
+    [
+      "a role's action grant",
+      edit(ROLE_FILE("TicketOwnWriter"), (m) => {
+        const [first] = m.grants as { grant: { actions: string[] } }[]
+        first!.grant.actions = ["read", "create", "update"]
+      }),
+    ],
+    [
+      "another object",
+      edit(BULLETIN_FILE, (m) => {
+        m.attributes = [...attributesOf(m), optional(6992, "memo")]
+      }),
+    ],
+    [
+      "a load change",
+      edit(TICKET_FILE, (m) => {
+        m.attributes = attributesOf(m).map((a) =>
+          a.name === "watchers" ? { ...a, load: "lazy" } : a
+        )
+      }),
+    ],
+  ])("%s keeps the catalog's kernelHash", async (_, change) => {
+    const { model: changed, diagnostics } = await compileRights(
+      await change(files())
+    )
+    expect(diagnostics.filter((d) => d.severity === "error")).toEqual([])
+    // Без цього кейс нічого б не доводив: зміна мусить дійти до моделі.
+    expect(changed!.hash).not.toBe(model.hash)
+    const ticket = buildRuntimeCatalog(changed!).objects.find(
+      (o) => o.id === TICKET_ID
+    )
+    expect(ticket?.kernelHash).toBe(objectOf("Ticket").kernelHash)
+  })
+
+  it("other functions, contexts or actions give other hashes", () => {
+    const operations = objectOf("OrgRoleAssignments").operations!
+    const update = operations.update!
+    const variants = [
+      operations,
+      { ...operations, update: { ...update, context: "update" } },
+      {
+        ...operations,
+        update: {
+          ...update,
+          function: { ...update.function, name: "other_save" },
+        },
+      },
+      { ...operations, delete: undefined },
+    ]
+    expect(new Set(variants.map(kernelHashOf)).size).toBe(variants.length)
   })
 })

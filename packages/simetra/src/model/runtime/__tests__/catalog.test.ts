@@ -9,6 +9,8 @@ import {
 } from "../catalog"
 import { standardElementId } from "../../schemas/element-id"
 import {
+  KERNEL_HASH,
+  MEMBERSHIP_ID,
   OBJECT_ID,
   catalogEntry,
   catalogEntrySection,
@@ -74,12 +76,68 @@ describe("catalog entries", () => {
       { ...catalogEntry(), constraints: [] },
       false,
     ],
+    [
+      "a kernelHash not in lowercase hex",
+      catalogEntrySchema,
+      catalogEntry({ kernelHash: "A".repeat(64) }),
+      false,
+    ],
   ])("%s", (_, schema, input, ok) => {
     expect(schema.safeParse(input).success).toBe(ok)
   })
 
   it("a runtime entry is a shared entry", () => {
     expectTypeOf<RuntimeObject>().toExtend<CatalogEntry>()
+  })
+})
+
+describe("runtimeObjectSchema: creatorMembership", () => {
+  const withRoot = (membership?: string): RuntimeObject => {
+    const entry = runtimeObject()
+    return {
+      ...entry,
+      operations: {
+        ...entry.operations,
+        create: {
+          ...entry.operations!.create!,
+          root: membership === undefined ? {} : { membership },
+        },
+      },
+    }
+  }
+  const OTHER_ID = "00000000-0000-4000-8000-000000000106"
+
+  // Клієнт мапить `creatorMember` за полем спільної частини, ядро перевіряє
+  // за `operations`: розбіжність дала б запис не в той довідник членства.
+  it.each<[string, RuntimeObject, boolean]>([
+    [
+      "both name the same membership catalog",
+      { ...withRoot(MEMBERSHIP_ID), creatorMembership: MEMBERSHIP_ID },
+      true,
+    ],
+    ["a root without a creator and no field", withRoot(), true],
+    [
+      "the root names a membership the entry omits",
+      withRoot(MEMBERSHIP_ID),
+      false,
+    ],
+    [
+      "the entry names a membership the root lacks",
+      { ...withRoot(), creatorMembership: MEMBERSHIP_ID },
+      false,
+    ],
+    [
+      "a field on a non-root entry",
+      runtimeObject({ creatorMembership: MEMBERSHIP_ID }),
+      false,
+    ],
+    [
+      "different membership catalogs",
+      { ...withRoot(MEMBERSHIP_ID), creatorMembership: OTHER_ID },
+      false,
+    ],
+  ])("%s", (_, input, ok) => {
+    expect(runtimeObjectSchema.safeParse(input).success).toBe(ok)
   })
 })
 
@@ -101,6 +159,7 @@ describe("runtimeCatalogSchema", () => {
           keyName: "ref",
           versionColumn: "version",
           versionName: "version",
+          kernelHash: KERNEL_HASH,
           signal: true,
           attributes: [],
           tabularSections: [],
