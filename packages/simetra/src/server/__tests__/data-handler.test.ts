@@ -788,6 +788,54 @@ describe("schema refusal paths: the logical layer and the envelope agree", () =>
     expect(pathFromWire(index, sample.id, refusal.path ?? "")).toBe(path)
     expect(pathToWire(index, sample.id, path)).toBe(refusal.path)
   })
+
+  // Без `object` операцію пакета називає лише індекс: шлях його зберігає.
+  const NOPE = { kind: "Catalog", name: "Nope" }
+  it.each<[string, unknown, string]>([
+    [
+      "an unknown object and a bad field",
+      [logicalDelete, { ...logicalUpdate, object: NOPE }],
+      "1.expectedVersion",
+    ],
+    [
+      "an object that is not a reference and a bad field",
+      [logicalDelete, { ...logicalUpdate, object: "Catalog.Nope" }],
+      "1.object",
+    ],
+    [
+      // Перша операція проходить каталог: до другої відмова доходить лише так.
+      "an unknown object of a valid operation",
+      [
+        { ...logicalDelete, object: { kind: "Catalog", name: "Link" } },
+        { ...logicalDelete, object: NOPE },
+      ],
+      "1.object",
+    ],
+  ])("logical: %s keeps the operation index", (_, input, path) => {
+    expect(logicalRefusal(input)).toStrictEqual({
+      code: "command.invalid",
+      path,
+    })
+  })
+
+  it.each<[string, object, string]>([
+    [
+      "an object that is not a UUID and a bad field",
+      batchOf([wireDelete, { ...wireUpdate, object: "Catalog.Link" }]),
+      "1.object",
+    ],
+    [
+      "an object that is not a UUID and a bad tabular line",
+      batchOf([wireDelete, { ...wireCreate([{}, 1]), object: "Catalog.Link" }]),
+      "1.object",
+    ],
+  ])("envelope: %s keeps the operation index", async (_, wire, path) => {
+    const { handle } = await harness()
+    expect(errorOf(await handle(session, wire, HTTP))).toStrictEqual({
+      code: "command.invalid",
+      path,
+    })
+  })
 })
 
 describe("CommandRuntime.catalog", () => {

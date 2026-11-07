@@ -170,6 +170,19 @@ describe("default value (spec §5)", () => {
     ).toEqual(MISMATCH)
   })
 
+  // Правило дроту (спека П4-B §4.4): момент DDL `DEFAULT` поза роками
+  // 1–9999 в UTC база збереже, а суворий декодер рядка не прочитає.
+  it.each<[string, [string, string][]]>([
+    ["9999-12-31T23:59:59-05:00", INVALID],
+    ["0001-01-01T00:30:00+01:00", INVALID],
+    ["9999-12-31T23:59:59Z", []],
+    ["0001-01-01T00:00:00Z", []],
+  ])("DateTime default %s by the UTC year rule", (value, expected) => {
+    expect(defaultRules({ type: "DateTime", defaultValue: value })).toEqual(
+      expected
+    )
+  })
+
   it("UUID takes a UUID string", () => {
     expect(
       defaultRules({

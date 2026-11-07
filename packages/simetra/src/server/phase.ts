@@ -195,9 +195,9 @@ function rejectedObject(
 
 /**
  * `command.invalid` відмови схеми з причиною межі. Шлях — від операції
- * (`operationRefusalPath`): без індексу пакета й без `tabularSections`;
- * операцію пакета називає `object`. ТЧ понад межу — лише її логічне ім'я,
- * пакет понад межу — без шляху: це корінь.
+ * (`operationRefusalPath`), без `tabularSections`; операцію пакета називає
+ * `object`, а без нього — індекс на початку шляху. ТЧ понад межу — лише її
+ * логічне ім'я, пакет понад межу — без шляху: це корінь.
  */
 function schemaRefusal(
   catalog: RuntimeCatalog,
@@ -228,10 +228,13 @@ function schemaRefusal(
   }
   // Сегмент `id` операції — її ключ (спека П4-B §4.0): за відомого об'єкта
   // шлях називає `keyName`, як і решта помилок цього об'єкта.
-  const segments = operationRefusalPath(path, batch)
+  const indexed = batch && typeof index === "number" && path.length > 1
+  const segments = operationRefusalPath(indexed ? path.slice(1) : path)
   if (object !== undefined && segments[0] === "id") {
     segments[0] = object.keyName
   }
+  // Без `object` операцію пакета називає лише її індекс.
+  if (indexed && object === undefined) segments.unshift(String(index))
   const refusal: CommandError = {
     ...invalid(segments.length === 0 ? undefined : segments.join(".")),
     ...(reason === undefined ? {} : { reason }),
@@ -305,9 +308,18 @@ export function prepareInput(
       reason: LIMIT_REASONS.batchTooLarge,
     })
   }
-  return parsed.data.map((op) => {
+  const batch = Array.isArray(input)
+  return parsed.data.map((op, i) => {
     const found = targetOf(catalog, op)
-    if ("error" in found) throw new CommandFailure(found.error)
+    if ("error" in found) {
+      // Невідомий об'єкт `object` не дає: операцію пакета називає індекс.
+      const { error } = found
+      throw new CommandFailure(
+        batch && error.object === undefined && error.path !== undefined
+          ? { ...error, path: `${i}.${error.path}` }
+          : error
+      )
+    }
     // У пакеті — об'єкт операції, що відмовила (спека П4-B §6.10).
     const fail: (error: CommandError) => never = (error) => {
       throw new CommandFailure(withObject(error, found.object))

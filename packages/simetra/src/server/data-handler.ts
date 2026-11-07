@@ -111,7 +111,8 @@ type Raw = { request?: Record<string, unknown> } | null | undefined
  * запиту, як у логічній формі (`schemaRefusal` у `phase.ts`, `readRefusal`
  * у `read.ts`): префікс `request` і `operation` / `batch.<i>` / `query`
  * прибирається, бо T4 мапить шлях записом об'єкта, а не конверта; шлях
- * операції — без `tabularSections`, перший сегмент — `<id ТЧ>`. ТЧ понад
+ * операції — без `tabularSections`, перший сегмент — `<id ТЧ>`; без
+ * `object` шлях операції пакета зберігає її індекс. ТЧ понад
  * межу — лише `<id ТЧ>`; пакет понад межу — без шляху й об'єкта.
  */
 function envelopeRefusal(
@@ -132,6 +133,7 @@ function envelopeRefusal(
   // (`operationRefusalPath`); запит читання її не має: його `tabularSections`
   // — перелік, а не ТЧ.
   let operation = false
+  let opIndex: number | undefined
   const [root, field, at] = path
   if (root === "request" && path.length > 1) {
     if ((field === "operation" || field === "query") && path.length > 2) {
@@ -146,14 +148,13 @@ function envelopeRefusal(
           (request()?.batch as { object?: unknown }[] | undefined)?.[at]?.object
       )
       operation = true
+      opIndex = at
       path = path.slice(3)
     } else {
       path = path.slice(1)
     }
   }
-  const segments = operation
-    ? operationRefusalPath(path, false)
-    : path.map(String)
+  const segments = operation ? operationRefusalPath(path) : path.map(String)
   if (reason === LIMIT_REASONS.tabularTooLarge) {
     return {
       code: "command.invalid",
@@ -166,6 +167,10 @@ function envelopeRefusal(
   // ключа відомого об'єкта (спека П4-B §4.0).
   const entry = object === undefined ? undefined : index.byId.get(object)
   if (entry !== undefined && segments[0] === "id") segments[0] = entry.key
+  // Без `object` операцію пакета називає лише її індекс.
+  if (opIndex !== undefined && object === undefined) {
+    segments.unshift(String(opIndex))
+  }
   return {
     code: "command.invalid",
     ...(reason === undefined ? {} : { reason }),

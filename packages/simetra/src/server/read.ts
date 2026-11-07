@@ -766,23 +766,15 @@ export function decidingIssue(error: z.ZodError): z.core.$ZodIssue | undefined {
 /**
  * Шлях відмови схеми операції — одна форма для логічного шару й конверта
  * (спека П4-B §4.0): перший сегмент шляху ТЧ — сама ТЧ, тож структурний
- * `tabularSections` прибирається, а провідний індекс операції пакета теж —
- * операцію називає `object`. Обидва — лише коли за ними щось лишається:
- * хибний сам контейнер зберігає свій шлях. Шлях — від операції; конверт
- * відрізає свій префікс `request.operation` / `request.batch` до виклику.
+ * `tabularSections` прибирається, лише коли за ним щось лишається (хибний
+ * сам контейнер зберігає шлях). Шлях — від операції: індекс операції пакета
+ * викликач відрізає сам і повертає, коли `object` назвати не може.
  */
-export function operationRefusalPath(
-  path: readonly PropertyKey[],
-  batch: boolean
-): string[] {
-  let segments = path.map(String)
-  if (batch && typeof path[0] === "number" && segments.length > 1) {
-    segments = segments.slice(1)
-  }
-  if (segments[0] === "tabularSections" && segments.length > 1) {
-    segments = segments.slice(1)
-  }
-  return segments
+export function operationRefusalPath(path: readonly PropertyKey[]): string[] {
+  const segments = path.map(String)
+  return segments[0] === "tabularSections" && segments.length > 1
+    ? segments.slice(1)
+    : segments
 }
 
 /** The `params.reason` of the first Zod issue that carries one. */

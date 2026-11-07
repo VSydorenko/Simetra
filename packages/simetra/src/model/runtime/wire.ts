@@ -3,7 +3,7 @@ import type {
   CatalogEntryAttribute,
   CatalogEntrySection,
 } from "./catalog"
-import { normalDateTime } from "./date-time"
+import { normalDateTime } from "../schemas/value-type"
 import { INTEGER_TEXT, encodeItemValue, isPlainObject } from "./values"
 
 /**

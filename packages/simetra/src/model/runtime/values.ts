@@ -3,9 +3,9 @@ import {
   isDate,
   isDateTime,
   isWithinType,
+  normalDateTime,
 } from "../schemas/value-type"
 import type { CatalogEntryAttribute } from "./catalog"
-import { normalDateTime } from "./date-time"
 import { LIMIT_REASONS, type CommandError } from "./errors"
 import { jsonBytes } from "./limits"
 
@@ -148,14 +148,9 @@ function scalar(attribute: CatalogEntryAttribute, value: unknown): unknown {
     case "Date":
       return typeof value === "string" && isDate(value) ? value : undefined
     case "DateTime":
-      // Лише зі зсувом: момент без поясу база прочитала б у поясі сесії.
-      // Правило дроту: рік поза 1–9999 в UTC база запише, але `to_jsonb` у
-      // поясі сесії UTC дасть рядок, якого суворий декодер не прочитає.
-      return typeof value === "string" &&
-        isDateTime(value) &&
-        normalDateTime(value) !== undefined
-        ? value
-        : undefined
+      // Лише зі зсувом: момент без поясу база прочитала б у поясі сесії;
+      // `isDateTime` тримає й правило дроту (рік 1–9999 в UTC).
+      return typeof value === "string" && isDateTime(value) ? value : undefined
     case "Bytes":
       return typeof value === "string" && BYTES_TEXT.test(value)
         ? value

@@ -593,11 +593,11 @@ describe("command transaction", () => {
     ],
     [
       // Об'єкта немає в каталозі: шлях лишається структурним (`id`, не
-      // `keyName`), без `object` і, як у конверті, без індексу операції.
+      // `keyName`), без `object`, тож операцію називає індекс пакета.
       "a schema refusal of an operation of an unknown object",
       [create, { ...rights, object: NOPE, id: "x" }],
       () => undefined,
-      { code: "command.invalid", path: "id" },
+      { code: "command.invalid", path: "1.id" },
     ],
     [
       "a database error in the second phase",
