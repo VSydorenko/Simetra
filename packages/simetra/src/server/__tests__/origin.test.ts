@@ -33,6 +33,24 @@ describe("checkRequestOrigin: HTTP", () => {
       true,
     ],
     ["обох заголовків немає", {}, true],
+    ["Sec-Fetch-Site Same-Origin", { secFetchSite: "Same-Origin" }, true],
+    [
+      "Sec-Fetch-Site з пробілом попереду",
+      { secFetchSite: " same-origin" },
+      true,
+    ],
+    [
+      "Sec-Fetch-Site з пробілом позаду",
+      { secFetchSite: "same-origin " },
+      true,
+    ],
+    ["Sec-Fetch-Site порожній", { secFetchSite: "" }, true],
+    ["Origin порожній", { origin: "" }, true],
+    [
+      "Origin з верхнім регістром хоста",
+      { origin: "https://APP.example.com" },
+      true,
+    ],
   ])("%s", (_name, headers, refused) => {
     const result = checkRequestOrigin(
       { expectedOrigin: OWN, ...headers },
@@ -125,6 +143,25 @@ describe("checkRequestOrigin: inProcess", () => {
     expect(checkRequestOrigin({ inProcess: true }, raw)).toEqual(
       refused ? refusal : undefined
     )
+  })
+
+  it.each<[string, unknown, boolean]>([
+    ["inProcess: false без заголовків", { inProcess: false }, true],
+    [
+      "inProcess: false з власним Origin — правила HTTP",
+      { inProcess: false, expectedOrigin: OWN, origin: OWN },
+      false,
+    ],
+    [
+      "inProcess: false з чужим Origin",
+      { inProcess: false, expectedOrigin: OWN, origin: "https://evil.example" },
+      true,
+    ],
+    ["inProcess: 1", { inProcess: 1 }, true],
+  ])("не-true inProcess іде HTTP-гілкою: %s", (_name, origin, refused) => {
+    expect(
+      checkRequestOrigin(origin as RequestOrigin, { request: { type: "read" } })
+    ).toEqual(refused ? refusal : undefined)
   })
 
   it("type читається один раз", () => {

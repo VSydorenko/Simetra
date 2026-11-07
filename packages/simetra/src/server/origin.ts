@@ -29,10 +29,16 @@ export function checkRequestOrigin(
   origin: RequestOrigin,
   rawRequest: unknown
 ): CommandError | undefined {
-  if ("inProcess" in origin) {
+  if (isInProcess(origin)) {
     return inProcessAllowed(rawRequest) ? undefined : REFUSED
   }
   return httpAllowed(origin) ? undefined : REFUSED
+}
+
+// Лише буквальне `true`: присутність ключа не рахується, бо нетипізований
+// виклик з `inProcess: false` інакше обійшов би перевірку заголовків.
+function isInProcess(origin: RequestOrigin): origin is { inProcess: true } {
+  return (origin as { inProcess?: unknown }).inProcess === true
 }
 
 function httpAllowed(origin: {
