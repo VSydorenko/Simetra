@@ -228,6 +228,12 @@
   рядка в модулі «Користувачів». Кандидат на послаблення — правило лише над
   колонками застосунку з безпечними значеннями заповнення. Низький пріоритет,
   до першого запиту.
+- **Розбір синтетичного id елемента** мусить іти через
+  `packages/simetra/src/model/schemas/element-id.ts` (`ELEMENT_ID_SEPARATOR`,
+  `standardElementId`, `elementIdSchema`), а не через літерал `"#"`. Літерал
+  лишився в `packages/simetra/src/compiler/movement-functions.ts`,
+  `packages/simetra/src/compiler/operations/promote/record.ts` і
+  `packages/simetra/src/schema/apply/promotion/removals.ts`.
 
 ## 5. Права
 
