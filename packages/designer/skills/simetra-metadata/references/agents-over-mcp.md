@@ -1,7 +1,7 @@
 # Agents over MCP
 
 Contents: launch flags; data of the development database (connect, flags,
-examples, the database marker, limits).
+examples, tabular section arrays, the database marker, limits).
 
 `simetra mcp` serves the tool catalog to an agent over stdio. `simetra init`
 writes its entry in the MCP client config; flags added to that entry's `args`
@@ -167,6 +167,38 @@ Seed rows in one transaction (`id` is a new UUID you generate; `update`,
   ]
 }
 ```
+
+A tabular section array in `update` replaces the section. Name every
+existing line by its key (`ref`), either in the array or in `deleteIds`;
+otherwise the command is refused with `command.invalid`, reason
+`tabular-rows-missing`, `path` — the section. Build the array only from a
+card read with that section or from the lines of the owner, and pass the
+`ownerVersion` you read as `expectedVersion`. A line in both the array and
+`deleteIds` is refused; an id in `deleteIds` that is already gone is
+ignored. Keep one line and delete another:
+
+```json simetra:data-command
+{
+  "operations": [
+    {
+      "action": "update",
+      "object": { "kind": "Document", "name": "Invoice" },
+      "id": "0b9d4c5e-8f1a-4c3b-9e2d-6a7f8b9c0d1e",
+      "expectedVersion": 3,
+      "tabularSections": {
+        "lines": [
+          { "ref": "6f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b", "quantity": 2 }
+        ]
+      },
+      "deleteIds": { "lines": ["7a2b3c4d-5e6f-4a70-8b8c-9d0e1f2a3b4c"] }
+    }
+  ]
+}
+```
+
+A set of lines over the tabular section limit (5000 lines), or one that is
+edited in parts, does not belong in a tabular section: model it as a
+separate object or a register.
 
 The tools work only on a development database. Before connecting they check
 that the host is this machine (`localhost`, `127.0.0.0/8`, `::1` or a unix

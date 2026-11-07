@@ -360,7 +360,8 @@ catalogs through `runtime.run` (`simetra/server`). Every operation on them
 runs under `administerRights`:
 
 - custom role: `create`, `update` with `expectedVersion` (the `delta`
-  tabular section is replaced whole), `markDeletion` on the roles catalog;
+  tabular section is replaced whole: name every existing line in the array
+  or in `deleteIds`), `markDeletion` on the roles catalog;
 - assignment: `create`, and `delete` with `expectedVersion`, on the role
   assignments catalog.
 

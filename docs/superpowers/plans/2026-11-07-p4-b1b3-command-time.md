@@ -1,9 +1,9 @@
 # П4-B1b-3 — бюджет часу, коди команди й масиви ТЧ: план реалізації
 
-> **Статус:** на прийманні архітекторкою П4-B (2026-11-07). Підсумок аудиту —
+> **Статус:** виконано, на рев'ю архітекторки. Підсумок аудиту —
 > наприкінці файла.
 >
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** транзакція команди T3 тримає бюджет часу й межі простою, мапить
 тайм-аути, замки й обриви на окремі коди, не валить процес на `FATAL`
@@ -88,16 +88,16 @@
 
 **Interfaces:** Produces `"command.busy"` у `COMMAND_ERROR_CODES`.
 
-- [ ] **Step 1: Failing tests** (таблиця `it.each` у `errors.test.ts`): `55P03`
+- [x] **Step 1: Failing tests** (таблиця `it.each` у `errors.test.ts`): `55P03`
   у фазі запису й читання → `{ code: "command.busy" }`; `57014` у фазі запису
   й без фази → `{ code: "command.timeout" }`; `23514` CHECK реквізиту ТЧ
   (`table` = таблиця ТЧ, обмеження з колонкою) → `command.constraint` `check`
   з `attributes: ["<ТЧ>.<реквізит>"]` (пункт реєстру боргу §7 «`23514` у ТЧ»).
-- [ ] **Step 2: Run, expect FAIL** — `pnpm --filter simetra test errors`.
-- [ ] **Step 3: Implement** — гілки `55P03` і `57014` у `mapDatabaseError`;
+- [x] **Step 2: Run, expect FAIL** — `pnpm --filter simetra test errors`.
+- [x] **Step 3: Implement** — гілки `55P03` і `57014` у `mapDatabaseError`;
   `logsDatabaseError` їх не логує як internal.
-- [ ] **Step 4: Run** — PASS; `pnpm typecheck`.
-- [ ] **Step 5: Commit** — `feat(server): коди command.busy і command.timeout команди`.
+- [x] **Step 4: Run** — PASS; `pnpm typecheck`.
+- [x] **Step 5: Commit** — `feat(server): коди command.busy і command.timeout команди`.
 
 ### Task 2: порт `fromPgPool` — слухач `error` на час видачі
 
@@ -110,14 +110,14 @@
   `query` відхиляється саме нею (з її `code`, напр. `25P03`), а не загальною
   «not queryable»; `release` знімає слухача.
 
-- [ ] **Step 1: Failing tests** — `fakePool()` з емітером: подія `error` з
+- [x] **Step 1: Failing tests** — `fakePool()` з емітером: подія `error` з
   `code: "25P03"` між запитами не кидає з процесу (немає необробленої
   помилки); наступний `query` відхиляється помилкою з `code: "25P03"`;
   після `release` слухач знято (кількість слухачів 0).
-- [ ] **Step 2: Run, expect FAIL** — `pnpm --filter simetra test port`.
-- [ ] **Step 3: Implement** — `node:events` не потрібен: тип структурний.
-- [ ] **Step 4: Run** — PASS; `pnpm typecheck` (designer передає `pg.Pool`).
-- [ ] **Step 5: Commit** — `fix(server): слухач error клієнта порту на час видачі`.
+- [x] **Step 2: Run, expect FAIL** — `pnpm --filter simetra test port`.
+- [x] **Step 3: Implement** — `node:events` не потрібен: тип структурний.
+- [x] **Step 4: Run** — PASS; `pnpm typecheck` (designer передає `pg.Pool`).
+- [x] **Step 5: Commit** — `fix(server): слухач error клієнта порту на час видачі`.
 
 ### Task 3: бюджет часу транзакції
 
@@ -134,7 +134,7 @@ Test `server/__tests__/transaction.test.ts`, `runtime.test.ts`, `harness.ts`.
   не змінюється.
 - Дедлайн — `performance.now() + budgetMs` на початку `runCommand` (Ф2).
 
-- [ ] **Step 1: Failing tests** (fake timers; послідовність викликів порту з
+- [x] **Step 1: Failing tests** (fake timers; послідовність викликів порту з
   `harness.ts`):
   - оператор claims **команди** (не читання) додає до наявних `set_config`
     `set_config('lock_timeout', $2, true)`,
@@ -155,8 +155,8 @@ Test `server/__tests__/transaction.test.ts`, `runtime.test.ts`, `harness.ts`.
   - `ctx.read` усередині хука проходить ту саму перевірку;
   - `commandBudgetMs: 500` і `lockTimeoutMs: 0` — відмова `createCommandRuntime`
     без I/O.
-- [ ] **Step 2: Run, expect FAIL** — `pnpm --filter simetra test transaction runtime`.
-- [ ] **Step 3: Implement** — у `enqueue` перед кожним оператором:
+- [x] **Step 2: Run, expect FAIL** — `pnpm --filter simetra test transaction runtime`.
+- [x] **Step 3: Implement** — у `enqueue` перед кожним оператором:
   `remaining = deadline - performance.now()`; `remaining <= 1` →
   `this.close({ failure: command.timeout, retry: false, destroy: false })`;
   `remaining` менший за чинне значення `statement_timeout` (`Transaction` його
@@ -167,8 +167,8 @@ Test `server/__tests__/transaction.test.ts`, `runtime.test.ts`, `harness.ts`.
   бюджету; прийнята свідомо. Налаштування — у функції
   claims команди (окремо від `claimsStatement` читання); значення — зв'язаними
   параметрами.
-- [ ] **Step 4: Run** — PASS; `pnpm --filter simetra test`; `pnpm typecheck`.
-- [ ] **Step 5: Commit** — `feat(server): бюджет часу транзакції команди`.
+- [x] **Step 4: Run** — PASS; `pnpm --filter simetra test`; `pnpm typecheck`.
+- [x] **Step 5: Commit** — `feat(server): бюджет часу транзакції команди`.
 
 ### Task 4: межа `COMMIT` і збережений `FATAL`
 
@@ -176,7 +176,7 @@ Test `server/__tests__/transaction.test.ts`, `runtime.test.ts`, `harness.ts`.
 
 **Interfaces:** `terminalOf(raw, state, phase, commitSent: boolean)`; `Terminal` несе `code?: string` (SQLSTATE) — його читає пауза задачі 5.
 
-- [ ] **Step 1: Failing tests:**
+- [x] **Step 1: Failing tests:**
   - `25P03` і `25P04` на операторі фази (до `COMMIT`) → `command.timeout`,
     `release(true)` без `ROLLBACK`;
   - `25P03` у відповідь на `COMMIT` → `command.unavailable`, `release(true)`;
@@ -186,27 +186,27 @@ Test `server/__tests__/transaction.test.ts`, `runtime.test.ts`, `harness.ts`.
     `maps a guard refusal answered at COMMIT` зелені);
   - `25P03` на прелюдії `statement_timeout` перед `COMMIT` — `command.timeout`
     (`COMMIT` ще не надіслано).
-- [ ] **Step 2: Run, expect FAIL** — `pnpm --filter simetra test transaction`.
-- [ ] **Step 3: Implement** — `enqueue` позначає `commitSent` після перевірки
+- [x] **Step 2: Run, expect FAIL** — `pnpm --filter simetra test transaction`.
+- [x] **Step 3: Implement** — `enqueue` позначає `commitSent` після перевірки
   бюджету й прелюдії, безпосередньо перед `query(COMMIT)`; `terminalOf`:
   `commitSent` і (`connectionLost` чи `25P03`/`25P04`) → `command.unavailable`
   `destroy: true`; решта SQLSTATE на `COMMIT` мапиться як зараз; до `COMMIT`
   `25P03`/`25P04` → `command.timeout` `destroy: true`.
-- [ ] **Step 4: Run** — PASS.
-- [ ] **Step 5: Commit** — `feat(server): межа COMMIT для тайм-аутів простою й транзакції`.
+- [x] **Step 4: Run** — PASS.
+- [x] **Step 5: Commit** — `feat(server): межа COMMIT для тайм-аутів простою й транзакції`.
 
 ### Task 5: пауза з джитером перед повтором `40P01`
 
 **Files:** `server/transaction.ts`; Test `transaction.test.ts`.
 
-- [ ] **Step 1: Failing tests** (fake timers, `Math.random` підмінено):
+- [x] **Step 1: Failing tests** (fake timers, `Math.random` підмінено):
   перед другою спробою після `40P01` — пауза `base·2^(n−1) + jitter`, де
   `base` = 20 мс, `jitter ∈ [0, base·2^(n−1))`; `40001` повторюється без паузи;
   пауза, що перетинає дедлайн, — `command.timeout` без нової спроби (Review
   Focus 5).
-- [ ] **Step 2–4:** red → implement (`await new Promise(r => setTimeout(r, ms))`
+- [x] **Step 2–4:** red → implement (`await new Promise(r => setTimeout(r, ms))`
   у `runCommand`) → green.
-- [ ] **Step 5: Commit** — `feat(server): пауза з джитером перед повтором 40P01`.
+- [x] **Step 5: Commit** — `feat(server): пауза з джитером перед повтором 40P01`.
 
 ### Task 6: `BATCH_MAX` і межа фаз `ctx.run`
 
@@ -219,12 +219,12 @@ phases of one batch and of `ctx.run` in one transaction); лічильник ф�
 `ctx.run` у `Transaction`. Межу схеми пакета й конверта (`batch-too-large`)
 дає B1b-2 — тут стала лише оголошується й рахує `ctx.run` (Ф1).
 
-- [ ] **Step 1: Failing tests:** хук кличе `ctx.run` `BATCH_MAX + 1` разів (з
+- [x] **Step 1: Failing tests:** хук кличе `ctx.run` `BATCH_MAX + 1` разів (з
   `vi.spyOn` неможливо — стала; кейс будує фейкова база з відповідями на кожну
   фазу) → остання — `command.depth` `{ reason: "phases" }`, транзакція
   відкочена; фази вхідного пакета в лік не входять; T0: `BATCH_MAX === 500`.
-- [ ] **Step 2–4:** red → implement → green; `pnpm typecheck`.
-- [ ] **Step 5: Commit** — `feat(server): межа кількості фаз ctx.run за BATCH_MAX`.
+- [x] **Step 2–4:** red → implement → green; `pnpm typecheck`.
+- [x] **Step 5: Commit** — `feat(server): межа кількості фаз ctx.run за BATCH_MAX`.
 
 ### Task 7: масиви ТЧ — `deleteIds`, хук бачить ТЧ цілком
 
@@ -241,7 +241,7 @@ phases of one batch and of `ctx.run` in one transaction); лічильник ф�
   (сувора схема відхиляє); `Draft` — без `deleteIds`.
 - T3: `runtime.run(session, input, options?: { fullTabularArrays?: true })` — сувора перевірка типова; опція її вимикає (Ф3).
 
-- [ ] **Step 1: Failing tests:**
+- [x] **Step 1: Failing tests:**
   - схема: `deleteIds` без відповідної ТЧ у `tabularSections`, дубль id,
     не-UUID, `deleteIds` у `create` — відмова зі шляхом;
   - сувора перевірка (типово і в `run`, і в `ctx.run`) — на початку фази, до
@@ -272,17 +272,17 @@ phases of one batch and of `ctx.run` in one transaction); лічильник ф�
   - MCP `data-command` кличе `run` без опції (сувора перевірка); опис інструмента
     (англійською): масив ТЧ — повна заміна; кожен наявний рядок — у масиві чи
     в `deleteIds`.
-- [ ] **Step 2: Run, expect FAIL** —
+- [x] **Step 2: Run, expect FAIL** —
   `pnpm --filter simetra test runtime-contracts runtime hooks values` і
   `pnpm --filter @simetrajs/designer test data-tools mcp`.
-- [ ] **Step 3: Implement** — одиниця `[CONTEXT, check]` іде через `tx.enqueue`
+- [x] **Step 3: Implement** — одиниця `[CONTEXT, check]` іде через `tx.enqueue`
   з фазою запису (бюджет і коди діють; оператор контексту — той самий текст,
   що в `callCore`, `phase.ts`); `deleteIds` до ядра не передається.
   Наявні unit- і DB-тести, що шлють масиви ТЧ в `update`, отримують у
   послідовності викликів оператор перевірки (чи називають рядки в масиві);
   поведінку їхніх асертів не міняти.
-- [ ] **Step 4: Run** — PASS; `pnpm typecheck`, `pnpm lint`.
-- [ ] **Step 5: Commit** — `feat(server): deleteIds для масиву ТЧ з MCP і ctx.run`.
+- [x] **Step 4: Run** — PASS; `pnpm typecheck`, `pnpm lint`.
+- [x] **Step 5: Commit** — `feat(server): deleteIds для масиву ТЧ з MCP і ctx.run`.
 
 ### Task 8: DB-кейси тайм-аутів, кодів і `deleteIds`
 
@@ -297,7 +297,7 @@ Modify `packages/designer/src/__tests__/support/db.ts` (спільний пом�
 `support/`, без зміни поведінки кейсів — пункт реєстру §7), `carrier-locks.db.test.ts` (кейс `UPDATE parent_id`),
 `command-runtime.db.test.ts` (`23514` у ТЧ), `data-tools.db.test.ts` (`deleteIds`).
 
-- [ ] **Step 1: Write DB tests** (рантайм над тінню, `fromPgPool` над
+- [x] **Step 1: Write DB tests** (рантайм над тінню, `fromPgPool` над
   справжнім `pg.Pool`; `commandBudgetMs`/`lockTimeoutMs` малі):
   1. «lock_timeout is command.busy»: інша сесія тримає замок рядка →
      `update` → `command.busy`;
@@ -331,9 +331,9 @@ Modify `packages/designer/src/__tests__/support/db.ts` (спільний пом�
      `check` з `<ТЧ>.<реквізит>`;
   8. `data-tools.db.test.ts`: `data-command` з масивом ТЧ без наявного рядка →
      `tabular-rows-missing`; з `deleteIds` → проходить.
-- [ ] **Step 2: Run** —
+- [x] **Step 2: Run** —
   `pnpm --filter @simetrajs/designer test:db command-time carrier-locks command-runtime data-tools read-query rights-maintenance rights-admin-commands` — PASS.
-- [ ] **Step 3: Mutation check (обов'язковий, без коміту):** прибрати слухача
+- [x] **Step 3: Mutation check (обов'язковий, без коміту):** прибрати слухача
   `error` у `fromPgPool` → кейс 3 червоніє (необроблена помилка); мапити
   `25P03` на `COMMIT` як `command.timeout` → unit задачі 4 червоніє; повернути
   в перевірку `FOR NO KEY UPDATE` (як у першій редакції плану) → кейс 5 на
@@ -341,7 +341,14 @@ Modify `packages/designer/src/__tests__/support/db.ts` (спільний пом�
   перевірку взагалі → кейс 5 червоніє;
   прибрати порівняння версії → кейс 5 дає `tabular-rows-missing` замість
   `command.conflict`. Повернути код.
-- [ ] **Step 4: Commit** — `test(designer): DB-кейси бюджету часу, кодів команди й deleteIds`.
+- [x] **Step 4: Commit** — `test(designer): DB-кейси бюджету часу, кодів команди й deleteIds`.
+
+**Примітка виконання.** Сценарій «порожнього успіху» на фікстурі не
+відтворився; мутація «повернути `FOR NO KEY UPDATE`» однаково червонить
+кейс 5 — через гонку. Кейс 7 живе в `command-time.db.test.ts`
+(`gaugeLineCheckLayer`), а не в `command-runtime.db.test.ts`. Кейс
+`carrier-locks` асертить сирий `55P03`; мапінг на `command.busy` доводить
+unit.
 
 ### Task 9: документація й гейти
 
@@ -359,8 +366,8 @@ Modify `packages/designer/src/__tests__/support/db.ts` (спільний пом�
 «ТЧ власника»; `deleteIds` у `data-command`), `docs/superpowers/plans/2026-10-30-archive-residual-debt.md`
 (прибрати три закриті пункти §7), `docs/ROADMAP.md` (рядок П4: B1b-3 виконано).
 
-- [ ] **Step 1:** правки рядок у рядок; `python3 scripts/check-doc-anchors.py`.
-- [ ] **Step 2: Гейти:**
+- [x] **Step 1:** правки рядок у рядок; `python3 scripts/check-doc-anchors.py`.
+- [x] **Step 2: Гейти:**
 
 ```bash
 pnpm format:check && pnpm lint && pnpm typecheck && pnpm test
@@ -369,7 +376,7 @@ pnpm test:db
 pnpm build:packages && pnpm test:packaging   # нова опція runtime.run і поле операції — публічний API
 ```
 
-- [ ] **Step 3: Commit** — `docs(spec): П4-B1b-3 — правки Додатку А, PostgreSQL ≥ 17, скіл`.
+- [x] **Step 3: Commit** — `docs(spec): П4-B1b-3 — правки Додатку А, PostgreSQL ≥ 17, скіл`.
 
 ## Готово (спека §13, рядок B1b-3)
 

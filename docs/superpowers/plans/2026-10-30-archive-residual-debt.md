@@ -338,14 +338,6 @@
 
 ## 7. Тести
 
-- **Блокування власника на зміні зв'язку рядка ТЧ.** Тригер носіїв читає
-  копію під `FOR SHARE` і на вставці, і на `UPDATE` рядка ТЧ, що змінює
-  зв'язок (`parent_id` чи скоуп), — `deriveFunction` у
-  `packages/simetra/src/compiler/rights/carrier-units.ts`. Мутаційна
-  перевірка показала: без `FOR SHARE` на зміні зв'язку всі тести зелені.
-  Кейс `packages/designer/src/__tests__/carrier-locks.db.test.ts` перевіряє
-  лише вставку. Додати кейс: `UPDATE` рядка ТЧ зі зміною `parent_id` чекає
-  на блокування нового власника (`55P03` під `lock_timeout`).
 - **Кроки даних і механіка платформи.** Правило спеки промоції §7.2 «кроки
   даних вимикають і тригери механіки, тож `version` і `updated_at` не
   змінюються» не перевіряє жоден тест. Тест — з першим кроком даних, що пише
@@ -372,14 +364,7 @@
   (`packages/simetra/test/db/`). Суміжні кандидати швидкодії DB-наборів —
   [борг П3-2b](2026-10-15-p3-2b-residual-debt.md) § 3. Рішення про
   виконання — окремо.
-- **`23514` у ТЧ наскрізь.** Мапінг `23514` на реквізит перевірено лише
-  для основної таблиці (`packages/simetra/src/server/__tests__/errors.test.ts`,
-  DB `packages/designer/src/__tests__/command-runtime.db.test.ts`); CHECK
-  реквізиту ТЧ (`<ТЧ>.<реквізит>`) наскрізь не перевірено.
-- **Спільний помічник утримання замка.** `heldEnv` у
-  `packages/designer/src/__tests__/command-runtime.db.test.ts` дублює
-  `heldTarget` з `packages/designer/src/__tests__/carrier-locks.db.test.ts`;
-  винести в `packages/designer/src/__tests__/support/`.
+
 ## 8. Designer
 
 - **Розмір `tools/list`.** JSON Schema входів MCP повторює схему мапінгу
