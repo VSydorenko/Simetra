@@ -299,13 +299,25 @@ describe("tier zones", () => {
       "../compiler/x",
       "../schema/x",
       "../model/x",
+      // `./` з виходом угору — той самий вихід з теки, що й `../model`:
+      // вбудував би другу копію T0 у `dist/server`.
+      "./../model/x",
+      "./a/../../model/x",
+      "./a/../b",
       "node:fs",
       "pg",
     ]) {
       const msgs = await ruleIds(importOf(spec), file)
       expect(msgs, spec).toContain("@typescript-eslint/no-restricted-imports")
     }
-    for (const spec of ["./x", "node:async_hooks", "zod", "simetra/model"]) {
+    for (const spec of [
+      "./x",
+      "./a/b",
+      "./x.js",
+      "node:async_hooks",
+      "zod",
+      "simetra/model",
+    ]) {
       expect(await purity(importOf(spec), file), spec).toEqual([])
     }
     expect(

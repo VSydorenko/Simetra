@@ -123,8 +123,10 @@ export const purityConfigs = [
           patterns: [
             DB_ENGINE_PATTERN,
             {
+              // `./` — лише без сегмента `..`: `./../model` чи `./a/../../model`
+              // виходять з теки так само, як `../model`.
               regex:
-                "^(?!\\./|zod(?:/|$)|simetra/model(?:/|$)|node:async_hooks$)",
+                "^(?!\\./(?!(?:.*/)?\\.\\.(?:/|$))|zod(?:/|$)|simetra/model(?:/|$)|node:async_hooks$)",
               message:
                 "T3 purity: src/server imports only ./…, simetra/model, zod and node:async_hooks (P4 A3 decision A3-10).",
             },
