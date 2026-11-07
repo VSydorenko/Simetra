@@ -110,7 +110,7 @@ function cardProjection(object: RuntimeObject): string {
   // аргументів `jsonb_build_object`.
   return text.length === 0
     ? "to_jsonb(t)::text"
-    : `(to_jsonb(t) || ${jsonbOf(text)})::text`
+    : `(to_jsonb(t) || ${jsonbBuildObject(text)})::text`
 }
 
 /**

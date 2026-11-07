@@ -87,6 +87,10 @@ describe("command core with more than 50 text columns", () => {
                   ])
                 )
               )
+              // Картка тієї самої ширини: будівник читання ріже приведення на
+              // ті самі шматки, інакше понад 100 аргументів.
+              const card = await rt.read(session, { object: GAUGE, id })
+              expect(card.rows[0]).toMatchObject(valuesOf(-2n * BIG))
             } finally {
               await pool.end()
             }
