@@ -8,6 +8,7 @@ import {
   type CompiledModel,
 } from "simetra/compiler"
 import {
+  objectColumns,
   runtimeCatalogSchema,
   standardElementId,
   type RuntimeCatalog,
@@ -338,6 +339,19 @@ describe("buildRuntimeCatalog", () => {
  * будівник читання робить `include` і корелює ТЧ з власником. FK скоупленої
  * таблиці на ціль того самого виду — складений `(скоуп, колонка)`.
  */
+describe("objectColumns of a compiled entry", () => {
+  it("a scoped catalog lists no column twice and reads key, version, scope and pair type", () => {
+    const { tabularSections, ...header } = objectColumns(objectOf("Ticket"))
+    const lists = [header, ...tabularSections.values()].flatMap((l) =>
+      Object.values(l)
+    )
+    for (const list of lists) expect(new Set(list).size).toBe(list.length)
+    expect(header.read).toEqual(
+      expect.arrayContaining(["id", "version", "org_id", "subject_type"])
+    )
+  })
+})
+
 describe("signalObject", () => {
   it.each<[string, boolean, ReadBoundary[], boolean]>([
     ["a single uuid key under the tenant boundary", true, ["tenant"], true],
