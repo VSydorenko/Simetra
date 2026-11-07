@@ -57,6 +57,9 @@ const FORBIDDEN: WireCommandError = {
 
 const guid = z.guid()
 
+// Ключ ТЧ логічного рядка (`encodeRow`).
+const SECTIONS = "tabularSections"
+
 // Будь-який виняток правила походження — відмова: `origin` без аргументу
 // (нетипізований виклик) чи ворожий об'єкт не мають пропустити запит.
 function originRefused(origin: RequestOrigin, request: unknown): boolean {
@@ -175,6 +178,25 @@ function entryOf(
 }
 
 /**
+ * Логічний рядок `run` без того, що відповідь однаково не несе (Рд26, Рд27):
+ * ТЧ і лінивих атрибутів. Кодувати їх — зайва робота, а відмова кодека в
+ * них зробила б уже закомічену команду `command.internal`. Що несе рядок
+ * `run`, визначає `fitRunResult`; тут лише не кодується відкинуте ним.
+ */
+function runHeader(
+  entry: CatalogEntry,
+  row: Record<string, unknown>
+): Record<string, unknown> {
+  const skip = new Set([
+    SECTIONS,
+    ...entry.attributes.filter((a) => a.load === "lazy").map((a) => a.name),
+  ])
+  return Object.fromEntries(
+    Object.entries(row).filter(([key]) => !skip.has(key))
+  )
+}
+
+/**
  * Creates the data handler of the transport (P4-B spec §4.5): checks the
  * request origin, the envelope, the session and the compatibility with the
  * runtime catalog, maps the wire form to the logical one, calls the runtime
@@ -196,12 +218,14 @@ export function createDataHandler(
   const serverHash = catalog.snapshotHash
   // Один індекс на життя обробника: звірка, мапінг і бюджет бачать той самий.
   const index = catalogIndex(catalog.objects)
-  const version: VersionValue = {
+  // Одне значення на всі відповіді `version`, тож заморожене: викликач у
+  // процесі, що змінив би його, інакше змінив би й наступні відповіді.
+  const version: VersionValue = Object.freeze({
     snapshotHash: serverHash,
-    objects: Object.fromEntries(
-      catalog.objects.map((o) => [o.id, o.kernelHash])
+    objects: Object.freeze(
+      Object.fromEntries(catalog.objects.map((o) => [o.id, o.kernelHash]))
     ),
-  }
+  })
   const sink = options.log ?? ((error: unknown) => console.error(error))
   const log = (error: unknown) => {
     try {
@@ -261,9 +285,10 @@ export function createDataHandler(
       request.batch === undefined ? logical[0]! : logical,
       { fullTabularArrays: true }
     )
-    const rows = result.rows.map((row, i) =>
-      encodeRow(entryOf(index, operations[i]?.object), row)
-    )
+    const rows = result.rows.map((row, i) => {
+      const entry = entryOf(index, operations[i]?.object)
+      return encodeRow(entry, runHeader(entry, row))
+    })
     const changes = mappedOrRefused(changesToWire(index, result.changes))
     if ("refused" in changes) throw new Defect(changes.refused)
     return {

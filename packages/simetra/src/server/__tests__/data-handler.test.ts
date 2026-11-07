@@ -579,6 +579,51 @@ describe("createDataHandler: steps 4–6", () => {
     expect(log).toHaveBeenCalledOnce()
   })
 
+  it("version is frozen: a caller that mutates it does not change later responses", async () => {
+    const { handle } = await harness()
+    const first = valueOf(
+      await handle(session, envelope({ type: "version" }), IN_PROCESS)
+    ) as { objects: Record<string, string> }
+    expect(Object.isFrozen(first)).toBe(true)
+    expect(Object.isFrozen(first.objects)).toBe(true)
+    const second = valueOf(
+      await handle(session, envelope({ type: "version" }), IN_PROCESS)
+    )
+    expect(second).toStrictEqual(first)
+  })
+
+  it("encodes only the header of a run row: a section line the codec refuses does not fail a committed run", async () => {
+    const { runtime } = await harness()
+    // Рядок, який рантайм повернув би після `COMMIT`, з рядком ТЧ, номер
+    // якого не ціле число: кодек його відхилив би (`WireEncodeError`).
+    const row = {
+      ref: ID,
+      version: 1,
+      code: "A",
+      tabularSections: { lines: [{ ref: OTHER, lineNumber: 1.5 }] },
+    }
+    const log = vi.fn()
+    const handle = createDataHandler(
+      {
+        ...runtime,
+        run: () => Promise.resolve({ rows: [row], changes: [] }),
+      },
+      { log }
+    )
+    const value = valueOf(
+      await handle(
+        session,
+        runOf({ action: "create", object: sample.id, id: ID }),
+        HTTP
+      )
+    )
+    expect(value).toStrictEqual({
+      rows: [{ id: ID, version: "1", code_col: "A" }],
+      changes: [],
+    })
+    expect(log).not.toHaveBeenCalled()
+  })
+
   it("logs to console.error by default", async () => {
     const { runtime } = await harness()
     const spy = vi.spyOn(console, "error").mockImplementation(() => undefined)
