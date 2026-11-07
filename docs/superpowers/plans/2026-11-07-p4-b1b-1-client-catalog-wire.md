@@ -95,7 +95,8 @@ rebase на `main`, `orient --plan` цього файла, звірка кожн
 
 **На погодження з цим планом** (з аудиту плану, див. «Відкриті питання»):
 В8 — `creatorMembership` у спільній частині запису кореня; В9 — невідома
-мітка перерахування чи цілі пари в рядку читання.
+мітка перерахування чи цілі пари в рядку читання; В10 — `object` на кожній
+помилці з `path` чи `attributes`.
 
 ## Review Focus
 
@@ -152,7 +153,8 @@ rebase на `main`, `orient --plan` цього файла, звірка кожн
 - Modify: `packages/simetra/src/model/runtime/catalog.ts`,
   `packages/simetra/src/model/runtime/values.ts`,
   `packages/simetra/src/compiler/runtime-catalog.ts`,
-  `packages/simetra/src/server/__tests__/fixtures.ts`
+  `packages/simetra/src/server/__tests__/fixtures.ts`,
+  `packages/simetra/src/server/__tests__/errors.test.ts` (ручні записи)
 - Create: `packages/simetra/src/model/runtime/__tests__/entries.ts`
 - Test: `packages/simetra/src/model/runtime/__tests__/catalog.test.ts`
   (наявний), `values.test.ts` (наявний),
@@ -179,7 +181,10 @@ rebase на `main`, `orient --plan` цього файла, звірка кожн
   - `values.ts`: `encodePair`, `encodeItemValue`, `encodeAttributes` і
     `scalar` приймають `CatalogAttribute` (вони читають лише спільні поля:
     `type`, `array`, `precision`, `scale`, `maxLength`, `enumValues`,
-    `pair`, `column`, `name`, `insert`, `update`).
+    `pair`, `column`, `name`, `insert`, `update`). `EncodeAttributesOptions`
+    — узагальнений за типом реквізиту (`allowed: (a: A) => boolean`), щоб
+    явні анотації `(a: RuntimeAttribute) => …` у викликачах компілювалися;
+    виклики — `rg -n "encodeAttributes" packages`.
 - Produces (T0 тести): `entries.ts` — `catalogAttribute(overrides)`,
   `catalogSection(overrides)`, `catalogObject(overrides)`,
   `runtimeObject(overrides)` зі стабільними типовими значеннями (довідник
@@ -208,7 +213,9 @@ rebase на `main`, `orient --plan` цього файла, звірка кожн
 - Modify: `packages/simetra/src/compiler/access-units.ts`,
   `packages/simetra/src/model/runtime/catalog.ts`,
   `packages/simetra/src/compiler/runtime-catalog.ts`,
-  `packages/simetra/src/model/runtime/__tests__/entries.ts`
+  `packages/simetra/src/model/runtime/__tests__/entries.ts`,
+  `packages/simetra/src/server/__tests__/fixtures.ts` і `errors.test.ts`
+  (нове обов'язкове поле)
 - Test: `packages/simetra/src/compiler/__tests__/access-units.test.ts`,
   `runtime-catalog.test.ts`
 
@@ -262,7 +269,9 @@ rebase на `main`, `orient --plan` цього файла, звірка кожн
 - Modify: `packages/simetra/src/model/runtime/catalog.ts`,
   `packages/simetra/src/compiler/runtime-catalog.ts`,
   `packages/simetra/src/compiler/index.ts`,
-  `packages/simetra/src/model/runtime/__tests__/entries.ts`
+  `packages/simetra/src/model/runtime/__tests__/entries.ts`,
+  `packages/simetra/src/server/__tests__/fixtures.ts` і `errors.test.ts`
+  (нове обов'язкове поле)
 - Test: `packages/simetra/src/compiler/__tests__/runtime-catalog.test.ts`
 
 **Interfaces:**
@@ -273,7 +282,10 @@ rebase на `main`, `orient --plan` цього файла, звірка кожн
   `catalogObjectSchema.creatorMembership?: z.guid()` — UUID довідника
   членства кореня виду скоупу з творцем (те саме, що
   `operations.create.root.membership`): клієнт мапить `creatorMember` записом
-  цього довідника без `operations` (В8, на погодження).
+  цього довідника без `operations` (В8, на погодження). `superRefine`
+  `runtimeObjectSchema`: `creatorMembership` = `operations.create.root.membership`;
+  `clientCatalogSchema` (задача 5): ціль `creatorMembership` — серед
+  `objects`.
 
 - [ ] **Step 1: тести** (`describe("kernelHash")`):
   - `kernelHash` кожного запису = `kernelHashOf(entry.operations)`;
@@ -326,7 +338,9 @@ function objectColumns(entry: CatalogObject): ObjectColumns
     `parent`, `lineNumber`, колонки реквізитів; `lazy` — `[]`;
   - **без дублів, порядок — перше входження**: скоуп скоупленого довідника
     є й реквізитом, а в кореня `scopeColumn` = `key`.
-  Функція чиста й читає лише спільну частину.
+  Функція чиста й читає лише спільну частину. Локальна `objectColumns` у
+  `server/read.ts` (B1a) має інше призначення: якщо імпорт T0 з'являється в
+  тому самому модулі, локальну перейменувати на `listColumns`.
 
 - [ ] **Step 1: тести.** `columns.test.ts` (будівник `entries.ts`):
   `toEqual` переліків довідника з парою, лінивим полем і ТЧ; `it.each`
@@ -422,6 +436,12 @@ function objectColumns(entry: CatalogObject): ObjectColumns
     погодження; типово — поле відсутнє, як колонка поза каталогом).
     Значення не того типу (не рядок цілого для `BigInt`) — `WireDecodeError`
     з фізичною колонкою.
+  - `Raw` (копії носія прав, напр. `copy_id`) — і `encodeRow`, і
+    `decodeRow` передають значення як є, без `encodeItemValue`: `scalar`
+    відхиляє `Raw` як вхід команди, а читання їх віддає.
+  - Значення бази, яких `encodeItemValue` не приймає (`infinity` для
+    `Date`/`DateTime`, `NaN` для `Numeric`), — `WireEncodeError`; записати
+    це в JSDoc `encodeRow`.
 
 - [ ] **Step 1: тести.** `wire.test.ts` (будівник `entries.ts`): таблиця
   `it.each` з `LOGICAL_TYPES` (`model/schemas/value-type.ts`) плюс `Raw`,
@@ -456,9 +476,13 @@ function objectColumns(entry: CatalogObject): ObjectColumns
   `server/values.ts`, `server/errors.ts`, `server/read.ts` і
   `hook-context.ts`): сегменти через крапку; мапиться за правилами нижче,
   решта сегментів — без змін:
-  - `<ТЧ>[.<i>[.<реквізит ТЧ>]]` ↔ `<UUID ТЧ>[.<i>[.<колонка>]]` — `<i>`
-    (ціле) без змін;
-  - `creatorMember[.<реквізит довідника членства>]` ↔
+  - ТЧ: `<ТЧ>[.<i>][.<реквізит ТЧ | keyName ТЧ>[.<j>]]` ↔
+    `<UUID ТЧ>[.<i>][.<колонка>[.<j>]]`; сегмент лише з цифр — індекс (без
+    змін), інакше ім'я. Так покрито `<ТЧ>`, `<ТЧ>.<i>`, `<ТЧ>.<i>.<реквізит>`,
+    `<ТЧ>.<i>.<реквізит>.<j>` (масив), `<ТЧ>.<i>.<keyName ТЧ>` з
+    `server/values.ts` і `<ТЧ>.<реквізит>` без індексу з `server/errors.ts`
+    (`tablesOf` дає префікс `<ТЧ>.`);
+  - `creatorMember[.<реквізит | keyName довідника членства>]` ↔
     `creatorMember[.<колонка>]` — записом з `creatorMembership`;
   - `<реквізит шапки>[.<i>]`, `keyName`, `versionName` ↔ колонка;
   - структурні сегменти (`values`, `id`, `object`, `orderBy`, `filter`,
@@ -466,7 +490,9 @@ function objectColumns(entry: CatalogObject): ObjectColumns
     іменем каталогу, — без змін.
   - Правило неоднозначності: перший сегмент спершу шукається серед ТЧ, далі
     `creatorMember`, далі серед реквізитів, ключа й версії; збіг з іменем
-    каталогу виграє в структурного слова.
+    каталогу виграє в структурного слова. Імена ТЧ і реквізитів шапки —
+    один простір імен об'єкта (виконавець звіряє це з правилом унікальності
+    імен T0; якщо простори різні — повідомлення архітекторці).
   - `pathToWire(index, objectId, path): string`,
     `pathFromWire(index, objectId, path): string` — завжди повертають шлях
     (помилка не губиться через мапінг).
@@ -491,18 +517,23 @@ function objectColumns(entry: CatalogObject): ObjectColumns
   - `operationToWire(index, op: Operation): Mapped<WireOperation>` (T4):
     невідоме логічне ім'я — `unknown` (помилка входу T4); значення —
     через `encodeItemValue`, його відмова — `{ ok: false, invalid }` з
-    логічним `path` (гілка `invalid` буває лише на T4: `*FromWire` її не
-    повертає).
+    логічним `path`.
   - `operationFromWire(index, wire: WireOperation): Mapped<Operation>`
     (сервер): невідома фізична колонка в `values`, рядку ТЧ чи
     `creatorMember`, невідомий UUID ТЧ — `unknown` (не ігнорується);
-    значення перекладаються **м'яко**: мітка перерахування → ім'я, пара з
-    двох колонок → `{ type, id }`, коли мітку знає каталог; інакше значення
-    передається як є, і його відхиляє валідація `runtime.run`
-    (`command.invalid` з логічним `path`). `operationFromWire` не кидає.
+    значення, що потребують перекладу, перекладаються суворо: мітка
+    перерахування → ім'я, пара з двох колонок → `{ type, id }`; невідома
+    мітка (зокрема логічне ім'я замість мітки) — `{ ok: false, invalid }` з
+    логічним `path`. Решта значень (`BigInt` текстом, `Numeric`, дати,
+    `Json`, `Raw`) передається як є, і її валідує `runtime.run`
+    (`parseInput` у `server/phase.ts` → `command.invalid`).
+    `operationFromWire` не кидає.
   - `errorToWire(index, error: CommandError): WireCommandError` і
-    `errorFromWire(index, error: WireCommandError): CommandError` — через
-    `path.ts`; `attributes` — за правилом `wireCommandErrorSchema`.
+    `errorFromWire(index, error: WireCommandError): CommandError` — `path` і
+    `attributes` мапляться записом `error.object` через `path.ts`; помилка
+    без `object` мапить лише `object`-незалежні поля, а `path` і `attributes`
+    лишає без змін (В10: T3 ставить `object` на кожну помилку з `path` чи
+    `attributes` — на погодження, виконання в B1b-2).
   - `changesToWire` / `changesFromWire` — над `object` (`Change` з
     `result.ts`; решта полів без змін).
 
@@ -514,11 +545,13 @@ function objectColumns(entry: CatalogObject): ObjectColumns
   туди й назад; `creatorMember` кореня мапиться записом довідника членства
   **клієнтського** каталогу; масив ТЧ з двома рядками; `errorToWire` /
   `errorFromWire` для `command.constraint` з `attributes` шапки, пари й ТЧ і
-  `path` ТЧ; набір змін; невідомий UUID об'єкта, невідомий UUID ТЧ, невідома
+  `path` ТЧ (`<ТЧ>.<реквізит>` без індексу), помилка без `object` — `path`
+  без змін; набір змін; невідомий UUID об'єкта, невідомий UUID ТЧ, невідома
   колонка, невідоме логічне ім'я — `unknown` з UUID об'єкта; ворожі імена
   (`__proto__`, `constructor`, `a.b`, `"x`) — `unknown`, прототип не змінено;
-  `BigInt: "abc"` і невідома мітка перерахування в `operationFromWire` —
-  `ok`, значення як є; `operationToWire` з `BigInt` не тим типом —
+  `BigInt: "abc"` в `operationFromWire` — `ok`, значення як є; невідома
+  мітка перерахування й логічне ім'я значення замість мітки — `invalid` з
+  логічним `path`; `operationToWire` з `BigInt` не тим типом —
   `invalid` з логічним `path`. `envelope.test.ts`: `wireOperationSchema`
   відхиляє `object`, що не UUID; таблиця схем помилки й змін.
   `wire-catalog.test.ts`: операція й помилка над скомпільованим каталогом —
@@ -546,8 +579,12 @@ function objectColumns(entry: CatalogObject): ObjectColumns
     `{ rows, ownerVersion }`, `{ count, capped? }`;
   - `readQueryToWire(index, query: ReadQuery): Mapped<WireReadQuery>`,
     `readQueryFromWire(index, wire): Mapped<ReadQuery>` — невідома колонка
-    фільтра, сортування, `include` чи UUID ТЧ — `unknown`; значення
-    фільтра перекладаються м'яко, як в операції;
+    фільтра, сортування, `include` чи UUID ТЧ — `unknown`. Форми значень
+    умови фільтра в передачі: версія — рядок цілого (логічна — `number`,
+    `read-filter.ts` вимагає безпечне ціле); перерахування — мітка; пара —
+    умова над `column` пари зі значенням `{ type: <мітка цілі>, id }`
+    (логічна — `{ type: "<Kind>.<Name>", id }`); `BigInt` — рядок; решта —
+    як є. Невідома мітка — `invalid` з логічним `path`, як в операції;
   - `readResultToWire(index, query, result: ReadResult): WireReadResult`
     (сервер, `encodeRow`), `readResultFromWire(index, query, wire): ReadResult`
     (клієнт, `decodeRow`).
@@ -676,7 +713,8 @@ interface SignalTransport {
   `stale-client`, межі й бюджет відповіді — B1b-2.
 - Бюджет часу, коди команди, масиви ТЧ і `deleteIds` — B1b-3.
 - Контракт прав у клієнтському каталозі — B6.
-- Переведення декодера T3 (`server/decode.ts`) на кодек T0 — питання 3 нижче.
+- Переведення декодера T3 (`server/decode.ts`) на кодек T0 — питання 4 нижче.
+- `object` на кожній помилці T3 — питання 2 (В10) нижче.
 
 ## Відкриті питання до архітекторки
 
@@ -687,13 +725,21 @@ interface SignalTransport {
    (§4.0, §12 — «над спільною частиною записів обох каталогів»). Пропоную
    поле `creatorMembership?: <UUID довідника>` у спільній частині (не
    секрет). Вплив на спеку: §3, вміст клієнтського каталогу — одне слово.
-2. **В9. Невідома мітка перерахування чи цілі пари в рядку читання.**
+2. **В10. `object` на кожній помилці з `path` чи `attributes`.** Мапінг
+   `path` і `attributes` потребує об'єкта, а T3 ставить `object` лише в
+   частині помилок (`rlsOf`, `hook-context`, членство в `phase.ts`); у
+   пакеті операцій без нього не видно, яка операція відмовила. Пропоную:
+   T3 ставить `object` (і для пакета — об'єкт операції, що відмовила) на
+   кожну помилку з `path` чи `attributes`; виконання — у B1b-2 разом з
+   обробником, B1b-1 лише мапить `error.object`. Вплив на спеку: §6.10 П4
+   (через Додаток А, блок B1b-2), §4.0 — рядок «Поля помилки».
+3. **В9. Невідома мітка перерахування чи цілі пари в рядку читання.**
    Нове значення перерахування чи нова ціль пари на сервері — це розширення,
    про яке спека мовчить; `WireDecodeError` зламав би читання старої
    вкладки. Пропоную: `decodeRow` пропускає поле (як колонку поза
    каталогом), стара вкладка бачить реквізит порожнім до перезавантаження.
    Вплив на спеку: §4.4 — речення поруч із «Сумісність із розширенням».
-3. **Один декодер на сервері.** `server/decode.ts` (T3) декодує jsonb рядка
+4. **Один декодер на сервері.** `server/decode.ts` (T3) декодує jsonb рядка
    бази з фізичними ключами — по суті ту саму форму, що `decodeRow` T0.
    Пропоную у B1b-2 (де обробник складає декодування й кодування) перевести
    T3 на `decodeRow` T0, щоб семантика значень (зокрема `DateTime`
