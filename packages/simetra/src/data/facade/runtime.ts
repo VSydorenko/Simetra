@@ -35,8 +35,14 @@ export interface DataRuntimeOptions {
 
 // Відмова рантайму після звичайного `dispose()` (вихід, зміна користувача з
 // боку host-а): сесії рантайму вже немає, а проміс викликача мусить
-// завершитися, а не висіти.
-const DISPOSED: CommandError = { code: "command.unavailable" }
+// завершитися, а не висіти. Окрема причина, бо write-back і перечитування
+// B3-3 мусять відрізнити «рантайм закрито — нічого не робити» від «сервер
+// недоступний — перечитати»: без неї таблиця §7.3 перечитувала б після
+// `dispose()`.
+const DISPOSED: CommandError = {
+  code: "command.unavailable",
+  reason: LIMIT_REASONS.disposed,
+}
 
 const isSessionChanged = (response: DataResponse) =>
   !response.ok &&

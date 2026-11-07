@@ -18,6 +18,11 @@ import {
 } from "./support"
 
 const ID = "11111111-1111-4111-8111-111111111111"
+const DISPOSED = { code: "command.unavailable", reason: "disposed" }
+const SESSION_CHANGED = {
+  code: "command.unauthenticated",
+  reason: "session-changed",
+}
 
 const card = (id = ID): DataRequest["request"] => ({
   type: "read",
@@ -161,6 +166,21 @@ describe("runtime transport wrapper", () => {
       respond(ok({ rows: [{ id: ID }] }))
       expect((await failureOf(second)).reason).toBe("session-changed")
     })
+
+    it("refuses a new request with session-changed without the transport", async () => {
+      const { transport, calls, respond } = controlledTransport()
+      const runtime = createDataRuntime({
+        catalog: clientCatalog(),
+        transport,
+        subject: SUBJECT,
+      })
+      const { send } = facadeOf(runtime)
+      const first = send(card())
+      respond(sessionChanged())
+      await failureOf(first)
+      expect(await failureOf(send(card()))).toEqual(SESSION_CHANGED)
+      expect(calls).toHaveLength(1)
+    })
   })
 
   describe("dispose()", () => {
@@ -187,7 +207,7 @@ describe("runtime transport wrapper", () => {
         subject: SUBJECT,
       })
       runtime.dispose()
-      await failureOf(facadeOf(runtime).send(card()))
+      expect(await failureOf(facadeOf(runtime).send(card()))).toEqual(DISPOSED)
       expect(calls).toHaveLength(0)
     })
 
@@ -201,7 +221,7 @@ describe("runtime transport wrapper", () => {
       const pending = facadeOf(runtime).send(card())
       runtime.dispose()
       respond(ok({ rows: [{ id: ID }] }))
-      await failureOf(pending)
+      expect(await failureOf(pending)).toEqual(DISPOSED)
     })
 
     it("rejects an in-flight request whose transport fails after it", async () => {
@@ -214,7 +234,7 @@ describe("runtime transport wrapper", () => {
       const request = facadeOf(runtime).send(card())
       runtime.dispose()
       pending[0]!.fail(new TypeError("network"))
-      await failureOf(request)
+      expect(await failureOf(request)).toEqual(DISPOSED)
     })
 
     it("does not call onSessionChanged for a session-changed after it", async () => {
@@ -229,7 +249,7 @@ describe("runtime transport wrapper", () => {
       const request = facadeOf(runtime).send(card())
       runtime.dispose()
       respond(sessionChanged())
-      await failureOf(request)
+      expect(await failureOf(request)).toEqual(DISPOSED)
       expect(onSessionChanged).not.toHaveBeenCalled()
     })
   })

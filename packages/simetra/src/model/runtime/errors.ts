@@ -43,6 +43,8 @@ export const LIMIT_REASONS = {
   sessionChanged: "session-changed",
   /** A request from an origin the handler does not accept. */
   origin: "origin",
+  /** A client request after its data runtime was disposed (`command.unavailable`). */
+  disposed: "disposed",
 } as const
 
 /**
