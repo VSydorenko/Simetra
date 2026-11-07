@@ -631,6 +631,16 @@ B1a (`git show c99068f1 --stat`).
   - DB-тест: `afterAll` може сховати помилку `beforeAll` (той самий шаблон,
     що в сусідніх тестах).
 
+- Фінальне рев'ю (правки архітекторки погоджено): F1 — вхід `DateTime`
+  команди перевіряється правилом дроту (`normalDateTime`, роки 1–9999 в
+  UTC), `e007b89a`; F2 — `maxBytes` міряє форму передачі (`Numeric`
+  доповнений до масштабу типу, `DateTime` фіксованої ширини), `ee129f8e`;
+  F3 — шлях відмови схеми операції без `tabularSections` і без індексу
+  пакета в обох шарах (`operationRefusalPath`), `db0c77f4`; F4 і F5 —
+  правки спек П4-B (§4.0, §4.4, Рд26, Додаток А) і П4 (§6.3, «Звірка
+  хешу»), коментар `DATE_TIME_BYTES` — коміт
+  `docs(spec): П4-B1b-2 — правки фінального рев'ю`.
+
 **Що лишилось:** гейти задачі 13 (`pnpm format:check && pnpm lint &&
 pnpm typecheck && pnpm test`, `pnpm metadata:check`, один повний
 `pnpm test:db`) і PR у `main`.
