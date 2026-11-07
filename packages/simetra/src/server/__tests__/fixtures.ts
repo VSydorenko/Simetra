@@ -48,6 +48,10 @@ export const SUBJECT = attr("subject", "Ref", {
   },
 })
 
+// Хеш виводиться з тих самих `operations`, що несе запис: зміна однієї без
+// іншої не розводить їх мовчки.
+const sampleOperations: RuntimeObject["operations"] = {}
+
 export const sample: RuntimeObject = runtimeObjectSchema.parse({
   id: "00000000-0000-4000-8000-000000000001",
   name: "Sample",
@@ -58,7 +62,7 @@ export const sample: RuntimeObject = runtimeObjectSchema.parse({
   keyName: "ref",
   versionColumn: "version",
   versionName: "version",
-  kernelHash: kernelHashOf({}),
+  kernelHash: kernelHashOf(sampleOperations),
   signal: true,
   attributes: [
     attr("code", "String", { maxLength: 3 }),
@@ -115,7 +119,7 @@ export const sample: RuntimeObject = runtimeObjectSchema.parse({
       ],
     },
   ],
-  operations: {},
+  operations: sampleOperations,
   constraints: [],
 })
 

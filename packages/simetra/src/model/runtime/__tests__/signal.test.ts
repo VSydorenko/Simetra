@@ -64,6 +64,7 @@ describe("channel topics", () => {
       `simetra-rights:${KIND}:${SCOPE}:${OBJECT}`,
     ],
     ["a user topic with a name", "simetra-user:alice"],
+    ["a user topic with an extra segment", `simetra-user:${USER}:${USER}`],
   ])("refuses %s", (_name, topic) => {
     expect(parseTopic(topic)).toBeUndefined()
   })

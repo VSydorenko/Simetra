@@ -67,6 +67,17 @@ const keysOf = (value: unknown): string[] =>
       ? Object.entries(value).flatMap(([key, v]) => [key, ...keysOf(v)])
       : []
 
+const withoutServerOnly = (value: unknown): unknown =>
+  Array.isArray(value)
+    ? value.map(withoutServerOnly)
+    : typeof value === "object" && value !== null
+      ? Object.fromEntries(
+          Object.entries(value)
+            .filter(([key]) => !SERVER_ONLY.includes(key))
+            .map(([key, v]) => [key, withoutServerOnly(v)])
+        )
+      : value
+
 describe("buildClientCatalog", () => {
   it("passes the T0 schema and keeps the runtime provider and hash", () => {
     clients.forEach((client, index) => {
@@ -98,55 +109,28 @@ describe("buildClientCatalog", () => {
     expect(SERVER_ONLY.filter((key) => keys.has(key))).toEqual([])
   })
 
-  it("every entry carries kind, kindLabel, kernelHash and signal", () => {
-    clients
-      .flatMap((c) => c.objects)
-      .forEach((entry) => {
-        expect(entry.kind, entry.name).toBeTypeOf("string")
-        expect(entry.kindLabel, entry.name).toBeTypeOf("string")
-        expect(entry.kernelHash, entry.name).toMatch(/^[0-9a-f]{64}$/)
-        expect(entry.signal, entry.name).toBeTypeOf("boolean")
-      })
-  })
-
-  it("keeps ref with constraint, load, parentConstraint, section id and creatorMembership", () => {
-    const pairs = clients.flatMap((client, index) =>
-      client.objects.map((entry) => ({
-        entry,
-        runtime: runtimes[index]!.objects.find((o) => o.id === entry.id)!,
-      }))
-    )
-    const attributes = pairs.flatMap(({ entry, runtime }) => [
-      ...entry.attributes.map((a, i) => [a, runtime.attributes[i]!] as const),
-      ...entry.tabularSections.flatMap((s, si) =>
-        s.attributes.map(
-          (a, i) => [a, runtime.tabularSections[si]!.attributes[i]!] as const
+  // Структурна рівність, а не перевірка форми: проєкція не сміє ні
+  // загубити спільне поле, ні підмінити його значення.
+  it("each entry equals its runtime entry without the server-only keys", () => {
+    // Домени несуть кожне необов'язкове поле — інакше рівність мовчки
+    // пройшла б і на проєкції, що його губить.
+    const keys = new Set(clients.flatMap(keysOf))
+    expect(
+      [
+        "ref",
+        "load",
+        "parentConstraint",
+        "creatorMembership",
+        "scopeKindId",
+      ].filter((key) => !keys.has(key))
+    ).toEqual([])
+    clients.forEach((client, index) => {
+      client.objects.forEach((entry, i) => {
+        expect(entry, entry.name).toEqual(
+          withoutServerOnly(runtimes[index]!.objects[i]!)
         )
-      ),
-    ])
-    const refs = attributes.filter(([, r]) => r.ref !== undefined)
-    expect(refs.length).toBeGreaterThan(0)
-    refs.forEach(([a, r]) => expect(a.ref).toEqual(r.ref))
-    const lazy = attributes.filter(([, r]) => r.load === "lazy")
-    expect(lazy.length).toBeGreaterThan(0)
-    lazy.forEach(([a]) => expect(a.load).toBe("lazy"))
-
-    const sections = pairs.flatMap(({ entry, runtime }) =>
-      entry.tabularSections.map((s, i) => [s, runtime.tabularSections[i]!])
-    )
-    expect(sections.length).toBeGreaterThan(0)
-    sections.forEach(([s, r]) => {
-      expect(s!.id).toBe(r!.id)
-      expect(s!.parentConstraint).toBe(r!.parentConstraint)
+      })
     })
-
-    const creators = pairs.filter(
-      ({ runtime }) => runtime.creatorMembership !== undefined
-    )
-    expect(creators.length).toBeGreaterThan(0)
-    creators.forEach(({ entry, runtime }) =>
-      expect(entry.creatorMembership).toBe(runtime.creatorMembership)
-    )
   })
 
   // Сервер і клієнт виводять переліки колонок однією функцією T0 (рішення
