@@ -325,6 +325,12 @@ export interface ReadRows {
   included?: Record<string, Record<string, unknown>[]>
   /** The owner version read by the same statement as the tabular rows. */
   ownerVersion?: number
+  /**
+   * The page was cut by the response budget: more rows exist. Only a page can
+   * carry it, and only through the data handler's response budget — the
+   * server read engine itself never sets it.
+   */
+  more?: true
 }
 
 /** A count under RLS; `capped` — there are more than {@link READ_COUNT_CAP}. */

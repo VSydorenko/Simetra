@@ -963,6 +963,12 @@ describe("readResultToWire / readResultFromWire", () => {
       { rows: [line] },
       { rows: [wireLine] },
     ],
+    [
+      "a page cut by the response budget",
+      list,
+      { rows: [row], more: true },
+      { rows: [wireRow], more: true },
+    ],
     ["a count", { object: TASK, count: true }, { count: 5 }, { count: 5 }],
     [
       "a capped section count",
@@ -973,6 +979,12 @@ describe("readResultToWire / readResultFromWire", () => {
   ])("maps %s both ways", (_, query, logical, wire) => {
     expect(readResultToWire(readIndex, query, logical)).toEqual(wire)
     expect(readResultFromWire(readIndex, query, wire)).toEqual(logical)
+  })
+
+  it("decodes a complete page without a more key", () => {
+    expect(
+      readResultFromWire(readIndex, list, { rows: [wireRow] })
+    ).toStrictEqual({ rows: [row] })
   })
 
   // Рядок рантайму може нести момент у формі входу (дріб і зсув): дріт однаковий

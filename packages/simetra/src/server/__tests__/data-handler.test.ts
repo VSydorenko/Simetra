@@ -6,6 +6,7 @@ import {
   dataResponseSchema,
   runtimeCatalogSchema,
   versionValueSchema,
+  wireReadResultSchema,
   type DataResponse,
   type ObjectModule,
   type RuntimeCatalog,
@@ -406,6 +407,73 @@ describe("createDataHandler: steps 4–6", () => {
       rows: [{ id: ID, version: "2", code: "R" }],
     })
     expect(calls).toStrictEqual({ run: 0, read: 1 })
+  })
+
+  // Рядки по ~1,5 МіБ: два вміщуються в бюджет відповіді, три — ні.
+  const bigRegionRows =
+    (n: number): Override =>
+    (text) =>
+      text.includes('"public"."region" t')
+        ? {
+            rows: Array.from({ length: n }, (_, i) => ({
+              row: JSON.stringify({
+                id: `00000000-0000-4000-8000-${String(i + 1).padStart(12, "0")}`,
+                version: 1,
+                code: "x".repeat(1_500_000),
+              }),
+            })),
+          }
+        : undefined
+
+  it("a page over the response budget is a strict prefix with more", async () => {
+    const { handle } = await harness(bigRegionRows(3))
+    const value = wireReadResultSchema.parse(
+      valueOf(await handle(session, readOf({}), IN_PROCESS))
+    )
+    if (!("rows" in value)) throw new Error("expected rows")
+    expect(value.more).toBe(true)
+    expect(value.rows.length).toBeGreaterThan(0)
+    expect(value.rows.length).toBeLessThan(3)
+  })
+
+  it("a key read over the response budget is response-too-large with serverHash", async () => {
+    const { handle } = await harness(bigRegionRows(3))
+    const ids = [1, 2, 3].map(
+      (i) => `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`
+    )
+    const response = await handle(
+      session,
+      readOf({ where: { attribute: "id", op: "in", value: ids } }),
+      IN_PROCESS
+    )
+    expect(errorOf(response)).toMatchObject({
+      code: "command.invalid",
+      reason: LIMIT_REASONS.responseTooLarge,
+    })
+    expect(response.serverHash).toBe(HASH)
+  })
+
+  it("a run result over the response budget has changes and no rows", async () => {
+    const { handle } = await harness((text) =>
+      text.endsWith("AS r")
+        ? {
+            rows: [
+              {
+                r: JSON.stringify({
+                  id: ID,
+                  version: 1,
+                  code: "A",
+                  company_id: COMPANY,
+                  extra: "x".repeat(5 * 1024 * 1024),
+                }),
+              },
+            ],
+          }
+        : undefined
+    )
+    const value = valueOf(await handle(session, runOf(createClient), HTTP))
+    expect(value).not.toHaveProperty("rows")
+    expect(value).toHaveProperty("changes")
   })
 
   it("run returns wire rows and changes; the call is fullTabularArrays", async () => {

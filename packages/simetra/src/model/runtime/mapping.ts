@@ -862,6 +862,9 @@ export function readResultToWire(
     }
     out.ownerVersion = String(result.ownerVersion)
   }
+  // Сервер ставить `more` на дроті сам (fitResponse), тож логічне поле тут
+  // недосяжне на сервері; проходить лише для симетрії з декодером.
+  if (result.more !== undefined) out.more = true
   return out
 }
 
@@ -912,5 +915,7 @@ export function readResultFromWire(
     }
     out.ownerVersion = number
   }
+  // Без цього обрізана за бюджетом сторінка на клієнті виглядала б повною.
+  if (wire.more !== undefined) out.more = true
   return out
 }
