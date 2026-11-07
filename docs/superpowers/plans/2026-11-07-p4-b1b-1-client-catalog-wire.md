@@ -1,7 +1,7 @@
 # П4-B1b-1 — каталог клієнта, мапінг і форма передачі: план реалізації
 
-> **Статус:** прийнято архітекторкою П4-B 2026-11-07. Виконання — на новій
-> гілці від `main` після мерджу B1a. Підсумок аудиту — наприкінці файла.
+> **Статус:** виконано; PR — на рев'ю архітекторки. Підсумки аудиту й
+> виконання — наприкінці файла.
 >
 > **For agentic workers:** REQUIRED SUB-SKILL: Use
 > superpowers:subagent-driven-development (recommended) or
@@ -202,7 +202,7 @@ rebase на `main`, `orient --plan` цього файла, звірка кожн
   зі скоупом, пара, перерахування, лінивий `Text`, ТЧ з двома реквізитами).
   Задачі 2–11 доповнюють їх лише перевизначеннями.
 
-- [ ] **Step 1: тести.** `element-id.test.ts` (T0): `it.each` —
+- [x] **Step 1: тести.** `element-id.test.ts` (T0): `it.each` —
   `standardElementId(uuid, { logicalName: "delta" })` проходить
   `elementIdSchema`; UUID проходить; `не-uuid#delta`, `<uuid>#`,
   `<uuid>#a.b`, `<uuid>#a#b`, порожній рядок — відмова. `catalog.test.ts`:
@@ -212,15 +212,15 @@ rebase на `main`, `orient --plan` цього файла, звірка кожн
   `runtime-catalog.test.ts`: `it("a tabular section carries its UUID")` —
   `id` кожної ТЧ дорівнює `origin.tabularSectionId` її фізичної таблиці в
   `model.physical`, зокрема синтетичний id дельти «Ролей».
-- [ ] **Step 2:** `pnpm --filter simetra test catalog` — червоні.
-- [ ] **Step 3:** розділити схеми; у `runtimeObject` (`runtime-catalog.ts`)
+- [x] **Step 2:** `pnpm --filter simetra test catalog` — червоні.
+- [x] **Step 3:** розділити схеми; у `runtimeObject` (`runtime-catalog.ts`)
   — `id: section.table.origin.tabularSectionId` через наявний `must`;
   перетипізувати `values.ts`; доповнити ручні записи
   `server/__tests__/fixtures.ts` і `values.test.ts` (там, де вони не на
   будівнику, — перевести на `entries.ts`).
-- [ ] **Step 4:** `pnpm --filter simetra test` і
+- [x] **Step 4:** `pnpm --filter simetra test` і
   `pnpm --filter simetra typecheck` — зелені.
-- [ ] **Step 5: коміт** `feat(model): спільна частина запису каталогу й id ТЧ`.
+- [x] **Step 5: коміт** `feat(model): спільна частина запису каталогу й id ТЧ`.
 
 ### Задача 2: межі читання й ознака `signal`
 
@@ -253,7 +253,7 @@ rebase на `main`, `orient --plan` цього файла, звірка кожн
     — `false`: без політик межу читання не доведено.
 - Produces (T0): `catalogEntrySchema.signal: z.boolean()`.
 
-- [ ] **Step 1: тести.** `access-units.test.ts`: `it.each` над
+- [x] **Step 1: тести.** `access-units.test.ts`: `it.each` над
   `readBoundaries` — скоуплена без `publicRead` → `["tenant"]`; скоуплена з
   `publicRead` → `[]`; нескоуплена → `[]`; «Користувачі» з видимими
   користувачами → `["users"]`, без них → `[]`. Наявні тести дерева SQL
@@ -267,16 +267,16 @@ rebase на `main`, `orient --plan` цього файла, звірка кожн
   `signal: false`, скоуплений довідник — `true`; корінь виду скоупу
   (`rootCreationDomain()`) — `true`; запис без `operations` — за тим самим
   правилом.
-- [ ] **Step 2:** `pnpm --filter simetra test access-units` і
+- [x] **Step 2:** `pnpm --filter simetra test access-units` і
   `pnpm --filter simetra test runtime-catalog` — нові кейси червоні.
-- [ ] **Step 3:** винести `readBoundaries`, перевести `buildAccessUnits` на
+- [x] **Step 3:** винести `readBoundaries`, перевести `buildAccessUnits` на
   нього; `isSignalObject` і поле `signal` у `runtimeObject`. Коментар
   «чому»: те саме рішення пише виклик сигналу в ядрі (B2), тож джерело
   одне (§8.3).
-- [ ] **Step 4:** `pnpm --filter simetra test` — увесь unit-набір зелений.
-- [ ] **Step 5:** мутація — `signalObject` повертає `keyIsSingleUuid`:
+- [x] **Step 4:** `pnpm --filter simetra test` — увесь unit-набір зелений.
+- [x] **Step 5:** мутація — `signalObject` повертає `keyIsSingleUuid`:
   червоніє кейс `Users`; відкотити.
-- [ ] **Step 6: коміт** `feat(compiler): межі читання одним джерелом і ознака signal запису каталогу`.
+- [x] **Step 6: коміт** `feat(compiler): межі читання одним джерелом і ознака signal запису каталогу`.
 
 ### Задача 3: `kernelHash` і `creatorMembership`
 
@@ -302,7 +302,7 @@ rebase на `main`, `orient --plan` цього файла, звірка кожн
   `clientCatalogSchema` (задача 5): ціль `creatorMembership` — серед
   `objects`.
 
-- [ ] **Step 1: тести** (`describe("kernelHash")`):
+- [x] **Step 1: тести** (`describe("kernelHash")`):
   - `kernelHash` кожного запису = `kernelHashOf(entry.operations)`;
   - запис без `operations` — `kernelHashOf(undefined)`, однаковий у двох
     компіляціях;
@@ -316,10 +316,10 @@ rebase на `main`, `orient --plan` цього файла, звірка кожн
   - `creatorMembership`: корінь з творцем (`rootCreationDomain()`) — UUID
     довідника членства = `operations.create.root.membership`; корінь без
     творця й не корінь — поля немає.
-- [ ] **Step 2:** `pnpm --filter simetra test runtime-catalog` — червоні.
-- [ ] **Step 3:** `kernelHashOf`, поля в записі.
-- [ ] **Step 4:** зелені.
-- [ ] **Step 5: коміт** `feat(compiler): kernelHash і creatorMembership запису каталогу`.
+- [x] **Step 2:** `pnpm --filter simetra test runtime-catalog` — червоні.
+- [x] **Step 3:** `kernelHashOf`, поля в записі.
+- [x] **Step 4:** зелені.
+- [x] **Step 5: коміт** `feat(compiler): kernelHash і creatorMembership запису каталогу`.
 
 ### Задача 4: `objectColumns`
 
@@ -357,7 +357,7 @@ function objectColumns(entry: CatalogEntry): ObjectColumns
   `server/read.ts` (B1a) має інше призначення: якщо імпорт T0 з'являється в
   тому самому модулі, локальну перейменувати на `listColumns`.
 
-- [ ] **Step 1: тести.** `columns.test.ts` (будівник `entries.ts`):
+- [x] **Step 1: тести.** `columns.test.ts` (будівник `entries.ts`):
   `toEqual` переліків довідника з парою, лінивим полем і ТЧ; `it.each`
   інваріантів — перейменування реквізиту (інші `name`, ті самі `column`) —
   переліки рівні; зміна `load` переносить колонку між `read` і `lazy`;
@@ -367,10 +367,10 @@ function objectColumns(entry: CatalogEntry): ObjectColumns
   скоуплений довідник і корінь (`scopeColumn` = `key`) — без дублів.
   `runtime-catalog.test.ts`: `objectColumns` скомпільованого скоупленого
   довідника — без дублів, `read` містить ключ, версію, скоуп і колонку пари.
-- [ ] **Step 2:** `pnpm --filter simetra test columns` — червоні.
-- [ ] **Step 3:** реалізація.
-- [ ] **Step 4:** зелені.
-- [ ] **Step 5: коміт** `feat(model): objectColumns — переліки колонок зі спільної частини запису`.
+- [x] **Step 2:** `pnpm --filter simetra test columns` — червоні.
+- [x] **Step 3:** реалізація.
+- [x] **Step 4:** зелені.
+- [x] **Step 5: коміт** `feat(model): objectColumns — переліки колонок зі спільної частини запису`.
 
 ### Задача 5: клієнтський каталог і `client-catalog.json`
 
@@ -398,7 +398,7 @@ function objectColumns(entry: CatalogEntry): ObjectColumns
   (`JSON.stringify(buildClientCatalog(buildRuntimeCatalog(model)), null, 2) + "\n"`)
   після `runtime-catalog.json`.
 
-- [ ] **Step 1: тести.** `client-catalog.test.ts`: результат проходить
+- [x] **Step 1: тести.** `client-catalog.test.ts`: результат проходить
   `clientCatalogSchema`; детермінований у двох компіляціях; обхід дерева
   JSON не знаходить ключів `operations`, `membership`, `constraints`,
   `pgType`, `castType`, `function`; кожен запис несе `kind`, `kindLabel`,
@@ -409,12 +409,12 @@ function objectColumns(entry: CatalogEntry): ObjectColumns
   переліки файлів у `compile.test.ts` («--out writes …») і `catalog.test.ts`
   («compileArtifacts emits …») доповнюються `client-catalog.json`; вміст —
   `buildClientCatalog` тієї самої моделі.
-- [ ] **Step 2:** `pnpm --filter simetra test client-catalog`,
+- [x] **Step 2:** `pnpm --filter simetra test client-catalog`,
   `pnpm --filter @simetrajs/designer test compile catalog` — червоні.
-- [ ] **Step 3:** реалізація; довідка CLI й скіл споживача називають
+- [x] **Step 3:** реалізація; довідка CLI й скіл споживача називають
   `client-catalog.json`.
-- [ ] **Step 4:** зелені.
-- [ ] **Step 5: коміт** `feat(compiler): клієнтський каталог і client-catalog.json`.
+- [x] **Step 4:** зелені.
+- [x] **Step 5: коміт** `feat(compiler): клієнтський каталог і client-catalog.json`.
 
 ### Задача 6: кодек `wire`
 
@@ -459,7 +459,7 @@ function objectColumns(entry: CatalogEntry): ObjectColumns
     `Date`/`DateTime`, `NaN` для `Numeric`), — `WireEncodeError`; записати
     це в JSDoc `encodeRow`.
 
-- [ ] **Step 1: тести.** `wire.test.ts` (будівник `entries.ts`): таблиця
+- [x] **Step 1: тести.** `wire.test.ts` (будівник `entries.ts`): таблиця
   `it.each` з `LOGICAL_TYPES` (`model/schemas/value-type.ts`) плюс `Raw`,
   масив, одноцільовий `Ref`, перерахування, пара, `null` — конкретна форма
   передачі кожного (`toEqual` на літерал) і `decodeRow(encodeRow(x))` = `x`
@@ -472,10 +472,10 @@ function objectColumns(entry: CatalogEntry): ObjectColumns
   `decodeRow` рядка скомпільованого довідника з парою й ТЧ (каталог фікстури
   `policyDomain`), обидва каталоги (рантайму й клієнтський) дають ту саму
   форму передачі.
-- [ ] **Step 2:** `pnpm --filter simetra test wire` — червоні.
-- [ ] **Step 3:** реалізація.
-- [ ] **Step 4:** зелені.
-- [ ] **Step 5: коміт** `feat(model): кодек wire — encodeRow і decodeRow`.
+- [x] **Step 2:** `pnpm --filter simetra test wire` — червоні.
+- [x] **Step 3:** реалізація.
+- [x] **Step 4:** зелені.
+- [x] **Step 5: коміт** `feat(model): кодек wire — encodeRow і decodeRow`.
 
 ### Задача 7: `path`, мапінг операції, помилки й набору змін; схеми передачі
 
@@ -554,7 +554,7 @@ function objectColumns(entry: CatalogEntry): ObjectColumns
   - `changesToWire` / `changesFromWire` — над `object` (`Change` з
     `result.ts`; решта полів без змін).
 
-- [ ] **Step 1: тести.** `path.test.ts` (будівник): `it.each` кожної
+- [x] **Step 1: тести.** `path.test.ts` (будівник): `it.each` кожної
   форми граматики туди й назад, зокрема `<ТЧ>.<i>.<реквізит>`, `<ТЧ>.<i>`,
   `<ТЧ>`, стандартна ТЧ із синтетичним id (туди й назад), `creatorMember.<реквізит>`, `keyName`, `values`, `orderBy.0.attribute`,
   довільний шлях застосунку; реквізит з ім'ям `values` — колонка;
@@ -576,11 +576,11 @@ function objectColumns(entry: CatalogEntry): ObjectColumns
   відхиляє `object`, що не UUID; таблиця схем помилки й змін.
   `wire-catalog.test.ts`: операція й помилка над скомпільованим каталогом —
   обидва каталоги дають ту саму форму передачі.
-- [ ] **Step 2:** `pnpm --filter simetra test path mapping envelope wire-catalog`
+- [x] **Step 2:** `pnpm --filter simetra test path mapping envelope wire-catalog`
   — червоні.
-- [ ] **Step 3:** реалізація.
-- [ ] **Step 4:** зелені.
-- [ ] **Step 5: коміт** `feat(model): path і мапінг операції, помилки й набору змін у форму передачі`.
+- [x] **Step 3:** реалізація.
+- [x] **Step 4:** зелені.
+- [x] **Step 5: коміт** `feat(model): path і мапінг операції, помилки й набору змін у форму передачі`.
 
 ### Задача 8: мапінг запиту й результату читання (після B1a)
 
@@ -609,14 +609,14 @@ function objectColumns(entry: CatalogEntry): ObjectColumns
     (сервер, `encodeRow`), `readResultFromWire(index, query, wire): ReadResult`
     (клієнт, `decodeRow`).
 
-- [ ] **Step 1: тести:** `it.each` над кожною формою запиту B1a (список з
+- [x] **Step 1: тести:** `it.each` над кожною формою запиту B1a (список з
   `and`/`or`/`not` і кожним оператором, сортування, `include`, картка з ТЧ,
   «ТЧ власника», ТЧ як ціль списку, `count`) — туди й назад; фільтр за
   невідомою колонкою — `unknown`; невідомий id ТЧ — `unknown`; результат
   — `included` за UUID ↔ за `"<kind>.<name>"`, `ownerVersion`, `more`,
   `count`.
-- [ ] **Step 2:** червоні. **Step 3:** реалізація. **Step 4:** зелені.
-- [ ] **Step 5: коміт** `feat(model): мапінг запиту й результату читання у форму передачі`.
+- [x] **Step 2:** червоні. **Step 3:** реалізація. **Step 4:** зелені.
+- [x] **Step 5: коміт** `feat(model): мапінг запиту й результату читання у форму передачі`.
 
 ### Задача 9: перейменування й розширення (каталоги A і A′)
 
@@ -631,7 +631,7 @@ function objectColumns(entry: CatalogEntry): ObjectColumns
   і ТЧ, новим необов'язковим реквізитом шапки й ТЧ і реквізитом, видаленим на
   фазі розширення.
 
-- [ ] **Step 1: тести** — клієнт мапить `buildClientCatalog(a)`, сервер —
+- [x] **Step 1: тести** — клієнт мапить `buildClientCatalog(a)`, сервер —
   каталогом рантайму `aPrime`: запит читання з фільтром, `include`, карткою
   з ТЧ; `update` з повною заміною рядків ТЧ; помилка `command.constraint` з
   `attributes`; набір змін. Логічне `A` → передача → логічне `A′` — ті самі
@@ -643,8 +643,8 @@ function objectColumns(entry: CatalogEntry): ObjectColumns
   передачі; `objectColumns(A)` без колонки видаленого реквізиту —
   підмножина `objectColumns(A′)`, а колонка видаленого реквізиту в
   `objectColumns(A′)` відсутня (окремий `expect`).
-- [ ] **Step 2:** червоні. **Step 3:** будівник. **Step 4:** зелені.
-- [ ] **Step 5: коміт** `test(model): мапінг між каталогами після перейменування й розширення`.
+- [x] **Step 2:** червоні. **Step 3:** будівник. **Step 4:** зелені.
+- [x] **Step 5: коміт** `test(model): мапінг між каталогами після перейменування й розширення`.
 
 ### Задача 10: порти `SourceAdapter` і `SignalTransport`
 
@@ -671,12 +671,12 @@ interface SignalTransport {
 }
 ```
 
-- [ ] **Step 1: тест типів** (`expectTypeOf`): фейкова реалізація
+- [x] **Step 1: тест типів** (`expectTypeOf`): фейкова реалізація
   задовольняє обидва порти; `// @ts-expect-error` на виклику `read` із
   запитом `{ count: true }` і на реалізації, що повертає `{ count }`.
-- [ ] **Step 2–4:** червоний → реалізація → зелений
+- [x] **Step 2–4:** червоний → реалізація → зелений
   (`pnpm --filter simetra test ports`, `pnpm --filter simetra typecheck`).
-- [ ] **Step 5: коміт** `feat(model): порти SourceAdapter і SignalTransport`.
+- [x] **Step 5: коміт** `feat(model): порти SourceAdapter і SignalTransport`.
 
 ### Задача 11: формат каналу й схеми сигналу
 
@@ -702,16 +702,16 @@ interface SignalTransport {
     `receivedRightsSchema` — те саме плюс `id: z.guid()`. Поля `sections`
     немає.
 
-- [ ] **Step 1: тести:** `it.each` — `channelTopic` ↔ `parseTopic` туди й
+- [x] **Step 1: тести:** `it.each` — `channelTopic` ↔ `parseTopic` туди й
   назад для кожного виду й нескоупленого; `parseTopic` чужих форматів
   (`realtime:x`, зайвий сегмент, верхній регістр, не-UUID, `simetraX:…`) —
   `undefined`; таблиця схем: зміна — рівно чотири поля, `invalidate` —
   рівно два, права — рівно два; зайве поле (зокрема `sections`), `keys` з
   двома записами чи порожній — відмова; прийняте — те саме плюс `id`;
   невідомий `op` — відмова.
-- [ ] **Step 2–4:** червоний → реалізація → зелений
+- [x] **Step 2–4:** червоний → реалізація → зелений
   (`pnpm --filter simetra test signal`).
-- [ ] **Step 5: коміт** `feat(model): формат каналу й схеми сигналу`.
+- [x] **Step 5: коміт** `feat(model): формат каналу й схеми сигналу`.
 
 ### Задача 12: документація, гейти, PR
 
@@ -720,11 +720,11 @@ interface SignalTransport {
   `docs/superpowers/specs/2026-09-24-simetra-platform-design.md` (рядки
   Додатку А спеки П4-B з блоком B1b-1), `docs/ROADMAP.md`
 
-- [ ] **Step 1:** внести правки Додатку А з колонкою «Блок» = B1b-1 у названі
+- [x] **Step 1:** внести правки Додатку А з колонкою «Блок» = B1b-1 у названі
   документи так само, як це робить B1a; `python3 scripts/check-doc-anchors.py`
   — чисто.
-- [ ] **Step 2:** ROADMAP — стан П4-B (B1b-1 виконано).
-- [ ] **Step 3: гейти:** `pnpm format:check && pnpm lint && pnpm typecheck && pnpm test`,
+- [x] **Step 2:** ROADMAP — стан П4-B (B1b-1 виконано).
+- [x] **Step 3: гейти:** `pnpm format:check && pnpm lint && pnpm typecheck && pnpm test`,
   `pnpm metadata:check`. DB-гейту блок не потребує (DB-змін немає).
 - [ ] **Step 4: коміт** `docs(spec): П4-B1b-1 — правки Додатку А й ROADMAP`; PR у
   `main`; звіт архітекторці.
@@ -764,3 +764,31 @@ interface SignalTransport {
   `SourceAdapter`.
 - Повторна перевірка правок третього раунду аудиту спеки (§14.3) для B1b-1
   не потрібна: ті пункти — B1b-2, B1b-3 і B3.
+
+## Підсумок виконання
+
+- **Рев'ю** гілки трьома лінзами — correctness, test-honesty, drift; кожну
+  знахідку перевірено адверсарійно.
+- **Виправлено:**
+  - тест проєкції каталогу — структурна рівність запису клієнта й запису
+    рантайму без серверних ключів замість перевірки форми;
+  - відмови `decodeRow` — неіснуючий день, межі годин, хвилин і секунд,
+    рік поза 1–9999 в UTC, дробове `Integer`, пара з одною колонкою чи
+    нерядковою міткою, масив з невідомою міткою, ТЧ не масивом і рядок ТЧ
+    не об'єктом; кожен вартовий `wire.ts` мутація робить червоним;
+  - топік користувача з зайвим сегментом; взаємна оберненість `pathToWire`
+    і `pathFromWire` на структурних шляхах T3; `kernelHash` фікстури
+    сервера — з її `operations`;
+  - JSDoc експортованого API T0 — англійською; спека: стиль документації
+    §3.1 і §3.3 платформної, id ТЧ без повтору формату (§3, §4.0,
+    Додаток А), ключ у `path` (§4.0), переліки вставки й зміни ТЧ і
+    покриття хешу (§10, Рд12), номер рядка ТЧ текстом в адаптері PostgREST
+    (§4.4).
+- **Рішення архітекторки:**
+  - ключ запису в `path` — лише `keyName`; T3 перестає видавати структурний
+    `id` у B1b-2 (задача 5 плану B1b-2, рішення П4); вплив на спеку — §4.0,
+    внесено;
+  - `kernelHash` покриває довідник членства кореня з творцем: з метаданих
+    прав хеш змінює лише `rootCreator`; коду не змінює (хеш уже покриває
+    форму `operations`), тест у `runtime-catalog.test.ts`; вплив на спеку —
+    Рд12 і §10, внесено.
