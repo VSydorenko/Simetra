@@ -442,6 +442,14 @@ export async function runCommand(
 ): Promise<CommandResult> {
   rejectNested()
   const ops = prepareInput(state.catalog, input)
+  // Повний масив сам видаляє пропущені рядки: `deleteIds` поруч із ним не
+  // діяв би, а мовчазний ігнор сховав би помилку викликача.
+  if (
+    fullTabularArrays &&
+    ops.some((op) => op.action === "update" && op.deleteIds !== undefined)
+  ) {
+    throw new CommandFailure({ code: "command.invalid", path: "deleteIds" })
+  }
   let claims: string
   try {
     claims = JSON.stringify(session)

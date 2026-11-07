@@ -81,7 +81,8 @@ export interface CommandRunOptions {
    * existing rows it leaves out are deleted. Without it (the default) such
    * rows must be named in `deleteIds`, or the phase fails with
    * `command.invalid` `reason: "tabular-rows-missing"`. `ctx.run` is always
-   * strict.
+   * strict. An operation with `deleteIds` under this option is
+   * `command.invalid` with `path` `deleteIds`.
    */
   fullTabularArrays?: true
 }

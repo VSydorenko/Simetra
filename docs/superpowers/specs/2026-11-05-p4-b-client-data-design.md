@@ -1074,7 +1074,8 @@ useCan(action, object, { scope?, row? }) → true | false | "unknown"
     Вимикає її лише опція виклику `runtime.run(session, input, { fullTabularArrays: true })`,
     яку ставить `createDataHandler`: фасад шле повні масиви з чернетки чи
     підмножини «ТЧ власника» з `expectedVersion`. `ctx.run` опції не має.
-    Форма передачі `deleteIds` не несе.
+    Форма передачі `deleteIds` не несе; операція з `deleteIds` під цією
+    опцією — `command.invalid` з `path` `deleteIds` до бази.
 - **Компілятор і бюджет відповіді:**
   - помилка — один рядок списочної форми може перевищити бюджет (сума
     `maxBytes` звичайних колонок шапки понад бюджет); так само для одного

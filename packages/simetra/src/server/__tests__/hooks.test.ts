@@ -1822,6 +1822,20 @@ describe("tabular section arrays", () => {
     ])
   })
 
+  // Повний масив сам видаляє пропущені рядки, тож `deleteIds` поруч із ним
+  // нічого б не значив: мовчазний ігнор сховав би помилку викликача.
+  it("refuses deleteIds with fullTabularArrays before the database", async () => {
+    const { db, runtime } = await withOrder(fresh)
+    expect(
+      await failureOf(
+        runtime.run(session, update({ deleteIds: { lines: [OTHER] } }), {
+          fullTabularArrays: true,
+        })
+      )
+    ).toEqual({ code: "command.invalid", path: "deleteIds" })
+    expect(db.calls).toEqual([])
+  })
+
   it("checks a ctx.run phase even when run has fullTabularArrays", async () => {
     const { db, runtime } = await withOrder(fresh, {
       "Catalog.Client": {
