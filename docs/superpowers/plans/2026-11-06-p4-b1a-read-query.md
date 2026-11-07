@@ -629,6 +629,11 @@ export type ReadResultOf<Q> = Q extends { count: true } ? ReadCount : ReadRows
 - [x] **Step 4: Run** — PASS; `pnpm typecheck` і `pnpm --filter @simetrajs/designer test` — PASS.
 - [x] **Step 5: Commit** — `feat(server): ТЧ у серверному читанні одним оператором з межею`.
 
+> **Примітка виконання (прийнято архітекторкою, вплив на спеку — немає):**
+> форма «ТЧ власника» і сторінка ТЧ повертають дві колонки — `owner_version`
+> і `tabular`, а не один `jsonb_build_object`; рядки декодуються до `COMMIT`,
+> бо `include` бере id з декодованих рядків першого оператора.
+
 ---
 
 ### Task 9: `statement_timeout` читання й `command.timeout`

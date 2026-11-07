@@ -91,7 +91,13 @@ a count stops at 10000 and then comes `capped`.
 - `orderBy` takes up to 4 attributes; the key goes only last, and without it
   the server adds the key ascending. `limit` is 1 to 200; `offset` is up to
   10000, past it page by a key condition (`{ "attribute": "<key>", "op":
-  "gt", "value": <last key> }`).
+  "gt", "value": <last key> }`). That condition holds only for a page sorted
+  by the key alone. With `orderBy` on an attribute, the condition covers the
+  whole sort tuple plus the key, from the last row of the previous page. For
+  `orderBy: [{ "attribute": "code", "direction": "asc" }]`:
+  `{ "or": [{ "attribute": "code", "op": "gt", "value": <last code> },
+  { "and": [{ "attribute": "code", "op": "eq", "value": <last code> },
+  { "attribute": "<key>", "op": "gt", "value": <last key> }] }] }`.
 - A page leaves out lazy attributes (`load: "lazy"`, `Bytes` by default);
   a card returns them. Filter or sort by a lazy attribute is refused (reason
   `lazy`).
