@@ -89,7 +89,7 @@ Modify `packages/simetra/src/data/facade/transactions.ts`,
 | --- | --- |
 | `command.conflict` | `rereadKeys` усіх ключів операцій з об'єктом `failure.object` (помилка не несе `id`; без `object` — усіх ключів операцій) і `fetchedOnce` активної підмножини «ТЧ власника» кожного з них, з межею `writeBackRefetchMs`; чернетку й дельту не накладає повторно |
 | `command.forbidden` | `rereadKeys` ключів операцій (невидимий рядок прибирає `rereadKeys`); з `reason: "origin"` — нічого |
-| `command.unavailable` (без `reason: "schema"`) | `rereadKeys` ключів операцій; `create` без `id` — нічого (В5) |
+| `command.unavailable` (без `reason: "schema"`) | `rereadKeys` ключів операцій, причому ключі `create` цього виклику передаються як власні створення: повернутий рядок (сервер таки створив) вставляється й заноситься в реєстр, інакше відкат прибрав би його з екрана, а повтор з новим UUID дав би дублікат; `create` без `id` — нічого (В5) |
 | `command.busy`, `command.timeout` | нічого |
 | решта (зокрема `command.invalid`) | нічого |
 
@@ -113,7 +113,8 @@ Modify `packages/simetra/src/data/facade/transactions.ts`,
   (`currentVersion`), підмножина ТЧ перезапитана, повторного `run` немає;
   `forbidden` — невидимий рядок прибрано, `origin` — нуль запитів;
   `unavailable` на `run` — перечитано ключі (Review Focus 3), повтору `run`
-  немає; `busy`/`timeout` — відкат, нуль запитів; читання з будь-яким кодом —
+  немає; `create` з `id` фасаду, який сервер таки записав, — рядок у
+  колекції й реєстрі після відкату оптимістичного; `busy`/`timeout` — відкат, нуль запитів; читання з будь-яким кодом —
   нуль запитів рядків; Review Focus 4; `reconcileOwnCreates` 450 ключів —
   три запити (200, 200, 50), рядок без відповіді прибрано;
   `dispose()` посеред дії (матриця як задача 8 B3-3a: обгортка B3-1 і
@@ -147,6 +148,11 @@ B3-3a); Test `version.test.ts`.
 - Запис: `prepareOps` (B3-3a) відмовляє `CommandFailure`
   `command.stale-client` з `object` без транзакції й транспорту, якщо хоч
   один об'єкт операцій позначено.
+
+- Межа В1: відповіді адаптера-перевизначення застосунку (`selectSource({ override })`)
+  `serverHash` не несуть і трекер їх не бачить — прийнято: зміну каталогу
+  трекер побачить на наступній відповіді обгортки (запис іде лише через
+  `run`); рядок у JSDoc `selectSource`.
 
 - [ ] **Step 1: Failing tests:**
   - таблиця «подія → запит `version`»: зміна `serverHash` у відповіді
