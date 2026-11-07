@@ -1,7 +1,14 @@
 import { execFile } from "node:child_process"
-import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises"
+import {
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { join, resolve } from "node:path"
+import { dirname, join, resolve } from "node:path"
 import { promisify } from "node:util"
 
 export const exec = promisify(execFile)
@@ -72,6 +79,17 @@ export async function listPackedFiles(tarball: string): Promise<string[]> {
 }
 
 /**
+ * Що споживач має понад tarball-и: залежності з реєстру (peer-и `simetra`,
+ * стек host-а) і власні файли (вхід бандлера). Файли генеруються в
+ * тимчасовій теці: з імпортами `vite` чи `@tanstack/*` у дереві designer вони
+ * зламали б його `typecheck` і `lint`.
+ */
+export interface ConsumerHost {
+  dependencies?: Record<string, string>
+  files?: Record<string, string>
+}
+
+/**
  * Тимчасовий проєкт споживача поза репо (у `os.tmpdir()`), тож ні npm, ні pnpm
  * не бачать workspace репо. `npm` перевіряє розкладку `node_modules` без
  * симлінків, `pnpm` — ізольовану розкладку `.pnpm`, у якій пакет видно лише
@@ -82,10 +100,15 @@ export async function listPackedFiles(tarball: string): Promise<string[]> {
  */
 export async function installConsumer(
   tarballs: string[],
-  manager: "npm" | "pnpm" = "npm"
+  manager: "npm" | "pnpm" = "npm",
+  host: ConsumerHost = {}
 ): Promise<string> {
   const dir = await tempDir("simetra-consumer-")
-  const dependencies: Record<string, string> = {}
+  for (const [file, content] of Object.entries(host.files ?? {})) {
+    await mkdir(dirname(join(dir, file)), { recursive: true })
+    await writeFile(join(dir, file), content)
+  }
+  const dependencies: Record<string, string> = { ...host.dependencies }
   for (const tarball of tarballs) {
     const manifest = await readPackedManifest(tarball)
     dependencies[manifest.name as string] = `file:${tarball}`
@@ -149,4 +172,32 @@ export async function repackWithVersion(
   const out = join(work, `repacked-${version}.tgz`)
   await exec("tar", ["-czf", out, "-C", work, "package"])
   return out
+}
+
+/**
+ * Фізичні корені кожного пакета серед id модулів бандла: шлях до останнього
+ * `node_modules/<пакет>/`. Ізольована розкладка pnpm кладе пакет у
+ * `node_modules/.pnpm/<ім'я>@<версія>[_<peer-и>]/node_modules/<пакет>/`, тож
+ * дві версії чи два набори peer-ів одного пакета — два різні корені, тобто
+ * два екземпляри його стану на рівні модуля.
+ */
+export function packageRoots(
+  moduleIds: string[],
+  packages: string[]
+): Record<string, string[]> {
+  const roots: Record<string, string[]> = {}
+  for (const pkg of packages) {
+    const escaped = pkg.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")
+    // Жадібне `.*` бере останнє входження: вкладений `node_modules` — це
+    // корінь вкладеної копії, а не того пакета, що її містить
+    const pattern = new RegExp(`^(.*/node_modules/${escaped})/`)
+    const found = new Set<string>()
+    for (const id of moduleIds) {
+      // Віртуальні модулі Rolldown мають префікс `\0`, а запит — суфікс `?…`
+      const match = pattern.exec(id.replace(/^\0/, "").split("?")[0])
+      if (match) found.add(match[1])
+    }
+    roots[pkg] = [...found].sort()
+  }
+  return roots
 }
