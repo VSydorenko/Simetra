@@ -685,9 +685,33 @@ function readResult(
   return { rows: out }
 }
 
-/** The input path of the first Zod issue; `undefined` — the input root. */
+const reasonOf = (issue: z.core.$ZodIssue): string | undefined => {
+  const reason = (issue as { params?: { reason?: unknown } }).params?.reason
+  return typeof reason === "string" ? reason : undefined
+}
+
+/**
+ * The issue a refusal reports: the first one with a `params.reason`, else
+ * the first one.
+ */
+export function decidingIssue(error: z.ZodError): z.core.$ZodIssue | undefined {
+  // Причина межі важливіша за порядок: issue сусідніх полів не мають ховати,
+  // що вхід завеликий.
+  return (
+    error.issues.find((issue) => reasonOf(issue) !== undefined) ??
+    error.issues[0]
+  )
+}
+
+/** The `params.reason` of the first Zod issue that carries one. */
+export function issueReason(error: z.ZodError): string | undefined {
+  const issue = decidingIssue(error)
+  return issue === undefined ? undefined : reasonOf(issue)
+}
+
+/** The input path of the deciding Zod issue; `undefined` — the input root. */
 export function issuePath(error: z.ZodError): string | undefined {
-  const [issue] = error.issues
+  const issue = decidingIssue(error)
   return issue === undefined || issue.path.length === 0
     ? undefined
     : issue.path.join(".")
@@ -710,9 +734,11 @@ export function prepareRead(
   }
   if (!parsed.success) {
     const path = issuePath(parsed.error)
+    const reason = issueReason(parsed.error)
     return {
       error: {
         code: "command.invalid",
+        ...(reason === undefined ? {} : { reason }),
         ...(path === undefined ? {} : { path }),
       },
     }

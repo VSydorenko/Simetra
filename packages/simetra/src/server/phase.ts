@@ -1,13 +1,16 @@
 import {
   COMMAND_SETTING,
+  LIMIT_REASONS,
   OPERATION_EVENTS,
   batchSchema,
   encodeAttributes,
   isPlainObject,
+  metadataRefSchema,
   operationSchema,
   type CommandContext,
   type CommandError,
   type Draft,
+  type MetadataRef,
   type ObjectModule,
   type Operation,
   type RuntimeCatalog,
@@ -18,7 +21,8 @@ import {
 } from "simetra/model"
 import { decodeRecord } from "./decode"
 import { callHook, type HookPhase } from "./hook-context"
-import { ident, issuePath, literal } from "./read"
+import type { z } from "zod"
+import { decidingIssue, ident, issuePath, issueReason, literal } from "./read"
 import type { Statement, Transaction } from "./transaction"
 import { encodeItem } from "./values"
 
@@ -153,6 +157,65 @@ const draftOf = (op: Operation): Draft<object> =>
     : {}
 
 /**
+ * Об'єкт операції, що відмовила, — лише відомий каталогу: сирий вхід не
+ * проходив схеми, тож назовні не йде нічого, чого не знає модель. Читання —
+ * у `try`: геттер чи `Proxy` у вході може кинути.
+ */
+function rejectedObject(
+  catalog: RuntimeCatalog,
+  op: unknown
+): MetadataRef | undefined {
+  try {
+    const ref = metadataRefSchema.safeParse(
+      (op as { object?: unknown } | null | undefined)?.object
+    )
+    if (!ref.success) return undefined
+    const known = catalog.objects.some(
+      (o) => o.kind === ref.data.kind && o.name === ref.data.name
+    )
+    return known ? ref.data : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * `command.invalid` відмови схеми з причиною межі. Шлях ТЧ понад межу — її
+ * логічне ім'я, як у решти помилок ТЧ, без префікса й індексу пакета;
+ * операцію пакета називає `object`. Пакет понад межу — без шляху: це корінь.
+ */
+function schemaRefusal(
+  catalog: RuntimeCatalog,
+  input: unknown,
+  error: z.ZodError
+): CommandError {
+  const reason = issueReason(error)
+  if (reason === LIMIT_REASONS.tabularTooLarge) {
+    const path = decidingIssue(error)?.path ?? []
+    const [index] = path
+    let op: unknown = input
+    if (typeof index === "number") {
+      try {
+        op = (input as unknown[])[index]
+      } catch {
+        op = undefined
+      }
+    }
+    const object = rejectedObject(catalog, op)
+    return {
+      code: "command.invalid",
+      reason,
+      path: String(path.at(-1)),
+      ...(object === undefined ? {} : { object }),
+    }
+  }
+  return {
+    ...invalid(issuePath(error)),
+    ...(reason === undefined ? {} : { reason }),
+  }
+}
+
+/**
  * Перевірка до транзакції (спека П4 §6.5): схема операції, об'єкт і операція
  * каталогу, значення за каталогом — без звернення до бази.
  */
@@ -170,7 +233,7 @@ export function prepareInput(
     throw new CommandFailure(invalid())
   }
   if (!parsed.success) {
-    throw new CommandFailure(invalid(issuePath(parsed.error)))
+    throw new CommandFailure(schemaRefusal(catalog, input, parsed.error))
   }
   return parsed.data.map((op) => {
     const found = targetOf(catalog, op)
