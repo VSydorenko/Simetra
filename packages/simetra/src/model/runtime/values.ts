@@ -238,6 +238,48 @@ export function encodeItemValue(
   }
 }
 
+// Число з дробом без експоненти: вхід `Numeric` рядком уже пройшов `scalar`.
+const DECIMAL_PARTS = /^([+-]?)0*(\d*)(?:\.(\d*))?$/
+
+/**
+ * Верхня межа рядка, яким база віддасть `Numeric(p, s)`: знак, ціла частина
+ * без провідних нулів, крапка й рівно `s` дробових цифр (масштаб типу, а не
+ * входу). Дробових цифр понад `s` база округлює, і перенос може додати цілу
+ * цифру — вона входить у межу.
+ */
+function numericWire(text: string, scale: number): string {
+  const match = DECIMAL_PARTS.exec(text)
+  if (match === null) return text
+  const [, sign = "", whole = "", fraction = ""] = match
+  const carry = fraction.length > scale ? "0" : ""
+  const integer = carry + (whole === "" ? "0" : whole)
+  return scale > 0
+    ? `${sign === "-" ? "-" : ""}${integer}.${"0".repeat(scale)}`
+    : `${sign === "-" ? "-" : ""}${integer}`
+}
+
+/**
+ * Значення в тій формі, якою воно піде дротом, — лише для міри `maxBytes`.
+ * Р7: `maxBytes` і бюджет рядка — одна міра, `jsonBytes` форми передачі;
+ * без цього масив `Numeric(20, 10)` з `"0"` пройшов би межу входу, а дротом
+ * виріс би вчетверо, і межа рядка компілятора не була б верхньою.
+ */
+function wireMeasure(
+  attribute: CatalogEntryAttribute,
+  value: unknown
+): unknown {
+  let wire: ((text: string) => string) | undefined
+  if (attribute.type === "DateTime") {
+    wire = (text) => normalDateTime(text) ?? text
+  } else if (attribute.type === "Numeric" && attribute.scale !== undefined) {
+    const { scale } = attribute
+    wire = (text) => numericWire(text, scale)
+  }
+  if (wire === undefined) return value
+  const one = (item: unknown) => (typeof item === "string" ? wire(item) : item)
+  return Array.isArray(value) ? value.map(one) : one(value)
+}
+
 /**
  * Options of {@link encodeAttributes}: who may write and how errors are named.
  * Generic over the attribute type, so `allowed` may read the caller's
@@ -309,7 +351,7 @@ export function encodeAttributes<A extends CatalogEntryAttribute>(
     if (
       maxBytes === true &&
       attribute.maxBytes !== undefined &&
-      jsonBytes(encoded.value) > attribute.maxBytes
+      jsonBytes(wireMeasure(attribute, encoded.value)) > attribute.maxBytes
     ) {
       return {
         error: {

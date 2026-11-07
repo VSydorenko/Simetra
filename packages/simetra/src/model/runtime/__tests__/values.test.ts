@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 import type { CatalogEntryAttribute } from "../catalog"
+import { jsonBytes } from "../limits"
 import { encodeAttributes, type EncodeAttributesOptions } from "../values"
 import { catalogEntryAttribute } from "./entries"
 
@@ -209,6 +210,60 @@ describe("encodeAttributes: maxBytes", () => {
       })
     }
   )
+
+  // Р7: міра — форма, якою значення піде дротом, а не форма входу.
+  // `Numeric(p, s)` база доповнює до `s` дробових цифр, `DateTime` кодек
+  // нормалізує до фіксованої ширини UTC; надісланий базі вхід — без змін.
+  it.each<[string, Partial<CatalogEntryAttribute>, unknown, number]>([
+    [
+      'a Numeric(20, 10) array of "0" by its padded scale',
+      { type: "Numeric", precision: 20, scale: 10, array: true },
+      ["0", "0", "0"],
+      jsonBytes(["0.0000000000", "0.0000000000", "0.0000000000"]),
+    ],
+    [
+      '"0" in Numeric(38, 10) as "0.0000000000"',
+      { type: "Numeric", precision: 38, scale: 10 },
+      "0",
+      jsonBytes("0.0000000000"),
+    ],
+    [
+      "a negative Numeric(5, 2) with its sign",
+      { type: "Numeric", precision: 5, scale: 2 },
+      "-5",
+      jsonBytes("-5.00"),
+    ],
+    [
+      "Numeric(5, 0) without a point or leading zeros",
+      { type: "Numeric", precision: 5, scale: 0 },
+      "+007",
+      jsonBytes("7"),
+    ],
+    // Дробових цифр понад `s` база округлює: перенос може додати цілу цифру.
+    [
+      "Numeric(10, 2) past its scale with a carry digit",
+      { type: "Numeric", precision: 10, scale: 2 },
+      "1.5000",
+      jsonBytes("01.50"),
+    ],
+    [
+      "a DateTime array by its fixed-width UTC form",
+      { type: "DateTime", array: true },
+      ["2026-01-01T00:00+02:00", null],
+      jsonBytes(["2025-12-31T22:00:00.000000Z", null]),
+    ],
+  ])("measures %s", (_, extra, value, bytes) => {
+    const at = (maxBytes: number) => [
+      attr("big", extra.type ?? "Text", { ...extra, maxBytes }),
+    ]
+    expect(jsonBytes(value)).not.toBe(bytes)
+    expect(encodeAttributes(at(bytes), { big: value }, INPUT)).toEqual({
+      columns: { big_col: value },
+    })
+    expect(encodeAttributes(at(bytes - 1), { big: value }, INPUT)).toEqual({
+      error: { code: "command.invalid", path: "big", reason: "too-large" },
+    })
+  })
 
   it("names the row path of a tabular section value", () => {
     const row = [attr("memo", "Text", { maxBytes: 4 })]

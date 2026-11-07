@@ -3,6 +3,7 @@ import { buildRuntimeCatalog, type Diagnostic } from "simetra/compiler"
 import {
   RESPONSE_BUDGET_BYTES,
   RIGHTS_DELTA_SECTION,
+  encodeAttributes,
   jsonBytes,
   type CatalogEntryAttribute,
 } from "simetra/model"
@@ -120,6 +121,40 @@ describe("rowBytesOf: value bounds", () => {
         attribute({ column: "n", type: "Numeric", precision: 3, scale: 3 }),
       ])
     ).toBe(jsonBytes({ s: "\u0001\u0001\u0001", n: "-0.123" }) + 1)
+  })
+})
+
+/**
+ * Одна міра входу й бюджету (Р7): масив, який вхід команди пропускає за
+ * `maxBytes`, дротом не довший за межу рядка компілятора. Дротова форма —
+ * та, якою базу віддає масив `Numeric(20, 10)` з `"0"`.
+ */
+describe("rowBytesOf: the input limit bounds the wire", () => {
+  const input = ["0", "0", "0"]
+  const wire = { c: ["0.0000000000", "0.0000000000", "0.0000000000"] }
+  it.each(
+    Array.from(
+      { length: jsonBytes(wire.c) - jsonBytes(input) + 1 },
+      (_, i) => jsonBytes(input) + i
+    )
+  )("maxBytes %i: accepted input fits the row bound", (maxBytes) => {
+    const column = attribute({
+      type: "Numeric",
+      precision: 20,
+      scale: 10,
+      array: true,
+      maxBytes,
+    })
+    const encoded = encodeAttributes(
+      [column],
+      { c: input },
+      { allowed: () => true, path: "values", prefix: "", maxBytes: true }
+    )
+    if ("columns" in encoded) {
+      expect(rowBytesOf([column])).toBeGreaterThanOrEqual(jsonBytes(wire))
+    } else {
+      expect(maxBytes).toBeLessThan(jsonBytes(wire.c))
+    }
   })
 })
 
