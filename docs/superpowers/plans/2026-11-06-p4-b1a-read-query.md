@@ -1,6 +1,6 @@
 # П4-B1a — запит читання другої форми: план реалізації
 
-> **Статус:** прийнято архітекторкою П4-B 2026-11-06; у виконанні. Підсумок аудиту
+> **Статус:** виконано, на рев'ю архітекторки. Підсумок аудиту
 > плану — наприкінці файла.
 >
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
@@ -156,7 +156,7 @@ T1 (`simetra/compiler`) дає нові поля каталогу й прави�
 - Produces: `CommandFailure` і `ZERO_UUID` з `simetra/model`; `simetra/server`
   більше не експортує `CommandFailure`.
 
-- [ ] **Step 1: Write the failing tests** у `tier-boundary.test.ts`, у
+- [x] **Step 1: Write the failing tests** у `tier-boundary.test.ts`, у
   наявному `describe("tier zones")`:
 
 ```ts
@@ -182,19 +182,19 @@ it("server no longer exports CommandFailure; model does", async () => {
 })
 ```
 
-- [ ] **Step 2: Run, expect FAIL** —
+- [x] **Step 2: Run, expect FAIL** —
   `pnpm --filter simetra test tier-boundary` (червоний кейс експорту; кейс
   межі зелений уже зараз — це фіксація, а не новий доказ).
-- [ ] **Step 3: Move.** Клас `CommandFailure` (без змін тіла й JSDoc)
+- [x] **Step 3: Move.** Клас `CommandFailure` (без змін тіла й JSDoc)
   переноситься в `model/runtime/errors.ts`; `ZERO_UUID` — у
   `model/runtime/core.ts` з JSDoc «UUID without a scope: the channel and the
   holder key of an unscoped object». Видалити оголошення зі старих місць і
   рядок `export { CommandFailure }` з `server/index.ts`. Усі споживачі
   імпортують із `simetra/model` (у `src/model` — відносно).
-- [ ] **Step 4: Run** `pnpm --filter simetra test tier-boundary errors hooks decode rights-guards`
+- [x] **Step 4: Run** `pnpm --filter simetra test tier-boundary errors hooks decode rights-guards`
   і `pnpm typecheck` — PASS; `grep -rn "CommandFailure" packages/*/src | grep "server\""`
   — порожньо.
-- [ ] **Step 5: Commit** — `refactor(model): CommandFailure і ZERO_UUID у T0 без реекспорту`.
+- [x] **Step 5: Commit** — `refactor(model): CommandFailure і ZERO_UUID у T0 без реекспорту`.
 
 ---
 
@@ -209,20 +209,20 @@ it("server no longer exports CommandFailure; model does", async () => {
 **Interfaces:**
 - Produces: `RuntimeObject.operations?: { create?, update?, markDeletion?, delete? }`.
 
-- [ ] **Step 1: Failing tests.** Unit T0: `runtimeCatalogSchema.parse` приймає
+- [x] **Step 1: Failing tests.** Unit T0: `runtimeCatalogSchema.parse` приймає
   об'єкт `sample` з `fixtures.ts` без поля `operations`. Unit T3
   (`runtime.test.ts`): каталог з таким об'єктом, `runtime.run(session,
   { action: "update", object: CLIENT, id: ID, expectedVersion: 1 })` →
   `CommandFailure` з `error` = `{ code: "command.invalid", path: "action" }`,
   `db.calls` після створення рантайму — порожній (до бази).
-- [ ] **Step 2: Run, expect FAIL** —
+- [x] **Step 2: Run, expect FAIL** —
   `pnpm --filter simetra test catalog.test runtime.test`.
-- [ ] **Step 3: Implement.** `operations: z.strictObject({...}).optional()`;
+- [x] **Step 3: Implement.** `operations: z.strictObject({...}).optional()`;
   `superRefine` каталогу читає `object.operations?.create?.root`;
   `phase.ts`: `object.operations?.[op.action]`, `object.operations?.create?.root`.
   Пошукати інші звертання: `grep -rn "\.operations\b" packages/*/src`.
-- [ ] **Step 4: Run** ті самі тести й `pnpm typecheck` (увесь репо: designer теж читає `operations`) — PASS.
-- [ ] **Step 5: Commit** — `feat(model): запис каталогу рантайму лише для читання`.
+- [x] **Step 4: Run** ті самі тести й `pnpm typecheck` (увесь репо: designer теж читає `operations`) — PASS.
+- [x] **Step 5: Commit** — `feat(model): запис каталогу рантайму лише для читання`.
 
 ---
 
@@ -246,7 +246,7 @@ it("server no longer exports CommandFailure; model does", async () => {
   у `stage-scope-model.test.ts`). Простий FK мають лише нескоуплені таблиці,
   ТЧ кореня й `crossScope`.
 
-- [ ] **Step 1: Failing tests** у `runtime-catalog.test.ts` на фікстурі з
+- [x] **Step 1: Failing tests** у `runtime-catalog.test.ts` на фікстурі з
   одноцільовим `Ref` на довідник (`refAttribute` з `fixtures/rights.ts`) і ТЧ:
   - реквізит одноцільового `Ref` на об'єкт має `ref` = `{ object: <id
     цілі в моделі>, constraint: <ім'я FK> }` — і для складеного FK того самого
@@ -262,8 +262,8 @@ it("server no longer exports CommandFailure; model does", async () => {
     (`superRefine`) відхиляє ТЧ, чий `parentConstraint` не називає
     `foreignKey` з `references` у `section.constraints`.
   Unit T0: схема відхиляє ТЧ без `parentConstraint` і `ref` без `constraint`.
-- [ ] **Step 2: Run, expect FAIL** — `pnpm --filter simetra test runtime-catalog catalog.test`.
-- [ ] **Step 3: Implement** у `attributes()` (лише для `type === "Ref"` без
+- [x] **Step 2: Run, expect FAIL** — `pnpm --filter simetra test runtime-catalog catalog.test`.
+- [x] **Step 3: Implement** у `attributes()` (лише для `type === "Ref"` без
   `enumValues`, `array` і пари): FK таблиці, чия **остання**
   колонка — `column.name`, а остання колонка `references.columns` — ключ
   цілі; ціль — таблиця моделі з `references.schema/table`, чий `origin` не
@@ -271,8 +271,8 @@ it("server no longer exports CommandFailure; model does", async () => {
   такого FK `ref` немає (масив і пара FK не мають). У ТЧ — FK, чия остання
   колонка — `section.parent`, на основну таблицю власника; відсутність —
   `must(...)` (внутрішня помилка: ТЧ ядра завжди має FK власника).
-- [ ] **Step 4: Run** — PASS; `pnpm typecheck` і `pnpm metadata:check` — PASS.
-- [ ] **Step 5: Commit** — `feat(compiler): ref цілі Ref і parentConstraint ТЧ у каталозі рантайму`.
+- [x] **Step 4: Run** — PASS; `pnpm typecheck` і `pnpm metadata:check` — PASS.
+- [x] **Step 5: Commit** — `feat(compiler): ref цілі Ref і parentConstraint ТЧ у каталозі рантайму`.
 
 ---
 
@@ -297,7 +297,7 @@ it("server no longer exports CommandFailure; model does", async () => {
   правило схеми `attribute.lazy-not-allowed`; правило компілятора
   `rights.carrier-lazy`.
 
-- [ ] **Step 1: Failing tests** (одна таблиця `it.each` на правило):
+- [x] **Step 1: Failing tests** (одна таблиця `it.each` на правило):
   - схема: `load: "lazy"` на поліморфному `Ref` (`allowedTypes`) →
     issue `params.rule = "attribute.lazy-not-allowed"`, `path ["load"]`;
     `load: "lazy"` на реквізиті ТЧ (`tabularSectionSchema`) → те саме правило з
@@ -313,9 +313,9 @@ it("server no longer exports CommandFailure; model does", async () => {
     `load: "eager"` → без `load`; `Numeric` з `load: "lazy"` → `load: "lazy"`;
     `Bytes` у ТЧ → без `load`;
   - `messages.test.ts` — запис для `rights.carrier-lazy`.
-- [ ] **Step 2: Run, expect FAIL** —
+- [x] **Step 2: Run, expect FAIL** —
   `pnpm --filter simetra test attribute stage-model runtime-catalog messages`.
-- [ ] **Step 3: Implement.** `attributeShape.load: z.enum(["eager","lazy"]).optional()`
+- [x] **Step 3: Implement.** `attributeShape.load: z.enum(["eager","lazy"]).optional()`
   з `.meta({ description: "Whether list reads omit the attribute; default lazy for Bytes of the header." })`;
   refine пари в `attributeSchema` і `catalogAttributeSchema`; refine
   `tabularSectionSchema` над `attributes[i].load === "lazy"`. Ключ, версія й
@@ -328,14 +328,14 @@ it("server no longer exports CommandFailure; model does", async () => {
   окремий блок метаданих разом із тим самим типовим правилом); `load` доходить до `attributes()` через `field.element`.
   Регенерувати JSON-схеми:
   `UPDATE_JSON_SCHEMAS=1 pnpm --filter simetra test json-schema`.
-- [ ] **Step 4: Run** — PASS; `pnpm --filter simetra test json-schema` без
+- [x] **Step 4: Run** — PASS; `pnpm --filter simetra test json-schema` без
   змінної — PASS; `pnpm typecheck`, `pnpm metadata:check` — PASS. Скіл
   споживача (`packages/designer/skills/simetra-metadata/`, довідник
   реквізитів): `load` — коли й навіщо, типове для `Bytes`, заборони Рд25.
   Відоме обмеження: реквізити регістрів беруть ту саму `attributeSchema`, тож
   `load` там приймається й нічого не робить, доки регістри не ввійдуть у
   каталог (Рд1) — згадати в описі поля.
-- [ ] **Step 5: Commit** — `feat(model): лінивий атрибут load і правила лінивості`.
+- [x] **Step 5: Commit** — `feat(model): лінивий атрибут load і правила лінивості`.
 
 ---
 
@@ -380,7 +380,7 @@ export function renderFilter(
 export function topLevelParentEq(filter: Filter | undefined, parentName: string): unknown | undefined
 ```
 
-- [ ] **Step 1: Failing tests.**
+- [x] **Step 1: Failing tests.**
   T0 (`read.test.ts`, таблиця): дерево глибини 9 і дерево з 65 вузлами —
   відмова; `{ and: [] }` — відмова; `in` з 201 значенням, `in: []`, `{ or: [] }`, `in` без масиву,
   `isNull` зі значенням, `eq` без `value` — відмова з шляхом до вузла;
@@ -411,8 +411,8 @@ export function topLevelParentEq(filter: Filter | undefined, parentName: string)
     `where.value` за входом;
   - `topLevelParentEq`: `{ attribute: "owner", op: "eq", value: id }` і той самий
     вузол у кореневому `and` → `id`; під `or`, `not`, `in` → `undefined`.
-- [ ] **Step 2: Run, expect FAIL** — `pnpm --filter simetra test read.test read-filter`.
-- [ ] **Step 3: Implement.** `filterSchema` — `z.lazy` над union суворих
+- [x] **Step 2: Run, expect FAIL** — `pnpm --filter simetra test read.test read-filter`.
+- [x] **Step 3: Implement.** `filterSchema` — `z.lazy` над union суворих
   об'єктів; глибина й кількість вузлів — `superRefine` кореня. Оператори за
   типом: `contains`/`startsWith` — `String`, `Text`; порівняння — скаляри,
   крім `Json`, `Bytes`, `Raw`, масиву й пари; `in` — скаляри й пара. Значення
@@ -421,8 +421,8 @@ export function topLevelParentEq(filter: Filter | undefined, parentName: string)
   `Version` — ціле (`bigint`). Порівняння й `orderBy` — для тих самих
   скалярних типів (не `Json`, `Bytes`, `Raw`, масив, пара, лінивий). Екранування шаблону — `\` → `\\`, `%` → `\%`, `_` → `\_`
   (типовий `ESCAPE '\'` у `ILIKE`).
-- [ ] **Step 4: Run** — PASS; `pnpm typecheck` — PASS.
-- [ ] **Step 5: Commit** — `feat(server): фільтр-дерево запиту читання й рендер SQL`.
+- [x] **Step 4: Run** — PASS; `pnpm typecheck` — PASS.
+- [x] **Step 5: Commit** — `feat(server): фільтр-дерево запиту читання й рендер SQL`.
 
 ---
 
@@ -474,7 +474,7 @@ export type ReadResultOf<Q> = Q extends { count: true } ? ReadCount : ReadRows
   де `ReadPlan` — внутрішній опис операторів форми (перший оператор, режим
   декодування), який виконують і `readRows`, і `ctx.read`.
 
-- [ ] **Step 1: Failing tests** (`read.test.ts` — цілі оператори й `params`):
+- [x] **Step 1: Failing tests** (`read.test.ts` — цілі оператори й `params`):
   - список без `orderBy`: `SELECT <проєкція> AS row FROM "s"."t" t ORDER BY "id" LIMIT $n`;
   - `orderBy` з `direction` і `nulls` → `ORDER BY "name" DESC NULLS LAST, "id"`;
     `orderBy`, що закінчується ключем, — ключ не дублюється (В4); ключ не
@@ -498,15 +498,15 @@ export type ReadResultOf<Q> = Q extends { count: true } ? ReadCount : ReadRows
   кожна відмова (невідомий реквізит, лінивий фільтр, невалідна схема) —
   без жодного виклику порту після створення рантайму. `hooks.test.ts`:
   `ctx.read` повертає `{ rows }` і `{ count }`.
-- [ ] **Step 2: Run, expect FAIL** —
+- [x] **Step 2: Run, expect FAIL** —
   `pnpm --filter simetra test read.test read-runtime hooks`.
-- [ ] **Step 3: Implement T0 і T3.** `readQuerySchema` — лише три об'єктні
+- [x] **Step 3: Implement T0 і T3.** `readQuerySchema` — лише три об'єктні
   форми (П4-A видалити). У `read.ts` T3: мапа `FilterColumn` об'єкта
   (реквізити, `keyName` → `Key`, `versionName` → `Version`); `buildReadStatement`
   розбивається на функції форм; проєкція списку ріже пари на шматки по 50.
   `readRows` і `ctx.read` виконують `ReadPlan` і повертають `ReadRows`/`ReadCount`;
   версія з рядка — як зараз через `decodeRow`.
-- [ ] **Step 4: Update consumers.**
+- [x] **Step 4: Update consumers.**
   - `data-tools.ts`: вхід `{ query: readQuerySchema }` без змін імені;
     `DataReadData` і `summarizeData` (обидва в `data-tools.ts`) —
     `toJson(ReadResult)` | `{ error }`, підсумок `rows.length` чи `count`; опис інструмента
@@ -521,10 +521,10 @@ export type ReadResultOf<Q> = Q extends { count: true } ? ReadCount : ReadRows
     `after` → keyset-умова `gt` за ключем.
   - скіл: приклади `data-read` (`agents-over-mcp.md`) і опис `ctx.read`
     (`object-modules.md`) — нова форма з одним прикладом фільтра.
-- [ ] **Step 5: Run** `pnpm --filter simetra test`, `pnpm --filter @simetrajs/designer test`,
+- [x] **Step 5: Run** `pnpm --filter simetra test`, `pnpm --filter @simetrajs/designer test`,
   `pnpm typecheck`, `pnpm lint` — PASS; scoped DB:
   `pnpm --filter @simetrajs/designer test:db command-runtime data-tools tenant-creation rights-admin-commands` — PASS.
-- [ ] **Step 6: Commit** — `feat(server): запит читання другої форми замість форми П4-A`.
+- [x] **Step 6: Commit** — `feat(server): запит читання другої форми замість форми П4-A`.
 
 ---
 
@@ -541,7 +541,7 @@ export type ReadResultOf<Q> = Q extends { count: true } ? ReadCount : ReadRows
 - Produces: `include?: string[]` (1…`INCLUDE_MAX` = 16 унікальних імен, В10) у формах картки й
   списку; `ReadRows.included` з ключем `"<kind>.<name>"` об'єкта цілі.
 
-- [ ] **Step 1: Failing tests.** Будівник: другий оператор
+- [x] **Step 1: Failing tests.** Будівник: другий оператор
   `SELECT <проєкція списку цілі> AS row FROM <ціль> t WHERE "id" = ANY(ARRAY[$1::uuid, …])`
   (параметр на id)
   на кожну ціль (два реквізити з тією самою ціллю — один оператор з
@@ -552,14 +552,14 @@ export type ReadResultOf<Q> = Q extends { count: true } ? ReadCount : ReadRows
   `included` мовчки був би порожнім). Рантайм: обидва
   оператори в одній транзакції до `COMMIT` (послідовність викликів порту
   з `harness.ts`); `ctx.read` з `include` — два `enqueue`.
-- [ ] **Step 2: Run, expect FAIL** — `pnpm --filter simetra test read.test read-runtime hooks`.
-- [ ] **Step 3: Implement** — `ReadPlan` отримує крок `include`, що будує
+- [x] **Step 2: Run, expect FAIL** — `pnpm --filter simetra test read.test read-runtime hooks`.
+- [x] **Step 3: Implement** — `ReadPlan` отримує крок `include`, що будує
   оператор з декодованих рядків першого; оператор `include` — теж у фазі
   `read` (інакше `57014` там став би `command.internal`). `INCLUDE_MAX` —
   нова стала T0. Опис `data-read` і приклад скіла `agents-over-mcp.md` —
   з `include`; бюджет `tools/list` — перезамір.
-- [ ] **Step 4: Run** — PASS; `pnpm typecheck` і `pnpm --filter @simetrajs/designer test` — PASS.
-- [ ] **Step 5: Commit** — `feat(server): include посилань у серверному читанні`.
+- [x] **Step 4: Run** — PASS; `pnpm typecheck` і `pnpm --filter @simetrajs/designer test` — PASS.
+- [x] **Step 5: Commit** — `feat(server): include посилань у серверному читанні`.
 
 ---
 
@@ -586,7 +586,7 @@ export type ReadResultOf<Q> = Q extends { count: true } ? ReadCount : ReadRows
 - Produces (T3): `decodeLine(section, record)` (виділено з `decodeRecord`),
   `decodeCardRow(object, json)`.
 
-- [ ] **Step 1: Failing tests.**
+- [x] **Step 1: Failing tests.**
   T0: `tabularSections` у списочній формі, `include` у формах ТЧ, порожній
   масив `tabularSections` — відмова схеми.
   Будівник (цілі оператори):
@@ -620,14 +620,14 @@ export type ReadResultOf<Q> = Q extends { count: true } ? ReadCount : ReadRows
   UUID — відмова схеми; рядок
   картки з ТЧ декодовано в `tabularSections`; рядок ТЧ несе `parentName` і
   `lineNumberName` (як у `decodeRecord`); `ctx.read` з тими самими формами.
-- [ ] **Step 2: Run, expect FAIL** — `pnpm --filter simetra test read.test read-runtime hooks decode`.
-- [ ] **Step 3: Implement.** Проєкція рядка ТЧ — та сама функція явного
+- [x] **Step 2: Run, expect FAIL** — `pnpm --filter simetra test read.test read-runtime hooks decode`.
+- [x] **Step 3: Implement.** Проєкція рядка ТЧ — та сама функція явного
   переліку, що й списку (реквізити ТЧ лінивими не бувають). `decodeLine`
   виділити з `decodeRecord` без зміни поведінки команд. Перевірка межі —
   у T3 після декодування, до повернення. Опис `data-read` і скіл — форми
   ТЧ (одним прикладом «ТЧ власника»); бюджет `tools/list` — перезамір.
-- [ ] **Step 4: Run** — PASS; `pnpm typecheck` і `pnpm --filter @simetrajs/designer test` — PASS.
-- [ ] **Step 5: Commit** — `feat(server): ТЧ у серверному читанні одним оператором з межею`.
+- [x] **Step 4: Run** — PASS; `pnpm typecheck` і `pnpm --filter @simetrajs/designer test` — PASS.
+- [x] **Step 5: Commit** — `feat(server): ТЧ у серверному читанні одним оператором з межею`.
 
 ---
 
@@ -642,18 +642,18 @@ export type ReadResultOf<Q> = Q extends { count: true } ? ReadCount : ReadRows
   `CommandRuntimeOptions.readStatementTimeoutMs?: number` (ціле ≥ 1, типово
   `15_000`; 0 — відмова `createCommandRuntime`, бо вимкнув би межу).
 
-- [ ] **Step 1: Failing tests.** `read-runtime.test.ts`: після `BEGIN`
+- [x] **Step 1: Failing tests.** `read-runtime.test.ts`: після `BEGIN`
   читання йде `SELECT set_config('statement_timeout', $1, true)` з
   параметром `"15000"` (і `"250"` з опцією); `readStatementTimeoutMs: 0` —
   відмова створення без I/O. `errors.test.ts`: `57014` у фазі `read` →
   `{ code: "command.timeout" }`; у фазі `write` і без фази — `command.internal` (В7).
-- [ ] **Step 2: Run, expect FAIL** — `pnpm --filter simetra test read-runtime errors`.
-- [ ] **Step 3: Implement.** Значення — зв'язаним параметром через
+- [x] **Step 2: Run, expect FAIL** — `pnpm --filter simetra test read-runtime errors`.
+- [x] **Step 3: Implement.** Значення — зв'язаним параметром через
   `set_config`, не текстом `SET`. Фаза `read` ставиться до першого оператора
   будівника, як зараз. `ctx.read` у транзакції команди `statement_timeout`
   не ставить: межу часу команди дає бюджет часу B1b.
-- [ ] **Step 4: Run** — PASS; `pnpm typecheck` — PASS.
-- [ ] **Step 5: Commit** — `feat(server): statement_timeout серверного читання і command.timeout`.
+- [x] **Step 4: Run** — PASS; `pnpm typecheck` — PASS.
+- [x] **Step 5: Commit** — `feat(server): statement_timeout серверного читання і command.timeout`.
 
 ---
 
@@ -682,7 +682,7 @@ export type ReadResultOf<Q> = Q extends { count: true } ? ReadCount : ReadRows
   `beforeStatement(inner: CommandDatabase, hook: (index: number, text: string) => Promise<void>): CommandDatabase`
   у `support/db.ts` — кличе `hook` перед кожним оператором клієнта.
 
-- [ ] **Step 1: Write the DB tests** (рантайм над тінню, як у
+- [x] **Step 1: Write the DB tests** (рантайм над тінню, як у
   `command-runtime.db.test.ts`; два актори двох скоупів):
   1. «second-form reads under RLS»: фільтр-дерево, `orderBy`, `offset`,
      `count` бачать лише рядки свого скоупу; `in` з елементами `a,b`, `NULL`,
@@ -715,13 +715,13 @@ export type ReadResultOf<Q> = Q extends { count: true } ? ReadCount : ReadRows
   the request role sees» доповнити запитами другої форми (фільтр `or`/`not`,
   `orderBy`, `count`): множина id `runtime.read` = множина `SELECT` під роллю
   запиту з тими самими claims, і запасний шлях дає те саме (інваріант 10).
-- [ ] **Step 2: Run** —
+- [x] **Step 2: Run** —
   `pnpm --filter @simetrajs/designer test:db read-query command-runtime` — PASS
-- [ ] **Step 3: Mutation check (обов'язковий).** Локально, без коміту,
+- [x] **Step 3: Mutation check (обов'язковий).** Локально, без коміту,
   розщепити «ТЧ власника» на два оператори (версія власника окремо від
   рядків ТЧ) — кейс 3 червоніє на прогоні `i` = другий оператор; так само
   додати явний `COLLATE "C"` у `orderBy` — кейс 5 червоніє. Повернути код.
-- [ ] **Step 4: Commit** — `test(designer): DB-кейси серверного читання другої форми`.
+- [x] **Step 4: Commit** — `test(designer): DB-кейси серверного читання другої форми`.
 
 ---
 
@@ -736,7 +736,7 @@ export type ReadResultOf<Q> = Q extends { count: true } ? ReadCount : ReadRows
   `docs/superpowers/specs/2026-10-23-provider-profiles-design.md` (ПП2),
   `docs/ROADMAP.md` (рядок П4: B1a виконано)
 
-- [ ] **Step 1: Колляція (В8).** Повторити запит на локальному стеку
+- [x] **Step 1: Колляція (В8).** Повторити запит на локальному стеку
   (`pnpm db:start`, лише читання):
 
 ```sql
@@ -749,13 +749,13 @@ FROM pg_database WHERE datname = current_database();
   зупинитися й доповісти архітекторці. Речення §4.2 про колляцію і пункт
   колляції в рядку «Хостований Supabase» спеки П4 §9 внесено разом із планом
   (рядок Додатку А П4-B «внесено (B1a)»).
-- [ ] **Step 2: Правки спек** — рядок у рядок за Додатком А (колонка «Блок» =
+- [x] **Step 2: Правки спек** — рядок у рядок за Додатком А (колонка «Блок» =
   B1a, зокрема B1a-частини змішаних рядків §6.3 і §6.10), плюс відповіді
   архітекторки на В1–В7. Старий текст форми П4-A в §6.11 спеки П4 замінити
   посиланням на §4.1–§4.2 П4-B, не дублюючи її.
-- [ ] **Step 3: Anchors** — `python3 scripts/check-doc-anchors.py` — без
+- [x] **Step 3: Anchors** — `python3 scripts/check-doc-anchors.py` — без
   помилок.
-- [ ] **Step 4: Гейти блоку**:
+- [x] **Step 4: Гейти блоку**:
 
 ```bash
 pnpm format:check && pnpm lint && pnpm typecheck && pnpm test
@@ -766,7 +766,7 @@ pnpm build:packages && pnpm test:packaging   # змінено публічні �
 
   Очікування: усе зелене; `test:db` — один повний прогін на блок, без
   паралельної сесії, що редагує checkout.
-- [ ] **Step 5: Commit** — `docs(spec): П4-B1a — правки Додатку А, колляція бази, ROADMAP`.
+- [x] **Step 5: Commit** — `docs(spec): П4-B1a — правки Додатку А, колляція бази, ROADMAP`.
 
 ---
 
