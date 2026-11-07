@@ -347,6 +347,49 @@ describe("tier zones", () => {
     expect(msgs[0]).toContain("normalized relative path")
   })
 
+  // `.` і порожні сегменти обходили регекс, що бачить лише початковий `../`.
+  it.each([
+    ["src/data/__fixture.ts", ".././model"],
+    ["src/data/__fixture.ts", "././../model"],
+    ["src/data/__fixture.ts", "..//model"],
+    ["src/data/__fixture.ts", "../../src/./model"],
+    ["src/data/__fixture.ts", "./.././model"],
+    ["src/ui/__fixture.ts", ".././data/x"],
+  ])("%s: dot or empty segment %s is refused", async (file, spec) => {
+    const msgs = await restricted(importOf(spec), file)
+    expect(msgs, spec).toHaveLength(1)
+    expect(msgs[0]).toContain("normalized relative path")
+  })
+
+  it.each([
+    ["src/data/facade/__fixture.ts", "./../supabase/x"],
+    ["src/data/__fixture.ts", "../data/supabase/x"],
+    ["src/data/facade/__fixture.ts", "../../data/supabase/x"],
+    ["src/data/__fixture.ts", "../../src/data/supabase/x"],
+  ])("%s: supabase detour %s is refused", async (file, spec) => {
+    const msgs = await purity(importOf(spec), file)
+    expect(msgs, spec).toHaveLength(1)
+  })
+
+  it("plain ./x and ../x stay allowed in the facade", async () => {
+    for (const spec of ["./x", "../x"]) {
+      expect(
+        await restricted(importOf(spec), "src/data/facade/__fixture.ts"),
+        spec
+      ).toEqual([])
+      expect(
+        await purity(importOf(spec), "src/data/facade/__fixture.ts"),
+        spec
+      ).toEqual([])
+    }
+  })
+
+  it("namespace import of @tanstack/db is refused outside the facade", async () => {
+    const code = `import * as db from "@tanstack/db"\nexport const used = db\n`
+    expect(await restricted(code, "src/data/__fixture.ts")).toHaveLength(1)
+    expect(await restricted(code, "src/data/facade/__fixture.ts")).toEqual([])
+  })
+
   it("normalized relative paths within the allowed tiers pass", async () => {
     for (const [file, spec] of [
       ["src/data/__fixture.ts", "./x"],

@@ -29,11 +29,13 @@ const SERVER_MESSAGE =
 
 // Ярусний regex бачить лише `..` на початку шляху, тож `./a/../../server`
 // обходив би його. Нормалізований шлях — без `..` після звичайного сегмента.
+// Три гілки: `..` після звичайного сегмента; порожній сегмент (`//`); сегмент
+// `.` будь-де, крім єдиного початкового `./` (`.././model`, `../../src/./model`).
 const NORMALIZED_PATTERN =
-  "^\\.\\.?/(?:[^/]+/)*?(?!\\.\\.?/)[^/]+/\\.\\.(?:/|$)"
+  "^\\.\\.?/(?:[^/]+/)*?(?!\\.\\.?/)[^/]+/\\.\\.(?:/|$)|^\\.\\.?/(?:.*/)?/|^\\.\\.?/(?:.*/)?\\.(?:/|$)"
 
 const NORMALIZED_MESSAGE =
-  "Tier zone: use a normalized relative path (no `..` after a regular segment); a non-normalized path bypasses the tier check."
+  "Tier zone: use a normalized relative path (no `..` after a regular segment, no `.` segment after the start, no empty segment); a non-normalized path bypasses the tier check."
 
 function tierMessage(tier, index) {
   return (
@@ -161,7 +163,9 @@ function dataPurity(facade) {
                 "T4 purity: a relative path out of src/data embeds a second copy of another tier in dist/data (P4-B spec §3).",
             },
             {
-              regex: "^(?:\\./|(?:\\.\\./)+)(?:\\./)?supabase(?:/|$)",
+              // Прямі форми й обхід через ярус: `../data/supabase`, `../../src/data/supabase`.
+              regex:
+                "^(?:(?:\\./(?:\\.\\./)*|(?:\\.\\./)+)(?:(?:src/)?data/)?supabase(?:/|$))",
               message:
                 "T4 purity: only src/data/supabase imports its own folder; a relative supabase/… elsewhere pulls @supabase/realtime-js into simetra/data (P4-B spec §3).",
             },
