@@ -11,6 +11,7 @@ import {
   type RuntimeRootCreate,
   type RuntimeSection,
 } from "simetra/model"
+import { isSignalObject } from "./access-units"
 import type {
   CatalogCommandContract,
   CommandReference,
@@ -127,6 +128,7 @@ function runtimeObject(
     keyName: fieldOf(fields, key).name,
     versionColumn,
     versionName: fieldOf(fields, versionColumn).name,
+    signal: isSignalObject(facts.model, object.id),
     ...(scope?.origin.scopeKindId === undefined
       ? {}
       : { scopeKindId: scope.origin.scopeKindId, scopeColumn: scope.name }),

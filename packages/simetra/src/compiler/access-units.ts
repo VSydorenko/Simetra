@@ -16,7 +16,7 @@ import {
   type PublicReadRole,
   type RequestRolePurpose,
 } from "simetra/model"
-import type { CompiledScopeKind } from "./compile"
+import type { CompiledModel, CompiledScopeKind } from "./compile"
 import {
   mainTableOf,
   qualified,
@@ -340,6 +340,75 @@ export function tableGrants(
   ]
 }
 
+/** A `RESTRICTIVE` read boundary of a table: the tenant one or the Users one. */
+export type ReadBoundary = "tenant" | "users"
+
+/**
+ * The `RESTRICTIVE` read boundaries of a table (rights spec §5.2): `tenant`
+ * for a scoped table without `publicRead`, `users` for a Users table when
+ * users visibility is generated.
+ */
+export function readBoundaries(
+  contract: AccessContract,
+  visibleUsers: boolean
+): readonly ReadBoundary[] {
+  // Одне джерело для політик читання й ознаки сигналу (спека П4-B §8.3):
+  // інакше ознака могла б розійтися з тим, що насправді обмежує читання.
+  const boundaries: ReadBoundary[] = []
+  if (contract.scope !== undefined && contract.publicRead.length === 0) {
+    boundaries.push("tenant")
+  }
+  if (visibleUsers && contract.users) boundaries.push("users")
+  return boundaries
+}
+
+/**
+ * Whether an object takes a change signal (P4-B spec §8.3): its key is a
+ * single `uuid` column and no read boundary other than the tenant one
+ * restricts its rows.
+ */
+export function signalObject(
+  keyIsSingleUuid: boolean,
+  boundaries: readonly ReadBoundary[]
+): boolean {
+  // Межу тенанта канал сигналу відтворює скоупом; межу «Користувачів» — ні:
+  // сигнал розкрив би id рядка, якого отримувач не бачить.
+  return keyIsSingleUuid && boundaries.every((b) => b === "tenant")
+}
+
+/**
+ * Whether an object of the compiled model takes a change signal: the one
+ * entry for the runtime catalog and the kernel generator.
+ */
+export function isSignalObject(
+  model: CompiledModel,
+  objectId: string
+): boolean {
+  // Той самий вхід пише виклик сигналу в ядрі (B2), тож рішення одне (§8.3).
+  const main = mainTableOf(model.physical, objectId)
+  if (main === undefined) return false
+  // Без контракту доступу (RLS вимкнено) політик немає, і межу читання не
+  // доведено — сигнал не вмикаємо.
+  const contract = model.contracts.access.find(
+    (a) =>
+      a.objectId === objectId &&
+      a.table.schema === main.schema &&
+      a.table.name === main.name
+  )
+  if (contract === undefined) return false
+  const key = main.primaryKey?.columns ?? []
+  const keyIsSingleUuid =
+    key.length === 1 &&
+    main.columns.find((c) => c.name === key[0])?.type === "uuid"
+  return signalObject(
+    keyIsSingleUuid,
+    readBoundaries(
+      contract,
+      hasVisibleUsers(model.contracts, model.project.database.provider)
+    )
+  )
+}
+
 /** Контракти, з яких генератор будує політики прав і межі «Користувачів». */
 export type AccessPolicyContracts = Pick<
   Contracts,
@@ -390,6 +459,7 @@ export function buildAccessUnits(
       const names = accessPolicyNames(table)
       const policies: string[] = []
       const publicRead = contract.publicRead.length > 0
+      const boundaries = readBoundaries(contract, visibleUsers)
       if (contract.scope !== undefined) {
         // Некорельована форма: множину скоупів планувальник обчислює раз на
         // запит, а не викликає функцію на кожен рядок (§6.8). Межа —
@@ -401,7 +471,7 @@ export function buildAccessUnits(
           )
         // Об'єкт із `publicRead` свідомо відкриває всі рядки на читання
         // (§6.8, спека прав §5.2), але межа запису від форми прав не залежить.
-        if (!publicRead) {
+        if (boundaries.includes("tenant")) {
           restrict(names.scopeRead, "SELECT", { using: boundary })
         }
         // Скоуп нового кореня — його власний `id`: межу нового тенанта дасть
@@ -415,7 +485,7 @@ export function buildAccessUnits(
         })
         restrict(names.scopeDelete, "DELETE", { using: boundary })
       }
-      if (visibleUsers && contract.users) {
+      if (boundaries.includes("users")) {
         // «Користувачі» нескоуплені, тож межа тенанта їх не обмежує: роль
         // рівня скоупу з `read@any` бачила б користувачів усіх тенантів
         // (спека системної схеми §12).

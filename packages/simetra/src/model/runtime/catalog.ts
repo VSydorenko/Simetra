@@ -174,6 +174,11 @@ export const catalogEntrySchema = z.strictObject({
   versionName: z.string(),
   scopeKindId: z.string().optional(),
   scopeColumn: z.string().optional(),
+  /**
+   * Whether the object takes a change signal (P4-B spec §8.3): a single
+   * `uuid` key and no read boundary but the tenant one.
+   */
+  signal: z.boolean(),
   attributes: z.array(catalogEntryAttributeSchema),
   tabularSections: z.array(catalogEntrySectionSchema),
 })
