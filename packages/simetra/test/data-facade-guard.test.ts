@@ -38,18 +38,40 @@ function propName(n: ts.PropertyName | ts.BindingName): string | undefined {
   return ts.isIdentifier(n) || ts.isStringLiteralLike(n) ? n.text : undefined
 }
 
+const WRAPPERS = (n: ts.Node): boolean =>
+  ts.isParenthesizedExpression(n) ||
+  ts.isAsExpression(n) ||
+  ts.isSatisfiesExpression(n) ||
+  ts.isNonNullExpression(n)
+
+function stripDown(e: ts.Expression): ts.Expression {
+  while (WRAPPERS(e)) e = (e as ts.ParenthesizedExpression).expression
+  return e
+}
+
+function outermost(n: ts.Node): ts.Node {
+  while (n.parent && WRAPPERS(n.parent)) n = n.parent
+  return n
+}
+
 /**
- * Знаходить обходи фасаду, невидимі статичному лінту:
- *  - деструктуризація `writeInsert|…|refetch` та `createTransaction|…`;
- *  - доступ `x.createTransaction` / `x.createOptimisticAction` (отже й
- *    `(await import("@tanstack/db")).createTransaction`);
- *  - доступ до sync-методів літеральним ключем `c.utils["refetch"]`;
- *  - обчислений не-літеральний ключ лише на `….utils[expr]` — саме там живуть
- *    sync-методи; ширше правило ловило б кожен `arr[i]` у коді;
- *  - динамічний `import()` пакетів `@tanstack/query-core` і
- *    `@tanstack/query-db-collection`.
+ * Знаходить обходи фасаду, невидимі статичному лінту. Чому саме так: значення
+ * `.utils` колекції несе sync-методи (`writeInsert`, `refetch`, …), тож поза
+ * фасадом його дозволено лише як об'єкт доступу до літерального імені, що не
+ * є забороненим (`c.utils.isReady`). Будь-яке інше використання (аліас,
+ * присвоєння, аргумент, spread, деструктуризація, обчислений ключ) ховає
+ * подальший доступ від лінту, тому є знахідкою. Дужки, `as`, `satisfies` і `!`
+ * пропускаємо — вони не змінюють значення.
+ *  - голий `utils[expr]` з нелітеральним ключем — знахідка;
+ *  - деструктуризація (декларація чи присвоєння) шести sync-імен і
+ *    `createTransaction|createOptimisticAction`;
+ *  - доступ до фабрик транзакцій, літеральний ключ до заборонених імен;
+ *  - будь-який динамічний `import()` пакета `@tanstack/db` (статичні імпорти
+ *    тримає лінт, а динамічний імпорт поза фасадом не потрібен), а також
+ *    `@tanstack/query-core` і `@tanstack/query-db-collection`.
+ * Загальний `arr[i]` не чіпаємо: правило звужене до значення `utils`.
  */
-export function findFacadeBypasses(source: string, file: string): string[] {
+function findFacadeBypasses(source: string, file: string): string[] {
   const sf = ts.createSourceFile(
     file,
     source,
@@ -62,25 +84,46 @@ export function findFacadeBypasses(source: string, file: string): string[] {
     const { line } = sf.getLineAndCharacterOfPosition(n.getStart(sf))
     found.push(`${file}:${line + 1} ${what}`)
   }
+  const banned = (name: string) =>
+    SYNC_WRITES.has(name) || TX_FACTORIES.has(name)
   const visit = (n: ts.Node): void => {
     if (ts.isObjectBindingPattern(n)) {
       for (const el of n.elements) {
         const name = propName(el.propertyName ?? el.name)
-        if (name && (SYNC_WRITES.has(name) || TX_FACTORIES.has(name)))
-          report(el, `destructuring of ${name}`)
+        if (name && banned(name)) report(el, `destructuring of ${name}`)
+      }
+    } else if (
+      ts.isBinaryExpression(n) &&
+      n.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+      ts.isObjectLiteralExpression(stripDown(n.left))
+    ) {
+      for (const p of (stripDown(n.left) as ts.ObjectLiteralExpression)
+        .properties) {
+        const name = p.name ? propName(p.name as ts.PropertyName) : undefined
+        if (name && banned(name)) report(p, `destructuring of ${name}`)
       }
     } else if (ts.isPropertyAccessExpression(n)) {
       if (TX_FACTORIES.has(n.name.text)) report(n, `access to ${n.name.text}`)
+      if (n.name.text === "utils") {
+        const out = outermost(n)
+        const p = out.parent
+        const ok =
+          (ts.isPropertyAccessExpression(p) &&
+            p.expression === out &&
+            !banned(p.name.text)) ||
+          (ts.isElementAccessExpression(p) &&
+            p.expression === out &&
+            isStringLiteral(p.argumentExpression) &&
+            !banned((p.argumentExpression as ts.StringLiteralLike).text))
+        if (!ok) report(n, "utils used other than as c.utils.<allowed name>")
+      }
     } else if (ts.isElementAccessExpression(n)) {
       const arg = n.argumentExpression
-      const onUtils =
-        ts.isPropertyAccessExpression(n.expression) &&
-        n.expression.name.text === "utils"
+      const obj = stripDown(n.expression)
       if (isStringLiteral(arg)) {
         const name = (arg as ts.StringLiteralLike).text
-        if (SYNC_WRITES.has(name) || TX_FACTORIES.has(name))
-          report(n, `element access to ${name}`)
-      } else if (onUtils) {
+        if (banned(name)) report(n, `element access to ${name}`)
+      } else if (ts.isIdentifier(obj) && obj.text === "utils") {
         report(n, "computed non-literal key on utils")
       }
     } else if (
@@ -88,12 +131,11 @@ export function findFacadeBypasses(source: string, file: string): string[] {
       n.expression.kind === ts.SyntaxKind.ImportKeyword
     ) {
       const arg = n.arguments[0]
-      if (
-        arg &&
-        isStringLiteral(arg) &&
-        QUERY_MODULES.has((arg as ts.StringLiteral).text)
-      )
-        report(n, `dynamic import of ${(arg as ts.StringLiteral).text}`)
+      if (arg && isStringLiteral(arg)) {
+        const m = (arg as ts.StringLiteral).text
+        if (QUERY_MODULES.has(m) || m === "@tanstack/db")
+          report(n, `dynamic import of ${m}`)
+      }
     }
     ts.forEachChild(n, visit)
   }
@@ -103,7 +145,7 @@ export function findFacadeBypasses(source: string, file: string): string[] {
 
 // Обхід приймає корінь параметром, щоб тест на тимчасовій теці і тест на
 // реальному дереві ділили один код.
-export function scanDataTree(root: string): string[] {
+function scanDataTree(root: string): string[] {
   const out: string[] = []
   const walkDir = (dir: string, rel: string): void => {
     for (const e of readdirSync(dir, { withFileTypes: true })) {
@@ -139,6 +181,24 @@ describe("data-facade guard: findFacadeBypasses", () => {
       'const t = (await import("@tanstack/db")).createTransaction',
       "x.ts",
     ],
+    ["alias", "const u = c.utils\nu[k]()", "x.ts"],
+    ["assignment alias", "let u\nu = c.utils", "x.ts"],
+    ["bare utils computed", "utils[k]()", "x.ts"],
+    ["as-cast computed", "(c.utils as X)[k]()", "x.ts"],
+    ["non-null computed", "c.utils![k]()", "x.ts"],
+    ["utils as argument", "f(c.utils)", "x.ts"],
+    ["utils spread", "const o = { ...c.utils }", "x.ts"],
+    [
+      "destructuring assignment",
+      "let refetch\n;({ refetch } = c.utils)",
+      "x.ts",
+    ],
+    ["banned property", "c.utils.refetch()", "x.ts"],
+    [
+      "dynamic db then",
+      'import("@tanstack/db").then((m) => m["create" + "Transaction"])',
+      "x.ts",
+    ],
     ["tsx file", 'void import("@tanstack/query-core")', "x.tsx"],
   ]
   it.each(bad)("flags %s", (_n, src, file) => {
@@ -147,7 +207,7 @@ describe("data-facade guard: findFacadeBypasses", () => {
 
   it("passes clean source", () => {
     const src =
-      'const a = arr[i]\nconst { x } = y\nawait import("./z")\nutils.foo'
+      'const a = arr[i]\nconst b = record[key]\nconst { x } = y\nawait import("./z")\nc.utils.isReady()\nc.utils["isReady"]\nutils.foo'
     expect(findFacadeBypasses(src, "x.ts")).toEqual([])
   })
 
