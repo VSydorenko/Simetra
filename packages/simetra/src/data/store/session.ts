@@ -41,6 +41,8 @@ export interface Session {
   close(reason: CloseReason, purgeAll: (scope: Scope) => void): void
   /** A request controller; call `release()` when the request is done. */
   track(): { signal: AbortSignal; release(): void }
+  /** The number of tracked request controllers (inspection). */
+  trackedCount(): number
 }
 
 export function createSession(options: {
@@ -170,6 +172,7 @@ export function createSession(options: {
         listeners.clear()
       }
     },
+    trackedCount: () => controllers.size,
     track() {
       const controller = new AbortController()
       if (closed !== undefined) {

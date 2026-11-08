@@ -439,10 +439,18 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
     const spec = form.spec
     if (spec.kind === "section") {
       const entry = o.sections.get(spec.owner, spec.section)
+      const header = viewOf(o, spec.owner)
+      // Власник `removed` чи схований горизонтом рядків не показує: у
+      // другому випадку вони лишаються в сховищі, а вирішує хвіст (Р36).
+      const hidden =
+        header?.state === "removed" ||
+        o.rows.get(spec.owner)?.stale.seen !== undefined
       section = {
-        ownerVersion: entry?.ownerVersion,
-        complete: entry?.complete ?? false,
-        lines: entry?.lines ?? NO_LINES,
+        ownerVersion: hidden ? undefined : entry?.ownerVersion,
+        complete: hidden ? false : (entry?.complete ?? false),
+        lines: hidden ? NO_LINES : (entry?.lines ?? NO_LINES),
+        // Без шапки в сховищі стан власника невідомий.
+        ownerState: header?.state ?? "unknown",
       }
     } else {
       const refViews = new Map<Key, RowView>()

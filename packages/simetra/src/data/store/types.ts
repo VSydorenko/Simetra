@@ -69,6 +69,11 @@ export interface ViewSnapshot {
     readonly ownerVersion: number | undefined
     readonly complete: boolean
     readonly lines: readonly SectionLine[]
+    /**
+     * The state of the owner header, from the row state vocabulary: `removed`
+     * (no lines shown), `stale`, `unknown` when the store has no header.
+     */
+    readonly ownerState: RowState
   }
   readonly strategy?: "full" | "window"
   readonly truncated?: boolean

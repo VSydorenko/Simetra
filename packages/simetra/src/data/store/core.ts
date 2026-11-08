@@ -102,8 +102,17 @@ export interface CoreInspection {
     pairBurials: number
     revisions: number
     rowViews: number
+    /** Keys waiting for or in flight in the tail re-reads. */
     tails: number
     purges: number
+    /** Tracked request controllers of the session. */
+    controllers: number
+    /** Release timers and preload timers of the held view forms. */
+    releaseTimers: number
+    preloadTimers: number
+    /** Section store maps, summed over objects. */
+    sectionOwners: number
+    sectionOwnerVersions: number
   }
   /** Deliberate defects of the model test's self-check; empty by default. */
   readonly defects: Set<DefectFlag>
@@ -495,12 +504,22 @@ export function createCore(options: {
     defects,
     serviceSizes() {
       const views = rowViews.sizes()
+      const subs = [...registry.subsets()]
+      const sections = [...objects.values()].map((o) => o.sections.sizes())
       return {
         ...session.epochs.sizes(),
         revisions: views.revisions,
         rowViews: views.views,
-        tails: tails.size,
+        tails: [...tails.values()].reduce(
+          (n, t) => n + t.pending.size + (t.flying?.length ?? 0),
+          0
+        ),
         purges: purges.size,
+        controllers: session.trackedCount(),
+        releaseTimers: subs.filter((s) => s.releaseTimer !== undefined).length,
+        preloadTimers: subs.reduce((n, s) => n + s.preloadTimers.size, 0),
+        sectionOwners: sections.reduce((n, x) => n + x.owners, 0),
+        sectionOwnerVersions: sections.reduce((n, x) => n + x.ownerVersions, 0),
       }
     },
     owners: (object, key) => objectOf(object).rows.get(key)?.owners ?? 0,

@@ -121,6 +121,23 @@ function setLayout(s: ReaderTarget, layout: readonly Key[]) {
   s.layoutSet = new Set(layout)
 }
 
+/**
+ * Читання за ключем не знайшло рядка: з шапкою — `removed` на місці; без
+ * шапки сховище нічого не фіксує, але рядки ТЧ цього власника (вигляд ТЧ
+ * писав їх за невідомим скоупом) показали б власника, якого сервер не
+ * повертає (Р36).
+ */
+function missed(
+  ops: StoreOps,
+  scope: Scope,
+  o: ObjectState,
+  key: Key,
+  readEpoch: number
+) {
+  if (o.rows.get(key) !== undefined) ops.remove(scope, o, key, readEpoch)
+  else ops.clearOwner(scope, o, key)
+}
+
 /** Writes the read targets of `include` and moves the view's target ownership to them. */
 export function applyIncluded(
   ctx: ReaderContext,
@@ -140,8 +157,7 @@ export function applyIncluded(
     }
     // Зникла ціль — `removed` на місці; `refs` на неї — `null`.
     for (const key of keys) {
-      if (!got.has(key) && target.rows.get(key) !== undefined)
-        ops.remove(scope, target, key, readEpoch)
+      if (!got.has(key)) missed(ops, scope, target, key, readEpoch)
     }
     next.set(
       name,
@@ -310,8 +326,7 @@ async function readKeysForm(
     }
     // Перечитування за ключем без рядка — `removed` на місці (§6.2, правило 5).
     for (const key of form.keys) {
-      if (!got.has(key) && o.rows.get(key) !== undefined)
-        ops.remove(scope, o, key, readEpoch)
+      if (!got.has(key)) missed(ops, scope, o, key, readEpoch)
     }
     s.owned = diffOwn(ops, scope, o, s.owned, form.keys)
     setLayout(
@@ -333,7 +348,7 @@ async function readCard(
   return (scope) => {
     const row = rows.find((r) => r.key === key)
     if (row !== undefined) ops.put(scope, o, row, readEpoch, true)
-    else if (o.rows.get(key) !== undefined) ops.remove(scope, o, key, readEpoch)
+    else missed(ops, scope, o, key, readEpoch)
     s.owned = diffOwn(ops, scope, o, s.owned, [key])
   }
 }

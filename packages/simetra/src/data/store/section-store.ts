@@ -39,6 +39,8 @@ export interface SectionStore {
   resetCompleteness(scope: Scope, owner: Key, section: string): void
   clearOwner(scope: Scope, owner: Key): void
   get(owner: Key, section: string): SectionEntry | undefined
+  /** Sizes of the owner maps (inspection). */
+  sizes(): { owners: number; ownerVersions: number }
 }
 
 export function createSectionStore(options: {
@@ -162,5 +164,6 @@ export function createSectionStore(options: {
     },
 
     get: (owner, section) => owners.get(owner)?.get(section),
+    sizes: () => ({ owners: owners.size, ownerVersions: ownerVersions.size }),
   }
 }

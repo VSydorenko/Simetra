@@ -94,16 +94,15 @@ export function createEpochs(
   // перевіряється за будь-якою парою об'єкта, і витіснення його не губить.
   const pairBurials = new Map<string, number>()
 
+  // Предикати винесено, щоб `bury`/`remember` не створювали замикання на виклик.
+  const skipTombstoneHorizon = () => defects.has("no-horizon-tombstones")
+  const skipSeenHorizon = () => defects.has("no-horizon-seen")
+
   function bury(id: string) {
     const at = ++epoch
     tombstones.delete(id)
     tombstones.set(id, at)
-    trim(
-      tombstones,
-      limits.tombstonesMax,
-      (v) => v,
-      () => defects.has("no-horizon-tombstones")
-    )
+    trim(tombstones, limits.tombstonesMax, (v) => v, skipTombstoneHorizon)
   }
 
   return {
@@ -121,12 +120,7 @@ export function createEpochs(
       const known = seen.get(id)?.version ?? -Infinity
       seen.delete(id)
       seen.set(id, { version: Math.max(known, version), epoch: at })
-      trim(
-        seen,
-        limits.seenMax,
-        (v) => v.epoch,
-        () => defects.has("no-horizon-seen")
-      )
+      trim(seen, limits.seenMax, (v) => v.epoch, skipSeenHorizon)
     },
     seen: (id) => seen.get(id),
     evictedSince: (id, readEpoch) => (horizon[bucket(id)] ?? 0) > readEpoch,

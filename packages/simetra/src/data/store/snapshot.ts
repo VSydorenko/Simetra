@@ -261,6 +261,7 @@ export function shareSnapshot(
     prev?.section !== undefined &&
     prev.section.ownerVersion === next.section.ownerVersion &&
     prev.section.complete === next.section.complete &&
+    prev.section.ownerState === next.section.ownerState &&
     prev.section.lines === next.section.lines
       ? prev.section
       : next.section

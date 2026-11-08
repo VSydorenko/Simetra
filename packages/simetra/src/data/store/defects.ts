@@ -36,4 +36,5 @@ export type DefectFlag =
 /** The defect set of a core; empty outside the self-check. */
 export type Defects = ReadonlySet<DefectFlag>
 
-export const NO_DEFECTS: Defects = new Set<DefectFlag>()
+// Заморожений: спільний за замовчуванням набір не можна змінити ззовні.
+export const NO_DEFECTS: Defects = Object.freeze(new Set<DefectFlag>())
