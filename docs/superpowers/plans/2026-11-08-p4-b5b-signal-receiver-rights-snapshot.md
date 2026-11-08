@@ -134,18 +134,18 @@ Playwright (`page.clock`), `pg` 8.23.1, Postgres 17, Centrifugo v6 (стенд
 | Р1 | Поділ на A і B, межа з B6 і правило «B6 розширює `rightsSnapshot`, не дублює» — рішення архітекторки | §13 рядки B5b і B6 (задача 0) |
 | Р2 | **Межа B5b для втрати доступу без сигналу прав** (рішення архітекторки). До B6 втрату доступу ловлять: правило Р5 на кожній заміні знімка — перший пакет рантайму, гідратація, `resume()`, приєднання без `recovered`, зміна `serverHash`, `command.unavailable` на `create` кореня; а також `command.forbidden` чи відсутній рядок (Р36). Затримку обмежує інтервал свіжості `revalidateIntervalMs`. B6 посилює цю межу сигналами прав | §8.4 — абзац межі B5b (задача 0) |
 | Р3 | Форма знімка T0 — `rightsSnapshotSchema`: `{ userId: uuid \| null; projectionVersion?: string; versions?: { scopeKind, scope, version: string }[]; scopeSets: { scopeKind, scope }[]; rights: { level: string; levelId: uuid \| null; scope: uuid \| null; container: uuid \| null; object: string; action: string; extent: string; dimensionId: uuid \| null }[] }`. `rights` — рядки `rights_mine()` у camelCase (`MINE_COLUMNS`), зокрема рівень `everyUser`; `level` і `extent` — рядки без переліку, щоб новий рівень не валив схему. Поля `scopes`, `dimensionValues`, `containers` §9.1 додає B6 | §9.1 — поля за блоками (задача 0) |
-| Р4 | `rightsVersion` — hex sha-256 канонічного JSON власних фактів: `userId`, `scopeSets` і рядки `rights` з `action = 'read'`, кожен рядок — масив-кортеж полів у порядку Р3, масиви відсортовані. `versions` і `projectionVersion` у хеш **не входять**: вони змінюються від чужих змін прав у скоупі й дали б зайвий `purge` SSR, а дрібну втрату доступу однаково ловить Р5. Рахується під час запису знімка в сховище (WebCrypto); `CoreSession.rightsReady(): Promise<void>` осідає, коли хеш поточного знімка готовий; SSR `preload` чекає його до `dehydrate()` | §6.6 — значення `rightsVersion` (задача 0) |
+| Р4 | `rightsVersion` — hex sha-256 канонічного JSON власних фактів: `userId`, `scopeSets` і рядки `rights` з `action = 'read'`, кожен рядок — масив-кортеж полів у порядку Р3, масиви відсортовані. `versions` і `projectionVersion` у хеш **не входять**: вони змінюються від чужих змін прав у скоупі й дали б зайвий `purge` SSR, а дрібну втрату доступу однаково ловить Р5. Окремо `meta.rightsVersions` — hex sha-256 відсортованих `versions` і `projectionVersion` (коли є): збіг `rightsVersion` при розбіжності `rightsVersions` — `revalidate` видимих виглядів знімка без `purge` (ловить зміну членства й значень виміру, які рядків `read` не змінюють). Знімок, `purge` за Р5 і перерахунок підписок застосовуються **синхронно** на відповіді; асинхронно (WebCrypto) осідають лише хеші й `CoreSession.rightsReady(): Promise<void>`; SSR `preload` чекає його до `dehydrate()`. На сервері збій частини `rights` — без повторів: `rightsReady()` осідає без хешу, знімок іде без `rightsVersion` (шлях «звірка з перечитуванням») | §6.6 — значення `rightsVersion`, `rightsVersions`, межа гарантії; §12 рядок SSR (задача 0) |
 | Р5 | **Втрата доступу — від сховища.** На кожній заміні знімка (зокрема першій) ядро перебирає пари (збережений скоуп, об'єкт), що є в сховищі, знімках показу вікна, цілях `include`, `SectionStore` і чернетках `card`. Для кожної пари `readAllowed(snapshot, pair)` хибний → `purge` пари. `readAllowed` — будь-який обсяг `read`, зокрема контейнер, або `publicRead`, або несигнальний об'єкт без скоупу з будь-яким рядком `read`. **Звуження** — порівняння повних кортежів рядків `read` пари (`level`, `levelId`, `scope`, `container`, `extent`, `dimensionId`): зник кортеж, а `readAllowed` лишився істинним → `revalidate` усіх виглядів об'єкта, зокрема невидимих і підмножин `include` (§6.2 правило 4; до B6). Зміна `userId` — шлях `session-changed` рантайму (`onSessionChanged`, `RuntimeHolder`). Доповнення: рядки об'єкта без збереженого скоупу (частковий запис, П14 B3-2) прибираються, коли об'єкт втратив `read` у будь-якому скоупі; зміна `scopeSets` → `revalidate` виглядів об'єктів з межею `users` («Користувачі», спека прав §5.2); на звуженні рядки лише слабких власників об'єкта знімаються, а чернетки `card` перечитуються | немає |
 | Р6 | Предикат підписки `canSubscribe(snapshot, channel, catalog)` — дзеркало режиму підписки `signal_topic_allowed` для каналу змін (§8.3): `userId` `null` → `false`; невідомий чи несигнальний об'єкт → `false`; вид у топіку ≠ вид скоупу об'єкта → `false`; `publicRead` → `true`; скоуплений — скоуп у `scopeSets` виду **і** рядок з `action = 'read'`, мітка об'єкта, `extent` ∈ `any`, `own`, вимір, `level = 'scope'` і `scope` = скоуп каналу (так рахують `rights_any/own/dim`); нескоуплений — такий рядок з `level` ≠ `container` (так рахує `has_right`), зокрема `everyUser`; канали прав — `false` | немає |
 | Р7 | Канали підписки — для кожного сигнального об'єкта з **активними** виглядами (§8.4), для скоупів `scopeSets` виду з `canSubscribe` істинним; `publicRead` — ще скоупи активних виглядів; нескоуплений — `ZERO_UUID`. Перерахунок — на заміні знімка й на зміні множини об'єктів з активними виглядами, злитий в одну мікрозадачу. Підписка — **дельтою, по каналу**: `subscribe([channel], …)` для нового, його `Unsubscribe` для знятого; незмінні канали не перепідписуються. Канал, відхилений `auth`, не повторюється до наступної заміни знімка | немає |
-| Р8 | Порт T0 (§8.5): `subscribe(channels, onSignal, onError({ kind, channel? }))`, `onSubscribed(({ channel, recovered }) => void)`, `refreshTokens(channels?): Promise<void>`, `close(): void`. `kind: "auth"` каналу — лише 403 чи «канал не дозволено» (`authorizeChannels` його не повернув); 401 (сесія скінчилась) — `auth` без каналу (шлях сесії); мережевий збій і 5xx — `transport` | §8.5 — уточнення `auth`, `close()` (задача 0) |
+| Р8 | Порт T0 (§8.5): `subscribe(channels, onSignal, onError({ kind, channel?, session? }))`, `onSubscribed(({ channel, recovered }) => void)`, `refreshTokens(channels?): Promise<void>`, `close(): void`. `kind: "auth"` каналу — лише 403 чи «канал не дозволено» (`authorizeChannels` його не повернув); 401 токена каналу — `auth` з `session: true` (шлях сесії, Р13); відмова токена з'єднання — `auth` без каналу; мережевий збій і 5xx — `transport` | §8.5 — уточнення `auth`, `close()` (задача 0) |
 | Р9 | Сигнал `schema` (`command.unavailable` з `reason: "schema"`) дають лише коди PostgREST (§5.3, §7.3) — у B5b джерела немає. Обробка переходить у B4 разом із `reason` (рішення архітекторки) | §13 рядок B4; плани B3-4 і B5a (задача 0) |
 | Р10 | `CoreSession.readKeys(object, keys): Promise<ReadKeysResult>` — тонка обгортка ядра (рішення архітекторки), **без другого читача**: над наявним `readKeys` з `store/source.ts` B3-2 (200 ключів на запит, поділ навпіл на `response-too-large`) і над тим самим шляхом запису, що й хвостове перечитування `stale-inserted` (епоха старту, `commit` з токеном, правило версії, надгробки). Іде через збирач B3-3. `ReadKeysResult = { returned: Key[]; missing: Key[]; versions: Map<Key, number> }` | немає |
 | Р11 | **Приєднання без `recovered` перечитує те, що старше за приєднання.** Опорна мить — `joinedAt` = час **кожної** події `onSubscribed` каналу (перша підписка, авто-перепідписка клієнта після розриву, перепідписка `refreshTokens`). Перечитуються вигляди об'єкта пари з `refreshedAt < joinedAt` (вигляд у польоті отримує хвіст `revalidate` B5a Р5); `rights` — коли `lastRightsAt < joinedAt`; `version` — коли `lastVersionAt < joinedAt`. Отже перше приєднання теж дає 1 умовний запит з `known` — як вимагає §8.4. Хвиля — одне вікно джитера: перший `onSubscribed` без `recovered` ставить таймер `random() × REJOIN_JITTER_MS`, решта входить у нього; наступна хвиля — не раніше ніж через `REJOIN_JITTER_MS` після спрацювання попередньої. Прихована вкладка: виглядам хвилі — `needsRefresh` і позначка `rejoinPending`, яку `resume()` (B5a) бере поза межею `resumeMinIntervalMs`. **Прийнятий ризик:** зміна між активацією підписки на сервері й `onSubscribed` на клієнті (≈ RTT) дійде лише перечитуванням хвилі — воно й закриває вікно | §8.4 — опорна мить приєднання, прийнятий ризик (задача 0) |
 | Р12 | Позначка «розрив»: `transport` → `markDisconnected(channel?)`. Знімає `clearDisconnected(channel)`: `recovered: true` — після `RECOVERED_SETTLE_MS` тиші після `onSubscribed` (і після пачки відновлених, якщо вони є); `recovered: false` — коли всі вигляди об'єкта пари мають `refreshedAt ≥ joinedAt` (`freshnessOf`, B5a). Збій перечитування лишає позначку | немає |
-| Р13 | Відмова токена з'єднання (`auth` без каналу): перша — `requestVersion()` і один новий токен з'єднання (`connect()` клієнта); друга поспіль без успішного `onSubscribed` між ними — `core.close("connection-refused")` через шлях рантайму. Лічильник скидає кожен успішний `onSubscribed`. `CloseReason` дістає `"connection-refused"` | §6.1 — причина закриття (задача 0) |
+| Р13 | Відмова токена **з'єднання** (`getConnectionToken` 401/403 чи відмова Centrifugo на з'єднанні): перша — `requestVersion()` і один новий токен з'єднання (`connect()` клієнта); друга поспіль без успішного з'єднання між ними — `core.close("connection-refused")` через шлях рантайму. Лічильник скидає подія успішного **з'єднання** клієнта, а не `onSubscribed` каналу. 401 від `getChannelToken` — лише `requestVersion()` (шлях сесії), без `connect()` і без лічильника. `CloseReason` дістає `"connection-refused"` | §6.1 — причина закриття (задача 0) |
 | Р15 | **Життєвий цикл транспорту.** `DataRuntimeOptions.signals` — фабрика `(subject: string) => SignalTransport`: транспорт створюється на суб'єкта рантайму й закривається разом із ним. `dispose()` і `session-changed` знімають кожну підписку й кличуть `close()`; перевикористати транспорт іншого суб'єкта не можна | §8.5 (задача 0) |
-| Р16 | **Збій частини `rights`.** `command.unauthenticated` чи `session-changed` — шлях сесії. Інші збої: старий знімок лишається, повтор з паузою 1, 2, 4 с (до `revalidateIntervalMs`); після трьох збоїв поспіль — `revalidate` усіх активних виглядів і метрика `rights-failed` (без даних) | немає |
+| Р16 | **Збій частини `rights`.** `command.unauthenticated` чи `session-changed` — шлях сесії. Інші збої: старий знімок лишається, повтор з паузою 1, 2, 4 с; після трьох збоїв поспіль — `revalidate` усіх активних виглядів, метрика `rights-failed` (без даних), далі повтори лише тактом інтервалу `revalidateIntervalMs`. На сервері (SSR) — без повторів (Р4) | немає |
 | Р14 | Знімок прав — частина першого пакета рантайму (перше читання після створення чи гідратації) і першої частини SSR `preload`, до даних тієї самої транзакції | §6.6 — порядок на сервері (задача 0) |
 
 ## Review Focus
@@ -185,7 +185,10 @@ Playwright (`page.clock`), `pg` 8.23.1, Postgres 17, Centrifugo v6 (стенд
     приєднання й прийнятий ризик RTT (Р11);
   - §8.5 — значення `auth`, `close()` порту, транспорт на суб'єкта (Р8, Р15);
   - §9.1 — поля знімка за блоками (Р3);
-  - §6.6 — значення `rightsVersion`, порядок на сервері (Р4, Р14);
+  - §6.6 — значення `rightsVersion` і `rightsVersions`, порядок на сервері
+    (Р4, Р14); «Межа гарантії»: звірка «першим кроком» прибирає зміну рядків
+    `read` і `scopeSets` (`purge`), а зміну членства й значень виміру —
+    `revalidate` за `rightsVersions`; §12 рядок SSR — так само;
   - §6.1 — причина закриття `connection-refused` (Р13);
   - §13 рядок B5b — частини A і B, межа з B6, рядок «B6 розширює
     `rightsSnapshot`, не дублює»; рядок B6 — «розширює знімок B5b»; рядок
@@ -234,7 +237,8 @@ Playwright (`page.clock`), `pg` 8.23.1, Postgres 17, Centrifugo v6 (стенд
 **Interfaces:**
 - Produces:
   - `rightsSnapshotSchema`, `type RightsSnapshot` (Р3, strict);
-  - `function rightsVersionOf(s: RightsSnapshot): Promise<string>` (Р4);
+  - `function rightsVersionOf(s: RightsSnapshot): Promise<string>` і
+    `function rightsVersionsOf(s: RightsSnapshot): Promise<string | undefined>` (Р4);
   - частина `{ type: "rights" }`; відповідь `{ ok: true, value: RightsSnapshot }`;
     не більше однієї частини `rights` на пакет.
 
@@ -242,8 +246,9 @@ Playwright (`page.clock`), `pg` 8.23.1, Postgres 17, Centrifugo v6 (стенд
   - схема приймає вихід з усіма полями, з рівнем `everyUser`, без
     `versions`; зайве поле — відмова;
   - `rightsVersionOf` однаковий для переставлених масивів; інший за зміни
-    `userId`, `scopeSets`, рядка `read` чи версії; рядок не-`read` його не
-    змінює;
+    `userId`, `scopeSets` чи рядка `read`; рядок не-`read`, зміна
+    `versions` чи `projectionVersion` його не змінюють (їх ловить
+    `rightsVersionsOf`);
   - пакет з двома частинами `rights` — відмова.
 - [ ] **Step 2:** `pnpm --filter simetra test src/model/runtime` — FAIL.
 - [ ] **Step 3:** реалізація → **Step 4:** PASS.
@@ -346,8 +351,8 @@ Playwright (`page.clock`), `pg` 8.23.1, Postgres 17, Centrifugo v6 (стенд
     `lastRightsAt` — старт останнього запиту `rights`;
   - перший пакет рантайму (`load()` першого вигляду чи звірка гідратації)
     несе частину `rights` (Р14);
-  - на кожну відповідь `rights` — запис знімка й `rightsVersion` (Р4), далі
-    одним `commit`: `purge` пар за Р5 (`accessLoss(store, snapshot, catalog): PairRef[]`),
+  - на кожну відповідь `rights` — синхронно запис знімка, далі одним
+    `commit` (хеші осідають асинхронно, Р4): `purge` пар за Р5 (`accessLoss(store, snapshot, catalog): PairRef[]`),
     потім `revalidate` об'єктів звуження (`narrowed(prev, next, catalog): ObjectName[]`),
     зміна `userId` — шлях `session-changed` рантайму;
   - `readAllowed(snapshot, pair, catalog): boolean` і
@@ -446,6 +451,8 @@ Playwright (`page.clock`), `pg` 8.23.1, Postgres 17, Centrifugo v6 (стенд
     `session-changed` (`subject` уже звіряє конверт, B3-6);
   - `rightsVersion` нової відповіді ≠ `meta.rightsVersion` → `purge` усіх
     ключів знімка й причина `access-changed` (§6.5), далі правило Р5;
+  - `rightsVersion` збігся, а `rightsVersions` — ні → `revalidate` видимих
+    виглядів знімка без `purge` (другий запит);
   - `meta.rightsVersion` відсутній (проєкт без функцій прав чи хеш ще не
     готовий на мить `dehydrate`) — шлях «звірка з перечитуванням» B3-6:
     одразу `revalidate` видимих виглядів знімка тим самим запитом, а втрату
@@ -457,6 +464,10 @@ Playwright (`page.clock`), `pg` 8.23.1, Postgres 17, Centrifugo v6 (стенд
     тіло й відповідь ≤ 2 КіБ + 128 Б × об'єктів каталогу + `jsonBytes`
     знімка;
   - інший `rightsVersion` — `purge` усіх ключів, причина в UI;
+  - той самий `rightsVersion`, інші `rightsVersions` (зняли значення виміру)
+    — рівно 2 запити, без `purge`, рядки виміру прибрані перечитуванням;
+  - серверний збій частини `rights` — `preload` не висить, знімок без
+    `rightsVersion`;
   - `dehydrate` до готовності хешу — знімок без `rightsVersion`; звірка —
     1 запит з `version`, `rights` і перечитуваннями; пара без права в
     сховищі — `purge` за Р5;
@@ -516,7 +527,7 @@ Playwright (`page.clock`), `pg` 8.23.1, Postgres 17, Centrifugo v6 (стенд
 **Interfaces:**
 - Produces (Р8):
   ```text
-  type SignalError = { kind: "auth" | "transport"; channel?: string }
+  type SignalError = { kind: "auth" | "transport"; channel?: string; session?: true }
   interface SignalTransport {
     subscribe(channels: readonly string[], onSignal: (topic: string, payload: unknown) => void,
               onError: (e: SignalError) => void): Unsubscribe
@@ -687,8 +698,9 @@ Playwright (`page.clock`), `pg` 8.23.1, Postgres 17, Centrifugo v6 (стенд
   - `auth` без каналу: перша — 1 запит `version`; друга поспіль — закриття
     з причиною; успішний `onSubscribed` між ними скидає лічильник; N поспіль
     в одній мікрозадачі — 1 запит;
-  - 401 від `getChannelToken` — `auth` без каналу, без `purge`; 403 —
-    `auth` каналу;
+  - 401 від `getChannelToken` — лише 1 запит `version`, без `connect()`,
+    без `purge` і без зміни лічильника Р13; 403 — `auth` каналу;
+  - лічильник Р13 скидає успішне з'єднання, а не `onSubscribed` каналу;
   - `session-changed` і `dispose()` — `subscribed()` порожній, `closed()` —
     `true` (Review Focus 6);
   - `transport` — позначки «розрив» на рядках виглядів каналу, 0 запитів.
@@ -785,8 +797,10 @@ Playwright (`page.clock`), `pg` 8.23.1, Postgres 17, Centrifugo v6 (стенд
     `subscribed`;
   - `getChannelToken` кинув `SignalAuthRefused` зі `status: 403` (host:
     канал не дозволено) чи `unsubscribed` з кодом `unauthorized` →
-    `onError({ kind: "auth", channel })` без автоповтору; `status: 401` →
-    `onError({ kind: "auth" })` без каналу (шлях сесії);
+    `onError({ kind: "auth", channel })` без автоповтору; `status: 401` з
+    `getChannelToken` → `onError({ kind: "auth", channel, session: true })`
+    — приймач веде шлях сесії (Р13); відмова токена з'єднання →
+    `onError({ kind: "auth" })` без каналу;
   - `close()` — `disconnect()` клієнта й зняття всіх підписок;
   - інший збій `getChannelToken` чи `getConnectionToken` (мережа, 5xx) —
     `transport`, повтор — backoff клієнта;
