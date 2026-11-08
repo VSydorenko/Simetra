@@ -27,7 +27,13 @@ export interface SectionStore {
     ownerScope: OwnerScope,
     source: "owner-section" | "other"
   ): "written" | "rejected"
-  /** Drops sections of owners of this scope and of owners with unknown scope. */
+  /**
+   * Drops sections of owners of this scope and of owners with unknown scope,
+   * by the owner scope captured at `put`. A header that moved into the purged
+   * scope after its lines were written is not seen here: the caller
+   * (`Writer.purge`, Task 8) must also call `clearOwner` for every key that
+   * `ObjectStore.purgeScope` / `purgeKeys` returns.
+   */
   purgeScope(scope: Scope, scopeId: string | null): void
   resetCompleteness(scope: Scope, owner: Key, section: string): void
   clearOwner(scope: Scope, owner: Key): void
@@ -37,7 +43,7 @@ export interface SectionStore {
 export function createSectionStore(options: {
   object: ObjectName
   session: Pick<Session, "epochs" | "onClose">
-  rows: Pick<ObjectStore, "get" | "pairBuriedSince">
+  rows: Pick<ObjectStore, "get">
 }): SectionStore {
   const { object, session, rows } = options
   const { epochs } = session
@@ -50,6 +56,9 @@ export function createSectionStore(options: {
     owners.clear()
     ownerVersions.clear()
   })
+
+  const pairBuried = (scopeId: string | null, readEpoch: number) =>
+    epochs.buriedSince(pairId(object, scopeId), readEpoch)
 
   function drop(owner: Key) {
     owners.delete(owner)
@@ -65,16 +74,28 @@ export function createSectionStore(options: {
     const id = keyId(object, owner)
     const e = rows.get(owner)
     // Власника без запису ядро могло забути разом з його надгробком.
+    if (e === undefined && epochs.evictedSince(id, readEpoch)) return true
+    // Витіснений надгробок пари скоупу власника, якого шапка в сховищі не
+    // підтверджує (немає запису чи шапка в іншому скоупі), міг належати purge.
     if (
-      e === undefined &&
-      (epochs.evictedSince(id, readEpoch) ||
-        (ownerScope !== "unknown" &&
-          epochs.evictedSince(pairId(object, ownerScope), readEpoch)))
+      ownerScope !== "unknown" &&
+      (e === undefined || e.scope !== ownerScope) &&
+      epochs.evictedSince(pairId(object, ownerScope), readEpoch)
     )
       return true
+    // Шапку сховано горизонтом від цього чи новішого читання: рядки ТЧ з
+    // того самого читання показали б те, що шапка ховає.
+    if (e?.stale.seen !== undefined && readEpoch < e.stale.seen.epoch)
+      return true
     if (epochs.buriedSince(id, readEpoch)) return true
-    if (rows.pairBuriedSince(ownerScope, readEpoch)) return true
-    if (e !== undefined && rows.pairBuriedSince(e.scope, readEpoch)) return true
+    const lastPair = epochs.lastPairBurial(object)
+    if (
+      ownerScope === "unknown"
+        ? lastPair > readEpoch
+        : pairBuried(ownerScope, readEpoch)
+    )
+      return true
+    if (e !== undefined && pairBuried(e.scope, readEpoch)) return true
     if (e?.removed !== undefined && e.removed.epoch > readEpoch) return true
     return ownerVersion < (ownerVersions.get(owner) ?? -Infinity)
   }

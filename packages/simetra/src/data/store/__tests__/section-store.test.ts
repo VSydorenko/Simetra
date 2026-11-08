@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest"
 import type { SectionLine } from "../types"
 import { harness, K1, K2, K3, row, S, T, type Harness } from "./store-support"
 
+const U = "00000000-0000-4000-8000-0000000000b3"
+
 const LINES: SectionLine[] = [
   { key: "00000000-0000-4000-8000-0000000000c1", values: { qty: 1 } },
 ]
@@ -102,6 +104,47 @@ describe("SectionStore.put", () => {
     }
     expect(putLines(h, K1, 1, { readEpoch: early })).toBe("rejected")
     expect(putLines(h, K1, 1)).toBe("written")
+  })
+
+  it("rejects an owner whose stored-scope pair tombstone is newer than the read", () => {
+    const h = harness()
+    const early = h.now()
+    h.write((s) => h.store.purgeScope(s, S))
+    h.write((s) => h.store.put(s, row(K1, 1, { org: S }), h.now(), false))
+    expect(putLines(h, K1, 1, { readEpoch: early, ownerScope: T })).toBe(
+      "rejected"
+    )
+  })
+
+  // K1 у T; старе читання бачить K1 у S; purge(S), надгробок пари S витіснено.
+  const movedUnderHorizon = () => {
+    const h = harness({ limits: { tombstonesMax: 1 } })
+    h.write((s) => h.store.put(s, row(K1, 1, { org: T }), h.now(), false))
+    const early = h.now()
+    h.write((s) => h.store.purgeScope(s, S))
+    h.write((s) => h.store.purgeScope(s, U))
+    return { h, early }
+  }
+
+  it("(c) header then section in one commit: lines under a horizon-hidden header are rejected", () => {
+    const { h, early } = movedUnderHorizon()
+    const results = h.write((s) => [
+      h.store.put(s, row(K1, 2, { org: S }), early, false),
+      h.sections.put(s, K1, "lines", LINES, 2, early, S, "owner-section"),
+    ])
+    expect(results).toEqual(["stale-inserted", "rejected"])
+    expect(h.sections.get(K1, "lines")).toBeUndefined()
+  })
+
+  it("(c) section then header: lines for an owner moving into an evicted pair are rejected", () => {
+    const { h, early } = movedUnderHorizon()
+    expect(putLines(h, K1, 2, { readEpoch: early, ownerScope: S })).toBe(
+      "rejected"
+    )
+    expect(
+      h.write((s) => h.store.put(s, row(K1, 2, { org: S }), early, false))
+    ).toBe("stale-inserted")
+    expect(h.sections.get(K1, "lines")).toBeUndefined()
   })
 
   it("a write from another source is not complete", () => {

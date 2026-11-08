@@ -1,7 +1,12 @@
 import { describe, expect, it, vi } from "vitest"
 import { catalogEntry } from "../../../model/runtime/__tests__/entries"
 import { keyId } from "../epoch"
-import { mergeVersioned, scopeOf, type RowEntry } from "../object-store"
+import {
+  mergeVersioned,
+  scopeOf,
+  visibleRow,
+  type RowEntry,
+} from "../object-store"
 import {
   harness,
   K1,
@@ -30,6 +35,7 @@ const purgeScope = (h: Harness, scope: string | null) =>
   h.write((s) => h.store.purgeScope(s, scope))
 const purgeKeys = (h: Harness, keys: string[]) =>
   h.write((s) => h.store.purgeKeys(s, keys))
+const U = "00000000-0000-4000-8000-0000000000b3"
 const channelOf = (e: RowEntry) => `ch:${String(e.scope)}`
 
 // Пам'ять версій K1 витісняє K2 (seenMax 1): кошик K1 отримує горизонт.
@@ -378,12 +384,101 @@ describe("ObjectStore.remove (П15)", () => {
     expect(h.store.get(K1)?.row).toBeDefined()
   })
 
+  it("is a no-op for a key with a newer pair tombstone of its stored scope", () => {
+    const h = harness()
+    const early = h.now()
+    purgeScope(h, S)
+    put(h, row(K1, 1, { org: S }))
+    remove(h, K1, early)
+    expect(h.store.get(K1)?.removed).toBeUndefined()
+  })
+
+  it("a repeated remove keeps the earlier removed epoch", () => {
+    const h = harness()
+    put(h, row(K1, 1))
+    remove(h, K1)
+    const first = h.store.get(K1)?.removed?.epoch
+    remove(h, K1)
+    expect(h.store.get(K1)?.removed?.epoch).toBe(first)
+    // читання між двома remove має право відновити
+    expect(put(h, row(K1, 1), first)).toBe("written")
+  })
+
   it("is a no-op for a key without an entry", () => {
     const h = harness()
     const before = h.now()
     remove(h, K1)
     expect(h.store.get(K1)).toBeUndefined()
     expect(h.now()).toBe(before)
+  })
+})
+
+describe("ObjectStore scope change under the horizon (I1)", () => {
+  it("(a) K in T, an old read sees K in S, purgeScope(S), S pair tombstone evicted: values hidden, tail, horizon-hidden", () => {
+    const h = harness({ limits: { tombstonesMax: 1 } })
+    put(h, row(K1, 1, { org: T }))
+    own(h, K1)
+    const early = h.now()
+    purgeScope(h, S)
+    purgeScope(h, U) // витісняє надгробок пари S
+    h.log.length = 0
+    expect(put(h, row(K1, 2, { org: S }), early)).toBe("stale-inserted")
+    const e = h.store.get(K1)
+    expect(e?.stale.seen).toBeDefined()
+    expect(e && visibleRow(e)).toBeUndefined()
+    expect(h.store.drainTail()).toEqual([K1])
+    expect(h.log).toEqual([
+      { kind: "horizon-hidden", object: "Catalog.Task", count: 1 },
+    ])
+  })
+
+  it("(b) the same scenario without eviction is rejected by the S pair tombstone", () => {
+    const h = harness()
+    put(h, row(K1, 1, { org: T }))
+    own(h, K1)
+    const early = h.now()
+    purgeScope(h, S)
+    expect(put(h, row(K1, 2, { org: S }), early)).toBe("rejected")
+    expect(h.store.get(K1)?.version).toBe(1)
+    expect(h.store.get(K1)?.scope).toBe(T)
+  })
+
+  it("a removed slot restored into a scope whose pair tombstone was evicted is hidden", () => {
+    const h = harness({ limits: { tombstonesMax: 1 } })
+    put(h, row(K1, 1, { org: T }))
+    remove(h, K1)
+    const early = h.now()
+    purgeScope(h, S)
+    purgeScope(h, U)
+    expect(put(h, row(K1, 2, { org: S }), early)).toBe("stale-inserted")
+    expect(h.store.get(K1)?.stale.seen).toBeDefined()
+  })
+
+  it("the same scope under a raised horizon stays written (no mass stale)", () => {
+    const h = harness({ limits: { tombstonesMax: 1, horizonBuckets: 1 } })
+    put(h, row(K1, 1, { org: T }))
+    own(h, K1)
+    const early = h.now()
+    purgeKeys(h, [K2])
+    purgeKeys(h, [K3]) // один кошик: горизонт піднято для всіх
+    expect(put(h, row(K1, 2, { org: T }), early)).toBe("written")
+    expect(h.store.get(K1)?.stale.seen).toBeUndefined()
+  })
+})
+
+describe("visibleRow", () => {
+  it("returns the values of a live row, undefined for removed and horizon-hidden", () => {
+    const { h, early } = evictedK1()
+    put(h, row(K2, 1))
+    const live = h.store.get(K2)
+    expect(live && visibleRow(live)).toMatchObject({ title: "t1" })
+    put(h, row(K1, 1), early)
+    const hiddenEntry = h.store.get(K1)
+    expect(hiddenEntry?.row).toBeDefined()
+    expect(hiddenEntry && visibleRow(hiddenEntry)).toBeUndefined()
+    remove(h, K2)
+    const removed = h.store.get(K2)
+    expect(removed && visibleRow(removed)).toBeUndefined()
   })
 })
 
@@ -444,6 +539,14 @@ describe("ObjectStore.own / disown", () => {
     expect(h.store.get(K1)).toBeUndefined()
   })
 
+  it("own before the entry exists creates nothing", () => {
+    const h = harness()
+    own(h, K1)
+    expect(h.store.get(K1)).toBeUndefined()
+    put(h, row(K1, 1))
+    expect(h.store.get(K1)?.owners).toBe(0)
+  })
+
   it("disown keeps the row while another owner holds it", () => {
     const h = harness()
     put(h, row(K1, 1))
@@ -486,9 +589,20 @@ describe("ObjectStore stale marks", () => {
     put(h, row(K2, 1, { org: T }))
     h.write((s) => h.store.markDisconnected(s, channelOf))
     put(h, row(K2, 2, { org: T }))
-    h.write((s) => h.store.clearDisconnected(s, `ch:${S}`, channelOf))
+    h.write((s) => h.store.clearDisconnected(s, `ch:${S}`))
     expect(h.store.get(K1)?.stale.disconnect).toBeUndefined()
     expect(h.store.get(K2)?.stale.disconnect?.channel).toBe(`ch:${T}`)
+  })
+
+  it("disconnect is cleared by the channel it was recorded on after the row moved", () => {
+    const h = harness()
+    put(h, row(K1, 1, { org: S }))
+    h.write((s) => h.store.markDisconnected(s, channelOf))
+    put(h, row(K1, 2, { org: T }))
+    h.write((s) => h.store.clearDisconnected(s, `ch:${T}`))
+    expect(h.store.get(K1)?.stale.disconnect).toBeDefined()
+    h.write((s) => h.store.clearDisconnected(s, `ch:${S}`))
+    expect(h.store.get(K1)?.stale.disconnect).toBeUndefined()
   })
 
   it("markDisconnected with a channel marks only rows of that channel", () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { createEpochs } from "../epoch"
+import { createEpochs, pairId } from "../epoch"
 
 const limits = { seenMax: 100, tombstonesMax: 100, horizonBuckets: 65_536 }
 
@@ -51,6 +51,27 @@ describe("createEpochs", () => {
     e.remember("o\u0000k", 7)
     expect(e.seen("o\u0000k")?.version).toBe(7)
     expect(e.seen("o\u0000missing")).toBeUndefined()
+  })
+
+  it("buryPair buries the pair and records the last pair burial per object", () => {
+    const e = createEpochs({ ...limits, tombstonesMax: 1 })
+    const early = e.now()
+    e.buryPair("o", "s")
+    const at = e.now()
+    expect(e.buriedSince(pairId("o", "s"), early)).toBe(true)
+    expect(e.lastPairBurial("o")).toBe(at)
+    expect(e.lastPairBurial("other")).toBe(0)
+    // витіснення надгробка пари не губить останнього поховання
+    e.bury("o\u0000k")
+    expect(e.buriedSince(pairId("o", "s"), early)).toBe(false)
+    expect(e.lastPairBurial("o")).toBe(at)
+  })
+
+  it("clear() resets the last pair burials", () => {
+    const e = createEpochs(limits)
+    e.buryPair("o", null)
+    e.clear()
+    expect(e.lastPairBurial("o")).toBe(0)
   })
 
   it("clear() drops both maps and the horizon", () => {

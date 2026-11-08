@@ -66,6 +66,17 @@ export interface RowEntry {
   }
 }
 
+/**
+ * The values a reader may show: `undefined` for a removed slot and for a row
+ * hidden by the eviction horizon (`stale.seen`). Every reader of the store —
+ * `RowView`, the local filter and comparator, `include` refs — goes through
+ * it; reading `row.values` directly would show hidden values.
+ */
+export function visibleRow(e: RowEntry): Values | undefined {
+  if (e.removed !== undefined || e.stale.seen !== undefined) return undefined
+  return e.row?.values
+}
+
 export type PutResult = "written" | "rejected" | "stale-inserted"
 
 /** The header rows of one object (P4-B spec §6.1, §6.2). */
@@ -83,7 +94,10 @@ export interface ObjectStore {
   remove(scope: Scope, key: Key, readEpoch: number): void
   /** Buries the keys and drops their entries; returns the dropped keys. */
   purgeKeys(scope: Scope, keys: readonly Key[]): Key[]
-  /** Buries the pair and every key with that stored scope (removed slots too). */
+  /**
+   * Buries the pair (through `Epochs.buryPair`) and every key with that stored
+   * scope (removed slots too); returns the dropped keys.
+   */
   purgeScope(scope: Scope, scopeId: string | null): Key[]
   markStale(scope: Scope, keys: readonly Key[], minVersion: number): void
   markDisconnected(
@@ -91,11 +105,12 @@ export interface ObjectStore {
     channelOf: (e: RowEntry) => string,
     channel?: string
   ): void
-  clearDisconnected(
-    scope: Scope,
-    channel: string,
-    channelOf: (e: RowEntry) => string
-  ): void
+  /** Clears the marks recorded on `channel` (`stale.disconnect.channel`). */
+  clearDisconnected(scope: Scope, channel: string): void
+  /**
+   * Adds an owner to an existing entry; a key without an entry gets nothing.
+   * Callers own a key only after its `put` was accepted.
+   */
   own(scope: Scope, key: Key): void
   /** At zero owners: the version goes to memory; a removed slot is also buried. */
   disown(scope: Scope, key: Key): void
@@ -106,14 +121,6 @@ export interface ObjectStore {
    * remove. The caller re-reads them after the `commit`.
    */
   drainTail(): Key[]
-  /**
-   * A pair tombstone of `scopeId` newer than `readEpoch`; `"unknown"` — any
-   * pair tombstone of this object.
-   */
-  pairBuriedSince(
-    scopeId: string | null | "unknown",
-    readEpoch: number
-  ): boolean
 }
 
 export function createObjectStore(options: {
@@ -136,9 +143,6 @@ export function createObjectStore(options: {
 
   const rows = new Map<Key, RowEntry>()
   const tail = new Set<Key>()
-  // Найбільша епоха надгробка пари цього об'єкта: власник ТЧ з невідомим
-  // скоупом перевіряється за будь-якою парою, а LRU надгробків цього не дає.
-  let lastPairBurial = 0
   // Лічильники метрик одного commit: журнал отримує кількість без ключів.
   let restored = 0
   let hidden = 0
@@ -154,7 +158,6 @@ export function createObjectStore(options: {
   session.onClose(() => {
     rows.clear()
     tail.clear()
-    lastPairBurial = 0
     restored = 0
     hidden = 0
   })
@@ -180,6 +183,12 @@ export function createObjectStore(options: {
     )
       delete e.stale.minVersion
     if (seen !== undefined && readEpoch >= seen.epoch) delete e.stale.seen
+  }
+
+  function hide(e: RowEntry, key: Key) {
+    e.stale.seen = { epoch: epochs.next() }
+    hidden++
+    tail.add(key)
   }
 
   function insert(
@@ -208,10 +217,7 @@ export function createObjectStore(options: {
     const horizon =
       epochs.evictedSince(id, readEpoch) ||
       epochs.evictedSince(pairId(object, scopeId), readEpoch)
-    if (horizon) {
-      e.stale.seen = { epoch: epochs.next() }
-      hidden++
-    }
+    if (horizon) hide(e, row.key)
     rows.set(row.key, e)
     if (!lower && !horizon) return "written"
     tail.add(row.key)
@@ -244,6 +250,14 @@ export function createObjectStore(options: {
       if (e.removed !== undefined && readEpoch < e.removed.epoch)
         return "rejected"
 
+      // Рядок переїжджає в інший скоуп: витіснений надгробок нової пари міг
+      // належати purge, який цей рядок мав би прибрати. Лише на зміні скоупу,
+      // щоб витіснення під час прокрутки не робило stale кожну відповідь.
+      const moved =
+        incomingScope !== undefined &&
+        incomingScope !== e.scope &&
+        epochs.evictedSince(pairId(object, incomingScope), readEpoch)
+
       let result: PutResult = "written"
       if (e.removed !== undefined) {
         // Значення стерто, тож зливати нема з чим; версію рядка після позначки
@@ -266,7 +280,9 @@ export function createObjectStore(options: {
       e.writtenEpoch = Math.max(e.writtenEpoch, readEpoch)
       setLazy(e, row, lazyRead)
       clearMarks(e, readEpoch)
-      return result
+      if (!moved) return result
+      hide(e, row.key)
+      return "stale-inserted"
     },
 
     remove(scope, key, readEpoch) {
@@ -276,10 +292,16 @@ export function createObjectStore(options: {
       // Епоха старту не впорядковує серверних знімків: відсутній рядок ховає
       // значення завжди, а розбіжність вирішує одне хвостове перечитування.
       const divergent = readEpoch < e.writtenEpoch
+      if (divergent) tail.add(key)
+      // Повторний remove лишає ранню епоху: зсув уперед відкидав би відповіді
+      // читань, що почались після першої позначки й уже мають право відновити.
+      if (e.removed !== undefined) {
+        e.removed.divergent = divergent
+        return
+      }
       e.row = undefined
       e.lazyVersions.clear()
       e.removed = { epoch: epochs.next(), divergent }
-      if (divergent) tail.add(key)
     },
 
     purgeKeys(scope, keys) {
@@ -295,8 +317,7 @@ export function createObjectStore(options: {
 
     purgeScope(scope, scopeId) {
       scope.assert()
-      epochs.bury(pairId(object, scopeId))
-      lastPairBurial = epochs.now()
+      epochs.buryPair(object, scopeId)
       const dropped: Key[] = []
       for (const [key, e] of rows) {
         if (e.scope !== scopeId) continue
@@ -327,12 +348,12 @@ export function createObjectStore(options: {
       }
     },
 
-    clearDisconnected(scope, channel, channelOf) {
+    clearDisconnected(scope, channel) {
       scope.assert()
-      // Розрив знімає лише канал самого рядка (його поточний скоуп).
+      // Розрив знімає канал, на якому його поставлено: відновлення сигналів
+      // нового каналу не покриває пропущеного в старому.
       for (const e of rows.values()) {
-        if (e.stale.disconnect !== undefined && channelOf(e) === channel)
-          delete e.stale.disconnect
+        if (e.stale.disconnect?.channel === channel) delete e.stale.disconnect
       }
     },
 
@@ -367,11 +388,6 @@ export function createObjectStore(options: {
       const keys = [...tail]
       tail.clear()
       return keys
-    },
-
-    pairBuriedSince(scopeId, readEpoch) {
-      if (scopeId === "unknown") return lastPairBurial > readEpoch
-      return epochs.buriedSince(pairId(object, scopeId), readEpoch)
     },
   }
 }

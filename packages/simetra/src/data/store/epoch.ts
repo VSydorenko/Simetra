@@ -18,7 +18,14 @@ export interface Epochs {
   seen(id: string): { version: number; epoch: number } | undefined
   /** The horizon of the id's bucket is greater than `readEpoch`. */
   evictedSince(id: string, readEpoch: number): boolean
-  /** Drops both maps and the horizon. */
+  /**
+   * Buries the pair (scope, object) and records it as the last pair burial of
+   * the object; every pair purge goes through it, not through `bury`.
+   */
+  buryPair(object: string, scope: string | null): void
+  /** The epoch of the last `buryPair` of the object (0 — none). */
+  lastPairBurial(object: string): number
+  /** Drops both maps, the horizon and the last pair burials. */
   clear(): void
 }
 
@@ -73,15 +80,26 @@ export function createEpochs(
     }
   }
 
+  // Одне число на об'єкт без LRU: власник ТЧ з невідомим скоупом
+  // перевіряється за будь-якою парою об'єкта, і витіснення його не губить.
+  const pairBurials = new Map<string, number>()
+
+  function bury(id: string) {
+    const at = ++epoch
+    tombstones.delete(id)
+    tombstones.set(id, at)
+    trim(tombstones, limits.tombstonesMax, (v) => v)
+  }
+
   return {
     now: () => epoch,
     next: () => ++epoch,
-    bury(id) {
-      const at = ++epoch
-      tombstones.delete(id)
-      tombstones.set(id, at)
-      trim(tombstones, limits.tombstonesMax, (v) => v)
+    bury,
+    buryPair(object, scope) {
+      bury(pairId(object, scope))
+      pairBurials.set(object, epoch)
     },
+    lastPairBurial: (object) => pairBurials.get(object) ?? 0,
     buriedSince: (id, readEpoch) => (tombstones.get(id) ?? -1) > readEpoch,
     remember(id, version) {
       const at = ++epoch
@@ -96,6 +114,7 @@ export function createEpochs(
       seen.clear()
       tombstones.clear()
       horizon.fill(0)
+      pairBurials.clear()
     },
   }
 }
