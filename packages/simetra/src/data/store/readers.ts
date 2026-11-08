@@ -8,6 +8,7 @@ import type { OwnerScope } from "./section-store"
 import type { Scope } from "./session"
 import { readKeys, serverRow, type CoreSource } from "./source"
 import type {
+  GenerationToken,
   CoreLimits,
   CoreLogEntry,
   Key,
@@ -51,6 +52,12 @@ export interface StoreOps {
     ownerScope: OwnerScope
   ): void
   clearOwner(scope: Scope, o: ObjectState, owner: Key): void
+  /**
+   * Drops the entries written in this `commit` that are left without an
+   * owner (an `apply` that threw half-way): a row never outlives its commit
+   * unowned.
+   */
+  sweep(scope: Scope): void
 }
 
 /** What the readers need from the core. */
@@ -180,10 +187,13 @@ function fullLayout(s: ReaderTarget, fetched: ReadonlyMap<Key, Values>): Key[] {
   return layout
 }
 
+const NOTHING: Apply = () => {}
+
 async function readFull(
   ctx: ReaderContext,
   s: ReaderTarget,
-  readEpoch: number
+  readEpoch: number,
+  token: GenerationToken
 ): Promise<Apply> {
   const { source, limits, ops } = ctx
   const { form } = s
@@ -205,6 +215,9 @@ async function readFull(
       ...(where === undefined ? {} : { where }),
       limit: limits.fullPageSize,
     })
+    // Звільнений чи перезапитаний вигляд далі не читає: наступна сторінка
+    // була б запитом, результат якого нікуди не запишеться.
+    if (!token.valid) return NOTHING
     pages.push(...page.rows)
     if (pages.length > limits.fullLimit) break
     const tail = page.rows.at(-1)
@@ -228,6 +241,7 @@ async function readFull(
     form.include,
     shown.map((r) => r.values)
   )
+  if (!token.valid) return NOTHING
   const included = await readIncluded(
     source,
     form.include,
@@ -339,11 +353,15 @@ async function readSection(
   }
 }
 
-/** Reads the form of `s`; the result is applied by one `commit`. */
+/**
+ * Reads the form of `s`; the result is applied by one `commit`. A
+ * multi-request read stops once `token` is invalid.
+ */
 export function readForm(
   ctx: ReaderContext,
   s: ReaderTarget,
-  readEpoch: number
+  readEpoch: number,
+  token: GenerationToken
 ): Promise<Apply> {
   switch (s.form.spec.kind) {
     case "keys":
@@ -353,6 +371,6 @@ export function readForm(
     case "section":
       return readSection(ctx, s, readEpoch)
     case "full":
-      return readFull(ctx, s, readEpoch)
+      return readFull(ctx, s, readEpoch, token)
   }
 }

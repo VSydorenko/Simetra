@@ -157,7 +157,7 @@ export function withRefs(
 export interface RowViews {
   /** Marks a key changed in this `commit`. */
   touch(object: ObjectName, key: Key): void
-  /** The revision of a key: grows with every touch while its entry lives. */
+  /** The revision of a key: a fresh value of one core-wide counter on every touch; 0 — untouched. */
   revision(object: ObjectName, key: Key): number
   get(
     object: ObjectName,
@@ -175,6 +175,7 @@ export interface RowViews {
 }
 
 export function createRowViews(): RowViews {
+  let clock = 0
   const revisions = new Map<string, number>()
   const cache = new Map<string, { rev: number; view: RowView }>()
   const parts = new Map<string, { object: ObjectName; key: Key }>()
@@ -189,7 +190,9 @@ export function createRowViews(): RowViews {
   return {
     touch(object, key) {
       const id = keyId(object, key)
-      revisions.set(id, (revisions.get(id) ?? 0) + 1)
+      // Один лічильник на всі ключі: після `settle` ревізія ключа не
+      // повторює записаної раніше, тож перевірка дочитування не хибить.
+      revisions.set(id, ++clock)
       parts.set(id, { object, key })
       const keys = touched.get(object) ?? new Set<Key>()
       keys.add(key)

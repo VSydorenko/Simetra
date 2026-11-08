@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { DataError } from "../../errors"
+import { coreInternals } from "../core"
+import { createRowViews } from "../snapshot"
 import { DEFAULT_CORE_LIMITS, type ViewSpec } from "../types"
 import {
   ORG,
@@ -649,3 +651,109 @@ describe("close", () => {
 })
 
 void S
+
+describe("fix round 1", () => {
+  const lines = [{ ref: key(901), qty: 1, lineNumber: 1 }]
+
+  it("re-reads a mounted section when its header changed during the section read", async () => {
+    const { core, fake } = setup()
+    seed(fake, 1, 1)
+    fake.setLines(TASK, key(1), "lines", lines)
+    const header = core.view(keys(1))
+    watch(header)
+    const mounted = core.view(section(1))
+    watch(mounted)
+    await settle()
+    fake.hold = (read) => isSection(read)
+    mounted.refresh()
+    const before = fake.clock
+    const v2 = fake.edit(TASK, key(1), { title: "v2" })
+    header.refresh()
+    await settle()
+    fake.take().answer(before)
+    await settle()
+    expect(mounted.getSnapshot().section!.ownerVersion).toBeLessThan(v2)
+    expect(fake.pending).toHaveLength(1)
+    fake.take().answer()
+    await settle()
+    expect(mounted.getSnapshot().section!.ownerVersion).toBe(v2)
+  })
+
+  it("re-reads a mounted card when its row changed during the card read", async () => {
+    const { core, fake } = setup()
+    seed(fake, 1, 1)
+    const list = core.view(keys(1))
+    watch(list)
+    const handle = core.view(card(1))
+    watch(handle)
+    await settle()
+    fake.hold = (read) => isCard(read)
+    handle.refresh()
+    const before = fake.clock
+    fake.edit(TASK, key(1), { title: "x", notes: "body 2" })
+    list.refresh()
+    await settle()
+    fake.take().answer(before)
+    await settle()
+    expect(handle.getSnapshot().rows[0]).toMatchObject({
+      staleFields: ["notes"],
+    })
+    expect(fake.pending).toHaveLength(1)
+    fake.take().answer()
+    await settle()
+    expect(handle.getSnapshot().rows[0]).toMatchObject({
+      values: { notes: "body 2" },
+      staleFields: [],
+    })
+  })
+
+  it("keeps no row values in subsets after close", async () => {
+    const { core, fake } = setup()
+    seed(fake, 1, 2)
+    watch(core.view({ kind: "full", object: TASK, include: ["org"] }))
+    await settle()
+    const [s] = [...coreInternals(core).registry.subsets()]
+    core.close("disposed")
+    expect(s!.snapshot).toBeUndefined()
+    expect(s!.layout).toEqual([])
+    expect(s!.owned.size).toBe(0)
+    expect(s!.included.size).toBe(0)
+    expect(s!.refViews.size).toBe(0)
+  })
+
+  it("never repeats a row revision after its key is dropped", () => {
+    const views = createRowViews()
+    views.touch(TASK, key(1))
+    const first = views.revision(TASK, key(1))
+    views.settle(() => false)
+    expect(views.revision(TASK, key(1))).toBe(0)
+    views.touch(TASK, key(1))
+    expect(views.revision(TASK, key(1))).not.toBe(first)
+    expect(views.revision(TASK, key(1))).not.toBe(0)
+  })
+
+  it("leaves the view in error and no unowned row when applying a read throws", async () => {
+    const { core, fake, inspect, log } = setup()
+    seed(fake, 1, 2)
+    const { ops } = coreInternals(core)
+    const put = ops.put.bind(ops)
+    let calls = 0
+    const spy = vi.spyOn(ops, "put").mockImplementation((...args) => {
+      if (++calls === 2) throw new Error("boom")
+      return put(...args)
+    })
+    const handle = core.view(keys(1, 2))
+    watch(handle)
+    await settle()
+    spy.mockRestore()
+    expect(handle.getSnapshot()).toMatchObject({
+      status: "error",
+      error: { code: "command.internal" },
+    })
+    expect(inspect.rowCount()).toBe(0)
+    expect(inspect.violations()).toEqual([])
+    expect(log).toContainEqual(
+      expect.objectContaining({ kind: "listener-failed" })
+    )
+  })
+})

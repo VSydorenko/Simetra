@@ -81,7 +81,8 @@ describe("full", () => {
   })
 
   it("filters and orders locally", async () => {
-    const { core, fake } = setup()
+    // Сервер віддає рядки у зворотному порядку: порядок дає лише компаратор ядра.
+    const { core, fake } = setup({ reverseRows: true })
     const titles = ["b", "a", "C", "ä", "c", "B", "x"]
     titles.forEach((title, i) =>
       fake.insert(TASK, taskValues(i + 1, { title }))
@@ -182,5 +183,20 @@ describe("full", () => {
       { key: key(2), state: "removed" },
       { key: key(3) },
     ])
+  })
+
+  it("stops reading pages and targets once the view is released", async () => {
+    const { core, fake, inspect } = setup()
+    seed(fake, 1, 1_000)
+    fake.hold = (read) => isPage(read)
+    const handle = core.view({ kind: "full", object: TASK, include: ["org"] })
+    watch(handle).unsubscribe()
+    const first = fake.take()
+    vi.advanceTimersByTime(RELEASE)
+    first.answer()
+    await settle()
+    expect(fake.log.filter(isPage)).toHaveLength(1)
+    expect(fake.pending).toHaveLength(0)
+    expect(inspect.rowCount()).toBe(0)
   })
 })

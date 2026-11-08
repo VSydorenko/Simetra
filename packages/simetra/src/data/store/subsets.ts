@@ -77,6 +77,8 @@ export interface Subset extends ReaderTarget {
   /** The header revision at the start of the last card or section read. */
   readRevision: number | undefined
   checkQueued: boolean
+  /** A re-read check found a load in flight: check again when it ends. */
+  recheck: boolean
 }
 
 /** The view registry of a core. */
@@ -109,6 +111,8 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
   // Мемо хендлів з межею: хендл шукає підмножину за ключем форми, тож новий
   // хендл після витіснення під'єднується до тієї самої підмножини.
   const handles = new Map<string, ViewHandle>()
+  // Кеш знімка картки без утримання — на хендл мемо; закриття його чистить.
+  const idleCaches = new Map<string, { snapshot?: ViewSnapshot }>()
   const isClosed = () => ctx.closedSnapshot() !== undefined
 
   // ------------------------------------------------------------ завантаження
@@ -155,18 +159,28 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       token,
       what
     )
-    readForm(ctx, s, readEpoch)
+    readForm(ctx, s, readEpoch, token)
       .then(
         (apply) => {
           session.commit(
             (scope) => {
-              apply(scope)
-              s.loaded = true
-              s.status = "ready"
-              s.error = undefined
-              s.needsRefresh = false
-              s.hasNewRows = false
-              s.dirty = true
+              try {
+                apply(scope)
+                s.loaded = true
+                s.status = "ready"
+                s.error = undefined
+                s.needsRefresh = false
+                s.hasNewRows = false
+              } catch (error) {
+                // Дефект застосування — вигляд у `error`, рядки без власника
+                // прибирає `sweep`; відмова не стає необробленою.
+                ctx.log({ kind: "listener-failed", error })
+                s.status = "error"
+                s.error = errorOf(error)
+              } finally {
+                ops.sweep(scope)
+                s.dirty = true
+              }
             },
             token,
             what
@@ -194,6 +208,12 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
         if (s.trailing && s.alive && !isClosed()) {
           s.trailing = false
           load(s)
+        }
+        // Шапка змінилась під час польоту: перевірка, відкладена до кінця
+        // читання, не губиться (захист ревізією — від повторів).
+        if (s.recheck) {
+          s.recheck = false
+          if (s.alive && !isClosed() && s.listeners.size > 0) queueCheck(s)
         }
       })
   }
@@ -235,7 +255,11 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
    * повторів.
    */
   function check(s: Subset) {
-    if (!s.alive || s.flight !== undefined || s.listeners.size === 0) return
+    if (!s.alive || s.listeners.size === 0) return
+    if (s.flight !== undefined) {
+      s.recheck = true
+      return
+    }
     const header = headerKey(s)
     if (header === undefined) return
     const stale = s.form.spec.kind === "card" ? cardStale(s) : sectionStale(s)
@@ -374,6 +398,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       refViews: new Map(),
       readRevision: undefined,
       checkQueued: false,
+      recheck: false,
     }
     subsets.set(form.specKey, s)
     return s
@@ -497,6 +522,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
 
   function makeHandle(form: Form): ViewHandle {
     const idleCache: { snapshot?: ViewSnapshot } = {}
+    idleCaches.set(form.specKey, idleCache)
     const live = () => subsets.get(form.specKey)
     return {
       getSnapshot() {
@@ -550,7 +576,11 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       handles.set(form.specKey, handle)
       if (handles.size > limits.viewsMax) {
         const oldest = handles.keys().next()
-        if (!oldest.done) handles.delete(oldest.value)
+        if (!oldest.done) {
+          handles.delete(oldest.value)
+          // Хендл поза мемо тримає лише власний кеш; закриття його не бачить.
+          idleCaches.delete(oldest.value)
+        }
       }
       return handle
     },
@@ -592,12 +622,22 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
     },
 
     close() {
+      // Жодне значення рядка не переживає закриття навіть у пам'яті
+      // підмножин чи хендлів, на які ще тримають посилання.
       for (const s of subsets.values()) {
         s.alive = false
         s.listeners.clear()
         cancelTimers(s)
         resolveWaiters(s)
+        s.snapshot = undefined
+        s.refViews.clear()
+        s.owned = new Set()
+        s.included = new Map()
+        s.layout = []
+        s.layoutSet = new Set()
       }
+      for (const cache of idleCaches.values()) delete cache.snapshot
+      idleCaches.clear()
       subsets.clear()
       handles.clear()
     },

@@ -172,11 +172,24 @@ export function createCore(options: {
     dirtySections.set(o.name, owners)
   }
 
+  // Ключі, записані поточним `commit`: `sweep` прибирає ті, що лишились
+  // без власника; очищується на кожному сповіщенні.
+  const written: Array<readonly [ObjectState, Key]> = []
   const ops: StoreOps = {
     put(scope, o, row, readEpoch, lazyRead) {
       const result = o.rows.put(scope, row, readEpoch, lazyRead)
-      if (result !== "rejected") rowViews.touch(o.name, row.key)
+      if (result !== "rejected") {
+        rowViews.touch(o.name, row.key)
+        written.push([o, row.key])
+      }
       return result
+    },
+    sweep(scope) {
+      for (const [o, key] of written.splice(0)) {
+        if (o.rows.get(key)?.owners !== 0) continue
+        o.rows.disown(scope, key)
+        rowViews.touch(o.name, key)
+      }
     },
     remove(scope, o, key, readEpoch) {
       o.rows.remove(scope, key, readEpoch)
@@ -269,6 +282,8 @@ export function createCore(options: {
               const got = new Set<Key>()
               for (const row of rows) {
                 got.add(row.key)
+                // Ключ без запису — і перший запис без колонки скоупу (П11),
+                // недосяжний: проєкція завжди несе scopeColumn (§10).
                 if ((o.rows.get(row.key)?.owners ?? 0) > 0)
                   ops.put(scope, o, row, readEpoch, false)
               }
@@ -304,6 +319,7 @@ export function createCore(options: {
   // ------------------------------------------------------------ сповіщення
 
   session.onFlush(() => {
+    written.length = 0
     const closing = closed !== undefined
     if (!closing) {
       for (const o of objects.values()) {
@@ -331,6 +347,7 @@ export function createCore(options: {
   })
 
   session.onClose(() => {
+    written.length = 0
     registry.close()
     rowViews.clear()
     dirtySections.clear()

@@ -1,4 +1,4 @@
-import type { CatalogEntry, ReadQuery } from "simetra/model"
+import type { CatalogEntry, ReadQuery, SourceAdapter } from "simetra/model"
 import {
   ORGANIZATION_ID,
   catalogEntry,
@@ -57,12 +57,24 @@ export function setup(
     limits?: Partial<CoreLimits>
     strict?: boolean
     mode?: "auto" | "manual"
+    /** Answers rows in reverse server order: only a local sort restores it. */
+    reverseRows?: boolean
   } = {}
 ): CoreHarness {
   const fake = createFakeSource({ objects: OBJECTS, mode: options.mode })
   const limits = { ...DEFAULT_CORE_LIMITS, ...options.limits }
+  const adapter: SourceAdapter =
+    options.reverseRows === true
+      ? {
+          capabilities: fake.adapter.capabilities,
+          read: async (wire) => {
+            const result = await fake.adapter.read(wire)
+            return { ...result, rows: [...result.rows].reverse() }
+          },
+        }
+      : fake.adapter
   const source = createCoreSource(
-    () => fake.adapter,
+    () => adapter,
     fake.index,
     createReadLimiter(limits.readParallel)
   )
