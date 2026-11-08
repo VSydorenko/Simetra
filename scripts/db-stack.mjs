@@ -6,6 +6,8 @@
 //
 //   node scripts/db-stack.mjs start postgres
 //   node scripts/db-stack.mjs stop postgres [--volumes]
+//   node scripts/db-stack.mjs start supabase-signals
+//   node scripts/db-stack.mjs stop supabase-signals
 import { spawnSync } from "node:child_process"
 import {
   closeSync,
@@ -20,10 +22,23 @@ import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..")
-const STACK_DIR = join(ROOT, "docker/postgres-stack")
-const PROJECT = "simetra-pg"
-// Ім'я — те саме, що `TEST_STACKS.postgres.lockFile` у test/db/profile.ts
-const LOCK = join(tmpdir(), "simetra-db-stack-postgres.lock")
+// Профілі скрипта як дані. `lock` — ім'я замка, те саме, що
+// `TEST_STACKS.postgres.lockFile` у test/db/profile.ts. `supabase-signals` без
+// замка: DB-прогін його не вживає (стек Supabase має власний замок guard-а), а
+// кроку ініціалізації, що мусив би йти під замком, у нього немає.
+const PROFILES = {
+  postgres: {
+    dir: join(ROOT, "docker/postgres-stack"),
+    project: "simetra-pg",
+    lock: join(tmpdir(), "simetra-db-stack-postgres.lock"),
+  },
+  "supabase-signals": {
+    dir: join(ROOT, "docker/supabase-signals"),
+    project: "simetra-sb",
+    lock: undefined,
+  },
+}
+const STACK_DIR = PROFILES.postgres.dir
 const BUCKET = "simetra-dev"
 
 /**
@@ -106,14 +121,22 @@ function removeLockFile(path) {
  * `docker compose` лише з явним проєктом і файлом стека: без них compose
  * узяв би проєкт за іменем теки й міг би зачепити чужі контейнери.
  *
+ * @param {{ dir: string, project: string }} profile
  * @param {string[]} args
  * @param {{ input?: string | Buffer, capture?: boolean }} [options]
  * @returns {string}
  */
-function compose(args, options = {}) {
+function compose(profile, args, options = {}) {
   const result = spawnSync(
     "docker",
-    ["compose", "-p", PROJECT, "-f", join(STACK_DIR, "compose.yaml"), ...args],
+    [
+      "compose",
+      "-p",
+      profile.project,
+      "-f",
+      join(profile.dir, "compose.yaml"),
+      ...args,
+    ],
     {
       input: options.input,
       encoding: "utf8",
@@ -137,6 +160,7 @@ function compose(args, options = {}) {
 const garage = (args) =>
   // Журнал з'єднань CLI на кожен виклик лише засмічує вивід старту
   compose(
+    PROFILES.postgres,
     ["exec", "-T", "-e", "RUST_LOG=garage=warn", "garage", "/garage", ...args],
     {
       capture: true,
@@ -221,10 +245,11 @@ function initGarage() {
     ])
 }
 
-async function start() {
-  compose(["up", "-d", "--build", "--wait"])
+async function startPostgres() {
+  compose(PROFILES.postgres, ["up", "-d", "--build", "--wait"])
   initGarage()
   compose(
+    PROFILES.postgres,
     [
       "exec",
       "-T",
@@ -243,24 +268,42 @@ async function start() {
   )
 }
 
-/** @param {boolean} volumes */
-async function stop(volumes) {
-  compose(volumes ? ["down", "--volumes"] : ["down"])
+async function startSignals() {
+  compose(PROFILES["supabase-signals"], ["up", "-d", "--wait"])
+}
+
+/**
+ * @param {keyof typeof PROFILES} profile
+ * @param {boolean} volumes
+ */
+async function stop(profile, volumes) {
+  compose(PROFILES[profile], volumes ? ["down", "--volumes"] : ["down"])
 }
 
 /** @param {string[]} argv */
 async function main(argv) {
   const [command, profile, ...flags] = argv
   const usage =
-    "usage: node scripts/db-stack.mjs start postgres | stop postgres [--volumes]"
-  if (profile !== "postgres" || (command !== "start" && command !== "stop"))
+    "usage: node scripts/db-stack.mjs start postgres | stop postgres [--volumes] | start supabase-signals | stop supabase-signals"
+  if (
+    (profile !== "postgres" && profile !== "supabase-signals") ||
+    (command !== "start" && command !== "stop")
+  )
     throw new Error(usage)
-  const unknown = flags.filter((f) => command !== "stop" || f !== "--volumes")
+  // Тома є лише в стеку `postgres`: Centrifugo нічого не зберігає
+  const allowed =
+    command === "stop" && profile === "postgres" ? ["--volumes"] : []
+  const unknown = flags.filter((f) => !allowed.includes(f))
   if (unknown.length > 0)
     throw new Error(`unknown flag ${unknown[0]}; ${usage}`)
-  await withStackLock(LOCK, () =>
-    command === "start" ? start() : stop(flags.includes("--volumes"))
-  )
+  const run = () =>
+    command === "stop"
+      ? stop(profile, flags.includes("--volumes"))
+      : profile === "postgres"
+        ? startPostgres()
+        : startSignals()
+  const { lock } = PROFILES[profile]
+  await (lock === undefined ? run() : withStackLock(lock, run))
 }
 
 // Лише як команда: тест імпортує `withStackLock`, і CLI тоді не запускається

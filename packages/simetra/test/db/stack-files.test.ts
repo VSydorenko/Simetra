@@ -14,11 +14,22 @@ import { withStackLock } from "../../../../scripts/db-stack.mjs"
 
 // Файли стека перевіряються як текст: межі безпеки (лише 127.0.0.1, піни
 // образів, жодних секретів у конфігах) ламаються правкою файла, а не коду
-const STACK_DIR = fileURLToPath(
-  new URL("../../../../docker/postgres-stack/", import.meta.url)
-)
-const read = (name: string): string =>
-  readFileSync(join(STACK_DIR, name), "utf8")
+const dockerDir = (name: string): string =>
+  fileURLToPath(new URL(`../../../../docker/${name}/`, import.meta.url))
+const STACK_DIR = dockerDir("postgres-stack")
+const read = (name: string, dir = STACK_DIR): string =>
+  readFileSync(join(dir, name), "utf8")
+
+// Стек `postgres` і Centrifugo поруч зі стеком Supabase мають однакові межі
+// безпеки, тому спільні перевірки йдуть по обох теках
+const STACKS = [
+  { title: "postgres stack", dir: STACK_DIR, project: "simetra-pg" },
+  {
+    title: "supabase-signals stack",
+    dir: dockerDir("supabase-signals"),
+    project: "simetra-sb",
+  },
+]
 
 /**
  * Рядки-елементи списків `ports:` у compose-файлі, без лапок. Розбір по рядках
@@ -50,11 +61,11 @@ function publishedPorts(compose: string): string[] {
   return ports
 }
 
-describe("compose.yaml of the postgres stack", () => {
-  const compose = read("compose.yaml")
+describe.each(STACKS)("compose.yaml of the $title", ({ dir, project }) => {
+  const compose = read("compose.yaml", dir)
 
   it("names the compose project", () => {
-    expect(compose).toMatch(/^name: simetra-pg$/m)
+    expect(compose).toMatch(new RegExp(`^name: ${project}$`, "m"))
   })
 
   it("publishes every port on 127.0.0.1 only and never the Garage RPC port", () => {
@@ -67,6 +78,26 @@ describe("compose.yaml of the postgres stack", () => {
   it("has no network_mode", () => {
     expect(compose).not.toMatch(/^\s*["']?network_mode["']?\s*:/m)
   })
+
+  it("pins the Centrifugo image by tag and digest", () => {
+    const [image] = [...compose.matchAll(/^\s*image:\s*(centrifugo\S+)/gm)]
+    expect(image?.[1]).toMatch(/^[^:@\s]+:[^:@\s]+@sha256:[0-9a-f]{64}$/)
+  })
+})
+
+it("pins one Centrifugo image in both stacks", () => {
+  const images = STACKS.map(
+    ({ dir }) =>
+      /^\s*image:\s*(centrifugo\S+)/m.exec(read("compose.yaml", dir))?.[1]
+  )
+  expect(new Set(images).size).toBe(1)
+})
+
+it("publishes the Centrifugo of the Supabase stack on its own port", () => {
+  const [, signals] = STACKS
+  expect(publishedPorts(read("compose.yaml", signals!.dir))).toEqual([
+    "127.0.0.1:8101:8000",
+  ])
 })
 
 describe("images of the postgres stack", () => {
@@ -87,8 +118,8 @@ describe("images of the postgres stack", () => {
   })
 })
 
-describe("centrifugo.json of the postgres stack", () => {
-  const config: unknown = JSON.parse(read("centrifugo.json"))
+describe.each(STACKS)("centrifugo.json of the $title", ({ dir }) => {
+  const config: unknown = JSON.parse(read("centrifugo.json", dir))
 
   function keys(value: unknown): string[] {
     if (Array.isArray(value)) return value.flatMap(keys)
