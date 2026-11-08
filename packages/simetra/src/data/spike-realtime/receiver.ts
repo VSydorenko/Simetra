@@ -4,6 +4,16 @@ import {
   receivedInvalidateSchema,
   type SignalTransport,
 } from "simetra/model"
+
+/**
+ * Порт каналу приймача: порт T0 плюс ознака `recovered` на (пере)підписці.
+ * `recovered: true` — сервер сигналів підтвердив, що доставив усі пропущені
+ * повідомлення (Centrifugo recovery); тоді перечитування можна пропустити.
+ * Транспорт без recovery (Supabase Realtime) її не дає.
+ */
+export interface SignalPort extends Omit<SignalTransport, "onSubscribed"> {
+  onSubscribed(handler: (info?: { recovered: boolean }) => void): () => void
+}
 import type { ReceiverCore, Row, SubsetSpec } from "./core"
 
 /**
@@ -26,7 +36,7 @@ export interface ReceiverSource {
 
 export interface ReceiverOptions {
   core: ReceiverCore
-  transport: SignalTransport
+  transport: SignalPort
   source: ReceiverSource
   /** Топіки каналів змін (обчислює кеш прав, §8.4 «Підписки»). */
   topics: readonly string[]
@@ -55,6 +65,7 @@ export interface ReceiverStats {
   keyReads: number
   subsetReads: number
   resyncs: number
+  recovered: number
 }
 
 interface Pending {
@@ -93,9 +104,11 @@ export function createSignalReceiver(options: ReceiverOptions): SignalReceiver {
     keyReads: 0,
     subsetReads: 0,
     resyncs: 0,
+    recovered: 0,
   }
 
   let disposed = false
+  let unstaleAfterFlush = false
   const seen = new Set<string>()
   let batch = new Map<string, ObjectBatch>()
   let quietTimer: ReturnType<typeof setTimeout> | undefined
@@ -183,20 +196,22 @@ export function createSignalReceiver(options: ReceiverOptions): SignalReceiver {
     clearTimeout(maxTimer)
     quietTimer = undefined
     maxTimer = undefined
-    if (disposed || batch.size === 0) {
-      void track(async () => {})
-      return
-    }
     const taken = batch
     batch = new Map()
     const prev = flight
     flight = track(async () => {
       await prev
       if (disposed) return
-      stats.batches += 1
-      await Promise.all(
-        [...taken].map(([object, b]) => processObject(object, b))
-      )
+      if (taken.size > 0) {
+        stats.batches += 1
+        await Promise.all(
+          [...taken].map(([object, b]) => processObject(object, b))
+        )
+      }
+      if (unstaleAfterFlush && !disposed) {
+        unstaleAfterFlush = false
+        core.markAllStale(false, core.generation())
+      }
     })
   }
 
@@ -378,8 +393,18 @@ export function createSignalReceiver(options: ReceiverOptions): SignalReceiver {
     after?.()
   }
 
-  const onSubscribed = () => {
+  const onSubscribed = (info?: { recovered: boolean }) => {
     if (disposed) return
+    if (info?.recovered === true) {
+      // Пропущені сигнали дійдуть після цієї події як звичайні: перечитувати
+      // підмножини не треба, лише зняти позначку розриву.
+      // `stale` знімається після пачки відновлених сигналів, а не до неї:
+      // інакше рядок на мить показав би себе свіжим зі старим значенням.
+      stats.recovered += 1
+      unstaleAfterFlush = true
+      schedule()
+      return
+    }
     // Сигнали з проміжку без підписки втрачено (Realtime їх не буферизує, а
     // слот реплікації створюється ліниво на перший join): кожен `SUBSCRIBED`
     // — перечитування активних підмножин, сигнал його не заміняє.
