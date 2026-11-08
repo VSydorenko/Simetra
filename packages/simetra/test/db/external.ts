@@ -170,13 +170,14 @@ async function bucketObjects(
  * Removes the containers of run `tag` on the stack of profile `p`
  * (`docker rm -f -v`) and its empty buckets; a bucket with objects is left
  * (emptying it comes with the first writer of bytes). Never throws and never
- * runs past `deadlineMs`: what it could not remove or check is in `left`.
+ * runs past `deadlineMs`: what it could not remove or check is in `left`, and
+ * the commands to finish it by hand are in `cleanup`.
  */
 export async function removeRunResources(
   tag: string,
   p: TestProvider,
   deps: { exec: Exec; fetch: Fetch; deadlineMs: number }
-): Promise<{ removed: string[]; left: string[] }> {
+): Promise<{ removed: string[]; left: string[]; cleanup: string[] }> {
   const deadline = Date.now() + deps.deadlineMs
   // Кожен виклик обмежений рештою дедлайну: прибиральник у обробнику сигналу
   // має власну межу, і завислий docker чи Garage не мусить її з'їсти
@@ -184,6 +185,10 @@ export async function removeRunResources(
     Math.max(1, Math.min(CALL_TIMEOUT_MS, deadline - Date.now()))
   const removed: string[] = []
   const left: string[] = []
+  const cleanup: string[] = []
+  const bucketName = runBucketName(tag)
+  const emptyAndDelete = (bucket: string): string =>
+    `bucket ${bucket}: empty and delete in Garage`
   const reason = (error: unknown): string =>
     error instanceof Error ? error.message : String(error)
 
@@ -199,15 +204,18 @@ export async function removeRunResources(
         removed.push(`container ${name}`)
       } catch (error) {
         left.push(`container ${name} (${reason(error)})`)
+        cleanup.push(`docker rm -f -v ${name}`)
       }
   } catch (error) {
     left.push(`containers of run ${tag} (not checked: ${reason(error)})`)
+    cleanup.push(
+      `docker ps -a --filter label=${RUN_LABEL}=${tag} --filter label=${STACK_LABEL}=${p}  # then docker rm -f -v each`
+    )
   }
 
   const stack = TEST_STACKS[p]
   // Без Garage на стеку бакетів немає — і файла секретів не читаємо
-  if (stack.garageAdminUrl === null) return { removed, left }
-  const name = runBucketName(tag)
+  if (stack.garageAdminUrl === null) return { removed, left, cleanup }
   let buckets: { id: string; name: string }[]
   try {
     buckets = (await listRunBuckets(stack, deps.fetch, budget())).filter(
@@ -215,8 +223,9 @@ export async function removeRunResources(
     )
   } catch (error) {
     // Ім'я бакета виводиться з тегу: людина знає, що перевірити
-    left.push(`bucket ${name} (not checked: ${reason(error)})`)
-    return { removed, left }
+    left.push(`bucket ${bucketName} (not checked: ${reason(error)})`)
+    cleanup.push(emptyAndDelete(bucketName))
+    return { removed, left, cleanup }
   }
   for (const bucket of buckets)
     try {
@@ -227,9 +236,8 @@ export async function removeRunResources(
         bucket.id
       )
       if (objects > 0) {
-        left.push(
-          `bucket ${bucket.name} (${objects} object(s): empty and delete it in Garage)`
-        )
+        left.push(`bucket ${bucket.name} (${objects} object(s))`)
+        cleanup.push(emptyAndDelete(bucket.name))
         continue
       }
       await garage(stack, deps.fetch, budget(), "DeleteBucket", {
@@ -238,8 +246,9 @@ export async function removeRunResources(
       removed.push(`bucket ${bucket.name}`)
     } catch (error) {
       left.push(`bucket ${bucket.name} (${reason(error)})`)
+      cleanup.push(emptyAndDelete(bucket.name))
     }
-  return { removed, left }
+  return { removed, left, cleanup }
 }
 
 /** One admin API v2 call: `GET` without a body, `POST` with one or for a delete. */

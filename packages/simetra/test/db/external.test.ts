@@ -9,12 +9,23 @@ import {
 import { garageAdminToken, PROVIDER_ENV, TEST_STACKS } from "./profile"
 import { sweepRun } from "./sweep"
 
-// База, недосяжна на з'єднанні: прибиральник мусить дійти до зовнішніх
-// ресурсів і без неї
+// Підставна база: недосяжна на з'єднанні, із запитом, що ніколи не повертається,
+// чи порожня. Прибиральник мусить дійти до зовнішніх ресурсів у кожному разі
+const db = vi.hoisted(() => ({
+  mode: "refuse" as "refuse" | "hang" | "empty",
+}))
 vi.mock("pg", () => {
   class Client {
-    connect(): Promise<never> {
-      return Promise.reject(new Error("connect ECONNREFUSED 127.0.0.1:54422"))
+    connect(): Promise<void> {
+      return db.mode === "refuse"
+        ? Promise.reject(new Error("connect ECONNREFUSED 127.0.0.1:54422"))
+        : Promise.resolve()
+    }
+    query(): Promise<{ rows: never[] }> {
+      // Без реакції й на `end()`: межу мусить тримати сам прибиральник
+      return db.mode === "hang"
+        ? new Promise(() => {})
+        : Promise.resolve({ rows: [] })
     }
     end(): Promise<void> {
       return Promise.resolve()
@@ -119,6 +130,7 @@ function fakeGarage(
 
 afterEach(() => {
   vi.unstubAllEnvs()
+  db.mode = "refuse"
 })
 
 describe("runContainers", () => {
@@ -206,6 +218,7 @@ describe("removeRunResources", () => {
     expect(result).toEqual({
       removed: ["container mine", `bucket run-${TAG}`],
       left: [],
+      cleanup: [],
     })
     expect(docker.alive()).toEqual(["other-run", "other-stack"])
     expect(garage.buckets().map((b) => b.id)).toEqual(["theirs"])
@@ -222,6 +235,9 @@ describe("removeRunResources", () => {
     })
     expect(result.removed).toEqual([])
     expect(result.left).toEqual([expect.stringContaining(`bucket run-${TAG}`)])
+    expect(result.cleanup).toEqual([
+      `bucket run-${TAG}: empty and delete in Garage`,
+    ])
     expect(garage.buckets().map((b) => b.id)).toEqual(["full"])
   })
 
@@ -246,18 +262,46 @@ describe("removeRunResources", () => {
 })
 
 describe("sweepRun", () => {
-  it("DB unreachable still removes containers", async () => {
+  const sweep = (docker: ReturnType<typeof fakeDocker>, deadlineMs: number) => {
     vi.stubEnv(PROVIDER_ENV, "postgres")
-    const docker = fakeDocker([{ name: "mine", tag: TAG, stack: "postgres" }])
-    const garage = fakeGarage([])
-    const result = await sweepRun(TAG, {
-      deadlineMs: 10_000,
+    return sweepRun(TAG, {
+      deadlineMs,
       exec: docker.exec,
-      fetch: garage.fetch,
+      fetch: fakeGarage([]).fetch,
     })
+  }
+
+  it("DB unreachable still removes containers", async () => {
+    const docker = fakeDocker([{ name: "mine", tag: TAG, stack: "postgres" }])
+    const result = await sweep(docker, 10_000)
     expect(result.dropped).toContain("container mine")
     expect(docker.alive()).toEqual([])
-    // Невдала DB-фаза не мовчить: її причина — у `left`
+    // Невдала DB-фаза не мовчить: її причина — у `left`, ручний SQL — у `cleanup`
     expect(result.left).toEqual([expect.stringMatching(/ECONNREFUSED/)])
+    expect(result.cleanup).toEqual([expect.stringContaining("DROP DATABASE")])
+  })
+
+  // DB-фаза отримує дедлайн мінус 5 с бюджету зовнішніх ресурсів: з
+  // дедлайном 6 с зависла база тримає прибиральника ~1 с, а не 6
+  it("a query that never returns does not take the external budget", async () => {
+    db.mode = "hang"
+    const docker = fakeDocker([{ name: "mine", tag: TAG, stack: "postgres" }])
+    const started = Date.now()
+    const result = await sweep(docker, 6_000)
+    const elapsed = Date.now() - started
+    expect(elapsed).toBeGreaterThanOrEqual(900)
+    expect(elapsed).toBeLessThan(2_000)
+    expect(result.dropped).toEqual(["container mine"])
+    expect(result.left).toEqual([expect.stringMatching(/database phase/)])
+  })
+
+  it("removes containers after the database pass finds nothing", async () => {
+    db.mode = "empty"
+    const docker = fakeDocker([{ name: "mine", tag: TAG, stack: "postgres" }])
+    expect(await sweep(docker, 10_000)).toEqual({
+      dropped: ["container mine"],
+      left: [],
+      cleanup: [],
+    })
   })
 })

@@ -88,7 +88,12 @@ describe("an interrupted DB run", () => {
         if (ready !== undefined && !workerGone) killQuietly(ready.workerPid)
         // Коротка межа: очікування виходу (до 45 с) і прибирання разом мають
         // уміститися в таймаут тесту
-        await cleanup(() => sweepRun(tag, { deadlineMs: 10_000 }))
+        await cleanup(async () => {
+          // Прибиральник не кидає на недосяжній базі — лишки лише в `left`
+          const { left } = await sweepRun(tag, { deadlineMs: 10_000 })
+          if (left.length > 0)
+            throw new Error(`the sweep left ${left.join(", ")}`)
+        })
         await cleanup(() => dropDatabase(foreign))
       }
     },
