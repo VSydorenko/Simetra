@@ -1257,6 +1257,17 @@ describe("core model", () => {
   it("holds the invariants over random interleavings", async () => {
     await fc.assert(property(), { numRuns: RUNS })
   }, 120_000)
+
+  // Фіксований прогін: випадковий пошук ловить дефект повторного remove (П15,
+  // нова позначка мусить пересунути епоху) лише в частині прогонів, а цей
+  // шлях відтворює його щоразу.
+  it("replays seed 527771713 (П15 repeated remove moves the mark epoch)", async () => {
+    await fc.assert(property(), {
+      seed: 527771713,
+      path: "6101:1:1:10:13:18:19:21:20:19:20:20:25:26:25:25:25:25:19:15:12:12:12:12:12:12:12:12:14:14:14:14:14:14:14:13:13:13:13:13",
+      numRuns: 1,
+    })
+  }, 120_000)
 })
 
 const DEFECTS: readonly DefectFlag[] = [
