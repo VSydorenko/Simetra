@@ -73,6 +73,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@supabase/realtime-js": "2.119.0",
     "@tanstack/db": "1.0.0-rc.1.4",
     "@tanstack/query-core": "5.107.1",
     "@tanstack/query-db-collection": "1.5.1",
