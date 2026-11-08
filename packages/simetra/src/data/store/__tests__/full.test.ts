@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { DataError } from "../../errors"
 import { DEFAULT_CORE_LIMITS, type ViewSpec } from "../types"
 import {
+  ORG,
+  S,
   TASK,
   isPage,
   key,
@@ -183,6 +185,32 @@ describe("full", () => {
       { key: key(2), state: "removed" },
       { key: key(3) },
     ])
+  })
+
+  it("reads include targets of a removed row that the same read restores", async () => {
+    const { core, fake, inspect } = setup()
+    fake.insert(ORG, { ref: S })
+    // Єдиний рядок із ціллю `S`: інакше ціль прийшла б від сусіда.
+    seed(fake, 1, 1)
+    const single = core.view({ kind: "keys", object: TASK, keys: [key(1)] })
+    watch(single)
+    await settle()
+    fake.remove(TASK, key(1))
+    single.refresh()
+    await settle()
+    expect(single.getSnapshot().rows[0]).toMatchObject({ state: "removed" })
+
+    // Рядок повернувся на сервер: читання `full`, почате після позначки,
+    // знімає `removed` у своєму ж застосуванні, тож і ціль `include` має
+    // прийти з цього читання — пізнішого читання цілей не буде.
+    fake.insert(TASK, taskValues(1))
+    const handle = core.view({ kind: "full", object: TASK, include: ["org"] })
+    watch(handle)
+    await settle()
+    const row = handle.getSnapshot().rows.find((r) => r.key === key(1))
+    expect(row).toMatchObject({ refs: { org: { key: S } } })
+    expect(row?.state).not.toBe("removed")
+    expect(inspect.owners(ORG, S)).toBeGreaterThan(0)
   })
 
   it("stops reading pages and targets once the view is released", async () => {
