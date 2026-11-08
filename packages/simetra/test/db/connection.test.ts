@@ -12,8 +12,12 @@ import {
   shadowAgeMinutes,
   shadowSuffix,
   testDatabaseName,
+  testDatabaseUrl,
+  testPoolerUrl,
   testRoleName,
+  testSuperuserUrl,
 } from "./connection"
+import { PROVIDER_ENV, TEST_STACKS } from "./profile"
 
 describe("shadowAgeMinutes", () => {
   const NOW = Date.UTC(2026, 9, 14, 12, 0, 0)
@@ -176,5 +180,38 @@ describe("isRunTag", () => {
     expect(isRunTag(newRunTag())).toBe(true)
     for (const value of ["", "abc12", "abc1234", "ABC123", "abc.12", ".*"])
       expect(isRunTag(value)).toBe(false)
+  })
+})
+
+describe("stack addresses by profile", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  it("takes the defaults from the profile", () => {
+    vi.stubEnv(PROVIDER_ENV, "postgres")
+    vi.stubEnv("SIMETRA_TEST_DATABASE_URL", "")
+    vi.stubEnv("SIMETRA_TEST_SUPERUSER_URL", "")
+    delete process.env.SIMETRA_TEST_DATABASE_URL
+    delete process.env.SIMETRA_TEST_SUPERUSER_URL
+    expect(testDatabaseUrl()).toBe(TEST_STACKS.postgres.databaseUrl)
+    expect(testSuperuserUrl()).toBe(TEST_STACKS.postgres.superuserUrl)
+  })
+
+  it("refuses a pooler address on a profile without a pooler", () => {
+    vi.stubEnv(PROVIDER_ENV, "postgres")
+    vi.stubEnv("SIMETRA_TEST_POOLER_URL", "")
+    delete process.env.SIMETRA_TEST_POOLER_URL
+    expect(() => testPoolerUrl()).toThrow(/no pooler/)
+  })
+
+  it("lets SIMETRA_TEST_* variables override the profile", () => {
+    vi.stubEnv(PROVIDER_ENV, "postgres")
+    vi.stubEnv("SIMETRA_TEST_DATABASE_URL", "postgresql://a@h/db")
+    vi.stubEnv("SIMETRA_TEST_SUPERUSER_URL", "postgresql://b@h/db")
+    vi.stubEnv("SIMETRA_TEST_POOLER_URL", "postgresql://c@h/db")
+    expect(testDatabaseUrl()).toBe("postgresql://a@h/db")
+    expect(testSuperuserUrl()).toBe("postgresql://b@h/db")
+    expect(testPoolerUrl()).toBe("postgresql://c@h/db")
   })
 })
