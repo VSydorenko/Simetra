@@ -219,7 +219,8 @@ describe("view registry and holds", () => {
     expect(keysIn(hidden)).toEqual([key(1)])
     expect(hidden.rows[0]).toMatchObject({ state: "stale" })
     // toMatchObject пропустив би будь-який об'єкт: значення мають бути порожні.
-    expect(hidden.rows[0]!.values).toEqual({})
+    const row = hidden.rows[0]!
+    expect(row.state !== "removed" && row.values).toEqual({})
     expect(log).toContainEqual({
       kind: "horizon-hidden",
       object: TASK,
