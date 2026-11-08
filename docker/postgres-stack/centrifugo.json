@@ -1,0 +1,33 @@
+{
+  "client": {
+    "recovery_max_publication_limit": 300
+  },
+  "channel": {
+    "without_namespace": {},
+    "namespaces": [
+      {
+        "name": "simetra",
+        "history_size": 100,
+        "history_ttl": "300s",
+        "history_meta_ttl": "24h",
+        "force_recovery": true
+      },
+      {
+        "name": "simetra-rights",
+        "history_size": 20,
+        "history_ttl": "300s",
+        "history_meta_ttl": "24h",
+        "force_recovery": true
+      },
+      {
+        "name": "simetra-user",
+        "history_size": 20,
+        "history_ttl": "300s",
+        "history_meta_ttl": "24h",
+        "force_recovery": true
+      }
+    ]
+  },
+  "http_api": { "disabled": true },
+  "health": { "enabled": true }
+}

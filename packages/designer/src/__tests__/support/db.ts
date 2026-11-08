@@ -199,6 +199,27 @@ export function throughPoolerAs(loginUrl: string): string {
 }
 
 /**
+ * A pool of `loginUrl` through the pooler, or `null` when the caller does not
+ * ask for it. Only the Supabase-bound halves of a test ask: a stack without a
+ * pooler never resolves `testPoolerUrl()` for the other half.
+ */
+export function poolerPoolOf(
+  loginUrl: string,
+  viaPooler: boolean
+): pg.Pool | null {
+  return viaPooler
+    ? new pg.Pool({ connectionString: throughPoolerAs(loginUrl) })
+    : null
+}
+
+/** The pooler pool of an environment built with it; a test bug otherwise. */
+export function pooledOf(pool: pg.Pool | null): pg.Pool {
+  if (pool === null)
+    throw new Error("the environment was built without the pooler")
+  return pool
+}
+
+/**
  * Records `hash` as the applied snapshot in `simetra.marker` (every `NOT NULL`
  * column of `renderApplyState`, placeholders elsewhere): the runtime compares
  * only the hash. Replaces the row, so a test can switch the hash.

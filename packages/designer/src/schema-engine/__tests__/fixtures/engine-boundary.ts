@@ -60,3 +60,9 @@ export function boundaryViolations(
   }
   return out
 }
+
+/** Межа порту: керовані схеми й провайдер стеку тестів. */
+export const scopeOf = (...schemas: string[]): EngineScope => ({
+  schemas,
+  provider: "supabase",
+})

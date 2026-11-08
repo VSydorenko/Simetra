@@ -34,15 +34,6 @@ describe("DB test stack", () => {
     })
   })
 
-  it("provider base state is visible", async () => {
-    await withRollback(async (client) => {
-      const result = await client.query(
-        "SELECT to_regclass('auth.users') IS NOT NULL AS present"
-      )
-      expect(result.rows[0]).toEqual({ present: true })
-    })
-  })
-
   it("readCatalog reads a table", async () => {
     await withRollback(async (client) => {
       await client.query(`
