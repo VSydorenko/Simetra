@@ -22,6 +22,17 @@ export interface Epochs {
   clear(): void
 }
 
+/** The epoch id of a key: `"<object>\u0000<key>"`. */
+export const keyId = (object: string, key: string): string =>
+  `${object}\u0000${key}`
+
+/**
+ * The epoch id of a pair (scope, object): `"<object>\u0000scope\u0000<scope>"`;
+ * the scope of an unscoped object (`null`) is the empty string.
+ */
+export const pairId = (object: string, scope: string | null): string =>
+  `${object}\u0000scope\u0000${scope ?? ""}`
+
 // FNV-1a 32 біти: стабільний хеш, тож один id завжди в одному кошику.
 function fnv1a(id: string): number {
   let h = 0x811c9dc5
