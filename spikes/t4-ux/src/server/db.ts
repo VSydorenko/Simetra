@@ -4,6 +4,17 @@
 import { FakeServer, ITEM, itemSpec } from "../core"
 
 export const TOTAL = 10_000
+export const WIN_TOTAL = 100_000
+const WORDS = [
+  "north",
+  "amber",
+  "ledger",
+  "quartz",
+  "harbor",
+  "willow",
+  "signal",
+  "copper",
+]
 const servers = new Map<string, FakeServer>()
 
 export function itemId(subject: string, n: number): string {
@@ -18,15 +29,27 @@ export function serverOf(subject: string): FakeServer {
   if (s) return s
   s = new FakeServer([itemSpec])
   const prefix = subject.startsWith("bob") ? "Bravo" : "Alpha"
-  const total = subject.includes("-full") ? 5000 : TOTAL
+  // `-win` — спайк 4: ~100 тис. рядків для вікна; назви різної довжини
+  // (змінна висота рядка), частина рядків без статусу (NULL у сортуванні).
+  const win = subject.includes("-win")
+  const total = subject.includes("-full") ? 5000 : win ? WIN_TOTAL : TOTAL
   const rows = []
   for (let n = 1; n <= total; n++)
     rows.push({
       id: itemId(subject, n),
       num: n * 10,
-      name: `${prefix} item ${n}`,
+      name: win
+        ? `${prefix} item ${n}` +
+          (n % 5 === 0
+            ? " " +
+              Array.from(
+                { length: 6 + (n % 4) * 6 },
+                (_, i) => WORDS[(n + i) % 8]
+              ).join(" ")
+            : "")
+        : `${prefix} item ${n}`,
       amount: (n * 3.25).toFixed(2),
-      status: n % 7 === 0 ? "closed" : "open",
+      status: win && n % 11 === 0 ? null : n % 7 === 0 ? "closed" : "open",
       note: `${prefix} note for item ${n}. Long text field loaded lazily.`,
     })
   s.seed(ITEM, rows)

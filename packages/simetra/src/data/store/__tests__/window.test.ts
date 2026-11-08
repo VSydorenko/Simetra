@@ -180,7 +180,8 @@ describe("перехід і зміна ланцюжка без порожньо�
     expect(v.last.status).toBe("refreshing")
     const chain = v.last.window!.chain
     await transport.drain()
-    expect(v.last.window!.chain).toBe(chain)
+    // Показаний ланцюжок змінюється лише разом з новим складом.
+    expect(v.last.window!.chain).toBe(chain + 1)
     expect(v.last.status).toBe("ready")
     for (const f of v.frames.slice(before))
       expect(f.rows.length).toBeGreaterThan(0)

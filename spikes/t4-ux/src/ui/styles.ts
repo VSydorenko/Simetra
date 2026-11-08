@@ -15,6 +15,11 @@ button{font:inherit;font-size:12px;padding:2px 8px;height:24px;border:1px solid 
 .list{position:relative;height:${VIEW_H}px;overflow:auto;background:#fff;border:1px solid #dde2e8;border-radius:6px}
 .row{position:absolute;left:0;right:0;height:${ROW_H}px;display:grid;grid-template-columns:60px 1fr 90px 80px 360px;align-items:center;gap:8px;padding:0 8px;border-bottom:1px solid #eef1f4;box-shadow:inset 3px 0 0 transparent}
 .row a{color:inherit}
+.wrow{position:relative;height:${ROW_H}px;display:grid;grid-template-columns:60px 1fr 90px 80px 300px;align-items:center;gap:8px;padding:0 8px;border-bottom:1px solid #eef1f4;box-shadow:inset 3px 0 0 transparent}
+.wrow .name{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.wrow.var{height:auto;min-height:${ROW_H}px;align-items:start;padding:6px 8px}
+.wrow.var .name{white-space:normal;display:flex;flex-direction:column}
+.wrow.var .note{display:block;height:18px;line-height:18px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;color:#6b7684;font-size:12px}
 .placeholder{color:#9aa4b1}
 .state-col{display:grid;grid-template-columns:1fr 28px;align-items:center;gap:6px}
 .state{display:flex;min-width:0;align-items:center;gap:6px;height:28px;font-size:12px;white-space:nowrap;overflow:hidden}

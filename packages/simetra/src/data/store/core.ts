@@ -204,11 +204,15 @@ interface Win {
   atEnd: boolean
   before: boolean
   after: boolean
+  /** Покоління запитів ланцюжка: відкидає відповіді старого. */
   chain: number
+  /** Показаний ланцюжок: змінюється, коли новий ланцюжок застосовано. */
+  shown: number
   target: "start" | "end" | "keep"
   /** Власні створення — на початку вікна, поки їх не прийме сторінка. */
   created: Key[]
   visible?: { first: Key; last: Key }
+  lastRange?: [number, number]
   /** Ключ → сторінка (усі яруси). */
   index: Map<Key, WinPage>
   ghostBytes: number
@@ -462,6 +466,9 @@ export function createCoreSession(options: CoreOptions): CoreSession {
     o.rows.delete(key)
     touchRow(o.name, key)
     rowCache.delete(rowId(o.name, key))
+    // Ревізія звільненого рядка теж іде: інакше мапа ревізій росте з кожним
+    // коли-небудь показаним ключем (знайдено заміром пам'яті вікна).
+    rowRev.delete(rowId(o.name, key))
   }
 
   /**
@@ -1299,6 +1306,7 @@ export function createCoreSession(options: CoreOptions): CoreSession {
         before: false,
         after: false,
         chain: 0,
+        shown: 0,
         target: "start",
         created: [],
         index: new Map(),
@@ -1397,9 +1405,11 @@ export function createCoreSession(options: CoreOptions): CoreSession {
   }
 
   /** Склад і власність з ланцюжка: власні лише сторінки `resident`. */
-  function syncWin(scope: Scope, s: Subset) {
+  function syncWin(scope: Scope, s: Subset, full = false) {
     const w = winOf(s)
-    reindex(w)
+    // Повний перебуд індексу — лише коли ланцюжок замінено; інакше O(n²)
+    // на прокрутці 100 тис. рядків (виміряно: 339 с замість секунд).
+    if (full) reindex(w)
     w.created = w.created.filter(
       (k) => !w.index.has(k) && (s.obj.own.has(k) || heldByLog(s.obj.name, k))
     )
@@ -1459,10 +1469,12 @@ export function createCoreSession(options: CoreOptions): CoreSession {
             w.atStart = target.k === "start" || (target.k === "end" && end)
             w.atEnd = target.k === "end" || end
             w.target = target.k === "end" ? "end" : "start"
+            w.shown++
             // Власні створення лишаються на початку лише від початку.
             if (target.k !== "start") w.created = []
             delete w.visible
-            syncWin(scope, s)
+            delete w.lastRange
+            syncWin(scope, s, true)
             s.status = "ready"
             delete s.error
             s.needsRefresh = false
@@ -1520,8 +1532,11 @@ export function createCoreSession(options: CoreOptions): CoreSession {
           for (const r of fresh) putRow(scope, s.obj, r, since)
           if (dir === "after") {
             if (end) w.atEnd = true
-            if (fresh.length > 0)
-              w.pages.push(makePage(s, fresh, { k: "after", c: cursor }))
+            if (fresh.length > 0) {
+              const page = makePage(s, fresh, { k: "after", c: cursor })
+              for (const k of page.keys) w.index.set(k, page)
+              w.pages.push(page)
+            }
           } else {
             if (end) w.atStart = true
             if (fresh.length > 0) {
@@ -1534,6 +1549,7 @@ export function createCoreSession(options: CoreOptions): CoreSession {
               // строго після її останнього рядка (рядок між ними не випаде).
               if (page.last !== undefined)
                 edge.lower = { k: "after", c: page.last }
+              for (const k of page.keys) w.index.set(k, page)
               w.pages.unshift(page)
             }
           }
@@ -1571,12 +1587,14 @@ export function createCoreSession(options: CoreOptions): CoreSession {
           ghost: true as const,
         })
       )
-      // Оцінка: рядок у UTF-16 плюс накладні на об'єкт, ключ і запис мапи.
-      bytes += JSON.stringify(v.values).length * 2 + key.length * 2 + 160
+      // Оцінка: рядок у UTF-16 плюс накладні на об'єкти й записи мап;
+      // константу відкалібровано заміром (window-memory.test.ts).
+      bytes += JSON.stringify(v.values).length * 2 + key.length * 2 + 300
     }
     p.tier = "ghost"
     p.ghost = ghost
     p.bytes = bytes
+    winOf(s).ghostBytes += bytes
     delete p.cache
     syncWin(scope, s)
     trimGhosts(scope, s)
@@ -1604,6 +1622,7 @@ export function createCoreSession(options: CoreOptions): CoreSession {
       if (pick === "front") w.atStart = false
       else w.atEnd = false
       w.ghostBytes -= p.bytes
+      for (const k of p.keys) if (w.index.get(k) === p) w.index.delete(k)
       changed = true
     }
     if (changed) syncWin(scope, s)
@@ -1611,11 +1630,16 @@ export function createCoreSession(options: CoreOptions): CoreSession {
 
   function visiblePages(w: Win): [number, number] {
     if (w.visible === undefined) return [0, 0]
-    const a = w.index.get(w.visible.first)
-    const b = w.index.get(w.visible.last)
-    const ia = a === undefined ? 0 : w.pages.indexOf(a)
-    const ib = b === undefined ? ia : w.pages.indexOf(b)
-    return [Math.max(0, ia), Math.max(ia, ib)]
+    const a = w.index.get(w.visible.first) ?? w.index.get(w.visible.last)
+    const b = w.index.get(w.visible.last) ?? a
+    // Ключ поза ланцюжком (створення, ще не прочитана сторінка): лишається
+    // останній відомий діапазон, а не сторінка 0 — інакше вікно дочитувало б
+    // початок, якого ніхто не бачить (знайдено заміром пам'яті).
+    if (a === undefined || b === undefined) return w.lastRange ?? [0, 0]
+    const ia = w.pages.indexOf(a)
+    const ib = Math.max(ia, w.pages.indexOf(b))
+    w.lastRange = [ia, ib]
+    return w.lastRange
   }
 
   const pinned = (s: Subset, p: WinPage) =>
@@ -1707,9 +1731,12 @@ export function createCoreSession(options: CoreOptions): CoreSession {
             }
             touchRow(s.obj.name, key)
           }
+          for (const k of p.keys)
+            if (!keep.includes(k) && w.index.get(k) === p) w.index.delete(k)
           p.keys = keep
           p.tier = "resident"
           delete p.ghost
+          w.ghostBytes -= p.bytes
           p.bytes = 0
           delete p.cache
           syncWin(scope, s)
@@ -1794,7 +1821,8 @@ export function createCoreSession(options: CoreOptions): CoreSession {
           ]
           w.atEnd = end
           w.target = "keep"
-          syncWin(scope, s)
+          w.shown++
+          syncWin(scope, s, true)
           s.status = "ready"
           delete s.error
           s.needsRefresh = false
@@ -1846,7 +1874,7 @@ export function createCoreSession(options: CoreOptions): CoreSession {
       atEnd: w.atEnd,
       loadingBefore: w.before,
       loadingAfter: w.after,
-      chain: w.chain,
+      chain: w.shown,
       target: w.target,
       pages: Object.freeze(
         w.pages.map((p) =>
@@ -2949,7 +2977,7 @@ export function createCoreSession(options: CoreOptions): CoreSession {
               delete p.cache
             }
             w.pages = w.pages.filter((p) => p.keys.length > 0)
-            syncWin(scope, s)
+            syncWin(scope, s, true)
             continue
           }
           if (![...s.layoutSet].some((k) => gone.has(k))) continue
@@ -3173,6 +3201,7 @@ export function createCoreSession(options: CoreOptions): CoreSession {
         w.atStart = sub.window?.atStart ?? true
         w.atEnd = sub.atEnd ?? false
         w.chain = 1
+        w.shown = 1
         w.pages = (sub.window?.pages ?? []).map((p) => ({
           id: nextPageId++,
           keys: [...p.keys],

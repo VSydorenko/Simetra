@@ -17,18 +17,33 @@
 
   function regionSnap(el) {
     const box = el.getBoundingClientRect()
+    const scv = el.querySelector("[data-scroll]")
+    const port = scv ? scv.getBoundingClientRect() : null
     const rows = []
     el.querySelectorAll("[data-row-key]").forEach((r) => {
       const rr = r.getBoundingClientRect()
+      const cs = getComputedStyle(r)
+      // Зобов'язання 10: прихований рядок (visibility, opacity) — відсутній
+      // для правил присутності; колір і тло — частина значення рядка, тож
+      // спалах (A → B → A) ловить правило value-aba.
+      if (
+        cs.visibility === "hidden" ||
+        cs.opacity === "0" ||
+        cs.display === "none"
+      )
+        return
       const fields = {}
       r.querySelectorAll("[data-field]").forEach((f) => {
         fields[f.getAttribute("data-field")] =
           f.tagName === "INPUT" ? f.value : f.textContent
       })
+      fields.__style = `${cs.opacity}|${cs.color}|${cs.backgroundColor}`
       const st =
         r.querySelector("[data-state]") ||
         el.querySelector(".toolbar [data-state]")
       rows.push({
+        // Рядок у видимій області прокрутки (поза нею — запас віртуалізатора).
+        vis: !port || (rr.bottom > port.top && rr.top < port.bottom),
         key: r.getAttribute("data-row-key"),
         top: Math.round((rr.top - box.top) * 10) / 10,
         h: Math.round(rr.height * 10) / 10,
@@ -37,11 +52,35 @@
       })
     })
     const sc = el.querySelector("[data-scroll]")
+    // Покриття видимої області прокрутки рядками й слотами: найдовша смуга
+    // без жодного рядка (порожнеча на місці списку).
+    let gap = null
+    if (sc && sc.scrollHeight > sc.clientHeight) {
+      const vb = sc.getBoundingClientRect()
+      const top = vb.top + sc.clientTop
+      const bottom = top + sc.clientHeight
+      const spans = []
+      sc.querySelectorAll("[data-row-key],[data-loading]").forEach((r) => {
+        const rr = r.getBoundingClientRect()
+        if (rr.bottom > top && rr.top < bottom)
+          spans.push([Math.max(top, rr.top), Math.min(bottom, rr.bottom)])
+      })
+      spans.sort((a, b) => a[0] - b[0])
+      let at = top
+      let worst = 0
+      for (const [a, b] of spans) {
+        if (a > at) worst = Math.max(worst, a - at)
+        at = Math.max(at, b)
+      }
+      worst = Math.max(worst, bottom - at)
+      gap = Math.round(worst)
+    }
     return {
       name: el.getAttribute("data-region"),
       rows,
       skeleton: !!el.querySelector("[data-skeleton]"),
       scrollTop: sc ? sc.scrollTop : null,
+      gap,
       text: (el.textContent || "").slice(0, 50000),
     }
   }
@@ -126,7 +165,20 @@
     characterData: true,
   })
 
-  document.addEventListener("scroll", () => take("scroll"), true)
+  // Прокрутка елемента списку: знімок у capture-слухачі документа бачив би
+  // DOM до обробника віртуалізатора (той малює синхронно у своєму
+  // слухачі), тобто стан, якого браузер не малює. Для `[data-scroll]` стан
+  // після обробників дають знімки MutationObserver (мікрозадача після
+  // commit) і rAF (перед малюванням). Решта прокруток — як раніше.
+  document.addEventListener(
+    "scroll",
+    (e) => {
+      const t = e.target
+      if (t && t.nodeType === 1 && t.hasAttribute("data-scroll")) return
+      take("scroll")
+    },
+    true
+  )
 
   const raf = () => {
     log.frame++

@@ -17,6 +17,8 @@ export interface MarkOpts {
 }
 
 export interface RowSnap {
+  /** У видимій області прокрутки; правила геометрії — лише для видимих. */
+  vis?: boolean
   key: string
   top: number
   h: number
@@ -28,6 +30,8 @@ export interface RegionSnap {
   rows: RowSnap[]
   skeleton: boolean
   scrollTop: number | null
+  /** Найдовша смуга видимої області прокрутки без рядка, px. */
+  gap?: number | null
   text: string
 }
 export interface Snap {
@@ -74,6 +78,8 @@ export type ViolationKind =
   | "forbidden-text"
   | "hydration-mutation"
   | "hydration-error"
+  | "blank"
+  | "scroll-rigid"
 
 export interface Violation {
   kind: ViolationKind
@@ -166,16 +172,37 @@ export function analyze(log: OracleLog): Violation[] {
           snap: s.i,
         })
       if (r.rows.length > 0 && !r.skeleton) hadData.add(r.name)
+      // Порожня смуга у видимій області, коли дані вже були (прокрутка
+      // в тому числі): рядки не встигли за прокруткою чи вивантажені.
+      if (
+        hadData.has(r.name) &&
+        r.gap !== undefined &&
+        r.gap !== null &&
+        r.gap > 2 &&
+        !allows(s.seg, "clear")
+      )
+        push({
+          kind: "blank",
+          seg: s.seg,
+          region: r.name,
+          detail: `${r.gap}px without rows`,
+          snap: s.i,
+        })
 
       const pr = prev?.regions.find((x) => x.name === r.name)
       const scrolling = allows(s.seg, "scroll")
 
+      // Стрибок прокрутки — зміна scrollTop без дії, від якої видимі рядки
+      // зрушили. Корекція якоря (scrollTop змінено, видимі рядки на місці,
+      // бо вміст над ними змінився) — не стрибок: її доводить незмінна
+      // геометрія видимих рядків нижче (правило shift).
       if (
         pr &&
         pr.scrollTop !== null &&
         r.scrollTop !== null &&
         pr.scrollTop !== r.scrollTop &&
-        !scrolling
+        !scrolling &&
+        !anchored(pr, r)
       )
         push({
           kind: "scroll-jump",
@@ -188,6 +215,11 @@ export function analyze(log: OracleLog): Violation[] {
       if (pr) {
         const prevIdx = new Map(pr.rows.map((x, i) => [x.key, i]))
         const common = r.rows.filter((x) => prevIdx.has(x.key))
+        // Геометрія — лише того, що видно в обох станах: запас віртуалізатора
+        // поза видимою областю користувач не бачить.
+        const seen = common.filter(
+          (x) => x.vis !== false && pr.rows[prevIdx.get(x.key)!]!.vis !== false
+        )
         if (!allows(s.seg, "reorder"))
           for (let i = 1; i < common.length; i++)
             if (
@@ -203,7 +235,31 @@ export function analyze(log: OracleLog): Violation[] {
               })
               break
             }
-        for (const row of common) {
+        // Прокрутка рухає весь вміст як одне ціле: спільні рядки зсуваються
+        // на одну величину — 0 (якір, корекція) чи −Δ прокрутки. Інше —
+        // стрибок, якого не дає жоден рух користувача.
+        if (scrolling && !allows(s.seg, "shift") && seen.length > 0) {
+          const dScroll =
+            pr.scrollTop !== null && r.scrollTop !== null
+              ? r.scrollTop - pr.scrollTop
+              : 0
+          const deltas = seen.map(
+            (row) => row.top - pr.rows[prevIdx.get(row.key)!]!.top
+          )
+          const d0 = deltas[0]!
+          // Допуск 2px: дробові висоти рядків змінної висоти округлюються.
+          const rigid = deltas.every((d) => Math.abs(d - d0) <= 2)
+          const fits = Math.abs(d0) <= 2 || Math.abs(d0 + dScroll) <= 2
+          if (!rigid || !fits)
+            push({
+              kind: "scroll-rigid",
+              seg: s.seg,
+              region: r.name,
+              detail: `rows moved by ${[...new Set(deltas.map(Math.round))].slice(0, 4).join(",")} at scroll Δ${dScroll}`,
+              snap: s.i,
+            })
+        }
+        for (const row of seen) {
           const p = pr.rows[prevIdx.get(row.key)!]!
           if (p.h !== row.h)
             push({
@@ -214,7 +270,12 @@ export function analyze(log: OracleLog): Violation[] {
               detail: `${p.h} → ${row.h}`,
               snap: s.i,
             })
-          if (p.top !== row.top && !scrolling && !allows(s.seg, "shift")) {
+          // Менше пікселя — субпіксельний залишок якоря, не видимий зсув.
+          if (
+            Math.abs(p.top - row.top) >= 1 &&
+            !scrolling &&
+            !allows(s.seg, "shift")
+          ) {
             const t = track(r.name, row.key, s.seg)
             t.shifts++
             if (!allows(s.seg, "shift-once") || t.shifts > 1)
@@ -231,13 +292,18 @@ export function analyze(log: OracleLog): Violation[] {
       }
 
       // ABA присутності й значень у межах сегмента.
-      const present = new Set(r.rows.map((x) => x.key))
+      // Присутність — лише видимих рядків: запас віртуалізатора поза
+      // видимою областю з'являється й зникає без жодного кадру для ока.
+      const present = new Set(
+        r.rows.filter((x) => x.vis !== false).map((x) => x.key)
+      )
       for (const [id, t] of tracks) {
         const [region, key] = splitId(id)
         if (region !== r.name || t.seg !== s.seg) continue
         if (!present.has(key)) t.presence.push(false)
       }
       for (const row of r.rows) {
+        if (row.vis === false) continue
         const t = track(r.name, row.key, s.seg)
         const pres = t.presence
         if (
@@ -311,4 +377,16 @@ export function format(vs: Violation[]): string {
         `[${v.kind}] seg=${v.seg}(${v.segName}) ${v.region ?? ""} ${v.key ?? ""} ${v.detail}`
     )
     .join("\n")
+}
+
+/** Спільні видимі рядки є й не зрушили: зміна прокрутки — корекція якоря. */
+function anchored(pr: RegionSnap, r: RegionSnap): boolean {
+  const prev = new Map(
+    pr.rows.filter((x) => x.vis !== false).map((x) => [x.key, x])
+  )
+  const common = r.rows.filter((x) => x.vis !== false && prev.has(x.key))
+  return (
+    common.length > 0 &&
+    common.every((x) => Math.abs(x.top - prev.get(x.key)!.top) <= 2)
+  )
 }

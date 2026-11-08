@@ -6,6 +6,7 @@ import { StartClient } from "@tanstack/react-start/client"
 import { readBreaks } from "./t4/breaks"
 import { control } from "./server/fns"
 import { settings } from "./t4/facade"
+import { windowOptions } from "./t4/runtime"
 
 interface OracleWindow {
   __t4Commits?: Array<{ id: string; phase: string; t: number }>
@@ -17,6 +18,14 @@ w.__t4Recoverable = []
 const params = new URLSearchParams(location.search)
 readBreaks(params.get("break"))
 if (params.get("policy") === "await") settings.policy = "await"
+const num = (k: string) => (params.has(k) ? Number(params.get(k)) : undefined)
+windowOptions.value = {
+  ...(num("margin") === undefined ? {} : { marginPages: num("margin") }),
+  ...(num("unload") === undefined ? {} : { unloadDelayMs: num("unload") }),
+  ...(num("ghostKb") === undefined
+    ? {}
+    : { ghostBytes: num("ghostKb")! * 1024 }),
+}
 // Лише полігон: керування фейковим сервером із тестів.
 ;(window as unknown as { __t4Control: unknown }).__t4Control = (
   c: Parameters<typeof control>[0]["data"]

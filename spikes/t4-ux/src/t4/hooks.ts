@@ -7,6 +7,7 @@ import {
   createElement,
   useContext,
   useMemo,
+  useRef,
   useSyncExternalStore,
   type ReactNode,
 } from "react"
@@ -54,6 +55,11 @@ const NOOP: ViewHandle = {
   refresh() {},
   showNew() {},
   loadAfter() {},
+  loadBefore() {},
+  goTo() {},
+  goToStart() {},
+  goToEnd() {},
+  setVisibleRange() {},
 }
 
 export function useView(spec: ViewSpec): [ViewSnapshot, ViewHandle] {
@@ -77,4 +83,29 @@ export const useLines = (key: string) => useView(linesSpec(key))[0]
 export function useWriter() {
   const core = useCore()
   return useMemo(() => (core ? writerOf(core) : null), [core])
+}
+
+/**
+ * Вікно зі зміною форми (сортування, фільтр — дія користувача): поки новий
+ * ланцюжок без даних, показ лишається на попередньому знімку зі станом
+ * `refreshing` — без порожнього кадру. Новий ланцюжок замінює старий одним
+ * рендером; `formKey` каже UI, що це новий ланцюжок.
+ */
+export function useWindowView(
+  spec: ViewSpec
+): [ViewSnapshot, ViewHandle, string] {
+  const [snap, handle] = useView(spec)
+  const key = JSON.stringify(spec)
+  const shown = useRef<{ snap: ViewSnapshot; key: string } | null>(null)
+  const fresh = !(snap.status === "loading" && snap.rows.length === 0)
+  if (fresh || shown.current === null) shown.current = { snap, key }
+  else if (
+    shown.current.key !== key &&
+    shown.current.snap.status !== "refreshing"
+  )
+    shown.current = {
+      snap: { ...shown.current.snap, status: "refreshing" },
+      key: shown.current.key,
+    }
+  return [shown.current.snap, handle, shown.current.key]
 }

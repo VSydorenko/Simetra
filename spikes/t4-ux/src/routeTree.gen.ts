@@ -8,94 +8,111 @@
 // You should NOT make any changes in this file as it will be overwritten.
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
-import { Route as rootRouteImport } from './routes/__root'
-import { Route as IndexRouteImport } from './routes/index'
-import { Route as FullRouteImport } from './routes/full'
-import { Route as LoginRouteImport } from './routes/login'
-import { Route as ItemsIdRouteImport } from './routes/items.$id'
+import { Route as rootRouteImport } from "./routes/__root"
+import { Route as IndexRouteImport } from "./routes/index"
+import { Route as FullRouteImport } from "./routes/full"
+import { Route as LoginRouteImport } from "./routes/login"
+import { Route as WindowRouteImport } from "./routes/window"
+import { Route as ItemsIdRouteImport } from "./routes/items.$id"
 
 const IndexRoute = IndexRouteImport.update({
-  id: '/',
-  path: '/',
+  id: "/",
+  path: "/",
   getParentRoute: () => rootRouteImport,
 } as any)
 const FullRoute = FullRouteImport.update({
-  id: '/full',
-  path: '/full',
+  id: "/full",
+  path: "/full",
   getParentRoute: () => rootRouteImport,
 } as any)
 const LoginRoute = LoginRouteImport.update({
-  id: '/login',
-  path: '/login',
+  id: "/login",
+  path: "/login",
+  getParentRoute: () => rootRouteImport,
+} as any)
+const WindowRoute = WindowRouteImport.update({
+  id: "/window",
+  path: "/window",
   getParentRoute: () => rootRouteImport,
 } as any)
 const ItemsIdRoute = ItemsIdRouteImport.update({
-  id: '/items/$id',
-  path: '/items/$id',
+  id: "/items/$id",
+  path: "/items/$id",
   getParentRoute: () => rootRouteImport,
 } as any)
 
 export interface FileRoutesByFullPath {
-  '/': typeof IndexRoute
-  '/full': typeof FullRoute
-  '/login': typeof LoginRoute
-  '/items/$id': typeof ItemsIdRoute
+  "/": typeof IndexRoute
+  "/full": typeof FullRoute
+  "/login": typeof LoginRoute
+  "/window": typeof WindowRoute
+  "/items/$id": typeof ItemsIdRoute
 }
 export interface FileRoutesByTo {
-  '/': typeof IndexRoute
-  '/full': typeof FullRoute
-  '/login': typeof LoginRoute
-  '/items/$id': typeof ItemsIdRoute
+  "/": typeof IndexRoute
+  "/full": typeof FullRoute
+  "/login": typeof LoginRoute
+  "/window": typeof WindowRoute
+  "/items/$id": typeof ItemsIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
-  '/': typeof IndexRoute
-  '/full': typeof FullRoute
-  '/login': typeof LoginRoute
-  '/items/$id': typeof ItemsIdRoute
+  "/": typeof IndexRoute
+  "/full": typeof FullRoute
+  "/login": typeof LoginRoute
+  "/window": typeof WindowRoute
+  "/items/$id": typeof ItemsIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/full' | '/login' | '/items/$id'
+  fullPaths: "/" | "/full" | "/login" | "/window" | "/items/$id"
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/full' | '/login' | '/items/$id'
-  id: '__root__' | '/' | '/full' | '/login' | '/items/$id'
+  to: "/" | "/full" | "/login" | "/window" | "/items/$id"
+  id: "__root__" | "/" | "/full" | "/login" | "/window" | "/items/$id"
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   FullRoute: typeof FullRoute
   LoginRoute: typeof LoginRoute
+  WindowRoute: typeof WindowRoute
   ItemsIdRoute: typeof ItemsIdRoute
 }
 
-declare module '@tanstack/react-router' {
+declare module "@tanstack/react-router" {
   interface FileRoutesByPath {
-    '/': {
-      id: '/'
-      path: '/'
-      fullPath: '/'
+    "/": {
+      id: "/"
+      path: "/"
+      fullPath: "/"
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/full': {
-      id: '/full'
-      path: '/full'
-      fullPath: '/full'
+    "/full": {
+      id: "/full"
+      path: "/full"
+      fullPath: "/full"
       preLoaderRoute: typeof FullRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/login': {
-      id: '/login'
-      path: '/login'
-      fullPath: '/login'
+    "/login": {
+      id: "/login"
+      path: "/login"
+      fullPath: "/login"
       preLoaderRoute: typeof LoginRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/items/$id': {
-      id: '/items/$id'
-      path: '/items/$id'
-      fullPath: '/items/$id'
+    "/window": {
+      id: "/window"
+      path: "/window"
+      fullPath: "/window"
+      preLoaderRoute: typeof WindowRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    "/items/$id": {
+      id: "/items/$id"
+      path: "/items/$id"
+      fullPath: "/items/$id"
       preLoaderRoute: typeof ItemsIdRouteImport
       parentRoute: typeof rootRouteImport
     }
@@ -106,15 +123,16 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   FullRoute: FullRoute,
   LoginRoute: LoginRoute,
+  WindowRoute: WindowRoute,
   ItemsIdRoute: ItemsIdRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
   ._addFileTypes<FileRouteTypes>()
 
-import type { getRouter } from './router.tsx'
-import type { createStart } from '@tanstack/react-start'
-declare module '@tanstack/react-start' {
+import type { getRouter } from "./router.tsx"
+import type { createStart } from "@tanstack/react-start"
+declare module "@tanstack/react-start" {
   interface Register {
     ssr: true
     router: Awaited<ReturnType<typeof getRouter>>

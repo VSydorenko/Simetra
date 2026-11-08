@@ -3,6 +3,10 @@
 import { createCoreSession, itemSpec, type CoreSession } from "../core"
 import { hostSource } from "./source"
 import type { SnapshotMeta } from "./ssr"
+import type { WindowOptions } from "../../../../packages/simetra/src/data/store/types"
+
+/** Політика пам'яті вікна полігона (`?margin=&unload=&ghostKb=` на клієнті). */
+export const windowOptions: { value: WindowOptions } = { value: {} }
 
 export function createCore(subject: string): CoreSession {
   return createCoreSession({
@@ -10,6 +14,7 @@ export function createCore(subject: string): CoreSession {
     source: hostSource(subject),
     objects: [itemSpec],
     releaseDelayMs: 1000,
+    window: windowOptions.value,
   })
 }
 
