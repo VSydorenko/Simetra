@@ -43,6 +43,12 @@ const write = (core: CoreSession, fn: (w: Writer) => void) =>
 const rowOf = (handle: ViewHandle, n: number) =>
   handle.getSnapshot().rows.find((r) => r.key === key(n))
 
+// toMatchObject пропустив би будь-який об'єкт: значення мають бути порожні.
+const expectHidden = (row: ReturnType<typeof rowOf>) => {
+  expect(row).toBeDefined()
+  expect(row!.state !== "removed" && row!.values).toEqual({})
+}
+
 describe("eviction from seen and tombstones", () => {
   beforeEach(() => {
     vi.useFakeTimers()
@@ -91,7 +97,7 @@ describe("eviction from seen and tombstones", () => {
       expect(rowOf(late, 1)?.state).toBe(shown)
       if (defect !== undefined) return
       // Значення сховано до перечитування; хвіст бачить видалення.
-      expect(rowOf(late, 1)).toMatchObject({ values: {} })
+      expectHidden(rowOf(late, 1))
       fake.take((r) => isKeys(r)).answer()
       await settle()
       expect(rowOf(late, 1)?.state).toBe("removed")
@@ -129,7 +135,7 @@ describe("eviction from seen and tombstones", () => {
       await settle()
       expect(rowOf(late, 1)?.state).toBe(shown)
       if (defect !== undefined) return
-      expect(rowOf(late, 1)).toMatchObject({ values: {} })
+      expectHidden(rowOf(late, 1))
       fake.take((r) => isKeys(r)).answer()
       await settle()
       expect(rowOf(late, 1)).toMatchObject({ state: "synced", version: v2 })

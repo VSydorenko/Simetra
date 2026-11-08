@@ -534,10 +534,10 @@ describe("section", () => {
     vi.advanceTimersByTime(RELEASE)
     headerRead.answer()
     await settle()
-    expect(header.getSnapshot().rows[0]).toMatchObject({
-      state: "stale",
-      values: {},
-    })
+    const hiddenHeader = header.getSnapshot().rows[0]!
+    expect(hiddenHeader).toMatchObject({ state: "stale" })
+    // toMatchObject пропустив би будь-який об'єкт: значення мають бути порожні.
+    expect(hiddenHeader.state !== "removed" && hiddenHeader.values).toEqual({})
     // Рядки ТЧ з читання до позначки шапки відкинуто: шапку сховано.
     sectionRead.answer()
     await settle()

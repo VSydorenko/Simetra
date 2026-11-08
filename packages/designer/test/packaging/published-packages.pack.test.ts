@@ -325,6 +325,8 @@ describe("simetra/data", () => {
     const specifiers = [
       ...(await packedSources(tarballs.simetra, "dist/data/", ".js")).values(),
     ].flatMap(bareSpecifiers)
+    // Без цього перелік міг би бути порожнім і перевірка нічого б не казала
+    expect(specifiers).toContain("simetra/model")
     expect(specifiers.filter((s) => !allowed.has(s))).toEqual([])
   })
 })
