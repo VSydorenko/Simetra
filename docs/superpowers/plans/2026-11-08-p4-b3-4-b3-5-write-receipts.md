@@ -34,7 +34,7 @@
 **Шляхи.** Відносні шляхи `store/…`, `runtime/…`, `adapter.ts`, `errors.ts`, `index.ts` у B3-4 — від `packages/simetra/src/data/`; шляхи T3 у B3-5 — від `packages/simetra/src/server/`, а `envelope.ts`, `limits.ts` — від `packages/simetra/src/model/runtime/`.
 
 **Поділ і залежності.** **B3-4** (Task 1–7) — після B3-3 і B1b-3; **B3-5**
-(Task 8–11) — після B3-4 і B1e. Кожна частина — з власним «готово». Імена
+(Task 8–12) — після B3-4 і B1e. Кожна частина — з власним «готово». Імена
 ядра — з гілки B3-2 (`feat/p4-b3-2`) і планів B3-3, B1c; виконавець звіряє
 їх з `main` (`orient --plan`).
 
@@ -196,10 +196,23 @@
 - [ ] **Step 3: Червоний → реалізація → зелений.** `pnpm --filter simetra test journal model`.
 - [ ] **Step 4: Commit.** `feat(data): розв'язання unknown квитанцією`
 
-### Task 11: Спеки й гейти B3-5
+### Task 11: Інваріанти ТЧ у команді: суцільний номер рядка й версія власника
+
+Рядок B2 §13 називає обидва інваріанти, а DB-тесту на них немає; це шар команд T3, тож вони тут (доручення архітекторки). З B1e-2 Task 6 не перетинається: там підвищення версії за колонками, які переписав двигун під час застосування схеми, а тут — запис командою. Обидва покладаються на тригер версії B1e-1 (`nextval` послідовності).
 
 **Files:**
-- Modify: `docs/superpowers/specs/2026-11-05-p4-b-client-data-design.md` (§7.4 — розташування квитанцій у стані застосування, функції Р5, хеш Р6, прибирання Р7; Додаток А — рядки B3-5 «внесено (B3-5)»), `docs/superpowers/specs/2026-10-07-system-schema-users-design.md` §3 (таблиця й функції квитанцій), `docs/superpowers/specs/2026-10-26-p4-runtime-design.md` §6.4 і §6.10 (`mutationId`, `receipt`)
+- Modify: `packages/simetra/test/db/catalog-command.db.test.ts` (нові сценарії; спільний будівник фікстур файлу)
+- Modify (лише якщо тест червоніє): `packages/simetra/src/compiler/catalog-command/units.ts` (номер рядка — `x.ord` повної підмножини; підвищення версії шапки за зміною ТЧ)
+
+- [ ] **Step 1: DB-тест суцільного номера** (причина DB: номер присвоює згенерована функція команди): створення документа з трьома рядками ТЧ — номери 1, 2, 3; `update` повним масивом без середнього рядка — 1, 2; дельта з додаванням рядка в середину й видаленням першого (повний масив з `ownerVersion`) — номери суцільні 1…N у порядку масиву; `ctx.run` хука з тією самою зміною — так само. Перевірка: відсортовані номери кожного власника дорівнюють `generate_series(1, N)`.
+- [ ] **Step 2: DB-тест версії власника:** `update` лише зі зміною змістової колонки одного рядка ТЧ (шапка без змін) — `version` шапки зросла, і `expectedVersion` зі старою версією далі дає `command.conflict` `version`; перестановка рядків (зміна лише номерів) — версія зросла; масив ТЧ, рівний збереженому, — тест фіксує поведінку ядра, і якщо вона розходиться з §7.2, це розвилка архітекторці, а не тиха правка.
+- [ ] **Step 3: Червоний → виправлення ядра → зелений.** Червоний сценарій — правка в `units.ts` з тестом генератора поряд. `pnpm --filter simetra test:db catalog-command`.
+- [ ] **Step 4: Commit.** `test(server): інваріанти ТЧ у команді — суцільний номер і версія власника`
+
+### Task 12: Спеки й гейти B3-5
+
+**Files:**
+- Modify: `docs/superpowers/specs/2026-11-05-p4-b-client-data-design.md` (§7.4 — розташування квитанцій у стані застосування, функції Р5, хеш Р6, прибирання Р7; §13 рядок B2 — інваріанти суцільного номера й версії власника перенесено в B3-5; Додаток А — рядки B3-5 «внесено (B3-5)»), `docs/superpowers/specs/2026-10-07-system-schema-users-design.md` §3 (таблиця й функції квитанцій), `docs/superpowers/specs/2026-10-26-p4-runtime-design.md` §6.4 і §6.10 (`mutationId`, `receipt`)
 
 - [ ] **Step 1: Правки**; `python3 scripts/check-doc-anchors.py`.
 - [ ] **Step 2: Гейти.** `pnpm format:check && pnpm lint && pnpm typecheck && pnpm test`, `pnpm metadata:check`, `pnpm test:db`, `pnpm build:packages && pnpm test:packaging`.
@@ -228,3 +241,5 @@
 | показати квитанцію чужому `subject` | `receipts.db.test.ts` |
 | дозволити `receipt` під `inProcess` | `origin.test.ts` |
 | квитанція зберігає значення рядків | `data-handler.test.ts` |
+| номер рядка ТЧ з розривом після видалення | `catalog-command.db.test.ts` (Task 11) |
+| зміна лише ТЧ не підвищує версії шапки | `catalog-command.db.test.ts` (Task 11) |
