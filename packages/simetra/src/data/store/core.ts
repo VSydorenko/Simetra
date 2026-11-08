@@ -110,9 +110,23 @@ export function inspectCore(session: CoreSession): CoreInspection {
 const KEYS_PER_REQUEST_MAX = Math.min(READ_LIMIT_MAX, FILTER_IN_MAX)
 
 // Нуль чи дріб у межі тихо вимикає її (горизонт без кошиків пропускає все):
-// межі перевіряються до створення сесії.
-function limitsOf(overrides: Partial<CoreLimits> | undefined): CoreLimits {
-  const limits = { ...DEFAULT_CORE_LIMITS, ...overrides }
+// межі перевіряються до створення сесії. Явне `undefined` — типове значення,
+// як і відсутнє поле.
+/**
+ * Merges `overrides` with {@link DEFAULT_CORE_LIMITS} (an `undefined` field
+ * takes the default) and checks them; a limit that is not a positive
+ * integer is a `TypeError`.
+ */
+export function limitsOf(
+  overrides: Partial<CoreLimits> | undefined
+): CoreLimits {
+  const set = Object.entries(overrides ?? {}).filter(
+    ([, value]) => value !== undefined
+  )
+  const limits: CoreLimits = {
+    ...DEFAULT_CORE_LIMITS,
+    ...(Object.fromEntries(set) as Partial<CoreLimits>),
+  }
   for (const [name, value] of Object.entries(limits)) {
     if (!Number.isSafeInteger(value) || value < 1) {
       throw new TypeError(`limits.${name} must be a positive integer`)

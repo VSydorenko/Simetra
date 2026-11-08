@@ -13,14 +13,9 @@ import {
   type SourceAdapter,
 } from "simetra/model"
 import { selectSource, serverFunctionAdapter } from "../adapter"
-import { createCore } from "../store/core"
+import { createCore, limitsOf } from "../store/core"
 import { createCoreSource, createReadLimiter } from "../store/source"
-import {
-  DEFAULT_CORE_LIMITS,
-  type CloseReason,
-  type CoreLimits,
-  type CoreLogEntry,
-} from "../store/types"
+import type { CloseReason, CoreLimits, CoreLogEntry } from "../store/types"
 import { bindRuntimeHandle, type RuntimeRequest } from "./handle"
 
 /** The data runtime of one user session (P4-B spec §6.1). */
@@ -38,7 +33,10 @@ export interface DataRuntimeOptions {
   transport: DataTransport
   /** The session `sub`. */
   subject: string
-  /** Called once when the server reports `session-changed`. */
+  /**
+   * Called once when the server, or an override adapter, reports
+   * `session-changed`; the runtime is already closed by then.
+   */
   onSessionChanged?: () => void
   /** The runtime journal (default `console.warn`); see {@link DataLogEntry}. */
   log?: (entry: DataLogEntry) => void
@@ -48,7 +46,10 @@ export interface DataRuntimeOptions {
    * is a `TypeError`. Each factory is called once on creation with this
    * runtime's `subject` and transport wrapper `send`: the adapter either
    * reads through `send` (it sets `subject`) or checks the `sub` of its own
-   * credentials against `subject` itself (PostgREST adapter, §5.3).
+   * credentials against `subject` itself (PostgREST adapter, §5.3). A
+   * `CommandFailure` `command.unauthenticated` `session-changed` from an
+   * override closes the runtime and calls `onSessionChanged` once, as the
+   * same response of the transport does.
    */
   sources?: {
     override?: Readonly<
@@ -88,10 +89,9 @@ const DISPOSED: CommandError = {
   reason: LIMIT_REASONS.disposed,
 }
 
-const isSessionChanged = (response: DataResponse) =>
-  !response.ok &&
-  response.error.code === "command.unauthenticated" &&
-  response.error.reason === LIMIT_REASONS.sessionChanged
+const isSessionChanged = (error: CommandError) =>
+  error.code === "command.unauthenticated" &&
+  error.reason === LIMIT_REASONS.sessionChanged
 
 /** Creates the data runtime of one user session (P4-B spec §6.1). */
 export function createDataRuntime(options: DataRuntimeOptions): DataRuntime {
@@ -113,10 +113,12 @@ export function createDataRuntime(options: DataRuntimeOptions): DataRuntime {
   ) {
     throw new TypeError("fullLimit must be a positive integer")
   }
-  const limits: Partial<CoreLimits> = {
+  // Межі перевіряються тут, до обмежувача й фабрик: кожна хибна межа —
+  // той самий `TypeError` ядра, а не `RangeError` обмежувача.
+  const limits = limitsOf({
     ...options.limits,
     ...(fullLimit === undefined ? {} : { fullLimit }),
-  }
+  })
   const sink = options.log ?? ((entry: DataLogEntry) => console.warn(entry))
   const log = (entry: DataLogEntry) => {
     try {
@@ -132,18 +134,63 @@ export function createDataRuntime(options: DataRuntimeOptions): DataRuntime {
   // Закриття рантайму — це закриття його ядра: одна purge-пачка (кожен
   // вигляд — `purged` з причиною), потім жодного запиту й запису (§6.1).
   // `closedWith` ставиться до `core.close`, щоб слухач purge-пачки вже не
-  // відправив запиту; збій закриття (виклик з `commit`) лишає рантайм живим,
-  // як і ядро.
+  // відправив запиту.
   const close = (error: CommandError, reason: CloseReason) => {
     if (closedWith !== undefined) return
     closedWith = error
     try {
       core.close(reason)
-    } catch (thrown) {
-      closedWith = undefined
-      throw thrown
+    } catch {
+      // Ядро не закривається всередині `commit` (кидає, лишаючись живим);
+      // туди `dispose()` доходить, наприклад, з журналу host-а на
+      // `full-truncated`. Закриття відкладається на мікрозадачу — вона
+      // настає після `commit` і його сповіщення, — а запити рантайм
+      // відхиляє вже зараз.
+      queueMicrotask(() => core.close(reason))
     }
   }
+
+  // `session-changed` з будь-якого шляху — відповідь транспорту чи відмова
+  // адаптера-перевизначення, що сам звіряє `sub` (§5.3): спершу закрити,
+  // потім колбек — host у колбеку створює рантайм нового користувача, і
+  // старий на цей момент уже не відповідає нікому. Колбек — один раз: після
+  // першого закриття решта відмов сюди не доходить. Обидва шляхи кличуть це
+  // після `await` чи в обробнику промісу, тобто поза будь-яким `commit`.
+  const sessionChanged = (error: CommandError) => {
+    if (closedWith !== undefined) return
+    close(error, "session-changed")
+    try {
+      onSessionChanged?.()
+    } catch (thrown) {
+      // Збій колбека host-а не підміняє відмову запиту: викликач однаково
+      // бачить `session-changed`, а збій виходить окремо, як неперехоплений.
+      queueMicrotask(() => {
+        throw thrown
+      })
+    }
+  }
+
+  // Відмова `session-changed` адаптера-перевизначення закриває рантайм так
+  // само, як відповідь транспорту: інакше лишились би тільки помилка
+  // вигляду, а решта виглядів — з рядками старого суб'єкта. Обробник
+  // промісу завжди виконується мікрозадачею, тож навіть синхронний кидок
+  // `read` закриває рантайм поза `commit`.
+  const watchSessionChanged = (adapter: SourceAdapter): SourceAdapter => ({
+    capabilities: adapter.capabilities,
+    read(query) {
+      let pending: ReturnType<SourceAdapter["read"]>
+      try {
+        pending = adapter.read(query)
+      } catch (error) {
+        pending = Promise.reject(error)
+      }
+      return pending.catch((error: unknown) => {
+        if (error instanceof CommandFailure && isSessionChanged(error.error))
+          sessionChanged(error.error)
+        throw error
+      })
+    },
+  })
 
   const send = async (request: RuntimeRequest): Promise<unknown> => {
     if (closedWith !== undefined) throw new CommandFailure(closedWith)
@@ -173,27 +220,10 @@ export function createDataRuntime(options: DataRuntimeOptions): DataRuntime {
     if (closedWith !== undefined) throw new CommandFailure(closedWith)
     if (response.ok) return response.value
     const error = errorFromWire(index, response.error)
-    if (isSessionChanged(response)) {
-      // Спершу закрити, потім колбек: host у колбеку створює рантайм нового
-      // користувача, і старий на цей момент уже не відповідає нікому. Сюди
-      // доходимо лише після `await`, тобто поза будь-яким `commit` ядра.
-      close(error, "session-changed")
-      try {
-        onSessionChanged?.()
-      } catch (thrown) {
-        // Збій колбека host-а не підміняє відмову запиту: викликач однаково
-        // бачить `session-changed`, а збій виходить окремо, як неперехоплений.
-        queueMicrotask(() => {
-          throw thrown
-        })
-      }
-    }
+    if (isSessionChanged(error)) sessionChanged(error)
     throw new CommandFailure(error)
   }
 
-  // Межі перевіряє ядро; обмежувачу потрібна лише паралельність після
-  // злиття з типовими.
-  const parallel = { ...DEFAULT_CORE_LIMITS, ...limits }.readParallel
   const serverFunction = serverFunctionAdapter(send)
   const adapters = new Map<string, SourceAdapter>()
   const source = createCoreSource(
@@ -204,7 +234,7 @@ export function createDataRuntime(options: DataRuntimeOptions): DataRuntime {
         serverFunction,
       }),
     index,
-    createReadLimiter(parallel)
+    createReadLimiter(limits.readParallel)
   )
   const core = createCore({
     subject,
@@ -217,7 +247,7 @@ export function createDataRuntime(options: DataRuntimeOptions): DataRuntime {
   // Фабрики — після обгортки `send` і ядра: адаптер отримує саме цей
   // `subject` і саме цю обгортку, тож його запити несуть суб'єкт рантайму.
   for (const [name, factory] of overrides) {
-    adapters.set(name, factory({ subject, send }))
+    adapters.set(name, watchSessionChanged(factory({ subject, send })))
   }
 
   const runtime: DataRuntime = {

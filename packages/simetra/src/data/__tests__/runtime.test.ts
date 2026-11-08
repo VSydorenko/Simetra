@@ -13,6 +13,7 @@ import {
 import {
   createDataRuntime,
   type DataLogEntry,
+  type DataRuntime,
   type DataRuntimeOptions,
 } from "../index"
 import { runtimeHandleOf } from "../runtime/handle"
@@ -45,7 +46,7 @@ const DISPOSED = { code: "command.unavailable", reason: "disposed" }
 const SESSION_CHANGED = {
   code: "command.unauthenticated",
   reason: "session-changed",
-}
+} as const
 
 const card = (id = ID): DataRequest["request"] => ({
   type: "read",
@@ -580,6 +581,94 @@ describe("runtime core", () => {
     expect(
       calls.map((c) => c.request.type === "read" && c.request.query.object)
     ).toEqual([task.id])
+  })
+
+  it("closes on session-changed from an override adapter, then calls onSessionChanged once", async () => {
+    const fake = createFakeSource({ objects: OBJECTS })
+    seed(fake, 1, 1)
+    fake.insert(ORG, { ref: S })
+    const events: string[] = []
+    // Адаптер звіряє `sub` сам (§5.3) і відмовляє без запиту.
+    let refuse = false
+    const override: SourceAdapter = {
+      capabilities: fake.adapter.capabilities,
+      read: (query) =>
+        refuse
+          ? Promise.reject(new CommandFailure(SESSION_CHANGED))
+          : fake.adapter.read(query),
+    }
+    const { runtime, core } = runtimeOver(fake, {
+      sources: { override: { [ORG]: () => override } },
+      onSessionChanged: () => events.push("onSessionChanged"),
+    })
+    const taskView = core.view(cardOf(1))
+    taskView.subscribe(() => {
+      const s = taskView.getSnapshot()
+      events.push(`${s.status}:${s.reason ?? ""}:${s.rows.length}`)
+    })
+    const one = core.view({ kind: "card", object: ORG, key: S })
+    one.subscribe(() => {})
+    const two = core.view({ kind: "full", object: ORG })
+    two.subscribe(() => {})
+    await settle()
+    expect(taskView.getSnapshot().rows).toHaveLength(1)
+    refuse = true
+    events.length = 0
+    // Дві відмови в польоті: друга колбека вже не кличе.
+    one.refresh()
+    two.refresh()
+    await settle()
+    expect(events).toEqual(["purged:session-changed:0", "onSessionChanged"])
+    expect(runtime.disposed).toBe(true)
+    expect(inspectCore(core).rowCount()).toBe(0)
+  })
+
+  it("refuses limits.readParallel 0 with TypeError and takes the default for undefined", () => {
+    const fake = createFakeSource({ objects: OBJECTS })
+    expect(() => runtimeOver(fake, { limits: { readParallel: 0 } })).toThrow(
+      TypeError
+    )
+    expect(() =>
+      runtimeOver(fake, { limits: { readParallel: undefined } })
+    ).not.toThrow()
+  })
+
+  it("never sends a read queued in the limiter when disposed", async () => {
+    const fake = createFakeSource({ objects: OBJECTS, mode: "manual" })
+    seed(fake, 1, 2)
+    const { runtime, core, calls } = runtimeOver(fake, {
+      limits: { readParallel: 1 },
+    })
+    core.view(cardOf(1)).subscribe(() => {})
+    core.view(cardOf(2)).subscribe(() => {})
+    await settle()
+    expect(calls).toHaveLength(1)
+    runtime.dispose()
+    fake.deliverAll()
+    await settle()
+    expect(calls).toHaveLength(1)
+  })
+
+  it("takes effect when dispose() is called from the log sink during a commit", async () => {
+    const fake = createFakeSource({ objects: OBJECTS })
+    seed(fake, 1, 4)
+    const target: { runtime?: DataRuntime } = {}
+    const { runtime, core } = runtimeOver(fake, {
+      fullLimit: 3,
+      log: (entry) => {
+        if (entry.kind === "full-truncated") target.runtime?.dispose()
+      },
+    })
+    target.runtime = runtime
+    const handle = core.view({ kind: "full", object: TASK })
+    handle.subscribe(() => {})
+    await settle()
+    expect(runtime.disposed).toBe(true)
+    expect(handle.getSnapshot()).toMatchObject({
+      status: "purged",
+      reason: "disposed",
+    })
+    expect(inspectCore(core).rowCount()).toBe(0)
   })
 
   it("gives the override factory this runtime's subject and send; drops its response after dispose()", async () => {
