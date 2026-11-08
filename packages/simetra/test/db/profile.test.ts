@@ -1,4 +1,5 @@
-import { mkdtempSync } from "node:fs"
+import { randomUUID } from "node:crypto"
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it, vi } from "vitest"
@@ -76,7 +77,23 @@ describe("garageAdminToken", () => {
   })
 
   it("names the file in the error when it is missing", () => {
-    const missing = join(mkdtempSync(join(tmpdir(), "profile-")), "none.env")
+    // Шлях, який ніколи не створюється: тест не лишає тек у системній temp
+    const missing = join(
+      tmpdir(),
+      `simetra-missing-${randomUUID()}`,
+      "none.env"
+    )
     expect(() => garageAdminToken(missing)).toThrow(missing)
+  })
+
+  it("names the file in the error when it has no token line", () => {
+    const dir = mkdtempSync(join(tmpdir(), "profile-"))
+    try {
+      const file = join(dir, "no-token.env")
+      writeFileSync(file, "GARAGE_RPC_SECRET=x\n")
+      expect(() => garageAdminToken(file)).toThrow(file)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })
