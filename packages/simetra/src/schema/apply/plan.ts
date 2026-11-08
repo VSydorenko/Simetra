@@ -155,6 +155,7 @@ import {
   rightsSourceInput,
   type RightsOrphans,
 } from "./rights-sources"
+import { planRowVersionSteps, rowVersionFirstTables } from "./row-version"
 import { tableKey } from "./table-key"
 import { typeChangeRefusals, typeGuards, type TypeChange } from "./type-guard"
 import { PLATFORM_VERSION } from "./version"
@@ -575,6 +576,7 @@ export async function buildPlan(
       targetOwners,
       rightsOrphans,
       promotion: transition,
+      epochExists: state.status === "applied" && state.rowVersionEpoch,
       file: input.file,
       diagnostics: dedupe([
         ...verdict.diagnostics,
@@ -639,7 +641,14 @@ export async function buildPlan(
   // 6. Нічого застосовувати лише тоді, коли немає ні кроків, ні нового
   // знімка, ні дрейфу. Дрейф без кроків (зміна версій) — план із нулем кроків:
   // інакше дрейф не було б як прийняти, і кожен наступний план бачив би його
-  if (actions.length === 0 && fromHash === model.hash && drift === null)
+  // Без рядка епохи план не порожній: його пише крок `versions`
+  if (
+    actions.length === 0 &&
+    fromHash === model.hash &&
+    drift === null &&
+    state.status === "applied" &&
+    state.rowVersionEpoch
+  )
     return { status: "unchanged", diagnostics, rightsOrphans }
 
   // 7. Класи — від моделі вихідного стану плану, тобто живої цілі: з
@@ -671,6 +680,18 @@ export async function buildPlan(
   ]
   // 7б. Кроки середовища (спека промоції §7.2) — наприкінці плану; клас
   // і дозволи рахуються вже з ними
+  // 7б′. Блок `versions` — після кроків двигуна й копій, до середовища: id
+  // наскрізні, а крок середовища рахується вже з ним
+  const withVersions = [
+    ...withCarriers,
+    ...planRowVersionSteps({
+      live: live.extracted.model,
+      epochExists: state.status === "applied" && state.rowVersionEpoch,
+      model,
+      engineSteps: planSteps,
+      offset: withCarriers.length,
+    }),
+  ]
   const collected = await collectEnvironment({
     engine,
     dbs,
@@ -680,12 +701,12 @@ export async function buildPlan(
     live,
     desired: target.extracted.catalog,
     role: targetOwners.session,
-    steps: withCarriers,
+    steps: withVersions,
     parse,
   })
   if (!collected.ok) return refused([...diagnostics, ...collected.diagnostics])
   const { environment } = collected
-  const steps = [...withCarriers, ...collected.steps]
+  const steps = [...withVersions, ...collected.steps]
   const permissions = requiredPermissions({ steps, drift, promotion: null })
   // Слід кроків — те саме правило, що й для плану з промоцією (спека промоції §7.2); без
   // промоції імена вихідного стану й кроків збігаються
@@ -824,6 +845,8 @@ interface PromotionContext {
   /** Сироти прав цілі, прочитані до розгалуження промоції. */
   rightsOrphans: RightsOrphans
   promotion: Extract<TransitionVerdict, { status: "promotion" }>
+  /** Чи є рядок епохи версій цілі: без нього епоху пише крок `versions`. */
+  epochExists: boolean
   /** Файл запису в `plans/`: його називають відмови виявлення. */
   file: string
   /** Діагностики гейта, переходу й бажаного стану. */
@@ -942,6 +965,21 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
   })
   if ("refusal" in data)
     return refused(dedupe([...diagnostics, ...data.refusal]))
+  // Кроки даних (фаза 10) йдуть до кроків двигуна: на таблиці з живою
+  // механікою без послідовності версій тригер упав би (Р11)
+  const noSequence = rowVersionFirstTables(
+    live.extracted.model,
+    data.tables.map((t) => ({ schema: t.before.schema, name: t.before.table }))
+  )
+  if (noSequence.length > 0)
+    return refused(
+      dedupe([
+        ...diagnostics,
+        applyDiagnostic("plan.row-version-first", "error", {
+          tables: noSequence.join(", "),
+        }),
+      ])
+    )
   // Нові типи замірів збереження — тією самою транзакцією: замір «до»
   // приводить до них до будь-якого кроку (спека промоції §4)
   const read =
@@ -1096,6 +1134,25 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
 
   // Кроки середовища (спека промоції §7.2): копія цілі в старих іменах
   // проходить кроки наміру, двигуна й копій, тож залишок — у нових
+  const withVersions = [
+    ...withCarriers,
+    ...planRowVersionSteps({
+      live: live.extracted.model,
+      epochExists: c.epochExists,
+      model: c.model,
+      engineSteps: planSteps,
+      offset: withCarriers.length,
+      // Таблиця на цілі — у старому імені
+      liveName: (table) => {
+        const old = intent.tablesNewToOld.get(
+          tableKey(table.schema, table.name)
+        )
+        if (old === undefined) return table
+        const [schema, name] = JSON.parse(old) as [string, string]
+        return { schema, name }
+      },
+    }),
+  ]
   const collected = await collectEnvironment({
     engine,
     dbs,
@@ -1105,12 +1162,12 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
     live,
     desired: target.extracted.catalog,
     role: c.targetOwners.session,
-    steps: withCarriers,
+    steps: withVersions,
     parse,
   })
   if (!collected.ok) return refused([...withClone, ...collected.diagnostics])
   const { environment } = collected
-  const steps = [...withCarriers, ...collected.steps]
+  const steps = [...withVersions, ...collected.steps]
 
   // Залежні доступу (спека промоції §8) — з живої цілі, у старих іменах, транзакцією
   // READ ONLY

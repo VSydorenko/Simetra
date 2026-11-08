@@ -2302,7 +2302,7 @@ describe("executePlan", () => {
       options
     )
     await expect(run).rejects.toThrow(
-      "plan steps are out of origin order: intent, engine, carriers, environment"
+      "plan steps are out of origin order: intent, engine, carriers, versions, environment"
     )
     expect(log).toEqual([])
   })

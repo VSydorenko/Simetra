@@ -246,7 +246,13 @@ export const APPLY_ADVISORY_LOCK = "1397312837, 1"
  * кроки копій носіїв — після двигуна, що створює колонки-копії, і до
  * середовища.
  */
-const ORIGIN_ORDER = ["intent", "engine", "carriers", "environment"] as const
+const ORIGIN_ORDER = [
+  "intent",
+  "engine",
+  "carriers",
+  "versions",
+  "environment",
+] as const
 
 /**
  * `LOCK TABLE` на таблиці, що зникла (`42P01`) чи змінила вид (`42809`) після
@@ -957,6 +963,15 @@ async function runAttempt(
   if (carriers.length > 0) {
     phase("carriers")
     await runCarrierSteps(tx, carriers, parse, (id) => phase("carriers", id))
+  }
+  // 11б. Блок `versions` (засів послідовності версій, епоха) — лише для
+  // непорожнього блоку. Ці кроки пишуть версію з вимкненими тригерами, тож
+  // `touch` синхронного коміту не ставить: умова в одному місці
+  const versions = block("versions")
+  if (versions.length > 0) {
+    phase("versions")
+    await tx.query("SET LOCAL synchronous_commit = on")
+    await runSteps(tx, versions, parse, (id) => phase("versions", id))
   }
   // 12. Кроки середовища (спека промоції §7.2) — під налаштуваннями
   // транзакції

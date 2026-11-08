@@ -47,10 +47,11 @@ import { STEP_CLASSES, type PermissionItem, type PlanStep } from "./steps"
  * сторожами, блокувань із режимами й преамбули двигуна, шлях ревалідації,
  * факти сервера й голову ledger цілі (спека промоції §8), сигнатури функцій
  * платформи (`platformFunctions`) — раннер виключає їх з `plpgsql_check` і
- * переліку сліпих — та кроки копій носіїв (`origin: "carriers"`): раннер
- * старішого формату не знав би їхнього блоку.
+ * переліку сліпих — кроки копій носіїв (`origin: "carriers"`) та блок `versions`
+ * (засів послідовності версій і епоха): раннер старішого формату не знав би
+ * їхніх блоків.
  */
-export const PLAN_FORMAT = 6
+export const PLAN_FORMAT = 7
 
 /**
  * Таблиця одиниці, чиї дані план зберігає (спека промоції §7.2): імена до й
@@ -347,7 +348,7 @@ const objectRefSchema = z.strictObject({
 
 const stepSchema = z.strictObject({
   id: z.string(),
-  origin: z.enum(["intent", "engine", "carriers", "environment"]),
+  origin: z.enum(["intent", "engine", "carriers", "versions", "environment"]),
   sql: z.string(),
   verb: z.enum(ENGINE_ACTION_VERBS),
   class: z.enum(STEP_CLASSES),

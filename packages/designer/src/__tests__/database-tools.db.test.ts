@@ -520,7 +520,9 @@ describe("diff and the apply state", () => {
       const data = await diffData(dir, env)
       expect(data.applyState).toBe("present")
       expect(data.empty).toBe(false)
-      expect(data.plan.map((a) => a.sql).join("\n")).toContain("row_version")
+      expect(data.plan.map((a) => a.sql).join("\n")).toContain(
+        "CREATE SEQUENCE simetra.row_version"
+      )
     })
   })
 

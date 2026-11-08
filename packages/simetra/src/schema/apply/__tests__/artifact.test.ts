@@ -400,7 +400,7 @@ describe("plan artifact", () => {
     expect(parsed.diagnostic.message).toMatch(
       /plan format 1 is not supported.*rebuild the plan/i
     )
-    expect(PLAN_FORMAT).toBe(6)
+    expect(PLAN_FORMAT).toBe(7)
   })
 
   it("asks to rebuild a plan of the second format", async () => {

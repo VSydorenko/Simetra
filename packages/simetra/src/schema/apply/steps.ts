@@ -48,7 +48,7 @@ export interface PlanStep {
    * (спека промоції §7.2) заповнює копії наявних рядків після кроків двигуна, що
    * створюють колонки-копії, і до кроків середовища.
    */
-  origin: "intent" | "engine" | "carriers" | "environment"
+  origin: "intent" | "engine" | "carriers" | "versions" | "environment"
   sql: string
   verb: EngineAction["verb"]
   class: StepClass
