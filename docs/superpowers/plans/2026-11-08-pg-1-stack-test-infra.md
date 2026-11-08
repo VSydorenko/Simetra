@@ -200,10 +200,14 @@ Vitest, `pg`.
     <provider> stack at …`;
   - типи `Snapshot` і `Change` — `export`;
   - `function stackMismatch(p: TestProvider, facts: { supabaseAdmin: boolean }): string | null`
-    — після з'єднання guard читає наявність ролі `supabase_admin`; для
-    `postgres` вона мусить бути відсутня, для `supabase` — присутня;
-    розбіжність — відмова прогону з текстом про змінні `SIMETRA_TEST_*`
-    (перевизначення адреси на чужий стек ламало б взаємне виключення);
+    — для `postgres` роль `supabase_admin` мусить бути відсутня, для
+    `supabase` — присутня; розбіжність — текст відмови про змінні
+    `SIMETRA_TEST_*` (перевизначення адреси на чужий стек ламало б взаємне
+    виключення);
+  - `async function assertStack(p: TestProvider): Promise<void>` — читає
+    факт через **кожну** ефективну адресу (`testDatabaseUrl()` і
+    `testSuperuserUrl()`) і кидає на першому `stackMismatch`; її кличуть
+    guard перед знімком «до» і `sweepRun` перед будь-яким `DROP`;
   - `function diff(before: Snapshot, after: Snapshot): Change[]`;
   - `function leakMessage(changes: Change[], p: TestProvider): string` —
     порада `DROP ROLE` закінчується `-- as <TEST_STACKS[p].superuserName>`;
@@ -283,12 +287,15 @@ Vitest, `pg`.
     psql -v ON_ERROR_STOP=1 -U postgres -d postgres -f -`;
   - `node scripts/db-stack.mjs stop postgres [--volumes]` — `docker
     compose … down` (з `--volumes` лише на прапорці);
-  - `export function lockHolder(path: string): { pid: number } | null` у
-    `scripts/db-stack.mjs` — читає замок формату `stack-guard.ts`
-    (`<pid>\n<cwd>\n<since>\n`) і повертає власника, лише коли його pid
-    живий; `start` і `stop` профілю `postgres` відмовляють (код 1, текст
-    `postgres stack is in use by DB run PID <pid>`), поки `lockHolder` не
-    `null` для `simetra-db-stack-postgres.lock`;
+  - `export async function withStackLock(path: string, fn: () => Promise<void>): Promise<void>`
+    у `scripts/db-stack.mjs` — бере той самий замок, що й `stack-guard.ts`
+    (`openSync(path, "wx")`, формат `<pid>\n<cwd>\n<since>\n`), тримає його
+    весь час `fn` і знімає у `finally`; замок живого чужого pid — відмова
+    (код 1, текст `postgres stack is in use by PID <pid>`), замок мертвого
+    pid знімається, як у guard. `start` і `stop` профілю `postgres`
+    виконують `compose up`/`down` і ініціалізацію лише всередині
+    `withStackLock(<tmpdir>/simetra-db-stack-postgres.lock, …)`: між
+    перевіркою й дією немає проміжку, у якому DB-прогін узяв би замок;
   - `pnpm db:pg:start`, `pnpm db:pg:stop` — виклики вище без `--volumes`.
 
 - [ ] **Step 1: failing unit test** `stack-files.test.ts`:
@@ -302,8 +309,10 @@ Vitest, `pg`.
     `http_api.disabled === true`;
   - `garage.toml` не містить `rpc_secret` чи `admin_token` (секрети — лише
     з `dev-secrets.env`);
-  - `lockHolder`: файла немає — `null`; pid поточного процесу — власник;
-    pid, якого немає, — `null`.
+  - `withStackLock`: вільний замок — `fn` виконано, файл після нього
+    знято; замок живого чужого pid (підставний файл з pid батьківського
+    процесу тесту) — відмова без виклику `fn`; замок неіснуючого pid —
+    знято й `fn` виконано; `fn`, що кидає, — замок знято.
 
   Розбір `compose.yaml` — по рядках регулярними виразами (порти в списках
   `ports:`, ключ `network_mode:`), без нової залежності.
@@ -315,8 +324,8 @@ Vitest, `pg`.
   дозвіл `read`, `write`, `owner` ключу — лише коли їх немає. Прапорці CLI
   звірити з `garage --help` у контейнері `v2.5.0`.
 - [ ] **Step 4:** `pnpm --filter simetra test stack-files` — PASS.
-- [ ] **Step 5:** `pnpm db:pg:start` — код 0; `docker compose -p simetra-pg
-  ps` — три сервіси `healthy`; `psql
+- [ ] **Step 5:** `pnpm db:pg:start` — код 0; `docker compose -f
+  docker/postgres-stack/compose.yaml ps` — три сервіси `healthy`; `psql
   postgresql://postgres:postgres@127.0.0.1:54422/postgres -c "select
   current_setting('simetra.environment')"` → `development`; `curl -s -o
   /dev/null -w '%{http_code}' http://127.0.0.1:8100/health` → `200`.
@@ -349,7 +358,7 @@ Vitest, `pg`.
     label=simetra-stack=<p> --format {{.Names}}\t{{.Label "simetra-run"}}`;
   - `async function runBuckets(stack: TestStack, fetch: Fetch, timeoutMs: number): Promise<{ id: string; name: string; tag: string; objects: number }[]>`
     — admin API Garage v2: перелік бакетів з глобальними аліасами, лише
-    `run-<тег>`, число об'єктів — з інформації про бакет; `stack.garage`
+    `run-<тег>`, число об'єктів — з інформації про бакет; `stack.garageAdminUrl`
     `null` — `[]`; маршрути звірити з документацією admin API `v2.5.0`;
   - `async function removeRunResources(tag: string, p: TestProvider, deps: { exec: Exec; fetch: Fetch; deadlineMs: number }): Promise<{ removed: string[]; left: string[] }>`
     — `docker rm -f -v` контейнерів тегу свого профілю; видалення
@@ -421,8 +430,10 @@ Vitest, `pg`.
     `\n`, — у `parseTap`; у `finally` — `ROLLBACK` і `end()`;
   - `pgtap.db.test.ts`: на кожен `*.pgtap.sql` у
     `test/db/pgtap/<testProvider()>/` — `it(<ім'я файла>)`: `failed`
-    порожній, `bailOut === null`, `planned === passed.length`; теки немає
-    чи вона порожня — `it.skip` з причиною;
+    порожній, `bailOut === null`, `planned === passed.length`. Для
+    `postgres` відсутність `stack-base-state.pgtap.sql` — падіння тесту, а
+    не пропуск; для `supabase` порожня тека — `it.skip` з причиною (його
+    базовий стан і далі перевіряє `supabase test db`);
   - проєкт `db-pg`: `include: ["test/db/pgtap.db.test.ts",
     "test/db/interrupt.db.test.ts"]`, `fileParallelism: false`,
     `globalSetup: ["./test/db/stack-guard.postgres.ts"]`;
@@ -626,4 +637,22 @@ select plan(…); …; select * from finish();` — без керування т
 
 ## Підсумок аудиту плану
 
-_Заповнюється після аудиту._
+Два раунди двох незалежних аудиторів Opus («план проти коду,
+виконуваність» і «безпека й операційний ризик»), потім Codex `gpt-6-sol`.
+Кожну знахідку автор звірив з кодом; спростовано одну (тег
+`postgres:17.11-trixie` існує). Виправлено, зокрема:
+
+- поправки спеки на кожне відхилення (задача 0);
+- контейнери в знімку прив'язано до стека міткою;
+- доказ прибирання контейнерів і бакетів на перериванні, з мутацією;
+- один DB-проєкт на процес vitest;
+- healthcheck Garage, що не залежить від layout;
+- профільна команда ручного прибирання;
+- порядок і бюджети прибиральника;
+- старт і стоп стека — під тим самим замком, що й DB-прогін;
+- звірка кожної ефективної адреси з профілем;
+- раннер pgTAP сам керує транзакцією й відхиляє оператори керування нею;
+- без точного піну пакетів PGDG.
+
+Відкритих blocker і безпекових major немає. Окремого раунду після правок
+Codex не було.
