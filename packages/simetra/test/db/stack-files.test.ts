@@ -20,13 +20,21 @@ const STACK_DIR = fileURLToPath(
 const read = (name: string): string =>
   readFileSync(join(STACK_DIR, name), "utf8")
 
-/** Рядки-елементи списків `ports:` у compose-файлі, без лапок. */
+/**
+ * Рядки-елементи списків `ports:` у compose-файлі, без лапок. Розбір по рядках
+ * знає лише блочний список під голим `ports:`; будь-яку іншу форму ключа
+ * (потоковий список, коментар, лапки) він відкидає, а не пропускає мовчки.
+ */
 function publishedPorts(compose: string): string[] {
   const ports: string[] = []
   let listIndent: number | undefined
   for (const line of compose.split(/\r?\n/)) {
-    const key = /^(\s*)ports:\s*$/.exec(line)
-    if (key !== null) {
+    if (/^\s*["']?ports["']?\s*:/.test(line)) {
+      const key = /^(\s*)ports:$/.exec(line)
+      if (key === null)
+        throw new Error(
+          `compose.yaml: write ports as a bare "ports:" block list, got: ${line.trim()}`
+        )
       listIndent = key[1]!.length
       continue
     }
@@ -57,7 +65,7 @@ describe("compose.yaml of the postgres stack", () => {
   })
 
   it("has no network_mode", () => {
-    expect(compose).not.toMatch(/^\s*network_mode:/m)
+    expect(compose).not.toMatch(/^\s*["']?network_mode["']?\s*:/m)
   })
 })
 
@@ -99,6 +107,32 @@ describe("centrifugo.json of the postgres stack", () => {
   it("disables the HTTP API", () => {
     expect(config).toMatchObject({ http_api: { disabled: true } })
   })
+
+  // До ПГ-4 немає таблиці outbox і JWKS (Р7): споживач і перевірка токенів
+  // з'являються разом із генератором конфігу
+  it("has no outbox consumer and no client token yet", () => {
+    expect(config).not.toHaveProperty("consumers")
+    expect(config).not.toHaveProperty(["client", "token"])
+  })
+
+  it("enables the health endpoint", () => {
+    expect(config).toMatchObject({ health: { enabled: true } })
+  })
+
+  it.each(["simetra", "simetra-rights", "simetra-user"])(
+    "namespace %s keeps history and forces recovery",
+    (name) => {
+      const { namespaces } = (
+        config as { channel: { namespaces: Record<string, unknown>[] } }
+      ).channel
+      const ns = namespaces.find((n) => n.name === name)
+      expect(ns).toMatchObject({
+        history_ttl: expect.any(String),
+        force_recovery: true,
+      })
+      expect(ns?.history_size).toBeGreaterThan(0)
+    }
+  )
 })
 
 describe("garage.toml of the postgres stack", () => {

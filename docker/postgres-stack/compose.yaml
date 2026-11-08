@@ -16,7 +16,9 @@ services:
     volumes:
       - pg-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD", "pg_isready", "-U", "postgres"]
+      # Через TCP: тимчасовий сервер initdb першого старту слухає лише сокет,
+      # і перевірка через сокет пустила б `--wait` до справжнього сервера
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "postgres"]
       interval: 2s
       timeout: 5s
       retries: 30

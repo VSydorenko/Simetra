@@ -264,11 +264,20 @@ async function main(argv) {
 }
 
 // Лише як команда: тест імпортує `withStackLock`, і CLI тоді не запускається
-const invoked = process.argv[1]
-if (
-  invoked !== undefined &&
-  realpathSync(invoked) === realpathSync(fileURLToPath(import.meta.url))
-) {
+/** @returns {boolean} */
+function invokedAsCommand() {
+  const invoked = process.argv[1]
+  if (invoked === undefined) return false
+  try {
+    return (
+      realpathSync(invoked) === realpathSync(fileURLToPath(import.meta.url))
+    )
+  } catch {
+    // argv[1] — не файл (REPL, `node -e`, шлях, якого вже нема): не команда
+    return false
+  }
+}
+if (invokedAsCommand()) {
   main(process.argv.slice(2)).catch((error) => {
     console.error(
       `db-stack: ${error instanceof Error ? error.message : String(error)}`
