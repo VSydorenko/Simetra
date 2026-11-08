@@ -362,6 +362,18 @@ async function runModel(
   }
   // Ключ, що став `removed`: значення — лише з читання після позначки (П15).
   const removedBarrier = new Map<string, number>()
+  // Мить (довжина журналу запитів), коли свіжа відповідь «рядка немає»
+  // позначила вже `removed` слот наново: значення — лише з читання, що
+  // почалось після неї (П15). Відповідь, яку ядро відкинуло (покоління,
+  // надгробок), позначки не дає, а пачка `revalidate` пише відповіді лише
+  // після всіх читань, тож момент знає лише ядро.
+  const remarkedAt = new Map<string, number>()
+  inspect.watchRemarks((object, k) => {
+    remarkedAt.set(id(object, k), fake.log.length)
+  })
+  // Цілі, які `purge` справді прибрав: `purged` картки чи ТЧ допустимий лише
+  // для них (інакше `purge` хибно позначив би чужі вигляди; П12).
+  const purgedTargets = new Set<string>()
   // `slot` — запис сховища: слот, що зник і з'явився знову між двома
   // перевірками, — вже інший слот, і його не порівнюємо з тим, що був.
   const wasRemoved = new Map<string, { divergent: boolean; slot: object }>()
@@ -488,6 +500,18 @@ async function runModel(
         if (ref !== null) checkRow(label, ORG, ref, `${where} ref`)
       }
     }
+    if (snap.status === "purged") {
+      // `purged` вигляду (після `purge`, не `close`) — лише для картки чи ТЧ
+      // ключа, який `purge` справді прибрав.
+      const target =
+        spec.kind === "card"
+          ? spec.key
+          : spec.kind === "section"
+            ? spec.owner
+            : undefined
+      if (target === undefined || !purgedTargets.has(id(spec.object, target)))
+        fail(label, `${where}: purged without a purge of its key`)
+    }
     if (spec.kind === "card") {
       // Картка ключа зі сховища не дає знімка без рядка.
       const stored = objectOf(TASK).rows.get(spec.key) !== undefined
@@ -576,8 +600,9 @@ async function runModel(
       fail(label, `seen ${sizes.seen} > ${LIMITS.seenMax}`)
     if (sizes.tombstones > LIMITS.tombstonesMax)
       fail(label, `tombstones ${sizes.tombstones} > ${LIMITS.tombstonesMax}`)
-    if (sizes.horizon > LIMITS.horizonBuckets)
-      fail(label, `horizon ${sizes.horizon} > ${LIMITS.horizonBuckets}`)
+    // Останнє поховання пари — по одному на об'єкт.
+    if (sizes.pairBurials > 2)
+      fail(label, `pair burials ${sizes.pairBurials} > 2 objects`)
 
     for (const name of [TASK, ORG]) {
       const o = objectOf(name)
@@ -654,6 +679,12 @@ async function runModel(
           wasRemoved.delete(key)
       }
     }
+
+    for (const [key, at] of remarkedAt) {
+      const barrier = removedBarrier.get(key)
+      if (barrier !== undefined) removedBarrier.set(key, Math.max(barrier, at))
+    }
+    remarkedAt.clear()
 
     handles.forEach((handle, v) => {
       checkSnapshot(label, v, handle.getSnapshot())
@@ -754,6 +785,46 @@ async function runModel(
     }
   }
   if (preloaded) noteGens(true)
+
+  /**
+   * Правило стабільності: жодна системна подія, крім `purge`, не змінює
+   * складу й порядку видимого списку; завантаження користувача — дія
+   * користувача, його завершення й початок виправдані.
+   */
+  const stability = (
+    label: string,
+    before: ReturnType<typeof lists>,
+    purgeStep: boolean
+  ) => {
+    const after = lists()
+    before.forEach((b, v) => {
+      const a = after[v]
+      if (b === undefined || a === undefined) return
+      if (b.subset !== a.subset) return
+      const same =
+        a.keys.length === b.keys.length &&
+        a.keys.every((x, i) => x === b.keys[i])
+      if (same) return
+      // Завантаження, що тривало чи почалось на цьому кроці, — користувача?
+      const mine = userGens.get(a.subset!)
+      const touched = [b.flight]
+      for (let g = (b.gen ?? 0) + 1; g <= (a.gen ?? 0); g++) touched.push(g)
+      if (touched.some((g) => g !== undefined && mine?.has(g) === true)) return
+      if (purgeStep) {
+        // purge лише прибирає ключі, порядок решти той самий.
+        const kept = b.keys.filter((x) => a.keys.includes(x))
+        if (
+          kept.length === a.keys.length &&
+          kept.every((x, i) => x === a.keys[i])
+        )
+          return
+      }
+      fail(
+        label,
+        `view ${v} composition ${b.keys.join(",")} → ${a.keys.join(",")}`
+      )
+    })
+  }
 
   const live = (object: ObjectName, k: Key) =>
     fake.row(object, k) !== undefined && !deleted.has(id(object, k))
@@ -958,6 +1029,7 @@ async function runModel(
         commit((w) => w.purge(object, { keys: [target] }))
         if (closed !== undefined) break
         purgedKeys = { object, keys: [target] }
+        purgedTargets.add(id(object, target))
         purgeBarrier.set(id(object, target), stepStart)
         if (object === TASK) barrierSections(stepStart)
         break
@@ -967,6 +1039,9 @@ async function runModel(
         const object = s.org ? ORG : TASK
         const scope = SCOPES[s.scope]!
         const held = [...objectOf(object).rows.keys()]
+        const hadLines =
+          object === TASK &&
+          objectOf(TASK).sections.get(K1, "lines") !== undefined
         commit((w) => w.purge(object, { scope }))
         if (closed !== undefined) break
         purgedScope = { object, scope }
@@ -974,6 +1049,15 @@ async function runModel(
           object,
           keys: held.filter((k) => objectOf(object).rows.get(k) === undefined),
         }
+        for (const k of purgedKeys.keys) purgedTargets.add(id(object, k))
+        // Власник без шапки в сховищі, чиї рядки ТЧ прибрано, — прибраний;
+        // з шапкою (в іншому скоупі) доступ не втрачено.
+        if (
+          hadLines &&
+          objectOf(TASK).sections.get(K1, "lines") === undefined &&
+          objectOf(TASK).rows.get(K1) === undefined
+        )
+          purgedTargets.add(id(TASK, K1))
         // П12: ключ, якого після purge у сховищі немає, повертає лише
         // читання, що почалось після нього.
         for (const k of object === TASK ? KEYS : ORG_KEYS) {
@@ -1042,37 +1126,7 @@ async function runModel(
     check(label, stepStart)
     if (purgedKeys !== undefined) checkPurged(label, purgedKeys)
     noteGens(userViews.size > 0)
-    // Правило стабільності: жодна системна подія, крім `purge`, не змінює
-    // складу й порядку видимого списку; завантаження користувача — дія
-    // користувача, його завершення й початок виправдані.
-    const after = lists()
-    before.forEach((b, v) => {
-      const a = after[v]
-      if (b === undefined || a === undefined) return
-      if (b.subset !== a.subset) return
-      const same =
-        a.keys.length === b.keys.length &&
-        a.keys.every((x, i) => x === b.keys[i])
-      if (same) return
-      // Завантаження, що тривало чи почалось на цьому кроці, — користувача?
-      const mine = userGens.get(a.subset!)
-      const touched = [b.flight]
-      for (let g = (b.gen ?? 0) + 1; g <= (a.gen ?? 0); g++) touched.push(g)
-      if (touched.some((g) => g !== undefined && mine?.has(g) === true)) return
-      if (purgeStep) {
-        // purge лише прибирає ключі, порядок решти той самий.
-        const kept = b.keys.filter((x) => a.keys.includes(x))
-        if (
-          kept.length === a.keys.length &&
-          kept.every((x, i) => x === a.keys[i])
-        )
-          return
-      }
-      fail(
-        label,
-        `view ${v} composition ${b.keys.join(",")} → ${a.keys.join(",")}`
-      )
-    })
+    stability(label, before, purgeStep)
   }
 
   // Пізні відповіді на все, що лишилось у польоті: повільні читання й
@@ -1083,12 +1137,15 @@ async function runModel(
     const stepStart = fake.log.length
     logAt = log.length
     restoredInStep.clear()
+    const before = lists()
     const slow = late.shift()
     const read = slow ?? fake.take()
     read.answer(slow !== undefined || i % 2 === 0 ? read.issuedAt : fake.clock)
     record(read)
     await flush()
     check(`drain ${i}`, stepStart)
+    noteGens(false)
+    stability(`drain ${i}`, before, false)
   }
 
   if (closed === undefined) await converge()
@@ -1236,7 +1293,18 @@ async function runModel(
   }
 }
 
-const RUNS = Number(process.env.CORE_MODEL_RUNS ?? 10_000)
+// Порожнє чи незадане — 10 000 прогонів; нечислове чи неплюсове значення —
+// помилка, а не тихі нуль прогонів, що виглядали б зеленим гейтом.
+function runsFromEnv(raw: string | undefined): number {
+  if (raw === undefined || raw.trim() === "") return 10_000
+  const n = Number(raw)
+  if (!Number.isInteger(n) || n <= 0)
+    throw new Error(
+      `CORE_MODEL_RUNS must be a positive integer, got ${JSON.stringify(raw)}`
+    )
+  return n
+}
+const RUNS = runsFromEnv(process.env.CORE_MODEL_RUNS)
 
 const property = (defects: readonly DefectFlag[] = []) =>
   fc.asyncProperty(
@@ -1257,17 +1325,6 @@ describe("core model", () => {
   it("holds the invariants over random interleavings", async () => {
     await fc.assert(property(), { numRuns: RUNS })
   }, 120_000)
-
-  // Фіксований прогін: випадковий пошук ловить дефект повторного remove (П15,
-  // нова позначка мусить пересунути епоху) лише в частині прогонів, а цей
-  // шлях відтворює його щоразу.
-  it("replays seed 527771713 (П15 repeated remove moves the mark epoch)", async () => {
-    await fc.assert(property(), {
-      seed: 527771713,
-      path: "6101:1:1:10:13:18:19:21:20:19:20:20:25:26:25:25:25:25:19:15:12:12:12:12:12:12:12:12:14:14:14:14:14:14:14:13:13:13:13:13",
-      numRuns: 1,
-    })
-  }, 120_000)
 })
 
 const DEFECTS: readonly DefectFlag[] = [
@@ -1284,6 +1341,8 @@ const DEFECTS: readonly DefectFlag[] = [
   "removed-keeps-sections",
   "revision-survives-row",
   "purge-keeps-views",
+  "purge-marks-unrelated-views",
+  "repeated-remove-keeps-epoch",
   "absent-row-ignored",
   "unbounded-seen",
   "system-reread-via-load",
@@ -1295,6 +1354,7 @@ const DEFECTS: readonly DefectFlag[] = [
 const CAUGHT_BY: Partial<Record<DefectFlag, RegExp>> = {
   "removed-keeps-sections": /section lines stored for a removed owner/,
   "purge-keeps-views": /card of purged/,
+  "purge-marks-unrelated-views": /purged without a purge of its key/,
   "absent-row-ignored": /^converge/,
   "unbounded-seen": /seen \d+ > \d+/,
   "system-reread-via-load": /composition/,
@@ -1315,6 +1375,10 @@ describe("core model self-check", () => {
       })
       expect(result.failed, `${flag} not caught`).toBe(true)
       expect(result.errorInstance).toBeInstanceOf(ModelFailure)
+      // Контроль: той самий контрприклад без дефекту проходить, тож червоний
+      // — від дефекту, а не від помилки моделі.
+      const [steps, preloaded, profile] = result.counterexample!
+      await runModel(steps, preloaded, profile, [])
       const caughtBy = CAUGHT_BY[flag]
       if (caughtBy !== undefined)
         expect((result.errorInstance as Error).message).toMatch(caughtBy)
