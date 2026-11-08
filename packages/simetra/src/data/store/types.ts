@@ -1,4 +1,5 @@
 import type { CommandError, Filter, OrderBy } from "simetra/model"
+import type { DataError } from "../errors"
 
 /** Logical object name: `"<kind>.<name>"`. */
 export type ObjectName = string
@@ -58,7 +59,8 @@ export type CloseReason =
 /** The immutable snapshot of one view. */
 export interface ViewSnapshot {
   readonly status: "loading" | "ready" | "refreshing" | "error" | "purged"
-  readonly error?: CommandError
+  /** A server refusal, or a developer error found while loading (`data.full-too-large`). */
+  readonly error?: CommandError | DataError
   readonly reason?: CloseReason | "access-changed"
   readonly rows: readonly RowView[]
   readonly hasNewRows: boolean
@@ -71,6 +73,22 @@ export interface ViewSnapshot {
   readonly strategy?: "full" | "window"
   readonly truncated?: boolean
   readonly atEnd?: boolean
+}
+
+/** A memoized handle of one view form (P4-B spec §6.4). */
+export interface ViewHandle {
+  /** The immutable snapshot; the same object while the view is unchanged. */
+  getSnapshot(): ViewSnapshot
+  /**
+   * Holds the view and loads it on the first hold; returns the release
+   * function (idempotent). Throws `DataError` `data.views-limit` when a new
+   * held form would exceed `viewsMax`.
+   */
+  subscribe(listener: () => void): () => void
+  /** A user action: re-reads the view; may change its composition. */
+  refresh(): void
+  /** A user action: re-reads the view and clears `hasNewRows`. */
+  showNew(): void
 }
 
 /** A generation token: async branches write only while it is valid. */

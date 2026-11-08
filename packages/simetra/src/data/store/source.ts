@@ -100,6 +100,11 @@ export function createReadLimiter(parallel: number): ReadLimiter {
  */
 export interface CoreSource {
   read(query: RowsQuery): Promise<ReadRows>
+  /**
+   * Closes the read limiter of the source (session close): a read still
+   * queued never goes out and rejects with {@link ReadLimiterClosed}.
+   */
+  close(): void
 }
 
 /**
@@ -115,6 +120,7 @@ export function createCoreSource(
   limiter: ReadLimiter
 ): CoreSource {
   return {
+    close: () => limiter.close(),
     async read(query) {
       const mapped = readQueryToWire(index, query)
       if (!mapped.ok) {
@@ -158,8 +164,14 @@ const isTooLarge = (error: unknown): boolean =>
   error.error.code === "command.invalid" &&
   error.error.reason === LIMIT_REASONS.responseTooLarge
 
-/** Рядок відповіді без ключа чи версії — порушення контракту джерела. */
-function serverRow(entry: CatalogEntry, values: Record<string, unknown>) {
+/**
+ * A confirmed row of `entry` from logical values; a row without its key or
+ * version breaks the source contract and is `CommandFailure` `command.internal`.
+ */
+export function serverRow(
+  entry: CatalogEntry,
+  values: Record<string, unknown>
+): ServerRow {
   const key = values[entry.keyName]
   const version = values[entry.versionName]
   if (typeof key !== "string" || typeof version !== "number") {

@@ -115,6 +115,10 @@ export interface ObjectStore {
   /** At zero owners: the version goes to memory; a removed slot is also buried. */
   disown(scope: Scope, key: Key): void
   get(key: Key): RowEntry | undefined
+  /** The number of entries, removed slots included. */
+  readonly size: number
+  /** The keys of every entry, removed slots included. */
+  keys(): IterableIterator<Key>
   /**
    * Keys that need a tail re-read, collected since the last call: a
    * `stale-inserted` put, a first write without the scope column, a divergent
@@ -383,6 +387,12 @@ export function createObjectStore(options: {
     },
 
     get: (key) => rows.get(key),
+
+    get size() {
+      return rows.size
+    },
+
+    keys: () => rows.keys(),
 
     drainTail() {
       const keys = [...tail]
