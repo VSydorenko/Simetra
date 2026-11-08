@@ -802,6 +802,48 @@ describe("revalidate", () => {
     ])
   })
 
+  it("re-reads a mounted section once the tail restores a divergent removed header", async () => {
+    const { core, fake, log } = setup()
+    seed(fake, 1, 1)
+    fake.setLines(TASK, key(1), "lines", [
+      { ref: key(901), qty: 1, lineNumber: 1 },
+    ])
+    const view = core.view(keys(1))
+    watch(view)
+    const sectionView = core.view(section(1))
+    watch(sectionView)
+    await settle()
+    expect(sectionView.getSnapshot().section?.lines).toHaveLength(1)
+    const hidden = fake.setVisibleScopes([])
+    fake.setVisibleScopes(undefined)
+    fake.hold = (read) => isKeys(read)
+    const done = core.revalidate(TASK, { visibleOnly: false })
+    await settle()
+    const early = fake.take()
+    bump(core)
+    fake.hold = undefined
+    view.refresh()
+    await settle()
+    fake.hold = (read) => isKeys(read)
+    early.answer(hidden)
+    await done
+    await settle()
+    expect(stateOf(view.getSnapshot(), 1)).toBe("removed")
+    expect(sectionView.getSnapshot().section).toMatchObject({
+      ownerState: "removed",
+      lines: [],
+    })
+    fake.take().answer()
+    await settle()
+    expect(log.filter((e) => e.kind === "removed-restored")).toHaveLength(1)
+    expect(stateOf(view.getSnapshot(), 1)).toBe("synced")
+    expect(sectionView.getSnapshot().section).toMatchObject({
+      ownerState: "synced",
+      complete: true,
+      lines: [{ key: key(901) }],
+    })
+  })
+
   it("keeps a divergent removed row hidden when the tail finds it invisible", async () => {
     const { core, fake, log } = setup()
     seed(fake, 1, 1)

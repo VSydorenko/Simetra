@@ -281,6 +281,11 @@ describe("close clears the service maps", () => {
       rowViews: 0,
       tails: 0,
       purges: 0,
+      controllers: 0,
+      releaseTimers: 0,
+      preloadTimers: 0,
+      sectionOwners: 0,
+      sectionOwnerVersions: 0,
     })
     expect(inspect.rowCount()).toBe(0)
   })

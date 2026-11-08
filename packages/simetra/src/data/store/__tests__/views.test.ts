@@ -602,6 +602,7 @@ describe("section of a removed owner", () => {
     fake.take().answer()
     await settle()
     expect(sectionView.getSnapshot().section?.lines ?? []).toEqual([])
+    expect(sectionView.getSnapshot().section?.ownerState).toBe("removed")
     cardView.refresh()
     await settle()
     fake.take().answer()
@@ -613,6 +614,74 @@ describe("section of a removed owner", () => {
     await settle()
     expect(sectionView.getSnapshot().section).toMatchObject({
       complete: true,
+      ownerState: "synced",
+      lines: [{ key: key(901) }],
+    })
+  })
+
+  it("clears the lines of an owner without a header when a by-key read finds no row", async () => {
+    const { core, fake } = setup({ mode: "manual" })
+    seed(fake, 1, 1)
+    fake.setLines(TASK, key(1), "lines", lines)
+    const sectionView = core.view(section(1))
+    watch(sectionView)
+    await settle()
+    fake.take().answer()
+    await settle()
+    expect(sectionView.getSnapshot().section).toMatchObject({
+      ownerState: "unknown",
+      lines: [{ key: key(901) }],
+    })
+    // Сервер більше не повертає власника; шапки в сховищі немає.
+    fake.setVisibleScopes([])
+    const cardView = core.view(card(1))
+    watch(cardView)
+    await settle()
+    fake.take().answer()
+    await settle()
+    expect(sectionView.getSnapshot().section?.lines ?? []).toEqual([])
+    expect(sectionView.getSnapshot().section?.ownerVersion).toBeUndefined()
+  })
+
+  it("shows no lines under a header hidden by the horizon and shows them once the tail resolves it", async () => {
+    const { core, fake } = setup({
+      limits: { seenMax: 1, tombstonesMax: 1, horizonBuckets: 1 },
+    })
+    seed(fake, 1, 3)
+    fake.setLines(TASK, key(1), "lines", lines)
+    const header = core.view(keys(1))
+    const held = watch(header)
+    const sectionView = core.view(section(1))
+    watch(sectionView)
+    await settle()
+    expect(sectionView.getSnapshot().section).toMatchObject({
+      ownerState: "synced",
+      lines: [{ key: key(901) }],
+    })
+    // Шапку відпущено, рядки ТЧ лишились (вигляд ТЧ змонтований); нове
+    // читання шапки старіше за горизонт, який підніме витіснення.
+    held.unsubscribe()
+    vi.advanceTimersByTime(RELEASE)
+    fake.hold = (read) => keysOf(read.query).includes(key(1))
+    watch(header)
+    await settle()
+    const headerRead = fake.take((r) => isKeys(r))
+    watch(core.view(keys(2, 3))).unsubscribe()
+    await settle()
+    vi.advanceTimersByTime(RELEASE)
+    headerRead.answer()
+    await settle()
+    expect(header.getSnapshot().rows[0]).toMatchObject({ state: "stale" })
+    // Рядки лишаються у сховищі, але шапку сховано: їх не показуємо.
+    expect(sectionView.getSnapshot().section).toMatchObject({
+      ownerState: "stale",
+      lines: [],
+    })
+    fake.hold = undefined
+    fake.take().answer()
+    await settle()
+    expect(sectionView.getSnapshot().section).toMatchObject({
+      ownerState: "synced",
       lines: [{ key: key(901) }],
     })
   })
