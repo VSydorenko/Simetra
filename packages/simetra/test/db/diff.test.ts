@@ -63,6 +63,14 @@ function index(name: string, columns: string[]): CatalogIndex {
   }
 }
 
+function shaped(
+  name: string,
+  columns: string[],
+  extra: Partial<CatalogIndex> = {}
+): CatalogIndex {
+  return { ...index(name, columns), ...extra }
+}
+
 function catalog(
   doc: Pick<CatalogTable, "constraints" | "indexes"> & {
     comment?: string
@@ -186,5 +194,70 @@ describe("scopeReplacementViolations", () => {
     expect(result.violations).toEqual([
       "drop index doc.doc_ref_b_idx: replacement doc_org_id_ref_idx already used",
     ])
+  })
+
+  describe("row key last in a search index", () => {
+    const old = () => shaped("doc_org_id_a_idx", ["org_id", "a"])
+    it.each<{
+      name: string
+      accepted: CatalogIndex
+      compiled: CatalogIndex
+      ok: boolean
+    }>([
+      {
+        name: "key appended last to a plain index",
+        accepted: old(),
+        compiled: shaped("doc_org_id_a_id_idx", ["org_id", "a", "id"]),
+        ok: true,
+      },
+      {
+        name: "key not last",
+        accepted: old(),
+        compiled: shaped("doc_org_id_id_a_idx", ["org_id", "id", "a"]),
+        ok: false,
+      },
+      {
+        name: "accepted index is unique",
+        accepted: shaped("doc_org_id_a_idx", ["org_id", "a"], { unique: true }),
+        compiled: shaped("doc_org_id_a_id_idx", ["org_id", "a", "id"]),
+        ok: false,
+      },
+      {
+        name: "a different extra column",
+        accepted: old(),
+        compiled: shaped("doc_org_id_a_b_idx", ["org_id", "a", "b"]),
+        ok: false,
+      },
+      {
+        name: "accepted index has a predicate",
+        accepted: shaped("doc_org_id_a_idx", ["org_id", "a"], {
+          where: "a > 0",
+        }),
+        compiled: shaped("doc_org_id_a_id_idx", ["org_id", "a", "id"]),
+        ok: false,
+      },
+      {
+        name: "accepted index has an expression",
+        accepted: shaped("doc_org_id_a_idx", ["org_id", "a"], {
+          keys: [{ column: "org_id" }, { expression: "lower(a)" }],
+        }),
+        compiled: shaped("doc_org_id_a_id_idx", ["org_id", "a", "id"]),
+        ok: false,
+      },
+      {
+        name: "compiled index has a predicate",
+        accepted: old(),
+        compiled: shaped("doc_org_id_a_id_idx", ["org_id", "a", "id"], {
+          where: "a > 0",
+        }),
+        ok: false,
+      },
+    ])("$name", ({ accepted, compiled, ok }) => {
+      const result = violations(
+        catalog({ constraints: [], indexes: [accepted] }),
+        catalog({ constraints: [], indexes: [compiled] })
+      )
+      expect(result.violations.length === 0).toBe(ok)
+    })
   })
 })
