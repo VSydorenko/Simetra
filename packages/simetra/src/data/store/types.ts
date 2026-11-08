@@ -356,10 +356,14 @@ export interface Writer {
    * виглядів. Виняток безпеки з правила стабільності.
    */
   purge(object: ObjectName, keys: readonly Key[]): void
-  /** Вигляди об'єкта: `needsRefresh` (і `hasNewRows`, якщо задано). */
+  /**
+   * `needsRefresh` / `hasNewRows` на виглядах об'єкта; з `spec` — лише на
+   * цьому вигляді (позначка вигляду, а не всього об'єкта).
+   */
   markViews(
     object: ObjectName,
-    flags: { needsRefresh?: boolean; hasNewRows?: boolean }
+    flags: { needsRefresh?: boolean; hasNewRows?: boolean },
+    spec?: ViewSpec
   ): void
 }
 
@@ -415,6 +419,23 @@ export interface CoreSession {
   confirmedVersion(object: ObjectName, key: Key): number | undefined
   /** Перечитати ключі (сигнал, перепідписка): відсутні прибираються. */
   refetchKeys(object: ObjectName, keys: readonly Key[]): Promise<void>
+  /**
+   * Активні вигляди об'єкта для приймача сигналів: форма (з `where`), ключі
+   * складу й видимість (є підписник). Видимі — першими.
+   */
+  activeViews(object: ObjectName): readonly {
+    readonly spec: ViewSpec
+    readonly keys: readonly Key[]
+    readonly visible: boolean
+  }[]
+  /**
+   * Системне перечитування виглядів об'єкта одним `commit`: склад і
+   * порядок не змінюються (не `refresh()` користувача); зниклі — `removed`.
+   */
+  revalidate(
+    object: ObjectName,
+    options?: { visibleOnly?: boolean }
+  ): Promise<void>
   /** Ключі власних створень, ще не прийнятих жодною підмножиною. */
   ownCreates(object: ObjectName): readonly Key[]
   dehydrate(): CoreSnapshot
