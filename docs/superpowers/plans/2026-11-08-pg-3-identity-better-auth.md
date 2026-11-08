@@ -20,6 +20,13 @@
 > `testProvider`, тимчасові гранти `better_auth` у тест-інфрі (Р3 плану
 > ПГ-2b). Якщо розходиться ім'я — перейменуй у плані за кодом. Якщо
 > розходиться поведінка — звертайся до архітекторки.
+> **Модель ПГ-2b, на яку спирається план** (рішення архітекторки
+> 2026-11-08): міграцію Better Auth і тимчасові гранти `better_auth` у базі
+> `simetra` ставить `pnpm db:pg:start` під замком стека; сесія DB-тестів на
+> `postgres` — суперкористувач з `SET ROLE simetra_owner`. Якщо ПГ-2b на
+> `main` зробив інакше (`globalSetup`, DSN `simetra_owner`), задачі 1 і 5
+> правлять те місце, яке є на `main`: прибрати тимчасові гранти там, де вони
+> стоять, і відкривати окремий пул на DSN ролі гейта.
 >
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -95,8 +102,8 @@ devDependency з ПГ-2a).
 | Р1 | Код гейта ролі входу — `command.privileged-login` у `CommandError`, а не `runtime.privileged-login`. Відмови конструктора рантайму — уже `CommandFailure` з кодами `command.*` (`command.read-role-missing`, `command.model-mismatch`) | §4.2 абзац «Межа довіри» (задача 0) |
 | Р2 | `LOGIN_ROLE_REQUEST_PURPOSES.supabase = ["user", "anonymous"]`: роль входу рантайму на `supabase` стає членом `anon` з `SET`. Рантайм без членства в ролі `anonymous` профілю — `command.read-role-missing` на створенні, без запасного шляху через роль команд. Анонім — гість в обох профілях на дверях Server Function (двері PostgREST `supabase` — блок B4) | спека профілю §4.4; спека П4 §6.2 рядок `simetra_runtime` для `supabase`, §6.11 (задача 0) |
 | Р3 | Сесію вважаємо анонімною, коли claim `PROVIDER_IDENTITY_SOURCES[provider].anonymousClaim` дорівнює `true` або `"true"`. SQL судить так само (`->> … = 'true'`); розбіжність дала б SQL-гостя під роллю `user`. Нового поля каталогу немає: T3 бере claim з даних T0 за `catalog.provider` | §4.4 «Анонімна сесія читає як гість» (задача 0) |
-| Р8 | **Відсутній claim аноніма — відмова, а не роль `user`.** Профіль з `anonymousClaim` ≠ `null` вимагає claim зі значенням `true`, `false`, `"true"` чи `"false"`. Інакше читання відмовляє `command.unauthenticated`. Правило діє лише на claims із суб'єктом (`sub`): запит без суб'єкта T3 відхиляє ще до нього (Рт8), і Р8 цього не змінює. Причина: адаптер host-а, що забув claim, інакше тихо дав би анонімові права `user` (fail-open). Сесії інструментів designer (`dataSession`) і тест-помічники ставлять `false` явно (рішення автора плану після аудиту безпеки; подано архітекторці) | §4.4 (задача 0) |
-| Р9 | **Гейт входу судить факти, а не ім'я.** Відмова, коли `session_user` (сам чи через будь-яке членство, `pg_has_role … 'MEMBER'`) досягає: власника схеми `simetra` (`nspowner`); ролі з іменем `PROVIDER_OWNER_ROLES[provider]`; ролі з `rolsuper` чи `rolbypassrls`; сервісної ролі профілю, коли вона не `null`. `NOINHERIT` тут не захищає: `SET ROLE` дає владу ролі | §4.2 «Межа довіри» (задача 0) |
+| Р8 | **Відсутній claim аноніма — відмова, а не роль `user`.** Профіль з `anonymousClaim` ≠ `null` вимагає claim зі значенням `true`, `false`, `"true"` чи `"false"`. Інакше читання, команда (`run`) і `authorizeChannels` відмовляють `command.unauthenticated` до будь-якого I/O. Команди теж: у проєкті без «Користувачів» `subjectUserFunction` за відсутнього claim повертає `sub::uuid`, тобто анонім виконав би команду з правами `everyUser`. Правило діє лише на claims із суб'єктом (`sub`): запит без суб'єкта T3 відхиляє ще до нього (Рт8), і Р8 цього не змінює. Причина: адаптер host-а, що забув claim, інакше тихо дав би анонімові права `user` (fail-open). Сесії інструментів designer (`dataSession`) і тест-помічники ставлять `false` явно (рішення автора плану після аудиту безпеки; подано архітекторці) | §4.4 (задача 0) |
+| Р9 | **Гейт входу судить факти, а не ім'я.** Відмова, коли `session_user` (сам чи через будь-яке членство, `pg_has_role … 'MEMBER'`) досягає: власника схеми `simetra` (`nspowner`); ролі з іменем `PROVIDER_OWNER_ROLES[provider]`; ролі з `rolsuper`, `rolbypassrls` чи `rolcreaterole`; вбудованих `pg_execute_server_program`, `pg_read_server_files`, `pg_write_server_files`; ролі входу провайдера (`PROVIDER_LOGIN_ROLES`, на `postgres` — `simetra_auth`, власник таблиці Better Auth); сервісної ролі профілю, коли вона не `null`. Обмеження порту: `CommandDatabase` входить роллю входу напряму; пул, що входить суперкористувачем і робить `SET SESSION AUTHORIZATION`, — поза моделлю довіри (такий host уже тримає DSN суперкористувача), це записано в JSDoc `CommandRuntimeOptions.database`. `NOINHERIT` тут не захищає: `SET ROLE` дає владу ролі | §4.2 «Межа довіри» (задача 0) |
 | Р10 | Адаптер `verifySession` Better Auth — у шаблоні host-а (П4-D, `packages/create-simetra-app/template`), а не в цьому плані, хоч §12 спеки називає його в ПГ-3 (рішення архітекторки, межа з П4-D) | §12 рядок ПГ-3 (задача 0) |
 | Р4 | `plan.identity-trigger-locked` судить дані T2 `PROVIDER_IDENTITY_TRIGGER_LOCKED = { supabase: false, postgres: true }`, а не факт власності таблиці. Факт стека Supabase: роль `postgres` знімає тригер на `auth.users`, хоч не власник і не суперкористувач (supautils). Гейт за власністю зламав би `supabase` | §4.2 таблиця мап, новий рядок (задача 0) |
 | Р5 | `plan.identity-table-missing` — спільна перевірка фактів в обох профілях: `to_regclass` таблиці ідентичності й `has_table_privilege(current_user, …, 'TRIGGER')`. Діє лише тоді, коли бажаний стан має тригери провізії. На стеку Supabase обидві умови істинні (перевірено) | немає |
@@ -121,9 +128,9 @@ devDependency з ПГ-2a).
    падає `23505` на ключі Better Auth, рядок «Користувачів» один. Тест —
    задача 6.
 5. **Заміна тригера провізії.** Живий тригер провізії відрізняється від
-   бажаного, і план його перестворює (`DROP`+`CREATE` чи `CREATE OR REPLACE`).
-   На `postgres` — `plan.identity-trigger-locked`, на `supabase` план
-   проходить. Тест — задача 3.
+   бажаного. Якщо план його знімає (`DROP`), на `postgres` —
+   `plan.identity-trigger-locked`, а на `supabase` план проходить. Заміна
+   `CREATE OR REPLACE` проходить в обох профілях. Тест — задача 3.
 
 ---
 
@@ -178,6 +185,11 @@ devDependency з ПГ-2a).
   guard стану схеми `better_auth` з порадою «`pnpm db:pg:start`» не
   змінюється. Інші місця ручних грантів знайди так:
   `grep -rn "GRANT TRIGGER\|GRANT USAGE ON SCHEMA better_auth" packages/*/src packages/*/test scripts`.
+- Modify (після ПГ-2): тести ПГ-2a, що ставлять гранти `better_auth` руками
+  від суперкористувача — `packages/designer/src/schema-engine/__tests__/plan.postgres.db.test.ts`,
+  `template-shadow.postgres.db.test.ts` та інші за grep кроку 4. Ручні
+  гранти замінює `ensurePostgresCluster` тегованого кластера після
+  `migrateBetterAuth`.
 - Test (після ПГ-2): `packages/simetra/src/schema/apply/__tests__/postgres-cluster.test.ts`,
   `packages/designer/src/__tests__/roles-tool.test.ts`,
   `packages/designer/src/__tests__/roles-tool.postgres.db.test.ts`
@@ -191,8 +203,9 @@ devDependency з ПГ-2a).
     `PROVIDER_IDENTITY_SOURCES.postgres.table`. Схема `better_auth` не
     тегується; у тестах теговані лише база й ролі;
   - `PostgresClusterOutcome.skipped: string[]` — нове поле;
-  - фаза читання `ensurePostgresCluster` на з'єднанні цілі читає
-    `has_schema_privilege(owner, schema, 'USAGE')`, `pg_catalog.to_regclass(<qualified>)`
+  - фаза читання `ensurePostgresCluster` на з'єднанні цілі читає (лише коли
+    схема вже є в `pg_namespace`; інакше обидва гранти — `created` у фазі
+    запису, а таблиці немає) `has_schema_privilege(owner, schema, 'USAGE')`, `pg_catalog.to_regclass(<qualified>)`
     і (коли таблиця є) `has_table_privilege(owner, <qualified>, 'TRIGGER')`;
   - фаза запису, після створення схеми `better_auth`:
     - `GRANT USAGE ON SCHEMA <schema> TO <owner>` — `created`, якщо гранту
@@ -258,7 +271,8 @@ devDependency з ПГ-2a).
     `identity`, що починається з `trigger:<schema>.<name>.`. Це умова «бажаний
     стан має тригери провізії»;
   - `interface IdentityTableFacts { usage: boolean; exists: boolean; trigger: boolean; triggers: string[] }`
-    — `triggers` — імена наявних нетехнічних тригерів таблиці (для задачі 3);
+    — `triggers` — імена наявних нетехнічних тригерів таблиці (звіт плану й
+    тест задачі 3);
   - `function identityTableRefusal(facts: IdentityTableFacts, table: string): EngineDiagnostic | undefined`:
     - `usage: false` чи `exists: true, trigger: false` → reason `privilege`;
     - `exists: false` → reason `table`;
@@ -268,9 +282,11 @@ devDependency з ПГ-2a).
       then `simetra roles` again»;
     - `privilege` — «run `simetra roles` again as superuser»;
   - факти читаються в тій самій транзакції `buildPlan`, що кличе
-    `serverVersionRefusal`, і лише коли `hasIdentityTriggers`. Спершу
-    `has_schema_privilege(current_user, $schema, 'USAGE')`: без `USAGE`
-    `to_regclass` кидає `42501`, а не дає `NULL`. Далі, лише з `USAGE` —
+    `serverVersionRefusal`, і лише коли `hasIdentityTriggers`. Спершу oid
+    схеми з `pg_catalog.pg_namespace`: схеми немає — `usage: false,
+    exists: false` і reason `table`, бо `has_schema_privilege` на відсутній
+    схемі кидає `3F000`. Далі за oid — `has_schema_privilege(current_user, oid, 'USAGE')`:
+    без `USAGE` `to_regclass` кидає `42501`, а не дає `NULL`. Далі, лише з `USAGE` —
     `to_regclass`, `has_table_privilege(current_user, …, 'TRIGGER')` і
     `SELECT tgname FROM pg_catalog.pg_trigger WHERE tgrelid = … AND NOT tgisinternal`.
     Ім'я — через `qualified`/`quoteIdent`. Відмова — до першого кроку, в
@@ -279,12 +295,15 @@ devDependency з ПГ-2a).
 - [ ] **Step 1: failing tests:**
   - unit: `identityTableRefusal` — чотири стани фактів, `undefined` лише для
     повних; `hasIdentityTriggers` на моделі з «Користувачами» й без;
-  - DB `postgres`:
+  - DB `postgres` — на тегованому кластері (`taggedClusterSet`,
+    `setTestPasswords`, ПГ-2a), не на спільній базі `simetra`; міграція
+    Better Auth — лише в кейсах, яким потрібна таблиця:
     - ціль без міграції Better Auth — `reason: "table"`, жодного кроку;
     - після міграції без `TRIGGER` (`REVOKE` від суперкористувача в тесті) —
       `reason: "privilege"`;
     - без `USAGE` на `better_auth` — `reason: "privilege"`, а не внутрішня
       помилка;
+    - без схеми `better_auth` — `reason: "table"`;
   - DB `supabase`: наявні кейси `build-plan-provider` зелені (Р5).
 - [ ] **Step 2:** `pnpm --filter simetra test plan` — FAIL.
 - [ ] **Step 3:** реалізація.
@@ -307,34 +326,39 @@ devDependency з ПГ-2a).
   - `export const PROVIDER_IDENTITY_TRIGGER_LOCKED: Readonly<Record<DatabaseProvider, boolean>> = { supabase: false, postgres: true }`;
   - `export const IDENTITY_TRIGGERS: readonly string[]` — значення наявної
     мапи `TRIGGERS` у `platform/units.ts`; мапа лишається джерелом;
-  - `function identityTriggerLocks(steps: readonly PlanStep[], table: { schema: string; name: string }, existing: readonly string[]): EngineDiagnostic[]`
+  - `function identityTriggerLocks(steps: readonly PlanStep[], table: { schema: string; name: string }): EngineDiagnostic[]`
     — тригер з `IDENTITY_TRIGGERS` на таблиці ідентичності, який крок
-    знімає (`destroyed`) **або** створює, коли він уже є в `existing`
-    (`produced`, тобто `CREATE OR REPLACE`). Для нього — діагностика
+    знімає (`destroyed`). Для нього — діагностика
     `plan.identity-trigger-locked` (помилка), параметри
-    `{ trigger, table, login }`. `login` = `PROVIDER_LOGIN_ROLES[provider][0]`;
-    підказка — виконати крок від цієї ролі. `existing` — `triggers` з фактів
-    задачі 2;
+    `{ trigger, table, login }`. `login` = `PROVIDER_LOGIN_ROLES[provider][0]`.
+    Підказка: виконати крок від цієї ролі; якщо живий тригер змінено поза
+    Simetra — це ознака підробки, звір її з власником таблиці. Крок
+    `CREATE OR REPLACE TRIGGER` (лише `produced`) не відмовляє: Postgres
+    вимагає для нього лише привілею `TRIGGER`, який власник має (задача 1);
   - виклик у `buildPlan` після побудови кроків, лише коли
     `PROVIDER_IDENTITY_TRIGGER_LOCKED[provider]`. Відмова — план не пишеться.
-    Перше створення тригера (немає в `existing`) не відмовляє. Зміна тіла
+    Перше створення тригера не відмовляє. Зміна тіла
     функції провізії не відмовляє (§4.2).
 
 - [ ] **Step 1: failing tests:**
   - unit:
     - `destroyed` тригера провізії — відмова;
-    - `produced` тригера, що є в `existing`, — відмова;
-    - `produced` нового — ні;
+    - лише `produced` (заміна чи створення) — ні;
     - інший тригер тієї самої таблиці — ні;
     - дані `false` — ні;
   - DB `postgres` (Review Focus 5): модель застосовано. Тест від ролі `auth`
     (власник таблиці) перевизначає живий тригер провізії: `CREATE OR REPLACE TRIGGER`
     з тим самим іменем, але без умови `WHEN` чи з іншою подією. Наступний
-    план тієї самої моделі хоче повернути бажаний тригер. Очікується
-    `plan.identity-trigger-locked`, жодного кроку. Форму кроку (`DROP`+`CREATE`
-    чи заміна) запиши у звіт фактом;
-  - DB `supabase`: той самий сценарій на `auth.users` від ролі
-    `supabase_auth_admin` (суперкористувач стека, якщо інакше не можна) — план
+    план тієї самої моделі хоче повернути бажаний тригер. Якщо крок —
+    `DROP`+`CREATE` (`destroyed`), очікується `plan.identity-trigger-locked`
+    і жодного кроку. Якщо крок — `CREATE OR REPLACE`, план проходить, а
+    застосування від тегованого власника повертає бажаний тригер. Форму
+    кроку запиши у звіт фактом; тест перевіряє ту гілку, яку дав рушій;
+  - DB `supabase`: той самий сценарій у тегованій базі тестів провайдера
+    (як `build-plan-provider.supabase.db.test.ts`), з відновленням тригера у
+    `finally`. Спільна база стека не зачіпається. З'єднання
+    `testSuperuserUrl()` (`supabase_admin`), `SET ROLE supabase_auth_admin`
+    (власник таблиці), `CREATE OR REPLACE TRIGGER` у тегованій базі — план
     без відмови.
 - [ ] **Step 2:** `pnpm --filter simetra test plan` — FAIL.
 - [ ] **Step 3:** реалізація.
@@ -403,8 +427,9 @@ devDependency з ПГ-2a).
   `WITH INHERIT FALSE, SET TRUE` за правилом ідемпотентності задачі 4a; на
   спільному стеку його ставить `pnpm db:roles` (задача 4a)
 - Modify: `supabase/tests/provider-base-state.test.sql` — `VALUES` у
-  `results_eq` членств `simetra_runtime`: додати пару з `anon`; `plan(…)` не
-  змінюється
+  `results_eq` членств `simetra_runtime`: пара `('anon', false, false, true)`
+  стає першою (`ORDER BY 1`); опис перевірки й коментар «рівно дві пари» —
+  «три»; `plan(…)` не змінюється
 - Modify: тест-помічники й тести, що будують роль входу рантайму чи claims
   читання:
   - `packages/designer/src/__tests__/support/db.ts` (`withRuntimeLogin`);
@@ -452,7 +477,9 @@ devDependency з ПГ-2a).
       роль `user` і не роль команд;
     - `"user"` — як зараз.
   
-  Команди не змінюються: їх судить `current_user_id()` = `NULL`.
+  Команди: `run` перевіряє `sessionKind` до I/O так само — `"invalid"` →
+  `command.unauthenticated` (Р8). Анонімна команда йде як зараз: її судить
+  `current_user_id()` = `NULL`.
 - Фейкова база (`harness.ts`) відповідає на перевірку членства кожної ролі.
 
 - [ ] **Step 1: failing unit tests:**
@@ -463,7 +490,8 @@ devDependency з ПГ-2a).
     - профіль без `anonymousClaim` → `user`;
   - `read-runtime.test.ts`:
     - claims аноніма → `SET LOCAL ROLE` ролі `anonymous`;
-    - `invalid` → `command.unauthenticated` без запиту до бази;
+    - `invalid` → `command.unauthenticated` без запиту до бази, і для
+      `read`, і для `run` (`it.each` за входом);
     - підставлений профіль без `anonymous` у `purposes` — анонім отримує
       `command.unauthenticated`;
     - `readFallback: true` без членства `anonymous` —
@@ -513,7 +541,13 @@ devDependency з ПГ-2a).
 **Interfaces:**
 - Produces:
   - `CommandError` з `code: "command.privileged-login"` і наявним полем
-    `reason`: `"owner"`, `"superuser"`, `"bypassrls"`, `"service"`;
+    `reason`: `"owner"`, `"superuser"`, `"bypassrls"`, `"createrole"`,
+    `"server-files"`, `"provider-login"`, `"service"`. Ці
+    значення — новий перелік `PRIVILEGED_LOGIN_REASONS` поруч із
+    `LIMIT_REASONS` у `errors.ts`, з тим самим оформленням документації.
+    Причина `service` на наявних профілях недосяжна окремо: `service_role`
+    `supabase` має `BYPASSRLS` і спрацьовує раніше, а в `postgres` сервісної
+    ролі немає. Її тримає unit-кейс;
   - у `inspect` перший оператор після `BEGIN READ ONLY` — факти ролі входу
     (Р9):
     ```sql
@@ -526,23 +560,38 @@ devDependency з ПГ-2a).
               AND pg_catalog.pg_has_role(session_user, x.oid, 'MEMBER')) AS superuser,
       EXISTS (SELECT FROM pg_catalog.pg_roles x WHERE x.rolbypassrls
               AND pg_catalog.pg_has_role(session_user, x.oid, 'MEMBER')) AS bypassrls,
+      EXISTS (SELECT FROM pg_catalog.pg_roles x WHERE x.rolcreaterole
+              AND pg_catalog.pg_has_role(session_user, x.oid, 'MEMBER')) AS createrole,
+      EXISTS (SELECT FROM pg_catalog.pg_roles x
+              WHERE x.rolname IN ('pg_execute_server_program', 'pg_read_server_files', 'pg_write_server_files')
+              AND pg_catalog.pg_has_role(session_user, x.oid, 'MEMBER')) AS server_files,
+      EXISTS (SELECT FROM pg_catalog.pg_roles x WHERE x.rolname = ANY ($4::text[])
+              AND pg_catalog.pg_has_role(session_user, x.oid, 'MEMBER')) AS provider_login,
       COALESCE((SELECT pg_catalog.pg_has_role(session_user, s.oid, 'MEMBER')
                 FROM pg_catalog.pg_roles s WHERE s.rolname = $3), false) AS service
     ```
     `$1` = `PLATFORM_SCHEMA`, `$2` = `PROVIDER_OWNER_ROLES[catalog.provider]`,
     `$3` = `PROVIDER_API_ROLES[catalog.provider].service` (на `null` —
-    `NULL`, тоді `false`). `pg_has_role(…, 'MEMBER')` бачить і саму роль, і
+    `NULL`, тоді `false`), `$4` = `PROVIDER_LOGIN_ROLES[catalog.provider]`.
+    `pg_has_role(…, 'MEMBER')` бачить і саму роль, і
     непряме членство незалежно від `INHERIT` і `SET`;
   - причина — перша істинна в порядку `owner`, `superuser`, `bypassrls`,
-    `service`. Відмова — до звірки хешу (`command.model-mismatch`).
-    З'єднання звільняється.
+    `createrole`, `server-files`, `provider-login`, `service`. Відмова — до
+    звірки хешу (`command.model-mismatch`). З'єднання звільняється;
+  - запит фактів — безумовний перший оператор **кожної** транзакції
+    `inspect`, зокрема повтору після `42704` на членстві. Повтор не має
+    прапорця пропуску гейта.
 - `DATA_GUARD_FACTS_SQL` designer не змінюється. Він судить роль
   інструмента до створення рантайму; рантайм тепер судить не слабше.
 
 - [ ] **Step 1: failing tests:**
   - unit (`runtime.test.ts`, фейкова база): кожна причина → своя відмова;
+    `42704` на ролі `anonymous` разом із `bypassrls: true` →
+    `command.privileged-login` (повтор теж судить факти);
     усі `false` → рантайм створюється; відмова іде раніше за
     `command.model-mismatch` за хибного хешу;
+  - теговані ролі входу DB-кейсів — `LOGIN` з `TEST_LOGIN_PASSWORD`
+    (`setTestPasswords` чи `CREATE ROLE … LOGIN PASSWORD` від суперкористувача);
   - DB (Review Focus 2), стек `postgres`. Звичайна сесія тестів на
     `postgres` — суперкористувач з `SET ROLE simetra_owner` (ПГ-2b), тож
     `session_user` там — суперкористувач. Кожен кейс гейта відкриває
@@ -559,6 +608,8 @@ devDependency з ПГ-2a).
       (на PG16+ таке членство дає `SET ROLE` без успадкування), — `bypassrls`.
       Мутація: заміна `'MEMBER'` на `'USAGE'` у запиті фактів — кейс
       червоніє (рішення архітекторки);
+    - тегована роль, член тегованої ролі входу провайдера (`auth`), —
+      `provider-login`; член `pg_read_server_files` — `server-files`;
     - тегована роль входу форми `simetra_runtime` — рантайм створюється;
   - DB, стек `supabase`: DSN ролі `postgres` — `owner`; тегована роль, член
     `service_role`, — `bypassrls` (`service_role` має `BYPASSRLS`;
@@ -598,21 +649,28 @@ API немає:
   `invalid`;
 - конвертація на місці: `UPDATE better_auth."user" SET "isAnonymous" = false`
   від ролі `auth` → провізія один раз; повтор `UPDATE` — без дубля;
-- видалення: `deleteUser` (або `DELETE` від ролі `auth`, якщо API вимагає
-  верифікації) → ідентичність видалено, рядок «Користувачів» лишається з
-  `invalid`;
+- видалення: `DELETE FROM better_auth."user" WHERE id = $1` від ролі `auth`
+  (так видаляє `deleteUser`; API потребує `user.deleteUser.enabled` і
+  верифікації, тож тест іде напряму) → ідентичність видалено, рядок
+  «Користувачів» лишається з `invalid`;
 - гонка провізії (Review Focus 4):
-  - дві паралельні транзакції (два з'єднання тегованого власника: функція
+  - порядок фіксований: A `BEGIN` і виклик з `p_user_id` = X, B `BEGIN` і
+    виклик з тим самим `subject` і `p_user_id` = Y (B чекає замка), A
+    `COMMIT`, B завершується. Обидва результати — X, ідентичність одна.
+    Тобто дві паралельні транзакції (два з'єднання тегованого власника: функція
     провізії не має `EXECUTE` для ролей застосунку) кличуть
     `simetra.provision_user(...)` з тим самим `subject`. Ідентичність одна,
     обидві повертають той самий `user_id`;
-  - дві вставки `better_auth."user"` з тим самим `id` від ролі `auth`:
+  - дві вставки `better_auth."user"` з тим самим `id` від ролі `auth`
+    (колонки `id`, `name`, `email`, `"emailVerified"`, `"createdAt"`,
+    `"updatedAt"`, `"isAnonymous"`):
     друга — `23505` на ключі Better Auth, рядок «Користувачів» один;
 - claims: `{ sub: <id>, is_anonymous: false }` → `current_user_id()` під
-  `commandAs` — id «Користувачів»; `{ sub: <анонім>, is_anonymous: true }`
-  → `NULL`; `sub` з великими літерами → `NULL`. Ключ — `sub` у нижньому
-  регістрі (§4.4); обидва результати збігаються з кейсами
-  `platform-users.supabase.db.test.ts`;
+  `commandAs` — id «Користувачів» (так само, як кейс `valid` у
+  `platform-users.supabase.db.test.ts`); `{ sub: <анонім>, is_anonymous: true }`
+  → `NULL`, бо анонім не провізований (`currentUserFunction` claim аноніма
+  не читає); `sub` з великими літерами → `NULL`, бо ключ — `sub` у нижньому
+  регістрі (§4.4);
 - рядок пресету: колонки `PROVIDER_EVENT_SOURCES.postgres` є в таблиці
   міграції.
 
@@ -634,12 +692,11 @@ API немає:
     міграції, повтор після неї;
   - коди `plan.identity-table-missing`, `plan.identity-trigger-locked`,
     `command.privileged-login`;
-  - анонім — гість.
+  - анонім — гість; claim аноніма обов'язковий (Р8);
+  - для наявного розгортання `supabase` — крок
+    `GRANT anon TO <runtime login> WITH INHERIT FALSE, SET TRUE` (Р2), інакше
+    рантайм не створюється (`command.read-role-missing`).
 - Modify: `docs/ROADMAP.md` — статус ПГ-3 у рядку профілю `postgres`
-- Modify: `packages/designer/skills/simetra-metadata/references/people-and-rights.md` —
-  крок для наявного розгортання `supabase`:
-  `GRANT anon TO <runtime login> WITH INHERIT FALSE, SET TRUE` (Р2), інакше
-  рантайм не створюється (`command.read-role-missing`)
 
 - [ ] **Step 1:** правки. Без лічильників і наративу фаз.
 - [ ] **Step 2:** `python3 scripts/check-doc-anchors.py` і `pnpm format:check` — зелені.
@@ -671,5 +728,5 @@ API немає:
 - Рантайм не створюється на ролі власника, його члені, суперкористувачі чи
   ролі з `BYPASSRLS`.
 - DB-тести провізії на таблиці справжньої міграції Better Auth зелені.
-  `current_user_id()` з claims Better Auth дає той самий результат, що й на
-  `supabase`.
+  `current_user_id()` з claims Better Auth дає id провізованого
+  користувача, а для аноніма й чужого регістру `sub` — `NULL`.
