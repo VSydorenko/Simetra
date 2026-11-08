@@ -16,7 +16,9 @@ export function centrifugoTransport(options: {
   downDelayMs?: number
 }): SignalPort & { client: Centrifuge; close(): void } {
   const client = new Centrifuge(options.url, {
-    ...(options.websocket !== undefined ? { websocket: options.websocket } : {}),
+    ...(options.websocket !== undefined
+      ? { websocket: options.websocket }
+      : {}),
     minReconnectDelay: 50,
     maxReconnectDelay: 500,
   })
@@ -30,10 +32,13 @@ export function centrifugoTransport(options: {
     subscribe(channels, onSignal, onError) {
       subs = channels.map((channel) => {
         const sub = client.newSubscription(channel)
-        sub.on("publication", (ctx) => later(() => onSignal(ctx.channel, ctx.data)))
+        sub.on("publication", (ctx) =>
+          later(() => onSignal(ctx.channel, ctx.data))
+        )
         sub.on("subscribed", (ctx) =>
           later(() => {
-            for (const h of subscribed) h({ recovered: ctx.wasRecovering && ctx.recovered })
+            for (const h of subscribed)
+              h({ recovered: ctx.wasRecovering && ctx.recovered })
           })
         )
         sub.on("subscribing", (ctx) => {
