@@ -95,7 +95,7 @@ devDependency з ПГ-2a).
 | Р1 | Код гейта ролі входу — `command.privileged-login` у `CommandError`, а не `runtime.privileged-login`. Відмови конструктора рантайму — уже `CommandFailure` з кодами `command.*` (`command.read-role-missing`, `command.model-mismatch`) | §4.2 абзац «Межа довіри» (задача 0) |
 | Р2 | `LOGIN_ROLE_REQUEST_PURPOSES.supabase = ["user", "anonymous"]`: роль входу рантайму на `supabase` стає членом `anon` з `SET`. Рантайм без членства в ролі `anonymous` профілю — `command.read-role-missing` на створенні, без запасного шляху через роль команд. Анонім — гість в обох профілях на дверях Server Function (двері PostgREST `supabase` — блок B4) | спека профілю §4.4; спека П4 §6.2 рядок `simetra_runtime` для `supabase`, §6.11 (задача 0) |
 | Р3 | Сесію вважаємо анонімною, коли claim `PROVIDER_IDENTITY_SOURCES[provider].anonymousClaim` дорівнює `true` або `"true"`. SQL судить так само (`->> … = 'true'`); розбіжність дала б SQL-гостя під роллю `user`. Нового поля каталогу немає: T3 бере claim з даних T0 за `catalog.provider` | §4.4 «Анонімна сесія читає як гість» (задача 0) |
-| Р8 | **Відсутній claim аноніма — відмова, а не роль `user`.** Профіль з `anonymousClaim` ≠ `null` вимагає claim зі значенням `true`, `false`, `"true"` чи `"false"`. Інакше читання відмовляє `command.unauthenticated`. Причина: адаптер host-а, що забув claim, інакше тихо дав би анонімові права `user` (fail-open). Сесії інструментів designer (`dataSession`) і тест-помічники ставлять `false` явно (рішення автора плану після аудиту безпеки; подано архітекторці) | §4.4 (задача 0) |
+| Р8 | **Відсутній claim аноніма — відмова, а не роль `user`.** Профіль з `anonymousClaim` ≠ `null` вимагає claim зі значенням `true`, `false`, `"true"` чи `"false"`. Інакше читання відмовляє `command.unauthenticated`. Правило діє лише на claims із суб'єктом (`sub`): запит без суб'єкта T3 відхиляє ще до нього (Рт8), і Р8 цього не змінює. Причина: адаптер host-а, що забув claim, інакше тихо дав би анонімові права `user` (fail-open). Сесії інструментів designer (`dataSession`) і тест-помічники ставлять `false` явно (рішення автора плану після аудиту безпеки; подано архітекторці) | §4.4 (задача 0) |
 | Р9 | **Гейт входу судить факти, а не ім'я.** Відмова, коли `session_user` (сам чи через будь-яке членство, `pg_has_role … 'MEMBER'`) досягає: власника схеми `simetra` (`nspowner`); ролі з іменем `PROVIDER_OWNER_ROLES[provider]`; ролі з `rolsuper` чи `rolbypassrls`; сервісної ролі профілю, коли вона не `null`. `NOINHERIT` тут не захищає: `SET ROLE` дає владу ролі | §4.2 «Межа довіри» (задача 0) |
 | Р10 | Адаптер `verifySession` Better Auth — у шаблоні host-а (П4-D, `packages/create-simetra-app/template`), а не в цьому плані, хоч §12 спеки називає його в ПГ-3 (рішення архітекторки, межа з П4-D) | §12 рядок ПГ-3 (задача 0) |
 | Р4 | `plan.identity-trigger-locked` судить дані T2 `PROVIDER_IDENTITY_TRIGGER_LOCKED = { supabase: false, postgres: true }`, а не факт власності таблиці. Факт стека Supabase: роль `postgres` знімає тригер на `auth.users`, хоч не власник і не суперкористувач (supautils). Гейт за власністю зламав би `supabase` | §4.2 таблиця мап, новий рядок (задача 0) |
@@ -430,7 +430,12 @@ devDependency з ПГ-2a).
   - анонімні claims бачать рядки лише першого об'єкта;
   - звичайний користувач бачить обидва;
   - `"true"` поводиться так само, як `true`;
-  - claims без claim аноніма — `command.unauthenticated`.
+  - claims з `sub`, але без claim аноніма — `command.unauthenticated`;
+  - запит без суб'єкта — claims форми справжнього запиту без сесії (на
+    `supabase` — `{ role: "anon" }` ключа `anon`, на `postgres` — `{}`) —
+    `command.unauthenticated` до будь-якого запиту в базу. Так само було до
+    Р8 (Рт8, `sessionClaimsSchema` вимагає `sub`); кейс фіксує, що Р8 цього
+    не змінює (уточнення архітекторки).
 - [ ] **Step 3:** `pnpm --filter simetra test runtime read-runtime` і
   `pnpm --filter @simetrajs/designer test data` — FAIL.
 - [ ] **Step 4:** реалізація; помічники за переліком.
@@ -495,6 +500,10 @@ devDependency з ПГ-2a).
     - тегована роль без атрибутів, член тегованої ролі з `BYPASSRLS` з
       `SET` — `bypassrls`;
     - тегована роль, член власника через проміжну роль, — `owner`;
+    - тегована роль, член ролі з `BYPASSRLS` **з `INHERIT FALSE, SET TRUE`**
+      (на PG16+ таке членство дає `SET ROLE` без успадкування), — `bypassrls`.
+      Мутація: заміна `'MEMBER'` на `'USAGE'` у запиті фактів — кейс
+      червоніє (рішення архітекторки);
     - тегована роль входу форми `simetra_runtime` — рантайм створюється;
   - DB, стек `supabase`: DSN ролі `postgres` — `owner`; тегована роль, член
     `service_role`, — `bypassrls` (`service_role` має `BYPASSRLS`;
