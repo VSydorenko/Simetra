@@ -123,8 +123,10 @@ function forget(
     const target = s.form.include.some((step) => step.target === o.name)
     if (!own && !target && !s.included.has(o.name)) continue
     if (own) {
-      if (spec.kind === "card" && purged.has(spec.key)) s.purged = true
-      if (spec.kind === "section" && purged.has(spec.owner)) s.purged = true
+      if (!ctx.defects.has("purge-keeps-views")) {
+        if (spec.kind === "card" && purged.has(spec.key)) s.purged = true
+        if (spec.kind === "section" && purged.has(spec.owner)) s.purged = true
+      }
       s.owned = without(s.owned, dropped)
       if (spec.kind === "keys" || spec.kind === "full") {
         s.layout = s.layout.filter((key) => !dropped.has(key))
@@ -550,6 +552,12 @@ async function revalidateViews(
     token,
     `revalidate ${o.name}`
   )
+  // Дефект самотесту «системне перечитування через завантаження».
+  if (ctx.defects.has("system-reread-via-load")) {
+    for (const { s } of results) {
+      if (s.alive && !s.purged) ctx.registry.load(s)
+    }
+  }
   // Вигляд із власним завантаженням у польоті (П12: його перезапускає purge)
   // оновить те завантаження; решта — новий прохід з новою епохою старту.
   await revalidateViews(

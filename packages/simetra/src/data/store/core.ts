@@ -257,6 +257,7 @@ export function createCore(options: {
       }
     },
     remove(scope, o, key, readEpoch) {
+      if (defects.has("absent-row-ignored")) return
       o.rows.remove(scope, key, readEpoch)
       rowViews.touch(o.name, key)
       // `removed` стирає й рядки ТЧ власника (§6.2, правило 5); власник без

@@ -120,7 +120,8 @@ export function createEpochs(
       const known = seen.get(id)?.version ?? -Infinity
       seen.delete(id)
       seen.set(id, { version: Math.max(known, version), epoch: at })
-      trim(seen, limits.seenMax, (v) => v.epoch, skipSeenHorizon)
+      if (!defects.has("unbounded-seen"))
+        trim(seen, limits.seenMax, (v) => v.epoch, skipSeenHorizon)
     },
     seen: (id) => seen.get(id),
     evictedSince: (id, readEpoch) => (horizon[bucket(id)] ?? 0) > readEpoch,

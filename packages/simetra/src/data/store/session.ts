@@ -56,6 +56,7 @@ export function createSession(options: {
   const epochs = createEpochs(options.limits, defects)
   const sessionController = new AbortController()
   const controllers = new Set<AbortController>()
+  let leaked = false
   const listeners = new Set<() => void>()
   const closeHooks: Array<() => void> = []
   let closed: CloseReason | undefined
@@ -183,6 +184,11 @@ export function createSession(options: {
       return {
         signal: controller.signal,
         release() {
+          // Дефект самотесту: перший контролер не звільняється.
+          if (defects.has("controller-leak") && !leaked) {
+            leaked = true
+            return
+          }
           controllers.delete(controller)
         },
       }

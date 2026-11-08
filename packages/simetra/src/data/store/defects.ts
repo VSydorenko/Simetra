@@ -32,6 +32,16 @@ export type DefectFlag =
   | "removed-keeps-sections"
   /** The revision and cached view of a row outlive the row. */
   | "revision-survives-row"
+  /** A tracked request controller is not released once (the first). */
+  | "controller-leak"
+  /** A purge leaves cards and sections of purged keys alive. */
+  | "purge-keeps-views"
+  /** A by-key read that finds no row changes nothing. */
+  | "absent-row-ignored"
+  /** The version memory is never trimmed. */
+  | "unbounded-seen"
+  /** `revalidate` re-reads the views through a full load. */
+  | "system-reread-via-load"
 
 /** The defect set of a core; empty outside the self-check. */
 export type Defects = ReadonlySet<DefectFlag>
