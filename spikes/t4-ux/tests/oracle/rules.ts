@@ -42,7 +42,7 @@ export interface OracleLog {
   snaps: Snap[]
   marks: { name: string; opts: MarkOpts; t: number; at: number }[]
   shifts: { t: number; value: number; hadRecentInput: boolean; seg: number }[]
-  appMutationsAfterParse: { t: number; type: string; target: string; attr: string | null }[]
+  appMutationsAfterParse: { t: number; type: string; target: string; attr: string | null; added?: string; removed?: string }[]
   parsedAt: number | null
   hydratedAt?: number
   recoverable?: { message: string }[]
@@ -82,7 +82,7 @@ export function analyze(log: OracleLog): Violation[] {
   // застосунку не змінюється (React гідратує без жодної мутації).
   const firstMarkT = log.marks[0]?.t ?? Infinity
   for (const m of log.appMutationsAfterParse)
-    if (m.t < firstMarkT) push({ kind: 'hydration-mutation', seg: 0, detail: `${m.type} ${m.target}${m.attr ? `@${m.attr}` : ''}` })
+    if (m.t < firstMarkT) push({ kind: 'hydration-mutation', seg: 0, detail: `${m.type} ${m.target}${m.attr ? `@${m.attr}` : ''} +[${m.added ?? ''}] -[${m.removed ?? ''}]` })
   for (const e of log.recoverable ?? []) push({ kind: 'hydration-error', seg: 0, detail: e.message })
 
   for (const s of log.shifts)
@@ -107,6 +107,12 @@ export function analyze(log: OracleLog): Violation[] {
   let prev: Snap | undefined
 
   for (const s of log.snaps) {
+    // До першого rendering update (жодного rAF) браузер нічого не малював:
+    // стан frame 0, змінений ще до першого кадру, — проміжний стан розбору
+    // HTML (WebKit вимірює його інакше), не кадр. Останній стан frame 0
+    // малюється першим кадром. Після нього — суворо: стан після кожної задачі.
+    const next = log.snaps[log.snaps.indexOf(s) + 1]
+    if (s.frame === 0 && next && next.frame === 0) continue
     for (const r of s.regions) {
       // Порожня зона чи скелет, коли дані вже були показані в цій зоні.
       if ((r.rows.length === 0 || r.skeleton) && hadData.has(r.name) && !allows(s.seg, 'clear'))

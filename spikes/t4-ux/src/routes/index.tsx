@@ -88,7 +88,7 @@ function ListPage() {
           data-action="logout"
           onClick={async () => {
             // Виняток безпеки: дані старого суб'єкта прибираються до будь-якого очікування.
-            holder.replace(null)
+            if (!breaks.has('keepcore')) holder.replace(null)
             await logout()
             await navigate({ to: '/login' })
           }}
@@ -107,7 +107,9 @@ function ListPage() {
               <ListRow key={v.key} view={v} index={first + i} rowH={rowH} onDismiss={() => core?.dismissRemoved(LIST)} onDelete={() => writer?.remove(v.key)} />
             ))}
             {tail ? (
-              <div className="row placeholder" data-loading-more style={{ top: snap.rows.length * rowH }}>
+              // Слот «далі» прив'язаний до позиції: після підвантаження старий слот
+              // замінюють рядки, а новий з'являється нижче — нічого не переїжджає.
+              <div key={`more-${snap.rows.length}`} className="row placeholder" data-loading-more style={{ top: snap.rows.length * rowH }}>
                 <span />
                 <span>{snap.loadingMore ? 'Завантаження…' : ''}</span>
               </div>

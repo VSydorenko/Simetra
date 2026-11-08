@@ -63,11 +63,22 @@
     if (log.parsedAt !== null) {
       const app = document.getElementById('app')
       for (const r of records)
-        if (app && app.contains(r.target))
-          log.appMutationsAfterParse.push({ t: performance.now(), type: r.type, target: r.target.nodeName, attr: r.attributeName })
+        if (app && app.contains(r.target)) {
+          // Атрибут, записаний тим самим значенням (React так гідратує value
+          // контрольованого input), видимої зміни не дає.
+          if (r.type === 'attributes' && r.oldValue === r.target.getAttribute(r.attributeName)) continue
+          log.appMutationsAfterParse.push({
+            t: performance.now(),
+            type: r.type,
+            target: r.target.nodeName + (r.target.getAttribute ? '.' + (r.target.getAttribute('class') || '') : ''),
+            attr: r.attributeName,
+            added: Array.from(r.addedNodes || []).map((n) => n.nodeName).join(','),
+            removed: Array.from(r.removedNodes || []).map((n) => n.nodeName).join(','),
+          })
+        }
     }
     take('mo')
-  }).observe(document, { subtree: true, childList: true, attributes: true, characterData: true })
+  }).observe(document, { subtree: true, childList: true, attributes: true, attributeOldValue: true, characterData: true })
 
   document.addEventListener('scroll', () => take('scroll'), true)
 

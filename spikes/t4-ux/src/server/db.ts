@@ -24,7 +24,7 @@ function uuid(subject: string, n: number): string {
 function seed(subject: string): Dataset {
   const rows = new Map<string, Row & { num: number; note: string }>()
   const lines = new Map<string, Line[]>()
-  const prefix = subject === 'bob' ? 'Bravo' : 'Alpha'
+  const prefix = subject.startsWith('bob') ? 'Bravo' : 'Alpha'
   for (let n = 1; n <= TOTAL; n++) {
     const id = uuid(subject, n)
     rows.set(id, {
