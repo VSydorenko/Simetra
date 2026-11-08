@@ -212,6 +212,20 @@ describe("issueReason over the data envelope", () => {
     }
     expect(issueReason(new z.ZodError([union]))).toBe("tabular-too-large")
   })
+
+  it("does not treat the client-only reason disposed as a limit reason", () => {
+    const issue = (reason: string): z.core.$ZodIssue => ({
+      code: "custom",
+      path: [],
+      message: "x",
+      params: { reason },
+    })
+    const error = new z.ZodError([issue("disposed"), issue("batch-too-large")])
+    expect(issueReason(error)).toBe("batch-too-large")
+    const onlyDisposed = new z.ZodError([issue("plain"), issue("disposed")])
+    const picked = decidingIssue(onlyDisposed)
+    expect(picked && issueReason(new z.ZodError([picked]))).toBe("plain")
+  })
 })
 
 describe("prepareRead reasons", () => {

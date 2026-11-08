@@ -686,8 +686,12 @@ function readResult(
   return { rows: out }
 }
 
+// `disposed` — суто клієнтська причина: сервер ніколи її не несе, тож issue з
+// нею не має вважатися межею й витісняти справжню причину.
 const LIMIT_REASON_VALUES: ReadonlySet<string> = new Set(
-  Object.values(LIMIT_REASONS)
+  Object.values(LIMIT_REASONS).filter(
+    (reason) => reason !== LIMIT_REASONS.disposed
+  )
 )
 
 const reasonOf = (issue: z.core.$ZodIssue): string | undefined => {

@@ -16,6 +16,7 @@ import {
   installConsumer,
   REPO,
   listPackedFiles,
+  packageRoots,
   packWorkspace,
   readPackedManifest,
   removeTemps,
@@ -98,6 +99,7 @@ describe("simetra", () => {
     const manifest = await readPackedManifest(tarballs.simetra)
     expect(Object.keys(manifest.exports as object).sort()).toEqual([
       "./compiler",
+      "./data",
       "./model",
       "./schema",
       "./schemas/*",
@@ -113,6 +115,8 @@ describe("simetra", () => {
       "dist/model/index.js",
       "dist/model/index.d.ts",
       "dist/compiler/index.js",
+      "dist/data/index.js",
+      "dist/data/index.d.ts",
       "dist/schema/index.js",
       "dist/server/index.js",
       "dist/server/index.d.ts",
@@ -133,8 +137,43 @@ describe("simetra", () => {
       f.endsWith(".js")
     )
     expect(
-      js.filter((f) => !/^dist\/(model|compiler|schema|server)\//.test(f))
+      js.filter((f) => !/^dist\/(model|compiler|data|schema|server)\//.test(f))
     ).toEqual([])
+  })
+
+  it("declares the data-tier peers as exact optional RC pins", async () => {
+    const m = await readPackedManifest(tarballs.simetra)
+    // Точний pin лише для RC-пакетів; діапазони — для react і query-core
+    expect(m.peerDependencies).toEqual({
+      "@tanstack/db": "1.0.0-rc.1.4",
+      "@tanstack/query-core": "^5.90.15",
+      "@tanstack/query-db-collection": "1.5.1",
+      "@tanstack/react-db": "1.0.0-rc.1.4",
+      react: "^19.3.1",
+    })
+    // Серверний споживач peer не ставить
+    expect(
+      Object.values(
+        m.peerDependenciesMeta as Record<string, { optional?: boolean }>
+      ).map((v) => v.optional)
+    ).toEqual([true, true, true, true, true])
+    expect(Object.keys(m.peerDependenciesMeta as object).sort()).toEqual(
+      Object.keys(m.peerDependencies as object).sort()
+    )
+  })
+
+  it("imports every server-side tier in plain Node without the data peers", async () => {
+    // `simetra/data` тут не імпортується: його рантайм тягне `@tanstack/query-core`,
+    // і його вхід доводить споживач із peer
+    const { stdout } = await exec(
+      process.execPath,
+      ["--input-type=module", "-e", 'await import("simetra/server")'],
+      { cwd: consumer }
+    )
+    expect(stdout).toBe("")
+    await expect(
+      readFile(join(consumer, "node_modules/react/package.json"))
+    ).rejects.toThrow()
   })
 
   it("imports every tier in plain Node", async () => {
@@ -168,6 +207,201 @@ describe("simetra", () => {
         "ascii",
       ])
     ).resolves.toBeDefined()
+  })
+})
+
+/** Вміст файлів tarball-а під `dir` із заданим закінченням імені. */
+async function packedSources(
+  tarball: string,
+  dir: string,
+  suffix: string
+): Promise<Map<string, string>> {
+  const files = (await listPackedFiles(tarball)).filter(
+    (f) => f.startsWith(dir) && f.endsWith(suffix)
+  )
+  const sources = new Map<string, string>()
+  for (const f of files) {
+    const { stdout } = await exec("tar", ["-xOzf", tarball, `package/${f}`])
+    sources.set(f, stdout)
+  }
+  return sources
+}
+
+/** Голі специфікатори статичних і динамічних імпортів модуля ES. */
+function bareSpecifiers(source: string): string[] {
+  const found = [
+    ...source.matchAll(/\bfrom\s*["']([^"']+)["']/g),
+    ...source.matchAll(/\bimport\s*\(?\s*["']([^"']+)["']/g),
+  ].map((m) => m[1])
+  return [...new Set(found.filter((s) => !s.startsWith(".")))].sort()
+}
+
+// Пара «поточні» звіту П0 (а) і Vite з нижньою межею збирача шаблону host-а
+const HOST_STACK = {
+  "@tanstack/react-query": "5.107.1",
+  "@tanstack/react-router": "1.170.46",
+  "@tanstack/react-start": "1.169.4",
+  "react-dom": "19.3.1",
+  vite: "8.3.6",
+}
+
+// Бібліотеки зі станом на рівні модуля, які імпортують і host, і пакет
+// (правило списку звіту П0 (а), спека П4-B §3): друга копія кожної з них —
+// другий кеш, реєстр чи контекст React у тому самому бандлі
+const SINGLE_COPY = [
+  "react",
+  "react-dom",
+  "@tanstack/db",
+  "@tanstack/db-ivm",
+  "@tanstack/react-db",
+  "@tanstack/query-core",
+  "zod",
+  "simetra",
+]
+
+const MODULE_IDS = "module-ids.json"
+
+/**
+ * Клієнтський вхід host-а. Кожна бібліотека списку єдиності вжита
+ * по-справжньому, інакше tree-shaking прибрав би її модулі й гейт пройшов би
+ * вхолосту.
+ */
+const HOST_FILES = {
+  "index.html":
+    '<!doctype html><div id="root"></div><script type="module" src="/src/main.js"></script>\n',
+  // Плагін лише пише id модулів кожного чанка; розбирає їх тест, тож правило
+  // коренів одне й живе в репо
+  "vite.config.mjs": `import { writeFileSync } from "node:fs"
+export default {
+  logLevel: "warn",
+  build: {
+    rolldownOptions: {
+      plugins: [
+        {
+          name: "module-ids",
+          generateBundle(_options, bundle) {
+            const ids = Object.values(bundle).flatMap((c) =>
+              c.type === "chunk" ? c.moduleIds : []
+            )
+            writeFileSync(${JSON.stringify(MODULE_IDS)}, JSON.stringify(ids))
+          },
+        },
+      ],
+    },
+  },
+}
+`,
+  "src/main.js": `import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
+import {
+  createCollection,
+  localOnlyCollectionOptions,
+  useLiveQuery,
+} from "@tanstack/react-db"
+import { createElement } from "react"
+import { createRoot } from "react-dom/client"
+import { createDataRuntime } from "simetra/data"
+import { z } from "zod"
+
+const rows = createCollection(
+  localOnlyCollectionOptions({
+    getKey: (row) => row.id,
+    schema: z.object({ id: z.string() }),
+  })
+)
+const runtime = createDataRuntime({
+  catalog: { format: 1, snapshotHash: "gate", provider: "supabase", objects: [] },
+  transport: async () => ({ ok: true, value: null }),
+  subject: "gate",
+})
+
+function App() {
+  const { data } = useLiveQuery((q) => q.from({ rows }))
+  return createElement("pre", null, runtime.subject + ":" + data.length)
+}
+
+createRoot(document.getElementById("root")).render(
+  createElement(
+    QueryClientProvider,
+    { client: new QueryClient() },
+    createElement(App)
+  )
+)
+`,
+}
+
+describe("simetra/data", () => {
+  it("public declarations do not reference @tanstack", async () => {
+    // Типи `simetra/data` — контракт пакета, а не бібліотек фасаду (§14.3)
+    const dts = await packedSources(tarballs.simetra, "dist/data/", ".d.ts")
+    expect([...dts.keys()]).toContain("dist/data/index.d.ts")
+    expect(
+      [...dts].filter(([, s]) => s.includes("@tanstack/")).map(([f]) => f)
+    ).toEqual([])
+  })
+
+  it("imports peers by bare specifiers instead of bundling them", async () => {
+    // Вбудована копія peer-а — друга копія в бандлі споживача, якої граф
+    // модулів не покаже: вона лежить у корені `simetra`
+    const m = await readPackedManifest(tarballs.simetra)
+    const allowed = new Set([
+      ...Object.keys(m.peerDependencies as object),
+      "simetra/model",
+    ])
+    const specifiers = [
+      ...(await packedSources(tarballs.simetra, "dist/data/", ".js")).values(),
+    ].flatMap(bareSpecifiers)
+    expect(specifiers).toContain("@tanstack/query-core")
+    expect(specifiers.filter((s) => !allowed.has(s))).toEqual([])
+  })
+})
+
+describe("simetra/data in a pnpm host with the TanStack stack", () => {
+  let consumer: string
+
+  beforeAll(async () => {
+    const m = await readPackedManifest(tarballs.simetra)
+    const dev = m.devDependencies as Record<string, string>
+    // Peer-и — точними версіями, проти яких пакет іде у своїх тестах
+    const peers = Object.fromEntries(
+      Object.keys(m.peerDependencies as object).map((p) => [p, dev[p]])
+    )
+    const zod = (m.dependencies as Record<string, string>).zod
+    // pnpm, а не npm: пласка розкладка npm дедуплікує сама, і гейт там
+    // пройшов би вхолосту (звіт П0 (а))
+    consumer = await installConsumer([tarballs.simetra], "pnpm", {
+      dependencies: { ...peers, ...HOST_STACK, zod },
+      files: HOST_FILES,
+    })
+  })
+
+  it("imports simetra/data in plain Node", async () => {
+    const { stdout } = await exec(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        'const d = await import("simetra/data"); console.log(typeof d.createDataRuntime)',
+      ],
+      { cwd: consumer }
+    )
+    expect(stdout.trim()).toBe("function")
+  })
+
+  it("bundles one copy of each module-state library", async () => {
+    await exec(join(consumer, "node_modules/.bin/vite"), ["build"], {
+      cwd: consumer,
+    })
+    const ids = JSON.parse(
+      await readFile(join(consumer, MODULE_IDS), "utf8")
+    ) as string[]
+    // Рівно один корінь: 0 — бібліотеку прибрав tree-shaking (гейт вхолосту),
+    // 2+ — дві копії стану
+    expect(
+      Object.entries(packageRoots(ids, SINGLE_COPY)).filter(
+        ([, roots]) => roots.length !== 1
+      ),
+      "packages whose bundle roots are not exactly one"
+    ).toEqual([])
   })
 })
 

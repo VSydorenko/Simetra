@@ -659,8 +659,9 @@ SourceAdapter = {
 ### 5.2 Адаптер Server Function
 
 Тонкий: `read` → `transport({ subject, request: { type: "read", query } })`.
-Помилка відповіді стає `CommandFailure` того самого коду. Цей адаптер —
-типовий для обох профілів (§5.1).
+Помилка відповіді стає `CommandFailure` того самого коду; виняток
+транспорту — `command.unavailable` (без `reason`, оригінал — у журнал
+рантайму записом `{ kind: "transport-failed", error }`, §6.1). Цей адаптер — типовий для обох профілів (§5.1).
 
 ### 5.3 Адаптер PostgREST
 
@@ -902,7 +903,9 @@ supabase-js з **літерала** `select` з аліасами й embed `!<fk>
   резолвить її каталогом під час створення й тримає UUID об'єкта; невідомий
   об'єкт — `TypeError`); `fullLimit` — межа `full` (типово 5 000);
   `strict` (типово `false`; host ставить `true` у розробці); `log` —
-  журнал рантайму (типово `console.warn`), запис перестворення —
+  журнал рантайму (типово `console.warn`; збій журналу результату запиту
+  не змінює), запис — `DataLogEntry`: виняток транспорту —
+  `{ kind: "transport-failed", error }` (§5.2), перестворення —
   `{ kind: "full-truncated", object, limit }`.
 
 ### 6.2 Власність рядків
@@ -1403,6 +1406,7 @@ useCan(action, object, { scope?, row? }) → true | false | "unknown"
 | `command.stale-client` | запит `version` і переоцінка позначки (§10); `onStaleClient(object)`; автоматичного повтору немає |
 | `command.unavailable` `schema` (PostgREST, §5.3) | запит `version` і переоцінка сумісності |
 | `command.unauthenticated` `session-changed` | `onSessionChanged` і `dispose()` (§6.1) |
+| `command.unavailable` з reason `disposed` | без дії: ні перечитування, ні журналу. Рантайм закрито (`dispose()`), тож перечитувати нікому; рядок стоїть перед загальними рядками `command.unavailable`. Лише клієнтський reason; на дроті не буває |
 | `command.unavailable` на читанні | нічого: повтор — рішення хоста |
 | `command.unavailable` на `run` | результат невідомий: фасад перечитує ключі операції; для `create` кореня виду скоупу (id дає T3) — перечитує знімок прав і перелік скоупів; автоматичного повтору немає |
 | `command.busy` (`55P03`), `command.timeout` (`57014`; `25P04` і `25P03` до надсилання `COMMIT`; і для читання) | відкат без автоповтору; повтор — рішення хоста |
@@ -2336,10 +2340,10 @@ embed невидимої цілі й сплеску (§4.4, §5.3, §8). Лиш�
 | Негативні DB-кейси каналу прав скоупу й глобального; еквівалентність предиката T4 для каналів прав | B6 |
 | DB-тест: `EXECUTE` на `simetra.signal` має лише `simetra_command` | B2 |
 | Прибирання рядків ТЧ при втраті скоупу — через прибраних власників (у ТЧ немає колонки скоупу); кейс приймача | B5 |
-| Заборони викликів методів фасаду — `no-restricted-properties`, а не `no-restricted-syntax` (той уже в `eslint.standard-columns.js`, опції заміняються) | B3-1 |
+| Заборони викликів методів фасаду — `no-restricted-properties`, а не `no-restricted-syntax` (той уже в `eslint.standard-columns.js`, опції заміняються) | закрито планом B3-1 |
 | `kind` об'єкта в спільній частині запису каталогу, `provider` у клієнтському каталозі | B1b-1 |
-| Закритий набір шляхів фікстур T4 для `allowDefaultProject` (межа 8 файлів typescript-eslint) | B3-1 |
-| Перевірка `.d.ts` `simetra/data` без `@tanstack/*` — у пак-тесті (`published-packages.pack.test.ts`), бо `dist` дає лише `build:package` | B3-1 |
+| Закритий набір шляхів фікстур T4 для `allowDefaultProject` (межа 8 файлів typescript-eslint) | закрито планом B3-1 |
+| Перевірка `.d.ts` `simetra/data` без `@tanstack/*` — у пак-тесті (`published-packages.pack.test.ts`), бо `dist` дає лише `build:package` | закрито планом B3-1 |
 | devDependencies jsdom-тестів: `react-dom`, `@testing-library/dom`, `@types/react` (точні версії, syncpack) | B3-2b |
 | Де живуть e2e-тести, клієнт Realtime як devDependency, застосування моделі через designer | B2 |
 | Як host обмежує тіло Server Function до розбору JSON (`Content-Length`, підрахунок потоку) на контейнері й Vercel; тест шаблону | П4-D |
@@ -2401,4 +2405,7 @@ embed невидимої цілі й сплеску (§4.4, §5.3, §8). Лиш�
 | спека системної схеми | §3 | у схемі `simetra` — `signal`, `signal_rights`, `signal_user_rights`, `signal_topic_allowed`, `rights_client_snapshot` | Рд8, Рд9, Рд11 | B2, B5, B6 |
 | спека П4-D і застосування схеми | `doctor`, `apply` | діагностика власників, у яких ТЧ перевищує зменшену межу запису ТЧ | Рд27 | П4-D |
 | платформна спека | §7 | розкатка збірки клієнта після розширення — лише після кроку застосування «кеш PostgREST бачить нові колонки» | §10 | П3-4 |
-| карта перевикористання | розділ 6 | точні версії RC для T4; діапазони `react` і `@tanstack/query-core` | Рд15 | B3-1 |
+| карта перевикористання | розділ 6 | точні версії RC для T4; діапазони `react` і `@tanstack/query-core` | Рд15 | внесено (B3-1) |
+| ця спека | §7.3 | `command.unavailable` з `reason: "disposed"` — запит рантайму після `dispose()` (новий чи з пізньою відповіддю); фасад нічого не робить: ні перечитування, ні журналу | §6.1, §7.3 | внесено (B3-1) |
+| ця спека | §5.2 | виняток транспорту (кинутий чи відхилений) обгортка транспорту рантайму перетворює на `command.unavailable` без `reason`, оригінал іде в журнал рантайму (`log`, запис `transport-failed`); після `dispose()` чи `session-changed` важить причина закриття | §7.3 | внесено (B3-1) |
+| ця спека | §6.1 | `log` і перший вид запису: опція рантайму `log?: (entry: DataLogEntry) => void` (типово `console.warn`, збій журналу результату запиту не змінює), вид `{ kind: "transport-failed", error }`; `full-truncated` додає B3-2b | §5.2, §6.1 | внесено (B3-1) |

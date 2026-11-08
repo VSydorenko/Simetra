@@ -134,9 +134,9 @@ B3](../specs/2026-11-07-p4-b3-facade-spike-report.md) — Q1, Q4, Q7. Плани
   (ключ — логічне `"<kind>.<name>"`; `createDataRuntime` резолвить його
   каталогом і тримає UUID об'єкта), `fullLimit?: number` (ціле ≥ 1, типово
   `FULL_LIMIT_DEFAULT = 5_000`), `strict?: boolean` (типово `false`),
-  `log?: (entry: DataLogEntry) => void` (типово `console.warn`);
-  `export type DataLogEntry = { kind: "full-truncated"; object: MetadataRef; limit: number }`
-  (B3-3 додає свої види).
+  `log` і `DataLogEntry` уже є (B3-1); додай вид
+  `{ kind: "full-truncated"; object; limit }` до наявного об'єднання,
+  `transport-failed` лишається (B3-3 додає свої види).
 - `strategyOf(runtime, object: MetadataRef): { strategy: "full" | "window"; truncated: boolean }`;
   `onStrategyChange(runtime, object, listener: () => void): () => void`;
   `markTruncated(runtime, object): void` — `window` + `truncated: true`,

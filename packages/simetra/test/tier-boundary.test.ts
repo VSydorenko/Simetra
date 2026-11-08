@@ -10,40 +10,44 @@ const eslint = new ESLint({ cwd: PKG })
 // `typescript` — разова ціна процесу (0,6 с у спокої, до 4,7 с під повним
 // `pnpm test`), а не перевірки межі. Тайм-аут тесту має міряти тест,
 // тому холодний старт винесено в хук зі своїм запасом.
+// Файл із src/data прогріває ще й projectService typescript-eslint.
 beforeAll(async () => {
-  await eslint.lintText("", {
-    filePath: join(PKG, "src/model/index.ts"),
-    warnIgnored: true,
-  })
+  for (const file of ["src/model/index.ts", "src/data/__fixture.ts"])
+    await eslint.lintText("", { filePath: join(PKG, file), warnIgnored: true })
 }, 60_000)
 // Таблицю ярусів тест тримає сам, а не імпортує з конфігу: інакше ярус,
 // що випав із конфігу, випав би й з тесту.
 const TIERS = ["model", "compiler", "schema", "server", "data", "ui", "shell"]
 
-async function restricted(code: string, file: string): Promise<string[]> {
+// Фікстура поза `allowDefaultProject` дає `Parsing error` з `ruleId: null`;
+// хелпер, що фільтрує за ruleId, тоді мовчки повертає [] — і кейс «дозволено»
+// зеленіє без жодної перевірки. Тому будь-яка фатальна помилка — виняток.
+async function lint(code: string, file: string) {
   const [result] = await eslint.lintText(code, {
     filePath: join(PKG, file),
     warnIgnored: true,
   })
-  return (result?.messages ?? [])
-    .filter((m) => m.ruleId === "no-restricted-imports")
+  const messages = result?.messages ?? []
+  const broken = messages.filter((m) => m.fatal || m.ruleId === null)
+  if (broken.length > 0)
+    throw new Error(
+      `${file}: lint did not run: ${broken.map((m) => m.message).join("; ")}`
+    )
+  return messages
+}
+async function byRule(rule: string, code: string, file: string) {
+  return (await lint(code, file))
+    .filter((m) => m.ruleId === rule)
     .map((m) => m.message)
 }
-async function purity(code: string, file: string): Promise<string[]> {
-  const [result] = await eslint.lintText(code, {
-    filePath: join(PKG, file),
-    warnIgnored: true,
-  })
-  return (result?.messages ?? [])
-    .filter((m) => m.ruleId === "@typescript-eslint/no-restricted-imports")
-    .map((m) => m.message)
-}
+const restricted = (code: string, file: string) =>
+  byRule("no-restricted-imports", code, file)
+const purity = (code: string, file: string) =>
+  byRule("@typescript-eslint/no-restricted-imports", code, file)
+const props = (code: string, file: string) =>
+  byRule("no-restricted-properties", code, file)
 async function ruleIds(code: string, file: string): Promise<string[]> {
-  const [result] = await eslint.lintText(code, {
-    filePath: join(PKG, file),
-    warnIgnored: true,
-  })
-  return (result?.messages ?? []).flatMap((m) => (m.ruleId ? [m.ruleId] : []))
+  return (await lint(code, file)).flatMap((m) => (m.ruleId ? [m.ruleId] : []))
 }
 const importOf = (s: string) =>
   `import { probe } from "${s}"\nexport const used = probe\n`
@@ -338,6 +342,49 @@ describe("tier zones", () => {
     expect(msgs[0]).toContain("normalized relative path")
   })
 
+  // `.` і порожні сегменти обходили регекс, що бачить лише початковий `../`.
+  it.each([
+    ["src/data/__fixture.ts", ".././model"],
+    ["src/data/__fixture.ts", "././../model"],
+    ["src/data/__fixture.ts", "..//model"],
+    ["src/data/__fixture.ts", "../../src/./model"],
+    ["src/data/__fixture.ts", "./.././model"],
+    ["src/ui/__fixture.ts", ".././data/x"],
+  ])("%s: dot or empty segment %s is refused", async (file, spec) => {
+    const msgs = await restricted(importOf(spec), file)
+    expect(msgs, spec).toHaveLength(1)
+    expect(msgs[0]).toContain("normalized relative path")
+  })
+
+  it.each([
+    ["src/data/facade/__fixture.ts", "./../supabase/x"],
+    ["src/data/__fixture.ts", "../data/supabase/x"],
+    ["src/data/facade/__fixture.ts", "../../data/supabase/x"],
+    ["src/data/__fixture.ts", "../../src/data/supabase/x"],
+  ])("%s: supabase detour %s is refused", async (file, spec) => {
+    const msgs = await purity(importOf(spec), file)
+    expect(msgs, spec).toHaveLength(1)
+  })
+
+  it("plain ./x and ../x stay allowed in the facade", async () => {
+    for (const spec of ["./x", "../x"]) {
+      expect(
+        await restricted(importOf(spec), "src/data/facade/__fixture.ts"),
+        spec
+      ).toEqual([])
+      expect(
+        await purity(importOf(spec), "src/data/facade/__fixture.ts"),
+        spec
+      ).toEqual([])
+    }
+  })
+
+  it("namespace import of @tanstack/db is refused outside the facade", async () => {
+    const code = `import * as db from "@tanstack/db"\nexport const used = db\n`
+    expect(await restricted(code, "src/data/__fixture.ts")).toHaveLength(1)
+    expect(await restricted(code, "src/data/facade/__fixture.ts")).toEqual([])
+  })
+
   it("normalized relative paths within the allowed tiers pass", async () => {
     for (const [file, spec] of [
       ["src/data/__fixture.ts", "./x"],
@@ -347,6 +394,208 @@ describe("tier zones", () => {
     ]) {
       expect(await restricted(importOf(spec), file), spec).toEqual([])
     }
+  })
+
+  // Блок чистоти T4 (спека П4-B §3): ярусне правило й allow-list чистоти
+  // разом; кожен блок несе повний перелік, бо опції flat config заміщуються.
+  describe("T4 data zone", () => {
+    const refusedBoth = async (spec: string, file: string) => [
+      ...(await restricted(importOf(spec), file)),
+      ...(await purity(importOf(spec), file)),
+    ]
+    const OUTSIDE = [
+      "src/data/__fixture.ts",
+      "src/data/nested/__fixture.ts",
+      "src/data/__tests__/__fixture.ts",
+    ]
+    const ALLOWED = [
+      "simetra/model",
+      "zod",
+      "react",
+      "@tanstack/db",
+      "@tanstack/react-db",
+      "./x",
+    ]
+
+    it.each(OUTSIDE.flatMap((f) => ALLOWED.map((s) => [f, s])))(
+      "%s allows %s",
+      async (file, spec) => {
+        expect(await refusedBoth(spec, file)).toEqual([])
+      }
+    )
+
+    it.each([
+      ["src/data/__fixture.ts", "simetra/server"],
+      ["src/data/__fixture.ts", "simetra/compiler"],
+      ["src/data/__fixture.ts", "simetra/schema"],
+      ["src/data/__fixture.ts", "pg"],
+      ["src/data/__fixture.ts", "../model"],
+      ["src/data/__fixture.ts", "./../model"],
+      ["src/data/nested/__fixture.ts", "../../model"],
+      ["src/data/__fixture.ts", "./supabase/x"],
+      ["src/data/facade/__fixture.ts", "../supabase/x"],
+      ["src/data/__fixture.ts", "@supabase/realtime-js"],
+      ["src/data/__fixture.ts", "@tanstack/query-db-collection"],
+      ["src/data/__fixture.ts", "@tanstack/query-core"],
+      ["src/data/nested/__fixture.ts", "@tanstack/query-core"],
+      ["src/data/facade/__fixture.ts", "simetra/server"],
+      ["src/data/facade/__fixture.ts", "../../model"],
+      ["src/data/facade/__fixture.ts", "pg"],
+      ["src/data/facade/__fixture.ts", "@supabase/realtime-js"],
+      // ярусне правило діє й на тести: фасад не обходять з __tests__
+      ["src/data/__tests__/__fixture.ts", "@tanstack/query-core"],
+      ["src/data/__tests__/__fixture.ts", "@tanstack/query-db-collection"],
+    ])("%s refuses %s", async (file, spec) => {
+      expect(await refusedBoth(spec, file)).not.toEqual([])
+    })
+
+    it("facade allows query-core, query-db-collection and ../x", async () => {
+      const file = "src/data/facade/__fixture.ts"
+      for (const spec of [
+        "@tanstack/query-core",
+        "@tanstack/query-db-collection",
+        "@tanstack/db",
+        "../x",
+        "./y",
+      ])
+        expect(await refusedBoth(spec, file), spec).toEqual([])
+      expect(await refusedBoth("../x", "src/data/nested/__fixture.ts")).toEqual(
+        []
+      )
+    })
+
+    it("createTransaction and createOptimisticAction live in the facade", async () => {
+      for (const name of ["createTransaction", "createOptimisticAction"]) {
+        const code = `import { ${name} } from "@tanstack/db"\nexport const used = ${name}\n`
+        for (const file of OUTSIDE)
+          expect(await restricted(code, file), `${file}: ${name}`).toHaveLength(
+            1
+          )
+        expect(
+          await restricted(code, "src/data/facade/__fixture.ts"),
+          `facade: ${name}`
+        ).toEqual([])
+      }
+      // інші іменовані імпорти @tanstack/db дозволено всюди в T4
+      expect(
+        await restricted(
+          `import { createCollection } from "@tanstack/db"\nexport const used = createCollection\n`,
+          "src/data/__fixture.ts"
+        )
+      ).toEqual([])
+    })
+
+    it("utils.write* and refetch are refused outside the facade", async () => {
+      for (const name of [
+        "writeInsert",
+        "writeUpdate",
+        "writeDelete",
+        "writeUpsert",
+        "writeBatch",
+        "refetch",
+      ]) {
+        const forms = [
+          `export const r = c.utils.${name}(1)\n`,
+          `export const r = c.utils["${name}"](1)\n`,
+          `const { ${name} } = c.utils\nexport const r = ${name}\n`,
+        ]
+        for (const code of forms)
+          for (const file of OUTSIDE)
+            expect(await props(code, file), `${file}: ${code}`).toHaveLength(1)
+        for (const code of forms)
+          expect(
+            await props(code, "src/data/facade/__fixture.ts"),
+            `facade: ${code}`
+          ).toEqual([])
+      }
+      expect(
+        await props(
+          "export const r = c.utils.other(1)\n",
+          "src/data/__fixture.ts"
+        )
+      ).toEqual([])
+    })
+
+    it("a QueryClient cannot be built outside the facade: its import is refused", async () => {
+      const code = `import { QueryClient } from "@tanstack/query-core"\nexport const q = new QueryClient()\n`
+      expect(await restricted(code, "src/data/__fixture.ts")).toHaveLength(1)
+      expect(await restricted(code, "src/data/facade/__fixture.ts")).toEqual([])
+    })
+
+    it("standard-columns rules still apply in src/data", async () => {
+      const code = `export const r = (o: { standard: string }) => o.standard === "x"\n`
+      expect(await ruleIds(code, "src/data/__fixture.ts")).toContain(
+        "no-restricted-syntax"
+      )
+      expect(await ruleIds(code, "src/data/facade/__fixture.ts")).toContain(
+        "no-restricted-syntax"
+      )
+    })
+  })
+
+  // Спека П4-B §3: `no-floating-promises` потребує типів, тож src/data
+  // лінтується з projectService, а віртуальні фікстури — через
+  // `allowDefaultProject` (закритий перелік в eslint.config.js).
+  describe("T4 typed lint", () => {
+    const floating = "async function f() {}\nf()\n"
+
+    it.each([
+      "src/data/__fixture.ts",
+      "src/data/facade/__fixture.ts",
+      "src/data/nested/__fixture.ts",
+      "src/data/__tests__/__fixture.ts",
+      "src/data/a/b/__fixture.ts",
+    ])("%s reports a floating promise", async (file) => {
+      expect(await ruleIds(floating, file)).toContain(
+        "@typescript-eslint/no-floating-promises"
+      )
+    })
+
+    it("typed parser keeps tier refusals", async () => {
+      const code = `import "simetra/server"\n${floating}`
+      const ids = await ruleIds(code, "src/data/__fixture.ts")
+      expect(ids).toContain("no-restricted-imports")
+      expect(ids).toContain("@typescript-eslint/no-floating-promises")
+    })
+
+    it("other tiers stay on the untyped parser", async () => {
+      expect(await ruleIds(floating, "src/ui/__fixture.ts")).not.toContain(
+        "@typescript-eslint/no-floating-promises"
+      )
+    })
+
+    it("a fixture outside allowDefaultProject makes every helper throw", async () => {
+      const file = "src/data/unlisted/__fixture.ts"
+      const code = importOf("zod")
+      await expect(restricted(code, file)).rejects.toThrow(/lint did not run/)
+      await expect(purity(code, file)).rejects.toThrow(/lint did not run/)
+      await expect(props(code, file)).rejects.toThrow(/lint did not run/)
+      await expect(ruleIds(code, file)).rejects.toThrow(/lint did not run/)
+    })
+
+    it("a syntax error makes the helper throw", async () => {
+      await expect(
+        restricted("export const = 1\n", "src/model/__fixture.ts")
+      ).rejects.toThrow(/lint did not run/)
+    })
+  })
+
+  it("ui does not import simetra/data/supabase or relative data", async () => {
+    for (const spec of [
+      "simetra/data/supabase",
+      "../data/supabase",
+      "./../data/x",
+      "../data",
+      "../data/x",
+      "../../data/x",
+    ]) {
+      const msgs = await purity(importOf(spec), "src/ui/__fixture.ts")
+      expect(msgs, spec).toHaveLength(1)
+    }
+    expect(
+      await purity(importOf("simetra/data"), "src/ui/__fixture.ts")
+    ).toEqual([])
+    expect(await purity(importOf("../x"), "src/ui/__fixture.ts")).toEqual([])
   })
 
   it("mts and cts are covered", async () => {

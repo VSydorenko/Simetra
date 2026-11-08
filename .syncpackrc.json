@@ -1,0 +1,10 @@
+{
+  "versionGroups": [
+    {
+      "label": "peer і dev одного пакета мають перетинатися (RC-pin у peer, точна версія в dev)",
+      "packages": ["simetra"],
+      "dependencies": ["react", "@tanstack/**"],
+      "policy": "sameRange"
+    }
+  ]
+}

@@ -1,4 +1,8 @@
-// Вміст ярусу з'явиться в наступних кроках П2 чи підпроєктах (платформна
-// спека §3.1); тека й subpath існують від початку, бо лінт-зони й експорти
-// покривають кожен ярус.
-export {}
+export { createServerFunctionAdapter, selectSource } from "./adapter"
+export { DataError, type DataErrorCode } from "./errors"
+export {
+  createDataRuntime,
+  type DataLogEntry,
+  type DataRuntime,
+  type DataRuntimeOptions,
+} from "./facade/runtime"
