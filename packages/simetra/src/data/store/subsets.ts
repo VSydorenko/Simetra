@@ -1,37 +1,15 @@
 import {
   CommandFailure,
-  type CatalogEntry,
-  type CatalogEntrySection,
   type CatalogIndex,
   type CommandError,
-  type MetadataRef,
 } from "simetra/model"
 import { DataError } from "../errors"
-import {
-  checkFilterBudget,
-  compareRows,
-  compileFilter,
-  keysetAfter,
-  type FieldInfo,
-} from "./filter"
-import {
-  includeKeys,
-  includeSteps,
-  readIncluded,
-  refsOf,
-  type IncludeStep,
-  type Included,
-} from "./include"
-import { visibleRow, type ObjectStore, type PutResult } from "./object-store"
-import type { OwnerScope, SectionStore } from "./section-store"
-import type { Scope, Session } from "./session"
+import { formOf, type Form, type ObjectState } from "./forms"
+import { refsOf } from "./include"
+import { diffOwn, readForm, type ReaderTarget, type StoreOps } from "./readers"
+import type { Session } from "./session"
 import { LOADING, shareSnapshot, withRefs, type RowViews } from "./snapshot"
-import {
-  ReadLimiterClosed,
-  readKeys,
-  serverRow,
-  type CoreSource,
-} from "./source"
+import { ReadLimiterClosed, type CoreSource } from "./source"
 import type {
   CoreLimits,
   CoreLogEntry,
@@ -39,8 +17,6 @@ import type {
   ObjectName,
   RowView,
   SectionLine,
-  ServerRow,
-  Values,
   ViewHandle,
   ViewSnapshot,
   ViewSpec,
@@ -50,48 +26,9 @@ import type {
  * Реєстр виглядів (спека П4-B §6.1 «Вигляди й форми підмножин», §6.2, §6.3):
  * мемо хендлів за канонічним ключем форми, утримання (підписка, `preload`)
  * зі звільненням через `releaseDelayMs`, межа утриманих форм, single-flight
- * з одним хвостовим запитом і читання кожної форми з одним `commit`.
+ * з одним хвостовим запитом і знімки виглядів. Форми — `forms.ts`, читання
+ * форм — `readers.ts`.
  */
-
-/** The stores and catalog facts of one object. */
-export interface ObjectState {
-  readonly name: ObjectName
-  readonly ref: MetadataRef
-  readonly entry: CatalogEntry
-  readonly info: FieldInfo
-  readonly lazyFields: readonly string[]
-  readonly rows: ObjectStore
-  readonly sections: SectionStore
-}
-
-/**
- * Store writes of the core: each keeps the row views and the dirty sections
- * in step with the store, so every write path (views, tail, Task 8 writer)
- * goes through them.
- */
-export interface StoreOps {
-  put(
-    scope: Scope,
-    o: ObjectState,
-    row: ServerRow,
-    readEpoch: number,
-    lazyRead: boolean
-  ): PutResult
-  remove(scope: Scope, o: ObjectState, key: Key, readEpoch: number): void
-  own(scope: Scope, o: ObjectState, key: Key): void
-  disown(scope: Scope, o: ObjectState, key: Key): void
-  putSection(
-    scope: Scope,
-    o: ObjectState,
-    owner: Key,
-    section: string,
-    lines: readonly SectionLine[],
-    ownerVersion: number,
-    readEpoch: number,
-    ownerScope: OwnerScope
-  ): void
-  clearOwner(scope: Scope, o: ObjectState, owner: Key): void
-}
 
 export interface RegistryContext {
   readonly session: Session
@@ -110,21 +47,10 @@ export interface RegistryContext {
   closedSnapshot(): ViewSnapshot | undefined
 }
 
-/** A validated view form: what every subset and handle of it shares. */
-interface Form {
-  readonly spec: ViewSpec
-  readonly specKey: string
-  readonly object: ObjectState
-  readonly keys: readonly Key[]
-  readonly test: (values: Values) => boolean
-  readonly compare: ((a: Values, b: Values) => number) | undefined
-  readonly include: readonly IncludeStep[]
-}
-
 type Timer = ReturnType<typeof setTimeout>
 
 /** A held view form. */
-export interface Subset {
+export interface Subset extends ReaderTarget {
   readonly form: Form
   readonly listeners: Set<{ readonly fn: () => void }>
   preloads: number
@@ -140,18 +66,10 @@ export interface Subset {
   settled: boolean
   /** A load succeeded: a later read is `refreshing`, not `loading` (§6.5). */
   loaded: boolean
-  owned: Set<Key>
-  included: Map<ObjectName, Set<Key>>
-  /** Composition and order; changes only on a load (§6.5). */
-  layout: readonly Key[]
-  layoutSet: ReadonlySet<Key>
   status: "loading" | "ready" | "refreshing" | "error"
   error: CommandError | DataError | undefined
   needsRefresh: boolean
   hasNewRows: boolean
-  strategy: "full" | "window" | undefined
-  truncated: boolean
-  atEnd: boolean
   waiters: Array<() => void>
   dirty: boolean
   snapshot: ViewSnapshot | undefined
@@ -177,23 +95,7 @@ export interface SubsetRegistry {
   close(): void
 }
 
-/** The size of the first page of a truncated `full` (P4-B plan П5). */
-const WINDOW_PAGE = 100
 const NO_LINES: readonly SectionLine[] = Object.freeze([])
-
-// Канонічний JSON: рівні фільтри з різним порядком полів — одна форма.
-function canonical(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`
-  if (typeof value === "object" && value !== null) {
-    const record = value as Record<string, unknown>
-    return `{${Object.keys(record)
-      .filter((k) => record[k] !== undefined)
-      .sort()
-      .map((k) => `${JSON.stringify(k)}:${canonical(record[k])}`)
-      .join(",")}}`
-  }
-  return JSON.stringify(value) ?? "null"
-}
 
 const errorOf = (error: unknown): CommandError | DataError => {
   if (error instanceof CommandFailure) return error.error
@@ -201,362 +103,13 @@ const errorOf = (error: unknown): CommandError | DataError => {
   return { code: "command.internal" }
 }
 
-function lineOf(
-  section: CatalogEntrySection,
-  values: Record<string, unknown>
-): SectionLine {
-  const key = values[section.keyName]
-  if (typeof key !== "string")
-    throw new CommandFailure({ code: "command.internal" })
-  return { key, values }
-}
-
 export function createRegistry(ctx: RegistryContext): SubsetRegistry {
-  const { session, source, limits, ops, rowViews } = ctx
+  const { session, limits, ops, rowViews } = ctx
   const subsets = new Map<string, Subset>()
   // Мемо хендлів з межею: хендл шукає підмножину за ключем форми, тож новий
   // хендл після витіснення під'єднується до тієї самої підмножини.
   const handles = new Map<string, ViewHandle>()
   const isClosed = () => ctx.closedSnapshot() !== undefined
-
-  // ------------------------------------------------------------ форми
-
-  function formOf(spec: ViewSpec): Form {
-    const object = ctx.objectOf(spec.object)
-    const { entry } = object
-    const all = () => true
-    switch (spec.kind) {
-      case "keys": {
-        const keys = [...new Set(spec.keys)]
-        return {
-          spec,
-          specKey: canonical([spec.kind, spec.object, keys]),
-          object,
-          keys,
-          test: all,
-          compare: undefined,
-          include: [],
-        }
-      }
-      case "card":
-        return {
-          spec,
-          specKey: canonical([spec.kind, spec.object, spec.key]),
-          object,
-          keys: [spec.key],
-          test: all,
-          compare: undefined,
-          include: [],
-        }
-      case "section":
-        if (!entry.tabularSections.some((s) => s.name === spec.section)) {
-          throw new TypeError(`${spec.object}: unknown section ${spec.section}`)
-        }
-        return {
-          spec,
-          specKey: canonical([
-            spec.kind,
-            spec.object,
-            spec.owner,
-            spec.section,
-          ]),
-          object,
-          keys: [],
-          test: all,
-          compare: undefined,
-          include: [],
-        }
-      case "full": {
-        // Усі відмови — тут, до запиту (§6.1 «Предикати», §6.4 «Бюджет фільтра»).
-        const orderBy = spec.orderBy ?? []
-        const test =
-          spec.where === undefined
-            ? all
-            : compileFilter(spec.where, object.info, ctx.filterCollator)
-        const compare = compareRows(
-          orderBy,
-          object.info,
-          entry.keyName,
-          ctx.userCollator
-        )
-        const sample: Record<string, unknown> = { [entry.keyName]: "x" }
-        for (const part of orderBy) sample[part.attribute] = "x"
-        const keyset = keysetAfter(orderBy, sample, entry.keyName)
-        checkFilterBudget(
-          spec.where === undefined ? keyset : { and: [spec.where, keyset] }
-        )
-        const include = includeSteps(
-          spec.object,
-          entry,
-          ctx.index,
-          spec.include
-        )
-        return {
-          spec,
-          specKey: canonical([
-            spec.kind,
-            spec.object,
-            spec.where ?? null,
-            orderBy,
-            include.map((s) => s.attribute).sort(),
-          ]),
-          object,
-          keys: [],
-          test,
-          compare,
-          include,
-        }
-      }
-    }
-  }
-
-  // ------------------------------------------------------------ власність
-
-  /** Owns `wanted` keys that have an entry, disowns the rest of `prev`. */
-  function diffOwn(
-    scope: Scope,
-    o: ObjectState,
-    prev: ReadonlySet<Key>,
-    wanted: Iterable<Key>
-  ): Set<Key> {
-    const next = new Set<Key>()
-    for (const key of wanted) {
-      if (next.has(key) || o.rows.get(key) === undefined) continue
-      if (!prev.has(key)) ops.own(scope, o, key)
-      next.add(key)
-    }
-    for (const key of prev) if (!next.has(key)) ops.disown(scope, o, key)
-    return next
-  }
-
-  function setLayout(s: Subset, layout: readonly Key[]) {
-    s.layout = layout
-    s.layoutSet = new Set(layout)
-  }
-
-  function applyIncluded(
-    scope: Scope,
-    s: Subset,
-    included: Included,
-    readEpoch: number
-  ) {
-    const next = new Map<ObjectName, Set<Key>>()
-    for (const [name, { keys, rows }] of included) {
-      const target = ctx.objectOf(name)
-      const got = new Set<Key>()
-      for (const row of rows) {
-        ops.put(scope, target, row, readEpoch, false)
-        got.add(row.key)
-      }
-      // Зникла ціль — `removed` на місці; `refs` на неї — `null`.
-      for (const key of keys) {
-        if (!got.has(key) && target.rows.get(key) !== undefined)
-          ops.remove(scope, target, key, readEpoch)
-      }
-      next.set(
-        name,
-        diffOwn(scope, target, s.included.get(name) ?? new Set(), keys)
-      )
-    }
-    for (const [name, keys] of s.included) {
-      if (next.has(name)) continue
-      const target = ctx.objectOf(name)
-      for (const key of keys) ops.disown(scope, target, key)
-    }
-    s.included = next
-  }
-
-  // ------------------------------------------------------------ читання форм
-
-  /** Склад `full`: локальний фільтр і порядок; `removed` тримає позицію. */
-  function fullLayout(s: Subset, fetched: ReadonlyMap<Key, Values>): Key[] {
-    const { form } = s
-    const live: { key: Key; values: Values }[] = []
-    const removed: Key[] = []
-    for (const key of s.owned) {
-      const e = form.object.rows.get(key)
-      if (e === undefined) continue
-      if (e.removed !== undefined) {
-        removed.push(key)
-        continue
-      }
-      // Сховані горизонтом значення не показуються, але місце рядок бере за
-      // значеннями цього ж читання.
-      const values = visibleRow(e) ?? fetched.get(key)
-      if (values !== undefined && form.test(values)) live.push({ key, values })
-    }
-    if (form.compare !== undefined) {
-      const compare = form.compare
-      live.sort((a, b) => compare(a.values, b.values))
-    }
-    const layout = live.map((r) => r.key)
-    const at = new Map(s.layout.map((key, i) => [key, i]))
-    removed
-      .filter((key) => at.has(key))
-      .sort((a, b) => at.get(a)! - at.get(b)!)
-      .forEach((key) =>
-        layout.splice(Math.min(at.get(key)!, layout.length), 0, key)
-      )
-    return layout
-  }
-
-  async function fetchFull(s: Subset, readEpoch: number) {
-    const { form } = s
-    const o = form.object
-    const spec = form.spec as Extract<ViewSpec, { kind: "full" }>
-    const orderBy = spec.orderBy ?? []
-    const pages: Record<string, unknown>[] = []
-    let last: Record<string, unknown> | undefined
-    // Сторінки — поза сховищем до кінця вибірки; зупинка лише на сторінці
-    // без `more` і коротшій за `limit` (§6.1).
-    for (;;) {
-      const where =
-        last === undefined
-          ? undefined
-          : keysetAfter(orderBy, last, o.entry.keyName)
-      const page = await source.read({
-        object: o.ref,
-        ...(orderBy.length === 0 ? {} : { orderBy }),
-        ...(where === undefined ? {} : { where }),
-        limit: limits.fullPageSize,
-      })
-      pages.push(...page.rows)
-      if (pages.length > limits.fullLimit) break
-      const tail = page.rows.at(-1)
-      if (tail === undefined) break
-      if (page.more !== true && page.rows.length < limits.fullPageSize) break
-      last = tail
-    }
-    const over = pages.length > limits.fullLimit
-    if (over && ctx.strict) throw new DataError("data.full-too-large")
-    const rows = pages.map((values) => serverRow(o.entry, values))
-    // Понад межу — перша сторінка вікна в серверному порядку (П5).
-    const kept = over
-      ? rows.filter((r) => form.test(r.values)).slice(0, WINDOW_PAGE)
-      : rows
-    // Цілі — лише з відфільтрованих рядків; слот `removed` цілей не дає (§6.2,
-    // правило 5).
-    const shown = (
-      over ? kept : kept.filter((r) => form.test(r.values))
-    ).filter((r) => o.rows.get(r.key)?.removed === undefined)
-    const wanted = includeKeys(
-      form.include,
-      shown.map((r) => r.values)
-    )
-    const included = await readIncluded(
-      source,
-      form.include,
-      wanted,
-      limits.keysPerRequest
-    )
-    const fetched = new Map(kept.map((r) => [r.key, r.values] as const))
-    return (scope: Scope) => {
-      for (const row of kept) ops.put(scope, o, row, readEpoch, false)
-      s.owned = diffOwn(scope, o, s.owned, fetched.keys())
-      applyIncluded(scope, s, included, readEpoch)
-      s.strategy = over ? "window" : "full"
-      s.truncated = over
-      s.atEnd = !over
-      setLayout(
-        s,
-        over
-          ? kept.map((r) => r.key).filter((k) => s.owned.has(k))
-          : fullLayout(s, fetched)
-      )
-      if (over)
-        ctx.log({
-          kind: "full-truncated",
-          object: o.name,
-          limit: limits.fullLimit,
-        })
-    }
-  }
-
-  async function fetchKeys(s: Subset, readEpoch: number) {
-    const { form } = s
-    const o = form.object
-    const rows = await readKeys(source, o.entry, form.keys, {
-      keysPerRequest: limits.keysPerRequest,
-    })
-    return (scope: Scope) => {
-      const got = new Set<Key>()
-      for (const row of rows) {
-        ops.put(scope, o, row, readEpoch, false)
-        got.add(row.key)
-      }
-      // Перечитування за ключем без рядка — `removed` на місці (§6.2, правило 5).
-      for (const key of form.keys) {
-        if (!got.has(key) && o.rows.get(key) !== undefined)
-          ops.remove(scope, o, key, readEpoch)
-      }
-      s.owned = diffOwn(scope, o, s.owned, form.keys)
-      setLayout(
-        s,
-        form.keys.filter((k) => s.owned.has(k))
-      )
-    }
-  }
-
-  async function fetchCard(s: Subset, readEpoch: number) {
-    const o = s.form.object
-    const key = s.form.keys[0]!
-    const rows = await readKeys(source, o.entry, [key], { form: "card" })
-    return (scope: Scope) => {
-      const row = rows.find((r) => r.key === key)
-      if (row !== undefined) ops.put(scope, o, row, readEpoch, true)
-      else if (o.rows.get(key) !== undefined)
-        ops.remove(scope, o, key, readEpoch)
-      s.owned = diffOwn(scope, o, s.owned, [key])
-    }
-  }
-
-  async function fetchSection(s: Subset, readEpoch: number) {
-    const o = s.form.object
-    const spec = s.form.spec as Extract<ViewSpec, { kind: "section" }>
-    const section = o.entry.tabularSections.find(
-      (t) => t.name === spec.section
-    )!
-    const result = await source.read({
-      object: o.ref,
-      tabularSection: spec.section,
-      owner: spec.owner,
-    })
-    const lines = result.rows.map((values) => lineOf(section, values))
-    return (scope: Scope) => {
-      // Невидимий власник — рядків ТЧ не показуємо.
-      if (result.ownerVersion === undefined) {
-        ops.clearOwner(scope, o, spec.owner)
-        return
-      }
-      const header = o.rows.get(spec.owner)
-      ops.putSection(
-        scope,
-        o,
-        spec.owner,
-        spec.section,
-        lines,
-        result.ownerVersion,
-        readEpoch,
-        header === undefined ? "unknown" : header.scope
-      )
-    }
-  }
-
-  function fetchOf(
-    s: Subset,
-    readEpoch: number
-  ): Promise<(scope: Scope) => void> {
-    switch (s.form.spec.kind) {
-      case "keys":
-        return fetchKeys(s, readEpoch)
-      case "card":
-        return fetchCard(s, readEpoch)
-      case "section":
-        return fetchSection(s, readEpoch)
-      case "full":
-        return fetchFull(s, readEpoch)
-    }
-  }
 
   // ------------------------------------------------------------ завантаження
 
@@ -602,7 +155,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       token,
       what
     )
-    fetchOf(s, readEpoch)
+    readForm(ctx, s, readEpoch)
       .then(
         (apply) => {
           session.commit(
@@ -705,7 +258,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       const token = session.childToken(() => s.alive)
       session.commit(
         (scope) => {
-          s.owned = diffOwn(scope, s.form.object, s.owned, [spec.key])
+          s.owned = diffOwn(ops, scope, s.form.object, s.owned, [spec.key])
           s.loaded = true
           s.status = "ready"
           s.dirty = true
@@ -986,7 +539,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
   return {
     view(spec) {
       if (isClosed()) return closedHandle()
-      const form = formOf(spec)
+      const form = formOf(ctx, spec)
       const found = handles.get(form.specKey)
       if (found !== undefined) {
         handles.delete(form.specKey)
@@ -1004,7 +557,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
 
     preload(spec, options) {
       if (isClosed()) return Promise.resolve()
-      const s = acquire(formOf(spec))
+      const s = acquire(formOf(ctx, spec))
       if (s.listeners.size === 0) {
         s.preloads++
         if (s.releaseTimer !== undefined) clearTimeout(s.releaseTimer)

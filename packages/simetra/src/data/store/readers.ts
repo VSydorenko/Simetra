@@ -1,0 +1,358 @@
+import { CommandFailure, type CatalogEntrySection } from "simetra/model"
+import { DataError } from "../errors"
+import { keysetAfter } from "./filter"
+import type { Form, ObjectState } from "./forms"
+import { includeKeys, readIncluded, type Included } from "./include"
+import { visibleRow, type PutResult } from "./object-store"
+import type { OwnerScope } from "./section-store"
+import type { Scope } from "./session"
+import { readKeys, serverRow, type CoreSource } from "./source"
+import type {
+  CoreLimits,
+  CoreLogEntry,
+  Key,
+  ObjectName,
+  SectionLine,
+  ServerRow,
+  Values,
+  ViewSpec,
+} from "./types"
+
+/*
+ * Читачі форм виглядів (спека П4-B §6.1, §6.2): кожен читає свою форму без
+ * запису й повертає `apply`, який вигляд застосовує одним `commit` з
+ * епохою старту першого запиту.
+ */
+
+/**
+ * Store writes of the core: each keeps the row views and the dirty sections
+ * in step with the store, so every write path (views, tail, Task 8 writer)
+ * goes through them.
+ */
+export interface StoreOps {
+  put(
+    scope: Scope,
+    o: ObjectState,
+    row: ServerRow,
+    readEpoch: number,
+    lazyRead: boolean
+  ): PutResult
+  remove(scope: Scope, o: ObjectState, key: Key, readEpoch: number): void
+  own(scope: Scope, o: ObjectState, key: Key): void
+  disown(scope: Scope, o: ObjectState, key: Key): void
+  putSection(
+    scope: Scope,
+    o: ObjectState,
+    owner: Key,
+    section: string,
+    lines: readonly SectionLine[],
+    ownerVersion: number,
+    readEpoch: number,
+    ownerScope: OwnerScope
+  ): void
+  clearOwner(scope: Scope, o: ObjectState, owner: Key): void
+}
+
+/** What the readers need from the core. */
+export interface ReaderContext {
+  readonly source: CoreSource
+  readonly limits: CoreLimits
+  readonly strict: boolean
+  readonly log: (entry: CoreLogEntry) => void
+  readonly ops: StoreOps
+  objectOf(name: ObjectName): ObjectState
+}
+
+/** The part of a subset a reader's `apply` writes. */
+export interface ReaderTarget {
+  readonly form: Form
+  owned: Set<Key>
+  included: Map<ObjectName, Set<Key>>
+  layout: readonly Key[]
+  layoutSet: ReadonlySet<Key>
+  strategy: "full" | "window" | undefined
+  truncated: boolean
+  atEnd: boolean
+}
+
+/** Applies a read result inside one `commit`. */
+export type Apply = (scope: Scope) => void
+
+/** The size of the first page of a truncated `full` (P4-B plan П5). */
+const WINDOW_PAGE = 100
+
+function lineOf(
+  section: CatalogEntrySection,
+  values: Record<string, unknown>
+): SectionLine {
+  const key = values[section.keyName]
+  if (typeof key !== "string")
+    throw new CommandFailure({ code: "command.internal" })
+  return { key, values }
+}
+
+/** Owns `wanted` keys that have an entry, disowns the rest of `prev`. */
+export function diffOwn(
+  ops: StoreOps,
+  scope: Scope,
+  o: ObjectState,
+  prev: ReadonlySet<Key>,
+  wanted: Iterable<Key>
+): Set<Key> {
+  const next = new Set<Key>()
+  for (const key of wanted) {
+    if (next.has(key) || o.rows.get(key) === undefined) continue
+    if (!prev.has(key)) ops.own(scope, o, key)
+    next.add(key)
+  }
+  for (const key of prev) if (!next.has(key)) ops.disown(scope, o, key)
+  return next
+}
+
+function setLayout(s: ReaderTarget, layout: readonly Key[]) {
+  s.layout = layout
+  s.layoutSet = new Set(layout)
+}
+
+function applyIncluded(
+  ctx: ReaderContext,
+  scope: Scope,
+  s: ReaderTarget,
+  included: Included,
+  readEpoch: number
+) {
+  const { ops } = ctx
+  const next = new Map<ObjectName, Set<Key>>()
+  for (const [name, { keys, rows }] of included) {
+    const target = ctx.objectOf(name)
+    const got = new Set<Key>()
+    for (const row of rows) {
+      ops.put(scope, target, row, readEpoch, false)
+      got.add(row.key)
+    }
+    // Зникла ціль — `removed` на місці; `refs` на неї — `null`.
+    for (const key of keys) {
+      if (!got.has(key) && target.rows.get(key) !== undefined)
+        ops.remove(scope, target, key, readEpoch)
+    }
+    next.set(
+      name,
+      diffOwn(ops, scope, target, s.included.get(name) ?? new Set(), keys)
+    )
+  }
+  for (const [name, keys] of s.included) {
+    if (next.has(name)) continue
+    const target = ctx.objectOf(name)
+    for (const key of keys) ops.disown(scope, target, key)
+  }
+  s.included = next
+}
+
+/** Склад `full`: локальний фільтр і порядок; `removed` тримає позицію. */
+function fullLayout(s: ReaderTarget, fetched: ReadonlyMap<Key, Values>): Key[] {
+  const { form } = s
+  const live: { key: Key; values: Values }[] = []
+  const removed: Key[] = []
+  for (const key of s.owned) {
+    const e = form.object.rows.get(key)
+    if (e === undefined) continue
+    if (e.removed !== undefined) {
+      removed.push(key)
+      continue
+    }
+    // Сховані горизонтом значення не показуються, але місце рядок бере за
+    // значеннями цього ж читання.
+    const values = visibleRow(e) ?? fetched.get(key)
+    if (values !== undefined && form.test(values)) live.push({ key, values })
+  }
+  if (form.compare !== undefined) {
+    const compare = form.compare
+    live.sort((a, b) => compare(a.values, b.values))
+  }
+  const layout = live.map((r) => r.key)
+  const at = new Map(s.layout.map((key, i) => [key, i]))
+  removed
+    .filter((key) => at.has(key))
+    .sort((a, b) => at.get(a)! - at.get(b)!)
+    .forEach((key) =>
+      layout.splice(Math.min(at.get(key)!, layout.length), 0, key)
+    )
+  return layout
+}
+
+async function readFull(
+  ctx: ReaderContext,
+  s: ReaderTarget,
+  readEpoch: number
+): Promise<Apply> {
+  const { source, limits, ops } = ctx
+  const { form } = s
+  const o = form.object
+  const spec = form.spec as Extract<ViewSpec, { kind: "full" }>
+  const orderBy = spec.orderBy ?? []
+  const pages: Record<string, unknown>[] = []
+  let last: Record<string, unknown> | undefined
+  // Сторінки — поза сховищем до кінця вибірки; зупинка лише на сторінці
+  // без `more` і коротшій за `limit` (§6.1).
+  for (;;) {
+    const where =
+      last === undefined
+        ? undefined
+        : keysetAfter(orderBy, last, o.entry.keyName)
+    const page = await source.read({
+      object: o.ref,
+      ...(orderBy.length === 0 ? {} : { orderBy }),
+      ...(where === undefined ? {} : { where }),
+      limit: limits.fullPageSize,
+    })
+    pages.push(...page.rows)
+    if (pages.length > limits.fullLimit) break
+    const tail = page.rows.at(-1)
+    if (tail === undefined) break
+    if (page.more !== true && page.rows.length < limits.fullPageSize) break
+    last = tail
+  }
+  const over = pages.length > limits.fullLimit
+  if (over && ctx.strict) throw new DataError("data.full-too-large")
+  const rows = pages.map((values) => serverRow(o.entry, values))
+  // Понад межу — перша сторінка вікна в серверному порядку (П5).
+  const kept = over
+    ? rows.filter((r) => form.test(r.values)).slice(0, WINDOW_PAGE)
+    : rows
+  // Цілі — лише з відфільтрованих рядків; слот `removed` цілей не дає (§6.2,
+  // правило 5).
+  const shown = (over ? kept : kept.filter((r) => form.test(r.values))).filter(
+    (r) => o.rows.get(r.key)?.removed === undefined
+  )
+  const wanted = includeKeys(
+    form.include,
+    shown.map((r) => r.values)
+  )
+  const included = await readIncluded(
+    source,
+    form.include,
+    wanted,
+    limits.keysPerRequest
+  )
+  const fetched = new Map(kept.map((r) => [r.key, r.values] as const))
+  return (scope) => {
+    for (const row of kept) ops.put(scope, o, row, readEpoch, false)
+    s.owned = diffOwn(ops, scope, o, s.owned, fetched.keys())
+    applyIncluded(ctx, scope, s, included, readEpoch)
+    s.strategy = over ? "window" : "full"
+    s.truncated = over
+    s.atEnd = !over
+    setLayout(
+      s,
+      over
+        ? kept.map((r) => r.key).filter((k) => s.owned.has(k))
+        : fullLayout(s, fetched)
+    )
+    if (over)
+      ctx.log({
+        kind: "full-truncated",
+        object: o.name,
+        limit: limits.fullLimit,
+      })
+  }
+}
+
+async function readKeysForm(
+  ctx: ReaderContext,
+  s: ReaderTarget,
+  readEpoch: number
+): Promise<Apply> {
+  const { ops } = ctx
+  const { form } = s
+  const o = form.object
+  const rows = await readKeys(ctx.source, o.entry, form.keys, {
+    keysPerRequest: ctx.limits.keysPerRequest,
+  })
+  return (scope) => {
+    const got = new Set<Key>()
+    for (const row of rows) {
+      ops.put(scope, o, row, readEpoch, false)
+      got.add(row.key)
+    }
+    // Перечитування за ключем без рядка — `removed` на місці (§6.2, правило 5).
+    for (const key of form.keys) {
+      if (!got.has(key) && o.rows.get(key) !== undefined)
+        ops.remove(scope, o, key, readEpoch)
+    }
+    s.owned = diffOwn(ops, scope, o, s.owned, form.keys)
+    setLayout(
+      s,
+      form.keys.filter((k) => s.owned.has(k))
+    )
+  }
+}
+
+async function readCard(
+  ctx: ReaderContext,
+  s: ReaderTarget,
+  readEpoch: number
+): Promise<Apply> {
+  const { ops } = ctx
+  const o = s.form.object
+  const key = s.form.keys[0]!
+  const rows = await readKeys(ctx.source, o.entry, [key], { form: "card" })
+  return (scope) => {
+    const row = rows.find((r) => r.key === key)
+    if (row !== undefined) ops.put(scope, o, row, readEpoch, true)
+    else if (o.rows.get(key) !== undefined) ops.remove(scope, o, key, readEpoch)
+    s.owned = diffOwn(ops, scope, o, s.owned, [key])
+  }
+}
+
+async function readSection(
+  ctx: ReaderContext,
+  s: ReaderTarget,
+  readEpoch: number
+): Promise<Apply> {
+  const { ops } = ctx
+  const o = s.form.object
+  const spec = s.form.spec as Extract<ViewSpec, { kind: "section" }>
+  const section = o.entry.tabularSections.find((t) => t.name === spec.section)!
+  const result = await ctx.source.read({
+    object: o.ref,
+    tabularSection: spec.section,
+    owner: spec.owner,
+  })
+  const lines = result.rows.map((values) => lineOf(section, values))
+  return (scope) => {
+    // Невидимий власник — рядків ТЧ не показуємо.
+    if (result.ownerVersion === undefined) {
+      ops.clearOwner(scope, o, spec.owner)
+      return
+    }
+    const header = o.rows.get(spec.owner)
+    ops.putSection(
+      scope,
+      o,
+      spec.owner,
+      spec.section,
+      lines,
+      result.ownerVersion,
+      readEpoch,
+      header === undefined ? "unknown" : header.scope
+    )
+  }
+}
+
+/** Reads the form of `s`; the result is applied by one `commit`. */
+export function readForm(
+  ctx: ReaderContext,
+  s: ReaderTarget,
+  readEpoch: number
+): Promise<Apply> {
+  switch (s.form.spec.kind) {
+    case "keys":
+      return readKeysForm(ctx, s, readEpoch)
+    case "card":
+      return readCard(ctx, s, readEpoch)
+    case "section":
+      return readSection(ctx, s, readEpoch)
+    case "full":
+      return readFull(ctx, s, readEpoch)
+  }
+}

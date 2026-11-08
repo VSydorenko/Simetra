@@ -6,12 +6,9 @@ import { createSectionStore } from "./section-store"
 import { createSession, type Scope } from "./session"
 import { createRowViews, purgedSnapshot } from "./snapshot"
 import { readKeys, type CoreSource } from "./source"
-import {
-  createRegistry,
-  type ObjectState,
-  type StoreOps,
-  type SubsetRegistry,
-} from "./subsets"
+import type { ObjectState } from "./forms"
+import type { StoreOps } from "./readers"
+import { createRegistry, type SubsetRegistry } from "./subsets"
 import {
   DEFAULT_CORE_LIMITS,
   type CloseReason,
