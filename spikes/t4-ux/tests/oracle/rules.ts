@@ -3,12 +3,12 @@
 // Дія дозволяє лише те, що явно перелічено в `allow`; решта — заборонений кадр.
 
 export type Allow =
-  | 'clear' // зона може спорожніти (вихід, зміна рантайму)
-  | 'reorder' // відносний порядок може змінитись (зміна сортування, showNew)
-  | 'shift' // рядки можуть зсуватись довільно (navigate, showNew)
-  | 'shift-once' // кожен рядок може зсунутись не більше одного разу (власне створення/видалення)
-  | 'scroll' // прокрутка користувача: геометрія й присутність (віртуалізація) вільні
-  | 'aba' // повернення значення дозволене (явна дія «скасувати» вже окремий сегмент)
+  | "clear" // зона може спорожніти (вихід, зміна рантайму)
+  | "reorder" // відносний порядок може змінитись (зміна сортування, showNew)
+  | "shift" // рядки можуть зсуватись довільно (navigate, showNew)
+  | "shift-once" // кожен рядок може зсунутись не більше одного разу (власне створення/видалення)
+  | "scroll" // прокрутка користувача: геометрія й присутність (віртуалізація) вільні
+  | "aba" // повернення значення дозволене (явна дія «скасувати» вже окремий сегмент)
 
 export interface MarkOpts {
   allow?: Allow[]
@@ -41,8 +41,21 @@ export interface Snap {
 export interface OracleLog {
   snaps: Snap[]
   marks: { name: string; opts: MarkOpts; t: number; at: number }[]
-  shifts: { t: number; value: number; hadRecentInput: boolean; seg: number; sources?: string[] }[]
-  appMutationsAfterParse: { t: number; type: string; target: string; attr: string | null; added?: string; removed?: string }[]
+  shifts: {
+    t: number
+    value: number
+    hadRecentInput: boolean
+    seg: number
+    sources?: string[]
+  }[]
+  appMutationsAfterParse: {
+    t: number
+    type: string
+    target: string
+    attr: string | null
+    added?: string
+    removed?: string
+  }[]
   parsedAt: number | null
   hydratedAt?: number
   recoverable?: { message: string }[]
@@ -50,17 +63,17 @@ export interface OracleLog {
 }
 
 export type ViolationKind =
-  | 'empty-after-data'
-  | 'presence-aba'
-  | 'value-aba'
-  | 'reorder'
-  | 'shift'
-  | 'height'
-  | 'scroll-jump'
-  | 'layout-shift'
-  | 'forbidden-text'
-  | 'hydration-mutation'
-  | 'hydration-error'
+  | "empty-after-data"
+  | "presence-aba"
+  | "value-aba"
+  | "reorder"
+  | "shift"
+  | "height"
+  | "scroll-jump"
+  | "layout-shift"
+  | "forbidden-text"
+  | "hydration-mutation"
+  | "hydration-error"
 
 export interface Violation {
   kind: ViolationKind
@@ -74,19 +87,33 @@ export interface Violation {
 
 export function analyze(log: OracleLog): Violation[] {
   const out: Violation[] = []
-  const segName = (seg: number) => (seg === 0 ? 'load' : (log.marks[seg - 1]?.name ?? `seg${seg}`))
-  const allows = (seg: number, a: Allow) => (seg === 0 ? false : (log.marks[seg - 1]?.opts.allow ?? []).includes(a))
-  const push = (v: Omit<Violation, 'segName'>) => out.push({ ...v, segName: segName(v.seg) })
+  const segName = (seg: number) =>
+    seg === 0 ? "load" : (log.marks[seg - 1]?.name ?? `seg${seg}`)
+  const allows = (seg: number, a: Allow) =>
+    seg === 0 ? false : (log.marks[seg - 1]?.opts.allow ?? []).includes(a)
+  const push = (v: Omit<Violation, "segName">) =>
+    out.push({ ...v, segName: segName(v.seg) })
 
   // Гідратація: після розбору серверного HTML до першої дії користувача DOM
   // застосунку не змінюється (React гідратує без жодної мутації).
   const firstMarkT = log.marks[0]?.t ?? Infinity
   for (const m of log.appMutationsAfterParse)
-    if (m.t < firstMarkT) push({ kind: 'hydration-mutation', seg: 0, detail: `${m.type} ${m.target}${m.attr ? `@${m.attr}` : ''} +[${m.added ?? ''}] -[${m.removed ?? ''}]` })
-  for (const e of log.recoverable ?? []) push({ kind: 'hydration-error', seg: 0, detail: e.message })
+    if (m.t < firstMarkT)
+      push({
+        kind: "hydration-mutation",
+        seg: 0,
+        detail: `${m.type} ${m.target}${m.attr ? `@${m.attr}` : ""} +[${m.added ?? ""}] -[${m.removed ?? ""}]`,
+      })
+  for (const e of log.recoverable ?? [])
+    push({ kind: "hydration-error", seg: 0, detail: e.message })
 
   for (const s of log.shifts)
-    if (!s.hadRecentInput && s.value > 0) push({ kind: 'layout-shift', seg: s.seg, detail: `CLS entry ${s.value.toFixed(4)} ${(s.sources ?? []).join(' | ')}` })
+    if (!s.hadRecentInput && s.value > 0)
+      push({
+        kind: "layout-shift",
+        seg: s.seg,
+        detail: `CLS entry ${s.value.toFixed(4)} ${(s.sources ?? []).join(" | ")}`,
+      })
 
   // Заборонений текст: з позначки й до кінця журналу.
   log.marks.forEach((m, idx) => {
@@ -96,13 +123,24 @@ export function analyze(log: OracleLog): Violation[] {
       if (s.seg >= idx + 1)
         for (const r of s.regions)
           if (r.text.includes(text)) {
-            push({ kind: 'forbidden-text', seg: s.seg, region: r.name, detail: `"${text}" visible`, snap: s.i })
+            push({
+              kind: "forbidden-text",
+              seg: s.seg,
+              region: r.name,
+              detail: `"${text}" visible`,
+              snap: s.i,
+            })
             return
           }
   })
 
   const hadData = new Set<string>()
-  type Track = { seg: number; presence: boolean[]; values: Map<string, string[]>; shifts: number }
+  type Track = {
+    seg: number
+    presence: boolean[]
+    values: Map<string, string[]>
+    shifts: number
+  }
   const tracks = new Map<string, Track>()
   let prev: Snap | undefined
 
@@ -115,34 +153,79 @@ export function analyze(log: OracleLog): Violation[] {
     if (s.frame === 0 && next && next.frame === 0) continue
     for (const r of s.regions) {
       // Порожня зона чи скелет, коли дані вже були показані в цій зоні.
-      if ((r.rows.length === 0 || r.skeleton) && hadData.has(r.name) && !allows(s.seg, 'clear'))
-        push({ kind: 'empty-after-data', seg: s.seg, region: r.name, detail: r.skeleton ? 'skeleton' : 'no rows', snap: s.i })
+      if (
+        (r.rows.length === 0 || r.skeleton) &&
+        hadData.has(r.name) &&
+        !allows(s.seg, "clear")
+      )
+        push({
+          kind: "empty-after-data",
+          seg: s.seg,
+          region: r.name,
+          detail: r.skeleton ? "skeleton" : "no rows",
+          snap: s.i,
+        })
       if (r.rows.length > 0 && !r.skeleton) hadData.add(r.name)
 
       const pr = prev?.regions.find((x) => x.name === r.name)
-      const scrolling = allows(s.seg, 'scroll')
+      const scrolling = allows(s.seg, "scroll")
 
-      if (pr && pr.scrollTop !== null && r.scrollTop !== null && pr.scrollTop !== r.scrollTop && !scrolling)
-        push({ kind: 'scroll-jump', seg: s.seg, region: r.name, detail: `${pr.scrollTop} → ${r.scrollTop}`, snap: s.i })
+      if (
+        pr &&
+        pr.scrollTop !== null &&
+        r.scrollTop !== null &&
+        pr.scrollTop !== r.scrollTop &&
+        !scrolling
+      )
+        push({
+          kind: "scroll-jump",
+          seg: s.seg,
+          region: r.name,
+          detail: `${pr.scrollTop} → ${r.scrollTop}`,
+          snap: s.i,
+        })
 
       if (pr) {
         const prevIdx = new Map(pr.rows.map((x, i) => [x.key, i]))
         const common = r.rows.filter((x) => prevIdx.has(x.key))
-        if (!allows(s.seg, 'reorder'))
+        if (!allows(s.seg, "reorder"))
           for (let i = 1; i < common.length; i++)
-            if (prevIdx.get(common[i - 1]!.key)! > prevIdx.get(common[i]!.key)!) {
-              push({ kind: 'reorder', seg: s.seg, region: r.name, key: common[i]!.key, detail: 'relative order inverted', snap: s.i })
+            if (
+              prevIdx.get(common[i - 1]!.key)! > prevIdx.get(common[i]!.key)!
+            ) {
+              push({
+                kind: "reorder",
+                seg: s.seg,
+                region: r.name,
+                key: common[i]!.key,
+                detail: "relative order inverted",
+                snap: s.i,
+              })
               break
             }
         for (const row of common) {
           const p = pr.rows[prevIdx.get(row.key)!]!
           if (p.h !== row.h)
-            push({ kind: 'height', seg: s.seg, region: r.name, key: row.key, detail: `${p.h} → ${row.h}`, snap: s.i })
-          if (p.top !== row.top && !scrolling && !allows(s.seg, 'shift')) {
+            push({
+              kind: "height",
+              seg: s.seg,
+              region: r.name,
+              key: row.key,
+              detail: `${p.h} → ${row.h}`,
+              snap: s.i,
+            })
+          if (p.top !== row.top && !scrolling && !allows(s.seg, "shift")) {
             const t = track(r.name, row.key, s.seg)
             t.shifts++
-            if (!allows(s.seg, 'shift-once') || t.shifts > 1)
-              push({ kind: 'shift', seg: s.seg, region: r.name, key: row.key, detail: `top ${p.top} → ${row.top}`, snap: s.i })
+            if (!allows(s.seg, "shift-once") || t.shifts > 1)
+              push({
+                kind: "shift",
+                seg: s.seg,
+                region: r.name,
+                key: row.key,
+                detail: `top ${p.top} → ${row.top}`,
+                snap: s.i,
+              })
           }
         }
       }
@@ -157,15 +240,34 @@ export function analyze(log: OracleLog): Violation[] {
       for (const row of r.rows) {
         const t = track(r.name, row.key, s.seg)
         const pres = t.presence
-        if (pres.length >= 2 && pres[pres.length - 1] === false && pres.includes(true) && !scrolling)
-          push({ kind: 'presence-aba', seg: s.seg, region: r.name, key: row.key, detail: 'row vanished and reappeared', snap: s.i })
+        if (
+          pres.length >= 2 &&
+          pres[pres.length - 1] === false &&
+          pres.includes(true) &&
+          !scrolling
+        )
+          push({
+            kind: "presence-aba",
+            seg: s.seg,
+            region: r.name,
+            key: row.key,
+            detail: "row vanished and reappeared",
+            snap: s.i,
+          })
         pres.push(true)
         for (const [f, v] of Object.entries(row.fields)) {
           const hist = t.values.get(f) ?? []
-          const val = v ?? ''
+          const val = v ?? ""
           if (hist.length === 0 || hist[hist.length - 1] !== val) {
-            if (hist.slice(0, -1).includes(val) && !allows(s.seg, 'aba'))
-              push({ kind: 'value-aba', seg: s.seg, region: r.name, key: row.key, detail: `${f}: ${hist.join(' → ')} → ${val}`, snap: s.i })
+            if (hist.slice(0, -1).includes(val) && !allows(s.seg, "aba"))
+              push({
+                kind: "value-aba",
+                seg: s.seg,
+                region: r.name,
+                key: row.key,
+                detail: `${f}: ${hist.join(" → ")} → ${val}`,
+                snap: s.i,
+              })
             hist.push(val)
             t.values.set(f, hist)
           }
@@ -188,7 +290,7 @@ export function analyze(log: OracleLog): Violation[] {
 }
 
 function splitId(id: string): [string, string] {
-  const i = id.indexOf('\u0000')
+  const i = id.indexOf("\u0000")
   return [id.slice(0, i), id.slice(i + 1)]
 }
 
@@ -203,5 +305,10 @@ function dedupe(vs: Violation[]): Violation[] {
 }
 
 export function format(vs: Violation[]): string {
-  return vs.map((v) => `[${v.kind}] seg=${v.seg}(${v.segName}) ${v.region ?? ''} ${v.key ?? ''} ${v.detail}`).join('\n')
+  return vs
+    .map(
+      (v) =>
+        `[${v.kind}] seg=${v.seg}(${v.segName}) ${v.region ?? ""} ${v.key ?? ""} ${v.detail}`
+    )
+    .join("\n")
 }

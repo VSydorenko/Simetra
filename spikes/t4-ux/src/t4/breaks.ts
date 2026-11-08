@@ -4,5 +4,5 @@ export const breaks = new Set<string>()
 
 export function readBreaks(source: string | null | undefined) {
   breaks.clear()
-  for (const b of (source ?? '').split(',')) if (b) breaks.add(b)
+  for (const b of (source ?? "").split(",")) if (b) breaks.add(b)
 }

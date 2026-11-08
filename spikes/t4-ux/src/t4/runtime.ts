@@ -1,11 +1,16 @@
 // Тримач рантайму: одне ядро на суб'єкта. Зміна суб'єкта = dispose старого
 // ядра до того, як новий суб'єкт щось побачить (сценарій 8).
-import { createCoreSession, itemSpec, type CoreSession } from '../core'
-import { hostSource } from './source'
-import type { SnapshotMeta } from './ssr'
+import { createCoreSession, itemSpec, type CoreSession } from "../core"
+import { hostSource } from "./source"
+import type { SnapshotMeta } from "./ssr"
 
 export function createCore(subject: string): CoreSession {
-  return createCoreSession({ subject, source: hostSource(subject), objects: [itemSpec], releaseDelayMs: 1000 })
+  return createCoreSession({
+    subject,
+    source: hostSource(subject),
+    objects: [itemSpec],
+    releaseDelayMs: 1000,
+  })
 }
 
 export class RuntimeHolder {
@@ -23,7 +28,12 @@ export class RuntimeHolder {
   }
 
   ensure(subject: string | null): CoreSession | null {
-    if (this.current && this.current.subject === subject && !this.current.closed) return this.current
+    if (
+      this.current &&
+      this.current.subject === subject &&
+      !this.current.closed
+    )
+      return this.current
     this.replace(subject ? createCore(subject) : null)
     return this.current
   }
@@ -31,7 +41,7 @@ export class RuntimeHolder {
   replace(next: CoreSession | null) {
     const prev = this.current
     this.current = next
-    prev?.dispose('subject-changed')
+    prev?.dispose("subject-changed")
     for (const l of [...this.listeners]) l()
   }
 

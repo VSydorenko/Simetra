@@ -1,10 +1,20 @@
 // Серверні функції полігона. Суб'єкт береться лише з cookie сесії, ніколи з
 // аргументів клієнта; кожна відповідь несе суб'єкта, щоб клієнт відкинув чужу.
-import { createServerFn } from '@tanstack/react-start'
-import { deleteCookie, getCookie, setCookie } from '@tanstack/react-start/server'
-import type { CommandError, CommandResult, Operation, ReadQuery, ReadRows } from '../../../../packages/simetra/src/model/index'
-import { ITEM } from '../core'
-import { serverOf } from './db'
+import { createServerFn } from "@tanstack/react-start"
+import {
+  deleteCookie,
+  getCookie,
+  setCookie,
+} from "@tanstack/react-start/server"
+import type {
+  CommandError,
+  CommandResult,
+  Operation,
+  ReadQuery,
+  ReadRows,
+} from "../../../../packages/simetra/src/model/index"
+import { ITEM } from "../core"
+import { serverOf } from "./db"
 
 interface Faults {
   readMs: number
@@ -24,56 +34,70 @@ function faultsOf(subject: string): Faults {
   }
   return f
 }
-const sleep = (ms: number) => (ms > 0 ? new Promise((r) => setTimeout(r, ms)) : Promise.resolve())
+const sleep = (ms: number) =>
+  ms > 0 ? new Promise((r) => setTimeout(r, ms)) : Promise.resolve()
 
 // Сесія полігона: непрозорий cookie → суб'єкт (форма Better Auth: cookie +
 // серверна сесія), без специфіки Supabase.
 const sessions = new Map<string, string>()
 function subjectOf(): string | null {
-  const sid = getCookie('sid')
+  const sid = getCookie("sid")
   return sid ? (sessions.get(sid) ?? null) : null
 }
 function subjectOrThrow(): string {
   const s = subjectOf()
-  if (!s) throw new Error('unauthenticated')
+  if (!s) throw new Error("unauthenticated")
   return s
 }
 
-export const getSession = createServerFn({ method: 'GET' }).handler(async () => {
-  const subject = subjectOf()
-  return { subject, rightsVersion: subject ? faultsOf(subject).rightsVersion : 0 }
-})
+export const getSession = createServerFn({ method: "GET" }).handler(
+  async () => {
+    const subject = subjectOf()
+    return {
+      subject,
+      rightsVersion: subject ? faultsOf(subject).rightsVersion : 0,
+    }
+  }
+)
 
 /** Контракт `version`: права й каталог для звірки знімка SSR після гідратації. */
-export const getVersion = createServerFn({ method: 'GET' }).handler(async () => {
-  const subject = subjectOf()
-  return { subject, catalogHash: 'catalog-v1', rightsVersion: subject ? faultsOf(subject).rightsVersion : 0 }
-})
+export const getVersion = createServerFn({ method: "GET" }).handler(
+  async () => {
+    const subject = subjectOf()
+    return {
+      subject,
+      catalogHash: "catalog-v1",
+      rightsVersion: subject ? faultsOf(subject).rightsVersion : 0,
+    }
+  }
+)
 
-export const login = createServerFn({ method: 'POST' })
+export const login = createServerFn({ method: "POST" })
   .validator((name: string) => name)
   .handler(async ({ data }) => {
     const sid = crypto.randomUUID()
     sessions.set(sid, data)
-    setCookie('sid', sid, { httpOnly: true, path: '/', sameSite: 'lax' })
+    setCookie("sid", sid, { httpOnly: true, path: "/", sameSite: "lax" })
     return { subject: data }
   })
 
-export const logout = createServerFn({ method: 'POST' }).handler(async () => {
-  const sid = getCookie('sid')
+export const logout = createServerFn({ method: "POST" }).handler(async () => {
+  const sid = getCookie("sid")
   if (sid) sessions.delete(sid)
-  deleteCookie('sid', { path: '/' })
+  deleteCookie("sid", { path: "/" })
   return { subject: null }
 })
 
-type Reply<T> = { subject: string; ok: true; value: T } | { subject: string; ok: false; error: CommandError }
+type Reply<T> =
+  | { subject: string; ok: true; value: T }
+  | { subject: string; ok: false; error: CommandError }
 
 function failure(e: unknown): CommandError {
   const err = (e as { error?: CommandError })?.error
-  return err?.code ? err : { code: 'command.internal' }
+  return err?.code ? err : { code: "command.internal" }
 }
 
-export const readRows = createServerFn({ method: 'POST' })
+export const readRows = createServerFn({ method: "POST" })
   .validator((q: ReadQuery) => q)
   .handler(async ({ data }): Promise<Reply<ReadRows>> => {
     const subject = subjectOrThrow()
@@ -85,7 +109,7 @@ export const readRows = createServerFn({ method: 'POST' })
     }
   })
 
-export const runOps = createServerFn({ method: 'POST' })
+export const runOps = createServerFn({ method: "POST" })
   .validator((ops: Operation[]) => ops)
   .handler(async ({ data }): Promise<Reply<CommandResult>> => {
     const subject = subjectOrThrow()
@@ -104,7 +128,11 @@ export const runOps = createServerFn({ method: 'POST' })
       } catch {
         // Сервер відмовив сам — викликач однаково бачить невідомий результат.
       }
-      return { subject, ok: false, error: { code: 'command.unavailable' } as CommandError }
+      return {
+        subject,
+        ok: false,
+        error: { code: "command.unavailable" } as CommandError,
+      }
     }
     try {
       return { subject, ok: true, value: serverOf(subject).run(data) }
@@ -115,52 +143,52 @@ export const runOps = createServerFn({ method: 'POST' })
 
 // Лише для тестів полігона: затримки, відмови, чужі зміни, зміна прав.
 export type Control =
-  | { kind: 'latency'; readMs?: number; writeMs?: number }
-  | { kind: 'failNext'; code: string; reason?: string }
-  | { kind: 'hold' }
-  | { kind: 'release' }
-  | { kind: 'edit'; id: string; values: Record<string, unknown> }
-  | { kind: 'remove'; id: string }
-  | { kind: 'insert'; id: string; values: Record<string, unknown> }
-  | { kind: 'rights'; version: number }
-  | { kind: 'lostReplyNext' }
+  | { kind: "latency"; readMs?: number; writeMs?: number }
+  | { kind: "failNext"; code: string; reason?: string }
+  | { kind: "hold" }
+  | { kind: "release" }
+  | { kind: "edit"; id: string; values: Record<string, unknown> }
+  | { kind: "remove"; id: string }
+  | { kind: "insert"; id: string; values: Record<string, unknown> }
+  | { kind: "rights"; version: number }
+  | { kind: "lostReplyNext" }
 
-export const control = createServerFn({ method: 'POST' })
+export const control = createServerFn({ method: "POST" })
   .validator((c: Control) => c)
   .handler(async ({ data }) => {
     const subject = subjectOrThrow()
     const f = faultsOf(subject)
     const s = serverOf(subject)
     switch (data.kind) {
-      case 'latency':
+      case "latency":
         f.readMs = data.readMs ?? f.readMs
         f.writeMs = data.writeMs ?? f.writeMs
         break
-      case 'failNext':
+      case "failNext":
         f.failNext = { code: data.code, reason: data.reason } as CommandError
         break
-      case 'hold': {
+      case "hold": {
         let release!: () => void
         const promise = new Promise<void>((r) => (release = r))
         f.hold = { promise, release }
         break
       }
-      case 'release':
+      case "release":
         f.hold?.release()
         f.hold = undefined
         break
-      case 'edit':
+      case "edit":
         return { ok: true, version: s.edit(ITEM, data.id, data.values) }
-      case 'remove':
+      case "remove":
         s.remove(ITEM, data.id)
         break
-      case 'insert':
+      case "insert":
         s.seed(ITEM, [{ id: data.id, ...data.values }])
         break
-      case 'lostReplyNext':
+      case "lostReplyNext":
         f.lostReplyNext = true
         break
-      case 'rights':
+      case "rights":
         f.rightsVersion = data.version
         break
     }
@@ -168,7 +196,7 @@ export const control = createServerFn({ method: 'POST' })
   })
 
 /** Лінивий `count` (спека §6.4): повільний, іде потоком SSR окремо від рядків. */
-export const countRows = createServerFn({ method: 'GET' }).handler(async () => {
+export const countRows = createServerFn({ method: "GET" }).handler(async () => {
   const subject = subjectOrThrow()
   await sleep(400)
   return { subject, count: serverOf(subject).tables.get(ITEM)!.size }
