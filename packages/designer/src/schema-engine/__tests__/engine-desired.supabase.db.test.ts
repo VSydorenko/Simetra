@@ -9,6 +9,8 @@ import { createPgDeltaEngine } from ".."
 import {
   testDatabaseUrl,
   acceptDebt,
+  attribute,
+  catalog,
   customTable,
   metaFiles,
   project,
@@ -17,8 +19,9 @@ import { boundaryViolations, scopeOf } from "./fixtures/engine-boundary"
 
 /**
  * Порівняння з бажаним станом на стеку Supabase: об'єкти застосунку на
- * поверхнях провайдера (`auth.users`, `storage.objects`) у плані й FK на
- * таблицю провайдера в тіні.
+ * поверхнях провайдера (`auth.users`, `storage.objects`) у плані, FK на
+ * таблицю провайдера в тіні й шар користувачів із тригерами провізії на
+ * `auth.users`.
  */
 
 const engine = createPgDeltaEngine()
@@ -90,5 +93,65 @@ describe("compareWithDesired", () => {
     expect(result.plan.actions.flatMap((a) => a.produces)).toContain(
       "table:app.profile"
     )
+  })
+
+  it("a deployed platform layer reconciles with no difference", async () => {
+    // Шар `simetra` — частина моделі з «Користувачами» (спека користувачів
+    // §3): межа звірки бачить схему сама, а розгорнутий шар — функції,
+    // тригери на `auth.users`, гранти, відкладений FK — не дає дрейфу
+    const compiled = await compile(
+      metaFiles({
+        "project.meta.json": project(),
+        "catalogs/Users/Users.meta.json": catalog("Users", {
+          role: "users",
+          scope: "none",
+          attributes: [
+            attribute("locale", {
+              type: "String",
+              length: 5,
+              required: true,
+              defaultValue: "uk",
+            }),
+          ],
+        }),
+      })
+    )
+    expect(compiled.diagnostics).toEqual([])
+    const model = compiled.model!
+    const { scope, diagnostics } = await engineScope(model)
+    expect(diagnostics).toEqual([])
+    expect(scope.schemas).toContain("simetra")
+    const desired = renderDesiredState(model).sql
+    const outcome = await engine.withDesiredShadow(
+      { target: stack },
+      desired,
+      scope,
+      (target) =>
+        compareWithDesired(engine, { target }, desired, scope, diagnostics)
+    )
+    expect(outcome.status).toBe("loaded")
+    if (outcome.status !== "loaded") return
+    const result = outcome.value
+    expect(result.status).toBe("compared")
+    if (result.status !== "compared") return
+    expect(
+      result.desired.model.tables
+        .filter((t) => t.schema === "simetra")
+        .map((t) => t.name)
+    ).toEqual(["identities"])
+    // Одиниці шару справді порівняно, а не відкинуто з обох боків: кожна
+    // згенерована одиниця є в моделі тіні й жодна не «нерепрезентовна».
+    // `REVOKE` — відсутність привілею, тож у каталозі одиницею не читається
+    const layer = model.sqlUnits
+      .filter((u) => u.generator === "platformLayer")
+      .map((u) => u.identity)
+      .filter((identity) => !identity.startsWith("grant:revoke:"))
+    expect(layer.length).toBeGreaterThan(0)
+    const read = new Set(result.desired.model.units.map((u) => u.identity))
+    expect(layer.filter((identity) => !read.has(identity))).toEqual([])
+    expect(result.diagnostics).toEqual([])
+    expect(result.differences).toEqual([])
+    expect(result.plan.empty).toBe(true)
+    expect(result.empty).toBe(true)
   })
 })

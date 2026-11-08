@@ -58,9 +58,6 @@ export const apply = createApplyDatabase({ readOnly: false })
 
 /** Роль-власник для підміни власника на цілі. */
 export const OWNER = testRoleName("execute_owner")
-/** Роль входу, чия сесія стає роллю API провайдера. */
-export const API_LOGIN = testRoleName("execute_api")
-export const API_PASSWORD = "simetra-execute-api"
 /** Роль входу без права на явний `LOCK`: лише те, що їй дасть тест. */
 export const LOCKER = testRoleName("execute_locker")
 export const LOCKER_PASSWORD = "simetra-execute-locker"
@@ -123,13 +120,10 @@ export function useExecutePlanSetup(): void {
     await query(
       testSuperuserUrl(),
       `create role ${OWNER} nologin; grant ${OWNER} to postgres;
-       create role ${API_LOGIN} login password '${API_PASSWORD}';
-       grant service_role to ${API_LOGIN};
-       alter role ${API_LOGIN} set role = 'service_role';
        create role ${LOCKER} login password '${LOCKER_PASSWORD}';`
     )
   })
-  afterAll(() => dropRoles(API_LOGIN, OWNER, LOCKER))
+  afterAll(() => dropRoles(OWNER, LOCKER))
 }
 
 /**

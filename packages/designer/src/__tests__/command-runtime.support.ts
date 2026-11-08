@@ -33,7 +33,7 @@ import {
   inTarget,
   seedMarker,
   seedRuntimeActor,
-  throughPoolerAs,
+  poolerPoolOf,
   withRuntimeLogin,
 } from "./support/db"
 
@@ -68,7 +68,8 @@ export interface Env {
   /** Роль входу лише з членством у ролі команд. */
   commandOnly: string
   direct: pg.Pool
-  pooled: pg.Pool
+  /** Пул через пулер — лише в середовищі, зібраному з `viaPooler`. */
+  pooled: pg.Pool | null
   me: Actor
   other: Actor
   region: string
@@ -102,9 +103,10 @@ export async function seedRow(
 
 /**
  * Тінь з бажаним станом застосування (модель і `simetra.marker`), засів і дві
- * ролі входу; тримається, доки `close` не відпустить колбек `inTarget`.
+ * ролі входу; тримається, доки `close` не відпустить колбек `inTarget`. Пул
+ * через пулер — лише з `viaPooler`: стек без пулера його не має.
  */
-export const heldEnv = () =>
+export const heldEnv = (viaPooler = false) =>
   heldResource<Env>(async (use) => {
     const result = await compile(policyDomain(runtimeValuesLayer()))
     expect(result.diagnostics).toEqual([])
@@ -128,9 +130,7 @@ export const heldEnv = () =>
               [PLATFORM_ROLES.command],
               async (commandOnly) => {
                 const direct = new pg.Pool({ connectionString: login })
-                const pooled = new pg.Pool({
-                  connectionString: throughPoolerAs(login),
-                })
+                const pooled = poolerPoolOf(login, viaPooler)
                 try {
                   await use({
                     model,
@@ -147,7 +147,7 @@ export const heldEnv = () =>
                   })
                 } finally {
                   await direct.end()
-                  await pooled.end()
+                  await pooled?.end()
                 }
               },
               "runtime_cmd"

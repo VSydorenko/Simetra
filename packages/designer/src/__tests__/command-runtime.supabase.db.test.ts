@@ -14,7 +14,7 @@ import {
   type CommandRuntime,
   type CommandRuntimeOptions,
 } from "simetra/server"
-import { throughPoolerAs } from "./support/db"
+import { pooledOf, throughPoolerAs } from "./support/db"
 
 import {
   type Env,
@@ -36,7 +36,7 @@ import {
  */
 
 describe("command runtime over the engine target", () => {
-  const target = heldEnv()
+  const target = heldEnv(true)
   let env: Env
 
   beforeAll(async () => {
@@ -67,7 +67,7 @@ describe("command runtime over the engine target", () => {
       objectModules: { [MODULE_KEY]: module as ObjectModule<object> },
     }
     const direct = await runtime(fromPgPool(env.direct), options)
-    const pooled = await runtime(fromPgPool(env.pooled), options)
+    const pooled = await runtime(fromPgPool(pooledOf(env.pooled)), options)
     const id = randomUUID()
     await direct.run(env.me.session, createGauge(randomUUID()))
     const created = await pooled.run(env.me.session, createGauge(id))

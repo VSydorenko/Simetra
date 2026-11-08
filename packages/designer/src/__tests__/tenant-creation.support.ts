@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import pg from "pg"
-import { beforeAll, expect, it } from "vitest"
+import { afterAll, beforeAll, expect, it } from "vitest"
 import {
   buildRuntimeCatalog,
   compile,
@@ -34,6 +34,11 @@ import {
   TENANT_OWNER_ID,
   TENANT_READER_ID,
   signUp,
+  GLOBAL_FOUNDER_ID,
+  TENANT_OPERATOR_ID,
+  policyDomain,
+  tenantOperator,
+  tenantSelfService,
 } from "../../../simetra/test/support"
 import {
   commandRefusal as refusal,
@@ -42,7 +47,8 @@ import {
   recordingDatabase,
   seedMarker,
   seedUnderMaintenance,
-  throughPoolerAs,
+  poolerPoolOf,
+  pooledOf,
   withRuntimeLogin,
 } from "./support/db"
 
@@ -75,7 +81,8 @@ export interface Env {
   catalog: RuntimeCatalog
   owner: pg.Client
   direct: pg.Pool
-  pooled: pg.Pool
+  /** Пул через пулер — лише в цілях, зібраних з `viaPooler`. */
+  pooled: pg.Pool | null
   /** Засіяні актори моделі: ім'я → id користувача. */
   users: Record<string, string>
 }
@@ -88,12 +95,14 @@ export const sessionOf = (user: string): SessionClaims => ({
 /**
  * Тінь моделі `files` з бажаним станом застосування й marker, засів `seed`
  * (глобальні призначення — у режимі обслуговування) і роль входу форми
- * `simetra_runtime` — напряму й через пулер.
+ * `simetra_runtime` — напряму, а з `viaPooler` і через пулер: стек без пулера
+ * його не має.
  */
 export const heldEnv = (
   files: () => Map<string, string>,
   label: string,
-  seed: (owner: pg.Client) => Promise<Record<string, string>>
+  seed: (owner: pg.Client) => Promise<Record<string, string>>,
+  viaPooler: boolean
 ) =>
   heldResource<Env>(async (use) => {
     const metadata = files()
@@ -118,9 +127,7 @@ export const heldEnv = (
             [PLATFORM_ROLES.command, REQUEST_ROLE],
             async (login) => {
               const direct = new pg.Pool({ connectionString: login })
-              const pooled = new pg.Pool({
-                connectionString: throughPoolerAs(login),
-              })
+              const pooled = poolerPoolOf(login, viaPooler)
               try {
                 await use({
                   dir,
@@ -135,7 +142,7 @@ export const heldEnv = (
                 })
               } finally {
                 await direct.end()
-                await pooled.end()
+                await pooled?.end()
               }
             },
             label
@@ -173,7 +180,10 @@ export const DIRECT_PORT: [string, Port] = [
   "the direct port",
   (env) => env.direct,
 ]
-export const POOLER_PORT: [string, Port] = ["the pooler", (env) => env.pooled]
+export const POOLER_PORT: [string, Port] = [
+  "the pooler",
+  (env) => pooledOf(env.pooled),
+]
 
 /**
  * Порт, що на першому `COMMIT` після `arm()` замість нього виконує в тій
@@ -269,6 +279,63 @@ export interface Targets {
   a: () => Env
   b: () => Env
   c: () => Env
+}
+
+/**
+ * Цілі моделей А, Б і В на час блоку, що кличе це: хуки відкривають їх до
+ * кейсів і закривають після. З `viaPooler` кожна ціль має й пул через пулер.
+ */
+export function heldTargets(viaPooler: boolean): Targets {
+  // Модель А: «кожен користувач» створює `Organization` з `creatorMember`
+  // (обов'язковий `title`), `TenantOwner` з `fullAccess` — творець;
+  // `TenantOperator` створює `Branch` без творця.
+  const targetA = heldEnv(
+    () =>
+      policyDomain(
+        tenantSelfService({ requiredMember: true }),
+        tenantOperator()
+      ),
+    "tenant_a",
+    (owner) => seedGlobal(owner, { operator: TENANT_OPERATOR_ID }),
+    viaPooler
+  )
+  // Модель Б: лише `GlobalFounder` створює `Organization`; `TenantOwner` без
+  // `fullAccess` адмініструє призначення в межах своїх прав.
+  const targetB = heldEnv(
+    () =>
+      policyDomain(
+        tenantSelfService({ fullAccess: false, founder: false }),
+        tenantOperator()
+      ),
+    "tenant_b",
+    (owner) => seedGlobal(owner, { founder: GLOBAL_FOUNDER_ID }),
+    viaPooler
+  )
+  // Модель В: `TenantOwner` без `fullAccess` і без гранту на `OrgMember` —
+  // рядок членства творця невидимий йому й після гранту.
+  const targetC = heldEnv(
+    () =>
+      policyDomain(tenantSelfService({ fullAccess: false, memberRead: false })),
+    "tenant_c",
+    async () => ({}),
+    viaPooler
+  )
+  let a: Env
+  let b: Env
+  let c: Env
+
+  beforeAll(async () => {
+    a = await targetA.open()
+    b = await targetB.open()
+    c = await targetC.open()
+  }, 360_000)
+  afterAll(async () => {
+    await targetA.close()
+    await targetB.close()
+    await targetC.close()
+  }, 60_000)
+
+  return { a: () => a, b: () => b, c: () => c }
 }
 
 /**

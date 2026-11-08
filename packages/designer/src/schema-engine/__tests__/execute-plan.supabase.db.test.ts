@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest"
+import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import {
   executePlan,
   readLockRights,
@@ -7,11 +7,17 @@ import {
   tableKey,
 } from "simetra/schema"
 import { createApplyDatabase } from ".."
-import { asSuperuser, query } from "../../__tests__/support/db"
+import {
+  testRoleName,
+  testSuperuserUrl,
+} from "../../../../simetra/test/support"
+import { asSuperuser, dropRoles, query } from "../../__tests__/support/db"
 import {
   ALTER_T,
   apply,
   BASE,
+  CREATE_N,
+  exists,
   holder,
   inTarget,
   ledger,
@@ -21,20 +27,84 @@ import {
   options,
   planFor,
   stack,
+  stubRehearsal,
   useExecutePlanSetup,
 } from "./execute-plan.support"
 
 /**
- * Раннер транзакції `executePlan` на стеку Supabase: перелік замків supautils
- * для ролі плану, таблиці переліку в недоступних схемах і зміна переліку після
- * плану. Спільна підготовка — `execute-plan.support.ts`.
+ * Раннер транзакції `executePlan` на стеку Supabase: відмова сесії сервісної
+ * ролі, перелік замків supautils для ролі плану, таблиці переліку в
+ * недоступних схемах і зміна переліку після плану. Спільна підготовка — `execute-plan.support.ts`.
  */
 
 useExecutePlanSetup()
 
+/** Роль входу, чия сесія стає роллю API провайдера. */
+const API_LOGIN = testRoleName("execute_api")
+const API_PASSWORD = "simetra-execute-api"
+
+// Сесія ролі входу стає сервісною роллю Supabase: у профілі без неї роль API
+// дав би інший член переліку, тож ці кейси — лише на стеку Supabase
+beforeAll(() =>
+  query(
+    testSuperuserUrl(),
+    `create role ${API_LOGIN} login password '${API_PASSWORD}';
+     grant service_role to ${API_LOGIN};
+     alter role ${API_LOGIN} set role = 'service_role';`
+  )
+)
+afterAll(() => dropRoles(API_LOGIN))
+
 // Конкурентно: ціль кожного тесту — власна база, ролі створює `beforeAll`;
 // тест із тримачем блокування — послідовний (`concurrent: false`)
 describe.concurrent("executePlan", () => {
+  it("refuses an API role", async () => {
+    await inTarget(BASE, async (url) => {
+      // План тієї самої ролі API: збіг ролі плану від відмови не рятує
+      const plan = await planFor(url, [CREATE_N], { role: "service_role" })
+      const asApi = new URL(url)
+      asApi.username = API_LOGIN
+      asApi.password = API_PASSWORD
+      const outcome = await executePlan(
+        apply,
+        { url: asApi.toString() },
+        plan,
+        options
+      )
+      expect(outcome).toMatchObject({
+        status: "refused",
+        attempts: 1,
+        diagnostics: [
+          { code: "apply.api-role", params: { role: "service_role" } },
+        ],
+      })
+      expect(await exists(url, "app.n")).toBe(false)
+    })
+  })
+
+  it("refuses a plan built for another role", async () => {
+    await inTarget(BASE, async (url) => {
+      const plan = await planFor(url, [CREATE_N])
+      const outcome = await executePlan(
+        apply,
+        { url: loginAs(url, API_LOGIN, API_PASSWORD) },
+        plan,
+        { ...options, mode: "rehearse", rehearsal: stubRehearsal }
+      )
+      expect(outcome).toMatchObject({
+        status: "refused",
+        attempts: 1,
+        diagnostics: [
+          {
+            code: "apply.role-mismatch",
+            params: { plan: "postgres", current: "service_role" },
+          },
+        ],
+      })
+      expect(await exists(url, "app.n")).toBe(false)
+    })
+  })
+
   it("reads the provider lock list of the plan role, only tables that exist", async () => {
     const reader = createApplyDatabase({ readOnly: true })
     const read = (url: string, role: string) =>

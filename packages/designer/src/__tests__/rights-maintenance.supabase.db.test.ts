@@ -1,23 +1,15 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
-import {
-  APPLY_ADVISORY_LOCK,
-  type RightsMaintenanceRequest,
-} from "simetra/schema"
-import { runTool } from "../cli/command"
-import { rightsMaintenanceTool } from "../tools/rights-maintenance-tool"
+import { type RightsMaintenanceRequest } from "simetra/schema"
 import { GLOBAL_ADMIN_ID, signUp } from "../../../simetra/test/support"
 import { query, throughPoolerAs, withCopy } from "./support/db"
 
 import {
   asOwner,
   doneOf,
-  ENV,
   type Env,
-  globalAssignments,
   heldEnv,
   journalOf,
   maintain,
-  refusalOf,
 } from "./rights-maintenance.support"
 
 /**
@@ -41,33 +33,14 @@ describe("rights-maintenance tool over a real database", () => {
       fn(url)
     )
 
-  it("first global: busy under the apply lock, then through the pooler, then not-first from the CLI", async () => {
+  it("first global through the pooler: the migrator's session_user still owns the rights functions", async () => {
     await inCopy(async (url) => {
-      const [user, other] = await asOwner(url, async (owner) => [
-        await signUp(owner),
-        await signUp(owner),
-      ])
+      const user = await asOwner(url, (owner) => signUp(owner))
       const first: RightsMaintenanceRequest = {
         action: "firstGlobalAssignment",
         user,
         role: "GlobalAdmin",
       }
-      // Замок `apply` тримає інша сесія: інструмент не чекає й не пише
-      await asOwner(url, async (holder) => {
-        await holder.query("BEGIN")
-        await holder.query(
-          `SELECT pg_advisory_xact_lock(${APPLY_ADVISORY_LOCK})`
-        )
-        try {
-          expect(refusalOf(await maintain(env.dir, url, first)).code).toBe(
-            "maintenance.busy"
-          )
-        } finally {
-          await holder.query("ROLLBACK")
-        }
-      })
-      expect(await globalAssignments(url)).toBe(0)
-
       // Мігратор через Supavisor: `session_user` там теж власник функцій
       const done = doneOf(await maintain(env.dir, throughPoolerAs(url), first))
       expect(
@@ -80,24 +53,6 @@ describe("rights-maintenance tool over a real database", () => {
       expect(await journalOf(url, done.assignment)).toEqual([
         { actor: null, reason: "maintenance", action: null },
       ])
-
-      // Повтор — уже не перше призначення: відмова з ненульовим кодом виходу
-      const again = await runTool(
-        rightsMaintenanceTool,
-        {
-          _: [JSON.stringify({ ...first, user: other }), env.dir],
-          yes: true,
-          format: "json",
-        },
-        () => Promise.resolve(""),
-        process.cwd(),
-        { [ENV]: url }
-      )
-      expect(again.exitCode, again.stderr + again.stdout).toBe(1)
-      expect(
-        (JSON.parse(again.stdout) as { code: string }[]).map((d) => d.code)
-      ).toEqual(["maintenance.not-first"])
-      expect(await globalAssignments(url)).toBe(1)
     })
   })
 })

@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe } from "vitest"
+import { pooledOf } from "./support/db"
 
 import {
   commandsCases,
@@ -25,14 +26,14 @@ describe("rights administration commands over a planned and applied target", () 
   afterAll(() => target.close(), 60_000)
 
   describe("commands", () => {
-    const login = heldLogin(() => env.url)
+    const login = heldLogin(() => env.url, true)
     let pools: Pools
     beforeAll(async () => {
       pools = await login.open()
     }, 60_000)
     afterAll(() => login.close(), 60_000)
 
-    describe.each([["pooler", (p: Pools) => p.pooled]] as const)(
+    describe.each([["pooler", (p: Pools) => pooledOf(p.pooled)]] as const)(
       "%s",
       (_, poolOf) => {
         commandsCases({ env: () => env, pools: () => pools }, poolOf)

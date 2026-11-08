@@ -43,8 +43,6 @@ import {
 import {
   afterEnd,
   ALTER_T,
-  API_LOGIN,
-  API_PASSWORD,
   apply,
   BASE,
   codes,
@@ -282,53 +280,6 @@ describe.concurrent("executePlan", () => {
         "select exists (select from pg_locks where relation = 'app.t'::regclass and not granted) as waiting"
       )
     )[0]!.waiting
-
-  it("refuses an API role", async () => {
-    await inTarget(BASE, async (url) => {
-      // План тієї самої ролі API: збіг ролі плану від відмови не рятує
-      const plan = await planFor(url, [CREATE_N], { role: "service_role" })
-      const asApi = new URL(url)
-      asApi.username = API_LOGIN
-      asApi.password = API_PASSWORD
-      const outcome = await executePlan(
-        apply,
-        { url: asApi.toString() },
-        plan,
-        options
-      )
-      expect(outcome).toMatchObject({
-        status: "refused",
-        attempts: 1,
-        diagnostics: [
-          { code: "apply.api-role", params: { role: "service_role" } },
-        ],
-      })
-      expect(await exists(url, "app.n")).toBe(false)
-    })
-  })
-
-  it("refuses a plan built for another role", async () => {
-    await inTarget(BASE, async (url) => {
-      const plan = await planFor(url, [CREATE_N])
-      const outcome = await executePlan(
-        apply,
-        { url: loginAs(url, API_LOGIN, API_PASSWORD) },
-        plan,
-        { ...options, mode: "rehearse", rehearsal: stubRehearsal }
-      )
-      expect(outcome).toMatchObject({
-        status: "refused",
-        attempts: 1,
-        diagnostics: [
-          {
-            code: "apply.role-mismatch",
-            params: { plan: "postgres", current: "service_role" },
-          },
-        ],
-      })
-      expect(await exists(url, "app.n")).toBe(false)
-    })
-  })
 
   it("refuses a LOCK the role has no right to, without a retry", async () => {
     // Лише REFERENCES: неявний замок кроку FK він дає, явний LOCK — ні

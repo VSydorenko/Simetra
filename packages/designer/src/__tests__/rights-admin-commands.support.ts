@@ -56,7 +56,7 @@ import {
   inTarget,
   recordingDatabase,
   seedUnderMaintenance,
-  throughPoolerAs,
+  poolerPoolOf,
   withRuntimeLogin,
   type RecordedStatement,
 } from "./support/db"
@@ -91,7 +91,8 @@ export interface Env {
 /** Пули ролі входу рантайму: прямим портом і через пулер. */
 export interface Pools {
   direct: pg.Pool
-  pooled: pg.Pool
+  /** Лише в пулах, зібраних з `viaPooler`. */
+  pooled: pg.Pool | null
 }
 
 export interface Person {
@@ -247,21 +248,22 @@ export const heldEnv = () =>
 /**
  * Роль входу рантайму (форма `simetra_runtime`: членства лише з `SET`) і її
  * пули. Лише на час команд: план відмовляє `plan.platform-role-shape`, доки
- * роль команд має чужого члена, тож тримає її `beforeAll` блоку команд.
+ * роль команд має чужого члена, тож тримає її `beforeAll` блоку команд. Пул
+ * через пулер — лише з `viaPooler`: стек без пулера його не має.
  */
-export const heldLogin = (url: () => string) =>
+export const heldLogin = (url: () => string, viaPooler = false) =>
   heldResource<Pools>((use) =>
     withRuntimeLogin(
       url(),
       [PLATFORM_ROLES.command, REQUEST_ROLE],
       async (login) => {
         const direct = new pg.Pool({ connectionString: login })
-        const pooled = new pg.Pool({ connectionString: throughPoolerAs(login) })
+        const pooled = poolerPoolOf(login, viaPooler)
         try {
           await use({ direct, pooled })
         } finally {
           await direct.end()
-          await pooled.end()
+          await pooled?.end()
         }
       }
     )
