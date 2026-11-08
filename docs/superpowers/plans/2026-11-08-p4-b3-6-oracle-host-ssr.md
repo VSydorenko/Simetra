@@ -31,7 +31,8 @@ dev-збірці тестового хоста ловить мерехтіння
 B3-3](2026-11-08-p4-b3-3-window-public-api.md).
 
 **Поділ і залежності.** Після мерджу B3-3, B3-4 і B3-5. **Передумова B3-6b**
-— затвердження власником межі фреймворку для `packages/test-host` (Task 0).
+— межа фреймворку для `packages/test-host` (Task 0, затверджено власником
+2026-11-08).
 П'ять частин з власним «готово»: **B3-6a** (Task 1–3) — SSR у ядрі й
 рантаймі; **B3-6b** (Task 4–6) — пакет хоста, фейковий рантайм і маршрути;
 **B3-6c** (Task 7–9) — оракул, unit-тести правил, сценарії й самотест;
@@ -58,7 +59,7 @@ B3-3](2026-11-08-p4-b3-3-window-public-api.md).
 
 | № | Рішення | Чому | Вплив на спеку |
 | --- | --- | --- | --- |
-| Р1 | Тестовий хост — приватний пакет `packages/test-host` з власними `eslint.config.js`, `vitest.config.ts` (без `e2e/**`), скриптами `lint`, `typecheck`, `test`, `e2e`; імпорт `simetra` — з `exports` | гейти репозиторію бачать його, а Vitest не збирає специфікацій Playwright | §14.3 П4-B (Task 13); межа фреймворку `AGENTS.md` — Task 0 (власник) |
+| Р1 | Тестовий хост — приватний пакет `packages/test-host` з власними `eslint.config.js`, `vitest.config.ts` (без `e2e/**`), скриптами `lint`, `typecheck`, `test`, `e2e`; імпорт `simetra` — з `exports` | гейти репозиторію бачать його, а Vitest не збирає специфікацій Playwright | §14.3 П4-B (Task 13); межа фреймворку `AGENTS.md` — Task 0 (затверджено власником 2026-11-08) |
 | Р2 | Дані хоста — справжній `createDataHandler` над фейковим `CommandRuntime` у пам'яті, що живе в `packages/simetra/src/server/testing/` під лінт-зоною T3 і dev-only входом `simetra/server/testing` (механізм Р6), тож хост і designer беруть його через `exports` (`createFakeRuntime(catalog: RuntimeCatalog, seed)`: `read`, `readParts`, `run`, квитанції; фільтр, сортування, keyset, `known` і маркери — проста модель) і тест еквівалентності фейку проти справжнього рантайму на базі (designer DB-тест, спільні фікстури) | конверт, сумісність, `version`, бюджет відповіді й походження — код T3, тож шляхи T3 у фільтрі CI справді перевіряються; розбіжність моделі ловить тест еквівалентності | немає |
 | Р3 | SSR ядра — `store/ssr.ts` (поряд із `object-store.ts`, `section-store.ts`, `window.ts`, `epoch.ts`): знімок рядків з `versionEpoch` і трьома позначками `stale`, ТЧ, складів і курсорів сторінок вікна; епоха сесії не переноситься (новий рантайм — свої епохи) | гідратований рядок мусить іти в `known` за правилом B3-3 | немає |
 | Р4 | Частина `version` — у збирачі B3-3: `CorePart` і `CoreReadItem` зі значенням `VersionValue`, група Server Function навіть за перевизначеного адаптера | §6.6: один запит після гідратації | немає |
@@ -84,9 +85,13 @@ B3-3](2026-11-08-p4-b3-3-window-public-api.md).
 
 ---
 
-## Task 0 (власник, передумова B3-6b): межа фреймворку
+## Task 0 (передумова B3-6b): межа фреймворку — затверджено власником 2026-11-08
 
-- [ ] Архітекторка передає власнику на затвердження правку `AGENTS.md`, § «Target architecture vs. the prototype»: у речення «the host template and the studio are the only places that import TanStack Start» додати тестовий хост `packages/test-host`. Без затвердження B3-6b не стартує.
+**Files:** `AGENTS.md` (§ «Target architecture vs. the prototype»), лінт-зона межі фреймворку (`packages/simetra/eslint.tier-zones.js` і, якщо зона діє на рівні репозиторію, кореневий `eslint.config.js`) та її негативний тест (`packages/simetra/test/tier-boundary.test.ts`).
+
+- [ ] У речення «the host template and the studio are the only places that import TanStack Start» додати тестовий хост `packages/test-host` поряд із шаблоном host-а й студією.
+- [ ] Лінт-зона дозволяє імпорт TanStack Start лише в `packages/test-host` серед нових місць; негативний тест: імпорт `@tanstack/react-start` поза дозволеними місцями — відмова, у `packages/test-host/**` — прохід.
+- [ ] Commit: `docs(agents): тестовий хост у межі фреймворку (затверджено власником)`.
 
 ## B3-6a. SSR у ядрі й рантаймі
 
@@ -236,11 +241,11 @@ B3-3](2026-11-08-p4-b3-3-window-public-api.md).
 ### Task 13: Спеки і справи власника
 
 **Files:**
-- Modify: `docs/superpowers/specs/2026-11-05-p4-b-client-data-design.md` (§12 «CI оракула» — логіка агрегатора й фактичний час ноги; §12 «Належність кейсів блокам» — кейси `rightsVersion` у B5; §14.3 — розташування хоста закрито; §6.6 — модулі `store/ssr.ts`, `runtime/ssr.ts`, `hydrateFrom`; Додаток А — рядки B3-6 «внесено (B3-6)»), `docs/ROADMAP.md`; рядок платформної спеки §11 (Рд45) — через архітекторку
+- Modify: `docs/superpowers/specs/2026-11-05-p4-b-client-data-design.md` (§12 «CI оракула» — логіка агрегатора й фактичний час ноги, а замість «обов'язкова перевірка гілки `main`» — «мердж змін T4–T6 і шаблону host-а — лише із зеленим `oracle` (дисципліна архітекторки; захисту гілки немає, рішення власника 2026-11-08)»; так само Рд45 П4-B; платформна Р42 — «браузерний оракул … — перевірка CI» без «обов'язкова», через архітекторку; Додаток А — рядок «налаштування репозиторію | захист гілки `main`» прибрати, рядок `AGENTS.md` про CI переписати без «обов'язкова»; §12 «Належність кейсів блокам» — кейси `rightsVersion` у B5; §14.3 — розташування хоста закрито; §6.6 — модулі `store/ssr.ts`, `runtime/ssr.ts`, `hydrateFrom`; Додаток А — рядки B3-6 «внесено (B3-6)»), `docs/ROADMAP.md`; рядок платформної спеки §11 (Рд45) — через архітекторку
 
 - [ ] **Step 1: Правки**; `python3 scripts/check-doc-anchors.py`.
 - [ ] **Step 2: Гейти.** `pnpm format:check && pnpm lint && pnpm typecheck && pnpm test`, `pnpm deps:check`, `pnpm build:packages && pnpm test:packaging`, `pnpm test:db`.
-- [ ] **Step 3: Справи власника** (виконавець готує текст, передає архітекторці): захист гілки `main` з обов'язковою перевіркою агрегатора `oracle`; у `AGENTS.md`, § «Commands and gates», у речення про CI — job `oracle`.
+- [ ] **Step 3: Рядок `AGENTS.md`** (рішення власника 2026-11-08): захисту гілки й обов'язкової перевірки немає; у § «Commands and gates», у речення про CI, додати job `oracle` як частину CI (браузерний оракул Chromium і WebKit на production- і dev-збірці тестового хоста з фільтром шляхів і агрегатором `oracle`), без слів «required» чи «обов'язкова»; текст рядка архітекторка показує власнику під час виконання. Мердж змін T4, T5, T6 чи шаблону host-а без зеленого `oracle` блокує дисципліна архітекторки, а не налаштування репозиторію.
 - [ ] **Step 4: Commit.** `docs(spec): SSR, оракул і CI під B3-6`
 
 **Готово B3-6e:** job `oracle` зелений у PR на чотирьох ногах, логіка агрегатора доведена, час записано; спеки оновлено; справи власника передано.
