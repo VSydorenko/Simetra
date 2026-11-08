@@ -25,8 +25,12 @@ export const COMMAND_ERROR_CODES = [
 export type CommandErrorCode = (typeof COMMAND_ERROR_CODES)[number]
 
 /**
- * `reason` values of the envelope and size limits (P4-B spec §4.5): a schema
- * issue carries one in `params.reason`, and T3 moves it into `CommandError`.
+ * `reason` values a `CommandError` carries for envelope and size limits
+ * (P4-B spec §4.5), session changes and refused origins. Most come from a
+ * schema issue's `params.reason`, which T3 moves into `CommandError`;
+ * `sessionChanged` and `origin` are set by the handler directly. `disposed`
+ * is client-only: the data runtime sets it locally and it is never on the
+ * wire (P4-B spec §7.3).
  */
 export const LIMIT_REASONS = {
   /** A batch longer than `BATCH_MAX`. */
