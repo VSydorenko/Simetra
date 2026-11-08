@@ -9,6 +9,7 @@ import { channelTopic, readResultFromWire, type ReadRows } from "simetra/model"
 import { DataError } from "../../errors"
 import { coreInternals, type CoreSession, type DefectFlag } from "../core"
 import { visibleRow } from "../object-store"
+import type { Subset } from "../subsets"
 import type { FakeRead } from "../testing/fake-source"
 import type {
   CloseReason,
@@ -127,7 +128,14 @@ const view = fc.nat(SPECS.length - 1)
 const k = fc.nat(KEYS.length - 1)
 const one = <T extends Step["t"]>(t: T) => fc.constant(t)
 
-/** Ваги — частки з 200 (бриф, крок 1): `purge`, відсутній рядок і застаріла репліка — по 15 %. */
+/**
+ * Ваги (бриф, крок 1): сума 223; `purge` (16 + 14), відсутній рядок і
+ * застаріла репліка — по 30, тобто по ~13,5 % кроків (частина кроків
+ * `answer` порожня, бо в польоті нічого нема, тож серед дійових кроків
+ * частка вища, близько 15 %). Самотест тримає насіння, яке знаходить
+ * дефекти за кількістю прогонів: зміна генератора (ваги, профілі, масиви
+ * кроків) зсуває ці числа, тож після неї самотест перевіряють заново.
+ */
 const STEP: fc.Arbitrary<Step> = fc.oneof(
   { weight: 24, arbitrary: fc.record({ t: one("sub"), v: view }) },
   // `release` — відписка й плин часу до звільнення одним кроком: звільнення
@@ -354,7 +362,9 @@ async function runModel(
   }
   // Ключ, що став `removed`: значення — лише з читання після позначки (П15).
   const removedBarrier = new Map<string, number>()
-  const wasRemoved = new Map<string, { divergent: boolean }>()
+  // `slot` — запис сховища: слот, що зник і з'явився знову між двома
+  // перевірками, — вже інший слот, і його не порівнюємо з тим, що був.
+  const wasRemoved = new Map<string, { divergent: boolean; slot: object }>()
   const maxVersion = new Map<string, number>()
   const storeVersion = new Map<string, number>()
   let closed:
@@ -422,6 +432,7 @@ async function runModel(
       return {
         keys: handles[v]!.getSnapshot().rows.map((r) => r.key),
         flight: s?.flight,
+        gen: s?.gen,
         subset: s,
       }
     })
@@ -444,6 +455,11 @@ async function runModel(
     const fields = Object.keys(row.values)
     // Схований горизонтом рядок значень не показує.
     if (fields.length === 0) return
+    // Показаний рядок (і ціль `refs`) прибраного `purge` ключа — лише з
+    // читання, що почалось після нього (П12).
+    const purged = purgeBarrier.get(id(object, row.key))
+    if (purged !== undefined && !deliveredSince(object, row.key, purged))
+      fail(label, `${at}: shown after purge without a later read`)
     if (!deliveredVersion(object, row.key, row.version))
       fail(label, `${at}: version ${row.version} never delivered`)
     const server = fake.row(object, row.key, row.version)
@@ -477,6 +493,22 @@ async function runModel(
       const stored = objectOf(TASK).rows.get(spec.key) !== undefined
       if (stored && snap.status !== "purged" && snap.rows.length !== 1)
         fail(label, `${where}: card of a stored key without its row`)
+    }
+    if (spec.kind === "section" && snap.section !== undefined) {
+      const owner = spec.owner
+      const { ownerVersion, ownerState, lines } = snap.section
+      // Без версії власника рядків ТЧ нема; власник `removed` чи схований —
+      // без версії й рядків (§6.2, правило 5).
+      if (ownerVersion === undefined && lines.length > 0)
+        fail(label, `${where}: lines without an owner version`)
+      const stored = objectOf(TASK).rows.get(owner)
+      if (stored?.removed !== undefined && ownerState !== "removed")
+        fail(label, `${where}: owner state ${ownerState}, slot removed`)
+      if (
+        ownerState === "removed" &&
+        (ownerVersion !== undefined || lines.length > 0)
+      )
+        fail(label, `${where}: a removed owner shows ${lines.length} lines`)
     }
     if (spec.kind === "section" && snap.section?.ownerVersion !== undefined) {
       const version = snap.section.ownerVersion
@@ -529,12 +561,23 @@ async function runModel(
         if (handle.getSnapshot() !== closed.snapshot)
           fail(label, "a handle after close is not the purged snapshot")
       }
+      // `close()` чистить усі службові мапи, таймери й контролери.
+      for (const [name, size] of Object.entries(inspect.serviceSizes())) {
+        if (size !== 0) fail(label, `${name} = ${size} after close`)
+      }
       return
     }
     const violations = inspect.violations()
     if (violations.length > 0) fail(label, violations.join("; "))
-    // Межа §6.2: не більше `readParallel` читань одночасно.
+    // Межі §6.2: читання, пам'ять версій, надгробки й горизонт.
     if (fake.inFlight > 4) fail(label, `${fake.inFlight} reads in flight`)
+    const sizes = inspect.serviceSizes()
+    if (sizes.seen > LIMITS.seenMax)
+      fail(label, `seen ${sizes.seen} > ${LIMITS.seenMax}`)
+    if (sizes.tombstones > LIMITS.tombstonesMax)
+      fail(label, `tombstones ${sizes.tombstones} > ${LIMITS.tombstonesMax}`)
+    if (sizes.horizon > LIMITS.horizonBuckets)
+      fail(label, `horizon ${sizes.horizon} > ${LIMITS.horizonBuckets}`)
 
     for (const name of [TASK, ORG]) {
       const o = objectOf(name)
@@ -555,23 +598,46 @@ async function runModel(
         if (purge !== undefined && !deliveredSince(name, k, purge))
           fail(label, `${at}: in the store after purge without a later read`)
         const before = wasRemoved.get(id(name, k))
+        // Власник `removed` не лишає рядків ТЧ у сховищі (§6.2, правило 5).
+        if (
+          name === TASK &&
+          e.removed !== undefined &&
+          objectOf(TASK).sections.get(k, "lines") !== undefined
+        )
+          fail(label, `${at}: section lines stored for a removed owner`)
         if (e.removed !== undefined) {
           if (before === undefined) {
             removedBarrier.set(id(name, k), stepStart)
           }
-          wasRemoved.set(id(name, k), { divergent: e.removed.divergent })
+          wasRemoved.set(id(name, k), {
+            divergent: e.removed.divergent,
+            slot: e,
+          })
           continue
         }
         if (before !== undefined && visibleRow(e) !== undefined) {
           // Єдиний перехід «сховано → показано» без читання користувача —
           // розбіжний слот, і він пише `removed-restored` (П15).
-          if (
-            before.divergent &&
-            !log
+          if (before.divergent && before.slot === e) {
+            const n = (restoredInStep.get(name) ?? 0) + 1
+            restoredInStep.set(name, n)
+            const logged = log
               .slice(logAt)
-              .some((x) => x.kind === "removed-restored" && x.object === name)
-          )
-            fail(label, `${at}: divergent slot restored without the log`)
+              .reduce(
+                (sum, x) =>
+                  x.kind === "removed-restored" && x.object === name
+                    ? sum + x.count
+                    : sum,
+                0
+              )
+            // Журнал рахує перехід на кожен ключ: розбіжних слотів, що
+            // ожили за крок, не більше, ніж записів у журналі.
+            if (logged < n)
+              fail(
+                label,
+                `${at}: divergent slot restored, log counts ${logged}`
+              )
+          }
         }
         wasRemoved.delete(id(name, k))
         const values = visibleRow(e)
@@ -594,7 +660,51 @@ async function runModel(
     })
   }
 
+  /** `purge` прибирає ключі зі складу списків, а картка й ТЧ ключа — `purged`. */
+  const checkPurged = (
+    label: string,
+    purged: { object: ObjectName; keys: Key[] }
+  ) => {
+    if (closed !== undefined) return
+    const gone = new Set<Key>(purged.keys)
+    SPECS.forEach((spec, v) => {
+      if (subs[v] === undefined) return
+      const snap = handles[v]!.getSnapshot()
+      const where = `view ${v} after purge`
+      if (spec.object === purged.object && isList(spec)) {
+        for (const row of snap.rows) {
+          if (gone.has(row.key))
+            fail(label, `${where}: purged ${row.key} still in the composition`)
+        }
+      }
+      for (const row of snap.rows) {
+        if (row.state === "removed" || row.refs === undefined) continue
+        for (const ref of Object.values(row.refs)) {
+          if (ref !== null && purged.object === ORG && gone.has(ref.key))
+            fail(label, `${where}: ref to purged ${ref.key}`)
+        }
+      }
+      const target =
+        spec.kind === "card"
+          ? spec.key
+          : spec.kind === "section"
+            ? spec.owner
+            : undefined
+      if (
+        target !== undefined &&
+        spec.object === purged.object &&
+        gone.has(target) &&
+        snap.status !== "purged"
+      )
+        fail(
+          label,
+          `${where}: ${spec.kind} of purged ${target} is ${snap.status}`
+        )
+    })
+  }
+
   let logAt = 0
+  const restoredInStep = new Map<ObjectName, number>()
 
   const lean = profile !== "full"
   const plan = lean ? steps.map((s) => leanStep(s, profile)) : steps
@@ -617,6 +727,34 @@ async function runModel(
     check("preload", 0)
   }
 
+  // Покоління завантажень, які почала дія користувача (підписка, прокрутка,
+  // `refresh`, `showNew`, `preload`, початкове завантаження), і чи належить
+  // користувачу наступне завантаження з черги «trailing». Правило
+  // стабільності виправдовує зміну складу лише завантаженням користувача.
+  const userGens = new Map<Subset, Set<number>>()
+  const lastGen = new Map<Subset, number>()
+  const userNext = new Set<Subset>()
+  const noteGens = (userStep: boolean) => {
+    for (const s of internals.registry.subsets()) {
+      const gens = userGens.get(s) ?? new Set<number>()
+      const mine =
+        userStep ||
+        userNext.has(s) ||
+        (s.flight !== undefined && gens.has(s.flight))
+      const last = lastGen.get(s) ?? 0
+      if (s.gen > last) {
+        // Покоління, яке `purge` підняв у польоті, лишається завантаженням
+        // користувача, чиє читання він перезапускає.
+        if (mine) for (let g = last + 1; g <= s.gen; g++) gens.add(g)
+        userGens.set(s, gens)
+        lastGen.set(s, s.gen)
+      }
+      if (s.trailing && mine) userNext.add(s)
+      else if (!s.trailing) userNext.delete(s)
+    }
+  }
+  if (preloaded) noteGens(true)
+
   const live = (object: ObjectName, k: Key) =>
     fake.row(object, k) !== undefined && !deleted.has(id(object, k))
 
@@ -628,10 +766,13 @@ async function runModel(
     const label = `step ${n} ${JSON.stringify(s)}`
     const stepStart = fake.log.length
     logAt = log.length
+    restoredInStep.clear()
     const before = lists()
     let userViews = new Set<number>()
     let purgeStep = false
     let purgedScope: { object: ObjectName; scope: string } | undefined
+    // Ключі, які `purge` кроку прибрав зі сховища (або назвав явно).
+    let purgedKeys: { object: ObjectName; keys: Key[] } | undefined
     switch (s.t) {
       case "sub":
         subscribe(s.v, label)
@@ -685,6 +826,7 @@ async function runModel(
         break
       }
       case "preload": {
+        userViews = new Set([s.v])
         let promise: Promise<void> | undefined
         try {
           promise = core.preload(
@@ -815,6 +957,7 @@ async function runModel(
         const target = s.org ? ORG_KEYS[s.k % 2]! : KEYS[s.k]!
         commit((w) => w.purge(object, { keys: [target] }))
         if (closed !== undefined) break
+        purgedKeys = { object, keys: [target] }
         purgeBarrier.set(id(object, target), stepStart)
         if (object === TASK) barrierSections(stepStart)
         break
@@ -823,9 +966,14 @@ async function runModel(
         purgeStep = true
         const object = s.org ? ORG : TASK
         const scope = SCOPES[s.scope]!
+        const held = [...objectOf(object).rows.keys()]
         commit((w) => w.purge(object, { scope }))
         if (closed !== undefined) break
         purgedScope = { object, scope }
+        purgedKeys = {
+          object,
+          keys: held.filter((k) => objectOf(object).rows.get(k) === undefined),
+        }
         // П12: ключ, якого після purge у сховищі немає, повертає лише
         // читання, що почалось після нього.
         for (const k of object === TASK ? KEYS : ORG_KEYS) {
@@ -892,17 +1040,25 @@ async function runModel(
       }
     }
     check(label, stepStart)
+    if (purgedKeys !== undefined) checkPurged(label, purgedKeys)
+    noteGens(userViews.size > 0)
     // Правило стабільності: жодна системна подія, крім `purge`, не змінює
-    // складу й порядку видимого списку; завантаження — дія користувача.
+    // складу й порядку видимого списку; завантаження користувача — дія
+    // користувача, його завершення й початок виправдані.
     const after = lists()
     before.forEach((b, v) => {
       const a = after[v]
-      if (b === undefined || a === undefined || userViews.has(v)) return
-      if (b.subset !== a.subset || b.flight !== a.flight) return
+      if (b === undefined || a === undefined) return
+      if (b.subset !== a.subset) return
       const same =
         a.keys.length === b.keys.length &&
         a.keys.every((x, i) => x === b.keys[i])
       if (same) return
+      // Завантаження, що тривало чи почалось на цьому кроці, — користувача?
+      const mine = userGens.get(a.subset!)
+      const touched = [b.flight]
+      for (let g = (b.gen ?? 0) + 1; g <= (a.gen ?? 0); g++) touched.push(g)
+      if (touched.some((g) => g !== undefined && mine?.has(g) === true)) return
       if (purgeStep) {
         // purge лише прибирає ключі, порядок решти той самий.
         const kept = b.keys.filter((x) => a.keys.includes(x))
@@ -926,12 +1082,136 @@ async function runModel(
     if (i > 500) fail("drain", "reads never end")
     const stepStart = fake.log.length
     logAt = log.length
+    restoredInStep.clear()
     const slow = late.shift()
     const read = slow ?? fake.take()
     read.answer(slow !== undefined || i % 2 === 0 ? read.issuedAt : fake.clock)
     record(read)
     await flush()
     check(`drain ${i}`, stepStart)
+  }
+
+  if (closed === undefined) await converge()
+
+  /**
+   * Збіжність до сервера: відновлюємо видимість, перечитуємо кожен
+   * підписаний вигляд (`refresh`) і обидва об'єкти (`revalidate`), відповідаємо
+   * на все станом зараз — і кожен показаний рядок, рядок `refs` та рядки ТЧ
+   * мусять дорівнювати серверним (версія й значення) або бути `removed`,
+   * коли сервер рядка не має.
+   */
+  async function converge() {
+    // Таймери звільнення й TTL `preload` спрацьовують до перечитування: їхній
+    // надгробок поховав би відповідь читання, що почалось раніше (за
+    // задумом), і збіжність мірялась би проти артефакту моделі.
+    vi.advanceTimersByTime(10_000)
+    await flush()
+    fake.setVisibleScopes(undefined)
+    visibility = undefined
+    for (let v = 0; v < SPECS.length; v++) {
+      if (subs[v] !== undefined) handles[v]!.refresh()
+    }
+    let settled = 0
+    const done = Promise.all(
+      [TASK, ORG].map((o) =>
+        core
+          .revalidate(o, { visibleOnly: false })
+          .catch((error: unknown) => errors.push(error))
+      )
+    ).then(() => settled++)
+    let quiet = 0
+    for (let i = 0; quiet < 3; i++) {
+      if (i > 500) fail("converge", "reads never end")
+      await flush()
+      if (fake.pending.length === 0 && settled > 0) quiet++
+      else quiet = 0
+      const stepStart = fake.log.length
+      logAt = log.length
+      restoredInStep.clear()
+      while (fake.pending.length > 0) {
+        const read = fake.take()
+        read.answer()
+        record(read)
+      }
+      await flush()
+      check(`converge ${i}`, stepStart)
+    }
+    await done
+    SPECS.forEach((spec, v) => {
+      if (subs[v] === undefined) return
+      const snap = handles[v]!.getSnapshot()
+      const where = `converge view ${v}`
+      if (snap.status === "purged") return
+      if (snap.status !== "ready")
+        fail(where, `status ${snap.status} after refresh`)
+      for (const row of snap.rows) sameAsServer(where, spec.object, row)
+      if (spec.kind === "full" && snap.atEnd) {
+        // Склад `full` — рядки сервера, що проходять фільтр (рядок, що
+        // зник із сервера, склад уже прибрав перезавантаження).
+        const shown = snap.rows.map((r) => r.key)
+        const expected = KEYS.filter((k) => {
+          const row = fake.row(TASK, k)
+          return (
+            row !== undefined &&
+            (spec.where === undefined ||
+              String(row.values.title) >=
+                String((spec.where as { value: unknown }).value))
+          )
+        })
+        if ([...shown].sort().join() !== [...expected].sort().join())
+          fail(where, `composition ${shown.join()} ≠ server ${expected.join()}`)
+      }
+      if (spec.kind === "section" && snap.section !== undefined) {
+        const owner = fake.row(TASK, spec.owner)
+        const { ownerState, ownerVersion, lines } = snap.section
+        if (owner === undefined) {
+          // Без шапки в сховищі (читання власника ТЧ не знайшло) стан
+          // власника невідомий.
+          if (
+            (ownerState !== "removed" && ownerState !== "unknown") ||
+            lines.length > 0
+          )
+            fail(
+              where,
+              `owner is gone, section ${ownerState} with ${lines.length} lines`
+            )
+        } else {
+          if (ownerVersion !== owner.version)
+            fail(
+              where,
+              `owner version ${String(ownerVersion)} ≠ ${owner.version}`
+            )
+          const expected = linesHistory.at(-1)!.qty
+          const shown = lines.map((l) => l.values.qty)
+          if (JSON.stringify(shown) !== JSON.stringify(expected))
+            fail(where, `lines ${String(shown)} ≠ server ${String(expected)}`)
+        }
+      }
+    })
+  }
+
+  function sameAsServer(where: string, object: ObjectName, row: RowView) {
+    const at = `${where} ${object}/${row.key}`
+    const server = fake.row(object, row.key)
+    if (row.state === "removed") {
+      if (server !== undefined)
+        fail(where, `${at}: removed, the server has the row`)
+      return
+    }
+    if (server === undefined)
+      return fail(where, `${at}: ${row.state}, the server has no such row`)
+    if (row.version !== server.version)
+      fail(where, `${at}: version ${row.version} ≠ server ${server.version}`)
+    const fields = Object.keys(row.values)
+    if (fields.length === 0) fail(where, `${at}: values hidden after refresh`)
+    for (const field of fields) {
+      if (field === "notes" && row.staleFields.includes(field)) continue
+      if (!Object.is(row.values[field], server.values[field]))
+        fail(where, `${at}.${field} ≠ server`)
+    }
+    for (const ref of Object.values(row.refs ?? {})) {
+      if (ref !== null) sameAsServer(`${where} ref`, ORG, ref)
+    }
   }
 }
 
@@ -971,7 +1251,22 @@ const DEFECTS: readonly DefectFlag[] = [
   "row-without-owner",
   "removed-keeps-sections",
   "revision-survives-row",
+  "purge-keeps-views",
+  "absent-row-ignored",
+  "unbounded-seen",
+  "system-reread-via-load",
 ]
+
+// Какою перевіркою дефект ловиться, коли це важливо: нові перевірки
+// (збіжність, межі пам'яті, `purge` картки, ТЧ у сховищі) не мають бути
+// затулені старішими.
+const CAUGHT_BY: Partial<Record<DefectFlag, RegExp>> = {
+  "removed-keeps-sections": /section lines stored for a removed owner/,
+  "purge-keeps-views": /card of purged/,
+  "absent-row-ignored": /^converge/,
+  "unbounded-seen": /seen \d+ > \d+/,
+  "system-reread-via-load": /composition/,
+}
 
 describe("core model self-check", () => {
   it.each(DEFECTS)(
@@ -982,9 +1277,15 @@ describe("core model self-check", () => {
       const result = await fc.check(property([flag]), {
         numRuns: 10_000,
         seed: 1,
+        // Достатньо знайти червоний прогін: ужимання контрприкладу лише
+        // подовжує самотест.
+        endOnFailure: true,
       })
       expect(result.failed, `${flag} not caught`).toBe(true)
       expect(result.errorInstance).toBeInstanceOf(ModelFailure)
+      const caughtBy = CAUGHT_BY[flag]
+      if (caughtBy !== undefined)
+        expect((result.errorInstance as Error).message).toMatch(caughtBy)
     },
     120_000
   )

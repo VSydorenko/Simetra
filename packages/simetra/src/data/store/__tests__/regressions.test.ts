@@ -214,32 +214,42 @@ describe("row revisions", () => {
   )
 })
 
-describe("abort listeners", () => {
-  it("10 000 reads leave no abort listener behind", async () => {
-    const { core, fake } = setup()
+describe("request controllers", () => {
+  // Ядро не створює контролера на читання (сигнал не доходить до транспорту),
+  // тож слухачі `abort` рахувати нема чого: реєстр контролерів сесії —
+  // єдине, що могло б рости. Тест тримає обидві межі: 10 000 читань ядра не
+  // лишають контролерів, а лічильник справді бачить контролер без `release`.
+  it("10 000 reads of the core leave no tracked controller", async () => {
+    const { core, fake, inspect } = setup()
     seed(fake, 1, 1)
-    // Шпигуни пропускають виклик далі: рахуємо, не підміняючи сигналів.
-    const add = vi.spyOn(AbortSignal.prototype, "addEventListener")
-    const remove = vi.spyOn(AbortSignal.prototype, "removeEventListener")
-    const net = () =>
-      add.mock.calls.filter(([type]) => type === "abort").length -
-      remove.mock.calls.filter(([type]) => type === "abort").length
-    try {
-      const view = core.view(keys(1))
-      watch(view)
-      await settle()
-      const reads = fake.log.length
-      for (let i = 1; i < 10_000; i++) {
-        view.refresh()
-        await settle(20)
-      }
-      expect(fake.log.length - reads).toBe(9_999)
-      expect(net()).toBe(0)
-    } finally {
-      add.mockRestore()
-      remove.mockRestore()
+    const view = core.view(keys(1))
+    watch(view)
+    await settle()
+    const reads = fake.log.length
+    for (let i = 1; i < 10_000; i++) {
+      view.refresh()
+      await settle(20)
     }
+    expect(fake.log.length - reads).toBe(9_999)
+    expect(inspect.serviceSizes().controllers).toBe(0)
   })
+
+  it.each([
+    [undefined, 0],
+    ["controller-leak", 1],
+  ] as const)(
+    "the session counts a controller left unreleased (defect %s)",
+    (defect, left) => {
+      const session = createSession({
+        subject: "u1",
+        limits: DEFAULT_CORE_LIMITS,
+        log: () => {},
+        defects: new Set<DefectFlag>(defect === undefined ? [] : [defect]),
+      })
+      for (let i = 0; i < 10_000; i++) session.track().release()
+      expect(session.trackedCount()).toBe(left)
+    }
+  )
 })
 
 describe("close clears the service maps", () => {
