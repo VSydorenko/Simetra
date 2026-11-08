@@ -152,12 +152,22 @@ devDependency з ПГ-2a).
   відмова (Р8); правило діє на `supabase` через членство `anon` (Р2), на
   дверях Server Function.
   
-  §12 рядок ПГ-3:
-  - `runtime.privileged-login` → `command.privileged-login`, якщо ПГ-2
-    вписав старе ім'я;
-  - адаптер `verifySession` — у П4-D (Р10);
-  - «міграція з `database.schemaName`» прибрати, якщо ПГ-2 цього ще не
-    зробив.
+  §12 рядок ПГ-3 (його правиш лише ти, ПГ-2a не чіпає) — разом:
+  - обсяг: `command.privileged-login` (Р1; замість `runtime.privileged-login`
+    з Р7 ПГ-2a); перенесення тимчасових грантів `USAGE`/`TRIGGER` з
+    `pnpm db:pg:start` у `roles`, з тестом на тегованому кластері;
+    `pnpm db:roles`; адаптер `verifySession` — у П4-D (Р10);
+  - «Готово»: «міграція з `database.schemaName: "better_auth"`» →
+    «міграція через `search_path = better_auth`, без `schemaName`».
+  
+  §4.2 крок 2 — те саме про `search_path`, якщо ПГ-2 цього не вніс.
+  
+  §13 рядок «спека профілів провайдера | ПП5»: `database.schemaName` →
+  `search_path` ролі `simetra_auth`.
+- Modify: `docs/superpowers/specs/2026-10-23-provider-profiles-design.md`
+  ПП5: «опція `database.schemaName` вбудованого адаптера» → «`search_path`
+  ролі міграції й пулу Better Auth (`schemaName` шле `CREATE SCHEMA`, а роль
+  міграції не має `CREATE` на базу)».
 - Modify: `docs/superpowers/specs/2026-10-26-p4-runtime-design.md`:
   - §6.2 — рядок `simetra_runtime` для `supabase`: член `authenticated` і
     `anon`, обидва `INHERIT FALSE, SET TRUE`;
