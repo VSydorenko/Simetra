@@ -365,6 +365,20 @@
   },
   {
     "op": "add",
+    "class": "index",
+    "table": "service_accrual",
+    "name": "service_accrual_org_id_date_id_idx",
+    "detail": "CREATE INDEX service_accrual_org_id_date_id_idx ON <schema>.service_accrual USING btree (org_id, date, id)"
+  },
+  {
+    "op": "drop",
+    "class": "index",
+    "table": "service_accrual",
+    "name": "service_accrual_org_id_date_idx",
+    "detail": "CREATE INDEX service_accrual_org_id_date_idx ON <schema>.service_accrual USING btree (org_id, date)"
+  },
+  {
+    "op": "add",
     "class": "column",
     "table": "service_accrual_performers",
     "name": "org_id",

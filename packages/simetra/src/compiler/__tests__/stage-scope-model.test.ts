@@ -804,7 +804,10 @@ describe("stage 3: scope indexes", () => {
       [CP]: counterparty({ codeUnique: false }),
     })
     expect(indexesOf(tableOf(physical, "counterparty"))).toEqual([
-      { name: "counterparty_org_id_code_idx", keys: ["org_id", "code"] },
+      {
+        name: "counterparty_org_id_code_id_idx",
+        keys: ["org_id", "code", "id"],
+      },
     ])
   })
 
@@ -815,7 +818,10 @@ describe("stage 3: scope indexes", () => {
       }),
     })
     expect(indexesOf(tableOf(physical, "invoice"))).toEqual([
-      { name: "invoice_org_id_date_idx", keys: ["org_id", "date"] },
+      {
+        name: "invoice_org_id_date_id_idx",
+        keys: ["org_id", "date", "id"],
+      },
     ])
   })
 
@@ -829,10 +835,13 @@ describe("stage 3: scope indexes", () => {
       }),
     })
     expect(indexesOf(tableOf(physical, "counterparty"))).toEqual([
-      { name: "counterparty_org_id_rank_idx", keys: ["org_id", "rank"] },
+      {
+        name: "counterparty_org_id_rank_id_idx",
+        keys: ["org_id", "rank", "id"],
+      },
     ])
     expect(indexesOf(tableOf(physical, "currency"))).toEqual([
-      { name: "currency_rank_idx", keys: ["rank"] },
+      { name: "currency_rank_id_idx", keys: ["rank", "id"] },
     ])
   })
 
@@ -852,8 +861,8 @@ describe("stage 3: scope indexes", () => {
     })
     expect(indexesOf(tableOf(physical, "contract"))).toEqual([
       {
-        name: "contract_org_id_counterparty_id_idx",
-        keys: ["org_id", "counterparty_id"],
+        name: "contract_org_id_counterparty_id_id_idx",
+        keys: ["org_id", "counterparty_id", "id"],
       },
     ])
   })
@@ -875,7 +884,10 @@ describe("stage 3: scope indexes", () => {
       }),
     })
     expect(indexesOf(tableOf(physical, "counterparty"))).toEqual([
-      { name: "counterparty_currency_id_idx", keys: ["currency_id"] },
+      {
+        name: "counterparty_currency_id_id_idx",
+        keys: ["currency_id", "id"],
+      },
     ])
   })
 
@@ -968,7 +980,7 @@ describe("stage 3: scope indexes", () => {
     ])
   })
 
-  it("root and its tabular section rows keep single-column indexes", async () => {
+  it("root and its tabular section rows lead with their own columns", async () => {
     const physical = await compileScoped({
       [ORG]: organization({
         codeUnique: false,
@@ -983,11 +995,11 @@ describe("stage 3: scope indexes", () => {
       }),
     })
     expect(indexesOf(tableOf(physical, "organization"))).toEqual([
-      { name: "organization_code_idx", keys: ["code"] },
+      { name: "organization_code_id_idx", keys: ["code", "id"] },
     ])
     expect(indexesOf(tableOf(physical, "organization_notes"))).toEqual([
       { name: "organization_notes_parent_id_idx", keys: ["parent_id"] },
-      { name: "organization_notes_rank_idx", keys: ["rank"] },
+      { name: "organization_notes_rank_id_idx", keys: ["rank", "id"] },
     ])
   })
 

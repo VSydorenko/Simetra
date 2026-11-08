@@ -346,7 +346,7 @@ describe("CustomTable physics round-trip", () => {
       .update(JSON.stringify(derived))
       .digest("hex")
     expect(digest).toBe(
-      "ba94ddce884bee5d5d4988a4b5a3980f1f1f7f9b0f2c57d377c13b7c11b99655"
+      "8af26bfb621d1e98c99250b3ac03267b55b687bde142dc13d02b80829f07a3c0"
     )
   })
 })

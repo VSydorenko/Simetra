@@ -163,6 +163,10 @@ interface Field {
   format?: string
   primaryKey: boolean
   indexed: boolean
+  /** Колонка — ключ рядка таблиці (не одинак і не скоуп-колонка). */
+  rowKey?: boolean
+  /** Стандартне посилання виду (власник, батько, автор): його індекс структурний. */
+  standardRef?: boolean
   unique: boolean
   /** Унікальність без регістру: індекс по `lower(колонка)`, а не UNIQUE. */
   uniqueIgnoreCase?: boolean
@@ -214,6 +218,11 @@ interface PendingTable {
     column: string
     generation: NonNullable<PhysicalColumn["identity"]>["generation"]
   }[]
+  /**
+   * Колонка ключа рядка, якщо вона одинока в PK: лише така таблиця читається
+   * списком за ключем, і лише їй пошуковий індекс дописує ключ останнім.
+   */
+  rowKey?: string
   primaryKey?: Omit<NonNullable<PhysicalTable["primaryKey"]>, "name"> & {
     name?: string
   }
@@ -337,8 +346,8 @@ interface DerivedIndexKey {
 /**
  * Похідний індекс разом із призначенням: навіщо він потрібен, а не лише які
  * колонки покриває. `search` — пошук і списки за реквізитом, `foreignKey` —
- * індекс під перевірку FK, `copy` — копія колонки носія, `structural` — рухи
- * й підсумки регістра.
+ * індекс під перевірку FK, `copy` — копія колонки носія, `structural` — два
+ * індекси руху регістра (підсумки й обороти йдуть як `search`/`foreignKey`).
  */
 interface DerivedIndex {
   purpose: "search" | "foreignKey" | "copy" | "structural"
@@ -1308,6 +1317,10 @@ class SnapshotBuilder {
         : {}),
       ...(column.check !== undefined ? { check: column.check } : {}),
       primaryKey: column.primaryKey === true,
+      ...(column.primaryKey === true && column.singleton !== true
+        ? { rowKey: true }
+        : {}),
+      ...(column.ref !== undefined ? { standardRef: true } : {}),
       // Індекс стандартного посилання — похідний індекс його FK на повний
       // набір колонок: у скоупленій таблиці `(scope, parent_id)` замість
       // `parent_id`. `indexed` посилання задовольняє індекс його FK (addField).
@@ -2396,6 +2409,7 @@ function addField(table: PendingTable, field: Field): string[] {
   }
 
   if (field.primaryKey) table.primaryKey = { columns: names }
+  if (field.primaryKey && field.rowKey === true) table.rowKey = names[0]
   if (field.unique) {
     // Ключ: носій скоупу, колонки власника чи батька, колонка поля.
     const lead = [
@@ -2468,8 +2482,10 @@ function addField(table: PendingTable, field: Field): string[] {
       keys: ascending(columns),
     })
   } else if (field.indexed) {
+    // Поліморфне стандартне посилання (пара власника) індексується для
+    // перевірки посилань, а не для списку, тож ключа не отримує.
     table.derivedIndexes.push({
-      purpose: "search",
+      purpose: field.standardRef === true ? "foreignKey" : "search",
       keys: ascending(withinScope(names, field.indexWithin)),
     })
   }
@@ -2489,21 +2505,40 @@ function materializeIndexes(table: PendingTable): void {
     ...(table.primaryKey !== undefined ? [table.primaryKey.columns] : []),
     ...table.uniques.map((unique) => unique.columns),
   ].map(ascending)
-  const { derivedIndexes: candidates } = table
-  candidates.forEach(({ keys: index }, i) => {
+  // Ключ рядка останнім дає keyset-сторінку без сортування; лише там, де PK
+  // — саме він (одинак підсумків чи скоуп-колонка в PK не ключ рядка).
+  const rowKey =
+    table.rowKey !== undefined &&
+    table.primaryKey?.columns.length === 1 &&
+    table.primaryKey.columns[0] === table.rowKey
+      ? table.rowKey
+      : undefined
+  const candidates = table.derivedIndexes.map((candidate) => ({
+    ...candidate,
+    full:
+      candidate.purpose === "search" &&
+      rowKey !== undefined &&
+      !candidate.keys.some(({ column }) => column === rowKey)
+        ? [...candidate.keys, { column: rowKey }]
+        : candidate.keys,
+  }))
+  candidates.forEach(({ purpose, keys: base, full }, i) => {
+    // Пошуковий кандидат, чиї колонки без ключа вже префікс PK чи UNIQUE,
+    // зайвий: той ключ дає порядок сам.
     const covered =
-      keys.some((key) => startsWith(key, index)) ||
+      (purpose === "search" && keys.some((key) => startsWith(key, base))) ||
+      keys.some((key) => startsWith(key, full)) ||
       candidates.some(
         (other, j) =>
           j !== i &&
-          startsWith(other.keys, index) &&
-          (other.keys.length > index.length || j < i)
+          startsWith(other.full, full) &&
+          (other.full.length > full.length || j < i)
       )
     if (covered) return
     table.indexes.push({
       unique: false,
       method: "btree",
-      keys: index.map(({ column, order }) => ({
+      keys: full.map(({ column, order }) => ({
         column,
         ...(order !== undefined ? { order } : {}),
       })),

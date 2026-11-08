@@ -246,7 +246,7 @@ describe("stage 3: physical snapshot", () => {
     expect(column("rank").default).toBe("3")
     expect(column("flag").default).toBe("true")
     expect(item.uniques.map((u) => u.name)).toEqual(["item_sku_key"])
-    expect(searchIndexes(item).map((i) => i.name)).toEqual(["item_rank_idx"])
+    expect(searchIndexes(item).map((i) => i.name)).toEqual(["item_rank_id_idx"])
   })
 
   it("required document attribute is checked on posting", async () => {
@@ -1371,7 +1371,7 @@ describe("stage 3: physical snapshot", () => {
     )
     expect(loose.uniques).toEqual([])
     expect(searchIndexes(loose).map((i) => i.keys)).toEqual([
-      [{ column: "code" }],
+      [{ column: "code" }, { column: "id" }],
     ])
   })
 
@@ -1534,6 +1534,7 @@ describe("stage 3: composite indexes", () => {
           { column: "org_id" },
           { column: "counterparty_id" },
           { column: "date", order: "desc" },
+          { column: "id" },
         ],
       })
     )
@@ -1562,6 +1563,7 @@ describe("stage 3: composite indexes", () => {
           { column: "org_id" },
           { column: "qty" },
           { column: "line_number", order: "desc" },
+          { column: "id" },
         ],
       })
     )
@@ -1587,7 +1589,7 @@ describe("stage 3: composite indexes", () => {
     const keys = tableOf(physical, "sale").indexes.map((i) =>
       i.keys.map((k) => ("column" in k ? k.column : k.expression))
     )
-    expect(keys).toContainEqual(["subject_type", "subject_id"])
+    expect(keys).toContainEqual(["subject_type", "subject_id", "id"])
   })
 
   it("an index covered by a longer one is dropped, a different order is not covered", async () => {
@@ -1606,9 +1608,17 @@ describe("stage 3: composite indexes", () => {
         (i) => !i.unique && "column" in i.keys[0]! && i.keys[0].column === "qty"
       )
       .map((i) => JSON.stringify(i.keys))
+    // Ключ рядка дописано всім трьом: `(qty, id)` не префікс `(qty, date, id)`,
+    // тож лишається окремим індексом — порядок за `qty` без `date` він не
+    // замінює.
     expect(keys).toEqual([
-      JSON.stringify([{ column: "qty" }, { column: "date" }]),
-      JSON.stringify([{ column: "qty" }, { column: "date", order: "desc" }]),
+      JSON.stringify([{ column: "qty" }, { column: "date" }, { column: "id" }]),
+      JSON.stringify([
+        { column: "qty" },
+        { column: "date", order: "desc" },
+        { column: "id" },
+      ]),
+      JSON.stringify([{ column: "qty" }, { column: "id" }]),
     ])
   })
 
@@ -1628,12 +1638,15 @@ describe("stage 3: composite indexes", () => {
     const indexes = tableOf(physical, "item").indexes
     expect(indexes.filter((i) => i.unique)).toHaveLength(2)
     expect(indexes).toContainEqual(
-      expect.objectContaining({ unique: false, keys: [{ column: "sku" }] })
+      expect.objectContaining({
+        unique: false,
+        keys: [{ column: "sku" }, { column: "id" }],
+      })
     )
     expect(indexes).toContainEqual(
       expect.objectContaining({
         unique: false,
-        keys: [{ column: "predefined_name" }],
+        keys: [{ column: "predefined_name" }, { column: "id" }],
       })
     )
   })
