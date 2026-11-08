@@ -94,11 +94,12 @@ designer, щоб тест-обгортка її бачила. Підготовк
 | Р4 | DB-тести, прив'язані до стека `postgres`, — `*.postgres.db.test.ts`, проєкт `db-pg` обох пакетів; проєкт `db` їх виключає; 2b додає їх у `db` | §10.5 (задача 0) |
 | Р5 | `simetra roles` бере той самий `SIMETRA_DATABASE_URL` (у профілі `postgres` — DSN суперкористувача до цільової бази); кластерні кроки — з'єднанням до службової бази `postgres` того самого сервера, кроки бази — до цілі й до шаблону. Скіл споживача радить окрему змінну через `--database-url-env` для `roles` | немає (§3.4 «DSN оператора») |
 | Р6 | Набір імен `PostgresClusterSet` параметризує підготовку; `roles` будує його з даних T0/T2, тести — з тегованих імен; шаблон тіні — `ShadowOptions.shadowTemplate ?? PROVIDER_SHADOW_TEMPLATES[provider]` | немає |
-| Р7 | Поза 2a: `runtime.privileged-login`, адресні гранти `better_auth`, `plan.identity-table-missing`, `plan.identity-trigger-locked` — ПГ-3; переведення наявних DB-тестів, CI, `AGENTS.md` — 2b | §12 рядок ПГ-3 дістає `runtime.privileged-login` (задача 0) |
+| Р7 | Поза 2a: `runtime.privileged-login`, адресні гранти `better_auth`, `plan.identity-table-missing`, `plan.identity-trigger-locked` — ПГ-3; переведення наявних DB-тестів, CI, `AGENTS.md` — 2b | §12 рядок ПГ-3 — править ПГ-3 (задача 0 ПГ-3) |
 | Р8 | Міграція Better Auth — без `schemaName`, бо з ним Better Auth шле `CREATE SCHEMA IF NOT EXISTS`, а Postgres перевіряє `CREATE` на базу до `IF NOT EXISTS` (перевірено на стеку). Головний засіб — опція з'єднання пулу host-а й тестів (`search_path = better_auth`); налаштування ролі — другий шар, бо роль сама може його переписати: `roles` ставить `ALTER ROLE <auth> SET search_path = better_auth` і `ALTER ROLE <auth> IN DATABASE <database> SET search_path = better_auth`. `roles` перевіряє: `<auth>` не має `CREATE` ні на базу, ні на `public`, жодне відношення з `relowner = <auth>` не лежить поза `better_auth`, а рядок `pg_db_role_setting` ролі `<auth>` для цілі не задає іншого `search_path` (рішення архітекторки) | §4.1, §4.2 крок 2, §10.1 (задача 0) |
 | Р9 | Окремий сервер тіней (`shadowBase`) у профілі `postgres` у 2a не підтримано: `roles`, план і застосування відмовляють `plan.shadow-base-unsupported` (рішення архітекторки) | §14 — новий рядок (задача 0) |
 | Р10 | Гейт `plan.owner-not-bypassrls` — на вході плану, застосування (після advisory lock) і репетиції; та сама функція рішення (рішення архітекторки, §3.3) | немає |
 | Р11 | `pnpm db:pg:start` після наявних кроків кличе `simetra roles` з теки `docker/postgres-stack/project/` (`project.meta.json`, `provider: "postgres"`) і ставить dev-паролі ролям входу; наскрізний DB-тест плану потребує справжніх ролей грантів, яким грантує бажаний SQL (рішення архітекторки) | §10.2 рядок `db:pg:start` (задача 0) |
+| Р13 | До ПГ-3 міграцію Better Auth у базі `simetra` і тимчасові гранти `USAGE` на `better_auth` і `TRIGGER` на `better_auth."user"` для `simetra_owner` ставить `pnpm db:pg:start` під замком стека, після кроку `roles`: мала точка входу `packages/simetra/test/db/better-auth-cli.ts` (`node --import tsx`) кличе `migrateBetterAuth` (задача 5) від `simetra_auth`, а гранти — від суперкористувача й лише після успішної міграції; повтор нічого не змінює. ПГ-3 переносить гранти в `roles` і прибирає їх з `db:pg:start`; тест гранту ПГ-3 — на тегованому кластері (`taggedClusterSet`), не на `simetra`, а CI перевіряє свіжий стек. Стан `better_auth` на стеку звіряє guard 2b (рішення архітекторки) | §10.1 (таблиці Better Auth бази стека `simetra` — з `db:pg:start`), §10.2 рядок `db:pg:start` (задача 0); §12 рядок ПГ-3 — править ПГ-3 (задача 0 ПГ-3) |
 | Р12 | Оператори поза транзакцією (`CREATE DATABASE`, `ALTER DATABASE … IS_TEMPLATE`) — метод порту `ApplyDatabase.statement(db, sql)`: T2 не імпортує `pg`, а `transaction` завжди відкриває `BEGIN`. Метод — лише для підготовки кластера (`ensurePostgresCluster`), ніколи в плані чи застосуванні; межу тримає тест-гард | немає |
 
 ## Review Focus
@@ -127,10 +128,10 @@ designer, щоб тест-обгортка її бачила. Підготовк
 - Modify: `docs/superpowers/specs/2026-11-08-postgres-profile-design.md`
 
 - [ ] **Step 1:** внести поправки за стовпцем «Вплив на спеку» (Р1, Р3, Р4,
-  Р7, Р8, Р9, Р11): §3.1, §4.1, §4.2 (таблиця мап і «Тінь», крок 2), §10.1,
+  Р7, Р8, Р9, Р11, Р13): §3.1, §4.1, §4.2 (таблиця мап і «Тінь», крок 2), §10.1,
   §10.2, §10.5, §12 (рядок ПГ-2 — поділ на 2a і 2b з посиланнями на обидва
-  плани; ПГ-3 — `runtime.privileged-login` і конфіг Better Auth без
-  `schemaName`; ПГ-4 — ролі сигналів), §14 (Р9). Формулювання — стан після
+  плани; ПГ-4 — ролі сигналів), §14 (Р9). Рядок ПГ-3 §12 цей план не
+  править: його поправки (Р7, Р13) робить задача 0 ПГ-3. Формулювання — стан після
   блоку, з посиланням на блок, що завершує механізм.
 - [ ] **Step 2:** `python3 scripts/check-doc-anchors.py` і `pnpm format:check` — зелені.
 - [ ] **Step 3: Commit** — `docs(spec): профіль postgres — поправки блоку ПГ-2a`.
@@ -623,13 +624,15 @@ designer, щоб тест-обгортка її бачила. Підготовк
 - [ ] **Step 5:** PASS; scoped DB на Supabase `pnpm --filter @simetrajs/designer test:db roles-tool` — зелений.
 - [ ] **Step 6: Commit** — `feat(designer): simetra roles готує кластер профілю postgres`.
 
-### Task 9: стек `postgres` — ролі, база `simetra` і шаблон на старті
+### Task 9: стек `postgres` — ролі, база `simetra`, шаблон і ідентичність на старті
 
 **Files:**
 - Create: `docker/postgres-stack/project/project.meta.json` — вміст
   `{ "name": "simetra-dev", "database": { "provider": "postgres" } }`; тека
   поза шаблоном `*metadata`, тож `metadata:check` її не компілює
-- Create: `packages/simetra/test/db/stack-roles.postgres.db.test.ts`
+- Create: `packages/simetra/test/db/better-auth-cli.ts` (Р13),
+  `packages/simetra/test/db/better-auth-cli.postgres.db.test.ts`,
+  `packages/simetra/test/db/stack-roles.postgres.db.test.ts`
 - Modify: `docker/postgres-stack/dev-secrets.env` (`SIMETRA_OWNER_DEV_PASSWORD`,
   `SIMETRA_RUNTIME_DEV_PASSWORD`, `SIMETRA_AUTH_DEV_PASSWORD`),
   `scripts/db-stack.mjs` (`startPostgres`), `scripts/db-stack.d.mts`,
@@ -637,30 +640,67 @@ designer, щоб тест-обгортка її бачила. Підготовк
   `packages/simetra/test/db/pgtap/postgres/stack-base-state.pgtap.sql` (`plan(N)`
   і шапку про ролі Simetra оновити)
 
+**Interfaces:**
+- Produces (`better-auth-cli.ts`):
+  - `async function prepareStackIdentity(o: { superuserUrl: string; authUrl: string; owner: string; migrate?: (authUrl: string) => Promise<void> }): Promise<void>`
+    — спершу `(o.migrate ?? migrateBetterAuth)(o.authUrl)` від ролі `auth`;
+    лише після її успіху — одна транзакція суперкористувача з прелюдією
+    `roles` (Global Constraints): `GRANT USAGE ON SCHEMA better_auth TO <owner>`,
+    `GRANT TRIGGER ON better_auth."user" TO <owner>`; збій міграції — виняток
+    без жодного гранту; `migrate` — шов тесту;
+  - точка входу CLI: DSN — зі змінних середовища `SIMETRA_SUPERUSER_URL` і
+    `SIMETRA_AUTH_URL` (не argv), `owner` — `PROVIDER_OWNER_ROLES.postgres`;
+    код виходу 1 з повідомленням англійською на збій.
+
 - [ ] **Step 1: failing tests:**
   - `stack-files.test.ts` — `project.meta.json` стека з
     `database.provider: "postgres"`; `dev-secrets.env` має три паролі;
+    `startPostgres` кличе `better-auth-cli.ts` після кроку `roles` і паролів;
   - набір базового стану (pgTAP, база `postgres`) — лише кластерні факти:
     ролі §3.1 (без ролей сигналів) з атрибутами (`pg_roles`) і членствами
     (`pg_auth_members`); `simetra` належить `simetra_owner` (`pg_database`);
     `simetra_template` — `datistemplate` і `NOT datallowconn`; налаштування
     `search_path` ролі `simetra_auth` (`pg_db_role_setting`);
   - `stack-roles.postgres.db.test.ts`: у `simetra` схема `better_auth` належить
-    `simetra_auth`, `plpgsql_check` стоїть у `extensions`; у тегованій
+    `simetra_auth`, `plpgsql_check` стоїть у `extensions`; колонки
+    `better_auth."user"` — `PROVIDER_EVENT_SOURCES.postgres` у тому самому
+    порядку; `simetra_owner` має `USAGE` на `better_auth` і `TRIGGER` на
+    `better_auth."user"` і не має на ній `INSERT`, `SELECT`; у тегованій
     одноразовій копії `CREATE DATABASE <тег> TEMPLATE simetra_template` —
-    `plpgsql_check` є, `better_auth` немає; копія видаляється у `finally`.
-- [ ] **Step 2:** `pnpm --filter simetra test stack-files` — FAIL.
+    `plpgsql_check` є, `better_auth` немає; копія видаляється у `finally`;
+  - `better-auth-cli.postgres.db.test.ts` (тегований кластер задачі 8:
+    `taggedClusterSet`, `ensurePostgresCluster`, `setTestPasswords`,
+    `dropTaggedCluster` у `afterAll`):
+    - **повтор нічого не змінює:** `prepareStackIdentity` двічі; знімок після
+      першого й другого виклику однаковий — атрибути ролей набору
+      (`pg_roles`), рядки `pg_auth_members`, `has_schema_privilege` і
+      `has_table_privilege` тегованого `owner` на `better_auth` і
+      `better_auth."user"` (`USAGE`, `TRIGGER`, `INSERT`, `SELECT`), колонки
+      `better_auth."user"` (`information_schema.columns`), `pg_db_role_setting`;
+    - **збій міграції не лишає грантів:** `migrate` — справжня міграція, що
+      після `runMigrations` кидає, і окремо підставна, що створює частину
+      таблиць і кидає; `prepareStackIdentity` кидає, у тегованого `owner`
+      немає `USAGE` на `better_auth` і `TRIGGER` на `better_auth."user"`
+      (якщо таблиця є); наступний виклик зі справжньою міграцією дає обидва
+      гранти.
+- [ ] **Step 2:** `pnpm --filter simetra test stack-files` і `pnpm --filter simetra test:db:pg better-auth-cli` — FAIL.
 - [ ] **Step 3:** `startPostgres` після `dev-environment.sql`, під тим самим
   замком: `node packages/designer/bin/simetra.mjs roles docker/postgres-stack/project`
   з `SIMETRA_DATABASE_URL` суперкористувача до бази `simetra`; потім паролі
   ролям входу від суперкористувача через stdin `psql` (`\set` і
   `ALTER ROLE … PASSWORD :'pw'`, як `dev-environment.sql` через `input:`), не
-  `-v` в argv. Шапку `db-stack.mjs` про «без залежностей» уточнити:
-  `start postgres` вимагає `pnpm install`.
+  `-v` в argv; потім `node --import tsx packages/simetra/test/db/better-auth-cli.ts`
+  з `SIMETRA_SUPERUSER_URL` (суперкористувач до `simetra`) і
+  `SIMETRA_AUTH_URL` (`simetra_auth` з `SIMETRA_AUTH_DEV_PASSWORD` до
+  `simetra`) у середовищі дочірнього процесу. Шапку `db-stack.mjs` про «без
+  залежностей» уточнити: `start postgres` вимагає `pnpm install`.
 - [ ] **Step 4:** PASS; `pnpm db:pg:start` — код 0; `pnpm test:db:pg` —
-  зелений; повторний `pnpm db:pg:start` — код 0, рядки `pg_auth_members` ті
-  самі; `docker ps --filter name=supabase_` — той самий uptime.
-- [ ] **Step 5: Commit** — `build(db): ролі Simetra, база simetra і шаблон на старті стека postgres`.
+  зелений; знімок стека (запит знімка тесту «повтор нічого не змінює» від
+  суперкористувача до `simetra`) до й після повторного `pnpm db:pg:start` —
+  однаковий, вивід обох — у звіт; uptime контейнерів `simetra-pg-*` — той
+  самий; `docker ps --filter name=supabase_` — той самий uptime, якщо стек
+  Supabase піднято.
+- [ ] **Step 5: Commit** — `build(db): ролі Simetra, база simetra, шаблон і міграція Better Auth на старті стека postgres`.
 
 ### Task 10: тінь і копія доказу з шаблону; план на `postgres` наскрізно
 
@@ -801,7 +841,8 @@ designer, щоб тест-обгортка її бачила. Підготовк
 - `simetra roles` від суперкористувача готує ролі §3.1 (без ролей сигналів),
   базу власника, `plpgsql_check` і `simetra_template`; повторний запуск
   нічого не змінює; відмови — до першого запису; `pnpm db:pg:start` виконує
-  його на стеку.
+  його на стеку, потім міграцію Better Auth у `simetra` і тимчасові гранти
+  власнику (Р13); повторний старт нічого не змінює.
 - План і застосування від ролі з атрибутами `simetra_owner` проходять на
   `postgres` з тінню й копією з шаблону, `plpgsql_check` — `installed`; без
   `BYPASSRLS` — `plan.owner-not-bypassrls` на плані, застосуванні й репетиції.
