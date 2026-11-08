@@ -114,7 +114,7 @@ export interface FakeSource {
   insert(object: FakeObject, values: Values): number
   /** A foreign change of a live row: merges `values`; returns the new version. */
   edit(object: FakeObject, key: Key, values: Values): number
-  /** A foreign deletion of a live row. */
+  /** A foreign deletion of a live row; its section lines go with it. */
   remove(object: FakeObject, key: Key): void
   /** Replaces the lines of a tabular section and raises the owner version. */
   setLines(
@@ -125,8 +125,12 @@ export interface FakeSource {
   ): number
   /** The row at moment `at` (default: now), visibility aside. */
   row(object: FakeObject, key: Key, at?: number): ServerRow | undefined
-  /** Rows only of these scopes are visible (as RLS); `undefined` — all. */
-  setVisibleScopes(scopes: Iterable<string | null> | undefined): void
+  /**
+   * From the next tick on, rows only of these scopes are visible (as RLS);
+   * `undefined` — all. Visibility is part of the history: a read answered at
+   * an earlier moment sees the visibility of that moment. Returns the tick.
+   */
+  setVisibleScopes(scopes: Iterable<string | null> | undefined): number
   /** Marks a row as alone exceeding the response budget. */
   oversize(object: FakeObject, key: Key, on?: boolean): void
 }
@@ -167,7 +171,11 @@ function byKeys(filter: Filter | undefined, keyName: string): boolean {
   )
 }
 
-/** Creates a fake server with a controlled transport (see {@link FakeSource}). */
+/**
+ * Creates a fake server with a controlled transport (see {@link FakeSource}).
+ * It serves the list, card and owner-lines forms; section pages and counts
+ * are not served yet — such a read is refused with a plain `Error`.
+ */
 export function createFakeSource(init: FakeSourceInit): FakeSource {
   const index = catalogIndex(init.objects)
   const collator = filterCollator()
@@ -177,7 +185,11 @@ export function createFakeSource(init: FakeSourceInit): FakeSource {
   const pending: FakeRead[] = []
   const log: FakeReadLog[] = []
   let clock = 0
-  let visible: Set<string | null> | undefined
+  // Видимість — теж ревізії на годиннику: відповідь на мить `at` бачить
+  // права тієї миті (застаріла репліка разом зі зміною доступу).
+  const visibility: Revision<ReadonlySet<string | null> | "all">[] = [
+    { at: 0, value: "all" },
+  ]
   let inFlight = 0
   let maxInFlight = 0
 
@@ -194,17 +206,25 @@ export function createFakeSource(init: FakeSourceInit): FakeSource {
   const tableOf = (object: FakeObject) => tables.get(nameOf(entryOf(object)))!
   const linesId = (object: ObjectName, owner: Key, section: string) =>
     `${object}\u0000${owner}\u0000${section}`
-  const isVisible = (entry: CatalogEntry, values: Values) =>
-    visible === undefined || visible.has(scopeOf(entry, values))
-  // Рядок понад бюджет не вміщується за жодного бюджету, і безмежного теж.
-  const fits = (entry: CatalogEntry, rows: readonly Values[]) =>
-    rows.length <= fake.responseRows &&
-    rows.every(
-      (row) =>
-        !oversized.has(
-          `${entry.kind}.${entry.name}\u0000${String(row[entry.keyName])}`
-        )
+  const isVisible = (entry: CatalogEntry, values: Values, at: number) => {
+    const scopes = valueAt(visibility, at) ?? "all"
+    return scopes === "all" || scopes.has(scopeOf(entry, values))
+  }
+  const isOversized = (entry: CatalogEntry, key: unknown) =>
+    oversized.has(`${entry.kind}.${entry.name}\u0000${String(key)}`)
+  // Розмір відповіді в рядках; рядок понад бюджет — безмежний розмір.
+  const size = (entry: CatalogEntry, rows: readonly Values[]) =>
+    rows.some((row) => isOversized(entry, row[entry.keyName]))
+      ? Infinity
+      : rows.length
+  const includedSize = (extra: Record<string, Values[]> | undefined) =>
+    Object.entries(extra ?? {}).reduce(
+      (sum, [name, rows]) => sum + size(index.byRef.get(name)!, rows),
+      0
     )
+  // Безмежний розмір не вміщується і в безмежний бюджет.
+  const fits = (total: number) =>
+    Number.isFinite(total) && total <= fake.responseRows
 
   const liveRow = (object: FakeObject, key: Key) => {
     const history = tableOf(object).get(key)
@@ -238,7 +258,7 @@ export function createFakeSource(init: FakeSourceInit): FakeSource {
     const out: Values[] = []
     for (const history of tables.get(`${entry.kind}.${entry.name}`)!.values()) {
       const values = valueAt(history, at)
-      if (values === null || !isVisible(entry, values)) continue
+      if (values === null || !isVisible(entry, values, at)) continue
       out.push(
         lazy.size === 0
           ? values
@@ -303,7 +323,9 @@ export function createFakeSource(init: FakeSourceInit): FakeSource {
         linesId(nameOf(query.object), query.owner, query.tabularSection)
       )
       const rows = [...((history && valueAt(history, at)) ?? [])]
-      if (rows.length > fake.responseRows) throw tooLarge()
+      // Позначка «понад бюджет» на власнику — це його ТЧ, що не вміщується.
+      const total = isOversized(entry, query.owner) ? Infinity : rows.length
+      if (!fits(total)) throw tooLarge()
       return { rows, ownerVersion: owner[entry.versionName] as number }
     }
     if ("count" in query) throw new Error("fake: counts are not served")
@@ -328,8 +350,8 @@ export function createFakeSource(init: FakeSourceInit): FakeSource {
           })
         )
       }
-      if (!fits(entry, [card])) throw tooLarge()
       const extra = included(entry, query.include, [card], at)
+      if (!fits(size(entry, [card]) + includedSize(extra))) throw tooLarge()
       return extra === undefined
         ? { rows: [card] }
         : { rows: [card], included: extra }
@@ -341,12 +363,15 @@ export function createFakeSource(init: FakeSourceInit): FakeSource {
     }
     rows.sort(compareRows(query.orderBy ?? [], info, entry.keyName, collator))
     rows = rows.slice(query.offset ?? 0, (query.offset ?? 0) + query.limit)
+    // Бюджет — рядки відповіді разом із рядками `included`.
+    const total = (part: readonly Values[]) =>
+      size(entry, part) + includedSize(included(entry, query.include, part, at))
     let more = false
-    if (!fits(entry, rows)) {
+    if (!fits(total(rows))) {
       // Читання за ключами не обрізається (§4.1); сторінка — найдовшим префіксом.
       if (byKeys(where, entry.keyName)) throw tooLarge()
       let end = 0
-      while (end < rows.length && fits(entry, rows.slice(0, end + 1))) end++
+      while (end < rows.length && fits(total(rows.slice(0, end + 1)))) end++
       if (end === 0) throw tooLarge()
       rows = rows.slice(0, end)
       more = true
@@ -470,7 +495,15 @@ export function createFakeSource(init: FakeSourceInit): FakeSource {
     },
     remove(object, key) {
       const { history } = liveRow(object, key)
-      history.push({ at: ++clock, value: null })
+      const at = ++clock
+      history.push({ at, value: null })
+      // Рядки ТЧ видаляються з власником тим самим тактом.
+      const entry = entryOf(object)
+      for (const section of entry.tabularSections) {
+        lines
+          .get(linesId(nameOf(entry), key, section.name))
+          ?.push({ at, value: null })
+      }
     },
     setLines(object, owner, section, rows) {
       const { current } = liveRow(object, owner)
@@ -494,7 +527,12 @@ export function createFakeSource(init: FakeSourceInit): FakeSource {
         : { key, version: values[entry.versionName] as number, values }
     },
     setVisibleScopes(scopes) {
-      visible = scopes === undefined ? undefined : new Set(scopes)
+      const at = ++clock
+      visibility.push({
+        at,
+        value: scopes === undefined ? "all" : new Set(scopes),
+      })
+      return at
     },
     oversize(object, key, on = true) {
       const id = `${nameOf(entryOf(object))}\u0000${key}`

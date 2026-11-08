@@ -17,6 +17,7 @@ import {
   createCoreSource,
   createReadLimiter,
   readKeys,
+  ReadLimiterClosed,
   type CoreSource,
 } from "../source"
 import { createFakeSource, type FakeSource } from "../testing/fake-source"
@@ -83,7 +84,7 @@ describe("readKeys", () => {
     const { fake, source } = setup()
     seedTasks(fake, 450)
     const keys = Array.from({ length: 450 }, (_, i) => key(i + 1))
-    const rows = await readKeys(source, task, TASK, keys, {
+    const rows = await readKeys(source, task, keys, {
       keysPerRequest: 200,
     })
     expect(fake.log.map((r) => keysOf(r.wire).length)).toEqual([200, 200, 50])
@@ -95,7 +96,7 @@ describe("readKeys", () => {
     seedTasks(fake, 200)
     fake.responseRows = 150
     const keys = Array.from({ length: 200 }, (_, i) => key(i + 1))
-    const rows = await readKeys(source, task, TASK, keys, {
+    const rows = await readKeys(source, task, keys, {
       keysPerRequest: 200,
     })
     expect(fake.log.map((r) => keysOf(r.wire).length)).toEqual([200, 100, 100])
@@ -106,7 +107,7 @@ describe("readKeys", () => {
     const { fake, source } = setup()
     seedTasks(fake, 2)
     fake.oversize(TASK, key(2))
-    const failure = await readKeys(source, task, TASK, [key(1), key(2)], {
+    const failure = await readKeys(source, task, [key(1), key(2)], {
       keysPerRequest: 200,
     }).catch((e: unknown) => e)
     expect(tooLarge(failure)).toBe(true)
@@ -121,7 +122,7 @@ describe("readKeys", () => {
     const { fake, source } = setup()
     seedTasks(fake, 1)
     const version = fake.edit(TASK, key(1), { title: "x" })
-    const [row] = await readKeys(source, task, TASK, [key(1)], {
+    const [row] = await readKeys(source, task, [key(1)], {
       keysPerRequest: 200,
     })
     expect(row).toEqual({
@@ -134,21 +135,30 @@ describe("readKeys", () => {
   it("returns no row for an absent key and sends nothing for no keys", async () => {
     const { fake, source } = setup()
     seedTasks(fake, 1)
-    const rows = await readKeys(source, task, TASK, [key(1), key(9)], {
+    const rows = await readKeys(source, task, [key(1), key(9)], {
       keysPerRequest: 200,
     })
     expect(rows.map((r) => r.key)).toEqual([key(1)])
-    expect(
-      await readKeys(source, task, TASK, [], { keysPerRequest: 200 })
-    ).toEqual([])
+    expect(await readKeys(source, task, [], { keysPerRequest: 200 })).toEqual(
+      []
+    )
     expect(fake.log).toHaveLength(1)
+  })
+
+  it("refuses keysPerRequest outside 1..READ_LIMIT_MAX before any request", async () => {
+    const { fake, source } = setup()
+    for (const keysPerRequest of [0, 201, 1.5]) {
+      await expect(
+        readKeys(source, task, [key(1)], { keysPerRequest })
+      ).rejects.toBeInstanceOf(RangeError)
+    }
+    expect(fake.log).toHaveLength(0)
   })
 
   it("reads each key by the card form with lazy fields when asked", async () => {
     const { fake, source } = setup()
     seedTasks(fake, 2)
-    const rows = await readKeys(source, task, TASK, [key(1), key(2)], {
-      keysPerRequest: 200,
+    const rows = await readKeys(source, task, [key(1), key(2)], {
       form: "card",
     })
     expect(fake.log.map((r) => r.query)).toEqual([
@@ -298,6 +308,36 @@ describe("createReadLimiter", () => {
     expect(await Promise.all([b, c])).toEqual(["b", "c"])
   })
 
+  it("on close drops queued reads and refuses later ones; reads in flight finish", async () => {
+    const fake = createFakeSource({ objects: OBJECTS, mode: "manual" })
+    const limiter = createReadLimiter(4)
+    const source = createCoreSource(
+      () => fake.adapter,
+      catalogIndex(OBJECTS),
+      limiter
+    )
+    seedTasks(fake, 1)
+    // Кожна відмова зловлена тут: необроблених відхилень немає.
+    const reads = Array.from({ length: 9 }, () =>
+      source.read({ object: TASK, limit: 1 }).then(
+        (r) => r.rows.length,
+        (e: unknown) => e
+      )
+    )
+    await settle()
+    limiter.close()
+    const later = source.read({ object: TASK, limit: 1 }).catch((e) => e)
+    fake.deliverAll()
+    const outcomes = await Promise.all(reads)
+    expect(outcomes.slice(0, 4)).toEqual([1, 1, 1, 1])
+    expect(outcomes.slice(4).every((e) => e instanceof ReadLimiterClosed)).toBe(
+      true
+    )
+    expect(await later).toBeInstanceOf(ReadLimiterClosed)
+    await settle()
+    expect(fake.log).toHaveLength(4)
+  })
+
   it("frees the slot of a task that throws synchronously", async () => {
     const limiter = createReadLimiter(1)
     const failed = limiter.run((): Promise<number> => {
@@ -353,10 +393,59 @@ describe("createFakeSource", () => {
     seedTasks(fake, 2)
     fake.edit(TASK, key(2), { org: T })
     fake.setVisibleScopes([S])
-    const rows = await readKeys(source, task, TASK, [key(1), key(2)], {
+    const rows = await readKeys(source, task, [key(1), key(2)], {
       keysPerRequest: 200,
     })
     expect(rows.map((r) => r.key)).toEqual([key(1)])
+  })
+
+  it("answers with the visibility of the chosen moment", async () => {
+    const fake = createFakeSource({ objects: OBJECTS, mode: "manual" })
+    const { source } = setup({ fake })
+    seedTasks(fake, 1)
+    const old = source.read({ object: TASK, id: key(1) })
+    const current = source.read({ object: TASK, id: key(1) })
+    await settle()
+    const [first, second] = [fake.take(), fake.take()]
+    // Доступ до скоупу рядка відкликано після читання (t1 > t0).
+    fake.setVisibleScopes([T])
+    first.answer(first.issuedAt)
+    second.answer()
+    expect((await old).rows.map((r) => r.ref)).toEqual([key(1)])
+    expect((await current).rows).toEqual([])
+  })
+
+  it("refuses owner lines of an oversized owner and drops lines with a removed owner", async () => {
+    const { fake, source } = setup()
+    seedTasks(fake, 1)
+    fake.setLines(TASK, key(1), "lines", [
+      { ref: key(50), lineNumber: 1, qty: 1 },
+    ])
+    const before = fake.clock
+    fake.oversize(TASK, key(1))
+    const lines = { object: TASK, tabularSection: "lines", owner: key(1) }
+    expect(tooLarge(await source.read(lines).catch((e: unknown) => e))).toBe(
+      true
+    )
+    fake.oversize(TASK, key(1), false)
+    fake.remove(TASK, key(1))
+    fake.insert(TASK, { ref: key(1), org: S, title: "again" })
+    expect((await source.read(lines)).rows).toEqual([])
+    expect(fake.row(TASK, key(1), before)?.values.title).toBe("t1")
+  })
+
+  it("counts included rows in the response budget", async () => {
+    const { fake, source } = setup()
+    fake.insert(ORG, { ref: S })
+    seedTasks(fake, 2)
+    fake.responseRows = 2
+    const page = await source.read({ object: TASK, limit: 5, include: ["org"] })
+    expect(page.rows).toHaveLength(1)
+    expect(page.more).toBe(true)
+    // Без `include` ті самі два рядки вміщуються.
+    expect(
+      await readKeys(source, task, [key(1), key(2)], { keysPerRequest: 200 })
+    ).toHaveLength(2)
   })
 
   it("fails a held read with the given error and still delivers after any caller is gone", async () => {

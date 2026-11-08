@@ -1,6 +1,8 @@
 import {
   CommandFailure,
+  FILTER_IN_MAX,
   LIMIT_REASONS,
+  READ_LIMIT_MAX,
   WireDecodeError,
   readQueryToWire,
   readResultFromWire,
@@ -18,12 +20,34 @@ import type { Key, ServerRow } from "./types"
 export type RowsQuery = Exclude<ReadQuery, { count: true }>
 
 /**
+ * The refusal of a read the limiter never started: it was queued or asked
+ * for after {@link ReadLimiter.close}. The core ignores it — its session is
+ * already closed.
+ */
+export class ReadLimiterClosed extends Error {
+  constructor() {
+    super("read limiter is closed")
+    this.name = "ReadLimiterClosed"
+  }
+}
+
+/**
  * Bounds the reads in flight (P4-B spec §8.4): at most `parallel` tasks run
  * at once, the rest wait in FIFO order; a settled task — resolved or
  * rejected — frees its slot.
  */
 export interface ReadLimiter {
+  /**
+   * Runs `task` when a slot is free. Not reentrant: a task must not await
+   * another `run` of the same limiter, or a full limiter deadlocks.
+   */
   run<T>(task: () => Promise<T>): Promise<T>
+  /**
+   * Closes the limiter (session close, `dispose()`): queued tasks never
+   * start and reject with {@link ReadLimiterClosed}, as does every later
+   * `run`; tasks in flight finish normally.
+   */
+  close(): void
 }
 
 /** Creates a {@link ReadLimiter} of `parallel` slots shared by every read. */
@@ -32,14 +56,24 @@ export function createReadLimiter(parallel: number): ReadLimiter {
     throw new RangeError("readParallel must be a positive integer")
   }
   let active = 0
-  const queue: (() => void)[] = []
+  let closed = false
+  const queue: { start: () => void; refuse: () => void }[] = []
   const release = () => {
     active--
-    queue.shift()?.()
+    queue.shift()?.start()
   }
   return {
+    close() {
+      closed = true
+      // Після закриття жодного нового запиту: черга відмовляє, не стартуючи.
+      for (const waiting of queue.splice(0)) waiting.refuse()
+    },
     run<T>(task: () => Promise<T>): Promise<T> {
       return new Promise<T>((resolve, reject) => {
+        if (closed) {
+          reject(new ReadLimiterClosed())
+          return
+        }
         const start = () => {
           active++
           // Синхронний кидок задачі — теж відмова: слот звільняється так само.
@@ -52,7 +86,8 @@ export function createReadLimiter(parallel: number): ReadLimiter {
           promise.then(resolve, reject).finally(release)
         }
         if (active < parallel) start()
-        else queue.push(start)
+        else
+          queue.push({ start, refuse: () => reject(new ReadLimiterClosed()) })
       })
     },
   }
@@ -106,15 +141,17 @@ export function createCoreSource(
   }
 }
 
+/** The most keys one list request by keys may carry. */
+const KEYS_PER_REQUEST_MAX = Math.min(READ_LIMIT_MAX, FILTER_IN_MAX)
+
 /**
- * Options of {@link readKeys}. `form: "card"` reads each key by the card form
- * (lazy columns included); the default list form reads keys in chunks.
+ * Options of {@link readKeys}: the list form reads keys in chunks of
+ * `keysPerRequest` (1 to `READ_LIMIT_MAX`); `form: "card"` reads each key by
+ * the card form, lazy columns included.
  */
-export interface ReadKeysOptions {
-  /** Keys per list request; at most `READ_LIMIT_MAX`. */
-  readonly keysPerRequest: number
-  readonly form?: "list" | "card"
-}
+export type ReadKeysOptions =
+  | { readonly form?: "list"; readonly keysPerRequest: number }
+  | { readonly form: "card" }
 
 const isTooLarge = (error: unknown): boolean =>
   error instanceof CommandFailure &&
@@ -132,7 +169,7 @@ function serverRow(entry: CatalogEntry, values: Record<string, unknown>) {
 }
 
 /**
- * Reads rows of `object` by keys (P4-B spec §6.1, form `keys`) — the single
+ * Reads rows of the object of `entry` by keys (P4-B spec §6.1, form `keys`) — the single
  * path of every re-read by key. The list form goes by `keysPerRequest` keys
  * per request; on `response-too-large` a chunk is halved down to one key,
  * and one key over the budget passes the failure on. A key without a row in
@@ -141,10 +178,11 @@ function serverRow(entry: CatalogEntry, values: Record<string, unknown>) {
 export async function readKeys(
   source: CoreSource,
   entry: CatalogEntry,
-  object: MetadataRef,
   keys: readonly Key[],
   options: ReadKeysOptions
 ): Promise<ServerRow[]> {
+  // Об'єкт — із запису каталогу: окремий параметр міг би з ним розійтися.
+  const object: MetadataRef = { kind: entry.kind, name: entry.name }
   const toRows = (result: ReadRows) =>
     result.rows.map((values) => serverRow(entry, values))
   if (options.form === "card") {
@@ -155,8 +193,14 @@ export async function readKeys(
     return results.flatMap(toRows)
   }
   const { keysPerRequest } = options
-  if (!Number.isSafeInteger(keysPerRequest) || keysPerRequest < 1) {
-    throw new RangeError("keysPerRequest must be a positive integer")
+  if (
+    !Number.isSafeInteger(keysPerRequest) ||
+    keysPerRequest < 1 ||
+    keysPerRequest > KEYS_PER_REQUEST_MAX
+  ) {
+    throw new RangeError(
+      `keysPerRequest must be an integer from 1 to ${KEYS_PER_REQUEST_MAX}`
+    )
   }
   const one = async (chunk: readonly Key[]): Promise<ServerRow[]> => {
     try {
