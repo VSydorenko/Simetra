@@ -100,8 +100,10 @@ Playwright (`page.clock`), `pg` 8.23.1, Postgres 17, Centrifugo v6 (стенд
   - приєднання з `recovered: true` — 0 перечитувань виглядів;
   - приєднання без `recovered` (зокрема перше, після монтування чи заміни
     знімка) — рівно 1 умовний запит на хвилю приєднань (Р11): «нічого не
-    змінилось» — тіло ≤ 64 Б × ключів `known` + 2 КіБ, інакше ≤ 1,1 ×
-    корисних + 2 КіБ; хвилі — не частіше разу на `REJOIN_JITTER_MS`;
+    змінилось» — тіло ≤ 64 Б × ключів `known` + 2 КіБ, а відповідь ще й
+    + `jsonBytes` знімка прав (коли в хвилі є `rights`) + 128 Б × об'єктів
+    каталогу (коли є `version`); інакше ≤ 1,1 × корисних + 2 КіБ; хвилі — не
+    частіше разу на `REJOIN_JITTER_MS`;
   - `auth` каналу — 0 запитів, лише `purge`;
   - `transport` — 0 запитів, лише позначки «розрив».
 - Сталі T4 (`src/data/runtime/signals.ts`): пачка — тиша `QUIET_MS = 50`,
@@ -545,7 +547,7 @@ Playwright (`page.clock`), `pg` 8.23.1, Postgres 17, Centrifugo v6 (стенд
     `known`; запис — `commit` з токеном старту: повернуті — `patch` за
     правилом версії, відсутні — `remove` (`removed` на місці);
     `ReadKeysResult = { returned: readonly Key[]; missing: readonly Key[]; versions: ReadonlyMap<Key, number> }`;
-  - `fakeSignalTransport(): SignalTransport & { emit(topic, payload): void; join(channel, recovered: boolean): void; fail(e: SignalError): void; refused: Set<string>; subscribed(): readonly string[]; subscribeCalls(): number; refreshCalls(): readonly (readonly string[] | undefined)[] }`.
+  - `fakeSignalTransport(): SignalTransport & { emit(topic, payload): void; join(channel, recovered: boolean): void; fail(e: SignalError): void; refused: Set<string>; subscribed(): readonly string[]; subscribeCalls(): number; refreshCalls(): readonly (readonly string[] | undefined)[]; closed(): boolean }`.
     `refreshTokens` закриває канали з `refused` і кличе
     `onError({ kind: "auth", channel })`.
 
@@ -566,7 +568,12 @@ Playwright (`page.clock`), `pg` 8.23.1, Postgres 17, Centrifugo v6 (стенд
 **Files:**
 - Create: `packages/simetra/src/data/runtime/signals.ts`
 - Modify: `packages/simetra/src/data/runtime/` — рантайм створює приймач, коли
-  в опціях є `signals: SignalTransport`
+  в опціях є фабрика `signals` (Р15)
+- Modify (після B5a): `packages/simetra/src/data/runtime/freshness.ts` —
+  контракт для приймача: `isVisible(): boolean`,
+  `markRejoinPending(object: ObjectName): void`; `resume()` перечитує
+  видимі вигляди об'єктів з `rejoinPending` поза межею `resumeMinIntervalMs`
+  і знімає позначку; тести — `freshness.test.ts`
 - Test: `packages/simetra/src/data/runtime/__tests__/signals.test.ts`
 
 **Interfaces:**
@@ -577,8 +584,7 @@ Playwright (`page.clock`), `pg` 8.23.1, Postgres 17, Centrifugo v6 (стенд
   `requestVersion()`, `requestRights()`, `rightsSnapshot()`, `onRightsChange`,
   `canSubscribe` (Task 5); сталі Global Constraints.
 - Produces: `createSignalReceiver({ core, transport, catalog, freshness, now, setTimer, clearTimer, random, log }): { dispose(): void }`
-  — `freshness` — планувальник B5a (видимість вкладки й позначка
-  `rejoinPending`); `DataRuntimeOptions.signals?: (subject: string) => SignalTransport` (Р15).
+  — `freshness` — планувальник B5a з контрактом вище; `DataRuntimeOptions.signals?: (subject: string) => SignalTransport` (Р15).
   Пачка сигналів у прихованій вкладці: збирається й закривається як
   звичайно, але замість запиту — `needsRefresh` виглядам об'єкта й
   `rejoinPending`; 0 запитів до `resume()`.
@@ -683,8 +689,8 @@ Playwright (`page.clock`), `pg` 8.23.1, Postgres 17, Centrifugo v6 (стенд
     в одній мікрозадачі — 1 запит;
   - 401 від `getChannelToken` — `auth` без каналу, без `purge`; 403 —
     `auth` каналу;
-  - `session-changed` і `dispose()` — `subscribed()` порожній, `close()`
-    викликано (Review Focus 6);
+  - `session-changed` і `dispose()` — `subscribed()` порожній, `closed()` —
+    `true` (Review Focus 6);
   - `transport` — позначки «розрив» на рядках виглядів каналу, 0 запитів.
 - [ ] **Step 2:** FAIL → **Step 3:** реалізація → **Step 4:** PASS.
 - [ ] **Step 5: Commit** — `feat(data): відмова каналу, розрив і токен з'єднання`.
@@ -698,8 +704,11 @@ Playwright (`page.clock`), `pg` 8.23.1, Postgres 17, Centrifugo v6 (стенд
 **Interfaces:**
 - Produces (Р11, Р12):
   - `recovered: false` — одне вікно джитера на хвилю, хвилі не частіше разу
-    на `REJOIN_JITTER_MS`; на спрацюванні одним запитом: `revalidate` видимих
-    виглядів об'єктів хвилі з `refreshedAt < joinedAt`, `requestRights()`
+    на `REJOIN_JITTER_MS`; на спрацюванні одним запитом, для кожного об'єкта
+    хвилі: якщо в нього є вигляд у польоті чи без `refreshedAt` зі стартом
+    (`attemptAt`) до `joinedAt` — `revalidate(object, { visibleOnly: true })`
+    **без** `select` (хвіст B5a Р5 для вигляду в польоті й перечитування
+    решти); інакше — `revalidate(object, { visibleOnly: true, select: v => v.refreshedAt < joinedAt })`; `requestRights()`
     лише коли `lastRightsAt < joinedAt`, `requestVersion()` лише коли
     `lastVersionAt < joinedAt`; невидимим — `needsRefresh`; прихована
     вкладка — `needsRefresh` і `rejoinPending`, 0 запитів до `resume()`;
@@ -722,8 +731,9 @@ Playwright (`page.clock`), `pg` 8.23.1, Postgres 17, Centrifugo v6 (стенд
     позначка знята після пачки; без відновлених — через 50 мс;
   - до таймера — 0; `random = 0` і `random → 1` — у межах вікна;
   - 20 каналів з різним `random()` — 1 запит;
-  - флапання: `random = 0`, 20 флапів по 300 мс (6 с) — рівно 4 запити
-    (хвилі не частіше разу на 2000 мс);
+  - флапання: `random = 0`, 20 флапів по 300 мс, годинник просунуто до
+    6000 мс включно — рівно 4 запити (хвилі о 0, 2000, 4000, 6000 мс);
+  - байти хвилі з `rights` і `version` — у межах Global Constraints;
   - збій перечитування — позначки лишаються;
   - прихована вкладка — 0 до `resume()`; `resume()` перечитує вигляди хвилі
     навіть свіжіші за `resumeMinIntervalMs` (`rejoinPending`);
@@ -765,7 +775,11 @@ Playwright (`page.clock`), `pg` 8.23.1, Postgres 17, Centrifugo v6 (стенд
   `signal-receiver.db.test.ts`, `signal-receiver.supabase.db.test.ts`
 
 **Interfaces:**
-- Produces: `createCentrifugoTransport({ url, getConnectionToken, getChannelToken }): SignalTransport`
+- Produces:
+  - `class SignalAuthRefused extends Error { readonly status: 401 | 403 }` —
+    експорт `simetra/data/centrifugo`; host кидає її з `getChannelToken` /
+    `getConnectionToken` на відповідь endpoint-а 401/403;
+  - `createCentrifugoTransport({ url, getConnectionToken, getChannelToken }): SignalTransport`
   (імпорт значення `Centrifuge` з `centrifuge` у цьому модулі). Мапінг:
   - `subscribed` → `onSubscribed({ channel, recovered })` — лише з події
     `subscribed`;
