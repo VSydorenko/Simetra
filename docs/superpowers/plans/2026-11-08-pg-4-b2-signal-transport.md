@@ -96,11 +96,11 @@ Centrifugo v6 (образ, закріплений у `docker/postgres-stack/comp
   `simetra_signals`) з'являються на стеку лише кроком ролей:
   - `postgres` — повторний `pnpm db:pg:start` (ідемпотентний, кличе
     `simetra roles`, Р2 ПГ-2b);
-  - `supabase` — `simetra roles` designer від ролі `postgres` стека
-    (ідемпотентний, створює лише відсутнє).
+  - `supabase` — `pnpm db:roles` (вводить ПГ-3, задача 4a): виконує
+    ідемпотентний `supabase/roles.sql` на запущеному стеку під замком.
   
-  Обидва кроки адитивні. Виконавець робить їх лише з дозволу архітекторки
-  (Р11), а не перезапуском стека.
+  Обидва кроки адитивні (Р11, дозволено архітекторкою): лише `CREATE`
+  відсутнього і членства, які додає сам крок, жодного `ALTER`/`DROP`.
 - Контейнери стенду мають мітки `runContainerLabels(tag, provider)`
   (`packages/simetra/test/db/external.ts`). Після кожного прогону
   `docker ps -a --filter label=simetra-run` — порожньо.
@@ -120,8 +120,8 @@ Centrifugo v6 (образ, закріплений у `docker/postgres-stack/comp
 | Р7 | У частині A стенд спостерігає публікацію через історію каналу HTTP API Centrifugo. API вмикає лише конфіг стенду, з ключем, на `127.0.0.1`. З частини C стенд бере конфіг генератора (API вимкнено), а доставку спостерігає клієнт `centrifuge` з токенами | немає |
 | Р8 | Функція створення кореня кличе `signal` лише в моделі з роллю `rootCreator`. У моделі оператора політика відхилила б рядок, а відмова `INSERT` валить команду (§8.2 П4-B) | немає |
 | Р9 | Пара (скоуп, об'єкт) фази для `signal_invalidate` T3 виводить з результату ядра та каталогу рантайму: колонка-носій скоупу рядка, у кореня — його `id`, у нескоупленого — `ZERO_UUID` | немає |
-| Р10 | **`EXECUTE` на `signal_topic_allowed` — лише `simetra_command` і ролі запиту `user`, а не `PUBLIC`.** Політика `INSERT` outbox — `TO simetra_command`, тож Postgres не перевіряє функцію для інших ролей. Власник, що пише сигнали прав (B6), обходить RLS. З `PUBLIC` роль споживача (`USAGE` на `simetra`) могла б поставити claims і питати права будь-якого користувача — оракул прав. **Відхилення від §8.3 П4-B — чекає рішення архітекторки** | П4-B §8.3, Рд9 (задача 0, після рішення) |
-| Р11 | Кластерні ролі сигналів на спільних стеках створює ідемпотентний крок ролей (Global Constraints), а не перезапуск. **Чекає дозволу архітекторки** | немає |
+| Р10 | **`EXECUTE` на `signal_topic_allowed` — лише `simetra_command` і ролі запиту `user`, а не `PUBLIC`.** Політика `INSERT` outbox — `TO simetra_command`, тож Postgres не перевіряє функцію для інших ролей. Власник, що пише сигнали прав (B6), обходить RLS. З `PUBLIC` роль споживача (`USAGE` на `simetra`) могла б поставити claims і питати права будь-якого користувача — оракул прав. Рішення архітекторки. **Залишковий ризик:** роль `user` з довільним SQL могла б підробити claims; межа — роль запиту не отримує довільного SQL (PostgREST не виставляє `pg_catalog`) | П4-B §8.3, Рд9 (задача 0) |
+| Р11 | Кластерні ролі сигналів на спільних стеках створює ідемпотентний крок ролей (Global Constraints), а не перезапуск (дозвіл архітекторки). **Інваріант для інших гілок:** нова роль не стає членом ролей, які перевіряють гейти форми (`LOGIN_ROLE_PARENTS`, власник), і не дістає серед них членів. `simetra_signals` — член лише `simetra_signal_consumer`; та — нічий член. Гейти гілок без цих ролей не червоніють | немає |
 | Р12 | `sub` токена з'єднання = `user` з `authorizeChannels` (`current_user_id()`), а не сирий `claims.sub`. Для обох пресетів вони рівні (`subjectIsUserId`). Але `user` — id «Користувачів», і так само Centrifugo знає користувача для майбутнього `disconnect` (§6.2) | спека профілю §6.2 таблиця токенів (задача 0) |
 | Р13 | Тригер штампа — не єдиний захист `id`. `CHECK` прив'язує обидва поля до колонки: `payload->>'idempotency_key' = id::text AND payload->'data'->>'id' = id::text`. Вимкнений тригер дає `23514`, а не тихо чужий ключ | немає |
 | Р14 | T3 скидає `simetra.signal_mode` у тому самому операторі, що ставить claims команди (`set_config(SIGNAL_MODE_SETTING, '', true)`). Значення, задане ролі чи базі (`ALTER ROLE … SET`), не гасить сигналів | немає |
@@ -177,7 +177,9 @@ Centrifugo v6 (образ, закріплений у `docker/postgres-stack/comp
   - рядок B1d — додати бенчмарк ТЧ на 1/1 000/5 000 рядках;
   - рядок B3-5 — додати інваріант суцільного номера рядка ТЧ і підвищення
     версії власника на зміні змісту ТЧ (рішення архітекторки);
-  - §8.3: Р10, лише після рішення архітекторки.
+  - §8.3 і Рд9: Р10. Нова причина: «політика `INSERT` — `TO simetra_command`,
+    іншим ролям її не застосовують; `PUBLIC` дає оракул прав ролі з `USAGE`
+    на `simetra`». Плюс рядок залишкового ризику Р10.
 
 - [ ] **Step 1:** правки. Без лічильників і наративу фаз.
 - [ ] **Step 2:** `python3 scripts/check-doc-anchors.py`, `pnpm format:check` — зелені.
@@ -224,7 +226,9 @@ Centrifugo v6 (образ, закріплений у `docker/postgres-stack/comp
   (`platformRoleSet`, `platformRoleRefusals`, `checkPlatformRoles`,
   `ensurePlatformRoles`), `packages/simetra/src/schema/apply/postgres-cluster.ts`
   (після ПГ-2), `packages/designer/src/tools/roles-tool.ts`
-- Modify: `supabase/roles.sql` — `simetra_signal_consumer` (`NOLOGIN NOINHERIT`),
+- Modify: `supabase/roles.sql` — за правилом ідемпотентності задачі 4a ПГ-3
+  (кожне членство під власною перевіркою `pg_auth_members`):
+  `simetra_signal_consumer` (`NOLOGIN NOINHERIT`),
   `simetra_signals` (`LOGIN NOINHERIT`, член `simetra_signal_consumer`
   `WITH INHERIT FALSE, SET TRUE`, `ALTER ROLE simetra_signals SET role = 'simetra_signal_consumer'`);
   dev-пароль — за тим самим правилом, що й `simetra_runtime` у файлі
@@ -270,7 +274,8 @@ Centrifugo v6 (образ, закріплений у `docker/postgres-stack/comp
 - [ ] **Step 3:** `pnpm --filter simetra test platform-roles` і
   `pnpm --filter @simetrajs/designer test roles-tool` — FAIL.
 - [ ] **Step 4:** реалізація; `supabase test db` і базовий стан `postgres` — зелені.
-- [ ] **Step 5:** ролі на спільних стеках — за Р11, лише з дозволу; PASS:
+- [ ] **Step 5:** ролі на спільних стеках — повторний `pnpm db:pg:start` і
+  `pnpm db:roles` (Р11); PASS:
   `pnpm --filter @simetrajs/designer test:db roles-tool` і
   `pnpm --filter @simetrajs/designer test:db:supabase roles-tool` — зелені.
 - [ ] **Step 6: Commit** — `feat(schema): ролі споживача сигналів в обох профілях`.
@@ -498,9 +503,9 @@ Centrifugo v6 (образ, закріплений у `docker/postgres-stack/comp
 - Produces:
   - `simetra.signal_topic_allowed(p_topic text, p_send boolean) RETURNS boolean`
     — `STABLE SECURITY DEFINER SET search_path = ''`, власник — роль
-    застосування. `EXECUTE` — за Р10 після рішення архітекторки: типово
-    `simetra_command` і роль запиту `user` профілю, `REVOKE … FROM PUBLIC`.
-    Якщо архітекторка лишить `PUBLIC` — як §8.3. Тіло:
+    застосування. `REVOKE EXECUTE … FROM PUBLIC`; `EXECUTE` — `simetra_command`
+    і роль запиту `user` профілю (`PROVIDER_API_ROLES[provider].user`, не
+    літерал) (Р10). Тіло:
     1. `current_user_id()` `NULL` → `false`;
     2. суворий розбір топіка тим самим шаблоном, що `parseTopic` T0
        (рівно три UUID у нижньому регістрі для каналу змін). Інша форма →
@@ -562,8 +567,10 @@ Centrifugo v6 (образ, закріплений у `docker/postgres-stack/comp
   - канали прав — `false`.
   
   Права функції:
-  - за Р10: `has_function_privilege` ролі споживача й ролі `anonymous` —
-    `false`; `simetra_command` і роль `user` — `true`.
+  - Р10: виклик від `simetra_signals` (тегована роль входу з налаштуванням) і
+    від ролі `anonymous` профілю — `42501`; `simetra_command` і роль `user` —
+    виклик іде;
+  - мутація: `GRANT EXECUTE … TO PUBLIC` у генераторі — кейс червоніє.
   
   Outbox:
   - `INSERT` від ролей запиту — `42501`;
