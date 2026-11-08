@@ -1,82 +1,29 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest"
+import { describe, expect, it } from "vitest"
 import {
   compareFingerprints,
   readFingerprint,
-  type CatalogFingerprint,
-  type EngineScope,
   type FingerprintSection,
 } from "simetra/schema"
 import { createApplyDatabase } from ".."
+import { asSuperuser, query } from "../../__tests__/support/db"
 import {
-  testRoleName,
-  testSuperuserUrl,
-} from "../../../../simetra/test/support"
-import {
-  asSuperuser,
-  dropRoles,
-  inTarget as loadTarget,
-  query,
-} from "../../__tests__/support/db"
+  changedBy,
+  defaultPrivilegesSection,
+  FIXTURE,
+  inTarget,
+  read,
+  ROLE,
+  scope,
+  useFingerprintRole,
+} from "./fingerprint.support"
 
 /**
- * SQL-відбиток каталогу. Ціль кожного тесту — окрема
- * база від `withDesiredShadow`; база стеку лише читається. Тестова роль —
- * спільна для кластера, тож її створює й прибирає суперкористувач стеку.
+ * SQL-відбиток каталогу. Спільна підготовка — `fingerprint.support.ts`;
+ * відбиток поверхонь і службових ролей провайдера —
+ * `fingerprint.supabase.db.test.ts`.
  */
 
-const scope: EngineScope = { schemas: ["app"], provider: "supabase" }
-const ROLE = testRoleName("fingerprint_owner")
-
-/** Базовий стан цілі: таблиця, функція, політика, грант. */
-const FIXTURE = `
-  create type app.mood as enum ('a');
-  create table app.t (id int primary key, name text);
-  create function app.f() returns int language sql as $$ select 1 $$;
-  create policy p on app.t for select to authenticated using (true);
-  grant select on app.t to authenticated;
-  grant create on schema app to ${ROLE};
-`
-
-beforeAll(() =>
-  query(
-    testSuperuserUrl(),
-    `create role ${ROLE} nologin; grant ${ROLE} to postgres;`
-  )
-)
-afterAll(() => dropRoles(ROLE))
-
-/**
- * Розгортає `create schema app` і `setup` у тимчасову базу; її прибирає порт.
- * На відміну від спільного `inTarget`, бажаний стан — лише схема, а `setup`
- * іде окремим запитом по вже завантаженій цілі.
- */
-const inTarget = <T>(
-  setup: string,
-  fn: (url: string) => Promise<T>
-): Promise<T> =>
-  loadTarget("create schema app;", scope, async (url) => {
-    await query(url, setup)
-    return fn(url)
-  })
-
-const read = (url: string): Promise<CatalogFingerprint> =>
-  createApplyDatabase({ readOnly: true }).transaction(
-    { url },
-    "rollback",
-    (tx) => readFingerprint(tx, scope)
-  )
-
-/** Секції, що змінилися від `mutate`, з власником. */
-async function changedBy(
-  url: string,
-  mutate: () => Promise<unknown>
-): Promise<FingerprintSection[]> {
-  const before = await read(url)
-  await mutate()
-  const result = compareFingerprints(before, await read(url), { owner: true })
-  if (!result.comparable) throw new Error("same version must be comparable")
-  return result.differing
-}
+useFingerprintRole()
 
 describe("readFingerprint", () => {
   it("is stable", async () => {
@@ -209,11 +156,7 @@ describe("readFingerprint", () => {
   })
 
   describe("default privileges", () => {
-    const section = (setup: string): Promise<string> =>
-      inTarget(FIXTURE, async (url) => {
-        await query(asSuperuser(url), setup)
-        return (await read(url)).sections.defaultPrivileges
-      })
+    const section = defaultPrivilegesSection
 
     it("ignores a schema default privilege equal to the built-in default", async () => {
       // Двигун пише лише відхилення від `acldefault`, тож запис «роль собі
@@ -247,15 +190,6 @@ describe("readFingerprint", () => {
       expect(
         await section(
           "alter default privileges for role postgres in schema app grant execute on functions to public"
-        )
-      ).toBe(await section("select 1"))
-    })
-
-    it("ignores default privileges of a provider service role", async () => {
-      // Поза межею двигуна: політика провайдера виключає ADP системних ролей
-      expect(
-        await section(
-          "alter default privileges for role supabase_admin in schema app grant all on tables to anon"
         )
       ).toBe(await section("select 1"))
     })
@@ -380,28 +314,5 @@ describe("readFingerprint", () => {
     const ab = await inTarget("create table app.x (a int, b text);", read)
     const ba = await inTarget("create table app.x (b text, a int);", read)
     expect(ab.sections.columns).toBe(ba.sections.columns)
-  })
-
-  it("sees provider surface policies", async () => {
-    await inTarget(FIXTURE, async (url) => {
-      expect(
-        await changedBy(url, () =>
-          query(
-            url,
-            "create policy app_read on storage.objects for select to authenticated using (true)"
-          )
-        )
-      ).toEqual(["policies"])
-      // `storage.app_extra` — на поверхні тригерів, але не політик: політика
-      // на ній не входить у відбиток, хоч схема та сама, що в `objects`
-      expect(
-        await changedBy(url, () =>
-          query(
-            url,
-            "create table storage.app_extra (id int); create policy app_x on storage.app_extra for select to authenticated using (true)"
-          )
-        )
-      ).toEqual([])
-    })
   })
 })

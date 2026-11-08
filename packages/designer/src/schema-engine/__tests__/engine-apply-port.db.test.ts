@@ -320,47 +320,6 @@ describe("SchemaEngine apply port", () => {
     })
   })
 
-  it("clones the target state", async () => {
-    const targetSql = [
-      "create schema app;",
-      "create table app.note (",
-      "  id int primary key,",
-      "  body text check (length(body) > 0)",
-      ");",
-      "create index note_body_idx on app.note (body);",
-      "alter table app.note enable row level security;",
-      "create policy note_read on app.note for select to authenticated using (true);",
-      "grant select on app.note to authenticated;",
-      "create function app.on_user() returns trigger language plpgsql",
-      "  security definer set search_path = ''",
-      "  as $$ begin return new; end $$;",
-      "create trigger app_on_user after insert on auth.users",
-      "  for each row execute function app.on_user();",
-      "create policy app_read on storage.objects for select to authenticated",
-      "  using (bucket_id = 'app');",
-    ].join("\n")
-    await inTarget(targetSql, scope, async (url) => {
-      const target = await engine.extract({ url }, scope)
-      const outcome = await engine.withTargetClone(
-        { target: { url } },
-        target,
-        scope,
-        (clone) => engine.extract(clone, scope)
-      )
-      if (outcome.status !== "loaded")
-        throw new Error(
-          `clone failed: ${outcome.diagnostics.map((d) => d.message).join("; ")}`
-        )
-      const clone = outcome.value
-      const back = engine.plan(clone.catalog, target.catalog, scope)
-      expect(back.actions.map((a) => a.sql)).toEqual([])
-      expect(back.empty).toBe(true)
-      expect(
-        diffCatalogModels(target.model, clone.model, { columnOrder: true })
-      ).toEqual([])
-    })
-  })
-
   it("clones a generated column in the middle of a table", async () => {
     // Колонку `note` додано після згенерованої `p`: копія мусить створити їх
     // у тому самому порядку, а не згорнути `note` у `CREATE TABLE` повз `p`

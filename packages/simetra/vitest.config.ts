@@ -23,11 +23,29 @@ export default defineConfig({
         test: {
           name: "db",
           include: ["**/*.db.test.ts"],
-          exclude: ["**/node_modules/**", "**/dist/**"],
+          // Тести, прив'язані до Supabase, — окремий проєкт `db-supabase`
+          exclude: [
+            "**/node_modules/**",
+            "**/dist/**",
+            "**/*.supabase.db.test.ts",
+          ],
           // Усі тести б'ють в одну базу стеку
           fileParallelism: false,
           // Стек один на машину: один прогін за раз і стек після прогону такий
           // самий, як до нього
+          globalSetup: ["./test/db/stack-guard.supabase.ts"],
+        },
+      },
+      {
+        extends: true,
+        test: {
+          // Кейси, яким потрібен саме стек Supabase (схеми `auth`, `storage`,
+          // `realtime`, ролі провайдера, пулер, пресет): лишаються на ньому й
+          // тоді, коли проєкт `db` перейде на стек postgres
+          name: "db-supabase",
+          include: ["**/*.supabase.db.test.ts"],
+          exclude: ["**/node_modules/**", "**/dist/**"],
+          fileParallelism: false,
           globalSetup: ["./test/db/stack-guard.supabase.ts"],
         },
       },

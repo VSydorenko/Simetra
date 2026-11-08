@@ -1,7 +1,6 @@
 import pg from "pg"
-import { afterAll, beforeAll, describe, expect, it } from "vitest"
+import { describe, expect, it } from "vitest"
 import {
-  compile,
   loadSqlParser,
   localize,
   promotionRecordHash,
@@ -12,61 +11,76 @@ import {
   ApplyConnectionLost,
   ApplyDbError,
   dataGuardSql,
-  desiredForApply,
   executePlan,
-  FINGERPRINT_SECTIONS,
-  FINGERPRINT_VERSION,
-  readFingerprint,
-  readLedgerHead,
-  readServerFacts,
   rehearsalHash,
   rehearsalReport,
   type ApplyDatabase,
-  type ApplyDesired,
-  type CatalogFingerprint,
   type DataStepKind,
   type DataTable,
-  type FingerprintSection,
-  type DriftReport,
-  type EngineCatalog,
   type ExecutablePlan,
-  type ExecuteOptions,
   type ExecuteOutcome,
-  footprintTables,
   intentStep,
-  planFootprint,
   planLocks,
   preservationPlan,
   readLiveForeignKeys,
   readLockRights,
-  readProviderLocks,
-  readSessionSearchPath,
-  SUPABASE_LOCKS,
   tableKey,
   type PlanStep,
-  type ProviderLockSet,
-  type RehearsalProof,
   type RehearsalReport,
-  type TableLock,
   typeGuards,
 } from "simetra/schema"
-import { createApplyDatabase, createPgDeltaEngine } from ".."
+import { createApplyDatabase } from ".."
 import {
-  catalog,
-  fingerprintAfterSteps,
-  metaFiles,
-  project,
-  testDatabaseUrl,
   testRoleName,
   testSuperuserUrl,
 } from "../../../../simetra/test/support"
 import {
   asSuperuser,
   dropRoles,
-  inTarget as loadTarget,
   query,
   withCopy,
 } from "../../__tests__/support/db"
+import {
+  afterEnd,
+  ALTER_T,
+  API_LOGIN,
+  API_PASSWORD,
+  apply,
+  BASE,
+  codes,
+  counted,
+  CREATE_N,
+  desired,
+  desiredCatalog,
+  desiredFingerprint,
+  DRIFT,
+  engine,
+  establish,
+  exists,
+  H1,
+  H2,
+  holder,
+  identityOf,
+  inTarget,
+  ledger,
+  LOCKER,
+  LOCKER_PASSWORD,
+  locksOf,
+  loginAs,
+  marker,
+  NOT_COMPARED,
+  observing,
+  options,
+  OWNER,
+  PLAN_HASH,
+  planFor,
+  read,
+  sessionLeftover,
+  step,
+  stubRehearsal,
+  until,
+  useExecutePlanSetup,
+} from "./execute-plan.support"
 
 /**
  * Раннер транзакції `executePlan` на справжній базі.
@@ -74,446 +88,12 @@ import {
  * застосування маленької моделі; база стеку лише читається. Відбитки цілі й
  * бажаного стану читаються з реальних баз, план складається вручну. Тести з
  * блокуваннями й обривом синхронізуються зі станом бази (`pg_locks`,
- * `pg_stat_activity`), а не з паузами.
+ * `pg_stat_activity`), а не з паузами. Спільна підготовка —
+ * `execute-plan.support.ts`; перелік замків supautils —
+ * `execute-plan.supabase.db.test.ts`.
  */
 
-const engine = createPgDeltaEngine()
-const stack = { url: testDatabaseUrl() }
-const apply = createApplyDatabase({ readOnly: false })
-
-/** Роль-власник для підміни власника на цілі. */
-const OWNER = testRoleName("execute_owner")
-/** Роль входу, чия сесія стає роллю API провайдера. */
-const API_LOGIN = testRoleName("execute_api")
-const API_PASSWORD = "simetra-execute-api"
-/** Роль входу без права на явний `LOCK`: лише те, що їй дасть тест. */
-const LOCKER = testRoleName("execute_locker")
-const LOCKER_PASSWORD = "simetra-execute-locker"
-
-/** Базовий стан цілі поверх бажаного стану моделі. */
-const BASE = `
-  create table app.t (id int primary key, c text);
-  insert into app.t values (1, null);
-  grant create on schema app to ${OWNER};
-`
-
-const H1 = "1".repeat(64)
-const H2 = "2".repeat(64)
-const PLAN_HASH = "c".repeat(64)
-const DRIFT: DriftReport = { reason: "drift", sections: ["owner"], paths: [] }
-
-let desired: ApplyDesired
-
-/** З'єднання, що тримає блокування, доки тест його не відпустить. */
-async function holder(url: string, sql: string): Promise<pg.Client> {
-  const client = new pg.Client({ connectionString: url })
-  // Обрив чужого backend не має валити процес тесту
-  client.on("error", () => {})
-  await client.connect()
-  await client.query(sql)
-  return client
-}
-
-/** Опитування стану бази з межею: синхронізація без фіксованих пауз. */
-async function until(
-  what: string,
-  check: () => Promise<boolean>
-): Promise<void> {
-  const deadline = Date.now() + 15_000
-  while (!(await check())) {
-    if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`)
-    await new Promise((resolve) => setTimeout(resolve, 20))
-  }
-}
-
-beforeAll(async () => {
-  const compiled = await compile(
-    metaFiles({
-      "project.meta.json": project({ defaultSchema: "app" }),
-      "catalogs/Party/Party.meta.json": catalog("Party"),
-    })
-  )
-  expect(compiled.diagnostics).toEqual([])
-  desired = await desiredForApply(compiled.model!)
-  await query(
-    testSuperuserUrl(),
-    `create role ${OWNER} nologin; grant ${OWNER} to postgres;
-     create role ${API_LOGIN} login password '${API_PASSWORD}';
-     grant service_role to ${API_LOGIN};
-     alter role ${API_LOGIN} set role = 'service_role';
-     create role ${LOCKER} login password '${LOCKER_PASSWORD}';`
-  )
-})
-afterAll(() => dropRoles(API_LOGIN, OWNER, LOCKER))
-
-/**
- * Ціль: бажаний стан застосування моделі плюс `setup`; базу прибирає порт.
- * На відміну від спільного `inTarget`, бажаний стан — модель, а `setup` іде
- * окремим запитом по вже завантаженій цілі.
- */
-const inTarget = <T>(
-  setup: string,
-  fn: (url: string) => Promise<T>
-): Promise<T> =>
-  loadTarget(desired.sql, desired.scope, async (url) => {
-    await query(url, setup)
-    return fn(url)
-  })
-
-const read = (url: string): Promise<CatalogFingerprint> =>
-  createApplyDatabase({ readOnly: true }).transaction(
-    { url },
-    "rollback",
-    (tx) => readFingerprint(tx, desired.scope)
-  )
-
-/**
- * Відбиток бажаного стану: кроки в тій самій цілі, у транзакції з відкатом.
- * Окрема база була б іншою ціллю, і відбиток залежав би від того, як вона
- * відтворила `setup`, а не від самої цілі.
- */
-const desiredFingerprint = (
-  url: string,
-  steps: readonly PlanStep[]
-): Promise<CatalogFingerprint> =>
-  fingerprintAfterSteps(url, desired.scope, steps)
-
-/**
- * Бажаний відбиток для тестів, де відмова настає до звірки з ним: порівняння
- * не відбувається, тож зміст не важить, а справжній відбиток створював би
- * враження, що тест його перевіряє.
- */
-const NOT_COMPARED: CatalogFingerprint = {
-  version: FINGERPRINT_VERSION,
-  sections: Object.fromEntries(
-    FINGERPRINT_SECTIONS.map((section) => [section, "not-compared"])
-  ) as Record<FingerprintSection, string>,
-}
-
-/**
- * Каталог двигуна бажаного стану: окрема база, де `setup` і кроки вже
- * виконано, — те, що `applyTool` бере з бажаної тіні.
- */
-const desiredCatalog = (
-  setup: string,
-  steps: readonly PlanStep[]
-): Promise<EngineCatalog> =>
-  inTarget(
-    `${setup};\n${steps.map((s) => `${s.sql};`).join("\n")}`,
-    async (url) => (await engine.extract({ url }, desired.scope)).catalog
-  )
-
-function step(id: string, sql: string, over: Partial<PlanStep> = {}): PlanStep {
-  return {
-    id,
-    origin: "engine",
-    sql,
-    verb: "create",
-    class: "catalogOnly",
-    lockClass: "none",
-    transactionality: "transactional",
-    newSegmentBefore: false,
-    lockedTables: [],
-    produces: [],
-    consumes: [],
-    destroys: [],
-    produced: [],
-    destroyed: [],
-    consumed: [],
-    dataLoss: false,
-    rewriteRisk: false,
-    guards: [],
-    ...over,
-  }
-}
-
-const CREATE_N = step("s1", "CREATE TABLE app.n (id int)")
-const ALTER_T = step("s1", "ALTER TABLE app.t ADD COLUMN d int", {
-  verb: "alter",
-  lockClass: "accessExclusive",
-  lockedTables: [{ schema: "app", name: "t" }],
-})
-
-const EMPTY_MODEL = { tables: [], enumTypes: [], units: [] }
-
-/**
- * Блокування плану за слідом кроків без моделей (кроки тут без FK): власні
- * таблиці, вихідні імена через `newToOld`, детермінований порядок. Право на
- * явний `LOCK` — на кожній таблиці: роль тестів ними володіє.
- */
-function locksOf(
-  steps: readonly PlanStep[],
-  newToOld: ReadonlyMap<string, string> = new Map()
-): TableLock[] {
-  const footprint = planFootprint(steps, {
-    source: EMPTY_MODEL,
-    desired: EMPTY_MODEL,
-    typeChanges: [],
-    newToOld,
-    columnsNewToOld: new Map(),
-    live: [],
-    providerStatements: new Map(),
-    providerLocks: [],
-  })
-  const rights = new Map(
-    footprintTables(footprint).map((t) => [tableKey(t.schema, t.name), true])
-  )
-  return planLocks({ footprint, rights }).locks
-}
-
-/**
- * Перелік провайдера цілі для ролі плану — як його записав би план: ключ
- * переліку — роль плану.
- */
-const providerList = (
-  url: string,
-  role = "postgres"
-): Promise<ProviderLockSet[]> =>
-  createApplyDatabase({ readOnly: true }).transaction(
-    { url },
-    "rollback",
-    (tx) => readProviderLocks(tx, role, SUPABASE_LOCKS)
-  )
-
-/** Шлях пошуку сесії цілі — як його записав би план для ревалідації. */
-const sessionPath = (url: string): Promise<string> =>
-  createApplyDatabase({ readOnly: true }).transaction(
-    { url },
-    "rollback",
-    readSessionSearchPath
-  )
-
-/**
- * Факти сервера й голова ledger цілі — як їх записав би план тією самою
- * транзакцією READ ONLY, що й стан.
- */
-const identityOf = (
-  url: string
-): Promise<Pick<ExecutablePlan, "server" | "ledgerHead">> =>
-  createApplyDatabase({ readOnly: true }).transaction(
-    { url },
-    "rollback",
-    async (tx) => ({
-      server: await readServerFacts(tx),
-      ledgerHead: await readLedgerHead(tx),
-    })
-  )
-
-/** План від `fromHash` до `toHash` над живою ціллю. */
-async function planFor(
-  url: string,
-  steps: PlanStep[],
-  over: Partial<ExecutablePlan> = {}
-): Promise<ExecutablePlan> {
-  return {
-    fromHash: null,
-    toHash: H1,
-    scope: desired.scope,
-    engine: engine.identity,
-    steps,
-    requiredPermissions: [],
-    drift: null,
-    role: "postgres",
-    locks: locksOf(steps),
-    implicitLocks: [],
-    foreignKeys: { subjects: [], live: [] },
-    preamble: [],
-    // Перевірку `plpgsql_check` тримає `function-checks.db.test.ts`
-    plpgsqlCheck: "unavailable",
-    platformFunctions: [],
-    desiredInvalid: [],
-    promotion: null,
-    // Цілі тестів глобальних ADP ролі не мають
-    environment: { defaultPrivileges: [] },
-    resultCatalog: { tables: [], enumTypes: [], units: [] },
-    ...(await identityOf(url)),
-    ...over,
-    providerLocks:
-      over.providerLocks ?? (await providerList(url, over.role ?? "postgres")),
-    revalidationSearchPath:
-      over.revalidationSearchPath ?? (await sessionPath(url)),
-    targetFingerprint: over.targetFingerprint ?? (await read(url)),
-    desiredFingerprint:
-      over.desiredFingerprint ?? (await desiredFingerprint(url, steps)),
-  }
-}
-
-/**
- * Заглушка доказу репетиції: тести, що не перевіряють сам доказ двигуна,
- * підставляють двигун, який не бачить розбіжності.
- */
-const stubRehearsal: RehearsalProof = {
-  engine: {
-    plan: () => ({ actions: [], empty: true, preamble: [], diagnostics: [] }),
-  },
-  desired: {} as EngineCatalog,
-}
-
-const options: ExecuteOptions = {
-  mode: "apply",
-  planHash: PLAN_HASH,
-  allow: [],
-  snapshot: { tables: [] },
-  sleep: async () => {},
-}
-
-/** Перше застосування без кроків: marker отримує `hash`. */
-async function establish(url: string, hash: string): Promise<void> {
-  const fingerprint = await read(url)
-  const outcome = await executePlan(
-    apply,
-    { url },
-    {
-      fromHash: null,
-      toHash: hash,
-      scope: desired.scope,
-      engine: engine.identity,
-      steps: [],
-      requiredPermissions: [],
-      drift: null,
-      role: "postgres",
-      ...(await identityOf(url)),
-      locks: [],
-      implicitLocks: [],
-      providerLocks: await providerList(url),
-      foreignKeys: { subjects: [], live: [] },
-      preamble: [],
-      revalidationSearchPath: await sessionPath(url),
-      plpgsqlCheck: "unavailable",
-      platformFunctions: [],
-      desiredInvalid: [],
-      promotion: null,
-      environment: { defaultPrivileges: [] },
-      targetFingerprint: fingerprint,
-      desiredFingerprint: fingerprint,
-      resultCatalog: { tables: [], enumTypes: [], units: [] },
-    },
-    { ...options, planHash: "e".repeat(64) }
-  )
-  expect(outcome).toMatchObject({ status: "committed" })
-}
-
-interface MarkerRow extends Record<string, unknown> {
-  snapshot_hash: string
-  plan_hash: string
-  fingerprint: Record<string, string>
-}
-
-const marker = async (url: string): Promise<MarkerRow | undefined> =>
-  (
-    await query<MarkerRow>(
-      url,
-      "select snapshot_hash, plan_hash, fingerprint from simetra.marker"
-    )
-  )[0]
-
-interface LedgerRow extends Record<string, unknown> {
-  plan_hash: string
-  from_hash: string | null
-  to_hash: string
-  allowed: string[]
-  drift: DriftReport | null
-  no_drift: boolean
-  apply_id: string
-}
-
-const ledger = (url: string): Promise<LedgerRow[]> =>
-  query<LedgerRow>(
-    url,
-    "select plan_hash, from_hash, to_hash, allowed, drift, drift is null as no_drift, apply_id from simetra.ledger order by id"
-  )
-
-const exists = async (url: string, table: string): Promise<boolean> =>
-  (
-    await query<{ found: boolean }>(
-      url,
-      `select to_regclass('${table}') is not null as found`
-    )
-  )[0]!.found
-
-/** Порт, що лічить відкриті транзакції: «до `BEGIN` на цілі» — нуль. */
-function counted(db: ApplyDatabase): {
-  db: ApplyDatabase
-  count: () => number
-} {
-  let n = 0
-  return {
-    db: {
-      transaction: (target, end, fn) => {
-        n++
-        return db.transaction(target, end, fn)
-      },
-    },
-    count: () => n,
-  }
-}
-
-const codes = (outcome: ExecuteOutcome) =>
-  outcome.diagnostics.map((d) => d.code)
-
-/**
- * Порт, що після `fn` і до `COMMIT`/`ROLLBACK` виконує `sql` на тій самій
- * транзакції й зберігає рядки: після `ROLLBACK` репетиції дані й режим
- * тригерів повертаються самі, тож перевірка після прогону нічого не доводить.
- */
-function observing(
-  db: ApplyDatabase,
-  sql: string
-): { db: ApplyDatabase; rows(): Record<string, unknown>[] } {
-  let seen: Record<string, unknown>[] = []
-  return {
-    db: {
-      transaction: (target, end, fn) =>
-        db.transaction(target, end, async (tx) => {
-          const value = await fn(tx)
-          seen = await tx.query(sql)
-          return value
-        }),
-    },
-    rows: () => seen,
-  }
-}
-
-/**
- * Порт, що читає `sql` на тому самому з'єднанні вже після кінця транзакції
- * раннера: його `COMMIT`/`ROLLBACK` виконується тут, а кінцю порту лишається
- * порожня транзакція.
- */
-function afterEnd(
-  db: ApplyDatabase,
-  sql: string
-): { db: ApplyDatabase; rows(): Record<string, unknown>[] } {
-  let seen: Record<string, unknown>[] = []
-  return {
-    db: {
-      transaction: (target, end, fn) =>
-        db.transaction(target, end, async (tx) => {
-          const value = await fn(tx)
-          await tx.query(end === "commit" ? "COMMIT" : "ROLLBACK")
-          seen = await tx.query(sql)
-          await tx.query("BEGIN")
-          return value
-        }),
-    },
-    rows: () => seen,
-  }
-}
-
-/**
- * Порт, що до транзакції раннера лишає на з'єднанні сесійний стан `sql`, —
- * як попередній клієнт того самого backend за пулером: `BEGIN` порту закомічено порожнім, `sql` іде поза транзакцією.
- */
-function sessionLeftover(db: ApplyDatabase, sql: string): ApplyDatabase {
-  return {
-    transaction: (target, end, fn) =>
-      db.transaction(target, end, async (tx) => {
-        await tx.query("COMMIT")
-        await tx.query(sql)
-        await tx.query("BEGIN ISOLATION LEVEL READ COMMITTED")
-        return fn(tx)
-      }),
-  }
-}
+useExecutePlanSetup()
 
 // Конкурентно: ціль кожного тесту — власна база, ролі створює `beforeAll`, а
 // advisory lock раннера діє в межах бази цілі. Тести з тримачем блокування,
@@ -703,14 +283,6 @@ describe.concurrent("executePlan", () => {
       )
     )[0]!.waiting
 
-  /** Та сама база цілі, але сесією іншої ролі входу. */
-  const loginAs = (url: string, user: string, password: string): string => {
-    const as = new URL(url)
-    as.username = user
-    as.password = password
-    return as.toString()
-  }
-
   it("refuses an API role", async () => {
     await inTarget(BASE, async (url) => {
       // План тієї самої ролі API: збіг ролі плану від відмови не рятує
@@ -821,94 +393,6 @@ describe.concurrent("executePlan", () => {
       // MAINTAIN (Postgres 17) теж дає явний LOCK
       await query(url, `grant maintain on app.t to ${LOCKER}`)
       expect(await rights()).toEqual(new Map([[t, true]]))
-    })
-  })
-
-  it("reads the provider lock list of the plan role, only tables that exist", async () => {
-    const reader = createApplyDatabase({ readOnly: true })
-    const read = (url: string, role: string) =>
-      reader.transaction({ url }, "rollback", (tx) =>
-        readProviderLocks(tx, role, SUPABASE_LOCKS)
-      )
-    // База стеку несе всі таблиці провайдера, і перелік — з налаштування
-    // supautils цілі, а не з пресету
-    const [policy, trigger] = await read(stack.url, "postgres")
-    const listed = (setting: string) =>
-      query<{ names: string[] }>(
-        stack.url,
-        `select array(select pg_catalog.json_array_elements_text(
-           pg_catalog.current_setting('${setting}')::json -> 'postgres')) as names`
-      ).then((rows) => rows[0]!.names)
-    for (const [set, setting] of [
-      [policy!, "supautils.policy_grants"],
-      [trigger!, "supautils.drop_trigger_grants"],
-    ] as const) {
-      expect(set.setting).toBe(setting)
-      const names = await listed(setting)
-      expect(set.tables).toContainEqual({ schema: "auth", name: "users" })
-      for (const t of set.tables)
-        expect(names).toContain(`${t.schema}.${t.name}`)
-    }
-    expect(policy!.statements).toEqual([
-      "createPolicy",
-      "alterPolicy",
-      "dropPolicy",
-      "commentPolicy",
-    ])
-    expect(trigger!.statements).toEqual(["dropTrigger"])
-    // Таблиця з переліку, якої на цілі немає, відсіюється, а не валить план
-    await inTarget(BASE, async (url) => {
-      await query(asSuperuser(url), "drop table auth.audit_log_entries cascade")
-      const [onTarget] = await read(url, "postgres")
-      expect(onTarget!.tables).toEqual(
-        policy!.tables.filter((t) => t.name !== "audit_log_entries")
-      )
-    })
-    // Роль поза переліком — таблиць немає, без відмови
-    expect(
-      (await read(stack.url, "authenticated")).map((s) => s.tables)
-    ).toEqual([[], []])
-  })
-
-  it("leaves out a listed table in a schema the plan role cannot use, without aborting the read", async () => {
-    // Роль тестів має `pg_read_all_data`, тобто USAGE на кожній схемі, тож
-    // роль плану без USAGE — окремий вхід; ключ переліку — той самий
-    const setup = `${BASE};
-      grant usage on schema app to ${LOCKER};
-      grant update on app.t to ${LOCKER};`
-    await inTarget(setup, async (url) => {
-      await query(
-        asSuperuser(url),
-        `revoke all on schema realtime from public;
-         grant usage on schema auth to ${LOCKER}`
-      )
-      const asLocker = loginAs(url, LOCKER, LOCKER_PASSWORD)
-      const [usage] = await query<{ usable: boolean }>(
-        asLocker,
-        "select pg_catalog.has_schema_privilege('realtime', 'USAGE') as usable"
-      )
-      expect(usage!.usable).toBe(false)
-      // `to_regclass` тут кидає 42501 — саме це зірвало б транзакцію плану
-      await expect(
-        query(asLocker, "select to_regclass('realtime.messages')")
-      ).rejects.toMatchObject({ code: "42501" })
-      const reader = createApplyDatabase({ readOnly: true })
-      const { sets, rights } = await reader.transaction(
-        { url: asLocker },
-        "rollback",
-        async (tx) => {
-          const sets = await readProviderLocks(tx, "postgres", SUPABASE_LOCKS)
-          // Транзакція жива: наступне читання плану проходить
-          const rights = await readLockRights(tx, [
-            { schema: "app", name: "t" },
-          ])
-          return { sets, rights }
-        }
-      )
-      const tables = sets.flatMap((set) => set.tables)
-      expect(tables).toContainEqual({ schema: "auth", name: "users" })
-      expect(tables.filter((t) => t.schema === "realtime")).toEqual([])
-      expect(rights).toEqual(new Map([[tableKey("app", "t"), true]]))
     })
   })
 
@@ -3019,53 +2503,6 @@ describe.concurrent("executePlan", () => {
       expect(await marker(url)).toBeUndefined()
     })
   })
-
-  // Послідовно: тримач блокування й очікування на ньому чутливі до часу й
-  // сторонніх сесій
-  it(
-    "refuses before the locks when the provider list changed after the plan",
-    { concurrent: false },
-    async () => {
-      await inTarget(BASE, async (url) => {
-        // План побудовано з переліком, де таблиця ще є; на цілі її вже немає
-        const plan = await planFor(url, [ALTER_T])
-        expect(
-          plan.providerLocks.some((set) =>
-            set.tables.some((t) => t.name === "audit_log_entries")
-          )
-        ).toBe(true)
-        await query(
-          asSuperuser(url),
-          "drop table auth.audit_log_entries cascade"
-        )
-        // Читач `app.t` конфліктує з ACCESS EXCLUSIVE: спроба замка чекала б
-        const reader = await holder(
-          url,
-          "begin; lock table app.t in access share mode"
-        )
-        try {
-          const outcome = await executePlan(apply, { url }, plan, {
-            ...options,
-            timeouts: { lockTimeoutMs: 15_000 },
-          })
-          expect(outcome).toMatchObject({
-            status: "refused",
-            attempts: 1,
-            diagnostics: [
-              {
-                code: "apply.target-changed",
-                params: { sections: "providerLocks" },
-              },
-            ],
-          })
-        } finally {
-          await reader.query("rollback")
-          await reader.end()
-        }
-        expect(await ledger(url)).toEqual([])
-      })
-    }
-  )
 
   // Послідовно: тримач блокування й очікування на ньому чутливі до часу й
   // сторонніх сесій

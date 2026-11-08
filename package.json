@@ -15,7 +15,7 @@
     "db:stop": "supabase stop",
     "db:pg:start": "node scripts/db-stack.mjs start postgres",
     "db:pg:stop": "node scripts/db-stack.mjs stop postgres",
-    "test:db": "supabase test db && pnpm --filter simetra test:db && pnpm --filter @simetrajs/designer test:db",
+    "test:db": "supabase test db && pnpm --filter simetra test:db && pnpm --filter @simetrajs/designer test:db && pnpm --filter simetra test:db:supabase && pnpm --filter @simetrajs/designer test:db:supabase",
     "test:db:pg": "pnpm --filter simetra test:db:pg",
     "format": "turbo format",
     "typecheck": "turbo typecheck",

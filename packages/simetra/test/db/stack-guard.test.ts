@@ -145,7 +145,14 @@ describe("vitest configs", () => {
           .map(({ name }) => name)
       )
     ).toEqual(
-      new Set(["simetra/db", "simetra/db-pg", "simetra/bench", "designer/db"])
+      new Set([
+        "simetra/db",
+        "simetra/db-supabase",
+        "simetra/db-pg",
+        "simetra/bench",
+        "designer/db",
+        "designer/db-supabase",
+      ])
     )
   })
 })

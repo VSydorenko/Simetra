@@ -28,6 +28,7 @@ import {
   COUNTERPARTY_FILE,
   COUNTERPARTY_ID,
   counterpartyMapping,
+  customTable,
   metaFiles,
   promotionProject,
   project,
@@ -266,6 +267,32 @@ export const BLIND_SETUP = `create schema other;
   revoke execute on function pgbouncer.get_auth(text) from public;
   alter function pgbouncer.other_auth(text) owner to ${STRANGER};
   revoke execute on function pgbouncer.other_auth(text) from public;`
+
+/**
+ * Прийнята таблиця `app.notes` з рядковою колонкою `note`. Дослівні тригер і
+ * політика — лише на `CustomTable`, як прийнятий борг (спека прав §6.1): на таблиці
+ * виду це помилка `sql.kind-table-verbatim`. Тести, чий предмет — дослівний
+ * тригер чи політика, ставлять їх сюди.
+ */
+export const NOTES = "custom-tables/Notes/Notes.meta.json"
+export const notes = (
+  type: Record<string, unknown> = { type: "String", length: 20 }
+) =>
+  customTable("Notes", {
+    id: uuid(9201),
+    physicalName: "notes",
+    columns: [
+      {
+        id: uuid(9202),
+        name: "id",
+        physicalName: "id",
+        type: "UUID",
+        notNull: true,
+      },
+      { id: uuid(9203), name: "note", physicalName: "note", ...type },
+    ],
+    primaryKey: { name: "notes_pkey", columns: ["id"] },
+  })
 
 // Фікстура промоції: спільна для файлів промоції конвеєра
 export type Json = Record<string, unknown>
