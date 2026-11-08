@@ -38,7 +38,7 @@ export const ROW_VERSION_SEQUENCE = {
 /**
  * Префікс налаштування транзакції, у яке `touch` кладе видану версію рядка
  * (`<префікс><OID таблиці>`): `currval` зсували б інші тригери, а це
- * налаштування пише лише вставка в ту саму таблицю.
+ * налаштування пише лише `touch` (вставка й оновлення) тієї самої таблиці.
  */
 export const ROW_VERSION_SETTING = "simetra.row_version_"
 
@@ -224,8 +224,6 @@ export function buildMechanicsUnits(
     module,
     generator: "mechanics",
   })
-  // Тригер, що спрацьовує в ролі, яка пише, не потребує `EXECUTE` функції, тож
-  // жодна роль API його не має (платформна спека §6.7).
   // Послідовність видається завжди, навіть без таблиць механіки: застосування
   // сіє її й веде епоху версій незалежно від того, чи вже є таблиці.
   const sequence = [
@@ -235,6 +233,8 @@ export function buildMechanicsUnits(
     ...sequenceRevokes(ROW_VERSION_SEQUENCE, provider).map(shared),
   ]
   if (tables.length === 0) return sequence.sort(byIdentity)
+  // Тригер, що спрацьовує в ролі, яка пише, не потребує `EXECUTE` функції, тож
+  // жодна роль API його не має (платформна спека §6.7).
   const units: SqlUnit[] = [
     ...sequence,
     shared(touchFunction()),

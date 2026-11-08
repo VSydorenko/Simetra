@@ -185,6 +185,9 @@ describe("row mechanics in Postgres", () => {
         await client.query(
           `GRANT SELECT, INSERT, UPDATE ON public.item TO ${role}`
         )
+        // USAGE на схему дано, щоб 42501 нижче виходив з ACL послідовності,
+        // а не з відсутності права на схему `simetra`.
+        await client.query(`GRANT USAGE ON SCHEMA simetra TO ${role}`)
         await client.query(`GRANT ${role} TO CURRENT_USER WITH SET TRUE`)
         await client.query(`SET LOCAL ROLE ${role}`)
         const { rows } = await client.query<{ id: string; version: string }>(
@@ -202,6 +205,14 @@ describe("row mechanics in Postgres", () => {
           "42501"
         )
         await client.query("RESET ROLE")
+        // USAGE — nextval/currval, SELECT — currval, UPDATE — setval
+        for (const privilege of ["USAGE", "SELECT", "UPDATE"]) {
+          const { rows: has } = await client.query<{ has: boolean }>(
+            "SELECT has_sequence_privilege($1, $2, $3) AS has",
+            [role, SEQUENCE, privilege]
+          )
+          expect(has[0]!.has, privilege).toBe(false)
+        }
       })
     }
   )
