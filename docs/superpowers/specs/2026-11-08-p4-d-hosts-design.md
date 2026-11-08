@@ -167,10 +167,10 @@ production показує лише код; помилка `pg` (хост, рол
 | `trustedOrigins` | `[SIMETRA_APP_ORIGIN]` |
 | `secret` | `BETTER_AUTH_SECRET` (§4.1) |
 | `emailAndPassword` | `{ enabled: true, disableSignUp: true }` (Дх4) |
-| плагіни | `anonymous` (Дх11) |
+| плагіни | `anonymous` (Дх11); `disabledPaths: ["/sign-in/anonymous"]`, доки немає екрана гостя: endpoint без екрана лише плодить рядки `better_auth.user` |
 | `session.cookieCache` | вимкнено |
 | `rateLimit` | `{ enabled: true, storage: "database" }`; окреме правило для `/sign-in/email` |
-| IP клієнта | `advanced.ipAddress.ipAddressHeaders` — на ціль: `node-server` без проксі — заголовків не довіряємо; за проксі й на Vercel — заголовок, який ставить сам проксі |
+| IP клієнта | `advanced.ipAddress.ipAddressHeaders: ["x-simetra-client-ip"]`: серверний entry видаляє клієнтське значення цього заголовка й ставить своє — з адреси сокета на `node-server` без проксі, з заголовка довіреного проксі за проксі й на Vercel. Без адреси клієнта Better Auth рахував би всіх клієнтів одним лічильником на шлях, і перебір паролів блокував би вхід усім |
 | cookie | `HttpOnly`, `SameSite=Lax`, `Secure` для `https` (правило П4-B §4.5 спирається на `Lax`) |
 
 Адаптер `verifySession` над `auth.api.getSession({ headers })` — за §4.4
@@ -197,8 +197,9 @@ user.isAnonymous === true }`, `sub` — нижнім регістром. `is_ano
   (`packages/designer/src/io/data.ts`): ознака `simetra.environment =
   'development'` рівня бази (`ALTER DATABASE … SET`), а не сесійне
   `options=-c …` чи налаштування ролі, і хост бази loopback; інакше відмова;
-- заводить користувача власним екземпляром Better Auth з дозволеною
-  реєстрацією; пароль — випадковий, друкується один раз, не пишеться ні у
+- запобіжник і власний екземпляр Better Auth з дозволеною реєстрацією
+  працюють на одному об'єкті `Pool` з одного DSN; запобіжник — до першого
+  запису; пароль — випадковий, друкується один раз, не пишеться ні у
   файл, ні в репозиторій;
 - повторний запуск для наявного користувача змінює пароль через внутрішній
   адаптер Better Auth (точне API — за піном ПГ-3).
@@ -213,6 +214,8 @@ user.isAnonymous === true }`, `sub` — нижнім регістром. `is_ano
   обгорнуто потоком-лічильником (`duplex: "half"`), який на межі кидає
   сентинел-помилку; entry ловить її й відповідає тією самою відмовою.
   `Content-Encoding` тіла, відмінний від `identity`, — `command.invalid`.
+- **Адреса клієнта.** Entry видаляє вхідний `x-simetra-client-ip` і ставить
+  власне значення (§4.3).
 - **Кеш.** Кожна неасетна відповідь — `Cache-Control: no-store`; HTML —
   `Cache-Control: private, no-store` і `Vary: Cookie` (Р41).
 - **Безпекові заголовки** зрізу — ті, що не залежать від оформлення:
@@ -283,7 +286,8 @@ user.isAnonymous === true }`, `sub` — нижнім регістром. `is_ano
 - `simetra/server` імпортує лише `src/server/**`; клієнтський код його не
   імпортує — межу збірки тримає та сама декларація серверних входів (Рт15);
 - літерал `inProcess` — лише в `src/server/ssr-transport.ts`; `createServerFn`
-  у `ssr-transport.ts` і `router.tsx` — помилка (Дх7);
+  у `ssr-transport.ts` і `router.tsx` — помилка; `ssr-transport.ts` імпортує
+  лише `src/router.tsx` (Дх7);
 - `template/` не імпортує `test-host` і `simetra/*/testing`; модуль `#instrument` імпортують лише точки, названі в §4.1 (Дх9).
 
 Спільний пакет правил для застосунків поза шаблоном — решта П4-D.
@@ -424,8 +428,11 @@ Server Function з результатом (Р9 плану B3-6) дає лише 
   `ssr: true`, `staticData: { simetraList: <id об'єкта> }`.
   `entityCardRoute(object)` — те саме для `useRow` і `CardHost` з `id` з
   параметрів шляху і `staticData: { simetraCard: <id об'єкта> }`. `object` —
-  логічне посилання `{ kind, name }`; невідомий у каталозі об'єкт — `TypeError`
-  під час створення маршруту.
+  дескриптор об'єкта з `simetraApp(catalog).object({ kind, name })` (T6):
+  застосунок один раз на рівні модуля передає статично імпортований
+  `client-catalog.json`, і невідомий об'єкт дає `TypeError` ще під час
+  імпорту маршрутів. Дескриптор несе логічне посилання й id об'єкта; у
+  `staticData` іде id.
 - **Звідки loader бере рантайм:** з контексту роутера `context.data`
   (тримач), який кладе фабрика роутера шаблону (§4.6). Тип контексту — експорт
   T6 (`SimetraRouterContext`).
@@ -491,8 +498,9 @@ DOM і журнал Server Function з точним результатом). З�
 
 ### 8.3 Безпекові кейси e2e
 
-Кожен кейс про походження несе дійсний cookie сесії, тож відмова доводить
-саме правило походження, а не відсутність сесії. Позитивний контроль:
+Безпекові кейси біжать на **production-збірці** без аліасу `#instrument`:
+саме її отримує споживач. Кожен кейс про походження несе дійсний cookie
+сесії, тож відмова доводить саме правило походження, а не відсутність сесії. Позитивний контроль:
 `run` того самого походження з сесією — `ok`.
 
 | Кейс | Частина | Очікування |
@@ -504,10 +512,11 @@ DOM і журнал Server Function з точним результатом). З�
 | `dataFn` того самого походження без сесії | D2 | `command.unauthenticated` |
 | тіло понад межу з `Content-Length` і chunked; тіло з `Content-Encoding: gzip`; завелике тіло `sign-in` | D2 | `command.invalid` до розбору |
 | `POST /api/auth/sign-up/email` | D2 | відмова (реєстрацію вимкнено) |
-| вхід зі змінним `X-Forwarded-For` | D2 | межа частоти вичерпується (429) |
+| вхід зі змінним `X-Forwarded-For` і `x-simetra-client-ip` з однієї адреси сокета | D2 | межа частоти вичерпується (429); запит з іншої адреси сокета проходить |
+| `POST /api/auth/sign-in/anonymous` | D2 | 404 |
 | конверт зі `subject` іншого користувача | D2 | `command.unauthenticated` `session-changed` |
 | `get-session` і HTML | D2 | `Cache-Control: no-store`; HTML — `private, no-store` і `Vary: Cookie` |
-| кожен id серверної функції з маніфесту production-збірки: `POST` з сесією й `Sec-Fetch-Site: cross-site` | D3 | жодна відповідь не несе значень рядків |
+| кожен id серверної функції з маніфесту production-збірки: `POST` з сесією, `Sec-Fetch-Site: cross-site` і дійсним конвертом `read` суб'єкта сесії в протоколі серіалізації Start | D3 | жодна відповідь не несе значень рядків; позитивний контроль — та сама проба на `dataFn` того самого походження повертає рядки |
 | SSR сесії A, потім вхід B у тій самій вкладці | D3 | жодного значення A в DOM після заміни рантайму |
 | запит без сесії на сторінку з даними | D3 | перенаправлення на вхід; знімка в HTML немає |
 | анонімна сесія Better Auth на сторінку з даними | D3 | HTML без рядків і без знімка; перенаправлення на вхід |
