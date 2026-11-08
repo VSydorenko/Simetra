@@ -22,9 +22,12 @@ export function getRouter() {
     defaultPendingMs: 60_000,
     defaultPendingMinMs: 0,
     defaultPreload: false,
+    // Loader над ядром миттєвий, коли дані вже є; stale-while-revalidate
+    // роутера показав би звільнений вигляд (порожній) до preload — тому blocking.
+    defaultStaleReloadMode: 'blocking',
     dehydrate: () => {
       const core = holder.core
-      return { t4: core ? { meta: snapshotMeta(core.subject), snap: core.dehydrate() } : null }
+      return { t4: core ? { meta: snapshotMeta(core.subject, holder.rightsVersion), snap: core.dehydrate() } : null }
     },
     hydrate: (d: { t4: { meta: SnapshotMeta; snap: CoreSnapshot } | null }) => {
       // Ядро гідрується до першого клієнтського рендера (router-core

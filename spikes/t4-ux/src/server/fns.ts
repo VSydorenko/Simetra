@@ -37,7 +37,10 @@ function subjectOrThrow(): string {
   return s
 }
 
-export const getSession = createServerFn({ method: 'GET' }).handler(async () => ({ subject: subjectOf() }))
+export const getSession = createServerFn({ method: 'GET' }).handler(async () => {
+  const subject = subjectOf()
+  return { subject, rightsVersion: subject ? faultsOf(subject).rightsVersion : 0 }
+})
 
 /** Контракт `version`: права й каталог для звірки знімка SSR після гідратації. */
 export const getVersion = createServerFn({ method: 'GET' }).handler(async () => {
@@ -148,3 +151,10 @@ export const control = createServerFn({ method: 'POST' })
     }
     return { ok: true }
   })
+
+/** Лінивий `count` (спека §6.4): повільний, іде потоком SSR окремо від рядків. */
+export const countRows = createServerFn({ method: 'GET' }).handler(async () => {
+  const subject = subjectOrThrow()
+  await sleep(400)
+  return { subject, count: serverOf(subject).tables.get(ITEM)!.size }
+})

@@ -1,7 +1,7 @@
-import { createFileRoute, Link, redirect, useNavigate } from '@tanstack/react-router'
-import { memo, Profiler, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { Await, createFileRoute, Link, redirect, useNavigate } from '@tanstack/react-router'
+import { memo, Profiler, Suspense, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { RowView } from '../core'
-import { logout } from '../server/fns'
+import { countRows, logout } from '../server/fns'
 import { breaks } from '../t4/breaks'
 import { LIST, rereadVisible } from '../t4/facade'
 import { useCore, useHolder, useRows, useWriter } from '../t4/hooks'
@@ -14,6 +14,8 @@ export const Route = createFileRoute('/')({
     if (!core) throw redirect({ to: '/login' })
     // Вигляд уже в ядрі (гідратація або попередній візит у межах releaseDelayMs) — без запиту.
     if (core.view(LIST).getSnapshot().status === 'loading') await core.preload(LIST)
+    // Не чекаємо: лічильник іде потоком SSR (Suspense), рядки — одразу.
+    return { count: countRows().then((r) => r.count) }
   },
   component: ProfiledList,
 })
@@ -67,6 +69,12 @@ function ListPage() {
     <div data-region="list">
       <div className="toolbar">
         <strong>Items</strong>
+        {/* Слот лічильника фіксованої ширини: fallback → значення без зсуву. */}
+        <span className="count" data-slot="count">
+          <Suspense fallback={<span data-count="pending">…</span>}>
+            <Await promise={Route.useLoaderData().count}>{(n) => <span data-count="ready">{n}</span>}</Await>
+          </Suspense>
+        </span>
         {breaks.has('hydration') && <span>{typeof window === 'undefined' ? 'SSR' : 'CSR'}</span>}
         <button
           data-action="reread"

@@ -76,7 +76,7 @@ export async function loginAs(page: Page, subject: string) {
   await page.goto('/login')
   await page.waitForFunction(() => (window as any).__t4Hydrated)
   // Вхід — дія користувача: усе після неї вже не гідратація.
-  await page.evaluate(() => (window as any).__oracleMark('login', { allow: ['shift', 'clear', 'reorder', 'scroll'] }))
+  await page.evaluate(() => (window as any).__oracleMark?.('login', { allow: ['shift', 'clear', 'reorder', 'scroll'] }))
   await page.fill('[data-field=login]', subject)
   await page.click('[data-action=login]')
   await page.waitForSelector('[data-region=list] [data-row-key]')

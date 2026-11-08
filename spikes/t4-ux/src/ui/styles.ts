@@ -7,6 +7,7 @@ export const css = `
 .security{height:24px;color:#a52020;font-size:12px;max-width:1000px;margin:0 auto}
 #app{max-width:1000px;margin:0 auto;padding:12px}
 .toolbar{display:flex;align-items:center;gap:8px;height:40px}
+.toolbar .count{width:60px;flex:none;color:#5b6675;font-size:12px}
 .toolbar .slot{width:300px;flex:none;overflow:hidden;gap:6px;height:28px;display:flex;align-items:center}
 .hidden{visibility:hidden}
 button{font:inherit;font-size:12px;padding:2px 8px;height:24px;border:1px solid #c5ccd6;border-radius:4px;background:#fff;cursor:pointer}

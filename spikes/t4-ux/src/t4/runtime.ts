@@ -14,6 +14,8 @@ export class RuntimeHolder {
   snapshotMeta: SnapshotMeta | null = null
   /** Причина винятку безпеки, яку показує UI. */
   securityReason: string | null = null
+  /** Версія прав сесії, з якою сервер рендерить знімок. */
+  rightsVersion = 0
   private listeners = new Set<() => void>()
 
   get core(): CoreSession | null {

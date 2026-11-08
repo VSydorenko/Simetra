@@ -11,8 +11,9 @@ export const Route = createRootRouteWithContext<RouterContext>()({
     // Суб'єкт визначає сервер (cookie сесії). На клієнті після гідратації
     // ядро вже є; запит сесії йде лише без ядра (вхід/вихід).
     if (!context.holder.core) {
-      const { subject } = await getSession()
+      const { subject, rightsVersion } = await getSession()
       context.holder.ensure(subject)
+      context.holder.rightsVersion = rightsVersion
     }
   },
   head: () => ({
