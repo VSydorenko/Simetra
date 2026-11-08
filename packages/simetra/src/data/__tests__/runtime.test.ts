@@ -6,7 +6,7 @@ import {
   type DataRequest,
 } from "simetra/model"
 import { createDataRuntime, type DataLogEntry } from "../index"
-import { facadeOf } from "../facade/handle"
+import { runtimeHandleOf } from "../runtime/handle"
 import {
   OBJECT_ID,
   SUBJECT,
@@ -71,7 +71,7 @@ describe("runtime transport wrapper", () => {
       transport,
       subject: SUBJECT,
     })
-    const { send } = facadeOf(runtime)
+    const { send } = runtimeHandleOf(runtime)
     await expect(send(card())).resolves.toEqual({ rows: [] })
     await expect(send({ type: "version" })).resolves.toEqual({ rows: [] })
     expect(calls).toEqual([
@@ -91,7 +91,7 @@ describe("runtime transport wrapper", () => {
 
     it("sends a body of exactly the limit", async () => {
       const { transport, calls } = answeringTransport(ok(null))
-      const { send } = facadeOf(
+      const { send } = runtimeHandleOf(
         createDataRuntime({
           catalog: clientCatalog(),
           transport,
@@ -106,7 +106,7 @@ describe("runtime transport wrapper", () => {
 
     it("refuses a body one UTF-8 byte over the limit without the transport", async () => {
       const { transport, calls } = answeringTransport(ok(null))
-      const { send } = facadeOf(
+      const { send } = runtimeHandleOf(
         createDataRuntime({
           catalog: clientCatalog(),
           transport,
@@ -137,7 +137,7 @@ describe("runtime transport wrapper", () => {
       "%s: command.unavailable without a reason, the original to the log",
       async (_, fail) => {
         const log = vi.fn<(entry: DataLogEntry) => void>()
-        const { send } = facadeOf(
+        const { send } = runtimeHandleOf(
           createDataRuntime({
             catalog: clientCatalog(),
             transport: fail,
@@ -160,7 +160,7 @@ describe("runtime transport wrapper", () => {
       const log = vi.fn(() => {
         throw new Error("sink down")
       })
-      const { send } = facadeOf(
+      const { send } = runtimeHandleOf(
         createDataRuntime({
           catalog: clientCatalog(),
           transport: () => Promise.reject(new TypeError("network")),
@@ -185,7 +185,7 @@ describe("runtime transport wrapper", () => {
         subject: SUBJECT,
         onSessionChanged,
       })
-      const { send } = facadeOf(runtime)
+      const { send } = runtimeHandleOf(runtime)
       const first = send(card())
       const second = send(card())
       respond(sessionChanged())
@@ -222,7 +222,7 @@ describe("runtime transport wrapper", () => {
             throw thrown
           },
         })
-        const request = facadeOf(runtime).send(card())
+        const request = runtimeHandleOf(runtime).send(card())
         respond(sessionChanged())
         expect(await failureOf(request)).toEqual(SESSION_CHANGED)
         expect(runtime.disposed).toBe(true)
@@ -240,7 +240,7 @@ describe("runtime transport wrapper", () => {
         transport,
         subject: SUBJECT,
       })
-      const { send } = facadeOf(runtime)
+      const { send } = runtimeHandleOf(runtime)
       const first = send(card())
       const second = send(card())
       respond(sessionChanged())
@@ -256,7 +256,7 @@ describe("runtime transport wrapper", () => {
         transport,
         subject: SUBJECT,
       })
-      const { send } = facadeOf(runtime)
+      const { send } = runtimeHandleOf(runtime)
       const first = send(card())
       respond(sessionChanged())
       await failureOf(first)
@@ -266,19 +266,16 @@ describe("runtime transport wrapper", () => {
   })
 
   describe("dispose()", () => {
-    it("clears the query cache", () => {
+    it("marks the runtime disposed", () => {
       const { transport } = answeringTransport(ok(null))
       const runtime = createDataRuntime({
         catalog: clientCatalog(),
         transport,
         subject: SUBJECT,
       })
-      const { queryClient, keyPrefix } = facadeOf(runtime)
-      queryClient.setQueryData([...keyPrefix, "seed"], { rows: [] })
-      expect(queryClient.getQueryCache().getAll()).toHaveLength(1)
+      expect(runtime.disposed).toBe(false)
       runtime.dispose()
       expect(runtime.disposed).toBe(true)
-      expect(queryClient.getQueryCache().getAll()).toEqual([])
     })
 
     it("refuses a later request without the transport", async () => {
@@ -289,7 +286,9 @@ describe("runtime transport wrapper", () => {
         subject: SUBJECT,
       })
       runtime.dispose()
-      expect(await failureOf(facadeOf(runtime).send(card()))).toEqual(DISPOSED)
+      expect(await failureOf(runtimeHandleOf(runtime).send(card()))).toEqual(
+        DISPOSED
+      )
       expect(calls).toHaveLength(0)
     })
 
@@ -300,7 +299,7 @@ describe("runtime transport wrapper", () => {
         transport,
         subject: SUBJECT,
       })
-      const pending = facadeOf(runtime).send(card())
+      const pending = runtimeHandleOf(runtime).send(card())
       runtime.dispose()
       respond(ok({ rows: [{ id: ID }] }))
       expect(await failureOf(pending)).toEqual(DISPOSED)
@@ -315,7 +314,7 @@ describe("runtime transport wrapper", () => {
         subject: SUBJECT,
         log,
       })
-      const request = facadeOf(runtime).send(card())
+      const request = runtimeHandleOf(runtime).send(card())
       runtime.dispose()
       pending[0]!.fail(new TypeError("network"))
       expect(await failureOf(request)).toEqual(DISPOSED)
@@ -331,7 +330,7 @@ describe("runtime transport wrapper", () => {
         subject: SUBJECT,
         onSessionChanged,
       })
-      const request = facadeOf(runtime).send(card())
+      const request = runtimeHandleOf(runtime).send(card())
       runtime.dispose()
       respond(sessionChanged())
       expect(await failureOf(request)).toEqual(DISPOSED)
@@ -339,8 +338,8 @@ describe("runtime transport wrapper", () => {
     })
   })
 
-  describe("cache isolation", () => {
-    it("gives each runtime its own client and key prefix", () => {
+  describe("isolation", () => {
+    it("keeps two runtimes independent: disposing one leaves the other answering", async () => {
       const { transport } = answeringTransport(ok(null))
       const one = createDataRuntime({
         catalog: clientCatalog(),
@@ -352,18 +351,12 @@ describe("runtime transport wrapper", () => {
         transport,
         subject: SUBJECT,
       })
-      expect(facadeOf(one).queryClient).toBe(facadeOf(one).queryClient)
-      expect(facadeOf(one).queryClient).not.toBe(facadeOf(two).queryClient)
-
-      const [prefixOne, prefixTwo] = [facadeOf(one), facadeOf(two)].map(
-        (f) => f.keyPrefix
+      one.dispose()
+      expect(await failureOf(runtimeHandleOf(one).send(card()))).toEqual(
+        DISPOSED
       )
-      expect(prefixOne).toEqual(["simetra", SUBJECT, expect.any(String)])
-      expect(prefixTwo).toEqual(["simetra", SUBJECT, expect.any(String)])
-      expect(prefixOne).not.toEqual(prefixTwo)
-
-      facadeOf(one).queryClient.setQueryData([...prefixOne!, "seed"], 1)
-      expect(facadeOf(two).queryClient.getQueryCache().getAll()).toEqual([])
+      expect(await runtimeHandleOf(two).send(card())).toBeNull()
+      expect(two.disposed).toBe(false)
     })
   })
 })

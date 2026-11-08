@@ -1,4 +1,3 @@
-import { QueryClient } from "@tanstack/query-core"
 import {
   CommandFailure,
   LIMIT_REASONS,
@@ -12,13 +11,13 @@ import {
   type DataResponse,
   type DataTransport,
 } from "simetra/model"
-import { bindFacade, type RuntimeRequest } from "./handle"
+import { bindRuntimeHandle, type RuntimeRequest } from "./handle"
 
 /** The data runtime of one user session (P4-B spec §6.1). */
 export interface DataRuntime {
   /** The session `sub`; every request of this runtime carries it. */
   readonly subject: string
-  /** Drops the runtime cache; later requests are refused without the transport. */
+  /** Closes the runtime; later requests are refused without the transport. */
   dispose(): void
   readonly disposed: boolean
 }
@@ -39,8 +38,8 @@ export interface DataRuntimeOptions {
  * An entry of the runtime journal (P4-B spec §6.1). `transport-failed`: the
  * transport threw or rejected; the caller saw `command.unavailable`.
  */
-// Об'єднання з одного виду: наступні види (`full-truncated`, B3-2b)
-// додаються гілками, без перейменування опції.
+// Об'єднання з одного виду: наступні види додаються гілками, без
+// перейменування опції.
 export type DataLogEntry = { kind: "transport-failed"; error: unknown }
 
 // Відмова рантайму після звичайного `dispose()` (вихід, зміна користувача з
@@ -72,10 +71,6 @@ export function createDataRuntime(options: DataRuntimeOptions): DataRuntime {
       // Журнал недоступний — результат запиту від нього не залежить.
     }
   }
-  // Власний клієнт і nonce у префіксі ключів: кеш одного рантайму не видно
-  // іншому, навіть з тим самим `subject` (спека §6.1, «Ізоляція кешу»).
-  const queryClient = new QueryClient()
-  const keyPrefix = ["simetra", subject, crypto.randomUUID()] as const
   // Причина закриття: після неї кожна відповідь, зокрема пізня, відхиляється
   // нею — рядки попереднього користувача викликачу не доходять.
   let closedWith: CommandError | undefined
@@ -83,7 +78,6 @@ export function createDataRuntime(options: DataRuntimeOptions): DataRuntime {
   const close = (error: CommandError) => {
     if (closedWith !== undefined) return
     closedWith = error
-    queryClient.clear()
   }
 
   const send = async (request: RuntimeRequest): Promise<unknown> => {
@@ -105,7 +99,7 @@ export function createDataRuntime(options: DataRuntimeOptions): DataRuntime {
       // `dispose()` чи пізня відмова — це «закрито», а не «недоступно».
       if (closedWith !== undefined) throw new CommandFailure(closedWith)
       // Сирий виняток обійшов би таблицю §7.3: для `run` «недоступно» —
-      // результат невідомий, і фасад перечитує ключі без повтору. Оригінал
+      // результат невідомий, і ядро перечитує ключі без повтору. Оригінал
       // іде в журнал, викликач бачить лише код.
       log({ kind: "transport-failed", error })
       throw new CommandFailure({ code: "command.unavailable" })
@@ -138,6 +132,6 @@ export function createDataRuntime(options: DataRuntimeOptions): DataRuntime {
     },
     dispose: () => close(DISPOSED),
   }
-  bindFacade(runtime, { queryClient, keyPrefix, send })
+  bindRuntimeHandle(runtime, { send })
   return runtime
 }

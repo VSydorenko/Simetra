@@ -141,33 +141,28 @@ describe("simetra", () => {
     ).toEqual([])
   })
 
-  it("declares the data-tier peers as exact optional RC pins", async () => {
+  it("declares react as the only, optional peer", async () => {
     const m = await readPackedManifest(tarballs.simetra)
-    // Точний pin лише для RC-пакетів; діапазони — для react і query-core
-    expect(m.peerDependencies).toEqual({
-      "@tanstack/db": "1.0.0-rc.1.4",
-      "@tanstack/query-core": "^5.90.15",
-      "@tanstack/query-db-collection": "1.5.1",
-      "@tanstack/react-db": "1.0.0-rc.1.4",
-      react: "^19.3.1",
-    })
+    expect(m.peerDependencies).toEqual({ react: "^19.3.1" })
     // Серверний споживач peer не ставить
     expect(
       Object.values(
         m.peerDependenciesMeta as Record<string, { optional?: boolean }>
       ).map((v) => v.optional)
-    ).toEqual([true, true, true, true, true])
+    ).toEqual([true])
     expect(Object.keys(m.peerDependenciesMeta as object).sort()).toEqual(
       Object.keys(m.peerDependencies as object).sort()
     )
   })
 
-  it("imports every server-side tier in plain Node without the data peers", async () => {
-    // `simetra/data` тут не імпортується: його рантайм тягне `@tanstack/query-core`,
-    // і його вхід доводить споживач із peer
+  it("imports every server-side tier and simetra/data in plain Node without the peer", async () => {
     const { stdout } = await exec(
       process.execPath,
-      ["--input-type=module", "-e", 'await import("simetra/server")'],
+      [
+        "--input-type=module",
+        "-e",
+        'await import("simetra/server"); await import("simetra/data")',
+      ],
       { cwd: consumer }
     )
     expect(stdout).toBe("")
@@ -238,7 +233,6 @@ function bareSpecifiers(source: string): string[] {
 
 // Пара «поточні» звіту П0 (а) і Vite з нижньою межею збирача шаблону host-а
 const HOST_STACK = {
-  "@tanstack/react-query": "5.107.1",
   "@tanstack/react-router": "1.170.46",
   "@tanstack/react-start": "1.169.4",
   "react-dom": "19.3.1",
@@ -248,16 +242,7 @@ const HOST_STACK = {
 // Бібліотеки зі станом на рівні модуля, які імпортують і host, і пакет
 // (правило списку звіту П0 (а), спека П4-B §3): друга копія кожної з них —
 // другий кеш, реєстр чи контекст React у тому самому бандлі
-const SINGLE_COPY = [
-  "react",
-  "react-dom",
-  "@tanstack/db",
-  "@tanstack/db-ivm",
-  "@tanstack/react-db",
-  "@tanstack/query-core",
-  "zod",
-  "simetra",
-]
+const SINGLE_COPY = ["react", "react-dom", "zod", "simetra"]
 
 const MODULE_IDS = "module-ids.json"
 
@@ -291,51 +276,41 @@ export default {
   },
 }
 `,
-  "src/main.js": `import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import {
-  createCollection,
-  localOnlyCollectionOptions,
-  useLiveQuery,
-} from "@tanstack/react-db"
-import { createElement } from "react"
+  "src/main.js": `import { createElement } from "react"
 import { createRoot } from "react-dom/client"
 import { createDataRuntime } from "simetra/data"
 import { z } from "zod"
 
-const rows = createCollection(
-  localOnlyCollectionOptions({
-    getKey: (row) => row.id,
-    schema: z.object({ id: z.string() }),
-  })
-)
 const runtime = createDataRuntime({
   catalog: { format: 1, snapshotHash: "gate", provider: "supabase", objects: [] },
   transport: async () => ({ ok: true, value: null }),
   subject: "gate",
 })
+const shape = z.object({ subject: z.string() })
 
 function App() {
-  const { data } = useLiveQuery((q) => q.from({ rows }))
-  return createElement("pre", null, runtime.subject + ":" + data.length)
+  return createElement("pre", null, shape.parse(runtime).subject)
 }
 
-createRoot(document.getElementById("root")).render(
-  createElement(
-    QueryClientProvider,
-    { client: new QueryClient() },
-    createElement(App)
-  )
-)
+createRoot(document.getElementById("root")).render(createElement(App))
 `,
 }
 
 describe("simetra/data", () => {
   it("public declarations do not reference @tanstack", async () => {
-    // Типи `simetra/data` — контракт пакета, а не бібліотек фасаду (§14.3)
+    // Типи `simetra/data` — контракт пакета: ні бібліотек, ні внутрішніх
+    // типів ядра. Межа слова: публічне `onSessionChanged` дозволене.
     const dts = await packedSources(tarballs.simetra, "dist/data/", ".d.ts")
     expect([...dts.keys()]).toContain("dist/data/index.d.ts")
     expect(
       [...dts].filter(([, s]) => s.includes("@tanstack/")).map(([f]) => f)
+    ).toEqual([])
+    expect(
+      [...dts]
+        .filter(([, s]) =>
+          /\b(CoreSession|Session|Scope|ObjectStore|SectionStore)\b/.test(s)
+        )
+        .map(([f]) => f)
     ).toEqual([])
   })
 
@@ -350,12 +325,11 @@ describe("simetra/data", () => {
     const specifiers = [
       ...(await packedSources(tarballs.simetra, "dist/data/", ".js")).values(),
     ].flatMap(bareSpecifiers)
-    expect(specifiers).toContain("@tanstack/query-core")
     expect(specifiers.filter((s) => !allowed.has(s))).toEqual([])
   })
 })
 
-describe("simetra/data in a pnpm host with the TanStack stack", () => {
+describe("simetra/data in a pnpm host", () => {
   let consumer: string
 
   beforeAll(async () => {

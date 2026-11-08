@@ -81,7 +81,7 @@ export async function listPackedFiles(tarball: string): Promise<string[]> {
 /**
  * Що споживач має понад tarball-и: залежності з реєстру (peer-и `simetra`,
  * стек host-а) і власні файли (вхід бандлера). Файли генеруються в
- * тимчасовій теці: з імпортами `vite` чи `@tanstack/*` у дереві designer вони
+ * тимчасовій теці: з імпортами `vite` чи `@tanstack/*` (router, start) у дереві designer вони
  * зламали б його `typecheck` і `lint`.
  */
 export interface ConsumerHost {
