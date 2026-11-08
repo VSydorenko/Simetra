@@ -521,7 +521,7 @@ describe("diff and the apply state", () => {
       expect(data.applyState).toBe("present")
       expect(data.empty).toBe(false)
       expect(data.plan.map((a) => a.sql).join("\n")).toContain(
-        "CREATE SEQUENCE simetra.row_version"
+        'CREATE SEQUENCE "simetra"."row_version"'
       )
     })
   })

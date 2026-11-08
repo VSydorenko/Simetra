@@ -52,7 +52,7 @@ export function liveMechanicsTables(model: CatalogModel): TableRef[] {
   return model.tables
     .filter((t) => {
       const unit = triggers.get(
-        `${t.schema}.${t.name}.${mechanicsTriggerName(t.name)}`
+        `trigger:${t.schema}.${t.name}.${mechanicsTriggerName(t.name)}`
       )
       return unit !== undefined && fn.test(unit.sql)
     })

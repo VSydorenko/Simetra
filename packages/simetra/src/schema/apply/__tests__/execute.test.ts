@@ -1350,6 +1350,54 @@ describe("executePlan", () => {
     expect(seen.ledger).toEqual([SESSION])
   })
 
+  describe("versions block", () => {
+    const engineSteps = plan.steps.map((s, i) => ({ ...s, id: `s${i + 1}` }))
+    const n = engineSteps.length + 1
+    const seed = step(`s${n}`, "DO $seed$ SELECT 1 $seed$", {
+      origin: "versions",
+      class: "validationScan",
+      lockClass: "share",
+    })
+    const environment = step(`s${n + 1}`, "GRANT SELECT ON app.n TO anon", {
+      origin: "environment",
+    })
+    const SYNC = "SET LOCAL synchronous_commit = on"
+
+    // Версії пишуться з вимкненими тригерами, тож `touch` синхронного
+    // коміту не ставить: його ставить раннер, і лише за непорожнього блоку
+    it("runs the block after the engine and before the environment with synchronous commit on", async () => {
+      const fake = clocked()
+      const outcome = await executePlan(
+        fake.db,
+        target,
+        { ...plan, steps: [...engineSteps, seed, environment] },
+        { ...withMode("rehearse"), clock: fake.clock }
+      )
+      if (outcome.status !== "rolledBack")
+        throw new Error(
+          `not rolled back: ${JSON.stringify(outcome).slice(0, 500)}`
+        )
+      const at = (sql: string) => fake.log.indexOf(sql)
+      expect(at(SYNC)).toBeGreaterThan(at(engineSteps.at(-1)!.sql))
+      expect(at(SYNC)).toBeLessThan(at(seed.sql))
+      expect(at(seed.sql)).toBeLessThan(at(environment.sql))
+      expect(
+        outcome.evidence.durations.steps.some((s) => s.id === seed.id)
+      ).toBe(true)
+    })
+
+    it("does not touch synchronous commit without a versions block", async () => {
+      const fake = clocked()
+      await executePlan(
+        fake.db,
+        target,
+        { ...plan, steps: [...engineSteps, environment] },
+        { ...withMode("rehearse"), clock: fake.clock }
+      )
+      expect(fake.log).not.toContain(SYNC)
+    })
+  })
+
   describe("carrier steps", () => {
     const intent = step("s1", "ALTER TABLE app.t RENAME TO t2", {
       origin: "intent",
@@ -2287,6 +2335,14 @@ describe("executePlan", () => {
     [
       "whose environment step precedes a carrier copy step",
       ["environment", "carriers"] as const,
+    ],
+    [
+      "whose versions step precedes a carrier copy step",
+      ["versions", "carriers"] as const,
+    ],
+    [
+      "whose environment step precedes a versions step",
+      ["environment", "versions"] as const,
     ],
   ])("refuses a plan %s before BEGIN", async (_, origins) => {
     const { db, log } = fakeDb()
