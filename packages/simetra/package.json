@@ -36,6 +36,7 @@
     "test": "vitest run --project unit",
     "test:watch": "vitest --project unit",
     "test:db": "vitest run --project db",
+    "test:db:pg": "vitest run --project db-pg",
     "schemas:update": "UPDATE_JSON_SCHEMAS=1 vitest run --project unit json-schema",
     "bench:rights": "vitest run --project bench",
     "catalog-functions": "node scripts/catalog-functions.ts",

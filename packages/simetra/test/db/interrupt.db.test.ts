@@ -21,6 +21,8 @@ import {
   testDatabaseUrl,
   testSuperuserUrl,
 } from "./connection"
+import { nodeExec, runBuckets, runContainers } from "./external"
+import { testProvider, testStack } from "./profile"
 import { stopRunBackends, sweepRun } from "./sweep"
 
 const TSX = pathToFileURL(createRequire(import.meta.url).resolve("tsx")).href
@@ -42,6 +44,9 @@ describe("an interrupted DB run", () => {
     "removes its own stack objects on %s (second signal: %s)",
     async (signal, second) => {
       const tag = newRunTag()
+      // Зовнішні ресурси прогону фікстура створює лише на стеку postgres; на
+      // Supabase кейс той самий, що й був
+      const external = testProvider() === "postgres"
       // Тінь чужого прогону — з тегом зовнішнього (env воркера vitest від
       // stack-guard, не фікстури): прибиральник фікстури не сміє її торкнутися,
       // а перерваний зовнішній прогін, чий воркер гине без `finally`, прибере
@@ -58,6 +63,9 @@ describe("an interrupted DB run", () => {
         })
         const exited = once(child, "exit") as Promise<[number | null, string]>
         ready = await readyLine(child)
+        // Без цього порожній перелік після сигналу нічого б не довів
+        if (external)
+          expect(await runResources(tag)).toEqual({ containers: 1, buckets: 1 })
         // Воркер тим часом створює нові бази: сигнал застає його посеред роботи
         await new Promise((resolve) => setTimeout(resolve, 500))
         child.kill(signal)
@@ -70,6 +78,10 @@ describe("an interrupted DB run", () => {
 
         expect(code).toBe(128 + constants.signals[signal])
         expect(await taggedObjects(tag)).toEqual([])
+        // Контейнер і бакет прибирає лише прибиральник на сигналі: фікстура
+        // їх не чіпає, а звірка стеку побачила б їх лише після прогону
+        if (external)
+          expect(await runResources(tag)).toEqual({ containers: 0, buckets: 0 })
         expect(await databaseExists(foreign)).toBe(true)
         await expect
           .poll(() => isAlive(ready!.workerPid), { timeout: 5_000 })
@@ -294,6 +306,18 @@ async function withDeadline<T>(promise: Promise<T>, ms: number): Promise<T> {
     ])
   } finally {
     clearTimeout(timer)
+  }
+}
+
+// Скільки контейнерів і бакетів тегу на стеку прогону
+async function runResources(
+  tag: string
+): Promise<{ containers: number; buckets: number }> {
+  const containers = await runContainers(testProvider(), nodeExec)
+  const buckets = await runBuckets(testStack(), fetch, 10_000)
+  return {
+    containers: containers.filter((c) => c.tag === tag).length,
+    buckets: buckets.filter((b) => b.tag === tag).length,
   }
 }
 

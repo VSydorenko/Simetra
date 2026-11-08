@@ -3,7 +3,8 @@
 // який уже тримає зовнішній прогін, тож фікстура ставить той самий обробник
 // сигналу, що й `stack-guard`, і створює об'єкти так, як їх створюють тести.
 //
-// `node --import tsx interrupted-run.ts <тег>` — головний процес;
+// `node --import tsx interrupted-run.ts <тег>` — головний процес (на стеку
+// postgres ще й з контейнером і бакетом тегу);
 // `… --worker` — «воркер», що безперервно створює тегові бази.
 // `… <тег> --sleep <файл замка>` — головний процес, що тримає замок-файл
 // (обробник сигналу його видаляє), і `… --sleep-worker` — воркер посеред
@@ -15,6 +16,7 @@ import pg from "pg"
 import {
   enterRun,
   isRunTag,
+  runTag,
   SHADOW_PREFIX,
   shadowSuffix,
   testDatabaseName,
@@ -22,12 +24,21 @@ import {
   testRoleName,
   testSuperuserUrl,
 } from "../connection"
+import { createRunBucket, nodeExec } from "../external"
 import { installInterruptCleanup } from "../interrupt"
+import { testProvider, testStack } from "../profile"
 
 // Запобіжник, якщо тест не надішле сигналу (упав чи сам був убитий): фікстура
 // перериває себе тим самим шляхом, тож не висить і не лишає тегових об'єктів
 const SELF_INTERRUPT_MS = 120_000
 const WORKER_PAUSE_MS = 200
+
+// Образ стека вже є локально: контейнер прогону не тягне нічого з мережі
+const RUN_CONTAINER_IMAGE = "simetra-pg/postgres:17.11"
+
+function interruptContainerName(tag: string): string {
+  return `simetra-run-${tag}-interrupt`
+}
 
 // Довший за будь-яке очікування тесту: запит, що завершився сам, нічого б не
 // довів про сторожа
@@ -76,6 +87,29 @@ async function createObjects(): Promise<void> {
     await client.query(`CREATE DATABASE ${id(SHADOW_PREFIX + shadowSuffix())}`)
     await client.query(`CREATE ROLE ${id(testRoleName("interrupt_owner"))}`)
   })
+  // На стеку postgres прогін має й зовнішні ресурси: прибиральник на сигналі
+  // мусить видалити і їх. `ready` друкується лише після обох
+  if (testProvider() === "postgres") {
+    const tag = runTag()
+    await nodeExec(
+      "docker",
+      [
+        "run",
+        "-d",
+        "--name",
+        interruptContainerName(tag),
+        "--label",
+        `simetra-run=${tag}`,
+        "--label",
+        "simetra-stack=postgres",
+        RUN_CONTAINER_IMAGE,
+        "sleep",
+        "infinity",
+      ],
+      { timeoutMs: 30_000 }
+    )
+    await createRunBucket(tag, testStack(), fetch)
+  }
 }
 
 async function worker(): Promise<void> {

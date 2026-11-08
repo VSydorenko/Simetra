@@ -34,6 +34,18 @@ export default defineConfig({
       {
         extends: true,
         test: {
+          // Стек профілю postgres: поки на ньому лише базовий стан і
+          // переривання — решта DB-тестів іде на Supabase до перемикання
+          // типового профілю
+          name: "db-pg",
+          include: ["test/db/pgtap.db.test.ts", "test/db/interrupt.db.test.ts"],
+          fileParallelism: false,
+          globalSetup: ["./test/db/stack-guard.postgres.ts"],
+        },
+      },
+      {
+        extends: true,
+        test: {
           // Бенчмарк меж прав (спека прав §5.4): той самий стек і сторож, що й `db`, але
           // поза `test:db` і CI — прогін хвилинний, а результат — заміри машини
           name: "bench",

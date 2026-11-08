@@ -144,7 +144,9 @@ describe("vitest configs", () => {
           .filter(({ path }) => basename(path).startsWith("stack-guard"))
           .map(({ name }) => name)
       )
-    ).toEqual(new Set(["simetra/db", "simetra/bench", "designer/db"]))
+    ).toEqual(
+      new Set(["simetra/db", "simetra/db-pg", "simetra/bench", "designer/db"])
+    )
   })
 })
 
