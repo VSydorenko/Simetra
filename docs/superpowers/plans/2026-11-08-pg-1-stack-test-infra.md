@@ -11,6 +11,9 @@
 > **Спільний стек.** Локальний стек Supabase на машині — спільний для всіх
 > сесій. Виконавець **ніколи** не виконує `pnpm db:stop`, `supabase stop` чи
 > `pnpm db:start`; новий стек `postgres` — окремий compose-проєкт поруч.
+> Стек `postgres` теж спільний для worktree машини: `pnpm db:pg:start` і
+> `pnpm db:pg:stop` відмовляють, поки його замок тримає живий DB-прогін
+> (задача 3), а `--volumes` локально не вживається.
 >
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -28,8 +31,7 @@ Garage), тест-інфра DB знає профіль стека, pgTAP іде
 його переводить ПГ-2.
 
 **Tech Stack:** Docker Compose v2, `postgres:17.11-trixie` (з digest) з
-`postgresql-17-pgtap` і `postgresql-17-plpgsql-check` (PGDG, закріплені
-версії), Centrifugo `v6.10.2`, Garage `v2.5.0`, Node (`.node-version`),
+`postgresql-17-pgtap` і `postgresql-17-plpgsql-check` (PGDG), Centrifugo `v6.10.2`, Garage `v2.5.0`, Node (`.node-version`),
 Vitest, `pg`.
 
 **Spec:** [спека профілю `postgres`](../specs/2026-11-08-postgres-profile-design.md)
@@ -49,8 +51,10 @@ Vitest, `pg`.
 - Образи — точний тег і digest: `postgres:17.11-trixie@sha256:…`,
   `centrifugo/centrifugo:v6.10.2@sha256:…`, `dxflrs/garage:v2.5.0@sha256:…`
   (digest бере виконавець `docker buildx imagetools inspect`). Пакети PGDG —
-  з точною версією (`=<версія>`). Версії живуть у файлах стека, не в
-  `AGENTS.md`.
+  без точного піну: основний репозиторій PGDG тримає лише останню версію, і
+  пін зламав би збірку з першим оновленням; доступність розширень доводить
+  набір базового стану (задача 5). Версії образів живуть у файлах стека, не
+  в `AGENTS.md`.
 - Імена compose-проєктів: `simetra-pg`, `simetra-sb`. Виклик `docker
   compose` без `-p` чи `name:` — заборонено.
 - Замок стека Supabase зберігає **наявне ім'я** `simetra-db-stack.lock`:
@@ -79,6 +83,7 @@ Vitest, `pg`.
 | Р5 | Бакети тегу в ПГ-1: guard їх бачить, прибиральник видаляє **порожні**. Спорожнення бакета з об'єктами — у ПГ-5 разом із першим записувачем байтів | §10.3 (задача 0) |
 | Р6 | Тести `db-supabase` у CI — рядки наявної матриці `db` (simetra; designer — 2 шарди); стек `postgres` — новий job `db-postgres` | §10.6 і §12 (задача 0) |
 | Р7 | Centrifugo обох стеків у ПГ-1 — зі статичним конфігом без споживача outbox і без токенів (таблиці outbox ще немає); вивід генератора конфігу з `audience` і `issuer` замінює його в ПГ-4 | §6.1 «конфіг стека розробки будується тим самим генератором» — «з ПГ-4» (задача 0) |
+| Р9 | Транзакцію набору pgTAP відкриває й відкочує раннер; файл набору не має операторів керування транзакцією (`begin`, `commit`, `rollback`, `savepoint` тощо) — раннер їх відхиляє | §10.5, опис раннера (задача 0) |
 | Р8 | Centrifugo поруч зі стеком Supabase стартує окремою командою `pnpm db:signals:start`; `db:start` і `db:stop` не змінюються: тести ПГ-1 його не вживають, а зайве завантаження образу в кожному рядку CI — нова причина збою старту | §10.1 «`pnpm db:start` піднімає його» — «окрема команда» (задача 0) |
 
 ## Review Focus
@@ -109,9 +114,11 @@ Vitest, `pg`.
 - [ ] **Step 1:** внести поправки за стовпцем «Вплив на спеку» таблиці
   «Рішення» (Р1, Р3–Р8), кожну — у названому розділі спеки, формулюванням
   стану після ПГ-1 і посиланням на блок, який завершує механізм:
-  - §6.1 — Р7; §10.1 — Р8; §10.2 — Р3; §10.3 — Р1, Р5;
-  - §10.5 — Р3, Р4; §10.6 — Р6 (рядки `supabase-bound` матриці `db`,
-    job `db-postgres`); §12 рядок ПГ-1 — Р3, Р6.
+  - §6.1 — Р7; §10.1 — Р8; §10.2 — Р1 (склад `test:db:pg` і `test:db` у
+    ПГ-1), Р3; §10.3 — Р1, Р5;
+  - §10.5 — Р1 (проєкт `db` на `postgres` — з ПГ-2), Р3, Р4, Р9; §10.6 — Р6
+    (рядки `supabase-bound` матриці `db`, job `db-postgres`); §12 рядок
+    ПГ-1 — Р3, Р6.
 - [ ] **Step 2:** `python3 scripts/check-doc-anchors.py` і `pnpm format:check` — зелені.
 - [ ] **Step 3: Commit** — `docs(spec): профіль postgres — межі блоку ПГ-1`.
 
@@ -119,6 +126,10 @@ Vitest, `pg`.
 
 **Files:**
 - Create: `packages/simetra/test/db/profile.ts`, `packages/simetra/test/db/profile.test.ts`
+- Create: `docker/postgres-stack/dev-secrets.env` — `GARAGE_RPC_SECRET`
+  (64 hex), `GARAGE_ADMIN_TOKEN`, `GARAGE_DEV_KEY_ID` (`GK…`),
+  `GARAGE_DEV_KEY_SECRET`; коментар «local stack on 127.0.0.1 only» (його
+  ж читають compose і скрипт задачі 3)
 - Modify: `packages/simetra/test/db/connection.ts` (`testDatabaseUrl`,
   `testPoolerUrl`, `testSuperuserUrl`), `packages/simetra/test/db/connection.test.ts`
 
@@ -126,7 +137,11 @@ Vitest, `pg`.
 - Produces (усі `export`):
   - `type TestProvider = "postgres" | "supabase"`
   - `const PROVIDER_ENV = "SIMETRA_TEST_PROVIDER"`
-  - `interface TestStack { databaseUrl: string; superuserUrl: string; poolerUrl: string | null; superuserName: string; lockFile: string; garage: { adminUrl: string; adminToken: string } | null }`
+  - `interface TestStack { databaseUrl: string; superuserUrl: string; poolerUrl: string | null; superuserName: string; lockFile: string; garageAdminUrl: string | null }`
+  - `function garageAdminToken(): string` — читає рядок `GARAGE_ADMIN_TOKEN=`
+    з `docker/postgres-stack/dev-secrets.env` (шлях — від `import.meta.url`
+    до кореня репо); немає файла чи рядка — `Error` з повним шляхом файла.
+    Окрема функція, а не поле: прогін на Supabase не читає файла стека.
   - `const TEST_STACKS: Record<TestProvider, TestStack>`
   - `function testProvider(): TestProvider` — читає `PROVIDER_ENV`; немає —
     `"supabase"` (Р1); інше значення — `Error` з іменем змінної.
@@ -141,18 +156,16 @@ Vitest, `pg`.
 | `poolerUrl` | `postgresql://postgres.pooler-dev:postgres@127.0.0.1:54329/postgres` | `null` |
 | `superuserName` | `supabase_admin` | `postgres` |
 | `lockFile` | `simetra-db-stack.lock` | `simetra-db-stack-postgres.lock` |
-| `garage` | `null` | `{ adminUrl: "http://127.0.0.1:3903", adminToken: <з dev-secrets.env> }` |
-
-`adminToken` читається з `docker/postgres-stack/dev-secrets.env` (рядок
-`GARAGE_ADMIN_TOKEN=…`) лише під час першого звернення до `TEST_STACKS.postgres.garage`,
-щоб прогін на Supabase не залежав від файлу стека.
+| `garageAdminUrl` | `null` | `http://127.0.0.1:3903` |
 
 - [ ] **Step 1: failing unit tests.** `profile.test.ts`:
   - `testProvider()` без змінної → `"supabase"`; `"postgres"` → `"postgres"`;
     `"pg"` → кидає, текст містить `SIMETRA_TEST_PROVIDER`;
   - `enterProvider("postgres")` після `enterProvider("supabase")` кидає;
   - `it.each` по `TEST_STACKS`: адреси на `127.0.0.1`; `lockFile` різні;
-    `TEST_STACKS.supabase.lockFile === "simetra-db-stack.lock"`.
+    `TEST_STACKS.supabase.lockFile === "simetra-db-stack.lock"`;
+  - `garageAdminToken()` повертає непорожній рядок; з підставним шляхом
+    до відсутнього файла кидає з цим шляхом у тексті.
 
   `connection.test.ts`: з `PROVIDER_ENV=postgres` `testPoolerUrl()` кидає з
   текстом `no pooler`; `testDatabaseUrl()` і `testSuperuserUrl()` дають
@@ -185,6 +198,12 @@ Vitest, `pg`.
     `lockPath(p)`; замок, який тримає `process.pid`, — `Error` «one DB
     project per vitest process» (Р2); рядок старту — `DB run <tag> on
     <provider> stack at …`;
+  - типи `Snapshot` і `Change` — `export`;
+  - `function stackMismatch(p: TestProvider, facts: { supabaseAdmin: boolean }): string | null`
+    — після з'єднання guard читає наявність ролі `supabase_admin`; для
+    `postgres` вона мусить бути відсутня, для `supabase` — присутня;
+    розбіжність — відмова прогону з текстом про змінні `SIMETRA_TEST_*`
+    (перевизначення адреси на чужий стек ламало б взаємне виключення);
   - `function diff(before: Snapshot, after: Snapshot): Change[]`;
   - `function leakMessage(changes: Change[], p: TestProvider): string` —
     порада `DROP ROLE` закінчується `-- as <TEST_STACKS[p].superuserName>`;
@@ -204,25 +223,29 @@ Vitest, `pg`.
   - `leakMessage` з доданою роллю: `-- as postgres` / `-- as supabase_admin`;
   - `leftoverReport` з тегованою базою: команда містить
     `SIMETRA_TEST_PROVIDER=<p>`;
-  - `manualSweepSql` називає суперкористувача профілю.
+  - `manualSweepSql` називає суперкористувача профілю;
+  - `stackMismatch`: `it.each` чотирьох комбінацій профілю й факту;
+  - «globalSetup paths exist»: імпорт обох `vitest.config.ts`, для кожного
+    проєкту кожен шлях `globalSetup` і `setupFiles` існує (`existsSync`) —
+    ловить і `bench`, і проєкти без файлів.
+
+  Наявні кейси `leftoverReport` у `stack-guard.test.ts` переписати на нову
+  сигнатуру (профіль другим параметром, команда з `SIMETRA_TEST_PROVIDER`).
 - [ ] **Step 2:** `pnpm --filter simetra test stack-guard sweep` — FAIL.
 - [ ] **Step 3:** реалізація за інтерфейсом.
 - [ ] **Step 4:** `pnpm --filter simetra test stack-guard sweep` — PASS.
 - [ ] **Step 5:** scoped DB-прогони на стеку Supabase:
   `pnpm --filter simetra test:db stack` і
   `pnpm --filter @simetrajs/designer test:db roles-tool` — зелені, рядок
-  старту `on supabase stack`; `pnpm --filter simetra exec vitest run
-  --project bench --passWithNoTests nonexistent` завантажує конфіг без
-  помилки імпорту.
+  старту `on supabase stack`.
 - [ ] **Step 6: Commit** — `test(db): stack-guard за профілем стека`.
 
 ### Task 3: compose-стек `postgres` і команди
 
 **Files:**
 - Create: `docker/postgres-stack/Dockerfile` — `FROM postgres:17.11-trixie@sha256:…`;
-  `apt-get update` і встановлення `postgresql-17-pgtap=<версія>`,
-  `postgresql-17-plpgsql-check=<версія>` (версії — з `apt-cache policy` у
-  базовому образі, записати у Dockerfile)
+  `apt-get update` і встановлення `postgresql-17-pgtap`,
+  `postgresql-17-plpgsql-check` без точних версій (Global Constraints)
 - Create: `docker/postgres-stack/compose.yaml` — `name: simetra-pg`;
   сервіси:
   - `postgres`: `build: .`, `image: simetra-pg/postgres:17.11`,
@@ -245,9 +268,6 @@ Vitest, `pg`.
 - Create: `docker/postgres-stack/garage.toml` — один вузол,
   `replication_factor = 1`, `db_engine = "sqlite"`, S3 на `0.0.0.0:3900`,
   region `garage`, admin на `0.0.0.0:3903`; секрети — лише із середовища.
-- Create: `docker/postgres-stack/dev-secrets.env` — `GARAGE_RPC_SECRET`
-  (64 hex), `GARAGE_ADMIN_TOKEN`, `GARAGE_DEV_KEY_ID` (`GK…`),
-  `GARAGE_DEV_KEY_SECRET`; коментар «local stack on 127.0.0.1 only».
 - Create: `docker/postgres-stack/dev-environment.sql` —
   `ALTER DATABASE postgres SET simetra.environment = 'development';`
 - Create: `scripts/db-stack.mjs`
@@ -263,6 +283,12 @@ Vitest, `pg`.
     psql -v ON_ERROR_STOP=1 -U postgres -d postgres -f -`;
   - `node scripts/db-stack.mjs stop postgres [--volumes]` — `docker
     compose … down` (з `--volumes` лише на прапорці);
+  - `export function lockHolder(path: string): { pid: number } | null` у
+    `scripts/db-stack.mjs` — читає замок формату `stack-guard.ts`
+    (`<pid>\n<cwd>\n<since>\n`) і повертає власника, лише коли його pid
+    живий; `start` і `stop` профілю `postgres` відмовляють (код 1, текст
+    `postgres stack is in use by DB run PID <pid>`), поки `lockHolder` не
+    `null` для `simetra-db-stack-postgres.lock`;
   - `pnpm db:pg:start`, `pnpm db:pg:stop` — виклики вище без `--volumes`.
 
 - [ ] **Step 1: failing unit test** `stack-files.test.ts`:
@@ -275,7 +301,12 @@ Vitest, `pg`.
     `allow_anonymous_connect_without_token` і жодного `allow_*_for_*`;
     `http_api.disabled === true`;
   - `garage.toml` не містить `rpc_secret` чи `admin_token` (секрети — лише
-    з `dev-secrets.env`).
+    з `dev-secrets.env`);
+  - `lockHolder`: файла немає — `null`; pid поточного процесу — власник;
+    pid, якого немає, — `null`.
+
+  Розбір `compose.yaml` — по рядках регулярними виразами (порти в списках
+  `ports:`, ключ `network_mode:`), без нової залежності.
 - [ ] **Step 2:** `pnpm --filter simetra test stack-files` — FAIL.
 - [ ] **Step 3:** файли стека й скрипт. Ініціалізація Garage ідемпотентна:
   id вузла з `garage status`; призначення ролі в layout (`dc1`, `1G`) і
@@ -309,6 +340,10 @@ Vitest, `pg`.
   - `type Exec = (file: string, args: readonly string[], opts: { timeoutMs: number }) => Promise<string>`
     — обгортка `execFile` (аргументи без shell-лапок);
   - `type Fetch = typeof fetch`;
+  - `const nodeExec: Exec` — справжня обгортка `execFile`; її вживають
+    `stack-guard.ts`, `sweep.ts` і фікстура задачі 5;
+  - `async function createRunBucket(tag: string, stack: TestStack, fetch: Fetch): Promise<string>`
+    — бакет з глобальним аліасом `run-<тег>` через admin API, повертає id;
   - `async function runContainers(p: TestProvider, exec: Exec): Promise<{ name: string; tag: string }[]>`
     — `docker ps -a --filter label=simetra-run --filter
     label=simetra-stack=<p> --format {{.Names}}\t{{.Label "simetra-run"}}`;
@@ -321,17 +356,24 @@ Vitest, `pg`.
     **порожніх** бакетів тегу за id; непорожній бакет — у `left` з
     причиною (Р5); кожен виклик — з `AbortSignal.timeout` чи `timeoutMs` у
     межах `deadlineMs`;
-  - `Snapshot` дістає `containers` і `buckets` (лише свого профілю); `diff`,
-    `leakMessage` і `leftoverReport` їх враховують;
-  - `sweepRun` спершу прибирає бази й ролі (як зараз), потім
-    `removeRunResources` у залишку свого дедлайну.
+  - `Snapshot` дістає поля `containers: string[]` і `buckets: string[]`
+    (імена, лише свого профілю; `diff` лишається порівнянням множин
+    рядків); у `leftoverReport` вони необов'язкові в `Pick`; `leakMessage`
+    радить `docker rm -f -v <ім'я>` для контейнера і «empty and delete in
+    Garage» для бакета;
+  - `sweepRun`: DB-фаза отримує дедлайн мінус гарантований бюджет
+    зовнішніх ресурсів `EXTERNAL_BUDGET_MS = 5_000`; `removeRunResources`
+    виконується в `finally` — і тоді, коли DB-фаза кинула (база
+    недосяжна), і після раннього `return` циклу; сумарно — у межах 40 с
+    обробника сигналу (`SWEEP_TIMEOUT_MS` в `interrupt.ts`).
 
 - [ ] **Step 1: failing unit tests** (`external.test.ts`, підставні `exec` і `fetch`):
   - розбір виводу `docker ps` у пари ім'я — тег; рядок без тегу
     пропускається; `exec` отримує фільтр `simetra-stack=<p>`;
-  - «container of another stack is not a leak»: знімки «до» й «після»
-    прогону `supabase`, між якими з'явився контейнер з
-    `simetra-stack=postgres`, дають порожній `diff` (Review Focus 1);
+  - «container of another stack is not a leak»: підставний `exec` тримає
+    контейнери обох стеків і фільтрує їх за переданими аргументами
+    `--filter`; `runContainers("supabase", exec)` не повертає контейнера з
+    `simetra-stack=postgres` (Review Focus 1);
   - `runBuckets` відбирає лише `run-<тег>` і шле токен;
   - «lister failure fails the run»: `exec` кидає чи `fetch` дає 500 →
     функція кидає (Review Focus 5);
@@ -339,11 +381,14 @@ Vitest, `pg`.
     `left`, контейнер тегу — у `removed`;
   - «sweep keeps its deadline»: `fetch`, що ніколи не відповідає,
     → `removeRunResources` завершується до `deadlineMs` + 1 с з бакетом у
-    `left`.
-- [ ] **Step 2:** `pnpm --filter simetra test external stack-guard` — FAIL.
+    `left`;
+  - «DB unreachable still removes containers»: `sweepRun` з підставною
+    базою, що кидає на з'єднанні, кличе `removeRunResources` і повертає
+    контейнер тегу в `dropped`.
+- [ ] **Step 2:** `pnpm --filter simetra test external stack-guard sweep` — FAIL.
 - [ ] **Step 3:** реалізація; справжні `exec` і `fetch` підставляють
   `stack-guard.ts` і `sweep.ts`.
-- [ ] **Step 4:** `pnpm --filter simetra test external stack-guard` — PASS.
+- [ ] **Step 4:** `pnpm --filter simetra test external stack-guard sweep` — PASS.
 - [ ] **Step 5: Commit** — `test(db): контейнери й бакети тегу в stack-guard`.
 
 ### Task 5: Vitest-раннер pgTAP, базовий стан `postgres` і переривання
@@ -360,15 +405,18 @@ Vitest, `pg`.
 
 **Interfaces:**
 - Consumes: `testProvider`, `testDatabaseUrl`, `testStack` (задача 1);
-  `stack-guard.postgres.ts` (задача 2); `removeRunResources` (задача 4).
+  `stack-guard.postgres.ts` (задача 2); `nodeExec`, `runContainers`,
+  `runBuckets`, `createRunBucket`, `removeRunResources` (задача 4).
 - Produces (усі `export`):
   - `interface TapResult { planned: number | null; passed: number[]; failed: { n: number; line: string; diag: string[] }[]; bailOut: string | null }`
   - `function parseTap(lines: readonly string[]): TapResult`
-  - `function checkSuite(sql: string): void` — кидає, коли текст набору має
-    `commit`, `end;` поза функцією, `alter system` чи не починається з
-    `begin` (набір не сміє лишити стан після `ROLLBACK`);
+  - `function checkSuite(sql: string): void` (Р9) — прибирає коментарі й
+    тіла в dollar-quote, ділить на оператори й кидає, коли оператор
+    починається з `begin`, `start transaction`, `commit`, `end`,
+    `rollback`, `abort`, `savepoint`, `release`, `prepare transaction` чи
+    є `alter system`;
   - `async function runPgTap(url: string, sql: string): Promise<TapResult>`
-    — новий `pg.Client` на набір; `checkSuite`; виконання тексту одним
+    — новий `pg.Client` на набір; `checkSuite`; `BEGIN`; текст набору одним
     простим запитом; текстові значення рядків усіх результатів, поділені за
     `\n`, — у `parseTap`; у `finally` — `ROLLBACK` і `end()`;
   - `pgtap.db.test.ts`: на кожен `*.pgtap.sql` у
@@ -381,8 +429,9 @@ Vitest, `pg`.
   - `test:db:pg` (simetra) = `vitest run --project db-pg`; у корені —
     `pnpm --filter simetra test:db:pg`.
 
-Набір `stack-base-state.pgtap.sql` (`begin; create extension if not exists
-pgtap; select plan(…); …; select * from finish(); rollback;`), Р3, Р4:
+Набір `stack-base-state.pgtap.sql` (`create extension if not exists pgtap;
+select plan(…); …; select * from finish();` — без керування транзакцією,
+Р9), Р3, Р4:
 
 1. `current_setting('server_version_num')::int / 10000 = 17`;
 2. `pg_available_extensions` містить `pgtap` і `plpgsql_check`;
@@ -394,7 +443,9 @@ pgtap; select plan(…); …; select * from finish(); rollback;`), Р3, Р4:
   з планом `1..3` — `failed` порожній; `not ok 2 - x` з рядками `# …` —
   `failed[0]` з `n: 2` і `diag`; план `1..3` при двох `ok` — `planned` 3,
   `passed.length` 2; `Bail out! …` — `bailOut`; `checkSuite` кидає на
-  `commit;`, `alter system set …` і на тексті без `begin`.
+  `commit;`, на `rollback;` посеред набору, на `alter system set …`, на
+  `begin;` і пропускає `do $$ begin perform 1; end $$;` та `-- commit` у
+  коментарі.
 - [ ] **Step 2:** `pnpm --filter simetra test pgtap` — FAIL.
 - [ ] **Step 3:** `pgtap.ts`, `pgtap.db.test.ts`, набір і проєкт `db-pg`.
   Помилка SQL у наборі — тест падає з повідомленням Postgres, а не з
@@ -405,10 +456,11 @@ pgtap; select plan(…); …; select * from finish(); rollback;`), Р3, Р4:
 - [ ] **Step 5: мутація набору.** Крок 1 набору тимчасово `= 16` —
   `pnpm test:db:pg` червоний з `not ok 1`; повернути.
 - [ ] **Step 6: переривання на `postgres`.** У `fixtures/interrupted-run.ts`
-  на профілі `postgres` фікстура створює ще контейнер (образ
-  `simetra-pg/postgres:17.11`, команда `sleep infinity`, мітки
-  `simetra-run=<тег>` і `simetra-stack=postgres`) і порожній бакет
-  `run-<тег>` через admin API; `interrupt.db.test.ts` після SIGINT
+  на профілі `postgres` фікстура створює ще контейнер (`nodeExec`; образ
+  `simetra-pg/postgres:17.11`, ім'я `simetra-run-<тег>-interrupt`, команда
+  `sleep infinity`, мітки `simetra-run=<тег>` і `simetra-stack=postgres`) і
+  порожній бакет `run-<тег>` (`createRunBucket`) і друкує `ready` лише
+  після обох; `interrupt.db.test.ts` після SIGINT
   перевіряє, що їх немає (`runContainers`, `runBuckets`), — DB-рівень, бо
   доводить справжнє прибирання прибиральником на сигналі. На `supabase`
   кейс без змін.
