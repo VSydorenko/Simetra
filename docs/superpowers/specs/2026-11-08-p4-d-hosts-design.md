@@ -80,7 +80,7 @@ Postgres під RLS → ядро T4 → хост T5 → маршрут T6, з SS
 - Нові залежності T5 і T6 — необов'язкові peer входів `./ui` і `./shell` з
   точним dev-піном (як `@tanstack/react-virtual` у B3-3). `@tanstack/react-form`
   — сімейство, яке Р35 лишає; версію й ліцензію план перевіряє за
-  `CONTRIBUTING.md`. Пін Better Auth — той, що закріплює план ПГ-3.
+  `CONTRIBUTING.md`. Пін Better Auth: тест-залежність закріплює ПГ-2a; рантайм-залежність шаблону — `better-auth` `1.7.12` — додає зріз (D2) тим самим точним піном.
 - Вхід `./ui` у `tsdown` і `publishConfig.exports` дає B3-3; зріз додає
   `./shell` і оновлює перевірку необов'язкових peer у тесті пакування.
 - Лінт-зона ярусів не змінюється: `FRAMEWORK_PATTERN` уже забороняє T5
@@ -183,7 +183,7 @@ user.isAnonymous === true }`, `sub` — нижнім регістром. `is_ano
 
 | ПГ-3 | Зріз П4-D |
 | --- | --- |
-| адресні гранти `better_auth` у `roles`, діагностики `plan.identity-table-missing` і `plan.identity-trigger-locked`, тригер провізії, вибір ролі читання за `anonymousClaim` у T3, DB-тести провізії на таблиці справжньої міграції, пін Better Auth | конфіг Better Auth шаблону, адаптер `verifySession`, маршрут Better Auth, форма входу, `db-setup`, `dev-user`, e2e входу й сесії |
+| адресні гранти `better_auth` у `roles`, діагностики `plan.identity-table-missing` і `plan.identity-trigger-locked`, тригер провізії, вибір ролі читання за `anonymousClaim` у T3, DB-тести провізії на таблиці справжньої міграції; пін тест-залежності — ПГ-2a, пін рантайм-залежності шаблону — П4-D, ПГ-3 пін лише вживає | конфіг Better Auth шаблону, адаптер `verifySession`, маршрут Better Auth, форма входу, `db-setup`, `dev-user`, e2e входу й сесії |
 
 **База розробника** (`db-setup`), порядок спеки профілю §4.2: `simetra roles`
 від суперкористувача стеку (створює `simetra_auth` і схему `better_auth`) →
@@ -203,7 +203,7 @@ user.isAnonymous === true }`, `sub` — нижнім регістром. `is_ano
   запису; пароль — випадковий, друкується один раз, не пишеться ні у
   файл, ні в репозиторій;
 - повторний запуск для наявного користувача змінює пароль через внутрішній
-  адаптер Better Auth (точне API — за піном ПГ-3).
+  адаптер Better Auth (точне API — за піном ПГ-2a).
 
 ### 4.4 Серверний entry
 
