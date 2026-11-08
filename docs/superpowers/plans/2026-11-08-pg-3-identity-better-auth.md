@@ -142,7 +142,9 @@ devDependency з ПГ-2a).
   - «Межа довіри»: `runtime.privileged-login` → `command.privileged-login` (Р1);
   - таблиця мап: новий рядок `PROVIDER_IDENTITY_TRIGGER_LOCKED` зі
     значенням `true` (Р4);
-  - абзац «Зняття й заміна тригера»: гейт судить ці дані.
+  - абзац «Зняття й заміна тригера»: гейт судить ці дані й відмовляє лише
+    на `DROP TRIGGER`; `CREATE OR REPLACE TRIGGER` потребує лише привілею
+    `TRIGGER` і проходить.
   
   «Межа довіри» — правило фактів Р9.
   
