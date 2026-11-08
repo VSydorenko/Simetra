@@ -86,6 +86,21 @@ Centrifugo v6 (образ, закріплений у `docker/postgres-stack/comp
 - Пакет `simetra` не залежить від `centrifuge` і `pg` у `src/server/signals`.
   Зона чистоти T3 (`eslint.tier-zones.js`) не послаблюється.
 - 🔴 Без `--` перед шаблоном vitest у `pnpm --filter` (`AGENTS.md`).
+- Команди DB-тестів — за станом після ПГ-2b: стек `postgres` —
+  `pnpm --filter <пакет> test:db <шаблон>`; стек `supabase` —
+  `pnpm --filter <пакет> test:db:supabase <шаблон>` (лише
+  `*.supabase.db.test.ts`). Кейс «на обох стеках» — спільне тіло в
+  `*.support.ts` і два тонкі файли: `<ім'я>.db.test.ts` і
+  `<ім'я>.supabase.db.test.ts`.
+- **Кластерні ролі на спільних стеках.** Нові ролі (`simetra_signal_consumer`,
+  `simetra_signals`) з'являються на стеку лише кроком ролей:
+  - `postgres` — повторний `pnpm db:pg:start` (ідемпотентний, кличе
+    `simetra roles`, Р2 ПГ-2b);
+  - `supabase` — `simetra roles` designer від ролі `postgres` стека
+    (ідемпотентний, створює лише відсутнє).
+  
+  Обидва кроки адитивні. Виконавець робить їх лише з дозволу архітекторки
+  (Р11), а не перезапуском стека.
 - Контейнери стенду мають мітки `runContainerLabels(tag, provider)`
   (`packages/simetra/test/db/external.ts`). Після кожного прогону
   `docker ps -a --filter label=simetra-run` — порожньо.
@@ -105,6 +120,11 @@ Centrifugo v6 (образ, закріплений у `docker/postgres-stack/comp
 | Р7 | У частині A стенд спостерігає публікацію через історію каналу HTTP API Centrifugo. API вмикає лише конфіг стенду, з ключем, на `127.0.0.1`. З частини C стенд бере конфіг генератора (API вимкнено), а доставку спостерігає клієнт `centrifuge` з токенами | немає |
 | Р8 | Функція створення кореня кличе `signal` лише в моделі з роллю `rootCreator`. У моделі оператора політика відхилила б рядок, а відмова `INSERT` валить команду (§8.2 П4-B) | немає |
 | Р9 | Пара (скоуп, об'єкт) фази для `signal_invalidate` T3 виводить з результату ядра та каталогу рантайму: колонка-носій скоупу рядка, у кореня — його `id`, у нескоупленого — `ZERO_UUID` | немає |
+| Р10 | **`EXECUTE` на `signal_topic_allowed` — лише `simetra_command` і ролі запиту `user`, а не `PUBLIC`.** Політика `INSERT` outbox — `TO simetra_command`, тож Postgres не перевіряє функцію для інших ролей. Власник, що пише сигнали прав (B6), обходить RLS. З `PUBLIC` роль споживача (`USAGE` на `simetra`) могла б поставити claims і питати права будь-якого користувача — оракул прав. **Відхилення від §8.3 П4-B — чекає рішення архітекторки** | П4-B §8.3, Рд9 (задача 0, після рішення) |
+| Р11 | Кластерні ролі сигналів на спільних стеках створює ідемпотентний крок ролей (Global Constraints), а не перезапуск. **Чекає дозволу архітекторки** | немає |
+| Р12 | `sub` токена з'єднання = `user` з `authorizeChannels` (`current_user_id()`), а не сирий `claims.sub`. Для обох пресетів вони рівні (`subjectIsUserId`). Але `user` — id «Користувачів», і так само Centrifugo знає користувача для майбутнього `disconnect` (§6.2) | спека профілю §6.2 таблиця токенів (задача 0) |
+| Р13 | Тригер штампа — не єдиний захист `id`. `CHECK` прив'язує обидва поля до колонки: `payload->>'idempotency_key' = id::text AND payload->'data'->>'id' = id::text`. Вимкнений тригер дає `23514`, а не тихо чужий ключ | немає |
+| Р14 | T3 скидає `simetra.signal_mode` у тому самому операторі, що ставить claims команди (`set_config(SIGNAL_MODE_SETTING, '', true)`). Значення, задане ролі чи базі (`ALTER ROLE … SET`), не гасить сигналів | немає |
 
 ## Review Focus
 
@@ -121,8 +141,12 @@ Centrifugo v6 (образ, закріплений у `docker/postgres-stack/comp
    просить токени — `user: null`, жодного каналу. Тест — задача 11.
 5. **Ротація ключа.** Токен, підписаний новим ключем раніше за правило
    перекриття, не видається. Старий ключ лишається в JWKS 20 хв після
-   останнього підпису. Підписка, взята старим токеном, не рветься. Тест —
-   задачі 10 і 13.
+   останнього підпису. Відставлений ключ ніколи не підписує. Підписка,
+   взята старим токеном, не рветься. Тест — задачі 10 і 13.
+6. **Довільні дані в сигналі.** Прямий виклик `simetra.signal` сирим SQL від
+   `simetra_command` з ключами-значеннями полів, невідомою операцією чи
+   мегабайтним `jsonb`. Функція відмовляє, `CHECK` розміру тримає межу.
+   Тест — задачі 3 і 8.
 
 ---
 
@@ -136,13 +160,24 @@ Centrifugo v6 (образ, закріплений у `docker/postgres-stack/comp
   - §12 рядок ПГ-4: «разом із B8» → «разом із B2»; «Залежить від»:
     «ПГ-3; B1e, B3-4 П4-B» (Р1);
   - §6.1 і §6.3: `<id застосунку>` → `<project.name>` (Р3);
-  - §10.4: Р6.
+  - §10.4: Р6;
+  - §5.3 «Вплив на код»: тіла `signal_rights`, `signal_user_rights` для
+    outbox — «блок B6 П4-B» (не ПГ-4, рішення архітекторки); тіла
+    `signal`, `signal_invalidate` — «блок B2 П4-B»;
+  - таблиця §13, рядок «спека П4-B (редакція 3)»: «B2, B8» → «B2, B6»;
+  - §6.2 таблиця токенів: `sub` = `user` з `authorizeChannels` (Р12).
+- Modify: `docs/superpowers/specs/2026-10-23-provider-profiles-design.md` —
+  рядок про outbox і токен каналу: «блок B8» → «блок B2 П4-B» (outbox, токен)
+  і «B6» (сигнали прав).
 - Modify: `docs/superpowers/specs/2026-11-05-p4-b-client-data-design.md`:
   - §8.1: `id` — десятковий рядок id рядка outbox; його ставить тригер
     outbox (Р4);
   - §13 рядок B2: бенчмарк ТЧ → B1d, інваріант номера рядка ТЧ і версії
     власника → B3-5 (Р2); «Після»: B1b-1, B1e, B3-4, ПГ-3;
-  - рядок B1d — додати бенчмарк ТЧ на 1/1 000/5 000 рядках.
+  - рядок B1d — додати бенчмарк ТЧ на 1/1 000/5 000 рядках;
+  - рядок B3-5 — додати інваріант суцільного номера рядка ТЧ і підвищення
+    версії власника на зміні змісту ТЧ (рішення архітекторки);
+  - §8.3: Р10, лише після рішення архітекторки.
 
 - [ ] **Step 1:** правки. Без лічильників і наративу фаз.
 - [ ] **Step 2:** `python3 scripts/check-doc-anchors.py`, `pnpm format:check` — зелені.
@@ -164,11 +199,19 @@ Centrifugo v6 (образ, закріплений у `docker/postgres-stack/comp
     обох профілях;
   - `export const LOGIN_ROLE_SETTINGS: Readonly<Partial<Record<keyof typeof PLATFORM_LOGIN_ROLES, { role: string }>>> = { signals: { role: PLATFORM_ROLES.signalConsumer } }`
     — налаштування `role` ролі входу.
-- `GrantPurpose` не знає ролей входу; `signalConsumer` — не призначення
-  гранту. Гранти outbox видає задача 3 адресно.
+- `PlatformRolePurpose = keyof typeof PLATFORM_ROLES` автоматично зробив би
+  `signalConsumer` призначенням гранту (`GrantPurpose`, `grantRole`,
+  `isPlatformPurpose` у `compiler/sql/execute-grants.ts`). Звузь тип:
+  `PlatformRolePurpose = Exclude<keyof typeof PLATFORM_ROLES, "signalConsumer">`.
+  Гранти outbox видає задача 3 адресно.
+- `PLATFORM_ROLE_NAMES` (`schema/apply/platform-roles.ts`) дістає й
+  `simetra_signal_consumer`: гейт вимагає її існування в обох профілях.
+- Тип батьків `LOGIN_ROLE_PARENTS` (ПГ-2a: `"command" | "request"`) дістає
+  токен `"signalConsumer"`.
 
-- [ ] **Step 1: failing test:** значення вище; `loginRoleParentNames("signals", p)`
-  для обох `p` — `["simetra_signal_consumer"]`.
+- [ ] **Step 1: failing tests:** значення вище; `loginRoleParentNames("signals", p)`
+  для обох `p` — `["simetra_signal_consumer"]`; type-тест
+  (`expectTypeOf`): `"signalConsumer"` не є `GrantPurpose`.
 - [ ] **Step 2:** `pnpm --filter simetra test project` — FAIL.
 - [ ] **Step 3:** реалізація.
 - [ ] **Step 4:** PASS.
@@ -211,18 +254,25 @@ Centrifugo v6 (образ, закріплений у `docker/postgres-stack/comp
   - `simetra_signals` з батьком `simetra_command` — `plan.platform-role-shape`
     `member-of:simetra_command` (Review Focus 2);
   - без налаштування `role` — `setting:role`;
-  - з `INHERIT TRUE` — відмова за наявним правилом пари.
+  - з `INHERIT TRUE` — відмова за наявним правилом пари;
+  - `simetra_runtime` член `simetra_signal_consumer` — `member-of:simetra_signal_consumer`
+    (дозволені батьки — свої для кожної ролі входу, ПГ-2a);
+  - `simetra_signal_consumer` член `simetra_command` чи ролі запиту — відмова.
 - [ ] **Step 2: failing DB tests** (обидва стеки, теговані імена):
   - після `roles` атрибути, `pg_auth_members` і `pg_db_role_setting` — за
     §3.1;
   - повтор нічого не змінює;
   - тегована роль входу з налаштуванням: `SELECT current_user` у новій сесії
     — `simetra_signal_consumer`. Кейс «без налаштування — `42501` на
-    outbox» — у задачі 3, бо таблиці ще немає.
+    outbox» — у задачі 3, бо таблиці ще немає;
+  - `postgres`: `simetra_signals` має адресний `CONNECT` на цільову базу, а
+    явний `CONNECT` на іншу базу дає `roles.shared-cluster` (§3.1).
 - [ ] **Step 3:** `pnpm --filter simetra test platform-roles` і
   `pnpm --filter @simetrajs/designer test roles-tool` — FAIL.
 - [ ] **Step 4:** реалізація; `supabase test db` і базовий стан `postgres` — зелені.
-- [ ] **Step 5:** PASS; scoped DB `roles-tool` обох стеків — зелений.
+- [ ] **Step 5:** ролі на спільних стеках — за Р11, лише з дозволу; PASS:
+  `pnpm --filter @simetrajs/designer test:db roles-tool` і
+  `pnpm --filter @simetrajs/designer test:db:supabase roles-tool` — зелені.
 - [ ] **Step 6: Commit** — `feat(schema): ролі споживача сигналів в обох профілях`.
 
 ### Task 3: таблиця outbox, тригери, гранти, `prune`
@@ -233,16 +283,20 @@ Centrifugo v6 (образ, закріплений у `docker/postgres-stack/comp
 - Modify: `packages/simetra/src/model/runtime/signal.ts` — константи
   `SIGNAL_OUTBOX`, `SIGNAL_NOTIFY_CHANNEL`, `SIGNAL_TOPIC_PATTERN`
 - Test: `packages/simetra/src/compiler/__tests__/signal-outbox.test.ts`,
-  `packages/simetra/test/db/signal-outbox.db.test.ts`
+  `packages/simetra/test/db/signal-outbox.support.ts`,
+  `signal-outbox.db.test.ts`, `signal-outbox.supabase.db.test.ts`
 
 **Interfaces:**
 - Produces `function outboxUnits(provider: DatabaseProvider, parse: SqlParse): SqlUnit[]` — одиниці
   `generator: "platformLayer"`:
   1. таблиця §5.1 дослівно плюс `CHECK` форми `payload`:
-     - ключі рівно `channel`, `data`, `idempotency_key`;
+     - ключі рівно `channel`, `data`, `idempotency_key`, без підзапиту:
+       `payload ?& ARRAY['channel','data','idempotency_key'] AND (payload - 'channel' - 'data' - 'idempotency_key') = '{}'::jsonb`;
      - `payload->>'channel' ~ SIGNAL_TOPIC_PATTERN`;
      - `jsonb_typeof(payload->'data') = 'object'`;
-     - `payload->>'idempotency_key' = payload->'data'->>'id'`;
+     - `payload->>'idempotency_key' = id::text AND payload->'data'->>'id' = id::text` (Р13);
+     - `octet_length(payload::text) <= 1024` — сигнал без даних короткий
+       (Review Focus 6);
   2. `simetra.signal_outbox_stamp()` + тригер `BEFORE INSERT … FOR EACH ROW`:
      `NEW.payload := jsonb_set(jsonb_set(NEW.payload, '{data,id}', to_jsonb(NEW.id::text)), '{idempotency_key}', to_jsonb(NEW.id::text))`
      (Р4). Функція `SECURITY INVOKER`, `SET search_path = ''`, без `EXECUTE`
@@ -264,6 +318,12 @@ Centrifugo v6 (образ, закріплений у `docker/postgres-stack/comp
      `EXECUTE` лише власнику (`REVOKE … FROM PUBLIC`).
 - Політику `INSERT` для `simetra_command` дає частина B (задача 7). До неї
   RLS відхиляє вставку `simetra_command`, і це очікувано.
+- `buildPlatformUnits` завершується раніше, коли немає «Користувачів» і
+  сесійного користувача. Одиниці outbox додаються до цих ранніх `return`,
+  щоб бути в кожному проєкті.
+- `SqlUnit.generator` — наявне `"platformLayer"`; ребра `requires` між
+  таблицею, послідовністю, функціями й тригерами — явні, як `bodyRequires`
+  у `catalog-command/units.ts`.
 
 - [ ] **Step 1: failing unit tests** (`signal-outbox.test.ts`, дерево SQL):
   - колонки, типи й `CHECK` §5.1;
@@ -277,10 +337,16 @@ Centrifugo v6 (образ, закріплений у `docker/postgres-stack/comp
     `idempotency_key` = `id::text`;
   - вставка з власним `idempotency_key` і `data.id` → обидва переписано
     (Review Focus 1);
+  - тригер штампа вимкнено (`ALTER TABLE … DISABLE TRIGGER` у транзакції
+    тесту, від власника) і вставлено рівну пару, відмінну від `id`, —
+    `23514` (Р13);
+  - `payload` понад 1024 байти — `23514`;
   - `payload` з `skip_history` чи `channel` поза шаблоном — `23514`;
   - роль споживача (тегована роль входу з налаштуванням задачі 2) робить
     `SELECT` і `DELETE`; `INSERT` і `UPDATE` — `42501`; `SELECT` з
     `simetra.ledger` і з таблиці виду — `42501`;
+    `has_function_privilege` на жодну функцію схеми `simetra` — `false`
+    (запит до `pg_proc` схеми);
   - роль входу споживача без налаштування — `42501` на `SELECT` outbox
     (з задачі 2);
   - ролі запиту: `SELECT`, `INSERT` — `42501`;
@@ -292,15 +358,17 @@ Centrifugo v6 (образ, закріплений у `docker/postgres-stack/comp
     `simetra_command` — `42501`.
 - [ ] **Step 3:** `pnpm --filter simetra test signal-outbox` — FAIL.
 - [ ] **Step 4:** реалізація.
-- [ ] **Step 5:** PASS; scoped DB `signal-outbox` на обох стеках — зелений;
-  `pnpm metadata:check` — зелений.
+- [ ] **Step 5:** PASS: `pnpm --filter simetra test:db signal-outbox` і
+  `pnpm --filter simetra test:db:supabase signal-outbox` (тіло — у
+  `signal-outbox.support.ts`); `pnpm metadata:check` — зелений.
 - [ ] **Step 6: Commit** — `feat(compiler): outbox сигналів у форматі споживача Centrifugo`.
 
 ### Task 4: стенд сигналу в тест-інфрі
 
 **Files:**
 - Create: `packages/simetra/test/db/signal-stand.ts`,
-  `packages/simetra/test/db/signal-stand.db.test.ts`
+  `packages/simetra/test/db/signal-stand.support.ts`,
+  `signal-stand.db.test.ts`, `signal-stand.supabase.db.test.ts`
 - Modify: `packages/simetra/test/db/stack-guard.ts` — прибирання контейнерів
   свого тегу вже є з ПГ-1; звір, що стенд ним покритий
 - Reference: `git show spike/t4-realtime:packages/simetra/test/realtime/stand.ts`
@@ -321,7 +389,14 @@ Centrifugo v6 (образ, закріплений у `docker/postgres-stack/comp
   файл, не дублювати рядок); `--network host` (Р6); ім'я
   `simetra-signals-<tag>`; мітки `runContainerLabels(runTag(), testProvider())`;
   конфіг — у тимчасовому каталозі, змонтованому `:ro`. Очікування готовності
-  — `GET /health`.
+  — `GET /health` (`health.enabled: true` у конфігу).
+- DSN споживача несе `application_name` тегу прогону (`runApplicationName`
+  з `connection.ts`): guard тоді завершує його бекенди.
+- Порядок прибирання: `down()` стенду, потім drop бази й ролей. Інакше
+  `DROP DATABASE` чекає на живі з'єднання споживача.
+- Стенд не імпортує designer: конфіг дає виклик (`config`). У частині A —
+  власний конфіг стенду, з частини C — `centrifugoConfig`, який передає тест
+  designer.
 - Конфіг стенду в частині A: простори §6.1, споживач §5.3 на `databaseUrl`,
   `http_api` з випадковим ключем, `http_server.address: "127.0.0.1"`,
   вільний порт.
@@ -331,21 +406,24 @@ Centrifugo v6 (образ, закріплений у `docker/postgres-stack/comp
   - власник вставляє рядок у канал `simetra:<z>:<z>:<uuid>` → публікація
     з'являється в історії каналу; `data.id` = id рядка; рядок outbox
     видалено;
-  - p95 «коміт → історія» з `LISTEN` ≤ 50 мс (30 вставок; опитування
-    історії кожні 5 мс — кроку опитування в межі не рахувати);
+  - p95 «коміт → історія» з `LISTEN` ≤ 50 мс на 200 вставках (опитування
+    історії кожні 5 мс; крок опитування в межі не рахувати);
   - `notifyUrl: "none"` → публікація доходить за ≤ 600 мс (такт 300 мс із
     запасом);
   - споживач зі справжнім логіном тегованої ролі з грантами лише задачі 3
     працює (доказ «лише `SELECT` і `DELETE`»);
+  - `use_try_lock`: два контейнери на тому самому outbox — кожен рядок
+    опубліковано рівно раз (історія каналу без дублів за `data.id`);
   - `restart()` (рушій у пам'яті) — нова епоха; рядки outbox, вставлені під
     час рестарту, публікуються після старту;
   - після `down()` і після падіння тесту (кейс з `throw` усередині
     `try/finally` стенду) — `docker ps -a --filter label=simetra-run=<tag>`
     порожньо.
-- [ ] **Step 2:** `pnpm --filter simetra test:db:pg signal-stand` — FAIL.
+- [ ] **Step 2:** `pnpm --filter simetra test:db signal-stand` — FAIL.
 - [ ] **Step 3:** реалізація.
-- [ ] **Step 4:** PASS на обох стеках: на `supabase` споживач дивиться на
-  теговану базу стека Supabase.
+- [ ] **Step 4:** PASS: `pnpm --filter simetra test:db signal-stand` і
+  `pnpm --filter simetra test:db:supabase signal-stand`. На `supabase`
+  споживач дивиться на теговану базу стека Supabase.
 - [ ] **Step 5: Commit** — `test(db): стенд сигналу з Centrifugo й тегом прогону`.
 
 ### Task 5: `realtime` у стеку `supabase` вимкнено
@@ -384,8 +462,7 @@ Centrifugo v6 (образ, закріплений у `docker/postgres-stack/comp
 
 **Files:**
 - Modify: `packages/simetra/src/model/runtime/signal.ts`
-- Test: `packages/simetra/src/model/__tests__/signal.test.ts` (наявний тест
-  схем сигналу — звір ім'я)
+- Test: `packages/simetra/src/model/runtime/__tests__/signal.test.ts`
 
 **Interfaces:**
 - Produces:
@@ -421,7 +498,9 @@ Centrifugo v6 (образ, закріплений у `docker/postgres-stack/comp
 - Produces:
   - `simetra.signal_topic_allowed(p_topic text, p_send boolean) RETURNS boolean`
     — `STABLE SECURITY DEFINER SET search_path = ''`, власник — роль
-    застосування, `EXECUTE` для `PUBLIC`. Тіло:
+    застосування. `EXECUTE` — за Р10 після рішення архітекторки: типово
+    `simetra_command` і роль запиту `user` профілю, `REVOKE … FROM PUBLIC`.
+    Якщо архітекторка лишить `PUBLIC` — як §8.3. Тіло:
     1. `current_user_id()` `NULL` → `false`;
     2. суворий розбір топіка тим самим шаблоном, що `parseTopic` T0
        (рівно три UUID у нижньому регістрі для каналу змін). Інша форма →
@@ -440,9 +519,13 @@ Centrifugo v6 (образ, закріплений у `docker/postgres-stack/comp
        чи ні) — `true`; нескоуплений — `has_right` за обсягами `any`, `own`
        чи вимір.
   - `function rowlessReadPredicate(contract: AccessContract, scope: string): string`
-    — той самий будівник, що й політика читання. Без носіїв рядка: для
-    обсягу `own` і виміру — «я маю рядок права цього обсягу на об'єкт у
-    скоупі». Контейнерні рядки не враховуються.
+    — грантова частина наявних предикатів `rightsPredicates`
+    (`compiler/rights/predicates.ts`): `scopeSet(extent, head)` для `any`,
+    `own` і виміру, без умов `mine` і без носіїв рядка. Нескоуплений об'єкт —
+    `has_right` за тими самими обсягами. Контейнерні рядки не
+    враховуються.
+  - `SqlUnit.generator` дістає `"signal"`; ребра `requires`: функція → функції
+    прав і `current_user_id`; політика → таблиця outbox і функція.
   - політика `signal_outbox_command_insert` на outbox: `FOR INSERT TO simetra_command WITH CHECK (simetra.signal_topic_allowed(payload ->> 'channel', true))`.
 
 - [ ] **Step 1: failing unit tests** (дерево SQL):
@@ -473,14 +556,22 @@ Centrifugo v6 (образ, закріплений у `docker/postgres-stack/comp
   
   Режим відправки:
   - писар лише з контейнером у своєму скоупі — `true`, у чужому — `false`;
+  - дослівна функція множини, що відсікає скоуп писаря, — `false`:
+    `simetra_command` у такий канал — `42501`;
   - нескоуплений — `true`;
   - канали прав — `false`.
+  
+  Права функції:
+  - за Р10: `has_function_privilege` ролі споживача й ролі `anonymous` —
+    `false`; `simetra_command` і роль `user` — `true`.
   
   Outbox:
   - `INSERT` від ролей запиту — `42501`;
   - `simetra_command` у недозволений канал — `42501`, зокрема після
     дозволеного в тій самій транзакції (Review Focus 3).
-- [ ] **Step 3:** FAIL → **Step 4:** реалізація → **Step 5:** PASS на обох стеках.
+- [ ] **Step 3:** FAIL → **Step 4:** реалізація → **Step 5:** PASS:
+  `pnpm --filter simetra test:db signal-topic-allowed` і
+  `pnpm --filter simetra test:db:supabase signal-topic-allowed` (спільне тіло).
 - [ ] **Step 6: Commit** — `feat(compiler): авторизація каналу сигналу в базі`.
 
 ### Task 8: `signal`, `signal_invalidate` і виклики в ядрі
@@ -501,9 +592,13 @@ Centrifugo v6 (образ, закріплений у `docker/postgres-stack/comp
   - `simetra.signal(p_object uuid, p_scope_kind uuid, p_scope uuid, p_keys jsonb, p_version bigint, p_operation text) RETURNS void`
     — `SECURITY INVOKER`, `SET search_path = ''`, `EXECUTE` лише
     `simetra_command`. Тіло:
-    1. `current_setting(SIGNAL_MODE_SETTING, true) = SIGNAL_MERGE_MODE` →
+    1. перевірка аргументів (Review Focus 6): `p_operation` ∈
+       `create`, `update`, `markDeletion`, `delete`; `p_keys` — об'єкт рівно з
+       одним ключем і значенням UUID; `p_version > 0`. Інакше —
+       `RAISE EXCEPTION` з `ERRCODE = '22023'`;
+    2. `current_setting(SIGNAL_MODE_SETTING, true) = SIGNAL_MERGE_MODE` →
        `RETURN`. Будь-яке інше значення сигналу не гасить;
-    2. `INSERT INTO simetra.signal_outbox (method, payload)` з
+    3. `INSERT INTO simetra.signal_outbox (method, payload)` з
        `{ channel: 'simetra:<kind>:<scope>:<object>', data: { object, op, keys, row_ver } }`.
        `id` і `idempotency_key` ставить тригер (Р4);
   - `simetra.signal_invalidate(p_object uuid, p_scope_kind uuid, p_scope uuid) RETURNS void`
@@ -538,9 +633,13 @@ Centrifugo v6 (образ, закріплений у `docker/postgres-stack/comp
     у моделі оператора — рядка немає й команда успішна;
   - писар лише з контейнерною роллю — рядок є;
   - `delete` з версією «до»;
-  - видалення й повторне створення ключа — більша версія.
-- [ ] **Step 3:** FAIL → **Step 4:** реалізація → **Step 5:** PASS на обох
-  стеках; `pnpm metadata:check` — зелений.
+  - видалення й повторне створення ключа — більша версія;
+  - прямий виклик `signal` від `simetra_command` з ключем-рядком,
+    двома ключами, операцією `rights` чи версією 0 — `22023`.
+- [ ] **Step 3:** FAIL → **Step 4:** реалізація → **Step 5:** PASS:
+  `pnpm --filter simetra test:db signal` і
+  `pnpm --filter simetra test:db:supabase signal` (спільне тіло);
+  `pnpm metadata:check` — зелений.
 - [ ] **Step 6: Commit** — `feat(compiler): ядро команд шле сигнал рядком outbox`.
 
 ### Task 9: режим злиття в T3 і бенчмарк порогу
@@ -556,6 +655,8 @@ Centrifugo v6 (образ, закріплений у `docker/postgres-stack/comp
 - Produces:
   - `signalMergeThreshold?: number` (ціле ≥ 1; типово — число з бенчмарку,
     до нього 50);
+  - у тому самому операторі, що ставить claims команди (`COMMAND_CLAIMS_TEXT`
+    у `server/transaction.ts`), — `set_config(SIGNAL_MODE_SETTING, '', true)` (Р14);
   - лічильник сигнальних фаз у стані транзакції. Сигнальна фаза — фаза над
     об'єктом з `catalog.objects[…].signal`, зокрема фаза `ctx.run`;
   - щойно лік досягає порогу, перед наступною фазою —
@@ -567,7 +668,8 @@ Centrifugo v6 (образ, закріплений у `docker/postgres-stack/comp
     Для нової пари транзакції — `SELECT simetra.signal_invalidate($1, $2, $3)`
     у тій самій транзакції, одразу після фази.
 
-- [ ] **Step 1: failing unit tests** (фейкова база):
+- [ ] **Step 1: failing unit tests** (фейкова база; поріг передається явно,
+  `signalMergeThreshold: 50`, щоб крок 6 не міняв тестів):
   - 49 сигнальних фаз — без `set_config` і без `invalidate`;
   - 50-та — після неї `set_config`;
   - фази `ctx.run` рахуються;
@@ -582,7 +684,9 @@ Centrifugo v6 (образ, закріплений у `docker/postgres-stack/comp
   - транзакція до порогу — без `invalidate`;
   - пізніша фаза, що виводить писаря зі скоупу, не губить надісланого
     `invalidate`;
-  - значення `simetra.signal_mode`, відмінне від `"merge"`, сигналів не гасить.
+  - значення `simetra.signal_mode`, відмінне від `"merge"`, сигналів не гасить;
+  - тегована роль входу з `ALTER ROLE … SET simetra.signal_mode = 'merge'`:
+    команда до порогу шле сигнал на фазу (Р14).
 - [ ] **Step 3:** FAIL → **Step 4:** реалізація → **Step 5:** PASS.
 - [ ] **Step 6: бенчмарк.** `SIMETRA_BENCH=1 pnpm --filter simetra test:db:pg signal-bench`:
   - ціна пакета з 500 фаз сигнального об'єкта з outbox і без нього (медіана
@@ -591,7 +695,8 @@ Centrifugo v6 (образ, закріплений у `docker/postgres-stack/comp
     пакета, округлений до 10.
   
   Числа й метод — у §8.2 П4-B (поріг) і в типове значення опції.
-- [ ] **Step 7: Commit** — `feat(server): режим злиття сигналів за ліком сигнальних фаз`.
+- [ ] **Step 7: Commit** — `feat(server): режим злиття сигналів за ліком сигнальних фаз`
+  (разом із правкою §8.2 П4-B числом порогу).
 
 ### Готово — частина B
 
@@ -632,10 +737,14 @@ Centrifugo v6 (образ, закріплений у `docker/postgres-stack/comp
   function createCentrifugoTokens(o: { keys: readonly SigningKey[]; audience: string; issuer: string; now?: () => number }): Promise<SignalTokens>
   ```
 - Правила:
-  - Підписує найновіший ключ з `addedAt` ≤ `now − 65 хв`. Якщо такого
-    немає — найстаріший доданий (перший запуск).
+  - Підписує лише ключ без `retiredAt` (чи з `retiredAt` > `now`) —
+    найновіший з `addedAt` ≤ `now − 65 хв`. Якщо такого немає — найстаріший
+    з невідставлених (перший запуск). Невідставленого ключа немає —
+    `Error` на створенні й на підписі.
   - `jwks()` дає публічні частини ключів без `retiredAt` і тих, де
     `retiredAt` > `now − 20 хв` (§6.3).
+  - Публічний JWK будується з білого списку
+    `{ kty, crv, x, kid, alg: "EdDSA", use: "sig" }`. Повтор `kid` — `Error`.
   - Claims з'єднання — `sub`, `aud`, `iss`, `exp` = `now + 15 хв`. Claims
     каналу — ще й `channel`, `exp` = `now + 5 хв`.
   - Заголовок — `{ alg: "EdDSA", typ: "JWT", kid }`.
@@ -652,8 +761,10 @@ Centrifugo v6 (образ, закріплений у `docker/postgres-stack/comp
   - правило ротації (Review Focus 5): ключ, доданий 64 хв тому, не
     підписує, а 66 хв тому — підписує. Відставлений ключ є в JWKS 19 хв і
     зникає на 21-й;
-  - ключ RSA — `Error`;
-  - `jwks()` не містить `d`.
+  - відставлений ключ не підписує ніколи, навіть як «найстаріший»;
+    `retiredAt` раніше за придатність наступника — `Error`;
+  - ключ RSA — `Error`; повтор `kid` — `Error`;
+  - кожен JWK у `jwks()` має рівно ключі білого списку.
 - [ ] **Step 2:** FAIL → **Step 3:** реалізація → **Step 4:** PASS;
   `pnpm --filter simetra lint` (зона T3) і `pnpm build:packages && pnpm test:packaging` — зелені.
 - [ ] **Step 5: Commit** — `feat(server): токени Centrifugo EdDSA з JWKS і ротацією`.
@@ -674,7 +785,8 @@ Centrifugo v6 (образ, закріплений у `docker/postgres-stack/comp
   - інакше одна транзакція `READ ONLY` під роллю `user`:
     `SELECT simetra.current_user_id() AS user, ARRAY(SELECT c FROM unnest($1::text[]) c WHERE simetra.signal_topic_allowed(c, false)) AS channels`;
   - `user` `NULL` → `channels: []`;
-  - понад 256 каналів — `command.invalid`;
+  - понад 256 каналів чи канал довший за `CENTRIFUGO_CHANNEL_MAX` —
+    `command.invalid` до запиту в базу;
   - порядок і дублікати входу не зберігаються: вихід відсортований і без
     повторів.
   
@@ -683,7 +795,7 @@ Centrifugo v6 (образ, закріплений у `docker/postgres-stack/comp
   `channelToken(user, c)` на кожен дозволений.
 
 - [ ] **Step 1: failing tests:**
-  - unit: анонім без запиту; ліміт; дедуплікація;
+  - unit: анонім без запиту; обидва ліміти; дедуплікація;
   - DB (Review Focus 4): користувач з правом — свій канал; чужий скоуп
     відсіяно; `invalid` — `user: null`; анонім — порожньо; вихід
     дорівнює `signal_topic_allowed(c, false)` на кожному каналі фікстури
@@ -713,23 +825,36 @@ Centrifugo v6 (образ, закріплений у `docker/postgres-stack/comp
     — чиста функція. Простори, споживач і заборони — за Global
     Constraints;
   - `function centrifugoConfigRefusals(config: unknown): string[]` —
-    заборони §6.1, для тесту генератора й тесту файлів стека;
+    **білий список**, а не перелік заборон. Точний набір ключів верхнього
+    рівня (`client`, `channel`, `consumers`, `http_api`, `health`, `log`) і
+    `client.token` (`jwks_public_endpoint`, `audience`, `issuer`). Змінні —
+    лише origin, issuer, `jwksUrl` і DSN. `allowed_origins` без `*`.
+    `jwksUrl` — `https:` чи loopback/внутрішня адреса (§6.3). Для тесту
+    генератора й тесту файлів стека;
+  - у конфігу також `health: { enabled: true }` і `log: { level: "info" }`
+    (§11: без debug у проді);
   - інструмент `signals-config`: `files: "read"`, `database: "none"`, вхід
-    `{ origin, issuer, jwksUrl }`. DSN не входять у вхід: генератор пише в
-    них заглушку, а значення оператор підставляє середовищем.
-  
-  **Факт до коду:** спосіб перевизначення DSN споживача середовищем у
-  Centrifugo v6 (через context7). Якщо такого способу немає, звертайся до
-  архітекторки з фактом. Секрет у файлі конфігу не пишеться.
-- Адреси стеків: `consumerDsn` — логін `simetra_signals` до бази стека
-  (`simetra` на `postgres`, `postgres` на `supabase`); `jwksUrl` —
-  `http://host.docker.internal:<порт host-а>/simetra/signals/jwks`; `extra_hosts`
-  у compose — за потреби.
+    `{ origin, issuer, jwksUrl }`. DSN у файлі — заглушка
+    `postgresql://override-by-env`. Оператор ставить справжні змінними
+    середовища Centrifugo v6 `CENTRIFUGO_CONSUMERS_SIMETRA_OUTBOX_POSTGRESQL_DSN`
+    і `CENTRIFUGO_CONSUMERS_SIMETRA_OUTBOX_POSTGRESQL_PARTITION_NOTIFICATION_DSN`
+    (факт документації). Опис інструмента називає обидві змінні. Секрет у
+    файлі конфігу не пишеться.
+- Стеки: compose ставить обидві змінні з dev-значень
+  (`docker/postgres-stack/dev-secrets.env`). DSN `postgres` — до сервісу
+  `postgres` мережі compose, база `simetra`. DSN `supabase` — до
+  `host.docker.internal:54322` з `extra_hosts: host.docker.internal:host-gateway`
+  у `docker/supabase-signals/compose.yaml`, база `postgres`. `jwksUrl` —
+  `http://host.docker.internal:<порт host-а>/simetra/signals/jwks`.
 
 - [ ] **Step 1: failing tests:**
   - `centrifugoConfigRefusals(centrifugoConfig(…))` — порожньо;
-  - кожна заборона ловить свою мутацію (`it.each`: `allow_subscribe_for_client`,
-    `insecure`, `http_api.disabled: false`, без `audience`);
+  - білий список ловить кожну мутацію (`it.each`): `allow_subscribe_for_client`,
+    `insecure`, `http_api.disabled: false`, без `audience`,
+    `client.subscription_token`, `client.token.hmac_secret_key`,
+    `audience_regex`, `allowed_origins: ["*"]`,
+    `allow_anonymous_connect_without_token`, `grpc_api`, `admin`, `jwksUrl`
+    `http://` на зовнішній хост;
   - `audience` = `centrifugo:<projectName>`;
   - тест дрейфу файлів стека.
 - [ ] **Step 2:** FAIL → **Step 3:** реалізація → **Step 4:** PASS;
@@ -741,15 +866,17 @@ Centrifugo v6 (образ, закріплений у `docker/postgres-stack/comp
 ### Task 13: гейт доставки на стенді
 
 **Files:**
-- Modify: `packages/simetra/test/db/signal-stand.ts` — конфіг з
-  `centrifugoConfig` (Р7); тестовий JWKS-сервер
+- Modify: `packages/simetra/test/db/signal-stand.ts` — тестовий JWKS-сервер
   `startJwksServer(tokens: SignalTokens): Promise<{ url; close() }>` на
   `127.0.0.1`; клієнт `standClient(stand, getToken)` над `centrifuge`
 - Modify: `packages/simetra/package.json` — devDependency `centrifuge` 5.8.0
   (точний пін; ліцензію перевір у `LICENSE` репозиторію за CONTRIBUTING.md);
   `docs/dependency-monitoring.md` — рядок
-- Create: `packages/designer/src/__tests__/signal-delivery.db.test.ts` —
-  модель з рантаймом і правами з наявних помічників designer
+- Create: `packages/designer/src/__tests__/signal-delivery.support.ts`,
+  `signal-delivery.db.test.ts`, `signal-delivery.supabase.db.test.ts` —
+  модель з рантаймом і правами з наявних помічників designer. Тест сам
+  кличе `centrifugoConfig` і передає результат у `startSignalStand({ config })`
+  (Р7; `simetra` не імпортує designer)
 
 **Interfaces:**
 - Consumes: задачі 4, 8, 10, 11, 12.
@@ -766,6 +893,8 @@ Centrifugo v6 (образ, закріплений у `docker/postgres-stack/comp
   - клієнт не публікує в простір `simetra` (відмова Centrifugo);
   - токен каналу з чужим каналом, прострочений, з чужим `aud`, з
     невідомим `kid` — відмова підписки;
+  - підроблені токени: `alg: none` і HS256, підписаний байтами публічного
+    ключа, — відмова;
   - JWKS з ключем `OKP` приймається;
   - ротація за §6.3 без розриву (Review Focus 5) з годинником порту, а не
     з чеканням:
@@ -775,11 +904,12 @@ Centrifugo v6 (образ, закріплений у `docker/postgres-stack/comp
       взяті новим ключем, живі;
   - короткий розрив з історією — пропущені публікації й `recovered: true`;
   - `restart()` — `recovered: false`;
-  - вимір «відповідь `run`» і «сигнал до клієнта» без мережі: p95 сигналу
-    ≤ 50 мс + вікно;
+  - вимір «відповідь `run`» і «сигнал до клієнта» без мережі, 200 команд:
+    p95 «коміт → подія клієнта» ≤ 50 мс;
   - падіння й переривання тесту не лишають контейнерів.
 - [ ] **Step 2:** FAIL → **Step 3:** реалізація стенду й клієнта → **Step 4:** PASS
-  на обох стеках, два прогони поспіль.
+  два прогони поспіль: `pnpm --filter @simetrajs/designer test:db signal-delivery`
+  і `pnpm --filter @simetrajs/designer test:db:supabase signal-delivery`.
 - [ ] **Step 5: Commit** — `test(db): гейт доставки сигналу з токенами на стенді Centrifugo`.
 
 ### Task 14: документація й гейти (кожна частина)
@@ -789,12 +919,16 @@ Centrifugo v6 (образ, закріплений у `docker/postgres-stack/comp
 - Modify: спека профілю §13 і Додаток А П4-B — позначки внесених правок, якщо
   таблиці їх ведуть
 
+- [ ] **Step 0 (частина C):** зведена таблиця у звіті «мутація §12 П4-B →
+  тест плану». Береться кожна мутація переліку §12, що стосується B2.
+  Кожну виконавець робить на закомміченому дереві, бачить червоний тест і
+  відкочує. Мутація без червоного тесту — дефект плану, до архітекторки.
 - [ ] **Step 1:** `git merge origin/main` (без rebase).
 - [ ] **Step 2:** `pnpm format:check && pnpm lint && pnpm typecheck && pnpm test` — зелені.
 - [ ] **Step 3:** `pnpm metadata:check`; `python3 scripts/check-doc-anchors.py` — зелені.
-- [ ] **Step 4:** DB-набір стека `postgres` — зелений;
+- [ ] **Step 4:** повний DB-набір стека `postgres` (`pnpm test:db:pg`) — зелений;
   `docker ps -a --filter label=simetra-run` — порожньо.
-- [ ] **Step 5:** повний `pnpm test:db` на стеку Supabase — **один раз** на
+- [ ] **Step 5:** повний `pnpm test:db` (регресія Supabase) — **один раз** на
   частину, після всіх її задач.
 - [ ] **Step 6 (частина C):** `pnpm build:packages && pnpm test:packaging` —
   зелені; `simetra/server/signals` імпортується з тарбола.
@@ -802,7 +936,9 @@ Centrifugo v6 (образ, закріплений у `docker/postgres-stack/comp
 
 ### Готово — частина C і блок
 
-Рядок ПГ-4 §12 спеки профілю й рядок B2 §13 П4-B (без пунктів Р2):
+Рядок ПГ-4 §12 спеки профілю й рядок B2 §13 П4-B (без пунктів Р2).
+**Частина C дає `SignalTokens` і `runtime.authorizeChannels`: її мердж —
+умова D5 тонкого зрізу П4-D.**
 - `simetra/server/signals` видає токени EdDSA з `kid` і JWKS з ротацією §6.3.
 - `runtime.authorizeChannels` дає рівно канали, для яких режим підписки
   `signal_topic_allowed` істинний, і лише дійсному користувачу.
