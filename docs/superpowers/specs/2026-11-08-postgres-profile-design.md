@@ -588,8 +588,12 @@ Centrifugo з рушієм у пам'яті, обрив сокета без reco
   недосяжний.
 - Шаблон перевіряє unit-тест: немає `client.insecure`, `admin`,
   анонімного підключення й жодного `allow_*_for_*`; `http_api.disabled` —
-  `true`; `audience` і `issuer` задано. Конфіг стека розробки будується тим
-  самим генератором, лише з адресами стека.
+  `true`; `audience` і `issuer` задано. З ПГ-4 конфіг стека розробки
+  будується тим самим генератором, лише з адресами стека. До ПГ-4 Centrifugo
+  обох стеків іде зі статичним конфігом у файлах стека: ті самі простори й
+  `http_api.disabled`, але без споживача outbox і без `client.token` —
+  таблиці outbox і JWKS ще немає. Unit-тест файлів стека перевіряє його тими
+  самими заборонами, без вимоги `audience` і `issuer`.
 - `http_api` вимкнено: публікація йде лише з outbox. Оператор, якому
   потрібен API, вмикає його лише у внутрішній мережі з ключем.
 - **Розмір історії.** `history_size` 100 на канал змін покриває типовий
@@ -864,8 +868,11 @@ FileStore = {
   несе лише `plpgsql_check`, а заглушку `better_auth."user"` тінь отримує з
   фактів цілі (§4.2).
 - Стек `supabase` дістає власний Centrifugo: compose-проєкт `simetra-sb`
-  (лише Centrifugo, DSN бази стека Supabase, порт 8101). `pnpm db:start`
-  піднімає його після `supabase start`, `pnpm db:stop` зупиняє. Так
+  (лише Centrifugo, DSN бази стека Supabase, порт 8101). Його піднімає
+  окрема команда `pnpm db:signals:start` і зупиняє `pnpm db:signals:stop`;
+  `pnpm db:start` і `pnpm db:stop` його не чіпають: DB-тести його не
+  вживають (стенд сигналів — власний на прогін, §10.4), а зайве
+  завантаження образу в кожному рядку CI — нова причина збою старту. Так
   паралельно запущені стеки не ділять порту.
 - Сервіс `realtime` у `supabase/config.toml` вимикається в блоці ПГ-4,
   разом із переходом сигналів на outbox у П4-B (редакція 3), а не раніше:
@@ -876,10 +883,11 @@ FileStore = {
 
 | Команда | Дія |
 | --- | --- |
-| `pnpm db:pg:start` | `docker compose -p simetra-pg up -d --wait`, далі ролі (`supabase/roles.sql`-аналог для `postgres`) і `simetra.environment = 'development'` |
+| `pnpm db:pg:start` | `docker compose -p simetra-pg up -d --wait`, ініціалізація Garage і `simetra.environment = 'development'`; з ПГ-2 далі ролі Simetra й шаблон `simetra_template` кроком `simetra roles` (§3.4, §3.5) |
 | `pnpm db:pg:stop` | `docker compose -p simetra-pg down` (томи лишаються; `--volumes` — лише явно) |
-| `pnpm test:db:pg` | DB-тести `simetra` і `@simetrajs/designer` на стеку `postgres` |
-| `pnpm db:start`, `pnpm db:stop`, `pnpm test:db` | стек `supabase`, як зараз; `test:db` — лише регресійні набори (§10.5) |
+| `pnpm test:db:pg` | до ПГ-2 — проєкт `db-pg` пакета `simetra`: набір базового стану `postgres` через Vitest-раннер і тест переривання; з ПГ-2 — DB-тести `simetra` і `@simetrajs/designer` на стеку `postgres` |
+| `pnpm db:signals:start`, `pnpm db:signals:stop` | Centrifugo поруч зі стеком `supabase` (compose-проєкт `simetra-sb`, §10.1) |
+| `pnpm db:start`, `pnpm db:stop`, `pnpm test:db` | стек `supabase`, як зараз; `test:db` до ПГ-2 — набір базового стану провайдера, проєкт `db` і проєкт `db-supabase` обох пакетів, з ПГ-2 — лише регресійні набори (§10.5) |
 
 Стек запускається лише цими командами, ніколи глобальним `docker compose`
 без `-p` чи сторонньою версією образів.
@@ -887,7 +895,8 @@ FileStore = {
 ### 10.3 Stack-guard і тег прогону
 
 `packages/simetra/test/db/stack-guard.ts` стає параметризованим профілем
-(`SIMETRA_TEST_PROVIDER = postgres | supabase`, типово `postgres`):
+(`SIMETRA_TEST_PROVIDER = postgres | supabase`; типово `supabase` до ПГ-2,
+з ПГ-2 — `postgres`, разом із переведенням проєкту `db`):
 
 - **замок на стек:** окремий файл замка на профіль; прогони різних стеків
   не чекають один одного, прогони одного — по черзі;
@@ -898,13 +907,18 @@ FileStore = {
   `simetra_owner` (`NOSUPERUSER BYPASSRLS CREATEDB`), як у проді: інакше
   суперкористувач сховав би гранти `better_auth`, замок `dropTrigger` і
   режим `plpgsql_check`. Так само на `supabase` тести вже йдуть від
-  не-суперкористувача `postgres`;
+  не-суперкористувача `postgres`. Роль власника на стеку `postgres` з'являється
+  з ПГ-2 (`simetra roles`); до того обидві адреси профілю — суперкористувач
+  `postgres`, і на стеку йдуть лише набір базового стану й тест переривання;
 - **знімок стека:** до бази, ролей, схем і розширень додаються контейнери з
   міткою `simetra-run=<тег>` і бакети Garage з префіксом тегу; різниця після
   прогону — збій, як зараз;
 - **прибирання на сигналах:** ті самі SIGINT, SIGTERM, SIGHUP; додатково
   `docker rm -f` контейнерів свого тегу; бакет свого тегу спершу
-  спорожнюється, потім видаляється (Garage видаляє лише порожній бакет);
+  спорожнюється, потім видаляється (Garage видаляє лише порожній бакет).
+  До ПГ-5 прибиральник видаляє лише **порожні** бакети тегу, а непорожній
+  називає в звіті про залишки; спорожнення бакета з об'єктами приходить у
+  ПГ-5 разом із першим тестом, що пише байти;
 - **тег прогону:** бази, ролі й тіні — як зараз (`connection.ts`);
   контейнер Centrifugo стенду — мітка й ім'я з тегом; бакет — `run-<тег>`.
 
@@ -922,12 +936,23 @@ FileStore = {
 - pgTAP-набори йдуть через тонкий Vitest-раннер в обох профілях (ПП6):
   тегована база, транзакція з `ROLLBACK`, `SET ROLE`, claims; раннер
   збирає вивід TAP і падає на `not ok` чи на розбіжності плану.
+  Транзакцію набору відкриває й відкочує раннер: файл набору не має
+  операторів керування транзакцією (`begin`, `commit`, `rollback`,
+  `savepoint` тощо) і `alter system` — раннер такий набір відхиляє. Набір
+  базового стану `postgres` іде в базі `postgres` від суперкористувача
+  стека; теговані бази, `SET ROLE` і claims раннер дістає з ПГ-2, з першими
+  наборами, яким вони потрібні.
 - `supabase test db` лишається лише для набору базового стану провайдера
   `supabase/tests/provider-base-state.test.sql`. Аналог для `postgres` —
-  набір базового стану стека `postgres` через раннер: версія 17, ролі §3.1 і
-  їхні атрибути, схема `better_auth`, розширення `pgtap` і `plpgsql_check`.
+  набір базового стану стека `postgres` через раннер: версія 17, доступні
+  розширення `pgtap` і `plpgsql_check`, налаштування стека
+  `simetra.environment`, відсутність схем Supabase (`auth`, `storage`,
+  `realtime`). Ролі §3.1 і їхні атрибути та схему `better_auth` набір
+  дістає разом із `simetra roles` (ПГ-2) і грантами ідентичності (ПГ-3).
 - **Розподіл DB-тестів:**
-  - проєкт `db` — на стеку `postgres`; роль запиту й таблицю ідентичності
+  - проєкт `db` — на стеку `postgres` з ПГ-2 (до того — на стеку
+    `supabase`, а на `postgres` іде лише проєкт `db-pg`: набір базового
+    стану й тест переривання); роль запиту й таблицю ідентичності
     тести беруть з даних профілю (помічник `test/db`), а не з імен Supabase;
   - проєкт `db-supabase` (`*.supabase.db.test.ts`) — на стеку `supabase`:
     прийом бази Supabase, пресет гейта `supabase` (поверхні `auth`,
@@ -948,6 +973,11 @@ FileStore = {
   збирається з кешем шарів (або тягнеться з реєстру за digest).
 - Повторні спроби старту — за тим самим правилом, що й для стека Supabase
   у `.github/workflows/ci.yml`.
+- **До ПГ-2** таблиця має проміжну форму: матриця `db` лишається на стеку
+  `supabase` і дістає рядки `supabase-bound` (проєкт `db-supabase`:
+  `simetra` одним рядком, designer — двома шардами), а стек `postgres` іде
+  окремим job-ом `db-postgres` (`pnpm db:pg:start`, `pnpm test:db:pg`).
+  ПГ-2 переводить `db` на стек `postgres` за таблицею вище.
 
 ### 10.7 Текст для `AGENTS.md` (затверджує власник)
 
@@ -1000,7 +1030,7 @@ pnpm db:stop
 
 | Блок | Обсяг | Готово, коли | Залежить від |
 | --- | --- | --- | --- |
-| **ПГ-1. Стек і тест-інфра** | `docker/` (образ, compose, конфіги, ініціалізація Garage); `pnpm db:pg:*`, `test:db:pg`; stack-guard за профілем (замок, адреси, знімок, контейнери й бакети); Vitest-раннер pgTAP; набір базового стану `postgres` (без пресету: версія, розширення, шаблон `simetra_template`); проєкт `db-supabase` і перенесення в нього тестів, прив'язаних до Supabase; CI з job-ом `db-supabase` поруч із наявним `db`; compose `simetra-sb` з Centrifugo; текст `AGENTS.md` на затвердження | обидва стеки стартують своїми командами; наявний `db` і `db-supabase` зелені на `supabase`; базовий стан `postgres` зелений через Vitest-раннер; прогін, перерваний SIGINT, не лишає ні баз, ні контейнерів, ні бакетів; CI зелений | — |
+| **ПГ-1. Стек і тест-інфра** | `docker/` (образ, compose, конфіги, ініціалізація Garage); `pnpm db:pg:*`, `test:db:pg`; stack-guard за профілем (замок, адреси, знімок, контейнери й бакети); Vitest-раннер pgTAP; набір базового стану `postgres` (версія, доступні розширення, налаштування стека, відсутність схем Supabase; ролі й шаблон `simetra_template` — з ПГ-2); проєкт `db-supabase` і перенесення в нього тестів, прив'язаних до Supabase; CI: рядки `supabase-bound` у наявній матриці `db` і job `db-postgres` (§10.6); compose `simetra-sb` з Centrifugo (`pnpm db:signals:*`); текст `AGENTS.md` на затвердження | обидва стеки стартують своїми командами; наявний `db` і `db-supabase` зелені на `supabase`; базовий стан `postgres` зелений через Vitest-раннер; прогін, перерваний SIGINT, не лишає ні баз, ні контейнерів, ні бакетів; CI зелений | — |
 | **ПГ-2. Провайдер у схемному рушії** | `postgres` у `DATABASE_PROVIDERS` і мапах за таблицею §4.2; споживачі `PROVIDER_SCHEMAS.supabase` і `SUPABASE_*` — за `scope.provider`; `renderProviderSeed(provider)`; профіль pg-delta `simetra-postgres`; запис пресету §4.1 (тип `Record<DatabaseProvider, …>` його вимагає); ролі §3 з `LOGIN_ROLE_PARENTS` і власником бази; `plpgsql_check` у цілі й шаблон `simetra_template`; власна провізія тіні й копії з шаблону (§3.5); `service: null`; гейт `plan.owner-not-bypassrls`; таблиця ідентичності в тестах — справжня міграція Better Auth закріпленої версії; переведення проєкту `db` на стек `postgres` і тестів — на дані профілю; CI-job `db` на стеку `postgres` | проєкт `db` зелений на `postgres` від ролі з атрибутами власника, `db-supabase` — на `supabase`; каталожний гейт бачить у чужих схемах лише розширення й тригери провізії; тест ролей §3.1 зелений | ПГ-1 |
 | **ПГ-3. Ідентичність** | адресні гранти `better_auth` у `roles` (§4.2); `plan.identity-table-missing`, `plan.identity-trigger-locked`; вибір ролі читання за `anonymousClaim`; адаптер `verifySession` у шаблоні host-а (разом з П4-D) | DB-тести §4.4 на таблиці справжньої міграції зелені (міграція з `database.schemaName: "better_auth"` створює таблиці саме там); план від `simetra_owner` ставить тригери провізії на `better_auth."user"`, а крок зняття тригера відмовляє `plan.identity-trigger-locked`; анонімна сесія читає лише `publicRead: anon`; `runCommand` і читання з claims Better Auth дають той самий `current_user_id()`, що й на `supabase` | ПГ-2 |
 | **ПГ-4. Outbox, споживач, токени** | таблиця, гранти, політики споживача, `NOTIFY`, `prune`; конфіг Centrifugo з designer; `simetra/server/signals` (порт, EdDSA, JWKS); стенд сигналів у тест-інфрі; разом із B8 П4-B — тіла функцій сигналу й `authorizeChannels` | `supabase/roles.sql` і `supabase/tests/provider-base-state.test.sql` знають `simetra_signal_consumer` і `simetra_signals`; тести §5.3 і §7 зелені в обох профілях; на стенді доведено фактом: `simetra.signal_outbox` зі схемою в `outbox_table_name`, `partition_notification_dsn`, `use_try_lock`, вхід `simetra_signals` з налаштуванням ролі; сигнал команди доходить, чужий канал, прострочений токен і токен з чужим `aud` відхилено; JWKS з ключем Ed25519 (`OKP`) приймається; ротація без розриву; `realtime` у стеку `supabase` вимкнено | ПГ-3; B6 П4-B |
