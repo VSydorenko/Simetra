@@ -39,7 +39,7 @@ export default defineConfig({
           maxConcurrency: 4,
           // Стек один на машину: один прогін за раз і стек після прогону такий
           // самий, як до нього
-          globalSetup: ["../simetra/test/db/stack-guard.ts"],
+          globalSetup: ["../simetra/test/db/stack-guard.supabase.ts"],
           // Тег прогону в іменах тіней двигуна й облік їхніх провізій
           setupFiles: ["./src/__tests__/support/db-setup.ts"],
           // Тінь двигуна — це створення й наповнення окремої бази: на раннері CI

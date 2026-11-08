@@ -1,7 +1,8 @@
 // Прибиральник одного DB-прогону: завершує бекенди цього прогону й видаляє
 // зі спільного стеку лише об'єкти з його тегом. Кличе його обробник сигналу (`interrupt.ts`) окремим
 // процесом через `spawnSync`, а людина — тим самим CLI:
-// `node --import tsx sweep.ts <тег>`.
+// `SIMETRA_TEST_PROVIDER=<профіль> node --import tsx sweep.ts <тег>`. Профіль
+// обробник передає через успадковане env прогону.
 import { realpathSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import pg from "pg"
@@ -11,8 +12,15 @@ import {
   runApplicationName,
   runObjectPatterns,
   runObjectStatementPattern,
+  testDatabaseUrl,
   testSuperuserUrl,
 } from "./connection"
+import {
+  PROVIDER_ENV,
+  TEST_STACKS,
+  testProvider,
+  type TestProvider,
+} from "./profile"
 
 const DEFAULT_DEADLINE_MS = 30_000
 const PASS_PAUSE_MS = 1_000
@@ -93,6 +101,9 @@ export async function sweepRun(
 ): Promise<{ dropped: string[]; left: string[] }> {
   checkTag(tag)
   const deadline = Date.now() + (o.deadlineMs ?? DEFAULT_DEADLINE_MS)
+  // Адреса, перевизначена на чужий стек, дала б прибиральнику видаляти там
+  // об'єкти, поки прогін того стека тримає свій замок
+  await assertStack(testProvider())
   // Воркери вже вбиті, але сервер доводить їхні запити до кінця й без
   // клієнта: важкий запит вантажив би стек наступному прогону після
   // звільнення замка
@@ -101,8 +112,8 @@ export async function sweepRun(
   )
   const { databases, roles } = runObjectPatterns(tag)
   const creating = runObjectStatementPattern(tag)
-  // Ролі видаляє лише supabase_admin; `DROP OWNED BY` діє в поточній базі,
-  // а тести працюють у `postgres`
+  // Ролі видаляє лише суперкористувач стека; `DROP OWNED BY` діє в поточній
+  // базі, а тести працюють у `postgres`
   const url = new URL(testSuperuserUrl())
   url.pathname = "/postgres"
   const client = new pg.Client({
@@ -170,12 +181,56 @@ export async function sweepRun(
   }
 }
 
+/**
+ * Why the stack of profile `p` cannot be the stack reached at an address with
+ * these facts, or `null` when it can. Only Supabase has `supabase_admin`.
+ */
+export function stackMismatch(
+  p: TestProvider,
+  facts: { supabaseAdmin: boolean }
+): string | null {
+  if (facts.supabaseAdmin === (p === "supabase")) return null
+  return `this is not the ${p} stack: role supabase_admin is ${facts.supabaseAdmin ? "present" : "missing"}. A SIMETRA_TEST_* variable likely points at another stack; a run there would not hold that stack's lock. Unset it or run against the matching stack.`
+}
+
+/**
+ * Throws unless every effective address of the run (`testDatabaseUrl()` and
+ * `testSuperuserUrl()`) reaches the stack of profile `p`.
+ */
+export async function assertStack(p: TestProvider): Promise<void> {
+  for (const url of [testDatabaseUrl(), testSuperuserUrl()]) {
+    const client = new pg.Client({
+      connectionString: url,
+      connectionTimeoutMillis: CONNECT_TIMEOUT_MS,
+      application_name: GUARD_APPLICATION_NAME,
+    })
+    await client.connect()
+    let supabaseAdmin: boolean
+    try {
+      supabaseAdmin =
+        (
+          await client.query<{ present: boolean }>(
+            "select exists (select from pg_roles where rolname = 'supabase_admin') as present"
+          )
+        ).rows[0]?.present === true
+    } finally {
+      await client.end()
+    }
+    const mismatch = stackMismatch(p, { supabaseAdmin })
+    if (mismatch !== null) {
+      // Без пароля: повідомлення йде в лог прогону
+      const { username, host, pathname } = new URL(url)
+      throw new Error(`${username}@${host}${pathname}: ${mismatch}`)
+    }
+  }
+}
+
 // SQL ручного прибирання за тегом — на випадок, коли стек недосяжний
-function manualSweepSql(tag: string): string {
+export function manualSweepSql(tag: string, p: TestProvider): string {
   checkTag(tag)
   const { databases, roles } = runObjectPatterns(tag)
   return [
-    "-- as supabase_admin, connected to database postgres; run the generated statements",
+    `-- as ${TEST_STACKS[p].superuserName}, connected to database postgres; run the generated statements`,
     `SELECT format('DROP DATABASE %I WITH (FORCE);', datname) FROM pg_database WHERE datname ~ '${databases.source}';`,
     `SELECT format('DROP OWNED BY %I; DROP ROLE %I;', rolname, rolname) FROM pg_roles WHERE rolname ~ '${roles.source}';`,
   ].join("\n")
@@ -213,8 +268,15 @@ async function tryQuery(
 async function cli(tag: string | undefined): Promise<number> {
   if (tag === undefined || !isRunTag(tag)) {
     process.stderr.write(
-      `Usage: node --import tsx sweep.ts <run tag> (6 characters [0-9a-z]); got "${tag ?? ""}"\n`
+      `Usage: ${PROVIDER_ENV}=<postgres|supabase> node --import tsx sweep.ts <run tag> (6 characters [0-9a-z]); got "${tag ?? ""}"\n`
     )
+    return 1
+  }
+  let p: TestProvider
+  try {
+    p = testProvider()
+  } catch (error) {
+    process.stderr.write(`${(error as Error).message}\n`)
     return 1
   }
   try {
@@ -225,7 +287,7 @@ async function cli(tag: string | undefined): Promise<number> {
     return left.length === 0 ? 0 : 1
   } catch (error) {
     process.stderr.write(
-      `DB run ${tag} sweep failed: ${(error as Error).message}\nClean up by hand:\n${manualSweepSql(tag)}\n`
+      `DB run ${tag} sweep failed: ${(error as Error).message}\nClean up by hand:\n${manualSweepSql(tag, p)}\n`
     )
     return 1
   }

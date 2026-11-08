@@ -1,7 +1,9 @@
-// globalSetup DB-проєкту vitest обох пакетів. Локальний стек один на машину, а
-// DB-тести ганяють кілька сесій і агентів: правила «один прогін за раз» і «стек
-// після прогону такий самий, як до нього» тримає цей механізм, а не дисципліна
-// в промптах.
+// Сторож DB-прогону vitest обох пакетів; globalSetup проєкту — файл профілю
+// (`stack-guard.<профіль>.ts`), бо профіль прогону задає проєкт, а не env
+// людини. Локальний стек кожного профілю один на машину, а DB-тести ганяють
+// кілька сесій і агентів: правила «один прогін стека за раз» і «стек після
+// прогону такий самий, як до нього» тримає цей механізм, а не дисципліна в
+// промптах.
 import { execFileSync } from "node:child_process"
 import {
   openSync,
@@ -23,11 +25,14 @@ import {
   testDatabaseUrl,
 } from "./connection"
 import { installInterruptCleanup } from "./interrupt"
-import { stopRunBackends } from "./sweep"
+import {
+  enterProvider,
+  PROVIDER_ENV,
+  TEST_STACKS,
+  type TestProvider,
+} from "./profile"
+import { assertStack, stopRunBackends } from "./sweep"
 
-// Замок у тимчасовій теці машини, а не в checkout: стек спільний і для інших
-// checkout чи worktree того самого репо
-const LOCK_PATH = join(tmpdir(), "simetra-db-stack.lock")
 // Межа — з запасом над найдовшим повним прогоном (designer); чекати довше
 // означає завислий прогін, і про нього краще дізнатися, ніж чекати безкінечно
 const LOCK_WAIT_MS = 45 * 60_000
@@ -37,14 +42,34 @@ const LOCK_POLL_MS = 5_000
 // Linux тримає дані стеку на кореневому розділі
 const MIN_FREE_BYTES = 3 * 1024 ** 3
 
-type Snapshot = Record<
+export type Snapshot = Record<
   "databases" | "roles" | "schemas" | "extensions",
   string[]
 >
 
-export default async function setup(): Promise<() => Promise<void>> {
+/**
+ * Lock file of the stack of profile `p`. In the machine's temp dir, not in the
+ * checkout: the stack is shared by every checkout and worktree of the repo.
+ */
+export function lockPath(p: TestProvider): string {
+  return join(tmpdir(), TEST_STACKS[p].lockFile)
+}
+
+/** The vitest globalSetup of a DB project that runs against the stack of `p`. */
+export function setupFor(p: TestProvider): () => Promise<() => Promise<void>> {
+  return () => setup(p)
+}
+
+async function setup(p: TestProvider): Promise<() => Promise<void>> {
+  // До воркерів: env профілю успадковують і вони, і прибиральник на сигналі
+  enterProvider(p)
+  const lock = lockPath(p)
+  const releaseLock = (): void => {
+    // Лише свій замок: чужий, перехоплений після нашого падіння, не чіпаємо
+    if (readHolder(lock)?.pid === process.pid) removeLockFile(lock)
+  }
   checkFreeSpace()
-  await acquireLock()
+  await acquireLock(lock)
   let removeInterruptCleanup = (): void => {}
   try {
     // Форки воркерів, які vitest стартує після globalSetup, успадковують env:
@@ -57,12 +82,15 @@ export default async function setup(): Promise<() => Promise<void>> {
     })
     const tree = treeState()
     process.stderr.write(
-      `DB run tag ${runTag}${tree !== undefined ? ` at ${tree.summary}` : ""}\n`
+      `DB run ${runTag} on ${p} stack${tree !== undefined ? ` at ${tree.summary}` : ""}\n`
     )
+    // Знімок і звірка чужого стека під своїм замком не тримали б «один
+    // прогін за раз» ні для одного з двох
+    await assertStack(p)
     // Тег уже є, але воркерів ще нема: об'єктів цього прогону в знімку бути
     // не може, тож звіт називає лише чужі лишки
     const before = await snapshot()
-    const leftovers = leftoverReport(before)
+    const leftovers = leftoverReport(before, p)
     if (leftovers.length > 0) process.stderr.write(`${leftovers.join("\n")}\n`)
     return async () => {
       // Нормальне завершення не прибирає: що лишилось, показує звірка стеку
@@ -84,7 +112,7 @@ export default async function setup(): Promise<() => Promise<void>> {
             `The working tree changed during the DB run (${tree.summary} → ${changed?.summary ?? "unknown"}): the results are not tied to one commit\n`
           )
         const leaks = diff(before, after)
-        if (leaks.length > 0) throw new Error(leakMessage(leaks))
+        if (leaks.length > 0) throw new Error(leakMessage(leaks, p))
       } finally {
         releaseLock()
       }
@@ -105,12 +133,12 @@ function checkFreeSpace(): void {
     )
 }
 
-async function acquireLock(): Promise<void> {
+async function acquireLock(lock: string): Promise<void> {
   const deadline = Date.now() + LOCK_WAIT_MS
   let announced = false
   for (;;) {
     try {
-      const fd = openSync(LOCK_PATH, "wx")
+      const fd = openSync(lock, "wx")
       writeSync(
         fd,
         `${process.pid}\n${process.cwd()}\n${new Date().toISOString()}\n`
@@ -120,16 +148,22 @@ async function acquireLock(): Promise<void> {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error
     }
-    const holder = readHolder()
+    const holder = readHolder(lock)
+    // Два DB-проєкти в одному процесі ділять env (тег, профіль), а свого ж
+    // замка процес не дочекається
+    if (holder?.pid === process.pid)
+      throw new Error(
+        `This process already holds ${lock}: one DB project per vitest process (run each with its own --project)`
+      )
     // Убитий прогін лишає файл замка без живого процесу — замок не тримає
     // ніхто, і його можна забрати
     if (holder === undefined || !isAlive(holder.pid)) {
-      removeLockFile()
+      removeLockFile(lock)
       continue
     }
     if (Date.now() > deadline)
       throw new Error(
-        `The local stack is still busy after ${LOCK_WAIT_MS / 60_000} min: DB run PID ${holder.pid} (${holder.cwd}, since ${holder.since}). Lock file: ${LOCK_PATH}`
+        `The local stack is still busy after ${LOCK_WAIT_MS / 60_000} min: DB run PID ${holder.pid} (${holder.cwd}, since ${holder.since}). Lock file: ${lock}`
       )
     if (!announced) {
       process.stderr.write(
@@ -141,16 +175,11 @@ async function acquireLock(): Promise<void> {
   }
 }
 
-function releaseLock(): void {
-  // Лише свій замок: чужий, перехоплений після нашого падіння, не чіпаємо
-  if (readHolder()?.pid === process.pid) removeLockFile()
-}
-
-function readHolder(): { pid: number; cwd: string; since: string } | undefined {
+function readHolder(
+  lock: string
+): { pid: number; cwd: string; since: string } | undefined {
   try {
-    const [pid, cwd = "?", since = "?"] = readFileSync(LOCK_PATH, "utf8").split(
-      "\n"
-    )
+    const [pid, cwd = "?", since = "?"] = readFileSync(lock, "utf8").split("\n")
     const parsed = Number(pid)
     return Number.isInteger(parsed) && parsed > 0
       ? { pid: parsed, cwd, since }
@@ -170,9 +199,9 @@ function isAlive(pid: number): boolean {
   }
 }
 
-function removeLockFile(): void {
+function removeLockFile(lock: string): void {
   try {
-    unlinkSync(LOCK_PATH)
+    unlinkSync(lock)
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
   }
@@ -235,6 +264,7 @@ async function snapshot(): Promise<Snapshot> {
  */
 export function leftoverReport(
   before: Pick<Snapshot, "databases" | "roles">,
+  p: TestProvider,
   now: number = Date.now()
 ): string[] {
   const byTag = new Map<string, string[]>()
@@ -259,7 +289,8 @@ export function leftoverReport(
       "Objects of earlier DB runs are already on the stack, likely left by a killed run or a failed sweep; they are not removed. A run's sweep drops only the objects of its tag:",
       ...[...byTag].flatMap(([tag, names]) => [
         `  run ${tag}: ${names.join(", ")}`,
-        `    cd packages/simetra && node --import tsx test/db/sweep.ts ${tag}`,
+        // Профіль явно: прибиральник без нього пішов би на типовий стек
+        `    cd packages/simetra && ${PROVIDER_ENV}=${p} node --import tsx test/db/sweep.ts ${tag}`,
       ])
     )
   if (untaggedShadows.length > 0)
@@ -278,13 +309,13 @@ function ageNote(name: string, now: number): string {
   return age === undefined ? "age unknown" : `${Math.round(age)} min old`
 }
 
-type Change = {
+export type Change = {
   kind: keyof Snapshot
   name: string
   change: "added" | "removed"
 }
 
-function diff(before: Snapshot, after: Snapshot): Change[] {
+export function diff(before: Snapshot, after: Snapshot): Change[] {
   return (Object.keys(before) as (keyof Snapshot)[]).flatMap((kind) => {
     const was = new Set(before[kind])
     const now = new Set(after[kind])
@@ -299,17 +330,20 @@ function diff(before: Snapshot, after: Snapshot): Change[] {
   })
 }
 
-function leakMessage(changes: readonly Change[]): string {
+export function leakMessage(
+  changes: readonly Change[],
+  p: TestProvider
+): string {
   const lines = changes.map(
     ({ kind, name, change }) => `  ${change} ${kind}: ${name}`
   )
   const cleanup = changes.flatMap(({ kind, name, change }) => {
     if (change !== "added") return []
     if (kind === "databases") return [`  DROP DATABASE "${name}" WITH (FORCE);`]
-    // Роль, яку створив тест, видаляє лише supabase_admin (testSuperuserUrl):
-    // у postgres на локальному стеку немає ADMIN на неї
+    // Роль, яку створив тест, видаляє лише суперкористувач стека
+    // (testSuperuserUrl): на стеку Supabase у postgres немає ADMIN на неї
     if (kind === "roles")
-      return [`  DROP ROLE "${name}";  -- as supabase_admin`]
+      return [`  DROP ROLE "${name}";  -- as ${TEST_STACKS[p].superuserName}`]
     if (kind === "schemas") return [`  DROP SCHEMA "${name}";`]
     return [`  DROP EXTENSION "${name}";`]
   })

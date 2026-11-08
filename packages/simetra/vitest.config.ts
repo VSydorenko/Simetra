@@ -28,7 +28,7 @@ export default defineConfig({
           fileParallelism: false,
           // Стек один на машину: один прогін за раз і стек після прогону такий
           // самий, як до нього
-          globalSetup: ["./test/db/stack-guard.ts"],
+          globalSetup: ["./test/db/stack-guard.supabase.ts"],
         },
       },
       {
@@ -40,7 +40,7 @@ export default defineConfig({
           include: ["bench/**/*.bench.db.ts"],
           exclude: ["**/node_modules/**", "**/dist/**"],
           fileParallelism: false,
-          globalSetup: ["./test/db/stack-guard.ts"],
+          globalSetup: ["./test/db/stack-guard.supabase.ts"],
           // Засів і оператори на сотнях тисяч рядків — хвилини, не секунди
           testTimeout: 30 * 60_000,
           hookTimeout: 30 * 60_000,
