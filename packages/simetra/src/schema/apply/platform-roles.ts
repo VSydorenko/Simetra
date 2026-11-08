@@ -1,5 +1,6 @@
 import type { SqlParser } from "simetra/compiler"
 import {
+  loginRoleParentNames,
   LOGIN_ROLE_REQUEST_PURPOSES,
   PLATFORM_LOGIN_ROLES,
   PLATFORM_ROLES,
@@ -447,12 +448,7 @@ export function platformRoleSet(provider?: DatabaseProvider): PlatformRoleSet {
     names,
     login: {
       name: PLATFORM_LOGIN_ROLES.runtime,
-      memberOf: [
-        PLATFORM_ROLES.command,
-        ...LOGIN_ROLE_REQUEST_PURPOSES[provider].map(
-          (purpose) => PROVIDER_API_ROLES[provider][purpose]
-        ),
-      ],
+      memberOf: loginRoleParentNames("runtime", provider),
     },
   }
 }

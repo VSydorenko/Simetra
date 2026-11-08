@@ -36,6 +36,7 @@ export function createServerFunctionAdapter(
 // PostgREST для `supabase` — рішення блоку B4.
 const DEFAULT_SOURCE: Record<DatabaseProvider, "serverFunction"> = {
   supabase: "serverFunction",
+  postgres: "serverFunction",
 }
 
 /**

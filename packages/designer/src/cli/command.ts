@@ -337,7 +337,8 @@ function argsFor(tool: Tool): ArgsDef {
     args["database-provider"] = {
       type: "enum",
       options: [...DATABASE_PROVIDERS],
-      description: 'Database provider of a new project (default "supabase")',
+      description:
+        'Database provider of a new project: supabase | postgres (default "supabase")',
     }
   }
   if (tool.name === "diff") {
