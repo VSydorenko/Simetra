@@ -203,20 +203,32 @@ pnpm build:packages && pnpm test:packaging # build the npm packages, then test t
 pnpm db:start                             # local Supabase stack (needs Docker)
 pnpm test:db                              # provider base-state pgTAP tests + Vitest DB tests (*.db.test.ts) of simetra and @simetrajs/designer against the local stack
 pnpm db:stop
+
+pnpm db:signals:start                     # Centrifugo beside the Supabase stack (needs Docker)
+pnpm db:signals:stop
+
+pnpm db:pg:start                          # local postgres-profile stack: Postgres 17, Centrifugo, Garage (needs Docker)
+pnpm test:db:pg                           # postgres-stack base state (pgTAP through the Vitest runner) and interrupt cleanup
+pnpm db:pg:stop
 ```
 
 - 🔴 **No `--` before a vitest pattern** with `pnpm --filter`: the pattern is
   then silently ignored and the whole suite runs, so a "green" filtered run
   proves nothing.
-- The local stack is started only through `pnpm db:*` (pinned CLI version),
-  never through a global `supabase`.
-- The local stack is one per machine and shared by every session and agent on
-  it. The DB test projects' `globalSetup`
-  (`packages/simetra/test/db/stack-guard.ts`) runs one DB run at a time (a
-  second run waits), refuses to start on a nearly full disk, and fails the run
+- Each local stack is started only through its `pnpm db:*` commands (pinned
+  images and CLI), never through a global `supabase` or `docker compose`
+  without the project name.
+- Each local stack (`postgres`, `supabase`) is one per profile per machine and
+  shared by every session and agent on it. The `globalSetup` of each DB project
+  (`stack-guard.<provider>.ts` over the guard module
+  `packages/simetra/test/db/stack-guard.ts`) runs one DB run at a time per
+  stack (a second run waits), refuses to start on a nearly full disk, and fails the run
   when the stack differs afterwards. A DB test leaves nothing behind, failure
   paths included. Never drop stack objects your run did not create; report an
-  orphan instead.
+  orphan instead. The guard is per stack: runs on the Supabase and the postgres
+  stacks do not wait for each other. One vitest process runs one DB project.
+  Tests bound to Supabase live in `*.supabase.db.test.ts` (project
+  `db-supabase`).
 - Every object a DB test creates on the stack (database, role, engine shadow)
   carries the run tag: name it through the run-tag helpers in
   `packages/simetra/test/db/connection.ts`; designer DB tests get tagged
@@ -228,15 +240,23 @@ pnpm db:stop
   the objects of its own tag only; after a SIGKILL they stay, and the next run
   names them. pnpm does not forward a signal sent to
   its own pid: stop a DB run by signalling its process group (Ctrl-C, GNU
-  `timeout` without `--foreground`) or the vitest pid.
+  `timeout` without `--foreground`) or the vitest pid. A container of a run
+  carries the `simetra-run=<tag>` and `simetra-stack=<provider>` labels
+  (`runContainerLabels` in `packages/simetra/test/db/external.ts`) and a Garage
+  bucket of a run is named `run-<tag>`; the guard reports both, removes its own
+  containers and its empty buckets, and reports a non-empty bucket instead of
+  emptying it.
 - CI (`.github/workflows/ci.yml`) runs the same four gates plus
   `pnpm metadata:check`, a `db` matrix (each shard starts its own stack: provider
-  pgTAP with `simetra`, then `@simetrajs/designer` split by `vitest --shard`),
+  pgTAP with `simetra`, then `@simetrajs/designer` split by `vitest --shard`), its `supabase-bound` rows
+  (`*.supabase.db.test.ts`), and a `db-postgres` job (the postgres stack and
+  `pnpm test:db:pg`),
   and a `packaging` job (`pnpm build:packages && pnpm test:packaging`). It does
   not run the anchor check — run it yourself whenever you edit docs or skills,
   or rename or move a file. Releases and npm publishing —
   `docs/architecture/release.md`.
-- Versions live in `.node-version` and `package.json`, not here.
+- Versions live in `.node-version`, `package.json` and the stack files
+  (`docker/*/compose.yaml`, `Dockerfile`), not here.
 - `tsc` is TypeScript 7 (native); the `typescript` package is aliased to
   TypeScript 6 because typescript-eslint needs its JS API. Don't "fix" the
   aliases.

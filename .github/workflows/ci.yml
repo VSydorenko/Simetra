@@ -68,6 +68,14 @@ jobs:
             run: pnpm --filter @simetrajs/designer test:db --shard=3/4
           - name: designer 4/4
             run: pnpm --filter @simetrajs/designer test:db --shard=4/4
+          # Тести, що вимагають стека Supabase (проєкт db-supabase); стек
+          # postgres іде окремою джобою db-postgres
+          - name: supabase-bound simetra
+            run: pnpm --filter simetra test:db:supabase
+          - name: supabase-bound designer 1/2
+            run: pnpm --filter @simetrajs/designer test:db:supabase --shard=1/2
+          - name: supabase-bound designer 2/2
+            run: pnpm --filter @simetrajs/designer test:db:supabase --shard=2/2
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Версію pnpm бере з поля packageManager у package.json
@@ -95,6 +103,37 @@ jobs:
           exit 1
       - name: Database tests
         run: ${{ matrix.run }}
+
+  # Стек postgres (Postgres + Centrifugo + Garage) окремо від Supabase:
+  # свій compose-проєкт, свій замок, тести лише проєкту db-pg
+  db-postgres:
+    name: Database (postgres stack)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Версію pnpm бере з поля packageManager у package.json
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      # Повтор старту, як у джобі db: між спробами `--volumes` прибирає том
+      # напівствореного стека; свіжий раннер даних не має, тож нічого не губимо
+      - name: Start postgres stack
+        run: |
+          for attempt in 1 2 3; do
+            if pnpm db:pg:start; then exit 0; fi
+            if [ "$attempt" -eq 3 ]; then break; fi
+            echo "::warning::postgres stack start failed (attempt $attempt), cleaning up and retrying"
+            node scripts/db-stack.mjs stop postgres --volumes || true
+            sleep $((attempt * 30))
+          done
+          exit 1
+      - name: Database tests
+        run: pnpm test:db:pg
 
   # Гейт пакування: пакує tarball-и так, як їх побачить реєстр, і ставить їх
   # у тимчасовий проєкт споживача через npm (імпорт ярусів, CLI, MCP)

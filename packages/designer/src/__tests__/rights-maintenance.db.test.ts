@@ -1,51 +1,42 @@
 import { randomUUID } from "node:crypto"
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
-import { dirname, join, resolve } from "node:path"
-import pg from "pg"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
-import {
-  compile,
-  fullAccessHolderRows,
-  type CompiledModel,
-} from "simetra/compiler"
+import { fullAccessHolderRows } from "simetra/compiler"
 import {
   APPLY_ADVISORY_LOCK,
-  desiredForApply,
   type RightsMaintenanceRequest,
 } from "simetra/schema"
 import { runTool } from "../cli/command"
-import { databaseResource } from "../io/database"
-import { readMetadataDir } from "../io/metadata-dir"
-import { invoke } from "../tools/invoke"
-import {
-  rightsMaintenanceTool,
-  type RightsMaintenanceData,
-} from "../tools/rights-maintenance-tool"
-import type { ToolResult } from "../tools/types"
+import { rightsMaintenanceTool } from "../tools/rights-maintenance-tool"
 import {
   GLOBAL_ADMIN_ID,
   MEMBER_FOCUS,
   MEMBER_REGIONS,
   MEMBER_TITLE,
   ORG_ADMIN_ID,
-  acceptDebt,
-  adminRoles,
-  memberScopedReferences,
-  policyDomain,
   signUp,
   testSuperuserUrl,
 } from "../../../simetra/test/support"
 import {
   heldResource,
-  inTarget,
   query,
-  seedMarker,
   seedUnderMaintenance,
-  throughPoolerAs,
   withCopy,
   withRuntimeLogin,
 } from "./support/db"
+
+import {
+  asOwner,
+  countOf,
+  doneOf,
+  ENV,
+  type Env,
+  globalAssignments,
+  heldEnv,
+  journalOf,
+  maintain,
+  ORG,
+  refusalOf,
+} from "./rights-maintenance.support"
 
 /**
  * Інструмент обслуговування прав (спека П4 §6.12, «Поза командами») над
@@ -55,109 +46,10 @@ import {
  * хешем моделі); глобальні сценарії — кожен у своїй копії: глобальний
  * `fullAccess`, раз записаний, не зняти навіть у режимі (`last-full-access`).
  * Сценарії рівня скоупу — на розгортанні, кожен у своїй організації.
+ * Спільна підготовка — `rights-maintenance.support.ts`; перше глобальне
+ * призначення мігратором через пулер Supavisor —
+ * `rights-maintenance.supabase.db.test.ts`.
  */
-
-const SIMETRA = resolve(__dirname, "../../../simetra")
-const ENV = "SIMETRA_DATABASE_URL"
-const ORG = "org"
-
-interface Env {
-  dir: string
-  url: string
-  model: CompiledModel
-}
-
-/** Корінь проєкту з `node_modules/simetra` і текою метаданих моделі файлу. */
-async function writeProject(): Promise<string> {
-  const root = await mkdtemp(join(tmpdir(), "simetra-rights-maintenance-"))
-  await mkdir(join(root, "node_modules"))
-  await symlink(SIMETRA, join(root, "node_modules", "simetra"), "dir")
-  const dir = join(root, "metadata")
-  const files = await acceptDebt(
-    policyDomain(adminRoles(), memberScopedReferences())
-  )
-  for (const [path, content] of files) {
-    await mkdir(dirname(join(dir, path)), { recursive: true })
-    await writeFile(join(dir, path), content)
-  }
-  return dir
-}
-
-/**
- * Ціль з бажаним станом застосування й marker з хешем моделі теки: інструмент
- * компілює ту саму теку, тож звірка хешу проходить. Тримається, доки `close`
- * не відпустить колбек `inTarget`. З'єднань до цілі не тримає: копія
- * `TEMPLATE` вимагає цілі без сесій.
- */
-const heldEnv = () =>
-  heldResource<Env>(async (use) => {
-    const dir = await writeProject()
-    try {
-      const compiled = await compile(await readMetadataDir(dir))
-      expect(compiled.diagnostics).toEqual([])
-      const model = compiled.model!
-      const desired = await desiredForApply(model)
-      await inTarget(desired.sql, desired.scope, async (url) => {
-        await asOwner(url, (owner) => seedMarker(owner, model.hash))
-        await use({ dir, url, model })
-      })
-    } finally {
-      await rm(dirname(dir), { recursive: true, force: true })
-    }
-  })
-
-/** Власник бази на час `fn`: сесія закривається й на шляху падіння. */
-async function asOwner<T>(
-  url: string,
-  fn: (owner: pg.Client) => Promise<T>
-): Promise<T> {
-  const owner = new pg.Client({ connectionString: url })
-  await owner.connect()
-  try {
-    return await fn(owner)
-  } finally {
-    await owner.end()
-  }
-}
-
-/** Інструмент так, як його запускає людина з `--yes`. */
-const maintain = (
-  dir: string,
-  url: string,
-  request: RightsMaintenanceRequest
-) =>
-  invoke(rightsMaintenanceTool, request, {
-    dir,
-    readOnly: false,
-    allowDatabaseWrite: true,
-    dryRun: false,
-    confirmed: true,
-    channel: "cli",
-    database: databaseResource({ [ENV]: url }, { url: ENV }),
-  })
-
-/** Відмова інструмента — код і параметри першої діагностики. */
-const refusalOf = (r: ToolResult) => {
-  expect(r.ok, JSON.stringify(r.diagnostics)).toBe(false)
-  const [d] = r.diagnostics
-  return { code: d?.code, params: d?.params }
-}
-
-const doneOf = (r: ToolResult): RightsMaintenanceData => {
-  expect(r.ok, JSON.stringify(r.diagnostics)).toBe(true)
-  return r.data as RightsMaintenanceData
-}
-
-const countOf = async (url: string, sql: string, params: unknown[] = []) =>
-  Number(
-    (
-      await query<{ n: string }>(
-        url,
-        `SELECT count(*) AS n FROM ${sql}`,
-        params
-      )
-    )[0]!.n
-  )
 
 describe("rights-maintenance tool over a real database", () => {
   const target = heldEnv()
@@ -193,17 +85,6 @@ describe("rights-maintenance tool over a real database", () => {
     return rows.map((r) => r.actor).sort()
   }
 
-  /** Записи журналу прав про рядок `row`. */
-  const journalOf = (url: string, row: string) =>
-    query(
-      url,
-      "SELECT actor, reason, action FROM simetra.rights_journal WHERE row_id = $1",
-      [row]
-    )
-
-  const globalAssignments = (url: string) =>
-    countOf(url, "public.global_role_assignments")
-
   /** Копія цілі: глобальний сценарій пише те, чого не зняти. */
   const inCopy = <T>(fn: (url: string) => Promise<T>) =>
     withCopy(`template "${new URL(env.url).pathname.slice(1)}"`, (url) =>
@@ -215,7 +96,7 @@ describe("rights-maintenance tool over a real database", () => {
     return values[0]!
   }
 
-  it("first global: busy under the apply lock, then through the pooler, then not-first from the CLI", async () => {
+  it("first global: busy under the apply lock, then done, then not-first from the CLI", async () => {
     await inCopy(async (url) => {
       const [user, other] = await asOwner(url, async (owner) => [
         await signUp(owner),
@@ -242,8 +123,8 @@ describe("rights-maintenance tool over a real database", () => {
       })
       expect(await globalAssignments(url)).toBe(0)
 
-      // Мігратор через Supavisor: `session_user` там теж власник функцій
-      const done = doneOf(await maintain(env.dir, throughPoolerAs(url), first))
+      // Замок звільнено: мігратор записує перше призначення
+      const done = doneOf(await maintain(env.dir, url, first))
       expect(
         await query(
           url,

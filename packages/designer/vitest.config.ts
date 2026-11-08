@@ -29,7 +29,12 @@ export default defineConfig({
         test: {
           name: "db",
           include: ["**/*.db.test.ts"],
-          exclude: ["**/node_modules/**", "**/dist/**"],
+          // Тести, прив'язані до Supabase, — окремий проєкт `db-supabase`
+          exclude: [
+            "**/node_modules/**",
+            "**/dist/**",
+            "**/*.supabase.db.test.ts",
+          ],
           // Усі тести б'ють в одну базу стеку
           fileParallelism: false,
           // Файл, що пройшов аудит ізоляції, вмикає `describe.concurrent`.
@@ -39,12 +44,29 @@ export default defineConfig({
           maxConcurrency: 4,
           // Стек один на машину: один прогін за раз і стек після прогону такий
           // самий, як до нього
-          globalSetup: ["../simetra/test/db/stack-guard.ts"],
+          globalSetup: ["../simetra/test/db/stack-guard.supabase.ts"],
           // Тег прогону в іменах тіней двигуна й облік їхніх провізій
           setupFiles: ["./src/__tests__/support/db-setup.ts"],
           // Тінь двигуна — це створення й наповнення окремої бази: на раннері CI
           // це довше за типові 5 с, а перерваний за тайм-аутом тест лишає
           // тінь, яку облік провізій назве лише наприкінці файлу.
+          testTimeout: 60_000,
+        },
+      },
+      {
+        extends: true,
+        test: {
+          // Кейси, яким потрібен саме стек Supabase (схеми `auth`, `storage`,
+          // `realtime`, ролі провайдера, пулер, пресет): лишаються на ньому й
+          // тоді, коли проєкт `db` перейде на стек postgres. Налаштування — ті
+          // самі, що в `db`, і з тих самих причин
+          name: "db-supabase",
+          include: ["**/*.supabase.db.test.ts"],
+          exclude: ["**/node_modules/**", "**/dist/**"],
+          fileParallelism: false,
+          maxConcurrency: 4,
+          globalSetup: ["../simetra/test/db/stack-guard.supabase.ts"],
+          setupFiles: ["./src/__tests__/support/db-setup.ts"],
           testTimeout: 60_000,
         },
       },

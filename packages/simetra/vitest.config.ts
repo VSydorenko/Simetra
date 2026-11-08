@@ -23,12 +23,42 @@ export default defineConfig({
         test: {
           name: "db",
           include: ["**/*.db.test.ts"],
-          exclude: ["**/node_modules/**", "**/dist/**"],
+          // Тести, прив'язані до Supabase, — окремий проєкт `db-supabase`
+          exclude: [
+            "**/node_modules/**",
+            "**/dist/**",
+            "**/*.supabase.db.test.ts",
+          ],
           // Усі тести б'ють в одну базу стеку
           fileParallelism: false,
           // Стек один на машину: один прогін за раз і стек після прогону такий
           // самий, як до нього
-          globalSetup: ["./test/db/stack-guard.ts"],
+          globalSetup: ["./test/db/stack-guard.supabase.ts"],
+        },
+      },
+      {
+        extends: true,
+        test: {
+          // Кейси, яким потрібен саме стек Supabase (схеми `auth`, `storage`,
+          // `realtime`, ролі провайдера, пулер, пресет): лишаються на ньому й
+          // тоді, коли проєкт `db` перейде на стек postgres
+          name: "db-supabase",
+          include: ["**/*.supabase.db.test.ts"],
+          exclude: ["**/node_modules/**", "**/dist/**"],
+          fileParallelism: false,
+          globalSetup: ["./test/db/stack-guard.supabase.ts"],
+        },
+      },
+      {
+        extends: true,
+        test: {
+          // Стек профілю postgres: поки на ньому лише базовий стан і
+          // переривання — решта DB-тестів іде на Supabase до перемикання
+          // типового профілю
+          name: "db-pg",
+          include: ["test/db/pgtap.db.test.ts", "test/db/interrupt.db.test.ts"],
+          fileParallelism: false,
+          globalSetup: ["./test/db/stack-guard.postgres.ts"],
         },
       },
       {
@@ -40,7 +70,7 @@ export default defineConfig({
           include: ["bench/**/*.bench.db.ts"],
           exclude: ["**/node_modules/**", "**/dist/**"],
           fileParallelism: false,
-          globalSetup: ["./test/db/stack-guard.ts"],
+          globalSetup: ["./test/db/stack-guard.supabase.ts"],
           // Засів і оператори на сотнях тисяч рядків — хвилини, не секунди
           testTimeout: 30 * 60_000,
           hookTimeout: 30 * 60_000,

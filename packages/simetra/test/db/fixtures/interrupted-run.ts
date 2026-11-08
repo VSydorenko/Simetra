@@ -3,18 +3,20 @@
 // який уже тримає зовнішній прогін, тож фікстура ставить той самий обробник
 // сигналу, що й `stack-guard`, і створює об'єкти так, як їх створюють тести.
 //
-// `node --import tsx interrupted-run.ts <тег>` — головний процес;
+// `node --import tsx interrupted-run.ts <тег>` — головний процес (на стеку
+// postgres ще й з контейнером і бакетом тегу);
 // `… --worker` — «воркер», що безперервно створює тегові бази.
 // `… <тег> --sleep <файл замка>` — головний процес, що тримає замок-файл
 // (обробник сигналу його видаляє), і `… --sleep-worker` — воркер посеред
 // довгого запиту, який сервер після смерті клієнта виконує й далі.
 import { fork } from "node:child_process"
-import { writeFileSync, rmSync } from "node:fs"
+import { readFileSync, writeFileSync, rmSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import pg from "pg"
 import {
   enterRun,
   isRunTag,
+  runTag,
   SHADOW_PREFIX,
   shadowSuffix,
   testDatabaseName,
@@ -22,12 +24,33 @@ import {
   testRoleName,
   testSuperuserUrl,
 } from "../connection"
+import { createRunBucket, nodeExec, runContainerLabels } from "../external"
 import { installInterruptCleanup } from "../interrupt"
+import { testProvider, testStack } from "../profile"
 
 // Запобіжник, якщо тест не надішле сигналу (упав чи сам був убитий): фікстура
 // перериває себе тим самим шляхом, тож не висить і не лишає тегових об'єктів
 const SELF_INTERRUPT_MS = 120_000
 const WORKER_PAUSE_MS = 200
+
+const COMPOSE_FILE = fileURLToPath(
+  new URL("../../../../../docker/postgres-stack/compose.yaml", import.meta.url)
+)
+
+// Образ сервісу postgres — з compose-файла стека, єдиного місця його тегу:
+// тег, продубльований тут, розійшовся б із ним на першому оновленні
+function stackPostgresImage(): string {
+  const image = /^ {2}postgres:\n(?: {4}.*\n)*? {4}image: (\S+)$/m.exec(
+    readFileSync(COMPOSE_FILE, "utf8")
+  )?.[1]
+  if (image === undefined)
+    throw new Error(`No image of service postgres in ${COMPOSE_FILE}`)
+  return image
+}
+
+function interruptContainerName(tag: string): string {
+  return `simetra-run-${tag}-interrupt`
+}
 
 // Довший за будь-яке очікування тесту: запит, що завершився сам, нічого б не
 // довів про сторожа
@@ -76,6 +99,30 @@ async function createObjects(): Promise<void> {
     await client.query(`CREATE DATABASE ${id(SHADOW_PREFIX + shadowSuffix())}`)
     await client.query(`CREATE ROLE ${id(testRoleName("interrupt_owner"))}`)
   })
+  // На стеку postgres прогін має й зовнішні ресурси: прибиральник на сигналі
+  // мусить видалити і їх. `ready` друкується лише після обох
+  if (testProvider() === "postgres") {
+    const tag = runTag()
+    await nodeExec(
+      "docker",
+      [
+        "run",
+        "-d",
+        "--name",
+        interruptContainerName(tag),
+        ...runContainerLabels(tag, "postgres"),
+        // Образ локальний (його збирає `db:pg:start`): без нього прогін має
+        // впасти, а не тягнути щось із реєстру
+        "--pull",
+        "never",
+        stackPostgresImage(),
+        "sleep",
+        "infinity",
+      ],
+      { timeoutMs: 30_000 }
+    )
+    await createRunBucket(tag, testStack(), fetch)
+  }
 }
 
 async function worker(): Promise<void> {

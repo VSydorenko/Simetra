@@ -2,47 +2,38 @@ import { randomUUID } from "node:crypto"
 import pg from "pg"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import {
-  buildRuntimeCatalog,
-  compile,
-  type CompiledModel,
-} from "simetra/compiler"
-import {
-  PLATFORM_ROLES,
   SESSION_CLAIMS_SETTING,
   defineObjectModule,
-  type CommandError,
   type Filter,
-  type MetadataRef,
   type ObjectModule,
   type Operation,
   type OrderBy,
-  type RuntimeCatalog,
-  type SessionClaims,
   CommandFailure,
 } from "simetra/model"
-import { desiredForApply } from "simetra/schema"
 import {
-  createCommandRuntime,
   fromPgPool,
-  readRoleOf,
   type CommandDatabase,
   type CommandRuntime,
   type CommandRuntimeOptions,
 } from "simetra/server"
-import {
-  GAUGE_TABLE,
-  policyDomain,
-  runtimeValuesLayer,
-} from "../../../simetra/test/support"
-import {
-  heldResource,
-  inTarget,
-  seedMarker,
-  seedRuntimeActor,
-  throughPoolerAs,
-  withRuntimeLogin,
-} from "./support/db"
+import { GAUGE_TABLE } from "../../../simetra/test/support"
+import { seedMarker } from "./support/db"
 
+import {
+  AMOUNT,
+  BIG,
+  type Env,
+  GAUGE,
+  GAUGE_LOG,
+  gaugeCreate,
+  header,
+  heldEnv,
+  MODULE_KEY,
+  refusal,
+  REQUEST_ROLE,
+  runtimeOver,
+  sessionOf,
+} from "./command-runtime.support"
 /**
  * Рантайм команд (`simetra/server`) над тінню рушія: справжній `pg.Pool`
  * тегованої ролі входу (форма `simetra_runtime`: членства лише з `SET`) і
@@ -50,142 +41,10 @@ import {
  * ядра й стан сесії між транзакціями вирішує Postgres — порт-фейк unit-тестів
  * T3 цього не доводить. Засів закомічений: кожна команда — окрема транзакція
  * окремого з'єднання пулу. Ціль — одна на файл (одне розгортання), кейси йдуть
- * послідовно й беруть свіжі рядки.
+ * послідовно й беруть свіжі рядки. Спільна підготовка —
+ * `command-runtime.support.ts`; кейси пулера Supavisor —
+ * `command-runtime.supabase.db.test.ts`.
  */
-
-const GAUGE: MetadataRef = { kind: "Catalog", name: "Gauge" }
-const GAUGE_LOG: MetadataRef = { kind: "Catalog", name: "GaugeLog" }
-const MODULE_KEY = "Catalog.Gauge"
-const REQUEST_ROLE = readRoleOf("supabase")!
-
-/** Більше за 2^53: `number` такого цілого не втримав би. */
-const BIG = 2n ** 53n + 1n
-/** 20 цифр цілої частини й 10 дробової — межа `Numeric(30,10)`. */
-const AMOUNT = "12345678901234567890.0123456789"
-
-interface Actor {
-  org: string
-  user: string
-  session: SessionClaims
-}
-
-interface Env {
-  model: CompiledModel
-  catalog: RuntimeCatalog
-  owner: pg.Client
-  /** Роль входу з членствами в ролі команд і ролі запиту. */
-  login: string
-  /** Роль входу лише з членством у ролі команд. */
-  commandOnly: string
-  direct: pg.Pool
-  pooled: pg.Pool
-  me: Actor
-  other: Actor
-  region: string
-  /** Рядок `Gauge` чужого тенанта. */
-  foreign: string
-}
-
-const sessionOf = (user: string): SessionClaims => ({
-  sub: user,
-  role: REQUEST_ROLE,
-})
-
-/** Актор фікстури з сесією запиту від його користувача. */
-async function seedActor(owner: pg.Client): Promise<Actor> {
-  const actor = await seedRuntimeActor(owner)
-  return { ...actor, session: sessionOf(actor.user) }
-}
-
-async function seedRow(
-  owner: pg.Client,
-  table: string,
-  org: string
-): Promise<string> {
-  const id = randomUUID()
-  await owner.query(
-    `INSERT INTO public.${table} (id, org_id) VALUES ($1, $2)`,
-    [id, org]
-  )
-  return id
-}
-
-/**
- * Тінь з бажаним станом застосування (модель і `simetra.marker`), засів і дві
- * ролі входу; тримається, доки `close` не відпустить колбек `inTarget`.
- */
-const heldEnv = () =>
-  heldResource<Env>(async (use) => {
-    const result = await compile(policyDomain(runtimeValuesLayer()))
-    expect(result.diagnostics).toEqual([])
-    const model = result.model!
-    const desired = await desiredForApply(model)
-    await inTarget(desired.sql, desired.scope, async (url) => {
-      const owner = new pg.Client({ connectionString: url })
-      await owner.connect()
-      try {
-        await seedMarker(owner, model.hash)
-        const me = await seedActor(owner)
-        const other = await seedActor(owner)
-        const region = await seedRow(owner, "region", me.org)
-        const foreign = await seedRow(owner, GAUGE_TABLE, other.org)
-        await withRuntimeLogin(
-          url,
-          [PLATFORM_ROLES.command, REQUEST_ROLE],
-          (login) =>
-            withRuntimeLogin(
-              url,
-              [PLATFORM_ROLES.command],
-              async (commandOnly) => {
-                const direct = new pg.Pool({ connectionString: login })
-                const pooled = new pg.Pool({
-                  connectionString: throughPoolerAs(login),
-                })
-                try {
-                  await use({
-                    model,
-                    catalog: buildRuntimeCatalog(model),
-                    owner,
-                    login,
-                    commandOnly,
-                    direct,
-                    pooled,
-                    me,
-                    other,
-                    region,
-                    foreign,
-                  })
-                } finally {
-                  await direct.end()
-                  await pooled.end()
-                }
-              },
-              "runtime_cmd"
-            )
-        )
-      } finally {
-        await owner.end()
-      }
-    })
-  })
-
-/** Відмова команди як `CommandError`; успіх — помилка тесту. */
-async function refusal(work: Promise<unknown>): Promise<CommandError> {
-  try {
-    await work
-  } catch (error) {
-    if (error instanceof CommandFailure) return error.error
-    throw error
-  }
-  throw new Error("the command succeeded")
-}
-
-/** Реквізити шапки результату: читання без `tabularSections` ТЧ не повертає. */
-function header(row: Record<string, unknown>): Record<string, unknown> {
-  return Object.fromEntries(
-    Object.entries(row).filter(([k]) => k !== "tabularSections")
-  )
-}
 
 describe("command runtime over the engine target", () => {
   const target = heldEnv()
@@ -199,8 +58,7 @@ describe("command runtime over the engine target", () => {
   const runtime = (
     database: CommandDatabase,
     options: Partial<CommandRuntimeOptions> = {}
-  ): Promise<CommandRuntime> =>
-    createCommandRuntime({ database, catalog: env.catalog, ...options })
+  ): Promise<CommandRuntime> => runtimeOver(env, database, options)
 
   const exists = async (table: string, id: string): Promise<boolean> =>
     (await env.owner.query(`SELECT 1 FROM public.${table} WHERE id = $1`, [id]))
@@ -216,12 +74,7 @@ describe("command runtime over the engine target", () => {
     ).rows
 
   const createGauge = (id: string, extra: Record<string, unknown> = {}) =>
-    ({
-      action: "create",
-      object: GAUGE,
-      id,
-      values: { org: env.me.org, ...extra },
-    }) satisfies Operation
+    gaugeCreate(env, id, extra)
 
   // Рядок ядра й рядок читання — з бази, через той самий `decodeRow`; збіг
   // значень без втрат (Numeric на 20 цифр, BigInt понад 2^53, Json, Bytes,
@@ -616,143 +469,4 @@ describe("command runtime over the engine target", () => {
       await pool.end()
     }
   })
-
-  // Пулер у режимі транзакцій міняє серверне з'єднання між транзакціями:
-  // той самий користувач і ті самі відмови доводять, що рантайм не спирається
-  // на сесійний стан (інваріант 7, спека П4 §7.3).
-  it("through the pooler: the same current user and the same refusals", async () => {
-    const users: string[] = []
-    const module = defineObjectModule({
-      beforeWrite: ({ ctx, draft }) => {
-        users.push(ctx.user)
-        return draft
-      },
-    })
-    const options = {
-      objectModules: { [MODULE_KEY]: module as ObjectModule<object> },
-    }
-    const direct = await runtime(fromPgPool(env.direct), options)
-    const pooled = await runtime(fromPgPool(env.pooled), options)
-    const id = randomUUID()
-    await direct.run(env.me.session, createGauge(randomUUID()))
-    const created = await pooled.run(env.me.session, createGauge(id))
-    expect(users).toEqual([env.me.user, env.me.user])
-    expect(await pooled.read(env.me.session, { object: GAUGE, id })).toEqual({
-      rows: [header(created.rows[0]!)],
-    })
-    const update: Operation = {
-      action: "update",
-      object: GAUGE,
-      id: env.foreign,
-      expectedVersion: 1,
-      values: { amount: "1" },
-    }
-    expect(await refusal(pooled.run(env.me.session, update))).toEqual(
-      await refusal(direct.run(env.me.session, update))
-    )
-    expect(
-      await refusal(pooled.run(sessionOf(randomUUID()), createGauge(id)))
-    ).toEqual({ code: "command.unauthenticated" })
-  })
-
-  // Роль і claims команди — `SET LOCAL` і `set_config(…, true)`: після
-  // `COMMIT` серверне з'єднання пулера не несе їх у чужу транзакцію. Бекенд
-  // команди записує обгортка порту перед `COMMIT`; наступні транзакції того
-  // самого клієнта пулера шукають саме його (інваріант 7).
-  it("through the pooler: the next transaction on the same backend sees neither the role nor the claims", async () => {
-    const pool = new pg.Pool({
-      connectionString: throughPoolerAs(env.login),
-      max: 1,
-    })
-    try {
-      const pids: string[] = []
-      const rt = await runtime(withBackendPid(fromPgPool(pool), pids))
-      pids.length = 0
-      await rt.run(env.me.session, createGauge(randomUUID()))
-      expect(pids).toHaveLength(1)
-      const state = await nextOnBackend(pool, pids[0]!)
-      expect(state.user).toBe(new URL(env.login).username)
-      // Раз поставлений у сесії GUC лишається визначеним: після `COMMIT` це
-      // `''`, а не `NULL` (звіт Задачі 0).
-      expect([null, ""]).toContain(state.claims)
-      expect(state.currentUserId).toBeNull()
-    } finally {
-      await pool.end()
-    }
-  })
 })
-
-/** Порт, що перед `COMMIT` записує бекенд транзакції. */
-function withBackendPid(
-  database: CommandDatabase,
-  pids: string[]
-): CommandDatabase {
-  return {
-    async connect() {
-      const client = await database.connect()
-      return {
-        async query(text, params) {
-          if (text === "COMMIT") {
-            const { rows } = await client.query(
-              "SELECT pg_backend_pid()::text AS pid",
-              []
-            )
-            pids.push(rows[0]!.pid as string)
-          }
-          return client.query(text, params)
-        },
-        release: (destroy) => client.release(destroy),
-      }
-    },
-  }
-}
-
-/**
- * Стан сесії в транзакції, яку пулер дав бекенду `pid`: роль, claims і
- * користувач платформи (функцію виконує роль команд — `SET LOCAL ROLE` не
- * змінює claims).
- */
-async function nextOnBackend(
-  pool: pg.Pool,
-  pid: string
-): Promise<{
-  user: string
-  claims: string | null
-  currentUserId: string | null
-}> {
-  for (let attempt = 0; attempt < 100; attempt++) {
-    const client = await pool.connect()
-    try {
-      await client.query("BEGIN")
-      const { rows } = await client.query<{
-        pid: string
-        user: string
-        claims: string | null
-      }>(
-        "SELECT pg_backend_pid()::text AS pid, current_user AS user, current_setting($1, true) AS claims",
-        [SESSION_CLAIMS_SETTING]
-      )
-      const [state] = rows
-      if (state!.pid !== pid) {
-        await client.query("COMMIT")
-        continue
-      }
-      await client.query(`SET LOCAL ROLE ${PLATFORM_ROLES.command}`)
-      const { rows: users } = await client.query<{ id: string | null }>(
-        "SELECT simetra.current_user_id() AS id"
-      )
-      await client.query("COMMIT")
-      return {
-        user: state!.user,
-        claims: state!.claims,
-        currentUserId: users[0]!.id,
-      }
-    } catch (error) {
-      await client.query("ROLLBACK").catch(() => undefined)
-      throw error
-    } finally {
-      client.release()
-    }
-  }
-  throw new Error(`the pooler never handed out backend ${pid} again`)
-}

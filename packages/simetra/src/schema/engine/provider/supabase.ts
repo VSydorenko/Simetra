@@ -34,7 +34,7 @@ export const SUPABASE_EXTENSIONS: readonly string[] = [
  * копією ACL цілі (спека промоції §9.9): інакше відмінність цілі від образу
  * провайдера зникла б з обох боків порівняння. Привілеї — у верхньому
  * регістрі, як у payload двигуна. Рівність образу локального стеку тримає
- * контрактний тест `provider-preset.db.test.ts`.
+ * контрактний тест `provider-preset.supabase.db.test.ts`.
  */
 export const SUPABASE_PUBLIC_SCHEMA_GRANTS: readonly {
   grantee: string
