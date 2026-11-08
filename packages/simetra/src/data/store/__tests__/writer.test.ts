@@ -576,6 +576,32 @@ describe("purge", () => {
     expect(stateOf(view.getSnapshot(), 1)).toBe("removed")
   })
 
+  it("does not purge the card or section of an accessible owner whose unknown-scope lines a purge of another scope wipes; the section re-reads", async () => {
+    const { core, fake } = setup()
+    seed(fake, 1, 1)
+    fake.setLines(TASK, key(1), "lines", lines)
+    const lineView = core.view(section(1))
+    watch(lineView)
+    await settle()
+    expect(sectionsOf(core, 1)?.scope).toBe("unknown")
+    const cardView = core.view(card(1))
+    watch(cardView)
+    await settle()
+    expect(cardView.getSnapshot().status).toBe("ready")
+    const sectionReads = fake.log.filter(isSection).length
+    write(core, (w) => w.purge(TASK, { scope: T }))
+    await settle()
+    expect(cardView.getSnapshot()).toMatchObject({
+      status: "ready",
+      rows: [{ key: key(1) }],
+    })
+    expect(lineView.getSnapshot().status).not.toBe("purged")
+    expect(fake.log.filter(isSection).length).toBe(sectionReads + 1)
+    expect(lineView.getSnapshot().section).toMatchObject({
+      lines: [{ key: key(901) }],
+    })
+  })
+
   it("marks the section view of an owner without a header purged when its unknown-scope lines are wiped", async () => {
     const { core, fake } = setup()
     seed(fake, 1, 1)

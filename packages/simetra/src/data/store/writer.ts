@@ -173,6 +173,9 @@ export function createWriter(ctx: WriterContext, scope: Scope): Writer {
       const o = ctx.objectOf(object)
       let dropped: Key[]
       let purged: Key[]
+      // Власники, чиї рядки ТЧ прибрано, хоча їхня шапка доступна: вигляд ТЧ
+      // не `purged`, а перечитує рядки (ревізія шапки змінюється нижче).
+      let cleared: Key[] = []
       if ("keys" in target) {
         dropped = o.rows.purgeKeys(scope, target.keys)
         purged = [...target.keys]
@@ -180,15 +183,19 @@ export function createWriter(ctx: WriterContext, scope: Scope): Writer {
         // Пари ховає лише `purgeScope` (через `Epochs.buryPair`): власник ТЧ
         // з невідомим скоупом перевіряється за останнім похованням пари.
         dropped = o.rows.purgeScope(scope, target.scope)
-        // Власники з невідомим скоупом, чиї рядки ТЧ прибрано, — теж
-        // прибрані для своїх виглядів ТЧ.
+        // Рядки ТЧ з невідомим скоупом прибираються на будь-якому purge
+        // скоупу. Прибраним для своїх виглядів власник стає лише тоді, коли
+        // шапки в сховищі немає (доступ не підтверджено); шапка в іншому
+        // скоупі доступна — її картка й ТЧ не втрачають доступу хибно.
         const wiped = o.sections.purgeScope(scope, target.scope)
-        purged = [...new Set([...dropped, ...wiped])]
+        const headerless = wiped.filter((key) => o.rows.get(key) === undefined)
+        cleared = wiped.filter((key) => o.rows.get(key) !== undefined)
+        purged = [...new Set([...dropped, ...headerless])]
       }
       // ТЧ записано зі скоупом шапки на мить запису: шапка, що відтоді
       // переїхала в прибраний скоуп, лишила б рядки ТЧ без `clearOwner`.
-      for (const key of purged) ops.clearOwner(scope, o, key)
-      for (const key of dropped) rowViews.touch(o.name, key)
+      for (const key of [...purged, ...cleared]) ops.clearOwner(scope, o, key)
+      for (const key of [...dropped, ...cleared]) rowViews.touch(o.name, key)
       forget(ctx, scope, o, new Set(dropped), new Set(purged))
       ctx.invalidateTail(o)
       ctx.purges.set(o.name, (ctx.purges.get(o.name) ?? 0) + 1)
