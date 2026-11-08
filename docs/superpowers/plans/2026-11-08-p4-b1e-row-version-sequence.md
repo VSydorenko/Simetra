@@ -79,6 +79,8 @@ libpg-query, pg-delta (двигун схеми в `@simetrajs/designer`).
 `synchronous_commit = off` після `touch` (лише попередження
 `sql.debt-session-write`).
 
+**Рішення архітекторки 2026-11-08:** Р1–Р11 погоджено. Версії між епохами й генерована колонка з копії носія — обсяг B1c. Побічний канал — прийнятий залишковий ризик (платформна Р24). Два залишки, яких база не тримає (вікно між відновленням лише даних і скиданням; одиниця боргу з `synchronous_commit = off`), записуються в коментар `reset_row_version_epoch()` і в скіл споживача (Task 3, Task 8) — цього достатньо.
+
 ## Review Focus
 
 1. **База з даними й версіями `+1`** (кожна наявна база): перше
@@ -139,7 +141,7 @@ libpg-query, pg-delta (двигун схеми в `@simetrajs/designer`).
   - `simetra.reset_row_version_epoch() RETURNS void LANGUAGE plpgsql SECURITY INVOKER SET search_path = ''` — засів над усіма таблицями механіки моделі за правилом Р6 і `UPDATE simetra.version_epoch SET epoch = gen_random_uuid()` (вставка, коли рядка немає); без `EXECUTE` для будь-якої ролі, крім власника; перелік таблиць рендериться з моделі в кожному застосуванні;
   - `rowVersionEpoch: boolean` у варіанті `applied` об'єднання `ApplyState` (для `fresh` — `false`); `renderApplyState` бере `Pick<CompiledModel, "project" | "contracts" | "physical">`, бо тіло `reset_row_version_epoch()` перелічує таблиці механіки; `EXECUTE` на `reset_row_version_epoch()` явно відкликано `executeGrants(sig, [], provider)`.
 
-- [ ] **Step 1: Unit `state.test.ts`.** Таблиця й обидві функції: властивості й гранти (`row_version_epoch` — лише ролі команд; `reset_row_version_epoch` — нікому); розібране тіло `row_version_epoch` має `pg_is_in_recovery()` і `substr(…, 1, 8)`; `applyStateOf` на базі без жодного застосування з новими об'єктами — `absent`, з ними — їхні ідентичності в `owns`.
+- [ ] **Step 1: Unit `state.test.ts`.** (Коментар над `reset_row_version_epoch()` називає обидва залишки, яких база не тримає: вікно до виклику після відновлення лише даних і одиницю боргу з `synchronous_commit = off`.) Таблиця й обидві функції: властивості й гранти (`row_version_epoch` — лише ролі команд; `reset_row_version_epoch` — нікому); розібране тіло `row_version_epoch` має `pg_is_in_recovery()` і `substr(…, 1, 8)`; `applyStateOf` на базі без жодного застосування з новими об'єктами — `absent`, з ними — їхні ідентичності в `owns`.
 - [ ] **Step 2: Червоний → реалізація → зелений.** `pnpm --filter simetra test state`.
 - [ ] **Step 3: DB `row-version.db.test.ts`** (причина DB: `pg_control_*`, WAL і привілеї виконує Postgres; розгортання — `renderDesiredState` + `renderApplyState`, без двигуна): без рядка — `NULL`; з рядком — 64 hex-символи; під роллю команд виконується, під `PROVIDER_API_ROLES[provider].user` — `42501`; сценарій відновлення лише даних: записати рядкам версії, відкотити послідовність `setval` нижче за них, лишити UUID — епоха та сама; `reset_row_version_epoch()` — епоха інша, наступне значення послідовності більше за найбільшу версію; під роллю команд `reset_row_version_epoch()` — `42501`.
 - [ ] **Step 4: Commit.** `feat(schema): епоха версій бази й скидання після відновлення даних`
@@ -223,6 +225,7 @@ libpg-query, pg-delta (двигун схеми в `@simetrajs/designer`).
 - [ ] **Step 1: Спека промоції.** §7.2: «серед вимкнених — і тригери механіки … `version` і `updated_at` записаних рядків не змінюються» → «`updated_at` не змінюється; `version` таблиці, що вже має механіку, крок даних пише з `simetra.row_version`: після П4 відкриті клієнти тримають рядки за версією (П4-B, інваріант 27); прийнята таблиця отримує механіку кроками двигуна з `DEFAULT 1` і засівом послідовності»; §9.2: «вставка = 1, оновлення = +1» → «вставка — `nextval`, оновлення — `GREATEST(nextval, OLD.version + 1)` послідовності `simetra.row_version`».
 - [ ] **Step 2: П4-B §4.1** — склад епохи за Р4; лише primary; відновлення лише даних — `simetra.reset_row_version_epoch()`; синхронний коміт транзакцій з механікою.
 - [ ] **Step 3: Спека системної схеми §3** — `row_version`, `version_epoch`, `row_version_epoch()`, `reset_row_version_epoch()`, налаштування `simetra.row_version_<oid>`.
+- [ ] **Step 3a: Платформна спека Р24** — речення про побічний канал уже внесено разом із планом (рішення архітекторки 2026-11-08); перевірити, що воно на місці.
 - [ ] **Step 4: Скіл споживача** — епоха змінюється сама на рестарті й відновленні знімка чи на мить у минулому; після відновлення лише даних у ту саму базу й після переносу бази логічною реплікацією власник схеми кличе `SELECT simetra.reset_row_version_epoch()` при зупиненому застосунку, до першого читання.
 - [ ] **Step 5: Гейти.** `pnpm format:check && pnpm lint && pnpm typecheck && pnpm test`, `pnpm metadata:check`, `python3 scripts/check-doc-anchors.py`, `pnpm test:db`.
 - [ ] **Step 6: Commit.** `docs(spec): промоція, системна схема й епоха версій під B1e`
