@@ -261,7 +261,10 @@ Centrifugo v6 (образ, закріплений у `docker/postgres-stack/comp
   - з `INHERIT TRUE` — відмова за наявним правилом пари;
   - `simetra_runtime` член `simetra_signal_consumer` — `member-of:simetra_signal_consumer`
     (дозволені батьки — свої для кожної ролі входу, ПГ-2a);
-  - `simetra_signal_consumer` член `simetra_command` чи ролі запиту — відмова.
+  - `simetra_signal_consumer` член `simetra_command` чи ролі запиту — відмова;
+  - членства всередину: `GRANT simetra_signal_consumer TO authenticated`
+    (чи сторонній ролі) і `GRANT simetra_signals TO authenticated` — відмова
+    `member:<роль>` (роль запиту інакше читала б outbox усіх тенантів).
 - [ ] **Step 2: failing DB tests** (обидва стеки, теговані імена):
   - після `roles` атрибути, `pg_auth_members` і `pg_db_role_setting` — за
     §3.1;
@@ -307,7 +310,8 @@ Centrifugo v6 (образ, закріплений у `docker/postgres-stack/comp
      (Р4). Функція `SECURITY INVOKER`, `SET search_path = ''`, без `EXECUTE`
      для `PUBLIC`;
   3. `simetra.signal_outbox_notify()` + тригер `AFTER INSERT … FOR EACH STATEMENT`:
-     `pg_notify(SIGNAL_NOTIFY_CHANNEL, '0')`;
+     `pg_notify(SIGNAL_NOTIFY_CHANNEL, '0')`; як і штамп — без `EXECUTE` для
+     `PUBLIC` (`executeGrants(…, [])`);
   4. `ENABLE ROW LEVEL SECURITY` без `FORCE`;
   5. гранти:
      - `REVOKE ALL` на таблицю й послідовність від `PUBLIC` і ролей API
@@ -642,7 +646,11 @@ Centrifugo v6 (образ, закріплений у `docker/postgres-stack/comp
   - `data` рівно `{ id, object, op, keys, row_ver }`;
   - жодного рядка після `ROLLBACK` і після невдалої спроби `40001`;
   - зміна кореня — рядок у його канал;
-  - створення кореня з `rootCreator` — рядок (версія з прочитаного рядка);
+  - створення кореня з `rootCreator` — рядок (версія з прочитаного рядка).
+    Режим відправки судить новий корінь через `scopeSetCall` після функції
+    гранту в тій самій транзакції. Якщо множина скоупів береться зі знімка
+    актора на початок транзакції (Права-3) і нового кореня не бачить, кейс
+    червоніє — тоді до архітекторки з фактом, без обходу;
     у моделі оператора — рядка немає й команда успішна;
   - писар лише з контейнерною роллю — рядок є;
   - `delete` з версією «до»;
@@ -843,7 +851,12 @@ Centrifugo v6 (образ, закріплений у `docker/postgres-stack/comp
   - `function centrifugoConfigRefusals(config: unknown): string[]` —
     **білий список**, а не перелік заборон. Точний набір ключів верхнього
     рівня (`client`, `channel`, `consumers`, `http_api`, `health`, `log`) і
-    `client.token` (`jwks_public_endpoint`, `audience`, `issuer`). Змінні —
+    точний набір ключів **кожного** вкладеного об'єкта: `client`,
+    `client.token` (`jwks_public_endpoint`, `audience`, `issuer`), `channel`,
+    кожен простір (`name`, `history_size`, `history_ttl`, `history_meta_ttl`,
+    `force_recovery`), кожен споживач і його `postgresql`, `http_api`,
+    `health`, `log`. `channel.without_namespace` — порожній об'єкт.
+    `http_server` у виході генератора відсутній: його накладає лише стенд (Р6). Змінні —
     лише origin, issuer, `jwksUrl` і DSN. `allowed_origins` без `*`.
     `jwksUrl` — `https:`, або `http:` на хост `127.0.0.1`, `localhost`,
     `host.docker.internal` чи однослівне ім'я сервісу compose (без крапки)
@@ -876,7 +889,9 @@ Centrifugo v6 (образ, закріплений у `docker/postgres-stack/comp
     `insecure`, `http_api.disabled: false`, без `audience`,
     `client.subscription_token`, `client.token.hmac_secret_key`,
     `audience_regex`, `allowed_origins: ["*"]`,
-    `allow_anonymous_connect_without_token`, `grpc_api`, `admin`, `jwksUrl`
+    `allow_anonymous_connect_without_token`, `grpc_api`, `admin`,
+    `allow_history_for_client` і `allow_presence_for_client` у просторі,
+    будь-який ключ у `without_namespace`, `http_server`, `jwksUrl`
     `http://` на зовнішній хост;
   - `audience` = `centrifugo:<projectName>`;
   - тест дрейфу файлів стека.
