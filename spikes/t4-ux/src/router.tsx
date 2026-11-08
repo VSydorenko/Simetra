@@ -1,12 +1,12 @@
 // Фабрика роутера викликається на кожен SSR-запит і один раз на клієнті:
 // тримач рантайму (і ядро) живе в ній, а не на рівні модуля — знімок одного
 // користувача не може потрапити іншому через спільний модуль.
-import { createRouter } from '@tanstack/react-router'
-import type { CoreSnapshot } from './core'
-import { routeTree } from './routeTree.gen'
-import { RuntimeProvider } from './t4/hooks'
-import { RuntimeHolder } from './t4/runtime'
-import { CATALOG_HASH, snapshotMeta, type SnapshotMeta } from './t4/ssr'
+import { createRouter } from "@tanstack/react-router"
+import type { CoreSnapshot } from "./core"
+import { routeTree } from "./routeTree.gen"
+import { RuntimeProvider } from "./t4/hooks"
+import { RuntimeHolder } from "./t4/runtime"
+import { CATALOG_HASH, snapshotMeta, type SnapshotMeta } from "./t4/ssr"
 
 export interface RouterContext {
   holder: RuntimeHolder
@@ -24,10 +24,17 @@ export function getRouter() {
     defaultPreload: false,
     // Loader над ядром миттєвий, коли дані вже є; stale-while-revalidate
     // роутера показав би звільнений вигляд (порожній) до preload — тому blocking.
-    defaultStaleReloadMode: 'blocking',
+    defaultStaleReloadMode: "blocking",
     dehydrate: () => {
       const core = holder.core
-      return { t4: core ? { meta: snapshotMeta(core.subject, holder.rightsVersion), snap: core.dehydrate() } : null }
+      return {
+        t4: core
+          ? {
+              meta: snapshotMeta(core.subject, holder.rightsVersion),
+              snap: core.dehydrate(),
+            }
+          : null,
+      }
     },
     hydrate: (d: { t4: { meta: SnapshotMeta; snap: CoreSnapshot } | null }) => {
       // Ядро гідрується до першого клієнтського рендера (router-core
@@ -38,14 +45,16 @@ export function getRouter() {
       holder.ensure(d.t4.snap.subject)?.hydrate(d.t4.snap)
       holder.snapshotMeta = d.t4.meta
     },
-    Wrap: ({ children }) => <RuntimeProvider holder={holder}>{children}</RuntimeProvider>,
+    Wrap: ({ children }) => (
+      <RuntimeProvider holder={holder}>{children}</RuntimeProvider>
+    ),
   })
   return router
 }
 
 export { CATALOG_HASH }
 
-declare module '@tanstack/react-router' {
+declare module "@tanstack/react-router" {
   interface Register {
     router: ReturnType<typeof getRouter>
   }

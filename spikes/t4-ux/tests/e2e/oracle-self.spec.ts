@@ -19,10 +19,9 @@ const cases: Array<{ brk: string; flow: Flow; expect: ViolationKind[]; what: str
   { brk: 'keepcore', flow: (p, o, x) => f.switchUser(p, o, x), expect: ['forbidden-text'], what: 'старе ядро після зміни суб\'єкта' },
 ]
 
-// lazyshift потребує лінивої фази картки: ядро 958e32f2 її не дає (вигляд
-// `card` порожній до читання), тож ця мутація вимірюється лише на фейку
-// (коміт 4fccfcc1) — до виправлення вигляду картки в спайку 1.
-const NEEDS_CARD_FROM_STORE = new Set(['lazyshift'])
+// lazyshift потребує лінивої фази картки: з ядра ac447962 вигляд `card`
+// бере рядок зі сховища одразу, ліниві поля доливаються.
+const NEEDS_CARD_FROM_STORE = new Set<string>()
 
 for (const c of cases)
   (NEEDS_CARD_FROM_STORE.has(c.brk) ? test.fixme : test)(`оракул ловить: ${c.brk} — ${c.what}`, async ({ page, oracle }) => {

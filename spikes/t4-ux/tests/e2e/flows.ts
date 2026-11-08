@@ -24,7 +24,7 @@ export async function ssrEntry(page: Page, oracle: Oracle, breaks?: string) {
   const html = await resp!.text()
   await page.waitForFunction(() => (window as any).__t4Commits?.some((c: any) => c.id === 'list'))
   await settle(page, 1500)
-  return { html, requests: fns.data(), calls: fns.calls, commits: await oracle.regionUpdatesAfterHydration('list') }
+  return { html, requests: fns.data(), calls: fns.calls, commits: await oracle.regionUpdatesAfterHydration('rows'), listCommits: await oracle.regionUpdatesAfterHydration('list') }
 }
 
 /** Сценарій 2: список → картка → список (клієнтська навігація). */

@@ -2,7 +2,8 @@ import * as f from './flows'
 import { expect, test } from './harness'
 
 test('1. перший вхід з SSR: HTML = перший клієнтський кадр, без скелета, без commit-ів і запитів', async ({ page, oracle }) => {
-  const { html, requests, calls, commits } = await f.ssrEntry(page, oracle)
+  const { html, requests, calls, commits, listCommits } = await f.ssrEntry(page, oracle)
+  test.info().annotations.push({ type: 'list-region-commits (stream count boundary)', description: String(listCommits.updates) })
   expect(calls.filter((c) => c === 'getVersion'), 'одна звірка знімка (контракт version)').toHaveLength(1)
   expect(html).toContain('data-row-key')
   const log = await oracle.log()
@@ -11,7 +12,7 @@ test('1. перший вхід з SSR: HTML = перший клієнтськи�
   expect(list.rows.length).toBeGreaterThan(10)
   expect(requests, 'жодного запиту даних після гідратації').toEqual([])
   test.info().annotations.push({ type: 'shell-commits', description: String(commits.shellUpdates) })
-  expect(commits.updates, 'жодного commit-у зони даних після гідратації').toBe(0)
+  expect(commits.updates, 'жодного commit-у рядків після гідратації').toBe(0)
   await oracle.expectClean()
 })
 

@@ -64,6 +64,10 @@
       const app = document.getElementById('app')
       for (const r of records)
         if (app && app.contains(r.target)) {
+          // Явний слот потоку (Suspense-межа лінивого значення, зарезервована
+          // за розміром): доливання в нього — не гідратаційна розбіжність.
+          const el = r.target.nodeType === 1 ? r.target : r.target.parentElement
+          if (el && el.closest('[data-stream-slot]')) continue
           // Атрибут, записаний тим самим значенням (React так гідратує value
           // контрольованого input), видимої зміни не дає.
           if (r.type === 'attributes' && r.oldValue === r.target.getAttribute(r.attributeName)) continue
