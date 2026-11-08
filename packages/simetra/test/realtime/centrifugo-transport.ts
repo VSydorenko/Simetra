@@ -1,6 +1,6 @@
 import { Centrifuge, type Subscription } from "centrifuge"
 import type { SignalErrorKind } from "simetra/model"
-import type { SignalPort } from "./receiver"
+import type { SignalPort } from "../../src/data/spike-realtime/receiver"
 
 /**
  * Порт каналу над Centrifugo (профіль `postgres`, ПП3) для стенду спайку 3.
