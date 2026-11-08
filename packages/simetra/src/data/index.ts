@@ -5,4 +5,4 @@ export {
   type DataLogEntry,
   type DataRuntime,
   type DataRuntimeOptions,
-} from "./facade/runtime"
+} from "./runtime/runtime"

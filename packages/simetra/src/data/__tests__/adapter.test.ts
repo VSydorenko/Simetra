@@ -98,7 +98,7 @@ describe("selectSource", () => {
 
 describe("DataError", () => {
   it("carries its code and is an Error", () => {
-    const code: DataErrorCode = "data.unbounded-subset"
+    const code: DataErrorCode = "data.views-limit"
     const error = new DataError(code)
     expect(error).toBeInstanceOf(Error)
     expect(error.code).toBe(code)
