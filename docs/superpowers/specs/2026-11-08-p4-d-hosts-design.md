@@ -162,7 +162,7 @@ production показує лише код; помилка `pg` (хост, рол
 
 | Опція | Значення |
 | --- | --- |
-| база | пул `auth-db.ts`, `database.schemaName: "better_auth"`, `advanced.database.generateId: "uuid"` |
+| база | пул `auth-db.ts` з опцією з'єднання `options=-c search_path=better_auth`, без `database.schemaName`; `advanced.database.generateId: "uuid"`. Зі `schemaName` Better Auth шле `CREATE SCHEMA IF NOT EXISTS`, а Postgres вимагає `CREATE` на базу ще до `IF NOT EXISTS` (рішення ПГ-2a Р8); другий шар — налаштування `search_path` ролі `simetra_auth`, яке ставить `roles` (спека профілю §4.1) |
 | `baseURL` | `SIMETRA_APP_ORIGIN` |
 | `trustedOrigins` | `[SIMETRA_APP_ORIGIN]` |
 | `secret` | `BETTER_AUTH_SECRET` (§4.1) |
@@ -187,7 +187,8 @@ user.isAnonymous === true }`, `sub` — нижнім регістром. `is_ano
 
 **База розробника** (`db-setup`), порядок спеки профілю §4.2: `simetra roles`
 від суперкористувача стеку (створює `simetra_auth` і схему `better_auth`) →
-міграція Better Auth (`npx auth migrate` від `simetra_auth`) → повторний
+міграція Better Auth (`npx auth migrate` від `simetra_auth` через пул з
+`search_path=better_auth`) → повторний
 `simetra roles` (адресні гранти на `better_auth."user"`) → `simetra apply`
 від `simetra_owner`.
 
