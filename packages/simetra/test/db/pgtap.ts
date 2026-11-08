@@ -78,6 +78,8 @@ const IDENT = /[A-Za-z0-9_$\u0080-\uffff]/
 // рядка чи `--` у тілі функції інакше зламали б поділ. Розсинхрон сканера з
 // лексером Postgres — це пропущений `commit`, тож правила лексера повторено
 // там, де вони змінюють межі рядка
+const ROUTINE_HEADER = /^\s*create\s+(or\s+replace\s+)?(function|procedure)\b/i
+
 function statements(sql: string): string[] {
   let out = ""
   // Глибина `begin atomic`: усередині оператори тіла функції, а `case … end`
@@ -134,10 +136,20 @@ function statements(sql: string): string[] {
       out += " "
       continue
     }
-    const word = identAt(i - 1) ? null : /^[A-Za-z_]+/.exec(rest)
+    // Ідентифікатор цілком: обрізаний `case1` рахувався б як `case`
+    const word = identAt(i - 1)
+      ? null
+      : /^[A-Za-z_\u0080-\uffff][A-Za-z0-9_$\u0080-\uffff]*/.exec(rest)
     if (word !== null) {
       const lower = word[0].toLowerCase()
-      const opensAtomic = lower === "begin" && /^begin\s+atomic\b/i.test(rest)
+      // Тіло `begin atomic` буває лише в заголовку `create … function |
+      // procedure` того самого оператора: деінде `begin atomic` — імена
+      // колонок, і відкрите на них «тіло» сховало б `commit` після них
+      const opensAtomic =
+        atomic === 0 &&
+        lower === "begin" &&
+        /^begin\s+atomic\b/i.test(rest) &&
+        ROUTINE_HEADER.test(out.slice(out.lastIndexOf(";") + 1))
       if (opensAtomic || (atomic > 0 && lower === "case")) atomic++
       else if (atomic > 0 && lower === "end") {
         atomic--
@@ -153,6 +165,11 @@ function statements(sql: string): string[] {
     out += atomic > 0 ? " " : sql[i]
     i++
   }
+  // Незакрите тіло поглинуло б решту набору разом з будь-яким `commit` у ній
+  if (atomic > 0)
+    throw new Error(
+      "A pgTAP suite has a begin atomic body without its end: the runner cannot tell its statements apart"
+    )
   return out
     .split(";")
     .map((s) => s.trim())

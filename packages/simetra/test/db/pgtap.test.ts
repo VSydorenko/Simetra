@@ -80,8 +80,22 @@ describe("checkSuite", () => {
       "end after a begin atomic body",
       "create function f() returns int language sql begin atomic select 1; end;\nend;",
     ],
+    [
+      "commit after a begin atomic body with an identifier starting with case",
+      "create function f() returns int language sql begin atomic select 1 as case1; end; commit; select plan(0);",
+    ],
+    [
+      "commit after columns named begin and atomic",
+      "select begin atomic from (select 1 as begin) t; commit; select plan(0);",
+    ],
+    [
+      "a begin atomic body without its end",
+      "create function f() returns int language sql begin atomic select 1; commit;",
+    ],
   ])("rejects %s", (_, sql) => {
-    expect(() => checkSuite(sql)).toThrow(/transaction control|alter system/)
+    expect(() => checkSuite(sql)).toThrow(
+      /transaction control|alter system|begin atomic/
+    )
   })
 
   it.each([
