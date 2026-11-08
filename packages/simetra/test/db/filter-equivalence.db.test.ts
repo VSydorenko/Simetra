@@ -7,6 +7,7 @@ import {
   type CommandError,
   type Filter,
   type FilterOperator,
+  type OrderBy,
 } from "simetra/model"
 import type pg from "pg"
 import { describe, expect, it } from "vitest"
@@ -20,9 +21,12 @@ import {
   filterObject,
 } from "../../src/data/store/__tests__/filter-fixture"
 import {
+  checkFilterBudget,
+  compareRows,
   compileFilter,
   fieldInfoOf,
   filterCollator,
+  keysetAfter,
 } from "../../src/data/store/filter"
 import { executeRead, prepareRead } from "../../src/server/read"
 import { withRollback } from "./connection"
@@ -52,13 +56,12 @@ const errorOf = ({ code, path, reason }: CommandError) => ({
   ...(reason === undefined ? {} : { reason }),
 })
 
-/** Множина ключів будівника T3: `prepareRead` + `executeRead` над клієнтом тесту. */
-async function serverKeys(client: pg.Client, where?: Filter): Promise<Outcome> {
-  const prepared = prepareRead(catalog, {
-    object,
-    ...(where === undefined ? {} : { where }),
-    limit: 200,
-  })
+/** Рядки читання T3 у порядку сервера: `prepareRead` + `executeRead` над клієнтом тесту. */
+async function serverRows(
+  client: pg.Client,
+  query: { where?: Filter; orderBy?: OrderBy; limit?: number } = {}
+): Promise<{ rows: Record<string, unknown>[] } | { error: object }> {
+  const prepared = prepareRead(catalog, { object, limit: 200, ...query })
   if ("error" in prepared) return { error: errorOf(prepared.error) }
   const result = await executeRead(
     prepared.object,
@@ -71,7 +74,14 @@ async function serverKeys(client: pg.Client, where?: Filter): Promise<Outcome> {
   )
   if ("error" in result) return { error: errorOf(result.error) }
   if (!("rows" in result)) throw new Error("a list read counted")
-  return { keys: result.rows.map((row) => row.ref as string).sort() }
+  return { rows: result.rows }
+}
+
+/** Множина ключів будівника T3. */
+async function serverKeys(client: pg.Client, where?: Filter): Promise<Outcome> {
+  const read = await serverRows(client, where === undefined ? {} : { where })
+  if ("error" in read) return read
+  return { keys: read.rows.map((row) => row.ref as string).sort() }
 }
 
 /** Множина ключів обчислювача T4 над рядками, прочитаними з бази. */
@@ -105,16 +115,9 @@ async function seeded(client: pg.Client): Promise<Record<string, unknown>[]> {
       [JSON.stringify(encodeRow(filterObject, row))]
     )
   }
-  const prepared = prepareRead(catalog, { object, limit: 200 })
-  if ("error" in prepared) throw new Error("fixture read refused")
-  const result = await executeRead(
-    prepared.object,
-    prepared.plan,
-    async (s) =>
-      (await client.query(s.text, s.params)).rows as Record<string, unknown>[]
-  )
-  if (!("rows" in result)) throw new Error("fixture read failed")
-  return result.rows
+  const read = await serverRows(client)
+  if (!("rows" in read)) throw new Error("fixture read refused")
+  return read.rows
 }
 
 // Генеративні фільтри: глибина до 3, оператори §4.1, значення з фікстури, з
@@ -195,14 +198,73 @@ describe("T4 filter evaluator against the T3 read builder", () => {
         expect(clientKeys(rows, filter), name).toEqual(server)
       }
 
+      // Кожен прогін — під точкою збереження: помилка драйвера в одному
+      // фільтрі не перериває транзакцію й не отруює звуження контрприкладу.
       await fc.assert(
         fc.asyncProperty(tree(3), async (filter) => {
-          expect(clientKeys(rows, filter)).toEqual(
-            await serverKeys(client, filter)
-          )
+          await client.query("SAVEPOINT filter_case")
+          try {
+            expect(clientKeys(rows, filter)).toEqual(
+              await serverKeys(client, filter)
+            )
+          } finally {
+            await client.query("ROLLBACK TO SAVEPOINT filter_case")
+          }
         }),
         { numRuns: 200 }
       )
+    })
+  })
+
+  // Порядок `full` (компаратор) і порядок `window` (`ORDER BY` бази й
+  // keyset) мають збігатися для не-рядкових типів, з NULL з обох боків.
+  // Рядки тут не звіряються: `full` сортує їх мовою користувача (Рд29).
+  it("orders like ORDER BY and pages by keyset without loss or duplicates", async () => {
+    await withRollback(async (client) => {
+      const rows = await seeded(client)
+      const orders: OrderBy[] = (
+        ["amount", "status", "day", "at", "flag"] as const
+      ).flatMap((attribute) =>
+        (["asc", "desc"] as const).flatMap((direction) => [
+          [{ attribute, direction }],
+          [{ attribute, direction, nulls: "first" as const }],
+          [{ attribute, direction, nulls: "last" as const }],
+        ])
+      )
+      orders.push([
+        { attribute: "flag", direction: "desc", nulls: "last" },
+        { attribute: "day", direction: "asc", nulls: "first" },
+        { attribute: "ref", direction: "desc" },
+      ])
+      for (const orderBy of orders) {
+        const name = JSON.stringify(orderBy)
+        const expected = [...rows]
+          .sort(compareRows(orderBy, info, "ref", collator))
+          .map((row) => row.ref as string)
+        const server = await serverRows(client, { orderBy })
+        expect(server, name).toEqual({ rows: expect.any(Array) })
+        const ordered = (server as { rows: Record<string, unknown>[] }).rows
+        expect(
+          ordered.map((row) => row.ref),
+          name
+        ).toEqual(expected)
+
+        const paged: string[] = []
+        let where: Filter | undefined
+        for (;;) {
+          if (where !== undefined) checkFilterBudget(where)
+          const page = await serverRows(client, {
+            orderBy,
+            limit: 3,
+            ...(where === undefined ? {} : { where }),
+          })
+          if (!("rows" in page)) throw new Error(`${name}: page refused`)
+          if (page.rows.length === 0) break
+          paged.push(...page.rows.map((row) => row.ref as string))
+          where = keysetAfter(orderBy, page.rows[page.rows.length - 1]!, "ref")
+        }
+        expect(paged, name).toEqual(expected)
+      }
     })
   })
 })

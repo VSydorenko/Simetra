@@ -1,13 +1,12 @@
 import {
   CommandFailure,
-  FILTER_DEPTH_MAX,
-  FILTER_NODES_MAX,
   FILTER_OPERATORS,
   ORDER_BY_MAX,
   UUID_TEXT,
   encodeItemValue,
   encodePair,
   filterSchema,
+  filterWithinLimits,
   normalDateTime,
   type CatalogEntry,
   type CatalogEntryAttribute,
@@ -276,23 +275,7 @@ const objectAt = (value: unknown): Record<string, unknown> | undefined =>
  * before it is sent.
  */
 export function checkFilterBudget(filter: Filter): void {
-  let nodes = 0
-  const walk = (value: unknown, depth: number): boolean => {
-    if (++nodes > FILTER_NODES_MAX || depth > FILTER_DEPTH_MAX) return false
-    const node = objectAt(value)
-    if (node === undefined) return true
-    for (const key of ["and", "or"] as const) {
-      const children = node[key]
-      if (
-        Array.isArray(children) &&
-        !children.every((child) => walk(child, depth + 1))
-      ) {
-        return false
-      }
-    }
-    return "not" in node ? walk(node.not, depth + 1) : true
-  }
-  if (!walk(filter, 1)) refuse("where")
+  if (!filterWithinLimits(filter)) refuse("where")
 }
 
 const OPERATORS: ReadonlySet<string> = new Set(FILTER_OPERATORS)
@@ -503,7 +486,9 @@ const compiled = new WeakMap<object, Compiled>()
  * refusal comes here, before any row or request. An unknown node, operator
  * or field is `DataError` `data.unsupported-predicate`; what the server
  * would refuse is `CommandFailure` `command.invalid` with the same `path`
- * (rooted at `where`).
+ * (rooted at `where`). Filters are treated as immutable: the compiled test
+ * is cached by the identity of the filter object, so a filter mutated after
+ * its first use keeps its first meaning.
  */
 export function compileFilter(
   filter: Filter,
