@@ -341,6 +341,55 @@ devDependency з ПГ-2a).
 - [ ] **Step 4:** PASS; scoped DB обох стеків — як у задачі 2.
 - [ ] **Step 5: Commit** — `feat(schema): план не знімає тригер провізії на таблиці Better Auth`.
 
+### Task 4a: `pnpm db:roles` — ролі на запущеному стеку `supabase`
+
+**Files:**
+- Modify: `scripts/db-stack.mjs` — дія `roles` профілю `supabase`: під тим
+  самим замком стека, що й `start`/`stop` (`withStackLock`), виконує
+  `supabase/roles.sql` на запущеному стеку від ролі `postgres`. Форма —
+  рецепт з першого рядка файлу:
+  `docker exec -i supabase_db_simetra psql -v ON_ERROR_STOP=1 -U postgres -d postgres -f -`.
+  Стек не запущено — помилка з порадою `pnpm db:start`.
+- Modify: `package.json` (корінь) — скрипт `db:roles`
+- Modify: `supabase/roles.sql` — ідемпотентність для доданих членств:
+  кожне членство, яке додає файл, ставиться поза блоком `IF NOT EXISTS` ролі,
+  під власною перевіркою `pg_auth_members`. Перше таке членство — `anon`
+  для `simetra_runtime` (задача 4). Жодного `ALTER`/`DROP` наявних ролей чи
+  членств
+- Modify: перший рядок-коментар `supabase/roles.sql` — рецепт замінює
+  «`pnpm db:roles`»
+- Create: `packages/simetra/test/db/db-roles.supabase.db.test.ts` або кейс
+  у наявному тесті скриптів стека (`packages/simetra/test/db/stack-files.test.ts`
+  — для статичної частини)
+
+**Interfaces:**
+- Produces: команда `pnpm db:roles`. Межі (рішення архітекторки, Р11 плану
+  ПГ-4/B2):
+  - лише `CREATE` відсутнього і членства, які додає сам файл;
+  - під замком стека;
+  - CI стартує зі свіжого тому й команди не потребує.
+- **Інваріант для інших гілок:** роль чи членство, які додає `roles.sql`,
+  не робить нову роль членом ролей, які перевіряють гейти форми
+  (`LOGIN_ROLE_PARENTS`, власник), і не дає їм нових членів. Тоді гейти
+  гілок без цих ролей не червоніють. Членство `simetra_runtime` в `anon`
+  — пара, яку гейт ролей цієї гілки очікує (Р2).
+
+- [ ] **Step 1: failing tests:**
+  - статичний (`stack-files.test.ts`): кожен `GRANT … TO` у `roles.sql` стоїть
+    під перевіркою `pg_auth_members` або в блоці створення своєї ролі;
+    `ALTER ROLE`/`DROP` у файлі немає;
+  - DB (`db-roles.supabase.db.test.ts`): знімок `pg_roles` і
+    `pg_auth_members` ролей Simetra до й після повторного виконання
+    `roles.sql` у транзакції з `ROLLBACK` — однаковий.
+- [ ] **Step 2:** FAIL → **Step 3:** реалізація.
+- [ ] **Step 4:** `pnpm db:roles` двічі на спільному стеку (дозволено, Р11) —
+  другий прогін нічого не змінює; `pnpm exec supabase test db` — зелений.
+- [ ] **Step 5:** рядок `AGENTS.md` (розділ «Commands and gates») — **задача
+  власника**. Виконавець пише текст у звіт:
+  `pnpm db:roles                            # apply supabase/roles.sql to the running Supabase stack (additive, idempotent)`.
+  Сам `AGENTS.md` не править.
+- [ ] **Step 6: Commit** — `build(db): pnpm db:roles — ролі на запущеному стеку Supabase`.
+
 ### Task 4: роль читання за claim аноніма
 
 **Files:**
@@ -350,13 +399,9 @@ devDependency з ПГ-2a).
   (`RuntimeState`), `packages/simetra/src/server/index.ts`
 - Modify: `packages/designer/src/io/data.ts` (`dataSession` — claim аноніма
   `false`, коли `anonymousClaim` ≠ `null`; Р8)
-- Modify: `supabase/roles.sql` — поза блоком `IF NOT EXISTS`: ідемпотентний
-  `GRANT anon TO simetra_runtime WITH INHERIT FALSE, SET TRUE`. Так членство
-  з'являється й на вже запущеному стеку з наявним томом (повторне
-  застосування `roles.sql` — тим самим кроком, яким стек застосовує його
-  зараз; звір у `scripts/db-stack.mjs`). Якщо стек без перезапуску файл не
-  перечитує, звертайся до архітекторки: перезапуск спільного стека —
-  її рішення
+- Modify: `supabase/roles.sql` — членство `simetra_runtime` в `anon`
+  `WITH INHERIT FALSE, SET TRUE` за правилом ідемпотентності задачі 4a; на
+  спільному стеку його ставить `pnpm db:roles` (задача 4a)
 - Modify: `supabase/tests/provider-base-state.test.sql` — `VALUES` у
   `results_eq` членств `simetra_runtime`: додати пару з `anon`; `plan(…)` не
   змінюється
@@ -447,6 +492,7 @@ devDependency з ПГ-2a).
 - [ ] **Step 5:** PASS; scoped DB:
   - `postgres` — `pnpm --filter @simetrajs/designer test:db read-anonymous command data-handler read-query wide-text rights tenant-creation`;
   - `supabase` — `pnpm --filter @simetrajs/designer test:db:supabase read-anonymous`;
+  - перед DB-кейсами `supabase` — `pnpm db:roles`;
   - `pnpm exec supabase test db` (набір базового стану) — зелений.
 - [ ] **Step 6: Commit** — `feat(server): анонімна сесія читає роллю гостя в обох профілях`.
 
