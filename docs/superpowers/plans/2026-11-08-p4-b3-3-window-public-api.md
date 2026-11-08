@@ -31,7 +31,7 @@ B1c](2026-11-08-p4-b1c-conditional-batched-reads.md).
 `packages/simetra/package.json`, який змінює й ПГ-1). П'ять частин з власним
 «готово»: **B3-3a1** (Task 1–2) — форма `window`, ланцюжок, яруси;
 **B3-3a2** (Task 3–5) — ланцюжки, перечитування, права на знімках, модельний
-тест і пам'ять; **B3-3b** (Task 6–9) — `known`, пакет, `include`, бюджети;
+тест і пам'ять; **B3-3b** (Task 6–9) — збирач, лінивий `count`, `known`, `include`, бюджети;
 **B3-3c1** (Task 10) — хуки; **B3-3c2** (Task 11–13) — компонент списку,
 пакування `./ui`, лінт, спеки. Імена ядра — з гілки B3-2 і плану B1c;
 виконавець звіряє їх з `main` (`orient --plan`). Браузерного оракула немає
@@ -60,14 +60,16 @@ B1c](2026-11-08-p4-b1c-conditional-batched-reads.md).
 | Р1 | `ViewSpec` отримує `{ kind: "window", object, where?, orderBy?, include?, count? }`; `useRows` обирає `full` чи `window` за `residency` налаштувань рантайму (`createDataRuntime({ residency })`, логічні імена резолвляться в UUID, невідомий об'єкт — `TypeError`); `full` понад межу без `strict` — справжній `window` (заглушку прибрано) | §6.1 | немає |
 | Р2 | Позначку «може бути застарілим» ставить хук через 500 мс; ядро дає `stale` чесно | звіт спайку §8.1 | немає |
 | Р3 | Частковий маркер частини з `include` несе й колонки посилань `include`; заборону `known` + `include` з B1c знято (T0 і будівник T3) | id цілей маркерного рядка тоді відомі серверу в тому самому операторі | П4-B Рд40, §4.1, §4.2 (Task 13) |
-| Р4 | Збирач лише накопичує частини одного такту мікрозадач і кличе `CoreSource.read(parts)`; поділ понад `READ_BATCH_MAX`, обмежувач і повтори лишаються за B1c; частини `version` і `rights` у той самий запит — B3-6 і B5 | один шар повторів і один обмежувач | немає |
+| Р4 | Збирач — реалізація `CoreSource`, яку ядро передає як `ctx.source`, тож через нього йдуть усі читачі (`readKeys`, `fetchFull`, `readIncluded`, вікно); він лише накопичує частини одного такту мікрозадач і кличе джерело B1c, а поділ понад `READ_BATCH_MAX`, обмежувач і повтори лишаються за B1c; частина — `CorePart = { query: RowsQuery \| CountQuery; known?: KnownVersions }`, результат — `CoreReadItem = { ok: true; value: ReadPartValue; epoch: string \| null } \| { ok: false; error: CommandError }` (рядки з `KnownMarker` чи лічильник); `count` іде групою транспорту (Server Function) навіть за перевизначеного адаптера об'єкта, тож з об'єктом на типовому адаптері — той самий запит; частини `version` і `rights` — B3-6 і B5 | один шар повторів і один обмежувач; `count` — лише через Server Function (§4.1) | немає |
 | Р5 | Лічильник бюджетів — `countingTransport(transport: DataTransport)` у `src/data/testing/`; той самий помічник бере тестовий хост B3-6 | `count` і `version` ідуть повз адаптер; §12 — обгортка транспорту | немає |
-| Р6 | Компонент списку T5 — `src/ui/list/virtual-list.ts` на `createElement` | §6.4: якір і перемонтування — в одному компоненті; JSX-конфігурації в пакеті немає | немає |
+| Р6 | Компонент списку T5 — `src/ui/list/virtual-list.ts` на `createElement`; DOM-типи — `/// <reference lib="dom" />` у файлах `src/ui/**` і jsdom-тестах, а не `lib` усього пакета (T0 не отримує DOM-глобалів); публічний тримач рантайму — `runtime/holder.ts` (`createRuntimeHolder`), `runtime/handle.ts` лишається внутрішнім | §6.4: якір і перемонтування — в одному компоненті; JSX-конфігурації в пакеті немає | немає |
 | Р7 | `@tanstack/react-virtual` — необов'язковий peer входу `./ui` (діапазон мажора) з точним dev-піном і групою syncpack `sameRange`; вхід tsdown і `publishConfig.exports` `./ui`; тест пакування — `./ui` у переліку exports і «серверний споживач без `react` і virtual» | peer віртуалізатора — `react` і `react-dom`, тож як залежність він затягнув би React серверу | П4-B §3 (Task 13) |
-| Р8 | Знімок показу на ключ зберігає: показані значення (через `visibleRow`, тож сховане не потрапляє), підтверджений `ServerRow` (версія, `versionEpoch`, версії лінивих полів, копії), скоуп, епоху читання, `refs` з об'єктом і скоупом кожної цілі. `remove`, надгробки ключа й пари, `purge` і звуження (`Writer.narrow`, Р11) доходять до знімків. Повернення сторінки перевіряє кожен ключ як `put` (`buriedSince` ключа й пари, `removed` в іншого власника, горизонт): поховане й `removed` — слот без значень, за горизонтом — значення сховано до перечитування. `known` ключа знімка будується з підтвердженого рядка й його `versionEpoch`; маркер вносить підтверджений рядок знімка через `put` з епохою читання знімка | інакше повернення знімка показало б видалене, невидиме під RLS чи значення цілі після втрати доступу, а маркер підтвердив би передбачене (`predict`) значення | немає |
+| Р8 | Знімок показу на ключ зберігає: показані значення (через `visibleRow`, тож сховане не потрапляє), підтверджений рядок (`ServerRow` з `versionEpoch` B1c і копіями; лінивих полів список не читає), скоуп, епоху читання, `refs` з об'єктом і скоупом кожної цілі. `remove`, надгробки ключа й пари, `purge` і звуження (Р11) доходять до знімків. На поверненні: (а) якщо сховище має запис ключа — слот показує `visibleRow` цього запису, а значення знімка відкидаються; (б) інакше ключ проходить перевірки `put` (`buriedSince` ключа й пари, позначка звуження Р11, горизонт, пам'ять версій новіша за підтверджений рядок — `stale`): поховане й `removed` — слот без значень, звужене чи за горизонтом — значення сховано до перечитування; (в) кожна ціль `refs` проходить ті самі перевірки за своїм об'єктом і скоупом, інакше `row: null`; (г) знімок іншої епохи версій — `stale` з причиною `epoch`. `known` знімка — з підтвердженого рядка й його `versionEpoch`; маркер вносить підтверджений рядок через `put`: надгробки — від епохи читання знімка, горизонт і зняття позначок — від старту читання маркера (сервер щойно звірив RLS і версію) | інакше повернення знімка показало б видалене, невидиме під RLS, старшу версію чи значення цілі після втрати доступу, а маркер підтвердив би передбачене значення | немає |
 | Р9 | Токен читання сторінки — пара (ланцюжок, покоління сторінки); відповідь пише лише тоді, коли сторінка в тому самому ярусі й ланцюжку; `revalidate` вікна несе `chain` | токена підмножини замало: вікно має кілька одночасних читань | немає |
 | Р10 | Гачок закріплення `pinned(key)`: сторінка з закріпленим ключем не вивантажується; B3-4 під'єднує його до журналу | журналу мутацій до B3-4 немає | немає |
-| Р11 | Точка звуження прав `Writer.narrow(object, keys, verdict: false \| "unknown")` — у B3-3 (кличе B6): `false` — `purge` ключа, `unknown` — значення сховано й `revalidate` виглядів ключа | знімок мусить бачити звуження, а B6 ще не написано | немає |
+| Р11 | Точка звуження прав `Writer.narrow(object, keys, verdict: false \| "unknown")` — у B3-3 (кличе B6): `false` — `purge` ключа; `unknown` — значення сховано, `revalidate` виглядів ключа і запис епохи звуження ключа в `Epochs` (`narrowedSince(key, readEpoch)`; витіснення запису піднімає горизонт, як надгробок): вставка з читання, що почалось до звуження, ховає значення; `purge` і `narrow` об'єкта позначають його `count` застарілим | знімок і читання в польоті мусять бачити звуження, а позначка лише в знімку губилась би, коли ключ вставляє читання, що стартувало раніше | немає |
+
+Правило заміни ланцюжка: `put` і `own` нового ланцюжка — до звільнення старого в тому самому `commit` (як `diffOwn`/`applyIncluded` B3-2), інакше слот `removed` старого ланцюжка поховав би ключ, який новий ланцюжок отримав.
 
 Кожне рішення — розвилка до погодження архітекторкою. Дайджест сторінки
 (§14.3) лишається відкладеним: B3-3 записує його в §14.3 з умовою «коли
@@ -84,6 +86,8 @@ B1c](2026-11-08-p4-b1c-conditional-batched-reads.md).
    не пише, власності не бере — Task 3.
 5. **`dispose()` з частиною в черзі збирача**: нуль запитів, обіцянки
    відхилено без запису — Task 6.
+6. **`narrow(unknown)` під час перечитування повернення**: відповідь, що
+   стартувала до звуження, значень не показує — Task 4.
 
 ---
 
@@ -133,15 +137,15 @@ B1c](2026-11-08-p4-b1c-conditional-batched-reads.md).
 - [ ] **Step 2: Червоний → реалізація → зелений.** `pnpm --filter simetra test window writer`.
 - [ ] **Step 3: Commit.** `feat(data): ланцюжки вікна, refresh і системне перечитування`
 
-### Task 4: Права, видалення й `purge` на знімках показу; лінивий `count`
+### Task 4: Права, видалення й `purge` на знімках показу
 
 **Files:**
-- Modify: `window.ts`, `writer.ts` (`remove`, надгробки ключа й пари, `purge`, `narrow` доходять до знімків; `Writer.narrow`), `object-store.ts`, `source.ts` і `runtime/runtime.ts` (`count` — частиною через `DataTransport`, навіть за перевизначеного адаптера, ліниво, з межею 10 000)
+- Modify: `window.ts`, `writer.ts` (`remove`, надгробки ключа й пари, `purge`, `narrow` доходять до знімків; `Writer.narrow`), `object-store.ts`, `epoch.ts` (`narrowedSince`)
 - Test: `window.test.ts`
 
-- [ ] **Step 1: Unit:** ключ знімка, видалений іншим виглядом (`remove`), похований надгробком чи прибраний «Прибрати», — при поверненні слот без значень; надгробок пари — так само; ключ за горизонтом — значення сховано до перечитування; `purge` скоупу прибирає рядки й зі знімків одним `commit`; `purge` чи звуження цілі `include` обнуляє відповідний `ref` знімка; `narrow` `false` — рядок прибрано, `unknown` — значення сховано, повернення показує їх лише з читання після звуження; `count` — лише за `count: true`, `capped` за 10 000, свіжіє після сигналу об'єкта (свіжість після write-back — B3-4).
+- [ ] **Step 1: Unit:** ключ знімка, видалений іншим виглядом (`remove`), похований надгробком чи прибраний «Прибрати», — при поверненні слот без значень; надгробок пари — так само; ключ за горизонтом — значення сховано до перечитування; `purge` скоупу прибирає рядки й зі знімків одним `commit`; `purge` чи звуження цілі `include` обнуляє відповідний `ref` знімка; `narrow` `false` — рядок прибрано, `unknown` — значення сховано, повернення показує їх лише з читання після звуження; `narrow(unknown)` під час перечитування повернення — відповідь, що стартувала раніше (маркер чи рядок), значень не показує; ключ знімка, який сховище має в іншого власника з прихованими значеннями чи новішою версією, — слот за сховищем; ціль `refs`, похована чи за горизонтом, — `row: null`; знімок іншої епохи — `stale` з причиною `epoch`; ключ, `removed` у старому ланцюжку й присутній у новому, — показано в новому.
 - [ ] **Step 2: Червоний → реалізація → зелений.** `pnpm --filter simetra test window`.
-- [ ] **Step 3: Commit.** `feat(data): права й видалення на знімках показу, лінивий count`
+- [ ] **Step 3: Commit.** `feat(data): права й видалення на знімках показу`
 
 ### Task 5: Модельний тест і пам'ять вікна
 
@@ -162,13 +166,13 @@ B1c](2026-11-08-p4-b1c-conditional-batched-reads.md).
 
 **Files:**
 - Create: `packages/simetra/src/data/store/batcher.ts`
-- Modify: `core.ts` (читання ядра через збирач)
+- Modify: `core.ts` (збирач — `ctx.source`), `source.ts` (`CorePart`, `CoreReadItem`, група транспорту для `count`), `readers.ts`, `window.ts` (лінивий `count`)
 - Test: `packages/simetra/src/data/store/__tests__/batcher.test.ts` (Create)
 
 **Interfaces:**
-- Produces: `createBatcher(source: CoreSource): { enqueue(query: RowsQuery, known?: KnownVersions): Promise<CoreReadItem>; close(): void }` — частини одного такту мікрозадач — один виклик `source.read(parts)`; таймера немає; `close()` (з `dispose()`) відхиляє черговані обіцянки без запису й без запиту.
+- Produces: `CoreSource.read(parts: readonly CorePart[]): Promise<{ items: CoreReadItem[] }>` (типи Р4; правка сигнатури B1c); `createBatcher(source: CoreSource): CoreSource & { close(): void }` — частини одного такту мікрозадач — один виклик внутрішнього джерела; таймера немає; `close()` (з `dispose()`) відхиляє черговані обіцянки без запису й без запиту; лінивий `count` вигляду (`count: true`, межа 10 000, `capped`) — частиною `CountQuery`, свіжіє після сигналу об'єкта й після `purge`/`narrow` об'єкта (після write-back — B3-4).
 
-- [ ] **Step 1: Unit:** три вигляди одного синхронного commit-у — один виклик; частина наступного такту — другий; порядок результатів збережено; жодної затримки на фейковому годиннику; `enqueue` → `dispose` → мікрозадача — нуль запитів, обіцянка відхилена.
+- [ ] **Step 1: Unit:** три вигляди одного синхронного commit-у (через `readKeys`, `fetchFull` і `readIncluded`) — один виклик; сторінка вікна й її `count` — один запит; `count` об'єкта з перевизначеним адаптером — запит транспорту; `purge` об'єкта — `count` застарілий і перечитується ліниво; частина наступного такту — другий; порядок результатів збережено; жодної затримки на фейковому годиннику; `enqueue` → `dispose` → мікрозадача — нуль запитів, обіцянка відхилена.
 - [ ] **Step 2: Червоний → реалізація → зелений.** `pnpm --filter simetra test batcher`.
 - [ ] **Step 3: Commit.** `feat(data): збирач пакета читань за такт мікрозадач`
 
@@ -181,7 +185,7 @@ B1c](2026-11-08-p4-b1c-conditional-batched-reads.md).
 **Interfaces:**
 - Produces: `knownFor(entry, form): KnownVersions | undefined` — ключ іде в `known`, коли рядок показує значення, версія `v` підтверджена, копія повна для форми, вигляд володіє ключем до осідання й епоха запису — поточна; для знімка — з підтвердженого рядка й `versionEpoch` знімка; `applyMarker(key, v, copies, readEpoch)` — підтверджений рядок через `put` (правило версії, надгробки, епохи, позначки); розбіжність — нічого не пише, ключ у перечитування без `known`.
 
-- [ ] **Step 1: Unit (`it.each`):** `removed`, сховане, неповна копія, ліниве поле іншої версії, ключ без власника, інша епоха — без `known`; маркер рядка, що за час польоту отримав новішу версію, — нічого не пише й перечитує; маркер знімка з `predict` — показ дорівнює підтвердженому рядку, а не передбаченому; знімок попередньої епохи — повна відповідь; маркер не обходить надгробка, новішого за епоху читання знімка.
+- [ ] **Step 1: Unit (`it.each`):** `removed`, сховане, неповна копія, ліниве поле іншої версії, ключ без власника, інша епоха — без `known`; маркер рядка, що за час польоту отримав новішу версію, — нічого не пише й перечитує; маркер знімка з `predict` — показ дорівнює підтвердженому рядку, а не передбаченому; знімок попередньої епохи — повна відповідь; маркер не обходить надгробка, новішого за епоху читання знімка; знімок, старший за горизонт свого кошика, з маркером — показано без другого запиту (горизонт — від старту читання маркера).
 - [ ] **Step 2: Червоний → реалізація → зелений.** `pnpm --filter simetra test source object-store window`.
 - [ ] **Step 3: Commit.** `feat(data): known у частинах і застосування маркера`
 
@@ -218,12 +222,12 @@ B1c](2026-11-08-p4-b1c-conditional-batched-reads.md).
 ### Task 10: `DataRuntimeProvider` і хуки
 
 **Files:**
-- Create: `packages/simetra/src/data/react/provider.ts`, `use-rows.ts`, `use-row.ts`
-- Modify: `packages/simetra/src/data/runtime/handle.ts` (тримач міняє рантайм і сповіщає хуки), `packages/simetra/src/data/index.ts`, `packages/simetra/package.json` (devDependencies `jsdom`, `@testing-library/react`, `@testing-library/dom`, `react-dom`, `@types/react`, `@types/react-dom` — точні версії, група syncpack)
-- Test: `packages/simetra/src/data/react/__tests__/hooks.test.ts` (Create, `// @vitest-environment jsdom`, `createElement`)
+- Create: `packages/simetra/src/data/react/provider.ts`, `use-rows.ts`, `use-row.ts`, `packages/simetra/src/data/runtime/holder.ts`
+- Modify: `packages/simetra/src/data/index.ts`, `packages/simetra/package.json` (devDependencies `jsdom`, `@testing-library/react`, `@testing-library/dom`, `react-dom`, `@types/react`, `@types/react-dom` — точні версії, група syncpack)
+- Test: `packages/simetra/src/data/react/__tests__/hooks.test.ts` (Create, `// @vitest-environment jsdom`, `/// <reference lib="dom" />`, `createElement`)
 
 **Interfaces:**
-- Produces: `DataRuntimeProvider({ holder, children })`; `useRows(spec)` → знімок §6.4 з діями вікна; `useRow({ object, id, tabularSections? })` → `{ row, tabularSections, version, editable, status, error?, needsRefresh, isStale }`.
+- Produces: `createRuntimeHolder(): RuntimeHolder`, `RuntimeHolder = { current(): DataRuntime | null; closed(): CloseReason | null; replace(next: DataRuntime | null, reason?: CloseReason): void; subscribe(listener: () => void): () => void }` (експорт з `simetra/data`; B3-6 бере його для SSR); `DataRuntimeProvider({ holder, children })`; `useRows(spec)` → знімок §6.4 з діями вікна; `useRow({ object, id, tabularSections? })` → `{ row, tabularSections, version, editable, status, error?, needsRefresh, isStale }`.
 
 - [ ] **Step 1: jsdom-тести:** `getServerSnapshot === getSnapshot`; незмінний вигляд — та сама посилка; жодного Suspense; `DataError` фільтра поза обчислювачем кидається в рендері до error boundary; `loading` лише без даних, далі `refreshing`; словник станів §6.5 у знімку (`synced`, `stale`, `removed` — з фейкового джерела); картка зі сховища — одразу; методи вікна в хуку; `refresh()` і `showNew()` змінюють склад, системне перечитування — ні; `strategy`, `truncated`, `refs`, `version`, `editable`, лінивий `count`; StrictMode «туди й назад» без запиту й без порожнього кадру; закритий рантайм — сталий знімок з причиною, не `loading`, доки вигляд нового рантайму не отримає даних; заміна рантайму тримачем — без рядків старого; хук без провайдера кидає `Error`; позначка знімка — через 500 мс, а `removed` і `purged` — у тому самому кадрі.
 - [ ] **Step 2: Червоний → реалізація → зелений.** `pnpm --filter simetra test hooks`.
@@ -238,13 +242,13 @@ B1c](2026-11-08-p4-b1c-conditional-batched-reads.md).
 
 **Files:**
 - Create: `packages/simetra/src/ui/list/virtual-list.ts`, `packages/simetra/src/ui/list/__tests__/virtual-contract.test.ts`, `virtual-list.test.ts` (jsdom)
-- Modify: `packages/simetra/src/ui/index.ts`, `packages/simetra/package.json` (`@tanstack/react-virtual` за Р7; `publishConfig.exports` і dev-`exports` `./ui`), `packages/simetra/tsdown.config.ts` (вхід `ui`), syncpack-конфігурація, `packages/designer/test/packaging/published-packages.pack.test.ts` (`./ui` у переліку; «each tier is self-contained» з `ui`; серверний споживач без `react` і віртуалізатора)
+- Modify: `packages/simetra/src/ui/index.ts`, `packages/simetra/package.json` (`@tanstack/react-virtual` за Р7; `publishConfig.exports` і dev-`exports` `./ui`), `packages/simetra/tsdown.config.ts` (вхід `ui`), syncpack-конфігурація, `packages/designer/test/packaging/published-packages.pack.test.ts` (`./ui` у переліку exports; «each tier is self-contained» з `ui`; кейс `declares react as the only, optional peer` → `react` і `@tanstack/react-virtual`, обидва `optional`; серверний споживач без них), DOM-типи — `/// <reference lib="dom" />` у файлах `src/ui/**`
 
 **Interfaces:**
 - Produces: `VirtualList({ view, renderRow, estimateSize, height })` — `useVirtualizer` з `getItemKey` за ключем, сталі ключі слотів завантаження, рядки в потоці під одним `translateY`, `anchorTo: "end"`, `virtualizer.shouldAdjustScrollPositionOnItemSizeChange = () => false`, якір читання в layout-ефекті, перемонтування за `chain` з `initialOffset`, SSR — `initialRect`, `overflowAnchor: "none"`; видимий діапазон — у `view.setVisibleRange`, після гідратації — лише після першої прокрутки; `removed` — слот того самого розміру.
 
 - [ ] **Step 1: Контрактний тест на піні:** вбудована компенсація росту за замовчуванням є; її вимикає властивість екземпляра; версії `@tanstack/react-virtual` і `virtual-core` дорівнюють піну.
-- [ ] **Step 2: jsdom `virtual-list.test.ts`** (розкладки jsdom не має: `observeElementRect` і `measureElement` віртуалізатора підміняються через опції `useVirtualizer`, `ResizeObserver` — стабом): `setVisibleRange` отримує ключі першого й останнього видимого; новий `chain` перемонтовує список з ціллю; ріст підміненої висоти рядка над видимими не зсуває першого видимого; до першої прокрутки після гідратації діапазон не звітується.
+- [ ] **Step 2: jsdom `virtual-list.test.ts`** (розкладки jsdom не має: `vi.mock("@tanstack/react-virtual")` зливає в опції `useVirtualizer` підмінені `observeElementRect`, `observeElementOffset`, `measureElement` і `scrollToFn`, що пише журнал прокрутки; `getBoundingClientRect` рядків — стаб; публічних пропсів для цього немає): `setVisibleRange` отримує ключі першого й останнього видимого; новий `chain` перемонтовує список з ціллю; ріст підміненої висоти рядка над видимими дає в журналі прокрутки зсув рівно на приріст (якір), а не на два (без вимкненої компенсації); до першої прокрутки після гідратації діапазон не звітується.
 - [ ] **Step 3: Пакування.** `pnpm build:packages && pnpm test:packaging`, `pnpm deps:check`.
 - [ ] **Step 4: Червоний → реалізація → зелений.** `pnpm --filter simetra test virtual-contract virtual-list`.
 - [ ] **Step 5: Commit.** `feat(ui): компонент списку на TanStack Virtual, вхід ./ui`
@@ -291,5 +295,8 @@ B1c](2026-11-08-p4-b1c-conditional-batched-reads.md).
 | `getServerSnapshot` відмінний від `getSnapshot` | `hooks.test.ts` |
 | затримка 500 мс на `purged` | `hooks.test.ts` |
 | вбудована компенсація росту не вимкнена | `virtual-list.test.ts` |
-| віртуалізатор — залежність, а не peer | тест пакування |
+| віртуалізатор — залежність, а не peer | `published-packages.pack.test.ts` (кейс peer) |
+| позначка звуження лише в знімку, не в `Epochs` | `window.test.ts` (`narrow` під час перечитування) |
+| повернення без перевірки цілей `refs` | `window.test.ts` |
+| знімок перекриває запис сховища | `window.test.ts`, модельний тест |
 | правило лінту T5 губить ярусну заборону чи правило стандартних колонок | `tier-boundary.test.ts` |
