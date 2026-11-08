@@ -464,6 +464,9 @@ describe("purge", () => {
     fake.remove(TASK, key(1))
     write(core, (w) => w.purge(TASK, { keys: [key(1)] }))
     fake.deliverAll()
+    await settle()
+    // Відкинутий прохід повторюється: доставляємо й його читання.
+    fake.deliverAll()
     await done
     await settle()
     expect(list.getSnapshot().rows).toMatchObject([
@@ -475,7 +478,7 @@ describe("purge", () => {
     expect(inspect.violations()).toEqual([])
   })
 
-  it("drops a revalidate in flight when the object is purged and reloads the views: no lines of the purged scope are written", async () => {
+  it("drops a revalidate in flight when the object is purged and re-reads the views: no lines of the purged scope are written", async () => {
     const { core, fake, log } = setup()
     seed(fake, 1, 1)
     fake.setLines(TASK, key(1), "lines", lines)
@@ -500,17 +503,50 @@ describe("purge", () => {
     // У сховищі шапка ще в S: purge(T) нічого не прибирає.
     write(core, (w) => w.purge(TASK, { scope: T }))
     for (const read of held) read.answer(moment)
-    await done
     await settle()
     expect(sectionsOf(core, 1)?.lines.map((l) => l.key)).toEqual([key(901)])
     expect(valueOf(header.getSnapshot(), 1, "org")).toBe(S)
     expect(log.some((e) => e.kind === "late-response")).toBe(false)
-    // Вигляди перечитано звичайним завантаженням після purge.
+    // Повторний прохід revalidate після purge.
     expect(fake.pending).toHaveLength(2)
     fake.deliverAll()
+    await done
     await settle()
     expect(stateOf(header.getSnapshot(), 1)).toBe("removed")
     expect(sectionsOf(core, 1)).toBeUndefined()
+  })
+
+  it("re-runs a revalidate dropped by a purge without changing the remaining composition or order", async () => {
+    const { core, fake } = setup()
+    seed(fake, 1, 3)
+    const full = core.view({
+      kind: "full",
+      object: TASK,
+      orderBy: [{ attribute: "title", direction: "asc" }],
+    })
+    watch(full)
+    await settle()
+    fake.hold = (read) => isPage(read)
+    const done = core.revalidate(TASK, { visibleOnly: false })
+    await settle()
+    const page = fake.take()
+    // Сервер міняє порядок і додає рядок: завантаження переставило б склад.
+    fake.edit(TASK, key(1), { title: "z" })
+    fake.insert(TASK, taskValues(4, { title: "a" }))
+    write(core, (w) => w.purge(TASK, { keys: [key(2)] }))
+    fake.hold = undefined
+    page.answer()
+    await done
+    await settle()
+    const snapshot = full.getSnapshot()
+    expect(keysIn(snapshot)).toEqual([key(1), key(3)])
+    expect(valueOf(snapshot, 1, "title")).toBe("z")
+    expect(snapshot.hasNewRows).toBe(true)
+    expect(snapshot.needsRefresh).toBe(true)
+    expect(coreInternals(core).objects.get(TASK)!.rows.get(key(4))).toBe(
+      undefined
+    )
+    expect(readsOf(fake, TASK).filter(isPage)).toHaveLength(3)
   })
 
   it("hides a stored row that an older read returns in a purged scope and re-reads it to removed", async () => {

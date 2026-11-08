@@ -429,22 +429,18 @@ async function readAgain(
  * every read first — through the shared limiter — then one `commit` applying
  * every result to the composition at commit time. A failed read sets its
  * view to `error` and stops no other view. Disconnect marks stay. Views that
- * never loaded are skipped; a purge of the object (or of an `include`
- * target) after the start drops the results and reloads those views.
+ * never loaded are skipped. A purge of the object (or of an `include`
+ * target) after the start drops the results and re-runs the re-read of those
+ * views with a new start epoch, composition kept; a view whose own load was
+ * invalidated by the purge is refreshed by that load instead (П12).
  */
 export async function revalidate(
   ctx: WriterContext,
   object: ObjectName,
   options: { visibleOnly: boolean }
 ): Promise<void> {
-  const { session } = ctx
   const o = ctx.objectOf(object)
-  if (session.closed !== undefined) return
-  const startEpoch = session.epochs.now()
-  const token = session.token()
-  const purgesAtStart = new Map(ctx.purges)
-  const purgedSince = (name: ObjectName) =>
-    (ctx.purges.get(name) ?? 0) !== (purgesAtStart.get(name) ?? 0)
+  if (ctx.session.closed !== undefined) return
   // Вигляд без жодного завантаження складу не має: його перше читання —
   // завантаження, а не системне перечитування. ТЧ — лише змонтовані.
   const targets = subsetsOf(ctx, o).filter(
@@ -453,7 +449,22 @@ export async function revalidate(
       (!options.visibleOnly || isVisible(s)) &&
       (s.form.spec.kind !== "section" || s.listeners.size > 0)
   )
-  if (targets.length === 0) return
+  await revalidateViews(ctx, o, targets)
+}
+
+/** One two-phase pass over `targets`; views dropped by a purge get another pass. */
+async function revalidateViews(
+  ctx: WriterContext,
+  o: ObjectState,
+  targets: readonly Subset[]
+): Promise<void> {
+  const { session } = ctx
+  if (targets.length === 0 || session.closed !== undefined) return
+  const startEpoch = session.epochs.now()
+  const token = session.token()
+  const purgesAtStart = new Map(ctx.purges)
+  const purgedSince = (name: ObjectName) =>
+    (ctx.purges.get(name) ?? 0) !== (purgesAtStart.get(name) ?? 0)
   const results = await Promise.all(
     targets.map((s) =>
       readAgain(ctx, s, startEpoch, token).then(
@@ -462,7 +473,7 @@ export async function revalidate(
       )
     )
   )
-  const reload: Subset[] = []
+  const again: Subset[] = []
   session.commit(
     (scope) => {
       try {
@@ -471,13 +482,13 @@ export async function revalidate(
           if (!s.alive || s.purged) continue
           // purge після старту: відповідь могла нести рядки й рядки ТЧ, яких
           // на мить purge у сховищі не було (рядок у сховищі ще в старому
-          // скоупі). Як завантаження в польоті (П12) — відкинути й
-          // перечитати вигляд.
+          // скоупі). Відкидаємо й перечитуємо тим самим системним шляхом:
+          // склад і порядок змінює лише сам purge (§6.5), а не перечитування.
           if (
             purgedSince(o.name) ||
             s.form.include.some((step) => purgedSince(step.target))
           ) {
-            reload.push(s)
+            again.push(s)
             continue
           }
           s.dirty = true
@@ -505,8 +516,13 @@ export async function revalidate(
       }
     },
     token,
-    `revalidate ${object}`
+    `revalidate ${o.name}`
   )
-  // Перечитування — звичайним завантаженням вигляду (single-flight).
-  for (const s of reload) ctx.registry.load(s)
+  // Вигляд із власним завантаженням у польоті (П12: його перезапускає purge)
+  // оновить те завантаження; решта — новий прохід з новою епохою старту.
+  await revalidateViews(
+    ctx,
+    o,
+    again.filter((s) => s.alive && !s.purged && s.flight === undefined)
+  )
 }

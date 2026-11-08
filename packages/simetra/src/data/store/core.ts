@@ -70,7 +70,8 @@ export interface CoreSession {
    * Re-reads the object's views by the stability rule (P4-B spec §8.4): all
    * reads first, then one `commit`; `visibleOnly` skips invisible views.
    * Views that never loaded are skipped (their first read is a load); a
-   * purge after the start drops the results and reloads those views.
+   * purge after the start drops the results and re-reads those views again
+   * by the same rule (composition kept).
    */
   revalidate(
     object: ObjectName,
