@@ -13,7 +13,7 @@ export const css = `
 button{font:inherit;font-size:12px;padding:2px 8px;height:24px;border:1px solid #c5ccd6;border-radius:4px;background:#fff;cursor:pointer}
 .banner{background:#e8f1ff;border:1px solid #9cc0ff;border-radius:4px;padding:2px 8px;font-size:12px}
 .list{position:relative;height:${VIEW_H}px;overflow:auto;background:#fff;border:1px solid #dde2e8;border-radius:6px}
-.row{position:absolute;left:0;right:0;height:${ROW_H}px;display:grid;grid-template-columns:70px 1fr 100px 70px 280px;align-items:center;gap:8px;padding:0 8px;border-bottom:1px solid #eef1f4;box-shadow:inset 3px 0 0 transparent}
+.row{position:absolute;left:0;right:0;height:${ROW_H}px;display:grid;grid-template-columns:60px 1fr 90px 80px 360px;align-items:center;gap:8px;padding:0 8px;border-bottom:1px solid #eef1f4;box-shadow:inset 3px 0 0 transparent}
 .row a{color:inherit}
 .placeholder{color:#9aa4b1}
 .state-col{display:grid;grid-template-columns:1fr 28px;align-items:center;gap:6px}

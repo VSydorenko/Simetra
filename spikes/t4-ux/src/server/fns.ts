@@ -10,6 +10,8 @@ interface Faults {
   readMs: number
   writeMs: number
   failNext?: CommandError
+  /** Застосувати на сервері, а викликачу віддати відмову (відповідь утрачено). */
+  lostReplyNext?: boolean
   hold?: { promise: Promise<void>; release: () => void }
   rightsVersion: number
 }
@@ -95,6 +97,15 @@ export const runOps = createServerFn({ method: 'POST' })
       f.failNext = undefined
       return { subject, ok: false, error }
     }
+    if (f.lostReplyNext) {
+      f.lostReplyNext = false
+      try {
+        serverOf(subject).run(data)
+      } catch {
+        // Сервер відмовив сам — викликач однаково бачить невідомий результат.
+      }
+      return { subject, ok: false, error: { code: 'command.unavailable' } as CommandError }
+    }
     try {
       return { subject, ok: true, value: serverOf(subject).run(data) }
     } catch (e) {
@@ -112,6 +123,7 @@ export type Control =
   | { kind: 'remove'; id: string }
   | { kind: 'insert'; id: string; values: Record<string, unknown> }
   | { kind: 'rights'; version: number }
+  | { kind: 'lostReplyNext' }
 
 export const control = createServerFn({ method: 'POST' })
   .validator((c: Control) => c)
@@ -144,6 +156,9 @@ export const control = createServerFn({ method: 'POST' })
         break
       case 'insert':
         s.seed(ITEM, [{ id: data.id, ...data.values }])
+        break
+      case 'lostReplyNext':
+        f.lostReplyNext = true
         break
       case 'rights':
         f.rightsVersion = data.version
