@@ -1,0 +1,439 @@
+import { ZERO_UUID, channelTopic, type CatalogEntry } from "simetra/model"
+import type { ObjectState } from "./forms"
+import { includeKeys, readIncluded } from "./include"
+import { visibleRow, type RowEntry } from "./object-store"
+import {
+  applyIncluded,
+  fetchFull,
+  readForm,
+  type Apply,
+  type ReaderContext,
+} from "./readers"
+import type { Scope, Session } from "./session"
+import type { RowViews } from "./snapshot"
+import { ReadLimiterClosed, readKeys } from "./source"
+import { errorOf, type Subset, type SubsetRegistry } from "./subsets"
+import type {
+  ActiveView,
+  GenerationToken,
+  Key,
+  ObjectName,
+  ServerRow,
+  ViewSpec,
+  Writer,
+} from "./types"
+
+/*
+ * API ядра для приймача сигналів (спека П4-B §8.4 «Ядро дає приймачу»):
+ * `Writer` усередині `commit`, `purge` як виняток безпеки (§6.5), позначки,
+ * перелік активних виглядів і двофазний `revalidate` (§6.3). Кожне
+ * перечитування за ключем іде через `readKeys` — єдиний шлях.
+ */
+
+/** What the writer and `revalidate` need from the core. */
+export interface WriterContext extends ReaderContext {
+  readonly session: Session
+  readonly registry: SubsetRegistry
+  readonly rowViews: RowViews
+  readonly objects: ReadonlyMap<ObjectName, ObjectState>
+  /** Invalidates the tail re-read of the object in flight and re-queues its keys (П12). */
+  invalidateTail(o: ObjectState): void
+}
+
+/**
+ * The change channel of a row (§8.3): `channelTopic` of the scope kind, the
+ * row's stored scope and the object id; an unscoped object takes
+ * `ZERO_UUID` for both the kind and the scope.
+ */
+export function channelOf(entry: CatalogEntry): (e: RowEntry) => string {
+  const scoped = entry.scopeColumn !== undefined
+  const scopeKindId = scoped ? (entry.scopeKindId ?? ZERO_UUID) : ZERO_UUID
+  return (e) =>
+    channelTopic({
+      kind: "changes",
+      scopeKindId,
+      scope: scoped ? (e.scope ?? ZERO_UUID) : ZERO_UUID,
+      object: entry.id,
+    })
+}
+
+const isVisible = (s: Subset) => s.visible ?? s.listeners.size > 0
+
+/** Held, not purged subsets of the object. */
+function subsetsOf(ctx: WriterContext, o: ObjectState): Subset[] {
+  return [...ctx.registry.subsets()].filter(
+    (s) => s.form.object === o && s.alive && !s.purged
+  )
+}
+
+function without(set: ReadonlySet<Key>, gone: ReadonlySet<Key>): Set<Key> {
+  return new Set([...set].filter((key) => !gone.has(key)))
+}
+
+/**
+ * Drops purged keys from every subset (§6.5): ownership, composition and
+ * `include` targets; a card or section of a purged key becomes `purged`.
+ * Loads in flight that may carry rows of the object are invalidated and
+ * re-run after the purge (П12): their answer would bring a row that was not
+ * in the store at the purge moment.
+ */
+function forget(
+  ctx: WriterContext,
+  o: ObjectState,
+  dropped: ReadonlySet<Key>,
+  purged: ReadonlySet<Key>
+) {
+  for (const s of ctx.registry.subsets()) {
+    const spec = s.form.spec
+    const own = s.form.object === o
+    const target = s.form.include.some((step) => step.target === o.name)
+    if (!own && !target && !s.included.has(o.name)) continue
+    if (own) {
+      if (spec.kind === "card" && purged.has(spec.key)) s.purged = true
+      if (spec.kind === "section" && purged.has(spec.owner)) s.purged = true
+      s.owned = without(s.owned, dropped)
+      if (spec.kind === "keys" || spec.kind === "full") {
+        s.layout = s.layout.filter((key) => !dropped.has(key))
+        s.layoutSet = new Set(s.layout)
+      }
+    }
+    const included = s.included.get(o.name)
+    if (included !== undefined)
+      s.included.set(o.name, without(included, dropped))
+    s.dirty = true
+    if ((own || target) && s.flight !== undefined) {
+      s.gen++
+      s.trailing = true
+    }
+  }
+}
+
+/** The writer of one `commit`: every method refuses once the commit ended. */
+export function createWriter(ctx: WriterContext, scope: Scope): Writer {
+  const { ops, rowViews } = ctx
+
+  function touchMarked(o: ObjectState, marked: (e: RowEntry) => boolean) {
+    for (const key of o.rows.keys()) {
+      if (marked(o.rows.get(key)!)) rowViews.touch(o.name, key)
+    }
+  }
+
+  return {
+    patch(object, rows, readEpoch) {
+      scope.assert()
+      const o = ctx.objectOf(object)
+      // Перечитування лише латає ключі з власником (§6.2): нового ключа
+      // сигнал у сховище не вносить.
+      for (const row of rows) {
+        if ((o.rows.get(row.key)?.owners ?? 0) > 0)
+          ops.put(scope, o, row, readEpoch, false)
+      }
+    },
+
+    remove(object, keys, readEpoch) {
+      scope.assert()
+      const o = ctx.objectOf(object)
+      for (const key of keys) ops.remove(scope, o, key, readEpoch)
+    },
+
+    purge(object, target) {
+      scope.assert()
+      const o = ctx.objectOf(object)
+      let dropped: Key[]
+      let purged: Key[]
+      if ("keys" in target) {
+        dropped = o.rows.purgeKeys(scope, target.keys)
+        purged = [...target.keys]
+      } else {
+        // Пари ховає лише `purgeScope` (через `Epochs.buryPair`): власник ТЧ
+        // з невідомим скоупом перевіряється за останнім похованням пари.
+        dropped = o.rows.purgeScope(scope, target.scope)
+        o.sections.purgeScope(scope, target.scope)
+        purged = dropped
+      }
+      // ТЧ записано зі скоупом шапки на мить запису: шапка, що відтоді
+      // переїхала в прибраний скоуп, лишила б рядки ТЧ без `clearOwner`.
+      for (const key of purged) ops.clearOwner(scope, o, key)
+      for (const key of dropped) rowViews.touch(o.name, key)
+      forget(ctx, o, new Set(dropped), new Set(purged))
+      ctx.invalidateTail(o)
+    },
+
+    markStale(object, keys, minVersion) {
+      scope.assert()
+      const o = ctx.objectOf(object)
+      o.rows.markStale(scope, keys, minVersion)
+      for (const key of keys) {
+        if (o.rows.get(key) !== undefined) rowViews.touch(o.name, key)
+      }
+    },
+
+    markDisconnected(channel) {
+      scope.assert()
+      for (const o of ctx.objects.values()) {
+        const of = channelOf(o.entry)
+        o.rows.markDisconnected(scope, of, channel)
+        touchMarked(o, (e) => channel === undefined || of(e) === channel)
+      }
+    },
+
+    clearDisconnected(channel) {
+      scope.assert()
+      for (const o of ctx.objects.values()) {
+        touchMarked(o, (e) => e.stale.disconnect?.has(channel) === true)
+        o.rows.clearDisconnected(scope, channel)
+      }
+    },
+
+    markViews(object, flags, spec) {
+      scope.assert()
+      const o = ctx.objectOf(object)
+      const found = spec === undefined ? undefined : ctx.registry.find(spec)
+      const targets =
+        spec === undefined
+          ? subsetsOf(ctx, o)
+          : found !== undefined && found.form.object === o && !found.purged
+            ? [found]
+            : []
+      for (const s of targets) {
+        if (flags.needsRefresh !== undefined)
+          s.needsRefresh = flags.needsRefresh
+        if (flags.hasNewRows !== undefined) s.hasNewRows = flags.hasNewRows
+        s.dirty = true
+      }
+    },
+  }
+}
+
+/** Active views of the object, visible first (§8.4). */
+export function activeViews(
+  ctx: WriterContext,
+  object: ObjectName
+): ActiveView[] {
+  const views = subsetsOf(ctx, ctx.objectOf(object)).map((s) => {
+    const spec = s.form.spec
+    const keys =
+      spec.kind === "card"
+        ? [spec.key]
+        : spec.kind === "section"
+          ? [spec.owner]
+          : [...s.layout]
+    return { spec, keys, visible: isVisible(s) }
+  })
+  return [...views.filter((v) => v.visible), ...views.filter((v) => !v.visible)]
+}
+
+/** Sets the visibility of a held view; a form without a held subset is ignored. */
+export function setVisible(
+  ctx: WriterContext,
+  spec: ViewSpec,
+  visible: boolean
+) {
+  const s = ctx.registry.find(spec)
+  if (s !== undefined) s.visible = visible
+}
+
+// ------------------------------------------------------------ revalidate
+
+/**
+ * Перечитування вигляду за правилом стабільності (§6.5): `apply` пише лише
+ * ключі складу на мить `commit`, зниклі — `removed` з епохою старту, ключі
+ * поза складом лише ставлять `hasNewRows`.
+ */
+function applyKeys(
+  ctx: WriterContext,
+  s: Subset,
+  requested: readonly Key[],
+  rows: readonly ServerRow[],
+  startEpoch: number
+): Apply {
+  const o = s.form.object
+  return (scope) => {
+    const got = new Set<Key>()
+    let fresh = false
+    for (const row of rows) {
+      got.add(row.key)
+      if (s.owned.has(row.key)) ctx.ops.put(scope, o, row, startEpoch, false)
+      else fresh = true
+    }
+    for (const key of requested) {
+      if (!got.has(key) && s.owned.has(key))
+        ctx.ops.remove(scope, o, key, startEpoch)
+    }
+    if (fresh) s.hasNewRows = true
+  }
+}
+
+/** A composition row out of the filter or the order: the list changed (§6.5). */
+function outOfPlace(s: Subset): boolean {
+  const { form } = s
+  let prev: ReturnType<typeof visibleRow>
+  for (const key of s.layout) {
+    const e = form.object.rows.get(key)
+    const values = e === undefined ? undefined : visibleRow(e)
+    if (values === undefined) continue
+    if (!form.test(values)) return true
+    // Вікно понад межу тримає серверний порядок: локальний компаратор міг
+    // би розійтися з ним у колації.
+    if (form.compare !== undefined && !s.truncated && prev !== undefined) {
+      if (form.compare(prev, values) > 0) return true
+    }
+    prev = values
+  }
+  return false
+}
+
+async function readFullAgain(
+  ctx: WriterContext,
+  s: Subset,
+  startEpoch: number,
+  token: GenerationToken
+): Promise<Apply> {
+  const { form } = s
+  const o = form.object
+  const { keysPerRequest } = ctx.limits
+  const fetched = await fetchFull(ctx, form, token)
+  if (fetched === undefined) return () => {}
+  const got = new Map(fetched.rows.map((r) => [r.key, r] as const))
+  const composition = [...s.owned]
+  // Понад межу вибірка неповна: ключ складу, якого в ній немає, перечитуємо
+  // за ключем, а не вважаємо зниклим.
+  const missing = fetched.over ? composition.filter((k) => !got.has(k)) : []
+  if (missing.length > 0) {
+    const rows = await readKeys(ctx.source, o.entry, missing, {
+      keysPerRequest,
+    })
+    for (const row of rows) got.set(row.key, row)
+  }
+  const wanted = includeKeys(
+    form.include,
+    composition.flatMap((key) => {
+      const row = got.get(key)
+      return row !== undefined && form.test(row.values) ? [row.values] : []
+    })
+  )
+  const included =
+    form.include.length === 0
+      ? undefined
+      : await readIncluded(ctx.source, form.include, wanted, keysPerRequest)
+  return (scope) => {
+    let fresh = false
+    for (const row of got.values()) {
+      if (s.owned.has(row.key)) {
+        ctx.ops.put(scope, o, row, startEpoch, false)
+        const e = o.rows.get(row.key)
+        const values = e === undefined ? undefined : visibleRow(e)
+        // Рядок у власності, але поза складом, увійшов у фільтр — новий.
+        if (!s.layoutSet.has(row.key) && values !== undefined)
+          fresh ||= form.test(values)
+      } else if (form.test(row.values)) fresh = true
+    }
+    for (const key of composition) {
+      if (!got.has(key) && s.owned.has(key))
+        ctx.ops.remove(scope, o, key, startEpoch)
+    }
+    if (included !== undefined)
+      applyIncluded(ctx, scope, s, included, startEpoch)
+    if (fresh) s.hasNewRows = true
+    if (outOfPlace(s)) s.needsRefresh = true
+  }
+}
+
+async function readAgain(
+  ctx: WriterContext,
+  s: Subset,
+  startEpoch: number,
+  token: GenerationToken
+): Promise<Apply> {
+  const spec = s.form.spec
+  const o = s.form.object
+  const { keysPerRequest } = ctx.limits
+  switch (spec.kind) {
+    case "keys": {
+      const rows = await readKeys(ctx.source, o.entry, s.form.keys, {
+        keysPerRequest,
+      })
+      return applyKeys(ctx, s, s.form.keys, rows, startEpoch)
+    }
+    case "card": {
+      // Шапка списочною формою; ліниві поля змонтованої картки дочитує
+      // перевірка вигляду, коли версія рядка зросла (§6.2, правило 2).
+      const rows = await readKeys(ctx.source, o.entry, [spec.key], {
+        keysPerRequest,
+      })
+      return applyKeys(ctx, s, [spec.key], rows, startEpoch)
+    }
+    case "section":
+      return readForm(ctx, s, startEpoch, token)
+    case "full":
+      return readFullAgain(ctx, s, startEpoch, token)
+  }
+}
+
+/**
+ * The system re-read of the object's views (§8.4), in two phases (§6.3):
+ * every read first — through the shared limiter — then one `commit` applying
+ * every result to the composition at commit time. A failed read sets its
+ * view to `error` and stops no other view. Disconnect marks stay.
+ */
+export async function revalidate(
+  ctx: WriterContext,
+  object: ObjectName,
+  options: { visibleOnly: boolean }
+): Promise<void> {
+  const { session } = ctx
+  const o = ctx.objectOf(object)
+  if (session.closed !== undefined) return
+  const startEpoch = session.epochs.now()
+  const token = session.token()
+  // Вигляд без жодного завантаження складу не має: його перше читання —
+  // завантаження, а не системне перечитування. ТЧ — лише змонтовані.
+  const targets = subsetsOf(ctx, o).filter(
+    (s) =>
+      s.loaded &&
+      (!options.visibleOnly || isVisible(s)) &&
+      (s.form.spec.kind !== "section" || s.listeners.size > 0)
+  )
+  if (targets.length === 0) return
+  const results = await Promise.all(
+    targets.map((s) =>
+      readAgain(ctx, s, startEpoch, token).then(
+        (apply) => ({ s, apply }) as const,
+        (error: unknown) => ({ s, error }) as const
+      )
+    )
+  )
+  session.commit(
+    (scope) => {
+      try {
+        for (const result of results) {
+          const { s } = result
+          if (!s.alive || s.purged) continue
+          s.dirty = true
+          if ("error" in result) {
+            // Закритий обмежувач — сесію закрито: писати нікуди.
+            if (result.error instanceof ReadLimiterClosed) continue
+            s.status = "error"
+            s.error = errorOf(result.error)
+            continue
+          }
+          try {
+            result.apply(scope)
+            if (s.status === "error") {
+              s.status = "ready"
+              s.error = undefined
+            }
+          } catch (error) {
+            ctx.log({ kind: "listener-failed", error })
+            s.status = "error"
+            s.error = errorOf(error)
+          }
+        }
+      } finally {
+        ctx.ops.sweep(scope)
+      }
+    },
+    token,
+    `revalidate ${object}`
+  )
+}

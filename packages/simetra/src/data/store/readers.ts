@@ -121,7 +121,8 @@ function setLayout(s: ReaderTarget, layout: readonly Key[]) {
   s.layoutSet = new Set(layout)
 }
 
-function applyIncluded(
+/** Writes the read targets of `include` and moves the view's target ownership to them. */
+export function applyIncluded(
   ctx: ReaderContext,
   scope: Scope,
   s: ReaderTarget,
@@ -189,14 +190,17 @@ function fullLayout(s: ReaderTarget, fetched: ReadonlyMap<Key, Values>): Key[] {
 
 const NOTHING: Apply = () => {}
 
-async function readFull(
+/**
+ * The keyset fetch of a `full` form (§6.1): pages in the view's order up to
+ * `fullLimit`; `over` — the visible set is larger. `undefined` once `token`
+ * is invalid: a released or re-requested view reads no further page.
+ */
+export async function fetchFull(
   ctx: ReaderContext,
-  s: ReaderTarget,
-  readEpoch: number,
+  form: Form,
   token: GenerationToken
-): Promise<Apply> {
-  const { source, limits, ops } = ctx
-  const { form } = s
+): Promise<{ rows: ServerRow[]; over: boolean } | undefined> {
+  const { source, limits } = ctx
   const o = form.object
   const spec = form.spec as Extract<ViewSpec, { kind: "full" }>
   const orderBy = spec.orderBy ?? []
@@ -217,7 +221,7 @@ async function readFull(
     })
     // Звільнений чи перезапитаний вигляд далі не читає: наступна сторінка
     // була б запитом, результат якого нікуди не запишеться.
-    if (!token.valid) return NOTHING
+    if (!token.valid) return undefined
     pages.push(...page.rows)
     if (pages.length > limits.fullLimit) break
     const tail = page.rows.at(-1)
@@ -225,9 +229,25 @@ async function readFull(
     if (page.more !== true && page.rows.length < limits.fullPageSize) break
     last = tail
   }
-  const over = pages.length > limits.fullLimit
+  return {
+    rows: pages.map((values) => serverRow(o.entry, values)),
+    over: pages.length > limits.fullLimit,
+  }
+}
+
+async function readFull(
+  ctx: ReaderContext,
+  s: ReaderTarget,
+  readEpoch: number,
+  token: GenerationToken
+): Promise<Apply> {
+  const { limits, ops } = ctx
+  const { form } = s
+  const o = form.object
+  const fetched = await fetchFull(ctx, form, token)
+  if (fetched === undefined) return NOTHING
+  const { rows, over } = fetched
   if (over && ctx.strict) throw new DataError("data.full-too-large")
-  const rows = pages.map((values) => serverRow(o.entry, values))
   // Понад межу — перша сторінка вікна в серверному порядку (П5).
   const kept = over
     ? rows.filter((r) => form.test(r.values)).slice(0, WINDOW_PAGE)
@@ -243,15 +263,15 @@ async function readFull(
   )
   if (!token.valid) return NOTHING
   const included = await readIncluded(
-    source,
+    ctx.source,
     form.include,
     wanted,
     limits.keysPerRequest
   )
-  const fetched = new Map(kept.map((r) => [r.key, r.values] as const))
+  const values = new Map(kept.map((r) => [r.key, r.values] as const))
   return (scope) => {
     for (const row of kept) ops.put(scope, o, row, readEpoch, false)
-    s.owned = diffOwn(ops, scope, o, s.owned, fetched.keys())
+    s.owned = diffOwn(ops, scope, o, s.owned, values.keys())
     applyIncluded(ctx, scope, s, included, readEpoch)
     s.strategy = over ? "window" : "full"
     s.truncated = over
@@ -260,7 +280,7 @@ async function readFull(
       s,
       over
         ? kept.map((r) => r.key).filter((k) => s.owned.has(k))
-        : fullLayout(s, fetched)
+        : fullLayout(s, values)
     )
     if (over)
       ctx.log({

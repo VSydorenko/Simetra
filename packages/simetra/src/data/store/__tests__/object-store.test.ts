@@ -591,7 +591,7 @@ describe("ObjectStore stale marks", () => {
     put(h, row(K2, 2, { org: T }))
     h.write((s) => h.store.clearDisconnected(s, `ch:${S}`))
     expect(h.store.get(K1)?.stale.disconnect).toBeUndefined()
-    expect(h.store.get(K2)?.stale.disconnect?.channel).toBe(`ch:${T}`)
+    expect([...h.store.get(K2)!.stale.disconnect!.keys()]).toEqual([`ch:${T}`])
   })
 
   it("disconnect is cleared by the channel it was recorded on after the row moved", () => {
@@ -603,6 +603,16 @@ describe("ObjectStore stale marks", () => {
     expect(h.store.get(K1)?.stale.disconnect).toBeDefined()
     h.write((s) => h.store.clearDisconnected(s, `ch:${S}`))
     expect(h.store.get(K1)?.stale.disconnect).toBeUndefined()
+  })
+
+  it("marking the new channel of a moved row keeps the mark of its old channel", () => {
+    const h = harness()
+    put(h, row(K1, 1, { org: S }))
+    h.write((s) => h.store.markDisconnected(s, channelOf))
+    put(h, row(K1, 2, { org: T }))
+    h.write((s) => h.store.markDisconnected(s, channelOf, `ch:${T}`))
+    h.write((s) => h.store.clearDisconnected(s, `ch:${T}`))
+    expect([...h.store.get(K1)!.stale.disconnect!.keys()]).toEqual([`ch:${S}`])
   })
 
   it("markDisconnected with a channel marks only rows of that channel", () => {
@@ -622,7 +632,9 @@ describe("ObjectStore stale marks", () => {
     expect(h.store.get(K1)?.stale.minVersion?.epoch).toBeGreaterThan(before)
     before = h.now()
     h.write((s) => h.store.markDisconnected(s, channelOf))
-    expect(h.store.get(K1)?.stale.disconnect?.epoch).toBeGreaterThan(before)
+    expect(h.store.get(K1)?.stale.disconnect?.get(`ch:${S}`)).toBeGreaterThan(
+      before
+    )
     before = h.now()
     remove(h, K1)
     expect(h.store.get(K1)?.removed?.epoch).toBeGreaterThan(before)

@@ -131,6 +131,14 @@ export type CoreLogEntry =
   | { kind: "removed-restored"; object: ObjectName; count: number }
   | { kind: "horizon-hidden"; object: ObjectName; count: number }
 
+/** A view the signal receiver re-reads (P4-B spec §8.4). */
+export interface ActiveView {
+  readonly spec: ViewSpec
+  /** The composition keys; a card — its key, a section — its owner. */
+  readonly keys: readonly Key[]
+  readonly visible: boolean
+}
+
 /** The only way to change the store (P4-B spec §6.1). */
 export interface Writer {
   patch(object: ObjectName, rows: readonly ServerRow[], readEpoch: number): void

@@ -59,9 +59,14 @@ export function setup(
     mode?: "auto" | "manual"
     /** Answers rows in reverse server order: only a local sort restores it. */
     reverseRows?: boolean
+    /** The catalog of the fake server and the core; default `OBJECTS`. */
+    objects?: readonly CatalogEntry[]
   } = {}
 ): CoreHarness {
-  const fake = createFakeSource({ objects: OBJECTS, mode: options.mode })
+  const fake = createFakeSource({
+    objects: options.objects ?? OBJECTS,
+    mode: options.mode,
+  })
   const limits = { ...DEFAULT_CORE_LIMITS, ...options.limits }
   const adapter: SourceAdapter =
     options.reverseRows === true

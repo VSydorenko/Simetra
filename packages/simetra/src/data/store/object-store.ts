@@ -61,7 +61,12 @@ export interface RowEntry {
    */
   stale: {
     minVersion?: { v: number; epoch: number }
-    disconnect?: { channel: string; epoch: number }
+    /**
+     * Channel → mark epoch. Per channel: a row that moved keeps the mark of
+     * its old channel until that channel clears it, so marking and clearing
+     * the new channel never drops a gap of the old one.
+     */
+    disconnect?: Map<string, number>
     seen?: { epoch: number }
   }
 }
@@ -105,7 +110,7 @@ export interface ObjectStore {
     channelOf: (e: RowEntry) => string,
     channel?: string
   ): void
-  /** Clears the marks recorded on `channel` (`stale.disconnect.channel`). */
+  /** Clears the mark recorded on `channel`; marks of other channels stay. */
   clearDisconnected(scope: Scope, channel: string): void
   /**
    * Adds an owner to an existing entry; a key without an entry gets nothing.
@@ -348,7 +353,9 @@ export function createObjectStore(options: {
       for (const e of rows.values()) {
         const own = channelOf(e)
         if (channel !== undefined && own !== channel) continue
-        e.stale.disconnect = { channel: own, epoch: epochs.next() }
+        const marks = e.stale.disconnect ?? new Map<string, number>()
+        marks.set(own, epochs.next())
+        e.stale.disconnect = marks
       }
     },
 
@@ -357,7 +364,9 @@ export function createObjectStore(options: {
       // Розрив знімає канал, на якому його поставлено: відновлення сигналів
       // нового каналу не покриває пропущеного в старому.
       for (const e of rows.values()) {
-        if (e.stale.disconnect?.channel === channel) delete e.stale.disconnect
+        const marks = e.stale.disconnect
+        if (marks === undefined || !marks.delete(channel)) continue
+        if (marks.size === 0) delete e.stale.disconnect
       }
     },
 

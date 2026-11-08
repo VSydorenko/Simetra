@@ -10,7 +10,15 @@ import type { ObjectState } from "./forms"
 import type { StoreOps } from "./readers"
 import { createRegistry, type SubsetRegistry } from "./subsets"
 import {
+  activeViews,
+  createWriter,
+  revalidate,
+  setVisible,
+  type WriterContext,
+} from "./writer"
+import {
   DEFAULT_CORE_LIMITS,
+  type ActiveView,
   type CloseReason,
   type CoreLimits,
   type CoreLogEntry,
@@ -24,18 +32,10 @@ import {
 } from "./types"
 
 /*
- * Ядро даних T4 (спека П4-B §6): сесія, сховища об'єктів, реєстр виглядів і
- * хвостове перечитування над одним `CoreSource`. Запис приймача сигналів
- * (`commit` з `Writer`, `activeViews`, `setVisible`, `revalidate`) додає
- * задача 8 плану П4-B3-2 поверх `CoreInternals`.
+ * Ядро даних T4 (спека П4-B §6): сесія, сховища об'єктів, реєстр виглядів,
+ * хвостове перечитування й API приймача сигналів (`writer.ts`) над одним
+ * `CoreSource`.
  */
-
-/** A view the signal receiver re-reads (Task 8). */
-export interface ActiveView {
-  readonly spec: ViewSpec
-  readonly keys: readonly Key[]
-  readonly visible: boolean
-}
 
 /** The data core of one user session (P4-B spec §6.1). */
 export interface CoreSession {
@@ -52,9 +52,20 @@ export interface CoreSession {
   token(): GenerationToken
   /** The current session epoch: a read started now carries it. */
   readEpoch(): number
+  /**
+   * Runs `fn` with a {@link Writer} when `token` is valid (one notification
+   * batch) and returns `true`; otherwise returns `false` without calling it.
+   * A throw of `fn` is passed on; rows it wrote stay only with an owner.
+   */
   commit(fn: (writer: Writer) => void, token: GenerationToken): boolean
+  /** Held views of the object, visible first. */
   activeViews(object: ObjectName): readonly ActiveView[]
+  /** Sets the visibility of a held view (unset — visible while subscribed). */
   setVisible(spec: ViewSpec, visible: boolean): void
+  /**
+   * Re-reads the object's views by the stability rule (P4-B spec §8.4): all
+   * reads first, then one `commit`; `visibleOnly` skips invisible views.
+   */
   revalidate(
     object: ObjectName,
     options: { visibleOnly: boolean }
@@ -110,15 +121,13 @@ function limitsOf(overrides: Partial<CoreLimits> | undefined): CoreLimits {
 }
 
 /**
- * Internals of a core shared with the Task 8 writer: the stores, the store
- * operations that keep views in step, the registry and the tail.
+ * Internals of a core for tests: the stores, the store operations that keep
+ * views in step and the registry.
  */
 export interface CoreInternals {
   readonly objects: ReadonlyMap<ObjectName, ObjectState>
   readonly ops: StoreOps
   readonly registry: SubsetRegistry
-  /** Makes tail re-reads of the object in flight unable to write (П12). */
-  invalidateTail(object: ObjectName): void
 }
 
 export function createCore(options: {
@@ -260,17 +269,21 @@ export function createCore(options: {
    */
   const tails = new Map<
     ObjectState,
-    { pending: Set<Key>; flying: boolean; gen: number }
+    { pending: Set<Key>; flying: readonly Key[] | undefined; gen: number }
   >()
 
   function runTail(o: ObjectState) {
     const tail = tails.get(o)
-    if (tail === undefined || tail.flying || session.closed !== undefined)
+    if (
+      tail === undefined ||
+      tail.flying !== undefined ||
+      session.closed !== undefined
+    )
       return
     const keys = [...tail.pending]
     tail.pending.clear()
     if (keys.length === 0) return
-    tail.flying = true
+    tail.flying = keys
     const gen = tail.gen
     const token = session.childToken(() => tail.gen === gen)
     const readEpoch = session.epochs.now()
@@ -300,7 +313,7 @@ export function createCore(options: {
         () => {}
       )
       .finally(() => {
-        tail.flying = false
+        tail.flying = undefined
         runTail(o)
       })
   }
@@ -308,7 +321,7 @@ export function createCore(options: {
   function scheduleTail(o: ObjectState, keys: readonly Key[]) {
     const tail = tails.get(o) ?? {
       pending: new Set<Key>(),
-      flying: false,
+      flying: undefined,
       gen: 0,
     }
     tails.set(o, tail)
@@ -354,8 +367,27 @@ export function createCore(options: {
     tails.clear()
   })
 
-  const notImplemented = (): never => {
-    throw new Error("not implemented")
+  // Хвіст у польоті під час purge: його відповідь могла нести рядок, якого на
+  // мить purge у сховищі не було (П12); ключі перечитуються наново.
+  function invalidateTail(o: ObjectState) {
+    const tail = tails.get(o)
+    if (tail === undefined) return
+    tail.gen++
+    for (const key of tail.flying ?? []) tail.pending.add(key)
+  }
+
+  const writerContext: WriterContext = {
+    session,
+    source,
+    limits,
+    strict: options.strict ?? false,
+    log,
+    ops,
+    objectOf,
+    registry,
+    rowViews,
+    objects,
+    invalidateTail,
   }
 
   const core: CoreSession = {
@@ -364,10 +396,24 @@ export function createCore(options: {
     preload: (spec, preloadOptions) => registry.preload(spec, preloadOptions),
     token: () => session.token(),
     readEpoch: () => session.epochs.now(),
-    commit: notImplemented,
-    activeViews: notImplemented,
-    setVisible: notImplemented,
-    revalidate: notImplemented,
+    commit(fn, token) {
+      return session.commit(
+        (scope) => {
+          try {
+            fn(createWriter(writerContext, scope))
+          } finally {
+            // Збій fn посеред запису не лишає рядка без власника.
+            ops.sweep(scope)
+          }
+        },
+        token,
+        "writer"
+      )
+    },
+    activeViews: (object) => activeViews(writerContext, object),
+    setVisible: (spec, visible) => setVisible(writerContext, spec, visible),
+    revalidate: (object, revalidateOptions) =>
+      revalidate(writerContext, object, revalidateOptions),
     close(reason) {
       if (closed !== undefined) return
       closed = purgedSnapshot(reason)
@@ -383,15 +429,7 @@ export function createCore(options: {
     },
   }
 
-  internals.set(core, {
-    objects,
-    ops,
-    registry,
-    invalidateTail(object) {
-      const tail = tails.get(objectOf(object))
-      if (tail !== undefined) tail.gen++
-    },
-  })
+  internals.set(core, { objects, ops, registry })
 
   inspections.set(core, {
     defects: new Set<DefectFlag>(),
@@ -442,7 +480,7 @@ export function createCore(options: {
   return core
 }
 
-/** The internals of a core for the Task 8 writer (not exported from `simetra/data`). */
+/** The internals of a core (tests only; not exported from `simetra/data`). */
 export function coreInternals(session: CoreSession): CoreInternals {
   const found = internals.get(session)
   if (found === undefined) throw new TypeError("not a core session")

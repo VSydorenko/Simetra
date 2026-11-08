@@ -8,7 +8,13 @@ import { formOf, type Form, type ObjectState } from "./forms"
 import { refsOf } from "./include"
 import { diffOwn, readForm, type ReaderTarget, type StoreOps } from "./readers"
 import type { Session } from "./session"
-import { LOADING, shareSnapshot, withRefs, type RowViews } from "./snapshot"
+import {
+  LOADING,
+  purgedSnapshot,
+  shareSnapshot,
+  withRefs,
+  type RowViews,
+} from "./snapshot"
 import { ReadLimiterClosed, type CoreSource } from "./source"
 import type {
   CoreLimits,
@@ -79,6 +85,13 @@ export interface Subset extends ReaderTarget {
   checkQueued: boolean
   /** A re-read check found a load in flight: check again when it ends. */
   recheck: boolean
+  /**
+   * The key (card) or owner (section) was purged (§6.5): the view shows
+   * `purged` and reads nothing until released.
+   */
+  purged: boolean
+  /** Set by `setVisible`; unset — visible while subscribed. */
+  visible: boolean | undefined
 }
 
 /** The view registry of a core. */
@@ -86,6 +99,8 @@ export interface SubsetRegistry {
   view(spec: ViewSpec): ViewHandle
   preload(spec: ViewSpec, options?: { ttlMs?: number }): Promise<void>
   subsets(): Iterable<Subset>
+  /** The held subset of a form, if any; throws on a refused form as `view` does. */
+  find(spec: ViewSpec): Subset | undefined
   /** Starts a load (single-flight: merges into one trailing request). */
   load(s: Subset): void
   /**
@@ -98,8 +113,10 @@ export interface SubsetRegistry {
 }
 
 const NO_LINES: readonly SectionLine[] = Object.freeze([])
+const ACCESS_CHANGED = purgedSnapshot("access-changed")
 
-const errorOf = (error: unknown): CommandError | DataError => {
+/** The error a view shows for a failed read. */
+export const errorOf = (error: unknown): CommandError | DataError => {
   if (error instanceof CommandFailure) return error.error
   if (error instanceof DataError) return error
   return { code: "command.internal" }
@@ -137,7 +154,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
   }
 
   function load(s: Subset) {
-    if (!s.alive || isClosed()) return
+    if (!s.alive || isClosed() || s.purged) return
     if (s.flight !== undefined) {
       s.trailing = true
       return
@@ -255,7 +272,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
    * повторів.
    */
   function check(s: Subset) {
-    if (!s.alive || s.listeners.size === 0) return
+    if (!s.alive || s.listeners.size === 0 || s.purged) return
     if (s.flight !== undefined) {
       s.recheck = true
       return
@@ -399,6 +416,8 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       readRevision: undefined,
       checkQueued: false,
       recheck: false,
+      purged: false,
+      visible: undefined,
     }
     subsets.set(form.specKey, s)
     return s
@@ -412,6 +431,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
   function computeSnapshot(s: Subset): ViewSnapshot {
     const closed = ctx.closedSnapshot()
     if (closed !== undefined) return closed
+    if (s.purged) return ACCESS_CHANGED
     const { form } = s
     const o = form.object
     const rows: RowView[] = []
@@ -606,6 +626,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
     },
 
     subsets: () => subsets.values(),
+    find: (spec) => subsets.get(formOf(ctx, spec).specKey),
     load,
 
     afterCommit(closing) {

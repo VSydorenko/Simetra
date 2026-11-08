@@ -28,10 +28,12 @@ export const LOADING: ViewSnapshot = Object.freeze({
 })
 
 /**
- * The one stable empty snapshot of a closed core (§6.1 «Закриття з
- * причиною»): every handle, new ones included, returns this object.
+ * The stable empty snapshot of a closed core (§6.1 «Закриття з причиною»),
+ * which every handle returns, or of a view whose key was purged (§6.5).
  */
-export const purgedSnapshot = (reason: CloseReason): ViewSnapshot =>
+export const purgedSnapshot = (
+  reason: CloseReason | "access-changed"
+): ViewSnapshot =>
   Object.freeze({
     status: "purged",
     reason,
