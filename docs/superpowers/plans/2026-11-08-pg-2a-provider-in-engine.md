@@ -643,11 +643,15 @@ designer, щоб тест-обгортка її бачила. Підготовк
 **Interfaces:**
 - Produces (`better-auth-cli.ts`):
   - `async function prepareStackIdentity(o: { superuserUrl: string; authUrl: string; owner: string; migrate?: (authUrl: string) => Promise<void> }): Promise<void>`
-    — спершу `(o.migrate ?? migrateBetterAuth)(o.authUrl)` від ролі `auth`;
-    лише після її успіху — одна транзакція суперкористувача з прелюдією
-    `roles` (Global Constraints): `GRANT USAGE ON SCHEMA better_auth TO <owner>`,
-    `GRANT TRIGGER ON better_auth."user" TO <owner>`; збій міграції — виняток
-    без жодного гранту; `migrate` — шов тесту;
+    — спершу транзакція суперкористувача з прелюдією `roles` (Global
+    Constraints) відкликає тимчасові гранти, якщо вони є (`REVOKE USAGE ON SCHEMA better_auth FROM <owner>`,
+    `REVOKE TRIGGER ON better_auth."user" FROM <owner>`), — тоді й на теплому
+    стеку збій міграції не лишає грантів над напівмігрованою схемою; далі
+    `(o.migrate ?? migrateBetterAuth)(o.authUrl)` від ролі `auth`; лише після її
+    успіху — одна транзакція суперкористувача з прелюдією: перевірка, що
+    `better_auth."user"` — таблиця (`relkind = 'r'`), якою володіє `auth`
+    (інакше виняток без гранту), потім `GRANT USAGE ON SCHEMA better_auth TO <owner>`,
+    `GRANT TRIGGER ON better_auth."user" TO <owner>`; `migrate` — шов тесту;
   - точка входу CLI: DSN — зі змінних середовища `SIMETRA_SUPERUSER_URL` і
     `SIMETRA_AUTH_URL` (не argv), `owner` — `PROVIDER_OWNER_ROLES.postgres`;
     код виходу 1 з повідомленням англійською на збій.
@@ -676,13 +680,19 @@ designer, щоб тест-обгортка її бачила. Підготовк
       (`pg_roles`), рядки `pg_auth_members`, `has_schema_privilege` і
       `has_table_privilege` тегованого `owner` на `better_auth` і
       `better_auth."user"` (`USAGE`, `TRIGGER`, `INSERT`, `SELECT`), колонки
-      `better_auth."user"` (`information_schema.columns`), `pg_db_role_setting`;
+      `better_auth."user"` (`information_schema.columns`), `pg_db_role_setting`,
+      сирі `nspacl` схеми `better_auth` і `relacl` кожного відношення в ній
+      (гранти `PUBLIC`, іншим ролям, `WITH GRANT OPTION`), перелік `pg_class`
+      схеми `better_auth`;
     - **збій міграції не лишає грантів:** `migrate` — справжня міграція, що
       після `runMigrations` кидає, і окремо підставна, що створює частину
       таблиць і кидає; `prepareStackIdentity` кидає, у тегованого `owner`
       немає `USAGE` на `better_auth` і `TRIGGER` на `better_auth."user"`
       (якщо таблиця є); наступний виклик зі справжньою міграцією дає обидва
-      гранти.
+      гранти; те саме на «теплому» кластері — перший виклик успішний, гранти
+      видано, другий з міграцією, що кидає, лишає без грантів;
+    - `better_auth."user"` як подання чи таблиця іншого власника — виняток,
+      гранту немає.
 - [ ] **Step 2:** `pnpm --filter simetra test stack-files` і `pnpm --filter simetra test:db:pg better-auth-cli` — FAIL.
 - [ ] **Step 3:** `startPostgres` після `dev-environment.sql`, під тим самим
   замком: `node packages/designer/bin/simetra.mjs roles docker/postgres-stack/project`
