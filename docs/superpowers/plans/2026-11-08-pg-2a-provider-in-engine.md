@@ -68,12 +68,19 @@ designer, щоб тест-обгортка її бачила. Підготовк
   ролі, і опція з'єднання пулу (`options=-c search_path=better_auth`).
 - DB-тести створюють кластерні ролі, бази й шаблони лише з тегованими іменами
   (`testRoleName`, `testDatabaseName` з `packages/simetra/test/db/connection.ts`)
-  і через спільний будівник задачі 6; DSN ролей входу на стеку — з паролем
-  (порт стека з хоста доходить у `pg_hba` правилом `scram-sha-256`).
-- Кожна транзакція й кожен оператор `roles` у профілі `postgres` першими
-  виконують `SET LOCAL ROLE NONE` і `SET LOCAL search_path = pg_catalog, pg_temp`
-  (поза транзакцією — `SET`), потім звіряють `current_user = session_user` і
-  `rolsuper`; кожне ім'я в SQL — кваліфіковане й через `quoteIdent`.
+  і через тест-хелпер кластера `packages/simetra/test/db/postgres-cluster.ts`
+  (задача 8); DSN ролей входу на стеку — з паролем (порт стека з хоста
+  доходить у `pg_hba` правилом `scram-sha-256`), пароль ставить
+  `setTestPasswords` у `beforeAll`.
+- Кожна транзакція `roles` у профілі `postgres` першими виконує
+  `SET LOCAL ROLE NONE`, `SET LOCAL search_path = pg_catalog, pg_temp`,
+  `SET LOCAL statement_timeout = 0`, `SET LOCAL lock_timeout = 0`, потім
+  звіряє `current_user = session_user` і `rolsuper`. Оператор
+  `ApplyDatabase.statement` іде лише на `conns.maintenance`; його прелюдія —
+  `SET ROLE NONE`, `SET search_path = pg_catalog, pg_temp`,
+  `SET default_transaction_read_only = off`, `SET statement_timeout = 0`, без
+  звірки `rolsuper`: звірку дає транзакція службової бази фази читання з тим
+  самим DSN. Кожне ім'я в SQL — кваліфіковане й через `quoteIdent`.
 - 🔴 Без `--` перед шаблоном vitest у `pnpm --filter` (`AGENTS.md`).
 - Без shims: замінене прибирається в тій самій зміні (`AGENTS.md` принцип 5).
 
@@ -88,11 +95,11 @@ designer, щоб тест-обгортка її бачила. Підготовк
 | Р5 | `simetra roles` бере той самий `SIMETRA_DATABASE_URL` (у профілі `postgres` — DSN суперкористувача до цільової бази); кластерні кроки — з'єднанням до службової бази `postgres` того самого сервера, кроки бази — до цілі й до шаблону. Скіл споживача радить окрему змінну через `--database-url-env` для `roles` | немає (§3.4 «DSN оператора») |
 | Р6 | Набір імен `PostgresClusterSet` параметризує підготовку; `roles` будує його з даних T0/T2, тести — з тегованих імен; шаблон тіні — `ShadowOptions.shadowTemplate ?? PROVIDER_SHADOW_TEMPLATES[provider]` | немає |
 | Р7 | Поза 2a: `runtime.privileged-login`, адресні гранти `better_auth`, `plan.identity-table-missing`, `plan.identity-trigger-locked` — ПГ-3; переведення наявних DB-тестів, CI, `AGENTS.md` — 2b | §12 рядок ПГ-3 дістає `runtime.privileged-login` (задача 0) |
-| Р8 | Міграція Better Auth — без `schemaName`, бо з ним Better Auth шле `CREATE SCHEMA IF NOT EXISTS`, а Postgres перевіряє `CREATE` на базу до `IF NOT EXISTS` (перевірено на стеку). `roles` ставить `ALTER ROLE <auth> SET search_path = better_auth`; host і тести ще й задають `search_path` з'єднання пулу. `roles` перевіряє: `<auth>` не має `CREATE` ні на базу, ні на `public`, а наявна таблиця `user` Better Auth лежить у `better_auth` (рішення архітекторки) | §4.1, §4.2 крок 2, §10.1 (задача 0) |
+| Р8 | Міграція Better Auth — без `schemaName`, бо з ним Better Auth шле `CREATE SCHEMA IF NOT EXISTS`, а Postgres перевіряє `CREATE` на базу до `IF NOT EXISTS` (перевірено на стеку). Головний засіб — опція з'єднання пулу host-а й тестів (`search_path = better_auth`); налаштування ролі — другий шар, бо роль сама може його переписати: `roles` ставить `ALTER ROLE <auth> SET search_path = better_auth` і `ALTER ROLE <auth> IN DATABASE <database> SET search_path = better_auth`. `roles` перевіряє: `<auth>` не має `CREATE` ні на базу, ні на `public`, жодне відношення з `relowner = <auth>` не лежить поза `better_auth`, а рядок `pg_db_role_setting` ролі `<auth>` для цілі не задає іншого `search_path` (рішення архітекторки) | §4.1, §4.2 крок 2, §10.1 (задача 0) |
 | Р9 | Окремий сервер тіней (`shadowBase`) у профілі `postgres` у 2a не підтримано: `roles`, план і застосування відмовляють `plan.shadow-base-unsupported` (рішення архітекторки) | §14 — новий рядок (задача 0) |
 | Р10 | Гейт `plan.owner-not-bypassrls` — на вході плану, застосування (після advisory lock) і репетиції; та сама функція рішення (рішення архітекторки, §3.3) | немає |
 | Р11 | `pnpm db:pg:start` після наявних кроків кличе `simetra roles` з теки `docker/postgres-stack/project/` (`project.meta.json`, `provider: "postgres"`) і ставить dev-паролі ролям входу; наскрізний DB-тест плану потребує справжніх ролей грантів, яким грантує бажаний SQL (рішення архітекторки) | §10.2 рядок `db:pg:start` (задача 0) |
-| Р12 | Оператори поза транзакцією (`CREATE DATABASE`, `ALTER DATABASE … IS_TEMPLATE`) — метод порту `ApplyDatabase.statement(db, sql)`: T2 не імпортує `pg`, а `transaction` завжди відкриває `BEGIN` | немає |
+| Р12 | Оператори поза транзакцією (`CREATE DATABASE`, `ALTER DATABASE … IS_TEMPLATE`) — метод порту `ApplyDatabase.statement(db, sql)`: T2 не імпортує `pg`, а `transaction` завжди відкриває `BEGIN`. Метод — лише для підготовки кластера (`ensurePostgresCluster`), ніколи в плані чи застосуванні; межу тримає тест-гард | немає |
 
 ## Review Focus
 
@@ -163,7 +170,7 @@ designer, щоб тест-обгортка її бачила. Підготовк
   `packages/simetra/src/schema/engine/provider/presets.ts`,
   `packages/simetra/src/data/adapter.ts` (`DEFAULT_SOURCE`),
   `packages/simetra/schemas/project.schema.json` (`pnpm --filter simetra schemas:update`),
-  `packages/designer/src/cli/command.ts` (опис `--provider`)
+  `packages/designer/src/cli/command.ts` (опис `--database-provider`)
 - Create: `packages/simetra/src/schema/engine/provider/postgres.ts` (дані T2
   профілю, дзеркало `provider/supabase.ts`),
   `packages/simetra/src/model/__tests__/project-providers.test.ts`,
@@ -209,8 +216,9 @@ designer, щоб тест-обгортка її бачила. Підготовк
     тест як дані (лише ці оператори, не весь SQL) (Review Focus 1, 2); unit
     SQL провізії з пресету `postgres` бере колонки в лапках (`"isAnonymous"`).
 - [ ] **Step 2:** `pnpm --filter simetra test project-providers engine-provider provider-grants` — FAIL.
-- [ ] **Step 3:** дані; `schemas:update`; опис CLI — без «default "supabase"»,
-  якщо типового значення в коді немає.
+- [ ] **Step 3:** дані; `schemas:update`; опис `--database-provider` —
+  перелік `supabase | postgres`, типове лишається `supabase`
+  (`database-tools.ts`: `?? "supabase"`).
 - [ ] **Step 4:** PASS; `pnpm typecheck` і `pnpm lint` — зелені.
 - [ ] **Step 5:** scoped DB на Supabase: `pnpm --filter simetra test:db access rights-functions membership` і
   `pnpm --filter @simetrajs/designer test:db data-tools` — зелені.
@@ -225,12 +233,12 @@ designer, щоб тест-обгортка її бачила. Підготовк
   `packages/simetra/src/schema/engine/index.ts` (експорт),
   `packages/designer/src/schema-engine/census-read.ts`,
   `packages/designer/src/schema-engine/pg-delta/map-units.ts` (`presetGrants`),
-  `packages/designer/src/schema-engine/pg-delta/map-model.ts` (опції `mapModel`),
+  `packages/designer/src/schema-engine/pg-delta/map-model.ts` (`MapContext.provider`),
   `packages/designer/src/schema-engine/pg-delta/adapter.ts` (`extractFrom`, `planAndRun`, `cloneAndRun`),
   `packages/designer/src/tools/database-tools.ts` (`introspect`)
 - Modify (тести, що імпортують `SUPABASE_*` з `simetra/schema`):
   `packages/designer/src/schema-engine/__tests__/{function-checks.db,read-only.supabase.db,engine-policy,build-plan-promotion.supabase.db,build-plan.supabase.db,execute-plan.supabase.db}.test.ts`,
-  `execute-plan.support.ts`; `packages/simetra/src/schema/__tests__/{provider-preset.supabase.db,engine-provider,provider-event-sources}.test.ts`,
+  `execute-plan.support.ts`, `packages/designer/src/schema-engine/__tests__/map-model.test.ts`; `packages/simetra/src/schema/__tests__/{provider-preset.supabase.db,engine-provider,provider-event-sources}.test.ts`,
   `packages/simetra/src/schema/apply/__tests__/execute.test.ts`
 - Create: `packages/designer/src/schema-engine/__tests__/census-read.test.ts`,
   `packages/designer/src/tools/__tests__/database-tools.test.ts`
@@ -245,7 +253,9 @@ designer, щоб тест-обгортка її бачила. Підготовк
   - `PROVIDER_BASE_EXTENSIONS` (`supabase` — нинішній `SUPABASE_BASE_EXTENSIONS`; `postgres` — `[]`);
   - `function renderProviderSeed(provider: DatabaseProvider): string` (`postgres` — `""`);
   - `function onSurface(cls, target, provider: DatabaseProvider)`;
-  - `mapModel(…, { provider })` — опція, яку `extractFrom` бере з `scope.provider`;
+  - `MapContext.provider: DatabaseProvider` — `extractFrom` бере його з
+    `scope.provider`, `presetGrants` і `revokedPresetStatements` читають його з
+    контексту;
   - константи `SUPABASE_*` не експортуються з `simetra/schema`; тести беруть
     `PROVIDER_*.supabase` (без аліасів).
 
@@ -307,40 +317,22 @@ designer, щоб тест-обгортка її бачила. Підготовк
 - [ ] **Step 4:** PASS.
 - [ ] **Step 5: Commit** — `feat(schema-engine): профіль pg-delta simetra-postgres`.
 
-### Task 5: порт — оператор поза транзакцією
-
-**Files:**
-- Modify: `packages/simetra/src/schema/apply/port.ts` (`ApplyDatabase`),
-  `packages/designer/src/schema-engine/apply-database.ts` (`createApplyDatabase`),
-  підставні реалізації порту в тестах (`grep -rn "ApplyDatabase" packages/*/src --include=*.test.ts`)
-- Test: `packages/designer/src/schema-engine/__tests__/apply-database.postgres.db.test.ts`
-
-**Interfaces:**
-- Produces: `ApplyDatabase.statement(db: DbConnection, sql: string): Promise<void>`
-  — окреме з'єднання без `BEGIN`; перед `sql` — `SET ROLE NONE`,
-  `SET search_path = pg_catalog, pg_temp`; з'єднання закривається у `finally`.
-
-- [ ] **Step 1: failing DB test:** `statement` виконує `CREATE DATABASE <тегована>`
-  (у `transaction` той самий оператор дає `25001`); після виклику
-  `current_setting('search_path')` нового з'єднання не змінено; база
-  видаляється у `finally`.
-- [ ] **Step 2:** FAIL (поки немає проєкту `db-pg` designer — запуск у задачі 6).
-- [ ] **Step 3:** реалізація; читальна реалізація (`readOnly: true`) `statement` відмовляє.
-- [ ] **Step 4:** `pnpm typecheck` — зелений.
-- [ ] **Step 5: Commit** — `feat(schema): порт ApplyDatabase — оператор поза транзакцією`.
-
-### Task 6: тест-інфра стека `postgres` для 2a
+### Task 5: тест-інфра стека `postgres` для 2a
 
 **Files:**
 - Modify: `packages/simetra/vitest.config.ts`, `packages/designer/vitest.config.ts`
   — проєкт `db-pg`: `include` — наявні два файли simetra плюс
   `**/*.postgres.db.test.ts`; `db` виключає `**/*.postgres.db.test.ts`; у
-  designer `db-pg` має ті самі `setupFiles`, `maxConcurrency`, `testTimeout`, що й `db`
+  designer `db-pg` — `globalSetup: ["../simetra/test/db/stack-guard.postgres.ts"]`,
+  `fileParallelism: false` (як у `db-pg` simetra), ті самі `setupFiles`,
+  `maxConcurrency`, `testTimeout`, що й `db`
 - Modify: `packages/designer/package.json` (`test:db:pg`), `package.json`
   (корінь: `test:db:pg` кличе обидва пакети)
 - Modify: `packages/simetra/package.json` — `devDependencies`
-  `"better-auth": "1.7.12"`, `"kysely"` — версія з `pnpm-lock.yaml` після
-  встановлення, точна
+  `"better-auth": "1.7.12"` і `"kysely"` — найновіша версія в межах
+  `^0.28.17 || ^0.29`, опублікована щонайменше 14 днів тому, точний пін;
+  ліцензію кожної нової транзитивної залежності звірити за `CONTRIBUTING.md`
+  § «Dependencies»
 - Modify: `packages/simetra/test/db/sweep.ts` (цикл і `manualSweepSql`),
   `packages/simetra/test/db/stack-guard.ts` (звіт про залишки) — тегована база з
   `datistemplate` спершу `ALTER DATABASE … WITH IS_TEMPLATE false`, потім `DROP … WITH (FORCE)`
@@ -351,31 +343,24 @@ designer, щоб тест-обгортка її бачила. Підготовк
 - Modify: `docs/dependency-monitoring.md` — рядки `better-auth` і `kysely`
   (тест-залежності, точний пін, оновлюються разом)
 - Create: `packages/simetra/test/db/better-auth.ts`,
-  `packages/simetra/test/db/better-auth.postgres.db.test.ts`,
-  `packages/designer/src/__tests__/support/postgres-cluster.ts`
+  `packages/simetra/test/db/better-auth.postgres.db.test.ts`
 - Modify: `packages/simetra/test/db/stack-guard.test.ts` («guards every DB project»)
 
 **Interfaces:**
-- Produces:
-  - `async function migrateBetterAuth(url: string): Promise<void>` у
-    `test/db/better-auth.ts` — `getMigrations` з `better-auth/db/migration`,
-    `database: { type: "postgres", dialect: new PostgresDialect({ pool }) }`
-    (без `schemaName`, Р8), пул з `options: "-c search_path=better_auth"`,
-    `advanced: { database: { generateId: "uuid" } }`, `plugins: [anonymous()]`
-    (`better-auth/plugins`), `runMigrations()`; пул закривається у `finally`;
-    `url` — DSN ролі `auth` до цільової бази;
-  - designer `support/postgres-cluster.ts`: `function taggedClusterSet(label: string): PostgresClusterSet`
-    (теговані імена ролей, бази й шаблону; задача 8 дає тип),
-    `const TEST_LOGIN_PASSWORD`, `function roleUrl(set, role): string` (DSN
-    ролі входу до цілі), `async function dropTaggedCluster(set): Promise<void>`
-    (шаблон `IS_TEMPLATE false` і `DROP … WITH (FORCE)`, база, ролі; помилки
-    кожного кроку збираються, останнім кидається перша).
+- Produces: `async function migrateBetterAuth(url: string): Promise<void>` у
+  `test/db/better-auth.ts` — `getMigrations` з `better-auth/db/migration`,
+  `database: { type: "postgres", dialect: new PostgresDialect({ pool }) }`
+  (без `schemaName`, Р8), пул з `options: "-c search_path=better_auth"`,
+  `advanced: { database: { generateId: "uuid" } }`, `plugins: [anonymous()]`
+  (`better-auth/plugins`), `runMigrations()`; пул закривається у `finally`;
+  `url` — DSN ролі `auth` до цільової бази.
 
 - [ ] **Step 1: failing tests:**
-  - `better-auth.postgres.db.test.ts`: у тегованій базі (створює
-    суперкористувач, видаляє `finally`) тегована роль `auth` — власник схеми
-    `better_auth`, з `ALTER ROLE … SET search_path = better_auth`, без `CREATE`
-    на базу; міграція створює `better_auth."user"`, колонки й типи —
+  - `better-auth.postgres.db.test.ts`: тегована база й тегована роль `auth`
+    з паролем (`testDatabaseName`, `testRoleName`; створює суперкористувач
+    прямо, без `PostgresClusterSet`, видаляє у `finally`); `auth` — власник
+    схеми `better_auth`, з `ALTER ROLE … SET search_path = better_auth`, без
+    `CREATE` на базу; міграція створює `better_auth."user"`, колонки й типи —
     `PROVIDER_EVENT_SOURCES.postgres` у тому самому порядку, `id` — `uuid`,
     `"isAnonymous"` — `boolean`; у `public` нічого; повторна міграція
     нічого не змінює;
@@ -387,12 +372,57 @@ designer, щоб тест-обгортка її бачила. Підготовк
   - `stack-guard.test.ts`: `designer/db-pg` у переліку; прибиральник видаляє
     теговану базу з `datistemplate` (підставний клієнт: `ALTER … IS_TEMPLATE false` перед `DROP`).
 - [ ] **Step 2:** `pnpm --filter simetra test stack-guard tier-boundary` — FAIL.
-- [ ] **Step 3:** конфіги, скрипти, залежність (`pnpm --filter simetra add -D -E better-auth@1.7.12 kysely@<версія>`),
-  хелпери. `test:db:pg` designer — без `--passWithNoTests`: перший файл дає задача 5.
-- [ ] **Step 4:** `pnpm test:db:pg` — зелений (з тестом задачі 5), рядок старту
+- [ ] **Step 3:** конфіги, скрипти, залежність
+  (`pnpm --filter simetra add -D -E better-auth@1.7.12 kysely@<вибрана>`),
+  хелпер. `test:db:pg` designer — без `--passWithNoTests`: перший файл дає задача 6.
+- [ ] **Step 4:** `pnpm --filter simetra test:db:pg` — зелений, рядок старту
   `on postgres stack`; `pnpm build:packages && pnpm test:packaging` — зелені;
   `docker ps -a --filter label=simetra-run` — порожньо.
 - [ ] **Step 5: Commit** — `test(db): проєкт db-pg обох пакетів, міграція Better Auth, прибирання шаблонів`.
+
+### Task 6: порт — оператор поза транзакцією
+
+**Files:**
+- Modify: `packages/simetra/src/schema/apply/port.ts` (`ApplyDatabase`),
+  `packages/designer/src/schema-engine/apply-database.ts` (`createApplyDatabase`)
+- Modify — кожна реалізація `ApplyDatabase` (звір із
+  `grep -rln "ApplyDatabase\|transaction(" packages --include=*.ts` перед стартом):
+  `packages/simetra/test/db/connection.ts` (`rollbackDatabase`),
+  `packages/designer/src/schema-engine/__tests__/execute-plan.support.ts`
+  (`counted`, `observing`, `afterEnd`, `sessionLeftover`),
+  `packages/designer/src/schema-engine/__tests__/build-plan.support.ts`
+  (`readerWithoutPlpgsqlCheck`);
+  `packages/simetra/src/schema/apply/__tests__/{rights-maintenance,plan,execute,platform-roles}.test.ts`,
+  `packages/designer/src/__tests__/apply-outcome.test.ts`;
+  DB-тести з власними портами: `packages/designer/src/__tests__/apply-tools.db.test.ts`,
+  `packages/designer/src/schema-engine/__tests__/{build-plan,build-plan-promotion-data,build-plan-provider,execute-plan}.db.test.ts`.
+  Заглушки реалізують `statement` як
+  `() => Promise.reject(new Error("no statement expected"))`; обгортки
+  (`counted`, `observing` та інші) пересилають виклик `db.statement(…)`
+- Create: `packages/designer/src/schema-engine/__tests__/apply-database.postgres.db.test.ts`,
+  `packages/simetra/src/schema/apply/__tests__/statement-boundary.test.ts`
+
+**Interfaces:**
+- Produces: `ApplyDatabase.statement(db: DbConnection, sql: string): Promise<void>`
+  — окреме з'єднання без `BEGIN`; перед `sql` — прелюдія `statement` з Global
+  Constraints; з'єднання закривається у `finally`. JSDoc англійською: «only
+  for cluster preparation (`ensurePostgresCluster`); never in plan or apply».
+- Змінює: `createApplyDatabase({ readOnly: false })` відкриває
+  `BEGIN ISOLATION LEVEL READ COMMITTED READ WRITE`.
+
+- [ ] **Step 1: failing tests:**
+  - DB: `statement` виконує `CREATE DATABASE <тегована>` (у `transaction` той
+    самий оператор дає `25001`); після виклику
+    `current_setting('search_path')` нового з'єднання не змінено; база з
+    `ALTER DATABASE … SET default_transaction_read_only = on` приймає
+    запис і в `transaction` з `readOnly: false`, і в `statement`; бази
+    видаляються у `finally`;
+  - гард `statement-boundary.test.ts`: у `packages/simetra/src/schema/apply`
+    немає виклику `.statement(` поза `postgres-cluster.ts`.
+- [ ] **Step 2:** `pnpm --filter @simetrajs/designer test:db:pg apply-database` — FAIL.
+- [ ] **Step 3:** реалізація; читальна реалізація (`readOnly: true`) `statement` відмовляє.
+- [ ] **Step 4:** PASS; `pnpm --filter simetra test statement-boundary`, `pnpm test:db:pg`, `pnpm typecheck` — зелені.
+- [ ] **Step 5: Commit** — `feat(schema): порт ApplyDatabase — оператор поза транзакцією`.
 
 ### Task 7: гейт ролей входу за `LOGIN_ROLE_PARENTS`
 
@@ -438,34 +468,61 @@ designer, щоб тест-обгортка її бачила. Підготовк
 **Files:**
 - Create: `packages/simetra/src/schema/apply/postgres-cluster.ts`,
   `packages/simetra/src/schema/apply/__tests__/postgres-cluster.test.ts`,
+  `packages/simetra/test/db/postgres-cluster.ts` (тест-хелпер кластера; designer-тести
+  імпортують його звідти),
   `packages/designer/src/__tests__/roles-tool.postgres.db.test.ts`
 - Modify: `packages/simetra/src/schema/apply/index.ts`,
+  `packages/simetra/src/schema/apply/execute.ts` (`CLUSTER_ADVISORY_LOCK` поруч
+  з `APPLY_ADVISORY_LOCK`),
   `packages/designer/src/tools/roles-tool.ts`,
   `packages/simetra/src/compiler/diagnostics.ts`, `packages/simetra/src/compiler/messages.ts`
 
 **Interfaces:**
-- Consumes: `PlatformRoleSet` (задача 7), `ApplyDatabase.statement` (задача 5),
+- Consumes: `PlatformRoleSet` (задача 7), `ApplyDatabase.statement` (задача 6),
   `PROVIDER_OWNER_ROLES`, `PROVIDER_LOGIN_ROLES`, `PROVIDER_API_ROLES`,
-  `PROVIDER_SHADOW_TEMPLATES` (задача 2), будівник задачі 6.
+  `PROVIDER_SHADOW_TEMPLATES` (задача 2).
 - Produces:
   - `interface PostgresClusterSet { owner: string; roles: PlatformRoleSet; request: readonly string[]; auth: string; template: string; database: string }`;
   - `function postgresClusterSet(database: string): PostgresClusterSet` — імена з даних T0/T2;
   - `async function ensurePostgresCluster(dbs: ApplyDatabase, conns: { maintenance: DbConnection; target: DbConnection; template: DbConnection }, set: PostgresClusterSet): Promise<Result<PostgresClusterOutcome, EngineDiagnostic[]>>`
     — `PostgresClusterOutcome { created: string[]; present: string[] }`;
     `conns` будує designer (`withDatabaseName` з `@supabase/pg-delta`);
+    `conns.template` відкривається лише для незапечатаного шаблону;
+  - `CLUSTER_ADVISORY_LOCK` — ключ замка `roles`;
   - коди (en, uk, підказка; за §3.1, §3.4): `roles.superuser-required`,
     `roles.unsafe-schema`, `roles.unsafe-template`, `roles.database-owner`,
-    `roles.shared-cluster`, `plan.shadow-base-unsupported` (Р9).
+    `roles.shared-cluster`, `plan.shadow-base-unsupported` (Р9);
+  - тест-хелпер `packages/simetra/test/db/postgres-cluster.ts`:
+    `function taggedClusterSet(label: string): PostgresClusterSet` (теговані
+    імена ролей, бази й шаблону), `const TEST_LOGIN_PASSWORD`,
+    `function roleUrl(set, role): string` (DSN ролі входу до цілі),
+    `async function setTestPasswords(set): Promise<void>` (від
+    суперкористувача, `TEST_LOGIN_PASSWORD`; тести, що входять тегованими
+    ролями, кличуть його в `beforeAll`),
+    `async function dropTaggedCluster(set, extraDatabases?: readonly string[]): Promise<void>`
+    (спершу додаткові бази, потім шаблон `IS_TEMPLATE false` і
+    `DROP … WITH (FORCE)`, база, ролі; помилки кожного кроку збираються,
+    останнім кидається перша).
 
-`ensurePostgresCluster` — дві фази (Review Focus 5):
+`ensurePostgresCluster` — дві фази в зовнішній транзакції службової бази, що
+бере `pg_advisory_xact_lock(CLUSTER_ADVISORY_LOCK)` і тримає його до кінця
+обох фаз; решта з'єднань працює всередині (Review Focus 5).
 
-**Фаза читання** (жодного запису; будь-яка відмова — повернення без запису):
-1. у кожному з'єднанні (службова база, ціль, шаблон, якщо є) — стартові
-   оператори Global Constraints; `current_user ≠ session_user` чи без
+**Запечатаний шаблон** — `datistemplate`, `NOT datallowconn`, власник —
+суперкористувач (з `pg_database` через службову базу). Він довірений без
+з'єднання: його вміст міг змінити лише суперкористувач. З'єднання з шаблоном
+(прелюдія, перевірки п. 5, відсутність `better_auth`, доробка й позначка) —
+лише коли шаблон ще не запечатано.
+
+**Фаза читання** (жодного запису; будь-яка відмова — повернення без запису;
+результат — знімок для фази запису):
+1. у кожній транзакції (службова база, ціль, якщо є, незапечатаний шаблон) —
+   прелюдія Global Constraints; `current_user ≠ session_user` чи без
    `rolsuper` — `roles.superuser-required`;
 2. форма наявних ролей: `owner` — атрибути рівно
    `LOGIN NOSUPERUSER NOINHERIT BYPASSRLS CREATEDB NOCREATEROLE NOREPLICATION`,
-   не член жодної ролі (зокрема `pg_*`), без членів; `auth` — лише `LOGIN`,
+   не член жодної ролі (зокрема `pg_*`), без членів; `auth` — атрибути рівно
+   `LOGIN NOSUPERUSER NOINHERIT NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`,
    без членств і членів; ролі запиту — форма ролі грантів, члени — лише пари
    ролі входу рантайму; роль входу рантайму — наявний гейт (задача 7);
    порушення — `plan.platform-role-shape` з `violation`;
@@ -473,57 +530,84 @@ designer, щоб тест-обгортка її бачила. Підготовк
 4. явний `CONNECT` ролі входу Simetra (`runtime`, `auth`) до іншої бази —
    рядок `aclexplode(datacl)` при `datacl IS NOT NULL`, `grantee <> 0`,
    `datname <> database` — `roles.shared-cluster` з переліком баз;
-5. ціль (якщо є) і шаблон (якщо є): схема `extensions` — `roles.unsafe-schema`,
+5. ціль (якщо є) і незапечатаний шаблон: схема `extensions` — `roles.unsafe-schema`,
    коли власник без `rolsuper`, `nspacl` дає `CREATE` не суперкористувачу, чи
    в схемі є об'єкт (`pg_class`, `pg_proc`, `pg_type`, `pg_operator`) з
    власником без `rolsuper`; `plpgsql_check` у схемі, відмінній від
    `extensions`, — та сама відмова;
 6. ціль: `better_auth` належить не `auth`; `auth` має `CREATE` на базу чи на
-   `public`; таблиця `user` Better Auth поза `better_auth` — `roles.unsafe-schema` (Р8);
+   `public`; будь-яке відношення з `relowner = <auth>` поза `better_auth`;
+   рядок `pg_db_role_setting` ролі `auth` для цілі з іншим `search_path` —
+   `roles.unsafe-schema` (Р8);
 7. шаблон: власник без `rolsuper`, чи `datallowconn` за `datistemplate` —
-   `roles.unsafe-template`; є `better_auth` — `roles.unsafe-template`.
+   `roles.unsafe-template`; у незапечатаному шаблоні є `better_auth` —
+   `roles.unsafe-template`.
 
-**Фаза запису** (лише без жодної відмови; кожен крок ідемпотентний):
+**Фаза запису** (лише без жодної відмови) діє за знімком фази читання: наявне
+в знімку пропускається, а чого не було, створюється без `IF NOT EXISTS`
+(`CREATE SCHEMA extensions`, `CREATE SCHEMA better_auth AUTHORIZATION …`,
+`CREATE DATABASE`). Об'єкт, що з'явився між фазами, дає помилку оператора, а
+не пропуск.
 1. відсутні ролі §3.1 (у 2a — без ролей сигналів, Р3) з атрибутами вище,
    пари `WITH INHERIT FALSE, SET TRUE`; `ALTER ROLE <auth> SET search_path = better_auth`;
 2. база — `statement`: `CREATE DATABASE <database> OWNER <owner> TEMPLATE template0`;
 3. ціль: `REVOKE CONNECT, TEMPORARY ON DATABASE … FROM PUBLIC`; `GRANT CONNECT`
-   ролям входу Simetra; `extensions` (власник — суперкористувач), `GRANT USAGE … TO <owner>`;
-   `CREATE EXTENSION IF NOT EXISTS plpgsql_check SCHEMA extensions`;
-   схема `better_auth AUTHORIZATION <auth>`;
+   ролям входу Simetra; `CREATE SCHEMA extensions` (власник — суперкористувач),
+   `GRANT USAGE … TO <owner>`; перевірку фази читання 5 повторити в тій самій
+   транзакції безпосередньо перед `CREATE EXTENSION plpgsql_check SCHEMA extensions`;
+   `CREATE SCHEMA better_auth AUTHORIZATION <auth>`;
+   `ALTER ROLE <auth> IN DATABASE <database> SET search_path = better_auth`;
 4. шаблон — `statement`: `CREATE DATABASE <template> TEMPLATE template0`,
    одразу `REVOKE CONNECT, TEMPORARY … FROM PUBLIC`; у ньому кроки
-   `extensions` без `better_auth`; `ALTER DATABASE … IS_TEMPLATE true ALLOW_CONNECTIONS false`.
-   Наявний шаблон суперкористувача без позначки — доробити й позначити.
+   `extensions` пункту 3 (з повторною перевіркою 5) без `better_auth`;
+   `ALTER DATABASE … IS_TEMPLATE true ALLOW_CONNECTIONS false`; після позначки —
+   `pg_terminate_backend` інших сесій шаблону
+   (`pg_stat_activity.datname = <template>`, `pid <> pg_backend_pid()`).
+   Незапечатаний шаблон суперкористувача — доробити тими самими кроками й позначити.
 
 - [ ] **Step 1: failing unit tests** (`postgres-cluster.test.ts`):
   `postgresClusterSet("app")` бере імена з даних; функції рішення фази читання
-  (форма ролей, явний `CONNECT`, безпечна схема) — табличні кейси з рядків
+  (форма ролей, явний `CONNECT`, безпечна схема, запечатаний шаблон,
+  налаштування `search_path` ролі `auth` для цілі) — табличні кейси з рядків
   каталогу; гілка `rolesTool` за провайдером — з підставним портом;
   `messages.test.ts` — нові коди мають en/uk і підказку.
 - [ ] **Step 2: failing DB tests** (`roles-tool.postgres.db.test.ts`; кожен
   сценарій — свій `taggedClusterSet(<мітка>)`, `dropTaggedCluster` у `afterAll`;
-  виклик — `ensurePostgresCluster` з тегованим набором, не справжній `rolesTool`):
+  виклик — `ensurePostgresCluster` з тегованим набором, не справжній `rolesTool`;
+  `plpgsql_check` і відсутність `better_auth` у шаблоні перевіряються в
+  тегованій одноразовій копії `CREATE DATABASE <тег> TEMPLATE <шаблон>`, не
+  з'єднанням із шаблоном):
   - атрибути й рядки `pg_auth_members` кожної ролі за §3.1; власник бази;
     `datistemplate` і `datallowconn` шаблону; `plpgsql_check` у цілі й у
-    шаблоні; `USAGE` власника на `extensions`; `better_auth` належить `auth`,
-    у шаблоні її немає; налаштування `search_path` ролі `auth` (`pg_db_role_setting`);
-  - повторний виклик — `created` порожній, рядки ті самі;
+    копії шаблону; `USAGE` власника на `extensions`; `better_auth` належить
+    `auth`, у копії шаблону її немає; налаштування `search_path` ролі `auth`
+    (`pg_db_role_setting`, рядок ролі й рядок ролі в цілі);
+  - повторний виклик — `created` порожній, рядки ті самі; третій виклик після
+    позначки шаблону — успіх, `created` порожній;
+  - шаблон, створений суперкористувачем без позначки (перерваний запуск), —
+    наступний виклик доробляє й позначає його;
   - не-суперкористувач — `roles.superuser-required`; база з іншим власником —
     `roles.database-owner`; явний `CONNECT` до іншої тегованої бази —
-    `roles.shared-cluster`; `extensions` власника, `GRANT CREATE` на
-    `extensions` власнику — `roles.unsafe-schema`; шаблон, створений
-    власником, — `roles.unsafe-template`; `owner` член `pg_execute_server_program`,
-    `runtime` член `owner`, `auth` з `BYPASSRLS` — `plan.platform-role-shape`;
+    `roles.shared-cluster` (ця база передається в `dropTaggedCluster` як
+    додаткова); `extensions` власника, `GRANT CREATE` на `extensions`
+    власнику, `better_auth` належить не `auth` — `roles.unsafe-schema`;
+    шаблон, створений власником, — `roles.unsafe-template`; `owner` член
+    `pg_execute_server_program`, `runtime` член `owner`, `auth` з `BYPASSRLS`,
+    член-посередник з `CREATEROLE` у тегованої ролі `user` —
+    `plan.platform-role-shape` (посередник — `request-path:<посередник>`, §3.1);
     для кожної відмови `pg_roles`, `pg_database` і `datacl` цілі — без змін;
+  - власник створює `extensions` між фазами (обгортка порту виконує це від
+    тегованого `owner` після фази читання) — `roles` падає, `plpgsql_check` у
+    схемі власника не з'являється;
   - власник ставить `ALTER DATABASE <ціль> SET role = <owner>` і
     `SET search_path = public, pg_catalog`, кладе в `public` функцію й
     оператор із сигнатурами вбудованих, які SQL фази цілі справді кличе
     (перелік — з власного SQL, щонайменше одна функція й оператор `=`), що
     пишуть маркер; наступний виклик проходить як суперкористувач (власник
     `extensions` — суперкористувач) і маркера не пише; мутація — без
-    стартових операторів тест червоний (результат мутації — у звіт задачі) (Review Focus 4);
-  - роль входу рантайму без `SET ROLE` не читає таблиці з `GRANT SELECT` лише ролі запиту.
+    прелюдії тест червоний (результат мутації — у звіт задачі) (Review Focus 4);
+  - роль входу рантайму без `SET ROLE` не читає таблиці з `GRANT SELECT` лише
+    ролі запиту (`setTestPasswords` у `beforeAll`).
 - [ ] **Step 3:** `pnpm --filter simetra test postgres-cluster` і `pnpm test:db:pg` — FAIL.
 - [ ] **Step 4:** реалізація; `rolesTool`: `postgres` — `ensurePostgresCluster`
   (`maintenance` — URL цілі з базою `postgres`, `template` — з базою шаблону),
@@ -535,24 +619,36 @@ designer, щоб тест-обгортка її бачила. Підготовк
 ### Task 9: стек `postgres` — ролі, база `simetra` і шаблон на старті
 
 **Files:**
-- Create: `docker/postgres-stack/project/project.meta.json`
+- Create: `docker/postgres-stack/project/project.meta.json` — вміст
+  `{ "name": "simetra-dev", "database": { "provider": "postgres" } }`; тека
+  поза шаблоном `*metadata`, тож `metadata:check` її не компілює
+- Create: `packages/simetra/test/db/stack-roles.postgres.db.test.ts`
 - Modify: `docker/postgres-stack/dev-secrets.env` (`SIMETRA_OWNER_DEV_PASSWORD`,
   `SIMETRA_RUNTIME_DEV_PASSWORD`, `SIMETRA_AUTH_DEV_PASSWORD`),
   `scripts/db-stack.mjs` (`startPostgres`), `scripts/db-stack.d.mts`,
   `packages/simetra/test/db/stack-files.test.ts`,
-  `packages/simetra/test/db/pgtap/postgres/stack-base-state.pgtap.sql`
+  `packages/simetra/test/db/pgtap/postgres/stack-base-state.pgtap.sql` (`plan(N)`
+  і шапку про ролі Simetra оновити)
 
-- [ ] **Step 1: failing tests:** `stack-files.test.ts` — `project.meta.json`
-  стека з `database.provider: "postgres"`; `dev-secrets.env` має три паролі;
-  набір базового стану: ролі §3.1 (без ролей сигналів) з атрибутами,
-  `simetra` належить `simetra_owner`, `simetra_template` — шаблон з
-  `plpgsql_check`, `better_auth` належить `simetra_auth`.
+- [ ] **Step 1: failing tests:**
+  - `stack-files.test.ts` — `project.meta.json` стека з
+    `database.provider: "postgres"`; `dev-secrets.env` має три паролі;
+  - набір базового стану (pgTAP, база `postgres`) — лише кластерні факти:
+    ролі §3.1 (без ролей сигналів) з атрибутами (`pg_roles`) і членствами
+    (`pg_auth_members`); `simetra` належить `simetra_owner` (`pg_database`);
+    `simetra_template` — `datistemplate` і `NOT datallowconn`; налаштування
+    `search_path` ролі `simetra_auth` (`pg_db_role_setting`);
+  - `stack-roles.postgres.db.test.ts`: у `simetra` схема `better_auth` належить
+    `simetra_auth`, `plpgsql_check` стоїть у `extensions`; у тегованій
+    одноразовій копії `CREATE DATABASE <тег> TEMPLATE simetra_template` —
+    `plpgsql_check` є, `better_auth` немає; копія видаляється у `finally`.
 - [ ] **Step 2:** `pnpm --filter simetra test stack-files` — FAIL.
 - [ ] **Step 3:** `startPostgres` після `dev-environment.sql`, під тим самим
   замком: `node packages/designer/bin/simetra.mjs roles docker/postgres-stack/project`
-  з `SIMETRA_DATABASE_URL` суперкористувача до бази `simetra`; потім
-  `ALTER ROLE … PASSWORD` ролям входу від суперкористувача (`psql -v` змінні,
-  не інтерполяція). Шапку `db-stack.mjs` про «без залежностей» уточнити:
+  з `SIMETRA_DATABASE_URL` суперкористувача до бази `simetra`; потім паролі
+  ролям входу від суперкористувача через stdin `psql` (`\set` і
+  `ALTER ROLE … PASSWORD :'pw'`, як `dev-environment.sql` через `input:`), не
+  `-v` в argv. Шапку `db-stack.mjs` про «без залежностей» уточнити:
   `start postgres` вимагає `pnpm install`.
 - [ ] **Step 4:** PASS; `pnpm db:pg:start` — код 0; `pnpm test:db:pg` —
   зелений; повторний `pnpm db:pg:start` — код 0, рядки `pg_auth_members` ті
@@ -564,11 +660,14 @@ designer, щоб тест-обгортка її бачила. Підготовк
 **Files:**
 - Create: `packages/designer/src/schema-engine/pg-delta/template-shadow.ts`
 - Modify: `packages/simetra/src/schema/engine/port.ts` (`ShadowOptions.shadowTemplate?`, JSDoc англійською),
+  `packages/simetra/src/schema/apply/plan.ts` (`buildPlan` — відмова `shadowBase`),
+  `packages/designer/src/tools/apply-tools.ts` (вхід `rehearse` і `apply` — та сама відмова),
   `packages/designer/src/schema-engine/pg-delta/adapter.ts` (`provisionShadow(o, scope)`),
-  `packages/designer/src/schema-engine/errors.ts` (`ShadowTemplateMissingError`),
+  `packages/designer/src/schema-engine/errors.ts` (`ShadowTemplateMissingError`, `ShadowBaseUnsupportedError`),
   `packages/designer/src/io/database.ts` (`classify`),
   `packages/designer/src/__tests__/support/db-setup.ts` (другий `vi.mock` на новий модуль),
   `packages/designer/src/__tests__/support/shadows.ts` (документація обліку)
+- Modify (тести): `packages/simetra/src/schema/apply/__tests__/plan.test.ts`
 - Create: `packages/designer/src/schema-engine/__tests__/template-shadow.postgres.db.test.ts`,
   `packages/designer/src/schema-engine/__tests__/plan.postgres.db.test.ts`
 
@@ -581,12 +680,20 @@ designer, щоб тест-обгортка її бачила. Підготовк
     ім'я, типовий суфікс і `cleanup` — як у `provisionCoLocatedShadow`;
   - `provisionShadow(o, scope)`: шаблон = `o.shadowTemplate ?? PROVIDER_SHADOW_TEMPLATES[scope.provider]`;
     `null` — `provisionCoLocatedShadow`; інакше `provisionTemplateShadow`;
-    `scope.provider === "postgres"` з `o.shadowBase` — `plan.shadow-base-unsupported`;
+    `scope.provider === "postgres"` з `o.shadowBase` — `ShadowBaseUnsupportedError`;
+  - `buildPlan` і вхід `rehearse`/`apply`: `provider === "postgres"` з
+    `shadowBase` — діагностика `plan.shadow-base-unsupported` до
+    `checkPlatformRoles` і до будь-якого звернення до бази;
   - `ShadowTemplateMissingError { template: string }` — `classify` друкує
-    шаблон і пораду `simetra roles`.
+    шаблон і пораду `simetra roles`; `ShadowBaseUnsupportedError` — гілка
+    `classify` з кодом `plan.shadow-base-unsupported`.
 
-- [ ] **Step 1: failing DB tests:**
-  - `template-shadow.postgres.db.test.ts` (тегований кластер задачі 6/8):
+- [ ] **Step 1: failing tests:**
+  - unit (`plan.test.ts`): `provider: "postgres"` і `shadowBase` — відмова
+    `plan.shadow-base-unsupported` до будь-якого звернення до бази (підставний
+    порт не отримує жодного запиту);
+  - `template-shadow.postgres.db.test.ts` (хелпер кластера задачі 8,
+    `setTestPasswords` у `beforeAll`):
     тінь від тегованого `owner` має `plpgsql_check`, ім'я
     `pgdelta_shadow_<тег>…`, облік `recordProvision` її бачить, після
     `cleanup` бази немає; шаблон без позначки чи з власником `owner` —
@@ -595,7 +702,7 @@ designer, щоб тест-обгортка її бачила. Підготовк
   - `plan.postgres.db.test.ts` (ролі грантів стека з задачі 9; тегована ціль
     від суперкористувача з власником — тегованим `owner` з атрибутами
     `simetra_owner` і членом нічого; міграція Better Auth на цілі від
-    тегованого `auth`; гранти `USAGE` на `better_auth` і `TRIGGER` на
+    тегованого `auth`; паролі — `setTestPasswords`; гранти `USAGE` на `better_auth` і `TRIGGER` на
     `better_auth."user"` тегованому `owner` ставить тест від суперкористувача
     — у ПГ-3 їх дасть `roles`; `shadowTemplate` — `simetra_template` стека):
     - план і застосування моделі `examples/reference` з `provider: "postgres"`
@@ -606,11 +713,11 @@ designer, щоб тест-обгортка її бачила. Підготовк
       на `better_auth` (Review Focus 3);
     - каталожний гейт (`readCensus`) бачить у чужих схемах лише розширення й
       тригери провізії.
-- [ ] **Step 2:** `pnpm test:db:pg` — FAIL.
+- [ ] **Step 2:** `pnpm --filter simetra test plan` і `pnpm test:db:pg` — FAIL.
 - [ ] **Step 3:** реалізація; прогалина pg-delta в наскрізному плані — до
   архітекторки з фактом, не обхід.
 - [ ] **Step 4:** PASS; scoped DB на Supabase
-  `pnpm --filter @simetrajs/designer test:db shadows engine-desired build-plan execute-plan` — зелені.
+  `pnpm --filter @simetrajs/designer test:db apply-tools build-plan-provider engine-desired build-plan execute-plan` — зелені.
 - [ ] **Step 5: Commit** — `feat(schema-engine): тінь профілю postgres з шаблону; план на postgres наскрізно`.
 
 ### Task 11: гейт `plan.owner-not-bypassrls`
@@ -621,27 +728,38 @@ designer, щоб тест-обгортка її бачила. Підготовк
   не для `mode: "proof"`), `packages/designer/src/tools/apply-tools.ts`
   (гілка `rehearse`, до `withDesiredShadow`),
   `packages/simetra/src/compiler/diagnostics.ts`, `packages/simetra/src/compiler/messages.ts`
+- Modify (тести з підставними портами): `packages/simetra/src/schema/apply/__tests__/plan.test.ts`,
+  `packages/simetra/src/schema/apply/__tests__/execute.test.ts`, фейки
+  `apply-tools`-тестів за потреби — на запит атрибутів `current_user`
+  відповідають `{ bypassrls: true, superuser: false }`
 - Create: `packages/simetra/src/schema/apply/owner-gate.ts`,
   `packages/simetra/src/schema/apply/__tests__/owner-gate.test.ts`,
   `packages/designer/src/schema-engine/__tests__/owner-gate.postgres.db.test.ts`
 
 **Interfaces:**
-- Produces: `function ownerRefusal(row: { bypassrls: boolean; superuser: boolean }): EngineDiagnostic | undefined`
+- Produces: `function ownerRefusal(row: { bypassrls: boolean; superuser: boolean } | undefined): EngineDiagnostic | undefined`
   і `async function checkOwnerAttributes(tx: ApplyTransaction): Promise<EngineDiagnostic | undefined>`
-  (читає атрибути `current_user`); код `plan.owner-not-bypassrls` (помилка;
-  підказка — `ALTER ROLE … BYPASSRLS` від суперкористувача). Виклики (Р10):
-  `buildPlan` — у першій читальній транзакції поруч із `serverVersionRefusal`,
-  до `checkPlatformRoles`; `executePlan` — у транзакції застосування після
-  advisory lock, до першого кроку; `rehearse` — до `withDesiredShadow`.
+  (читає атрибути `current_user`; відсутній рядок — відмова, fail-closed);
+  код `plan.owner-not-bypassrls` (помилка; підказка — `ALTER ROLE … BYPASSRLS`
+  від суперкористувача). Виклики (Р10): `buildPlan` — у першій читальній
+  транзакції після `serverVersionRefusal`, до `checkPlatformRoles`;
+  `executePlan` — у транзакції застосування після advisory lock, до першого
+  кроку; `rehearse` — до `withDesiredShadow`.
 
-- [ ] **Step 1: failing tests:** unit `ownerRefusal` — відмова лише для
-  `{ false, false }`; DB (`owner-gate.postgres.db.test.ts`, тегований кластер):
+- [ ] **Step 1: failing tests:** unit `ownerRefusal` — відмова для
+  `{ false, false }` і для відсутнього рядка; DB (`owner-gate.postgres.db.test.ts`,
+  хелпер кластера задачі 8, `setTestPasswords` у `beforeAll`):
   план від ролі без `BYPASSRLS` — відмова, жодного кроку; план від ролі з
   `BYPASSRLS`, потім `ALTER ROLE … NOBYPASSRLS`, потім застосування — відмова,
   у ledger нічого; репетиція від ролі без `BYPASSRLS` — відмова до створення тіні.
 - [ ] **Step 2:** `pnpm --filter simetra test owner-gate` і `pnpm test:db:pg` — FAIL.
-- [ ] **Step 3:** реалізація.
-- [ ] **Step 4:** PASS; scoped DB на Supabase `pnpm --filter @simetrajs/designer test:db build-plan execute-plan apply-tools` — зелені (роль `postgres` має `BYPASSRLS`).
+- [ ] **Step 3:** реалізація; фейки `plan.test.ts` і `execute.test.ts`
+  відповідають на новий запит.
+- [ ] **Step 4:** PASS; `pnpm --filter simetra test plan execute`; scoped DB на
+  Supabase `pnpm --filter @simetrajs/designer test:db build-plan execute-plan apply-tools round-trip database-tools`
+  — зелені (роль `postgres` має `BYPASSRLS`; ролям, які створюють
+  `round-trip.db.test.ts` і `database-tools.db.test.ts` і від яких будують план,
+  у налаштуванні тесту може знадобитися `BYPASSRLS`).
 - [ ] **Step 5: Commit** — `feat(schema): відмова власнику без BYPASSRLS на плані, застосуванні й репетиції`.
 
 ### Task 12: документація й гейти
@@ -655,6 +773,9 @@ designer, щоб тест-обгортка її бачила. Підготовк
 - Modify: `docs/superpowers/specs/2026-09-24-simetra-platform-design.md` §6.2
   «Тіньова БД» (шаблон `simetra_template`) і §6.7 (профіль без сервісної
   ролі; винятки outbox — ПГ-4)
+- Modify: `docs/superpowers/specs/2026-10-26-p4-runtime-design.md` §6.2 —
+  рядок `simetra_runtime` для `postgres`: член `simetra_user` і `simetra_anon`
+  (рядка `simetra_signals` немає — ПГ-4)
 - Modify: `docs/ROADMAP.md` — статус ПГ-2a
 
 - [ ] **Step 1:** правки; без лічильників і наративу фаз.
