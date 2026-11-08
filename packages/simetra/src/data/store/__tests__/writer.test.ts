@@ -561,10 +561,10 @@ describe("purge", () => {
     write(core, (w) => w.purge(TASK, { scope: T }))
     fake.hold = (read) => isKeys(read)
     write(core, (w) => w.patch(TASK, [fake.row(TASK, key(1))!], early))
-    expect(view.getSnapshot().rows[0]).toMatchObject({
-      state: "stale",
-      values: {},
-    })
+    const hidden = view.getSnapshot().rows[0]!
+    expect(hidden).toMatchObject({ state: "stale" })
+    // toMatchObject пропустив би будь-який об'єкт: значення мають бути порожні.
+    expect(hidden.state !== "removed" && hidden.values).toEqual({})
     expect(log).toContainEqual({
       kind: "horizon-hidden",
       object: TASK,
@@ -782,7 +782,9 @@ describe("revalidate", () => {
     // Пізніше розпочате читання встигає записати рядок.
     bump(core)
     fake.hold = undefined
-    view.refresh()
+    // Системне перечитування, а не `refresh()`: завантаження вигляду
+    // відкинуло б ранню відповідь за поколінням, а тут перевіряється епоха.
+    await core.revalidate(TASK, { visibleOnly: false })
     await settle()
     fake.hold = (read) => isKeys(read)
     early.answer(hidden)
@@ -822,7 +824,9 @@ describe("revalidate", () => {
     const early = fake.take()
     bump(core)
     fake.hold = undefined
-    view.refresh()
+    // Системне перечитування, а не `refresh()`: завантаження вигляду
+    // відкинуло б ранню відповідь за поколінням, а тут перевіряється епоха.
+    await core.revalidate(TASK, { visibleOnly: false })
     await settle()
     fake.hold = (read) => isKeys(read)
     early.answer(hidden)
@@ -856,7 +860,9 @@ describe("revalidate", () => {
     const early = fake.take()
     bump(core)
     fake.hold = undefined
-    view.refresh()
+    // Системне перечитування, а не `refresh()`: завантаження вигляду
+    // відкинуло б ранню відповідь за поколінням, а тут перевіряється епоха.
+    await core.revalidate(TASK, { visibleOnly: false })
     await settle()
     fake.setVisibleScopes([])
     early.answer()
@@ -1091,6 +1097,27 @@ describe("revalidate", () => {
     expect(core.commit(() => {}, core.token())).toBe(false)
   })
 
+  it("sends no read from a revalidate called by a listener of the closing purge batch", async () => {
+    // У пачці закриття `session.closed` ще не виставлено: ознака закриття —
+    // недійсний токен, інакше слухач відправив би читання після close.
+    const { core, fake } = setup()
+    seed(fake, 1, 2)
+    const view = core.view(keys(1))
+    let fired = false
+    view.subscribe(() => {
+      if (view.getSnapshot().status === "purged" && !fired) {
+        fired = true
+        void core.revalidate(TASK, { visibleOnly: false })
+      }
+    })
+    await settle()
+    const reads = fake.log.length
+    core.close("disposed")
+    await settle()
+    expect(fired).toBe(true)
+    expect(fake.log).toHaveLength(reads)
+  })
+
   it("lists active views with the visible ones first", async () => {
     const { core, fake } = setup()
     seed(fake, 1, 3)
@@ -1108,5 +1135,48 @@ describe("revalidate", () => {
       [keys(3), [key(3)], false],
     ])
     expect(core.activeViews(ORG)).toEqual([])
+  })
+
+  it("drops the result of a view whose load started after the re-read began", async () => {
+    // Завантаження після старту перечитування вже забрало нові рядки й
+    // їхні цілі `include`; застаріла відповідь не має їх відібрати.
+    const { core, fake, inspect } = setup()
+    const o1 = key(10_001)
+    const o2 = key(10_002)
+    fake.insert(ORG, { ref: o1 })
+    fake.insert(ORG, { ref: o2 })
+    fake.insert(TASK, taskValues(1, { org: o1 }))
+    const full = core.view({ kind: "full", object: TASK, include: ["org"] })
+    watch(full)
+    await settle()
+    fake.insert(TASK, taskValues(2, { org: o2 }))
+    let holdNext = true
+    fake.hold = (read) => {
+      if (holdNext && read.object === ORG) {
+        holdNext = false
+        return true
+      }
+      return false
+    }
+    const done = core.revalidate(TASK, { visibleOnly: false })
+    await settle()
+    expect(fake.pending.length).toBe(1)
+    full.refresh()
+    await settle()
+    const orgsOf = () =>
+      full
+        .getSnapshot()
+        .rows.map((r) => [
+          r.key,
+          r.state === "removed" ? undefined : r.refs?.org?.key,
+        ])
+    const before = orgsOf()
+    expect(before).toContainEqual([key(2), o2])
+    fake.take().answer()
+    await done
+    await settle()
+    expect(orgsOf()).toEqual(before)
+    expect(inspect.owners(ORG, o2)).not.toEqual([])
+    expect(inspect.violations()).toEqual([])
   })
 })

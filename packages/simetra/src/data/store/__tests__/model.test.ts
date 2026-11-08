@@ -1145,6 +1145,20 @@ async function runModel(
       if (snap.status !== "ready")
         fail(where, `status ${snap.status} after refresh`)
       for (const row of snap.rows) sameAsServer(where, spec.object, row)
+      // Рядок, який сервер має, мусить бути показаний: порожня готова
+      // картка чи список без нього — втрата, а не збіжність.
+      const wanted =
+        spec.kind === "keys"
+          ? spec.keys
+          : spec.kind === "card"
+            ? [spec.key]
+            : []
+      for (const k of wanted) {
+        if (fake.row(spec.object, k) === undefined) continue
+        const shown = snap.rows.find((r) => r.key === k)
+        if (shown === undefined || shown.state === "removed")
+          fail(where, `${spec.object}/${k}: on the server, view shows none`)
+      }
       if (spec.kind === "full" && snap.atEnd) {
         // Склад `full` — рядки сервера, що проходять фільтр (рядок, що
         // зник із сервера, склад уже прибрав перезавантаження).
@@ -1209,8 +1223,15 @@ async function runModel(
       if (!Object.is(row.values[field], server.values[field]))
         fail(where, `${at}.${field} ≠ server`)
     }
-    for (const ref of Object.values(row.refs ?? {})) {
+    for (const [field, ref] of Object.entries(row.refs ?? {})) {
       if (ref !== null) sameAsServer(`${where} ref`, ORG, ref)
+      else {
+        // `null` — лише для цілі, якої сервер не показує; наявна ціль
+        // не може лишитись порожньою (гонка власності `include`).
+        const target = row.values[field]
+        if (typeof target === "string" && fake.row(ORG, target) !== undefined)
+          fail(where, `${at}.${field}: ref is null, the server has the target`)
+      }
     }
   }
 }

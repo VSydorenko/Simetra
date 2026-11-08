@@ -417,7 +417,12 @@ async function readFullAgain(
       if (!got.has(key) && s.owned.has(key))
         ctx.ops.remove(scope, o, key, startEpoch)
     }
-    if (included !== undefined)
+    // Цілі прочитано за складом на старті: склад змінило інше завантаження
+    // (власник цілей — воно), тож застарілий список ключів їх би відібрав.
+    const sameComposition =
+      s.owned.size === composition.length &&
+      composition.every((key) => s.owned.has(key))
+    if (included !== undefined && sameComposition)
       applyIncluded(ctx, scope, s, included, startEpoch)
     if (fresh) s.hasNewRows = true
     if (outOfPlace(s) || [...moved].some((key) => s.layoutSet.has(key)))
@@ -474,7 +479,9 @@ export async function revalidate(
   options: { visibleOnly: boolean }
 ): Promise<void> {
   const o = ctx.objectOf(object)
-  if (ctx.session.closed !== undefined) return
+  // Єдина ознака закриття — токен сесії: він недійсний уже з `closing`, коли
+  // слухач purge-пачки ще бачить `closed === undefined`.
+  if (!ctx.session.token().valid) return
   // Вигляд без жодного завантаження складу не має: його перше читання —
   // завантаження, а не системне перечитування. ТЧ — лише змонтовані.
   const targets = subsetsOf(ctx, o).filter(
@@ -493,9 +500,15 @@ async function revalidateViews(
   targets: readonly Subset[]
 ): Promise<void> {
   const { session } = ctx
-  if (targets.length === 0 || session.closed !== undefined) return
+  if (targets.length === 0 || !session.token().valid) return
   const startEpoch = session.epochs.now()
   const token = session.token()
+  // Завантаження, що стартувало чи завершилось після старту, свіжіше за це
+  // перечитування: воно вже оновило склад і цілі `include` (так само, як
+  // purge відкидає відповіді).
+  const loadsAtStart = new Map(
+    targets.map((s) => [s, { gen: s.gen, flight: s.flight }] as const)
+  )
   const purgesAtStart = new Map(ctx.purges)
   const purgedSince = (name: ObjectName) =>
     (ctx.purges.get(name) ?? 0) !== (purgesAtStart.get(name) ?? 0)
@@ -514,6 +527,8 @@ async function revalidateViews(
         for (const result of results) {
           const { s } = result
           if (!s.alive || s.purged) continue
+          const atStart = loadsAtStart.get(s)
+          if (atStart?.gen !== s.gen || atStart.flight !== s.flight) continue
           // purge після старту: відповідь могла нести рядки й рядки ТЧ, яких
           // на мить purge у сховищі не було (рядок у сховищі ще в старому
           // скоупі). Відкидаємо й перечитуємо тим самим системним шляхом:

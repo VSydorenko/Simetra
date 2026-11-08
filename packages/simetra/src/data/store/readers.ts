@@ -268,11 +268,10 @@ async function readFull(
   const kept = over
     ? rows.filter((r) => form.test(r.values)).slice(0, WINDOW_PAGE)
     : rows
-  // Цілі — лише з відфільтрованих рядків; слот `removed` цілей не дає (§6.2,
-  // правило 5).
-  const shown = (over ? kept : kept.filter((r) => form.test(r.values))).filter(
-    (r) => o.rows.get(r.key)?.removed === undefined
-  )
+  // Цілі — з усіх відфільтрованих рядків читання, зокрема з тих, чий слот
+  // зараз `removed`: це читання може його воскресити в тій самій пачці
+  // застосування, а цілі, прочитані пізніше, вже не доберуться.
+  const shown = over ? kept : kept.filter((r) => form.test(r.values))
   const wanted = includeKeys(
     form.include,
     shown.map((r) => r.values)

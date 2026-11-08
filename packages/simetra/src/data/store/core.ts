@@ -340,7 +340,7 @@ export function createCore(options: {
     if (
       tail === undefined ||
       tail.flying !== undefined ||
-      session.closed !== undefined
+      !session.token().valid
     )
       return
     const keys = [...tail.pending]
@@ -397,7 +397,9 @@ export function createCore(options: {
   session.onFlush(() => {
     written.length = 0
     const closing = closed !== undefined
-    if (!closing) {
+    // Хвостове читання не стартує з flush пачки закриття (токен недійсний
+    // із `closing`, а `closed` сесії ще не виставлено).
+    if (!closing && session.token().valid) {
       for (const o of objects.values()) {
         const keys = o.rows.drainTail()
         if (keys.length > 0) scheduleTail(o, keys)
