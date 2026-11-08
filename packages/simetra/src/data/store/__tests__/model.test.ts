@@ -439,6 +439,33 @@ async function runModel(
 
   const objectOf = (name: ObjectName) => internals.objects.get(name)!
 
+  // Слоти, чию позначку «розбіжний» за крок законно скинув `remove` без
+  // розбіжності (П15): `readEpoch` не старший за `writtenEpoch`. Перевірка
+  // бачить стан лише між кроками, а в одному `commit` паралельні відповіді
+  // з тією самою епохою старту можуть спершу повторити `remove` (позначку
+  // скинуто), а потім зняти слот `put` читання після позначки — це звичайне
+  // відновлення, а не розбіжне, і журналу воно не пише. Епоху й розбіжність
+  // рахуємо тут незалежно від ядра: скидання позначки розбіжним `remove`
+  // чи пропущене скидання лишаються червоними.
+  const resetInStep = new Map<string, object>()
+  for (const name of [TASK, ORG]) {
+    const rows = objectOf(name).rows
+    const remove = rows.remove.bind(rows)
+    rows.remove = (scope, k, readEpoch) => {
+      const e = rows.get(k)
+      const writtenEpoch = e?.writtenEpoch
+      remove(scope, k, readEpoch)
+      if (e === undefined || writtenEpoch === undefined) return
+      if (
+        e.removed?.divergent === false &&
+        readEpoch >= writtenEpoch &&
+        rows.get(k) === e
+      )
+        resetInStep.set(id(name, k), e)
+      else resetInStep.delete(id(name, k))
+    }
+  }
+
   /** Показаний рядок (зі значеннями чи схований) проти сервера й позначок. */
   const checkRow = (
     label: string,
@@ -618,7 +645,11 @@ async function runModel(
         if (before !== undefined && visibleRow(e) !== undefined) {
           // Єдиний перехід «сховано → показано» без читання користувача —
           // розбіжний слот, і він пише `removed-restored` (П15).
-          if (before.divergent && before.slot === e) {
+          if (
+            before.divergent &&
+            before.slot === e &&
+            resetInStep.get(id(name, k)) !== e
+          ) {
             const n = (restoredInStep.get(name) ?? 0) + 1
             restoredInStep.set(name, n)
             const logged = log
@@ -767,6 +798,7 @@ async function runModel(
     const stepStart = fake.log.length
     logAt = log.length
     restoredInStep.clear()
+    resetInStep.clear()
     const before = lists()
     let userViews = new Set<number>()
     let purgeStep = false
@@ -1083,6 +1115,7 @@ async function runModel(
     const stepStart = fake.log.length
     logAt = log.length
     restoredInStep.clear()
+    resetInStep.clear()
     const slow = late.shift()
     const read = slow ?? fake.take()
     read.answer(slow !== undefined || i % 2 === 0 ? read.issuedAt : fake.clock)
@@ -1128,6 +1161,7 @@ async function runModel(
       const stepStart = fake.log.length
       logAt = log.length
       restoredInStep.clear()
+      resetInStep.clear()
       while (fake.pending.length > 0) {
         const read = fake.take()
         read.answer()
