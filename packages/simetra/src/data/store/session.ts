@@ -56,32 +56,25 @@ export function createSession(options: {
   let closed: CloseReason | undefined
   let closing = false
   let inCommit = false
-  let flushing = false
 
   const sessionToken: GenerationToken = {
     get valid() {
-      return closed === undefined
+      return closed === undefined && !closing
     },
   }
 
   // Слухач може закрити сесію або кинути: перед кожним викликом дивимось
-  // на `closed`, а збій одного не зупиняє решту. Вкладений flush (закриття
-  // зсередини слухача) не запускає другий обхід — зовнішній уже йде й
-  // побачить `closed`.
+  // на `closed`, а збій одного не зупиняє решту. Закриття зсередини слухача
+  // запускає вкладений flush з purge-пачкою (кожен слухач її отримує, спека
+  // §6.1); поточна пачка зупиняється, бо після close `closed` вже виставлено.
   function flush() {
-    if (flushing) return
-    flushing = true
-    try {
-      for (const listener of [...listeners]) {
-        if (closed !== undefined) return
-        try {
-          listener()
-        } catch (error) {
-          log({ kind: "listener-failed", error })
-        }
+    for (const listener of [...listeners]) {
+      if (closed !== undefined) return
+      try {
+        listener()
+      } catch (error) {
+        log({ kind: "listener-failed", error })
       }
-    } finally {
-      flushing = false
     }
   }
 
@@ -114,7 +107,7 @@ export function createSession(options: {
     token: () => sessionToken,
     childToken: (isValid) => ({
       get valid() {
-        return closed === undefined && isValid()
+        return closed === undefined && !closing && isValid()
       },
     }),
     commit(fn, token, what = "commit") {
@@ -133,12 +126,25 @@ export function createSession(options: {
       }
     },
     onClose(hook) {
+      // Модуль, що реєструється після закриття, чистить свої мапи одразу.
+      if (closed !== undefined) {
+        try {
+          hook()
+        } catch (error) {
+          log({ kind: "listener-failed", error })
+        }
+        return
+      }
       closeHooks.push(hook)
     },
     close(reason, purgeAll) {
       if (closed !== undefined || closing) return
+      // close усередині commit не виконав би purge в межах пачки: кидаємо
+      // до зміни стану, сесія лишається живою.
+      if (inCommit) throw new Error("close inside commit")
       closing = true
-      // purge йде, поки сесія ще жива: слухачі отримують одну пачку.
+      // purge йде до `closed`, але токени вже недійсні (closing): слухачі
+      // отримують одну пачку й не можуть дописати після purge.
       try {
         run(purgeAll)
       } finally {
@@ -147,7 +153,14 @@ export function createSession(options: {
         controllers.clear()
         sessionController.abort()
         epochs.clear()
-        for (const hook of closeHooks) hook()
+        // Збій одного хука не повинен лишити решту мап і слухачів живими.
+        for (const hook of closeHooks) {
+          try {
+            hook()
+          } catch (error) {
+            log({ kind: "listener-failed", error })
+          }
+        }
         closeHooks.length = 0
         listeners.clear()
       }

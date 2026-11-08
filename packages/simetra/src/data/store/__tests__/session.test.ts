@@ -1,6 +1,8 @@
-import { describe, expect, it, vi } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 import { createSession } from "../session"
 import { DEFAULT_CORE_LIMITS, type CoreLogEntry } from "../types"
+
+afterEach(() => vi.restoreAllMocks())
 
 function make() {
   const log: CoreLogEntry[] = []
@@ -80,14 +82,29 @@ describe("session.onFlush", () => {
     expect(log).toEqual([{ kind: "listener-failed", error: boom }])
   })
 
-  it("a listener that closes the session stops the following ones", () => {
+  it("a listener that closes the session: purge batch reaches the next listener once, original batch stops", () => {
     const { session } = make()
-    const next = vi.fn()
-    session.onFlush(() => session.close("disposed", () => {}))
-    session.onFlush(next)
+    let purged = false
+    const seen: boolean[] = []
+    session.onFlush(() => {
+      if (!purged) session.close("disposed", () => (purged = true))
+    })
+    session.onFlush(() => seen.push(purged))
     session.commit(() => {}, session.token())
-    expect(next).not.toHaveBeenCalled()
+    expect(seen).toEqual([true])
     expect(session.closed).toBe("disposed")
+  })
+
+  it("a listener commit during the close batch is refused and logged", () => {
+    const { session, log } = make()
+    const old = session.token()
+    const child = session.childToken(() => true)
+    const results: boolean[] = []
+    session.onFlush(() => results.push(session.commit(() => {}, old, "late")))
+    session.close("disposed", () => {})
+    expect(results).toEqual([false])
+    expect(child.valid).toBe(false)
+    expect(log).toEqual([{ kind: "late-response", what: "late" }])
   })
 
   it("unsubscribe stops notifications", () => {
@@ -142,6 +159,41 @@ describe("session.close", () => {
     expect(pending.signal.aborted).toBe(true)
   })
 
+  it("close inside a commit throws and leaves the session alive", () => {
+    const { session } = make()
+    const purge = vi.fn()
+    expect(() =>
+      session.commit(() => session.close("disposed", purge), session.token())
+    ).toThrow("close inside commit")
+    expect(purge).not.toHaveBeenCalled()
+    expect(session.closed).toBeUndefined()
+    expect(session.token().valid).toBe(true)
+  })
+
+  it("a throwing onClose hook does not skip the rest nor the listener cleanup", () => {
+    const { session, log } = make()
+    const boom = new Error("hook")
+    const second = vi.fn()
+    const listener = vi.fn()
+    session.onClose(() => {
+      throw boom
+    })
+    session.onClose(second)
+    session.close("disposed", () => {})
+    session.onFlush(listener)
+    expect(second).toHaveBeenCalledTimes(1)
+    expect(log).toEqual([{ kind: "listener-failed", error: boom }])
+    expect(listener).not.toHaveBeenCalled()
+  })
+
+  it("onClose registered after close runs immediately", () => {
+    const { session } = make()
+    session.close("disposed", () => {})
+    const hook = vi.fn()
+    session.onClose(hook)
+    expect(hook).toHaveBeenCalledTimes(1)
+  })
+
   it("track after close returns an aborted signal", () => {
     const { session } = make()
     session.close("disposed", () => {})
@@ -161,6 +213,5 @@ describe("session.track", () => {
     const abort = vi.spyOn(AbortController.prototype, "abort")
     session.close("disposed", () => {})
     expect(abort).toHaveBeenCalledTimes(1)
-    abort.mockRestore()
   })
 })
