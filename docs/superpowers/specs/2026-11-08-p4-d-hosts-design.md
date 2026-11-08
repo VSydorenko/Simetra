@@ -100,7 +100,7 @@ Postgres під RLS → ядро T4 → хост T5 → маршрут T6, з SS
 
 | Файл (у `template/`) | Роль |
 | --- | --- |
-| `simetra.config.ts`, `metadata/` | проєкт профілю `postgres`; довідники `Client` (стандартні `description` і `code` за налаштуваннями виду, `country: Ref → Country`, ТЧ `contacts` з `name` і `phone`) і `Country` (стандартні `description` і `code`); `description` обох — `indexed: true` |
+| `simetra.config.ts`, `metadata/` | проєкт профілю `postgres`; довідники `Client` (стандартні `description` і `code` за налаштуваннями виду, `country: Ref → Country`, ТЧ `contacts` з `name` і `phone`) і `Country` (стандартні `description` і `code`); індекс `description` дає реєстр виду (B1d) |
 | `generated/` | `runtime-catalog.json`, `client-catalog.json` з `compile --out`; комітяться, тест свіжості |
 | `src/server/runtime.ts` | **зв'язування рантайму**: пул `simetra_runtime` на рівні модуля (Рт17) з DSN `SIMETRA_RUNTIME_DATABASE_URL`, `createCommandRuntime({ database: fromPgPool(pool), catalog, defer })`, `createDataHandler` |
 | `src/server/auth-db.ts` | пул Better Auth з DSN `SIMETRA_AUTH_DATABASE_URL` (роль `simetra_auth`, власник схеми `better_auth`) |
