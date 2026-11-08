@@ -226,6 +226,21 @@ describe("runtime transport wrapper", () => {
       expect(onSessionChanged).toHaveBeenCalledTimes(1)
     })
 
+    it("aborts the core session signal", async () => {
+      const { transport, respond } = controlledTransport()
+      const runtime = createDataRuntime({
+        catalog: clientCatalog(),
+        transport,
+        subject: SUBJECT,
+      })
+      const { core, send } = runtimeHandleOf(runtime)
+      expect(core.signal.aborted).toBe(false)
+      const request = send(card())
+      respond(sessionChanged())
+      await failureOf(request)
+      expect(core.signal.aborted).toBe(true)
+    })
+
     it("rejects with session-changed and re-raises a throwing callback asynchronously", async () => {
       // Підміна `queueMicrotask`: справжній кидок у мікрозадачі став би
       // необробленою помилкою прогону.
@@ -300,6 +315,19 @@ describe("runtime transport wrapper", () => {
       expect(runtime.disposed).toBe(false)
       runtime.dispose()
       expect(runtime.disposed).toBe(true)
+    })
+
+    it("aborts the core session signal", () => {
+      const { transport } = answeringTransport(ok(null))
+      const runtime = createDataRuntime({
+        catalog: clientCatalog(),
+        transport,
+        subject: SUBJECT,
+      })
+      const { core } = runtimeHandleOf(runtime)
+      expect(core.signal.aborted).toBe(false)
+      runtime.dispose()
+      expect(core.signal.aborted).toBe(true)
     })
 
     it("refuses a later request without the transport", async () => {

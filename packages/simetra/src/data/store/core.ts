@@ -41,6 +41,8 @@ import {
 /** The data core of one user session (P4-B spec §6.1). */
 export interface CoreSession {
   readonly subject: string
+  /** Aborted when the session closes; internal, for the write transport. */
+  readonly signal: AbortSignal
   /** A memoized handle; throws synchronously on a refused form (`data.unsupported-predicate`, `command.invalid`). */
   view(spec: ViewSpec): ViewHandle
   /**
@@ -105,8 +107,6 @@ export interface CoreInspection {
     /** Keys waiting for or in flight in the tail re-reads. */
     tails: number
     purges: number
-    /** Tracked request controllers of the session. */
-    controllers: number
     /** Release timers and preload timers of the held view forms. */
     releaseTimers: number
     preloadTimers: number
@@ -462,6 +462,7 @@ export function createCore(options: {
 
   const core: CoreSession = {
     subject: options.subject,
+    signal: session.signal,
     view: (spec) => registry.view(spec),
     preload: (spec, preloadOptions) => registry.preload(spec, preloadOptions),
     token: () => session.token(),
@@ -516,7 +517,6 @@ export function createCore(options: {
           0
         ),
         purges: purges.size,
-        controllers: session.trackedCount(),
         releaseTimers: subs.filter((s) => s.releaseTimer !== undefined).length,
         preloadTimers: subs.reduce((n, s) => n + s.preloadTimers.size, 0),
         sectionOwners: sections.reduce((n, x) => n + x.owners, 0),

@@ -170,16 +170,6 @@ describe("session.close", () => {
     expect(hook).toHaveBeenCalledTimes(1)
   })
 
-  it("aborts only unfinished tracked requests", () => {
-    const { session } = make()
-    const done = session.track()
-    const pending = session.track()
-    done.release()
-    session.close("disposed", () => {})
-    expect(done.signal.aborted).toBe(false)
-    expect(pending.signal.aborted).toBe(true)
-  })
-
   it("close inside a commit throws and leaves the session alive", () => {
     const { session } = make()
     const purge = vi.fn()
@@ -213,26 +203,5 @@ describe("session.close", () => {
     const hook = vi.fn()
     session.onClose(hook)
     expect(hook).toHaveBeenCalledTimes(1)
-  })
-
-  it("track after close returns an aborted signal", () => {
-    const { session } = make()
-    session.close("disposed", () => {})
-    expect(session.track().signal.aborted).toBe(true)
-  })
-})
-
-describe("session.track", () => {
-  it("10 000 released requests leave no controllers and no signal listeners", () => {
-    const { session } = make()
-    // Слухачі: підміна addEventListener на сигналі сесії бачить усі підписки.
-    const add = vi.spyOn(session.signal, "addEventListener")
-    for (let i = 0; i < 10_000; i++) session.track().release()
-    expect(add).not.toHaveBeenCalled()
-    // Активні контролери: close обриває кожен, що лишився у множині, тож
-    // рахуємо виклики abort() — має бути лише сам сигнал сесії.
-    const abort = vi.spyOn(AbortController.prototype, "abort")
-    session.close("disposed", () => {})
-    expect(abort).toHaveBeenCalledTimes(1)
   })
 })

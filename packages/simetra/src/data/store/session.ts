@@ -39,10 +39,6 @@ export interface Session {
   onClose(hook: () => void): void
   /** Must be called outside `commit` (throws inside). Runs `purgeAll` in one batch, then aborts, invalidates and clears. */
   close(reason: CloseReason, purgeAll: (scope: Scope) => void): void
-  /** A request controller; call `release()` when the request is done. */
-  track(): { signal: AbortSignal; release(): void }
-  /** The number of tracked request controllers (inspection). */
-  trackedCount(): number
 }
 
 export function createSession(options: {
@@ -55,8 +51,6 @@ export function createSession(options: {
   const defects = options.defects ?? NO_DEFECTS
   const epochs = createEpochs(options.limits, defects)
   const sessionController = new AbortController()
-  const controllers = new Set<AbortController>()
-  let leaked = false
   const listeners = new Set<() => void>()
   const closeHooks: Array<() => void> = []
   let closed: CloseReason | undefined
@@ -157,8 +151,6 @@ export function createSession(options: {
         run(purgeAll)
       } finally {
         closed = reason
-        for (const c of controllers) c.abort()
-        controllers.clear()
         sessionController.abort()
         epochs.clear()
         // Збій одного хука не повинен лишити решту мап і слухачів живими.
@@ -171,26 +163,6 @@ export function createSession(options: {
         }
         closeHooks.length = 0
         listeners.clear()
-      }
-    },
-    trackedCount: () => controllers.size,
-    track() {
-      const controller = new AbortController()
-      if (closed !== undefined) {
-        controller.abort()
-        return { signal: controller.signal, release() {} }
-      }
-      controllers.add(controller)
-      return {
-        signal: controller.signal,
-        release() {
-          // Дефект самотесту: перший контролер не звільняється.
-          if (defects.has("controller-leak") && !leaked) {
-            leaked = true
-            return
-          }
-          controllers.delete(controller)
-        },
       }
     },
   }

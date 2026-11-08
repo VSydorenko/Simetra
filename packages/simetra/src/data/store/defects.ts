@@ -32,8 +32,6 @@ export type DefectFlag =
   | "removed-keeps-sections"
   /** The revision and cached view of a row outlive the row. */
   | "revision-survives-row"
-  /** A tracked request controller is not released once (the first). */
-  | "controller-leak"
   /** A purge leaves cards and sections of purged keys alive. */
   | "purge-keeps-views"
   /** A by-key read that finds no row changes nothing. */
