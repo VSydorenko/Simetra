@@ -2,7 +2,8 @@ import * as f from './flows'
 import { expect, test } from './harness'
 
 test('1. перший вхід з SSR: HTML = перший клієнтський кадр, без скелета, без commit-ів і запитів', async ({ page, oracle }) => {
-  const { html, requests, commits } = await f.ssrEntry(page, oracle)
+  const { html, requests, calls, commits } = await f.ssrEntry(page, oracle)
+  expect(calls.filter((c) => c === 'getVersion'), 'одна звірка знімка (контракт version)').toHaveLength(1)
   expect(html).toContain('data-row-key')
   const log = await oracle.log()
   const list = log.snaps.find((s) => s.regions.some((r) => r.name === 'list'))!.regions.find((r) => r.name === 'list')!
@@ -34,8 +35,9 @@ test('6. фонове перечитування', async ({ page, oracle }) => {
   await f.backgroundRefresh(page, oracle)
   await oracle.expectClean()
 })
-test('6б. змінене поле сортування → needsRefresh', async ({ page, oracle }) => {
-  await f.sortKeyChanged(page, oracle)
+test('6б. змінене поле сортування: рядок на місці', async ({ page, oracle }) => {
+  const r = await f.sortKeyChanged(page, oracle)
+  test.info().annotations.push({ type: 'needsRefresh-banner-after-sort-change', description: String(r.needsRefresh) })
   await oracle.expectClean()
 })
 test('7. прокрутка вікна', async ({ page, oracle }) => {

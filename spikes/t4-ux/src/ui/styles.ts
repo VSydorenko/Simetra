@@ -4,9 +4,10 @@ export const ROW_H = 36
 export const VIEW_H = 600
 export const css = `
 *{box-sizing:border-box} body{margin:0;font:14px/1.3 system-ui,sans-serif;color:#1d232b;background:#f6f7f9}
+.security{height:24px;color:#a52020;font-size:12px;max-width:1000px;margin:0 auto}
 #app{max-width:1000px;margin:0 auto;padding:12px}
 .toolbar{display:flex;align-items:center;gap:8px;height:40px}
-.toolbar .slot{min-width:220px;height:28px;display:flex;align-items:center}
+.toolbar .slot{width:300px;flex:none;overflow:hidden;gap:6px;height:28px;display:flex;align-items:center}
 .hidden{visibility:hidden}
 button{font:inherit;font-size:12px;padding:2px 8px;height:24px;border:1px solid #c5ccd6;border-radius:4px;background:#fff;cursor:pointer}
 .banner{background:#e8f1ff;border:1px solid #9cc0ff;border-radius:4px;padding:2px 8px;font-size:12px}
@@ -14,7 +15,8 @@ button{font:inherit;font-size:12px;padding:2px 8px;height:24px;border:1px solid 
 .row{position:absolute;left:0;right:0;height:${ROW_H}px;display:grid;grid-template-columns:70px 1fr 100px 70px 280px;align-items:center;gap:8px;padding:0 8px;border-bottom:1px solid #eef1f4;box-shadow:inset 3px 0 0 transparent}
 .row a{color:inherit}
 .placeholder{color:#9aa4b1}
-.state{display:flex;align-items:center;gap:6px;height:28px;font-size:12px;white-space:nowrap;overflow:hidden}
+.state-col{display:grid;grid-template-columns:1fr 28px;align-items:center;gap:6px}
+.state{display:flex;min-width:0;align-items:center;gap:6px;height:28px;font-size:12px;white-space:nowrap;overflow:hidden}
 .st-pending .pf{font-style:italic;color:#5b6675}
 .st-pending .state{color:#5b6675}
 .st-unknown{box-shadow:inset 3px 0 0 #8fa3bf}

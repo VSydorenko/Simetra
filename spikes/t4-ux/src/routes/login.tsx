@@ -2,8 +2,8 @@ import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { useState } from 'react'
 import { login } from '../server/fns'
 import { breaks } from '../t4/breaks'
-import { createFakeCore } from '../core/fake-core'
 import { useHolder } from '../t4/hooks'
+import { createCore } from '../t4/runtime'
 
 export const Route = createFileRoute('/login')({ component: LoginPage })
 
@@ -18,7 +18,7 @@ function LoginPage() {
         e.preventDefault()
         const { subject } = await login({ data: name })
         // Зламана реалізація: лишити старе ядро після зміни суб'єкта.
-        if (!(breaks.has('keepcore') && holder.core)) holder.replace(createFakeCore(subject))
+        if (!(breaks.has('keepcore') && holder.core)) holder.replace(createCore(subject))
         await navigate({ to: '/' })
       }}
     >

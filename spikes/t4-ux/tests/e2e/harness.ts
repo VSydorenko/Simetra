@@ -89,3 +89,28 @@ export async function control(page: Page, c: unknown) {
 export async function settle(page: Page, ms = 150) {
   await page.waitForTimeout(ms)
 }
+
+/** Ім'я серверної функції з URL Start (`/_serverFn/<base64 json>`). */
+export function serverFnName(url: string): string | null {
+  const m = url.match(/\/_serverFn\/([^/?]+)/)
+  if (!m) return null
+  try {
+    return JSON.parse(Buffer.from(decodeURIComponent(m[1]!), 'base64').toString()).export.replace(/_createServerFn_handler$/, '')
+  } catch {
+    return m[1]!
+  }
+}
+
+/** Журнал серверних функцій сторінки: дані (`readRows`, `runOps`) окремо від решти. */
+export function trackServerFns(page: import('@playwright/test').Page) {
+  const calls: string[] = []
+  page.on('request', (r) => {
+    const n = serverFnName(r.url())
+    if (n) calls.push(n)
+  })
+  return {
+    calls,
+    data: () => calls.filter((n) => n === 'readRows' || n === 'runOps'),
+    reads: () => calls.filter((n) => n === 'readRows'),
+  }
+}

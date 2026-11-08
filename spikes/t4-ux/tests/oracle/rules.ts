@@ -41,7 +41,7 @@ export interface Snap {
 export interface OracleLog {
   snaps: Snap[]
   marks: { name: string; opts: MarkOpts; t: number; at: number }[]
-  shifts: { t: number; value: number; hadRecentInput: boolean; seg: number }[]
+  shifts: { t: number; value: number; hadRecentInput: boolean; seg: number; sources?: string[] }[]
   appMutationsAfterParse: { t: number; type: string; target: string; attr: string | null; added?: string; removed?: string }[]
   parsedAt: number | null
   hydratedAt?: number
@@ -86,7 +86,7 @@ export function analyze(log: OracleLog): Violation[] {
   for (const e of log.recoverable ?? []) push({ kind: 'hydration-error', seg: 0, detail: e.message })
 
   for (const s of log.shifts)
-    if (!s.hadRecentInput && s.value > 0) push({ kind: 'layout-shift', seg: s.seg, detail: `CLS entry ${s.value.toFixed(4)}` })
+    if (!s.hadRecentInput && s.value > 0) push({ kind: 'layout-shift', seg: s.seg, detail: `CLS entry ${s.value.toFixed(4)} ${(s.sources ?? []).join(' | ')}` })
 
   // Заборонений текст: з позначки й до кінця журналу.
   log.marks.forEach((m, idx) => {

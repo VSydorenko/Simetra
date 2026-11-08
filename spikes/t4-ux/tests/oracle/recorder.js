@@ -92,7 +92,18 @@
   try {
     new PerformanceObserver((list) => {
       for (const e of list.getEntries())
-        log.shifts.push({ t: e.startTime, value: e.value, hadRecentInput: e.hadRecentInput, seg: log.marks.length })
+        log.shifts.push({
+          t: e.startTime,
+          value: e.value,
+          hadRecentInput: e.hadRecentInput,
+          seg: log.marks.length,
+          sources: (e.sources || []).map((src) => {
+            const n = src.node
+            const desc = n ? (n.nodeName + '.' + (n.className || '') + ' ' + (n.textContent || '').slice(0, 40)).trim() : '?'
+            const r = (x) => [Math.round(x.x), Math.round(x.y), Math.round(x.width), Math.round(x.height)].join(',')
+            return desc + ' ' + r(src.previousRect) + ' → ' + r(src.currentRect)
+          }),
+        })
     }).observe({ type: 'layout-shift', buffered: true })
   } catch {
     log.shiftsUnsupported = true

@@ -1,9 +1,10 @@
 // Хуки T4 над ядром. Єдиний міст у React — useSyncExternalStore: на сервері
 // й під час гідратації getServerSnapshot читає те саме гідроване ядро, тож
 // серверний HTML, getServerSnapshot і перший getSnapshot дають ті самі дані.
+// Власність на рядки дає лише subscribe хендла (React балансує її сам).
 import { createContext, createElement, useContext, useMemo, useSyncExternalStore, type ReactNode } from 'react'
-import type { CardSnapshot, CoreSession, WindowSnapshot } from '../core/types'
-import { cardSpec, LIST, writerOf } from './facade'
+import type { CoreSession, ViewHandle, ViewSnapshot, ViewSpec } from '../core'
+import { cardSpec, LIST, linesSpec, writerOf } from './facade'
 import type { RuntimeHolder } from './runtime'
 
 const HolderContext = createContext<RuntimeHolder | null>(null)
@@ -23,24 +24,19 @@ export function useCore(): CoreSession | null {
   return useSyncExternalStore(holder.subscribe, holder.getSnapshot, holder.getSnapshot)
 }
 
-const NOOP_SUBSCRIBE = () => () => {}
+const EMPTY: ViewSnapshot = Object.freeze({ status: 'loading', rows: [], hasNewRows: false, needsRefresh: false })
+const NOOP: ViewHandle = { getSnapshot: () => EMPTY, subscribe: () => () => {}, refresh() {}, showNew() {}, loadAfter() {} }
 
-function useView<S>(core: CoreSession | null, spec: Parameters<CoreSession['view']>[0], empty: S): S {
-  const handle = useMemo(() => core?.view(spec), [core, JSON.stringify(spec)])
-  const get = handle ? (handle.getSnapshot as () => S) : () => empty
-  return useSyncExternalStore(core ? core.subscribe : NOOP_SUBSCRIBE, get, get)
+export function useView(spec: ViewSpec): [ViewSnapshot, ViewHandle] {
+  const core = useCore()
+  const key = JSON.stringify(spec)
+  const handle = useMemo(() => (core ? core.view(spec) : NOOP), [core, key])
+  return [useSyncExternalStore(handle.subscribe, handle.getSnapshot, handle.getSnapshot), handle]
 }
 
-const EMPTY_WINDOW: WindowSnapshot = { kind: 'window', status: 'loading', rows: [], atEnd: true, loadingMore: false, hasNewRows: false, needsRefresh: false }
-const EMPTY_CARD: CardSnapshot = { kind: 'card', status: 'loading', lines: [], complete: false }
-
-export function useRows(): WindowSnapshot {
-  return useView(useCore(), LIST, EMPTY_WINDOW)
-}
-
-export function useRow(id: string): CardSnapshot {
-  return useView(useCore(), cardSpec(id), EMPTY_CARD)
-}
+export const useRows = () => useView(LIST)
+export const useCard = (key: string) => useView(cardSpec(key))[0]
+export const useLines = (key: string) => useView(linesSpec(key))[0]
 
 export function useWriter() {
   const core = useCore()

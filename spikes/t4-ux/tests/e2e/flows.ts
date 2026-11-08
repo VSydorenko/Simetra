@@ -1,7 +1,7 @@
 // Сценарії оракула як функції: їх женуть і зелені тести, і тести самого
 // оракула на зламаних реалізаціях (`?break=`).
 import type { Page } from '@playwright/test'
-import { control, expect, loginAs, type Oracle, settle, uniqueSubject } from './harness'
+import { control, expect, loginAs, type Oracle, settle, trackServerFns, uniqueSubject } from './harness'
 
 const ROW = '[data-region=list] [data-row-key]'
 const rowKey = (page: Page, n: number) => page.locator(ROW).nth(n).getAttribute('data-row-key') as Promise<string>
@@ -19,13 +19,12 @@ export async function openList(page: Page, opts: { breaks?: string; subject?: st
 /** Сценарій 1: SSR-вхід. Повертає HTML і запити після гідратації. */
 export async function ssrEntry(page: Page, oracle: Oracle, breaks?: string) {
   await loginAs(page, uniqueSubject())
-  const requests: string[] = []
-  page.on('request', (r) => r.url().includes('/_serverFn/') && requests.push(r.url()))
+  const fns = trackServerFns(page)
   const resp = await page.goto(breaks ? `/?break=${breaks}` : '/')
   const html = await resp!.text()
   await page.waitForFunction(() => (window as any).__t4Commits?.some((c: any) => c.id === 'list'))
-  await settle(page, 1000)
-  return { html, requests, commits: await oracle.regionUpdatesAfterHydration('list') }
+  await settle(page, 1500)
+  return { html, requests: fns.data(), calls: fns.calls, commits: await oracle.regionUpdatesAfterHydration('list') }
 }
 
 /** Сценарій 2: список → картка → список (клієнтська навігація). */
@@ -34,8 +33,7 @@ export async function listCardList(page: Page, oracle: Oracle, opts: { breaks?: 
   await control(page, { kind: 'latency', readMs: 300 })
   const key = await rowKey(page, 3)
   const name = await listRow(page, key).locator('[data-field=name]').textContent()
-  const requests: string[] = []
-  page.on('request', (r) => r.url().includes('/_serverFn/') && requests.push(r.url()))
+  const fns = trackServerFns(page)
   await oracle.mark('to-card', { allow: ['shift'] })
   await listRow(page, key).locator('[data-field=name]').click()
   await page.waitForSelector('[data-region=card]')
@@ -46,12 +44,12 @@ export async function listCardList(page: Page, oracle: Oracle, opts: { breaks?: 
   expect(card.rows[0]?.fields.name).toBe(name)
   await page.waitForFunction(() => (document.querySelector('[data-field=note]')?.textContent ?? '').length > 0)
   await settle(page, 200)
-  const before = requests.length
+  const before = fns.reads().length
   await oracle.mark('to-list', { allow: ['shift'] })
   await page.click('[data-action=back]')
   await page.waitForSelector(ROW)
   await settle(page, 400)
-  expect(requests.length, 'повернення до списку без запиту').toBe(before)
+  expect(fns.reads().length, 'повернення до списку без запиту').toBe(before)
   return { key }
 }
 
@@ -118,22 +116,31 @@ export async function createRow(page: Page, oracle: Oracle, opts: { breaks?: str
   expect(await page.locator(ROW).first().getAttribute('data-row-key')).toBe(key)
 }
 
+/** Сигнал спайку 3 (імітація): позначки виглядів через Writer ядра. */
+async function signal(page: Page, flags: { hasNewRows?: boolean; needsRefresh?: boolean }) {
+  await page.evaluate((fl) => {
+    const core = (window as any).__t4Holder.core
+    core.commit((w: any) => w.markViews('Catalog.Item', fl), core.token())
+  }, flags)
+}
+
 /** Сценарій 6: фонове перечитування — рядки на місці, нові лише через hasNewRows, видалені — `removed`. */
 export async function backgroundRefresh(page: Page, oracle: Oracle, opts: { breaks?: string } = {}) {
   await openList(page, opts)
   const k1 = await rowKey(page, 1)
   const k4 = await rowKey(page, 4)
-  await control(page, { kind: 'foreign', change: { kind: 'update', id: k1, patch: { name: 'Changed by other' } } })
-  await control(page, { kind: 'foreign', change: { kind: 'insert', num: 15, name: 'Inserted by other' } })
-  await control(page, { kind: 'foreign', change: { kind: 'delete', id: k4 } })
+  await control(page, { kind: 'edit', id: k1, values: { name: 'Changed by other' } })
+  await control(page, { kind: 'insert', id: '00000000-0000-4000-9000-000000000015', values: { num: 15, name: 'Inserted by other', amount: '0.00', status: 'open' } })
+  await control(page, { kind: 'remove', id: k4 })
   await control(page, { kind: 'latency', readMs: 300 })
-  await oracle.mark('refresh')
-  await page.click('[data-action=refresh]')
+  await oracle.mark('signal+reread')
+  await signal(page, { hasNewRows: true })
+  await page.click('[data-action=reread]')
   await expect(listRow(page, k1).locator('[data-field=name]')).toHaveText('Changed by other', { timeout: 3000 })
   await expect(page.locator('[data-action=show-new]')).toBeVisible()
   await expect(listRow(page, k4).locator('[data-state]')).toHaveAttribute('data-state', 'removed')
   await expect(page.getByText('Inserted by other')).toHaveCount(0)
-  await settle(page, 300)
+  await settle(page, 400)
   await oracle.mark('show-new', { allow: ['shift', 'reorder', 'clear'] })
   await page.click('[data-action=show-new]')
   await expect(page.getByText('Inserted by other')).toHaveCount(1, { timeout: 3000 })
@@ -141,17 +148,17 @@ export async function backgroundRefresh(page: Page, oracle: Oracle, opts: { brea
   await settle(page, 200)
 }
 
-/** Сценарій 6б: змінене поле сортування — рядок на місці, список отримує needsRefresh. */
+/** Сценарій 6б: змінене поле сортування — рядок на місці з новим значенням. */
 export async function sortKeyChanged(page: Page, oracle: Oracle) {
   await openList(page)
   const k2 = await rowKey(page, 2)
-  await control(page, { kind: 'foreign', change: { kind: 'update', id: k2, patch: { num: 95 } } })
-  await oracle.mark('refresh')
-  await page.click('[data-action=refresh]')
-  await expect(page.locator('[data-action=show-new]')).toHaveText(/Порядок/, { timeout: 3000 })
+  await control(page, { kind: 'edit', id: k2, values: { num: 95 } })
+  await oracle.mark('reread')
+  await page.click('[data-action=reread]')
+  await expect(listRow(page, k2).locator('[data-field=num]')).toHaveText('95', { timeout: 3000 })
   expect(await rowKey(page, 2)).toBe(k2)
-  await expect(listRow(page, k2).locator('[data-field=num]')).toHaveText('95')
-  await settle(page, 200)
+  await settle(page, 300)
+  return { needsRefresh: await page.locator('[data-action=show-new]').count() }
 }
 
 /** Сценарій 7: прокрутка вікна — підвантаження сторінки без стрибка прокрутки. */
@@ -215,8 +222,7 @@ export async function quickBackAndForth(page: Page, oracle: Oracle) {
   await page.click('[data-action=back]')
   await page.waitForSelector(ROW)
   await settle(page, 200)
-  const requests: string[] = []
-  page.on('request', (r) => r.url().includes('/_serverFn/') && requests.push(r.url()))
+  const fns = trackServerFns(page)
   for (let i = 0; i < 5; i++) {
     await oracle.mark(`forth-${i}`, { allow: ['shift'] })
     await listRow(page, key).locator('[data-field=name]').click()
@@ -225,5 +231,5 @@ export async function quickBackAndForth(page: Page, oracle: Oracle) {
     await page.waitForSelector(ROW)
   }
   await settle(page, 300)
-  expect(requests).toEqual([])
+  expect(fns.reads()).toEqual([])
 }

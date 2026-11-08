@@ -1,7 +1,9 @@
 import { createRootRouteWithContext, HeadContent, Outlet, Scripts } from '@tanstack/react-router'
-import { useEffect, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import type { RouterContext } from '../router'
 import { getSession } from '../server/fns'
+import { useHolder } from '../t4/hooks'
+import { verifyAfterHydration } from '../t4/ssr'
 import { css } from '../ui/styles'
 
 export const Route = createRootRouteWithContext<RouterContext>()({
@@ -27,11 +29,30 @@ function RootComponent() {
   )
 }
 
-function HydratedMark() {
+function Hydration() {
+  const holder = useHolder()
+  const [reason, setReason] = useState<string | null>(null)
   useEffect(() => {
     ;(window as unknown as { __t4Hydrated?: number }).__t4Hydrated = performance.now()
-  }, [])
-  return null
+    // Лише полігон: тести імітують сигнали спайку 3 через Writer ядра.
+    ;(window as any).__t4Holder = holder
+    const core = holder.core
+    const meta = holder.snapshotMeta
+    if (!core || !meta) return
+    // Одноразово: StrictMode повторює ефект, звірка й endHydration — ні.
+    holder.snapshotMeta = null
+    core.endHydration()
+    void verifyAfterHydration(core, meta).then((outcome) => {
+      ;(window as any).__t4Verify = outcome
+      if (outcome === 'rights-changed' || outcome === 'subject-changed') setReason(outcome)
+    })
+  }, [holder])
+  // Слот причини винятку безпеки: зарезервований, без зсуву розмітки.
+  return (
+    <div className="security" data-security={reason ?? ''}>
+      {reason ? 'Доступ змінився — дані приховано. Оновіть сторінку.' : ''}
+    </div>
+  )
 }
 
 function RootDocument({ children }: { children: ReactNode }) {
@@ -43,7 +64,7 @@ function RootDocument({ children }: { children: ReactNode }) {
       </head>
       <body>
         <div id="app">{children}</div>
-        <HydratedMark />
+        <Hydration />
         <Scripts />
       </body>
     </html>

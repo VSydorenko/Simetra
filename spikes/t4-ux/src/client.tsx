@@ -5,6 +5,7 @@ import { hydrateRoot } from 'react-dom/client'
 import { StartClient } from '@tanstack/react-start/client'
 import { readBreaks } from './t4/breaks'
 import { control } from './server/fns'
+import { settings } from './t4/facade'
 
 interface OracleWindow {
   __t4Commits?: Array<{ id: string; phase: string; t: number }>
@@ -13,7 +14,9 @@ interface OracleWindow {
 const w = window as unknown as OracleWindow
 w.__t4Commits = []
 w.__t4Recoverable = []
-readBreaks(new URLSearchParams(location.search).get('break'))
+const params = new URLSearchParams(location.search)
+readBreaks(params.get('break'))
+if (params.get('policy') === 'await') settings.policy = 'await'
 // Лише полігон: керування фейковим сервером із тестів.
 ;(window as unknown as { __t4Control: unknown }).__t4Control = (c: Parameters<typeof control>[0]['data']) => control({ data: c })
 
