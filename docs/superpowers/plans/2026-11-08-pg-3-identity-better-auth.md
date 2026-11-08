@@ -171,10 +171,13 @@ devDependency з ПГ-2a).
   (`PostgresClusterSet`, `postgresClusterSet`, `ensurePostgresCluster`)
 - Modify: `packages/designer/src/tools/roles-tool.ts` (`RolesData`,
   `SkippedRole`), `packages/designer/src/cli/render.ts` (гілка `roles`)
-- Modify (після ПГ-2): тест-інфра, що ставить тимчасові гранти `better_auth`
-  (Р3 плану ПГ-2b). Знайди її так:
-  `grep -rn "GRANT TRIGGER\|GRANT USAGE ON SCHEMA better_auth" packages/*/src packages/*/test scripts`;
-  `packages/simetra/test/db/stack-guard.postgres.ts` — серед кандидатів.
+- Modify (після ПГ-2): `scripts/db-stack.mjs` — крок `pnpm db:pg:start`, що
+  під замком стека ставить тимчасові гранти `USAGE`/`TRIGGER` для
+  `simetra_owner` у базі `simetra` (рішення ПГ-2b). Міграцію Better Auth
+  крок лишає, а гранти замінює повторним `simetra roles` після неї. Звірка
+  guard стану схеми `better_auth` з порадою «`pnpm db:pg:start`» не
+  змінюється. Інші місця ручних грантів знайди так:
+  `grep -rn "GRANT TRIGGER\|GRANT USAGE ON SCHEMA better_auth" packages/*/src packages/*/test scripts`.
 - Test (після ПГ-2): `packages/simetra/src/schema/apply/__tests__/postgres-cluster.test.ts`,
   `packages/designer/src/__tests__/roles-tool.test.ts`,
   `packages/designer/src/__tests__/roles-tool.postgres.db.test.ts`
@@ -225,14 +228,16 @@ devDependency з ПГ-2a).
 - [ ] **Step 3:** `pnpm --filter simetra test postgres-cluster`,
   `pnpm --filter @simetrajs/designer test roles-tool` і
   `pnpm --filter @simetrajs/designer test:db roles-tool` — FAIL.
-- [ ] **Step 4:** реалізація. Тимчасові гранти тест-інфри (Р3 ПГ-2b) заміни
-  повторним `ensurePostgresCluster` після міграції Better Auth у тому самому
-  місці. Ручних грантів у тест-інфрі не лишається:
+- [ ] **Step 4:** реалізація. У `pnpm db:pg:start` тимчасові гранти заміни
+  повторним `simetra roles` після міграції Better Auth. DB-тести гранту
+  йдуть на тегованому кластері (`taggedClusterSet`, ПГ-2a), а не на спільній
+  базі `simetra`. Ручних грантів не лишається:
   `grep -rn "GRANT TRIGGER\|GRANT USAGE ON SCHEMA better_auth" packages/*/src packages/*/test scripts`
   дає лише генератор `postgres-cluster.ts` і кейси задач 1–2, що
   відкликають чи ставлять грант навмисно.
-- [ ] **Step 5:** PASS; повний DB-проєкт стека `postgres` зелений (знімок
-  guard без залишків).
+- [ ] **Step 5:** повторний `pnpm db:pg:start` (ідемпотентний, під замком
+  стека; дозволено, ПГ-2b) — зелений, guard звірку `better_auth` проходить;
+  PASS; повний `pnpm test:db:pg` зелений (знімок guard без залишків).
 - [ ] **Step 6: Commit** — `feat(schema): roles дає власнику адресні гранти таблиці Better Auth`.
 
 ### Task 2: гейт `plan.identity-table-missing`
@@ -492,7 +497,11 @@ devDependency з ПГ-2a).
   - unit (`runtime.test.ts`, фейкова база): кожна причина → своя відмова;
     усі `false` → рантайм створюється; відмова іде раніше за
     `command.model-mismatch` за хибного хешу;
-  - DB (Review Focus 2), стек `postgres`:
+  - DB (Review Focus 2), стек `postgres`. Звичайна сесія тестів на
+    `postgres` — суперкористувач з `SET ROLE simetra_owner` (ПГ-2b), тож
+    `session_user` там — суперкористувач. Кожен кейс гейта відкриває
+    **окремий пул на DSN своєї ролі входу** (`roleUrl`, ПГ-2a), а не
+    спільний пул тестів:
     - DSN стекового `simetra_owner` (пароль з `dev-secrets.env`, ПГ-2b) —
       `owner`;
     - тегований власник цілі теста (власник схеми `simetra`, ім'я не
