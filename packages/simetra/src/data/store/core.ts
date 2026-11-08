@@ -109,6 +109,10 @@ type Op =
       values: Values
       /** База полів, що прийшла з сервера (не з власних попередніх мутацій). */
       base: Values
+      /** Підтверджена версія ключа на мить дії. */
+      baseVersion: number | undefined
+      /** Перед дією вже були власні живі мутації ключа: база — своя. */
+      chained: boolean
     }
   | { k: "delete"; obj: ObjectName; key: Key }
   | {
@@ -261,9 +265,7 @@ function errorOf(e: unknown): CommandError {
 
 /** Внутрішній стан для тестів (не публічний API). */
 export interface CoreInspection {
-  rows(
-    obj: ObjectName
-  ): ReadonlyMap<
+  rows(obj: ObjectName): ReadonlyMap<
     Key,
     {
       version: number
@@ -273,6 +275,8 @@ export interface CoreInspection {
       heldByLog: boolean
     }
   >
+  /** Підтверджений рядок (без оптимістичного шару). */
+  row(obj: ObjectName, key: Key): ServerRow | undefined
   sectionCount(): number
   logLength(): number
   subsetCount(): number
@@ -1321,7 +1325,15 @@ export function createCoreSession(options: CoreOptions): CoreSession {
         for (const f of Object.keys(values)) {
           if (!own.has(f)) base[f] = confirmed[f]
         }
-        ops.push({ k: "update", obj: object, key, values, base })
+        ops.push({
+          k: "update",
+          obj: object,
+          key,
+          values,
+          base,
+          baseVersion: o.rows.get(key)?.row.version,
+          chained: own.size > 0,
+        })
         return tx
       },
       delete(object, key) {
@@ -1528,6 +1540,19 @@ export function createCoreSession(options: CoreOptions): CoreSession {
               error: { code: "command.conflict", reason: "version" },
               conflict: true,
             }
+          }
+        }
+        // `await` (команди, проведення): зміна версії після дії — конфлікт,
+        // без перебазування: правило команди могло залежати від зміненого.
+        if (
+          rec.policy === "await" &&
+          !op.chained &&
+          e.row.version !== op.baseVersion
+        ) {
+          return {
+            kind: "local",
+            error: { code: "command.conflict", reason: "version" },
+            conflict: true,
           }
         }
         const u = updateOf(op.obj, op.key)
@@ -1837,7 +1862,9 @@ export function createCoreSession(options: CoreOptions): CoreSession {
     settleFailure(rec, token, error, verdict === "conflict")
   }
 
-  const headerOnly = (rec: Rec) => rec.ops.every((op) => op.k === "update")
+  // Автоперебазування — лише `predict` над простими правками атрибутів.
+  const headerOnly = (rec: Rec) =>
+    rec.policy === "predict" && rec.ops.every((op) => op.k === "update")
   const firstObjKeys = (rec: Rec): [ObjectName, Key[]] => {
     const first = rec.ops[0]
     const obj = first === undefined ? "" : first.obj
@@ -1966,7 +1993,15 @@ export function createCoreSession(options: CoreOptions): CoreSession {
         const base = Object.fromEntries(
           Object.keys(values).map((f) => [f, confirmed[f]])
         )
-        return [{ ...op, values, base }]
+        return [
+          {
+            ...op,
+            values,
+            base,
+            baseVersion: objOf(op.obj).rows.get(op.key)?.row.version,
+            chained: false,
+          },
+        ]
       })
       touchRec(rec)
       if (next.ops.length > 0) {
@@ -2296,6 +2331,7 @@ export function createCoreSession(options: CoreOptions): CoreSession {
         ])
       )
     },
+    row: (obj, key) => objOf(obj).rows.get(key)?.row,
     sectionCount: () => sections.size,
     logLength: () => mutLog.length,
     subsetCount: () => subsets.size,

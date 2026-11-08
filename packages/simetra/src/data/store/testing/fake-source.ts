@@ -244,6 +244,11 @@ export interface PendingCall {
   readonly signal: AbortSignal
   /** Відповісти станом сервера на мить відповіді. */
   answer(): void
+  /**
+   * `read`: відповісти станом сервера на мить запиту — як асинхронна
+   * репліка чи запит, що обігнав пізнішу зміну.
+   */
+  answerStale(): void
   /** Відмовити, нічого не застосувавши. */
   fail(error: CommandError): void
   /** `run`: застосувати на сервері, а викликачу дати відмову (невідомий результат). */
@@ -258,10 +263,23 @@ export interface PendingCall {
 export function controlledSource(server: FakeServer) {
   const calls: PendingCall[] = []
   let auto = false
+  let sent = 0
   const source: CoreSource = {
     read(query, signal) {
+      sent++
       return new Promise<ReadRows>((resolve, reject) => {
+        let early: ReadRows | undefined
+        let earlyError: unknown
+        try {
+          early = server.read(query)
+        } catch (e) {
+          earlyError = e
+        }
         const call: PendingCall = {
+          answerStale: () => {
+            if (early !== undefined) resolve(early)
+            else reject(earlyError)
+          },
           kind: "read",
           query,
           signal,
@@ -280,8 +298,16 @@ export function controlledSource(server: FakeServer) {
       })
     },
     run(operations, signal) {
+      sent++
       return new Promise<CommandResult>((resolve, reject) => {
         const call: PendingCall = {
+          answerStale: () => {
+            try {
+              resolve(server.run(operations))
+            } catch (e) {
+              reject(e)
+            }
+          },
           kind: "run",
           operations,
           signal,
@@ -314,6 +340,10 @@ export function controlledSource(server: FakeServer) {
   return {
     source,
     calls,
+    /** Скільки запитів ядро надіслало (на мить запиту, а не відповіді). */
+    get sent() {
+      return sent
+    },
     /** Відповідати одразу (без черги). */
     setAuto(value: boolean) {
       auto = value
