@@ -68,6 +68,18 @@ describe("checkSuite", () => {
     ["start transaction", "START TRANSACTION;"],
     ["savepoint", "select plan(1);\nsavepoint s1;"],
     ["prepare transaction", "prepare transaction 'x';"],
+    [
+      "commit after an E-string with an escaped quote",
+      "select E'\\''; commit; select 'x';",
+    ],
+    [
+      "commit after identifiers ending in a dollar tag",
+      "select 1 as x$y$; commit; select 1 as z$y$;",
+    ],
+    [
+      "end after a begin atomic body",
+      "create function f() returns int language sql begin atomic select 1; end;\nend;",
+    ],
   ])("rejects %s", (_, sql) => {
     expect(() => checkSuite(sql)).toThrow(/transaction control|alter system/)
   })
@@ -79,6 +91,17 @@ describe("checkSuite", () => {
     ["rollback in a block comment", "/* x; rollback; */ select plan(0);"],
     ["commit in a string", "select ok(true, 'a; commit');"],
     ["an identifier named end", 'select 1 as "x; end";'],
+    ["an E-string ending in an escaped quote", "select E'a\\'; commit; b';"],
+    ["a plain string ending in a backslash", "select 'a\\'; select plan(0);"],
+    ["a typed string literal", "select date'2026-01-01'; select plan(0);"],
+    [
+      "a begin atomic body",
+      "create function f() returns int language sql begin atomic select 1; end;",
+    ],
+    [
+      "a begin atomic body with case … end",
+      "create function f(x int) returns int language sql\nBEGIN ATOMIC\n  select case when x > 0 then 1 else 0 end;\n  select 2;\nEND;\nselect plan(0);",
+    ],
   ])("accepts %s", (_, sql) => {
     expect(() => checkSuite(sql)).not.toThrow()
   })

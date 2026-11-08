@@ -10,7 +10,7 @@
 // (обробник сигналу його видаляє), і `… --sleep-worker` — воркер посеред
 // довгого запиту, який сервер після смерті клієнта виконує й далі.
 import { fork } from "node:child_process"
-import { writeFileSync, rmSync } from "node:fs"
+import { readFileSync, writeFileSync, rmSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import pg from "pg"
 import {
@@ -33,8 +33,20 @@ import { testProvider, testStack } from "../profile"
 const SELF_INTERRUPT_MS = 120_000
 const WORKER_PAUSE_MS = 200
 
-// Образ стека вже є локально: контейнер прогону не тягне нічого з мережі
-const RUN_CONTAINER_IMAGE = "simetra-pg/postgres:17.11"
+const COMPOSE_FILE = fileURLToPath(
+  new URL("../../../../../docker/postgres-stack/compose.yaml", import.meta.url)
+)
+
+// Образ сервісу postgres — з compose-файла стека, єдиного місця його тегу:
+// тег, продубльований тут, розійшовся б із ним на першому оновленні
+function stackPostgresImage(): string {
+  const image = /^ {2}postgres:\n(?: {4}.*\n)*? {4}image: (\S+)$/m.exec(
+    readFileSync(COMPOSE_FILE, "utf8")
+  )?.[1]
+  if (image === undefined)
+    throw new Error(`No image of service postgres in ${COMPOSE_FILE}`)
+  return image
+}
 
 function interruptContainerName(tag: string): string {
   return `simetra-run-${tag}-interrupt`
@@ -102,7 +114,11 @@ async function createObjects(): Promise<void> {
         `simetra-run=${tag}`,
         "--label",
         "simetra-stack=postgres",
-        RUN_CONTAINER_IMAGE,
+        // Образ локальний (його збирає `db:pg:start`): без нього прогін має
+        // впасти, а не тягнути щось із реєстру
+        "--pull",
+        "never",
+        stackPostgresImage(),
         "sleep",
         "infinity",
       ],

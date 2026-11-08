@@ -1,6 +1,7 @@
 // Раннер наборів pgTAP у Vitest: набір іде одним простим запитом у
 // транзакції, яку відкриває й відкочує раннер, тож набір не лишає на стеку
 // нічого, навіть розширення `pgtap`. Вивід TAP — текст рядків результатів.
+import { randomUUID } from "node:crypto"
 import pg from "pg"
 
 /** What a pgTAP suite reported. */
@@ -12,7 +13,11 @@ export interface TapResult {
   bailOut: string | null
 }
 
-/** Parses TAP lines; `# …` lines after a failed test are its diagnostics. */
+/**
+ * Parses TAP lines; `# …` lines after a failed test are its diagnostics. A
+ * `not ok … # TODO` counts as failed on purpose: a base-state suite has no
+ * expected failures, and a TODO left in it must not turn green.
+ */
 export function parseTap(lines: readonly string[]): TapResult {
   const result: TapResult = {
     planned: null,
@@ -64,11 +69,21 @@ export function checkSuite(sql: string): void {
   }
 }
 
-// Текст набору без коментарів, рядків і тіл у dollar-quote, поділений за `;`.
-// Сканер, а не регулярні вирази: `$$` усередині рядка чи `--` у тілі функції
-// інакше зламали б поділ
+// Символ, що може стояти в ідентифікаторі: `x$y$` — ідентифікатор, а не
+// початок dollar-quote, а `e'…'` після нього — не рядок з екрануванням
+const IDENT = /[A-Za-z0-9_$\u0080-\uffff]/
+
+// Текст набору без коментарів, рядків, тіл у dollar-quote і тіл `begin atomic
+// … end`, поділений за `;`. Сканер, а не регулярні вирази: `$$` усередині
+// рядка чи `--` у тілі функції інакше зламали б поділ. Розсинхрон сканера з
+// лексером Postgres — це пропущений `commit`, тож правила лексера повторено
+// там, де вони змінюють межі рядка
 function statements(sql: string): string[] {
   let out = ""
+  // Глибина `begin atomic`: усередині оператори тіла функції, а `case … end`
+  // закривається тим самим `end`
+  let atomic = 0
+  const identAt = (j: number): boolean => j >= 0 && IDENT.test(sql[j] ?? "")
   for (let i = 0; i < sql.length;) {
     const rest = sql.slice(i)
     if (rest.startsWith("--")) {
@@ -92,7 +107,9 @@ function statements(sql: string): string[] {
       out += " "
       continue
     }
-    const dollar = /^\$([A-Za-z_][A-Za-z0-9_]*)?\$/.exec(rest)
+    const dollar = identAt(i - 1)
+      ? null
+      : /^\$([A-Za-z_\u0080-\uffff][A-Za-z0-9_\u0080-\uffff]*)?\$/.exec(rest)
     if (dollar !== null) {
       const end = sql.indexOf(dollar[0], i + dollar[0].length)
       i = end === -1 ? sql.length : end + dollar[0].length
@@ -101,17 +118,39 @@ function statements(sql: string): string[] {
     }
     const quote = sql[i]
     if (quote === "'" || quote === '"') {
-      // Подвоєна лапка — екранована, рядок триває
-      for (i++; i < sql.length; i++)
-        if (sql[i] === quote) {
+      // `E'…'`: зворотна скісна екранує наступний символ, і `\'` рядка не
+      // закриває
+      const escapes =
+        quote === "'" && /[Ee]/.test(sql[i - 1] ?? "") && !identAt(i - 2)
+      for (i++; i < sql.length; i++) {
+        if (escapes && sql[i] === "\\") i++
+        else if (sql[i] === quote) {
+          // Подвоєна лапка — екранована, рядок триває
           if (sql[i + 1] === quote) i++
           else break
         }
+      }
       i++
       out += " "
       continue
     }
-    out += sql[i]
+    const word = identAt(i - 1) ? null : /^[A-Za-z_]+/.exec(rest)
+    if (word !== null) {
+      const lower = word[0].toLowerCase()
+      const opensAtomic = lower === "begin" && /^begin\s+atomic\b/i.test(rest)
+      if (opensAtomic || (atomic > 0 && lower === "case")) atomic++
+      else if (atomic > 0 && lower === "end") {
+        atomic--
+        i += word[0].length
+        out += " "
+        continue
+      }
+      out += atomic > 0 ? " " : word[0]
+      i += word[0].length
+      continue
+    }
+    // Крапка з комою в тілі `begin atomic` не ділить оператора набору
+    out += atomic > 0 ? " " : sql[i]
     i++
   }
   return out
@@ -120,10 +159,14 @@ function statements(sql: string): string[] {
     .filter((s) => s !== "")
 }
 
+// Ім'я локального налаштування-позначки транзакції раннера
+const MARKER = "simetra.pgtap_runner"
+
 /**
  * Runs suite `sql` at `url` in a transaction it rolls back, on a new client
  * per suite, and parses the text of every result row as TAP. An SQL error of
- * the suite rejects with the Postgres message.
+ * the suite rejects with the Postgres message; so does a suite that ended the
+ * runner's transaction.
  */
 export async function runPgTap(url: string, sql: string): Promise<TapResult> {
   checkSuite(sql)
@@ -131,10 +174,22 @@ export async function runPgTap(url: string, sql: string): Promise<TapResult> {
   await client.connect()
   try {
     await client.query("BEGIN")
+    // Локальне налаштування живе лише до кінця транзакції: `commit` чи
+    // `rollback`, що проскочив повз `checkSuite`, його скидає
+    const marker = randomUUID()
+    await client.query("select set_config($1, $2, true)", [MARKER, marker])
     // Без параметрів node-postgres шле простий запит: увесь набір — одним
     // викликом, і результат — масив, по одному на оператор
     const results = (await client.query(sql)) as unknown as
       pg.QueryResult | pg.QueryResult[]
+    const { rows } = await client.query<{ value: string | null }>(
+      "select current_setting($1, true) as value",
+      [MARKER]
+    )
+    if (rows[0]?.value !== marker)
+      throw new Error(
+        "The pgTAP suite ended the runner's transaction (a commit or rollback got past checkSuite): what it did may be committed on the stack — check it by hand"
+      )
     const lines = (Array.isArray(results) ? results : [results]).flatMap(
       (result) =>
         result.rows.flatMap((row: Record<string, unknown>) =>
@@ -146,7 +201,8 @@ export async function runPgTap(url: string, sql: string): Promise<TapResult> {
     return parseTap(lines)
   } finally {
     // Збій `ROLLBACK` (обірване з'єднання) не має затерти помилку набору:
-    // сервер і так відкочує транзакцію клієнта, що від'єднався
+    // сервер і так відкочує транзакцію клієнта, що від'єднався. Кінець
+    // транзакції набором ловить позначка вище, а не цей виклик
     await client.query("ROLLBACK").catch(() => {})
     await client.end()
   }
