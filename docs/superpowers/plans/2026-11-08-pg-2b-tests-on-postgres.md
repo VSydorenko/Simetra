@@ -10,7 +10,14 @@
 > `pnpm --filter … test:db*` під замками стеків. Повторний `pnpm db:pg:start`
 > дозволено, лише коли запущений стек зібрано з файлів цієї гілки
 > (`docker/postgres-stack/` без змін проти `main`); після задачі 1 розбіжність
-> конфігу дає відмову, а не перестворення.
+> конфігу дає відмову, а не перестворення. Стек, піднятий до задачі 1, не має
+> мітки `simetra.stack-files-hash` і несе старий хеш конфігу, тож живий
+> повторний старт відмовляє за задумом. Відмову покривають підставні тести
+> задачі 1. Живу перевірку (Step 4) і наступні DB-гейти на стеку `postgres`
+> виконавець запускає лише після того, як власник (через архітекторку) перебудує
+> спільний стек з файлів задачі 1; виконавець не зупиняє й не перестворює його,
+> а повідомляє про цю точку передачі і веде далі задачі без живого стека або
+> чекає.
 > **Перед стартом:** `.agents/skills/codebase-research/scripts/orient --plan <цей файл>`;
 > якорі, які дає 2a (`postgresClusterSet`, `ensurePostgresCluster`,
 > `migrateBetterAuth`, `prepareStackIdentity`, `taggedClusterSet`, проєкт
@@ -154,7 +161,7 @@ Supabase за §10.5 чи розщеплений. Перенос іде підс
 | Р12 | Job `db-supabase` у CI — матриця: `provider + simetra`, `designer 1/2`, `designer 2/2`; один рядок перевищив би `timeout-minutes` | §10.6 стовпець «Шарди» `db-supabase` (задача 0) |
 | Р13 | Бенчмарк `packages/simetra/bench/rights.bench.db.ts` лишається на `supabase` (проєкт `bench`, `stack-guard.supabase.ts`); задача 4 лише переводить його виклики на нові сигнатури | немає |
 | Р14 | Задачу 16 виконавець не виконує: передає текст §10.7 архітекторці й іде далі; правка `AGENTS.md` — частина приймання архітекторкою після затвердження власником; гейти її не вимагають; у тексті PR — що рядки `AGENTS.md` про `test:db` і `test:db:pg` застарілі до затвердження | немає |
-| Р15 | **Дрейф ролі ловиться.** (а) Guard стека після `assertStack` відкриває з'єднання з `testDatabaseUrl()` і відмовляє, коли `current_user <> PROVIDER_OWNER_ROLES[p]` або `current_user` має `rolsuper`: «test database URL does not run as <owner> (SIMETRA_TEST_DATABASE_URL?)» — так модель перевіряє кожен прогін, зокрема scoped і з перевизначеною адресою. (б) Дрейф ловиться в тесті, що його спричинив, без хибних тривог від законних станів і сусідніх конкурентних тестів. `withRollback` одразу після `connect` читає стартову роль клієнта; **перед** `ROLLBACK`, коли стартова роль не суперкористувач, звіряє, що поточна теж не суперкористувач (`SELECT NOT rolsuper FROM pg_catalog.pg_roles WHERE rolname = current_user`; помилку перерваної транзакції ковтає, як і помилку `ROLLBACK`): законна роль запиту чи команд до кінця транзакції (`asRole` у `platform-users.supabase`, `SET LOCAL ROLE` перед `SET CONSTRAINTS` у `rights-plan-gate`, помічник `catalog-command-concurrency`) проходить; **після** `ROLLBACK` на тому самому клієнті — `current_user` = стартова роль (це і є перевірка витоку; на адресі тестів — власник). Клієнт інших хелперів (`connection.ts`, designer `support/db.ts`) пов'язується з тестом, що його відкрив: хелпер реєструє `onTestFinished`, який звіряє `current_user` зі стартовою роллю цього клієнта поза транзакцією (клієнт у транзакції чи вже закритий — пропуск з причиною в коментарі); клієнти конкурентних тестів (`describe.concurrent` у designer-і, як `execute-plan`, `build-plan`, `apply-tools`, `promotion-lifecycle`) не опитуються — з тієї самої причини наявний `support/db-setup.ts` перевіряє тіні в `afterAll`. Пули хелперів — в `afterAll` файлу: `pool.totalCount` клієнтів через одночасні `pool.connect()`, кожен звіряється зі стартовою роллю адреси пулу й звільняється (публічного переліку вільних клієнтів `pg.Pool` немає). Setup-файл DB-проєкту стека `postgres` (simetra — новий `test/db/db-setup.ts`, designer — наявний `support/db-setup.ts`) додає `afterAll` пулів і нове з'єднання з `testDatabaseUrl()` | §10.3 «адреси» — запобіжник (iii) (задача 0) |
+| Р15 | **Дрейф ролі ловиться.** (а) Guard стека після `assertStack` відкриває з'єднання з `testDatabaseUrl()` і відмовляє, коли `current_user <> PROVIDER_OWNER_ROLES[p]` або `current_user` має `rolsuper`: «test database URL does not run as <owner> (SIMETRA_TEST_DATABASE_URL?)» — так модель перевіряє кожен прогін, зокрема scoped і з перевизначеною адресою. (б) Дрейф ловиться в тесті, що його спричинив, без хибних тривог від законних станів і сусідніх конкурентних тестів. `withRollback` одразу після `connect` читає стартову роль клієнта; **перед** `ROLLBACK`, коли стартова роль не суперкористувач, звіряє, що поточна теж не суперкористувач (`SELECT NOT rolsuper FROM pg_catalog.pg_roles WHERE rolname = current_user`; помилку перерваної транзакції ковтає, як і помилку `ROLLBACK`): законна роль запиту чи команд до кінця транзакції (`asRole` у `platform-users.supabase`, `SET LOCAL ROLE` перед `SET CONSTRAINTS` у `rights-plan-gate`, помічник `catalog-command-concurrency`) проходить; **після** `ROLLBACK` на тому самому клієнті — `current_user` = стартова роль (це і є перевірка витоку; на адресі тестів — власник). Клієнт інших хелперів (`connection.ts`, designer `support/db.ts`) пов'язується з тестом, що його відкрив: хелпер реєструє `onTestFinished`, який звіряє `current_user` зі стартовою роллю цього клієнта поза транзакцією (клієнт у транзакції чи вже закритий — пропуск з причиною в коментарі); клієнти конкурентних тестів (`describe.concurrent` у designer-і, як `execute-plan`, `build-plan`, `apply-tools`, `promotion-lifecycle`) не опитуються — з тієї самої причини наявний `support/db-setup.ts` перевіряє тіні в `afterAll`. Пули хелперів: перевірка бере `pool.totalCount` клієнтів через одночасні `pool.connect()` **з коротким дедлайном** (інакше витеклий клієнт вішає перевірку: останній `connect()` чекає на нього); на дедлайні — збій з лічильниками пулу (`totalCount`, `idleCount`, `waitingCount`, звідки видно виданих клієнтів); кожен отриманий клієнт звіряється зі стартовою роллю адреси пулу, і **усі** отримані звільняються в `finally` (публічного переліку вільних клієнтів `pg.Pool` немає). Перевірка йде в `afterEach` для клієнтів і пулів, використаних цим тестом (клієнт у транзакції — як описано вище), а `afterAll` лишається останньою перевіркою пулів: нове з'єднання з `testDatabaseUrl()` бачить лише стартову роль адреси, не роль, лишену на повторно вживаному клієнті, а наступний тест може її скинути до `afterAll`. Регресія з двох тестів у `connection.test.ts`/setup-тесті: перший тест лишає сесійну роль клієнта, другий її скинув би — падати має перший Setup-файл DB-проєкту стека `postgres` (simetra — новий `test/db/db-setup.ts`, designer — наявний `support/db-setup.ts`) додає `afterEach` клієнтів і пулів тесту, `afterAll` пулів і нове з'єднання з `testDatabaseUrl()` | §10.3 «адреси» — запобіжник (iii) (задача 0) |
 | Р16 | **Код, що вимагає `session_user = current_user`, — окремий DSN** (запобіжник (iv)). `testOwnerLoginUrl()` у `connection.ts`: на `postgres` — прямий вхід `simetra_owner` з `devSecret("SIMETRA_OWNER_DEV_PASSWORD")` до бази `simetra`, без `options`; на `supabase` — `testDatabaseUrl()` (там власник і є роль входу). Теговані цілі й копії designer-а (`inTarget`, `withCopy`) — `withDatabaseName(testOwnerLoginUrl(), <база цілі чи копії>)` з `@supabase/pg-delta`, не база `simetra`; власник цілі (`inTarget` — роль рушія з адреси тестів) і копії (`withCopy`, задача 4) — `simetra_owner`, тож `CONNECT` у нього є. Місця в коді: `maintenanceSql` гарда прав (`compiler/rights/guard-units.ts`; споживачі — `insert` у `rights-seed.ts`, `seedUnderMaintenance` designer, `rights-maintenance`, `rights-last-full-access`, `tenant-creation`); `DATA_GUARD_FACTS_SQL` (`designer/src/io/data.ts`, `rolsuper` і членства `session_user`); `MEMBER` у `server/runtime.ts` (`pg_has_role(session_user, …)`: на адресі тестів суперкористувач — член усього, і відмова `command.read-role-missing` не настане). Тест на цьому DSN не потребує `SET ROLE` за членством; кейс, якому потрібне і те, і те, розщеплюється. **Засів під режимом обслуговування в тій самій відкочуваній транзакції** (`insert` з `rights-seed.ts` поряд із `queryAs`/`commandAs`; кандидати — `access`, `catalog-command`, `catalog-command-admin`, `catalog-command-rights`, `command-grants`, `rights-analysis`, `rights-functions`, `rights-guards`, `rights-plan-gate`, `rights-policies`, `rights-sources`, `rights-write`, `snake-case`, `tenant-creation`; точний перелік — інвентар задачі 2) іде через `asSessionLogin(client, PROVIDER_OWNER_ROLES[testProvider()], fn)` на тому самому з'єднанні (рішення архітекторки): `SET LOCAL SESSION AUTHORIZATION` дає `session_user = current_user = simetra_owner` для гарда, а авторизація закінчується з транзакцією, навіть якщо відновлення пропущено. Так само designer `seedUnderMaintenance` (`support/db.ts`): у транзакції `committed` увесь засів — `set_config` режиму, `steps`, `SET CONSTRAINTS ALL IMMEDIATE`, вимкнення — іде всередині `asSessionLogin(owner, PROVIDER_OWNER_ROLES[testProvider()], …)`; `signUp` у `steps` (`seedRuntimeActor`, `seedOrg` → `addPeople` у `rights-admin-commands.support.ts`) сам виходить до суперкористувача входу й повертає стан викликача (Р1), тож розщеплювати ці помічники не треба. На `supabase` `asSessionLogin` з власником — без змін поведінки (власник і є роль входу) | §10.3 «адреси» — запобіжник (iv) і перелік місць (задача 0) |
 | Р17 | **`signUp` у тегованих цілях designer-а** (рішення архітекторки). Ціль, якій потрібна ідентичність (`inTarget`, `withCopy`, `seedRuntimeActor`), дістає справжню міграцію Better Auth **до першого плану чи застосування, що посилається на ідентичність**; порядок у користувачах хелпера сталий: ціль без SQL ідентичності (`inTarget` з desired SQL без `better_auth`, чи `withCopy`) → `withTargetIdentity(url)` → план і застосування моделі з FK на `better_auth."user"` і тригером провізії → `signUp`. Хелпер у `support/db.ts` від суперкористувача дає `simetra_auth` `CONNECT` і схему `better_auth` з власником `simetra_auth` (`CREATE SCHEMA IF NOT EXISTS … AUTHORIZATION`; наявна схема іншого власника — помилка), потім кличе `prepareStackIdentity` задачі 9 ПГ-2a (`superuserUrl` — `asSuperuser(url)`, `authUrl` — `loginUrl(url, "simetra_auth", devSecret("SIMETRA_AUTH_DEV_PASSWORD"))`, `owner` — `PROVIDER_OWNER_ROLES.postgres`): міграція від `simetra_auth`, перевірка, що `better_auth."user"` — таблиця `simetra_auth`, і тимчасові гранти `USAGE`/`TRIGGER` власнику, які тест задачі 10 ПГ-2a на цілі ставить від суперкористувача; так ціль має той самий стан, що й `simetra` після `db:pg:start`, а засів тіні плану бере `better_auth."user"` з фактів цілі (Р2 ПГ-2a). Наявна `better_auth."user"` іншого власника — заглушка, яку pg-delta створила від ролі рушія, коли desired SQL цілі вже посилався на ідентичність, — лишається помилкою налаштування тесту: хелпер перевіряє власника до міграції й кидає `better_auth."user" of <база> is owned by <роль>, not simetra_auth`; він не вставляє в неї і не перевласнює її | немає |
 
@@ -260,7 +267,10 @@ Supabase за §10.5 чи розщеплений. Перенос іде підс
   `pg_terminate_backend` бекендів з `application_name = 'simetra_db_start'`
   від суперкористувача. Перед правкою звір `startPostgres` і `devSecrets()` на
   `main` (2a їх змінює).
-- [ ] **Step 4:** PASS; uptime `simetra-pg-postgres-1`, `-garage-1`,
+- [ ] **Step 4:** PASS; **передумова:** власник (через архітекторку) вже
+  перебудував спільний стек з файлів цієї задачі, інакше відмова за міткою чи
+  хешем очікувана — тоді виконавець звітує про точку передачі й пропускає живу
+  перевірку до перебудови (відмову покривають підставні тести кроку 1); uptime `simetra-pg-postgres-1`, `-garage-1`,
   `-centrifugo-1` (і `supabase_*`, якщо піднято) до й після повторного
   `pnpm db:pg:start` — той самий; код 0 (Review Focus 3).
 - [ ] **Step 5: Commit** — `build(db): старт стека postgres тримає замок до виходу дочірнього процесу й не перестворює контейнерів`.
@@ -310,7 +320,8 @@ Guard і прибиральник (Р2, Р15 (а)) змінюються в ць�
   перевірка ролі адреси тестів, Р15 (а)), `packages/simetra/test/db/sweep.ts`
   (`DROP OWNED BY` в обох базах, `manualSweepSql`, Р2), `stack-guard.test.ts`,
   обидва `vitest.config.ts` (`setupFiles` проєкту `db-pg`, Р15 (б)),
-  `packages/designer/src/__tests__/support/db-setup.ts` (`afterEach`, Р15 (б)),
+  `packages/designer/src/__tests__/support/db-setup.ts` (`afterEach` клієнтів
+  і пулів тесту та `afterAll` пулів, Р15 (б)),
   `packages/simetra/test/support.ts` (додати
   `export { testProvider } from "./db/profile"`; нові хелпери
   `connection.ts` уже йдуть через `export * from "./db/connection"`)
@@ -353,9 +364,12 @@ Guard і прибиральник (Р2, Р15 (а)) змінюються в ць�
   - `async function asSessionLogin<T>(client: pg.Client, login: string, fn: () => Promise<T>): Promise<T>`
     — та сама форма з `SET LOCAL SESSION AUTHORIZATION <login>` (лише
     `LOCAL`) замість `SET LOCAL ROLE NONE`; і успіх, і збій — явне
-    `RESET SESSION AUTHORIZATION` і `SET LOCAL ROLE <попередня current_user>`
-    (та `set_config` попереднього `search_path`), як в `asStackSuperuser`, а
-    не роль власника: виклик у контексті ролі команд чи запиту інакше лишив
+    `SET LOCAL SESSION AUTHORIZATION <попередній session_user>` (не лише
+    `RESET SESSION AUTHORIZATION`, що повертає автентифікований вхід, а не
+    попередній локальний стан), далі `SET LOCAL ROLE <попередня current_user>`
+    (та `set_config` попереднього `search_path`), як в `asStackSuperuser`; хелпер
+    спершу читає `session_user`, `current_user`, `search_path`; відновлюється
+    попередня роль, а не роль власника: виклик у контексті ролі команд чи запиту інакше лишив
     би решту транзакції власнику з `BYPASSRLS`; на збої — після
     `ROLLBACK TO SAVEPOINT`;
   - `async function restoreOwnerRole(client: pg.Client): Promise<void>` —
@@ -489,7 +503,9 @@ Guard і прибиральник (Р2, Р15 (а)) змінюються в ць�
     `simetra_command`; `CREATE EXTENSION … SCHEMA extensions` у `fn` ставить
     розширення в `extensions`; (ii′) `asSessionLogin` — успіх і збій
     (`fn`, що кидає) повертають `session_user` суперкористувача стека й
-    `current_user = simetra_owner`; виклик усередині
+    `current_user = simetra_owner`; вкладений `asSessionLogin` (зовнішній —
+    іншого входу) на успіху й на збої повертає `session_user`, `current_user`
+    і `search_path` зовнішнього виклику; виклик усередині
     `SET LOCAL ROLE ${PLATFORM_ROLES.command}` повертає `simetra_command`;
     мутація — без відновлення тест
     червоний (результат — у звіт задачі); засів під режимом обслуговування
@@ -922,5 +938,7 @@ Guard і прибиральник (Р2, Р15 (а)) змінюються в ць�
   сервісні кейси — у `db-supabase`, без пропусків у `db`.
 - Набір ролі запиту `roles.pgtap.sql` у тегованій копії шаблону зелений.
 - CI: job `db` на `postgres`, job `db-supabase`; зелені.
+- Перебудову спільного стека з файлів задачі 1 виконав власник (через
+  архітекторку); живі перевірки на ній пройдено.
 - Текст `AGENTS.md` передано архітекторці; правка — після затвердження
   власником.
