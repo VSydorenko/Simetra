@@ -153,6 +153,7 @@ describe("session.close", () => {
     expect(order).toEqual(["purge", "flush", "abort"])
     expect(session.closed).toBe("session-changed")
     expect(session.signal.aborted).toBe(true)
+    expect(session.signal.reason).toBe("session-changed")
     expect(session.commit(() => {}, old)).toBe(false)
     // повторне закриття — без наслідків
     session.close("disposed", purge)

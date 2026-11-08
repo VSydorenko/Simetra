@@ -172,6 +172,20 @@ export function applyIncluded(
   s.included = next
 }
 
+/** Лишає з прочитаних цілей лише ті, що потрібні живим рядкам читання. */
+function aliveIncluded(
+  included: Included,
+  wanted: ReadonlyMap<ObjectName, readonly Key[]>
+): Included {
+  return new Map(
+    [...included].map(([name, { rows }]) => {
+      const keys = wanted.get(name) ?? []
+      const set = new Set(keys)
+      return [name, { keys, rows: rows.filter((r) => set.has(r.key)) }]
+    })
+  )
+}
+
 /** Склад `full`: локальний фільтр і порядок; `removed` тримає позицію. */
 function fullLayout(s: ReaderTarget, fetched: ReadonlyMap<Key, Values>): Key[] {
   const { form } = s
@@ -287,7 +301,22 @@ async function readFull(
   return (scope) => {
     for (const row of kept) ops.put(scope, o, row, readEpoch, false)
     s.owned = diffOwn(ops, scope, o, s.owned, values.keys())
-    applyIncluded(ctx, scope, s, included, readEpoch)
+    // Рядок, чий `put` відхилено, лишається `removed`: його цілі не беремо
+    // (§6.2, правило 5). Рядок, якого це читання щойно відновило, тут уже живий.
+    const alive = shown.filter((r) => o.rows.get(r.key)?.removed === undefined)
+    applyIncluded(
+      ctx,
+      scope,
+      s,
+      aliveIncluded(
+        included,
+        includeKeys(
+          form.include,
+          alive.map((r) => r.values)
+        )
+      ),
+      readEpoch
+    )
     s.strategy = over ? "window" : "full"
     s.truncated = over
     s.atEnd = !over

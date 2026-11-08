@@ -213,6 +213,29 @@ describe("full", () => {
     expect(inspect.owners(ORG, S)).toBeGreaterThan(0)
   })
 
+  it("does not own include targets of a row whose put is rejected and stays removed", async () => {
+    const { core, fake, inspect } = setup()
+    fake.insert(ORG, { ref: S })
+    seed(fake, 1, 1)
+    const single = core.view({ kind: "keys", object: TASK, keys: [key(1)] })
+    watch(single)
+    await settle()
+    const handle = core.view({ kind: "full", object: TASK, include: ["org"] })
+    // Читання `full` почате до позначки: його відповідь для `removed` застаріла.
+    fake.hold = (read) => isPage(read)
+    watch(handle)
+    await settle()
+    const late = fake.take(isPage)
+    fake.hold = undefined
+    fake.remove(TASK, key(1))
+    single.refresh()
+    await settle()
+    expect(single.getSnapshot().rows[0]).toMatchObject({ state: "removed" })
+    late.answer(late.issuedAt)
+    await settle()
+    expect(inspect.owners(ORG, S)).toBe(0)
+  })
+
   it("stops reading pages and targets once the view is released", async () => {
     const { core, fake, inspect } = setup()
     seed(fake, 1, 1_000)

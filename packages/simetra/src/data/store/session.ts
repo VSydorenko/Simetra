@@ -151,7 +151,7 @@ export function createSession(options: {
         run(purgeAll)
       } finally {
         closed = reason
-        sessionController.abort()
+        sessionController.abort(reason)
         epochs.clear()
         // Збій одного хука не повинен лишити решту мап і слухачів живими.
         for (const hook of closeHooks) {

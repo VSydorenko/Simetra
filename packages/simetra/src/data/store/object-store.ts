@@ -94,8 +94,9 @@ export interface ObjectStore {
     lazyRead: boolean
   ): PutResult
   /**
-   * Always marks `removed` (П15); a no-op only for a key with a newer key or
-   * pair tombstone and for a key without an entry.
+   * Always marks `removed` (П15); a repeated non-divergent remove from a read
+   * started after the mark is a new mark and moves its epoch. A no-op only for
+   * a key with a newer key or pair tombstone and for a key without an entry.
    */
   remove(scope: Scope, key: Key, readEpoch: number): void
   /** Buries the keys and drops their entries; returns the dropped keys. */
