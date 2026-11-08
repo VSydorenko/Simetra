@@ -85,13 +85,14 @@ describe("session.onFlush", () => {
   it("a listener that closes the session: purge batch reaches the next listener once, original batch stops", () => {
     const { session } = make()
     let purged = false
-    const seen: boolean[] = []
+    const seen: Array<{ purged: boolean; closed: unknown }> = []
     session.onFlush(() => {
       if (!purged) session.close("disposed", () => (purged = true))
     })
-    session.onFlush(() => seen.push(purged))
+    session.onFlush(() => seen.push({ purged, closed: session.closed }))
     session.commit(() => {}, session.token())
-    expect(seen).toEqual([true])
+    // closed ще не виставлено й purge уже виконано: виклик у purge-пачці
+    expect(seen).toEqual([{ purged: true, closed: undefined }])
     expect(session.closed).toBe("disposed")
   })
 
@@ -100,11 +101,31 @@ describe("session.onFlush", () => {
     const old = session.token()
     const child = session.childToken(() => true)
     const results: boolean[] = []
-    session.onFlush(() => results.push(session.commit(() => {}, old, "late")))
+    const childValid: boolean[] = []
+    session.onFlush(() => {
+      results.push(session.commit(() => {}, old, "late"))
+      childValid.push(child.valid)
+    })
     session.close("disposed", () => {})
     expect(results).toEqual([false])
+    expect(childValid).toEqual([false])
     expect(child.valid).toBe(false)
     expect(log).toEqual([{ kind: "late-response", what: "late" }])
+  })
+
+  it("a listener may commit: the nested batch reaches the next listener first", () => {
+    const { session } = make()
+    let first = true
+    const order: string[] = []
+    session.onFlush(() => {
+      if (!first) return
+      first = false
+      order.push("commit")
+      session.commit(() => {}, session.token())
+    })
+    session.onFlush(() => order.push("next"))
+    session.commit(() => {}, session.token())
+    expect(order).toEqual(["commit", "next", "next"])
   })
 
   it("unsubscribe stops notifications", () => {

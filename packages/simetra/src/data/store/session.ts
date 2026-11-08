@@ -36,7 +36,7 @@ export interface Session {
   onFlush(listener: () => void): () => void
   /** Registers a clear-on-close hook for service maps of other modules. */
   onClose(hook: () => void): void
-  /** Runs `purgeAll` in one batch, then aborts, invalidates and clears. */
+  /** Must be called outside `commit` (throws inside). Runs `purgeAll` in one batch, then aborts, invalidates and clears. */
   close(reason: CloseReason, purgeAll: (scope: Scope) => void): void
   /** A request controller; call `release()` when the request is done. */
   track(): { signal: AbortSignal; release(): void }
@@ -63,6 +63,8 @@ export function createSession(options: {
     },
   }
 
+  // Слухачі можуть робити commit: вкладена пачка доходить до решти слухачів
+  // раніше за решту зовнішньої.
   // Слухач може закрити сесію або кинути: перед кожним викликом дивимось
   // на `closed`, а збій одного не зупиняє решту. Закриття зсередини слухача
   // запускає вкладений flush з purge-пачкою (кожен слухач її отримує, спека
