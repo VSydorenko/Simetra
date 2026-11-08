@@ -49,6 +49,8 @@ type Step =
     }
   | { t: "other"; key: number; value: number }
   | { t: "otherRemove"; key: number }
+  | { t: "del"; key: number }
+  | { t: "purge"; key: number }
   | { t: "signal"; key: number }
   | { t: "retry"; pick: number }
   | { t: "cancel"; pick: number }
@@ -112,6 +114,20 @@ const step: fc.Arbitrary<Step> = fc.oneof(
     }),
   },
   {
+    weight: 2,
+    arbitrary: fc.record({
+      t: fc.constant("del" as const),
+      key: fc.nat(KEYS.length - 1),
+    }),
+  },
+  {
+    weight: 1,
+    arbitrary: fc.record({
+      t: fc.constant("purge" as const),
+      key: fc.nat(KEYS.length - 1),
+    }),
+  },
+  {
     weight: 6,
     arbitrary: fc.record({
       t: fc.constant("signal" as const),
@@ -168,6 +184,11 @@ class Reference {
     this.log = this.log.filter((x) => Object.keys(x.values).length > 0)
   }
 
+  /** Втрата доступу: ядро прибирає мутації ключа разом з рядком. */
+  purge(key: string) {
+    this.log = this.log.filter((m) => m.key !== key)
+  }
+
   cancel(mid: MutationId) {
     this.log = this.log.filter((m) => m.id !== mid)
   }
@@ -212,6 +233,12 @@ async function runModel(
     KEYS.map((k, i) => ({ id: k, title: `t${i}`, rank: i }))
   )
   const ref = new Reference()
+  // Ключі з підтвердженим власним видаленням і вичищені `purge`: сервер
+  // видалення не відкочує, тож ні пізня відповідь, ні перечитування не
+  // мусять повернути видалений ключ.
+  const deleted = new Set<string>()
+  const purged = new Set<string>()
+  void purged
   const handles = SPECS.map((spec) => session.view(spec))
   const subs: ((() => void) | undefined)[] = SPECS.map(() => undefined)
   const frames = SPECS.map(() => 0)
@@ -240,6 +267,13 @@ async function runModel(
     // Межа пам'яті: рядок існує, лише поки його тримає підмножина, реєстр
     // створень чи журнал (зокрема failed/conflict/unknown).
     expect(insp.violations(), label).toEqual([])
+    // Підтверджене власне видалення не воскресає (пізня відповідь, репліка).
+    for (const key of deleted) {
+      expect(
+        insp.row(TASK, key),
+        `${label}: deleted ${key} is back`
+      ).toBeUndefined()
+    }
     for (const [key, row] of insp.rows(TASK)) {
       // Версія не зменшується (сервер монотонний, тож і між появами ключа).
       const max = maxVersion.get(key) ?? 0
@@ -262,7 +296,7 @@ async function runModel(
     }
     // Р3: рядок живої чи відмовленої мутації не витісняється.
     for (const m of ref.log) {
-      if (m.hadRow)
+      if (m.hadRow && !deleted.has(m.key))
         expect(
           insp.row(TASK, m.key),
           `${label}: held by log ${m.key}`
@@ -386,6 +420,28 @@ async function runModel(
       case "otherRemove":
         server.remove(TASK, KEYS[s.key] as string)
         break
+      case "del": {
+        if (session.closed) break
+        const key = KEYS[s.key] as string
+        const m = session
+          .begin({ policy: "predict" })
+          .delete(TASK, key)
+          .commit()
+        void m.settled.then((o) => {
+          if (o.ok) deleted.add(key)
+        })
+        break
+      }
+      case "purge":
+        if (session.closed) break
+        // Виняток безпеки: склад може змінитись, перевірка стабільності — ні.
+        session.commit(
+          (w) => w.purge(TASK, [KEYS[s.key] as string]),
+          session.token()
+        )
+        ref.purge(KEYS[s.key] as string)
+        purged.add(KEYS[s.key] as string)
+        break
 
       case "retry":
       case "cancel": {
@@ -416,7 +472,12 @@ async function runModel(
     await transport.settle()
     check(label)
     if (stableCheck !== undefined && disposedAt === undefined) {
-      expect(layouts(), `${label}: layouts`).toEqual(stableCheck)
+      // Підтверджене власне видалення — дозволена зміна складу.
+      const allowed = stableCheck.map((l) => l?.filter((k) => !deleted.has(k)))
+      expect(
+        layouts().map((l) => l?.filter((k) => !deleted.has(k))),
+        `${label}: layouts`
+      ).toEqual(allowed)
     }
     stableCheck = undefined
   }

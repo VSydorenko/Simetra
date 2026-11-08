@@ -440,9 +440,42 @@ export function createCoreSession(options: CoreOptions): CoreSession {
   }
   const staleInserts = new Map<ObjectName, Set<Key>>()
 
-  /** Записати рядок з результату підмножини за правилом версії. */
-  function putRow(scope: Scope, o: ObjState, row: ServerRow) {
+  /**
+   * Надгробки видалення й `purge` з епохою. Читання запам'ятовує епоху на
+   * старті; рядок з читання, що почалось до надгробка, не вставляється й не
+   * латається — інакше пізня відповідь воскресила б підтверджене видалення
+   * чи вичищений рядок (знайдено рев'ю спайку).
+   */
+  let epoch = 0
+  const tombstones = new Map<string, number>()
+
+  /** Рядок прибрано: надгробок і власність підмножин без лічильника. */
+  function bury(scope: Scope, o: ObjState, key: Key) {
     scope.assert()
+    const id = rowId(o.name, key)
+    epoch++
+    tombstones.delete(id)
+    tombstones.set(id, epoch)
+    if (tombstones.size > SEEN_MAX) {
+      const oldest = tombstones.keys().next().value
+      if (oldest !== undefined) tombstones.delete(oldest)
+    }
+    if (o.rows.delete(key)) touchRow(o.name, key)
+    o.own.delete(key)
+    rowCache.delete(id)
+    for (const sub of subsets.values()) {
+      if (sub.obj === o) sub.owned.delete(key)
+    }
+  }
+
+  /** Записати рядок з результату підмножини за правилом версії. */
+  function putRow(scope: Scope, o: ObjState, row: ServerRow, since?: number) {
+    scope.assert()
+    if (
+      since !== undefined &&
+      (tombstones.get(rowId(o.name, row.key)) ?? -1) > since
+    )
+      return
     const e = o.rows.get(row.key)
     if (e === undefined) {
       const known = seen.get(rowId(o.name, row.key)) ?? 0
@@ -830,8 +863,17 @@ export function createCoreSession(options: CoreOptions): CoreSession {
     dirtySections.clear()
     dirtySubsets.clear()
     changed = false
-    for (const s of toNotify) for (const l of [...s.listeners]) call(l)
-    for (const l of [...listeners]) call(l)
+    // Слухач може закрити сесію: після цього нікого не сповіщаємо.
+    for (const s of toNotify) {
+      for (const l of [...s.listeners]) {
+        if (closed) return
+        call(l)
+      }
+    }
+    for (const l of [...listeners]) {
+      if (closed) return
+      call(l)
+    }
   }
 
   function call(listener: () => void) {
@@ -937,11 +979,13 @@ export function createCoreSession(options: CoreOptions): CoreSession {
   ): Promise<LoadResult> {
     const o = s.obj
     const spec = s.spec
+    // Епоха на старті читання: надгробки після неї сильніші за відповідь.
+    const since = epoch
     switch (spec.kind) {
       case "keys": {
         const rows = await readKeys(o, spec.keys, signal)
         return (scope) => {
-          for (const r of rows) putRow(scope, o, r)
+          for (const r of rows) putRow(scope, o, r, since)
           own(
             scope,
             s,
@@ -958,7 +1002,7 @@ export function createCoreSession(options: CoreOptions): CoreSession {
         const res = await read({ object: o.spec.ref, id: spec.key }, signal)
         const rows = res.rows.map(toServerRow)
         return (scope) => {
-          for (const r of rows) putRow(scope, o, r)
+          for (const r of rows) putRow(scope, o, r, since)
           own(
             scope,
             s,
@@ -1015,7 +1059,7 @@ export function createCoreSession(options: CoreOptions): CoreSession {
           last = rows[rows.length - 1]?.key
         }
         return (scope) => {
-          for (const r of rows) putRow(scope, o, r)
+          for (const r of rows) putRow(scope, o, r, since)
           own(
             scope,
             s,
@@ -1047,7 +1091,7 @@ export function createCoreSession(options: CoreOptions): CoreSession {
         const atEnd = rows.length < size && res.more !== true
         const lastRow = rows[rows.length - 1]
         return (scope) => {
-          for (const r of rows) putRow(scope, o, r)
+          for (const r of rows) putRow(scope, o, r, since)
           const keys = rows.map((r) => r.key)
           const prevKeys =
             mode === "more" ? s.layout.filter((k) => !keys.includes(k)) : []
@@ -1084,6 +1128,47 @@ export function createCoreSession(options: CoreOptions): CoreSession {
     return items.map((i) => i.key)
   }
 
+  /** ТЧ потрібна: жива підмножина `section` чи дельта рядка в журналі. */
+  function sectionWanted(
+    obj: ObjectName,
+    owner: Key,
+    section: string
+  ): boolean {
+    if (
+      subsets.has(specKeyOf({ kind: "section", object: obj, owner, section }))
+    )
+      return true
+    return mutLog.some((r) =>
+      r.ops.some(
+        (op) =>
+          op.k === "line" &&
+          op.obj === obj &&
+          op.owner === owner &&
+          op.section === section
+      )
+    )
+  }
+
+  /** Межа пам'яті ТЧ: запис живе, лише поки він потрібен. */
+  function collectSection(
+    scope: Scope,
+    obj: ObjectName,
+    owner: Key,
+    section: string
+  ) {
+    scope.assert()
+    const sid = sectionId(obj, owner, section)
+    if (!sections.has(sid) || sectionWanted(obj, owner, section)) return
+    sections.delete(sid)
+    touchSection(sid)
+  }
+
+  function collectSectionsOf(scope: Scope, rec: Rec) {
+    for (const op of rec.ops) {
+      if (op.k === "line") collectSection(scope, op.obj, op.owner, op.section)
+    }
+  }
+
   function applySection(
     scope: Scope,
     obj: ObjectName,
@@ -1096,6 +1181,8 @@ export function createCoreSession(options: CoreOptions): CoreSession {
     const sid = sectionId(obj, owner, section)
     const entry = sections.get(sid)
     if (entry === undefined) {
+      // Відповідь для ТЧ, яку вже ніхто не тримає, запису не створює.
+      if (!sectionWanted(obj, owner, section)) return
       sections.set(sid, { ownerVersion, lines, complete: true })
       touchSection(sid)
       return
@@ -1166,23 +1253,8 @@ export function createCoreSession(options: CoreOptions): CoreSession {
       subsets.delete(s.specKey)
       own(scope, s, [])
       const spec = s.spec
-      if (spec.kind === "section") {
-        const sid = sectionId(s.obj.name, spec.owner, spec.section)
-        // ТЧ тримають лише дельти рядків цієї ТЧ у журналі, не правки шапки.
-        const held = mutLog.some((r) =>
-          r.ops.some(
-            (op) =>
-              op.k === "line" &&
-              op.obj === s.obj.name &&
-              op.owner === spec.owner &&
-              op.section === spec.section
-          )
-        )
-        if (sections.has(sid) && !held) {
-          sections.delete(sid)
-          touchSection(sid)
-        }
-      }
+      if (spec.kind === "section")
+        collectSection(scope, s.obj.name, spec.owner, spec.section)
     }, sessionToken)
     for (const w of s.waiters.splice(0)) w()
   }
@@ -1530,9 +1602,11 @@ export function createCoreSession(options: CoreOptions): CoreSession {
   /** Черга ключа (§7.1): мутація стартує, коли попередні того ключа осіли. */
   function pump() {
     if (closed) return
-    for (let i = 0; i < mutLog.length; i++) {
-      const rec = mutLog[i]
-      if (rec === undefined || rec.state !== "queued") continue
+    // Обхід знімка: `send` може синхронно прибрати мутацію з журналу
+    // (осідання `noop`), і зсув індексу пропустив би наступну (рев'ю).
+    for (const rec of [...mutLog]) {
+      const i = mutLog.indexOf(rec)
+      if (i < 0 || rec.state !== "queued") continue
       const keys = new Set(recKeys(rec))
       const blocked = mutLog
         .slice(0, i)
@@ -1551,15 +1625,24 @@ export function createCoreSession(options: CoreOptions): CoreSession {
     | {
         kind: "send"
         operations: Operation[]
-        touchedSections: { obj: ObjectName; owner: Key; section: string }[]
+        touchedSections: {
+          obj: ObjectName
+          owner: Key
+          section: string
+          lines: SectionLine[]
+        }[]
       }
     | { kind: "local"; error: CommandError; conflict: boolean }
     | { kind: "noop" }
 
   function build(rec: Rec): Built {
     const operations: Operation[] = []
-    const touchedSections: { obj: ObjectName; owner: Key; section: string }[] =
-      []
+    const touchedSections: {
+      obj: ObjectName
+      owner: Key
+      section: string
+      lines: SectionLine[]
+    }[] = []
     const updates = new Map<
       string,
       {
@@ -1670,6 +1753,7 @@ export function createCoreSession(options: CoreOptions): CoreSession {
           obj: op.obj,
           owner: op.owner,
           section: op.section,
+          lines,
         })
       }
       const d = op.d
@@ -1823,11 +1907,8 @@ export function createCoreSession(options: CoreOptions): CoreSession {
         const row = rows[i]
         const o = objOf(refName(operation.object))
         if (operation.action === "delete") {
-          const id = operation.id
-          if (o.rows.delete(id)) touchRow(o.name, id)
-          o.own.delete(id)
-          rowCache.delete(rowId(o.name, id))
-          removeSectionsOf(scope, o.name, id)
+          bury(scope, o, operation.id)
+          removeSectionsOf(scope, o.name, operation.id)
           return
         }
         if (row === undefined) return
@@ -1855,7 +1936,23 @@ export function createCoreSession(options: CoreOptions): CoreSession {
             r.ownerVersion,
             r.lines
           )
-        else markSectionViews(r.t.obj, r.t.owner, r.t.section)
+        else {
+          // Перечитування не вдалось: надісланий масив — підтверджений стан
+          // ТЧ з версією власника з write-back, тож доданий рядок не зникає;
+          // видима ТЧ перечитується.
+          const header = objOf(r.t.obj).rows.get(r.t.owner)
+          if (header !== undefined) {
+            applySection(
+              scope,
+              r.t.obj,
+              r.t.owner,
+              r.t.section,
+              header.row.version,
+              [...r.t.lines]
+            )
+          }
+          markSectionViews(r.t.obj, r.t.owner, r.t.section)
+        }
       }
       settleSuccess(scope, rec, rows)
     }, token)
@@ -1925,8 +2022,7 @@ export function createCoreSession(options: CoreOptions): CoreSession {
         for (const op of rec.ops) {
           if (op.k !== "delete") continue
           const o = objOf(op.obj)
-          if (o.rows.delete(op.key)) touchRow(o.name, op.key)
-          o.own.delete(op.key)
+          bury(scope, o, op.key)
           removeSectionsOf(scope, o.name, op.key)
         }
         for (const op of rec.ops) {
@@ -1978,6 +2074,8 @@ export function createCoreSession(options: CoreOptions): CoreSession {
     if (s === undefined) return
     s.needsRefresh = true
     touchSubset(s)
+    const sub = s
+    if (sub.listeners.size > 0) queueMicrotask(() => load(sub))
   }
 
   /** Осідання успіху: мутація зникає з журналу в тому самому commit, що write-back. */
@@ -2025,6 +2123,7 @@ export function createCoreSession(options: CoreOptions): CoreSession {
       const o = objOf(op.obj)
       collect(scope, o, op.k === "line" ? op.owner : op.key)
     }
+    collectSectionsOf(scope, rec)
     rec.resolve({ ok: true, rows })
   }
 
@@ -2092,6 +2191,7 @@ export function createCoreSession(options: CoreOptions): CoreSession {
       }
       for (const op of rec.ops)
         collect(scope, objOf(op.obj), op.k === "line" ? op.owner : op.key)
+      collectSectionsOf(scope, rec)
     }, sessionToken)
     if (next.ops.length === 0) next.resolve({ ok: true, rows: [] })
     pump()
@@ -2126,6 +2226,7 @@ export function createCoreSession(options: CoreOptions): CoreSession {
       }
       for (const op of rec.ops)
         collect(scope, objOf(op.obj), op.k === "line" ? op.owner : op.key)
+      collectSectionsOf(scope, rec)
     }, sessionToken)
   }
 
@@ -2157,7 +2258,9 @@ export function createCoreSession(options: CoreOptions): CoreSession {
           const e = o.rows.get(key)
           if (e === undefined) continue
           if (minVersion !== undefined && e.row.version >= minVersion) continue
-          e.staleUntil = Math.max(e.staleUntil, minVersion ?? e.row.version + 1)
+          // Без `minVersion` (розрив зв'язку) `stale` знімає будь-яке
+          // підтвердження — і тієї самої версії: рядок міг не змінитись.
+          e.staleUntil = Math.max(e.staleUntil, minVersion ?? e.row.version)
           if (e.stale) continue
           e.stale = true
           touchRow(object, key)
@@ -2168,9 +2271,7 @@ export function createCoreSession(options: CoreOptions): CoreSession {
         const o = objOf(object)
         const gone = new Set(keys)
         for (const key of keys) {
-          if (o.rows.delete(key)) touchRow(object, key)
-          o.own.delete(key)
-          rowCache.delete(rowId(object, key))
+          bury(scope, o, key)
           for (const [sid] of sections) {
             if (sid.startsWith(`${object}\u0000${key}\u0000`)) {
               sections.delete(sid)
@@ -2185,7 +2286,12 @@ export function createCoreSession(options: CoreOptions): CoreSession {
             touchSubset(s)
           }
           if (![...s.layoutSet].some((k) => gone.has(k))) continue
-          s.owned = new Set([...s.owned].filter((k) => !gone.has(k)))
+          // Склад картки сталий: рядок зник зі сховища, ключ лишається.
+          if (s.spec.kind === "card") {
+            s.needsRefresh = true
+            touchSubset(s)
+            continue
+          }
           setLayout(
             scope,
             s,
@@ -2206,10 +2312,12 @@ export function createCoreSession(options: CoreOptions): CoreSession {
           r.resolve({ ok: false, error: { code: "command.forbidden" } })
         }
       },
-      markViews(object, flags) {
+      markViews(object, flags, spec) {
         scope.assert()
+        const only = spec === undefined ? undefined : specKeyOf(spec)
         for (const s of subsets.values()) {
           if (s.obj.name !== object) continue
+          if (only !== undefined && s.specKey !== only) continue
           if (flags.needsRefresh) s.needsRefresh = true
           if (
             flags.hasNewRows &&
@@ -2230,6 +2338,7 @@ export function createCoreSession(options: CoreOptions): CoreSession {
     // теж латається: рядок тримає журнал мутацій.
     if (closed || keys.length === 0) return
     const o = objOf(object)
+    const since = epoch
     let rows: ServerRow[]
     try {
       rows = await readKeys(o, keys, abort.signal)
@@ -2239,15 +2348,61 @@ export function createCoreSession(options: CoreOptions): CoreSession {
     const got = new Set(rows.map((r) => r.key))
     commitInternal((scope) => {
       const w = writerFor(scope)
-      w.patch(object, rows)
       for (const row of rows) {
-        if (!o.rows.has(row.key) && heldByLog(object, row.key))
-          putRow(scope, o, row)
+        if (o.rows.has(row.key) || heldByLog(object, row.key))
+          putRow(scope, o, row, since)
       }
       w.remove(
         object,
         keys.filter((k) => !got.has(k))
       )
+    }, sessionToken)
+  }
+
+  /**
+   * Системне перечитування виглядів об'єкта (сигнал, перепідписка): за
+   * ключами їхнього складу, одним `commit`. Склад і порядок не змінюються —
+   * це не `refresh()` користувача: змінені рядки латаються, зниклі стають
+   * `removed`, вигляди отримують `needsRefresh`, якщо щось змінилось.
+   */
+  async function revalidate(
+    object: ObjectName,
+    options?: { visibleOnly?: boolean }
+  ): Promise<void> {
+    if (closed) return
+    const o = objOf(object)
+    const targets = [...subsets.values()].filter(
+      (s) =>
+        s.obj === o &&
+        s.spec.kind !== "section" &&
+        (!options?.visibleOnly || s.listeners.size > 0)
+    )
+    const keys = [...new Set(targets.flatMap((s) => s.layout))]
+    if (keys.length === 0) return
+    let rows: ServerRow[]
+    try {
+      rows = await readKeys(o, keys, abort.signal)
+    } catch {
+      return
+    }
+    const got = new Set(rows.map((r) => r.key))
+    commitInternal((scope) => {
+      const w = writerFor(scope)
+      const before = new Map(keys.map((k) => [k, o.rows.get(k)?.row.version]))
+      w.patch(object, rows)
+      w.remove(
+        object,
+        keys.filter((k) => !got.has(k))
+      )
+      for (const s of targets) {
+        const touched = s.layout.some(
+          (k) => o.rows.get(k)?.row.version !== before.get(k) || !got.has(k)
+        )
+        if (touched && (s.spec.kind === "full" || s.spec.kind === "window")) {
+          s.needsRefresh = true
+          touchSubset(s)
+        }
+      }
     }, sessionToken)
   }
 
@@ -2391,6 +2546,17 @@ export function createCoreSession(options: CoreOptions): CoreSession {
       commitInternal((scope) => fn(writerFor(scope)), token),
     confirmedVersion: (object, key) => objOf(object).rows.get(key)?.row.version,
     refetchKeys,
+    activeViews: (object) =>
+      [...subsets.values()]
+        .filter((s) => s.obj.name === object)
+        .map((s) => ({
+          spec: s.spec,
+          keys: s.spec.kind === "section" ? [s.spec.owner] : [...s.layout],
+          visible: s.listeners.size > 0,
+        }))
+        // Видимі — першими: їх перечитують спершу.
+        .sort((a, b) => Number(b.visible) - Number(a.visible)),
+    revalidate,
     ownCreates: (object) => [...objOf(object).own],
     dehydrate,
     hydrate,
@@ -2420,6 +2586,15 @@ export function createCoreSession(options: CoreOptions): CoreSession {
     subsetCount: () => subsets.size,
     violations() {
       const out: string[] = []
+      for (const sid of sections.keys()) {
+        const [obj, owner, section] = sid.split("\u0000") as [
+          string,
+          string,
+          string,
+        ]
+        if (!sectionWanted(obj, owner, section))
+          out.push(`section ${sid}: held by nobody`)
+      }
       for (const o of objects.values()) {
         for (const [key, e] of o.rows) {
           let owners = 0
