@@ -370,7 +370,8 @@ export function throughCases(target: Targets, port: Port): void {
       (attribute) => attribute.column === "created_by_id"
     )!.name
     expect(row).toMatchObject({
-      [organization.versionName]: 1,
+      // Версія з послідовності, а не `1`
+      [organization.versionName]: expect.any(Number),
       [author]: creator,
     })
     expect(created.changes).toEqual([
@@ -379,7 +380,7 @@ export function throughCases(target: Targets, port: Port): void {
         scopeKind: organization.scopeKindId,
         scope: id,
         id,
-        version: 1,
+        version: row![organization.versionName],
         operation: "create",
       },
     ])
