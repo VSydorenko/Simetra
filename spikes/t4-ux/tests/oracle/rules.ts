@@ -37,6 +37,8 @@ export interface RegionSnap {
 export interface Snap {
   i: number
   t: number
+  /** Сума колеса за останні 300 мс. */
+  wheel?: number
   frame: number
   reason: string
   seg: number
@@ -249,7 +251,16 @@ export function analyze(log: OracleLog): Violation[] {
           const d0 = deltas[0]!
           // Допуск 2px: дробові висоти рядків змінної висоти округлюються.
           const rigid = deltas.every((d) => Math.abs(d - d0) <= 2)
-          const fits = Math.abs(d0) <= 2 || Math.abs(d0 + dScroll) <= 2
+          // Складений рух: корекція якоря в той самий інтервал, що й
+          // прокрутка колесом. Рядки можуть зрушити лише в межах недавнього
+          // введення і проти його напрямку (колесо вниз — рядки вгору).
+          const wheel = s.wheel ?? 0
+          const byInput =
+            wheel !== 0 &&
+            Math.sign(d0) === -Math.sign(wheel) &&
+            Math.abs(d0) <= Math.abs(wheel) + 2
+          const fits =
+            Math.abs(d0) <= 2 || Math.abs(d0 + dScroll) <= 2 || byInput
           if (!rigid || !fits)
             push({
               kind: "scroll-rigid",

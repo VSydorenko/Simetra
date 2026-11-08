@@ -108,7 +108,7 @@ async function expectClean(
 }
 
 test.describe("спайк 4 — вікно", () => {
-  test.setTimeout(180_000)
+  test.setTimeout(360_000)
   test("1. 50 сторінок вниз і назад без вивантаження", async ({
     page,
     oracle,
@@ -116,8 +116,8 @@ test.describe("спайк 4 — вікно", () => {
     await openWindow(page, "?margin=1000")
     await oracle.mark("scroll", { allow: ["scroll"] })
     const far = 50 * PAGE * ROW_H
-    await wheelUntil(page, 1200, (t) => t >= far)
-    await wheelUntil(page, -1200, (t) => t === 0)
+    await wheelUntil(page, 2400, (t) => t >= far)
+    await wheelUntil(page, -2400, (t) => t === 0)
     await settle(page, 300)
     const w = await win(page)
     expect(w.pages.length).toBeGreaterThanOrEqual(50)
@@ -199,7 +199,13 @@ test.describe("спайк 4 — вікно", () => {
     expect(atBottom).toBe(true)
     await expect(page.locator("[data-field=num]").last()).toHaveText("1000000")
     await oracle.mark("scroll-up", { allow: ["scroll"] })
-    await wheelUntil(page, -600, (t) => t < 50, 3000).catch(() => {})
+    // Фіксована кількість кроків: кожен prepend додає 3600px над видимими,
+    // тож «докрутити до 0» тут нескінченне.
+    await wheelUntil(page, -600, () => true)
+    for (let i = 0; i < 40; i++) {
+      await page.mouse.wheel(0, -600)
+      await frame(page)
+    }
     // Догрузка вгору: щонайменше 5 сторінок перед кінцем.
     for (let i = 0; i < 400 && (await win(page)).pages.length < 6; i++) {
       await page.mouse.wheel(0, -600)

@@ -96,6 +96,12 @@ export interface CoreOptions {
   readonly releaseDelayMs?: number
   /** Межа ключів одного запиту за ключами (типово 200). */
   readonly keysPerRequest?: number
+  /**
+   * Розмір службових мап `seen` і надгробків (типово 10 000 записів кожна).
+   * Витіснений ключ ядро не забуває мовчки: читання, що почалось до
+   * витіснення, вставляє його лише як `stale` з перечитуванням.
+   */
+  readonly seenMax?: number
   /** Політика пам'яті вигляду `window` (спайк 4). */
   readonly window?: WindowOptions
   /** Журнал ядра; збій журналу результату не змінює. */

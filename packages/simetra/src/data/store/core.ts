@@ -142,7 +142,7 @@ interface Rec {
   readonly policy: ActionPolicy
   /** Версії ключів, з якими пішла остання спроба (`expectedVersion`). */
   sent: Map<string, number>
-  abort?: AbortController
+  abort?: { abort(reason?: unknown): void }
   resolve: (outcome: MutationOutcome) => void
   settled: Promise<MutationOutcome>
 }
@@ -169,7 +169,7 @@ interface Subset {
   error?: CommandError
   loading: boolean
   trailing: boolean
-  abort?: AbortController
+  abort?: { abort(reason?: unknown): void }
   needsRefresh: boolean
   hasNewRows: boolean
   atEnd: boolean
@@ -330,6 +330,8 @@ export interface CoreInspection {
   subsetCount(): number
   /** Чи тримає рядок хтось: підмножина, реєстр створень чи журнал. */
   violations(): string[]
+  /** Розміри службових мап (замір пам'яті). */
+  sizes(): Record<string, number>
 }
 
 const inspections = new WeakMap<CoreSession, CoreInspection>()
@@ -477,15 +479,44 @@ export function createCoreSession(options: CoreOptions): CoreSession {
    * повернула б ключ старшою версією, ніж користувач уже бачив (Рд24 між
    * появами ключа; знайдено модельним тестом).
    */
-  const seen = new Map<string, number>()
-  const SEEN_MAX = 10_000
+  const seen = new Map<string, { version: number; at: number }>()
+  const SEEN_MAX = options.seenMax ?? 10_000
+  /**
+   * Горизонт витіснення: найбільша епоха запису, витісненого з `seen` чи
+   * надгробків (за кошиком ключа). Читання, що почалось до нього, могло нести старшу версію
+   * чи видалений рядок, про який ядро вже забуло. Такий невідомий ключ
+   * вставляється лише як `stale` і перечитується — без воскресіння й без
+   * тихого повернення старої версії (рішення про рушій, §3.1).
+   */
+  // Горизонт — за хеш-кошиками ключів: у вікні витіснення безперервне, і
+  // один глобальний горизонт робив би `stale` майже кожну відповідь, що
+  // летіла під час прокрутки. Кошик хибно спрацьовує лише тоді, коли в нього
+  // під час польоту запиту витіснено інший ключ (≈ витіснень / 65 536).
+  const HORIZON_BUCKETS = 65_536
+  const horizon = new Uint32Array(HORIZON_BUCKETS)
+  const bucketOf = (id: string) => {
+    let h = 0x811c9dc5
+    for (let i = 0; i < id.length; i++) {
+      h ^= id.charCodeAt(i)
+      h = Math.imul(h, 0x01000193)
+    }
+    return (h >>> 0) % HORIZON_BUCKETS
+  }
+  const evicted = (id: string, at: number) => {
+    const b = bucketOf(id)
+    if (at > (horizon[b] ?? 0)) horizon[b] = at
+  }
   const remember = (obj: ObjectName, row: ServerRow) => {
     const id = rowId(obj, row.key)
+    epoch++
     seen.delete(id)
-    seen.set(id, row.version)
+    seen.set(id, { version: row.version, at: epoch })
     if (seen.size > SEEN_MAX) {
-      const oldest = seen.keys().next().value
-      if (oldest !== undefined) seen.delete(oldest)
+      const [oldest] = seen
+      if (oldest !== undefined) {
+        seen.delete(oldest[0])
+        evicted(oldest[0], oldest[1].at)
+      }
     }
   }
   const staleInserts = new Map<ObjectName, Set<Key>>()
@@ -507,8 +538,11 @@ export function createCoreSession(options: CoreOptions): CoreSession {
     tombstones.delete(id)
     tombstones.set(id, epoch)
     if (tombstones.size > SEEN_MAX) {
-      const oldest = tombstones.keys().next().value
-      if (oldest !== undefined) tombstones.delete(oldest)
+      const [oldest] = tombstones
+      if (oldest !== undefined) {
+        tombstones.delete(oldest[0])
+        evicted(oldest[0], oldest[1])
+      }
     }
     if (o.rows.delete(key)) touchRow(o.name, key)
     o.own.delete(key)
@@ -528,15 +562,24 @@ export function createCoreSession(options: CoreOptions): CoreSession {
       return
     const e = o.rows.get(row.key)
     if (e === undefined) {
-      const known = seen.get(rowId(o.name, row.key)) ?? 0
+      const id = rowId(o.name, row.key)
+      const known = seen.get(id)?.version ?? 0
+      // Читання почалось до витіснення, а ключа ядро не пам'ятає: його
+      // могли видалити чи бачити новішим. Показ без приховування, `stale`
+      // і перечитування; зниклий на сервері стане `removed`.
+      const uncertain =
+        since !== undefined &&
+        since < (horizon[bucketOf(id)] ?? 0) &&
+        !seen.has(id) &&
+        !tombstones.has(id)
       // Старше за бачене: показ без приховування, але `stale` до
       // перечитування (ставиться в чергу після commit).
-      const stale = row.version < known
+      const stale = row.version < known || uncertain
       o.rows.set(row.key, {
         row,
         owners: 0,
         stale,
-        staleUntil: stale ? known : 0,
+        staleUntil: stale ? Math.max(known, row.version) : 0,
         removed: false,
       })
       if (stale) {
@@ -970,11 +1013,34 @@ export function createCoreSession(options: CoreOptions): CoreSession {
     }
   }
 
-  const linked = (): AbortController => {
+  /**
+   * Сигнал запиту, що обривається і з `dispose()` сесії. Сесія тримає
+   * множину активних контролерів і обриває їх у `dispose()`; запит знімає
+   * свій контролер, коли завершився (`release`). Слухач на сигналі сесії на
+   * кожен запит без зняття, як і `AbortSignal.any` (слабкі посилання
+   * залежних, що чистяться ліниво), — пам'ять, що росте з кількістю читань
+   * (знайдено заміром пам'яті вікна).
+   */
+  const children = new Set<AbortController>()
+  type Linked = {
+    signal: AbortSignal
+    abort(reason?: unknown): void
+    release(): void
+  }
+  const linked = (): Linked => {
     const c = new AbortController()
-    if (abort.signal.aborted) c.abort()
-    else abort.signal.addEventListener("abort", () => c.abort(), { once: true })
-    return c
+    if (closed) c.abort()
+    else children.add(c)
+    return {
+      signal: c.signal,
+      abort: (reason) => {
+        children.delete(c)
+        c.abort(reason)
+      },
+      release: () => {
+        children.delete(c)
+      },
+    }
   }
 
   /** Читання за ключами: по `keysPerRequest`, на `response-too-large` — навпіл. */
@@ -1233,6 +1299,7 @@ export function createCoreSession(options: CoreOptions): CoreSession {
       touchSubset(s)
     }, token)
     fetchSubset(s, controller.signal)
+      .finally(() => controller.release())
       .then(
         (apply) => {
           const wrote = commitInternal((scope) => {
@@ -1451,6 +1518,7 @@ export function createCoreSession(options: CoreOptions): CoreSession {
         ? keysetFromValue(sortSpec(s).orderBy, target.v)
         : undefined
     readPage(s, bound, target.k === "end", controller.signal)
+      .finally(() => controller.release())
       .then(
         ({ rows, end }) => {
           const wrote = commitInternal((scope) => {
@@ -1519,54 +1587,59 @@ export function createCoreSession(options: CoreOptions): CoreSession {
       dir === "after"
         ? keysetAfter(orderBy, cursor)
         : keysetAfter(reverseOrder(orderBy), cursor)
-    readPage(s, bound, dir === "before", linked().signal).then(
-      ({ rows, end }) => {
-        commitInternal((scope) => {
-          if (dir === "after") w.after = false
-          else w.before = false
-          delete w.info
-          touchSubset(s)
-          // Рядок, що вже є в ланцюжку (переїхав зміною сортування), удруге
-          // не показується: лишається на своєму місці (правило стабільності).
-          const fresh = rows.filter((r) => !w.index.has(r.key))
-          for (const r of fresh) putRow(scope, s.obj, r, since)
-          if (dir === "after") {
-            if (end) w.atEnd = true
-            if (fresh.length > 0) {
-              const page = makePage(s, fresh, { k: "after", c: cursor })
-              for (const k of page.keys) w.index.set(k, page)
-              w.pages.push(page)
+    const edgeSignal = linked()
+    readPage(s, bound, dir === "before", edgeSignal.signal)
+      .finally(() => edgeSignal.release())
+      .then(
+        ({ rows, end }) => {
+          commitInternal((scope) => {
+            if (dir === "after") w.after = false
+            else w.before = false
+            delete w.info
+            touchSubset(s)
+            // Рядок, що вже є в ланцюжку (переїхав зміною сортування), удруге
+            // не показується: лишається на своєму місці (правило стабільності).
+            const fresh = rows.filter((r) => !w.index.has(r.key))
+            for (const r of fresh) putRow(scope, s.obj, r, since)
+            if (dir === "after") {
+              if (end) w.atEnd = true
+              if (fresh.length > 0) {
+                const page = makePage(s, fresh, { k: "after", c: cursor })
+                for (const k of page.keys) w.index.set(k, page)
+                w.pages.push(page)
+              }
+            } else {
+              if (end) w.atStart = true
+              if (fresh.length > 0) {
+                const page = makePage(
+                  s,
+                  fresh,
+                  end
+                    ? { k: "start" }
+                    : { k: "from", c: cursorOf(s, fresh[0]!) }
+                )
+                // Тепер відома попередня сторінка: межа колишньої першої —
+                // строго після її останнього рядка (рядок між ними не випаде).
+                if (page.last !== undefined)
+                  edge.lower = { k: "after", c: page.last }
+                for (const k of page.keys) w.index.set(k, page)
+                w.pages.unshift(page)
+              }
             }
-          } else {
-            if (end) w.atStart = true
-            if (fresh.length > 0) {
-              const page = makePage(
-                s,
-                fresh,
-                end ? { k: "start" } : { k: "from", c: cursorOf(s, fresh[0]!) }
-              )
-              // Тепер відома попередня сторінка: межа колишньої першої —
-              // строго після її останнього рядка (рядок між ними не випаде).
-              if (page.last !== undefined)
-                edge.lower = { k: "after", c: page.last }
-              for (const k of page.keys) w.index.set(k, page)
-              w.pages.unshift(page)
-            }
-          }
-          syncWin(scope, s)
-        }, token)
-        winRange(s)
-      },
-      (e: unknown) => {
-        commitInternal(() => {
-          if (dir === "after") w.after = false
-          else w.before = false
-          s.error = errorOf(e)
-          delete w.info
-          touchSubset(s)
-        }, token)
-      }
-    )
+            syncWin(scope, s)
+          }, token)
+          winRange(s)
+        },
+        (e: unknown) => {
+          commitInternal(() => {
+            if (dir === "after") w.after = false
+            else w.before = false
+            s.error = errorOf(e)
+            delete w.info
+            touchSubset(s)
+          }, token)
+        }
+      )
   }
 
   /** Знімок показу сторінки й звільнення власності. */
@@ -1700,7 +1773,9 @@ export function createCoreSession(options: CoreOptions): CoreSession {
       },
     }
     const since = epoch
-    readKeys(s.obj, p.keys, linked().signal)
+    const reviveSignal = linked()
+    readKeys(s.obj, p.keys, reviveSignal.signal)
+      .finally(() => reviveSignal.release())
       .then((rows) => {
         const wrote = commitInternal((scope) => {
           const got = new Set(rows.map((r) => r.key))
@@ -1798,46 +1873,50 @@ export function createCoreSession(options: CoreOptions): CoreSession {
         lower = { k: "after", c: cursorOf(s, page.rows[page.rows.length - 1]!) }
       }
       return { built, end }
-    })().then(
-      ({ built, end }) => {
-        commitInternal((scope) => {
-          const fresh = new Set(built.flatMap((b) => b.rows.map((r) => r.key)))
-          const above = w.pages.slice(0, lo)
-          for (const p of w.pages.slice(lo)) dropPage(p)
-          // Рядок, що переїхав у перебудовану частину, лишає старе місце.
-          for (const p of above) {
-            if (!p.keys.some((k) => fresh.has(k))) continue
-            p.keys = p.keys.filter((k) => !fresh.has(k))
-            p.ghost?.forEach((_, k) => {
-              if (fresh.has(k)) p.ghost?.delete(k)
-            })
-            delete p.cache
-          }
-          for (const b of built)
-            for (const r of b.rows) putRow(scope, s.obj, r, since)
-          w.pages = [
-            ...above.filter((p) => p.keys.length > 0),
-            ...built.map((b) => makePage(s, b.rows, b.lower)),
-          ]
-          w.atEnd = end
-          w.target = "keep"
-          w.shown++
-          syncWin(scope, s, true)
-          s.status = "ready"
-          delete s.error
-          s.needsRefresh = false
-          touchSubset(s)
-        }, token)
-        winRange(s)
-      },
-      (e: unknown) => {
-        commitInternal(() => {
-          s.status = "error"
-          s.error = errorOf(e)
-          touchSubset(s)
-        }, token)
-      }
-    )
+    })()
+      .finally(() => controller.release())
+      .then(
+        ({ built, end }) => {
+          commitInternal((scope) => {
+            const fresh = new Set(
+              built.flatMap((b) => b.rows.map((r) => r.key))
+            )
+            const above = w.pages.slice(0, lo)
+            for (const p of w.pages.slice(lo)) dropPage(p)
+            // Рядок, що переїхав у перебудовану частину, лишає старе місце.
+            for (const p of above) {
+              if (!p.keys.some((k) => fresh.has(k))) continue
+              p.keys = p.keys.filter((k) => !fresh.has(k))
+              p.ghost?.forEach((_, k) => {
+                if (fresh.has(k)) p.ghost?.delete(k)
+              })
+              delete p.cache
+            }
+            for (const b of built)
+              for (const r of b.rows) putRow(scope, s.obj, r, since)
+            w.pages = [
+              ...above.filter((p) => p.keys.length > 0),
+              ...built.map((b) => makePage(s, b.rows, b.lower)),
+            ]
+            w.atEnd = end
+            w.target = "keep"
+            w.shown++
+            syncWin(scope, s, true)
+            s.status = "ready"
+            delete s.error
+            s.needsRefresh = false
+            touchSubset(s)
+          }, token)
+          winRange(s)
+        },
+        (e: unknown) => {
+          commitInternal(() => {
+            s.status = "error"
+            s.error = errorOf(e)
+            touchSubset(s)
+          }, token)
+        }
+      )
   }
 
   /** Рядки вікна: створення, далі сторінки; кеш — посторінково. */
@@ -2503,7 +2582,9 @@ export function createCoreSession(options: CoreOptions): CoreSession {
     }, token)
     let result
     try {
-      result = await source.run(built.operations, controller.signal)
+      result = await source
+        .run(built.operations, controller.signal)
+        .finally(() => controller.release())
     } catch (e) {
       if (closed) return
       const error = errorOf(e)
@@ -3230,6 +3311,8 @@ export function createCoreSession(options: CoreOptions): CoreSession {
     if (closed) return
     closed = true
     abort.abort()
+    for (const c of children) c.abort()
+    children.clear()
     for (const s of subsets.values()) {
       s.alive = false
       s.listeners.clear()
@@ -3249,6 +3332,12 @@ export function createCoreSession(options: CoreOptions): CoreSession {
       rec.resolve({ ok: false, error: DISPOSED })
     listeners.clear()
     rowCache.clear()
+    // Службові мапи теж: закрита сесія не тримає нічого, крім себе.
+    seen.clear()
+    tombstones.clear()
+    rowRev.clear()
+    sectionRev.clear()
+    staleInserts.clear()
   }
 
   const session: CoreSession = {
@@ -3313,6 +3402,26 @@ export function createCoreSession(options: CoreOptions): CoreSession {
     sectionCount: () => sections.size,
     logLength: () => mutLog.length,
     subsetCount: () => subsets.size,
+    sizes: () => ({
+      seen: seen.size,
+      tombstones: tombstones.size,
+      rowRev: rowRev.size,
+      rowCache: rowCache.size,
+      sectionRev: sectionRev.size,
+      handles: handles.size,
+      subsets: subsets.size,
+      rows: [...objects.values()].reduce((n, o) => n + o.rows.size, 0),
+      own: [...objects.values()].reduce((n, o) => n + o.own.size, 0),
+      log: mutLog.length,
+      index: [...subsets.values()].reduce(
+        (n, x) => n + (x.win?.index.size ?? 0),
+        0
+      ),
+      pages: [...subsets.values()].reduce(
+        (n, x) => n + (x.win?.pages.length ?? 0),
+        0
+      ),
+    }),
     violations() {
       const out: string[] = []
       for (const sid of sections.keys()) {

@@ -253,3 +253,87 @@ describe("core regressions", () => {
     })
   })
 })
+
+describe("витіснення з seen і надгробків (спайк 4)", () => {
+  it("пізня відповідь, прочитана до видалення, після витіснення надгробка — stale і перечитування, без воскресіння", async () => {
+    const { session, server, transport } = setup()
+    server.seed(TASK, [{ id: id(1), title: "a", rank: 1, done: false }])
+    const h = session.view({ kind: "keys", object: TASK, keys: [id(1)] })
+    const v = watch(h)
+    await transport.drain()
+    // Читання почалось до видалення й чекає.
+    session.view({ kind: "card", object: TASK, key: id(1) })
+    const card = watch(session.view({ kind: "card", object: TASK, key: id(1) }))
+    await transport.settle()
+    const late = transport.take()
+    // Видалення: надгробок; потім 10 тис. інших надгробків витісняють його.
+    server.remove(TASK, id(1))
+    session.commit((w) => w.purge(TASK, [id(1)]), session.token())
+    const others = Array.from({ length: 10_001 }, (_, i) => id(100_000 + i))
+    session.commit((w) => w.purge(TASK, others), session.token())
+    late.answerStale()
+    await transport.settle()
+    const shown = card.last.rows[0]
+    // Якщо рядок і показано, то лише як stale, а перечитування робить його removed.
+    if (shown !== undefined) expect(shown.status.state).toBe("stale")
+    await transport.drain()
+    const after = card.last.rows[0]
+    if (after !== undefined) expect(after.status.state).toBe("removed")
+    expect(
+      inspectCore(session).row(TASK, id(1))?.version ?? 0
+    ).toBeLessThanOrEqual(1)
+    v.unsubscribe()
+    card.unsubscribe()
+  })
+
+  it("старша версія після витіснення з seen — stale і перечитування", async () => {
+    const { session, server, transport } = setup({ seenMax: 5 })
+    server.seed(TASK, [{ id: id(1), title: "a", rank: 1, done: false }])
+    const k1 = watch(
+      session.view({ kind: "keys", object: TASK, keys: [id(1)] })
+    )
+    await transport.drain()
+    // Жива підмножина починає читання, поки на сервері версія 1, і чекає.
+    const slow = watch(
+      session.view({ kind: "keys", object: TASK, keys: [id(1), id(2)] })
+    )
+    await transport.settle()
+    const late = transport.take()
+    // Сервер іде вперед, ядро бачить версію 2, потім ключ вивантажено.
+    server.edit(TASK, id(1), { title: "b" })
+    const refetched = session.refetchKeys(TASK, [id(1)])
+    await transport.drain()
+    await refetched
+    expect(k1.last.rows[0]?.version).toBe(2)
+    k1.unsubscribe()
+    await transport.drain()
+    expect(inspectCore(session).row(TASK, id(1))).toBeUndefined()
+    // Інші вивантаження витісняють ключ із seen (межа 5).
+    const many = Array.from({ length: 10 }, (_, i) => ({
+      id: id(200 + i),
+      title: "x",
+      rank: i,
+      done: false,
+    }))
+    server.seed(TASK, many)
+    for (const r of many) {
+      const w = watch(
+        session.view({ kind: "keys", object: TASK, keys: [r.id] })
+      )
+      await transport.drain()
+      w.unsubscribe()
+    }
+    await transport.drain()
+    // Пізня відповідь — стан на мить запиту, версія 1.
+    late.answerStale()
+    await transport.settle()
+    const row = inspectCore(session).rows(TASK).get(id(1))
+    // Без горизонту — версія 1 у стані synced: старше, ніж користувач бачив.
+    expect(row?.version).toBe(1)
+    expect(row?.stale).toBe(true)
+    await transport.drain()
+    expect(slow.last.rows[0]?.values.title).toBe("b")
+    expect(slow.last.rows[0]?.status.state).toBe("synced")
+    slow.unsubscribe()
+  })
+})

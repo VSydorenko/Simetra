@@ -199,7 +199,10 @@ function Scroller(props: {
     getScrollElement: () => el.current,
     estimateSize: () => est,
     getItemKey: keyAt,
-    overscan: 6,
+    // `asyncrender` — поломка для самотесту оракула: рендер після прокрутки
+    // не синхронний і без запасу — порожня смуга.
+    overscan: breaks.has("asyncrender") ? 0 : 6,
+    useFlushSync: !breaks.has("asyncrender"),
     // SSR і перший клієнтський рендер: той самий прямокутник — той самий
     // діапазон рядків, без зміни DOM після гідратації.
     initialRect: { width: 1000, height: VIEW_H },
@@ -333,6 +336,16 @@ const WinRow = memo(function WinRow(props: {
   const removed = view.status.state === "removed"
   const note = r.note
   const busy = view.status.state !== "synced" && view.status.state !== "stale"
+  // `highlight` — поломка для самотесту: підсвічування зміни значення на
+  // 30 мс (поширений прийом) — спалах тла, який оракул має зловити.
+  const [lit, setLit] = useState(false)
+  const firstValues = useRef(view.values)
+  useEffect(() => {
+    if (!breaks.has("highlight") || firstValues.current === view.values) return
+    setLit(true)
+    const t = setTimeout(() => setLit(false), 30)
+    return () => clearTimeout(t)
+  }, [view.values])
   // Змінна висота: вимір у тому самому commit, що змінив вміст рядка. Тоді
   // корекція прокрутки для рядка над видимими йде до мікрозадач і малювання,
   // а не з ResizeObserver після нього (інакше один стан — зсув видимих).
@@ -353,6 +366,7 @@ const WinRow = memo(function WinRow(props: {
       ref={setRef}
       data-index={props.index}
       className={`wrow ${variable ? "var" : ""} ${stateClass(view)}`}
+      style={lit ? { background: "#fff3b0" } : undefined}
       data-row-key={view.key}
       data-ghost={view.ghost ? "1" : undefined}
     >

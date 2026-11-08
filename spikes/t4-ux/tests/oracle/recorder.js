@@ -13,6 +13,12 @@
   }
   window.__oracle = log
   let lastKey = ""
+  const wheels = []
+  window.addEventListener(
+    "wheel",
+    (e) => wheels.push({ t: performance.now(), dy: e.deltaY }),
+    { capture: true, passive: true }
+  )
   let seq = 0
 
   function regionSnap(el) {
@@ -92,9 +98,14 @@
     const key = JSON.stringify(regions)
     if (key === lastKey) return
     lastKey = key
+    const now = performance.now()
+    while (wheels.length > 0 && now - wheels[0].t > 300) wheels.shift()
     log.snaps.push({
       i: seq++,
-      t: performance.now(),
+      t: now,
+      // Сума колеса за останні 300 мс: бюджет руху від користувача, коли
+      // прокрутка (WebKit анімує колесо) збігається з корекцією якоря.
+      wheel: wheels.reduce((n, w) => n + w.dy, 0),
       frame: log.frame,
       reason,
       seg: log.marks.length,

@@ -65,6 +65,11 @@ test("6б. змінене поле сортування: рядок на міс�
   await oracle.expectClean()
 })
 test("7. прокрутка вікна", async ({ page, oracle }) => {
+  // Спайк 4: посилений оракул (правило `blank`) ловить порожню смугу
+  // власної віртуалізації цього полігона — рендер через setState з
+  // onScroll асинхронний. Відомий дефект полігона, не ядра; T5 іде на
+  // TanStack Virtual (`/window`). Тест лишається доказом сили оракула.
+  test.fail()
   await f.scrollWindow(page, oracle)
   await oracle.expectClean()
 })
@@ -76,6 +81,11 @@ test("8б. зміна рантайму з відповіддю старого с
   page,
   oracle,
 }) => {
+  // Спайк 4: посилений оракул (правило `blank`) ловить порожню смугу
+  // власної віртуалізації цього полігона — рендер через setState з
+  // onScroll асинхронний. Відомий дефект полігона, не ядра; T5 іде на
+  // TanStack Virtual (`/window`). Тест лишається доказом сили оракула.
+  test.fail()
   await f.switchUser(page, oracle, { inflight: true })
   await oracle.expectClean()
 })
