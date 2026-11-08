@@ -489,4 +489,47 @@ describe("core targeted", () => {
     expect(full.last.rows[0]?.status.state).toBe("synced")
     expect(full.last.rows[0]?.values.title).toBe("B")
   })
+
+  it("card of a key already in the store: the row at once, refreshing, lazy fields poured in place", async () => {
+    const { server, transport, session } = setup()
+    server.seed(TASK, [{ id: K1, title: "A", rank: 1, body: "long" }])
+    watch(session.view({ kind: "keys", object: TASK, keys: [K1] }))
+    await transport.drain()
+    const card = session.view({ kind: "card", object: TASK, key: K1 })
+    const before = card.getSnapshot()
+    expect(before.status).toBe("refreshing")
+    expect(before.rows[0]?.values).toEqual({ title: "A", rank: 1 })
+    const w = watch(card)
+    expect(w.last.status).toBe("refreshing")
+    expect(w.last.rows[0]?.values).toBe(before.rows[0]?.values)
+    await transport.drain()
+    for (const frame of w.frames) expect(frame.rows).toHaveLength(1)
+    expect(w.last.status).toBe("ready")
+    expect(w.last.rows[0]?.values).toEqual({
+      title: "A",
+      rank: 1,
+      body: "long",
+    })
+  })
+
+  it("section view before its read: no rows, its own loading only", async () => {
+    const { server, transport, session } = setup()
+    server.seed(TASK, [{ id: K1, title: "A", rank: 1 }])
+    watch(session.view({ kind: "keys", object: TASK, keys: [K1] }))
+    await transport.drain()
+    const card = watch(session.view({ kind: "card", object: TASK, key: K1 }))
+    const lines = watch(
+      session.view({
+        kind: "section",
+        object: TASK,
+        owner: K1,
+        section: "items",
+      })
+    )
+    expect(card.last.status).toBe("refreshing")
+    expect(lines.last.status).toBe("loading")
+    expect(lines.last.section?.lines ?? []).toEqual([])
+    await transport.drain()
+    expect(lines.last.status).toBe("ready")
+  })
 })

@@ -218,8 +218,12 @@ async function runModel(
   const maxVersion = new Map<string, number>()
   let stableCheck: (string[] | undefined)[] | undefined
   const layouts = () =>
+    // Картка — не список: її склад сталий (свій ключ), рядок з'являється з
+    // даними; правило стабільності стосується списків.
     handles.map((h, v) =>
-      subs[v] === undefined ? undefined : h.getSnapshot().rows.map((r) => r.key)
+      subs[v] === undefined || SPECS[v]?.kind === "card"
+        ? undefined
+        : h.getSnapshot().rows.map((r) => r.key)
     )
   let disposedAt: { frames: number[]; sent: number } | undefined
 
@@ -247,6 +251,14 @@ async function runModel(
           `${label}: version of ${key} ${max} → ${row.version}`
         ).toBe(true)
       } else maxVersion.set(key, row.version)
+    }
+    // Картка ключа, що є у сховищі, ніколи не дає знімка без рядка
+    // (з підпискою чи без).
+    if (insp.row(TASK, KEYS[0] as string) !== undefined) {
+      expect(
+        (handles[2] as ViewHandle).getSnapshot().rows,
+        `${label}: card row`
+      ).toHaveLength(1)
     }
     // Р3: рядок живої чи відмовленої мутації не витісняється.
     for (const m of ref.log) {

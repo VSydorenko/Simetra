@@ -229,18 +229,16 @@ describe("core perf", () => {
             keys: seed.slice(0, 200).map((r) => r.id),
           })
         ),
-        ...seed
-          .slice(0, 50)
-          .map((r) =>
-            watch(
-              session.view({
-                kind: "section",
-                object: TASK,
-                owner: r.id,
-                section: "items",
-              })
-            )
-          ),
+        ...seed.slice(0, 50).map((r) =>
+          watch(
+            session.view({
+              kind: "section",
+              object: TASK,
+              owner: r.id,
+              section: "items",
+            })
+          )
+        ),
       ]
       await transport.drain()
       while (subs[0]?.last.status !== "ready")

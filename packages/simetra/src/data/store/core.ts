@@ -757,8 +757,13 @@ export function createCoreSession(options: CoreOptions): CoreSession {
       prev !== undefined &&
       prev.rows.length === rows.length &&
       prev.rows.every((r, i) => r === rows[i])
+    // Картка з рядком у сховищі не буває `loading` (П4-B §6.2).
+    const status: ViewStatus =
+      s.status === "loading" && s.spec.kind === "card" && rows.length > 0
+        ? "refreshing"
+        : s.status
     const next: ViewSnapshot = {
-      status: s.status,
+      status,
       ...(s.error === undefined ? {} : { error: s.error }),
       rows: sameRows ? prev.rows : Object.freeze(rows),
       hasNewRows: s.hasNewRows,
@@ -1206,6 +1211,12 @@ export function createCoreSession(options: CoreOptions): CoreSession {
       listeners: new Set(),
       waiters: [],
     }
+    // Склад картки сталий — її ключ: рядок, що прийшов з іншої вибірки,
+    // видно одразу.
+    if (spec.kind === "card") {
+      made.layout = [spec.key]
+      made.layoutSet = new Set(made.layout)
+    }
     subsets.set(specKey, made)
     return made
   }
@@ -1217,8 +1228,17 @@ export function createCoreSession(options: CoreOptions): CoreSession {
   function hold(spec: ViewSpec, specKey: string): Subset {
     let s = subsets.get(specKey)
     if (s === undefined) {
-      s = makeSubset(spec, specKey)
-      load(s)
+      const made = makeSubset(spec, specKey)
+      s = made
+      // Картка ключа, що вже є в сховищі (П4-B §6.2): одразу рядок у
+      // списочній формі й `refreshing`, а не порожній `loading`. Повне
+      // читання доливає ліниві поля в той самий рядок частковим злиттям.
+      if (spec.kind === "card" && made.obj.rows.has(spec.key)) {
+        commitInternal((scope) => {
+          own(scope, made, [spec.key])
+        }, sessionToken)
+      }
+      load(made)
     }
     if (s.releaseTimer !== undefined) {
       clearTimeout(s.releaseTimer)
@@ -1264,10 +1284,26 @@ export function createCoreSession(options: CoreOptions): CoreSession {
       needsRefresh: false,
     })
     const live = () => subsets.get(specKey)
+    // Картка без підписки (рендер до `subscribe`): рядок зі сховища, якщо є.
+    let cardIdle: ViewSnapshot | undefined
+    const idleOf = (): ViewSnapshot => {
+      if (spec.kind !== "card") return idle
+      const row = rowView(spec.object, spec.key)
+      if (row === undefined) return idle
+      if (cardIdle?.rows[0] !== row) {
+        cardIdle = Object.freeze({
+          status: "refreshing",
+          rows: Object.freeze([row]),
+          hasNewRows: false,
+          needsRefresh: false,
+        })
+      }
+      return cardIdle
+    }
     const handle: ViewHandle = {
       getSnapshot() {
         const s = live()
-        return s === undefined ? idle : snapshotOf(s)
+        return s === undefined ? idleOf() : snapshotOf(s)
       },
       subscribe(listener) {
         if (closed) return () => {}
