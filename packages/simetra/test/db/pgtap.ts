@@ -69,8 +69,8 @@ export function checkSuite(sql: string): void {
   }
 }
 
-// Символ, що може стояти в ідентифікаторі: `x$y$` — ідентифікатор, а не
-// початок dollar-quote, а `e'…'` після нього — не рядок з екрануванням
+// Символ, що може стояти в ідентифікаторі чи числі: після нього `$y$` — ще
+// ідентифікатор, а не початок dollar-quote
 const IDENT = /[A-Za-z0-9_$\u0080-\uffff]/
 
 // Текст набору без коментарів, рядків, тіл у dollar-quote і тіл `begin atomic
@@ -85,13 +85,32 @@ function statements(sql: string): string[] {
   // Глибина `begin atomic`: усередині оператори тіла функції, а `case … end`
   // закривається тим самим `end`
   let atomic = 0
-  const identAt = (j: number): boolean => j >= 0 && IDENT.test(sql[j] ?? "")
+  // Чи попередній токен — ідентифікатор (чи число), що впритул триває. Саме
+  // токен, а не символ: `$`, що закрив dollar-quote, ідентифікатора не
+  // продовжує, і `$$a$$E'…'` лексер Postgres читає як E-рядок
+  let prevIdent = false
+  // Кінець рядка з лапкою на позиції `from`; у `E'…'` зворотна скісна
+  // екранує наступний символ, і `\'` рядка не закриває
+  const skipQuoted = (from: number, escapes: boolean): number => {
+    const quote = sql[from]
+    let j = from + 1
+    for (; j < sql.length; j++) {
+      if (escapes && sql[j] === "\\") j++
+      else if (sql[j] === quote) {
+        // Подвоєна лапка — екранована, рядок триває
+        if (sql[j + 1] === quote) j++
+        else break
+      }
+    }
+    return j + 1
+  }
   for (let i = 0; i < sql.length;) {
     const rest = sql.slice(i)
     if (rest.startsWith("--")) {
       const end = sql.indexOf("\n", i)
       i = end === -1 ? sql.length : end
       out += " "
+      prevIdent = false
       continue
     }
     if (rest.startsWith("/*")) {
@@ -107,37 +126,30 @@ function statements(sql: string): string[] {
         } else i++
       } while (depth > 0 && i < sql.length)
       out += " "
+      prevIdent = false
       continue
     }
-    const dollar = identAt(i - 1)
+    const dollar = prevIdent
       ? null
       : /^\$([A-Za-z_\u0080-\uffff][A-Za-z0-9_\u0080-\uffff]*)?\$/.exec(rest)
     if (dollar !== null) {
       const end = sql.indexOf(dollar[0], i + dollar[0].length)
       i = end === -1 ? sql.length : end + dollar[0].length
       out += " "
+      prevIdent = false
       continue
     }
-    const quote = sql[i]
-    if (quote === "'" || quote === '"') {
-      // `E'…'`: зворотна скісна екранує наступний символ, і `\'` рядка не
-      // закриває
-      const escapes =
-        quote === "'" && /[Ee]/.test(sql[i - 1] ?? "") && !identAt(i - 2)
-      for (i++; i < sql.length; i++) {
-        if (escapes && sql[i] === "\\") i++
-        else if (sql[i] === quote) {
-          // Подвоєна лапка — екранована, рядок триває
-          if (sql[i + 1] === quote) i++
-          else break
-        }
-      }
-      i++
+    // `E'` на початку токена — E-рядок: лексер бере довший збіг, ніж
+    // ідентифікатор `E`
+    const eString = !prevIdent && /^[Ee]'/.test(rest)
+    if (eString || sql[i] === "'" || sql[i] === '"') {
+      i = eString ? skipQuoted(i + 1, true) : skipQuoted(i, false)
       out += " "
+      prevIdent = false
       continue
     }
     // Ідентифікатор цілком: обрізаний `case1` рахувався б як `case`
-    const word = identAt(i - 1)
+    const word = prevIdent
       ? null
       : /^[A-Za-z_\u0080-\uffff][A-Za-z0-9_$\u0080-\uffff]*/.exec(rest)
     if (word !== null) {
@@ -155,14 +167,17 @@ function statements(sql: string): string[] {
         atomic--
         i += word[0].length
         out += " "
+        prevIdent = true
         continue
       }
       out += atomic > 0 ? " " : word[0]
       i += word[0].length
+      prevIdent = true
       continue
     }
     // Крапка з комою в тілі `begin atomic` не ділить оператора набору
     out += atomic > 0 ? " " : sql[i]
+    prevIdent = IDENT.test(sql[i] ?? "")
     i++
   }
   // Незакрите тіло поглинуло б решту набору разом з будь-яким `commit` у ній

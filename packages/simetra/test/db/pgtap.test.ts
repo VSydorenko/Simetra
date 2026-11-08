@@ -89,6 +89,14 @@ describe("checkSuite", () => {
       "select begin atomic from (select 1 as begin) t; commit; select plan(0);",
     ],
     [
+      "commit after an E-string right after a dollar quote",
+      "select $$a$$E'\\''; commit; select 'x';",
+    ],
+    [
+      "commit after an E-string right after a string",
+      "select 'a'E'\\''; commit; select 'x';",
+    ],
+    [
       "a begin atomic body without its end",
       "create function f() returns int language sql begin atomic select 1; commit;",
     ],
