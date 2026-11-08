@@ -271,6 +271,7 @@ export interface CoreInspection {
       version: number
       owners: number
       removed: boolean
+      stale: boolean
       own: boolean
       heldByLog: boolean
     }
@@ -388,6 +389,11 @@ export function createCoreSession(options: CoreOptions): CoreSession {
       inCommit = false
     }
     flush()
+    if (staleInserts.size > 0) {
+      const pending = [...staleInserts]
+      staleInserts.clear()
+      for (const [obj, keys] of pending) void refetchKeys(obj, [...keys])
+    }
     return true
   }
 
@@ -409,23 +415,52 @@ export function createCoreSession(options: CoreOptions): CoreSession {
     const e = o.rows.get(key)
     if (e === undefined) return
     if (e.owners > 0 || o.own.has(key) || heldByLog(o.name, key)) return
+    remember(o.name, e.row)
     o.rows.delete(key)
     touchRow(o.name, key)
     rowCache.delete(rowId(o.name, key))
   }
+
+  /**
+   * Найбільші версії вивантажених ключів (обмежено `SEEN_MAX`, найстаріші
+   * витісняються). Без неї застаріла відповідь, надіслана до вивантаження,
+   * повернула б ключ старшою версією, ніж користувач уже бачив (Рд24 між
+   * появами ключа; знайдено модельним тестом).
+   */
+  const seen = new Map<string, number>()
+  const SEEN_MAX = 10_000
+  const remember = (obj: ObjectName, row: ServerRow) => {
+    const id = rowId(obj, row.key)
+    seen.delete(id)
+    seen.set(id, row.version)
+    if (seen.size > SEEN_MAX) {
+      const oldest = seen.keys().next().value
+      if (oldest !== undefined) seen.delete(oldest)
+    }
+  }
+  const staleInserts = new Map<ObjectName, Set<Key>>()
 
   /** Записати рядок з результату підмножини за правилом версії. */
   function putRow(scope: Scope, o: ObjState, row: ServerRow) {
     scope.assert()
     const e = o.rows.get(row.key)
     if (e === undefined) {
+      const known = seen.get(rowId(o.name, row.key)) ?? 0
+      // Старше за бачене: показ без приховування, але `stale` до
+      // перечитування (ставиться в чергу після commit).
+      const stale = row.version < known
       o.rows.set(row.key, {
         row,
         owners: 0,
-        stale: false,
-        staleUntil: 0,
+        stale,
+        staleUntil: stale ? known : 0,
         removed: false,
       })
+      if (stale) {
+        const set = staleInserts.get(o.name) ?? new Set()
+        set.add(row.key)
+        staleInserts.set(o.name, set)
+      }
       touchRow(o.name, row.key)
       return
     }
@@ -722,8 +757,13 @@ export function createCoreSession(options: CoreOptions): CoreSession {
       prev !== undefined &&
       prev.rows.length === rows.length &&
       prev.rows.every((r, i) => r === rows[i])
+    // Картка з рядком у сховищі не буває `loading` (П4-B §6.2).
+    const status: ViewStatus =
+      s.status === "loading" && s.spec.kind === "card" && rows.length > 0
+        ? "refreshing"
+        : s.status
     const next: ViewSnapshot = {
-      status: s.status,
+      status,
       ...(s.error === undefined ? {} : { error: s.error }),
       rows: sameRows ? prev.rows : Object.freeze(rows),
       hasNewRows: s.hasNewRows,
@@ -1125,9 +1165,20 @@ export function createCoreSession(options: CoreOptions): CoreSession {
       s.abort?.abort()
       subsets.delete(s.specKey)
       own(scope, s, [])
-      if (s.spec.kind === "section") {
-        const sid = sectionId(s.obj.name, s.spec.owner, s.spec.section)
-        if (sections.has(sid) && !heldByLog(s.obj.name, s.spec.owner)) {
+      const spec = s.spec
+      if (spec.kind === "section") {
+        const sid = sectionId(s.obj.name, spec.owner, spec.section)
+        // ТЧ тримають лише дельти рядків цієї ТЧ у журналі, не правки шапки.
+        const held = mutLog.some((r) =>
+          r.ops.some(
+            (op) =>
+              op.k === "line" &&
+              op.obj === s.obj.name &&
+              op.owner === spec.owner &&
+              op.section === spec.section
+          )
+        )
+        if (sections.has(sid) && !held) {
           sections.delete(sid)
           touchSection(sid)
         }
@@ -1160,6 +1211,12 @@ export function createCoreSession(options: CoreOptions): CoreSession {
       listeners: new Set(),
       waiters: [],
     }
+    // Склад картки сталий — її ключ: рядок, що прийшов з іншої вибірки,
+    // видно одразу.
+    if (spec.kind === "card") {
+      made.layout = [spec.key]
+      made.layoutSet = new Set(made.layout)
+    }
     subsets.set(specKey, made)
     return made
   }
@@ -1171,8 +1228,17 @@ export function createCoreSession(options: CoreOptions): CoreSession {
   function hold(spec: ViewSpec, specKey: string): Subset {
     let s = subsets.get(specKey)
     if (s === undefined) {
-      s = makeSubset(spec, specKey)
-      load(s)
+      const made = makeSubset(spec, specKey)
+      s = made
+      // Картка ключа, що вже є в сховищі (П4-B §6.2): одразу рядок у
+      // списочній формі й `refreshing`, а не порожній `loading`. Повне
+      // читання доливає ліниві поля в той самий рядок частковим злиттям.
+      if (spec.kind === "card" && made.obj.rows.has(spec.key)) {
+        commitInternal((scope) => {
+          own(scope, made, [spec.key])
+        }, sessionToken)
+      }
+      load(made)
     }
     if (s.releaseTimer !== undefined) {
       clearTimeout(s.releaseTimer)
@@ -1218,10 +1284,26 @@ export function createCoreSession(options: CoreOptions): CoreSession {
       needsRefresh: false,
     })
     const live = () => subsets.get(specKey)
+    // Картка без підписки (рендер до `subscribe`): рядок зі сховища, якщо є.
+    let cardIdle: ViewSnapshot | undefined
+    const idleOf = (): ViewSnapshot => {
+      if (spec.kind !== "card") return idle
+      const row = rowView(spec.object, spec.key)
+      if (row === undefined) return idle
+      if (cardIdle?.rows[0] !== row) {
+        cardIdle = Object.freeze({
+          status: "refreshing",
+          rows: Object.freeze([row]),
+          hasNewRows: false,
+          needsRefresh: false,
+        })
+      }
+      return cardIdle
+    }
     const handle: ViewHandle = {
       getSnapshot() {
         const s = live()
-        return s === undefined ? idle : snapshotOf(s)
+        return s === undefined ? idleOf() : snapshotOf(s)
       },
       subscribe(listener) {
         if (closed) return () => {}
@@ -2325,6 +2407,7 @@ export function createCoreSession(options: CoreOptions): CoreSession {
             version: e.row.version,
             owners: e.owners,
             removed: e.removed,
+            stale: e.stale,
             own: o.own.has(k),
             heldByLog: heldByLog(obj, k),
           },
