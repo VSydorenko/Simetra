@@ -136,6 +136,7 @@ async function withContacts(): Promise<Promoted> {
 function applied(model: CompiledModel): ApplyState {
   return {
     status: "applied",
+    rowVersionEpoch: true,
     marker: {
       format: 1,
       snapshotHash: model.hash,

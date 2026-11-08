@@ -422,6 +422,37 @@ async function modelOf(dir: string): Promise<CompiledModel> {
   return compiled.model!
 }
 
+const SEQUENCE_ID = "sequence:simetra.row_version"
+
+/**
+ * Послідовність версій і її відкликання: одиниці механіки моделі, які
+ * `renderApplyState` не несе. Повний стан застосування — це й вони.
+ */
+const sequenceSql = (model: CompiledModel): string => {
+  const units = model.sqlUnits.filter(
+    (u) =>
+      u.identity === SEQUENCE_ID ||
+      u.identity.startsWith("grant:revoke:sequence:simetra.row_version:")
+  )
+  // Відкликання йдуть після створення, а не в алфавітному порядку ідентичностей
+  return [
+    ...units.filter((u) => u.identity === SEQUENCE_ID),
+    ...units.filter((u) => u.identity !== SEQUENCE_ID),
+  ]
+    .map((u) => u.sql)
+    .join("\n")
+}
+
+/** Бажаний SQL моделі без об'єкта стану, послідовності версій. */
+const withoutSequence = (model: CompiledModel): string =>
+  `${renderDesiredState(model).sql}\n\nDROP SEQUENCE simetra.row_version;`
+
+/** Повний стан застосування: схема, таблиці, функції й послідовність версій. */
+async function applyComplete(url: string, model: CompiledModel): Promise<void> {
+  await query(url, renderApplyState(model))
+  await query(url, sequenceSql(model))
+}
+
 const diffData = async (
   dir: string,
   env: NodeJS.ProcessEnv
@@ -468,7 +499,7 @@ describe("diff and the apply state", () => {
 
   it("a complete apply state matches, a partial one is a difference", async () => {
     await introspected(async (dir, env, url) => {
-      await query(url, renderApplyState(await modelOf(dir)))
+      await applyComplete(url, await modelOf(dir))
       expect(await diffData(dir, env)).toMatchObject({
         empty: true,
         applyState: "present",
@@ -479,6 +510,32 @@ describe("diff and the apply state", () => {
       expect(partial.applyState).toBe("present")
       expect(partial.plan.map((a) => a.sql).join("\n")).toContain("ledger")
     })
+  })
+
+  it("a complete apply state without the version sequence is a partial state", async () => {
+    // Послідовність — об'єкт стану: без неї застосування ще не завершене, і
+    // це відмінність, а не мовчання
+    await introspected(async (dir, env, url) => {
+      await query(url, renderApplyState(await modelOf(dir)))
+      const data = await diffData(dir, env)
+      expect(data.applyState).toBe("present")
+      expect(data.empty).toBe(false)
+      expect(data.plan.map((a) => a.sql).join("\n")).toContain("row_version")
+    })
+  })
+
+  it("the version sequence alone is a partial state, not silence", async () => {
+    // Схему тут дає платформний шар, тож без послідовності в умові `absent`
+    // база з шаром і послідовністю, але без таблиць і функцій стану, вважалася
+    // б відсутнім станом, і різниця зникала б мовчки
+    const { dir, model } = await usersProject()
+    const { scope } = await desiredForApply(model)
+    await inTarget(renderDesiredState(model).sql, [...scope.schemas], (url) =>
+      diffData(dir, { [ENV]: url }).then((data) => {
+        expect(data.applyState).toBe("present")
+        expect(data.empty).toBe(false)
+      })
+    )
   })
 
   it("a bare simetra schema is a partial apply state", async () => {
@@ -494,7 +551,7 @@ describe("diff and the apply state", () => {
 
   it("a changed marker table is a difference", async () => {
     await introspected(async (dir, env, url) => {
-      await query(url, renderApplyState(await modelOf(dir)))
+      await applyComplete(url, await modelOf(dir))
       await query(url, "ALTER TABLE simetra.marker ADD COLUMN x int")
       const data = await diffData(dir, env)
       expect(data.empty).toBe(false)
@@ -508,7 +565,9 @@ describe("diff and the apply state", () => {
   it("a deployed platform layer without the apply state matches", async () => {
     const { dir, model } = await usersProject()
     const { scope } = await desiredForApply(model)
-    await inTarget(renderDesiredState(model).sql, [...scope.schemas], (url) =>
+    // Послідовність версій — об'єкт стану застосування, тож «без стану» її
+    // теж немає
+    await inTarget(withoutSequence(model), [...scope.schemas], (url) =>
       diffData(dir, { [ENV]: url }).then((data) =>
         expect(data).toMatchObject({
           plan: [],
@@ -524,7 +583,7 @@ describe("diff and the apply state", () => {
     const { dir, model } = await usersProject()
     const { scope } = await desiredForApply(model)
     await inTarget(
-      `${renderDesiredState(model).sql}\n\nDROP TABLE simetra.identities;`,
+      `${withoutSequence(model)}\n\nDROP TABLE simetra.identities;`,
       [...scope.schemas],
       async (url) => {
         const data = await diffData(dir, { [ENV]: url })

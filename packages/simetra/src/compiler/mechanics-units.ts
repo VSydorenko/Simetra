@@ -166,24 +166,17 @@ export function contentChangeCondition(
 }
 
 /**
- * Механіка рядка (спека промоції §9.2): службову дату оновлення й версію
- * рядка тримає база, а не клієнт: версію видає послідовність
- * `simetra.row_version`, дату — `now()`, що б не записав клієнт. Таблиці
- * беруться з фізичного знімка за `origin.standard`, а не за видом: механіку має рівно та таблиця, якій
- * реєстр дав обидві колонки. `origin.standard` — логічне ім'я в стилі проєкту
- * (`attributeCase`), тож порівнюється зі стилізованим ім'ям реєстру. Послідовність
- * з відкликаними правами — завжди; функція й її гранти — лише коли є хоч одна така таблиця; власника-об'єкта в них
- * немає, бо функція спільна.
+ * Таблиці механіки моделі: ті, чиї колонки реєстр дав як службові дату й
+ * версію (за `origin.standard`, а не за іменем колонки). Єдине рішення, яке
+ * читають і генератор тригерів, і засів послідовності версій у стані
+ * застосування, тож вони не розходяться.
  */
-export function buildMechanicsUnits(
-  physical: PhysicalSnapshot,
-  attributeCase: AttributeCase,
-  provider: DatabaseProvider,
-  module: string,
-  parse: SqlParser
-): SqlUnit[] {
+export function mechanicsTables(
+  physical: Pick<PhysicalSnapshot, "tables">,
+  attributeCase: AttributeCase
+): PhysicalTable[] {
   const mechanics = mechanicsStandardNames(attributeCase)
-  const tables = physical.tables.filter((table) => {
+  return physical.tables.filter((table) => {
     const found = table.columns.filter((c) =>
       mechanics.has(c.origin.standard ?? "")
     )
@@ -201,6 +194,29 @@ export function buildMechanicsUnits(
     }
     return true
   })
+}
+
+/** Фізичне ім'я колонки версії рядка таблиць механіки. */
+export const ROW_VERSION_COLUMN = VERSION.physicalName
+
+/**
+ * Механіка рядка (спека промоції §9.2): службову дату оновлення й версію
+ * рядка тримає база, а не клієнт: версію видає послідовність
+ * `simetra.row_version`, дату — `now()`, що б не записав клієнт. Таблиці
+ * беруться з фізичного знімка за `origin.standard`, а не за видом: механіку має рівно та таблиця, якій
+ * реєстр дав обидві колонки. `origin.standard` — логічне ім'я в стилі проєкту
+ * (`attributeCase`), тож порівнюється зі стилізованим ім'ям реєстру. Послідовність
+ * з відкликаними правами — завжди; функція й її гранти — лише коли є хоч одна така таблиця; власника-об'єкта в них
+ * немає, бо функція спільна.
+ */
+export function buildMechanicsUnits(
+  physical: PhysicalSnapshot,
+  attributeCase: AttributeCase,
+  provider: DatabaseProvider,
+  module: string,
+  parse: SqlParser
+): SqlUnit[] {
+  const tables = mechanicsTables(physical, attributeCase)
   const fn = `${quoteIdent(MECHANICS_FUNCTION.schema)}.${quoteIdent(MECHANICS_FUNCTION.name)}`
   const shared = (sql: string): SqlUnit => ({
     ...generatedUnit(sql, PLATFORM_SCHEMA, parse),

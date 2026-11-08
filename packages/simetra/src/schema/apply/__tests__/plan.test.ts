@@ -54,7 +54,7 @@ describe("planPlatformFunctions", () => {
   // Функцію стану застосування рендерить T2 з фіксованим тілом, тож для
   // перевірки функцій вона платформна, як і функції шару: інакше роль
   // застосування без `EXECUTE` на неї бачила б «сліпу» функцію на кожному плані
-  it("adds the apply state function to the platform functions of the model", async () => {
+  it("adds the apply state functions to the platform functions of the model", async () => {
     const m = (
       await compile(
         metaFiles({
@@ -69,7 +69,12 @@ describe("planPlatformFunctions", () => {
     const layer = platformFunctionSignatures(m.sqlUnits)
     expect(layer.length).toBeGreaterThan(0)
     expect(planPlatformFunctions(m)).toEqual(
-      [...layer, "simetra.applied_snapshot_hash()"].sort()
+      [
+        ...layer,
+        "simetra.applied_snapshot_hash()",
+        "simetra.row_version_epoch()",
+        "simetra.reset_row_version_epoch()",
+      ].sort()
     )
   })
 })

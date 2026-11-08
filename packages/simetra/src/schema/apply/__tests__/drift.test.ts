@@ -53,6 +53,7 @@ const SNAPSHOT = "5".repeat(64)
 function applied(over: Partial<MarkerRecord> = {}): ApplyState {
   return {
     status: "applied",
+    rowVersionEpoch: true,
     marker: {
       format: 1,
       snapshotHash: SNAPSHOT,
