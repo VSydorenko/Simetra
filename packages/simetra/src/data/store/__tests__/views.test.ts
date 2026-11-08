@@ -550,6 +550,74 @@ describe("section", () => {
   })
 })
 
+describe("section of a removed owner", () => {
+  const lines = [{ ref: key(901), qty: 1, lineNumber: 1 }]
+  const hideOnce = (fake: ReturnType<typeof setup>["fake"]) => {
+    // Рядок відсутній для одного читання: скоуп на мить невидимий (RLS).
+    fake.setVisibleScopes([])
+    fake.take().answer()
+    fake.setVisibleScopes(undefined)
+  }
+
+  it("shows no lines after a newer section read while the header stays removed", async () => {
+    const { core, fake, inspect } = setup({ mode: "manual" })
+    seed(fake, 1, 1)
+    fake.setLines(TASK, key(1), "lines", lines)
+    const cardView = core.view(card(1))
+    watch(cardView)
+    await settle()
+    fake.take().answer()
+    await settle()
+    cardView.refresh()
+    await settle()
+    hideOnce(fake)
+    await settle()
+    expect(cardView.getSnapshot().rows[0]?.state).toBe("removed")
+    const sectionView = core.view(section(1))
+    watch(sectionView)
+    await settle()
+    fake.take().answer()
+    await settle()
+    expect(sectionView.getSnapshot().section?.lines ?? []).toEqual([])
+    expect(sectionView.getSnapshot().section?.ownerVersion).toBeUndefined()
+    expect(inspect.violations()).toEqual([])
+  })
+
+  it("re-reads a mounted section once a header re-read restores the owner", async () => {
+    const { core, fake } = setup({ mode: "manual" })
+    seed(fake, 1, 1)
+    fake.setLines(TASK, key(1), "lines", lines)
+    const cardView = core.view(card(1))
+    watch(cardView)
+    await settle()
+    fake.take().answer()
+    await settle()
+    cardView.refresh()
+    await settle()
+    hideOnce(fake)
+    await settle()
+    const sectionView = core.view(section(1))
+    watch(sectionView)
+    await settle()
+    fake.take().answer()
+    await settle()
+    expect(sectionView.getSnapshot().section?.lines ?? []).toEqual([])
+    cardView.refresh()
+    await settle()
+    fake.take().answer()
+    await settle()
+    expect(cardView.getSnapshot().rows[0]?.state).toBe("synced")
+    // Шапку відновлено: змонтований вигляд ТЧ дочитує рядки.
+    expect(fake.pending.filter(isSection)).toHaveLength(1)
+    fake.take().answer()
+    await settle()
+    expect(sectionView.getSnapshot().section).toMatchObject({
+      complete: true,
+      lines: [{ key: key(901) }],
+    })
+  })
+})
+
 describe("include", () => {
   const orgKey = (n: number) => key(10_000 + n)
   const full: ViewSpec = { kind: "full", object: TASK, include: ["org"] }

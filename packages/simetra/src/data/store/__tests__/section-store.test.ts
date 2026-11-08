@@ -85,6 +85,16 @@ describe("SectionStore.put", () => {
     expect(putLines(h, K1, 1, { readEpoch: early })).toBe("rejected")
   })
 
+  it("rejects lines of a removed owner from a read started after the mark", () => {
+    const h = harness()
+    h.write((s) => h.store.put(s, row(K1, 1), h.now(), false))
+    h.write((s) => h.store.remove(s, K1, h.now()))
+    expect(putLines(h, K1, 1, { readEpoch: h.now() })).toBe("rejected")
+    // Перечитування шапки знімає `removed` — рядки ТЧ знову пишуться.
+    h.write((s) => h.store.put(s, row(K1, 1), h.now(), false))
+    expect(putLines(h, K1, 1, { readEpoch: h.now() })).toBe("written")
+  })
+
   it("an owner with unknown scope is rejected by any newer pair tombstone of the object", () => {
     const h = harness()
     const early = h.now()

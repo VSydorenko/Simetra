@@ -97,7 +97,10 @@ export function createSectionStore(options: {
     )
       return true
     if (e !== undefined && pairBuried(e.scope, readEpoch)) return true
-    if (e?.removed !== undefined && e.removed.epoch > readEpoch) return true
+    // Власник `removed` показує причину без рядків (§6.2, правило 5): рядки
+    // ТЧ не пишуться за будь-якої епохи читання, доки слот не зніме
+    // перечитування шапки (П15) — читання ТЧ шапки не відновлює.
+    if (e?.removed !== undefined) return true
     return ownerVersion < (ownerVersions.get(owner) ?? -Infinity)
   }
 
