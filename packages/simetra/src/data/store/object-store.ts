@@ -140,8 +140,10 @@ export function createObjectStore(options: {
   session: Pick<Session, "epochs" | "onFlush" | "onClose">
   log: (entry: CoreLogEntry) => void
   defects?: Defects
+  /** Inspection only: a fresh "row absent" answer re-marked a `removed` slot. */
+  onRemark?: (key: Key) => void
 }): ObjectStore {
-  const { object, entry, session, log } = options
+  const { object, entry, session, log, onRemark } = options
   const { epochs } = session
   const defects = options.defects ?? NO_DEFECTS
   const bury = (id: string) => {
@@ -332,8 +334,11 @@ export function createObjectStore(options: {
         // слот без хвоста (П15). Старіший повторний remove лишає ранню епоху:
         // зсув уперед відкидав би відповіді читань, що почались після першої
         // позначки й уже мають право відновити.
-        if (!divergent && readEpoch >= e.removed.epoch)
-          e.removed.epoch = epochs.next()
+        if (!divergent && readEpoch >= e.removed.epoch) {
+          onRemark?.(key)
+          if (!defects.has("repeated-remove-keeps-epoch"))
+            e.removed.epoch = epochs.next()
+        }
         return
       }
       e.row = undefined

@@ -34,6 +34,10 @@ export type DefectFlag =
   | "revision-survives-row"
   /** A purge leaves cards and sections of purged keys alive. */
   | "purge-keeps-views"
+  /** A purge marks cards and sections of keys it did not purge as purged. */
+  | "purge-marks-unrelated-views"
+  /** A repeated "row absent" answer does not move the `removed` mark epoch. */
+  | "repeated-remove-keeps-epoch"
   /** A by-key read that finds no row changes nothing. */
   | "absent-row-ignored"
   /** The version memory is never trimmed. */

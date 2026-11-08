@@ -116,6 +116,11 @@ export interface CoreInspection {
   }
   /** Deliberate defects of the model test's self-check; empty by default. */
   readonly defects: Set<DefectFlag>
+  /**
+   * Subscribes to the moments a fresh "row absent" answer re-marks a slot that
+   * is already `removed`; the model then expects no older read to lift it.
+   */
+  watchRemarks(listener: (object: ObjectName, key: Key) => void): void
 }
 
 const inspections = new WeakMap<CoreSession, CoreInspection>()
@@ -193,6 +198,7 @@ export function createCore(options: {
   // Прапорці самотесту: модулі тримають той самий набір, тож прапорець,
   // доданий через `inspectCore` після створення, діє одразу.
   const defects = new Set<DefectFlag>()
+  let remarkListener: ((object: ObjectName, key: Key) => void) | undefined
   const session = createSession({
     subject: options.subject,
     limits,
@@ -212,6 +218,7 @@ export function createCore(options: {
       session,
       log,
       defects,
+      onRemark: (key) => remarkListener?.(name, key),
     })
     objects.set(name, {
       name,
@@ -506,6 +513,9 @@ export function createCore(options: {
 
   inspections.set(core, {
     defects,
+    watchRemarks(listener) {
+      remarkListener = listener
+    },
     serviceSizes() {
       const views = rowViews.sizes()
       const subs = [...registry.subsets()]

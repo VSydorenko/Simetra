@@ -124,8 +124,11 @@ function forget(
     if (!own && !target && !s.included.has(o.name)) continue
     if (own) {
       if (!ctx.defects.has("purge-keeps-views")) {
-        if (spec.kind === "card" && purged.has(spec.key)) s.purged = true
-        if (spec.kind === "section" && purged.has(spec.owner)) s.purged = true
+        const any = ctx.defects.has("purge-marks-unrelated-views")
+        if (spec.kind === "card" && (any || purged.has(spec.key)))
+          s.purged = true
+        if (spec.kind === "section" && (any || purged.has(spec.owner)))
+          s.purged = true
       }
       s.owned = without(s.owned, dropped)
       if (spec.kind === "keys" || spec.kind === "full") {
