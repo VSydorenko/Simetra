@@ -324,10 +324,15 @@ export function createObjectStore(options: {
       // значення завжди, а розбіжність вирішує одне хвостове перечитування.
       const divergent = readEpoch < e.writtenEpoch
       if (divergent) tail.add(key)
-      // Повторний remove лишає ранню епоху: зсув уперед відкидав би відповіді
-      // читань, що почались після першої позначки й уже мають право відновити.
       if (e.removed !== undefined) {
         e.removed.divergent = divergent
+        // Свіже «рядка немає» з читання після позначки — нова позначка: інакше
+        // паралельне читання з тією самою епохою старту, що каже «є», зняло б
+        // слот без хвоста (П15). Старіший повторний remove лишає ранню епоху:
+        // зсув уперед відкидав би відповіді читань, що почались після першої
+        // позначки й уже мають право відновити.
+        if (!divergent && readEpoch >= e.removed.epoch)
+          e.removed.epoch = epochs.next()
         return
       }
       e.row = undefined

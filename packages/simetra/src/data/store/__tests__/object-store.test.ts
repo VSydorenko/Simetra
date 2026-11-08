@@ -400,15 +400,59 @@ describe("ObjectStore.remove (П15)", () => {
     expect(h.store.get(K1)?.removed).toBeUndefined()
   })
 
-  it("a repeated remove keeps the earlier removed epoch", () => {
+  it("an older repeated remove keeps the earlier removed epoch", () => {
     const h = harness()
     put(h, row(K1, 1))
     remove(h, K1)
     const first = h.store.get(K1)?.removed?.epoch
-    remove(h, K1)
+    // читання, що почалося до першої позначки
+    remove(h, K1, (first ?? 0) - 1)
     expect(h.store.get(K1)?.removed?.epoch).toBe(first)
     // читання між двома remove має право відновити
     expect(put(h, row(K1, 1), first)).toBe("written")
+  })
+
+  describe("a fresh non-divergent remove on an already removed slot (П15)", () => {
+    const removedSlot = () => {
+      const h = harness()
+      put(h, row(K1, 1))
+      remove(h, K1)
+      const rE = h.now()
+      return { h, rE }
+    }
+
+    it("remove then put with the same start epoch in one commit stays hidden", () => {
+      const { h, rE } = removedSlot()
+      h.write((s) => {
+        h.store.remove(s, K1, rE)
+        h.store.put(s, row(K1, 1), rE, false)
+      })
+      expect(h.store.get(K1)?.removed).toBeDefined()
+    })
+
+    it("put then remove with the same start epoch in one commit stays hidden", () => {
+      const { h, rE } = removedSlot()
+      h.write((s) => {
+        h.store.put(s, row(K1, 1), rE, false)
+        h.store.remove(s, K1, rE)
+      })
+      expect(h.store.get(K1)?.removed).toBeDefined()
+    })
+
+    it("remove then put with the same start epoch in separate commits stays hidden", () => {
+      const { h, rE } = removedSlot()
+      remove(h, K1, rE)
+      expect(put(h, row(K1, 1), rE)).toBe("rejected")
+      expect(h.store.get(K1)?.removed).toBeDefined()
+    })
+
+    it("a put from a read started after the new mark still restores", () => {
+      const { h, rE } = removedSlot()
+      remove(h, K1, rE)
+      const after = h.now()
+      expect(put(h, row(K1, 1), after)).toBe("written")
+      expect(h.store.get(K1)?.removed).toBeUndefined()
+    })
   })
 
   it("is a no-op for a key without an entry", () => {
