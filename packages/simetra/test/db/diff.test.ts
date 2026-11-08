@@ -100,12 +100,13 @@ const CARRIERS = new Map([
 
 function violations(
   accepted: CatalogShape,
-  compiled: CatalogShape
+  compiled: CatalogShape,
+  carriers: ReadonlyMap<string, string> = CARRIERS
 ): { diff: CatalogDiff; violations: string[] } {
   const diff = diffCatalogs(accepted, compiled, ["doc"])
   return {
     diff,
-    violations: scopeReplacementViolations(diff, accepted, compiled, CARRIERS),
+    violations: scopeReplacementViolations(diff, accepted, compiled, carriers),
   }
 }
 
@@ -256,6 +257,22 @@ describe("scopeReplacementViolations", () => {
       const result = violations(
         catalog({ constraints: [], indexes: [accepted] }),
         catalog({ constraints: [], indexes: [compiled] })
+      )
+      expect(result.violations.length === 0).toBe(ok)
+    })
+
+    // Нескоупльована таблиця носія не має, але ключ останнім їй дозволений.
+    it.each([
+      { name: "no carrier: key last", compiled: ["a", "id"], ok: true },
+      { name: "no carrier: key not last", compiled: ["id", "a"], ok: false },
+    ])("$name", ({ compiled, ok }) => {
+      const result = violations(
+        catalog({ constraints: [], indexes: [shaped("doc_a_idx", ["a"])] }),
+        catalog({
+          constraints: [],
+          indexes: [shaped("doc_new_idx", compiled)],
+        }),
+        new Map()
       )
       expect(result.violations.length === 0).toBe(ok)
     })

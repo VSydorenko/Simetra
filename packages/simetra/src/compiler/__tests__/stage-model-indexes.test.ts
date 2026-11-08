@@ -208,6 +208,46 @@ describe("stage 3: list-order search indexes end with the row key", () => {
       expected: ["(org_id, a, b DESC, id)"],
     },
     {
+      name: "standard owner_id: no key",
+      entries: {
+        "catalogs/A/A.meta.json": catalog("A", { scope: "none" }),
+        [CURRENCY]: catalog("Currency", {
+          scope: "none",
+          owners: [{ kind: "Catalog", name: "A" }],
+        }),
+      },
+      table: "currency",
+      expected: ["(owner_id)"],
+    },
+    {
+      name: "standard polymorphic owner pair: no key",
+      entries: {
+        "catalogs/A/A.meta.json": catalog("A", { scope: "none" }),
+        "catalogs/B/B.meta.json": catalog("B", { scope: "none" }),
+        [CURRENCY]: catalog("Currency", {
+          scope: "none",
+          owners: [
+            { kind: "Catalog", name: "A" },
+            { kind: "Catalog", name: "B" },
+          ],
+        }),
+      },
+      table: "currency",
+      expected: ["(owner_type, owner_id)"],
+    },
+    {
+      name: "author columns: no key",
+      entries: {
+        "catalogs/Users/Users.meta.json": catalog("Users", {
+          scope: "none",
+          role: "users",
+        }),
+        [CURRENCY]: catalog("Currency", { scope: "none", trackAuthor: true }),
+      },
+      table: "currency",
+      expected: ["(created_by_id)", "(updated_by_id)"],
+    },
+    {
       name: "composite index over a polymorphic Ref: the pair, then the key",
       entries: {
         "catalogs/A/A.meta.json": catalog("A", { scope: "none" }),

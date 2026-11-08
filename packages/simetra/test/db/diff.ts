@@ -313,7 +313,11 @@ export function scopeReplacementViolations(
         ? keyShape(accepted, entry)
         : undefined
     const carrier = carriers.get(entry.table)
-    if (dropped === undefined || carrier === undefined) {
+    // Ключ рядка останнім не потребує носія скоупу: так росте й індекс
+    // нескоупленої таблиці; носій потрібен лише шляхам FK і скоуп-префікса.
+    const keyLast =
+      entry.class === "index" && plainIndex(accepted, entry) !== undefined
+    if (dropped === undefined || (carrier === undefined && !keyLast)) {
       violations.push(`${label}: not a reference FK or index of a scoped table`)
       continue
     }
@@ -321,8 +325,6 @@ export function scopeReplacementViolations(
       dropped.target === undefined
         ? undefined
         : carriers.get(dropped.target.table)
-    const keyLast =
-      entry.class === "index" && plainIndex(accepted, entry) !== undefined
     const matches = diff.filter((add) => {
       if (add.op !== "add" || add.class !== entry.class) return false
       if (add.table !== entry.table) return false
@@ -336,7 +338,10 @@ export function scopeReplacementViolations(
       ) {
         return true
       }
-      if (!sameColumns(added.columns, [carrier, ...dropped.columns])) {
+      if (
+        carrier === undefined ||
+        !sameColumns(added.columns, [carrier, ...dropped.columns])
+      ) {
         return false
       }
       if (dropped.target === undefined) return added.target === undefined
