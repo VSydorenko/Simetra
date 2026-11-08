@@ -34,14 +34,14 @@ B3-2 (B1c-1 змінює адаптер `src/data`, який переносит�
 ## Global Constraints
 
 - `READ_BATCH_MAX = 16` частин; частина — `{ type: "query", query }` чи `{ type: "version" }` (`rights` додає B5).
-- `known` — `{ epoch: string, keys: string[], versions: string[] }`: епоха — 64 hex; ключі — UUID без повторів; рівна довжина, до `READ_LIMIT_MAX` (200); версія — рядок безпечного цілого 1…2^53 − 1; дозволено лише в списочній формі й формі картки без `tabularSections`; в інших формах — `command.invalid` з `reason: "known-form"`. `known` — лише в частині пакета й у формі передачі; логічний `ReadQuery` (`runtime.read`, `ctx.read`, MCP) його не має.
-- Маркер у `rows`: ціле ≥ 0 — позиція в `known` (рядок незмінний); `{ "$known": n, <колонки copy> }` — частковий маркер об'єкта, що має атрибути `copy`. Фізичні імена колонок з `$` не починаються, тож частковий маркер не плутається з рядком.
+- `known` — `{ epoch: string, keys: string[], versions: string[] }`: епоха — 64 hex; ключі — UUID без повторів; рівна довжина, до `READ_LIMIT_MAX` (200); версія — рядок безпечного цілого 1…2^53 − 1; дозволено лише в списочній формі й формі картки без `tabularSections` і без `include`; в інших формах — `command.invalid` з `reason: "known-form"` (`known` разом з `include` вводить B3-3 разом з `include` тим самим запитом: id цілей маркерного рядка будівнику ще не відомі). `known` — лише в частині пакета й у формі передачі; логічний `ReadQuery` (`runtime.read`, `ctx.read`, MCP) його не має.
+- Маркер у `rows`: ціле ≥ 0 — позиція в `known` (рядок незмінний); `{ "$known": n, <колонки copy> }` — частковий маркер об'єкта, що має атрибути `copy`. Частковий маркер відрізняє відсутність колонки ключа: повний рядок завжди її має, тож навіть фізична колонка з іменем `$known` не плутає форм.
 - Маркер — лише коли `known.epoch` дорівнює епосі бази цієї транзакції й вона не `NULL`; інакше відповідь повна.
-- Транзакція читання: `BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY`, оператор налаштування, оператор епохи, по оператору на частину й на ціль `include`, `COMMIT` — **4 + частини + цілі**. Бюджет `readBudgetMs` — 30 000 мс; стеля оператора — наявний `readStatementTimeoutMs` (15 000 мс); запобіжник `transaction_timeout` = бюджет + 1 000 мс на PostgreSQL ≥ 17.
+- Транзакція читання: `BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY`, оператор налаштування, оператор епохи, по оператору на частину й на ціль `include`, `COMMIT` — **4 + частини `query` + цілі `include`**, ще +1 оператор `set_config('statement_timeout', …)` біля дедлайну; частина `version` бази не питає. Бюджет `readBudgetMs` — 30 000 мс; стеля оператора — наявний `readStatementTimeoutMs` (15 000 мс); запобіжник `transaction_timeout` = бюджет + 1 000 мс на PostgreSQL ≥ 17.
 - Відповідь `read`: `{ epoch: string | null, items: [{ ok: true, value } | { ok: false, error }, …] }`; бюджет — `RESPONSE_BUDGET_BYTES` на всю `DataResponse`.
 - Коди частин: `command.unavailable` з `reason: "batch-aborted"` (помилка бази в попередній частині) і `"batch-budget"` (не вмістилось у залишок); `command.timeout` після дедлайну; втрата з'єднання — `command.unavailable` усім невиконаним частинам.
 - Ядро шле `known` лише з B3-3; у B1c ядро його не шле, а маркер у відповіді без `known` — `command.internal`.
-- Без шимів: окремий тип запиту `version` і `read` з одним `query` видаляються в тій самій зміні; запит невідомого типу чи `read` старої форми — `command.stale-client` (стара вкладка дізнається про нове розгортання).
+- Без шимів: окремий тип запиту `version` і `read` з одним `query` видаляються в тій самій зміні; запит невідомого типу чи `read` старої форми — `command.stale-client` (стара вкладка дізнається про нове розгортання); невідомий тип **частини** — `command.invalid` лише цій частині (новіший клієнт на старішому сервері не має перезавантажуватись — сумісність «клієнт новіший» тримає звірка хеша каталогу).
 - Файли ПГ-1 не чіпати (перелік — план B1e, Global Constraints). DB-тести профілево-нейтральні, ролі API — з `PROVIDER_API_ROLES`; читання в DB-тестах — під справжньою роллю входу (`runtime-login.db.test.ts` — зразок).
 - Коментарі — українською й про «чому»; повідомлення — en/uk у `packages/simetra/src/compiler/messages.ts`.
 
@@ -58,10 +58,15 @@ B3-2 (B1c-1 змінює адаптер `src/data`, який переносит�
 | Р7 | Момент перемикання епохи — подія епохи сесії; відповідь з епохою, відмінною від поточної, від читання, що стартувало до перемикання, ядро не застосовує (ключі — `stale` і перечитування) | пізня відповідь старої епохи інакше перезаписала б свіжі рядки | немає |
 | Р8 | (рішення архітекторки 2026-11-08) Після перемикання рядки одразу отримують `stale` з причиною `epoch`; видимі вигляди перечитуються з розкидом, рівномірним на `[0, revalidateIntervalMs)`; позначку знімає читання, що почалось після перемикання | рестарт primary змінює епоху в усіх клієнтів одночасно, і миттєве перечитування було б шквалом | немає |
 | Р9 | `SourceAdapter.read(items)` заміняє `read(query)`; фейк джерела B3-2 і `createCoreSource` переходять разом | принцип 5 | П4-B §5.1 (Task 10) |
+| Р11 | Перевірка частини (Zod, каталог, межі) — до `BEGIN`; вибір проєкції з `known` — після оператора епохи: `ReadPlan.known` рендериться під час виконання (`renderKnown(plan, dbEpoch)`), бо епоха відома лише всередині транзакції | `prepareRead` викликається до `connect()` | немає |
+| Р12 | Покинуті епохи: ядро тримає множину епох, з яких перемикалось; відповідь покинутої епохи не застосовується й нічого не перемикає (ключі — `stale` і перечитування); відповідь, що спричинила перемикання, застосовується | чергування інстансів старої й нової бази під час PITR інакше перемикало б епоху на кожній відповіді | П4-B §6.2 (Task 10) |
+| Р13 | Пам'ять версій — не лише `seen`: перемикання скидає й позначки `stale.minVersion` рядків і ТЧ; `remember` не приймає версії рядка іншої епохи; `row_ver` сигналу (B5) порівнюється лише з рядками поточної епохи | інакше позначка старої епохи не знімалась би ніколи, а `disown` знову отруював би пам'ять | П4-B §8.4 (Task 10, рядок для B5) |
 | Р10 | Обмежувач паралельних читань ядра рахує запит, а не частину; повтор `batch-aborted` — через обмежувач з паузою, що зростає | зворотний тиск §8.4; без паузи збій бази давав би до 16 послідовних повторів на пакет | немає |
 
-Кожне рішення — розвилка, погоджена архітекторкою (2026-11-08). Межа одночасних читань на `subject` на
-сервері — залишок для B3-3.
+Кожне рішення — розвилка, погоджена архітекторкою (2026-11-08); Р11–Р13 —
+правки аудиту, до погодження. Межа одночасних читань на `subject` на сервері
+— залишок: Task 10 записує його в §14.3 П4-B з блоком-власником (П4-D,
+шаблон host-а).
 
 ## Review Focus
 
@@ -83,13 +88,13 @@ B3-2 (B1c-1 змінює адаптер `src/data`, який переносит�
 ### Task 1: Схеми T0 — частини, `known`, маркери, відповідь
 
 **Files:**
-- Modify: `packages/simetra/src/model/runtime/envelope.ts` (`dataRequestSchema`: гілка `read` з `items`, без `version`; `wireReadQuerySchema` — `known` у списочній формі й формі картки; `wireReadResultSchema` — `rows` з маркерами; нова `wireReadPartsResultSchema`), `read.ts` (`READ_BATCH_MAX`), `ports.ts` (`WireReadPart`, `WireReadParts`), `mapping.ts` (`readPartToWire`, `readPartFromWire` — `known` переноситься окремо від запиту)
+- Modify: `packages/simetra/src/model/runtime/envelope.ts` (`dataRequestSchema`: гілка `read` з `items`, без `version`; `wireReadQuerySchema` — `known` у списочній формі й формі картки; `wireReadResultSchema` — `rows` з маркерами; нова `wireReadPartsResultSchema`), `read.ts` (`READ_BATCH_MAX`), `ports.ts` (`WireReadPart`, `WireReadParts`), `mapping.ts` (`readPartToWire`, `readPartFromWire` — `known` переноситься окремо від запиту; `readResultToWire`, `readResultFromWire` — маркери)
 - Test: `packages/simetra/src/model/runtime/__tests__/envelope.test.ts`, `read.test.ts`, `mapping.test.ts`
 
 **Interfaces:**
-- Produces: `READ_BATCH_MAX = 16`; `knownSchema` і тип `KnownVersions`; `WireReadPart = { type: "query"; query: WireRowsQuery & { known?: KnownVersions } } | { type: "version" }`; `WireReadParts = { epoch: string | null; items: Array<{ ok: true; value: WireReadValue } | { ok: false; error: WireCommandError }> }`; рядок результату — `WireRow | number | { $known: number; [copyColumn: string]: unknown }`; схема конверта бере частини як `z.array(z.unknown())` з межею, кожну частину валідує окрема схема (Task 5).
+- Produces: `READ_BATCH_MAX = 16`; `knownSchema` і тип `KnownVersions`; логічний маркер `KnownMarker = { known: number; copies?: Record<string, unknown> }` (копії — логічні імена) і `ReadPartValue = Omit<ReadRows, "rows"> & { rows: Array<Row | KnownMarker> }` у `read.ts`; `readResultToWire` / `readResultFromWire` (`mapping.ts`) кодують і декодують маркери; `WireReadPart = { type: "query"; query: WireRowsQuery & { known?: KnownVersions } } | { type: "version" }`; `WireReadParts = { epoch: string | null; items: Array<{ ok: true; value: WireReadValue } | { ok: false; error: WireCommandError }> }`; рядок результату — `WireRow | number | { $known: number; [copyColumn: string]: unknown }`; схема конверта бере частини як `z.array(z.unknown())` з межею, кожну частину валідує окрема схема (Task 5).
 
-- [ ] **Step 1: Unit (`it.each`, одна таблиця на схему).** `known` — прийняті й відхилені форми з Global Constraints, зокрема `reason: "known-form"` для `count`, сторінки ТЧ, «ТЧ власника» й картки з `tabularSections`; конверт `read` — 1 і 16 частин прийнято, 0 і 17 — відмова з причиною межі; рядки відповіді — ціле ≥ 0 і `{ $known }` прийнято, від'ємне, дробове й `{ $known: -1 }` — ні; `readPartToWire` / `readPartFromWire` переносять `known` без змін.
+- [ ] **Step 1: Unit (`it.each`, одна таблиця на схему).** `known` — прийняті й відхилені форми з Global Constraints, зокрема `reason: "known-form"` для `count`, сторінки ТЧ, «ТЧ власника» й картки з `tabularSections`; конверт `read` — 1 і 16 частин прийнято, 0 і 17 — відмова з причиною межі; рядки відповіді — ціле ≥ 0 і `{ $known }` прийнято, від'ємне, дробове й `{ $known: -1 }` — ні; `readPartToWire` / `readPartFromWire` переносять `known` без змін; `readResultToWire` / `readResultFromWire` — маркер туди й назад, частковий маркер з копіями в логічних і фізичних іменах; об'єкт з `$known` і з колонкою ключа — рядок, а не маркер.
 - [ ] **Step 2: Червоний → реалізація → зелений.** `pnpm --filter simetra test envelope read mapping`.
 - [ ] **Step 3: Commit.** `feat(model): частини запиту read, known з епохою і маркери у формі передачі`
 
@@ -110,14 +115,14 @@ B3-2 (B1c-1 змінює адаптер `src/data`, який переносит�
 ### Task 3: Будівник з умовною проєкцією
 
 **Files:**
-- Modify: `packages/simetra/src/server/read.ts` (`ReadPlan.known`, `listProjection`, `cardProjection`, `buildObjectPlan`, `includeStatement`), `read-filter.ts` (колонки фільтра кваліфіковано `t.`), ключ картки — `t.<ключ>`
+- Modify: `packages/simetra/src/server/read.ts` (`ReadPlan.known`, `renderKnown`, `listProjection`, `cardProjection`, `buildObjectPlan`, `readResult`, `decodeRows`), `decode.ts`, `read-filter.ts` (колонки фільтра кваліфіковано `t.`), ключ картки — `t.<ключ>`
 - Test: `packages/simetra/src/server/__tests__/read.test.ts`, `read-filter.test.ts`
 
 **Interfaces:**
 - Consumes: `KnownVersions` (Task 1), `copy` атрибута (Task 2), епоха бази транзакції (Task 4 передає її будівнику).
-- Produces: `buildReadPlan(object, query, known?: KnownVersions, dbEpoch?: string | null)`; коли `known` є й `known.epoch === dbEpoch !== null`: `LEFT JOIN unnest($keys::uuid[], $versions::bigint[]) WITH ORDINALITY AS simetra_known(simetra_known_key, simetra_known_version, simetra_known_position) ON simetra_known.simetra_known_key = t.<ключ>`, проєкція `CASE WHEN t.<версія> = simetra_known.simetra_known_version THEN <маркер> ELSE <рядок> END`, де маркер — `(simetra_known.simetra_known_position - 1)::text` без копій і `jsonb_build_object('$known', simetra_known.simetra_known_position - 1, <колонки copy з тими самими приведеннями, що в рядку>)::text` з копіями; `where`, RLS і порядок не змінюються; план віддає id цілей `include` з рядків першого оператора незалежно від маркера.
+- Produces: `ReadPlan.known?: KnownVersions` (план будується до `BEGIN` наявним `buildReadPlan(catalog, object, query)` з додатковим аргументом `known`) і `renderKnown(plan: ReadPlan, dbEpoch: string | null): ReadStatement` під час виконання; коли `known.epoch === dbEpoch !== null`: `LEFT JOIN unnest($keys::uuid[], $versions::bigint[]) WITH ORDINALITY AS simetra_known(simetra_known_key, simetra_known_version, simetra_known_position) ON simetra_known.simetra_known_key = t.<ключ>`, проєкція `CASE WHEN t.<версія> = simetra_known.simetra_known_version THEN <маркер> ELSE <рядок> END`, де маркер — `(simetra_known.simetra_known_position - 1)::text` без копій і `jsonb_build_object('$known', simetra_known.simetra_known_position - 1, <колонки copy з тими самими приведеннями, що в рядку>)::text` з копіями; `where`, RLS і порядок не змінюються; масиви `$keys` і `$versions` — текстом масиву Postgres (`{…}`, UUID і цілі без лапок), бо порт приймає `(string | null)[]`; `readResult` / `decodeRows` (`read.ts`, `decode.ts`) розбирають маркер-ціле й `{ $known }` без колонки ключа в `KnownMarker`.
 
-- [ ] **Step 1: Unit `read.test.ts`** (розібрані оператори): список і читання за ключами (`in` за ключем) з `known` і рівною епохою — `LEFT JOIN … WITH ORDINALITY` і `CASE` з однаковим типом гілок; `known` з іншою епохою чи `dbEpoch = null` — оператор без `known`; об'єкт з копіями — частковий маркер рівно з `$known`, ключем немає (лише позиція), колонками `copy`; `include` бере id для маркерних рядків; `ctx.read` будує той самий оператор, що й раніше. `read-filter.test.ts`: колонки кваліфіковано `t.`.
+- [ ] **Step 1: Unit `read.test.ts`** (розібрані оператори): список і читання за ключами (`in` за ключем) з `known` і рівною епохою — `LEFT JOIN … WITH ORDINALITY` і `CASE` з однаковим типом гілок; `known` з іншою епохою чи `dbEpoch = null` — оператор без `known`; об'єкт з копіями — частковий маркер рівно з `$known` і колонками `copy`, без ключа; `known` з `include` — `known-form`; `ctx.read` будує той самий оператор, що й раніше; `decodeRows` дає `KnownMarker`. `read-filter.test.ts`: колонки кваліфіковано `t.`.
 - [ ] **Step 2: Червоний → реалізація → зелений.** `pnpm --filter simetra test read read-filter hooks`.
 - [ ] **Step 3: Commit.** `feat(server): умовна проєкція known у будівнику читання`
 
@@ -128,9 +133,8 @@ B3-2 (B1c-1 змінює адаптер `src/data`, який переносит�
 - Test: `packages/simetra/src/server/__tests__/read-runtime.test.ts`
 
 **Interfaces:**
-- Produces: `CommandRuntime.readParts(session: SessionClaims, parts: readonly ReadPart[]): Promise<ReadPartsResult>`; `ReadPart = { type: "query"; query: ReadQuery; known?: KnownVersions } | { type: "version" }`; `ReadPartsResult = { epoch: string | null; items: Array<{ ok: true; value: ReadPartValue } | { ok: false; error: CommandError }> }`; опція рантайму `readBudgetMs` (типово 30 000).
-- Порядок результатів (П4-B §4.2): дедлайн перед частиною — вона й наступні `command.timeout` без виконання; помилка бази в частині — вона отримує свою помилку (`57014`, `25P04` — `command.timeout`), наступні — `batch-aborted`; втрата з'єднання — невиконаним `command.unavailable`; після `25P04` з'єднання знищується; виконані раніше частини лишають результати. Частина `version` бази не питає.
-
+- Produces: `CommandRuntime.readParts(session: SessionClaims, parts: readonly ReadPart[]): Promise<ReadPartsResult>`; `ReadPart = { type: "query"; query: ReadQuery; known?: KnownVersions }` (частину `version` обробляє лише обробник, Task 5); `ReadPartsResult = { epoch: string | null; items: Array<{ ok: true; value: ReadPartValue } | { ok: false; error: CommandError }> }`; опція рантайму `readBudgetMs` (типово 30 000).
+- Порядок результатів (П4-B §4.2): дедлайн перед частиною — вона й наступні `command.timeout` без виконання; помилка бази в частині — вона отримує свою помилку (`57014`, `25P04` — `command.timeout`), наступні — `batch-aborted`; втрата з'єднання — невиконаним `command.unavailable`; після `25P04` з'єднання знищується; виконані раніше частини лишають результати. 
 - [ ] **Step 1: Unit `read-runtime.test.ts`** (порт-фейк з журналом операторів): рівно `BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY`, налаштування (розібране: усі `set_config` Р1, `role` останнім), `SELECT simetra.row_version_epoch()`, по оператору на частину й ціль, `COMMIT`; залишок бюджету менший за стелю — окремий `set_config('statement_timeout', …)` перед оператором; дедлайн — `command.timeout` без операторів; `57014` у другій з трьох частин — перша з результатом, друга `command.timeout`, третя `batch-aborted`; обрив з'єднання — `command.unavailable` невиконаним; `runtime.read` дає ті самі оператори з однією частиною; епоха з оператора епохи — в результаті.
 - [ ] **Step 2: Червоний → реалізація → зелений.** `pnpm --filter simetra test read-runtime transaction`.
 - [ ] **Step 3: Commit.** `feat(server): пакет читань в одній транзакції REPEATABLE READ`
@@ -140,19 +144,26 @@ B3-2 (B1c-1 змінює адаптер `src/data`, який переносит�
 **Files:**
 - Modify: `packages/simetra/src/server/data-handler.ts` (кроки 1, 3, 5, 6 для частин; `envelopeRefusal` — шлях `items.<i>`; невідомий тип запиту й `read` без `items` — `stale-client`), `compatibility.ts` (звірка на частину), `response-budget.ts` (`fitParts`), `origin.ts` (`IN_PROCESS_TYPES = {"read"}`)
 - Modify (споживачі старого запиту `version`): `packages/simetra/src/server/__tests__/data-handler*.test.ts`, `compatibility.test.ts`, `packages/simetra/src/data/__tests__/runtime.test.ts`, `packages/designer/src/__tests__/data-handler.db.test.ts`; адаптер `packages/simetra/src/data/adapter.ts` — мінімально: одна частина `query`
-- Test: `packages/simetra/src/server/__tests__/data-handler.test.ts`, `response-budget.test.ts`, `origin.test.ts`, `packages/designer/src/__tests__/read-batch.db.test.ts` (Create)
+- Test: `packages/simetra/src/server/__tests__/data-handler.test.ts`, `response-budget.test.ts`, `origin.test.ts`
 
 **Interfaces:**
 - Consumes: `readParts` (Task 4), схеми Task 1.
 - Produces: `fitParts(index, parts, result: WireReadParts, serverHash): WireReadParts` — частини по черзі; частина, чий результат не вміщується в залишок, а окремо вмістився б, виконана й відкинута, вона й наступні — `batch-budget` (сторінка — непорожній префікс з `more: true`, коли вміщується); частина, що не вміщується й сама, — `response-too-large`.
 
-- [ ] **Step 1: Unit:** невалідна частина — `command.invalid` лише їй; несумісна — `stale-client` лише їй; `version` — значення каталогу без звернення до порту; `subject` ≠ `sub` — відмова всього запиту; `{ type: "version" }` і `read` з `query` замість `items` — `stale-client`; обидві гілки бюджету пакета; `inProcess` пропускає `read` з будь-якими частинами, `run` і `receipt` — ні.
+- [ ] **Step 1: Unit:** невалідна частина — `command.invalid` лише їй; несумісна — `stale-client` лише їй; `version` — значення каталогу без звернення до порту; `subject` ≠ `sub` — відмова всього запиту; `{ type: "version" }` і `read` з `query` замість `items` — `stale-client`; невідомий тип частини — `command.invalid` лише їй; обидві гілки бюджету пакета; `inProcess` пропускає `read` з будь-якими частинами, `run` і `receipt` — ні.
 - [ ] **Step 2: Червоний → реалізація → зелений.** `pnpm --filter simetra test data-handler response-budget origin compatibility runtime`.
-- [ ] **Step 3: DB `read-batch.db.test.ts`** (причина DB: RLS, `unnest`, знімок `REPEATABLE READ` і епоха B1e виконує Postgres; під справжньою роллю входу): ключ із `known`, невидимий під RLS, — відсутній; ключ поза `where` — відсутній; рівна версія й епоха — маркер; інша версія — рядок; `known` іншої епохи — повна відповідь; поширення копії носія без підвищення версії — частковий маркер з новою копією; пакет з двох частин і конкурентний коміт між ними (друге з'єднання) — обидві бачать стан до коміту; `epoch` — 64 hex.
-- [ ] **Step 4: Гейти B1c-1.** `pnpm format:check && pnpm lint && pnpm typecheck && pnpm test`, `pnpm --filter @simetrajs/designer test:db read-batch read-query data-handler runtime-login`.
-- [ ] **Step 5: Commit.** `feat(server): обробник частин read, бюджет пакета й походження`
+- [ ] **Step 3: Commit.** `feat(server): обробник частин read, бюджет пакета й походження`
 
-**Готово B1c-1:** unit T0/T1/T3 і DB-кейси Task 5 зелені; окремого запиту `version` немає; `runtime.read` і MCP `data-read` працюють як раніше.
+### Task 5b: DB-кейси пакета читань
+
+**Files:**
+- Create: `packages/designer/src/__tests__/read-batch.db.test.ts`
+
+- [ ] **Step 1: DB** (причина DB: RLS, `unnest`, знімок `REPEATABLE READ` і епоха B1e виконує Postgres; під справжньою роллю входу): ключ із `known`, невидимий під RLS, — відсутній; ключ поза `where` — відсутній; рівна версія й епоха — маркер; інша версія — рядок; `known` іншої епохи — повна відповідь; база без рядка епохи — `epoch: null` і повна відповідь; поширення копії носія без підвищення версії — частковий маркер з новою копією; пакет з двох частин і конкурентний коміт між ними (друге з'єднання) — обидві бачать стан до коміту; `epoch` — 64 hex.
+- [ ] **Step 2: Гейти B1c-1.** `pnpm format:check && pnpm lint && pnpm typecheck && pnpm test`, `pnpm --filter @simetrajs/designer test:db read-batch read-query data-handler runtime-login`.
+- [ ] **Step 3: Commit.** `test(server): DB-кейси пакета читань`
+
+**Готово B1c-1:** unit T0/T1/T3 і DB-кейси Task 5b зелені; окремого запиту `version` немає; `runtime.read` і MCP `data-read` працюють як раніше.
 
 ## B1c-2. Порт, джерело ядра, епоха, документи
 
@@ -173,7 +184,7 @@ B3-2 (B1c-1 змінює адаптер `src/data`, який переносит�
 - Test: тести `source`, `readers`, `include` гілки B3-2
 
 **Interfaces:**
-- Produces: `CoreSource.read(parts: readonly RowsQuery[]): Promise<CoreReadResult>`, `CoreReadResult = { epoch: string | null; startEpoch: number; items: Array<{ ok: true; rows: ReadRows } | { ok: false; error: CommandError }> }` (`startEpoch` — епоха сесії на старті читання); `readKeys` ділить ключі на частини по 200 і частини на запити по `READ_BATCH_MAX`, один слот обмежувача на запит; `batch-aborted` — повтор частин після упалої наступним запитом через обмежувач з паузою, що зростає; `batch-budget` — повтор наступним запитом; навпіл на `response-too-large` — як було.
+- Produces: `CoreSource.read(parts: readonly RowsQuery[]): Promise<CoreReadResult>`, `CoreReadResult = { epoch: string | null; startEpoch: number; items: Array<{ ok: true; rows: ReadRows } | { ok: false; error: CommandError }> }` (`startEpoch` — епоха сесії на старті читання); `readKeys` ділить ключі на частини по `ReadKeysOptions.keysPerRequest` (≤ 200), а форма картки — по ключу на частину, і частини — на запити по `READ_BATCH_MAX`, один слот обмежувача на запит; `batch-aborted` — повтор частин після упалої наступним запитом через обмежувач з паузою, що зростає; `batch-budget` — повтор наступним запитом; навпіл на `response-too-large` — як було.
 
 - [ ] **Step 1: Unit:** 1 000 ключів — 5 частин в одному запиті й один слот; 4 000 ключів — два запити; `batch-aborted` у третій частині — повтор частин 3…n без упалої, з паузою; `batch-budget` — повтор; маркер без `known` — `command.internal`.
 - [ ] **Step 2: Червоний → реалізація → зелений.** `pnpm --filter simetra test source readers include core`.
@@ -195,14 +206,14 @@ B3-2 (B1c-1 змінює адаптер `src/data`, який переносит�
 ### Task 9: Правило перемикання епохи
 
 **Files:**
-- Modify: `packages/simetra/src/data/store/epoch.ts` (`Epochs.forgetVersions()` — пам'ять версій; надгробки, горизонт і поховання пар лишаються; на відміну від `clear()`), `core.ts` / `session.ts` (поточна епоха й подія перемикання; Р6–Р8), `types.ts` (причина `stale` — `epoch`), модельний тест B3-2
+- Modify: `packages/simetra/src/data/store/epoch.ts` (`Epochs.forgetVersions()` — пам'ять версій; надгробки, горизонт і поховання пар лишаються; на відміну від `clear()`), `session.ts` (поточна епоха, покинуті, подія перемикання; `acceptEpoch(epoch: string | null, startEpoch: number): "apply" | "discard"` — єдина точка перевірки перед записом у сховище), виклики `acceptEpoch` у `readers.ts`, `include.ts`, `writer.ts`, `core.ts`, `object-store.ts` (позначка `stale.epoch` у `RowEntry.stale`; перемикання скидає `stale.minVersion` рядків і ТЧ; `remember` лише для поточної епохи), `types.ts` (`DEFAULT_CORE_LIMITS.revalidateIntervalMs = 60_000` — розкид Р8; такт інтервалу — B5), модельний тест B3-2
 - Test: тести `epoch`, `core` гілки B3-2; модельний тест
 
 **Interfaces:**
 - Consumes: `CoreReadResult.epoch`, `startEpoch` (Task 7).
 - Produces: перша непорожня епоха сесії задає поточну без скидання; інша непорожня — перемикання: `forgetVersions()`, `stale` з причиною `epoch` усім рядкам, перечитування видимих виглядів з розкидом `[0, revalidateIntervalMs)`; відповідь іншої епохи від читання з `startEpoch` до перемикання не застосовується (ключі — `stale` і перечитування); позначку `epoch` знімає читання, що почалось після перемикання.
 
-- [ ] **Step 1: Unit:** чергування `A`, `null`, `A` — жодного перемикання; `A` → `B` — `forgetVersions`, `stale`, перечитування в межах інтервалу, а не одразу; пізня відповідь `A` після перемикання — не застосовано; читання до `buryPair`, відповідь з епохою `B` — рядок не записано; `purge` після перемикання діє як раніше.
+- [ ] **Step 1: Unit:** чергування `A`, `null`, `A` — жодного перемикання; `A`, `B`, `A` — друга `A` покинута, не застосована й не перемикає; відповідь, що спричинила перемикання, застосована; `stale.minVersion` старої епохи знято першим читанням нової; `disown` після перемикання не пише в пам'ять версію старої епохи; `A` → `B` — `forgetVersions`, `stale`, перечитування в межах інтервалу, а не одразу; пізня відповідь `A` після перемикання — не застосовано; читання до `buryPair`, відповідь з епохою `B` — рядок не записано; `purge` після перемикання діє як раніше.
 - [ ] **Step 2: Модельний тест** — крок «перемикання епохи» з вагою; інваріанти «версія не зменшується» і «видалене й `purge` не воскресають» — у межах однієї епохи й через перемикання відповідно.
 - [ ] **Step 3: Червоний → реалізація → зелений.** `pnpm --filter simetra test epoch core model`.
 - [ ] **Step 4: Commit.** `feat(data): версії порівнюються в межах однієї епохи версій бази`
@@ -210,7 +221,7 @@ B3-2 (B1c-1 змінює адаптер `src/data`, який переносит�
 ### Task 10: Спеки
 
 **Files:**
-- Modify: `docs/superpowers/specs/2026-11-05-p4-b-client-data-design.md` — Рд24 і §6.2 правило 1 (Р5–Р8); §4.2 і §6.7 (Р1: 4 + частини + цілі, грант епохи); §12 (бюджет операторів 4 + частини + цілі); §4.5 і §5.1 (`value.epoch`, частини без окремого `version`, `stale-client` для старої форми); §4.1 (`known` лише у формі передачі й частині; маркери `n` і `{ $known }`); §3 (позначка `copy`); §6.6 (знімок SSR несе епоху — рядок Додатка А з колонкою B3-6); Додаток А — рядки B1c «внесено (B1c)»
+- Modify: `docs/superpowers/specs/2026-11-05-p4-b-client-data-design.md` — Рд24 і §6.2 правило 1 (Р5–Р8); §4.2 і §6.7 (Р1: 4 + частини + цілі, грант епохи); §12 (бюджет операторів 4 + частини + цілі); §4.5 і §5.1 (`value.epoch`, частини без окремого `version`, `stale-client` для старої форми); §4.1 (`known` лише у формі передачі й частині; маркери `n` і `{ $known }`); §3 (позначка `copy`); Рд40 (частковий маркер — `$known` і копії, без ключа й версії); §4.1 абзац «Епоха версій» (окремий оператор під роллю читання, епоха — у `value.epoch`); обґрунтування Рд41 і рядок B1c у §13 (лічильник операторів); §8.4 (`row_ver` сигналу — лише в межах поточної епохи, для B5); §14.3 (серверна межа одночасних читань на `subject` — П4-D); §6.6 (знімок SSR несе епоху — рядок Додатка А з колонкою B3-6); Додаток А — рядки B1c «внесено (B1c)»
 - Modify: `docs/superpowers/specs/2026-09-24-simetra-platform-design.md` §8.1 (рядок Додатка А), `docs/superpowers/specs/2026-10-26-p4-runtime-design.md` §6.11 (транзакція читання `REPEATABLE READ READ ONLY`)
 
 - [ ] **Step 1: Правки** за переліком; кожна — стан, без історії.
@@ -235,3 +246,6 @@ B3-2 (B1c-1 змінює адаптер `src/data`, який переносит�
 | перемикання епохи скидає надгробки | Task 9 (`buryPair`) |
 | `null` змінює епоху | Task 9 (чергування) |
 | обмежувач рахує частину, а не запит | Task 7 |
+| повернення на покинуту епоху перемикає | Task 9 (`A`, `B`, `A`) |
+| перемикання без скидання `stale.minVersion` | Task 9 |
+| `known` разом з `include` приймається | `envelope.test.ts` |
