@@ -1,28 +1,29 @@
 # П4-B5b — знімок прав клієнта, приймач сигналів і транспорт Centrifugo: план реалізації
 
 > **Статус:** проєкт плану, 2026-11-08; приймає архітекторка
-> `runtime-client-data`. Блок B5b спеки П4-B. Межі B5a/B5b задає план
-> B5a (задача 0: поділ рядка B5 у §13). Дві частини, кожна має своє «готово»
-> й окремий PR (рішення архітекторки):
+> `runtime-client-data`. Блок B5b спеки П4-B. Межі B5a/B5b задає план B5a
+> (задача 0: поділ рядка B5 у §13). Дві частини, кожна має своє «готово» й
+> окремий PR (рішення архітекторки):
 > - **A** — знімок прав клієнта;
 > - **B** — приймач сигналів і транспорт.
 >
-> **Залежності.** Частина A — після B1c, B3-2, B3-3, B3-6 і B5a. Частина B —
-> ще й після ПГ-4/B2 частин B і C. Якорі на незмерджене позначено «після X».
-> На `main` зараз немає ядра T4 (`createCore`, `CoreSession`), частини пакета
-> `read`, функцій сигналу й `SignalTokens`: усе це дають плани
-> [B3-2](2026-11-08-p4-b3-2-core.md), [B3-3](2026-11-08-p4-b3-3-window-public-api.md),
+> **Залежності.** B3-2 і B3-3 — у `main` до старту. Частина A — після B1c,
+> B3-2, B3-3, B3-4, B3-6, B5a і ПГ-3 (`sessionKind`). Частина B — ще й після ПГ-4/B2 частин B і C. Якорі на
+> незмерджене позначено «після X». На `main` зараз немає ядра T4
+> (`createCore`, `CoreSession`), частин пакета `read`, функцій сигналу й
+> `SignalTokens`: їх дають плани [B3-2](2026-11-08-p4-b3-2-core.md),
+> [B3-3](2026-11-08-p4-b3-3-window-public-api.md),
 > [B3-4/B3-5](2026-11-08-p4-b3-4-b3-5-write-receipts.md),
 > [B3-6](2026-11-08-p4-b3-6-oracle-host-ssr.md),
-> [B1c](2026-11-08-p4-b1c-conditional-batched-reads.md), B5a і
+> [B1c](2026-11-08-p4-b1c-conditional-batched-reads.md), B5a,
+> [ПГ-3](2026-11-08-pg-3-identity-better-auth.md) і
 > [ПГ-4/B2](2026-11-08-pg-4-b2-signal-transport.md).
 > **Межа з B6** (рішення архітекторки). Функції сигналів прав, підписка на
-> `simetra-rights:` і `simetra-user:`, реакція на їхні сигнали, контракт
-> прав у каталозі, обчислювач і `useCan` — B6. B5b дає `refreshTokens` як
-> метод порту з тестом на фейковому каналі й підписується лише на канали
-> змін. **B6 розширює `rightsSnapshot`, не дублює:** знімок прав клієнта —
-> одне сховище; B6 додає до нього права дій поряд зі `scopeSets` і другого
-> кешу прав не заводить.
+> `simetra-rights:` і `simetra-user:`, реакція на їхні сигнали, контракт прав
+> дій у каталозі, обчислювач і `useCan` — B6. B5b дає `refreshTokens` як
+> метод порту й підписується лише на канали змін. **B6 розширює
+> `rightsSnapshot`, не дублює:** знімок прав клієнта — одне сховище; B6 додає
+> до нього права дій поряд зі `scopeSets` і другого кешу прав не заводить.
 > **Спільні стеки.** Виконавець **ніколи** не виконує `pnpm db:stop`,
 > `pnpm db:start`, `pnpm db:pg:stop`, `supabase stop`. DB-тести запускає
 > лише через `pnpm --filter … test:db*` під замками стеків.
@@ -37,28 +38,32 @@
 - клієнт підписується на канали змін пар (скоуп, об'єкт), де має право
   `read`;
 - сигнал оновлює рядки ядра одним пакетом читань за правилами §8.4;
-- втрата доступу прибирає дані (`purge`) незалежно від каналу.
+- втрата доступу прибирає дані (`purge`) незалежно від каналу й токена.
 
 **Architecture:**
 - **A.** `simetra.rights_client_snapshot()` — генерований SQL T1
   (`STABLE SECURITY INVOKER`). Читає його `runtime.rightsSnapshot(session)`
-  T3 частиною `rights` пакета `read`. Сховище знімка й порівняння знімків
-  живуть у ядрі T4.
-- **A.** Предикат підписки — чиста функція T4 над знімком, дзеркало режиму
-  підписки `signal_topic_allowed`. Їхню еквівалентність доводить DB-тест.
-- **B.** Порт `SignalTransport` T0 розширюється до форми §8.5. Реалізація —
+  T3 частиною `rights` пакета `read`. Сховище знімка, правило втрати
+  доступу й предикат підписки живуть у T4 (`src/data/rights/`).
+- **A.** Втрату доступу ядро рахує від **вмісту сховища** проти нового
+  знімка (Р5). Порівняння двох знімків потрібне лише для звуження.
+- **B.** Порт `SignalTransport` T0 — форма §8.5. Реалізація —
   `simetra/data/centrifugo` над необов'язковою peer `centrifuge`.
-- **B.** Приймач — модуль рантайму T4 над портом і ядром. Він не пише в
-  сховище інакше, ніж через `commit` з токеном (§6.1).
+- **B.** Приймач — модуль рантайму T4 над портом і ядром. Читає через новий
+  `CoreSession.readKeys` і `revalidate`, а в сховище пише лише через `commit`
+  з токеном (§6.1).
 
 **Tech Stack:** TypeScript 7, Zod, Vitest 5 (фейкові таймери), fast-check,
-`pg` 8.23.1, Postgres 17, Centrifugo v6 (стенд ПГ-4/B2), `centrifuge` 5.8.0.
+Playwright (`page.clock`), `pg` 8.23.1, Postgres 17, Centrifugo v6 (стенд
+ПГ-4/B2), `centrifuge` 5.8.0.
 
 **Spec:** [П4-B](../specs/2026-11-05-p4-b-client-data-design.md):
-- §4.5 (частина `rights`), §6.1, §6.2 правило 4, §6.5, §6.6 (`rightsVersion`);
-- §8.1, §8.3–§8.6, §9.1, §9.3, §10;
+- §3 (клієнтський каталог), §4.5 (частина `rights`), §6.1, §6.2 правило 4,
+  §6.3, §6.5, §6.6, §6.7 (бюджети);
+- §8.1, §8.3–§8.6, §9.1, §9.3, §10, §11;
 - §12 (рядки «unit T4 (приймач…)», «DB `simetra`» — кейси знімка й
-  еквівалентності, «стенд сигналу», мутації), §13 рядок B5b;
+  еквівалентності, «стенд сигналу», браузерні бюджети, «лінт і типи»,
+  мутації), §13 рядок B5b;
 - платформна Р39, Р42; рішення T4 §3.6;
 - [звіт спайку realtime](../specs/2026-11-08-t4-realtime-spike-report.md).
 
@@ -70,128 +75,172 @@
   — англійською.
 - Коміти: Conventional Commits, опис українською, без трейлерів. Push і PR
   робить архітекторка.
-- 🔴 Без `--` перед шаблоном vitest у `pnpm --filter` (`AGENTS.md`).
+- 🔴 Без `--` перед шаблоном vitest у `pnpm --filter` (`AGENTS.md`). Шаблон —
+  шлях теки, коли ім'я файлу збігається з файлами інших ярусів
+  (наприклад, `src/data/rights`, а не `rights-snapshot`).
 - Команди DB-тестів: стек `postgres` — `pnpm --filter <пакет> test:db <шаблон>`,
   стек `supabase` — `pnpm --filter <пакет> test:db:supabase <шаблон>` (лише
   `*.supabase.db.test.ts`). Кейс «на обох стеках» — спільне тіло в
   `*.support.ts` і два тонкі файли.
 - Приймач і знімок пишуть у сховище лише через `core.commit(fn, token)`;
-  `commit` зі старим токеном нічого не пише (§6.1). Сигнал чи відповідь,
-  що прийшли після `dispose()` чи закриття, — 0 записів і 0 запитів.
+  `commit` зі старим токеном нічого не пише (§6.1). Сигнал, відповідь чи
+  таймер після `dispose()` чи закриття — 0 записів і 0 запитів.
 - Одна подія — один синхронний прохід; частини йдуть у збирач B3-3 в одній
-  мікрозадачі (як B5a).
-- **Бюджети Р42** — кожен сценарій у тесті називає число запитів явно
-  (`countingTransport` B3-3):
+  мікрозадачі. Перечитування несуть `known` (B1c).
+- **Бюджети Р42.** Кожен сценарій у тесті називає число запитів явно
+  (`countingTransport` B3-3), а де §12 задає байти — і байти:
   - пачка сигналів одного об'єкта на N ≤ 200 ключів — рівно 1 запит;
-  - пачка на кількох об'єктах (до `READ_BATCH_MAX` частин) — рівно 1 запит;
+  - пачка на кількох об'єктах — `⌈частин / READ_BATCH_MAX⌉` запитів (≤ 16
+    частин — 1); тіло й відповідь ≤ 1,1 × корисних + 2 КіБ;
+  - 201+ ключ одного об'єкта — `revalidate` видимих виглядів, 1 запит;
   - власне відлуння — 0;
-  - приєднання з `recovered: true` — 0 перечитувань;
-  - приєднання без `recovered` — рівно 1 запит (частини `version`, `rights`
-    і перечитування видимих виглядів) після джитера;
-  - сигнал `delete` для ключа поза сховищем — 0;
-  - відмова `auth` каналу змін — 0 запитів, лише `purge`.
-- Пачка сигналів: тиша `QUIET_MS = 50`, найдовше `MAX_BATCH_MS = 2000`;
-  бюджет ключів `KEYS_PER_READ = 200`; дочитування очікуваної мінімальної
-  версії — до `MIN_VERSION_RETRIES = 3`; джитер приєднання без `recovered` —
-  рівномірно 0–2000 мс (`REJOIN_JITTER_MS = 2000`). Сталі — T4,
-  `src/data/runtime/signals.ts`.
-- Дедуплікація — за `id` повідомлення (десятковий рядок id рядка outbox,
-  Р4 плану ПГ-4/B2), множина останніх `SEEN_SIGNALS_MAX = 4096` id.
-- Об'єкт у рядках знімка — мітка виду (`kindLabel`); T4 мапить її на UUID
-  об'єкта клієнтським каталогом. Невідома мітка — рядок пропускається.
-- Пакет `simetra` без `centrifuge` у `dependencies`; `centrifuge` — лише
-  необов'язкова peer і devDependency. `src/data/**`, крім
-  `src/data/centrifugo/**`, `centrifuge` не імпортує (лінт-зона).
+  - `delete` для ключа поза сховищем — 0;
+  - `invalidate` — 1 запит на пачку для видимих виглядів пари й ТЧ
+    власників; невидимим — 0 і `needsRefresh`;
+  - приєднання з `recovered: true` — 0 перечитувань виглядів;
+  - приєднання без `recovered` — рівно 1 запит на хвилю приєднань, лише з
+    частинами, чиє останнє читання почалося до запиту підписки (Р11);
+    «нічого не змінилось» — тіло ≤ 64 Б × ключів `known` + 2 КіБ;
+  - нова підписка (монтування вигляду, новий канал після заміни знімка) —
+    0 зайвих запитів;
+  - `auth` каналу — 0 запитів, лише `purge`;
+  - `transport` — 0 запитів, лише позначки «розрив».
+- Сталі T4 (`src/data/runtime/signals.ts`): пачка — тиша `QUIET_MS = 50`,
+  найдовше `MAX_BATCH_MS = 2000`; `KEYS_PER_READ = 200`; дочитування
+  очікуваної мінімальної версії — `MIN_VERSION_RETRIES = 3` з паузою
+  `MIN_VERSION_RETRY_MS = 500 × 2^(n−1)`; вікно джитера приєднання —
+  `REJOIN_JITTER_MS = 2000`; тиша зняття позначки після `recovered: true` —
+  `RECOVERED_SETTLE_MS = 50`; дедуплікація — `SEEN_SIGNALS_MAX = 4096`
+  останніх `id`.
+- `id` повідомлення — десятковий рядок id рядка outbox (Р4 плану ПГ-4/B2).
+- Об'єкт у рядках знімка — мітка виду (`kindLabel`); T4 мапить її на ім'я
+  об'єкта (`ObjectName`) клієнтським каталогом. Невідома мітка — рядок
+  пропускається й пишеться в журнал.
+- `centrifuge` — лише необов'язкова peer (`^5.8.0`) і devDependency
+  (`5.8.0`); імпорт значення — лише в `src/data/centrifugo/**`.
 - Без shims (`AGENTS.md`, принцип 5): стара форма порту `SignalTransport`
-  прибирається в тій самій зміні.
+  (`SignalErrorKind`, `onSubscribed` без аргументів) прибирається в тій самій
+  зміні.
 
 ## Рішення
 
 | № | Рішення | Вплив на спеку |
 | --- | --- | --- |
 | Р1 | Поділ на A і B, межа з B6 і правило «B6 розширює `rightsSnapshot`, не дублює» — рішення архітекторки | §13 рядки B5b і B6 (задача 0) |
-| Р2 | **Межа B5b для втрати доступу без сигналу прав** (рішення архітекторки). До B6 втрату доступу ловлять: порівняння знімків на звірці — гідратація, `resume()`, приєднання без `recovered`, перечитування знімка за `command.unavailable` на `create` кореня; а також `command.forbidden` чи відсутній рядок (Р36). Затримку обмежує інтервал свіжості `revalidateIntervalMs`. B6 посилює цю межу сигналами прав | §8.4 — абзац межі B5b (задача 0) |
-| Р3 | Форма знімка T0 — `rightsSnapshotSchema`: `{ userId: uuid \| null; projectionVersion?: string; versions?: { scopeKind, scope, version: string }[]; scopeSets: { scopeKind, scope }[]; rights: { level, levelId, scope, container, object, action, extent, dimension }[] }`. `rights` — рядки `rights_mine()` у camelCase, `object` — `kindLabel`. Поля `scopes`, `dimensionValues`, `containers` §9.1 додає B6 разом з обчислювачем: B5b їх не споживає | §9.1 — поля за блоками (задача 0) |
-| Р4 | `rightsVersion` — рядок `<projectionVersion>:<sha-256 відсортованих versions>` (T0 `rightsVersionOf(snapshot)`); без `projectionVersion` — `undefined`. Однакові знімки дають однаковий рядок | §6.6 — значення `rightsVersion` (задача 0) |
-| Р5 | Порівняння знімків (§6.2 правило 4): пара (скоуп, об'єкт), де в старому знімку предикат `read` (будь-який обсяг, зокрема контейнер) істинний, а в новому — ні, або скоуп зник зі `scopeSets` → `purge` пари. Звуження обсягу (набір `extent` для пари зменшився, але не до нуля) → `revalidate` усіх виглядів об'єкта, зокрема невидимих (до B6). Зміна `userId` — закриття сесії `session-changed` | немає |
-| Р6 | Предикат підписки `canSubscribe(snapshot, channel, catalog): boolean` — режим підписки `signal_topic_allowed` для каналу змін (§8.3): `userId` `null` → `false`; несигнальний чи невідомий об'єкт → `false`; `publicRead` → `true`; скоуплений — скоуп у `scopeSets` виду **і** рядок `rights` з `action = 'read'`, `object` = мітка, `extent` ∈ `any`, `own`, вимір, а `level` глобальний чи скоуп рядка = скоуп каналу; нескоуплений — такий рядок на будь-якому рівні, крім контейнерного. Канали `simetra-rights:`, `simetra-user:` → `false` (до B6) | немає |
-| Р7 | Канали підписки — для кожного сигнального об'єкта з **активними** виглядами (видимими й невидимими змонтованими, §8.4), для кожного скоупу `scopeSets` виду, де `canSubscribe` істинний; `publicRead` — ще скоупи активних виглядів; нескоуплений — `ZERO_UUID`. Перерахунок — на кожній заміні знімка й на зміні множини об'єктів з активними виглядами, злитий в одну мікрозадачу. Канал, відхилений `auth`, не повторюється до наступної заміни знімка | немає |
-| Р8 | Порт T0 (§8.5): `subscribe(channels, onSignal, onError({ kind, channel? }))`, `onSubscribed(({ channel, recovered }) => void)`, `refreshTokens(channels?): Promise<void>`. Реалізація `createCentrifugoTransport` — `src/data/centrifugo/`, вхід `simetra/data/centrifugo`, лінт-зона дозволяє `centrifuge` лише там | §8.5 — вже така форма; немає |
-| Р9 | Сигнал `schema` — це відповідь читання `command.unavailable` з `reason: "schema"` (таблиця «подія → `version`» B3-4). Приймач кличе `core.requestVersion()` раз на подію | немає |
-| Р10 | Позначки «розрив» (`markDisconnected`) — на `onError({ kind: "transport" })` для каналу (без каналу — усіх). Знімає їх: `recovered: true` — після пачки відновлених сигналів; `recovered: false` — `revalidate` (B3-2: `revalidate` позначки не знімає, тож приймач кличе `clearDisconnected(channel)` після успішного `revalidate` виглядів каналу) | немає |
+| Р2 | **Межа B5b для втрати доступу без сигналу прав** (рішення архітекторки). До B6 втрату доступу ловлять: правило Р5 на кожній заміні знімка — перший пакет рантайму, гідратація, `resume()`, приєднання без `recovered`, зміна `serverHash`, `command.unavailable` на `create` кореня; а також `command.forbidden` чи відсутній рядок (Р36). Затримку обмежує інтервал свіжості `revalidateIntervalMs`. B6 посилює цю межу сигналами прав | §8.4 — абзац межі B5b (задача 0) |
+| Р3 | Форма знімка T0 — `rightsSnapshotSchema`: `{ userId: uuid \| null; projectionVersion?: string; versions?: { scopeKind, scope, version: string }[]; scopeSets: { scopeKind, scope }[]; rights: { level: string; levelId: uuid \| null; scope: uuid \| null; container: uuid \| null; object: string; action: string; extent: string; dimensionId: uuid \| null }[] }`. `rights` — рядки `rights_mine()` у camelCase (`MINE_COLUMNS`), зокрема рівень `everyUser`; `level` і `extent` — рядки без переліку, щоб новий рівень не валив схему. Поля `scopes`, `dimensionValues`, `containers` §9.1 додає B6 | §9.1 — поля за блоками (задача 0) |
+| Р4 | `rightsVersion` — hex sha-256 канонічного JSON знімка: `userId`, `scopeSets` і рядки `rights` з `action = 'read'` (обидва відсортовані за всіма полями), `versions` (відсортовані), `projectionVersion`. Рахується **під час запису** знімка в сховище (WebCrypto, асинхронно) і зберігається поруч; `dehydrate()` бере готове значення синхронно. Визначений у кожному проєкті з функціями прав | §6.6 — значення `rightsVersion`; гілка «знімок без `rightsVersion`» лишається лише для проєкту без функцій прав (задача 0) |
+| Р5 | **Втрата доступу — від сховища.** На кожній заміні знімка (зокрема першій) ядро перебирає пари (збережений скоуп, об'єкт), що є в сховищі, знімках показу вікна, цілях `include`, `SectionStore` і чернетках `card`. Для кожної пари `readAllowed(snapshot, pair)` хибний → `purge` пари. `readAllowed` — будь-який обсяг `read`, зокрема контейнер, або `publicRead`, або несигнальний об'єкт без скоупу з будь-яким рядком `read`. **Звуження** — порівняння повних кортежів рядків `read` пари (`level`, `levelId`, `scope`, `container`, `extent`, `dimensionId`): зник кортеж, а `readAllowed` лишився істинним → `revalidate` усіх виглядів об'єкта, зокрема невидимих і підмножин `include` (§6.2 правило 4; до B6). Зміна `userId` — шлях `session-changed` рантайму (`onSessionChanged`, `RuntimeHolder`) | немає |
+| Р6 | Предикат підписки `canSubscribe(snapshot, channel, catalog)` — дзеркало режиму підписки `signal_topic_allowed` для каналу змін (§8.3): `userId` `null` → `false`; невідомий чи несигнальний об'єкт → `false`; вид у топіку ≠ вид скоупу об'єкта → `false`; `publicRead` → `true`; скоуплений — скоуп у `scopeSets` виду **і** рядок з `action = 'read'`, мітка об'єкта, `extent` ∈ `any`, `own`, вимір, `level = 'scope'` і `scope` = скоуп каналу (так рахують `rights_any/own/dim`); нескоуплений — такий рядок з `level` ≠ `container` (так рахує `has_right`), зокрема `everyUser`; канали прав — `false` | немає |
+| Р7 | Канали підписки — для кожного сигнального об'єкта з **активними** виглядами (§8.4), для скоупів `scopeSets` виду з `canSubscribe` істинним; `publicRead` — ще скоупи активних виглядів; нескоуплений — `ZERO_UUID`. Перерахунок — на заміні знімка й на зміні множини об'єктів з активними виглядами, злитий в одну мікрозадачу. Підписка — **дельтою, по каналу**: `subscribe([channel], …)` для нового, його `Unsubscribe` для знятого; незмінні канали не перепідписуються. Канал, відхилений `auth`, не повторюється до наступної заміни знімка | немає |
+| Р8 | Порт T0 (§8.5): `subscribe(channels, onSignal, onError({ kind, channel? }))`, `onSubscribed(({ channel, recovered }) => void)`, `refreshTokens(channels?): Promise<void>`. `kind: "auth"` — лише явна відмова (host повернув 401/403 чи канал не в дозволених); мережевий збій і 5xx endpoint-а — `transport` | §8.5 — уточнення `auth` (задача 0) |
+| Р9 | Сигнал `schema` (`command.unavailable` з `reason: "schema"`) дають лише коди PostgREST (§5.3, §7.3) — у B5b джерела немає. Обробка переходить у B4 разом із `reason` (рішення архітекторки) | §13 рядок B4; плани B3-4 і B5a (задача 0) |
+| Р10 | `CoreSession.readKeys(object, keys): Promise<ReadKeysResult>` — тонка обгортка ядра (рішення архітекторки), **без другого читача**: над наявним `readKeys` з `store/source.ts` B3-2 (200 ключів на запит, поділ навпіл на `response-too-large`) і над тим самим шляхом запису, що й хвостове перечитування `stale-inserted` (епоха старту, `commit` з токеном, правило версії, надгробки). Іде через збирач B3-3. `ReadKeysResult = { returned: Key[]; missing: Key[]; versions: Map<Key, number> }` | немає |
+| Р11 | **Приєднання без `recovered` перечитує лише застаріле.** Для каналу запам'ятовується мить запиту підписки `subscribeAt`. Перечитуються лише вигляди пари з `refreshedAt < subscribeAt` (B5a); частина `rights` — лише коли останнє читання знімка почалося до `subscribeAt`; `version` — лише коли `lastVersionAt < subscribeAt`. Нова підписка для щойно завантаженого вигляду дає 0 запитів, а циклу «знімок → канал → знімок» немає. Хвиля приєднань — одне вікно джитера: перший `onSubscribed` без `recovered` ставить один таймер `random() × REJOIN_JITTER_MS`, решта входить у нього | §8.4 — умова перечитування після приєднання (задача 0) |
+| Р12 | Позначка «розрив»: `transport` → `markDisconnected(channel?)`. Знімає `clearDisconnected(channel)`: `recovered: true` — після `RECOVERED_SETTLE_MS` тиші після приєднання (і після пачки відновлених, якщо вони є); `recovered: false` — коли вигляди пари мають `refreshedAt ≥ subscribeAt` (`freshnessOf`, B5a). Збій перечитування лишає позначку | немає |
+| Р13 | Відмова токена з'єднання (`auth` без каналу): перша — `requestVersion()`, порт бере новий токен один раз (`connect()` клієнта); друга поспіль — `core.close("connection-refused")` через шлях рантайму. `CloseReason` дістає `"connection-refused"` | §6.1 — причина закриття (задача 0) |
+| Р14 | Знімок прав — частина першого пакета рантайму (перше читання після створення чи гідратації) і першої частини SSR `preload`, до даних тієї самої транзакції | §6.6 — порядок на сервері (задача 0) |
 
 ## Review Focus
 
-1. **Токен каналу після втрати доступу.** Знімок без права `read` на пару
-   (скоуп, об'єкт): `purge` рядків пари, канал знято з підписки,
-   `refreshTokens` для нього не просить токена. Тест — задачі 4 і 11.
-2. **Сигнал від старого покоління.** Сигнал чи відповідь перечитування,
-   що прийшли після `purge`, `session-changed` чи `dispose()`, нічого не
-   пишуть (`commit` зі старим токеном). Тест — задачі 10 і 13.
-3. **Знімок SSR іншого суб'єкта.** Гідратація знімка з `subject` чи
-   `rightsVersion`, відмінними від звірки, — `purge` усіх ключів знімка й
-   причина в UI. Тест — задача 6.
-4. **Канал чужого скоупу.** Сигнал у топіку зі скоупом поза моїми
-   `scopeSets` (підробка на транспорті) приймач відкидає, без запиту. Тест —
-   задача 10.
-5. **Приєднання з `recovered: true`** — 0 перечитувань, а позначки «розрив»
-   знято лише після пачки відновлених сигналів. Тест — задача 12.
+1. **Токен каналу після втрати доступу.** Знімок без права `read` на пару:
+   `purge` рядків пари в усіх сховищах, канал знято дельтою, незакрита пачка
+   ключів і таймер джитера пари скинуті. Тест — задачі 5 і 12.
+2. **Grant → дані → revoke між двома знімками.** Право дали й забрали між
+   двома читаннями знімка: рядки, завантажені в проміжку, прибирає `purge`
+   за сховищем. Тест — задача 5.
+3. **Сигнал від старого покоління.** Сигнал чи відповідь перечитування після
+   `purge`, `session-changed` чи `dispose()` нічого не пишуть. Тест —
+   задачі 11 і 14.
+4. **Знімок SSR іншого суб'єкта чи прав.** Гідратація знімка, чий
+   `rightsVersion` чи `rights.userId` розходиться з першою відповіддю
+   `rights`, — `purge` усіх ключів знімка (права) чи `session-changed`
+   (суб'єкт). Тест — задача 7.
+5. **Нова підписка й приєднання.** Монтування вигляду й новий канал — 0
+   зайвих запитів; 20 каналів без `recovered` — 1 запит; флапання
+   `recovered: false` кожні 300 мс — ≤ 1 запит на вікно джитера. Тест —
+   задача 13.
 
 ---
 
 ## Частина A — знімок прав клієнта
 
-### Task 0: поправки спеки
+### Task 0: поправки спеки й плану B3-4
 
 **Files:**
 - Modify: `docs/superpowers/specs/2026-11-05-p4-b-client-data-design.md`:
-  - §8.4 — абзац «Межа B5b»: Р2;
+  - §8.4 — абзац «Межа B5b» (Р2) і умова перечитування після приєднання (Р11);
+  - §8.5 — значення `auth` (Р8);
   - §9.1 — поля знімка за блоками (Р3);
-  - §6.6 — значення `rightsVersion` (Р4);
+  - §6.6 — значення `rightsVersion`, порядок на сервері (Р4, Р14);
+  - §6.1 — причина закриття `connection-refused` (Р13);
   - §13 рядок B5b — частини A і B, межа з B6, рядок «B6 розширює
-    `rightsSnapshot`, не дублює»; рядок B6 — «розширює знімок B5b».
+    `rightsSnapshot`, не дублює»; рядок B6 — «розширює знімок B5b»; рядок
+    B4 дістає «`reason: "schema"` у T0 і `requestVersion()` на ньому» (Р9).
   
   Звір із поділом, який вносить B5a.
+- Modify: `docs/superpowers/plans/2026-11-08-p4-b3-4-b3-5-write-receipts.md` —
+  таблиця «подія → `version`»: `schema` → B4 (Р9).
+- Modify (після мерджу PR #77 з планом B5a): `docs/superpowers/plans/2026-11-08-p4-b5a-resume-interval.md`
+  — той самий розподіл: `schema` → B4. Цей рядок править лише гілка B5b.
 
 - [ ] **Step 1:** правки. Без лічильників і наративу фаз.
 - [ ] **Step 2:** `python3 scripts/check-doc-anchors.py` і `pnpm format:check` — зелені.
-- [ ] **Step 3: Commit** — `docs(spec): B5b — знімок прав, межа з B6, rightsVersion`.
+- [ ] **Step 3: Commit** — `docs(spec): B5b — знімок прав, межа з B6, rightsVersion, приєднання`.
 
-### Task 1: T0 — схема знімка, `rightsVersion`, частина `rights`
+### Task 1: `publicRead` у клієнтському каталозі
+
+**Files:**
+- Modify: `packages/simetra/src/model/runtime/catalog.ts` (`catalogEntrySchema`),
+  `packages/simetra/src/compiler/runtime-catalog.ts`, `compiler/client-catalog.ts`
+- Test: `packages/simetra/src/compiler/__tests__/client-catalog.test.ts`,
+  `runtime-catalog.test.ts`
+
+**Interfaces:**
+- Produces: `CatalogEntry.publicRead?: "anon" | "authenticated"` — з контракту
+  доступу (`AccessContract.publicRead`), тим самим джерелом, що й політика
+  `<t>_public_read`. Відсутнє — об'єкт без `publicRead`.
+
+- [ ] **Step 1: failing tests:** об'єкт з `publicRead: anon` і
+  `authenticated` — поле в обох каталогах; без — поля немає; `snapshotHash`
+  змінюється разом із ним; `kernelHash` — ні.
+- [ ] **Step 2:** `pnpm --filter simetra test client-catalog runtime-catalog` — FAIL.
+- [ ] **Step 3:** реалізація → **Step 4:** PASS; `pnpm metadata:check`.
+- [ ] **Step 5: Commit** — `feat(compiler): publicRead у клієнтському каталозі`.
+
+### Task 2: T0 — схема знімка, `rightsVersion`, частина `rights`
 
 **Files:**
 - Create: `packages/simetra/src/model/runtime/rights-snapshot.ts`
-- Modify: `packages/simetra/src/model/runtime/envelope.ts` (після B1c: схема
-  частини пакета `read` дістає `{ type: "rights" }`), `model/runtime/index.ts`
+- Modify: `packages/simetra/src/model/runtime/envelope.ts` (після B1c: частина
+  `{ type: "rights" }`), `model/runtime/index.ts`
 - Test: `packages/simetra/src/model/runtime/__tests__/rights-snapshot.test.ts`,
   тест конверта (B1c)
 
 **Interfaces:**
 - Produces:
-  - `rightsSnapshotSchema` і `type RightsSnapshot` за Р3 (Zod strict);
-  - `function rightsVersionOf(s: RightsSnapshot): Promise<string | undefined>`
-    (Р4, WebCrypto `SHA-256`);
-  - частина `{ type: "rights" }` у пакеті `read`; відповідь —
-    `{ ok: true, value: RightsSnapshot }`; не більше однієї частини `rights`
-    на пакет (друга — `command.invalid`).
+  - `rightsSnapshotSchema`, `type RightsSnapshot` (Р3, strict);
+  - `function rightsVersionOf(s: RightsSnapshot): Promise<string>` (Р4);
+  - частина `{ type: "rights" }`; відповідь `{ ok: true, value: RightsSnapshot }`;
+    не більше однієї частини `rights` на пакет.
 
 - [ ] **Step 1: failing tests:**
-  - схема приймає вихід з усіма полями й без `versions`/`projectionVersion`;
-    зайве поле — відмова;
-  - `rightsVersionOf` однаковий для переставлених `versions`, інший для
-    іншої версії; без `projectionVersion` — `undefined`;
-  - пакет з двома частинами `rights` — відмова схеми.
-- [ ] **Step 2:** `pnpm --filter simetra test rights-snapshot envelope` — FAIL.
+  - схема приймає вихід з усіма полями, з рівнем `everyUser`, без
+    `versions`; зайве поле — відмова;
+  - `rightsVersionOf` однаковий для переставлених масивів; інший за зміни
+    `userId`, `scopeSets`, рядка `read` чи версії; рядок не-`read` його не
+    змінює;
+  - пакет з двома частинами `rights` — відмова.
+- [ ] **Step 2:** `pnpm --filter simetra test src/model/runtime` — FAIL.
 - [ ] **Step 3:** реалізація → **Step 4:** PASS.
 - [ ] **Step 5: Commit** — `feat(model): знімок прав клієнта й частина rights пакета read`.
 
-### Task 2: T1 — `simetra.rights_client_snapshot()`
+### Task 3: T1 — `simetra.rights_client_snapshot()`
 
 **Files:**
 - Create: `packages/simetra/src/compiler/rights/client-snapshot.ts`
-- Modify: генератор функцій прав — підключити одиницю там, де генеруються
-  функції фактів (`compiler/rights/functions.ts`), за тією самою умовою
-  «є функції прав»
+- Modify: `packages/simetra/src/compiler/rights/functions.ts` — одиниця там,
+  де генеруються функції фактів, за умовою «є функції прав»
 - Test: `packages/simetra/src/compiler/__tests__/rights-client-snapshot.test.ts`,
   `packages/simetra/test/db/rights-client-snapshot.support.ts`,
   `rights-client-snapshot.db.test.ts`, `rights-client-snapshot.supabase.db.test.ts`
@@ -201,184 +250,235 @@
   `EXECUTE` — роль запиту `user` профілю (`PROVIDER_API_ROLES`) і
   `simetra_command`; `REVOKE … FROM PUBLIC`. Тіло:
   - кличе лише `current_user_id()`, `rights_mine()`, `scopeSetCall` кожного
-    виду скоупу (`compiler/access-units.ts`), а з довідниками прав — ще
+    виду скоупу (один раз на `scopeKindId`), а з довідниками прав — ще
     `rights_versions()` і `rights_projection_version()`. Нової
     definer-поверхні немає (§9.1);
+  - проєкт без `current_user_id()` — функція не генерується;
   - `userId` `NULL` → `{ "userId": null, "scopeSets": [], "rights": [] }`;
   - числа версій — рядками.
 
-- [ ] **Step 1: failing unit tests** (дерево SQL):
-  - функція `SECURITY INVOKER`, `search_path = ''`, `EXECUTE` за переліком;
-  - `scopeSets` будує той самий `scopeSetCall`, що й `<t>_scope_read`
-    (мутація «`rights_scope_set` для всіх видів» червоніє);
-  - без довідників прав немає `rights_versions()`.
-- [ ] **Step 2: failing DB tests** (обидва стеки, рядок «DB `simetra`» §12):
-  - знімок — лише власні факти: `userId` = `current_user_id()`;
+- [ ] **Step 1: failing unit tests** (дерево SQL): `SECURITY INVOKER`,
+  `search_path = ''`, `EXECUTE` за переліком; `scopeSets` — той самий
+  `scopeSetCall`, що й `<t>_scope_read` (мутація «`rights_scope_set` для всіх
+  видів» червоніє); без довідників прав немає `rights_versions()`.
+- [ ] **Step 2: failing DB tests** (обидва стеки):
+  - лише власні факти, `userId` = `current_user_id()`;
   - `scopeSets` = вихід `scopeSetCall` на кожен вид: вид із членством —
-    непорожній, вид з дослівною функцією множини — її вихід;
-  - проєкт без довідників прав — знімок працює без `versions`;
-  - транзакція `READ ONLY` — без запису;
-  - анонім і недійсний користувач — `userId: null`, порожні масиви;
+    непорожній, вид з дослівною функцією — її вихід;
+  - проєкт без довідників прав — працює без `versions`;
+  - `READ ONLY` — без запису;
+  - анонім і недійсний — `userId: null`, порожні масиви;
   - вихід проходить `rightsSnapshotSchema`.
-- [ ] **Step 3:** FAIL → **Step 4:** реалізація → **Step 5:** PASS обох стеків.
+- [ ] **Step 3:** `pnpm --filter simetra test:db rights-client-snapshot` і
+  `pnpm --filter simetra test:db:supabase rights-client-snapshot` — FAIL.
+- [ ] **Step 4:** реалізація → **Step 5:** PASS обох.
 - [ ] **Step 6: Commit** — `feat(compiler): rights_client_snapshot — знімок прав користувача`.
 
-### Task 3: T3 — `runtime.rightsSnapshot` і частина `rights`
+### Task 4: T3 — `runtime.rightsSnapshot` і частина `rights`
 
 **Files:**
 - Modify: `packages/simetra/src/server/runtime.ts` (`CommandRuntime.rightsSnapshot`,
-  `readParts` після B1c), `packages/simetra/src/server/data-handler.ts`
-  (частина `rights`, `inProcess`)
+  `readParts` після B1c: `ReadPart` і `ReadPartsResult` дістають `rights`),
+  `packages/simetra/src/server/data-handler.ts` (маршрут частини `rights` у
+  групі Server Function, як `version` у B3-4; `inProcess`)
+- Modify (після B3-6): `packages/simetra/src/server/testing/` — фейковий
+  рантайм тестового хоста відповідає на частину `rights`
 - Test: `packages/simetra/src/server/__tests__/rights-snapshot.test.ts`,
   `packages/designer/src/__tests__/rights-snapshot.db.test.ts`
 
 **Interfaces:**
 - Produces:
-  - `rightsSnapshot(session: SessionClaims): Promise<RightsSnapshot>`.
+  - `rightsSnapshot(session: SessionClaims): Promise<RightsSnapshot>`:
     `sessionKind` (ПГ-3) ≠ `"user"` → `{ userId: null, scopeSets: [], rights: [] }`
-    без бази. Інакше транзакція `READ ONLY` під роллю `user`,
-    `SELECT simetra.rights_client_snapshot()`, вихід — через
-    `rightsSnapshotSchema` (розбіжність — `command.internal` і журнал);
-  - частина `rights` пакета `read` — у тій самій транзакції, що й частини
-    `query` пакета (§4.5 крок 5); `inProcess` теж дає частину `rights`.
+    без бази; інакше `SELECT simetra.rights_client_snapshot()` під роллю
+    `user`, вихід через `rightsSnapshotSchema` (розбіжність —
+    `command.internal` і журнал);
+  - частина `rights` — **першою** в транзакції пакета, до частин `query`
+    (Р14); `inProcess` теж дає частину `rights`.
 
 - [ ] **Step 1: failing tests:**
-  - unit (фейкова база): анонім — без запиту; невалідна відповідь бази —
-    `command.internal`; пакет `[query, rights]` — рівно один `BEGIN … READ ONLY`
-    і один `COMMIT`;
-  - DB: `rights.userId` = id користувача сесії; `inProcess` дає ту саму
-    відповідь, що й конверт.
-- [ ] **Step 2:** FAIL → **Step 3:** реалізація → **Step 4:** PASS.
+  - unit (фейкова база): анонім — без запиту; невалідна відповідь —
+    `command.internal`; пакет `[query, rights]` — рівно один
+    `BEGIN … READ ONLY`, `rights_client_snapshot()` перед першим оператором
+    читання, один `COMMIT`;
+  - DB: `rights.userId` = id користувача сесії; `inProcess` = конверт.
+- [ ] **Step 2:** `pnpm --filter simetra test src/server` і
+  `pnpm --filter @simetrajs/designer test:db rights-snapshot` — FAIL.
+- [ ] **Step 3:** реалізація → **Step 4:** PASS.
 - [ ] **Step 5: Commit** — `feat(server): rightsSnapshot і частина rights пакета read`.
 
-### Task 4: T4 — сховище знімка, порівняння, предикат підписки
+### Task 5: T4 — сховище знімка, правило втрати доступу, предикат
 
 **Files:**
 - Create: `packages/simetra/src/data/rights/snapshot-store.ts`,
+  `packages/simetra/src/data/rights/access.ts`,
   `packages/simetra/src/data/rights/subscribe.ts`
-- Modify (після B3-2): `packages/simetra/src/data/store/` — `createCore` дістає
-  сховище знімка; `CorePart` (B3-3) дістає `rights`
+- Modify (після B3-2/B3-3): `packages/simetra/src/data/store/` — `createCore`
+  тримає сховище знімка; `CorePart` дістає `rights`; `CloseReason` дістає
+  `"connection-refused"` (для Р13)
 - Test: `packages/simetra/src/data/rights/__tests__/snapshot-store.test.ts`,
-  `subscribe.test.ts`
+  `access.test.ts`, `subscribe.test.ts`
 
 **Interfaces:**
 - Produces:
-  - `CoreSession.rightsSnapshot(): RightsSnapshot | undefined` — **єдине**
-    джерело `scopeSets` у T4 (Р1);
-  - `CoreSession.requestRights(): void` — частина `rights` у збирачі
-    поточної мікрозадачі, single-flight з одним хвостом, як
-    `requestVersion()` (B5a);
-  - `CoreSession.onRightsChange(listener: (next: RightsSnapshot, prev?: RightsSnapshot) => void): () => void`;
-  - на кожну відповідь частини `rights` — `diffSnapshots(prev, next, catalog): { purge: { scope: string | null; object: ObjectName }[]; revalidate: ObjectName[]; sessionChanged: boolean }`
-    (Р5) і застосування одним `commit`: `purge` пар, далі `revalidate`
-    об'єктів, `sessionChanged` → `core.close("session-changed")`;
-  - `canSubscribe(snapshot, channel: Channel, catalog: ClientCatalog): boolean` (Р6).
+  - `CoreSession.rightsSnapshot(): { snapshot: RightsSnapshot; rightsVersion: string } | undefined`
+    — **єдине** джерело знімка й `scopeSets` у T4 (Р1);
+  - `CoreSession.requestRights(): void` — частина `rights` у збирачі поточної
+    мікрозадачі, single-flight з одним хвостом, як `requestVersion()`;
+    `lastRightsAt` — старт останнього запиту `rights`;
+  - перший пакет рантайму (`load()` першого вигляду чи звірка гідратації)
+    несе частину `rights` (Р14);
+  - на кожну відповідь `rights` — запис знімка й `rightsVersion` (Р4), далі
+    одним `commit`: `purge` пар за Р5 (`accessLoss(store, snapshot, catalog): PairRef[]`),
+    потім `revalidate` об'єктів звуження (`narrowed(prev, next, catalog): ObjectName[]`),
+    зміна `userId` — шлях `session-changed` рантайму;
+  - `readAllowed(snapshot, pair, catalog): boolean` і
+    `canSubscribe(snapshot, channel, catalog): boolean` (Р5, Р6);
+  - `onRightsChange(listener)` — для приймача (Task 11).
+- Відповідь `rights` з помилкою — старий знімок лишається, запис у журнал,
+  `purge` не робиться (fail-safe: дані не відкриваються, а лише не
+  прибираються до наступного знімка).
 
 - [ ] **Step 1: failing tests:**
-  - `canSubscribe` — `it.each` за кейсами режиму підписки §12 (свій скоуп з
-    правом, учасник без `read`, чужий скоуп, лише `own`, лише контейнер,
-    нескоуплений з `own`, роль рівня скоупу на нескоупленому, `publicRead`,
-    «Користувачі», корінь свій і чужий, `userId: null`, канали прав);
-  - `diffSnapshots`:
-    - зникла пара — `purge`;
-    - зник скоуп зі `scopeSets` — `purge` усіх пар скоупу;
-    - зник лише контейнерний обсяг — `purge` (Review Focus 1);
-    - звуження `any` → `own` — `revalidate` без `purge`;
-    - новий `userId` — `sessionChanged`;
-  - сховище: заміна знімка зі старим токеном — нічого (Review Focus 2);
-  - у T4 немає іншого джерела `scopeSets`: тест-інваріант — `grep` по
-    `src/data` знаходить читання `scopeSets` лише в `rights/`.
-- [ ] **Step 2:** `pnpm --filter simetra test snapshot-store subscribe` — FAIL.
+  - `canSubscribe` — `it.each` за кейсами режиму підписки §12: свій скоуп з
+    правом; учасник без `read`; чужий скоуп; лише `own`; лише контейнер;
+    нескоуплений з `own`; роль рівня скоупу на нескоупленому; `everyUser`;
+    глобальна роль на нескоупленому; `publicRead`; «Користувачі»; корінь
+    свій і чужий; вид у топіку ≠ вид об'єкта; `userId: null`; канали прав;
+  - `accessLoss`:
+    - перший знімок (база порожня) прибирає рядки пари без права
+      (Review Focus 2);
+    - grant → рядки → revoke між двома знімками → `purge`;
+    - зник скоуп зі `scopeSets` — `purge` усіх пар скоупу, крім об'єктів з
+      `publicRead`;
+    - лишився лише контейнер — без `purge`; зник і він — `purge`;
+    - рядок, утриманий лише слабким власником (знімок показу вікна B3-3) у
+      скоупі без `read`, теж очищається;
+    - `purge` доходить до знімків показу вікна, цілей `include` у чужих
+      виглядах, `SectionStore` і чернетки `card` (стан `purged`);
+  - `narrowed`: втрата контейнера C2 при C1, виміру D1 при D2, `own` однієї
+    ролі при `own` іншої, `any` → `own` — `revalidate` без `purge`;
+    невидимі вигляди й підмножини `include` теж перечитуються;
+  - сховище: заміна зі старим токеном — нічого (Review Focus 3); помилка
+    частини `rights` — старий знімок лишається;
+  - єдине джерело: у `src/data/**` лише `rights/snapshot-store.ts` тримає
+    знімок; інші модулі читають `scopeSets` через `CoreSession.rightsSnapshot()`
+    (тест-інваріант над джерелами: `scopeSets:` як поле стану — лише в
+    `snapshot-store.ts`).
+- [ ] **Step 2:** `pnpm --filter simetra test src/data/rights` — FAIL.
 - [ ] **Step 3:** реалізація → **Step 4:** PASS.
-- [ ] **Step 5: Commit** — `feat(data): знімок прав клієнта, порівняння й предикат підписки`.
+- [ ] **Step 5: Commit** — `feat(data): знімок прав клієнта, втрата доступу від сховища, предикат підписки`.
 
-### Task 5: DB-еквівалентність предиката з `signal_topic_allowed`
+### Task 6: DB-еквівалентність предиката з `signal_topic_allowed`
 
 **Files:**
 - Create: `packages/designer/src/__tests__/subscribe-equivalence.support.ts`,
   `subscribe-equivalence.db.test.ts`, `subscribe-equivalence.supabase.db.test.ts`
 
 **Interfaces:**
-- Consumes: Task 2–4; `signal_topic_allowed` (ПГ-4/B2 Task 7).
+- Consumes: Task 3–5; `signal_topic_allowed` (ПГ-4/B2 Task 7).
 
-- [ ] **Step 1: failing DB test.** Фікстури прав — кожна пара «користувач,
-  скоуп, сигнальний об'єкт», зокрема:
-  - лише контейнерне право;
-  - роль рівня скоупу на нескоупленому об'єкті;
-  - вид з дослівною функцією множини.
+- [ ] **Step 1: DB test.** Фікстури прав — кожна пара «користувач, скоуп,
+  сигнальний об'єкт» над моїми й чужими скоупами, зокрема:
+  - лише контейнерне право; роль рівня скоупу на нескоупленому;
+  - `everyUser` і глобальна роль на нескоупленому;
+  - `deny`, що звужує обсяг (`deny read@any` при `own`);
+  - замикання графа вимог, `fullAccess`, вимір;
+  - вид з дослівною функцією множини;
+  - топіки з чужим видом, у верхньому регістрі, неправильної форми.
   
   Для кожної пари `canSubscribe(знімок користувача, канал)` дорівнює
   `signal_topic_allowed(канал, false)` під claims того самого користувача.
   Вибір скоупів для `publicRead` — поза еквівалентністю (§12).
-- [ ] **Step 2:** FAIL (до Task 4) → **Step 3:** PASS обох стеків.
-- [ ] **Step 4: Commit** — `test(db): предикат підписки T4 еквівалентний signal_topic_allowed`.
+- [ ] **Step 2:** `pnpm --filter @simetrajs/designer test:db subscribe-equivalence` і
+  `pnpm --filter @simetrajs/designer test:db:supabase subscribe-equivalence` —
+  PASS; мутація «`canSubscribe` бере `level` будь-який» — червоніє.
+- [ ] **Step 3: Commit** — `test(db): предикат підписки T4 еквівалентний signal_topic_allowed`.
 
-### Task 6: тригери перечитування знімка й SSR `rightsVersion`
+### Task 7: тригери знімка й SSR `rightsVersion`
 
 **Files:**
 - Modify (після B3-6): `packages/simetra/src/data/runtime/ssr.ts`
-  (`dehydrate`: `meta.rightsVersion`; `verifyAfterHydration`: частина
-  `rights` і звірка)
+  (`dehydrate`: `meta.rightsVersion` з `CoreSession.rightsSnapshot()`;
+  `verifyAfterHydration`: частини `version` і `rights`); гідратований знімок
+  прав кладеться в ядро як база
 - Modify (після B5a): `packages/simetra/src/data/runtime/freshness.ts` —
   `resume()` кладе `requestRights()` поряд із `requestVersion()`
-- Modify (після B3-4): обробка `command.unavailable` на `create` кореня виду
-  скоупу — `requestRights()`
-- Modify (після B3-4): зміна `serverHash` у відповіді — `requestRights()`
-  поряд із `requestVersion()` (§9.3)
+- Modify (після B3-4): `command.unavailable` на `create` кореня виду скоупу —
+  `requestRights()`; зміна `serverHash` — `requestRights()` **разом** із
+  `requestVersion()` в одній мікрозадачі
+- Modify (після B3-6): серверний `preload` SSR — частина `rights` першою в
+  пакеті (Р14)
 - Test: `packages/simetra/src/data/runtime/__tests__/ssr.test.ts`,
   `freshness.test.ts`, тест запису B3-4
 
 **Interfaces:**
-- Produces:
-  - `SnapshotMeta.rightsVersion?: string` = `rightsVersionOf(core.rightsSnapshot())`;
-  - звірка після гідратації — один запит: `version` + `rights`;
-    `subject` чи `rightsVersion` знімка ≠ звірки → `purge` усіх ключів
-    знімка й причина `access-changed` (§6.5; Review Focus 3); проєкт без
-    `rightsVersion` — як B3-6 (одразу `revalidate`).
+- Produces: звірка після гідратації — один запит `version` + `rights`:
+  - `rights.userId` ≠ `meta.subject` → шлях `session-changed`;
+  - `rightsVersion` нової відповіді ≠ `meta.rightsVersion` → `purge` усіх
+    ключів знімка й причина `access-changed` (§6.5), далі правило Р5;
+  - `meta.rightsVersion` відсутній (проєкт без функцій прав чи хеш ще не
+    готовий на мить `dehydrate`) — шлях «звірка з перечитуванням» B3-6:
+    одразу `revalidate` видимих виглядів знімка тим самим запитом, а втрату
+    доступу прибирає Р5 за частиною `rights` звірки. `dehydrate` не чекає
+    хешу (рішення автора; архітекторка дала вибір).
 
 - [ ] **Step 1: failing tests:**
-  - гідратація: свіжий знімок з тим самим `rightsVersion` — рівно 1 запит
-    (`version` + `rights`), без `purge`;
-  - інший `rightsVersion` — `purge` усіх ключів знімка, причина в UI;
-  - інший `subject` — те саме;
-  - `resume()` — рівно 1 запит з частинами `version`, `rights` і
-    перечитуваннями (бюджет B5a з частиною `rights`);
-  - `command.unavailable` на `create` кореня — рівно 1 запит `rights`;
-  - зміна `serverHash` — `version` і `rights` одним запитом.
-- [ ] **Step 2:** FAIL → **Step 3:** реалізація → **Step 4:** PASS.
-- [ ] **Step 5: Commit** — `feat(data): знімок прав на гідратації, resume() і зміні serverHash`.
+  - гідратація: той самий `rightsVersion` — рівно 1 запит, без `purge`;
+    тіло й відповідь ≤ 2 КіБ + 128 Б × об'єктів каталогу + `jsonBytes`
+    знімка;
+  - інший `rightsVersion` — `purge` усіх ключів, причина в UI;
+  - `dehydrate` до готовності хешу — знімок без `rightsVersion`; звірка —
+    1 запит з `version`, `rights` і перечитуваннями; пара без права в
+    сховищі — `purge` за Р5;
+  - `rights.userId` ≠ `subject` — `session-changed`;
+  - серверний `preload`: частина `rights` перша в пакеті;
+  - `resume()` — рівно 1 запит з `version`, `rights` і перечитуваннями;
+  - `create` кореня з `command.unavailable` — рівно 1 запит `rights`;
+    п'ять таких відповідей в одній мікрозадачі — теж 1;
+  - зміна `serverHash` — `version` і `rights` одним запитом; транспорт
+    чергує два хеші — без пінг-понгу (відповідь з частиною `version`
+    нового запиту не запускає, §10);
+  - гідратація, `resume()` і зміна `serverHash` в одній мікрозадачі —
+    1 запит.
+- [ ] **Step 2:** `pnpm --filter simetra test src/data/runtime` — FAIL.
+- [ ] **Step 3:** реалізація → **Step 4:** PASS.
+- [ ] **Step 5: Commit** — `feat(data): знімок прав на гідратації, resume(), serverHash і create кореня`.
 
-### Task 7: гейти частини A
+### Task 8: гейти частини A
 
 - [ ] **Step 1:** `git merge origin/main` (без rebase).
 - [ ] **Step 2:** `pnpm format:check && pnpm lint && pnpm typecheck && pnpm test`;
   `pnpm metadata:check` — зелені.
 - [ ] **Step 3:** `pnpm test:db:pg` — зелений; повний `pnpm test:db`
   (регресія Supabase) — один раз на частину.
-- [ ] **Step 4:** модельний тест ядра (B3-2) — повний прогін, зелений.
+- [ ] **Step 4:** модельний тест ядра (B3-2) і браузерний оракул (B3-6) —
+  повні прогони, зелені (тестовий хост знає частину `rights`).
 - [ ] **Step 5:** `docs/ROADMAP.md` — статус B5b-A; commit
   `docs: ROADMAP — B5b частина A`.
 
 ### Готово — частина A
 
+- `publicRead` є в клієнтському каталозі.
 - `rights_client_snapshot` дає лише власні факти; `scopeSets` — вихід
-  `scopeSetCall` кожного виду.
-- Частина `rights` іде в пакеті `read` однією транзакцією з `query`.
-- Знімок у T4 — одне сховище. Порівняння знімків дає `purge` втраченої
-  пари й `revalidate` звуження.
+  `scopeSetCall` кожного виду. Частина `rights` іде першою в транзакції
+  пакета `read`.
+- Знімок у T4 — одне сховище. Кожна заміна, зокрема перша, прибирає пари
+  без права `read` за вмістом сховища. Звуження за кортежами дає
+  `revalidate`.
 - `canSubscribe` еквівалентний `signal_topic_allowed` на фікстурах обох
   стеків.
-- Знімок SSR з іншим `subject` чи `rightsVersion` — `purge`.
-- `resume()` і зміна `serverHash` перечитують знімок у тому самому запиті.
+- Знімок SSR з іншим `rightsVersion` — `purge`, з іншим суб'єктом —
+  `session-changed`.
 
 ## Частина B — приймач сигналів і транспорт
 
-### Task 8: порт `SignalTransport` T0 за §8.5
+### Task 9: порт `SignalTransport` T0 за §8.5
 
 **Files:**
-- Modify: `packages/simetra/src/model/runtime/ports.ts`
-- Modify: споживачі старої форми — `grep -rn "SignalTransport\|onSubscribed" packages/*/src packages/*/test`
-- Test: `packages/simetra/src/model/runtime/__tests__/ports.test.ts` (type-тест)
+- Modify: `packages/simetra/src/model/runtime/ports.ts`,
+  `packages/simetra/src/model/runtime/__tests__/ports.test.ts`
+- Modify: споживачі старої форми — `grep -rn "SignalTransport\|SignalErrorKind\|onSubscribed" packages/*/src packages/*/test`
 
 **Interfaces:**
 - Produces (Р8):
@@ -391,154 +491,202 @@
     refreshTokens(channels?: readonly string[]): Promise<void>
   }
   ```
+  `SignalErrorKind` прибирається.
 
-- [ ] **Step 1:** type-тест (`expectTypeOf`) форми → FAIL.
+- [ ] **Step 1:** type-тест форми (`expectTypeOf`) → FAIL.
 - [ ] **Step 2:** реалізація; стара форма прибрана → PASS; `pnpm typecheck`.
 - [ ] **Step 3: Commit** — `feat(model): порт каналу сигналів за §8.5`.
 
-### Task 9: фейковий канал для тестів
+### Task 10: `CoreSession.readKeys` і фейковий канал
 
 **Files:**
+- Modify (після B3-2/B3-3): `packages/simetra/src/data/store/` — `readKeys`
 - Create (після B3-6 Р6): `packages/simetra/src/data/testing/fake-signal-transport.ts`
   (вхід `simetra/data/testing`)
+- Test: `packages/simetra/src/data/store/__tests__/read-keys.test.ts`,
+  `packages/simetra/src/data/testing/__tests__/fake-signal-transport.test.ts`
 
 **Interfaces:**
-- Produces: `fakeSignalTransport(): SignalTransport & { emit(topic, payload): void; join(channel, recovered: boolean): void; fail(e: SignalError): void; refused: Set<string>; subscribed(): readonly string[]; refreshCalls(): readonly (readonly string[] | undefined)[] }`.
-  `refreshTokens` закриває канали з `refused` і кличе `onError({ kind: "auth", channel })`.
+- Produces:
+  - `CoreSession.readKeys(object: ObjectName, keys: readonly Key[]): Promise<ReadKeysResult>` (Р10)
+    — частини `keys` по ≤ `KEYS_PER_READ` у збирач поточної мікрозадачі, з
+    `known`; запис — `commit` з токеном старту: повернуті — `patch` за
+    правилом версії, відсутні — `remove` (`removed` на місці);
+    `ReadKeysResult = { returned: readonly Key[]; missing: readonly Key[]; versions: ReadonlyMap<Key, number> }`;
+  - `fakeSignalTransport(): SignalTransport & { emit(topic, payload): void; join(channel, recovered: boolean): void; fail(e: SignalError): void; refused: Set<string>; subscribed(): readonly string[]; subscribeCalls(): number; refreshCalls(): readonly (readonly string[] | undefined)[] }`.
+    `refreshTokens` закриває канали з `refused` і кличе
+    `onError({ kind: "auth", channel })`.
 
-- [ ] **Step 1:** unit самого фейка (`subscribe`, `join`, `refused`) → FAIL → реалізація → PASS.
-- [ ] **Step 2: Commit** — `test(data): фейковий канал сигналів з recovered`.
+- [ ] **Step 1: failing tests:**
+  - `readKeys` двох об'єктів в одній мікрозадачі — 1 запит; 200 ключів — 1
+    пакет, 201 — 2 пакети (поділ `store/source.ts`); жодного запиту поза
+    збирачем (`countingTransport` бачить лише виклики збирача); відповідь
+    після `purge` пари — нічого не пише;
+  - фейк: `subscribe`, `join`, `refused`, `subscribeCalls`.
+- [ ] **Step 2:** `pnpm --filter simetra test src/data/store src/data/testing` — FAIL.
+- [ ] **Step 3:** реалізація → **Step 4:** PASS.
+- [ ] **Step 5: Commit** — `feat(data): readKeys ядра й фейковий канал сигналів`.
 
-### Task 10: приймач — розбір, дедуплікація, пачка, кроки §8.4
+### Task 11: приймач — підписки, розбір, пачка, кроки §8.4
 
 **Files:**
-- Create (після B3-2): `packages/simetra/src/data/runtime/signals.ts`
-- Modify: `packages/simetra/src/data/runtime/` — рантайм створює приймач,
-  коли в опціях є `signals: SignalTransport`
+- Create: `packages/simetra/src/data/runtime/signals.ts`
+- Modify: `packages/simetra/src/data/runtime/` — рантайм створює приймач, коли
+  в опціях є `signals: SignalTransport`
 - Test: `packages/simetra/src/data/runtime/__tests__/signals.test.ts`
 
 **Interfaces:**
 - Consumes: `CoreSession` (B3-2: `activeViews`, `commit`, `token`,
-  `readEpoch`; `Writer.markStale`, `markViews`, `purge`); `revalidate` з
-  хвостом (B5a); `evaluateFilter` (B3-2 Task 5); `requestVersion()`;
-  `rightsSnapshot`, `onRightsChange`, `canSubscribe` (Task 4); сталі Global
-  Constraints.
+  `readEpoch`; `Writer.markStale`, `markViews`, `markDisconnected`,
+  `clearDisconnected`, `purge`); `revalidate` з хвостом і `freshnessOf`
+  (B5a); `readKeys` (Task 10); `evaluateFilter` (B3-2 Task 5);
+  `requestVersion()`, `requestRights()`, `rightsSnapshot()`, `onRightsChange`,
+  `canSubscribe` (Task 5); сталі Global Constraints.
 - Produces: `createSignalReceiver({ core, transport, catalog, now, setTimer, clearTimer, random, log }): { dispose(): void }`;
   `DataRuntimeOptions.signals?: SignalTransport`.
 
-Правила (§8.1, §8.4):
-- розбір — `received*Schema` (`id` — десятковий рядок); сумісність уперед
-  §8.1: нерозібране повідомлення каналу змін — `invalidate` пари топіка;
-  `payload.object` ≠ об'єкт топіка — `invalidate` об'єкта топіка; невідомий
-  канал — ігнор;
-- топік, якого немає серед моїх поточних підписок (зокрема скоуп поза
-  `scopeSets`), — відкинути без запиту (Review Focus 4);
+Правила:
+- **підписки** — Р7, дельтою по каналу; `subscribeAt` на кожен канал;
+- **розбір** — `received*Schema`; сумісність уперед §8.1: невідомий `op` чи
+  зайве поле каналу змін — `invalidate` пари; `payload.object` ≠ об'єкт
+  топіка — `invalidate` об'єкта топіка; невідомий `object` (немає в збірці)
+  — відкинути; невідомий канал — ігнор;
+- топік, якого немає серед моїх поточних підписок, — відкинути без запиту;
 - дедуплікація за `id`;
-- пачка за об'єктом, кроки 1–7 §8.4 у цьому порядку: `delete` першим,
-  відлуння, ключі з меншою версією — одне перечитування за ключами (≤ 200),
-  очікувана мінімальна версія (≤ 3 дочитування), нові ключі —
-  `evaluateFilter` активних виглядів і `hasNewRows` лише відповідним,
-  понад 200 ключів — `revalidate(object, { visibleOnly: true })` і
-  `needsRefresh` невидимим, `invalidate` — `revalidate` видимих виглядів
-  пари й виглядів ТЧ власників, невидимим — `needsRefresh`;
-- усі об'єкти пачки — один пакет `read` (одна мікрозадача).
+- **пачка** за об'єктом; кроки 1–7 §8.4 у цьому порядку:
+  1. `delete` — першим, до перевірки версії: ключа немає — нічого; є —
+     ключ у `readKeys` кроку 3; не повернувся — `removed`;
+  2. відлуння — ключ з підтвердженою версією ≥ `row_ver` — відкинути;
+  3. ключі з меншою версією — `readKeys`; нова версія шапки з видимою ТЧ —
+     перечитування ТЧ (§6.2 правило 2);
+  4. повернута версія < `row_ver` — `markStale(minVersion = row_ver)` і до
+     `MIN_VERSION_RETRIES` дочитувань з паузою; новий сигнал того самого
+     ключа лічильника не скидає; ключі однієї спроби — однією частиною;
+  5. нові ключі — той самий `readKeys`; рядок у сховище не пишеться,
+     `evaluateFilter` активних виглядів → `markViews(…, { hasNewRows }, spec)`
+     лише відповідним;
+  6. понад 200 ключів об'єкта — збір ключів зупиняється, `revalidate(object, { visibleOnly: true })`,
+     невидимим — `needsRefresh`;
+  7. `invalidate` — `revalidate` видимих виглядів пари й ТЧ власників,
+     невидимим — `needsRefresh`;
+- усі об'єкти пачки — одна мікрозадача (`⌈частин / READ_BATCH_MAX⌉`
+  пакетів);
+- **зворотний тиск:** читання пачки — single-flight; пачка, що закрилась під
+  час читання попередньої, чекає її осідання;
+- `purge` пари (Task 5) скидає її незакриту пачку й дочитування;
+- метрики в `log` без ключів і значень: `stale-age`, `revalidate-burst`
+  (§8.4).
 
 - [ ] **Step 1: failing tests** (рядок «unit T4 (приймач…)» §12; фейковий
-  канал, `countingTransport`, фейкові таймери; число запитів — явно):
-  - дедуплікація за `id`;
-  - відлуння відкидається без запиту — 0;
-  - чужий `delete`: перечитування; `removed` лише за порожньою
-    відповіддю; `delete` для рядка, який перечитування повернуло, — нічого;
-  - власне відлуння `delete` (ключа немає) — 0;
-  - пачка: 50 мс тиші й найдовше 2 с; сплеск 1000 сигналів над вікном — ≤ 1
-    запит на вікно пачки за ключами вікна;
-  - 1000 різних ключів — `revalidate` видимих, 1 запит;
-  - сигнали двох об'єктів в одній пачці — рівно 1 запит;
-  - очікувана мінімальна версія: перечитування повернуло 6 при `row_ver` 7 —
-    `stale` з `minVersion` 7 і до 3 дочитувань;
-  - новий ключ, що підходить фільтру лише одного з двох списків, —
-    `hasNewRows` лише йому, у сховище не пишеться;
-  - нерозібране повідомлення каналу змін — `invalidate`; невідомий канал — 0;
-  - топік чужого скоупу — 0 запитів, 0 записів (Review Focus 4);
-  - сигнал після `dispose()` і відповідь перечитування після `purge` пари —
-    0 записів (Review Focus 2).
-- [ ] **Step 2:** `pnpm --filter simetra test signals` — FAIL.
+  канал, `countingTransport`, фейкові таймери; число запитів і байти —
+  явно):
+  - підписки: канали змін сигнальних об'єктів з активними виглядами в моїх
+    скоупах; несигнальний — без каналу; нескоуплений — `ZERO_UUID`; скоуп
+    поза `scopeSets` — без каналу; заміна знімка, що додає скоуп, —
+    `subscribeCalls` +1, незмінні канали не перепідписано;
+  - дедуплікація за `id`; дубль після витіснення з `SEEN_SIGNALS_MAX` — не
+    більше 1 зайвого запиту;
+  - відлуння — 0; власне відлуння `delete` — 0;
+  - чужий `delete`: перечитування; `removed` лише за порожньою відповіддю;
+    `delete` для рядка, який перечитування повернуло, — нічого;
+  - пачка 50 мс тиші й найдовше 2 с; сплеск 1000 сигналів над вікном — 1
+    запит на вікно пачки;
+  - межі: 200 ключів — 1 запит за ключами; 201 — `revalidate` видимих,
+    1 запит; 16 об'єктів — 1 запит, 17 — 2;
+  - `minVersion`: повернуто 6 при `row_ver` 7 — `stale` і рівно 1 + 3
+    запити з паузами 500, 1000, 2000 мс; далі 0;
+  - новий ключ, що підходить лише одному з двох списків, — `hasNewRows`
+    лише йому, у сховищі ключа немає;
+  - нова версія шапки з видимою ТЧ — ТЧ у тому самому пакеті;
+  - `invalidate`: видимі вигляди пари й ТЧ власників — 1 запит; невидимі — 0
+    і `needsRefresh`; три `invalidate` у пачці — 1 запит;
+  - невідомий `op` і зайве поле — `invalidate`; `object` ≠ топік —
+    `invalidate` об'єкта топіка; невідомий `object` — 0;
+  - топік поза підписками — 0 запитів, 0 записів;
+  - зворотний тиск: відповідь пачки 5 с, за цей час три нові пачки — після
+    осідання рівно 1 запит;
+  - сигнал після `dispose()` і відповідь після `purge` пари — 0 записів;
+  - байти пачки чужих сигналів до 16 об'єктів і 200 ключів — ≤ 1,1 ×
+    корисних + 2 КіБ.
+- [ ] **Step 2:** `pnpm --filter simetra test src/data/runtime` — FAIL.
 - [ ] **Step 3:** реалізація → **Step 4:** PASS.
 - [ ] **Step 5: Commit** — `feat(data): приймач сигналів змін за кроками §8.4`.
 
-### Task 11: підписки, відмова авторизації, розрив, `schema`
+### Task 12: відмова авторизації, розрив, токен з'єднання
 
 **Files:**
 - Modify: `packages/simetra/src/data/runtime/signals.ts`
-- Test: `packages/simetra/src/data/runtime/__tests__/signals-subscriptions.test.ts`
+- Test: `packages/simetra/src/data/runtime/__tests__/signals-errors.test.ts`
 
 **Interfaces:**
-- Produces: правила Р7, Р9, Р10 і §8.4 «Відмова авторизації»:
-  - `auth` каналу змін → `purge` пари каналу; канал не повторюється до
-    заміни знімка;
-  - `auth` без каналу → `requestVersion()`; відповідь `session-changed`
-    закриває рантайм, інакше порт сам бере новий токен з'єднання один раз;
-  - `transport` → `markDisconnected(channel?)`;
-  - `command.unavailable` `schema` у відповіді читання → `requestVersion()`
-    раз на подію (Р9).
+- Produces (§8.4 «Відмова авторизації», «Розрив», Р12, Р13):
+  - `auth` каналу змін → `purge` пари; канал знято; не повторюється до заміни
+    знімка; незакрита пачка й джитер пари скинуті;
+  - `auth` без каналу → перша: `requestVersion()` і новий токен з'єднання
+    один раз; друга поспіль — `core.close("connection-refused")` через шлях
+    рантайму;
+  - `transport` → `markDisconnected(channel?)`, 0 запитів.
 
 - [ ] **Step 1: failing tests:**
-  - підписки = канали змін сигнальних об'єктів з активними виглядами в
-    моїх скоупах (Р7); несигнальний об'єкт — без каналу;
-  - заміна знімка, де пара зникла, — канал знято, `purge` (Review Focus 1);
-    `refreshTokens` після цього не містить каналу;
   - `auth` каналу — `purge`, 0 запитів, повтору до нової заміни знімка немає;
-  - `auth` без каналу — 1 запит `version`;
-  - `transport` — позначки «розрив» на рядках виглядів каналу;
-  - `schema` — 1 запит `version` на подію, не на частину;
-  - монтування першого вигляду об'єкта — підписка в тій самій мікрозадачі
-    злита з іншими змінами.
+    `refreshTokens` після заміни знімка без пари не просить її токена;
+  - `auth` без каналу: перша — 1 запит `version`; друга — закриття з
+    причиною; N поспіль в одній мікрозадачі — 1 запит;
+  - `transport` — позначки «розрив» на рядках виглядів каналу, 0 запитів.
 - [ ] **Step 2:** FAIL → **Step 3:** реалізація → **Step 4:** PASS.
-- [ ] **Step 5: Commit** — `feat(data): підписки за знімком прав, відмова каналу, розрив`.
+- [ ] **Step 5: Commit** — `feat(data): відмова каналу, розрив і токен з'єднання`.
 
-### Task 12: приєднання з `recovered` і без
+### Task 13: приєднання з `recovered` і без
 
 **Files:**
 - Modify: `packages/simetra/src/data/runtime/signals.ts`
 - Test: `packages/simetra/src/data/runtime/__tests__/signals-rejoin.test.ts`
 
 **Interfaces:**
-- Produces (§8.4 «Після приєднання», Р10):
-  - `recovered: false` — через джитер 0–2000 мс (`random` з опцій) одним
-    запитом: `revalidate` видимих виглядів пари, `requestRights()`,
-    `requestVersion()`; невидимим — `needsRefresh`; після успіху —
-    `clearDisconnected(channel)`;
-  - `recovered: true` — 0 перечитувань; `clearDisconnected` після пачки
-    відновлених сигналів; `stale` з `minVersion` лишається до
-    підтвердження.
+- Produces (Р11, Р12):
+  - `recovered: false` — одне вікно джитера на хвилю; на спрацюванні одним
+    запитом: `revalidate` видимих виглядів пар хвилі з `refreshedAt < subscribeAt`,
+    `requestRights()` лише коли `lastRightsAt < subscribeAt`,
+    `requestVersion()` лише коли `lastVersionAt < subscribeAt`; невидимим —
+    `needsRefresh`; прихована вкладка — нічого до `resume()` (B5a);
+  - `recovered: true` — 0 перечитувань; `clearDisconnected` через
+    `RECOVERED_SETTLE_MS` тиші після приєднання й після пачки відновлених;
+    `stale` з `minVersion` лишається до підтвердження.
 
 - [ ] **Step 1: failing tests** (Review Focus 5):
-  - `recovered: true` + 50 відновлених сигналів — запити лише за ключами
-    пачки, 0 перечитувань виглядів; позначка «розрив» знята після пачки, а
-    не до неї;
-  - `recovered: false` — рівно 1 запит у межах 2000 мс; позначки зняті
-    після успіху; збій перечитування — позначки лишаються;
-  - 3 канали приєдналися разом без `recovered` — 1 запит;
-  - приєднання після `dispose()` — 0.
+  - монтування першого вигляду об'єкта: `load()` і підписка — `onSubscribed`
+    без `recovered` → 0 додаткових запитів;
+  - заміна знімка додає канал → 0 запитів, якщо знімок і вигляди свіжіші за
+    `subscribeAt`;
+  - `recovered: true` + 50 відновлених — запити лише за ключами пачки;
+    позначка знята після пачки, а не до неї; `recovered: true` без
+    відновлених — знята через 50 мс;
+  - `recovered: false` для давнього вигляду — 1 запит до кінця вікна; до
+    таймера — 0; `random = 0` і `random → 1` — у межах вікна;
+  - 20 каналів з різним `random()` — 1 запит; флапання кожні 300 мс — ≤ 1
+    запит на вікно;
+  - «нічого не змінилось» — тіло ≤ 64 Б × ключів `known` + 2 КіБ;
+  - збій перечитування — позначки лишаються;
+  - прихована вкладка — 0 до `resume()`;
+  - `dispose()` скасовує таймер — 0.
 - [ ] **Step 2:** FAIL → **Step 3:** реалізація → **Step 4:** PASS.
-- [ ] **Step 5: Commit** — `feat(data): перечитування після приєднання без recovered`.
+- [ ] **Step 5: Commit** — `feat(data): перечитування після приєднання лише застарілого`.
 
-### Task 13: модельний тест — кроки сигналу
+### Task 14: модельний тест — кроки сигналу
 
 **Files:**
-- Modify (після B3-2): модельний тест ядра (`packages/simetra/src/data/__tests__/model.test.ts`
-  чи файл, що його дав B3-2) — нові кроки
+- Modify (після B3-2): `packages/simetra/src/data/store/__tests__/model.test.ts`
 
-- [ ] **Step 1:** кроки: сигнал (`create`, `update`, `delete`,
-  `invalidate`) у будь-якому порядку з дублями; приєднання з `recovered` і
-  без; відмова `auth`; заміна знімка з втратою пари. Інваріанти ядра (§11)
+- [ ] **Step 1:** кроки: сигнал (`create`, `update`, `delete`, `invalidate`)
+  у будь-якому порядку з дублями; приєднання з `recovered` і без; відмова
+  `auth`; заміна знімка з втратою пари й зі звуженням. Інваріанти ядра (§11)
   тримаються; після `purge` пари жоден рядок пари не з'являється з
-  відповіді, що почалась до неї (Review Focus 2).
-- [ ] **Step 2:** повний прогін модельного тесту — зелений; мутація «приймач
-  пише без токена» — червоніє.
-- [ ] **Step 3: Commit** — `test(data): кроки сигналу в модельному тесті ядра`.
+  відповіді, що почалась до неї (Review Focus 3).
+- [ ] **Step 2:** повний прогін — зелений; мутація «приймач пише без
+  токена» — червоніє.
+- [ ] **Step 3: Commit** — `test(data): кроки сигналу й знімка в модельному тесті ядра`.
 
-### Task 14: `simetra/data/centrifugo` і стенд
+### Task 15: `simetra/data/centrifugo` і стенд
 
 **Files:**
 - Create: `packages/simetra/src/data/centrifugo/index.ts`,
@@ -546,79 +694,113 @@
 - Modify: `packages/simetra/package.json` — обидва блоки `exports`
   (`./data/centrifugo`), `peerDependencies` `centrifuge` `^5.8.0` з
   `peerDependenciesMeta.optional`; `tsdown.config.ts` (`data/centrifugo/index`);
-  `eslint.tier-zones.js` — `centrifuge` дозволено лише в
-  `src/data/centrifugo/**`; `test/tier-boundary.test.ts`; пак-тест designer
-  (імпорт з тарбола)
+  `.syncpackrc.json` — група для `centrifuge` (peer `^5.8.0` і dev `5.8.0`
+  разом, як `react`)
+- Modify: `packages/simetra/eslint.tier-zones.js` — окремий блок
+  `src/data/centrifugo/**` (зразок `facade`): дозволено `centrifuge`;
+  решта `src/data/**` — заборонено; T5 не імпортує `simetra/data/centrifugo`
+- Modify: `packages/simetra/test/tier-boundary.test.ts` — негативні тести:
+  `centrifuge` у `src/data/store`, `./centrifugo/…` з решти `src/data`,
+  `simetra/data/centrifugo` з `src/ui`; пак-тест designer — імпорт з тарбола
 - Create: `packages/designer/src/__tests__/signal-receiver.support.ts`,
   `signal-receiver.db.test.ts`, `signal-receiver.supabase.db.test.ts`
 
 **Interfaces:**
-- Produces: `createCentrifugoTransport({ url, getConnectionToken, getChannelToken, Centrifuge }): SignalTransport`
-  — клас `Centrifuge` передається параметром (ін'єкція), щоб T4 не мав
-  статичного імпорту поза зоною. Мапінг:
-  - `subscribed` → `onSubscribed({ channel, recovered })`; `recovered` —
-    лише з події `subscribed` Centrifugo;
-  - `unsubscribed` з кодом `unauthorized` → `onError({ kind: "auth", channel })`,
-    без автоповтору;
-  - розрив з'єднання — `onError({ kind: "transport" })`;
-  - `refreshTokens(channels)` — перепідписка названих каналів;
-  - відмова токена каналу — `auth`.
-  
-  Токени: `getConnectionToken`/`getChannelToken` — функції host-а над
-  endpoint-ами `SignalTokens` (П4-D).
+- Produces: `createCentrifugoTransport({ url, getConnectionToken, getChannelToken }): SignalTransport`
+  (імпорт значення `Centrifuge` з `centrifuge` у цьому модулі). Мапінг:
+  - `subscribed` → `onSubscribed({ channel, recovered })` — лише з події
+    `subscribed`;
+  - `getChannelToken` кинув явну відмову (`SignalAuthRefused` — помилка, яку
+    кидає host на 401/403) чи `unsubscribed` з кодом `unauthorized` →
+    `onError({ kind: "auth", channel })` без автоповтору;
+  - інший збій `getChannelToken` чи `getConnectionToken` (мережа, 5xx) —
+    `transport`, повтор — backoff клієнта;
+  - відмова токена з'єднання — `onError({ kind: "auth" })`; повторне
+    з'єднання — явний `connect()` (після `UnauthorizedError` клієнт сам не
+    перепідключається);
+  - розрив — `onError({ kind: "transport" })`;
+  - `refreshTokens(channels)` — перепідписка названих каналів; канал з
+    відмовою — закрито й `auth`;
+  - `subscribe` кожного каналу — окрема підписка клієнта; `Unsubscribe` знімає
+    лише її.
 
 - [ ] **Step 1: failing tests:**
-  - unit над фейковим `Centrifuge` (мапінг подій);
+  - unit над фейковим `Centrifuge`: мапінг подій; 5xx токена — `transport`;
+    явна відмова — `auth`; `Unsubscribe` одного каналу не чіпає інших;
+    `refreshTokens` закриває відмовлений канал;
   - стенд (ПГ-4/B2 `startSignalStand`, `createCentrifugoTokens`, тестовий
-    JWKS):
-    - реалізація порту: розрив дає повторний `onSubscribed`; короткий розрив
-      з історією — `recovered: true`; рестарт — `recovered: false`; відмова
-      токена — `auth` без автоповтору;
+    JWKS; `getChannelToken` — над `runtime.authorizeChannels`):
+    - розрив — повторний `onSubscribed`; короткий розрив з історією —
+      `recovered: true`; рестарт — `recovered: false`; відмова токена —
+      `auth` без автоповтору;
     - «сигнал рівно раз у своєму скоупі й жодного в чужому»: два рантайми
       двох користувачів двох скоупів, команда в першому — рівно 1 оновлення
-      рядка в першому рантаймі, 0 запитів у другому;
-    - учасник без `read` на пару — `canSubscribe` хибний, токена не просить,
-      сигналів немає;
-    - вимір Г7 (§14.2): після видалення членства — час до припинення
-      сигналів (до кінця строку токена каналу 5 хв або до `purge` за
-      порівнянням знімків на `resume()`). Число й метод — у §8.6.
-- [ ] **Step 2:** FAIL → **Step 3:** реалізація → **Step 4:** PASS обох
-  стеків; `pnpm build:packages && pnpm test:packaging` — зелені.
+      рядка в першому, 0 запитів у другому;
+    - учасник без `read` на пару — `canSubscribe` хибний, токена не просить;
+    - вимір Г7 (§14.2): з годинником порту токенів (`now` у
+      `createCentrifugoTokens`) — після видалення членства токен каналу на
+      оновленні не видається; час до припинення сигналів = залишок строку
+      токена каналу (≤ 5 хв), а з `resume()` — до першої звірки знімка.
+      Числа — у §8.6.
+- [ ] **Step 2:** `pnpm --filter simetra test src/data/centrifugo` і
+  `pnpm --filter @simetrajs/designer test:db signal-receiver`,
+  `pnpm --filter @simetrajs/designer test:db:supabase signal-receiver` — FAIL.
+- [ ] **Step 3:** реалізація → **Step 4:** PASS; `pnpm deps:check`,
+  `pnpm build:packages && pnpm test:packaging` — зелені.
 - [ ] **Step 5: Commit** — `feat(data): транспорт Centrifugo і доказ приймача на стенді`.
 
-### Task 15: гейти частини B і документація
+### Task 16: метрики, браузерні бюджети, документація й гейти
 
 **Files:**
-- Modify: `packages/designer/skills/` — скіл споживача: `signals` в опціях
-  рантайму, `simetra/data/centrifugo`, токени через host (англійською)
-- Modify: `docs/ROADMAP.md` — статус B5b
-- Modify: спека §8.6 — Г7 (задача 14)
+- Modify: `packages/simetra/src/data/runtime/signals.ts` і ядро — метрики
+  `unknown-age`, `stale-age`, `revalidate-burst`, `queue-stalled` у `log`
+  без ключів і значень (§8.4), якщо B3-2…B3-4 їх ще не дали (звір)
+- Modify (після B3-6): браузерні бюджети тестового хоста — приєднання без
+  `recovered` (рівно 1 запит), `resume()` і звірка гідратації з частиною
+  `rights` (байти §12), сигнальні сценарії р1–р9 спайку в оракулі
+- Modify: `packages/designer/skills/simetra-metadata/` — розділ про
+  рантайм даних: `signals` в опціях, `simetra/data/centrifugo`, токени через
+  host (англійською)
+- Modify: `docs/ROADMAP.md`; спека §8.6 — Г7 (задача 15). Бюджети
+  рахуються на рантайм (вкладку): кооперації вкладок немає; масовий рестарт
+  сервера сигналів дає N вкладок × 1 запит, розмазаних джитером — рядок у
+  §8.6
 
 - [ ] **Step 0:** зведена таблиця «мутація §12 П4-B → тест плану» у звіті
-  для мутацій приймача й знімка: розбирати повідомлення схемою відправки;
-  `onSubscribed` лише на першому підключенні; предикат без `scopeSets`;
-  `scopeSets` з `rights_scope_set` для виду з членством; предикат, що
-  пропускає лише контейнерне право; не перечитувати після приєднання без
-  `recovered`; знімати позначку «розрив» до пачки відновлених; відкидати
-  нерозібране повідомлення каналу змін замість `invalidate`; дати `removed`
-  за сигналом `delete` без перечитування; записати новий ключ за сигналом у
-  сховище; позначати `hasNewRows` на всі вигляди; пропустити звірку
-  `rightsVersion` після гідратації. Кожну виконавець робить на закомміченому
-  дереві, бачить червоний тест і відкочує.
+  для мутацій приймача й знімка:
+  - розбирати повідомлення схемою відправки;
+  - `onSubscribed` лише на першому підключенні;
+  - предикат без `scopeSets`; `scopeSets` з `rights_scope_set` для виду з
+    членством; предикат, що пропускає лише контейнерне право;
+  - не перечитувати після приєднання без `recovered`; перечитувати після
+    `recovered: true`; знімати позначку «розрив» до пачки відновлених;
+  - перевірка версії перед гілкою `delete`; прибрати перевірку версії
+    відлуння; ставити `stale` на кожне перечитування;
+  - відкидати нерозібране повідомлення каналу змін замість `invalidate`;
+    `removed` за сигналом `delete` без перечитування; записати новий ключ за
+    сигналом у сховище; `hasNewRows` на всі вигляди;
+  - пропустити звірку `rightsVersion` після гідратації; `purge` лише за
+    різницею знімків (без сховища).
+  
+  Кожну виконавець робить на закомміченому дереві, бачить червоний тест і
+  відкочує. Мутація без червоного тесту — дефект плану, до архітекторки.
 - [ ] **Step 1:** `git merge origin/main` (без rebase).
 - [ ] **Step 2:** `pnpm format:check && pnpm lint && pnpm typecheck && pnpm test`;
   `pnpm metadata:check`; `python3 scripts/check-doc-anchors.py` — зелені.
 - [ ] **Step 3:** `pnpm test:db:pg` — зелений; повний `pnpm test:db` — один раз.
-- [ ] **Step 4:** модельний тест і браузерний оракул (B3-6) — зелені.
+- [ ] **Step 4:** модельний тест і браузерний оракул у Chromium і WebKit —
+  зелені.
 - [ ] **Step 5:** `pnpm build:packages && pnpm test:packaging` — зелені.
-- [ ] **Step 6: Commit** — `docs: B5b — скіл споживача, ROADMAP, Г7`.
+- [ ] **Step 6: Commit** — `docs: B5b — метрики, бюджети, скіл споживача, ROADMAP, Г7`.
 
 ### Готово — частина B і блок
 
 - Порт `SignalTransport` має форму §8.5. `simetra/data/centrifugo`
-  імпортується з тарбола; `centrifuge` — необов'язкова peer.
+  імпортується з тарбола; `centrifuge` — необов'язкова peer; лінт-зона тримає
+  імпорт лише там.
 - Приймач на фейковому каналі тримає всі бюджети Global Constraints; модельний
-  тест з кроками сигналу зелений.
+  тест з кроками сигналу й знімка зелений; браузерні бюджети з частиною
+  `rights` зелені.
 - Стенд обох профілів:
   - `recovered` після короткого розриву, нова епоха, відмова токена;
   - сигнал рівно раз у своєму скоупі й жодного в чужому.
