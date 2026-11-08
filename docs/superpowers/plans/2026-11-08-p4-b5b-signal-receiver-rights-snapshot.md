@@ -195,10 +195,14 @@ Playwright (`page.clock`), `pg` 8.23.1, Postgres 17, Centrifugo v6 (стенд
     B4 дістає «`reason: "schema"` у T0 і `requestVersion()` на ньому» (Р9).
   
   Звір із поділом, який вносить B5a.
-- Modify: `docs/superpowers/plans/2026-11-08-p4-b3-4-b3-5-write-receipts.md` —
-  таблиця «подія → `version`»: `schema` → B4 (Р9).
-- Modify (після мерджу PR #77 з планом B5a): `docs/superpowers/plans/2026-11-08-p4-b5a-resume-interval.md`
-  — той самий розподіл: `schema` → B4. Цей рядок править лише гілка B5b.
+- Modify: `docs/superpowers/plans/2026-11-08-p4-b3-4-b3-5-write-receipts.md`
+  (Р9), задача 4, Step 1:
+  - речення «приєднання без `recovered` і `schema` — B5b» → «приєднання без
+    `recovered` — B5b, `schema` — B4»;
+  - рядок таблиці «приєднання без `recovered`, сигнал `schema` | B5b» →
+    два рядки: «приєднання без `recovered` | B5b» і «сигнал `schema` | B4».
+  
+  План B5a на `main` подій `schema` не розподіляє — у ньому правок немає.
 
 - [ ] **Step 1:** правки. Без лічильників і наративу фаз.
 - [ ] **Step 2:** `python3 scripts/check-doc-anchors.py` і `pnpm format:check` — зелені.
