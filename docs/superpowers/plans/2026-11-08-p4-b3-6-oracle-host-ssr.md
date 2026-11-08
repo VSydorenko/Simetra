@@ -62,7 +62,7 @@ B3-3](2026-11-08-p4-b3-3-window-public-api.md).
 | Р1 | Тестовий хост — приватний пакет `packages/test-host` з власними `eslint.config.js`, `vitest.config.ts` (без `e2e/**`), скриптами `lint`, `typecheck`, `test`, `e2e`; імпорт `simetra` — з `exports` | гейти репозиторію бачать його, а Vitest не збирає специфікацій Playwright | §14.3 П4-B (Task 13); межа фреймворку `AGENTS.md` — Task 0 (затверджено власником 2026-11-08) |
 | Р2 | Дані хоста — справжній `createDataHandler` над фейковим `CommandRuntime` у пам'яті, що живе в `packages/simetra/src/server/testing/` під лінт-зоною T3 і dev-only входом `simetra/server/testing` (механізм Р6), тож хост і designer беруть його через `exports` (`createFakeRuntime(catalog: RuntimeCatalog, seed)`: `read`, `readParts`, `run`, квитанції; фільтр, сортування, keyset, `known` і маркери — проста модель) і тест еквівалентності фейку проти справжнього рантайму на базі (designer DB-тест, спільні фікстури) | конверт, сумісність, `version`, бюджет відповіді й походження — код T3, тож шляхи T3 у фільтрі CI справді перевіряються; розбіжність моделі ловить тест еквівалентності | немає |
 | Р3 | SSR ядра — `store/ssr.ts` (поряд із `object-store.ts`, `section-store.ts`, `window.ts`, `epoch.ts`): знімок рядків з `versionEpoch` і трьома позначками `stale`, ТЧ, складів і курсорів сторінок вікна; епоха сесії не переноситься (новий рантайм — свої епохи) | гідратований рядок мусить іти в `known` за правилом B3-3 | немає |
-| Р4 | Частина `version` — у збирачі B3-3: `CorePart` і `CoreReadItem` зі значенням `VersionValue`, група Server Function навіть за перевизначеного адаптера | §6.6: один запит після гідратації | немає |
+| Р4 | Частину `version` у збирачі (`CorePart` і `CoreReadItem` зі значенням `VersionValue`, група Server Function навіть за перевизначеного адаптера) вводить B3-4 Task 4; B3-6 її лише вживає | §6.6: один запит після гідратації | немає |
 | Р5 | `RuntimeHolder.hydrateFrom(snapshot, create: (subject: string) => DataRuntime)` — host дає фабрику рантайму | тримач B3-3 не знає каталогу й транспорту | немає |
 | Р6 | `simetra/data/testing` (`countingTransport`) і `simetra/server/testing` (фейковий рантайм) — dev-only входи в `exports` `packages/simetra/package.json`, без `publishConfig.exports` (як `./ui` і `./shell` сьогодні); тест пакування доводить, що його не опубліковано | хост бере помічник як споживач, а в пакет він не йде | немає |
 | Р7 | Бюджети браузера: `countingTransport` у клієнті звіряється з мережевим журналом Playwright (`/_serverFn/`) — розбіжність червона; кожен бюджет «0» має позитивний контроль на тій самій тривалості; байти знімка — за скриптом дегідрованих даних, а не всім HTML | лічильник бачить лише те, що пройшло через нього, а нульовий бюджет на короткому вікні проходить завжди | немає |
@@ -127,11 +127,11 @@ B3-3](2026-11-08-p4-b3-3-window-public-api.md).
 ### Task 3: Звірка після гідратації
 
 **Files:**
-- Modify: `runtime/ssr.ts` (`verifyAfterHydration`), `store/batcher.ts` і `store/source.ts` (частина `version`, Р4). Спирається на B1c у `main`: частина `version` конверта `read` і `readParts` T3 уже є; якщо ні — блок не стартує
-- Test: `runtime/__tests__/ssr.test.ts`, `store/__tests__/batcher.test.ts`
+- Modify: `runtime/ssr.ts` (`verifyAfterHydration`). Спирається на B1c і B3-4 у `main`: частина `version` конверта `read`, `readParts` T3 і частина `version` у збирачі ядра (B3-4 Task 4, Р4) уже є; якщо ні — блок не стартує
+- Test: `runtime/__tests__/ssr.test.ts`
 
 - [ ] **Step 1: Unit (`it.each` за гілкою):** знімок без `rightsVersion` (до B5 — завжди) — один запит з частиною `version` і частинами перечитування видимих виглядів, склад незмінний; прострочений — так само; інший `catalogHash` — `onStaleClient()` без об'єкта й `stale` рядків знімка без перечитування як свіжих; відповідь `session-changed` — закриття рантайму з причиною наявним шляхом; StrictMode — одна звірка; частина `version` за перевизначеного адаптера об'єкта — у групі Server Function; наскрізний тест (справжній `createDataHandler` над фейковим рантаймом) — звірка після гідратації дає рівно один запит транспорту.
-- [ ] **Step 2: Червоний → реалізація → зелений.** `pnpm --filter simetra test ssr batcher source`.
+- [ ] **Step 2: Червоний → реалізація → зелений.** `pnpm --filter simetra test ssr`.
 - [ ] **Step 3: Commit.** `feat(data): звірка після гідратації одним запитом`
 
 **Готово B3-6a:** unit-тести SSR ядра, рантайму й збирача, модельний крок гідратації зелені.
