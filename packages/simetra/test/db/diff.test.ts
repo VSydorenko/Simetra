@@ -261,6 +261,32 @@ describe("scopeReplacementViolations", () => {
       expect(result.violations.length === 0).toBe(ok)
     })
 
+    // Скоуплена таблиця: носій, ключ і обидва разом — заміна, інакше — ні.
+    it.each([
+      { name: "carrier only", compiled: ["org_id", "ref"], ok: true },
+      { name: "key only", compiled: ["ref", "id"], ok: true },
+      { name: "carrier and key", compiled: ["org_id", "ref", "id"], ok: true },
+      {
+        name: "key before carrier",
+        compiled: ["ref", "org_id", "id"],
+        ok: false,
+      },
+      {
+        name: "key in the middle",
+        compiled: ["org_id", "id", "ref"],
+        ok: false,
+      },
+    ])("scoped: $name", ({ compiled, ok }) => {
+      const result = violations(
+        catalog({ constraints: [], indexes: [shaped("doc_ref_idx", ["ref"])] }),
+        catalog({
+          constraints: [],
+          indexes: [shaped("doc_new_idx", compiled)],
+        })
+      )
+      expect(result.violations.length === 0).toBe(ok)
+    })
+
     // Нескоупльована таблиця носія не має, але ключ останнім їй дозволений.
     it.each([
       { name: "no carrier: key last", compiled: ["a", "id"], ok: true },

@@ -334,7 +334,9 @@ export function scopeReplacementViolations(
       if (
         keyLast &&
         plainIndex(compiled, add) !== undefined &&
-        sameColumns(added.columns, [...dropped.columns, ROW_KEY])
+        (sameColumns(added.columns, [...dropped.columns, ROW_KEY]) ||
+          (carrier !== undefined &&
+            sameColumns(added.columns, [carrier, ...dropped.columns, ROW_KEY])))
       ) {
         return true
       }
