@@ -37,13 +37,7 @@ export type ViewSpec =
 
 /** Row state vocabulary (P4-B spec §6.5). */
 export type RowState =
-  | "synced"
-  | "pending"
-  | "failed"
-  | "conflict"
-  | "unknown"
-  | "stale"
-  | "removed"
+  "synced" | "pending" | "failed" | "conflict" | "unknown" | "stale" | "removed"
 
 /** A row as a view shows it; `removed` keeps the place without values. */
 export type RowView =
@@ -59,10 +53,7 @@ export type RowView =
 
 /** Why a session or view was closed. */
 export type CloseReason =
-  | "disposed"
-  | "session-changed"
-  | "signed-out"
-  | "subject-changed"
+  "disposed" | "session-changed" | "signed-out" | "subject-changed"
 
 /** The immutable snapshot of one view. */
 export interface ViewSnapshot {
@@ -124,11 +115,7 @@ export type CoreLogEntry =
 
 /** The only way to change the store (P4-B spec §6.1). */
 export interface Writer {
-  patch(
-    object: ObjectName,
-    rows: readonly ServerRow[],
-    readEpoch: number
-  ): void
+  patch(object: ObjectName, rows: readonly ServerRow[], readEpoch: number): void
   remove(object: ObjectName, keys: readonly Key[], readEpoch: number): void
   purge(
     object: ObjectName,
