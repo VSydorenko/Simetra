@@ -124,7 +124,7 @@ DB-тест плану на 100 000 рядках під справжнім RLS.
 - Test: `packages/simetra/src/compiler/__tests__/stage-model-indexes.test.ts` (новий, table-driven, білдери з `fixtures/`)
 - Modify: тести й фікстури з формою індексів — `stage-model.test.ts`, `stage-scope-model.test.ts`, `stage-registers.test.ts`, `stage-integrity.test.ts`, `sql-namespaces.test.ts`, `creation-order.test.ts`, `rights-admin-tables.test.ts`, `fixtures/kitchen-sink.ts`; `schema/__tests__/{render-tables,desired-state,reverse-generate}.test.ts`, `schema/__tests__/fixtures/e1-fixtures.ts`; `schema/apply/__tests__/promotion-*.test.ts`; `test/db/diff.test.ts`; хеш-літерали, що залежать від форми (`custom-table-physics.test.ts`, `runtime-catalog.test.ts` — перевірити); designer — тести з `_idx`; `examples/reference/accepted/expected-diff.json` (і `service-accrual.sql`, якщо зачеплено)
 
-- [ ] **Step 1: Failing test** — очікувані `keys` індексів таблиці:
+- [ ] **Step 1: Failing test** — очікувані `keys` індексів таблиці (рядок «складений, що містить `id`» прибрано — неможливо: `index.attribute-unknown`):
 
 | Кейс | Очікування |
 | --- | --- |
@@ -137,7 +137,6 @@ DB-тест плану на 100 000 рядках під справжнім RLS.
 | `unique` `a` у скоупі + `indexed` | лише UNIQUE `(org_id, a)` |
 | `unique` з `ignoreCase` + `indexed` | unique-індекс `lower(a)` і `(org_id, a, id)` |
 | складений `[a, { name: b, order: desc }]` | `(org_id, a, b DESC, id)` |
-| складений, що містить `id` | `id` не дублюється |
 | складений з `Ref` поліморфної пари | пара колонок, далі `id` |
 | ТЧ зі складеним `indexes` | `(…колонки, <ключ ТЧ>)` |
 | рух регістра з `indexed` виміром | без нового індексу; індекс руху без змін |
