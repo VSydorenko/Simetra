@@ -15,6 +15,7 @@ import {
   testDatabaseUrl,
   testSuperuserUrl,
 } from "./connection"
+import { type Exec, type Fetch, nodeExec, removeRunResources } from "./external"
 import {
   PROVIDER_ENV,
   TEST_STACKS,
@@ -23,6 +24,9 @@ import {
 } from "./profile"
 
 const DEFAULT_DEADLINE_MS = 30_000
+// Гарантована частка дедлайну на контейнери й бакети: DB-фаза, що впирається
+// в свій дедлайн чи висить на з'єднанні, не з'їдає часу зовнішніх ресурсів
+const EXTERNAL_BUDGET_MS = 5_000
 const PASS_PAUSE_MS = 1_000
 // Закритий фаєрволом порт інакше тримав би обробник сигналу до його межі
 const CONNECT_TIMEOUT_MS = 5_000
@@ -91,19 +95,50 @@ export async function stopRunBackends(
 /**
  * Stops the backends of run `tag` ({@link stopRunBackends}), then drops every
  * stack database and role tagged with `tag` and terminates the backends still
- * creating one, repeating the pass until one finds nothing or
- * `deadlineMs` runs out. A failed DROP does not stop the pass; whatever is
- * still found at the end is returned in `left`.
+ * creating one, repeating the pass until one finds nothing or the deadline
+ * runs out. A failed DROP does not stop the pass. Then, even when the database
+ * is unreachable, removes the run's containers and empty buckets
+ * ({@link removeRunResources}). Whatever is still found at the end, and why
+ * a phase failed, is returned in `left`.
  */
 export async function sweepRun(
   tag: string,
-  o: { deadlineMs?: number } = {}
+  o: { deadlineMs?: number; exec?: Exec; fetch?: Fetch } = {}
 ): Promise<{ dropped: string[]; left: string[] }> {
   checkTag(tag)
+  const p = testProvider()
   const deadline = Date.now() + (o.deadlineMs ?? DEFAULT_DEADLINE_MS)
+  let db: { dropped: string[]; left: string[] } = { dropped: [], left: [] }
+  let external: { removed: string[]; left: string[] }
+  try {
+    db = await sweepDatabase(tag, p, deadline - EXTERNAL_BUDGET_MS)
+  } catch (error) {
+    // Недосяжна база не скасовує прибирання контейнерів і бакетів: вони від
+    // неї не залежать
+    db.left.push(
+      `stack objects of run ${tag} (sweep failed: ${(error as Error).message})`
+    )
+  } finally {
+    external = await removeRunResources(tag, p, {
+      exec: o.exec ?? nodeExec,
+      fetch: o.fetch ?? fetch,
+      deadlineMs: Math.max(EXTERNAL_BUDGET_MS, deadline - Date.now()),
+    })
+  }
+  return {
+    dropped: [...db.dropped, ...external.removed],
+    left: [...db.left, ...external.left],
+  }
+}
+
+async function sweepDatabase(
+  tag: string,
+  p: TestProvider,
+  deadline: number
+): Promise<{ dropped: string[]; left: string[] }> {
   // Адреса, перевизначена на чужий стек, дала б прибиральнику видаляти там
   // об'єкти, поки прогін того стека тримає свій замок
-  await assertStack(testProvider())
+  await assertStack(p)
   // Воркери вже вбиті, але сервер доводить їхні запити до кінця й без
   // клієнта: важкий запит вантажив би стек наступному прогону після
   // звільнення замка
@@ -284,7 +319,11 @@ async function cli(tag: string | undefined): Promise<number> {
     process.stderr.write(
       `DB run ${tag} sweep: dropped ${dropped.length > 0 ? dropped.join(", ") : "nothing"}; left ${left.length > 0 ? left.join(", ") : "nothing"}\n`
     )
-    return left.length === 0 ? 0 : 1
+    if (left.length === 0) return 0
+    // Недосяжна база не кидає, а лишає причину в `left`: ручний SQL потрібен
+    // і тоді
+    process.stderr.write(`Clean up by hand:\n${manualSweepSql(tag, p)}\n`)
+    return 1
   } catch (error) {
     process.stderr.write(
       `DB run ${tag} sweep failed: ${(error as Error).message}\nClean up by hand:\n${manualSweepSql(tag, p)}\n`

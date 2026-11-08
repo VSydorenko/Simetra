@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest"
 import designerConfig from "../../../designer/vitest.config"
 import simetraConfig from "../../vitest.config"
 import { TEST_STACKS, type TestProvider } from "./profile"
-import { leakMessage, leftoverReport, lockPath } from "./stack-guard"
+import { diff, leakMessage, leftoverReport, lockPath } from "./stack-guard"
 import { manualSweepSql, stackMismatch } from "./sweep"
 
 const PROVIDERS: TestProvider[] = ["supabase", "postgres"]
@@ -37,6 +37,50 @@ describe("leakMessage", () => {
       )
     }
   )
+})
+
+describe("external resources", () => {
+  const empty = {
+    databases: [],
+    roles: [],
+    schemas: [],
+    extensions: [],
+    containers: [],
+    buckets: [],
+  }
+
+  it("a container or bucket left by the run is a leak with its cleanup", () => {
+    const changes = diff(empty, {
+      ...empty,
+      containers: ["simetra-run-abc123-x"],
+      buckets: ["run-abc123"],
+    })
+    expect(changes).toEqual([
+      { kind: "containers", name: "simetra-run-abc123-x", change: "added" },
+      { kind: "buckets", name: "run-abc123", change: "added" },
+    ])
+    const message = leakMessage(changes, "postgres")
+    expect(message).toContain("  docker rm -f -v simetra-run-abc123-x")
+    expect(message).toMatch(/run-abc123.*empty and delete in Garage/)
+  })
+
+  it("names leftover buckets under their run and leftover containers", () => {
+    const lines = leftoverReport(
+      {
+        databases: [],
+        roles: [],
+        containers: ["stray"],
+        buckets: ["run-abc123"],
+      },
+      "postgres"
+    )
+    expect(lines).toContainEqual(
+      expect.stringMatching(/run abc123: bucket run-abc123/)
+    )
+    expect(lines).toContainEqual(
+      expect.stringContaining("docker rm -f -v stray")
+    )
+  })
 })
 
 describe("manualSweepSql", () => {

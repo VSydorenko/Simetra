@@ -24,6 +24,7 @@ import {
   shadowAgeMinutes,
   testDatabaseUrl,
 } from "./connection"
+import { nodeExec, runBuckets, runContainers } from "./external"
 import { installInterruptCleanup } from "./interrupt"
 import {
   enterProvider,
@@ -41,9 +42,14 @@ const LOCK_POLL_MS = 5_000
 // вже наприкінці й лишає сиріт, тож краще не стартувати зовсім. Docker на
 // Linux тримає дані стеку на кореневому розділі
 const MIN_FREE_BYTES = 3 * 1024 ** 3
+// Адмінка Garage локальна: довша відповідь — завислий сервіс, і прогін
+// краще впаде, ніж чекатиме
+const LIST_TIMEOUT_MS = 10_000
 
+// Контейнери й бакети — лише свого профілю: ресурси прогону іншого стека,
+// що йде одночасно, не є змінами цього
 export type Snapshot = Record<
-  "databases" | "roles" | "schemas" | "extensions",
+  "databases" | "roles" | "schemas" | "extensions" | "containers" | "buckets",
   string[]
 >
 
@@ -89,7 +95,7 @@ async function setup(p: TestProvider): Promise<() => Promise<void>> {
     await assertStack(p)
     // Тег уже є, але воркерів ще нема: об'єктів цього прогону в знімку бути
     // не може, тож звіт називає лише чужі лишки
-    const before = await snapshot()
+    const before = await snapshot(p)
     const leftovers = leftoverReport(before, p)
     if (leftovers.length > 0) process.stderr.write(`${leftovers.join("\n")}\n`)
     return async () => {
@@ -105,7 +111,7 @@ async function setup(p: TestProvider): Promise<() => Promise<void>> {
           process.stderr.write(
             `DB run ${runTag}: stopped ${backends.stopped} backend(s) still running after the tests${backends.left.length > 0 ? `; still running: ${backends.left.join(", ")}` : ""}\n`
           )
-        const after = await snapshot()
+        const after = await snapshot(p)
         const changed = treeState()
         if (tree !== undefined && changed?.summary !== tree.summary)
           process.stderr.write(
@@ -229,7 +235,13 @@ function treeState(): { summary: string } | undefined {
   }
 }
 
-async function snapshot(): Promise<Snapshot> {
+// Перелік контейнерів і бакетів, що впав, валить прогін: порожній замість
+// нього сховав би витік
+async function snapshot(p: TestProvider): Promise<Snapshot> {
+  const containers = (await runContainers(p, nodeExec)).map((c) => c.name)
+  const buckets = (
+    await runBuckets(TEST_STACKS[p], fetch, LIST_TIMEOUT_MS)
+  ).map((b) => b.name)
   const client = new pg.Client({ connectionString: testDatabaseUrl() })
   await client.connect()
   try {
@@ -247,6 +259,8 @@ async function snapshot(): Promise<Snapshot> {
       extensions: await names(
         "select extname as name from pg_extension order by 1"
       ),
+      containers,
+      buckets,
     }
   } finally {
     await client.end()
@@ -263,7 +277,8 @@ async function snapshot(): Promise<Snapshot> {
  * лишити й інша сесія (ручний спайк), тож для неї — окремий `DROP` на ім'я.
  */
 export function leftoverReport(
-  before: Pick<Snapshot, "databases" | "roles">,
+  before: Pick<Snapshot, "databases" | "roles"> &
+    Partial<Pick<Snapshot, "containers" | "buckets">>,
   p: TestProvider,
   now: number = Date.now()
 ): string[] {
@@ -283,6 +298,13 @@ export function leftoverReport(
       ])
     else if (shadow) untaggedShadows.push(name)
   }
+  // Тег бакета — в імені `run-<тег>`; ім'я контейнера тегу не несе, тож
+  // контейнер названо окремо з командою на ім'я
+  for (const name of before.buckets ?? []) {
+    const tag = name.slice("run-".length)
+    byTag.set(tag, [...(byTag.get(tag) ?? []), `bucket ${name}`])
+  }
+  const containers = before.containers ?? []
   const lines: string[] = []
   if (byTag.size > 0)
     lines.push(
@@ -292,6 +314,11 @@ export function leftoverReport(
         // Профіль явно: прибиральник без нього пішов би на типовий стек
         `    cd packages/simetra && ${PROVIDER_ENV}=${p} node --import tsx test/db/sweep.ts ${tag}`,
       ])
+    )
+  if (containers.length > 0)
+    lines.push(
+      "Containers of earlier DB runs are already on the stack, likely left by a killed run; they are not removed. To clean up, after checking nobody else owns them:",
+      ...containers.map((name) => `  docker rm -f -v ${name}`)
     )
   if (untaggedShadows.length > 0)
     lines.push(
@@ -345,6 +372,10 @@ export function leakMessage(
     if (kind === "roles")
       return [`  DROP ROLE "${name}";  -- as ${TEST_STACKS[p].superuserName}`]
     if (kind === "schemas") return [`  DROP SCHEMA "${name}";`]
+    if (kind === "containers") return [`  docker rm -f -v ${name}`]
+    // Порожнити бакет прибиральник ще не вміє (Р5): це робить людина
+    if (kind === "buckets")
+      return [`  bucket ${name}: empty and delete in Garage`]
     return [`  DROP EXTENSION "${name}";`]
   })
   return [
