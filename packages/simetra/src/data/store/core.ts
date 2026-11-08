@@ -1,4 +1,5 @@
 import { FILTER_IN_MAX, READ_LIMIT_MAX, type CatalogIndex } from "simetra/model"
+import type { DefectFlag } from "./defects"
 import { fieldInfoOf, filterCollator } from "./filter"
 import { keyId } from "./epoch"
 import { createObjectStore } from "./object-store"
@@ -85,8 +86,7 @@ export interface CoreSession {
   close(reason: CloseReason): void
 }
 
-/** Defect flags of the model test's self-check (Task 10 adds them). */
-export type DefectFlag = never
+export type { DefectFlag } from "./defects"
 
 /** Test-only inspection of a core. */
 export interface CoreInspection {
@@ -94,6 +94,18 @@ export interface CoreInspection {
   violations(): string[]
   owners(object: ObjectName, key: Key): number
   rowCount(): number
+  /** Sizes of the service maps that must not outlive their rows or the session. */
+  serviceSizes(): {
+    seen: number
+    tombstones: number
+    horizon: number
+    pairBurials: number
+    revisions: number
+    rowViews: number
+    tails: number
+    purges: number
+  }
+  /** Deliberate defects of the model test's self-check; empty by default. */
   readonly defects: Set<DefectFlag>
 }
 
@@ -169,7 +181,15 @@ export function createCore(options: {
       // Журнал недоступний.
     }
   }
-  const session = createSession({ subject: options.subject, limits, log })
+  // Прапорці самотесту: модулі тримають той самий набір, тож прапорець,
+  // доданий через `inspectCore` після створення, діє одразу.
+  const defects = new Set<DefectFlag>()
+  const session = createSession({
+    subject: options.subject,
+    limits,
+    log,
+    defects,
+  })
   const rowViews = createRowViews()
   const dirtySections = new Map<ObjectName, Set<Key>>()
   let closed: ViewSnapshot | undefined
@@ -177,7 +197,13 @@ export function createCore(options: {
   const objects = new Map<ObjectName, ObjectState>()
   for (const entry of index.byRef.values()) {
     const name = `${entry.kind}.${entry.name}`
-    const rows = createObjectStore({ object: name, entry, session, log })
+    const rows = createObjectStore({
+      object: name,
+      entry,
+      session,
+      log,
+      defects,
+    })
     objects.set(name, {
       name,
       ref: { kind: entry.kind, name: entry.name },
@@ -230,6 +256,7 @@ export function createCore(options: {
       // клієнті не впорядковує серверних знімків (П15), тож відсутній рядок
       // ховає завжди; рядки повертає наступне читання ТЧ.
       const e = o.rows.get(key)
+      if (defects.has("removed-keeps-sections")) return
       if (e === undefined || e.removed !== undefined) {
         o.sections.clearOwner(scope, key)
         touchSection(o, key)
@@ -369,7 +396,9 @@ export function createCore(options: {
     const notify = registry.afterCommit(closing)
     // Ревізії й кеш `RowView` — лише для рядків, що є в сховищі.
     rowViews.settle(
-      (object, key) => objectOf(object).rows.get(key) !== undefined
+      (object, key) =>
+        defects.has("revision-survives-row") ||
+        objectOf(object).rows.get(key) !== undefined
     )
     dirtySections.clear()
     for (const s of notify) {
@@ -418,6 +447,7 @@ export function createCore(options: {
     objects,
     purges,
     invalidateTail,
+    defects,
   }
 
   const core: CoreSession = {
@@ -462,7 +492,17 @@ export function createCore(options: {
   internals.set(core, { objects, ops, registry })
 
   inspections.set(core, {
-    defects: new Set<DefectFlag>(),
+    defects,
+    serviceSizes() {
+      const views = rowViews.sizes()
+      return {
+        ...session.epochs.sizes(),
+        revisions: views.revisions,
+        rowViews: views.views,
+        tails: tails.size,
+        purges: purges.size,
+      }
+    },
     owners: (object, key) => objectOf(object).rows.get(key)?.owners ?? 0,
     rowCount: () => [...objects.values()].reduce((n, o) => n + o.rows.size, 0),
     violations() {

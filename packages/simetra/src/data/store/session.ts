@@ -1,3 +1,4 @@
+import { NO_DEFECTS, type Defects } from "./defects"
 import { createEpochs, type Epochs } from "./epoch"
 import type {
   CloseReason,
@@ -46,9 +47,11 @@ export function createSession(options: {
   subject: string
   limits: CoreLimits
   log: (entry: CoreLogEntry) => void
+  defects?: Defects
 }): Session {
   const { log } = options
-  const epochs = createEpochs(options.limits)
+  const defects = options.defects ?? NO_DEFECTS
+  const epochs = createEpochs(options.limits, defects)
   const sessionController = new AbortController()
   const controllers = new Set<AbortController>()
   const listeners = new Set<() => void>()
@@ -113,7 +116,7 @@ export function createSession(options: {
       },
     }),
     commit(fn, token, what = "commit") {
-      if (!token.valid) {
+      if (!token.valid && !defects.has("no-token-check")) {
         log({ kind: "late-response", what })
         return false
       }

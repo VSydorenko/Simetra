@@ -1,4 +1,5 @@
 import type { CatalogEntry } from "simetra/model"
+import { NO_DEFECTS, type Defects } from "./defects"
 import { keyId, pairId } from "./epoch"
 import type { Scope, Session } from "./session"
 import type { CoreLogEntry, Key, ObjectName, ServerRow, Values } from "./types"
@@ -137,9 +138,14 @@ export function createObjectStore(options: {
   entry: CatalogEntry
   session: Pick<Session, "epochs" | "onFlush" | "onClose">
   log: (entry: CoreLogEntry) => void
+  defects?: Defects
 }): ObjectStore {
   const { object, entry, session, log } = options
   const { epochs } = session
+  const defects = options.defects ?? NO_DEFECTS
+  const bury = (id: string) => {
+    if (!defects.has("no-tombstone")) epochs.bury(id)
+  }
   const scopeField = scopeFieldOf(entry)
   if (entry.scopeColumn !== undefined && scopeField === undefined) {
     throw new TypeError(
@@ -264,7 +270,11 @@ export function createObjectStore(options: {
       if (e === undefined)
         return insert(row, incomingScope ?? null, readEpoch, lazyRead)
       // `removed` знімає лише читання після позначки — будь-якої версії.
-      if (e.removed !== undefined && readEpoch < e.removed.epoch)
+      if (
+        e.removed !== undefined &&
+        readEpoch < e.removed.epoch &&
+        !(defects.has("removed-by-older-read") && row.version > e.version)
+      )
         return "rejected"
 
       // Рядок переїжджає в інший скоуп: витіснений надгробок нової пари міг
@@ -288,7 +298,11 @@ export function createObjectStore(options: {
         delete e.removed
         e.row = row
       } else {
-        const merged = mergeVersioned(e.row, row)
+        const merged =
+          mergeVersioned(e.row, row) ??
+          (defects.has("version-decrease")
+            ? { ...row, values: { ...e.row?.values, ...row.values } }
+            : undefined)
         if (merged === undefined) return "rejected"
         e.row = merged
       }
@@ -325,7 +339,7 @@ export function createObjectStore(options: {
       scope.assert()
       const dropped: Key[] = []
       for (const key of keys) {
-        epochs.bury(keyId(object, key))
+        bury(keyId(object, key))
         tail.delete(key)
         if (rows.delete(key)) dropped.push(key)
       }
@@ -334,11 +348,16 @@ export function createObjectStore(options: {
 
     purgeScope(scope, scopeId) {
       scope.assert()
-      epochs.buryPair(object, scopeId)
+      if (!defects.has("no-tombstone")) epochs.buryPair(object, scopeId)
       const dropped: Key[] = []
       for (const [key, e] of rows) {
-        if (e.scope !== scopeId) continue
-        epochs.bury(keyId(object, key))
+        const stored = defects.has("purge-by-values")
+          ? e.row === undefined
+            ? undefined
+            : scopeOf(entry, e.row.values)
+          : e.scope
+        if (stored !== scopeId) continue
+        bury(keyId(object, key))
         rows.delete(key)
         tail.delete(key)
         dropped.push(key)
@@ -389,7 +408,7 @@ export function createObjectStore(options: {
       const e = rows.get(key)
       if (e === undefined) return
       e.owners = Math.max(0, e.owners - 1)
-      if (e.owners > 0) return
+      if (e.owners > 0 || defects.has("row-without-owner")) return
       const id = keyId(object, key)
       // Пам'ятна версія не менша за очікувану: інакше stale-вставка після
       // повернення ключа втратила б свою мінімальну версію.
@@ -398,7 +417,7 @@ export function createObjectStore(options: {
         Math.max(e.version, e.stale.minVersion?.v ?? e.version)
       )
       // Слот removed без надгробка дав би старій відповіді повернути значення.
-      if (e.removed !== undefined) epochs.bury(id)
+      if (e.removed !== undefined) bury(id)
       rows.delete(key)
       tail.delete(key)
     },

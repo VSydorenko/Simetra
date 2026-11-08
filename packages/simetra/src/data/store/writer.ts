@@ -1,4 +1,5 @@
 import { ZERO_UUID, channelTopic, type CatalogEntry } from "simetra/model"
+import type { Defects } from "./defects"
 import type { ObjectState } from "./forms"
 import { includeKeys, readIncluded } from "./include"
 import { visibleRow, type RowEntry } from "./object-store"
@@ -43,6 +44,8 @@ export interface WriterContext extends ReaderContext {
   readonly purges: Map<ObjectName, number>
   /** Invalidates the tail re-read of the object in flight and re-queues its keys (П12). */
   invalidateTail(o: ObjectState): void
+  /** Deliberate defects of the model test's self-check. */
+  readonly defects: Defects
 }
 
 /**
@@ -133,7 +136,11 @@ function forget(
       s.included.set(o.name, without(included, dropped))
     if (own && s.form.include.length > 0) releaseTargets(ctx, scope, s)
     s.dirty = true
-    if ((own || target) && s.flight !== undefined) {
+    if (
+      (own || target) &&
+      s.flight !== undefined &&
+      !ctx.defects.has("purge-keeps-flights")
+    ) {
       s.gen++
       s.trailing = true
     }
@@ -277,6 +284,22 @@ export function setVisible(
 
 // ------------------------------------------------------------ revalidate
 
+// Дефект самотесту «системне перечитування міняє склад»: склад будується
+// заново за значеннями, як у завантаження.
+function rebuildLayout(ctx: WriterContext, s: Subset) {
+  if (!ctx.defects.has("reread-changes-layout")) return
+  const { form } = s
+  const live = s.layout.flatMap((key) => {
+    const e = form.object.rows.get(key)
+    const values = e === undefined ? undefined : visibleRow(e)
+    return values !== undefined && form.test(values) ? [{ key, values }] : []
+  })
+  const compare = form.compare
+  if (compare !== undefined) live.sort((a, b) => compare(a.values, b.values))
+  s.layout = live.map((r) => r.key)
+  s.layoutSet = new Set(s.layout)
+}
+
 /**
  * Перечитування вигляду за правилом стабільності (§6.5): `apply` пише лише
  * ключі складу на мить `commit`, зниклі — `removed` з епохою старту, ключі
@@ -304,6 +327,7 @@ function applyKeys(
         ctx.ops.remove(scope, o, key, startEpoch)
     }
     if (fresh && marksNew) s.hasNewRows = true
+    if (s.form.spec.kind === "keys") rebuildLayout(ctx, s)
   }
 }
 
@@ -396,6 +420,7 @@ async function readFullAgain(
     if (fresh) s.hasNewRows = true
     if (outOfPlace(s) || [...moved].some((key) => s.layoutSet.has(key)))
       s.needsRefresh = true
+    rebuildLayout(ctx, s)
   }
 }
 

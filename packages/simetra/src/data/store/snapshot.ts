@@ -173,6 +173,8 @@ export interface RowViews {
   settle(exists: (object: ObjectName, key: Key) => boolean): void
   /** Ids of every revision and cached view (inspection). */
   ids(): Iterable<{ object: ObjectName; key: Key }>
+  /** Sizes of the revision map and the view cache (inspection). */
+  sizes(): { revisions: number; views: number }
   clear(): void
 }
 
@@ -225,6 +227,7 @@ export function createRowViews(): RowViews {
       touched.clear()
     },
     ids: () => parts.values(),
+    sizes: () => ({ revisions: revisions.size, views: cache.size }),
     clear() {
       revisions.clear()
       cache.clear()

@@ -1,3 +1,4 @@
+import { NO_DEFECTS, type Defects } from "./defects"
 import type { CoreLimits } from "./types"
 
 /**
@@ -27,6 +28,13 @@ export interface Epochs {
   lastPairBurial(object: string): number
   /** Drops both maps, the horizon and the last pair burials. */
   clear(): void
+  /** Sizes of the service maps (inspection); `horizon` counts raised buckets. */
+  sizes(): {
+    seen: number
+    tombstones: number
+    horizon: number
+    pairBurials: number
+  }
 }
 
 /** The epoch id of a key: `"<object>\u0000<key>"`. */
@@ -51,7 +59,8 @@ function fnv1a(id: string): number {
 }
 
 export function createEpochs(
-  limits: Pick<CoreLimits, "seenMax" | "tombstonesMax" | "horizonBuckets">
+  limits: Pick<CoreLimits, "seenMax" | "tombstonesMax" | "horizonBuckets">,
+  defects: Defects = NO_DEFECTS
 ): Epochs {
   let epoch = 0
   const seen = new Map<string, { version: number; epoch: number }>()
@@ -70,13 +79,14 @@ export function createEpochs(
   function trim<V>(
     map: Map<string, V>,
     max: number,
-    epochOf: (v: V) => number
+    epochOf: (v: V) => number,
+    skipHorizon: () => boolean
   ) {
     while (map.size > max) {
       const oldest = map.entries().next()
       if (oldest.done) return
       map.delete(oldest.value[0])
-      evicted(oldest.value[0], epochOf(oldest.value[1]))
+      if (!skipHorizon()) evicted(oldest.value[0], epochOf(oldest.value[1]))
     }
   }
 
@@ -88,7 +98,12 @@ export function createEpochs(
     const at = ++epoch
     tombstones.delete(id)
     tombstones.set(id, at)
-    trim(tombstones, limits.tombstonesMax, (v) => v)
+    trim(
+      tombstones,
+      limits.tombstonesMax,
+      (v) => v,
+      () => defects.has("no-horizon-tombstones")
+    )
   }
 
   return {
@@ -106,7 +121,12 @@ export function createEpochs(
       const known = seen.get(id)?.version ?? -Infinity
       seen.delete(id)
       seen.set(id, { version: Math.max(known, version), epoch: at })
-      trim(seen, limits.seenMax, (v) => v.epoch)
+      trim(
+        seen,
+        limits.seenMax,
+        (v) => v.epoch,
+        () => defects.has("no-horizon-seen")
+      )
     },
     seen: (id) => seen.get(id),
     evictedSince: (id, readEpoch) => (horizon[bucket(id)] ?? 0) > readEpoch,
@@ -116,5 +136,11 @@ export function createEpochs(
       horizon.fill(0)
       pairBurials.clear()
     },
+    sizes: () => ({
+      seen: seen.size,
+      tombstones: tombstones.size,
+      horizon: horizon.reduce((n, at) => (at > 0 ? n + 1 : n), 0),
+      pairBurials: pairBurials.size,
+    }),
   }
 }
