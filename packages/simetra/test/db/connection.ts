@@ -7,11 +7,11 @@ import {
 } from "simetra/model"
 import type { ApplyDatabase, ApplyTransaction } from "simetra/schema"
 
-const DEFAULT_URL = "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+import { testProvider, testStack } from "./profile"
 
 /** Адреса бази стеку для тестів, яким потрібне власне з'єднання (порт `SchemaEngine`). */
 export function testDatabaseUrl(): string {
-  return process.env.SIMETRA_TEST_DATABASE_URL ?? DEFAULT_URL
+  return process.env.SIMETRA_TEST_DATABASE_URL ?? testStack().databaseUrl
 }
 
 /**
@@ -23,10 +23,10 @@ export function testDatabaseUrl(): string {
  * недоступний пулер має валити перевірку.
  */
 export function testPoolerUrl(): string {
-  return (
-    process.env.SIMETRA_TEST_POOLER_URL ??
-    "postgresql://postgres.pooler-dev:postgres@127.0.0.1:54329/postgres"
-  )
+  const url = process.env.SIMETRA_TEST_POOLER_URL ?? testStack().poolerUrl
+  // Профіль без пулера: мовчки взяти адресу Supabase означало б бити в чужий стек
+  if (url === null) throw new Error(`Profile "${testProvider()}" has no pooler`)
+  return url
 }
 
 /**
@@ -34,10 +34,7 @@ export function testPoolerUrl(): string {
  * (shell-тип). Локальний стек Supabase має його як `supabase_admin`.
  */
 export function testSuperuserUrl(): string {
-  return (
-    process.env.SIMETRA_TEST_SUPERUSER_URL ??
-    "postgresql://supabase_admin:postgres@127.0.0.1:54322/postgres"
-  )
+  return process.env.SIMETRA_TEST_SUPERUSER_URL ?? testStack().superuserUrl
 }
 
 /**

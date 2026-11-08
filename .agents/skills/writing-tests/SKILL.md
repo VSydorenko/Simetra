@@ -34,11 +34,12 @@ touch it (§ 6).
 | --- | --- |
 | metamodel, compiler stages, contracts, diagnostics, rendered SQL text | unit (`*.test.ts`) |
 | that Postgres accepts, executes or plans the SQL (RLS outcome, DDL apply, engine plans, EXPLAIN shape, locks) | DB (`*.db.test.ts`) |
+| the same, bound to Supabase (criterion: postgres-profile spec `docs/superpowers/specs/2026-11-08-postgres-profile-design.md` §10.5) | DB (`*.supabase.db.test.ts`, project `db-supabase`) |
 | provider base state | pgTAP |
 
 **A DB test needs a reason the unit level cannot give** — state it in the test
 name or a one-line comment. The full `pnpm test:db` run is a shared, serialized
-resource (one run at a time on the machine); every DB case is paid by every
+resource (one run at a time per stack); every DB case is paid by every
 later run of every session. Prefer one DB case that walks a scenario over
 several that each rebuild the same database. Name stack objects only through
 the run-tag helpers (`AGENTS.md` § "Commands and gates").

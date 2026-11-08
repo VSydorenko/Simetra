@@ -1,7 +1,8 @@
 // Прибиральник одного DB-прогону: завершує бекенди цього прогону й видаляє
 // зі спільного стеку лише об'єкти з його тегом. Кличе його обробник сигналу (`interrupt.ts`) окремим
 // процесом через `spawnSync`, а людина — тим самим CLI:
-// `node --import tsx sweep.ts <тег>`.
+// `SIMETRA_TEST_PROVIDER=<профіль> node --import tsx sweep.ts <тег>`. Профіль
+// обробник передає через успадковане env прогону.
 import { realpathSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import pg from "pg"
@@ -11,10 +12,21 @@ import {
   runApplicationName,
   runObjectPatterns,
   runObjectStatementPattern,
+  testDatabaseUrl,
   testSuperuserUrl,
 } from "./connection"
+import { type Exec, type Fetch, nodeExec, removeRunResources } from "./external"
+import {
+  PROVIDER_ENV,
+  TEST_STACKS,
+  testProvider,
+  type TestProvider,
+} from "./profile"
 
 const DEFAULT_DEADLINE_MS = 30_000
+// Гарантована частка дедлайну на контейнери й бакети: DB-фаза, що впирається
+// в свій дедлайн чи висить на з'єднанні, не з'їдає часу зовнішніх ресурсів
+const EXTERNAL_BUDGET_MS = 5_000
 const PASS_PAUSE_MS = 1_000
 // Закритий фаєрволом порт інакше тримав би обробник сигналу до його межі
 const CONNECT_TIMEOUT_MS = 5_000
@@ -33,16 +45,19 @@ const BACKEND_POLL_MS = 100
  */
 export async function stopRunBackends(
   tag: string,
-  o: { graceMs?: number } = {}
+  o: { graceMs?: number; signal?: AbortSignal } = {}
 ): Promise<{ stopped: number; left: number[] }> {
   checkTag(tag)
-  const client = new pg.Client({
-    connectionString: testSuperuserUrl(),
-    connectionTimeoutMillis: CONNECT_TIMEOUT_MS,
-    // Явне ім'я важить більше за `PGAPPNAME` прогону, успадкований
-    // прибиральником, — і `pid <> pg_backend_pid()` нижче лише страховка
-    application_name: GUARD_APPLICATION_NAME,
-  })
+  const client = sweepClient(
+    {
+      connectionString: testSuperuserUrl(),
+      connectionTimeoutMillis: CONNECT_TIMEOUT_MS,
+      // Явне ім'я важить більше за `PGAPPNAME` прогону, успадкований
+      // прибиральником, — і `pid <> pg_backend_pid()` нижче лише страховка
+      application_name: GUARD_APPLICATION_NAME,
+    },
+    o.signal
+  )
   await client.connect()
   try {
     // Точний збіг імені: шаблон міг би зачепити бекенди іншого прогону
@@ -83,37 +98,106 @@ export async function stopRunBackends(
 /**
  * Stops the backends of run `tag` ({@link stopRunBackends}), then drops every
  * stack database and role tagged with `tag` and terminates the backends still
- * creating one, repeating the pass until one finds nothing or
- * `deadlineMs` runs out. A failed DROP does not stop the pass; whatever is
- * still found at the end is returned in `left`.
+ * creating one, repeating the pass until one finds nothing or the database
+ * deadline (`deadlineMs` minus the external budget) runs out. A failed DROP
+ * does not stop the pass. Then, even when the database is unreachable or
+ * hangs, removes the run's containers and empty buckets
+ * ({@link removeRunResources}). Whatever is still found at the end, and why a
+ * phase failed, is returned in `left`; `cleanup` holds the commands to finish
+ * by hand.
  */
 export async function sweepRun(
   tag: string,
-  o: { deadlineMs?: number } = {}
-): Promise<{ dropped: string[]; left: string[] }> {
+  o: { deadlineMs?: number; exec?: Exec; fetch?: Fetch } = {}
+): Promise<{ dropped: string[]; left: string[]; cleanup: string[] }> {
   checkTag(tag)
+  const p = testProvider()
   const deadline = Date.now() + (o.deadlineMs ?? DEFAULT_DEADLINE_MS)
+  const dbDeadline = deadline - EXTERNAL_BUDGET_MS
+  // Тайм-аути з'єднань не обмежують запиту, що не повертається: межу DB-фази
+  // тримає таймер, а не сервер. На ньому клієнти фази рвуть з'єднання, тож
+  // і на своїй межі фаза не лишає відкритих сокетів
+  const phase = new AbortController()
+  const timer = setTimeout(
+    () =>
+      phase.abort(
+        new Error(
+          `the database phase did not finish within ${o.deadlineMs ?? DEFAULT_DEADLINE_MS} ms minus ${EXTERNAL_BUDGET_MS} ms for containers and buckets`
+        )
+      ),
+    Math.max(0, dbDeadline - Date.now())
+  )
+  timer.unref()
+  const timedOut = new Promise<never>((_, reject) =>
+    phase.signal.addEventListener("abort", () => reject(phase.signal.reason))
+  )
+  let db: { dropped: string[]; left: string[] } = { dropped: [], left: [] }
+  let external: Awaited<ReturnType<typeof removeRunResources>>
+  try {
+    db = await Promise.race([
+      sweepDatabase(tag, p, dbDeadline, phase.signal),
+      timedOut,
+    ])
+  } catch (error) {
+    // Недосяжна чи зависла база не скасовує прибирання контейнерів і
+    // бакетів: вони від неї не залежать
+    db.left.push(
+      `stack objects of run ${tag} (sweep failed: ${(error as Error).message})`
+    )
+  } finally {
+    clearTimeout(timer)
+    external = await removeRunResources(tag, p, {
+      exec: o.exec ?? nodeExec,
+      fetch: o.fetch ?? fetch,
+      deadlineMs: Math.max(EXTERNAL_BUDGET_MS, deadline - Date.now()),
+    })
+  }
+  return {
+    dropped: [...db.dropped, ...external.removed],
+    left: [...db.left, ...external.left],
+    // SQL — лише коли лишилось щось у базі: для контейнерів і бакетів він не
+    // допоможе
+    cleanup: [
+      ...(db.left.length > 0 ? [manualSweepSql(tag, p)] : []),
+      ...external.cleanup,
+    ],
+  }
+}
+
+async function sweepDatabase(
+  tag: string,
+  p: TestProvider,
+  deadline: number,
+  signal: AbortSignal
+): Promise<{ dropped: string[]; left: string[] }> {
+  // Адреса, перевизначена на чужий стек, дала б прибиральнику видаляти там
+  // об'єкти, поки прогін того стека тримає свій замок
+  await assertStack(p, signal)
   // Воркери вже вбиті, але сервер доводить їхні запити до кінця й без
   // клієнта: важкий запит вантажив би стек наступному прогону після
   // звільнення замка
-  const stuck = (await stopRunBackends(tag)).left.map(
+  const stuck = (await stopRunBackends(tag, { signal })).left.map(
     (pid) => `backend ${pid} (did not stop)`
   )
   const { databases, roles } = runObjectPatterns(tag)
   const creating = runObjectStatementPattern(tag)
-  // Ролі видаляє лише supabase_admin; `DROP OWNED BY` діє в поточній базі,
-  // а тести працюють у `postgres`
+  // Ролі видаляє лише суперкористувач стека; `DROP OWNED BY` діє в поточній
+  // базі, а тести працюють у `postgres`
   const url = new URL(testSuperuserUrl())
   url.pathname = "/postgres"
-  const client = new pg.Client({
-    connectionString: url.href,
-    connectionTimeoutMillis: CONNECT_TIMEOUT_MS,
-    application_name: GUARD_APPLICATION_NAME,
-  })
+  const client = sweepClient(
+    {
+      connectionString: url.href,
+      connectionTimeoutMillis: CONNECT_TIMEOUT_MS,
+      application_name: GUARD_APPLICATION_NAME,
+    },
+    signal
+  )
   await client.connect()
   try {
     const dropped: string[] = []
     for (;;) {
+      signal.throwIfAborted()
       // `CREATE DATABASE` убитого воркера сервер доводить до кінця й після
       // смерті клієнта, а до фіксації рядка в каталозі немає: прохід без
       // таких запитів у pg_stat_activity ще не означає «чисто». Лише запити,
@@ -170,15 +254,80 @@ export async function sweepRun(
   }
 }
 
+/**
+ * Why the stack of profile `p` cannot be the stack reached at an address with
+ * these facts, or `null` when it can. Only Supabase has `supabase_admin`.
+ */
+export function stackMismatch(
+  p: TestProvider,
+  facts: { supabaseAdmin: boolean }
+): string | null {
+  if (facts.supabaseAdmin === (p === "supabase")) return null
+  return `this is not the ${p} stack: role supabase_admin is ${facts.supabaseAdmin ? "present" : "missing"}. A SIMETRA_TEST_* variable likely points at another stack; a run there would not hold that stack's lock. Unset it or run against the matching stack.`
+}
+
+/**
+ * Throws unless every effective address of the run (`testDatabaseUrl()` and
+ * `testSuperuserUrl()`) reaches the stack of profile `p`.
+ */
+export async function assertStack(
+  p: TestProvider,
+  signal?: AbortSignal
+): Promise<void> {
+  for (const url of [testDatabaseUrl(), testSuperuserUrl()]) {
+    const client = sweepClient(
+      {
+        connectionString: url,
+        connectionTimeoutMillis: CONNECT_TIMEOUT_MS,
+        application_name: GUARD_APPLICATION_NAME,
+      },
+      signal
+    )
+    await client.connect()
+    let supabaseAdmin: boolean
+    try {
+      supabaseAdmin =
+        (
+          await client.query<{ present: boolean }>(
+            "select exists (select from pg_roles where rolname = 'supabase_admin') as present"
+          )
+        ).rows[0]?.present === true
+    } finally {
+      await client.end()
+    }
+    const mismatch = stackMismatch(p, { supabaseAdmin })
+    if (mismatch !== null) {
+      // Без пароля: повідомлення йде в лог прогону
+      const { username, host, pathname } = new URL(url)
+      throw new Error(`${username}@${host}${pathname}: ${mismatch}`)
+    }
+  }
+}
+
 // SQL ручного прибирання за тегом — на випадок, коли стек недосяжний
-function manualSweepSql(tag: string): string {
+export function manualSweepSql(tag: string, p: TestProvider): string {
   checkTag(tag)
   const { databases, roles } = runObjectPatterns(tag)
   return [
-    "-- as supabase_admin, connected to database postgres; run the generated statements",
+    `-- as ${TEST_STACKS[p].superuserName}, connected to database postgres; run the generated statements`,
     `SELECT format('DROP DATABASE %I WITH (FORCE);', datname) FROM pg_database WHERE datname ~ '${databases.source}';`,
     `SELECT format('DROP OWNED BY %I; DROP ROLE %I;', rolname, rolname) FROM pg_roles WHERE rolname ~ '${roles.source}';`,
   ].join("\n")
+}
+
+// На сигнал `end()` рве сокет клієнта з активним запитом (node-postgres 8):
+// запит падає, `finally` викликача закриває вже закритого клієнта, і процес
+// прибиральника не тримає нічого відкритим
+function sweepClient(
+  config: pg.ClientConfig,
+  signal: AbortSignal | undefined
+): pg.Client {
+  signal?.throwIfAborted()
+  const client = new pg.Client(config)
+  signal?.addEventListener("abort", () => void client.end().catch(() => {}), {
+    once: true,
+  })
+  return client
 }
 
 function checkTag(tag: string): void {
@@ -213,19 +362,29 @@ async function tryQuery(
 async function cli(tag: string | undefined): Promise<number> {
   if (tag === undefined || !isRunTag(tag)) {
     process.stderr.write(
-      `Usage: node --import tsx sweep.ts <run tag> (6 characters [0-9a-z]); got "${tag ?? ""}"\n`
+      `Usage: ${PROVIDER_ENV}=<postgres|supabase> node --import tsx sweep.ts <run tag> (6 characters [0-9a-z]); got "${tag ?? ""}"\n`
     )
     return 1
   }
+  let p: TestProvider
   try {
-    const { dropped, left } = await sweepRun(tag)
+    p = testProvider()
+  } catch (error) {
+    process.stderr.write(`${(error as Error).message}\n`)
+    return 1
+  }
+  try {
+    const { dropped, left, cleanup } = await sweepRun(tag)
     process.stderr.write(
       `DB run ${tag} sweep: dropped ${dropped.length > 0 ? dropped.join(", ") : "nothing"}; left ${left.length > 0 ? left.join(", ") : "nothing"}\n`
     )
-    return left.length === 0 ? 0 : 1
+    if (left.length === 0) return 0
+    if (cleanup.length > 0)
+      process.stderr.write(`Clean up by hand:\n${cleanup.join("\n")}\n`)
+    return 1
   } catch (error) {
     process.stderr.write(
-      `DB run ${tag} sweep failed: ${(error as Error).message}\nClean up by hand:\n${manualSweepSql(tag)}\n`
+      `DB run ${tag} sweep failed: ${(error as Error).message}\nClean up by hand:\n${manualSweepSql(tag, p)}\n`
     )
     return 1
   }
