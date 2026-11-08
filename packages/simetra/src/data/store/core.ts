@@ -60,11 +60,17 @@ export interface CoreSession {
   commit(fn: (writer: Writer) => void, token: GenerationToken): boolean
   /** Held views of the object, visible first. */
   activeViews(object: ObjectName): readonly ActiveView[]
-  /** Sets the visibility of a held view (unset — visible while subscribed). */
+  /**
+   * Sets the visibility of a held view (unset — visible while subscribed).
+   * Call it after `subscribe` / `preload`: a form without a held subset is
+   * ignored.
+   */
   setVisible(spec: ViewSpec, visible: boolean): void
   /**
    * Re-reads the object's views by the stability rule (P4-B spec §8.4): all
    * reads first, then one `commit`; `visibleOnly` skips invisible views.
+   * Views that never loaded are skipped (their first read is a load); a
+   * purge after the start drops the results and reloads those views.
    */
   revalidate(
     object: ObjectName,
@@ -203,8 +209,10 @@ export function createCore(options: {
     remove(scope, o, key, readEpoch) {
       o.rows.remove(scope, key, readEpoch)
       rowViews.touch(o.name, key)
-      // `removed` стирає й рядки ТЧ власника (§6.2, правило 5).
-      if (o.rows.get(key)?.removed !== undefined) {
+      // `removed` стирає й рядки ТЧ власника (§6.2, правило 5); власник без
+      // шапки в сховищі — теж: його рядкам ТЧ нема чим лишатись видимими.
+      const e = o.rows.get(key)
+      if (e === undefined || e.removed !== undefined) {
         o.sections.clearOwner(scope, key)
         touchSection(o, key)
       }
@@ -365,6 +373,7 @@ export function createCore(options: {
     rowViews.clear()
     dirtySections.clear()
     tails.clear()
+    purges.clear()
   })
 
   // Хвіст у польоті під час purge: його відповідь могла нести рядок, якого на
@@ -375,6 +384,8 @@ export function createCore(options: {
     tail.gen++
     for (const key of tail.flying ?? []) tail.pending.add(key)
   }
+
+  const purges = new Map<ObjectName, number>()
 
   const writerContext: WriterContext = {
     session,
@@ -387,6 +398,7 @@ export function createCore(options: {
     registry,
     rowViews,
     objects,
+    purges,
     invalidateTail,
   }
 

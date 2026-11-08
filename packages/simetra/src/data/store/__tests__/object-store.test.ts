@@ -149,15 +149,22 @@ describe("ObjectStore.put", () => {
     expect(h.store.get(K1)).toBeUndefined()
   })
 
-  it("a row stored in T and returned in S by a read older than purgeScope(S) is rejected", () => {
+  it("a row stored in T and returned in S by a read older than purgeScope(S) is not written; its values are hidden and re-read", () => {
     const h = harness()
     put(h, row(K1, 1, { org: T }))
+    h.store.drainTail()
     const early = h.now()
     purgeScope(h, S)
     expect(h.store.get(K1)?.scope).toBe(T)
-    expect(put(h, row(K1, 2, { org: S }), early)).toBe("rejected")
-    expect(h.store.get(K1)?.scope).toBe(T)
-    expect(h.store.get(K1)?.version).toBe(1)
+    expect(put(h, row(K1, 2, { org: S }), early)).toBe("stale-inserted")
+    const e = h.store.get(K1)!
+    expect(e.scope).toBe(T)
+    expect(e.version).toBe(1)
+    expect(visibleRow(e)).toBeUndefined()
+    expect(h.store.drainTail()).toEqual([K1])
+    // Перечитування після purge знімає позначку.
+    expect(put(h, row(K1, 3, { org: T }))).toBe("written")
+    expect(visibleRow(h.store.get(K1)!)).toMatchObject({ org: T })
   })
 
   it("a row inserted in S after purgeScope(S) and returned in T by a read older than the purge is rejected (stored scope)", () => {
@@ -432,15 +439,32 @@ describe("ObjectStore scope change under the horizon (I1)", () => {
     ])
   })
 
-  it("(b) the same scenario without eviction is rejected by the S pair tombstone", () => {
+  it("(b) the same scenario without eviction writes nothing from the S read, hides the values and re-reads", () => {
     const h = harness()
     put(h, row(K1, 1, { org: T }))
     own(h, K1)
+    h.store.drainTail()
+    const early = h.now()
+    purgeScope(h, S)
+    h.log.length = 0
+    expect(put(h, row(K1, 2, { org: S }), early)).toBe("stale-inserted")
+    expect(h.store.get(K1)?.version).toBe(1)
+    expect(h.store.get(K1)?.scope).toBe(T)
+    expect(visibleRow(h.store.get(K1)!)).toBeUndefined()
+    expect(h.store.drainTail()).toEqual([K1])
+    expect(h.log).toEqual([
+      { kind: "horizon-hidden", object: "Catalog.Task", count: 1 },
+    ])
+  })
+
+  it("a removed slot returned in a buried scope by an older read stays removed", () => {
+    const h = harness()
+    put(h, row(K1, 1, { org: T }))
+    remove(h, K1)
     const early = h.now()
     purgeScope(h, S)
     expect(put(h, row(K1, 2, { org: S }), early)).toBe("rejected")
-    expect(h.store.get(K1)?.version).toBe(1)
-    expect(h.store.get(K1)?.scope).toBe(T)
+    expect(h.store.get(K1)?.removed).toBeDefined()
   })
 
   it("a removed slot restored into a scope whose pair tombstone was evicted is hidden", () => {

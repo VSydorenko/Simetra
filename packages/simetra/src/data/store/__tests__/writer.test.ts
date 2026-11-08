@@ -135,6 +135,19 @@ describe("Writer", () => {
     expect(sectionsOf(core, 1)).toBeUndefined()
   })
 
+  it("remove clears the lines of an owner without a header in the store", async () => {
+    const { core, fake } = setup()
+    seed(fake, 1, 1)
+    fake.setLines(TASK, key(1), "lines", lines)
+    const lineView = core.view(section(1))
+    watch(lineView)
+    await settle()
+    expect(sectionsOf(core, 1)?.lines).toHaveLength(1)
+    write(core, (w) => w.remove(TASK, [key(1)], core.readEpoch()))
+    expect(sectionsOf(core, 1)).toBeUndefined()
+    expect(lineView.getSnapshot().section?.lines ?? []).toEqual([])
+  })
+
   it("markViews with a spec marks only that view", async () => {
     const { core, fake } = setup()
     seed(fake, 1, 2)
@@ -457,28 +470,106 @@ describe("purge", () => {
       { key: key(2), state: "synced" },
     ])
     expect(cardView.getSnapshot().status).toBe("purged")
+    expect(list.getSnapshot().hasNewRows).toBe(false)
     expect(inspect.rowCount()).toBe(1)
     expect(inspect.violations()).toEqual([])
   })
 
-  it("does not write a row that moved into the purged scope from a revalidate in flight", async () => {
-    const { core, fake } = setup()
+  it("drops a revalidate in flight when the object is purged and reloads the views: no lines of the purged scope are written", async () => {
+    const { core, fake, log } = setup()
+    seed(fake, 1, 1)
+    fake.setLines(TASK, key(1), "lines", lines)
+    const header = core.view(keys(1))
+    watch(header)
+    await settle()
+    watch(core.view(section(1)))
+    await settle()
+    expect(sectionsOf(core, 1)?.scope).toBe(S)
+    // На сервері шапка переїжджає в T з новими рядками ТЧ.
+    fake.edit(TASK, key(1), { org: T })
+    fake.setLines(TASK, key(1), "lines", [
+      { ref: key(902), qty: 9, lineNumber: 1 },
+    ])
+    fake.hold = (read) => isKeys(read) || isSection(read)
+    const done = core.revalidate(TASK, { visibleOnly: false })
+    await settle()
+    const held = [...fake.pending].map(() => fake.take())
+    expect(held).toHaveLength(2)
+    const moment = fake.clock
+    fake.setVisibleScopes([S])
+    // У сховищі шапка ще в S: purge(T) нічого не прибирає.
+    write(core, (w) => w.purge(TASK, { scope: T }))
+    for (const read of held) read.answer(moment)
+    await done
+    await settle()
+    expect(sectionsOf(core, 1)?.lines.map((l) => l.key)).toEqual([key(901)])
+    expect(valueOf(header.getSnapshot(), 1, "org")).toBe(S)
+    expect(log.some((e) => e.kind === "late-response")).toBe(false)
+    // Вигляди перечитано звичайним завантаженням після purge.
+    expect(fake.pending).toHaveLength(2)
+    fake.deliverAll()
+    await settle()
+    expect(stateOf(header.getSnapshot(), 1)).toBe("removed")
+    expect(sectionsOf(core, 1)).toBeUndefined()
+  })
+
+  it("hides a stored row that an older read returns in a purged scope and re-reads it to removed", async () => {
+    const { core, fake, log } = setup()
     seed(fake, 1, 1)
     const view = core.view(keys(1))
     watch(view)
     await settle()
-    fake.hold = (read) => isKeys(read)
-    const done = core.revalidate(TASK, { visibleOnly: false })
-    await settle()
+    const early = core.readEpoch()
     fake.edit(TASK, key(1), { org: T, title: "moved" })
+    fake.setVisibleScopes([S])
     write(core, (w) => w.purge(TASK, { scope: T }))
-    fake.deliverAll()
-    await done
+    fake.hold = (read) => isKeys(read)
+    write(core, (w) => w.patch(TASK, [fake.row(TASK, key(1))!], early))
+    expect(view.getSnapshot().rows[0]).toMatchObject({
+      state: "stale",
+      values: {},
+    })
+    expect(log).toContainEqual({
+      kind: "horizon-hidden",
+      object: TASK,
+      count: 1,
+    })
+    expect(fake.pending).toHaveLength(1)
+    fake.take().answer()
     await settle()
-    expect(valueOf(view.getSnapshot(), 1, "title")).toBe("t1")
-    expect(coreInternals(core).objects.get(TASK)!.rows.get(key(1))?.scope).toBe(
-      S
-    )
+    expect(stateOf(view.getSnapshot(), 1)).toBe("removed")
+  })
+
+  it("marks the section view of an owner without a header purged when its unknown-scope lines are wiped", async () => {
+    const { core, fake } = setup()
+    seed(fake, 1, 1)
+    fake.setLines(TASK, key(1), "lines", lines)
+    const lineView = core.view(section(1))
+    watch(lineView)
+    await settle()
+    expect(sectionsOf(core, 1)?.scope).toBe("unknown")
+    write(core, (w) => w.purge(TASK, { scope: T }))
+    expect(sectionsOf(core, 1)).toBeUndefined()
+    expect(lineView.getSnapshot()).toMatchObject({
+      status: "purged",
+      reason: "access-changed",
+    })
+  })
+
+  it("releases include targets that only the purged rows referred to", async () => {
+    const { core, fake, inspect } = setup()
+    const orgKey = (n: number) => key(10_000 + n)
+    for (const n of [1, 2]) {
+      fake.insert(ORG, { ref: orgKey(n) })
+      fake.insert(TASK, taskValues(n, { org: orgKey(n) }))
+    }
+    watch(core.view({ kind: "full", object: TASK, include: ["org"] }))
+    await settle()
+    expect(inspect.owners(ORG, orgKey(1))).toBe(1)
+    write(core, (w) => w.purge(TASK, { scope: orgKey(1) }))
+    expect(inspect.owners(ORG, orgKey(1))).toBe(0)
+    expect(inspect.owners(ORG, orgKey(2))).toBe(1)
+    expect(inspect.violations()).toEqual([])
   })
 
   it("does not write an include target from a read in flight during purge of its scope", async () => {
@@ -759,6 +850,70 @@ describe("revalidate", () => {
       undefined
     )
     expect(inspect.violations()).toEqual([])
+  })
+
+  it("does not mark a card hasNewRows when its key appears on the server", async () => {
+    const { core, fake } = setup()
+    const handle = core.view(card(1))
+    watch(handle)
+    await settle()
+    fake.insert(TASK, taskValues(1))
+    await core.revalidate(TASK, { visibleOnly: false })
+    expect(handle.getSnapshot().hasNewRows).toBe(false)
+  })
+
+  it("does not mark a truncated full hasNewRows for rows past its window, only for one before its last row", async () => {
+    const { core, fake } = setup({
+      limits: { fullLimit: 120, fullPageSize: 50 },
+    })
+    for (let n = 1; n <= 150; n++) fake.insert(TASK, taskValues(n + 10))
+    const full = core.view({ kind: "full", object: TASK })
+    watch(full)
+    await settle()
+    expect(full.getSnapshot()).toMatchObject({
+      truncated: true,
+      strategy: "window",
+    })
+    expect(full.getSnapshot().rows).toHaveLength(100)
+    await core.revalidate(TASK, { visibleOnly: false })
+    expect(full.getSnapshot().hasNewRows).toBe(false)
+    // Ключ, що в серверному порядку стає перед останнім рядком вікна, — новий.
+    fake.insert(TASK, taskValues(1))
+    await core.revalidate(TASK, { visibleOnly: false })
+    expect(full.getSnapshot().hasNewRows).toBe(true)
+  })
+
+  it("confirms by key a row that moved between pages of the full re-read: values on place and needsRefresh, not removed", async () => {
+    const { core, fake } = setup({ limits: { fullPageSize: 2 } })
+    seed(fake, 1, 5)
+    const full = core.view({
+      kind: "full",
+      object: TASK,
+      orderBy: [{ attribute: "title", direction: "asc" }],
+    })
+    watch(full)
+    await settle()
+    expect(keysIn(full.getSnapshot())).toEqual([1, 2, 3, 4, 5].map(key))
+    fake.mode = "manual"
+    const done = core.revalidate(TASK, { visibleOnly: false })
+    await settle()
+    fake.take().answer()
+    await settle()
+    // Між сторінками рядок 3 переїжджає на початок порядку й проскакує keyset.
+    fake.edit(TASK, key(3), { title: "a" })
+    for (;;) {
+      await settle()
+      if (fake.pending.length === 0) break
+      fake.deliverAll()
+    }
+    await done
+    const snapshot = full.getSnapshot()
+    expect(keysIn(snapshot)).toEqual([1, 2, 3, 4, 5].map(key))
+    expect(snapshot.rows[2]).toMatchObject({
+      state: "synced",
+      values: { title: "a" },
+    })
+    expect(snapshot.needsRefresh).toBe(true)
   })
 
   it("reads nine views at most four at a time", async () => {

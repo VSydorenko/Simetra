@@ -31,10 +31,11 @@ export interface SectionStore {
    * Drops sections of owners of this scope and of owners with unknown scope,
    * by the owner scope captured at `put`. A header that moved into the purged
    * scope after its lines were written is not seen here: the caller
-   * (`Writer.purge`, Task 8) must also call `clearOwner` for every key that
-   * `ObjectStore.purgeScope` / `purgeKeys` returns.
+   * (`Writer.purge`) must also call `clearOwner` for every key that
+   * `ObjectStore.purgeScope` / `purgeKeys` returns. Returns the owners whose
+   * lines were dropped.
    */
-  purgeScope(scope: Scope, scopeId: string | null): void
+  purgeScope(scope: Scope, scopeId: string | null): Key[]
   resetCompleteness(scope: Scope, owner: Key, section: string): void
   clearOwner(scope: Scope, owner: Key): void
   get(owner: Key, section: string): SectionEntry | undefined
@@ -130,13 +131,18 @@ export function createSectionStore(options: {
 
     purgeScope(scope, scopeId) {
       scope.assert()
+      const dropped: Key[] = []
       for (const [owner, sections] of owners) {
+        let hit = false
         for (const [name, e] of sections) {
-          if (e.scope === scopeId || e.scope === "unknown")
-            sections.delete(name)
+          if (e.scope !== scopeId && e.scope !== "unknown") continue
+          sections.delete(name)
+          hit = true
         }
+        if (hit) dropped.push(owner)
         if (sections.size === 0) drop(owner)
       }
+      return dropped
     },
 
     resetCompleteness(scope, owner, section) {

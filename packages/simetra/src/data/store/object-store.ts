@@ -246,13 +246,21 @@ export function createObjectStore(options: {
       }
       const incomingScope = hasScope ? scopeOf(entry, row.values) : undefined
       // Обидва скоупи: рядок міг переїхати, а надгробок стоїть на будь-якому.
+      if (e !== undefined && buried(row.key, e.scope, readEpoch))
+        return "rejected"
       if (
         incomingScope !== undefined &&
         buried(row.key, incomingScope, readEpoch)
-      )
-        return "rejected"
-      if (e !== undefined && buried(row.key, e.scope, readEpoch))
-        return "rejected"
+      ) {
+        if (e === undefined || e.removed !== undefined) return "rejected"
+        // Рядок у сховищі переїхав у скоуп, прибраний після старту читання:
+        // його збережені значення вже не підтверджені, а цей рядок писати не
+        // можна. Ховаємо значення, як горизонт (§6.2, правило 1), і
+        // перечитуємо: доступ втрачено — `removed`, інакше — нові значення.
+        if (e.stale.seen === undefined) hide(e, row.key)
+        else tail.add(row.key)
+        return "stale-inserted"
+      }
       if (e === undefined)
         return insert(row, incomingScope ?? null, readEpoch, lazyRead)
       // `removed` знімає лише читання після позначки — будь-якої версії.

@@ -36,6 +36,11 @@ export interface WriterContext extends ReaderContext {
   readonly registry: SubsetRegistry
   readonly rowViews: RowViews
   readonly objects: ReadonlyMap<ObjectName, ObjectState>
+  /**
+   * The purge generation of each object, raised by every `Writer.purge`: a
+   * `revalidate` that started before it drops its results (П12).
+   */
+  readonly purges: Map<ObjectName, number>
   /** Invalidates the tail re-read of the object in flight and re-queues its keys (П12). */
   invalidateTail(o: ObjectState): void
 }
@@ -71,14 +76,40 @@ function without(set: ReadonlySet<Key>, gone: ReadonlySet<Key>): Set<Key> {
 }
 
 /**
+ * Releases the `include` targets no row of the view refers to any more: the
+ * rows that referred to them were purged.
+ */
+function releaseTargets(ctx: WriterContext, scope: Scope, s: Subset) {
+  const o = s.form.object
+  const still = includeKeys(
+    s.form.include,
+    [...s.owned].flatMap((key) => {
+      const values = o.rows.get(key)?.row?.values
+      return values === undefined ? [] : [values]
+    })
+  )
+  for (const [name, keys] of s.included) {
+    const keep = new Set(still.get(name) ?? [])
+    const target = ctx.objectOf(name)
+    const next = new Set<Key>()
+    for (const key of keys) {
+      if (keep.has(key)) next.add(key)
+      else ctx.ops.disown(scope, target, key)
+    }
+    s.included.set(name, next)
+  }
+}
+
+/**
  * Drops purged keys from every subset (§6.5): ownership, composition and
- * `include` targets; a card or section of a purged key becomes `purged`.
- * Loads in flight that may carry rows of the object are invalidated and
- * re-run after the purge (П12): their answer would bring a row that was not
- * in the store at the purge moment.
+ * `include` targets (also those only the purged rows referred to); a card or
+ * section of a purged key becomes `purged`. Loads in flight that may carry
+ * rows of the object are invalidated and re-run after the purge (П12): their
+ * answer would bring a row that was not in the store at the purge moment.
  */
 function forget(
   ctx: WriterContext,
+  scope: Scope,
   o: ObjectState,
   dropped: ReadonlySet<Key>,
   purged: ReadonlySet<Key>
@@ -100,6 +131,7 @@ function forget(
     const included = s.included.get(o.name)
     if (included !== undefined)
       s.included.set(o.name, without(included, dropped))
+    if (own && s.form.include.length > 0) releaseTargets(ctx, scope, s)
     s.dirty = true
     if ((own || target) && s.flight !== undefined) {
       s.gen++
@@ -148,15 +180,18 @@ export function createWriter(ctx: WriterContext, scope: Scope): Writer {
         // Пари ховає лише `purgeScope` (через `Epochs.buryPair`): власник ТЧ
         // з невідомим скоупом перевіряється за останнім похованням пари.
         dropped = o.rows.purgeScope(scope, target.scope)
-        o.sections.purgeScope(scope, target.scope)
-        purged = dropped
+        // Власники з невідомим скоупом, чиї рядки ТЧ прибрано, — теж
+        // прибрані для своїх виглядів ТЧ.
+        const wiped = o.sections.purgeScope(scope, target.scope)
+        purged = [...new Set([...dropped, ...wiped])]
       }
       // ТЧ записано зі скоупом шапки на мить запису: шапка, що відтоді
       // переїхала в прибраний скоуп, лишила б рядки ТЧ без `clearOwner`.
       for (const key of purged) ops.clearOwner(scope, o, key)
       for (const key of dropped) rowViews.touch(o.name, key)
-      forget(ctx, o, new Set(dropped), new Set(purged))
+      forget(ctx, scope, o, new Set(dropped), new Set(purged))
       ctx.invalidateTail(o)
+      ctx.purges.set(o.name, (ctx.purges.get(o.name) ?? 0) + 1)
     },
 
     markStale(object, keys, minVersion) {
@@ -245,7 +280,8 @@ function applyKeys(
   s: Subset,
   requested: readonly Key[],
   rows: readonly ServerRow[],
-  startEpoch: number
+  startEpoch: number,
+  marksNew: boolean
 ): Apply {
   const o = s.form.object
   return (scope) => {
@@ -260,7 +296,7 @@ function applyKeys(
       if (!got.has(key) && s.owned.has(key))
         ctx.ops.remove(scope, o, key, startEpoch)
     }
-    if (fresh) s.hasNewRows = true
+    if (fresh && marksNew) s.hasNewRows = true
   }
 }
 
@@ -296,14 +332,29 @@ async function readFullAgain(
   if (fetched === undefined) return () => {}
   const got = new Map(fetched.rows.map((r) => [r.key, r] as const))
   const composition = [...s.owned]
-  // Понад межу вибірка неповна: ключ складу, якого в ній немає, перечитуємо
-  // за ключем, а не вважаємо зниклим.
-  const missing = fetched.over ? composition.filter((k) => !got.has(k)) : []
+  // Ключ складу, якого немає у сторінках, не обов'язково зник: рядок міг
+  // змінити поле сортування між читаннями сторінок і проскочити keyset.
+  // Підтверджуємо за ключем; лише відсутній — `removed` (§6.2, правило 5).
+  const missing = composition.filter((k) => !got.has(k))
+  const moved = new Set<Key>()
   if (missing.length > 0) {
     const rows = await readKeys(ctx.source, o.entry, missing, {
       keysPerRequest,
     })
-    for (const row of rows) got.set(row.key, row)
+    for (const row of rows) {
+      got.set(row.key, row)
+      moved.add(row.key)
+    }
+  }
+  // Понад межу вікно тримає лише початок серверного порядку: нові — лише
+  // рядки до останнього ключа складу, решта — просто поза вікном.
+  const order = new Map(fetched.rows.map((r, i) => [r.key, i] as const))
+  let cut = fetched.rows.length
+  if (fetched.over) {
+    cut = -1
+    fetched.rows.forEach((r, i) => {
+      if (s.layoutSet.has(r.key)) cut = i
+    })
   }
   const wanted = includeKeys(
     form.include,
@@ -326,7 +377,8 @@ async function readFullAgain(
         // Рядок у власності, але поза складом, увійшов у фільтр — новий.
         if (!s.layoutSet.has(row.key) && values !== undefined)
           fresh ||= form.test(values)
-      } else if (form.test(row.values)) fresh = true
+      } else if ((order.get(row.key) ?? Infinity) < cut)
+        fresh ||= form.test(row.values)
     }
     for (const key of composition) {
       if (!got.has(key) && s.owned.has(key))
@@ -335,7 +387,8 @@ async function readFullAgain(
     if (included !== undefined)
       applyIncluded(ctx, scope, s, included, startEpoch)
     if (fresh) s.hasNewRows = true
-    if (outOfPlace(s)) s.needsRefresh = true
+    if (outOfPlace(s) || [...moved].some((key) => s.layoutSet.has(key)))
+      s.needsRefresh = true
   }
 }
 
@@ -353,15 +406,16 @@ async function readAgain(
       const rows = await readKeys(ctx.source, o.entry, s.form.keys, {
         keysPerRequest,
       })
-      return applyKeys(ctx, s, s.form.keys, rows, startEpoch)
+      return applyKeys(ctx, s, s.form.keys, rows, startEpoch, true)
     }
     case "card": {
       // Шапка списочною формою; ліниві поля змонтованої картки дочитує
       // перевірка вигляду, коли версія рядка зросла (§6.2, правило 2).
+      // Картка не має дії «показати нові»: `hasNewRows` їй не ставимо.
       const rows = await readKeys(ctx.source, o.entry, [spec.key], {
         keysPerRequest,
       })
-      return applyKeys(ctx, s, [spec.key], rows, startEpoch)
+      return applyKeys(ctx, s, [spec.key], rows, startEpoch, false)
     }
     case "section":
       return readForm(ctx, s, startEpoch, token)
@@ -374,7 +428,9 @@ async function readAgain(
  * The system re-read of the object's views (§8.4), in two phases (§6.3):
  * every read first — through the shared limiter — then one `commit` applying
  * every result to the composition at commit time. A failed read sets its
- * view to `error` and stops no other view. Disconnect marks stay.
+ * view to `error` and stops no other view. Disconnect marks stay. Views that
+ * never loaded are skipped; a purge of the object (or of an `include`
+ * target) after the start drops the results and reloads those views.
  */
 export async function revalidate(
   ctx: WriterContext,
@@ -386,6 +442,9 @@ export async function revalidate(
   if (session.closed !== undefined) return
   const startEpoch = session.epochs.now()
   const token = session.token()
+  const purgesAtStart = new Map(ctx.purges)
+  const purgedSince = (name: ObjectName) =>
+    (ctx.purges.get(name) ?? 0) !== (purgesAtStart.get(name) ?? 0)
   // Вигляд без жодного завантаження складу не має: його перше читання —
   // завантаження, а не системне перечитування. ТЧ — лише змонтовані.
   const targets = subsetsOf(ctx, o).filter(
@@ -403,12 +462,24 @@ export async function revalidate(
       )
     )
   )
+  const reload: Subset[] = []
   session.commit(
     (scope) => {
       try {
         for (const result of results) {
           const { s } = result
           if (!s.alive || s.purged) continue
+          // purge після старту: відповідь могла нести рядки й рядки ТЧ, яких
+          // на мить purge у сховищі не було (рядок у сховищі ще в старому
+          // скоупі). Як завантаження в польоті (П12) — відкинути й
+          // перечитати вигляд.
+          if (
+            purgedSince(o.name) ||
+            s.form.include.some((step) => purgedSince(step.target))
+          ) {
+            reload.push(s)
+            continue
+          }
           s.dirty = true
           if ("error" in result) {
             // Закритий обмежувач — сесію закрито: писати нікуди.
@@ -436,4 +507,6 @@ export async function revalidate(
     token,
     `revalidate ${object}`
   )
+  // Перечитування — звичайним завантаженням вигляду (single-flight).
+  for (const s of reload) ctx.registry.load(s)
 }

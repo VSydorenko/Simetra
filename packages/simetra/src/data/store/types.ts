@@ -148,7 +148,14 @@ export interface Writer {
     target: { keys: readonly Key[] } | { scope: string | null }
   ): void
   markStale(object: ObjectName, keys: readonly Key[], minVersion: number): void
+  /**
+   * Marks rows of `channel` (every row when omitted) `stale` from a gap.
+   * Marks are kept per channel: a row that moved keeps the mark of its old
+   * channel until that channel is cleared, so the receiver must call
+   * `clearDisconnected(channel)` also when it unsubscribes a channel.
+   */
   markDisconnected(channel?: string): void
+  /** Clears the gap mark of `channel`; marks of other channels stay. */
   clearDisconnected(channel: string): void
   markViews(
     object: ObjectName,
