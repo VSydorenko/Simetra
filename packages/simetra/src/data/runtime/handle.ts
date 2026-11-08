@@ -1,4 +1,5 @@
 import type { DataRequest } from "simetra/model"
+import type { CoreSession } from "../store/core"
 import type { DataRuntime } from "./runtime"
 
 /** One request of the runtime: the envelope without `subject`. */
@@ -17,6 +18,11 @@ export interface RuntimeHandle {
    * `session-changed` — with that error.
    */
   send(request: RuntimeRequest): Promise<unknown>
+  /**
+   * The core session of the runtime (P4-B spec §6.1); closed by `dispose()`
+   * (`disposed`) and by `session-changed`.
+   */
+  readonly core: CoreSession
 }
 
 // Хендл живе в окремому модулі, а не в `runtime.ts`: `runtime.ts` входить у

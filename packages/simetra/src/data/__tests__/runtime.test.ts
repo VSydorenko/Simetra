@@ -3,10 +3,33 @@ import {
   CommandFailure,
   PAYLOAD_MAX_BYTES,
   jsonBytes,
+  type CatalogEntry,
+  type ClientCatalog,
   type DataRequest,
+  type DataResponse,
+  type DataTransport,
+  type SourceAdapter,
 } from "simetra/model"
-import { createDataRuntime, type DataLogEntry } from "../index"
+import {
+  createDataRuntime,
+  type DataLogEntry,
+  type DataRuntimeOptions,
+} from "../index"
 import { runtimeHandleOf } from "../runtime/handle"
+import { inspectCore } from "../store/core"
+import {
+  OBJECTS,
+  ORG,
+  S,
+  TASK,
+  key,
+  org,
+  seed,
+  settle,
+  task,
+} from "../store/__tests__/core-support"
+import { createFakeSource, type FakeSource } from "../store/testing/fake-source"
+import type { ViewSpec } from "../store/types"
 import {
   OBJECT_ID,
   SUBJECT,
@@ -358,5 +381,241 @@ describe("runtime transport wrapper", () => {
       expect(await runtimeHandleOf(two).send(card())).toBeNull()
       expect(two.disposed).toBe(false)
     })
+  })
+})
+
+// ------------------------------------------------------------ ядро рантайму
+
+/*
+ * Рантайм над ядром T4: транспорт тут — тонкий міст до фейкового сервера
+ * ядра, тож запит іде справжньою обгорткою `send` і справжнім адаптером
+ * Server Function, а тест сам вирішує, коли сервер відповідає.
+ */
+function serverTransport(fake: FakeSource) {
+  const calls: DataRequest[] = []
+  // Наступна відповідь замість читання (наприклад, `session-changed`).
+  const replies: DataResponse[] = []
+  const transport: DataTransport = async (body) => {
+    calls.push(body)
+    const reply = replies.shift()
+    if (reply !== undefined) return reply
+    if (body.request.type !== "read") return ok(null)
+    const query = body.request.query as Parameters<SourceAdapter["read"]>[0]
+    return ok(await fake.adapter.read(query))
+  }
+  return { transport, calls, replies }
+}
+
+const catalogOf = (objects: readonly CatalogEntry[]): ClientCatalog => ({
+  ...clientCatalog(),
+  objects: [...objects],
+})
+
+const cardOf = (n: number): ViewSpec => ({
+  kind: "card",
+  object: TASK,
+  key: key(n),
+})
+
+function runtimeOver(
+  fake: FakeSource,
+  options: Partial<DataRuntimeOptions> = {}
+) {
+  const wire = serverTransport(fake)
+  const runtime = createDataRuntime({
+    catalog: catalogOf(OBJECTS),
+    transport: wire.transport,
+    subject: SUBJECT,
+    log: () => {},
+    ...options,
+  })
+  return { runtime, core: runtimeHandleOf(runtime).core, ...wire }
+}
+
+describe("runtime core", () => {
+  it("purges every view in one notification before onSessionChanged", async () => {
+    const fake = createFakeSource({ objects: OBJECTS })
+    seed(fake, 1, 1)
+    const events: string[] = []
+    const { core, replies } = runtimeOver(fake, {
+      onSessionChanged: () => events.push("onSessionChanged"),
+    })
+    const handle = core.view(cardOf(1))
+    handle.subscribe(() => {
+      const s = handle.getSnapshot()
+      events.push(`${s.status}:${s.reason ?? ""}:${s.rows.length}`)
+    })
+    await settle()
+    expect(handle.getSnapshot().status).toBe("ready")
+    replies.push(sessionChanged())
+    handle.refresh()
+    events.length = 0
+    await settle()
+    expect(events).toEqual(["purged:session-changed:0", "onSessionChanged"])
+    expect(inspectCore(core).rowCount()).toBe(0)
+  })
+
+  it("dispose() purges the views, drops a late response and sends nothing new", async () => {
+    const fake = createFakeSource({ objects: OBJECTS, mode: "manual" })
+    seed(fake, 1, 2)
+    const { runtime, core, calls } = runtimeOver(fake)
+    const handle = core.view(cardOf(1))
+    handle.subscribe(() => {})
+    await settle()
+    expect(fake.pending).toHaveLength(1)
+    runtime.dispose()
+    const purged = handle.getSnapshot()
+    expect(purged).toMatchObject({ status: "purged", reason: "disposed" })
+    fake.deliverAll()
+    await settle()
+    expect(handle.getSnapshot()).toBe(purged)
+    expect(inspectCore(core).rowCount()).toBe(0)
+    const sent = calls.length
+    handle.refresh()
+    core.view(cardOf(2)).subscribe(() => {})
+    await settle()
+    expect(calls).toHaveLength(sent)
+    expect(core.view(cardOf(2)).getSnapshot()).toBe(purged)
+  })
+
+  it("keeps rows of two runtimes of the same subject apart", async () => {
+    const fake = createFakeSource({ objects: OBJECTS, mode: "manual" })
+    seed(fake, 1, 1)
+    const one = runtimeOver(fake)
+    const two = runtimeOver(fake)
+    const first = one.core.view(cardOf(1))
+    first.subscribe(() => {})
+    await settle()
+    fake.deliverAll()
+    await settle()
+    expect(first.getSnapshot().rows).toHaveLength(1)
+    const second = two.core.view(cardOf(1))
+    second.subscribe(() => {})
+    await settle()
+    // Другий рантайм читає сам: рядка першого він не бачить.
+    expect(second.getSnapshot()).toMatchObject({ status: "loading", rows: [] })
+    expect(two.calls).toHaveLength(1)
+    expect(inspectCore(two.core).rowCount()).toBe(0)
+  })
+
+  it("sends the subject of its own runtime with every core read", async () => {
+    const fake = createFakeSource({ objects: OBJECTS })
+    seed(fake, 1, 1)
+    const one = runtimeOver(fake)
+    const two = runtimeOver(fake, { subject: "user-2" })
+    one.core.view(cardOf(1)).subscribe(() => {})
+    two.core.view(cardOf(1)).subscribe(() => {})
+    await settle()
+    expect(one.calls.map((c) => c.subject)).toEqual([SUBJECT])
+    expect(two.calls.map((c) => c.subject)).toEqual(["user-2"])
+  })
+
+  it("passes the core log to the runtime log and applies fullLimit", async () => {
+    const fake = createFakeSource({ objects: OBJECTS })
+    seed(fake, 1, 4)
+    const log = vi.fn<(entry: DataLogEntry) => void>()
+    const { core } = runtimeOver(fake, { fullLimit: 3, log })
+    const handle = core.view({ kind: "full", object: TASK })
+    handle.subscribe(() => {})
+    await settle()
+    expect(handle.getSnapshot()).toMatchObject({ truncated: true })
+    expect(log).toHaveBeenCalledWith({
+      kind: "full-truncated",
+      object: TASK,
+      limit: 3,
+    })
+  })
+
+  it("lets fullLimit override limits.fullLimit", async () => {
+    const fake = createFakeSource({ objects: OBJECTS })
+    seed(fake, 1, 4)
+    const { core } = runtimeOver(fake, {
+      fullLimit: 4,
+      limits: { fullLimit: 3 },
+    })
+    const handle = core.view({ kind: "full", object: TASK })
+    handle.subscribe(() => {})
+    await settle()
+    expect(handle.getSnapshot()).toMatchObject({ truncated: false })
+    expect(handle.getSnapshot().rows).toHaveLength(4)
+  })
+
+  it.each([0, 1.5, -1])("refuses fullLimit %s with TypeError", (fullLimit) => {
+    const fake = createFakeSource({ objects: OBJECTS })
+    expect(() => runtimeOver(fake, { fullLimit })).toThrow(TypeError)
+  })
+
+  it("refuses an override of an object outside the catalog with TypeError", () => {
+    const fake = createFakeSource({ objects: OBJECTS })
+    const factory = vi.fn(() => fake.adapter)
+    expect(() =>
+      runtimeOver(fake, {
+        sources: { override: { "Catalog.Missing": factory } },
+      })
+    ).toThrow(TypeError)
+    expect(factory).not.toHaveBeenCalled()
+  })
+
+  it("reads only the overridden object through the override", async () => {
+    const fake = createFakeSource({ objects: OBJECTS })
+    seed(fake, 1, 1)
+    fake.insert(ORG, { ref: S })
+    const reads: string[] = []
+    const override: SourceAdapter = {
+      capabilities: fake.adapter.capabilities,
+      read: (query) => {
+        reads.push(query.object)
+        return fake.adapter.read(query)
+      },
+    }
+    const { core, calls } = runtimeOver(fake, {
+      sources: { override: { [ORG]: () => override } },
+    })
+    const orgView = core.view({ kind: "card", object: ORG, key: S })
+    orgView.subscribe(() => {})
+    core.view(cardOf(1)).subscribe(() => {})
+    await settle()
+    expect(orgView.getSnapshot().rows).toHaveLength(1)
+    expect(reads).toEqual([org.id])
+    expect(
+      calls.map((c) => c.request.type === "read" && c.request.query.object)
+    ).toEqual([task.id])
+  })
+
+  it("gives the override factory this runtime's subject and send; drops its response after dispose()", async () => {
+    const fake = createFakeSource({ objects: OBJECTS, mode: "manual" })
+    fake.insert(ORG, { ref: S })
+    const factory = vi.fn(
+      (context: {
+        subject: string
+        send: (request: DataRequest["request"]) => Promise<unknown>
+      }) => {
+        void context.send({ type: "version" })
+        return fake.adapter
+      }
+    )
+    const { runtime, core, calls } = runtimeOver(fake, {
+      subject: "user-2",
+      sources: { override: { [ORG]: factory } },
+    })
+    expect(factory).toHaveBeenCalledTimes(1)
+    expect(factory.mock.calls[0]![0].subject).toBe("user-2")
+    expect(calls).toEqual([{ subject: "user-2", request: { type: "version" } }])
+    const handle = core.view({ kind: "card", object: ORG, key: S })
+    handle.subscribe(() => {})
+    await settle()
+    expect(fake.pending).toHaveLength(1)
+    runtime.dispose()
+    fake.deliverAll()
+    await settle()
+    expect(handle.getSnapshot()).toMatchObject({
+      status: "purged",
+      reason: "disposed",
+      rows: [],
+    })
+    expect(inspectCore(core).rowCount()).toBe(0)
+    handle.refresh()
+    await settle()
+    expect(fake.log).toHaveLength(1)
   })
 })
