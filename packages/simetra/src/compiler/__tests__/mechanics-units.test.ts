@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it } from "vitest"
 import { compile } from "simetra/compiler"
 import type { PhysicalSnapshot, PhysicalTable } from "simetra/model"
-import { executeGrants } from "../sql/execute-grants"
+import { executeGrants, sequenceRevokes } from "../sql/execute-grants"
 import { platformFunctionSignatures, withoutLocations } from "../sql/units"
 import {
   buildMechanicsUnits,
@@ -9,7 +9,10 @@ import {
   contentColumns,
   MECHANICS_FUNCTION,
   mechanicsTriggerName,
+  ROW_VERSION_SEQUENCE,
+  ROW_VERSION_SETTING,
 } from "../mechanics-units"
+import { DATABASE_PROVIDERS, PROVIDER_API_ROLES } from "simetra/model"
 import { loadSqlParser, type SqlParser } from "../sql/parse"
 import { platformBeforeTriggerName } from "../before-trigger-names"
 import { compileRights, policyDomain } from "./fixtures/rights"
@@ -79,15 +82,26 @@ describe("buildMechanicsUnits", () => {
     expect(fn.identity).toBe("function:simetra.touch()")
     expect(fn.ownerObjectId).toBeUndefined()
     expect(fn.sql).toContain("IF TG_OP = 'INSERT' THEN")
-    expect(fn.sql).toContain("NEW.version := 1;")
-    expect(fn.sql).toContain("NEW.version := OLD.version + 1;")
+    expect(fn.sql).toContain("NEW.version := nextval('simetra.row_version');")
+    expect(fn.sql).toContain(
+      "NEW.version := GREATEST(nextval('simetra.row_version'), OLD.version + 1);"
+    )
     expect(fn.sql).toContain("NEW.updated_at := now();")
     expect(fn.sql).not.toContain("created_at")
-    expect(fn.sql).toContain("SECURITY INVOKER")
+    expect(fn.sql).toContain(
+      "IF current_setting('synchronous_commit') IN ('off', 'local') THEN"
+    )
+    expect(fn.sql).toContain(
+      "PERFORM set_config('synchronous_commit', 'on', true);"
+    )
+    expect(fn.sql).toContain(
+      "PERFORM set_config('simetra.row_version_' || TG_RELID::text, NEW.version::text, true);"
+    )
+    expect(fn.sql).toContain("SECURITY DEFINER")
     expect(fn.sql).toContain("SET search_path = ''")
     expect(
       units
-        .filter((u) => u.class === "grant")
+        .filter((u) => u.class === "grant" && u.sql.includes("FUNCTION"))
         .map((u) => u.sql)
         .sort()
     ).toEqual(executeGrants("simetra.touch()", [], "supabase").sort())
@@ -105,6 +119,14 @@ describe("buildMechanicsUnits", () => {
       expect(unit.module).toBe("TestApp")
     }
     expect(MECHANICS_FUNCTION).toEqual({ schema: "simetra", name: "touch" })
+  })
+
+  it("the row version sequence is issued with a trigger, and its setting prefix is exported", () => {
+    expect(ROW_VERSION_SEQUENCE).toEqual({
+      schema: "simetra",
+      name: "row_version",
+    })
+    expect(ROW_VERSION_SETTING).toBe("simetra.row_version_")
   })
 
   it("a Catalog with a tabular section gets the trigger on the main table only", async () => {
@@ -140,7 +162,51 @@ describe("buildMechanicsUnits", () => {
     ).toEqual(["trigger:public.item.item_simetra_touch"])
   })
 
-  it("a project with only a CustomTable and an Enumeration gets no mechanics unit", async () => {
+  it.each(DATABASE_PROVIDERS)(
+    "without mechanics tables only the sequence and its revokes remain (%s)",
+    (provider) => {
+      const units = buildMechanicsUnits(
+        snapshot([]),
+        "camelCase",
+        provider,
+        "app",
+        parse
+      )
+      const sequence = units.find((u) => u.class === "sequence")!
+      expect(sequence.identity).toBe("sequence:simetra.row_version")
+      expect(sequence.sql).toBe(
+        "CREATE SEQUENCE simetra.row_version AS bigint MINVALUE 1 NO CYCLE CACHE 1;"
+      )
+      expect(
+        units.filter((u) => u.class === "grant").map((u) => u.sql)
+      ).toEqual(
+        expect.arrayContaining(sequenceRevokes(ROW_VERSION_SEQUENCE, provider))
+      )
+      expect(units).toHaveLength(
+        1 + sequenceRevokes(ROW_VERSION_SEQUENCE, provider).length
+      )
+      for (const unit of units) expect(unit.generator).toBe("mechanics")
+    }
+  )
+
+  it.each(DATABASE_PROVIDERS)(
+    "the sequence revokes cover PUBLIC and every API role (%s)",
+    (provider) => {
+      const revokes = sequenceRevokes(ROW_VERSION_SEQUENCE, provider)
+      expect(revokes[0]).toBe(
+        "REVOKE ALL ON SEQUENCE simetra.row_version FROM PUBLIC;"
+      )
+      for (const role of Object.values(PROVIDER_API_ROLES[provider]))
+        expect(revokes).toContain(
+          `REVOKE ALL ON SEQUENCE simetra.row_version FROM "${role}";`.replace(
+            `"${role}"`,
+            /^[a-z_]+$/.test(role) ? role : `"${role}"`
+          )
+        )
+    }
+  )
+
+  it("a project with only a CustomTable and an Enumeration gets no table trigger or function", async () => {
     const model = await compiled({
       "project.meta.json": project(),
       "custom-tables/Codes/Codes.meta.json": customTable("Codes"),
@@ -152,7 +218,14 @@ describe("buildMechanicsUnits", () => {
         values: [],
       },
     })
-    expect(mechanics(model.sqlUnits)).toEqual([])
+    expect(
+      mechanics(model.sqlUnits).filter(
+        (u) => u.class !== "sequence" && u.class !== "grant"
+      )
+    ).toEqual([])
+    expect(
+      mechanics(model.sqlUnits).filter((u) => u.class === "sequence")
+    ).toHaveLength(1)
   })
 
   it("a table with updated_at but no version is a model defect", () => {

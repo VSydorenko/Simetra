@@ -1482,7 +1482,7 @@ describe("reverseGenerate", () => {
           label
         ).toBe(true)
       expect(new Set(platform.map((u) => u.class))).toEqual(
-        new Set(["function", "grant", "trigger"])
+        new Set(["function", "grant", "sequence", "trigger"])
       )
       const AUDIT_FN =
         "CREATE FUNCTION public.audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;"

@@ -100,6 +100,11 @@ describe("renderDesiredState", () => {
         "unit grant:revoke:function:simetra.touch():service_role:execute",
         "unit trigger:app.category.category_simetra_touch",
         "unit trigger:app.item.item_simetra_touch",
+        "unit sequence:simetra.row_version",
+        "unit grant:revoke:sequence:simetra.row_version:anon:all",
+        "unit grant:revoke:sequence:simetra.row_version:authenticated:all",
+        "unit grant:revoke:sequence:simetra.row_version:public:all",
+        "unit grant:revoke:sequence:simetra.row_version:service_role:all",
         "foreignKey app.category",
         "foreignKey app.item",
       ]

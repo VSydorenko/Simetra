@@ -55,6 +55,8 @@ export {
 export { KEY_FUNCTION, keyTriggerNames } from "./key-units"
 export {
   MECHANICS_FUNCTION,
+  ROW_VERSION_SEQUENCE,
+  ROW_VERSION_SETTING,
   authorTableColumns,
   contentChangeCondition,
   mechanicsTriggerName,

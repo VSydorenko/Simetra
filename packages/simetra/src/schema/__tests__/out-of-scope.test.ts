@@ -55,7 +55,7 @@ describe("the boundary takes the target of a unit", () => {
       "GRANT SELECT ON reports.t TO authenticated;\n"
     )
     expect(diagnostics).toEqual([])
-    expect(scope.schemas).toEqual(["app", "reports"])
+    expect(scope.schemas).toEqual(["app", "reports", "simetra"])
   })
 
   it("policy on storage.objects is in scope", async () => {
@@ -63,7 +63,7 @@ describe("the boundary takes the target of a unit", () => {
       "CREATE POLICY app_read ON storage.objects FOR SELECT TO authenticated USING (true);\n"
     )
     expect(diagnostics).toEqual([])
-    expect(scope.schemas).toEqual(["app"])
+    expect(scope.schemas).toEqual(["app", "simetra"])
   })
 
   it("comment on a policy on storage.objects gives no diagnostic", async () => {
@@ -205,13 +205,13 @@ describe("the platform layer joins the boundary by its own schemas", () => {
     expect(scope.schemas).toEqual(["app", "simetra"])
   })
 
-  it("a model with only a CustomTable and no users has no simetra in scope", async () => {
-    // Прийнята таблиця не має механіки рядка, тож `simetra` в межу не дає
-    // нічого, крім шару.
+  it("a model with only a CustomTable and no users still has simetra in scope", async () => {
+    // Послідовність версій рядків видається завжди, тож `simetra` у межі
+    // навіть без таблиць механіки.
     const { scope } = await scopeWith({
       "custom-tables/Codes/Codes.meta.json": customTable("Codes"),
     })
-    expect(scope.schemas).toEqual(["app"])
+    expect(scope.schemas).toEqual(["app", "simetra"])
   })
 
   it("the row mechanics brings simetra into scope without users", async () => {
