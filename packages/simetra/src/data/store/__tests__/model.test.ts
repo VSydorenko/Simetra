@@ -57,21 +57,21 @@ type Step =
 
 const step: fc.Arbitrary<Step> = fc.oneof(
   {
-    weight: 3,
+    weight: 9,
     arbitrary: fc.record({
       t: fc.constant("sub" as const),
       view: fc.nat(SPECS.length - 1),
     }),
   },
   {
-    weight: 2,
+    weight: 6,
     arbitrary: fc.record({
       t: fc.constant("unsub" as const),
       view: fc.nat(SPECS.length - 1),
     }),
   },
   {
-    weight: 4,
+    weight: 12,
     arbitrary: fc.record({
       t: fc.constant("edit" as const),
       key: fc.nat(KEYS.length - 1),
@@ -81,7 +81,7 @@ const step: fc.Arbitrary<Step> = fc.oneof(
     }),
   },
   {
-    weight: 8,
+    weight: 24,
     arbitrary: fc.record({
       t: fc.constant("answer" as const),
       call: fc.nat(5),
@@ -97,7 +97,7 @@ const step: fc.Arbitrary<Step> = fc.oneof(
     }),
   },
   {
-    weight: 2,
+    weight: 6,
     arbitrary: fc.record({
       t: fc.constant("other" as const),
       key: fc.nat(KEYS.length - 1),
@@ -105,31 +105,31 @@ const step: fc.Arbitrary<Step> = fc.oneof(
     }),
   },
   {
-    weight: 1,
+    weight: 3,
     arbitrary: fc.record({
       t: fc.constant("otherRemove" as const),
       key: fc.nat(KEYS.length - 1),
     }),
   },
   {
-    weight: 2,
+    weight: 6,
     arbitrary: fc.record({
       t: fc.constant("signal" as const),
       key: fc.nat(KEYS.length - 1),
     }),
   },
   {
-    weight: 1,
+    weight: 3,
     arbitrary: fc.record({ t: fc.constant("retry" as const), pick: fc.nat(5) }),
   },
   {
-    weight: 1,
+    weight: 3,
     arbitrary: fc.record({
       t: fc.constant("cancel" as const),
       pick: fc.nat(5),
     }),
   },
-  { weight: 1, arbitrary: fc.record({ t: fc.constant("time" as const) }) },
+  { weight: 3, arbitrary: fc.record({ t: fc.constant("time" as const) }) },
   { weight: 1, arbitrary: fc.record({ t: fc.constant("dispose" as const) }) }
 )
 
@@ -201,7 +201,11 @@ class Reference {
   }
 }
 
-async function runModel(steps: Step[], releaseDelayMs: number) {
+async function runModel(
+  steps: Step[],
+  releaseDelayMs: number,
+  preloaded: boolean
+) {
   const { server, transport, session } = setup({ releaseDelayMs })
   server.seed(
     TASK,
@@ -235,10 +239,14 @@ async function runModel(steps: Step[], releaseDelayMs: number) {
     for (const [key, row] of insp.rows(TASK)) {
       // Версія не зменшується (сервер монотонний, тож і між появами ключа).
       const max = maxVersion.get(key) ?? 0
-      expect(row.version, `${label}: version of ${key}`).toBeGreaterThanOrEqual(
-        max
-      )
-      maxVersion.set(key, row.version)
+      // Ключ, що повернувся старшою версією, ніж бачено, — лише зі `stale`
+      // (ядро його перечитує); інакше версія не зменшується.
+      if (row.version < max) {
+        expect(
+          row.stale,
+          `${label}: version of ${key} ${max} → ${row.version}`
+        ).toBe(true)
+      } else maxVersion.set(key, row.version)
     }
     // Р3: рядок живої чи відмовленої мутації не витісняється.
     for (const m of ref.log) {
@@ -265,6 +273,13 @@ async function runModel(steps: Step[], releaseDelayMs: number) {
     subs[v] = h.subscribe(() => {
       frames[v] = (frames[v] ?? 0) + 1
     })
+  }
+
+  // Старт: частина виглядів уже завантажена, тож правки мають базу.
+  if (preloaded) {
+    subscribe(0, handles[0] as ViewHandle)
+    subscribe(3, handles[3] as ViewHandle)
+    await transport.drain()
   }
 
   for (const [n, s] of steps.entries()) {
@@ -300,7 +315,14 @@ async function runModel(steps: Step[], releaseDelayMs: number) {
           hadRow: inspectCore(session).row(TASK, key) !== undefined,
         })
         void m.settled.then((o) => ref.settled(m.id, o.ok))
-        if (s.policy === "await") {
+        // Дія без змін проти підтвердженого рядка осідає одразу, без `run`
+        // (і за Р1 поглинає те саме поле відмовлених): commit уже стався.
+        const live = handles.some((h) =>
+          h
+            .getSnapshot()
+            .rows.some((r) => r.status.mutations.some((x) => x.id === m.id))
+        )
+        if (s.policy === "await" && live) {
           // `await`: між дією й commit відповіді показане значення те саме.
           handles.forEach((h, v) => {
             const after = h
@@ -406,20 +428,22 @@ describe("core model", () => {
   it("holds the invariants over random interleavings (release at once)", async () => {
     await fc.assert(
       fc.asyncProperty(
-        fc.array(step, { minLength: 1, maxLength: 30 }),
-        (steps) => runModel(steps, 0)
+        fc.array(step, { minLength: 1, maxLength: 40 }),
+        fc.boolean(),
+        (steps, preloaded) => runModel(steps, 0, preloaded)
       ),
-      { numRuns: Number(process.env.CORE_MODEL_RUNS ?? 5_000) }
+      { numRuns: Number(process.env.CORE_MODEL_RUNS ?? 10_000) }
     )
   }, 600_000)
 
   it("holds the invariants with a delayed release", async () => {
     await fc.assert(
       fc.asyncProperty(
-        fc.array(step, { minLength: 1, maxLength: 30 }),
-        (steps) => runModel(steps, 1_000)
+        fc.array(step, { minLength: 1, maxLength: 40 }),
+        fc.boolean(),
+        (steps, preloaded) => runModel(steps, 1_000, preloaded)
       ),
-      { numRuns: Number(process.env.CORE_MODEL_RUNS ?? 5_000) }
+      { numRuns: Number(process.env.CORE_MODEL_RUNS ?? 10_000) }
     )
   }, 600_000)
 })

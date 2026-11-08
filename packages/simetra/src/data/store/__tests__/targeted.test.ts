@@ -468,4 +468,25 @@ describe("core targeted", () => {
       expect(() => b.session.hydrate(a.session.dehydrate())).toThrow()
     })
   })
+
+  it("Рд24 across eviction: a stale load re-inserting an evicted key is flagged and re-read", async () => {
+    const { server, transport, session } = setup()
+    server.seed(TASK, [{ id: K1, title: "A", rank: 1 }])
+    const full = watch(session.view({ kind: "full", object: TASK }))
+    await transport.settle()
+    const oldLoad = transport.take() // знімок v1
+    server.edit(TASK, K1, { title: "B" })
+    const keys = watch(session.view({ kind: "keys", object: TASK, keys: [K1] }))
+    await transport.drain()
+    expect(keys.last.rows[0]?.version).toBe(2)
+    keys.unsubscribe() // ключ вивантажено з v2
+    expect(inspectCore(session).row(TASK, K1)).toBeUndefined()
+    oldLoad.answerStale() // повертає ключ з v1
+    await transport.settle()
+    expect(full.last.rows[0]?.status.state).toBe("stale")
+    expect(full.last.rows[0]?.values.title).toBe("A")
+    await transport.drain()
+    expect(full.last.rows[0]?.status.state).toBe("synced")
+    expect(full.last.rows[0]?.values.title).toBe("B")
+  })
 })
