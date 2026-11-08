@@ -113,7 +113,9 @@ const REQUEST_ROLES: readonly string[] = (
  */
 const DEFAULT_REQUEST_NAMES: readonly string[] = [
   ...new Set(
-    Object.values(PROVIDER_API_ROLES).flatMap((roles) => Object.values(roles))
+    Object.values(PROVIDER_API_ROLES)
+      .flatMap((roles) => Object.values(roles))
+      .filter((role): role is string => role !== null)
   ),
 ]
 

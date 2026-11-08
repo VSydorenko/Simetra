@@ -119,8 +119,11 @@ export interface ProviderApiRoles {
   user: string
   /** Запит без сесії. */
   anonymous: string
-  /** Сервісний ключ: сесії немає, RLS обходиться. */
-  service: string
+  /**
+   * Сервісний ключ: сесії немає, RLS обходиться. `null` — профіль без
+   * сервісної ролі (її просто немає в кластері, відкликати нічого).
+   */
+  service: string | null
 }
 export type ApiRolePurpose = keyof ProviderApiRoles
 /**

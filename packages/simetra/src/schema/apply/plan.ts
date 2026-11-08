@@ -874,7 +874,9 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
           oldTables,
           await readWritePath(tx, {
             tables: oldTables,
-            apiRoles: Object.values(PROVIDER_API_ROLES[scope.provider]),
+            apiRoles: Object.values(PROVIDER_API_ROLES[scope.provider]).filter(
+              (role): role is string => role !== null
+            ),
           })
         ),
       ],

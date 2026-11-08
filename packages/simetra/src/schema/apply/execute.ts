@@ -723,7 +723,7 @@ async function runAttempt(
   // 3. Роллю API схему не змінюють (спека П2 §8.6)
   const apiRoles: readonly string[] = Object.values(
     PROVIDER_API_ROLES[plan.scope.provider]
-  )
+  ).filter((role): role is string => role !== null)
   if (apiRoles.includes(who.role))
     throw stop("refused", "apply.api-role", { role: who.role })
 

@@ -23,10 +23,13 @@ export function executeGrants(
   provider: DatabaseProvider
 ): string[] {
   const apiRoles = PROVIDER_API_ROLES[provider]
-  const roles = purposes.map((purpose) => grantRole(purpose, provider))
-  const revoked = Object.values(apiRoles).filter(
-    (role) => !roles.includes(role)
-  )
+  // Призначення без ролі в профілі (`null`) ні відкликати, ні надати нічого
+  const roles = purposes
+    .map((purpose) => grantRole(purpose, provider))
+    .filter((role): role is string => role !== null)
+  const revoked = Object.values(apiRoles)
+    .filter((role): role is string => role !== null)
+    .filter((role) => !roles.includes(role))
   return [
     `REVOKE EXECUTE ON FUNCTION ${signature} FROM PUBLIC;`,
     ...revoked.map(
@@ -41,12 +44,13 @@ export function executeGrants(
 
 /**
  * Ім'я ролі за призначенням: роль API — від провайдера, роль платформи — та
- * сама для кожного провайдера.
+ * сама для кожного провайдера. `null` — профіль провайдера не має ролі за цим
+ * призначенням; кожен виклик її пропускає.
  */
 export function grantRole(
   purpose: GrantPurpose,
   provider: DatabaseProvider
-): string {
+): string | null {
   return isPlatformPurpose(purpose)
     ? PLATFORM_ROLES[purpose]
     : PROVIDER_API_ROLES[provider][purpose]
