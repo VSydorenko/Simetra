@@ -102,7 +102,7 @@ devDependency з ПГ-2a).
 | Р1 | Код гейта ролі входу — `command.privileged-login` у `CommandError`, а не `runtime.privileged-login`. Відмови конструктора рантайму — уже `CommandFailure` з кодами `command.*` (`command.read-role-missing`, `command.model-mismatch`) | §4.2 абзац «Межа довіри» (задача 0) |
 | Р2 | `LOGIN_ROLE_REQUEST_PURPOSES.supabase = ["user", "anonymous"]`: роль входу рантайму на `supabase` стає членом `anon` з `SET`. Рантайм без членства в ролі `anonymous` профілю — `command.read-role-missing` на створенні, без запасного шляху через роль команд. Анонім — гість в обох профілях на дверях Server Function (двері PostgREST `supabase` — блок B4) | спека профілю §4.4; спека П4 §6.2 рядок `simetra_runtime` для `supabase`, §6.11 (задача 0) |
 | Р3 | Сесію вважаємо анонімною, коли claim `PROVIDER_IDENTITY_SOURCES[provider].anonymousClaim` дорівнює `true` або `"true"`. SQL судить так само (`->> … = 'true'`); розбіжність дала б SQL-гостя під роллю `user`. Нового поля каталогу немає: T3 бере claim з даних T0 за `catalog.provider` | §4.4 «Анонімна сесія читає як гість» (задача 0) |
-| Р8 | **Відсутній claim аноніма — відмова, а не роль `user`.** Профіль з `anonymousClaim` ≠ `null` вимагає claim зі значенням `true`, `false`, `"true"` чи `"false"`. Інакше читання, команда (`run`) і `authorizeChannels` відмовляють `command.unauthenticated` до будь-якого I/O. Команди теж: у проєкті без «Користувачів» `subjectUserFunction` за відсутнього claim повертає `sub::uuid`, тобто анонім виконав би команду з правами `everyUser`. Правило діє лише на claims із суб'єктом (`sub`): запит без суб'єкта T3 відхиляє ще до нього (Рт8), і Р8 цього не змінює. Причина: адаптер host-а, що забув claim, інакше тихо дав би анонімові права `user` (fail-open). Сесії інструментів designer (`dataSession`) і тест-помічники ставлять `false` явно (рішення автора плану після аудиту безпеки; подано архітекторці) | §4.4 (задача 0) |
+| Р8 | **Відсутній claim аноніма — відмова, а не роль `user`.** Профіль з `anonymousClaim` ≠ `null` вимагає claim зі значенням `true`, `false`, `"true"` чи `"false"`. Інакше читання й команда (`run`) відмовляють `command.unauthenticated` до будь-якого I/O; `authorizeChannels` (ПГ-4/B2, задача 11) з тим самим `sessionKind` дає `{ user: null, channels: [] }`. Команди теж: у проєкті без «Користувачів» `subjectUserFunction` за відсутнього claim повертає `sub::uuid`, тобто анонім виконав би команду з правами `everyUser`. Правило діє лише на claims із суб'єктом (`sub`): запит без суб'єкта T3 відхиляє ще до нього (Рт8), і Р8 цього не змінює. Причина: адаптер host-а, що забув claim, інакше тихо дав би анонімові права `user` (fail-open). Сесії інструментів designer (`dataSession`) і тест-помічники ставлять `false` явно (рішення автора плану після аудиту безпеки; подано архітекторці) | §4.4 (задача 0) |
 | Р9 | **Гейт входу судить факти, а не ім'я.** Відмова, коли `session_user` (сам чи через будь-яке членство, `pg_has_role … 'MEMBER'`) досягає: власника схеми `simetra` (`nspowner`); ролі з іменем `PROVIDER_OWNER_ROLES[provider]`; ролі з `rolsuper`, `rolbypassrls` чи `rolcreaterole`; вбудованих `pg_execute_server_program`, `pg_read_server_files`, `pg_write_server_files`; ролі входу провайдера (`PROVIDER_LOGIN_ROLES`, на `postgres` — `simetra_auth`, власник таблиці Better Auth); сервісної ролі профілю, коли вона не `null`. Обмеження порту: `CommandDatabase` входить роллю входу напряму; пул, що входить суперкористувачем і робить `SET SESSION AUTHORIZATION`, — поза моделлю довіри (такий host уже тримає DSN суперкористувача), це записано в JSDoc `CommandRuntimeOptions.database`. `NOINHERIT` тут не захищає: `SET ROLE` дає владу ролі | §4.2 «Межа довіри» (задача 0) |
 | Р10 | Адаптер `verifySession` Better Auth — у шаблоні host-а (П4-D, `packages/create-simetra-app/template`), а не в цьому плані, хоч §12 спеки називає його в ПГ-3 (рішення архітекторки, межа з П4-D) | §12 рядок ПГ-3 (задача 0) |
 | Р4 | `plan.identity-trigger-locked` судить дані T2 `PROVIDER_IDENTITY_TRIGGER_LOCKED = { supabase: false, postgres: true }`, а не факт власності таблиці. Факт стека Supabase: роль `postgres` знімає тригер на `auth.users`, хоч не власник і не суперкористувач (supautils). Гейт за власністю зламав би `supabase` | §4.2 таблиця мап, новий рядок (задача 0) |
@@ -347,8 +347,10 @@ devDependency з ПГ-2a).
     Simetra — це ознака підробки, звір її з власником таблиці. Крок
     `CREATE OR REPLACE TRIGGER` (лише `produced`) не відмовляє: Postgres
     вимагає для нього лише привілею `TRIGGER`, який власник має (задача 1);
-  - виклик у `buildPlan` після побудови кроків, лише коли
-    `PROVIDER_IDENTITY_TRIGGER_LOCKED[provider]`. Відмова — план не пишеться.
+  - виклик в **обох** шляхах плану, лише коли
+    `PROVIDER_IDENTITY_TRIGGER_LOCKED[provider]`: у `buildPlan` після
+    `classifySteps` і в `planPromotion` над кроками промоції (`buildPlan`
+    повертає `planPromotion` раніше, ніж будує звичайні кроки). Відмова — план не пишеться.
     Перше створення тригера не відмовляє. Зміна тіла
     функції провізії не відмовляє (§4.2).
 
@@ -366,6 +368,10 @@ devDependency з ПГ-2a).
     і жодного кроку. Якщо крок — `CREATE OR REPLACE`, план проходить, а
     застосування від тегованого власника повертає бажаний тригер. Форму
     кроку запиши у звіт фактом; тест перевіряє ту гілку, яку дав рушій;
+  - DB `postgres`, шлях промоції: план промоції на цілі з підробленим
+    тригером провізії, що знімає тригер, — та сама відмова (unit на
+    кроках промоції досить, якщо DB-фікстура промоції на `postgres` ще
+    недоступна — тоді у звіті причина);
   - DB `supabase`: той самий сценарій у тегованій базі тестів провайдера
     (як `build-plan-provider.supabase.db.test.ts`), з відновленням тригера у
     `finally`. Спільна база стека не зачіпається. З'єднання
@@ -620,8 +626,10 @@ devDependency з ПГ-2a).
       (на PG16+ таке членство дає `SET ROLE` без успадкування), — `bypassrls`.
       Мутація: заміна `'MEMBER'` на `'USAGE'` у запиті фактів — кейс
       червоніє (рішення архітекторки);
-    - тегована роль, член тегованої ролі входу провайдера (`auth`), —
-      `provider-login`; член `pg_read_server_files` — `server-files`;
+    - тегована роль, член ролі входу провайдера `simetra_auth` стека
+      (фіксоване ім'я з `PROVIDER_LOGIN_ROLES`; тегована `auth` гейт не
+      бачить), — `provider-login`. Членство знімається разом із тегованою
+      роллю; член `pg_read_server_files` — `server-files`;
     - тегована роль входу форми `simetra_runtime` — рантайм створюється;
   - DB, стек `supabase`: DSN ролі `postgres` — `owner`; тегована роль, член
     `service_role`, — `bypassrls` (`service_role` має `BYPASSRLS`;
