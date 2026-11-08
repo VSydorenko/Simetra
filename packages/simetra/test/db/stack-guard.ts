@@ -75,7 +75,7 @@ async function setup(p: TestProvider): Promise<() => Promise<void>> {
     if (readHolder(lock)?.pid === process.pid) removeLockFile(lock)
   }
   checkFreeSpace()
-  await acquireLock(lock)
+  await acquireLock(lock, p)
   let removeInterruptCleanup = (): void => {}
   try {
     // Форки воркерів, які vitest стартує після globalSetup, успадковують env:
@@ -139,7 +139,7 @@ function checkFreeSpace(): void {
     )
 }
 
-async function acquireLock(lock: string): Promise<void> {
+async function acquireLock(lock: string, p: TestProvider): Promise<void> {
   const deadline = Date.now() + LOCK_WAIT_MS
   let announced = false
   for (;;) {
@@ -169,11 +169,11 @@ async function acquireLock(lock: string): Promise<void> {
     }
     if (Date.now() > deadline)
       throw new Error(
-        `The local stack is still busy after ${LOCK_WAIT_MS / 60_000} min: DB run PID ${holder.pid} (${holder.cwd}, since ${holder.since}). Lock file: ${lock}`
+        `The local ${p} stack is still busy after ${LOCK_WAIT_MS / 60_000} min: DB run PID ${holder.pid} (${holder.cwd}, since ${holder.since}). Lock file: ${lock}`
       )
     if (!announced) {
       process.stderr.write(
-        `The local stack is busy: DB run PID ${holder.pid} (${holder.cwd}, since ${holder.since}); waiting…\n`
+        `The local ${p} stack is busy: DB run PID ${holder.pid} (${holder.cwd}, since ${holder.since}); waiting…\n`
       )
       announced = true
     }

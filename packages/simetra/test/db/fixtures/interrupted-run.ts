@@ -24,7 +24,7 @@ import {
   testRoleName,
   testSuperuserUrl,
 } from "../connection"
-import { createRunBucket, nodeExec } from "../external"
+import { createRunBucket, nodeExec, runContainerLabels } from "../external"
 import { installInterruptCleanup } from "../interrupt"
 import { testProvider, testStack } from "../profile"
 
@@ -110,10 +110,7 @@ async function createObjects(): Promise<void> {
         "-d",
         "--name",
         interruptContainerName(tag),
-        "--label",
-        `simetra-run=${tag}`,
-        "--label",
-        "simetra-stack=postgres",
+        ...runContainerLabels(tag, "postgres"),
         // Образ локальний (його збирає `db:pg:start`): без нього прогін має
         // впасти, а не тягнути щось із реєстру
         "--pull",

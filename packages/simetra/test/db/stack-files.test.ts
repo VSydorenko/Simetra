@@ -10,7 +10,11 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { withStackLock } from "../../../../scripts/db-stack.mjs"
+import {
+  POSTGRES_LOCK_FILE,
+  withStackLock,
+} from "../../../../scripts/db-stack.mjs"
+import { TEST_STACKS } from "./profile"
 
 // Файли стека перевіряються як текст: межі безпеки (лише 127.0.0.1, піни
 // образів, жодних секретів у конфігах) ламаються правкою файла, а не коду
@@ -175,6 +179,12 @@ describe("garage.toml of the postgres stack", () => {
 })
 
 describe("withStackLock", () => {
+  // Команда стека й DB-прогін мусять брати один замок: інакше `stop` зупинив
+  // би стек посеред прогону
+  it("the script locks the same file as the guard of the postgres stack", () => {
+    expect(POSTGRES_LOCK_FILE).toBe(TEST_STACKS.postgres.lockFile)
+  })
+
   let dir: string
   let lock: string
 

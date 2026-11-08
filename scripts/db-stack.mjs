@@ -22,15 +22,17 @@ import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..")
-// Профілі скрипта як дані. `lock` — ім'я замка, те саме, що
-// `TEST_STACKS.postgres.lockFile` у test/db/profile.ts. `supabase-signals` без
+/** Lock file name of the postgres stack; equals `TEST_STACKS.postgres.lockFile` (asserted by a unit test). */
+export const POSTGRES_LOCK_FILE = "simetra-db-stack-postgres.lock"
+
+// Профілі скрипта як дані. `lock` — замок, той самий, що бере DB-прогін. `supabase-signals` без
 // замка: DB-прогін його не вживає (стек Supabase має власний замок guard-а), а
 // кроку ініціалізації, що мусив би йти під замком, у нього немає.
 const PROFILES = {
   postgres: {
     dir: join(ROOT, "docker/postgres-stack"),
     project: "simetra-pg",
-    lock: join(tmpdir(), "simetra-db-stack-postgres.lock"),
+    lock: join(tmpdir(), POSTGRES_LOCK_FILE),
   },
   "supabase-signals": {
     dir: join(ROOT, "docker/supabase-signals"),

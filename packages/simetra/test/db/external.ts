@@ -45,6 +45,14 @@ export const nodeExec: Exec = (file, args, opts) =>
     )
   })
 
+/**
+ * `docker run` label args of a container of run `tag` on the stack of
+ * profile `p`: the guard sees and removes a container only by both labels.
+ */
+export function runContainerLabels(tag: string, p: TestProvider): string[] {
+  return ["--label", `${RUN_LABEL}=${tag}`, "--label", `${STACK_LABEL}=${p}`]
+}
+
 /** The Garage bucket of run `tag`: its global alias. */
 export function runBucketName(tag: string): string {
   return `run-${tag}`
