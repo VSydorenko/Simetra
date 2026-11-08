@@ -74,8 +74,16 @@
   - `PROVIDER_API_ROLES.postgres = { user: "simetra_user", anonymous: "simetra_anon", service: null }`;
   - `LOGIN_ROLE_REQUEST_PURPOSES.postgres = ["user", "anonymous"]`;
   - `PLATFORM_ROLES` дістає `signalConsumer: "simetra_signal_consumer"`;
-  - `PLATFORM_LOGIN_ROLES` дістає `signals: "simetra_signals"` з єдиним
-    дозволеним батьком `simetra_signal_consumer` (в обох профілях);
+  - `PLATFORM_LOGIN_ROLES` дістає `signals: "simetra_signals"` (в обох
+    профілях);
+  - нова мапа T0 `LOGIN_ROLE_PARENTS` — дозволені батьки кожної ролі входу
+    платформи: `runtime` — `simetra_command` і ролі запиту за
+    `LOGIN_ROLE_REQUEST_PURPOSES`; `signals` — лише
+    `simetra_signal_consumer`. Гейт ролей (`platformRoleRefusals`,
+    `checkPlatformRoles`) звіряє кожну роль входу за її рядком, а не за
+    спільною множиною; `PlatformRoleSet.login` стає переліком. Без цього
+    `simetra_signals` з членством у `simetra_command` пройшов би гейт, і
+    витік DSN споживача дав би роль команд;
   - `PROVIDER_LOGIN_ROLES.postgres = ["simetra_auth"]`;
   - нова мапа `PROVIDER_OWNER_ROLES = { supabase: "postgres", postgres: "simetra_owner" }`
     — очікувана роль застосування.
@@ -96,9 +104,15 @@
   одного застосунку (`simetra_auth`, `simetra_signals`, `simetra_runtime`)
   мав би ту саму владу в базі іншого застосунку того самого кластера. Тому в
   профілі `postgres` продовий кластер тримає одну базу застосунку Simetra.
-  `roles` перевіряє це: якщо роль входу Simetra має `CONNECT` до іншої
-  нешаблонної бази, ніж ціль, — відмова `roles.shared-cluster` з переліком
-  баз. Спільний стек розробки й тестів цього правила не порушує: тести
+  `roles` закріплює це двома кроками:
+  - на цільовій базі — `REVOKE CONNECT … FROM PUBLIC` і адресний
+    `GRANT CONNECT` ролям входу Simetra;
+  - якщо роль входу Simetra вже має **явний** (не через `PUBLIC`) `CONNECT`
+    до іншої бази — це база іншого застосунку, і `roles` відмовляє
+    `roles.shared-cluster` з переліком баз.
+
+  Службова база `postgres`, шаблони й тіні мають лише `CONNECT` для
+  `PUBLIC` і перевірку не зачіпають. Спільний стек розробки й тестів цього правила не порушує: тести
   працюють на тегованих іменах ролей (`packages/simetra/test/db/connection.ts`).
   Імена ролей із префіксом застосунку — окреме рішення разом із ролями
   `supabase` (там ролі провайдера теж фіксовані).
@@ -120,7 +134,8 @@
 - отримувач `null` пропускають усі споживачі `service`:
   `compiler/access-units.ts`, `compiler/platform/units.ts`
   (`SESSION_ROLES`), `schema/apply/plan.ts`
-  (`plan.service-role-access-lost`), `promotion/access.ts`,
+  (`plan.service-role-access-lost`),
+  `packages/simetra/src/schema/apply/promotion/access.ts`,
   `packages/designer/src/io/data.ts` (`dataGuardFactsParams`). Повний
   перелік дає `grep -rn "\.service\b" packages/*/src` перед блоком.
 
@@ -166,10 +181,16 @@
 
 - `simetra roles` у профілі `postgres` виконує суперкористувач (DSN
   оператора). Інструмент створює відсутні ролі §3.1, звіряє наявні, видає
-  адресні гранти на `better_auth` (§4.2) і ставить `plpgsql_check` (§3.5).
+  `USAGE` на `better_auth`, ставить тригери провізії (§4.2) і
+  `plpgsql_check` (§3.5).
   Повторний запуск ідемпотентний.
 - `plan` і `apply` від суперкористувача не вимагають: `simetra_owner` має
   `CREATEDB` для co-located тіні (платформна спека §6.2).
+- **Цільова база належить `simetra_owner`.** `roles` створює її
+  (`CREATE DATABASE … OWNER simetra_owner`) або звіряє власника наявної;
+  інший власник — відмова `roles.database-owner`. Причина: з Postgres 15
+  схемою `public` володіє `pg_database_owner`, а схеми `simetra` і
+  застосунку власник створює правом `CREATE` на базу.
 - `roles` без суперкористувача у `postgres` відмовляє
   `roles.superuser-required` і нічого не створює: половина ролей без
   `BYPASSRLS` мовчки змінила б поведінку прав.
@@ -180,14 +201,16 @@
 промоція без нього — відмова (спека промоції §7.2). Розширення не довірене,
 тож `simetra_owner` його не створює. Тому `roles` від суперкористувача
 ставить `CREATE EXTENSION IF NOT EXISTS plpgsql_check SCHEMA extensions` у
-`template1` і в цільовій базі (схема `extensions` — суперкористувача,
-`USAGE` для `simetra_owner`). Тіні й копії доказу, які `simetra_owner`
-створює з `template1`, отримують розширення самі; режим перевірки —
-`installed` (`function-checks.ts`). `PROVIDER_INSTALLABLE_EXTENSIONS.postgres`
-— порожній перелік.
+цільовій базі (схема `extensions` — суперкористувача, `USAGE` для
+`simetra_owner`). Режим перевірки читається на цілі
+(`packages/simetra/src/schema/apply/function-checks.ts`) — `installed`.
+Копія доказу створюється з цілі як шаблону й успадковує розширення; тінь
+pg-delta створюється з `template0`, і перевірки тіл на ній не йдуть.
+Теговані тестові бази отримують розширення від суперкористувача на старті
+прогону. `PROVIDER_INSTALLABLE_EXTENSIONS.postgres` — порожній перелік.
 
-**Тест:** базовий стан стека `postgres` — розширення є в `template1`; DB —
-тінь від `simetra_owner` має режим `installed`.
+**Тест:** DB — ціль і копія доказу від `simetra_owner` мають режим
+`installed`.
 
 ## 4. Ідентичність: Better Auth
 
@@ -226,25 +249,30 @@
 2. Міграція Better Auth (`npx auth migrate` від `simetra_auth`, конфіг
    `database.schemaName: "better_auth"`) створює свої таблиці. Схемою
    володіє вона, а не платформа (ПП5).
-3. Повторний `roles` (суперкористувач) видає адресно
-   `GRANT USAGE ON SCHEMA better_auth TO simetra_owner` і
-   `GRANT TRIGGER ON better_auth."user" TO simetra_owner` — лише на цю
-   таблицю. Типових привілеїв на всі таблиці схеми немає: `TRIGGER` на
-   `session` чи `account` дав би власнику змогу поставити тригер, що копіює
-   токени сесій і хеші паролів. Таблиці ще немає — `roles` називає пропуск.
-4. `simetra apply` від `simetra_owner` ставить тригери провізії на
-   `better_auth."user"`. Немає таблиці чи гранту — відмова плану
-   `plan.identity-table-missing` з порадою виконати кроки 2–3.
+3. `simetra apply` від `simetra_owner` створює функції провізії в схемі
+   `simetra` (definer власника, С3). Тригерів на `better_auth."user"` він
+   не ставить і `TRIGGER` на цю таблицю не має.
+4. Повторний `roles` (суперкористувач) ставить тригери провізії на
+   `better_auth."user"` за даними пресету (`PROVIDER_IDENTITY_SOURCES`,
+   імена тригерів і функцій фіксовані, компіляція не потрібна). Таблиці чи
+   функцій ще немає — `roles` називає пропуск і порядок.
 
-**Зняття й заміна тригера.** `TRIGGER` дозволяє створити тригер, але
-`DROP TRIGGER` вимагає власника таблиці. Тому пресет `postgres` має замок
-`dropTrigger` на поверхні `better_auth."user"` (`PROVIDER_LOCKS`, як
-`supautils.drop_trigger_grants` у `supabase`): план, що знімає чи
-перестворює тригер провізії, відмовляє з порадою виконати крок від
-`simetra_auth`. Зміна тіла провізії тригера не чіпає: тіло — функція
-`simetra`, якою володіє власник. Чи вимагає `CREATE OR REPLACE TRIGGER`
-власника таблиці, доводить DB-тест блоку ПГ-3; від факту залежить лише
-текст поради.
+**Чому тригери ставить не власник.** Тригер виконує функцію з правами
+ролі, що змінює таблицю, якщо функція не `SECURITY DEFINER`. Власник із
+`TRIGGER` на `better_auth."user"` міг би повісити туди функцію
+`SECURITY INVOKER`, яка спрацює від `simetra_auth` і прочитає
+`better_auth.session` і `account` (токени сесій, хеші паролів). Тож
+`TRIGGER` для власника дорівнював би доступу до секретів Better Auth. Без
+гранту власник має лише `USAGE` на схему `better_auth` (видає `roles`,
+потрібен для перевірки тригерів) і не бачить жодної її таблиці.
+
+**Гейт і план.** Тригери провізії лишаються поверхнею гейта
+(`PROVIDER_SURFACES.postgres`): відбиток їх бачить, і розбіжність —
+дрейф. План їх не створює, не знімає й не замінює: замок `dropTrigger` і
+відсутність гранту `TRIGGER` дають відмову `plan.identity-trigger-locked`
+з порадою виконати `roles`. Немає тригера на цілі — відмова
+`plan.identity-trigger-missing` з тією самою порадою. Копія доказу
+відтворює тригери з цілі, тож доказ і ціль не розходяться.
 
 Гейт бачить у схемі `better_auth` лише тригери провізії
 (`PROVIDER_SURFACES.postgres`, клас `trigger`, таблиця `user`).
@@ -265,7 +293,8 @@
 | `PROVIDER_EXPECTED_BLIND_FUNCTIONS` | порожньо |
 | розширення поза керуванням | `plpgsql`, `plpgsql_check` |
 | гранти схеми `public` у засіві тіні | лише вбудовані Postgres 15+ (`USAGE` для `PUBLIC`, власник — `pg_database_owner`) |
-| засів тіні (`renderProviderSeed("postgres")`) | схема `better_auth` і таблиця `user` (нижче); `plpgsql_check` приходить з `template1` |
+| засів тіні (`renderProviderSeed("postgres")`) | порожній: заглушку `better_auth."user"` дає профіль pg-delta (нижче) |
+| профіль pg-delta (`scopeProfile`, `packages/designer/src/schema-engine/pg-delta/policy.ts`) | власний `IntegrationProfile` `simetra-postgres`: `assumedSchemas` — `better_auth`, `extensions`; без ролей і схем Supabase |
 
 Споживачі, що зараз читають `PROVIDER_SCHEMAS.supabase` чи `SUPABASE_*`
 напряму, переходять на `scope.provider`:
@@ -277,12 +306,12 @@
 `packages/designer/src/tools/database-tools.ts`. Перелік перед блоком
 перераховує `grep -rn "\.supabase\b\|SUPABASE_" packages/*/src`.
 
-**Тінь і копія доказу.** Пресет дає schema-only засів тіні:
-`CREATE SCHEMA better_auth` і `CREATE TABLE better_auth."user"` з
-колонками, які читає пресет (`id uuid`, `name`, `email`, `isAnonymous`).
-Засів — функція `renderProviderSeed(provider)` (зараз без аргументу й лише
-для `supabase`). Тінь не потребує решти таблиць Better Auth: гейт їх не
-бачить.
+**Тінь.** Заглушку `better_auth."user"` у тіні дає той самий механізм, що
+й `auth.users` у `supabase`: pg-delta виводить засів припущених схем із
+фактів цілі (`seedAssumedSchemas`). Тож колонки заглушки — колонки
+справжньої таблиці цілі, зокрема всі колонки `PROVIDER_EVENT_SOURCES`, і
+рукописного `CREATE TABLE` у пресеті немає. Для цього `scopeProfile` дає
+для `postgres` власний профіль (таблиця вище) замість `supabaseProfile`.
 
 ### 4.3 Життєвий цикл облікового запису
 
@@ -532,7 +561,7 @@ Centrifugo з рушієм у пам'яті, обрив сокета без reco
 
 | Токен | Claims | TTL | Хто видає |
 | --- | --- | --- | --- |
-| з'єднання | `sub` = `claims.sub` сесії, `aud`, `iss`, `exp` | 15 хв | endpoint host-а після `verifySession`; без сесії чи для аноніма — 401 |
+| з'єднання | `sub` = `claims.sub` сесії, `aud`, `iss`, `exp` | 15 хв | endpoint host-а після `verifySession`; без сесії, для аноніма й коли `current_user_id()` = `NULL` (недійсний користувач) — 401 |
 | каналу | `sub`, `channel`, `aud`, `iss`, `exp` | 5 хв | endpoint host-а: `runtime.authorizeChannels` (П4-B) повертає дозволені канали, порт підписує токен на кожен |
 
 - Клієнт оновлює обидва токени колбеком `getToken` SDK до `exp`; відмова
@@ -636,6 +665,10 @@ SignalTokens = {
   і переходить на порт промоцією у вид з властивістю `storage`. Причина:
   колонки прийнятої таблиці пише код споживача, тож платформа не може
   гарантувати, що розмір і посилання на байти чесні.
+- Виклик `simetra.file_attach`, `simetra.storage_rows_exist` і
+  `simetra.storage_headroom` у SQL застосунку (модулі, названі запити) —
+  помилка компілятора: ці функції — лише шлях T3, а `EXECUTE` має та сама
+  роль команд, від якої виконується SQL модулів.
 - Доступ до рядка — RLS рядка, як до будь-якого об'єкта (§6.8 платформної
   спеки). Доступ до байтів — лише серверні endpoint-и після читання рядка
   під роллю запиту.
@@ -650,20 +683,30 @@ SignalTokens = {
   клієнт не може адресувати чужий об'єкт. Garage ігнорує
   `If-None-Match: *`, тож від перезапису захищає лише унікальність id.
 - **Завантаження:**
-  1. endpoint перевіряє сесію; анонім і `current_user_id()` = `NULL` — 401;
+  1. endpoint перевіряє походження запиту (`RequestOrigin`, спека П4
+     Рт19, fail-closed) і сесію; анонім і `current_user_id()` = `NULL` — 401;
   2. попередня перевірка в транзакції `READ ONLY` під роллю запиту: право
-     `create` на об'єкт у цільовому скоупі й `storage_usage + maxBytes ≤
-     межа`; відмова — без жодного байта в бакеті;
+     `create` на об'єкт у цільовому скоупі й запас обсягу через
+     `simetra.storage_headroom(p_scope_kind, p_scope, p_bytes) RETURNS
+     boolean` (definer, `EXECUTE` ролі запиту користувача; `false`, коли
+     скоуп не входить у множину скоупів користувача). Чисел обсягу й межі
+     функція не повертає, а роль запиту грантів на таблиці обліку не має.
+     Відмова — без жодного байта в бакеті;
   3. генерує id і пише байти в `o/<об'єкт>/<id>` з межею `maxBytes` об'єкта,
      рахуючи розмір сам;
   4. `runtime.attachFile` — одна транзакція команди: `create` рядка з
      реквізитами змісту, `simetra.file_attach` з розміром і типом, облік
-     обсягу з остаточною перевіркою межі;
+     обсягу з остаточною перевіркою межі. `file_attach` відмовляє
+     `storage.attach-invalid`, коли: рядок вставлено не в поточній
+     транзакції (`xmin` рядка ≠ поточний xid); розмір чи тип уже записано;
+     тип поза `mediaTypes`; розмір понад `maxBytes`;
   5. відмова кроку 4 — endpoint видаляє об'єкт; що лишилось після збою
      процесу — прибирає звірка.
 
   Кількість одночасних завантажень на користувача обмежує host (опція
-  шаблону): межа обсягу судить лише закомічені рядки.
+  шаблону): межа обсягу судить лише закомічені рядки. Заміна файлу — лише
+  новий рядок з новим id і видалення старого; зміни байтів чи розміру на
+  місці немає, тож тригер обліку на `UPDATE OF <розмір>` лише страхує.
 - **Читання:** endpoint читає рядок під роллю запиту (`runtime.read`) → немає
   рядка — 404 (той самий для «немає» й «не можна») → потік з
   `Content-Disposition: attachment; filename*=UTF-8''<ім'я>` (ім'я без
@@ -671,7 +714,7 @@ SignalTokens = {
   `Content-Type` з переліку дозволених типів об'єкта, інакше
   `application/octet-stream`, `X-Content-Type-Options: nosniff`,
   `Content-Security-Policy: sandbox`, `Cache-Control: private, no-store`.
-- **Видалення:** команда видаляє рядок; `afterCommit` видаляє об'єкт;
+- **Видалення:** endpoint перевіряє походження, як завантаження; команда видаляє рядок; `afterCommit` видаляє об'єкт;
   невдача — звірка.
 - **Звірка** — фонове завдання host-а:
   - перелічує лише префікс `o/<UUID об'єкта>/` для об'єктів каталогу з
@@ -680,7 +723,9 @@ SignalTokens = {
   - наявність рядків перевіряє definer-функція власника
     `simetra.storage_rows_exist(p_object uuid, p_ids uuid[])` (`EXECUTE`
     лише `simetra_command`, кличе лише T3 `runtime.reconcileFiles`), бо під
-    RLS рядки інших тенантів невидимі й їхні байти стали б «сиротами»;
+    RLS рядки інших тенантів невидимі й їхні байти стали б «сиротами».
+    Функція відмовляє для об'єкта без властивості `storage` і для понад
+    1000 id за виклик;
   - видаляє об'єкти без рядка, старші за 24 год;
   - запобіжник: якщо за прогін до видалення припадає понад 5 % переліченого,
     звірка нічого не видаляє й журналює відмову (помилковий DSN чи бакет);
@@ -756,7 +801,7 @@ FileStore = {
 | Postgres 17 | образ репо: `postgres:17` + pgTAP + `plpgsql_check` з PGDG, точний тег і digest | 54422 | `postgres` |
 | Centrifugo | `centrifugo/centrifugo` v6, точний тег | 8100 у `simetra-pg`, 8101 у `simetra-sb` | обидва, окремий інстанс на стек |
 | Garage | `dxflrs/garage`, точний тег | 3900 (S3), 3903 (admin) | `postgres` |
-| Supabase | Supabase CLI 2.122.1, як зараз | 54322, 54329 | `supabase` |
+| Supabase | Supabase CLI (пін у `package.json`) | 54322, 54329 | `supabase` |
 
 - Порти стека публікуються лише на `127.0.0.1`: Docker інакше відкриває їх
   на всіх інтерфейсах в обхід брандмауера, а стек має суперкористувача з
@@ -845,13 +890,14 @@ FileStore = {
 | Job | Стек | Що | Шарди |
 | --- | --- | --- | --- |
 | `checks` | — | без змін | 1 |
-| `db` | `postgres` | базовий стан `postgres`, DB `simetra`, DB designer | `simetra` + 4 designer, як зараз |
+| `db` | `postgres` | базовий стан `postgres`, DB `simetra`, DB designer | за наявною схемою шардів `.github/workflows/ci.yml` |
 | `db-supabase` | `supabase` | `supabase test db`, `db-supabase` обох пакетів | 1 |
 | `packaging` | — | без змін | 1 |
 
 - Стек `postgres` у CI стартує тим самим `pnpm db:pg:start`; образ Postgres
   збирається з кешем шарів (або тягнеться з реєстру за digest).
-- Повторні спроби старту — як для Supabase зараз (до 3, з паузою).
+- Повторні спроби старту — за тим самим правилом, що й для стека Supabase
+  у `.github/workflows/ci.yml`.
 
 ### 10.7 Текст для `AGENTS.md` (затверджує власник)
 
@@ -905,12 +951,12 @@ pnpm db:stop
 | Блок | Обсяг | Готово, коли | Залежить від |
 | --- | --- | --- | --- |
 | **ПГ-1. Стек і тест-інфра** | `docker/` (образ, compose, конфіги, ініціалізація Garage); `pnpm db:pg:*`, `test:db:pg`; stack-guard за профілем (замок, адреси, знімок, контейнери й бакети); Vitest-раннер pgTAP; набір базового стану `postgres` (без пресету: версія, розширення, `template1`); проєкт `db-supabase` і перенесення в нього тестів, прив'язаних до Supabase; CI з job-ом `db-supabase` поруч із наявним `db`; compose `simetra-sb` з Centrifugo; текст `AGENTS.md` на затвердження | обидва стеки стартують своїми командами; наявний `db` і `db-supabase` зелені на `supabase`; базовий стан `postgres` зелений через Vitest-раннер; прогін, перерваний SIGINT, не лишає ні баз, ні контейнерів, ні бакетів; CI зелений | — |
-| **ПГ-2. Провайдер у схемному рушії** | `postgres` у `DATABASE_PROVIDERS` і мапах за таблицею §4.2; споживачі `PROVIDER_SCHEMAS.supabase` і `SUPABASE_*` — за `scope.provider`; `renderProviderSeed(provider)`; ролі §3, `plpgsql_check` у `template1`; `service: null`; гейт `plan.owner-not-bypassrls`; переведення проєкту `db` на стек `postgres` і тестів — на дані профілю; CI-job `db` на стеку `postgres` | проєкт `db` зелений на `postgres` від ролі з атрибутами власника, `db-supabase` — на `supabase`; каталожний гейт бачить у чужих схемах лише розширення й тригери провізії; тест ролей §3.1 зелений | ПГ-1 |
-| **ПГ-3. Ідентичність** | запис пресету §4.1; імена колонок у лапках; засів тіні `better_auth`; `plan.identity-table-missing`; адаптер `verifySession` у шаблоні host-а (разом з П4-D) | DB-тести §4.4 на таблиці справжньої міграції зелені (міграція з `database.schemaName: "better_auth"` створює таблиці саме там); замок `dropTrigger` відмовляє плану на цілі від `simetra_owner`; `runCommand` і читання з claims Better Auth дають той самий `current_user_id()`, що й на `supabase` | ПГ-2 |
-| **ПГ-4. Outbox, споживач, токени** | таблиця, гранти, політики споживача, `NOTIFY`, `prune`; конфіг Centrifugo з designer; `simetra/server/signals` (порт, EdDSA, JWKS); стенд сигналів у тест-інфрі; разом із B8 П4-B — тіла функцій сигналу й `authorizeChannels` | тести §5.3 і §7 зелені в обох профілях; на стенді доведено фактом: `simetra.signal_outbox` зі схемою в `outbox_table_name`, `partition_notification_dsn`, `use_try_lock`, вхід `simetra_signals` з налаштуванням ролі; сигнал команди доходить, чужий канал, прострочений токен і токен з чужим `aud` відхилено; JWKS з ключем Ed25519 (`OKP`) приймається; ротація без розриву; `realtime` у стеку `supabase` вимкнено | ПГ-3; B6 П4-B |
-| **ПГ-5. Сховище файлів** | властивість `storage` у T0 з мапінгом; стандартні реквізити виду; облік і межа обсягу; `FileStore`, `fromS3Client`; endpoint-и й звірка в шаблоні host-а | тести §8 зелені на стеку `postgres` з Garage | ПГ-2 (схема), П4-D (host) |
+| **ПГ-2. Провайдер у схемному рушії** | `postgres` у `DATABASE_PROVIDERS` і мапах за таблицею §4.2; споживачі `PROVIDER_SCHEMAS.supabase` і `SUPABASE_*` — за `scope.provider`; `renderProviderSeed(provider)`; профіль pg-delta `simetra-postgres`; запис пресету §4.1 (тип `Record<DatabaseProvider, …>` його вимагає); ролі §3 з `LOGIN_ROLE_PARENTS` і власником бази; `plpgsql_check` у цілі; `service: null`; гейт `plan.owner-not-bypassrls`; таблиця ідентичності в тестах — справжня міграція Better Auth закріпленої версії; переведення проєкту `db` на стек `postgres` і тестів — на дані профілю; CI-job `db` на стеку `postgres` | проєкт `db` зелений на `postgres` від ролі з атрибутами власника, `db-supabase` — на `supabase`; каталожний гейт бачить у чужих схемах лише розширення й тригери провізії; тест ролей §3.1 зелений | ПГ-1 |
+| **ПГ-3. Ідентичність** | тригери провізії ставить `roles` (§4.2); `plan.identity-table-missing`, `plan.identity-trigger-missing`, `plan.identity-trigger-locked`; вибір ролі читання за `anonymousClaim`; адаптер `verifySession` у шаблоні host-а (разом з П4-D) | DB-тести §4.4 на таблиці справжньої міграції зелені (міграція з `database.schemaName: "better_auth"` створює таблиці саме там); план від `simetra_owner` не створює й не знімає тригерів на `better_auth."user"`; анонімна сесія читає лише `publicRead: anon`; `runCommand` і читання з claims Better Auth дають той самий `current_user_id()`, що й на `supabase` | ПГ-2 |
+| **ПГ-4. Outbox, споживач, токени** | таблиця, гранти, політики споживача, `NOTIFY`, `prune`; конфіг Centrifugo з designer; `simetra/server/signals` (порт, EdDSA, JWKS); стенд сигналів у тест-інфрі; разом із B8 П4-B — тіла функцій сигналу й `authorizeChannels` | `supabase/roles.sql` і `supabase/tests/provider-base-state.test.sql` знають `simetra_signal_consumer` і `simetra_signals`; тести §5.3 і §7 зелені в обох профілях; на стенді доведено фактом: `simetra.signal_outbox` зі схемою в `outbox_table_name`, `partition_notification_dsn`, `use_try_lock`, вхід `simetra_signals` з налаштуванням ролі; сигнал команди доходить, чужий канал, прострочений токен і токен з чужим `aud` відхилено; JWKS з ключем Ed25519 (`OKP`) приймається; ротація без розриву; `realtime` у стеку `supabase` вимкнено | ПГ-3; B6 П4-B |
+| **ПГ-5. Сховище файлів** | властивість `storage` у T0 з мапінгом; стандартні реквізити виду; облік і межа обсягу; `FileStore`, `fromS3Client`; endpoint-и й звірка в шаблоні host-а | тести §8 зелені на стеку `postgres` з Garage | ПГ-3 (ідентичність у тестах), П4-D (host) |
 
-ПГ-5 не залежить від ПГ-3 і ПГ-4 і може йти паралельно з ними після ПГ-2.
+ПГ-5 не залежить від ПГ-4 і може йти паралельно з ним після ПГ-3.
 
 ## 13. Поправки інших документів
 
