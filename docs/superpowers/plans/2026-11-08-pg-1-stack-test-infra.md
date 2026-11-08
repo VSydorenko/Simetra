@@ -85,6 +85,7 @@ Vitest, `pg`.
 | Р7 | Centrifugo обох стеків у ПГ-1 — зі статичним конфігом без споживача outbox і без токенів (таблиці outbox ще немає); вивід генератора конфігу з `audience` і `issuer` замінює його в ПГ-4 | §6.1 «конфіг стека розробки будується тим самим генератором» — «з ПГ-4» (задача 0) |
 | Р9 | Транзакцію набору pgTAP відкриває й відкочує раннер; файл набору не має операторів керування транзакцією (`begin`, `commit`, `rollback`, `savepoint` тощо) — раннер їх відхиляє | §10.5, опис раннера (задача 0) |
 | Р8 | Centrifugo поруч зі стеком Supabase стартує окремою командою `pnpm db:signals:start`; `db:start` і `db:stop` не змінюються: тести ПГ-1 його не вживають, а зайве завантаження образу в кожному рядку CI — нова причина збою старту | §10.1 «`pnpm db:start` піднімає його» — «окрема команда» (задача 0) |
+| Р10 | Кейси з жорстко прописаними ролями чи схемами Supabase, де роль — лише один член загальної перевірки, лишаються в `db`; так само файли на `signUp`, корпус engine-census/engine-extract, вставка в `auth.users` референсного домену, вхід під час виконання в command-grants і рядок build-plan-promotion. ПГ-2 і ПГ-3 переводять їх на дані профілю (§10.5, останній пункт). Перелік перераховує `grep -nE 'auth\.users\|service_role\|supabase_\|authenticator' $(git ls-files '*.db.test.ts' \| grep -v supabase.db)` | немає |
 
 ## Review Focus
 
@@ -591,6 +592,9 @@ select plan(…); …; select * from finish();` — без керування т
   затвердження задача не виконується:
   - у блок команд після `pnpm db:stop`:
     ```bash
+    pnpm db:signals:start                     # Centrifugo beside the Supabase stack (needs Docker)
+    pnpm db:signals:stop
+
     pnpm db:pg:start                          # local postgres-profile stack: Postgres 17, Centrifugo, Garage (needs Docker)
     pnpm test:db:pg                           # postgres-stack base state (pgTAP through the Vitest runner) and interrupt cleanup
     pnpm db:pg:stop
@@ -600,14 +604,27 @@ select plan(…); …; select * from finish();` — без керування т
     started only through its `pnpm db:*` commands (pinned images and CLI),
     never through a global `supabase` or `docker compose` without the
     project name.»
-  - після речення про `globalSetup` у пункті про спільний стек: «The guard
-    is per stack: runs on the Supabase and the postgres stacks do not wait
-    for each other. One vitest process runs one DB project. Tests bound to
-    Supabase live in `*.supabase.db.test.ts` (project `db-supabase`).»
+  - «The local stack is one per machine and shared by every session and
+    agent on it.» → «Each local stack (`postgres`, `supabase`) is one per
+    profile per machine and shared by every session and agent on it.»
+  - у тому самому пункті «The DB test projects' `globalSetup`
+    (`packages/simetra/test/db/stack-guard.ts`) runs one DB run at a time» →
+    «The `globalSetup` of each DB project (`stack-guard.<provider>.ts` over
+    the guard module `packages/simetra/test/db/stack-guard.ts`) runs one DB
+    run at a time per stack».
+  - після речення про `globalSetup`: «The guard is per stack: runs on the
+    Supabase and the postgres stacks do not wait for each other. One vitest
+    process runs one DB project. Tests bound to Supabase live in
+    `*.supabase.db.test.ts` (project `db-supabase`).»
   - у пункт про run tag: «A container of a run carries the
-    `simetra-run=<tag>` and `simetra-stack=<provider>` labels and a Garage
-    bucket of a run is named `run-<tag>`; the guard reports and removes its
-    own.»
+    `simetra-run=<tag>` and `simetra-stack=<provider>` labels
+    (`runContainerLabels` in `packages/simetra/test/db/external.ts`) and a
+    Garage bucket of a run is named `run-<tag>`; the guard reports both,
+    removes its own containers and its empty buckets, and reports a
+    non-empty bucket instead of emptying it.»
+  - «Versions live in `.node-version` and `package.json`, not here.» →
+    «Versions live in `.node-version`, `package.json` and the stack files
+    (`docker/*/compose.yaml`, `Dockerfile`), not here.»
   - у пункт про CI після опису матриці `db`: «, its `supabase-bound` rows
     (`*.supabase.db.test.ts`), and a `db-postgres` job (the postgres stack
     and `pnpm test:db:pg`)».
@@ -626,8 +643,10 @@ select plan(…); …; select * from finish();` — без керування т
 ## Готово (§12, рядок ПГ-1)
 
 - Обидва стеки стартують своїми командами; повторний старт — код 0.
-- Наявний `db` і новий `db-supabase` зелені на `supabase`; назви кейсів
-  `db` ∪ `db-supabase` збігаються з переліком до переносу.
+- Наявний `db` і новий `db-supabase` зелені на `supabase`; кожен кейс із
+  переліку до переносу є в `db` ∪ `db-supabase`. Виняток — сценарій
+  обслуговування прав, розділений на прямий кейс (`db`) і кейс через пулер
+  (`db-supabase`).
 - Базовий стан `postgres` зелений через Vitest-раннер; мутація набору
   червона.
 - Прогін на стеку `postgres`, перерваний SIGINT, не лишає баз, ролей,

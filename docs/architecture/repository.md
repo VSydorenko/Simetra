@@ -39,7 +39,8 @@ dev-залежність. Устрій — [designer.md](designer.md).
 | --- | --- |
 | `examples/reference/` | синтетичний референсний домен: метадані (`metadata/`), очікувані результати прийому (`accepted/`); на ньому стоять тести компілятора, рендера, звірки й скіла |
 | `legacy/` | заморожений прототип: читати можна, збирати, тестувати й імпортувати — ні (`AGENTS.md`, «Target architecture vs. the prototype») |
-| `supabase/` | локальний стек Postgres для `pnpm test:db` (запуск лише через `pnpm db:*`) |
+| `supabase/` | конфіг локального стека Supabase і набір базового стану провайдера для `pnpm test:db` (запуск лише через `pnpm db:start` / `db:stop`) |
+| `docker/` | файли compose-стеків: стек профілю `postgres` (`postgres-stack/`, для `pnpm test:db:pg`) і Centrifugo поруч зі стеком Supabase (`supabase-signals/`); запуск лише через `pnpm db:pg:*` і `pnpm db:signals:*` |
 | `scripts/` | службові скрипти репо, зокрема гард якорів документації |
 | `docs/` | BRD, ROADMAP, спеки й плани (`superpowers/`), дослідження (`research/`), ця тека |
 | `.agents/skills/`, `.claude/` | харнес агентів **розробки платформи**; скілів для споживачів тут немає |
@@ -53,8 +54,9 @@ dev-залежність. Устрій — [designer.md](designer.md).
   `packages/designer/eslint.zones.js`);
 - `pnpm test` — юніт-тести обох пакетів, разом із тестом прикладів скіла
   споживача;
-- `pnpm test:db` — тести проти локального Postgres: рендер і розгортання
+- `pnpm test:db` — тести проти локального стека Supabase: рендер і розгортання
   (`simetra`), адаптер двигуна схеми й звірка на корпусі (`@simetrajs/designer`);
+- `pnpm test:db:pg` — тести на стеку профілю `postgres` (`docker/postgres-stack/`);
 - `pnpm metadata:check` — `simetra compile --all` над кожною текою метаданих
   репо; pre-commit запускає його з `--staged` (компілюється вміст індексу Git),
   CI — без нього;

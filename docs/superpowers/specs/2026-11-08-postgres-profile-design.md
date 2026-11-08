@@ -857,10 +857,11 @@ FileStore = {
 - Порти стека публікуються лише на `127.0.0.1`: Docker інакше відкриває їх
   на всіх інтерфейсах в обхід брандмауера, а стек має суперкористувача з
   відомим паролем і admin Garage.
-- Compose-проєкт `simetra-pg` у каталозі `docker/` репо: Dockerfile образу
-  Postgres, `compose.yaml`, конфіг Centrifugo стека, скрипт ініціалізації
-  Garage (layout, бакет `simetra-dev`, ключ). Версії — у файлах стека, не в
-  `AGENTS.md`.
+- Compose-проєкт `simetra-pg` у каталозі `docker/postgres-stack/` репо:
+  Dockerfile образу Postgres, `compose.yaml`, конфіг Centrifugo стека,
+  `garage.toml`, `dev-environment.sql` і `dev-secrets.env`. Ініціалізацію
+  Garage (layout, бакет `simetra-dev`, ключ) робить `scripts/db-stack.mjs`,
+  а не скрипт у `docker/`. Версії — у файлах стека, не в `AGENTS.md`.
 - Better Auth не має сервісу: він живе в host-і. Для тестів його таблиці
   створює справжня міграція закріпленої версії (§4.4) у кожній тегованій
   тестовій базі, якій потрібна ідентичність, від тегованої ролі
@@ -868,7 +869,8 @@ FileStore = {
   несе лише `plpgsql_check`, а заглушку `better_auth."user"` тінь отримує з
   фактів цілі (§4.2).
 - Стек `supabase` дістає власний Centrifugo: compose-проєкт `simetra-sb`
-  (лише Centrifugo, DSN бази стека Supabase, порт 8101). Його піднімає
+  (лише Centrifugo, порт 8101; DSN бази стека Supabase він дістає з ПГ-4,
+  разом зі споживачем outbox, §6.1). Його піднімає
   окрема команда `pnpm db:signals:start` і зупиняє `pnpm db:signals:stop`;
   `pnpm db:start` і `pnpm db:stop` його не чіпають: DB-тести його не
   вживають (стенд сигналів — власний на прогін, §10.4), а зайве
@@ -911,8 +913,9 @@ FileStore = {
   з ПГ-2 (`simetra roles`); до того обидві адреси профілю — суперкористувач
   `postgres`, і на стеку йдуть лише набір базового стану й тест переривання;
 - **знімок стека:** до бази, ролей, схем і розширень додаються контейнери з
-  міткою `simetra-run=<тег>` і бакети Garage з префіксом тегу; різниця після
-  прогону — збій, як зараз;
+  двома мітками, `simetra-run=<тег>` і `simetra-stack=<профіль>`, і бакети
+  Garage з префіксом тегу; різниця після прогону — збій, як зараз. Контейнер
+  з міткою іншого стека не є витоком цього;
 - **прибирання на сигналах:** ті самі SIGINT, SIGTERM, SIGHUP; додатково
   `docker rm -f` контейнерів свого тегу; бакет свого тегу спершу
   спорожнюється, потім видаляється (Garage видаляє лише порожній бакет).
@@ -920,7 +923,9 @@ FileStore = {
   називає в звіті про залишки; спорожнення бакета з об'єктами приходить у
   ПГ-5 разом із першим тестом, що пише байти;
 - **тег прогону:** бази, ролі й тіні — як зараз (`connection.ts`);
-  контейнер Centrifugo стенду — мітка й ім'я з тегом; бакет — `run-<тег>`.
+  контейнер Centrifugo стенду — обидві мітки (аргументи `docker run` дає
+  помічник `runContainerLabels` у `packages/simetra/test/db/external.ts`) і
+  ім'я з тегом; бакет — `run-<тег>`.
 
 ### 10.4 Стенд сигналів
 
@@ -999,19 +1004,30 @@ pnpm db:stop
 
 Пункти під блоком:
 
+Блок також дістає рядок `pnpm db:signals:start` / `pnpm db:signals:stop`
+(Centrifugo поруч зі стеком Supabase, §10.1).
+
 - «The local stack is started only through `pnpm db:*` (pinned CLI
   version)» → «Each local stack is started only through its `pnpm db:*`
   commands (pinned images and CLI), never through a global `supabase` or
   `docker compose` without the project name.»
 - «The local stack is one per machine and shared…» → «Each local stack
-  (`postgres`, `supabase`) is one per machine and shared by every session
-  and agent on it.» Далі без змін, з доповненням після речення про
-  `globalSetup`: «The guard is per stack: runs on different stacks do not
-  wait for each other.»
+  (`postgres`, `supabase`) is one per profile per machine and shared by
+  every session and agent on it.» У реченні про `globalSetup` дужки з
+  `stack-guard.ts` → «(`stack-guard.<provider>.ts` of the DB project, over
+  the guard module `packages/simetra/test/db/stack-guard.ts`)». Після нього:
+  «The guard is per stack: runs on different stacks do not wait for each
+  other.»
 - Абзац про run tag доповнити: «Signal stands and buckets carry the run tag
-  too: a Centrifugo container gets the `simetra-run=<tag>` label, a Garage
-  bucket the `run-<tag>` name; the guard removes its own on exit and on the
-  same signals.»
+  too: a run container gets the `simetra-run=<tag>` and
+  `simetra-stack=<provider>` labels (`runContainerLabels` in
+  `packages/simetra/test/db/external.ts`), a Garage bucket the `run-<tag>`
+  name; the guard removes its own containers and its empty buckets on exit
+  and on the same signals, and reports a non-empty bucket.» Останнє — до
+  ПГ-5 (§10.3).
+- «Versions live in `.node-version` and `package.json`, not here.» →
+  «Versions live in `.node-version`, `package.json` and the stack files
+  (`docker/*/compose.yaml`, `Dockerfile`), not here.»
 - Абзац про CI: «a `db` matrix (each shard starts its own stack…)» →
   «a `db` matrix on the postgres stack (base-state pgTAP through the Vitest
   runner with `simetra`, then `@simetrajs/designer` split by `vitest
