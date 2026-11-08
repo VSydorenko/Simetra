@@ -1,0 +1,62 @@
+# Локальний стек профілю `postgres`. Запускати лише через `pnpm db:pg:start` /
+# `pnpm db:pg:stop`: скрипт бере замок стека, щоб не зупинити його під
+# DB-прогоном. Порти — лише на 127.0.0.1: Docker інакше відкриває їх на всіх
+# інтерфейсах в обхід брандмауера, а в стеку суперкористувач з відомим паролем
+# і admin Garage.
+name: simetra-pg
+
+services:
+  postgres:
+    build: .
+    image: simetra-pg/postgres:17.11
+    environment:
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "127.0.0.1:54422:5432"
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  centrifugo:
+    image: centrifugo/centrifugo:v6.10.2@sha256:34b84f823515927266ce3abfb840fd9e0acabb58805e7e896f5de731217a627d
+    command: ["centrifugo", "-c", "/centrifugo/config.json"]
+    ports:
+      - "127.0.0.1:8100:8000"
+    volumes:
+      - ./centrifugo.json:/centrifugo/config.json:ro
+    # curl в образі немає; wget — з busybox образу, а власної команди перевірки
+    # здоров'я Centrifugo не має
+    healthcheck:
+      test:
+        ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8000/health"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  garage:
+    image: dxflrs/garage:v2.5.0@sha256:677e5b758e4425a325b811c425c026bf35a4bf42f7ddbaa773de3f4fd779a5a5
+    # RPC (3901) не публікується: вузол один, і зовні до нього ходить лише S3 та admin
+    ports:
+      - "127.0.0.1:3900:3900"
+      - "127.0.0.1:3903:3903"
+    env_file: dev-secrets.env
+    volumes:
+      - ./garage.toml:/etc/garage.toml:ro
+      - garage-meta:/var/lib/garage/meta
+      - garage-data:/var/lib/garage/data
+    # `/health` admin API до застосування layout відповідає помилкою, а layout
+    # застосовує скрипт старту вже після `--wait`; `status` від layout не залежить
+    healthcheck:
+      test: ["CMD", "/garage", "status"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+volumes:
+  pg-data:
+  garage-meta:
+  garage-data:

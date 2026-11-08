@@ -13,6 +13,8 @@
     "db:start": "supabase start && pnpm db:dev-env",
     "db:dev-env": "node scripts/db-dev-env.mjs",
     "db:stop": "supabase stop",
+    "db:pg:start": "node scripts/db-stack.mjs start postgres",
+    "db:pg:stop": "node scripts/db-stack.mjs stop postgres",
     "test:db": "supabase test db && pnpm --filter simetra test:db && pnpm --filter @simetrajs/designer test:db",
     "format": "turbo format",
     "typecheck": "turbo typecheck",
