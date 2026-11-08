@@ -10,7 +10,8 @@
 > дозволено: він ідемпотентний і бере замок стека.
 > **Перед стартом:** `.agents/skills/codebase-research/scripts/orient --plan <цей файл>`;
 > якорі, які дає 2a (`postgresClusterSet`, `ensurePostgresCluster`,
-> `migrateBetterAuth`, проєкт `db-pg`, `*.postgres.db.test.ts`), звір з кодом
+> `migrateBetterAuth`, `taggedClusterSet`, проєкт `db-pg`, `*.postgres.db.test.ts`,
+> крок `roles` у `db:pg:start`), звір з кодом
 > `main`. Розбіжність імені — перейменуй у плані; поведінки — до архітекторки.
 >
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
@@ -20,8 +21,8 @@
 (`db-supabase`, базовий стан провайдера); CI має job `db` на `postgres` і job
 `db-supabase`; текст `AGENTS.md` відбиває стан з ПГ-2.
 
-**Architecture:** стек `postgres` дістає ролі Simetra, базу `simetra`
-власника й шаблон кроком `simetra roles` у `pnpm db:pg:start`. Тест-інфра
+**Architecture:** стек `postgres` уже має ролі Simetra, базу `simetra`
+власника й шаблон (крок `simetra roles` у `pnpm db:pg:start`, ПГ-2a). Тест-інфра
 бере ролі запиту, таблицю ідентичності й DSN власника з даних профілю
 (`packages/simetra/test/db/profile.ts`, `connection.ts`, `auth.ts`), тож
 більшість тестів переходить без правок. Тести, прив'язані до Supabase за
@@ -49,16 +50,15 @@
 - Тест, прив'язаний до Supabase за §10.5, — у `*.supabase.db.test.ts`; інший
   літерал Supabase в `db` переводиться на дані профілю, а не перейменовується.
 - Об'єкти DB-тестів — лише через хелпери тегу (`connection.ts`).
-- Dev-паролі стека — у `docker/postgres-stack/dev-secrets.env`, лише для `127.0.0.1`.
+- Dev-паролі стека — у `docker/postgres-stack/dev-secrets.env` (з ПГ-2a), лише для `127.0.0.1`.
 - Текст `AGENTS.md` (задача 9) — лише після затвердження власником.
 
 ## Рішення
 
 | № | Рішення | Вплив на спеку |
 | --- | --- | --- |
-| Р1 | Цільова база DB-тестів стека `postgres` — `simetra`, власник `simetra_owner`; `TEST_STACKS.postgres.databaseUrl` — `postgresql://simetra_owner:<dev>@127.0.0.1:54422/simetra`, `superuserUrl` — `postgres@…/simetra`; пароль — `SIMETRA_OWNER_DEV_PASSWORD` у `dev-secrets.env` | §10.3 «адреси» — назвати базу `simetra` (задача 0) |
-| Р2 | `pnpm db:pg:start` після наявних кроків кличе `node packages/designer/bin/simetra.mjs roles docker/postgres-stack/project` з `SIMETRA_DATABASE_URL` суперкористувача до бази `simetra`, потім ставить dev-паролі ролям входу (`simetra_owner`, `simetra_runtime`, `simetra_auth`); тека `docker/postgres-stack/project/` тримає лише `project.meta.json` з `database.provider: "postgres"`. Шапку `scripts/db-stack.mjs` про «без залежностей» уточнити: `start postgres` вимагає `pnpm install` | §10.2 рядок `db:pg:start` (задача 0) |
-| Р3 | До ПГ-3 гранти `USAGE` на `better_auth` і `TRIGGER` на `better_auth."user"` для `simetra_owner` і міграцію Better Auth у базі `simetra` ставить `globalSetup` стека `postgres` перед знімком «до» (ідемпотентно, від суперкористувача й `simetra_auth`); ПГ-3 переносить гранти в `roles` і прибирає їх з `globalSetup` | §12 рядок ПГ-3 — «прибрати тимчасові гранти з `globalSetup`» (задача 0) |
+| Р1 | Цільова база DB-тестів стека `postgres` — `simetra`, власник `simetra_owner`; `TEST_STACKS.postgres.databaseUrl` — `postgresql://simetra_owner:<dev>@127.0.0.1:54422/simetra`, `superuserUrl` — `postgres@…/simetra`; пароль — `SIMETRA_OWNER_DEV_PASSWORD` з `dev-secrets.env` (ПГ-2a), читає `profile.ts` як `garageAdminToken` | §10.3 «адреси» — назвати базу `simetra` (задача 0) |
+| Р3 | До ПГ-3 гранти `USAGE` на `better_auth` і `TRIGGER` на `better_auth."user"` для `simetra_owner` і міграцію Better Auth (`migrateBetterAuth` ПГ-2a, без `schemaName`) у базі `simetra` ставить `globalSetup` стека `postgres` перед знімком «до» (ідемпотентно, від суперкористувача й `simetra_auth`); ПГ-3 переносить гранти в `roles` і прибирає їх з `globalSetup` | §12 рядок ПГ-3 — «прибрати тимчасові гранти з `globalSetup`» (задача 0) |
 | Р4 | Тест-помічник ролей запиту бере призначення (`user`, `anonymous`, `service`), а ім'я ролі — з `PROVIDER_API_ROLES[testProvider()]`; кейс із `service` на профілі без сервісної ролі пропускається `it.skipIf` з причиною «no service role in profile» | немає |
 | Р5 | Job `db-supabase` у CI — матриця з рядків `supabase-bound` ПГ-1 (`provider + simetra`, designer 1/2, 2/2); один рядок перевищив би `timeout-minutes` | §10.6 стовпець «Шарди» `db-supabase` (задача 0) |
 | Р6 | Проєкт `db-pg` прибирається: `db` обох пакетів іде на стеку `postgres` і включає `*.postgres.db.test.ts`; скрипт `test:db:pg` = `db` обох пакетів; `test:db` = регресія `supabase` | немає (§10.2) |
@@ -70,7 +70,7 @@
 | `--passWithNoTests` у `test:db:supabase` ховає зламаний `include` | `packages/*/package.json` | задача 4: прапорець прибрано, тест «кожен DB-проєкт має файли» |
 | Тести з жорсткими ролями й схемами Supabase в `db` (Р10 плану ПГ-1; перелік — `grep -nE 'auth\.users\|service_role\|supabase_\|authenticator' $(git ls-files '*.db.test.ts' \| grep -v supabase.db)`) | обидва пакети | задачі 5–8 |
 | Пул пулера в половинах `db` (`poolerPoolOf(login, viaPooler)`) | `packages/designer/src/__tests__/support/db.ts` | задачі 7–8: на `postgres` `viaPooler` завжди `false`; перевірка — `db` зелений на `postgres` |
-| `scripts/db-stack.mjs` на `spawnSync`: сигнал лише pid вузла лишає `docker compose` сиротою, замок уже застарілий | `scripts/db-stack.mjs` | задача 1: дочірній процес у тій самій групі, обробник сигналу пересилає його й знімає замок; тест на підставному процесі |
+| `scripts/db-stack.mjs` на `spawnSync`: сигнал лише pid вузла лишає `docker compose` сиротою, замок уже застарілий | `scripts/db-stack.mjs` | задача 1 |
 | Немає тесту відмови замка на свій pid (Р2 ПГ-1) і тесту завислого `docker exec` | `stack-guard.test.ts`, `external.test.ts` | задача 4 |
 | Проводка `abort` у `sweepClient` без тесту; `PASS_PAUSE_MS` без `unref`; `dropped` недораховує після програної гонки | `packages/simetra/test/db/sweep.ts` | лишається боргом (поза метою 2b) |
 | Рядок старту guard друкується до `assertStack` | `stack-guard.ts` | задача 4 |
@@ -99,36 +99,27 @@
 
 **Files:** Modify `docs/superpowers/specs/2026-11-08-postgres-profile-design.md`
 
-- [ ] **Step 1:** §10.2 (Р2), §10.3 (Р1; «типово `supabase` до ПГ-2» →
+- [ ] **Step 1:** §10.3 (Р1; «типово `supabase` до ПГ-2» →
   стан: типово `postgres`), §10.5 (проєкт `db` на `postgres`; без форми «до
   ПГ-2»), §10.6 (Р5; абзац «До ПГ-2» прибрати), §12 рядок ПГ-3 (Р3).
 - [ ] **Step 2:** `python3 scripts/check-doc-anchors.py` і `pnpm format:check` — зелені.
 - [ ] **Step 3: Commit** — `docs(spec): профіль postgres — стан після ПГ-2`.
 
-### Task 1: ролі й база `simetra` на старті стека
+### Task 1: борг `scripts/db-stack.mjs`
 
-**Files:**
-- Create: `docker/postgres-stack/project/project.meta.json`
-- Modify: `docker/postgres-stack/dev-secrets.env` (`SIMETRA_OWNER_DEV_PASSWORD`,
-  `SIMETRA_RUNTIME_DEV_PASSWORD`, `SIMETRA_AUTH_DEV_PASSWORD`),
-  `scripts/db-stack.mjs` (`startPostgres`, пересилання сигналу, `STACK_DIR`),
-  `scripts/db-stack.d.mts`, `packages/simetra/test/db/stack-files.test.ts`
+**Files:** Modify `scripts/db-stack.mjs`, `scripts/db-stack.d.mts`,
+`packages/simetra/test/db/stack-files.test.ts`
 
-- [ ] **Step 1: failing test** (`stack-files.test.ts`): `project.meta.json`
-  стека має `database.provider: "postgres"`; `dev-secrets.env` має три
-  паролі; `db-stack.mjs` не вживає `STACK_DIR`; сигнал, надісланий
-  pid скрипта під час `withStackLock`, доходить до дочірнього процесу й
-  знімає замок (підставна команда `sleep`).
+- [ ] **Step 1: failing test** (`stack-files.test.ts`): `db-stack.mjs` не
+  вживає `STACK_DIR`; сигнал, надісланий pid скрипта під час `withStackLock`,
+  доходить до дочірнього процесу й знімає замок (підставна команда `sleep`).
 - [ ] **Step 2:** `pnpm --filter simetra test stack-files` — FAIL.
-- [ ] **Step 3:** реалізація за Р2; паролі — `ALTER ROLE … PASSWORD` від
-  суперкористувача з `-v` змінними `psql`, не інтерполяцією.
-- [ ] **Step 4:** PASS; `pnpm db:pg:start` — код 0; `psql` від
-  `simetra_owner` до `simetra` — `select current_user` = `simetra_owner`;
-  `simetra_template` — `datistemplate`.
-- [ ] **Step 5:** повторний `pnpm db:pg:start` — код 0, рядки
-  `pg_auth_members` ті самі; `docker ps --filter name=supabase_` — той самий
-  uptime (Review Focus 3).
-- [ ] **Step 6: Commit** — `build(db): ролі Simetra й база simetra на старті стека postgres`.
+- [ ] **Step 3:** дочірні процеси — асинхронний `spawn` з обробником
+  SIGINT, SIGTERM, SIGHUP, що пересилає сигнал і знімає замок; `STACK_DIR`
+  прибрати.
+- [ ] **Step 4:** PASS; повторний `pnpm db:pg:start` — код 0;
+  `docker ps --filter name=supabase_` — той самий uptime (Review Focus 3).
+- [ ] **Step 5: Commit** — `build(db): старт стека postgres пересилає сигнал дочірньому процесу`.
 
 ### Task 2: тест-помічники за даними профілю
 
@@ -146,7 +137,8 @@
     `no <purpose> role in <provider> profile`;
   - `function testRoleFor(purpose: RolePurpose): string | null`;
   - `signUp(client, account)` — `supabase`: `auth.users` як зараз;
-    `postgres`: `INSERT INTO better_auth."user" (id, name, email, "emailVerified", "createdAt", "updatedAt", "isAnonymous")`;
+    `postgres`: `INSERT INTO better_auth."user" (id, name, email, "emailVerified", "createdAt", "updatedAt", "isAnonymous")`
+    (схема — з `PROVIDER_IDENTITY_SOURCES[testProvider()].table`);
     поля `phone` і `meta` акаунта на `postgres` — `Error` з іменем поля
     (аналога в Better Auth немає).
 
