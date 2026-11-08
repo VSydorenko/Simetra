@@ -124,7 +124,7 @@ Centrifugo v6 (образ, закріплений у `docker/postgres-stack/comp
 | Р11 | Кластерні ролі сигналів на спільних стеках створює ідемпотентний крок ролей (Global Constraints), а не перезапуск (дозвіл архітекторки). **Інваріант для інших гілок:** нова роль не стає членом ролей, які перевіряють гейти форми (`LOGIN_ROLE_PARENTS`, власник), і не дістає серед них членів. `simetra_signals` — член лише `simetra_signal_consumer`; та — нічий член. Гейти гілок без цих ролей не червоніють | немає |
 | Р12 | `sub` токена з'єднання = `user` з `authorizeChannels` (`current_user_id()`), а не сирий `claims.sub`. Для обох пресетів вони рівні (`subjectIsUserId`). Але `user` — id «Користувачів», і так само Centrifugo знає користувача для майбутнього `disconnect` (§6.2) | спека профілю §6.2 таблиця токенів (задача 0) |
 | Р13 | Тригер штампа — не єдиний захист `id`. `CHECK` прив'язує обидва поля до колонки: `payload->>'idempotency_key' = id::text AND payload->'data'->>'id' = id::text`. Вимкнений тригер дає `23514`, а не тихо чужий ключ | немає |
-| Р15 | **Політика `INSERT` на outbox судить увесь `payload`, а не лише канал:** `WITH CHECK (simetra.signal_payload_allowed(payload))`. Функція — `STABLE SECURITY DEFINER`, `EXECUTE` лише `simetra_command`. Вона судить три речі: `signal_topic_allowed(channel, true)`; точну форму `data` за `op` (зміна — рівно `id, object, op, keys, row_ver`; інвалідація — `id, object, op`; `rights` — завжди `false`); `object` = об'єкт топіка; `keys` — рівно один ключ з іменем фізичної колонки ключа цього об'єкта й UUID-значенням. Причина (аудит Codex): `simetra_command` має `INSERT (method, payload)` і повз `signal()` міг би покласти в авторизований канал довільні дані чи значення UUID-поля під вигаданим ключем. **Посилення §8.2 і §8.3 П4-B — подано архітекторці** | П4-B §8.2, §8.3 (задача 0) |
+| Р15 | **Політика `INSERT` на outbox судить увесь `payload`, а не лише канал:** `WITH CHECK (simetra.signal_payload_allowed(payload))`. Функція — `STABLE SECURITY DEFINER`, `EXECUTE` лише `simetra_command`. Вона судить три речі: `signal_topic_allowed(channel, true)`; точну форму `data` за `op` (зміна — рівно `id, object, op, keys, row_ver`, `op` ∈ `create`, `update`, `markDeletion`, `delete`, `row_ver` — ціле > 0; інвалідація — `id, object, op`; `rights` — завжди `false`); `object` = об'єкт топіка; `keys` — рівно один ключ з іменем фізичної колонки ключа цього об'єкта й UUID-значенням. Причина (аудит Codex): `simetra_command` має `INSERT (method, payload)` і повз `signal()` міг би покласти в авторизований канал довільні дані чи значення UUID-поля під вигаданим ключем. Посилення §8.2 і §8.3 П4-B — погоджено архітекторкою; правило форми живе лише в `signal_payload_allowed`, тіло `signal()` його не дублює | П4-B §8.2, §8.3 (задача 0) |
 | Р14 | T3 скидає `simetra.signal_mode` у тому самому операторі, що ставить claims команди (`set_config(SIGNAL_MODE_SETTING, '', true)`). Значення, задане ролі чи базі (`ALTER ROLE … SET`), не гасить сигналів | немає |
 
 ## Review Focus
@@ -146,8 +146,8 @@ Centrifugo v6 (образ, закріплений у `docker/postgres-stack/comp
    взята старим токеном, не рветься. Тест — задачі 10 і 13.
 6. **Довільні дані в сигналі.** Прямий виклик `simetra.signal` чи прямий
    `INSERT` в outbox сирим SQL від `simetra_command`: ключі-значення полів,
-   вигадане ім'я ключа, невідома операція, мегабайтний `jsonb`. Функція й
-   політика (Р15) відмовляють, `CHECK` розміру тримає межу. Тест — задачі 3, 7 і 8.
+   вигадане ім'я ключа, невідома операція, мегабайтний `jsonb`. Політика
+   (Р15) відмовляє обом шляхам однаково, `CHECK` розміру тримає межу. Тест — задачі 3, 7 і 8.
 
 ---
 
@@ -177,8 +177,8 @@ Centrifugo v6 (образ, закріплений у `docker/postgres-stack/comp
     власника → B3-5 (Р2); «Після»: B1b-1, B1e, B3-4, ПГ-3;
   - рядок B3-5 — додати інваріант суцільного номера рядка ТЧ і підвищення
     версії власника на зміні змісту ТЧ (рішення архітекторки);
-  - §8.2 і §8.3: Р15 (політика над `signal_payload_allowed`), після рішення
-    архітекторки;
+  - §8.2 і §8.3: Р15 (політика над `signal_payload_allowed`, правило форми
+    лише там; рішення архітекторки);
   - §8.3 і Рд9: Р10. Нова причина: «політика `INSERT` — `TO simetra_command`,
     іншим ролям її не застосовують; `PUBLIC` дає оракул прав ролі з `USAGE`
     на `simetra`». Плюс рядок залишкового ризику Р10.
@@ -600,7 +600,13 @@ Centrifugo v6 (образ, закріплений у `docker/postgres-stack/comp
   - прямий `INSERT` від `simetra_command` у дозволений канал (Р15) — `42501`
     для кожного: зайве поле в `data`; `op: "rights"`; `object` ≠ об'єкт
     топіка; ключ з вигаданим іменем і UUID-значенням; два ключі; правильна
-    форма — вставка йде.
+    форма — вставка йде;
+  - мутації Р15, кожна окремо (рішення архітекторки):
+    - без `WITH CHECK` у політиці — прямий `INSERT` з довільним `data`
+      проходить, кейс червоніє;
+    - функція пропускає другий ключ у `keys` — кейс «два ключі» червоніє;
+    - функція не звіряє ім'я ключа з колонкою об'єкта — кейс «вигадане
+      ім'я ключа» червоніє.
 - [ ] **Step 3:** FAIL → **Step 4:** реалізація → **Step 5:** PASS:
   `pnpm --filter simetra test:db signal-topic-allowed` і
   `pnpm --filter simetra test:db:supabase signal-topic-allowed` (спільне тіло).
@@ -625,11 +631,9 @@ Centrifugo v6 (образ, закріплений у `docker/postgres-stack/comp
   - `simetra.signal(p_object uuid, p_scope_kind uuid, p_scope uuid, p_keys jsonb, p_version bigint, p_operation text) RETURNS void`
     — `SECURITY INVOKER`, `SET search_path = ''`, `EXECUTE` лише
     `simetra_command`. Тіло:
-    1. перевірка аргументів (Review Focus 6): `p_operation` ∈
-       `create`, `update`, `markDeletion`, `delete`; `p_keys` — об'єкт рівно з
-       одним ключем і значенням UUID; `p_version > 0`. Ім'я ключа звіряє
-       політика (Р15). Інакше —
-       `RAISE EXCEPTION` з `ERRCODE = '22023'`;
+    1. форму не перевіряє: її судить лише політика над
+       `signal_payload_allowed` (Р15), одна перевірка для обох шляхів —
+       `signal()` і прямого `INSERT`;
     2. `current_setting(SIGNAL_MODE_SETTING, true) = SIGNAL_MERGE_MODE` →
        `RETURN`. Будь-яке інше значення сигналу не гасить;
     3. `INSERT INTO simetra.signal_outbox (method, payload)` з
@@ -673,7 +677,8 @@ Centrifugo v6 (образ, закріплений у `docker/postgres-stack/comp
   - `delete` з версією «до»;
   - видалення й повторне створення ключа — більша версія;
   - прямий виклик `signal` від `simetra_command` з ключем-рядком,
-    двома ключами, операцією `rights` чи версією 0 — `22023`.
+    двома ключами, операцією `rights` чи версією 0 — `42501` від політики
+    (Р15; у тілі `signal()` перевірки форми немає).
 - [ ] **Step 3:** FAIL → **Step 4:** реалізація → **Step 5:** PASS:
   `pnpm --filter simetra test:db signal-core` і
   `pnpm --filter simetra test:db:supabase signal-core` (спільне тіло);
