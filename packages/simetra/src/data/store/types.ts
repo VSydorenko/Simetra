@@ -96,8 +96,22 @@ export interface CoreOptions {
   readonly releaseDelayMs?: number
   /** Межа ключів одного запиту за ключами (типово 200). */
   readonly keysPerRequest?: number
+  /** Політика пам'яті вигляду `window` (спайк 4). */
+  readonly window?: WindowOptions
   /** Журнал ядра; збій журналу результату не змінює. */
   readonly log?: (entry: CoreLogEntry) => void
+}
+
+export interface WindowOptions {
+  /** Сторінок запасу з кожного боку видимих, що лишаються у власності (типово 2). */
+  readonly marginPages?: number
+  /** Затримка, після якої сторінка поза запасом стає знімком показу (типово 1 000 мс). */
+  readonly unloadDelayMs?: number
+  /**
+   * Межа знімків показу вигляду в байтах (оцінка; типово 4 МіБ). Понад неї
+   * найдальші знімки з країв ланцюжка відкидаються разом з місцем у списку.
+   */
+  readonly ghostBytes?: number
 }
 
 export type CoreLogEntry =
@@ -188,6 +202,36 @@ export interface RowView {
   readonly version: number | undefined
   readonly values: Values
   readonly status: RowStatus
+  /**
+   * Лише `window`: рядок вивантаженої сторінки — останній показаний знімок
+   * без власності (стан `stale`), поки сторінку не перечитано за ключами.
+   */
+  readonly ghost?: true
+}
+
+/** Сторінка ланцюжка вікна (для показу й вимірів). */
+export interface WindowPageInfo {
+  readonly id: number
+  /** `resident` — рядки у власності ядра; `ghost` — знімок показу. */
+  readonly tier: "resident" | "ghost"
+  readonly count: number
+}
+
+export interface WindowInfo {
+  readonly atStart: boolean
+  readonly atEnd: boolean
+  readonly loadingBefore: boolean
+  readonly loadingAfter: boolean
+  /**
+   * Покоління ланцюжка: змінюється лише дією користувача (перехід, оновлення,
+   * `showNew`). Разом з `target` каже UI, куди стати одним кадром.
+   */
+  readonly chain: number
+  /** `start`/`end` — стати на початок чи кінець; `keep` — тримати якір. */
+  readonly target: "start" | "end" | "keep"
+  readonly pages: readonly WindowPageInfo[]
+  /** Оцінка байтів знімків показу. */
+  readonly ghostBytes: number
 }
 
 /** Стан вибірки (словник спільних правил). */
@@ -218,7 +262,7 @@ export interface ViewSnapshot {
     readonly lines: readonly SectionLineView[]
   }
   /** Лише `window`. */
-  readonly window?: { readonly atEnd: boolean }
+  readonly window?: WindowInfo
   /** Лише `full`: множина понад межу. */
   readonly truncated?: boolean
 }
@@ -255,6 +299,17 @@ export interface ViewHandle {
   showNew(): void
   /** Лише `window`: наступна сторінка keyset-ом. */
   loadAfter(): void
+  /** Лише `window`: попередня сторінка (зворотний keyset від першого рядка). */
+  loadBefore(): void
+  /** Лише `window`: новий ланцюжок від значення першого атрибута сортування. */
+  goTo(value: unknown): void
+  goToStart(): void
+  goToEnd(): void
+  /**
+   * Лише `window`: ключі першого й останнього видимого рядка. Ядро тримає
+   * видимі сторінки із запасом, решту вивантажує й дочитує краї.
+   */
+  setVisibleRange(first: Key, last: Key): void
 }
 
 // ---------------------------------------------------------------- запис
@@ -383,8 +438,36 @@ export interface CoreSnapshot {
     readonly spec: ViewSpec
     readonly keys: readonly Key[]
     readonly atEnd?: boolean
+    /** Лише `window`: ланцюжок сторінок із межами. */
+    readonly window?: {
+      readonly atStart: boolean
+      readonly pages: readonly {
+        readonly keys: readonly Key[]
+        readonly lower: WindowLower
+        readonly first?: Cursor
+        readonly last?: Cursor
+      }[]
+    }
   }[]
 }
+
+/** Кортеж сортування рядка, прочитаний разом зі сторінкою, плюс ключ. */
+export interface Cursor {
+  readonly key: Key
+  readonly values: Values
+}
+
+/**
+ * Нижня межа сторінки: як її перечитати, не загубивши рядка між нею й
+ * попередньою. `after` — строго після останнього рядка попередньої сторінки
+ * (на мить читання); `from` — від власного першого рядка включно (попередня
+ * ще невідома); `value` — `goTo`.
+ */
+export type WindowLower =
+  | { readonly k: "start" }
+  | { readonly k: "after"; readonly c: Cursor }
+  | { readonly k: "from"; readonly c: Cursor }
+  | { readonly k: "value"; readonly v: unknown }
 
 export interface CoreSession {
   readonly subject: string

@@ -8,13 +8,20 @@ import {
   type ReadQuery,
   type ReadRows,
 } from "simetra/model"
-import { keysetAfter, matches, rowComparator } from "./filter"
+import {
+  keysetAfter,
+  keysetFromValue,
+  matches,
+  reverseOrder,
+  rowComparator,
+} from "./filter"
 import type {
   ActionPolicy,
   CoreLogEntry,
   CoreOptions,
   CoreSession,
   CoreSnapshot,
+  Cursor,
   GenerationToken,
   Key,
   Mutation,
@@ -37,6 +44,8 @@ import type {
   ViewSnapshot,
   ViewSpec,
   ViewStatus,
+  WindowInfo,
+  WindowLower,
   Writer,
 } from "./types"
 
@@ -165,11 +174,45 @@ interface Subset {
   hasNewRows: boolean
   atEnd: boolean
   truncated: boolean
-  /** Курсор вікна: останній рядок, прочитаний разом зі сторінкою. */
-  cursor?: { key: Key; values: Values }
+  /** Лише `window`: ланцюжок сторінок. */
+  win?: Win
   dirty: boolean
   snapshot?: ViewSnapshot
   readonly listeners: Set<() => void>
+}
+
+/** Сторінка ланцюжка вікна. */
+interface WinPage {
+  readonly id: number
+  /** Склад у серверному порядку на мить читання; змінює лише дія. */
+  keys: Key[]
+  lower: WindowLower
+  first?: Cursor
+  last?: Cursor
+  tier: "resident" | "ghost"
+  /** Знімок показу вивантаженої сторінки: останні показані рядки. */
+  ghost?: Map<Key, RowView>
+  bytes: number
+  reviving: boolean
+  leaveTimer?: ReturnType<typeof setTimeout>
+  cache?: readonly RowView[]
+}
+
+interface Win {
+  pages: WinPage[]
+  atStart: boolean
+  atEnd: boolean
+  before: boolean
+  after: boolean
+  chain: number
+  target: "start" | "end" | "keep"
+  /** Власні створення — на початку вікна, поки їх не прийме сторінка. */
+  created: Key[]
+  visible?: { first: Key; last: Key }
+  /** Ключ → сторінка (усі яруси). */
+  index: Map<Key, WinPage>
+  ghostBytes: number
+  info?: WindowInfo
 }
 
 const sectionId = (obj: ObjectName, owner: Key, section: string) =>
@@ -746,8 +789,9 @@ export function createCoreSession(options: CoreOptions): CoreSession {
   function computeSnapshot(s: Subset): ViewSnapshot {
     const prev = s.snapshot
     const obj = s.obj.name
-    const rows: RowView[] = []
-    if (s.spec.kind !== "section") {
+    let rows: RowView[] = []
+    if (s.spec.kind === "window") rows = windowRows(s)
+    else if (s.spec.kind !== "section") {
       for (const key of s.layout) {
         const view = rowView(obj, key)
         if (view !== undefined) rows.push(view)
@@ -802,7 +846,7 @@ export function createCoreSession(options: CoreOptions): CoreSession {
       hasNewRows: s.hasNewRows,
       needsRefresh: s.needsRefresh,
       ...(section === undefined ? {} : { section }),
-      ...(s.spec.kind === "window" ? { window: { atEnd: s.atEnd } } : {}),
+      ...(s.spec.kind === "window" ? { window: windowInfo(s) } : {}),
       ...(s.spec.kind === "full" ? { truncated: s.truncated } : {}),
     }
     if (
@@ -813,7 +857,7 @@ export function createCoreSession(options: CoreOptions): CoreSession {
       prev.hasNewRows === next.hasNewRows &&
       prev.needsRefresh === next.needsRefresh &&
       prev.section === next.section &&
-      prev.window?.atEnd === next.window?.atEnd &&
+      prev.window === next.window &&
       prev.truncated === next.truncated
     ) {
       return prev
@@ -974,8 +1018,7 @@ export function createCoreSession(options: CoreOptions): CoreSession {
 
   async function fetchSubset(
     s: Subset,
-    signal: AbortSignal,
-    mode: "load" | "more"
+    signal: AbortSignal
   ): Promise<LoadResult> {
     const o = s.obj
     const spec = s.spec
@@ -1069,44 +1112,9 @@ export function createCoreSession(options: CoreOptions): CoreSession {
           setLayout(scope, s, computeFullLayout(s))
         }
       }
-      case "window": {
-        const size = spec.pageSize ?? 100
-        const after = mode === "more" ? s.cursor : undefined
-        const where: Filter | undefined =
-          after === undefined
-            ? spec.where
-            : spec.where === undefined
-              ? keysetAfter(spec.orderBy, after)
-              : { and: [spec.where, keysetAfter(spec.orderBy, after)] }
-        const res = await read(
-          {
-            object: o.spec.ref,
-            orderBy: spec.orderBy,
-            limit: size,
-            ...(where === undefined ? {} : { where }),
-          },
-          signal
-        )
-        const rows = res.rows.map(toServerRow)
-        const atEnd = rows.length < size && res.more !== true
-        const lastRow = rows[rows.length - 1]
-        return (scope) => {
-          for (const r of rows) putRow(scope, o, r, since)
-          const keys = rows.map((r) => r.key)
-          const prevKeys =
-            mode === "more" ? s.layout.filter((k) => !keys.includes(k)) : []
-          // Власні створення, вже показані на початку, лишаються там.
-          const created =
-            mode === "load"
-              ? s.layout.filter((k) => o.own.has(k) && !keys.includes(k))
-              : []
-          own(scope, s, [...(mode === "more" ? s.owned : []), ...keys])
-          s.atEnd = atEnd
-          if (lastRow !== undefined)
-            s.cursor = { key: lastRow.key, values: lastRow.values }
-          setLayout(scope, s, [...created, ...prevKeys, ...keys])
-        }
-      }
+      case "window":
+        // Вікно читає власний ланцюжок сторінок (`winReset` і далі).
+        throw new Error("window is loaded by its chain")
     }
   }
 
@@ -1198,6 +1206,11 @@ export function createCoreSession(options: CoreOptions): CoreSession {
   /** Завантаження чи перезапит підмножини: single-flight з одним хвостом. */
   function load(s: Subset, mode: "load" | "more" = "load") {
     if (!s.alive || closed) return
+    if (s.spec.kind === "window") {
+      if (mode === "more") winEdge(s, "after")
+      else winReset(s, { k: "start" })
+      return
+    }
     if (s.loading) {
       s.trailing = true
       return
@@ -1212,7 +1225,7 @@ export function createCoreSession(options: CoreOptions): CoreSession {
       s.status = hasData ? "refreshing" : "loading"
       touchSubset(s)
     }, token)
-    fetchSubset(s, controller.signal, mode)
+    fetchSubset(s, controller.signal)
       .then(
         (apply) => {
           const wrote = commitInternal((scope) => {
@@ -1244,12 +1257,614 @@ export function createCoreSession(options: CoreOptions): CoreSession {
       })
   }
 
+  // ------------------------------------------------------------ вікно
+
+  /*
+   * Вікно (спайк 4) — ланцюжок keyset-сторінок. Три яруси:
+   * 1. `resident` — видимі сторінки ± `marginPages`: рядки у власності ядра,
+   *    повний стан, сигнали й перечитування.
+   * 2. `ghost` — сторінка поза запасом після `unloadDelayMs`: власність
+   *    звільнено, лишається знімок показу (стан `stale`) і місце в списку.
+   *    Повернення до неї показує знімок одразу й перечитує сторінку за
+   *    ключами: склад не змінюється (правило стабільності), зниклі —
+   *    `removed` на місці.
+   * 3. Понад `ghostBytes` найдальші знімки з країв ланцюжка відкидаються
+   *    разом з місцем: край знову невідомий (`atStart`/`atEnd` = false).
+   * Склад змінюють лише дії: `goTo*`, `refresh`, `showNew`, дочитування
+   * країв, власне створення й підтверджене власне видалення, `purge`.
+   */
+  const marginPages = options.window?.marginPages ?? 2
+  const unloadDelayMs = options.window?.unloadDelayMs ?? 1_000
+  const ghostBudget = options.window?.ghostBytes ?? 4 * 1024 * 1024
+  let nextPageId = 1
+
+  const STALE_GHOST: RowStatus = Object.freeze({
+    state: "stale",
+    pendingFields: Object.freeze([]) as readonly string[],
+    mutations: Object.freeze([]) as readonly MutationInfo[],
+    deleting: false,
+    created: false,
+  })
+  const REMOVED_GHOST: RowStatus = Object.freeze({
+    ...STALE_GHOST,
+    state: "removed",
+  })
+
+  function winOf(s: Subset): Win {
+    if (s.win === undefined) {
+      s.win = {
+        pages: [],
+        atStart: false,
+        atEnd: false,
+        before: false,
+        after: false,
+        chain: 0,
+        target: "start",
+        created: [],
+        index: new Map(),
+        ghostBytes: 0,
+      }
+    }
+    return s.win
+  }
+
+  const chainToken = (s: Subset, chain: number): GenerationToken => ({
+    get valid() {
+      return !closed && s.alive && s.win?.chain === chain
+    },
+  })
+
+  function sortSpec(s: Subset) {
+    if (s.spec.kind !== "window") throw new Error("not a window")
+    return s.spec
+  }
+
+  /** Кортеж сортування рядка (лише атрибути сортування — менше пам'яті). */
+  function cursorOf(s: Subset, row: ServerRow): Cursor {
+    const values: Record<string, unknown> = {}
+    for (const p of sortSpec(s).orderBy) {
+      if (p.attribute !== "id") values[p.attribute] = row.values[p.attribute]
+    }
+    return { key: row.key, values }
+  }
+
+  function lowerFilter(s: Subset, lower: WindowLower): Filter | undefined {
+    const { orderBy } = sortSpec(s)
+    switch (lower.k) {
+      case "start":
+        return undefined
+      case "after":
+        return keysetAfter(orderBy, lower.c)
+      case "from":
+        return keysetAfter(orderBy, lower.c, true)
+      case "value":
+        return keysetFromValue(orderBy, lower.v)
+    }
+  }
+
+  /** Одна сторінка; `reversed` — у зворотному порядку, повернута до прямого. */
+  async function readPage(
+    s: Subset,
+    bound: Filter | undefined,
+    reversed: boolean,
+    signal: AbortSignal
+  ): Promise<{ rows: ServerRow[]; end: boolean }> {
+    const spec = sortSpec(s)
+    const size = spec.pageSize ?? 100
+    const where: Filter | undefined =
+      bound === undefined
+        ? spec.where
+        : spec.where === undefined
+          ? bound
+          : { and: [spec.where, bound] }
+    const res = await read(
+      {
+        object: s.obj.spec.ref,
+        orderBy: reversed ? reverseOrder(spec.orderBy) : spec.orderBy,
+        limit: size,
+        ...(where === undefined ? {} : { where }),
+      },
+      signal
+    )
+    const rows = res.rows.map(toServerRow)
+    if (reversed) rows.reverse()
+    return { rows, end: rows.length < size && res.more !== true }
+  }
+
+  function makePage(
+    s: Subset,
+    rows: readonly ServerRow[],
+    lower: WindowLower
+  ): WinPage {
+    const first = rows[0]
+    const last = rows[rows.length - 1]
+    return {
+      id: nextPageId++,
+      keys: rows.map((r) => r.key),
+      lower,
+      ...(first === undefined ? {} : { first: cursorOf(s, first) }),
+      ...(last === undefined ? {} : { last: cursorOf(s, last) }),
+      tier: "resident",
+      bytes: 0,
+      reviving: false,
+    }
+  }
+
+  function reindex(w: Win) {
+    w.index.clear()
+    for (const p of w.pages) for (const k of p.keys) w.index.set(k, p)
+    w.ghostBytes = w.pages.reduce((n, p) => n + p.bytes, 0)
+  }
+
+  /** Склад і власність з ланцюжка: власні лише сторінки `resident`. */
+  function syncWin(scope: Scope, s: Subset) {
+    const w = winOf(s)
+    reindex(w)
+    w.created = w.created.filter(
+      (k) => !w.index.has(k) && (s.obj.own.has(k) || heldByLog(s.obj.name, k))
+    )
+    const resident: Key[] = []
+    for (const p of w.pages) if (p.tier === "resident") resident.push(...p.keys)
+    own(scope, s, resident)
+    setLayout(scope, s, [...w.created, ...resident])
+    delete w.info
+  }
+
+  function dropPage(p: WinPage) {
+    if (p.leaveTimer !== undefined) clearTimeout(p.leaveTimer)
+    delete p.leaveTimer
+  }
+
+  type Target = { k: "start" } | { k: "end" } | { k: "value"; v: unknown }
+
+  /**
+   * Новий ланцюжок (дія користувача): старий лишається видимим
+   * (`refreshing`), новий замінює його одним `commit`.
+   */
+  function winReset(s: Subset, target: Target) {
+    const w = winOf(s)
+    const chain = ++w.chain
+    const token = chainToken(s, chain)
+    s.abort?.abort()
+    const controller = linked()
+    s.abort = controller
+    commitInternal(() => {
+      s.status = w.pages.length > 0 ? "refreshing" : "loading"
+      w.before = false
+      w.after = false
+      delete w.info
+      touchSubset(s)
+    }, token)
+    const since = epoch
+    const bound =
+      target.k === "value"
+        ? keysetFromValue(sortSpec(s).orderBy, target.v)
+        : undefined
+    readPage(s, bound, target.k === "end", controller.signal)
+      .then(
+        ({ rows, end }) => {
+          const wrote = commitInternal((scope) => {
+            for (const r of rows) putRow(scope, s.obj, r, since)
+            const first = rows[0]
+            const lower: WindowLower =
+              target.k === "start"
+                ? { k: "start" }
+                : target.k === "value"
+                  ? { k: "value", v: target.v }
+                  : end || first === undefined
+                    ? { k: "start" }
+                    : { k: "from", c: cursorOf(s, first) }
+            for (const p of w.pages) dropPage(p)
+            w.pages = rows.length > 0 ? [makePage(s, rows, lower)] : []
+            w.atStart = target.k === "start" || (target.k === "end" && end)
+            w.atEnd = target.k === "end" || end
+            w.target = target.k === "end" ? "end" : "start"
+            // Власні створення лишаються на початку лише від початку.
+            if (target.k !== "start") w.created = []
+            delete w.visible
+            syncWin(scope, s)
+            s.status = "ready"
+            delete s.error
+            s.needsRefresh = false
+            s.hasNewRows = false
+            touchSubset(s)
+          }, token)
+          if (!wrote) log({ kind: "late-response", what: s.specKey })
+          else winRange(s)
+        },
+        (e: unknown) => {
+          commitInternal(() => {
+            s.status = "error"
+            s.error = errorOf(e)
+            touchSubset(s)
+          }, token)
+        }
+      )
+      .finally(() => {
+        if (w.chain !== chain) return
+        for (const wt of s.waiters.splice(0)) wt()
+      })
+  }
+
+  /** Дочитати край ланцюжка: `after` — keyset після останнього рядка. */
+  function winEdge(s: Subset, dir: "before" | "after") {
+    const w = winOf(s)
+    if (s.status === "loading" || w.pages.length === 0) return
+    if (dir === "after" ? w.after || w.atEnd : w.before || w.atStart) return
+    const edge = dir === "after" ? w.pages[w.pages.length - 1] : w.pages[0]
+    const cursor = dir === "after" ? edge?.last : edge?.first
+    if (edge === undefined || cursor === undefined) return
+    const token = chainToken(s, w.chain)
+    commitInternal(() => {
+      if (dir === "after") w.after = true
+      else w.before = true
+      delete w.info
+      touchSubset(s)
+    }, token)
+    const since = epoch
+    const { orderBy } = sortSpec(s)
+    const bound =
+      dir === "after"
+        ? keysetAfter(orderBy, cursor)
+        : keysetAfter(reverseOrder(orderBy), cursor)
+    readPage(s, bound, dir === "before", linked().signal).then(
+      ({ rows, end }) => {
+        commitInternal((scope) => {
+          if (dir === "after") w.after = false
+          else w.before = false
+          delete w.info
+          touchSubset(s)
+          // Рядок, що вже є в ланцюжку (переїхав зміною сортування), удруге
+          // не показується: лишається на своєму місці (правило стабільності).
+          const fresh = rows.filter((r) => !w.index.has(r.key))
+          for (const r of fresh) putRow(scope, s.obj, r, since)
+          if (dir === "after") {
+            if (end) w.atEnd = true
+            if (fresh.length > 0)
+              w.pages.push(makePage(s, fresh, { k: "after", c: cursor }))
+          } else {
+            if (end) w.atStart = true
+            if (fresh.length > 0) {
+              const page = makePage(
+                s,
+                fresh,
+                end ? { k: "start" } : { k: "from", c: cursorOf(s, fresh[0]!) }
+              )
+              // Тепер відома попередня сторінка: межа колишньої першої —
+              // строго після її останнього рядка (рядок між ними не випаде).
+              if (page.last !== undefined)
+                edge.lower = { k: "after", c: page.last }
+              w.pages.unshift(page)
+            }
+          }
+          syncWin(scope, s)
+        }, token)
+        winRange(s)
+      },
+      (e: unknown) => {
+        commitInternal(() => {
+          if (dir === "after") w.after = false
+          else w.before = false
+          s.error = errorOf(e)
+          delete w.info
+          touchSubset(s)
+        }, token)
+      }
+    )
+  }
+
+  /** Знімок показу сторінки й звільнення власності. */
+  function ghostify(scope: Scope, s: Subset, p: WinPage) {
+    scope.assert()
+    const ghost = new Map<Key, RowView>()
+    let bytes = 0
+    for (const key of p.keys) {
+      const v = rowView(s.obj.name, key)
+      if (v === undefined) continue
+      ghost.set(
+        key,
+        Object.freeze({
+          key,
+          version: v.version,
+          values: v.values,
+          status: v.status.state === "removed" ? REMOVED_GHOST : STALE_GHOST,
+          ghost: true as const,
+        })
+      )
+      // Оцінка: рядок у UTF-16 плюс накладні на об'єкт, ключ і запис мапи.
+      bytes += JSON.stringify(v.values).length * 2 + key.length * 2 + 160
+    }
+    p.tier = "ghost"
+    p.ghost = ghost
+    p.bytes = bytes
+    delete p.cache
+    syncWin(scope, s)
+    trimGhosts(scope, s)
+  }
+
+  /** Межа пам'яті знімків: відкинути найдальші з країв разом з місцем. */
+  function trimGhosts(scope: Scope, s: Subset) {
+    const w = winOf(s)
+    let changed = false
+    while (w.ghostBytes > ghostBudget && w.pages.length > 1) {
+      const [lo, hi] = visiblePages(w)
+      const front = w.pages[0]!
+      const back = w.pages[w.pages.length - 1]!
+      const frontFar = lo
+      const backFar = w.pages.length - 1 - hi
+      const pick =
+        front.tier === "ghost" && (back.tier !== "ghost" || frontFar >= backFar)
+          ? "front"
+          : back.tier === "ghost"
+            ? "back"
+            : undefined
+      if (pick === undefined) break
+      const p = pick === "front" ? w.pages.shift()! : w.pages.pop()!
+      dropPage(p)
+      if (pick === "front") w.atStart = false
+      else w.atEnd = false
+      w.ghostBytes -= p.bytes
+      changed = true
+    }
+    if (changed) syncWin(scope, s)
+  }
+
+  function visiblePages(w: Win): [number, number] {
+    if (w.visible === undefined) return [0, 0]
+    const a = w.index.get(w.visible.first)
+    const b = w.index.get(w.visible.last)
+    const ia = a === undefined ? 0 : w.pages.indexOf(a)
+    const ib = b === undefined ? ia : w.pages.indexOf(b)
+    return [Math.max(0, ia), Math.max(ia, ib)]
+  }
+
+  const pinned = (s: Subset, p: WinPage) =>
+    p.keys.some((k) => heldByLog(s.obj.name, k))
+
+  /** Політика пам'яті: запас навколо видимих, вивантаження, дочитування. */
+  function winRange(s: Subset) {
+    const w = s.win
+    if (w === undefined || !s.alive || closed || s.status === "loading") return
+    const [lo, hi] = visiblePages(w)
+    const from = lo - marginPages
+    const to = hi + marginPages
+    w.pages.forEach((p, i) => {
+      const inside = i >= from && i <= to
+      if (inside) {
+        if (p.leaveTimer !== undefined) dropPage(p)
+        if (p.tier === "ghost" && !p.reviving) revive(s, p)
+        return
+      }
+      if (p.tier !== "resident" || p.leaveTimer !== undefined) return
+      // Відкладене звільнення: прокрутка туди й назад не перечитує.
+      const token = chainToken(s, w.chain)
+      const leave = () => {
+        delete p.leaveTimer
+        commitInternal((scope) => {
+          const [l, h] = visiblePages(w)
+          const at = w.pages.indexOf(p)
+          if (at < 0 || p.tier !== "resident") return
+          if (at >= l - marginPages && at <= h + marginPages) return
+          if (pinned(s, p)) return
+          ghostify(scope, s, p)
+        }, token)
+      }
+      if (unloadDelayMs <= 0) leave()
+      else p.leaveTimer = setTimeout(leave, unloadDelayMs)
+    })
+    // Краї дочитуються лише за видимим діапазоном від UI: після переходу
+    // `goTo` рядки над ціллю не з'являються раніше, ніж UI став на ціль.
+    if (w.visible === undefined) return
+    if (to >= w.pages.length - 1) winEdge(s, "after")
+    if (from <= 0) winEdge(s, "before")
+  }
+
+  /** Повернення до знімка: перечитати сторінку за ключами, склад той самий. */
+  function revive(s: Subset, p: WinPage) {
+    const w = winOf(s)
+    p.reviving = true
+    const chain = w.chain
+    const token: GenerationToken = {
+      get valid() {
+        return (
+          !closed &&
+          s.alive &&
+          w.chain === chain &&
+          p.tier === "ghost" &&
+          w.pages.includes(p)
+        )
+      },
+    }
+    const since = epoch
+    readKeys(s.obj, p.keys, linked().signal)
+      .then((rows) => {
+        const wrote = commitInternal((scope) => {
+          const got = new Set(rows.map((r) => r.key))
+          for (const r of rows) putRow(scope, s.obj, r, since)
+          const keep: Key[] = []
+          for (const key of p.keys) {
+            if (got.has(key)) {
+              keep.push(key)
+              continue
+            }
+            // Прибрано після початку читання (видалення, `purge`) — ні рядка,
+            // ні місця; інакше сервер його не віддав: `removed` на місці.
+            if ((tombstones.get(rowId(s.obj.name, key)) ?? -1) > since) continue
+            const g = p.ghost?.get(key)
+            if (g === undefined) continue
+            keep.push(key)
+            const e = s.obj.rows.get(key)
+            if (e !== undefined) {
+              e.removed = true
+            } else {
+              s.obj.rows.set(key, {
+                row: { key, version: g.version ?? 0, values: g.values },
+                owners: 0,
+                stale: false,
+                staleUntil: 0,
+                removed: true,
+              })
+            }
+            touchRow(s.obj.name, key)
+          }
+          p.keys = keep
+          p.tier = "resident"
+          delete p.ghost
+          p.bytes = 0
+          delete p.cache
+          syncWin(scope, s)
+        }, token)
+        if (!wrote) log({ kind: "late-response", what: `${s.specKey} revive` })
+      })
+      .catch(() => {
+        // Знімок лишається; наступна зміна видимого діапазону спробує знову.
+      })
+      .finally(() => {
+        p.reviving = false
+      })
+  }
+
+  /**
+   * Оновлення (дія користувача) від першої видимої сторінки до кінця
+   * власних: keyset-ом від нижньої межі цієї сторінки стільки сторінок,
+   * скільки було. Межа — курсор, з яким сторінку прочитано, тож рядок між
+   * сторінками не випадає. Знімки нижче відкидаються: їхній склад більше
+   * не узгоджений з перебудованим ланцюжком.
+   */
+  function winRefresh(s: Subset) {
+    const w = winOf(s)
+    if (w.pages.length === 0) {
+      winReset(s, { k: "start" })
+      return
+    }
+    const [lo] = visiblePages(w)
+    const startPage = w.pages[lo]!
+    let count = 0
+    for (let i = lo; i < w.pages.length && w.pages[i]!.tier === "resident"; i++)
+      count++
+    count = Math.max(1, count)
+    const chain = ++w.chain
+    const token = chainToken(s, chain)
+    const controller = linked()
+    commitInternal(() => {
+      s.status = "refreshing"
+      w.before = false
+      w.after = false
+      delete w.info
+      touchSubset(s)
+    }, token)
+    const since = epoch
+    void (async () => {
+      const built: { rows: ServerRow[]; lower: WindowLower }[] = []
+      let lower = startPage.lower
+      let end = false
+      for (let i = 0; i < count && !end; i++) {
+        const page = await readPage(
+          s,
+          lowerFilter(s, lower),
+          false,
+          controller.signal
+        )
+        end = page.end
+        if (page.rows.length === 0) break
+        built.push({ rows: page.rows, lower })
+        lower = { k: "after", c: cursorOf(s, page.rows[page.rows.length - 1]!) }
+      }
+      return { built, end }
+    })().then(
+      ({ built, end }) => {
+        commitInternal((scope) => {
+          const fresh = new Set(built.flatMap((b) => b.rows.map((r) => r.key)))
+          const above = w.pages.slice(0, lo)
+          for (const p of w.pages.slice(lo)) dropPage(p)
+          // Рядок, що переїхав у перебудовану частину, лишає старе місце.
+          for (const p of above) {
+            if (!p.keys.some((k) => fresh.has(k))) continue
+            p.keys = p.keys.filter((k) => !fresh.has(k))
+            p.ghost?.forEach((_, k) => {
+              if (fresh.has(k)) p.ghost?.delete(k)
+            })
+            delete p.cache
+          }
+          for (const b of built)
+            for (const r of b.rows) putRow(scope, s.obj, r, since)
+          w.pages = [
+            ...above.filter((p) => p.keys.length > 0),
+            ...built.map((b) => makePage(s, b.rows, b.lower)),
+          ]
+          w.atEnd = end
+          w.target = "keep"
+          syncWin(scope, s)
+          s.status = "ready"
+          delete s.error
+          s.needsRefresh = false
+          touchSubset(s)
+        }, token)
+        winRange(s)
+      },
+      (e: unknown) => {
+        commitInternal(() => {
+          s.status = "error"
+          s.error = errorOf(e)
+          touchSubset(s)
+        }, token)
+      }
+    )
+  }
+
+  /** Рядки вікна: створення, далі сторінки; кеш — посторінково. */
+  function windowRows(s: Subset): RowView[] {
+    const w = winOf(s)
+    const obj = s.obj.name
+    const out: RowView[] = []
+    for (const key of w.created) {
+      const v = rowView(obj, key)
+      if (v !== undefined) out.push(v)
+    }
+    for (const p of w.pages) {
+      const rows: RowView[] = []
+      for (const key of p.keys) {
+        const v = p.tier === "resident" ? rowView(obj, key) : p.ghost?.get(key)
+        if (v !== undefined) rows.push(v)
+      }
+      const prev = p.cache
+      const same =
+        prev !== undefined &&
+        prev.length === rows.length &&
+        prev.every((r, i) => r === rows[i])
+      if (!same) p.cache = Object.freeze(rows)
+      for (const r of p.cache!) out.push(r)
+    }
+    return out
+  }
+
+  function windowInfo(s: Subset): WindowInfo {
+    const w = winOf(s)
+    if (w.info !== undefined) return w.info
+    w.info = Object.freeze({
+      atStart: w.atStart,
+      atEnd: w.atEnd,
+      loadingBefore: w.before,
+      loadingAfter: w.after,
+      chain: w.chain,
+      target: w.target,
+      pages: Object.freeze(
+        w.pages.map((p) =>
+          Object.freeze({ id: p.id, tier: p.tier, count: p.keys.length })
+        )
+      ),
+      ghostBytes: w.ghostBytes,
+    })
+    return w.info
+  }
+
   /** Звільнення підмножини — теж зміна стану, тож через `commit` сесії. */
   function release(s: Subset) {
     if (!s.alive) return
     commitInternal((scope) => {
       s.alive = false
       s.abort?.abort()
+      for (const p of s.win?.pages ?? []) dropPage(p)
       subsets.delete(s.specKey)
       own(scope, s, [])
       const spec = s.spec
@@ -1398,7 +2013,9 @@ export function createCoreSession(options: CoreOptions): CoreSession {
       },
       refresh() {
         const s = live()
-        if (s !== undefined) load(s)
+        if (s === undefined) return
+        if (s.spec.kind === "window") winRefresh(s)
+        else load(s)
       },
       showNew() {
         const s = live()
@@ -1406,8 +2023,34 @@ export function createCoreSession(options: CoreOptions): CoreSession {
       },
       loadAfter() {
         const s = live()
-        if (s !== undefined && s.spec.kind === "window" && !s.atEnd)
-          load(s, "more")
+        if (s !== undefined && s.spec.kind === "window") winEdge(s, "after")
+      },
+      loadBefore() {
+        const s = live()
+        if (s !== undefined && s.spec.kind === "window") winEdge(s, "before")
+      },
+      goTo(value) {
+        const s = live()
+        if (s !== undefined && s.spec.kind === "window")
+          winReset(s, { k: "value", v: value })
+      },
+      goToStart() {
+        const s = live()
+        if (s !== undefined && s.spec.kind === "window")
+          winReset(s, { k: "start" })
+      },
+      goToEnd() {
+        const s = live()
+        if (s !== undefined && s.spec.kind === "window")
+          winReset(s, { k: "end" })
+      },
+      setVisibleRange(first, last) {
+        const s = live()
+        if (s === undefined || s.spec.kind !== "window") return
+        const w = winOf(s)
+        if (w.visible?.first === first && w.visible.last === last) return
+        w.visible = { first, last }
+        winRange(s)
       },
     }
     handles.set(specKey, handle)
@@ -1575,7 +2218,10 @@ export function createCoreSession(options: CoreOptions): CoreSession {
           if (s.obj.name !== op.obj || s.layoutSet.has(op.key)) continue
           if (s.spec.kind === "full" || s.spec.kind === "window") {
             if (matches(s.obj.spec.fields, op.values, s.spec.where)) {
-              setLayout(scope, s, [op.key, ...s.layout])
+              if (s.spec.kind === "window") {
+                winOf(s).created.unshift(op.key)
+                syncWin(scope, s)
+              } else setLayout(scope, s, [op.key, ...s.layout])
             }
           }
         }
@@ -2216,6 +2862,11 @@ export function createCoreSession(options: CoreOptions): CoreSession {
             s.layoutSet.has(op.key) &&
             !s.obj.rows.has(op.key)
           ) {
+            if (s.win !== undefined) {
+              s.win.created = s.win.created.filter((k) => k !== op.key)
+              syncWin(scope, s)
+              continue
+            }
             setLayout(
               scope,
               s,
@@ -2284,6 +2935,22 @@ export function createCoreSession(options: CoreOptions): CoreSession {
           if (s.spec.kind === "section" && gone.has(s.spec.owner)) {
             s.needsRefresh = true
             touchSubset(s)
+          }
+          if (s.win !== undefined) {
+            // Виняток безпеки: і з власних сторінок, і зі знімків показу.
+            const w = s.win
+            if (![...gone].some((k) => w.index.has(k) || w.created.includes(k)))
+              continue
+            w.created = w.created.filter((k) => !gone.has(k))
+            for (const p of w.pages) {
+              if (!p.keys.some((k) => gone.has(k))) continue
+              p.keys = p.keys.filter((k) => !gone.has(k))
+              for (const k of gone) p.ghost?.delete(k)
+              delete p.cache
+            }
+            w.pages = w.pages.filter((p) => p.keys.length > 0)
+            syncWin(scope, s)
+            continue
           }
           if (![...s.layoutSet].some((k) => gone.has(k))) continue
           // Склад картки сталий: рядок зник зі сховища, ключ лишається.
@@ -2437,7 +3104,28 @@ export function createCoreSession(options: CoreOptions): CoreSession {
       sections: secs,
       subsets: [...subsets.values()]
         .filter((s) => s.status === "ready")
-        .map((s) => ({ spec: s.spec, keys: [...s.layout], atEnd: s.atEnd })),
+        .map((s) => ({
+          spec: s.spec,
+          keys: [...s.layout],
+          atEnd: s.win?.atEnd ?? s.atEnd,
+          ...(s.win === undefined
+            ? {}
+            : {
+                window: {
+                  atStart: s.win.atStart,
+                  // Знімок SSR несе лише власні сторінки: знімки показу —
+                  // пам'ять клієнта, а не дані сервера.
+                  pages: s.win.pages
+                    .filter((p) => p.tier === "resident")
+                    .map((p) => ({
+                      keys: [...p.keys],
+                      lower: p.lower,
+                      ...(p.first === undefined ? {} : { first: p.first }),
+                      ...(p.last === undefined ? {} : { last: p.last }),
+                    })),
+                },
+              }),
+        })),
     }
   }
 
@@ -2481,10 +3169,21 @@ export function createCoreSession(options: CoreOptions): CoreSession {
         if (e !== undefined) e.owners++
       }
       if (sub.spec.kind === "window") {
-        const lastKey = s.layout[s.layout.length - 1]
-        const last = lastKey === undefined ? undefined : o.rows.get(lastKey)
-        if (last !== undefined)
-          s.cursor = { key: last.row.key, values: last.row.values }
+        const w = winOf(s)
+        w.atStart = sub.window?.atStart ?? true
+        w.atEnd = sub.atEnd ?? false
+        w.chain = 1
+        w.pages = (sub.window?.pages ?? []).map((p) => ({
+          id: nextPageId++,
+          keys: [...p.keys],
+          lower: p.lower,
+          ...(p.first === undefined ? {} : { first: p.first }),
+          ...(p.last === undefined ? {} : { last: p.last }),
+          tier: "resident" as const,
+          bytes: 0,
+          reviving: false,
+        }))
+        reindex(w)
       }
       hydrated.add(s)
     }
@@ -2506,6 +3205,7 @@ export function createCoreSession(options: CoreOptions): CoreSession {
       s.alive = false
       s.listeners.clear()
       if (s.releaseTimer !== undefined) clearTimeout(s.releaseTimer)
+      for (const p of s.win?.pages ?? []) dropPage(p)
       for (const w of s.waiters.splice(0)) w()
     }
     handles.clear()

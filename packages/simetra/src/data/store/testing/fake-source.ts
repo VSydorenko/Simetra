@@ -1,5 +1,6 @@
 import {
   CommandFailure,
+  type Filter,
   type CommandError,
   type CommandResult,
   type Operation,
@@ -7,7 +8,31 @@ import {
   type ReadRows,
 } from "simetra/model"
 import { matches, rowComparator } from "../filter"
-import type { CoreSource, Key, ObjectName, ObjectSpec, Values } from "../types"
+import type { OrderBy } from "simetra/model"
+import type {
+  CoreSource,
+  FieldType,
+  Key,
+  ObjectName,
+  ObjectSpec,
+  Values,
+} from "../types"
+
+/**
+ * Keyset-частина фільтра вікна (умова з ключем `id` в останній гілці):
+ * лише вона монотонна вздовж порядку. Фільтр користувача — ні.
+ */
+function keysetPart(where: Filter | undefined): Filter | undefined {
+  if (where === undefined) return undefined
+  const looksKeyset = (f: Filter) =>
+    JSON.stringify(f).includes('"attribute":"id","op":"g') ||
+    JSON.stringify(f).includes('"attribute":"id","op":"l')
+  if ("and" in where) {
+    const last = where.and[where.and.length - 1]
+    return last !== undefined && looksKeyset(last) ? last : undefined
+  }
+  return looksKeyset(where) ? where : undefined
+}
 
 /**
  * Фейковий сервер і керований транспорт для тестів ядра й спайків 2–3.
@@ -34,6 +59,12 @@ export class FakeServer {
   /** Лічильник викликів джерела (для перевірок «без запиту»). */
   reads = 0
   runs = 0
+  /** Ревізія даних: кеш упорядкованих масивів дійсний у межах однієї. */
+  private rev = 0
+  private sorted = new Map<
+    string,
+    { rev: number; rows: { key: Key; values: Values; row: StoredRow }[] }
+  >()
 
   constructor(objects: readonly ObjectSpec[]) {
     for (const spec of objects) {
@@ -54,6 +85,7 @@ export class FakeServer {
     obj: ObjectName,
     rows: readonly ({ id: Key; version?: number } & Record<string, unknown>)[]
   ) {
+    this.rev++
     for (const { id, version, ...values } of rows) {
       this.table(obj).set(id, { version: version ?? 1, values })
     }
@@ -75,6 +107,7 @@ export class FakeServer {
   edit(obj: ObjectName, key: Key, values: Values): number {
     const row = this.table(obj).get(key)
     if (row === undefined) throw new Error(`no row ${key}`)
+    this.rev++
     row.version++
     row.values = { ...row.values, ...values }
     return row.version
@@ -97,6 +130,7 @@ export class FakeServer {
 
   /** Чуже видалення. */
   remove(obj: ObjectName, key: Key) {
+    this.rev++
     this.table(obj).delete(key)
   }
 
@@ -156,24 +190,60 @@ export class FakeServer {
         })
       }
     }
-    let rows = [...t].map(([key, row]) => ({
+    const order = this.orderedRows(obj, t, fields, query.orderBy)
+    // Keyset-умова монотонна вздовж порядку: початок — бінарним пошуком,
+    // далі лінійно з повним фільтром до `limit` (інакше 100 тис. рядків
+    // прокрутки коштували б O(n) на сторінку).
+    const keyset = keysetPart(where)
+    let start = 0
+    if (keyset !== undefined) {
+      let lo = 0
+      let hi = order.length
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1
+        if (matches(fields, order[mid]!.values, keyset)) hi = mid
+        else lo = mid + 1
+      }
+      start = lo
+    }
+    const from = query.offset ?? 0
+    const out: Record<string, unknown>[] = []
+    let skipped = 0
+    for (let i = start; i < order.length && out.length < query.limit; i++) {
+      const r = order[i]!
+      if (!matches(fields, r.values, where)) continue
+      if (skipped < from) {
+        skipped++
+        continue
+      }
+      out.push(this.listRow(obj, r.key, r.row, false))
+    }
+    return { rows: out }
+  }
+
+  private orderedRows(
+    obj: ObjectName,
+    t: Map<Key, StoredRow>,
+    fields: Readonly<Record<string, FieldType>>,
+    orderBy: OrderBy | undefined
+  ) {
+    const id = `${obj}\u0000${JSON.stringify(orderBy ?? null)}`
+    const cached = this.sorted.get(id)
+    if (cached !== undefined && cached.rev === this.rev) return cached.rows
+    const rows = [...t].map(([key, row]) => ({
       key,
-      values: { id: key, ...row.values },
+      values: { id: key, ...row.values } as Values,
       row,
     }))
-    rows = rows.filter((r) => matches(fields, r.values, where))
-    rows.sort(rowComparator(fields, query.orderBy, "en-US"))
-    const from = query.offset ?? 0
-    return {
-      rows: rows
-        .slice(from, from + query.limit)
-        .map((r) => this.listRow(obj, r.key, r.row, false)),
-    }
+    rows.sort(rowComparator(fields, orderBy, "en-US"))
+    this.sorted.set(id, { rev: this.rev, rows })
+    return rows
   }
 
   /** Атомарне застосування пакета: усе або нічого. */
   run(operations: readonly Operation[]): CommandResult {
     this.runs++
+    this.rev++
     const fail = (error: CommandError): never => {
       throw new CommandFailure(error)
     }

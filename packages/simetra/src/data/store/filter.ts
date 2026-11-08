@@ -167,32 +167,143 @@ export function rowComparator(
   }
 }
 
+/** Частина повного кортежу сортування з явним місцем `NULL`. */
+interface SortPart {
+  readonly attribute: string
+  readonly direction: "asc" | "desc"
+  readonly nullsFirst: boolean
+}
+
 /**
- * Keyset-умова «після рядка» для вікна: повний кортеж сортування плюс ключ.
- * Спайк: без NULL у полях сортування.
+ * Повний кортеж сортування: атрибути `orderBy` з явним `nulls` (типове
+ * Postgres: `asc` — last, `desc` — first) і ключ останнім. Ключ, якщо його
+ * немає в `orderBy`, — за зростанням, як дописує сервер (§4.1).
+ */
+function sortParts(orderBy: OrderBy): SortPart[] {
+  const parts: SortPart[] = orderBy.map((p) => ({
+    attribute: p.attribute,
+    direction: p.direction,
+    nullsFirst:
+      (p.nulls ?? (p.direction === "asc" ? "last" : "first")) === "first",
+  }))
+  if (parts[parts.length - 1]?.attribute !== "id")
+    parts.push({ attribute: "id", direction: "asc", nullsFirst: false })
+  return parts
+}
+
+/**
+ * Зворотний порядок того самого кортежу — для `goToEnd` і `loadBefore`:
+ * напрям і місце `NULL` перевернуто, ключ — явно останнім (інакше сервер
+ * допише його за зростанням, і нічия розвернеться неправильно).
+ */
+export function reverseOrder(orderBy: OrderBy): OrderBy {
+  return sortParts(orderBy).map((p) => ({
+    attribute: p.attribute,
+    direction: p.direction === "asc" ? "desc" : "asc",
+    nulls: p.nullsFirst ? "last" : "first",
+  })) as OrderBy
+}
+
+const isNullish = (v: unknown) => v === null || v === undefined
+
+/** «Строго після `v`» (чи «не раніше» з `inclusive`) у порядку частини. */
+function after(
+  p: SortPart,
+  v: unknown,
+  inclusive: boolean
+): Filter | undefined {
+  if (isNullish(v)) {
+    // `NULL` найменше (nulls first): після нього всі непорожні; найбільше
+    // (nulls last): після нього нічого.
+    if (inclusive) return { attribute: p.attribute, op: "isNull" }
+    return p.nullsFirst
+      ? { not: { attribute: p.attribute, op: "isNull" } }
+      : undefined
+  }
+  const op =
+    p.direction === "asc"
+      ? inclusive
+        ? "gte"
+        : "gt"
+      : inclusive
+        ? "lte"
+        : "lt"
+  const cmp: Filter = { attribute: p.attribute, op, value: v }
+  // Непорожнє значення при nulls last: усі `NULL` ідуть після нього.
+  return p.nullsFirst
+    ? cmp
+    : { or: [cmp, { attribute: p.attribute, op: "isNull" }] }
+}
+
+function equalTo(p: SortPart, v: unknown): Filter {
+  return isNullish(v)
+    ? { attribute: p.attribute, op: "isNull" }
+    : { attribute: p.attribute, op: "eq", value: v }
+}
+
+/**
+ * Keyset-умова для вікна: рядки після `cursor` у порядку `orderBy` (повний
+ * кортеж сортування плюс ключ, з `NULL`). `inclusive` — і сам рядок курсора
+ * (нижня межа сторінки, прочитаної від свого першого рядка).
  */
 export function keysetAfter(
   orderBy: OrderBy,
-  last: { key: string; values: Values }
+  cursor: { key: string; values: Values },
+  inclusive = false
 ): Filter {
-  const parts = [
-    ...orderBy.map((p) => ({ attribute: p.attribute, direction: p.direction })),
-    { attribute: "id", direction: "asc" as const },
-  ]
+  const parts = sortParts(orderBy)
   const valueOf = (attribute: string) =>
-    attribute === "id" ? last.key : last.values[attribute]
-  const branches: Filter[] = parts.map((part, i) => {
-    const equal: Filter[] = parts.slice(0, i).map((prev) => ({
-      attribute: prev.attribute,
-      op: "eq" as const,
-      value: valueOf(prev.attribute),
-    }))
-    const strict: Filter = {
-      attribute: part.attribute,
-      op: part.direction === "asc" ? "gt" : "lt",
-      value: valueOf(part.attribute),
-    }
-    return equal.length === 0 ? strict : { and: [...equal, strict] }
+    attribute === "id" ? cursor.key : cursor.values[attribute]
+  const branches: Filter[] = []
+  parts.forEach((part, i) => {
+    const last = i === parts.length - 1
+    const strict = after(part, valueOf(part.attribute), inclusive && last)
+    if (strict === undefined) return
+    const equal = parts
+      .slice(0, i)
+      .map((prev) => equalTo(prev, valueOf(prev.attribute)))
+    branches.push(equal.length === 0 ? strict : { and: [...equal, strict] })
   })
+  // Ключ ніколи не `NULL`, тож гілка ключа є завжди.
   return branches.length === 1 ? (branches[0] as Filter) : { or: branches }
+}
+
+/**
+ * Перехід «до значення» (`goTo`): рядки, у яких перший атрибут сортування
+ * не раніше `value` у порядку списку.
+ */
+export function keysetFromValue(orderBy: OrderBy, value: unknown): Filter {
+  const first = sortParts(orderBy)[0]
+  if (first === undefined) throw new TypeError("empty orderBy")
+  return (
+    after(first, value, true) ?? { attribute: first.attribute, op: "isNull" }
+  )
+}
+
+/** Компаратор повного кортежу, як у бази (тести й перевірки ланцюжка). */
+export function tupleComparator(
+  fields: Readonly<Record<string, FieldType>>,
+  orderBy: OrderBy
+): (
+  a: { key: string; values: Values },
+  b: { key: string; values: Values }
+) => number {
+  const parts = sortParts(orderBy)
+  return (a, b) => {
+    for (const p of parts) {
+      const x = p.attribute === "id" ? a.key : a.values[p.attribute]
+      const y = p.attribute === "id" ? b.key : b.values[p.attribute]
+      const xn = isNullish(x)
+      const yn = isNullish(y)
+      if (xn || yn) {
+        if (xn && yn) continue
+        return xn === p.nullsFirst ? -1 : 1
+      }
+      const type =
+        p.attribute === "id" ? "uuid" : (fields[p.attribute] ?? "string")
+      const c = compareTyped(type, x, y)
+      if (c !== 0) return p.direction === "asc" ? c : -c
+    }
+    return 0
+  }
 }
