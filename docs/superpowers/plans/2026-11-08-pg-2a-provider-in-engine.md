@@ -506,7 +506,10 @@ designer, щоб тест-обгортка її бачила. Підготовк
 
 `ensurePostgresCluster` — дві фази в зовнішній транзакції службової бази, що
 бере `pg_advisory_xact_lock(CLUSTER_ADVISORY_LOCK)` і тримає його до кінця
-обох фаз; решта з'єднань працює всередині (Review Focus 5).
+обох фаз; ця транзакція лише тримає замок і читає. Кожен запис фази запису
+комітиться власною транзакцією чи `statement` до наступного кроку, що від
+нього залежить: ролі — до `CREATE DATABASE … OWNER <owner>`, бо інше
+з'єднання незакомічених ролей не бачить (Review Focus 5).
 
 **Запечатаний шаблон** — `datistemplate`, `NOT datallowconn`, власник —
 суперкористувач (з `pg_database` через службову базу). Він довірений без
@@ -582,6 +585,10 @@ designer, щоб тест-обгортка її бачила. Підготовк
     копії шаблону; `USAGE` власника на `extensions`; `better_auth` належить
     `auth`, у копії шаблону її немає; налаштування `search_path` ролі `auth`
     (`pg_db_role_setting`, рядок ролі й рядок ролі в цілі);
+  - повторна перевірка перед `CREATE EXTENSION`: наявна безпечна `extensions`,
+    між фазами (обгортка порту) їй дають `GRANT CREATE` тегованому `owner` —
+    саме `roles.unsafe-schema`, `plpgsql_check` не встановлено (окремо від
+    кейсу колізії, де `CREATE SCHEMA` без `IF NOT EXISTS` падає сам);
   - повторний виклик — `created` порожній, рядки ті самі; третій виклик після
     позначки шаблону — успіх, `created` порожній;
   - шаблон, створений суперкористувачем без позначки (перерваний запуск), —
@@ -676,7 +683,8 @@ designer, щоб тест-обгортка її бачила. Підготовк
   - `async function provisionTemplateShadow(baseUrl: string, template: string, opts?: ProvisionCoLocatedShadowOptions): Promise<CoLocatedShadow>`
     — перевірка `rolcreatedb OR rolsuper`; перевірка шаблону: є,
     `datistemplate`, `NOT datallowconn`, власник — суперкористувач, інакше
-    `ShadowProvisionError` (причина `template`); `CREATE DATABASE "pgdelta_shadow_<suffix>" TEMPLATE "<template>"`;
+    `ShadowTemplateMissingError`; `provisionShadow` пропускає її до `classify`
+    без перетворення на `ShadowCreateRefusedError`; `CREATE DATABASE "pgdelta_shadow_<suffix>" TEMPLATE "<template>"`;
     ім'я, типовий суфікс і `cleanup` — як у `provisionCoLocatedShadow`;
   - `provisionShadow(o, scope)`: шаблон = `o.shadowTemplate ?? PROVIDER_SHADOW_TEMPLATES[scope.provider]`;
     `null` — `provisionCoLocatedShadow`; інакше `provisionTemplateShadow`;
