@@ -901,9 +901,9 @@ FileStore = {
 - **замок на стек:** окремий файл замка на профіль; прогони різних стеків
   не чекають один одного, прогони одного — по черзі;
 - **адреси:** `connection.ts` бере DSN з даних профілю; змінні
-  `SIMETRA_TEST_*` їх перевизначають. У `postgres` суперкористувач
+  `SIMETRA_TEST_*` їх перевизначають. З ПГ-2 у `postgres` суперкористувач
   (`postgres`, порт 54422) лише створює ролі на старті стека й тегованих
-  прогонів. Тести плану й застосування йдуть від ролі з атрибутами
+  прогонів, а тести плану й застосування йдуть від ролі з атрибутами
   `simetra_owner` (`NOSUPERUSER BYPASSRLS CREATEDB`), як у проді: інакше
   суперкористувач сховав би гранти `better_auth`, замок `dropTrigger` і
   режим `plpgsql_check`. Так само на `supabase` тести вже йдуть від
@@ -981,6 +981,10 @@ FileStore = {
 
 ### 10.7 Текст для `AGENTS.md` (затверджує власник)
 
+Текст описує стан з ПГ-2. ПГ-1 вносить проміжний текст: власні команди
+(`db:pg:*`, `test:db:pg`), рядки `supabase-bound` матриці `db` і job
+`db-postgres` (§10.6).
+
 У розділі «Commands and gates» блок команд замінити так:
 
 ```bash
@@ -1031,10 +1035,10 @@ pnpm db:stop
 | Блок | Обсяг | Готово, коли | Залежить від |
 | --- | --- | --- | --- |
 | **ПГ-1. Стек і тест-інфра** | `docker/` (образ, compose, конфіги, ініціалізація Garage); `pnpm db:pg:*`, `test:db:pg`; stack-guard за профілем (замок, адреси, знімок, контейнери й бакети); Vitest-раннер pgTAP; набір базового стану `postgres` (версія, доступні розширення, налаштування стека, відсутність схем Supabase; ролі й шаблон `simetra_template` — з ПГ-2); проєкт `db-supabase` і перенесення в нього тестів, прив'язаних до Supabase; CI: рядки `supabase-bound` у наявній матриці `db` і job `db-postgres` (§10.6); compose `simetra-sb` з Centrifugo (`pnpm db:signals:*`); текст `AGENTS.md` на затвердження | обидва стеки стартують своїми командами; наявний `db` і `db-supabase` зелені на `supabase`; базовий стан `postgres` зелений через Vitest-раннер; прогін, перерваний SIGINT, не лишає ні баз, ні контейнерів, ні бакетів; CI зелений | — |
-| **ПГ-2. Провайдер у схемному рушії** | `postgres` у `DATABASE_PROVIDERS` і мапах за таблицею §4.2; споживачі `PROVIDER_SCHEMAS.supabase` і `SUPABASE_*` — за `scope.provider`; `renderProviderSeed(provider)`; профіль pg-delta `simetra-postgres`; запис пресету §4.1 (тип `Record<DatabaseProvider, …>` його вимагає); ролі §3 з `LOGIN_ROLE_PARENTS` і власником бази; `plpgsql_check` у цілі й шаблон `simetra_template`; власна провізія тіні й копії з шаблону (§3.5); `service: null`; гейт `plan.owner-not-bypassrls`; таблиця ідентичності в тестах — справжня міграція Better Auth закріпленої версії; переведення проєкту `db` на стек `postgres` і тестів — на дані профілю; CI-job `db` на стеку `postgres` | проєкт `db` зелений на `postgres` від ролі з атрибутами власника, `db-supabase` — на `supabase`; каталожний гейт бачить у чужих схемах лише розширення й тригери провізії; тест ролей §3.1 зелений | ПГ-1 |
+| **ПГ-2. Провайдер у схемному рушії** | `postgres` у `DATABASE_PROVIDERS` і мапах за таблицею §4.2; споживачі `PROVIDER_SCHEMAS.supabase` і `SUPABASE_*` — за `scope.provider`; `renderProviderSeed(provider)`; профіль pg-delta `simetra-postgres`; запис пресету §4.1 (тип `Record<DatabaseProvider, …>` його вимагає); ролі §3 з `LOGIN_ROLE_PARENTS` і власником бази; `plpgsql_check` у цілі й шаблон `simetra_template`; власна провізія тіні й копії з шаблону (§3.5); `service: null`; гейт `plan.owner-not-bypassrls`; таблиця ідентичності в тестах — справжня міграція Better Auth закріпленої версії; переведення проєкту `db` на стек `postgres` і тестів — на дані профілю; теговані бази, `SET ROLE` і claims у Vitest-раннері pgTAP (§10.5); CI-job `db` на стеку `postgres` і окремий job `db-supabase` (рядки `supabase-bound` з ПГ-1) | проєкт `db` зелений на `postgres` від ролі з атрибутами власника, `db-supabase` — на `supabase`; каталожний гейт бачить у чужих схемах лише розширення й тригери провізії; тест ролей §3.1 зелений | ПГ-1 |
 | **ПГ-3. Ідентичність** | адресні гранти `better_auth` у `roles` (§4.2); `plan.identity-table-missing`, `plan.identity-trigger-locked`; вибір ролі читання за `anonymousClaim`; адаптер `verifySession` у шаблоні host-а (разом з П4-D) | DB-тести §4.4 на таблиці справжньої міграції зелені (міграція з `database.schemaName: "better_auth"` створює таблиці саме там); план від `simetra_owner` ставить тригери провізії на `better_auth."user"`, а крок зняття тригера відмовляє `plan.identity-trigger-locked`; анонімна сесія читає лише `publicRead: anon`; `runCommand` і читання з claims Better Auth дають той самий `current_user_id()`, що й на `supabase` | ПГ-2 |
 | **ПГ-4. Outbox, споживач, токени** | таблиця, гранти, політики споживача, `NOTIFY`, `prune`; конфіг Centrifugo з designer; `simetra/server/signals` (порт, EdDSA, JWKS); стенд сигналів у тест-інфрі; разом із B8 П4-B — тіла функцій сигналу й `authorizeChannels` | `supabase/roles.sql` і `supabase/tests/provider-base-state.test.sql` знають `simetra_signal_consumer` і `simetra_signals`; тести §5.3 і §7 зелені в обох профілях; на стенді доведено фактом: `simetra.signal_outbox` зі схемою в `outbox_table_name`, `partition_notification_dsn`, `use_try_lock`, вхід `simetra_signals` з налаштуванням ролі; сигнал команди доходить, чужий канал, прострочений токен і токен з чужим `aud` відхилено; JWKS з ключем Ed25519 (`OKP`) приймається; ротація без розриву; `realtime` у стеку `supabase` вимкнено | ПГ-3; B6 П4-B |
-| **ПГ-5. Сховище файлів** | властивість `storage` у T0 з мапінгом; стандартні реквізити виду; облік і межа обсягу; `FileStore`, `fromS3Client`; endpoint-и й звірка в шаблоні host-а | тести §8 зелені на стеку `postgres` з Garage | ПГ-3 (ідентичність у тестах), П4-D (host) |
+| **ПГ-5. Сховище файлів** | властивість `storage` у T0 з мапінгом; стандартні реквізити виду; облік і межа обсягу; `FileStore`, `fromS3Client`; endpoint-и й звірка в шаблоні host-а; спорожнення бакета тегу з об'єктами в прибиральнику stack-guard (§10.3) | тести §8 зелені на стеку `postgres` з Garage | ПГ-3 (ідентичність у тестах), П4-D (host) |
 
 ПГ-5 не залежить від ПГ-4 і може йти паралельно з ним після ПГ-3.
 
