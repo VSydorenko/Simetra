@@ -9,13 +9,16 @@ const APPLY_DIR = join(import.meta.dirname, "..")
 // `.statement(` у виробничих файлах T2 `apply`, крім файлу підготовки кластера
 describe("ApplyDatabase.statement boundary", () => {
   it("is called only from postgres-cluster.ts in production sources of apply", () => {
-    const callers = readdirSync(APPLY_DIR, {
+    const files = readdirSync(APPLY_DIR, {
       recursive: true,
       withFileTypes: true,
     })
       .filter((e) => e.isFile() && e.name.endsWith(".ts"))
       .map((e) => join(e.parentPath, e.name))
       .filter((path) => !path.includes("__tests__"))
+    // Порожній перелік (перейменована тека) не має проходити вхолосту
+    expect(files.length).toBeGreaterThan(0)
+    const callers = files
       .filter((path) => /\.statement\(/.test(readFileSync(path, "utf8")))
       .map((path) => path.slice(APPLY_DIR.length + 1))
       .filter((path) => path !== "postgres-cluster.ts")

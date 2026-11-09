@@ -34,16 +34,27 @@ function offenders(dir: string, pattern: RegExp): string[] {
 describe("target reads carry no session state", () => {
   // Сторож запитів сам називає `default_transaction_read_only`, щоб
   // відмовити на ньому, тож шукається встановлення, а не ім'я
+  const SESSION_STATE =
+    /set\s+(?:session\s+)?default_transaction_read_only|default_transaction_read_only\s*(?:=|to\b)|onConnect|\breadOnlyPool\b/gi
+  const APPLY_DATABASE = join("schema-engine", "apply-database.ts")
+
   it("no session-level read-only switch or connect hook in the designer", () => {
     expect(
-      offenders(
-        SRC,
-        /set\s+(?:session\s+)?default_transaction_read_only|default_transaction_read_only\s*(?:=|to\b)|onConnect|\breadOnlyPool\b/i
+      offenders(SRC, new RegExp(SESSION_STATE.source, "i")).filter(
+        (path) => path !== APPLY_DATABASE
       )
-        // Лише порт запису знімає режим `off` у прелюдії `statement` (окреме
-        // з'єднання підготовки кластера); читальні шляхи його не торкаються
-        .filter((path) => path !== join("schema-engine", "apply-database.ts"))
     ).toEqual([])
+  })
+
+  // Лише порт запису знімає режим `off` — одним рядком прелюдії `statement`
+  // (окреме з'єднання підготовки кластера). Рахується збіг, а не файл: будь-яке
+  // друге перемикання, `onConnect` чи читальний пул у цьому файлі теж провалить
+  it("apply-database has only the statement prelude's read-only switch", () => {
+    const text = readFileSync(join(SRC, APPLY_DATABASE), "utf8")
+    expect(text.match(SESSION_STATE)).toEqual([
+      "SET default_transaction_read_only",
+    ])
+    expect(text).toContain('"SET default_transaction_read_only = off",')
   })
 
   // Із типовим параметром теж: `pool.query<Row>(…)` — той самий сирий запит

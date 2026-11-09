@@ -118,11 +118,12 @@ export function createApplyDatabase(o: { readOnly: boolean }): ApplyDatabase {
             guarded(() => extractOnTransactionClient(client, scope)),
         }
         try {
-          // Режим запису — теж явно: база з `default_transaction_read_only`
-          // не має ховати запис за налаштуванням. Ізоляція — явно, не з налаштувань бази: кожен оператор бачить
-          // коміти, зроблені до нього. На цьому стоять читання відбитка
-          // після `LOCK TABLE` і пошук `applyId` після advisory lock: за
-          // `REPEATABLE READ` знімок узяв би перший оператор транзакції
+          // Режим запису теж явний: база з `default_transaction_read_only` не
+          // має ховати запис за налаштуванням. Ізоляція також явна, не з
+          // налаштувань бази: кожен оператор бачить коміти, зроблені до нього.
+          // На цьому стоять читання відбитка після `LOCK TABLE` і пошук
+          // `applyId` після advisory lock: за `REPEATABLE READ` знімок узяв би
+          // перший оператор транзакції
           await run(
             o.readOnly
               ? "BEGIN ISOLATION LEVEL READ COMMITTED READ ONLY"
