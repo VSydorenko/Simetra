@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest"
 import {
+  applyChanges,
   canonicalSnapshot,
   compile,
   type CompiledModel,
+  MECHANICS_FUNCTION,
+  mechanicsTriggerName,
+  promoteObject,
   effectsFunctionName,
   effectsTriggerNames,
   platformFunctionSignatures,
@@ -44,6 +48,12 @@ import {
   tagMapping,
   TASK_FILE,
 } from "../../../compiler/__tests__/fixtures/rights"
+import {
+  COUNTERPARTY_ID,
+  counterpartyMapping,
+  promotionProject,
+} from "../../../compiler/__tests__/fixtures/promotion"
+import { uuid } from "../../../compiler/__tests__/helpers"
 import { applyDiagnostic } from "../diagnostic"
 
 /**
@@ -472,6 +482,96 @@ describe("buildPlan", () => {
         ["warning", { source: "grants", keys: "stale", more: 0 }],
         ["warning", { source: "globalGrants", keys: "stale", more: 0 }],
       ])
+    }
+  )
+})
+
+describe("buildPlan: row version first (Р11)", () => {
+  const PARTS = { module: false, contacts: false, invoice: false }
+
+  /** Промоція з кроками даних на `app.counterparties`; ціль — її стан «до». */
+  async function dataPromotion() {
+    const files = promotionProject(PARTS)
+    const before = (await compile(files)).model!
+    const result = await promoteObject(files, counterpartyMapping(PARTS), {
+      schemaPath: (file, schemaFile) => `schemas-of/${file}/${schemaFile}`,
+      newId: (() => {
+        let n = 900_000
+        return () => uuid(++n)
+      })(),
+    })
+    const desired = (await compile(applyChanges(files, result.changes))).model!
+    return {
+      before,
+      desired,
+      records: [
+        {
+          record: result.record!,
+          file: `plans/${COUNTERPARTY_ID}.promotion.json`,
+        },
+      ] satisfies PromotionInput[],
+    }
+  }
+
+  /** Двигун, чия жива ціль має `app.counterparties` з живою механікою. */
+  function engineWithMechanics(sequence: boolean): SchemaEngine {
+    const base = fakeEngine([])
+    const table = {
+      schema: "app",
+      name: "counterparties",
+    } as CatalogModel["tables"][number]
+    const unit = (identity: string, cls: string, sql: string) =>
+      ({ identity, class: cls, sql }) as CatalogModel["units"][number]
+    const model: CatalogModel = {
+      tables: [table],
+      enumTypes: [],
+      units: [
+        unit(
+          `trigger:app.counterparties.${mechanicsTriggerName("counterparties")}`,
+          "trigger",
+          `CREATE TRIGGER x BEFORE INSERT OR UPDATE ON app.counterparties FOR EACH ROW EXECUTE FUNCTION ${MECHANICS_FUNCTION.schema}.${MECHANICS_FUNCTION.name}()`
+        ),
+        ...(sequence
+          ? [unit("sequence:simetra.row_version", "sequence", "")]
+          : []),
+      ],
+    }
+    return new Proxy(base, {
+      get: (target, name) =>
+        name === "extract"
+          ? () =>
+              Promise.resolve({
+                model,
+                catalog: {} as EngineCatalog,
+                diagnostics: [],
+                unpopulated: [],
+              })
+          : target[name as keyof SchemaEngine],
+    })
+  }
+
+  it.each([
+    { sequence: false, refused: true },
+    { sequence: true, refused: false },
+  ])(
+    "data steps on a live mechanics table (sequence present: $sequence)",
+    async ({ sequence, refused }) => {
+      const { before, desired, records } = await dataPromotion()
+      const target = await fakeTarget(before, { notCopies: [] })
+      const outcome = await buildPlan(
+        engineWithMechanics(sequence),
+        { reader: target.reader, scratch: emptyScratch },
+        desired,
+        { target: { url: "postgres://target" } },
+        records
+      ).catch((e: unknown) => e)
+      const codes = (
+        outcome as { diagnostics?: { code: string }[] }
+      ).diagnostics?.map((d) => d.code)
+      if (refused) {
+        expect(outcome).toMatchObject({ status: "refused" })
+        expect(codes).toContain("plan.row-version-first")
+      } else expect(codes ?? []).not.toContain("plan.row-version-first")
     }
   )
 })

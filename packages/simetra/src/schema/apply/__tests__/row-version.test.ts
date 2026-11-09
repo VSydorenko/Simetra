@@ -204,19 +204,28 @@ describe("planRowVersionSteps", () => {
     expect(plan({})).toEqual([])
   })
 
-  it("engine steps that recreate the sequence seed everything and write the epoch", () => {
-    const steps = plan({
-      live: live({ tables: ["a", "b"], touched: ["a", "b"], sequence: true }),
-      model: model("a", "b"),
-      engineSteps: [
-        engine({ destroys: ["sequence:simetra.row_version"] }),
-        engine({ produces: ["sequence:simetra.row_version"] }),
-      ],
-    })
-    expect(classes(steps)).toEqual(["validationScan", "catalogOnly"])
-    expect(steps[0]!.lockedTables.map((x) => x.name)).toEqual(["a", "b"])
-    expect(steps[0]!.sql).toContain("ALTER SEQUENCE")
-  })
+  it.each([
+    {
+      case: "destroys",
+      steps: [engine({ destroys: ["sequence:simetra.row_version"] })],
+    },
+    {
+      case: "produces",
+      steps: [engine({ produces: ["sequence:simetra.row_version"] })],
+    },
+  ])(
+    "engine steps that only $case the sequence seed everything and write the epoch",
+    ({ steps }) => {
+      const result = plan({
+        live: live({ tables: ["a", "b"], touched: ["a", "b"], sequence: true }),
+        model: model("a", "b"),
+        engineSteps: steps,
+      })
+      expect(classes(result)).toEqual(["validationScan", "catalogOnly"])
+      expect(result[0]!.lockedTables.map((x) => x.name)).toEqual(["a", "b"])
+      expect(result[0]!.sql).toContain("ALTER SEQUENCE")
+    }
+  )
 
   it("a table that the plan destroys is not read by the seed", () => {
     const steps = plan({
