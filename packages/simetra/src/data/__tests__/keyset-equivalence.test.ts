@@ -10,6 +10,7 @@ import {
   compileFilter,
   fieldInfoOf,
   filterCollator,
+  nullableOf,
 } from "../store/filter"
 import {
   FILTER_ROWS,
@@ -91,71 +92,89 @@ const ORDERS: [string, OrderBy][] = [
   ["the key alone", []],
 ]
 
-describe("keysetFilter against the full-view comparator", () => {
-  it.each(ORDERS)("%s", (_, orderBy) => {
-    const compare = compareRows(orderBy, info, "ref", collator)
-    const sorted = [...ROWS].sort(compare)
-    const cursors = [
-      0,
-      1,
-      7,
-      Math.floor(sorted.length / 2),
-      sorted.length - 2,
-      sorted.length - 1,
-      ...sorted.flatMap((row, i) =>
-        orderBy.some((e) => row[e.attribute] === null) && i % 40 === 0
-          ? [i]
-          : []
-      ),
-    ]
-    for (const at of cursors) {
-      const row = sorted[at]!
-      for (const direction of ["after", "before"] as const) {
-        const cursor: KeysetCursor = {
-          values: row,
-          key: row.ref as string,
-          direction,
-        }
-        const filter: Filter = keysetFilter(orderBy, cursor, "ref")
-        const test = compileFilter(filter, info, collator)
-        const expected = (
-          direction === "after" ? sorted.slice(at + 1) : sorted.slice(0, at)
-        ).map((r) => r.ref)
-        const passed = sorted.filter(test).map((r) => r.ref)
-        expect({ at, direction, passed }).toEqual({
-          at,
-          direction,
-          passed: expected,
-        })
-      }
-    }
-  })
+/**
+ * Колонки каталогу фікстури необов'язкові; обов'язкову колонку моделюємо
+ * вибіркою рядків без NULL і `nullable` = «ні»: так гілок `isNull` немає, а
+ * множина збігається з порядком.
+ */
+const MODES = [
+  { name: "optional columns", required: false },
+  { name: "required columns", required: true },
+]
 
-  it("pages the fixture through NULL without loss or duplicates", () => {
-    const orderBy: OrderBy = [
-      term("day", "desc", "last"),
-      term("amount", "asc"),
-      term("ref", "desc"),
-    ]
-    const compare = compareRows(orderBy, info, "ref", collator)
-    const all = [...FILTER_ROWS].sort(compare).map((r) => r.ref)
-    const out: unknown[] = []
-    let rest = [...FILTER_ROWS].sort(compare)
-    while (rest.length > 0) {
-      const page = rest.slice(0, 3)
-      out.push(...page.map((r) => r.ref))
-      const last = page[page.length - 1]!
-      const test = compileFilter(
-        keysetFilter(
-          orderBy,
-          { values: last, key: last.ref as string, direction: "after" },
-          "ref"
+describe.each(MODES)(
+  "keysetFilter against the full-view comparator: $name",
+  ({ required }) => {
+    it.each(ORDERS)("%s", (_, orderBy) => {
+      const compare = compareRows(orderBy, info, "ref", collator)
+      const nullable = required ? () => false : nullableOf(info)
+      const rows = required
+        ? ROWS.filter((row) => orderBy.every((e) => row[e.attribute] != null))
+        : ROWS
+      const sorted = [...rows].sort(compare)
+      const cursors = [
+        0,
+        1,
+        7,
+        Math.floor(sorted.length / 2),
+        sorted.length - 2,
+        sorted.length - 1,
+        ...sorted.flatMap((row, i) =>
+          orderBy.some((e) => row[e.attribute] === null) && i % 40 === 0
+            ? [i]
+            : []
         ),
-        info,
-        collator
-      )
-      rest = FILTER_ROWS.filter(test).sort(compare)
-    }
-    expect(out).toEqual(all)
-  })
-})
+      ]
+      for (const at of cursors) {
+        const row = sorted[at]!
+        for (const direction of ["after", "before"] as const) {
+          const cursor: KeysetCursor = {
+            values: row,
+            key: row.ref as string,
+            direction,
+          }
+          const filter: Filter = keysetFilter(orderBy, cursor, "ref", nullable)
+          const test = compileFilter(filter, info, collator)
+          const expected = (
+            direction === "after" ? sorted.slice(at + 1) : sorted.slice(0, at)
+          ).map((r) => r.ref)
+          const passed = sorted.filter(test).map((r) => r.ref)
+          expect({ at, direction, passed }).toEqual({
+            at,
+            direction,
+            passed: expected,
+          })
+        }
+      }
+    })
+
+    it("pages the fixture through NULL without loss or duplicates", () => {
+      const orderBy: OrderBy = [
+        term("day", "desc", "last"),
+        term("amount", "asc"),
+        term("ref", "desc"),
+      ]
+      const compare = compareRows(orderBy, info, "ref", collator)
+      const all = [...FILTER_ROWS].sort(compare).map((r) => r.ref)
+      const out: unknown[] = []
+      let rest = [...FILTER_ROWS].sort(compare)
+      while (rest.length > 0) {
+        const page = rest.slice(0, 3)
+        out.push(...page.map((r) => r.ref))
+        const last = page[page.length - 1]!
+        const test = compileFilter(
+          keysetFilter(
+            orderBy,
+            { values: last, key: last.ref as string, direction: "after" },
+            "ref",
+            nullableOf(info)
+          ),
+          info,
+          collator
+        )
+        rest = FILTER_ROWS.filter(test).sort(compare)
+      }
+      expect(out).toEqual(all)
+    })
+  }
+)

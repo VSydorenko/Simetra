@@ -36,7 +36,11 @@ const isNullish = (value: unknown) => value === null || value === undefined
 const isNull = (attribute: string): Filter => ({ attribute, op: "isNull" })
 
 /** Терми порядку: колонки запиту й ключ останнім (його додає сервер, як `orderClause` T3). */
-function termsOf(orderBy: OrderBy, keyName: string): Term[] {
+function termsOf(
+  orderBy: OrderBy,
+  keyName: string,
+  nullable: (attribute: string) => boolean
+): Term[] {
   const terms: Term[] = orderBy.map((entry) => ({
     attribute: entry.attribute,
     desc: entry.direction === "desc",
@@ -44,7 +48,7 @@ function termsOf(orderBy: OrderBy, keyName: string): Term[] {
     nullsFirst:
       (entry.nulls ?? (entry.direction === "asc" ? "last" : "first")) ===
       "first",
-    nullable: entry.attribute !== keyName,
+    nullable: entry.attribute !== keyName && nullable(entry.attribute),
   }))
   // Порядок, що вже закінчується ключем, ключ удруге не дописує.
   if (terms[terms.length - 1]?.attribute !== keyName) {
@@ -119,16 +123,20 @@ function build(terms: readonly Term[], values: readonly unknown[]): Filter {
  * ends with it): a leading bound on the first column and a flat `OR` of
  * per-column branches, of constant depth. `before` is the mirror of `after`.
  * A NULL leading-column value yields the exact bound for where `nulls` puts
- * NULL, or no bound when every row qualifies. Throws `TypeError` when the
+ * NULL, or no bound when every row qualifies. `nullable` says which
+ * attributes may hold NULL: only those get `isNull` branches, so the leading
+ * bound of a required column stays a plain range the database can use as an
+ * index condition. The key is never nullable. Throws `TypeError` when the
  * cursor has no key.
  */
 export function keysetFilter(
   orderBy: OrderBy,
   cursor: KeysetCursor,
-  keyName: string
+  keyName: string,
+  nullable: (attribute: string) => boolean
 ): Filter {
   if (isNullish(cursor.key)) throw new TypeError("keyset cursor has no key")
-  const forward = termsOf(orderBy, keyName)
+  const forward = termsOf(orderBy, keyName, nullable)
   const terms =
     cursor.direction === "after" ? forward : forward.map((t) => mirrored(t))
   const values = forward.map((term) =>
@@ -150,12 +158,13 @@ const nodesOf = (filter: Filter): number =>
  * The most nodes a keyset condition of this order can have, over both
  * directions and every NULL / non-NULL pattern of the cursor row. The window
  * checks a user filter against this worst case, so a page never fails on the
- * server for the cursor it happens to hold (spec §6.4). `orderBy` is the
- * query order without the key.
+ * server for the cursor it happens to hold (spec §6.4). Assumes every column
+ * nullable, so it bounds the tree of any nullability. `orderBy` is the query
+ * order without the key.
  */
 export function keysetNodesMax(orderBy: OrderBy): number {
   const key = "\u0000key"
-  const terms = termsOf(orderBy, key)
+  const terms = termsOf(orderBy, key, () => true)
   let max = 0
   for (const direction of ["after", "before"] as const) {
     const used = direction === "after" ? terms : terms.map((t) => mirrored(t))

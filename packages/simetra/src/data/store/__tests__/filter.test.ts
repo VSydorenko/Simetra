@@ -13,6 +13,7 @@ import {
   evaluateFilter,
   fieldInfoOf,
   filterCollator,
+  nullableOf,
 } from "../filter"
 import type { Values } from "../types"
 import {
@@ -196,7 +197,8 @@ describe("checkFilterBudget", () => {
         keysetFilter(
           orderBy,
           { values: FILTER_ROWS[0]!, key: key(1), direction: "after" },
-          "ref"
+          "ref",
+          nullableOf(info)
         ),
       ],
     }

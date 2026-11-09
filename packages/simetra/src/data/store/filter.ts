@@ -600,3 +600,15 @@ export function compareRows(
     return 0
   }
 }
+
+/**
+ * Whether a field of the catalog entry may hold NULL: an optional attribute
+ * does, a required one, the key and the version do not. The keyset condition
+ * takes `isNull` branches only for these (P4-B spec §6.4).
+ */
+export function nullableOf(info: FieldInfo): (name: string) => boolean {
+  return (name) => {
+    const attribute = info.get(name)?.attribute
+    return attribute !== undefined && !attribute.required
+  }
+}

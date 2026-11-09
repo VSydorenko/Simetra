@@ -27,6 +27,7 @@ import {
   compileFilter,
   fieldInfoOf,
   filterCollator,
+  nullableOf,
 } from "../../src/data/store/filter"
 import { executeRead, prepareRead } from "../../src/server/read"
 import { withRollback } from "./connection"
@@ -265,7 +266,8 @@ describe("T4 filter evaluator against the T3 read builder", () => {
           where = keysetFilter(
             orderBy,
             { values: last, key: last.ref as string, direction: "after" },
-            "ref"
+            "ref",
+            nullableOf(info)
           )
         }
         expect(paged, name).toEqual(expected)

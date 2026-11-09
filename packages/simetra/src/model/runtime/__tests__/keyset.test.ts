@@ -10,6 +10,8 @@ import {
 import { keysetFilter, keysetNodesMax, type KeysetCursor } from "../keyset"
 
 const KEY = "ref"
+const NULLABLE = () => true
+const REQUIRED = () => false
 
 const c = (attribute: string, op: string, value?: unknown): Filter =>
   value === undefined
@@ -189,12 +191,59 @@ describe("keysetFilter", () => {
       c(KEY, "gt", "k"),
     ],
   ])("%s", (_, orderBy, cursor, expected) => {
-    expect(keysetFilter(orderBy, cursor, KEY)).toEqual(expected)
+    expect(keysetFilter(orderBy, cursor, KEY, NULLABLE)).toEqual(expected)
+  })
+
+  it.each<[string, OrderBy, KeysetCursor, (a: string) => boolean, Filter]>([
+    [
+      "required column, default nulls last, after: a plain range",
+      A_LAST,
+      after({ a: 5 }),
+      REQUIRED,
+      and(
+        c("a", "gte", 5),
+        or(c("a", "gt", 5), and(c("a", "eq", 5), c(KEY, "gt", "k")))
+      ),
+    ],
+    [
+      "required column descending, before: a plain range",
+      [{ attribute: "a", direction: "desc" }],
+      before({ a: 5 }),
+      REQUIRED,
+      and(
+        c("a", "gte", 5),
+        or(c("a", "gt", 5), and(c("a", "eq", 5), c(KEY, "lt", "k")))
+      ),
+    ],
+    [
+      "only the optional column of two keeps its NULL branches",
+      [
+        { attribute: "a", direction: "asc" },
+        { attribute: "b", direction: "asc" },
+      ],
+      after({ a: 1, b: 2 }),
+      (attribute) => attribute === "b",
+      and(
+        c("a", "gte", 1),
+        or(
+          c("a", "gt", 1),
+          and(c("a", "eq", 1), or(c("b", "gt", 2), c("b", "isNull"))),
+          and(c("a", "eq", 1), c("b", "eq", 2), c(KEY, "gt", "k"))
+        )
+      ),
+    ],
+  ])("%s", (_, orderBy, cursor, nullable, expected) => {
+    expect(keysetFilter(orderBy, cursor, KEY, nullable)).toEqual(expected)
   })
 
   it("refuses a cursor without a key", () => {
     expect(() =>
-      keysetFilter(A_LAST, { ...after({ a: 1 }), key: undefined! }, KEY)
+      keysetFilter(
+        A_LAST,
+        { ...after({ a: 1 }), key: undefined! },
+        KEY,
+        NULLABLE
+      )
     ).toThrow(TypeError)
   })
 })
@@ -220,7 +269,10 @@ function orders(n: number): OrderBy[] {
 }
 
 /** Перебір напрямів і NULL / не-NULL курсора: незалежний від `keysetNodesMax`. */
-function enumerated(orderBy: OrderBy): Filter[] {
+function enumerated(
+  orderBy: OrderBy,
+  nullable: (attribute: string) => boolean = NULLABLE
+): Filter[] {
   const out: Filter[] = []
   for (const direction of ["after", "before"] as const) {
     for (let mask = 0; mask < 1 << orderBy.length; mask++) {
@@ -228,7 +280,9 @@ function enumerated(orderBy: OrderBy): Filter[] {
       orderBy.forEach((entry, i) => {
         values[entry.attribute] = (mask >> i) & 1 ? null : 7
       })
-      out.push(keysetFilter(orderBy, { values, key: "k", direction }, KEY))
+      out.push(
+        keysetFilter(orderBy, { values, key: "k", direction }, KEY, nullable)
+      )
     }
   }
   return out
@@ -280,6 +334,17 @@ describe("keyset depth and budget", () => {
         keysetNodesMax(orderBy) !== Math.max(...enumerated(orderBy).map(nodes))
     )
     expect(mismatches).toEqual([])
+  })
+
+  it("keysetNodesMax bounds the tree of any nullability", () => {
+    const over = ALL.filter((orderBy) =>
+      [REQUIRED, (a: string) => a === "c0", (a: string) => a !== "c0"].some(
+        (nullable) =>
+          Math.max(...enumerated(orderBy, nullable).map(nodes)) >
+          keysetNodesMax(orderBy)
+      )
+    )
+    expect(over).toEqual([])
   })
 
   /** Фільтр глибини 7 рівно з `count` вузлів. */
