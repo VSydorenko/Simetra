@@ -26,9 +26,9 @@ export function executeGrants(
   // Призначення без ролі в профілі (`null`) ні відкликати, ні надати нічого
   const roles = purposes
     .map((purpose) => grantRole(purpose, provider))
-    .filter((role): role is string => role !== null)
+    .filter((role): role is string => typeof role === "string")
   const revoked = Object.values(apiRoles)
-    .filter((role): role is string => role !== null)
+    .filter((role): role is string => typeof role === "string")
     .filter((role) => !roles.includes(role))
   return [
     `REVOKE EXECUTE ON FUNCTION ${signature} FROM PUBLIC;`,
@@ -51,9 +51,13 @@ export function grantRole(
   purpose: GrantPurpose,
   provider: DatabaseProvider
 ): string | null {
-  return isPlatformPurpose(purpose)
-    ? PLATFORM_ROLES[purpose]
-    : PROVIDER_API_ROLES[provider][purpose]
+  // `?? null`: відсутній ключ мапи (`undefined`) не має просочитися в SQL
+  // як `"undefined"` — він означає те саме, що й `null`
+  return (
+    (isPlatformPurpose(purpose)
+      ? PLATFORM_ROLES[purpose]
+      : PROVIDER_API_ROLES[provider][purpose]) ?? null
+  )
 }
 
 function isPlatformPurpose(

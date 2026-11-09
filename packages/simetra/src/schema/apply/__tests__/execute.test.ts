@@ -24,7 +24,7 @@ import {
   type RehearsalProof,
   type ProviderLockSet,
   type RehearsalReport,
-  SUPABASE_LOCKS,
+  PROVIDER_LOCKS,
 } from "simetra/schema"
 import {
   localize,
@@ -72,13 +72,12 @@ function step(id: string, sql: string, over: Partial<PlanStep> = {}): PlanStep {
 }
 
 /** Перелік провайдера, який план прочитав з цілі: таблиць немає. */
-const NO_PROVIDER_TABLES: ProviderLockSet[] = SUPABASE_LOCKS.sources.map(
-  (source) => ({
+const NO_PROVIDER_TABLES: ProviderLockSet[] =
+  PROVIDER_LOCKS.supabase.sources.map((source) => ({
     setting: source.setting,
     statements: [...source.statements],
     tables: [],
-  })
-)
+  }))
 
 /** Хеш плану для звіту з доказів фейкової репетиції. */
 const PLAN_HASH = "e".repeat(64)

@@ -13,7 +13,7 @@ import {
   readProviderLocks,
   readServerFacts,
   readSessionSearchPath,
-  SUPABASE_LOCKS,
+  PROVIDER_LOCKS,
   tableKey,
   type ApplyDesired,
   type CatalogFingerprint,
@@ -182,7 +182,7 @@ async function planFor(
     locks: locksOf(steps),
     implicitLocks: [],
     providerLocks: await reader.transaction({ url }, "rollback", (tx) =>
-      readProviderLocks(tx, "postgres", SUPABASE_LOCKS)
+      readProviderLocks(tx, "postgres", PROVIDER_LOCKS.supabase)
     ),
     foreignKeys: { subjects: [], live: [] },
     preamble: [],
@@ -700,7 +700,7 @@ describe("plpgsql_check", () => {
               providerLocks: await reader.transaction(
                 { url: as.toString() },
                 "rollback",
-                (tx) => readProviderLocks(tx, NOUSAGE, SUPABASE_LOCKS)
+                (tx) => readProviderLocks(tx, NOUSAGE, PROVIDER_LOCKS.supabase)
               ),
             }),
             options
@@ -734,7 +734,8 @@ describe("plpgsql_check", () => {
                 providerLocks: await reader.transaction(
                   { url: as.toString() },
                   "rollback",
-                  (tx) => readProviderLocks(tx, NOUSAGE, SUPABASE_LOCKS)
+                  (tx) =>
+                    readProviderLocks(tx, NOUSAGE, PROVIDER_LOCKS.supabase)
                 ),
               }),
               options

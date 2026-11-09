@@ -501,6 +501,7 @@ async function extractFrom(
     planOptions.baseline
   )
   const { model, issues } = mapModel(view, {
+    provider: scope.provider,
     produced: producedBy(result.factBase, view, planOptions),
     parse: await loadSqlParser(),
     defaults: aclDefaultsOf(view, await currentRole(pool)),
@@ -619,7 +620,10 @@ async function planAndRun<T>(
       targetPool,
       shadowPool,
       [
-        { name: "provider-seed.sql", sql: renderProviderSeed() },
+        {
+          name: "provider-seed.sql",
+          sql: renderProviderSeed(scope.provider),
+        },
         { name: "desired.sql", sql: desiredSql },
       ],
       {
@@ -736,7 +740,7 @@ async function reproduce(
 
 /**
  * Тіло копії без її прибирання. Засів — так само, як бажана тінь у
- * `planAndRun`, і план засіву відкидається: лише `renderProviderSeed()` замало,
+ * `planAndRun`, і план засіву відкидається: лише `renderProviderSeed` замало,
  * бо заглушки `auth.users` і `storage.objects` дає `seedAssumedSchemas`, а без
  * них тригер чи політика застосунку на поверхні провайдера не відтворилися б.
  * Стан цілі відтворює план двигуна «копія → ціль» з опціями копії, як `plan`
@@ -758,7 +762,12 @@ async function cloneAndRun<T>(
       await planSchemaFiles(
         targetPool,
         clonePool,
-        [{ name: "provider-seed.sql", sql: renderProviderSeed() }],
+        [
+          {
+            name: "provider-seed.sql",
+            sql: renderProviderSeed(scope.provider),
+          },
+        ],
         {
           profile: scopeProfile(scope),
           seedAssumedSchemas: true,

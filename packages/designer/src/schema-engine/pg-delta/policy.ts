@@ -5,7 +5,7 @@ import {
   type IntegrationProfile,
   type Policy,
 } from "@supabase/pg-delta"
-import { SUPABASE_EXTENSIONS, type EngineScope } from "simetra/schema"
+import { PROVIDER_UNMANAGED_EXTENSIONS, type EngineScope } from "simetra/schema"
 import { PROVIDER_SCHEMAS } from "simetra/model"
 
 /**
@@ -22,14 +22,17 @@ import { PROVIDER_SCHEMAS } from "simetra/model"
  * генерація пише одиницею лише відмінність цілі від пресету.
  */
 export function scopePolicy(scope: EngineScope): Policy {
-  const inside = [...scope.schemas, ...PROVIDER_SCHEMAS.supabase]
+  const inside = [...scope.schemas, ...PROVIDER_SCHEMAS[scope.provider]]
   const policy: Policy = {
     id: "simetra-scope",
     extends: [supabasePolicy],
     filter: [
       {
         match: {
-          all: [{ kind: "extension" }, { name: [...SUPABASE_EXTENSIONS] }],
+          all: [
+            { kind: "extension" },
+            { name: [...PROVIDER_UNMANAGED_EXTENSIONS[scope.provider]] },
+          ],
         },
         action: "exclude",
       },

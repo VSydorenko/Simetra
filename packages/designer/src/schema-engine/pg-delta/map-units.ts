@@ -8,8 +8,12 @@ import {
   type StableId,
 } from "@supabase/pg-delta"
 import { readSqlUnits, type SqlParser } from "simetra/compiler"
-import { quoteIdent, type CatalogUnit } from "simetra/model"
-import { SUPABASE_PUBLIC_SCHEMA_GRANTS } from "simetra/schema"
+import {
+  quoteIdent,
+  type CatalogUnit,
+  type DatabaseProvider,
+} from "simetra/model"
+import { PROVIDER_PUBLIC_SCHEMA_GRANTS } from "simetra/schema"
 import { unknownKeys, type MappingIssue } from "./map-tables"
 
 /**
@@ -189,14 +193,21 @@ function defaultsFor(target: StableId, defaults: AclDefaults): DefaultEntry[] {
  * тінь засіяна саме ним, тож рівне пресету — не одиниця застосунку, а
  * відмінність від нього — явна одиниця (спека промоції §9.9).
  */
-function presetGrants(schema: StableId): typeof SUPABASE_PUBLIC_SCHEMA_GRANTS {
+function presetGrants(
+  schema: StableId,
+  provider: DatabaseProvider
+): (typeof PROVIDER_PUBLIC_SCHEMA_GRANTS)[DatabaseProvider] {
   return schema.kind === "schema" && schema.name === "public"
-    ? SUPABASE_PUBLIC_SCHEMA_GRANTS
+    ? PROVIDER_PUBLIC_SCHEMA_GRANTS[provider]
     : []
 }
 
 /** Права, які пара (об'єкт, отримувач) має без жодного `GRANT`. */
-function expectedPrivileges(fact: Fact, defaults: AclDefaults): PrivilegeSet {
+function expectedPrivileges(
+  fact: Fact,
+  defaults: AclDefaults,
+  provider: DatabaseProvider
+): PrivilegeSet {
   const id = fact.id as Extract<StableId, { kind: "acl" }>
   const ownerDefault = fact.payload._ownerDefault
   if (Array.isArray(ownerDefault))
@@ -207,7 +218,9 @@ function expectedPrivileges(fact: Fact, defaults: AclDefaults): PrivilegeSet {
   )
   const builtin =
     id.grantee === "PUBLIC" ? PUBLIC_DEFAULT[id.target.kind] : undefined
-  const preset = presetGrants(id.target).find((g) => g.grantee === id.grantee)
+  const preset = presetGrants(id.target, provider).find(
+    (g) => g.grantee === id.grantee
+  )
   // Об'єднання, а не вибір: ADP схеми лише додає права, а для рядка схеми
   // двигун синтезує порожній маркер `PUBLIC`, який відкликання не означає —
   // «або-або» губило б вбудований `EXECUTE`/`USAGE` і явний `REVOKE … FROM PUBLIC`
@@ -244,6 +257,7 @@ const sameSet = (a: readonly string[], b: readonly string[]) =>
 function aclStatement(
   fact: Fact,
   defaults: AclDefaults,
+  provider: DatabaseProvider,
   issues: MappingIssue[]
 ): string[] {
   unknownKeys(fact, issues)
@@ -259,7 +273,7 @@ function aclStatement(
   }
   const privileges = strings(fact.payload.privileges)
   const grantable = strings(fact.payload.grantable)
-  const expected = expectedPrivileges(fact, defaults)
+  const expected = expectedPrivileges(fact, defaults, provider)
   if (
     sameSet(privileges, expected.privileges) &&
     sameSet(grantable, expected.grantable)
@@ -352,11 +366,12 @@ export function revokedDefaultStatements(
  */
 export function revokedPresetStatements(
   view: FactBase,
-  schema: StableId
+  schema: StableId,
+  provider: DatabaseProvider
 ): string[] {
   const target = grantTarget(schema)
   if (target === undefined) return []
-  return presetGrants(schema)
+  return presetGrants(schema, provider)
     .filter(
       (g) =>
         view.get({ kind: "acl", target: schema, grantee: g.grantee }) ===
@@ -447,6 +462,7 @@ export function unitStatements(
   fact: Fact,
   produced: ProducedBy,
   defaults: AclDefaults,
+  provider: DatabaseProvider,
   issues: MappingIssue[]
 ): string[] {
   switch (fact.id.kind) {
@@ -464,7 +480,7 @@ export function unitStatements(
         })
       return [String(fact.payload.def)]
     case "acl":
-      return aclStatement(fact, defaults, issues)
+      return aclStatement(fact, defaults, provider, issues)
     case "sequence": {
       // Текст послідовності — з дії двигуна, а `OWNED BY` — окрема дія без
       // цілі, тож її форму звіряємо з payload тут

@@ -9,9 +9,9 @@ import {
 } from "@supabase/pg-delta"
 import { describe, expect, it } from "vitest"
 import {
-  SUPABASE_EXTENSIONS,
-  SUPABASE_ROLES,
-  SUPABASE_SURFACES,
+  PROVIDER_UNMANAGED_EXTENSIONS,
+  PROVIDER_SYSTEM_ROLES,
+  PROVIDER_SURFACES,
 } from "simetra/schema"
 import { PROVIDER_SCHEMAS } from "simetra/model"
 import { scopePolicy } from "../pg-delta/policy"
@@ -116,24 +116,25 @@ describe("provider preset matches the pinned engine", () => {
     // свого пресету; перепис — лише перелік пресету
     const scope = { schemas: ["app"], provider: "supabase" } as const
     expect(excludedExtensions(scopePolicy(scope))).toEqual(
-      new Set(SUPABASE_EXTENSIONS)
+      new Set(PROVIDER_UNMANAGED_EXTENSIONS.supabase)
     )
     for (const name of excludedExtensions(supabasePolicy))
-      expect(SUPABASE_EXTENSIONS, `engine preset excludes ${name}`).toContain(
-        name
-      )
+      expect(
+        PROVIDER_UNMANAGED_EXTENSIONS.supabase,
+        `engine preset excludes ${name}`
+      ).toContain(name)
   })
 
   it("surfaces match the engine preset", () => {
-    const policies = SUPABASE_SURFACES.filter((s) =>
-      s.classes.includes("policy")
-    ).map((s) => `${s.schema}.${s.table}`)
+    const policies = PROVIDER_SURFACES.supabase
+      .filter((s) => s.classes.includes("policy"))
+      .map((s) => `${s.schema}.${s.table}`)
     expect(new Set(policies)).toEqual(policySurface(supabasePolicy))
     expect(policies.length).toBeGreaterThan(0)
   })
 
   it("trigger surface matches the engine preset", () => {
-    const triggers = SUPABASE_SURFACES.filter((s) =>
+    const triggers = PROVIDER_SURFACES.supabase.filter((s) =>
       s.classes.includes("trigger")
     )
     for (const surface of triggers) expect(surface.table).toBe("*")
@@ -145,12 +146,14 @@ describe("provider preset matches the pinned engine", () => {
 
   it("extension list is not empty", () => {
     // Порожній перелік робив би контракт вище тавтологічним
-    expect(SUPABASE_EXTENSIONS).toContain("pg_graphql")
+    expect(PROVIDER_UNMANAGED_EXTENSIONS.supabase).toContain("pg_graphql")
   })
 
   it("provider roles are the engine's system roles", () => {
-    expect(new Set(SUPABASE_ROLES)).toEqual(ownerRoles(supabasePolicy))
-    expect(SUPABASE_ROLES).toContain("authenticated")
+    expect(new Set(PROVIDER_SYSTEM_ROLES.supabase)).toEqual(
+      ownerRoles(supabasePolicy)
+    )
+    expect(PROVIDER_SYSTEM_ROLES.supabase).toContain("authenticated")
   })
 
   it("default privileges declared for a provider system role are excluded, postgres ones are managed", () => {

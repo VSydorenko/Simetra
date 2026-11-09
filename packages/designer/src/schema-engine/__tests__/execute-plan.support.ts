@@ -23,7 +23,7 @@ import {
   planLocks,
   readProviderLocks,
   readSessionSearchPath,
-  SUPABASE_LOCKS,
+  PROVIDER_LOCKS,
   tableKey,
   type PlanStep,
   type ProviderLockSet,
@@ -256,7 +256,7 @@ export const providerList = (
   createApplyDatabase({ readOnly: true }).transaction(
     { url },
     "rollback",
-    (tx) => readProviderLocks(tx, role, SUPABASE_LOCKS)
+    (tx) => readProviderLocks(tx, role, PROVIDER_LOCKS.supabase)
   )
 
 /** Шлях пошуку сесії цілі — як його записав би план для ревалідації. */

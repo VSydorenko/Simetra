@@ -60,6 +60,26 @@ describe("grant generators on a profile without the service role", () => {
     ])
   })
 
+  // Відсутній ключ мапи ролей під час виконання (`undefined`) має бути
+  // пропущений так само, як `null`, а не надрукований як роль "undefined"
+  it("executeGrants skips a role that is undefined at runtime", () => {
+    const roles = PROVIDER_API_ROLES.postgres as { anonymous?: string | null }
+    const saved = roles.anonymous
+    delete roles.anonymous
+    try {
+      expect(grantRole("anonymous", "postgres")).toBeNull()
+      const sql = executeGrants(
+        "app.f()",
+        ["user", "anonymous"],
+        "postgres"
+      ).join("\n")
+      expect(sql).not.toMatch(/undefined/)
+      expect(sql).toContain("simetra_user")
+    } finally {
+      roles.anonymous = saved
+    }
+  })
+
   describe("the whole reference domain compiled for postgres", () => {
     let units: { sql: string }[]
     beforeAll(async () => {

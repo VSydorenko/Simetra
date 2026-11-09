@@ -47,6 +47,34 @@ async function outOfScope(
 const OUTSIDE =
   "lies outside the boundary the schema engine compares, so a comparison would never see it"
 
+describe("the boundary follows the provider of the project", () => {
+  const postgres = {
+    "project.meta.json": project({
+      defaultSchema: "app",
+      database: { provider: "postgres" },
+    }),
+  }
+
+  it("auth and storage are ordinary schemas under postgres", async () => {
+    const { scope, diagnostics } = await scopeOf(
+      "GRANT SELECT ON auth.t TO simetra_user;\n",
+      postgres
+    )
+    expect(diagnostics).toEqual([])
+    expect(scope.schemas).toEqual(["app", "auth"])
+    expect(scope.provider).toBe("postgres")
+  })
+
+  it("better_auth is a provider schema under postgres", async () => {
+    const messages = await outOfScope(
+      "GRANT SELECT ON better_auth.t TO simetra_user;\n",
+      postgres
+    )
+    expect(messages).toHaveLength(1)
+    expect(messages[0]).toContain("better_auth")
+  })
+})
+
 describe("the boundary takes the target of a unit", () => {
   it("grant target schema joins the scope", async () => {
     // Без цілі гранту `reports` не потрапляла в межу, і фільтр двигуна мовчки

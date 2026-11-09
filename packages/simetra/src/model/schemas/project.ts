@@ -201,7 +201,7 @@ export const PROVIDER_OWNER_ROLES: Readonly<Record<DatabaseProvider, string>> =
  * має в них лише поверхню пресету. Факт T0, бо його потребує і компілятор (T1:
  * доступність недосудного SQL, `SECURITY DEFINER` над RLS), і схема (T2) та
  * designer — один перелік замість копії по ярусах. Порядок зберігається:
- * його читає й `SUPABASE_SURFACES`.
+ * його читає й `PROVIDER_SURFACES`.
  */
 export const PROVIDER_SCHEMAS: Readonly<
   Record<DatabaseProvider, readonly string[]>
