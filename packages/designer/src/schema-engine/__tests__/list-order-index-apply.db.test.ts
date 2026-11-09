@@ -64,6 +64,20 @@ async function recordLiveState(url: string): Promise<void> {
   )
 }
 
+/**
+ * Стара форма тут без області `(description)`: рішення класифікатора залежить
+ * від унікальності старого індексу, а не від його колонок. Заміну префікса
+ * області `(org_id, …)` на `(org_id, …, id)` доводять юніт-тести
+ * `materializeIndexes`.
+ */
+const ROWS = [
+  { id: "00000000-0000-4000-8000-000000000001", description: "b" },
+  { id: "00000000-0000-4000-8000-000000000002", description: "a" },
+]
+
+const rowsOf = (url: string) =>
+  query(url, "select id, description from app.party order by id")
+
 /** Ціль у стані старої платформи: нова форма замінена старою за DDL власника. */
 async function inOldFormTarget(
   unique: boolean,
@@ -75,8 +89,8 @@ async function inOldFormTarget(
     await query(
       asSuperuser(url),
       `insert into app.party (id, description, code) values
-         ('00000000-0000-4000-8000-000000000001', 'b', '1'),
-         ('00000000-0000-4000-8000-000000000002', 'a', '2');
+         ('${ROWS[0]!.id}', '${ROWS[0]!.description}', '1'),
+         ('${ROWS[1]!.id}', '${ROWS[1]!.description}', '2');
        drop index app.${NEW_INDEX};
        create ${unique ? "unique " : ""}index ${OLD_INDEX} on app.party (description);`
     )
@@ -108,9 +122,7 @@ describe.concurrent("list-order index on an existing database", () => {
       expect(
         (await indexDefs(url)).map((d) => d.replace(/^.* USING /, ""))
       ).toEqual(["btree (description, id)"])
-      expect(
-        (await query(url, "select count(*)::int as n from app.party"))[0]?.["n"]
-      ).toBe(2)
+      expect(await rowsOf(url)).toEqual(ROWS)
       // Відбиток стану зелений: повторний план нічого не змінює й без дрейфу
       const again = await plan(url, model)
       expect(again.status).toBe("unchanged")
@@ -127,6 +139,7 @@ describe.concurrent("list-order index on an existing database", () => {
         new RegExp(`DROP INDEX .*${OLD_INDEX}`)
       )
       expect(drop?.class).toBe("relaxation")
+      expect(drop).toBeDefined()
       expect(artifact.requiredPermissions).toContain(drop!.id)
     })
   })
