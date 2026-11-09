@@ -28,6 +28,7 @@ export default defineConfig({
             "**/node_modules/**",
             "**/dist/**",
             "**/*.supabase.db.test.ts",
+            "**/*.postgres.db.test.ts",
           ],
           // Усі тести б'ють в одну базу стеку
           fileParallelism: false,
@@ -52,11 +53,16 @@ export default defineConfig({
       {
         extends: true,
         test: {
-          // Стек профілю postgres: поки на ньому лише базовий стан і
-          // переривання — решта DB-тестів іде на Supabase до перемикання
-          // типового профілю
+          // Стек профілю postgres: базовий стан, переривання й тести, прив'язані
+          // до цього стека (`*.postgres.db.test.ts`); решта DB-тестів іде на
+          // Supabase до перемикання типового профілю
           name: "db-pg",
-          include: ["test/db/pgtap.db.test.ts", "test/db/interrupt.db.test.ts"],
+          include: [
+            "test/db/pgtap.db.test.ts",
+            "test/db/interrupt.db.test.ts",
+            "**/*.postgres.db.test.ts",
+          ],
+          exclude: ["**/node_modules/**", "**/dist/**"],
           fileParallelism: false,
           globalSetup: ["./test/db/stack-guard.postgres.ts"],
         },

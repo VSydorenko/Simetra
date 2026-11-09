@@ -15,6 +15,14 @@ const TEST_SUPPORT_PATTERN = {
     "simetra test support boundary: only packages/designer/**/__tests__/** may import packages/simetra/test/support (designer plan, decision 12).",
 }
 
+// Better Auth і kysely — тестова залежність `simetra` (рішення Р2): designer їх
+// не оголошує, тож production-імпорт зламався б у споживача.
+const TEST_ONLY_AUTH_PATTERN = {
+  regex: "^(?:better-auth|kysely)(?:/|$)",
+  message:
+    "Test-only dependency: better-auth and kysely are devDependencies of simetra for DB tests; designer production sources must not import them (postgres profile plan 2a, decision R2).",
+}
+
 // Студія — єдине місце designer, що імпортує host-фреймворк (спека designer
 // §3.4): CLI, MCP і каталог інструментів лишаються незалежними від нього.
 const STUDIO_ZONE = {
@@ -43,7 +51,7 @@ export const designerZoneConfigs = [
     rules: {
       "@typescript-eslint/no-restricted-imports": [
         "error",
-        { patterns: [TEST_SUPPORT_PATTERN] },
+        { patterns: [TEST_SUPPORT_PATTERN, TEST_ONLY_AUTH_PATTERN] },
       ],
     },
   },

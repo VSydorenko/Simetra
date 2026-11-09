@@ -366,7 +366,12 @@ export function leakMessage(
   )
   const cleanup = changes.flatMap(({ kind, name, change }) => {
     if (change !== "added") return []
-    if (kind === "databases") return [`  DROP DATABASE "${name}" WITH (FORCE);`]
+    // Шаблон без зняття ознаки не видалиться; для звичайної бази рядок безпечний
+    if (kind === "databases")
+      return [
+        `  ALTER DATABASE "${name}" WITH IS_TEMPLATE false;`,
+        `  DROP DATABASE "${name}" WITH (FORCE);`,
+      ]
     // Роль, яку створив тест, видаляє лише суперкористувач стека
     // (testSuperuserUrl): на стеку Supabase у postgres немає ADMIN на неї
     if (kind === "roles")

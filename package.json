@@ -18,7 +18,7 @@
     "db:signals:start": "node scripts/db-stack.mjs start supabase-signals",
     "db:signals:stop": "node scripts/db-stack.mjs stop supabase-signals",
     "test:db": "supabase test db && pnpm --filter simetra test:db && pnpm --filter @simetrajs/designer test:db && pnpm --filter simetra test:db:supabase && pnpm --filter @simetrajs/designer test:db:supabase",
-    "test:db:pg": "pnpm --filter simetra test:db:pg",
+    "test:db:pg": "pnpm --filter simetra test:db:pg && pnpm --filter @simetrajs/designer test:db:pg",
     "format": "turbo format",
     "typecheck": "turbo typecheck",
     "test": "turbo test --concurrency=1",
