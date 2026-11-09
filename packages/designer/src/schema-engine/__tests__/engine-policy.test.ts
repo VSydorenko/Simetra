@@ -6,7 +6,9 @@ import {
   type Fact,
   type Policy,
   type Predicate,
+  type StableId,
 } from "@supabase/pg-delta"
+import { resolveView } from "@supabase/pg-delta/policy"
 import { describe, expect, it } from "vitest"
 import {
   PROVIDER_UNMANAGED_EXTENSIONS,
@@ -14,7 +16,7 @@ import {
   PROVIDER_SURFACES,
 } from "simetra/schema"
 import { PROVIDER_SCHEMAS } from "simetra/model"
-import { scopePolicy } from "../pg-delta/policy"
+import { scopePolicy, scopeProfile } from "../pg-delta/policy"
 
 /**
  * Контракт нейтрального пресету провайдера з закріпленою версією двигуна:
@@ -183,5 +185,151 @@ describe("provider preset matches the pinned engine", () => {
     }
     expect(verdict("supabase_admin")).toBe("exclude")
     expect(verdict("postgres")).toBe("include")
+  })
+})
+
+describe("postgres profile policy", () => {
+  const scope = {
+    schemas: ["app", "simetra"],
+    provider: "postgres",
+  } as const
+  const policy = scopePolicy(scope)
+  const flat = flattenPolicy(policy)
+
+  it("assumes only better_auth, which is a provider schema", () => {
+    expect(flat.assumedSchemas).toEqual(["better_auth"])
+    for (const schema of flat.assumedSchemas)
+      expect(PROVIDER_SCHEMAS.postgres).toContain(schema)
+    // extensions та information_schema — провайдерні, але не припущені
+    expect(flat.assumedSchemas).not.toContain("extensions")
+    expect(flat.assumedSchemas).not.toContain("information_schema")
+  })
+
+  it("excludes the provider's unmanaged extensions", () => {
+    expect(excludedExtensions(policy)).toEqual(
+      new Set(PROVIDER_UNMANAGED_EXTENSIONS.postgres)
+    )
+  })
+
+  it("carries nothing of the Supabase preset", () => {
+    expect(flat.id).toBe("simetra-scope")
+    expect(flat.assumedRoles).toEqual([])
+    expect(flat.assumedPublications).toEqual([])
+    expect(flat.assumedExtensions).toEqual([])
+    expect(flat.assumedDefaultGrants).toEqual([])
+    expect(flat.defaultOwner).toBeUndefined()
+    const text = JSON.stringify(flat.filter)
+    for (const name of [
+      ...PROVIDER_SYSTEM_ROLES.supabase,
+      ...PROVIDER_SCHEMAS.supabase.filter(
+        (s) => !PROVIDER_SCHEMAS.postgres.includes(s)
+      ),
+    ])
+      expect(text, `rules name ${name}`).not.toContain(`"${name}"`)
+    const profile = scopeProfile(scope)
+    expect(profile.id).toBe("simetra-postgres")
+    expect(profile.handlers).toHaveLength(0)
+  })
+
+  it("trigger surface matches PROVIDER_SURFACES", () => {
+    const triggers = PROVIDER_SURFACES.postgres.filter((s) =>
+      s.classes.includes("trigger")
+    )
+    const rule = flat.filter.find(
+      (r) =>
+        r.action === "include" &&
+        "all" in r.match &&
+        r.match.all.some((m) => "kind" in m && list(m.kind).includes("trigger"))
+    )
+    const tables =
+      rule !== undefined && "all" in rule.match
+        ? rule.match.all.flatMap((m) =>
+            "idField" in m && m.idField.field === "table"
+              ? list(m.idField.glob)
+              : []
+          )
+        : []
+    expect(new Set(triggers.map((s) => s.table))).toEqual(new Set(tables))
+    expect(triggerSurfaceSchemas(policy)).toEqual(
+      new Set(triggers.map((s) => s.schema))
+    )
+  })
+
+  describe("verdicts of the managed view", () => {
+    const schema = (name: string): Fact => ({
+      id: { kind: "schema", name },
+      payload: {},
+    })
+    const table = (s: string, name: string): Fact => ({
+      id: { kind: "table", schema: s, name },
+      payload: {},
+    })
+    const userTable = table("better_auth", "user").id
+    const fn: StableId = {
+      kind: "function",
+      schema: "simetra",
+      name: "on_user",
+      args: [],
+    }
+    const trigger: StableId = {
+      kind: "trigger",
+      schema: "better_auth",
+      table: "user",
+      name: "sync",
+    }
+    const acl: StableId = {
+      kind: "acl",
+      target: userTable,
+      grantee: "simetra_owner",
+    }
+    const adp: StableId = {
+      kind: "defaultPrivilege",
+      role: "simetra_owner",
+      schema: "app",
+      objtype: "r",
+      grantee: "simetra_user",
+    }
+
+    const view = resolveView(
+      buildFactBase(
+        [
+          schema("better_auth"),
+          schema("extensions"),
+          schema("app"),
+          schema("simetra"),
+          table("better_auth", "user"),
+          { id: fn, payload: {} },
+          { id: trigger, parent: userTable, payload: {} },
+          { id: acl, payload: {} },
+          { id: adp, payload: {} },
+        ],
+        [
+          { from: trigger, to: userTable, kind: "depends" },
+          { from: trigger, to: fn, kind: "depends" },
+        ],
+        "liveDb",
+        new Set()
+      ),
+      policy
+    )
+
+    it.each([
+      [
+        "trigger on better_auth.user with an edge to simetra",
+        "managed",
+        trigger,
+      ],
+      ["table better_auth.user", "reference-only", userTable],
+      ["acl on better_auth.user", "dropped", acl],
+      ["schema extensions", "dropped", { kind: "schema", name: "extensions" }],
+      ["default privilege of the owner in app", "managed", adp],
+    ] as const)("%s is %s", (_name, verdict, id) => {
+      const actual = !view.has(id)
+        ? "dropped"
+        : view.isReferenceOnly(id)
+          ? "reference-only"
+          : "managed"
+      expect(actual).toBe(verdict)
+    })
   })
 })
