@@ -46,6 +46,9 @@ function standardColumns(obj: unknown): StandardColumnDef[] {
       physicalName: "description",
       type: { type: "String", length: catalog.descriptionLength },
       notNull: false,
+      // Список довідника впорядковують і шукають за найменуванням, тож
+      // індекс походить від виду, а не від налаштувань кожного довідника.
+      indexed: true,
       title: { uk: "Найменування", en: "Description" },
     })
   }

@@ -328,6 +328,8 @@ describe("CustomTable physics round-trip", () => {
     // Далі носії прав отримали денормалізовані копії — нові колонки
     // з `origin.copyOf` та їхні індекси в `item`, `sale` і їхніх ТЧ; без них
     // хеш той самий, що до копій.
+    // Далі стандартне найменування довідника стало `indexed` — пошуковий
+    // індекс `(…, description, id)` у кожній таблиці довідника.
     const derived = {
       tables: physical.tables.filter(
         (t) =>
@@ -346,7 +348,7 @@ describe("CustomTable physics round-trip", () => {
       .update(JSON.stringify(derived))
       .digest("hex")
     expect(digest).toBe(
-      "8af26bfb621d1e98c99250b3ac03267b55b687bde142dc13d02b80829f07a3c0"
+      "e8e2c028273c991bb8e77d0863b90bf582c20aacbf1622bfd1f7eebe3f209f35"
     )
   })
 })
