@@ -22,6 +22,12 @@ export interface PlanNode {
   parent?: string
   loops?: number
   filter?: string
+  /** `Actual Rows` вузла: середнє на цикл, як його віддає Postgres. */
+  rows?: number
+  /** `Rows Removed by Filter` вузла: рядки, прочитані й відкинуті `Filter`. */
+  rowsRemovedByFilter?: number
+  /** `Actual Total Time` вузла (мс) на цикл. */
+  time?: number
 }
 
 /** Одна гілка індексного доступу вузла таблиці. */
@@ -88,6 +94,14 @@ export function planNodes(plan: unknown): PlanNode[] {
   if (typeof loops === "number") node.loops = loops
   const filter = text(plan.Filter)
   if (filter !== undefined) node.filter = filter
+  for (const [key, field] of [
+    ["rows", "Actual Rows"],
+    ["rowsRemovedByFilter", "Rows Removed by Filter"],
+    ["time", "Actual Total Time"],
+  ] as const) {
+    const value = plan[field]
+    if (typeof value === "number") node[key] = value
+  }
   return [node, ...children(plan).flatMap(planNodes)]
 }
 
@@ -102,6 +116,36 @@ export const subPlans = (plan: unknown): PlanNode[] =>
 /** Вузли, що читають таблицю `table`. */
 export const scansOf = (plan: unknown, table: string): PlanNode[] =>
   planNodes(plan).filter((n) => n.relation === table)
+
+/**
+ * Вузли `Sort` / `Incremental Sort`, через які йде читання таблиці `table`:
+ * сортування її видимої множини, з числом рядків на вході (`Actual Rows` ×
+ * цикли дитини). Сортування в `InitPlan` функцій прав не береться — вони не
+ * предки скану таблиці.
+ */
+export const sortsOver = (
+  plan: unknown,
+  table: string
+): { type: string; input: number }[] =>
+  rawPaths(plan)
+    .filter(({ node }) => text(node["Relation Name"]) === table)
+    .flatMap(({ node, path }) =>
+      path.flatMap((ancestor, i) => {
+        const type = text(ancestor["Node Type"])
+        if (type !== "Sort" && type !== "Incremental Sort") return []
+        const child = path[i + 1] ?? node
+        const rows = child["Actual Rows"]
+        const loops = child["Actual Loops"]
+        return [
+          {
+            type,
+            input:
+              (typeof rows === "number" ? rows : 0) *
+              (typeof loops === "number" ? loops : 1),
+          },
+        ]
+      })
+    )
 
 const subtree = (node: Raw): Raw[] => [node, ...children(node).flatMap(subtree)]
 
