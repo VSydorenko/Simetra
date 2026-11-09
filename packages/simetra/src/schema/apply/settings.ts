@@ -58,6 +58,16 @@ async function setLocal(
 }
 
 /**
+ * Підвищення синхронного коміту до `on` для кроків, що пишуть версію з
+ * вимкненими тригерами (блок `versions`, крок даних з `bumpsVersion`): `touch`
+ * синхронного коміту тоді не ставить. Правило те саме, що в `touch`: лише з
+ * `off` і `local`, а `remote_write` і `remote_apply` не знижуються. Один
+ * оператор без `SET LOCAL`, бо умова — на стороні бази.
+ */
+export const RAISE_SYNCHRONOUS_COMMIT_SQL =
+  "SELECT pg_catalog.set_config('synchronous_commit', 'on', true) WHERE pg_catalog.current_setting('synchronous_commit') IN ('off', 'local')"
+
+/**
  * Закріплені налаштування даних: під ними йдуть кроки даних і заміри
  * збереження «до» й «після», тож репетиція й робота рахують вирази й текст
  * значень однаково. Перелік і причини — спека промоції §7.2 «Закріплені

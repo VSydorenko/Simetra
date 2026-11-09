@@ -26,6 +26,7 @@ import {
   type RehearsalReport,
   SUPABASE_LOCKS,
 } from "simetra/schema"
+import { RAISE_SYNCHRONOUS_COMMIT_SQL } from "../settings"
 import {
   localize,
   promotionRecordHash,
@@ -1361,7 +1362,7 @@ describe("executePlan", () => {
     const environment = step(`s${n + 1}`, "GRANT SELECT ON app.n TO anon", {
       origin: "environment",
     })
-    const SYNC = "SET LOCAL synchronous_commit = on"
+    const SYNC = RAISE_SYNCHRONOUS_COMMIT_SQL
 
     // Версії пишуться з вимкненими тригерами, тож `touch` синхронного
     // коміту не ставить: його ставить раннер, і лише за непорожнього блоку
@@ -1425,6 +1426,12 @@ describe("executePlan", () => {
         expect(log).not.toContain("ALTER TABLE app.n DISABLE TRIGGER tg")
         expect(log).not.toContain(bump.sql)
       })
+    })
+
+    // Підвищення умовне (лише з off і local): текст оператора тримає це
+    it("raises synchronous commit only from off and local", () => {
+      expect(SYNC).toContain("IN ('off', 'local')")
+      expect(SYNC).not.toContain("remote_apply")
     })
 
     it("does not touch synchronous commit without a versions block", async () => {

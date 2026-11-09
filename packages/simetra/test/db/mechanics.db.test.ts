@@ -8,6 +8,7 @@ import {
   metaFiles,
   project,
 } from "../../src/compiler/__tests__/helpers"
+import { RAISE_SYNCHRONOUS_COMMIT_SQL } from "../../src/schema/apply/settings"
 import { withRollback } from "./connection"
 
 /**
@@ -216,4 +217,25 @@ describe("row mechanics in Postgres", () => {
       })
     }
   )
+})
+
+// Правило підвищення синхронного коміту раннера те саме, що в `touch`: лише
+// з `off` і `local`; сильніші значення не знижуються
+describe("runner synchronous commit raise", () => {
+  it.each([
+    ["off", "on"],
+    ["local", "on"],
+    ["on", "on"],
+    ["remote_write", "remote_write"],
+    ["remote_apply", "remote_apply"],
+  ])("%s becomes %s", async (from, to) => {
+    await withRollback(async (client) => {
+      await client.query(`SET LOCAL synchronous_commit = ${from}`)
+      await client.query(RAISE_SYNCHRONOUS_COMMIT_SQL)
+      const { rows } = await client.query<{ v: string }>(
+        "SELECT current_setting('synchronous_commit') AS v"
+      )
+      expect(rows[0]!.v).toBe(to)
+    })
+  })
 })

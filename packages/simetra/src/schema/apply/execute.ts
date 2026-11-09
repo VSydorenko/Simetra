@@ -84,6 +84,7 @@ import { readInvalidObjects } from "./validity"
 import {
   CARRIER_STEP_SETTINGS,
   DATA_SETTINGS,
+  RAISE_SYNCHRONOUS_COMMIT_SQL,
   revalidationSettings,
   withLocalSettings,
 } from "./settings"
@@ -970,7 +971,7 @@ async function runAttempt(
   const versions = block("versions")
   if (versions.length > 0) {
     phase("versions")
-    await tx.query("SET LOCAL synchronous_commit = on")
+    await tx.query(RAISE_SYNCHRONOUS_COMMIT_SQL)
     await runVersionSteps(tx, versions, parse, (id) => phase("versions", id))
   }
   // 12. Кроки середовища (спека промоції §7.2) — під налаштуваннями
