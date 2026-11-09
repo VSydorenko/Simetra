@@ -50,39 +50,20 @@
     "zod": "^4.6.7"
   },
   "peerDependencies": {
-    "@tanstack/db": "1.0.0-rc.1.4",
-    "@tanstack/query-core": "^5.90.15",
-    "@tanstack/query-db-collection": "1.5.1",
-    "@tanstack/react-db": "1.0.0-rc.1.4",
     "react": "^19.3.1"
   },
   "peerDependenciesMeta": {
-    "@tanstack/db": {
-      "optional": true
-    },
-    "@tanstack/query-core": {
-      "optional": true
-    },
-    "@tanstack/query-db-collection": {
-      "optional": true
-    },
-    "@tanstack/react-db": {
-      "optional": true
-    },
     "react": {
       "optional": true
     }
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@tanstack/db": "1.0.0-rc.1.4",
-    "@tanstack/query-core": "5.107.1",
-    "@tanstack/query-db-collection": "1.5.1",
-    "@tanstack/react-db": "1.0.0-rc.1.4",
     "@types/node": "^24.19.2",
     "@types/pg": "^8.23.1",
     "@typescript/native": "npm:typescript@^7.0.2",
     "eslint": "^10.14.0",
+    "fast-check": "4.10.2",
     "pg": "8.23.1",
     "react": "19.3.1",
     "tsdown": "0.23.5",

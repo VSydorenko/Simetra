@@ -24,7 +24,8 @@ export default defineConfig([
           allowDefaultProject: [
             "src/data/__fixture.ts",
             "src/data/a/b/__fixture.ts",
-            "src/data/facade/__fixture.ts",
+            "src/data/runtime/__fixture.ts",
+            "src/data/store/__fixture.ts",
             "src/data/nested/__fixture.ts",
             "src/data/__tests__/__fixture.ts",
           ],

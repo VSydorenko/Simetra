@@ -77,12 +77,15 @@ const objectAt = (value: unknown): Record<string, unknown> | undefined =>
     ? (value as Record<string, unknown>)
     : undefined
 
+// Рахує до розбору й зупиняється на першому перевищенні: вороже дерево
+// глибиною в тисячі не доходить до рекурсивного розбору Zod. Спільна для
+// схеми й T4: ядро перевіряє фільтр з keyset-умовою до надсилання.
 /**
- * Чи дерево в межах глибини й кількості вузлів. Рахує до розбору й
- * зупиняється на першому перевищенні: вороже дерево глибиною в тисячі не
- * доходить до рекурсивного розбору Zod.
+ * Whether a filter tree stays within {@link FILTER_DEPTH_MAX} levels and
+ * {@link FILTER_NODES_MAX} nodes. Safe on any input: it stops at the first
+ * excess.
  */
-function withinLimits(root: unknown): boolean {
+export function filterWithinLimits(root: unknown): boolean {
   let nodes = 0
   const walk = (value: unknown, depth: number): boolean => {
     if (++nodes > FILTER_NODES_MAX || depth > FILTER_DEPTH_MAX) return false
@@ -140,7 +143,7 @@ function located(
  * `{ attribute, op, value? }`, bounded in depth, nodes and `in` values.
  */
 export const filterSchema: z.ZodType<Filter> = z.preprocess((value, ctx) => {
-  if (!withinLimits(value)) {
+  if (!filterWithinLimits(value)) {
     ctx.addIssue({
       code: "custom",
       message: `filter exceeds ${FILTER_DEPTH_MAX} levels or ${FILTER_NODES_MAX} nodes`,
