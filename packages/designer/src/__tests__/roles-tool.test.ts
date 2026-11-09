@@ -25,7 +25,23 @@ describe("roles: the project file", () => {
       const set = await projectRoleSet(empty.dir)
       expect(set).toEqual({
         ok: true,
-        roles: { names: Object.values(PLATFORM_ROLES), login: [] },
+        roles: {
+          names: Object.values(PLATFORM_ROLES),
+          login: [],
+          // Роль входу не створюють, але наявну звіряють за батьками всіх профілів
+          checkLogin: [
+            {
+              name: RUNTIME,
+              memberOf: [
+                "authenticated",
+                "simetra_anon",
+                PLATFORM_ROLES.command,
+                "simetra_user",
+              ],
+              checkOnly: true,
+            },
+          ],
+        },
         skipped: [{ name: RUNTIME, reason: "no-project-file" }],
       })
       const data: RolesData = {
@@ -77,6 +93,7 @@ describe("roles: the project file", () => {
             memberOf: [PLATFORM_ROLES.command, "authenticated"],
           },
         ],
+        checkLogin: [],
       },
       skipped: [],
     })

@@ -1,5 +1,6 @@
 import type { SqlParser } from "simetra/compiler"
 import {
+  DATABASE_PROVIDERS,
   loginRoleParentNames,
   PLATFORM_LOGIN_ROLES,
   PLATFORM_ROLES,
@@ -57,7 +58,13 @@ export interface PlatformRoleRow {
 /** Роль входу платформи і батьки, в які вона входить парою `INHERIT FALSE, SET TRUE`. */
 export interface PlatformLoginRole {
   name: string
+  /** Для `checkOnly` — дозволені батьки, а не обов'язкові. */
   memberOf: readonly string[]
+  /**
+   * Наявну роль лише звіряють за дозволеними батьками; брак членства не
+   * порушення, а саму роль ніхто не створює (провайдер невідомий).
+   */
+  checkOnly?: true
 }
 
 /**
@@ -69,6 +76,11 @@ export interface PlatformLoginRole {
 export interface PlatformRoleSet {
   names: readonly string[]
   login: readonly PlatformLoginRole[]
+  /**
+   * Ролі входу, які створювати не можна, але наявні звіряють: без провайдера
+   * дозволені батьки — об'єднання профілів усіх провайдерів.
+   */
+  checkLogin?: readonly PlatformLoginRole[]
 }
 
 /** Результат одного створення чи звірки. */
@@ -344,7 +356,7 @@ export function platformRoleRefusals(
             const violation = loginViolation(
               row,
               new Set(own.memberOf),
-              own.memberOf,
+              own.checkOnly === true ? [] : own.memberOf,
               requestNames
             )
             return violation === undefined ? [] : [{ role, violation }]
@@ -428,18 +440,33 @@ export async function checkPlatformRoles(
 
 /**
  * Ролі, які створює `roles` (спека П4 §6.2). Без провайдера (немає файлу проєкту)
- * роль входу не створюється й не звіряється: без членства в ролі запиту її
- * потім ніхто б не виправив — наявну `roles` лише звіряє.
+ * роль входу не створюється: без членства в ролі запиту її потім ніхто б не
+ * виправив. Наявну `roles` звіряє за об'єднанням батьків усіх провайдерів.
  */
 export function platformRoleSet(provider?: DatabaseProvider): PlatformRoleSet {
   const names = Object.values(PLATFORM_ROLES)
-  if (provider === undefined) return { names, login: [] }
+  const purposes = Object.entries(PLATFORM_LOGIN_ROLES) as [
+    PlatformLoginPurpose,
+    string,
+  ][]
+  if (provider === undefined)
+    return {
+      names,
+      login: [],
+      // Старе ефективне правило: батьки з даних T0 усіх профілів разом
+      checkLogin: purposes.map(([purpose, name]) => ({
+        name,
+        memberOf: sortedNames(
+          DATABASE_PROVIDERS.flatMap((p) => loginRoleParentNames(purpose, p))
+        ),
+        checkOnly: true as const,
+      })),
+    }
   return {
     names,
+    checkLogin: [],
     // Склад і батьки кожної ролі входу — з даних T0, не літералом тут
-    login: (
-      Object.entries(PLATFORM_LOGIN_ROLES) as [PlatformLoginPurpose, string][]
-    ).map(([purpose, name]) => ({
+    login: purposes.map(([purpose, name]) => ({
       name,
       memberOf: loginRoleParentNames(purpose, provider),
     })),
@@ -497,6 +524,7 @@ export async function ensurePlatformRoles(
   roles: PlatformRoleSet
 ): Promise<{ created: PlatformRoleOutcome[]; refusal?: EngineDiagnostic[] }> {
   const { names, login } = roles
+  const gated = [...login, ...(roles.checkLogin ?? [])]
   const refusal: EngineDiagnostic[] = []
   const adminRefusal: EngineDiagnostic[] = []
   for (const { server, db } of servers) {
@@ -507,16 +535,16 @@ export async function ensurePlatformRoles(
       const allowed = self?.allowed === true
       const found = await readPlatformRoles(tx, [
         ...names,
-        ...login.map((l) => l.name),
+        ...gated.map((l) => l.name),
       ])
-      const present = login.filter((l) => found.some((r) => r.name === l.name))
+      const present = gated.filter((l) => found.some((r) => r.name === l.name))
       // На цілі наявні ролі входу звіряються повністю разом з ролями грантів:
       // роль входу серед потрібних знімає її повтор з винятку пари, тож
       // порушення звітується один раз
       const shape = await platformRoleGate(
         tx,
         server === "target" ? [...names, ...present.map((l) => l.name)] : names,
-        login,
+        gated,
         server
       )
       const missing = names.filter(
@@ -567,7 +595,7 @@ export async function ensurePlatformRoles(
             tx,
             name,
             [`CREATE ROLE ${quoteIdent(name)} NOLOGIN NOINHERIT`],
-            () => platformRoleGate(tx, [name], login, server)
+            () => platformRoleGate(tx, [name], gated, server)
           )
         )
       if (server === "target" && adminRefusal.length === 0)
@@ -588,7 +616,7 @@ export async function ensurePlatformRoles(
                     `GRANT ${quoteIdent(parent)} TO ${q} WITH INHERIT FALSE, SET TRUE`
                 ),
               ],
-              () => platformRoleGate(tx, [l.name], login, server)
+              () => platformRoleGate(tx, [l.name], gated, server)
             )
           )
         }

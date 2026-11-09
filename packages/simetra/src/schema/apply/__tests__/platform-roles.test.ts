@@ -514,9 +514,11 @@ describe("platformRoleRefusals", () => {
   })
 
   // §3.1 профілю postgres: роль запиту не досяжна через посередника з
-  // CREATEROLE — це справедливо для кожної ролі запиту профілю
+  // CREATEROLE — це справедливо для кожної ролі запиту профілю. Тут
+  // `requestPath` — готовий рядок; сам обхід `pg_auth_members` у SQL доводить
+  // DB-тест `provider-roles.supabase.db.test.ts`
   it.each(["simetra_user", "simetra_anon"])(
-    "refuses a CREATEROLE intermediary that reaches the request role %s",
+    "maps a precomputed requestPath row for the request role %s to a refusal",
     (requestRole) => {
       const runtime = {
         name: RUNTIME,
@@ -541,11 +543,73 @@ describe("platformRoleRefusals", () => {
   )
 })
 
+/** Роль входу без провайдера: лише звірка за об'єднанням батьків усіх профілів. */
+const CHECK_RUNTIME = {
+  name: RUNTIME,
+  memberOf: ["authenticated", "simetra_anon", COMMAND, "simetra_user"],
+  checkOnly: true as const,
+}
+
+describe("platformRoleRefusals of a check-only login role", () => {
+  it.each([
+    {
+      title: "SET-only pair with supabase parents",
+      memberOf: ["authenticated"],
+      want: [],
+    },
+    {
+      title: "SET-only pair with postgres parents",
+      memberOf: ["simetra_user", "simetra_anon"],
+      want: [],
+    },
+    {
+      title: "a parent outside the union",
+      memberOf: ["authenticated", "stranger"],
+      want: [[RUNTIME, "member-of:stranger"]],
+    },
+  ])("$title", ({ memberOf, want }) => {
+    const found = [
+      commandWith(),
+      loginRow({ memberOf: [pair(COMMAND), ...memberOf.map((p) => pair(p))] }),
+    ]
+    expect(
+      platformRoleRefusals([COMMAND], found, "target", [CHECK_RUNTIME]).map(
+        (d) => [d.params?.role, d.params?.violation]
+      )
+    ).toEqual(want)
+  })
+
+  it("does not demand the parents of a login role it checks", () => {
+    const found = [commandWith(), loginRow({ memberOf: [pair(COMMAND)] })]
+    expect(
+      platformRoleRefusals([COMMAND, RUNTIME], found, "target", [CHECK_RUNTIME])
+    ).toEqual([])
+  })
+
+  it("still refuses wrong options and a missing login row", () => {
+    const wrong = [
+      commandWith(),
+      loginRow({ memberOf: [pair(COMMAND, { inherit: true })] }),
+    ]
+    expect(
+      platformRoleRefusals([COMMAND], wrong, "target", [CHECK_RUNTIME]).map(
+        (d) => d.params?.violation
+      )
+    ).toEqual([`membership-option:${COMMAND}`])
+    expect(
+      platformRoleRefusals([COMMAND], [commandWith()], "target", [
+        CHECK_RUNTIME,
+      ]).map((d) => d.params?.violation)
+    ).toEqual([`member:${RUNTIME}`])
+  })
+})
+
 describe("platformRoleSet", () => {
   it("adds the runtime login role only when the provider is known", () => {
     expect(platformRoleSet("supabase")).toEqual({
       names: Object.values(PLATFORM_ROLES),
       login: [{ name: RUNTIME, memberOf: [COMMAND, "authenticated"] }],
+      checkLogin: [],
     })
     expect(platformRoleSet("postgres")).toEqual({
       names: Object.values(PLATFORM_ROLES),
@@ -555,10 +619,12 @@ describe("platformRoleSet", () => {
           memberOf: [COMMAND, "simetra_user", "simetra_anon"],
         },
       ],
+      checkLogin: [],
     })
     expect(platformRoleSet(undefined)).toEqual({
       names: Object.values(PLATFORM_ROLES),
       login: [],
+      checkLogin: [CHECK_RUNTIME],
     })
   })
 })
@@ -682,8 +748,53 @@ const BOTH = [
 ]
 const NAMES = { names: [COMMAND], login: [] }
 const WITH_LOGIN = { names: [COMMAND], login: LOGINS }
+const CHECK_ONLY = { names: [COMMAND], login: [], checkLogin: [CHECK_RUNTIME] }
 
 describe("ensurePlatformRoles", () => {
+  it("accepts an existing SET-only login pair and never creates the login role without a provider", async () => {
+    const present = fakeCluster({
+      canCreate: { [TARGET.url]: true },
+      roles: {
+        [TARGET.url]: [
+          commandWith(),
+          loginRow({ memberOf: [pair(COMMAND), pair("authenticated")] }),
+        ],
+      },
+    })
+    const outcome = await ensurePlatformRoles(
+      present.dbs,
+      [BOTH[0]!],
+      CHECK_ONLY
+    )
+    expect(outcome.refusal).toBeUndefined()
+    expect(outcome.created.map((c) => [c.name, c.outcome])).toEqual([
+      [COMMAND, "present"],
+    ])
+
+    const absent = fakeCluster({
+      canCreate: { [TARGET.url]: true },
+      roles: { [TARGET.url]: [row()] },
+    })
+    await ensurePlatformRoles(absent.dbs, [BOTH[0]!], CHECK_ONLY)
+    expect(absent.writes.filter((w) => w.sql.includes(RUNTIME))).toEqual([])
+  })
+
+  it("refuses an existing login role with a parent outside the union", async () => {
+    const { dbs } = fakeCluster({
+      canCreate: { [TARGET.url]: true },
+      roles: {
+        [TARGET.url]: [
+          commandWith(),
+          loginRow({ memberOf: [pair(COMMAND), pair("stranger")] }),
+        ],
+      },
+    })
+    const outcome = await ensurePlatformRoles(dbs, [BOTH[0]!], CHECK_ONLY)
+    expect(
+      (outcome.refusal ?? []).map((d) => [d.code, d.params?.violation])
+    ).toEqual([["plan.platform-role-shape", "member-of:stranger"]])
+  })
+
   it("checks CREATEROLE on every server before creating anything", async () => {
     const { dbs, writes } = fakeCluster({
       canCreate: { [TARGET.url]: true, [SHADOW.url]: false },

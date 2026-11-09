@@ -1,5 +1,5 @@
 import type pg from "pg"
-import { PLATFORM_ROLES } from "simetra/model"
+import { PLATFORM_LOGIN_ROLES, PLATFORM_ROLES } from "simetra/model"
 import {
   ensurePlatformRoles,
   platformRoleGate,
@@ -151,6 +151,32 @@ describe("roles", () => {
             )
         )
       ).toEqual([])
+    })
+  })
+
+  it("without a project file an existing login pair is checked, not refused or created", async () => {
+    await withRollback(async (client) => {
+      // Локальний стек після `roles.sql`: пара runtime → command SET-only
+      expect(
+        await ensurePlatformRoles(
+          rollbackDatabase(client),
+          TARGET,
+          platformRoleSet(undefined)
+        )
+      ).toEqual({
+        created: [
+          {
+            server: "target",
+            name: PLATFORM_ROLES.command,
+            outcome: "present",
+          },
+          {
+            server: "target",
+            name: PLATFORM_LOGIN_ROLES.runtime,
+            outcome: "present",
+          },
+        ],
+      })
     })
   })
 })
