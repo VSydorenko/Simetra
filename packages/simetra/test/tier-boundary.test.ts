@@ -357,38 +357,42 @@ describe("tier zones", () => {
   })
 
   it.each([
-    ["src/data/facade/__fixture.ts", "./../supabase/x"],
+    ["src/data/runtime/__fixture.ts", "./../supabase/x"],
     ["src/data/__fixture.ts", "../data/supabase/x"],
-    ["src/data/facade/__fixture.ts", "../../data/supabase/x"],
+    ["src/data/runtime/__fixture.ts", "../../data/supabase/x"],
     ["src/data/__fixture.ts", "../../src/data/supabase/x"],
   ])("%s: supabase detour %s is refused", async (file, spec) => {
     const msgs = await purity(importOf(spec), file)
     expect(msgs, spec).toHaveLength(1)
   })
 
-  it("plain ./x and ../x stay allowed in the facade", async () => {
+  it("plain ./x and ../x stay allowed in src/data/runtime", async () => {
     for (const spec of ["./x", "../x"]) {
       expect(
-        await restricted(importOf(spec), "src/data/facade/__fixture.ts"),
+        await restricted(importOf(spec), "src/data/runtime/__fixture.ts"),
         spec
       ).toEqual([])
       expect(
-        await purity(importOf(spec), "src/data/facade/__fixture.ts"),
+        await purity(importOf(spec), "src/data/runtime/__fixture.ts"),
         spec
       ).toEqual([])
     }
   })
 
-  it("namespace import of @tanstack/db is refused outside the facade", async () => {
+  it("namespace import of @tanstack/db is refused in src/data", async () => {
     const code = `import * as db from "@tanstack/db"\nexport const used = db\n`
-    expect(await restricted(code, "src/data/__fixture.ts")).toHaveLength(1)
-    expect(await restricted(code, "src/data/facade/__fixture.ts")).toEqual([])
+    for (const file of [
+      "src/data/__fixture.ts",
+      "src/data/runtime/__fixture.ts",
+      "src/data/store/__fixture.ts",
+    ])
+      expect(await purity(code, file), file).toHaveLength(1)
   })
 
   it("normalized relative paths within the allowed tiers pass", async () => {
     for (const [file, spec] of [
       ["src/data/__fixture.ts", "./x"],
-      ["src/data/facade/__fixture.ts", "../x"],
+      ["src/data/runtime/__fixture.ts", "../x"],
       ["src/server/__fixture.ts", "../model/x"],
       ["src/shell/__fixture.ts", "../ui/x"],
     ]) {
@@ -407,15 +411,9 @@ describe("tier zones", () => {
       "src/data/__fixture.ts",
       "src/data/nested/__fixture.ts",
       "src/data/__tests__/__fixture.ts",
+      "src/data/runtime/__fixture.ts",
     ]
-    const ALLOWED = [
-      "simetra/model",
-      "zod",
-      "react",
-      "@tanstack/db",
-      "@tanstack/react-db",
-      "./x",
-    ]
+    const ALLOWED = ["simetra/model", "zod", "react", "./x"]
 
     it.each(OUTSIDE.flatMap((f) => ALLOWED.map((s) => [f, s])))(
       "%s allows %s",
@@ -433,93 +431,39 @@ describe("tier zones", () => {
       ["src/data/__fixture.ts", "./../model"],
       ["src/data/nested/__fixture.ts", "../../model"],
       ["src/data/__fixture.ts", "./supabase/x"],
-      ["src/data/facade/__fixture.ts", "../supabase/x"],
+      ["src/data/runtime/__fixture.ts", "../supabase/x"],
       ["src/data/__fixture.ts", "@supabase/realtime-js"],
-      ["src/data/__fixture.ts", "@tanstack/query-db-collection"],
-      ["src/data/__fixture.ts", "@tanstack/query-core"],
-      ["src/data/nested/__fixture.ts", "@tanstack/query-core"],
-      ["src/data/facade/__fixture.ts", "simetra/server"],
-      ["src/data/facade/__fixture.ts", "../../model"],
-      ["src/data/facade/__fixture.ts", "pg"],
-      ["src/data/facade/__fixture.ts", "@supabase/realtime-js"],
-      // ярусне правило діє й на тести: фасад не обходять з __tests__
-      ["src/data/__tests__/__fixture.ts", "@tanstack/query-core"],
-      ["src/data/__tests__/__fixture.ts", "@tanstack/query-db-collection"],
+      ["src/data/store/__fixture.ts", "react"],
+      ["src/data/store/__fixture.ts", "simetra/server"],
+      ["src/data/store/__fixture.ts", "../../model"],
+      ["src/data/runtime/__fixture.ts", "simetra/server"],
+      ["src/data/runtime/__fixture.ts", "../../model"],
+      ["src/data/runtime/__fixture.ts", "pg"],
+      ["src/data/runtime/__fixture.ts", "@supabase/realtime-js"],
+      // @tanstack/* не дозволено ніде в T4, зокрема в тестах і ядрі
+      ...[
+        "@tanstack/db",
+        "@tanstack/react-db",
+        "@tanstack/query-core",
+        "@tanstack/query-db-collection",
+      ].flatMap((spec) =>
+        [
+          "src/data/__fixture.ts",
+          "src/data/nested/__fixture.ts",
+          "src/data/__tests__/__fixture.ts",
+          "src/data/runtime/__fixture.ts",
+          "src/data/store/__fixture.ts",
+        ].map((file) => [file, spec])
+      ),
     ])("%s refuses %s", async (file, spec) => {
       expect(await refusedBoth(spec, file)).not.toEqual([])
     })
 
-    it("facade allows query-core, query-db-collection and ../x", async () => {
-      const file = "src/data/facade/__fixture.ts"
-      for (const spec of [
-        "@tanstack/query-core",
-        "@tanstack/query-db-collection",
-        "@tanstack/db",
-        "../x",
-        "./y",
-      ])
+    it("src/data/store allows model, zod and ./x, but not react", async () => {
+      const file = "src/data/store/__fixture.ts"
+      for (const spec of ["simetra/model", "zod", "./x", "../x"])
         expect(await refusedBoth(spec, file), spec).toEqual([])
-      expect(await refusedBoth("../x", "src/data/nested/__fixture.ts")).toEqual(
-        []
-      )
-    })
-
-    it("createTransaction and createOptimisticAction live in the facade", async () => {
-      for (const name of ["createTransaction", "createOptimisticAction"]) {
-        const code = `import { ${name} } from "@tanstack/db"\nexport const used = ${name}\n`
-        for (const file of OUTSIDE)
-          expect(await restricted(code, file), `${file}: ${name}`).toHaveLength(
-            1
-          )
-        expect(
-          await restricted(code, "src/data/facade/__fixture.ts"),
-          `facade: ${name}`
-        ).toEqual([])
-      }
-      // інші іменовані імпорти @tanstack/db дозволено всюди в T4
-      expect(
-        await restricted(
-          `import { createCollection } from "@tanstack/db"\nexport const used = createCollection\n`,
-          "src/data/__fixture.ts"
-        )
-      ).toEqual([])
-    })
-
-    it("utils.write* and refetch are refused outside the facade", async () => {
-      for (const name of [
-        "writeInsert",
-        "writeUpdate",
-        "writeDelete",
-        "writeUpsert",
-        "writeBatch",
-        "refetch",
-      ]) {
-        const forms = [
-          `export const r = c.utils.${name}(1)\n`,
-          `export const r = c.utils["${name}"](1)\n`,
-          `const { ${name} } = c.utils\nexport const r = ${name}\n`,
-        ]
-        for (const code of forms)
-          for (const file of OUTSIDE)
-            expect(await props(code, file), `${file}: ${code}`).toHaveLength(1)
-        for (const code of forms)
-          expect(
-            await props(code, "src/data/facade/__fixture.ts"),
-            `facade: ${code}`
-          ).toEqual([])
-      }
-      expect(
-        await props(
-          "export const r = c.utils.other(1)\n",
-          "src/data/__fixture.ts"
-        )
-      ).toEqual([])
-    })
-
-    it("a QueryClient cannot be built outside the facade: its import is refused", async () => {
-      const code = `import { QueryClient } from "@tanstack/query-core"\nexport const q = new QueryClient()\n`
-      expect(await restricted(code, "src/data/__fixture.ts")).toHaveLength(1)
-      expect(await restricted(code, "src/data/facade/__fixture.ts")).toEqual([])
+      expect(await purity(importOf("react"), file)).toHaveLength(1)
     })
 
     it("standard-columns rules still apply in src/data", async () => {
@@ -527,7 +471,7 @@ describe("tier zones", () => {
       expect(await ruleIds(code, "src/data/__fixture.ts")).toContain(
         "no-restricted-syntax"
       )
-      expect(await ruleIds(code, "src/data/facade/__fixture.ts")).toContain(
+      expect(await ruleIds(code, "src/data/store/__fixture.ts")).toContain(
         "no-restricted-syntax"
       )
     })
@@ -541,7 +485,8 @@ describe("tier zones", () => {
 
     it.each([
       "src/data/__fixture.ts",
-      "src/data/facade/__fixture.ts",
+      "src/data/runtime/__fixture.ts",
+      "src/data/store/__fixture.ts",
       "src/data/nested/__fixture.ts",
       "src/data/__tests__/__fixture.ts",
       "src/data/a/b/__fixture.ts",
