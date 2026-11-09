@@ -463,7 +463,8 @@ export async function buildPlan(
     o.target,
     o.shadowBase,
     desired.sql,
-    parse
+    parse,
+    desired.scope.provider
   )
   if (roles.refusal !== undefined) return refused(roles.refusal)
 

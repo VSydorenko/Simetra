@@ -582,7 +582,8 @@ export const applyTool = defineTool({
           db.target,
           db.shadowBase,
           desired.sql,
-          await loadSqlParser()
+          await loadSqlParser(),
+          artifact.scope.provider
         )
         if (roles.refusal !== undefined) return { rolesRefused: roles.refusal }
         const shadow = await engine.withDesiredShadow(

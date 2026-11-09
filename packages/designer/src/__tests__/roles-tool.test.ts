@@ -25,7 +25,7 @@ describe("roles: the project file", () => {
       const set = await projectRoleSet(empty.dir)
       expect(set).toEqual({
         ok: true,
-        roles: { names: Object.values(PLATFORM_ROLES) },
+        roles: { names: Object.values(PLATFORM_ROLES), login: [] },
         skipped: [{ name: RUNTIME, reason: "no-project-file" }],
       })
       const data: RolesData = {
@@ -71,10 +71,12 @@ describe("roles: the project file", () => {
       ok: true,
       roles: {
         names: Object.values(PLATFORM_ROLES),
-        login: {
-          name: RUNTIME,
-          memberOf: [PLATFORM_ROLES.command, "authenticated"],
-        },
+        login: [
+          {
+            name: RUNTIME,
+            memberOf: [PLATFORM_ROLES.command, "authenticated"],
+          },
+        ],
       },
       skipped: [],
     })

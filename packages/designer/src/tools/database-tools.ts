@@ -497,7 +497,8 @@ export const diffTool = defineTool({
           db.target,
           db.shadowBase,
           desired.sql,
-          await loadSqlParser()
+          await loadSqlParser(),
+          desired.scope.provider
         )
         if (roles.refusal !== undefined) return { refusal: roles.refusal }
         return {
