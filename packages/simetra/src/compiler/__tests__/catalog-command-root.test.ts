@@ -224,12 +224,26 @@ describe("<root>_create_root", () => {
     ])
   })
 
-  it("renders a visible row like save and an invisible one as key and version 1", () => {
+  it("renders a visible row like save and an invisible one as key and the inserted version", () => {
     const shape = bodyShape(unitOf("organization").sql)
-    for (const [table, row, id, into] of [
-      ["organization", "v_row", "v_in.id", "v_result"],
-      ["org_member", "v_member_row", "p_member_id", "v_member"],
+    for (const [table, row, id, into, version] of [
+      ["organization", "v_row", "v_in.id", "v_result", "v_root_version"],
+      [
+        "org_member",
+        "v_member_row",
+        "p_member_id",
+        "v_member",
+        "v_member_version",
+      ],
     ] as const) {
+      // Версію вставки читаємо з налаштування тригера механіки одразу після
+      // вставки, а не літералом `1`.
+      const setting = at(
+        shape,
+        "assign",
+        `SELECT current_setting('simetra.row_version_' || 'public.${table}'::regclass::oid::text, true)`
+      )
+      expect(shape[setting]).toMatchObject({ target: { variable: version } })
       const read = at(
         shape,
         "execsql",
@@ -254,7 +268,7 @@ describe("<root>_create_root", () => {
           expressions: [
             {
               tree: tree(
-                `SELECT jsonb_build_object('id', ${id}, 'version', '1'::text)`
+                `SELECT jsonb_build_object('id', ${id}, 'version', ${version})`
               ),
             },
           ],

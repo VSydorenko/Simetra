@@ -776,12 +776,23 @@ describe("tenant creation: self-service with a required member attribute and the
     const completed = succeeded(
       await steps(
         "operator",
-        [coreStep(BRANCH, { id: root }, null, null), query(MARKERS)],
+        [
+          coreStep(BRANCH, { id: root }, null, null),
+          query(MARKERS),
+          {
+            sql: `SELECT version::text AS v FROM public.${BRANCH} WHERE id = $1`,
+            params: [root],
+            asOwner: true,
+          },
+        ],
         true
       )
     )
+    // Невидимий після створення корінь повертає версію, яку видав тригер
+    // механіки, а не літерал.
+    const stored = (completed[2] as { rows: { v: string }[] }).rows[0]!.v
     expect(resultOf(completed, 0)).toEqual({
-      root: { id: root, version: "1" },
+      root: { id: root, version: stored },
       member: null,
     })
     expect(completed[1]).toEqual([{ n: 0 }])
@@ -797,6 +808,64 @@ describe("tenant creation: self-service with a required member attribute and the
     expect(denied.refusal).toMatchObject({ code: "42501" })
     expect(denied.refusal!.message).toMatch(/row-level security/)
     succeeded(await steps("operator", [insertBranch(randomUUID())], true))
+  })
+})
+
+describe("tenant creation: invisible root version with an AFTER INSERT subscription", () => {
+  // Обробник підписки на `Branch` пише в іншу таблицю з механікою: `currval`
+  // після такої вставки вже не версія кореня, а налаштування на таблицю — так.
+  const s = scenario(() => policyDomain(tenantSelfService(), tenantOperator()))
+  const { key, ids, steps } = s
+
+  beforeAll(
+    () =>
+      s.open(async (client) => {
+        ids.operator = await signUp(client)
+        await insert(
+          client,
+          GLOBAL_ASSIGNMENTS,
+          assignmentRow(key("operator"), { archetype: TENANT_OPERATOR_ID })
+        )
+        // Прикладний SQL не пише таблиць видів (`sql.kind-table-verbatim`), тож
+        // тригер, що пише таблицю з механікою, ставимо в транзакції опису.
+        await client.query(`
+          CREATE FUNCTION public.branch_write_test() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
+          BEGIN INSERT INTO public.country (id) VALUES (gen_random_uuid()); RETURN NEW; END $$`)
+        await client.query(
+          "CREATE TRIGGER branch_write_test AFTER INSERT ON public.branch FOR EACH ROW EXECUTE FUNCTION public.branch_write_test()"
+        )
+      }),
+    120_000
+  )
+  afterAll(() => s.close())
+
+  it("the response carries the root version, not the last sequence value", async () => {
+    const root = randomUUID()
+    const completed = succeeded(
+      await steps(
+        "operator",
+        [
+          coreStep(BRANCH, { id: root }, null, null),
+          {
+            sql: `SELECT version::text AS v FROM public.${BRANCH} WHERE id = $1`,
+            params: [root],
+            asOwner: true,
+          },
+          {
+            sql: "SELECT last_value::text AS v FROM simetra.row_version",
+            asOwner: true,
+          },
+        ],
+        true
+      )
+    )
+    const version = (completed[1] as { rows: { v: string }[] }).rows[0]!.v
+    const last = (completed[2] as { rows: { v: string }[] }).rows[0]!.v
+    expect(last).not.toBe(version)
+    expect(resultOf(completed, 0)).toEqual({
+      root: { id: root, version },
+      member: null,
+    })
   })
 })
 
