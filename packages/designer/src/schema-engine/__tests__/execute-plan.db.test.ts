@@ -1589,6 +1589,7 @@ describe.concurrent("executePlan", () => {
       const plan = await planFor(url, [CREATE_N])
       let first = true
       const lostAfterCommit: ApplyDatabase = {
+        statement: (target, sql) => apply.statement(target, sql),
         async transaction(target, end, fn) {
           const value = await apply.transaction(target, end, fn)
           if (first) {
@@ -1648,6 +1649,7 @@ describe.concurrent("executePlan", () => {
         await live?.end().catch(() => {})
       },
       db: {
+        statement: (target, sql) => apply.statement(target, sql),
         async transaction(target, end, fn) {
           if (!first) return apply.transaction(target, end, fn)
           first = false
@@ -1740,6 +1742,7 @@ describe.concurrent("executePlan", () => {
       // Обривається лише транзакція застосування, а не пошук у ledger
       let first = true
       const lostBeforeCommit: ApplyDatabase = {
+        statement: (target, sql) => apply.statement(target, sql),
         transaction: (target, end, fn) => {
           if (!first) return apply.transaction(target, end, fn)
           first = false

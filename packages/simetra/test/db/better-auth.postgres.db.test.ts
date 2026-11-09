@@ -35,8 +35,9 @@ describe("Better Auth migration on the postgres stack", () => {
     const role = testRoleName("auth")
     const admin = new pg.Client({ connectionString: testSuperuserUrl() })
     await admin.connect()
+    const id = (name: string): string => admin.escapeIdentifier(name)
+    const failures: unknown[] = []
     try {
-      const id = (name: string): string => admin.escapeIdentifier(name)
       await admin.query(`CREATE ROLE ${id(role)} LOGIN PASSWORD '${PASSWORD}'`)
       await admin.query(`CREATE DATABASE ${id(database)}`)
       await admin.query(`ALTER ROLE ${id(role)} SET search_path = better_auth`)
@@ -87,13 +88,21 @@ describe("Better Auth migration on the postgres stack", () => {
       } finally {
         await inDatabase.end()
       }
+    } catch (error) {
+      failures.push(error)
     } finally {
       // Своє ім'я прогону: база спершу, бо роль, що володіє схемою в ній,
-      // не видалиться разом із базою
-      const id = (name: string): string => admin.escapeIdentifier(name)
-      await admin.query(`DROP DATABASE IF EXISTS ${id(database)} WITH (FORCE)`)
-      await admin.query(`DROP ROLE IF EXISTS ${id(role)}`)
-      await admin.end()
+      // не видалиться разом із базою. Кожен крок іде незалежно від збою
+      // попереднього: тест нічого не лишає навіть на шляху помилки
+      for (const step of [
+        () =>
+          admin.query(`DROP DATABASE IF EXISTS ${id(database)} WITH (FORCE)`),
+        () => admin.query(`DROP ROLE IF EXISTS ${id(role)}`),
+        () => admin.end(),
+      ])
+        await step().catch((e: unknown) => failures.push(e))
     }
+    // Перша помилка — причина збою; решта лише не завадила прибиранню
+    if (failures.length > 0) throw failures[0]
   }, 60_000)
 })

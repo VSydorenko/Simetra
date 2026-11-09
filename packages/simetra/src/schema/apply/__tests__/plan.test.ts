@@ -236,9 +236,11 @@ describe("buildPlan", () => {
       extract: () => Promise.reject(new Error("no extract expected")),
     }
     const reader: ApplyDatabase = {
+      statement: () => Promise.reject(new Error("no statement expected")),
       transaction: (_db, _end, fn) => fn(tx),
     }
     const scratch: ApplyDatabase = {
+      statement: () => Promise.reject(new Error("no statement expected")),
       transaction: () => Promise.reject(new Error("no copy expected")),
     }
     // Двигун не потрібен: відмова — до будь-якого витягу
@@ -283,6 +285,7 @@ describe("buildPlan", () => {
       }
       // Свіжа ціль Postgres 17; роль команд є лише на іншому сервері
       const reader: ApplyDatabase = {
+        statement: () => Promise.reject(new Error("no statement expected")),
         transaction: (db, _end, fn) =>
           fn({
             query: async <R extends Record<string, unknown>>(sql: string) =>
@@ -304,6 +307,7 @@ describe("buildPlan", () => {
           }),
       }
       const scratch: ApplyDatabase = {
+        statement: () => Promise.reject(new Error("no statement expected")),
         transaction: () => Promise.reject(new Error("no copy expected")),
       }
       // Будь-який виклик двигуна — і `withDesiredShadow` — кидає: відмова
@@ -513,6 +517,7 @@ async function promotedTag(domain: Domain = policyDomain) {
 
 /** Копія цілі гілки промоції: усе читає порожнім, кроки наміру приймає. */
 const emptyScratch: ApplyDatabase = {
+  statement: () => Promise.reject(new Error("no statement expected")),
   transaction: (_db, _end, fn) =>
     fn({
       query: async <R extends Record<string, unknown>>() => [] as R[],
@@ -669,7 +674,10 @@ async function fakeTarget(
     ) => answer(sql, params) as R[],
     extract: () => Promise.reject(new Error("no extract expected")),
   }
-  const reader: ApplyDatabase = { transaction: (_db, _end, fn) => fn(tx) }
+  const reader: ApplyDatabase = {
+    transaction: (_db, _end, fn) => fn(tx),
+    statement: () => Promise.reject(new Error("no statement expected")),
+  }
   return { reader, lockTables, platformFunctions }
 }
 

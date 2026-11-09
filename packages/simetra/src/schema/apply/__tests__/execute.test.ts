@@ -414,6 +414,7 @@ function fakeDb(script: Script = {}) {
   const seen: Record<string, Record<string, string>[]> = {}
   let attempt = 0
   const db: ApplyDatabase = {
+    statement: () => Promise.reject(new Error("no statement expected")),
     async transaction(_target, end, fn) {
       attempt++
       let stepsRan = false
@@ -580,6 +581,7 @@ function clocked(
   let now = 0
   const fake = fakeDb(script)
   const db: ApplyDatabase = {
+    statement: (target, sql) => fake.db.statement(target, sql),
     transaction: (t, end, fn) =>
       fake.db.transaction(t, end, (tx) =>
         fn({
@@ -656,6 +658,7 @@ describe("executePlan", () => {
     const calls: { sql: string; params?: readonly unknown[] }[] = []
     const { db, log } = fakeDb(script)
     const spy: ApplyDatabase = {
+      statement: (target, sql) => db.statement(target, sql),
       transaction: (t, end, fn) =>
         db.transaction(t, end, (tx) =>
           fn({
@@ -3934,6 +3937,7 @@ describe("executePlan", () => {
     const sqls: string[] = []
     const { db } = fakeDb()
     const spy: ApplyDatabase = {
+      statement: (target, sql) => db.statement(target, sql),
       transaction: (t, end, fn) =>
         db.transaction(t, end, (tx) =>
           fn({

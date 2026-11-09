@@ -40,6 +40,9 @@ describe("target reads carry no session state", () => {
         SRC,
         /set\s+(?:session\s+)?default_transaction_read_only|default_transaction_read_only\s*(?:=|to\b)|onConnect|\breadOnlyPool\b/i
       )
+        // Лише порт запису знімає режим `off` у прелюдії `statement` (окреме
+        // з'єднання підготовки кластера); читальні шляхи його не торкаються
+        .filter((path) => path !== join("schema-engine", "apply-database.ts"))
     ).toEqual([])
   })
 

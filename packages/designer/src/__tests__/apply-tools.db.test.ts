@@ -86,6 +86,7 @@ vi.mock("../schema-engine", async (importOriginal) => {
   const original = await importOriginal<typeof import("../schema-engine")>()
   const { ApplyConnectionLost } = await import("simetra/schema")
   const lost: ApplyDatabase = {
+    statement: () => Promise.reject(new Error("no statement expected")),
     transaction: () =>
       Promise.reject(new ApplyConnectionLost("connection lost")),
   }
@@ -96,6 +97,7 @@ vi.mock("../schema-engine", async (importOriginal) => {
       const real = original.createApplyDatabase(o)
       if (o.readOnly) return real
       return {
+        statement: (target, sql) => real.statement(target, sql),
         transaction: (target, end, fn) => {
           lose.writes++
           return real.transaction(target, end, fn)

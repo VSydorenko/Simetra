@@ -425,6 +425,7 @@ export function counted(db: ApplyDatabase): {
   let n = 0
   return {
     db: {
+      statement: (target, sql) => db.statement(target, sql),
       transaction: (target, end, fn) => {
         n++
         return db.transaction(target, end, fn)
@@ -449,6 +450,7 @@ export function observing(
   let seen: Record<string, unknown>[] = []
   return {
     db: {
+      statement: (target, sql) => db.statement(target, sql),
       transaction: (target, end, fn) =>
         db.transaction(target, end, async (tx) => {
           const value = await fn(tx)
@@ -472,6 +474,7 @@ export function afterEnd(
   let seen: Record<string, unknown>[] = []
   return {
     db: {
+      statement: (target, sql) => db.statement(target, sql),
       transaction: (target, end, fn) =>
         db.transaction(target, end, async (tx) => {
           const value = await fn(tx)
@@ -491,6 +494,7 @@ export function afterEnd(
  */
 export function sessionLeftover(db: ApplyDatabase, sql: string): ApplyDatabase {
   return {
+    statement: (target, sql) => db.statement(target, sql),
     transaction: (target, end, fn) =>
       db.transaction(target, end, async (tx) => {
         await tx.query("COMMIT")

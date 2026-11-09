@@ -44,6 +44,7 @@ const lost = vi.hoisted(() => ({ transactions: 0 }))
 vi.mock("../schema-engine", async (importOriginal) => {
   const { ApplyConnectionLost } = await import("simetra/schema")
   const database: ApplyDatabase = {
+    statement: () => Promise.reject(new Error("no statement expected")),
     transaction() {
       lost.transactions++
       return Promise.reject(new ApplyConnectionLost("connection lost"))

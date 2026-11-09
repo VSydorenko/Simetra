@@ -520,6 +520,7 @@ function fakeCluster(o: {
     pending = undefined
   }
   const dbs: ApplyDatabase = {
+    statement: () => Promise.reject(new Error("no statement expected")),
     transaction: async (db, end, fn) => {
       if (end === "commit" && pending?.on === "read") arrive(clusterOf(db.url))
       return fn({

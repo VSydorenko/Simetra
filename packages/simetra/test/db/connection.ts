@@ -268,7 +268,10 @@ export function rollbackDatabase(client: pg.Client): ApplyDatabase {
     extract: () =>
       Promise.reject(new Error("no extract in a test transaction")),
   }
-  return { transaction: (_db, _end, fn) => fn(tx) }
+  return {
+    transaction: (_db, _end, fn) => fn(tx),
+    statement: () => Promise.reject(new Error("no statement expected")),
+  }
 }
 
 /**
