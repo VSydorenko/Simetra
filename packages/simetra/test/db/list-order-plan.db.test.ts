@@ -497,7 +497,8 @@ describe("list order plans under RLS", () => {
         found.push(`no leading bound on ${c.bound} in Index Cond`)
     }
     const read = scans.reduce(
-      (sum, n) => sum + (n.rows ?? 0) + (n.rowsRemovedByFilter ?? 0),
+      (sum, n) =>
+        sum + ((n.rows ?? 0) + (n.rowsRemovedByFilter ?? 0)) * (n.loops ?? 1),
       0
     )
     if (tail && read > bound)
@@ -586,6 +587,13 @@ describe("list order plans under RLS", () => {
     console.info(
       `list-order-plan control a: sorts ${JSON.stringify(sorts)}, ${JSON.stringify(describe_(scans))}`
     )
-    expect(violations(c, scans, sorts, "middle")).not.toEqual([])
+    // Правило межі (регулярка) тут спрацьовує завжди, тож контроль судить саме
+    // бюджет читання — єдину перевірку розбору `rowsRemovedByFilter`; зелений
+    // базис того самого правила — сторінка з провідною межею.
+    expect(
+      violations(c, scans, sorts, "middle").filter((v) => v.startsWith("read "))
+    ).not.toEqual([])
+    const baseline = await pageOf(reader, c, "middle")
+    expect(violations(c, baseline.scans, baseline.sorts, "middle")).toEqual([])
   })
 })

@@ -24,7 +24,7 @@ export interface PlanNode {
   filter?: string
   /** `Actual Rows` вузла: середнє на цикл, як його віддає Postgres. */
   rows?: number
-  /** `Rows Removed by Filter` вузла: рядки, прочитані й відкинуті `Filter`. */
+  /** `Rows Removed by Filter` вузла на цикл: рядки, прочитані й відкинуті `Filter`. */
   rowsRemovedByFilter?: number
   /** `Actual Total Time` вузла (мс) на цикл. */
   time?: number
