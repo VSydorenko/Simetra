@@ -41,7 +41,7 @@ libpg-query, pg-delta (двигун схеми в `@simetrajs/designer`).
 - Епоха версій є лише на primary: на репліці (`pg_is_in_recovery()`) функція дає `NULL`; читання з логічного підписника не підтримується (його послідовність своя).
 - «Таблиця з механікою в живій цілі» — таблиця з живим тригером `mechanicsTriggerName(t)`, що виконує `MECHANICS_FUNCTION` (`liveMechanicsTables`, Task 4), а не таблиця з колонками `version` і `updated_at`: у живій моделі немає `origin.standard`, а прийнята таблиця може мати власні колонки з цими іменами.
 - Таблиці механіки не партиціюються: `TG_RELID` партиції не збігся б з OID таблиці, який читає `createRoot`.
-- Транзакція застосування з блоком `versions` має `SET LOCAL synchronous_commit = on`: цей блок пише версію з вимкненими тригерами, тож `touch` синхронного коміту не ставить.
+- Транзакція застосування з блоком `versions` підвищує `synchronous_commit` до `on` лише зі значень `off` і `local` (як `touch`; `remote_apply` і `remote_write` лишає; рішення архітекторки): цей блок пише версію з вимкненими тригерами, тож `touch` синхронного коміту не ставить.
 - DB-тести профілево-нейтральні: лише SQL Postgres; ролі API — з `PROVIDER_API_ROLES[provider]`, не літералом; кейс, що потребує двигуна (план → застосування), — лише в `packages/designer/src/__tests__/`, бо `simetra` двигуна не має.
 - Файли ПГ-1 (виконується паралельно) не чіпати: `packages/simetra/test/db/{connection,stack-guard,sweep,interrupt}*.ts`, обидва `vitest.config.ts`, `package.json` пакетів і корінь, `.github/workflows/ci.yml`, `AGENTS.md`.
 - Термін «епоха версій бази» не плутати з епохою сесії ядра T4 (`Epochs` у B3-2): у коді й коментарях — `rowVersionEpoch`.
