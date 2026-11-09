@@ -811,9 +811,12 @@ describe("tenant creation: self-service with a required member attribute and the
   })
 })
 
-describe("tenant creation: invisible root version with an AFTER INSERT subscription", () => {
-  // Обробник підписки на `Branch` пише в іншу таблицю з механікою: `currval`
+describe("tenant creation: invisible root version with an AFTER INSERT trigger writing another mechanics table", () => {
+  // Дослівний тригер на `Branch` заступає платформені AFTER INSERT-тригери
+  // (ефекти, `provision`): вони пишуть в іншу таблицю з механікою, і `currval`
   // після такої вставки вже не версія кореня, а налаштування на таблицю — так.
+  // Підписка тут не підходить: прикладний SQL не пише таблиць видів
+  // (`sql.kind-table-verbatim`).
   const s = scenario(() => policyDomain(tenantSelfService(), tenantOperator()))
   const { key, ids, steps } = s
 
@@ -826,8 +829,7 @@ describe("tenant creation: invisible root version with an AFTER INSERT subscript
           GLOBAL_ASSIGNMENTS,
           assignmentRow(key("operator"), { archetype: TENANT_OPERATOR_ID })
         )
-        // Прикладний SQL не пише таблиць видів (`sql.kind-table-verbatim`), тож
-        // тригер, що пише таблицю з механікою, ставимо в транзакції опису.
+        // Тригер, що пише таблицю з механікою, ставимо в транзакції опису.
         await client.query(`
           CREATE FUNCTION public.branch_write_test() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
           BEGIN INSERT INTO public.country (id) VALUES (gen_random_uuid()); RETURN NEW; END $$`)
@@ -865,6 +867,56 @@ describe("tenant creation: invisible root version with an AFTER INSERT subscript
     expect(resultOf(completed, 0)).toEqual({
       root: { id: root, version },
       member: null,
+    })
+  })
+})
+
+describe("tenant creation: invisible member version", () => {
+  // `TenantOwner` без `fullAccess` і без права читати членство: творець бачить
+  // корінь, але не рядок свого члена, тож відповідь несе ключ і версію вставки
+  // (налаштування тригера), а не `to_jsonb` рядка.
+  const s = scenario(() =>
+    policyDomain(
+      tenantSelfService({ fullAccess: false, memberRead: false }),
+      tenantOperator()
+    )
+  )
+  const { ids, steps } = s
+
+  beforeAll(
+    () =>
+      s.open(async (client) => {
+        ids.creator = await signUp(client)
+      }),
+    120_000
+  )
+  afterAll(() => s.close())
+
+  it("the response carries the member version read under the schema owner", async () => {
+    const root = randomUUID()
+    const member = randomUUID()
+    const completed = succeeded(
+      await steps(
+        "creator",
+        [
+          coreStep(ORG, { id: root }, {}, member),
+          {
+            sql: `SELECT version::text AS v FROM public.${MEMBER} WHERE id = $1`,
+            params: [member],
+            asOwner: true,
+          },
+          {
+            sql: `SELECT id FROM public.${MEMBER} WHERE id = $1`,
+            params: [member],
+          },
+        ],
+        true
+      )
+    )
+    const version = (completed[1] as { rows: { v: string }[] }).rows[0]!.v
+    expect((completed[2] as { rows: unknown[] }).rows).toEqual([])
+    expect(resultOf(completed, 0)).toMatchObject({
+      member: { id: member, version },
     })
   })
 })
