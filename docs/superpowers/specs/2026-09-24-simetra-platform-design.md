@@ -1024,8 +1024,8 @@ act-as — claim `act`), — `SET LOCAL ROLE simetra_command`, далі на к�
 
 ### 8.5 Значення, обмін, стан списку
 
-`Numeric` у рантаймі — decimal.js (рядок із Postgres без втрат); дати — Temporal
-з поліфілом; CSV — papaparse; XLSX — write-excel-file / read-excel-file. Стан
+У сховищі ядра T4 `Numeric` — рядок, дата й час — рядок ISO; decimal.js
+(рядок із Postgres без втрат) і Temporal з поліфілом — на межі полів T5 (П4-D); CSV — papaparse; XLSX — write-excel-file / read-excel-file. Стан
 списку (фільтри, сортування, сторінка) живе в URL через адаптер навігації: у
 типовому — `validateSearch` TanStack Router зі схемою Zod, виведеною з
 метаданих. Версії й альтернативи — [карта перевикористання](../../research/stack/reuse-map-2026-09.md).

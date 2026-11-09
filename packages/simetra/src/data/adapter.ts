@@ -4,8 +4,8 @@ import {
   type SourceAdapter,
   type WireReadResult,
 } from "simetra/model"
-import { facadeOf } from "./facade/handle"
-import type { DataRuntime } from "./facade/runtime"
+import { runtimeHandleOf, type RuntimeHandle } from "./runtime/handle"
+import type { DataRuntime } from "./runtime/runtime"
 
 /**
  * The Server Function source adapter (P4-B spec §5.2): a read goes through
@@ -15,7 +15,16 @@ import type { DataRuntime } from "./facade/runtime"
 export function createServerFunctionAdapter(
   runtime: DataRuntime
 ): SourceAdapter {
-  const { send } = facadeOf(runtime)
+  return serverFunctionAdapter(runtimeHandleOf(runtime).send)
+}
+
+/**
+ * The Server Function adapter over a transport wrapper; `createDataRuntime`
+ * builds its default source with it before the runtime handle exists.
+ */
+export function serverFunctionAdapter(
+  send: RuntimeHandle["send"]
+): SourceAdapter {
   return {
     // Сервер повертає `included` сам (§4.2, Р5).
     capabilities: { include: true },

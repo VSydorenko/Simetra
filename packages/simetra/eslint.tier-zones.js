@@ -44,23 +44,6 @@ function tierMessage(tier, index) {
   )
 }
 
-const DATA_FACADE_ONLY_PATTERNS = [
-  {
-    regex: "^@tanstack/(?:query-db-collection|query-core)(?:/|$)",
-    message:
-      "Facade boundary: @tanstack/query-db-collection and @tanstack/query-core are imported only in src/data/facade (P4-B spec §3).",
-  },
-]
-
-const DATA_FACADE_ONLY_PATHS = [
-  {
-    name: "@tanstack/db",
-    importNames: ["createTransaction", "createOptimisticAction"],
-    message:
-      "Facade boundary: createTransaction and createOptimisticAction are used only in src/data/facade (P4-B spec §3).",
-  },
-]
-
 const tierConfigs = TIERS.flatMap((tier, index) => {
   const higher = TIERS.slice(index + 1)
   // Нормалізований шлях — у кожному ярусі, зокрема shell: опції правила flat
@@ -82,28 +65,21 @@ const tierConfigs = TIERS.flatMap((tier, index) => {
   if (tier === "data" || tier === "ui") {
     patterns.push({ regex: tierPattern(["server"]), message: SERVER_MESSAGE })
   }
-  const options = { patterns }
+  // Бібліотек рушія даних у T4 немає зовсім (власне ядро); правило ярусу, а не
+  // чистоти, бо чистота пропускає `__tests__`, а тест теж не тягне TanStack.
   if (tier === "data") {
-    // Транзакційний рантайм і QueryClient живуть лише у фасаді: решта T4
-    // не обходить його ні іменованим імпортом, ні `import *`.
-    options.patterns = [...patterns, ...DATA_FACADE_ONLY_PATTERNS]
-    options.paths = DATA_FACADE_ONLY_PATHS
-  }
-  const configs = [
-    {
-      files: [`src/${tier}/**/*.{ts,tsx,mts,cts}`],
-      rules: { "no-restricted-imports": ["error", options] },
-    },
-  ]
-  if (tier === "data") {
-    // Фасад — те саме без фасадних заборон: опції flat config заміщуються
-    // цілком, тож перелік повторено, а не успадковано.
-    configs.push({
-      files: ["src/data/facade/**/*.{ts,tsx,mts,cts}"],
-      rules: { "no-restricted-imports": ["error", { patterns }] },
+    patterns.push({
+      regex: "^@tanstack(?:/|$)",
+      message:
+        "T4 purity: src/data imports no @tanstack/* library (own data core, P4-B spec §3).",
     })
   }
-  return configs
+  return [
+    {
+      files: [`src/${tier}/**/*.{ts,tsx,mts,cts}`],
+      rules: { "no-restricted-imports": ["error", { patterns }] },
+    },
+  ]
 })
 
 // Межі чистоти ярусів T0, T1, T3, T4, T5 і заборона рушія бази в усьому `src`.
@@ -125,24 +101,17 @@ const DB_ENGINE_PATTERN = {
 }
 
 // Чистота T4 (спека П4-B §3). Allow-list: нерелятивні імпорти — лише
-// simetra/model, zod, react і бібліотеки рушія; фасад додатково бачить
-// query-core та query-db-collection. Відносні імпорти пропущено allow-list-ом
-// (`\\.`), а вихід з ярусу й `supabase/…` ловлять окремі патерни: `../x` з
-// `src/data/facade` — легальний шлях усередині T4, тож заборона іде за іменем
-// яруса, а не за самим `..`.
-function dataPurity(facade) {
-  const allowed = [
-    "zod",
-    "react",
-    "simetra/model",
-    "@tanstack/(?:react-)?db",
-    ...(facade
-      ? ["@tanstack/query-core", "@tanstack/query-db-collection"]
-      : []),
-  ]
+// simetra/model, zod і react; `@tanstack/*` не дозволено ніде в `src/data`
+// (власне ядро даних, без бібліотек рушія). Ядро в `src/data/store` ще й без
+// `react`: його читає і React-міст, і Node-тести. Відносні імпорти пропущено
+// allow-list-ом (`\\.`), а вихід з ярусу й `supabase/…` ловлять окремі
+// патерни: `../x` з `src/data/runtime` — легальний шлях усередині T4, тож
+// заборона йде за іменем яруса, а не за самим `..`.
+function dataPurity(store) {
+  const allowed = ["zod", "simetra/model", ...(store ? [] : ["react"])]
   return {
-    files: facade
-      ? ["src/data/facade/**/*.{ts,tsx,mts,cts}"]
+    files: store
+      ? ["src/data/store/**/*.{ts,tsx,mts,cts}"]
       : PURITY_FILES("data"),
     ignores: PURITY_IGNORES,
     rules: {
@@ -153,10 +122,9 @@ function dataPurity(facade) {
             DB_ENGINE_PATTERN,
             {
               regex: `^(?!\\.|(?:${allowed.join("|")})(?:/|$))`,
-              message:
-                "T4 purity: src/data imports only ./…, simetra/model, zod, react, @tanstack/db and @tanstack/react-db" +
-                (facade ? " plus the query libraries in the facade" : "") +
-                " (P4-B spec §3).",
+              message: store
+                ? "T4 purity: src/data/store imports only ./…, simetra/model and zod; no react and no @tanstack/* (P4-B spec §3)."
+                : "T4 purity: src/data imports only ./…, simetra/model, zod and react; no @tanstack/* (P4-B spec §3).",
             },
             {
               regex: `^(?:\\./)?(?:\\.\\./)+(?:src/)?(?:${TIERS.filter((t) => t !== "data").join("|")})(?:/|$)`,
@@ -278,34 +246,4 @@ export const purityConfigs = [
   },
 ]
 
-// Запис у колекцію в обхід фасаду: форма `{ property }` без `object`, бо лише
-// вона ловить `c.utils["writeUpdate"]` і `const { writeInsert } = c.utils`.
-const FACADE_PROPERTIES = [
-  "writeInsert",
-  "writeUpdate",
-  "writeDelete",
-  "writeUpsert",
-  "writeBatch",
-  "refetch",
-].map((property) => ({
-  property,
-  message:
-    "Facade boundary: utils.write* and refetch are called only in src/data/facade (P4-B spec §3).",
-}))
-
-export const facadeConfigs = [
-  {
-    files: ["src/data/**/*.{ts,tsx,mts,cts}"],
-    rules: { "no-restricted-properties": ["error", ...FACADE_PROPERTIES] },
-  },
-  {
-    files: ["src/data/facade/**/*.{ts,tsx,mts,cts}"],
-    rules: { "no-restricted-properties": "off" },
-  },
-]
-
-export const tierZoneConfigs = [
-  ...tierConfigs,
-  ...purityConfigs,
-  ...facadeConfigs,
-]
+export const tierZoneConfigs = [...tierConfigs, ...purityConfigs]
