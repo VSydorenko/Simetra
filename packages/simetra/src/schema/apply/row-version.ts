@@ -6,7 +6,9 @@ import {
   mechanicsTables,
   mechanicsTriggerName,
   type CompiledModel,
+  type SqlParser,
 } from "simetra/compiler"
+import type { DataTable } from "./promotion/data"
 import { stepId, type PlanStep } from "./steps"
 import { tableKey } from "./table-key"
 
@@ -18,8 +20,11 @@ export interface TableRef {
   name: string
 }
 
-/** Placeholder: Task 6 розширить типом таблиці, чиї колонки переписав двигун. */
-export type RewrittenTable = TableRef
+/**
+ * Таблиця з механікою, чиї колонки читання переписав двигун. `triggers` — з
+ * моделі бажаної тіні: раннер звіряє їх з живими вже після кроків двигуна.
+ */
+export type RewrittenTable = TableRef & { triggers: DataTable["triggers"] }
 
 export interface RowVersionInput {
   sequenceFresh: boolean
@@ -66,7 +71,8 @@ const qualify = (t: TableRef): string =>
  * Блок кроків `versions` (рішення Р6, Р7): засів — коли послідовність нова
  * (над усіма таблицями механіки й тими, що входять у неї) або лише таблиці
  * входять у механіку (над ними); епоха — коли послідовність нова чи рядка
- * епохи ще немає. Підвищення версії переписаних таблиць — Task 6.
+ * епохи ще немає. Між ними — підвищення версії переписаних двигуном таблиць
+ * (Р10): `updated_at` не чіпаємо, тож тригери кроку вимикає раннер.
  */
 export function rowVersionSteps(
   input: RowVersionInput,
@@ -109,6 +115,20 @@ export function rowVersionSteps(
       lockClass: "share",
       lockedTables: unique.map((t) => ({ schema: t.schema, name: t.name })),
     })
+  for (const t of [...input.rewritten].sort((a, b) => {
+    const x = qualify(a)
+    const y = qualify(b)
+    return x < y ? -1 : x > y ? 1 : 0
+  }))
+    steps.push({
+      ...base,
+      sql: `UPDATE ${qualify(t)} SET ${quoteIdent(ROW_VERSION_COLUMN)} = nextval('${SEQUENCE}')`,
+      class: "dataStep",
+      lockClass: "shareRowExclusive",
+      lockedTables: [{ schema: t.schema, name: t.name }],
+      rewriteRisk: true,
+      triggers: t.triggers,
+    })
   if (input.sequenceFresh || !input.epochExists)
     steps.push({
       ...base,
@@ -118,6 +138,90 @@ export function rowVersionSteps(
       lockedTables: [],
     })
   return steps.map((s, i) => ({ ...s, id: stepId(offset + i) }))
+}
+
+const byCodeUnit = (a: string, b: string): number =>
+  a < b ? -1 : a > b ? 1 : 0
+
+/** Ключ об'єкта двигуна за структурною формою (схема, таблиця, ім'я). */
+const refKey = (r: { schema: string; table?: string; name: string }): string =>
+  JSON.stringify([r.schema, r.table ?? null, r.name])
+
+/**
+ * Таблиці (в іменах кроків двигуна), чиї колонки двигун переписує (Р10):
+ * `ALTER COLUMN … TYPE` і пара «знищено й створено» тієї самої ідентичності
+ * `column:` — так pg-delta замінює зміну виразу генерованої колонки
+ * (`generatedExpr: "replace"`). Таблиця, яку план сам знищує чи створює,
+ * не рахується: її рядки нові, а знищені колонки — лише наслідок. Вираз
+ * читається з кроків, а не з різниці знімків: різниця тексту виразу між
+ * версіями платформи давала б хибне переписування.
+ */
+export function rewrittenByEngine(
+  steps: readonly Pick<PlanStep, "sql" | "produced" | "destroyed">[],
+  parse: SqlParser
+): TableRef[] {
+  const found = new Map<string, TableRef>()
+  const note = (schema: string, name: string) =>
+    found.set(JSON.stringify([schema, name]), { schema, name })
+  const replaced = new Set<string>()
+  for (const step of steps) {
+    for (const r of [...step.produced, ...step.destroyed])
+      if (r.kind === "table") replaced.add(refKey(r))
+    const result = parse(step.sql)
+    if (!result.ok) continue
+    for (const { stmt } of result.statements) {
+      if (!("AlterTableStmt" in stmt)) continue
+      const { relation, cmds, objtype } = stmt.AlterTableStmt
+      if (
+        objtype === "OBJECT_TYPE" ||
+        relation?.schemaname === undefined ||
+        relation.relname === undefined
+      )
+        continue
+      if (
+        (cmds ?? []).some(
+          (n) =>
+            "AlterTableCmd" in n &&
+            n.AlterTableCmd.subtype === "AT_AlterColumnType"
+        )
+      )
+        note(relation.schemaname, relation.relname)
+    }
+  }
+  const created = new Set(
+    steps.flatMap((s) =>
+      s.produced.filter((r) => r.kind === "column").map(refKey)
+    )
+  )
+  for (const step of steps)
+    for (const r of step.destroyed)
+      if (
+        r.kind === "column" &&
+        r.table !== undefined &&
+        created.has(refKey(r))
+      )
+        note(r.schema, r.table)
+  return [...found.values()].filter(
+    (t) => !replaced.has(refKey({ schema: t.schema, name: t.name }))
+  )
+}
+
+/**
+ * Тригери таблиці в моделі бажаної тіні (бажані імена): режим моделі завжди
+ * `O` (інший режим модель не мапить), порядок — як у `readUserTriggers`.
+ */
+export function modelTriggers(
+  model: CatalogModel,
+  table: TableRef
+): DataTable["triggers"] {
+  const prefix = `trigger:${table.schema}.${table.name}.`
+  return model.units
+    .filter((u) => u.class === "trigger" && u.identity.startsWith(prefix))
+    .map((u) => ({
+      name: u.identity.slice(prefix.length),
+      enabled: "O" as const,
+    }))
+    .sort((a, b) => byCodeUnit(a.name, b.name))
 }
 
 /**
@@ -227,7 +331,13 @@ export function planRowVersionSteps(p: {
   live: CatalogModel
   epochExists: boolean
   model: Pick<CompiledModel, "project" | "physical">
-  engineSteps: readonly Pick<PlanStep, "produces" | "destroys">[]
+  /** Модель бажаної тіні: з неї тригери кроків підвищення. */
+  desired: CatalogModel
+  engineSteps: readonly Pick<
+    PlanStep,
+    "sql" | "produces" | "destroys" | "produced" | "destroyed"
+  >[]
+  parse: SqlParser
   offset: number
   liveName?: (t: TableRef) => TableRef
 }): PlanStep[] {
@@ -238,7 +348,7 @@ export function planRowVersionSteps(p: {
       (s) =>
         s.produces.includes(SEQUENCE_ID) || s.destroys.includes(SEQUENCE_ID)
     )
-  const desired = mechanicsTables(
+  const wanted = mechanicsTables(
     p.model.physical,
     p.model.project.naming.attributeCase
   ).map((t): TableRef => ({ schema: t.schema, name: t.name }))
@@ -254,11 +364,20 @@ export function planRowVersionSteps(p: {
     {
       sequenceFresh,
       epochExists: p.epochExists,
-      mechanicsTables: desired.filter((t) => mechanical.has(keyOf(t))),
-      entering: desired.filter(
+      mechanicsTables: wanted.filter((t) => mechanical.has(keyOf(t))),
+      entering: wanted.filter(
         (t) => present.has(keyOf(t)) && !mechanical.has(keyOf(t))
       ),
-      rewritten: [],
+      // Лише таблиці, що мали механіку на цілі й мають її в бажаній моделі
+      rewritten: rewrittenByEngine(p.engineSteps, p.parse)
+        .filter(
+          (t) =>
+            mechanical.has(keyOf(t)) &&
+            wanted.some(
+              (w) => tableKey(w.schema, w.name) === tableKey(t.schema, t.name)
+            )
+        )
+        .map((t) => ({ ...t, triggers: modelTriggers(p.desired, t) })),
     },
     p.offset
   )

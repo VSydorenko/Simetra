@@ -262,6 +262,14 @@ const sectionTableSchema = z.strictObject({
   name: z.string(),
 })
 
+/** Тригери таблиці, що їх вимикає запис: секція промоції й крок `versions`. */
+const dataTriggers = z.array(
+  z.strictObject({
+    name: z.string(),
+    enabled: z.enum(DATA_TRIGGER_MODES),
+  })
+)
+
 const promotionSectionSchema = z.strictObject({
   recordHash: hashSchema,
   record: promotionRecordSchema,
@@ -324,12 +332,7 @@ const promotionSectionSchema = z.strictObject({
           guard: z.string(),
         })
       ),
-      triggers: z.array(
-        z.strictObject({
-          name: z.string(),
-          enabled: z.enum(DATA_TRIGGER_MODES),
-        })
-      ),
+      triggers: dataTriggers,
     })
   ),
 })
@@ -367,6 +370,7 @@ const stepSchema = z.strictObject({
   dataLoss: z.boolean(),
   rewriteRisk: z.boolean(),
   guards: z.array(z.string()),
+  triggers: dataTriggers.optional(),
 })
 
 /**

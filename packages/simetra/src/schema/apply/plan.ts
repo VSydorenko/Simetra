@@ -688,7 +688,9 @@ export async function buildPlan(
       live: live.extracted.model,
       epochExists: state.status === "applied" && state.rowVersionEpoch,
       model,
+      desired: target.extracted.model,
       engineSteps: planSteps,
+      parse,
       offset: withCarriers.length,
     }),
   ]
@@ -1140,7 +1142,9 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
       live: live.extracted.model,
       epochExists: c.epochExists,
       model: c.model,
+      desired: target.extracted.model,
       engineSteps: planSteps,
+      parse,
       offset: withCarriers.length,
       // Таблиця на цілі — у старому імені
       liveName: (table) => {

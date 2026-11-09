@@ -8,6 +8,7 @@ import type {
   LockedTable,
 } from "../engine"
 import { applyDiagnostic } from "./diagnostic"
+import type { DataTable } from "./promotion/data"
 import type { DriftReport } from "./drift"
 import {
   isLossless,
@@ -69,6 +70,11 @@ export interface PlanStep {
   rewriteRisk: boolean
   /** SQL сторожів кроку; раннер виконує їх перед кроком. */
   guards: string[]
+  /**
+   * Тригери користувача таблиці кроку підвищення версії (бажані імена): раннер
+   * звіряє їх з живими, вимикає на час кроку й вмикає після блоку `versions`.
+   */
+  triggers?: DataTable["triggers"]
 }
 
 /**

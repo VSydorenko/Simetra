@@ -1386,6 +1386,47 @@ describe("executePlan", () => {
       ).toBe(true)
     })
 
+    describe("bump step triggers", () => {
+      const bump = step(`s${n}`, "UPDATE app.n SET version = 1", {
+        origin: "versions",
+        class: "dataStep",
+        lockClass: "shareRowExclusive",
+        lockedTables: [{ schema: "app", name: "n" }],
+        triggers: [{ name: "tg", enabled: "O" }],
+      })
+      const run = (script: Parameters<typeof clocked>[0]) => {
+        const fake = clocked(script)
+        return executePlan(
+          fake.db,
+          target,
+          { ...plan, steps: [...engineSteps, bump, environment] },
+          { ...withMode("rehearse"), clock: fake.clock }
+        ).then((outcome) => ({ outcome, log: fake.log }))
+      }
+
+      it("checks the live triggers, disables them for the step and enables them after the block", async () => {
+        const { outcome, log } = await run({
+          triggers: [{ name: "tg", enabled: "O" }],
+        })
+        expect(outcome.status).toBe("rolledBack")
+        const at = (sql: string) => log.indexOf(sql)
+        const off = at("ALTER TABLE app.n DISABLE TRIGGER tg")
+        const on = at("ALTER TABLE app.n ENABLE TRIGGER tg")
+        expect(off).toBeGreaterThan(at("triggers"))
+        expect(at(bump.sql)).toBeGreaterThan(off)
+        expect(on).toBeGreaterThan(at(bump.sql))
+        expect(on).toBeLessThan(at(environment.sql))
+      })
+
+      it("refuses a mismatch of the live triggers before disabling anything", async () => {
+        const { outcome, log } = await run({ triggers: [] })
+        expect(outcome).toMatchObject({ status: "refused" })
+        expect(JSON.stringify(outcome)).toContain("apply.target-changed")
+        expect(log).not.toContain("ALTER TABLE app.n DISABLE TRIGGER tg")
+        expect(log).not.toContain(bump.sql)
+      })
+    })
+
     it("does not touch synchronous commit without a versions block", async () => {
       const fake = clocked()
       await executePlan(

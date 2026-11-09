@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { mechanicsTriggerName } from "simetra/compiler"
+import { loadSqlParser, mechanicsTriggerName } from "simetra/compiler"
 import type { CatalogModel, PhysicalTable } from "simetra/model"
 import {
   liveMechanicsTables,
@@ -153,9 +153,14 @@ const live = (o: {
     units: [...(o.sequence ? [SEQUENCE] : []), ...o.touched.map(touch)],
   }) as unknown as CatalogModel
 
+const parse = await loadSqlParser()
+
 const engine = (over: Partial<PlanStep> = {}) => ({
+  sql: "SELECT 1",
   produces: [] as string[],
   destroys: [] as string[],
+  produced: [] as PlanStep["produced"],
+  destroyed: [] as PlanStep["destroyed"],
   ...over,
 })
 
@@ -164,7 +169,9 @@ const plan = (p: Partial<Parameters<typeof planRowVersionSteps>[0]>) =>
     live: live({ tables: ["a"], touched: ["a"], sequence: true }),
     epochExists: true,
     model: model("a"),
+    desired: live({ tables: ["a"], touched: ["a"], sequence: true }),
     engineSteps: [],
+    parse,
     offset: 0,
     ...p,
   })
@@ -292,5 +299,142 @@ describe("rowVersionFirstTables", () => {
         written.map((name) => ({ schema: "app", name }))
       )
     ).toEqual(refused)
+  })
+})
+
+describe("rewritten tables (Р10)", () => {
+  const column = (table: string, name = "total") => ({
+    kind: "column",
+    schema: "app",
+    table,
+    name,
+  })
+  const retype = (table: string, kind = "TYPE numeric(10,0)") =>
+    engine({
+      sql: `ALTER TABLE app.${table} ALTER COLUMN total ${kind}`,
+      consumed: [column(table)],
+    })
+  const recreate = (table: string) => [
+    engine({
+      sql: `ALTER TABLE app.${table} DROP COLUMN total`,
+      destroyed: [column(table)],
+      destroys: [`column:app.${table}.total`],
+    }),
+    engine({
+      sql: `ALTER TABLE app.${table} ADD COLUMN total numeric GENERATED ALWAYS AS (1) STORED`,
+      produced: [column(table)],
+      produces: [`column:app.${table}.total`],
+    }),
+  ]
+  const bumps = (steps: PlanStep[]) =>
+    steps.filter((s) => s.class === "dataStep")
+  const desired = live({ tables: ["a"], touched: ["a"], sequence: true })
+  // Користувацький тригер у бажаній тіні: раннер звіряє його разом з механікою
+  desired.units.push({
+    class: "trigger",
+    identity: "trigger:app.a.audit",
+    schema: "app",
+    name: "audit",
+    sql: "CREATE TRIGGER audit AFTER UPDATE ON app.a FOR EACH ROW EXECUTE FUNCTION app.log()",
+  } as never)
+
+  it.each([
+    ["a column type change", [retype("a")]],
+    ["a column destroyed and created again", recreate("a")],
+  ])("%s: a bump step with the triggers of the desired shadow", (_, steps) => {
+    const result = plan({ desired, engineSteps: steps })
+    const [bump] = bumps(result)
+    expect(bump!.sql).toBe(
+      "UPDATE app.a SET version = nextval('simetra.row_version')"
+    )
+    expect(bump!.triggers).toEqual([
+      { name: mechanicsTriggerName("a"), enabled: "O" },
+      { name: "audit", enabled: "O" },
+    ])
+    expect(bump).toMatchObject({
+      origin: "versions",
+      class: "dataStep",
+      lockClass: "shareRowExclusive",
+      rewriteRisk: true,
+      lockedTables: [{ schema: "app", name: "a" }],
+    })
+  })
+
+  it("the bump step stands between the seed and the epoch", () => {
+    const result = plan({
+      live: live({ tables: ["a"], touched: ["a"], sequence: false }),
+      desired,
+      engineSteps: [retype("a")],
+    })
+    expect(result.map((s) => s.class)).toEqual([
+      "validationScan",
+      "dataStep",
+      "catalogOnly",
+    ])
+  })
+
+  it.each([
+    [
+      "a table without mechanics",
+      { live: live({ tables: ["a"], touched: [], sequence: true }) },
+      [retype("a")],
+    ],
+    [
+      "a new column",
+      {},
+      [
+        engine({
+          sql: "ALTER TABLE app.a ADD COLUMN extra text",
+          produced: [column("a", "extra")],
+        }),
+      ],
+    ],
+    [
+      "a rename",
+      {},
+      [
+        engine({
+          sql: "ALTER TABLE app.a RENAME COLUMN total TO sum",
+          produced: [column("a", "sum")],
+          destroyed: [column("a", "total")],
+        }),
+      ],
+    ],
+    [
+      "a table the plan replaces",
+      {},
+      [
+        engine({
+          sql: "DROP TABLE app.a",
+          destroyed: [{ kind: "table", schema: "app", name: "a" }, column("a")],
+        }),
+        engine({
+          sql: "CREATE TABLE app.a (total numeric)",
+          produced: [{ kind: "table", schema: "app", name: "a" }, column("a")],
+        }),
+      ],
+    ],
+    [
+      "a composite type attribute",
+      {},
+      [engine({ sql: "ALTER TYPE app.a ALTER ATTRIBUTE total TYPE int" })],
+    ],
+  ])("%s: no bump step", (_, over, steps) => {
+    expect(bumps(plan({ ...over, engineSteps: steps }))).toEqual([])
+  })
+
+  it("promotion: the table is looked up on the target by its old name", () => {
+    const result = plan({
+      live: live({ tables: ["old"], touched: ["old"], sequence: true }),
+      model: model("fresh"),
+      desired: live({ tables: ["fresh"], touched: ["fresh"], sequence: true }),
+      liveName: () => ({ schema: "app", name: "old" }),
+      engineSteps: [retype("fresh")],
+    })
+    const [bump] = bumps(result)
+    expect(bump!.sql).toContain("app.fresh")
+    expect(bump!.triggers).toEqual([
+      { name: mechanicsTriggerName("fresh"), enabled: "O" },
+    ])
   })
 })

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto"
 import { describe, expect, it } from "vitest"
 import type { CompiledModel } from "simetra/compiler"
 import type { PlanArtifact } from "simetra/schema"
+import { attribute, uuid } from "../../../simetra/test/support"
 import {
   applyArtifact,
   compiled,
@@ -145,6 +146,86 @@ describe.concurrent("versions block on live rows", () => {
       await applyArtifact(url, artifact, model)
       expect(await epochOf(url)).toMatch(/^[0-9a-f-]{36}$/)
       expect((await plan(url, model)).status).toBe("unchanged")
+    })
+  })
+})
+
+describe.concurrent("versions of the columns the engine rewrites", () => {
+  // Обробник підписки падає на `UPDATE`: якщо крок підвищення не вимкне
+  // тригери користувача, застосування зірветься
+  const HANDLER = `CREATE FUNCTION app.on_party() RETURNS trigger LANGUAGE plpgsql VOLATILE SET search_path = '' AS $$
+BEGIN
+  IF TG_OP = 'UPDATE' THEN RAISE EXCEPTION 'user trigger fired'; END IF;
+  RETURN NEW;
+END $$;`
+  const amount = (scale: number) =>
+    attribute("amount", {
+      id: uuid(9301),
+      type: "Numeric",
+      precision: 12,
+      scale,
+    })
+  const withScale = (scale: number) =>
+    compiled({
+      [PARTY]: party([amount(scale)]),
+      "event-subscriptions/OnParty/OnParty.meta.json": {
+        id: uuid(9302),
+        kind: "EventSubscription",
+        name: "OnParty",
+        physicalName: "on_party",
+        sources: [{ kind: "Catalog", name: "Party" }],
+        event: "beforeWrite",
+        handler: { schema: "app", name: "on_party" },
+      },
+      "sql/app/handlers.sql": HANDLER,
+    })
+
+  const rows = (url: string) =>
+    query<{ id: string; version: string; updated_at: string; amount: string }>(
+      url,
+      "select id::text, version::text, updated_at::text, amount::text from app.party order by id"
+    )
+
+  // Значення цілі: звуження зі втратою відмовляє сторож типу
+  // (`apply.type-narrowing`), тож рядки несуть цілі значення, а перепис
+  // таблиці робить сама зміна масштабу
+  it("a scale decrease raises the version of every row and leaves updated_at and user triggers alone", async () => {
+    const before = await withScale(2)
+    const after = await withScale(0)
+    await inTarget(EMPTY, async (url) => {
+      await establish(url, before)
+      await query(
+        url,
+        `insert into app.party (id, amount) values
+         ('${randomUUID()}', 1), ('${randomUUID()}', 2), ('${randomUUID()}', 3)`
+      )
+      const was = await rows(url)
+
+      const artifact = planned(await plan(url, after))
+      const bump = versionsOf(artifact).filter((s) => s.class === "dataStep")
+      expect(bump.map((s) => s.sql)).toEqual([
+        "UPDATE app.party SET version = nextval('simetra.row_version')",
+      ])
+      expect(bump[0]!.triggers!.map((t) => t.name)).toContain("on_party")
+      await applyArtifact(url, artifact, after)
+
+      const now = await rows(url)
+      expect(now.map((r) => r.id)).toEqual(was.map((r) => r.id))
+      now.forEach((row, i) => {
+        expect(BigInt(row.version)).toBeGreaterThan(BigInt(was[i]!.version))
+        expect(row.updated_at).toBe(was[i]!.updated_at)
+      })
+      expect(now.map((r) => r.amount)).toEqual(
+        was.map((r) => String(Number(r.amount)))
+      )
+      // Тригери повернуто, а наступний запис знову підвищує версію
+      expect(
+        await query(
+          url,
+          "select count(*)::int as n from pg_trigger where tgrelid = 'app.party'::regclass and not tgisinternal and tgenabled <> 'O'"
+        )
+      ).toEqual([{ n: 0 }])
+      expect((await plan(url, after)).status).toBe("unchanged")
     })
   })
 })
