@@ -254,6 +254,15 @@ describe("keyset depth and budget", () => {
     ).toBe(true)
   })
 
+  it("keeps the keyset shallower than any where the budget admits (the pad invariant)", () => {
+    // `forms.ts` перевіряє бюджет заглушкою глибини 2: це чесно, лише поки
+    // keyset-умова неглибша за `where` найбільшої глибини, яку бюджет пропускає.
+    const deepest = Math.max(
+      ...ALL.flatMap((orderBy) => enumerated(orderBy)).map(depthOf)
+    )
+    expect(1 + deepest).toBeLessThanOrEqual(FILTER_DEPTH_MAX)
+  })
+
   it("pins the node count of the ORDER_BY_MAX default order", () => {
     const orderBy: OrderBy = Array.from({ length: ORDER_BY_MAX }, (_, i) => ({
       attribute: `c${i}`,
