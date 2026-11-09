@@ -154,6 +154,7 @@ describe("roles", () => {
     })
   })
 
+  // Наявну пару лише звіряють: у підсумку її немає, відмови теж
   it("without a project file an existing login pair is checked, not refused or created", async () => {
     await withRollback(async (client) => {
       // Локальний стек після `roles.sql`: пара runtime → command SET-only
@@ -168,11 +169,6 @@ describe("roles", () => {
           {
             server: "target",
             name: PLATFORM_ROLES.command,
-            outcome: "present",
-          },
-          {
-            server: "target",
-            name: PLATFORM_LOGIN_ROLES.runtime,
             outcome: "present",
           },
         ],
