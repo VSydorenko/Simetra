@@ -204,7 +204,7 @@ END $$;`
       const artifact = planned(await plan(url, after))
       const bump = versionsOf(artifact).filter((s) => s.class === "dataStep")
       expect(bump.map((s) => s.sql)).toEqual([
-        "UPDATE app.party SET version = nextval('simetra.row_version')",
+        "UPDATE app.party SET version = GREATEST(nextval('simetra.row_version'), version + 1)",
       ])
       expect(bump[0]!.triggers!.map((t) => t.name)).toContain("on_party")
       await applyArtifact(url, artifact, after)
@@ -226,6 +226,28 @@ END $$;`
         )
       ).toEqual([{ n: 0 }])
       expect((await plan(url, after)).status).toBe("unchanged")
+    })
+  })
+
+  // Послідовність відстає від версій рядків (логічна реплікація чи ручний
+  // `setval`): голий `nextval` дав би версію нижчу за видану; крок підвищення
+  // йде за правилом тригера оновлення
+  it("a lagging sequence does not lower the version of a rewritten row", async () => {
+    const before = await withScale(2)
+    const after = await withScale(0)
+    await inTarget(EMPTY, async (url) => {
+      await establish(url, before)
+      await seedRows(url, [5_000, 7_000, 9_000])
+      await query(url, "select setval('simetra.row_version', 10)")
+      const was = await rows(url)
+
+      await reapply(url, after)
+
+      const now = await rows(url)
+      expect(now.map((r) => r.id)).toEqual(was.map((r) => r.id))
+      now.forEach((row, i) => {
+        expect(BigInt(row.version)).toBeGreaterThan(BigInt(was[i]!.version))
+      })
     })
   })
 })

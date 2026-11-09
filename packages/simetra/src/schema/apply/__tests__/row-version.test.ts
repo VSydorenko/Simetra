@@ -345,7 +345,7 @@ describe("rewritten tables (Р10)", () => {
     const result = plan({ desired, engineSteps: steps })
     const [bump] = bumps(result)
     expect(bump!.sql).toBe(
-      "UPDATE app.a SET version = nextval('simetra.row_version')"
+      "UPDATE app.a SET version = GREATEST(nextval('simetra.row_version'), version + 1)"
     )
     expect(bump!.triggers).toEqual([
       { name: mechanicsTriggerName("a"), enabled: "O" },

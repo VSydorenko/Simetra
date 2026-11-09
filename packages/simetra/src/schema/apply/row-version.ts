@@ -122,7 +122,7 @@ export function rowVersionSteps(
   }))
     steps.push({
       ...base,
-      sql: `UPDATE ${qualify(t)} SET ${quoteIdent(ROW_VERSION_COLUMN)} = nextval('${SEQUENCE}')`,
+      sql: `UPDATE ${qualify(t)} SET ${quoteIdent(ROW_VERSION_COLUMN)} = GREATEST(nextval('${SEQUENCE}'), ${quoteIdent(ROW_VERSION_COLUMN)} + 1)`,
       class: "dataStep",
       lockClass: "shareRowExclusive",
       lockedTables: [{ schema: t.schema, name: t.name }],
