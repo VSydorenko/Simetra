@@ -2,6 +2,7 @@ import fc from "fast-check"
 import {
   CommandFailure,
   FILTER_OPERATORS,
+  keysetFilter,
   encodeRow,
   runtimeCatalogSchema,
   type CommandError,
@@ -26,7 +27,6 @@ import {
   compileFilter,
   fieldInfoOf,
   filterCollator,
-  keysetAfter,
 } from "../../src/data/store/filter"
 import { executeRead, prepareRead } from "../../src/server/read"
 import { withRollback } from "./connection"
@@ -261,7 +261,12 @@ describe("T4 filter evaluator against the T3 read builder", () => {
           if (!("rows" in page)) throw new Error(`${name}: page refused`)
           if (page.rows.length === 0) break
           paged.push(...page.rows.map((row) => row.ref as string))
-          where = keysetAfter(orderBy, page.rows[page.rows.length - 1]!, "ref")
+          const last = page.rows[page.rows.length - 1]!
+          where = keysetFilter(
+            orderBy,
+            { values: last, key: last.ref as string, direction: "after" },
+            "ref"
+          )
         }
         expect(paged, name).toEqual(expected)
       }

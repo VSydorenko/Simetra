@@ -1,4 +1,9 @@
-import { CommandFailure, type Filter, type OrderBy } from "simetra/model"
+import {
+  CommandFailure,
+  keysetFilter,
+  type Filter,
+  type OrderBy,
+} from "simetra/model"
 import { describe, expect, it } from "vitest"
 import { DataError } from "../../errors"
 import {
@@ -8,7 +13,6 @@ import {
   evaluateFilter,
   fieldInfoOf,
   filterCollator,
-  keysetAfter,
 } from "../filter"
 import type { Values } from "../types"
 import {
@@ -176,47 +180,6 @@ describe("compareRows", () => {
   })
 })
 
-describe("keysetAfter", () => {
-  /** Сторінки по `size` keyset-ом від останнього рядка, як читає вікно. */
-  function pages(orderBy: OrderBy, size: number): number[] {
-    const compare = compareRows(orderBy, info, "ref", collator)
-    const out: Values[] = []
-    let rest = [...FILTER_ROWS].sort(compare)
-    for (;;) {
-      const page = rest.slice(0, size)
-      if (page.length === 0) break
-      out.push(...page)
-      const after = keysetAfter(orderBy, page[page.length - 1]!, "ref")
-      rest = FILTER_ROWS.filter((row) =>
-        evaluateFilter(after, row, info, collator)
-      ).sort(compare)
-    }
-    return out.map((row) => Number((row.ref as string).slice(-12)))
-  }
-
-  it.each<[string, OrderBy]>([
-    ["NULL last ascending", [{ attribute: "count", direction: "asc" }]],
-    ["NULL first descending", [{ attribute: "count", direction: "desc" }]],
-    [
-      "NULL first ascending",
-      [{ attribute: "count", direction: "asc", nulls: "first" }],
-    ],
-    [
-      "two terms and the key descending",
-      [
-        { attribute: "day", direction: "desc", nulls: "last" },
-        { attribute: "amount", direction: "asc" },
-        { attribute: "ref", direction: "desc" },
-      ],
-    ],
-  ])("pages through NULL without loss or duplicates: %s", (_, orderBy) => {
-    const all = [...FILTER_ROWS]
-      .sort(compareRows(orderBy, info, "ref", collator))
-      .map((row) => Number((row.ref as string).slice(-12)))
-    expect(pages(orderBy, 3)).toEqual(all)
-  })
-})
-
 describe("checkFilterBudget", () => {
   const deep = (depth: number): Filter =>
     depth === 1 ? { attribute: "name", op: "isNull" } : { not: deep(depth - 1) }
@@ -228,7 +191,14 @@ describe("checkFilterBudget", () => {
   it("refuses a user filter at the limit plus a keyset", () => {
     const orderBy: OrderBy = [{ attribute: "count", direction: "asc" }]
     const combined: Filter = {
-      and: [deep(8), keysetAfter(orderBy, FILTER_ROWS[0]!, "ref")],
+      and: [
+        deep(8),
+        keysetFilter(
+          orderBy,
+          { values: FILTER_ROWS[0]!, key: key(1), direction: "after" },
+          "ref"
+        ),
+      ],
     }
     expect(refusal(() => checkFilterBudget(combined))).toEqual({
       code: "command.invalid",
