@@ -1,5 +1,6 @@
 import type { CatalogEntry } from "simetra/model"
 import { catalogEntry } from "../../../model/runtime/__tests__/entries"
+import type { Defects } from "../defects"
 import { createObjectStore, type ObjectStore } from "../object-store"
 import { createSectionStore, type SectionStore } from "../section-store"
 import { createSession, type Scope, type Session } from "../session"
@@ -53,7 +54,11 @@ export interface Harness {
 }
 
 export function harness(
-  options: { limits?: Partial<CoreLimits>; entry?: CatalogEntry } = {}
+  options: {
+    limits?: Partial<CoreLimits>
+    entry?: CatalogEntry
+    defects?: Defects
+  } = {}
 ): Harness {
   const log: CoreLogEntry[] = []
   const session = createSession({
@@ -66,6 +71,7 @@ export function harness(
     entry: options.entry ?? catalogEntry(),
     session,
     log: (e) => log.push(e),
+    defects: options.defects,
   })
   const sections = createSectionStore({ object: OBJECT, session, rows: store })
   return {

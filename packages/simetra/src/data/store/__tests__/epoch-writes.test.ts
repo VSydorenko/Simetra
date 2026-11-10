@@ -98,6 +98,35 @@ const PATHS: { path: string; check: () => void }[] = [
     },
   },
   {
+    // Тримана епоха — спершу запис власника, а не шапка: шапка вже EB, а
+    // `null`-рядки не доводять, що вони з EB, тож лишаються EA і `stale`.
+    path: "section put after a header switch",
+    check: () => {
+      const h = harness()
+      expect(putLines(h, 5, EA)).toBe("written")
+      put(h, inEpoch(row(K1, 1), EB))
+      expect(putLines(h, 6, null)).toBe("written")
+      expect(h.sections.get(K1, "lines")?.versionEpoch).toBe(EA)
+      expect(
+        sectionLinesStale(h.sections.get(K1, "lines")!, h.store.get(K1)!)
+      ).toBe(true)
+    },
+  },
+  {
+    // Гілка навмисного дефекту теж пише рядок у стан — і теж через правило.
+    path: "version-decrease fault branch",
+    check: () => {
+      const h = harness({ defects: new Set(["version-decrease"]) })
+      put(h, inEpoch(row(K1, 5), EA))
+      expect(put(h, inEpoch(row(K1, 3), null))).toBe("written")
+      expect(h.store.get(K1)).toMatchObject({
+        version: 3,
+        versionEpoch: EA,
+        row: { versionEpoch: EA },
+      })
+    },
+  },
+  {
     path: "ownerVersions",
     check: () => {
       const h = harness()

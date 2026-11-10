@@ -361,7 +361,14 @@ export function createObjectStore(options: {
         const merged =
           mergeVersioned(e.row, row) ??
           (defects.has("version-decrease")
-            ? { ...row, values: { ...e.row?.values, ...row.values } }
+            ? {
+                ...row,
+                versionEpoch: effectiveEpoch(
+                  row.versionEpoch,
+                  e.row?.versionEpoch
+                ),
+                values: { ...e.row?.values, ...row.values },
+              }
             : undefined)
         if (merged === undefined) return "rejected"
         e.row = merged
