@@ -276,9 +276,11 @@ describe.concurrent("apply backfill", () => {
         { id: empty, note: "n/a" },
         { id: kept, note: "x" },
       ])
+      // Блок `versions` підвищує всі рядки таблиці заповнення (Р4 після
+      // рішення архітекторки): клієнт перечитає зайвий рядок, а не пропустить
       const now = await versions()
       expect(BigInt(now[empty]!)).toBeGreaterThan(BigInt(was[empty]!))
-      expect(now[kept]).toBe(was[kept])
+      expect(BigInt(now[kept]!)).toBeGreaterThan(BigInt(was[kept]!))
       // Після кроку підписка знову ввімкнена
       await expect(
         query(url, "update app.party set note = 'n/a' where note = 'x'")
@@ -345,6 +347,64 @@ describe.concurrent("apply backfill", () => {
       })
       expect(await notesOf(url)).toEqual([null, "z"])
       expect(await ledgerRows(url)).toBe(ledger)
+    })
+  })
+
+  it("pins the shape of a recreated column that becomes NOT NULL", async () => {
+    // Доповнення п. 3: колонку, яку план знімає й додає знову, план не рахує.
+    // pg-delta замінює зміну виразу генерованої колонки парою DROP + ADD …
+    // NOT NULL одним оператором, без окремого SET NOT NULL, тож поля
+    // `notNull` немає, і `NULL` з виразу дає сирий 23502 на кроці. Це той
+    // самий випадок боргу, що й ADD COLUMN … NOT NULL без default (Р7
+    // покриває лише SET NOT NULL); тест фіксує форму, щоб її зміна в
+    // pg-delta не пройшла непоміченою
+    const gen = (expression: string, over: Json = {}) => {
+      const t = notes() as unknown as { columns: Json[] }
+      t.columns.push({
+        id: uuid(9206),
+        name: "g",
+        physicalName: "g",
+        type: "Text",
+        generated: { expression },
+        ...over,
+      })
+      return t
+    }
+    const before = await compiled({ [NOTES]: gen("upper(note)") })
+    const after = await compiled({
+      [NOTES]: gen("lower(note)", { notNull: true }),
+    })
+    await inTarget(EMPTY, async (url) => {
+      await establish(url, before)
+      await query(url, rows(null, "a"))
+      const artifact = planned(await plan(url, after))
+      expect(
+        artifact.steps.map((s) => ({
+          origin: s.origin,
+          sql: s.sql,
+          notNull: s.notNull,
+        }))
+      ).toEqual([
+        {
+          origin: "engine",
+          sql: 'ALTER TABLE "app"."notes" DROP COLUMN "g"',
+          notNull: undefined,
+        },
+        {
+          origin: "engine",
+          sql: 'ALTER TABLE "app"."notes" ADD COLUMN "g" text GENERATED ALWAYS AS (lower((note)::text)) STORED NOT NULL',
+          notNull: undefined,
+        },
+      ])
+      expect(await apply(url, artifact, after)).toMatchObject({
+        status: "failed",
+        diagnostics: [
+          {
+            code: "apply.step-failed",
+            params: { step: artifact.steps[1]!.id, sqlstate: "23502" },
+          },
+        ],
+      })
     })
   })
 

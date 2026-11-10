@@ -396,7 +396,10 @@ describe.concurrent("carrier copy steps on live rows", () => {
     // І20 (платформна спека §6.6, спека промоції §7.2): коментар отримує
     // власність — носій, чий тригер створює пізніший крок плану, — і
     // обов'язковий `note` з default. Перевірка тригерів Р4а не вимагає
-    // тригера, якого ще немає, а копію пише крок копій після блоку двигуна
+    // тригера, якого ще немає, а копію пише крок копій після блоку двигуна.
+    // Двигун знімає тригер механіки до заповнення й створює пізніше, тож
+    // версію рядка підвищує блок `versions`: таблиця заповнення для нього
+    // переписана
     const note = (over: Record<string, unknown> = {}) => ({
       id: uuid(6905),
       name: "note",
@@ -435,6 +438,17 @@ describe.concurrent("carrier copy steps on live rows", () => {
          insert into public.${COMMENT_TABLE} (id, org_id, task_id)
            values ('${id.comment}', '${id.org}', '${id.task}');`
       )
+      const version = async () =>
+        BigInt(
+          (
+            await one<{ version: string }>(
+              url,
+              `select version::text from public.${COMMENT_TABLE} where id = $1`,
+              [id.comment]
+            )
+          ).version
+        )
+      const was = await version()
       const artifact = planned(
         await buildPlan(engine, dbs, after, { target: { url } }, [])
       )
@@ -477,6 +491,7 @@ describe.concurrent("carrier copy steps on live rows", () => {
           [id.comment]
         )
       ).toEqual({ note: "n/a", copy: id.u1 })
+      expect(await version()).toBeGreaterThan(was)
     })
   })
 

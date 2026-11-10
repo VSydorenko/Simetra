@@ -672,12 +672,18 @@ export const applyTool = defineTool({
             attempts: outcome.attempts,
             report: ok ? report : null,
             // Звіт репетиції лічить лише фактичне; план — з артефакту
-            backfills: outcome.evidence.backfills.map((b) => ({
-              ...b,
-              rowsAtPlan:
-                artifact.steps.find((s) => s.id === b.step)?.backfill
-                  ?.rowsAtPlan ?? 0,
-            })),
+            backfills: outcome.evidence.backfills.map((b) => {
+              const facts = artifact.steps.find(
+                (s) => s.id === b.step
+              )?.backfill
+              // Доказ назвав крок без фактів заповнення — зламаний конвеєр,
+              // а не нуль рядків на плані
+              if (facts === undefined)
+                throw new Error(
+                  `rehearsal evidence names ${b.step}, which is not a backfill step of the plan`
+                )
+              return { ...b, rowsAtPlan: facts.rowsAtPlan }
+            }),
           },
           artifacts: ok
             ? [

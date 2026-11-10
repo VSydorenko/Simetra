@@ -341,6 +341,23 @@ describe("rewritten tables (Р10)", () => {
   it.each([
     ["a column type change", [retype("a")]],
     ["a column destroyed and created again", recreate("a")],
+    // Заповнення перед NOT NULL: тригер механіки двигун міг зняти до кроку
+    [
+      "a NOT NULL fill",
+      [
+        engine({
+          sql: 'UPDATE app.a SET "note" = DEFAULT WHERE "note" IS NULL',
+          backfill: {
+            table: { schema: "app", name: "a" },
+            column: "note",
+            rowsAtPlan: 1,
+            permission: false,
+            default: "''",
+            triggers: [],
+          },
+        }),
+      ],
+    ],
   ])("%s: a bump step with the triggers of the desired shadow", (_, steps) => {
     const result = plan({ desired, engineSteps: steps })
     const [bump] = bumps(result)
