@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { SUPABASE_EXPECTED_BLIND_FUNCTIONS } from "simetra/schema"
+import { PROVIDER_EXPECTED_BLIND_FUNCTIONS } from "simetra/schema"
 import { project } from "../../../../simetra/test/support"
 import { asSuperuser, query } from "../../__tests__/support/db"
 import {
@@ -38,7 +38,8 @@ describe.concurrent("buildPlan", () => {
       // переліку: ідентичності пресету збігаються з каталогом поіменно
       expect(outcome).toMatchObject({
         status: "planned",
-        expectedBlindFunctions: SUPABASE_EXPECTED_BLIND_FUNCTIONS.length,
+        expectedBlindFunctions:
+          PROVIDER_EXPECTED_BLIND_FUNCTIONS.supabase.length,
       })
       expect(
         outcome.diagnostics.filter(

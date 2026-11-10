@@ -732,6 +732,7 @@ describe.concurrent("buildPlan", () => {
         // Без права на явний LOCK замок бере сам крок — і це крок даних
         const p = await repairedContacts()
         const reader: ApplyDatabase = {
+          statement: (target, sql) => dbs.reader.statement(target, sql),
           transaction: (target, end, fn) =>
             dbs.reader.transaction(target, end, (tx) =>
               fn({
@@ -1129,6 +1130,7 @@ describe.concurrent("buildPlan", () => {
         const outcome = await inTarget(EMPTY, async (url) => {
           await establish(url, p.before)
           const reader: ApplyDatabase = {
+            statement: (target, sql) => dbs.reader.statement(target, sql),
             transaction: (target, end, fn) =>
               dbs.reader.transaction(target, end, (tx) =>
                 fn({

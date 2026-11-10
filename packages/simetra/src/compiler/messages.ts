@@ -4407,6 +4407,26 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Нічого не сплановано й не створено. `simetra roles` наявну роль не змінює: виправте її вручну — `ALTER ROLE <роль> NO<атрибут>` для атрибута, `REVOKE <роль> FROM <член>` (або відкличте роль, у яку вона входить) для членства чи `GRANT <батько> TO <роль входу> WITH INHERIT FALSE, SET TRUE` для відсутнього чи хибного членства ролі входу — і повторіть команду.",
     },
   },
+  "plan.owner-not-bypassrls": {
+    en: () =>
+      "The connected role has neither BYPASSRLS nor superuser: it would see only the rows row-level security allows, so the plan, the apply and the rehearsal cannot be trusted",
+    uk: () =>
+      "Підключена роль не має ні BYPASSRLS, ні прав суперкористувача: вона бачила б лише рядки, які дозволяє захист на рівні рядків, тож плану, застосуванню й репетиції не можна довіряти",
+    hint: {
+      en: "Nothing was planned or written. As a superuser run ALTER ROLE <role> BYPASSRLS, or connect as a role that has it.",
+      uk: "Нічого не сплановано й не записано. Від суперкористувача виконайте ALTER ROLE <роль> BYPASSRLS або підключіться роллю, що його має.",
+    },
+  },
+  "plan.shadow-base-unsupported": {
+    en: () =>
+      "A separate shadow server is not supported with the postgres profile: shadows are built from the template database of the target cluster",
+    uk: () =>
+      "Окремий сервер тіней не підтримано в профілі postgres: тіні будують із бази-шаблону кластера цілі",
+    hint: {
+      en: "Nothing was planned or created. Run the command without the shadow server variable.",
+      uk: "Нічого не сплановано й не створено. Запустіть команду без змінної сервера тіней.",
+    },
+  },
   "plan.type-guard-unsupported": {
     en: (p) =>
       p.reason === "equality"
@@ -4912,6 +4932,56 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     hint: {
       en: "The grant roles were created or checked; the login role was not created, because a login role without its memberships would silently change how the runtime reads. Run `simetra roles` with a role that has ADMIN OPTION on every parent of the login role, or ask the database administrator to create it.",
       uk: "Ролі грантів створено чи звірено; роль входу не створено, бо без своїх членств вона мовчки змінила б шлях читання рантайму. Запустіть `simetra roles` від ролі з ADMIN OPTION на кожній батьківській ролі ролі входу або попросіть адміністратора бази її створити.",
+    },
+  },
+  "roles.superuser-required": {
+    en: (p) =>
+      `The connecting role is not a superuser on ${p.database}: the postgres profile prepares the cluster only as a superuser that logs in as itself`,
+    uk: (p) =>
+      `Роль підключення не є суперкористувачем у ${p.database}: профіль postgres готує кластер лише від суперкористувача, що входить під власним іменем`,
+    hint: {
+      en: "This step was refused before it ran; roles or the database created earlier stay. Run `simetra roles` with a superuser DSN of the server through `--database-url-env`, naming a variable other than the owner's.",
+      uk: "Цей крок відхилено до його виконання; створені раніше ролі чи база лишаються. Запустіть `simetra roles` з DSN суперкористувача сервера через `--database-url-env`, указавши змінну, відмінну від змінної власника.",
+    },
+  },
+  "roles.unsafe-schema": {
+    en: (p) =>
+      `The schema ${p.schema} in ${p.database} is not safe for a superuser session (${p.reason}): its owner or content can run code with superuser rights`,
+    uk: (p) =>
+      `Схема ${p.schema} у ${p.database} небезпечна для сесії суперкористувача (${p.reason}): її власник чи вміст можуть виконати код з правами суперкористувача`,
+    hint: {
+      en: "This step was refused before it ran; roles or the database created earlier stay. The database owner can create objects there, so `simetra roles` refuses instead of installing an extension or running a grant next to them. Make the schema extensions belong to a superuser with no CREATE for anyone else and no objects of other owners, keep plpgsql_check in the schema extensions, make better_auth belong to the auth login role, take CREATE on the database and on public away from the auth login role, drop its objects outside better_auth, and remove any search_path of that role for this database other than better_auth. Then run the command again.",
+      uk: "Цей крок відхилено до його виконання; створені раніше ролі чи база лишаються. Власник бази може створювати там об'єкти, тож `simetra roles` відмовляє, а не ставить розширення чи видає гранти поруч із ними. Зробіть власником схеми extensions суперкористувача без CREATE для інших і без об'єктів чужих власників, тримайте plpgsql_check у схемі extensions, зробіть власником better_auth роль входу auth, заберіть у неї CREATE на базу й на public, видаліть її об'єкти поза better_auth і приберіть її search_path для цієї бази, окрім better_auth. Потім повторіть команду.",
+    },
+  },
+  "roles.unsafe-template": {
+    en: (p) =>
+      `The template database ${p.database} is not safe (${p.reason}): a template that a non-superuser owns or that accepts connections could carry code into every shadow`,
+    uk: (p) =>
+      `База-шаблон ${p.database} небезпечна (${p.reason}): шаблон, яким володіє не суперкористувач чи який приймає з'єднання, міг би занести код у кожну тінь`,
+    hint: {
+      en: "Nothing was changed. Drop the template as a superuser (`ALTER DATABASE … IS_TEMPLATE false`, then `DROP DATABASE … WITH (FORCE)`) and run `simetra roles` again: it recreates the template from template0.",
+      uk: "Нічого не змінено. Видаліть шаблон від суперкористувача (`ALTER DATABASE … IS_TEMPLATE false`, потім `DROP DATABASE … WITH (FORCE)`) і запустіть `simetra roles` знову: він створить шаблон із template0 заново.",
+    },
+  },
+  "roles.database-owner": {
+    en: (p) =>
+      `The database ${p.database} belongs to ${p.actual}, not to the application owner ${p.expected}`,
+    uk: (p) =>
+      `База ${p.database} належить ${p.actual}, а не власнику застосунку ${p.expected}`,
+    hint: {
+      en: "Nothing was changed. The owner creates the application schemas through CREATE on the database, so another owner would break the plan. As a superuser run `ALTER DATABASE … OWNER TO <owner>` after checking what the current owner changed, or point the command at a database that `simetra roles` creates.",
+      uk: "Нічого не змінено. Власник створює схеми застосунку правом CREATE на базу, тож інший власник зламав би план. Від суперкористувача виконайте `ALTER DATABASE … OWNER TO <власник>`, перевіривши, що встиг змінити поточний власник, або вкажіть базу, яку створює `simetra roles`.",
+    },
+  },
+  "roles.shared-cluster": {
+    en: (p) =>
+      `A Simetra login role has an explicit CONNECT on other databases of this cluster (${p.databases}): one cluster serves one Simetra application`,
+    uk: (p) =>
+      `Роль входу Simetra має явний CONNECT до інших баз цього кластера (${p.databases}): один кластер обслуговує один застосунок Simetra`,
+    hint: {
+      en: "Nothing was created. Login roles are cluster-wide with fixed names, so the same login would get its rights in the other application's database. Use a separate cluster for each application, or revoke the explicit CONNECT on those databases if they are not Simetra applications.",
+      uk: "Нічого не створено. Ролі входу кластерні з фіксованими іменами, тож той самий логін мав би свої права в базі іншого застосунку. Використайте окремий кластер для кожного застосунку або відкличте явний CONNECT на ці бази, якщо вони не застосунки Simetra.",
     },
   },
   // Режим обслуговування прав (інструмент `rights-maintenance`): усі відмови

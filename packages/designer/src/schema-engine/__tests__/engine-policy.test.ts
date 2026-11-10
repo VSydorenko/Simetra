@@ -6,15 +6,17 @@ import {
   type Fact,
   type Policy,
   type Predicate,
+  type StableId,
 } from "@supabase/pg-delta"
+import { resolveView } from "@supabase/pg-delta/policy"
 import { describe, expect, it } from "vitest"
 import {
-  SUPABASE_EXTENSIONS,
-  SUPABASE_ROLES,
-  SUPABASE_SURFACES,
+  PROVIDER_UNMANAGED_EXTENSIONS,
+  PROVIDER_SYSTEM_ROLES,
+  PROVIDER_SURFACES,
 } from "simetra/schema"
 import { PROVIDER_SCHEMAS } from "simetra/model"
-import { scopePolicy } from "../pg-delta/policy"
+import { scopePolicy, scopeProfile } from "../pg-delta/policy"
 
 /**
  * Контракт нейтрального пресету провайдера з закріпленою версією двигуна:
@@ -116,24 +118,25 @@ describe("provider preset matches the pinned engine", () => {
     // свого пресету; перепис — лише перелік пресету
     const scope = { schemas: ["app"], provider: "supabase" } as const
     expect(excludedExtensions(scopePolicy(scope))).toEqual(
-      new Set(SUPABASE_EXTENSIONS)
+      new Set(PROVIDER_UNMANAGED_EXTENSIONS.supabase)
     )
     for (const name of excludedExtensions(supabasePolicy))
-      expect(SUPABASE_EXTENSIONS, `engine preset excludes ${name}`).toContain(
-        name
-      )
+      expect(
+        PROVIDER_UNMANAGED_EXTENSIONS.supabase,
+        `engine preset excludes ${name}`
+      ).toContain(name)
   })
 
   it("surfaces match the engine preset", () => {
-    const policies = SUPABASE_SURFACES.filter((s) =>
-      s.classes.includes("policy")
-    ).map((s) => `${s.schema}.${s.table}`)
+    const policies = PROVIDER_SURFACES.supabase
+      .filter((s) => s.classes.includes("policy"))
+      .map((s) => `${s.schema}.${s.table}`)
     expect(new Set(policies)).toEqual(policySurface(supabasePolicy))
     expect(policies.length).toBeGreaterThan(0)
   })
 
   it("trigger surface matches the engine preset", () => {
-    const triggers = SUPABASE_SURFACES.filter((s) =>
+    const triggers = PROVIDER_SURFACES.supabase.filter((s) =>
       s.classes.includes("trigger")
     )
     for (const surface of triggers) expect(surface.table).toBe("*")
@@ -145,12 +148,14 @@ describe("provider preset matches the pinned engine", () => {
 
   it("extension list is not empty", () => {
     // Порожній перелік робив би контракт вище тавтологічним
-    expect(SUPABASE_EXTENSIONS).toContain("pg_graphql")
+    expect(PROVIDER_UNMANAGED_EXTENSIONS.supabase).toContain("pg_graphql")
   })
 
   it("provider roles are the engine's system roles", () => {
-    expect(new Set(SUPABASE_ROLES)).toEqual(ownerRoles(supabasePolicy))
-    expect(SUPABASE_ROLES).toContain("authenticated")
+    expect(new Set(PROVIDER_SYSTEM_ROLES.supabase)).toEqual(
+      ownerRoles(supabasePolicy)
+    )
+    expect(PROVIDER_SYSTEM_ROLES.supabase).toContain("authenticated")
   })
 
   it("default privileges declared for a provider system role are excluded, postgres ones are managed", () => {
@@ -180,5 +185,151 @@ describe("provider preset matches the pinned engine", () => {
     }
     expect(verdict("supabase_admin")).toBe("exclude")
     expect(verdict("postgres")).toBe("include")
+  })
+})
+
+describe("postgres profile policy", () => {
+  const scope = {
+    schemas: ["app", "simetra"],
+    provider: "postgres",
+  } as const
+  const policy = scopePolicy(scope)
+  const flat = flattenPolicy(policy)
+
+  it("assumes only better_auth, which is a provider schema", () => {
+    expect(flat.assumedSchemas).toEqual(["better_auth"])
+    for (const schema of flat.assumedSchemas)
+      expect(PROVIDER_SCHEMAS.postgres).toContain(schema)
+    // extensions та information_schema — провайдерні, але не припущені
+    expect(flat.assumedSchemas).not.toContain("extensions")
+    expect(flat.assumedSchemas).not.toContain("information_schema")
+  })
+
+  it("excludes the provider's unmanaged extensions", () => {
+    expect(excludedExtensions(policy)).toEqual(
+      new Set(PROVIDER_UNMANAGED_EXTENSIONS.postgres)
+    )
+  })
+
+  it("carries nothing of the Supabase preset", () => {
+    expect(flat.id).toBe("simetra-scope")
+    expect(flat.assumedRoles).toEqual([])
+    expect(flat.assumedPublications).toEqual([])
+    expect(flat.assumedExtensions).toEqual([])
+    expect(flat.assumedDefaultGrants).toEqual([])
+    expect(flat.defaultOwner).toBeUndefined()
+    const text = JSON.stringify(flat.filter)
+    for (const name of [
+      ...PROVIDER_SYSTEM_ROLES.supabase,
+      ...PROVIDER_SCHEMAS.supabase.filter(
+        (s) => !PROVIDER_SCHEMAS.postgres.includes(s)
+      ),
+    ])
+      expect(text, `rules name ${name}`).not.toContain(`"${name}"`)
+    const profile = scopeProfile(scope)
+    expect(profile.id).toBe("simetra-postgres")
+    expect(profile.handlers).toHaveLength(0)
+  })
+
+  it("trigger surface matches PROVIDER_SURFACES", () => {
+    const triggers = PROVIDER_SURFACES.postgres.filter((s) =>
+      s.classes.includes("trigger")
+    )
+    const rule = flat.filter.find(
+      (r) =>
+        r.action === "include" &&
+        "all" in r.match &&
+        r.match.all.some((m) => "kind" in m && list(m.kind).includes("trigger"))
+    )
+    const tables =
+      rule !== undefined && "all" in rule.match
+        ? rule.match.all.flatMap((m) =>
+            "idField" in m && m.idField.field === "table"
+              ? list(m.idField.glob)
+              : []
+          )
+        : []
+    expect(new Set(triggers.map((s) => s.table))).toEqual(new Set(tables))
+    expect(triggerSurfaceSchemas(policy)).toEqual(
+      new Set(triggers.map((s) => s.schema))
+    )
+  })
+
+  describe("verdicts of the managed view", () => {
+    const schema = (name: string): Fact => ({
+      id: { kind: "schema", name },
+      payload: {},
+    })
+    const table = (s: string, name: string): Fact => ({
+      id: { kind: "table", schema: s, name },
+      payload: {},
+    })
+    const userTable = table("better_auth", "user").id
+    const fn: StableId = {
+      kind: "function",
+      schema: "simetra",
+      name: "on_user",
+      args: [],
+    }
+    const trigger: StableId = {
+      kind: "trigger",
+      schema: "better_auth",
+      table: "user",
+      name: "sync",
+    }
+    const acl: StableId = {
+      kind: "acl",
+      target: userTable,
+      grantee: "simetra_owner",
+    }
+    const adp: StableId = {
+      kind: "defaultPrivilege",
+      role: "simetra_owner",
+      schema: "app",
+      objtype: "r",
+      grantee: "simetra_user",
+    }
+
+    const view = resolveView(
+      buildFactBase(
+        [
+          schema("better_auth"),
+          schema("extensions"),
+          schema("app"),
+          schema("simetra"),
+          table("better_auth", "user"),
+          { id: fn, payload: {} },
+          { id: trigger, parent: userTable, payload: {} },
+          { id: acl, payload: {} },
+          { id: adp, payload: {} },
+        ],
+        [
+          { from: trigger, to: userTable, kind: "depends" },
+          { from: trigger, to: fn, kind: "depends" },
+        ],
+        "liveDb",
+        new Set()
+      ),
+      policy
+    )
+
+    it.each([
+      [
+        "trigger on better_auth.user with an edge to simetra",
+        "managed",
+        trigger,
+      ],
+      ["table better_auth.user", "reference-only", userTable],
+      ["acl on better_auth.user", "dropped", acl],
+      ["schema extensions", "dropped", { kind: "schema", name: "extensions" }],
+      ["default privilege of the owner in app", "managed", adp],
+    ] as const)("%s is %s", (_name, verdict, id) => {
+      const actual = !view.has(id)
+        ? "dropped"
+        : view.isReferenceOnly(id)
+          ? "reference-only"
+          : "managed"
+      expect(actual).toBe(verdict)
+    })
   })
 })

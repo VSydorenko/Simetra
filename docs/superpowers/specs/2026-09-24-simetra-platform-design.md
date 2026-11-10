@@ -581,7 +581,13 @@ SQL-одиниці): адаптер двигуна мапить у неї сво
 модель порту. Оцінка альтернатив і версії —
 [карта перевикористання](../../research/stack/reuse-map-2026-09.md).
 
-**Тіньова БД.** У проді — co-located `CREATE DATABASE` у тому самому кластері
+**Тіньова БД.** У профілі `postgres` тінь і копію доказу адаптер створює від
+`simetra_owner` через `CREATE DATABASE … TEMPLATE simetra_template`: шаблон
+(з `template0`, з `plpgsql_check`, закритий для з'єднань) готує `roles`, тож
+базові схеми провайдера не відтворюються, а окремий сервер тіней не
+підтримано (`plan.shadow-base-unsupported`); форма та ризики — [спека
+профілю `postgres`](2026-11-08-postgres-profile-design.md) §3.4, §3.5.
+У проді — co-located `CREATE DATABASE` у тому самому кластері
 засобами двигуна (роль `postgres` у Supabase має `CREATEDB`); у dev і CI — локальний
 стек Supabase CLI з образом Postgres тієї самої мажорної версії; тести рушія —
 testcontainers на матриці з 17 і новіших мажорних версій, які збирає провайдер
@@ -746,7 +752,9 @@ Insert і Update взаємно рівні; Relationships, Enums і Functions р
   `runCommand` перемикається на час транзакції. Ролі API провайдера — за
   призначенням (дані T0 `PROVIDER_API_ROLES`): запит користувача
   (`authenticated`), запит без сесії (`anon`), сервісний ключ
-  (`service_role`). `EXECUTE` функцій прав, скоупу, членства й `current_user_id` та `USAGE` на `simetra` має й `simetra_command`; сервісна роль отримує порожню множину; `simetra_command` не член `authenticated` і має `SELECT` таблиць виду (для `UPDATE … WHERE` і `RETURNING`; [спека прав](2026-10-17-rights-design.md) §5.1, §5.3). Гранти таблиць і віртуальних таблиць застосунку — лише
+  (`service_role`); профіль без сервісної ролі (`postgres`) має
+  `service: null`: гранти сервісній ролі просто не генеруються, а винятки
+  outbox для ролей сигналів — блок ПГ-4 спеки профілю. `EXECUTE` функцій прав, скоупу, членства й `current_user_id` та `USAGE` на `simetra` має й `simetra_command`; сервісна роль отримує порожню множину; `simetra_command` не член `authenticated` і має `SELECT` таблиць виду (для `UPDATE … WHERE` і `RETURNING`; [спека прав](2026-10-17-rights-design.md) §5.1, §5.3). Гранти таблиць і віртуальних таблиць застосунку — лише
   ролям запиту (`authenticated`, `anon`); сервісна роль у шляхах застосунку не
   використовується, а функції сесії й членства їй доступні, щоб серверний код
   отримував `NULL`, а не відмову.

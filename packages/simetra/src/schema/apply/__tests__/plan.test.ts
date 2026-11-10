@@ -167,6 +167,36 @@ describe("buildPlan", () => {
     }
   )
 
+  it.each([
+    ["a role without BYPASSRLS", { bypassrls: false, superuser: false }],
+    ["a missing role row (fail-closed)", "none" as const],
+  ])(
+    "refuses %s before any state read or platform-role check",
+    async (_name, owner) => {
+      const model = (await compile(policyDomain(adminRoles()))).model!
+      const queries: string[] = []
+      const target = await fakeTarget(model, {
+        notCopies: [],
+        owner,
+        queries,
+      })
+      const outcome = await buildPlan(
+        fakeEngine([]),
+        { reader: target.reader, scratch: emptyScratch },
+        model,
+        { target: { url: "postgres://target" } },
+        []
+      )
+      expect(outcome).toMatchObject({
+        status: "refused",
+        diagnostics: [{ code: "plan.owner-not-bypassrls" }],
+      })
+      // Гейт — останнє читання: далі ні стану застосування, ні ролей платформи
+      expect(queries.at(-1)).toContain("AS bypassrls")
+      expect(queries.filter((q) => q.includes("AS bypassrls"))).toHaveLength(1)
+    }
+  )
+
   it("hands the engine the hashed effects function of a long table and no truncated one", async () => {
     // До хешу ім'я функції ефектів довгої таблиці було іменем її
     // тригера (обрізане алгоритмом Postgres). Сам перехід — DROP старої й
@@ -251,9 +281,11 @@ describe("buildPlan", () => {
       extract: () => Promise.reject(new Error("no extract expected")),
     }
     const reader: ApplyDatabase = {
+      statement: () => Promise.reject(new Error("no statement expected")),
       transaction: (_db, _end, fn) => fn(tx),
     }
     const scratch: ApplyDatabase = {
+      statement: () => Promise.reject(new Error("no statement expected")),
       transaction: () => Promise.reject(new Error("no copy expected")),
     }
     // Двигун не потрібен: відмова — до будь-якого витягу
@@ -279,6 +311,43 @@ describe("buildPlan", () => {
     expect(statements[0]).toContain("server_version_num")
   })
 
+  it("refuses a separate shadow server on the postgres profile before any database access", async () => {
+    // Р9: тіні профілю будують із шаблону кластера цілі. Відмова — до
+    // платформних ролей, тож підставний порт не отримує жодного запиту
+    const compiled = await compile(
+      metaFiles({
+        "project.meta.json": project({ database: { provider: "postgres" } }),
+        "catalogs/Party/Party.meta.json": catalog("Party"),
+      })
+    )
+    expect(compiled.diagnostics).toEqual([])
+    const never = (what: string) => () =>
+      Promise.reject(new Error(`no ${what} expected`))
+    const reader: ApplyDatabase = {
+      statement: never("statement"),
+      transaction: never("transaction"),
+    }
+    const engine = new Proxy({} as SchemaEngine, {
+      get: (_, name) => {
+        throw new Error(`no engine call expected: ${String(name)}`)
+      },
+    })
+    const outcome = await buildPlan(
+      engine,
+      { reader, scratch: reader },
+      compiled.model!,
+      {
+        target: { url: "postgres://target" },
+        shadowBase: { url: "postgres://shadow" },
+      },
+      []
+    )
+    expect(outcome).toMatchObject({
+      status: "refused",
+      diagnostics: [{ code: "plan.shadow-base-unsupported" }],
+    })
+  })
+
   it.each([
     { server: "target", promotions: false },
     { server: "shadow", promotions: false },
@@ -298,27 +367,31 @@ describe("buildPlan", () => {
       }
       // Свіжа ціль Postgres 17; роль команд є лише на іншому сервері
       const reader: ApplyDatabase = {
+        statement: () => Promise.reject(new Error("no statement expected")),
         transaction: (db, _end, fn) =>
           fn({
             query: async <R extends Record<string, unknown>>(sql: string) =>
               (sql.includes("server_version_num")
                 ? [{ num: 170004, version: "17.4", major: 17 }]
-                : sql.includes("pg_auth_members") &&
-                    db.url !== urls[server as "target" | "shadow"]
-                  ? [
-                      {
-                        name: PLATFORM_ROLES.command,
-                        attributes: {},
-                        memberOf: [],
-                        members: [],
-                        requestPath: [],
-                      },
-                    ]
-                  : []) as unknown as R[],
+                : sql.includes("AS bypassrls")
+                  ? [{ bypassrls: true, superuser: false }]
+                  : sql.includes("pg_auth_members") &&
+                      db.url !== urls[server as "target" | "shadow"]
+                    ? [
+                        {
+                          name: PLATFORM_ROLES.command,
+                          attributes: {},
+                          memberOf: [],
+                          members: [],
+                          requestPath: [],
+                        },
+                      ]
+                    : []) as unknown as R[],
             extract: () => Promise.reject(new Error("no extract expected")),
           }),
       }
       const scratch: ApplyDatabase = {
+        statement: () => Promise.reject(new Error("no statement expected")),
         transaction: () => Promise.reject(new Error("no copy expected")),
       }
       // Будь-який виклик двигуна — і `withDesiredShadow` — кидає: відмова
@@ -618,6 +691,7 @@ async function promotedTag(domain: Domain = policyDomain) {
 
 /** Копія цілі гілки промоції: усе читає порожнім, кроки наміру приймає. */
 const emptyScratch: ApplyDatabase = {
+  statement: () => Promise.reject(new Error("no statement expected")),
   transaction: (_db, _end, fn) =>
     fn({
       query: async <R extends Record<string, unknown>>() => [] as R[],
@@ -644,6 +718,10 @@ async function fakeTarget(
   model: CompiledModel,
   o: {
     notCopies: readonly string[]
+    /** Атрибути ролі сесії для гейта власника; за замовчуванням є BYPASSRLS. */
+    owner?: { bypassrls: boolean; superuser: boolean } | "none"
+    /** Усі запити, які бачить фейк, — у порядку надходження. */
+    queries?: string[]
     /**
      * Таблиці прийнятих джерел прав: доступ ролі застосування й ключ ролі,
      * якого не оголошує жодна роль, у кожному джерелі призначень.
@@ -698,10 +776,15 @@ async function fakeTarget(
   const lockTables: Named[] = []
   const platformFunctions: string[][] = []
   const answer = (sql: string, params: readonly unknown[] = []): unknown[] => {
+    o.queries?.push(sql)
     if (sql.includes("pg_database"))
       return [{ major: 17, encoding: "UTF8", collate: "C", ctype: "C" }]
     if (sql.includes("server_version_num"))
       return [{ num: 170004, version: "17.4" }]
+    if (sql.includes("AS bypassrls"))
+      return o.owner === "none"
+        ? []
+        : [o.owner ?? { bypassrls: true, superuser: false }]
     if (sql.includes("AS marker, to_regclass"))
       return [{ marker: true, ledger: true }]
     if (sql.includes("to_jsonb(m)")) return [{ row: JSON.stringify(marker) }]
@@ -774,7 +857,10 @@ async function fakeTarget(
     ) => answer(sql, params) as R[],
     extract: () => Promise.reject(new Error("no extract expected")),
   }
-  const reader: ApplyDatabase = { transaction: (_db, _end, fn) => fn(tx) }
+  const reader: ApplyDatabase = {
+    transaction: (_db, _end, fn) => fn(tx),
+    statement: () => Promise.reject(new Error("no statement expected")),
+  }
   return { reader, lockTables, platformFunctions }
 }
 

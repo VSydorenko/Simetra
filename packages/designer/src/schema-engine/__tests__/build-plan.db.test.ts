@@ -114,6 +114,7 @@ describe.concurrent("buildPlan", () => {
     const model = await compiled({ [PARTY]: party() })
     await inTarget(EMPTY, async (url) => {
       const reader: ApplyDatabase = {
+        statement: (target, sql) => dbs.reader.statement(target, sql),
         transaction: (target, end, fn) =>
           dbs.reader.transaction(target, end, (tx) =>
             fn({

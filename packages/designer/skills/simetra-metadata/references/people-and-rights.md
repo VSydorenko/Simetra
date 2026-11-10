@@ -687,6 +687,40 @@ that runs `roles`. Without it `roles` still creates the grant roles, but
 refuses the login role with `roles.admin-option-missing` and does not create
 it. An existing role is only checked, never changed.
 
+### The `postgres` provider
+
+On `database.provider: "postgres"` the same command prepares the cluster and
+needs a superuser that logs in as itself. Give it through
+`--database-url-env <VAR>` (a variable other than the owner's, so the
+superuser DSN is not the one `plan` and `apply` use). It creates the roles of
+the profile, the application database owned by `simetra_owner`,
+`plpgsql_check` in that database, and the sealed template database
+`simetra_template` that shadows and proof copies are built from. Running it
+again converges the declared state and creates nothing. The spec of the
+profile has the role set and the reasons:
+`docs/superpowers/specs/2026-11-08-postgres-profile-design.md` §3.
+
+Refusals, all raised before anything is written unless the hint says
+otherwise:
+
+- `roles.superuser-required` — the role is not a superuser, or its current
+  role differs from the login role; connect as the superuser.
+- `roles.unsafe-schema` — a schema in the database (`extensions`,
+  `better_auth`) has an owner or content a superuser session must not trust;
+  the hint lists what to fix by hand.
+- `roles.unsafe-template` — `simetra_template` is owned by a non-superuser,
+  accepts connections, or is closed without being marked as a template; drop
+  it as a superuser and run `roles` again.
+- `roles.database-owner` — the database belongs to another role than
+  `simetra_owner`; fix the owner by hand or use a database `roles` creates.
+- `roles.shared-cluster` — a Simetra login role has an explicit `CONNECT` on
+  other databases; one cluster serves one application.
+- `plan.owner-not-bypassrls` — the role of `plan`, `apply` or `rehearse` has
+  neither `BYPASSRLS` nor superuser; run `ALTER ROLE <role> BYPASSRLS` as a
+  superuser.
+- `plan.shadow-base-unsupported` — a separate shadow server is not supported
+  on `postgres`; drop `--shadow-url-env`.
+
 `plan.platform-role-shape` with the violation `request-role:<role>` means an
 API request role (such as `authenticated`) and a platform role are members of
 each other in some form, even `ADMIN` alone; revoke that membership.

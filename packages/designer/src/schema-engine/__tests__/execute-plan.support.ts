@@ -23,7 +23,7 @@ import {
   planLocks,
   readProviderLocks,
   readSessionSearchPath,
-  SUPABASE_LOCKS,
+  PROVIDER_LOCKS,
   tableKey,
   type PlanStep,
   type ProviderLockSet,
@@ -120,7 +120,7 @@ export function useExecutePlanSetup(): void {
     await query(
       testSuperuserUrl(),
       `create role ${OWNER} nologin; grant ${OWNER} to postgres;
-       create role ${LOCKER} login password '${LOCKER_PASSWORD}';`
+       create role ${LOCKER} login bypassrls password '${LOCKER_PASSWORD}';`
     )
   })
   afterAll(() => dropRoles(OWNER, LOCKER))
@@ -256,7 +256,7 @@ export const providerList = (
   createApplyDatabase({ readOnly: true }).transaction(
     { url },
     "rollback",
-    (tx) => readProviderLocks(tx, role, SUPABASE_LOCKS)
+    (tx) => readProviderLocks(tx, role, PROVIDER_LOCKS.supabase)
   )
 
 /** Шлях пошуку сесії цілі — як його записав би план для ревалідації. */
@@ -425,6 +425,7 @@ export function counted(db: ApplyDatabase): {
   let n = 0
   return {
     db: {
+      statement: (target, sql) => db.statement(target, sql),
       transaction: (target, end, fn) => {
         n++
         return db.transaction(target, end, fn)
@@ -449,6 +450,7 @@ export function observing(
   let seen: Record<string, unknown>[] = []
   return {
     db: {
+      statement: (target, sql) => db.statement(target, sql),
       transaction: (target, end, fn) =>
         db.transaction(target, end, async (tx) => {
           const value = await fn(tx)
@@ -472,6 +474,7 @@ export function afterEnd(
   let seen: Record<string, unknown>[] = []
   return {
     db: {
+      statement: (target, sql) => db.statement(target, sql),
       transaction: (target, end, fn) =>
         db.transaction(target, end, async (tx) => {
           const value = await fn(tx)
@@ -491,6 +494,7 @@ export function afterEnd(
  */
 export function sessionLeftover(db: ApplyDatabase, sql: string): ApplyDatabase {
   return {
+    statement: (target, sql) => db.statement(target, sql),
     transaction: (target, end, fn) =>
       db.transaction(target, end, async (tx) => {
         await tx.query("COMMIT")

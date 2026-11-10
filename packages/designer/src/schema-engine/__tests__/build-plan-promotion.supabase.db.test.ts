@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import {
-  SUPABASE_EXPECTED_BLIND_FUNCTIONS,
+  PROVIDER_EXPECTED_BLIND_FUNCTIONS,
   type PlanArtifact,
 } from "simetra/schema"
 import {
@@ -114,7 +114,8 @@ describe.concurrent("buildPlan", () => {
       })
       expect(planned(outcome).plpgsqlCheck).toBe("transient")
       expect(outcome).toMatchObject({
-        expectedBlindFunctions: SUPABASE_EXPECTED_BLIND_FUNCTIONS.length,
+        expectedBlindFunctions:
+          PROVIDER_EXPECTED_BLIND_FUNCTIONS.supabase.length,
       })
       expect(params(outcome, "apply.function-check-blind")).toEqual([
         { count: 2, functions: "other.fh(), pgbouncer.other_auth(text)" },
