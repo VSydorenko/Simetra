@@ -483,8 +483,9 @@ function planOptionsOf(resolved: PlanOptions, target: FactBase): PlanOptions {
 }
 
 /**
- * Роль сесії — типовий власник: проєкція двигуна прибирає ребро `owner` саме
- * до неї, і саме її ADP дають права новим об'єктам.
+ * Роль сесії — типовий власник: ребро `owner` саме до неї прибирає проєкція
+ * двигуна (Supabase, `defaultOwner`) або мапер (postgres, без типового
+ * власника), і саме її ADP дають права новим об'єктам.
  */
 async function currentRole(pool: pg.Pool): Promise<string> {
   const { rows } = await readOnlyQuery(pool, (client) =>

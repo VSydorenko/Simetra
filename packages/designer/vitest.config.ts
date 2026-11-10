@@ -14,6 +14,12 @@ export const ON_POSTGRES: string[] = [
   "src/schema-engine/__tests__/function-checks.db.test.ts",
   "src/schema-engine/__tests__/fingerprint.db.test.ts",
   "src/schema-engine/__tests__/apply-database.db.test.ts",
+  "src/schema-engine/__tests__/engine-desired-corpus.db.test.ts",
+  "src/schema-engine/__tests__/engine-desired.db.test.ts",
+  "src/schema-engine/__tests__/apply-state.db.test.ts",
+  "src/schema-engine/__tests__/engine-census.db.test.ts",
+  "src/schema-engine/__tests__/engine-extract.db.test.ts",
+  "src/schema-engine/__tests__/round-trip.db.test.ts",
 ]
 
 export default defineConfig({

@@ -82,6 +82,8 @@ export function mapModel(
   const sources = new Map<string, StableId>()
   const managed = (id: StableId) =>
     view.get(id) !== undefined && !view.isReferenceOnly(id)
+  const sessionOwner = (to: StableId) =>
+    to.kind === "role" && to.name === defaults.owner
   const modelTable = (schema: string, name: string) =>
     managed({ kind: "table", schema, name })
   const unit = (fact: Fact, statements: string[]) => {
@@ -122,9 +124,11 @@ export function mapModel(
     const id = fact.id
     if (view.isReferenceOnly(id)) continue
     // Власник — ребро, а не payload; типового власника проєкція двигуна
-    // прибирає, тож ребро, що лишилось, — інший власник, якого модель не має
+    // прибирає, тож ребро, що лишилось, — інший власник, якого модель не має.
+    // Профіль без типового власника (postgres, Р1 ПГ-2a) лишає й ребро до
+    // ролі сесії — вона і є власником об'єктів без явного `OWNER TO`
     for (const edge of view.outgoingEdges(id))
-      if (edge.kind === "owner")
+      if (edge.kind === "owner" && !sessionOwner(edge.to))
         issues.push({
           object: id,
           property: "owner",

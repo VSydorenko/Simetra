@@ -378,7 +378,7 @@ Auth не можна дешево, і це не мета: `simetra_owner` і т�
 | розширення поза керуванням | `plpgsql`, `plpgsql_check` |
 | гранти схеми `public` у засіві тіні | лише вбудовані Postgres 15+ (`USAGE` для `PUBLIC`, власник — `pg_database_owner`) |
 | засів тіні (`renderProviderSeed("postgres")`) | порожній: заглушку `better_auth."user"` дає профіль pg-delta (нижче) |
-| профіль pg-delta (`scopeProfile`, `packages/designer/src/schema-engine/pg-delta/policy.ts`) | власний `IntegrationProfile` `simetra-postgres`: `assumedSchemas: ["better_auth"]`; схема `extensions` з об'єктами — жорстке виключення; ACL, коментарі й мітки безпеки схем `better_auth` і `extensions` виключено; `handlers: []`; без `supabasePolicy`, `assumedRoles`, `assumedPublications`, `assumedExtensions`, `assumedDefaultGrants`, `defaultOwner` |
+| профіль pg-delta (`scopeProfile`, `packages/designer/src/schema-engine/pg-delta/policy.ts`) | власний `IntegrationProfile` `simetra-postgres`: `assumedSchemas: ["better_auth"]`; схема `extensions` з об'єктами — жорстке виключення; ACL, коментарі й мітки безпеки схем `better_auth` і `extensions` виключено; `handlers: []`; без `supabasePolicy`, `assumedRoles`, `assumedPublications`, `assumedExtensions`, `assumedDefaultGrants`, `defaultOwner`. Без `defaultOwner` ребро `owner` до ролі сесії прибирає мапер рушія (`map-model.ts`), а власник, інший за роль сесії, лишається `engine.unrepresentable` з іменем ролі |
 
 Споживачі, що зараз читають `PROVIDER_SCHEMAS.supabase` чи `SUPABASE_*`
 напряму, переходять на `scope.provider`:
