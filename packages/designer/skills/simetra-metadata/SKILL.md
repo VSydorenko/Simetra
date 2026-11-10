@@ -280,9 +280,9 @@ No event is insert-only; `TG_OP` tells insert from update. The same events as
 TypeScript hooks of a command (object modules): `references/object-modules.md`.
 
 Catalogs and Documents get the row mechanics trigger `<table>_simetra_touch`
-(the single platform function `simetra.touch()`): an insert sets `version` to 1,
-an update adds 1, both set `updatedAt` to `now()` whatever the client writes;
-on a table with carrier copies the update is `<table>_simetra_touch_update`,
+(the single platform function `simetra.touch()`): `version` comes from the
+sequence `simetra.row_version` (an update: at least old version plus 1), `updatedAt` is `now()`, whatever
+the client writes; on a table with carrier copies the update is `<table>_simetra_touch_update`,
 firing on a content change only. Never maintain them (`moddatetime`) or list
 them in `whenChanged`. A `beforeWrite` handler never assigns `NEW.updated_at`
 or `NEW.version` and never replaces the row (`NEW := …`, `SELECT … INTO NEW`):
@@ -416,7 +416,8 @@ The output shows them as their own group, `environment rights: the global
 default privileges of role <role>`; review them with the rest of the plan.
 If the environment changes before the apply, it is refused
 (`apply.target-changed`); plan again. A plan file from an older tool version is
-refused too: rebuild it with `plan`.
+refused too: rebuild it with `plan`. After a data-only restore or a
+logical-replication move, reset the row version epoch: `references/row-version-epoch.md`.
 
 A promotion plan's `allow` also takes its listed `access:<table>`, `remove:<t>`,
 `repair:<t>`, `delete:<t>.<constraint>` and `update:<t>.<constraint>` items; a

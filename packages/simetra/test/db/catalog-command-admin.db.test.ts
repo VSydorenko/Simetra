@@ -334,9 +334,15 @@ describe("catalog command core on rights system catalogs and Users", () => {
     expect(outcome).toMatchObject({
       result: {
         id: key("inUseCustom"),
-        version: String(BigInt(before) + 1n),
+        version: expect.stringMatching(/^\d+$/),
       },
     })
+    // Версія з послідовності: лише «більша за попередню», не `+1`
+    expect(
+      BigInt(
+        (outcome as unknown as { result: { version: string } }).result.version
+      )
+    ).toBeGreaterThan(BigInt(before))
   })
 
   it("mark_deletion of a role with a live assignment → role-in-use", async () => {
@@ -1845,14 +1851,21 @@ describe("catalog command core on rights system catalogs and Users", () => {
 
     it("save of an application attribute passes", async () => {
       const version = await versionOf("users", "target")
-      expect(await usersSave({ nickname: "nick" }, version)).toMatchObject({
+      const outcome = await usersSave({ nickname: "nick" }, version)
+      expect(outcome).toMatchObject({
         result: {
           id: key("target"),
           nickname: "nick",
-          version: String(BigInt(version) + 1n),
+          version: expect.stringMatching(/^\d+$/),
         },
         probe: [{ nickname: "nick" }],
       })
+      // Версія з послідовності: лише «більша за попередню», не `+1`
+      expect(
+        BigInt(
+          (outcome as unknown as { result: { version: string } }).result.version
+        )
+      ).toBeGreaterThan(BigInt(version))
     })
 
     it("unknown key → command.invalid", async () => {

@@ -1,4 +1,5 @@
 import {
+  ROW_VERSION_SEQUENCE,
   executeGrants,
   platformFunctionSignatures,
   platformSchemaGrants,
@@ -10,6 +11,7 @@ import {
   PLATFORM_SCHEMA,
   quoteIdent,
   type CatalogModel,
+  type DatabaseProvider,
 } from "simetra/model"
 import type {
   EngineDiagnostic,
@@ -22,6 +24,12 @@ import { applyDiagnostic } from "./diagnostic"
 import type { DriftReport } from "./drift"
 import type { CatalogFingerprint, FingerprintSection } from "./fingerprint"
 import type { ApplyTransaction } from "./port"
+import {
+  rowVersionSeedBlock,
+  rowVersionTables,
+  SEQUENCE_ID,
+} from "./row-version"
+import { RAISE_SYNCHRONOUS_COMMIT_PLPGSQL } from "./settings"
 import { PLATFORM_VERSION } from "./version"
 
 /**
@@ -35,12 +43,19 @@ const MARKER = `${SCHEMA}.${quoteIdent("marker")}`
 const LEDGER = `${SCHEMA}.${quoteIdent("ledger")}`
 const SNAPSHOT_HASH_FUNCTION = `${PLATFORM_SCHEMA}.${APPLIED_SNAPSHOT_HASH_FUNCTION_NAME}()`
 const SNAPSHOT_HASH_SIGNATURE = `${SCHEMA}.${quoteIdent(APPLIED_SNAPSHOT_HASH_FUNCTION_NAME)}()`
+const VERSION_EPOCH = `${SCHEMA}.${quoteIdent("version_epoch")}`
+const EPOCH_FUNCTION = `${PLATFORM_SCHEMA}.row_version_epoch()`
+const EPOCH_SIGNATURE = `${SCHEMA}.row_version_epoch()`
+const RESET_FUNCTION = `${PLATFORM_SCHEMA}.reset_row_version_epoch()`
+const RESET_SIGNATURE = `${SCHEMA}.reset_row_version_epoch()`
+const SEQUENCE_NAME = `${PLATFORM_SCHEMA}.${ROW_VERSION_SEQUENCE.name}`
 
 /**
  * Функції платформи плану (`platformFunctions` артефакту): функції шару з
- * фіксованим тілом і функція стану застосування. Її тіло теж фіксоване, а
- * `EXECUTE` має лише роль команд, тож роль застосування, що не власник
- * стану, інакше отримувала б `apply.function-check-blind` на кожному плані.
+ * фіксованим тілом і три функції стану застосування. Їхні тіла теж
+ * фіксовані, а `EXECUTE` мають не всі ролі, тож роль застосування, що не
+ * власник стану, інакше отримувала б `apply.function-check-blind` на кожному
+ * плані.
  */
 export function planPlatformFunctions(
   model: Pick<CompiledModel, "sqlUnits">
@@ -48,6 +63,8 @@ export function planPlatformFunctions(
   return [
     ...platformFunctionSignatures(model.sqlUnits),
     SNAPSHOT_HASH_FUNCTION,
+    EPOCH_FUNCTION,
+    RESET_FUNCTION,
   ].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
 }
 
@@ -57,13 +74,19 @@ export function planPlatformFunctions(
  * метаданих від них не залежить. Безпеку схеми дає та сама функція, що й
  * платформному шару, і лише коли шару в моделі немає — інакше одиниці
  * задублювалися б. Таблицям стану грантів немає: їх читає й пише лише роль,
- * що застосовує. Єдиний виняток — `applied_snapshot_hash()` для ролі команд
+ * що застосовує. Винятки — функції стану: `applied_snapshot_hash()` для ролі команд
  * (рішення Р-A3-16): рантайм звіряє хеш знімка з базою, не отримуючи права
  * читати marker, тож функція — `SECURITY DEFINER`, а її `EXECUTE` — лише
  * ролі команд і в обох випадках, бо функцію платформний шар не дає.
+ * Читач епохи `row_version_epoch()` має `EXECUTE` ще й ролей користувача й
+ * анонімної; `reset_row_version_epoch()` — без грантів.
+ *
+ * Епоха версій бази (спека П4-B §4.1): таблиця з одним рядком і дві функції.
+ * Перелік таблиць `reset_row_version_epoch()` рендериться з моделі в кожному
+ * застосуванні: нова таблиця механіки потрапляє в засів без ручної правки.
  */
 export function renderApplyState(
-  model: Pick<CompiledModel, "project" | "contracts">
+  model: Pick<CompiledModel, "project" | "contracts" | "physical">
 ): string {
   const grants =
     model.contracts.users === undefined
@@ -131,7 +154,94 @@ export function renderApplyState(
         model.project.database.provider
       ),
     ].join("\n"),
+    // Рядок епохи пише крок плану `versions`; до нього функція дає NULL
+    [
+      `CREATE TABLE ${VERSION_EPOCH} (`,
+      "  singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),",
+      "  epoch uuid NOT NULL DEFAULT gen_random_uuid()",
+      ");",
+    ].join("\n"),
+    epochFunction(model.project.database.provider),
+    resetFunction(model),
   ].join("\n\n")
+}
+
+/** Ролі, що читають епоху: команди й ролі запиту провайдера (гостьова сесія теж). */
+const EPOCH_READERS = ["command", "user", "anonymous"] as const
+
+/**
+ * Епоха версій бази: хеш від ідентичності кластера, лінії часу, бази,
+ * послідовності, часу старту й UUID рядка `version_epoch` (рішення Р4). `NULL`
+ * на репліці (`pg_current_wal_insert_lsn()` там недоступна, тож гілка за
+ * `CASE`) і без рядка. Лінія часу — з імені WAL-файла, а не з контрольного
+ * файла: швидкий failover змінює її одразу. OID послідовності береться через
+ * `to_regclass`, а не літерал `::regclass`: SQL-тіло перевіряється при
+ * створенні, а послідовність двигун може створити пізніше. `SECURITY DEFINER`:
+ * роль входу читання грантів згенерованого SQL не має, а функція дає лише
+ * хеш, який і так іде браузеру.
+ */
+function epochFunction(provider: DatabaseProvider): string {
+  const identity = [
+    "(SELECT system_identifier::text FROM pg_catalog.pg_control_system())",
+    "substr(pg_catalog.pg_walfile_name(pg_catalog.pg_current_wal_insert_lsn()), 1, 8)",
+    "(SELECT d.oid::text FROM pg_catalog.pg_database d WHERE d.datname = pg_catalog.current_database())",
+    `pg_catalog.to_regclass('${SEQUENCE_NAME}')::oid::text`,
+    "extract(epoch from pg_catalog.pg_postmaster_start_time())::text",
+    "e.epoch::text",
+  ].join(" || '/' || ")
+  return [
+    `CREATE OR REPLACE FUNCTION ${EPOCH_SIGNATURE}`,
+    "RETURNS text",
+    "LANGUAGE sql STABLE SECURITY DEFINER",
+    "SET search_path = ''",
+    "AS $$SELECT CASE WHEN pg_catalog.pg_is_in_recovery() THEN NULL ELSE",
+    `  (SELECT encode(sha256(convert_to(${identity}, 'UTF8')), 'hex') FROM ${VERSION_EPOCH} e)`,
+    "END$$;",
+    ...executeGrants(EPOCH_SIGNATURE, EPOCH_READERS, provider),
+  ].join("\n")
+}
+
+/**
+ * Скидання після відновлення лише даних у ту саму базу (`pg_restore
+ * --data-only`, `psql` з дампу): дамп повертає `setval` і UUID, а OID бази,
+ * послідовності й час старту лишаються, тож епоха сама не змінилася б.
+ * Функція сіє послідовність над усіма таблицями механіки й міняє UUID.
+ *
+ * Замки беруться завжди (режим `fresh` засіву): виклик рідкісний, при
+ * зупиненому застосунку, тож швидка гілка без замка нічого не заощадила б, а
+ * сліпа гарантія «послідовність не нижча за максимум» — дешевша за підбір
+ * умови. Нижче вона не опуститься: `setval` лише вгору. Без `EXECUTE` будь-кому,
+ * крім власника: `SECURITY INVOKER`, бо функція пише в таблиці, на які ролі
+ * запиту прав не мають.
+ *
+ * Залишки, яких база не тримає: (1) вікно між відновленням лише даних і
+ * викликом функції — версії, видані в ньому, можуть повторитися; процедура —
+ * відновлення й виклик при зупиненому застосунку, до першого читання;
+ * (2) одиниця боргу, що ставить `synchronous_commit = off` після `touch`,
+ * знову робить коміт асинхронним — тоді краш губить видані версії без зміни
+ * епохи; (3) одиниця боргу з нелітеральним іменем `set_config` могла б
+ * писати `simetra.row_version_*` (лише попередження `sql.debt-session-write`).
+ */
+function resetFunction(
+  model: Pick<CompiledModel, "project" | "physical">
+): string {
+  const block = rowVersionSeedBlock(rowVersionTables(model), "fresh", [
+    RAISE_SYNCHRONOUS_COMMIT_PLPGSQL,
+    `UPDATE ${VERSION_EPOCH} SET epoch = gen_random_uuid();`,
+    "IF NOT FOUND THEN",
+    `  INSERT INTO ${VERSION_EPOCH} DEFAULT VALUES;`,
+    "END IF;",
+  ])
+  return [
+    `CREATE OR REPLACE FUNCTION ${RESET_SIGNATURE}`,
+    "RETURNS void",
+    "LANGUAGE plpgsql SECURITY INVOKER",
+    "SET search_path = ''",
+    "AS $$",
+    block,
+    "$$;",
+    ...executeGrants(RESET_SIGNATURE, [], model.project.database.provider),
+  ].join("\n")
 }
 
 /** Рядок marker: поточний стан інстансу (платформна спека §6.1). */
@@ -153,7 +263,12 @@ export interface MarkerRecord {
 
 export type ApplyState =
   | { status: "fresh" }
-  | { status: "applied"; marker: MarkerRecord }
+  | {
+      status: "applied"
+      marker: MarkerRecord
+      /** Чи є рядок `version_epoch`: без нього епоху пише крок `versions`. */
+      rowVersionEpoch: boolean
+    }
   | { status: "corrupt"; diagnostic: EngineDiagnostic }
 
 /** Рядок marker як `to_jsonb`: назви колонок. */
@@ -195,9 +310,13 @@ function corrupt(
 export async function readApplyState(
   tx: ApplyTransaction
 ): Promise<ApplyState> {
-  const [tables] = await tx.query<{ marker: boolean; ledger: boolean }>(
-    "SELECT to_regclass($1) IS NOT NULL AS marker, to_regclass($2) IS NOT NULL AS ledger",
-    [MARKER, LEDGER]
+  const [tables] = await tx.query<{
+    marker: boolean
+    ledger: boolean
+    epoch: boolean
+  }>(
+    "SELECT to_regclass($1) IS NOT NULL AS marker, to_regclass($2) IS NOT NULL AS ledger, to_regclass($3) IS NOT NULL AS epoch",
+    [MARKER, LEDGER, VERSION_EPOCH]
   )
   const markerRows = tables?.marker
     ? await tx.query<{ row: string }>(
@@ -220,8 +339,15 @@ export async function readApplyState(
   const row = JSON.parse(markerRow.row) as MarkerRow
   if (row.format !== APPLY_STATE_FORMAT)
     return corrupt("apply.state-format", { found: row.format })
+  // Таблиці епохи може ще не бути (база до B1e): це «рядка немає», а не збій
+  const [epoch] = tables?.epoch
+    ? await tx.query<{ found: boolean }>(
+        `SELECT EXISTS (SELECT FROM ${VERSION_EPOCH}) AS found`
+      )
+    : []
   return {
     status: "applied",
+    rowVersionEpoch: epoch?.found === true,
     marker: {
       format: row.format,
       snapshotHash: row.snapshot_hash,
@@ -420,13 +546,14 @@ export async function readAppliedPromotions(
   return new Set(rows.map((r) => r.hash))
 }
 
-const STATE_TABLES = ["marker", "ledger"] as const
+const STATE_TABLES = ["marker", "ledger", "version_epoch"] as const
 
 /** Стан застосування цілі для звірки та розпізнавач його об'єктів. */
 export interface ApplyStateObjects {
   /**
-   * `absent` — немає жодного об'єкта стану: обох таблиць, функції хешу знімка,
-   * а без платформного шару й схеми `simetra` (разом з її грантами). Будь-що часткове —
+   * `absent` — немає жодного об'єкта стану: таблиць, функцій хешу знімка й
+   * епохи версій, послідовності версій, а без платформного шару й схеми
+   * `simetra` (разом з її грантами). Будь-що часткове —
    * `present` (спека П2 §8.6).
    */
   state: "absent" | "present"
@@ -457,9 +584,18 @@ export function applyStateOf(
       t.schema === PLATFORM_SCHEMA &&
       (STATE_TABLES as readonly string[]).includes(t.name)
   )
-  const functionId = `function:${SNAPSHOT_HASH_FUNCTION}`
-  const functionAbsent = !target.model.units.some(
-    (u) => u.identity === functionId
+  const functions = [
+    SNAPSHOT_HASH_FUNCTION,
+    EPOCH_FUNCTION,
+    RESET_FUNCTION,
+  ].map((f) => `function:${f}`)
+  const functionAbsent = !target.model.units.some((u) =>
+    functions.includes(u.identity)
+  )
+  // Послідовність версій — одиниця генератора механіки, але її життя
+  // прив'язане до стану: без стану вона так само «ще не застосована»
+  const sequenceAbsent = !target.model.units.some(
+    (u) => u.identity === SEQUENCE_ID
   )
   const schemaAbsent = plan.actions.some((a) => a.produces.includes(schemaId))
   const sub = /^(?:column|constraint|trigger|rule|policy|default):(.*)$/
@@ -468,17 +604,23 @@ export function applyStateOf(
   const schemaGrant = new RegExp(
     `^grant:(?:grant|revoke):schema:${PLATFORM_SCHEMA}:`
   )
-  // Гранти функції хешу — стану завжди: шар її не дає
-  const functionGrant = `grant:grant:function:${SNAPSHOT_HASH_FUNCTION}:`
-  const functionRevoke = `grant:revoke:function:${SNAPSHOT_HASH_FUNCTION}:`
+  // Гранти функцій стану — стану завжди: шар їх не дає. Гранти й відкликання
+  // послідовності версій — так само
+  const grantPrefixes = [
+    ...[SNAPSHOT_HASH_FUNCTION, EPOCH_FUNCTION, RESET_FUNCTION].flatMap((f) => [
+      `grant:grant:function:${f}:`,
+      `grant:revoke:function:${f}:`,
+    ]),
+    `grant:revoke:sequence:${SEQUENCE_NAME}:`,
+  ]
   const owns = (identity: string): boolean => {
     const wrapped = /^(?:comment|acl|securityLabel):\((.*)\)/.exec(identity)
     if (wrapped !== null) return owns(wrapped[1]!)
     if (tables.some((t) => identity === `table:${t}`)) return true
     if (
-      identity === functionId ||
-      identity.startsWith(functionGrant) ||
-      identity.startsWith(functionRevoke)
+      functions.includes(identity) ||
+      identity === SEQUENCE_ID ||
+      grantPrefixes.some((p) => identity.startsWith(p))
     )
       return true
     const m = sub.exec(identity)
@@ -489,7 +631,10 @@ export function applyStateOf(
   }
   return {
     state:
-      tablesAbsent && functionAbsent && (!schemaIsState || schemaAbsent)
+      tablesAbsent &&
+      functionAbsent &&
+      sequenceAbsent &&
+      (!schemaIsState || schemaAbsent)
         ? "absent"
         : "present",
     owns,

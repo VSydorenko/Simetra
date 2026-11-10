@@ -6,6 +6,7 @@ import {
   type GrantPurpose,
   type PlatformRolePurpose,
 } from "simetra/model"
+import type { QualifiedName } from "../contracts"
 
 /**
  * Право виконання згенерованої функції — лише ролям названих призначень
@@ -35,6 +36,25 @@ export function executeGrants(
     ),
     ...roles.map(
       (role) => `GRANT EXECUTE ON FUNCTION ${signature} TO ${quoteIdent(role)};`
+    ),
+  ]
+}
+
+/**
+ * Послідовність не дає прав нікому: `nextval` бере лише дефайнер-тригер
+ * платформи, тож відкликаються обидва джерела — `PUBLIC` і ролі API
+ * провайдера (типові привілеї схеми). Кожен оператор — на одного отримувача,
+ * як у `executeGrants`: у тій самій формі гранти читає extract.
+ */
+export function sequenceRevokes(
+  sequence: QualifiedName,
+  provider: DatabaseProvider
+): string[] {
+  const target = `${quoteIdent(sequence.schema)}.${quoteIdent(sequence.name)}`
+  return [
+    `REVOKE ALL ON SEQUENCE ${target} FROM PUBLIC;`,
+    ...Object.values(PROVIDER_API_ROLES[provider]).map(
+      (role) => `REVOKE ALL ON SEQUENCE ${target} FROM ${quoteIdent(role)};`
     ),
   ]
 }

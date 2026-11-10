@@ -214,6 +214,8 @@ describe("readApplyState", () => {
         platformVersion: PLATFORM_VERSION,
         planHash: record.planHash,
       },
+      // Запис стану не створює епохи версій: її сіє блок `versions` плану
+      rowVersionEpoch: false,
     })
   })
 

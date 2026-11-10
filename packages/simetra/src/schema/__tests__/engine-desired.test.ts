@@ -42,7 +42,7 @@ describe("engineScope", () => {
       "CREATE VIEW reports.note_view AS SELECT id FROM app.note;\n"
     )
     expect(scope).toEqual({
-      scope: { schemas: ["app", "reports"], provider: "supabase" },
+      scope: { schemas: ["app", "reports", "simetra"], provider: "supabase" },
       diagnostics: [],
     })
   })
@@ -61,7 +61,7 @@ describe("engineScope", () => {
     )
     // Політика й тригер на таблицях провайдера — поверхня пресету, у межі
     expect(scope).toEqual({
-      scope: { schemas: ["app"], provider: "supabase" },
+      scope: { schemas: ["app", "simetra"], provider: "supabase" },
       diagnostics: [],
     })
   })
