@@ -8,6 +8,7 @@ import {
 } from "simetra/compiler"
 import {
   APPLIED_SNAPSHOT_HASH_FUNCTION_NAME,
+  ROW_VERSION_EPOCH_FUNCTION_NAME,
   PLATFORM_SCHEMA,
   quoteIdent,
   type CatalogModel,
@@ -44,8 +45,8 @@ const LEDGER = `${SCHEMA}.${quoteIdent("ledger")}`
 const SNAPSHOT_HASH_FUNCTION = `${PLATFORM_SCHEMA}.${APPLIED_SNAPSHOT_HASH_FUNCTION_NAME}()`
 const SNAPSHOT_HASH_SIGNATURE = `${SCHEMA}.${quoteIdent(APPLIED_SNAPSHOT_HASH_FUNCTION_NAME)}()`
 const VERSION_EPOCH = `${SCHEMA}.${quoteIdent("version_epoch")}`
-const EPOCH_FUNCTION = `${PLATFORM_SCHEMA}.row_version_epoch()`
-const EPOCH_SIGNATURE = `${SCHEMA}.row_version_epoch()`
+const EPOCH_FUNCTION = `${PLATFORM_SCHEMA}.${ROW_VERSION_EPOCH_FUNCTION_NAME}()`
+const EPOCH_SIGNATURE = `${SCHEMA}.${ROW_VERSION_EPOCH_FUNCTION_NAME}()`
 const RESET_FUNCTION = `${PLATFORM_SCHEMA}.reset_row_version_epoch()`
 const RESET_SIGNATURE = `${SCHEMA}.reset_row_version_epoch()`
 const SEQUENCE_NAME = `${PLATFORM_SCHEMA}.${ROW_VERSION_SEQUENCE.name}`

@@ -104,6 +104,7 @@ import {
 } from "./sql/expression-calls"
 import { checkKindTableVerbatim, kindTables } from "./sql/kind-table-verbatim"
 import { loadSqlParser, type SqlParser } from "./sql/parse"
+import { copyColumns } from "./copy-columns"
 import { loadPlpgsqlParser } from "./sql/plpgsql"
 import { assertPinnedSearchPath } from "./sql/pinned-search-path"
 import { embedRowRules } from "./sql/row-rule"
@@ -938,6 +939,14 @@ export async function runStages(
     sqlUnits,
     catalogCommands,
     checkColumns: stage3.checkColumns,
+    copyColumns: new Map(
+      physical.tables.flatMap((table) => {
+        const columns = copyColumns(table, parse)
+        return columns.size === 0
+          ? []
+          : [[`${table.schema}.${table.name}`, columns] as const]
+      })
+    ),
     creationOrder: ordered.order,
     contracts: buildContracts(
       stage1.objects,

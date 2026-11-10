@@ -46,6 +46,9 @@ const [K1, K2, K3, K4, K5] = KEYS as [Key, Key, Key, Key, Key]
 const ORG_KEYS = [S, T]
 const TITLES = ["a", "m", "t", "z"]
 
+// Розкид перечитування після перемикання епохи (Р8) — у межах кроків `time`.
+const REVALIDATE_MS = 2_000
+
 // П7: межі моделі малі, щоб витіснення пам'яті версій і надгробків і
 // межа виглядів траплялись у кожному прогоні, а не раз на тисячу.
 const LIMITS = {
@@ -54,8 +57,14 @@ const LIMITS = {
   horizonBuckets: 16,
   viewsMax: 8,
   fullPageSize: 3,
+  revalidateIntervalMs: REVALIDATE_MS,
 }
 const RELEASE_MS = 1_000
+
+// Епохи версій бази (P4-B план B1c): `null` — репліка чи база без епохи.
+const EA = "a".repeat(64)
+const EB = "b".repeat(64)
+const EPOCHS = [null, EA, EB] as const
 
 const SPECS: readonly ViewSpec[] = [
   { kind: "keys", object: TASK, keys: [K1, K2] },
@@ -122,6 +131,7 @@ type Step =
   | { t: "disconnect"; channel: number; clear: boolean }
   | { t: "markViews"; v: number; one: boolean; needs: boolean; news: boolean }
   | { t: "time"; ms: number }
+  | { t: "epoch"; which: number }
   | { t: "close"; reason: CloseReason }
 
 const view = fc.nat(SPECS.length - 1)
@@ -129,7 +139,7 @@ const k = fc.nat(KEYS.length - 1)
 const one = <T extends Step["t"]>(t: T) => fc.constant(t)
 
 /**
- * Ваги (бриф, крок 1): сума 223; `purge` (16 + 14), відсутній рядок і
+ * Ваги (бриф, крок 1): сума 229 (перемикання епохи — 6, план B1c); `purge` (16 + 14), відсутній рядок і
  * застаріла репліка — по 30, тобто по ~13,5 % кроків (частина кроків
  * `answer` порожня, бо в польоті нічого нема, тож серед дійових кроків
  * частка вища, близько 15 %). Самотест тримає насіння, яке знаходить
@@ -244,6 +254,12 @@ const STEP: fc.Arbitrary<Step> = fc.oneof(
       t: one("time"),
       ms: fc.constantFrom(500, RELEASE_MS, 5_000),
     }),
+  },
+  // База відповідає з іншою епохою версій: рестарт primary, PITR, репліка
+  // (`null`); послідовність A, B, A — повернення покинутої.
+  {
+    weight: 6,
+    arbitrary: fc.record({ t: one("epoch"), which: fc.nat(EPOCHS.length - 1) }),
   },
   {
     weight: 1,
@@ -379,6 +395,14 @@ async function runModel(
   const wasRemoved = new Map<string, { divergent: boolean; slot: object }>()
   const maxVersion = new Map<string, number>()
   const storeVersion = new Map<string, number>()
+  // Версії порівнюються в межах однієї епохи (Р5): до першого перемикання
+  // `null` і перша епоха — одна історія, після нього — кожна епоха окремо.
+  const versionKey = (object: ObjectName, k: Key) => {
+    const e = objectOf(object).rows.get(k)
+    return inspect.versionEpochs().previous === null || e === undefined
+      ? id(object, k)
+      : `${id(object, k)}\u0000${String(e.versionEpoch)}`
+  }
   let closed:
     { frames: number; sent: number; snapshot: ViewSnapshot } | undefined
 
@@ -460,10 +484,10 @@ async function runModel(
   ) => {
     const at = `${where} ${object}/${row.key}`
     if (row.state === "removed") return
-    const max = maxVersion.get(id(object, row.key)) ?? 0
+    const max = maxVersion.get(versionKey(object, row.key)) ?? 0
     if (row.version < max && row.state !== "stale")
       fail(label, `${at}: version ${max} → ${row.version} as ${row.state}`)
-    maxVersion.set(id(object, row.key), Math.max(max, row.version))
+    maxVersion.set(versionKey(object, row.key), Math.max(max, row.version))
     const fields = Object.keys(row.values)
     // Схований горизонтом рядок значень не показує.
     if (fields.length === 0) return
@@ -611,14 +635,21 @@ async function runModel(
         const at = `${name}/${k}`
         // Версія не зменшується на жодному шляху запису: старший рядок —
         // лише з позначкою мінімальної версії чи схований горизонтом.
-        const top = storeVersion.get(id(name, k)) ?? 0
+        const top = storeVersion.get(versionKey(name, k)) ?? 0
+        // Рядок не поточної епохи з позначкою перемикання — `null`-відповідь
+        // після перемикання: її версії не впорядковані ні з якою епохою (Р5),
+        // і рядок не показано підтвердженим.
+        const unordered =
+          e.stale.epoch !== undefined &&
+          e.versionEpoch !== inspect.versionEpochs().current
         if (
           e.version < top &&
           (e.stale.minVersion?.v ?? -1) < top &&
-          e.stale.seen === undefined
+          e.stale.seen === undefined &&
+          !unordered
         )
           fail(label, `${at}: stored version ${top} → ${e.version}`)
-        storeVersion.set(id(name, k), Math.max(top, e.version))
+        storeVersion.set(versionKey(name, k), Math.max(top, e.version))
         const purge = purgeBarrier.get(id(name, k))
         if (purge !== undefined && !deliveredSince(name, k, purge))
           fail(label, `${at}: in the store after purge without a later read`)
@@ -1099,6 +1130,9 @@ async function runModel(
       case "time":
         vi.advanceTimersByTime(s.ms)
         break
+      case "epoch":
+        fake.epoch = EPOCHS[s.which]!
+        break
       case "close":
         if (closed !== undefined) break
         core.close(s.reason)
@@ -1161,6 +1195,10 @@ async function runModel(
     // Таймери звільнення й TTL `preload` спрацьовують до перечитування: їхній
     // надгробок поховав би відповідь читання, що почалось раніше (за
     // задумом), і збіжність мірялась би проти артефакту моделі.
+    // База сходиться до епохи, за якою йде сесія: відповіді покинутої
+    // епохи сесія не застосовує ніколи (Р12).
+    const epochs = inspect.versionEpochs()
+    fake.epoch = epochs.current
     vi.advanceTimersByTime(10_000)
     await flush()
     fake.setVisibleScopes(undefined)
@@ -1199,6 +1237,16 @@ async function runModel(
       const snap = handles[v]!.getSnapshot()
       const where = `converge view ${v}`
       if (snap.status === "purged") return
+      // Після межі відкинутих відповідей поспіль сесія не читає (Р12): вихід
+      // — лише нова сесія.
+      if (epochs.unavailable) {
+        if (
+          snap.status !== "error" ||
+          snap.error?.code !== "command.unavailable"
+        )
+          fail(where, `status ${snap.status} of an unavailable session`)
+        return
+      }
       if (snap.status !== "ready")
         fail(where, `status ${snap.status} after refresh`)
       for (const row of snap.rows) sameAsServer(where, spec.object, row)
@@ -1353,7 +1401,9 @@ const DEFECTS: readonly DefectFlag[] = [
 // затулені старішими.
 const CAUGHT_BY: Partial<Record<DefectFlag, RegExp>> = {
   "removed-keeps-sections": /section lines stored for a removed owner/,
-  "purge-keeps-views": /card of purged/,
+  // Та сама перевірка `checkPurged` для картки й ТЧ: насіння після зміни
+  // генератора (крок епохи, план B1c) знаходить ТЧ.
+  "purge-keeps-views": /(card|section) of purged/,
   "purge-marks-unrelated-views": /purged without a purge of its key/,
   "absent-row-ignored": /^converge/,
   "unbounded-seen": /seen \d+ > \d+/,

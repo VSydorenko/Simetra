@@ -9,13 +9,15 @@ import {
   errorToWire,
   operationFromWire,
   operationToWire,
+  readPartFromWire,
+  readPartToWire,
   readQueryFromWire,
   readQueryToWire,
   readResultFromWire,
   readResultToWire,
 } from "../mapping"
 import type { Operation } from "../operation"
-import type { ReadQuery, ReadResult } from "../read"
+import type { ReadPartValue, ReadQuery, ReadResult } from "../read"
 import type { Change } from "../result"
 import { WireDecodeError, WireEncodeError } from "../wire"
 import {
@@ -1053,4 +1055,161 @@ describe("readResultToWire / readResultFromWire", () => {
       ).toThrow(WireDecodeError)
     }
   )
+})
+
+describe("readPartToWire / readPartFromWire", () => {
+  const KNOWN = {
+    epoch: "0123456789abcdef".repeat(4),
+    keys: [ID],
+    versions: ["9007199254740991"],
+  }
+  const query: ReadQuery = {
+    object: TASK,
+    where: { attribute: "title", op: "eq", value: "a" },
+    limit: 5,
+  }
+  const wireQuery: WireReadQuery = {
+    object: OBJECT_ID,
+    where: { attribute: "title_col", op: "eq", value: "a" },
+    limit: 5,
+  }
+
+  // `known` — та сама форма в обох шарах: ключі — UUID, версії — текст.
+  it("carries known unchanged beside the mapped query", () => {
+    const wire = {
+      type: "query" as const,
+      query: { ...wireQuery, known: KNOWN },
+    }
+    expect(
+      readPartToWire(readIndex, { type: "query", query, known: KNOWN })
+    ).toStrictEqual({ ok: true, value: wire })
+    expect(readPartFromWire(readIndex, wire)).toStrictEqual({
+      ok: true,
+      value: { type: "query", query, known: KNOWN },
+    })
+  })
+
+  it("adds no known key to a part without known", () => {
+    const wire = { type: "query" as const, query: wireQuery }
+    expect(readPartToWire(readIndex, { type: "query", query })).toStrictEqual({
+      ok: true,
+      value: wire,
+    })
+    expect(readPartFromWire(readIndex, wire)).toStrictEqual({
+      ok: true,
+      value: { type: "query", query },
+    })
+  })
+
+  it("refuses an unknown object both ways", () => {
+    expect(
+      readPartToWire(readIndex, {
+        type: "query",
+        query: { object: { kind: "Catalog", name: "Nope" }, limit: 1 },
+        known: KNOWN,
+      })
+    ).toEqual({ ok: false, unknown: { object: "Catalog.Nope" } })
+    expect(
+      readPartFromWire(readIndex, {
+        type: "query",
+        query: { object: UNKNOWN_ID, limit: 1, known: KNOWN },
+      })
+    ).toEqual({ ok: false, unknown: { object: UNKNOWN_ID } })
+  })
+})
+
+describe("readResultToWire / readResultFromWire: known markers", () => {
+  const list: ReadQuery = { object: TASK, limit: 10 }
+  const row = { ref: ID, version: 2, title: "a" }
+  const wireRow = { task_id: ID, row_version: "2", title_col: "a" }
+
+  it.each<[string, ReadPartValue, WireReadResult]>([
+    [
+      "a row, an unchanged-row marker and a partial marker",
+      {
+        rows: [
+          row,
+          { known: 0 },
+          { known: 2, copies: { title: "b", status: "Open" } },
+        ],
+      },
+      {
+        rows: [wireRow, 0, { $known: 2, title_col: "b", status: "open" }],
+      },
+    ],
+  ])("maps %s both ways", (_, logical, wire) => {
+    expect(readResultToWire(readIndex, list, logical)).toStrictEqual(wire)
+    expect(readResultFromWire(readIndex, list, wire)).toStrictEqual(logical)
+  })
+
+  // Повний рядок завжди несе колонку ключа: навіть фізична колонка `$known`
+  // не робить його маркером.
+  it("decodes an object with $known and the key column as a row", () => {
+    expect(
+      readResultFromWire(readIndex, list, {
+        rows: [{ ...wireRow, $known: 1 }],
+      })
+    ).toStrictEqual({ rows: [row] })
+  })
+
+  // Логічний рядок завжди несе ключ: реквізит з іменем `known` не робить
+  // його маркером.
+  it("encodes a row with the key and an attribute named known as a row", () => {
+    const known = catalogEntryAttribute({
+      name: "known",
+      column: "known_col",
+      type: "Integer",
+    })
+    const entry = { ...reader, attributes: [...reader.attributes, known] }
+    expect(
+      readResultToWire(catalogIndex([entry]), list, {
+        rows: [{ ...row, known: 1 }],
+      })
+    ).toStrictEqual({ rows: [{ ...wireRow, known_col: 1 }] })
+  })
+
+  it.each<[string, unknown]>([
+    ["a negative marker", -1],
+    ["a fractional marker", 1.5],
+    ["an unsafe marker", 2 ** 53],
+    ["a partial marker with a negative index", { $known: -1 }],
+    [
+      "a partial marker with a fractional index",
+      { $known: 0.5, title_col: "a" },
+    ],
+    ["a partial marker with an index as text", { $known: "1" }],
+  ])("refuses %s", (_, marker) => {
+    expect(() =>
+      readResultFromWire(readIndex, list, {
+        rows: [marker],
+      } as WireReadResult)
+    ).toThrow(WireDecodeError)
+  })
+
+  // `known` у ТЧ заборонено формою запиту: маркер серед рядків ТЧ — хибна
+  // відповідь, а не рядок.
+  it("refuses a marker among section lines", () => {
+    expect(() =>
+      readResultFromWire(
+        readIndex,
+        { object: TASK, tabularSection: "lines", limit: 5 },
+        { rows: [0] }
+      )
+    ).toThrow(WireDecodeError)
+  })
+
+  it.each<[string, unknown]>([
+    ["a negative index", { known: -1 }],
+    ["a fractional index", { known: 0.5 }],
+    // Колонка копії з іменем `$known` перезаписала б індекс маркера.
+    ["a copy column named $known", { known: 0, copies: { dollar: "x" } }],
+  ])("refuses to encode a marker with %s", (_, marker) => {
+    const dollar = catalogEntryAttribute({ name: "dollar", column: "$known" })
+    const entry = { ...reader, attributes: [...reader.attributes, dollar] }
+    expect(() =>
+      readResultToWire(catalogIndex([entry]), list, {
+        rows: [marker],
+      } as ReadPartValue)
+    ).toThrow(WireEncodeError)
+  })
 })

@@ -177,10 +177,10 @@ export function createDataRuntime(options: DataRuntimeOptions): DataRuntime {
   // `read` закриває рантайм поза `commit`.
   const watchSessionChanged = (adapter: SourceAdapter): SourceAdapter => ({
     capabilities: adapter.capabilities,
-    read(query) {
+    read(items) {
       let pending: ReturnType<SourceAdapter["read"]>
       try {
-        pending = adapter.read(query)
+        pending = adapter.read(items)
       } catch (error) {
         pending = Promise.reject(error)
       }

@@ -6,8 +6,10 @@ import {
 import { DataError } from "../errors"
 import { formOf, type Form, type ObjectState } from "./forms"
 import { refsOf } from "./include"
+import { lazyFieldStale } from "./object-store"
+import { sectionLinesStale } from "./section-store"
 import { diffOwn, readForm, type ReaderTarget, type StoreOps } from "./readers"
-import type { Session } from "./session"
+import { DISCARD_PAUSE_MS, type Session } from "./session"
 import {
   LOADING,
   purgedSnapshot,
@@ -115,6 +117,15 @@ export interface SubsetRegistry {
 const NO_LINES: readonly SectionLine[] = Object.freeze([])
 const ACCESS_CHANGED = purgedSnapshot("access-changed")
 
+/**
+ * The error of a view once the session discarded too many answers in a row
+ * (P4-B plan B1c, Р12): the database keeps answering from an epoch the
+ * session left; only a new session reads again.
+ */
+export const EPOCH_UNAVAILABLE: CommandError = Object.freeze({
+  code: "command.unavailable",
+})
+
 /** The error a view shows for a failed read. */
 export const errorOf = (error: unknown): CommandError | DataError => {
   if (error instanceof CommandFailure) return error.error
@@ -164,10 +175,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
     // Токен покоління: недійсний після звільнення й нового запиту (§6.1).
     const token = session.childToken(() => s.alive && s.gen === gen)
     const what = `view ${s.form.specKey}`
-    const readEpoch = session.epochs.now()
     const header = headerKey(s)
-    if (header !== undefined)
-      s.readRevision = rowViews.revision(s.form.object.name, header)
     session.commit(
       () => {
         s.status = hasData(s) || s.loaded ? "refreshing" : "loading"
@@ -176,13 +184,26 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       token,
       what
     )
-    readForm(ctx, s, readEpoch, token)
-      .then(
+    // Відкинута відповідь (Р12) — те саме завантаження з паузою, що зростає:
+    // покоління й політ не змінюються, тож це й далі дія, що його почала.
+    const attempt = (): Promise<void> => {
+      const readEpoch = session.epochs.now()
+      if (header !== undefined)
+        s.readRevision = rowViews.revision(s.form.object.name, header)
+      let discarded = false
+      return readForm(ctx, s, readEpoch, token).then(
         (apply) => {
           session.commit(
             (scope) => {
               try {
-                apply(scope)
+                if (!apply(scope)) {
+                  discarded = !session.versions.unavailable()
+                  if (!discarded) {
+                    s.status = "error"
+                    s.error = EPOCH_UNAVAILABLE
+                  }
+                  return
+                }
                 s.loaded = true
                 s.status = "ready"
                 s.error = undefined
@@ -202,6 +223,26 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
             token,
             what
           )
+          if (!discarded || !token.valid) return
+          // Цей прохід вичерпав межу (лічильник рухається після commit):
+          // повтору не буде, вигляд — `command.unavailable`.
+          if (session.versions.unavailable()) {
+            session.commit(
+              () => {
+                s.status = "error"
+                s.error = EPOCH_UNAVAILABLE
+                s.dirty = true
+              },
+              token,
+              what
+            )
+            return
+          }
+          const pause =
+            DISCARD_PAUSE_MS * 2 ** Math.max(0, session.versions.discards() - 1)
+          return new Promise<void>((resolve) => {
+            setTimeout(resolve, pause)
+          }).then(() => (token.valid ? attempt() : undefined))
         },
         (error: unknown) => {
           // Закритий обмежувач — сесію закрито: писати нікуди.
@@ -217,22 +258,24 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
           )
         }
       )
-      .finally(() => {
-        if (s.flight !== gen) return
-        s.flight = undefined
-        s.settled = true
-        resolveWaiters(s)
-        if (s.trailing && s.alive && !isClosed()) {
-          s.trailing = false
-          load(s)
-        }
-        // Шапка змінилась під час польоту: перевірка, відкладена до кінця
-        // читання, не губиться (захист ревізією — від повторів).
-        if (s.recheck) {
-          s.recheck = false
-          if (s.alive && !isClosed() && s.listeners.size > 0) queueCheck(s)
-        }
-      })
+    }
+    // Відмову читання обробляє `attempt`, тож ланцюг не відхиляється.
+    void attempt().finally(() => {
+      if (s.flight !== gen) return
+      s.flight = undefined
+      s.settled = true
+      resolveWaiters(s)
+      if (s.trailing && s.alive && !isClosed()) {
+        s.trailing = false
+        load(s)
+      }
+      // Шапка змінилась під час польоту: перевірка, відкладена до кінця
+      // читання, не губиться (захист ревізією — від повторів).
+      if (s.recheck) {
+        s.recheck = false
+        if (s.alive && !isClosed() && s.listeners.size > 0) queueCheck(s)
+      }
+    })
   }
 
   /** Mounted card: lazy fields absent or read with an older row version. */
@@ -245,9 +288,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
     if (e.stale.seen !== undefined) return false
     const values = e.row.values
     return o.lazyFields.some(
-      (f) =>
-        !Object.hasOwn(values, f) ||
-        (e.lazyVersions.get(f) ?? -Infinity) < e.version
+      (f) => !Object.hasOwn(values, f) || lazyFieldStale(e, f)
     )
   }
 
@@ -263,7 +304,11 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
     )
       return false
     const lines = s.form.object.sections.get(spec.owner, spec.section)
-    return lines === undefined || lines.ownerVersion < e.version
+    return (
+      lines === undefined ||
+      lines.staleEpoch === true ||
+      sectionLinesStale(lines, e)
+    )
   }
 
   /**

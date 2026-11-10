@@ -66,6 +66,90 @@ describe("mergeVersioned", () => {
   })
 })
 
+const EA = "a".repeat(64)
+const EB = "b".repeat(64)
+const inEpoch = (r: ReturnType<typeof row>, versionEpoch: string | null) => ({
+  ...r,
+  versionEpoch,
+})
+
+describe("mergeVersioned epochs (B1c Р5, Р6)", () => {
+  it("a row of another non-empty epoch replaces a higher version", () => {
+    const merged = mergeVersioned(
+      inEpoch(row(K1, 5), EA),
+      inEpoch(row(K1, 1), EB)
+    )
+    expect(merged).toMatchObject({ version: 1, versionEpoch: EB })
+  })
+
+  it("a null epoch with a lower version does not replace", () => {
+    expect(
+      mergeVersioned(inEpoch(row(K1, 5), EA), inEpoch(row(K1, 1), null))
+    ).toBeUndefined()
+  })
+
+  it("a null epoch with a higher version merges and keeps the epoch", () => {
+    const merged = mergeVersioned(
+      inEpoch(row(K1, 1), EA),
+      inEpoch(row(K1, 2), null)
+    )
+    expect(merged).toMatchObject({ version: 2, versionEpoch: EA })
+  })
+
+  it("a lower version of the same epoch is dropped", () => {
+    expect(
+      mergeVersioned(inEpoch(row(K1, 5), EA), inEpoch(row(K1, 1), EA))
+    ).toBeUndefined()
+  })
+})
+
+describe("ObjectStore.put epochs (B1c Р5)", () => {
+  it("replaces the entry with a lower version of a new epoch", () => {
+    const h = harness()
+    put(h, inEpoch(row(K1, 5), EA))
+    expect(put(h, inEpoch(row(K1, 1), EB))).toBe("written")
+    const e = h.store.get(K1)
+    expect(e).toMatchObject({ version: 1, versionEpoch: EB })
+    expect(e?.stale.minVersion).toBeUndefined()
+  })
+
+  it("rejects a lower version of a null epoch", () => {
+    const h = harness()
+    put(h, inEpoch(row(K1, 5), EA))
+    expect(put(h, inEpoch(row(K1, 1), null))).toBe("rejected")
+    expect(h.store.get(K1)).toMatchObject({ version: 5, versionEpoch: EA })
+  })
+
+  it("records the epoch of a lazy read and keeps the old one for an older field", () => {
+    const h = harness()
+    put(h, inEpoch(row(K1, 1, { notes: "n" }), EA), h.now(), true)
+    expect(h.store.get(K1)?.lazyEpochs.get("notes")).toBe(EA)
+    put(h, inEpoch(row(K1, 1), EB))
+    const e = h.store.get(K1)
+    expect(e?.versionEpoch).toBe(EB)
+    expect(e?.row?.values.notes).toBe("n")
+    expect(e?.lazyEpochs.get("notes")).toBe(EA)
+  })
+
+  it("a null-epoch restore of a removed slot keeps its epoch, so a lower version of a new epoch still replaces", () => {
+    const h = harness()
+    put(h, inEpoch(row(K1, 5), EA))
+    remove(h, K1)
+    put(h, inEpoch(row(K1, 6), null), h.now())
+    expect(h.store.get(K1)?.versionEpoch).toBe(EA)
+    expect(put(h, inEpoch(row(K1, 1), EB))).toBe("written")
+    expect(h.store.get(K1)).toMatchObject({ version: 1, versionEpoch: EB })
+  })
+
+  it("a remove then a lower version of a new epoch is not marked stale", () => {
+    const h = harness()
+    put(h, inEpoch(row(K1, 5), EA))
+    remove(h, K1)
+    expect(put(h, inEpoch(row(K1, 1), EB))).toBe("written")
+    expect(h.store.get(K1)?.stale.minVersion).toBeUndefined()
+  })
+})
+
 describe("scopeOf (П11)", () => {
   it("reads the attribute whose column is the scope column", () => {
     expect(scopeOf(catalogEntry(), { org: S })).toBe(S)

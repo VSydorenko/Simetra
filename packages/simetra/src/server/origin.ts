@@ -15,8 +15,11 @@ const REFUSED: CommandError = {
   reason: LIMIT_REASONS.origin,
 }
 
-/** In-process calls may only read: `run` needs the facts of an HTTP request. */
-const IN_PROCESS_TYPES: ReadonlySet<string> = new Set(["read", "version"])
+/**
+ * In-process calls may only read: `run` needs the facts of an HTTP request.
+ * The parts of a `read` are not looked at — every part only reads.
+ */
+const IN_PROCESS_TYPES: ReadonlySet<string> = new Set(["read"])
 
 /**
  * Step 0 of the data handler: refuses a request that could be forged by

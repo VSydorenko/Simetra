@@ -14,6 +14,11 @@ export type Values = Readonly<Record<string, unknown>>
 export interface ServerRow {
   readonly key: Key
   readonly version: number
+  /**
+   * The row version epoch of the database that answered (P4-B plan B1c, Р5);
+   * absent or `null` — the database has none, so versions compare as usual.
+   */
+  readonly versionEpoch?: string | null
   readonly values: Values
 }
 
@@ -113,6 +118,12 @@ export interface CoreLimits {
   readonly fullLimit: number
   readonly releaseDelayMs: number
   readonly preloadTtlMs: number
+  /**
+   * After a version epoch switch, visible views are re-read at a moment
+   * uniform on `[0, revalidateIntervalMs)` (P4-B plan B1c, Р8): a primary
+   * restart switches every client at once. The interval tick itself is B5.
+   */
+  readonly revalidateIntervalMs: number
 }
 
 export const DEFAULT_CORE_LIMITS: CoreLimits = {
@@ -126,6 +137,7 @@ export const DEFAULT_CORE_LIMITS: CoreLimits = {
   fullLimit: 5_000,
   releaseDelayMs: 1_000,
   preloadTtlMs: 5_000,
+  revalidateIntervalMs: 60_000,
 }
 
 /** Diagnostic events of the core. */
@@ -146,8 +158,22 @@ export interface ActiveView {
 
 /** The only way to change the store (P4-B spec §6.1). */
 export interface Writer {
-  patch(object: ObjectName, rows: readonly ServerRow[], readEpoch: number): void
-  remove(object: ObjectName, keys: readonly Key[], readEpoch: number): void
+  /**
+   * Applies one answer of a receiver re-read (P4-B plan B1c, Р7, Р12): the
+   * session gates it once by `versionEpoch` and the epochs of its rows
+   * (`acceptEpochs`), so a row of an abandoned epoch discards the whole
+   * answer; a discard counts toward the pass of its `commit`, not once per
+   * answer. `rows` patch keys that have an owner (a signal brings no new key
+   * in); `absent` are keys the answer did not return (`removed`). `"discarded"` — nothing was written:
+   * the answer came from an abandoned epoch, from a read started before a
+   * switch, or the session is unavailable.
+   */
+  apply(
+    object: ObjectName,
+    answer: { rows: readonly ServerRow[]; absent: readonly Key[] },
+    readEpoch: number,
+    versionEpoch: string | null
+  ): "applied" | "discarded"
   purge(
     object: ObjectName,
     target: { keys: readonly Key[] } | { scope: string | null }

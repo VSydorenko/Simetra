@@ -47,8 +47,6 @@ export const statementTimeout = (ms: string) => ({
   text: "SELECT set_config('statement_timeout', $1, true)",
   params: [ms],
 })
-/** Межа часу серверного читання — перший оператор після `BEGIN`; типово 15 с. */
-export const readTimeout = (ms = "15000") => statementTimeout(ms)
 /**
  * Claims команди: claims читання плюс межі часу транзакції. Типово — бюджет
  * 60 с (стеля оператора 30 с, простій і `transaction_timeout` — 61 с) і
@@ -68,7 +66,34 @@ export const commandClaims = (
     " THEN set_config('transaction_timeout', $4, true) END",
   params: [JSON.stringify(session), statement, lock, idle],
 })
-export const READ_TIMEOUT = readTimeout()
+/** `BEGIN` транзакції серверного читання: один знімок на всі частини. */
+export const READ_BEGIN = {
+  text: "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY",
+  params: [],
+}
+/**
+ * Налаштування транзакції читання одним оператором: claims, стеля оператора,
+ * запобіжник `transaction_timeout` (бюджет + 1 с) і роль останньою. Типово —
+ * бюджет і стеля 15 с під роллю команд (запасний шлях).
+ */
+export const readSetup = (
+  role = "simetra_command",
+  statement = "15000",
+  guard = "16000"
+) => ({
+  text:
+    CLAIMS.text +
+    ", set_config('statement_timeout', $2, true)" +
+    ", CASE WHEN current_setting('server_version_num')::int >= 170000" +
+    " THEN set_config('transaction_timeout', $3, true) END" +
+    ", set_config('role', $4, true)",
+  params: [JSON.stringify(session), statement, guard, role],
+})
+/** Епоха версій бази — оператор після налаштування, уже під роллю читання. */
+export const EPOCH = {
+  text: 'SELECT "simetra"."row_version_epoch"() AS epoch',
+  params: [],
+}
 export const ROLE = { text: 'SET LOCAL ROLE "simetra_command"', params: [] }
 export const CURRENT_USER = {
   text: 'SELECT "simetra"."current_user_id"() AS user_id',
@@ -109,6 +134,8 @@ export function answer(text: string): Answer {
   if (text.includes("applied_snapshot_hash"))
     return { rows: [{ hash: "hash-1" }] }
   if (text.includes("pg_has_role")) return { rows: [{ member: "t" }] }
+  // База без рядка епохи: функція відповідає `NULL`.
+  if (text.includes("row_version_epoch")) return { rows: [{ epoch: null }] }
   if (text.includes("rights_role_")) {
     return { rows: [{ r: JSON.stringify({ id: ID, version: 1, code: "R" }) }] }
   }
@@ -205,6 +232,18 @@ export const checkedRuntime = (
     checked(catalog, input, runtime.run(session, input, options)),
   read: <Q extends ReadQuery>(session: SessionClaims, query: Q) =>
     checked(catalog, query, runtime.read(session, query)),
+  // Відмова частини — тим самим правилом, що й відмова читання її запиту.
+  readParts: async (session, parts, options) => {
+    const result = await checked(
+      catalog,
+      parts,
+      runtime.readParts(session, parts, options)
+    )
+    result.items.forEach((item, i) => {
+      if (!item.ok) expectErrorObject(catalog, parts[i]!.query, item.error)
+    })
+    return result
+  },
 })
 
 export async function setup(

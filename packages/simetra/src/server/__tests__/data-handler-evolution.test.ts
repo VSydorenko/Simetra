@@ -8,6 +8,7 @@ import {
   operationToWire,
   readQueryToWire,
   readResultFromWire,
+  wireReadPartsResultSchema,
   type CatalogEntry,
   type CatalogIndex,
   type DataResponse,
@@ -123,7 +124,7 @@ async function harness(override: Override = () => undefined) {
   )
   live = true
   const run = vi.spyOn(runtime, "run")
-  const read = vi.spyOn(runtime, "read")
+  const readParts = vi.spyOn(runtime, "readParts")
   const handler = createDataHandler(runtime, { log: vi.fn() })
   const kernels = { [TICKET_ID]: ticket.kernelHash }
   const send = (request: object) =>
@@ -131,11 +132,20 @@ async function harness(override: Override = () => undefined) {
   return {
     db,
     run,
-    read,
-    readWire: (query: ReadQuery) => {
+    readParts,
+    // Запит з однієї частини; відповідь — як у частини: значення чи помилка.
+    readWire: async (query: ReadQuery): Promise<DataResponse> => {
       const wire = readQueryToWire(client, query)
       if (!wire.ok) throw new Error(`unmapped query: ${JSON.stringify(wire)}`)
-      return send({ type: "read", query: wire.value })
+      const response = await send({
+        type: "read",
+        items: [{ type: "query", query: wire.value }],
+      })
+      if (!response.ok) return response
+      const [item] = wireReadPartsResultSchema.parse(response.value).items
+      return item!.ok
+        ? { ok: true, value: item!.value, serverHash: response.serverHash }
+        : { ok: false, error: item!.error, serverHash: response.serverHash }
     },
     runWire: (operation: Operation) => {
       const wire = operationToWire(client, operation)
@@ -190,16 +200,17 @@ describe("data handler between catalogs A and A′", () => {
     ],
   ])("decodes %s into A's names", async (_, build) => {
     const query = build()
-    const { readWire, read } = await harness()
+    const { readWire, readParts } = await harness()
     const value = valueOf(await readWire(query))
     // Сервер прочитав запит під іменами `A′`.
-    expect(read.mock.calls[0]![1]).toMatchObject({
+    expect(readParts.mock.calls[0]![1][0]!.query).toMatchObject({
       object: { name: object.to },
       include: [attribute.to],
     })
     const decoded = readResultFromWire(client, query, value as never)
     if (!("rows" in decoded)) throw new Error("expected rows")
-    const row = decoded.rows[0]!
+    // Запит без `known`: маркерів у відповіді немає.
+    const row = decoded.rows[0] as Record<string, unknown>
     expect(row).toMatchObject({
       [ticket.keyName]: ID,
       [attribute.from]: TARGET,
@@ -269,7 +280,7 @@ describe("data handler between catalogs A and A′", () => {
     })
 
     it("a read naming the removed attribute", async () => {
-      const { readWire, read, db } = await harness()
+      const { readWire, readParts, db } = await harness()
       const before = db.calls.length
       const error = errorOf(
         await readWire({
@@ -279,7 +290,7 @@ describe("data handler between catalogs A and A′", () => {
         })
       )
       expect(error).toMatchObject({ code: "command.stale-client" })
-      expect(read).not.toHaveBeenCalled()
+      expect(readParts).not.toHaveBeenCalled()
       expect(db.calls).toHaveLength(before)
     })
 

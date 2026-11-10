@@ -166,7 +166,8 @@ describe("mapping between catalogs A and A′", () => {
     // Окремо від `toEqual`: стара вкладка не бачить нової колонки ні в
     // шапці, ні в рядку ТЧ.
     if (!("rows" in decoded)) return
-    const row = decoded.rows[0]!
+    // Запит без `known`: маркерів у відповіді немає.
+    const row = decoded.rows[0] as LogicalRow
     const lines = (row.tabularSections as Record<string, LogicalRow[]>)[
       section.from
     ]!

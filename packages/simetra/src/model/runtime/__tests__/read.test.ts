@@ -1,6 +1,13 @@
 import { z } from "zod"
 import { describe, expect, it } from "vitest"
-import { FILTER_OPERATORS, filterSchema, type Filter } from "../read"
+import {
+  FILTER_OPERATORS,
+  READ_LIMIT_MAX,
+  filterSchema,
+  knownFormAllowed,
+  knownSchema,
+  type Filter,
+} from "../read"
 
 // Шлях — від поля запиту `where`: так його побачить `prepareRead`.
 const querySchema = z.strictObject({ where: filterSchema })
@@ -76,5 +83,94 @@ describe("filterSchema", () => {
     ["a non-object node", { or: [leaf(), 5] }, "where.or.1"],
   ])("rejects %s at its node", (_, where, path) => {
     expect(pathOf(where)).toBe(path)
+  })
+})
+
+describe("knownSchema", () => {
+  const EPOCH = "0123456789abcdef".repeat(4)
+  const key = (i: number) =>
+    `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`
+  const KEY = key(1)
+  // Ключ з літерами: на ключі з одних цифр регістр нічого не змінює.
+  const LETTERS = "abcdefab-cdef-4abc-8def-abcdefabcdef"
+  const known = (fields: Record<string, unknown> = {}) => ({
+    epoch: EPOCH,
+    keys: [KEY],
+    versions: ["1"],
+    ...fields,
+  })
+  const many = (n: number) => ({
+    keys: Array.from({ length: n }, (_, i) => key(i)),
+    versions: Array.from({ length: n }, () => "1"),
+  })
+  const pathOf = (value: unknown): string | undefined => {
+    const parsed = knownSchema.safeParse(value)
+    return parsed.success ? undefined : parsed.error.issues[0]!.path.join(".")
+  }
+
+  it.each<[string, unknown]>([
+    ["one key", known()],
+    [`${READ_LIMIT_MAX} keys`, known(many(READ_LIMIT_MAX))],
+    ["no keys", known({ keys: [], versions: [] })],
+    ["the largest safe version", known({ versions: ["9007199254740991"] })],
+    ["a key in upper case", known({ keys: [LETTERS.toUpperCase()] })],
+  ])("accepts %s", (_, value) => {
+    expect(pathOf(value)).toBeUndefined()
+  })
+
+  it.each<[string, unknown, string]>([
+    ["a short epoch", known({ epoch: EPOCH.slice(1) }), "epoch"],
+    ["an upper-case epoch", known({ epoch: EPOCH.toUpperCase() }), "epoch"],
+    ["a null epoch", known({ epoch: null }), "epoch"],
+    ["a key that is not a UUID", known({ keys: ["k"] }), "keys.0"],
+    [
+      "a repeated key",
+      known({ keys: [KEY, key(2), KEY], versions: ["1", "1", "1"] }),
+      "keys.2",
+    ],
+    // Postgres рівняє UUID без регістру: інакше два записи одного рядка.
+    [
+      "a key repeated in another case",
+      known({
+        keys: [LETTERS, LETTERS.toUpperCase()],
+        versions: ["1", "1"],
+      }),
+      "keys.1",
+    ],
+    ["more versions than keys", known({ versions: ["1", "2"] }), "versions"],
+    [`${READ_LIMIT_MAX + 1} keys`, known(many(READ_LIMIT_MAX + 1)), "keys"],
+    ["version 0", known({ versions: ["0"] }), "versions.0"],
+    ["a negative version", known({ versions: ["-1"] }), "versions.0"],
+    [
+      "a version with a leading zero",
+      known({ versions: ["01"] }),
+      "versions.0",
+    ],
+    ["a fractional version", known({ versions: ["1.5"] }), "versions.0"],
+    [
+      "a version past 2^53 - 1",
+      known({ versions: ["9007199254740992"] }),
+      "versions.0",
+    ],
+    ["a version that is a number", known({ versions: [1] }), "versions.0"],
+    ["an extra field", known({ more: true }), ""],
+  ])("rejects %s", (_, value, path) => {
+    expect(pathOf(value)).toBe(path)
+  })
+})
+
+describe("knownFormAllowed", () => {
+  const ID = "11111111-1111-4111-8111-111111111111"
+  it.each<[string, boolean, Record<string, unknown>]>([
+    ["a list", true, { limit: 1 }],
+    ["a card", true, { id: ID }],
+    ["a count", false, { count: true }],
+    ["a section page", false, { tabularSection: "s", limit: 1 }],
+    ["the lines of one owner", false, { tabularSection: "s", owner: ID }],
+    ["a card with sections", false, { id: ID, tabularSections: true }],
+    ["a card with include", false, { id: ID, include: ["org"] }],
+    ["a list with include", false, { limit: 1, include: ["org"] }],
+  ])("%s -> %s", (_, allowed, query) => {
+    expect(knownFormAllowed(query)).toBe(allowed)
   })
 })

@@ -1,5 +1,5 @@
 import { keyId } from "./epoch"
-import { visibleRow, type RowEntry } from "./object-store"
+import { lazyFieldStale, visibleRow, type RowEntry } from "./object-store"
 import type {
   CloseReason,
   Key,
@@ -89,18 +89,19 @@ export function computeRowView(
   }
   const shown = visibleRow(e)
   const values = shown ?? EMPTY_VALUES
-  const { minVersion, disconnect, seen } = e.stale
+  const { minVersion, disconnect, seen, epoch } = e.stale
   const state =
-    minVersion !== undefined || disconnect !== undefined || seen !== undefined
+    minVersion !== undefined ||
+    disconnect !== undefined ||
+    seen !== undefined ||
+    epoch !== undefined
       ? "stale"
       : "synced"
   const stale =
     shown === undefined
       ? NO_FIELDS
       : lazyFields.filter(
-          (f) =>
-            Object.hasOwn(shown, f) &&
-            (e.lazyVersions.get(f) ?? -Infinity) < e.version
+          (f) => Object.hasOwn(shown, f) && lazyFieldStale(e, f)
         )
   const base = prev?.state === "removed" ? undefined : prev
   const nextValues =

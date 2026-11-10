@@ -389,6 +389,25 @@
   (`packages/simetra/test/db/`). Суміжні кандидати швидкодії DB-наборів —
   [борг П3-2b](2026-10-15-p3-2b-residual-debt.md) § 3. Рішення про
   виконання — окремо.
+- **Гард шлюзу записувача не ловить реекспорт.** Тест
+  `packages/simetra/src/data/store/__tests__/writer-gate-guard.test.ts`
+  шукає виклики `patchRows` / `removeKeys` поза `writer.ts` за символом, але
+  не відхиляє `export default patchRows` чи `export const alias = removeKeys`
+  у самому `writer.ts`: так внутрішня функція вийшла б з модуля в обхід
+  шлюзу епохи `Writer.apply`. Додати негативні кейси на такий експорт.
+- **Гард епохи довіряє `heldEpoch` за назвою.** Тест
+  `packages/simetra/src/data/store/__tests__/epoch-write-guard.test.ts`
+  приймає `heldEpoch(…)` як законну копію власної епохи запису, тож
+  `versionEpoch: heldEpoch(row.versionEpoch)` над вхідним рядком пройшов би
+  гард, хоч скидає утримувану епоху. Зараз усі виклики копіюють епоху запису
+  чи пам'яті. Обмежити аргумент `heldEpoch` записом чи пам'яттю, яку
+  копіюють, або перелічити дозволені місця виклику.
+- **Модельний тест ядра без історії на епоху.** Фейк модельного тесту B3-2
+  (`packages/simetra/src/data/store/__tests__/model.test.ts` над
+  `packages/simetra/src/data/store/testing/fake-source.ts`) має одну історію
+  версій для всіх епох: зміна `fake.epoch` не змінює даних, тож правила
+  епохи (спека П4-B, план B1c, Р5–Р13) тримають лише юніт-тести. Кандидат —
+  фейк з окремою історією на епоху, щоб модельний тест судив і їх.
 
 ## 8. Designer
 

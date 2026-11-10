@@ -1,16 +1,18 @@
 import {
   catalogIndex,
   changesToWire,
+  isPlainObject,
   CommandFailure,
   dataRequestSchema,
   encodeRow,
   errorToWire,
   LIMIT_REASONS,
   operationFromWire,
-  readQueryFromWire,
+  readPartFromWire,
   readResultToWire,
   sessionClaimsSchema,
   wireCommandErrorSchema,
+  wireReadPartSchema,
   type CatalogEntry,
   type CatalogIndex,
   type CommandError,
@@ -18,6 +20,8 @@ import {
   type DataResponse,
   type Mapped,
   type Operation,
+  type ReadPart,
+  type ReadPartValue,
   type SessionClaims,
   type VersionValue,
   type WireCommandError,
@@ -27,7 +31,12 @@ import { z } from "zod"
 import { checkCompatibility } from "./compatibility"
 import { checkRequestOrigin, type RequestOrigin } from "./origin"
 import { decidingIssue, issueReason, operationRefusalPath } from "./read"
-import { fitResponse, fitRunResult } from "./response-budget"
+import {
+  fitParts,
+  fitRunResult,
+  type ReadSlot,
+  type WireReadItem,
+} from "./response-budget"
 import type { CommandRuntime } from "./runtime"
 
 /**
@@ -38,6 +47,7 @@ import type { CommandRuntime } from "./runtime"
 
 type Request = DataRequest["request"]
 type RunRequest = Extract<Request, { type: "run" }>
+type ReadRequest = Extract<Request, { type: "read" }>
 
 /**
  * Дефект сервера (`unknown` мапінгу після звірки): назовні — лише
@@ -67,6 +77,23 @@ function originRefused(origin: RequestOrigin, request: unknown): boolean {
     return checkRequestOrigin(origin, request) !== undefined
   } catch {
     return true
+  }
+}
+
+/**
+ * Запит старого розгортання: тип, якого сервер не знає (окремий `version`
+ * до B1c), чи `read` без `items` (одиночний `query`). Стара вкладка має
+ * дізнатися про нове розгортання (`stale-client`), а не отримати `invalid`.
+ */
+function staleRequest(raw: unknown): boolean {
+  try {
+    const request = (raw as Raw)?.request
+    if (!isPlainObject(request)) return false
+    const { type } = request
+    if (type === "read") return !Object.hasOwn(request, "items")
+    return typeof type === "string" && type !== "run"
+  } catch {
+    return false
   }
 }
 
@@ -107,10 +134,12 @@ function rawObject(read: () => unknown): string | undefined {
 type Raw = { request?: Record<string, unknown> } | null | undefined
 
 /**
- * Відмова схеми конверта (крок 1) у формі передачі. Шлях — від операції чи
- * запиту, як у логічній формі (`schemaRefusal` у `phase.ts`, `readRefusal`
- * у `read.ts`): префікс `request` і `operation` / `batch.<i>` / `query`
- * прибирається, бо T4 мапить шлях записом об'єкта, а не конверта; шлях
+ * Відмова схеми конверта (крок 1) чи частини читання у формі передачі.
+ * Шлях — від операції чи запиту, як у логічній формі (`schemaRefusal` у
+ * `phase.ts`, `readRefusal` у `read.ts`): префікс `request` і `operation` /
+ * `batch.<i>` / `items.<i>.query` прибирається, бо T4 мапить шлях записом
+ * об'єкта, а не конверта (частину розбирає окрема схема, тож її шлях
+ * приходить префіксом `prefix`); шлях
  * операції — без `tabularSections`, перший сегмент — `<id ТЧ>`; без
  * `object` шлях операції пакета зберігає її індекс. ТЧ понад
  * межу — лише `<id ТЧ>`; пакет понад межу — без шляху й об'єкта.
@@ -118,13 +147,17 @@ type Raw = { request?: Record<string, unknown> } | null | undefined
 function envelopeRefusal(
   index: CatalogIndex,
   raw: unknown,
-  error: z.ZodError
+  error: z.ZodError,
+  prefix: readonly PropertyKey[] = []
 ): WireCommandError {
   const reason = issueReason(error)
   if (reason === LIMIT_REASONS.batchTooLarge) {
     return { code: "command.invalid", reason }
   }
-  let path: readonly PropertyKey[] = decidingIssue(error)?.path ?? []
+  let path: readonly PropertyKey[] = [
+    ...prefix,
+    ...(decidingIssue(error)?.path ?? []),
+  ]
   const request = () => (raw as Raw)?.request
   let object: string | undefined
   // Префікс прибирається, лише коли за ним щось лишається: відсутнє поле
@@ -136,12 +169,27 @@ function envelopeRefusal(
   let opIndex: number | undefined
   const [root, field, at] = path
   if (root === "request" && path.length > 1) {
-    if ((field === "operation" || field === "query") && path.length > 2) {
+    if (field === "operation" && path.length > 2) {
       object = rawObject(
         () => (request()?.[field] as { object?: unknown } | undefined)?.object
       )
-      operation = field === "operation"
+      operation = true
       path = path.slice(2)
+    } else if (field === "items" && typeof at === "number") {
+      // Частина читання (B1c): шлях — від її запиту, як в одиночного читання
+      // раніше; поле самої частини (`type`, `query`) — від частини.
+      if (path[3] === "query" && path.length > 4) {
+        object = rawObject(
+          () =>
+            (
+              (request()?.items as { query?: { object?: unknown } }[])[at]
+                ?.query as { object?: unknown } | undefined
+            )?.object
+        )
+        path = path.slice(4)
+      } else {
+        path = path.slice(3)
+      }
     } else if (field === "batch" && typeof at === "number" && path.length > 3) {
       object = rawObject(
         () =>
@@ -256,25 +304,107 @@ export function createDataHandler(
     serverHash,
   })
 
+  const partFailure = (error: WireCommandError): WireReadItem => ({
+    ok: false,
+    // Та сама сувора схема, що й у відповіді цілком (`failure`).
+    error: wireCommandErrorSchema.parse(error),
+  })
+
+  /**
+   * Кроки 1, 3, 4 для однієї частини: відмова схеми, звірки чи мапінгу —
+   * лише цій частині. Невідомий тип частини — `invalid`, а не `stale-client`:
+   * новіший клієнт на старішому сервері не має перезавантажуватись (звірку
+   * версій тримає хеш каталогу).
+   */
+  function slotOf(
+    items: readonly unknown[],
+    at: number
+  ): { slot: ReadSlot; part?: ReadPart } {
+    let parsed: ReturnType<typeof wireReadPartSchema.safeParse>
+    try {
+      parsed = wireReadPartSchema.safeParse(items[at])
+    } catch {
+      return { slot: { item: partFailure({ code: "command.invalid" }) } }
+    }
+    const refused = (error: WireCommandError) => ({
+      slot: { item: partFailure(error) },
+    })
+    if (!parsed.success) {
+      return refused(
+        envelopeRefusal(index, { request: { items } }, parsed.error, [
+          "request",
+          "items",
+          at,
+        ])
+      )
+    }
+    const wire = parsed.data
+    if (wire.type === "version") {
+      return { slot: { item: { ok: true, value: version } } }
+    }
+    const stale = checkCompatibility(index, wire)
+    if (stale !== undefined) return refused(stale)
+    const part = mappedOrRefused(readPartFromWire(index, wire))
+    if ("refused" in part) {
+      const { object } = wire.query as { object: string }
+      return refused(mappingRefusal(index, object, part.refused))
+    }
+    return { slot: { query: wire.query }, part: part.value }
+  }
+
   async function read(
     claims: SessionClaims,
-    request: Extract<Request, { type: "read" }>
+    request: ReadRequest
   ): Promise<DataResponse> {
-    const query = mappedOrRefused(readQueryFromWire(index, request.query))
-    if ("refused" in query) {
-      const { object } = request.query as { object: string }
-      return failure(mappingRefusal(index, object, query.refused))
+    const slots: ReadSlot[] = []
+    const parts: ReadPart[] = []
+    request.items.forEach((_, at) => {
+      const { slot, part } = slotOf(request.items, at)
+      slots.push(slot)
+      if (part !== undefined) parts.push(part)
+    })
+    // Крок 6: бюджет міряє кожну частину до наступної (`fit`), тож частина
+    // після переповнення бази не бачить.
+    const budget = fitParts(index, slots, serverHash)
+    const fitted = new Set<number>()
+    let defect: { error: unknown } | undefined
+    const fit = (part: number, value: ReadPartValue) => {
+      if (defect !== undefined) return "overflow"
+      fitted.add(part)
+      try {
+        return budget.fit(
+          part,
+          readResultToWire(index, parts[part]!.query, value)
+        )
+      } catch (error) {
+        // Кодек відхилив значення рантайму — дефект сервера. Виняток із `fit`
+        // рантайм узяв би за збій бази; тут лише зупинка, а відмова — вся
+        // відповідь `command.internal` після `readParts`.
+        defect = { error }
+        return "overflow"
+      }
     }
-    const result = await runtime.read(claims, query.value)
-    const fitted = fitResponse(
-      index,
-      request.query,
-      readResultToWire(index, query.value, result),
-      serverHash
-    )
-    return "code" in fitted
-      ? failure(errorToWire(index, fitted))
-      : { ok: true, value: fitted, serverHash }
+    const result =
+      parts.length === 0
+        ? { epoch: null, items: [] }
+        : await runtime.readParts(claims, parts, { fit })
+    const failed = new Map<number, WireCommandError>()
+    result.items.forEach((outcome, part) => {
+      if (!outcome.ok) {
+        failed.set(part, errorToWire(index, outcome.error))
+      } else if (!fitted.has(part)) {
+        // Рантайм, що не викликав `fit`: бюджет однаково вирішує сам.
+        fit(part, outcome.value)
+      }
+    })
+    if (defect !== undefined) throw new Defect(defect.error)
+    for (const [part, error] of failed) {
+      failed.set(part, wireCommandErrorSchema.parse(error))
+    }
+    const value = budget.finish(result.epoch, failed)
+    return "code" in value
+      ? failure(errorToWire(index, value))
+      : { ok: true, value, serverHash }
   }
 
   async function run(
@@ -334,7 +464,11 @@ export function createDataHandler(
       return failure({ code: "command.invalid" })
     }
     if (!parsed.success) {
-      return failure(envelopeRefusal(index, raw, parsed.error))
+      return failure(
+        staleRequest(raw)
+          ? { code: "command.stale-client" }
+          : envelopeRefusal(index, raw, parsed.error)
+      )
     }
     // Повторна звірка типу: крок 0 читав сирий вхід, а розбір читає його
     // вдруге, тож геттер чи `Proxy` міг підмінити `read` на `run`. Розібране
@@ -356,11 +490,11 @@ export function createDataHandler(
         reason: LIMIT_REASONS.sessionChanged,
       })
     }
-    // Крок 3: помилка звірки — уже форми передачі, з UUID із запиту.
-    const stale = checkCompatibility(index, request)
-    if (stale !== undefined) return failure(stale)
-    if (request.type === "version") {
-      return { ok: true, value: version, serverHash }
+    // Крок 3: помилка звірки — уже форми передачі, з UUID із запиту. Частини
+    // читання звіряються кожна окремо (`slotOf`).
+    if (request.type === "run") {
+      const stale = checkCompatibility(index, request)
+      if (stale !== undefined) return failure(stale)
     }
     // Кроки 4–6.
     try {

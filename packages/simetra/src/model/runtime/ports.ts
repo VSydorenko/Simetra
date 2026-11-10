@@ -1,8 +1,9 @@
 import type {
   DataRequest,
   DataResponse,
+  WireReadPart,
+  WireReadParts,
   WireReadQuery,
-  WireReadResult,
 } from "./envelope"
 
 /**
@@ -11,12 +12,22 @@ import type {
  */
 export type WireRowsQuery = Exclude<WireReadQuery, { count: true }>
 
-/** A wire read result an adapter returns: rows only, never a count. */
-export type WireRowsResult = Exclude<WireReadResult, { count: unknown }>
+/**
+ * A part an adapter is asked to read: a rows query part. The catalog
+ * `version` part goes through the data transport, not the adapter.
+ */
+export type WireQueryPart = Omit<
+  Extract<WireReadPart, { type: "query" }>,
+  "query"
+> & { query: WireRowsQuery }
 
-/** Reads rows from one source (a server, a local store, a fake). */
+/**
+ * Reads parts from one source (a server, a local store, a fake): one request,
+ * one outcome per part in request order. A failure of the whole request
+ * rejects with `CommandFailure`.
+ */
 export interface SourceAdapter {
-  read(query: WireRowsQuery): Promise<WireRowsResult>
+  read(items: readonly WireQueryPart[]): Promise<WireReadParts>
   /** `include: false` means the source cannot join related rows. */
   capabilities: { include: boolean }
 }

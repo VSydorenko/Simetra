@@ -26,13 +26,10 @@ B1e](2026-11-08-p4-b1e-row-version-sequence.md) (епоха й послідов�
 вхід цього блоку).
 
 **Поділ і залежності.** **B1c-1** (Task 1–5, T0, T1, T3) і **B1c-2** (Task
-6–10, T4 і документи) — кожна з власним «готово». Обидві йдуть після мерджу
-B3-2 (B1c-1 змінює адаптер `src/data`, який переносить B3-2) і після
-виконання B1e **разом із правкою гранту** (гілка `plan/p4-b1e-grant`:
-`EXECUTE` на `row_version_epoch()` ролям запиту `user` і `anonymous`) —
-без неї кожне читання падає з `42501`; DB-кейс Task 5b читає епоху під
-кожною роллю запиту провайдера. Виконавець спершу звіряє план з `main` (`orient --plan`):
-імена T4 нижче — з гілки B3-2 (`feat/p4-b3-2`, `data/store/*`).
+6–10, T4 і документи) — кожна з власним «готово». B3-2 (PR #79) і B1e разом з
+грантом `EXECUTE` на `row_version_epoch()` (`EPOCH_READERS` у
+`packages/simetra/src/schema/apply/state.ts`, PR #84) уже в `main`. Виконавець
+спершу звіряє план з `main` (`orient --plan`).
 
 ## Global Constraints
 
@@ -45,7 +42,7 @@ B3-2 (B1c-1 змінює адаптер `src/data`, який переносит�
 - Коди частин: `command.unavailable` з `reason: "batch-aborted"` (помилка бази в попередній частині) і `"batch-budget"` (не вмістилось у залишок); `command.timeout` після дедлайну; втрата з'єднання — `command.unavailable` усім невиконаним частинам.
 - Ядро шле `known` лише з B3-3; у B1c ядро його не шле, а маркер у відповіді без `known` — `command.internal`.
 - Без шимів: окремий тип запиту `version` і `read` з одним `query` видаляються в тій самій зміні; запит невідомого типу чи `read` старої форми — `command.stale-client` (стара вкладка дізнається про нове розгортання); невідомий тип **частини** — `command.invalid` лише цій частині (новіший клієнт на старішому сервері не має перезавантажуватись — сумісність «клієнт новіший» тримає звірка хеша каталогу).
-- Файли ПГ-1 не чіпати (перелік — план B1e, Global Constraints). DB-тести профілево-нейтральні, ролі API — з `PROVIDER_API_ROLES`; читання в DB-тестах — під справжньою роллю входу (`runtime-login.db.test.ts` — зразок).
+- Файли ПГ-1 не чіпати (перелік — план B1e, Global Constraints). DB-тести профілево-нейтральні, ролі API — з `PROVIDER_API_ROLES`; читання в DB-тестах — під справжньою роллю входу (`withRuntimeLogin` у `packages/designer/src/__tests__/support/db.ts`; зразок — `read-query.db.test.ts` і `data-handler.db.test.ts`).
 - Коментарі — українською й про «чому»; повідомлення — en/uk у `packages/simetra/src/compiler/messages.ts`.
 
 ## Рішення плану
@@ -66,8 +63,7 @@ B3-2 (B1c-1 змінює адаптер `src/data`, який переносит�
 | Р13 | Позначку `stale.epoch` знімає лише відповідь поточної непорожньої епохи, що почалась після перемикання; рядок, вставлений з `null`-відповіді після перемикання, отримує `stale.epoch`; `row_ver` сигналу (B5) порівнюється лише з пам'яттю й рядками поточної епохи; результат `run` епохи не несе й порівнюється за правилом `null` (епоху в результат `run` може додати B3-4) | інакше позначка старої епохи не знімалась би ніколи, а відставлена репліка зняла б позначку, не довівши свіжості | П4-B §6.2, §8.4 (Task 10) |
 | Р10 | Обмежувач паралельних читань ядра рахує запит, а не частину; повтор `batch-aborted` — через обмежувач з паузою, що зростає | зворотний тиск §8.4; без паузи збій бази давав би до 16 послідовних повторів на пакет | немає |
 
-Кожне рішення — розвилка, погоджена архітекторкою (2026-11-08); Р11–Р13 —
-правки аудиту, до погодження. Межа одночасних читань на `subject` на сервері
+Кожне рішення — розвилка, погоджена архітекторкою (2026-11-08; Р11–Р13 — 2026-11-10). Межа одночасних читань на `subject` на сервері
 — залишок: Task 10 записує його в §14.3 П4-B з блоком-власником (П4-D,
 шаблон host-а).
 
@@ -91,11 +87,11 @@ B3-2 (B1c-1 змінює адаптер `src/data`, який переносит�
 ### Task 1: Схеми T0 — частини, `known`, маркери, відповідь
 
 **Files:**
-- Modify: `packages/simetra/src/model/runtime/envelope.ts` (`dataRequestSchema`: гілка `read` з `items`, без `version`; `wireReadQuerySchema` — `known` у списочній формі й формі картки; `wireReadResultSchema` — `rows` з маркерами; нова `wireReadPartsResultSchema`), `read.ts` (`READ_BATCH_MAX`), `ports.ts` (`WireReadPart`, `WireReadParts`), `mapping.ts` (`readPartToWire`, `readPartFromWire` — `known` переноситься окремо від запиту; `readResultToWire`, `readResultFromWire` — маркери)
+- Modify: `packages/simetra/src/model/runtime/envelope.ts` (`dataRequestSchema`: гілка `read` з `items`, без `version`; `wireReadQuerySchema` — `known` у списочній формі й формі картки; `wireReadResultSchema` — `rows` з маркерами; нова `wireReadPartsResultSchema`), `read.ts` (`READ_BATCH_MAX`, `READ_BATCH_STATEMENTS_MAX = 32`), `ports.ts` (`WireReadPart`, `WireReadParts`), `mapping.ts` (`readPartToWire`, `readPartFromWire` — `known` переноситься окремо від запиту; `readResultToWire`, `readResultFromWire` — маркери)
 - Test: `packages/simetra/src/model/runtime/__tests__/envelope.test.ts`, `read.test.ts`, `mapping.test.ts`
 
 **Interfaces:**
-- Produces: `READ_BATCH_MAX = 16`; `knownSchema` і тип `KnownVersions`; логічний маркер `KnownMarker = { known: number; copies?: Record<string, unknown> }` (копії — логічні імена) і `ReadPartValue = ReadCount | (Omit<ReadRows, "rows"> & { rows: Array<Record<string, unknown> | KnownMarker> })` у `read.ts`; `readResultToWire` / `readResultFromWire` (`mapping.ts`) кодують і декодують маркери; `WireReadPart` і `WireReadParts` — `z.infer` схем частини й відповіді в `envelope.ts` (одне визначення): частина — `{ type: "query", query: WireReadQuery & { known?: KnownVersions } } | { type: "version" }` (`count` — теж частина `query`), значення частини — `WireReadResult` (рядки з маркерами або лічильник) `| VersionValue`; `ports.ts` для адаптера лише звужує їх `Extract`; рядок результату — `WireRow | number | { $known: number; [copyColumn: string]: unknown }`; схема конверта бере частини як `z.array(z.unknown())` з межею, кожну частину валідує окрема схема (Task 5).
+- Produces: `READ_BATCH_MAX = 16`, `READ_BATCH_STATEMENTS_MAX = 32` (`read.ts`); `knownSchema` і тип `KnownVersions`; логічний маркер `KnownMarker = { known: number; copies?: Record<string, unknown> }` (копії — логічні імена) і `ReadPartValue = ReadCount | (Omit<ReadRows, "rows"> & { rows: Array<Record<string, unknown> | KnownMarker> })` у `read.ts`; `readResultToWire` / `readResultFromWire` (`mapping.ts`) кодують і декодують маркери; `WireReadPart` і `WireReadParts` — `z.infer` схем частини й відповіді в `envelope.ts` (одне визначення): частина — `{ type: "query", query: WireReadQuery & { known?: KnownVersions } } | { type: "version" }` (`count` — теж частина `query`), значення частини — `WireReadResult` (рядки з маркерами або лічильник) `| VersionValue`; `ports.ts` для адаптера лише звужує їх `Extract`; рядок результату — `WireRow | number | { $known: number; [copyColumn: string]: unknown }`; схема конверта бере частини як `z.array(z.unknown())` з межею, кожну частину валідує окрема схема (Task 5).
 
 - [ ] **Step 1: Unit (`it.each`, одна таблиця на схему).** `known` — прийняті й відхилені форми з Global Constraints, зокрема `reason: "known-form"` для `count`, сторінки ТЧ, «ТЧ власника», картки з `tabularSections` і будь-якої форми з `include`; конверт `read` — 1 і 16 частин прийнято, 0 і 17 — відмова з причиною межі; рядки відповіді — ціле ≥ 0 і `{ $known }` прийнято, від'ємне, дробове й `{ $known: -1 }` — ні; `readPartToWire` / `readPartFromWire` переносять `known` без змін; `readResultToWire` / `readResultFromWire` — маркер туди й назад, частковий маркер з копіями в логічних і фізичних іменах; об'єкт з `$known` і з колонкою ключа — рядок, а не маркер.
 - [ ] **Step 2: Червоний → реалізація → зелений.** `pnpm --filter simetra test envelope read mapping`.
@@ -105,7 +101,7 @@ B3-2 (B1c-1 змінює адаптер `src/data`, який переносит�
 
 **Files:**
 - Create: `packages/simetra/src/compiler/copy-columns.ts`
-- Modify: стадія компілятора, де є парсер і фізична модель (`packages/simetra/src/compiler/pipeline.ts` — збирання `CompiledModel`), `packages/simetra/src/compiler/runtime-catalog.ts` (`attributes()`: `copy: true` з `model.copyColumns`, шапка й ТЧ), `client-catalog.ts` (`attributeOf`: `present("copy", …)`), `packages/simetra/src/model/runtime/catalog.ts` (`catalogEntryAttributeSchema`: `copy: z.literal(true).optional()`)
+- Modify: стадія компілятора, де є парсер і фізична модель (`packages/simetra/src/compiler/pipeline.ts` — збирання `CompiledModel`), `packages/simetra/src/compiler/compile.ts` (інтерфейс `CompiledModel`: поле `copyColumns`), `packages/simetra/src/compiler/runtime-catalog.ts` (`attributes()`: `copy: true` з `model.copyColumns`, шапка й ТЧ), `client-catalog.ts` (`attributeOf`: `present("copy", …)`), `packages/simetra/src/model/runtime/catalog.ts` (`catalogEntryAttributeSchema`: `copy: z.literal(true).optional()`)
 - Test: `packages/simetra/src/compiler/__tests__/copy-columns.test.ts` (Create), `runtime-catalog.test.ts`
 
 **Interfaces:**
@@ -136,7 +132,7 @@ B3-2 (B1c-1 змінює адаптер `src/data`, який переносит�
 - Test: `packages/simetra/src/server/__tests__/read-runtime.test.ts`
 
 **Interfaces:**
-- Produces: `CommandRuntime.readParts(session: SessionClaims, parts: readonly ReadPart[]): Promise<ReadPartsResult>`; `ReadPart = { type: "query"; query: ReadQuery; known?: KnownVersions }` (частину `version` обробляє лише обробник, Task 5); `ReadPartsResult = { epoch: string | null; items: Array<{ ok: true; value: ReadPartValue } | { ok: false; error: CommandError }> }`; необов'язковий `fit` (Task 5) зупиняє виконання решти частин; опція рантайму `readBudgetMs` (типово 15 000); `READ_BATCH_STATEMENTS_MAX = 32` у T0.
+- Produces: `CommandRuntime.readParts(session: SessionClaims, parts: readonly ReadPart[]): Promise<ReadPartsResult>`; `ReadPart = { type: "query"; query: ReadQuery; known?: KnownVersions }` (частину `version` обробляє лише обробник, Task 5); `ReadPartsResult = { epoch: string | null; items: Array<{ ok: true; value: ReadPartValue } | { ok: false; error: CommandError }> }`; необов'язковий `fit` (Task 5) зупиняє виконання решти частин; опція рантайму `readBudgetMs` (типово 15 000); споживає `READ_BATCH_STATEMENTS_MAX` (Task 1).
 - Порядок результатів (П4-B §4.2): дедлайн перед частиною — вона й наступні `command.timeout` без виконання; помилка бази в частині — вона отримує свою помилку (`57014`, `25P04` — `command.timeout`), наступні — `batch-aborted`; втрата з'єднання — невиконаним `command.unavailable`; після `25P04` з'єднання знищується; виконані раніше частини лишають результати. 
 - [ ] **Step 1: Unit `read-runtime.test.ts`** (порт-фейк з журналом операторів): рівно `BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY`, налаштування (розібране: усі `set_config` Р1, `role` останнім), `SELECT simetra.row_version_epoch()`, по оператору на частину й ціль, `COMMIT`; залишок бюджету менший за стелю — окремий `set_config('statement_timeout', …)` перед оператором; дедлайн — `command.timeout` без операторів; `57014` у другій з трьох частин — перша з результатом, друга `command.timeout`, третя `batch-aborted`; обрив з'єднання — `command.unavailable` невиконаним; `runtime.read` дає ті самі оператори з однією частиною; епоха з оператора епохи — в результаті.
 - [ ] **Step 2: Червоний → реалізація → зелений.** `pnpm --filter simetra test read-runtime transaction`.
@@ -146,7 +142,7 @@ B3-2 (B1c-1 змінює адаптер `src/data`, який переносит�
 
 **Files:**
 - Modify: `packages/simetra/src/server/data-handler.ts` (кроки 1, 3, 5, 6 для частин; `envelopeRefusal` — шлях `items.<i>`; невідомий тип запиту й `read` без `items` — `stale-client`), `compatibility.ts` (звірка на частину), `response-budget.ts` (`fitParts`), `origin.ts` (`IN_PROCESS_TYPES = {"read"}`)
-- Modify (споживачі старого запиту `version`): `packages/simetra/src/server/__tests__/data-handler*.test.ts`, `compatibility.test.ts`, `packages/simetra/src/data/__tests__/runtime.test.ts`, `packages/designer/src/__tests__/data-handler.db.test.ts`; адаптер `packages/simetra/src/data/adapter.ts` — мінімально: одна частина `query`
+- Modify (споживачі старого запиту `version`): `packages/simetra/src/server/__tests__/data-handler*.test.ts`, `compatibility.test.ts`, `packages/simetra/src/data/__tests__/runtime.test.ts`, `packages/simetra/src/server/__tests__/phase.test.ts`, `packages/simetra/src/server/__tests__/origin.test.ts`, `packages/simetra/src/data/__tests__/adapter.test.ts`, `packages/designer/src/__tests__/data-handler.db.test.ts`; адаптер `packages/simetra/src/data/adapter.ts` — мінімально: одна частина `query`
 - Test: `packages/simetra/src/server/__tests__/data-handler.test.ts`, `response-budget.test.ts`, `origin.test.ts`
 
 **Interfaces:**
@@ -154,7 +150,7 @@ B3-2 (B1c-1 змінює адаптер `src/data`, який переносит�
 - Produces: `fitParts` — вимірювач, який обробник передає в `readParts` (`readParts(session, parts, { fit })`, `fit(index, value) => "accept" | "overflow"` міряє закодовану форму передачі частини проти залишку бюджету відповіді **до** виконання наступної частини); частина, чий результат не вміщується в залишок, а окремо вмістився б, виконана один раз і відкинута, вона й наступні (вже без виконання) — `batch-budget` (сторінка — непорожній префікс з `more: true`, коли вміщується); частина, що не вміщується й сама, — `response-too-large`.
 
 - [ ] **Step 1: Unit:** невалідна частина — `command.invalid` лише їй; несумісна — `stale-client` лише їй; `version` — значення каталогу без звернення до порту; `subject` ≠ `sub` — відмова всього запиту; `{ type: "version" }` і `read` з `query` замість `items` — `stale-client`; невідомий тип частини — `command.invalid` лише їй; обидві гілки бюджету пакета (частина після переповнення не виконується — порт-фейк не бачить її оператора); понад `READ_BATCH_STATEMENTS_MAX` — `batch-too-large` до бази; `inProcess` пропускає `read` з будь-якими частинами, `run` і `receipt` — ні.
-- [ ] **Step 2: Червоний → реалізація → зелений.** `pnpm --filter simetra test data-handler response-budget origin compatibility runtime`.
+- [ ] **Step 2: Червоний → реалізація → зелений.** `pnpm --filter simetra test data-handler response-budget origin compatibility runtime phase adapter`.
 - [ ] **Step 3: Commit.** `feat(server): обробник частин read, бюджет пакета й походження`
 
 ### Task 5b: DB-кейси пакета читань
@@ -163,62 +159,56 @@ B3-2 (B1c-1 змінює адаптер `src/data`, який переносит�
 - Create: `packages/designer/src/__tests__/read-batch.db.test.ts`
 
 - [ ] **Step 1: DB** (причина DB: RLS, `unnest`, знімок `REPEATABLE READ` і епоха B1e виконує Postgres; під справжньою роллю входу): епоха читається під кожною роллю запиту провайдера (`user`, `anonymous` — коли є); ключ із `known`, невидимий під RLS, — відсутній; ключ поза `where` — відсутній; рівна версія й епоха — маркер; інша версія — рядок; ключ, якого немає в `known`, — повний рядок поряд із маркерами; `known` іншої епохи — повна відповідь; база без рядка епохи — `epoch: null` і повна відповідь; поширення копії носія без підвищення версії — частковий маркер з новою копією; пакет з двох частин і конкурентний коміт між ними (друге з'єднання) — обидві бачать стан до коміту; `epoch` — 64 hex.
-- [ ] **Step 2: Гейти B1c-1.** `pnpm format:check && pnpm lint && pnpm typecheck && pnpm test`, `pnpm --filter @simetrajs/designer test:db read-batch read-query data-handler runtime-login`.
+- [ ] **Step 2: Гейти B1c-1.** `pnpm format:check && pnpm lint && pnpm typecheck && pnpm test`, `pnpm --filter @simetrajs/designer test:db read-batch read-query data-handler`.
 - [ ] **Step 3: Commit.** `test(server): DB-кейси пакета читань`
 
 **Готово B1c-1:** unit T0/T1/T3 і DB-кейси Task 5b зелені; окремого запиту `version` немає; `runtime.read` і MCP `data-read` працюють як раніше.
 
 ## B1c-2. Порт, джерело ядра, епоха, документи
 
-### Task 6: Порт і адаптер Server Function
+### Task 6: Порт, адаптер і `CoreSource` на частинах
+
+(Заміняє колишні Task 6 і Task 7: зміна `SourceAdapter.read` у порту ламає єдиного викликача `createCoreSource`, тож порт, адаптер і джерело ядра змінюються разом.)
 
 **Files:**
 - Modify: `packages/simetra/src/model/runtime/ports.ts` (`SourceAdapter.read(items: readonly WireReadPart[]): Promise<WireReadParts>`), `packages/simetra/src/data/adapter.ts`, фейк джерела `packages/simetra/src/data/store/testing/fake-source.ts`
-- Test: `packages/simetra/src/data/__tests__/adapter.test.ts`, тести фейка
-
-- [ ] **Step 1: Unit:** адаптер шле один запит з усіма частинами й повертає `WireReadParts`; збій транспорту — `command.unavailable` усім частинам; фейк приймає частини й `known` з епохою і віддає маркери за правилами сервера (рівна епоха — маркер, інша — повний рядок).
-- [ ] **Step 2: Червоний → реалізація → зелений.** `pnpm --filter simetra test adapter fake-source`.
-- [ ] **Step 3: Commit.** `feat(data): SourceAdapter.read на частинах`
-
-### Task 7: `CoreSource` на частинах
-
-**Files:**
 - Modify: `packages/simetra/src/data/store/source.ts` (`CoreSource.read(parts)`, `createCoreSource`, `readKeys`, `serverRow` — маркер без `known` — `command.internal`), `readers.ts`, `include.ts` (виклики через частини)
-- Test: тести `source`, `readers`, `include` гілки B3-2
+- Test: `packages/simetra/src/data/__tests__/adapter.test.ts`, `packages/simetra/src/data/store/__tests__/source.test.ts`, `views.test.ts`, `full.test.ts`, `writer.test.ts`, `regressions.test.ts`, `model.test.ts`
 
 **Interfaces:**
-- Produces: `CoreSource.read(parts: readonly RowsQuery[]): Promise<CoreReadResult>`, `CoreReadResult = { items: Array<{ ok: true; rows: ReadRows; epoch: string | null } | { ok: false; error: CommandError }> }` — порядок частин збережено; частини групуються за адаптером (`sourceFor(object)`), кожна група — свій запит і своя епоха, тож епоха несеться на частину, а не на весь виклик; епоху версій бази `readKeys` переносить на кожен `ServerRow.versionEpoch` (кілька запитів одного виклику можуть мати різні епохи), а епоху старту читання сесії бере викликач (`readEpoch` у `readers.ts`, епохи старту `writer.ts` і `core.ts`), як і зараз; `readKeys` ділить ключі на частини по `ReadKeysOptions.keysPerRequest` (≤ 200), а форма картки — по ключу на частину, і частини — на запити по `READ_BATCH_MAX`, один слот обмежувача на запит; `batch-aborted` — повтор частин після упалої наступним запитом через обмежувач з паузою, що зростає; `batch-budget` — повтор наступним запитом; навпіл на `response-too-large` — як було.
+- Produces: `CoreSource.read(parts: readonly RowsQuery[]): Promise<CoreReadResult>`, `CoreReadResult = { items: Array<{ ok: true; rows: ReadRows; epoch: string | null } | { ok: false; error: CommandError }> }` — порядок частин збережено; частини групуються за адаптером (`sourceFor(object)`), кожна група — свій запит і своя епоха, тож епоха несеться на частину, а не на весь виклик; епоху старту читання сесії бере викликач (`readEpoch` у `readers.ts`, епохи старту `writer.ts` і `core.ts`), як і зараз (перенесення епохи бази на `ServerRow.versionEpoch` — Task 8); `readKeys` ділить ключі на частини по `ReadKeysOptions.keysPerRequest` (≤ 200), а форма картки — по ключу на частину, і частини — на запити по `READ_BATCH_MAX`, один слот обмежувача на запит; `batch-aborted` — повтор частин після упалої наступним запитом через обмежувач з паузою, що зростає; `batch-budget` — повтор наступним запитом; навпіл на `response-too-large` — як було.
 
-- [ ] **Step 1: Unit:** частини двох об'єктів з різними адаптерами — два запити, порядок і епоха кожної частини збережені; 1 000 ключів — 5 частин в одному запиті й один слот; 4 000 ключів — два запити; `batch-aborted` у третій частині — повтор частин 3…n без упалої, з паузою; `batch-budget` — повтор; маркер без `known` — `command.internal`.
-- [ ] **Step 2: Червоний → реалізація → зелений.** `pnpm --filter simetra test source readers include core`.
-- [ ] **Step 3: Commit.** `feat(data): джерело ядра читає частинами`
+- [ ] **Step 1: Unit:** адаптер шле один запит з усіма частинами й повертає `WireReadParts`; збій транспорту — `command.unavailable` усім частинам; фейк приймає частини й `known` з епохою і віддає маркери за правилами сервера (рівна епоха — маркер, інша — повний рядок). Джерело: частини двох об'єктів з різними адаптерами — два запити, порядок і епоха кожної частини збережені; 1 000 ключів — 5 частин в одному запиті й один слот; 4 000 ключів — два запити; `batch-aborted` у третій частині — повтор частин 3…n без упалої, з паузою; `batch-budget` — повтор; маркер без `known` — `command.internal`.
+- [ ] **Step 2: Червоний → реалізація → зелений.** `pnpm --filter simetra test adapter source views full writer regressions model`.
+- [ ] **Step 3: Commit.** `feat(data): порт, адаптер і джерело ядра на частинах`
 
 ### Task 8: Епоха у сховищах
 
 **Files:**
-- Modify: `packages/simetra/src/data/store/types.ts` (`ServerRow.versionEpoch`), `source.ts` (`serverRow`, `readKeys` переносять епоху), `object-store.ts` (`RowEntry.versionEpoch`, `mergeVersioned` за епохою, `lazyVersions` з епохою), `section-store.ts` (`ownerVersions` з епохою), `snapshot.ts` (`staleFields` порівнює лише версії однієї епохи)
-- Test: тести `object-store`, `section-store`, `snapshot` гілки B3-2
+- Modify: `packages/simetra/src/data/store/types.ts` (`ServerRow.versionEpoch`), `source.ts` (`serverRow`, `readKeys` переносять епоху версій бази відповіді на кожен `ServerRow.versionEpoch`; кілька запитів одного виклику можуть мати різні епохи), `object-store.ts` (`RowEntry.versionEpoch`, `mergeVersioned` за епохою, `lazyVersions` з епохою), `section-store.ts` (`ownerVersions` з епохою), `snapshot.ts` (`staleFields` порівнює лише версії однієї епохи)
+- Test: `packages/simetra/src/data/store/__tests__/object-store.test.ts`, `section-store.test.ts`, `views.test.ts`, `model.test.ts`
 
 **Interfaces:**
-- Produces: правило — запис з `versionEpoch`, відмінною від запису в сховищі (обидві непорожні), заміняє його незалежно від версії; за `null` в одній зі сторін — звичайне правило версії (Р6).
+- Produces: правило — запис з `versionEpoch`, відмінною від запису в сховищі (обидві непорожні), заміняє його незалежно від версії; відповідь з `null` не заміняє запису поточної непорожньої епохи: ключ лише отримує `stale` і перечитування, а версія порівнюється з пам'яттю версій будь-якої епохи (Р5, Р6; докладно — Task 9).
 
-- [ ] **Step 1: Unit:** рядок нової епохи з меншою версією заміняє рядок; `null`-епоха меншої версії — ні; «ТЧ власника» нової епохи з меншою `ownerVersion` приймається; ліниве поле старої епохи — `staleFields`.
-- [ ] **Step 2: Червоний → реалізація → зелений.** `pnpm --filter simetra test object-store section-store snapshot`.
+- [ ] **Step 1: Unit:** рядок нової епохи з меншою версією заміняє рядок; `null`-відповідь будь-якої версії не заміняє рядка поточної непорожньої епохи, ключ лише `stale`; «ТЧ власника» нової епохи з меншою `ownerVersion` приймається; ліниве поле старої епохи — `staleFields`.
+- [ ] **Step 2: Червоний → реалізація → зелений.** `pnpm --filter simetra test object-store section-store views model`.
 - [ ] **Step 3: Commit.** `feat(data): сховища несуть епоху версій`
 
 ### Task 9: Правило перемикання епохи
 
 **Files:**
 - Modify: `packages/simetra/src/data/store/epoch.ts` (`Epochs.remember` / `seen` з епохою версій бази запису; надгробки, горизонт і поховання пар не змінюються), `session.ts` (поточна епоха, покинуті, подія перемикання; `acceptEpoch(epoch: string | null, startEpoch: number): "apply" | "discard"` — єдина точка перевірки перед записом у сховище), виклики `acceptEpoch` у `readers.ts`, `include.ts`, `writer.ts`, `core.ts`, `object-store.ts` (позначка `stale.epoch` у `RowEntry.stale`; перемикання скидає `stale.minVersion` рядків і ТЧ; `remember` лише для поточної епохи), `types.ts` (`DEFAULT_CORE_LIMITS.revalidateIntervalMs = 60_000` — розкид Р8; такт інтервалу — B5), модельний тест B3-2
-- Test: тести `epoch`, `core` гілки B3-2; модельний тест
+- Test: `packages/simetra/src/data/store/__tests__/epoch.test.ts`, `session.test.ts`, `writer.test.ts`, `views.test.ts`, `model.test.ts`
 
 **Interfaces:**
 - Consumes: `ServerRow.versionEpoch` (Task 8) і епоха старту викликача; `acceptEpoch` викликається на `commit`, по кожному результату, у порядку застосування (у двофазному `revalidate` результат старої епохи, прийнятий до перемикання в тому самому `commit`, вже не перезапише рядка нової).
 - Produces: перша непорожня епоха сесії задає поточну без скидання; інша непорожня — перемикання: пам'ять і позначки інших епох більше не беруться до уваги для відповідей поточної (Р5), `stale.epoch` усім рядкам, перечитування видимих виглядів з розкидом `[0, revalidateIntervalMs)`; відповідь іншої епохи від читання з `startEpoch` до перемикання не застосовується (ключі — `stale` і перечитування); позначку `epoch` знімає читання, що почалось після перемикання.
 
 - [ ] **Step 1: Unit:** чергування `A`, `null`, `A` — жодного перемикання; `A`, `B`, `A` — друга `A` покинута, не застосована й не перемикає (і після десяти інших перемикань); після перемикання `null`-рядок вищої версії не заміняє рядка поточної епохи, ключ — `stale`; відповідь, що спричинила перемикання, застосована; `stale.minVersion` старої епохи не заважає першому читанню нової; після перемикання `null`-рядок версії, нижчої за запам'ятовану, — `stale`, а не `synced`; `null`-відповідь не знімає `stale.epoch`; після 8 відкинутих відповідей поспіль — `command.unavailable`; `A` → `B` — пам'ять епохи `A` не береться до уваги, `stale`, перечитування в межах інтервалу, а не одразу; пізня відповідь `A` після перемикання — не застосовано; читання до `buryPair`, відповідь з епохою `B` — рядок не записано; `purge` після перемикання діє як раніше.
+- [ ] **Step 1b: Unit:** 8 відкинутих відповідей поспіль → `command.unavailable`; нова сесія на тій самій базі читає нормально. JSDoc правила: вихід зі стану — лише нова сесія, бо безпека важливіша за доступність (виняток Р36).
 - [ ] **Step 2: Модельний тест** — крок «перемикання епохи» з вагою; інваріанти «версія не зменшується» і «видалене й `purge` не воскресають» — у межах однієї епохи й через перемикання відповідно.
-- [ ] **Step 3: Червоний → реалізація → зелений.** `pnpm --filter simetra test epoch core model`.
+- [ ] **Step 3: Червоний → реалізація → зелений.** `pnpm --filter simetra test epoch session writer views model`.
 - [ ] **Step 4: Commit.** `feat(data): версії порівнюються в межах однієї епохи версій бази`
 
 ### Task 10: Спеки
@@ -227,7 +217,7 @@ B3-2 (B1c-1 змінює адаптер `src/data`, який переносит�
 - Modify: `docs/superpowers/specs/2026-11-05-p4-b-client-data-design.md` — Рд24 і §6.2 правило 1 (Р5–Р8); §4.2 і §6.7 (Р1: 4 + частини + цілі, грант епохи; `readBudgetMs` — 15 с замість 30 с і `READ_BATCH_STATEMENTS_MAX = 32`); §12 (бюджет операторів 4 + частини + цілі); §4.5 і §5.1 (`value.epoch`, частини без окремого `version`, `stale-client` для старої форми); §4.1 (`known` лише у формі передачі й частині; маркери `n` і `{ $known }`); §3 (позначка `copy`); Рд40 (частковий маркер — `$known` і копії, без ключа й версії); §4.1 абзац «Епоха версій» (окремий оператор під роллю читання, епоха — у `value.epoch`); обґрунтування Рд41 і рядок B1c у §13 (лічильник операторів); §8.4 (`row_ver` сигналу — лише в межах поточної епохи, для B5); §14.3 (серверна межа одночасних читань на `subject` — П4-D); §6.6 (знімок SSR несе епоху — рядок Додатка А з колонкою B3-6); Додаток А — рядки B1c «внесено (B1c)»
 - Modify: `docs/superpowers/specs/2026-09-24-simetra-platform-design.md` §8.1 (рядок Додатка А), `docs/superpowers/specs/2026-10-26-p4-runtime-design.md` §6.11 (транзакція читання `REPEATABLE READ READ ONLY`)
 
-- [ ] **Step 1: Правки** за переліком; кожна — стан, без історії.
+- [ ] **Step 1: Правки** за переліком; кожна — стан, без історії. У §6.2 — одне речення до Р12: якщо база остаточно повернулась на інстанс зі старою епохою, сесія після 8 відкинутих відповідей отримує `command.unavailable`, і вихід — лише нова сесія (виняток Р36: безпека важливіша за доступність).
 - [ ] **Step 2: Гейти B1c-2.** `pnpm format:check && pnpm lint && pnpm typecheck && pnpm test`, `pnpm metadata:check`, `python3 scripts/check-doc-anchors.py`, `pnpm test:db`.
 - [ ] **Step 3: Commit.** `docs(spec): пакет читань, known і епоха версій під B1c`
 
@@ -248,7 +238,7 @@ B3-2 (B1c-1 змінює адаптер `src/data`, який переносит�
 | версії порівнюються між епохами | Task 8 |
 | перемикання епохи скидає надгробки | Task 9 (`buryPair`) |
 | `null` змінює епоху | Task 9 (чергування) |
-| обмежувач рахує частину, а не запит | Task 7 |
+| обмежувач рахує частину, а не запит | Task 6 |
 | `fit` після виконання всіх частин | `response-budget.test.ts` (оператор зайвої частини) |
 | `null`-рядок заміняє рядок поточної епохи | Task 9 |
 | покинута епоха витісняється | Task 9 |

@@ -3,18 +3,22 @@ import {
   UUID_TEXT,
   isTextEncodedType,
   LIMIT_REASONS,
+  KNOWN_MARKER,
   ORDER_BY_MAX,
   READ_COUNT_CAP,
   TABULAR_LINES_MAX,
   isPlainObject,
   jsonbBuildObject,
+  knownFormAllowed,
+  knownSchema,
   metadataRefSchema,
   readQuerySchema,
   type BaseCastType,
   type CommandError,
+  type KnownVersions,
   type OrderBy,
+  type ReadPartValue,
   type ReadQuery,
-  type ReadResult,
   type ReadRows,
   type RuntimeAttribute,
   type RuntimeCatalog,
@@ -22,7 +26,13 @@ import {
   type RuntimeSection,
 } from "simetra/model"
 import type { z } from "zod"
-import { decodeReadRow, decodeSafeInteger, linesWire, parse } from "./decode"
+import {
+  decodeReadRow,
+  decodeReadRowOrMarker,
+  decodeSafeInteger,
+  linesWire,
+  parse,
+} from "./decode"
 import { withObject } from "./errors"
 import {
   renderFilter,
@@ -45,12 +55,35 @@ export interface ReadStatement {
 }
 
 /**
- * The checked plan of one read: its statement and how its rows become the
- * result. `readRows` і `ctx.read` виконують той самий план — двері читання
- * не розходяться формою.
+ * A list or card statement with `known`, in parts (P4-B spec §4.1): whether
+ * its rows may be markers depends on the epoch of the database, known only
+ * inside the transaction, so {@link renderKnown} joins the parts at run time.
  */
-export interface ReadPlan {
-  statement: ReadStatement
+export interface KnownStatement {
+  /** Projection of a full row and of a marker of a row the client holds. */
+  row: string
+  marker: string
+  /** The read table with its alias `t`, and its key and version columns. */
+  from: string
+  key: string
+  version: string
+  /** `WHERE`, order and limit after `FROM`. */
+  tail: string
+  params: (string | null)[]
+}
+
+/**
+ * The checked plan of one read: its statement — in parts when the read has
+ * `known` — and how its rows become the result. `readRows` і `ctx.read`
+ * виконують той самий план — двері читання не розходяться формою.
+ */
+export type ReadPlan = ReadPlanResult &
+  (
+    | { statement: ReadStatement; known?: undefined }
+    | { statement: KnownStatement; known: KnownVersions }
+  )
+
+interface ReadPlanResult {
   /**
    * `rows` — a `row` text column per row, a card also `tabular`; `lines` — at
    * most one row with `tabular` and `owner_version`; `count` — one row with `n`.
@@ -85,13 +118,17 @@ const textCast = (attribute: RuntimeAttribute) =>
       ? "text[]"
       : "text"
 
-/** Пари звичайних колонок реквізитів: лінивих немає, пара — дві колонки. */
+/**
+ * Пари колонок реквізитів: пара — дві колонки; ліниві — лише з `withLazy`
+ * (картка їх віддає, список — ні).
+ */
 function attributePairs(
   attributes: readonly RuntimeAttribute[],
-  alias: string
+  alias: string,
+  withLazy = false
 ): string[] {
   return attributes.flatMap((attribute) => {
-    if (attribute.load === "lazy") return []
+    if (attribute.load === "lazy" && !withLazy) return []
     const column = pairOf(attribute.column, textCast(attribute), alias)
     return attribute.pair === undefined
       ? [column]
@@ -127,6 +164,34 @@ function listProjection(object: RuntimeObject): string {
     pairOf(object.versionColumn),
     ...attributePairs(object.attributes, "t"),
   ])}::text`
+}
+
+// Позиція в `known` від нуля: `WITH ORDINALITY` рахує від одиниці.
+const KNOWN_POSITION = "simetra_known.simetra_known_position - 1"
+
+/**
+ * Маркер незмінного рядка (спека П4-B §4.1): позиція в `known`, а в об'єкта з
+ * копіями — `{ $known, <колонки copy> }` з тими самими приведеннями, що в
+ * рядку: копія змінюється без версії, тож клієнт не може її тримати. Ключа в
+ * частковому маркері немає — цим його й відрізняє декодер. `undefined` —
+ * колонка копії зветься `$known` і затерла б позицію: тоді читання повне.
+ */
+function markerProjection(
+  object: RuntimeObject,
+  card: boolean
+): string | undefined {
+  const copies = object.attributes.filter((a) => a.copy === true)
+  if (
+    copies.some(
+      (a) => a.column === KNOWN_MARKER || a.pair?.typeColumn === KNOWN_MARKER
+    )
+  ) {
+    return undefined
+  }
+  const pairs = attributePairs(copies, "t", card)
+  return pairs.length === 0
+    ? `(${KNOWN_POSITION})::text`
+    : `${jsonbBuildObject([`${literal(KNOWN_MARKER)}, ${KNOWN_POSITION}`, ...pairs])}::text`
 }
 
 /** Рядок ТЧ — той самий явний перелік; реквізити ТЧ лінивими не бувають. */
@@ -350,12 +415,14 @@ function includeSteps(
 function buildReadPlan(
   catalog: RuntimeCatalog,
   object: RuntimeObject,
-  query: ReadQuery
+  query: ReadQuery,
+  known: KnownVersions | undefined
 ): ReadPlan | { error: CommandError } {
+  // Форму з `known` уже перевірив `prepareRead`: ТЧ його не мають.
   const plan =
     "tabularSection" in query
       ? buildSectionPlan(object, query)
-      : buildObjectPlan(object, query)
+      : buildObjectPlan(object, query, known)
   if ("error" in plan || !("include" in query) || query.include === undefined) {
     return plan
   }
@@ -395,9 +462,49 @@ function cardSections(
 /** Межа рядків однієї ТЧ: зайвий рядок каже, що межу перейдено. */
 const LINES_LIMIT = String(TABULAR_LINES_MAX + 1)
 
+const rowsText = (row: string, from: string, tail: string) =>
+  `SELECT ${row} AS row FROM ${from}${tail}`
+
+/**
+ * План рядків списку чи картки без ТЧ: з `known` — частинами для
+ * `renderKnown`, інакше готовим оператором.
+ */
+function rowsPlan(
+  object: RuntimeObject,
+  row: string,
+  tail: string,
+  params: (string | null)[],
+  known: KnownVersions | undefined,
+  card: boolean
+): ReadPlan {
+  const from = `${tableOf(object)} t`
+  const marker =
+    known === undefined ? undefined : markerProjection(object, card)
+  if (known === undefined || marker === undefined) {
+    return {
+      statement: { text: rowsText(row, from, tail), params },
+      result: "rows",
+    }
+  }
+  return {
+    statement: {
+      row,
+      marker,
+      from,
+      key: object.key,
+      version: object.versionColumn,
+      tail,
+      params,
+    },
+    known,
+    result: "rows",
+  }
+}
+
 function buildObjectPlan(
   object: RuntimeObject,
-  query: ObjectQuery
+  query: ObjectQuery,
+  known: KnownVersions | undefined
 ): ReadPlan | { error: CommandError } {
   const { params, bind } = binder()
   const table = tableOf(object)
@@ -405,18 +512,14 @@ function buildObjectPlan(
     const sections = cardSections(object, query.tabularSections)
     if ("error" in sections) return sections
     const id = bind(query.id, KEY_CAST)
-    const tabular =
-      sections.length === 0
-        ? ""
-        : `, ${tabularColumn(sections, bind(LINES_LIMIT))}`
-    const text =
-      `SELECT ${cardProjection(object)} AS row${tabular} FROM ${table} t` +
-      ` WHERE ${ident(object.key)} = ${id} LIMIT 1`
-    return {
-      statement: { text, params },
-      result: "rows",
-      ...(sections.length === 0 ? {} : { sections }),
+    // Ключ — з аліасом `t`: умовне читання приєднує `simetra_known`.
+    const tail = ` WHERE t.${ident(object.key)} = ${id} LIMIT 1`
+    if (sections.length === 0) {
+      return rowsPlan(object, cardProjection(object), tail, params, known, true)
     }
+    const tabular = `, ${tabularColumn(sections, bind(LINES_LIMIT))}`
+    const text = `SELECT ${cardProjection(object)} AS row${tabular} FROM ${table} t${tail}`
+    return { statement: { text, params }, result: "rows", sections }
   }
   const columns = objectColumns(object)
   let where = ""
@@ -438,13 +541,57 @@ function buildObjectPlan(
     query.orderBy
   )
   if ("error" in order) return order
-  let text =
-    `SELECT ${listProjection(object)} AS row FROM ${table} t${where}` +
-    ` ORDER BY ${order.sql} LIMIT ${bind(String(query.limit))}`
+  let tail = `${where} ORDER BY ${order.sql} LIMIT ${bind(String(query.limit))}`
   if (query.offset !== undefined) {
-    text += ` OFFSET ${bind(String(query.offset))}`
+    tail += ` OFFSET ${bind(String(query.offset))}`
   }
-  return { statement: { text, params }, result: "rows" }
+  return rowsPlan(object, listProjection(object), tail, params, known, false)
+}
+
+/** `known` плану, коли епоха бази транзакції — його епоха й не `NULL`. */
+const knownIn = (
+  plan: ReadPlan,
+  dbEpoch: string | null
+): KnownVersions | undefined =>
+  plan.known !== undefined && dbEpoch !== null && plan.known.epoch === dbEpoch
+    ? plan.known
+    : undefined
+
+/**
+ * The statement of a plan in a transaction whose database epoch is
+ * `dbEpoch` (P4-B spec §4.1): with `known` of that epoch, rows the client
+ * holds at the same version come as markers; otherwise — and always for a
+ * plan without `known` — the plain statement. `where`, RLS and order do not
+ * change: the marker only replaces the projection of a row already selected.
+ */
+export function renderKnown(
+  plan: ReadPlan,
+  dbEpoch: string | null
+): ReadStatement {
+  if (plan.known === undefined) return plan.statement
+  const { row, marker, from, key, version, tail, params } = plan.statement
+  const known = knownIn(plan, dbEpoch)
+  if (known === undefined) return { text: rowsText(row, from, tail), params }
+  // Масиви — текстом масиву Postgres: порт приймає лише `string | null`.
+  // Ключі — UUID, версії — цілі (перевірено `knownSchema`), тож лапки не
+  // потрібні. Ключі без повторів: рядок має щонайбільше один збіг, і `JOIN`
+  // не множить рядків.
+  const keys = `$${params.length + 1}::${KEY_CAST}[]`
+  const versions = `$${params.length + 2}::${VERSION_CAST}[]`
+  const text =
+    `SELECT CASE WHEN t.${ident(version)} = simetra_known.simetra_known_version` +
+    ` THEN ${marker} ELSE ${row} END AS row FROM ${from}` +
+    ` LEFT JOIN unnest(${keys}, ${versions}) WITH ORDINALITY` +
+    ` AS simetra_known(simetra_known_key, simetra_known_version, simetra_known_position)` +
+    ` ON simetra_known.simetra_known_key = t.${ident(key)}${tail}`
+  return {
+    text,
+    params: [
+      ...params,
+      `{${known.keys.join(",")}}`,
+      `{${known.versions.join(",")}}`,
+    ],
+  }
 }
 
 /**
@@ -608,22 +755,30 @@ export type ReadStatementRunner = (
 ) => Promise<readonly Record<string, unknown>[]>
 
 /**
- * Executes a plan through `run` — the first statement, then one statement per
- * `include` target, all in the caller's transaction — and builds the result;
- * a tabular section over `TABULAR_LINES_MAX` lines is an `error`. Throws what
- * `run` throws, and on a row of the wrong shape; the caller maps the latter
- * to `command.internal`.
+ * Executes a plan through `run` — the first statement, rendered for the
+ * transaction's database epoch `dbEpoch` ({@link renderKnown}), then one
+ * statement per `include` target, all in the caller's transaction — and
+ * builds the result; a tabular section over `TABULAR_LINES_MAX` lines is an
+ * `error`. Throws what `run` throws, and on a row of the wrong shape (a
+ * marker the statement could not answer among them); the caller maps the
+ * latter to `command.internal`.
  */
 export async function executeRead(
   object: RuntimeObject,
   plan: ReadPlan,
-  run: ReadStatementRunner
-): Promise<ReadResult | { error: CommandError }> {
-  const result = readResult(object, plan, await run(plan.statement, object))
+  run: ReadStatementRunner,
+  dbEpoch: string | null
+): Promise<ReadPartValue | { error: CommandError }> {
+  const rows = await run(renderKnown(plan, dbEpoch), object)
+  // Маркер — лише від умовного оператора: інакше позицій нема.
+  const known = knownIn(plan, dbEpoch)?.keys.length ?? 0
+  const result = readResult(object, plan, rows, known)
   if (plan.include === undefined || !("rows" in result)) return result
+  // `known` з `include` не буває (known-form), тож маркерів серед рядків нема.
+  const read = result.rows as Record<string, unknown>[]
   const included: NonNullable<ReadRows["included"]> = {}
   for (const step of plan.include) {
-    const statement = includeStatement(step, result.rows)
+    const statement = includeStatement(step, read)
     const key = `${step.target.kind}.${step.target.name}`
     included[key] =
       statement === undefined
@@ -636,8 +791,9 @@ export async function executeRead(
 function readResult(
   object: RuntimeObject,
   plan: ReadPlan,
-  rows: readonly Record<string, unknown>[]
-): ReadResult | { error: CommandError } {
+  rows: readonly Record<string, unknown>[],
+  known: number
+): ReadPartValue | { error: CommandError } {
   if (plan.result === "count") {
     // `count(*)` — `bigint`, драйвер віддає його текстом.
     const n = rows[0]?.n
@@ -673,15 +829,19 @@ function readResult(
         : { ownerVersion: decodeSafeInteger(version) }),
     }
   }
+  // Картка з ТЧ `known` не має (known-form), тож маркер буває лише без ТЧ.
+  if (sections.length === 0) {
+    return {
+      rows: rows.map((r) =>
+        decodeReadRowOrMarker(object, textOf(r.row, "row"), known)
+      ),
+    }
+  }
   const out: Record<string, unknown>[] = []
   for (const row of rows) {
-    let wire: Record<string, unknown> | undefined
-    if (sections.length > 0) {
-      const decoded = decodeSections(object, sections, row.tabular)
-      if ("error" in decoded) return decoded
-      wire = decoded.wire
-    }
-    out.push(decodeReadRow(object, textOf(row.row, "row"), wire))
+    const decoded = decodeSections(object, sections, row.tabular)
+    if ("error" in decoded) return decoded
+    out.push(decodeReadRow(object, textOf(row.row, "row"), decoded.wire))
   }
   return { rows: out }
 }
@@ -788,12 +948,15 @@ export function issueReason(error: z.ZodError): string | undefined {
 }
 
 /**
- * Checks a read query against the catalog and builds its plan; every
- * failure is `command.invalid` before the database.
+ * Checks a read query, and the rows it knows when it is a part of a `read`
+ * request, against the catalog and builds its plan; every failure is
+ * `command.invalid` before the database. `known` is allowed only where
+ * `knownFormAllowed` allows it, else `reason: "known-form"`.
  */
 export function prepareRead(
   catalog: RuntimeCatalog,
-  query: unknown
+  query: unknown,
+  known?: unknown
 ): { object: RuntimeObject; plan: ReadPlan } | { error: CommandError } {
   let parsed: ReturnType<typeof readQuerySchema.safeParse>
   try {
@@ -809,11 +972,37 @@ export function prepareRead(
   if (object === undefined) {
     return { error: { code: "command.invalid", path: "object" } }
   }
-  const plan = buildReadPlan(catalog, object, parsed.data)
+  const versions = checkKnown(parsed.data, known)
+  if (versions !== undefined && "error" in versions) {
+    return { error: withObject(versions.error, object) }
+  }
+  const plan = buildReadPlan(catalog, object, parsed.data, versions)
   // Шляхи будівника й фільтра — відносно об'єкта запиту.
   return "error" in plan
     ? { error: withObject(plan.error, object) }
     : { object, plan }
+}
+
+/**
+ * `known` частини: спершу форма запиту (як препроцесор конверта), потім
+ * сама схема. Будівник пише ключі й версії в текст масиву, тож без цієї
+ * перевірки до бази не йде нічого.
+ */
+function checkKnown(
+  query: ReadQuery,
+  known: unknown
+): KnownVersions | { error: CommandError } | undefined {
+  if (known === undefined) return undefined
+  if (!knownFormAllowed(query)) return invalid("known", "known-form")
+  let parsed: ReturnType<typeof knownSchema.safeParse>
+  try {
+    parsed = knownSchema.safeParse(known)
+  } catch {
+    return invalid("known")
+  }
+  if (parsed.success) return parsed.data
+  const path = (decidingIssue(parsed.error)?.path ?? []).map(String)
+  return invalid(["known", ...path].join("."), issueReason(parsed.error))
 }
 
 const objectOf = (
