@@ -920,11 +920,11 @@ FileStore = {
 
 | Команда | Дія |
 | --- | --- |
-| `pnpm db:pg:start` | `docker compose -p simetra-pg up -d --wait`, ініціалізація Garage і `simetra.environment = 'development'`; з ПГ-2 далі ролі Simetra й шаблон `simetra_template` кроком `simetra roles` (§3.4, §3.5) з теки `docker/postgres-stack/project/` (`project.meta.json`, `provider: "postgres"`), dev-паролі ролям входу (з `login-secrets.env`), міграція Better Auth у базі `simetra` від `simetra_auth` і тимчасові гранти `USAGE` на `better_auth` та `TRIGGER` на `better_auth."user"` для `simetra_owner` (усе під замком стека, гранти — лише після успішної міграції, повтор нічого не змінює); гранти до ПГ-3 стоять тут, ПГ-3 переносить їх у `roles` |
+| `pnpm db:pg:start` | `docker compose -p simetra-pg up -d --wait`, ініціалізація Garage і `simetra.environment = 'development'`; з ПГ-2 далі ролі Simetra й шаблон `simetra_template` кроком `simetra roles` (§3.4, §3.5) з теки `docker/postgres-stack/project/` (`project.meta.json`, `provider: "postgres"`), dev-паролі ролям входу (з `login-secrets.env`), міграція Better Auth у базі `simetra` від `simetra_auth` і тимчасові гранти `USAGE` на `better_auth` та `TRIGGER` на `better_auth."user"` для `simetra_owner` (усе під замком стека, гранти — лише після успішної міграції, повтор нічого не змінює); гранти до ПГ-3 стоять тут, ПГ-3 переносить їх у `roles`; `start` на запущеному стеку йде як `up -d --wait --no-recreate`, без `--build`, і відмовляє, коли конфіг сервісу чи файли `docker/postgres-stack/**` стека відрізняються від гілки (хеш конфігу сервісу й мітка `simetra.stack-files-hash` контейнера `postgres`); зупинка стека — за власником |
 | `pnpm db:pg:stop` | `docker compose -p simetra-pg down` (томи лишаються; `--volumes` — лише явно) |
-| `pnpm test:db:pg` | до ПГ-2 — проєкт `db-pg` пакета `simetra`: набір базового стану `postgres` через Vitest-раннер і тест переривання; з ПГ-2 — DB-тести `simetra` і `@simetrajs/designer` на стеку `postgres` |
+| `pnpm test:db:pg` | набір базового стану `postgres` через Vitest-раннер, тест переривання і DB-тести `simetra` та `@simetrajs/designer` (проєкт `db`) на стеку `postgres` |
 | `pnpm db:signals:start`, `pnpm db:signals:stop` | Centrifugo поруч зі стеком `supabase` (compose-проєкт `simetra-sb`, §10.1) |
-| `pnpm db:start`, `pnpm db:stop`, `pnpm test:db` | стек `supabase`, як зараз; `test:db` до ПГ-2 — набір базового стану провайдера, проєкт `db` і проєкт `db-supabase` обох пакетів, з ПГ-2 — лише регресійні набори (§10.5) |
+| `pnpm db:start`, `pnpm db:stop`, `pnpm test:db` | стек `supabase`, як зараз; `test:db` — набір базового стану провайдера і проєкт `db-supabase` обох пакетів, тобто лише регресійні набори (§10.5) |
 
 Стек запускається лише цими командами, ніколи глобальним `docker compose`
 без `-p` чи сторонньою версією образів.
@@ -932,25 +932,61 @@ FileStore = {
 ### 10.3 Stack-guard і тег прогону
 
 `packages/simetra/test/db/stack-guard.ts` стає параметризованим профілем
-(`SIMETRA_TEST_PROVIDER = postgres | supabase`; типово `supabase` до ПГ-2,
-з ПГ-2 — `postgres`, разом із переведенням проєкту `db`):
+(`SIMETRA_TEST_PROVIDER = postgres | supabase`; типово `postgres`):
 
 - **замок на стек:** окремий файл замка на профіль; прогони різних стеків
   не чекають один одного, прогони одного — по черзі;
 - **адреси:** `connection.ts` бере DSN з даних профілю; змінні
-  `SIMETRA_TEST_*` їх перевизначають. З ПГ-2 у `postgres` суперкористувач
-  (`postgres`, порт 54422) лише створює ролі на старті стека й тегованих
-  прогонів, а тести плану й застосування йдуть від ролі з атрибутами
-  `simetra_owner` (`NOSUPERUSER BYPASSRLS CREATEDB`), як у проді: інакше
-  суперкористувач сховав би гранти `better_auth`, замок `dropTrigger` і
-  режим `plpgsql_check`. Так само на `supabase` тести вже йдуть від
-  не-суперкористувача `postgres`. Роль власника на стеку `postgres` з'являється
-  з ПГ-2 (`simetra roles`); до того обидві адреси профілю — суперкористувач
-  `postgres`, і на стеку йдуть лише набір базового стану й тест переривання;
+  `SIMETRA_TEST_*` їх перевизначають. На `postgres` цільова база тестів —
+  `simetra`; набір базового стану йде в базі `postgres` (кластерні факти й
+  `simetra.environment` стоять там). Суперкористувач стека (`postgres`, порт
+  54422) створює ролі на старті стека й тегованих прогонів, а тести плану й
+  застосування працюють з роллю `simetra_owner` (`NOSUPERUSER BYPASSRLS
+  CREATEDB`), як у проді: інакше суперкористувач сховав би гранти
+  `better_auth`, замок `dropTrigger` і режим `plpgsql_check`. Так само на
+  `supabase` тести йдуть від не-суперкористувача `postgres`. Модель
+  з'єднання тримається на чотирьох запобіжниках:
+  1. **Роль власника — стартовий параметр кожного з'єднання.** Адреса
+     тестів несе `options=-c role=simetra_owner`, тож кожне нове з'єднання,
+     зокрема рушія чи pg-delta, стартує з `current_user = simetra_owner`;
+     `RESET ROLE` повертає цю стартову роль, а не суперкористувача. Сесійні
+     налаштування дописує `withSessionOptions`, і `-c role=` лишається;
+     адреса з двома параметрами `options` — помилка (останній перемагає й
+     роль губиться). DSN ролі входу будує лише `loginUrl`, що прибирає
+     `-c role=`. Прелюдія `roles` іде окремим DSN суперкористувача без
+     `options`.
+  2. **Явне відновлення.** Об'єкти, яких власник не створить (`CREATE ROLE`,
+     `CREATE EXTENSION`), створює `asStackSuperuser`: `SET LOCAL`, зроблений
+     у точці збереження, переживає `RELEASE SAVEPOINT`, тож хелпер на обох
+     шляхах явно повертає попередні `role` і `search_path`. Інша роль входу в
+     межах транзакції — `asSessionLogin` із тим самим відновленням.
+  3. **Дрейф ролі ловиться.** Guard на старті відмовляє, коли `current_user`
+     адреси тестів — не власник або має `rolsuper`; `withRollback` звіряє
+     роль до й після `ROLLBACK`; setup-файл DB-проєкту перевіряє клієнтів і
+     пули тесту в `afterEach`, а пули — і в `afterAll`; статичний тест
+     тримає форми `SET ROLE`, `SESSION AUTHORIZATION` і `set_config` у
+     дозволеному переліку місць.
+  4. **Код, що вимагає `session_user = current_user`, — окремий DSN.**
+     `testOwnerLoginUrl()` — прямий вхід `simetra_owner` без `options` (на
+     `supabase` це `testDatabaseUrl()`, бо власник там і є роль входу).
+     Місця: `maintenanceSql` гарда прав, `DATA_GUARD_FACTS_SQL` у
+     `@simetrajs/designer`, `MEMBER` у `server/runtime.ts`
+     (`pg_has_role(session_user, …)`: суперкористувач — член усього, тож
+     відмова не настала б). Теговані цілі й копії designer-а ідуть на
+     `withDatabaseName(testOwnerLoginUrl(), <база>)`, а засів під режимом
+     обслуговування в транзакції адреси тестів — через `asSessionLogin` із
+     власником.
 - **знімок стека:** до бази, ролей, схем і розширень додаються контейнери з
   двома мітками, `simetra-run=<тег>` і `simetra-stack=<профіль>`, і бакети
   Garage з префіксом тегу; різниця після прогону — збій, як зараз. Контейнер
-  з міткою іншого стека не є витоком цього;
+  з міткою іншого стека не є витоком цього. Знімок не містить ACL, тож на
+  `postgres` guard додатково знімає відбиток схеми `better_auth` бази
+  `simetra` (відношення, колонки й типи, власники й ACL, тригери,
+  `pg_default_acl`, налаштування ролі `simetra_auth`): відмінність після
+  прогону — збій. На старті guard звіряє колонки `better_auth."user"` з
+  `PROVIDER_EVENT_SOURCES.postgres` і стан після `db:pg:start` (власник
+  `simetra_auth`, лише очікувані гранти); розбіжність — відмова з порадою.
+  Міграцію й тимчасові гранти дає `db:pg:start`, не `globalSetup`;
 - **прибирання на сигналах:** ті самі SIGINT, SIGTERM, SIGHUP; додатково
   `docker rm -f` контейнерів свого тегу; бакет свого тегу спершу
   спорожнюється, потім видаляється (Garage видаляє лише порожній бакет).
@@ -991,15 +1027,14 @@ FileStore = {
   дістає разом із `simetra roles` (ПГ-2) і грантами ідентичності (ПГ-3).
 - **Розподіл DB-тестів:**
   - тести, прив'язані до стека `postgres`, — `*.postgres.db.test.ts`, проєкт
-    `db-pg` обох пакетів; проєкт `db` їх виключає (блок ПГ-2a), блок ПГ-2b
-    додає їх у `db`;
-  - проєкт `db` — на стеку `postgres` з ПГ-2 (до того — на стеку
-    `supabase`, а на `postgres` іде лише проєкт `db-pg`: набір базового
-    стану й тест переривання); роль запиту й таблицю ідентичності
+    `db-pg` обох пакетів; проєкт `db` їх виключає;
+  - проєкт `db` — на стеку `postgres`; роль запиту й таблицю ідентичності
     тести беруть з даних профілю (помічник `test/db`), а не з імен Supabase;
   - проєкт `db-supabase` (`*.supabase.db.test.ts`) — на стеку `supabase`:
     прийом бази Supabase, пресет гейта `supabase` (поверхні `auth`,
-    `storage`), провізія з `auth.users`, пулер Supavisor, ролі провайдера;
+    `storage`), провізія з `auth.users`, пулер Supavisor, ролі провайдера,
+    публікація `supabase_realtime` і схеми провайдера в кейсах корпусу рушія
+    (решта корпусу конвертується на дані профілю);
   - тест, що вживає ролі чи схеми Supabase поза цим переліком, переводиться
     на дані профілю, а не перейменовується.
 
@@ -1009,30 +1044,23 @@ FileStore = {
 | --- | --- | --- | --- |
 | `checks` | — | без змін | 1 |
 | `db` | `postgres` | базовий стан `postgres`, DB `simetra`, DB designer | за наявною схемою шардів `.github/workflows/ci.yml` |
-| `db-supabase` | `supabase` | `supabase test db`, `db-supabase` обох пакетів | 1 |
+| `db-supabase` | `supabase` | `supabase test db`, `db-supabase` обох пакетів | `provider + simetra`, `designer 1/2`, `designer 2/2` |
 | `packaging` | — | без змін | 1 |
 
 - Стек `postgres` у CI стартує тим самим `pnpm db:pg:start`; образ Postgres
   збирається з кешем шарів (або тягнеться з реєстру за digest).
 - Повторні спроби старту — за тим самим правилом, що й для стека Supabase
   у `.github/workflows/ci.yml`.
-- **До ПГ-2** таблиця має проміжну форму: матриця `db` лишається на стеку
-  `supabase` і дістає рядки `supabase-bound` (проєкт `db-supabase`:
-  `simetra` одним рядком, designer — двома шардами), а стек `postgres` іде
-  окремим job-ом `db-postgres` (`pnpm db:pg:start`, `pnpm test:db:pg`).
-  ПГ-2 переводить `db` на стек `postgres` за таблицею вище.
 
 ### 10.7 Текст для `AGENTS.md` (затверджує власник)
 
-Текст описує стан з ПГ-2. ПГ-1 вносить проміжний текст: власні команди
-(`db:pg:*`, `test:db:pg`), рядки `supabase-bound` матриці `db` і job
-`db-postgres` (§10.6).
+Текст описує стан після ПГ-2.
 
 У розділі «Commands and gates» блок команд замінити так:
 
 ```bash
 pnpm db:pg:start                          # local postgres-profile stack: Postgres 17, Centrifugo, Garage (needs Docker)
-pnpm test:db:pg                           # DB tests of simetra and @simetrajs/designer on the postgres stack (the default DB suite)
+pnpm test:db:pg                           # base-state pgTAP and DB tests of simetra and @simetrajs/designer on the postgres stack (the default DB suite)
 pnpm db:pg:stop
 
 pnpm db:start                             # local Supabase stack (needs Docker) — supabase-profile regression only
