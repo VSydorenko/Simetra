@@ -5,7 +5,7 @@ import {
   readBackfillCounts,
   withLocalSettings,
 } from "simetra/schema"
-import { uuid } from "../../../../simetra/test/support"
+import { loginUrl, uuid } from "../../../../simetra/test/support"
 import { query } from "../../__tests__/support/db"
 import {
   compiled,
@@ -97,11 +97,9 @@ describe.concurrent("buildPlan backfill", () => {
          grant usage on schema app to ${COPIER};
          grant select on app.notes to ${COPIER};`
       )
-      const login = new URL(url)
-      login.username = COPIER
-      login.password = COPIER_PASSWORD
+      const login = loginUrl(url, COPIER, COPIER_PASSWORD)
       const result = await dbs.reader.transaction(
-        { url: login.toString() },
+        { url: login },
         "rollback",
         (tx) =>
           readBackfillCounts(tx, [
@@ -149,19 +147,14 @@ describe.concurrent("buildPlan backfill", () => {
         default: "'n/a'",
         triggers: [],
       })
-      const login = new URL(url)
-      login.username = COPIER
-      login.password = COPIER_PASSWORD
-      const fill = writer.transaction(
-        { url: login.toString() },
-        "rollback",
-        (tx) =>
-          withLocalSettings(tx, BACKFILL_SETTINGS, async () => {
-            const [row] = await tx.query<{ n: string }>(
-              `WITH filled AS (${sql} RETURNING 1) SELECT pg_catalog.count(*)::text AS n FROM filled`
-            )
-            return { filled: row?.n }
-          })
+      const login = loginUrl(url, COPIER, COPIER_PASSWORD)
+      const fill = writer.transaction({ url: login }, "rollback", (tx) =>
+        withLocalSettings(tx, BACKFILL_SETTINGS, async () => {
+          const [row] = await tx.query<{ n: string }>(
+            `WITH filled AS (${sql} RETURNING 1) SELECT pg_catalog.count(*)::text AS n FROM filled`
+          )
+          return { filled: row?.n }
+        })
       )
       await expect(fill).rejects.toMatchObject({ sqlstate: "42501" })
       expect(

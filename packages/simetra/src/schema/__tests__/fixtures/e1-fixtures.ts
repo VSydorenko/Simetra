@@ -469,14 +469,27 @@ export function enumerations(
 const MOVEMENTS_SQL = "documents/Sale/Sale.sql"
 
 /**
- * `sub` сесії як uuid: на `supabase` — функція провайдера, на `postgres` —
- * сам claim (спека профілю §4.4; функції провайдера там немає).
+ * `sub` сесії як uuid у SQL фікстур: на `supabase` — функція провайдера, на
+ * `postgres` — сам claim (спека профілю §4.4; функції провайдера там немає),
+ * у формі `current_user_id()` платформи: налаштування, задане `set_config(…,
+ * true)` у попередній транзакції сесії, читається як `''`, і без `nullif`
+ * приведення до `jsonb` впало б (`22P02`). `deparsed` — як вираз віддає
+ * `pg_get_expr`; обидва поля з одного місця, щоб не розійшлися.
  */
-function currentSubject(provider: DatabaseProvider): string {
-  return provider === "supabase"
-    ? "auth.uid()"
-    : `(pg_catalog.current_setting('${SESSION_CLAIMS_SETTING}', true)::jsonb ->> 'sub')::uuid`
+export function claimSubject(provider: DatabaseProvider): {
+  sql: string
+  deparsed: string
+} {
+  if (provider === "supabase")
+    return { sql: "auth.uid()", deparsed: "auth.uid()" }
+  return {
+    sql: `(nullif(pg_catalog.current_setting('${SESSION_CLAIMS_SETTING}', true), '')::jsonb ->> 'sub')::uuid`,
+    deparsed: `(((NULLIF(current_setting('${SESSION_CLAIMS_SETTING}'::text, true), ''::text))::jsonb ->> 'sub'::text))::uuid`,
+  }
 }
+
+const currentSubject = (provider: DatabaseProvider): string =>
+  claimSubject(provider).sql
 
 export function movementQuery(
   provider: DatabaseProvider = "supabase"

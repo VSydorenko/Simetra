@@ -3,11 +3,11 @@ import {
   PROVIDER_API_ROLES,
   PROVIDER_IDENTITY_SOURCES,
   PROVIDER_OWNER_ROLES,
-  SESSION_CLAIMS_SETTING,
   quoteIdent,
   type DatabaseProvider,
 } from "simetra/model"
 import {
+  claimSubject,
   readCatalog,
   type CatalogShape,
   type CatalogTable,
@@ -248,15 +248,9 @@ export function classFixtures(
   const user = PROVIDER_API_ROLES[provider].user
   const owner = PROVIDER_OWNER_ROLES[provider]
   const identity = PROVIDER_IDENTITY_SOURCES[provider]
-  // `sub` сесії: на `supabase` — функція провайдера, на `postgres` — сам
-  // claim (спека профілю §4.4); `deparsed` — як його віддає `pg_get_expr`
-  const subject =
-    provider === "supabase"
-      ? { sql: "auth.uid()", deparsed: "auth.uid()" }
-      : {
-          sql: `(pg_catalog.current_setting('${SESSION_CLAIMS_SETTING}', true)::jsonb ->> 'sub')::uuid`,
-          deparsed: `(((current_setting('${SESSION_CLAIMS_SETTING}'::text, true))::jsonb ->> 'sub'::text))::uuid`,
-        }
+  // `sub` сесії й форма, яку для нього віддає `pg_get_expr`, — спільний
+  // помічник фікстур (форма `current_user_id()` платформи)
+  const subject = claimSubject(provider)
   const presetClasses: ClassFixture[] =
     provider === "supabase" ? PRESET_CLASSES : []
   return [

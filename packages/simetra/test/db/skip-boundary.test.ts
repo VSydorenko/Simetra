@@ -44,6 +44,12 @@ function dbFiles(dir: string): string[] {
 
 interface Exception {
   file: string
+  /**
+   * Кожен дозволений збіг — текстом, без рядка: зайвий збіг у тому самому
+   * файлі (другий `it.skip`, новий `skipIf` за профілем) — порушення, а не
+   * мовчки покритий винятком файла.
+   */
+  hits: readonly string[]
   reason: string
   /** Задача плану ПГ-2b, що прибирає тимчасовий виняток. */
   task?: number
@@ -52,11 +58,16 @@ interface Exception {
 const EXCEPTIONS: Exception[] = [
   {
     file: "packages/simetra/test/db/pgtap.db.test.ts",
+    hits: ["skip: it.skip"],
     reason:
       "it.skip names on the supabase stack that `supabase test db` checks its base state: the runner has no suite there",
   },
   {
     file: "packages/simetra/test/db/row-version.db.test.ts",
+    hits: [
+      "skipIf on the profile: it.skipIf(role === undefined)",
+      "skipIf on the profile: it.skipIf(role === undefined)",
+    ],
     reason:
       "skipIf of a reader role the provider has no: the cases move by profile",
     task: 8,
@@ -152,6 +163,9 @@ function reads(
 }
 
 const RUNNERS = new Set(["it", "test", "describe"])
+// Пропуск контекстом кейсу: `ctx.skip(умова?)`, `({ skip }) => skip()` —
+// у Vitest `TestContext.skip(note?)` і `skip(condition, note?)`
+const CONTEXT_SKIPS = new Set(["skip", "todo"])
 
 // Корінь ланцюжка `it.concurrent.skipIf(…)` чи `describe.each(…).skip`
 function runnerOf(node: ts.Expression): string | undefined {
@@ -204,6 +218,19 @@ function hitsOf(file: string, text: string): Hit[] {
           hit(node.parent, `${member} on the profile`)
       }
     }
+    // Пропуск контекстом кейсу, хоч би якою була умова: умову в `if` чи
+    // аргументі статично не простежити до кінця, а кейс, що себе пропускає,
+    // живе у файлі з суфіксом провайдера
+    if (ts.isCallExpression(node)) {
+      const callee = node.expression
+      if (
+        (ts.isPropertyAccessExpression(callee) &&
+          CONTEXT_SKIPS.has(callee.name.text) &&
+          runnerOf(callee.expression) === undefined) ||
+        (ts.isIdentifier(callee) && CONTEXT_SKIPS.has(callee.text))
+      )
+        hit(node, "context skip")
+    }
     // Порівняння ролі профілю з `null`: за ним кейс тихо виходить
     if (
       ts.isBinaryExpression(node) &&
@@ -224,19 +251,22 @@ function check(
   hits: readonly Hit[],
   exceptions: readonly Exception[]
 ): { violations: string[]; stale: string[] } {
-  const used = new Set<Exception>()
+  // Кожен очікуваний збіг винятку покриває рівно один збіг файла
+  const left = new Map(exceptions.map((e) => [e, [...e.hits]]))
   const violations: string[] = []
   for (const hit of hits) {
-    const exception = exceptions.find((e) => e.file === hit.file)
-    if (exception === undefined)
+    const entry = [...left].find(
+      ([e, texts]) => e.file === hit.file && texts.includes(hit.text)
+    )
+    if (entry === undefined)
       violations.push(`${hit.file}:${hit.line}: ${hit.text}`)
-    else used.add(exception)
+    else entry[1].splice(entry[1].indexOf(hit.text), 1)
   }
   return {
     violations,
-    stale: exceptions
-      .filter((e) => !used.has(e))
-      .map((e) => `${e.file}: ${e.reason}`),
+    stale: [...left].flatMap(([e, texts]) =>
+      texts.map((text) => `${e.file}: ${text} (${e.reason})`)
+    ),
   }
 }
 
@@ -295,6 +325,41 @@ describe("the skip checker", () => {
         `describe.each(["a", "b"])("%s", (mode) => { it.runIf(mode === "a")("x", f) })`
       )
     ).toEqual([])
+  })
+
+  it.each([
+    [
+      "with a profile condition",
+      `it("x", (ctx) => ctx.skip(testProvider() === "postgres"))`,
+    ],
+    [
+      "under an if on the profile",
+      `it("x", async (ctx) => { if (testProvider() === "postgres") ctx.skip() })`,
+    ],
+    [
+      "destructured from the context",
+      `it("x", async ({ skip }) => { if (PROVIDER_API_ROLES[p].service === null) skip() })`,
+    ],
+    ["as todo", `test("x", (context) => context.todo())`],
+  ])("rejects a context skip %s", (_, code) => {
+    expect(sample(code)).toEqual(["context skip"])
+  })
+
+  // Виняток покриває свої збіги поіменно, а не весь файл
+  it("counts an extra hit in an excepted file as a violation and a missing one as stale", () => {
+    const hits = (texts: string[]): Hit[] =>
+      texts.map((text, line) => ({ file: "f.db.test.ts", line, text }))
+    const only: Exception[] = [
+      { file: "f.db.test.ts", hits: ["skip: it.skip"], reason: "r" },
+    ]
+    expect(check(hits(["skip: it.skip", "skip: it.skip"]), only)).toEqual({
+      violations: ["f.db.test.ts:1: skip: it.skip"],
+      stale: [],
+    })
+    expect(check(hits(["todo: it.todo"]), only)).toEqual({
+      violations: ["f.db.test.ts:0: todo: it.todo"],
+      stale: ["f.db.test.ts: skip: it.skip (r)"],
+    })
   })
 
   it.each([
