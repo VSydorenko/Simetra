@@ -4034,9 +4034,9 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "apply.deferred-constraint-failed": {
     en: (p) =>
-      `A deferred trigger or constraint failed when the transaction checked it ${p.after === "data" ? "right after the data steps wrote their values" : "after the plan's steps"} (SQLSTATE ${p.sqlstate}): ${p.error}. The transaction was rolled back`,
+      `A deferred trigger or constraint failed when the transaction checked it ${p.after === "data" ? "right after the data steps wrote their values" : p.after === "backfill" ? "right after a backfill step filled NULL values with the default" : "after the plan's steps"} (SQLSTATE ${p.sqlstate}): ${p.error}. The transaction was rolled back`,
     uk: (p) =>
-      `Відкладений тригер чи обмеження не спрацювали, коли транзакція перевірила їх ${p.after === "data" ? "одразу після запису значень кроків даних" : "після кроків плану"} (SQLSTATE ${p.sqlstate}): ${p.error}. Транзакцію відкочено`,
+      `Відкладений тригер чи обмеження не спрацювали, коли транзакція перевірила їх ${p.after === "data" ? "одразу після запису значень кроків даних" : p.after === "backfill" ? "одразу після того, як крок заповнення записав default замість NULL" : "після кроків плану"} (SQLSTATE ${p.sqlstate}): ${p.error}. Транзакцію відкочено`,
     hint: {
       en: (p) =>
         p.after === "data"
@@ -4046,6 +4046,46 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
         p.after === "data"
           ? "Нічого не записано. Значення, які записали кроки даних, порушують обмеження DEFERRABLE або їх відхиляє відкладений тригер: виправте вираз кроку чи дані, які він читає."
           : "Нічого не записано. Крок лишає рядки, що порушують обмеження DEFERRABLE, або їх відхиляє відкладений тригер: виправте крок або дані, з якими він працює.",
+    },
+  },
+  "apply.not-null-violation": {
+    en: (p) =>
+      `Before plan step ${p.step}, which makes column ${p.column} of ${p.table} NOT NULL, the column has ${p.rows} row(s) with NULL that the plan did not count. The transaction was rolled back`,
+    uk: (p) =>
+      `Перед кроком плану ${p.step}, що робить колонку ${p.column} таблиці ${p.table} NOT NULL, колонка має рядків з NULL: ${p.rows}, яких план не рахував. Транзакцію відкочено`,
+    hint: {
+      en: "Nothing was written. The NULL values appeared after the plan, or an earlier step of the plan wrote them (a type change with USING). Plan again: the plan counts them and fills them with the default, or refuses.",
+      uk: "Нічого не записано. Значення NULL з'явилися після плану або їх записав попередній крок плану (зміна типу з USING). Сплануйте знову: план порахує їх і заповнить default або відмовить.",
+    },
+  },
+  "apply.backfill-rows-changed": {
+    en: (p) =>
+      `Backfill step ${p.step} filled ${p.rows} row(s) of column ${p.column} of ${p.table} with the default, but the plan showed ${p.planned}. The transaction was rolled back`,
+    uk: (p) =>
+      `Крок заповнення ${p.step} записав default у рядків колонки ${p.column} таблиці ${p.table}: ${p.rows}, а план показав ${p.planned}. Транзакцію відкочено`,
+    hint: {
+      en: "Nothing was written. The permission for this step covers the rows the plan showed, and a NULL replaced with the default cannot be told apart afterwards. Plan again and review the new count before allowing the step.",
+      uk: "Нічого не записано. Дозвіл на цей крок покриває рядки, які показав план, а NULL, замінений на default, потім не відрізнити. Сплануйте знову й перегляньте нову кількість, перш ніж дозволити крок.",
+    },
+  },
+  "apply.backfill-triggers-changed": {
+    en: (p) =>
+      p.reason === "platform"
+        ? `Before backfill step ${p.step} on ${p.table} these platform triggers are missing or disabled: ${p.triggers}. The fill would skip what they maintain. The transaction was rolled back`
+        : `Before backfill step ${p.step} on ${p.table} these triggers are enabled, and the plan did not show them among the triggers disabled during the fill: ${p.triggers}. The transaction was rolled back`,
+    uk: (p) =>
+      p.reason === "platform"
+        ? `Перед кроком заповнення ${p.step} на ${p.table} цих платформних тригерів немає або вони вимкнені: ${p.triggers}. Заповнення пропустило б те, що вони підтримують. Транзакцію відкочено`
+        : `Перед кроком заповнення ${p.step} на ${p.table} ці тригери ввімкнені, а план не показав їх серед тригерів, вимкнених на час заповнення: ${p.triggers}. Транзакцію відкочено`,
+    hint: {
+      en: (p) =>
+        p.reason === "platform"
+          ? "Nothing was written. Enable the platform triggers of the table (or let a plan restore them) before the fill; then plan again."
+          : "Nothing was written. The triggers of the table differ from those the plan showed; plan again and review the triggers the fill disables.",
+      uk: (p) =>
+        p.reason === "platform"
+          ? "Нічого не записано. Увімкніть платформні тригери таблиці (або дайте плану їх відновити) до заповнення; потім сплануйте знову."
+          : "Нічого не записано. Тригери таблиці відрізняються від тих, що показав план; сплануйте знову й перегляньте тригери, які вимикає заповнення.",
     },
   },
   "apply.constraint-invalid": {

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 import {
   ApplyConnectionLost,
   ApplyDbError,
+  backfillAction,
   DATA_SETTINGS,
   dataGuardSql,
   executePlan,
@@ -283,6 +284,12 @@ interface Script {
   lost?: (label: string) => number
   /** Живі тригери користувача записуваної таблиці; типово немає. */
   triggers?: { name: string; enabled: string }[]
+  /** Не внутрішні тригери таблиці кроку заповнення; типово немає. */
+  liveTriggers?: { name: string; enabled: string; definition: string }[]
+  /** `rowCount` кроку заповнення; типово 2. */
+  filled?: number
+  /** `NULL` колонки перед `SET NOT NULL` без заповнення; типово 0. */
+  nulls?: number
   /** Сторож приведення кроку даних не повертає рядка. */
   noGuardRow?: boolean
   /** Лічильники обчислених і записаних рядків; типово 3 і стільки ж. */
@@ -331,7 +338,15 @@ function labelOf(sql: string): string | undefined {
     return `count ${/FROM pg_temp\.(\S+)$/.exec(sql)![1]!}`
   if (sql.includes(" AS lost FROM (SELECT (\n"))
     return `guard ${/\(SELECT \(\n([\s\S]*)\n\) AS x FROM /.exec(sql)![1]!}`
+  // Живі тригери кроку заповнення — до тригерів користувача: запит містить
+  // і їхній фрагмент
+  if (sql.includes("pg_get_triggerdef(t.oid) as definition"))
+    return "live-triggers"
   if (sql.includes("t.tgenabled::text as enabled")) return "triggers"
+  if (sql.startsWith("WITH filled AS (UPDATE "))
+    return `backfill ${/^WITH filled AS \(UPDATE (\S+)/.exec(sql)![1]!}`
+  if (sql.startsWith("SELECT pg_catalog.count(*) AS n FROM "))
+    return `nulls ${/ FROM (\S+) WHERE/.exec(sql)![1]!}`
   if (sql.startsWith("WITH u AS (UPDATE "))
     return `write ${/^WITH u AS \(UPDATE (\S+)/.exec(sql)![1]!}`
   if (sql.includes("current_setting(s.name)")) return "get-settings"
@@ -398,6 +413,11 @@ function dataRows(
     return [{ role: script.replicationRole ?? "origin" }]
   if (label === "temp-name") return [{ taken: script.tempTaken ?? false }]
   if (label === "triggers") return script.triggers ?? []
+  if (label === "live-triggers") return script.liveTriggers ?? []
+  if (label?.startsWith("backfill ") === true)
+    return [{ n: String(script.filled ?? 2) }]
+  if (label?.startsWith("nulls ") === true)
+    return [{ n: String(script.nulls ?? 0) }]
   if (label?.startsWith("guard ") === true && script.noGuardRow === true)
     return []
   if (label?.startsWith("guard ") === true)
@@ -1446,6 +1466,324 @@ describe("executePlan", () => {
     })
   })
 
+  describe("backfill steps", () => {
+    const T = { schema: "app", name: "t" }
+    const facts = {
+      table: T,
+      column: "d",
+      rowsAtPlan: 2,
+      permission: false,
+      default: "0",
+      triggers: [{ name: "audit", enabled: "A" as const }],
+    }
+    const setDefault = step(
+      "s1",
+      "ALTER TABLE app.t ALTER COLUMN d SET DEFAULT 0",
+      {
+        lockedTables: [T],
+      }
+    )
+    const fill = (over: Partial<typeof facts> = {}) =>
+      step("s2", backfillAction({ ...facts, ...over }).sql, {
+        origin: "backfill",
+        class: "dataStep",
+        lockedTables: [T],
+        backfill: { ...facts, ...over },
+      })
+    const setNotNull = step(
+      "s3",
+      "ALTER TABLE app.t ALTER COLUMN d SET NOT NULL",
+      {
+        lockedTables: [T],
+      }
+    )
+    const environment = step("s4", "GRANT SELECT ON app.t TO anon", {
+      origin: "environment",
+    })
+    // Фейк бачить кроки лише модульного `plan`, тож відбиток після кроків тут
+    // — відбиток цілі
+    const withFill = (over: Partial<typeof facts> = {}): ExecutablePlan => ({
+      ...plan,
+      desiredFingerprint: TARGET,
+      steps: [setDefault, fill(over), setNotNull, environment],
+    })
+    const AUDIT = {
+      name: "audit",
+      enabled: "A",
+      definition:
+        "CREATE TRIGGER audit AFTER UPDATE ON app.t FOR EACH ROW EXECUTE FUNCTION app.audit()",
+    }
+    const PREAMBLE = { search_path: "pg_catalog", check_function_bodies: "on" }
+    const filled = (log: string[]) => log.find((l) => l.startsWith("backfill "))
+
+    // Р1, Р4, Р11: заповнення — між кроками двигуна в порядку плану, поза
+    // преамбулою й лише з `row_security = off`; показаний тригер
+    // користувача вимкнено на час `UPDATE`, а ввімкнено в прочитаному
+    // режимі після `SET CONSTRAINTS` під налаштуваннями транзакції
+    it("fills between the engine steps with row security off and restores the triggers after SET CONSTRAINTS", async () => {
+      const { db, log, seen } = fakeDb({ liveTriggers: [AUDIT] })
+      const outcome = await executePlan(db, target, withFill(), options)
+      expect(outcome).toMatchObject({
+        status: "committed",
+        backfills: [
+          {
+            step: "s2",
+            schema: "app",
+            table: "t",
+            column: "d",
+            rowsAtPlan: 2,
+            rows: 2,
+          },
+        ],
+      })
+      const update = filled(log)!
+      const at = (entry: string) => {
+        const i = log.indexOf(entry, log.indexOf(setDefault.sql))
+        expect(i, entry).toBeGreaterThan(-1)
+        return i
+      }
+      const order = [
+        setDefault.sql,
+        "replication-role",
+        "live-triggers",
+        "ALTER TABLE app.t DISABLE TRIGGER audit",
+        update,
+        "set-constraints",
+        "ALTER TABLE app.t ENABLE ALWAYS TRIGGER audit",
+        setNotNull.sql,
+        environment.sql,
+      ].map(at)
+      expect(order).toEqual([...order].sort((a, b) => a - b))
+      expect(seen[setDefault.sql]).toEqual([PREAMBLE])
+      expect(seen[setNotNull.sql]).toEqual([PREAMBLE])
+      expect(seen[update]).toEqual([{ ...SESSION, row_security: "off" }])
+      // Визначення тригерів — під шляхом витягу двигуна, а відкладене —
+      // під налаштуваннями транзакції, не Р11
+      expect(seen["live-triggers"]).toEqual([
+        { ...SESSION, search_path: "pg_catalog" },
+      ])
+      expect(seen["set-constraints"]![0]).toEqual(SESSION)
+    })
+
+    it("refuses an enabled trigger the plan did not show and fills nothing", async () => {
+      const { db, log } = fakeDb({
+        liveTriggers: [AUDIT, { ...AUDIT, name: "extra", enabled: "O" }],
+      })
+      const outcome = await executePlan(db, target, withFill(), options)
+      expect(outcome).toMatchObject({
+        status: "refused",
+        diagnostics: [
+          {
+            code: "apply.backfill-triggers-changed",
+            params: {
+              step: "s2",
+              table: "app.t",
+              reason: "unshown",
+              triggers: "extra",
+            },
+          },
+        ],
+      })
+      expect(filled(log)).toBeUndefined()
+      expect(log.some((l) => /DISABLE TRIGGER/.test(l))).toBe(false)
+      expect(log.at(-1)).toBe("ROLLBACK")
+    })
+
+    // Р3а: згода власника — на показаний обсяг
+    it("refuses more rows than the plan showed on a step with permission", async () => {
+      const allowed = { ...options, allow: ["s2"] }
+      const more = fakeDb({ liveTriggers: [AUDIT], filled: 3 })
+      expect(
+        await executePlan(
+          more.db,
+          target,
+          withFill({ permission: true }),
+          allowed
+        )
+      ).toMatchObject({
+        status: "refused",
+        diagnostics: [
+          {
+            code: "apply.backfill-rows-changed",
+            params: {
+              step: "s2",
+              table: "app.t",
+              column: "d",
+              planned: 2,
+              rows: 3,
+            },
+          },
+        ],
+      })
+      expect(more.log).not.toContain(setNotNull.sql)
+      expect(more.log.at(-1)).toBe("ROLLBACK")
+      // Без дозволу кількість не обмежена: таблиця виду, дані платформи
+      const free = fakeDb({ liveTriggers: [AUDIT], filled: 3 })
+      expect(
+        await executePlan(free.db, target, withFill(), options)
+      ).toMatchObject({ status: "committed" })
+      // Менше рядків — не зміна згоди
+      const fewer = fakeDb({ liveTriggers: [AUDIT], filled: 1 })
+      expect(
+        await executePlan(
+          fewer.db,
+          target,
+          withFill({ permission: true }),
+          allowed
+        )
+      ).toMatchObject({ status: "committed" })
+    })
+
+    it("names the backfill step when its UPDATE or the deferred check fails", async () => {
+      const denied = fakeDb({
+        liveTriggers: [AUDIT],
+        fail: (label) =>
+          label.startsWith("backfill ")
+            ? new ApplyDbError("permission denied", "42501")
+            : undefined,
+      })
+      expect(
+        await executePlan(denied.db, target, withFill(), options)
+      ).toMatchObject({
+        status: "failed",
+        diagnostics: [
+          {
+            code: "apply.step-failed",
+            params: { step: "s2", sqlstate: "42501" },
+          },
+        ],
+      })
+      const deferred = fakeDb({
+        liveTriggers: [AUDIT],
+        fail: (label) =>
+          label === "set-constraints"
+            ? new ApplyDbError("violates", "23503")
+            : undefined,
+      })
+      expect(
+        await executePlan(deferred.db, target, withFill(), options)
+      ).toMatchObject({
+        status: "failed",
+        diagnostics: [
+          {
+            code: "apply.deferred-constraint-failed",
+            params: { after: "backfill", sqlstate: "23503" },
+          },
+        ],
+      })
+    })
+
+    it("refuses the fill in replica mode", async () => {
+      const { db, log } = fakeDb({ replicationRole: "replica" })
+      expect(await executePlan(db, target, withFill(), options)).toMatchObject({
+        status: "refused",
+        diagnostics: [{ code: "apply.replication-role" }],
+      })
+      expect(filled(log)).toBeUndefined()
+    })
+
+    it("rejects a backfill step whose SQL is not the fill of its facts", async () => {
+      const { db } = fakeDb()
+      const tampered = {
+        ...withFill(),
+        steps: [
+          setDefault,
+          { ...fill(), sql: 'UPDATE app.t SET "d" = DEFAULT' },
+          setNotNull,
+        ],
+      }
+      await expect(executePlan(db, target, tampered, options)).rejects.toThrow(
+        /backfill facts/
+      )
+      const unlabelled = {
+        ...withFill(),
+        steps: [
+          setDefault,
+          { ...fill(), origin: "engine" as const },
+          setNotNull,
+        ],
+      }
+      await expect(
+        executePlan(db, target, unlabelled, options)
+      ).rejects.toThrow(/backfill facts/)
+    })
+
+    it("reports the filled rows in the rehearsal evidence under the step id", async () => {
+      const fake = clocked({ liveTriggers: [AUDIT] })
+      const outcome = await executePlan(fake.db, target, withFill(), {
+        ...withMode("rehearse"),
+        clock: fake.clock,
+      })
+      if (outcome.status !== "rolledBack")
+        throw new Error(`not rolled back: ${outcome.status}`)
+      expect(outcome.evidence.backfills).toEqual([
+        { step: "s2", schema: "app", table: "t", column: "d", rows: 2 },
+      ])
+      expect(
+        outcome.evidence.durations.steps.find((s) => s.id === "s2")?.phase
+      ).toBe("engine")
+    })
+
+    // Р7: `NULL`, що з'явилися після плану, — керована відмова до кроку
+    describe("the check before SET NOT NULL without a fill", () => {
+      const checked: ExecutablePlan = {
+        ...plan,
+        desiredFingerprint: TARGET,
+        steps: [
+          {
+            ...setNotNull,
+            id: "s1",
+            notNull: [{ table: T, column: "d" }],
+          },
+        ],
+      }
+
+      it("refuses NULL values before the step, counted with row security off", async () => {
+        const { db, log, seen } = fakeDb({ nulls: 2 })
+        expect(await executePlan(db, target, checked, options)).toMatchObject({
+          status: "failed",
+          diagnostics: [
+            {
+              code: "apply.not-null-violation",
+              params: { step: "s1", table: "app.t", column: "d", rows: 2 },
+            },
+          ],
+        })
+        expect(log).not.toContain(setNotNull.sql)
+        const count = log.find((l) => l.startsWith("nulls "))!
+        expect(seen[count]).toEqual([{ ...PREAMBLE, row_security: "off" }])
+      })
+
+      it("runs the step when the column has no NULL", async () => {
+        const { db, log } = fakeDb()
+        expect(await executePlan(db, target, checked, options)).toMatchObject({
+          status: "committed",
+        })
+        const count = log.findIndex((l) => l.startsWith("nulls "))
+        expect(count).toBeGreaterThan(-1)
+        expect(log.indexOf(setNotNull.sql)).toBeGreaterThan(count)
+      })
+
+      it("names the step when the count fails", async () => {
+        const { db } = fakeDb({
+          fail: (label) =>
+            label.startsWith("nulls ")
+              ? new ApplyDbError("permission denied", "42501")
+              : undefined,
+        })
+        expect(await executePlan(db, target, checked, options)).toMatchObject({
+          status: "failed",
+          diagnostics: [
+            {
+              code: "apply.step-failed",
+              params: { step: "s1", sqlstate: "42501" },
+            },
+          ],
+        })
+      })
+    })
+  })
+
   describe("carrier steps", () => {
     const intent = step("s1", "ALTER TABLE app.t RENAME TO t2", {
       origin: "intent",
@@ -2476,13 +2814,14 @@ describe("executePlan", () => {
     }
     /** Чинний звіт репетиції цього плану на копії з одним рядком `app.t`. */
     const REPORT: RehearsalReport = {
-      format: 1,
+      format: 2,
       planHash: options.planHash,
       server: SERVER,
       ledgerHead: null,
       rows: [{ schema: "app", table: "t", rows: 1 }],
       durations: { phases: [], steps: [], longestStatementMs: 100 },
       data: [],
+      backfills: [],
       preservation: [{ schema: "app", table: "t", rows: 1 }],
       plpgsqlCheck: "skipped",
       triggers: [],
@@ -3355,6 +3694,7 @@ describe("executePlan", () => {
         // старих іменах
         rows: [{ schema: "app", table: "t", rows: 1 }],
         data: [{ schema: "app", table: "t", computed: 3, written: 3 }],
+        backfills: [],
         preservation: [{ schema: "app", table: "t", rows: 1 }],
         plpgsqlCheck: "skipped",
         triggers: [{ schema: "app", table: "t", name: "tg", enabled: "O" }],

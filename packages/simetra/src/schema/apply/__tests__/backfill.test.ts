@@ -22,6 +22,7 @@ import {
   columnKey,
   intentStep,
   notNullColumns,
+  backfillTriggers,
   isPlatformTrigger,
   planBackfills,
   readBackfillCounts,
@@ -1014,6 +1015,105 @@ describe("platform triggers of a backfill", () => {
       { name: mechanics.trigger, enabled: "O" },
       { name: "made_before", enabled: "O" },
     ])
+  })
+
+  describe("backfillTriggers", () => {
+    // Крок заповнення з показаним тригером `audit` і платформним тригером
+    // механіки в бажаній моделі
+    const fill = (): PlanStep => {
+      const s = stepsOf({ actions: [SET_NOT_NULL, SET_DEFAULT] }).find(
+        (x) => x.backfill !== undefined
+      )!
+      return {
+        ...s,
+        backfill: {
+          ...s.backfill!,
+          triggers: [{ name: "audit", enabled: "A" }],
+        },
+      }
+    }
+    const audit = {
+      name: "audit",
+      enabled: "A",
+      definition: def("audit", "app.audit"),
+    }
+    const platform = {
+      name: mechanics.trigger,
+      enabled: "O",
+      definition: def(mechanics.trigger),
+    }
+    const check = (
+      live: { name: string; enabled: string; definition: string }[],
+      later: PlanStep[] = []
+    ) =>
+      backfillTriggers({
+        step: fill(),
+        live,
+        later,
+        desired: DESIRED_UNITS,
+        parse,
+      })
+
+    it("disables the shown user triggers in their mode and keeps the platform ones", () => {
+      expect(check([audit, platform])).toEqual({
+        ok: true,
+        disable: [{ name: "audit", enabled: "A" }],
+      })
+      // Вимкнений тригер користувача вимикати й вмикати нічого
+      expect(check([{ ...audit, enabled: "D" }, platform])).toEqual({
+        ok: true,
+        disable: [],
+      })
+    })
+
+    it("refuses a live trigger the plan did not show", () => {
+      expect(check([audit, platform, { ...audit, name: "extra" }])).toEqual({
+        ok: false,
+        reason: "unshown",
+        triggers: ["extra"],
+      })
+      // Платформне ім'я з чужим визначенням — тригер користувача, не показаний
+      expect(
+        check([
+          audit,
+          {
+            ...platform,
+            definition: def(mechanics.trigger, fn, "AFTER UPDATE"),
+          },
+        ])
+      ).toEqual({ ok: false, reason: "unshown", triggers: [mechanics.trigger] })
+    })
+
+    it("refuses a platform trigger that is missing or disabled before the fill", () => {
+      expect(check([audit])).toEqual({
+        ok: false,
+        reason: "platform",
+        triggers: [mechanics.trigger],
+      })
+      for (const enabled of ["D", "R"])
+        expect(check([audit, { ...platform, enabled }])).toEqual({
+          ok: false,
+          reason: "platform",
+          triggers: [mechanics.trigger],
+        })
+      // Тригер, який створює пізніший крок, на час заповнення ще не існує
+      const later = {
+        ...fill(),
+        id: "s9",
+        produced: [
+          {
+            kind: "trigger" as const,
+            schema: "app",
+            table: "items",
+            name: mechanics.trigger,
+          },
+        ],
+      }
+      expect(check([audit], [later])).toEqual({
+        ok: true,
+        disable: [{ name: "audit", enabled: "A" }],
+      })
+    })
   })
 })
 

@@ -332,13 +332,14 @@ describe("apply with an unknown outcome", TOOL_PIPELINE, () => {
       over: Partial<RehearsalReport> = {}
     ): string =>
       serializeRehearsal({
-        format: 1,
+        format: 2,
         planHash: artifact.planHash,
         server: SERVER,
         ledgerHead: null,
         rows: [{ schema: "app", table: "t", rows: 1 }],
         durations: { phases: [], steps: [], longestStatementMs: 1 },
         data: [],
+        backfills: [],
         preservation: [{ schema: "app", table: "t", rows: 1 }],
         plpgsqlCheck: "skipped",
         triggers: [],
@@ -380,7 +381,7 @@ describe("apply with an unknown outcome", TOOL_PIPELINE, () => {
       [
         "format",
         (a: PlanArtifact) =>
-          JSON.stringify({ ...JSON.parse(reportOf(a)), format: 2 }),
+          JSON.stringify({ ...JSON.parse(reportOf(a)), format: 1 }),
       ],
       // Файл переписано, `planHash` той самий: без
       // рядків звіт оминув би гейт порожньої копії

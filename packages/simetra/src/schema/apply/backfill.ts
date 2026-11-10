@@ -909,3 +909,109 @@ export function withNotNullChecks(
     return columns.length === 0 ? step : { ...step, notNull: columns }
   })
 }
+
+/** Тригер таблиці на цілі перед кроком заповнення: внутрішні FK — поза ним. */
+export interface LiveTrigger {
+  name: string
+  /** `tgenabled`: `O`, `A`, `R` чи `D`. */
+  enabled: string
+  /** `pg_get_triggerdef` під `search_path = pg_catalog`, як у витягу двигуна. */
+  definition: string
+}
+
+const LIVE_TRIGGERS_SQL = `
+select t.tgname::text as name, t.tgenabled::text as enabled,
+  pg_catalog.pg_get_triggerdef(t.oid) as definition
+from pg_catalog.pg_trigger t
+join pg_catalog.pg_class c on c.oid = t.tgrelid
+join pg_catalog.pg_namespace n on n.oid = c.relnamespace
+where n.nspname = $1 and c.relname = $2 and not t.tgisinternal
+`
+
+/**
+ * Не внутрішні тригери таблиці кроку заповнення (платформна спека §6.6) —
+ * у транзакції застосування під уже взятим замком. Визначення — під
+ * `search_path = pg_catalog`: двигун витягує їх так само, і лише тоді
+ * функція тригера кваліфікована схемою, як у бажаній моделі, з якою
+ * `isPlatformTrigger` порівнює дерево. Під шляхом сесії функція зі схеми
+ * шляху друкувалася б без схеми, і платформний тригер став би тригером
+ * користувача.
+ */
+export async function readLiveTriggers(
+  tx: ApplyTransaction,
+  table: { schema: string; name: string }
+): Promise<LiveTrigger[]> {
+  const rows = await withLocalSettings(
+    tx,
+    [{ name: "search_path", value: "pg_catalog" }],
+    () =>
+      tx.query<{ name: string; enabled: string; definition: string }>(
+        LIVE_TRIGGERS_SQL,
+        [table.schema, table.name]
+      )
+  )
+  return rows.map((r) => ({ ...r })).sort((a, b) => byCodeUnit(a.name, b.name))
+}
+
+const firing = (t: LiveTrigger): t is LiveTrigger & { enabled: "O" | "A" } =>
+  t.enabled === "O" || t.enabled === "A"
+
+/**
+ * Тригери, які вимикає крок заповнення (платформна спека §6.6, спека
+ * промоції §7.2): живі ввімкнені тригери таблиці без платформних за
+ * визначенням. Відмова, коли серед них є тригер поза показаним переліком
+ * кроку (`unshown`): мовчки не вимикається жоден тригер, якого не показали.
+ * Відмова й тоді, коли платформний тригер бажаного реєстру не живий чи не
+ * ввімкнений (`platform`): вимкнений тригер носіїв чи сторож прав пропустив
+ * би заповнення. Тригер, який створює пізніший крок (`later`), не
+ * перевіряється: на час заповнення його ще немає. `desired` — бажана модель
+ * в іменах кроку.
+ */
+export function backfillTriggers(p: {
+  step: PlanStep
+  live: readonly LiveTrigger[]
+  later: readonly PlanStep[]
+  desired: CatalogModel
+  parse: SqlParser
+}):
+  | { ok: true; disable: DataTable["triggers"] }
+  | { ok: false; reason: "unshown" | "platform"; triggers: string[] } {
+  const facts = p.step.backfill
+  if (facts === undefined)
+    throw new Error(`plan step ${p.step.id} is not a backfill step`)
+  const { table } = facts
+  const platform = (name: string, live?: string) =>
+    isPlatformTrigger({ table, name, live, desired: p.desired, parse: p.parse })
+  const disable = p.live
+    .filter(firing)
+    .filter((t) => !platform(t.name, t.definition))
+    .map((t) => ({ name: t.name, enabled: t.enabled }))
+  const shown = new Set(facts.triggers.map((t) => t.name))
+  const unshown = disable.filter((t) => !shown.has(t.name)).map((t) => t.name)
+  if (unshown.length > 0)
+    return { ok: false, reason: "unshown", triggers: unshown }
+  const later = new Set(
+    p.later.flatMap((s) =>
+      s.produced
+        .filter(
+          (r) =>
+            r.kind === "trigger" &&
+            r.schema === table.schema &&
+            r.table === table.name
+        )
+        .map((r) => r.name)
+    )
+  )
+  const missing = platformTriggers(table)
+    .map((e) => e.trigger)
+    .filter((name) => !later.has(name) && platform(name))
+    .filter(
+      (name) =>
+        !p.live.some(
+          (t) => t.name === name && firing(t) && platform(t.name, t.definition)
+        )
+    )
+  if (missing.length > 0)
+    return { ok: false, reason: "platform", triggers: missing }
+  return { ok: true, disable }
+}

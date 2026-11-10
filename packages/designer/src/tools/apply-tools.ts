@@ -29,6 +29,7 @@ import {
   serializeRehearsal,
   verifyPlanHash,
   type ApplyTimeouts,
+  type BackfillResult,
   type DriftReport,
   type EngineDiagnostic,
   type EngineIdentity,
@@ -142,6 +143,12 @@ export interface ApplyData {
    * застосування чи репетиція, звіту якої не записано.
    */
   report: string | null
+  /**
+   * Кроки заповнення перед `NOT NULL` (платформна спека §6.6): фактичний
+   * `rowCount` поруч із кількістю `NULL` на плані. Порожньо — кроків
+   * заповнення немає або після обриву з'єднання лічильники невідомі.
+   */
+  backfills: BackfillResult[]
 }
 
 /**
@@ -629,6 +636,7 @@ export const applyTool = defineTool({
             status: outcome.status,
             attempts: outcome.attempts,
             report: null,
+            backfills: outcome.backfills ?? [],
           },
         }
       // Звіт успішної репетиції — поруч із файлом плану (спека промоції
@@ -644,6 +652,13 @@ export const applyTool = defineTool({
             status: outcome.status,
             attempts: outcome.attempts,
             report: ok ? report : null,
+            // Звіт репетиції лічить лише фактичне; план — з артефакту
+            backfills: outcome.evidence.backfills.map((b) => ({
+              ...b,
+              rowsAtPlan:
+                artifact.steps.find((s) => s.id === b.step)?.backfill
+                  ?.rowsAtPlan ?? 0,
+            })),
           },
           artifacts: ok
             ? [

@@ -7,7 +7,11 @@ import { TOOL_PIPELINE } from "./helpers/budget"
 import { commandByName, runTool, toolCommand } from "../cli/command"
 import { cliInput } from "../cli/input"
 import { renderResult } from "../cli/render"
-import type { PlanData, UnchangedPlanData } from "../tools/apply-tools"
+import type {
+  ApplyData,
+  PlanData,
+  UnchangedPlanData,
+} from "../tools/apply-tools"
 import { TOOLS, toolByName, type Tool } from "../tools/catalog"
 import { TOOL_NAMES } from "../tools/types"
 import {
@@ -904,6 +908,34 @@ describe("cli adapter", TOOL_PIPELINE, () => {
         "    backfill app.notes.note: 3 row(s) with NULL at plan",
         "    default: ''::text",
         "    triggers disabled during the fill: audit",
+      ])
+    })
+
+    it("renders the filled rows of a backfill step after apply", () => {
+      // Р8: фактичний `rowCount` поруч із кількістю `NULL` на плані
+      const data: ApplyData = {
+        status: "committed",
+        attempts: 1,
+        report: null,
+        backfills: [
+          {
+            step: "s2",
+            schema: "app",
+            table: "notes",
+            column: "note",
+            rowsAtPlan: 2,
+            rows: 3,
+          },
+        ],
+      }
+      const { stdout } = renderResult(
+        tool("apply"),
+        { ok: true, changes: [], diagnostics: [], data },
+        { dir: "metadata", locale: "en", format: "text" }
+      )
+      expect(stdout.split("\n").slice(0, 2)).toEqual([
+        "apply: committed in 1 attempt(s)",
+        "  backfill s2 app.notes.note: 3 row(s) filled with the default; 2 with NULL at plan",
       ])
     })
 

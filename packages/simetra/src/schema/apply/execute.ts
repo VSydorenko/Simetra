@@ -24,6 +24,7 @@ import {
   type PlanArtifact,
   type PreservedTable,
 } from "./artifact"
+import { backfillTriggers, readLiveTriggers } from "./backfill"
 import { applyDiagnostic } from "./diagnostic"
 import { differencePaths } from "./drift"
 import { environmentMismatch, readGlobalDefaultPrivileges } from "./environment"
@@ -82,6 +83,7 @@ import {
 import { isRetryable } from "./retry"
 import { readInvalidObjects } from "./validity"
 import {
+  BACKFILL_SETTINGS,
   CARRIER_STEP_SETTINGS,
   DATA_SETTINGS,
   RAISE_SYNCHRONOUS_COMMIT_SQL,
@@ -110,7 +112,12 @@ import {
   type TableLock,
   type TableLockMode,
 } from "./locks"
-import { checkPermissions, lintSteps, type PlanStep } from "./steps"
+import {
+  backfillAction,
+  checkPermissions,
+  lintSteps,
+  type PlanStep,
+} from "./steps"
 import { tableKey } from "./table-key"
 import { guardTarget } from "./type-guard"
 
@@ -211,12 +218,31 @@ export type ExecuteOptions = ExecuteBase &
     | { mode: "rehearse"; rehearsal: RehearsalProof }
   )
 
+/**
+ * Що заповнив крок `backfill` (платформна спека §6.6): `rows` — фактичний
+ * `rowCount` оператора `UPDATE`, `rowsAtPlan` — скільки `NULL` план бачив.
+ * Таблиця — в іменах кроку.
+ */
+export interface BackfillResult {
+  step: string
+  schema: string
+  table: string
+  column: string
+  rowsAtPlan: number
+  rows: number
+}
+
 export type ExecuteOutcome =
   | {
       status: "committed"
       applyId: string
       attempts: number
       diagnostics: EngineDiagnostic[]
+      /**
+       * Кроки заповнення цього застосування; немає — після обриву з'єднання,
+       * коли `COMMIT` встановлено за ledger, а лічильники спроби невідомі.
+       */
+      backfills?: BackfillResult[]
     }
   | {
       /** Відкат буває лише в репетиції, і вона несе докази для звіту. */
@@ -254,6 +280,13 @@ const ORIGIN_ORDER = [
   "versions",
   "environment",
 ] as const
+
+/**
+ * Блок кроку: крок заповнення стоїть усередині блоку двигуна, перед кроком,
+ * що робить його колонку `NOT NULL` (платформна спека §6.6).
+ */
+const blockOf = (s: PlanStep): (typeof ORIGIN_ORDER)[number] =>
+  s.origin === "backfill" ? "engine" : s.origin
 
 /**
  * `LOCK TABLE` на таблиці, що зникла (`42P01`) чи змінила вид (`42809`) після
@@ -369,17 +402,24 @@ export async function executePlan(
   // наміру після кроку двигуна пішов би під преамбулою. Так кроки будують
   // `analyseOnClone` і збір середовища, тож інший порядок — зламаний конвеєр
   // (спека промоції §7.2)
-  // Кроки заповнення виконує блок двигуна (задача раннера); доки його немає,
-  // план із ними — відмова, а не мовчки пропущені кроки
-  if (plan.steps.some((s) => s.origin === "backfill"))
-    throw new Error("this runner does not execute backfill steps")
   // Ранг заповнення — ранг двигуна: крок стоїть усередині блоку двигуна
-  const ranks = plan.steps.map((s) =>
-    ORIGIN_ORDER.indexOf(s.origin === "backfill" ? "engine" : s.origin)
-  )
+  const ranks = plan.steps.map((s) => ORIGIN_ORDER.indexOf(blockOf(s)))
   if (ranks.some((rank, i) => i > 0 && rank < ranks[i - 1]!))
     throw new Error(
       `plan steps are out of origin order: ${ORIGIN_ORDER.join(", ")}`
+    )
+  // Раннер вимикає тригери й звіряє лічильник за фактами кроку, а виконує
+  // його SQL: SQL, що не є заповненням цих фактів, писав би не ту таблицю чи
+  // колонку — зламаний конвеєр плану, як і крок без фактів
+  if (
+    plan.steps.some(
+      (s) =>
+        (s.origin === "backfill") !== (s.backfill !== undefined) ||
+        (s.backfill !== undefined && s.sql !== backfillAction(s.backfill).sql)
+    )
+  )
+    throw new Error(
+      "a backfill step does not match its backfill facts, or a step that is not a backfill carries them"
     )
   // Застосування промоції з COMMIT — лише після репетиції на копії з даними
   // (спека промоції §8). План промоцію без
@@ -405,8 +445,10 @@ export async function executePlan(
   const end = o.mode === "rehearse" ? "rollback" : "commit"
   for (let attempt = 1; ; attempt++) {
     try {
-      const { warnings, evidence } = await db.transaction(target, end, (tx) =>
-        runAttempt(tx, plan, o, timeouts, applyId, parse, report)
+      const { warnings, evidence, backfills } = await db.transaction(
+        target,
+        end,
+        (tx) => runAttempt(tx, plan, o, timeouts, applyId, parse, report)
       )
       if (end === "commit")
         return {
@@ -414,6 +456,7 @@ export async function executePlan(
           applyId,
           attempts: attempt,
           diagnostics: warnings,
+          backfills,
         }
       // Докази — лише цієї, останньої спроби: попередні відкочено повтором
       if (evidence === undefined)
@@ -683,7 +726,11 @@ async function runAttempt(
   applyId: string,
   parse: SqlParser,
   report: { value: RehearsalReport; hash: string } | undefined
-): Promise<{ warnings: EngineDiagnostic[]; evidence?: RehearsalEvidence }> {
+): Promise<{
+  warnings: EngineDiagnostic[]
+  evidence?: RehearsalEvidence
+  backfills: BackfillResult[]
+}> {
   // Докази лише в репетиції: застосування й копія доказу йдуть повз обгортку
   const timed =
     o.mode === "rehearse"
@@ -919,7 +966,7 @@ async function runAttempt(
   // Блок — за іменем походження, а не за позицією: новий блок у
   // `ORIGIN_ORDER` інакше мовчки зсунув би решту під чужу фазу
   const block = (origin: (typeof ORIGIN_ORDER)[number]) =>
-    plan.steps.filter((s) => s.origin === origin)
+    plan.steps.filter((s) => blockOf(s) === origin)
   let computed = new Map<string, number>()
   phase("compute")
   if (data.length > 0) {
@@ -958,10 +1005,16 @@ async function runAttempt(
   // 11. Кроки двигуна разом зі сторожами — під преамбулою, такою, як її
   // записав план, і з поверненням налаштувань транзакції після них. Пару
   // виконуємо лише разом із ревалідацією (спека промоції §7.2):
-  // `check_function_bodies = off` пропускає тіло, яке ловить фаза 15
+  // `check_function_bodies = off` пропускає тіло, яке ловить фаза 15.
+  // Кроки заповнення блоку — у порядку плану, кожен окремим викликом під
+  // своїми налаштуваннями (платформна спека §6.6)
   phase("engine")
-  await withLocalSettings(tx, plan.preamble, () =>
-    runSteps(tx, block("engine"), parse, (id) => phase("engine", id))
+  const backfills = await runEngineBlock(
+    tx,
+    plan,
+    block("engine"),
+    parse,
+    (id) => phase("engine", id)
   )
   // 11а. Кроки копій носіїв (спека промоції §7.2) — після двигуна: колонку-копію
   // створює він, а кроки даних промоції (фаза 10) йдуть ще до нього. Фаза —
@@ -1100,6 +1153,7 @@ async function runAttempt(
     existing === undefined ? [] : await footprintGaps(tx, plan, existing)
   // 20. `COMMIT` чи `ROLLBACK` виконує порт за `end`
   return {
+    backfills,
     warnings: [
       ...warnings,
       ...blindWarning(after.blind),
@@ -1118,6 +1172,15 @@ async function runAttempt(
             })),
             durations: timed.durations(),
             data: written,
+            backfills: backfills.map(
+              ({ step, schema, table, column, rows }) => ({
+                step,
+                schema,
+                table,
+                column,
+                rows,
+              })
+            ),
             preservation: preserved.map((t, i) => ({
               ...oldName(t),
               rows: countOf(proven[i]!.rows),
@@ -1209,13 +1272,14 @@ const oldName = (t: PreservedTable): { schema: string; table: string } => ({
 })
 
 /**
- * `SET CONSTRAINTS ALL IMMEDIATE` фаз 10 (`after: "data"`) і 13 (`"steps"`):
- * не-повторну помилку дає відкладене обмеження чи тригер-обмеження
- * користувача — своїм кодом, з місцем у транзакції.
+ * `SET CONSTRAINTS ALL IMMEDIATE` фаз 10 (`after: "data"`), 13 (`"steps"`)
+ * і кроку заповнення (`"backfill"`): не-повторну помилку дає відкладене
+ * обмеження чи тригер-обмеження користувача — своїм кодом, з місцем у
+ * транзакції.
  */
 async function constraintsNow(
   tx: ApplyTransaction,
-  after: "data" | "steps"
+  after: "data" | "steps" | "backfill"
 ): Promise<void> {
   try {
     await tx.query("SET CONSTRAINTS ALL IMMEDIATE")
@@ -1618,7 +1682,7 @@ async function runVersionSteps(
       if (canonicalize(live) !== canonicalize(step.triggers))
         throw stop("refused", "apply.target-changed", { sections: "triggers" })
       for (const sql of triggerSql(target, false))
-        await versionTriggerQuery(tx, step, sql)
+        await stepQuery(tx, step, sql)
       disabled.push({ step, target })
     }
     await runSteps(tx, [step], parse, statement)
@@ -1626,18 +1690,21 @@ async function runVersionSteps(
   if (disabled.length === 0) return
   await constraintsNow(tx, "data")
   for (const { step, target } of disabled)
-    for (const sql of triggerSql(target, true))
-      await versionTriggerQuery(tx, step, sql)
+    for (const sql of triggerSql(target, true)) await stepQuery(tx, step, sql)
 }
 
-/** `ALTER TABLE … TRIGGER` кроку підвищення: збій — як збій самого кроку. */
-async function versionTriggerQuery(
+/**
+ * Оператор раннера від імені кроку (`ALTER TABLE … TRIGGER` кроків
+ * підвищення й заповнення, `UPDATE` заповнення): збій — як збій самого
+ * кроку.
+ */
+async function stepQuery<R extends Record<string, unknown>>(
   tx: ApplyTransaction,
   step: PlanStep,
   sql: string
-): Promise<void> {
+): Promise<R[]> {
   try {
-    await tx.query(sql)
+    return await tx.query<R>(sql)
   } catch (error) {
     if (!(error instanceof ApplyDbError) || retryable(error)) throw error
     throw stop("failed", "apply.step-failed", {
@@ -1646,6 +1713,161 @@ async function versionTriggerQuery(
       error: error.message,
     })
   }
+}
+
+/**
+ * Блок двигуна (фаза 11): кроки двигуна — під преамбулою плану, кожна
+ * послідовність без перерви одним викликом, а крок заповнення між ними —
+ * окремо, під налаштуваннями транзакції й `BACKFILL_SETTINGS`, як кроки
+ * копій носіїв (платформна спека §6.6). Порядок — порядок плану: default
+ * колонки ставить крок двигуна до заповнення, а `SET NOT NULL` — після.
+ */
+async function runEngineBlock(
+  tx: ApplyTransaction,
+  plan: ExecutablePlan,
+  steps: readonly PlanStep[],
+  parse: SqlParser,
+  statement: (id: string) => void
+): Promise<BackfillResult[]> {
+  const out: BackfillResult[] = []
+  let run: PlanStep[] = []
+  const flush = async () => {
+    if (run.length === 0) return
+    const engine = run
+    run = []
+    await withLocalSettings(tx, plan.preamble, () =>
+      runSteps(tx, engine, parse, statement)
+    )
+  }
+  for (const step of steps) {
+    if (step.backfill === undefined) {
+      run.push(step)
+      continue
+    }
+    await flush()
+    const later = plan.steps.slice(plan.steps.indexOf(step) + 1)
+    out.push(await runBackfill(tx, plan, step, later, parse, statement))
+  }
+  await flush()
+  return out
+}
+
+/**
+ * Крок заповнення (платформна спека §6.6, спека промоції §7.2), у тій самій
+ * транзакції під уже взятим `ACCESS EXCLUSIVE`:
+ * - режим реплікації `origin`, бо платформні тригери мусять спрацювати;
+ * - живі тригери таблиці читаються тут, а не з плану: попередні кроки блоку
+ *   створюють і знімають тригери, тож рівність «план = живе» дала б хибну
+ *   відмову. Вимикаються лише показані тригери користувача
+ *   (`backfillTriggers`);
+ * - `UPDATE` — під `BACKFILL_SETTINGS`: роль бачить усі рядки або дає гучне
+ *   `42501`, а не тихо лишає `NULL`;
+ * - на кроці з дозволом рядків не більше, ніж план показав: згода власника
+ *   — на обсяг, а «невідоме» після заповнення не відновити;
+ * - після повернення налаштувань транзакції — завжди `SET CONSTRAINTS ALL
+ *   IMMEDIATE`: відкладені тригери споживача не мусять іти під
+ *   `row_security = off`, а увімкнення тригерів і наступний `SET NOT NULL` —
+ *   `ALTER TABLE`, який з відкладеними подіями падає `55006`;
+ * - тригери вмикаються назад у прочитаному режимі (`O` чи `A`).
+ * Збій будь-якого оператора відкочує всю транзакцію разом із `DISABLE`.
+ */
+async function runBackfill(
+  tx: ApplyTransaction,
+  plan: ExecutablePlan,
+  step: PlanStep,
+  later: readonly PlanStep[],
+  parse: SqlParser,
+  statement: (id: string) => void
+): Promise<BackfillResult> {
+  const facts = step.backfill!
+  const name = `${facts.table.schema}.${facts.table.name}`
+  await requireOriginReplication(tx)
+  const checked = backfillTriggers({
+    step,
+    live: await readLiveTriggers(tx, facts.table),
+    later,
+    desired: plan.resultCatalog,
+    parse,
+  })
+  if (!checked.ok)
+    throw stop("refused", "apply.backfill-triggers-changed", {
+      step: step.id,
+      table: name,
+      reason: checked.reason,
+      triggers: checked.triggers.join(", "),
+    })
+  const target = {
+    after: { schema: facts.table.schema, table: facts.table.name, key: "" },
+    triggers: checked.disable,
+  }
+  for (const sql of triggerSql(target, false)) await stepQuery(tx, step, sql)
+  const rows = await withLocalSettings(tx, BACKFILL_SETTINGS, async () => {
+    statement(step.id)
+    const [row] = await stepQuery<{ n: string | number }>(
+      tx,
+      step,
+      `WITH filled AS (${step.sql} RETURNING 1) SELECT pg_catalog.count(*) AS n FROM filled`
+    )
+    if (row === undefined) throw new Error("the backfill count returned no row")
+    return countOf(row.n)
+  })
+  if (facts.permission && rows > facts.rowsAtPlan)
+    throw stop("refused", "apply.backfill-rows-changed", {
+      step: step.id,
+      table: name,
+      column: facts.column,
+      planned: facts.rowsAtPlan,
+      rows,
+    })
+  await constraintsNow(tx, "backfill")
+  for (const sql of triggerSql(target, true)) await stepQuery(tx, step, sql)
+  return {
+    step: step.id,
+    schema: facts.table.schema,
+    table: facts.table.name,
+    column: facts.column,
+    rowsAtPlan: facts.rowsAtPlan,
+    rows,
+  }
+}
+
+/**
+ * Перевірка перед `SET NOT NULL` без заповнення (платформна спека §6.6):
+ * `NULL` могли з'явитися після плану, зокрема від `USING` зміни типу в тому
+ * самому плані. Рахує під `BACKFILL_SETTINGS`, бо політика, що ховає рядки,
+ * дала б неправдивий нуль; `NULL` є — керована відмова замість сирого
+ * `23502` кроку.
+ */
+async function notNullGuard(
+  tx: ApplyTransaction,
+  step: PlanStep,
+  c: NonNullable<PlanStep["notNull"]>[number]
+): Promise<void> {
+  const table = `${quoteIdent(c.table.schema)}.${quoteIdent(c.table.name)}`
+  let rows: number
+  try {
+    rows = await withLocalSettings(tx, BACKFILL_SETTINGS, async () => {
+      const [row] = await tx.query<{ n: string | number }>(
+        `SELECT pg_catalog.count(*) AS n FROM ${table} WHERE ${quoteIdent(c.column)} IS NULL`
+      )
+      if (row === undefined) throw new Error("the NULL count returned no row")
+      return countOf(row.n)
+    })
+  } catch (error) {
+    if (!(error instanceof ApplyDbError) || retryable(error)) throw error
+    throw stop("failed", "apply.step-failed", {
+      step: step.id,
+      sqlstate: error.sqlstate ?? "unknown",
+      error: error.message,
+    })
+  }
+  if (rows > 0)
+    throw stop("failed", "apply.not-null-violation", {
+      step: step.id,
+      table: `${c.table.schema}.${c.table.name}`,
+      column: c.column,
+      rows,
+    })
 }
 
 /** Кроки блоку по черзі, кожен після своїх сторожів. */
@@ -1658,6 +1880,7 @@ async function runSteps(
   // Конфлікт блокувань летить далі на повтор спроби. Сторожі від
   // `search_path` не залежать: таблиця й типи в них повністю кваліфіковані
   for (const step of steps) {
+    for (const c of step.notNull ?? []) await notNullGuard(tx, step, c)
     for (const guard of step.guards) await runGuard(tx, step.id, guard, parse)
     try {
       statement(step.id)

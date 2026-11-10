@@ -268,5 +268,11 @@ export function renderApply(
       : d.status === "committed"
         ? `apply: committed in ${d.attempts} attempt(s)`
         : `rehearse: rolled back after ${d.attempts} attempt(s); the database was not changed; ${d.report === null ? "no rehearsal report was written" : `rehearsal report written to ${d.report}`}. The rehearsal took the plan's locks, as apply does.`
-  return [head, report].join("\n")
+  // Заповнення (платформна спека §6.6): фактична кількість поруч із тією,
+  // що показав план, — різниця означає рядки, що з'явилися після плану
+  const backfills = (d?.backfills ?? []).map(
+    (b) =>
+      `  backfill ${b.step} ${qualified(b.schema, b.table)}.${quoteIdent(b.column)}: ${b.rows} row(s) filled with the default; ${b.rowsAtPlan} with NULL at plan`
+  )
+  return [head, ...backfills, report].join("\n")
 }
