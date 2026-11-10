@@ -9,6 +9,11 @@ import {
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
+import {
+  PLATFORM_LOGIN_ROLES,
+  PROVIDER_LOGIN_ROLES,
+  PROVIDER_OWNER_ROLES,
+} from "simetra/model"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import {
   POSTGRES_LOCK_FILE,
@@ -175,6 +180,59 @@ describe("garage.toml of the postgres stack", () => {
     const toml = read("garage.toml")
     expect(toml).not.toMatch(/^\s*rpc_secret\s*=/m)
     expect(toml).not.toMatch(/^\s*admin_token\s*=/m)
+  })
+})
+
+describe("Simetra identity of the postgres stack", () => {
+  const script = readFileSync(
+    fileURLToPath(new URL("../../../../scripts/db-stack.mjs", import.meta.url)),
+    "utf8"
+  )
+  const secretNames = [
+    "SIMETRA_OWNER_DEV_PASSWORD",
+    "SIMETRA_RUNTIME_DEV_PASSWORD",
+    "SIMETRA_AUTH_DEV_PASSWORD",
+  ]
+
+  it("the stack project file selects the postgres provider", () => {
+    expect(JSON.parse(read("project/project.meta.json"))).toMatchObject({
+      database: { provider: "postgres" },
+    })
+  })
+
+  it("dev-secrets.env holds a password for each login role", () => {
+    const secrets = read("dev-secrets.env")
+    for (const name of secretNames)
+      expect(secrets).toMatch(new RegExp(`^${name}=\\S+$`, "m"))
+  })
+
+  // Імена в скрипті без залежностей — літерали; тест тримає їх рівними даним T0
+  it("the script names the login roles of the T0 data and a secret for each", () => {
+    for (const role of [
+      PROVIDER_OWNER_ROLES.postgres,
+      PROVIDER_LOGIN_ROLES.postgres[0],
+      PLATFORM_LOGIN_ROLES.runtime,
+    ])
+      expect(script).toContain(`role: "${role}"`)
+    for (const name of secretNames) expect(script).toContain(`"${name}"`)
+  })
+
+  it("startPostgres runs roles, then passwords, then the Better Auth step", () => {
+    const body = script.slice(script.indexOf("async function startPostgres"))
+    const order = [
+      "dev-environment.sql",
+      '"roles"',
+      "ALTER ROLE",
+      "better-auth-cli.ts",
+    ].map((marker) => body.indexOf(marker))
+    expect(order.every((i) => i >= 0)).toBe(true)
+    expect([...order].sort((a, b) => a - b)).toEqual(order)
+  })
+
+  it("passes passwords through stdin and DSNs through the environment, never argv", () => {
+    expect(script).not.toMatch(/"-v",\s*`/)
+    expect(script).toContain("SIMETRA_SUPERUSER_URL")
+    expect(script).toContain("SIMETRA_AUTH_URL")
   })
 })
 

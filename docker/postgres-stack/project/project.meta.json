@@ -1,0 +1,4 @@
+{
+  "name": "simetra-dev",
+  "database": { "provider": "postgres" }
+}
