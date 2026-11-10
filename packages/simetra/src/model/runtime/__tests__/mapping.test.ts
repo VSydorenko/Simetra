@@ -1152,6 +1152,22 @@ describe("readResultToWire / readResultFromWire: known markers", () => {
     ).toStrictEqual({ rows: [row] })
   })
 
+  // Логічний рядок завжди несе ключ: реквізит з іменем `known` не робить
+  // його маркером.
+  it("encodes a row with the key and an attribute named known as a row", () => {
+    const known = catalogEntryAttribute({
+      name: "known",
+      column: "known_col",
+      type: "Integer",
+    })
+    const entry = { ...reader, attributes: [...reader.attributes, known] }
+    expect(
+      readResultToWire(catalogIndex([entry]), list, {
+        rows: [{ ...row, known: 1 }],
+      })
+    ).toStrictEqual({ rows: [{ ...wireRow, known_col: 1 }] })
+  })
+
   it.each<[string, unknown]>([
     ["a negative marker", -1],
     ["a fractional marker", 1.5],

@@ -934,7 +934,8 @@ describe("createFakeSource: known markers", () => {
       epoch: EPOCH,
       known: EPOCH,
     })
-    expect(row).toMatchObject({ $known: 0 })
+    // Копію несе колонка передачі з поточним значенням.
+    expect(row).toMatchObject({ $known: 0, owner_org_id: S })
     expect(row).not.toHaveProperty("title")
     expect(Object.keys(row as object)).toHaveLength(2)
   })

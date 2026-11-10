@@ -132,12 +132,27 @@ describe("receiver writes go through Writer.apply (B1c Р7, Р12)", () => {
     const own = program
       .getSourceFile(writerFile)!
       .statements.filter(
-        (s) =>
+        (s): s is ts.FunctionDeclaration =>
           ts.isFunctionDeclaration(s) &&
           s.name !== undefined &&
           INTERNAL.has(s.name.text)
       )
     expect(own).toHaveLength(INTERNAL.size)
+    // Без експорту внутрішніх: інакше посилання-значення (`const f =
+    // removeKeys`) в іншому файлі обійшло б перевірку викликів нижче.
+    for (const s of own)
+      expect(ts.getCombinedModifierFlags(s) & ts.ModifierFlags.Export).toBe(0)
+    const reexported = program
+      .getSourceFile(writerFile)!
+      .statements.flatMap((s) =>
+        ts.isExportDeclaration(s) &&
+        s.exportClause !== undefined &&
+        ts.isNamedExports(s.exportClause)
+          ? s.exportClause.elements.map((e) => (e.propertyName ?? e.name).text)
+          : []
+      )
+      .filter((name) => INTERNAL.has(name))
+    expect(reexported).toEqual([])
     expect(
       outsideUses(program, files, writerFile, (f) => relative(DATA, f))
     ).toEqual([])

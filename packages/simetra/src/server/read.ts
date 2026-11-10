@@ -3,6 +3,7 @@ import {
   UUID_TEXT,
   isTextEncodedType,
   LIMIT_REASONS,
+  KNOWN_MARKER,
   ORDER_BY_MAX,
   READ_COUNT_CAP,
   TABULAR_LINES_MAX,
@@ -26,7 +27,6 @@ import {
 } from "simetra/model"
 import type { z } from "zod"
 import {
-  KNOWN_MARKER,
   decodeReadRow,
   decodeReadRowOrMarker,
   decodeSafeInteger,

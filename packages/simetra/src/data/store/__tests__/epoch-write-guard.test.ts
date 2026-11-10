@@ -39,6 +39,8 @@ type Form =
   | "row-spread"
 
 // Місце, де запис епохи поза `effectiveEpoch` правильний, — з причиною.
+// Ключ — `файл функція форма`, а для `.set` — ще й `<мапа>.set`: виняток
+// покриває один стік, а не все тіло функції.
 const ALLOWED: Record<string, string> = {
   // Вхідний рядок з відповіді джерела — ще не стан: епоху несе відповідь,
   // а правило застосовує запис у сховище.
@@ -48,9 +50,10 @@ const ALLOWED: Record<string, string> = {
   "source.ts rowFromMarker row-spread": "a marker confirms the held row",
   // Копія запису з власною епохою без змін — лише `complete` скидається.
   "section-store.ts resetCompleteness row-spread": "copies its own epoch",
-  "section-store.ts resetCompleteness row-value": "copies its own epoch",
+  "section-store.ts resetCompleteness row-value sections.set":
+    "copies its own epoch",
   // Локальна мапа рядків відповіді, не стан: у сховище вони йдуть через `put`.
-  "writer.ts readFullAgain row-value": "a local map of answer rows",
+  "writer.ts readFullAgain row-value got.set": "a local map of answer rows",
 }
 
 const BASE_OPTIONS: ts.CompilerOptions = {
@@ -96,6 +99,9 @@ const setsEpoch = (p: ts.ObjectLiteralElementLike) =>
   propName(p) === "versionEpoch" &&
   isEffectiveEpoch(p.initializer)
 
+// Найближча функція: безіменна стрілка чи вираз функції без зв'язку з
+// іменем — анонімна (""), а не зовнішня функція, тож виняток зовнішньої не
+// покриває замикання (на кшталт `apply`, яке вона повертає).
 function enclosingFunction(n: ts.Node): string {
   for (let p: ts.Node | undefined = n.parent; p; p = p.parent) {
     if (
@@ -104,14 +110,15 @@ function enclosingFunction(n: ts.Node): string {
       ts.isIdentifier(p.name)
     )
       return p.name.text
-    if (
-      ts.isVariableDeclaration(p) &&
-      ts.isIdentifier(p.name) &&
-      p.initializer !== undefined &&
-      (ts.isArrowFunction(p.initializer) ||
-        ts.isFunctionExpression(p.initializer))
-    )
-      return p.name.text
+    if (ts.isArrowFunction(p) || ts.isFunctionExpression(p)) {
+      if (ts.isFunctionExpression(p) && p.name !== undefined) return p.name.text
+      const bound = p.parent
+      return ts.isVariableDeclaration(bound) &&
+        bound.initializer === p &&
+        ts.isIdentifier(bound.name)
+        ? bound.name.text
+        : ""
+    }
   }
   return ""
 }
@@ -128,7 +135,12 @@ interface Scan {
  * and type declarations do not count, and a row is recognised by its type
  * (it carries `versionEpoch`), not by a variable name.
  */
-function scan(program: ts.Program, sf: ts.SourceFile, label: string): Scan {
+function scan(
+  program: ts.Program,
+  sf: ts.SourceFile,
+  label: string,
+  allowed: Record<string, string> = ALLOWED
+): Scan {
   const checker = program.getTypeChecker()
   const result: Scan = { violations: [], ruled: 0 }
 
@@ -175,16 +187,17 @@ function scan(program: ts.Program, sf: ts.SourceFile, label: string): Scan {
     return false
   }
 
-  const flag = (n: ts.Node, form: Form) => {
-    if (ALLOWED[`${label} ${enclosingFunction(n)} ${form}`] !== undefined)
+  const flag = (n: ts.Node, form: Form, detail?: string) => {
+    const at = `${label} ${enclosingFunction(n)} ${form}`
+    if (allowed[detail === undefined ? at : `${at} ${detail}`] !== undefined)
       return
     const line = sf.getLineAndCharacterOfPosition(n.getStart()).line + 1
     result.violations.push(`${label}:${line} ${form}`)
   }
-  const sink = (n: ts.Node, value: ts.Expression) => {
+  const sink = (n: ts.Node, value: ts.Expression, detail?: string) => {
     if (!epochCarrying(value)) return
     if (ruledValue(value)) result.ruled++
-    else flag(n, "row-value")
+    else flag(n, "row-value", detail)
   }
 
   const visit = (n: ts.Node): void => {
@@ -258,7 +271,13 @@ function scan(program: ts.Program, sf: ts.SourceFile, label: string): Scan {
         n.expression.expression.name.text === "lazyEpochs"
       )
     )
-      sink(n, n.arguments[1]!)
+      sink(
+        n,
+        n.arguments[1]!,
+        ts.isIdentifier(n.expression.expression)
+          ? `${n.expression.expression.text}.set`
+          : undefined
+      )
     if (
       ts.isCallExpression(n) &&
       ts.isPropertyAccessExpression(n.expression) &&
@@ -289,7 +308,7 @@ declare const rows: Map<string, Row>
 declare const Object: { assign(a: object, b: object): object }
 `
 
-function inlineScan(body: string): Scan {
+function inlineScan(body: string, allowed?: Record<string, string>): Scan {
   const name = "/virtual/case.ts"
   const text = `${PRELUDE}\nexport function write() {\n${body}\n}\n`
   const options = { ...BASE_OPTIONS, noLib: true }
@@ -301,7 +320,7 @@ function inlineScan(body: string): Scan {
   host.fileExists = (file) => file === name
   host.readFile = (file) => (file === name ? text : undefined)
   const program = ts.createProgram([name], options, host)
-  return scan(program, program.getSourceFile(name)!, "case.ts")
+  return scan(program, program.getSourceFile(name)!, "case.ts", allowed)
 }
 
 const forms = (s: Scan) => s.violations.map((v) => v.split(" ")[1])
@@ -382,6 +401,32 @@ describe("epoch write guard self-test", () => {
 
   it.each(CASES)("$form: passes `$good`", ({ good }) => {
     expect(inlineScan(good).violations).toEqual([])
+  })
+
+  describe("an allowlisted sink", () => {
+    const allowed = { "case.ts write row-value got.set": "the one sink" }
+    const GOT = "const got = new Map<string, Row>(); got.set(f, row)"
+
+    it("passes itself", () => {
+      expect(inlineScan(GOT, allowed).violations).toEqual([])
+    })
+
+    it("does not cover another sink of the same function", () => {
+      expect(forms(inlineScan(`${GOT}; e.row = row`, allowed))).toEqual([
+        "row-value",
+      ])
+    })
+
+    it("does not cover an anonymous closure of the same function", () => {
+      expect(
+        forms(
+          inlineScan(
+            `const got = new Map<string, Row>(); return () => { got.set(f, row) }`,
+            allowed
+          )
+        )
+      ).toEqual(["row-value"])
+    })
   })
 })
 

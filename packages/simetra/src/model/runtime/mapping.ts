@@ -877,7 +877,28 @@ function queryTarget(
 const isMarkerIndex = (value: unknown): value is number =>
   typeof value === "number" && Number.isSafeInteger(value) && value >= 0
 
-const MARKER = "$known"
+/** The key of a marker's position in a partial marker (P4-B spec §4.1). */
+export const KNOWN_MARKER = "$known"
+
+/**
+ * The marker rule of a wire row of an object read (P4-B spec §4.1, Рд40),
+ * shared by the client codec and the server decoder: an integer is a marker
+ * at that position of `known`; an object with `$known` and without the key
+ * column `keyColumn` is a partial marker with its copies in wire form.
+ * Anything else is a row — `undefined` — even with a `$known` column: a row
+ * always has its key. The position is returned as is; each side checks it.
+ */
+export function splitKnownMarker(
+  keyColumn: string,
+  raw: unknown
+): { known: unknown; copies: Record<string, unknown> } | undefined {
+  if (typeof raw === "number") return { known: raw, copies: {} }
+  if (!isPlainObject(raw) || own(raw, keyColumn) || !own(raw, KNOWN_MARKER)) {
+    return undefined
+  }
+  const { [KNOWN_MARKER]: known, ...copies } = raw
+  return { known, copies }
+}
 
 /**
  * Маркер у логічній формі відрізняє від рядка відсутність ключа: рядок
@@ -896,23 +917,21 @@ function encodeMarker(entry: CatalogEntry, marker: KnownMarker): unknown {
   }
   const copies = encodeRow(entry, marker.copies)
   // Колонка копії `$known` перезаписала б позицію маркера.
-  if (own(copies, MARKER)) throw new WireEncodeError("copies")
-  return Object.fromEntries([[MARKER, marker.known], ...Object.entries(copies)])
+  if (own(copies, KNOWN_MARKER)) throw new WireEncodeError("copies")
+  return Object.fromEntries([
+    [KNOWN_MARKER, marker.known],
+    ...Object.entries(copies),
+  ])
 }
 
 function decodeRowOrMarker(
   entry: CatalogEntry,
   raw: unknown
 ): LogicalRow | KnownMarker {
-  if (typeof raw === "number") {
-    if (!isMarkerIndex(raw)) throw new WireDecodeError(MARKER)
-    return { known: raw }
-  }
-  if (!isPlainObject(raw) || own(raw, entry.key) || !own(raw, MARKER)) {
-    return decodeRow(entry, raw as WireRow)
-  }
-  const { [MARKER]: known, ...copies } = raw
-  if (!isMarkerIndex(known)) throw new WireDecodeError(MARKER)
+  const marker = splitKnownMarker(entry.key, raw)
+  if (marker === undefined) return decodeRow(entry, raw as WireRow)
+  const { known, copies } = marker
+  if (!isMarkerIndex(known)) throw new WireDecodeError(KNOWN_MARKER)
   return Object.keys(copies).length === 0
     ? { known }
     : { known, copies: decodeRow(entry, copies) }

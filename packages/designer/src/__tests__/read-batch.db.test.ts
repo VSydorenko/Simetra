@@ -303,6 +303,16 @@ describe("read batch with known over the engine target", () => {
     expect(
       await conditional(rt, env.me.session, card, known(OTHER_EPOCH, [cardRow]))
     ).toEqual([cardRow])
+    // Картка рядка, який ховає RLS, з його версією в `known`: ні рядка, ні
+    // маркера — маркер підтвердив би існування невидимого рядка.
+    expect(
+      await conditional(
+        rt,
+        env.me.session,
+        { object: GAUGE, id: hidden! },
+        known(epoch, [{ ref: hidden, version: hiddenVersion }])
+      )
+    ).toEqual([])
   })
 
   it("conditional list matches the unconditional one for limit and offset", async () => {
