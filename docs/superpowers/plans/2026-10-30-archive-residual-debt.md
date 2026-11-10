@@ -127,6 +127,16 @@
   кандидат — `CREATE INDEX CONCURRENTLY` і `DROP INDEX CONCURRENTLY` поза
   транзакцією.
 
+- **`ADD COLUMN … NOT NULL` без default поза сторожем раннера.** Порожня на
+  плані таблиця, у якій рядки з'явилися до застосування, дає сирий `23502`
+  (`apply.step-failed`): відбиток даних не бачить, а перевірка перед кроком
+  (поле `notNull`) стоїть лише на `SET NOT NULL`. Та сама форма — колонка,
+  яку план знімає й додає знову: pg-delta замінює зміну виразу генерованої
+  колонки парою `DROP COLUMN` + `ADD COLUMN … NOT NULL`, і план її `NULL` не
+  рахує (`packages/designer/src/schema-engine/__tests__/apply-backfill.db.test.ts`
+  фіксує форму). Кандидат: перевірка перед кроком і для `ADD COLUMN … NOT
+  NULL` (`packages/simetra/src/schema/apply/backfill.ts`, `withNotNullChecks`).
+
 ## 2. Двигун схеми й апстрім
 
 - **Партиції й успадкування** на закріпленому `@supabase/pg-delta`: дрейф
