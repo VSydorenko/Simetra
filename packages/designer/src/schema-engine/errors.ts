@@ -36,3 +36,19 @@ export class ShadowServerError extends Error {
     super("the shadow could not be created or reached", { cause })
   }
 }
+
+/** Шаблон тіні профілю відсутній або не запечатаний суперкористувачем: його готує `simetra roles`. */
+export class ShadowTemplateMissingError extends Error {
+  override name = "ShadowTemplateMissingError"
+  constructor(readonly template: string) {
+    super(`the shadow template database "${template}" is missing or not sealed`)
+  }
+}
+
+/** Профіль `postgres` будує тіні з шаблону кластера цілі й окремого сервера тіней не має. */
+export class ShadowBaseUnsupportedError extends Error {
+  override name = "ShadowBaseUnsupportedError"
+  constructor() {
+    super("a separate shadow server is not supported with the postgres profile")
+  }
+}

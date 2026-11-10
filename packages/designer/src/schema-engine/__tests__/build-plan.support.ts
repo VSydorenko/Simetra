@@ -224,6 +224,7 @@ export const stepMatching = (artifact: PlanArtifact, pattern: RegExp) =>
  * запиті фактів розширення справжній читач підмінено, решта — як є.
  */
 export const readerWithoutPlpgsqlCheck: ApplyDatabase = {
+  statement: (target, sql) => dbs.reader.statement(target, sql),
   transaction: (target, end, fn) =>
     dbs.reader.transaction(target, end, (tx) =>
       fn({

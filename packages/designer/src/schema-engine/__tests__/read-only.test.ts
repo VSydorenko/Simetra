@@ -34,13 +34,27 @@ function offenders(dir: string, pattern: RegExp): string[] {
 describe("target reads carry no session state", () => {
   // Сторож запитів сам називає `default_transaction_read_only`, щоб
   // відмовити на ньому, тож шукається встановлення, а не ім'я
+  const SESSION_STATE =
+    /set\s+(?:session\s+)?default_transaction_read_only|default_transaction_read_only\s*(?:=|to\b)|onConnect|\breadOnlyPool\b/gi
+  const APPLY_DATABASE = join("schema-engine", "apply-database.ts")
+
   it("no session-level read-only switch or connect hook in the designer", () => {
     expect(
-      offenders(
-        SRC,
-        /set\s+(?:session\s+)?default_transaction_read_only|default_transaction_read_only\s*(?:=|to\b)|onConnect|\breadOnlyPool\b/i
+      offenders(SRC, new RegExp(SESSION_STATE.source, "i")).filter(
+        (path) => path !== APPLY_DATABASE
       )
     ).toEqual([])
+  })
+
+  // Лише порт запису знімає режим `off` — одним рядком прелюдії `statement`
+  // (окреме з'єднання підготовки кластера). Рахується збіг, а не файл: будь-яке
+  // друге перемикання, `onConnect` чи читальний пул у цьому файлі теж провалить
+  it("apply-database has only the statement prelude's read-only switch", () => {
+    const text = readFileSync(join(SRC, APPLY_DATABASE), "utf8")
+    expect(text.match(SESSION_STATE)).toEqual([
+      "SET default_transaction_read_only",
+    ])
+    expect(text).toContain('"SET default_transaction_read_only = off",')
   })
 
   // Із типовим параметром теж: `pool.query<Row>(…)` — той самий сирий запит
@@ -56,7 +70,7 @@ describe("target reads carry no session state", () => {
   // пул даних — роль входу рантайму, не мігратор, і за запобіжниками бази
   // розробника (`io/data.ts`). Рахується кількість, а не файли: другий пул
   // у дозволеному файлі теж мусить провалити перевірку
-  it("pools are created only by the guard, the shadow, the apply runner and the data resource", () => {
+  it("pools are created only by the guard, the shadows, the apply runner and the data resource", () => {
     const counts: Record<string, number> = {}
     for (const path of sources(SRC)) {
       const n = readFileSync(path, "utf8").match(/new pg\.Pool\(/g)?.length
@@ -66,6 +80,7 @@ describe("target reads carry no session state", () => {
       [join("io", "data.ts")]: 1,
       [join("schema-engine", "apply-database.ts")]: 1,
       [join("schema-engine", "pg-delta", "adapter.ts")]: 1,
+      [join("schema-engine", "pg-delta", "template-shadow.ts")]: 1,
       [join("schema-engine", "read-only.ts")]: 1,
     })
   })

@@ -1,9 +1,9 @@
 import pg from "pg"
 import { describe, expect, it } from "vitest"
 import {
-  SUPABASE_BASE_EXTENSIONS,
-  SUPABASE_PUBLIC_SCHEMA_GRANTS,
-} from "../engine/provider/supabase"
+  PROVIDER_BASE_EXTENSIONS,
+  PROVIDER_PUBLIC_SCHEMA_GRANTS,
+} from "../engine/provider/presets"
 import { testDatabaseUrl } from "../../../test/db/connection"
 
 /**
@@ -38,7 +38,7 @@ describe("the provider preset matches the stack image", () => {
         WHERE n.nspname = 'public' AND a.grantee <> n.nspowner`
     )
     const actual = rows.map((r) => `${r.grantee}=${r.privilege}`)
-    const preset = SUPABASE_PUBLIC_SCHEMA_GRANTS.flatMap((g) =>
+    const preset = PROVIDER_PUBLIC_SCHEMA_GRANTS.supabase.flatMap((g) =>
       g.privileges.map((p) => `${g.grantee}=${p}`)
     )
     expect(actual.sort(byCodePoint)).toEqual(preset.sort(byCodePoint))
@@ -49,7 +49,7 @@ describe("the provider preset matches the stack image", () => {
       `SELECT extname AS name, extnamespace::regnamespace::text AS schema
          FROM pg_extension`
     )
-    for (const ext of SUPABASE_BASE_EXTENSIONS)
+    for (const ext of PROVIDER_BASE_EXTENSIONS.supabase)
       expect(rows).toContainEqual({ name: ext.name, schema: ext.schema })
   })
 })

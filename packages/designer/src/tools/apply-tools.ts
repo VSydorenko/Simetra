@@ -15,6 +15,7 @@ import {
 import {
   buildPlan,
   checkPermissions,
+  checkOwnerAttributes,
   checkPlatformRoles,
   desiredForApply,
   executePlan,
@@ -130,6 +131,7 @@ type ApplyRun =
   | { outcome: ExecuteOutcome }
   | { shadowFailed: EngineDiagnostic[] }
   | { rolesRefused: EngineDiagnostic[] }
+  | { unsupported: Diagnostic }
 
 export interface ApplyData {
   status: "committed" | "rolledBack"
@@ -564,6 +566,15 @@ export const applyTool = defineTool({
       required(database),
       "apply",
       async (db): Promise<ApplyRun> => {
+        // Профіль `postgres` не має окремого сервера тіней (Р9): відмова до
+        // будь-якого звернення до бази, і для застосування, і для репетиції
+        if (
+          artifact.scope.provider === "postgres" &&
+          db.shadowBase !== undefined
+        )
+          return {
+            unsupported: diagnostic("plan.shadow-base-unsupported", "", ""),
+          }
         if (input.rehearse !== true)
           return {
             outcome: await executePlan(writer, db.target, artifact, {
@@ -576,13 +587,19 @@ export const applyTool = defineTool({
         // з'єднанні, тож бажану тінь будують до відкриття транзакції цілі
         // (спека промоції §7.2): під замками плану її не будують
         const desired = await desiredForApply(model)
+        // Р10: роль без BYPASSRLS — відмова до платформних ролей і до створення тіні
+        const ownerGate = await (
+          await applyDatabase({ readOnly: true })
+        ).transaction(db.target, "rollback", checkOwnerAttributes)
+        if (ownerGate !== undefined) return { rolesRefused: [ownerGate] }
         // Платформні ролі — до тіні, як у плані (спека designer §3.2)
         const roles = await checkPlatformRoles(
           await applyDatabase({ readOnly: true }),
           db.target,
           db.shadowBase,
           desired.sql,
-          await loadSqlParser()
+          await loadSqlParser(),
+          artifact.scope.provider
         )
         if (roles.refusal !== undefined) return { rolesRefused: roles.refusal }
         const shadow = await engine.withDesiredShadow(
@@ -608,6 +625,8 @@ export const applyTool = defineTool({
     if (!executed.ok) return refusedWith([executed.diagnostic])
     if ("shadowFailed" in executed.value)
       return refusedWith(executed.value.shadowFailed.map(fromEngine))
+    if ("unsupported" in executed.value)
+      return refusedWith([executed.value.unsupported])
     if ("rolesRefused" in executed.value)
       return refusedWith(executed.value.rolesRefused.map(fromEngine))
     const outcome = executed.value.outcome

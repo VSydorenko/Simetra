@@ -243,7 +243,7 @@ Attribute properties (an element of `attributes`):
 Object properties:
 
 - `indexes` on a Catalog, a Document and their tabular sections: a list of
-  composite indexes, each `{ "attributes": [name | { "name": …, "order": "desc" }] }`.
+  composite indexes, each `{ "attributes": [name | { "name": …, "order": "desc" }] }`; like `indexed`, a list-order index: `references/list-order-indexes.md`.
 - `publicRead`: `"authenticated"` or `"anon"` on kinds with row-level security.
 - Project file: `storageBuckets`, a list of `{ "bucket": …, "scopeKind": … }`.
 
@@ -388,9 +388,9 @@ The generated SQL grants to platform roles (`simetra_command`) that live in the
 cluster, not in the database, so `plan` does not create them. Without one on
 the target or the shadow server, `plan`, `diff` and `rehearse` refuse with
 `plan.platform-role-missing`: run `simetra roles` once with a role that has
-`CREATEROLE` (with a project file it also creates the login role: "Platform
-roles" in `references/people-and-rights.md`). It only checks an existing role;
-an unsafe shape (`plan.platform-role-shape`) is fixed by hand, not by `roles`.
+`CREATEROLE` ("Platform roles" in `references/people-and-rights.md`; `postgres`
+needs a superuser and no separate shadow server). It only checks an existing role; an unsafe
+shape (`plan.platform-role-shape`) is fixed by hand, not by `roles`.
 
 `apply` applies exactly that file in one transaction. It needs the `planHash`
 of the reviewed plan, confirmation (`--yes`, MCP `confirm: true`), and in

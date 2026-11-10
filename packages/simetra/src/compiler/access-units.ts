@@ -44,7 +44,6 @@ import {
   type RightsPredicate,
 } from "./rights/predicates"
 import { sha256HexSync } from "./sha256"
-import { grantRole } from "./sql/execute-grants"
 import type { SqlParser } from "./sql/parse"
 import { generatedUnit, type SqlUnit } from "./sql/units"
 import { isDeclaredTable, sqlLiteral } from "./stages/model"
@@ -307,18 +306,20 @@ export function tableGrants(
 ): string[] {
   const apiRoles = PROVIDER_API_ROLES[provider]
   const target = `TABLE ${qualified(table)}`
-  const commandRole = quoteIdent(grantRole("command", provider))
+  const commandRole = quoteIdent(PLATFORM_ROLES.command)
   const columns = (names: readonly string[]) =>
     names.map((name) => quoteIdent(name)).join(", ")
   return [
     `REVOKE ALL ON ${target} FROM PUBLIC;`,
-    ...Object.values(apiRoles).map(
-      (role) => `REVOKE ALL ON ${target} FROM ${quoteIdent(role)};`
-    ),
-    ...readers.map(
-      (purpose) =>
-        `GRANT SELECT ON ${target} TO ${quoteIdent(apiRoles[purpose])};`
-    ),
+    ...Object.values(apiRoles)
+      .filter((role): role is string => role !== null)
+      .map((role) => `REVOKE ALL ON ${target} FROM ${quoteIdent(role)};`),
+    ...readers.flatMap((purpose) => {
+      const role = apiRoles[purpose]
+      return role === null
+        ? []
+        : [`GRANT SELECT ON ${target} TO ${quoteIdent(role)};`]
+    }),
     `GRANT SELECT ON ${target} TO ${commandRole};`,
     ...(command === undefined
       ? []

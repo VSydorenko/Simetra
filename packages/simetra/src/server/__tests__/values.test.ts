@@ -609,4 +609,21 @@ describe("on the compiled catalog", () => {
       encodeItem(ticket, create(), { values: { code: "T-1234567😀" } })
     ).toEqual(invalid("code"))
   })
+
+  // Найменування — NOT NULL DEFAULT '': явний null відхиляє команда до бази,
+  // пропущене значення лишає типове
+  it.each([
+    ["create", create()],
+    ["update", update()],
+  ])("refuses an explicit null description on %s", (_, op) => {
+    expect(encodeItem(ticket, op, { values: { description: null } })).toEqual(
+      invalid("description")
+    )
+  })
+
+  it("leaves a missing description to the database default", () => {
+    expect(encodeItem(ticket, create(), { values: { code: "T-1" } })).toEqual({
+      item: { id: ID, code: "T-1" },
+    })
+  })
 })

@@ -7,7 +7,7 @@
  * контрактний тест адаптера.
  */
 
-import { PROVIDER_SCHEMAS, quoteIdent } from "simetra/model"
+import { PROVIDER_SCHEMAS } from "simetra/model"
 
 /**
  * Розширення, якими межа не керує: їх ставить провайдер, а не застосунок, тож
@@ -61,43 +61,6 @@ export const SUPABASE_BASE_EXTENSIONS: readonly {
   { name: "uuid-ossp", schema: "extensions" },
   { name: "pg_stat_statements", schema: "extensions" },
 ]
-
-const granteeSql = (role: string) =>
-  role === "PUBLIC" ? "PUBLIC" : quoteIdent(role)
-
-/**
- * Засів тіні базовим станом провайдера: тінь створюється з `template0`, тож
- * без засіву `public` має лише `USAGE` для `PUBLIC`, а базових розширень немає.
- * Робоча база цей стан уже має, тож у `renderDesiredState` засіву немає —
- * його подає лише адаптер тіні, окремим файлом перед бажаним станом.
- */
-export function renderProviderSeed(): string {
-  // Один оператор на набір привілеїв: отримувачі з різними наборами не мають
-  // тихо отримати об'єднання
-  const byPrivileges = new Map<string, string[]>()
-  for (const g of SUPABASE_PUBLIC_SCHEMA_GRANTS) {
-    const key = g.privileges.join(", ")
-    byPrivileges.set(key, [
-      ...(byPrivileges.get(key) ?? []),
-      granteeSql(g.grantee),
-    ])
-  }
-  return [
-    ...[...byPrivileges].map(
-      ([privileges, grantees]) =>
-        `GRANT ${privileges} ON SCHEMA public TO ${grantees.join(", ")};`
-    ),
-    ...SUPABASE_BASE_EXTENSIONS.map(
-      (ext) =>
-        `CREATE EXTENSION IF NOT EXISTS ${quoteIdent(ext.name)} WITH SCHEMA ${quoteIdent(ext.schema)};`
-    ),
-  ]
-    .map(
-      (line) => `${line}
-`
-    )
-    .join("")
-}
 
 /** Тригери подій базового стану (LIKE-шаблони). */
 export const SUPABASE_EVENT_TRIGGERS: readonly string[] = [

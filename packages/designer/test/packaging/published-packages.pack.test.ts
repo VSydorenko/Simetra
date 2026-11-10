@@ -216,7 +216,10 @@ async function packedSources(
   )
   const sources = new Map<string, string>()
   for (const f of files) {
-    const { stdout } = await exec("tar", ["-xOzf", tarball, `package/${f}`])
+    // Бандл ярусу з WASM-парсером більший за типові 1 МБ буфера
+    const { stdout } = await exec("tar", ["-xOzf", tarball, `package/${f}`], {
+      maxBuffer: 128 * 1024 * 1024,
+    })
     sources.set(f, stdout)
   }
   return sources
@@ -329,6 +332,45 @@ describe("simetra/data", () => {
     expect(specifiers).toContain("simetra/model")
     expect(specifiers.filter((s) => !allowed.has(s))).toEqual([])
   })
+})
+
+// Better Auth і kysely — тестова залежність `simetra` (рішення Р2): жоден
+// тарбол не оголошує їх і жоден файл `dist` не імпортує
+describe("test-only auth dependencies", () => {
+  const BANNED = /^(?:better-auth|kysely)(?:\/|$)/
+
+  it.each(["simetra", "designer"] as const)(
+    "the %s tarball declares neither better-auth nor kysely",
+    async (name) => {
+      const m = await readPackedManifest(tarballs[name])
+      for (const field of [
+        "dependencies",
+        "peerDependencies",
+        "optionalDependencies",
+      ])
+        expect(
+          Object.keys((m[field] as object | undefined) ?? {}).filter((d) =>
+            BANNED.test(d)
+          ),
+          field
+        ).toEqual([])
+    }
+  )
+
+  it.each(["simetra", "designer"] as const)(
+    "no file of dist in the %s tarball imports them",
+    async (name) => {
+      const sources = [
+        ...(await packedSources(tarballs[name], "dist/", ".js")).values(),
+        ...(await packedSources(tarballs[name], "dist/", ".d.ts")).values(),
+      ]
+      // Без файлів перевірка нічого б не казала
+      expect(sources.length).toBeGreaterThan(0)
+      expect(
+        sources.flatMap(bareSpecifiers).filter((s) => BANNED.test(s))
+      ).toEqual([])
+    }
+  )
 })
 
 describe("simetra/data in a pnpm host", () => {

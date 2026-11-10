@@ -297,7 +297,15 @@ describe("readRoleOf", () => {
     [[] as const, undefined],
   ])("reads purposes %j as %s", (purposes, role) => {
     expect(
-      readRoleOf("supabase", { supabase: purposes }, PROVIDER_API_ROLES)
+      readRoleOf(
+        "supabase",
+        { supabase: purposes, postgres: [] },
+        PROVIDER_API_ROLES
+      )
     ).toBe(role)
+  })
+
+  it("reads under the user role of the postgres profile", () => {
+    expect(readRoleOf("postgres")).toBe("simetra_user")
   })
 })

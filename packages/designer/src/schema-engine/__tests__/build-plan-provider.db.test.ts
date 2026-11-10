@@ -514,6 +514,7 @@ CREATE TRIGGER notes_note BEFORE UPDATE ON app.notes FOR EACH ROW WHEN (NEW.note
       const after = await compiled({ [PARTY]: note(SHORT) })
       // Порт копії, що губить з'єднання на першому ж запиті транзакції
       const losing: ApplyDatabase = {
+        statement: (target, sql) => dbs.scratch.statement(target, sql),
         transaction: (db, end, fn) =>
           dbs.scratch.transaction(db, end, () =>
             fn({

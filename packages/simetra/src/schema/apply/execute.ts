@@ -27,6 +27,7 @@ import {
 import { applyDiagnostic } from "./diagnostic"
 import { differencePaths } from "./drift"
 import { environmentMismatch, readGlobalDefaultPrivileges } from "./environment"
+import { checkOwnerAttributes } from "./owner-gate"
 import {
   blindWarning,
   CheckNameTaken,
@@ -241,6 +242,14 @@ export type ExecuteOutcome =
  * (Р-A4-19): звірка хешу без TOCTOU і жодних двох запусків разом.
  */
 export const APPLY_ADVISORY_LOCK = "1397312837, 1"
+
+/**
+ * Ключ advisory lock підготовки кластера профілю `postgres` (`roles`): ключ
+ * застосування й `2`. Інший ключ, бо замок кластера береться у службовій базі
+ * і тримається обома фазами `roles`, а замок застосування — у базі цілі й
+ * лише на час застосування.
+ */
+export const CLUSTER_ADVISORY_LOCK = "1397312837, 2"
 
 /**
  * Порядок блоків кроків за походженням (спека промоції §7.2):
@@ -700,6 +709,10 @@ async function runAttempt(
     const unsupported = await serverVersionRefusal(tx)
     if (unsupported !== undefined)
       throw new AttemptStop("refused", [unsupported])
+    // Р10: власник без BYPASSRLS після плану (ALTER ROLE між планом і
+    // застосуванням) — відмова до першого кроку, у ledger нічого
+    const ownerGate = await checkOwnerAttributes(tx)
+    if (ownerGate !== undefined) throw new AttemptStop("refused", [ownerGate])
   }
 
   // 1a. План побудовано для своєї ролі: від неї залежать замки (право на
@@ -730,7 +743,7 @@ async function runAttempt(
   // 3. Роллю API схему не змінюють (спека П2 §8.6)
   const apiRoles: readonly string[] = Object.values(
     PROVIDER_API_ROLES[plan.scope.provider]
-  )
+  ).filter((role): role is string => role !== null)
   if (apiRoles.includes(who.role))
     throw stop("refused", "apply.api-role", { role: who.role })
 

@@ -4,8 +4,8 @@ import { testDatabaseUrl } from "../../../../simetra/test/support"
 /**
  * Облік тіней, які двигун створив у цьому тестовому файлі. «Наша» тінь —
  * лише та, чию провізію записано тут: нове ім'я на стеку ще не наше,
- * паралельна сесія створює такі самі. Записує тільки обгортка
- * `provisionCoLocatedShadow` із `db-setup.ts`; ізоляція файлів vitest дає
+ * паралельна сесія створює такі самі. Записують тільки обгортки
+ * `provisionCoLocatedShadow` і `provisionTemplateShadow` із `db-setup.ts`; ізоляція файлів vitest дає
  * кожному файлу свій екземпляр модуля, тож облік — на файл.
  *
  * Модуль свідомо не імпортує `./db`: той тягне адаптер, а адаптер —
@@ -23,7 +23,8 @@ const inFlight = new Set<Promise<unknown>>()
 
 /**
  * Records the name of a shadow the engine provisions. Called only by the
- * `provisionCoLocatedShadow` wrapper in `db-setup.ts`; returns `p` unchanged.
+ * `provisionCoLocatedShadow` and `provisionTemplateShadow` wrappers in
+ * `db-setup.ts`; returns `p` unchanged.
  */
 export function recordProvision<T extends { name: string }>(
   p: Promise<T>

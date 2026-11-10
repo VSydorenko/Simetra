@@ -210,12 +210,16 @@ async function sweepDatabase(
           [creating.source]
         )
       ).rows
+      // `datistemplate`: тегову базу-шаблон Postgres не дає видалити, доки
+      // ознаку не знято
+      const foundDatabases = (
+        await client.query<{ name: string; template: boolean }>(
+          "select datname as name, datistemplate as template from pg_database where datname ~ $1 order by 1",
+          [databases.source]
+        )
+      ).rows
       const found = {
-        databases: await names(
-          client,
-          "select datname as name from pg_database where datname ~ $1 order by 1",
-          databases.source
-        ),
+        databases: foundDatabases.map((row) => row.name),
         roles: await names(
           client,
           "select rolname as name from pg_roles where rolname ~ $1 order by 1",
@@ -235,9 +239,8 @@ async function sweepDatabase(
         await tryQuery(client, "SELECT pg_terminate_backend($1)", [pid])
       const id = (name: string): string => client.escapeIdentifier(name)
       // Бази спершу: роль, що володіє базою, не видалиться
-      for (const name of found.databases)
-        if (await tryQuery(client, `DROP DATABASE ${id(name)} WITH (FORCE)`))
-          dropped.push(name)
+      for (const { name, template } of foundDatabases)
+        if (await tryDrop(client, name, template)) dropped.push(name)
       for (const name of found.roles)
         if (
           await tryQuery(
@@ -252,6 +255,25 @@ async function sweepDatabase(
   } finally {
     await client.end()
   }
+}
+
+/**
+ * Drops the tagged database `name`; a template database first loses its
+ * `datistemplate` flag, because Postgres refuses to drop a template. Takes the
+ * client by the two members it uses so a test can pass a stand-in.
+ */
+export async function dropRunDatabase(
+  client: {
+    query(text: string): Promise<unknown>
+    escapeIdentifier(name: string): string
+  },
+  name: string,
+  isTemplate: boolean
+): Promise<void> {
+  const id = client.escapeIdentifier(name)
+  if (isTemplate)
+    await client.query(`ALTER DATABASE ${id} WITH IS_TEMPLATE false`)
+  await client.query(`DROP DATABASE ${id} WITH (FORCE)`)
 }
 
 /**
@@ -310,7 +332,8 @@ export function manualSweepSql(tag: string, p: TestProvider): string {
   const { databases, roles } = runObjectPatterns(tag)
   return [
     `-- as ${TEST_STACKS[p].superuserName}, connected to database postgres; run the generated statements`,
-    `SELECT format('DROP DATABASE %I WITH (FORCE);', datname) FROM pg_database WHERE datname ~ '${databases.source}';`,
+    // `IS_TEMPLATE false` безпечний і для звичайної бази, а шаблон без нього не видалиться
+    `SELECT format('ALTER DATABASE %I WITH IS_TEMPLATE false; DROP DATABASE %I WITH (FORCE);', datname, datname) FROM pg_database WHERE datname ~ '${databases.source}';`,
     `SELECT format('DROP OWNED BY %I; DROP ROLE %I;', rolname, rolname) FROM pg_roles WHERE rolname ~ '${roles.source}';`,
   ].join("\n")
 }
@@ -355,6 +378,20 @@ async function tryQuery(
     return true
   } catch (error) {
     process.stderr.write(`${sql}: ${(error as Error).message}\n`)
+    return false
+  }
+}
+
+async function tryDrop(
+  client: pg.Client,
+  name: string,
+  template: boolean
+): Promise<boolean> {
+  try {
+    await dropRunDatabase(client, name, template)
+    return true
+  } catch (error) {
+    process.stderr.write(`drop database ${name}: ${(error as Error).message}\n`)
     return false
   }
 }

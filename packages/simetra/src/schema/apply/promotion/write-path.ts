@@ -182,14 +182,15 @@ from found group by schema, name, t_ord order by t_ord
 /**
  * Привілеї ролі `role` на таблицях `tables` (старі імена — так їх бачить
  * ціль); таблиця без привілеїв у відповідь не входить. Роль, якої в базі
- * немає, привілеїв не має. Викликач відкриває транзакцію `READ ONLY` на
+ * немає (чи профіль її не має, `null`), привілеїв не має. Викликач відкриває транзакцію `READ ONLY` на
  * цілі. Порядок — порядок `tables`.
  */
 export async function readServiceAccess(
   tx: ApplyTransaction,
-  p: { tables: readonly TableName[]; role: string }
+  p: { tables: readonly TableName[]; role: string | null }
 ): Promise<{ table: TableName; privileges: string[] }[]> {
-  if (p.tables.length === 0) return []
+  // Профіль без сервісної ролі: забирати з неї нічого
+  if (p.tables.length === 0 || p.role === null) return []
   const rows = await tx.query<{
     schema: string
     name: string

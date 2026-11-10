@@ -51,6 +51,7 @@ B1c](2026-11-08-p4-b1c-conditional-batched-reads.md).
 - Позначка «може бути застарілим» знімка показу — у хуку через 500 мс; стани `removed`, `purged` і сховані значення — у тому самому кадрі.
 - Лічильник бюджетів — обгортка `DataTransport`.
 - Імена B3-2: дискримінатор `ViewSpec` — `kind`; `ViewSnapshot` уже має `atEnd`, `strategy`, `truncated`; публічний тримач рантайму — `runtime/holder.ts` (внутрішній хендл — `runtime/handle.ts`).
+- Keyset-умову будує `keysetFilter` T0 (B1d); B3-3 стартує після мерджу задачі з `keysetFilter` або бере її першою задачею, якщо B1d ще не в `main` (рішення архітекторки 2026-11-08).
 - Коментарі — українською й про «чому».
 
 ## Рішення плану
@@ -100,7 +101,7 @@ B1c](2026-11-08-p4-b1c-conditional-batched-reads.md).
 
 **Files:**
 - Create: `packages/simetra/src/data/store/window.ts`
-- Modify: `packages/simetra/src/data/store/types.ts` (`ViewSpec` з `kind: "window"`; `ViewSnapshot` — `chain`, `target`, `atStart`, `count?`), `snapshot.ts` (`shareSnapshot` порівнює й нові поля), `forms.ts` (`formOf` для `window`; бюджет фільтра — фільтр користувача з найбільшою keyset-умовою цього `orderBy`), `filter.ts` (`keysetFromValue`, `reverseOrder` поряд з `keysetAfter`, повний кортеж з `NULL`), `subsets.ts`, `readers.ts` (прибрати заглушку), `packages/simetra/src/data/runtime/runtime.ts` (`residency`)
+- Modify: `packages/simetra/src/data/store/types.ts` (`ViewSpec` з `kind: "window"`; `ViewSnapshot` — `chain`, `target`, `atStart`, `count?`), `snapshot.ts` (`shareSnapshot` порівнює й нові поля), `forms.ts` (`formOf` для `window`; бюджет фільтра для `window` повторно бере наявну перевірку з `keysetNodesMax` (B1d), без нової), `filter.ts` (`keysetFromValue`: межа з видимого значення через `keysetFilter(orderBy, cursor, keyName, nullableOf(info))` з `direction: "before"` — без окремого `reverseOrder`; повний кортеж з `NULL`), `subsets.ts`, `readers.ts` (прибрати заглушку), `packages/simetra/src/data/runtime/runtime.ts` (`residency`)
 - Test: `packages/simetra/src/data/store/__tests__/window.test.ts` (Create), `filter.test.ts`, `full.test.ts` (оновити кейс заглушки)
 
 **Interfaces:**

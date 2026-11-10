@@ -200,10 +200,12 @@ export function platformSchemaGrants(provider: DatabaseProvider): string[] {
   const schema = quoteIdent(PLATFORM_SCHEMA)
   return [
     `REVOKE ALL ON SCHEMA ${schema} FROM PUBLIC;`,
-    ...SESSION_ROLES.map(
-      (purpose) =>
-        `GRANT USAGE ON SCHEMA ${schema} TO ${quoteIdent(grantRole(purpose, provider))};`
-    ),
+    ...SESSION_ROLES.flatMap((purpose) => {
+      const role = grantRole(purpose, provider)
+      return role === null
+        ? []
+        : [`GRANT USAGE ON SCHEMA ${schema} TO ${quoteIdent(role)};`]
+    }),
   ]
 }
 

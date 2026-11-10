@@ -28,6 +28,7 @@ export {
   type MarkerRecord,
 } from "./state"
 export { readServerFacts, type ServerFacts } from "./server"
+export { checkOwnerAttributes, ownerRefusal } from "./owner-gate"
 export { PLATFORM_VERSION } from "./version"
 export { tableKey } from "./table-key"
 export {
@@ -153,6 +154,7 @@ export {
 } from "./function-checks"
 export {
   APPLY_ADVISORY_LOCK,
+  CLUSTER_ADVISORY_LOCK,
   DEFAULT_APPLY_TIMEOUTS,
   executePlan,
   type ApplyTimeouts,
@@ -161,6 +163,23 @@ export {
   type ExecuteOutcome,
   type RehearsalProof,
 } from "./execute"
+export {
+  clusterRoleViolation,
+  ENGINE_SESSION_TIMEOUTS,
+  ensurePostgresCluster,
+  explicitConnectDatabases,
+  extensionsSchemaViolation,
+  authSchemaViolation,
+  postgresClusterSet,
+  templateState,
+  type AuthSchemaFacts,
+  type ExtensionsSchemaFacts,
+  type PostgresClusterOutcome,
+  type PostgresClusterResult,
+  type PostgresClusterSet,
+  type TemplateRow,
+  type TemplateState,
+} from "./postgres-cluster"
 export {
   runRightsMaintenance,
   type RightsMaintenanceDone,
