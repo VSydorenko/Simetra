@@ -45,8 +45,15 @@ vi.mock("simetra/model", async (importOriginal) => ({
   ...(await importOriginal<typeof import("simetra/model")>()),
   LOGIN_ROLE_REQUEST_PURPOSES: purposes,
 }))
+// Часу немає, доки тест його не просуне: `statement_timeout` оператора
+// налаштування — від залишку бюджету, а відлік іде ще до `connect()`, тож
+// будь-яка пауза машини інакше міняла б параметр у точному переліку операторів.
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["performance"] })
+})
 afterEach(() => {
   purposes.supabase = ["user"]
+  vi.useRealTimers()
 })
 
 // Роль запиту профілю supabase; запасний шлях — роль команд (`readSetup`).
