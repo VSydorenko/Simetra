@@ -7,6 +7,7 @@ import {
   type CommandErrorCode,
   type MetadataRef,
   type SourceAdapter,
+  type WireQueryPart,
   type WireReadParts,
 } from "simetra/model"
 import {
@@ -894,7 +895,7 @@ describe("createFakeSource: known markers", () => {
       },
     })
     if (!part.ok) throw new Error("fake: mapping failed")
-    const answer = await fake.adapter.read([part.value])
+    const answer = await fake.adapter.read([part.value as WireQueryPart])
     const item = answer.items[0]!
     if (!item.ok || !("rows" in item.value)) throw new Error("fake: not rows")
     return item.value.rows as unknown[]
