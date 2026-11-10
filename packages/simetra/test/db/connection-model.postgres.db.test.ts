@@ -11,11 +11,13 @@ import {
   PROVIDER_OWNER_ROLES,
   RIGHTS_MAINTENANCE_SETTING,
 } from "simetra/model"
-import { describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 import { maintenanceSql } from "../../src/compiler/rights/guard-units"
 import {
   asSessionLogin,
   asStackSuperuser,
+  expectFileEndRoles,
+  expectPoolRole,
   restoreOwnerRole,
   setLocalSetting,
   testDatabaseUrl,
@@ -307,4 +309,44 @@ describe("(vii) withRollback catches a role drift in the test that caused it", (
       })
     }
   )
+})
+
+describe("the checks of the setup file", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  // Нове з'єднання з адреси тестів наприкінці файлу: не власник — збій
+  it("a test URL that no longer starts as the owner fails the end-of-file check", async () => {
+    vi.stubEnv("SIMETRA_TEST_DATABASE_URL", testSuperuserUrl())
+    await expect(expectFileEndRoles()).rejects.toThrow(
+      `runs as ${SUPERUSER} (superuser), not ${OWNER}`
+    )
+  })
+
+  // Клієнт, якого тест не повернув, інакше вішав би перевірку пулу
+  it("a pool with a client still checked out fails within the deadline, with its counters", async () => {
+    const pool = new pg.Pool({ connectionString: testDatabaseUrl(), max: 1 })
+    const held = await pool.connect()
+    try {
+      await expect(expectPoolRole(pool, 300)).rejects.toThrow(
+        /within 300 ms \(totalCount 1, idleCount 0, waitingCount 1\)/
+      )
+    } finally {
+      held.release()
+      await pool.end()
+    }
+  })
+
+  it("a pool whose clients run as its start role passes", async () => {
+    const pool = new pg.Pool({ connectionString: testDatabaseUrl(), max: 2 })
+    try {
+      const [a, b] = await Promise.all([pool.connect(), pool.connect()])
+      a!.release()
+      b!.release()
+      await expectPoolRole(pool)
+    } finally {
+      await pool.end()
+    }
+  })
 })
