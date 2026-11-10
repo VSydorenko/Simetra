@@ -5,26 +5,39 @@
 // Без залежностей, крім `start postgres`: він кличе `simetra roles` і міграцію
 // Better Auth, тож потребує `pnpm install`.
 //
-//   node scripts/db-stack.mjs start postgres
+//   node scripts/db-stack.mjs start postgres [--no-build]
 //   node scripts/db-stack.mjs stop postgres [--volumes]
+//   node scripts/db-stack.mjs files-hash postgres
 //   node scripts/db-stack.mjs start supabase-signals
 //   node scripts/db-stack.mjs stop supabase-signals
-import { spawnSync } from "node:child_process"
+import { spawn } from "node:child_process"
+import {
+  createHash,
+  createHmac,
+  pbkdf2Sync,
+  timingSafeEqual,
+} from "node:crypto"
 import {
   closeSync,
   openSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   unlinkSync,
   writeSync,
 } from "node:fs"
-import { tmpdir } from "node:os"
-import { dirname, join } from "node:path"
+import { constants } from "node:os"
+import { dirname, join, relative } from "node:path"
 import { fileURLToPath } from "node:url"
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..")
 /** Lock file name of the postgres stack; equals `TEST_STACKS.postgres.lockFile` (asserted by a unit test). */
 export const POSTGRES_LOCK_FILE = "simetra-db-stack-postgres.lock"
+// Фіксований `/tmp`, не `tmpdir()`: сесії з різним TMPDIR інакше брали б різні
+// файли замка одного спільного стека; guard бере той самий шлях
+export const POSTGRES_LOCK_PATH = join("/tmp", POSTGRES_LOCK_FILE)
+/** Env variable that names the held stack lock to the children of the script. */
+export const STACK_LOCK_ENV = "SIMETRA_DB_STACK_LOCK"
 
 // Профілі скрипта як дані. `lock` — замок, той самий, що бере DB-прогін. `supabase-signals` без
 // замка: DB-прогін його не вживає (стек Supabase має власний замок guard-а), а
@@ -33,7 +46,7 @@ const PROFILES = {
   postgres: {
     dir: join(ROOT, "docker/postgres-stack"),
     project: "simetra-pg",
-    lock: join(tmpdir(), POSTGRES_LOCK_FILE),
+    lock: POSTGRES_LOCK_PATH,
   },
   "supabase-signals": {
     dir: join(ROOT, "docker/supabase-signals"),
@@ -41,13 +54,21 @@ const PROFILES = {
     lock: undefined,
   },
 }
-const STACK_DIR = PROFILES.postgres.dir
 const BUCKET = "simetra-dev"
+// Бекенди кроків старту мають це ім'я, тож їх можна знайти й завершити до
+// зняття замка: запит, кинутий убитим дочірнім процесом, сервер виконує й далі
+const START_APP_NAME = "simetra_db_start"
+// Дочірній, що не завершився за цей час після пересланого сигналу, і вся його
+// група дістають SIGKILL: замок не має висіти без кінця
+const KILL_AFTER_MS = 30_000
+/** @type {readonly NodeJS.Signals[]} */
+const FORWARDED_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"]
 
 /**
  * Runs `fn` while holding the stack lock at `path` — the same lock the DB-run
  * guard takes. A lock of a live process refuses at once (the caller is a
  * command, not a run that may wait); a lock of a dead process is taken over.
+ * While `fn` runs, `STACK_LOCK_ENV` names the lock to child processes.
  *
  * @param {string} path
  * @param {() => Promise<void>} fn
@@ -75,9 +96,11 @@ export async function withStackLock(path, fn) {
     // Убитий процес лишає файл замка без власника — його можна забрати, як і guard
     removeLockFile(path)
   }
+  process.env[STACK_LOCK_ENV] = path
   try {
     await fn()
   } finally {
+    delete process.env[STACK_LOCK_ENV]
     // Лише свій замок: чужий, узятий після нашого падіння, не чіпаємо
     if (readHolder(path)?.pid === process.pid) removeLockFile(path)
   }
@@ -120,71 +143,283 @@ function removeLockFile(path) {
   }
 }
 
+/** @typedef {Pick<NodeJS.EventEmitter, "on" | "off">} SignalSource */
+
+/**
+ * @typedef {object} ChildOptions
+ * @property {string} [cwd]
+ * @property {NodeJS.ProcessEnv} [env] повне середовище дочірнього процесу
+ * @property {string} [input] stdin; без нього stdin закрито
+ * @property {(chunk: string) => void} [onStdout] stdout у трубу замість термінала
+ * @property {SignalSource} [signals] джерело сигналів скрипту; типово `process`
+ * @property {number} [killAfterMs]
+ */
+
+/** @param {number | undefined} pid @param {NodeJS.Signals} signal */
+function killGroup(pid, signal) {
+  if (pid === undefined) return
+  try {
+    process.kill(-pid, signal)
+  } catch (error) {
+    if (/** @type {NodeJS.ErrnoException} */ (error).code !== "ESRCH")
+      throw error
+  }
+}
+
+/**
+ * Runs a child process in its own process group and resolves with its exit
+ * code (128 + signal number when a signal ended it). A signal of the script is
+ * forwarded to the child's group once; a group still alive `killAfterMs` later
+ * gets SIGKILL. The promise settles only after the child exits, so a caller
+ * under the stack lock keeps it until then.
+ *
+ * @param {string} command
+ * @param {readonly string[]} args
+ * @param {ChildOptions} [opts]
+ * @param {typeof spawn} [spawnFn]
+ * @returns {Promise<number>}
+ */
+export function runChild(command, args, opts = {}, spawnFn = spawn) {
+  const signals = opts.signals ?? process
+  const killAfterMs = opts.killAfterMs ?? KILL_AFTER_MS
+  return new Promise((resolve, reject) => {
+    // Своя група: Ctrl-C термінала дістається лише скрипту, а він пересилає
+    // сигнал усій групі — і `docker compose`, і його нащадкам, — не лише pid
+    const child = spawnFn(command, [...args], {
+      cwd: opts.cwd,
+      env: opts.env ?? process.env,
+      detached: true,
+      // Процес фонової групи, що читає термінал, зупинив би SIGTTIN: stdin
+      // або труба, або закритий
+      stdio: [
+        opts.input === undefined ? "ignore" : "pipe",
+        opts.onStdout === undefined ? "inherit" : "pipe",
+        "inherit",
+      ],
+    })
+    let forwarded = false
+    /** @type {NodeJS.Timeout | undefined} */
+    let killTimer
+    const onSignal = (/** @type {NodeJS.Signals} */ signal) => {
+      if (forwarded) return
+      forwarded = true
+      killGroup(child.pid, signal)
+      killTimer = setTimeout(() => killGroup(child.pid, "SIGKILL"), killAfterMs)
+    }
+    for (const s of FORWARDED_SIGNALS) signals.on(s, onSignal)
+    const settle = () => {
+      clearTimeout(killTimer)
+      for (const s of FORWARDED_SIGNALS) signals.off(s, onSignal)
+    }
+    child.once("error", (error) => {
+      settle()
+      reject(new Error(`${command} failed: ${error.message}`))
+    })
+    child.once("close", (code, signal) => {
+      settle()
+      resolve(code ?? 128 + (signal === null ? 0 : constants.signals[signal]))
+    })
+    if (opts.onStdout !== undefined)
+      child.stdout?.setEncoding("utf8").on("data", opts.onStdout)
+    if (opts.input !== undefined) {
+      // Дочірній, що вийшов, не дочитавши, дає EPIPE — код виходу скаже більше
+      child.stdin?.on("error", () => {})
+      child.stdin?.end(opts.input)
+    }
+  })
+}
+
+/**
+ * Контекст однієї команди скрипту: шов `spawn`, джерело сигналів і перший
+ * сигнал, що прийшов, — після нього наступні кроки не стартують.
+ *
+ * @typedef {object} Ctx
+ * @property {typeof spawn} spawnFn
+ * @property {SignalSource} signals
+ * @property {NodeJS.Signals | undefined} interrupted
+ */
+
+/**
+ * @param {typeof spawn} spawnFn
+ * @param {SignalSource} signals
+ * @returns {{ ctx: Ctx, release: () => void }}
+ */
+function commandContext(spawnFn, signals) {
+  /** @type {Ctx} */
+  const ctx = { spawnFn, signals, interrupted: undefined }
+  // Слухач і для того, щоб сигнал між кроками не вбив скрипт до зняття замка
+  const record = (/** @type {NodeJS.Signals} */ signal) => {
+    ctx.interrupted ??= signal
+  }
+  for (const s of FORWARDED_SIGNALS) signals.on(s, record)
+  return {
+    ctx,
+    release: () => {
+      for (const s of FORWARDED_SIGNALS) signals.off(s, record)
+    },
+  }
+}
+
+/**
+ * `runChild` з контекстом команди: кидає на ненульовому коді й на перерваній
+ * команді, тож наступний крок не стартує.
+ *
+ * @param {Ctx} ctx
+ * @param {string} command
+ * @param {readonly string[]} args
+ * @param {ChildOptions} [opts]
+ */
+async function runChecked(ctx, command, args, opts = {}) {
+  if (ctx.interrupted !== undefined)
+    throw new Error(`interrupted by ${ctx.interrupted}`)
+  const code = await runChild(
+    command,
+    args,
+    { ...opts, signals: ctx.signals },
+    ctx.spawnFn
+  )
+  if (ctx.interrupted !== undefined)
+    throw new Error(`interrupted by ${ctx.interrupted}`)
+  if (code !== 0) throw new Error(`${command} ${args[0]} exited with ${code}`)
+}
+
 /**
  * `docker compose` лише з явним проєктом і файлом стека: без них compose
  * узяв би проєкт за іменем теки й міг би зачепити чужі контейнери.
  *
  * @param {{ dir: string, project: string }} profile
  * @param {string[]} args
- * @param {{ input?: string | Buffer, capture?: boolean }} [options]
- * @returns {string}
  */
-function compose(profile, args, options = {}) {
-  const result = spawnSync(
-    "docker",
-    [
-      "compose",
-      "-p",
-      profile.project,
-      "-f",
-      join(profile.dir, "compose.yaml"),
-      ...args,
-    ],
-    {
-      input: options.input,
-      encoding: "utf8",
-      stdio: [
-        options.input === undefined ? "inherit" : "pipe",
-        options.capture === true ? "pipe" : "inherit",
-        "inherit",
-      ],
-    }
-  )
-  if (result.error !== undefined)
-    throw new Error(`docker compose failed: ${result.error.message}`)
-  if (result.status !== 0)
-    throw new Error(
-      `docker compose ${args.join(" ")} exited with ${result.status ?? result.signal}`
-    )
-  return result.stdout ?? ""
-}
+const composeArgv = (profile, args) => [
+  "compose",
+  "-p",
+  profile.project,
+  "-f",
+  join(profile.dir, "compose.yaml"),
+  ...args,
+]
 
-/** @param {string[]} args */
-const garage = (args) =>
-  // Журнал з'єднань CLI на кожен виклик лише засмічує вивід старту
-  compose(
-    PROFILES.postgres,
-    ["exec", "-T", "-e", "RUST_LOG=garage=warn", "garage", "/garage", ...args],
-    {
-      capture: true,
-    }
-  )
+// Хеш файлів стека — у середовищі кожного виклику compose: він підставляє його
+// в аргумент збірки, і `config` бачить той самий файл, що й `up`
+const composeEnv = () => ({
+  ...process.env,
+  SIMETRA_STACK_FILES_HASH: stackFilesHash(),
+})
 
 /**
- * Адмінський виклик через CLI: структурована відповідь замість розбору
- * таблиць `garage status`, формат яких не є контрактом.
- *
- * @param {string} endpoint
- * @param {unknown} [payload]
+ * @param {Ctx} ctx
+ * @param {{ dir: string, project: string }} profile
+ * @param {string[]} args
+ * @param {{ input?: string, capture?: boolean }} [options]
+ * @returns {Promise<string>}
  */
-const garageApi = (endpoint, payload) =>
-  JSON.parse(
-    garage(
-      payload === undefined
-        ? ["json-api", endpoint]
-        : ["json-api", endpoint, JSON.stringify(payload)]
+async function compose(ctx, profile, args, options = {}) {
+  let stdout = ""
+  await runChecked(ctx, "docker", composeArgv(profile, args), {
+    env: composeEnv(),
+    input: options.input,
+    onStdout:
+      options.capture === true
+        ? (chunk) => {
+            stdout += chunk
+          }
+        : undefined,
+  })
+  return stdout
+}
+
+/**
+ * sha256 of the files of `docker/postgres-stack/**` (paths and contents). The
+ * config hash of compose does not see the Dockerfile or the contents of the
+ * files a container reads, so the image carries this hash as a label.
+ *
+ * @returns {string}
+ */
+export function stackFilesHash() {
+  const dir = PROFILES.postgres.dir
+  /** @param {string} at @returns {string[]} */
+  const walk = (at) =>
+    readdirSync(at, { withFileTypes: true }).flatMap((entry) =>
+      entry.isDirectory()
+        ? walk(join(at, entry.name))
+        : [relative(dir, join(at, entry.name))]
     )
+  const hash = createHash("sha256")
+  for (const file of walk(dir).sort()) {
+    hash.update(`${file}\0`)
+    hash.update(readFileSync(join(dir, file)))
+    hash.update("\0")
+  }
+  return hash.digest("hex")
+}
+
+const STACK_FILES_LABEL = "simetra.stack-files-hash"
+const CONFIG_HASH_LABEL = "com.docker.compose.config-hash"
+const SERVICE_LABEL = "com.docker.compose.service"
+
+/**
+ * Мітки контейнерів проєкту за сервісом; порожньо — стека немає.
+ *
+ * @param {Ctx} ctx
+ * @returns {Promise<Map<string, Record<string, string>>>}
+ */
+async function stackContainers(ctx) {
+  const ids = (
+    await compose(ctx, PROFILES.postgres, ["ps", "--all", "--quiet"], {
+      capture: true,
+    })
   )
+    .split("\n")
+    .map((id) => id.trim())
+    .filter((id) => id !== "")
+  /** @type {Map<string, Record<string, string>>} */
+  const byService = new Map()
+  if (ids.length === 0) return byService
+  let out = ""
+  await runChecked(ctx, "docker", ["inspect", ...ids], {
+    onStdout: (chunk) => {
+      out += chunk
+    },
+  })
+  for (const container of JSON.parse(out)) {
+    const labels = container.Config?.Labels ?? {}
+    byService.set(labels[SERVICE_LABEL], labels)
+  }
+  return byService
+}
+
+/**
+ * Запущений стек лишається, лише якщо зібраний з тих самих файлів: `up`
+ * інакше перестворив би контейнери спільного стека під чужими прогонами.
+ *
+ * @param {Ctx} ctx
+ * @param {Map<string, Record<string, string>>} containers
+ */
+async function assertSameStack(ctx, containers) {
+  const hashes = (
+    await compose(ctx, PROFILES.postgres, ["config", "--hash=*"], {
+      capture: true,
+    })
+  )
+    .split("\n")
+    .map((line) => line.trim().split(/\s+/))
+    .filter((parts) => parts.length === 2)
+  /** @type {string[]} */
+  const differences = []
+  if (hashes.length === 0) differences.push("compose printed no config hash")
+  for (const [service, hash] of hashes) {
+    const labels = containers.get(service)
+    if (labels === undefined) differences.push(`${service}: no container`)
+    else if (labels[CONFIG_HASH_LABEL] !== hash)
+      differences.push(`${service}: ${CONFIG_HASH_LABEL}`)
+  }
+  if (containers.get("postgres")?.[STACK_FILES_LABEL] !== stackFilesHash())
+    differences.push(`postgres: ${STACK_FILES_LABEL}`)
+  if (differences.length > 0)
+    throw new Error(
+      `stack config differs from this branch (${differences.join(", ")}); stopping the stack is the owner's call`
+    )
+}
 
 /**
  * @param {string} file ім'я .env-файла в теці стека
@@ -194,7 +429,7 @@ const garageApi = (endpoint, payload) =>
 function readEnvFile(file, required) {
   /** @type {Record<string, string>} */
   const secrets = {}
-  const text = readFileSync(join(STACK_DIR, file), "utf8")
+  const text = readFileSync(join(PROFILES.postgres.dir, file), "utf8")
   for (const line of text.split(/\r?\n/)) {
     const m = /^([A-Z0-9_]+)=(.*)$/.exec(line)
     if (m !== null) secrets[m[1]] = m[2].trim()
@@ -208,22 +443,59 @@ function readEnvFile(file, required) {
 const devSecrets = () =>
   readEnvFile("dev-secrets.env", ["GARAGE_DEV_KEY_ID", "GARAGE_DEV_KEY_SECRET"])
 
+/**
+ * @param {Ctx} ctx
+ * @param {string[]} args
+ */
+const garage = (ctx, args) =>
+  // Журнал з'єднань CLI на кожен виклик лише засмічує вивід старту
+  compose(
+    ctx,
+    PROFILES.postgres,
+    ["exec", "-T", "-e", "RUST_LOG=garage=warn", "garage", "/garage", ...args],
+    { capture: true }
+  )
+
+/**
+ * Адмінський виклик через CLI: структурована відповідь замість розбору
+ * таблиць `garage status`, формат яких не є контрактом.
+ *
+ * @param {Ctx} ctx
+ * @param {string} endpoint
+ * @param {unknown} [payload]
+ */
+const garageApi = async (ctx, endpoint, payload) =>
+  JSON.parse(
+    await garage(
+      ctx,
+      payload === undefined
+        ? ["json-api", endpoint]
+        : ["json-api", endpoint, JSON.stringify(payload)]
+    )
+  )
+
 // Кожен крок спершу дивиться на стан: повторний `db:pg:start` на запущеному
 // стеку нічого не змінює
-function initGarage() {
+/** @param {Ctx} ctx */
+async function initGarage(ctx) {
   const secrets = devSecrets()
   const keyId = secrets.GARAGE_DEV_KEY_ID
-  const status = garageApi("GetClusterStatus")
+  const status = await garageApi(ctx, "GetClusterStatus")
   const node = status.nodes[0]
   if (node === undefined) throw new Error("Garage reports no nodes")
   if (node.role === null || node.role === undefined) {
-    garage(["layout", "assign", "-z", "dc1", "-c", "1G", node.id])
-    const layout = garageApi("GetClusterLayout")
-    garage(["layout", "apply", "--version", String(layout.version + 1)])
+    await garage(ctx, ["layout", "assign", "-z", "dc1", "-c", "1G", node.id])
+    const layout = await garageApi(ctx, "GetClusterLayout")
+    await garage(ctx, [
+      "layout",
+      "apply",
+      "--version",
+      String(layout.version + 1),
+    ])
   }
-  const keys = garageApi("ListKeys")
+  const keys = await garageApi(ctx, "ListKeys")
   if (!keys.some((/** @type {{ id: string }} */ k) => k.id === keyId))
-    garage([
+    await garage(ctx, [
       "key",
       "import",
       "--yes",
@@ -232,19 +504,19 @@ function initGarage() {
       keyId,
       secrets.GARAGE_DEV_KEY_SECRET,
     ])
-  const buckets = garageApi("ListBuckets")
+  const buckets = await garageApi(ctx, "ListBuckets")
   if (
     !buckets.some((/** @type {{ globalAliases: string[] }} */ b) =>
       b.globalAliases.includes(BUCKET)
     )
   )
-    garage(["bucket", "create", BUCKET])
-  const bucket = garageApi("GetBucketInfo", { globalAlias: BUCKET })
+    await garage(ctx, ["bucket", "create", BUCKET])
+  const bucket = await garageApi(ctx, "GetBucketInfo", { globalAlias: BUCKET })
   const grant = bucket.keys.find(
     (/** @type {{ accessKeyId: string }} */ k) => k.accessKeyId === keyId
   )?.permissions
   if (grant?.read !== true || grant?.write !== true || grant?.owner !== true)
-    garage([
+    await garage(ctx, [
       "bucket",
       "allow",
       "--read",
@@ -274,33 +546,20 @@ const LOGIN_ROLES = [
   { role: "simetra_auth", secret: "SIMETRA_AUTH_DEV_PASSWORD" },
 ]
 
-/**
- * @param {string} command
- * @param {string[]} args
- * @param {Record<string, string>} env
- * @param {string} [cwd]
- */
-function run(command, args, env, cwd = ROOT) {
-  const result = spawnSync(command, args, {
-    cwd,
-    stdio: "inherit",
-    env: { ...process.env, ...env },
-  })
-  if (result.error !== undefined)
-    throw new Error(`${command} failed: ${result.error.message}`)
-  if (result.status !== 0)
-    throw new Error(
-      `${command} ${args[0]} exited with ${result.status ?? result.signal}`
-    )
-}
-
 /** Пароль у `\set` без екранування: лише безпечні символи, інакше SQL зламався б. */
 const SAFE_PASSWORD = /^[A-Za-z0-9._-]+$/
 
-/** Аргументи `docker compose exec … psql`: пароль ніколи не тут (він іде у stdin). */
-export const POSTGRES_PSQL_ARGS = [
+/**
+ * Аргументи `docker compose exec … psql`: пароль ніколи не тут (він іде у
+ * stdin). `exec` не передає середовища хоста, тож ім'я сесії — через `-e`.
+ *
+ * @param {string[]} extra
+ */
+const psqlArgs = (...extra) => [
   "exec",
   "-T",
+  "-e",
+  `PGAPPNAME=${START_APP_NAME}`,
   "postgres",
   "psql",
   "-v",
@@ -309,9 +568,60 @@ export const POSTGRES_PSQL_ARGS = [
   "postgres",
   "-d",
   "postgres",
+  ...extra,
   "-f",
   "-",
 ]
+
+/** Аргументи `docker compose exec … psql`: пароль ніколи не тут (він іде у stdin). */
+export const POSTGRES_PSQL_ARGS = psqlArgs()
+
+/**
+ * StoredKey and ServerKey of a SCRAM-SHA-256 verifier (RFC 5802, RFC 7677),
+ * base64. The password goes in as is: the stack's passwords are ASCII from
+ * `SAFE_PASSWORD`, where SASLprep changes nothing.
+ *
+ * @param {string} password
+ * @param {string} salt base64
+ * @param {number} iterations
+ * @returns {{ storedKey: string, serverKey: string }}
+ */
+export function scramKeys(password, salt, iterations) {
+  const salted = pbkdf2Sync(
+    password,
+    Buffer.from(salt, "base64"),
+    iterations,
+    32,
+    "sha256"
+  )
+  const hmac = (/** @type {string} */ msg) =>
+    createHmac("sha256", salted).update(msg).digest()
+  return {
+    storedKey: createHash("sha256").update(hmac("Client Key")).digest("base64"),
+    serverKey: hmac("Server Key").toString("base64"),
+  }
+}
+
+/**
+ * Whether a `pg_authid.rolpassword` value is a SCRAM verifier of `password`.
+ * The verifier is salted, so SQL cannot compare it; the keys are derived again
+ * with its salt and iteration count.
+ *
+ * @param {string} verifier
+ * @param {string} password
+ * @returns {boolean}
+ */
+export function passwordMatches(verifier, password) {
+  const m = /^SCRAM-SHA-256\$(\d+):([^$]+)\$([^:]+):(.+)$/.exec(verifier)
+  if (m === null) return false
+  const keys = scramKeys(password, m[2], Number(m[1]))
+  const same = (/** @type {string} */ a, /** @type {string} */ b) => {
+    const x = Buffer.from(a)
+    const y = Buffer.from(b)
+    return x.length === y.length && timingSafeEqual(x, y)
+  }
+  return same(keys.storedKey, m[3]) && same(keys.serverKey, m[4])
+}
 
 /**
  * Команда кроку Better Auth: DSN лише в середовищі дочірнього процесу, не в argv.
@@ -336,83 +646,194 @@ export function betterAuthCommand(secrets, superuserUrl) {
   }
 }
 
-async function startPostgres() {
-  compose(PROFILES.postgres, ["up", "-d", "--build", "--wait"])
-  initGarage()
-  const psql = (/** @type {string} */ input) =>
-    compose(PROFILES.postgres, POSTGRES_PSQL_ARGS, { input })
-  psql(readFileSync(join(STACK_DIR, "dev-environment.sql"), "utf8"))
-  const secrets = readEnvFile(
-    "login-secrets.env",
-    LOGIN_ROLES.map((r) => r.secret)
+/**
+ * Starts the postgres stack, or re-runs the init steps on a running stack of
+ * the same files without recreating its containers. The caller holds the lock.
+ *
+ * @param {{ spawnFn?: typeof spawn, signals?: SignalSource, noBuild?: boolean }} [options]
+ * @returns {Promise<void>}
+ */
+export async function startPostgres(options = {}) {
+  const { ctx, release } = commandContext(
+    options.spawnFn ?? spawn,
+    options.signals ?? process
   )
-  const superuserUrl = stackUrl("postgres", "postgres")
-  run(
-    process.execPath,
-    [
-      join(ROOT, "packages/designer/bin/simetra.mjs"),
-      "roles",
-      join(STACK_DIR, "project"),
-    ],
-    { SIMETRA_DATABASE_URL: superuserUrl }
-  )
-  // Пароль іде у stdin `psql` (`\set` + `:'pw'`), а не в `-v`: argv видно в `ps`
-  psql(
-    LOGIN_ROLES.map(({ role, secret }, i) => {
-      const password = secrets[secret]
-      if (!SAFE_PASSWORD.test(password))
+  try {
+    await startPostgresSteps(ctx, options.noBuild === true)
+  } finally {
+    release()
+  }
+}
+
+/** @param {Ctx} ctx @param {boolean} noBuild */
+async function startPostgresSteps(ctx, noBuild) {
+  const profile = PROFILES.postgres
+  const containers = await stackContainers(ctx)
+  // На наявному стеку без `--build`: збірка перезаписала б спільний тег
+  // образу з файлів цієї гілки, навіть коли контейнер лишається
+  if (containers.size > 0) {
+    await assertSameStack(ctx, containers)
+    await compose(ctx, profile, ["up", "-d", "--wait", "--no-recreate"])
+  } else
+    await compose(ctx, profile, [
+      "up",
+      "-d",
+      "--wait",
+      ...(noBuild ? [] : ["--build"]),
+    ])
+  try {
+    await initGarage(ctx)
+    const psql = (
+      /** @type {string} */ input,
+      /** @type {string[]} */ ...extra
+    ) => compose(ctx, profile, psqlArgs(...extra), { input, capture: true })
+    await psql(readFileSync(join(profile.dir, "dev-environment.sql"), "utf8"))
+    const secrets = readEnvFile(
+      "login-secrets.env",
+      LOGIN_ROLES.map((r) => r.secret)
+    )
+    for (const { secret } of LOGIN_ROLES)
+      if (!SAFE_PASSWORD.test(secrets[secret]))
         throw new Error(
           `${secret} in login-secrets.env has unsupported characters`
         )
-      return `\\set pw${i} '${password}'\nALTER ROLE ${role} PASSWORD :'pw${i}';\n`
-    }).join("")
-  )
-  const step = betterAuthCommand(secrets, superuserUrl)
-  run(
-    process.execPath,
-    step.args,
-    step.env,
+    const superuserUrl = stackUrl("postgres", "postgres")
+    const node = (
+      /** @type {string[]} */ args,
+      /** @type {Record<string, string>} */ env,
+      cwd = ROOT
+    ) =>
+      runChecked(ctx, process.execPath, args, {
+        cwd,
+        env: { ...process.env, ...env, PGAPPNAME: START_APP_NAME },
+      })
+    await node(
+      [
+        join(ROOT, "packages/designer/bin/simetra.mjs"),
+        "roles",
+        join(profile.dir, "project"),
+      ],
+      { SIMETRA_DATABASE_URL: superuserUrl }
+    )
+    // Пароль ставиться лише там, де відрізняється: ALTER з тим самим паролем
+    // знову солить верифікатор, а повторний старт не має змінювати нічого
+    const current = new Map(
+      (
+        await psql(
+          `SELECT rolname, coalesce(rolpassword, '') FROM pg_catalog.pg_authid WHERE rolname IN (${LOGIN_ROLES.map((r) => `'${r.role}'`).join(", ")});\n`,
+          "-A",
+          "-t"
+        )
+      )
+        .split("\n")
+        .filter((line) => line.includes("|"))
+        .map((line) => {
+          const at = line.indexOf("|")
+          return [line.slice(0, at), line.slice(at + 1).trim()]
+        })
+    )
+    const stale = LOGIN_ROLES.filter(
+      ({ role, secret }) =>
+        !passwordMatches(current.get(role) ?? "", secrets[secret])
+    )
+    // Пароль іде у stdin `psql` (`\set` + `:'pw'`), а не в `-v`: argv видно в `ps`
+    if (stale.length > 0)
+      await psql(
+        stale
+          .map(
+            ({ role, secret }, i) =>
+              `\\set pw${i} '${secrets[secret]}'\nALTER ROLE ${role} PASSWORD :'pw${i}';\n`
+          )
+          .join("")
+      )
+    const step = betterAuthCommand(secrets, superuserUrl)
     // `tsx` — залежність пакета simetra, не кореня: звідти її й резолвить `--import`
-    join(ROOT, "packages/simetra")
-  )
-}
-
-async function startSignals() {
-  compose(PROFILES["supabase-signals"], ["up", "-d", "--wait"])
+    await node(step.args, step.env, join(ROOT, "packages/simetra"))
+  } finally {
+    await stopStartBackends(ctx)
+  }
 }
 
 /**
+ * Бекенди кроків старту завершує суперкористувач до зняття замка, і після
+ * сигналу теж; збій лише попереджає — первинна помилка старту важливіша.
+ *
+ * @param {Ctx} ctx
+ */
+async function stopStartBackends(ctx) {
+  const code = await runChild(
+    "docker",
+    composeArgv(PROFILES.postgres, psqlArgs("-q")),
+    {
+      env: composeEnv(),
+      input: `SELECT pg_catalog.pg_terminate_backend(pid) FROM pg_catalog.pg_stat_activity WHERE application_name = '${START_APP_NAME}' AND pid <> pg_catalog.pg_backend_pid();\n`,
+      onStdout: () => {},
+      signals: ctx.signals,
+    },
+    ctx.spawnFn
+  ).catch(() => -1)
+  if (code !== 0)
+    process.stderr.write(
+      `db-stack: could not stop the backends of ${START_APP_NAME} (exit ${code}); they may still load the stack\n`
+    )
+}
+
+/** @param {Ctx} ctx */
+async function startSignals(ctx) {
+  await compose(ctx, PROFILES["supabase-signals"], ["up", "-d", "--wait"])
+}
+
+/**
+ * @param {Ctx} ctx
  * @param {keyof typeof PROFILES} profile
  * @param {boolean} volumes
  */
-async function stop(profile, volumes) {
-  compose(PROFILES[profile], volumes ? ["down", "--volumes"] : ["down"])
+async function stop(ctx, profile, volumes) {
+  await compose(
+    ctx,
+    PROFILES[profile],
+    volumes ? ["down", "--volumes"] : ["down"]
+  )
 }
 
 /** @param {string[]} argv */
 async function main(argv) {
   const [command, profile, ...flags] = argv
   const usage =
-    "usage: node scripts/db-stack.mjs start postgres | stop postgres [--volumes] | start supabase-signals | stop supabase-signals"
+    "usage: node scripts/db-stack.mjs start postgres [--no-build] | stop postgres [--volumes] | files-hash postgres | start supabase-signals | stop supabase-signals"
   if (
     (profile !== "postgres" && profile !== "supabase-signals") ||
-    (command !== "start" && command !== "stop")
+    (command !== "start" && command !== "stop" && command !== "files-hash") ||
+    (command === "files-hash" && profile !== "postgres")
   )
     throw new Error(usage)
-  // Тома є лише в стеку `postgres`: Centrifugo нічого не зберігає
-  const allowed =
-    command === "stop" && profile === "postgres" ? ["--volumes"] : []
+  // Тома є лише в стеку `postgres`: Centrifugo нічого не зберігає; `--no-build`
+  // — для CI, де образ зібрано заздалегідь із кешем
+  /** @type {Record<string, string[]>} */
+  const flagsOf = { stop: ["--volumes"], start: ["--no-build"] }
+  const allowed = profile === "postgres" ? (flagsOf[command] ?? []) : []
   const unknown = flags.filter((f) => !allowed.includes(f))
   if (unknown.length > 0)
     throw new Error(`unknown flag ${unknown[0]}; ${usage}`)
+  if (command === "files-hash") {
+    process.stdout.write(`${stackFilesHash()}\n`)
+    return
+  }
+  // Сигнал під час команди не вбиває скрипт одразу: його дістає дочірня
+  // група, а замок знімається вже після її виходу
+  const { ctx, release } = commandContext(spawn, process)
   const run = () =>
     command === "stop"
-      ? stop(profile, flags.includes("--volumes"))
+      ? stop(ctx, profile, flags.includes("--volumes"))
       : profile === "postgres"
-        ? startPostgres()
-        : startSignals()
+        ? startPostgres({ noBuild: flags.includes("--no-build") })
+        : startSignals(ctx)
   const { lock } = PROFILES[profile]
-  await (lock === undefined ? run() : withStackLock(lock, run))
+  try {
+    await (lock === undefined ? run() : withStackLock(lock, run))
+  } finally {
+    release()
+  }
 }
 
 // Лише як команда: тест імпортує `withStackLock`, і CLI тоді не запускається

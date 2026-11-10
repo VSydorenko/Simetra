@@ -13,7 +13,6 @@ import {
   writeSync,
   closeSync,
 } from "node:fs"
-import { tmpdir } from "node:os"
 import { join } from "node:path"
 import pg from "pg"
 import {
@@ -54,11 +53,13 @@ export type Snapshot = Record<
 >
 
 /**
- * Lock file of the stack of profile `p`. In the machine's temp dir, not in the
- * checkout: the stack is shared by every checkout and worktree of the repo.
+ * Lock file of the stack of profile `p`. In `/tmp`, not in the checkout and not
+ * in `tmpdir()`: the stack is shared by every checkout, worktree and session of
+ * the machine, and sessions with another `TMPDIR` would take another file.
+ * `scripts/db-stack.mjs` takes the same path.
  */
 export function lockPath(p: TestProvider): string {
-  return join(tmpdir(), TEST_STACKS[p].lockFile)
+  return join("/tmp", TEST_STACKS[p].lockFile)
 }
 
 /** The vitest globalSetup of a DB project that runs against the stack of `p`. */

@@ -8,3 +8,7 @@ RUN apt-get update \
     postgresql-17-pgtap \
     postgresql-17-plpgsql-check \
   && rm -rf /var/lib/apt/lists/*
+
+# Після встановлення пакетів: інший хеш не скидає кеш шару apt
+ARG SIMETRA_STACK_FILES_HASH
+LABEL simetra.stack-files-hash=$SIMETRA_STACK_FILES_HASH

@@ -7,7 +7,13 @@ name: simetra-pg
 
 services:
   postgres:
-    build: .
+    # Хеш файлів стека (`node scripts/db-stack.mjs files-hash postgres`) стає
+    # міткою образу `simetra.stack-files-hash`: хеш конфігу compose не бачить
+    # Dockerfile, а скрипт старту звіряє мітку на запущеному стеку
+    build:
+      context: .
+      args:
+        SIMETRA_STACK_FILES_HASH: ${SIMETRA_STACK_FILES_HASH:-}
     image: simetra-pg/postgres:17.11
     environment:
       POSTGRES_PASSWORD: postgres

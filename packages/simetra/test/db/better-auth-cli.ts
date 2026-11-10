@@ -6,6 +6,7 @@ import { realpathSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import pg from "pg"
 import { PROVIDER_OWNER_ROLES, quoteIdent } from "simetra/model"
+import { STACK_LOCK_ENV } from "../../../../scripts/db-stack.mjs"
 import {
   CLUSTER_TRANSACTION_PRELUDE,
   postgresClusterSet,
@@ -116,6 +117,14 @@ function invokedAsCommand(): boolean {
 }
 
 if (invokedAsCommand()) {
+  // Міграція й гранти — під замком стека, як і решта `db:pg:start`: запуск
+  // повз скрипт ішов би посеред чужого DB-прогону
+  if (!process.env[STACK_LOCK_ENV]) {
+    console.error(
+      `better-auth-cli: ${STACK_LOCK_ENV} is not set; run it through pnpm db:pg:start, which holds the stack lock`
+    )
+    process.exit(1)
+  }
   prepareStackIdentity({
     superuserUrl: requiredEnv(SUPERUSER_URL_ENV),
     authUrl: requiredEnv(AUTH_URL_ENV),
