@@ -516,7 +516,9 @@ describe("platformRoleRefusals", () => {
   // §3.1 профілю postgres: роль запиту не досяжна через посередника з
   // CREATEROLE — це справедливо для кожної ролі запиту профілю. Тут
   // `requestPath` — готовий рядок; сам обхід `pg_auth_members` у SQL доводить
-  // DB-тест `provider-roles.supabase.db.test.ts`
+  // DB-тест `packages/designer/src/__tests__/roles-tool.db.test.ts` («the gate
+  // refuses a request role that reaches a manager of the command role through
+  // any membership»)
   it.each(["simetra_user", "simetra_anon"])(
     "maps a precomputed requestPath row for the request role %s to a refusal",
     (requestRole) => {

@@ -1,5 +1,5 @@
 import type pg from "pg"
-import { PLATFORM_LOGIN_ROLES, PLATFORM_ROLES } from "simetra/model"
+import { PLATFORM_ROLES } from "simetra/model"
 import {
   ensurePlatformRoles,
   platformRoleGate,
