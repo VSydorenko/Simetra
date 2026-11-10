@@ -162,7 +162,7 @@ describe("stage 3: list-order search indexes end with the row key", () => {
       expected: ["(org_id, parent_id)"],
     },
     {
-      name: "unique indexed attribute in a scope: the UNIQUE constraint alone",
+      name: "unique indexed attribute in a scope: no search index of its own, only the UNIQUE (and the description index)",
       entries: {
         [CP]: catalog("Counterparty", {
           scope: "org",
@@ -291,7 +291,7 @@ describe("stage 3: list-order search indexes end with the row key", () => {
       expected: ["(org_id, parent_id)", "(org_id, qty, line_number DESC, id)"],
     },
     {
-      name: "standard code with the numbering UNIQUE: the UNIQUE alone",
+      name: "standard code with the numbering UNIQUE: no search index of its own (only the description index)",
       entries: { [CP]: catalog("Counterparty", { scope: "org" }) },
       table: "counterparty",
       expected: ["(org_id, description, id)"],

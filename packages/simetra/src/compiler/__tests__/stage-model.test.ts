@@ -578,6 +578,7 @@ describe("stage 3: physical snapshot", () => {
       },
     ])
     expect(order.foreignKeys).toEqual([])
+    // Лишився тільки індекс найменування: решта реквізитів без `indexed`.
     expect(searchIndexes(order).map((i) => i.name)).toEqual([
       "order_description_id_idx",
     ])
@@ -597,6 +598,7 @@ describe("stage 3: physical snapshot", () => {
       type: "uuid[]",
     })
     expect(rate.foreignKeys).toEqual([])
+    // Масив посилань не індексується; лишився тільки індекс найменування.
     expect(searchIndexes(rate).map((i) => i.name)).toEqual([
       "rate_description_id_idx",
     ])
