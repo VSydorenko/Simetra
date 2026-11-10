@@ -164,23 +164,12 @@ export {
   type RehearsalProof,
 } from "./execute"
 export {
-  clusterRoleViolation,
-  databaseLocaleViolation,
   ENGINE_SESSION_TIMEOUTS,
   ensurePostgresCluster,
-  explicitConnectDatabases,
-  extensionsSchemaViolation,
-  authSchemaViolation,
   postgresClusterSet,
-  templateState,
-  type AuthSchemaFacts,
-  type DatabaseRow,
-  type ExtensionsSchemaFacts,
   type PostgresClusterOutcome,
   type PostgresClusterResult,
   type PostgresClusterSet,
-  type TemplateRow,
-  type TemplateState,
 } from "./postgres-cluster"
 export {
   runRightsMaintenance,

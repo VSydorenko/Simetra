@@ -17,6 +17,7 @@ import {
   checkPermissions,
   checkOwnerAttributes,
   checkPlatformRoles,
+  copiesShadowFromTemplate,
   desiredForApply,
   executePlan,
   FINGERPRINT_VERSION,
@@ -569,7 +570,7 @@ export const applyTool = defineTool({
         // Профіль `postgres` не має окремого сервера тіней (Р9): відмова до
         // будь-якого звернення до бази, і для застосування, і для репетиції
         if (
-          artifact.scope.provider === "postgres" &&
+          copiesShadowFromTemplate(artifact.scope.provider) &&
           db.shadowBase !== undefined
         )
           return {

@@ -20,6 +20,7 @@ import pg from "pg"
 import { loadSqlParser, localize, type RuleCode } from "simetra/compiler"
 import {
   ENGINE_PREAMBLE_ALLOWED,
+  copiesShadowFromTemplate,
   PROVIDER_SHADOW_TEMPLATES,
   censusDiagnostics,
   renderProviderSeed,
@@ -871,7 +872,7 @@ async function dropAfter<T>(
  * зокрема до перевірки версії сервера тіней.
  */
 function refuseShadowBase(o: ShadowOptions, scope: EngineScope): void {
-  if (scope.provider === "postgres" && o.shadowBase !== undefined)
+  if (copiesShadowFromTemplate(scope.provider) && o.shadowBase !== undefined)
     throw new ShadowBaseUnsupportedError()
 }
 

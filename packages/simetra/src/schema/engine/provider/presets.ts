@@ -81,6 +81,15 @@ export const PROVIDER_SHADOW_TEMPLATES: Readonly<
   Record<DatabaseProvider, string | null>
 > = { supabase: null, postgres: "simetra_template" }
 
+/**
+ * Профіль із шаблоном тіні копіює тінь із шаблону кластера цілі й окремого
+ * сервера тіней не знає (Р9). Єдине місце цього факту для плану, адаптера й
+ * інструмента застосування.
+ */
+export function copiesShadowFromTemplate(provider: DatabaseProvider): boolean {
+  return PROVIDER_SHADOW_TEMPLATES[provider] !== null
+}
+
 /** Колляція бази: провайдер локалі `CREATE DATABASE` і локаль. */
 export interface DatabaseLocale {
   provider: "icu"

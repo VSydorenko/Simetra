@@ -7,22 +7,24 @@ import {
   quoteIdent,
 } from "simetra/model"
 import {
+  ensurePostgresCluster,
+  platformRoleSet,
+  postgresClusterSet,
+  type ApplyDatabase,
+  type PlatformRoleRow,
+  type PostgresClusterSet,
+} from "simetra/schema"
+import {
   authSchemaViolation,
   clusterRoleViolation,
   databaseLocaleViolation,
-  ensurePostgresCluster,
   explicitConnectDatabases,
   extensionsSchemaViolation,
-  platformRoleSet,
-  postgresClusterSet,
   templateState,
-  type ApplyDatabase,
   type AuthSchemaFacts,
   type ExtensionsSchemaFacts,
-  type PlatformRoleRow,
-  type PostgresClusterSet,
   type TemplateRow,
-} from "simetra/schema"
+} from "../postgres-cluster"
 import {
   PROVIDER_DATABASE_LOCALES,
   PROVIDER_SHADOW_TEMPLATES,

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { PROVIDER_SCHEMAS } from "simetra/model"
 import {
+  copiesShadowFromTemplate,
   PROVIDER_BASE_EXTENSIONS,
   PROVIDER_EVENT_TRIGGERS,
   PROVIDER_EXPECTED_BLIND_FUNCTIONS,
@@ -80,5 +81,10 @@ describe("postgres preset of T2", () => {
       supabase: null,
       postgres: "simetra_template",
     })
+  })
+
+  it("copiesShadowFromTemplate follows the template registry", () => {
+    expect(copiesShadowFromTemplate("supabase")).toBe(false)
+    expect(copiesShadowFromTemplate("postgres")).toBe(true)
   })
 })

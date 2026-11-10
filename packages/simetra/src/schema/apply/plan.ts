@@ -17,6 +17,7 @@ import {
   type CatalogModel,
 } from "simetra/model"
 import {
+  copiesShadowFromTemplate,
   PROVIDER_EXPECTED_BLIND_FUNCTIONS,
   PROVIDER_INSTALLABLE_EXTENSIONS,
   PROVIDER_LOCKS,
@@ -431,7 +432,10 @@ export async function buildPlan(
   // Профіль `postgres` будує тіні з шаблону кластера цілі й окремого сервера
   // тіней не знає (Р9): відмова до платформних ролей і до будь-якого звернення
   // до бази
-  if (desired.scope.provider === "postgres" && o.shadowBase !== undefined)
+  if (
+    copiesShadowFromTemplate(desired.scope.provider) &&
+    o.shadowBase !== undefined
+  )
     return refused([applyDiagnostic("plan.shadow-base-unsupported", "error")])
   // Факти сервера й голова ledger — тією самою транзакцією READ ONLY, що й
   // стан: доказ копії репетиції (спека промоції §8) звіряє з ними базу
