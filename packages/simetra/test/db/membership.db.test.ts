@@ -1,83 +1,27 @@
 import { describe, expect, it } from "vitest"
-import type pg from "pg"
-import { compile } from "simetra/compiler"
-import { PROVIDER_API_ROLES } from "simetra/model"
-import { renderDesiredState } from "simetra/schema"
 import {
-  expectClean,
-  attribute,
-  catalog,
-  metaFiles,
-  project,
-  uuid,
-} from "../../src/compiler/__tests__/helpers"
+  PLATFORM_ROLES,
+  PROVIDER_API_ROLES,
+  PROVIDER_OWNER_ROLES,
+} from "simetra/model"
 import { signUp } from "./auth"
 import { queryAs, withRollback, claimsFor } from "./connection"
+import {
+  deployMembership as deploy,
+  member,
+  organization,
+} from "./membership.support"
+import { testProvider } from "./profile"
 
 /**
  * Членство на справжньому Postgres (спека користувачів §8): унікальність
  * `(носій скоупу, користувач)` NULLS DISTINCT, «мій учасник» і функція
- * множини з членства під claims запиту. Схема — `public`: провайдер дає там
- * ролям API `EXECUTE` на нові функції типовими привілеями, тож це суворіший
- * випадок за власну схему застосунку.
+ * множини з членства під claims запиту. Схема — `public`: на стеку Supabase
+ * провайдер дає там ролям API `EXECUTE` на нові функції типовими
+ * привілеями, тож це суворіший випадок за власну схему застосунку; кейси
+ * сервісної ролі й типових привілеїв провайдера —
+ * `membership.supabase.db.test.ts`.
  */
-
-async function deploy(client: pg.Client): Promise<void> {
-  const result = await compile(
-    metaFiles({
-      "project.meta.json": project({
-        scopeKinds: [
-          {
-            id: uuid(80),
-            name: "org",
-            physicalName: "org_id",
-            root: { object: { kind: "Catalog", name: "Organization" } },
-            setFunction: "membership",
-          },
-        ],
-      }),
-      "catalogs/Organization/Organization.meta.json": catalog("Organization", {
-        scope: "org",
-      }),
-      "catalogs/Users/Users.meta.json": catalog("Users", {
-        role: "users",
-        scope: "none",
-      }),
-      "catalogs/OrgMember/OrgMember.meta.json": catalog("OrgMember", {
-        scope: "org",
-        membership: { user: "user" },
-        attributes: [
-          attribute("user", {
-            physicalName: "user_id",
-            type: "Ref",
-            ref: { kind: "Catalog", name: "Users" },
-          }),
-        ],
-      }),
-    })
-  )
-  expectClean(result, { allow: ["rights.scope-kind-unread"] })
-  await client.query(renderDesiredState(result.model!).sql)
-}
-
-async function organization(client: pg.Client): Promise<string> {
-  const { rows } = await client.query<{ id: string }>(
-    "INSERT INTO public.organization (id, description) VALUES (gen_random_uuid(), 'Org') RETURNING id"
-  )
-  return rows[0]!.id
-}
-
-async function member(
-  client: pg.Client,
-  org: string,
-  user: string | null
-): Promise<string> {
-  const { rows } = await client.query<{ id: string }>(
-    "INSERT INTO public.org_member (id, org_id, user_id) VALUES (gen_random_uuid(), $1, $2) RETURNING id",
-    [org, user]
-  )
-  return rows[0]!.id
-}
 
 const user = (sub: string) => claimsFor("user", sub)
 
@@ -150,50 +94,47 @@ describe("membership in Postgres", () => {
     })
   })
 
-  it("the provider API roles are exactly the default EXECUTE grantees of the stack", async () => {
-    // Факт провайдера в T0: розходження зі стеком дало б функцію, яку
-    // виконує роль, що її не названо.
+  it("no function of the model is executable by PUBLIC or by a role outside the profile", async () => {
+    // Аналог кейсу типових грантів провайдера (`membership.supabase`): без
+    // типових привілеїв `EXECUTE` нової функції дістає `PUBLIC`, і функцію
+    // виконав би будь-хто з входом, зокрема роль сервісу автентифікації.
+    // Функції моделі — ті, що з'явилися з розгортанням.
     await withRollback(async (client) => {
-      const { rows } = await client.query<{ grantee: string }>(
-        `SELECT DISTINCT a.grantee::regrole::text AS grantee
-         FROM pg_default_acl d, aclexplode(d.defaclacl) a
-         WHERE d.defaclrole = 'postgres'::regrole
-           AND d.defaclnamespace = 'public'::regnamespace
-           AND d.defaclobjtype = 'f'
-           AND a.privilege_type = 'EXECUTE'
-           AND a.grantee <> d.defaclrole
-         ORDER BY 1`
-      )
-      expect(rows.map((r) => r.grantee)).toEqual(
-        Object.values(PROVIDER_API_ROLES.supabase).sort()
-      )
-    })
-  })
-
-  it("service_role gets no member instead of a permission error", async () => {
-    await withRollback(async (client) => {
+      const functionsSql = `SELECT p.oid, n.nspname || '.' || p.proname AS fn
+          FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+         WHERE n.nspname IN ('public', 'simetra')`
+      const before = await client.query<{ oid: number }>(functionsSql)
       await deploy(client)
-      const alice = await signUp(client)
-      const org = await organization(client)
-      await member(client, org, alice)
-      const service = claimsFor("service")
-      expect(
-        await queryAs<{ m: string | null }>(
-          client,
-          "service",
-          service,
-          "SELECT public.org_member_my_member($1) AS m",
-          [org]
-        )
-      ).toEqual({ rows: [{ m: null }] })
-      expect(
-        await queryAs(
-          client,
-          "service",
-          service,
-          "SELECT s FROM public.org_member_member_scopes() AS s"
-        )
-      ).toEqual({ rows: [] })
+      const known = new Set(before.rows.map((f) => f.oid))
+      const functions = (
+        await client.query<{ oid: number; fn: string }>(functionsSql)
+      ).rows.filter((f) => !known.has(f.oid))
+      // Функції моделі справді є: інакше «жодного гранту» нічого б не довело
+      expect(functions.map((f) => f.fn)).toContain(
+        "public.org_member_my_member"
+      )
+      const provider = testProvider()
+      const allowed = [
+        PROVIDER_OWNER_ROLES[provider],
+        ...Object.values(PROVIDER_API_ROLES[provider]).filter(
+          (role): role is string => role !== null
+        ),
+        ...Object.values(PLATFORM_ROLES),
+      ]
+      // Без ACL функція має типовий: `EXECUTE` для `PUBLIC`
+      const { rows } = await client.query<{ fn: string; grantee: string }>(
+        `SELECT n.nspname || '.' || p.proname AS fn,
+                CASE a.grantee WHEN 0 THEN 'PUBLIC' ELSE a.grantee::regrole::text END AS grantee
+           FROM pg_catalog.pg_proc p
+           JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace,
+                pg_catalog.aclexplode(coalesce(p.proacl, pg_catalog.acldefault('f', p.proowner))) a
+          WHERE p.oid = ANY ($1::oid[])
+            AND a.privilege_type = 'EXECUTE'
+            AND (a.grantee = 0 OR NOT a.grantee::regrole::text = ANY ($2::text[]))
+          ORDER BY 1, 2`,
+        [functions.map((f) => f.oid), allowed]
+      )
+      expect(rows).toEqual([])
     })
   })
 

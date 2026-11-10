@@ -1,277 +1,39 @@
 import { beforeAll, describe, expect, it } from "vitest"
 import type pg from "pg"
-import { compile, type CompiledModel } from "simetra/compiler"
+import type { CompiledModel } from "simetra/compiler"
 import { renderDesiredState } from "simetra/schema"
-import { RIGHTS_MAINTENANCE_SETTING, type ApiRolePurpose } from "simetra/model"
+import {
+  PLATFORM_ROLES,
+  PROVIDER_OWNER_ROLES,
+  type ApiRolePurpose,
+} from "simetra/model"
 import { accessPolicyNames } from "../../src/compiler/access-units"
-import {
-  expectClean,
-  acceptDebt,
-  attribute,
-  catalog,
-  document,
-  metaFiles,
-  project,
-  uuid,
-} from "../../src/compiler/__tests__/helpers"
-import {
-  grant,
-  objects,
-  role,
-  systemCatalog,
-} from "../../src/compiler/__tests__/fixtures/rights"
 import { signUp } from "./auth"
-import { claimsFor, queryAs, withRollback, setLocalSetting } from "./connection"
+import { claimsFor, queryAs, testRoleFor, withRollback } from "./connection"
+import {
+  PRIVILEGES,
+  SCENARIOS,
+  claimsOf,
+  compiled,
+  hasPrivilege,
+  tenant,
+} from "./access.support"
+import { testProvider } from "./profile"
 
 /**
  * Доступ до таблиць виду на справжньому Postgres (платформна спека §6.7,
  * §6.8): згенеровані гранти й політики читання вперше виконуються тут, а не
- * лише звіряються текстом. Два сценарії: схема `public`, де типові привілеї
- * провайдера дають ролям API усе на кожну нову таблицю, і власна схема
- * застосунку з прийнятим дослівним `USAGE`, який генерація не чіпає.
+ * лише звіряються текстом. Два сценарії — `access.support.ts`. Кейси
+ * сервісної ролі провайдера — `access.supabase.db.test.ts`.
  */
-
-const SCENARIOS = [
-  { schema: "public", defaultSchema: undefined },
-  { schema: "app", defaultSchema: "app" },
-] as const
-
-type Scenario = (typeof SCENARIOS)[number]
-
-/** ТЧ з однією колонкою: фізичне ім'я таблиці рядків задає файл. */
-function lines(id: number, physicalName: string) {
-  return {
-    id: uuid(id),
-    name: "lines",
-    physicalName,
-    attributes: [attribute("note", { type: "String", length: 20 })],
-  }
-}
-
-/** Роль рівня `org`: `read@any` на скоуплених об'єктах тесту. */
-const ORG_READER_ID = uuid(85)
-
-/**
- * Системні довідники прав рівня `org` (спека прав §4.6) і роль, що читає
- * явний перелік скоуплених об'єктів — не `withAction`: інакше вона читала б і
- * нескоуплений `Secret`, а тест доводить, що його не читає ніхто.
- */
-function orgRights(): Record<string, unknown> {
-  return {
-    "catalogs/OrgRoles/OrgRoles.meta.json": systemCatalog(
-      uuid(86),
-      "OrgRoles",
-      "org_roles",
-      "rightsRoles",
-      "org"
-    ),
-    "catalogs/OrgRoleAssignments/OrgRoleAssignments.meta.json": systemCatalog(
-      uuid(87),
-      "OrgRoleAssignments",
-      "org_role_assignments",
-      "roleAssignments",
-      "org"
-    ),
-    "roles/OrgReader/OrgReader.meta.json": role(
-      ORG_READER_ID,
-      "OrgReader",
-      { scopeKind: "org" },
-      {
-        grants: [
-          grant(
-            objects(
-              ["Catalog", "Organization"],
-              ["Catalog", "Item"],
-              ["Document", "Sale"],
-              ["AccumulationRegister", "Stock"]
-            ),
-            ["read"],
-            "any"
-          ),
-        ],
-      }
-    ),
-  }
-}
-
-const itemRef = (physicalName: string) =>
-  attribute("item", {
-    physicalName,
-    type: "Ref",
-    ref: { kind: "Catalog", name: "Item" },
-  })
-
-async function compiled(scenario: Scenario): Promise<CompiledModel> {
-  const entries: Record<string, unknown> = {
-    "project.meta.json": project({
-      ...(scenario.defaultSchema === undefined
-        ? {}
-        : { defaultSchema: scenario.defaultSchema }),
-      scopeKinds: [
-        {
-          id: uuid(80),
-          name: "org",
-          physicalName: "org_id",
-          root: { object: { kind: "Catalog", name: "Organization" } },
-          setFunction: "membership",
-        },
-      ],
-    }),
-    "catalogs/Users/Users.meta.json": catalog("Users", {
-      role: "users",
-      scope: "none",
-    }),
-    "catalogs/OrgMember/OrgMember.meta.json": catalog("OrgMember", {
-      scope: "org",
-      membership: { user: "user" },
-      attributes: [
-        attribute("user", {
-          physicalName: "user_id",
-          type: "Ref",
-          ref: { kind: "Catalog", name: "Users" },
-        }),
-      ],
-    }),
-    "catalogs/Organization/Organization.meta.json": catalog("Organization", {
-      scope: "org",
-      tabularSections: [lines(81, "organization_lines")],
-    }),
-    "catalogs/Item/Item.meta.json": catalog("Item", {
-      scope: "org",
-      tabularSections: [lines(82, "item_lines")],
-    }),
-    // Регістр накопичення потребує реєстратора; документ лише дає рухи.
-    "documents/Sale/Sale.meta.json": document("Sale", {
-      scope: "org",
-      tabularSections: [
-        {
-          id: uuid(83),
-          name: "goods",
-          physicalName: "sale_goods",
-          attributes: [
-            itemRef("item_id"),
-            attribute("qty", { type: "Numeric", precision: 15, scale: 3 }),
-          ],
-        },
-      ],
-      registerMovements: [{ kind: "AccumulationRegister", name: "Stock" }],
-      posting: {
-        movements: [
-          {
-            register: { kind: "AccumulationRegister", name: "Stock" },
-            source: { tabularSection: "goods" },
-            movementType: "Expense",
-            fields: { item: "row.item", qty: "row.qty" },
-          },
-        ],
-      },
-    }),
-    "accumulation-registers/Stock/Stock.meta.json": {
-      id: uuid(84),
-      kind: "AccumulationRegister",
-      name: "Stock",
-      physicalName: "stock",
-      kindLabel: "stock",
-      scope: "org",
-      recorderTypes: [{ kind: "Document", name: "Sale" }],
-      dimensions: [itemRef("item_id")],
-      resources: [
-        attribute("qty", { type: "Numeric", precision: 15, scale: 3 }),
-      ],
-    },
-    "catalogs/Currency/Currency.meta.json": catalog("Currency", {
-      scope: "none",
-      publicRead: "anon",
-    }),
-    "catalogs/Secret/Secret.meta.json": catalog("Secret", { scope: "none" }),
-    ...orgRights(),
-  }
-  let files = metaFiles(entries)
-  if (scenario.schema === "app") {
-    // Прийнятий грант схеми — дослівний борг, як у споживача з власною
-    // схемою: генерація грантів схеми не дає й не відкликає.
-    files.set(
-      "sql/app/usage.sql",
-      "GRANT USAGE ON SCHEMA app TO authenticated;\nGRANT USAGE ON SCHEMA app TO anon;\n"
-    )
-    files = await acceptDebt(files)
-  }
-  const result = await compile(files)
-  expectClean(result, { allow: ["rights.scope-kind-unread"] })
-  return result.model!
-}
-
-interface Tenant {
-  org: string
-  item: string
-}
-
-/**
- * Організація з одним рядком у кожній таблиці, яку перевіряє тест, і
- * користувачем — учасником з роллю `OrgReader`: читання тепер дає право, а
- * межа тенанта лише звужує (спека прав §5.2). Пише власник таблиць: RLS його не
- * обмежує, а запис від ролей API тут не перевіряється.
- */
-async function tenant(
-  client: pg.Client,
-  schema: string,
-  user: string
-): Promise<Tenant> {
-  const one = async (sql: string, params: unknown[] = []) =>
-    (await client.query<{ id: string }>(sql, params)).rows[0]?.id
-  const org = (await one(
-    `INSERT INTO ${schema}.organization (id) VALUES (gen_random_uuid()) RETURNING id`
-  ))!
-  await client.query(
-    `INSERT INTO ${schema}.organization_lines (id, parent_id, line_number) VALUES (gen_random_uuid(), $1, 1)`,
-    [org]
-  )
-  const member = (await one(
-    `INSERT INTO ${schema}.org_member (id, org_id, user_id) VALUES (gen_random_uuid(), $1, $2) RETURNING id`,
-    [org, user]
-  ))!
-  await setLocalSetting(client, RIGHTS_MAINTENANCE_SETTING, "on")
-  await client.query(
-    `INSERT INTO ${schema}.org_role_assignments (id, org_id, subject, archetype) VALUES (gen_random_uuid(), $1, $2, $3)`,
-    [org, member, ORG_READER_ID]
-  )
-  await setLocalSetting(client, RIGHTS_MAINTENANCE_SETTING, "off")
-  const item = (await one(
-    `INSERT INTO ${schema}.item (id, org_id) VALUES (gen_random_uuid(), $1) RETURNING id`,
-    [org]
-  ))!
-  await client.query(
-    `INSERT INTO ${schema}.item_lines (id, org_id, parent_id, line_number) VALUES (gen_random_uuid(), $1, $2, 1)`,
-    [org, item]
-  )
-  await client.query(
-    `INSERT INTO ${schema}.stock (org_id, period, recorder_type, recorder_id, line_number, movement_type, item_id, qty) VALUES ($1, now(), 'sale', gen_random_uuid(), 1, 'Expense', $2, 1)`,
-    [org, item]
-  )
-  await client.query(
-    `INSERT INTO ${schema}.stock_totals (org_id, item_id, qty) VALUES ($1, $2, 1)`,
-    [org, item]
-  )
-  await client.query(
-    `INSERT INTO ${schema}.stock_turnovers_month (org_id, item_id, month) VALUES ($1, $2, date_trunc('month', now())::date)`,
-    [org, item]
-  )
-  return { org, item }
-}
 
 const user = (sub: string) => claimsFor("user", sub)
-const claimsOf = (purpose: ApiRolePurpose, sub: string) =>
-  claimsFor(purpose, purpose === "user" ? sub : undefined)
 
-const PRIVILEGES = [
-  "SELECT",
-  "INSERT",
-  "UPDATE",
-  "DELETE",
-  "TRUNCATE",
-  "REFERENCES",
-  "TRIGGER",
-] as const
+/** Ролі запиту профілю: сервісна — не роль запиту, і профіль її може не мати. */
+const REQUEST_PURPOSES = [
+  "user",
+  "anonymous",
+] as const satisfies readonly ApiRolePurpose[]
 
 /** Усі значення `Parent Relationship` дерева плану `EXPLAIN (FORMAT JSON)`. */
 function parentRelationships(node: unknown): string[] {
@@ -358,7 +120,7 @@ describe.each(SCENARIOS)("kind table access in schema $schema", (scenario) => {
     })
   })
 
-  it("unscoped table without public read: no rows for users, no access for anon and service_role", async () => {
+  it("unscoped table without public read: no rows for users, no access for anon", async () => {
     await withRollback(async (client) => {
       await deploy(client)
       const alice = await signUp(client)
@@ -375,17 +137,15 @@ describe.each(SCENARIOS)("kind table access in schema $schema", (scenario) => {
         )
       ).toEqual({ rows: [] })
       for (const table of ["secret", "item"]) {
-        for (const role of ["anonymous", "service"] as const) {
-          expect(
-            await queryAs(
-              client,
-              role,
-              claimsOf(role, alice),
-              `SELECT * FROM ${schema}.${table}`
-            ),
-            `${role} on ${table}`
-          ).toEqual({ code: "42501" })
-        }
+        expect(
+          await queryAs(
+            client,
+            "anonymous",
+            claimsOf("anonymous", alice),
+            `SELECT * FROM ${schema}.${table}`
+          ),
+          `anonymous on ${table}`
+        ).toEqual({ code: "42501" })
       }
     })
   })
@@ -393,28 +153,24 @@ describe.each(SCENARIOS)("kind table access in schema $schema", (scenario) => {
   it("table privileges: select for readers only, nothing else for any API role", async () => {
     await withRollback(async (client) => {
       await deploy(client)
-      const has = async (role: string, table: string, privilege: string) =>
-        (
-          await client.query<{ ok: boolean }>(
-            "SELECT has_table_privilege($1, $2, $3) AS ok",
-            [role, `${schema}.${table}`, privilege]
-          )
-        ).rows[0]!.ok
-      expect(await has("authenticated", "item", "INSERT")).toBe(false)
-      expect(await has("anon", "currency", "INSERT")).toBe(false)
-      expect(await has("anon", "currency", "TRUNCATE")).toBe(false)
-      expect(await has("service_role", "currency", "SELECT")).toBe(false)
-      // Повна матриця: типові привілеї схеми провайдера не лишають ролям API
-      // нічого понад згенерований `SELECT`.
+      const has = (role: string, table: string, privilege: string) =>
+        hasPrivilege(client, role, `${schema}.${table}`, privilege)
+      const userRole = testRoleFor("user")!
+      const anonRole = testRoleFor("anonymous")!
+      expect(await has(userRole, "item", "INSERT")).toBe(false)
+      expect(await has(anonRole, "currency", "INSERT")).toBe(false)
+      expect(await has(anonRole, "currency", "TRUNCATE")).toBe(false)
+      // Повна матриця: типові привілеї схеми не лишають ролям запиту нічого
+      // понад згенерований `SELECT`.
       for (const contract of model.contracts.access) {
         const table = contract.table.name
-        for (const role of ["anon", "authenticated", "service_role"]) {
+        for (const purpose of REQUEST_PURPOSES) {
+          const role = testRoleFor(purpose)!
           const granted: string[] = []
           for (const privilege of PRIVILEGES)
             if (await has(role, table, privilege)) granted.push(privilege)
           const reads =
-            role === "authenticated" ||
-            (role === "anon" && contract.publicRead.includes("anonymous"))
+            purpose === "user" || contract.publicRead.includes("anonymous")
           expect(granted, `${role} on ${table}`).toEqual(
             reads ? ["SELECT"] : []
           )
@@ -423,12 +179,48 @@ describe.each(SCENARIOS)("kind table access in schema $schema", (scenario) => {
     })
   })
 
+  it("no role outside the profile holds a privilege on a kind table", async () => {
+    // Сервісної ролі в обхід RLS профіль може не мати (`postgres`), а грант
+    // таблиці чи колонки ролі поза профілем — ні `PUBLIC`, ні ролі входу —
+    // відкрив би рядки повз політики читання.
+    await withRollback(async (client) => {
+      await deploy(client)
+      const allowed = [
+        PROVIDER_OWNER_ROLES[testProvider()],
+        ...REQUEST_PURPOSES.map((purpose) => testRoleFor(purpose)!),
+        ...Object.values(PLATFORM_ROLES),
+      ]
+      const tables = model.contracts.access.map(
+        (contract) => `${schema}.${contract.table.name}`
+      )
+      expect(tables.length).toBeGreaterThan(0)
+      const { rows } = await client.query<{ object: string; grantee: string }>(
+        `WITH t AS (SELECT c.oid, c.relowner, n.nspname || '.' || c.relname AS name
+                      FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+                     WHERE n.nspname || '.' || c.relname = ANY ($1::text[])),
+              acl AS (SELECT t.name AS object, a.grantee
+                        FROM t, pg_catalog.aclexplode(coalesce((SELECT relacl FROM pg_catalog.pg_class WHERE oid = t.oid), pg_catalog.acldefault('r', t.relowner))) a
+                      UNION ALL
+                      SELECT t.name || '.' || att.attname, a.grantee
+                        FROM t JOIN pg_catalog.pg_attribute att ON att.attrelid = t.oid AND att.attacl IS NOT NULL,
+                             pg_catalog.aclexplode(att.attacl) a)
+         SELECT DISTINCT object, CASE grantee WHEN 0 THEN 'PUBLIC' ELSE grantee::regrole::text END AS grantee
+           FROM acl
+          WHERE grantee = 0 OR NOT grantee::regrole::text = ANY ($2::text[])
+          ORDER BY 1, 2`,
+        [tables, allowed]
+      )
+      expect(rows).toEqual([])
+    })
+  })
+
   it.runIf(schema === "app")(
     "the adopted schema USAGE survives the deployment",
     async () => {
       await withRollback(async (client) => {
         await deploy(client)
-        for (const role of ["authenticated", "anon"]) {
+        for (const purpose of REQUEST_PURPOSES) {
+          const role = testRoleFor(purpose)!
           const { rows } = await client.query<{ ok: boolean }>(
             "SELECT has_schema_privilege($1, 'app', 'USAGE') AS ok",
             [role]
@@ -489,9 +281,9 @@ describe.each(SCENARIOS)("kind table access in schema $schema", (scenario) => {
         policy: string
       }>(
         `SELECT tablename AS table, policyname AS policy FROM pg_policies
-         WHERE schemaname = $1 AND cmd = 'SELECT' AND roles @> ARRAY['authenticated']::name[]
+         WHERE schemaname = $1 AND cmd = 'SELECT' AND roles @> ARRAY[$2]::name[]
          ORDER BY 1, 2`,
-        [schema]
+        [schema, testRoleFor("user")]
       )
       const deployed = new Map<string, string[]>()
       for (const { table, policy } of policies) {

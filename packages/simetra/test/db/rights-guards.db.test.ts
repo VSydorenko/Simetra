@@ -4,8 +4,11 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import {
   COMMAND_SETTING,
   PLATFORM_ROLES,
+  PROVIDER_LOGIN_ROLES,
+  PROVIDER_OWNER_ROLES,
   RIGHTS_MAINTENANCE_SETTING,
   SESSION_CLAIMS_SETTING,
+  quoteIdent,
 } from "simetra/model"
 import {
   CHECKLIST_TABLE,
@@ -30,23 +33,29 @@ import {
 } from "../../src/compiler/__tests__/fixtures/rights"
 import { signUp } from "./auth"
 import {
+  asStackSuperuser,
   commandAs,
   commandSteps,
   queryAs,
+  restoreOwnerRole,
+  testRoleFor,
   testRoleName,
-  testSuperuserUrl,
   withRollback,
   type Refusal,
   setLocalSetting,
   claimsFor,
 } from "./connection"
+import { testProvider } from "./profile"
+import { ownerLoginModel, probe, seedProbes } from "./rights-guards.support"
 import {
   assignmentRow,
   closureRights,
   describeTransaction,
+  inMaintenance,
   insert,
   insertOrphan,
   orgDeltaRow,
+  profileLayer,
   seedAdministration,
   type Delta,
   type Seed,
@@ -132,11 +141,13 @@ describe("rights administration guards", () => {
     const client = tx.client()
     await client.query("SAVEPOINT owner_probe")
     try {
-      if (maintenance)
-        await setLocalSetting(client, RIGHTS_MAINTENANCE_SETTING, "on")
-      const result: pg.QueryResult | pg.QueryResult[] = await client.query(
-        sql(statement)
-      )
+      const run = (): Promise<pg.QueryResult | pg.QueryResult[]> =>
+        client.query(sql(statement))
+      const result = maintenance
+        ? await inMaintenance(client, run)
+        : await run()
+      // Поза `inMaintenance`: режим черга запам'ятала, а `SET CONSTRAINTS`
+      // у відпущеній точці збереження помічника пережив би відкат цієї
       await client.query("SET CONSTRAINTS ALL IMMEDIATE")
       // Кілька операторів одним запитом дають масив: рядки — останнього.
       return { rows: Array.isArray(result) ? result.at(-1)!.rows : result.rows }
@@ -200,16 +211,18 @@ describe("rights administration guards", () => {
 
   beforeAll(async () => {
     const result = await compileRights(
-      policyDomain(writeRoles(), adminRoles(), globalRightsAdmins())
+      policyDomain(
+        writeRoles(),
+        adminRoles(),
+        globalRightsAdmins(),
+        profileLayer()
+      )
     )
     expect(result.diagnostics).toEqual([])
     const client = await tx.open()
     await deploy(client, result.model!)
     await client.query(
       `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ${PLATFORM_ROLES.command}`
-    )
-    await client.query(
-      `GRANT ${PLATFORM_ROLES.command} TO CURRENT_USER WITH SET TRUE`
     )
     ids = await seedAdministration(client)
     // Відкладені ключі засіву перевіряються зараз: кейси починають з порожньої черги
@@ -746,9 +759,10 @@ describe("rights administration guards", () => {
     const client = tx.client()
     await client.query("SAVEPOINT maintenance_journal")
     try {
-      await setLocalSetting(client, RIGHTS_MAINTENANCE_SETTING, "on")
       const id = randomUUID()
-      await client.query(sql(assignSql(id, TASK_VIEWER_ID)))
+      await inMaintenance(client, () =>
+        client.query(sql(assignSql(id, TASK_VIEWER_ID)))
+      )
       await client.query("SET CONSTRAINTS ALL IMMEDIATE")
       const { rows } = await client.query<{
         actor: string | null
@@ -822,8 +836,7 @@ describe("rights administration guards", () => {
     const client = tx.client()
     await client.query("SAVEPOINT scope_move")
     try {
-      await setLocalSetting(client, RIGHTS_MAINTENANCE_SETTING, "on")
-      await client.query(sql(swap))
+      await inMaintenance(client, () => client.query(sql(swap)))
       const { rows } = await client.query<{ key: string }>(
         "SELECT key::text FROM simetra.rights_tx_pending WHERE xid = txid_current() AND kind = 'holders'"
       )
@@ -1339,15 +1352,15 @@ describe("rights administration guards", () => {
           await client.query(sql(assignSql(second, TASK_VIEWER_ID, "other@A")))
           // Оператор обслуговування — поза командою: з контекстом його судив
           // би тригер ефектів як некореневий запис команди
-          await client.query("RESET ROLE")
+          await restoreOwnerRole(client)
           await setLocalSetting(client, COMMAND_SETTING, "")
-          await setLocalSetting(client, RIGHTS_MAINTENANCE_SETTING, "on")
-          await client.query(
-            sql(
-              'UPDATE public.org_roles SET "order" = 9 WHERE id = {unusedCustom}'
+          await inMaintenance(client, () =>
+            client.query(
+              sql(
+                'UPDATE public.org_roles SET "order" = 9 WHERE id = {unusedCustom}'
+              )
             )
           )
-          await setLocalSetting(client, RIGHTS_MAINTENANCE_SETTING, "off")
           await client.query("SET CONSTRAINTS ALL IMMEDIATE")
           const { rows } = await client.query<{ n: number }>(PENDING_ROWS)
           expect(rows[0]?.n).toBe(0)
@@ -1367,7 +1380,7 @@ describe("rights administration guards", () => {
         async (client) => {
           await client.query("SET CONSTRAINTS ALL IMMEDIATE")
           await client.query(sql(assignSql(id, TASK_VIEWER_ID)))
-          await client.query("RESET ROLE")
+          await restoreOwnerRole(client)
           const { rows } = await client.query<{ n: number }>(PENDING_ROWS)
           expect(rows[0]?.n).toBe(0)
           const headers = await client.query<{ n: number }>(RIGHTS_HEADERS)
@@ -1391,7 +1404,7 @@ describe("rights administration guards", () => {
           )
           expect(rowCount).toBe(1)
           await client.query("SET CONSTRAINTS ALL IMMEDIATE")
-          await client.query("RESET ROLE")
+          await restoreOwnerRole(client)
           const { rows } = await client.query<{ n: number }>(PENDING_ROWS)
           expect(rows[0]?.n).toBe(0)
           const headers = await client.query<{ n: number }>(RIGHTS_HEADERS)
@@ -1403,114 +1416,61 @@ describe("rights administration guards", () => {
 })
 
 describe("maintenance only from the owner login", () => {
-  // Хто власник функцій прав і під яким входом сесія, вирішує Postgres:
-  // `session_user = current_user` у `SECURITY DEFINER` юніт не доводить.
-  const compiled = () => compileRights(policyDomain(writeRoles(), adminRoles()))
-
-  /** Засів і функції-зонди: `debt_grant` вмикає режим, `debt_grant_plain` — ні. */
-  const seedProbes = async (client: pg.Client): Promise<string> => {
-    const org = randomUUID()
-    const member = randomUUID()
-    const user = await signUp(client)
-    await insert(client, "organization", { id: org })
-    await insert(client, "org_member", {
-      id: member,
-      org_id: org,
-      user_id: user,
-    })
-    const grant = `INSERT INTO public.org_role_assignments (id, org_id, subject, archetype)
-          VALUES (gen_random_uuid(), '${org}', p_subject, '${TASK_VIEWER_ID}');`
-    for (const [name, prelude] of [
-      [
-        "debt_grant",
-        `PERFORM set_config('${RIGHTS_MAINTENANCE_SETTING}', 'on', true);`,
-      ],
-      ["debt_grant_plain", ""],
-    ]) {
-      await client.query(`CREATE FUNCTION public.${name}(p_subject uuid) RETURNS void
-        LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
-        BEGIN
-          ${prelude}
-          ${grant}
-        END $$`)
-      await client.query(
-        `GRANT EXECUTE ON FUNCTION public.${name}(uuid) TO authenticated`
-      )
-    }
-    return member
-  }
-
-  const probe = async (
-    client: pg.Client,
-    member: string,
-    login: string,
-    expected?: string,
-    fn = "debt_grant"
-  ) => {
-    await client.query("SAVEPOINT api_login")
-    try {
-      await client.query(`SET SESSION AUTHORIZATION ${login}`)
-      if (login !== "postgres") await client.query("SET ROLE authenticated")
-      const identity = await client.query<{ login: string; role: string }>(
-        "SELECT session_user AS login, current_user AS role"
-      )
-      expect(identity.rows[0]).toEqual({
-        login,
-        role: login === "postgres" ? "postgres" : "authenticated",
-      })
-      let failure: pg.DatabaseError | undefined
-      try {
-        await client.query(`SELECT public.${fn}($1)`, [member])
-        await client.query("SET CONSTRAINTS ALL IMMEDIATE")
-      } catch (error) {
-        if (!(error instanceof pg.DatabaseError)) throw error
-        failure = error
-      }
-      if (expected === undefined) expect(failure).toBeUndefined()
-      else expect(failure).toMatchObject({ code: "42501", detail: expected })
-    } finally {
-      await client.query("ROLLBACK TO SAVEPOINT api_login")
-    }
-  }
-
-  it("a postgres-owned definer enables maintenance only for the postgres login", async () => {
-    const model = await compiled()
+  it("an owner-owned definer enables maintenance only for the owner login", async () => {
+    const model = await ownerLoginModel()
     expect(model.diagnostics).toEqual([])
     await withRollback(async (client) => {
-      await client.query("SET ROLE postgres")
       await deploy(client, model.model!)
       const member = await seedProbes(client)
-      await client.query("RESET ROLE")
       // Логін поза переліками провайдера: заборонний список його пропускав.
+      // Роль входу й членство власник не створить — це дає суперкористувач
+      // стека в точці збереження транзакції тесту
       const foreign = testRoleName("foreign_login")
-      await client.query(`CREATE ROLE ${foreign} LOGIN`)
-      await client.query(`GRANT authenticated TO ${foreign}`)
-      await probe(client, member, "postgres")
+      await asStackSuperuser(client, async () => {
+        await client.query(`CREATE ROLE ${foreign} LOGIN`)
+        await client.query(
+          `GRANT ${quoteIdent(testRoleFor("user")!)} TO ${foreign}`
+        )
+      })
+      const provider = testProvider()
+      const owner = PROVIDER_OWNER_ROLES[provider]
+      await probe(client, member, owner)
       await probe(client, member, foreign, "rights-context")
-      await probe(client, member, "authenticator", "rights-context")
-      await probe(client, member, "supabase_admin", "rights-context")
-      await probe(
-        client,
-        member,
-        "postgres",
-        "rights-context",
-        "debt_grant_plain"
-      )
-    }, testSuperuserUrl())
+      for (const login of PROVIDER_LOGIN_ROLES[provider])
+        await probe(client, member, login, "rights-context")
+      await probe(client, member, owner, "rights-context", "debt_grant_plain")
+    })
   }, 120_000)
 
-  it("a provider login that owns the rights functions never enables maintenance", async () => {
-    const model = await compiled()
+  // Аналог кейсу провайдера, чий вхід сам володіє функціями прав
+  // (`rights-guards.supabase`): власник функцій, що вмикають режим, — роль
+  // власника профілю, а не вхід провайдера і не суперкористувач
+  it("the functions that read the maintenance setting belong to the owner role of the profile", async () => {
+    const model = await ownerLoginModel()
     expect(model.diagnostics).toEqual([])
     await withRollback(async (client) => {
-      // Без `SET ROLE postgres`: власник функцій прав — сам `supabase_admin`.
       await deploy(client, model.model!)
-      const member = await seedProbes(client)
-      const owner = await client.query<{ same: boolean }>(
-        "SELECT session_user = current_user AS same"
+      const { rows } = await client.query<{
+        fn: string
+        owner: string
+        superuser: boolean
+      }>(
+        `SELECT n.nspname || '.' || p.proname AS fn, r.rolname AS owner, r.rolsuper AS superuser
+           FROM pg_catalog.pg_proc p
+           JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+           JOIN pg_catalog.pg_roles r ON r.oid = p.proowner
+          WHERE p.prosecdef AND strpos(p.prosrc, $1) > 0
+          ORDER BY 1`,
+        [RIGHTS_MAINTENANCE_SETTING]
       )
-      expect(owner.rows[0]).toEqual({ same: true })
-      await probe(client, member, "supabase_admin", "rights-context")
-    }, testSuperuserUrl())
+      // Функції режиму справді є: інакше «усі власника» нічого б не довело
+      expect(rows.length).toBeGreaterThan(0)
+      const provider = testProvider()
+      const owner = PROVIDER_OWNER_ROLES[provider]
+      expect(PROVIDER_LOGIN_ROLES[provider]).not.toContain(owner)
+      expect(
+        rows.filter((row) => row.owner !== owner || row.superuser)
+      ).toEqual([])
+    })
   }, 120_000)
 })

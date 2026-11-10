@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto"
 import pg from "pg"
 import type { CompiledModel } from "simetra/compiler"
-import { RIGHTS_MAINTENANCE_SETTING } from "simetra/model"
+import { PROVIDER_OWNER_ROLES, RIGHTS_MAINTENANCE_SETTING } from "simetra/model"
 import { renderDesiredState } from "simetra/schema"
 import {
   COMMENT_TABLE,
@@ -21,9 +21,18 @@ import {
   TICKET_TABLE,
   TICKET_TARGETS_READER_ID,
   TICKET_WRITER_ID,
+  PROJECT_FILE,
+  type Layer,
 } from "../../src/compiler/__tests__/fixtures/rights"
 import { signUp } from "./auth"
-import { queryAs, testDatabaseUrl, claimsFor } from "./connection"
+import {
+  asSessionLogin,
+  claimsFor,
+  queryAs,
+  setLocalSetting,
+  testDatabaseUrl,
+} from "./connection"
+import { testProvider } from "./profile"
 
 /**
  * Спільний засів DB-сценаріїв прав (`rights-functions`, `rights-policies`,
@@ -73,19 +82,52 @@ export async function insert(
   if (tables === undefined)
     throw new Error("insert: deploy the model on this client first")
   const columns = Object.keys(values)
-  const rightsTable = tables.has(`public.${table}`)
-  if (rightsTable)
-    await client.query("SELECT set_config($1, 'on', true)", [
-      RIGHTS_MAINTENANCE_SETTING,
-    ])
-  await client.query(
-    `INSERT INTO public.${table} (${columns.join(", ")}) VALUES (${columns.map((_, i) => `$${i + 1}`).join(", ")})`,
-    Object.values(values)
+  const write = async () => {
+    await client.query(
+      `INSERT INTO public.${table} (${columns.join(", ")}) VALUES (${columns.map((_, i) => `$${i + 1}`).join(", ")})`,
+      Object.values(values)
+    )
+  }
+  if (tables.has(`public.${table}`)) await inMaintenance(client, write)
+  else await write()
+}
+
+/**
+ * Шар проєкту прав з профілем прогону: модель компілюється під провайдера
+ * стека, на якому її розгортають (таблиця ідентичності, ролі API).
+ */
+export const profileLayer = (): Layer => ({
+  [PROJECT_FILE]: { database: { provider: testProvider() } },
+})
+
+/**
+ * `fn` під режимом обслуговування прав у тій самій транзакції. Режим діє лише
+ * для входу власника функцій прав (`session_user = current_user`), а на
+ * адресі тестів профілю `postgres` `session_user` — суперкористувач, тож
+ * засів іде від входу власника (`asSessionLogin`); на `supabase` власник і є
+ * роль входу. Режим вимикається явно на успіху, а на збої його знімає відкат
+ * точки збереження помічника.
+ *
+ * `SET CONSTRAINTS` — поза `fn`: режим обмежень, змінений у відпущеній точці
+ * збереження помічника, Postgres не повертає відкатом зовнішньої, і решта
+ * транзакції судила б оператори одразу, а не на COMMIT. Режим обслуговування
+ * черга прав запам'ятовує на записі, тож відкладена перевірка після `fn`
+ * судить так само.
+ */
+export async function inMaintenance<T>(
+  client: pg.Client,
+  fn: () => Promise<T>
+): Promise<T> {
+  return asSessionLogin(
+    client,
+    PROVIDER_OWNER_ROLES[testProvider()],
+    async () => {
+      await setLocalSetting(client, RIGHTS_MAINTENANCE_SETTING, "on")
+      const result = await fn()
+      await setLocalSetting(client, RIGHTS_MAINTENANCE_SETTING, "off")
+      return result
+    }
   )
-  if (rightsTable)
-    await client.query("SELECT set_config($1, 'off', true)", [
-      RIGHTS_MAINTENANCE_SETTING,
-    ])
 }
 
 /**

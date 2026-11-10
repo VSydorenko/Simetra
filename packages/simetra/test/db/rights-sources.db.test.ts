@@ -32,6 +32,7 @@ import {
   mineEquivalence,
 } from "./closure-oracle"
 import {
+  asStackSuperuser,
   queryAs,
   rollbackDatabase,
   testRoleName,
@@ -46,6 +47,7 @@ import {
   outcome,
   set,
   deploy,
+  profileLayer,
 } from "./rights-seed"
 
 /**
@@ -328,7 +330,7 @@ describe("adopted sources", () => {
 
   beforeAll(async () => {
     model = await sourcesModel(
-      adoptedSourcesDomain(adoptedCrossKind(), activeGrants())
+      adoptedSourcesDomain(adoptedCrossKind(), activeGrants(), profileLayer())
     )
     const client = await tx.open()
     await deploy(client, model)
@@ -474,10 +476,14 @@ describe("adopted sources", () => {
     const schema = testRoleName("source_schema")
     await client.query("SAVEPOINT plan_facts")
     try {
-      // Творець ролі може перемкнутися на неї лише з `set` (Postgres 16+)
+      // Творець ролі може перемкнутися на неї лише з `set` (Postgres 16+);
+      // ролі й членства власник профілю не створить — їх дає
+      // суперкористувач стека, а все інше лишається за власником
       await client.query("SET LOCAL createrole_self_grant = 'set, inherit'")
-      await client.query(`CREATE ROLE ${role} NOLOGIN NOBYPASSRLS`)
-      await client.query(`GRANT USAGE ON SCHEMA public TO ${role}`)
+      await asStackSuperuser(client, async () => {
+        await client.query(`CREATE ROLE ${role} NOLOGIN NOBYPASSRLS`)
+        await client.query(`GRANT USAGE ON SCHEMA public TO ${role}`)
+      })
       await client.query(
         `GRANT SELECT ON public.membership, public.role_grant, public.global_grant TO ${role}`
       )
@@ -497,8 +503,10 @@ describe("adopted sources", () => {
       await restoreOwnerRole(client)
 
       // Не власник, але з `BYPASSRLS`: RLS таблиці його не зупиняє
-      await client.query(`CREATE ROLE ${bypass} NOLOGIN BYPASSRLS`)
-      await client.query(`GRANT USAGE ON SCHEMA public TO ${bypass}`)
+      await asStackSuperuser(client, async () => {
+        await client.query(`CREATE ROLE ${bypass} NOLOGIN BYPASSRLS`)
+        await client.query(`GRANT USAGE ON SCHEMA public TO ${bypass}`)
+      })
       await client.query(`GRANT SELECT ON public.role_grant TO ${bypass}`)
       await client.query(`SET LOCAL ROLE ${bypass}`)
       expect
@@ -511,15 +519,17 @@ describe("adopted sources", () => {
       await restoreOwnerRole(client)
 
       // Власник, успадкований через членство (`pg_has_role`), обходить RLS
-      await client.query(`CREATE ROLE ${owner} NOLOGIN NOBYPASSRLS`)
-      await client.query(`GRANT USAGE, CREATE ON SCHEMA public TO ${owner}`)
       await client.query(`CREATE TABLE public.${ownedTable} (id integer)`)
-      await client.query(`ALTER TABLE public.${ownedTable} OWNER TO ${owner}`)
       await client.query(
         `ALTER TABLE public.${ownedTable} ENABLE ROW LEVEL SECURITY`
       )
-      await client.query(`CREATE ROLE ${heir} NOLOGIN NOBYPASSRLS`)
-      await client.query(`GRANT ${owner} TO ${heir}`)
+      await asStackSuperuser(client, async () => {
+        await client.query(`CREATE ROLE ${owner} NOLOGIN NOBYPASSRLS`)
+        await client.query(`GRANT USAGE, CREATE ON SCHEMA public TO ${owner}`)
+        await client.query(`ALTER TABLE public.${ownedTable} OWNER TO ${owner}`)
+        await client.query(`CREATE ROLE ${heir} NOLOGIN NOBYPASSRLS`)
+        await client.query(`GRANT ${owner} TO ${heir}`)
+      })
       await client.query(`SET LOCAL ROLE ${heir}`)
       expect
         .soft(await ownersOf(["public", ownedTable]), "inherited owner")
@@ -532,8 +542,10 @@ describe("adopted sources", () => {
 
       // Без `SELECT` на таблиці без RLS — відмова; без `USAGE` на схемі —
       // теж відмова (рядок є), а не відсутність і не `42501`
-      await client.query(`CREATE ROLE ${blind} NOLOGIN NOBYPASSRLS`)
-      await client.query(`GRANT USAGE ON SCHEMA public TO ${blind}`)
+      await asStackSuperuser(client, async () => {
+        await client.query(`CREATE ROLE ${blind} NOLOGIN NOBYPASSRLS`)
+        await client.query(`GRANT USAGE ON SCHEMA public TO ${blind}`)
+      })
       await client.query(`CREATE SCHEMA ${schema}`)
       await client.query(`CREATE TABLE ${schema}.t (id integer)`)
       await client.query(`GRANT SELECT ON ${schema}.t TO ${blind}`)
@@ -683,7 +695,7 @@ describe("without users", () => {
 
   beforeAll(async () => {
     model = await sourcesModel(
-      adoptedSourcesDomain(withoutUsers(), polymorphicGrants())
+      adoptedSourcesDomain(withoutUsers(), polymorphicGrants(), profileLayer())
     )
     const client = await tx.open()
     await deploy(client, model)

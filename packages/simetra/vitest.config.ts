@@ -3,7 +3,20 @@ import { defineConfig } from "vitest/config"
 // DB-файли, уже перенесені на стек postgres (план ПГ-2b, Р6): `db-pg` їх
 // бере, а `db`, ще на Supabase, виключає тим самим комітом — кейс під час
 // переносу не губиться й не задвоюється
-export const ON_POSTGRES: string[] = []
+export const ON_POSTGRES: string[] = [
+  // Права (задача 7)
+  "test/db/access.db.test.ts",
+  "test/db/membership.db.test.ts",
+  "test/db/rights-analysis.db.test.ts",
+  "test/db/rights-functions.db.test.ts",
+  "test/db/rights-guards.db.test.ts",
+  "test/db/rights-plan-gate.db.test.ts",
+  "test/db/rights-policies.db.test.ts",
+  "test/db/rights-sources.db.test.ts",
+  "test/db/rights-write.db.test.ts",
+  "test/db/row-rule.db.test.ts",
+  "test/db/command-grants.db.test.ts",
+]
 
 // Шлях guard і прибиральника переривання покритий на обох стеках: на
 // Supabase — проєктом `db-supabase`, тож `db` його не бере, інакше файл ішов

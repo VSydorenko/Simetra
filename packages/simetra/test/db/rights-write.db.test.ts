@@ -1,42 +1,15 @@
-import { randomUUID } from "node:crypto"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import type pg from "pg"
-import {
-  COMMAND_SETTING,
-  PLATFORM_ROLES,
-  PROVIDER_API_ROLES,
-  type CommandContext,
-} from "simetra/model"
+import { PLATFORM_ROLES, type CommandContext } from "simetra/model"
 import {
   BULLETIN_TABLE,
   CHECKLIST_TABLE,
-  COMMENT_TABLE,
-  PROJECT_WRITER_ID,
   REASSIGN_ACTION_ID,
   REGION_NOTES_TABLE,
-  REGION_WRITER_ID,
-  TASK_MARKER_ID,
-  TASK_WRITER_ID,
-  compileRights,
-  policyDomain,
-  writableRegister,
-  writeRoles,
 } from "../../src/compiler/__tests__/fixtures/rights"
-import { signUp } from "./auth"
-import {
-  type Refusal,
-  commandAs,
-  restoreOwnerRole,
-  setLocalSetting,
-} from "./connection"
-import {
-  type Assignment,
-  type Seed,
-  assignmentRow,
-  describeTransaction,
-  insert,
-  deploy,
-} from "./rights-seed"
+import { type Refusal, claimsFor, commandAs, queryAs } from "./connection"
+import { type Seed, describeTransaction, deploy } from "./rights-seed"
+import { seedWrites, writesModel } from "./rights-write.support"
 
 /**
  * Запис під роллю команд на справжньому Postgres (спека прав §5.3, §6.2): які рядки пише роль під RLS запису (запобіжник контексту,
@@ -45,106 +18,11 @@ import {
  * текст. Одне розгортання на опис; кожен запит — у точці збереження, яку
  * `commandAs` відкочує, тож порядок кейсів нічого не змінює.
  *
- * Механізм ролі — перший шлях: `GRANT simetra_command TO
- * CURRENT_USER WITH SET TRUE` у транзакції опису. Роль тестів стеку
- * (`postgres`) має `ADMIN` на ролі команд, тож Postgres гранту не відмовляє;
- * запасна тегова роль і клієнт суперкористувача не потрібні.
+ * Роль команд — через `SET LOCAL ROLE` у `commandAs`: перемикання судить
+ * `session_user` (суперкористувач стека на адресі тестів), тож гранту
+ * членства власнику не треба. Кейси сервісної ролі провайдера —
+ * `rights-write.supabase.db.test.ts`.
  */
-
-/**
- * Засів: організації A, B; учасники w1 (A, `TaskWriter` і `RegionWriter`,
- * регіон r1 у `MemberRegion`), w2 (A, `TaskMarker`), w3 (B, `TaskWriter`),
- * w4 (A, лише `ProjectWriter` на P1), w5 (`TaskWriter` і в A, і в B —
- * `tenant-move`). Задачі A у P1: T1 (виконавець w2), T2 (w1, рядок ТЧ),
- * T5 (w1, проведена), T3 (w1, два рядки ТЧ і коментар), T4 (два рядки ТЧ, без
- * коментарів: коментар тримає задачу FK `NO ACTION`); T6 — задача A без
- * посилань і залежних рядків: її ключ і скоуп змінює лише тригер, не FK.
- * Задача B — TB у PB. Учасник `u` організації `O` — ключ `u@O`.
- */
-async function seedWrites(client: pg.Client): Promise<Seed> {
-  const ids: Seed = { new: randomUUID() }
-  const create = async (
-    key: string,
-    table: string,
-    values: Record<string, unknown> = {}
-  ) => {
-    ids[key] = randomUUID()
-    await insert(client, table, { id: ids[key], ...values })
-  }
-  const assign = (member: string, a: Assignment) =>
-    insert(client, "org_role_assignments", {
-      org_id: ids[member.split("@")[1]!],
-      ...assignmentRow(ids[member]!, a),
-    })
-
-  for (const user of ["w1", "w2", "w3", "w4", "w5"])
-    ids[user] = await signUp(client)
-  await create("A", "organization")
-  await create("B", "organization")
-  for (const [member, org] of [
-    ["w1", "A"],
-    ["w2", "A"],
-    ["w3", "B"],
-    ["w4", "A"],
-    ["w5", "A"],
-    ["w5", "B"],
-  ] as const) {
-    await create(`${member}@${org}`, "org_member", {
-      org_id: ids[org],
-      user_id: ids[member],
-    })
-  }
-  await create("P1", "project", { org_id: ids.A })
-  await create("PB", "project", { org_id: ids.B })
-  await create("r1", "region", { org_id: ids.A })
-  await create("r2", "region", { org_id: ids.A })
-  await create("BA", BULLETIN_TABLE, { org_id: ids.A })
-  await create("BB", BULLETIN_TABLE, { org_id: ids.B })
-
-  await assign("w1@A", { archetype: TASK_WRITER_ID })
-  await assign("w1@A", { archetype: REGION_WRITER_ID })
-  await assign("w2@A", { archetype: TASK_MARKER_ID })
-  await assign("w3@B", { archetype: TASK_WRITER_ID })
-  await assign("w4@A", { archetype: PROJECT_WRITER_ID, container: ids.P1 })
-  await assign("w5@A", { archetype: TASK_WRITER_ID })
-  await assign("w5@B", { archetype: TASK_WRITER_ID })
-  await insert(client, "member_region", {
-    org_id: ids.A,
-    member_id: ids["w1@A"],
-    region_id: ids.r1,
-  })
-
-  const now = new Date()
-  const task = (
-    key: string,
-    org: string,
-    values: Record<string, unknown>,
-    lines = 0
-  ) =>
-    create(key, "task", { org_id: ids[org], date: now, ...values }).then(
-      async () => {
-        for (let line = 1; line <= lines; line++)
-          await create(`${key}.l${line}`, CHECKLIST_TABLE, {
-            org_id: ids[org],
-            parent_id: ids[key],
-            line_number: line,
-          })
-      }
-    )
-  await task("T1", "A", { project_id: ids.P1, assignee_id: ids["w2@A"] })
-  await task("T2", "A", { project_id: ids.P1, assignee_id: ids["w1@A"] }, 1)
-  await task("T5", "A", {
-    project_id: ids.P1,
-    assignee_id: ids["w1@A"],
-    posted: true,
-  })
-  await task("T3", "A", { project_id: ids.P1, assignee_id: ids["w1@A"] }, 2)
-  await task("T4", "A", { project_id: ids.P1 }, 2)
-  await task("T6", "A", {})
-  await task("TB", "B", { project_id: ids.PB, assignee_id: ids["w3@B"] })
-  await create("T3.c", COMMENT_TABLE, { org_id: ids.A, task_id: ids.T3 })
-  return ids
-}
 
 /**
  * Контекст запиту: дія, мітка й ключ кореня засіву або сирий рядок з
@@ -651,24 +529,12 @@ describe("command writes", () => {
   let ids: Seed = {}
 
   beforeAll(async () => {
-    const result = await compileRights(
-      policyDomain(writeRoles(), writableRegister())
-    )
-    expect(result.diagnostics).toEqual([])
+    const model = await writesModel()
     const client = await tx.open()
-    await deploy(client, result.model!)
-    // DML і членство з `SET` ролі команд — лише в цій транзакції;
-    // згенерований SQL їх не дає (П4).
+    await deploy(client, model)
+    // DML ролі команд — лише в цій транзакції; згенерований SQL його не дає (П4).
     await client.query(
       `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ${PLATFORM_ROLES.command}`
-    )
-    await client.query(
-      `GRANT ${PLATFORM_ROLES.command} TO CURRENT_USER WITH SET TRUE`
-    )
-    // Серверний код споживача досі пише сервісною роллю провайдера: DML їй
-    // теж лише в цій транзакції (кейс `provider-api-role-write`).
-    await client.query(
-      `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ${PROVIDER_API_ROLES.supabase.service}`
     )
     ids = await seedWrites(client)
   })
@@ -683,7 +549,7 @@ describe("command writes", () => {
   }
   const literal = (sql: string) =>
     sql.replace(/\{([^}]+)\}/g, (_, name: string) => `'${key(name)}'`)
-  const claims = (user: string) => ({ sub: key(user), role: "authenticated" })
+  const claims = (user: string) => claimsFor("user", key(user))
 
   /** Перша колонка рядків як ключі засіву; невідомий id — як є. */
   const byKey = (rows: pg.QueryResultRow[]) => {
@@ -769,51 +635,21 @@ describe("command writes", () => {
     expect(seen).toEqual({ rows: [{ role: false, definer: true }] })
   })
 
-  // Спека прав §5.3: тригер ефектів спрацьовує й на записі ролі API, а `EXECUTE` на
-  // функціях контексту має лише роль команд. Під правами викликача кожен
-  // такий запис упав би на функції контексту; `SECURITY DEFINER` дає йому
-  // дійти до раннього виходу без контексту. Права функцій вирішує Postgres.
-  it("provider-api-role-write", async () => {
-    const written = await probe(async (client) => {
-      await client.query(
-        `SET LOCAL ROLE ${PROVIDER_API_ROLES.supabase.service}`
-      )
-      const { rows } = await client.query<{ region_id: string }>(
-        "UPDATE public.task SET region_id = $1 WHERE id = $2 RETURNING region_id",
-        [key("r2"), key("T2")]
-      )
-      await restoreOwnerRole(client)
-      const after = await client.query<{ region_id: string }>(
-        "SELECT region_id FROM public.task WHERE id = $1",
-        [key("T2")]
-      )
-      return { rows: byKey(rows), after: byKey(after.rows) }
-    })
-    expect(written).toEqual({ rows: ["r2"], after: ["r2"] })
-  })
-
-  // Спека П4 §6.8: зіпсований контекст у сесії ролі API — відмова контракту §6.2,
-  // а не тихий запис «без контексту». Першим його читає `BEFORE`-тригер
-  // авторства (`SECURITY DEFINER`), і що функція контексту відмовляє саме
-  // так під роллю без `EXECUTE` на ній, вирішує Postgres.
-  it("provider-api-role-malformed-context", async () => {
-    const refusal = await probe(async (client) => {
-      await client.query(
-        `SET LOCAL ROLE ${PROVIDER_API_ROLES.supabase.service}`
-      )
-      await setLocalSetting(client, COMMAND_SETTING, "not json")
-      try {
-        await client.query(
+  // Аналог кейсів сервісної ролі провайдера (`rights-write.supabase`): ролі
+  // запиту профілю пишуть лише командою, тож прямий запис ролі API —
+  // відмова привілею, а не запис повз тригер ефектів.
+  it("a request role of the profile cannot write outside a command", async () => {
+    for (const purpose of ["user", "anonymous"] as const)
+      expect(
+        await queryAs(
+          tx.client(),
+          purpose,
+          claimsFor(purpose, purpose === "user" ? key("w1") : undefined),
           "UPDATE public.task SET region_id = $1 WHERE id = $2",
           [key("r2"), key("T2")]
-        )
-        return undefined
-      } catch (error) {
-        const { code, message, detail } = error as Refusal
-        return { code, message, detail }
-      }
-    })
-    expect(refusal).toEqual(context("malformed"))
+        ),
+        purpose
+      ).toEqual({ code: "42501" })
   })
 
   it.each(CASES)("%s", async (_, steps) => {

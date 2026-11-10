@@ -1,7 +1,8 @@
 import { readFileSync } from "node:fs"
 import { expect } from "vitest"
 import type pg from "pg"
-import { queryAs, claimsFor } from "./connection"
+import { quoteIdent } from "simetra/model"
+import { queryAs, claimsFor, testRoleFor } from "./connection"
 
 /**
  * Еквівалентність замикання прав (спека прав §5.4): нове тіло `rights_mine` і
@@ -47,7 +48,7 @@ function undenied(sql: string, fn: string): string {
 /**
  * Створює в транзакції клієнта функції оракула (`rights_mine` моделі `model`
  * і `rights_role_grants`) і варіанти без замикання й без `deny`; `EXECUTE` варіантів
- * `rights_mine` — ролі `authenticated`, бо `rights_mine` читається під claims
+ * `rights_mine` — ролі запиту користувача профілю, бо `rights_mine` читається під claims
  * користувача.
  */
 export async function installClosureOracle(
@@ -64,7 +65,7 @@ export async function installClosureOracle(
     await client.query(undenied(sql, fn))
   }
   await client.query(
-    "GRANT EXECUTE ON FUNCTION simetra.rights_mine_before(), simetra.rights_mine_unclosed(), simetra.rights_mine_undenied() TO authenticated"
+    `GRANT EXECUTE ON FUNCTION simetra.rights_mine_before(), simetra.rights_mine_unclosed(), simetra.rights_mine_undenied() TO ${quoteIdent(testRoleFor("user")!)}`
   )
 }
 

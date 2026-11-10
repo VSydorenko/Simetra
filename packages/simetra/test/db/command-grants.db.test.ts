@@ -6,6 +6,7 @@ import {
   COMMAND_SETTING,
   PLATFORM_LOGIN_ROLES,
   PLATFORM_ROLES,
+  PROVIDER_OWNER_ROLES,
   RIGHTS_MAINTENANCE_SETTING,
   SESSION_CLAIMS_SETTING,
   type CommandContext,
@@ -27,17 +28,20 @@ import {
 import { signUp } from "./auth"
 import {
   type Refusal,
+  asSessionLogin,
+  claimsFor,
   commandAs,
-  testSuperuserUrl,
   withRollback,
   setLocalSetting,
 } from "./connection"
+import { testProvider } from "./profile"
 import {
   type Seed,
   assignmentRow,
   deploy,
   describeTransaction,
   insert,
+  profileLayer,
 } from "./rights-seed"
 
 /**
@@ -45,13 +49,17 @@ import {
  * Postgres (спека П4 §6.2, §6.8, §6.16 інваріанти 1, 8, 9). Чи відмовляє привілей колонки, у якому порядку спрацьовують
  * `BEFORE`-тригери однакового часу і що бачить RLS, вирішує Postgres:
  * компілятор бачить лише текст. Повного гранту таблиць фікстури тут немає —
- * діють лише згенеровані гранти; членство з `SET` у ролі команд опис дає
- * собі сам, бо його потребує `SET LOCAL ROLE` у `commandAs`.
+ * діють лише згенеровані гранти; `SET LOCAL ROLE` у `commandAs` перевіряє
+ * `session_user` — суперкористувача стека на адресі тестів, тож членства
+ * власнику в ролі команд не треба.
  */
 
 const NOTES_MODEL = () =>
   compileRights(
-    singleTenantRights({ ...authorCarrier(), ...authorCarrier("long") })
+    singleTenantRights(
+      { ...authorCarrier(), ...authorCarrier("long") },
+      testProvider()
+    )
   )
 
 /** Відмова саме гранту: текст Postgres без деталі тригера чи політики. */
@@ -69,9 +77,6 @@ describe("generated grants of the command role", () => {
     expect(result.diagnostics).toEqual([])
     const client = await tx.open()
     await deploy(client, result.model!)
-    await client.query(
-      `GRANT ${PLATFORM_ROLES.command} TO CURRENT_USER WITH SET TRUE`
-    )
     // U і V — автори з різними наставниками (M1, M2): копія носія
     // `createdBy.mentor` розрізняє, чий автор у рядку. H — історичний автор.
     ids = {}
@@ -117,7 +122,7 @@ describe("generated grants of the command role", () => {
     if (id === undefined) throw new Error(`unknown seed key ${name}`)
     return id
   }
-  const claims = (user: string) => ({ sub: key(user), role: "authenticated" })
+  const claims = (user: string) => claimsFor("user", key(user))
   const ctx = (
     action: string,
     object: string,
@@ -323,9 +328,9 @@ describe("generated grants of the command role", () => {
 /**
  * Справжня роль входу рантайму (спека П4 §7.2): режим обслуговування судить
  * `session_user`, тож тегована роль нічого не доводить — сесія тут іде від
- * кластерної `simetra_runtime` локального стеку (`supabase/roles.sql`).
- * `SET SESSION AUTHORIZATION` можливий лише від суперкористувача, тож
- * з'єднання — `supabase_admin`, а модель розгортається під `SET ROLE postgres`.
+ * кластерної ролі входу платформи, яку дають ролі стека (`db:start`,
+ * `db:pg:start`). Інший вхід у межах транзакції тесту — `asSessionLogin`;
+ * модель розгортає власник профілю, роль адреси тестів.
  */
 describe("runtime login role", () => {
   const RUNTIME = PLATFORM_LOGIN_ROLES.runtime
@@ -345,9 +350,8 @@ describe("runtime login role", () => {
       )
       if (present.length === 0)
         throw new Error(
-          `role ${RUNTIME} is missing: it comes from supabase/roles.sql; apply it to the running stack as the header of that file says`
+          `role ${RUNTIME} is missing: it comes from the roles of the stack; restart the stack with its db:start command`
         )
-      await client.query("SET ROLE postgres")
       await client.query(renderDesiredState(model).sql)
       const subject = await signUp(client)
       await client.query(`CREATE FUNCTION public.probe_maintenance_grant() RETURNS void
@@ -360,14 +364,11 @@ describe("runtime login role", () => {
       await client.query(
         `GRANT EXECUTE ON FUNCTION public.probe_maintenance_grant() TO ${PLATFORM_ROLES.command}`
       )
-      await client.query("RESET ROLE")
       const tables = model.physical.tables.map((t) => `${t.schema}.${t.name}`)
 
       // (a) Інваріант 1 (§6.16) — каталогом, а не пробою: відмова `USAGE`
       // схеми маскувала б прямі гранти таблиць.
-      await client.query("SAVEPOINT runtime_rights")
-      try {
-        await client.query(`SET SESSION AUTHORIZATION ${RUNTIME}`)
+      await asSessionLogin(client, RUNTIME, async () => {
         const { rows } = await client.query<{ object: string }>(
           `SELECT n.nspname || '.' || c.relname AS object
              FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -385,34 +386,37 @@ describe("runtime login role", () => {
         expect(rows).toEqual([])
         // Перелік таблиць справді непорожній: інакше «жодного права» нічого б не довело
         expect(tables).toContain("public.note")
+        // Відмова зриває транзакцію: точка збереження дає повернути вхід
+        await client.query("SAVEPOINT runtime_read")
         let failure: unknown
         try {
           await client.query("SELECT id FROM public.note")
         } catch (error) {
           failure = error
+        } finally {
+          await client.query("ROLLBACK TO SAVEPOINT runtime_read")
         }
         expect(failure).toBeInstanceOf(pg.DatabaseError)
         expect(failure).toMatchObject({
           code: "42501",
           message: expect.stringMatching(/^permission denied for /),
         })
-      } finally {
-        await client.query("ROLLBACK TO SAVEPOINT runtime_rights")
-      }
+      })
 
       // (b) Режим обслуговування не вмикається для сесії ролі входу
-      // платформи; той самий зонд із сесії `postgres` проходить. `RESET` тут
-      // не годиться: він повернув би `supabase_admin`, роль входу провайдера.
-      const probe = async (login: string, expected?: string) => {
-        await client.query("SAVEPOINT maintenance_login")
-        try {
-          await client.query(`SET SESSION AUTHORIZATION ${login}`)
+      // платформи; той самий зонд із сесії власника профілю проходить.
+      const probe = (login: string, expected?: string) =>
+        asSessionLogin(client, login, async () => {
           if (login === RUNTIME)
-            await client.query(`SET ROLE ${PLATFORM_ROLES.command}`)
+            await client.query(`SET LOCAL ROLE ${PLATFORM_ROLES.command}`)
           const identity = await client.query<{ login: string }>(
             "SELECT session_user AS login"
           )
           expect(identity.rows[0]?.login).toBe(login)
+          // Відмова зриває транзакцію, а `SET CONSTRAINTS` у відпущеній
+          // точці збереження пережив би відкат зовнішньої: ця точка
+          // відкочується завжди
+          await client.query("SAVEPOINT maintenance_login")
           let failure: pg.DatabaseError | undefined
           try {
             await client.query("SELECT public.probe_maintenance_grant()")
@@ -420,6 +424,8 @@ describe("runtime login role", () => {
           } catch (error) {
             if (!(error instanceof pg.DatabaseError)) throw error
             failure = error
+          } finally {
+            await client.query("ROLLBACK TO SAVEPOINT maintenance_login")
           }
           if (expected === undefined) expect(failure).toBeUndefined()
           else
@@ -428,13 +434,10 @@ describe("runtime login role", () => {
               message: "command.forbidden",
               detail: expected,
             })
-        } finally {
-          await client.query("ROLLBACK TO SAVEPOINT maintenance_login")
-        }
-      }
+        })
       await probe(RUNTIME, "rights-context")
-      await probe("postgres")
-    }, testSuperuserUrl())
+      await probe(PROVIDER_OWNER_ROLES[testProvider()])
+    })
   }, 120_000)
 
   // Справжня загроза рантайму: роль входу з контекстом команди вмикає режим
@@ -444,13 +447,12 @@ describe("runtime login role", () => {
   // членстві); у моделі файлу ні того, ні іншого немає.
   it("the runtime login cannot enable maintenance even with a command context", async () => {
     const result = await compileRights(
-      policyDomain(adminRoles(), rightsAdminReadingMembers())
+      policyDomain(adminRoles(), rightsAdminReadingMembers(), profileLayer())
     )
     expect(result.diagnostics).toEqual([])
     await withRollback(async (client) => {
-      // Засів прав — під режимом обслуговування, а його дає лише сесія
-      // власника функцій: `SET ROLE` лишив би `session_user` суперкористувачем
-      await client.query("SET SESSION AUTHORIZATION postgres")
+      // Засів прав — під режимом обслуговування від входу власника
+      // функцій: його дає `insert`
       await deploy(client, result.model!)
       const org = randomUUID()
       const member = randomUUID()
@@ -469,46 +471,51 @@ describe("runtime login role", () => {
       await client.query("SET CONSTRAINTS ALL IMMEDIATE")
       await client.query("SET CONSTRAINTS ALL DEFERRED")
 
-      await client.query(`SET SESSION AUTHORIZATION ${RUNTIME}`)
-      await setLocalSetting(
-        client,
-        SESSION_CLAIMS_SETTING,
-        JSON.stringify({ sub: admin, role: "authenticated" })
-      )
-      await setLocalSetting(client, RIGHTS_MAINTENANCE_SETTING, "on")
-      await client.query(`SET LOCAL ROLE ${PLATFORM_ROLES.command}`)
-      const assignment = randomUUID()
-      const context: CommandContext = {
-        action: "administerRights",
-        object: "org_role_assignments",
-        root: assignment,
-      }
-      await setLocalSetting(client, COMMAND_SETTING, JSON.stringify(context))
-      let failure: unknown
-      try {
-        await client.query(
-          "SELECT public.org_role_assignments_save($1::jsonb, NULL) AS r",
-          [
-            JSON.stringify({
-              id: assignment,
-              org_id: org,
-              subject: member,
-              archetype: TASK_EDITOR_ID,
-            }),
-          ]
+      const failure = await asSessionLogin(client, RUNTIME, async () => {
+        await setLocalSetting(
+          client,
+          SESSION_CLAIMS_SETTING,
+          JSON.stringify(claimsFor("user", admin))
         )
-        // Лише в тесті: `COMMIT` у відкатній транзакції — відкладені
-        // запобіжники судять зараз (один оператор ядра без CTE)
-        await client.query("SET CONSTRAINTS ALL IMMEDIATE")
-      } catch (error) {
-        failure = error
-      }
+        await setLocalSetting(client, RIGHTS_MAINTENANCE_SETTING, "on")
+        await client.query(`SET LOCAL ROLE ${PLATFORM_ROLES.command}`)
+        const assignment = randomUUID()
+        const context: CommandContext = {
+          action: "administerRights",
+          object: "org_role_assignments",
+          root: assignment,
+        }
+        await setLocalSetting(client, COMMAND_SETTING, JSON.stringify(context))
+        // Відмова зриває транзакцію: точка збереження дає повернути вхід
+        await client.query("SAVEPOINT runtime_save")
+        try {
+          await client.query(
+            "SELECT public.org_role_assignments_save($1::jsonb, NULL) AS r",
+            [
+              JSON.stringify({
+                id: assignment,
+                org_id: org,
+                subject: member,
+                archetype: TASK_EDITOR_ID,
+              }),
+            ]
+          )
+          // Лише в тесті: `COMMIT` у відкатній транзакції — відкладені
+          // запобіжники судять зараз (один оператор ядра без CTE)
+          await client.query("SET CONSTRAINTS ALL IMMEDIATE")
+          return undefined
+        } catch (error) {
+          return error
+        } finally {
+          await client.query("ROLLBACK TO SAVEPOINT runtime_save")
+        }
+      })
       expect(failure).toBeInstanceOf(pg.DatabaseError)
       expect(failure).toMatchObject({
         code: "42501",
         message: "command.forbidden",
         detail: "escalation",
       })
-    }, testSuperuserUrl())
+    })
   }, 120_000)
 })

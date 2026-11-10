@@ -30,6 +30,7 @@ import {
   outcome,
   set,
   deploy,
+  profileLayer,
 } from "./rights-seed"
 
 /**
@@ -51,12 +52,18 @@ const TASK = objects(["Document", "Task"])
  */
 async function policyModel(): Promise<CompiledModel> {
   const result = await compileRights(
-    policyDomain(secondScopeKind(), {
-      [ROLE_FILE("ProjectLead")]: { grants: [grant(TASK, ["read"], "any")] },
-      [ROLE_FILE("Support")]: {
-        grants: [grant(objects(["Document", "Announcement"]), ["read"], "any")],
+    policyDomain(
+      secondScopeKind(),
+      {
+        [ROLE_FILE("ProjectLead")]: { grants: [grant(TASK, ["read"], "any")] },
+        [ROLE_FILE("Support")]: {
+          grants: [
+            grant(objects(["Document", "Announcement"]), ["read"], "any"),
+          ],
+        },
       },
-    })
+      profileLayer()
+    )
   )
   expect(result.diagnostics).toEqual([])
   return result.model!

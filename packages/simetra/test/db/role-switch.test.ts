@@ -197,27 +197,9 @@ const ROLE_SWITCH_EXCEPTIONS: Exception[] = [
   },
   // Тимчасові: форми переписує задача, що володіє файлом
   {
-    file: "packages/simetra/test/db/rights-guards.db.test.ts",
-    reason:
-      "SET ROLE postgres, SET SESSION AUTHORIZATION, RESET ROLE of the owner-login cases",
-    task: 7,
-  },
-  {
-    file: "packages/simetra/test/db/command-grants.db.test.ts",
-    reason:
-      "SET ROLE postgres, SET SESSION AUTHORIZATION, RESET ROLE of the runtime-login cases",
-    task: 7,
-  },
-  {
     file: "packages/designer/src/__tests__/roles-tool.db.test.ts",
     reason: "SET LOCAL ROLE authenticated and a role returned by a helper",
     task: 12,
-  },
-  {
-    file: "packages/simetra/test/db/rights-write.db.test.ts",
-    reason:
-      "SET LOCAL ROLE of the Supabase service role by a literal key: the cases go to rights-write.supabase (Р5)",
-    task: 7,
   },
   {
     file: "packages/simetra/test/db/mechanics.db.test.ts",
@@ -236,8 +218,6 @@ const ROLE_SWITCH_EXCEPTIONS: Exception[] = [
 const POSTGRES_LITERAL_EXCEPTIONS: Exception[] = [
   ...(
     [
-      ["packages/simetra/test/db/rights-guards.db.test.ts", 7],
-      ["packages/simetra/test/db/command-grants.db.test.ts", 7],
       [
         "packages/designer/src/schema-engine/__tests__/engine-census.db.test.ts",
         10,
