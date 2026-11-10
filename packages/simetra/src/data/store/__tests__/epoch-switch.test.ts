@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { createCore, inspectCore } from "../core"
 import { keyId } from "../epoch"
 import { createCoreSource, createReadLimiter } from "../source"
-import { DISCARDS_MAX } from "../session"
+import { DISCARD_PAUSE_MS, DISCARDS_MAX } from "../session"
 import { computeRowView } from "../snapshot"
 import type { ServerRow, ViewSpec } from "../types"
 import {
@@ -156,6 +156,8 @@ describe("store after a switch (Р5, Р8, Р13)", () => {
       versionEpoch: EA,
     })
     accept(h, EB)
+    // Перемикання скидає позначку старої епохи одразу, а не першим записом.
+    expect(h.store.get(K1)?.stale.minVersion).toBeUndefined()
     put(h, inEpoch(row(K1, 3), EB))
     expect(stateOf(h)).toMatchObject({ version: 3, state: "synced" })
   })
@@ -388,6 +390,71 @@ describe("core: the epoch switch", () => {
       current: EA,
       unavailable: false,
     })
+  })
+
+  /** Перемикає ядро на B відповіддю на `refresh` списку. */
+  async function switched() {
+    const h = await loaded()
+    vi.spyOn(Math, "random").mockReturnValue(0.99)
+    h.fake.epoch = EB
+    h.handle.refresh()
+    await deliver(h)
+    expect(h.inspect.versionEpochs().current).toBe(EB)
+    return h
+  }
+
+  it("a patch of the receiver with rows of an abandoned epoch writes nothing", async () => {
+    const h = await switched()
+    const stale = {
+      key: key(1),
+      version: 99,
+      versionEpoch: EA,
+      values: { ref: key(1), version: 99, org: S, title: "old" },
+    }
+    h.core.commit(
+      (w) => w.patch(TASK, [stale], h.core.readEpoch()),
+      h.core.token()
+    )
+    expect(h.handle.getSnapshot().rows[0]).toMatchObject({
+      values: { title: "t1" },
+    })
+  })
+
+  it("a tail re-read answered from an abandoned epoch writes nothing", async () => {
+    const h = await switched()
+    // Перечитування після перемикання підтверджує рядки поточної епохи.
+    vi.advanceTimersByTime(INTERVAL)
+    await deliver(h)
+    expect(h.handle.getSnapshot().rows[0]).toMatchObject({ state: "synced" })
+    // `null`-відповідь над рядком поточної епохи — `stale` і хвіст.
+    h.fake.epoch = null
+    h.handle.refresh()
+    await settle()
+    h.fake.take().answer()
+    await settle()
+    const tail = h.fake.pending.filter(isKeys)
+    expect(tail).toHaveLength(1)
+    h.fake.edit(TASK, key(1), { title: "old" })
+    h.fake.epoch = EA
+    h.fake.take().answer()
+    await settle()
+    expect(h.handle.getSnapshot().rows[0]).toMatchObject({
+      values: { title: "t1" },
+    })
+  })
+
+  it("a discarded revalidate re-reads after a pause by the same system path", async () => {
+    const h = await switched()
+    h.fake.epoch = EA
+    void h.core.revalidate(TASK, { visibleOnly: false })
+    await deliver(h)
+    expect(h.fake.pending).toHaveLength(0)
+    vi.advanceTimersByTime(DISCARD_PAUSE_MS)
+    await settle()
+    expect(h.fake.pending.filter(isKeys)).toHaveLength(1)
+    h.fake.epoch = EB
+    await deliver(h)
+    expect(h.handle.getSnapshot()).toMatchObject({ status: "ready" })
   })
 
   it("close clears the timers of a switch", async () => {
