@@ -91,6 +91,8 @@ describe("knownSchema", () => {
   const key = (i: number) =>
     `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`
   const KEY = key(1)
+  // Ключ з літерами: на ключі з одних цифр регістр нічого не змінює.
+  const LETTERS = "abcdefab-cdef-4abc-8def-abcdefabcdef"
   const known = (fields: Record<string, unknown> = {}) => ({
     epoch: EPOCH,
     keys: [KEY],
@@ -111,7 +113,7 @@ describe("knownSchema", () => {
     [`${READ_LIMIT_MAX} keys`, known(many(READ_LIMIT_MAX))],
     ["no keys", known({ keys: [], versions: [] })],
     ["the largest safe version", known({ versions: ["9007199254740991"] })],
-    ["a key in upper case", known({ keys: [KEY.toUpperCase()] })],
+    ["a key in upper case", known({ keys: [LETTERS.toUpperCase()] })],
   ])("accepts %s", (_, value) => {
     expect(pathOf(value)).toBeUndefined()
   })
@@ -129,7 +131,10 @@ describe("knownSchema", () => {
     // Postgres рівняє UUID без регістру: інакше два записи одного рядка.
     [
       "a key repeated in another case",
-      known({ keys: [KEY, KEY.toUpperCase()], versions: ["1", "1"] }),
+      known({
+        keys: [LETTERS, LETTERS.toUpperCase()],
+        versions: ["1", "1"],
+      }),
       "keys.1",
     ],
     ["more versions than keys", known({ versions: ["1", "2"] }), "versions"],
