@@ -7,6 +7,7 @@ import {
 import { createHmac, createHash } from "node:crypto"
 import { EventEmitter } from "node:events"
 import {
+  cpSync,
   existsSync,
   mkdtempSync,
   readFileSync,
@@ -341,16 +342,81 @@ describe("withStackLock", () => {
   })
 })
 
+const SCRIPT_URL = new URL("../../../../scripts/db-stack.mjs", import.meta.url)
+
+describe("stack-files hash wiring of the postgres stack", () => {
+  /** Блок сервісу в compose.yaml: рядки від `  <name>:` до наступного сервісу. */
+  const serviceBlock = (name: string): string => {
+    const compose = read("compose.yaml")
+    const m = new RegExp(`^  ${name}:\\n((?:    .*\\n|\\s*\\n)*)`, "m").exec(
+      compose
+    )
+    expect(m, name).not.toBeNull()
+    return m![1]!
+  }
+
+  it("the Dockerfile labels the image with the build argument, after the packages", () => {
+    const dockerfile = read("Dockerfile")
+    const arg = dockerfile.indexOf("ARG SIMETRA_STACK_FILES_HASH\n")
+    const label = dockerfile.indexOf(
+      "LABEL simetra.stack-files-hash=$SIMETRA_STACK_FILES_HASH\n"
+    )
+    expect(arg).toBeGreaterThan(dockerfile.indexOf("RUN apt-get"))
+    expect(label).toBeGreaterThan(arg)
+  })
+
+  it("compose passes the hash as the build argument of postgres", () => {
+    expect(serviceBlock("postgres")).toMatch(
+      /^ {6}args:\n {8}SIMETRA_STACK_FILES_HASH: \$\{SIMETRA_STACK_FILES_HASH:-\}$/m
+    )
+  })
+
+  it.each(["garage", "centrifugo"])(
+    "compose labels the %s container with the hash",
+    (name) => {
+      expect(serviceBlock(name)).toMatch(
+        /^ {4}labels:\n(?: {6}#.*\n)* {6}simetra\.stack-files-hash: \$\{SIMETRA_STACK_FILES_HASH:-\}$/m
+      )
+    }
+  )
+
+  // Мітку має кожен сервіс: образ postgres — зі збірки, решта — з compose
+  it("every service of compose.yaml is covered", () => {
+    const services = [...read("compose.yaml").matchAll(/^ {2}(\w+):$/gm)].map(
+      (m) => m[1]
+    )
+    expect(services.sort()).toEqual(["centrifugo", "garage", "postgres"])
+  })
+})
+
 describe("stack lock path", () => {
   afterEach(() => {
     vi.unstubAllEnvs()
   })
 
   // Сесії з різним TMPDIR інакше брали б різні файли й не виключали б одна одну
-  it("is /tmp/<lockFile> in the script and in the guard whatever TMPDIR is", () => {
+  // Шлях скрипту обчислюється при імпорті: імпорт — у процесі з іншим TMPDIR
+  it("is /tmp/<lockFile> in the script whatever TMPDIR is", () => {
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        `import { POSTGRES_LOCK_PATH } from ${JSON.stringify(SCRIPT_URL.href)}; process.stdout.write(POSTGRES_LOCK_PATH)`,
+      ],
+      {
+        encoding: "utf8",
+        env: { ...process.env, TMPDIR: "/var/tmp/some-session" },
+      }
+    )
+    expect(result.status).toBe(0)
+    expect(result.stdout).toBe(`/tmp/${TEST_STACKS.postgres.lockFile}`)
+    expect(POSTGRES_LOCK_PATH).toBe(result.stdout)
+  })
+
+  it("is /tmp/<lockFile> in the guard whatever TMPDIR is", () => {
     vi.stubEnv("TMPDIR", "/var/tmp/some-session")
-    expect(POSTGRES_LOCK_PATH).toBe(`/tmp/${TEST_STACKS.postgres.lockFile}`)
-    expect(lockPath("postgres")).toBe(POSTGRES_LOCK_PATH)
+    expect(lockPath("postgres")).toBe(`/tmp/${TEST_STACKS.postgres.lockFile}`)
     expect(lockPath("supabase")).toBe(`/tmp/${TEST_STACKS.supabase.lockFile}`)
   })
 
@@ -488,6 +554,81 @@ describe("runChild", () => {
   })
 })
 
+describe("runChild with a grandchild in the group", () => {
+  const alive = (pid: number): boolean => {
+    try {
+      process.kill(pid, 0)
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  // Прямий дочірній виходить на сигнал, а нащадок у його групі — ні: замок
+  // тримається до SIGKILL групи
+  it("keeps the lock until the whole group is gone after a forwarded signal", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "simetra-stack-lock-"))
+    let grandchild = 0
+    try {
+      const lock = join(dir, "stack.lock")
+      const signals = new EventEmitter()
+      let ready!: () => void
+      const started = new Promise<void>((resolve) => (ready = resolve))
+      let code: number | undefined
+      const run = withStackLock(lock, async () => {
+        code = await runChild(
+          "x",
+          [],
+          {
+            signals,
+            killAfterMs: 500,
+            onStdout: (chunk: string) => {
+              const m = /grandchild (\d+)/.exec(chunk)
+              if (m !== null) {
+                grandchild = Number(m[1])
+                ready()
+              }
+            },
+          },
+          (_command, _args, options) =>
+            spawn(
+              process.execPath,
+              [
+                "-e",
+                `const { spawn } = require("node:child_process");
+                 const g = spawn(process.execPath, ["-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"], { stdio: "ignore" });
+                 process.on("SIGTERM", () => process.exit(0));
+                 setInterval(() => {}, 1000);
+                 setTimeout(() => process.stdout.write("grandchild " + g.pid + "\\n"), 100)`,
+              ],
+              options
+            )
+        )
+      })
+      await started
+      const signalled = Date.now()
+      signals.emit("SIGTERM", "SIGTERM")
+      await new Promise((resolve) => setTimeout(resolve, 250))
+      expect(alive(grandchild)).toBe(true)
+      expect(existsSync(lock)).toBe(true)
+      await run
+      expect(Date.now() - signalled).toBeGreaterThanOrEqual(500)
+      expect(code).toBe(0)
+      expect(alive(grandchild)).toBe(false)
+      expect(existsSync(lock)).toBe(false)
+    } finally {
+      if (grandchild > 0) {
+        try {
+          process.kill(grandchild, "SIGKILL")
+        } catch {
+          // уже вбито
+        }
+      }
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
 // RFC 7677 §3: користувач `user`, пароль `pencil`
 const RFC7677 = {
   salt: "W22ZaJ0SNY7soEsUEjb6gQ==",
@@ -565,17 +706,18 @@ function fakeStack(
     labels?: Partial<Record<(typeof SERVICES)[number], Record<string, string>>>
     verifiers?: Record<string, string>
     fail?: (call: Call) => boolean
+    /** Справжній дочірній замість підставного для виклику, що підходить. */
+    real?: (call: Call) => ChildProcess | undefined
+    /** Тека й хеш конфігу, з якими створено контейнери. */
+    createdFrom?: { dir: string; configHash: string }
   } = {}
 ) {
   const calls: Call[] = []
-  const hashes = { postgres: "hp", garage: "hg", centrifugo: "hc" }
   const reply = (call: Call): Reply => {
     const { args } = call
     if (o.fail?.(call) === true) return { code: 1 }
     if (args.includes("config"))
-      return {
-        stdout: SERVICES.map((s) => `${s} ${hashes[s]}\n`).join(""),
-      }
+      return { stdout: SERVICES.map((s) => `${s}\n`).join("") }
     if (args.includes("ps"))
       return { stdout: o.running === true ? "id-1\nid-2\nid-3\n" : "" }
     if (call.command === "docker" && args[0] === "inspect")
@@ -585,10 +727,11 @@ function fakeStack(
             Config: {
               Labels: {
                 "com.docker.compose.service": s,
-                "com.docker.compose.config-hash": hashes[s],
-                ...(s === "postgres"
-                  ? { "simetra.stack-files-hash": stackFilesHash() }
-                  : {}),
+                "com.docker.compose.config-hash":
+                  o.createdFrom?.configHash ?? `${s}-hash`,
+                "com.docker.compose.project.working_dir":
+                  o.createdFrom?.dir ?? STACK_DIR,
+                "simetra.stack-files-hash": stackFilesHash(),
                 ...o.labels?.[s],
               },
             },
@@ -627,6 +770,11 @@ function fakeStack(
     args: readonly string[],
     options: SpawnOptions
   ): ChildProcess => {
+    const real = o.real?.({ command, args, options, input: "" })
+    if (real !== undefined) {
+      calls.push({ command, args, options, input: "" })
+      return real
+    }
     const child = new EventEmitter() as ChildProcess
     const stdio = options.stdio as string[]
     const stdin = new PassThrough()
@@ -709,22 +857,60 @@ describe("startPostgres", () => {
     const config = stack.calls.find((c) => c.args.includes("config"))!
     expect(config.args.slice(config.args.indexOf("config"))).toEqual([
       "config",
-      "--hash=*",
+      "--services",
     ])
+  })
+
+  // Хеш конфігу compose містить абсолютний шлях bind-монтувань: ті самі файли
+  // з іншого checkout-а не мають давати відмову
+  it("accepts a running stack created from the same files in another checkout", async () => {
+    const copy = mkdtempSync(join(tmpdir(), "simetra-other-checkout-"))
+    try {
+      cpSync(STACK_DIR, copy, { recursive: true })
+      expect(stackFilesHash(copy)).toBe(stackFilesHash())
+      const stack = fakeStack({
+        running: true,
+        createdFrom: { dir: copy, configHash: "hash-of-another-path" },
+      })
+      await start(stack)
+      const [up] = stack.ups()
+      expect(up!.args).toContain("--no-recreate")
+    } finally {
+      rmSync(copy, { recursive: true, force: true })
+    }
+  })
+
+  it("refuses a running stack created with another garage.toml, without up", async () => {
+    const copy = mkdtempSync(join(tmpdir(), "simetra-other-checkout-"))
+    try {
+      cpSync(STACK_DIR, copy, { recursive: true })
+      writeFileSync(
+        join(copy, "garage.toml"),
+        `${read("garage.toml")}\n# changed\n`
+      )
+      const other = stackFilesHash(copy)
+      expect(other).not.toBe(stackFilesHash())
+      const stack = fakeStack({
+        running: true,
+        labels: { garage: { "simetra.stack-files-hash": other } },
+      })
+      await expect(start(stack)).rejects.toThrow(
+        /garage: simetra\.stack-files-hash.*stopping the stack is the owner's call/
+      )
+      expect(stack.ups()).toEqual([])
+    } finally {
+      rmSync(copy, { recursive: true, force: true })
+    }
   })
 
   it.each([
     [
-      "the config hash of a service",
-      { garage: { "com.docker.compose.config-hash": "other" } },
-    ],
-    [
-      "the stack-files hash",
+      "the stack-files hash of postgres",
       { postgres: { "simetra.stack-files-hash": "other" } },
     ],
     [
-      "a missing stack-files hash",
-      { postgres: { "simetra.stack-files-hash": "" } },
+      "a missing stack-files hash of centrifugo",
+      { centrifugo: { "simetra.stack-files-hash": "" } },
     ],
   ])(
     "refuses a running stack whose %s differs, without up",
@@ -849,6 +1035,54 @@ describe("startPostgres", () => {
     })
     await start(stack)
     expect(stack.calls.some((c) => c.input.includes("ALTER ROLE"))).toBe(false)
+  })
+
+  const isTerminate = (c: Call): boolean =>
+    c.args.includes("psql") && c.args.includes("-q")
+
+  // Другий Ctrl-C не має вбити прибирання бекендів
+  it("the backend cleanup does not hear the signals of the script", async () => {
+    const signals = new EventEmitter()
+    let listening: number | undefined
+    const stack = fakeStack({
+      real: (call) => {
+        if (isTerminate(call)) listening = signals.listenerCount("SIGINT")
+        return undefined
+      },
+    })
+    await startPostgres({ spawnFn: stack.spawnFn, signals })
+    // Лише слухач контексту команди, що записує сигнал
+    expect(listening).toBe(1)
+  })
+
+  it("the backend cleanup stops a hung psql after its own timeout and warns", async () => {
+    const warn = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation(() => true)
+    try {
+      const stack = fakeStack({
+        real: (call) =>
+          isTerminate(call)
+            ? spawn(
+                process.execPath,
+                ["-e", "setInterval(() => {}, 1000)"],
+                call.options
+              )
+            : undefined,
+      })
+      const began = Date.now()
+      await startPostgres({
+        spawnFn: stack.spawnFn,
+        signals: new EventEmitter(),
+        cleanupTimeoutMs: 200,
+      })
+      expect(Date.now() - began).toBeLessThan(5_000)
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining("could not stop the backends")
+      )
+    } finally {
+      warn.mockRestore()
+    }
   })
 
   // argv видно в `ps`: паролі лише в stdin, DSN — лише в середовищі

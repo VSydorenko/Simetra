@@ -11,6 +11,7 @@
 //   node scripts/db-stack.mjs start supabase-signals
 //   node scripts/db-stack.mjs stop supabase-signals
 import { spawn } from "node:child_process"
+import { EventEmitter } from "node:events"
 import {
   createHash,
   createHmac,
@@ -166,12 +167,24 @@ function killGroup(pid, signal) {
   }
 }
 
+/** @param {number | undefined} pid */
+function groupAlive(pid) {
+  if (pid === undefined) return false
+  try {
+    process.kill(-pid, 0)
+    return true
+  } catch (error) {
+    return /** @type {NodeJS.ErrnoException} */ (error).code === "EPERM"
+  }
+}
+
 /**
  * Runs a child process in its own process group and resolves with its exit
  * code (128 + signal number when a signal ended it). A signal of the script is
  * forwarded to the child's group once; a group still alive `killAfterMs` later
- * gets SIGKILL. The promise settles only after the child exits, so a caller
- * under the stack lock keeps it until then.
+ * gets SIGKILL. The promise settles only after the child exits and, once a
+ * signal was forwarded, after its whole group is gone, so a caller under the
+ * stack lock keeps the lock until then.
  *
  * @param {string} command
  * @param {readonly string[]} args
@@ -216,8 +229,19 @@ export function runChild(command, args, opts = {}, spawnFn = spawn) {
       reject(new Error(`${command} failed: ${error.message}`))
     })
     child.once("close", (code, signal) => {
-      settle()
-      resolve(code ?? 128 + (signal === null ? 0 : constants.signals[signal]))
+      const result =
+        code ?? 128 + (signal === null ? 0 : constants.signals[signal])
+      // Після сигналу нащадок групи (`docker compose` → плагін) може пережити
+      // прямий дочірній: замок тримаємо, доки група не порожня, і межа SIGKILL
+      // лишається зведеною до того
+      const finish = () => {
+        if (forwarded && groupAlive(child.pid)) setTimeout(finish, 50)
+        else {
+          settle()
+          resolve(result)
+        }
+      }
+      finish()
     })
     if (opts.onStdout !== undefined)
       child.stdout?.setEncoding("utf8").on("data", opts.onStdout)
@@ -237,6 +261,7 @@ export function runChild(command, args, opts = {}, spawnFn = spawn) {
  * @property {typeof spawn} spawnFn
  * @property {SignalSource} signals
  * @property {NodeJS.Signals | undefined} interrupted
+ * @property {number} [cleanupTimeoutMs]
  */
 
 /**
@@ -329,14 +354,14 @@ async function compose(ctx, profile, args, options = {}) {
 }
 
 /**
- * sha256 of the files of `docker/postgres-stack/**` (paths and contents). The
- * config hash of compose does not see the Dockerfile or the contents of the
- * files a container reads, so the image carries this hash as a label.
+ * sha256 of the files of `docker/postgres-stack/**` (relative paths and
+ * contents), so the same files give the same hash in every checkout. Every
+ * container of the stack carries it as the label `simetra.stack-files-hash`.
  *
+ * @param {string} [dir] the stack directory; a test passes a copy
  * @returns {string}
  */
-export function stackFilesHash() {
-  const dir = PROFILES.postgres.dir
+export function stackFilesHash(dir = PROFILES.postgres.dir) {
   /** @param {string} at @returns {string[]} */
   const walk = (at) =>
     readdirSync(at, { withFileTypes: true }).flatMap((entry) =>
@@ -354,7 +379,6 @@ export function stackFilesHash() {
 }
 
 const STACK_FILES_LABEL = "simetra.stack-files-hash"
-const CONFIG_HASH_LABEL = "com.docker.compose.config-hash"
 const SERVICE_LABEL = "com.docker.compose.service"
 
 /**
@@ -391,30 +415,31 @@ async function stackContainers(ctx) {
 /**
  * Запущений стек лишається, лише якщо зібраний з тих самих файлів: `up`
  * інакше перестворив би контейнери спільного стека під чужими прогонами.
+ * Хеш конфігу compose не годиться: він містить абсолютний шлях bind-монтувань,
+ * тож ті самі файли з іншого checkout-а дали б інший хеш.
  *
  * @param {Ctx} ctx
  * @param {Map<string, Record<string, string>>} containers
  */
 async function assertSameStack(ctx, containers) {
-  const hashes = (
-    await compose(ctx, PROFILES.postgres, ["config", "--hash=*"], {
+  const services = (
+    await compose(ctx, PROFILES.postgres, ["config", "--services"], {
       capture: true,
     })
   )
     .split("\n")
-    .map((line) => line.trim().split(/\s+/))
-    .filter((parts) => parts.length === 2)
+    .map((line) => line.trim())
+    .filter((line) => line !== "")
+  const expected = stackFilesHash()
   /** @type {string[]} */
   const differences = []
-  if (hashes.length === 0) differences.push("compose printed no config hash")
-  for (const [service, hash] of hashes) {
+  if (services.length === 0) differences.push("compose printed no services")
+  for (const service of services) {
     const labels = containers.get(service)
     if (labels === undefined) differences.push(`${service}: no container`)
-    else if (labels[CONFIG_HASH_LABEL] !== hash)
-      differences.push(`${service}: ${CONFIG_HASH_LABEL}`)
+    else if (labels[STACK_FILES_LABEL] !== expected)
+      differences.push(`${service}: ${STACK_FILES_LABEL}`)
   }
-  if (containers.get("postgres")?.[STACK_FILES_LABEL] !== stackFilesHash())
-    differences.push(`postgres: ${STACK_FILES_LABEL}`)
   if (differences.length > 0)
     throw new Error(
       `stack config differs from this branch (${differences.join(", ")}); stopping the stack is the owner's call`
@@ -650,7 +675,7 @@ export function betterAuthCommand(secrets, superuserUrl) {
  * Starts the postgres stack, or re-runs the init steps on a running stack of
  * the same files without recreating its containers. The caller holds the lock.
  *
- * @param {{ spawnFn?: typeof spawn, signals?: SignalSource, noBuild?: boolean }} [options]
+ * @param {{ spawnFn?: typeof spawn, signals?: SignalSource, noBuild?: boolean, cleanupTimeoutMs?: number }} [options]
  * @returns {Promise<void>}
  */
 export async function startPostgres(options = {}) {
@@ -658,6 +683,7 @@ export async function startPostgres(options = {}) {
     options.spawnFn ?? spawn,
     options.signals ?? process
   )
+  ctx.cleanupTimeoutMs = options.cleanupTimeoutMs
   try {
     await startPostgresSteps(ctx, options.noBuild === true)
   } finally {
@@ -754,6 +780,11 @@ async function startPostgresSteps(ctx, noBuild) {
   }
 }
 
+// Прибирання бекендів не чує сигналів скрипту (другий Ctrl-C інакше вбив би
+// саме його), тож має власну межу: завислий psql не тримає замок довше
+const CLEANUP_TIMEOUT_MS = 15_000
+const CLEANUP_KILL_AFTER_MS = 2_000
+
 /**
  * Бекенди кроків старту завершує суперкористувач до зняття замка, і після
  * сигналу теж; збій лише попереджає — первинна помилка старту важливіша.
@@ -761,6 +792,12 @@ async function startPostgresSteps(ctx, noBuild) {
  * @param {Ctx} ctx
  */
 async function stopStartBackends(ctx) {
+  // Джерело «сигналів» лише для власної межі часу
+  const deadline = new EventEmitter()
+  const timer = setTimeout(
+    () => deadline.emit("SIGTERM", "SIGTERM"),
+    ctx.cleanupTimeoutMs ?? CLEANUP_TIMEOUT_MS
+  )
   const code = await runChild(
     "docker",
     composeArgv(PROFILES.postgres, psqlArgs("-q")),
@@ -768,10 +805,13 @@ async function stopStartBackends(ctx) {
       env: composeEnv(),
       input: `SELECT pg_catalog.pg_terminate_backend(pid) FROM pg_catalog.pg_stat_activity WHERE application_name = '${START_APP_NAME}' AND pid <> pg_catalog.pg_backend_pid();\n`,
       onStdout: () => {},
-      signals: ctx.signals,
+      signals: deadline,
+      killAfterMs: CLEANUP_KILL_AFTER_MS,
     },
     ctx.spawnFn
-  ).catch(() => -1)
+  )
+    .catch(() => -1)
+    .finally(() => clearTimeout(timer))
   if (code !== 0)
     process.stderr.write(
       `db-stack: could not stop the backends of ${START_APP_NAME} (exit ${code}); they may still load the stack\n`

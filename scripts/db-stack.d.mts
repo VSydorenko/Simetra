@@ -51,8 +51,8 @@ export function runChild(
   spawnFn?: SpawnFn
 ): Promise<number>
 
-/** sha256 of the files of `docker/postgres-stack/**`. */
-export function stackFilesHash(): string
+/** sha256 of the files of `docker/postgres-stack/**` (or of `dir`). */
+export function stackFilesHash(dir?: string): string
 
 /** StoredKey and ServerKey (base64) of a SCRAM-SHA-256 verifier. */
 export function scramKeys(
@@ -69,4 +69,5 @@ export function startPostgres(options?: {
   spawnFn?: SpawnFn
   signals?: SignalSource
   noBuild?: boolean
+  cleanupTimeoutMs?: number
 }): Promise<void>
