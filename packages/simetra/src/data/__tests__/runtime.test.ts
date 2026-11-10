@@ -433,15 +433,16 @@ function serverTransport(fake: FakeSource) {
     const reply = replies.shift()
     if (reply !== undefined) return reply
     if (body.request.type !== "read") return ok(null)
-    // Адаптер Server Function шле одну частину `query`; інша частина
-    // (`version` фабрики-перевизначення) — без читання.
-    const [part] = body.request.items as {
+    // Частини `query` читає фейк; інша частина (`version` фабрики-
+    // перевизначення) — без читання.
+    const parts = body.request.items as {
       type: string
-      query: Parameters<SourceAdapter["read"]>[0]
+      query: Parameters<SourceAdapter["read"]>[0][number]["query"]
     }[]
-    if (part?.type !== "query") return ok(null)
-    const value = await fake.adapter.read(part.query)
-    return ok({ epoch: null, items: [{ ok: true, value }] })
+    if (parts.some((part) => part.type !== "query")) return ok(null)
+    return ok(
+      await fake.adapter.read(parts as Parameters<SourceAdapter["read"]>[0])
+    )
   }
   return { transport, calls, replies }
 }
@@ -603,9 +604,9 @@ describe("runtime core", () => {
     const reads: string[] = []
     const override: SourceAdapter = {
       capabilities: fake.adapter.capabilities,
-      read: (query) => {
-        reads.push(query.object)
-        return fake.adapter.read(query)
+      read: (items) => {
+        reads.push(...items.map((item) => item.query.object))
+        return fake.adapter.read(items)
       },
     }
     const { core, calls } = runtimeOver(fake, {
@@ -635,10 +636,10 @@ describe("runtime core", () => {
     let refuse = false
     const override: SourceAdapter = {
       capabilities: fake.adapter.capabilities,
-      read: (query) =>
+      read: (items) =>
         refuse
           ? Promise.reject(new CommandFailure(SESSION_CHANGED))
-          : fake.adapter.read(query),
+          : fake.adapter.read(items),
     }
     const { runtime, core } = runtimeOver(fake, {
       sources: { override: { [ORG]: () => override } },

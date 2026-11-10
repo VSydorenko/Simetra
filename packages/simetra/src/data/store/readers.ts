@@ -10,7 +10,7 @@ import { includeKeys, readIncluded, type Included } from "./include"
 import { visibleRow, type PutResult } from "./object-store"
 import type { OwnerScope } from "./section-store"
 import type { Scope } from "./session"
-import { readKeys, serverRow, type CoreSource } from "./source"
+import { readKeys, readOne, serverRow, type CoreSource } from "./source"
 import type {
   GenerationToken,
   CoreLimits,
@@ -256,7 +256,7 @@ export async function fetchFull(
             o.entry.keyName,
             nullableOf(o.info)
           )
-    const page = await source.read({
+    const page = await readOne(source, {
       object: o.ref,
       ...(orderBy.length === 0 ? {} : { orderBy }),
       ...(where === undefined ? {} : { where }),
@@ -403,7 +403,7 @@ async function readSection(
   const o = s.form.object
   const spec = s.form.spec as Extract<ViewSpec, { kind: "section" }>
   const section = o.entry.tabularSections.find((t) => t.name === spec.section)!
-  const result = await ctx.source.read({
+  const result = await readOne(ctx.source, {
     object: o.ref,
     tabularSection: spec.section,
     owner: spec.owner,

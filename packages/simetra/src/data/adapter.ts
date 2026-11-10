@@ -1,24 +1,22 @@
 import {
   CommandFailure,
-  errorFromWire,
-  type CatalogIndex,
+  wireReadPartsResultSchema,
   type DatabaseProvider,
   type SourceAdapter,
-  type WireReadParts,
 } from "simetra/model"
 import { runtimeHandleOf, type RuntimeHandle } from "./runtime/handle"
 import type { DataRuntime } from "./runtime/runtime"
 
 /**
- * The Server Function source adapter (P4-B spec §5.2): a read goes through
- * the runtime transport wrapper as a one-part `read`; a failure of the
- * request or of its part is a `CommandFailure` of the same code.
+ * The Server Function source adapter (P4-B spec §5.2): the parts go through
+ * the runtime transport wrapper as one `read` request; a failure of the whole
+ * request is a `CommandFailure` of the same code, a failure of a part stays
+ * in its item.
  */
 export function createServerFunctionAdapter(
   runtime: DataRuntime
 ): SourceAdapter {
-  const { send, index } = runtimeHandleOf(runtime)
-  return serverFunctionAdapter(send, index)
+  return serverFunctionAdapter(runtimeHandleOf(runtime).send)
 }
 
 /**
@@ -26,29 +24,21 @@ export function createServerFunctionAdapter(
  * builds its default source with it before the runtime handle exists.
  */
 export function serverFunctionAdapter(
-  send: RuntimeHandle["send"],
-  index: CatalogIndex
+  send: RuntimeHandle["send"]
 ): SourceAdapter {
   return {
     // Сервер повертає `included` сам (§4.2, Р5).
     capabilities: { include: true },
-    async read(query) {
-      // Одна частина `query`: пакет частин адаптер шле разом із ядром (B1c-2).
-      const value = (await send({
-        type: "read",
-        items: [{ type: "query", query }],
-      })) as WireReadParts
-      // Форму значення тримає обробник T3; тут лише звуження до рядків:
-      // лічильник на рядковий запит — порушення контракту сервера.
-      const item = value.items[0]
-      if (item === undefined) {
+    async read(items) {
+      const value = await send({ type: "read", items: [...items] })
+      // Значення — від сервера, а не від ядра: форму перевіряє схема, і
+      // хибна відповідь — дефект сервера (`command.internal`), а не
+      // `TypeError` на чужому полі. Помилки частин мапить джерело ядра.
+      const parsed = wireReadPartsResultSchema.safeParse(value)
+      if (!parsed.success) {
         throw new CommandFailure({ code: "command.internal" })
       }
-      if (!item.ok) throw new CommandFailure(errorFromWire(index, item.error))
-      if (!("rows" in item.value)) {
-        throw new CommandFailure({ code: "command.internal" })
-      }
-      return item.value
+      return parsed.data
     },
   }
 }

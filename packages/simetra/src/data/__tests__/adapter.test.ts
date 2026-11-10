@@ -3,7 +3,7 @@ import {
   CommandFailure,
   DATABASE_PROVIDERS,
   type SourceAdapter,
-  type WireRowsQuery,
+  type WireQueryPart,
 } from "simetra/model"
 import {
   DataError,
@@ -22,7 +22,14 @@ import {
 } from "./support"
 
 const ID = "11111111-1111-4111-8111-111111111111"
-const QUERY: WireRowsQuery = { object: OBJECT_ID, id: ID }
+const PART: WireQueryPart = {
+  type: "query",
+  query: { object: OBJECT_ID, id: ID },
+}
+const OTHER: WireQueryPart = {
+  type: "query",
+  query: { object: OBJECT_ID, limit: 5 },
+}
 
 function adapterOver(response: Parameters<typeof answeringTransport>[0]) {
   const { transport, calls } = answeringTransport(response)
@@ -43,55 +50,79 @@ async function failureOf(promise: Promise<unknown>) {
   return (error as CommandFailure).error
 }
 
-// Відповідь `read` з однією частиною.
-const part = (item: unknown) => ok({ epoch: null, items: [item] })
-
 describe("createServerFunctionAdapter", () => {
-  it("sends a one-part read with the subject and returns the rows unchanged", async () => {
-    const value = { rows: [{ id: ID }], more: true }
-    const { adapter, calls } = adapterOver(part({ ok: true, value }))
-    await expect(adapter.read(QUERY)).resolves.toEqual(value)
+  it("sends every part in one read request with the subject and returns the answer unchanged", async () => {
+    const answer = {
+      epoch: null,
+      items: [
+        { ok: true, value: { rows: [{ id: ID }], more: true } },
+        {
+          ok: false,
+          error: { code: "command.unavailable", reason: "batch-aborted" },
+        },
+      ],
+    }
+    const { adapter, calls } = adapterOver(ok(answer))
+    await expect(adapter.read([PART, OTHER])).resolves.toEqual(answer)
     expect(calls).toEqual([
       {
         subject: SUBJECT,
-        request: { type: "read", items: [{ type: "query", query: QUERY }] },
+        request: { type: "read", items: [PART, OTHER] },
       },
     ])
   })
 
-  it("maps a failed part to a logical CommandFailure by the catalog", async () => {
+  it("passes the epoch of the answer on", async () => {
+    const epoch = "c".repeat(64)
     const { adapter } = adapterOver(
-      part({
-        ok: false,
-        error: { code: "command.forbidden", object: OBJECT_ID, path: "org_id" },
-      })
+      ok({ epoch, items: [{ ok: true, value: { rows: [] } }] })
     )
-    expect(await failureOf(adapter.read(QUERY))).toEqual({
-      code: "command.forbidden",
-      object: { kind: "Catalog", name: "Task" },
-      path: "org",
-    })
+    expect((await adapter.read([PART])).epoch).toBe(epoch)
   })
 
-  it("maps a failed response to a logical CommandFailure by the catalog", async () => {
+  it("rejects with the logical CommandFailure of a failed response", async () => {
     const { adapter } = adapterOver(
       failed({ code: "command.forbidden", object: OBJECT_ID, path: "org_id" })
     )
-    expect(await failureOf(adapter.read(QUERY))).toEqual({
+    expect(await failureOf(adapter.read([PART]))).toEqual({
       code: "command.forbidden",
       object: { kind: "Catalog", name: "Task" },
       path: "org",
     })
   })
 
-  it("refuses a count result for a rows query as command.internal", async () => {
-    const { adapter } = adapterOver(part({ ok: true, value: { count: 3 } }))
-    expect((await failureOf(adapter.read(QUERY))).code).toBe("command.internal")
+  it("rejects with command.unavailable when the transport fails", async () => {
+    const runtime = createDataRuntime({
+      catalog: clientCatalog(),
+      transport: () => Promise.reject(new Error("offline")),
+      subject: SUBJECT,
+      log: () => {},
+    })
+    const adapter = createServerFunctionAdapter(runtime)
+    expect(await failureOf(adapter.read([PART, OTHER]))).toEqual({
+      code: "command.unavailable",
+    })
   })
 
-  it("refuses a value without parts as command.internal", async () => {
-    const { adapter } = adapterOver(ok({ epoch: null, items: [] }))
-    expect((await failureOf(adapter.read(QUERY))).code).toBe("command.internal")
+  it.each([
+    ["null", null],
+    ["a string", "rows"],
+    ["an object without items", { epoch: null }],
+    ["no items", { epoch: null, items: [] }],
+    ["an item that is not an object", { epoch: null, items: [null] }],
+    [
+      "an item whose value is not an object",
+      { epoch: null, items: [{ ok: true, value: 3 }] },
+    ],
+    [
+      "an epoch that is not a hash",
+      { epoch: "x", items: [{ ok: true, value: { rows: [] } }] },
+    ],
+  ])("refuses %s as command.internal", async (_name, value) => {
+    const { adapter } = adapterOver(ok(value))
+    expect((await failureOf(adapter.read([PART]))).code).toBe(
+      "command.internal"
+    )
   })
 
   it("declares include support (Р5)", () => {
@@ -101,11 +132,11 @@ describe("createServerFunctionAdapter", () => {
 
 describe("selectSource", () => {
   const serverFunction: SourceAdapter = {
-    read: () => Promise.resolve({ rows: [] }),
+    read: () => Promise.resolve({ epoch: null, items: [] }),
     capabilities: { include: true },
   }
   const override: SourceAdapter = {
-    read: () => Promise.resolve({ rows: [] }),
+    read: () => Promise.resolve({ epoch: null, items: [] }),
     capabilities: { include: false },
   }
 

@@ -177,10 +177,10 @@ export function createDataRuntime(options: DataRuntimeOptions): DataRuntime {
   // `read` закриває рантайм поза `commit`.
   const watchSessionChanged = (adapter: SourceAdapter): SourceAdapter => ({
     capabilities: adapter.capabilities,
-    read(query) {
+    read(items) {
       let pending: ReturnType<SourceAdapter["read"]>
       try {
-        pending = adapter.read(query)
+        pending = adapter.read(items)
       } catch (error) {
         pending = Promise.reject(error)
       }
@@ -224,7 +224,7 @@ export function createDataRuntime(options: DataRuntimeOptions): DataRuntime {
     throw new CommandFailure(error)
   }
 
-  const serverFunction = serverFunctionAdapter(send, index)
+  const serverFunction = serverFunctionAdapter(send)
   const adapters = new Map<string, SourceAdapter>()
   const source = createCoreSource(
     (object) =>
@@ -257,6 +257,6 @@ export function createDataRuntime(options: DataRuntimeOptions): DataRuntime {
     },
     dispose: () => close(DISPOSED, "disposed"),
   }
-  bindRuntimeHandle(runtime, { send, core, index })
+  bindRuntimeHandle(runtime, { send, core })
   return runtime
 }

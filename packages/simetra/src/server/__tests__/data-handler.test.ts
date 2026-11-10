@@ -9,6 +9,7 @@ import {
   pathToWire,
   runtimeCatalogSchema,
   READ_BATCH_MAX,
+  RESPONSE_BUDGET_BYTES,
   versionValueSchema,
   WireEncodeError,
   wireReadPartsResultSchema,
@@ -757,6 +758,34 @@ describe("createDataHandler: steps 4–6", () => {
     })
     expect(items[1]).toMatchObject({ ok: true })
     expect(sentFor(db, 2)).toBe(true)
+  })
+
+  it("a batch [small, too large, small]: two values and one response-too-large, within the budget", async () => {
+    const { handle } = await harness(
+      sizedCards({
+        [cardId(1)]: 10,
+        [cardId(2)]: 5_000_000,
+        [cardId(3)]: 10,
+      })
+    )
+    const response = await handle(
+      session,
+      readItems([1, 2, 3].map(cardPart)),
+      HTTP
+    )
+    const items = itemsOf(response)
+    expect(items.map((item) => item.ok)).toEqual([true, false, true])
+    expect(items[1]).toStrictEqual({
+      ok: false,
+      error: {
+        code: "command.invalid",
+        reason: LIMIT_REASONS.responseTooLarge,
+      },
+    })
+    // `finish` мірює всю відповідь: оверфлоу однієї частини бюджет не рве.
+    expect(JSON.stringify(response).length).toBeLessThanOrEqual(
+      RESPONSE_BUDGET_BYTES
+    )
   })
 
   it("a runtime that ignores overflow still yields batch-budget, never the rows", async () => {

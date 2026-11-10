@@ -7,7 +7,6 @@ import type {
   SourceAdapter,
   Unsubscribe,
   WireRowsQuery,
-  WireRowsResult,
 } from "../ports"
 
 const OBJECT = "11111111-1111-4111-8111-111111111111"
@@ -16,7 +15,7 @@ const OBJECT = "11111111-1111-4111-8111-111111111111"
 // тож перевірка йде на рівні типів.
 const adapter: SourceAdapter = {
   capabilities: { include: false },
-  read: async () => ({ rows: [] }),
+  read: async () => ({ epoch: null, items: [] }),
 }
 
 const transport: SignalTransport = {
@@ -30,9 +29,11 @@ describe("ports", () => {
     expectTypeOf(transport).toExtend<SignalTransport>()
     expectTypeOf<SignalErrorKind>().toEqualTypeOf<"auth" | "transport">()
     expectTypeOf<Unsubscribe>().toEqualTypeOf<() => void>()
-    expect(await adapter.read({ object: OBJECT, limit: 10 })).toEqual({
-      rows: [],
-    })
+    expect(
+      await adapter.read([
+        { type: "query", query: { object: OBJECT, limit: 10 } },
+      ])
+    ).toEqual({ epoch: null, items: [] })
   })
 
   it("keep both count forms out of the adapter query", () => {
@@ -44,19 +45,9 @@ describe("ports", () => {
       count: true,
     } as const
     // @ts-expect-error лічильник об'єкта йде через DataTransport, не адаптер
-    void adapter.read(objectCount)
+    void adapter.read([{ type: "query", query: objectCount }])
     // @ts-expect-error лічильник ТЧ теж
-    void adapter.read(sectionCount)
-  })
-
-  it("keep the count result out of the adapter result", () => {
-    expectTypeOf<WireRowsResult>().not.toExtend<{ count: number }>()
-    const bad: SourceAdapter = {
-      capabilities: { include: false },
-      // @ts-expect-error адаптер не повертає лічильник
-      read: async () => ({ count: 1 }),
-    }
-    expect(bad).toBeDefined()
+    void adapter.read([{ type: "query", query: sectionCount }])
   })
 })
 

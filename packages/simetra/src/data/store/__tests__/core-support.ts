@@ -72,9 +72,22 @@ export function setup(
     options.reverseRows === true
       ? {
           capabilities: fake.adapter.capabilities,
-          read: async (wire) => {
-            const result = await fake.adapter.read(wire)
-            return { ...result, rows: [...result.rows].reverse() }
+          read: async (items) => {
+            const result = await fake.adapter.read(items)
+            return {
+              ...result,
+              items: result.items.map((item) =>
+                item.ok && "rows" in item.value
+                  ? {
+                      ...item,
+                      value: {
+                        ...item.value,
+                        rows: [...item.value.rows].reverse(),
+                      },
+                    }
+                  : item
+              ),
+            }
           },
         }
       : fake.adapter
