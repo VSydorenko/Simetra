@@ -7,7 +7,9 @@ import {
   type CommandError,
   type Filter,
   type WireChange,
+  type WireCommandError,
   type WireOperation,
+  type WireReadParts,
   type WireReadQuery,
   type WireReadResult,
   type WireRow,
@@ -119,23 +121,14 @@ function references(
   return out
 }
 
-/**
- * Fits a read result into the response budget (P4-B spec §4.1, decision Р8):
- * measures the whole `DataResponse` (`{ ok: true, value, serverHash }`).
- * A result that fits is returned as is. A page — a list or a section page
- * with no `eq` or `in` on the key anywhere in `where` — is cut to its longest
- * non-empty prefix that fits, with `more: true` and `included` rows only of
- * targets the kept rows reference. A key read, a card, the lines of an owner,
- * or a page whose first row does not fit is `command.invalid` with
- * `reason: "response-too-large"`, never cut.
- */
-export function fitResponse(
-  index: CatalogIndex,
-  query: WireReadQuery,
-  result: WireReadResult,
-  serverHash: string
-): WireReadResult | CommandError {
-  if ("count" in result) return result
+/** Розміри результату рядків: значення цілком, кожен рядок і рядок `included`. */
+interface Measured {
+  bytes: number
+  rowSizes: readonly number[]
+  includedSizes: ReadonlyMap<string, readonly number[]>
+}
+
+function measure(result: RowsResult): Measured {
   const rowSizes = result.rows.map((row) => jsonBytes(row))
   const includedSizes = new Map(
     Object.entries(result.included ?? {}).map(([id, rows]) => [
@@ -148,47 +141,61 @@ export function fitResponse(
     rows: [],
     included: emptyIncluded(result.included),
   }
-  const full =
-    responseBytes(empty, serverHash) +
+  const bytes =
+    jsonBytes(empty) +
     itemsBytes(rowSizes) +
     [...includedSizes.values()].reduce((sum, s) => sum + itemsBytes(s), 0)
-  if (full <= RESPONSE_BUDGET_BYTES) return result
+  return { bytes, rowSizes, includedSizes }
+}
+
+/**
+ * Результат, що вміщується в `room` байтів значення: сам результат, обрізана
+ * сторінка (рішення Р8) чи `undefined`. Fail-closed: читання за ключами,
+ * картка, «ТЧ власника» й сторінка без жодного рядка в межі не ріжуться.
+ */
+function fitValue(
+  index: CatalogIndex,
+  query: WireReadQuery,
+  result: WireReadResult,
+  room: number
+): WireReadResult | undefined {
+  if ("count" in result) return jsonBytes(result) <= room ? result : undefined
+  const measured = measure(result)
+  if (measured.bytes <= room) return result
   const shape = query as QueryShape
-  if (!isPage(index, shape)) return TOO_LARGE
-  return cutPage(index, shape, result, rowSizes, includedSizes, serverHash)
+  if (!isPage(index, shape)) return undefined
+  return cutPage(index, shape, result, measured, room)
 }
 
 function cutPage(
   index: CatalogIndex,
   query: QueryShape,
   result: RowsResult,
-  rowSizes: readonly number[],
-  includedSizes: ReadonlyMap<string, readonly number[]>,
-  serverHash: string
-): WireReadResult | CommandError {
+  { rowSizes, includedSizes }: Measured,
+  room: number
+): WireReadResult | undefined {
   const included = result.included ?? {}
   const refs = references(index, query, included)
   // База — з `more`: обрізана відповідь його несе, і саме це поле може
   // перетнути межу.
-  let total = responseBytes(
-    {
-      ...result,
-      rows: [],
-      included: emptyIncluded(result.included),
-      more: true,
-    },
-    serverHash
-  )
+  let total = jsonBytes({
+    ...result,
+    rows: [],
+    included: emptyIncluded(result.included),
+    more: true,
+  })
   const taken = new Map<string, Set<number>>()
   let kept = 0
   for (const [i, row] of result.rows.entries()) {
     let cost = rowSizes[i]! + (i > 0 ? 1 : 0)
     const pending = new Map<string, Set<number>>()
+    // Маркер-позиція колонок не має: цілей `include` він не тягне.
+    const record = typeof row === "object" ? row : undefined
     for (const { column, target, byKey } of refs) {
-      if (!Object.hasOwn(row, column)) continue
+      if (record === undefined || !Object.hasOwn(record, column)) continue
       const done = taken.get(target)
       const fresh = pending.get(target) ?? new Set<number>()
-      for (const j of byKey.get(row[column]) ?? []) {
+      for (const j of byKey.get(record[column]) ?? []) {
         if (done?.has(j) === true || fresh.has(j)) continue
         // Кома — коли в масиві цілі вже є рядок, лишений чи щойно доданий.
         const before = (done?.size ?? 0) + fresh.size
@@ -197,7 +204,7 @@ function cutPage(
       }
       pending.set(target, fresh)
     }
-    if (total + cost > RESPONSE_BUDGET_BYTES) break
+    if (total + cost > room) break
     total += cost
     kept++
     for (const [target, fresh] of pending) {
@@ -206,7 +213,7 @@ function cutPage(
       taken.set(target, done)
     }
   }
-  if (kept === 0) return TOO_LARGE
+  if (kept === 0) return undefined
   const out: RowsResult = { ...result, rows: result.rows.slice(0, kept) }
   if (result.included !== undefined) {
     out.included = Object.fromEntries(
@@ -218,6 +225,158 @@ function cutPage(
   }
   out.more = true
   return out
+}
+
+/** One outcome of a `read` request in wire form. */
+export type WireReadItem = WireReadParts["items"][number]
+
+/**
+ * A position of a `read` request for {@link fitParts}: an outcome the
+ * handler already has (a refused part, a `version` part) or a query part the
+ * runtime reads.
+ */
+export type ReadSlot = { item: WireReadItem } | { query: WireReadQuery }
+
+/** The budget of one `read` response, see {@link fitParts}. */
+export interface PartsBudget {
+  /**
+   * Decides the outcome of query part `part` (its position among the query
+   * slots) from its encoded result, before the next part runs: `"overflow"`
+   * — the parts after it must not run.
+   */
+  fit(part: number, result: WireReadResult): "accept" | "overflow"
+  /**
+   * The value of the response: the decided outcomes, `failed` errors for
+   * the parts without one. A response still over the budget is
+   * `response-too-large` whole. Throws for a query part with neither — a
+   * server defect.
+   */
+  finish(
+    epoch: string | null,
+    failed: ReadonlyMap<number, WireCommandError>
+  ): WireReadParts | CommandError
+}
+
+// Епоха — 64 hex чи `null`: до кінця транзакції бюджет міряє довшу форму.
+const EPOCH_PLACEHOLDER = "0".repeat(64)
+// Частина, ще не виконана, отримає хіба помилку: код, причину, UUID об'єкта
+// й короткий шлях. Резерв тримає для неї місце; що його перевищить, ловить
+// остаточна міра `finish`.
+const PENDING_RESERVE_BYTES = 1024
+// `{"ok":true,"value":…}` понад саме значення.
+const OK_ITEM_OVERHEAD = jsonBytes({ ok: true, value: null }) - jsonBytes(null)
+
+const BATCH_BUDGET: WireCommandError = {
+  code: "command.unavailable",
+  reason: "batch-budget",
+}
+const TOO_LARGE_ITEM: WireReadItem = {
+  ok: false,
+  error: { code: "command.invalid", reason: LIMIT_REASONS.responseTooLarge },
+}
+
+/**
+ * The response budget of a `read` request (P4-B spec §4.1, §4.5): measures
+ * the whole `DataResponse` `{ ok: true, value: { epoch, items }, serverHash }`
+ * as the handler serializes it. A part fits into what the outcomes before it,
+ * the ready outcomes and a reserve for every part not yet run leave. A part
+ * over that remainder: a page is cut to its longest non-empty prefix that
+ * fits, with `more: true`; otherwise, if it would fit in a response alone,
+ * it is `command.unavailable` `reason: "batch-budget"` (the client rereads it
+ * apart). Either way the parts after it are `batch-budget` and `fit` answers
+ * `"overflow"`. A part that does not fit even alone is `command.invalid`
+ * `reason: "response-too-large"`, and the parts after it still run.
+ */
+export function fitParts(
+  index: CatalogIndex,
+  slots: readonly ReadSlot[],
+  serverHash: string
+): PartsBudget {
+  const queries: WireReadQuery[] = []
+  const fixedBytes: number[] = []
+  for (const slot of slots) {
+    if ("query" in slot) queries.push(slot.query)
+    else fixedBytes.push(jsonBytes(slot.item))
+  }
+  const decided: (WireReadItem | undefined)[] = queries.map(() => undefined)
+  const decidedBytes: number[] = queries.map(() => 0)
+  let overflowed = false
+  const baseOf = (epoch: string | null) =>
+    responseBytes({ epoch, items: [] }, serverHash) +
+    Math.max(0, slots.length - 1)
+  const base = baseOf(EPOCH_PLACEHOLDER)
+  const fixed = fixedBytes.reduce((sum, size) => sum + size, 0)
+  // Байти, що лишаються значенню частини `part` поміж інших елементів.
+  const room = (part: number): number => {
+    let used = base + fixed
+    queries.forEach((_, p) => {
+      if (p === part) return
+      used +=
+        decided[p] === undefined ? PENDING_RESERVE_BYTES : decidedBytes[p]!
+    })
+    return RESPONSE_BUDGET_BYTES - used - OK_ITEM_OVERHEAD
+  }
+  const decide = (part: number, item: WireReadItem) => {
+    decided[part] = item
+    decidedBytes[part] = jsonBytes(item)
+  }
+  // Сама в відповіді: без інших елементів і без ком між ними.
+  const alone =
+    RESPONSE_BUDGET_BYTES -
+    responseBytes({ epoch: EPOCH_PLACEHOLDER, items: [] }, serverHash) -
+    OK_ITEM_OVERHEAD
+
+  return {
+    fit(part, result) {
+      const query = queries[part]
+      if (query === undefined || decided[part] !== undefined) {
+        throw new Error(`read part ${part} fitted twice or out of range`)
+      }
+      if (overflowed) {
+        decide(part, { ok: false, error: BATCH_BUDGET })
+        return "overflow"
+      }
+      const value = fitValue(index, query, result, room(part))
+      if (value === result) {
+        decide(part, { ok: true, value })
+        return "accept"
+      }
+      if (value !== undefined) {
+        decide(part, { ok: true, value })
+        overflowed = true
+        return "overflow"
+      }
+      if (fitValue(index, query, result, alone) !== undefined) {
+        decide(part, { ok: false, error: BATCH_BUDGET })
+        overflowed = true
+        return "overflow"
+      }
+      decide(part, TOO_LARGE_ITEM)
+      return "accept"
+    },
+    finish(epoch, failed) {
+      let part = 0
+      let total = baseOf(epoch)
+      const items = slots.map((slot): WireReadItem => {
+        if ("item" in slot) return slot.item
+        const p = part++
+        const done = decided[p]
+        if (done !== undefined) {
+          total += decidedBytes[p]!
+          return done
+        }
+        const error = failed.get(p)
+        if (error === undefined) {
+          throw new Error(`read part ${p} has no outcome`)
+        }
+        const item: WireReadItem = { ok: false, error }
+        total += jsonBytes(item)
+        return item
+      })
+      if (total + fixed > RESPONSE_BUDGET_BYTES) return TOO_LARGE
+      return { epoch, items }
+    },
+  }
 }
 
 /** The value of a `run` response in wire form. */

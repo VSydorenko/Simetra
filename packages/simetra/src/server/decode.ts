@@ -2,6 +2,8 @@ import {
   INTEGER_TEXT,
   isPlainObject,
   decodeRow,
+  splitKnownMarker,
+  type KnownMarker,
   type LogicalRow,
   type RuntimeObject,
   type RuntimeSection,
@@ -105,6 +107,42 @@ export function decodeReadRow(
   const wire = headWire(object, parse(json))
   if (sections !== undefined) wire.set("tabularSections", sections)
   return decodeStrict(object, Object.fromEntries(wire))
+}
+
+/**
+ * Decodes a read row that may be a marker of a row the client holds (P4-B
+ * spec §4.1) by the T0 rule `splitKnownMarker`: a marker's copies decode by
+ * logical name; anything else is a row, as {@link decodeReadRow}.
+ * `known` — the number of positions of the statement's `known`, 0 when it
+ * had none: a position outside it is `command.internal`.
+ */
+export function decodeReadRowOrMarker(
+  object: RuntimeObject,
+  json: string,
+  known: number
+): LogicalRow | KnownMarker {
+  const raw = parse(json)
+  // Маркер шле лише умовний оператор і лише з позицією з `unnest` — інше
+  // значення є дефектом, а не рядком.
+  const position = (value: unknown): number => {
+    if (
+      typeof value !== "number" ||
+      !Number.isSafeInteger(value) ||
+      value < 0 ||
+      value >= known
+    ) {
+      throw internal()
+    }
+    return value
+  }
+  const marker = splitKnownMarker(object.key, raw)
+  if (marker === undefined) {
+    return decodeStrict(object, Object.fromEntries(headWire(object, raw)))
+  }
+  const at = position(marker.known)
+  return Object.keys(marker.copies).length === 0
+    ? { known: at }
+    : { known: at, copies: decodeStrict(object, marker.copies) }
 }
 
 /**

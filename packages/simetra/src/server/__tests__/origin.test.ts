@@ -97,8 +97,21 @@ describe("checkRequestOrigin: inProcess", () => {
   const wrap = (type: unknown) => ({ request: { type } })
   it.each<[string, unknown, boolean]>([
     ["read", wrap("read"), false],
-    ["version", wrap("version"), false],
+    // Частини походження не дивиться: будь-які частини `read` — лише читання.
+    [
+      "read з частинами",
+      {
+        request: {
+          type: "read",
+          items: [{ type: "query" }, { type: "version" }, { type: "x" }],
+        },
+      },
+      false,
+    ],
+    // Окремого запиту `version` більше немає (B1c): старий тип — відмова.
+    ["version", wrap("version"), true],
     ["run", wrap("run"), true],
+    ["receipt", wrap("receipt"), true],
     ["невідомий тип", wrap("rights2"), true],
     ["тип не рядок", wrap(1), true],
     ["тип String-об'єкт", wrap(Object("read")), true],

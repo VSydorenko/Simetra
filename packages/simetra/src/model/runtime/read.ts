@@ -346,3 +346,99 @@ export type ReadResult = ReadRows | ReadCount
 
 /** The result shape of a query: a count query counts, any other reads rows. */
 export type ReadResultOf<Q> = Q extends { count: true } ? ReadCount : ReadRows
+
+/** Upper bound of parts in one `read` request (P4-B spec §4.5). */
+export const READ_BATCH_MAX = 16
+/**
+ * Upper bound of database statements of the parts and `include` targets of
+ * one `read` request; past it the request fails with `batch-too-large`
+ * before the database.
+ */
+export const READ_BATCH_STATEMENTS_MAX = 32
+
+/** The row version epoch of a database: 64 lowercase hex (a hash). */
+export const versionEpochSchema = z.string().regex(/^[0-9a-f]{64}$/)
+
+// Версія — текст, як колонка версії у формі передачі: `bigint` бази JSON
+// числом не несе. Нуль версією не буває, тож нижня межа — 1.
+const knownVersionSchema = z
+  .string()
+  .regex(/^[1-9]\d{0,15}$/)
+  .refine((version) => Number.isSafeInteger(Number(version)), {
+    message: "version past 2^53 - 1",
+  })
+
+/**
+ * Rows the client already holds, for a conditional read (P4-B spec §4.1):
+ * the epoch they were read in and, position by position, a key and its
+ * version. Only a part of a `read` request carries it, never `ReadQuery`.
+ */
+export const knownSchema = z
+  .strictObject({
+    epoch: versionEpochSchema,
+    keys: z.array(z.guid()).max(READ_LIMIT_MAX),
+    versions: z.array(knownVersionSchema).max(READ_LIMIT_MAX),
+  })
+  .superRefine((known, ctx) => {
+    if (known.keys.length !== known.versions.length) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["versions"],
+        message: "versions must match keys one to one",
+      })
+    }
+    // Postgres рівняє UUID без регістру: повтор в іншому регістрі дав би два
+    // збіги одного рядка в `unnest` і дубль рядка у відповіді.
+    const seen = new Set<string>()
+    known.keys.forEach((key, i) => {
+      const folded = key.toLowerCase()
+      if (seen.has(folded)) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["keys", i],
+          message: "repeated key",
+        })
+      }
+      seen.add(folded)
+    })
+  })
+
+export type KnownVersions = z.infer<typeof knownSchema>
+
+/**
+ * Whether a read query form may carry `known`: a list or a card, without
+ * `tabularSections` and `include`. Any other form is refused with
+ * `reason: "known-form"`.
+ */
+// Маркер заміняє рядок шапки за ключем; ТЧ і лічильник ключа рядка не мають,
+// а `include` з маркером вводить B3-3: id цілей маркерного рядка будівнику ще
+// не відомі. Форму визначають ключі, як і `formIndex`.
+export function knownFormAllowed(query: object): boolean {
+  return !["tabularSection", "count", "tabularSections", "include"].some(
+    (key) => Object.hasOwn(query, key)
+  )
+}
+
+/** A read query as one part of a `read` request, with the rows it knows. */
+export interface ReadPart {
+  type: "query"
+  query: ReadQuery
+  known?: KnownVersions
+}
+
+/**
+ * A row the server left out because the client holds it (P4-B spec §4.1):
+ * `known` — its position in the part's `known`; `copies` — the values of the
+ * object's `copy` attributes by logical name, which the client cannot keep.
+ */
+export interface KnownMarker {
+  known: number
+  copies?: Record<string, unknown>
+}
+
+/** The value of one read part: a count, or rows among which may be markers. */
+export type ReadPartValue =
+  | ReadCount
+  | (Omit<ReadRows, "rows"> & {
+      rows: Array<Record<string, unknown> | KnownMarker>
+    })

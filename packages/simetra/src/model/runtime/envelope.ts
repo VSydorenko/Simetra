@@ -9,8 +9,16 @@ import {
   operationSchema,
   updateOperationObjectSchema,
 } from "./operation"
-import { queryFormSchema, readQuerySchema, TABULAR_LINES_MAX } from "./read"
-import { INTEGER_TEXT } from "./values"
+import {
+  knownFormAllowed,
+  knownSchema,
+  queryFormSchema,
+  READ_BATCH_MAX,
+  readQuerySchema,
+  TABULAR_LINES_MAX,
+  versionEpochSchema,
+} from "./read"
+import { INTEGER_TEXT, isPlainObject } from "./values"
 
 /**
  * Схеми форми передачі (спека П4-B §4.0): та сама операція, помилка й зміна,
@@ -105,43 +113,72 @@ const wireSectionIdsSchema = z.array(elementIdSchema).min(1)
 /**
  * A read query in wire form: the logical forms with the object by UUID,
  * physical columns in `where`, `orderBy` and `include`, and section ids in
- * `tabularSection` and `tabularSections`.
+ * `tabularSection` and `tabularSections`. A list and a card without
+ * `tabularSections` and `include` may carry `known` (a conditional read);
+ * any other form with `known` is refused with `reason: "known-form"`.
  */
-export const wireReadQuerySchema = queryFormSchema([
-  card.extend({
-    object: wireObjectSchema,
-    tabularSections: z
-      .union([z.literal(true), wireSectionIdsSchema])
-      .optional(),
-  }),
-  list.extend({ object: wireObjectSchema }),
-  count.extend({ object: wireObjectSchema }),
-  ownerLines.extend({
-    object: wireObjectSchema,
-    tabularSection: elementIdSchema,
-  }),
-  sectionList.extend({
-    object: wireObjectSchema,
-    tabularSection: elementIdSchema,
-  }),
-  sectionCount.extend({
-    object: wireObjectSchema,
-    tabularSection: elementIdSchema,
-  }),
-])
+// Форму з `known` перевіряє препроцесор до розбору форми: суворий об'єкт
+// інших форм відхилив би `known` як зайвий ключ без причини, а
+// `queryFormSchema` переносить лише шлях і текст відмови форми.
+export const wireReadQuerySchema = z.preprocess(
+  (value, ctx) => {
+    if (
+      isPlainObject(value) &&
+      Object.hasOwn(value, "known") &&
+      !knownFormAllowed(value)
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["known"],
+        message:
+          "known is allowed only on a list or a card without tabularSections and include",
+        params: { reason: "known-form" },
+      })
+    }
+    return value
+  },
+  queryFormSchema([
+    card.extend({
+      object: wireObjectSchema,
+      tabularSections: z
+        .union([z.literal(true), wireSectionIdsSchema])
+        .optional(),
+      known: knownSchema.optional(),
+    }),
+    list.extend({ object: wireObjectSchema, known: knownSchema.optional() }),
+    count.extend({ object: wireObjectSchema }),
+    ownerLines.extend({
+      object: wireObjectSchema,
+      tabularSection: elementIdSchema,
+    }),
+    sectionList.extend({
+      object: wireObjectSchema,
+      tabularSection: elementIdSchema,
+    }),
+    sectionCount.extend({
+      object: wireObjectSchema,
+      tabularSection: elementIdSchema,
+    }),
+  ])
+)
 
 export type WireReadQuery = z.infer<typeof wireReadQuerySchema>
 
 const wireRowSchema = z.record(z.string(), z.unknown())
 
 /**
- * A read result in wire form: rows keyed by physical columns, `included`
- * keyed by the target object's UUID, `ownerVersion` as integer text (a
- * version, like the version column); or a count.
+ * A read result in wire form: rows keyed by physical columns (or markers
+ * of rows the client holds, see `readResultFromWire`), `included` keyed by
+ * the target object's UUID, `ownerVersion` as integer text (a version, like
+ * the version column); or a count.
  */
 export const wireReadResultSchema = z.union([
   z.strictObject({
-    rows: z.array(wireRowSchema),
+    // Рядок, маркер незмінного рядка (позиція в `known`) чи частковий
+    // маркер `{ $known, <колонки copy> }`. Частковий маркер від рядка
+    // відрізняє відсутність колонки ключа, а її знає лише каталог, тож
+    // об'єкт тут — будь-який; індекс `$known` перевіряє декодер.
+    rows: z.array(z.union([z.int().min(0), wireRowSchema])),
     included: z.record(wireObjectSchema, z.array(wireRowSchema)).optional(),
     ownerVersion: z.string().regex(INTEGER_TEXT).optional(),
     // Сторінку обрізано за бюджетом відповіді: є ще рядки. Що `more` буває
@@ -184,25 +221,68 @@ const runRequestSchema = z.union([
   }),
 ])
 
-/** A request to the data transport: the session subject and one request. */
-export const dataRequestSchema = z.strictObject({
-  subject: z.string(),
-  request: z.union([
-    z.strictObject({ type: z.literal("read"), query: wireReadQuerySchema }),
-    runRequestSchema,
-    z.strictObject({ type: z.literal("version") }),
-  ]),
-})
-
-export type DataRequest = z.infer<typeof dataRequestSchema>
-
-/** The catalog version a `version` request returns. */
+/** The catalog version a `version` part returns. */
 export const versionValueSchema = z.strictObject({
   snapshotHash: z.string(),
   objects: z.record(wireObjectSchema, kernelHashSchema),
 })
 
 export type VersionValue = z.infer<typeof versionValueSchema>
+
+/**
+ * One part of a `read` request: a read query (with `known`, where its form
+ * allows) or the catalog version. `rights` comes with B5.
+ */
+export const wireReadPartSchema = z.discriminatedUnion("type", [
+  z.strictObject({ type: z.literal("query"), query: wireReadQuerySchema }),
+  z.strictObject({ type: z.literal("version") }),
+])
+
+export type WireReadPart = z.infer<typeof wireReadPartSchema>
+
+/**
+ * The value of a `read` request: the row version epoch of its transaction
+ * (`null` without a transaction or an epoch) and an outcome per part, in
+ * request order.
+ */
+export const wireReadPartsResultSchema = z.strictObject({
+  epoch: versionEpochSchema.nullable(),
+  items: z
+    .array(
+      z.union([
+        z.strictObject({
+          ok: z.literal(true),
+          value: z.union([wireReadResultSchema, versionValueSchema]),
+        }),
+        z.strictObject({ ok: z.literal(false), error: wireCommandErrorSchema }),
+      ])
+    )
+    .min(1)
+    .max(READ_BATCH_MAX),
+})
+
+export type WireReadParts = z.infer<typeof wireReadPartsResultSchema>
+
+/** A request to the data transport: the session subject and one request. */
+// Частини конверт бере будь-якими: кожну перевіряє `wireReadPartSchema` в
+// обробнику, тож хибна чи невідома частина відмовляє лише собі, а новіший
+// клієнт на старішому сервері не перезавантажується. Межа — до розбору.
+export const dataRequestSchema = z.strictObject({
+  subject: z.string(),
+  request: z.union([
+    z.strictObject({
+      type: z.literal("read"),
+      items: lengthLimited(
+        z.array(z.unknown()).min(1),
+        READ_BATCH_MAX,
+        LIMIT_REASONS.batchTooLarge
+      ),
+    }),
+    runRequestSchema,
+  ]),
+})
+
+export type DataRequest = z.infer<typeof dataRequestSchema>
 
 /** A response of the data transport; `serverHash` is the server's catalog hash. */
 export const dataResponseSchema = z.union([

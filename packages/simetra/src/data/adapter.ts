@@ -1,16 +1,17 @@
 import {
   CommandFailure,
+  wireReadPartsResultSchema,
   type DatabaseProvider,
   type SourceAdapter,
-  type WireReadResult,
 } from "simetra/model"
 import { runtimeHandleOf, type RuntimeHandle } from "./runtime/handle"
 import type { DataRuntime } from "./runtime/runtime"
 
 /**
- * The Server Function source adapter (P4-B spec §5.2): a read goes through
- * the runtime transport wrapper; a failure is a `CommandFailure` of the same
- * code.
+ * The Server Function source adapter (P4-B spec §5.2): the parts go through
+ * the runtime transport wrapper as one `read` request; a failure of the whole
+ * request is a `CommandFailure` of the same code, a failure of a part stays
+ * in its item.
  */
 export function createServerFunctionAdapter(
   runtime: DataRuntime
@@ -28,14 +29,16 @@ export function serverFunctionAdapter(
   return {
     // Сервер повертає `included` сам (§4.2, Р5).
     capabilities: { include: true },
-    async read(query) {
-      // Форму значення тримає обробник T3; тут лише звуження до рядків:
-      // лічильник на рядковий запит — порушення контракту сервера.
-      const value = (await send({ type: "read", query })) as WireReadResult
-      if ("count" in value) {
+    async read(items) {
+      const value = await send({ type: "read", items: [...items] })
+      // Значення — від сервера, а не від ядра: форму перевіряє схема, і
+      // хибна відповідь — дефект сервера (`command.internal`), а не
+      // `TypeError` на чужому полі. Помилки частин мапить джерело ядра.
+      const parsed = wireReadPartsResultSchema.safeParse(value)
+      if (!parsed.success) {
         throw new CommandFailure({ code: "command.internal" })
       }
-      return value
+      return parsed.data
     },
   }
 }

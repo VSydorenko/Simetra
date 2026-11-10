@@ -187,7 +187,9 @@ function contextOf(tx: Transaction, phase: HookPhase, scope: Scope) {
             target,
             plan,
             async (statement, object) =>
-              (await tx.enqueue([statement], { kind: "read", object })).rows
+              (await tx.enqueue([statement], { kind: "read", object })).rows,
+            // `ctx.read` не має `known`: епоха бази оператора не змінює.
+            null
           )
           if ("error" in result) tx.abort(result.error)
           return result as ReadResultOf<Q>

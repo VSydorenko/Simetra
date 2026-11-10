@@ -46,8 +46,13 @@ export interface RuntimeState {
   maxBatch: number
   /** Rows of one tabular section of an operation, `run` and `ctx.run` alike. */
   maxTabularLines: number
-  /** `statement_timeout` of a server read, ms; `ctx.read` sets none (B1b budget). */
+  /**
+   * `statement_timeout` ceiling of a server read statement, ms; `ctx.read`
+   * sets none (B1b budget).
+   */
   readTimeout: number
+  /** Time budget of one server read transaction, all its parts, ms (P4-B spec §4.2). */
+  readBudgetMs: number
   /** The request role of reads; `undefined` — the fallback path (§6.11). */
   readRole: string | undefined
   /** Time budget of one `run` call with its retries, ms (P4-B spec §7.1). */
@@ -112,20 +117,39 @@ export const COMMAND_ROLE = statement(
 const CLAIMS_TEXT =
   `SELECT set_config(${literal(SESSION_CLAIMS_SETTING)}, $1, true), ` +
   `set_config('TimeZone', 'UTC', true), set_config('bytea_output', 'hex', true)`
-/** Claims, `TimeZone` і `bytea_output` транзакції читання; команда додає межі часу. */
-export const claimsStatement = (claims: string) =>
-  statement(CLAIMS_TEXT, claims)
+// `transaction_timeout` є лише з PostgreSQL 17; умова — у самому SQL, щоб
+// не питати версію окремо.
+const transactionTimeout = (param: string) =>
+  `CASE WHEN current_setting('server_version_num')::int >= 170000 ` +
+  `THEN set_config('transaction_timeout', ${param}, true) END`
 // Межі часу команди — у тому самому операторі claims, без кругового запиту
 // (Ф4, Ф6). Запобіжники простою й транзакції — бюджет + 1 с: бюджет
 // спрацьовує раніше, вони ловлять завислий хук чи обірваного клієнта.
-// `transaction_timeout` є лише з PostgreSQL 17; умова — у самому SQL, щоб
-// не питати версію окремо.
 const COMMAND_CLAIMS_TEXT =
   `${CLAIMS_TEXT}, set_config('statement_timeout', $2, true), ` +
   `set_config('lock_timeout', $3, true), ` +
   `set_config('idle_in_transaction_session_timeout', $4, true), ` +
-  `CASE WHEN current_setting('server_version_num')::int >= 170000 ` +
-  `THEN set_config('transaction_timeout', $4, true) END`
+  transactionTimeout("$4")
+// Налаштування транзакції читання — теж одним оператором (Р1 плану B1c):
+// `set_config('role', …, true)` діє як `SET LOCAL ROLE`, тож роль — без
+// окремого кругового запиту. Роль — останньою: решту виразів обчислює ще
+// роль входу, як і claims команди до `SET LOCAL ROLE`. Епоху цей оператор
+// не читає: `EXECUTE` перевіряється на старті виконавця, ще під роллю входу.
+const READ_SETUP_TEXT =
+  `${CLAIMS_TEXT}, set_config('statement_timeout', $2, true), ` +
+  `${transactionTimeout("$3")}, set_config('role', $4, true)`
+/**
+ * The setup statement of a server read transaction: claims, `TimeZone`,
+ * `bytea_output`, the statement ceiling, the `transaction_timeout` guard and
+ * the read role.
+ */
+export const readSetupStatement = (
+  claims: string,
+  statementMs: number,
+  guardMs: number,
+  role: string
+) =>
+  statement(READ_SETUP_TEXT, claims, String(statementMs), String(guardMs), role)
 const CURRENT_USER = statement(
   `SELECT ${ident(PLATFORM_SCHEMA)}.${ident(CURRENT_USER_FUNCTION_NAME)}() AS user_id`
 )
@@ -186,6 +210,79 @@ export function terminalOf(
     }
   }
   return code === undefined ? terminal : { ...terminal, code }
+}
+
+/**
+ * Відмова бази в транзакції читання (спека П4-B §4.2). Сесію, закриту
+ * запобіжником (`25P03`, `25P04`), — `command.timeout` і знищення з'єднання:
+ * `ROLLBACK` слати нікуди. Повтору читання немає (§6.11 П4), тож `40001` —
+ * за мапінгом, `command.internal`. `lost` — обірване з'єднання: решта частин
+ * отримує `command.unavailable`, а не `batch-aborted`.
+ */
+export function readRefusal(
+  raw: unknown,
+  state: RuntimeState,
+  phase: ErrorPhase | undefined
+): { error: CommandError; destroy: boolean; lost: boolean } {
+  const error = normalizeError(raw)
+  if (!error.connectionLost && SESSION_TIMEOUT_CODES.has(error.code ?? "")) {
+    return { error: TIMEOUT, destroy: true, lost: false }
+  }
+  const mapped = mapDatabaseError(error, state.catalog, phase)
+  if (logsDatabaseError(error, mapped)) {
+    state.log({ kind: "database", error: raw })
+  }
+  return {
+    error: mapped,
+    destroy: error.connectionLost,
+    lost: error.connectionLost,
+  }
+}
+
+/**
+ * Перевищення дедлайну чинною межею оператора читання, яке ще терпимо, мс.
+ * Типово бюджет дорівнює стелі, а відлік іде ще до `connect()`, тож залишок
+ * менший за стелю вже на першій частині: без допуску нижча межа йшла б перед
+ * кожним оператором, а не лише біля дедлайну. Допуск — значно менший за
+ * запас 1 с `transaction_timeout`: оператор упирається в `57014` (тайм-аут
+ * частини, з'єднання живе) раніше, ніж сесію закриє `25P04`.
+ */
+const READ_TIMEOUT_SLACK_MS = 250
+
+/**
+ * Бюджет часу транзакції читання (спека П4-B §4.2) — за правилом
+ * {@link Transaction} `budget`: стелю оператора ставить налаштування, а
+ * залишок, менший за чинну межу більш ніж на `READ_TIMEOUT_SLACK_MS`, —
+ * окремий оператор перед наступним.
+ */
+export class ReadBudget {
+  /** `statement_timeout` оператора налаштування, мс. */
+  readonly setup: number
+  private statementTimeout: number
+
+  /** `deadline` — мітка `performance.now()` кінця бюджету; `ceiling` — стеля оператора. */
+  constructor(
+    private readonly deadline: number,
+    ceiling: number
+  ) {
+    this.setup = timeoutMs(Math.min(ceiling, deadline - performance.now()))
+    this.statementTimeout = this.setup
+  }
+
+  /**
+   * Перед оператором: `"expired"` — залишку немає, оператор не йде;
+   * оператор — спершу нижча межа; `undefined` — чинна межа виходить за
+   * залишок не більш ніж на допуск.
+   */
+  next(): "expired" | Statement | undefined {
+    const remaining = this.deadline - performance.now()
+    if (remaining <= 1) return "expired"
+    // Порівняння в цілих мілісекундах межі, як у `budget` команди.
+    const ms = timeoutMs(remaining)
+    if (this.statementTimeout - ms <= READ_TIMEOUT_SLACK_MS) return undefined
+    this.statementTimeout = ms
+    return statement(STATEMENT_TIMEOUT, String(ms))
+  }
 }
 
 /**

@@ -5,6 +5,7 @@ import { Client } from "@modelcontextprotocol/client"
 import { InMemoryTransport } from "@modelcontextprotocol/server"
 import pg from "pg"
 import { compile } from "simetra/compiler"
+import { ROW_VERSION_EPOCH_FUNCTION_NAME } from "simetra/model"
 import type { CommandDatabase } from "simetra/server"
 import {
   afterAll,
@@ -81,6 +82,9 @@ afterEach(() => {
 function answer(text: string): Answer {
   if (text.includes("applied_snapshot_hash")) return { rows: [{ hash }] }
   if (text.includes("pg_has_role")) return { rows: [{ member: "t" }] }
+  // Оператор епохи читання частин: база без рядка епохи відповідає `NULL`.
+  if (text.includes(ROW_VERSION_EPOCH_FUNCTION_NAME))
+    return { rows: [{ epoch: null }] }
   if (text.includes("current_user_id")) return { rows: [{ user_id: AS }] }
   const row = JSON.stringify({ id: ID, version: 2, counter: BIG, org_id: ORG })
   if (text.includes(" AS row FROM ")) return { rows: [{ row }] }

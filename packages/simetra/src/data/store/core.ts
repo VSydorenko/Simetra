@@ -6,7 +6,7 @@ import { createObjectStore } from "./object-store"
 import { createSectionStore } from "./section-store"
 import { createSession, type Scope } from "./session"
 import { createRowViews, purgedSnapshot } from "./snapshot"
-import { readKeys, type CoreSource } from "./source"
+import { readKeys, tracked, type CoreSource } from "./source"
 import type { ObjectState } from "./forms"
 import type { StoreOps } from "./readers"
 import { createRegistry, type SubsetRegistry } from "./subsets"
@@ -110,12 +110,21 @@ export interface CoreInspection {
     /** Release timers and preload timers of the held view forms. */
     releaseTimers: number
     preloadTimers: number
+    /** Re-reads scheduled by a version epoch switch, per object. */
+    switchTimers: number
     /** Section store maps, summed over objects. */
     sectionOwners: number
     sectionOwnerVersions: number
   }
   /** Deliberate defects of the model test's self-check; empty by default. */
   readonly defects: Set<DefectFlag>
+  /** The version epoch state of the session (P4-B plan B1c). */
+  versionEpochs(): {
+    current: string | null
+    previous: string | null
+    discards: number
+    unavailable: boolean
+  }
   /**
    * Subscribes to the moments a fresh "row absent" answer re-marks a slot that
    * is already `removed`; the model then expects no older read to lift it.
@@ -291,6 +300,7 @@ export function createCore(options: {
       section,
       lines,
       ownerVersion,
+      versionEpoch,
       readEpoch,
       ownerScope
     ) {
@@ -300,11 +310,18 @@ export function createCore(options: {
         section,
         lines,
         ownerVersion,
+        versionEpoch,
         readEpoch,
         ownerScope,
         "owner-section"
       )
       if (result === "written") touchSection(o, owner)
+      // Позначені рядки ТЧ перечитує змонтований вигляд: перевірка вигляду
+      // читає наново, коли ревізія шапки змінилась (Р13).
+      if (result === "stale") {
+        touchSection(o, owner)
+        if (o.rows.get(owner) !== undefined) rowViews.touch(o.name, owner)
+      }
     },
     clearOwner(scope, o, owner) {
       o.sections.clearOwner(scope, owner)
@@ -357,11 +374,18 @@ export function createCore(options: {
     const gen = tail.gen
     const token = session.childToken(() => tail.gen === gen)
     const readEpoch = session.epochs.now()
-    readKeys(source, o.entry, keys, { keysPerRequest: limits.keysPerRequest })
+    const read = tracked(source)
+    readKeys(read.source, o.entry, keys, {
+      keysPerRequest: limits.keysPerRequest,
+    })
       .then(
         (rows) => {
           session.commit(
             (scope) => {
+              // Відкинута відповідь (Р7, Р12) не пише нічого; без автоповтору
+              // (§6.3) ключі перечитує вигляд.
+              if (session.acceptEpochs(read.epochs, readEpoch) === "discard")
+                return
               const got = new Set<Key>()
               for (const row of rows) {
                 got.add(row.key)
@@ -440,6 +464,8 @@ export function createCore(options: {
     dirtySections.clear()
     tails.clear()
     purges.clear()
+    for (const timer of switchTimers.values()) clearTimeout(timer)
+    switchTimers.clear()
   })
 
   // Хвіст у польоті під час purge: його відповідь могла нести рядок, якого на
@@ -452,6 +478,28 @@ export function createCore(options: {
   }
 
   const purges = new Map<ObjectName, number>()
+
+  // Перемикання епохи (Р8): кожен рядок уже `stale` (сховища позначили), а
+  // видимі вигляди перечитуються з розкидом — рестарт primary перемикає
+  // всіх клієнтів одночасно, і миттєве перечитування було б шквалом.
+  const switchTimers = new Map<ObjectName, ReturnType<typeof setTimeout>>()
+  session.onSwitch(() => {
+    for (const o of objects.values()) {
+      for (const key of o.rows.keys()) rowViews.touch(o.name, key)
+      if (switchTimers.has(o.name)) continue
+      if (!activeViews(writerContext, o.name).some((v) => v.visible)) continue
+      const delay = Math.floor(Math.random() * limits.revalidateIntervalMs)
+      switchTimers.set(
+        o.name,
+        setTimeout(() => {
+          switchTimers.delete(o.name)
+          revalidate(writerContext, o.name, { visibleOnly: true }).catch(
+            (error: unknown) => log({ kind: "listener-failed", error })
+          )
+        }, delay)
+      )
+    }
+  })
 
   const writerContext: WriterContext = {
     session,
@@ -516,6 +564,12 @@ export function createCore(options: {
     watchRemarks(listener) {
       remarkListener = listener
     },
+    versionEpochs: () => ({
+      current: session.versions.current(),
+      previous: session.versions.previous(),
+      discards: session.versions.discards(),
+      unavailable: session.versions.unavailable(),
+    }),
     serviceSizes() {
       const views = rowViews.sizes()
       const subs = [...registry.subsets()]
@@ -531,6 +585,7 @@ export function createCore(options: {
         purges: purges.size,
         releaseTimers: subs.filter((s) => s.releaseTimer !== undefined).length,
         preloadTimers: subs.reduce((n, s) => n + s.preloadTimers.size, 0),
+        switchTimers: switchTimers.size,
         sectionOwners: sections.reduce((n, x) => n + x.owners, 0),
         sectionOwnerVersions: sections.reduce((n, x) => n + x.ownerVersions, 0),
       }

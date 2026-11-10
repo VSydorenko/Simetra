@@ -8,6 +8,7 @@ import {
   type ObjectColumns,
   type WireCommandError,
   type WireOperation,
+  type WireReadPart,
   type WireReadQuery,
 } from "simetra/model"
 
@@ -65,19 +66,20 @@ const within = (record: object, allowed: ReadonlySet<string>): boolean =>
  * Checks a request in wire form against the server catalog before mapping
  * (P4-B spec §10): an unknown object UUID; for `run` — a missing or
  * different `kernelHash` of any operation's object, a column outside the
- * insert or update list of the action, an unknown section id; for `read` — a
- * filter, sort or `include` column outside the regular and lazy read lists
- * (pair type columns excluded: a read never names them), an unknown section
- * id. Returns `command.stale-client` with the request's object UUID, or
- * `undefined` when compatible; one incompatible operation refuses the whole
- * batch. Never throws on hostile names.
+ * insert or update list of the action, an unknown section id; for a query
+ * part of `read` — a filter, sort or `include` column outside the regular
+ * and lazy read lists (pair type columns excluded: a read never names them),
+ * an unknown section id. Returns `command.stale-client` with the request's
+ * object UUID, or `undefined` when compatible; one incompatible operation
+ * refuses the whole batch, a read part refuses only itself. Never throws on
+ * hostile names.
  */
 export function checkCompatibility(
   index: CatalogIndex,
-  request: Request
+  request: RunRequest | WireReadPart
 ): WireCommandError | undefined {
   if (request.type === "version") return undefined
-  if (request.type === "read") return checkRead(index, request.query)
+  if (request.type === "query") return checkRead(index, request.query)
   return checkRun(index, request)
 }
 

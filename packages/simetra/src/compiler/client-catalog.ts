@@ -32,6 +32,7 @@ const attributeOf = (a: RuntimeAttribute): CatalogEntryAttribute => ({
   insert: a.insert,
   update: a.update,
   ...present("generated", a.generated),
+  ...present("copy", a.copy),
   ...present("enumValues", a.enumValues),
   ...present("pair", a.pair),
   ...present("ref", a.ref),

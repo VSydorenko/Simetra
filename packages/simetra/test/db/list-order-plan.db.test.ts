@@ -4,6 +4,7 @@ import {
   keysetFilter,
   type Filter,
   type KeysetCursor,
+  type KnownVersions,
   type OrderBy,
   type RuntimeCatalog,
 } from "simetra/model"
@@ -22,7 +23,7 @@ import {
 } from "../../src/compiler/__tests__/fixtures/rights"
 import { fieldInfoOf, nullableOf } from "../../src/data/store/filter"
 import { buildRuntimeCatalog } from "../../src/compiler/runtime-catalog"
-import { prepareRead } from "../../src/server/read"
+import { prepareRead, renderKnown } from "../../src/server/read"
 import { signUp } from "./auth"
 import { queryAs, runTag, claimsFor } from "./connection"
 import { type PlanNode, planNodes, scansOf, sortsOver } from "./explain-plan"
@@ -57,6 +58,12 @@ const A_GROUP = SCOPE_ROWS / 1000
 const TABLE = "listing"
 /** Рівність скоупу з літералом у `Index Cond`: те, що дає порядок індексу. */
 const SCOPE_EQUALITY = /\borg_id = '[0-9a-f-]{36}'/
+
+/**
+ * Епоха `known` умовного читання: оператор з маркерами будується, коли епоха
+ * бази транзакції — епоха `known`; яка саме вона, плану не змінює.
+ */
+const EPOCH = "e".repeat(64)
 
 const LISTING_FILE = "catalogs/Listing/Listing.meta.json"
 const LISTING_READER_ID = uuid(9300)
@@ -255,6 +262,7 @@ describe("list order plans under RLS", () => {
   let catalog: RuntimeCatalog
   let keyName: string
   let keyColumn: string
+  let versionColumn: string
   let scopeAttribute: string
   let nullable: (attribute: string) => boolean
   let foreignScope: string
@@ -272,6 +280,7 @@ describe("list order plans under RLS", () => {
     const listing = catalog.objects.find((o) => o.name === "Listing")!
     keyName = listing.keyName
     keyColumn = listing.key
+    versionColumn = listing.versionColumn
     scopeAttribute = listing.attributes.find(
       (a) => a.column === listing.scopeColumn
     )!.name
@@ -371,16 +380,52 @@ describe("list order plans under RLS", () => {
   }
 
   /** Оператор сторінки, збудований T3 з умовою `where`. */
-  const statementOf = (orderBy: OrderBy, where?: Filter) => {
-    const prepared = prepareRead(catalog, {
-      object: { kind: "Catalog", name: "Listing" },
-      limit: PAGE,
-      ...(orderBy.length === 0 ? {} : { orderBy }),
-      ...(where === undefined ? {} : { where }),
-    })
+  const statementOf = (
+    orderBy: OrderBy,
+    where?: Filter,
+    known?: KnownVersions
+  ) => {
+    const prepared = prepareRead(
+      catalog,
+      {
+        object: { kind: "Catalog", name: "Listing" },
+        limit: PAGE,
+        ...(orderBy.length === 0 ? {} : { orderBy }),
+        ...(where === undefined ? {} : { where }),
+      },
+      known
+    )
     if ("error" in prepared)
       throw new Error(`prepareRead refused: ${JSON.stringify(prepared.error)}`)
-    return prepared.plan.statement
+    return renderKnown(prepared.plan, known === undefined ? null : EPOCH)
+  }
+
+  /**
+   * `known` клієнта, що тримає рядки сторінки `page` порядку `order` і
+   * перечитує їх умовно (Р42): ключі й версії цих рядків в епосі {@link EPOCH}.
+   */
+  const knownOf = async (
+    order: OrderBy,
+    page: Page
+  ): Promise<KnownVersions> => {
+    const terms = [
+      ...order.map(
+        (o) => `${COLUMN[o.attribute]}${o.direction === "desc" ? " DESC" : ""}`
+      ),
+      keyColumn,
+    ]
+    const { rows } = await tx.client().query<{ key: string; version: string }>(
+      `SELECT ${keyColumn} AS key, ${versionColumn}::text AS version
+         FROM public.${TABLE} WHERE org_id = $1
+         ORDER BY ${terms.join(", ")} OFFSET $2 LIMIT $3`,
+      [scope, page === "first" ? 0 : OFFSET[page] + 1, PAGE]
+    )
+    expect(rows).toHaveLength(PAGE)
+    return {
+      epoch: EPOCH,
+      keys: rows.map((r) => r.key),
+      versions: rows.map((r) => r.version),
+    }
   }
 
   /** План `EXPLAIN (ANALYZE, FORMAT JSON)` від імені `user`; другий прогін — прогрітий. */
@@ -411,6 +456,8 @@ describe("list order plans under RLS", () => {
     options: {
       mutate?: (where: Filter, cursor: KeysetCursor) => Filter
       scopeId?: string
+      /** Умовне читання: `known` рядків цієї сторінки. */
+      known?: true
     } = {}
   ) => {
     // Запит списку одного скоупу несе рівність скоупу явно: політики RLS дають
@@ -428,7 +475,14 @@ describe("list order plans under RLS", () => {
         and: [scopeEquals, options.mutate?.(keyset, cursor) ?? keyset],
       }
     }
-    const plan = await explain(user, statementOf(c.orderBy, where))
+    const known =
+      options.known === true ? await knownOf(c.orderBy, page) : undefined
+    const statement = statementOf(c.orderBy, where, known)
+    if (known !== undefined)
+      expect(statement.text, "the conditional form").toContain(
+        "LEFT JOIN unnest("
+      )
+    const plan = await explain(user, statement)
     return {
       plan,
       scans: scansOf(plan, TABLE),
@@ -517,6 +571,23 @@ describe("list order plans under RLS", () => {
       const { scans, sorts, returned } = await pageOf(reader, c, page)
       console.info(
         `list-order-plan ${c.name} / ${page}: returned ${returned}, sorts ${JSON.stringify(sorts)}, ${JSON.stringify(describe_(scans))}`
+      )
+      expect(returned, "the page has rows").toBeGreaterThan(0)
+      expect(violations(c, scans, sorts, page)).toEqual([])
+    }
+  )
+
+  // Умовне читання (P4-B план B1c, Р42): `LEFT JOIN unnest(known)` лише
+  // замінює проєкцію відібраного рядка, тож план сторінки судять ті самі
+  // правила — індекс порядку, без Seq Scan, без Sort видимої множини.
+  it.each(CASES.flatMap((c) => PAGES.map((page) => ({ c, page }))))(
+    "conditional read, order $c.name, $page page: reads its index under RLS",
+    async ({ c, page }) => {
+      const { scans, sorts, returned } = await pageOf(reader, c, page, {
+        known: true,
+      })
+      console.info(
+        `list-order-plan known ${c.name} / ${page}: returned ${returned}, sorts ${JSON.stringify(sorts)}, ${JSON.stringify(describe_(scans))}`
       )
       expect(returned, "the page has rows").toBeGreaterThan(0)
       expect(violations(c, scans, sorts, page)).toEqual([])

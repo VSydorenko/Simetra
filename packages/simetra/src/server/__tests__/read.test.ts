@@ -1,11 +1,12 @@
 import {
+  CommandFailure,
   runtimeCatalogSchema,
   runtimeObjectSchema,
   type RuntimeAttribute,
   type RuntimeObject,
 } from "simetra/model"
 import { describe, expect, it } from "vitest"
-import { executeRead, prepareRead } from "../read"
+import { executeRead, prepareRead, renderKnown } from "../read"
 import {
   ID,
   LINK,
@@ -109,6 +110,21 @@ const scopedObject = runtimeObjectSchema.parse({
   ],
 })
 
+// Копії носія прав (`copy`): звичайна, з текстовим приведенням і лінива.
+const COPIED = { kind: "Catalog" as const, name: "Copied" }
+const copiedObject = runtimeObjectSchema.parse({
+  ...sample,
+  id: "00000000-0000-4000-8000-000000000017",
+  name: "Copied",
+  table: { schema: "public", name: "copied" },
+  attributes: [
+    attributeOf("code"),
+    { ...attributeOf("code"), name: "owner", column: "owner_col", copy: true },
+    { ...attributeOf("amount"), copy: true },
+    { ...lazy(attributeOf("blob")), copy: true },
+  ],
+})
+
 const catalog = runtimeCatalogSchema.parse({
   format: 1,
   snapshotHash: "hash-1",
@@ -118,6 +134,7 @@ const catalog = runtimeCatalogSchema.parse({
     lazyObject,
     wideObject,
     wideTextObject,
+    copiedObject,
     region,
     link,
     scopedObject,
@@ -138,7 +155,7 @@ const CARD =
 const statementOf = (query: unknown) => {
   const prepared = prepareRead(catalog, query)
   if ("error" in prepared) return prepared
-  return { ...prepared.plan.statement, result: prepared.plan.result }
+  return { ...renderKnown(prepared.plan, null), result: prepared.plan.result }
 }
 const where = { attribute: "code", op: "eq", value: "A" }
 
@@ -153,7 +170,8 @@ async function execute(query: unknown, answers: Record<string, unknown>[][]) {
     (statement, target) => {
       calls.push({ ...statement, object: target.name })
       return Promise.resolve(answers.shift() ?? [])
-    }
+    },
+    null
   )
   return { calls, result }
 }
@@ -161,7 +179,7 @@ async function execute(query: unknown, answers: Record<string, unknown>[][]) {
 describe("prepareRead", () => {
   it("a card reads the whole row by key", () => {
     expect(statementOf({ object: ref, id: ID })).toEqual({
-      text: `${CARD} WHERE "id" = $1::uuid LIMIT 1`,
+      text: `${CARD} WHERE t."id" = $1::uuid LIMIT 1`,
       params: [ID],
       result: "rows",
     })
@@ -187,7 +205,7 @@ describe("prepareRead", () => {
       })
     ).toEqual({
       text:
-        `${LIST} WHERE "code_col" = $1::text` +
+        `${LIST} WHERE t."code_col" = $1::text` +
         ` ORDER BY t."label_col" DESC NULLS LAST, t."id" LIMIT $2 OFFSET $3`,
       params: ["A", "50", "100"],
       result: "rows",
@@ -224,7 +242,7 @@ describe("prepareRead", () => {
         limit: 1,
       })
     ).toEqual({
-      text: `${LIST} WHERE ("id" > $1::uuid AND "version" >= $2::bigint) ORDER BY t."id" LIMIT $3`,
+      text: `${LIST} WHERE (t."id" > $1::uuid AND t."version" >= $2::bigint) ORDER BY t."id" LIMIT $3`,
       params: [ID, "2", "1"],
       result: "rows",
     })
@@ -239,13 +257,13 @@ describe("prepareRead", () => {
         limit: 1,
       })
     ).toMatchObject({
-      text: `${LIST} WHERE "label_col" = $1::character varying ORDER BY t."id" LIMIT $2`,
+      text: `${LIST} WHERE t."label_col" = $1::character varying ORDER BY t."id" LIMIT $2`,
     })
   })
 
   it("a count is capped one past READ_COUNT_CAP", () => {
     expect(statementOf({ object: ref, where, count: true })).toEqual({
-      text: `SELECT count(*) AS n FROM (SELECT 1 FROM "public"."sample" t WHERE "code_col" = $1::text LIMIT $2) c`,
+      text: `SELECT count(*) AS n FROM (SELECT 1 FROM "public"."sample" t WHERE t."code_col" = $1::text LIMIT $2) c`,
       params: ["A", "10001"],
       result: "count",
     })
@@ -257,7 +275,7 @@ describe("prepareRead", () => {
       text: `SELECT ${listed} ${FROM} ORDER BY t."id" LIMIT $1`,
     })
     expect(statementOf({ object: LAZY, id: ID })).toMatchObject({
-      text: `SELECT (to_jsonb(t) || jsonb_build_object('amount_col', t."amount_col"::text))::text ${FROM} WHERE "id" = $1::uuid LIMIT 1`,
+      text: `SELECT (to_jsonb(t) || jsonb_build_object('amount_col', t."amount_col"::text))::text ${FROM} WHERE t."id" = $1::uuid LIMIT 1`,
     })
   })
 
@@ -278,7 +296,7 @@ describe("prepareRead", () => {
     expect(statementOf({ object: WIDE_TEXT, id: ID })).toMatchObject({
       text:
         `SELECT (to_jsonb(t) || (jsonb_build_object(${pairs.slice(0, 50).join(", ")}) || ` +
-        `jsonb_build_object(${pairs.slice(50).join(", ")})))::text ${FROM} WHERE "id" = $1::uuid LIMIT 1`,
+        `jsonb_build_object(${pairs.slice(50).join(", ")})))::text ${FROM} WHERE t."id" = $1::uuid LIMIT 1`,
     })
   })
 
@@ -542,7 +560,7 @@ describe("executeRead include", () => {
     )
     expect(calls).toEqual([
       {
-        text: `SELECT to_jsonb(t)::text ${LINK_FROM} WHERE "id" = $1::uuid LIMIT 1`,
+        text: `SELECT to_jsonb(t)::text ${LINK_FROM} WHERE t."id" = $1::uuid LIMIT 1`,
         params: [ID],
         object: "Link",
       },
@@ -608,7 +626,7 @@ describe("tabular sections", () => {
     ],
   ])("%s is one statement with a tabular column", (_, query, head, rest) => {
     expect(statementOf(query)).toEqual({
-      text: `SELECT ${head} AS row, ${rest} WHERE "id" = $1::uuid LIMIT 1`,
+      text: `SELECT ${head} AS row, ${rest} WHERE t."id" = $1::uuid LIMIT 1`,
       params: [ID, "5001"],
       result: "rows",
     })
@@ -640,7 +658,7 @@ describe("tabular sections", () => {
         `SELECT (SELECT o."version"::text FROM "public"."sample" o WHERE o."id" = $3::uuid)` +
         ` AS owner_version, ${AGG} ` +
         PAGE(
-          `("parent_id" = $1::uuid AND "qty_col" > $2::text)`,
+          `(t."parent_id" = $1::uuid AND t."qty_col" > $2::text)`,
           undefined,
           "LIMIT $4"
         ),
@@ -659,7 +677,7 @@ describe("tabular sections", () => {
       }) as { text: string }
     ).text
     expect(text).toContain(
-      `FROM "public"."scoped_lines" t WHERE "parent_id" = $1::uuid AND ` +
+      `FROM "public"."scoped_lines" t WHERE t."parent_id" = $1::uuid AND ` +
         `"org_id" = (SELECT o."org_id" FROM "public"."scoped" o WHERE o."id" = $2::uuid) ORDER BY`
     )
     expect(text).toMatch(
@@ -681,7 +699,7 @@ describe("tabular sections", () => {
       text:
         `SELECT ${AGG} ` +
         PAGE(
-          `("parent_id" = $1::uuid OR "parent_id" = $2::uuid)`,
+          `(t."parent_id" = $1::uuid OR t."parent_id" = $2::uuid)`,
           `t."line_number" DESC, t."id"`,
           "LIMIT $3 OFFSET $4"
         ),
@@ -695,25 +713,25 @@ describe("tabular sections", () => {
     [
       "one owner — uncapped",
       { and: [parentEq] },
-      `SELECT count(*) AS n ${COUNT_FROM} ("parent_id" = $1::uuid)`,
+      `SELECT count(*) AS n ${COUNT_FROM} (t."parent_id" = $1::uuid)`,
       [OTHER],
     ],
     [
       "or over owners — capped",
       { or: [parentEq, parentEq] },
-      `SELECT count(*) AS n FROM (SELECT 1 ${COUNT_FROM} ("parent_id" = $1::uuid OR "parent_id" = $2::uuid) LIMIT $3) c`,
+      `SELECT count(*) AS n FROM (SELECT 1 ${COUNT_FROM} (t."parent_id" = $1::uuid OR t."parent_id" = $2::uuid) LIMIT $3) c`,
       [OTHER, OTHER, "10001"],
     ],
     [
       "in over owners — capped",
       { attribute: "parent", op: "in", value: [OTHER] },
-      `SELECT count(*) AS n FROM (SELECT 1 ${COUNT_FROM} "parent_id" = ANY(ARRAY[$1::uuid]) LIMIT $2) c`,
+      `SELECT count(*) AS n FROM (SELECT 1 ${COUNT_FROM} t."parent_id" = ANY(ARRAY[$1::uuid]) LIMIT $2) c`,
       [OTHER, "10001"],
     ],
     [
       "not over an owner — capped",
       { not: parentEq },
-      `SELECT count(*) AS n FROM (SELECT 1 ${COUNT_FROM} NOT ("parent_id" = $1::uuid) LIMIT $2) c`,
+      `SELECT count(*) AS n FROM (SELECT 1 ${COUNT_FROM} NOT (t."parent_id" = $1::uuid) LIMIT $2) c`,
       [OTHER, "10001"],
     ],
   ])("a section count of %s", (_, filter, text, params) => {
@@ -857,7 +875,7 @@ describe("ORDER BY names table columns, not output columns", () => {
   const textOf = (query: unknown) => {
     const prepared = prepareRead(shadowCatalog, query)
     if ("error" in prepared) throw new Error(prepared.error.code)
-    return prepared.plan.statement.text
+    return renderKnown(prepared.plan, null).text
   }
 
   it("a list column named row", () => {
@@ -880,7 +898,7 @@ describe("ORDER BY names table columns, not output columns", () => {
     const page = (order: string) =>
       `SELECT jsonb_build_object('sample_lines', coalesce(jsonb_agg(x.r ORDER BY x.n), '[]'))::text` +
       ` AS tabular FROM (SELECT ${line} AS r, row_number() OVER (ORDER BY ${order}) AS n` +
-      ` FROM "public"."sample_lines" t WHERE "r" = $1::text ORDER BY ${order} LIMIT $2) x`
+      ` FROM "public"."sample_lines" t WHERE t."r" = $1::text ORDER BY ${order} LIMIT $2) x`
     const where = { attribute: "r", op: "eq", value: "A" }
     expect(
       textOf({
@@ -894,5 +912,242 @@ describe("ORDER BY names table columns, not output columns", () => {
     expect(
       textOf({ object: SHADOW, tabularSection: "lines", where, limit: 10 })
     ).toBe(page(`t."line_number", t."id"`))
+  })
+})
+
+describe("conditional read with known", () => {
+  const EPOCH = "a".repeat(64)
+  const OTHER_EPOCH = "b".repeat(64)
+  const known = { epoch: EPOCH, keys: [ID, OTHER], versions: ["3", "7"] }
+  const JOIN =
+    `LEFT JOIN unnest($KEYS::uuid[], $VERSIONS::bigint[]) WITH ORDINALITY` +
+    ` AS simetra_known(simetra_known_key, simetra_known_version, simetra_known_position)` +
+    ` ON simetra_known.simetra_known_key = t."id"`
+  const join = (keys: number) =>
+    JOIN.replace("KEYS", String(keys)).replace("VERSIONS", String(keys + 1))
+  const MARKER = `(simetra_known.simetra_known_position - 1)::text`
+  // Обидві гілки `CASE` — `text`: інакше Postgres відхилив би оператор.
+  const conditional = (row: string, marker = MARKER) =>
+    `CASE WHEN t."version" = simetra_known.simetra_known_version` +
+    ` THEN ${marker} ELSE ${row} END AS row`
+  const LIST_ROW = LIST.slice("SELECT ".length, -` ${FROM}`.length)
+  const CARD_ROW = CARD.slice("SELECT ".length, -` ${FROM}`.length)
+  const ARRAYS = [`{${ID},${OTHER}}`, "{3,7}"]
+
+  const planOf = (query: unknown, withKnown: unknown) => {
+    const prepared = prepareRead(catalog, query, withKnown)
+    if ("error" in prepared) throw new Error(prepared.error.code)
+    return prepared.plan
+  }
+  const knownPlanOf = (query: unknown) => planOf(query, known)
+  const plainOf = (query: unknown) =>
+    renderKnown(planOf(query, undefined), null)
+
+  it("a list with known of the database epoch marks unchanged rows", () => {
+    const query = { object: ref, where, limit: 10 }
+    expect(renderKnown(knownPlanOf(query), EPOCH)).toEqual({
+      text:
+        `SELECT ${conditional(LIST_ROW)} FROM "public"."sample" t ${join(3)}` +
+        ` WHERE t."code_col" = $1::text ORDER BY t."id" LIMIT $2`,
+      params: ["A", "10", ...ARRAYS],
+    })
+  })
+
+  it("a read by keys (in by the key) with known", () => {
+    const query = {
+      object: ref,
+      where: { attribute: "ref", op: "in", value: [ID, OTHER] },
+      limit: 2,
+    }
+    expect(renderKnown(knownPlanOf(query), EPOCH)).toEqual({
+      text:
+        `SELECT ${conditional(LIST_ROW)} FROM "public"."sample" t ${join(4)}` +
+        ` WHERE t."id" = ANY(ARRAY[$1::uuid, $2::uuid]) ORDER BY t."id" LIMIT $3`,
+      params: [ID, OTHER, "2", ...ARRAYS],
+    })
+  })
+
+  it("a card with known keeps its key condition qualified", () => {
+    expect(renderKnown(knownPlanOf({ object: ref, id: ID }), EPOCH)).toEqual({
+      text:
+        `SELECT ${conditional(CARD_ROW)} FROM "public"."sample" t ${join(2)}` +
+        ` WHERE t."id" = $1::uuid LIMIT 1`,
+      params: [ID, ...ARRAYS],
+    })
+  })
+
+  it.each([
+    ["another epoch", OTHER_EPOCH],
+    ["a database without epoch", null],
+  ])("known of %s renders the plain statement", (_, epoch) => {
+    for (const query of [
+      { object: ref, where, limit: 10 },
+      { object: ref, id: ID },
+    ]) {
+      expect(renderKnown(knownPlanOf(query), epoch)).toEqual(plainOf(query))
+    }
+  })
+
+  it("a plan without known renders the statement it always had", () => {
+    const plan = planOf({ object: ref, where, limit: 10 }, undefined)
+    expect(renderKnown(plan, EPOCH)).toEqual({
+      text: `${LIST} WHERE t."code_col" = $1::text ORDER BY t."id" LIMIT $2`,
+      params: ["A", "10"],
+    })
+  })
+
+  it("an object with copies marks with exactly $known and its copy columns", () => {
+    const listed =
+      `jsonb_build_object('$known', simetra_known.simetra_known_position - 1,` +
+      ` 'owner_col', t."owner_col", 'amount_col', t."amount_col"::text)::text`
+    expect(
+      renderKnown(knownPlanOf({ object: COPIED, limit: 5 }), EPOCH).text
+    ).toContain(` THEN ${listed} ELSE `)
+    // Картка віддає й ліниві колонки, тож і копію лінивої — теж.
+    const card =
+      `jsonb_build_object('$known', simetra_known.simetra_known_position - 1,` +
+      ` 'owner_col', t."owner_col", 'amount_col', t."amount_col"::text,` +
+      ` 'blob_col', t."blob_col")::text`
+    expect(
+      renderKnown(knownPlanOf({ object: COPIED, id: ID }), EPOCH).text
+    ).toContain(` THEN ${card} ELSE `)
+  })
+
+  it("a copy column named $known reads full rows: it would overwrite the position", () => {
+    const clash = runtimeObjectSchema.parse({
+      ...copiedObject,
+      attributes: [
+        { ...attributeOf("code"), name: "clash", column: "$known", copy: true },
+      ],
+    })
+    const clashCatalog = runtimeCatalogSchema.parse({
+      format: 1,
+      snapshotHash: "hash-1",
+      provider: "supabase",
+      objects: [clash],
+    })
+    const prepare = (withKnown: unknown) => {
+      const prepared = prepareRead(
+        clashCatalog,
+        { object: COPIED, limit: 5 },
+        withKnown
+      )
+      if ("error" in prepared) throw new Error(prepared.error.code)
+      return prepared.plan
+    }
+    expect(renderKnown(prepare(known), EPOCH)).toEqual(
+      renderKnown(prepare(undefined), null)
+    )
+  })
+
+  it.each([
+    ["include", { object: LINK, include: ["region"], limit: 10 }],
+    ["a card with include", { object: LINK, id: ID, include: ["region"] }],
+    [
+      "a card with tabularSections",
+      { object: ref, id: ID, tabularSections: true },
+    ],
+    ["a count", { object: ref, count: true }],
+    ["a section page", { object: ref, tabularSection: "lines", limit: 10 }],
+    [
+      "section lines of an owner",
+      { object: ref, tabularSection: "lines", owner: ID },
+    ],
+  ])("known with %s is known-form", (_, query) => {
+    expect(prepareRead(catalog, query, known)).toEqual({
+      error: {
+        code: "command.invalid",
+        path: "known",
+        reason: "known-form",
+        object: (query as { object: { kind: string; name: string } }).object,
+      },
+    })
+  })
+
+  it.each([
+    [
+      "versions not one to one",
+      { ...known, versions: ["3"] },
+      "known.versions",
+    ],
+    [
+      "a key that is not a UUID",
+      { ...known, keys: ["x", OTHER] },
+      "known.keys.0",
+    ],
+    [
+      "a version that is not an integer",
+      { ...known, versions: ["3", "1,2"] },
+      "known.versions.1",
+    ],
+    ["a repeated key", { ...known, keys: [ID, ID] }, "known.keys.1"],
+  ])("refuses known with %s", (_, bad, path) => {
+    expect(prepareRead(catalog, { object: ref, limit: 10 }, bad)).toMatchObject(
+      {
+        error: { code: "command.invalid", path, object: ref },
+      }
+    )
+  })
+
+  async function executeKnown(
+    query: unknown,
+    epoch: string | null,
+    rows: Record<string, unknown>[]
+  ) {
+    const prepared = prepareRead(catalog, query, known)
+    if ("error" in prepared) throw new Error(prepared.error.code)
+    return executeRead(
+      prepared.object,
+      prepared.plan,
+      () => Promise.resolve(rows),
+      epoch
+    )
+  }
+  const full = (id: string) => ({
+    row: JSON.stringify({ id, version: 9, code_col: "A" }),
+  })
+
+  it("decodes markers and partial markers into KnownMarker", async () => {
+    await expect(
+      executeKnown({ object: ref, limit: 10 }, EPOCH, [{ row: "1" }, full(ID)])
+    ).resolves.toEqual({
+      rows: [{ known: 1 }, { ref: ID, version: 9, code: "A" }],
+    })
+    await expect(
+      executeKnown({ object: COPIED, limit: 10 }, EPOCH, [
+        {
+          row: JSON.stringify({ $known: 0, owner_col: "X", amount_col: "1.5" }),
+        },
+        { row: JSON.stringify({ $known: 1 }) },
+      ])
+    ).resolves.toEqual({
+      rows: [{ known: 0, copies: { owner: "X", amount: "1.5" } }, { known: 1 }],
+    })
+  })
+
+  it("a row with the key and a $known column is a row", async () => {
+    const row = { id: ID, version: 9, code_col: "A", $known: 0 }
+    await expect(
+      executeKnown({ object: ref, limit: 10 }, EPOCH, [
+        { row: JSON.stringify(row) },
+      ])
+    ).resolves.toEqual({ rows: [{ ref: ID, version: 9, code: "A" }] })
+  })
+
+  it.each([
+    ["past known", EPOCH, "2"],
+    ["negative", EPOCH, "-1"],
+    ["fractional", EPOCH, "0.5"],
+    ["partial past known", EPOCH, JSON.stringify({ $known: 2 })],
+    ["in a read of another epoch", OTHER_EPOCH, "0"],
+    ["in a read without epoch", null, JSON.stringify({ $known: 0 })],
+  ])("a marker %s is command.internal", async (_, epoch, row) => {
+    const thrown = await executeKnown({ object: ref, limit: 10 }, epoch, [
+      { row },
+    ]).catch((error: unknown) => error)
+    expect(thrown).toBeInstanceOf(CommandFailure)
+    expect((thrown as CommandFailure).error).toEqual({
+      code: "command.internal",
+    })
   })
 })

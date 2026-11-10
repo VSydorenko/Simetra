@@ -31,6 +31,10 @@ export interface FilterColumn {
   lazy: boolean
 }
 
+// Колонка — з аліасом таблиці читання `t`: умовне читання приєднує
+// `simetra_known`, і голе ім'я колонки з тим самим ім'ям стало б неоднозначним.
+const qualified = (column: string) => `t.${ident(column)}`
+
 // Мітка пари — текст: її тип задає платформа, у каталозі `castType` немає.
 const LABEL_CAST = "text"
 
@@ -123,9 +127,9 @@ function pairEquals(
   const pair = encodePair(attribute, value, path)
   if ("error" in pair) return refuse(path)
   return [
-    `(${ident(attribute.pair!.typeColumn)} = `,
+    `(${qualified(attribute.pair!.typeColumn)} = `,
     { value: pair.value.label, cast: LABEL_CAST },
-    ` AND ${ident(column.column)} = `,
+    ` AND ${qualified(column.column)} = `,
     { value: pair.value.id, cast: column.castType },
     ")",
   ]
@@ -145,13 +149,13 @@ function condition(
   if (column.lazy) return refuse(`${path}.attribute`, "lazy")
   const { op, value } = node
   if (!allows(column, op)) return refuse(`${path}.op`)
-  const name = ident(column.column)
+  const name = qualified(column.column)
   const pairColumn = column.attribute?.pair
   const valuePath = `${path}.value`
   if (op === "isNull") {
     return pairColumn === undefined
       ? [`${name} IS NULL`]
-      : [`(${ident(pairColumn.typeColumn)} IS NULL AND ${name} IS NULL)`]
+      : [`(${qualified(pairColumn.typeColumn)} IS NULL AND ${name} IS NULL)`]
   }
   // `= NULL` у тризначній логіці SQL мовчки дав би порожню множину (В5).
   const notNull = (item: unknown, at: string, reason?: string) => {

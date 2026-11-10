@@ -107,7 +107,15 @@ describe("Writer", () => {
     // Ключ без власника не пишеться взагалі, а не прибирається `sweep` після.
     const put = vi.spyOn(coreInternals(core).ops, "put")
     write(core, (w) =>
-      w.patch(TASK, [fake.row(TASK, key(1))!, fake.row(TASK, key(2))!], epoch)
+      w.apply(
+        TASK,
+        {
+          rows: [fake.row(TASK, key(1))!, fake.row(TASK, key(2))!],
+          absent: [],
+        },
+        epoch,
+        null
+      )
     )
     expect(valueOf(view.getSnapshot(), 1, "title")).toBe("patched")
     expect(put.mock.calls.map((call) => call[2].key)).toEqual([key(1)])
@@ -126,7 +134,9 @@ describe("Writer", () => {
     watch(lineView)
     await settle()
     expect(lineView.getSnapshot().section?.lines).toHaveLength(1)
-    write(core, (w) => w.remove(TASK, [key(1)], core.readEpoch()))
+    write(core, (w) =>
+      w.apply(TASK, { rows: [], absent: [key(1)] }, core.readEpoch(), null)
+    )
     await settle()
     expect(header.getSnapshot().rows).toEqual([
       { key: key(1), state: "removed" },
@@ -143,7 +153,9 @@ describe("Writer", () => {
     watch(lineView)
     await settle()
     expect(sectionsOf(core, 1)?.lines).toHaveLength(1)
-    write(core, (w) => w.remove(TASK, [key(1)], core.readEpoch()))
+    write(core, (w) =>
+      w.apply(TASK, { rows: [], absent: [key(1)] }, core.readEpoch(), null)
+    )
     expect(sectionsOf(core, 1)).toBeUndefined()
     expect(lineView.getSnapshot().section?.lines ?? []).toEqual([])
   })
@@ -260,7 +272,9 @@ describe("Writer", () => {
     write(core, (w) => {
       saved = w
     })
-    expect(() => saved!.patch(TASK, [], 0)).toThrow("write scope is closed")
+    expect(() => saved!.apply(TASK, { rows: [], absent: [] }, 0, null)).toThrow(
+      "write scope is closed"
+    )
     expect(() => saved!.markViews(TASK, { needsRefresh: true })).toThrow(
       "write scope is closed"
     )
@@ -283,7 +297,12 @@ describe("Writer", () => {
     const sweep = vi.spyOn(coreInternals(core).ops, "sweep")
     expect(() =>
       write(core, (w) => {
-        w.patch(TASK, [fake.row(TASK, key(1))!], core.readEpoch())
+        w.apply(
+          TASK,
+          { rows: [fake.row(TASK, key(1))!], absent: [] },
+          core.readEpoch(),
+          null
+        )
         throw new Error("boom")
       })
     ).toThrow("boom")
@@ -560,7 +579,14 @@ describe("purge", () => {
     fake.setVisibleScopes([S])
     write(core, (w) => w.purge(TASK, { scope: T }))
     fake.hold = (read) => isKeys(read)
-    write(core, (w) => w.patch(TASK, [fake.row(TASK, key(1))!], early))
+    write(core, (w) =>
+      w.apply(
+        TASK,
+        { rows: [fake.row(TASK, key(1))!], absent: [] },
+        early,
+        null
+      )
+    )
     const hidden = view.getSnapshot().rows[0]!
     expect(hidden).toMatchObject({ state: "stale" })
     // toMatchObject пропустив би будь-який об'єкт: значення мають бути порожні.

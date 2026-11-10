@@ -88,48 +88,49 @@ const cond = (attribute: string, op: string, value?: unknown): Filter =>
   (value === undefined ? { attribute, op } : { attribute, op, value }) as Filter
 
 describe("renderFilter", () => {
+  // Колонка — з аліасом `t`: умовне читання приєднує `simetra_known`.
   it.each<[string, Filter, string, (string | null)[]]>([
-    ["eq", cond("code", "eq", "ab"), `"code_col" = $1::text`, ["ab"]],
-    ["ne", cond("count", "ne", 5), `"count_col" <> $1::integer`, ["5"]],
-    ["lt", cond("count", "lt", 5), `"count_col" < $1::integer`, ["5"]],
-    ["lte", cond("count", "lte", 5), `"count_col" <= $1::integer`, ["5"]],
-    ["gt", cond("ref", "gt", ID), `"id" > $1::uuid`, [ID]],
-    ["gte", cond("version", "gte", 3), `"version" >= $1::bigint`, ["3"]],
-    ["isNull", cond("note", "isNull"), `"note_col" IS NULL`, []],
+    ["eq", cond("code", "eq", "ab"), `t."code_col" = $1::text`, ["ab"]],
+    ["ne", cond("count", "ne", 5), `t."count_col" <> $1::integer`, ["5"]],
+    ["lt", cond("count", "lt", 5), `t."count_col" < $1::integer`, ["5"]],
+    ["lte", cond("count", "lte", 5), `t."count_col" <= $1::integer`, ["5"]],
+    ["gt", cond("ref", "gt", ID), `t."id" > $1::uuid`, [ID]],
+    ["gte", cond("version", "gte", 3), `t."version" >= $1::bigint`, ["3"]],
+    ["isNull", cond("note", "isNull"), `t."note_col" IS NULL`, []],
     [
       "in, one parameter per element",
       cond("owner", "in", [ID, OTHER]),
-      `"owner_col" = ANY(ARRAY[$1::uuid, $2::uuid])`,
+      `t."owner_col" = ANY(ARRAY[$1::uuid, $2::uuid])`,
       [ID, OTHER],
     ],
     [
       "contains with pattern characters",
       cond("note", "contains", "50%_\\"),
-      `"note_col" ILIKE $1::text`,
+      `t."note_col" ILIKE $1::text`,
       ["%50\\%\\_\\\\%"],
     ],
     [
       "startsWith with pattern characters",
       cond("code", "startsWith", "%_\\"),
-      `"code_col" ILIKE $1::text`,
+      `t."code_col" ILIKE $1::text`,
       ["\\%\\_\\\\%"],
     ],
     [
       "an enum value by its name",
       cond("status", "eq", "Open"),
-      `"status_col" = $1::text`,
+      `t."status_col" = $1::text`,
       ["open"],
     ],
     [
       "a pair eq",
       cond("subject", "eq", { type: "Catalog.Project", id: ID }),
-      `("subject_type" = $1::text AND "subject_col" = $2::uuid)`,
+      `(t."subject_type" = $1::text AND t."subject_col" = $2::uuid)`,
       ["project", ID],
     ],
     [
       "a pair ne",
       cond("subject", "ne", { type: "Catalog.Project", id: ID }),
-      `NOT ("subject_type" = $1::text AND "subject_col" = $2::uuid)`,
+      `NOT (t."subject_type" = $1::text AND t."subject_col" = $2::uuid)`,
       ["project", ID],
     ],
     [
@@ -138,17 +139,17 @@ describe("renderFilter", () => {
         { type: "Catalog.Project", id: ID },
         { type: "Catalog.Region", id: OTHER },
       ]),
-      `(("subject_type" = $1::text AND "subject_col" = $2::uuid) OR ` +
-        `("subject_type" = $3::text AND "subject_col" = $4::uuid))`,
+      `((t."subject_type" = $1::text AND t."subject_col" = $2::uuid) OR ` +
+        `(t."subject_type" = $3::text AND t."subject_col" = $4::uuid))`,
       ["project", ID, "region", OTHER],
     ],
     [
       "a pair isNull",
       cond("subject", "isNull"),
-      `("subject_type" IS NULL AND "subject_col" IS NULL)`,
+      `(t."subject_type" IS NULL AND t."subject_col" IS NULL)`,
       [],
     ],
-    ["isNull of an array", cond("tags", "isNull"), `"tags_col" IS NULL`, []],
+    ["isNull of an array", cond("tags", "isNull"), `t."tags_col" IS NULL`, []],
     [
       "and, or and not as the tree",
       {
@@ -157,8 +158,8 @@ describe("renderFilter", () => {
           { or: [cond("count", "gt", 1), { not: cond("flag", "eq", true) }] },
         ],
       },
-      `("code_col" = $1::text AND ("count_col" > $2::integer OR ` +
-        `NOT ("flag_col" = $3::boolean)))`,
+      `(t."code_col" = $1::text AND (t."count_col" > $2::integer OR ` +
+        `NOT (t."flag_col" = $3::boolean)))`,
       ["a", "1", "true"],
     ],
   ])("renders %s", (_, filter, sql, params) => {
@@ -169,7 +170,7 @@ describe("renderFilter", () => {
     "passes the in element %j verbatim as its own parameter",
     (value) => {
       expect(render(cond("note", "in", [value, "x"]))).toEqual({
-        sql: `"note_col" = ANY(ARRAY[$1::text, $2::text])`,
+        sql: `t."note_col" = ANY(ARRAY[$1::text, $2::text])`,
         params: [value, "x"],
       })
     }

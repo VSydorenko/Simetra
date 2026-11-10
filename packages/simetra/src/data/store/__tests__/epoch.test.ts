@@ -36,7 +36,7 @@ describe("createEpochs", () => {
   it("continuous eviction leaves an untouched bucket's horizon alone", () => {
     const e = createEpochs({ ...limits, seenMax: 10 })
     const early = e.now()
-    for (let i = 0; i < 10_000; i++) e.remember(`o\u0000churn-${i}`, 1)
+    for (let i = 0; i < 10_000; i++) e.remember(`o\u0000churn-${i}`, 1, null)
     // 10 000 ключів зачіпають лише частину з 65 536 кошиків
     const untouched = Array.from({ length: 200 }, (_, i) => `o\u0000probe-${i}`)
     const hit = untouched.filter((id) => e.evictedSince(id, early)).length
@@ -45,10 +45,10 @@ describe("createEpochs", () => {
 
   it("remember keeps the maximum version", () => {
     const e = createEpochs(limits)
-    e.remember("o\u0000k", 5)
-    e.remember("o\u0000k", 3)
+    e.remember("o\u0000k", 5, null)
+    e.remember("o\u0000k", 3, null)
     expect(e.seen("o\u0000k")?.version).toBe(5)
-    e.remember("o\u0000k", 7)
+    e.remember("o\u0000k", 7, null)
     expect(e.seen("o\u0000k")?.version).toBe(7)
     expect(e.seen("o\u0000missing")).toBeUndefined()
   })
@@ -77,8 +77,8 @@ describe("createEpochs", () => {
   it("clear() drops both maps and the horizon", () => {
     const e = createEpochs({ ...limits, seenMax: 1, tombstonesMax: 1 })
     const early = e.now()
-    e.remember("o\u0000a", 1)
-    e.remember("o\u0000b", 1) // витісняє a
+    e.remember("o\u0000a", 1, null)
+    e.remember("o\u0000b", 1, null) // витісняє a
     e.bury("o\u0000c")
     e.bury("o\u0000d") // витісняє c
     expect(e.evictedSince("o\u0000a", early)).toBe(true)

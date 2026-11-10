@@ -73,7 +73,7 @@ const rightsRolePhase = (id = OTHER, code = "R") => [
 const readOf = (table: string, id: string) => ({
   text:
     `SELECT to_jsonb(t)::text AS row FROM "public"."${table}" t` +
-    ' WHERE "id" = $1::uuid LIMIT 1',
+    ' WHERE t."id" = $1::uuid LIMIT 1',
   params: [id],
 })
 const readRights = (id: string) => readOf("rights_role", id)

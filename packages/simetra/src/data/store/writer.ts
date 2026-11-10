@@ -1,19 +1,27 @@
 import { ZERO_UUID, channelTopic, type CatalogEntry } from "simetra/model"
 import type { Defects } from "./defects"
+import { effectiveEpoch } from "./epoch"
 import type { ObjectState } from "./forms"
 import { includeKeys, readIncluded } from "./include"
 import { visibleRow, type RowEntry } from "./object-store"
 import {
   applyIncluded,
   fetchFull,
-  readForm,
+  gated,
+  readFormWrite,
   type Apply,
   type ReaderContext,
+  type Write,
 } from "./readers"
-import type { Scope, Session } from "./session"
+import { DISCARD_PAUSE_MS, type Scope, type Session } from "./session"
 import type { RowViews } from "./snapshot"
 import { ReadLimiterClosed, readKeys } from "./source"
-import { errorOf, type Subset, type SubsetRegistry } from "./subsets"
+import {
+  EPOCH_UNAVAILABLE,
+  errorOf,
+  type Subset,
+  type SubsetRegistry,
+} from "./subsets"
 import type {
   ActiveView,
   GenerationToken,
@@ -152,6 +160,42 @@ function forget(
   }
 }
 
+// Запис відповіді приймача — лише через `Writer.apply`, після шлюзу епохи;
+// поза цим модулем їх не викликає ніхто (`__tests__/writer-gate-guard.test.ts`).
+
+/** Patches keys with an owner (§6.2): a signal brings no new key in. */
+function patchRows(
+  ctx: WriterContext,
+  scope: Scope,
+  o: ObjectState,
+  rows: readonly ServerRow[],
+  readEpoch: number,
+  versionEpoch: string | null
+) {
+  for (const row of rows) {
+    if ((o.rows.get(row.key)?.owners ?? 0) === 0) continue
+    // Епоха рядка — епоха відповіді, яку щойно прийняла сесія.
+    ctx.ops.put(
+      scope,
+      o,
+      { ...row, versionEpoch: effectiveEpoch(versionEpoch, row.versionEpoch) },
+      readEpoch,
+      false
+    )
+  }
+}
+
+/** Keys the answer did not return become `removed` (§6.2, rule 5). */
+function removeKeys(
+  ctx: WriterContext,
+  scope: Scope,
+  o: ObjectState,
+  keys: readonly Key[],
+  readEpoch: number
+) {
+  for (const key of keys) ctx.ops.remove(scope, o, key, readEpoch)
+}
+
 /** The writer of one `commit`: every method refuses once the commit ended. */
 export function createWriter(ctx: WriterContext, scope: Scope): Writer {
   const { ops, rowViews } = ctx
@@ -163,21 +207,20 @@ export function createWriter(ctx: WriterContext, scope: Scope): Writer {
   }
 
   return {
-    patch(object, rows, readEpoch) {
+    apply(object, answer, readEpoch, versionEpoch) {
       scope.assert()
       const o = ctx.objectOf(object)
-      // Перечитування лише латає ключі з власником (§6.2): нового ключа
-      // сигнал у сховище не вносить.
-      for (const row of rows) {
-        if ((o.rows.get(row.key)?.owners ?? 0) > 0)
-          ops.put(scope, o, row, readEpoch, false)
-      }
-    },
-
-    remove(object, keys, readEpoch) {
-      scope.assert()
-      const o = ctx.objectOf(object)
-      for (const key of keys) ops.remove(scope, o, key, readEpoch)
+      // Один шлюз на відповідь (Р7, Р12): і «рядка немає» без жодного рядка
+      // проходить його, а відкинута відповідь не пише нічого й каже про це.
+      // Шлюз бачить і епохи рядків: рядок пишеться з власною епохою, коли
+      // параметр `null`, тож рядок покинутої епохи відкидає всю відповідь.
+      const epochs = new Set<string | null>([versionEpoch])
+      for (const row of answer.rows) epochs.add(row.versionEpoch ?? null)
+      if (ctx.session.acceptEpochs(epochs, readEpoch) === "discard")
+        return "discarded"
+      patchRows(ctx, scope, o, answer.rows, readEpoch, versionEpoch)
+      removeKeys(ctx, scope, o, answer.absent, readEpoch)
+      return "applied"
     },
 
     purge(object, target) {
@@ -317,7 +360,7 @@ function applyKeys(
   rows: readonly ServerRow[],
   startEpoch: number,
   marksNew: boolean
-): Apply {
+): Write {
   const o = s.form.object
   return (scope) => {
     const got = new Set<Key>()
@@ -360,7 +403,7 @@ async function readFullAgain(
   s: Subset,
   startEpoch: number,
   token: GenerationToken
-): Promise<Apply> {
+): Promise<Write> {
   const { form } = s
   const o = form.object
   const { keysPerRequest } = ctx.limits
@@ -434,12 +477,21 @@ async function readFullAgain(
   }
 }
 
-async function readAgain(
+function readAgain(
   ctx: WriterContext,
   s: Subset,
   startEpoch: number,
   token: GenerationToken
 ): Promise<Apply> {
+  return gated(ctx, startEpoch, (c) => writeAgain(c, s, startEpoch, token))
+}
+
+async function writeAgain(
+  ctx: WriterContext,
+  s: Subset,
+  startEpoch: number,
+  token: GenerationToken
+): Promise<Write> {
   const spec = s.form.spec
   const o = s.form.object
   const { keysPerRequest } = ctx.limits
@@ -460,7 +512,7 @@ async function readAgain(
       return applyKeys(ctx, s, [spec.key], rows, startEpoch, false)
     }
     case "section":
-      return readForm(ctx, s, startEpoch, token)
+      return readFormWrite(ctx, s, startEpoch, token)
     case "full":
       return readFullAgain(ctx, s, startEpoch, token)
   }
@@ -524,6 +576,7 @@ async function revalidateViews(
     )
   )
   const again: Subset[] = []
+  const discarded: Subset[] = []
   session.commit(
     (scope) => {
       try {
@@ -552,7 +605,15 @@ async function revalidateViews(
             continue
           }
           try {
-            result.apply(scope)
+            if (!result.apply(scope)) {
+              // Відкинута відповідь (Р12): перечитування з паузою, а після
+              // межі відкинутих поспіль — `command.unavailable`.
+              if (session.versions.unavailable()) {
+                s.status = "error"
+                s.error = EPOCH_UNAVAILABLE
+              } else discarded.push(s)
+              continue
+            }
             if (s.status === "error") {
               s.status = "ready"
               s.error = undefined
@@ -570,6 +631,34 @@ async function revalidateViews(
     token,
     `revalidate ${o.name}`
   )
+  // Цей прохід вичерпав межу (лічильник рухається після commit): повтору
+  // не буде, відкинуті вигляди — `command.unavailable`.
+  if (discarded.length > 0 && session.versions.unavailable()) {
+    session.commit(
+      () => {
+        for (const s of discarded) {
+          if (!s.alive || s.purged) continue
+          s.status = "error"
+          s.error = EPOCH_UNAVAILABLE
+          s.dirty = true
+        }
+      },
+      token,
+      `revalidate ${o.name}`
+    )
+  } else if (discarded.length > 0) {
+    const pause =
+      DISCARD_PAUSE_MS * 2 ** Math.max(0, session.versions.discards() - 1)
+    // Не чекаємо паузи: `revalidate` завершується, а повтор іде тим самим
+    // системним шляхом (склад не змінюється).
+    setTimeout(() => {
+      revalidateViews(
+        ctx,
+        o,
+        discarded.filter((s) => s.alive && !s.purged)
+      ).catch((error: unknown) => ctx.log({ kind: "listener-failed", error }))
+    }, pause)
+  }
   // Дефект самотесту «системне перечитування через завантаження».
   if (ctx.defects.has("system-reread-via-load")) {
     for (const { s } of results) {

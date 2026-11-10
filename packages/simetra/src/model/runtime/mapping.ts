@@ -8,13 +8,21 @@ import type {
   WireChange,
   WireCommandError,
   WireOperation,
+  WireReadPart,
   WireReadQuery,
   WireReadResult,
 } from "./envelope"
 import type { CommandError } from "./errors"
 import type { Operation } from "./operation"
 import { pathFromWire, pathToWire } from "./path"
-import type { Filter, FilterCondition, ReadQuery, ReadResult } from "./read"
+import type {
+  Filter,
+  FilterCondition,
+  KnownMarker,
+  ReadPart,
+  ReadPartValue,
+  ReadQuery,
+} from "./read"
 import type { Change } from "./result"
 import {
   INTEGER_TEXT,
@@ -777,6 +785,50 @@ export function readQueryFromWire(
   )
 }
 
+type WireQueryPart = Extract<WireReadPart, { type: "query" }>
+
+/**
+ * Maps a read part to its wire form (T4): the query as
+ * {@link readQueryToWire} maps it, `known` carried unchanged — its keys are
+ * UUIDs and its versions integer text in both forms.
+ */
+export function readPartToWire(
+  index: CatalogIndex,
+  part: ReadPart
+): Mapped<WireQueryPart> {
+  const query = readQueryToWire(index, part.query)
+  if (!query.ok) return query
+  return {
+    ok: true,
+    value: {
+      type: "query",
+      query:
+        part.known === undefined
+          ? query.value
+          : ({ ...query.value, known: part.known } as WireReadQuery),
+    },
+  }
+}
+
+/**
+ * Maps a wire read part to its logical form (server): `known` is taken off
+ * the wire query and carried beside the logical one, which never has it;
+ * the query maps as {@link readQueryFromWire} maps it. Never throws.
+ */
+export function readPartFromWire(
+  index: CatalogIndex,
+  part: WireQueryPart
+): Mapped<ReadPart> {
+  const { known, ...wire } = part.query as WireReadQuery & {
+    known?: ReadPart["known"]
+  }
+  const query = readQueryFromWire(index, wire as WireReadQuery)
+  if (!query.ok) return query
+  const value: ReadPart = { type: "query", query: query.value }
+  if (known !== undefined) value.known = known
+  return { ok: true, value }
+}
+
 /**
  * Рядки ТЧ-цілі кодує той самий кодек, що й ТЧ картки: рядок картки з однією
  * ТЧ. Так у T0 одна точка кодування рядка ТЧ, і шлях відмови —
@@ -820,17 +872,84 @@ function queryTarget(
   return { entry, section }
 }
 
+// Позиція маркера — ціле ≥ 0: від'ємне чи дробове сервер не шле, а клієнт
+// узяв би за індекс `known` поза масивом.
+const isMarkerIndex = (value: unknown): value is number =>
+  typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+
+/** The key of a marker's position in a partial marker (P4-B spec §4.1). */
+export const KNOWN_MARKER = "$known"
+
+/**
+ * The marker rule of a wire row of an object read (P4-B spec §4.1, Рд40),
+ * shared by the client codec and the server decoder: an integer is a marker
+ * at that position of `known`; an object with `$known` and without the key
+ * column `keyColumn` is a partial marker with its copies in wire form.
+ * Anything else is a row — `undefined` — even with a `$known` column: a row
+ * always has its key. The position is returned as is; each side checks it.
+ */
+export function splitKnownMarker(
+  keyColumn: string,
+  raw: unknown
+): { known: unknown; copies: Record<string, unknown> } | undefined {
+  if (typeof raw === "number") return { known: raw, copies: {} }
+  if (!isPlainObject(raw) || own(raw, keyColumn) || !own(raw, KNOWN_MARKER)) {
+    return undefined
+  }
+  const { [KNOWN_MARKER]: known, ...copies } = raw
+  return { known, copies }
+}
+
+/**
+ * Маркер у логічній формі відрізняє від рядка відсутність ключа: рядок
+ * читання завжди його має, а маркер — ніколи (П4-B Рд40).
+ */
+const isKnownMarker = (
+  entry: CatalogEntry,
+  row: Row | KnownMarker
+): row is KnownMarker =>
+  !Object.hasOwn(row, entry.keyName) && Object.hasOwn(row, "known")
+
+function encodeMarker(entry: CatalogEntry, marker: KnownMarker): unknown {
+  if (!isMarkerIndex(marker.known)) throw new WireEncodeError("known")
+  if (marker.copies === undefined || Object.keys(marker.copies).length === 0) {
+    return marker.known
+  }
+  const copies = encodeRow(entry, marker.copies)
+  // Колонка копії `$known` перезаписала б позицію маркера.
+  if (own(copies, KNOWN_MARKER)) throw new WireEncodeError("copies")
+  return Object.fromEntries([
+    [KNOWN_MARKER, marker.known],
+    ...Object.entries(copies),
+  ])
+}
+
+function decodeRowOrMarker(
+  entry: CatalogEntry,
+  raw: unknown
+): LogicalRow | KnownMarker {
+  const marker = splitKnownMarker(entry.key, raw)
+  if (marker === undefined) return decodeRow(entry, raw as WireRow)
+  const { known, copies } = marker
+  if (!isMarkerIndex(known)) throw new WireDecodeError(KNOWN_MARKER)
+  return Object.keys(copies).length === 0
+    ? { known }
+    : { known, copies: decodeRow(entry, copies) }
+}
+
 /**
  * Encodes a read result for the wire (server): rows through `encodeRow` of
  * the query's object (or its section, for a section read), `included` keyed
- * by the target's UUID, `ownerVersion` as integer text. A count passes as
- * is. Throws {@link WireEncodeError} for a value the codec rejects or an
- * object outside the catalog — a server defect, not an input error.
+ * by the target's UUID, `ownerVersion` as integer text. A marker of a row
+ * the client holds becomes its position in `known`, or
+ * `{ $known, <copy columns> }` with its copies. A count passes as is.
+ * Throws {@link WireEncodeError} for a value the codec rejects or an object
+ * outside the catalog — a server defect, not an input error.
  */
 export function readResultToWire(
   index: CatalogIndex,
   query: ReadQuery,
-  result: ReadResult
+  result: ReadPartValue
 ): WireReadResult {
   if ("count" in result) return { ...result }
   const { entry, section } = queryTarget(
@@ -838,11 +957,16 @@ export function readResultToWire(
     query,
     (path) => new WireEncodeError(path)
   )
+  // Маркер буває лише в читанні шапки: `known` форма ТЧ не приймає.
   const out: WireReadResult = {
     rows:
       section === undefined
-        ? result.rows.map((row) => encodeRow(entry, row))
-        : encodeLines(entry, section, result.rows),
+        ? result.rows.map((row) =>
+            isKnownMarker(entry, row)
+              ? (encodeMarker(entry, row) as WireRow)
+              : encodeRow(entry, row)
+          )
+        : encodeLines(entry, section, result.rows as LogicalRow[]),
   }
   if (result.included !== undefined) {
     const included = new Map<string, WireRow[]>()
@@ -862,7 +986,7 @@ export function readResultToWire(
     }
     out.ownerVersion = String(result.ownerVersion)
   }
-  // Сервер ставить `more` на дроті сам (fitResponse), тож логічне поле тут
+  // Сервер ставить `more` на дроті сам (fitParts), тож логічне поле тут
   // недосяжне на сервері; проходить лише для симетрії з декодером.
   if (result.more !== undefined) out.more = true
   return out
@@ -871,26 +995,32 @@ export function readResultToWire(
 /**
  * Decodes a wire read result (T4) through `decodeRow`: rows of the query's
  * object or section, `included` keyed `"<kind>.<name>"`, `ownerVersion` a
- * safe integer. Included rows of an object the catalog does not know are
- * dropped, as `decodeRow` drops unknown columns. Throws
- * {@link WireDecodeError} for a value of the wrong form.
+ * safe integer. A row of an object read that is an integer, or an object
+ * with `$known` and without the key column, is a {@link KnownMarker}; an
+ * object with the key column is a row, even with a `$known` column. Included
+ * rows of an object the catalog does not know are dropped, as `decodeRow`
+ * drops unknown columns. Throws {@link WireDecodeError} for a value of the
+ * wrong form, a marker index that is not a non-negative safe integer among
+ * them.
  */
 export function readResultFromWire(
   index: CatalogIndex,
   query: ReadQuery,
   wire: WireReadResult
-): ReadResult {
+): ReadPartValue {
   if ("count" in wire) return { ...wire }
   const { entry, section } = queryTarget(
     index,
     query,
     (path) => new WireDecodeError(path)
   )
-  const out: ReadResult = {
+  // Маркер серед рядків ТЧ — хибна відповідь: його відхиляє `decodeRow`
+  // (рядок ТЧ — об'єкт).
+  const out: ReadPartValue = {
     rows:
       section === undefined
-        ? wire.rows.map((row) => decodeRow(entry, row))
-        : decodeLines(entry, section, wire.rows),
+        ? wire.rows.map((row) => decodeRowOrMarker(entry, row))
+        : decodeLines(entry, section, wire.rows as WireRow[]),
   }
   if (wire.included !== undefined) {
     const included = new Map<string, LogicalRow[]>()
