@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest"
-import { readBackfillCounts } from "simetra/schema"
+import {
+  BACKFILL_SETTINGS,
+  backfillAction,
+  readBackfillCounts,
+  withLocalSettings,
+} from "simetra/schema"
 import { uuid } from "../../../../simetra/test/support"
 import { query } from "../../__tests__/support/db"
 import {
@@ -18,6 +23,7 @@ import {
   planned,
   stepMatching,
   useBuildPlanRoles,
+  writer,
 } from "./build-plan.support"
 
 /**
@@ -112,6 +118,58 @@ describe.concurrent("buildPlan backfill", () => {
           params: { table: "app.notes", column: "note", sqlstate: "42501" },
         },
       })
+    })
+  })
+
+  it("never fills only the rows that row security shows", async () => {
+    // І3: крок заповнення під роллю без BYPASSRLS на таблиці з FORCE RLS,
+    // де політика показує лише один із двох `NULL`, дає гучне `42501`, а не
+    // тихо оновлює видиму частину. Раннер запускає крок роллю з обходом
+    // (гейт власника Р10), тож доказ — на тих самих частинах кроку:
+    // `BACKFILL_SETTINGS` навколо SQL `backfillAction`
+    const before = await compiled({ [NOTES]: notes() })
+    const [shown, hidden] = [uuid(9440), uuid(9441)]
+    await inTarget(EMPTY, async (url) => {
+      await establish(url, before)
+      await query(
+        url,
+        `insert into app.notes (id, note) values ('${shown}', null), ('${hidden}', null);
+         alter table app.notes alter column note set default 'n/a';
+         alter table app.notes enable row level security;
+         alter table app.notes force row level security;
+         create policy notes_one on app.notes using (id = '${shown}');
+         grant usage on schema app to ${COPIER};
+         grant select, update on app.notes to ${COPIER};`
+      )
+      const { sql } = backfillAction({
+        table: { schema: "app", name: "notes" },
+        column: "note",
+        rowsAtPlan: 2,
+        permission: true,
+        default: "'n/a'",
+        triggers: [],
+      })
+      const login = new URL(url)
+      login.username = COPIER
+      login.password = COPIER_PASSWORD
+      const fill = writer.transaction(
+        { url: login.toString() },
+        "rollback",
+        (tx) =>
+          withLocalSettings(tx, BACKFILL_SETTINGS, async () => {
+            const [row] = await tx.query<{ n: string }>(
+              `WITH filled AS (${sql} RETURNING 1) SELECT pg_catalog.count(*)::text AS n FROM filled`
+            )
+            return { filled: row?.n }
+          })
+      )
+      await expect(fill).rejects.toMatchObject({ sqlstate: "42501" })
+      expect(
+        await query(url, "select id, note from app.notes order by id")
+      ).toEqual([
+        { id: shown, note: null },
+        { id: hidden, note: null },
+      ])
     })
   })
 
