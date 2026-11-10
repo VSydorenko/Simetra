@@ -1,6 +1,12 @@
 import type { CatalogEntry } from "simetra/model"
 import { NO_DEFECTS, type Defects } from "./defects"
-import { differentEpochs, effectiveEpoch, keyId, pairId } from "./epoch"
+import {
+  differentEpochs,
+  effectiveEpoch,
+  heldEpoch,
+  keyId,
+  pairId,
+} from "./epoch"
 import type { Scope, Session } from "./session"
 import type { CoreLogEntry, Key, ObjectName, ServerRow, Values } from "./types"
 
@@ -311,7 +317,7 @@ export function createObjectStore(options: {
       e.stale.minVersion = {
         v: known.version,
         epoch: epochs.next(),
-        versionEpoch: effectiveEpoch(known.versionEpoch, null),
+        versionEpoch: heldEpoch(known.versionEpoch),
       }
     // Читання старше за горизонт кошика ключа чи пари: витіснений надгробок
     // міг належати видаленому чи прибраному рядку, тож значення ховаємо до
@@ -396,7 +402,7 @@ export function createObjectStore(options: {
           e.stale.minVersion = {
             v: e.version,
             epoch: epochs.next(),
-            versionEpoch: effectiveEpoch(e.versionEpoch, null),
+            versionEpoch: heldEpoch(e.versionEpoch),
           }
           tail.add(row.key)
           result = "stale-inserted"

@@ -80,6 +80,16 @@ export function effectiveEpoch(
   return incoming ?? held ?? null
 }
 
+/**
+ * The epoch an entry keeps when the store copies its own state (a stale
+ * mark, a remembered lower bound): its own epoch, no incoming one. A write of
+ * an answer never uses it — `effectiveEpoch` with a literal `null` held epoch
+ * is refused by the guard, so the held epoch cannot be dropped by accident.
+ */
+export function heldEpoch(own: string | null | undefined): string | null {
+  return own ?? null
+}
+
 /** The epoch id of a key: `"<object>\u0000<key>"`. */
 export const keyId = (object: string, key: string): string =>
   `${object}\u0000${key}`

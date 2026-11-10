@@ -88,8 +88,23 @@ function callOf(n: ts.Expression | undefined, name: string): boolean {
   )
 }
 
-const isEffectiveEpoch = (n: ts.Expression | undefined) =>
-  callOf(n, "effectiveEpoch")
+// Літерал `null` чи `undefined` на місці утримуваної епохи стер би її:
+// копія власної епохи запису — `heldEpoch`, окрема функція з іншим іменем.
+const noHeld = (n: ts.Expression | undefined) => {
+  if (n === undefined) return true
+  const a = stripped(n)
+  return (
+    a.kind === ts.SyntaxKind.NullKeyword ||
+    (ts.isIdentifier(a) && a.text === "undefined") ||
+    ts.isVoidExpression(a)
+  )
+}
+
+const isEffectiveEpoch = (n: ts.Expression | undefined) => {
+  if (callOf(n, "heldEpoch")) return true
+  if (!callOf(n, "effectiveEpoch")) return false
+  return !noHeld((stripped(n!) as ts.CallExpression).arguments[1])
+}
 
 const propName = (n: ts.ObjectLiteralElementLike) =>
   n.name !== undefined && ts.isIdentifier(n.name) ? n.name.text : undefined
@@ -300,6 +315,7 @@ declare var Map: new <K, V>(entries?: [K, V][]) => Map<K, V>
 interface Row { key: string; version: number; versionEpoch?: string | null; values: { [k: string]: unknown } }
 interface Entry { row: Row | undefined; versionEpoch: string | null; lazyEpochs: Map<string, string | null> }
 declare function effectiveEpoch(a: string | null | undefined, b: string | null | undefined): string | null
+declare function heldEpoch(a: string | null | undefined): string | null
 declare function mergeVersioned(a: Row | undefined, b: Row): Row | undefined
 declare const e: Entry
 declare const row: Row
@@ -327,13 +343,33 @@ const forms = (s: Scan) => s.violations.map((v) => v.split(" ")[1])
 
 const GOOD_ROW = "e.row = mergeVersioned(e.row, row)"
 const ENTRY = (row: string, lazy: string) =>
-  `const x: Entry = { row: ${row}, versionEpoch: effectiveEpoch(null, null), lazyEpochs: ${lazy} }; rows.get(x.row?.key ?? f)`
+  `const x: Entry = { row: ${row}, versionEpoch: heldEpoch(e.versionEpoch), lazyEpochs: ${lazy} }; rows.get(x.row?.key ?? f)`
 
 const CASES: { form: Form; bad: string; good: string }[] = [
   {
     form: "epoch-property",
     bad: `e.row = { key: "k", version: 1, versionEpoch: "x", values: {} }`,
-    good: `e.row = { key: "k", version: 1, versionEpoch: effectiveEpoch("x", null), values: {} }`,
+    good: `e.row = { key: "k", version: 1, versionEpoch: effectiveEpoch("x", e.versionEpoch), values: {} }`,
+  },
+  {
+    form: "epoch-property",
+    bad: `e.row = { ...row, versionEpoch: effectiveEpoch(row.versionEpoch, null) }`,
+    good: `e.row = { ...row, versionEpoch: heldEpoch(e.versionEpoch) }`,
+  },
+  {
+    form: "epoch-property",
+    bad: `e.row = { ...row, versionEpoch: effectiveEpoch(row.versionEpoch, undefined) }`,
+    good: `e.row = { ...row, versionEpoch: effectiveEpoch(row.versionEpoch, e.versionEpoch) }`,
+  },
+  {
+    form: "epoch-assignment",
+    bad: `e.versionEpoch = effectiveEpoch(row.versionEpoch, null)`,
+    good: `e.versionEpoch = heldEpoch(e.versionEpoch)`,
+  },
+  {
+    form: "lazy-set",
+    bad: `e.lazyEpochs.set(f, effectiveEpoch(row.versionEpoch, null))`,
+    good: `e.lazyEpochs.set(f, effectiveEpoch(row.versionEpoch, e.lazyEpochs.get(f)))`,
   },
   {
     form: "epoch-shorthand",
@@ -380,7 +416,7 @@ const CASES: { form: Form; bad: string; good: string }[] = [
   {
     form: "row-value",
     bad: `rows.set(f, row)`,
-    good: `rows.set(f, { ...row, versionEpoch: effectiveEpoch(row.versionEpoch, null) })`,
+    good: `rows.set(f, { ...row, versionEpoch: effectiveEpoch(row.versionEpoch, e.versionEpoch) })`,
   },
   {
     form: "row-spread",

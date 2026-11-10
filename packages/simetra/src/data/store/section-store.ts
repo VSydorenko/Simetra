@@ -1,4 +1,10 @@
-import { differentEpochs, effectiveEpoch, keyId, pairId } from "./epoch"
+import {
+  differentEpochs,
+  effectiveEpoch,
+  heldEpoch,
+  keyId,
+  pairId,
+} from "./epoch"
 import type { RowEntry } from "./object-store"
 import type { ObjectStore } from "./object-store"
 import type { Scope, Session } from "./session"
@@ -201,7 +207,7 @@ export function createSectionStore(options: {
           return "rejected"
         sections.set(section, {
           ...e,
-          versionEpoch: effectiveEpoch(e.versionEpoch, null),
+          versionEpoch: heldEpoch(e.versionEpoch),
           staleEpoch: true,
         })
         return "stale"
