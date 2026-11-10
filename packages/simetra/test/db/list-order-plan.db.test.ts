@@ -22,7 +22,7 @@ import {
 } from "../../src/compiler/__tests__/fixtures/rights"
 import { fieldInfoOf, nullableOf } from "../../src/data/store/filter"
 import { buildRuntimeCatalog } from "../../src/compiler/runtime-catalog"
-import { prepareRead } from "../../src/server/read"
+import { prepareRead, renderKnown } from "../../src/server/read"
 import { signUp } from "./auth"
 import { queryAs, runTag } from "./connection"
 import { type PlanNode, planNodes, scansOf, sortsOver } from "./explain-plan"
@@ -382,7 +382,7 @@ describe("list order plans under RLS", () => {
     })
     if ("error" in prepared)
       throw new Error(`prepareRead refused: ${JSON.stringify(prepared.error)}`)
-    return prepared.plan.statement
+    return renderKnown(prepared.plan, null)
   }
 
   /** План `EXPLAIN (ANALYZE, FORMAT JSON)` від імені `user`; другий прогін — прогрітий. */
