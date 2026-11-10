@@ -395,6 +395,13 @@
   не відхиляє `export default patchRows` чи `export const alias = removeKeys`
   у самому `writer.ts`: так внутрішня функція вийшла б з модуля в обхід
   шлюзу епохи `Writer.apply`. Додати негативні кейси на такий експорт.
+- **Гард епохи довіряє `heldEpoch` за назвою.** Тест
+  `packages/simetra/src/data/store/__tests__/epoch-write-guard.test.ts`
+  приймає `heldEpoch(…)` як законну копію власної епохи запису, тож
+  `versionEpoch: heldEpoch(row.versionEpoch)` над вхідним рядком пройшов би
+  гард, хоч скидає утримувану епоху. Зараз усі виклики копіюють епоху запису
+  чи пам'яті. Обмежити аргумент `heldEpoch` записом чи пам'яттю, яку
+  копіюють, або перелічити дозволені місця виклику.
 - **Модельний тест ядра без історії на епоху.** Фейк модельного тесту B3-2
   (`packages/simetra/src/data/store/__tests__/model.test.ts` над
   `packages/simetra/src/data/store/testing/fake-source.ts`) має одну історію
