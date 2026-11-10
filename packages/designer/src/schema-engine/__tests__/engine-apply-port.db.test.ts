@@ -10,6 +10,7 @@ import {
   leftoverShadows,
   provisionedShadows,
 } from "../../__tests__/support/shadows"
+import { testProvider } from "../../../../simetra/test/support"
 
 /**
  * Порт `SchemaEngine` для застосування: межа сегмента,
@@ -18,7 +19,7 @@ import {
  */
 
 const engine = createPgDeltaEngine()
-const scope: EngineScope = { schemas: ["app"], provider: "supabase" }
+const scope: EngineScope = { schemas: ["app"], provider: testProvider() }
 
 /** План «ціль → бажане» над окремою ціллю з `targetSql`. */
 function planOf(targetSql: string, desiredSql: string): Promise<EnginePlan> {
@@ -155,28 +156,6 @@ describe("SchemaEngine apply port", () => {
     expect(drop.lockClass).toBe("accessExclusive")
     expect(drop.lockedTables).toEqual([])
     expect(actionMatching(plan, /ADD CONSTRAINT/i).lockedTables).toEqual([])
-  })
-
-  it("does not report a foreign table as a locked table", async () => {
-    // Дія над колонкою сторонньої таблиці не несе батька `foreignTable:`, а
-    // `LOCK TABLE` на сторонній таблиці дає 42809
-    const fdw = [
-      "create extension if not exists postgres_fdw with schema extensions;",
-      "create server app_srv foreign data wrapper postgres_fdw",
-      "  options (host 'localhost', dbname 'none');",
-      "create schema app;",
-    ].join("\n")
-    const plan = await planOf(
-      `${fdw}\ncreate foreign table app.ft (x int default 1, y int not null) server app_srv;`,
-      `${fdw}\ncreate foreign table app.ft (x int default 2, y int) server app_srv;`
-    )
-    const setDefault = actionMatching(plan, /SET DEFAULT/i)
-    expect(setDefault.consumes).toEqual(["default:app.ft.x"])
-    expect(setDefault.lockClass).toBe("accessExclusive")
-    expect(setDefault.lockedTables).toEqual([])
-    const dropNotNull = actionMatching(plan, /DROP NOT NULL/i)
-    expect(dropNotNull.consumes).toEqual(["column:app.ft.y"])
-    expect(dropNotNull.lockedTables).toEqual([])
   })
 
   it("does not lock a table the plan creates", async () => {

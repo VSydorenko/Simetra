@@ -9,12 +9,15 @@ import { asSuperuser, query } from "../../__tests__/support/db"
 import {
   changedBy,
   defaultPrivilegesSection,
+  ANON,
   FIXTURE,
   inTarget,
+  OWNER,
   read,
   ROLE,
   scope,
   useFingerprintRole,
+  USER,
 } from "./fingerprint.support"
 
 /**
@@ -55,12 +58,6 @@ describe("readFingerprint", () => {
   // Четвертий елемент — підготовка поверх FIXTURE до першого читання
   it.each<[string, string, FingerprintSection, string?]>([
     ["comment on table", "comment on table app.t is 'x'", "comments"],
-    // Провайдер міток на стеку — `pgsodium` у `shared_preload_libraries`
-    [
-      "security label",
-      "security label for pgsodium on column app.t.name is 'ENCRYPT WITH KEY ID 00000000-0000-0000-0000-000000000000'",
-      "comments",
-    ],
     [
       "comment on rule",
       "comment on rule fr on app.t is 'x'",
@@ -119,10 +116,10 @@ describe("readFingerprint", () => {
       "alter table app.t force row level security",
       "relations",
     ],
-    ["grant to anon", "grant select on app.t to anon", "acl"],
+    ["grant to anon", `grant select on app.t to ${ANON}`, "acl"],
     [
       "create policy",
-      "create policy p2 on app.t for insert to authenticated with check (true)",
+      `create policy p2 on app.t for insert to ${USER} with check (true)`,
       "policies",
     ],
     [
@@ -145,7 +142,7 @@ describe("readFingerprint", () => {
     ["enum value", "alter type app.mood add value 'b'", "types"],
     [
       "default privileges",
-      "alter default privileges in schema app grant select on tables to anon",
+      `alter default privileges in schema app grant select on tables to ${ANON}`,
       "defaultPrivileges",
     ],
   ])("section per mutation: %s", async (_name, sql, section, setup) => {
@@ -163,7 +160,7 @@ describe("readFingerprint", () => {
       // ALL» він не бачить, а відбиток без нормалізації бачив би
       expect(
         await section(
-          "alter default privileges for role postgres in schema app grant all on tables to postgres"
+          `alter default privileges for role ${OWNER} in schema app grant all on tables to ${OWNER}`
         )
       ).toBe(await section("select 1"))
     })
@@ -171,7 +168,7 @@ describe("readFingerprint", () => {
     it("keeps a real schema default privilege", async () => {
       expect(
         await section(
-          "alter default privileges for role postgres in schema app grant select on tables to anon"
+          `alter default privileges for role ${OWNER} in schema app grant select on tables to ${ANON}`
         )
       ).not.toBe(await section("select 1"))
     })
@@ -180,7 +177,7 @@ describe("readFingerprint", () => {
       // `WITH GRANT OPTION` — відхилення від `acldefault`, хоч роль і та сама
       expect(
         await section(
-          "alter default privileges for role postgres in schema app grant all on tables to postgres with grant option"
+          `alter default privileges for role ${OWNER} in schema app grant all on tables to ${OWNER} with grant option`
         )
       ).not.toBe(await section("select 1"))
     })
@@ -189,7 +186,7 @@ describe("readFingerprint", () => {
       // `EXECUTE` для `PUBLIC` на функціях — вбудований типовий стан
       expect(
         await section(
-          "alter default privileges for role postgres in schema app grant execute on functions to public"
+          `alter default privileges for role ${OWNER} in schema app grant execute on functions to public`
         )
       ).toBe(await section("select 1"))
     })

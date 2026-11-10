@@ -77,7 +77,7 @@ export {
 } from "../src/server/__tests__/fake-database"
 export { planNodes } from "./db/explain-plan"
 export { authLoginRole, signUp } from "./db/auth"
-export { insertOrphan } from "./db/rights-seed"
+export { insertOrphan, profileLayer } from "./db/rights-seed"
 export * from "./db/connection"
 export { devSecret, LOGIN_SECRETS_FILE, testProvider } from "./db/profile"
 export * from "./db/postgres-cluster"

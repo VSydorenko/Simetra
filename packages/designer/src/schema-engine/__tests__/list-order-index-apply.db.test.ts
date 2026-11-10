@@ -3,6 +3,7 @@ import { executePlan, readFingerprint, type EngineScope } from "simetra/schema"
 import { canonicalSnapshot } from "simetra/compiler"
 import { createApplyDatabase } from ".."
 import { asSuperuser, query } from "../../__tests__/support/db"
+import { testProvider } from "../../../../simetra/test/support"
 import {
   compiled,
   EMPTY,
@@ -45,7 +46,7 @@ const indexDefs = async (url: string): Promise<string[]> =>
 
 const markerScope: EngineScope = {
   schemas: ["app", "simetra"],
-  provider: "supabase",
+  provider: testProvider(),
 }
 
 /**

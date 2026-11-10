@@ -13,6 +13,7 @@ import {
   customTable,
   metaFiles,
   project,
+  testProvider,
 } from "../../../../simetra/test/support"
 import { leftoverShadows } from "../../__tests__/support/shadows"
 import { scopeOf } from "./fixtures/engine-boundary"
@@ -34,7 +35,7 @@ describe("compareWithDesired", () => {
       engine,
       { target: stack },
       "create schema app; create table app.t (id int primary key);",
-      scopeOf("app"),
+      scopeOf("app", testProvider()),
       []
     )
     expect(ok.status).toBe("compared")
@@ -44,7 +45,7 @@ describe("compareWithDesired", () => {
       engine,
       { target: stack },
       "create table app.nowhere (id int);",
-      scopeOf("app"),
+      scopeOf("app", testProvider()),
       []
     )
     expect(failed.status).toBe("shadow-failed")
@@ -56,7 +57,7 @@ describe("compareWithDesired", () => {
       engine,
       { target: stack },
       "create schema app; create table app.t (id int references app.missing (id));",
-      scopeOf("app"),
+      scopeOf("app", testProvider()),
       []
     )
     expect(result.status).toBe("shadow-failed")
@@ -77,7 +78,10 @@ describe("compareWithDesired", () => {
     // мусить бачити той самий обмеження, а не хибну зміну виразу
     const compiled = await compile(
       metaFiles({
-        "project.meta.json": project({ defaultSchema: "app" }),
+        "project.meta.json": project({
+          defaultSchema: "app",
+          database: { provider: testProvider() },
+        }),
         "catalogs/Party/Party.meta.json": catalog("Party", {
           schema: "app",
           attributes: [
@@ -122,7 +126,9 @@ describe("compareWithDesired", () => {
     // послідовність версій рядків видається завжди й лежить у `simetra`
     const compiled = await compile(
       metaFiles({
-        "project.meta.json": project(),
+        "project.meta.json": project({
+          database: { provider: testProvider() },
+        }),
         "custom-tables/Party/Party.meta.json": customTable("Party"),
       })
     )
@@ -137,49 +143,13 @@ describe("compareWithDesired", () => {
       engine,
       { target: stack },
       "select 1;",
-      scopeOf("app"),
+      scopeOf("app", testProvider()),
       []
     )
     expect(result.status).toBe("compared")
     if (result.status !== "compared") return
     expect(result.differences).toEqual([])
     expect(result.empty).toBe(true)
-  })
-
-  it("objects outside the boundary make the comparison non-empty", async () => {
-    // Фільтр двигуна виключає таблицю в `auth` і з цілі, і з тіні: план і
-    // моделі порожні, і лише діагностика межі не дає назвати звірку рівною
-    const compiled = await compile(
-      metaFiles({
-        "project.meta.json": project({ defaultSchema: "app" }),
-        "custom-tables/Profile/Profile.meta.json": customTable("Profile", {
-          schema: "auth",
-        }),
-      })
-    )
-    const model = compiled.model!
-    const { scope: modelScope, diagnostics } = await engineScope(model)
-    expect(diagnostics.map((d) => d.code)).toEqual(["engine.out-of-scope"])
-    // Цілі стеку платформної послідовності не дають, а звірка тут не про неї:
-    // межа лишає тільки `app`, щоб єдиною підставою для «не рівно» була
-    // таблиця в `auth`
-    const scope = {
-      ...modelScope,
-      schemas: modelScope.schemas.filter((schema) => schema !== "simetra"),
-    }
-    const result = await compareWithDesired(
-      engine,
-      { target: stack },
-      renderDesiredState(model).sql,
-      scope,
-      diagnostics
-    )
-    expect(result.status).toBe("compared")
-    if (result.status !== "compared") return
-    expect(result.plan.empty).toBe(true)
-    expect(result.differences).toEqual([])
-    expect(result.diagnostics).toContainEqual(diagnostics[0])
-    expect(result.empty).toBe(false)
   })
 
   it("the engine's unmodeled kind is not repeated for a class the census names", async () => {
@@ -189,7 +159,7 @@ describe("compareWithDesired", () => {
       `create schema app;
        create type app.pair as (a int, b int);
        create cast (app.pair as text) with inout;`,
-      scopeOf("app"),
+      scopeOf("app", testProvider()),
       []
     )
     expect(result.status).toBe("compared")

@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync } from "node:fs"
 import { join, relative, sep } from "node:path"
 import { fileURLToPath } from "node:url"
+import type { DatabaseProvider } from "simetra/model"
 
 /** Тека `metadata/` референсного домену (спека П2 §10.1). */
 export const REFERENCE_METADATA = fileURLToPath(
@@ -10,9 +11,13 @@ export const REFERENCE_METADATA = fileURLToPath(
 /**
  * Читає домен із диска в мапу «шлях відносно `metadata/` → вміст»: компілятор
  * чистий, читання файлів — справа того, хто його викликає. Спільне для
- * юніт- і DB-тестів, щоб обидва бачили той самий набір файлів.
+ * юніт- і DB-тестів, щоб обидва бачили той самий набір файлів. Домен лежить
+ * на диску з провайдером `supabase`; DB-тест передає профіль прогону, і той
+ * підставляється в проєкт (без аргументу домен читається як є).
  */
-export function readReferenceDomain(): Map<string, string> {
+export function readReferenceDomain(
+  provider?: DatabaseProvider
+): Map<string, string> {
   const files = new Map<string, string>()
   for (const entry of readdirSync(REFERENCE_METADATA, {
     recursive: true,
@@ -22,6 +27,13 @@ export function readReferenceDomain(): Map<string, string> {
     const full = join(entry.parentPath, entry.name)
     const path = relative(REFERENCE_METADATA, full).split(sep).join("/")
     files.set(path, readFileSync(full, "utf8"))
+  }
+  if (provider !== undefined) {
+    const project = JSON.parse(files.get("project.meta.json")!) as {
+      database: { provider: string }
+    }
+    project.database.provider = provider
+    files.set("project.meta.json", JSON.stringify(project))
   }
   return files
 }

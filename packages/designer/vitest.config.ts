@@ -3,7 +3,18 @@ import { defineConfig } from "vitest/config"
 // DB-файли, уже перенесені на стек postgres (план ПГ-2b, Р6): `db-pg` їх
 // бере, а `db`, ще на Supabase, виключає тим самим комітом — кейс під час
 // переносу не губиться й не задвоюється
-export const ON_POSTGRES: string[] = []
+export const ON_POSTGRES: string[] = [
+  // Корпус рушія (задача 10)
+  "src/schema-engine/__tests__/promotion-equivalence.db.test.ts",
+  "src/schema-engine/__tests__/fingerprint-coverage.db.test.ts",
+  "src/schema-engine/__tests__/engine-scope.db.test.ts",
+  "src/schema-engine/__tests__/engine-apply-port.db.test.ts",
+  "src/schema-engine/__tests__/savepoint-extract.db.test.ts",
+  "src/schema-engine/__tests__/read-only.db.test.ts",
+  "src/schema-engine/__tests__/function-checks.db.test.ts",
+  "src/schema-engine/__tests__/fingerprint.db.test.ts",
+  "src/schema-engine/__tests__/apply-database.db.test.ts",
+]
 
 export default defineConfig({
   test: {

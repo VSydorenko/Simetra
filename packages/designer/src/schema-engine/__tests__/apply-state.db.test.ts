@@ -31,6 +31,7 @@ import {
   metaFiles,
   project,
   testDatabaseUrl,
+  testProvider,
 } from "../../../../simetra/test/support"
 import { inTarget } from "../../__tests__/support/db"
 
@@ -46,7 +47,7 @@ const stack = { url: testDatabaseUrl() }
 async function partyModel(): Promise<CompiledModel> {
   const compiled = await compile(
     metaFiles({
-      "project.meta.json": project(),
+      "project.meta.json": project({ database: { provider: testProvider() } }),
       "catalogs/Party/Party.meta.json": catalog("Party"),
     })
   )
@@ -93,7 +94,7 @@ const record: ApplyRecord = {
   fromHash: null,
   toHash: "t".repeat(64),
   snapshot: { tables: [{ schema: "app", name: "party" }] },
-  scope: { schemas: ["app", "simetra"], provider: "supabase" },
+  scope: { schemas: ["app", "simetra"], provider: testProvider() },
   catalog: {
     tables: [],
     enumTypes: [],
@@ -184,7 +185,7 @@ describe("readApplyState", () => {
     const outcome = await engine.withDesiredShadow(
       { target: stack },
       "create schema app;",
-      { schemas: ["app"], provider: "supabase" },
+      { schemas: ["app"], provider: testProvider() },
       (target) => read(target.url)
     )
     expect(outcome.status).toBe("loaded")
@@ -339,7 +340,7 @@ describe("readLedgerHead", () => {
     const outcome = await engine.withDesiredShadow(
       { target: stack },
       "create schema app;",
-      { schemas: ["app"], provider: "supabase" },
+      { schemas: ["app"], provider: testProvider() },
       (target) => head(target.url)
     )
     expect(outcome).toMatchObject({ status: "loaded", value: null })
@@ -376,7 +377,7 @@ describe("readAppliedPromotions", () => {
     const outcome = await engine.withDesiredShadow(
       { target: stack },
       "create schema app;",
-      { schemas: ["app"], provider: "supabase" },
+      { schemas: ["app"], provider: testProvider() },
       (target) => promotions(target.url)
     )
     expect(outcome.status).toBe("loaded")

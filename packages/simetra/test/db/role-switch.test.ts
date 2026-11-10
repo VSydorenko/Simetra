@@ -209,18 +209,6 @@ const POSTGRES_LITERAL_EXCEPTIONS: Exception[] = [
   ...(
     [
       [
-        "packages/designer/src/schema-engine/__tests__/engine-census.db.test.ts",
-        10,
-      ],
-      [
-        "packages/designer/src/schema-engine/__tests__/engine-extract.db.test.ts",
-        10,
-      ],
-      [
-        "packages/designer/src/schema-engine/__tests__/fingerprint.db.test.ts",
-        10,
-      ],
-      [
         "packages/designer/src/schema-engine/__tests__/build-plan.db.test.ts",
         11,
       ],

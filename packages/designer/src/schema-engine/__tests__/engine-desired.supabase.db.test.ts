@@ -154,4 +154,42 @@ describe("compareWithDesired", () => {
     expect(result.plan.empty).toBe(true)
     expect(result.empty).toBe(true)
   })
+
+  // Схему провайдера, у якій власник цілі може створити таблицю, має лише
+  // Supabase; на postgres власник у `extensions` і `better_auth` не пише
+  it("objects outside the boundary make the comparison non-empty", async () => {
+    // Фільтр двигуна виключає таблицю в `auth` і з цілі, і з тіні: план і
+    // моделі порожні, і лише діагностика межі не дає назвати звірку рівною
+    const compiled = await compile(
+      metaFiles({
+        "project.meta.json": project({ defaultSchema: "app" }),
+        "custom-tables/Profile/Profile.meta.json": customTable("Profile", {
+          schema: "auth",
+        }),
+      })
+    )
+    const model = compiled.model!
+    const { scope: modelScope, diagnostics } = await engineScope(model)
+    expect(diagnostics.map((d) => d.code)).toEqual(["engine.out-of-scope"])
+    // Цілі стеку платформної послідовності не дають, а звірка тут не про неї:
+    // межа лишає тільки `app`, щоб єдиною підставою для «не рівно» була
+    // таблиця в `auth`
+    const scope = {
+      ...modelScope,
+      schemas: modelScope.schemas.filter((schema) => schema !== "simetra"),
+    }
+    const result = await compareWithDesired(
+      engine,
+      { target: stack },
+      renderDesiredState(model).sql,
+      scope,
+      diagnostics
+    )
+    expect(result.status).toBe("compared")
+    if (result.status !== "compared") return
+    expect(result.plan.empty).toBe(true)
+    expect(result.differences).toEqual([])
+    expect(result.diagnostics).toContainEqual(diagnostics[0])
+    expect(result.empty).toBe(false)
+  })
 })

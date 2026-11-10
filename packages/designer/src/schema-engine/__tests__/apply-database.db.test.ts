@@ -5,7 +5,8 @@ import {
   type EngineScope,
 } from "simetra/schema"
 import { createApplyDatabase } from ".."
-import { inTarget, query } from "../../__tests__/support/db"
+import { asSuperuser, inTarget, query } from "../../__tests__/support/db"
+import { testProvider } from "../../../../simetra/test/support"
 
 /**
  * Порт виконання застосування. Ціль кожного тесту —
@@ -13,7 +14,7 @@ import { inTarget, query } from "../../__tests__/support/db"
  */
 
 const APP = "create schema app;"
-const scope: EngineScope = { schemas: ["app"], provider: "supabase" }
+const scope: EngineScope = { schemas: ["app"], provider: testProvider() }
 
 const tableExists = async (url: string): Promise<boolean> =>
   (await query(url, "select to_regclass('app.x') as t"))[0]?.["t"] !== null
@@ -163,7 +164,12 @@ describe("ApplyDatabase (pg)", () => {
           const pid = (
             await tx.query<{ pid: number }>("select pg_backend_pid() as pid")
           )[0]?.pid
-          await query(url, `select pg_terminate_backend(${String(pid)})`)
+          // Від суперкористувача: на стеку postgres тест входить роллю власника, а
+          // обрив бекенда іншої сесії дозволений лише її ролі чи суперкористувачу
+          await query(
+            asSuperuser(url),
+            `select pg_terminate_backend(${String(pid)})`
+          )
           await tx.query("select 1")
         })
         .catch((e: unknown) => e)

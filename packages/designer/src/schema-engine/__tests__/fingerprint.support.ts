@@ -6,8 +6,11 @@ import {
   type EngineScope,
   type FingerprintSection,
 } from "simetra/schema"
+import { PROVIDER_OWNER_ROLES } from "simetra/model"
 import { createApplyDatabase } from ".."
 import {
+  testProvider,
+  testRoleFor,
   testRoleName,
   testSuperuserUrl,
 } from "../../../../simetra/test/support"
@@ -25,16 +28,20 @@ import {
  * прибирає суперкористувач стеку.
  */
 
-export const scope: EngineScope = { schemas: ["app"], provider: "supabase" }
+export const scope: EngineScope = { schemas: ["app"], provider: testProvider() }
 export const ROLE = testRoleName("fingerprint_owner")
+/** Ролі профілю в SQL відбитка: власник цілі й ролі API (user, anonymous). */
+export const OWNER = PROVIDER_OWNER_ROLES[testProvider()]
+export const USER = testRoleFor("user")
+export const ANON = testRoleFor("anonymous")
 
 /** Базовий стан цілі: таблиця, функція, політика, грант. */
 export const FIXTURE = `
   create type app.mood as enum ('a');
   create table app.t (id int primary key, name text);
   create function app.f() returns int language sql as $$ select 1 $$;
-  create policy p on app.t for select to authenticated using (true);
-  grant select on app.t to authenticated;
+  create policy p on app.t for select to ${USER} using (true);
+  grant select on app.t to ${USER};
   grant create on schema app to ${ROLE};
 `
 
@@ -47,7 +54,7 @@ export function useFingerprintRole(): void {
   beforeAll(() =>
     query(
       testSuperuserUrl(),
-      `create role ${ROLE} nologin; grant ${ROLE} to postgres;`
+      `create role ${ROLE} nologin; grant ${ROLE} to ${OWNER};`
     )
   )
   afterAll(() => dropRoles(ROLE))

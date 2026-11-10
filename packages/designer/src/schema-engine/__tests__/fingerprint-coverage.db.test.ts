@@ -2,9 +2,15 @@ import pg from "pg"
 import { describe, expect, it } from "vitest"
 import type { EngineScope } from "simetra/schema"
 import { createPgDeltaEngine } from ".."
+import { asSuperuser, query } from "../../__tests__/support/db"
 import { engineFacts } from "../pg-delta/adapter"
 import { coverageGaps } from "../pg-delta/fingerprint-coverage"
-import { testDatabaseUrl } from "../../../../simetra/test/support"
+import {
+  testDatabaseUrl,
+  testProvider,
+  testRoleFor,
+} from "../../../../simetra/test/support"
+import { PROVIDER_OWNER_ROLES } from "simetra/model"
 
 /**
  * Контракт покриття відбитка (платформна спека §6.2): кожне поле моделі
@@ -15,7 +21,33 @@ import { testDatabaseUrl } from "../../../../simetra/test/support"
 
 const engine = createPgDeltaEngine()
 const stack = { url: testDatabaseUrl() }
-const scope: EngineScope = { schemas: ["app"], provider: "supabase" }
+const scope: EngineScope = { schemas: ["app"], provider: testProvider() }
+// Ролі API профілю: на postgres це `simetra_user`/`simetra_anon`
+const USER = testRoleFor("user")
+const ANON = testRoleFor("anonymous")
+const OWNER = PROVIDER_OWNER_ROLES[testProvider()]
+
+// Постачальник міток безпеки `pgsodium` є лише на стеку Supabase: на postgres
+// мітки не завантажено, і кожен інший постачальник вимагав би розширення, якого
+// там немає
+const SECURITY_LABEL =
+  testProvider() === "supabase"
+    ? "security label for pgsodium on column app.u.c is 'ENCRYPT WITH KEY ID 00000000-0000-0000-0000-000000000000';"
+    : ""
+
+// Лише суперкористувач створює публікацію `FOR TABLES IN SCHEMA`, розширення
+// `postgres_fdw` і сервер обгортки; власник цілі на стеку postgres не
+// суперкористувач. Об'єкти переходять до нього, бо відбиток читає й
+// порівнює власника, а решта каталогу вже його
+const SUPERUSER_CATALOG = `
+  create publication app_pub2 for tables in schema app;
+  create extension if not exists postgres_fdw with schema extensions;
+  create server app_srv foreign data wrapper postgres_fdw options (host 'localhost', dbname 'none');
+  create foreign table app.ft (x int options (column_name 'xx') default 1, y int not null) server app_srv options (table_name 'remote');
+  alter publication app_pub2 owner to ${OWNER};
+  alter server app_srv owner to ${OWNER};
+  alter foreign table app.ft owner to ${OWNER};
+`
 
 const CATALOG = `
   create extension if not exists citext with schema app;
@@ -52,10 +84,9 @@ const CATALOG = `
   create function app.minv(int, int) returns int language sql strict as $$ select $1 - $2 $$;
   create aggregate app.s(int) (sfunc = int4pl, stype = int, initcond = '0', finalfunc = app.ffin, combinefunc = int4pl, msfunc = int4pl, minvfunc = app.minv, mstype = int, minitcond = '0', mfinalfunc = app.ffin, sortop = <, parallel = safe);
   create aggregate app.os(order by int) (sfunc = int4pl, stype = int, initcond = 0);
-  create policy p on app.parent as restrictive for update to authenticated using (true) with check (id > 0);
+  create policy p on app.parent as restrictive for update to ${USER} using (true) with check (id > 0);
   create rule r as on insert to app.u where new.c = 'z' do instead nothing;
   create publication app_pub for table app.parent (id, name) where (id > 0), table app.u with (publish = 'insert');
-  create publication app_pub2 for tables in schema app;
   comment on table app.parent is 'parent';
   comment on column app.parent.name is 'name';
   comment on function app.f(int) is 'f';
@@ -74,19 +105,16 @@ const CATALOG = `
   comment on procedure app.pr(int) is 'pr';
   comment on collation app.co is 'co';
   comment on column app.pair.x is 'px';
-  security label for pgsodium on column app.u.c is 'ENCRYPT WITH KEY ID 00000000-0000-0000-0000-000000000000';
-  grant select on app.parent to anon;
-  grant update (name) on app.parent to authenticated;
-  grant usage on sequence app.seq to anon;
-  grant execute on function app.f(int) to anon;
-  grant usage on type app.mood to anon;
-  grant usage on schema app to anon;
+  ${SECURITY_LABEL}
+  grant select on app.parent to ${ANON};
+  grant update (name) on app.parent to ${USER};
+  grant usage on sequence app.seq to ${ANON};
+  grant execute on function app.f(int) to ${ANON};
+  grant usage on type app.mood to ${ANON};
+  grant usage on schema app to ${ANON};
   revoke execute on function app.trg() from public;
-  alter default privileges in schema app grant select on tables to anon;
-  alter default privileges in schema app grant execute on functions to authenticated;
-  create extension if not exists postgres_fdw with schema extensions;
-  create server app_srv foreign data wrapper postgres_fdw options (host 'localhost', dbname 'none');
-  create foreign table app.ft (x int options (column_name 'xx') default 1, y int not null) server app_srv options (table_name 'remote');
+  alter default privileges in schema app grant select on tables to ${ANON};
+  alter default privileges in schema app grant execute on functions to ${USER};
 `
 
 describe("fingerprint coverage of the engine model", () => {
@@ -103,6 +131,7 @@ describe("fingerprint coverage of the engine model", () => {
         } finally {
           await client.end()
         }
+        await query(asSuperuser(target.url), SUPERUSER_CATALOG)
         return coverageGaps(
           engineFacts((await engine.extract(target, scope)).catalog)
         )
@@ -110,6 +139,11 @@ describe("fingerprint coverage of the engine model", () => {
     )
     if (outcome.status !== "loaded")
       throw new Error(outcome.diagnostics.map((d) => d.message).join("; "))
-    expect(outcome.value).toEqual([])
+    // Мітка безпеки без постачальника не має екземпляра, тож контракт
+    // справедливо називає її види застарілими: це точний очікуваний набір
+    // профілю, а не послаблення
+    expect(outcome.value).toEqual(
+      testProvider() === "supabase" ? [] : ["stale kind securityLabel"]
+    )
   })
 })

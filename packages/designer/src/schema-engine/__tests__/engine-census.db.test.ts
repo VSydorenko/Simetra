@@ -1,4 +1,4 @@
-import { resolveProfile } from "@supabase/pg-delta"
+import { resolveProfile, type Policy } from "@supabase/pg-delta"
 import { resolveView } from "@supabase/pg-delta/policy"
 import pg from "pg"
 import { describe, expect, it } from "vitest"
@@ -8,9 +8,12 @@ import {
   PLATFORM_LOGIN_ROLES,
   PLATFORM_ROLES,
   PROVIDER_API_ROLES,
+  PROVIDER_LOGIN_ROLES,
+  PROVIDER_OWNER_ROLES,
   PROVIDER_SCHEMAS,
 } from "simetra/model"
 import {
+  PROVIDER_SYSTEM_ROLES,
   renderDesiredState,
   type CensusCount,
   type DbConnection,
@@ -18,7 +21,13 @@ import {
   type Extracted,
 } from "simetra/schema"
 import { createPgDeltaEngine } from ".."
-import { testSuperuserUrl, FIXTURES } from "../../../../simetra/test/support"
+import {
+  FIXTURES,
+  superuserClient,
+  testProvider,
+  testSuperuserUrl,
+  testRoleFor,
+} from "../../../../simetra/test/support"
 import { inTarget } from "../../__tests__/support/db"
 import { readCensus } from "../census-read"
 import { COVERED_CLASSES, factKindOf } from "../pg-delta/census-facts"
@@ -31,7 +40,10 @@ import { scopeProfile } from "../pg-delta/policy"
  */
 
 const engine = createPgDeltaEngine()
-const scope: EngineScope = { schemas: ["app"], provider: "supabase" }
+const scope: EngineScope = { schemas: ["app"], provider: testProvider() }
+// Ролі профілю в SQL корпусу: власник, що створює типові привілеї, і анонімна роль API
+const OWNER = PROVIDER_OWNER_ROLES[testProvider()]
+const ANON = testRoleFor("anonymous")
 
 async function withPool<T>(
   db: DbConnection,
@@ -83,6 +95,10 @@ function errorsOf(extracted: Extracted, code: string) {
 }
 
 /**
+ * Членство таблиці в публікації `supabase_realtime` — частина пресета Supabase;
+ * публікація застосунку була б ще одним видом факту, якого перепис не рахує, тож
+ * цей клас покриває `engine-census.supabase.db.test.ts`.
+ *
  * Об'єкти класів поза моделлю двигуна (casts, text search, statistics —
  * `unmodeled_kind` двигуна; conversion — без жодного сигналу двигуна) поряд
  * із класами, які він моделює.
@@ -119,8 +135,7 @@ create constraint trigger doc_check after insert on app.doc
 create policy doc_read on app.doc for select using (true);
 create rule doc_log as on update to app.doc do also select 1;
 create collation app.ci (provider = icu, locale = 'und-u-ks-level2', deterministic = false);
-alter publication supabase_realtime add table app.doc;
-alter default privileges for role postgres in schema app grant select on tables to anon;
+alter default privileges for role ${OWNER} in schema app grant select on tables to ${ANON};
 create extension citext with schema extensions;
 create function app.pair_text(app.pair) returns text language sql
   as $$ select ($1).a::text $$;
@@ -249,8 +264,7 @@ describe("class census inside the managed boundary", () => {
   it("shell type is counted as its own class", async () => {
     // Shell-тип створює лише суперкористувач: тінь під роллю застосунку його не
     // завантажить, тож перепис перевіряється в транзакції стеку з відкатом
-    const client = new pg.Client({ connectionString: testSuperuserUrl() })
-    await client.connect()
+    const client = await superuserClient()
     try {
       await client.query("begin")
       await client.query("create schema census_shell")
@@ -258,7 +272,7 @@ describe("class census inside the managed boundary", () => {
       expect(
         await readCensus(client, {
           schemas: ["census_shell"],
-          provider: "supabase",
+          provider: testProvider(),
         })
       ).toEqual([{ class: "type.shell", count: 1 }])
     } finally {
@@ -324,7 +338,7 @@ async function fixtureCase(
   const result = await compile(files)
   expect(result.diagnostics.filter((d) => d.severity === "error")).toEqual([])
   const model = result.model!
-  const provider = new Set(PROVIDER_SCHEMAS.supabase)
+  const provider = new Set(PROVIDER_SCHEMAS[testProvider()])
   const schemas = [
     ...new Set([
       ...model.physical.tables.map((t) => t.schema),
@@ -332,7 +346,7 @@ async function fixtureCase(
       ...model.sqlUnits.map((u) => u.schema),
     ]),
   ].filter((s) => s !== "" && !provider.has(s))
-  return [renderDesiredState(model).sql, { schemas, provider: "supabase" }]
+  return [renderDesiredState(model).sql, { schemas, provider: testProvider() }]
 }
 
 /** Керовані факти виду двигуна в тіні, перепис і extract порту тієї ж тіні. */
@@ -351,10 +365,40 @@ async function engineKindsAndCensus(
     ...(await withPool(shadow, async (pool) => {
       const profile = await resolveProfile(pool, scopeProfile(shadowScope))
       const { factBase } = await profile.extract(pool)
+      // Ролі провайдера — інфраструктура кластера, а не бажаного стану: пресет
+      // Supabase виключає їх сам, власний профіль postgres — ні, тож їх
+      // виключає тест: власник, ролі API, ролі входу провайдера й
+      // суперкористувач стека
+      const provider = shadowScope.provider
       const options = profile.planOptions
+      const policy: Policy = {
+        id: "census-roles",
+        extends: options.policy === undefined ? [] : [options.policy],
+        filter: [
+          {
+            match: {
+              all: [
+                { kind: "role" },
+                {
+                  name: [
+                    ...PROVIDER_SYSTEM_ROLES[provider],
+                    PROVIDER_OWNER_ROLES[provider],
+                    ...Object.values(PROVIDER_API_ROLES[provider]).filter(
+                      (role) => role !== null
+                    ),
+                    ...PROVIDER_LOGIN_ROLES[provider],
+                    decodeURIComponent(new URL(testSuperuserUrl()).username),
+                  ],
+                },
+              ],
+            },
+            action: "exclude",
+          },
+        ],
+      }
       const view = resolveView(
         factBase,
-        options.policy,
+        policy,
         options.capability,
         options.baseline
       )
@@ -387,7 +431,7 @@ describe("covered classes match the pinned engine", () => {
     ...FIXTURES.map(
       ([name, fixture]): [string, () => Promise<[string, EngineScope]>] => [
         name,
-        () => fixtureCase(fixture()),
+        () => fixtureCase(fixture(testProvider())),
       ]
     ),
     ["objects of every creatable class", async () => [BROAD_SQL, scope]],

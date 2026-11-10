@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { createPgDeltaEngine } from ".."
-import { testDatabaseUrl } from "../../../../simetra/test/support"
+import { testDatabaseUrl, testProvider } from "../../../../simetra/test/support"
 import { scopeOf } from "./fixtures/engine-boundary"
 
 /**
@@ -15,7 +15,7 @@ const stack = { url: testDatabaseUrl() }
 
 describe("SchemaEngine on pg-delta", () => {
   it("stack database with no managed schemas extracts an empty model", async () => {
-    const extracted = await engine.extract(stack, scopeOf())
+    const extracted = await engine.extract(stack, scopeOf([], testProvider()))
     expect(extracted.model).toEqual({ tables: [], enumTypes: [], units: [] })
   })
 
@@ -30,8 +30,8 @@ describe("SchemaEngine on pg-delta", () => {
     const outcome = await engine.withDesiredShadow(
       { target: stack },
       desired,
-      scopeOf("app"),
-      (shadow) => engine.extract(shadow, scopeOf("app"))
+      scopeOf("app", testProvider()),
+      (shadow) => engine.extract(shadow, scopeOf("app", testProvider()))
     )
     expect(outcome.status).toBe("loaded")
     if (outcome.status !== "loaded") return
@@ -65,7 +65,7 @@ describe("SchemaEngine on pg-delta", () => {
   })
 
   it("self plan is empty", async () => {
-    const scope = scopeOf("app")
+    const scope = scopeOf("app", testProvider())
     const outcome = await engine.withDesiredShadow(
       { target: stack },
       "create schema app; create table app.doc (id int primary key);",
@@ -102,7 +102,7 @@ describe("SchemaEngine on pg-delta", () => {
         create schema app;
         create text search configuration app.simple_ua (copy = simple);
       `,
-      scopeOf("app"),
+      scopeOf("app", testProvider()),
       () => Promise.resolve(null)
     )
     expect(outcome.status).toBe("loaded")
@@ -123,7 +123,7 @@ describe("SchemaEngine on pg-delta", () => {
     const outcome = await engine.withDesiredShadow(
       { target: stack },
       "create schema app; create table app.t (id int references app.missing (id));",
-      scopeOf("app"),
+      scopeOf("app", testProvider()),
       () => Promise.resolve("unreachable")
     )
     expect(outcome.status).toBe("shadow-failed")
@@ -143,7 +143,7 @@ describe("SchemaEngine on pg-delta", () => {
       engine.withDesiredShadow(
         { target: stack },
         "create schema app;",
-        scopeOf("app"),
+        scopeOf("app", testProvider()),
         () => Promise.reject(new Error("callback failed"))
       )
     ).rejects.toThrow("callback failed")

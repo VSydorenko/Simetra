@@ -1,226 +1,38 @@
 import pg from "pg"
-import { afterAll, beforeAll, describe, expect, it } from "vitest"
-import { compile } from "simetra/compiler"
+import { describe, expect, it } from "vitest"
+import { executePlan } from "simetra/schema"
 import {
-  desiredForApply,
-  executePlan,
-  footprintTables,
-  planFootprint,
-  planLocks,
-  planPlatformFunctions,
-  readFingerprint,
-  readLedgerHead,
-  readProviderLocks,
-  readServerFacts,
-  readSessionSearchPath,
-  PROVIDER_LOCKS,
-  tableKey,
-  type ApplyDesired,
-  type CatalogFingerprint,
-  type ExecutablePlan,
-  type ExecuteOptions,
-  type PlanStep,
-  type TableLock,
-} from "simetra/schema"
-import { createApplyDatabase, createPgDeltaEngine } from ".."
-import {
-  catalog,
-  fingerprintAfterSteps,
-  metaFiles,
-  project,
-  testRoleName,
-  testSuperuserUrl,
-  loginUrl,
-} from "../../../../simetra/test/support"
-import {
-  asSuperuser,
-  dropRoles,
-  inTarget as loadTarget,
-  query,
-} from "../../__tests__/support/db"
+  apply,
+  checkFailed,
+  columnsOf,
+  desiredFingerprint,
+  FP,
+  inTarget,
+  NEUTRAL,
+  options,
+  planFor,
+  platformFunctionNames,
+  PREAMBLE,
+  RENAME_A,
+  run,
+  sessionPath,
+  step,
+  STRANGER,
+  TABLE_T,
+  useFunctionChecks,
+} from "./function-checks.support"
+import { query } from "../../__tests__/support/db"
 
 /**
  * Ревалідація тіл функцій раннером на справжній базі (спека промоції
  * §7.2): валідатори мов `sql` і `plpgsql` до кроків і після, під шляхом
  * ревалідації й власними налаштуваннями функції, проти базової лінії в тій
- * самій транзакції. Ціль кожного тесту — окрема база від `withDesiredShadow`,
- * як у `execute-plan.db.test.ts`.
+ * самій транзакції. Спільна підготовка — `function-checks.support.ts`; режими
+ * `plpgsql_check`, що залежать від розширення, якого немає в базі профілю, —
+ * `function-checks.supabase.db.test.ts`.
  */
 
-const engine = createPgDeltaEngine()
-const apply = createApplyDatabase({ readOnly: false })
-const reader = createApplyDatabase({ readOnly: true })
-
-/** Роль-власник, членом якої роль застосування не є. */
-const STRANGER = testRoleName("fncheck_owner")
-
-const PREAMBLE: ExecutablePlan["preamble"] = [
-  { name: "search_path", value: "pg_catalog" },
-  { name: "check_function_bodies", value: "off" },
-]
-
-const options: ExecuteOptions = {
-  mode: "apply",
-  planHash: "c".repeat(64),
-  allow: [],
-  snapshot: { tables: [] },
-  sleep: async () => {},
-}
-
-let desired: ApplyDesired
-/** Функції платформи моделі: їх `plpgsql_check` і перелік сліпих не беруть. */
-let platformFunctions: string[]
-
-beforeAll(async () => {
-  const compiled = await compile(
-    metaFiles({
-      "project.meta.json": project({ defaultSchema: "app" }),
-      "catalogs/Party/Party.meta.json": catalog("Party"),
-    })
-  )
-  expect(compiled.diagnostics).toEqual([])
-  desired = await desiredForApply(compiled.model!)
-  platformFunctions = planPlatformFunctions(compiled.model!)
-  await query(testSuperuserUrl(), `create role ${STRANGER} nologin`)
-})
-afterAll(() => dropRoles(STRANGER))
-
-/**
- * Ціль: бажаний стан моделі, далі `setup` роллю застосування й `superuser`
- * сесією суперкористувача; базу прибирає порт. На відміну від спільного
- * `inTarget`, бажаний стан — модель, а `setup` і `superuser` ідуть окремими
- * запитами по вже завантаженій цілі.
- */
-const inTarget = <T>(
-  setup: string,
-  fn: (url: string) => Promise<T>,
-  superuser?: string
-): Promise<T> =>
-  loadTarget(desired.sql, desired.scope, async (url) => {
-    await query(url, setup)
-    if (superuser !== undefined) await query(asSuperuser(url), superuser)
-    return fn(url)
-  })
-
-const read = (url: string): Promise<CatalogFingerprint> =>
-  reader.transaction({ url }, "rollback", (tx) =>
-    readFingerprint(tx, desired.scope)
-  )
-
-/**
- * Відбиток бажаного стану: кроки в тій самій цілі, у транзакції з відкатом;
- * `bodiesOff` — кроки під вимкненою валідацією тіл, як під преамбулою.
- */
-const desiredFingerprint = (
-  url: string,
-  steps: readonly PlanStep[],
-  o: { bodiesOff?: boolean } = {}
-): Promise<CatalogFingerprint> =>
-  fingerprintAfterSteps(url, desired.scope, steps, o)
-
-function step(id: string, sql: string, over: Partial<PlanStep> = {}): PlanStep {
-  return {
-    id,
-    origin: "engine",
-    sql,
-    verb: "create",
-    class: "catalogOnly",
-    lockClass: "none",
-    transactionality: "transactional",
-    newSegmentBefore: false,
-    lockedTables: [],
-    produces: [],
-    consumes: [],
-    destroys: [],
-    produced: [],
-    destroyed: [],
-    consumed: [],
-    dataLoss: false,
-    rewriteRisk: false,
-    guards: [],
-    ...over,
-  }
-}
-
-const EMPTY_MODEL = { tables: [], enumTypes: [], units: [] }
-
-/** Блокування за слідом кроків без моделей (кроки тут без FK). */
-function locksOf(steps: readonly PlanStep[]): TableLock[] {
-  const footprint = planFootprint(steps, {
-    source: EMPTY_MODEL,
-    desired: EMPTY_MODEL,
-    typeChanges: [],
-    newToOld: new Map(),
-    columnsNewToOld: new Map(),
-    live: [],
-    providerStatements: new Map(),
-    providerLocks: [],
-  })
-  const rights = new Map(
-    footprintTables(footprint).map((t) => [tableKey(t.schema, t.name), true])
-  )
-  return planLocks({ footprint, rights }).locks
-}
-
-const sessionPath = (url: string): Promise<string> =>
-  reader.transaction({ url }, "rollback", readSessionSearchPath)
-
-/** План над живою ціллю; бажаний відбиток — кроки в цій самій цілі. */
-async function planFor(
-  url: string,
-  steps: PlanStep[],
-  over: Partial<ExecutablePlan> = {}
-): Promise<ExecutablePlan> {
-  return {
-    fromHash: null,
-    toHash: "1".repeat(64),
-    scope: desired.scope,
-    engine: engine.identity,
-    steps,
-    requiredPermissions: [],
-    drift: null,
-    role: "postgres",
-    locks: locksOf(steps),
-    implicitLocks: [],
-    providerLocks: await reader.transaction({ url }, "rollback", (tx) =>
-      readProviderLocks(tx, "postgres", PROVIDER_LOCKS.supabase)
-    ),
-    foreignKeys: { subjects: [], live: [] },
-    preamble: [],
-    revalidationSearchPath: await sessionPath(url),
-    // Режим, який план дає на стеку: supautils ставить розширення
-    plpgsqlCheck: "transient",
-    platformFunctions,
-    desiredInvalid: [],
-    promotion: null,
-    environment: { defaultPrivileges: [] },
-    resultCatalog: EMPTY_MODEL,
-    targetFingerprint: await read(url),
-    ...(await reader.transaction({ url }, "rollback", async (tx) => ({
-      server: await readServerFacts(tx),
-      ledgerHead: await readLedgerHead(tx),
-    }))),
-    ...over,
-    desiredFingerprint:
-      over.desiredFingerprint ?? (await desiredFingerprint(url, steps)),
-  }
-}
-
-const TABLE_T = "create table app.t (id int, a text)"
-const NEUTRAL = step("s1", "CREATE TABLE app.n (id int)")
-const RENAME_A = step("s1", "ALTER TABLE app.t RENAME COLUMN a TO b", {
-  verb: "alter",
-  lockClass: "accessExclusive",
-  lockedTables: [{ schema: "app", name: "t" }],
-})
-
-const columnsOf = async (url: string, table: string): Promise<string[]> =>
-  (
-    await query<{ name: string }>(
-      url,
-      `select attname as name from pg_attribute where attrelid = '${table}'::regclass and attnum > 0 and not attisdropped order by attnum`
-    )
-  ).map((r) => r.name)
+useFunctionChecks()
 
 describe("function body revalidation", () => {
   it("refuses a step that breaks a SQL function body", async () => {
@@ -430,7 +242,7 @@ describe("function body revalidation", () => {
     const superuser = `alter function app.fh() owner to ${STRANGER};
       revoke execute on function app.fh() from public;
       alter function simetra.touch() owner to ${STRANGER}`
-    expect(platformFunctions).toContain("simetra.touch()")
+    expect(platformFunctionNames()).toContain("simetra.touch()")
     await inTarget(
       setup,
       async (url) => {
@@ -495,46 +307,6 @@ describe("function body revalidation", () => {
  * розширення в точці збереження, наявне — на місці.
  */
 describe("plpgsql_check", () => {
-  const FP = `${TABLE_T};
-    create function app.fp() returns text language plpgsql as $$ declare r text; begin select a into r from app.t limit 1; return r; end $$`
-
-  /** Прогін `steps` на цілі після `setup`; `fn` бачить результат і базу. */
-  async function run(
-    setup: string,
-    steps: PlanStep[],
-    over: Partial<ExecutablePlan> = {},
-    fn: (
-      outcome: Awaited<ReturnType<typeof executePlan>>,
-      url: string
-    ) => Promise<void> = async () => {},
-    superuser?: string
-  ) {
-    await inTarget(
-      setup,
-      async (url) =>
-        fn(
-          await executePlan(
-            apply,
-            { url },
-            await planFor(url, steps, over),
-            options
-          ),
-          url
-        ),
-      superuser
-    )
-  }
-
-  const checkFailed = (
-    outcome: Awaited<ReturnType<typeof executePlan>>
-  ): string => {
-    expect(outcome).toMatchObject({
-      status: "failed",
-      diagnostics: [{ code: "apply.function-check-failed" }],
-    })
-    return String(outcome.diagnostics[0]!.params.functions)
-  }
-
   it("refuses a step that breaks a plpgsql body", async () => {
     await run(FP, [RENAME_A], {}, async (outcome, url) => {
       expect(checkFailed(outcome)).toContain("app.fp(): 42703")
@@ -615,188 +387,5 @@ describe("plpgsql_check", () => {
       async (outcome) =>
         expect(outcome).toMatchObject({ status: "committed", diagnostics: [] })
     )
-  })
-
-  it("installs the extension only for the check", async () => {
-    const leftover = (url: string) =>
-      query(
-        url,
-        `select
-           exists (select 1 from pg_extension where extname = 'plpgsql_check') as extension,
-           exists (select 1 from pg_namespace where nspname = 'simetra_plpgsql_check') as schema`
-      )
-    await inTarget(FP, async (url) => {
-      // Розширення в цій базі немає, і помилку тіла, якої валідатор мови не
-      // бачить, ловить лише воно: тимчасове встановлення справді відбулося
-      expect(await leftover(url)).toEqual([{ extension: false, schema: false }])
-      const failed = await executePlan(
-        apply,
-        { url },
-        await planFor(url, [RENAME_A]),
-        options
-      )
-      expect(failed).toMatchObject({
-        status: "failed",
-        diagnostics: [{ code: "apply.function-check-failed" }],
-      })
-      expect(String(failed.diagnostics[0]!.params.functions)).toContain(
-        "app.fp(): 42703"
-      )
-      // Та сама база, закомічений прогін: розширення й схема не пережили
-      // своєї точки збереження
-      const committed = await executePlan(
-        apply,
-        { url },
-        await planFor(url, [NEUTRAL]),
-        options
-      )
-      expect(committed).toMatchObject({ status: "committed", diagnostics: [] })
-      expect(await leftover(url)).toEqual([{ extension: false, schema: false }])
-    })
-  })
-
-  it("uses an installed extension in place", async () => {
-    const setup = `${FP};
-      create schema ext;
-      create extension plpgsql_check schema ext`
-    await run(
-      setup,
-      [RENAME_A],
-      { plpgsqlCheck: "installed" },
-      async (outcome, url) => {
-        expect(checkFailed(outcome)).toContain("app.fp(): 42703")
-        expect(
-          await query(
-            url,
-            "select extnamespace::regnamespace::text as schema from pg_extension where extname = 'plpgsql_check'"
-          )
-        ).toEqual([{ schema: "ext" }])
-      }
-    )
-  })
-
-  it("fails when plpgsql_check cannot be taken on the target", async () => {
-    // Ролі `postgres` стеку `USAGE` на будь-яку схему дає членство в
-    // `pg_read_all_data`, тож відібрати його нічим. Тому застосовує інша роль
-    // без членств: розширення стоїть у схемі, якої вона не бачить, а план
-    // «встановлене» обіцяв перевірку; BYPASSRLS — щоб застосування пройшло
-    // гейт власника (`plan.owner-not-bypassrls`) і дійшло до перевірки
-    const NOUSAGE = testRoleName("fncheck_nousage")
-    await query(
-      testSuperuserUrl(),
-      `create role ${NOUSAGE} login bypassrls password 'x'`
-    )
-    try {
-      await inTarget(
-        `${TABLE_T};
-         grant usage, create on schema app to ${NOUSAGE};
-         grant usage on schema simetra to ${NOUSAGE};
-         grant select on all tables in schema simetra to ${NOUSAGE}`,
-        async (url) => {
-          const as = new URL(loginUrl(url, NOUSAGE, "x"))
-          const outcome = await executePlan(
-            apply,
-            { url: as.toString() },
-            await planFor(url, [NEUTRAL], {
-              plpgsqlCheck: "installed",
-              role: NOUSAGE,
-              providerLocks: await reader.transaction(
-                { url: as.toString() },
-                "rollback",
-                (tx) => readProviderLocks(tx, NOUSAGE, PROVIDER_LOCKS.supabase)
-              ),
-            }),
-            options
-          )
-          expect(outcome).toMatchObject({
-            status: "failed",
-            diagnostics: [
-              {
-                code: "apply.plpgsql-check-unavailable",
-                params: { sqlstate: "42501" },
-              },
-            ],
-          })
-          expect(
-            await query(url, "select to_regclass('app.n') is null as absent")
-          ).toEqual([{ absent: true }])
-          // Контроль: з тим самим планом, але з `USAGE` на схему розширення
-          // роль застосовує, тож причина відмови саме в `USAGE`
-          await query(
-            asSuperuser(url),
-            `grant usage on schema simetra_locked_ext to ${NOUSAGE};
-             grant insert, update, delete on all tables in schema simetra to ${NOUSAGE}`
-          )
-          expect(
-            await executePlan(
-              apply,
-              { url: as.toString() },
-              await planFor(url, [NEUTRAL], {
-                plpgsqlCheck: "installed",
-                role: NOUSAGE,
-                providerLocks: await reader.transaction(
-                  { url: as.toString() },
-                  "rollback",
-                  (tx) =>
-                    readProviderLocks(tx, NOUSAGE, PROVIDER_LOCKS.supabase)
-                ),
-              }),
-              options
-            )
-          ).toMatchObject({ status: "committed", diagnostics: [] })
-        },
-        `create schema simetra_locked_ext;
-         create extension plpgsql_check schema simetra_locked_ext`
-      )
-    } finally {
-      await dropRoles(NOUSAGE)
-    }
-  })
-
-  it("refuses when plpgsql_check vanished since the plan", async () => {
-    // План будують, поки розширення стоїть, а до застосування його знято
-    await inTarget(
-      `${TABLE_T};
-       create schema ext;
-       create extension plpgsql_check schema ext`,
-      async (url) => {
-        const plan = await planFor(url, [NEUTRAL], {
-          plpgsqlCheck: "installed",
-        })
-        await query(url, "drop extension plpgsql_check")
-        const outcome = await executePlan(apply, { url }, plan, options)
-        expect(outcome).toMatchObject({
-          status: "refused",
-          diagnostics: [
-            {
-              code: "apply.target-changed",
-              params: { sections: "plpgsqlCheck" },
-            },
-          ],
-        })
-        expect(
-          await query(url, "select to_regclass('app.n') is null as absent")
-        ).toEqual([{ absent: true }])
-      }
-    )
-  })
-
-  it("refuses a taken check schema", async () => {
-    const setup = `${TABLE_T};
-      create schema simetra_plpgsql_check`
-    await run(setup, [NEUTRAL], {}, async (outcome, url) => {
-      expect(outcome).toMatchObject({
-        status: "refused",
-        diagnostics: [
-          {
-            code: "apply.temp-name-taken",
-            params: { name: "simetra_plpgsql_check" },
-          },
-        ],
-      })
-      expect(
-        await query(url, "select to_regclass('app.n') is null as absent")
-      ).toEqual([{ absent: true }])
-    })
   })
 })

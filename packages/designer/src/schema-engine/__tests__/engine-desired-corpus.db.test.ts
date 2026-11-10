@@ -17,6 +17,8 @@ import {
   policyDomain,
   writableRegister,
   writeRoles,
+  testProvider,
+  profileLayer,
 } from "../../../../simetra/test/support"
 
 /**
@@ -104,26 +106,26 @@ function planTargets(result: DesiredComparison & { status: "compared" }) {
 describe("deployed desired state reconciles empty through the port", () => {
   for (const [name, fixture] of FIXTURES) {
     it(name, async () => {
-      await expectDeployedRenderIsEmpty(fixture())
+      await expectDeployedRenderIsEmpty(fixture(testProvider()))
     })
   }
 
   it("reference domain", async () => {
-    await expectDeployedRenderIsEmpty(readReferenceDomain())
+    await expectDeployedRenderIsEmpty(readReferenceDomain(testProvider()))
   })
 
   // Функції й тригери копій носіїв, `WHEN` механіки й підписки з
   // генерованою колонкою (`TaskReport`), `RESTRICTIVE`-межі й
   // `rights_visible_users` проходять туди-назад через двигун
   it("policy domain", async () => {
-    await expectDeployedRenderIsEmpty(policyDomain())
+    await expectDeployedRenderIsEmpty(policyDomain(profileLayer()))
   })
 
   // Функції контексту команди, тригери ефектів з `WHEN` і `RESTRICTIVE`- та
   // `PERMISSIVE`-політики запису ролі команд проходять туди-назад
   it("write policy domain", async () => {
     await expectDeployedRenderIsEmpty(
-      policyDomain(writeRoles(), writableRegister())
+      policyDomain(writeRoles(), writableRegister(), profileLayer())
     )
   })
 })
@@ -132,9 +134,9 @@ describe("a mutated target is never silently empty", () => {
   // Фікстура `CustomTable` має все, що мутують тести: CHECK, частковий
   // індекс, функцію множини скоупу й таблицю з кількома колонками
   let render = ""
-  let scope: EngineScope = { schemas: [], provider: "supabase" }
+  let scope: EngineScope = { schemas: [], provider: testProvider() }
   beforeEach(async () => {
-    const model = await compiled(customTables())
+    const model = await compiled(customTables(testProvider()))
     render = renderDesiredState(model).sql
     scope = (await engineScope(model)).scope
   })
@@ -240,7 +242,7 @@ describe("a mutated target is never silently empty", () => {
 })
 
 describe("materialized view population is compared between the database and the shadow", () => {
-  const scope: EngineScope = { schemas: ["app"], provider: "supabase" }
+  const scope: EngineScope = { schemas: ["app"], provider: testProvider() }
   const view = (populate: "WITH DATA" | "WITH NO DATA") => `
     CREATE SCHEMA app;
     CREATE TABLE app.doc (id int PRIMARY KEY);
