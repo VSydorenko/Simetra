@@ -178,7 +178,7 @@ describe("emitEntityTypes", { timeout: 30_000 }, () => {
         /** Code */
         code: string | null
         /** Description */
-        description: string | null
+        description: string
         /** Deletion mark */
         deletionMark: boolean
         /** Predefined name */
@@ -216,7 +216,7 @@ describe("emitEntityTypes", { timeout: 30_000 }, () => {
         /** Code */
         code: string | null
         /** Description */
-        description: string | null
+        description: string
         /** Deletion mark */
         deletionMark: boolean
         /** Predefined name */
@@ -286,7 +286,7 @@ describe("emitEntityTypes", { timeout: 30_000 }, () => {
         /** Code */
         code: string | null
         /** Description */
-        description: string | null
+        description: string
         /** Deletion mark */
         deletionMark: boolean
         /** Predefined name */
@@ -664,7 +664,7 @@ describe("emitEntityTypes", { timeout: 30_000 }, () => {
         /** Code */
         code: string | null
         /** Description */
-        description: string | null
+        description: string
         /** Deletion mark */
         deletionMark: boolean
         /** Archetype */
@@ -761,7 +761,7 @@ describe("emitEntityTypes", { timeout: 30_000 }, () => {
         /** Code */
         code: string | null
         /** Description */
-        description: string | null
+        description: string
         /** Deletion mark */
         deletion_mark: boolean
         /** Predefined name */
@@ -793,7 +793,7 @@ describe("emitEntityTypes", { timeout: 30_000 }, () => {
         /** Code */
         code: string | null
         /** Description */
-        description: string | null
+        description: string
         /** Deletion mark */
         deletionMark: boolean
         /** Predefined name */

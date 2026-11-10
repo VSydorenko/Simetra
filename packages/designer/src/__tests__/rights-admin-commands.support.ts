@@ -641,7 +641,7 @@ export function commandsCases(
       expect(failed).toHaveLength(1)
       expect(touching(failed, table)).toEqual(failed)
       expect(await rowOf(TICKET_TABLE, ticket)).toMatchObject({
-        description: null,
+        description: "",
       })
       expect(await rowOf("org_role_assignments", grant)).toBe(undefined)
     }
@@ -729,7 +729,7 @@ export function commandsCases(
         "org_member"
       )
       expect(await rowOf("org_member", peer)).toMatchObject({
-        description: null,
+        description: "",
         version,
       })
     })
@@ -864,7 +864,7 @@ export function commandsCases(
         await refusal(rt.run(actor().session, await updateOf(away.ticket)))
       ).toEqual({ code: "command.forbidden", reason: "no-right" })
       expect(await rowOf(TICKET_TABLE, away.ticket)).toMatchObject({
-        description: null,
+        description: "",
       })
     })
   })

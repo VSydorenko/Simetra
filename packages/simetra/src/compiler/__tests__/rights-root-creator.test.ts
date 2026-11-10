@@ -103,10 +103,14 @@ function grantSteps(m: CompiledModel, fullAccess: boolean): Step[] {
     ["user_id", ME],
   ])
   const columns = [...new Set([...forced.keys(), ...member.createKeys])]
+  // Пропущений ключ дає типове значення колонки; єдине таке серед ключів —
+  // найменування (`''`), решта — NULL. Літерал, а не значення з таблиці: тест
+  // має упіймати зміну типового.
+  const absent = (c: string) => (c === "description" ? "''" : "NULL")
   const values = columns.map(
     (c) =>
       forced.get(c) ??
-      `CASE WHEN p_member ? '${c}' THEN v_in.${c} ELSE NULL END`
+      `CASE WHEN p_member ? '${c}' THEN v_in.${c} ELSE ${absent(c)} END`
   )
   const header = (fact: string) =>
     `NOT EXISTS (SELECT 1 FROM simetra.rights_tx_header h WHERE h.xid = txid_current() AND h.fact = '${fact}' AND h.actor = ${ME})`

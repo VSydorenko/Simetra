@@ -259,6 +259,22 @@ function keyShape(
   }
 }
 
+/** Ключ рядка видів: останній у пошуковому індексі порядку списку (Рд43). */
+const ROW_KEY = "id"
+
+/** Простий неунікальний індекс без умови й виразу — єдиний, що може рости. */
+function plainIndex(catalog: CatalogShape, entry: CatalogDiffEntry) {
+  const index = catalog.tables
+    .find((t) => t.name === entry.table)
+    ?.indexes.find((i) => i.name === entry.name)
+  return index !== undefined &&
+    !index.unique &&
+    index.where === undefined &&
+    index.keys.every((key) => "column" in key)
+    ? index
+    : undefined
+}
+
 const sameColumns = (
   a: readonly (string | null)[],
   b: readonly (string | null)[]
@@ -269,7 +285,8 @@ const sameColumns = (
 /**
  * Перевіряє правило паперового тесту (спека П2 §10.2, М4): змін немає, а
  * кожне видалення — простий FK чи індекс посилання, який вид замінює складеним
- * із носієм скоупу першим на тих самих колонках. Для кожного видалення має
+ * із носієм скоупу першим на тих самих колонках, або простий неунікальний
+ * індекс, що отримав ключ рядка останнім. Для кожного видалення має
  * бути рівно одне таке додавання в тій самій таблиці (для FK — і на ту саму
  * ціль із носієм скоупу цілі першим), і жодне додавання не замінює двох
  * видалень. Повертає порушення текстом; порожньо — правило виконане.
@@ -296,7 +313,11 @@ export function scopeReplacementViolations(
         ? keyShape(accepted, entry)
         : undefined
     const carrier = carriers.get(entry.table)
-    if (dropped === undefined || carrier === undefined) {
+    // Ключ рядка останнім не потребує носія скоупу: так росте й індекс
+    // нескоупленої таблиці; носій потрібен лише шляхам FK і скоуп-префікса.
+    const keyLast =
+      entry.class === "index" && plainIndex(accepted, entry) !== undefined
+    if (dropped === undefined || (carrier === undefined && !keyLast)) {
       violations.push(`${label}: not a reference FK or index of a scoped table`)
       continue
     }
@@ -309,7 +330,20 @@ export function scopeReplacementViolations(
       if (add.table !== entry.table) return false
       const added = keyShape(compiled, add)
       if (added === undefined) return false
-      if (!sameColumns(added.columns, [carrier, ...dropped.columns])) {
+      // М4: індекс, що лише отримав ключ рядка останнім, — теж заміна.
+      if (
+        keyLast &&
+        plainIndex(compiled, add) !== undefined &&
+        (sameColumns(added.columns, [...dropped.columns, ROW_KEY]) ||
+          (carrier !== undefined &&
+            sameColumns(added.columns, [carrier, ...dropped.columns, ROW_KEY])))
+      ) {
+        return true
+      }
+      if (
+        carrier === undefined ||
+        !sameColumns(added.columns, [carrier, ...dropped.columns])
+      ) {
         return false
       }
       if (dropped.target === undefined) return added.target === undefined
