@@ -1046,7 +1046,9 @@ describe("startPostgres", () => {
     let listening: number | undefined
     const stack = fakeStack({
       real: (call) => {
-        if (isTerminate(call)) listening = signals.listenerCount("SIGINT")
+        // Після повернення spawnFn: runChild підписується вже після нього
+        if (isTerminate(call))
+          setImmediate(() => (listening = signals.listenerCount("SIGINT")))
         return undefined
       },
     })
