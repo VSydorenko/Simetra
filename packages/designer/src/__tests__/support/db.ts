@@ -216,6 +216,36 @@ export async function withModelTarget<T>(
   })
 }
 
+/**
+ * Runs `fn` on an empty target that can take an identity before anything is
+ * applied to it — for a test that deploys the model itself (`plan` and
+ * `apply` tools): on `postgres` a bare target with the Better Auth identity
+ * (Р17 order); on a profile whose provider gives the identity, the engine
+ * shadow of an empty `public` state.
+ */
+export async function withIdentityTarget<T>(
+  fn: (url: string) => Promise<T>
+): Promise<T> {
+  if (testProvider() !== "postgres")
+    return inTarget(
+      "select 1;",
+      { schemas: ["public"], provider: testProvider() },
+      fn
+    )
+  return withTemplateTarget(async (url) => {
+    await withTargetIdentity(url)
+    return fn(url)
+  })
+}
+
+/**
+ * The URL of the database of `url` for the owner login of the profile
+ * (`testOwnerLoginUrl()`): the migrator whose `session_user` is the owner of
+ * the rights functions, as the rights guard requires (Р16).
+ */
+export const ownerLoginOf = (url: string): string =>
+  withDatabaseName(testOwnerLoginUrl(), databaseOf(url))
+
 /** Drops the given roles, if they exist, as the stack superuser. */
 export async function dropRoles(...names: string[]): Promise<void> {
   for (const name of names)

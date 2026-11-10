@@ -11,7 +11,6 @@ import {
   type RuntimeCatalog,
   type SessionClaims,
 } from "simetra/model"
-import { desiredForApply } from "simetra/schema"
 import {
   createCommandRuntime,
   fromPgPool,
@@ -21,19 +20,22 @@ import {
   type CommandRuntimeOptions,
 } from "simetra/server"
 import {
+  claimsFor,
   GAUGE_TABLE,
   gaugeLineCheckLayer,
   policyDomain,
+  profileLayer,
+  testProvider,
 } from "../../../simetra/test/support"
 import {
   asSuperuser,
   beforeStatement,
   commandRefusal,
   heldResource,
-  inTarget,
   query,
   seedMarker,
   seedRuntimeActor,
+  withModelTarget,
   withRuntimeLogin,
 } from "./support/db"
 
@@ -47,11 +49,11 @@ import {
 
 const GAUGE: MetadataRef = { kind: "Catalog", name: "Gauge" }
 const MODULE_KEY = "Catalog.Gauge"
-const REQUEST_ROLE = readRoleOf("supabase")!
+const REQUEST_ROLE = readRoleOf(testProvider())!
 
 interface Env {
   catalog: RuntimeCatalog
-  /** Тінь від ролі власника таблиць. */
+  /** Ціль від ролі власника таблиць. */
   url: string
   owner: pg.Client
   /** Роль входу з членствами в ролі команд і ролі запиту. */
@@ -65,11 +67,12 @@ const heldEnv = () =>
   heldResource<Env>(async (use) => {
     // `lines.qty` з `nonNegative` — для кейсу CHECK реквізиту ТЧ; решта кейсів
     // пише в `qty` додатні числа.
-    const result = await compile(policyDomain(gaugeLineCheckLayer()))
+    const result = await compile(
+      policyDomain(gaugeLineCheckLayer(), profileLayer())
+    )
     expect(result.diagnostics).toEqual([])
     const model = result.model!
-    const desired = await desiredForApply(model)
-    await inTarget(desired.sql, desired.scope, async (url) => {
+    await withModelTarget(model, async (url) => {
       const owner = new pg.Client({ connectionString: url })
       await owner.connect()
       try {
@@ -88,7 +91,7 @@ const heldEnv = () =>
                 login,
                 pool,
                 org,
-                session: { sub: user, role: REQUEST_ROLE },
+                session: { ...claimsFor("user", user), sub: user },
               })
             } finally {
               await pool.end()

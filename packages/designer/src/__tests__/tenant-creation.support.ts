@@ -19,7 +19,6 @@ import {
   type RuntimeCatalog,
   type SessionClaims,
 } from "simetra/model"
-import { desiredForApply } from "simetra/schema"
 import {
   createCommandRuntime,
   fromPgPool,
@@ -33,22 +32,26 @@ import {
   TENANT_AUDITOR_ID,
   TENANT_OWNER_ID,
   TENANT_READER_ID,
+  claimsFor,
   signUp,
   GLOBAL_FOUNDER_ID,
   TENANT_OPERATOR_ID,
   policyDomain,
+  profileLayer,
   tenantOperator,
   tenantSelfService,
+  testProvider,
 } from "../../../simetra/test/support"
 import {
   commandRefusal as refusal,
+  committed,
   heldResource,
-  inTarget,
   recordingDatabase,
   seedMarker,
   seedUnderMaintenance,
   poolerPoolOf,
   pooledOf,
+  withModelTarget,
   withRuntimeLogin,
 } from "./support/db"
 
@@ -69,7 +72,7 @@ export const ASSIGNMENTS: MetadataRef = {
 }
 export const ORGANIZATION_KEY = "Catalog.Organization"
 export const MEMBER_KEY = "Catalog.OrgMember"
-export const REQUEST_ROLE = readRoleOf("supabase")!
+export const REQUEST_ROLE = readRoleOf(testProvider())!
 
 export interface Env {
   /** Тека метаданих моделі — для інструмента `data-command`. */
@@ -88,65 +91,51 @@ export interface Env {
 }
 
 export const sessionOf = (user: string): SessionClaims => ({
+  ...claimsFor("user", user),
   sub: user,
-  role: REQUEST_ROLE,
 })
 
+/** Ціль моделі без ролі входу рантайму. */
+type Target = Omit<Env, "login" | "direct" | "pooled">
+
+/** Роль входу рантайму цілі та її пули. */
+type Login = Pick<Env, "login" | "direct" | "pooled">
+
 /**
- * Тінь моделі `files` з бажаним станом застосування й marker, засів `seed`
- * (глобальні призначення — у режимі обслуговування) і роль входу форми
- * `simetra_runtime` — напряму, а з `viaPooler` і через пулер: стек без пулера
- * його не має.
+ * Ціль з моделлю `files` (`withModelTarget`) і marker та засів `seed`
+ * (глобальні призначення — у режимі обслуговування), без ролі входу
+ * рантайму: план наступної цілі відмовляє `plan.platform-role-shape`, доки
+ * роль команд має чужого члена, тож роль входу — окремий ресурс (`heldLogin`).
  */
-export const heldEnv = (
+const heldTarget = (
   files: () => Map<string, string>,
-  label: string,
-  seed: (owner: pg.Client) => Promise<Record<string, string>>,
-  viaPooler: boolean
+  seed: (owner: pg.Client) => Promise<Record<string, string>>
 ) =>
-  heldResource<Env>(async (use) => {
+  heldResource<Target>(async (use) => {
     const metadata = files()
     const result = await compile(metadata)
     expect(result.diagnostics).toEqual([])
     const model = result.model!
-    const desired = await desiredForApply(model)
     const dir = join(await mkdtemp(join(tmpdir(), "simetra-tenant-")), "md")
     for (const [path, content] of metadata) {
       await mkdir(dirname(join(dir, path)), { recursive: true })
       await writeFile(join(dir, path), content)
     }
     try {
-      await inTarget(desired.sql, desired.scope, async (url) => {
+      await withModelTarget(model, async (url) => {
         const owner = new pg.Client({ connectionString: url })
         await owner.connect()
         try {
           await seedMarker(owner, model.hash)
           const users = await seed(owner)
-          await withRuntimeLogin(
+          await use({
+            dir,
             url,
-            [PLATFORM_ROLES.command, REQUEST_ROLE],
-            async (login) => {
-              const direct = new pg.Pool({ connectionString: login })
-              const pooled = poolerPoolOf(login, viaPooler)
-              try {
-                await use({
-                  dir,
-                  url,
-                  login,
-                  model,
-                  catalog: buildRuntimeCatalog(model),
-                  owner,
-                  direct,
-                  pooled,
-                  users,
-                })
-              } finally {
-                await direct.end()
-                await pooled?.end()
-              }
-            },
-            label
-          )
+            model,
+            catalog: buildRuntimeCatalog(model),
+            owner,
+            users,
+          })
         } finally {
           await owner.end()
         }
@@ -155,6 +144,32 @@ export const heldEnv = (
       await rm(dirname(dir), { recursive: true, force: true })
     }
   })
+
+/**
+ * Роль входу форми `simetra_runtime` на ціль `url` — напряму, а з
+ * `viaPooler` і через пулер: стек без пулера його не має.
+ */
+const heldLogin = (url: () => string, label: string, viaPooler: boolean) =>
+  heldResource<Login>((use) =>
+    withRuntimeLogin(
+      url(),
+      [PLATFORM_ROLES.command, REQUEST_ROLE],
+      async (login) => {
+        const direct = new pg.Pool({ connectionString: login })
+        let pooled: pg.Pool | null = null
+        try {
+          // Пул пулера — у `try`: якщо він кине, прямий пул однаково
+          // закриється
+          pooled = poolerPoolOf(login, viaPooler)
+          await use({ login, direct, pooled })
+        } finally {
+          await direct.end()
+          await pooled?.end()
+        }
+      },
+      label
+    )
+  )
 
 /** Користувачі з глобальними призначеннями `archetypes` (ім'я → архетип). */
 export async function seedGlobal(
@@ -231,7 +246,17 @@ export const runtime = (
 export const objectOf = (env: Env, ref: MetadataRef) =>
   env.catalog.objects.find((o) => o.kind === ref.kind && o.name === ref.name)!
 
-export const user = (env: Env) => signUp(env.owner)
+/**
+ * Новий користувач цілі. Реєстрація закомічена: її читають сесії рантайму, а
+ * `signUp` профілю `postgres` перемикає роль лише в транзакції.
+ */
+export async function user(env: Env): Promise<string> {
+  let id = ""
+  await committed(env.owner, async () => {
+    id = await signUp(env.owner)
+  })
+  return id
+}
 
 export const createOrganization = (
   creatorMember?: Record<string, unknown>
@@ -289,50 +314,74 @@ export function heldTargets(viaPooler: boolean): Targets {
   // Модель А: «кожен користувач» створює `Organization` з `creatorMember`
   // (обов'язковий `title`), `TenantOwner` з `fullAccess` — творець;
   // `TenantOperator` створює `Branch` без творця.
-  const targetA = heldEnv(
+  const targetA = heldTarget(
     () =>
       policyDomain(
         tenantSelfService({ requiredMember: true }),
-        tenantOperator()
+        tenantOperator(),
+        profileLayer()
       ),
-    "tenant_a",
-    (owner) => seedGlobal(owner, { operator: TENANT_OPERATOR_ID }),
-    viaPooler
+    (owner) => seedGlobal(owner, { operator: TENANT_OPERATOR_ID })
   )
   // Модель Б: лише `GlobalFounder` створює `Organization`; `TenantOwner` без
   // `fullAccess` адмініструє призначення в межах своїх прав.
-  const targetB = heldEnv(
+  const targetB = heldTarget(
     () =>
       policyDomain(
         tenantSelfService({ fullAccess: false, founder: false }),
-        tenantOperator()
+        tenantOperator(),
+        profileLayer()
       ),
-    "tenant_b",
-    (owner) => seedGlobal(owner, { founder: GLOBAL_FOUNDER_ID }),
-    viaPooler
+    (owner) => seedGlobal(owner, { founder: GLOBAL_FOUNDER_ID })
   )
   // Модель В: `TenantOwner` без `fullAccess` і без гранту на `OrgMember` —
   // рядок членства творця невидимий йому й після гранту.
-  const targetC = heldEnv(
+  const targetC = heldTarget(
     () =>
-      policyDomain(tenantSelfService({ fullAccess: false, memberRead: false })),
-    "tenant_c",
-    async () => ({}),
-    viaPooler
+      policyDomain(
+        tenantSelfService({ fullAccess: false, memberRead: false }),
+        profileLayer()
+      ),
+    async () => ({})
   )
+  let ta: Target
+  let tb: Target
+  let tc: Target
+  const loginA = heldLogin(() => ta.url, "tenant_a", viaPooler)
+  const loginB = heldLogin(() => tb.url, "tenant_b", viaPooler)
+  const loginC = heldLogin(() => tc.url, "tenant_c", viaPooler)
   let a: Env
   let b: Env
   let c: Env
 
+  // Спершу всі цілі (план кожної — без ролей входу), потім ролі входу
   beforeAll(async () => {
-    a = await targetA.open()
-    b = await targetB.open()
-    c = await targetC.open()
+    ta = await targetA.open()
+    tb = await targetB.open()
+    tc = await targetC.open()
+    a = { ...ta, ...(await loginA.open()) }
+    b = { ...tb, ...(await loginB.open()) }
+    c = { ...tc, ...(await loginC.open()) }
   }, 360_000)
+  // Кожен ресурс закривається, навіть коли інший впав: послідовне закриття
+  // лишило б решту відкритими до сторожа стека. Ролі входу — раніше за цілі:
+  // їхнє прибирання відкликає `CONNECT` на базі цілі
   afterAll(async () => {
-    await targetA.close()
-    await targetB.close()
-    await targetC.close()
+    const logins = await Promise.allSettled([
+      loginA.close(),
+      loginB.close(),
+      loginC.close(),
+    ])
+    const targets = await Promise.allSettled([
+      targetA.close(),
+      targetB.close(),
+      targetC.close(),
+    ])
+    const failed = [...logins, ...targets].flatMap((r) =>
+      r.status === "rejected" ? [r.reason as unknown] : []
+    )
+    if (failed.length > 0)
+      throw new AggregateError(failed, "a tenant target did not close")
   }, 60_000)
 
   return { a: () => a, b: () => b, c: () => c }

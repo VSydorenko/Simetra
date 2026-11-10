@@ -8,15 +8,18 @@ import {
   ORG_ADMIN_ID,
   adminRoles,
   policyDomain,
+  profileLayer,
   writeRoles,
   setLocalSetting,
 } from "../../../simetra/test/support"
-import { inTarget, waitForLock } from "./support/db"
+import { inTarget, ownerLoginOf, waitForLock } from "./support/db"
 
 /**
  * Останнього носія перевіряємо двома з'єднаннями після реального COMMIT:
  * тільки Postgres доводить, що замок версії серіалізує одночасні зміни, а
- * VOLATILE-перевірка бачить свіжий знімок у READ COMMITTED.
+ * VOLATILE-перевірка бачить свіжий знімок у READ COMMITTED. Кожна сесія —
+ * вхід власника (`ownerLoginOf`): режим обслуговування вимагає
+ * `session_user` власника функцій прав (Р16).
  */
 
 type Carrier = {
@@ -88,13 +91,16 @@ async function seedCarrier(client: pg.Client): Promise<Carrier> {
 
 describe("concurrent last fullAccess carrier", () => {
   it("serializes READ COMMITTED and rejects the stale REPEATABLE READ transaction", async () => {
-    const result = await compile(policyDomain(writeRoles(), adminRoles()))
+    const result = await compile(
+      policyDomain(writeRoles(), adminRoles(), profileLayer())
+    )
     expect(result.diagnostics).toEqual([])
     const model = result.model!
     await inTarget(
       renderDesiredState(model).sql,
       (await engineScope(model)).scope,
-      async (url) => {
+      async (target) => {
+        const url = ownerLoginOf(target)
         const owner = await session(url)
         try {
           for (const [isolation, expectedCode, expectedDetail] of [

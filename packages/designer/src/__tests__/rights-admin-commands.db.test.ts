@@ -12,6 +12,7 @@ import {
   TASK_VIEWER_ID,
   TICKET_TABLE,
   TICKET_WRITER_ID,
+  asStackSuperuser,
   insertOrphan,
   planNodes,
   restoreOwnerRole,
@@ -104,14 +105,26 @@ describe("rights administration commands over a planned and applied target", () 
         SESSION_CLAIMS_SETTING,
         JSON.stringify(home.people.reader!.session)
       )
-      for (const setting of [
-        "auto_explain.log_min_duration = 0",
-        "auto_explain.log_nested_statements = on",
-        "auto_explain.log_analyze = on",
-        "auto_explain.log_format = 'json'",
-        "client_min_messages = log",
-      ])
-        await client.query(`SET LOCAL ${setting}`)
+      // Параметри `auto_explain.*` — рівня суперкористувача (на Supabase їх
+      // відкриває supautils), тож їх ставить `asStackSuperuser`: `SET LOCAL`
+      // у його точці збереження діє й після неї. Стек без `auto_explain` у
+      // `shared_preload_libraries` (профіль `postgres`) прийняв би параметри
+      // заглушками без планів, тож бібліотеку тоді вантажить у сесію той самий
+      // суперкористувач; без параметрів вона нічого не робить
+      await asStackSuperuser(client, async () => {
+        const { rows } = await client.query<{ loaded: boolean }>(
+          "SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_settings WHERE name = 'auto_explain.log_min_duration') AS loaded"
+        )
+        if (!rows[0]!.loaded) await client.query("LOAD 'auto_explain'")
+        for (const setting of [
+          "auto_explain.log_min_duration = 0",
+          "auto_explain.log_nested_statements = on",
+          "auto_explain.log_analyze = on",
+          "auto_explain.log_format = 'json'",
+          "client_min_messages = log",
+        ])
+          await client.query(`SET LOCAL ${setting}`)
+      })
       plans.length = 0
       await client.query(`SET LOCAL ROLE ${REQUEST_ROLE}`)
       const read = await client.query(

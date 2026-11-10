@@ -141,10 +141,6 @@ const ROLE_SWITCH_EXCEPTIONS: Exception[] = [
     reason: "the list of forbidden settings (role, session_authorization)",
   },
   {
-    file: "packages/simetra/src/server/runtime.ts",
-    reason: "SET LOCAL ROLE of the read role from the runtime state",
-  },
-  {
     file: "packages/simetra/src/server/transaction.ts",
     reason: "SET LOCAL ROLE of the command role",
   },
@@ -177,7 +173,6 @@ const ROLE_SWITCH_EXCEPTIONS: Exception[] = [
     "packages/simetra/src/schema/apply/__tests__/state.test.ts",
     "packages/simetra/src/server/__tests__/harness.ts",
     "packages/simetra/src/server/__tests__/runtime.test.ts",
-    "packages/simetra/src/server/__tests__/read-runtime.test.ts",
     "packages/designer/src/schema-engine/__tests__/read-only.test.ts",
   ].map((file) => ({ file, reason: EXPECTED_SQL })),
   // DB-тести, прив'язані до стека

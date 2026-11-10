@@ -44,6 +44,17 @@ export const ON_POSTGRES: string[] = [
   "src/__tests__/support/shadows.db.test.ts",
   "src/__tests__/promotion-lifecycle.db.test.ts",
   "src/__tests__/promotion-commit.db.test.ts",
+  // Рантайм і адміністрування прав (задача 13)
+  "src/__tests__/command-runtime.db.test.ts",
+  "src/__tests__/command-time.db.test.ts",
+  "src/__tests__/catalog-command-concurrency.db.test.ts",
+  "src/__tests__/tenant-creation.db.test.ts",
+  "src/__tests__/rights-admin-commands.db.test.ts",
+  "src/__tests__/rights-last-full-access.db.test.ts",
+  "src/__tests__/rights-maintenance.db.test.ts",
+  "src/__tests__/carrier-locks.db.test.ts",
+  "src/__tests__/read-batch.db.test.ts",
+  "src/__tests__/row-version.db.test.ts",
 ]
 
 export default defineConfig({

@@ -15,7 +15,6 @@ import {
   type SessionClaims,
   CommandFailure,
 } from "simetra/model"
-import { desiredForApply } from "simetra/schema"
 import {
   createCommandRuntime,
   readRoleOf,
@@ -24,16 +23,19 @@ import {
   type CommandRuntimeOptions,
 } from "simetra/server"
 import {
+  claimsFor,
   GAUGE_TABLE,
   policyDomain,
+  profileLayer,
   runtimeValuesLayer,
+  testProvider,
 } from "../../../simetra/test/support"
 import {
   heldResource,
-  inTarget,
   seedMarker,
   seedRuntimeActor,
   poolerPoolOf,
+  withModelTarget,
   withRuntimeLogin,
 } from "./support/db"
 
@@ -46,7 +48,7 @@ import {
 export const GAUGE: MetadataRef = { kind: "Catalog", name: "Gauge" }
 export const GAUGE_LOG: MetadataRef = { kind: "Catalog", name: "GaugeLog" }
 export const MODULE_KEY = "Catalog.Gauge"
-export const REQUEST_ROLE = readRoleOf("supabase")!
+export const REQUEST_ROLE = readRoleOf(testProvider())!
 
 /** Більше за 2^53: `number` такого цілого не втримав би. */
 export const BIG = 2n ** 53n + 1n
@@ -78,8 +80,8 @@ export interface Env {
 }
 
 export const sessionOf = (user: string): SessionClaims => ({
+  ...claimsFor("user", user),
   sub: user,
-  role: REQUEST_ROLE,
 })
 
 /** Актор фікстури з сесією запиту від його користувача. */
@@ -102,17 +104,18 @@ export async function seedRow(
 }
 
 /**
- * Тінь з бажаним станом застосування (модель і `simetra.marker`), засів і дві
- * ролі входу; тримається, доки `close` не відпустить колбек `inTarget`. Пул
+ * Ціль з моделлю (`withModelTarget`) і `simetra.marker`, засів і дві ролі
+ * входу; тримається, доки `close` не відпустить колбек цілі. Пул
  * через пулер — лише з `viaPooler`: стек без пулера його не має.
  */
 export const heldEnv = (viaPooler = false) =>
   heldResource<Env>(async (use) => {
-    const result = await compile(policyDomain(runtimeValuesLayer()))
+    const result = await compile(
+      policyDomain(runtimeValuesLayer(), profileLayer())
+    )
     expect(result.diagnostics).toEqual([])
     const model = result.model!
-    const desired = await desiredForApply(model)
-    await inTarget(desired.sql, desired.scope, async (url) => {
+    await withModelTarget(model, async (url) => {
       const owner = new pg.Client({ connectionString: url })
       await owner.connect()
       try {
@@ -130,8 +133,11 @@ export const heldEnv = (viaPooler = false) =>
               [PLATFORM_ROLES.command],
               async (commandOnly) => {
                 const direct = new pg.Pool({ connectionString: login })
-                const pooled = poolerPoolOf(login, viaPooler)
+                let pooled: pg.Pool | null = null
                 try {
+                  // Пул пулера — у `try`: якщо він кине, прямий пул однаково
+                  // закриється
+                  pooled = poolerPoolOf(login, viaPooler)
                   await use({
                     model,
                     catalog: buildRuntimeCatalog(model),
