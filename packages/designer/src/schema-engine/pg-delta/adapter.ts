@@ -84,6 +84,9 @@ const IDENTITY: EngineIdentity = { name: ENGINE, version: "1.0.0-alpha.60" }
  */
 const REDACT_SECRETS = true
 
+/** Оператор без дії: єдиний вміст входу `planSchemaFiles`, коли засів провайдера порожній. */
+const ASSUMED_SEED_ONLY = "SELECT 1;\n"
+
 /**
  * Пул адміністративної сесії тіні: завантаження бажаного стану пише. Читання
  * з нього — так само транзакціями `readOnlyQuery`.
@@ -769,11 +772,14 @@ async function cloneAndRun<T>(
         [
           {
             name: "provider-seed.sql",
-            // Тінь з шаблону засіву не має, а pg-delta відмовляє входу без
-            // жодного виконуваного оператора (захист від порожнього бажаного
-            // стану). План засіву тут відкидається, тож порожній засів
-            // замінює оператор без дії
-            sql: renderProviderSeed(scope.provider) || "SELECT 1;\n",
+            // Виклик `planSchemaFiles` тут потрібен заради `seedAssumedSchemas`:
+            // pg-delta сам виводить і виконує засів припущених схем (для
+            // `postgres` — заглушку `better_auth."user"`, спека §4.2 «Тінь»).
+            // `deriveAssumedSchemaSeed` не експортовано, а вхід без жодного
+            // виконуваного оператора pg-delta відхиляє ("no executable SQL"),
+            // тож порожній засів провайдера замінює оператор без дії. Без
+            // виклику копія зламалась би
+            sql: renderProviderSeed(scope.provider) || ASSUMED_SEED_ONLY,
           },
         ],
         {

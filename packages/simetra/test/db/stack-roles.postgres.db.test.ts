@@ -87,6 +87,24 @@ describe("database simetra of the postgres stack", () => {
                   exists (select from pg_namespace where nspname = 'better_auth') as auth`
         )
         expect(rows[0]).toEqual({ check: true, auth: false })
+        // Власник застосовує плани з перевіркою функцій: без USAGE на схему
+        // розширення й EXECUTE на перевірку вона відмовила б у копії
+        const grants = await client.query<{
+          usage: boolean
+          total: number
+          executable: number
+        }>(
+          `select has_schema_privilege($1, 'extensions', 'USAGE') as usage,
+                  count(*)::int as total,
+                  (count(*) filter (where has_function_privilege($1, p.oid, 'EXECUTE')))::int as executable
+             from pg_proc p
+             join pg_namespace n on n.oid = p.pronamespace
+            where n.nspname = 'extensions' and p.proname = 'plpgsql_check_function_tb'`,
+          [owner]
+        )
+        expect(grants.rows[0]!.usage).toBe(true)
+        expect(grants.rows[0]!.total).toBeGreaterThan(0)
+        expect(grants.rows[0]!.executable).toBe(grants.rows[0]!.total)
       })
     } catch (error) {
       failures.push(error)

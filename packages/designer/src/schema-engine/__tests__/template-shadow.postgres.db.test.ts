@@ -102,29 +102,50 @@ describe("provisionTemplateShadow", () => {
   it.each([
     {
       case: "a database that is not marked as a template",
+      create: true,
       mark: false,
       owner: false,
+      closed: true,
     },
     {
       case: "a template owned by a role that is not a superuser",
+      create: true,
       mark: true,
       owner: true,
+      closed: true,
+    },
+    {
+      case: "a superuser-owned template that still allows connections",
+      create: true,
+      mark: true,
+      owner: false,
+      closed: false,
+    },
+    {
+      case: "a template that does not exist",
+      create: false,
+      mark: false,
+      owner: false,
+      closed: true,
     },
   ])("refuses $case with the advice to run roles", async (c) => {
     const name = testDatabaseName("tplbad")
-    extra.push(name)
-    await admin(async (client) => {
-      await client.query(
-        `create database ${quoteIdent(name)}${c.owner ? ` owner ${quoteIdent(set.owner)}` : ""}`
-      )
-      if (c.mark)
+    if (c.create) {
+      extra.push(name)
+      await admin(async (client) => {
         await client.query(
-          `alter database ${quoteIdent(name)} is_template true`
+          `create database ${quoteIdent(name)}${c.owner ? ` owner ${quoteIdent(set.owner)}` : ""}`
         )
-      await client.query(
-        `alter database ${quoteIdent(name)} allow_connections false`
-      )
-    })
+        if (c.mark)
+          await client.query(
+            `alter database ${quoteIdent(name)} is_template true`
+          )
+        if (c.closed)
+          await client.query(
+            `alter database ${quoteIdent(name)} allow_connections false`
+          )
+      })
+    }
     const error = await provisionTemplateShadow(ownerUrl(), name).catch(
       (e: unknown) => e
     )

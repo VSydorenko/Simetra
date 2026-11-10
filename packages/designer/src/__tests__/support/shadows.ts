@@ -23,7 +23,8 @@ const inFlight = new Set<Promise<unknown>>()
 
 /**
  * Records the name of a shadow the engine provisions. Called only by the
- * `provisionCoLocatedShadow` wrapper in `db-setup.ts`; returns `p` unchanged.
+ * `provisionCoLocatedShadow` and `provisionTemplateShadow` wrappers in
+ * `db-setup.ts`; returns `p` unchanged.
  */
 export function recordProvision<T extends { name: string }>(
   p: Promise<T>
