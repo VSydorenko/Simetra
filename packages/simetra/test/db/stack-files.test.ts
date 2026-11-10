@@ -9,9 +9,16 @@ import {
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
+import {
+  PLATFORM_LOGIN_ROLES,
+  PROVIDER_LOGIN_ROLES,
+  PROVIDER_OWNER_ROLES,
+} from "simetra/model"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import {
+  betterAuthCommand,
   POSTGRES_LOCK_FILE,
+  POSTGRES_PSQL_ARGS,
   withStackLock,
 } from "../../../../scripts/db-stack.mjs"
 import { TEST_STACKS } from "./profile"
@@ -175,6 +182,95 @@ describe("garage.toml of the postgres stack", () => {
     const toml = read("garage.toml")
     expect(toml).not.toMatch(/^\s*rpc_secret\s*=/m)
     expect(toml).not.toMatch(/^\s*admin_token\s*=/m)
+  })
+})
+
+describe("Simetra identity of the postgres stack", () => {
+  const script = readFileSync(
+    fileURLToPath(new URL("../../../../scripts/db-stack.mjs", import.meta.url)),
+    "utf8"
+  )
+  const secretNames = [
+    "SIMETRA_OWNER_DEV_PASSWORD",
+    "SIMETRA_RUNTIME_DEV_PASSWORD",
+    "SIMETRA_AUTH_DEV_PASSWORD",
+  ]
+
+  it("the stack project file selects the postgres provider", () => {
+    expect(JSON.parse(read("project/project.meta.json"))).toMatchObject({
+      database: { provider: "postgres" },
+    })
+  })
+
+  it("login-secrets.env holds a password for each login role", () => {
+    const secrets = read("login-secrets.env")
+    for (const name of secretNames)
+      expect(secrets).toMatch(new RegExp(`^${name}=\\S+$`, "m"))
+  })
+
+  // Усе з `env_file` потрапляє в середовище контейнера
+  it("dev-secrets.env holds no login password and compose reads only GARAGE_ keys", () => {
+    const garage = read("dev-secrets.env")
+    for (const name of secretNames) expect(garage).not.toContain(name)
+    const files = [
+      ...read("compose.yaml").matchAll(/^\s*env_file:\s*(\S+)\s*$/gm),
+    ].map((m) => m[1]!)
+    expect(files.length).toBeGreaterThan(0)
+    for (const file of files) {
+      expect(file).not.toContain("login-secrets")
+      const keys = [...read(file).matchAll(/^([A-Z0-9_]+)=/gm)].map(
+        (m) => m[1]!
+      )
+      expect(keys.length).toBeGreaterThan(0)
+      for (const key of keys) expect(key).toMatch(/^GARAGE_/)
+    }
+    expect(read("compose.yaml")).not.toContain("login-secrets")
+  })
+
+  // Імена в скрипті без залежностей — літерали; тест тримає їх рівними даним T0
+  it("the script names the login roles of the T0 data and a secret for each", () => {
+    for (const role of [
+      PROVIDER_OWNER_ROLES.postgres,
+      PROVIDER_LOGIN_ROLES.postgres[0],
+      PLATFORM_LOGIN_ROLES.runtime,
+    ])
+      expect(script).toContain(`role: "${role}"`)
+    for (const name of secretNames) expect(script).toContain(`"${name}"`)
+  })
+
+  it("startPostgres runs roles, then passwords, then the Better Auth step", () => {
+    const body = script.slice(script.indexOf("async function startPostgres"))
+    const order = [
+      "dev-environment.sql",
+      '"roles"',
+      "ALTER ROLE",
+      "betterAuthCommand(",
+    ].map((marker) => body.indexOf(marker))
+    expect(order.every((i) => i >= 0)).toBe(true)
+    expect([...order].sort((a, b) => a - b)).toEqual(order)
+  })
+
+  it("passes passwords through stdin and DSNs through the environment, never argv", () => {
+    const secrets = Object.fromEntries(
+      [...read("login-secrets.env").matchAll(/^([A-Z0-9_]+)=(\S+)$/gm)].map(
+        (m) => [m[1]!, m[2]!]
+      )
+    )
+    const passwords = secretNames.map((name) => secrets[name]!)
+    expect(passwords).toHaveLength(secretNames.length)
+    const step = betterAuthCommand(secrets, "postgresql://postgres@h/simetra")
+    // argv у `ps`: ні psql, ні дочірній процес Better Auth не несуть паролів чи DSN
+    const argvs = [POSTGRES_PSQL_ARGS, step.args]
+    for (const argv of argvs)
+      for (const arg of argv) {
+        for (const password of passwords) expect(arg).not.toContain(password)
+        expect(arg).not.toMatch(/PASSWORD|postgresql:\/\/|login-secrets/)
+      }
+    expect(step.env.SIMETRA_AUTH_URL).toContain(
+      secrets.SIMETRA_AUTH_DEV_PASSWORD
+    )
+    expect(script).toContain("SIMETRA_SUPERUSER_URL")
+    expect(script).toContain("SIMETRA_AUTH_URL")
   })
 })
 

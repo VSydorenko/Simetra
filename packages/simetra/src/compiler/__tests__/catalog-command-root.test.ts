@@ -224,12 +224,48 @@ describe("<root>_create_root", () => {
     ])
   })
 
-  it("renders a visible row like save and an invisible one as key and version 1", () => {
+  it("renders a visible row like save and an invisible one as key and the inserted version", () => {
     const shape = bodyShape(unitOf("organization").sql)
-    for (const [table, row, id, into] of [
-      ["organization", "v_row", "v_in.id", "v_result"],
-      ["org_member", "v_member_row", "p_member_id", "v_member"],
+    // `at` шукає по всьому тілу, тож порядок закріплюємо `from`: версія кореня —
+    // після вставки і всього блоку `unique_violation` (він закінчується
+    // відмовою `no-right` на insert + 7), версія члена — після `PERFORM` гранту,
+    // що вставляє члена.
+    const insert = shape.findIndex((s) => dmlKind(s) === "InsertStmt")
+    const grant = at(
+      shape,
+      "perform",
+      "SELECT simetra.org_id_root_creator(v_in.id, p_member_id, p_member)"
+    )
+    expect(insert).toBeGreaterThanOrEqual(0)
+    expect(grant).toBeGreaterThan(insert)
+    for (const [table, row, id, into, version, from] of [
+      [
+        "organization",
+        "v_row",
+        "v_in.id",
+        "v_result",
+        "v_root_version",
+        insert + 8,
+      ],
+      [
+        "org_member",
+        "v_member_row",
+        "p_member_id",
+        "v_member",
+        "v_member_version",
+        grant + 1,
+      ],
     ] as const) {
+      // Версію вставки читаємо з налаштування тригера механіки одразу після
+      // вставки, а не літералом `1`.
+      const setting = at(
+        shape,
+        "assign",
+        `SELECT current_setting('simetra.row_version_' || 'public.${table}'::regclass::oid::text, true)`,
+        from
+      )
+      expect(setting).toBeGreaterThanOrEqual(from)
+      expect(shape[setting]).toMatchObject({ target: { variable: version } })
       const read = at(
         shape,
         "execsql",
@@ -254,7 +290,7 @@ describe("<root>_create_root", () => {
           expressions: [
             {
               tree: tree(
-                `SELECT jsonb_build_object('id', ${id}, 'version', '1'::text)`
+                `SELECT jsonb_build_object('id', ${id}, 'version', ${version})`
               ),
             },
           ],

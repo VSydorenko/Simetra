@@ -51,6 +51,7 @@ import {
   acceptDebt,
   attribute,
   catalog,
+  customTable,
   metaFiles,
   project as projectFile,
   testRoleName,
@@ -86,6 +87,7 @@ vi.mock("../schema-engine", async (importOriginal) => {
   const original = await importOriginal<typeof import("../schema-engine")>()
   const { ApplyConnectionLost } = await import("simetra/schema")
   const lost: ApplyDatabase = {
+    statement: () => Promise.reject(new Error("no statement expected")),
     transaction: () =>
       Promise.reject(new ApplyConnectionLost("connection lost")),
   }
@@ -96,6 +98,7 @@ vi.mock("../schema-engine", async (importOriginal) => {
       const real = original.createApplyDatabase(o)
       if (o.readOnly) return real
       return {
+        statement: (target, sql) => real.statement(target, sql),
         transaction: (target, end, fn) => {
           lose.writes++
           return real.transaction(target, end, fn)
@@ -628,6 +631,83 @@ describe.concurrent("apply", () => {
     })
   })
 
+  it("apply reports a failed step and leaves the marker and the ledger", async () => {
+    // Збій, що проходить план: pg-delta перестворює генеровану колонку
+    // одним `ADD COLUMN … NOT NULL`, план її не рахує, і `NULL` з виразу
+    // дає сирий 23502 на кроці (борг `ADD COLUMN … NOT NULL`)
+    const NOTES = "custom-tables/Notes/Notes.meta.json"
+    const notes = (expression: string, over: Record<string, unknown> = {}) =>
+      customTable("Notes", {
+        id: uuid(9201),
+        physicalName: "notes",
+        columns: [
+          {
+            id: uuid(9202),
+            name: "id",
+            physicalName: "id",
+            type: "UUID",
+            notNull: true,
+          },
+          {
+            id: uuid(9203),
+            name: "note",
+            physicalName: "note",
+            type: "String",
+            length: 20,
+          },
+          {
+            id: uuid(9204),
+            name: "g",
+            physicalName: "g",
+            type: "Text",
+            generated: { expression },
+            ...over,
+          },
+        ],
+        primaryKey: { name: "notes_pkey", columns: ["id"] },
+      })
+    await inTarget(EMPTY, async (url) => {
+      const dir = await projectWith({ [NOTES]: notes("upper(note)") })
+      await establish(dir, url)
+      await query(
+        url,
+        "insert into app.notes (id, note) values (gen_random_uuid(), null)"
+      )
+      await writeMetadata(dir, {
+        [NOTES]: notes("lower(note)", { notNull: true }),
+      })
+      const data = await planned(dir, url)
+      const state = async () => ({
+        marker: await query(
+          url,
+          "select snapshot_hash, plan_hash, fingerprint from simetra.marker"
+        ),
+        ledger: await query(
+          url,
+          "select id, plan_hash from simetra.ledger order by id"
+        ),
+      })
+      const before = await state()
+      expect(before.ledger).toHaveLength(1)
+
+      const r = await call(
+        "apply",
+        {
+          plan: data.file,
+          planHash: data.planHash,
+          allow: data.requiredPermissions,
+        },
+        options(dir, url)
+      )
+      expect(r.ok).toBe(false)
+      expect(errors(r)).toEqual(["apply.step-failed"])
+      expect(r.diagnostics[0]!.params).toMatchObject({ sqlstate: "23502" })
+      // Невдале застосування даних не має: лише діагностика
+      expect(r.data).toBeUndefined()
+      expect(await state()).toEqual(before)
+    })
+  })
+
   it("apply rehearses without writing", async () => {
     await inTarget(EMPTY, async (url) => {
       const dir = await projectWith({ [PARTY]: party() })
@@ -819,6 +899,27 @@ describe("apply", { concurrent: false }, () => {
       ])
       // Тінь доказу прибрано
       expect(await leftoverShadows(mark)).toEqual([])
+    })
+  })
+
+  it("apply --rehearse refuses a role without BYPASSRLS before building the shadow", async () => {
+    await inTarget(EMPTY, async (url) => {
+      const dir = await projectWith({ [PARTY]: party() })
+      const data = await planned(dir, url)
+      // `current_user` стає роллю без BYPASSRLS через параметр з'єднання, без
+      // пароля й нового логіна: роль `OWNER` створено без цього атрибута
+      const limited = new URL(url)
+      limited.searchParams.set("options", `-c role=${OWNER}`)
+      const shadowCallsBefore = lose.shadowScopes.length
+      const r = await call(
+        "apply",
+        { plan: data.file, planHash: data.planHash, rehearse: true },
+        options(dir, limited.toString())
+      )
+      expect(errors(r)).toEqual(["plan.owner-not-bypassrls"])
+      // Р10: відмова до тіні
+      expect(lose.shadowScopes.length).toBe(shadowCallsBefore)
+      expect(await markerExists(url)).toBe(false)
     })
   })
 

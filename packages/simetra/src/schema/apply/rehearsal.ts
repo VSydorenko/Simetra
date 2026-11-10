@@ -21,7 +21,7 @@ import type { ServerFacts } from "./server"
  * Форма файлу звіту (спека промоції §8). Інший формат — «звіт
  * застарів»: репетицію повторюють, шиму немає.
  */
-export const REHEARSAL_FORMAT = 1
+export const REHEARSAL_FORMAT = 2
 
 /**
  * Фази репетиції, яким `timedTransaction` приписує оператори. Один перелік і для раннера, і для схеми звіту: фаза поза ним — не
@@ -43,6 +43,7 @@ export const REHEARSAL_PHASES = [
   "write",
   "engine",
   "carriers",
+  "versions",
   "environment",
   "deferred",
   "measureAfter",
@@ -62,7 +63,7 @@ export type RehearsalPhase = (typeof REHEARSAL_PHASES)[number]
  * table }`, скрізь у старих іменах (до кроків), як їх знає ціль.
  */
 export interface RehearsalReport {
-  format: 1
+  format: 2
   planHash: string
   server: ServerFacts
   ledgerHead: string | null
@@ -79,6 +80,18 @@ export interface RehearsalReport {
   }
   /** Лічильники кроків даних: обчислено (фаза 8) і записано (фаза 10). */
   data: { schema: string; table: string; computed: number; written: number }[]
+  /**
+   * Кроки заповнення перед `NOT NULL` (платформна спека §6.6): `rows` —
+   * фактичний `rowCount` їхнього `UPDATE` на копії. Таблиця заповнення не
+   * належить одиниці промоції, тож її імена до кроків і після однакові.
+   */
+  backfills: {
+    step: string
+    schema: string
+    table: string
+    column: string
+    rows: number
+  }[]
   /** Рядки, збереження яких доведено замірами «після» (фаза 14). */
   preservation: { schema: string; table: string; rows: number }[]
   plpgsqlCheck:
@@ -227,6 +240,14 @@ export const rehearsalReportSchema: z.ZodType<RehearsalReport> = z.strictObject(
     }),
     data: z.array(
       z.strictObject({ ...tableName, computed: count, written: count })
+    ),
+    backfills: z.array(
+      z.strictObject({
+        step: z.string().regex(new RegExp(`^s${positive}$`)),
+        ...tableName,
+        column: z.string(),
+        rows: count,
+      })
     ),
     preservation: z.array(z.strictObject({ ...tableName, rows: count })),
     plpgsqlCheck: z.union([

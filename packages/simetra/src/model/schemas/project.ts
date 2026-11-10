@@ -14,7 +14,7 @@ import {
  * Пресети провайдера бази (платформна спека §6.9). Проєкт вибирає пресет
  * ключем, а його вміст — факти образу провайдера — лишається кодом платформи.
  */
-export const DATABASE_PROVIDERS = ["supabase"] as const
+export const DATABASE_PROVIDERS = ["supabase", "postgres"] as const
 export type DatabaseProvider = (typeof DATABASE_PROVIDERS)[number]
 
 /** Таблиця провайдера, на яку можна підписатися подією, з її колонками. */
@@ -99,6 +99,25 @@ export const PROVIDER_EVENT_SOURCES: Readonly<
       ],
     },
   ],
+  // Колонки — справжня міграція Better Auth закріпленої версії у порядку
+  // `ordinal_position`; імена в camelCase, бо вбудований адаптер створює
+  // колонки з іменами полів. Джерела `storage.objects` у профілю немає.
+  postgres: [
+    {
+      schema: "better_auth",
+      table: "user",
+      columns: [
+        "id",
+        "name",
+        "email",
+        "emailVerified",
+        "image",
+        "createdAt",
+        "updatedAt",
+        "isAnonymous",
+      ],
+    },
+  ],
 }
 
 /**
@@ -119,8 +138,11 @@ export interface ProviderApiRoles {
   user: string
   /** Запит без сесії. */
   anonymous: string
-  /** Сервісний ключ: сесії немає, RLS обходиться. */
-  service: string
+  /**
+   * Сервісний ключ: сесії немає, RLS обходиться. `null` — профіль без
+   * сервісної ролі (її просто немає в кластері, відкликати нічого).
+   */
+  service: string | null
 }
 export type ApiRolePurpose = keyof ProviderApiRoles
 /**
@@ -137,6 +159,12 @@ export const PROVIDER_API_ROLES: Readonly<
     user: "authenticated",
     anonymous: "anon",
     service: "service_role",
+  },
+  // Сервісної ролі в чистому Postgres немає: ключа в обхід RLS профіль не має.
+  postgres: {
+    user: "simetra_user",
+    anonymous: "simetra_anon",
+    service: null,
   },
 }
 
@@ -155,14 +183,25 @@ export const PROVIDER_LOGIN_ROLES: Readonly<
     "supabase_realtime_admin",
     "supabase_admin",
   ],
+  postgres: ["simetra_auth"],
 }
+
+/**
+ * Роль, від якої застосовується схема на цілі (спека профілю postgres §3.1):
+ * очікувана роль застосування профілю. Рантайм host-а її DSN не має.
+ */
+export const PROVIDER_OWNER_ROLES: Readonly<Record<DatabaseProvider, string>> =
+  {
+    supabase: "postgres",
+    postgres: "simetra_owner",
+  }
 
 /**
  * Схеми, які створює й наповнює провайдер (платформна спека §6.9): застосунок
  * має в них лише поверхню пресету. Факт T0, бо його потребує і компілятор (T1:
  * доступність недосудного SQL, `SECURITY DEFINER` над RLS), і схема (T2) та
  * designer — один перелік замість копії по ярусах. Порядок зберігається:
- * його читає й `SUPABASE_SURFACES`.
+ * його читає й `PROVIDER_SURFACES`.
  */
 export const PROVIDER_SCHEMAS: Readonly<
   Record<DatabaseProvider, readonly string[]>
@@ -191,6 +230,7 @@ export const PROVIDER_SCHEMAS: Readonly<
     "supabase_migrations",
     "vault",
   ],
+  postgres: ["better_auth", "extensions", "information_schema"],
 }
 
 // Довіри до цілої схеми провайдера немає (спека прав §5.3): голова кличе лише
@@ -204,6 +244,7 @@ export const PROVIDER_FUNCTIONS: Readonly<
   Record<DatabaseProvider, readonly string[]>
 > = {
   supabase: ["auth.uid", "auth.jwt", "auth.role"],
+  postgres: [],
 }
 
 // Вирази прийнятих таблиць, подання й політики кличуть функції провайдера
@@ -218,6 +259,8 @@ export const PROVIDER_EXPRESSION_FUNCTIONS: Readonly<
   Record<DatabaseProvider, readonly string[]>
 > = {
   supabase: ["extensions.gen_random_bytes", "extensions.uuid_generate_v4"],
+  // `gen_random_uuid()` — ядро Postgres, поіменного дозволу не потребує.
+  postgres: [],
 }
 
 // Що саме виконає така функція, статично не відомо, тож її виклик з
@@ -241,6 +284,13 @@ export const PROVIDER_SQL_TEXT_FUNCTIONS: Readonly<
     "cron.schedule",
     "cron.schedule_in_database",
     "cron.alter_job",
+  ],
+  // Лише `dblink*` (contrib); решта записів — функції образу Supabase.
+  postgres: [
+    "extensions.dblink",
+    "extensions.dblink_exec",
+    "extensions.dblink_send_query",
+    "extensions.dblink_open",
   ],
 }
 
@@ -269,7 +319,7 @@ export const PLATFORM_LOGIN_ROLES = { runtime: "simetra_runtime" } as const
  */
 export const LOGIN_ROLE_REQUEST_PURPOSES: Readonly<
   Record<DatabaseProvider, readonly RequestRolePurpose[]>
-> = { supabase: ["user"] }
+> = { supabase: ["user"], postgres: ["user", "anonymous"] }
 
 // Ім'я одне для всіх провайдерів, тож літерала поза T0 немає (спека прав §5.3).
 /**
@@ -396,6 +446,45 @@ export const PROVIDER_IDENTITY_SOURCES: Readonly<
     subjectIsUserId: true,
     anonymousClaim: "is_anonymous",
   },
+  // Better Auth видаляє обліковий запис фізично, тож `deletedAtColumn` немає;
+  // колонка `isAnonymous` — від плагіна `anonymous` (спека профілю §4.1).
+  postgres: {
+    table: { schema: "better_auth", name: "user" },
+    keyColumn: "id",
+    nameSources: [{ column: "name" }, { column: "email" }],
+    anonymousColumn: "isAnonymous",
+    providerKey: "better-auth",
+    subjectIsUserId: true,
+    anonymousClaim: "is_anonymous",
+  },
+}
+
+/** Призначення ролі входу платформи (ключ `PLATFORM_LOGIN_ROLES`). */
+export type PlatformLoginPurpose = keyof typeof PLATFORM_LOGIN_ROLES
+
+/**
+ * Дозволені батьки кожної ролі входу платформи (спека профілю postgres §3.1):
+ * `command` — роль команд, `request` — ролі запиту профілю за
+ * `LOGIN_ROLE_REQUEST_PURPOSES`. Гейт ролей звіряє кожну роль входу за її
+ * рядком, а не за спільною множиною: інакше майбутня роль входу з членством
+ * у ролі команд пройшла б гейт.
+ */
+export const LOGIN_ROLE_PARENTS: Readonly<
+  Record<PlatformLoginPurpose, readonly ("command" | "request")[]>
+> = { runtime: ["command", "request"] }
+
+/** Імена ролей-батьків ролі входу для профілю: за `LOGIN_ROLE_PARENTS`. */
+export function loginRoleParentNames(
+  purpose: PlatformLoginPurpose,
+  provider: DatabaseProvider
+): readonly string[] {
+  return LOGIN_ROLE_PARENTS[purpose].flatMap((parent) =>
+    parent === "command"
+      ? [PLATFORM_ROLES.command]
+      : LOGIN_ROLE_REQUEST_PURPOSES[provider].map(
+          (request) => PROVIDER_API_ROLES[provider][request]
+        )
+  )
 }
 
 /** Файл проєкту: ідентичність, правила іменування й часовий пояс застосунку. */

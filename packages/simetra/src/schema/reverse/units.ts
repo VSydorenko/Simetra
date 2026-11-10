@@ -4,6 +4,7 @@ import {
   ownsTarget,
   platformTriggers,
   readSqlUnits,
+  ROW_VERSION_SEQUENCE,
   SHARED_TRIGGER_FUNCTIONS,
   unitPlacement,
   unitTarget,
@@ -309,6 +310,23 @@ function isPlatformTrigger(
   }
 }
 
+/**
+ * Послідовність версій рядків платформи й відкликання прав на неї: база має
+ * їх завжди, а власник — платформа, тож вони не пишуться в теку. Ціль гранту
+ * впізнаємо за кваліфікованим ім'ям послідовності.
+ */
+function isPlatformSequence(unit: CatalogUnit, ctx: UnitsContext): boolean {
+  const own = qualified(ROW_VERSION_SEQUENCE.schema, ROW_VERSION_SEQUENCE.name)
+  if (unit.class === "sequence")
+    return qualified(unit.schema, unit.name) === own
+  if (unit.class !== "grant") return false
+  const target = unitTarget(unit, ctx.parse)
+  return (
+    target !== undefined &&
+    qualified(target.schema || ctx.defaultSchema, target.object ?? "") === own
+  )
+}
+
 /** Сегмент імені файлу: лише безпечні символи, `[]` — `_array`. */
 function slug(text: string): string {
   return text
@@ -418,6 +436,7 @@ export function layoutUnits(
     if (
       ctx.described.has(unit.identity) ||
       platformOwned(unit) ||
+      isPlatformSequence(unit, ctx) ||
       isPlatformTrigger(unit, ctx, platform)
     )
       continue

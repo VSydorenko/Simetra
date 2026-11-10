@@ -15,10 +15,23 @@ describe("provider event sources", () => {
     expect(PROVIDER_EVENT_SOURCES.supabase.length).toBeGreaterThan(0)
     for (const source of PROVIDER_EVENT_SOURCES.supabase) {
       expect(
-        onSurface("trigger", { schema: source.schema, object: source.table }),
+        onSurface(
+          "trigger",
+          { schema: source.schema, object: source.table },
+          "supabase"
+        ),
         `${source.schema}.${source.table}`
       ).toBe(true)
     }
+  })
+
+  it("a postgres project's surface is Better Auth, not auth", () => {
+    const user = { schema: "better_auth", object: "user" }
+    expect(onSurface("trigger", user, "postgres")).toBe(true)
+    expect(
+      onSurface("trigger", { schema: "auth", object: "users" }, "postgres")
+    ).toBe(false)
+    expect(onSurface("trigger", user, "supabase")).toBe(false)
   })
 
   it("the supabase identity source lies on the trigger surface", () => {
@@ -26,7 +39,11 @@ describe("provider event sources", () => {
     // керування вважала б його чужим.
     const { table } = PROVIDER_IDENTITY_SOURCES.supabase
     expect(
-      onSurface("trigger", { schema: table.schema, object: table.name })
+      onSurface(
+        "trigger",
+        { schema: table.schema, object: table.name },
+        "supabase"
+      )
     ).toBe(true)
   })
 })

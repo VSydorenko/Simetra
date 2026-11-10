@@ -34,6 +34,7 @@ export default defineConfig({
             "**/node_modules/**",
             "**/dist/**",
             "**/*.supabase.db.test.ts",
+            "**/*.postgres.db.test.ts",
           ],
           // Усі тести б'ють в одну базу стеку
           fileParallelism: false,
@@ -66,6 +67,21 @@ export default defineConfig({
           fileParallelism: false,
           maxConcurrency: 4,
           globalSetup: ["../simetra/test/db/stack-guard.supabase.ts"],
+          setupFiles: ["./src/__tests__/support/db-setup.ts"],
+          testTimeout: 60_000,
+        },
+      },
+      {
+        extends: true,
+        test: {
+          // Тести, прив'язані до стека postgres. Налаштування — ті самі, що в
+          // `db`, і з тих самих причин; сторож — свій, бо стек інший
+          name: "db-pg",
+          include: ["**/*.postgres.db.test.ts"],
+          exclude: ["**/node_modules/**", "**/dist/**"],
+          fileParallelism: false,
+          maxConcurrency: 4,
+          globalSetup: ["../simetra/test/db/stack-guard.postgres.ts"],
           setupFiles: ["./src/__tests__/support/db-setup.ts"],
           testTimeout: 60_000,
         },

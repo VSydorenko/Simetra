@@ -15,6 +15,13 @@ export interface DbConnection {
 export interface ShadowOptions {
   target: DbConnection
   shadowBase?: DbConnection
+  /**
+   * Sealed template database on the shadow server to copy each shadow from.
+   * Defaults to the provider's template (`PROVIDER_SHADOW_TEMPLATES`); a
+   * provider without one builds the shadow from an empty database. Meant for
+   * tests that run against a template other than the stack's.
+   */
+  shadowTemplate?: string
 }
 
 /**

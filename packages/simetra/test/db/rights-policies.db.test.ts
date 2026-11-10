@@ -432,7 +432,8 @@ describe("policies", () => {
         [key("t2")]
       )
       expect.soft(rows).toEqual([{ copy: key("m1@A") }])
-      expect.soft(await version()).toBe(before + 1)
+      // Версія з послідовності: лише «більша за попередню», не `+1`
+      expect.soft(await version()).toBeGreaterThan(before)
     }))
 
   it("propagation-path: path copies follow in two hops without a content change", () =>

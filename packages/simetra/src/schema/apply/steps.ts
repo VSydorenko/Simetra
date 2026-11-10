@@ -1,6 +1,6 @@
 import type { AlterTableCmd, Node } from "libpg-query"
 import type { SqlParser } from "simetra/compiler"
-import type { CatalogModel, CatalogTable } from "simetra/model"
+import { quoteIdent, type CatalogModel, type CatalogTable } from "simetra/model"
 import type {
   EngineAction,
   EngineDiagnostic,
@@ -8,6 +8,7 @@ import type {
   LockedTable,
 } from "../engine"
 import { applyDiagnostic } from "./diagnostic"
+import type { DataTable } from "./promotion/data"
 import type { DriftReport } from "./drift"
 import {
   isLossless,
@@ -46,9 +47,12 @@ export interface PlanStep {
    * повертає об'єктам плану права бажаного стану попри глобальні типові
    * привілеї ролі; такі кроки стоять наприкінці плану. Крок копій носіїв
    * (спека промоції §7.2) заповнює копії наявних рядків після кроків двигуна, що
-   * створюють колонки-копії, і до кроків середовища.
+   * створюють колонки-копії, і до кроків середовища. Крок заповнення
+   * (платформна спека §6.6) стоїть у блоці двигуна безпосередньо перед
+   * кроком, що робить його колонку `NOT NULL`.
    */
-  origin: "intent" | "engine" | "carriers" | "environment"
+  origin:
+    "intent" | "engine" | "backfill" | "carriers" | "versions" | "environment"
   sql: string
   verb: EngineAction["verb"]
   class: StepClass
@@ -69,7 +73,55 @@ export interface PlanStep {
   rewriteRisk: boolean
   /** SQL сторожів кроку; раннер виконує їх перед кроком. */
   guards: string[]
+  /**
+   * Тригери користувача таблиці кроку підвищення версії (бажані імена): раннер
+   * звіряє їх з живими, вимикає на час кроку й вмикає після блоку `versions`.
+   */
+  triggers?: DataTable["triggers"]
+  /** Що заповнює крок `backfill`; одне джерело для раннера й виводу `plan`. */
+  backfill?: BackfillFacts
+  /**
+   * Колонки, які крок двигуна робить `NOT NULL` без кроку заповнення перед
+   * ним (платформна спека §6.6): `NULL`, що з'явилися після плану, раннер
+   * рахує перед кроком і зупиняється відмовою, а не сирим `23502`. Імена —
+   * імена кроку.
+   */
+  notNull?: { table: { schema: string; name: string }; column: string }[]
 }
+
+/**
+ * Заповнення `NULL` default колонки перед `NOT NULL` (платформна спека
+ * §6.6). Імена — ті, в яких діє крок (після кроків наміру).
+ */
+export interface BackfillFacts {
+  table: { schema: string; name: string }
+  column: string
+  /** Рядки з `NULL` на плані. */
+  rowsAtPlan: number
+  /**
+   * Прийнята таблиця: заповнення потребує дозволу за id кроку, бо там дані
+   * споживача.
+   */
+  permission: boolean
+  /** Текст default бажаної колонки: пункт дозволу показує його до згоди. */
+  default: string
+  /**
+   * Показаний перелік тригерів користувача таблиці (платформна спека §6.6):
+   * живі на плані разом зі створеними кроками до заповнення, без платформних
+   * за визначенням (`isPlatformTrigger`). Раннер вимикає лише тригери з
+   * цього переліку; живий тригер поза ним — відмова.
+   */
+  triggers: DataTable["triggers"]
+}
+
+/** Синтетична дія заповнення серед дій двигуна (`backfillAction`). */
+export type BackfillAction = EngineAction & { backfill: BackfillFacts }
+
+/** Дія плану до класифікації: дія двигуна чи вставлене заповнення. */
+export type PlanAction = EngineAction | BackfillAction
+
+const isBackfill = (action: PlanAction): action is BackfillAction =>
+  "backfill" in action
 
 /**
  * Види, чиє знищення — втрата даних навіть тоді, коли пізніший крок
@@ -410,6 +462,113 @@ export function intentStep(
 }
 
 /**
+ * Колонка, яку дія робить `NOT NULL`. `filled` — `ADD COLUMN` сам дає
+ * значення наявним рядкам (default, identity чи generated).
+ */
+export interface NotNullColumn {
+  schema?: string
+  table: string
+  column: string
+  via: "setNotNull" | "addColumn"
+  filled: boolean
+}
+
+const hasConstraint = (
+  constraints: readonly Node[] | undefined,
+  types: ReadonlySet<string>
+): boolean =>
+  (constraints ?? []).some(
+    (n) => "Constraint" in n && types.has(n.Constraint.contype ?? "")
+  )
+
+const NOT_NULL: ReadonlySet<string> = new Set(["CONSTR_NOTNULL"])
+const FILLING: ReadonlySet<string> = new Set([
+  "CONSTR_DEFAULT",
+  "CONSTR_IDENTITY",
+  "CONSTR_GENERATED",
+])
+
+/**
+ * Колонки, які оператори дії роблять `NOT NULL`: `SET NOT NULL` і
+ * `ADD COLUMN … NOT NULL` — з дерева, а не з тексту, тож ні коментар, ні
+ * ім'я колонки кроку не дають (платформна спека §6.6).
+ */
+export function notNullColumns(stmts: readonly Node[]): NotNullColumn[] {
+  return stmts.flatMap((stmt): NotNullColumn[] => {
+    if (!("AlterTableStmt" in stmt)) return []
+    const { relation, cmds, objtype } = stmt.AlterTableStmt
+    if (objtype !== "OBJECT_TABLE" || relation?.relname === undefined) return []
+    const at = { schema: relation.schemaname, table: relation.relname }
+    return (cmds ?? []).flatMap((node): NotNullColumn[] => {
+      if (!("AlterTableCmd" in node)) return []
+      const { subtype, name, def } = node.AlterTableCmd
+      if (subtype === "AT_SetNotNull" && name !== undefined)
+        return [{ ...at, column: name, via: "setNotNull", filled: false }]
+      if (
+        subtype === "AT_AddColumn" &&
+        def !== undefined &&
+        "ColumnDef" in def &&
+        def.ColumnDef.colname !== undefined &&
+        (def.ColumnDef.is_not_null === true ||
+          hasConstraint(def.ColumnDef.constraints, NOT_NULL))
+      )
+        return [
+          {
+            ...at,
+            column: def.ColumnDef.colname,
+            via: "addColumn",
+            filled:
+              def.ColumnDef.raw_default !== undefined ||
+              def.ColumnDef.identity !== undefined ||
+              hasConstraint(def.ColumnDef.constraints, FILLING),
+          },
+        ]
+      return []
+    })
+  })
+}
+
+/**
+ * Предикат «у колонці NULL» для заповнення, його підрахунку й сторожа
+ * `SET NOT NULL` (платформна спека §6.6). Не `IS NULL`: для композитного типу
+ * `ROW(NULL, NULL) IS NULL` істинне, хоча `attnotnull` такий рядок пропускає,
+ * тож заповнення перезаписало б значення споживача. `IS NOT DISTINCT FROM
+ * NULL` перевіряє сам datum і для решти типів поводиться як `IS NULL`; одна
+ * форма для всіх типів, бо крок однаково сканує таблицю під ACCESS EXCLUSIVE.
+ * `column` — уже взяте в лапки ім'я.
+ */
+export const nullDatum = (column: string): string =>
+  `${column} IS NOT DISTINCT FROM NULL`
+
+/**
+ * Синтетична дія заповнення (платформна спека §6.6): `DEFAULT` бере default
+ * колонки на момент кроку, тож текст виразу не копіюється, а умова
+ * `nullDatum` не торкається наявних значень. Замок — `ACCESS EXCLUSIVE`: наступний
+ * `SET NOT NULL` однаково бере його на цій таблиці.
+ */
+export function backfillAction(facts: BackfillFacts): BackfillAction {
+  const table = `${quoteIdent(facts.table.schema)}.${quoteIdent(facts.table.name)}`
+  const column = quoteIdent(facts.column)
+  return {
+    sql: `UPDATE ${table} SET ${column} = DEFAULT WHERE ${nullDatum(column)}`,
+    verb: "alter",
+    produces: [],
+    consumes: [],
+    destroys: [],
+    produced: [],
+    destroyed: [],
+    consumed: [],
+    transactionality: "transactional",
+    newSegmentBefore: false,
+    lockedTables: [facts.table],
+    lockClass: "accessExclusive",
+    dataLoss: false,
+    rewriteRisk: false,
+    backfill: facts,
+  }
+}
+
+/**
  * Класи кроків із прапорів двигуна й дерева розбору. `target` — модель
  * каталогу цілі, тобто вихідного стану плану: лише вона знає, чи знятий
  * індекс унікальний, чи таблиця вже існує і який тип мала колонка.
@@ -420,7 +579,7 @@ export function intentStep(
  * видалення плюс створення (спека промоції §8).
  */
 export function classifySteps(
-  actions: readonly EngineAction[],
+  actions: readonly PlanAction[],
   target: CatalogModel,
   parse: SqlParser,
   offset = 0,
@@ -440,8 +599,19 @@ export function classifySteps(
     ),
     columnType: columnTypeReader(parse),
   }
-  return actions.map((action, index) => {
+  return actions.map((action, index): PlanStep => {
     const id = stepId(offset + index)
+    // Заповнення змінює лише `NULL`, тож це крок даних без втрати; сторожів
+    // приведення в нього немає
+    if (isBackfill(action))
+      return {
+        id,
+        origin: "backfill",
+        ...stepFields(action),
+        class: "dataStep",
+        guards: [],
+        backfill: action.backfill,
+      }
     const base = baseClass(action, parsed(id, action.sql, parse), facts)
     // Виняток не перекриває втрату даних: `destructive` сюди не доходить
     const cls =
@@ -453,25 +623,31 @@ export function classifySteps(
     return {
       id,
       origin: "engine",
-      sql: action.sql,
-      verb: action.verb,
+      ...stepFields(action),
       class: cls,
-      lockClass: action.lockClass,
-      transactionality: action.transactionality,
-      newSegmentBefore: action.newSegmentBefore,
-      lockedTables: action.lockedTables,
-      produces: action.produces,
-      consumes: action.consumes,
-      destroys: action.destroys,
-      produced: action.produced,
-      destroyed: action.destroyed,
-      consumed: action.consumed,
-      dataLoss: action.dataLoss,
-      rewriteRisk: action.rewriteRisk,
       guards: guardsOf(typeGuards({ id, sql: action.sql }, target, parse)),
     }
   })
 }
+
+const stepFields = (
+  action: EngineAction
+): Omit<PlanStep, "id" | "origin" | "class" | "guards"> => ({
+  sql: action.sql,
+  verb: action.verb,
+  lockClass: action.lockClass,
+  transactionality: action.transactionality,
+  newSegmentBefore: action.newSegmentBefore,
+  lockedTables: action.lockedTables,
+  produces: action.produces,
+  consumes: action.consumes,
+  destroys: action.destroys,
+  produced: action.produced,
+  destroyed: action.destroyed,
+  consumed: action.consumed,
+  dataLoss: action.dataLoss,
+  rewriteRisk: action.rewriteRisk,
+})
 
 /**
  * Сторожі кроку; відмову побудувати сторожа план збирає окремо тим самим
@@ -635,6 +811,13 @@ export function comparePermissionItems(
 }
 
 /**
+ * Чи крок потребує дозволу: клас, що знімає гарантію чи губить дані, або
+ * заповнення прийнятої таблиці (платформна спека §6.6).
+ */
+const needsPermission = (step: PlanStep): boolean =>
+  NEEDS_PERMISSION.has(step.class) || step.backfill?.permission === true
+
+/**
  * Пункти, яким потрібен явний дозвіл: дрейф першим — його переглядають до
  * кроків, бо кроки показують, що станеться з об'єктами, які дрейфнули, —
  * далі пункти промоції (`access:`, `delete:`, `update:`, `remove:`,
@@ -648,7 +831,7 @@ export function requiredPermissions(plan: PermissionSubject): string[] {
   return [
     ...(plan.drift === null ? [] : [DRIFT_PERMISSION]),
     ...new Set(promotion),
-    ...plan.steps.filter((s) => NEEDS_PERMISSION.has(s.class)).map((s) => s.id),
+    ...plan.steps.filter(needsPermission).map((s) => s.id),
   ]
 }
 

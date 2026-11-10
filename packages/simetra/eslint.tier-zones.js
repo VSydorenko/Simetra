@@ -100,6 +100,14 @@ const DB_ENGINE_PATTERN = {
     "Runtime boundary: simetra production sources import neither pg nor @supabase/pg-delta; the schema engine and database readers live in @simetrajs/designer (designer plan, decision 4).",
 }
 
+// Better Auth і kysely — лише тестова залежність `simetra` (рішення Р2): міграція
+// схеми `better_auth` потрібна DB-тестам, а не споживачеві пакета.
+const TEST_ONLY_AUTH_PATTERN = {
+  regex: "^(?:better-auth|kysely)(?:/|$)",
+  message:
+    "Test-only dependency: better-auth and kysely are devDependencies of simetra for DB tests; production sources must not import them (postgres profile plan 2a, decision R2).",
+}
+
 // Чистота T4 (спека П4-B §3). Allow-list: нерелятивні імпорти — лише
 // simetra/model, zod і react; `@tanstack/*` не дозволено ніде в `src/data`
 // (власне ядро даних, без бібліотек рушія). Ядро в `src/data/store` ще й без
@@ -120,6 +128,7 @@ function dataPurity(store) {
         {
           patterns: [
             DB_ENGINE_PATTERN,
+            TEST_ONLY_AUTH_PATTERN,
             {
               regex: `^(?!\\.|(?:${allowed.join("|")})(?:/|$))`,
               message: store
@@ -152,7 +161,7 @@ export const purityConfigs = [
     rules: {
       "@typescript-eslint/no-restricted-imports": [
         "error",
-        { patterns: [DB_ENGINE_PATTERN] },
+        { patterns: [DB_ENGINE_PATTERN, TEST_ONLY_AUTH_PATTERN] },
       ],
     },
   },
@@ -165,6 +174,7 @@ export const purityConfigs = [
         {
           patterns: [
             DB_ENGINE_PATTERN,
+            TEST_ONLY_AUTH_PATTERN,
             {
               regex: "^(?!zod(?:/|$)|\\.|simetra/model(?:/|$))",
               message:
@@ -187,6 +197,7 @@ export const purityConfigs = [
         {
           patterns: [
             DB_ENGINE_PATTERN,
+            TEST_ONLY_AUTH_PATTERN,
             {
               // `./` — лише без сегмента `..`: `./../model` чи `./a/../../model`
               // виходять з теки так само, як `../model`.
@@ -213,6 +224,7 @@ export const purityConfigs = [
         {
           patterns: [
             DB_ENGINE_PATTERN,
+            TEST_ONLY_AUTH_PATTERN,
             {
               regex:
                 "^(?:simetra/data/supabase(?:/|$)|(?:\\./)?(?:\\.\\./)+(?:src/)?data(?:/|$))",
@@ -233,6 +245,7 @@ export const purityConfigs = [
         {
           patterns: [
             DB_ENGINE_PATTERN,
+            TEST_ONLY_AUTH_PATTERN,
             {
               regex:
                 "^(?:node:|(?:fs|path|os|crypto|url|child_process)(?:/|$))",

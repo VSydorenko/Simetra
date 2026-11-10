@@ -1,9 +1,11 @@
 import { diagnostic, localize, type Diagnostic } from "simetra/compiler"
 import { ApplyConnectionLost, ApplyDbError } from "simetra/schema"
 import {
+  ShadowBaseUnsupportedError,
   ShadowCreateRefusedError,
   ShadowServerError,
   ShadowServerMismatchError,
+  ShadowTemplateMissingError,
 } from "../schema-engine/errors"
 import type { DatabaseContext, DatabaseResource } from "../tools/types"
 import { UsageError } from "./usage-error"
@@ -154,10 +156,19 @@ function classify(
     return { kind: "refusal", message: error.message }
   if (error instanceof ShadowServerMismatchError)
     return { kind: "refusal", message: error.message }
+  if (error instanceof ShadowBaseUnsupportedError)
+    return refusal(
+      localize({ code: "plan.shadow-base-unsupported", params: {} }, "en")
+        .message
+    )
+  if (error instanceof ShadowTemplateMissingError)
+    return refusal(
+      `The shadow template database "${error.template}" is missing or is not sealed by a superuser. Run \`simetra roles\` as a superuser to prepare it.`
+    )
   if (error instanceof ShadowCreateRefusedError) {
     const where = error.onShadowBase ? (names.shadow ?? describe) : describe
     return refusal(
-      `A shadow database cannot be created on ${where}: the connecting role lacks CREATEDB.${error.onShadowBase ? "" : " Point --shadow-url-env at a server where it has it."}`
+      `A shadow database cannot be created on ${where}: the connecting role lacks CREATEDB.${error.onShadowBase ? "" : " Grant CREATEDB to the role or, where the provider allows a separate shadow server, point --shadow-url-env at a server where it has it."}`
     )
   }
   // Збій тіні — та сама класифікація з адресою сервера, де мала з'явитися

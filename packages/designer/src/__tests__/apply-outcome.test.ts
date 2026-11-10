@@ -13,6 +13,7 @@ import {
   PLAN_FORMAT,
   PLATFORM_VERSION,
   planFileName,
+  REHEARSAL_FORMAT,
   rehearsalFileName,
   serializePlan,
   serializeRehearsal,
@@ -44,6 +45,7 @@ const lost = vi.hoisted(() => ({ transactions: 0 }))
 vi.mock("../schema-engine", async (importOriginal) => {
   const { ApplyConnectionLost } = await import("simetra/schema")
   const database: ApplyDatabase = {
+    statement: () => Promise.reject(new Error("no statement expected")),
     transaction() {
       lost.transactions++
       return Promise.reject(new ApplyConnectionLost("connection lost"))
@@ -88,7 +90,8 @@ const SERVER: PlanArtifact["server"] = {
 /** Чинний план без кроків для еталонних метаданих у `plans/` кореня. */
 async function writePlan(
   dir: string,
-  promotion: PlanArtifact["promotion"] = null
+  promotion: PlanArtifact["promotion"] = null,
+  provider: "supabase" | "postgres" = "supabase"
 ): Promise<{ file: string; artifact: PlanArtifact }> {
   const model = (await compile(await readMetadataDir(dir))).model
   if (model === undefined) throw new Error("reference metadata must compile")
@@ -99,7 +102,7 @@ async function writePlan(
     fingerprintVersion: FINGERPRINT_VERSION,
     fromHash: null,
     toHash: model.hash,
-    scope: { schemas: ["app"], provider: "supabase" },
+    scope: { schemas: ["app"], provider },
     targetFingerprint: fingerprint(),
     desiredFingerprint: fingerprint(),
     steps: [],
@@ -332,13 +335,14 @@ describe("apply with an unknown outcome", TOOL_PIPELINE, () => {
       over: Partial<RehearsalReport> = {}
     ): string =>
       serializeRehearsal({
-        format: 1,
+        format: REHEARSAL_FORMAT,
         planHash: artifact.planHash,
         server: SERVER,
         ledgerHead: null,
         rows: [{ schema: "app", table: "t", rows: 1 }],
         durations: { phases: [], steps: [], longestStatementMs: 1 },
         data: [],
+        backfills: [],
         preservation: [{ schema: "app", table: "t", rows: 1 }],
         plpgsqlCheck: "skipped",
         triggers: [],
@@ -380,7 +384,10 @@ describe("apply with an unknown outcome", TOOL_PIPELINE, () => {
       [
         "format",
         (a: PlanArtifact) =>
-          JSON.stringify({ ...JSON.parse(reportOf(a)), format: 2 }),
+          JSON.stringify({
+            ...JSON.parse(reportOf(a)),
+            format: REHEARSAL_FORMAT + 1,
+          }),
       ],
       // Файл переписано, `planHash` той самий: без
       // рядків звіт оминув би гейт порожньої копії
@@ -413,4 +420,44 @@ describe("apply with an unknown outcome", TOOL_PIPELINE, () => {
       expect(lost.transactions).toBeGreaterThan(0)
     })
   })
+})
+
+// Профіль `postgres` не має окремого сервера тіней (Р9): відмова до будь-якого
+// звернення до бази, і для застосування, і для репетиції
+describe("apply with a separate shadow server on the postgres profile", () => {
+  it.each([false, true])(
+    "refuses before any database access (rehearse: %s)",
+    async (rehearse) => {
+      const dir = await project()
+      const { file, artifact } = await writePlan(dir, null, "postgres")
+      const url = "postgres://u:p@db.example.test:5432/app"
+      const r = await invoke(
+        toolByName("apply")!,
+        { plan: file, planHash: artifact.planHash, rehearse },
+        {
+          dir,
+          readOnly: false,
+          allowDatabaseWrite: true,
+          dryRun: false,
+          confirmed: true,
+          channel: "cli" as const,
+          database: {
+            describe: "db.example.test:5432/app",
+            connect: () =>
+              Promise.resolve({
+                target: { url },
+                describe: "db.example.test:5432/app",
+                shadowBase: {
+                  url: "postgres://u:p@shadow.example.test:5432/x",
+                },
+              }),
+          },
+        }
+      )
+      expect(r.diagnostics.map((d) => d.code)).toEqual([
+        "plan.shadow-base-unsupported",
+      ])
+      expect(lost.transactions).toBe(0)
+    }
+  )
 })

@@ -34,7 +34,7 @@ async function compileSql(
 async function identities(sql: string): Promise<string[]> {
   const result = await compileSql(sql)
   expect(result.diagnostics).toEqual([])
-  return result.model!.sqlUnits.map((unit) => unit.identity)
+  return withoutMechanics(result.model!.sqlUnits).map((unit) => unit.identity)
 }
 
 describe("sql units", () => {
@@ -63,7 +63,7 @@ describe("sql units", () => {
       "CREATE FUNCTION public.f(a uuid, b text) RETURNS int LANGUAGE sql AS $$ select 1 $$;"
     )
     expect(result.diagnostics).toEqual([])
-    const [unit] = result.model!.sqlUnits
+    const [unit] = withoutMechanics(result.model!.sqlUnits)
     expect(unit).toMatchObject({
       class: "function",
       identity: "function:public.f(uuid,text)",
@@ -244,7 +244,9 @@ describe("sql units", () => {
       "sql/b/item.sql": "CREATE DOMAIN item AS text;",
     })
     expect(result.diagnostics).toEqual([])
-    expect(result.model!.sqlUnits.map((u) => u.identity)).toEqual(
+    expect(
+      withoutMechanics(result.model!.sqlUnits).map((u) => u.identity)
+    ).toEqual(
       expect.arrayContaining([
         "function:a.f(b.item)",
         "grant:grant:function:a.f(b.item):anon:execute",
@@ -260,9 +262,9 @@ describe("sql units", () => {
       "sql/b/item.sql": "CREATE DOMAIN item AS text;",
     })
     expect(result.diagnostics).toEqual([])
-    expect(result.model!.sqlUnits.map((u) => u.identity)).toContain(
-      "function:a.f(a.item)"
-    )
+    expect(
+      withoutMechanics(result.model!.sqlUnits).map((u) => u.identity)
+    ).toContain("function:a.f(a.item)")
   })
 
   it("unqualified type unknown to the model stays as written", async () => {
@@ -352,9 +354,9 @@ describe("sql units", () => {
       "sql/b/y.sql": "COMMENT ON CONSTRAINT c ON DOMAIN d IS 'x';",
     })
     expect(result.diagnostics).toEqual([])
-    expect(result.model!.sqlUnits.map((u) => u.identity)).toContain(
-      "comment:domconstraint:a.d.c"
-    )
+    expect(
+      withoutMechanics(result.model!.sqlUnits).map((u) => u.identity)
+    ).toContain("comment:domconstraint:a.d.c")
   })
 
   it("a table row type argument has one identity however it is written", async () => {
@@ -389,9 +391,9 @@ describe("sql units", () => {
       }
     )
     expect(result.diagnostics).toEqual([])
-    expect(result.model!.sqlUnits.map((u) => u.identity)).toEqual([
-      "function:public.f(public.codes)",
-    ])
+    expect(
+      withoutMechanics(result.model!.sqlUnits).map((u) => u.identity)
+    ).toEqual(["function:public.f(public.codes)"])
   })
 
   it("aggregate, function settings, grant and comment name a signature canonically", async () => {
@@ -494,7 +496,9 @@ describe("sql units", () => {
     expect(result.diagnostics.map((d) => [d.code, d.severity])).toEqual([
       ["sql.debt-extension-schema", "warning"],
     ])
-    expect(result.model!.sqlUnits.map((u) => u.identity)).toEqual([
+    expect(
+      withoutMechanics(result.model!.sqlUnits).map((u) => u.identity)
+    ).toEqual([
       "domain:public.d",
       "extension:pgcrypto",
       "policy:storage.objects.p",
@@ -556,7 +560,9 @@ describe("sql units", () => {
       "sql/b/x.sql": sql,
     })
     expect(result.diagnostics).toEqual([])
-    expect(result.model!.sqlUnits.map((u) => u.identity)).toEqual(
+    expect(
+      withoutMechanics(result.model!.sqlUnits).map((u) => u.identity)
+    ).toEqual(
       expect.arrayContaining([
         "grant:grant:domain:a.d:anon:usage",
         "grant:grant:domain:b.d:anon:usage",
@@ -573,7 +579,9 @@ describe("sql units", () => {
       "sql/b/x.sql": sql,
     })
     expect(result.diagnostics).toEqual([])
-    expect(result.model!.sqlUnits.map((u) => u.identity)).toEqual(
+    expect(
+      withoutMechanics(result.model!.sqlUnits).map((u) => u.identity)
+    ).toEqual(
       expect.arrayContaining([
         "comment:domconstraint:a.d.c",
         "comment:domconstraint:b.d.c",
@@ -632,7 +640,7 @@ describe("sql units", () => {
       "CREATE VIEW a AS SELECT 'ї😀';\n-- ї 😀\n/* 😀 */ CREATE VIEW b AS SELECT 'ї😀 ї';"
     const valid = await compileSql(text)
     expect(valid.diagnostics).toEqual([])
-    expect(valid.model!.sqlUnits.map((u) => u.sql)).toEqual([
+    expect(withoutMechanics(valid.model!.sqlUnits).map((u) => u.sql)).toEqual([
       "CREATE VIEW a AS SELECT 'ї😀'",
       "CREATE VIEW b AS SELECT 'ї😀 ї'",
     ])
@@ -651,7 +659,7 @@ describe("sql units", () => {
     const result = await compileSql(
       "CREATE VIEW v AS SELECT a.x + 1 FROM public.t a WHERE a.y = 'z';"
     )
-    const [unit] = result.model!.sqlUnits
+    const [unit] = withoutMechanics(result.model!.sqlUnits)
     const text = JSON.stringify(unit!.tree)
     expect(text).toContain("ViewStmt")
     expect(text).not.toContain('"location"')
@@ -662,7 +670,9 @@ describe("sql units", () => {
   it("formatting does not change the tree", async () => {
     const a = await compileSql("CREATE VIEW v AS SELECT 1;")
     const b = await compileSql("\n\n  create   view v as\n  select 1 ;")
-    expect(a.model!.sqlUnits[0]!.tree).toEqual(b.model!.sqlUnits[0]!.tree)
+    expect(withoutMechanics(a.model!.sqlUnits)[0]!.tree).toEqual(
+      withoutMechanics(b.model!.sqlUnits)[0]!.tree
+    )
   })
 
   it("object sql belongs to its object and leaves movement blocks out", async () => {
@@ -712,7 +722,7 @@ describe("sql units", () => {
       metaFiles({ "project.meta.json": project(), ...entries })
     )
     expect(result.diagnostics).toEqual([])
-    const [unit] = result.model!.sqlUnits
+    const [unit] = withoutMechanics(result.model!.sqlUnits)
     expect(unit).toMatchObject({
       class: "movementQuery",
       identity: "function:public.sale_stock_movements(uuid)",

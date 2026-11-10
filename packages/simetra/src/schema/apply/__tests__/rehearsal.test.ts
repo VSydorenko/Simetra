@@ -68,6 +68,9 @@ const evidence: RehearsalEvidence = {
     ],
   },
   data: [{ schema: "app", table: "t", computed: 10, written: 10 }],
+  backfills: [
+    { step: "s3", schema: "app", table: "t", column: "note", rows: 2 },
+  ],
   preservation: [{ schema: "app", table: "t", rows: 10 }],
   plpgsqlCheck: {
     mode: "installed",
@@ -163,7 +166,7 @@ describe("rehearsal file", () => {
 
   it("reports another format as format", () => {
     expect(
-      parseRehearsal(JSON.stringify({ ...report(), format: 2, other: true }))
+      parseRehearsal(JSON.stringify({ ...report(), format: 1, other: true }))
     ).toMatchObject({ ok: false, reason: "format" })
   })
 

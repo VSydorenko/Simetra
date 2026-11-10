@@ -243,7 +243,7 @@ Attribute properties (an element of `attributes`):
 Object properties:
 
 - `indexes` on a Catalog, a Document and their tabular sections: a list of
-  composite indexes, each `{ "attributes": [name | { "name": …, "order": "desc" }] }`.
+  composite indexes, each `{ "attributes": [name | { "name": …, "order": "desc" }] }`; like `indexed`, a list-order index: `references/list-order-indexes.md`.
 - `publicRead`: `"authenticated"` or `"anon"` on kinds with row-level security.
 - Project file: `storageBuckets`, a list of `{ "bucket": …, "scopeKind": … }`.
 
@@ -279,9 +279,9 @@ No event is insert-only; `TG_OP` tells insert from update. The same events as
 TypeScript hooks of a command (object modules): `references/object-modules.md`.
 
 Catalogs and Documents get the row mechanics trigger `<table>_simetra_touch`
-(the single platform function `simetra.touch()`): an insert sets `version` to 1,
-an update adds 1, both set `updatedAt` to `now()` whatever the client writes;
-on a table with carrier copies the update is `<table>_simetra_touch_update`,
+(the single platform function `simetra.touch()`): `version` comes from the
+sequence `simetra.row_version` (an update: at least old version plus 1), `updatedAt` is `now()`, whatever
+the client writes; on a table with carrier copies the update is `<table>_simetra_touch_update`,
 firing on a content change only. Never maintain them (`moddatetime`) or list
 them in `whenChanged`. A `beforeWrite` handler never assigns `NEW.updated_at`
 or `NEW.version` and never replaces the row (`NEW := …`, `SELECT … INTO NEW`):
@@ -388,9 +388,9 @@ The generated SQL grants to platform roles (`simetra_command`) that live in the
 cluster, not in the database, so `plan` does not create them. Without one on
 the target or the shadow server, `plan`, `diff` and `rehearse` refuse with
 `plan.platform-role-missing`: run `simetra roles` once with a role that has
-`CREATEROLE` (with a project file it also creates the login role: "Platform
-roles" in `references/people-and-rights.md`). It only checks an existing role;
-an unsafe shape (`plan.platform-role-shape`) is fixed by hand, not by `roles`.
+`CREATEROLE` ("Platform roles" in `references/people-and-rights.md`; `postgres`
+needs a superuser and no separate shadow server). It only checks an existing role; an unsafe
+shape (`plan.platform-role-shape`) is fixed by hand, not by `roles`.
 
 `apply` applies exactly that file in one transaction. It needs the `planHash`
 of the reviewed plan, confirmation (`--yes`, MCP `confirm: true`), and in
@@ -415,7 +415,8 @@ The output shows them as their own group, `environment rights: the global
 default privileges of role <role>`; review them with the rest of the plan.
 If the environment changes before the apply, it is refused
 (`apply.target-changed`); plan again. A plan file from an older tool version is
-refused too: rebuild it with `plan`.
+refused too: rebuild it with `plan`. After a data-only restore or a
+logical-replication move, reset the row version epoch: `references/row-version-epoch.md`.
 
 A promotion plan's `allow` also takes its listed `access:<table>`, `remove:<t>`,
 `repair:<t>`, `delete:<t>.<constraint>` and `update:<t>.<constraint>` items; a

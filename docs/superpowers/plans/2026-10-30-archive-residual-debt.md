@@ -120,6 +120,31 @@
   `providerTriggerConflicts` (`plan.ts`), а не кодованим
   `plan.provider-trigger-taken`. Розпізнати цей збій тіні й дати кодовану
   відмову.
+- **Замок при заміні індексу на наявній базі.** Зміна форми пошукового
+  індексу порядку списку (B1d, Рд43 П4-B) — `DROP INDEX` і `CREATE INDEX` у
+  транзакції застосування: `ACCESS EXCLUSIVE` на таблицю на час побудови,
+  читання й запис стоять. До першої міграції споживача рішення не потрібне;
+  кандидат — `CREATE INDEX CONCURRENTLY` і `DROP INDEX CONCURRENTLY` поза
+  транзакцією.
+
+- **`ADD COLUMN … NOT NULL` без default поза сторожем раннера.** Порожня на
+  плані таблиця, у якій рядки з'явилися до застосування, дає сирий `23502`
+  (`apply.step-failed`): відбиток даних не бачить, а перевірка перед кроком
+  (поле `notNull`) стоїть лише на `SET NOT NULL`. Та сама форма — колонка,
+  яку план знімає й додає знову: pg-delta замінює зміну виразу генерованої
+  колонки парою `DROP COLUMN` + `ADD COLUMN … NOT NULL`, і план її `NULL` не
+  рахує (`packages/designer/src/schema-engine/__tests__/apply-backfill.db.test.ts`
+  фіксує форму). Кандидат: перевірка перед кроком і для `ADD COLUMN … NOT
+  NULL` (`packages/simetra/src/schema/apply/backfill.ts`, `withNotNullChecks`).
+- **Хеш збереження промоції не розрізняє композитний `ROW(NULL, NULL)` і
+  `NULL`.** Замір збереження
+  (`packages/simetra/src/schema/apply/promotion/preservation.ts`,
+  `preservationQuery`) позначає значення `CASE WHEN x IS NULL`, а для
+  композитного типу `ROW(NULL, NULL) IS NULL` істинне: рядок з усіма полями
+  `NULL` і справжній `NULL` дають однаковий внесок у хеш, тож перевірка
+  збереження не бачить заміни одного іншим. Поза шляхом заповнення.
+  Кандидат: той самий предикат `IS NOT DISTINCT FROM NULL`, що й у кроці
+  заповнення (`nullDatum` у `packages/simetra/src/schema/apply/steps.ts`).
 
 ## 2. Двигун схеми й апстрім
 
@@ -387,3 +412,5 @@
 - **`describe` підключення даних — за WHATWG URL, не за хостом `pg`.** `describeConnection` (`packages/designer/src/io/database.ts`) для `?host=` чи unix-сокета показує в `instructions` інший хост, ніж той, що бере `pg` і перевіряє запобіжник; не витік, але вводить агента в оману.
 - **Вивід даних гілкується за іменем інструмента.** `toResponse` (`packages/designer/src/mcp/tools.ts`) і `renderResult` (`packages/designer/src/cli/render.ts`) розпізнають `data-read`/`data-command` за `tool.name`, хоча ознака є у віссі `tool.data`; новий інструмент даних тихо отримав би загальний вивід.
 - **Повільні unit-тести `simetra` чутливі до навантаження.** За load 30+ окремі тести компілятора й плану перевищують типовий таймаут vitest 5000 мс; кандидат — збільшити таймаут цих файлів або зменшити їхню вагу.
+- **Тест промоції в `carrier-backfill` важкий через повний `policyDomain`.** Тест «a promotion backfills the copy of the renamed table» (`packages/designer/src/schema-engine/__tests__/carrier-backfill.db.test.ts`) займає ~26 с наодинці: CPU процесу Node, а не Postgres. Кандидат: полегшена фікстура `policyDomain` для тестів промоції без `TaskComment`, `TaskHours`, `TaskReport` і лічильника коментарів.
+- **`buildPlan` промоції повторює `extract` каталогу.** План промоції займає ~11 с, із них 10 викликів `extract` по ~0,7 с на малій фікстурі (`packages/designer/src/schema-engine/pg-delta/adapter.ts`, `packages/simetra/src/schema/apply/plan.ts`). Кандидат: перевикористати результат `extract` в межах одного плану.

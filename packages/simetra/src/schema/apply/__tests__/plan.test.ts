@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest"
 import {
+  applyChanges,
   canonicalSnapshot,
   compile,
   type CompiledModel,
+  MECHANICS_FUNCTION,
+  mechanicsTriggerName,
+  promoteObject,
   effectsFunctionName,
   effectsTriggerNames,
   platformFunctionSignatures,
@@ -44,6 +48,12 @@ import {
   tagMapping,
   TASK_FILE,
 } from "../../../compiler/__tests__/fixtures/rights"
+import {
+  COUNTERPARTY_ID,
+  counterpartyMapping,
+  promotionProject,
+} from "../../../compiler/__tests__/fixtures/promotion"
+import { uuid } from "../../../compiler/__tests__/helpers"
 import { applyDiagnostic } from "../diagnostic"
 
 /**
@@ -54,7 +64,7 @@ describe("planPlatformFunctions", () => {
   // Функцію стану застосування рендерить T2 з фіксованим тілом, тож для
   // перевірки функцій вона платформна, як і функції шару: інакше роль
   // застосування без `EXECUTE` на неї бачила б «сліпу» функцію на кожному плані
-  it("adds the apply state function to the platform functions of the model", async () => {
+  it("adds the apply state functions to the platform functions of the model", async () => {
     const m = (
       await compile(
         metaFiles({
@@ -69,7 +79,12 @@ describe("planPlatformFunctions", () => {
     const layer = platformFunctionSignatures(m.sqlUnits)
     expect(layer.length).toBeGreaterThan(0)
     expect(planPlatformFunctions(m)).toEqual(
-      [...layer, "simetra.applied_snapshot_hash()"].sort()
+      [
+        ...layer,
+        "simetra.applied_snapshot_hash()",
+        "simetra.row_version_epoch()",
+        "simetra.reset_row_version_epoch()",
+      ].sort()
     )
   })
 })
@@ -149,6 +164,36 @@ describe("buildPlan", () => {
         expect(
           outcome.diagnostics.some((d) => d.code === SHADOW_FAILED.code)
         ).toBe(true)
+    }
+  )
+
+  it.each([
+    ["a role without BYPASSRLS", { bypassrls: false, superuser: false }],
+    ["a missing role row (fail-closed)", "none" as const],
+  ])(
+    "refuses %s before any state read or platform-role check",
+    async (_name, owner) => {
+      const model = (await compile(policyDomain(adminRoles()))).model!
+      const queries: string[] = []
+      const target = await fakeTarget(model, {
+        notCopies: [],
+        owner,
+        queries,
+      })
+      const outcome = await buildPlan(
+        fakeEngine([]),
+        { reader: target.reader, scratch: emptyScratch },
+        model,
+        { target: { url: "postgres://target" } },
+        []
+      )
+      expect(outcome).toMatchObject({
+        status: "refused",
+        diagnostics: [{ code: "plan.owner-not-bypassrls" }],
+      })
+      // Гейт — останнє читання: далі ні стану застосування, ні ролей платформи
+      expect(queries.at(-1)).toContain("AS bypassrls")
+      expect(queries.filter((q) => q.includes("AS bypassrls"))).toHaveLength(1)
     }
   )
 
@@ -236,9 +281,11 @@ describe("buildPlan", () => {
       extract: () => Promise.reject(new Error("no extract expected")),
     }
     const reader: ApplyDatabase = {
+      statement: () => Promise.reject(new Error("no statement expected")),
       transaction: (_db, _end, fn) => fn(tx),
     }
     const scratch: ApplyDatabase = {
+      statement: () => Promise.reject(new Error("no statement expected")),
       transaction: () => Promise.reject(new Error("no copy expected")),
     }
     // Двигун не потрібен: відмова — до будь-якого витягу
@@ -264,6 +311,43 @@ describe("buildPlan", () => {
     expect(statements[0]).toContain("server_version_num")
   })
 
+  it("refuses a separate shadow server on the postgres profile before any database access", async () => {
+    // Р9: тіні профілю будують із шаблону кластера цілі. Відмова — до
+    // платформних ролей, тож підставний порт не отримує жодного запиту
+    const compiled = await compile(
+      metaFiles({
+        "project.meta.json": project({ database: { provider: "postgres" } }),
+        "catalogs/Party/Party.meta.json": catalog("Party"),
+      })
+    )
+    expect(compiled.diagnostics).toEqual([])
+    const never = (what: string) => () =>
+      Promise.reject(new Error(`no ${what} expected`))
+    const reader: ApplyDatabase = {
+      statement: never("statement"),
+      transaction: never("transaction"),
+    }
+    const engine = new Proxy({} as SchemaEngine, {
+      get: (_, name) => {
+        throw new Error(`no engine call expected: ${String(name)}`)
+      },
+    })
+    const outcome = await buildPlan(
+      engine,
+      { reader, scratch: reader },
+      compiled.model!,
+      {
+        target: { url: "postgres://target" },
+        shadowBase: { url: "postgres://shadow" },
+      },
+      []
+    )
+    expect(outcome).toMatchObject({
+      status: "refused",
+      diagnostics: [{ code: "plan.shadow-base-unsupported" }],
+    })
+  })
+
   it.each([
     { server: "target", promotions: false },
     { server: "shadow", promotions: false },
@@ -283,27 +367,31 @@ describe("buildPlan", () => {
       }
       // Свіжа ціль Postgres 17; роль команд є лише на іншому сервері
       const reader: ApplyDatabase = {
+        statement: () => Promise.reject(new Error("no statement expected")),
         transaction: (db, _end, fn) =>
           fn({
             query: async <R extends Record<string, unknown>>(sql: string) =>
               (sql.includes("server_version_num")
                 ? [{ num: 170004, version: "17.4", major: 17 }]
-                : sql.includes("pg_auth_members") &&
-                    db.url !== urls[server as "target" | "shadow"]
-                  ? [
-                      {
-                        name: PLATFORM_ROLES.command,
-                        attributes: {},
-                        memberOf: [],
-                        members: [],
-                        requestPath: [],
-                      },
-                    ]
-                  : []) as unknown as R[],
+                : sql.includes("AS bypassrls")
+                  ? [{ bypassrls: true, superuser: false }]
+                  : sql.includes("pg_auth_members") &&
+                      db.url !== urls[server as "target" | "shadow"]
+                    ? [
+                        {
+                          name: PLATFORM_ROLES.command,
+                          attributes: {},
+                          memberOf: [],
+                          members: [],
+                          requestPath: [],
+                        },
+                      ]
+                    : []) as unknown as R[],
             extract: () => Promise.reject(new Error("no extract expected")),
           }),
       }
       const scratch: ApplyDatabase = {
+        statement: () => Promise.reject(new Error("no statement expected")),
         transaction: () => Promise.reject(new Error("no copy expected")),
       }
       // Будь-який виклик двигуна — і `withDesiredShadow` — кидає: відмова
@@ -471,6 +559,96 @@ describe("buildPlan", () => {
   )
 })
 
+describe("buildPlan: row version first (Р11)", () => {
+  const PARTS = { module: false, contacts: false, invoice: false }
+
+  /** Промоція з кроками даних на `app.counterparties`; ціль — її стан «до». */
+  async function dataPromotion() {
+    const files = promotionProject(PARTS)
+    const before = (await compile(files)).model!
+    const result = await promoteObject(files, counterpartyMapping(PARTS), {
+      schemaPath: (file, schemaFile) => `schemas-of/${file}/${schemaFile}`,
+      newId: (() => {
+        let n = 900_000
+        return () => uuid(++n)
+      })(),
+    })
+    const desired = (await compile(applyChanges(files, result.changes))).model!
+    return {
+      before,
+      desired,
+      records: [
+        {
+          record: result.record!,
+          file: `plans/${COUNTERPARTY_ID}.promotion.json`,
+        },
+      ] satisfies PromotionInput[],
+    }
+  }
+
+  /** Двигун, чия жива ціль має `app.counterparties` з живою механікою. */
+  function engineWithMechanics(sequence: boolean): SchemaEngine {
+    const base = fakeEngine([])
+    const table = {
+      schema: "app",
+      name: "counterparties",
+    } as CatalogModel["tables"][number]
+    const unit = (identity: string, cls: string, sql: string) =>
+      ({ identity, class: cls, sql }) as CatalogModel["units"][number]
+    const model: CatalogModel = {
+      tables: [table],
+      enumTypes: [],
+      units: [
+        unit(
+          `trigger:app.counterparties.${mechanicsTriggerName("counterparties")}`,
+          "trigger",
+          `CREATE TRIGGER x BEFORE INSERT OR UPDATE ON app.counterparties FOR EACH ROW EXECUTE FUNCTION ${MECHANICS_FUNCTION.schema}.${MECHANICS_FUNCTION.name}()`
+        ),
+        ...(sequence
+          ? [unit("sequence:simetra.row_version", "sequence", "")]
+          : []),
+      ],
+    }
+    return new Proxy(base, {
+      get: (target, name) =>
+        name === "extract"
+          ? () =>
+              Promise.resolve({
+                model,
+                catalog: {} as EngineCatalog,
+                diagnostics: [],
+                unpopulated: [],
+              })
+          : target[name as keyof SchemaEngine],
+    })
+  }
+
+  it.each([
+    { sequence: false, refused: true },
+    { sequence: true, refused: false },
+  ])(
+    "data steps on a live mechanics table (sequence present: $sequence)",
+    async ({ sequence, refused }) => {
+      const { before, desired, records } = await dataPromotion()
+      const target = await fakeTarget(before, { notCopies: [] })
+      const outcome = await buildPlan(
+        engineWithMechanics(sequence),
+        { reader: target.reader, scratch: emptyScratch },
+        desired,
+        { target: { url: "postgres://target" } },
+        records
+      ).catch((e: unknown) => e)
+      const codes = (
+        outcome as { diagnostics?: { code: string }[] }
+      ).diagnostics?.map((d) => d.code)
+      if (refused) {
+        expect(outcome).toMatchObject({ status: "refused" })
+        expect(codes).toContain("plan.row-version-first")
+      } else expect(codes ?? []).not.toContain("plan.row-version-first")
+    }
+  )
+})
+
 /** Маркер падіння бажаної тіні фейкового двигуна. */
 const SHADOW_FAILED = applyDiagnostic("engine.clone-failed", "error", {
   detail: "fake shadow",
@@ -513,6 +691,7 @@ async function promotedTag(domain: Domain = policyDomain) {
 
 /** Копія цілі гілки промоції: усе читає порожнім, кроки наміру приймає. */
 const emptyScratch: ApplyDatabase = {
+  statement: () => Promise.reject(new Error("no statement expected")),
   transaction: (_db, _end, fn) =>
     fn({
       query: async <R extends Record<string, unknown>>() => [] as R[],
@@ -539,6 +718,10 @@ async function fakeTarget(
   model: CompiledModel,
   o: {
     notCopies: readonly string[]
+    /** Атрибути ролі сесії для гейта власника; за замовчуванням є BYPASSRLS. */
+    owner?: { bypassrls: boolean; superuser: boolean } | "none"
+    /** Усі запити, які бачить фейк, — у порядку надходження. */
+    queries?: string[]
     /**
      * Таблиці прийнятих джерел прав: доступ ролі застосування й ключ ролі,
      * якого не оголошує жодна роль, у кожному джерелі призначень.
@@ -593,10 +776,15 @@ async function fakeTarget(
   const lockTables: Named[] = []
   const platformFunctions: string[][] = []
   const answer = (sql: string, params: readonly unknown[] = []): unknown[] => {
+    o.queries?.push(sql)
     if (sql.includes("pg_database"))
       return [{ major: 17, encoding: "UTF8", collate: "C", ctype: "C" }]
     if (sql.includes("server_version_num"))
       return [{ num: 170004, version: "17.4" }]
+    if (sql.includes("AS bypassrls"))
+      return o.owner === "none"
+        ? []
+        : [o.owner ?? { bypassrls: true, superuser: false }]
     if (sql.includes("AS marker, to_regclass"))
       return [{ marker: true, ledger: true }]
     if (sql.includes("to_jsonb(m)")) return [{ row: JSON.stringify(marker) }]
@@ -669,7 +857,10 @@ async function fakeTarget(
     ) => answer(sql, params) as R[],
     extract: () => Promise.reject(new Error("no extract expected")),
   }
-  const reader: ApplyDatabase = { transaction: (_db, _end, fn) => fn(tx) }
+  const reader: ApplyDatabase = {
+    transaction: (_db, _end, fn) => fn(tx),
+    statement: () => Promise.reject(new Error("no statement expected")),
+  }
   return { reader, lockTables, platformFunctions }
 }
 

@@ -47,10 +47,13 @@ import { STEP_CLASSES, type PermissionItem, type PlanStep } from "./steps"
  * сторожами, блокувань із режимами й преамбули двигуна, шлях ревалідації,
  * факти сервера й голову ledger цілі (спека промоції §8), сигнатури функцій
  * платформи (`platformFunctions`) — раннер виключає їх з `plpgsql_check` і
- * переліку сліпих — та кроки копій носіїв (`origin: "carriers"`): раннер
- * старішого формату не знав би їхнього блоку.
+ * переліку сліпих — кроки копій носіїв (`origin: "carriers"`) та блок `versions`
+ * (засів послідовності версій і епоха), кроки заповнення перед `NOT NULL`
+ * (`origin: "backfill"`) з кількістю `NULL` на плані й показаними тригерами
+ * та колонки `notNull` кроків `SET NOT NULL` без заповнення: раннер
+ * старішого формату не знав би їхніх блоків.
  */
-export const PLAN_FORMAT = 6
+export const PLAN_FORMAT = 8
 
 /**
  * Таблиця одиниці, чиї дані план зберігає (спека промоції §7.2): імена до й
@@ -261,6 +264,14 @@ const sectionTableSchema = z.strictObject({
   name: z.string(),
 })
 
+/** Тригери таблиці, що їх вимикає запис: секція промоції й крок `versions`. */
+const dataTriggers = z.array(
+  z.strictObject({
+    name: z.string(),
+    enabled: z.enum(DATA_TRIGGER_MODES),
+  })
+)
+
 const promotionSectionSchema = z.strictObject({
   recordHash: hashSchema,
   record: promotionRecordSchema,
@@ -323,12 +334,7 @@ const promotionSectionSchema = z.strictObject({
           guard: z.string(),
         })
       ),
-      triggers: z.array(
-        z.strictObject({
-          name: z.string(),
-          enabled: z.enum(DATA_TRIGGER_MODES),
-        })
-      ),
+      triggers: dataTriggers,
     })
   ),
 })
@@ -347,7 +353,14 @@ const objectRefSchema = z.strictObject({
 
 const stepSchema = z.strictObject({
   id: z.string(),
-  origin: z.enum(["intent", "engine", "carriers", "environment"]),
+  origin: z.enum([
+    "intent",
+    "engine",
+    "backfill",
+    "carriers",
+    "versions",
+    "environment",
+  ]),
   sql: z.string(),
   verb: z.enum(ENGINE_ACTION_VERBS),
   class: z.enum(STEP_CLASSES),
@@ -366,6 +379,25 @@ const stepSchema = z.strictObject({
   dataLoss: z.boolean(),
   rewriteRisk: z.boolean(),
   guards: z.array(z.string()),
+  triggers: dataTriggers.optional(),
+  backfill: z
+    .strictObject({
+      table: z.strictObject({ schema: z.string(), name: z.string() }),
+      column: z.string(),
+      rowsAtPlan: z.number().int().nonnegative(),
+      permission: z.boolean(),
+      default: z.string(),
+      triggers: dataTriggers,
+    })
+    .optional(),
+  notNull: z
+    .array(
+      z.strictObject({
+        table: z.strictObject({ schema: z.string(), name: z.string() }),
+        column: z.string(),
+      })
+    )
+    .optional(),
 })
 
 /**

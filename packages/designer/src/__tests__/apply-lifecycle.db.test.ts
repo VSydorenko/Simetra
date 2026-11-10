@@ -36,7 +36,7 @@ import { dropRoles, inTarget, query } from "./support/db"
 
 /**
  * Наскрізний цикл `plan` → `apply` → `diff` на порожній цілі:
- * ланцюжок хешів, репетиція, атомарний відкат на даних, прийняття
+ * ланцюжок хешів, репетиція, відмова й заповнення NULL перед NOT NULL, прийняття
  * дрейфу та відмова на підміні власника. Ціль — окрема база від
  * `withDesiredShadow`; база стеку лише читається.
  */
@@ -285,40 +285,65 @@ describe("apply lifecycle", () => {
       expect(await columnNullable(url, "note")).toBe("YES")
       expect(await markerHash(url)).toBe(h3)
 
-      // 4. Збій на даних: NULL у реквізиті, що стає обов'язковим
+      // 4. NULL у реквізиті, що стає обов'язковим
       await query(
         url,
         "insert into app.party (id) values ('00000000-0000-4000-8000-000000000001')"
       )
-      await writeMetadata(dir, party("Parties", { required: true }))
-      const strict = await planned(dir, url)
-      const notNull = strict.steps.find((s) => /SET NOT NULL/i.test(s.sql))
-      expect(notNull?.class).toBe("validationScan")
       const ledgerBefore = await ledger(url)
-      const failed = await applyCall(dir, url, strict, {
-        allow: strict.requiredPermissions,
-      })
-      expect(errors(failed)).toEqual(["apply.step-failed"])
+
+      // 4а. Без `defaultValue` нічим заповнити: план відмовляє, а ціль
+      // лишається недоторканою (marker і ledger без змін)
+      await writeMetadata(dir, party("Parties", { required: true }))
+      const refused = await call("plan", {}, options(dir, url))
+      expect(refused.ok).toBe(false)
+      expect(errors(refused)).toEqual(["plan.not-null-violation"])
       expect(
-        failed.diagnostics.find((d) => d.code === "apply.step-failed")?.params
-      ).toMatchObject({ step: notNull!.id, sqlstate: "23502" })
+        refused.diagnostics.find((d) => d.code === "plan.not-null-violation")
+          ?.params
+      ).toMatchObject({ rows: 1 })
+      expect(refused.written).toBe(false)
       expect(await markerHash(url)).toBe(h3)
       expect(await ledger(url)).toEqual(ledgerBefore)
       expect(await columnNullable(url, "note")).toBe("YES")
 
-      // 5. Ledger: три застосування в порядку id, ланцюжок хешів
+      // 4б. З `defaultValue` план додає крок заповнення перед `SET NOT NULL`;
+      // застосування заповнює NULL і зводить колонку до NOT NULL
+      await writeMetadata(
+        dir,
+        party("Parties", { required: true, defaultValue: "n/a" })
+      )
+      const h4 = await hashOf(dir)
+      const strict = await planned(dir, url)
+      const fill = strict.steps.find((s) => s.origin === "backfill")
+      expect(fill?.backfill?.rowsAtPlan).toBe(1)
+      const filled = await applyCall(dir, url, strict, {
+        allow: strict.requiredPermissions,
+      })
+      expect(filled.diagnostics, JSON.stringify(filled.diagnostics)).toEqual([])
+      expect(filled.data).toMatchObject({
+        status: "committed",
+        backfills: [{ step: fill!.id, rows: 1 }],
+      })
+      expect(
+        await query(url, "select note from app.party order by id")
+      ).toEqual([{ note: "n/a" }])
+      expect(await columnNullable(url, "note")).toBe("NO")
+      expect(await markerHash(url)).toBe(h4)
+      expect((await ledger(url)).length).toBe(ledgerBefore.length + 1)
+
+      // 5. Ledger: чотири застосування в порядку id, ланцюжок хешів
       const chain = await ledger(url)
       expect(chain.map((r) => [r.from_hash, r.to_hash])).toEqual([
         [null, h1],
         [h1, h2],
         [h2, h3],
+        [h3, h4],
       ])
       const ids = chain.map((r) => BigInt(r.id))
       expect(ids).toEqual([...ids].sort((a, b) => (a < b ? -1 : 1)))
 
-      // 6. Скасування кроку 4: метадані знову дорівнюють стану кроку 3
-      await writeMetadata(dir, party("Parties", {}))
-      expect(await hashOf(dir)).toBe(h3)
+      // 6. Застосований стан кроку 4 збігається з метаданими
       await expectUnchanged(dir, url)
       await query(url, "delete from app.party")
 
@@ -342,7 +367,7 @@ describe("apply lifecycle", () => {
         )?.params?.items
       ).toBe("drift")
       expect(await columnNullable(url, "extra")).toBe("YES")
-      expect(await markerHash(url)).toBe(h3)
+      expect(await markerHash(url)).toBe(h4)
       expect(await ledger(url)).toEqual(ledgerPre)
 
       await committed(dir, url, drifted, drifted.requiredPermissions)
@@ -372,7 +397,7 @@ describe("apply lifecycle", () => {
       expect(swapped.written).toBe(false)
       // Відмова не лишає нового файлу плану
       expect(await readdir(plansDir)).toEqual(plansBeforeSwap)
-      expect(await markerHash(url)).toBe(h3)
+      expect(await markerHash(url)).toBe(h4)
       expect(await ledger(url)).toEqual(ledgerAtSwap)
       // Грант на схему був лише для ALTER OWNER; лишений, він сам став би дрейфом ACL
       await query(
@@ -396,13 +421,18 @@ describe("apply lifecycle", () => {
       await committed(dir, url, versions, ["drift"])
       await expectUnchanged(dir, url)
 
-      // 10. П'ять рядків; drift лише там, де його приймали
+      // 10. Шість рядків; drift лише там, де його приймали
       const all = await ledger(url)
-      expect(all).toHaveLength(5)
-      expect(all.slice(0, 3).map((r) => r.drift)).toEqual([null, null, null])
-      expect(all[3]?.drift).not.toBeNull()
-      expect(all[4]?.drift?.reason).toBe("versions-changed")
-      expect(all[4]?.from_hash).toBe(all[4]?.to_hash)
+      expect(all).toHaveLength(6)
+      expect(all.slice(0, 4).map((r) => r.drift)).toEqual([
+        null,
+        null,
+        null,
+        null,
+      ])
+      expect(all[4]?.drift).not.toBeNull()
+      expect(all[5]?.drift?.reason).toBe("versions-changed")
+      expect(all[5]?.from_hash).toBe(all[5]?.to_hash)
     })
   })
 

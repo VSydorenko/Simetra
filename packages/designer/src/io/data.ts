@@ -65,7 +65,9 @@ LEFT JOIN pg_catalog.pg_namespace n ON n.nspname = $4
 WHERE r.rolname = session_user`
 
 /** Параметри {@link DATA_GUARD_FACTS_SQL} для профілю провайдера. */
-export function dataGuardFactsParams(provider: DatabaseProvider): string[] {
+export function dataGuardFactsParams(
+  provider: DatabaseProvider
+): (string | null)[] {
   return [
     PLATFORM_ROLES.command,
     PROVIDER_API_ROLES[provider].service,

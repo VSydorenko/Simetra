@@ -1,4 +1,9 @@
-import { CommandFailure, type Filter, type OrderBy } from "simetra/model"
+import {
+  CommandFailure,
+  keysetFilter,
+  type Filter,
+  type OrderBy,
+} from "simetra/model"
 import { describe, expect, it } from "vitest"
 import { DataError } from "../../errors"
 import {
@@ -8,7 +13,7 @@ import {
   evaluateFilter,
   fieldInfoOf,
   filterCollator,
-  keysetAfter,
+  nullableOf,
 } from "../filter"
 import type { Values } from "../types"
 import {
@@ -38,6 +43,41 @@ const refusal = (fn: () => unknown) => {
   }
   throw new Error("no refusal")
 }
+
+describe("nullableOf", () => {
+  // `required` — «обов'язкова при вставці»: NOT NULL з DEFAULT не обов'язкова,
+  // але NULL не вміщає, тож гілку `isNull` keyset не повинен брати.
+  const withNotNull = fieldInfoOf({
+    ...filterObject,
+    attributes: filterObject.attributes.map((a) =>
+      a.name === "count" ? { ...a, required: false, notNull: true as const } : a
+    ),
+  })
+
+  it("treats a NOT NULL column with a default as not nullable", () => {
+    expect(nullableOf(withNotNull)("count")).toBe(false)
+  })
+
+  it("treats a column without the NOT NULL fact as nullable", () => {
+    expect(nullableOf(withNotNull)("small")).toBe(true)
+    expect(nullableOf(info)("count")).toBe(true)
+  })
+
+  it("takes no isNull branch for the NOT NULL column only", () => {
+    const orderBy: OrderBy = [{ attribute: "count", direction: "asc" }]
+    const hasIsNull = (nullable: (name: string) => boolean) =>
+      JSON.stringify(
+        keysetFilter(
+          orderBy,
+          { values: FILTER_ROWS[0]!, key: key(1), direction: "after" },
+          "ref",
+          nullable
+        )
+      ).includes('"isNull"')
+    expect(hasIsNull(nullableOf(withNotNull))).toBe(false)
+    expect(hasIsNull(nullableOf(info))).toBe(true)
+  })
+})
 
 describe("evaluateFilter", () => {
   it.each(FILTER_CASES)("%s", (_, filter, expected) => {
@@ -176,47 +216,6 @@ describe("compareRows", () => {
   })
 })
 
-describe("keysetAfter", () => {
-  /** Сторінки по `size` keyset-ом від останнього рядка, як читає вікно. */
-  function pages(orderBy: OrderBy, size: number): number[] {
-    const compare = compareRows(orderBy, info, "ref", collator)
-    const out: Values[] = []
-    let rest = [...FILTER_ROWS].sort(compare)
-    for (;;) {
-      const page = rest.slice(0, size)
-      if (page.length === 0) break
-      out.push(...page)
-      const after = keysetAfter(orderBy, page[page.length - 1]!, "ref")
-      rest = FILTER_ROWS.filter((row) =>
-        evaluateFilter(after, row, info, collator)
-      ).sort(compare)
-    }
-    return out.map((row) => Number((row.ref as string).slice(-12)))
-  }
-
-  it.each<[string, OrderBy]>([
-    ["NULL last ascending", [{ attribute: "count", direction: "asc" }]],
-    ["NULL first descending", [{ attribute: "count", direction: "desc" }]],
-    [
-      "NULL first ascending",
-      [{ attribute: "count", direction: "asc", nulls: "first" }],
-    ],
-    [
-      "two terms and the key descending",
-      [
-        { attribute: "day", direction: "desc", nulls: "last" },
-        { attribute: "amount", direction: "asc" },
-        { attribute: "ref", direction: "desc" },
-      ],
-    ],
-  ])("pages through NULL without loss or duplicates: %s", (_, orderBy) => {
-    const all = [...FILTER_ROWS]
-      .sort(compareRows(orderBy, info, "ref", collator))
-      .map((row) => Number((row.ref as string).slice(-12)))
-    expect(pages(orderBy, 3)).toEqual(all)
-  })
-})
-
 describe("checkFilterBudget", () => {
   const deep = (depth: number): Filter =>
     depth === 1 ? { attribute: "name", op: "isNull" } : { not: deep(depth - 1) }
@@ -228,7 +227,15 @@ describe("checkFilterBudget", () => {
   it("refuses a user filter at the limit plus a keyset", () => {
     const orderBy: OrderBy = [{ attribute: "count", direction: "asc" }]
     const combined: Filter = {
-      and: [deep(8), keysetAfter(orderBy, FILTER_ROWS[0]!, "ref")],
+      and: [
+        deep(8),
+        keysetFilter(
+          orderBy,
+          { values: FILTER_ROWS[0]!, key: key(1), direction: "after" },
+          "ref",
+          nullableOf(info)
+        ),
+      ],
     }
     expect(refusal(() => checkFilterBudget(combined))).toEqual({
       code: "command.invalid",

@@ -1,9 +1,10 @@
 import type pg from "pg"
-import { PLATFORM_LOGIN_ROLES, PLATFORM_ROLES } from "simetra/model"
+import { PLATFORM_ROLES } from "simetra/model"
 import {
   ensurePlatformRoles,
   platformRoleGate,
   platformRoleRefusals,
+  platformRoleSet,
   readPlatformRoles,
 } from "simetra/schema"
 import { describe, expect, it } from "vitest"
@@ -26,9 +27,9 @@ describe("roles", () => {
     await withRollback(async (client) => {
       const dbs = rollbackDatabase(client)
       const name = testRoleName("command")
-      expect(await ensurePlatformRoles(dbs, TARGET, { names: [name] })).toEqual(
-        { created: [{ server: "target", name, outcome: "created" }] }
-      )
+      expect(
+        await ensurePlatformRoles(dbs, TARGET, { names: [name], login: [] })
+      ).toEqual({ created: [{ server: "target", name, outcome: "created" }] })
       const found = await dbs.transaction(TARGET[0]!.db, "rollback", (tx) =>
         readPlatformRoles(tx, [name])
       )
@@ -48,10 +49,10 @@ describe("roles", () => {
         },
       ])
       // Творець — член лише з ADMIN і сам має CREATEROLE: форму не ламає
-      expect(platformRoleRefusals([name], found, "target")).toEqual([])
-      expect(await ensurePlatformRoles(dbs, TARGET, { names: [name] })).toEqual(
-        { created: [{ server: "target", name, outcome: "present" }] }
-      )
+      expect(platformRoleRefusals([name], found, "target", [])).toEqual([])
+      expect(
+        await ensurePlatformRoles(dbs, TARGET, { names: [name], login: [] })
+      ).toEqual({ created: [{ server: "target", name, outcome: "present" }] })
     })
   })
 
@@ -72,7 +73,7 @@ describe("roles", () => {
       await client.query("SET LOCAL createrole_self_grant = 'set, inherit'")
       const dbs = rollbackDatabase(client)
       const name = testRoleName("command")
-      await ensurePlatformRoles(dbs, TARGET, { names: [name] })
+      await ensurePlatformRoles(dbs, TARGET, { names: [name], login: [] })
       const found = await dbs.transaction(TARGET[0]!.db, "rollback", (tx) =>
         readPlatformRoles(tx, [name])
       )
@@ -87,7 +88,7 @@ describe("roles", () => {
       const name = testRoleName("command")
       await client.query("SET LOCAL ROLE authenticated")
       expect(
-        await ensurePlatformRoles(dbs, TARGET, { names: [name] })
+        await ensurePlatformRoles(dbs, TARGET, { names: [name], login: [] })
       ).toMatchObject({
         refusal: [
           {
@@ -127,7 +128,7 @@ describe("roles", () => {
         createDb: true,
         replication: false,
       })
-      expect(platformRoleRefusals([name], found, "target")).toMatchObject([
+      expect(platformRoleRefusals([name], found, "target", [])).toMatchObject([
         { code: "plan.platform-role-shape", params: { violation: "createDb" } },
       ])
     })
@@ -145,11 +146,33 @@ describe("roles", () => {
             platformRoleGate(
               tx,
               [PLATFORM_ROLES.command],
-              Object.values(PLATFORM_LOGIN_ROLES),
+              platformRoleSet("supabase").login,
               "target"
             )
         )
       ).toEqual([])
+    })
+  })
+
+  // Наявну пару лише звіряють: у підсумку її немає, відмови теж
+  it("without a project file an existing login pair is checked, not refused or created", async () => {
+    await withRollback(async (client) => {
+      // Локальний стек після `roles.sql`: пара runtime → command SET-only
+      expect(
+        await ensurePlatformRoles(
+          rollbackDatabase(client),
+          TARGET,
+          platformRoleSet(undefined)
+        )
+      ).toEqual({
+        created: [
+          {
+            server: "target",
+            name: PLATFORM_ROLES.command,
+            outcome: "present",
+          },
+        ],
+      })
     })
   })
 })
@@ -189,7 +212,7 @@ describe("roles: the login role", () => {
     await withRollback(async (client) => {
       await asExecutor(client)
       const dbs = rollbackDatabase(client)
-      const login = { name: runtime, memberOf: [command] }
+      const login = [{ name: runtime, memberOf: [command] }]
       expect(
         await ensurePlatformRoles(dbs, TARGET, { names: [command], login })
       ).toEqual({
@@ -199,13 +222,7 @@ describe("roles: the login role", () => {
         ],
       })
       expect(
-        platformRoleRefusals(
-          [command, runtime],
-          await at(dbs),
-          "target",
-          [runtime],
-          login
-        )
+        platformRoleRefusals([command, runtime], await at(dbs), "target", login)
       ).toEqual([])
       expect(
         await ensurePlatformRoles(dbs, TARGET, { names: [command], login })
@@ -222,7 +239,7 @@ describe("roles: the login role", () => {
     await withRollback(async (client) => {
       // Виконавець — `postgres`: ADMIN на `authenticated` має лише він (спека П4 §6.2)
       const dbs = rollbackDatabase(client)
-      const login = { name: runtime, memberOf: [command, "authenticated"] }
+      const login = [{ name: runtime, memberOf: [command, "authenticated"] }]
       expect(
         await ensurePlatformRoles(dbs, TARGET, { names: [command], login })
       ).toMatchObject({ created: [{ name: command }, { name: runtime }] })
@@ -233,13 +250,7 @@ describe("roles: the login role", () => {
           .map((m) => [m.admin, m.inherit, m.set])
       ).toEqual([[false, false, true]])
       expect(
-        platformRoleRefusals(
-          [command, runtime],
-          await at(dbs),
-          "target",
-          [runtime],
-          login
-        )
+        platformRoleRefusals([command, runtime], await at(dbs), "target", login)
       ).toEqual([])
     })
   })
@@ -249,7 +260,7 @@ describe("roles: the login role", () => {
     await withRollback(async (client) => {
       const executor = await asExecutor(client)
       const dbs = rollbackDatabase(client)
-      const login = { name: runtime, memberOf: [command] }
+      const login = [{ name: runtime, memberOf: [command] }]
       await ensurePlatformRoles(dbs, TARGET, { names: [command], login })
       const manager = testRoleName("mgr")
       await client.query(`CREATE ROLE ${manager} NOLOGIN CREATEROLE`)
@@ -270,7 +281,7 @@ describe("roles: the login role", () => {
         `plan.platform-role-shape:${runtime}:membership-option:${command}`,
       ])
       expect(
-        platformRoleRefusals([command], await at(dbs), "target", [runtime]).map(
+        platformRoleRefusals([command], await at(dbs), "target", login).map(
           asCode
         )
       ).toEqual([`plan.platform-role-shape:${command}:member:${runtime}`])
@@ -286,7 +297,7 @@ describe("roles: the login role", () => {
       expect(
         await ensurePlatformRoles(dbs, TARGET, {
           names: [command],
-          login: { name: runtime, memberOf: [command, request] },
+          login: [{ name: runtime, memberOf: [command, request] }],
         })
       ).toEqual({
         created: [{ server: "target", name: command, outcome: "created" }],
@@ -310,7 +321,7 @@ describe("roles: the login role", () => {
       expect(
         await ensurePlatformRoles(dbs, TARGET, {
           names: [command],
-          login: { name: runtime, memberOf: [command] },
+          login: [{ name: runtime, memberOf: [command] }],
         })
       ).toEqual({
         created: [{ server: "target", name: command, outcome: "present" }],
@@ -329,13 +340,13 @@ describe("roles: the login role", () => {
     await withRollback(async (client) => {
       await asExecutor(client)
       const dbs = rollbackDatabase(client)
-      const login = { name: runtime, memberOf: [command] }
+      const login = [{ name: runtime, memberOf: [command] }]
       await ensurePlatformRoles(dbs, TARGET, { names: [command], login })
       const x = testRoleName("x")
       await client.query(`CREATE ROLE ${x} NOLOGIN`)
       await client.query(`GRANT ${runtime} TO ${x} WITH SET TRUE`)
       const gate = await dbs.transaction(TARGET[0]!.db, "rollback", (tx) =>
-        platformRoleGate(tx, [command], [runtime], "target")
+        platformRoleGate(tx, [command], login, "target")
       )
       expect(gate.map(asCode)).toEqual([
         `plan.platform-role-shape:${runtime}:member:${x}`,
@@ -354,16 +365,20 @@ describe("roles: the login role", () => {
   it("the gate refuses a request role with CREATEROLE that administers the command role", async () => {
     await withRollback(async (client) => {
       const dbs = rollbackDatabase(client)
-      await ensurePlatformRoles(dbs, TARGET, { names: [command] })
+      await ensurePlatformRoles(dbs, TARGET, { names: [command], login: [] })
       const request = testRoleName("request")
       await client.query(`CREATE ROLE ${request} NOLOGIN CREATEROLE`)
       await client.query(
         `GRANT ${command} TO ${request} WITH ADMIN TRUE, INHERIT FALSE, SET FALSE`
       )
       const gate = await dbs.transaction(TARGET[0]!.db, "rollback", (tx) =>
-        platformRoleGate(tx, [command], [runtime], "target", undefined, [
-          request,
-        ])
+        platformRoleGate(
+          tx,
+          [command],
+          [{ name: runtime, memberOf: [command] }],
+          "target",
+          [request]
+        )
       )
       expect(gate.map(asCode)).toEqual([
         `plan.platform-role-shape:${command}:request-role:${request}`,
@@ -403,9 +418,8 @@ describe("roles: the login role", () => {
       platformRoleGate(
         tx,
         [command],
-        [runtime],
+        [{ name: runtime, memberOf: [command] }],
         "target",
-        undefined,
         requestNames
       )
     )
@@ -413,7 +427,7 @@ describe("roles: the login role", () => {
   it("the gate refuses a request role that reaches a manager of the command role through any membership", async () => {
     await withRollback(async (client) => {
       const dbs = rollbackDatabase(client)
-      await ensurePlatformRoles(dbs, TARGET, { names: [command] })
+      await ensurePlatformRoles(dbs, TARGET, { names: [command], login: [] })
       const { request, manager } = await requestPath(client)
       expect((await gateFor(dbs, [request])).map(asCode)).toEqual([
         `plan.platform-role-shape:${command}:request-path:${manager}`,
@@ -434,7 +448,7 @@ describe("roles: the login role", () => {
   it("a CREATEROLE member of the manager administers the command role", async () => {
     await withRollback(async (client) => {
       const dbs = rollbackDatabase(client)
-      await ensurePlatformRoles(dbs, TARGET, { names: [command] })
+      await ensurePlatformRoles(dbs, TARGET, { names: [command], login: [] })
       const { request, middle } = await requestPath(client)
       const x = testRoleName("x")
       await client.query(`CREATE ROLE ${x} NOLOGIN`)
@@ -464,7 +478,7 @@ describe("roles: the login role", () => {
   it("Postgres refuses a membership cycle the walk would have to end", async () => {
     await withRollback(async (client) => {
       const dbs = rollbackDatabase(client)
-      await ensurePlatformRoles(dbs, TARGET, { names: [command] })
+      await ensurePlatformRoles(dbs, TARGET, { names: [command], login: [] })
       const a = testRoleName("cycle_a")
       const b = testRoleName("cycle_b")
       await client.query(`CREATE ROLE ${a} NOLOGIN`)
@@ -479,15 +493,16 @@ describe("roles: the login role", () => {
   it("the gate refuses a request role membership with INHERIT TRUE", async () => {
     await withRollback(async (client) => {
       const dbs = rollbackDatabase(client)
+      const login = [{ name: runtime, memberOf: [command, "authenticated"] }]
       await ensurePlatformRoles(dbs, TARGET, {
         names: [command],
-        login: { name: runtime, memberOf: [command] },
+        login: [{ name: runtime, memberOf: [command] }],
       })
       await client.query(
         `GRANT authenticated TO ${runtime} WITH INHERIT TRUE, SET TRUE`
       )
       const gate = await dbs.transaction(TARGET[0]!.db, "rollback", (tx) =>
-        platformRoleGate(tx, [command], [runtime], "target")
+        platformRoleGate(tx, [command], login, "target")
       )
       expect(gate.map(asCode)).toEqual([
         `plan.platform-role-shape:${runtime}:membership-option:authenticated`,

@@ -14,9 +14,9 @@ import {
 import { platformBeforeTriggerName } from "./before-trigger-names"
 import type { QualifiedName } from "./contracts"
 import { compareStrings } from "./diagnostics"
-import { dollarTag } from "./movement-functions"
 import { carrierCopies } from "./rights/carrier-units"
-import { executeGrants } from "./sql/execute-grants"
+import { definerTrigger } from "./rights/definer"
+import { executeGrants, sequenceRevokes } from "./sql/execute-grants"
 import type { SqlParser } from "./sql/parse"
 import { generatedUnit, type SqlUnit } from "./sql/units"
 
@@ -25,6 +25,22 @@ export const MECHANICS_FUNCTION: QualifiedName = {
   schema: PLATFORM_SCHEMA,
   name: "touch",
 }
+
+/**
+ * Єдине джерело версій рядків бази: усі таблиці механіки беруть версію з неї,
+ * тож ключ, видалений і створений знову, не повторює вже видану версію.
+ */
+export const ROW_VERSION_SEQUENCE = {
+  schema: PLATFORM_SCHEMA,
+  name: "row_version",
+} as const satisfies QualifiedName
+
+/**
+ * Префікс налаштування транзакції, у яке `touch` кладе видану версію рядка
+ * (`<префікс><OID таблиці>`): `currval` зсували б інші тригери, а це
+ * налаштування пише лише `touch` (вставка й оновлення) тієї самої таблиці.
+ */
+export const ROW_VERSION_SETTING = "simetra.row_version_"
 
 /**
  * Ім'я тригера механіки на таблиці. Спільний префікс рядкових `BEFORE`-тригерів
@@ -150,24 +166,17 @@ export function contentChangeCondition(
 }
 
 /**
- * Механіка рядка (спека промоції §9.2): службову дату оновлення й версію
- * рядка тримає база, а не клієнт: вставка дає версію 1, оновлення —
- * `OLD.version + 1`, обидва — `now()`, що б не записав клієнт. Таблиці
- * беруться з фізичного знімка за `origin.standard`, а не за видом: механіку має рівно та таблиця, якій
- * реєстр дав обидві колонки. `origin.standard` — логічне ім'я в стилі проєкту
- * (`attributeCase`), тож порівнюється зі стилізованим ім'ям реєстру. Функція
- * й її гранти — лише коли є хоч одна така таблиця; власника-об'єкта в них
- * немає, бо функція спільна.
+ * Таблиці механіки моделі: ті, чиї колонки реєстр дав як службові дату й
+ * версію (за `origin.standard`, а не за іменем колонки). Єдине рішення, яке
+ * читають і генератор тригерів, і засів послідовності версій у стані
+ * застосування, тож вони не розходяться.
  */
-export function buildMechanicsUnits(
-  physical: PhysicalSnapshot,
-  attributeCase: AttributeCase,
-  provider: DatabaseProvider,
-  module: string,
-  parse: SqlParser
-): SqlUnit[] {
+export function mechanicsTables(
+  physical: Pick<PhysicalSnapshot, "tables">,
+  attributeCase: AttributeCase
+): PhysicalTable[] {
   const mechanics = mechanicsStandardNames(attributeCase)
-  const tables = physical.tables.filter((table) => {
+  return physical.tables.filter((table) => {
     const found = table.columns.filter((c) =>
       mechanics.has(c.origin.standard ?? "")
     )
@@ -185,7 +194,29 @@ export function buildMechanicsUnits(
     }
     return true
   })
-  if (tables.length === 0) return []
+}
+
+/** Фізичне ім'я колонки версії рядка таблиць механіки. */
+export const ROW_VERSION_COLUMN = VERSION.physicalName
+
+/**
+ * Механіка рядка (спека промоції §9.2): службову дату оновлення й версію
+ * рядка тримає база, а не клієнт: версію видає послідовність
+ * `simetra.row_version`, дату — `now()`, що б не записав клієнт. Таблиці
+ * беруться з фізичного знімка за `origin.standard`, а не за видом: механіку має рівно та таблиця, якій
+ * реєстр дав обидві колонки. `origin.standard` — логічне ім'я в стилі проєкту
+ * (`attributeCase`), тож порівнюється зі стилізованим ім'ям реєстру. Послідовність
+ * з відкликаними правами — завжди; функція й її гранти — лише коли є хоч одна така таблиця; власника-об'єкта в них
+ * немає, бо функція спільна.
+ */
+export function buildMechanicsUnits(
+  physical: PhysicalSnapshot,
+  attributeCase: AttributeCase,
+  provider: DatabaseProvider,
+  module: string,
+  parse: SqlParser
+): SqlUnit[] {
+  const tables = mechanicsTables(physical, attributeCase)
   const fn = `${quoteIdent(MECHANICS_FUNCTION.schema)}.${quoteIdent(MECHANICS_FUNCTION.name)}`
   const shared = (sql: string): SqlUnit => ({
     ...generatedUnit(sql, PLATFORM_SCHEMA, parse),
@@ -209,10 +240,20 @@ export function buildMechanicsUnits(
     module,
     generator: "mechanics",
   })
+  // Послідовність видається завжди, навіть без таблиць механіки: застосування
+  // сіє її й веде епоху версій незалежно від того, чи вже є таблиці.
+  const sequence = [
+    shared(
+      `CREATE SEQUENCE ${quoteIdent(ROW_VERSION_SEQUENCE.schema)}.${quoteIdent(ROW_VERSION_SEQUENCE.name)} AS bigint MINVALUE 1 NO CYCLE CACHE 1;`
+    ),
+    ...sequenceRevokes(ROW_VERSION_SEQUENCE, provider).map(shared),
+  ]
+  if (tables.length === 0) return sequence.sort(byIdentity)
   // Тригер, що спрацьовує в ролі, яка пише, не потребує `EXECUTE` функції, тож
   // жодна роль API його не має (платформна спека §6.7).
   const units: SqlUnit[] = [
-    shared(touchFunction(fn)),
+    ...sequence,
+    shared(touchFunction()),
     ...executeGrants(`${fn}()`, [], provider).map(shared),
     ...tables.flatMap((table): SqlUnit[] => {
       // Поширення копій носіїв не підвищує версію (спека прав §5.2): оновлення —
@@ -236,37 +277,42 @@ export function buildMechanicsUnits(
           ]
     }),
   ]
-  return units.sort((a, b) => compareStrings(a.identity, b.identity))
+  return units.sort(byIdentity)
 }
 
+const byIdentity = (a: SqlUnit, b: SqlUnit) =>
+  compareStrings(a.identity, b.identity)
+
 /**
- * Вставка починає версію з 1, оновлення додає 1; службова дата — `now()` в
- * обох. Значення клієнта не діє ні там, ні там: інакше вставка могла б
- * почати з чужої версії. `created_at` тригер не чіпає. `SECURITY INVOKER`:
- * присвоєння `NEW` прав на таблицю не потребує, тож підвищувати роль нема
- * чого. Порожній `search_path` — `now()` з `pg_catalog` резолвиться завжди,
- * а підміни імен через шлях немає.
+ * Версію рядка видає послідовність, а не клієнт: вставка бере `nextval`,
+ * оновлення — `GREATEST(nextval, OLD.version + 1)`, щоб версія ключа не падала,
+ * навіть коли послідовність нижча (логічна реплікація послідовностей не
+ * переносить). Службова дата — `now()` в обох. `created_at` тригер не чіпає.
+ * `SECURITY DEFINER`: `nextval` вимагає права на послідовність, а давати його
+ * кожній пишучій ролі не можна. Підвищення `synchronous_commit` до `on` лише з
+ * `off` і `local` (`remote_*` лишається): асинхронний коміт губив би видані
+ * версії при крахові без зміни епохи. Видана версія лишається в локальному
+ * налаштуванні транзакції — її читає `createRoot` після `INSERT`.
  */
-function touchFunction(fn: string): string {
+function touchFunction(): string {
   const updatedAt = `NEW.${quoteIdent(UPDATED_AT.physicalName)}`
-  const version = quoteIdent(VERSION.physicalName)
+  const version = `NEW.${quoteIdent(VERSION.physicalName)}`
+  const old = `OLD.${quoteIdent(VERSION.physicalName)}`
+  const sequence = `'${quoteIdent(ROW_VERSION_SEQUENCE.schema)}.${quoteIdent(ROW_VERSION_SEQUENCE.name)}'`
   const text = [
     "BEGIN",
     "  IF TG_OP = 'INSERT' THEN",
-    `    NEW.${version} := 1;`,
+    `    ${version} := nextval(${sequence});`,
     "  ELSE",
-    `    NEW.${version} := OLD.${version} + 1;`,
+    `    ${version} := GREATEST(nextval(${sequence}), ${old} + 1);`,
     "  END IF;",
     `  ${updatedAt} := now();`,
+    "  IF current_setting('synchronous_commit') IN ('off', 'local') THEN",
+    "    PERFORM set_config('synchronous_commit', 'on', true);",
+    "  END IF;",
+    `  PERFORM set_config('${ROW_VERSION_SETTING}' || TG_RELID::text, ${version}::text, true);`,
     "  RETURN NEW;",
     "END",
   ].join("\n")
-  const tag = dollarTag(text)
-  return (
-    `CREATE OR REPLACE FUNCTION ${fn}()\n` +
-    `RETURNS trigger\n` +
-    `LANGUAGE plpgsql SECURITY INVOKER\n` +
-    `SET search_path = ''\n` +
-    `AS ${tag}\n${text}\n${tag};`
-  )
+  return definerTrigger(MECHANICS_FUNCTION, text)
 }

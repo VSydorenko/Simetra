@@ -432,7 +432,9 @@ export function commandsCases(
       // Масив ТЧ — повна заміна: рядок, що зникає, названо явно.
       deleteIds: { delta: [line] },
     })
-    expect(updated.rows[0]!.version).toBe(version + 1)
+    // Версія з послідовності: лише «більша за попередню», не `+1`
+    const updatedVersion = updated.rows[0]!.version as number
+    expect(updatedVersion).toBeGreaterThan(version)
     const delta = await env.owner.query(
       "SELECT object, action, extent, effect FROM public.org_roles_delta WHERE parent_id = $1",
       [id]
@@ -454,14 +456,14 @@ export function commandsCases(
     ).toEqual({
       code: "command.conflict",
       reason: "version",
-      currentVersion: version + 1,
+      currentVersion: updatedVersion,
     })
 
     const marked = await rt.run(admin().session, {
       action: "markDeletion",
       object: ROLES,
       id,
-      expectedVersion: version + 1,
+      expectedVersion: updatedVersion,
       mark: true,
     })
     expect(marked.rows[0]).toMatchObject({ deletionMark: true })
@@ -639,7 +641,7 @@ export function commandsCases(
       expect(failed).toHaveLength(1)
       expect(touching(failed, table)).toEqual(failed)
       expect(await rowOf(TICKET_TABLE, ticket)).toMatchObject({
-        description: null,
+        description: "",
       })
       expect(await rowOf("org_role_assignments", grant)).toBe(undefined)
     }
@@ -658,17 +660,22 @@ export function commandsCases(
 
     it("assign → read X → unassign through a hook", async () => {
       let seen: Record<string, unknown>[] | undefined
+      // Версію призначення видає послідовність, тож зняти його тим самим
+      // пакетом із наперед відомим `expectedVersion` не можна: знімає хук
+      // тієї самої транзакції за версією щойно створеного рядка.
       const module = defineObjectModule({
-        onWrite: async ({ ctx }) => {
-          if (ctx.action === "create")
-            seen = (await ctx.read({ object: TICKET, id: ticket })).rows
+        onWrite: async ({ ctx, row }) => {
+          if (ctx.action !== "create") return
+          seen = (await ctx.read({ object: TICKET, id: ticket })).rows
+          const created = row as { ref: string; version: number }
+          await ctx.run(unassign(created.ref, created.version))
         },
       })
       const { rt } = await runtime({
         [ASSIGNMENTS_KEY]: module as ObjectModule<object>,
       })
       const batch = (person: Person, grant: string) =>
-        rt.run(person.session, [selfGrant(person, grant), unassign(grant)])
+        rt.run(person.session, [selfGrant(person, grant)])
       const grant = randomUUID()
       await batch(admin(), grant)
       expect(seen).toEqual([])
@@ -722,7 +729,7 @@ export function commandsCases(
         "org_member"
       )
       expect(await rowOf("org_member", peer)).toMatchObject({
-        description: null,
+        description: "",
         version,
       })
     })
@@ -857,7 +864,7 @@ export function commandsCases(
         await refusal(rt.run(actor().session, await updateOf(away.ticket)))
       ).toEqual({ code: "command.forbidden", reason: "no-right" })
       expect(await rowOf(TICKET_TABLE, away.ticket)).toMatchObject({
-        description: null,
+        description: "",
       })
     })
   })

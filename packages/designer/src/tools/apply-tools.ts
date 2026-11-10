@@ -15,6 +15,7 @@ import {
 import {
   buildPlan,
   checkPermissions,
+  checkOwnerAttributes,
   checkPlatformRoles,
   desiredForApply,
   executePlan,
@@ -29,6 +30,7 @@ import {
   serializeRehearsal,
   verifyPlanHash,
   type ApplyTimeouts,
+  type BackfillResult,
   type DriftReport,
   type EngineDiagnostic,
   type EngineIdentity,
@@ -72,10 +74,13 @@ export interface PlanPromotion {
   data: PromotionSection["data"]
 }
 
-/** Крок плану для перегляду; клас конверсії — лише біля кроку видалення. */
+/**
+ * Крок плану для перегляду; клас конверсії — лише біля кроку видалення,
+ * факти заповнення — лише біля кроку заповнення.
+ */
 export type PlanDataStep = Pick<
   PlanStep,
-  "id" | "origin" | "class" | "lockClass" | "sql"
+  "id" | "origin" | "class" | "lockClass" | "sql" | "backfill"
 > & { conversion?: ConversionClass }
 
 /** Те з артефакту, що людина чи агент переглядає перед `apply`. */
@@ -130,6 +135,7 @@ type ApplyRun =
   | { outcome: ExecuteOutcome }
   | { shadowFailed: EngineDiagnostic[] }
   | { rolesRefused: EngineDiagnostic[] }
+  | { unsupported: Diagnostic }
 
 export interface ApplyData {
   status: "committed" | "rolledBack"
@@ -139,6 +145,12 @@ export interface ApplyData {
    * застосування чи репетиція, звіту якої не записано.
    */
   report: string | null
+  /**
+   * Кроки заповнення перед `NOT NULL` (платформна спека §6.6): фактичний
+   * `rowCount` поруч із кількістю `NULL` на плані. Порожньо — кроків
+   * заповнення немає або після обриву з'єднання лічильники невідомі.
+   */
+  backfills: BackfillResult[]
 }
 
 /**
@@ -197,17 +209,20 @@ function planData(
       artifact.promotion === null
         ? null
         : planPromotion(artifact.promotion, model),
-    steps: artifact.steps.map(({ id, origin, class: cls, lockClass, sql }) => {
-      const conversion = conversions.get(id)
-      return {
-        id,
-        origin,
-        class: cls,
-        lockClass,
-        sql,
-        ...(conversion === undefined ? {} : { conversion }),
+    steps: artifact.steps.map(
+      ({ id, origin, class: cls, lockClass, sql, backfill }) => {
+        const conversion = conversions.get(id)
+        return {
+          id,
+          origin,
+          class: cls,
+          lockClass,
+          sql,
+          ...(conversion === undefined ? {} : { conversion }),
+          ...(backfill === undefined ? {} : { backfill }),
+        }
       }
-    }),
+    ),
     locks: artifact.locks,
     implicitLocks: artifact.implicitLocks,
     requiredPermissions: artifact.requiredPermissions,
@@ -564,6 +579,15 @@ export const applyTool = defineTool({
       required(database),
       "apply",
       async (db): Promise<ApplyRun> => {
+        // Профіль `postgres` не має окремого сервера тіней (Р9): відмова до
+        // будь-якого звернення до бази, і для застосування, і для репетиції
+        if (
+          artifact.scope.provider === "postgres" &&
+          db.shadowBase !== undefined
+        )
+          return {
+            unsupported: diagnostic("plan.shadow-base-unsupported", "", ""),
+          }
         if (input.rehearse !== true)
           return {
             outcome: await executePlan(writer, db.target, artifact, {
@@ -576,13 +600,19 @@ export const applyTool = defineTool({
         // з'єднанні, тож бажану тінь будують до відкриття транзакції цілі
         // (спека промоції §7.2): під замками плану її не будують
         const desired = await desiredForApply(model)
+        // Р10: роль без BYPASSRLS — відмова до платформних ролей і до створення тіні
+        const ownerGate = await (
+          await applyDatabase({ readOnly: true })
+        ).transaction(db.target, "rollback", checkOwnerAttributes)
+        if (ownerGate !== undefined) return { rolesRefused: [ownerGate] }
         // Платформні ролі — до тіні, як у плані (спека designer §3.2)
         const roles = await checkPlatformRoles(
           await applyDatabase({ readOnly: true }),
           db.target,
           db.shadowBase,
           desired.sql,
-          await loadSqlParser()
+          await loadSqlParser(),
+          artifact.scope.provider
         )
         if (roles.refusal !== undefined) return { rolesRefused: roles.refusal }
         const shadow = await engine.withDesiredShadow(
@@ -608,6 +638,8 @@ export const applyTool = defineTool({
     if (!executed.ok) return refusedWith([executed.diagnostic])
     if ("shadowFailed" in executed.value)
       return refusedWith(executed.value.shadowFailed.map(fromEngine))
+    if ("unsupported" in executed.value)
+      return refusedWith([executed.value.unsupported])
     if ("rolesRefused" in executed.value)
       return refusedWith(executed.value.rolesRefused.map(fromEngine))
     const outcome = executed.value.outcome
@@ -623,6 +655,7 @@ export const applyTool = defineTool({
             status: outcome.status,
             attempts: outcome.attempts,
             report: null,
+            backfills: outcome.backfills ?? [],
           },
         }
       // Звіт успішної репетиції — поруч із файлом плану (спека промоції
@@ -638,6 +671,19 @@ export const applyTool = defineTool({
             status: outcome.status,
             attempts: outcome.attempts,
             report: ok ? report : null,
+            // Звіт репетиції лічить лише фактичне; план — з артефакту
+            backfills: outcome.evidence.backfills.map((b) => {
+              const facts = artifact.steps.find(
+                (s) => s.id === b.step
+              )?.backfill
+              // Доказ назвав крок без фактів заповнення — зламаний конвеєр,
+              // а не нуль рядків на плані
+              if (facts === undefined)
+                throw new Error(
+                  `rehearsal evidence names ${b.step}, which is not a backfill step of the plan`
+                )
+              return { ...b, rowsAtPlan: facts.rowsAtPlan }
+            }),
           },
           artifacts: ok
             ? [

@@ -370,7 +370,8 @@ export function throughCases(target: Targets, port: Port): void {
       (attribute) => attribute.column === "created_by_id"
     )!.name
     expect(row).toMatchObject({
-      [organization.versionName]: 1,
+      // Версія з послідовності, а не `1`
+      [organization.versionName]: expect.any(Number),
       [author]: creator,
     })
     expect(created.changes).toEqual([
@@ -379,7 +380,7 @@ export function throughCases(target: Targets, port: Port): void {
         scopeKind: organization.scopeKindId,
         scope: id,
         id,
-        version: 1,
+        version: row![organization.versionName],
         operation: "create",
       },
     ])
@@ -398,7 +399,7 @@ export function throughCases(target: Targets, port: Port): void {
     expect(await fullAccessScopes(a, creator)).toEqual([id])
   })
 
-  it("operator tenant: the root without a creator is { id, version: 1 }", async () => {
+  it("operator tenant: the root without a creator carries the version stored in the row", async () => {
     const rt = await runtime(a, fromPgPool(port(a)))
     const branch = objectOf(a, BRANCH)
     const created = await rt.run(sessionOf(a.users.operator!), {
@@ -406,8 +407,19 @@ export function throughCases(target: Targets, port: Port): void {
       object: BRANCH,
     })
     const id = created.rows[0]![branch.keyName] as string
+    // Невидимий після створення корінь повертає версію, яку видав тригер
+    // механіки, а не літерал: її читаємо під власником схеми
+    const stored = await a.owner.query(
+      "SELECT version::text AS v FROM public.branch WHERE id = $1",
+      [id]
+    )
     expect(created.rows).toEqual([
-      { [branch.keyName]: id, [branch.versionName]: 1 },
+      {
+        [branch.keyName]: id,
+        [branch.versionName]: expect.toSatisfy(
+          (v: unknown) => String(v) === stored.rows[0]!.v
+        ),
+      },
     ])
     const { rows } = await a.owner.query(
       "SELECT (SELECT count(*)::int FROM public.branch WHERE id = $1) AS roots, (SELECT count(*)::int FROM public.branch_member WHERE branch_id = $1) AS members",
@@ -511,7 +523,7 @@ export function throughCases(target: Targets, port: Port): void {
   // Ядро віддає невидимий рядок членства формою `{ключ, версія}` без
   // скоупу (спека П4 §6.13): T3 приймає його, `onWrite` членства отримує
   // цю форму, а творець має права в новому скоупі після справжнього COMMIT.
-  it("invisible member row: membership onWrite gets { id, version: 1 }, the creator reads the root next", async () => {
+  it("invisible member row: membership onWrite gets { id, version } with the stored version, the creator reads the root next", async () => {
     const creator = await user(c)
     const member = objectOf(c, { kind: "Catalog", name: "OrgMember" })
     const seen: { id: string; row: unknown }[] = []
@@ -526,10 +538,20 @@ export function throughCases(target: Targets, port: Port): void {
     const created = await rt.run(sessionOf(creator), createOrganization({}))
     const [row] = created.rows
     const id = row![objectOf(c, ORGANIZATION).keyName] as string
+    // Версію видав тригер механіки: порівнюємо з прочитаною під власником схеми
+    const stored = await c.owner.query(
+      "SELECT version::text AS v FROM public.org_member WHERE id = $1",
+      [seen[0]!.id]
+    )
     expect(seen).toEqual([
       {
         id: expect.any(String),
-        row: { [member.keyName]: seen[0]!.id, [member.versionName]: 1 },
+        row: {
+          [member.keyName]: seen[0]!.id,
+          [member.versionName]: expect.toSatisfy(
+            (v: unknown) => String(v) === stored.rows[0]!.v
+          ),
+        },
       },
     ])
     const { rows } = await c.owner.query(

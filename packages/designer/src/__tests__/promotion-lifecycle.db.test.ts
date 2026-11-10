@@ -16,6 +16,7 @@ import {
 } from "simetra/compiler"
 import {
   parseRehearsal,
+  REHEARSAL_FORMAT,
   rehearsalHash,
   type EngineScope,
   type RehearsalReport,
@@ -632,7 +633,11 @@ describe.concurrent("promotion lifecycle", () => {
         JSON.stringify({ ...report, planHash: "f".repeat(64) }),
         "plan"
       )
-      await stale(JSON.stringify({ ...report, format: 2 }), "format")
+      // Наступний формат, а не число: тест не застаріє з новим форматом
+      await stale(
+        JSON.stringify({ ...report, format: REHEARSAL_FORMAT + 1 }),
+        "format"
+      )
       // Файл переписано, `planHash` той самий
       await stale(JSON.stringify({ ...report, rows: [] }), "tables")
       await writeFile(path, "{")

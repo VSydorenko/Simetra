@@ -57,6 +57,26 @@ async function setLocal(
   )
 }
 
+const RAISE_SYNCHRONOUS_COMMIT =
+  "pg_catalog.set_config('synchronous_commit', 'on', true) WHERE pg_catalog.current_setting('synchronous_commit') IN ('off', 'local')"
+
+/**
+ * Підвищення синхронного коміту до `on` для блоку `versions`: він пише версію
+ * з вимкненими тригерами, тож `touch` синхронного коміту тоді не ставить.
+ * Правило те саме, що в `touch`: лише з `off` і `local`, а `remote_write` і
+ * `remote_apply` не знижуються. Один оператор без `SET LOCAL`, бо умова — на
+ * стороні бази.
+ */
+export const RAISE_SYNCHRONOUS_COMMIT_SQL = `SELECT ${RAISE_SYNCHRONOUS_COMMIT}`
+
+/**
+ * Те саме правило як оператор plpgsql — для `reset_row_version_epoch()`: ручний
+ * виклик теж пише послідовність версій, і асинхронний коміт губив би `setval`
+ * і новий UUID епохи після збою. `set_config(…, true)` діє до кінця
+ * транзакції виклику, тож і її коміт синхронний.
+ */
+export const RAISE_SYNCHRONOUS_COMMIT_PLPGSQL = `PERFORM ${RAISE_SYNCHRONOUS_COMMIT};`
+
 /**
  * Закріплені налаштування даних: під ними йдуть кроки даних і заміри
  * збереження «до» й «після», тож репетиція й робота рахують вирази й текст
@@ -88,6 +108,16 @@ export const DATA_SETTINGS: readonly EngineSetting[] = [
  * їхні тіла мусять іти під `search_path` транзакції.
  */
 export const CARRIER_STEP_SETTINGS: readonly EngineSetting[] = [
+  { name: "row_security", value: "off" },
+]
+
+/**
+ * Налаштування заповнення перед `NOT NULL` і підрахунку `NULL` (платформна
+ * спека §6.6): лише обхід політик — роль бачить усі рядки або дає гучне
+ * `42501`, а не неправдивий нуль. Решта — налаштування транзакції: default
+ * колонки й тригери таблиці рахуються під її `search_path`.
+ */
+export const BACKFILL_SETTINGS: readonly EngineSetting[] = [
   { name: "row_security", value: "off" },
 ]
 

@@ -137,7 +137,10 @@ export function dataWriteSql(t: PlannedDataTable): string {
  * Вимкнення (`on = false`) чи повернення тригерів таблиці в нових іменах,
  * поштучно: `ENABLE TRIGGER` дав би завжди ввімкненому тригеру режим `O`.
  */
-export function triggerSql(t: DataTable, on: boolean): string[] {
+export function triggerSql(
+  t: Pick<DataTable, "after" | "triggers">,
+  on: boolean
+): string[] {
   const table = qualified(t.after.schema, t.after.table)
   return t.triggers.map(
     (g) =>
@@ -150,14 +153,26 @@ export function triggerSql(t: DataTable, on: boolean): string[] {
 const error = (code: RuleCode, params: DiagnosticParams) =>
   applyDiagnostic(code, "error", params)
 
+/**
+ * Хто пише в таблицю цілі (спека промоції §4): крок даних запису промоції
+ * чи заповнення перед `SET NOT NULL` (платформна спека §6.6). Передумови й
+ * коди відмов у них спільні, а відмова називає свій запис.
+ */
+export type DataWriter = DataOrigin | "backfill"
+
+/** Параметри, якими відмова називає запис. */
+const writerParams = (writer: DataWriter): DiagnosticParams =>
+  writer === "backfill"
+    ? { write: "backfill" }
+    : { objectId: writer.objectId, file: writer.file }
+
 const unsupported = (
-  origin: DataOrigin,
+  writer: DataWriter,
   reason: string,
   extra: DiagnosticParams
 ): EngineDiagnostic =>
   error("plan.promotion-unsupported", {
-    objectId: origin.objectId,
-    file: origin.file,
+    ...writerParams(writer),
     reason,
     ...extra,
   })
@@ -408,18 +423,39 @@ export function dataPlan(p: {
 }
 
 /**
- * Факти цілі для кроків даних (спека промоції §4, §7.2), прочитані в `READ ONLY` до
- * копії. Ключі мап — `tableKey` старого імені; `types` — тип запису (текст
- * секції) → наявність у вихідному стані; `cascading` — id кроків, на колонку-ціль
- * яких посилається вхідний FK з `ON UPDATE CASCADE | SET NULL | SET DEFAULT`.
+ * Таблиця запису для спільних фактів (спека промоції §4): вихідне ім'я, id,
+ * яким відмова таблиці називає запис, і колонки запису. `column` — ім'я,
+ * яке показує відмова; `source` — вихідне ім'я колонки, на яку дивиться
+ * вхідний FK (немає — FK не питається).
  */
-export interface DataFacts {
+export interface WriteTable {
+  before: { schema: string; table: string }
+  step: string
+  columns: { step: string; column: string; source?: string }[]
+}
+
+/**
+ * Факти цілі, спільні для кроків даних промоції й заповнення перед
+ * `SET NOT NULL` (спека промоції §4), прочитані в `READ ONLY`. Ключі мап —
+ * `tableKey` вихідного імені; `cascading` — id кроків, на колонку яких
+ * посилається вхідний FK з `ON UPDATE CASCADE | SET NULL | SET DEFAULT`.
+ */
+export interface WriteFacts {
   triggers: Map<string, DataTable["triggers"]>
   inherited: string[]
   /** Таблиці з правилом перезапису `UPDATE` (спека промоції §4). */
   ruled: string[]
   tempPrivilege: boolean
   replicationRole: string
+  cascading: string[]
+}
+
+/**
+ * Факти цілі для кроків даних (спека промоції §4, §7.2), прочитані до
+ * копії: спільні факти запису плюс `types` — тип запису (текст секції) →
+ * наявність у вихідному стані — і прямі виклики виразів.
+ */
+export interface DataFacts extends WriteFacts {
   types: Map<string, TypePresence>
   functions: {
     step: string
@@ -428,7 +464,6 @@ export interface DataFacts {
     immutable: boolean
     exists: boolean
   }[]
-  cascading: string[]
 }
 
 const byCodeUnit = (a: string, b: string): number =>
@@ -567,18 +602,13 @@ const isCatalog = (schema: string | undefined): boolean =>
   schema === undefined || schema === "pg_catalog"
 
 /**
- * Факти цілі для кроків даних; викликач відкриває транзакцію `READ ONLY` на
- * цілі. Таблиці — у старих іменах. Функції — прямі виклики виразу
- * (`fillCalls`), крім функцій часу транзакції (`NOW_FUNCTIONS`): вони
- * `STABLE`, і T1 уже допустив їх лише поза ремонтом. `sources` — старе ім'я
- * колонки-джерела змапленої цілі за id кроку (`dataPlan`).
+ * Спільні факти запису (спека промоції §4); викликач відкриває транзакцію
+ * `READ ONLY` на цілі. Нова передумова, додана тут, діє для обох записів.
  */
-export async function readDataFacts(
+export async function readWriteFacts(
   tx: ApplyTransaction,
-  tables: readonly PlannedDataTable[],
-  parse: SqlParser,
-  sources: ReadonlyMap<string, string> = new Map()
-): Promise<DataFacts> {
+  tables: readonly WriteTable[]
+): Promise<WriteFacts> {
   const triggers = new Map<string, DataTable["triggers"]>()
   for (const t of tables)
     triggers.set(
@@ -595,6 +625,80 @@ export async function readDataFacts(
       .sort(byCodeUnit)
   const inherited = await tablesOf(INHERITED_SQL)
   const ruled = await tablesOf(RULED_SQL)
+
+  const targets = tables.flatMap((t) =>
+    t.columns.flatMap((c) =>
+      c.source === undefined
+        ? []
+        : [
+            {
+              step: c.step,
+              schema: t.before.schema,
+              table: t.before.table,
+              column: c.source,
+            },
+          ]
+    )
+  )
+  const cascading =
+    targets.length === 0
+      ? []
+      : (
+          await tx.query<{ step: string }>(CASCADING_SQL, [
+            JSON.stringify(targets),
+          ])
+        )
+          .map((r) => r.step)
+          .sort(byCodeUnit)
+
+  const [session] = await tx.query<{ temp: boolean; role: string }>(SESSION_SQL)
+  if (session === undefined)
+    throw new Error("the session facts returned no row")
+  return {
+    triggers,
+    inherited,
+    ruled,
+    tempPrivilege: session.temp,
+    replicationRole: session.role,
+    cascading,
+  }
+}
+
+/**
+ * Таблиці кроків даних як таблиці запису: колонка відмови — нове ім'я
+ * цілі, FK питається за старим ім'ям джерела змапленої цілі (`sources`).
+ */
+const dataWriteTables = (
+  tables: readonly PlannedDataTable[],
+  sources: ReadonlyMap<string, string>
+): WriteTable[] =>
+  tables.map((t) => ({
+    before: t.before,
+    step: dataTableStep(t),
+    columns: t.columns.map((c) => {
+      const source = sources.get(c.step)
+      return {
+        step: c.step,
+        column: c.column,
+        ...(source === undefined ? {} : { source }),
+      }
+    }),
+  }))
+
+/**
+ * Факти цілі для кроків даних; викликач відкриває транзакцію `READ ONLY` на
+ * цілі. Таблиці — у старих іменах. Функції — прямі виклики виразу
+ * (`fillCalls`), крім функцій часу транзакції (`NOW_FUNCTIONS`): вони
+ * `STABLE`, і T1 уже допустив їх лише поза ремонтом. `sources` — старе ім'я
+ * колонки-джерела змапленої цілі за id кроку (`dataPlan`).
+ */
+export async function readDataFacts(
+  tx: ApplyTransaction,
+  tables: readonly PlannedDataTable[],
+  parse: SqlParser,
+  sources: ReadonlyMap<string, string> = new Map()
+): Promise<DataFacts> {
+  const write = await readWriteFacts(tx, dataWriteTables(tables, sources))
 
   const types = await readTypePresence(
     tx,
@@ -636,60 +740,73 @@ export async function readDataFacts(
     }
   })
 
-  const targets = tables.flatMap((t) =>
-    t.columns.flatMap((c) => {
-      const column = sources.get(c.step)
-      return column === undefined
-        ? []
-        : [
-            {
-              step: c.step,
-              schema: t.before.schema,
-              table: t.before.table,
-              column,
-            },
-          ]
-    })
-  )
-  const cascading =
-    targets.length === 0
-      ? []
-      : (
-          await tx.query<{ step: string }>(CASCADING_SQL, [
-            JSON.stringify(targets),
-          ])
-        )
-          .map((r) => r.step)
-          .sort(byCodeUnit)
-
-  const [session] = await tx.query<{ temp: boolean; role: string }>(SESSION_SQL)
-  if (session === undefined)
-    throw new Error("the session facts returned no row")
-  return {
-    triggers,
-    inherited,
-    ruled,
-    tempPrivilege: session.temp,
-    replicationRole: session.role,
-    types,
-    functions,
-    cascading,
-  }
+  return { ...write, types, functions }
 }
 
 const functionName = (f: { schema?: string; name: string }): string =>
   f.schema === undefined ? quoteIdent(f.name) : qualified(f.schema, f.name)
 
+/** Таблиці з нащадками, партиціоновані чи з правилом `UPDATE`. */
+const refusedTables = (facts: WriteFacts): Set<string> =>
+  new Set([...facts.inherited, ...facts.ruled])
+
 /**
- * Відмови з фактів цілі — до копії (спека промоції §4, §7.2): таблиця з
- * нащадками, партиціонована чи з правилом `UPDATE`, тип запису, якого
- * немає у вихідному стані, вхідний FK з каскадом оновлення, право `TEMP`,
- * `session_replication_role` і
- * детермінованість викликів на цілі. `models` — кваліфіковані імена
- * функцій моделі бажаного стану (`modelFunctions`): функція моделі, якої на
- * цілі немає, — `plan.data-step-function-changed` (її створює сам план), а
- * будь-яка інша відсутня функція — `plan.data-step-volatile`: її
- * детермінованість на цілі не доведено.
+ * Відмови зі спільних фактів запису (спека промоції §4): таблиця з
+ * нащадками, партиціонована чи з правилом `UPDATE`, вхідний FK з каскадом
+ * оновлення на колонку запису й `session_replication_role` не `origin`.
+ * Обидва записи відмовляють тут тими самими кодами.
+ */
+export function writeFactRefusals(
+  tables: readonly WriteTable[],
+  facts: WriteFacts,
+  writer: DataWriter
+): EngineDiagnostic[] {
+  if (tables.length === 0) return []
+  const out: EngineDiagnostic[] = []
+  const inherited = new Set(facts.inherited)
+  const refused = refusedTables(facts)
+  const cascading = new Set(facts.cascading)
+  for (const t of tables) {
+    const table = qualified(t.before.schema, t.before.table)
+    const key = tableKey(t.before.schema, t.before.table)
+    if (refused.has(key)) {
+      out.push(
+        unsupported(writer, "dataStepTable", {
+          step: t.step,
+          table,
+          ...(inherited.has(key) ? {} : { detail: "rule" }),
+        })
+      )
+      continue
+    }
+    for (const c of t.columns)
+      if (cascading.has(c.step))
+        out.push(
+          unsupported(writer, "dataStepReferenced", {
+            step: c.step,
+            table,
+            column: quoteIdent(c.column),
+          })
+        )
+  }
+  if (facts.replicationRole !== "origin")
+    out.push(
+      error("plan.replication-role", {
+        value: facts.replicationRole,
+        ...(writer === "backfill" ? { write: "backfill" } : {}),
+      })
+    )
+  return out
+}
+
+/**
+ * Відмови з фактів цілі — до копії (спека промоції §4, §7.2): спільні
+ * відмови запису (`writeFactRefusals`), тип запису, якого немає у вихідному
+ * стані, право `TEMP` і детермінованість викликів на цілі. `models` —
+ * кваліфіковані імена функцій моделі бажаного стану (`modelFunctions`):
+ * функція моделі, якої на цілі немає, — `plan.data-step-function-changed`
+ * (її створює сам план), а будь-яка інша відсутня функція —
+ * `plan.data-step-volatile`: її детермінованість на цілі не доведено.
  */
 export function dataFactRefusals(
   tables: readonly PlannedDataTable[],
@@ -699,23 +816,16 @@ export function dataFactRefusals(
   models: ReadonlySet<string>
 ): EngineDiagnostic[] {
   if (tables.length === 0) return []
-  const out: EngineDiagnostic[] = []
-  const inherited = new Set(facts.inherited)
-  const ruled = new Set(facts.ruled)
-  const cascading = new Set(facts.cascading)
+  const out = writeFactRefusals(
+    dataWriteTables(tables, new Map()),
+    facts,
+    origin
+  )
+  // Тип запису таблиці, яку вже відхилено, не питається: її кроків не буде
+  const refused = refusedTables(facts)
   for (const t of tables) {
+    if (refused.has(tableKey(t.before.schema, t.before.table))) continue
     const table = qualified(t.before.schema, t.before.table)
-    const key = tableKey(t.before.schema, t.before.table)
-    if (inherited.has(key) || ruled.has(key)) {
-      out.push(
-        unsupported(origin, "dataStepTable", {
-          step: dataTableStep(t),
-          table,
-          ...(inherited.has(key) ? {} : { detail: "rule" }),
-        })
-      )
-      continue
-    }
     for (const c of t.columns) {
       const presence = facts.types.get(c.type) ?? "missing"
       if (presence !== "found")
@@ -728,20 +838,10 @@ export function dataFactRefusals(
             detail: presence,
           })
         )
-      if (cascading.has(c.step))
-        out.push(
-          unsupported(origin, "dataStepReferenced", {
-            step: c.step,
-            table,
-            column: quoteIdent(c.column),
-          })
-        )
     }
   }
   if (!facts.tempPrivilege)
     out.push(error("plan.temp-privilege", { role: quoteIdent(role) }))
-  if (facts.replicationRole !== "origin")
-    out.push(error("plan.replication-role", { value: facts.replicationRole }))
   for (const f of facts.functions) {
     const params = { step: f.step, function: functionName(f) }
     const model = f.schema !== undefined && models.has(`${f.schema}.${f.name}`)
@@ -789,26 +889,44 @@ export function dataStepRefusals(
             by: type.step,
           })
         )
-      for (const f of fillCalls(c.expression, parse)) {
-        if (f.schema === undefined || isCatalog(f.schema)) continue
-        const change = planChange(
-          steps,
-          { kind: "routine", schema: f.schema, name: f.name },
-          parse
-        )
-        if (change !== undefined)
-          out.push(
-            error("plan.data-step-function-changed", {
-              step: c.step,
-              function: functionName(f),
-              detail: change.verdict,
-              by: change.step,
-            })
-          )
-      }
+      out.push(
+        ...functionChangeRefusals(c.step, c.expression, steps, parse, origin)
+      )
     }
   }
   return out
+}
+
+/**
+ * Функції моделі виразу запису, які змінює крок плану (спека промоції §4):
+ * запис порахував би старе тіло. Спільне для кроку даних і заповнення.
+ */
+export function functionChangeRefusals(
+  step: string,
+  expression: string,
+  steps: readonly PlanStep[],
+  parse: SqlParser,
+  writer: DataWriter
+): EngineDiagnostic[] {
+  return fillCalls(expression, parse).flatMap((f) => {
+    if (f.schema === undefined || isCatalog(f.schema)) return []
+    const change = planChange(
+      steps,
+      { kind: "routine", schema: f.schema, name: f.name },
+      parse
+    )
+    return change === undefined
+      ? []
+      : [
+          error("plan.data-step-function-changed", {
+            step,
+            function: functionName(f),
+            detail: change.verdict,
+            by: change.step,
+            ...(writer === "backfill" ? { write: "backfill" } : {}),
+          }),
+        ]
+  })
 }
 
 /** Ім'я підготовленого оператора проби форми; префікс платформи. */

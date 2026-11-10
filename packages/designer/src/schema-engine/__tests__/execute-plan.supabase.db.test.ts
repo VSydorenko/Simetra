@@ -3,7 +3,7 @@ import {
   executePlan,
   readLockRights,
   readProviderLocks,
-  SUPABASE_LOCKS,
+  PROVIDER_LOCKS,
   tableKey,
 } from "simetra/schema"
 import { createApplyDatabase } from ".."
@@ -109,7 +109,7 @@ describe.concurrent("executePlan", () => {
     const reader = createApplyDatabase({ readOnly: true })
     const read = (url: string, role: string) =>
       reader.transaction({ url }, "rollback", (tx) =>
-        readProviderLocks(tx, role, SUPABASE_LOCKS)
+        readProviderLocks(tx, role, PROVIDER_LOCKS.supabase)
       )
     // База стеку несе всі таблиці провайдера, і перелік — з налаштування
     // supautils цілі, а не з пресету
@@ -178,7 +178,11 @@ describe.concurrent("executePlan", () => {
         { url: asLocker },
         "rollback",
         async (tx) => {
-          const sets = await readProviderLocks(tx, "postgres", SUPABASE_LOCKS)
+          const sets = await readProviderLocks(
+            tx,
+            "postgres",
+            PROVIDER_LOCKS.supabase
+          )
           // Транзакція жива: наступне читання плану проходить
           const rights = await readLockRights(tx, [
             { schema: "app", name: "t" },

@@ -37,6 +37,19 @@ import {
   type PromotionSection,
 } from "./artifact"
 import {
+  backfillStepRefusals,
+  backfillTargetKey,
+  backfillTargets,
+  backfillWriteTables,
+  columnKey,
+  planBackfills,
+  readBackfillCounts,
+  withNotNullChecks,
+  withShownTriggers,
+  type BackfillInput,
+  type BackfillTarget,
+} from "./backfill"
+import {
   carrierBackfillSteps,
   createdByPlan,
   pendingCarrierCopies,
@@ -85,6 +98,7 @@ import {
   type ProviderLockSet,
   type TableLock,
 } from "./locks"
+import { checkOwnerAttributes } from "./owner-gate"
 import { checkPlatformRoles } from "./platform-roles"
 import { ApplyConnectionLost, ApplyDbError, type ApplyDatabase } from "./port"
 import {
@@ -109,6 +123,7 @@ import {
   readAccessDependents,
   readDataFacts,
   readEquivalenceObjects,
+  readWriteFacts,
   readTypePresence,
   preservationTypeRefusals,
   preservationTypeStepRefusals,
@@ -122,6 +137,7 @@ import {
   valueElementColumns,
   withTempNames,
   withTriggers,
+  writeFactRefusals,
   type CanonicalRename,
   type DataOrigin,
   type EquivalenceObject,
@@ -145,6 +161,7 @@ import {
   lintSteps,
   requiredPermissions,
   stepId,
+  type PlanAction,
   type PlanStep,
 } from "./steps"
 import {
@@ -155,6 +172,7 @@ import {
   rightsSourceInput,
   type RightsOrphans,
 } from "./rights-sources"
+import { planRowVersionSteps, rowVersionFirstTables } from "./row-version"
 import { tableKey } from "./table-key"
 import { typeChangeRefusals, typeGuards, type TypeChange } from "./type-guard"
 import { PLATFORM_VERSION } from "./version"
@@ -288,6 +306,118 @@ function guardedChanges(
     else changes.push(...guarded.changes)
   }
   return { refusals, changes }
+}
+
+/**
+ * Імена таблиці й колонки на цілі за іменами дій двигуна: план із
+ * промоцією будує дії з копії після кроків наміру, а ціль ще в старих.
+ */
+interface TargetNames {
+  table: (t: TableName) => TableName
+  /** `table` — ім'я дії. */
+  column: (table: TableName, column: string) => string
+}
+
+/** Без промоції імена дій — імена цілі. */
+const SAME_NAMES: TargetNames = { table: (t) => t, column: (_t, c) => c }
+
+const onTarget = (names: TargetNames, t: BackfillTarget): BackfillTarget => ({
+  ...t,
+  table: names.table(t.table),
+  column: names.column(t.table, t.column),
+})
+
+/**
+ * Заповнення `NULL` перед `NOT NULL` на рівні дій двигуна, до класифікації
+ * (платформна спека §6.6): цілі `backfillTargets`, їхні кількості на цілі
+ * в rollback-транзакції читача (`readBackfillCounts`, у вихідних іменах
+ * `onTarget`), далі `planBackfills`. Без цілей ціль не читається.
+ */
+async function backfillActions(p: {
+  reader: ApplyDatabase
+  target: DbConnection
+  input: BackfillInput
+  names: TargetNames
+}): Promise<
+  | { ok: true; actions: PlanAction[] }
+  | { ok: false; diagnostics: EngineDiagnostic[] }
+> {
+  const targets = backfillTargets(p.input)
+  if (targets.length === 0) return { ok: true, actions: [...p.input.actions] }
+  const read = await p.reader.transaction(p.target, "rollback", (tx) =>
+    readBackfillCounts(
+      tx,
+      targets.map((t) => onTarget(p.names, t))
+    )
+  )
+  if ("refusal" in read) return { ok: false, diagnostics: [read.refusal] }
+  const { rows, excluded } = read.counts
+  const key = (t: BackfillTarget) => backfillTargetKey(onTarget(p.names, t))
+  const planned = planBackfills({
+    ...p.input,
+    // Ціль без прочитаної кількості — дефект конвеєра: `planBackfills`
+    // відкидає не ціле число
+    rows: (t) => rows.get(key(t)) ?? Number.NaN,
+    excluded: (t) => excluded.has(key(t)),
+  })
+  return planned.refusals.length > 0
+    ? { ok: false, diagnostics: planned.refusals }
+    : { ok: true, actions: planned.actions }
+}
+
+/**
+ * Передумови кроків заповнення за остаточним списком кроків (спека
+ * промоції §4): функції моделі default, які змінює крок плану, і спільні
+ * факти запису з кроками даних промоції (`readWriteFacts`, у вихідних
+ * іменах); далі показаний перелік тригерів (`withShownTriggers`) і поле
+ * `notNull` кроків `SET NOT NULL` без заповнення (`withNotNullChecks`).
+ */
+async function backfillChecks(p: {
+  reader: ApplyDatabase
+  target: DbConnection
+  steps: readonly PlanStep[]
+  parse: SqlParser
+  /** Модель живої цілі. */
+  live: CatalogModel
+  /** Модель бажаної тіні. */
+  desired: CatalogModel
+  names: TargetNames
+}): Promise<
+  | { ok: true; steps: PlanStep[] }
+  | { ok: false; diagnostics: EngineDiagnostic[] }
+> {
+  const steps = withNotNullChecks(p.steps, p.parse)
+  const tables = backfillWriteTables(steps).map((t) => {
+    const table = { schema: t.before.schema, name: t.before.table }
+    const live = p.names.table(table)
+    return {
+      ...t,
+      before: { schema: live.schema, table: live.name },
+      columns: t.columns.map((c) => ({
+        ...c,
+        source: p.names.column(table, c.column),
+      })),
+    }
+  })
+  if (tables.length === 0) return { ok: true, steps }
+  const facts = await p.reader.transaction(p.target, "rollback", (tx) =>
+    readWriteFacts(tx, tables)
+  )
+  const refusals = [
+    ...backfillStepRefusals(steps, p.parse),
+    ...writeFactRefusals(tables, facts, "backfill"),
+  ]
+  if (refusals.length > 0) return { ok: false, diagnostics: refusals }
+  return {
+    ok: true,
+    steps: withShownTriggers(steps, {
+      user: (t) => facts.triggers.get(tableKey(t.schema, t.name)) ?? [],
+      live: p.live,
+      desired: p.desired,
+      parse: p.parse,
+      liveName: p.names.table,
+    }),
+  }
 }
 
 /** Генератори, чиї тригери стоять і на таблицях провайдера. */
@@ -426,6 +556,11 @@ export async function buildPlan(
   // 1–2. Бажаний стан і стан застосування цілі; пошкоджений стан лагодять
   // вручну, а не дозволом
   const desired = await desiredForApply(model)
+  // Профіль `postgres` будує тіні з шаблону кластера цілі й окремого сервера
+  // тіней не знає (Р9): відмова до платформних ролей і до будь-якого звернення
+  // до бази
+  if (desired.scope.provider === "postgres" && o.shadowBase !== undefined)
+    return refused([applyDiagnostic("plan.shadow-base-unsupported", "error")])
   // Факти сервера й голова ledger — тією самою транзакцією READ ONLY, що й
   // стан: доказ копії репетиції (спека промоції §8) звіряє з ними базу
   // того самого моменту, що й ланцюжок. Сервер, старіший за мінімум
@@ -437,6 +572,11 @@ export async function buildPlan(
     async (tx) => {
       const unsupported = await serverVersionRefusal(tx)
       if (unsupported !== undefined) return { ok: false as const, unsupported }
+      // Р10: роль без BYPASSRLS читала б стан крізь захист рядків — відмова
+      // до будь-якого читання стану й до платформних ролей
+      const ownerGate = await checkOwnerAttributes(tx)
+      if (ownerGate !== undefined)
+        return { ok: false as const, unsupported: ownerGate }
       return {
         ok: true as const,
         state: await readApplyState(tx),
@@ -463,7 +603,8 @@ export async function buildPlan(
     o.target,
     o.shadowBase,
     desired.sql,
-    parse
+    parse,
+    desired.scope.provider
   )
   if (roles.refusal !== undefined) return refused(roles.refusal)
 
@@ -575,6 +716,7 @@ export async function buildPlan(
       targetOwners,
       rightsOrphans,
       promotion: transition,
+      epochExists: state.status === "applied" && state.rowVersionEpoch,
       file: input.file,
       diagnostics: dedupe([
         ...verdict.diagnostics,
@@ -639,19 +781,54 @@ export async function buildPlan(
   // 6. Нічого застосовувати лише тоді, коли немає ні кроків, ні нового
   // знімка, ні дрейфу. Дрейф без кроків (зміна версій) — план із нулем кроків:
   // інакше дрейф не було б як прийняти, і кожен наступний план бачив би його
-  if (actions.length === 0 && fromHash === model.hash && drift === null)
+  // Без рядка епохи план не порожній: його пише крок `versions`
+  if (
+    actions.length === 0 &&
+    fromHash === model.hash &&
+    drift === null &&
+    state.status === "applied" &&
+    state.rowVersionEpoch
+  )
     return { status: "unchanged", diagnostics, rightsOrphans }
 
   // 7. Класи — від моделі вихідного стану плану, тобто живої цілі: з
   // порожньою моделлю кожна зміна типу стала б `destructive`
   const unparsable = unparsableSteps(actions, parse)
   if (unparsable.length > 0) return refused([...diagnostics, ...unparsable])
-  const planSteps = classifySteps(actions, live.extracted.model, parse)
+  // 7′. Заповнення `NULL` перед `NOT NULL` (платформна спека §6.6) — на
+  // рівні дій, до класифікації: id, сторожі й позиційні правила рахуються
+  // від остаточного списку
+  const filled = await backfillActions({
+    reader: dbs.reader,
+    target: o.target,
+    input: {
+      actions,
+      parse,
+      source: live.extracted.model,
+      desired: target.extracted.model,
+      physical: model.physical,
+      objects: model.objects,
+    },
+    names: SAME_NAMES,
+  })
+  if (!filled.ok) return refused([...diagnostics, ...filled.diagnostics])
+  const classified = classifySteps(filled.actions, live.extracted.model, parse)
   // Зміна типу, якій сторожа не побудувати, — відмова, а не крок без
   // перевірки: інакше дозвіл на `destructive` знову означав би «обріж мовчки»
-  const guarded = guardedChanges(planSteps, live.extracted.model, parse)
-  const lint = [...lintSteps(planSteps, parse), ...guarded.refusals]
+  const guarded = guardedChanges(classified, live.extracted.model, parse)
+  const lint = [...lintSteps(classified, parse), ...guarded.refusals]
   if (lint.length > 0) return refused([...diagnostics, ...lint])
+  const checked = await backfillChecks({
+    reader: dbs.reader,
+    target: o.target,
+    steps: classified,
+    parse,
+    live: live.extracted.model,
+    desired: target.extracted.model,
+    names: SAME_NAMES,
+  })
+  if (!checked.ok) return refused([...diagnostics, ...checked.diagnostics])
+  const planSteps = checked.steps
   // 7а. Кроки даних нових копій носіїв (спека прав §5.2, спека промоції §7.2) — після кроків
   // двигуна, що створюють колонки-копії: копію звіряємо зі знімком marker, а
   // не з живою колонкою
@@ -664,13 +841,27 @@ export async function buildPlan(
         state.status === "applied"
           ? { tables: markerTables(state.marker) }
           : undefined,
-        createdByPlan(actions)
+        createdByPlan(filled.actions)
       ),
       planSteps.length
     ),
   ]
   // 7б. Кроки середовища (спека промоції §7.2) — наприкінці плану; клас
   // і дозволи рахуються вже з ними
+  // 7б′. Блок `versions` — після кроків двигуна й копій, до середовища: id
+  // наскрізні, а крок середовища рахується вже з ним
+  const withVersions = [
+    ...withCarriers,
+    ...planRowVersionSteps({
+      live: live.extracted.model,
+      epochExists: state.status === "applied" && state.rowVersionEpoch,
+      model,
+      desired: target.extracted.model,
+      engineSteps: planSteps,
+      parse,
+      offset: withCarriers.length,
+    }),
+  ]
   const collected = await collectEnvironment({
     engine,
     dbs,
@@ -680,12 +871,12 @@ export async function buildPlan(
     live,
     desired: target.extracted.catalog,
     role: targetOwners.session,
-    steps: withCarriers,
+    steps: withVersions,
     parse,
   })
   if (!collected.ok) return refused([...diagnostics, ...collected.diagnostics])
   const { environment } = collected
-  const steps = [...withCarriers, ...collected.steps]
+  const steps = [...withVersions, ...collected.steps]
   const permissions = requiredPermissions({ steps, drift, promotion: null })
   // Слід кроків — те саме правило, що й для плану з промоцією (спека промоції §7.2); без
   // промоції імена вихідного стану й кроків збігаються
@@ -824,6 +1015,8 @@ interface PromotionContext {
   /** Сироти прав цілі, прочитані до розгалуження промоції. */
   rightsOrphans: RightsOrphans
   promotion: Extract<TransitionVerdict, { status: "promotion" }>
+  /** Чи є рядок епохи версій цілі: без нього епоху пише крок `versions`. */
+  epochExists: boolean
   /** Файл запису в `plans/`: його називають відмови виявлення. */
   file: string
   /** Діагностики гейта, переходу й бажаного стану. */
@@ -874,7 +1067,9 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
           oldTables,
           await readWritePath(tx, {
             tables: oldTables,
-            apiRoles: Object.values(PROVIDER_API_ROLES[scope.provider]),
+            apiRoles: Object.values(PROVIDER_API_ROLES[scope.provider]).filter(
+              (role): role is string => role !== null
+            ),
           })
         ),
       ],
@@ -942,6 +1137,21 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
   })
   if ("refusal" in data)
     return refused(dedupe([...diagnostics, ...data.refusal]))
+  // Кроки даних (фаза 10) йдуть до кроків двигуна: на таблиці з живою
+  // механікою без послідовності версій тригер упав би (Р11)
+  const noSequence = rowVersionFirstTables(
+    live.extracted.model,
+    data.tables.map((t) => ({ schema: t.before.schema, name: t.before.table }))
+  )
+  if (noSequence.length > 0)
+    return refused(
+      dedupe([
+        ...diagnostics,
+        applyDiagnostic("plan.row-version-first", "error", {
+          tables: noSequence.join(", "),
+        }),
+      ])
+    )
   // Нові типи замірів збереження — тією самою транзакцією: замір «до»
   // приводить до них до будь-якого кроку (спека промоції §4)
   const read =
@@ -974,6 +1184,49 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
   if (factRefusals.length > 0)
     return refused(dedupe([...diagnostics, ...factRefusals]))
 
+  // Заповнення `NULL` (платформна спека §6.6): дії двигуна названо в
+  // іменах копії після наміру, а ціль ще в старих — підрахунок і факти
+  // перекладають імена назад (Р5). Таблиці одиниці й колонки кроків даних —
+  // у нових іменах, як і дії
+  const columnsOld = columnsNewToOld(intent.columns)
+  const names: TargetNames = {
+    table: (t) => {
+      const old = intent.tablesNewToOld.get(tableKey(t.schema, t.name))
+      if (old === undefined) return t
+      const [schema, name] = JSON.parse(old) as [string, string]
+      return { schema, name }
+    },
+    column: (t, column) =>
+      columnsOld.get(JSON.stringify([t.schema, t.name, column])) ?? column,
+  }
+  const backfills = (
+    actions: readonly EngineAction[],
+    source: CatalogModel
+  ): ReturnType<typeof backfillActions> =>
+    backfillActions({
+      reader: dbs.reader,
+      target: o.target,
+      input: {
+        actions,
+        parse,
+        source,
+        desired: target.extracted.model,
+        physical: c.model.physical,
+        objects: c.model.objects,
+        promotion: {
+          tables: new Set(newTables.map((t) => tableKey(t.schema, t.name))),
+          dataColumns: new Set(
+            data.tables.flatMap((t) =>
+              t.columns.map((col) =>
+                columnKey(t.after.schema, t.after.table, col.column)
+              )
+            )
+          ),
+        },
+      },
+      names,
+    })
+
   const cloned = await engine.withTargetClone(
     o,
     live.extracted,
@@ -993,6 +1246,7 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
         data: data.tables,
         origin,
         parse,
+        backfills,
       })
   )
   if (cloned.status === "shadow-failed")
@@ -1004,7 +1258,18 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
     ...analysis.diagnostics,
   ])
   if (!analysis.ok || hasError(withClone)) return refused(withClone)
-  const { steps: planSteps, model: cloneModel } = analysis
+  const { model: cloneModel } = analysis
+  const checked = await backfillChecks({
+    reader: dbs.reader,
+    target: o.target,
+    steps: analysis.steps,
+    parse,
+    live: live.extracted.model,
+    desired: target.extracted.model,
+    names,
+  })
+  if (!checked.ok) return refused([...withClone, ...checked.diagnostics])
+  const planSteps = checked.steps
 
   // Типи й функції моделі кроків даних і нові типи замірів, які створює,
   // змінює чи знищує крок плану, — лише за кроками двигуна (спека
@@ -1096,6 +1361,27 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
 
   // Кроки середовища (спека промоції §7.2): копія цілі в старих іменах
   // проходить кроки наміру, двигуна й копій, тож залишок — у нових
+  const withVersions = [
+    ...withCarriers,
+    ...planRowVersionSteps({
+      live: live.extracted.model,
+      epochExists: c.epochExists,
+      model: c.model,
+      desired: target.extracted.model,
+      engineSteps: planSteps,
+      parse,
+      offset: withCarriers.length,
+      // Таблиця на цілі — у старому імені
+      liveName: (table) => {
+        const old = intent.tablesNewToOld.get(
+          tableKey(table.schema, table.name)
+        )
+        if (old === undefined) return table
+        const [schema, name] = JSON.parse(old) as [string, string]
+        return { schema, name }
+      },
+    }),
+  ]
   const collected = await collectEnvironment({
     engine,
     dbs,
@@ -1105,12 +1391,12 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
     live,
     desired: target.extracted.catalog,
     role: c.targetOwners.session,
-    steps: withCarriers,
+    steps: withVersions,
     parse,
   })
   if (!collected.ok) return refused([...withClone, ...collected.diagnostics])
   const { environment } = collected
-  const steps = [...withCarriers, ...collected.steps]
+  const steps = [...withVersions, ...collected.steps]
 
   // Залежні доступу (спека промоції §8) — з живої цілі, у старих іменах, транзакцією
   // READ ONLY
@@ -1421,6 +1707,14 @@ async function analyseOnClone(p: {
   data: readonly PlannedDataTable[]
   origin: DataOrigin
   parse: SqlParser
+  /**
+   * Заповнення `NULL` перед `NOT NULL` за діями двигуна й моделлю копії
+   * після наміру — вихідним станом дій (`backfillActions`).
+   */
+  backfills: (
+    actions: readonly EngineAction[],
+    source: CatalogModel
+  ) => ReturnType<typeof backfillActions>
 }): Promise<CloneAnalysis> {
   const { engine, scratch, clone, scope, parse } = p
   try {
@@ -1477,10 +1771,15 @@ async function analyseOnClone(p: {
     if (hasError(diagnostics)) return { ok: false, diagnostics }
 
     const offset = renames.length + names.length
-    const { actions } = enginePlan
-    const unparsable = unparsableSteps(actions, parse, offset)
+    const unparsable = unparsableSteps(enginePlan.actions, parse, offset)
     if (unparsable.length > 0)
       return { ok: false, diagnostics: [...diagnostics, ...unparsable] }
+    // Заповнення — до класифікації (Р10): id, сторожі, `noReplacement` і
+    // позиційний виняток «заміна» рахуються від остаточного списку
+    const filled = await p.backfills(enginePlan.actions, extracted.model)
+    if (!filled.ok)
+      return { ok: false, diagnostics: [...diagnostics, ...filled.diagnostics] }
+    const { actions } = filled
     // Виняток «заміна» не діє для прийнятого об'єкта таблиці одиниці
     // (спека промоції §8): рахується з дій до класифікатора, бо він — його вхід
     const unitTables = new Set(

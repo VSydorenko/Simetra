@@ -255,6 +255,17 @@ describe("buildRuntimeCatalog", () => {
     })
   })
 
+  // `required` — «обов'язкова при вставці»; `notNull` — факт колонки. NOT NULL
+  // DEFAULT '' найменування не обов'язкове, але NULL не вміщає: keyset T4
+  // читає саме `notNull`.
+  it("notNull is the column fact, apart from required", () => {
+    expect(attributeOf("Ticket", "description")).toMatchObject({
+      required: false,
+      notNull: true,
+    })
+    expect(attributeOf("Ticket", "code").notNull).toBeUndefined()
+  })
+
   it("value facts: length, precision, cast type, enumeration labels, pair", () => {
     expect(attributeOf("Ticket", "code")).toMatchObject({
       pgType: "character varying(9)",
@@ -802,7 +813,7 @@ describe("buildRuntimeCatalog: CHECK columns", () => {
     expect(canonicalSnapshot(m)).not.toHaveProperty("checkColumns")
     expect(await modelHash({ ...m, checkColumns: [] })).toBe(m.hash)
     expect(m.hash).toBe(
-      "79a88a9c55d98e85b67d0755be1372e00a447fe23af7340cd14359f854c24f6a"
+      "a783fc852e9071420ed776d72318d1652495eb8a4fb536ab7d29dd320ac68adb"
     )
   })
 })

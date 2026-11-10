@@ -76,11 +76,13 @@ async function compileWith(
 async function order(entries: Record<string, unknown>): Promise<string[]> {
   const result = await compileWith(entries)
   expectClean(result, { allow: ["rights.scope-kind-unread"] })
-  return result.model!.creationOrder.map((node) =>
-    node.type === "unit"
-      ? node.identity
-      : `${node.type}:${node.schema}.${node.name}`
-  )
+  return result
+    .model!.creationOrder.map((node) =>
+      node.type === "unit"
+        ? node.identity
+        : `${node.type}:${node.schema}.${node.name}`
+    )
+    .filter((id) => !id.includes("simetra.row_version"))
 }
 
 /** Кожна пара `[раніше, пізніше]` стоїть у порядку саме так. */

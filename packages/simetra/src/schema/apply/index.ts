@@ -28,6 +28,7 @@ export {
   type MarkerRecord,
 } from "./state"
 export { readServerFacts, type ServerFacts } from "./server"
+export { checkOwnerAttributes, ownerRefusal } from "./owner-gate"
 export { PLATFORM_VERSION } from "./version"
 export { tableKey } from "./table-key"
 export {
@@ -93,19 +94,25 @@ export {
   dataStepRefusals,
   dataTableStep,
   dataWriteSql,
+  functionChangeRefusals,
   readDataFacts,
   readTypePresence,
   readUserTriggers,
+  readWriteFacts,
   triggerSql,
   typeIdentity,
   withTriggers,
+  writeFactRefusals,
   type DataFacts,
   type DataOrigin,
   type DataStepKind,
   type DataTable,
+  type DataWriter,
   type GuardForm,
   type PlannedDataTable,
   type TypePresence,
+  type WriteFacts,
+  type WriteTable,
   type AccessChange,
   type ColumnName,
   type CanonicalRename,
@@ -127,6 +134,7 @@ export {
 } from "./environment"
 export { isRetryable, RETRYABLE_SQLSTATES } from "./retry"
 export {
+  BACKFILL_SETTINGS,
   DATA_SETTINGS,
   readSessionSearchPath,
   revalidationSettings,
@@ -153,14 +161,33 @@ export {
 } from "./function-checks"
 export {
   APPLY_ADVISORY_LOCK,
+  CLUSTER_ADVISORY_LOCK,
   DEFAULT_APPLY_TIMEOUTS,
   executePlan,
   type ApplyTimeouts,
   type ExecutablePlan,
   type ExecuteOptions,
+  type BackfillResult,
   type ExecuteOutcome,
   type RehearsalProof,
 } from "./execute"
+export {
+  clusterRoleViolation,
+  ENGINE_SESSION_TIMEOUTS,
+  ensurePostgresCluster,
+  explicitConnectDatabases,
+  extensionsSchemaViolation,
+  authSchemaViolation,
+  postgresClusterSet,
+  templateState,
+  type AuthSchemaFacts,
+  type ExtensionsSchemaFacts,
+  type PostgresClusterOutcome,
+  type PostgresClusterResult,
+  type PostgresClusterSet,
+  type TemplateRow,
+  type TemplateState,
+} from "./postgres-cluster"
 export {
   runRightsMaintenance,
   type RightsMaintenanceDone,
@@ -184,15 +211,41 @@ export {
   type RehearsalTimings,
 } from "./rehearsal"
 export {
+  backfillStepRefusals,
+  backfillTargetKey,
+  backfillTargets,
+  backfillTriggers,
+  backfillWriteTables,
+  columnKey,
+  defaultsBeforeNotNull,
+  isPlatformTrigger,
+  planBackfills,
+  readBackfillCounts,
+  readLiveTriggers,
+  sameDefault,
+  withNotNullChecks,
+  withShownTriggers,
+  type BackfillCounts,
+  type BackfillInput,
+  type BackfillTarget,
+  type LiveTrigger,
+} from "./backfill"
+export {
+  backfillAction,
   checkPermissions,
   classifySteps,
   comparePermissionItems,
   DRIFT_PERMISSION,
   intentStep,
   lintSteps,
+  notNullColumns,
   requiredPermissions,
   STEP_CLASSES,
+  type BackfillAction,
+  type BackfillFacts,
+  type NotNullColumn,
   type PermissionItem,
+  type PlanAction,
   type PermissionSubject,
   type PlanStep,
   type StepClass,

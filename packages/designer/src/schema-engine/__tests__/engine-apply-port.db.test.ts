@@ -108,6 +108,23 @@ describe("SchemaEngine apply port", () => {
     expect(setDefault.newSegmentBefore).toBe(true)
   })
 
+  it("orders SET NOT NULL before SET DEFAULT for one column", async () => {
+    // Фактичний порядок pg-delta: дві окремі дії, SET NOT NULL перед
+    // SET DEFAULT. Заповнення NULL мусить бачити бажаний default, тож пару
+    // переставляє T2-планувальник (`defaultsBeforeNotNull`). Якщо pg-delta
+    // змінить порядок, тест покаже, що перестановка вже не потрібна
+    const plan = await planOf(
+      "create schema app; create table app.t (id int, c int);",
+      "create schema app; create table app.t (id int, c int not null default 0);"
+    )
+    const setDefault = actionMatching(plan, /ALTER COLUMN.*SET DEFAULT/i)
+    const setNotNull = actionMatching(plan, /ALTER COLUMN.*SET NOT NULL/i)
+    expect(setDefault).not.toBe(setNotNull)
+    expect(plan.actions.indexOf(setNotNull)).toBeLessThan(
+      plan.actions.indexOf(setDefault)
+    )
+  })
+
   it("reports locked tables structurally", async () => {
     const plan = await planOf(
       'create schema app; create table app."a.b" (id int);',

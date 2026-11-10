@@ -58,6 +58,20 @@ const snapshotHashGrants = executeGrants(
   "supabase"
 )
 
+// Читають епоху команди й обидві ролі запиту (гостьова сесія теж); скидання
+// не має отримувача
+const epochGrants = executeGrants(
+  "simetra.row_version_epoch()",
+  ["command", "user", "anonymous"],
+  "supabase"
+)
+const resetGrants = executeGrants(
+  "simetra.reset_row_version_epoch()",
+  [],
+  "supabase"
+)
+const stateGrants = [...snapshotHashGrants, ...epochGrants, ...resetGrants]
+
 describe("renderApplyState", () => {
   it("creates the schema with marker and ledger", async () => {
     const sql = renderApplyState(await withoutUsers())
@@ -78,7 +92,7 @@ describe("renderApplyState", () => {
     const lines = renderApplyState(m).split("\n")
     // Рішення Р-A3-16: стан дає лише гранти своєї функції, а схему — шар
     expect(lines.filter((l) => /^(GRANT|REVOKE)\b/.test(l))).toEqual(
-      snapshotHashGrants
+      stateGrants
     )
     // Ті самі одиниці вже дає платформний шар — дубля не буде
     const layer = m.sqlUnits.map((u) => u.sql)
@@ -125,7 +139,7 @@ describe("renderApplyState", () => {
   })
 
   it("grants nothing on the state tables", async () => {
-    // Рішення Р-A3-16: поза гранти схеми — лише EXECUTE функції хешу
+    // Рішення Р-A3-16: поза гранти схеми — лише EXECUTE функцій стану
     for (const [m, schema] of [
       [await withoutUsers(), platformSchemaGrants("supabase")],
       [await withUsers(), []],
@@ -133,7 +147,7 @@ describe("renderApplyState", () => {
       const lines = renderApplyState(m).split("\n")
       expect(lines.filter((l) => /^(GRANT|REVOKE)\b/.test(l))).toEqual([
         ...schema,
-        ...snapshotHashGrants,
+        ...stateGrants,
       ])
       expect(lines.join("\n")).not.toMatch(/ON\s+(ALL\s+)?TABLES?\b/i)
     }
@@ -158,6 +172,101 @@ describe("renderApplyState", () => {
         sql.indexOf(fn)
       )
     }
+  })
+})
+
+describe("renderApplyState: epoch of row versions", () => {
+  const FN = (name: string) => `CREATE OR REPLACE FUNCTION simetra.${name}()`
+
+  it("creates the one-row epoch table", async () => {
+    const sql = renderApplyState(await withoutUsers())
+    expect(sql).toContain(
+      [
+        "CREATE TABLE simetra.version_epoch (",
+        "  singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),",
+        "  epoch uuid NOT NULL DEFAULT gen_random_uuid()",
+        ");",
+      ].join("\n")
+    )
+  })
+
+  it("reads the epoch through a stable definer function that is NULL on a replica", async () => {
+    for (const m of [await withoutUsers(), await withUsers()]) {
+      const sql = renderApplyState(m)
+      const start = sql.indexOf(FN("row_version_epoch"))
+      expect(start).toBeGreaterThan(
+        sql.indexOf("CREATE TABLE simetra.version_epoch")
+      )
+      const fn = sql.slice(start, sql.indexOf("\n\n", start) + 1)
+      expect(fn).toContain("RETURNS text")
+      expect(fn).toContain("LANGUAGE sql STABLE SECURITY DEFINER")
+      expect(fn).toContain("SET search_path = ''")
+      expect(fn).toContain("pg_is_in_recovery()")
+      expect(fn).toContain("substr(")
+      expect(fn).toContain(", 1, 8)")
+      expect(fn).toContain("pg_control_system()")
+      expect(fn).toContain("pg_postmaster_start_time()")
+      expect(fn).toContain("e.epoch::text")
+      // Не літерал `::regclass`: послідовність двигун може створити пізніше
+      expect(fn).not.toContain("::regclass")
+      expect(fn).toContain("to_regclass('simetra.row_version')")
+      expect(fn).not.toContain("simetra_runtime")
+    }
+  })
+
+  it("lets the command role and both request roles read the epoch, nobody run the reset", async () => {
+    const lines = renderApplyState(await withoutUsers()).split("\n")
+    for (const role of [
+      PLATFORM_ROLES.command,
+      PROVIDER_API_ROLES.supabase.user,
+      PROVIDER_API_ROLES.supabase.anonymous,
+    ])
+      expect(lines).toContain(
+        `GRANT EXECUTE ON FUNCTION simetra.row_version_epoch() TO ${quoteIdent(role)};`
+      )
+    expect(lines).not.toContain(
+      `GRANT EXECUTE ON FUNCTION simetra.row_version_epoch() TO ${quoteIdent(PROVIDER_API_ROLES.supabase.service ?? "service_role")};`
+    )
+    expect(
+      lines.filter((l) =>
+        l.startsWith(
+          "GRANT EXECUTE ON FUNCTION simetra.reset_row_version_epoch()"
+        )
+      )
+    ).toEqual([])
+    expect(lines).toContain(
+      "REVOKE EXECUTE ON FUNCTION simetra.reset_row_version_epoch() FROM PUBLIC;"
+    )
+  })
+
+  it("seeds over the mechanics tables of the model and draws a new epoch", async () => {
+    const m = await withoutUsers()
+    const sql = renderApplyState(m)
+    const start = sql.indexOf(FN("reset_row_version_epoch"))
+    const fn = sql.slice(start, sql.indexOf("$$;", start))
+    expect(fn).toContain("LANGUAGE plpgsql SECURITY INVOKER")
+    expect(fn).toContain("SET search_path = ''")
+    // Таблиці беруться з моделі, а не з імен колонок
+    expect(fn).toContain("LOCK TABLE public.party IN SHARE MODE;")
+    expect(fn).toContain("ALTER SEQUENCE simetra.row_version NO CYCLE;")
+    expect(fn).toContain("setval('simetra.row_version', v_max, true)")
+    expect(fn).toContain(
+      "CASE WHEN is_called THEN last_value + 1 ELSE last_value END"
+    )
+    expect(fn).toContain(
+      "UPDATE simetra.version_epoch SET epoch = gen_random_uuid();"
+    )
+    expect(fn).toContain("INSERT INTO simetra.version_epoch DEFAULT VALUES;")
+    // Ручний виклик пише послідовність, тож коміт синхронний за правилом раннера
+    expect(fn).toContain(
+      "PERFORM pg_catalog.set_config('synchronous_commit', 'on', true) WHERE pg_catalog.current_setting('synchronous_commit') IN ('off', 'local');"
+    )
+    // Замки йдуть до повторного сканування й до `setval`; epoха — після засіву
+    expect(fn.indexOf("LOCK TABLE")).toBeLessThan(fn.indexOf("ALTER SEQUENCE"))
+    expect(fn.indexOf("ALTER SEQUENCE")).toBeLessThan(fn.indexOf("setval("))
+    expect(fn.indexOf("setval(")).toBeLessThan(
+      fn.indexOf("UPDATE simetra.version_epoch")
+    )
   })
 })
 
@@ -241,6 +350,65 @@ describe("applyStateOf", () => {
       ])
         expect(state.owns(id), id).toBe(false)
     }
+  })
+
+  const SEQ = "sequence:simetra.row_version"
+  const EPOCH_FN = "function:simetra.row_version_epoch()"
+  const RESET_FN = "function:simetra.reset_row_version_epoch()"
+
+  it("owns the version sequence, its revokes and its ACL, not other sequences", async () => {
+    for (const m of [await withoutUsers(), await withUsers()]) {
+      const state = applyStateOf(target([]), plan([]), m)
+      for (const id of [
+        SEQ,
+        `acl:(${SEQ}).anon`,
+        "grant:revoke:sequence:simetra.row_version:public:all",
+        "grant:revoke:sequence:simetra.row_version:authenticated:all",
+        EPOCH_FN,
+        RESET_FN,
+        "grant:grant:function:simetra.row_version_epoch():anon:execute",
+        "grant:revoke:function:simetra.reset_row_version_epoch():public:execute",
+        "table:simetra.version_epoch",
+      ])
+        expect(state.owns(id), id).toBe(true)
+      for (const id of [
+        "sequence:simetra.other",
+        "sequence:public.row_version",
+        "grant:revoke:sequence:simetra.other:public:all",
+      ])
+        expect(state.owns(id), id).toBe(false)
+    }
+  })
+
+  it("sees the state as present when only the version sequence is left", async () => {
+    // Послідовність без таблиць і функцій — часткове застосування: інакше
+    // її відсутність у плані лишилася б непоміченою
+    for (const m of [await withoutUsers(), await withUsers()])
+      expect(
+        applyStateOf(target([SEQ]), plan(["schema:simetra", FN]), m).state
+      ).toBe("present")
+  })
+
+  it("sees the state as absent when the sequence is missing too", async () => {
+    const m = await withoutUsers()
+    expect(
+      applyStateOf(
+        target([]),
+        plan(["schema:simetra", FN, EPOCH_FN, RESET_FN, SEQ]),
+        m
+      ).state
+    ).toBe("absent")
+  })
+
+  it("sees the state as present when only an epoch function is left", async () => {
+    for (const fn of [EPOCH_FN, RESET_FN])
+      expect(
+        applyStateOf(
+          target([fn]),
+          plan(["schema:simetra"]),
+          await withoutUsers()
+        ).state
+      ).toBe("present")
   })
 })
 

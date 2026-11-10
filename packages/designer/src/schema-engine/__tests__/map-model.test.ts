@@ -1,7 +1,7 @@
 import { buildFactBase, encodeId, type StableId } from "@supabase/pg-delta"
 import { beforeAll, describe, expect, it } from "vitest"
 import { loadSqlParser, type SqlParser } from "simetra/compiler"
-import type { FunctionVolatility } from "simetra/model"
+import type { DatabaseProvider, FunctionVolatility } from "simetra/model"
 import { mapModel } from "../pg-delta/map-model"
 
 let parse: SqlParser
@@ -13,7 +13,10 @@ const schema: StableId = { kind: "schema", name: "app" }
 const fn: StableId = { kind: "function", schema: "app", name: "f", args: [] }
 
 /** Одна функція без волатильності в тексті — як її друкує `pg_get_functiondef`. */
-function mapped(volatility: ReadonlyMap<string, FunctionVolatility>) {
+function mapped(
+  volatility: ReadonlyMap<string, FunctionVolatility>,
+  provider: DatabaseProvider = "supabase"
+) {
   const view = buildFactBase(
     [
       { id: schema, payload: {} },
@@ -28,6 +31,7 @@ function mapped(volatility: ReadonlyMap<string, FunctionVolatility>) {
     []
   )
   return mapModel(view, {
+    provider,
     produced: new Map(),
     parse,
     defaults: { owner: "postgres", entries: [] },
@@ -54,6 +58,35 @@ describe("function volatility in the catalog model", () => {
         property: "volatility",
         detail: "pg_proc has no volatility under the engine identity",
       },
+    ])
+  })
+})
+
+describe("provider preset of the public schema grants", () => {
+  // Схема `public` без жодного ACL-факту: усе, що пресет провайдера дає
+  // `public`, відкликане, і мапер називає саме отримувачів пресету
+  const revokes = (provider: DatabaseProvider) => {
+    const view = buildFactBase(
+      [{ id: { kind: "schema", name: "public" }, payload: {} }],
+      []
+    )
+    return mapModel(view, {
+      provider,
+      produced: new Map(),
+      parse,
+      defaults: { owner: "postgres", entries: [] },
+      extensionComments: new Map(),
+      volatility: new Map(),
+    }).model.units.map((u) => u.sql)
+  }
+
+  it("supabase revokes its five preset grantees", () => {
+    expect(revokes("supabase")).toHaveLength(5)
+  })
+
+  it("postgres revokes only PUBLIC", () => {
+    expect(revokes("postgres")).toEqual([
+      "REVOKE USAGE ON SCHEMA public FROM PUBLIC",
     ])
   })
 })

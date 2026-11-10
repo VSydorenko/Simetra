@@ -47,6 +47,34 @@ async function outOfScope(
 const OUTSIDE =
   "lies outside the boundary the schema engine compares, so a comparison would never see it"
 
+describe("the boundary follows the provider of the project", () => {
+  const postgres = {
+    "project.meta.json": project({
+      defaultSchema: "app",
+      database: { provider: "postgres" },
+    }),
+  }
+
+  it("auth and storage are ordinary schemas under postgres", async () => {
+    const { scope, diagnostics } = await scopeOf(
+      "GRANT SELECT ON auth.t TO simetra_user;\n",
+      postgres
+    )
+    expect(diagnostics).toEqual([])
+    expect(scope.schemas).toEqual(["app", "auth", "simetra"])
+    expect(scope.provider).toBe("postgres")
+  })
+
+  it("better_auth is a provider schema under postgres", async () => {
+    const messages = await outOfScope(
+      "GRANT SELECT ON better_auth.t TO simetra_user;\n",
+      postgres
+    )
+    expect(messages).toHaveLength(1)
+    expect(messages[0]).toContain("better_auth")
+  })
+})
+
 describe("the boundary takes the target of a unit", () => {
   it("grant target schema joins the scope", async () => {
     // Без цілі гранту `reports` не потрапляла в межу, і фільтр двигуна мовчки
@@ -55,7 +83,7 @@ describe("the boundary takes the target of a unit", () => {
       "GRANT SELECT ON reports.t TO authenticated;\n"
     )
     expect(diagnostics).toEqual([])
-    expect(scope.schemas).toEqual(["app", "reports"])
+    expect(scope.schemas).toEqual(["app", "reports", "simetra"])
   })
 
   it("policy on storage.objects is in scope", async () => {
@@ -63,7 +91,7 @@ describe("the boundary takes the target of a unit", () => {
       "CREATE POLICY app_read ON storage.objects FOR SELECT TO authenticated USING (true);\n"
     )
     expect(diagnostics).toEqual([])
-    expect(scope.schemas).toEqual(["app"])
+    expect(scope.schemas).toEqual(["app", "simetra"])
   })
 
   it("comment on a policy on storage.objects gives no diagnostic", async () => {
@@ -205,13 +233,13 @@ describe("the platform layer joins the boundary by its own schemas", () => {
     expect(scope.schemas).toEqual(["app", "simetra"])
   })
 
-  it("a model with only a CustomTable and no users has no simetra in scope", async () => {
-    // Прийнята таблиця не має механіки рядка, тож `simetra` в межу не дає
-    // нічого, крім шару.
+  it("a model with only a CustomTable and no users still has simetra in scope", async () => {
+    // Послідовність версій рядків видається завжди, тож `simetra` у межі
+    // навіть без таблиць механіки.
     const { scope } = await scopeWith({
       "custom-tables/Codes/Codes.meta.json": customTable("Codes"),
     })
-    expect(scope.schemas).toEqual(["app"])
+    expect(scope.schemas).toEqual(["app", "simetra"])
   })
 
   it("the row mechanics brings simetra into scope without users", async () => {

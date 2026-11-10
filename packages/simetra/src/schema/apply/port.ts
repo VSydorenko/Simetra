@@ -75,4 +75,12 @@ export interface ApplyDatabase {
     end: "commit" | "rollback",
     fn: (tx: ApplyTransaction) => Promise<T>
   ): Promise<T>
+  /**
+   * One statement on its own connection, outside any transaction, for
+   * operators that Postgres refuses inside one (`CREATE DATABASE`,
+   * `ALTER DATABASE … IS_TEMPLATE`). Only for cluster preparation
+   * (`ensurePostgresCluster`); never in plan or apply. The read-only
+   * implementation rejects it.
+   */
+  statement(db: DbConnection, sql: string): Promise<void>
 }

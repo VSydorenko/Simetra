@@ -49,3 +49,19 @@ describe("simetra test support boundary", () => {
     ).toEqual([])
   })
 })
+
+describe("test-only auth dependencies", () => {
+  it("production sources import neither better-auth nor kysely", async () => {
+    for (const spec of ["better-auth", "better-auth/plugins", "kysely"]) {
+      const msgs = await restricted(importOf(spec), "src/schema-engine/x.ts")
+      expect(msgs, spec).toHaveLength(1)
+      expect(msgs[0]).toContain("Test-only dependency")
+    }
+    expect(
+      await restricted(
+        importOf("better-auth"),
+        "src/schema-engine/__tests__/x.test.ts"
+      )
+    ).toEqual([])
+  })
+})

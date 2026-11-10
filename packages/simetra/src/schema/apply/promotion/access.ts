@@ -182,7 +182,7 @@ export function accessChanges(p: {
           : { rowLevelSecurity: { from: rls.from, to: rls.to } }),
         policies,
         grants,
-        ...(service.length === 0
+        ...(service.length === 0 || roles.service === null
           ? {}
           : {
               serviceRole: { role: roles.service, privileges: [...service] },

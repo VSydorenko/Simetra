@@ -1,9 +1,13 @@
-import type { CatalogEntry, CatalogIndex, MetadataRef } from "simetra/model"
+import {
+  keysetNodesMax,
+  type CatalogEntry,
+  type CatalogIndex,
+  type MetadataRef,
+} from "simetra/model"
 import {
   checkFilterBudget,
   compareRows,
   compileFilter,
-  keysetAfter,
   type FieldInfo,
 } from "./filter"
 import { includeSteps, type IncludeStep } from "./include"
@@ -120,12 +124,27 @@ export function formOf(ctx: FormContext, spec: ViewSpec): Form {
         entry.keyName,
         ctx.userCollator
       )
-      const sample: Record<string, unknown> = { [entry.keyName]: "x" }
-      for (const part of orderBy) sample[part.attribute] = "x"
-      const keyset = keysetAfter(orderBy, sample, entry.keyName)
-      checkFilterBudget(
-        spec.where === undefined ? keyset : { and: [spec.where, keyset] }
-      )
+      // Бюджет — за найгіршою keyset-умовою порядку (§6.4), а не за курсором
+      // першої сторінки: інакше сторінка з іншим курсором відмовила б на
+      // сервері. Умова глибиною ≤ 5 не обмежує `and` над `where`, тож
+      // перевірці досить заглушки з тим самим числом вузлів.
+      if (spec.where !== undefined) {
+        const keyset =
+          orderBy.at(-1)?.attribute === entry.keyName
+            ? orderBy.slice(0, -1)
+            : orderBy
+        checkFilterBudget({
+          and: [
+            spec.where,
+            {
+              or: Array.from({ length: keysetNodesMax(keyset) - 1 }, () => ({
+                attribute: entry.keyName,
+                op: "isNull" as const,
+              })),
+            },
+          ],
+        })
+      }
       const include = includeSteps(spec.object, entry, ctx.index, spec.include)
       return {
         spec,

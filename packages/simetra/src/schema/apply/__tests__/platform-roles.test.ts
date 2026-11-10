@@ -107,6 +107,7 @@ const commandWith = (rows: Partial<Member>[] = [{}]): PlatformRoleRow =>
   })
 
 const LOGIN = { name: RUNTIME, memberOf: [COMMAND, "authenticated"] }
+const LOGINS = [LOGIN]
 
 describe("platformRoleRefusals", () => {
   it.each([
@@ -195,7 +196,8 @@ describe("platformRoleRefusals", () => {
       const refusals = platformRoleRefusals(
         [PLATFORM_ROLES.command],
         found,
-        "shadow"
+        "shadow",
+        LOGINS
       )
       expect(refusals.map((d) => [d.code, d.params?.server])).toEqual(
         codes.map((c) => [c, "shadow"])
@@ -232,7 +234,7 @@ describe("platformRoleRefusals", () => {
     },
   ])("refuses the command role with $case", ({ found, violation }) => {
     expect(
-      platformRoleRefusals([COMMAND], found, "target").map((d) => [
+      platformRoleRefusals([COMMAND], found, "target", LOGINS).map((d) => [
         d.code,
         d.params?.role,
         d.params?.violation,
@@ -245,9 +247,12 @@ describe("platformRoleRefusals", () => {
       members: [member(), member({ role: "authenticated" })],
     })
     expect(
-      platformRoleRefusals([COMMAND], [commandWith(), login], "target").map(
-        (d) => [d.params?.role, d.params?.violation]
-      )
+      platformRoleRefusals(
+        [COMMAND],
+        [commandWith(), login],
+        "target",
+        LOGINS
+      ).map((d) => [d.params?.role, d.params?.violation])
     ).toEqual([[RUNTIME, "request-role:authenticated"]])
   })
 
@@ -274,7 +279,7 @@ describe("platformRoleRefusals", () => {
     },
   ])("refuses a request path to $case", ({ found, role, violation }) => {
     expect(
-      platformRoleRefusals([COMMAND], found, "target").map((d) => [
+      platformRoleRefusals([COMMAND], found, "target", LOGINS).map((d) => [
         d.code,
         d.params?.role,
         d.params?.violation,
@@ -284,14 +289,19 @@ describe("platformRoleRefusals", () => {
 
   it("accepts a manager the request roles do not reach", () => {
     expect(
-      platformRoleRefusals([COMMAND], [commandWith(), loginRow()], "target")
+      platformRoleRefusals(
+        [COMMAND],
+        [commandWith(), loginRow()],
+        "target",
+        LOGINS
+      )
     ).toEqual([])
   })
 
   it("checks the request roles it is given instead of the provider ones", () => {
     const found = [row({ members: [member(), member({ role: "tagged_req" })] })]
     expect(
-      platformRoleRefusals([COMMAND], found, "target", undefined, undefined, [
+      platformRoleRefusals([COMMAND], found, "target", LOGINS, [
         "tagged_req",
       ]).map((d) => d.params?.violation)
     ).toEqual(["request-role:tagged_req"])
@@ -301,13 +311,14 @@ describe("platformRoleRefusals", () => {
     const refusals = platformRoleRefusals(
       [PLATFORM_ROLES.command],
       [row({ attributes: { login: true }, members: [member({ set: true })] })],
-      "target"
+      "target",
+      LOGINS
     )
     expect(refusals.map((d) => d.params?.violation)).toEqual(["login"])
   })
 
   it("asks for nothing when the model needs no platform role", () => {
-    expect(platformRoleRefusals([], [], "target")).toEqual([])
+    expect(platformRoleRefusals([], [], "target", LOGINS)).toEqual([])
   })
 
   // Повна звірка ролі входу (`login` передано, як кличе `roles`)
@@ -359,13 +370,7 @@ describe("platformRoleRefusals", () => {
       violation: "member:x",
     },
   ])("checks the login role with $case", ({ found, violation }) => {
-    const refusals = platformRoleRefusals(
-      [RUNTIME],
-      [found],
-      "target",
-      [RUNTIME],
-      LOGIN
-    )
+    const refusals = platformRoleRefusals([RUNTIME], [found], "target", LOGINS)
     expect(refusals.map((d) => [d.params?.role, d.params?.violation])).toEqual(
       violation === undefined ? [] : [[RUNTIME, violation]]
     )
@@ -376,19 +381,19 @@ describe("platformRoleRefusals", () => {
     {
       case: "accepts the pair of a safe login role",
       found: [commandWith(), loginRow()],
-      loginNames: [RUNTIME],
+      login: LOGINS,
       refusals: [],
     },
     {
       case: "a second grantor of the pair with INHERIT",
       found: [commandWith([{}, { inherit: true }]), loginRow()],
-      loginNames: [RUNTIME],
+      login: LOGINS,
       refusals: [[COMMAND, `member:${RUNTIME}`]],
     },
     {
       case: "the pair of a role that is not a platform login",
       found: [commandWith(), loginRow()],
-      loginNames: ["other_login"],
+      login: [{ name: "other_login", memberOf: [COMMAND] }],
       refusals: [[COMMAND, `member:${RUNTIME}`]],
     },
     {
@@ -397,13 +402,13 @@ describe("platformRoleRefusals", () => {
         commandWith(),
         loginRow({ members: [member(), member({ role: "x", set: true })] }),
       ],
-      loginNames: [RUNTIME],
+      login: LOGINS,
       refusals: [[RUNTIME, "member:x"]],
     },
     {
       case: "the pair without the login role row",
       found: [commandWith()],
-      loginNames: [RUNTIME],
+      login: LOGINS,
       refusals: [[COMMAND, `member:${RUNTIME}`]],
     },
     {
@@ -414,13 +419,13 @@ describe("platformRoleRefusals", () => {
           memberOf: [pair(COMMAND), pair("authenticated", { inherit: true })],
         }),
       ],
-      loginNames: [RUNTIME],
+      login: LOGINS,
       refusals: [[RUNTIME, "membership-option:authenticated"]],
     },
     {
       case: "a login role with CREATEROLE",
       found: [commandWith(), loginRow({ attributes: { createRole: true } })],
-      loginNames: [RUNTIME],
+      login: LOGINS,
       refusals: [[RUNTIME, "createRole"]],
     },
     {
@@ -435,12 +440,12 @@ describe("platformRoleRefusals", () => {
           ],
         }),
       ],
-      loginNames: [RUNTIME],
+      login: LOGINS,
       refusals: [[RUNTIME, "member-of:service_role"]],
     },
-  ])("the command role: $case", ({ found, loginNames, refusals }) => {
+  ])("the command role: $case", ({ found, login, refusals }) => {
     expect(
-      platformRoleRefusals([COMMAND], found, "target", loginNames).map((d) => [
+      platformRoleRefusals([COMMAND], found, "target", login).map((d) => [
         d.params?.role,
         d.params?.violation,
       ])
@@ -449,8 +454,155 @@ describe("platformRoleRefusals", () => {
 
   it("accepts the pair of the platform login role by default", () => {
     expect(
-      platformRoleRefusals([COMMAND], [commandWith(), loginRow()], "target")
+      platformRoleRefusals(
+        [COMMAND],
+        [commandWith(), loginRow()],
+        "target",
+        LOGINS
+      )
     ).toEqual([])
+  })
+  // Гейт звіряє кожну роль входу з власними батьками (спека профілю §3.1):
+  // батько, дозволений іншій ролі входу, цій не належить
+  describe("with several login roles", () => {
+    const OTHER = "tagged_other_login"
+    const both = [LOGIN, { name: OTHER, memberOf: ["authenticated"] }]
+    const otherRow = (memberOf: Membership[]): PlatformRoleRow =>
+      row({
+        name: OTHER,
+        attributes: { login: true },
+        memberOf,
+        members: [member()],
+      })
+    const otherPair = (over: Partial<Member> = {}) =>
+      member({ role: OTHER, admin: false, set: true, manager: false, ...over })
+
+    it.each([
+      {
+        case: "a parent allowed only to the other login role",
+        memberOf: [pair("authenticated"), pair(COMMAND)],
+        refusals: [[OTHER, `member-of:${COMMAND}`]],
+      },
+      {
+        case: "its own parents",
+        memberOf: [pair("authenticated")],
+        refusals: [] as string[][],
+      },
+    ])("the command role with a login member holding $case", (c) => {
+      const found = [
+        row({ members: [member(), otherPair()] }),
+        otherRow(c.memberOf),
+      ]
+      expect(
+        platformRoleRefusals([COMMAND], found, "target", both).map((d) => [
+          d.params?.role,
+          d.params?.violation,
+        ])
+      ).toEqual(c.refusals)
+    })
+
+    it("checks a required login role against its own parents only", () => {
+      expect(
+        platformRoleRefusals(
+          [OTHER],
+          [otherRow([pair("authenticated"), pair(COMMAND)])],
+          "target",
+          both
+        ).map((d) => [d.params?.role, d.params?.violation])
+      ).toEqual([[OTHER, `member-of:${COMMAND}`]])
+    })
+  })
+
+  // §3.1 профілю postgres: роль запиту не досяжна через посередника з
+  // CREATEROLE — це справедливо для кожної ролі запиту профілю. Тут
+  // `requestPath` — готовий рядок; сам обхід `pg_auth_members` у SQL доводить
+  // DB-тест `packages/designer/src/__tests__/roles-tool.db.test.ts` («the gate
+  // refuses a request role that reaches a manager of the command role through
+  // any membership»)
+  it.each(["simetra_user", "simetra_anon"])(
+    "maps a precomputed requestPath row for the request role %s to a refusal",
+    (requestRole) => {
+      const runtime = {
+        name: RUNTIME,
+        memberOf: [COMMAND, "simetra_user", "simetra_anon"],
+      }
+      const found = [
+        row({ requestPath: ["tagged_intermediary"] }),
+        loginRow({
+          memberOf: [pair(COMMAND), pair("simetra_user"), pair("simetra_anon")],
+        }),
+      ]
+      expect(
+        platformRoleRefusals(
+          [COMMAND],
+          found,
+          "target",
+          [runtime],
+          [requestRole]
+        ).map((d) => [d.params?.role, d.params?.violation])
+      ).toEqual([[COMMAND, "request-path:tagged_intermediary"]])
+    }
+  )
+})
+
+/** Роль входу без провайдера: лише звірка за об'єднанням батьків усіх профілів. */
+const CHECK_RUNTIME = {
+  name: RUNTIME,
+  memberOf: ["authenticated", "simetra_anon", COMMAND, "simetra_user"],
+  checkOnly: true as const,
+}
+
+describe("platformRoleRefusals of a check-only login role", () => {
+  it.each([
+    {
+      title: "SET-only pair with supabase parents",
+      memberOf: ["authenticated"],
+      want: [],
+    },
+    {
+      title: "SET-only pair with postgres parents",
+      memberOf: ["simetra_user", "simetra_anon"],
+      want: [],
+    },
+    {
+      title: "a parent outside the union",
+      memberOf: ["authenticated", "stranger"],
+      want: [[RUNTIME, "member-of:stranger"]],
+    },
+  ])("$title", ({ memberOf, want }) => {
+    const found = [
+      commandWith(),
+      loginRow({ memberOf: [pair(COMMAND), ...memberOf.map((p) => pair(p))] }),
+    ]
+    expect(
+      platformRoleRefusals([COMMAND], found, "target", [CHECK_RUNTIME]).map(
+        (d) => [d.params?.role, d.params?.violation]
+      )
+    ).toEqual(want)
+  })
+
+  it("does not demand the parents of a login role it checks", () => {
+    const found = [commandWith(), loginRow({ memberOf: [pair(COMMAND)] })]
+    expect(
+      platformRoleRefusals([COMMAND, RUNTIME], found, "target", [CHECK_RUNTIME])
+    ).toEqual([])
+  })
+
+  it("still refuses wrong options and a missing login row", () => {
+    const wrong = [
+      commandWith(),
+      loginRow({ memberOf: [pair(COMMAND, { inherit: true })] }),
+    ]
+    expect(
+      platformRoleRefusals([COMMAND], wrong, "target", [CHECK_RUNTIME]).map(
+        (d) => d.params?.violation
+      )
+    ).toEqual([`membership-option:${COMMAND}`])
+    expect(
+      platformRoleRefusals([COMMAND], [commandWith()], "target", [
+        CHECK_RUNTIME,
+      ]).map((d) => d.params?.violation)
+    ).toEqual([`member:${RUNTIME}`])
   })
 })
 
@@ -458,10 +610,23 @@ describe("platformRoleSet", () => {
   it("adds the runtime login role only when the provider is known", () => {
     expect(platformRoleSet("supabase")).toEqual({
       names: Object.values(PLATFORM_ROLES),
-      login: { name: RUNTIME, memberOf: [COMMAND, "authenticated"] },
+      login: [{ name: RUNTIME, memberOf: [COMMAND, "authenticated"] }],
+      checkLogin: [],
+    })
+    expect(platformRoleSet("postgres")).toEqual({
+      names: Object.values(PLATFORM_ROLES),
+      login: [
+        {
+          name: RUNTIME,
+          memberOf: [COMMAND, "simetra_user", "simetra_anon"],
+        },
+      ],
+      checkLogin: [],
     })
     expect(platformRoleSet(undefined)).toEqual({
       names: Object.values(PLATFORM_ROLES),
+      login: [],
+      checkLogin: [CHECK_RUNTIME],
     })
   })
 })
@@ -520,6 +685,7 @@ function fakeCluster(o: {
     pending = undefined
   }
   const dbs: ApplyDatabase = {
+    statement: () => Promise.reject(new Error("no statement expected")),
     transaction: async (db, end, fn) => {
       if (end === "commit" && pending?.on === "read") arrive(clusterOf(db.url))
       return fn({
@@ -582,10 +748,55 @@ const BOTH = [
   { server: "target" as const, db: TARGET },
   { server: "shadow" as const, db: SHADOW },
 ]
-const NAMES = { names: [COMMAND] }
-const WITH_LOGIN = { names: [COMMAND], login: LOGIN }
+const NAMES = { names: [COMMAND], login: [] }
+const WITH_LOGIN = { names: [COMMAND], login: LOGINS }
+const CHECK_ONLY = { names: [COMMAND], login: [], checkLogin: [CHECK_RUNTIME] }
 
 describe("ensurePlatformRoles", () => {
+  it("accepts an existing SET-only login pair and never creates the login role without a provider", async () => {
+    const present = fakeCluster({
+      canCreate: { [TARGET.url]: true },
+      roles: {
+        [TARGET.url]: [
+          commandWith(),
+          loginRow({ memberOf: [pair(COMMAND), pair("authenticated")] }),
+        ],
+      },
+    })
+    const outcome = await ensurePlatformRoles(
+      present.dbs,
+      [BOTH[0]!],
+      CHECK_ONLY
+    )
+    expect(outcome.refusal).toBeUndefined()
+    expect(outcome.created.map((c) => [c.name, c.outcome])).toEqual([
+      [COMMAND, "present"],
+    ])
+
+    const absent = fakeCluster({
+      canCreate: { [TARGET.url]: true },
+      roles: { [TARGET.url]: [row()] },
+    })
+    await ensurePlatformRoles(absent.dbs, [BOTH[0]!], CHECK_ONLY)
+    expect(absent.writes.filter((w) => w.sql.includes(RUNTIME))).toEqual([])
+  })
+
+  it("refuses an existing login role with a parent outside the union", async () => {
+    const { dbs } = fakeCluster({
+      canCreate: { [TARGET.url]: true },
+      roles: {
+        [TARGET.url]: [
+          commandWith(),
+          loginRow({ memberOf: [pair(COMMAND), pair("stranger")] }),
+        ],
+      },
+    })
+    const outcome = await ensurePlatformRoles(dbs, [BOTH[0]!], CHECK_ONLY)
+    expect(
+      (outcome.refusal ?? []).map((d) => [d.code, d.params?.violation])
+    ).toEqual([["plan.platform-role-shape", "member-of:stranger"]])
+  })
+
   it("checks CREATEROLE on every server before creating anything", async () => {
     const { dbs, writes } = fakeCluster({
       canCreate: { [TARGET.url]: true, [SHADOW.url]: false },

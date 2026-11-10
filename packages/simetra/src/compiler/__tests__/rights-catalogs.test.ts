@@ -117,7 +117,7 @@ describe("system rights catalogs", () => {
       },
       indexes: [
         ["org_id", "subject"],
-        ["org_id", "container"],
+        ["org_id", "container", "id"],
       ],
     },
     {
@@ -131,7 +131,7 @@ describe("system rights catalogs", () => {
         columns: ["custom_role"],
         references: { table: "global_roles", columns: ["id"] },
       },
-      indexes: [["subject"], ["container"]],
+      indexes: [["subject"], ["container", "id"]],
     },
   ])(
     "points the assignment subject at the member of the $level level",

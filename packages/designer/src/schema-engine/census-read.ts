@@ -4,8 +4,8 @@
  */
 import type pg from "pg"
 import {
-  SUPABASE_EVENT_TRIGGERS,
-  SUPABASE_EXTENSIONS,
+  PROVIDER_EVENT_TRIGGERS,
+  PROVIDER_UNMANAGED_EXTENSIONS,
   type CensusCount,
   type EngineScope,
   type PropertyCount,
@@ -136,9 +136,9 @@ export async function readCensus(
 ): Promise<CensusCount[]> {
   const { rows } = await db.query<CensusCount>(CENSUS_SQL, [
     scope.schemas,
-    PROVIDER_SCHEMAS.supabase,
-    SUPABASE_EXTENSIONS,
-    SUPABASE_EVENT_TRIGGERS,
+    PROVIDER_SCHEMAS[scope.provider],
+    PROVIDER_UNMANAGED_EXTENSIONS[scope.provider],
+    PROVIDER_EVENT_TRIGGERS[scope.provider],
   ])
   return rows
 }

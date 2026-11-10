@@ -1,11 +1,13 @@
 import type { SqlParser } from "simetra/compiler"
 import {
-  LOGIN_ROLE_REQUEST_PURPOSES,
+  DATABASE_PROVIDERS,
+  loginRoleParentNames,
   PLATFORM_LOGIN_ROLES,
   PLATFORM_ROLES,
   PROVIDER_API_ROLES,
   quoteIdent,
   type DatabaseProvider,
+  type PlatformLoginPurpose,
 } from "simetra/model"
 import type { DbConnection, EngineDiagnostic } from "../engine"
 import { applyDiagnostic } from "./diagnostic"
@@ -56,17 +58,29 @@ export interface PlatformRoleRow {
 /** Роль входу платформи і батьки, в які вона входить парою `INHERIT FALSE, SET TRUE`. */
 export interface PlatformLoginRole {
   name: string
+  /** Для `checkOnly` — дозволені батьки, а не обов'язкові. */
   memberOf: readonly string[]
+  /**
+   * Наявну роль лише звіряють за дозволеними батьками; брак членства не
+   * порушення, а саму роль ніхто не створює (провайдер невідомий).
+   */
+  checkOnly?: true
 }
 
 /**
  * Що створює й звіряє `roles` (спека П4 §6.2): ролі грантів `names` — на кожному
- * сервері; роль входу — лише на цілі, бо бажаний SQL її не згадує, тож тіні
- * вона не потрібна.
+ * сервері; ролі входу `login` — лише на цілі, бо бажаний SQL їх не згадує, тож
+ * тіні вони не потрібні. Порожній перелік — роль входу пропущено (провайдер
+ * невідомий).
  */
 export interface PlatformRoleSet {
   names: readonly string[]
-  login?: PlatformLoginRole
+  login: readonly PlatformLoginRole[]
+  /**
+   * Ролі входу, які створювати не можна, але наявні звіряють: без провайдера
+   * дозволені батьки — об'єднання профілів усіх провайдерів.
+   */
+  checkLogin?: readonly PlatformLoginRole[]
 }
 
 /** Результат одного створення чи звірки. */
@@ -94,18 +108,6 @@ const PLATFORM_ROLE_NAMES: ReadonlySet<string> = new Set(
   Object.values(PLATFORM_ROLES)
 )
 
-const DEFAULT_LOGIN_NAMES: readonly string[] =
-  Object.values(PLATFORM_LOGIN_ROLES)
-
-/** Ролі запиту, членом яких роль входу може бути за профілем будь-якого провайдера. */
-const REQUEST_ROLES: readonly string[] = (
-  Object.keys(LOGIN_ROLE_REQUEST_PURPOSES) as DatabaseProvider[]
-).flatMap((provider) =>
-  LOGIN_ROLE_REQUEST_PURPOSES[provider].map(
-    (purpose) => PROVIDER_API_ROLES[provider][purpose]
-  )
-)
-
 /**
  * Ролі запиту API усіх провайдерів (§6.16 п. 2): об'єднання, а не профіль
  * одного провайдера, бо гейт `plan` провайдера не знає, а роль запиту будь-
@@ -113,7 +115,9 @@ const REQUEST_ROLES: readonly string[] = (
  */
 const DEFAULT_REQUEST_NAMES: readonly string[] = [
   ...new Set(
-    Object.values(PROVIDER_API_ROLES).flatMap((roles) => Object.values(roles))
+    Object.values(PROVIDER_API_ROLES)
+      .flatMap((roles) => Object.values(roles))
+      .filter((role): role is string => role !== null)
   ),
 ]
 
@@ -277,9 +281,8 @@ const requestMember = (
 function grantRoleViolations(
   found: PlatformRoleRow,
   rows: readonly PlatformRoleRow[],
-  loginNames: readonly string[],
+  login: readonly PlatformLoginRole[],
   requestNames: readonly string[],
-  allowedParents: ReadonlySet<string>,
   checkedLogins: ReadonlySet<string>
 ): { role: string; violation: string }[] {
   const role = found.name
@@ -299,21 +302,29 @@ function grantRoleViolations(
   for (const name of sortedNames(found.members.map((m) => m.role))) {
     const own = found.members.filter((m) => m.role === name)
     if (own.every(managesOnly)) continue
-    const login = rows.find((r) => r.name === name)
-    if (!loginNames.includes(name) || !own.every(isPair) || login === undefined)
+    const def = login.find((l) => l.name === name)
+    const loginRow = rows.find((r) => r.name === name)
+    if (def === undefined || !own.every(isPair) || loginRow === undefined)
       return [{ role, violation: `member:${name}` }]
     if (checkedLogins.has(name)) continue
-    const broken = loginViolation(login, allowedParents, [], requestNames)
+    // Дозволені батьки — власні батьки цієї ролі входу, а не спільна
+    // множина: батько, дозволений іншій ролі входу, цій не належить
+    const broken = loginViolation(
+      loginRow,
+      new Set(def.memberOf),
+      [],
+      requestNames
+    )
     if (broken !== undefined) logins.push({ role: name, violation: broken })
   }
   return logins
 }
 
 /**
- * Відмови плану щодо потрібних ролей одного сервера. `loginNames` — ролі
- * входу, чия пара з роллю грантів допустима (типово — ролі входу
- * платформи; тест на тегованих іменах передає свої). `login` — роль входу
- * `roles`: серед `required` її звіряють повністю, а виняток пари її вже не
+ * Відмови плану щодо потрібних ролей одного сервера. `login` — ролі входу
+ * платформи, чия пара з роллю грантів допустима, з власними дозволеними
+ * батьками кожної (`platformRoleSet`; тест на тегованих іменах передає свої).
+ * Роль входу серед `required` звіряють повністю, а виняток пари її вже не
  * звіряє — повну звірку робить виклик, де вона серед `required`.
  * `requestNames` — ролі запиту API, які не можуть бути членами платформних
  * ролей і мати їх членами (типово — усіх провайдерів; тест передає теговані).
@@ -322,16 +333,12 @@ export function platformRoleRefusals(
   required: readonly string[],
   found: readonly PlatformRoleRow[],
   server: RoleServer,
-  loginNames: readonly string[] = DEFAULT_LOGIN_NAMES,
-  login?: PlatformLoginRole,
+  login: readonly PlatformLoginRole[],
   requestNames: readonly string[] = DEFAULT_REQUEST_NAMES
 ): EngineDiagnostic[] {
-  const allowedParents = new Set([
-    ...required,
-    ...REQUEST_ROLES,
-    ...(login?.memberOf ?? []),
-  ])
-  const checkedLogins = new Set(login === undefined ? [] : [login.name])
+  const checkedLogins = new Set(
+    login.filter((l) => required.includes(l.name)).map((l) => l.name)
+  )
   const seen = new Set<string>()
   return required.flatMap((role) => {
     const row = found.find((r) => r.name === role)
@@ -342,25 +349,19 @@ export function platformRoleRefusals(
           server,
         }),
       ]
+    const own = login.find((l) => l.name === role)
     const broken =
-      login !== undefined && role === login.name
+      own !== undefined
         ? (() => {
             const violation = loginViolation(
               row,
-              new Set(login.memberOf),
-              login.memberOf,
+              new Set(own.memberOf),
+              own.checkOnly === true ? [] : own.memberOf,
               requestNames
             )
             return violation === undefined ? [] : [{ role, violation }]
           })()
-        : grantRoleViolations(
-            row,
-            found,
-            loginNames,
-            requestNames,
-            allowedParents,
-            checkedLogins
-          )
+        : grantRoleViolations(row, found, login, requestNames, checkedLogins)
     return broken
       .filter((b) => {
         // Роль входу в кількох ролях грантів звітується один раз
@@ -386,16 +387,18 @@ export function platformRoleRefusals(
 export async function platformRoleGate(
   tx: ApplyTransaction,
   required: readonly string[],
-  loginNames: readonly string[],
+  login: readonly PlatformLoginRole[],
   server: RoleServer,
-  login?: PlatformLoginRole,
   requestNames: readonly string[] = DEFAULT_REQUEST_NAMES
 ): Promise<EngineDiagnostic[]> {
   return platformRoleRefusals(
     required,
-    await readPlatformRoles(tx, [...required, ...loginNames], requestNames),
+    await readPlatformRoles(
+      tx,
+      [...required, ...login.map((l) => l.name)],
+      requestNames
+    ),
     server,
-    loginNames,
     login,
     requestNames
   )
@@ -412,10 +415,12 @@ export async function checkPlatformRoles(
   target: DbConnection,
   shadowBase: DbConnection | undefined,
   desiredSql: string,
-  parse: SqlParser
+  parse: SqlParser,
+  provider: DatabaseProvider
 ): Promise<{ refusal?: EngineDiagnostic[] }> {
   const required = requiredPlatformRoles(desiredSql, parse)
   if (required.length === 0) return {}
+  const { login } = platformRoleSet(provider)
   const servers: { server: RoleServer; db: DbConnection }[] = [
     { server: "target", db: target },
     ...(shadowBase === undefined
@@ -426,7 +431,7 @@ export async function checkPlatformRoles(
   for (const { server, db } of servers) {
     refusal.push(
       ...(await dbs.transaction(db, "rollback", (tx) =>
-        platformRoleGate(tx, required, DEFAULT_LOGIN_NAMES, server)
+        platformRoleGate(tx, required, login, server)
       ))
     )
   }
@@ -435,23 +440,36 @@ export async function checkPlatformRoles(
 
 /**
  * Ролі, які створює `roles` (спека П4 §6.2). Без провайдера (немає файлу проєкту)
- * роль входу не створюється й не звіряється: без членства в ролі запиту її
- * потім ніхто б не виправив — наявну `roles` лише звіряє.
+ * роль входу не створюється: без членства в ролі запиту її потім ніхто б не
+ * виправив. Наявну `roles` звіряє за об'єднанням батьків усіх провайдерів.
  */
 export function platformRoleSet(provider?: DatabaseProvider): PlatformRoleSet {
   const names = Object.values(PLATFORM_ROLES)
-  if (provider === undefined) return { names }
+  const purposes = Object.entries(PLATFORM_LOGIN_ROLES) as [
+    PlatformLoginPurpose,
+    string,
+  ][]
+  if (provider === undefined)
+    return {
+      names,
+      login: [],
+      // Старе ефективне правило: батьки з даних T0 усіх профілів разом
+      checkLogin: purposes.map(([purpose, name]) => ({
+        name,
+        memberOf: sortedNames(
+          DATABASE_PROVIDERS.flatMap((p) => loginRoleParentNames(purpose, p))
+        ),
+        checkOnly: true as const,
+      })),
+    }
   return {
     names,
-    login: {
-      name: PLATFORM_LOGIN_ROLES.runtime,
-      memberOf: [
-        PLATFORM_ROLES.command,
-        ...LOGIN_ROLE_REQUEST_PURPOSES[provider].map(
-          (purpose) => PROVIDER_API_ROLES[provider][purpose]
-        ),
-      ],
-    },
+    checkLogin: [],
+    // Склад і батьки кожної ролі входу — з даних T0, не літералом тут
+    login: purposes.map(([purpose, name]) => ({
+      name,
+      memberOf: loginRoleParentNames(purpose, provider),
+    })),
   }
 }
 
@@ -506,7 +524,7 @@ export async function ensurePlatformRoles(
   roles: PlatformRoleSet
 ): Promise<{ created: PlatformRoleOutcome[]; refusal?: EngineDiagnostic[] }> {
   const { names, login } = roles
-  const loginNames = login === undefined ? DEFAULT_LOGIN_NAMES : [login.name]
+  const gated = [...login, ...(roles.checkLogin ?? [])]
   const refusal: EngineDiagnostic[] = []
   const adminRefusal: EngineDiagnostic[] = []
   for (const { server, db } of servers) {
@@ -515,41 +533,35 @@ export async function ensurePlatformRoles(
         "SELECT rolcreaterole OR rolsuper AS allowed FROM pg_catalog.pg_roles WHERE rolname = current_user"
       )
       const allowed = self?.allowed === true
-      const found = await readPlatformRoles(tx, [...names, ...loginNames])
-      // На цілі роль входу звіряє повна перевірка нижче: передана `login`
-      // знімає її повтор з винятку пари, тож порушення звітується один раз
+      const found = await readPlatformRoles(tx, [
+        ...names,
+        ...gated.map((l) => l.name),
+      ])
+      const present = gated.filter((l) => found.some((r) => r.name === l.name))
+      // На цілі наявні ролі входу звіряються повністю разом з ролями грантів:
+      // роль входу серед потрібних знімає її повтор з винятку пари, тож
+      // порушення звітується один раз
       const shape = await platformRoleGate(
         tx,
-        names,
-        loginNames,
-        server,
-        server === "target" ? login : undefined
+        server === "target" ? [...names, ...present.map((l) => l.name)] : names,
+        gated,
+        server
       )
       const missing = names.filter(
         (name) => !found.some((r) => r.name === name)
       )
       const denied = allowed ? [] : missing
-      const own: EngineDiagnostic[] = []
-      if (login !== undefined && server === "target") {
-        if (found.some((r) => r.name === login.name))
-          own.push(
-            ...(await platformRoleGate(
-              tx,
-              [login.name],
-              loginNames,
-              server,
-              login
-            ))
-          )
-        else if (!allowed) denied.push(login.name)
-        else
-          adminRefusal.push(...(await missingAdmin(tx, login, missing, server)))
-      }
-      return { shape, denied, own }
+      if (server === "target")
+        for (const l of login) {
+          if (present.includes(l)) continue
+          if (!allowed) denied.push(l.name)
+          else
+            adminRefusal.push(...(await missingAdmin(tx, l, missing, server)))
+        }
+      return { shape, denied }
     })
     refusal.push(
       ...read.shape.filter((d) => d.code !== "plan.platform-role-missing"),
-      ...read.own,
       ...read.denied.map((role) =>
         applyDiagnostic("roles.create-role-denied", "error", { role, server })
       )
@@ -583,34 +595,31 @@ export async function ensurePlatformRoles(
             tx,
             name,
             [`CREATE ROLE ${quoteIdent(name)} NOLOGIN NOINHERIT`],
-            () => platformRoleGate(tx, [name], loginNames, server)
+            () => platformRoleGate(tx, [name], gated, server)
           )
         )
-      if (
-        login !== undefined &&
-        server === "target" &&
-        adminRefusal.length === 0
-      ) {
-        const q = quoteIdent(login.name)
-        record(
-          server,
-          login.name,
-          await createOrCheck(
-            tx,
-            login.name,
-            [
-              `CREATE ROLE ${q} LOGIN NOINHERIT`,
-              // INHERIT FALSE явно: з PG16 типове значення членства бере
-              // атрибут ролі, а пара §6.2 мусить бути саме такою
-              ...login.memberOf.map(
-                (parent) =>
-                  `GRANT ${quoteIdent(parent)} TO ${q} WITH INHERIT FALSE, SET TRUE`
-              ),
-            ],
-            () => platformRoleGate(tx, [login.name], loginNames, server, login)
+      if (server === "target" && adminRefusal.length === 0)
+        for (const l of login) {
+          const q = quoteIdent(l.name)
+          record(
+            server,
+            l.name,
+            await createOrCheck(
+              tx,
+              l.name,
+              [
+                `CREATE ROLE ${q} LOGIN NOINHERIT`,
+                // INHERIT FALSE явно: з PG16 типове значення членства бере
+                // атрибут ролі, а пара §6.2 мусить бути саме такою
+                ...l.memberOf.map(
+                  (parent) =>
+                    `GRANT ${quoteIdent(parent)} TO ${q} WITH INHERIT FALSE, SET TRUE`
+                ),
+              ],
+              () => platformRoleGate(tx, [l.name], gated, server)
+            )
           )
-        )
-      }
+        }
     })
   }
   const all = [...late, ...adminRefusal]

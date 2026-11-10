@@ -1589,6 +1589,7 @@ describe.concurrent("executePlan", () => {
       const plan = await planFor(url, [CREATE_N])
       let first = true
       const lostAfterCommit: ApplyDatabase = {
+        statement: (target, sql) => apply.statement(target, sql),
         async transaction(target, end, fn) {
           const value = await apply.transaction(target, end, fn)
           if (first) {
@@ -1648,6 +1649,7 @@ describe.concurrent("executePlan", () => {
         await live?.end().catch(() => {})
       },
       db: {
+        statement: (target, sql) => apply.statement(target, sql),
         async transaction(target, end, fn) {
           if (!first) return apply.transaction(target, end, fn)
           first = false
@@ -1740,6 +1742,7 @@ describe.concurrent("executePlan", () => {
       // Обривається лише транзакція застосування, а не пошук у ledger
       let first = true
       const lostBeforeCommit: ApplyDatabase = {
+        statement: (target, sql) => apply.statement(target, sql),
         transaction: (target, end, fn) => {
           if (!first) return apply.transaction(target, end, fn)
           first = false
@@ -2936,13 +2939,14 @@ describe.concurrent("executePlan", () => {
         })
         // Копія з одним рядком, ціль — з трьома: ⌈3 × 30 000 × 3 / 1⌉
         const report: RehearsalReport = {
-          format: 1,
+          format: 2,
           planHash: PLAN_HASH,
           server: plan.server,
           ledgerHead: plan.ledgerHead,
           rows: [{ schema: "app", table: "pt", rows: 1 }],
           durations: { phases: [], steps: [], longestStatementMs: 30_000 },
           data: [],
+          backfills: [],
           preservation: [{ schema: "app", table: "pt", rows: 1 }],
           plpgsqlCheck: "skipped",
           triggers: [],

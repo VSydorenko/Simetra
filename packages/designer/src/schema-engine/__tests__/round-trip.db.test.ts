@@ -245,11 +245,26 @@ interface Loss {
 }
 
 const NO_LOSS = (scope: EngineScope): Loss => ({
-  schemas: [...scope.schemas],
+  schemas: [...new Set([...scope.schemas, "simetra"])],
   triggers: [],
   functions: [],
   identities: [],
 })
+
+/**
+ * Послідовність версій компілятор видає завжди, тож межа з метаданих завжди
+ * містить `simetra`, а застосована база її має. Фікстури класів — сирий SQL
+ * без платформного шару, тому ціль доповнюється так, як її доповнило б
+ * перше застосування: інакше звірка бачила б послідовність як різницю, а не
+ * як втрачену чи збережену одиницю.
+ */
+const withPlatformSequence = (target: DbConnection) =>
+  withClient(target, async (c) => {
+    await c.query("CREATE SCHEMA IF NOT EXISTS simetra")
+    await c.query(
+      "CREATE SEQUENCE IF NOT EXISTS simetra.row_version AS bigint MINVALUE 1 NO CYCLE CACHE 1"
+    )
+  })
 
 const dropTrigger = (t: Loss["triggers"][number]) =>
   `DROP TRIGGER "${t.name}" ON "${t.schema}"."${t.table}"`
@@ -316,6 +331,7 @@ async function roundTripOf(
   existing: ReadonlyMap<string, string> = new Map(),
   loss: Loss = NO_LOSS(extractScope)
 ): Promise<RoundTrip> {
+  await withPlatformSequence(target)
   const extracted = await engine.extract(target, extractScope)
   expect(errors(extracted.diagnostics)).toEqual([])
 
@@ -548,9 +564,10 @@ async function mechanicsLoss(source: CompiledModel): Promise<Loss> {
     ...source,
     sqlUnits: source.sqlUnits.filter((u) => !lost(u)),
   })
-  // Спільні функції механіки (`simetra.touch()` тощо) — поза межею звірки:
-  // їх звірка не бачить, тож і втратою вони не є
-  const inScope = new Set(scope.schemas)
+  // Межа після прийому з нуля завжди має `simetra` (послідовність версій), тож
+  // спільні функції механіки (`simetra.touch()` тощо) звірка бачить, і їх
+  // втрата — така сама, як тригерів таблиць
+  const inScope = new Set([...scope.schemas, "simetra"])
   const lostUnits = source.sqlUnits.filter(lost)
   const identities = new Set(
     lostUnits.filter((u) => u.class === "trigger").map((u) => u.identity)
@@ -600,7 +617,7 @@ async function mechanicsLoss(source: CompiledModel): Promise<Loss> {
   )
   expect(grants.every((u) => u !== undefined)).toBe(true)
   return {
-    schemas: [...scope.schemas],
+    schemas: [...inScope],
     triggers,
     functions,
     identities: [

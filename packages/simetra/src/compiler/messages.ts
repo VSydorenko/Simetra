@@ -4034,9 +4034,9 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "apply.deferred-constraint-failed": {
     en: (p) =>
-      `A deferred trigger or constraint failed when the transaction checked it ${p.after === "data" ? "right after the data steps wrote their values" : "after the plan's steps"} (SQLSTATE ${p.sqlstate}): ${p.error}. The transaction was rolled back`,
+      `A deferred trigger or constraint failed when the transaction checked it ${p.after === "data" ? "right after the data steps wrote their values" : p.after === "backfill" ? "right after a backfill step filled NULL values with the default" : "after the plan's steps"} (SQLSTATE ${p.sqlstate}): ${p.error}. The transaction was rolled back`,
     uk: (p) =>
-      `Відкладений тригер чи обмеження не спрацювали, коли транзакція перевірила їх ${p.after === "data" ? "одразу після запису значень кроків даних" : "після кроків плану"} (SQLSTATE ${p.sqlstate}): ${p.error}. Транзакцію відкочено`,
+      `Відкладений тригер чи обмеження не спрацювали, коли транзакція перевірила їх ${p.after === "data" ? "одразу після запису значень кроків даних" : p.after === "backfill" ? "одразу після того, як крок заповнення записав default замість NULL" : "після кроків плану"} (SQLSTATE ${p.sqlstate}): ${p.error}. Транзакцію відкочено`,
     hint: {
       en: (p) =>
         p.after === "data"
@@ -4046,6 +4046,46 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
         p.after === "data"
           ? "Нічого не записано. Значення, які записали кроки даних, порушують обмеження DEFERRABLE або їх відхиляє відкладений тригер: виправте вираз кроку чи дані, які він читає."
           : "Нічого не записано. Крок лишає рядки, що порушують обмеження DEFERRABLE, або їх відхиляє відкладений тригер: виправте крок або дані, з якими він працює.",
+    },
+  },
+  "apply.not-null-violation": {
+    en: (p) =>
+      `Before plan step ${p.step}, which makes column ${p.column} of ${p.table} NOT NULL, the column has ${p.rows} row(s) with NULL that the plan did not count. The transaction was rolled back`,
+    uk: (p) =>
+      `Перед кроком плану ${p.step}, що робить колонку ${p.column} таблиці ${p.table} NOT NULL, колонка має рядків з NULL: ${p.rows}, яких план не рахував. Транзакцію відкочено`,
+    hint: {
+      en: "Nothing was written. The NULL values appeared after the plan, or an earlier step of the plan wrote them (a type change with USING). Plan again: the plan counts them and fills them with the default, or refuses.",
+      uk: "Нічого не записано. Значення NULL з'явилися після плану або їх записав попередній крок плану (зміна типу з USING). Сплануйте знову: план порахує їх і заповнить default або відмовить.",
+    },
+  },
+  "apply.backfill-rows-changed": {
+    en: (p) =>
+      `Backfill step ${p.step} filled ${p.rows} row(s) of column ${p.column} of ${p.table} with the default, but the plan showed ${p.planned}. The transaction was rolled back`,
+    uk: (p) =>
+      `Крок заповнення ${p.step} записав default у рядків колонки ${p.column} таблиці ${p.table}: ${p.rows}, а план показав ${p.planned}. Транзакцію відкочено`,
+    hint: {
+      en: "Nothing was written. The permission for this step covers the rows the plan showed, and a NULL replaced with the default cannot be told apart afterwards. Plan again and review the new count before allowing the step.",
+      uk: "Нічого не записано. Дозвіл на цей крок покриває рядки, які показав план, а NULL, замінений на default, потім не відрізнити. Сплануйте знову й перегляньте нову кількість, перш ніж дозволити крок.",
+    },
+  },
+  "apply.backfill-triggers-changed": {
+    en: (p) =>
+      p.reason === "platform"
+        ? `Before backfill step ${p.step} on ${p.table} these platform triggers are missing or disabled: ${p.triggers}. The fill would skip what they maintain. The transaction was rolled back`
+        : `Before backfill step ${p.step} on ${p.table} these triggers are enabled, and the plan did not show them among the triggers disabled during the fill: ${p.triggers}. The transaction was rolled back`,
+    uk: (p) =>
+      p.reason === "platform"
+        ? `Перед кроком заповнення ${p.step} на ${p.table} цих платформних тригерів немає або вони вимкнені: ${p.triggers}. Заповнення пропустило б те, що вони підтримують. Транзакцію відкочено`
+        : `Перед кроком заповнення ${p.step} на ${p.table} ці тригери ввімкнені, а план не показав їх серед тригерів, вимкнених на час заповнення: ${p.triggers}. Транзакцію відкочено`,
+    hint: {
+      en: (p) =>
+        p.reason === "platform"
+          ? "Nothing was written. Enable the platform triggers of the table (or let a plan restore them) before the fill; then plan again."
+          : "Nothing was written. The triggers of the table differ from those the plan showed; plan again and review the triggers the fill disables.",
+      uk: (p) =>
+        p.reason === "platform"
+          ? "Нічого не записано. Увімкніть платформні тригери таблиці (або дайте плану їх відновити) до заповнення; потім сплануйте знову."
+          : "Нічого не записано. Тригери таблиці відрізняються від тих, що показав план; сплануйте знову й перегляньте тригери, які вимикає заповнення.",
     },
   },
   "apply.constraint-invalid": {
@@ -4235,16 +4275,26 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "plan.data-step-function-changed": {
     en: (p) =>
-      p.detail === "unproven"
-        ? `Data step ${p.step} of the promotion calls the model function ${p.function}, and plan step ${p.by} uses it in a statement whose object the plan cannot determine, so it cannot prove the function stays unchanged before the data steps compute with it`
-        : `Data step ${p.step} of the promotion calls the model function ${p.function}, which this plan creates, changes or drops${p.by === undefined ? "" : ` (step ${p.by})`}, while the data steps run before the engine steps and would compute with the old body`,
+      p.write === "backfill"
+        ? `The default that backfill step ${p.step} writes calls the model function ${p.function}, and plan step ${p.by} ${p.detail === "unproven" ? "uses it in a statement whose object the plan cannot determine" : "creates, changes or drops it"}, so the backfill could compute with another body`
+        : p.detail === "unproven"
+          ? `Data step ${p.step} of the promotion calls the model function ${p.function}, and plan step ${p.by} uses it in a statement whose object the plan cannot determine, so it cannot prove the function stays unchanged before the data steps compute with it`
+          : `Data step ${p.step} of the promotion calls the model function ${p.function}, which this plan creates, changes or drops${p.by === undefined ? "" : ` (step ${p.by})`}, while the data steps run before the engine steps and would compute with the old body`,
     uk: (p) =>
-      p.detail === "unproven"
-        ? `Крок даних ${p.step} промоції викликає функцію моделі ${p.function}, а крок плану ${p.by} вживає її в операторі, предмета якого план не визначає, тож не доведе, що функція не зміниться до обчислення кроків даних`
-        : `Крок даних ${p.step} промоції викликає функцію моделі ${p.function}, яку цей план створює, змінює чи знищує${p.by === undefined ? "" : ` (крок ${p.by})`}, а кроки даних ідуть до кроків двигуна й рахували б старим тілом`,
+      p.write === "backfill"
+        ? `Default, який пише крок заповнення ${p.step}, викликає функцію моделі ${p.function}, а крок плану ${p.by} ${p.detail === "unproven" ? "вживає її в операторі, предмета якого план не визначає" : "її створює, змінює чи знищує"}, тож заповнення могло б порахувати іншим тілом`
+        : p.detail === "unproven"
+          ? `Крок даних ${p.step} промоції викликає функцію моделі ${p.function}, а крок плану ${p.by} вживає її в операторі, предмета якого план не визначає, тож не доведе, що функція не зміниться до обчислення кроків даних`
+          : `Крок даних ${p.step} промоції викликає функцію моделі ${p.function}, яку цей план створює, змінює чи знищує${p.by === undefined ? "" : ` (крок ${p.by})`}, а кроки даних ідуть до кроків двигуна й рахували б старим тілом`,
     hint: {
-      en: "No plan was written. Apply the change of the function first, then plan the promotion.",
-      uk: "План не записано. Спершу застосуйте зміну функції, потім сплануйте промоцію.",
+      en: (p) =>
+        p.write === "backfill"
+          ? "No plan was written. Apply the change of the function first, then plan the change of the column."
+          : "No plan was written. Apply the change of the function first, then plan the promotion.",
+      uk: (p) =>
+        p.write === "backfill"
+          ? "План не записано. Спершу застосуйте зміну функції, потім сплануйте зміну колонки."
+          : "План не записано. Спершу застосуйте зміну функції, потім сплануйте промоцію.",
     },
   },
   "plan.temp-privilege": {
@@ -4259,9 +4309,13 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "plan.replication-role": {
     en: (p) =>
-      `The target session runs with session_replication_role = ${p.value}, and the promotion's data steps need origin: otherwise foreign key triggers do not fire and the written values bypass the reference checks`,
+      p.write === "backfill"
+        ? `The target session runs with session_replication_role = ${p.value}, and the backfill steps need origin: otherwise the platform triggers do not fire and the filled rows miss their version and carrier copies`
+        : `The target session runs with session_replication_role = ${p.value}, and the promotion's data steps need origin: otherwise foreign key triggers do not fire and the written values bypass the reference checks`,
     uk: (p) =>
-      `Сесія цілі має session_replication_role = ${p.value}, а кроки даних промоції потребують origin: інакше тригери зовнішніх ключів не спрацьовують, і записані значення обходять перевірку посилань`,
+      p.write === "backfill"
+        ? `Сесія цілі має session_replication_role = ${p.value}, а кроки заповнення потребують origin: інакше платформні тригери не спрацьовують, і заповнені рядки лишаються без версії й копій носіїв`
+        : `Сесія цілі має session_replication_role = ${p.value}, а кроки даних промоції потребують origin: інакше тригери зовнішніх ключів не спрацьовують, і записані значення обходять перевірку посилань`,
     hint: {
       en: "No plan was written. Remove the session_replication_role setting of the database or the role (ALTER DATABASE … RESET / ALTER ROLE … RESET), then plan again.",
       uk: "План не записано. Зніміть налаштування session_replication_role бази чи ролі (ALTER DATABASE … RESET / ALTER ROLE … RESET) і сплануйте знову.",
@@ -4351,6 +4405,26 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     hint: {
       en: "Nothing was planned or created. `simetra roles` does not change an existing role: fix it by hand with `ALTER ROLE <role> NO<attribute>` for an attribute, `REVOKE <role> FROM <member>` (or revoke the role it belongs to) for a membership, or `GRANT <parent> TO <login role> WITH INHERIT FALSE, SET TRUE` for a missing or wrong membership of a login role, and run the command again.",
       uk: "Нічого не сплановано й не створено. `simetra roles` наявну роль не змінює: виправте її вручну — `ALTER ROLE <роль> NO<атрибут>` для атрибута, `REVOKE <роль> FROM <член>` (або відкличте роль, у яку вона входить) для членства чи `GRANT <батько> TO <роль входу> WITH INHERIT FALSE, SET TRUE` для відсутнього чи хибного членства ролі входу — і повторіть команду.",
+    },
+  },
+  "plan.owner-not-bypassrls": {
+    en: () =>
+      "The connected role has neither BYPASSRLS nor superuser: it would see only the rows row-level security allows, so the plan, the apply and the rehearsal cannot be trusted",
+    uk: () =>
+      "Підключена роль не має ні BYPASSRLS, ні прав суперкористувача: вона бачила б лише рядки, які дозволяє захист на рівні рядків, тож плану, застосуванню й репетиції не можна довіряти",
+    hint: {
+      en: "Nothing was planned or written. As a superuser run ALTER ROLE <role> BYPASSRLS, or connect as a role that has it.",
+      uk: "Нічого не сплановано й не записано. Від суперкористувача виконайте ALTER ROLE <роль> BYPASSRLS або підключіться роллю, що його має.",
+    },
+  },
+  "plan.shadow-base-unsupported": {
+    en: () =>
+      "A separate shadow server is not supported with the postgres profile: shadows are built from the template database of the target cluster",
+    uk: () =>
+      "Окремий сервер тіней не підтримано в профілі postgres: тіні будують із бази-шаблону кластера цілі",
+    hint: {
+      en: "Nothing was planned or created. Run the command without the shadow server variable.",
+      uk: "Нічого не сплановано й не створено. Запустіть команду без змінної сервера тіней.",
     },
   },
   "plan.type-guard-unsupported": {
@@ -4455,86 +4529,110 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "plan.promotion-unsupported": {
     en: (p) =>
-      p.reason === "labelTranslation"
-        ? `The promotion record ${p.file} translates kind labels, which plans do not support yet`
-        : p.reason === "sequenceSchema"
-          ? `Column ${p.column} of ${p.table} in the promotion ${p.file} depends on the sequence ${p.sequence} outside the table's schema, so the plan would recreate the sequence and reset its counter`
-          : p.reason === "dataStepTable"
-            ? p.detail === "rule"
-              ? `Table ${p.table} of data step ${p.step} in the promotion ${p.file} has an UPDATE rewrite rule, which would run other statements beside or instead of the update of the data steps, so the write could not prove the rows it wrote`
-              : `Table ${p.table} of data step ${p.step} in the promotion ${p.file} has inheritance children or is partitioned, so one update and its preservation measure would cover different rows`
-            : p.reason === "dataStepType"
-              ? p.detail === "oldType"
-                ? `Data step ${p.step} in the promotion ${p.file} fills ${p.column} of ${p.table}, whose type also changes, and the old type ${p.type} is not an unbounded string type, so the value written before the change could be rounded silently`
-                : p.detail === "cast"
-                  ? `The value of data step ${p.step} in the promotion ${p.file} cannot be cast to ${p.type}, the type of ${p.column} of ${p.table} at the write`
-                  : p.detail === "unparsed"
-                    ? `Data step ${p.step} in the promotion ${p.file} writes ${p.column} of ${p.table} in type ${p.type}, which the plan cannot name as a schema and a type, so it cannot check that the type exists on the target`
-                    : `Data step ${p.step} in the promotion ${p.file} writes ${p.column} of ${p.table} in type ${p.type}, which ${p.detail === "changed" ? `step ${p.by} of the plan creates, changes or drops` : p.detail === "unproven" ? `step ${p.by} of the plan uses in a statement whose object the plan cannot determine, so the plan cannot prove it unchanged` : "does not exist on the target before the plan"}, while the data steps run before the engine steps`
-              : p.reason === "dataStepKey"
-                ? `Data step ${p.step} in the promotion ${p.file} addresses rows of ${p.table} by ${p.key}, which ${p.detail === "notPrimaryKey" ? "is not the single-column primary key of the table" : p.detail === "retired" ? "is retired" : p.detail === "fillTarget" ? "is itself a fill target" : "changes its type"}`
-                : p.reason === "dataStepReferenced"
-                  ? `Data step ${p.step} in the promotion ${p.file} changes ${p.column} of ${p.table}, which a foreign key references with ON UPDATE CASCADE, SET NULL or SET DEFAULT, so rows of other tables would change outside the preservation proof`
-                  : `Table ${p.table} of the promotion ${p.file} has no primary key, so the plan cannot prove that rows keep their values`,
+      p.write === "backfill"
+        ? p.reason === "dataStepTable"
+          ? p.detail === "rule"
+            ? `Table ${p.table} of backfill step ${p.step} has an UPDATE rewrite rule, which would run other statements beside or instead of the backfill, so the count of filled rows would prove nothing`
+            : `Table ${p.table} of backfill step ${p.step} has inheritance children or is partitioned, so the backfill would run triggers the plan does not show`
+          : `Backfill step ${p.step} fills ${p.column} of ${p.table}, which a foreign key references with ON UPDATE CASCADE, SET NULL or SET DEFAULT, so rows of other tables could change outside the plan`
+        : p.reason === "labelTranslation"
+          ? `The promotion record ${p.file} translates kind labels, which plans do not support yet`
+          : p.reason === "sequenceSchema"
+            ? `Column ${p.column} of ${p.table} in the promotion ${p.file} depends on the sequence ${p.sequence} outside the table's schema, so the plan would recreate the sequence and reset its counter`
+            : p.reason === "dataStepTable"
+              ? p.detail === "rule"
+                ? `Table ${p.table} of data step ${p.step} in the promotion ${p.file} has an UPDATE rewrite rule, which would run other statements beside or instead of the update of the data steps, so the write could not prove the rows it wrote`
+                : `Table ${p.table} of data step ${p.step} in the promotion ${p.file} has inheritance children or is partitioned, so one update and its preservation measure would cover different rows`
+              : p.reason === "dataStepType"
+                ? p.detail === "oldType"
+                  ? `Data step ${p.step} in the promotion ${p.file} fills ${p.column} of ${p.table}, whose type also changes, and the old type ${p.type} is not an unbounded string type, so the value written before the change could be rounded silently`
+                  : p.detail === "cast"
+                    ? `The value of data step ${p.step} in the promotion ${p.file} cannot be cast to ${p.type}, the type of ${p.column} of ${p.table} at the write`
+                    : p.detail === "unparsed"
+                      ? `Data step ${p.step} in the promotion ${p.file} writes ${p.column} of ${p.table} in type ${p.type}, which the plan cannot name as a schema and a type, so it cannot check that the type exists on the target`
+                      : `Data step ${p.step} in the promotion ${p.file} writes ${p.column} of ${p.table} in type ${p.type}, which ${p.detail === "changed" ? `step ${p.by} of the plan creates, changes or drops` : p.detail === "unproven" ? `step ${p.by} of the plan uses in a statement whose object the plan cannot determine, so the plan cannot prove it unchanged` : "does not exist on the target before the plan"}, while the data steps run before the engine steps`
+                : p.reason === "dataStepKey"
+                  ? `Data step ${p.step} in the promotion ${p.file} addresses rows of ${p.table} by ${p.key}, which ${p.detail === "notPrimaryKey" ? "is not the single-column primary key of the table" : p.detail === "retired" ? "is retired" : p.detail === "fillTarget" ? "is itself a fill target" : "changes its type"}`
+                  : p.reason === "dataStepReferenced"
+                    ? `Data step ${p.step} in the promotion ${p.file} changes ${p.column} of ${p.table}, which a foreign key references with ON UPDATE CASCADE, SET NULL or SET DEFAULT, so rows of other tables would change outside the preservation proof`
+                    : `Table ${p.table} of the promotion ${p.file} has no primary key, so the plan cannot prove that rows keep their values`,
     uk: (p) =>
-      p.reason === "labelTranslation"
-        ? `Запис промоції ${p.file} перекладає мітки виду, а план їх ще не підтримує`
-        : p.reason === "sequenceSchema"
-          ? `Колонка ${p.column} таблиці ${p.table} промоції ${p.file} залежить від послідовності ${p.sequence} поза схемою таблиці, тож план перестворив би послідовність і скинув би її лічильник`
-          : p.reason === "dataStepTable"
-            ? p.detail === "rule"
-              ? `Таблиця ${p.table} кроку даних ${p.step} промоції ${p.file} має правило перезапису UPDATE, яке виконало б інші оператори поряд з оновленням кроків даних чи замість нього, тож запис не довів би записані рядки`
-              : `Таблиця ${p.table} кроку даних ${p.step} промоції ${p.file} має нащадків за успадкуванням чи партиціонована, тож один запис і його замір збереження охопили б різні рядки`
-            : p.reason === "dataStepType"
-              ? p.detail === "oldType"
-                ? `Крок даних ${p.step} промоції ${p.file} заповнює ${p.column} таблиці ${p.table}, тип якої теж змінюється, а старий тип ${p.type} — не рядковий тип без межі, тож значення, записане до зміни, могло б мовчки округлитися`
-                : p.detail === "cast"
-                  ? `Значення кроку даних ${p.step} промоції ${p.file} не приводиться до ${p.type} — типу ${p.column} таблиці ${p.table} на момент запису`
-                  : p.detail === "unparsed"
-                    ? `Крок даних ${p.step} промоції ${p.file} пише ${p.column} таблиці ${p.table} у типі ${p.type}, якого план не називає схемою й типом, тож не перевірить, що тип є на цілі`
-                    : `Крок даних ${p.step} промоції ${p.file} пише ${p.column} таблиці ${p.table} у типі ${p.type}, який ${p.detail === "changed" ? `крок плану ${p.by} створює, змінює чи знищує` : p.detail === "unproven" ? `крок плану ${p.by} вживає в операторі, предмета якого план не визначає, тож план не доведе, що тип не зміниться` : "відсутній на цілі до плану"}, а кроки даних ідуть до кроків двигуна`
-              : p.reason === "dataStepKey"
-                ? `Крок даних ${p.step} промоції ${p.file} адресує рядки ${p.table} за ${p.key}, який ${p.detail === "notPrimaryKey" ? "не є одноколонковим первинним ключем таблиці" : p.detail === "retired" ? "виводиться з ужитку" : p.detail === "fillTarget" ? "сам є ціллю fill" : "змінює тип"}`
-                : p.reason === "dataStepReferenced"
-                  ? `Крок даних ${p.step} промоції ${p.file} змінює ${p.column} таблиці ${p.table}, на яку посилається зовнішній ключ з ON UPDATE CASCADE, SET NULL чи SET DEFAULT, тож рядки інших таблиць змінилися б поза доказом збереження`
-                  : `Таблиця ${p.table} промоції ${p.file} не має первинного ключа, тож план не доведе, що рядки зберегли значення`,
+      p.write === "backfill"
+        ? p.reason === "dataStepTable"
+          ? p.detail === "rule"
+            ? `Таблиця ${p.table} кроку заповнення ${p.step} має правило перезапису UPDATE, яке виконало б інші оператори поряд із заповненням чи замість нього, тож кількість заповнених рядків нічого б не доводила`
+            : `Таблиця ${p.table} кроку заповнення ${p.step} має нащадків за успадкуванням чи партиціонована, тож заповнення запустило б тригери, яких план не показує`
+          : `Крок заповнення ${p.step} заповнює ${p.column} таблиці ${p.table}, на яку посилається зовнішній ключ з ON UPDATE CASCADE, SET NULL чи SET DEFAULT, тож рядки інших таблиць могли б змінитися поза планом`
+        : p.reason === "labelTranslation"
+          ? `Запис промоції ${p.file} перекладає мітки виду, а план їх ще не підтримує`
+          : p.reason === "sequenceSchema"
+            ? `Колонка ${p.column} таблиці ${p.table} промоції ${p.file} залежить від послідовності ${p.sequence} поза схемою таблиці, тож план перестворив би послідовність і скинув би її лічильник`
+            : p.reason === "dataStepTable"
+              ? p.detail === "rule"
+                ? `Таблиця ${p.table} кроку даних ${p.step} промоції ${p.file} має правило перезапису UPDATE, яке виконало б інші оператори поряд з оновленням кроків даних чи замість нього, тож запис не довів би записані рядки`
+                : `Таблиця ${p.table} кроку даних ${p.step} промоції ${p.file} має нащадків за успадкуванням чи партиціонована, тож один запис і його замір збереження охопили б різні рядки`
+              : p.reason === "dataStepType"
+                ? p.detail === "oldType"
+                  ? `Крок даних ${p.step} промоції ${p.file} заповнює ${p.column} таблиці ${p.table}, тип якої теж змінюється, а старий тип ${p.type} — не рядковий тип без межі, тож значення, записане до зміни, могло б мовчки округлитися`
+                  : p.detail === "cast"
+                    ? `Значення кроку даних ${p.step} промоції ${p.file} не приводиться до ${p.type} — типу ${p.column} таблиці ${p.table} на момент запису`
+                    : p.detail === "unparsed"
+                      ? `Крок даних ${p.step} промоції ${p.file} пише ${p.column} таблиці ${p.table} у типі ${p.type}, якого план не називає схемою й типом, тож не перевірить, що тип є на цілі`
+                      : `Крок даних ${p.step} промоції ${p.file} пише ${p.column} таблиці ${p.table} у типі ${p.type}, який ${p.detail === "changed" ? `крок плану ${p.by} створює, змінює чи знищує` : p.detail === "unproven" ? `крок плану ${p.by} вживає в операторі, предмета якого план не визначає, тож план не доведе, що тип не зміниться` : "відсутній на цілі до плану"}, а кроки даних ідуть до кроків двигуна`
+                : p.reason === "dataStepKey"
+                  ? `Крок даних ${p.step} промоції ${p.file} адресує рядки ${p.table} за ${p.key}, який ${p.detail === "notPrimaryKey" ? "не є одноколонковим первинним ключем таблиці" : p.detail === "retired" ? "виводиться з ужитку" : p.detail === "fillTarget" ? "сам є ціллю fill" : "змінює тип"}`
+                  : p.reason === "dataStepReferenced"
+                    ? `Крок даних ${p.step} промоції ${p.file} змінює ${p.column} таблиці ${p.table}, на яку посилається зовнішній ключ з ON UPDATE CASCADE, SET NULL чи SET DEFAULT, тож рядки інших таблиць змінилися б поза доказом збереження`
+                    : `Таблиця ${p.table} промоції ${p.file} не має первинного ключа, тож план не доведе, що рядки зберегли значення`,
     hint: {
       en: (p) =>
-        p.reason === "sequenceSchema"
-          ? "No plan was written. Move the sequence into the schema of the table or remove the dependency before promoting."
-          : p.reason === "dataStepTable"
+        p.write === "backfill"
+          ? p.reason === "dataStepTable"
             ? p.detail === "rule"
-              ? "No plan was written. Drop the UPDATE rule of the table before promoting, or promote this table without data steps."
-              : "No plan was written. Promote this table without data steps."
-            : p.reason === "dataStepType"
-              ? p.detail === "cast"
-                ? "No plan was written. Cast the fill expression explicitly to the type of the column."
-                : p.detail === "unparsed"
-                  ? "No plan was written. Give the column a type the plan can name: a type name, optionally qualified with its schema, with modifiers or array bounds if needed; or promote without a data step on this column."
-                  : "No plan was written. Apply the change of the type first (a plan of its own), then promote."
-              : p.reason === "dataStepKey"
-                ? "No plan was written. A data step addresses rows by the single-column primary key of the table, which keeps its name meaning and type through the promotion."
-                : p.reason === "dataStepReferenced"
-                  ? "No plan was written. Drop the cascading update of the referencing foreign key, or promote without a step on this column."
-                  : "No plan was written. Promote without this part, or wait for the platform version that supports it; a table needs a primary key before it is promoted.",
+              ? "No plan was written. Drop the UPDATE rule of the table, or fill the NULL values before applying."
+              : "No plan was written. Fill the NULL values of the column before applying."
+            : "No plan was written. Drop the cascading update of the referencing foreign key, or fill the NULL values before applying."
+          : p.reason === "sequenceSchema"
+            ? "No plan was written. Move the sequence into the schema of the table or remove the dependency before promoting."
+            : p.reason === "dataStepTable"
+              ? p.detail === "rule"
+                ? "No plan was written. Drop the UPDATE rule of the table before promoting, or promote this table without data steps."
+                : "No plan was written. Promote this table without data steps."
+              : p.reason === "dataStepType"
+                ? p.detail === "cast"
+                  ? "No plan was written. Cast the fill expression explicitly to the type of the column."
+                  : p.detail === "unparsed"
+                    ? "No plan was written. Give the column a type the plan can name: a type name, optionally qualified with its schema, with modifiers or array bounds if needed; or promote without a data step on this column."
+                    : "No plan was written. Apply the change of the type first (a plan of its own), then promote."
+                : p.reason === "dataStepKey"
+                  ? "No plan was written. A data step addresses rows by the single-column primary key of the table, which keeps its name meaning and type through the promotion."
+                  : p.reason === "dataStepReferenced"
+                    ? "No plan was written. Drop the cascading update of the referencing foreign key, or promote without a step on this column."
+                    : "No plan was written. Promote without this part, or wait for the platform version that supports it; a table needs a primary key before it is promoted.",
       uk: (p) =>
-        p.reason === "sequenceSchema"
-          ? "План не записано. Перенесіть послідовність у схему таблиці або зніміть залежність перед промоцією."
-          : p.reason === "dataStepTable"
+        p.write === "backfill"
+          ? p.reason === "dataStepTable"
             ? p.detail === "rule"
-              ? "План не записано. Зніміть правило UPDATE таблиці перед промоцією або промотуйте цю таблицю без кроків даних."
-              : "План не записано. Промотуйте цю таблицю без кроків даних."
-            : p.reason === "dataStepType"
-              ? p.detail === "cast"
-                ? "План не записано. Приведіть вираз fill явно до типу колонки."
-                : p.detail === "unparsed"
-                  ? "План не записано. Дайте колонці тип, який план може назвати: ім'я типу, за потреби кваліфіковане схемою, з модифікаторами чи межами масиву, коли треба; або промотуйте без кроку даних на цю колонку."
-                  : "План не записано. Спершу застосуйте зміну типу окремим планом, потім промотуйте."
-              : p.reason === "dataStepKey"
-                ? "План не записано. Крок даних адресує рядки одноколонковим первинним ключем таблиці, який зберігає зміст і тип через промоцію."
-                : p.reason === "dataStepReferenced"
-                  ? "План не записано. Зніміть каскадне оновлення зовнішнього ключа, що посилається, або промотуйте без кроку на цю колонку."
-                  : "План не записано. Промотуйте без цієї частини або дочекайтеся версії платформи, що її підтримує; таблиці потрібен первинний ключ до промоції.",
+              ? "План не записано. Зніміть правило UPDATE таблиці або заповніть значення NULL до застосування."
+              : "План не записано. Заповніть значення NULL колонки до застосування."
+            : "План не записано. Зніміть каскадне оновлення зовнішнього ключа, що посилається, або заповніть значення NULL до застосування."
+          : p.reason === "sequenceSchema"
+            ? "План не записано. Перенесіть послідовність у схему таблиці або зніміть залежність перед промоцією."
+            : p.reason === "dataStepTable"
+              ? p.detail === "rule"
+                ? "План не записано. Зніміть правило UPDATE таблиці перед промоцією або промотуйте цю таблицю без кроків даних."
+                : "План не записано. Промотуйте цю таблицю без кроків даних."
+              : p.reason === "dataStepType"
+                ? p.detail === "cast"
+                  ? "План не записано. Приведіть вираз fill явно до типу колонки."
+                  : p.detail === "unparsed"
+                    ? "План не записано. Дайте колонці тип, який план може назвати: ім'я типу, за потреби кваліфіковане схемою, з модифікаторами чи межами масиву, коли треба; або промотуйте без кроку даних на цю колонку."
+                    : "План не записано. Спершу застосуйте зміну типу окремим планом, потім промотуйте."
+                : p.reason === "dataStepKey"
+                  ? "План не записано. Крок даних адресує рядки одноколонковим первинним ключем таблиці, який зберігає зміст і тип через промоцію."
+                  : p.reason === "dataStepReferenced"
+                    ? "План не записано. Зніміть каскадне оновлення зовнішнього ключа, що посилається, або промотуйте без кроку на цю колонку."
+                    : "План не записано. Промотуйте без цієї частини або дочекайтеся версії платформи, що її підтримує; таблиці потрібен первинний ключ до промоції.",
     },
   },
   "plan.promotion-applied": {
@@ -4629,6 +4727,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "План не записано. Перейменуйте чи зніміть наявний тригер; підписці можна й дати інший physicalName.",
     },
   },
+  "plan.row-version-first": {
+    en: (p) =>
+      `The plan writes data into table(s) ${p.tables} that already have row mechanics, but the database has no sequence simetra.row_version yet; the data steps would run before the engine steps that create it`,
+    uk: (p) =>
+      `План пише дані в таблиці ${p.tables}, що вже мають механіку рядка, але в базі ще немає послідовності simetra.row_version; кроки даних пішли б до кроків двигуна, які її створюють`,
+    hint: {
+      en: "No plan was written. Apply the platform update (the sequence) first, then plan the promotion again.",
+      uk: "План не записано. Спершу застосуйте оновлення платформи (послідовність), потім сплануйте промоцію знову.",
+    },
+  },
   "plan.rights-source-access": {
     en: (p) =>
       `The applying role cannot read every row of the adopted rights source table(s) ${p.tables}: it lacks USAGE on the schema or SELECT on the table, or row level security is enabled and the role neither owns the table nor has BYPASSRLS`,
@@ -4666,6 +4774,80 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     hint: {
       en: "Review these row IDs and remove or update them through rights administration commands.",
       uk: "Перевірте id цих рядків і приберіть або оновіть їх командами адміністрування прав.",
+    },
+  },
+  "plan.not-null-violation": {
+    en: (p) =>
+      p.detail === "promotion"
+        ? `Column ${p.column} of ${p.table} becomes NOT NULL and has ${p.rows} row(s) with NULL, and the table belongs to the promotion of this plan, so the plan does not fill it with the default: the preservation proof checks its values`
+        : p.detail === "addColumn"
+          ? `Column ${p.column} is added to ${p.table} as NOT NULL without a default, and the table has ${p.rows} row(s), which would get NULL`
+          : `Column ${p.column} of ${p.table} becomes NOT NULL and has ${p.rows} row(s) with NULL, and the desired column has no default to fill them with`,
+    uk: (p) =>
+      p.detail === "promotion"
+        ? `Колонка ${p.column} таблиці ${p.table} стає NOT NULL і має рядків з NULL: ${p.rows}, а таблиця належить промоції цього плану, тож план не заповнює її default: її значення звіряє доказ збереження`
+        : p.detail === "addColumn"
+          ? `Колонку ${p.column} додають до ${p.table} як NOT NULL без default, а таблиця має рядків: ${p.rows}, і вони отримали б NULL`
+          : `Колонка ${p.column} таблиці ${p.table} стає NOT NULL і має рядків з NULL: ${p.rows}, а бажана колонка не має default, яким їх заповнити`,
+    hint: {
+      en: (p) =>
+        p.detail === "promotion"
+          ? "No plan was written. Declare a data step or a repair of the promotion for this column, or fill the NULL values before applying."
+          : "No plan was written. Give the attribute a defaultValue, or fill the NULL values before applying.",
+      uk: (p) =>
+        p.detail === "promotion"
+          ? "План не записано. Оголосіть для цієї колонки крок даних чи ремонт промоції або заповніть значення NULL до застосування."
+          : "План не записано. Дайте реквізиту defaultValue або заповніть значення NULL до застосування.",
+    },
+  },
+  "plan.backfill-order": {
+    en: (p) =>
+      `Column ${p.column} of ${p.table} becomes NOT NULL and its NULL values are filled with the default, but the engine plan does not set the desired default before the step that makes the column NOT NULL`,
+    uk: (p) =>
+      `Колонка ${p.column} таблиці ${p.table} стає NOT NULL, а її NULL заповнюються default, але план двигуна не ставить бажаний default до кроку, що робить колонку NOT NULL`,
+    hint: {
+      en: "No plan was written. This is a defect of the engine adapter's order, so report it to the platform maintainers; until then fill the NULL values before applying.",
+      uk: "План не записано. Це дефект порядку адаптера двигуна, тож повідомте про нього супровідникам платформи; доти заповніть значення NULL до застосування.",
+    },
+  },
+  "plan.backfill-unique": {
+    en: (p) =>
+      `Column ${p.column} of ${p.table} becomes NOT NULL and its ${p.rows} NULL values would be filled with one default value, while a unique key or index covers the column`,
+    uk: (p) =>
+      `Колонка ${p.column} таблиці ${p.table} стає NOT NULL, а її NULL (рядків: ${p.rows}) заповнилися б одним значенням default, тоді як колонку покриває унікальний ключ чи індекс`,
+    hint: {
+      en: "No plan was written. Fill the NULL values with distinct values before applying, or give a UUID attribute the newUuid default.",
+      uk: "План не записано. Заповніть значення NULL різними значеннями до застосування або дайте реквізиту UUID default newUuid.",
+    },
+  },
+  "plan.backfill-carrier-source": {
+    en: (p) =>
+      `Column ${p.column} of ${p.table} becomes NOT NULL and its NULL values would be filled with the default, but the rights carrier copy ${p.copy} reads this column, and the plan does not prove the copies follow the filled value`,
+    uk: (p) =>
+      `Колонка ${p.column} таблиці ${p.table} стає NOT NULL, а її NULL заповнилися б default, але цю колонку читає копія носія прав ${p.copy}, і план не доводить, що копії підхоплять заповнене значення`,
+    hint: {
+      en: "No plan was written. Fill the NULL values before applying.",
+      uk: "План не записано. Заповніть значення NULL до застосування.",
+    },
+  },
+  "plan.backfill-rights-guard": {
+    en: (p) =>
+      `Column ${p.column} of ${p.table} becomes NOT NULL and step ${p.step} would fill its NULL values with the default, but step ${p.by} drops the rights guard trigger ${p.trigger} of the table before the fill: the guard also keeps the rights version, so the clients' rights snapshot would not follow the filled value`,
+    uk: (p) =>
+      `Колонка ${p.column} таблиці ${p.table} стає NOT NULL, і крок ${p.step} заповнив би її NULL значенням default, але крок ${p.by} до заповнення знімає запобіжник прав ${p.trigger} таблиці: запобіжник веде й версію прав, тож знімок прав клієнтів не підхопив би заповнене значення`,
+    hint: {
+      en: "No plan was written. Fill the NULL values before applying.",
+      uk: "План не записано. Заповніть значення NULL до застосування.",
+    },
+  },
+  "plan.backfill-count-failed": {
+    en: (p) =>
+      `The plan could not count the NULL values of column ${p.column} of ${p.table} with row security off: ${p.error} (SQLSTATE ${p.sqlstate})`,
+    uk: (p) =>
+      `План не зміг порахувати NULL колонки ${p.column} таблиці ${p.table} з вимкненою безпекою рядків: ${p.error} (SQLSTATE ${p.sqlstate})`,
+    hint: {
+      en: "No plan was written. The count must see every row: plan with a role that bypasses row security on this table (its owner without FORCE ROW LEVEL SECURITY, or a role with BYPASSRLS).",
+      uk: "План не записано. Підрахунок мусить бачити всі рядки: плануйте роллю, що обходить безпеку рядків цієї таблиці (власником без FORCE ROW LEVEL SECURITY чи роллю з BYPASSRLS).",
     },
   },
   "plan.numbering-not-generated": {
@@ -4760,6 +4942,56 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     hint: {
       en: "The grant roles were created or checked; the login role was not created, because a login role without its memberships would silently change how the runtime reads. Run `simetra roles` with a role that has ADMIN OPTION on every parent of the login role, or ask the database administrator to create it.",
       uk: "Ролі грантів створено чи звірено; роль входу не створено, бо без своїх членств вона мовчки змінила б шлях читання рантайму. Запустіть `simetra roles` від ролі з ADMIN OPTION на кожній батьківській ролі ролі входу або попросіть адміністратора бази її створити.",
+    },
+  },
+  "roles.superuser-required": {
+    en: (p) =>
+      `The connecting role is not a superuser on ${p.database}: the postgres profile prepares the cluster only as a superuser that logs in as itself`,
+    uk: (p) =>
+      `Роль підключення не є суперкористувачем у ${p.database}: профіль postgres готує кластер лише від суперкористувача, що входить під власним іменем`,
+    hint: {
+      en: "This step was refused before it ran; roles or the database created earlier stay. Run `simetra roles` with a superuser DSN of the server through `--database-url-env`, naming a variable other than the owner's.",
+      uk: "Цей крок відхилено до його виконання; створені раніше ролі чи база лишаються. Запустіть `simetra roles` з DSN суперкористувача сервера через `--database-url-env`, указавши змінну, відмінну від змінної власника.",
+    },
+  },
+  "roles.unsafe-schema": {
+    en: (p) =>
+      `The schema ${p.schema} in ${p.database} is not safe for a superuser session (${p.reason}): its owner or content can run code with superuser rights`,
+    uk: (p) =>
+      `Схема ${p.schema} у ${p.database} небезпечна для сесії суперкористувача (${p.reason}): її власник чи вміст можуть виконати код з правами суперкористувача`,
+    hint: {
+      en: "This step was refused before it ran; roles or the database created earlier stay. The database owner can create objects there, so `simetra roles` refuses instead of installing an extension or running a grant next to them. Make the schema extensions belong to a superuser with no CREATE for anyone else and no objects of other owners, keep plpgsql_check in the schema extensions, make better_auth belong to the auth login role, take CREATE on the database and on public away from the auth login role, drop its objects outside better_auth, and remove any search_path of that role for this database other than better_auth. Then run the command again.",
+      uk: "Цей крок відхилено до його виконання; створені раніше ролі чи база лишаються. Власник бази може створювати там об'єкти, тож `simetra roles` відмовляє, а не ставить розширення чи видає гранти поруч із ними. Зробіть власником схеми extensions суперкористувача без CREATE для інших і без об'єктів чужих власників, тримайте plpgsql_check у схемі extensions, зробіть власником better_auth роль входу auth, заберіть у неї CREATE на базу й на public, видаліть її об'єкти поза better_auth і приберіть її search_path для цієї бази, окрім better_auth. Потім повторіть команду.",
+    },
+  },
+  "roles.unsafe-template": {
+    en: (p) =>
+      `The template database ${p.database} is not safe (${p.reason}): a template that a non-superuser owns or that accepts connections could carry code into every shadow`,
+    uk: (p) =>
+      `База-шаблон ${p.database} небезпечна (${p.reason}): шаблон, яким володіє не суперкористувач чи який приймає з'єднання, міг би занести код у кожну тінь`,
+    hint: {
+      en: "Nothing was changed. Drop the template as a superuser (`ALTER DATABASE … IS_TEMPLATE false`, then `DROP DATABASE … WITH (FORCE)`) and run `simetra roles` again: it recreates the template from template0.",
+      uk: "Нічого не змінено. Видаліть шаблон від суперкористувача (`ALTER DATABASE … IS_TEMPLATE false`, потім `DROP DATABASE … WITH (FORCE)`) і запустіть `simetra roles` знову: він створить шаблон із template0 заново.",
+    },
+  },
+  "roles.database-owner": {
+    en: (p) =>
+      `The database ${p.database} belongs to ${p.actual}, not to the application owner ${p.expected}`,
+    uk: (p) =>
+      `База ${p.database} належить ${p.actual}, а не власнику застосунку ${p.expected}`,
+    hint: {
+      en: "Nothing was changed. The owner creates the application schemas through CREATE on the database, so another owner would break the plan. As a superuser run `ALTER DATABASE … OWNER TO <owner>` after checking what the current owner changed, or point the command at a database that `simetra roles` creates.",
+      uk: "Нічого не змінено. Власник створює схеми застосунку правом CREATE на базу, тож інший власник зламав би план. Від суперкористувача виконайте `ALTER DATABASE … OWNER TO <власник>`, перевіривши, що встиг змінити поточний власник, або вкажіть базу, яку створює `simetra roles`.",
+    },
+  },
+  "roles.shared-cluster": {
+    en: (p) =>
+      `A Simetra login role has an explicit CONNECT on other databases of this cluster (${p.databases}): one cluster serves one Simetra application`,
+    uk: (p) =>
+      `Роль входу Simetra має явний CONNECT до інших баз цього кластера (${p.databases}): один кластер обслуговує один застосунок Simetra`,
+    hint: {
+      en: "Nothing was created. Login roles are cluster-wide with fixed names, so the same login would get its rights in the other application's database. Use a separate cluster for each application, or revoke the explicit CONNECT on those databases if they are not Simetra applications.",
+      uk: "Нічого не створено. Ролі входу кластерні з фіксованими іменами, тож той самий логін мав би свої права в базі іншого застосунку. Використайте окремий кластер для кожного застосунку або відкличте явний CONNECT на ці бази, якщо вони не застосунки Simetra.",
     },
   },
   // Режим обслуговування прав (інструмент `rights-maintenance`): усі відмови

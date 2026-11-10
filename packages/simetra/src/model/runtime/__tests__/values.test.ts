@@ -356,3 +356,25 @@ describe("encodeAttributes: DateTime by the wire rule", () => {
     }
   )
 })
+
+describe("encodeAttributes: NOT NULL column with a default", () => {
+  // Колонка NOT NULL з DEFAULT (`required` хибне): явний null відхиляє
+  // команда зі шляхом, пропущене значення не відхиляється.
+  const named = [
+    attr("title", "String", { notNull: true }),
+    attr("note", "String"),
+  ]
+
+  it.each([HEADER, ROW])("refuses an explicit null on $path", (options) => {
+    const at = `${options.prefix}title`
+    expect(encodeAttributes(named, { title: null }, options)).toEqual({
+      error: { code: "command.invalid", path: at },
+    })
+  })
+
+  it("accepts a missing value and an explicit null on a nullable column", () => {
+    expect(encodeAttributes(named, { note: null }, HEADER)).toEqual({
+      columns: { note_col: null },
+    })
+  })
+})

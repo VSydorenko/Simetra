@@ -1,6 +1,10 @@
-import { ApplyConnectionLost, ApplyDbError } from "simetra/schema"
+import {
+  ApplyConnectionLost,
+  ApplyDbError,
+  ENGINE_SESSION_TIMEOUTS,
+} from "simetra/schema"
 import { describe, expect, it } from "vitest"
-import { normalize } from "../apply-database"
+import { normalize, STATEMENT_PRELUDE } from "../apply-database"
 
 /** Помилка сервера в формі, яку кидає `pg`: SQLSTATE в `code` і поля діагностики. */
 function serverError(code: string, fields: Record<string, unknown> = {}) {
@@ -42,5 +46,12 @@ describe("apply database error normalization", () => {
     expect(normalize(serverError("08006", { detail: "x" }))).toBeInstanceOf(
       ApplyConnectionLost
     )
+  })
+})
+
+describe("statement prelude", () => {
+  it("resets every engine session timeout on the session", () => {
+    for (const guc of ENGINE_SESSION_TIMEOUTS)
+      expect(STATEMENT_PRELUDE).toContain(`SET ${guc} = 0`)
   })
 })

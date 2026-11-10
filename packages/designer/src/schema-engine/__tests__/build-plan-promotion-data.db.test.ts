@@ -469,6 +469,46 @@ describe.concurrent("buildPlan", () => {
         expect(artifact.requiredPermissions).toContain("repair:app.item")
       })
 
+      it("refuses NULL in a unit column that becomes NOT NULL, counted under its old name", async () => {
+        // Таблиця одиниці заповнення не отримує (Р3): її значення звіряє
+        // доказ збереження. Дії двигуна названо в іменах копії після наміру
+        // (`app.item`), а ціль план рахує в старих (`app.items`, Р5). Колонку
+        // кроку даних (`deletion_mark`) план не рахує: її заповнює сам крок
+        // `promote` не дає обов'язковий реквізит з nullable-джерела, тож
+        // реквізит стає обов'язковим у метаданих після промоції
+        const base = await promotedItems()
+        const [file, text] = [...base.afterFiles].find(([, t]) => {
+          const o = JSON.parse(t) as Json
+          return o.kind === "Catalog" && o.name === "Item"
+        })!
+        const item = JSON.parse(text) as { attributes: Json[] }
+        for (const a of item.attributes)
+          if (a.name === "payload") a.required = true
+        const p = await recompiled(base, { [file]: JSON.stringify(item) })
+        // Запис фіксує посилення, яке виводить план із моделей
+        p.record.tightened = [
+          {
+            schema: "app",
+            table: "item",
+            column: "payload",
+            constraint: "notNull",
+          },
+        ]
+        const outcome = await planPromotion(p, {
+          drift:
+            "insert into app.items (id, code, payload) values (gen_random_uuid(), 'a', null), (gen_random_uuid(), 'b', 'x');",
+        })
+        expect(outcome.status).toBe("refused")
+        expect(params(outcome, "plan.not-null-violation")).toEqual([
+          {
+            table: "app.item",
+            column: "payload",
+            rows: 1,
+            detail: "promotion",
+          },
+        ])
+      })
+
       it("refuses a fill target referenced with ON UPDATE CASCADE", async () => {
         const p = await promotedItems({
           fill: [
@@ -559,6 +599,11 @@ describe.concurrent("buildPlan", () => {
         const files = contactsProject()
         const raw = JSON.parse(files.get(CONTACT_FILE)!) as Json
         ;(raw.columns as Json[])[1]!.physicalName = "parent_id"
+        // Телефон джерела допускає NULL: ремонт заповнює його виразом, а
+        // обов'язковість цілі не додає таблиці явний ADD CONSTRAINT, що
+        // заступив би неявний замок кроку даних.
+        ;(raw.columns as Json[]).find((c) => c.name === "phone")!.notNull =
+          false
         ;(raw.foreignKeys as Json[])[0]!.name =
           "counterparty_contacts_parent_id_fkey"
         raw.rowLevelSecurity = "enabled"
@@ -687,6 +732,7 @@ describe.concurrent("buildPlan", () => {
         // Без права на явний LOCK замок бере сам крок — і це крок даних
         const p = await repairedContacts()
         const reader: ApplyDatabase = {
+          statement: (target, sql) => dbs.reader.statement(target, sql),
           transaction: (target, end, fn) =>
             dbs.reader.transaction(target, end, (tx) =>
               fn({
@@ -1084,6 +1130,7 @@ describe.concurrent("buildPlan", () => {
         const outcome = await inTarget(EMPTY, async (url) => {
           await establish(url, p.before)
           const reader: ApplyDatabase = {
+            statement: (target, sql) => dbs.reader.statement(target, sql),
             transaction: (target, end, fn) =>
               dbs.reader.transaction(target, end, (tx) =>
                 fn({

@@ -889,8 +889,11 @@ describe("command writes", () => {
       "UPDATE public.task SET posted = true, version = 999 WHERE id = $1 RETURNING version::text",
       { params: [key("T2")] }
     )
-    expect(result).toEqual({
-      rows: [{ version: String(Number(rows[0]!.v) + 1) }],
-    })
+    // Версія з послідовності, клієнтське `version = 999` ігнорується
+    const { rows: after } = result as { rows: { version: string }[] }
+    expect(after).toHaveLength(1)
+    const next = BigInt(after[0]!.version)
+    expect(next).toBeGreaterThan(BigInt(rows[0]!.v))
+    expect(next).not.toBe(999n)
   })
 })

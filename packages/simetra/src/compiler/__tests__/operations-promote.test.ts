@@ -439,6 +439,10 @@ describe("promoteObject: catalog from one CustomTable", () => {
       files,
       mapping((m) => {
         m.columns.createdAt = { to: "retire" }
+        // Найменування само NOT NULL, тож пом'якшення показує код: його колонка
+        // в реєстрі виду допускає NULL, а джерело — ні.
+        m.into.data = { codeLength: 150, descriptionLength: 0 }
+        m.columns.name = { to: "standard", name: "code" }
       })
     )
     expect(errors(result)).toEqual([])
@@ -454,7 +458,7 @@ describe("promoteObject: catalog from one CustomTable", () => {
       {
         schema: "app",
         table: "counterparty",
-        column: "description",
+        column: "code",
         constraint: "notNull",
       },
     ])
@@ -2197,6 +2201,51 @@ describe("promoteObject: tabular sections, documents, registers, data steps", ()
       ).toMatchObject({ column: target, kind })
     }
   )
+
+  // `description` довідника — NOT NULL DEFAULT '': nullable джерело потребує
+  // заповнення в промоції (типове значення наявних NULL не заповнює).
+  describe("a nullable source mapped to the catalog description", () => {
+    const fromInn = (fill: string | undefined) =>
+      mapping((m) => {
+        m.columns.name = {
+          to: "attribute",
+          collection: "attributes",
+          element: { name: "title" },
+        }
+        m.columns.inn = { to: "standard", name: "description" }
+        // UNIQUE за inn не переноситься на стандартну колонку
+        m.conversions["Counterparty#uniques/counterparties_inn_key"] = "removed"
+        if (fill !== undefined)
+          m.fill.push({
+            target: { to: "standard", name: "description" },
+            expression: fill,
+          })
+      })
+
+    it("is refused without a declared fill", async () => {
+      const { result } = await promoted(
+        promotionProject(PARTS),
+        fromInn(undefined)
+      )
+      expect(
+        result.diagnostics
+          .filter((d) => d.code === "promote.fill-missing")
+          .map((d) => [d.params?.column, d.params?.reason])
+      ).toEqual([["description", "nullable-source"]])
+    })
+
+    it("passes with a declared fill, which becomes a data step", async () => {
+      const expression = "coalesce(inn, '')"
+      const { result } = await promoted(
+        promotionProject(PARTS),
+        fromInn(expression)
+      )
+      expect(errors(result)).toEqual([])
+      expect(
+        result.record?.dataSteps.find((x) => x.expression === expression)
+      ).toMatchObject({ column: "description" })
+    })
+  })
 
   it("derives the recorded kind as promote does", async () => {
     const parse = await loadSqlParser()
