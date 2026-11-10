@@ -65,7 +65,7 @@ async function insertOrganization(client: pg.Client): Promise<string> {
   return rows[0]!.id
 }
 
-describe("deploy the desired state to Postgres", () => {
+describe("deploy the desired state to the stack database", () => {
   for (const [name, fixture] of FIXTURES) {
     it(name, async () => {
       const model = await compiled(fixture())

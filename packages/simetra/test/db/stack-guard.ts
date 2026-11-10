@@ -43,6 +43,7 @@ import {
 import {
   assertStack,
   type ClientFactory,
+  type GuardClient,
   openAdmin,
   stackDatabases,
   stopRunBackends,
@@ -62,8 +63,17 @@ const LIST_TIMEOUT_MS = 10_000
 
 // Контейнери й бакети — лише свого профілю: ресурси прогону іншого стека,
 // що йде одночасно, не є змінами цього
+// Схеми й розширення — `<база>.<ім'я>` по кожній базі стека; шаблони —
+// рядок фактів бази з `pg_database` (дозвіл з'єднань, ознака шаблону,
+// власник, ACL): знімок не містить ACL, а шаблон не можна відкрити
 export type Snapshot = Record<
-  "databases" | "roles" | "schemas" | "extensions" | "containers" | "buckets",
+  | "databases"
+  | "roles"
+  | "schemas"
+  | "extensions"
+  | "templates"
+  | "containers"
+  | "buckets",
   string[]
 >
 
@@ -124,14 +134,12 @@ async function setup(p: TestProvider): Promise<() => Promise<void>> {
           process.stderr.write(
             `DB run ${runTag}: stopped ${backends.stopped} backend(s) still running after the tests${backends.left.length > 0 ? `; still running: ${backends.left.join(", ")}` : ""}\n`
           )
-        const after = await snapshot(p)
         const changed = treeState()
         if (tree !== undefined && changed?.summary !== tree.summary)
           process.stderr.write(
             `The working tree changed during the DB run (${tree.summary} → ${changed?.summary ?? "unknown"}): the results are not tied to one commit\n`
           )
-        const leaks = diff(before, after)
-        if (leaks.length > 0) throw new Error(leakMessage(leaks, p))
+        await endChecks(p, before)
       } finally {
         releaseLock()
       }
@@ -303,9 +311,23 @@ export async function assertTestRole(
     )
 }
 
+/**
+ * Звірка кінця прогону: новий знімок проти знімка `before`; відмінність —
+ * збій прогону з командами прибирання.
+ */
+export async function endChecks(
+  p: TestProvider,
+  before: Snapshot,
+  deps: GuardDeps = {}
+): Promise<void> {
+  const leaks = diff(before, await snapshot(p, deps))
+  if (leaks.length > 0) throw new Error(leakMessage(leaks, p))
+}
+
 // Перелік контейнерів і бакетів, що впав, валить прогін: порожній замість
-// нього сховав би витік. Каталоги кластера (бази, ролі) — з бази `postgres`,
-// схеми й розширення — з бази тестів: їх лишає тест там, де працює
+// нього сховав би витік. Каталоги кластера (бази, ролі, факти шаблонів) — з
+// бази `postgres`; схеми й розширення — з кожної бази стека: тести пишуть у
+// базу тестів, а базовий стан і `superuserClient` — і в `postgres`
 async function snapshot(
   p: TestProvider,
   deps: GuardDeps = {}
@@ -316,47 +338,60 @@ async function snapshot(
   const buckets = (
     await runBuckets(TEST_STACKS[p], deps.fetch ?? fetch, LIST_TIMEOUT_MS)
   ).map((b) => b.name)
-  const databases = stackDatabases(p)
-  const tests = databases[databases.length - 1]!
-  const cluster = await openAdmin(testSuperuserUrl(), "postgres", deps)
-  try {
-    const local =
-      tests === "postgres"
-        ? cluster
-        : await openAdmin(testSuperuserUrl(), tests, deps)
-    try {
-      const names = async (
-        client: typeof cluster,
-        sql: string
-      ): Promise<string[]> =>
-        (await client.query<{ name: string }>(sql)).rows.map((row) => row.name)
-      return {
-        databases: await names(
-          cluster,
-          "select datname as name from pg_catalog.pg_database order by 1"
-        ),
-        roles: await names(
-          cluster,
-          "select rolname as name from pg_catalog.pg_roles order by 1"
-        ),
-        // Тимчасові схеми сесій Postgres створює сам і не прибирає — це не слід тесту
-        schemas: await names(
-          local,
-          "select nspname as name from pg_catalog.pg_namespace where nspname !~ '^pg_(toast_)?temp_[0-9]+$' order by 1"
-        ),
-        extensions: await names(
-          local,
-          "select extname as name from pg_catalog.pg_extension order by 1"
-        ),
-        containers,
-        buckets,
-      }
-    } finally {
-      if (local !== cluster) await local.end()
-    }
-  } finally {
-    await cluster.end()
+  const names = async (client: GuardClient, sql: string): Promise<string[]> =>
+    (await client.query<{ name: string }>(sql)).rows.map((row) => row.name)
+  const result: Snapshot = {
+    databases: [],
+    roles: [],
+    schemas: [],
+    extensions: [],
+    templates: [],
+    containers,
+    buckets,
   }
+  for (const database of stackDatabases(p)) {
+    const client = await openAdmin(testSuperuserUrl(), database, deps)
+    try {
+      if (database === "postgres") {
+        result.databases = await names(
+          client,
+          "select datname as name from pg_catalog.pg_database order by 1"
+        )
+        result.roles = await names(
+          client,
+          "select rolname as name from pg_catalog.pg_roles order by 1"
+        )
+        // Шаблон з `datallowconn = false` не відкрити — його факти лише тут
+        const templates = await client.query<{
+          name: string
+          allowconn: boolean
+          template: boolean
+          owner: string
+          acl: string
+        }>(
+          "select datname as name, datallowconn as allowconn, datistemplate as template, pg_catalog.pg_get_userbyid(datdba) as owner, coalesce(datacl::text, '') as acl from pg_catalog.pg_database where datistemplate or not datallowconn order by 1"
+        )
+        result.templates = templates.rows.map(
+          (t) =>
+            `${t.name} allowconn=${t.allowconn} template=${t.template} owner=${t.owner} acl=${t.acl}`
+        )
+      }
+      // Тимчасові схеми сесій Postgres створює сам і не прибирає — це не слід тесту
+      for (const name of await names(
+        client,
+        "select nspname as name from pg_catalog.pg_namespace where nspname !~ '^pg_(toast_)?temp_[0-9]+$' order by 1"
+      ))
+        result.schemas.push(`${database}.${name}`)
+      for (const name of await names(
+        client,
+        "select extname as name from pg_catalog.pg_extension order by 1"
+      ))
+        result.extensions.push(`${database}.${name}`)
+    } finally {
+      await client.end()
+    }
+  }
+  return result
 }
 
 /**
@@ -478,12 +513,20 @@ export function leakMessage(
         `  DROP OWNED BY "${name}"; DROP ROLE "${name}";  -- as ${su}, in database ${main!}`,
       ]
     }
-    if (kind === "schemas") return [`  DROP SCHEMA "${name}";`]
+    // Ім'я схеми й розширення — `<база>.<ім'я>`: `DROP` діє в поточній базі
+    const dot = name.indexOf(".")
+    const [database, local] = [name.slice(0, dot), name.slice(dot + 1)]
+    if (kind === "schemas")
+      return [`  DROP SCHEMA "${local}";  -- in database ${database}`]
+    if (kind === "templates")
+      return [
+        `  database facts now: ${name}; restore the facts from before the run by hand (ALTER DATABASE … ALLOW_CONNECTIONS / IS_TEMPLATE / OWNER TO, GRANT / REVOKE)`,
+      ]
     if (kind === "containers") return [`  docker rm -f -v ${name}`]
     // Порожнити бакет прибиральник ще не вміє (Р5): це робить людина
     if (kind === "buckets")
       return [`  bucket ${name}: empty and delete in Garage`]
-    return [`  DROP EXTENSION "${name}";`]
+    return [`  DROP EXTENSION "${local}";  -- in database ${database}`]
   })
   return [
     "The DB run left the local stack different from how it found it (a test that does not clean up, or another client changed the stack during the run):",

@@ -15,6 +15,7 @@ import {
 import {
   diff,
   leakMessage,
+  endChecks,
   leftoverReport,
   lockPath,
   startChecks,
@@ -79,6 +80,7 @@ describe("external resources", () => {
     roles: [],
     schemas: [],
     extensions: [],
+    templates: [],
     containers: [],
     buckets: [],
   }
@@ -190,7 +192,9 @@ describe("manualSweepSql", () => {
  * Підставні з'єднання сторожа: кожне записує базу, оператори й відповідає
  * за `answer`. Порядок записів — порядок операторів у всіх з'єднаннях.
  */
-function fakeConnections(answer: (sql: string) => Record<string, unknown>[]) {
+function fakeConnections(
+  answer: (sql: string, database: string) => Record<string, unknown>[]
+) {
   const log: { database: string; sql: string }[] = []
   const factory: ClientFactory = (config) => {
     const url = new URL(String(config.connectionString))
@@ -201,7 +205,7 @@ function fakeConnections(answer: (sql: string) => Record<string, unknown>[]) {
       },
       query: async <R>(sql: string) => {
         log.push({ database, sql })
-        return { rows: answer(sql) as R[] }
+        return { rows: answer(sql, database) as R[] }
       },
       end: async () => undefined,
       escapeIdentifier: (name: string) => `"${name}"`,
@@ -266,12 +270,28 @@ describe("guard connections on the postgres stack", () => {
       (e) => !e.sql.startsWith("connect") && !SUPERUSER_PRELUDE.includes(e.sql)
     )
     for (const { sql } of queries) expect(sql).toMatch(/pg_catalog\.pg_/)
-    // Схеми й розширення — з бази тестів, де їх лишає тест
+    // Схеми й розширення — з кожної бази стека: і тести, і базовий стан пишуть
+    // у свою
     expect(
       queries
         .filter((e) => /pg_namespace|pg_extension/.test(e.sql))
-        .map((e) => e.database)
-    ).toEqual(["simetra", "simetra"])
+        .map(
+          (e) =>
+            `${e.database} ${/pg_namespace/.test(e.sql) ? "schemas" : "extensions"}`
+        )
+        .sort()
+    ).toEqual([
+      "postgres extensions",
+      "postgres schemas",
+      "simetra extensions",
+      "simetra schemas",
+    ])
+    // Факти шаблонів — з `pg_database` бази `postgres`: до шаблону з
+    // `datallowconn = false` сторож не під'єднується
+    expect(
+      queries.filter((e) => /pg_database/.test(e.sql)).map((e) => e.database)
+    ).toEqual(["postgres", "postgres"])
+    expect(connects.some((c) => c.database.endsWith("_template"))).toBe(false)
   })
 
   it.each([
@@ -465,5 +485,104 @@ describe("leftoverReport", () => {
     expect(lines.filter((line) => line.includes("sweep.ts"))).toEqual([
       sweepCommand("supabase", "abc123"),
     ])
+  })
+})
+
+describe("the end of a run on the postgres stack", () => {
+  beforeEach(() => {
+    vi.stubEnv(PROVIDER_ENV, "postgres")
+    for (const name of [
+      "SIMETRA_TEST_DATABASE_URL",
+      "SIMETRA_TEST_SUPERUSER_URL",
+    ]) {
+      vi.stubEnv(name, "")
+      delete process.env[name]
+    }
+  })
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  interface StackState {
+    schemas: Record<string, string[]>
+    extensions: Record<string, string[]>
+    template: { allowconn: boolean; acl: string }
+  }
+
+  const baseState = (): StackState => ({
+    schemas: { postgres: ["public"], simetra: ["public", "better_auth"] },
+    extensions: { postgres: ["plpgsql"], simetra: ["plpgsql"] },
+    template: { allowconn: false, acl: "{simetra_owner=CTc/simetra_owner}" },
+  })
+
+  // Підставний стек: відповіді читають поточний стан, тож зміна стану між
+  // знімками — те, що лишив прогін
+  const stack = (state: StackState) =>
+    fakeConnections((sql, database) => {
+      if (sql.includes("'supabase_admin'")) return [{ present: false }]
+      if (sql.startsWith("select current_user as role"))
+        return [{ role: PROVIDER_OWNER_ROLES.postgres, superuser: false }]
+      if (sql.includes("pg_namespace"))
+        return (state.schemas[database] ?? []).map((name) => ({ name }))
+      if (sql.includes("pg_extension"))
+        return (state.extensions[database] ?? []).map((name) => ({ name }))
+      if (sql.includes("datallowconn"))
+        return [
+          {
+            name: "simetra_template",
+            allowconn: state.template.allowconn,
+            template: true,
+            owner: "simetra_owner",
+            acl: state.template.acl,
+          },
+        ]
+      return []
+    }).factory
+
+  it.each<[string, (state: StackState) => void]>([
+    ["a schema left in simetra", (s) => s.schemas.simetra!.push("leak")],
+    ["a schema left in postgres", (s) => s.schemas.postgres!.push("leak")],
+    [
+      "an extension left in simetra",
+      (s) => s.extensions.simetra!.push("citext"),
+    ],
+    [
+      "an extension left in postgres",
+      (s) => s.extensions.postgres!.push("citext"),
+    ],
+    [
+      "datallowconn of simetra_template turned on",
+      (s) => (s.template.allowconn = true),
+    ],
+    [
+      "a grant on simetra_template",
+      (s) =>
+        (s.template.acl = "{simetra_owner=CTc/simetra_owner,=c/simetra_owner}"),
+    ],
+  ])("%s fails the run", async (_label, change) => {
+    const state = baseState()
+    const deps = { client: stack(state), exec: noDocker, fetch: noBuckets }
+    const before = await startChecks("postgres", deps)
+    change(state)
+    await expect(endChecks("postgres", before, deps)).rejects.toThrow(
+      /left the local stack different/
+    )
+  })
+
+  it("an unchanged stack passes", async () => {
+    const state = baseState()
+    const deps = { client: stack(state), exec: noDocker, fetch: noBuckets }
+    const before = await startChecks("postgres", deps)
+    await expect(endChecks("postgres", before, deps)).resolves.toBeUndefined()
+  })
+
+  it("names the database of a left schema in its cleanup", async () => {
+    const state = baseState()
+    const deps = { client: stack(state), exec: noDocker, fetch: noBuckets }
+    const before = await startChecks("postgres", deps)
+    state.schemas.simetra!.push("leak")
+    await expect(endChecks("postgres", before, deps)).rejects.toThrow(
+      'DROP SCHEMA "leak";  -- in database simetra'
+    )
   })
 })

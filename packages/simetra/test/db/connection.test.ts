@@ -358,7 +358,9 @@ describe("role switch helpers", () => {
     "asSessionLogin restores the previous session_user, current_user and search_path on %s",
     async (_path, fn) => {
       const client = fakeClient(roles)
-      await asSessionLogin(client, "simetra_owner", fn).catch(() => undefined)
+      const run = asSessionLogin(client, "simetra_owner", fn)
+      if (_path === "failure") await expect(run).rejects.toThrow("boom")
+      else expect(await run).toBe(1)
       const restore = [
         "SET LOCAL SESSION AUTHORIZATION postgres",
         "SET LOCAL ROLE simetra_command",

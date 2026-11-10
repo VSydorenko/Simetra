@@ -56,9 +56,11 @@ const PARAMETER_SETTING_FILES = [
 ]
 
 // Цілі `SET LOCAL ROLE ${…}`, дозволені без винятку в тестах і помічниках:
-// роль платформи, роль профілю чи тегована роль прогону
+// роль платформи, роль запиту профілю (індекс — профіль, не літеральний
+// ключ), власник профілю прогону чи тегована роль прогону. Ні власник чужого
+// профілю (на Supabase `postgres`), ні роль входу ціллю не бувають
 const ALLOWED_TARGET =
-  /^(PLATFORM_ROLES\.|testRoleFor\(|PROVIDER_\w+|readRoleOf\(|testRoleName\()/
+  /^(PLATFORM_ROLES\.|testRoleFor\(|PROVIDER_API_ROLES\[(?!["'`])[^\]]+\]|PROVIDER_OWNER_ROLES\[testProvider\(\)\]|readRoleOf\(|testRoleName\()/
 
 interface Exception {
   file: string
@@ -206,6 +208,12 @@ const ROLE_SWITCH_EXCEPTIONS: Exception[] = [
     task: 12,
   },
   {
+    file: "packages/simetra/test/db/rights-write.db.test.ts",
+    reason:
+      "SET LOCAL ROLE of the Supabase service role by a literal key: the cases go to rights-write.supabase (Р5)",
+    task: 7,
+  },
+  {
     file: "packages/simetra/test/db/mechanics.db.test.ts",
     reason: "SET LOCAL ROLE of a table row parameter",
     task: 8,
@@ -220,10 +228,6 @@ const ROLE_SWITCH_EXCEPTIONS: Exception[] = [
 // Літерал ролі `postgres` у SQL файлів `db`: ім'я — дані профілю
 // (`PROVIDER_OWNER_ROLES[testProvider()]`). Тимчасові — до задачі-власника
 const POSTGRES_LITERAL_EXCEPTIONS: Exception[] = [
-  {
-    file: "packages/simetra/src/schema/__tests__/deploy.db.test.ts",
-    reason: "prose in a test name, not SQL",
-  },
   ...(
     [
       ["packages/simetra/test/db/rights-guards.db.test.ts", 7],
@@ -343,8 +347,10 @@ interface Source {
 }
 
 // AST, а не regex: шаблон `/*` у рядку (glob) інакше «відкрив» би коментар
-function parse(file: string): Source {
-  const text = readFileSync(join(REPO, file), "utf8")
+function parse(
+  file: string,
+  text: string = readFileSync(join(REPO, file), "utf8")
+): Source {
   const ast = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true)
   // Одиниці UTF-16, як і позиції AST
   const units = text.split("")
@@ -361,7 +367,9 @@ function parse(file: string): Source {
   return { file, code: units.join(""), ast }
 }
 
-const SOURCES = ROOTS.flatMap(sources).sort().map(parse)
+const SOURCES = ROOTS.flatMap(sources)
+  .sort()
+  .map((file) => parse(file))
 const BY_FILE = new Map(SOURCES.map((s) => [s.file, s]))
 
 /** Файли тестів і помічників: дозволені форми діють лише в них. */
@@ -460,26 +468,30 @@ function check(
 const targetOf = (text: string): string => text.trim().replace(/!$/, "")
 
 // Сталі з дозволеною ціллю, які експортують помічники тестів
+/** Сталі з дозволеною ціллю, які експортує помічник тестів `source`. */
+function helperConstantsOf(source: Source): string[] {
+  return source.ast.statements.flatMap((statement) =>
+    ts.isVariableStatement(statement) &&
+    statement.modifiers?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword)
+      ? statement.declarationList.declarations.flatMap((d) =>
+          ts.isIdentifier(d.name) &&
+          d.initializer !== undefined &&
+          ALLOWED_TARGET.test(targetOf(d.initializer.getText()))
+            ? [d.name.text]
+            : []
+        )
+      : []
+  )
+}
+
+// Сталі з дозволеною ціллю, які експортують помічники тестів
 const HELPER_CONSTANTS = new Set(
   SOURCES.filter(
     (s) =>
       s.file.endsWith(".support.ts") ||
       s.file.includes("/support/") ||
       s.file.startsWith("packages/simetra/test/db/")
-  ).flatMap((s) =>
-    s.ast.statements.flatMap((statement) =>
-      ts.isVariableStatement(statement) &&
-      statement.modifiers?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword)
-        ? statement.declarationList.declarations.flatMap((d) =>
-            ts.isIdentifier(d.name) &&
-            d.initializer !== undefined &&
-            ALLOWED_TARGET.test(targetOf(d.initializer.getText()))
-              ? [d.name.text]
-              : []
-          )
-        : []
-    )
-  )
+  ).flatMap(helperConstantsOf)
 )
 
 interface Declaration {
@@ -613,18 +625,20 @@ function allowedSetConfig(source: Source, hit: Hit): boolean {
   return /^\$1\b/.test(rest) && PARAMETER_SETTING_FILES.includes(source.file)
 }
 
+function roleSwitchHitsOf(source: Source): Hit[] {
+  return [
+    ...hitsOf(source, ROLE_FORM).filter(
+      (hit) => !allowedRoleSwitch(source, hit)
+    ),
+    ...hitsOf(source, SESSION_AUTH),
+    ...hitsOf(source, SET_CONFIG).filter(
+      (hit) => !allowedSetConfig(source, hit)
+    ),
+  ]
+}
+
 function roleSwitchHits(): Hit[] {
-  return SOURCES.flatMap((source) => {
-    return [
-      ...hitsOf(source, ROLE_FORM).filter(
-        (hit) => !allowedRoleSwitch(source, hit)
-      ),
-      ...hitsOf(source, SESSION_AUTH),
-      ...hitsOf(source, SET_CONFIG).filter(
-        (hit) => !allowedSetConfig(source, hit)
-      ),
-    ]
-  })
+  return SOURCES.flatMap(roleSwitchHitsOf)
 }
 
 function postgresLiteralHits(): Hit[] {
@@ -713,5 +727,47 @@ describe("the checker", () => {
     )
     expect(ALLOWED_TARGET.test("PLATFORM_ROLES.command")).toBe(true)
     expect(ALLOWED_TARGET.test("role")).toBe(false)
+  })
+})
+
+describe("allowed SET LOCAL ROLE targets", () => {
+  // Синтетичний DB-тест: ціль — роль профілю за індексом профілю, а не
+  // літеральним ключем, і ніколи — власник чужого профілю чи роль входу
+  const sample = (target: string): Source =>
+    parse(
+      "packages/simetra/test/db/sample.db.test.ts",
+      `await client.query(\`SET LOCAL ROLE \${${target}}\`)\n`
+    )
+
+  it.each([
+    "PROVIDER_OWNER_ROLES.supabase",
+    "PROVIDER_OWNER_ROLES[provider]",
+    "PROVIDER_LOGIN_ROLES[provider][0]",
+    "PROVIDER_API_ROLES.supabase.service",
+    'PROVIDER_API_ROLES["postgres"].user',
+  ])("rejects %s", (target) => {
+    expect(roleSwitchHitsOf(sample(target))).toHaveLength(1)
+  })
+
+  it.each([
+    "PLATFORM_ROLES.command",
+    "PROVIDER_API_ROLES[testProvider()].user",
+    "PROVIDER_API_ROLES[provider].anonymous",
+    "PROVIDER_OWNER_ROLES[testProvider()]",
+    'testRoleName("x")',
+  ])("allows %s", (target) => {
+    expect(roleSwitchHitsOf(sample(target))).toEqual([])
+  })
+
+  it("does not take a helper constant of a superuser or a login role", () => {
+    const helper = parse(
+      "packages/simetra/test/db/sample.support.ts",
+      [
+        "export const OWNER = PROVIDER_OWNER_ROLES.supabase",
+        "export const LOGIN = PROVIDER_LOGIN_ROLES[provider][0]",
+        "export const USER = PROVIDER_API_ROLES[testProvider()].user",
+      ].join("\n")
+    )
+    expect(helperConstantsOf(helper)).toEqual(["USER"])
   })
 })

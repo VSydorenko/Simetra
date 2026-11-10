@@ -189,6 +189,12 @@ describe("(ii) asStackSuperuser", () => {
   })
 })
 
+// Шлях виклику помічника: успіх має завершитися, збій — відмовою саме `fn`
+async function settle(path: string, run: Promise<unknown>): Promise<void> {
+  if (path === "failure") await expect(run).rejects.toThrow("fn failed")
+  else await run
+}
+
 describe("(ii′) asSessionLogin", () => {
   it.each([
     ["success", (): Promise<void> => Promise.resolve()],
@@ -199,10 +205,13 @@ describe("(ii′) asSessionLogin", () => {
       await withRollback(async (client) => {
         const before = await who(client)
         let inside: Who | undefined
-        await asSessionLogin(client, OWNER, async () => {
-          inside = await who(client)
-          await end()
-        }).catch((error: Error) => expect(error.message).toBe("fn failed"))
+        await settle(
+          _path,
+          asSessionLogin(client, OWNER, async () => {
+            inside = await who(client)
+            await end()
+          })
+        )
         expect(inside).toMatchObject({ current: OWNER, session: OWNER })
         expect(await who(client)).toEqual(before)
         expect(before).toMatchObject({ current: OWNER, session: SUPERUSER })
@@ -226,12 +235,15 @@ describe("(ii′) asSessionLogin", () => {
             current: OTHER_LOGIN,
             session: OTHER_LOGIN,
           })
-          await asSessionLogin(client, OWNER, async () => {
-            await client.query(
-              "SELECT set_config('search_path', 'pg_catalog', true)"
-            )
-            await end()
-          }).catch((error: Error) => expect(error.message).toBe("fn failed"))
+          await settle(
+            _path,
+            asSessionLogin(client, OWNER, async () => {
+              await client.query(
+                "SELECT set_config('search_path', 'pg_catalog', true)"
+              )
+              await end()
+            })
+          )
           expect(await who(client)).toEqual(outer)
         })
       })
