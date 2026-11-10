@@ -35,7 +35,12 @@ specs. Claude Code specifics live in `CLAUDE.md`.
 1. **Platform spec** `docs/superpowers/specs/2026-09-24-simetra-platform-design.md`
    and the sub-specs next to it in `docs/superpowers/specs/` — the **how**:
    architecture, mechanisms, decisions. A sub-spec refines the platform spec;
-   it does not contradict it silently.
+   it does not contradict it silently. A new spec follows the agent-kit
+   `spec` skill: one term — one meaning in the project glossary; a weighty
+   decision — an ADR (paths: profile fields `docs.glossary` and `docs.adr` in
+   `.agents/kit.profile.json`); the spec states the result and carries the
+   blocks table and the interface → owner block table. Decisions already
+   recorded inside a spec stay there until that section is rewritten.
 2. **Code** — the real state. Where code and spec disagree, that is a defect:
    either the code is fixed or the spec is amended with the owner. Silent drift
    is not acceptable.
@@ -186,6 +191,12 @@ These hold for T0 and for every tier that reads metadata:
 
 ## Commands and gates
 
+With agent-kit, use its scripts; they read `.agents/kit.profile.json`: tests —
+`run-tests` (`unit` by default; the `db`, `db-supabase` and `db-pg` levels wait
+for the stack lock), PR — `pr-gate`, a spec or plan section —
+`doc section <file> §N`, Codex — `codex-audit`. The commands below are what
+they run, and the way to work without the kit.
+
 ```bash
 pnpm install                              # pnpm via corepack (packageManager)
 pnpm --filter <pkg> test                  # during work — scoped
@@ -246,6 +257,8 @@ pnpm db:pg:stop
   bucket of a run is named `run-<tag>`; the guard reports both, removes its own
   containers and its empty buckets, and reports a non-empty bucket instead of
   emptying it.
+- Generated SQL is verified through the generator's own tests and fixtures,
+  never by applying it to a live database from an agent.
 - CI (`.github/workflows/ci.yml`) runs the same four gates plus
   `pnpm metadata:check`, a `db` matrix (each shard starts its own stack: provider
   pgTAP with `simetra`, then `@simetrajs/designer` split by `vitest --shard`), its `supabase-bound` rows
@@ -319,20 +332,24 @@ bodies still follow the rules.
 
 ## Code research
 
-Start from a question in human words, not a symbol name. The procedure, the
-report format and the degradation rules are in the `codebase-research` skill.
-Docs and plan anchors are checked by one agent-neutral script:
+Start from a question in human words, not a symbol name. The entry point is
+`orient` from agent-kit; its doc corpus is `research.corpus` in
+`.agents/kit.profile.json`:
 
 ```bash
-.agents/skills/codebase-research/scripts/orient --map "<topic>"   # ranked docs for a topic
-.agents/skills/codebase-research/scripts/orient --plan <plan-file> # plan anchors vs. code
+orient <Symbol> [Symbol...]   # where a symbol lives and who calls it
+orient --map "<topic>"        # ranked docs for a topic
+orient --plan <plan-file>     # plan anchors vs. code
+orient --doctor               # state of the code graph and the doc corpus
 ```
 
-- A recon agent in an unfamiliar area uses the harness code tooling plus
-  `orient --map`.
+- A recon agent in an unfamiliar area uses `orient` plus the harness code
+  tooling.
 - **A task executor re-checks its plan with `orient --plan` before starting its
   block** — a map handed over in a prompt is stale by the time work starts.
 - Reviewers and verifiers read freely; code tooling only for coverage.
+- Without agent-kit (a cloud session, a fresh clone): grep and read, and say
+  in the report that the code graph was not used.
 
 Which code-graph tool a harness has, and who gets it, lives in the
 harness-specific file (`CLAUDE.md` for Claude Code).
@@ -343,6 +360,7 @@ harness-specific file (`CLAUDE.md` for Claude Code).
   relevant to your task, not everything.
 - **Plans** — alongside specs under `docs/superpowers/`.
 - **BRD** and **ROADMAP** — `docs/`.
+- **Review criteria** per lens — `.agents/review-criteria.md`.
 - **Skills** — `.agents/skills/<name>/SKILL.md`. Load the matching one **before**
   implementing, not after.
 - **Library APIs** — check current docs through tooling, not from memory.
@@ -353,10 +371,8 @@ harness-specific file (`CLAUDE.md` for Claude Code).
 
 skills:
 
-- task: "find where code lives, what a change affects, whether a plan still matches the code, or how an unfamiliar subsystem works"
-  load: ".agents/skills/codebase-research/SKILL.md"
-- task: "review landed work before merge: choosing lenses, severity x confidence scale, adversarial verification of findings"
-  load: ".agents/skills/code-review/SKILL.md"
+- task: "review landed work before merge: the Simetra criteria per lens (tiers, platform/consumer boundary, metamodel, generated SQL, test honesty, doc style)"
+  load: ".agents/review-criteria.md"
 - task: "add or change tests (unit, DB, pgTAP), write the test steps of a plan, or review test form"
   load: ".agents/skills/writing-tests/SKILL.md"
 <!-- intent-skills:end -->

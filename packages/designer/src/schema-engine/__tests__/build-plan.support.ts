@@ -11,6 +11,7 @@ import {
 import {
   buildPlan,
   desiredForApply,
+  engineScope,
   executePlan,
   type ApplyDatabase,
   type EngineScope,
@@ -415,3 +416,32 @@ export const OLD = "app.counterparties"
 
 export const params = (outcome: PlanOutcome, code: string) =>
   outcome.diagnostics.filter((d) => d.code === code).map((d) => d.params)
+
+export const ref = (kind: string, name: string) => ({ kind, name })
+
+export async function compiledFiles(
+  files: Map<string, string>
+): Promise<CompiledModel> {
+  const result = await compile(files)
+  expect(result.diagnostics).toEqual([])
+  return result.model!
+}
+
+/** Ціль у межах схем моделі: `policyDomain()` живе в `public`. */
+export async function inModelTarget<T>(
+  model: CompiledModel,
+  fn: (url: string) => Promise<T>
+): Promise<T> {
+  return loadTarget(EMPTY, (await engineScope(model)).scope, fn)
+}
+
+export const carrierTables = (artifact: PlanArtifact) =>
+  artifact.steps
+    .filter((s) => s.origin === "carriers")
+    .map((s) => s.lockedTables[0]!.name)
+
+export const one = async <R extends Record<string, unknown>>(
+  url: string,
+  sql: string,
+  params: unknown[]
+): Promise<R> => (await query<R>(url, sql, params))[0]!

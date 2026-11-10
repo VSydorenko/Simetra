@@ -27,7 +27,6 @@
       "Bash(gh run list*)",
       "Bash(python3 scripts/check-doc-anchors.py*)",
       "Bash(./scripts/check-doc-anchors.py*)",
-      "Bash(.agents/skills/codebase-research/scripts/orient*)",
       "mcp__codebase-memory-mcp__search_graph",
       "mcp__codebase-memory-mcp__trace_path",
       "mcp__codebase-memory-mcp__get_code_snippet",
@@ -38,7 +37,16 @@
       "mcp__codebase-memory-mcp__index_status",
       "mcp__codebase-memory-mcp__detect_changes",
       "mcp__codebase-memory-mcp__get_graph_schema",
-      "mcp__codebase-memory-mcp__list_projects"
+      "mcp__codebase-memory-mcp__list_projects",
+      "Bash(pr-gate:*)",
+      "Bash(wait-for:*)",
+      "Bash(run-tests:*)",
+      "Bash(review-pack:*)",
+      "Bash(doc:*)",
+      "Bash(orient:*)",
+      "Bash(pkg-src:*)",
+      "Bash(codex-audit:*)",
+      "Bash(session-cost:*)"
     ]
   }
 }
