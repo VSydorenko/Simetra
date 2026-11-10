@@ -1,19 +1,21 @@
-import { resolveProfile, type Policy } from "@supabase/pg-delta"
+import {
+  buildFactBase,
+  encodeId,
+  plan as enginePlan,
+  resolveProfile,
+  type Delta,
+  type StableId,
+} from "@supabase/pg-delta"
 import { resolveView } from "@supabase/pg-delta/policy"
 import pg from "pg"
 import { describe, expect, it } from "vitest"
 import { compile } from "simetra/compiler"
 import {
-  LOGIN_ROLE_REQUEST_PURPOSES,
-  PLATFORM_LOGIN_ROLES,
   PLATFORM_ROLES,
-  PROVIDER_API_ROLES,
-  PROVIDER_LOGIN_ROLES,
   PROVIDER_OWNER_ROLES,
   PROVIDER_SCHEMAS,
 } from "simetra/model"
 import {
-  PROVIDER_SYSTEM_ROLES,
   renderDesiredState,
   type CensusCount,
   type DbConnection,
@@ -25,7 +27,6 @@ import {
   FIXTURES,
   superuserClient,
   testProvider,
-  testSuperuserUrl,
   testRoleFor,
 } from "../../../../simetra/test/support"
 import { inTarget } from "../../__tests__/support/db"
@@ -331,6 +332,13 @@ const SATELLITE_KINDS: readonly [string, string][] = [
   ["securityLabel", "a label on a counted object"],
 ]
 
+/** Про що дельта плану: факт додавання чи вилучення, або ідентичність зміни. */
+function deltaSubject(delta: Delta): StableId {
+  if (delta.verb === "add" || delta.verb === "remove") return delta.fact.id
+  if (delta.verb === "set") return delta.id
+  return delta.edge.from
+}
+
 /** Межа фікстури — її схеми без схем провайдера. */
 async function fixtureCase(
   files: Map<string, string>
@@ -356,7 +364,7 @@ async function engineKindsAndCensus(
 ): Promise<{
   kinds: Set<string>
   roles: Set<string>
-  memberships: { role: string; member: string }[]
+  cluster: string[]
   census: CensusCount[]
   extracted: Extracted
 }> {
@@ -365,40 +373,10 @@ async function engineKindsAndCensus(
     ...(await withPool(shadow, async (pool) => {
       const profile = await resolveProfile(pool, scopeProfile(shadowScope))
       const { factBase } = await profile.extract(pool)
-      // Ролі провайдера — інфраструктура кластера, а не бажаного стану: пресет
-      // Supabase виключає їх сам, власний профіль postgres — ні, тож їх
-      // виключає тест: власник, ролі API, ролі входу провайдера й
-      // суперкористувач стека
-      const provider = shadowScope.provider
       const options = profile.planOptions
-      const policy: Policy = {
-        id: "census-roles",
-        extends: options.policy === undefined ? [] : [options.policy],
-        filter: [
-          {
-            match: {
-              all: [
-                { kind: "role" },
-                {
-                  name: [
-                    ...PROVIDER_SYSTEM_ROLES[provider],
-                    PROVIDER_OWNER_ROLES[provider],
-                    ...Object.values(PROVIDER_API_ROLES[provider]).filter(
-                      (role) => role !== null
-                    ),
-                    ...PROVIDER_LOGIN_ROLES[provider],
-                    decodeURIComponent(new URL(testSuperuserUrl()).username),
-                  ],
-                },
-              ],
-            },
-            action: "exclude",
-          },
-        ],
-      }
       const view = resolveView(
         factBase,
-        policy,
+        options.policy,
         options.capability,
         options.baseline
       )
@@ -407,15 +385,20 @@ async function engineKindsAndCensus(
       const roles = new Set(
         managed.flatMap((f) => (f.id.kind === "role" ? [f.id.name] : []))
       )
-      const memberships = managed.flatMap((f) =>
-        f.id.kind === "membership"
-          ? [{ role: f.id.role, member: f.id.member }]
-          : []
-      )
+      // Ролі й членства продукт порівнює лише в межі бази (scope `database`,
+      // як у опціях плану адаптера): план «тінь → порожньо» з тими самими
+      // опціями видалив би кожну роль, яку бачить порівнюваний вид
+      const cluster = enginePlan(factBase, buildFactBase([], []), {
+        ...options,
+        scope: "database",
+      })
+        .deltas.map(deltaSubject)
+        .filter((id) => id.kind === "role" || id.kind === "membership")
+        .map(encodeId)
       return {
         kinds,
         roles,
-        memberships,
+        cluster,
         census: await readCensus(pool, shadowScope),
       }
     })),
@@ -440,42 +423,14 @@ describe("covered classes match the pinned engine", () => {
   for (const [name, load] of corpus) {
     it(name, async () => {
       const [desiredSql, shadowScope] = await load()
-      const { kinds, roles, memberships, census, extracted } =
+      const { kinds, roles, cluster, census, extracted } =
         await engineKindsAndCensus(desiredSql, shadowScope)
-      // Роль — інфраструктура кластера (§6.9): факт двигуна з'являється, лише
-      // коли грант називає платформну роль поза пресетом провайдера. Будь-яка
-      // інша роль означала б, що бажаний стан створює роль сам, а ролі
-      // створює лише `simetra roles`. Роль входу рантайму кластерна так само
-      const platformRoles = new Set<string>([
-        ...Object.values(PLATFORM_ROLES),
-        ...Object.values(PLATFORM_LOGIN_ROLES),
-      ])
-      for (const role of roles)
-        expect(
-          platformRoles.has(role),
-          `engine role fact ${role} is not a platform role a grant names`
-        ).toBe(true)
-      // Членство ролей платформи в ролях запиту провайдера — теж
-      // інфраструктура кластера: бажаний стан бази його не несе
-      const clusterRoles = new Set<string>([
-        ...platformRoles,
-        ...Object.entries(LOGIN_ROLE_REQUEST_PURPOSES).flatMap(
-          ([provider, purposes]) =>
-            purposes.map(
-              (p) =>
-                PROVIDER_API_ROLES[provider as keyof typeof PROVIDER_API_ROLES][
-                  p
-                ]
-            )
-        ),
-      ])
-      for (const { role, member } of memberships)
-        expect(
-          clusterRoles.has(role) && clusterRoles.has(member),
-          `engine membership fact ${member} -> ${role} is not between platform and request roles`
-        ).toBe(true)
-      // Без факту ролі перевірка вище порожня: бажаний стан кожної фікстури
-      // грантує роль команд (гранти схеми `simetra`, спека прав §5.1)
+      // Роль і членство — інфраструктура кластера (§6.9): ролі створює лише
+      // `simetra roles`, і вид, який порівнює продукт, жодної ролі чи
+      // членства не несе — ні платформних, ні провайдера, ні суперкористувача
+      expect(cluster).toEqual([])
+      // Без ролі в сирому виді перевірка вище порожня: бажаний стан кожної
+      // фікстури грантує роль команд (гранти схеми `simetra`, спека прав §5.1)
       if (desiredSql !== BROAD_SQL)
         expect([...roles]).toContain(PLATFORM_ROLES.command)
       // Кожен інший вид факту, що трапився, перепис рахує як покритий клас
