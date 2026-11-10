@@ -27,6 +27,7 @@ import { BACKFILL_SETTINGS, withLocalSettings } from "./settings"
 import {
   backfillAction,
   notNullColumns,
+  nullDatum,
   type NotNullColumn,
   type PlanAction,
   type PlanStep,
@@ -360,7 +361,9 @@ const isUnique = (
   parse: SqlParser
 ): boolean =>
   table !== undefined &&
-  (table.uniques.some((u) => u.columns.includes(column)) ||
+  // Первинний ключ — окреме поле каталогу, не елемент `uniques`
+  (table.primaryKey?.columns.includes(column) === true ||
+    table.uniques.some((u) => u.columns.includes(column)) ||
     table.indexes.some(
       (i) =>
         i.unique &&
@@ -795,7 +798,7 @@ export async function readBackfillCounts(
         const column = quoteIdent(t.column)
         const [row] = await tx.query<{ n: string | number }>(
           `SELECT pg_catalog.count(*) AS n FROM ${qualified(t.table)}${
-            t.count === "nulls" ? ` WHERE ${column} IS NULL` : ""
+            t.count === "nulls" ? ` WHERE ${nullDatum(column)}` : ""
           }`
         )
         if (row === undefined) throw new Error("count(*) returned no row")

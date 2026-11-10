@@ -529,16 +529,28 @@ export function notNullColumns(stmts: readonly Node[]): NotNullColumn[] {
 }
 
 /**
+ * Предикат «у колонці NULL» для заповнення, його підрахунку й сторожа
+ * `SET NOT NULL` (платформна спека §6.6). Не `IS NULL`: для композитного типу
+ * `ROW(NULL, NULL) IS NULL` істинне, хоча `attnotnull` такий рядок пропускає,
+ * тож заповнення перезаписало б значення споживача. `IS NOT DISTINCT FROM
+ * NULL` перевіряє сам datum і для решти типів поводиться як `IS NULL`; одна
+ * форма для всіх типів, бо крок однаково сканує таблицю під ACCESS EXCLUSIVE.
+ * `column` — уже взяте в лапки ім'я.
+ */
+export const nullDatum = (column: string): string =>
+  `${column} IS NOT DISTINCT FROM NULL`
+
+/**
  * Синтетична дія заповнення (платформна спека §6.6): `DEFAULT` бере default
- * колонки на момент кроку, тож текст виразу не копіюється, а `WHERE … IS
- * NULL` не торкається наявних значень. Замок — `ACCESS EXCLUSIVE`: наступний
+ * колонки на момент кроку, тож текст виразу не копіюється, а умова
+ * `nullDatum` не торкається наявних значень. Замок — `ACCESS EXCLUSIVE`: наступний
  * `SET NOT NULL` однаково бере його на цій таблиці.
  */
 export function backfillAction(facts: BackfillFacts): BackfillAction {
   const table = `${quoteIdent(facts.table.schema)}.${quoteIdent(facts.table.name)}`
   const column = quoteIdent(facts.column)
   return {
-    sql: `UPDATE ${table} SET ${column} = DEFAULT WHERE ${column} IS NULL`,
+    sql: `UPDATE ${table} SET ${column} = DEFAULT WHERE ${nullDatum(column)}`,
     verb: "alter",
     produces: [],
     consumes: [],

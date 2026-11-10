@@ -117,6 +117,7 @@ import {
   backfillAction,
   checkPermissions,
   lintSteps,
+  nullDatum,
   type PlanStep,
 } from "./steps"
 import { tableKey } from "./table-key"
@@ -1861,7 +1862,7 @@ async function notNullGuard(
   try {
     rows = await withLocalSettings(tx, BACKFILL_SETTINGS, async () => {
       const [row] = await tx.query<{ n: string | number }>(
-        `SELECT pg_catalog.count(*) AS n FROM ${table} WHERE ${quoteIdent(c.column)} IS NULL`
+        `SELECT pg_catalog.count(*) AS n FROM ${table} WHERE ${nullDatum(quoteIdent(c.column))}`
       )
       if (row === undefined) throw new Error("the NULL count returned no row")
       return countOf(row.n)
