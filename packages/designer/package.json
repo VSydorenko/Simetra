@@ -39,7 +39,7 @@
     "test:watch": "vitest --project unit",
     "test:db": "vitest run --project db",
     "test:db:pg": "vitest run --project db-pg",
-    "test:db:supabase": "vitest run --project db-supabase --passWithNoTests",
+    "test:db:supabase": "vitest run --project db-supabase",
     "test:packaging": "vitest run --project packaging"
   },
   "dependencies": {

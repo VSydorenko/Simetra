@@ -1,5 +1,10 @@
 import { defineConfig } from "vitest/config"
 
+// DB-файли, уже перенесені на стек postgres (план ПГ-2b, Р6): `db-pg` їх
+// бере, а `db`, ще на Supabase, виключає тим самим комітом — кейс під час
+// переносу не губиться й не задвоюється
+export const ON_POSTGRES: string[] = []
+
 export default defineConfig({
   test: {
     globals: true,
@@ -35,6 +40,7 @@ export default defineConfig({
             "**/dist/**",
             "**/*.supabase.db.test.ts",
             "**/*.postgres.db.test.ts",
+            ...ON_POSTGRES,
           ],
           // Усі тести б'ють в одну базу стеку
           fileParallelism: false,
@@ -77,7 +83,7 @@ export default defineConfig({
           // Тести, прив'язані до стека postgres. Налаштування — ті самі, що в
           // `db`, і з тих самих причин; сторож — свій, бо стек інший
           name: "db-pg",
-          include: ["**/*.postgres.db.test.ts"],
+          include: ["**/*.postgres.db.test.ts", ...ON_POSTGRES],
           exclude: ["**/node_modules/**", "**/dist/**"],
           fileParallelism: false,
           maxConcurrency: 4,

@@ -1,5 +1,15 @@
 import { defineConfig } from "vitest/config"
 
+// DB-файли, уже перенесені на стек postgres (план ПГ-2b, Р6): `db-pg` їх
+// бере, а `db`, ще на Supabase, виключає тим самим комітом — кейс під час
+// переносу не губиться й не задвоюється
+export const ON_POSTGRES: string[] = []
+
+// Шлях guard і прибиральника переривання покритий на обох стеках: на
+// Supabase — проєктом `db-supabase`, тож `db` його не бере, інакше файл ішов
+// би двічі за `test:db`
+const INTERRUPT = "test/db/interrupt.db.test.ts"
+
 export default defineConfig({
   test: {
     globals: true,
@@ -29,6 +39,8 @@ export default defineConfig({
             "**/dist/**",
             "**/*.supabase.db.test.ts",
             "**/*.postgres.db.test.ts",
+            INTERRUPT,
+            ...ON_POSTGRES,
           ],
           // Усі тести б'ють в одну базу стеку
           fileParallelism: false,
@@ -44,7 +56,7 @@ export default defineConfig({
           // `realtime`, ролі провайдера, пулер, пресет): лишаються на ньому й
           // тоді, коли проєкт `db` перейде на стек postgres
           name: "db-supabase",
-          include: ["**/*.supabase.db.test.ts"],
+          include: ["**/*.supabase.db.test.ts", INTERRUPT],
           exclude: ["**/node_modules/**", "**/dist/**"],
           fileParallelism: false,
           globalSetup: ["./test/db/stack-guard.supabase.ts"],
@@ -59,8 +71,9 @@ export default defineConfig({
           name: "db-pg",
           include: [
             "test/db/pgtap.db.test.ts",
-            "test/db/interrupt.db.test.ts",
+            INTERRUPT,
             "**/*.postgres.db.test.ts",
+            ...ON_POSTGRES,
           ],
           exclude: ["**/node_modules/**", "**/dist/**"],
           fileParallelism: false,

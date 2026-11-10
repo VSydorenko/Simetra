@@ -1,10 +1,21 @@
-import { existsSync } from "node:fs"
-import { basename, resolve } from "node:path"
+import {
+  existsSync,
+  globSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs"
+import { tmpdir } from "node:os"
+import { basename, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
-import { PROVIDER_OWNER_ROLES } from "simetra/model"
+import { PROVIDER_EVENT_SOURCES, PROVIDER_OWNER_ROLES } from "simetra/model"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import designerConfig from "../../../designer/vitest.config"
-import simetraConfig from "../../vitest.config"
+import designerConfig, {
+  ON_POSTGRES as DESIGNER_ON_POSTGRES,
+} from "../../../designer/vitest.config"
+import simetraConfig, {
+  ON_POSTGRES as SIMETRA_ON_POSTGRES,
+} from "../../vitest.config"
 import type { Exec, Fetch } from "./external"
 import {
   PROVIDER_ENV,
@@ -13,7 +24,9 @@ import {
   type TestProvider,
 } from "./profile"
 import {
+  acquireLock,
   diff,
+  IDENTITY_SQL,
   leakMessage,
   endChecks,
   leftoverReport,
@@ -217,6 +230,61 @@ function fakeConnections(
 const noDocker: Exec = async () => ""
 const noBuckets: Fetch = async () => new Response("[]")
 
+const OWNER = PROVIDER_OWNER_ROLES.postgres
+const USER_COLUMNS = PROVIDER_EVENT_SOURCES.postgres.find(
+  (s) => s.schema === "better_auth" && s.table === "user"
+)!.columns
+
+/** Каталог `better_auth` бази `simetra`, яким його лишає `db:pg:start`. */
+interface IdentityState {
+  columns: string[]
+  owners: { object: string; owner: string }[]
+  grants: { object: string; grantee: string; privilege: string }[]
+  defaultAcl: { type: string; role: string }[]
+  triggers: { name: string; enabled: string }[]
+}
+
+const identityState = (): IdentityState => ({
+  columns: [...USER_COLUMNS],
+  owners: [
+    { object: "schema better_auth", owner: "simetra_auth" },
+    { object: "relation session", owner: "simetra_auth" },
+    { object: "relation user", owner: "simetra_auth" },
+    { object: "relation user_pkey", owner: "simetra_auth" },
+  ],
+  grants: [
+    {
+      object: "schema better_auth",
+      grantee: "simetra_auth",
+      privilege: "USAGE",
+    },
+    { object: "schema better_auth", grantee: OWNER, privilege: "USAGE" },
+    { object: "relation user", grantee: "simetra_auth", privilege: "SELECT" },
+    { object: "relation user", grantee: OWNER, privilege: "TRIGGER" },
+  ],
+  defaultAcl: [],
+  triggers: [{ name: "RI_ConstraintTrigger_a_16474", enabled: "O" }],
+})
+
+const IDENTITY_QUERIES = new Set<string>(Object.values(IDENTITY_SQL))
+
+// Відповідь на запити звірки `better_auth` з поточного стану; відбиток —
+// увесь стан, тож будь-яка його зміна між знімками змінює й відбиток
+function identityAnswer(
+  state: IdentityState,
+  sql: string
+): Record<string, unknown>[] | undefined {
+  if (sql === IDENTITY_SQL.columns)
+    return state.columns.map((name) => ({ name }))
+  if (sql === IDENTITY_SQL.owners) return state.owners
+  if (sql === IDENTITY_SQL.grants) return state.grants
+  if (sql === IDENTITY_SQL.defaultAcl) return state.defaultAcl
+  if (sql === IDENTITY_SQL.triggers) return state.triggers
+  if (sql === IDENTITY_SQL.fingerprint)
+    return [{ fingerprint: JSON.stringify(state) }]
+  return undefined
+}
+
 describe("guard connections on the postgres stack", () => {
   beforeEach(() => {
     vi.stubEnv(PROVIDER_ENV, "postgres")
@@ -237,7 +305,7 @@ describe("guard connections on the postgres stack", () => {
     (sql: string): Record<string, unknown>[] => {
       if (sql.includes("'supabase_admin'")) return [{ present: false }]
       if (sql.startsWith("select current_user as role")) return [role]
-      return []
+      return identityAnswer(identityState(), sql) ?? []
     }
   const owner = { role: PROVIDER_OWNER_ROLES.postgres, superuser: false }
 
@@ -256,6 +324,8 @@ describe("guard connections on the postgres stack", () => {
       "postgres connect postgres?options=-c%20role%3Dsimetra_owner",
       "postgres connect postgres",
       "simetra connect postgres?options=-c%20role%3Dsimetra_owner",
+      // Звірка `better_auth` (Р3) — у базі тестів, до знімка
+      "simetra connect postgres",
       "postgres connect postgres",
       "simetra connect postgres",
     ])
@@ -271,10 +341,15 @@ describe("guard connections on the postgres stack", () => {
     )
     for (const { sql } of queries) expect(sql).toMatch(/pg_catalog\.pg_/)
     // Схеми й розширення — з кожної бази стека: і тести, і базовий стан пишуть
-    // у свою
+    // у свою. Запити звірки `better_auth` теж читають `pg_namespace`, але не
+    // є знімком
     expect(
       queries
-        .filter((e) => /pg_namespace|pg_extension/.test(e.sql))
+        .filter(
+          (e) =>
+            /pg_namespace|pg_extension/.test(e.sql) &&
+            !IDENTITY_QUERIES.has(e.sql)
+        )
         .map(
           (e) =>
             `${e.database} ${/pg_namespace/.test(e.sql) ? "schemas" : "extensions"}`
@@ -355,6 +430,232 @@ describe("guard connections on the postgres stack", () => {
   })
 })
 
+describe("the better_auth check at the start of a run on the postgres stack", () => {
+  beforeEach(() => {
+    vi.stubEnv(PROVIDER_ENV, "postgres")
+    for (const name of [
+      "SIMETRA_TEST_DATABASE_URL",
+      "SIMETRA_TEST_SUPERUSER_URL",
+    ]) {
+      vi.stubEnv(name, "")
+      delete process.env[name]
+    }
+  })
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  const start = (
+    state: IdentityState,
+    o: { supabaseAdmin?: boolean; announce?: () => void } = {}
+  ) => {
+    const connections = fakeConnections((sql) => {
+      if (sql.includes("'supabase_admin'"))
+        return [{ present: o.supabaseAdmin ?? false }]
+      if (sql.startsWith("select current_user as role"))
+        return [{ role: OWNER, superuser: false }]
+      return identityAnswer(state, sql) ?? []
+    })
+    const announce = (): void => {
+      connections.log.push({ database: "-", sql: "announce" })
+      o.announce?.()
+    }
+    return {
+      log: connections.log,
+      run: () =>
+        startChecks("postgres", {
+          client: connections.factory,
+          exec: noDocker,
+          fetch: noBuckets,
+          announce,
+        }),
+    }
+  }
+  const snapshotStarted = (log: { sql: string }[]): boolean =>
+    log.some((e) => e.sql.includes("pg_database"))
+
+  it("runs after assertStack and before the snapshot, in database simetra", async () => {
+    const { log, run } = start(identityState())
+    await run()
+    const at = (match: (sql: string) => boolean): number[] =>
+      log.flatMap((e, i) => (match(e.sql) ? [i] : []))
+    const stack = at((sql) => sql.includes("'supabase_admin'"))
+    const identity = at((sql) => IDENTITY_QUERIES.has(sql))
+    const snapshot = at((sql) => sql.includes("pg_database"))
+    expect(identity.length).toBeGreaterThan(0)
+    expect(Math.min(...identity)).toBeGreaterThan(Math.max(...stack))
+    expect(Math.max(...identity)).toBeLessThan(Math.min(...snapshot))
+    expect(new Set(identity.map((i) => log[i]!.database))).toEqual(
+      new Set(["simetra"])
+    )
+  })
+
+  it.each<[string, (s: IdentityState) => void, RegExp]>([
+    [
+      "an extra grantee in relacl",
+      (s) =>
+        s.grants.push({
+          object: "relation user",
+          grantee: "simetra_user",
+          privilege: "SELECT",
+        }),
+      /relation user grants SELECT to simetra_user/,
+    ],
+    [
+      "a grant to PUBLIC on the schema",
+      (s) =>
+        s.grants.push({
+          object: "schema better_auth",
+          grantee: "PUBLIC",
+          privilege: "USAGE",
+        }),
+      /schema better_auth grants USAGE to PUBLIC/,
+    ],
+    [
+      "a privilege of the owner beyond TRIGGER",
+      (s) =>
+        s.grants.push({
+          object: "relation user",
+          grantee: OWNER,
+          privilege: "INSERT",
+        }),
+      /relation user grants INSERT to simetra_owner/,
+    ],
+    [
+      "another owner of a relation",
+      (s) => (s.owners[1]!.owner = OWNER),
+      /relation session is owned by simetra_owner/,
+    ],
+    [
+      "another owner of the schema",
+      (s) => (s.owners[0]!.owner = "postgres"),
+      /schema better_auth is owned by postgres/,
+    ],
+    [
+      "a pg_default_acl row of the schema",
+      (s) => s.defaultAcl.push({ type: "r", role: "simetra_auth" }),
+      /default privileges of simetra_auth for type r in schema better_auth/,
+    ],
+    [
+      'a disabled trigger on better_auth."user"',
+      (s) => s.triggers.push({ name: "simetra_provision_user", enabled: "D" }),
+      /trigger simetra_provision_user on user is disabled/,
+    ],
+  ])("refuses %s before the snapshot", async (_label, change, detail) => {
+    const state = identityState()
+    change(state)
+    const { log, run } = start(state)
+    const failure = run()
+    await expect(failure).rejects.toThrow(
+      "better_auth of database simetra is not in the db:pg:start state ("
+    )
+    await expect(failure).rejects.toThrow(detail)
+    expect(snapshotStarted(log)).toBe(false)
+  })
+
+  it("an enabled trigger of the platform passes", async () => {
+    const state = identityState()
+    state.triggers.push({ name: "simetra_provision_user", enabled: "O" })
+    await expect(start(state).run()).resolves.toBeDefined()
+  })
+
+  it("a missing column is refused with pnpm db:pg:start", async () => {
+    const state = identityState()
+    state.columns = state.columns.filter((c) => c !== "isAnonymous")
+    const { log, run } = start(state)
+    const failure = run()
+    await expect(failure).rejects.toThrow(
+      'better_auth."user" of database simetra does not match this branch (missing column(s) isAnonymous: run pnpm db:pg:start'
+    )
+    await expect(failure).rejects.not.toThrow(/owner's call/)
+    expect(snapshotStarted(log)).toBe(false)
+  })
+
+  it("an extra column is refused as the owner's call", async () => {
+    const state = identityState()
+    state.columns.push("nickname")
+    const { log, run } = start(state)
+    const failure = run()
+    await expect(failure).rejects.toThrow(
+      /does not match this branch \(extra column\(s\) nickname: .*stopping the stack is the owner's call/
+    )
+    expect(snapshotStarted(log)).toBe(false)
+  })
+
+  it("another column order is refused as the owner's call", async () => {
+    const state = identityState()
+    state.columns.reverse()
+    await expect(start(state).run()).rejects.toThrow(
+      /does not match this branch \(column order .*owner's call/
+    )
+  })
+
+  // Рядок «DB run … on postgres stack» на чужому стеку збрехав би в лозі
+  it("prints the start line only after assertStack passed", async () => {
+    const announce = vi.fn()
+    const wrong = start(identityState(), { supabaseAdmin: true, announce })
+    await expect(wrong.run()).rejects.toThrow(/this is not the postgres stack/)
+    expect(announce).not.toHaveBeenCalled()
+
+    const { log, run } = start(identityState(), { announce })
+    await run()
+    expect(announce).toHaveBeenCalledOnce()
+    const line = log.findIndex((e) => e.sql === "announce")
+    const stack = log.flatMap((e, i) =>
+      e.sql.includes("'supabase_admin'") ? [i] : []
+    )
+    expect(line).toBeGreaterThan(Math.max(...stack))
+  })
+})
+
+describe("the better_auth check on the supabase stack", () => {
+  beforeEach(() => {
+    vi.stubEnv(PROVIDER_ENV, "supabase")
+    for (const name of [
+      "SIMETRA_TEST_DATABASE_URL",
+      "SIMETRA_TEST_SUPERUSER_URL",
+    ]) {
+      vi.stubEnv(name, "")
+      delete process.env[name]
+    }
+  })
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  // Схемою ідентичності Supabase володіє провайдер: стану `db:pg:start` у неї немає
+  it("is not run", async () => {
+    const { log, factory } = fakeConnections((sql) => {
+      if (sql.includes("'supabase_admin'")) return [{ present: true }]
+      if (sql.startsWith("select current_user as role"))
+        return [{ role: PROVIDER_OWNER_ROLES.supabase, superuser: false }]
+      return []
+    })
+    const deps = { client: factory, exec: noDocker, fetch: noBuckets }
+    const before = await startChecks("supabase", deps)
+    await endChecks("supabase", before, deps)
+    expect(before.identity).toBeUndefined()
+    expect(log.some((e) => IDENTITY_QUERIES.has(e.sql))).toBe(false)
+  })
+})
+
+describe("acquireLock", () => {
+  // Два DB-проєкти в одному процесі ділять env прогону, а свого замка процес
+  // не дочекався б — замість 45 хвилин очікування одразу відмова
+  it("refuses a lock this process already holds", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "simetra-lock-"))
+    try {
+      const lock = join(dir, "stack.lock")
+      writeFileSync(lock, `${process.pid}\n${process.cwd()}\nnow\n`)
+      await expect(acquireLock(lock, "postgres")).rejects.toThrow(
+        "one DB project per vitest process (run each with its own --project)"
+      )
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
 describe("stackMismatch", () => {
   it.each([
     { p: "supabase", supabaseAdmin: true, mismatch: false },
@@ -398,6 +699,66 @@ describe("vitest configs", () => {
   // Перейменований чи видалений файл vitest помітив би лише на старті DB-проєкту
   it.each(files)("globalSetup paths exist: $name $path", ({ path }) => {
     expect(existsSync(path)).toBe(true)
+  })
+
+  // Файли проєкту за його ж `include` і `exclude`, як їх збирає vitest
+  const projects = packages.flatMap(({ dir, config }) =>
+    (config.test?.projects ?? []).flatMap((project) => {
+      if (typeof project !== "object" || !("test" in project)) return []
+      const test = project.test ?? {}
+      const setups = [test.globalSetup ?? []].flat()
+      return [
+        {
+          name: `${basename(dir)}/${String(test.name)}`,
+          dir,
+          stack: setups
+            .map((path) => /stack-guard\.(\w+)\.ts$/.exec(path)?.[1])
+            .find((s) => s !== undefined),
+          files: globSync(test.include ?? [], {
+            cwd: dir,
+            exclude: test.exclude ?? [],
+          }).sort(),
+        },
+      ]
+    })
+  )
+  const project = (name: string) => projects.find((p) => p.name === name)!
+
+  // Зламаний `include` інакше дав би зелений рядок CI без жодного тесту
+  it.each(projects.filter((p) => p.stack !== undefined))(
+    "DB project $name has at least one file",
+    ({ files }) => {
+      expect(files.length).toBeGreaterThan(0)
+    }
+  )
+
+  it.each([
+    ["simetra", SIMETRA_ON_POSTGRES],
+    ["designer", DESIGNER_ON_POSTGRES],
+  ] as const)(
+    "%s: db excludes every ON_POSTGRES file and db-pg includes it",
+    (pkg, moved) => {
+      const { dir } = project(`${pkg}/db`)
+      for (const pattern of moved) {
+        const files = globSync(pattern, { cwd: dir })
+        expect(files.length, pattern).toBeGreaterThan(0)
+        for (const file of files) {
+          expect(project(`${pkg}/db`).files).not.toContain(file)
+          expect(project(`${pkg}/db-pg`).files).toContain(file)
+        }
+      }
+    }
+  )
+
+  // Шлях guard і прибиральника переривання — на кожному стеку рівно раз
+  it("interrupt.db.test.ts runs once on each stack", () => {
+    const interrupt = "test/db/interrupt.db.test.ts"
+    const on = (stack: string) =>
+      projects
+        .filter((p) => p.stack === stack && p.files.includes(interrupt))
+        .map((p) => p.name)
+    expect(on("supabase")).toEqual(["simetra/db-supabase"])
+    expect(on("postgres")).toEqual(["simetra/db-pg"])
   })
 
   // Проєкт без stack-guard ішов би на стек без замка й без звірки
@@ -507,12 +868,14 @@ describe("the end of a run on the postgres stack", () => {
     schemas: Record<string, string[]>
     extensions: Record<string, string[]>
     template: { allowconn: boolean; acl: string }
+    identity: IdentityState
   }
 
   const baseState = (): StackState => ({
     schemas: { postgres: ["public"], simetra: ["public", "better_auth"] },
     extensions: { postgres: ["plpgsql"], simetra: ["plpgsql"] },
     template: { allowconn: false, acl: "{simetra_owner=CTc/simetra_owner}" },
+    identity: identityState(),
   })
 
   // Підставний стек: відповіді читають поточний стан, тож зміна стану між
@@ -522,6 +885,8 @@ describe("the end of a run on the postgres stack", () => {
       if (sql.includes("'supabase_admin'")) return [{ present: false }]
       if (sql.startsWith("select current_user as role"))
         return [{ role: PROVIDER_OWNER_ROLES.postgres, superuser: false }]
+      const identity = identityAnswer(state.identity, sql)
+      if (identity !== undefined) return identity
       if (sql.includes("pg_namespace"))
         return (state.schemas[database] ?? []).map((name) => ({ name }))
       if (sql.includes("pg_extension"))
@@ -566,6 +931,22 @@ describe("the end of a run on the postgres stack", () => {
     change(state)
     await expect(endChecks("postgres", before, deps)).rejects.toThrow(
       /left the local stack different/
+    )
+  })
+
+  // Знімок стека ACL не містить: грант, лишений тестом поза відкатом, ловить
+  // лише відбиток `better_auth`
+  it("a grant on better_auth.user left by the run fails it", async () => {
+    const state = baseState()
+    const deps = { client: stack(state), exec: noDocker, fetch: noBuckets }
+    const before = await startChecks("postgres", deps)
+    state.identity.grants.push({
+      object: "relation user",
+      grantee: OWNER,
+      privilege: "UPDATE",
+    })
+    await expect(endChecks("postgres", before, deps)).rejects.toThrow(
+      /The run changed better_auth of database simetra/
     )
   })
 
