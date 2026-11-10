@@ -678,9 +678,13 @@ describe("plpgsql_check", () => {
     // Ролі `postgres` стеку `USAGE` на будь-яку схему дає членство в
     // `pg_read_all_data`, тож відібрати його нічим. Тому застосовує інша роль
     // без членств: розширення стоїть у схемі, якої вона не бачить, а план
-    // «встановлене» обіцяв перевірку
+    // «встановлене» обіцяв перевірку; BYPASSRLS — щоб застосування пройшло
+    // гейт власника (`plan.owner-not-bypassrls`) і дійшло до перевірки
     const NOUSAGE = testRoleName("fncheck_nousage")
-    await query(testSuperuserUrl(), `create role ${NOUSAGE} login password 'x'`)
+    await query(
+      testSuperuserUrl(),
+      `create role ${NOUSAGE} login bypassrls password 'x'`
+    )
     try {
       await inTarget(
         `${TABLE_T};
