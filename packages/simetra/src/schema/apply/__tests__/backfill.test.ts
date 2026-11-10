@@ -940,6 +940,12 @@ describe("platform triggers of a backfill", () => {
     )
     expect(platform(def(mechanics.trigger, "app.mine"), foreign)).toBe(false)
     expect(platform(undefined, foreign)).toBe(false)
+    // Та сама схема, інша функція
+    const sibling = `${mechanics.function.schema}.not_${mechanics.function.name}`
+    const near = withUnits(
+      unit(mechanics.trigger, def(mechanics.trigger, sibling))
+    )
+    expect(platform(undefined, near)).toBe(false)
     // Ім'я поза реєстром — тригер користувача, хоч би й кликав функцію платформи
     const other = withUnits(unit("audit", def("audit")))
     expect(platform(def("audit"), other, "audit")).toBe(false)
@@ -978,6 +984,19 @@ describe("platform triggers of a backfill", () => {
       shown.find((s) => s.backfill !== undefined)!.backfill!.triggers
     ).toEqual([
       { name: "audit", enabled: "A" },
+      { name: "made_before", enabled: "O" },
+    ])
+    // Живий тригер без визначення в моделі — тригер користувача, показаний
+    const unknown = withShownTriggers(plan, {
+      user: () => [{ name: mechanics.trigger, enabled: "O" }],
+      live: withUnits(),
+      desired: DESIRED_UNITS,
+      parse,
+    })
+    expect(
+      unknown.find((s) => s.backfill !== undefined)!.backfill!.triggers
+    ).toEqual([
+      { name: mechanics.trigger, enabled: "O" },
       { name: "made_before", enabled: "O" },
     ])
     // Живий платформний тригер, чиє визначення інше, — показаний і вимкнений
