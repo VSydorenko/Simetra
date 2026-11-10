@@ -187,21 +187,26 @@ const garageApi = (endpoint, payload) =>
   )
 
 /**
- * @param {string[]} [extra] додаткові обов'язкові змінні
+ * @param {string} file ім'я .env-файла в теці стека
+ * @param {string[]} required обов'язкові змінні
  * @returns {Record<string, string>}
  */
-function devSecrets(extra = []) {
+function readEnvFile(file, required) {
   /** @type {Record<string, string>} */
   const secrets = {}
-  const text = readFileSync(join(STACK_DIR, "dev-secrets.env"), "utf8")
+  const text = readFileSync(join(STACK_DIR, file), "utf8")
   for (const line of text.split(/\r?\n/)) {
     const m = /^([A-Z0-9_]+)=(.*)$/.exec(line)
     if (m !== null) secrets[m[1]] = m[2].trim()
   }
-  for (const name of ["GARAGE_DEV_KEY_ID", "GARAGE_DEV_KEY_SECRET", ...extra])
-    if (!secrets[name]) throw new Error(`${name} is not set in dev-secrets.env`)
+  for (const name of required)
+    if (!secrets[name]) throw new Error(`${name} is not set in ${file}`)
   return secrets
 }
+
+/** Секрети Garage: їх читає і compose (`env_file`), тож паролів ролей тут нема. */
+const devSecrets = () =>
+  readEnvFile("dev-secrets.env", ["GARAGE_DEV_KEY_ID", "GARAGE_DEV_KEY_SECRET"])
 
 // Кожен крок спершу дивиться на стан: повторний `db:pg:start` на запущеному
 // стеку нічого не змінює
@@ -292,30 +297,55 @@ function run(command, args, env, cwd = ROOT) {
 /** Пароль у `\set` без екранування: лише безпечні символи, інакше SQL зламався б. */
 const SAFE_PASSWORD = /^[A-Za-z0-9._-]+$/
 
+/** Аргументи `docker compose exec … psql`: пароль ніколи не тут (він іде у stdin). */
+export const POSTGRES_PSQL_ARGS = [
+  "exec",
+  "-T",
+  "postgres",
+  "psql",
+  "-v",
+  "ON_ERROR_STOP=1",
+  "-U",
+  "postgres",
+  "-d",
+  "postgres",
+  "-f",
+  "-",
+]
+
+/**
+ * Команда кроку Better Auth: DSN лише в середовищі дочірнього процесу, не в argv.
+ *
+ * @param {Record<string, string>} secrets
+ * @param {string} superuserUrl
+ */
+export function betterAuthCommand(secrets, superuserUrl) {
+  return {
+    args: [
+      "--import",
+      "tsx",
+      join(ROOT, "packages/simetra/test/db/better-auth-cli.ts"),
+    ],
+    env: {
+      SIMETRA_SUPERUSER_URL: superuserUrl,
+      SIMETRA_AUTH_URL: stackUrl(
+        "simetra_auth",
+        secrets.SIMETRA_AUTH_DEV_PASSWORD
+      ),
+    },
+  }
+}
+
 async function startPostgres() {
   compose(PROFILES.postgres, ["up", "-d", "--build", "--wait"])
   initGarage()
   const psql = (/** @type {string} */ input) =>
-    compose(
-      PROFILES.postgres,
-      [
-        "exec",
-        "-T",
-        "postgres",
-        "psql",
-        "-v",
-        "ON_ERROR_STOP=1",
-        "-U",
-        "postgres",
-        "-d",
-        "postgres",
-        "-f",
-        "-",
-      ],
-      { input }
-    )
+    compose(PROFILES.postgres, POSTGRES_PSQL_ARGS, { input })
   psql(readFileSync(join(STACK_DIR, "dev-environment.sql"), "utf8"))
-  const secrets = devSecrets(LOGIN_ROLES.map((r) => r.secret))
+  const secrets = readEnvFile(
+    "login-secrets.env",
+    LOGIN_ROLES.map((r) => r.secret)
+  )
   const superuserUrl = stackUrl("postgres", "postgres")
   run(
     process.execPath,
@@ -332,26 +362,16 @@ async function startPostgres() {
       const password = secrets[secret]
       if (!SAFE_PASSWORD.test(password))
         throw new Error(
-          `${secret} in dev-secrets.env has unsupported characters`
+          `${secret} in login-secrets.env has unsupported characters`
         )
       return `\\set pw${i} '${password}'\nALTER ROLE ${role} PASSWORD :'pw${i}';\n`
     }).join("")
   )
-  // DSN лише через середовище дочірнього процесу, не через argv
+  const step = betterAuthCommand(secrets, superuserUrl)
   run(
     process.execPath,
-    [
-      "--import",
-      "tsx",
-      join(ROOT, "packages/simetra/test/db/better-auth-cli.ts"),
-    ],
-    {
-      SIMETRA_SUPERUSER_URL: superuserUrl,
-      SIMETRA_AUTH_URL: stackUrl(
-        "simetra_auth",
-        secrets.SIMETRA_AUTH_DEV_PASSWORD
-      ),
-    },
+    step.args,
+    step.env,
     // `tsx` — залежність пакета simetra, не кореня: звідти її й резолвить `--import`
     join(ROOT, "packages/simetra")
   )

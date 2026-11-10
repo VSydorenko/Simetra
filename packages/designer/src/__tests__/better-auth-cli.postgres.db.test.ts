@@ -1,12 +1,12 @@
 import { withDatabaseName } from "@supabase/pg-delta"
 import pg from "pg"
 import { ensurePostgresCluster, type PostgresClusterSet } from "simetra/schema"
-import { afterAll, describe, expect, it } from "vitest"
-import { prepareStackIdentity } from "../../../simetra/test/db/better-auth-cli"
-import { migrateBetterAuth } from "../../../simetra/test/db/better-auth"
+import { afterAll, describe, expect, it, vi } from "vitest"
 import {
   clusterRoleNames,
   dropTaggedCluster,
+  migrateBetterAuth,
+  prepareStackIdentity,
   roleUrl,
   setTestPasswords,
   taggedClusterSet,
@@ -57,6 +57,7 @@ const superuserUrl = (set: PostgresClusterSet): string =>
 const identity = (set: PostgresClusterSet) => ({
   superuserUrl: superuserUrl(set),
   authUrl: roleUrl(set, set.auth),
+  auth: set.auth,
   owner: set.owner,
 })
 
@@ -142,6 +143,20 @@ describe("prepareStackIdentity", () => {
     const first = await snapshot(set)
     await prepareStackIdentity(identity(set))
     expect(await snapshot(set)).toEqual(first)
+  }, 120_000)
+
+  it("refuses an auth DSN of another role and changes nothing", async () => {
+    const set = await cluster("who")
+    const migrate = vi.fn(noop)
+    await expect(
+      prepareStackIdentity({
+        ...identity(set),
+        authUrl: roleUrl(set, set.owner),
+        migrate,
+      })
+    ).rejects.toThrow("does not log in as the auth role")
+    expect(migrate).not.toHaveBeenCalled()
+    expect(await grants(set)).toEqual({ usage: false, trigger: null })
   }, 120_000)
 
   it("leaves no grants when the migration fails, cold and warm", async () => {

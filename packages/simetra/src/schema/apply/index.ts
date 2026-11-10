@@ -163,7 +163,6 @@ export {
   type RehearsalProof,
 } from "./execute"
 export {
-  CLUSTER_TRANSACTION_PRELUDE,
   clusterRoleViolation,
   ensurePostgresCluster,
   explicitConnectDatabases,

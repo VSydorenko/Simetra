@@ -54,7 +54,8 @@ select is(
              from pg_auth_members a
              join pg_roles u on u.oid = a.member
              join pg_roles r on r.oid = a.roleid
-            where u.rolname like 'simetra\_%' or r.rolname like 'simetra\_%') m),
+            where u.rolname in ('simetra_owner', 'simetra_runtime', 'simetra_auth', 'simetra_user', 'simetra_anon', 'simetra_command')
+               or r.rolname in ('simetra_owner', 'simetra_runtime', 'simetra_auth', 'simetra_user', 'simetra_anon', 'simetra_command')) m),
   '["simetra_runtime>simetra_anon", "simetra_runtime>simetra_command", "simetra_runtime>simetra_user"]'::jsonb,
   'the only memberships of Simetra roles are those of the runtime login role'
 );

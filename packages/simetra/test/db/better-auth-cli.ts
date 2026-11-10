@@ -6,7 +6,10 @@ import { realpathSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import pg from "pg"
 import { PROVIDER_OWNER_ROLES, quoteIdent } from "simetra/model"
-import { CLUSTER_TRANSACTION_PRELUDE } from "simetra/schema"
+import {
+  CLUSTER_TRANSACTION_PRELUDE,
+  postgresClusterSet,
+} from "../../src/schema/apply/postgres-cluster"
 import { migrateBetterAuth } from "./better-auth"
 
 /** Env variable with the superuser DSN of the database `simetra`. */
@@ -57,9 +60,15 @@ const TABLE_FACTS = `SELECT c.relkind::text AS kind, o.rolname::text AS owner
 export async function prepareStackIdentity(o: {
   superuserUrl: string
   authUrl: string
+  /** Роль входу Better Auth з даних профілю; DSN мусить відкривати саме її. */
+  auth: string
   owner: string
   migrate?: (authUrl: string) => Promise<void>
 }): Promise<void> {
+  if (decodeURIComponent(new URL(o.authUrl).username) !== o.auth)
+    throw new Error(
+      "The auth DSN does not log in as the auth role of the profile; nothing was changed"
+    )
   const owner = quoteIdent(o.owner)
   await superuserTransaction(o.superuserUrl, async (client) => {
     // REVOKE на відсутню схему чи таблицю — помилка: на свіжій базі відкликати нічого
@@ -73,13 +82,12 @@ export async function prepareStackIdentity(o: {
       await client.query(`REVOKE TRIGGER ON better_auth."user" FROM ${owner}`)
   })
   await (o.migrate ?? migrateBetterAuth)(o.authUrl)
-  const auth = decodeURIComponent(new URL(o.authUrl).username)
   await superuserTransaction(o.superuserUrl, async (client) => {
     const { rows } = await client.query<{ kind: string; owner: string }>(
       TABLE_FACTS
     )
     const table = rows[0]
-    if (table?.kind !== "r" || table.owner !== auth)
+    if (table?.kind !== "r" || table.owner !== o.auth)
       throw new Error(
         'better_auth."user" must be a table owned by the auth role; no grants were given'
       )
@@ -111,6 +119,7 @@ if (invokedAsCommand()) {
   prepareStackIdentity({
     superuserUrl: requiredEnv(SUPERUSER_URL_ENV),
     authUrl: requiredEnv(AUTH_URL_ENV),
+    auth: postgresClusterSet("simetra").auth,
     owner: PROVIDER_OWNER_ROLES.postgres,
   }).catch((error: unknown) => {
     console.error(

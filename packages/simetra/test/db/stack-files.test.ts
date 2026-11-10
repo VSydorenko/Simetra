@@ -16,7 +16,9 @@ import {
 } from "simetra/model"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import {
+  betterAuthCommand,
   POSTGRES_LOCK_FILE,
+  POSTGRES_PSQL_ARGS,
   withStackLock,
 } from "../../../../scripts/db-stack.mjs"
 import { TEST_STACKS } from "./profile"
@@ -200,10 +202,29 @@ describe("Simetra identity of the postgres stack", () => {
     })
   })
 
-  it("dev-secrets.env holds a password for each login role", () => {
-    const secrets = read("dev-secrets.env")
+  it("login-secrets.env holds a password for each login role", () => {
+    const secrets = read("login-secrets.env")
     for (const name of secretNames)
       expect(secrets).toMatch(new RegExp(`^${name}=\\S+$`, "m"))
+  })
+
+  // Усе з `env_file` потрапляє в середовище контейнера
+  it("dev-secrets.env holds no login password and compose reads only GARAGE_ keys", () => {
+    const garage = read("dev-secrets.env")
+    for (const name of secretNames) expect(garage).not.toContain(name)
+    const files = [
+      ...read("compose.yaml").matchAll(/^\s*env_file:\s*(\S+)\s*$/gm),
+    ].map((m) => m[1]!)
+    expect(files.length).toBeGreaterThan(0)
+    for (const file of files) {
+      expect(file).not.toContain("login-secrets")
+      const keys = [...read(file).matchAll(/^([A-Z0-9_]+)=/gm)].map(
+        (m) => m[1]!
+      )
+      expect(keys.length).toBeGreaterThan(0)
+      for (const key of keys) expect(key).toMatch(/^GARAGE_/)
+    }
+    expect(read("compose.yaml")).not.toContain("login-secrets")
   })
 
   // Імена в скрипті без залежностей — літерали; тест тримає їх рівними даним T0
@@ -223,14 +244,31 @@ describe("Simetra identity of the postgres stack", () => {
       "dev-environment.sql",
       '"roles"',
       "ALTER ROLE",
-      "better-auth-cli.ts",
+      "betterAuthCommand(",
     ].map((marker) => body.indexOf(marker))
     expect(order.every((i) => i >= 0)).toBe(true)
     expect([...order].sort((a, b) => a - b)).toEqual(order)
   })
 
   it("passes passwords through stdin and DSNs through the environment, never argv", () => {
-    expect(script).not.toMatch(/"-v",\s*`/)
+    const secrets = Object.fromEntries(
+      [...read("login-secrets.env").matchAll(/^([A-Z0-9_]+)=(\S+)$/gm)].map(
+        (m) => [m[1]!, m[2]!]
+      )
+    )
+    const passwords = secretNames.map((name) => secrets[name]!)
+    expect(passwords).toHaveLength(secretNames.length)
+    const step = betterAuthCommand(secrets, "postgresql://postgres@h/simetra")
+    // argv у `ps`: ні psql, ні дочірній процес Better Auth не несуть паролів чи DSN
+    const argvs = [POSTGRES_PSQL_ARGS, step.args]
+    for (const argv of argvs)
+      for (const arg of argv) {
+        for (const password of passwords) expect(arg).not.toContain(password)
+        expect(arg).not.toMatch(/PASSWORD|postgresql:\/\/|login-secrets/)
+      }
+    expect(step.env.SIMETRA_AUTH_URL).toContain(
+      secrets.SIMETRA_AUTH_DEV_PASSWORD
+    )
     expect(script).toContain("SIMETRA_SUPERUSER_URL")
     expect(script).toContain("SIMETRA_AUTH_URL")
   })
