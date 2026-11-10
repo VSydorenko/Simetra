@@ -207,7 +207,7 @@ pnpm --filter <pkg> lint
 pnpm format:check && pnpm lint && pnpm typecheck && pnpm test   # before a PR
 pnpm format:fix                           # fixes what format:check reports
 
-python3 scripts/check-doc-anchors.py      # dead paths / § pointers in docs
+doc anchors && doc lint                   # dead paths, § pointers, corpus form (agent-kit)
 pnpm metadata:check                       # simetra compile --all via packages/designer/bin; pre-commit runs it with --staged
 pnpm build:packages && pnpm test:packaging # build the npm packages, then test the packed tarballs in a scratch consumer project
 
@@ -322,7 +322,7 @@ bodies still follow the rules.
 5. **Anchors without line numbers or SHAs.** Point to a file, not
    `file.ts:171`. A code example only when the rule is unclear without it — a
    short shape with placeholders plus `Reference: <path>`. After writing an
-   anchor, run `scripts/check-doc-anchors.py`.
+   anchor, run `doc anchors`.
 6. **Three layers, each fact in one of them.** Specs answer **what and why**
    (model, invariants, boundaries, trade-offs). Skills (`.agents/skills/<name>/`)
    answer **how to do a task** (trigger, branches, steps, checklist) and link to

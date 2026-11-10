@@ -25,8 +25,6 @@
       "Bash(gh pr list*)",
       "Bash(gh run view*)",
       "Bash(gh run list*)",
-      "Bash(python3 scripts/check-doc-anchors.py*)",
-      "Bash(./scripts/check-doc-anchors.py*)",
       "mcp__codebase-memory-mcp__search_graph",
       "mcp__codebase-memory-mcp__trace_path",
       "mcp__codebase-memory-mcp__get_code_snippet",

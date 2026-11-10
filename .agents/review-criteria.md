@@ -14,10 +14,9 @@ the skill's; this file holds only what is specific to Simetra.
   rules apply and when prototype rules do. Judging the prototype by the target
   (the prototype generator not emitting RLS) is not a finding; new target-tier
   code copying a prototype convention the spec replaced is one.
-- **`drift` starts with the guards.** Run `./scripts/check-doc-anchors.py`
-  (dead paths, `§` pointers, duplicated blocks, skill limits) and
-  `doc anchors`; then look for what they cannot see: claims that lie rather
-  than point.
+- **`drift` starts with the guards.** Run `doc anchors` (dead paths, `§`
+  pointers) and `doc lint` (duplicated blocks, skill limits); then look for
+  what they cannot see: claims that lie rather than point.
 - **`data-layer` here covers** metamodel invariants (Zod as source of truth,
   standard attributes, the Ref model, naming), generated DDL/RLS/triggers/
   grants, identifier and literal escaping, identity and rename safety, write
