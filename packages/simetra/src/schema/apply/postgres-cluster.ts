@@ -20,6 +20,7 @@ import {
   type PlatformRoleSet,
 } from "./platform-roles"
 import type { ApplyDatabase, ApplyTransaction } from "./port"
+import { serverVersionRefusal } from "./server"
 
 /**
  * Names that `ensurePostgresCluster` prepares. `roles` builds it from the
@@ -257,6 +258,8 @@ export interface DatabaseRow extends TemplateRow {
   localeProvider: string
   /** `datlocale`, а для `libc` (там його немає) — `datcollate`. */
   locale: string
+  /** `daticurules`: власні правила ICU поверх локалі; `null` — їх немає. */
+  icuRules: string | null
 }
 
 // Колляція баз, які створює `roles`: одне джерело для `CREATE DATABASE` і
@@ -267,15 +270,19 @@ const localeName = (provider: string, locale: string) => `${provider} ${locale}`
 /**
  * Інша колляція наявної бази, ніж та, з якою `roles` її створив би:
  * `undefined` — збіг. Перестворити базу платформа не може без втрати даних
- * (колляцію бази не змінює `ALTER`), тож це відмова, а не крок.
+ * (колляцію бази не змінює `ALTER`), тож це відмова, а не крок. Правила ICU
+ * теж міняють порядок: та сама локаль з ними сортує не як колатор клієнта.
  */
 export function databaseLocaleViolation(
-  found: Pick<DatabaseRow, "localeProvider" | "locale">
+  found: Pick<DatabaseRow, "localeProvider" | "locale" | "icuRules">
 ): string | undefined {
-  return found.localeProvider === DATABASE_LOCALE.provider &&
-    found.locale === DATABASE_LOCALE.locale
-    ? undefined
-    : localeName(found.localeProvider, found.locale)
+  const name = localeName(found.localeProvider, found.locale)
+  if (
+    found.localeProvider !== DATABASE_LOCALE.provider ||
+    found.locale !== DATABASE_LOCALE.locale
+  )
+    return name
+  return found.icuRules === null ? undefined : `${name} with ICU rules`
 }
 
 /**
@@ -533,7 +540,8 @@ async function readDatabases(
       "  CASE d.datlocprovider WHEN 'i' THEN 'icu' WHEN 'c' THEN 'libc'",
       "    WHEN 'b' THEN 'builtin' ELSE d.datlocprovider::text END",
       '    AS "localeProvider",',
-      "  COALESCE(d.datlocale, d.datcollate)::text AS locale",
+      "  COALESCE(d.datlocale, d.datcollate)::text AS locale,",
+      '  d.daticurules::text AS "icuRules"',
       "FROM pg_catalog.pg_database d JOIN pg_catalog.pg_roles o ON o.oid = d.datdba",
       "WHERE d.datname = ANY($1::text[])",
     ].join("\n"),
@@ -982,6 +990,11 @@ export async function ensurePostgresCluster(
       async (maintenance): Promise<PostgresClusterResult> => {
         const denied = await enterSession(maintenance)
         if (denied !== undefined) return { ok: false, error: denied }
+        // До фази читання: `datlocale` є лише з Postgres 17, і старіший
+        // сервер дав би сирий `42703` замість зрозумілої відмови
+        const unsupported = await serverVersionRefusal(maintenance)
+        if (unsupported !== undefined)
+          return { ok: false, error: [unsupported] }
         await maintenance.query(
           `SELECT pg_catalog.pg_advisory_xact_lock(${CLUSTER_ADVISORY_LOCK})`
         )

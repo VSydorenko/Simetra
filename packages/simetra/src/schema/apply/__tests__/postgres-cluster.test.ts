@@ -357,7 +357,10 @@ describe("templateState", () => {
  * Порт-пастка: відповідає на запити за шматком SQL і записує все, що йшло.
  * Адреса з'єднання тут — його назва.
  */
-function trapPort(answers: (sql: string) => Record<string, unknown>[]) {
+function trapPort(
+  answers: (sql: string) => Record<string, unknown>[],
+  version = { num: 170000, version: "17.0" }
+) {
   const calls: {
     kind: "transaction" | "statement"
     db: string
@@ -376,7 +379,7 @@ function trapPort(answers: (sql: string) => Record<string, unknown>[]) {
       return fn({
         query: (async (sql: string) => {
           call.sql.push(sql)
-          return answers(sql)
+          return sql.includes("server_version_num") ? [version] : answers(sql)
         }) as never,
         extract: () => Promise.reject(new Error("no extract")),
       })
@@ -403,30 +406,31 @@ const allRoleNames = [
   ...set.roles.login.map((l) => l.name),
 ]
 
+const icu = { localeProvider: "icu", locale: "en-US", icuRules: null }
+
 describe("databaseLocaleViolation", () => {
   it.each([
-    ["ICU en-US", { localeProvider: "icu", locale: "en-US" }, undefined],
+    ["ICU en-US", { ...icu }, undefined],
     [
       "libc of the same language",
-      { localeProvider: "libc", locale: "en_US.utf8" },
+      { ...icu, localeProvider: "libc", locale: "en_US.utf8" },
       "libc en_US.utf8",
     ],
-    [
-      "ICU of another locale",
-      { localeProvider: "icu", locale: "uk-UA" },
-      "icu uk-UA",
-    ],
+    ["ICU of another locale", { ...icu, locale: "uk-UA" }, "icu uk-UA"],
     [
       "the builtin provider",
-      { localeProvider: "builtin", locale: "C.UTF-8" },
+      { ...icu, localeProvider: "builtin", locale: "C.UTF-8" },
       "builtin C.UTF-8",
+    ],
+    [
+      "ICU en-US with custom rules",
+      { ...icu, icuRules: "&a < b" },
+      "icu en-US with ICU rules",
     ],
   ] as const)("%s", (_title, found, expected) => {
     expect(databaseLocaleViolation(found)).toBe(expected)
   })
 })
-
-const icu = { localeProvider: "icu", locale: "en-US" }
 
 /** Рядок `pg_database`, на який відповідає порт-пастка. */
 const databaseRow = (
@@ -533,6 +537,22 @@ describe("ensurePostgresCluster", () => {
       expect(CLUSTER_TRANSACTION_PRELUDE).toContain(`SET LOCAL ${guc} = 0`)
     for (const sql of CLUSTER_TRANSACTION_PRELUDE)
       expect(sql.startsWith("SET LOCAL ")).toBe(true)
+  })
+
+  it("refuses a server older than the platform minimum before it reads the databases", async () => {
+    const { dbs, calls } = trapPort(
+      (sql) =>
+        sql.includes("session_user") ? [{ ok: true, database: "x" }] : [],
+      { num: 160004, version: "16.4" }
+    )
+    const result = await ensurePostgresCluster(dbs, conns, set)
+    expect(result).toMatchObject({
+      ok: false,
+      error: [{ code: "apply.server-unsupported" }],
+    })
+    expect(calls.filter((c) => c.kind === "statement")).toEqual([])
+    expect(calls.filter((c) => c.end === "commit")).toEqual([])
+    expect(calls.flatMap((c) => c.sql).join("\n")).not.toContain("datlocale")
   })
 
   it("holds the cluster lock in the reading transaction before any read", async () => {
