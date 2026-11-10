@@ -400,7 +400,7 @@ describe("plan artifact", () => {
     expect(parsed.diagnostic.message).toMatch(
       /plan format 1 is not supported.*rebuild the plan/i
     )
-    expect(PLAN_FORMAT).toBe(7)
+    expect(PLAN_FORMAT).toBe(8)
   })
 
   it("asks to rebuild a plan of the second format", async () => {
@@ -483,6 +483,58 @@ describe("plan artifact", () => {
         params: { found: 6, supported: PLAN_FORMAT },
       },
     })
+  })
+
+  it("asks to rebuild a plan of the seventh format", async () => {
+    // Сьомий формат не знав кроків заповнення: його раннер їх не виконав би
+    const artifact = await stampPlan(draft())
+    const old: Record<string, unknown> = { ...artifact, format: 7 }
+    expect(parsePlan(JSON.stringify(old))).toMatchObject({
+      ok: false,
+      reason: "format",
+      diagnostic: {
+        code: "apply.plan-format",
+        params: { found: 7, supported: PLAN_FORMAT },
+      },
+    })
+  })
+
+  it("round-trips a backfill step and covers its facts with the hash", async () => {
+    const base = draft()
+    const backfill = {
+      ...base.steps[0]!,
+      id: "s2",
+      origin: "backfill" as const,
+      sql: 'UPDATE "app"."t" SET "c" = DEFAULT WHERE "c" IS NULL',
+      class: "dataStep" as const,
+      destroys: [],
+      destroyed: [],
+      consumes: [],
+      consumed: [],
+      dataLoss: false,
+      backfill: {
+        table: { schema: "app", name: "t" },
+        column: "c",
+        rowsAtPlan: 3,
+        permission: true,
+        default: "''::text",
+      },
+    }
+    const artifact = await stampPlan({
+      ...base,
+      steps: [...base.steps, backfill],
+    })
+    const parsed = parsePlan(serializePlan(artifact))
+    if (!parsed.ok) throw new Error(parsed.message)
+    expect(parsed.artifact).toEqual(artifact)
+    const other = await stampPlan({
+      ...base,
+      steps: [
+        ...base.steps,
+        { ...backfill, backfill: { ...backfill.backfill, rowsAtPlan: 4 } },
+      ],
+    })
+    expect(other.planHash).not.toBe(artifact.planHash)
   })
 
   it("round-trips a versions step", async () => {

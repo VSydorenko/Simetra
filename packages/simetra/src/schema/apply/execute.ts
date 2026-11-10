@@ -369,7 +369,14 @@ export async function executePlan(
   // наміру після кроку двигуна пішов би під преамбулою. Так кроки будують
   // `analyseOnClone` і збір середовища, тож інший порядок — зламаний конвеєр
   // (спека промоції §7.2)
-  const ranks = plan.steps.map((s) => ORIGIN_ORDER.indexOf(s.origin))
+  // Кроки заповнення виконує блок двигуна (задача раннера); доки його немає,
+  // план із ними — відмова, а не мовчки пропущені кроки
+  if (plan.steps.some((s) => s.origin === "backfill"))
+    throw new Error("this runner does not execute backfill steps")
+  // Ранг заповнення — ранг двигуна: крок стоїть усередині блоку двигуна
+  const ranks = plan.steps.map((s) =>
+    ORIGIN_ORDER.indexOf(s.origin === "backfill" ? "engine" : s.origin)
+  )
   if (ranks.some((rank, i) => i > 0 && rank < ranks[i - 1]!))
     throw new Error(
       `plan steps are out of origin order: ${ORIGIN_ORDER.join(", ")}`

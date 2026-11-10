@@ -48,10 +48,10 @@ import { STEP_CLASSES, type PermissionItem, type PlanStep } from "./steps"
  * факти сервера й голову ledger цілі (спека промоції §8), сигнатури функцій
  * платформи (`platformFunctions`) — раннер виключає їх з `plpgsql_check` і
  * переліку сліпих — кроки копій носіїв (`origin: "carriers"`) та блок `versions`
- * (засів послідовності версій і епоха): раннер старішого формату не знав би
- * їхніх блоків.
+ * (засів послідовності версій і епоха), кроки заповнення перед `NOT NULL`
+ * (`origin: "backfill"`): раннер старішого формату не знав би їхніх блоків.
  */
-export const PLAN_FORMAT = 7
+export const PLAN_FORMAT = 8
 
 /**
  * Таблиця одиниці, чиї дані план зберігає (спека промоції §7.2): імена до й
@@ -351,7 +351,14 @@ const objectRefSchema = z.strictObject({
 
 const stepSchema = z.strictObject({
   id: z.string(),
-  origin: z.enum(["intent", "engine", "carriers", "versions", "environment"]),
+  origin: z.enum([
+    "intent",
+    "engine",
+    "backfill",
+    "carriers",
+    "versions",
+    "environment",
+  ]),
   sql: z.string(),
   verb: z.enum(ENGINE_ACTION_VERBS),
   class: z.enum(STEP_CLASSES),
@@ -371,6 +378,15 @@ const stepSchema = z.strictObject({
   rewriteRisk: z.boolean(),
   guards: z.array(z.string()),
   triggers: dataTriggers.optional(),
+  backfill: z
+    .strictObject({
+      table: z.strictObject({ schema: z.string(), name: z.string() }),
+      column: z.string(),
+      rowsAtPlan: z.number().int().nonnegative(),
+      permission: z.boolean(),
+      default: z.string(),
+    })
+    .optional(),
 })
 
 /**

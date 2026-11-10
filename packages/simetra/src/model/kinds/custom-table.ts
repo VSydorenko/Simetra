@@ -154,6 +154,7 @@ export const customTableKind: KindDefinition = {
   rowLevelSecurity: "declared",
   scope: "required",
   declared: true,
+  consumerData: true,
   kindLabel: true,
   columnFields: ["columns"],
   valueElements: false,
