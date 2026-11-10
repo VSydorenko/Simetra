@@ -51,6 +51,12 @@ export const catalogEntryAttributeSchema = z.strictObject({
   type: z.enum([...LOGICAL_TYPES, "Raw"]),
   array: z.literal(true).optional(),
   required: z.boolean(),
+  /**
+   * Колонка NOT NULL (факт фізики, не «обов'язкова при вставці»): `required`
+   * цього не каже, бо колонка з DEFAULT не обов'язкова, але NULL не вміщає.
+   * Є лише коли істина — тим самим ключем рядка, що й `generated`.
+   */
+  notNull: z.literal(true).optional(),
   maxLength: z.int().min(1).optional(),
   precision: z.int().min(1).optional(),
   scale: z.int().min(0).optional(),

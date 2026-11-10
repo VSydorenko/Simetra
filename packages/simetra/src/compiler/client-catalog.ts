@@ -25,6 +25,7 @@ const attributeOf = (a: RuntimeAttribute): CatalogEntryAttribute => ({
   type: a.type,
   ...present("array", a.array),
   required: a.required,
+  ...present("notNull", a.notNull),
   ...present("maxLength", a.maxLength),
   ...present("precision", a.precision),
   ...present("scale", a.scale),

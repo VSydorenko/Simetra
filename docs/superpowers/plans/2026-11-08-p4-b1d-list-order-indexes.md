@@ -47,7 +47,10 @@ DB-тест плану на 100 000 рядках під справжнім RLS.
 | Р5 | Стандартний `description` довідника — `indexed: true` у реєстрі виду, лише коли реквізит є (`descriptionLength > 0`): типовий порядок списку довідника — за найменуванням | П2 §5 — новий абзац; П4-B Додаток А |
 | Р6 | Бенчмарк ТЧ на 1, 1 000, 2 500 і 5 000 рядках — у B1d, у проєкті `bench`; числа `TABULAR_LINES_MAX` у рядках і байтах у §7.1 П4-B і рядок B1d у §13 править лише B1d | П4-B §7.1, §13 |
 | Р7 | Заміна індексу на наявній базі — DROP старого й CREATE нового в транзакції застосування: `ACCESS EXCLUSIVE` на таблицю на час побудови (читання й запис стоять). Класифікатору план передає модель **живої** бази (`classifySteps(actions, live.extracted.model, …)` у `schema/apply/plan.ts`), де старий індекс відомий як неунікальний, тож його DROP — `catalogOnly`, а заміна йде без дозволу; класифікатор не змінюється. До релізу рішення не потрібне; примітка — у борг першої міграції споживача: замок на кожну перебудовану таблицю, кандидат — `CREATE INDEX CONCURRENTLY` і `DROP INDEX CONCURRENTLY` поза транзакцією | борг першої міграції (Task 8) |
-| Р8 | **Keyset-умова — з провідною межею** (рішення архітекторки 2026-11-08, форма (а); пласка — за безпековим аудитом раунду 2): для порядку `(c1, …, cn, key)` і курсора `(v1, …, vn, k)` — **пласка форма сталої глибини**: `c1 ≥ v1 AND OR[ c1 > v1, AND[c1 = v1, c2 > v2], …, AND[c1 = v1, …, cn = vn, key > k] ]` з дзеркальними знаками для `desc` (глибина за мірою `withinLimits` T0, де лист — рівень 1: 4, з гілками `nulls` — 5; листів O(n²)). Вкладена форма для `ORDER_BY_MAX` колонок перевищила б `FILTER_DEPTH_MAX`, а бюджет фільтра — страж від ворожого дерева, тож межі фільтра не змінюються; будує одна функція T0 `keysetFilter(orderBy, cursor)` — для ядра T4 і для тесту; вона заступає `keysetAfter` з B3-2 (`packages/simetra/src/data/store/filter.ts`: пласка форма з гілками `isNull`), додаючи провідну межу й напрям `before`, а `keysetAfter` видаляється в тій самій зміні (принцип 5 `AGENTS.md`). Межа `c1 ≥ v1` дає Index Cond діапазону, тож сторінка читає групу рівних `c1` і саму сторінку. **Відомі обмеження §6.4:** (1) межа стоїть лише на першій колонці, тож глибока сторінка всередині довгої групи рівних значень першої колонки (наприклад, статусу) читає групу через `Filter` — DB-тест вимірює це на першій колонці низької кардинальності й записує число в розділ «Виміри» цього плану без порогу (вимір для майбутнього варіанта з порівнянням кортежів); (2) nullable-колонка без провідної межі: для необов'язкового реквізиту з типовим `asc` (`nulls last`, а таких більшість) межа — `c1 ≥ v1 OR c1 IS NULL`, з якої Postgres межі індексу може не взяти; план вимірюється й записується, і в §6.4 це записано як правило за замовчуванням, а не як рідкісний випадок | П4-B §6.4 — форма keyset і обмеження (Task 0) |
+| Р8 | **Keyset-умова — з провідною межею** (рішення архітекторки 2026-11-08, форма (а); пласка — за безпековим аудитом раунду 2): для порядку `(c1, …, cn, key)` і курсора `(v1, …, vn, k)` — **пласка форма сталої глибини**: `c1 ≥ v1 AND OR[ c1 > v1, AND[c1 = v1, c2 > v2], …, AND[c1 = v1, …, cn = vn, key > k] ]` з дзеркальними знаками для `desc` (глибина за мірою `withinLimits` T0, де лист — рівень 1: 4, з гілками `nulls` — 5; листів O(n²)). Вкладена форма для `ORDER_BY_MAX` колонок перевищила б `FILTER_DEPTH_MAX`, а бюджет фільтра — страж від ворожого дерева, тож межі фільтра не змінюються; будує одна функція T0 `keysetFilter(orderBy, cursor, keyName, nullable)` — для ядра T4 і для тесту; вона заступає `keysetAfter` з B3-2 (`packages/simetra/src/data/store/filter.ts`: пласка форма з гілками `isNull`), додаючи провідну межу й напрям `before`, а `keysetAfter` видаляється в тій самій зміні (принцип 5 `AGENTS.md`). Межа `c1 ≥ v1` дає Index Cond діапазону, тож сторінка читає групу рівних `c1` і саму сторінку. **Відомі обмеження §6.4:** (1) межа стоїть лише на першій колонці, тож глибока сторінка всередині довгої групи рівних значень першої колонки (наприклад, статусу) читає групу через `Filter` — DB-тест вимірює це на першій колонці низької кардинальності й записує число в розділ «Виміри» цього плану без порогу (вимір для майбутнього варіанта з порівнянням кортежів); (2) nullable-колонка без провідної межі: для необов'язкового реквізиту з типовим `asc` (`nulls last`, а таких більшість) межа — `c1 ≥ v1 OR c1 IS NULL`, з якої Postgres межі індексу може не взяти; план вимірюється й записується, і в §6.4 це записано як правило за замовчуванням, а не як рідкісний випадок | П4-B §6.4 — форма keyset і обмеження (Task 0) |
+| Р9 | **Найменування довідника — `NOT NULL DEFAULT ''`** (рішення архітекторки 2026-11-09, варіант (б)): колонку `description`, яку створює платформа, реєстр виду робить NOT NULL з типовим `''`, тож межа keyset за найменуванням — діапазон індексу, як для `a`. Прийняті таблиці не змінюються: nullability — з факту колонки. `nullableOf` (T4) читає новий факт каталогу `notNull`, а не `required` («обов'язковий при вставці»; NOT NULL з DEFAULT не обов'язковий, але NULL не вміщає). Наявна база з `NULL`-рядками: рушій не робить backfill перед `SET NOT NULL` (`validationScan`), тож застосування дає `apply.step-failed` 23502, як для будь-якого реквізиту, що став обов'язковим; загальний крок backfill — окремий блок (Р11). **Команда:** явний `null` для поля з `notNull` і типовим значенням відхиляє T0 `encodeAttributes` як `command.invalid` зі шляхом (на вставці й оновленні; загальне за фактом `notNull`), пропущене значення лишає типове. **Промоція** (варіант (а)): після неї таблиця — платформний довідник, `description` NOT NULL за реєстром; nullable джерело, змаплене на `description`, без заповнення дає `promote.fill-missing`, із заповненням мапінгу — проходить крок даних | П2 §5 (абзац індексів), спека промоції §4 (рядок про стандартні реквізити; приклад послаблення без найменування) і П4-B Додаток А (рядок «спека П2 \| індекси») — внесено (Task 4b) |
+| Р10 | **Відхилення виконання (внесено в Task 8).** (1) `keysetFilter` має параметри `keyName` (ім'я ключа) і `nullable` (предикат nullability реквізиту): гілки `isNull` — лише для nullable-колонок, інакше межа обов'язкової колонки не діапазон індексу. (2) Критерії Task 5: кінцеві сторінки можуть мати Sort лише над входом ≤ `limit` + група + 1 і без Seq Scan; порядок за ключем читає UNIQUE `(org_id, id)`; фільтр скоупу — явна рівність у запиті. (3) Файл Task 6 лежить у `packages/designer/src/schema-engine/__tests__/` | (1) П4-B §6.4 — внесено; (2), (3) немає |
+| Р11 | Заповнення перед `SET NOT NULL` (Р9) — блок виправлення рушія (`feat/apply-not-null-backfill`), не B1d | немає |
 
 ## Global Constraints
 
@@ -86,9 +89,9 @@ DB-тест плану на 100 000 рядках під справжнім RLS.
 - Modify: `docs/superpowers/plans/2026-11-08-p4-b3-3-window-public-api.md` — один рядок у Global Constraints: «keyset-умову будує `keysetFilter` T0 (B1d); B3-3 стартує після мерджу задачі з `keysetFilter` або бере її першою задачею, якщо B1d ще не в `main`» (рішення архітекторки 2026-11-08).
 - Modify: `docs/superpowers/specs/2026-09-28-p2-metamodel-compiler-design.md` §5 — новий абзац після фізики стандартних реквізитів: правило пошукового індексу (Р1, Р1a, Р2) і `description` довідника (Р5)
 
-- [ ] **Step 1:** `.agents/skills/codebase-research/scripts/orient --plan docs/superpowers/plans/2026-11-08-p4-b1d-list-order-indexes.md`; розбіжності якорів — у звіт архітекторці до старту. Перевірити, чи B3-3 у `main` (для Task 1).
-- [ ] **Step 2:** правки спек; `python3 scripts/check-doc-anchors.py` і `pnpm format:check` — зелені.
-- [ ] **Step 3: Commit.** `docs(spec): B1d — індекс порядку списку, форма keyset, description довідника`
+- [x] **Step 1:** `.agents/skills/codebase-research/scripts/orient --plan docs/superpowers/plans/2026-11-08-p4-b1d-list-order-indexes.md`; розбіжності якорів — у звіт архітекторці до старту. Перевірити, чи B3-3 у `main` (для Task 1).
+- [x] **Step 2:** правки спек; `python3 scripts/check-doc-anchors.py` і `pnpm format:check` — зелені.
+- [x] **Step 3: Commit.** `docs(spec): B1d — індекс порядку списку, форма keyset, description довідника`
 
 ## B1d-a. T0 і T1
 
@@ -99,12 +102,12 @@ DB-тест плану на 100 000 рядках під справжнім RLS.
 - Modify: `packages/simetra/src/model/runtime/index.ts`; `packages/simetra/src/data/store/readers.ts` і `forms.ts` — виклики `keysetAfter` → `keysetFilter`; `forms.ts` перевіряє бюджет фільтра вікна через `keysetNodesMax(orderBy)` (найгірший випадок), а не зразком курсора `"x"` з напрямом «після»; `packages/simetra/src/data/store/filter.ts` — видалити `keysetAfter` і його тести (кейси переносяться в `keyset.test.ts`)
 
 **Interfaces:**
-- Produces: `keysetNodesMax(orderBy: OrderBy): number` — найбільше число вузлів keyset-умови цього порядку за напрямами `after`/`before`, за `NULL` і не-`NULL` у курсорі (спека §6.4: «фільтр користувача з найбільшою keyset-умовою цього `orderBy`»); `keysetFilter(orderBy: OrderBy, cursor: KeysetCursor): Filter`, де `KeysetCursor = { values: Record<string, JsonValue | null>; key: string; direction: "after" | "before" }`; `orderBy` — логічний порядок запиту T0 без ключа, ключ — останній член неявно, як у `orderClause` T3; результат — фільтр-дерево T0 форми Р8.
+- Produces: `keysetNodesMax(orderBy: OrderBy): number` — найбільше число вузлів keyset-умови цього порядку за напрямами `after`/`before`, за `NULL` і не-`NULL` у курсорі (спека §6.4: «фільтр користувача з найбільшою keyset-умовою цього `orderBy`»); `keysetFilter(orderBy: OrderBy, cursor: KeysetCursor, keyName: string, nullable: (attribute: string) => boolean): Filter`, де `KeysetCursor = { values: Record<string, JsonValue | null>; key: string; direction: "after" | "before" }`; `orderBy` — логічний порядок запиту T0 без ключа, ключ — останній член неявно, як у `orderClause` T3; результат — фільтр-дерево T0 форми Р8.
 
-- [ ] **Step 1: Failing test** (`keyset.test.ts`, таблицею): одна, дві й три колонки; змішані напрямки (`a ASC, b DESC`); `nulls first` і `nulls last`; `NULL` у курсорі; `after` і `before`. Очікування — точне фільтр-дерево, напр. `(a nulls first)` після `(5, k)` — `a ≥ 5 AND OR[a > 5, AND[a = 5, key > k]]`; для типового `a asc` (`nulls last`) — `OR[a ≥ 5, a isNull] AND OR[OR[a > 5, a isNull], AND[a = 5, key > k]]`. Глибина за мірою `withinLimits` T0 ≤ 5 для `ORDER_BY_MAX` колонок з гілками `nulls`. `keysetNodesMax(orderBy)` дорівнює максимуму, знайденому перебором `keysetFilter` за напрямами, `nulls` кожної колонки й `NULL`/не-`NULL` курсора, для кожного порядку таблиці й для `ORDER_BY_MAX` колонок. Для кожного такого порядку: `and: [where, keyset]`, де `where` має глибину `FILTER_DEPTH_MAX − 1` і `FILTER_NODES_MAX − keysetNodesMax(orderBy) − 1` вузлів, проходить `withinLimits` для найгіршої keyset-умови, а на вузол більше — ні; `where` глибини `FILTER_DEPTH_MAX` разом з keyset — відмова на відкритті вікна з `path` `where` (§6.4).
-- [ ] **Step 2: Failing test** (`keyset-equivalence.test.ts`): для 500 випадкових рядків з колонками `Integer` і `DateTime` (без рядкових: колатор клієнта й `COLLATE "C"` бази розходяться), з `NULL` і повторами першої колонки, і кожного порядку таблиці Step 1 обчислювач фільтра T4 над `keysetFilter` пропускає рівно ті рядки, що йдуть після (до) курсора за компаратором `full` з B3-2.
-- [ ] **Step 3:** реалізація; виклики ядра переведено, `keysetAfter` видалено; `pnpm --filter simetra test keyset` — PASS (обидва файли); `pnpm --filter simetra test data` — зелені (вікно й читачі на новій функції).
-- [ ] **Step 4: Commit.** `feat(model): keyset-умова з провідною межею`
+- [x] **Step 1: Failing test** (`keyset.test.ts`, таблицею): одна, дві й три колонки; змішані напрямки (`a ASC, b DESC`); `nulls first` і `nulls last`; `NULL` у курсорі; `after` і `before`. Очікування — точне фільтр-дерево, напр. `(a nulls first)` після `(5, k)` — `a ≥ 5 AND OR[a > 5, AND[a = 5, key > k]]`; для типового `a asc` (`nulls last`) — `OR[a ≥ 5, a isNull] AND OR[OR[a > 5, a isNull], AND[a = 5, key > k]]`. Глибина за мірою `withinLimits` T0 ≤ 5 для `ORDER_BY_MAX` колонок з гілками `nulls`. `keysetNodesMax(orderBy)` дорівнює максимуму, знайденому перебором `keysetFilter` за напрямами, `nulls` кожної колонки й `NULL`/не-`NULL` курсора, для кожного порядку таблиці й для `ORDER_BY_MAX` колонок. Для кожного такого порядку: `and: [where, keyset]`, де `where` має глибину `FILTER_DEPTH_MAX − 1` і `FILTER_NODES_MAX − keysetNodesMax(orderBy) − 1` вузлів, проходить `withinLimits` для найгіршої keyset-умови, а на вузол більше — ні; `where` глибини `FILTER_DEPTH_MAX` разом з keyset — відмова на відкритті вікна з `path` `where` (§6.4).
+- [x] **Step 2: Failing test** (`keyset-equivalence.test.ts`): для 500 випадкових рядків з колонками `Integer` і `DateTime` (без рядкових: колатор клієнта й `COLLATE "C"` бази розходяться), з `NULL` і повторами першої колонки, і кожного порядку таблиці Step 1 обчислювач фільтра T4 над `keysetFilter` пропускає рівно ті рядки, що йдуть після (до) курсора за компаратором `full` з B3-2.
+- [x] **Step 3:** реалізація; виклики ядра переведено, `keysetAfter` видалено; `pnpm --filter simetra test keyset` — PASS (обидва файли); `pnpm --filter simetra test data` — зелені (вікно й читачі на новій функції).
+- [x] **Step 4: Commit.** `feat(model): keyset-умова з провідною межею`
 
 ### Task 2: Мета похідного індексу
 
@@ -114,8 +117,8 @@ DB-тест плану на 100 000 рядках під справжнім RLS.
 **Interfaces:**
 - Produces: `interface DerivedIndex { purpose: "search" | "foreignKey" | "copy" | "structural"; keys: DerivedIndexKey[] }`; `addField` — `foreignKey` для FK, `search` для `indexed`; FK `Ref` з `indexed: true` — `search` (Р1); `addCompositeIndexes` — `search`; копія носія — `copy`; рух і підсумки регістра — `structural`. Рядок `indexed: column.indexed === true && target.form !== "foreignKey"` у стандартних колонках не змінюється.
 
-- [ ] **Step 1:** рефакторинг без зміни виходу: `pnpm --filter simetra test compiler schema` — зелені.
-- [ ] **Step 2: Commit.** `refactor(compiler): мета похідного індексу`
+- [x] **Step 1:** рефакторинг без зміни виходу: `pnpm --filter simetra test compiler schema` — зелені.
+- [x] **Step 2: Commit.** `refactor(compiler): мета похідного індексу`
 
 ### Task 3: Ключ останнім і правило покриття
 
@@ -124,7 +127,7 @@ DB-тест плану на 100 000 рядках під справжнім RLS.
 - Test: `packages/simetra/src/compiler/__tests__/stage-model-indexes.test.ts` (новий, table-driven, білдери з `fixtures/`)
 - Modify: тести й фікстури з формою індексів — `stage-model.test.ts`, `stage-scope-model.test.ts`, `stage-registers.test.ts`, `stage-integrity.test.ts`, `sql-namespaces.test.ts`, `creation-order.test.ts`, `rights-admin-tables.test.ts`, `fixtures/kitchen-sink.ts`; `schema/__tests__/{render-tables,desired-state,reverse-generate}.test.ts`, `schema/__tests__/fixtures/e1-fixtures.ts`; `schema/apply/__tests__/promotion-*.test.ts`; `test/db/diff.test.ts`; хеш-літерали, що залежать від форми (`custom-table-physics.test.ts`, `runtime-catalog.test.ts` — перевірити); designer — тести з `_idx`; `examples/reference/accepted/expected-diff.json` (і `service-accrual.sql`, якщо зачеплено)
 
-- [ ] **Step 1: Failing test** — очікувані `keys` індексів таблиці:
+- [x] **Step 1: Failing test** — очікувані `keys` індексів таблиці (рядок «складений, що містить `id`» прибрано — неможливо: `index.attribute-unknown`):
 
 | Кейс | Очікування |
 | --- | --- |
@@ -137,17 +140,16 @@ DB-тест плану на 100 000 рядках під справжнім RLS.
 | `unique` `a` у скоупі + `indexed` | лише UNIQUE `(org_id, a)` |
 | `unique` з `ignoreCase` + `indexed` | unique-індекс `lower(a)` і `(org_id, a, id)` |
 | складений `[a, { name: b, order: desc }]` | `(org_id, a, b DESC, id)` |
-| складений, що містить `id` | `id` не дублюється |
 | складений з `Ref` поліморфної пари | пара колонок, далі `id` |
 | ТЧ зі складеним `indexes` | `(…колонки, <ключ ТЧ>)` |
 | рух регістра з `indexed` виміром | без нового індексу; індекс руху без змін |
 | стандартний `code` з UNIQUE нумерації | лише UNIQUE, як сьогодні |
 | два кандидати з однаковими колонками | один індекс |
 
-- [ ] **Step 2:** `pnpm --filter simetra test stage-model-indexes` — FAIL.
-- [ ] **Step 3:** `materializeIndexes`: для `search` таблиці з PK з однієї колонки `keyColumnOf` — дописати ключ, якщо його немає; відкинути `search`, якщо `keys` без ключа — префікс ключа PK чи UNIQUE; решта покриття — як сьогодні над повними `keys`.
-- [ ] **Step 4:** `pnpm --filter simetra test stage-model-indexes` — PASS; оновити тести й фікстури з переліку; `pnpm --filter simetra test` і `pnpm --filter @simetrajs/designer test` — зелені; `pnpm db:start`; `pnpm --filter simetra test:db paper-test` — зелений з оновленим `expected-diff.json`.
-- [ ] **Step 5: Commit.** `feat(compiler): ключ останнім у пошуковому індексі порядку списку`
+- [x] **Step 2:** `pnpm --filter simetra test stage-model-indexes` — FAIL.
+- [x] **Step 3:** `materializeIndexes`: для `search` таблиці з PK з однієї колонки `keyColumnOf` — дописати ключ, якщо його немає; відкинути `search`, якщо `keys` без ключа — префікс ключа PK чи UNIQUE; решта покриття — як сьогодні над повними `keys`.
+- [x] **Step 4:** `pnpm --filter simetra test stage-model-indexes` — PASS; оновити тести й фікстури з переліку; `pnpm --filter simetra test` і `pnpm --filter @simetrajs/designer test` — зелені; `pnpm db:start`; `pnpm --filter simetra test:db paper-test` — зелений з оновленим `expected-diff.json`.
+- [x] **Step 5: Commit.** `feat(compiler): ключ останнім у пошуковому індексі порядку списку`
 
 ### Task 4: `description` довідника — `indexed`
 
@@ -155,9 +157,9 @@ DB-тест плану на 100 000 рядках під справжнім RLS.
 - Modify: `packages/simetra/src/model/kinds/catalog.ts` (стандартна колонка `description`: `indexed: true`)
 - Test: `packages/simetra/src/compiler/__tests__/stage-model-indexes.test.ts`
 
-- [ ] **Step 1: Failing test:** скоуплений довідник з `descriptionLength > 0` — `(org_id, description, id)`; `descriptionLength = 0` — індексу `description` немає.
-- [ ] **Step 2:** реалізація; PASS; оновити зачеплені тести, `expected-diff.json` і хеш-літерали; `pnpm --filter simetra test`, `pnpm --filter @simetrajs/designer test`, `pnpm metadata:check`, `pnpm --filter simetra test:db paper-test` — зелені.
-- [ ] **Step 3: Commit.** `feat(model): пошуковий індекс найменування довідника`
+- [x] **Step 1: Failing test:** скоуплений довідник з `descriptionLength > 0` — `(org_id, description, id)`; `descriptionLength = 0` — індексу `description` немає.
+- [x] **Step 2:** реалізація; PASS; оновити зачеплені тести, `expected-diff.json` і хеш-літерали; `pnpm --filter simetra test`, `pnpm --filter @simetrajs/designer test`, `pnpm metadata:check`, `pnpm --filter simetra test:db paper-test` — зелені.
+- [x] **Step 3: Commit.** `feat(model): пошуковий індекс найменування довідника`
 
 **Готово B1d-a:** unit T0 і T1 зелені, наявні тести й еталон оновлено; правки спек внесено.
 
@@ -173,8 +175,8 @@ DB-тест плану на 100 000 рядках під справжнім RLS.
 **Interfaces:**
 - Consumes: `prepareRead(catalog, query)` T3 → `plan.statement` (текст і параметри); `keysetFilter` (Task 1).
 
-- [ ] **Step 1:** фікстура через фікстури прав (справжні політики RLS): скоуплений довідник з обов'язковим `indexed` `a` (`Integer`, 1 000 різних значень), обов'язковим `indexed` `s` (`Integer`, 5 різних значень), nullable `indexed` `n` (30 % `NULL`), `unique` `u`, складеним `[a, { name: b, order: desc }]`, `indexed` `Ref` `r`, стандартним `description`; 100 000 рядків у двох скоупах (`generate_series`), `ANALYZE` лише таблиць фікстури; користувач з правом читання одного скоупу.
-- [ ] **Step 2:** для кожного порядку — три сторінки: перша, курсор у середині (рядок 50 000 скоупу), курсор за 100 рядків до кінця; `limit` 100, умова `keysetFilter`, фільтр одного скоупу; `EXPLAIN (ANALYZE, FORMAT JSON)` під роллю запиту з claims користувача. Для вузла скану **таблиці списку** (`scansOf` за назвою таблиці):
+- [x] **Step 1:** фікстура через фікстури прав (справжні політики RLS): скоуплений довідник з обов'язковим `indexed` `a` (`Integer`, 1 000 різних значень), обов'язковим `indexed` `s` (`Integer`, 5 різних значень), nullable `indexed` `n` (30 % `NULL`), `unique` `u`, складеним `[a, { name: b, order: desc }]`, `indexed` `Ref` `r`, стандартним `description`; 100 000 рядків у двох скоупах (`generate_series`), `ANALYZE` лише таблиць фікстури; користувач з правом читання одного скоупу.
+- [x] **Step 2:** для кожного порядку — три сторінки: перша, курсор у середині (рядок 50 000 скоупу), курсор за 100 рядків до кінця; `limit` 100, умова `keysetFilter`, фільтр одного скоупу; `EXPLAIN (ANALYZE, FORMAT JSON)` під роллю запиту з claims користувача. Для вузла скану **таблиці списку** (`scansOf` за назвою таблиці):
 
 | Порядок | Очікування |
 | --- | --- |
@@ -188,19 +190,25 @@ DB-тест плану на 100 000 рядках під справжнім RLS.
 | `s` (5 різних значень), ключ — курсор у середині групи рівних `s` | жодного вузла Sort, зокрема Incremental Sort; виміряти `actual rows + rowsRemovedByFilter` і час вузла таблиці; записати в розділ «Виміри» плану; порогу немає (Р8, обмеження 1) |
 | `n` (nullable), ключ | записати план у розділ «Виміри»; якщо є Seq Scan чи повний Sort — відоме обмеження §4.2 (Р8), тест фіксує поточний план, а не вимагає кращого |
 
-- [ ] **Step 3:** RLS діє: предикат скоупу політики є в Index Cond вузла таблиці; та сама сторінка для чужого скоупу дає 0 рядків і теж без Seq Scan таблиці.
-- [ ] **Step 4:** автоматичний негативний контроль у тому самому тесті під `SAVEPOINT` (відкат після кейсу, щоб не зламати наступні), DDL — від власника до `asRole`: створити індекс старої форми `(org_id, s)` і прибрати новий — план порядку `s`, ключ для курсора в середині має Incremental Sort за ключем над групою ≈ 10 000 рядків, тож правило рядка `s` («жодного Sort») червоне. Другий контроль — keyset без провідної межі на новому індексі: правило рядка `a` (`actual rows + rowsRemovedByFilter`) червоне.
-- [ ] **Step 5:** `pnpm db:start`; `pnpm --filter simetra test:db list-order-plan` — PASS. Інший план для рядка `u` чи для глибокого курсора — зупинка й звіт архітекторці (Р2, Р8).
-- [ ] **Step 6: Commit.** `test(db): план keyset-сторінки під RLS для оголошених порядків`
+- [x] **Step 3:** RLS діє: предикат скоупу політики є в Index Cond вузла таблиці; та сама сторінка для чужого скоупу дає 0 рядків і теж без Seq Scan таблиці.
+- [x] **Step 4:** автоматичний негативний контроль у тому самому тесті під `SAVEPOINT` (відкат після кейсу, щоб не зламати наступні), DDL — від власника до `asRole`: створити індекс старої форми `(org_id, s)` і прибрати новий — план порядку `s`, ключ для курсора в середині має Incremental Sort за ключем над групою ≈ 10 000 рядків, тож правило рядка `s` («жодного Sort») червоне. Другий контроль — keyset без провідної межі на новому індексі: правило рядка `a` (`actual rows + rowsRemovedByFilter`) червоне.
+- [x] **Step 5:** `pnpm db:start`; `pnpm --filter simetra test:db list-order-plan` — PASS. Інший план для рядка `u` чи для глибокого курсора — зупинка й звіт архітекторці (Р2, Р8).
+- [x] **Step 6: Commit.** `test(db): план keyset-сторінки під RLS для оголошених порядків`
+
+### Task 4b: `description` довідника — NOT NULL DEFAULT ''
+
+Рішення Р9. Реєстр виду (`catalog.ts`): `notNull: true`, `default: "''"`; каталог виконання несе факт `notNull`, `nullableOf` читає його. Тести: unit (`nullableOf`, каталог, фізика, генерація типів), DB `catalog-command` (пропущене значення дає `''`, явний `NULL` — 23502), DB плану (`description` — діапазон, критерій `a`), DB designer (`NULL`-рядок — `step-failed` 23502; без `NULL` — застосовується). Спеки П2 §5 і П4-B Додаток А узгоджено.
+
+- [x] **Commit.** `feat(model): найменування довідника NOT NULL з типовим ''`
 
 ### Task 6: Застосування на наявній базі
 
 **Files:**
-- Create: `packages/designer/src/__tests__/list-order-index-apply.db.test.ts` (білдери фікстур designer, як у сусідніх `*-apply*.db.test.ts`)
+- Create: `packages/designer/src/schema-engine/__tests__/list-order-index-apply.db.test.ts` (білдери фікстур designer, як у сусідніх `*-apply*.db.test.ts`)
 
-- [ ] **Step 1:** база зі схемою старої форми `(org_id, a)` і рядками; план застосування нової моделі: DROP старого неунікального індексу — `catalogOnly`, CREATE нового — без класу; план застосовується без дозволу; нова форма, дані без змін, відбиток стану зелений. Контроль: той самий план на базі, де старий індекс унікальний, вимагає дозволу `relaxation`.
-- [ ] **Step 2:** `pnpm --filter @simetrajs/designer test:db list-order-index-apply` — PASS.
-- [ ] **Step 3: Commit.** `test(designer): заміна індексу порядку на наявній базі`
+- [x] **Step 1:** база зі схемою старої форми `(org_id, a)` і рядками; план застосування нової моделі: DROP старого неунікального індексу — `catalogOnly`, CREATE нового — без класу; план застосовується без дозволу; нова форма, дані без змін, відбиток стану зелений. Контроль: той самий план на базі, де старий індекс унікальний, вимагає дозволу `relaxation`.
+- [x] **Step 2:** `pnpm --filter @simetrajs/designer test:db list-order-index-apply` — PASS.
+- [x] **Step 3: Commit.** `test(designer): заміна індексу порядку на наявній базі`
 
 **Готово B1d-b:** DB-тест плану й тест застосування зелені.
 
@@ -212,19 +220,19 @@ DB-тест плану на 100 000 рядках під справжнім RLS.
 - Create: `packages/simetra/bench/tabular.bench.db.ts` (проєкт `bench` з `packages/simetra/vitest.config.ts`, зразок — `bench/rights.bench.db.ts`)
 - Modify: `packages/simetra/package.json` — скрипт `bench:tabular` (`vitest run --project bench tabular`); `bench:rights` звузити до `vitest run --project bench rights`, щоб він не запускав новий файл
 
-- [ ] **Step 1:** тегована база прогону (хелпери `connection.ts`), прибирання в `afterAll` і на збої; довідник з ТЧ із 8 реквізитів (`String` 50, `Numeric` 15,2, `Integer`, `Date`, `Boolean`, `Ref`, два `String` 100); `runtime.run` `update` з повним масивом ТЧ (`fullTabularArrays`) на 1, 1 000, 2 500 і 5 000 рядках, 10 прогонів після прогріву: медіана й p90 часу транзакції з `COMMIT`, `jsonBytes` операції у формі передачі, `jsonBytes` відповіді картки з ТЧ.
-- [ ] **Step 2:** `pnpm db:start`; `pnpm --filter simetra bench:tabular` — числа в журналі.
-- [ ] **Step 3:** правило: `TABULAR_LINES_MAX` = 5 000 лишається, якщо на 5 000 рядках медіана `run` ≤ 2 с, байти операції ≤ 3 МіБ і байти відповіді картки ≤ 3 МіБ (запас до межі тіла й бюджету відповіді 4 МБ, §4.5). Інакше — **стоп**: найбільше виміряне число, що вкладається, і звіт архітекторці; сталу T0 (`packages/simetra/src/model/runtime/read.ts`) і похідні тести змінює окремий крок після її рішення. Записати рядки й байти в §7.1 П4-B і в рядок B1d §13.
-- [ ] **Step 4: Commit.** `test(bench): бенчмарк ТЧ і межа TABULAR_LINES_MAX`
+- [x] **Step 1:** тегована база прогону (хелпери `connection.ts`), прибирання в `afterAll` і на збої; довідник з ТЧ із 8 реквізитів (`String` 50, `Numeric` 15,2, `Integer`, `Date`, `Boolean`, `Ref`, два `String` 100); `runtime.run` `update` з повним масивом ТЧ (`fullTabularArrays`) на 1, 1 000, 2 500 і 5 000 рядках, 10 прогонів після прогріву: медіана й p90 часу транзакції з `COMMIT`, `jsonBytes` операції у формі передачі, `jsonBytes` відповіді картки з ТЧ.
+- [x] **Step 2:** `pnpm db:start`; `pnpm --filter simetra bench:tabular` — числа в журналі.
+- [x] **Step 3:** правило: `TABULAR_LINES_MAX` = 5 000 лишається, якщо на 5 000 рядках медіана `run` ≤ 2 с, байти операції ≤ 3 МіБ і байти відповіді картки ≤ 3 МіБ (запас до межі тіла й бюджету відповіді 4 МБ, §4.5). Інакше — **стоп**: найбільше виміряне число, що вкладається, і звіт архітекторці; сталу T0 (`packages/simetra/src/model/runtime/read.ts`) і похідні тести змінює окремий крок після її рішення. Записати рядки й байти в §7.1 П4-B і в рядок B1d §13.
+- [x] **Step 4: Commit.** `test(bench): бенчмарк ТЧ і межа TABULAR_LINES_MAX`
 
 ### Task 8: Документи й фінальні гейти
 
 **Files:**
 - Modify: `docs/ROADMAP.md` (B1d); борг першої міграції споживача — примітка Р7 (документ боргу, який ROADMAP називає для першої міграції); `packages/designer/skills/simetra-metadata/SKILL.md` — що дає `indexed` і складений `indexes`: індекс порядку списку з ключем останнім
 
-- [ ] **Step 1:** правки; `python3 scripts/check-doc-anchors.py`.
-- [ ] **Step 2:** `pnpm format:check && pnpm lint && pnpm typecheck && pnpm test`, `pnpm metadata:check`, `pnpm test:db` (раз на блок).
-- [ ] **Step 3: Commit.** `docs: B1d — індекси порядків списку`
+- [x] **Step 1:** правки; `python3 scripts/check-doc-anchors.py`.
+- [x] **Step 2:** `pnpm format:check && pnpm lint && pnpm typecheck && pnpm test`, `pnpm metadata:check`, `pnpm test:db` (раз на блок).
+- [x] **Step 3: Commit.** `docs: B1d — індекси порядків списку`
 
 **Готово B1d:** unit T0 і T1, DB-тест плану, тест застосування зелені; числа бенчмарку в §7.1; спеки, борг і скіл синхронізовано.
 
@@ -234,9 +242,10 @@ DB-тест плану на 100 000 рядках під справжнім RLS.
 
 | Вимір | Значення |
 | --- | --- |
-| `s` (5 значень), курсор у середині групи: `actual rows + rowsRemovedByFilter`, час вузла таблиці | — |
-| `n` (nullable), курсор у середині: план, `actual rows` | — |
-| ТЧ 1 / 1 000 / 2 500 / 5 000 рядків: медіана й p90 `run`, байти операції й відповіді | — |
+| `s` (5 значень), курсор у середині групи: `actual rows + rowsRemovedByFilter`, час вузла таблиці | Index Scan `(org_id, s, id)`, Index Cond `org_id = … AND s >= 2`; без Sort; 100 + 10 000 = 10 100 рядків, 10–18 мс (100 000 рядків у скоупі, 20 000 у групі) |
+| `n` (nullable), курсор у середині: план, `actual rows` | Index Scan `(org_id, n, id)`, Index Cond лише `org_id = …` (межа `n >= x OR n IS NULL` не діапазон, іде в Filter); без Seq Scan і Sort; 100 + 50 000 = 50 100 рядків, 24,1 мс |
+| `description` (NOT NULL DEFAULT '', Р9), курсор у середині й наприкінці | Index Scan `(org_id, description, id)`, Index Cond `org_id = … AND description >= …` (межа — діапазон, як у `a`); без Seq Scan і Sort; 100 + 1 = 101 рядок, 4,6 мс (до Р9, nullable: 50 100 рядків, 28 мс) |
+| ТЧ 1 / 1 000 / 2 500 / 5 000 рядків: медіана й p90 `run`, байти операції й відповіді | 1: 109,0 / 138,1 мс, 652 Б / 1 112 Б; 1 000: 248,3 / 297,1 мс, 0,407 / 0,521 МіБ; 2 500: 471,6 / 561,6 мс, 1,024 / 1,310 МіБ; 5 000: 1 017,3 / 1 174,4 мс (другий прогін: 781,0 / 1 114,6 мс), 2,053 / 2,625 МіБ (локальний стек, 10 прогонів після прогріву; `TABULAR_LINES_MAX` = 5 000 лишається) |
 
 ## Мутаційні перевірки (кожна червонить названий тест)
 

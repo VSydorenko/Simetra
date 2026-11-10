@@ -333,6 +333,7 @@ function attributes(
       // заповнює база чи платформа.
       required:
         insert && field.notNull && !field.hasDefault && !field.generated,
+      ...(field.notNull ? { notNull: true as const } : {}),
       ...(value?.type === "String" && value.length !== undefined
         ? { maxLength: value.length }
         : {}),

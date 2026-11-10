@@ -719,6 +719,27 @@ describe("catalog command core", () => {
     })
   })
 
+  // Найменування, колонку якого створила платформа, — NOT NULL DEFAULT '':
+  // пропущене значення дає порожній рядок, явний NULL відхиляє сама база.
+  it("create: a missing description is an empty string", async () => {
+    const item = newTicket({})
+    expect(await run({ user: "tw", item, version: null })).toMatchObject({
+      id: item.id,
+      description: "",
+    })
+  })
+
+  // Запасна межа: явний NULL відхиляє T3 (`command.invalid`) ще до бази,
+  // а ядро, викликане повз нього, — NOT NULL колонки
+  it("create: an explicit NULL description is refused by the core", async () => {
+    const outcome = await run({
+      user: "tw",
+      item: newTicket({ description: null }),
+      version: null,
+    })
+    expect(outcome).toMatchObject({ code: "23502" })
+  })
+
   it("update: version grows and comes back as text", async () => {
     const before = await versionOf("K1")
     const result = await run({
