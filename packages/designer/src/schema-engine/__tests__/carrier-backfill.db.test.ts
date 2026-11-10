@@ -1,18 +1,8 @@
 import { randomUUID } from "node:crypto"
 import pg from "pg"
 import { describe, expect, it, vi } from "vitest"
-import {
-  canonicalSnapshot,
-  compile,
-  type CompiledModel,
-} from "simetra/compiler"
-import {
-  buildPlan,
-  engineScope,
-  executePlan,
-  rehearsalReport,
-  type PlanArtifact,
-} from "simetra/schema"
+import { canonicalSnapshot } from "simetra/compiler"
+import { buildPlan, executePlan, rehearsalReport } from "simetra/schema"
 import {
   ATTACHMENTS_TABLE,
   CHECKLIST_TABLE,
@@ -26,14 +16,18 @@ import {
   taskNoteMapping,
   uuid,
 } from "../../../../simetra/test/support"
-import { inTarget, query } from "../../__tests__/support/db"
+import { query } from "../../__tests__/support/db"
 import {
+  carrierTables,
+  compiledFiles as compiled,
   dbs,
   engine,
-  EMPTY,
   establish,
+  inModelTarget,
+  one,
   planned,
   promoted,
+  ref,
   rehearsalOf,
   writer,
 } from "./build-plan.support"
@@ -45,14 +39,6 @@ import {
  * таблицю до нього — вирішує Postgres на живих рядках, а не текст плану.
  * Це перший наскрізний план і перша промоція моделі з правами на базі.
  */
-
-const ref = (kind: string, name: string) => ({ kind, name })
-
-async function compiled(files: Map<string, string>): Promise<CompiledModel> {
-  const result = await compile(files)
-  expect(result.diagnostics).toEqual([])
-  return result.model!
-}
 
 /**
  * Вихідна модель звичайного плану: `policyDomain()` без носіїв на `Task` і
@@ -124,19 +110,6 @@ function targetFiles(): Map<string, string> {
   files.set(COMMENT_FILE, JSON.stringify(comment))
   return files
 }
-
-/** Ціль у межах схем моделі: `policyDomain()` живе в `public`. */
-async function inModelTarget<T>(
-  model: CompiledModel,
-  fn: (url: string) => Promise<T>
-): Promise<T> {
-  return inTarget(EMPTY, (await engineScope(model)).scope, fn)
-}
-
-const carrierTables = (artifact: PlanArtifact) =>
-  artifact.steps
-    .filter((s) => s.origin === "carriers")
-    .map((s) => s.lockedTables[0]!.name)
 
 /** Тригери ефектів дії (спека прав §5.3) на таблицях, за іменами. */
 const effectsTriggers = (url: string, tables: string[]) =>
@@ -216,12 +189,6 @@ async function poolNotices<T>(
     spy.mockRestore()
   }
 }
-
-const one = async <R extends Record<string, unknown>>(
-  url: string,
-  sql: string,
-  params: unknown[]
-): Promise<R> => (await query<R>(url, sql, params))[0]!
 
 describe.concurrent("carrier copy steps on live rows", () => {
   it("a plain plan backfills a path copy and the tabular copy reading it", async () => {
@@ -389,109 +356,6 @@ describe.concurrent("carrier copy steps on live rows", () => {
       // Зміна лише копій — не зміна змісту: механіка й підписка мовчать
       expect(await commentVersion()).toEqual(versionBefore)
       expect(fired).toEqual([])
-    })
-  })
-
-  it("a NOT NULL fill runs before the carrier trigger a later step creates", async () => {
-    // І20 (платформна спека §6.6, спека промоції §7.2): коментар отримує
-    // власність — носій, чий тригер створює пізніший крок плану, — і
-    // обов'язковий `note` з default. Перевірка тригерів Р4а не вимагає
-    // тригера, якого ще немає, а копію пише крок копій після блоку двигуна.
-    // Двигун знімає тригер механіки до заповнення й створює пізніше, тож
-    // версію рядка підвищує блок `versions`: таблиця заповнення для нього
-    // переписана
-    const note = (over: Record<string, unknown> = {}) => ({
-      id: uuid(6905),
-      name: "note",
-      physicalName: "note",
-      type: "String",
-      length: 50,
-      ...over,
-    })
-    const task = refAttribute(6051, "task", "task_id", ref("Document", "Task"))
-    const before = await compiled(
-      policyDomain({
-        [COMMENT_FILE]: { ownership: undefined, attributes: [task, note()] },
-      })
-    )
-    const after = await compiled(
-      policyDomain({
-        [COMMENT_FILE]: {
-          attributes: [task, note({ required: true, defaultValue: "n/a" })],
-        },
-      })
-    )
-    const id = {
-      org: randomUUID(),
-      u1: randomUUID(),
-      task: randomUUID(),
-      comment: randomUUID(),
-    }
-    await inModelTarget(after, async (url) => {
-      await establish(url, before)
-      await query(
-        url,
-        `insert into public.organization (id) values ('${id.org}');
-         insert into public.org_member (id, org_id) values ('${id.u1}', '${id.org}');
-         insert into public.task (id, org_id, date, assignee_id)
-           values ('${id.task}', '${id.org}', now(), '${id.u1}');
-         insert into public.${COMMENT_TABLE} (id, org_id, task_id)
-           values ('${id.comment}', '${id.org}', '${id.task}');`
-      )
-      const version = async () =>
-        BigInt(
-          (
-            await one<{ version: string }>(
-              url,
-              `select version::text from public.${COMMENT_TABLE} where id = $1`,
-              [id.comment]
-            )
-          ).version
-        )
-      const was = await version()
-      const artifact = planned(
-        await buildPlan(engine, dbs, after, { target: { url } }, [])
-      )
-      const fills = artifact.steps.filter((s) => s.origin === "backfill")
-      expect(fills.map((s) => s.backfill)).toEqual([
-        expect.objectContaining({
-          table: { schema: "public", name: COMMENT_TABLE },
-          column: "note",
-          rowsAtPlan: 1,
-          permission: false,
-        }),
-      ])
-      // Тригер носіїв коментаря створює крок після заповнення: інакше випадок
-      // не той, який доводить тест
-      const created = artifact.steps.findIndex((s) =>
-        s.produced.some(
-          (r) =>
-            r.kind === "trigger" &&
-            r.table === COMMENT_TABLE &&
-            r.name === `${COMMENT_TABLE}_simetra_carriers`
-        )
-      )
-      expect(created).toBeGreaterThan(artifact.steps.indexOf(fills[0]!))
-      expect(carrierTables(artifact)).toContain(COMMENT_TABLE)
-      const outcome = await executePlan(writer, { url }, artifact, {
-        mode: "apply",
-        planHash: artifact.planHash,
-        allow: artifact.requiredPermissions,
-        snapshot: canonicalSnapshot(after),
-      })
-      expect(outcome.diagnostics).toEqual([])
-      expect(outcome).toMatchObject({
-        status: "committed",
-        backfills: [{ step: fills[0]!.id, rows: 1 }],
-      })
-      expect(
-        await one(
-          url,
-          `select note, task_id_assignee_id as copy from public.${COMMENT_TABLE} where id = $1`,
-          [id.comment]
-        )
-      ).toEqual({ note: "n/a", copy: id.u1 })
-      expect(await version()).toBeGreaterThan(was)
     })
   })
 
