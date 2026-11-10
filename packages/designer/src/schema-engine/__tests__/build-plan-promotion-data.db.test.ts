@@ -559,6 +559,11 @@ describe.concurrent("buildPlan", () => {
         const files = contactsProject()
         const raw = JSON.parse(files.get(CONTACT_FILE)!) as Json
         ;(raw.columns as Json[])[1]!.physicalName = "parent_id"
+        // Телефон джерела допускає NULL: ремонт заповнює його виразом, а
+        // обов'язковість цілі не додає таблиці явний ADD CONSTRAINT, що
+        // заступив би неявний замок кроку даних.
+        ;(raw.columns as Json[]).find((c) => c.name === "phone")!.notNull =
+          false
         ;(raw.foreignKeys as Json[])[0]!.name =
           "counterparty_contacts_parent_id_fkey"
         raw.rowLevelSecurity = "enabled"
