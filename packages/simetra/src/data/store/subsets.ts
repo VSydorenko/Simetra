@@ -290,7 +290,11 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
     )
       return false
     const lines = s.form.object.sections.get(spec.owner, spec.section)
-    return lines === undefined || sectionLinesStale(lines, e)
+    return (
+      lines === undefined ||
+      lines.staleEpoch === true ||
+      sectionLinesStale(lines, e)
+    )
   }
 
   /**

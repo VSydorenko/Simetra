@@ -1,5 +1,6 @@
 import { ZERO_UUID, channelTopic, type CatalogEntry } from "simetra/model"
 import type { Defects } from "./defects"
+import { effectiveEpoch } from "./epoch"
 import type { ObjectState } from "./forms"
 import { includeKeys, readIncluded } from "./include"
 import { visibleRow, type RowEntry } from "./object-store"
@@ -159,6 +160,42 @@ function forget(
   }
 }
 
+// Запис відповіді приймача — лише через `Writer.apply`, після шлюзу епохи;
+// поза цим модулем їх не викликає ніхто (`__tests__/writer-gate-guard.test.ts`).
+
+/** Patches keys with an owner (§6.2): a signal brings no new key in. */
+function patchRows(
+  ctx: WriterContext,
+  scope: Scope,
+  o: ObjectState,
+  rows: readonly ServerRow[],
+  readEpoch: number,
+  versionEpoch: string | null
+) {
+  for (const row of rows) {
+    if ((o.rows.get(row.key)?.owners ?? 0) === 0) continue
+    // Епоха рядка — епоха відповіді, яку щойно прийняла сесія.
+    ctx.ops.put(
+      scope,
+      o,
+      { ...row, versionEpoch: effectiveEpoch(versionEpoch, row.versionEpoch) },
+      readEpoch,
+      false
+    )
+  }
+}
+
+/** Keys the answer did not return become `removed` (§6.2, rule 5). */
+function removeKeys(
+  ctx: WriterContext,
+  scope: Scope,
+  o: ObjectState,
+  keys: readonly Key[],
+  readEpoch: number
+) {
+  for (const key of keys) ctx.ops.remove(scope, o, key, readEpoch)
+}
+
 /** The writer of one `commit`: every method refuses once the commit ended. */
 export function createWriter(ctx: WriterContext, scope: Scope): Writer {
   const { ops, rowViews } = ctx
@@ -170,27 +207,16 @@ export function createWriter(ctx: WriterContext, scope: Scope): Writer {
   }
 
   return {
-    patch(object, rows, readEpoch) {
+    apply(object, answer, readEpoch, versionEpoch) {
       scope.assert()
       const o = ctx.objectOf(object)
-      // Епохи відповіді — до запису, у порядку рядків (Р7): відкинута
-      // відповідь не пише нічого.
-      const epochs = new Set(rows.map((row) => row.versionEpoch ?? null))
-      for (const epoch of epochs) {
-        if (ctx.session.acceptEpoch(epoch, readEpoch) === "discard") return
-      }
-      // Перечитування лише латає ключі з власником (§6.2): нового ключа
-      // сигнал у сховище не вносить.
-      for (const row of rows) {
-        if ((o.rows.get(row.key)?.owners ?? 0) > 0)
-          ops.put(scope, o, row, readEpoch, false)
-      }
-    },
-
-    remove(object, keys, readEpoch) {
-      scope.assert()
-      const o = ctx.objectOf(object)
-      for (const key of keys) ops.remove(scope, o, key, readEpoch)
+      // Один шлюз на відповідь (Р7, Р12): і «рядка немає» без жодного рядка
+      // проходить його, а відкинута відповідь не пише нічого й каже про це.
+      if (ctx.session.acceptEpoch(versionEpoch, readEpoch) === "discard")
+        return "discarded"
+      patchRows(ctx, scope, o, answer.rows, readEpoch, versionEpoch)
+      removeKeys(ctx, scope, o, answer.absent, readEpoch)
+      return "applied"
     },
 
     purge(object, target) {

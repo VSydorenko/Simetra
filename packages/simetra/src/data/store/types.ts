@@ -158,8 +158,21 @@ export interface ActiveView {
 
 /** The only way to change the store (P4-B spec §6.1). */
 export interface Writer {
-  patch(object: ObjectName, rows: readonly ServerRow[], readEpoch: number): void
-  remove(object: ObjectName, keys: readonly Key[], readEpoch: number): void
+  /**
+   * Applies one answer of a receiver re-read (P4-B plan B1c, Р7, Р12): the
+   * session gates it once by `versionEpoch` (`acceptEpoch`) and counts a
+   * discard once per answer. `rows` patch keys that have an owner (a signal
+   * brings no new key in); `absent` are keys the answer did not return
+   * (`removed`). `"discarded"` — nothing was written: the answer came from an
+   * abandoned epoch, from a read started before a switch, or the session is
+   * unavailable.
+   */
+  apply(
+    object: ObjectName,
+    answer: { rows: readonly ServerRow[]; absent: readonly Key[] },
+    readEpoch: number,
+    versionEpoch: string | null
+  ): "applied" | "discarded"
   purge(
     object: ObjectName,
     target: { keys: readonly Key[] } | { scope: string | null }

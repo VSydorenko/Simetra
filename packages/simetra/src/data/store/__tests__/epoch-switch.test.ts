@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { createCore, inspectCore } from "../core"
+import { coreInternals, createCore, inspectCore } from "../core"
 import { keyId } from "../epoch"
 import { createCoreSource, createReadLimiter } from "../source"
 import { DISCARD_PAUSE_MS, DISCARDS_MAX } from "../session"
@@ -8,6 +8,7 @@ import type { ServerRow, ViewSpec } from "../types"
 import {
   TASK,
   isKeys,
+  isSection,
   key,
   seed,
   settle,
@@ -96,6 +97,17 @@ describe("acceptEpoch (Р6, Р7, Р12)", () => {
     expect(h.session.versions.unavailable()).toBe(true)
     expect(accept(h, null)).toBe("discard")
     expect(accept(h, EB)).toBe("discard")
+  })
+
+  it("a null answer breaks the series of discards", () => {
+    const h = harness()
+    accept(h, EA)
+    accept(h, EB)
+    for (let i = 1; i < DISCARDS_MAX; i++) accept(h, EA)
+    expect(accept(h, null)).toBe("apply")
+    for (let i = 1; i < DISCARDS_MAX; i++) accept(h, EA)
+    expect(h.session.versions.unavailable()).toBe(false)
+    expect(h.session.versions.discards()).toBe(DISCARDS_MAX - 1)
   })
 
   it("throws outside commit", () => {
@@ -249,8 +261,17 @@ describe("store after a switch (Р5, Р8, Р13)", () => {
       ownerVersion: 1,
       versionEpoch: EB,
     })
-    // `null`-рядки після перемикання не заміняють рядків поточної епохи.
+    // `null`-рядки після перемикання не заміняють рядків поточної епохи:
+    // наявні стають `stale` (одне перечитування), повтор — відкинуто.
+    expect(lines(9, null)).toBe("stale")
+    expect(h.sections.get(K1, "lines")).toMatchObject({
+      ownerVersion: 1,
+      versionEpoch: EB,
+      staleEpoch: true,
+    })
     expect(lines(9, null)).toBe("rejected")
+    expect(lines(2, EB)).toBe("written")
+    expect(h.sections.get(K1, "lines")?.staleEpoch).toBeUndefined()
   })
 })
 
@@ -403,21 +424,85 @@ describe("core: the epoch switch", () => {
     return h
   }
 
-  it("a patch of the receiver with rows of an abandoned epoch writes nothing", async () => {
+  /** Перемикання на B і перечитування, що підтверджує рядки нової епохи. */
+  async function proven() {
     const h = await switched()
-    const stale = {
-      key: key(1),
+    vi.advanceTimersByTime(INTERVAL)
+    await deliver(h)
+    expect(h.handle.getSnapshot().rows).toMatchObject([
+      { state: "synced" },
+      { state: "synced" },
+    ])
+    return h
+  }
+
+  const receive = (
+    h: CoreHarness,
+    answer: { rows: ServerRow[]; absent: string[] },
+    versionEpoch: string | null
+  ) => {
+    let result: "applied" | "discarded" | undefined
+    h.core.commit((w) => {
+      result = w.apply(TASK, answer, h.core.readEpoch(), versionEpoch)
+    }, h.core.token())
+    return result
+  }
+
+  it("a receiver answer of an abandoned epoch is discarded: no row absent, no patch", async () => {
+    const h = await proven()
+    const old = {
+      key: key(2),
       version: 99,
-      versionEpoch: EA,
-      values: { ref: key(1), version: 99, org: S, title: "old" },
+      values: { ref: key(2), version: 99, org: S, title: "old" },
     }
-    h.core.commit(
-      (w) => w.patch(TASK, [stale], h.core.readEpoch()),
-      h.core.token()
-    )
-    expect(h.handle.getSnapshot().rows[0]).toMatchObject({
-      values: { title: "t1" },
+    expect(receive(h, { rows: [], absent: [key(1)] }, EA)).toBe("discarded")
+    expect(receive(h, { rows: [old], absent: [] }, EA)).toBe("discarded")
+    expect(h.handle.getSnapshot().rows).toMatchObject([
+      { state: "synced", values: { title: "t1" } },
+      { state: "synced", values: { title: "t2" } },
+    ])
+    // Відповідь поточної епохи пишеться.
+    expect(receive(h, { rows: [], absent: [key(1)] }, EB)).toBe("applied")
+    expect(h.handle.getSnapshot().rows[0]).toEqual({
+      key: key(1),
+      state: "removed",
     })
+  })
+
+  it("a receiver answer after the session became unavailable is discarded", async () => {
+    const h = await proven()
+    for (let i = 0; i < DISCARDS_MAX; i++)
+      expect(receive(h, { rows: [], absent: [] }, EA)).toBe("discarded")
+    expect(h.inspect.versionEpochs().unavailable).toBe(true)
+    expect(receive(h, { rows: [], absent: [key(1)] }, EB)).toBe("discarded")
+    expect(receive(h, { rows: [], absent: [key(1)] }, null)).toBe("discarded")
+    expect(h.handle.getSnapshot().rows[0]).toMatchObject({ state: "synced" })
+  })
+
+  it("a load answer of an abandoned epoch without the held keys removes nothing", async () => {
+    const h = await proven()
+    h.fake.remove(TASK, key(1))
+    h.fake.remove(TASK, key(2))
+    h.fake.epoch = EA
+    h.handle.refresh()
+    await deliver(h)
+    expect(h.handle.getSnapshot().rows).toMatchObject([
+      { state: "synced" },
+      { state: "synced" },
+    ])
+  })
+
+  it("a revalidate answer of an abandoned epoch without the held keys removes nothing", async () => {
+    const h = await proven()
+    h.fake.remove(TASK, key(1))
+    h.fake.remove(TASK, key(2))
+    h.fake.epoch = EA
+    void h.core.revalidate(TASK, { visibleOnly: false })
+    await deliver(h)
+    expect(h.handle.getSnapshot().rows).toMatchObject([
+      { state: "synced" },
+      { state: "synced" },
+    ])
   })
 
   it("a tail re-read answered from an abandoned epoch writes nothing", async () => {
@@ -455,6 +540,43 @@ describe("core: the epoch switch", () => {
     h.fake.epoch = EB
     await deliver(h)
     expect(h.handle.getSnapshot()).toMatchObject({ status: "ready" })
+  })
+
+  it("a null section answer after a switch marks the lines stale and re-reads them once", async () => {
+    const h = await proven()
+    h.fake.setLines(TASK, key(1), "lines", [
+      { ref: key(901), qty: 1, lineNumber: 1 },
+    ])
+    h.fake.epoch = EB
+    const spec: ViewSpec = {
+      kind: "section",
+      object: TASK,
+      owner: key(1),
+      section: "lines",
+    }
+    const lines = h.core.view(spec)
+    watch(lines)
+    await deliver(h)
+    const sections = () =>
+      coreInternals(h.core).objects.get(TASK)!.sections.get(key(1), "lines")
+    expect(sections()).toMatchObject({ versionEpoch: EB })
+    expect(sections()?.staleEpoch).toBeUndefined()
+    h.fake.epoch = null
+    lines.refresh()
+    await settle()
+    h.fake.take(isSection).answer()
+    await settle()
+    expect(sections()).toMatchObject({ staleEpoch: true })
+    // Одне перечитування; його `null`-відповідь нового не ставить.
+    expect(h.fake.pending.filter(isSection)).toHaveLength(1)
+    h.fake.take(isSection).answer()
+    await settle()
+    expect(h.fake.pending.filter(isSection)).toHaveLength(0)
+    // Відповідь поточної епохи знімає позначку.
+    h.fake.epoch = EB
+    lines.refresh()
+    await deliver(h)
+    expect(sections()?.staleEpoch).toBeUndefined()
   })
 
   it("close clears the timers of a switch", async () => {

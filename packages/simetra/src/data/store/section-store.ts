@@ -15,6 +15,12 @@ export interface SectionEntry {
   readonly versionEpoch: string | null
   readonly complete: boolean
   readonly scope: OwnerScope
+  /**
+   * After a version epoch switch a `null` answer was not ordered with these
+   * lines of the current epoch (P4-B plan B1c, Р5, Р13): they are `stale`
+   * until the next written answer replaces the entry.
+   */
+  readonly staleEpoch?: true
 }
 
 /**
@@ -33,7 +39,11 @@ export function sectionLinesStale(
 
 /** Tabular section lines by (owner, section) (P4-B spec §6.1, §6.2 rule 3). */
 export interface SectionStore {
-  /** `source: "other"` writes `complete = false` (Рд27). */
+  /**
+   * `source: "other"` writes `complete = false` (Рд27). `"stale"` — after a
+   * switch a `null` answer met lines of the current epoch: they stay, marked
+   * `staleEpoch`, and the caller re-reads the section.
+   */
   put(
     scope: Scope,
     owner: Key,
@@ -44,7 +54,7 @@ export interface SectionStore {
     readEpoch: number,
     ownerScope: OwnerScope,
     source: "owner-section" | "other"
-  ): "written" | "rejected"
+  ): "written" | "rejected" | "stale"
   /**
    * Drops sections of owners of this scope and of owners with unknown scope,
    * by the owner scope captured at `put`. A header that moved into the purged
@@ -177,13 +187,25 @@ export function createSectionStore(options: {
         rows.get(owner)?.versionEpoch ??
         versions.previous()
       // Після перемикання `null`-відповідь не впорядкована з даними поточної
-      // епохи (Р5): рядки ТЧ не пишуться.
+      // епохи (Р5): рядки ТЧ не пишуться, а наявні стають `stale` і
+      // перечитуються — як рядок шапки. Перечитування — одне на позначку:
+      // репліка знову відповіла б `null`.
       if (
         versionEpoch === null &&
         versions.previous() !== null &&
         held === versions.current()
-      )
-        return "rejected"
+      ) {
+        const sections = owners.get(owner)
+        const e = sections?.get(section)
+        if (sections === undefined || e === undefined || e.staleEpoch)
+          return "rejected"
+        sections.set(section, {
+          ...e,
+          versionEpoch: effectiveEpoch(e.versionEpoch, null),
+          staleEpoch: true,
+        })
+        return "stale"
+      }
       const sections = owners.get(owner) ?? new Map<string, SectionEntry>()
       sections.set(section, {
         lines,

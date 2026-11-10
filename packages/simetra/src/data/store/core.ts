@@ -315,6 +315,12 @@ export function createCore(options: {
         "owner-section"
       )
       if (result === "written") touchSection(o, owner)
+      // Позначені рядки ТЧ перечитує змонтований вигляд: перевірка вигляду
+      // читає наново, коли ревізія шапки змінилась (Р13).
+      if (result === "stale") {
+        touchSection(o, owner)
+        if (o.rows.get(owner) !== undefined) rowViews.touch(o.name, owner)
+      }
     },
     clearOwner(scope, o, owner) {
       o.sections.clearOwner(scope, owner)

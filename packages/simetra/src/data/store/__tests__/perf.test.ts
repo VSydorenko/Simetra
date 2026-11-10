@@ -135,7 +135,10 @@ describe.runIf(PERF)("core perf", () => {
         version,
         values: { ...listValues(index), version, rank: 500 + i },
       }
-      core.commit((w) => w.patch(TASK, [row], epoch()), core.token())
+      core.commit(
+        (w) => w.apply(TASK, { rows: [row], absent: [] }, epoch(), null),
+        core.token()
+      )
       full.getSnapshot()
     })
     console.log(
@@ -163,7 +166,10 @@ describe.runIf(PERF)("core perf", () => {
         version,
         values: { ...listValues(n), version, title: `v${version}` },
       }))
-      core.commit((w) => w.patch(TASK, rows, core.readEpoch()), core.token())
+      core.commit(
+        (w) => w.apply(TASK, { rows, absent: [] }, core.readEpoch(), null),
+        core.token()
+      )
     })
     console.log("commit 200 rows:", result)
     expect(result.p95).toBeLessThan(2)
