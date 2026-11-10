@@ -244,8 +244,11 @@ describe("Better Auth identity of a tagged target", () => {
 // ціль мала б таблицю ідентичності від ролі рушія замість міграції Better Auth
 describe("an engine apply onto a target from the template", () => {
   it("creates no assumed schema and no stub in the target", async () => {
-    const assumed = postgresBasePolicy.assumedSchemas ?? []
-    expect(assumed).toContain(schema)
+    // Схема ідентичності — явно, а не лише з політики: політика, що забула
+    // її припустити, не має робити перевірку порожньою
+    const assumed = [
+      ...new Set([...(postgresBasePolicy.assumedSchemas ?? []), schema]),
+    ]
     await withTemplateTarget(async (url) => {
       await planAndApply(url, await plainModel())
       const client = await superuserClient(databaseOf(url))
