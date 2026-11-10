@@ -387,8 +387,8 @@ describe.concurrent("buildPlan", () => {
         },
       ])
       const origins = artifact.steps.map((s) => s.origin)
-      // Походження йдуть блоками: намір, двигун, копії носіїв, середовище
-      const order = ["intent", "engine", "carriers", "environment"]
+      // Походження йдуть блоками: намір, двигун, копії носіїв, версії, середовище
+      const order = ["intent", "engine", "carriers", "versions", "environment"]
       expect(origins).toEqual(
         [...origins].sort((a, b) => order.indexOf(a) - order.indexOf(b))
       )

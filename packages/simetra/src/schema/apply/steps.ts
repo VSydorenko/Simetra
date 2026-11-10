@@ -8,6 +8,7 @@ import type {
   LockedTable,
 } from "../engine"
 import { applyDiagnostic } from "./diagnostic"
+import type { DataTable } from "./promotion/data"
 import type { DriftReport } from "./drift"
 import {
   isLossless,
@@ -48,7 +49,7 @@ export interface PlanStep {
    * (спека промоції §7.2) заповнює копії наявних рядків після кроків двигуна, що
    * створюють колонки-копії, і до кроків середовища.
    */
-  origin: "intent" | "engine" | "carriers" | "environment"
+  origin: "intent" | "engine" | "carriers" | "versions" | "environment"
   sql: string
   verb: EngineAction["verb"]
   class: StepClass
@@ -69,6 +70,11 @@ export interface PlanStep {
   rewriteRisk: boolean
   /** SQL сторожів кроку; раннер виконує їх перед кроком. */
   guards: string[]
+  /**
+   * Тригери користувача таблиці кроку підвищення версії (бажані імена): раннер
+   * звіряє їх з живими, вимикає на час кроку й вмикає після блоку `versions`.
+   */
+  triggers?: DataTable["triggers"]
 }
 
 /**

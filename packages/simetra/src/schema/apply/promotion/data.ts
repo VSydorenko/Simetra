@@ -137,7 +137,10 @@ export function dataWriteSql(t: PlannedDataTable): string {
  * Вимкнення (`on = false`) чи повернення тригерів таблиці в нових іменах,
  * поштучно: `ENABLE TRIGGER` дав би завжди ввімкненому тригеру режим `O`.
  */
-export function triggerSql(t: DataTable, on: boolean): string[] {
+export function triggerSql(
+  t: Pick<DataTable, "after" | "triggers">,
+  on: boolean
+): string[] {
   const table = qualified(t.after.schema, t.after.table)
   return t.triggers.map(
     (g) =>
