@@ -10,6 +10,7 @@ import {
 } from "../../src/compiler/__tests__/helpers"
 import { RAISE_SYNCHRONOUS_COMMIT_SQL } from "../../src/schema/apply/settings"
 import { withRollback } from "./connection"
+import { testProvider } from "./profile"
 
 /**
  * Механіка рядка на справжньому Postgres (спека промоції §9.2): `version` і
@@ -19,10 +20,12 @@ import { withRollback } from "./connection"
  * тригер спрацьовує в будь-якій ролі, що пише.
  */
 
+const provider = testProvider()
+
 async function deploy(client: pg.Client): Promise<void> {
   const result = await compile(
     metaFiles({
-      "project.meta.json": project(),
+      "project.meta.json": project({ database: { provider } }),
       "catalogs/Item/Item.meta.json": catalog("Item"),
     })
   )
@@ -169,7 +172,7 @@ describe("row mechanics in Postgres", () => {
 
   const WRITERS = [
     ["the command role", PLATFORM_ROLES.command],
-    ["the API user role", PROVIDER_API_ROLES.supabase.user],
+    ["the API user role", PROVIDER_API_ROLES[provider].user],
   ] as const
 
   it.each(WRITERS)(
@@ -221,6 +224,35 @@ describe("row mechanics in Postgres", () => {
 
 // Правило підвищення синхронного коміту раннера те саме, що в `touch`: лише
 // з `off` і `local`; сильніші значення не знижуються
+// `touch` підвищує синхронний коміт на кожному записі — і вставці, і
+// оновленні: інакше асинхронний коміт губив би видані версії після збою
+describe("touch synchronous commit raise", () => {
+  it.each([
+    ["off", "on"],
+    ["local", "on"],
+    ["remote_apply", "remote_apply"],
+  ])("%s becomes %s on insert and on update", async (from, to) => {
+    await withRollback(async (client) => {
+      await deploy(client)
+      const setting = async () =>
+        (
+          await client.query<{ v: string }>(
+            "SELECT current_setting('synchronous_commit') AS v"
+          )
+        ).rows[0]!.v
+      await client.query(`SET LOCAL synchronous_commit = ${from}`)
+      const id = await insertItem(client)
+      expect(await setting()).toBe(to)
+      await client.query(`SET LOCAL synchronous_commit = ${from}`)
+      await client.query(
+        "UPDATE public.item SET description = 'b' WHERE id = $1",
+        [id]
+      )
+      expect(await setting()).toBe(to)
+    })
+  })
+})
+
 describe("runner synchronous commit raise", () => {
   it.each([
     ["off", "on"],

@@ -9,6 +9,7 @@ import {
   project,
 } from "../../src/compiler/__tests__/helpers"
 import { testRoleName, withRollback } from "./connection"
+import { testProvider } from "./profile"
 
 /**
  * Епоха версій бази й скидання після відновлення даних (спека П4-B §4.1).
@@ -19,13 +20,13 @@ import { testRoleName, withRollback } from "./connection"
 const SEQUENCE = "simetra.row_version"
 const EPOCH = "SELECT simetra.row_version_epoch() AS epoch"
 const RESET = "SELECT simetra.reset_row_version_epoch()"
-const provider = "supabase"
+const provider = testProvider()
 const api = PROVIDER_API_ROLES[provider]
 
 async function deploy(client: pg.Client): Promise<void> {
   const result = await compile(
     metaFiles({
-      "project.meta.json": project(),
+      "project.meta.json": project({ database: { provider } }),
       "catalogs/Item/Item.meta.json": catalog("Item"),
     })
   )
