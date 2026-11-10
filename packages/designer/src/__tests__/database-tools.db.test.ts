@@ -37,6 +37,8 @@ import {
   testDatabaseUrl,
   testRoleName,
   testSuperuserUrl,
+  loginUrl,
+  withSessionOptions,
 } from "../../../simetra/test/support"
 import {
   asSuperuser,
@@ -666,12 +668,7 @@ describe("sessions", () => {
 describe("credentials never leak", () => {
   const USER = "leaky_user_q7x"
   const PASSWORD = "Wr0ng-pa55-Kx81"
-  const badPassword = (() => {
-    const u = new URL(stack.url)
-    u.username = USER
-    u.password = PASSWORD
-    return u.toString()
-  })()
+  const badPassword = loginUrl(stack.url, USER, PASSWORD)
   const unreachable = `postgresql://${USER}:${PASSWORD}@127.0.0.1:1/app_db`
   const secrets = [USER, PASSWORD, badPassword, unreachable]
   const leaks = (text: string) => secrets.filter((s) => text.includes(s))
@@ -823,10 +820,11 @@ describe("pools", () => {
       expect(await settled(url)).toBe(0)
       // Підключення вдається, а запити двигуна падають за таймаутом
       // (57014): збій роботи з базою, а не відмова підключення
-      const slow = new URL(url)
-      slow.searchParams.set("options", "-c statement_timeout=1")
+      // Дописати до `options`, а не перезаписати: стартова роль адреси
+      // лишається, і рушій з CLI не йдуть суперкористувачем
+      const slow = withSessionOptions(url, "-c statement_timeout=1")
       for (const tool of ["introspect", "diff"] as const) {
-        const r = await call(tool, {}, options(dir, { [ENV]: slow.toString() }))
+        const r = await call(tool, {}, options(dir, { [ENV]: slow }))
         expect(r.refusal, tool).toBeUndefined()
         expect(r.ok, tool).toBe(false)
         expect(

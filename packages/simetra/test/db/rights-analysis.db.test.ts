@@ -37,6 +37,7 @@ import {
   type CommandStep,
   restoreOwnerRole,
   setLocalSetting,
+  claimsFor,
 } from "./connection"
 import {
   type Assignment,
@@ -283,7 +284,7 @@ describe("rights analysis", () => {
     if (id === undefined) throw new Error(`unknown seed key ${name}`)
     return id
   }
-  const claims = (user: string) => ({ sub: key(user), role: "authenticated" })
+  const claims = (user: string) => claimsFor("user", key(user))
 
   /** Рядки запиту під `authenticated` від імені `user`. */
   const as = async <T extends pg.QueryResultRow>(
@@ -293,7 +294,7 @@ describe("rights analysis", () => {
   ): Promise<T[]> => {
     const result = await queryAs<T>(
       tx.client(),
-      "authenticated",
+      "user",
       claims(user),
       sql,
       params
@@ -843,8 +844,8 @@ describe("rights analysis of an unscoped container", () => {
   const as = async (sql: string, params: unknown[]) => {
     const result = await queryAs<pg.QueryResultRow>(
       tx.client(),
-      "authenticated",
-      { sub: ids.g, role: "authenticated" },
+      "user",
+      claimsFor("user", ids.g),
       sql,
       params
     )

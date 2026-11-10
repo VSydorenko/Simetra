@@ -22,7 +22,7 @@ import {
 import { SNAPSHOT_TABLES } from "../../src/compiler/rights/actor-snapshot"
 import { RIGHTS_FUNCTIONS } from "../../src/compiler/rights/functions"
 import { signUp } from "./auth"
-import { asRole, queryAs, setLocalSetting } from "./connection"
+import { asRole, queryAs, setLocalSetting, claimsFor } from "./connection"
 import {
   type PlanNode,
   functionScans,
@@ -522,8 +522,8 @@ describe("rights plan gate", () => {
   const explain = async (user: string, sql: string): Promise<unknown> => {
     const result = await queryAs<{ "QUERY PLAN": unknown }>(
       tx.client(),
-      "authenticated",
-      { sub: user, role: "authenticated" },
+      "user",
+      claimsFor("user", user),
       `EXPLAIN (ANALYZE, FORMAT JSON) ${sql}`
     )
     if (!("rows" in result)) throw new Error(`EXPLAIN failed: ${result.code}`)
@@ -596,7 +596,7 @@ describe("rights plan gate", () => {
         await setLocalSetting(
           client,
           SESSION_CLAIMS_SETTING,
-          JSON.stringify({ sub: user, role: "authenticated" })
+          JSON.stringify(claimsFor("user", user))
         )
         await setLocalSetting(
           client,
@@ -621,11 +621,7 @@ describe("rights plan gate", () => {
         "client_min_messages = log",
       ])
         await client.query(`SET LOCAL ${setting}`)
-      if (user !== null)
-        await asRole(client, "authenticated", {
-          sub: user,
-          role: "authenticated",
-        })
+      if (user !== null) await asRole(client, "user", claimsFor("user", user))
       const { rows } = await client.query(sql, params)
       return { plans, rows, headers }
     } finally {
@@ -980,7 +976,7 @@ describe("rights plan gate", () => {
       await setLocalSetting(
         client,
         SESSION_CLAIMS_SETTING,
-        JSON.stringify({ sub: user, role: "authenticated" })
+        JSON.stringify(claimsFor("user", user))
       )
       await setLocalSetting(client, COMMAND_SETTING, JSON.stringify(context))
       await client.query(`SET LOCAL ROLE ${PLATFORM_ROLES.command}`)

@@ -24,7 +24,7 @@ import { fieldInfoOf, nullableOf } from "../../src/data/store/filter"
 import { buildRuntimeCatalog } from "../../src/compiler/runtime-catalog"
 import { prepareRead } from "../../src/server/read"
 import { signUp } from "./auth"
-import { queryAs, runTag } from "./connection"
+import { queryAs, runTag, claimsFor } from "./connection"
 import { type PlanNode, planNodes, scansOf, sortsOver } from "./explain-plan"
 import {
   assignmentRow,
@@ -394,8 +394,8 @@ describe("list order plans under RLS", () => {
     for (let run = 0; run < 2; run++) {
       const result = await queryAs<{ "QUERY PLAN": unknown }>(
         tx.client(),
-        "authenticated",
-        { sub: user, role: "authenticated" },
+        "user",
+        claimsFor("user", user),
         `EXPLAIN (ANALYZE, FORMAT JSON) ${statement.text}`,
         statement.params
       )

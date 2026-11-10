@@ -2,7 +2,12 @@ import pg from "pg"
 import { PROVIDER_EVENT_SOURCES } from "simetra/model"
 import { describe, expect, it } from "vitest"
 import { migrateBetterAuth } from "./better-auth"
-import { testDatabaseName, testRoleName, testSuperuserUrl } from "./connection"
+import {
+  testDatabaseName,
+  testRoleName,
+  testSuperuserUrl,
+  loginUrl,
+} from "./connection"
 
 const PASSWORD = "better-auth-test"
 
@@ -51,10 +56,7 @@ describe("Better Auth migration on the postgres stack", () => {
         await inDatabase.query(
           `CREATE SCHEMA better_auth AUTHORIZATION ${id(role)}`
         )
-        const url = new URL(superUrl.href)
-        url.username = role
-        url.password = PASSWORD
-        authUrl = url.href
+        authUrl = loginUrl(superUrl.href, role, PASSWORD)
 
         await migrateBetterAuth(authUrl)
 

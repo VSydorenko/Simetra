@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import type pg from "pg"
 import type { CompiledModel } from "simetra/compiler"
+import type { ApiRolePurpose } from "simetra/model"
 import { renderApplyState } from "simetra/schema"
 import {
   ADOPTED_LEAD_KEY,
@@ -31,11 +32,11 @@ import {
   mineEquivalence,
 } from "./closure-oracle"
 import {
-  type ApiRole,
   queryAs,
   rollbackDatabase,
   testRoleName,
   restoreOwnerRole,
+  claimsFor,
 } from "./connection"
 import {
   type Seed,
@@ -68,7 +69,7 @@ async function sourcesModel(
 }
 
 /** Від чийого імені запит: ключ засіву (`sub`) чи власні роль і claims. */
-type Who = string | { role: ApiRole; claims: Record<string, unknown> }
+type Who = string | { role: ApiRolePurpose; claims: Record<string, unknown> }
 
 /** Перевірка: хто, запит з одним значенням `v` і очікування (масив — множина). */
 type Check = [who: Who, sql: string, expected: unknown]
@@ -103,7 +104,7 @@ async function runChecks(
   for (const [who, sql, expected] of checks(id)) {
     const [role, claims] =
       typeof who === "string"
-        ? (["authenticated", { sub: id(who), role: "authenticated" }] as const)
+        ? (["user", claimsFor("user", id(who))] as const)
         : [who.role, who.claims]
     const result = await queryAs<{ v: unknown }>(client, role, claims, sql)
     const want = Array.isArray(expected) ? [...expected].sort() : expected
@@ -630,8 +631,8 @@ async function seedWithoutUsers(client: pg.Client): Promise<Seed> {
 const CURRENT_USER = value("simetra.current_user_id()")
 /** `sub` не uuid: без regex приведення кинуло б `22P02` на кожному запиті. */
 const NOT_A_UUID: Who = {
-  role: "authenticated",
-  claims: { sub: "not-a-uuid", role: "authenticated" },
+  role: "user",
+  claims: claimsFor("user", "not-a-uuid"),
 }
 
 const WITHOUT_USERS_CASES: Case[] = [
@@ -643,7 +644,11 @@ const WITHOUT_USERS_CASES: Case[] = [
       [NOT_A_UUID, CURRENT_USER, null],
       [NOT_A_UUID, TASKS, []],
       [NOT_A_UUID, MINE, []],
-      [{ role: "anon", claims: { role: "anon" } }, CURRENT_USER, null],
+      [
+        { role: "anonymous", claims: claimsFor("anonymous") },
+        CURRENT_USER,
+        null,
+      ],
     ],
   ],
   [

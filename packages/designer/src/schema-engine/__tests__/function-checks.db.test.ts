@@ -30,6 +30,7 @@ import {
   project,
   testRoleName,
   testSuperuserUrl,
+  loginUrl,
 } from "../../../../simetra/test/support"
 import {
   asSuperuser,
@@ -692,9 +693,7 @@ describe("plpgsql_check", () => {
          grant usage on schema simetra to ${NOUSAGE};
          grant select on all tables in schema simetra to ${NOUSAGE}`,
         async (url) => {
-          const as = new URL(url)
-          as.username = NOUSAGE
-          as.password = "x"
+          const as = new URL(loginUrl(url, NOUSAGE, "x"))
           const outcome = await executePlan(
             apply,
             { url: as.toString() },

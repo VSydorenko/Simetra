@@ -11,7 +11,7 @@ import {
   project,
 } from "../../src/compiler/__tests__/helpers"
 import { signUp } from "./auth"
-import { asRole, queryAs, withRollback } from "./connection"
+import { asRole, queryAs, withRollback, claimsFor } from "./connection"
 
 /**
  * Платформний шар `simetra` на справжньому стеку Supabase (спека користувачів
@@ -89,7 +89,7 @@ async function count(client: pg.Client, table: string): Promise<number> {
   return rows[0]!.n
 }
 
-const authenticated = (sub: string) => ({ sub, role: "authenticated" })
+const authenticated = (sub: string) => claimsFor("user", sub)
 
 describe("platform users layer in Postgres", () => {
   it("signup provisions one identity and one user", async () => {
@@ -157,7 +157,7 @@ describe("platform users layer in Postgres", () => {
       const currentUser = () =>
         queryAs<{ u: string | null }>(
           client,
-          "authenticated",
+          "user",
           authenticated(id),
           "SELECT simetra.current_user_id() AS u"
         )
@@ -258,9 +258,9 @@ describe("platform users layer in Postgres", () => {
       }
       const [role, claims] =
         situation === "anon without sub"
-          ? (["anon", { role: "anon" }] as const)
+          ? (["anonymous", claimsFor("anonymous")] as const)
           : ([
-              "authenticated",
+              "user",
               authenticated(situation === "non-uuid sub" ? "not-a-uuid" : id),
             ] as const)
       const result = await queryAs<{ u: string | null }>(
@@ -279,11 +279,11 @@ describe("platform users layer in Postgres", () => {
     await withRollback(async (client) => {
       await deploy(client)
       await signUp(client)
-      const service = { role: "service_role" }
+      const service = claimsFor("service")
       expect(
         await queryAs<{ u: string | null }>(
           client,
-          "service_role",
+          "service",
           service,
           "SELECT simetra.current_user_id() AS u"
         )
@@ -291,7 +291,7 @@ describe("platform users layer in Postgres", () => {
       expect(
         await queryAs(
           client,
-          "service_role",
+          "service",
           service,
           "SELECT * FROM simetra.identities"
         )
@@ -311,7 +311,7 @@ describe("platform users layer in Postgres", () => {
       expect(
         await queryAs<{ owner_id: string }>(
           client,
-          "authenticated",
+          "user",
           authenticated(alice),
           "SELECT owner_id FROM public.platform_note"
         )
@@ -319,7 +319,7 @@ describe("platform users layer in Postgres", () => {
       expect(
         await queryAs(
           client,
-          "authenticated",
+          "user",
           authenticated(alice),
           "SELECT * FROM simetra.identities"
         )
@@ -341,7 +341,7 @@ describe("platform users layer in Postgres", () => {
       )
       // Перемикання ролі без точки збереження: решта транзакції — запит
       // користувача, як у PostgREST.
-      await asRole(client, "authenticated", authenticated(alice))
+      await asRole(client, "user", authenticated(alice))
       const { rows } = await client.query(
         "SELECT owner_id FROM public.platform_note"
       )

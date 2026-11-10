@@ -38,6 +38,7 @@ import {
   withRollback,
   type Refusal,
   setLocalSetting,
+  claimsFor,
 } from "./connection"
 import {
   assignmentRow,
@@ -100,7 +101,7 @@ describe("rights administration guards", () => {
     /^[0-9a-f-]{36}$/.test(name) ? name : key(name)
   const sql = (source: string) =>
     source.replace(/\{([^}]+)\}/g, (_, name: string) => `'${key(name)}'`)
-  const claims = (user: string) => ({ sub: key(user), role: "authenticated" })
+  const claims = (user: string) => claimsFor("user", key(user))
   /**
    * Команда пише лише свій кореневий рядок і його ТЧ (спека прав §4.6), тож корінь
    * контексту — id рядка, а не скоуп; `after` завершує її відкладену
@@ -1297,7 +1298,7 @@ describe("rights administration guards", () => {
       expect(await version(key("A"))).toBe(++previous)
       const api = await queryAs<{ scope: string; version: string }>(
         client,
-        "authenticated",
+        "user",
         claims("root"),
         "SELECT scope, version::text FROM simetra.rights_versions()"
       )

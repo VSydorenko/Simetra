@@ -6,6 +6,7 @@ import {
   type CompileResult,
   type PromoteInput,
 } from "simetra/compiler"
+import type { DatabaseProvider } from "simetra/model"
 import { SCOPE_FUNCTIONS_FILE, acceptDebt, metaFiles, uuid } from "../helpers"
 
 /**
@@ -108,11 +109,13 @@ export const ORG_SCOPE_KIND = {
   setFunction: "membership",
 }
 
-function defaults(): Record<string, Record<string, unknown>> {
+function defaults(
+  provider: DatabaseProvider
+): Record<string, Record<string, unknown>> {
   return {
     "project.meta.json": {
       name: "RightsApp",
-      database: { provider: "supabase" },
+      database: { provider },
       scopeKinds: [ORG_SCOPE_KIND],
     },
     [ORGANIZATION_FILE]: catalog(uuid(6002), "Organization", "organization"),
@@ -537,15 +540,17 @@ export function globalGrantsSource(overrides: Record<string, unknown> = {}) {
  * `Project`, задача з прив'язкою до нього, контейнерна роль `ProjectLead` з
  * `read@any` на задачі й глобальні системні довідники — контейнерні
  * призначення без виду скоупу лежать у глобальному довіднику (спека прав §4.6).
- * Перевизначення зливається з файлом за шляхом, як у `rightsFiles`.
+ * Перевизначення зливається з файлом за шляхом, як у `rightsFiles`;
+ * `provider` — як у `rightsFiles`.
  */
 export function singleTenantRights(
-  overrides: Record<string, Record<string, unknown>> = {}
+  overrides: Record<string, Record<string, unknown>> = {},
+  provider: DatabaseProvider = "supabase"
 ): Map<string, string> {
   const files: Record<string, Record<string, unknown>> = {
     "project.meta.json": {
       name: "SingleTenantRights",
-      database: { provider: "supabase" },
+      database: { provider },
     },
     [USERS_FILE]: catalog(uuid(6003), "Users", "users", {
       role: "users",
@@ -1929,12 +1934,14 @@ export const deny = (
 /**
  * Файли проєкту прав. Перевизначення зливається з типовим файлом за шляхом
  * на верхньому рівні ключів: тест додає поле прав, не повторюючи решти файлу.
- * Шлях без типового файлу додає новий файл.
+ * Шлях без типового файлу додає новий файл. `provider` — профіль бази
+ * проєкту: DB-тест передає профіль прогону, unit-тести лишаються на типовому.
  */
 export function rightsFiles(
-  overrides: Record<string, Record<string, unknown>> = {}
+  overrides: Record<string, Record<string, unknown>> = {},
+  provider: DatabaseProvider = "supabase"
 ): Map<string, string> {
-  const files = defaults()
+  const files = defaults(provider)
   for (const [path, fields] of Object.entries(overrides)) {
     files[path] = { ...files[path], ...fields }
   }

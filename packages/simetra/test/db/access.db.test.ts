@@ -2,7 +2,7 @@ import { beforeAll, describe, expect, it } from "vitest"
 import type pg from "pg"
 import { compile, type CompiledModel } from "simetra/compiler"
 import { renderDesiredState } from "simetra/schema"
-import { RIGHTS_MAINTENANCE_SETTING } from "simetra/model"
+import { RIGHTS_MAINTENANCE_SETTING, type ApiRolePurpose } from "simetra/model"
 import { accessPolicyNames } from "../../src/compiler/access-units"
 import {
   expectClean,
@@ -21,12 +21,7 @@ import {
   systemCatalog,
 } from "../../src/compiler/__tests__/fixtures/rights"
 import { signUp } from "./auth"
-import {
-  queryAs,
-  withRollback,
-  type ApiRole,
-  setLocalSetting,
-} from "./connection"
+import { claimsFor, queryAs, withRollback, setLocalSetting } from "./connection"
 
 /**
  * Доступ до таблиць виду на справжньому Postgres (платформна спека §6.7,
@@ -264,9 +259,9 @@ async function tenant(
   return { org, item }
 }
 
-const user = (sub: string) => ({ sub, role: "authenticated" })
-const claimsOf = (role: ApiRole, sub: string) =>
-  role === "authenticated" ? user(sub) : { role }
+const user = (sub: string) => claimsFor("user", sub)
+const claimsOf = (purpose: ApiRolePurpose, sub: string) =>
+  claimsFor(purpose, purpose === "user" ? sub : undefined)
 
 const PRIVILEGES = [
   "SELECT",
@@ -323,7 +318,7 @@ describe.each(SCENARIOS)("kind table access in schema $schema", (scenario) => {
         expect(
           await queryAs<{ s: string }>(
             client,
-            "authenticated",
+            "user",
             user(alice),
             `SELECT ${carrier} AS s FROM ${schema}.${table}`
           ),
@@ -334,7 +329,7 @@ describe.each(SCENARIOS)("kind table access in schema $schema", (scenario) => {
       expect(
         await queryAs<{ p: string }>(
           client,
-          "authenticated",
+          "user",
           user(alice),
           `SELECT parent_id AS p FROM ${schema}.item_lines`
         )
@@ -349,7 +344,7 @@ describe.each(SCENARIOS)("kind table access in schema $schema", (scenario) => {
       await client.query(
         `INSERT INTO ${schema}.currency (id, code) VALUES (gen_random_uuid(), 'UAH'), (gen_random_uuid(), 'EUR')`
       )
-      for (const role of ["anon", "authenticated"] as const) {
+      for (const role of ["anonymous", "user"] as const) {
         expect(
           await queryAs<{ code: string }>(
             client,
@@ -374,13 +369,13 @@ describe.each(SCENARIOS)("kind table access in schema $schema", (scenario) => {
       expect(
         await queryAs(
           client,
-          "authenticated",
+          "user",
           user(alice),
           `SELECT * FROM ${schema}.secret`
         )
       ).toEqual({ rows: [] })
       for (const table of ["secret", "item"]) {
-        for (const role of ["anon", "service_role"] as const) {
+        for (const role of ["anonymous", "service"] as const) {
           expect(
             await queryAs(
               client,
@@ -507,7 +502,7 @@ describe.each(SCENARIOS)("kind table access in schema $schema", (scenario) => {
       for (const [table, reads] of expected) {
         const result = await queryAs<{ "QUERY PLAN": unknown }>(
           client,
-          "authenticated",
+          "user",
           user(alice),
           `EXPLAIN (FORMAT JSON) SELECT * FROM ${schema}.${table}`
         )

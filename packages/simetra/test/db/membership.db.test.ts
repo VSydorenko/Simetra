@@ -12,7 +12,7 @@ import {
   uuid,
 } from "../../src/compiler/__tests__/helpers"
 import { signUp } from "./auth"
-import { queryAs, withRollback } from "./connection"
+import { queryAs, withRollback, claimsFor } from "./connection"
 
 /**
  * Членство на справжньому Postgres (спека користувачів §8): унікальність
@@ -79,7 +79,7 @@ async function member(
   return rows[0]!.id
 }
 
-const user = (sub: string) => ({ sub, role: "authenticated" })
+const user = (sub: string) => claimsFor("user", sub)
 
 describe("membership in Postgres", () => {
   it("members without a user may repeat in a tenant; the same user may not", async () => {
@@ -113,7 +113,7 @@ describe("membership in Postgres", () => {
       const myMember = (sub: string, org: string) =>
         queryAs<{ m: string | null }>(
           client,
-          "authenticated",
+          "user",
           user(sub),
           "SELECT public.org_member_my_member($1) AS m",
           [org]
@@ -141,7 +141,7 @@ describe("membership in Postgres", () => {
       const scopes = (sub: string) =>
         queryAs<{ s: string }>(
           client,
-          "authenticated",
+          "user",
           user(sub),
           "SELECT s FROM public.org_member_member_scopes() AS s"
         )
@@ -176,11 +176,11 @@ describe("membership in Postgres", () => {
       const alice = await signUp(client)
       const org = await organization(client)
       await member(client, org, alice)
-      const service = { role: "service_role" }
+      const service = claimsFor("service")
       expect(
         await queryAs<{ m: string | null }>(
           client,
-          "service_role",
+          "service",
           service,
           "SELECT public.org_member_my_member($1) AS m",
           [org]
@@ -189,7 +189,7 @@ describe("membership in Postgres", () => {
       expect(
         await queryAs(
           client,
-          "service_role",
+          "service",
           service,
           "SELECT s FROM public.org_member_member_scopes() AS s"
         )
@@ -207,7 +207,13 @@ describe("membership in Postgres", () => {
       ]) {
         const params = sql.includes("$1") ? [org] : []
         expect(
-          await queryAs(client, "anon", { role: "anon" }, sql, params),
+          await queryAs(
+            client,
+            "anonymous",
+            claimsFor("anonymous"),
+            sql,
+            params
+          ),
           sql
         ).toEqual({ code: "42501" })
       }

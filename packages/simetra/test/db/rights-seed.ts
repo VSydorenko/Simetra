@@ -23,7 +23,7 @@ import {
   TICKET_WRITER_ID,
 } from "../../src/compiler/__tests__/fixtures/rights"
 import { signUp } from "./auth"
-import { queryAs, testDatabaseUrl } from "./connection"
+import { queryAs, testDatabaseUrl, claimsFor } from "./connection"
 
 /**
  * Спільний засів DB-сценаріїв прав (`rights-functions`, `rights-policies`,
@@ -382,8 +382,8 @@ export async function closureRights(
     })
     const result = await queryAs<{ v: string[] }>(
       client,
-      "authenticated",
-      { sub: ids.other, role: "authenticated" },
+      "user",
+      claimsFor("user", ids.other),
       SCOPE_MINE
     )
     if (!("rows" in result)) throw new Error(`rights_mine: ${result.code}`)

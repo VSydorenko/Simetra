@@ -1,14 +1,20 @@
 import { readFileSync } from "node:fs"
 import pg from "pg"
 import {
+  PROVIDER_API_ROLES,
+  PROVIDER_IDENTITY_SOURCES,
+  PROVIDER_LOGIN_ROLES,
   PROVIDER_OWNER_ROLES,
   RIGHTS_MAINTENANCE_SETTING,
   SESSION_CLAIMS_SETTING,
 } from "simetra/model"
 import { afterEach, describe, expect, it, vi } from "vitest"
+import { signUp } from "./auth"
 import {
+  asRole,
   asSessionLogin,
   asStackSuperuser,
+  claimsFor,
   expectClientRole,
   isRunTag,
   loginUrl,
@@ -28,6 +34,7 @@ import {
   setLocalSetting,
   type SwitchClient,
   testOwnerLoginUrl,
+  testRoleFor,
   testRoleName,
   testSuperuserUrl,
   trackClient,
@@ -549,4 +556,134 @@ describe("trackClient", () => {
     )
     expect(checks).toEqual([])
   })
+})
+
+describe("request roles of the run profile", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  it.each(["supabase", "postgres"] as const)(
+    "%s: testRoleFor reads PROVIDER_API_ROLES of the profile",
+    (provider) => {
+      vi.stubEnv(PROVIDER_ENV, provider)
+      for (const purpose of ["user", "anonymous", "service"] as const)
+        expect(testRoleFor(purpose)).toBe(PROVIDER_API_ROLES[provider][purpose])
+    }
+  )
+
+  it("supabase: claims carry the role name, as PostgREST reads it", () => {
+    vi.stubEnv(PROVIDER_ENV, "supabase")
+    expect(claimsFor("user", "u1")).toEqual({
+      sub: "u1",
+      role: PROVIDER_API_ROLES.supabase.user,
+    })
+    expect(claimsFor("anonymous")).toEqual({
+      role: PROVIDER_API_ROLES.supabase.anonymous,
+    })
+    expect(claimsFor("service")).toEqual({
+      role: PROVIDER_API_ROLES.supabase.service,
+    })
+  })
+
+  // Спека профілю §4.4: роль ставить сервер, а не claim
+  it("postgres: claims carry sub and is_anonymous, no role", () => {
+    vi.stubEnv(PROVIDER_ENV, "postgres")
+    expect(claimsFor("user", "u1")).toEqual({ sub: "u1", is_anonymous: false })
+    expect(claimsFor("anonymous")).toEqual({ is_anonymous: true })
+    expect(() => claimsFor("service")).toThrow(
+      "no service role in postgres profile"
+    )
+  })
+
+  it("postgres: asRole of the service purpose refuses before any statement", async () => {
+    vi.stubEnv(PROVIDER_ENV, "postgres")
+    const client = fakeClient()
+    await expect(asRole(client, "service", {})).rejects.toThrow(
+      "no service role in postgres profile"
+    )
+    expect(client.sql).toEqual([])
+  })
+
+  it("asRole sets the claims, switches the role and checks it", async () => {
+    vi.stubEnv(PROVIDER_ENV, "postgres")
+    const client = fakeClient(() => [
+      { role: PROVIDER_API_ROLES.postgres.user },
+    ])
+    await asRole(client, "user", { sub: "u1" })
+    expect(client.sql).toEqual([
+      `SELECT set_config($1, $2, true) ["${SESSION_CLAIMS_SETTING}","{\\"sub\\":\\"u1\\"}"]`,
+      `SET LOCAL ROLE ${PROVIDER_API_ROLES.postgres.user}`,
+      "SELECT current_user AS role",
+    ])
+  })
+
+  // Поза транзакцією `SET LOCAL` — лише WARNING: запит пішов би від власника
+  it("asRole throws when the role did not switch", async () => {
+    vi.stubEnv(PROVIDER_ENV, "supabase")
+    const client = fakeClient(() => [{ role: "postgres" }])
+    await expect(asRole(client, "user", {})).rejects.toThrow(
+      /runs as postgres, not authenticated/
+    )
+  })
+})
+
+describe("signUp on the postgres profile", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  const auth = PROVIDER_LOGIN_ROLES.postgres[0]!
+  const { schema, name } = PROVIDER_IDENTITY_SOURCES.postgres.table
+  const caller = (sql: string): Record<string, unknown>[] =>
+    sql.startsWith("SELECT session_user")
+      ? [{ session: "simetra_owner", role: "simetra_command" }]
+      : sql.startsWith("INSERT")
+        ? [{ id: "11111111-1111-4111-8111-111111111111" }]
+        : []
+
+  it.each<[string, Record<string, unknown>]>([
+    ["email", { email: null }],
+    ["phone", { phone: "+380" }],
+    ["meta", { meta: { name: "x" } }],
+  ])(
+    "refuses %s, which Better Auth cannot hold, before any statement",
+    async (field, account) => {
+      vi.stubEnv(PROVIDER_ENV, "postgres")
+      const client = fakeClient(caller)
+      await expect(signUp(client, account)).rejects.toThrow(field)
+      expect(client.sql).toEqual([])
+    }
+  )
+
+  // Відновлюється стан викликача (тут — роль команд під входом власника), а
+  // не суперкористувач входу: інакше решта засіву йшла б суперкористувачем
+  it.each(["success", "failure"] as const)(
+    "inserts as the auth login and restores the caller's session_user and current_user on %s",
+    async (path) => {
+      vi.stubEnv(PROVIDER_ENV, "postgres")
+      const client = fakeClient((sql) => {
+        if (path === "failure" && sql.startsWith("INSERT"))
+          throw new Error("duplicate email")
+        return caller(sql)
+      })
+      const run = signUp(client, { email: "a@example.test" })
+      if (path === "failure") await expect(run).rejects.toThrow("duplicate")
+      else expect(await run).toBe("11111111-1111-4111-8111-111111111111")
+      const restore = [
+        "SET LOCAL SESSION AUTHORIZATION simetra_owner",
+        "SET LOCAL ROLE simetra_command",
+      ]
+      expect(client.sql.map((sql) => sql.split("\n")[0]!)).toEqual([
+        "SAVEPOINT sign_up",
+        "SELECT session_user AS session, current_user AS role",
+        "SET LOCAL SESSION AUTHORIZATION DEFAULT",
+        `SET LOCAL ROLE ${auth}`,
+        `INSERT INTO ${schema}."${name}" (id, name, email, "emailVerified", "createdAt", "updatedAt", "isAnonymous")`,
+        ...(path === "success"
+          ? [...restore, "RELEASE SAVEPOINT sign_up"]
+          : ["ROLLBACK TO SAVEPOINT sign_up", ...restore]),
+      ])
+    }
+  )
 })

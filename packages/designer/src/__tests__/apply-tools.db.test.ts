@@ -56,6 +56,7 @@ import {
   testRoleName,
   testSuperuserUrl,
   uuid,
+  withSessionOptions,
 } from "../../../simetra/test/support"
 import { dropRoles, inTarget as loadTarget, query } from "./support/db"
 import { leftoverShadows, provisionedShadows } from "./support/shadows"
@@ -830,13 +831,12 @@ describe("apply", { concurrent: false }, () => {
       const data = await planned(dir, url)
       // `current_user` стає роллю без BYPASSRLS через параметр з'єднання, без
       // пароля й нового логіна: роль `OWNER` створено без цього атрибута
-      const limited = new URL(url)
-      limited.searchParams.set("options", `-c role=${OWNER}`)
+      const limited = withSessionOptions(url, `-c role=${OWNER}`)
       const shadowCallsBefore = lose.shadowScopes.length
       const r = await call(
         "apply",
         { plan: data.file, planHash: data.planHash, rehearse: true },
-        options(dir, limited.toString())
+        options(dir, limited)
       )
       expect(errors(r)).toEqual(["plan.owner-not-bypassrls"])
       // Р10: відмова до тіні

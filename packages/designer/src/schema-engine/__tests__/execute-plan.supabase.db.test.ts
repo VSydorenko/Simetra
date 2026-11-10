@@ -10,6 +10,7 @@ import { createApplyDatabase } from ".."
 import {
   testRoleName,
   testSuperuserUrl,
+  loginUrl,
 } from "../../../../simetra/test/support"
 import { asSuperuser, dropRoles, query } from "../../__tests__/support/db"
 import {
@@ -62,12 +63,9 @@ describe.concurrent("executePlan", () => {
     await inTarget(BASE, async (url) => {
       // План тієї самої ролі API: збіг ролі плану від відмови не рятує
       const plan = await planFor(url, [CREATE_N], { role: "service_role" })
-      const asApi = new URL(url)
-      asApi.username = API_LOGIN
-      asApi.password = API_PASSWORD
       const outcome = await executePlan(
         apply,
-        { url: asApi.toString() },
+        { url: loginUrl(url, API_LOGIN, API_PASSWORD) },
         plan,
         options
       )

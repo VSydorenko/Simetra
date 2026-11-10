@@ -8,7 +8,7 @@ import {
   metaFiles,
   project,
 } from "../../src/compiler/__tests__/helpers"
-import { commandAs, queryAs, withRollback } from "./connection"
+import { commandAs, queryAs, withRollback, claimsFor } from "./connection"
 
 /**
  * Звірка хешу знімка рантаймом (рішення Р-A3-12, Р-A3-16): роль команд
@@ -85,9 +85,9 @@ describe.each(MODELS)("applied_snapshot_hash %s", (_, files) => {
     const m = await model(files)
     await withRollback(async (client) => {
       await deploy(client, m)
-      expect(
-        await queryAs(client, "authenticated", { role: "authenticated" }, READ)
-      ).toEqual({ code: "42501" })
+      expect(await queryAs(client, "user", claimsFor("user"), READ)).toEqual({
+        code: "42501",
+      })
     })
   })
 })

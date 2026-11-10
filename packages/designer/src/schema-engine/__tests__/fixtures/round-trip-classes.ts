@@ -1,5 +1,13 @@
 import type pg from "pg"
 import {
+  PROVIDER_API_ROLES,
+  PROVIDER_IDENTITY_SOURCES,
+  PROVIDER_OWNER_ROLES,
+  SESSION_CLAIMS_SETTING,
+  quoteIdent,
+  type DatabaseProvider,
+} from "simetra/model"
+import {
   readCatalog,
   type CatalogShape,
   type CatalogTable,
@@ -227,37 +235,61 @@ export interface ClassFixture {
   expected: unknown
 }
 
-export const CLASS_FIXTURES: ClassFixture[] = [
-  {
-    name: "expression and partial indexes",
-    schemas: ["app"],
-    sql: `
+/**
+ * Фікстури класів профілю `provider`: ролі API, власник (він же грантор і
+ * роль типових привілеїв) і таблиця ідентичності — з даних профілю. Класи
+ * відмінності від ACL пресету `public` — лише на `supabase`: вони читають
+ * пресет провайдера. DB-тест передає профіль прогону, без нього — `supabase`.
+ */
+export function classFixtures(
+  provider: DatabaseProvider = "supabase"
+): ClassFixture[] {
+  const anon = PROVIDER_API_ROLES[provider].anonymous
+  const user = PROVIDER_API_ROLES[provider].user
+  const owner = PROVIDER_OWNER_ROLES[provider]
+  const identity = PROVIDER_IDENTITY_SOURCES[provider]
+  // `sub` сесії: на `supabase` — функція провайдера, на `postgres` — сам
+  // claim (спека профілю §4.4); `deparsed` — як його віддає `pg_get_expr`
+  const subject =
+    provider === "supabase"
+      ? { sql: "auth.uid()", deparsed: "auth.uid()" }
+      : {
+          sql: `(pg_catalog.current_setting('${SESSION_CLAIMS_SETTING}', true)::jsonb ->> 'sub')::uuid`,
+          deparsed: `(((current_setting('${SESSION_CLAIMS_SETTING}'::text, true))::jsonb ->> 'sub'::text))::uuid`,
+        }
+  const presetClasses: ClassFixture[] =
+    provider === "supabase" ? PRESET_CLASSES : []
+  return [
+    {
+      name: "expression and partial indexes",
+      schemas: ["app"],
+      sql: `
       CREATE SCHEMA app;
       CREATE TABLE app.account (id uuid PRIMARY KEY, email text, closed_at timestamptz);
       CREATE INDEX account_email_lower_idx ON app.account (lower(email));
       CREATE INDEX account_open_idx ON app.account (email) WHERE closed_at IS NULL;
     `,
-    property: (shape) =>
-      table(shape, "app.account")
-        .indexes.filter((i) => i.constraint === undefined)
-        .map((i) => ({ name: i.name, keys: i.keys, where: i.where })),
-    expected: [
-      {
-        name: "account_email_lower_idx",
-        keys: [{ expression: "lower(email)" }],
-        where: undefined,
-      },
-      {
-        name: "account_open_idx",
-        keys: [{ column: "email" }],
-        where: "(closed_at IS NULL)",
-      },
-    ],
-  },
-  {
-    name: "unique nulls not distinct",
-    schemas: ["app"],
-    sql: `
+      property: (shape) =>
+        table(shape, "app.account")
+          .indexes.filter((i) => i.constraint === undefined)
+          .map((i) => ({ name: i.name, keys: i.keys, where: i.where })),
+      expected: [
+        {
+          name: "account_email_lower_idx",
+          keys: [{ expression: "lower(email)" }],
+          where: undefined,
+        },
+        {
+          name: "account_open_idx",
+          keys: [{ column: "email" }],
+          where: "(closed_at IS NULL)",
+        },
+      ],
+    },
+    {
+      name: "unique nulls not distinct",
+      schemas: ["app"],
+      sql: `
       CREATE SCHEMA app;
       CREATE TABLE app.code (
         id uuid PRIMARY KEY,
@@ -266,75 +298,75 @@ export const CLASS_FIXTURES: ClassFixture[] = [
       );
       CREATE UNIQUE INDEX code_lower_idx ON app.code (lower(value)) NULLS NOT DISTINCT;
     `,
-    property: (shape) =>
-      table(shape, "app.code").indexes.map((i) => ({
-        name: i.name,
-        nullsNotDistinct: i.nullsNotDistinct,
-      })),
-    expected: [
-      { name: "code_lower_idx", nullsNotDistinct: true },
-      { name: "code_pkey", nullsNotDistinct: false },
-      { name: "code_value_key", nullsNotDistinct: true },
-    ],
-  },
-  {
-    name: "table without a primary key",
-    schemas: ["app"],
-    sql: `
+      property: (shape) =>
+        table(shape, "app.code").indexes.map((i) => ({
+          name: i.name,
+          nullsNotDistinct: i.nullsNotDistinct,
+        })),
+      expected: [
+        { name: "code_lower_idx", nullsNotDistinct: true },
+        { name: "code_pkey", nullsNotDistinct: false },
+        { name: "code_value_key", nullsNotDistinct: true },
+      ],
+    },
+    {
+      name: "table without a primary key",
+      schemas: ["app"],
+      sql: `
       CREATE SCHEMA app;
       CREATE TABLE app.event_log (at timestamptz NOT NULL DEFAULT now(), message text);
     `,
-    property: (shape) => {
-      const t = table(shape, "app.event_log")
-      return {
-        columns: t.columns.map((c) => c.name),
-        constraints: t.constraints,
-        indexes: t.indexes,
-      }
+      property: (shape) => {
+        const t = table(shape, "app.event_log")
+        return {
+          columns: t.columns.map((c) => c.name),
+          constraints: t.constraints,
+          indexes: t.indexes,
+        }
+      },
+      expected: { columns: ["at", "message"], constraints: [], indexes: [] },
     },
-    expected: { columns: ["at", "message"], constraints: [], indexes: [] },
-  },
-  {
-    name: "identity always",
-    schemas: ["app"],
-    sql: `
+    {
+      name: "identity always",
+      schemas: ["app"],
+      sql: `
       CREATE SCHEMA app;
       CREATE TABLE app.ticket (
         id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
         title text NOT NULL
       );
     `,
-    property: (shape) => table(shape, "app.ticket").columns[0]?.identity,
-    expected: { generation: "always", sequence: "ticket_id_seq" },
-  },
-  {
-    name: "foreign key to auth.users",
-    schemas: ["app"],
-    sql: `
+      property: (shape) => table(shape, "app.ticket").columns[0]?.identity,
+      expected: { generation: "always", sequence: "ticket_id_seq" },
+    },
+    {
+      name: "foreign key to auth.users",
+      schemas: ["app"],
+      sql: `
       CREATE SCHEMA app;
       CREATE TABLE app.profile (
         id uuid PRIMARY KEY,
         user_id uuid NOT NULL,
         CONSTRAINT profile_user_fk FOREIGN KEY (user_id)
-          REFERENCES auth.users (id) ON DELETE CASCADE
+          REFERENCES ${quoteIdent(identity.table.schema)}.${quoteIdent(identity.table.name)} (${identity.keyColumn}) ON DELETE CASCADE
       );
     `,
-    property: (shape) =>
-      table(shape, "app.profile").constraints.find(
-        (c) => c.name === "profile_user_fk"
-      )?.references,
-    expected: {
-      schema: "auth",
-      table: "users",
-      columns: ["id"],
-      onDelete: "cascade",
-      onUpdate: "noAction",
+      property: (shape) =>
+        table(shape, "app.profile").constraints.find(
+          (c) => c.name === "profile_user_fk"
+        )?.references,
+      expected: {
+        schema: identity.table.schema,
+        table: identity.table.name,
+        columns: [identity.keyColumn],
+        onDelete: "cascade",
+        onUpdate: "noAction",
+      },
     },
-  },
-  {
-    name: "enum type and its column",
-    schemas: ["app"],
-    sql: `
+    {
+      name: "enum type and its column",
+      schemas: ["app"],
+      sql: `
       CREATE SCHEMA app;
       CREATE TYPE app.order_status AS ENUM ('draft', 'posted', 'void');
       CREATE TABLE app.purchase (
@@ -342,24 +374,24 @@ export const CLASS_FIXTURES: ClassFixture[] = [
         status app.order_status NOT NULL DEFAULT 'draft'
       );
     `,
-    property: (shape) => ({
-      enumTypes: shape.catalog.enumTypes.map((e) => [e.name, e.values]),
-      column: table(shape, "app.purchase").columns[1],
-    }),
-    expected: {
-      enumTypes: [["order_status", ["draft", "posted", "void"]]],
-      column: {
-        name: "status",
-        type: "<schema>.order_status",
-        notNull: true,
-        default: "'draft'::<schema>.order_status",
+      property: (shape) => ({
+        enumTypes: shape.catalog.enumTypes.map((e) => [e.name, e.values]),
+        column: table(shape, "app.purchase").columns[1],
+      }),
+      expected: {
+        enumTypes: [["order_status", ["draft", "posted", "void"]]],
+        column: {
+          name: "status",
+          type: "<schema>.order_status",
+          notNull: true,
+          default: "'draft'::<schema>.order_status",
+        },
       },
     },
-  },
-  {
-    name: "trigger with its function",
-    schemas: ["app"],
-    sql: `
+    {
+      name: "trigger with its function",
+      schemas: ["app"],
+      sql: `
       CREATE SCHEMA app;
       CREATE TABLE app.note (id uuid PRIMARY KEY, body text, updated_at timestamptz);
       CREATE FUNCTION app.note_touch() RETURNS trigger LANGUAGE plpgsql
@@ -367,226 +399,283 @@ export const CLASS_FIXTURES: ClassFixture[] = [
       CREATE TRIGGER note_touch BEFORE UPDATE ON app.note
         FOR EACH ROW EXECUTE FUNCTION app.note_touch();
     `,
-    property: (shape) => ({
-      triggers: shape.triggers,
-      functions: shape.functions.map((f) => f.name),
-    }),
-    expected: {
-      triggers: [
-        {
-          table: "app.note",
-          name: "note_touch",
-          definition:
-            "CREATE TRIGGER note_touch BEFORE UPDATE ON app.note FOR EACH ROW EXECUTE FUNCTION app.note_touch()",
-        },
-      ],
-      functions: ["app.note_touch()"],
+      property: (shape) => ({
+        triggers: shape.triggers,
+        functions: shape.functions.map((f) => f.name),
+      }),
+      expected: {
+        triggers: [
+          {
+            table: "app.note",
+            name: "note_touch",
+            definition:
+              "CREATE TRIGGER note_touch BEFORE UPDATE ON app.note FOR EACH ROW EXECUTE FUNCTION app.note_touch()",
+          },
+        ],
+        functions: ["app.note_touch()"],
+      },
     },
-  },
-  {
-    name: "row level security policy",
-    schemas: ["app"],
-    sql: `
+    {
+      name: "row level security policy",
+      schemas: ["app"],
+      sql: `
       CREATE SCHEMA app;
       CREATE TABLE app.diary (id uuid PRIMARY KEY, owner_id uuid NOT NULL);
       ALTER TABLE app.diary ENABLE ROW LEVEL SECURITY;
-      CREATE POLICY diary_own ON app.diary FOR SELECT TO authenticated
-        USING (owner_id = auth.uid());
+      CREATE POLICY diary_own ON app.diary FOR SELECT TO ${user}
+        USING (owner_id = ${subject.sql});
     `,
-    property: (shape) => ({
-      rls: table(shape, "app.diary").rowLevelSecurity,
-      policies: shape.policies,
-    }),
-    expected: {
-      rls: "enabled",
-      policies: [
-        {
-          table: "app.diary",
-          name: "diary_own",
-          command: "r",
-          permissive: true,
-          roles: ["authenticated"],
-          using: "(owner_id = auth.uid())",
-          check: null,
-        },
-      ],
+      property: (shape) => ({
+        rls: table(shape, "app.diary").rowLevelSecurity,
+        policies: shape.policies,
+      }),
+      expected: {
+        rls: "enabled",
+        policies: [
+          {
+            table: "app.diary",
+            name: "diary_own",
+            command: "r",
+            permissive: true,
+            roles: [user],
+            using: `(owner_id = ${subject.deparsed})`,
+            check: null,
+          },
+        ],
+      },
     },
-  },
-  {
-    name: "grant on a table",
-    schemas: ["app"],
-    sql: `
+    {
+      name: "grant on a table",
+      schemas: ["app"],
+      sql: `
       CREATE SCHEMA app;
       CREATE TABLE app.price (id uuid PRIMARY KEY, amount numeric);
-      GRANT SELECT ON app.price TO anon;
-      GRANT SELECT, UPDATE (amount) ON app.price TO authenticated;
+      GRANT SELECT ON app.price TO ${anon};
+      GRANT SELECT, UPDATE (amount) ON app.price TO ${user};
     `,
-    property: (shape) => ({
-      table: shape.acls
-        .find((a) => a.object === "r:app.price")
-        ?.acl.filter((item) => item.startsWith("anon=")),
-      // Грант на колонку живе в `pg_attribute.attacl`, а не в ACL таблиці
-      column: shape.acls.find((a) => a.object === "c:app.price.amount")?.acl,
-    }),
-    expected: {
-      table: ["anon=r/postgres"],
-      column: ["authenticated=w/postgres"],
+      property: (shape) => ({
+        table: shape.acls
+          .find((a) => a.object === "r:app.price")
+          ?.acl.filter((item) => item.startsWith(`${anon}=`)),
+        // Грант на колонку живе в `pg_attribute.attacl`, а не в ACL таблиці
+        column: shape.acls.find((a) => a.object === "c:app.price.amount")?.acl,
+      }),
+      expected: {
+        table: [`${anon}=r/${owner}`],
+        column: [`${user}=w/${owner}`],
+      },
     },
-  },
-  {
-    name: "column grant after a table revoke",
-    schemas: ["app"],
-    sql: `
+    {
+      name: "column grant after a table revoke",
+      schemas: ["app"],
+      sql: `
       CREATE SCHEMA app;
-      ALTER DEFAULT PRIVILEGES IN SCHEMA app GRANT ALL ON TABLES TO anon;
+      ALTER DEFAULT PRIVILEGES IN SCHEMA app GRANT ALL ON TABLES TO ${anon};
       CREATE TABLE app.ledger (id uuid PRIMARY KEY, amount numeric);
-      REVOKE ALL ON app.ledger FROM anon;
-      GRANT SELECT (amount) ON app.ledger TO anon;
+      REVOKE ALL ON app.ledger FROM ${anon};
+      GRANT SELECT (amount) ON app.ledger TO ${anon};
     `,
-    property: (shape) =>
-      shape.acls.find((a) => a.object === "c:app.ledger.amount")?.acl,
-    expected: ["anon=r/postgres"],
-  },
-  {
-    name: "comments",
-    schemas: ["app"],
-    sql: `
+      property: (shape) =>
+        shape.acls.find((a) => a.object === "c:app.ledger.amount")?.acl,
+      expected: [`${anon}=r/${owner}`],
+    },
+    {
+      name: "comments",
+      schemas: ["app"],
+      sql: `
       CREATE SCHEMA app;
       CREATE TABLE app.memo (id uuid PRIMARY KEY, body text);
       COMMENT ON TABLE app.memo IS 'Memo of a user';
       COMMENT ON COLUMN app.memo.body IS 'Free text';
     `,
-    property: (shape) => {
-      const t = table(shape, "app.memo")
-      return [t.comment, t.columns.map((c) => c.comment)]
+      property: (shape) => {
+        const t = table(shape, "app.memo")
+        return [t.comment, t.columns.map((c) => c.comment)]
+      },
+      expected: ["Memo of a user", [undefined, "Free text"]],
     },
-    expected: ["Memo of a user", [undefined, "Free text"]],
-  },
-  {
-    name: "sequence owned by a column",
-    schemas: ["app"],
-    sql: `
+    {
+      name: "sequence owned by a column",
+      schemas: ["app"],
+      sql: `
       CREATE SCHEMA app;
       CREATE TABLE app.invoice (id uuid PRIMARY KEY, number bigint);
       CREATE SEQUENCE app.invoice_number_seq OWNED BY app.invoice.number;
       ALTER TABLE app.invoice ALTER COLUMN number SET DEFAULT nextval('app.invoice_number_seq');
     `,
-    property: (shape) => ({
-      ownedBy: shape.ownedBy,
-      default: table(shape, "app.invoice").columns[1]?.default,
-    }),
-    expected: {
-      ownedBy: [
-        {
-          sequence: "app.invoice_number_seq",
-          column: "app.invoice.number",
-        },
-      ],
-      default: "nextval('<schema>.invoice_number_seq'::regclass)",
+      property: (shape) => ({
+        ownedBy: shape.ownedBy,
+        default: table(shape, "app.invoice").columns[1]?.default,
+      }),
+      expected: {
+        ownedBy: [
+          {
+            sequence: "app.invoice_number_seq",
+            column: "app.invoice.number",
+          },
+        ],
+        default: "nextval('<schema>.invoice_number_seq'::regclass)",
+      },
     },
-  },
-  {
-    name: "replica identity full",
-    schemas: ["app"],
-    sql: `
+    {
+      name: "replica identity full",
+      schemas: ["app"],
+      sql: `
       CREATE SCHEMA app;
       CREATE TABLE app.feed (id uuid PRIMARY KEY, body text);
       ALTER TABLE app.feed REPLICA IDENTITY FULL;
     `,
-    property: (shape) => shape.replicaIdentity,
-    expected: [{ table: "app.feed", identity: "f" }],
-  },
-  {
-    name: "default privileges",
-    schemas: ["app"],
-    sql: `
+      property: (shape) => shape.replicaIdentity,
+      expected: [{ table: "app.feed", identity: "f" }],
+    },
+    {
+      name: "default privileges",
+      schemas: ["app"],
+      sql: `
       CREATE SCHEMA app;
       CREATE TABLE app.item (id uuid PRIMARY KEY);
-      ALTER DEFAULT PRIVILEGES IN SCHEMA app GRANT SELECT ON TABLES TO anon;
+      ALTER DEFAULT PRIVILEGES IN SCHEMA app GRANT SELECT ON TABLES TO ${anon};
     `,
-    property: (shape) =>
-      shape.defaultAcls.map((a) => ({
-        role: a.role,
-        type: a.type,
-        anon: a.acl.filter((item) => item.startsWith("anon=")),
-      })),
-    expected: [{ role: "postgres", type: "r", anon: ["anon=r/postgres"] }],
-  },
-  {
-    name: "view with a grant",
-    schemas: ["app"],
-    sql: `
+      property: (shape) =>
+        shape.defaultAcls.map((a) => ({
+          role: a.role,
+          type: a.type,
+          anon: a.acl.filter((item) => item.startsWith(`${anon}=`)),
+        })),
+      expected: [{ role: owner, type: "r", anon: [`${anon}=r/${owner}`] }],
+    },
+    {
+      name: "view with a grant",
+      schemas: ["app"],
+      sql: `
       CREATE SCHEMA app;
       CREATE TABLE app.goods (id uuid PRIMARY KEY, title text, archived boolean NOT NULL DEFAULT false);
       CREATE VIEW app.active_goods AS SELECT id, title FROM app.goods WHERE NOT archived;
-      GRANT SELECT ON app.active_goods TO anon;
+      GRANT SELECT ON app.active_goods TO ${anon};
     `,
-    property: (shape) => ({
-      views: shape.views,
-      anon: shape.acls
-        .find((a) => a.object === "v:app.active_goods")
-        ?.acl.filter((item) => item.startsWith("anon=")),
-    }),
-    expected: {
-      views: [
-        {
-          name: "app.active_goods",
-          kind: "v",
-          definition:
-            " SELECT id,\n    title\n   FROM app.goods\n  WHERE (NOT archived);",
-        },
-      ],
-      anon: ["anon=r/postgres"],
+      property: (shape) => ({
+        views: shape.views,
+        anon: shape.acls
+          .find((a) => a.object === "v:app.active_goods")
+          ?.acl.filter((item) => item.startsWith(`${anon}=`)),
+      }),
+      expected: {
+        views: [
+          {
+            name: "app.active_goods",
+            kind: "v",
+            definition:
+              " SELECT id,\n    title\n   FROM app.goods\n  WHERE (NOT archived);",
+          },
+        ],
+        anon: [`${anon}=r/${owner}`],
+      },
     },
-  },
-  {
-    name: "materialized view with a grant",
-    schemas: ["app"],
-    sql: `
+    {
+      name: "materialized view with a grant",
+      schemas: ["app"],
+      sql: `
       CREATE SCHEMA app;
       CREATE TABLE app.sale (id uuid PRIMARY KEY, day date NOT NULL, amount numeric NOT NULL);
       CREATE MATERIALIZED VIEW app.daily_sales AS
         SELECT day, sum(amount) AS total FROM app.sale GROUP BY day;
-      GRANT SELECT ON app.daily_sales TO authenticated;
+      GRANT SELECT ON app.daily_sales TO ${user};
     `,
-    property: (shape) => ({
-      views: shape.views,
-      authenticated: shape.acls
-        .find((a) => a.object === "m:app.daily_sales")
-        ?.acl.filter((item) => item.startsWith("authenticated=")),
-    }),
-    expected: {
-      views: [
-        {
-          name: "app.daily_sales",
-          kind: "m",
-          definition:
-            " SELECT day,\n    sum(amount) AS total\n   FROM app.sale\n  GROUP BY day;",
-        },
-      ],
-      authenticated: ["authenticated=r/postgres"],
+      property: (shape) => ({
+        views: shape.views,
+        authenticated: shape.acls
+          .find((a) => a.object === "m:app.daily_sales")
+          ?.acl.filter((item) => item.startsWith(`${user}=`)),
+      }),
+      expected: {
+        views: [
+          {
+            name: "app.daily_sales",
+            kind: "m",
+            definition:
+              " SELECT day,\n    sum(amount) AS total\n   FROM app.sale\n  GROUP BY day;",
+          },
+        ],
+        authenticated: [`${user}=r/${owner}`],
+      },
     },
-  },
-  {
-    name: "two tables with one name in different schemas",
-    schemas: ["app", "reports"],
-    sql: `
+    {
+      name: "two tables with one name in different schemas",
+      schemas: ["app", "reports"],
+      sql: `
       CREATE SCHEMA app;
       CREATE SCHEMA reports;
       CREATE TABLE app.orders (id uuid PRIMARY KEY, total numeric);
       CREATE TABLE reports.orders (id uuid PRIMARY KEY, day date NOT NULL);
     `,
-    property: (shape) =>
-      shape.catalog.tables.map((t) => [
-        t.schema,
-        t.name,
-        t.columns.map((c) => c.name),
-      ]),
-    expected: [
-      ["app", "orders", ["id", "total"]],
-      ["reports", "orders", ["id", "day"]],
-    ],
-  },
+      property: (shape) =>
+        shape.catalog.tables.map((t) => [
+          t.schema,
+          t.name,
+          t.columns.map((c) => c.name),
+        ]),
+      expected: [
+        ["app", "orders", ["id", "total"]],
+        ["reports", "orders", ["id", "day"]],
+      ],
+    },
+    ...presetClasses,
+    {
+      name: "PUBLIC execute revoked by a global ADP beside a schema ADP",
+      schemas: ["app"],
+      sql: `
+      CREATE SCHEMA app;
+      ALTER DEFAULT PRIVILEGES FOR ROLE ${owner} REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;
+      ALTER DEFAULT PRIVILEGES FOR ROLE ${owner} IN SCHEMA app GRANT EXECUTE ON FUNCTIONS TO ${anon};
+      CREATE FUNCTION app.secret() RETURNS int LANGUAGE sql AS $$ select 1 $$;
+    `,
+      property: (shape) =>
+        shape.acls
+          .find((a) => a.object === "f:app.secret()")
+          ?.acl.filter((item) => item.startsWith("=")),
+      expected: [],
+    },
+    {
+      name: "PUBLIC usage revoked on a type and a domain beside a schema ADP",
+      schemas: ["app"],
+      sql: `
+      CREATE SCHEMA app;
+      ALTER DEFAULT PRIVILEGES IN SCHEMA app GRANT USAGE ON TYPES TO ${anon};
+      CREATE TYPE app.mood AS ENUM ('ok', 'bad');
+      CREATE DOMAIN app.positive AS int CHECK (VALUE > 0);
+      REVOKE USAGE ON TYPE app.mood FROM PUBLIC;
+      REVOKE USAGE ON DOMAIN app.positive FROM PUBLIC;
+    `,
+      property: (shape) =>
+        shape.acls
+          .filter(
+            (a) => a.object === "T:app.mood" || a.object === "T:app.positive"
+          )
+          .map((a) => a.acl.filter((item) => item.startsWith("="))),
+      expected: [[], []],
+    },
+    {
+      name: "mixed ACL pair on a table beside a schema ADP",
+      schemas: ["app"],
+      sql: `
+      CREATE SCHEMA app;
+      ALTER DEFAULT PRIVILEGES IN SCHEMA app GRANT SELECT, INSERT ON TABLES TO ${anon};
+      CREATE TABLE app.memo (id uuid PRIMARY KEY);
+      REVOKE INSERT ON app.memo FROM ${anon};
+      GRANT UPDATE ON app.memo TO ${anon};
+    `,
+      property: (shape) =>
+        shape.acls
+          .find((a) => a.object === "r:app.memo")
+          ?.acl.filter((item) => item.startsWith(`${anon}=`)),
+      expected: [`${anon}=rw/${owner}`],
+    },
+  ]
+}
+
+// Відмінності від ACL пресету `public` провайдера Supabase: класи читають
+// його пресет, аналога на `postgres` немає
+const PRESET_CLASSES: ClassFixture[] = [
   {
     // Ціль — тінь, засіяна пресетом провайдера, тож відкликання `PUBLIC` —
     // саме відмінність від пресету, яку видно лише з боку пресету
@@ -625,55 +714,5 @@ export const CLASS_FIXTURES: ClassFixture[] = [
         ?.acl.map((item) => item.split("/")[0])
         .filter((item) => item.startsWith("anon=")),
     expected: ["anon=C"],
-  },
-  {
-    name: "PUBLIC execute revoked by a global ADP beside a schema ADP",
-    schemas: ["app"],
-    sql: `
-      CREATE SCHEMA app;
-      ALTER DEFAULT PRIVILEGES FOR ROLE postgres REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;
-      ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA app GRANT EXECUTE ON FUNCTIONS TO anon;
-      CREATE FUNCTION app.secret() RETURNS int LANGUAGE sql AS $$ select 1 $$;
-    `,
-    property: (shape) =>
-      shape.acls
-        .find((a) => a.object === "f:app.secret()")
-        ?.acl.filter((item) => item.startsWith("=")),
-    expected: [],
-  },
-  {
-    name: "PUBLIC usage revoked on a type and a domain beside a schema ADP",
-    schemas: ["app"],
-    sql: `
-      CREATE SCHEMA app;
-      ALTER DEFAULT PRIVILEGES IN SCHEMA app GRANT USAGE ON TYPES TO anon;
-      CREATE TYPE app.mood AS ENUM ('ok', 'bad');
-      CREATE DOMAIN app.positive AS int CHECK (VALUE > 0);
-      REVOKE USAGE ON TYPE app.mood FROM PUBLIC;
-      REVOKE USAGE ON DOMAIN app.positive FROM PUBLIC;
-    `,
-    property: (shape) =>
-      shape.acls
-        .filter(
-          (a) => a.object === "T:app.mood" || a.object === "T:app.positive"
-        )
-        .map((a) => a.acl.filter((item) => item.startsWith("="))),
-    expected: [[], []],
-  },
-  {
-    name: "mixed ACL pair on a table beside a schema ADP",
-    schemas: ["app"],
-    sql: `
-      CREATE SCHEMA app;
-      ALTER DEFAULT PRIVILEGES IN SCHEMA app GRANT SELECT, INSERT ON TABLES TO anon;
-      CREATE TABLE app.memo (id uuid PRIMARY KEY);
-      REVOKE INSERT ON app.memo FROM anon;
-      GRANT UPDATE ON app.memo TO anon;
-    `,
-    property: (shape) =>
-      shape.acls
-        .find((a) => a.object === "r:app.memo")
-        ?.acl.filter((item) => item.startsWith("anon=")),
-    expected: ["anon=rw/postgres"],
   },
 ]

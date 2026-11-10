@@ -3,7 +3,7 @@ import pg from "pg"
 import { ID, sample } from "../../src/server/__tests__/fixtures"
 import { fromPgPool, normalizeError } from "../../src/server/port"
 import { decodeCoreRow } from "../../src/server/decode"
-import { testDatabaseUrl } from "./connection"
+import { testDatabaseUrl, withSessionOptions } from "./connection"
 
 /**
  * Контракт порту команд (рішення Р19): що рядок ядра доходить до `decodeCoreRow`
@@ -34,13 +34,15 @@ const PARSED_OIDS = new Set([
 
 // Сесія пулу навмисно не та, що потрібна ядру: `escape` дав би інший `bytea`,
 // пояс сесії — інший запис моменту; крок 2 транзакції ставить свої локально.
+// Налаштування дописуються до `options` адреси: ключ `options` конфігу `pg`
+// адреса перекрила б, а перезапис адреси загубив би її стартову роль
 const SESSION = "-c bytea_output=escape -c TimeZone=Asia/Tokyo"
+const SESSION_URL = withSessionOptions(testDatabaseUrl(), SESSION)
 
 const pools = [
-  new pg.Pool({ connectionString: testDatabaseUrl(), options: SESSION }),
+  new pg.Pool({ connectionString: SESSION_URL }),
   new pg.Pool({
-    connectionString: testDatabaseUrl(),
-    options: SESSION,
+    connectionString: SESSION_URL,
     types: {
       getTypeParser: ((oid: number, format?: "text" | "binary") =>
         PARSED_OIDS.has(oid)
@@ -85,6 +87,15 @@ describe("CommandDatabase over pg.Pool", () => {
       const client = await fromPgPool(pool).connect()
       try {
         await client.query("BEGIN")
+        // Сесія пулу справді не та, що потрібна ядру: інакше кроку 2 нічого
+        // доводити
+        expect(
+          (
+            await client.query(
+              "SELECT current_setting('bytea_output') AS bytea, current_setting('TimeZone') AS zone"
+            )
+          ).rows
+        ).toEqual([{ bytea: "escape", zone: "Asia/Tokyo" }])
         // Без кроку 2 — форма сесії: доводить, що крок 2 щось змінює. Сирий
         // текст, бо декодер нормалізує момент і різниця поясу в ньому зникає.
         const session = await client.query(ROW, [ID])

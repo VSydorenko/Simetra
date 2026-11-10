@@ -10,7 +10,12 @@ import {
   type PlanOutcome,
   type SchemaEngine,
 } from "simetra/schema"
-import { attribute, customTable, uuid } from "../../../../simetra/test/support"
+import {
+  attribute,
+  customTable,
+  uuid,
+  loginUrl,
+} from "../../../../simetra/test/support"
 import { asSuperuser, query } from "../../__tests__/support/db"
 import {
   codes,
@@ -184,10 +189,7 @@ describe.concurrent("buildPlan", () => {
             clone.url,
             `grant create on database "${database}" to ${COPIER}`
           )
-          const as = new URL(clone.url)
-          as.username = COPIER
-          as.password = COPIER_PASSWORD
-          const url = as.toString()
+          const url = loginUrl(clone.url, COPIER, COPIER_PASSWORD)
           if (setup !== undefined) await query(url, setup)
           return fn({ url })
         }),

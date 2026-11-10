@@ -28,6 +28,7 @@ import {
   testRoleName,
   testSuperuserUrl,
   setLocalSetting,
+  loginUrl,
 } from "../test/db/connection"
 
 /**
@@ -138,10 +139,9 @@ describe("tabular section limit", () => {
   let owner: pg.Client | undefined
   let pool: pg.Pool | undefined
 
-  const urlOf = (override: (url: URL) => void) => {
+  const urlOf = () => {
     const url = new URL(testDatabaseUrl())
     url.pathname = `/${database}`
-    override(url)
     return url.toString()
   }
 
@@ -206,7 +206,7 @@ describe("tabular section limit", () => {
     } finally {
       await base.end()
     }
-    owner = new pg.Client({ connectionString: urlOf(() => undefined) })
+    owner = new pg.Client({ connectionString: urlOf() })
     await owner.connect()
     await owner.query(desired.sql)
 
@@ -254,10 +254,7 @@ describe("tabular section limit", () => {
         `grant ${quoted(role)} to ${quoted(login)} with inherit false, set true`
       )
     pool = new pg.Pool({
-      connectionString: urlOf((url) => {
-        url.username = login
-        url.password = password
-      }),
+      connectionString: loginUrl(urlOf(), login, password),
       max: 2,
     })
     const runtime = await createCommandRuntime({

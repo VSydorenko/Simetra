@@ -4,7 +4,7 @@ import { compile, type CompiledModel } from "simetra/compiler"
 import { renderDesiredState } from "simetra/schema"
 import { readCatalog } from "../../../test/db/catalog"
 import { expectCatalogMatchesSnapshot } from "../../../test/db/compare"
-import { queryAs, withRollback } from "../../../test/db/connection"
+import { claimsFor, queryAs, withRollback } from "../../../test/db/connection"
 import { readReferenceDomain } from "../../compiler/__tests__/fixtures/reference-domain"
 import { expectClean } from "../../compiler/__tests__/helpers"
 
@@ -106,27 +106,27 @@ describe("reference domain in Postgres", () => {
       const scopes = async (claims: Record<string, unknown>) => ({
         orgs: await queryAs(
           client,
-          "authenticated",
+          "user",
           claims,
           "SELECT id FROM app.org_member_member_scopes() AS id"
         ),
         users: await queryAs(
           client,
-          "authenticated",
+          "user",
           claims,
           "SELECT id FROM app.accessible_user_ids() AS id"
         ),
       })
-      expect(await scopes({ sub: user, role: "authenticated" })).toEqual({
+      expect(await scopes(claimsFor("user", user))).toEqual({
         orgs: { rows: [{ id: org }] },
         users: { rows: [{ id: user }] },
       })
-      expect(await scopes({ sub: other, role: "authenticated" })).toEqual({
+      expect(await scopes(claimsFor("user", other))).toEqual({
         orgs: { rows: [{ id: otherOrg }] },
         users: { rows: [{ id: other }] },
       })
       // Без `sub` користувача немає — і скоупів теж
-      expect(await scopes({ role: "authenticated" })).toEqual({
+      expect(await scopes(claimsFor("user"))).toEqual({
         orgs: { rows: [] },
         users: { rows: [] },
       })

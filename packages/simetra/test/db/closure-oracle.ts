@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs"
 import { expect } from "vitest"
 import type pg from "pg"
-import { queryAs } from "./connection"
+import { queryAs, claimsFor } from "./connection"
 
 /**
  * Еквівалентність замикання прав (спека прав §5.4): нове тіло `rights_mine` і
@@ -100,8 +100,8 @@ export async function mineEquivalence(
   for (const [key, sub] of Object.entries(users)) {
     const result = await queryAs<Equivalence>(
       client,
-      "authenticated",
-      { sub, role: "authenticated" },
+      "user",
+      claimsFor("user", sub),
       compare(
         "simetra.rights_mine()",
         "simetra.rights_mine_before()",

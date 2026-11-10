@@ -50,7 +50,7 @@ import {
   provisionedShadows,
 } from "../../__tests__/support/shadows"
 import {
-  CLASS_FIXTURES,
+  classFixtures,
   readOracle,
   type OracleShape,
 } from "./fixtures/round-trip-classes"
@@ -409,7 +409,7 @@ const scopeOf = (schemas: string[]): EngineScope => ({
 })
 
 describe("class fixtures survive the round trip", () => {
-  for (const fixture of CLASS_FIXTURES) {
+  for (const fixture of classFixtures()) {
     it(fixture.name, async () => {
       const scope = scopeOf(fixture.schemas)
       await inTarget(fixture.sql, scope, async (target) => {

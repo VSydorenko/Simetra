@@ -23,7 +23,7 @@ import {
   writeRoles,
 } from "../../src/compiler/__tests__/fixtures/rights"
 import { signUp } from "./auth"
-import { type Refusal, commandAs, queryAs } from "./connection"
+import { type Refusal, commandAs, queryAs, claimsFor } from "./connection"
 import {
   deploy,
   type Seed,
@@ -145,7 +145,7 @@ describe("catalog command core", () => {
     if (id === undefined) throw new Error(`unknown seed key ${name}`)
     return id
   }
-  const claims = (user: string) => ({ sub: key(user), role: "authenticated" })
+  const claims = (user: string) => claimsFor("user", key(user))
 
   /** Поточна версія рядка — читає власник, RLS її не ховає. */
   const versionById = async (id: string) =>
@@ -930,7 +930,7 @@ describe("catalog command core: unscoped Note", () => {
     if (id === undefined) throw new Error(`unknown seed key ${name}`)
     return id
   }
-  const claims = (user: string) => ({ sub: key(user), role: "authenticated" })
+  const claims = (user: string) => claimsFor("user", key(user))
   const noteVersion = async () =>
     (
       await tx
@@ -1011,7 +1011,7 @@ describe("catalog command core: unscoped Note", () => {
     expect(
       await queryAs(
         tx.client(),
-        "authenticated",
+        "user",
         claims("C"),
         "SELECT * FROM simetra.current_user_carrier_sources()"
       )

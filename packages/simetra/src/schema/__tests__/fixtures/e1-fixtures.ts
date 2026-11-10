@@ -1,4 +1,9 @@
-import { toSnakeCase } from "simetra/model"
+import {
+  PROVIDER_IDENTITY_SOURCES,
+  SESSION_CLAIMS_SETTING,
+  toSnakeCase,
+  type DatabaseProvider,
+} from "simetra/model"
 import {
   attribute,
   catalog,
@@ -13,11 +18,19 @@ import {
 
 const ORG = "catalogs/Organization/Organization.meta.json"
 
-/** Проєкт усіх фікстур: два види скоупу, схема `app`, пояс Києва. */
-function domain(entries: Record<string, unknown>): Map<string, string> {
+/**
+ * Проєкт усіх фікстур: два види скоупу, схема `app`, пояс Києва, база
+ * профілю `provider` (DB-тест передає профіль прогону, unit-тести лишаються
+ * на типовому).
+ */
+function domain(
+  provider: DatabaseProvider,
+  entries: Record<string, unknown>
+): Map<string, string> {
   return metaFiles({
     "project.meta.json": {
       ...scopedProject(),
+      database: { provider },
       defaultSchema: "app",
       timezone: "Europe/Kyiv",
     },
@@ -31,9 +44,13 @@ const ref = (kind: string, name: string) => ({
   ref: { kind, name },
 })
 
-export function scopedCatalog(): Map<string, string> {
-  return domain({
-    "catalogs/Partner/Partner.meta.json": catalog("Partner", { scope: "org" }),
+export function scopedCatalog(
+  provider: DatabaseProvider = "supabase"
+): Map<string, string> {
+  return domain(provider, {
+    "catalogs/Partner/Partner.meta.json": catalog("Partner", {
+      scope: "org",
+    }),
     "catalogs/Item/Item.meta.json": catalog("Item", {
       scope: "org",
       hierarchyType: "FoldersAndItems",
@@ -58,8 +75,10 @@ export function scopedCatalog(): Map<string, string> {
 
 const SALE_FILE = "documents/Sale/Sale.meta.json"
 
-export function saleDocument(): Map<string, string> {
-  return domain({
+export function saleDocument(
+  provider: DatabaseProvider = "supabase"
+): Map<string, string> {
+  return domain(provider, {
     "catalogs/Item/Item.meta.json": catalog("Item", { scope: "org" }),
     [SALE_FILE]: document("Sale", {
       scope: "org",
@@ -112,7 +131,9 @@ function goods(n: number): Record<string, unknown> {
 
 const STOCK_FILE = "accumulation-registers/Stock/Stock.meta.json"
 
-export function accumulationRegisters(): Map<string, string> {
+export function accumulationRegisters(
+  provider: DatabaseProvider = "supabase"
+): Map<string, string> {
   const register = (
     name: string,
     registerType: string
@@ -131,7 +152,7 @@ export function accumulationRegisters(): Map<string, string> {
     ],
     resources: [attribute("qty", { type: "Numeric", precision: 15, scale: 3 })],
   })
-  return domain({
+  return domain(provider, {
     "catalogs/Item/Item.meta.json": catalog("Item", { scope: "org" }),
     [SALE_FILE]: document("Sale", {
       scope: "org",
@@ -164,12 +185,14 @@ export function accumulationRegisters(): Map<string, string> {
   })
 }
 
-export function informationRegisters(): Map<string, string> {
+export function informationRegisters(
+  provider: DatabaseProvider = "supabase"
+): Map<string, string> {
   const dimensions = () => [
     attribute("item", { ...ref("Catalog", "Item"), physicalName: "item_id" }),
     attribute("region", { type: "String", length: 20 }),
   ]
-  return domain({
+  return domain(provider, {
     "catalogs/Item/Item.meta.json": catalog("Item", { scope: "org" }),
     [SALE_FILE]: document("Sale", {
       scope: "org",
@@ -228,7 +251,9 @@ export function informationRegisters(): Map<string, string> {
   })
 }
 
-export function constants(): Map<string, string> {
+export function constants(
+  provider: DatabaseProvider = "supabase"
+): Map<string, string> {
   const constant = (
     n: number,
     name: string,
@@ -241,7 +266,7 @@ export function constants(): Map<string, string> {
     kindLabel: toSnakeCase(name),
     ...value,
   })
-  return domain({
+  return domain(provider, {
     "catalogs/Item/Item.meta.json": catalog("Item", { scope: "org" }),
     "constants/MainItem/MainItem.meta.json": constant(91, "MainItem", {
       scope: "org",
@@ -257,14 +282,18 @@ export function constants(): Map<string, string> {
   })
 }
 
-export function customTables(): Map<string, string> {
+export function customTables(
+  provider: DatabaseProvider = "supabase"
+): Map<string, string> {
   const column = (
     n: number,
     name: string,
     physicalName: string,
     value: Record<string, unknown>
   ) => ({ id: uuid(n), name, physicalName, ...value })
-  return domain({
+  // Таблиця ідентичності провайдера: FK на неї — зовнішнє посилання
+  const identity = PROVIDER_IDENTITY_SOURCES[provider].table
+  return domain(provider, {
     // Ціль FK оголошена пізніше за шляхом файлу: FK рендеряться після всіх таблиць.
     "custom-tables/Audit/Audit.meta.json": customTable("Audit", {
       scope: "none",
@@ -310,7 +339,11 @@ export function customTables(): Map<string, string> {
           name: "audit_user_fk",
           columns: ["userId"],
           references: {
-            external: { schema: "auth", table: "users", columns: ["id"] },
+            external: {
+              schema: identity.schema,
+              table: identity.name,
+              columns: [PROVIDER_IDENTITY_SOURCES[provider].keyColumn],
+            },
           },
           onDelete: "setNull",
         },
@@ -349,7 +382,9 @@ export function customTables(): Map<string, string> {
     }),
     // FK у межах тенанта на скоуплений довідник (спека прав §4.7): ціль — складений
     // `UNIQUE (<скоуп>, <ключ>)`, що його Postgres має прийняти як ціль FK.
-    "catalogs/Partner/Partner.meta.json": catalog("Partner", { scope: "org" }),
+    "catalogs/Partner/Partner.meta.json": catalog("Partner", {
+      scope: "org",
+    }),
     "custom-tables/PartnerNote/PartnerNote.meta.json": customTable(
       "PartnerNote",
       {
@@ -376,8 +411,10 @@ export function customTables(): Map<string, string> {
   })
 }
 
-export function enumerations(): Map<string, string> {
-  return domain({
+export function enumerations(
+  provider: DatabaseProvider = "supabase"
+): Map<string, string> {
+  return domain(provider, {
     "enumerations/Color/Color.meta.json": {
       id: uuid(121),
       kind: "Enumeration",
@@ -431,8 +468,20 @@ export function enumerations(): Map<string, string> {
 
 const MOVEMENTS_SQL = "documents/Sale/Sale.sql"
 
-export function movementQuery(): Map<string, string> {
-  return domain({
+/**
+ * `sub` сесії як uuid: на `supabase` — функція провайдера, на `postgres` —
+ * сам claim (спека профілю §4.4; функції провайдера там немає).
+ */
+function currentSubject(provider: DatabaseProvider): string {
+  return provider === "supabase"
+    ? "auth.uid()"
+    : `(pg_catalog.current_setting('${SESSION_CLAIMS_SETTING}', true)::jsonb ->> 'sub')::uuid`
+}
+
+export function movementQuery(
+  provider: DatabaseProvider = "supabase"
+): Map<string, string> {
+  return domain(provider, {
     "catalogs/Item/Item.meta.json": catalog("Item", { scope: "org" }),
     [SALE_FILE]: document("Sale", {
       scope: "org",
@@ -480,7 +529,7 @@ export function movementQuery(): Map<string, string> {
       "  AS $$ SELECT id FROM app.organization $$;",
       "CREATE FUNCTION app.user_ids() RETURNS SETOF uuid LANGUAGE sql STABLE",
       "  SECURITY DEFINER SET search_path = ''",
-      "  AS $$ SELECT auth.uid() $$;",
+      `  AS $$ SELECT ${currentSubject(provider)} $$;`,
     ].join("\n"),
     [MOVEMENTS_SQL]: [
       "-- @movements Stock",
@@ -499,7 +548,10 @@ export function movementQuery(): Map<string, string> {
  * розгортається в Postgres. Спільні для звірки каталогу з рендером
  * (`deploy.db.test.ts`) і для мапера порту `SchemaEngine`.
  */
-export const FIXTURES: [string, () => Map<string, string>][] = [
+export const FIXTURES: [
+  string,
+  (provider?: DatabaseProvider) => Map<string, string>,
+][] = [
   [
     "scoped catalog with hierarchy, owner, code numbering and predefined items",
     scopedCatalog,

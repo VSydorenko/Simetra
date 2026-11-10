@@ -2,10 +2,12 @@ import pg from "pg"
 import {
   COMMAND_SETTING,
   PLATFORM_ROLES,
+  PROVIDER_API_ROLES,
   PROVIDER_OWNER_ROLES,
   quoteIdent,
   RIGHTS_MAINTENANCE_SETTING,
   SESSION_CLAIMS_SETTING,
+  type ApiRolePurpose,
   type CommandContext,
 } from "simetra/model"
 import type { ApplyDatabase, ApplyTransaction } from "simetra/schema"
@@ -745,24 +747,61 @@ export function rollbackDatabase(client: pg.Client): ApplyDatabase {
 }
 
 /**
- * Роль запиту API: від неї PostgREST виконує запит користувача чи сервісного
- * ключа.
+ * Роль API призначення `purpose` у профілі прогону; `null` — профіль такої
+ * ролі не має (сервісної на `postgres`).
  */
-export type ApiRole = "authenticated" | "anon" | "service_role"
+export function testRoleFor(purpose: ApiRolePurpose): string | null {
+  return PROVIDER_API_ROLES[testProvider()][purpose]
+}
 
 /**
- * Перемикає транзакцію на роль API з claims запиту, як це робить PostgREST:
- * `SET LOCAL` і `set_config(…, true)` діють до кінця транзакції чи до відкату
- * точки збереження, тож повернення до власника — справа того, хто кличе.
- * Claims ставляться до ролі: роль API не мала б права їх змінити.
+ * Claims запиту призначення `purpose`, як їх дає сесія провайдера: на
+ * `supabase` — з claim `role` (за ним PostgREST обирає роль), на `postgres` —
+ * без `role`, з `is_anonymous` (спека профілю §4.4: роль ставить сервер, а не
+ * claim). `sub` — id облікового запису, коли сесія є (`null` — claim є, але
+ * порожній).
+ */
+export function claimsFor(
+  purpose: ApiRolePurpose,
+  sub?: string | null
+): Record<string, unknown> {
+  const provider = testProvider()
+  const role = requiredRole(purpose)
+  const subject = sub === undefined ? {} : { sub }
+  return provider === "supabase"
+    ? { ...subject, role }
+    : { ...subject, is_anonymous: purpose === "anonymous" }
+}
+
+function requiredRole(purpose: ApiRolePurpose): string {
+  const role = testRoleFor(purpose)
+  if (role === null)
+    throw new Error(`no ${purpose} role in ${testProvider()} profile`)
+  return role
+}
+
+/**
+ * Перемикає транзакцію на роль API призначення `purpose` з claims запиту, як
+ * це робить сервер запитів: `SET LOCAL` і `set_config(…, true)` діють до кінця
+ * транзакції чи до відкату точки збереження, тож повернення до власника —
+ * справа того, хто кличе. Claims ставляться до ролі: роль API не мала б
+ * права їх змінити. Роль звіряється окремим запитом: поза транзакцією
+ * `SET LOCAL` — лише `WARNING`, і запит тихо пішов би від власника з
+ * `BYPASSRLS`.
  */
 export async function asRole(
-  client: pg.Client,
-  role: ApiRole,
+  client: RoleClient,
+  purpose: ApiRolePurpose,
   claims: Record<string, unknown>
 ): Promise<void> {
+  const role = requiredRole(purpose)
   await setLocalSetting(client, SESSION_CLAIMS_SETTING, JSON.stringify(claims))
-  await client.query(`SET LOCAL ROLE ${role}`)
+  await client.query(`SET LOCAL ROLE ${quoteIdent(role)}`)
+  const current = await currentRole(client)
+  if (current !== role)
+    throw new Error(
+      `asRole: the transaction runs as ${current}, not ${role}: SET LOCAL ROLE outside a transaction does not switch the role`
+    )
 }
 
 /**
@@ -771,14 +810,14 @@ export async function asRole(
  */
 export async function queryAs<T extends pg.QueryResultRow>(
   client: pg.Client,
-  role: ApiRole,
+  purpose: ApiRolePurpose,
   claims: Record<string, unknown>,
   sql: string,
   params: unknown[] = []
 ): Promise<{ rows: T[] } | { code: string }> {
   await client.query("SAVEPOINT as_role")
   try {
-    await asRole(client, role, claims)
+    await asRole(client, purpose, claims)
     const { rows } = await client.query<T>(sql, params)
     return { rows }
   } catch (error) {

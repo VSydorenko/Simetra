@@ -39,6 +39,7 @@ import {
   testDatabaseUrl,
   testRoleName,
   testSuperuserUrl,
+  loginUrl,
 } from "../../../../simetra/test/support"
 import {
   dropRoles,
@@ -506,13 +507,5 @@ export function sessionLeftover(db: ApplyDatabase, sql: string): ApplyDatabase {
 }
 
 /** Та сама база цілі, але сесією іншої ролі входу. */
-export const loginAs = (
-  url: string,
-  user: string,
-  password: string
-): string => {
-  const as = new URL(url)
-  as.username = user
-  as.password = password
-  return as.toString()
-}
+export const loginAs = (url: string, user: string, password: string): string =>
+  loginUrl(url, user, password)

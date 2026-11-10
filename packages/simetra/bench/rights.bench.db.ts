@@ -30,7 +30,13 @@ import { SNAPSHOT_TABLES } from "../src/compiler/rights/actor-snapshot"
 import { RIGHTS_FUNCTIONS } from "../src/compiler/rights/functions"
 import { rootCreatorFunctionName } from "../src/compiler/rights/root-creator-units"
 import { signUp } from "../test/db/auth"
-import { asRole, testDatabaseUrl, setLocalSetting } from "../test/db/connection"
+import {
+  asRole,
+  claimsFor,
+  restoreOwnerRole,
+  setLocalSetting,
+  testDatabaseUrl,
+} from "../test/db/connection"
 import {
   assignmentRow,
   deploy,
@@ -241,7 +247,7 @@ async function readForms(
   let timedOut = false
   await client.query("SAVEPOINT reader")
   try {
-    await asRole(client, "authenticated", { sub: user, role: "authenticated" })
+    await asRole(client, "user", claimsFor("user", user))
     await client.query(`SET LOCAL statement_timeout = '${READ_LIMIT}'`)
     // Точковий рядок видимий: інакше замір читав би порожню відповідь
     const visible = await timed(client, forms.point)
@@ -568,7 +574,7 @@ async function snapshotFill(
       await setLocalSetting(
         client,
         SESSION_CLAIMS_SETTING,
-        JSON.stringify({ sub: user, role: "authenticated" })
+        JSON.stringify(claimsFor("user", user))
       )
       const run = new Map<string, number>()
       for (const filler of fillers) {
@@ -1095,14 +1101,14 @@ describe("rights limits benchmark", () => {
             await setLocalSetting(
               client,
               SESSION_CLAIMS_SETTING,
-              JSON.stringify({ sub: admin, role: "authenticated" })
+              JSON.stringify(claimsFor("user", admin))
             )
             await client.query(`SET LOCAL ROLE ${PLATFORM_ROLES.command}`)
             const time = await elapsed(async () => {
               await client.query(block(true, commands))
               await client.query("SET CONSTRAINTS ALL IMMEDIATE")
             })
-            await client.query("RESET ROLE")
+            await restoreOwnerRole(client)
             await written(commands)
             return time
           } finally {
@@ -1210,7 +1216,7 @@ describe("rights limits benchmark", () => {
         await setLocalSetting(
           client,
           SESSION_CLAIMS_SETTING,
-          JSON.stringify({ sub: user, role: "authenticated" })
+          JSON.stringify(claimsFor("user", user))
         )
         const calls: FactCall[] = [
           { fact: "rights_mine", from: "simetra.rights_mine()" },
@@ -1385,7 +1391,7 @@ describe("rights limits benchmark", () => {
             await setLocalSetting(
               client,
               SESSION_CLAIMS_SETTING,
-              JSON.stringify({ sub: user, role: "authenticated" })
+              JSON.stringify(claimsFor("user", user))
             )
             await setLocalSetting(
               client,
@@ -1405,7 +1411,7 @@ describe("rights limits benchmark", () => {
               )
               written = result.rowCount ?? 0
             })
-            await client.query("RESET ROLE")
+            await restoreOwnerRole(client)
             expect(written, `${target.table} row is written`).toBe(1)
             return time
           } finally {
@@ -1428,7 +1434,7 @@ describe("rights limits benchmark", () => {
           setLocalSetting(
             client,
             SESSION_CLAIMS_SETTING,
-            JSON.stringify({ sub: user, role: "authenticated" })
+            JSON.stringify(claimsFor("user", user))
           )
 
         // Р3-9 (в), розвилка (2): Σ операторів заповнення знімка з розбивкою
@@ -1477,7 +1483,7 @@ describe("rights limits benchmark", () => {
                 `UPDATE public.${container.table} SET description = 'bench' WHERE id = $1`,
                 [container.id]
               )
-              await client.query("RESET ROLE")
+              await restoreOwnerRole(client)
             }
             expect(
               (await snapshotFacts(client)).includes("rights"),
@@ -1546,7 +1552,7 @@ describe("rights limits benchmark", () => {
                     await client.query("SET CONSTRAINTS ALL IMMEDIATE")
                   })
                 )
-                await client.query("RESET ROLE")
+                await restoreOwnerRole(client)
                 const { rows: n } = await client.query<{ n: string }>(
                   `SELECT count(*) AS n FROM public.${ASSIGNMENTS} WHERE archetype = $1`,
                   [TASK_VIEWER_ID]
@@ -1593,11 +1599,8 @@ describe("rights limits benchmark", () => {
                 [container.id]
               )
             )
-            await client.query("RESET ROLE")
-            await asRole(client, "authenticated", {
-              sub: largest.user,
-              role: "authenticated",
-            })
+            await restoreOwnerRole(client)
+            await asRole(client, "user", claimsFor("user", largest.user))
             let found = 0
             const read = await elapsed(async () => {
               found =
@@ -1682,7 +1685,7 @@ describe("rights limits benchmark", () => {
             setLocalSetting(
               client,
               SESSION_CLAIMS_SETTING,
-              JSON.stringify({ sub: user, role: "authenticated" })
+              JSON.stringify(claimsFor("user", user))
             )
           const context = (action: string, object: string, root: string) =>
             setLocalSetting(
@@ -1700,7 +1703,7 @@ describe("rights limits benchmark", () => {
             await client.query(`INSERT INTO public.${ORG} (id) VALUES ($1)`, [
               root,
             ])
-            await client.query("RESET ROLE")
+            await restoreOwnerRole(client)
             expect(
               await snapshotFacts(client),
               "the root insert takes no snapshot"
@@ -1740,7 +1743,7 @@ describe("rights limits benchmark", () => {
                     result = r[0]!.r
                   })
                 )
-                await client.query("RESET ROLE")
+                await restoreOwnerRole(client)
                 expect(
                   result?.member,
                   "the creator member is written"
@@ -1830,7 +1833,7 @@ describe("rights limits benchmark", () => {
                     )
                   )
                 )
-                await client.query("RESET ROLE")
+                await restoreOwnerRole(client)
               } finally {
                 await client.query("ROLLBACK TO SAVEPOINT breakdown")
               }
@@ -1878,7 +1881,7 @@ describe("rights limits benchmark", () => {
                   )
                 )
               )
-              await client.query("RESET ROLE")
+              await restoreOwnerRole(client)
               writeCommit.push(
                 await elapsed(() =>
                   client.query("SET CONSTRAINTS ALL IMMEDIATE")

@@ -108,6 +108,12 @@ const ROLE_SWITCH_EXCEPTIONS: Exception[] = [
     reason: "the statements of SUPERUSER_PRELUDE",
   },
   {
+    file: "packages/simetra/test/db/auth.ts",
+    reason:
+      "signUp on postgres: the insert of the auth login role from the login superuser, and the return to the caller's session_user and current_user",
+    within: ["signUpBetterAuth"],
+  },
+  {
     file: "packages/simetra/test/db/pgtap.ts",
     reason:
       "the runner's own marker set_config($1 and the forms it refuses inside a suite",
@@ -196,11 +202,6 @@ const ROLE_SWITCH_EXCEPTIONS: Exception[] = [
     reason:
       "SET ROLE postgres, SET SESSION AUTHORIZATION, RESET ROLE of the runtime-login cases",
     task: 7,
-  },
-  {
-    file: "packages/simetra/bench/rights.bench.db.ts",
-    reason: "RESET ROLE of the benchmark",
-    task: 4,
   },
   {
     file: "packages/designer/src/__tests__/roles-tool.db.test.ts",
@@ -303,27 +304,6 @@ const OPTIONS_EXCEPTIONS: Exception[] = [
     reason:
       "options go on env.login, a login role URL without -c role=, not on the test URL",
   },
-  {
-    file: "packages/designer/src/__tests__/support/db.ts",
-    reason: "withRuntimeLogin builds a login URL by hand",
-    task: 4,
-    within: ["withRuntimeLogin"],
-  },
-  ...[
-    "packages/simetra/test/db/command-port.db.test.ts",
-    "packages/designer/src/__tests__/database-tools.db.test.ts",
-    "packages/designer/src/__tests__/apply-tools.db.test.ts",
-    "packages/designer/src/schema-engine/__tests__/execute-plan.support.ts",
-    "packages/designer/src/schema-engine/__tests__/execute-plan.supabase.db.test.ts",
-    "packages/designer/src/schema-engine/__tests__/function-checks.db.test.ts",
-    "packages/designer/src/schema-engine/__tests__/build-plan-provider.db.test.ts",
-    "packages/simetra/bench/tabular.bench.db.ts",
-    "packages/simetra/test/db/better-auth.postgres.db.test.ts",
-  ].map((file) => ({
-    file,
-    reason: "sets options or the user on a URL by hand",
-    task: 4,
-  })),
 ]
 
 function sources(dir: string): string[] {
@@ -467,7 +447,6 @@ function check(
 
 const targetOf = (text: string): string => text.trim().replace(/!$/, "")
 
-// Сталі з дозволеною ціллю, які експортують помічники тестів
 /** Сталі з дозволеною ціллю, які експортує помічник тестів `source`. */
 function helperConstantsOf(source: Source): string[] {
   return source.ast.statements.flatMap((statement) =>
@@ -484,7 +463,6 @@ function helperConstantsOf(source: Source): string[] {
   )
 }
 
-// Сталі з дозволеною ціллю, які експортують помічники тестів
 const HELPER_CONSTANTS = new Set(
   SOURCES.filter(
     (s) =>

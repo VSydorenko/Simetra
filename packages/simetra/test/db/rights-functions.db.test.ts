@@ -42,7 +42,7 @@ import {
   mineEquivalence,
   roleGrantsEquivalence,
 } from "./closure-oracle"
-import { queryAs } from "./connection"
+import { queryAs, claimsFor } from "./connection"
 import {
   type Assignment,
   type Delta,
@@ -591,8 +591,8 @@ describe("rights functions with a scope kind", () => {
       if (sub === undefined) throw new Error(`unknown seed key ${user}`)
       const result = await queryAs<{ v: unknown }>(
         tx.client(),
-        "authenticated",
-        { sub, role: "authenticated" },
+        "user",
+        claimsFor("user", sub),
         sql
       )
       const want = Array.isArray(expected)
@@ -687,8 +687,8 @@ describe("rights functions with a scope kind", () => {
       outcome(
         await queryAs<{ v: unknown }>(
           tx.client(),
-          "service_role",
-          { role: "service_role" },
+          "service",
+          claimsFor("service"),
           any("read")
         )
       )
@@ -699,8 +699,8 @@ describe("rights functions with a scope kind", () => {
     expect(
       await queryAs(
         tx.client(),
-        "anon",
-        { role: "anon" },
+        "anonymous",
+        claimsFor("anonymous"),
         "SELECT simetra.rights_any('read','task')"
       )
     ).toEqual({ code: "42501" })
@@ -758,12 +758,7 @@ describe("rights functions without scope kinds", () => {
   })
 
   const as = (sub: string, sql: string) =>
-    queryAs<{ v: unknown }>(
-      tx.client(),
-      "authenticated",
-      { sub, role: "authenticated" },
-      sql
-    )
+    queryAs<{ v: unknown }>(tx.client(), "user", claimsFor("user", sub), sql)
 
   afterAll(() => tx.close())
 
