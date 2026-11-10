@@ -61,7 +61,7 @@ describe("the boundary follows the provider of the project", () => {
       postgres
     )
     expect(diagnostics).toEqual([])
-    expect(scope.schemas).toEqual(["app", "auth"])
+    expect(scope.schemas).toEqual(["app", "auth", "simetra"])
     expect(scope.provider).toBe("postgres")
   })
 

@@ -1,7 +1,11 @@
 import { beforeAll, describe, expect, it } from "vitest"
 import { PROVIDER_API_ROLES, type DatabaseProvider } from "simetra/model"
 import { compile } from "../compile"
-import { executeGrants, grantRole } from "../sql/execute-grants"
+import {
+  executeGrants,
+  grantRole,
+  sequenceRevokes,
+} from "../sql/execute-grants"
 import { tableGrants } from "../access-units"
 import { platformSchemaGrants } from "../platform/units"
 import { readReferenceDomain } from "./fixtures/reference-domain"
@@ -44,6 +48,11 @@ describe("grant generators on a profile without the service role", () => {
         ),
     ],
     ["platformSchemaGrants", () => platformSchemaGrants("postgres")],
+    [
+      "sequenceRevokes",
+      () =>
+        sequenceRevokes({ schema: "simetra", name: "row_version" }, "postgres"),
+    ],
   ])("%s: no statement for the service role, no null", (_, generate) => {
     const sql = generate().join("\n")
     expect(sql).not.toMatch(/service/)

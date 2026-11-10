@@ -174,9 +174,11 @@ describe("buildPlan", () => {
     "refuses %s before any state read or platform-role check",
     async (_name, owner) => {
       const model = (await compile(policyDomain(adminRoles()))).model!
+      const queries: string[] = []
       const target = await fakeTarget(model, {
         notCopies: [],
         owner,
+        queries,
       })
       const outcome = await buildPlan(
         fakeEngine([]),
@@ -189,6 +191,9 @@ describe("buildPlan", () => {
         status: "refused",
         diagnostics: [{ code: "plan.owner-not-bypassrls" }],
       })
+      // Гейт — останнє читання: далі ні стану застосування, ні ролей платформи
+      expect(queries.at(-1)).toContain("AS bypassrls")
+      expect(queries.filter((q) => q.includes("AS bypassrls"))).toHaveLength(1)
     }
   )
 
@@ -715,6 +720,8 @@ async function fakeTarget(
     notCopies: readonly string[]
     /** Атрибути ролі сесії для гейта власника; за замовчуванням є BYPASSRLS. */
     owner?: { bypassrls: boolean; superuser: boolean } | "none"
+    /** Усі запити, які бачить фейк, — у порядку надходження. */
+    queries?: string[]
     /**
      * Таблиці прийнятих джерел прав: доступ ролі застосування й ключ ролі,
      * якого не оголошує жодна роль, у кожному джерелі призначень.
@@ -769,6 +776,7 @@ async function fakeTarget(
   const lockTables: Named[] = []
   const platformFunctions: string[][] = []
   const answer = (sql: string, params: readonly unknown[] = []): unknown[] => {
+    o.queries?.push(sql)
     if (sql.includes("pg_database"))
       return [{ major: 17, encoding: "UTF8", collate: "C", ctype: "C" }]
     if (sql.includes("server_version_num"))
