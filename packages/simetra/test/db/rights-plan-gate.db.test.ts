@@ -474,7 +474,9 @@ const CASES: [string, Form][] = [
  * `SET LOCAL` у його точці збереження діє й після неї. Стек без
  * `auto_explain` у `shared_preload_libraries` (профіль `postgres`) прийняв би
  * параметри як заглушки, і планів не було б, тож бібліотеку тоді вантажить у
- * сесію той самий суперкористувач — до кінця з'єднання опису.
+ * сесію той самий суперкористувач — до кінця з'єднання опису. LOAD
+ * auto_explain живе на з'єднанні опису до afterAll; без параметрів
+ * (log_min_duration = -1) він нічого не робить для пізніших кейсів.
  */
 async function explainNested(client: pg.Client): Promise<void> {
   await asStackSuperuser(client, async () => {
