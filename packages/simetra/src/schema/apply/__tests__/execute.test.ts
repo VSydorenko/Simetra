@@ -347,7 +347,7 @@ function labelOf(sql: string): string | undefined {
   if (sql.startsWith("WITH filled AS (UPDATE "))
     return `backfill ${/^WITH filled AS \(UPDATE (\S+)/.exec(sql)![1]!}`
   if (sql.startsWith("SELECT pg_catalog.count(*) AS n FROM "))
-    return `nulls ${/ FROM (\S+) WHERE/.exec(sql)![1]!}`
+    return `nulls ${/ FROM (\S+ WHERE .*)$/.exec(sql)![1]!}`
   if (sql.startsWith("WITH u AS (UPDATE "))
     return `write ${/^WITH u AS \(UPDATE (\S+)/.exec(sql)![1]!}`
   if (sql.includes("current_setting(s.name)")) return "get-settings"
@@ -1795,6 +1795,9 @@ describe("executePlan", () => {
         })
         expect(log).not.toContain(setNotNull.sql)
         const count = log.find((l) => l.startsWith("nulls "))!
+        // Сам datum, а не поля: `ROW(NULL, NULL) IS NULL` для композитного
+        // типу істинне, хоча `SET NOT NULL` такий рядок пропускає
+        expect(count).toBe("nulls app.t WHERE d IS NOT DISTINCT FROM NULL")
         expect(seen[count]).toEqual([{ ...PREAMBLE, row_security: "off" }])
       })
 

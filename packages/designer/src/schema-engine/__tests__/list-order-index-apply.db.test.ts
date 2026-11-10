@@ -211,6 +211,11 @@ describe.concurrent("description NOT NULL on an existing database", () => {
 
       expect(outcome.diagnostics).toEqual([])
       expect(outcome.status).toBe("committed")
+      // Заповнення й `SET NOT NULL` закомічено одним застосуванням: marker
+      // несе відбиток бажаного стану плану
+      expect(await markerOf(url)).toEqual({
+        fingerprint: artifact.desiredFingerprint.sections,
+      })
       expect(await descriptionColumn(url)).toMatchObject({
         is_nullable: "NO",
         column_default: "''::character varying",

@@ -408,6 +408,59 @@ describe.concurrent("apply backfill", () => {
     })
   })
 
+  it("fills a NULL composite value and keeps a row whose fields are all NULL", async () => {
+    // І1: `ROW(NULL, NULL) IS NULL` істинне, але для `attnotnull` це не
+    // `NULL` — значення споживача, яке заповнення не перезаписує, а план
+    // не рахує
+    // Композитний тип — рядковий тип прийнятої таблиці: `.sql` не несе
+    // `CREATE TYPE … AS (…)`, а тип мусить бути і в моделі, і на тіні
+    const PAIR = {
+      "custom-tables/Pair/Pair.meta.json": {
+        ...(notes() as unknown as Json),
+        id: uuid(9430),
+        name: "Pair",
+        physicalName: "pair",
+        kindLabel: "pair",
+        columns: [
+          { id: uuid(9431), name: "a", physicalName: "a", type: "Text" },
+          { id: uuid(9432), name: "b", physicalName: "b", type: "Text" },
+        ],
+        primaryKey: undefined,
+      },
+    }
+    const raw = { type: "Raw", pgType: "app.pair" }
+    const before = await compiled({ [NOTES]: notes(raw), ...PAIR })
+    const after = await compiled({
+      [NOTES]: notes({
+        ...raw,
+        notNull: true,
+        default: "ROW('x'::text, 'y'::text)::app.pair",
+      }),
+      ...PAIR,
+    })
+    await inTarget(EMPTY, async (url) => {
+      await establish(url, before)
+      await query(
+        url,
+        `insert into app.notes (id, note) values
+           (gen_random_uuid(), ROW(null, null)::app.pair),
+           (gen_random_uuid(), null);`
+      )
+      const artifact = planned(await plan(url, after))
+      const fill = backfillOf(artifact)
+      expect(fill.backfill?.rowsAtPlan).toBe(1)
+      const outcome = await apply(url, artifact, after)
+      expect(outcome.diagnostics).toEqual([])
+      expect(outcome).toMatchObject({
+        status: "committed",
+        backfills: [{ step: fill.id, rowsAtPlan: 1, rows: 1 }],
+      })
+      expect(
+        await query(url, "select note::text as note from app.notes order by 1")
+      ).toEqual([{ note: "(,)" }, { note: "(x,y)" }])
+    })
+  })
+
   it("refuses more NULL values than the permission covered and rolls back", async () => {
     // І11, Р3а: згода власника — на обсяг, який показав план
     const before = await compiled({ [NOTES]: notes() })

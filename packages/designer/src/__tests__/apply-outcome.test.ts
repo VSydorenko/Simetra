@@ -13,6 +13,7 @@ import {
   PLAN_FORMAT,
   PLATFORM_VERSION,
   planFileName,
+  REHEARSAL_FORMAT,
   rehearsalFileName,
   serializePlan,
   serializeRehearsal,
@@ -334,7 +335,7 @@ describe("apply with an unknown outcome", TOOL_PIPELINE, () => {
       over: Partial<RehearsalReport> = {}
     ): string =>
       serializeRehearsal({
-        format: 2,
+        format: REHEARSAL_FORMAT,
         planHash: artifact.planHash,
         server: SERVER,
         ledgerHead: null,
@@ -383,7 +384,10 @@ describe("apply with an unknown outcome", TOOL_PIPELINE, () => {
       [
         "format",
         (a: PlanArtifact) =>
-          JSON.stringify({ ...JSON.parse(reportOf(a)), format: 1 }),
+          JSON.stringify({
+            ...JSON.parse(reportOf(a)),
+            format: REHEARSAL_FORMAT + 1,
+          }),
       ],
       // Файл переписано, `planHash` той самий: без
       // рядків звіт оминув би гейт порожньої копії

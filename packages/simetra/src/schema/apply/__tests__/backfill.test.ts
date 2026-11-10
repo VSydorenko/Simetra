@@ -500,6 +500,22 @@ describe("planBackfills", () => {
       unique({ uniques: [key] }),
     ])
       expect(codes(run({ source }))).toEqual(["plan.backfill-unique"])
+    // Первинний ключ каталог несе окремим полем, не в `uniques`: і на цілі,
+    // і в бажаному стані (ключ, що план лише додає)
+    const primaryKey = { name: "items_pkey", columns: ["id", "note"] }
+    expect(codes(run({ source: unique({ primaryKey }) }))).toEqual([
+      "plan.backfill-unique",
+    ])
+    expect(
+      codes(
+        run({
+          desired: {
+            ...DESIRED,
+            tables: DESIRED.tables.map((t) => ({ ...t, primaryKey })),
+          },
+        })
+      )
+    ).toEqual(["plan.backfill-unique"])
     // Вираз ключа чи предикат унікального індексу над колонкою — з дерева
     const expression = { ...index, keys: [{ expression: "lower(note)" }] }
     const predicate = {
@@ -626,7 +642,7 @@ describe("classifySteps with backfill", () => {
       ["s3", "engine", "validationScan"],
     ])
     expect(steps[1]).toMatchObject({
-      sql: "UPDATE app.items SET note = DEFAULT WHERE note IS NULL",
+      sql: "UPDATE app.items SET note = DEFAULT WHERE note IS NOT DISTINCT FROM NULL",
       lockClass: "accessExclusive",
       lockedTables: [{ schema: "app", name: "items" }],
       guards: [],
@@ -906,7 +922,9 @@ describe("readBackfillCounts", () => {
         if (sql.includes("current_setting"))
           return Promise.resolve([{ value: "on" }])
         if (sql.includes("count(*)"))
-          return Promise.resolve([{ n: sql.includes("IS NULL") ? "2" : "5" }])
+          return Promise.resolve([
+            { n: sql.includes("IS NOT DISTINCT FROM NULL") ? "2" : "5" },
+          ])
         return Promise.resolve([])
       },
     } as unknown as ApplyTransaction
@@ -926,7 +944,7 @@ describe("readBackfillCounts", () => {
     expect([...read.counts.excluded]).toEqual([backfillTargetKey(TARGETS[0]!)])
     const counts = log.filter((q) => q.sql.includes("count(*) AS n"))
     expect(counts.map((q) => q.sql)).toEqual([
-      "SELECT pg_catalog.count(*) AS n FROM app.items WHERE note IS NULL",
+      "SELECT pg_catalog.count(*) AS n FROM app.items WHERE note IS NOT DISTINCT FROM NULL",
       "SELECT pg_catalog.count(*) AS n FROM app.items",
     ])
     // `row_security = off` ставиться до першого підрахунку (Р5)
@@ -945,7 +963,7 @@ describe("readBackfillCounts", () => {
   })
 
   it("refuses with the SQLSTATE of the failed count, not a zero", async () => {
-    const { tx } = fake("IS NULL")
+    const { tx } = fake("IS NOT DISTINCT FROM NULL")
     const read = await readBackfillCounts(tx, TARGETS)
     expect(read).toEqual({
       refusal: expect.objectContaining({
