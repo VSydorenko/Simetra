@@ -133,7 +133,11 @@ export interface UnchangedPlanData {
 
 /** Результат колбека `withDatabase`: застосування або відмова бажаної тіні. */
 type ApplyRun =
-  | { outcome: ExecuteOutcome }
+  | {
+      outcome: ExecuteOutcome
+      /** Діагностики бажаної тіні репетиції (зокрема невидалена тінь). */
+      shadow?: EngineDiagnostic[]
+    }
   | { shadowFailed: EngineDiagnostic[] }
   | { rolesRefused: EngineDiagnostic[] }
   | { unsupported: Diagnostic }
@@ -636,6 +640,7 @@ export const applyTool = defineTool({
             mode: "rehearse",
             rehearsal: { engine, desired: shadow.value.catalog },
           }),
+          shadow: shadow.diagnostics,
         }
       }
     )
@@ -647,7 +652,12 @@ export const applyTool = defineTool({
     if ("rolesRefused" in executed.value)
       return refusedWith(executed.value.rolesRefused.map(fromEngine))
     const outcome = executed.value.outcome
-    const diagnostics = outcome.diagnostics.map(fromEngine)
+    // Діагностики тіні — у результаті, як у плані: невидалена тінь
+    // (`engine.shadow-drop-failed`) не губиться між тінню й виконанням
+    const diagnostics = [
+      ...(executed.value.shadow ?? []),
+      ...outcome.diagnostics,
+    ].map(fromEngine)
     const ok = !hasErrors(diagnostics)
     switch (outcome.status) {
       case "committed":
