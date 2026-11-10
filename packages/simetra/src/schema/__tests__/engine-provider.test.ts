@@ -65,7 +65,11 @@ describe("postgres preset of T2", () => {
 
   it("surface is the Better Auth user table, triggers only", () => {
     expect(PROVIDER_SURFACES.postgres).toEqual([
-      { schema: "better_auth", table: "user", classes: ["trigger"] },
+      {
+        schema: "better_auth",
+        table: "user",
+        classes: ["trigger", "references"],
+      },
     ])
   })
 

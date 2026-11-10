@@ -261,6 +261,7 @@ const identityState = (): IdentityState => ({
     { object: "schema better_auth", grantee: OWNER, privilege: "USAGE" },
     { object: "relation user", grantee: "simetra_auth", privilege: "SELECT" },
     { object: "relation user", grantee: OWNER, privilege: "TRIGGER" },
+    { object: "relation user", grantee: OWNER, privilege: "REFERENCES" },
   ],
   defaultAcl: [],
   triggers: [{ name: "RI_ConstraintTrigger_a_16474", enabled: "O" }],
@@ -512,7 +513,7 @@ describe("the better_auth check at the start of a run on the postgres stack", ()
       /schema better_auth grants USAGE to PUBLIC/,
     ],
     [
-      "a privilege of the owner beyond TRIGGER",
+      "a privilege of the owner beyond TRIGGER and REFERENCES",
       (s) =>
         s.grants.push({
           object: "relation user",

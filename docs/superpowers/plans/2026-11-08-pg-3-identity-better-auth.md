@@ -109,6 +109,7 @@ devDependency з ПГ-2a).
 | Р5 | `plan.identity-table-missing` — спільна перевірка фактів в обох профілях: `to_regclass` таблиці ідентичності й `has_table_privilege(current_user, …, 'TRIGGER')`. Діє лише тоді, коли бажаний стан має тригери провізії. На стеку Supabase обидві умови істинні (перевірено) | немає |
 | Р6 | Запис пресету й генерацію тригерів провізії дає ПГ-2a. Цей план лише доводить їх DB-тестами життєвого циклу | немає |
 | Р7 | Гранти `better_auth` — крок `ensurePostgresCluster` після створення схеми. Таблиці ще немає — крок `TRIGGER` іде в `skipped`, а не у відмову. Тимчасові гранти тест-інфри (Р3 ПГ-2b) замінює повторний виклик `roles` після міграції | немає |
+| Р11 | Гранти `better_auth` у Р7 мають три привілеї: `USAGE` на схему, `TRIGGER` і `REFERENCES` на `better_auth."user"` (зовнішній ключ моделі на таблицю ідентичності, як `auth.users` на `supabase`). У `PROVIDER_SURFACES.postgres` поряд із `trigger` стоїть клас `references` (рішення архітектора, розв'язка 9 ПГ-2b) | спека профілю §4.2 крок 3 і таблиця мап (змінено в ПГ-2b) |
 
 ## Review Focus
 
@@ -244,7 +245,7 @@ devDependency з ПГ-2a).
   - до міграції Better Auth: `USAGE` є, у `skipped` — `better_auth.user:TRIGGER`,
     виклик успішний;
   - після `migrateBetterAuth` повторний виклик:
-    `has_table_privilege(owner, 'better_auth."user"', 'TRIGGER')` — `true`;
+    `has_table_privilege(owner, 'better_auth."user"', 'TRIGGER')` і `'REFERENCES'` — `true`;
     `TRIGGER` уже в `created`, а не в `skipped`;
   - третій виклик — `created` порожній (ідемпотентність);
   - Review Focus 3: від ролі `auth` створити `better_auth.extra(id int)`.

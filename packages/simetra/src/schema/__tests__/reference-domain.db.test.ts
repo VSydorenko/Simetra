@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import type pg from "pg"
 import { compile, type CompiledModel } from "simetra/compiler"
+import { quoteIdent } from "simetra/model"
 import { renderDesiredState } from "simetra/schema"
 import { readCatalog } from "../../../test/db/catalog"
 import { expectCatalogMatchesSnapshot } from "../../../test/db/compare"
@@ -119,7 +120,9 @@ describe("reference domain in Postgres", () => {
       // claims запиту: контракт скоупу, на який спиратимуться RLS-політики П3.
       // Гранти схем застосунку ролям API — П3 (платформна спека §6.7); тут
       // лише `USAGE`, без якого роль запиту не дістане до функцій схеми.
-      await client.query(`GRANT USAGE ON SCHEMA app TO ${testRoleFor("user")}`)
+      await client.query(
+        `GRANT USAGE ON SCHEMA app TO ${quoteIdent(testRoleFor("user")!)}`
+      )
       const scopes = async (claims: Record<string, unknown>) => ({
         orgs: await queryAs(
           client,

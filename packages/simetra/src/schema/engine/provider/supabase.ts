@@ -105,7 +105,7 @@ export const SUPABASE_ROLES: readonly string[] = [
 export interface ProviderSurface {
   schema: string
   table: string
-  classes: readonly ("policy" | "trigger")[]
+  classes: readonly ("policy" | "trigger" | "references")[]
 }
 
 /**

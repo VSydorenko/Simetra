@@ -12,7 +12,7 @@ import type { ProviderLocks, ProviderSurface } from "./supabase"
  * (спека профілю §4.2). Політик у схемі провайдера немає.
  */
 export const POSTGRES_SURFACES: readonly ProviderSurface[] = [
-  { schema: "better_auth", table: "user", classes: ["trigger"] },
+  { schema: "better_auth", table: "user", classes: ["trigger", "references"] },
 ]
 
 /** `simetra_auth` не має типових привілеїв у схемах межі: системних ролей немає. */

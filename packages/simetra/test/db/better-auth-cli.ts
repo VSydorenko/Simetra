@@ -80,7 +80,9 @@ export async function prepareStackIdentity(o: {
     if (rows[0]?.schema === true)
       await client.query(`REVOKE USAGE ON SCHEMA better_auth FROM ${owner}`)
     if (rows[0]?.tbl === true)
-      await client.query(`REVOKE TRIGGER ON better_auth."user" FROM ${owner}`)
+      await client.query(
+        `REVOKE TRIGGER, REFERENCES ON better_auth."user" FROM ${owner}`
+      )
   })
   await (o.migrate ?? migrateBetterAuth)(o.authUrl)
   await superuserTransaction(o.superuserUrl, async (client) => {
@@ -93,7 +95,11 @@ export async function prepareStackIdentity(o: {
         'better_auth."user" must be a table owned by the auth role; no grants were given'
       )
     await client.query(`GRANT USAGE ON SCHEMA better_auth TO ${owner}`)
-    await client.query(`GRANT TRIGGER ON better_auth."user" TO ${owner}`)
+    // `REFERENCES` — для зовнішнього ключа моделі на таблицю ідентичності,
+    // як у `auth.users` на supabase
+    await client.query(
+      `GRANT TRIGGER, REFERENCES ON better_auth."user" TO ${owner}`
+    )
   })
 }
 

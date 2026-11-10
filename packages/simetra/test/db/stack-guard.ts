@@ -485,8 +485,8 @@ function columnMismatch(
 
 /**
  * Відмінності `better_auth` від стану після `db:pg:start`: схема й відношення
- * — роль ідентичності; власник має лише `USAGE` на схему й `TRIGGER` на
- * таблицю ідентичності (тригер провізії), інших отримувачів немає; типових
+ * — роль ідентичності; власник має лише `USAGE` на схему, `TRIGGER` і
+ * `REFERENCES` на таблицю ідентичності (тригер провізії, ключ моделі), інших отримувачів немає; типових
  * привілеїв у схемі немає; тригери таблиці ідентичності ввімкнені.
  */
 export function identityStateDifferences(
@@ -501,6 +501,7 @@ export function identityStateDifferences(
   const allowed = new Set([
     `schema ${o.schema} ${o.owner} USAGE`,
     `relation ${o.table} ${o.owner} TRIGGER`,
+    `relation ${o.table} ${o.owner} REFERENCES`,
   ])
   return [
     ...facts.owners

@@ -45,6 +45,11 @@ describe("the better_auth check of the stack guard on database simetra", () => {
         {
           object: "relation user",
           grantee: PROVIDER_OWNER_ROLES.postgres,
+          privilege: "REFERENCES",
+        },
+        {
+          object: "relation user",
+          grantee: PROVIDER_OWNER_ROLES.postgres,
           privilege: "TRIGGER",
         },
         {

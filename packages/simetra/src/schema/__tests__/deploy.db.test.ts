@@ -3,14 +3,13 @@ import type pg from "pg"
 import { compile, type CompiledModel } from "simetra/compiler"
 import {
   PROVIDER_IDENTITY_SOURCES,
-  PROVIDER_OWNER_ROLES,
   quoteIdent,
   type PhysicalTable,
 } from "simetra/model"
 import { renderDesiredState } from "simetra/schema"
 import { readCatalog } from "../../../test/db/catalog"
 import { expectCatalogMatchesSnapshot } from "../../../test/db/compare"
-import { asStackSuperuser, withRollback } from "../../../test/db/connection"
+import { withRollback } from "../../../test/db/connection"
 import { testProvider } from "../../../test/db/profile"
 import {
   accumulationRegisters,
@@ -38,17 +37,6 @@ async function deploy(
   client: pg.Client,
   model: CompiledModel
 ): Promise<string[]> {
-  // Власник на `postgres` не має `REFERENCES` на таблицю ідентичності Better
-  // Auth (стек дає йому лише тимчасові `USAGE`/`TRIGGER` для провізії), тож
-  // FK власної таблиці на неї вимагає гранту; транзакція тесту його відкотить
-  if (testProvider() === "postgres") {
-    const { schema, name } = PROVIDER_IDENTITY_SOURCES.postgres.table
-    await asStackSuperuser(client, () =>
-      client.query(
-        `GRANT REFERENCES ON ${quoteIdent(schema)}.${quoteIdent(name)} TO ${quoteIdent(PROVIDER_OWNER_ROLES.postgres)}`
-      )
-    )
-  }
   await client.query(renderDesiredState(model).sql)
   return [
     ...new Set([
@@ -105,6 +93,20 @@ describe("deploy the desired state to the stack database", () => {
       })
     })
   }
+
+  it("a foreign key to the identity table deploys without a test-local grant", async () => {
+    const model = await compiled(customTables(testProvider()))
+    const { schema, name } = PROVIDER_IDENTITY_SOURCES[testProvider()].table
+    await withRollback(async (client) => {
+      await deploy(client, model)
+      const { rows } = await client.query<{ n: string }>(
+        `SELECT count(*)::text AS n FROM pg_catalog.pg_constraint
+          WHERE contype = 'f' AND confrelid = $1::regclass`,
+        [`${quoteIdent(schema)}.${quoteIdent(name)}`]
+      )
+      expect(Number(rows[0]?.n)).toBeGreaterThan(0)
+    })
+  })
 
   it("the comparison notices a snapshot that differs from the catalog", async () => {
     const model = await compiled(customTables(testProvider()))
