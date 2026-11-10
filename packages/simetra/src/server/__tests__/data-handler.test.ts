@@ -956,6 +956,22 @@ describe("createDataHandler: steps 4–6", () => {
       readOf({}),
     ],
     [
+      "a part error with a field outside the wire error",
+      {
+        readParts: () =>
+          Promise.resolve({
+            epoch: null,
+            items: [
+              {
+                ok: false,
+                error: { code: "command.rejected", ...{ message: SECRET } },
+              },
+            ],
+          }),
+      },
+      readOf({}),
+    ],
+    [
       "readParts returns a part without an outcome",
       { readParts: () => Promise.resolve({ epoch: null, items: [] }) },
       readOf({}),
