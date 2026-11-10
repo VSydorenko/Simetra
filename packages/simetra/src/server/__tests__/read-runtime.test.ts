@@ -391,31 +391,36 @@ describe("CommandRuntime.read", () => {
     expect(log.mock.calls).toEqual([[{ kind: "database", error: raw }]])
   })
 
-  it.each([
-    [
-      "a COMMIT answered ROLLBACK",
-      (text: string): Answer | undefined =>
-        text === COMMIT.text ? { command: "ROLLBACK" } : rows(text, []),
-      read(byId, REQUEST_ROLE),
-    ],
-    [
-      // Рядки декодуються до `COMMIT`: з них `include` бере id.
-      "a row of the wrong shape",
-      (text: string): Answer | undefined =>
-        isRead(text) ? { rows: [{ row: 42 }] } : undefined,
-      failed(byId, [ROLLBACK, { release: false }]),
-    ],
-  ])("fails %s as command.internal and logs it", async (_, override, calls) => {
+  it("keeps the rows of a COMMIT answered ROLLBACK and logs it", async () => {
     // Відповідь діє лише на читання: створення рантайму теж має `COMMIT`.
     let armed = false
-    const { db, runtime, log } = await setup((text) =>
-      armed ? override(text) : undefined
+    const { db, runtime, log } = await setup((text, params) =>
+      armed && text === COMMIT.text
+        ? { command: "ROLLBACK" }
+        : rows(text, params)
     )
     armed = true
+    expect(await runtime.read(session, { object: RIGHTS, id: OTHER })).toEqual({
+      rows: [
+        { ref: OTHER, version: 2, code: "R" },
+        { ref: ID, version: 3, code: "R" },
+      ],
+    })
+    expect(db.calls).toEqual(read(byId, REQUEST_ROLE))
+    expect(log.mock.calls).toEqual([
+      [{ kind: "database", error: expect.any(Error) }],
+    ])
+  })
+
+  it("fails a row of the wrong shape as command.internal and logs it", async () => {
+    // Рядки декодуються до `COMMIT`: з них `include` бере id.
+    const { db, runtime, log } = await setup((text) =>
+      isRead(text) ? { rows: [{ row: 42 }] } : undefined
+    )
     expect(
       await failureOf(runtime.read(session, { object: RIGHTS, id: OTHER }))
     ).toEqual({ code: "command.internal" })
-    expect(db.calls).toEqual(calls)
+    expect(db.calls).toEqual(failed(byId, [ROLLBACK, { release: false }]))
     expect(log.mock.calls).toEqual([
       [{ kind: "database", error: expect.any(Error) }],
     ])
@@ -929,6 +934,41 @@ describe("CommandRuntime.readParts", () => {
     ])
   })
 
+  it.each<[string, Answer, unknown[]]>([
+    [
+      "a lost connection",
+      { error: { code: "08006", message: "gone" } },
+      [{ release: true }],
+    ],
+    [
+      "a database error",
+      { error: { code: "XX000", message: "x" } },
+      [ROLLBACK, { release: false }],
+    ],
+  ])(
+    "keeps the values of every part on %s at COMMIT",
+    async (_, failure, end) => {
+      let armed = false
+      const { db, runtime } = await setup((text, params) =>
+        armed && text === COMMIT.text ? failure : cards(text, params)
+      )
+      armed = true
+      expect(await runtime.readParts(session, [card(OTHER), card(R2)])).toEqual(
+        {
+          epoch: null,
+          items: [ok(valueOf(OTHER)), ok(valueOf(R2))],
+        }
+      )
+      expect(db.calls).toEqual([
+        ...opened(),
+        cardOf(OTHER),
+        cardOf(R2),
+        COMMIT,
+        ...end,
+      ])
+    }
+  )
+
   it("answers no parts without the database", async () => {
     const { db, runtime } = await setup()
     expect(await runtime.readParts(session, [])).toEqual({
@@ -980,6 +1020,50 @@ describe("CommandRuntime.readParts", () => {
         COMMIT,
         { release: false },
       ])
+    })
+
+    const LOWER = "SELECT set_config('statement_timeout'"
+    const lowerings = (calls: readonly unknown[]) =>
+      calls.filter(
+        (c) =>
+          typeof c === "object" &&
+          c !== null &&
+          "text" in c &&
+          (c as { text: string }).text.startsWith(LOWER)
+      )
+    const every = (text: string) => !text.includes("pg_has_role")
+
+    it.each<[string, (runtime: CommandRuntime) => Promise<unknown>, number]>([
+      [
+        "a single read",
+        (runtime) => runtime.read(session, { object: RIGHTS, id: OTHER }),
+        1,
+      ],
+      [
+        "two parts",
+        (runtime) => runtime.readParts(session, [card(OTHER), card(R2)]),
+        2,
+      ],
+    ])(
+      "sends no lower statement_timeout by default when each answer takes 3 ms: %s",
+      async (_, call, parts) => {
+        const { db, runtime } = await setup(elapse(every, 3))
+        await call(runtime)
+        // 4 + частини + `COMMIT`; з'єднання й звільнення — не оператори.
+        expect(lowerings(db.calls)).toEqual([])
+        expect(db.calls.filter((c) => "text" in c)).toHaveLength(4 + parts)
+      }
+    )
+
+    it("sends exactly one lower statement_timeout near the deadline", async () => {
+      const { db, runtime } = await setup((text, params) => {
+        vi.advanceTimersByTime(atEpoch(text) ? 14_000 : 3)
+        return cards(text, params)
+      })
+      await runtime.readParts(session, [card(OTHER), card(R2), card(R3)])
+      expect(lowerings(db.calls)).toHaveLength(1)
+      expect(db.calls[4]).toEqual(lowerings(db.calls)[0])
+      expect(db.calls[5]).toEqual(cardOf(OTHER))
     })
 
     it("never sets 0: a rest of 1.2 ms rounds up to 2", async () => {

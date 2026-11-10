@@ -8,6 +8,7 @@ import {
   PLATFORM_SCHEMA,
   PROVIDER_API_ROLES,
   READ_BATCH_STATEMENTS_MAX,
+  ROW_VERSION_EPOCH_FUNCTION_NAME,
   TABULAR_LINES_MAX,
   runtimeCatalogSchema,
   sessionClaimsSchema,
@@ -231,7 +232,7 @@ const BEGIN_READ_ONLY = "BEGIN ISOLATION LEVEL READ COMMITTED READ ONLY"
 const BEGIN_READ = "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY"
 // Окремим оператором під роллю читання: `EXECUTE` функції перевіряється на
 // старті виконавця, а в операторі налаштування роль ще — роль входу (Р1).
-const EPOCH = `SELECT ${ident(PLATFORM_SCHEMA)}.${ident("row_version_epoch")}() AS epoch`
+const EPOCH = `SELECT ${ident(PLATFORM_SCHEMA)}.${ident(ROW_VERSION_EPOCH_FUNCTION_NAME)}() AS epoch`
 const MEMBER = "SELECT pg_has_role(session_user, $1, 'SET') AS member"
 const APPLIED_HASH = `SELECT ${ident(PLATFORM_SCHEMA)}.${ident(APPLIED_SNAPSHOT_HASH_FUNCTION_NAME)}() AS hash`
 // База до функції хеша (`42883`) чи без схеми платформи (`3F000`) — модель
@@ -592,20 +593,21 @@ async function readParts(
       return { epoch, items }
     }
   }
+  // Транзакція лише читає, а кожна частина вже отримала рядки свого знімка:
+  // збій `COMMIT` (і обрив з'єднання) результатів не скасовує — з'єднання
+  // лише завершується як після відмови.
   let tag: string
   try {
     ;({ command: tag } = await send(COMMIT))
   } catch (error) {
-    const refusal = refusalOf(error)
-    await endFailed(client, refusal.destroy)
-    throw new CommandFailure(refusal.error)
+    await endFailed(client, refusalOf(error).destroy)
+    return { epoch, items }
   }
   client.release()
-  // Перервана транзакція відповідає на `COMMIT` тегом `ROLLBACK`: частини
-  // вже не довести, тож відмова всього запиту.
+  // `ROLLBACK` на `COMMIT` — аномалія (перервану транзакцію відкочує
+  // гілка відмови частини): у журнал, результати лишаються.
   if (tag !== "COMMIT") {
     state.log({ kind: "database", error: new Error(`COMMIT answered ${tag}`) })
-    throw new CommandFailure(INTERNAL)
   }
   return { epoch, items }
 }

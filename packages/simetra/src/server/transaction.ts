@@ -240,9 +240,20 @@ export function readRefusal(
 }
 
 /**
+ * Перевищення дедлайну чинною межею оператора читання, яке ще терпимо, мс.
+ * Типово бюджет дорівнює стелі, а відлік іде ще до `connect()`, тож залишок
+ * менший за стелю вже на першій частині: без допуску нижча межа йшла б перед
+ * кожним оператором, а не лише біля дедлайну. Допуск — значно менший за
+ * запас 1 с `transaction_timeout`: оператор упирається в `57014` (тайм-аут
+ * частини, з'єднання живе) раніше, ніж сесію закриє `25P04`.
+ */
+const READ_TIMEOUT_SLACK_MS = 250
+
+/**
  * Бюджет часу транзакції читання (спека П4-B §4.2) — за правилом
  * {@link Transaction} `budget`: стелю оператора ставить налаштування, а
- * залишок, менший за чинну межу, — окремий оператор перед наступним.
+ * залишок, менший за чинну межу більш ніж на `READ_TIMEOUT_SLACK_MS`, —
+ * окремий оператор перед наступним.
  */
 export class ReadBudget {
   /** `statement_timeout` оператора налаштування, мс. */
@@ -260,15 +271,15 @@ export class ReadBudget {
 
   /**
    * Перед оператором: `"expired"` — залишку немає, оператор не йде;
-   * оператор — спершу нижча межа; `undefined` — чинна межа не більша за
-   * залишок.
+   * оператор — спершу нижча межа; `undefined` — чинна межа виходить за
+   * залишок не більш ніж на допуск.
    */
   next(): "expired" | Statement | undefined {
     const remaining = this.deadline - performance.now()
     if (remaining <= 1) return "expired"
     // Порівняння в цілих мілісекундах межі, як у `budget` команди.
     const ms = timeoutMs(remaining)
-    if (ms >= this.statementTimeout) return undefined
+    if (this.statementTimeout - ms <= READ_TIMEOUT_SLACK_MS) return undefined
     this.statementTimeout = ms
     return statement(STATEMENT_TIMEOUT, String(ms))
   }

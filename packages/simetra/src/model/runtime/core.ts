@@ -72,5 +72,8 @@ export const CURRENT_USER_FUNCTION_NAME = "current_user_id"
 /** Функція хеша застосованого знімка (схема — `PLATFORM_SCHEMA`). */
 export const APPLIED_SNAPSHOT_HASH_FUNCTION_NAME = "applied_snapshot_hash"
 
+/** Функція епохи версій рядків бази (схема — `PLATFORM_SCHEMA`). */
+export const ROW_VERSION_EPOCH_FUNCTION_NAME = "row_version_epoch"
+
 /** UUID without a scope: the channel and the holder key of an unscoped object. */
 export const ZERO_UUID = "00000000-0000-0000-0000-000000000000"
