@@ -729,7 +729,9 @@ describe("catalog command core", () => {
     })
   })
 
-  it("create: an explicit NULL description is refused", async () => {
+  // Запасна межа: явний NULL відхиляє T3 (`command.invalid`) ще до бази,
+  // а ядро, викликане повз нього, — NOT NULL колонки
+  it("create: an explicit NULL description is refused by the core", async () => {
     const outcome = await run({
       user: "tw",
       item: newTicket({ description: null }),

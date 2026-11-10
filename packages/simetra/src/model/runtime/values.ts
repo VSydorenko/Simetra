@@ -386,6 +386,12 @@ export function encodeAttributes<A extends CatalogEntryAttribute>(
     } catch {
       return invalid(at)
     }
+    // Колонка NOT NULL з типовим значенням (`required` хибне): явний `null`
+    // відхиляє команда, а не база — клієнт бачить `command.invalid` зі шляхом.
+    // Пропущене значення лишається за типовим.
+    if (value === null && attribute.notNull === true && !attribute.required) {
+      return invalid(at)
+    }
     const encoded = encodeItemValue(attribute, value, at)
     if ("error" in encoded) return encoded
     // Міра — закодоване значення форми передачі (Р7), та сама, якою бюджет

@@ -187,6 +187,9 @@ describe.concurrent("description NOT NULL on an existing database", () => {
       )
     )[0]
 
+  const markerOf = async (url: string) =>
+    (await query(url, "select fingerprint from simetra.marker"))[0]
+
   const snapshotOf = (url: string) =>
     query(url, "select id, description from app.party order by id")
 
@@ -197,6 +200,8 @@ describe.concurrent("description NOT NULL on an existing database", () => {
       const [notNull] = stepMatching(artifact, /SET NOT NULL/)
       expect(notNull?.class).toBe("validationScan")
       const before = await snapshotOf(url)
+      const columnBefore = await descriptionColumn(url)
+      const markerBefore = await markerOf(url)
 
       const outcome = await executePlan(writer, { url }, artifact, {
         mode: "apply",
@@ -213,7 +218,10 @@ describe.concurrent("description NOT NULL on an existing database", () => {
         sqlstate: "23502",
       })
       expect(await snapshotOf(url)).toEqual(before)
-      expect(await descriptionColumn(url)).toMatchObject({ is_nullable: "YES" })
+      expect(await descriptionColumn(url)).toEqual(columnBefore)
+      expect(columnBefore).toMatchObject({ is_nullable: "YES" })
+      // Відкат цілий: відбиток у маркері той самий
+      expect(await markerOf(url)).toEqual(markerBefore)
     })
   })
 
