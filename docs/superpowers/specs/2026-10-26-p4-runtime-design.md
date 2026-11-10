@@ -179,7 +179,7 @@ Postgres»](2026-10-01-platform-in-postgres-design.md) §9, п. 1 і п. 4) на
 | Роль | Атрибути | Членство |
 | --- | --- | --- |
 | `simetra_command` | `NOLOGIN NOINHERIT` | без змін (спека прав §5.3) |
-| `simetra_runtime` | `LOGIN NOINHERIT`, без пароля від платформи | член `simetra_command`; у профілі `supabase` — ще й ролі запиту користувача (`PROVIDER_API_ROLES.supabase.user`); обидва `WITH INHERIT FALSE, SET TRUE`; у профілі `postgres` — лише `simetra_command`, доки спека профілю не назве ролей запиту |
+| `simetra_runtime` | `LOGIN NOINHERIT`, без пароля від платформи | член `simetra_command`; у профілі `supabase` — ще й ролі запиту користувача (`PROVIDER_API_ROLES.supabase.user`); обидва `WITH INHERIT FALSE, SET TRUE`; у профілі `postgres` — ще й `simetra_user` та `simetra_anon` (спека профілю `postgres` §3.1); рядка `simetra_signals` у `roles` немає до блоку ПГ-4 |
 
 Інваріанти, які тримає тест членства ролей і гейт:
 
@@ -211,7 +211,8 @@ Postgres»](2026-10-01-platform-in-postgres-design.md) §9, п. 1 і п. 4) на
 членствами, наявну — звіряє. Профіль для членства в ролі запиту `roles` бере з
 `database.provider` файлу проєкту (новий доступ інструмента — читання файлів
 проєкту); без файлу проєкту `database.provider` невідомий, тож роль входу не
-створюється, і вивід `roles` називає пропуск і причину. `ensurePlatformRoles`
+створюється, і вивід `roles` називає пропуск і причину; наявну роль входу
+`roles` без файлу лише звіряє — з батьками, дозволеними будь-яким профілем. `ensurePlatformRoles`
 приймає перелік імен, тож DB-тест інструмента працює на тегованих іменах
 (`packages/simetra/test/db/connection.ts`), а не на справжніх кластерних
 ролях стека. Правило «жодного члена з `SET`» послаблюється рівно для пар цієї

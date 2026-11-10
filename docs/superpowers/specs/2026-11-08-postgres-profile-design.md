@@ -196,6 +196,19 @@
   SQL і відмовляє `roles.unsafe-schema`, коли схема `extensions` належить
   не суперкористувачу. Тест: власник ставить `search_path` бази й кладе
   `public.format`; наступний `roles` цієї функції не викликає.
+- **Шаблон перевіряється до довіри.** Шаблон, яким володіє не
+  суперкористувач, що приймає з'єднання або закритий (`NOT datallowconn`),
+  але не позначений `datistemplate`, `roles` відхиляє `roles.unsafe-template`:
+  закритий не-шаблон не можна оглянути без з'єднання, а підключення до нього
+  суперкористувачем віддало б сесію його вмісту.
+- **`roles` лікує заявлений стан.** На кожному запуску `roles` заново видає
+  `REVOKE`/`GRANT CONNECT` на цільовій базі й обидва `ALTER ROLE … SET
+  search_path` (роль `simetra_auth` — глобально й для цієї бази); повторний
+  запуск нічого не створює, а розбіжність у цих налаштуваннях виправляє.
+- **Залишковий ризик.** Власник бази може поставити `local_preload_libraries`
+  на свою базу: бібліотеки вантажаться з `$libdir/plugins` під час
+  з'єднання, раніше за будь-який пролог, тож `roles` цього не зупиняє.
+  Каталог `$libdir/plugins` тримає чистим адміністратор сервера.
 - `plan` і `apply` від суперкористувача не вимагають: `simetra_owner` має
   `CREATEDB` для co-located тіні (платформна спека §6.2).
 - **Цільова база належить `simetra_owner`.** `roles` створює її
@@ -218,9 +231,10 @@
 
 **Правило.** `roles` від суперкористувача:
 
-1. ставить `CREATE EXTENSION IF NOT EXISTS plpgsql_check SCHEMA extensions`
-   у цільовій базі (схема `extensions` — суперкористувача, `USAGE` для
-   `simetra_owner`);
+1. ставить `CREATE EXTENSION plpgsql_check SCHEMA extensions` у цільовій
+   базі (схема `extensions` — суперкористувача, `USAGE` для `simetra_owner`);
+   крок без `IF NOT EXISTS`: наявне розширення пропускає знімок фази читання,
+   а об'єкт, що з'явився між фазами, — помилка оператора;
 2. створює базу-шаблон `simetra_template` з `template0`, ставить у неї те
    саме розширення й позначає `IS_TEMPLATE true, ALLOW_CONNECTIONS false`.
 
@@ -876,7 +890,9 @@ FileStore = {
   відомим паролем і admin Garage.
 - Compose-проєкт `simetra-pg` у каталозі `docker/postgres-stack/` репо:
   Dockerfile образу Postgres, `compose.yaml`, конфіг Centrifugo стека,
-  `garage.toml`, `dev-environment.sql` і `dev-secrets.env`. Ініціалізацію
+  `garage.toml`, `dev-environment.sql`, `dev-secrets.env` (ключ Garage) і `login-secrets.env`
+  (паролі ролей входу; compose цей файл не читає, тож зміна паролів не
+  перестворює контейнерів). Ініціалізацію
   Garage (layout, бакет `simetra-dev`, ключ) робить `scripts/db-stack.mjs`,
   а не скрипт у `docker/`. Версії — у файлах стека, не в `AGENTS.md`.
 - Better Auth не має сервісу: він живе в host-і. Для тестів його таблиці
@@ -903,7 +919,7 @@ FileStore = {
 
 | Команда | Дія |
 | --- | --- |
-| `pnpm db:pg:start` | `docker compose -p simetra-pg up -d --wait`, ініціалізація Garage і `simetra.environment = 'development'`; з ПГ-2 далі ролі Simetra й шаблон `simetra_template` кроком `simetra roles` (§3.4, §3.5) з теки `docker/postgres-stack/project/` (`project.meta.json`, `provider: "postgres"`), dev-паролі ролям входу, міграція Better Auth у базі `simetra` від `simetra_auth` і тимчасові гранти `USAGE` на `better_auth` та `TRIGGER` на `better_auth."user"` для `simetra_owner` (усе під замком стека, гранти — лише після успішної міграції, повтор нічого не змінює); гранти до ПГ-3 стоять тут, ПГ-3 переносить їх у `roles` |
+| `pnpm db:pg:start` | `docker compose -p simetra-pg up -d --wait`, ініціалізація Garage і `simetra.environment = 'development'`; з ПГ-2 далі ролі Simetra й шаблон `simetra_template` кроком `simetra roles` (§3.4, §3.5) з теки `docker/postgres-stack/project/` (`project.meta.json`, `provider: "postgres"`), dev-паролі ролям входу (з `login-secrets.env`), міграція Better Auth у базі `simetra` від `simetra_auth` і тимчасові гранти `USAGE` на `better_auth` та `TRIGGER` на `better_auth."user"` для `simetra_owner` (усе під замком стека, гранти — лише після успішної міграції, повтор нічого не змінює); гранти до ПГ-3 стоять тут, ПГ-3 переносить їх у `roles` |
 | `pnpm db:pg:stop` | `docker compose -p simetra-pg down` (томи лишаються; `--volumes` — лише явно) |
 | `pnpm test:db:pg` | до ПГ-2 — проєкт `db-pg` пакета `simetra`: набір базового стану `postgres` через Vitest-раннер і тест переривання; з ПГ-2 — DB-тести `simetra` і `@simetrajs/designer` на стеку `postgres` |
 | `pnpm db:signals:start`, `pnpm db:signals:stop` | Centrifugo поруч зі стеком `supabase` (compose-проєкт `simetra-sb`, §10.1) |
