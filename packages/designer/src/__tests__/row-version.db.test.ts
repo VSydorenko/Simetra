@@ -229,6 +229,52 @@ END $$;`
     })
   })
 
+  // Тригер моделі, вимкнений на живій базі, — дрейф: крок двигуна
+  // `ENABLE TRIGGER` повертає йому режим бажаної моделі (`O`) ще до блоку
+  // `versions`, тож звірка тригерів кроку підвищення бачить `O` і хибного
+  // `apply.target-changed` не дає
+  it("re-enables a disabled model trigger in the engine block before the version bump", async () => {
+    const before = await withScale(2)
+    const after = await withScale(0)
+    const modes = (url: string) =>
+      query<{ name: string; enabled: string }>(
+        url,
+        `select tgname::text as name, tgenabled::text as enabled from pg_trigger
+         where tgrelid = 'app.party'::regclass and not tgisinternal order by tgname`
+      )
+    await inTarget(EMPTY, async (url) => {
+      await establish(url, before)
+      await query(
+        url,
+        `insert into app.party (id, amount) values ('${randomUUID()}', 1), ('${randomUUID()}', 2);
+         alter table app.party disable trigger on_party;`
+      )
+      const was = await modes(url)
+      expect(was).toContainEqual({ name: "on_party", enabled: "D" })
+      const old = await rows(url)
+
+      const artifact = planned(await plan(url, after))
+      const at = (sql: string) => artifact.steps.findIndex((s) => s.sql === sql)
+      const enable = at('ALTER TABLE "app"."party" ENABLE TRIGGER "on_party"')
+      expect(artifact.steps[enable]?.origin).toBe("engine")
+      expect(enable).toBeLessThan(
+        artifact.steps.findIndex((s) => s.origin === "versions")
+      )
+      // Застосування без діагностик (зокрема без `apply.target-changed`)
+      await applyArtifact(url, artifact, after)
+
+      const now = await rows(url)
+      now.forEach((row, i) => {
+        expect(BigInt(row.version)).toBeGreaterThan(BigInt(old[i]!.version))
+      })
+      expect(await modes(url)).toEqual(was.map((t) => ({ ...t, enabled: "O" })))
+      // Підписка знову ввімкнена: її обробник падає на `UPDATE`
+      await expect(
+        query(url, "update app.party set amount = 5")
+      ).rejects.toThrow(/user trigger fired/)
+    })
+  })
+
   // Послідовність відстає від версій рядків (логічна реплікація чи ручний
   // `setval`): голий `nextval` дав би версію нижчу за видану; крок підвищення
   // йде за правилом тригера оновлення

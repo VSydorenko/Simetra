@@ -155,10 +155,17 @@ const refKey = (r: { schema: string; table?: string; name: string }): string =>
  * (`generatedExpr: "replace"`). Таблиця, яку план сам знищує чи створює,
  * не рахується: її рядки нові, а знищені колонки — лише наслідок. Вираз
  * читається з кроків, а не з різниці знімків: різниця тексту виразу між
- * версіями платформи давала б хибне переписування.
+ * версіями платформи давала б хибне переписування. Таблиця кроку заповнення
+ * перед `NOT NULL` (платформна спека §6.6) — теж переписана: двигун може
+ * зняти тригер механіки до заповнення й створити його пізніше, тож заповнені
+ * рядки інакше лишилися б зі старою версією. Підвищуються всі рядки таблиці:
+ * зайве перечитування клієнтом безпечне, пропущене — ні.
  */
 export function rewrittenByEngine(
-  steps: readonly Pick<PlanStep, "sql" | "produced" | "destroyed">[],
+  steps: readonly Pick<
+    PlanStep,
+    "sql" | "produced" | "destroyed" | "backfill"
+  >[],
   parse: SqlParser
 ): TableRef[] {
   const found = new Map<string, TableRef>()
@@ -168,6 +175,10 @@ export function rewrittenByEngine(
   for (const step of steps) {
     for (const r of [...step.produced, ...step.destroyed])
       if (r.kind === "table") replaced.add(refKey(r))
+    if (step.backfill !== undefined) {
+      note(step.backfill.table.schema, step.backfill.table.name)
+      continue
+    }
     const result = parse(step.sql)
     if (!result.ok) continue
     for (const { stmt } of result.statements) {
@@ -336,7 +347,7 @@ export function planRowVersionSteps(p: {
   desired: CatalogModel
   engineSteps: readonly Pick<
     PlanStep,
-    "sql" | "produces" | "destroys" | "produced" | "destroyed"
+    "sql" | "produces" | "destroys" | "produced" | "destroyed" | "backfill"
   >[]
   parse: SqlParser
   offset: number

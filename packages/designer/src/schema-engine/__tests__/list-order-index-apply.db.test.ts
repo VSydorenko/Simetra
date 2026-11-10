@@ -150,9 +150,9 @@ describe.concurrent("list-order index on an existing database", () => {
 /**
  * Найменування довідника стало `NOT NULL DEFAULT ''` (рішення Р9). База,
  * застосована старою платформою, має nullable колонку без типового значення.
- * Рушій не робить backfill перед `SET NOT NULL`, тож `NULL`-рядок дає збій
- * кроку, як і для будь-якого реквізиту, що став обов'язковим. DB-рівень
- * потрібен: збій і успіх `SET NOT NULL` на даних доводить лише справжній Postgres.
+ * План додає крок заповнення перед `SET NOT NULL`, тож `NULL`-рядок
+ * заповнюється `''`. DB-рівень потрібен: заповнення й успіх `SET NOT NULL`
+ * на даних доводить лише справжній Postgres.
  */
 describe.concurrent("description NOT NULL on an existing database", () => {
   const A = "00000000-0000-4000-8000-0000000000a1"
@@ -193,15 +193,14 @@ describe.concurrent("description NOT NULL on an existing database", () => {
   const snapshotOf = (url: string) =>
     query(url, "select id, description from app.party order by id")
 
-  it("fails the SET NOT NULL step on a NULL row and changes nothing", async () => {
+  it("fills the NULL row with the default and sets NOT NULL", async () => {
     const model = await compiled({ [PARTY]: party() })
     await inNullableTarget(true, async (url) => {
       const artifact = planned(await plan(url, model))
+      const [fill] = artifact.steps.filter((s) => s.origin === "backfill")
+      expect(fill?.backfill?.rowsAtPlan).toBe(1)
       const [notNull] = stepMatching(artifact, /SET NOT NULL/)
       expect(notNull?.class).toBe("validationScan")
-      const before = await snapshotOf(url)
-      const columnBefore = await descriptionColumn(url)
-      const markerBefore = await markerOf(url)
 
       const outcome = await executePlan(writer, { url }, artifact, {
         mode: "apply",
@@ -210,18 +209,24 @@ describe.concurrent("description NOT NULL on an existing database", () => {
         snapshot: canonicalSnapshot(model),
       })
 
-      expect(outcome.diagnostics.map((d) => d.code)).toEqual([
-        "apply.step-failed",
-      ])
-      expect(outcome.diagnostics[0]?.params).toMatchObject({
-        step: notNull!.id,
-        sqlstate: "23502",
+      expect(outcome.diagnostics).toEqual([])
+      expect(outcome.status).toBe("committed")
+      // Заповнення й `SET NOT NULL` закомічено одним застосуванням: marker
+      // несе відбиток бажаного стану плану
+      expect(await markerOf(url)).toEqual({
+        fingerprint: artifact.desiredFingerprint.sections,
       })
-      expect(await snapshotOf(url)).toEqual(before)
-      expect(await descriptionColumn(url)).toEqual(columnBefore)
-      expect(columnBefore).toMatchObject({ is_nullable: "YES" })
-      // Відкат цілий: відбиток у маркері той самий
-      expect(await markerOf(url)).toEqual(markerBefore)
+      expect(await descriptionColumn(url)).toMatchObject({
+        is_nullable: "NO",
+        column_default: "''::character varying",
+      })
+      expect(await snapshotOf(url)).toEqual([
+        { id: A, description: "x" },
+        { id: B, description: "" },
+      ])
+      const again = await plan(url, model)
+      expect(again.status).toBe("unchanged")
+      expect(again.diagnostics.map((d) => d.code)).not.toContain("apply.drift")
     })
   })
 

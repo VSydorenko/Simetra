@@ -2939,13 +2939,14 @@ describe.concurrent("executePlan", () => {
         })
         // Копія з одним рядком, ціль — з трьома: ⌈3 × 30 000 × 3 / 1⌉
         const report: RehearsalReport = {
-          format: 1,
+          format: 2,
           planHash: PLAN_HASH,
           server: plan.server,
           ledgerHead: plan.ledgerHead,
           rows: [{ schema: "app", table: "pt", rows: 1 }],
           durations: { phases: [], steps: [], longestStatementMs: 30_000 },
           data: [],
+          backfills: [],
           preservation: [{ schema: "app", table: "pt", rows: 1 }],
           plpgsqlCheck: "skipped",
           triggers: [],

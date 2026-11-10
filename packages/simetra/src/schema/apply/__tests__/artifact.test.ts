@@ -400,7 +400,7 @@ describe("plan artifact", () => {
     expect(parsed.diagnostic.message).toMatch(
       /plan format 1 is not supported.*rebuild the plan/i
     )
-    expect(PLAN_FORMAT).toBe(7)
+    expect(PLAN_FORMAT).toBe(8)
   })
 
   it("asks to rebuild a plan of the second format", async () => {
@@ -483,6 +483,76 @@ describe("plan artifact", () => {
         params: { found: 6, supported: PLAN_FORMAT },
       },
     })
+  })
+
+  it("asks to rebuild a plan of the seventh format", async () => {
+    // Сьомий формат не знав кроків заповнення: його раннер їх не виконав би
+    const artifact = await stampPlan(draft())
+    const old: Record<string, unknown> = { ...artifact, format: 7 }
+    expect(parsePlan(JSON.stringify(old))).toMatchObject({
+      ok: false,
+      reason: "format",
+      diagnostic: {
+        code: "apply.plan-format",
+        params: { found: 7, supported: PLAN_FORMAT },
+      },
+    })
+  })
+
+  it("round-trips a backfill step and covers its facts with the hash", async () => {
+    const base = draft()
+    const setNotNull = {
+      ...base.steps[0]!,
+      id: "s3",
+      sql: 'ALTER TABLE "app"."t" ALTER COLUMN "d" SET NOT NULL',
+      notNull: [{ table: { schema: "app", name: "t" }, column: "d" }],
+    }
+    const backfill = {
+      ...base.steps[0]!,
+      id: "s2",
+      origin: "backfill" as const,
+      sql: 'UPDATE "app"."t" SET "c" = DEFAULT WHERE "c" IS NULL',
+      class: "dataStep" as const,
+      destroys: [],
+      destroyed: [],
+      consumes: [],
+      consumed: [],
+      dataLoss: false,
+      backfill: {
+        table: { schema: "app", name: "t" },
+        column: "c",
+        rowsAtPlan: 3,
+        permission: true,
+        default: "''::text",
+        triggers: [{ name: "audit", enabled: "A" as const }],
+      },
+    }
+    const artifact = await stampPlan({
+      ...base,
+      steps: [...base.steps, backfill, setNotNull],
+    })
+    const parsed = parsePlan(serializePlan(artifact))
+    if (!parsed.ok) throw new Error(parsed.message)
+    expect(parsed.artifact).toEqual(artifact)
+    const hashWith = async (step: typeof backfill, next = setNotNull) =>
+      (await stampPlan({ ...base, steps: [...base.steps, step, next] }))
+        .planHash
+    expect(
+      await hashWith({
+        ...backfill,
+        backfill: { ...backfill.backfill, rowsAtPlan: 4 },
+      })
+    ).not.toBe(artifact.planHash)
+    // Показаний перелік тригерів і колонки перевірки — теж під `planHash`
+    expect(
+      await hashWith({
+        ...backfill,
+        backfill: { ...backfill.backfill, triggers: [] },
+      })
+    ).not.toBe(artifact.planHash)
+    expect(await hashWith(backfill, { ...setNotNull, notNull: [] })).not.toBe(
+      artifact.planHash
+    )
   })
 
   it("round-trips a versions step", async () => {

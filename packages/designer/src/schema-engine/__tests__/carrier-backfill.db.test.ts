@@ -1,18 +1,8 @@
 import { randomUUID } from "node:crypto"
 import pg from "pg"
 import { describe, expect, it, vi } from "vitest"
-import {
-  canonicalSnapshot,
-  compile,
-  type CompiledModel,
-} from "simetra/compiler"
-import {
-  buildPlan,
-  engineScope,
-  executePlan,
-  rehearsalReport,
-  type PlanArtifact,
-} from "simetra/schema"
+import { canonicalSnapshot } from "simetra/compiler"
+import { buildPlan, executePlan, rehearsalReport } from "simetra/schema"
 import {
   ATTACHMENTS_TABLE,
   CHECKLIST_TABLE,
@@ -26,14 +16,18 @@ import {
   taskNoteMapping,
   uuid,
 } from "../../../../simetra/test/support"
-import { inTarget, query } from "../../__tests__/support/db"
+import { query } from "../../__tests__/support/db"
 import {
+  carrierTables,
+  compiledFiles as compiled,
   dbs,
   engine,
-  EMPTY,
   establish,
+  inModelTarget,
+  one,
   planned,
   promoted,
+  ref,
   rehearsalOf,
   writer,
 } from "./build-plan.support"
@@ -45,14 +39,6 @@ import {
  * таблицю до нього — вирішує Postgres на живих рядках, а не текст плану.
  * Це перший наскрізний план і перша промоція моделі з правами на базі.
  */
-
-const ref = (kind: string, name: string) => ({ kind, name })
-
-async function compiled(files: Map<string, string>): Promise<CompiledModel> {
-  const result = await compile(files)
-  expect(result.diagnostics).toEqual([])
-  return result.model!
-}
 
 /**
  * Вихідна модель звичайного плану: `policyDomain()` без носіїв на `Task` і
@@ -124,19 +110,6 @@ function targetFiles(): Map<string, string> {
   files.set(COMMENT_FILE, JSON.stringify(comment))
   return files
 }
-
-/** Ціль у межах схем моделі: `policyDomain()` живе в `public`. */
-async function inModelTarget<T>(
-  model: CompiledModel,
-  fn: (url: string) => Promise<T>
-): Promise<T> {
-  return inTarget(EMPTY, (await engineScope(model)).scope, fn)
-}
-
-const carrierTables = (artifact: PlanArtifact) =>
-  artifact.steps
-    .filter((s) => s.origin === "carriers")
-    .map((s) => s.lockedTables[0]!.name)
 
 /** Тригери ефектів дії (спека прав §5.3) на таблицях, за іменами. */
 const effectsTriggers = (url: string, tables: string[]) =>
@@ -216,12 +189,6 @@ async function poolNotices<T>(
     spy.mockRestore()
   }
 }
-
-const one = async <R extends Record<string, unknown>>(
-  url: string,
-  sql: string,
-  params: unknown[]
-): Promise<R> => (await query<R>(url, sql, params))[0]!
 
 describe.concurrent("carrier copy steps on live rows", () => {
   it("a plain plan backfills a path copy and the tabular copy reading it", async () => {
