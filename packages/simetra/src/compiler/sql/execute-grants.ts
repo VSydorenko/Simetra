@@ -24,10 +24,13 @@ export function executeGrants(
   provider: DatabaseProvider
 ): string[] {
   const apiRoles = PROVIDER_API_ROLES[provider]
-  const roles = purposes.map((purpose) => grantRole(purpose, provider))
-  const revoked = Object.values(apiRoles).filter(
-    (role) => !roles.includes(role)
-  )
+  // Призначення без ролі в профілі (`null`) ні відкликати, ні надати нічого
+  const roles = purposes
+    .map((purpose) => grantRole(purpose, provider))
+    .filter((role): role is string => typeof role === "string")
+  const revoked = Object.values(apiRoles)
+    .filter((role): role is string => typeof role === "string")
+    .filter((role) => !roles.includes(role))
   return [
     `REVOKE EXECUTE ON FUNCTION ${signature} FROM PUBLIC;`,
     ...revoked.map(
@@ -53,23 +56,32 @@ export function sequenceRevokes(
   const target = `${quoteIdent(sequence.schema)}.${quoteIdent(sequence.name)}`
   return [
     `REVOKE ALL ON SEQUENCE ${target} FROM PUBLIC;`,
-    ...Object.values(PROVIDER_API_ROLES[provider]).map(
-      (role) => `REVOKE ALL ON SEQUENCE ${target} FROM ${quoteIdent(role)};`
-    ),
+    // Роль API без значення (`null`, сервісної ролі профілю `postgres` немає)
+    // відкликати нічого: `FROM null` не складає одиницю SQL
+    ...Object.values(PROVIDER_API_ROLES[provider])
+      .filter((role): role is string => typeof role === "string")
+      .map(
+        (role) => `REVOKE ALL ON SEQUENCE ${target} FROM ${quoteIdent(role)};`
+      ),
   ]
 }
 
 /**
  * Ім'я ролі за призначенням: роль API — від провайдера, роль платформи — та
- * сама для кожного провайдера.
+ * сама для кожного провайдера. `null` — профіль провайдера не має ролі за цим
+ * призначенням; кожен виклик її пропускає.
  */
 export function grantRole(
   purpose: GrantPurpose,
   provider: DatabaseProvider
-): string {
-  return isPlatformPurpose(purpose)
-    ? PLATFORM_ROLES[purpose]
-    : PROVIDER_API_ROLES[provider][purpose]
+): string | null {
+  // `?? null`: відсутній ключ мапи (`undefined`) не має просочитися в SQL
+  // як `"undefined"` — він означає те саме, що й `null`
+  return (
+    (isPlatformPurpose(purpose)
+      ? PLATFORM_ROLES[purpose]
+      : PROVIDER_API_ROLES[provider][purpose]) ?? null
+  )
 }
 
 function isPlatformPurpose(

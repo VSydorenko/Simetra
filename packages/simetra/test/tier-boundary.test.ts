@@ -283,6 +283,38 @@ describe("tier zones", () => {
     ).toEqual([])
   })
 
+  // Better Auth і kysely — лише тестова залежність `simetra` (рішення Р2):
+  // production-джерело, що їх імпортує, зламалося б у споживача
+  it("production sources import neither better-auth nor kysely", async () => {
+    for (const spec of [
+      "better-auth",
+      "better-auth/db/migration",
+      "better-auth/plugins",
+      "kysely",
+      "kysely/helpers/postgres",
+    ])
+      for (const file of [
+        "src/schema/engine/x.ts",
+        "src/server/x.ts",
+        "src/model/x.ts",
+        "src/compiler/x.ts",
+        "src/data/__fixture.ts",
+      ])
+        expect(
+          await ruleIds(importOf(spec), file),
+          `${file}: ${spec}`
+        ).toContain("@typescript-eslint/no-restricted-imports")
+    expect(
+      await ruleIds(
+        importOf("better-auth"),
+        "src/schema/__tests__/x.db.test.ts"
+      )
+    ).toEqual([])
+    expect(
+      await ruleIds(importOf("kysely-like"), "src/schema/engine/x.ts")
+    ).toEqual([])
+  })
+
   it("data and ui do not import server", async () => {
     for (const tier of ["data", "ui"])
       for (const spec of ["simetra/server", "../server/x", "../server"]) {

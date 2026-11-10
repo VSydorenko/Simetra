@@ -85,6 +85,7 @@ import {
   type ProviderLockSet,
   type TableLock,
 } from "./locks"
+import { checkOwnerAttributes } from "./owner-gate"
 import { checkPlatformRoles } from "./platform-roles"
 import { ApplyConnectionLost, ApplyDbError, type ApplyDatabase } from "./port"
 import {
@@ -427,6 +428,11 @@ export async function buildPlan(
   // 1–2. Бажаний стан і стан застосування цілі; пошкоджений стан лагодять
   // вручну, а не дозволом
   const desired = await desiredForApply(model)
+  // Профіль `postgres` будує тіні з шаблону кластера цілі й окремого сервера
+  // тіней не знає (Р9): відмова до платформних ролей і до будь-якого звернення
+  // до бази
+  if (desired.scope.provider === "postgres" && o.shadowBase !== undefined)
+    return refused([applyDiagnostic("plan.shadow-base-unsupported", "error")])
   // Факти сервера й голова ledger — тією самою транзакцією READ ONLY, що й
   // стан: доказ копії репетиції (спека промоції §8) звіряє з ними базу
   // того самого моменту, що й ланцюжок. Сервер, старіший за мінімум
@@ -438,6 +444,11 @@ export async function buildPlan(
     async (tx) => {
       const unsupported = await serverVersionRefusal(tx)
       if (unsupported !== undefined) return { ok: false as const, unsupported }
+      // Р10: роль без BYPASSRLS читала б стан крізь захист рядків — відмова
+      // до будь-якого читання стану й до платформних ролей
+      const ownerGate = await checkOwnerAttributes(tx)
+      if (ownerGate !== undefined)
+        return { ok: false as const, unsupported: ownerGate }
       return {
         ok: true as const,
         state: await readApplyState(tx),
@@ -464,7 +475,8 @@ export async function buildPlan(
     o.target,
     o.shadowBase,
     desired.sql,
-    parse
+    parse,
+    desired.scope.provider
   )
   if (roles.refusal !== undefined) return refused(roles.refusal)
 
@@ -899,7 +911,9 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
           oldTables,
           await readWritePath(tx, {
             tables: oldTables,
-            apiRoles: Object.values(PROVIDER_API_ROLES[scope.provider]),
+            apiRoles: Object.values(PROVIDER_API_ROLES[scope.provider]).filter(
+              (role): role is string => role !== null
+            ),
           })
         ),
       ],

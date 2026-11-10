@@ -45,7 +45,8 @@
         "provider": {
           "type": "string",
           "enum": [
-            "supabase"
+            "supabase",
+            "postgres"
           ],
           "description": "Database provider preset that defines the management boundary."
         }

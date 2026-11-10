@@ -10,6 +10,7 @@ import type {
   CatalogModel,
   CatalogTable,
   CatalogUnit,
+  DatabaseProvider,
   FunctionVolatility,
 } from "simetra/model"
 import { mapEnumType, mapTable, type MappingIssue } from "./map-tables"
@@ -24,6 +25,8 @@ import {
 
 /** Що мапер бере поза видом двигуна. */
 export interface MapContext {
+  /** Пресет провайдера: базовий стан `public`, від якого рахується відмінність. */
+  provider: DatabaseProvider
   produced: ProducedBy
   parse: SqlParser
   defaults: AclDefaults
@@ -112,7 +115,7 @@ export function mapModel(
     }
   }
   const statements = (fact: Fact) => [
-    ...unitStatements(view, fact, produced, defaults, issues),
+    ...unitStatements(view, fact, produced, defaults, ctx.provider, issues),
     ...revokedDefaultStatements(view, fact.id, defaults),
   ]
   for (const fact of view.facts()) {
@@ -140,7 +143,7 @@ export function mapModel(
     } else if (id.kind === "schema") {
       // Схема в моделі неявна — її створює рендер зі схем об'єктів; одиниці
       // дає лише відкликане з пресету провайдера
-      unit(fact, revokedPresetStatements(view, id))
+      unit(fact, revokedPresetStatements(view, id, ctx.provider))
     } else if (id.kind === "typeAttribute") {
       // Атрибут складеного типу вже названо діагностикою самого типу
     } else if (id.kind === "role" || id.kind === "membership") {

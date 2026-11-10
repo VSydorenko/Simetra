@@ -42,7 +42,9 @@ export function writePathProblems(
 ): Diagnostic[] {
   const unit = new Set(tables.map((t) => key(t.schema, t.name)))
   const roles = new Set(
-    Object.values(PROVIDER_API_ROLES[model.project.database.provider])
+    Object.values(PROVIDER_API_ROLES[model.project.database.provider]).filter(
+      (role): role is string => role !== null
+    )
   )
   const located = model.sqlUnits.filter(
     (u) => u.file !== undefined && u.line !== undefined

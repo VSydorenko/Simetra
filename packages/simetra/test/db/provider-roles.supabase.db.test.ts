@@ -33,10 +33,9 @@ describe("provider roles", () => {
       )
       expect(found.map((r) => r.name).sort()).toEqual([command, runtime].sort())
       expect(
-        platformRoleRefusals([command, runtime], found, "target", [runtime], {
-          name: runtime,
-          memberOf: [command, "authenticated"],
-        })
+        platformRoleRefusals([command, runtime], found, "target", [
+          { name: runtime, memberOf: [command, "authenticated"] },
+        ])
       ).toEqual([])
     })
   })

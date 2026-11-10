@@ -167,6 +167,7 @@ function fakeDatabase(state: State, applied: string) {
     },
   }
   const dbs: ApplyDatabase = {
+    statement: () => Promise.reject(new Error("no statement expected")),
     async transaction(_db, end, fn) {
       transactions++
       log.push("BEGIN")

@@ -5,7 +5,7 @@ import {
   readProviderLocks,
   readServerFacts,
   readSessionSearchPath,
-  SUPABASE_LOCKS,
+  PROVIDER_LOCKS,
   type CatalogFingerprint,
   type ExecutablePlan,
   type PlanStep,
@@ -99,7 +99,7 @@ describe("transaction-mode pooler", () => {
         providerLocks: await createApplyDatabase({
           readOnly: true,
         }).transaction({ url }, "rollback", (tx) =>
-          readProviderLocks(tx, "postgres", SUPABASE_LOCKS)
+          readProviderLocks(tx, "postgres", PROVIDER_LOCKS.supabase)
         ),
         foreignKeys: { subjects: [], live: [] },
         preamble: [],

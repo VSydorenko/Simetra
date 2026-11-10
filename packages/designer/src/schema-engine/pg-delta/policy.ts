@@ -5,11 +5,71 @@ import {
   type IntegrationProfile,
   type Policy,
 } from "@supabase/pg-delta"
-import { SUPABASE_EXTENSIONS, type EngineScope } from "simetra/schema"
+import { PROVIDER_UNMANAGED_EXTENSIONS, type EngineScope } from "simetra/schema"
 import { PROVIDER_SCHEMAS } from "simetra/model"
 
 /**
- * Політика межі §6.9 поверх `supabasePolicy`. Фільтр двигуна — «перше збігле
+ * Базова політика провайдера `postgres` (рішення Р1 плану ПГ-2a): власна, не
+ * похідна від Supabase. `better_auth` припущена (її створює міграція Better
+ * Auth), але керованим лишається лише тригер застосунку на `better_auth.user`;
+ * `extensions` — жорстке виключення. Виключена, але припущена схема стає
+ * reference-only, тож без виключення ACL план відкликав би гранти `roles` на
+ * `better_auth`, а засів тіні видав би `CREATE SCHEMA "extensions"` (42P06).
+ */
+export const postgresBasePolicy: Policy = {
+  id: "simetra-postgres-base",
+  assumedSchemas: ["better_auth"],
+  filter: [
+    {
+      match: {
+        all: [
+          { kind: "trigger" },
+          { schema: "better_auth" },
+          { idField: { field: "table", glob: "user" } },
+          { not: { edgeTo: { kind: "function", schema: "better_auth" } } },
+        ],
+      },
+      action: "include",
+    },
+    {
+      match: { schema: ["better_auth", "extensions"] },
+      action: "exclude",
+    },
+    {
+      match: {
+        all: [{ kind: "schema" }, { name: ["better_auth", "extensions"] }],
+      },
+      action: "exclude",
+    },
+    {
+      match: {
+        all: [
+          { kind: ["acl", "comment", "securityLabel"] },
+          {
+            any: [
+              { target: { schema: ["better_auth", "extensions"] } },
+              {
+                target: {
+                  kind: "schema",
+                  name: ["better_auth", "extensions"],
+                },
+              },
+            ],
+          },
+        ],
+      },
+      action: "exclude",
+    },
+  ],
+}
+
+const PROVIDER_BASE_POLICY: Record<EngineScope["provider"], Policy> = {
+  supabase: supabasePolicy,
+  postgres: postgresBasePolicy,
+}
+
+/**
+ * Політика межі §6.9 поверх базової політики провайдера. Фільтр двигуна — «перше збігле
  * правило виграє», а власні правила стоять перед успадкованими, тож наші
  * правила лише звужують межу, а правила пресета вирішують, що в схемах
  * провайдера належить застосунку (тригер на `auth.users`, політика на
@@ -22,14 +82,17 @@ import { PROVIDER_SCHEMAS } from "simetra/model"
  * генерація пише одиницею лише відмінність цілі від пресету.
  */
 export function scopePolicy(scope: EngineScope): Policy {
-  const inside = [...scope.schemas, ...PROVIDER_SCHEMAS.supabase]
+  const inside = [...scope.schemas, ...PROVIDER_SCHEMAS[scope.provider]]
   const policy: Policy = {
     id: "simetra-scope",
-    extends: [supabasePolicy],
+    extends: [PROVIDER_BASE_POLICY[scope.provider]],
     filter: [
       {
         match: {
-          all: [{ kind: "extension" }, { name: [...SUPABASE_EXTENSIONS] }],
+          all: [
+            { kind: "extension" },
+            { name: [...PROVIDER_UNMANAGED_EXTENSIONS[scope.provider]] },
+          ],
         },
         action: "exclude",
       },
@@ -82,11 +145,13 @@ export function scopePolicy(scope: EngineScope): Policy {
   return policy
 }
 
-/** Профіль двигуна для межі: пресет Supabase з політикою межі замість його власної. */
+/**
+ * Профіль двигуна для межі. Supabase: пресет з політикою межі замість його
+ * власної. Postgres: без обробників розширень і без пресету провайдера.
+ */
 export function scopeProfile(scope: EngineScope): IntegrationProfile {
-  return {
-    ...supabaseProfile,
-    id: "simetra-supabase",
-    policy: scopePolicy(scope),
-  }
+  const policy = scopePolicy(scope)
+  if (scope.provider === "postgres")
+    return { id: "simetra-postgres", handlers: [], policy }
+  return { ...supabaseProfile, id: "simetra-supabase", policy }
 }

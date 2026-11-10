@@ -13,8 +13,12 @@ import {
   diffCatalogModels,
   PROVIDER_SCHEMAS,
   type CatalogDifference,
+  type DatabaseProvider,
 } from "simetra/model"
-import { SUPABASE_EXTENSIONS, SUPABASE_SURFACES } from "./provider/supabase"
+import {
+  PROVIDER_SURFACES,
+  PROVIDER_UNMANAGED_EXTENSIONS,
+} from "./provider/presets"
 import type {
   EngineDiagnostic,
   EnginePlan,
@@ -178,9 +182,10 @@ function globMatches(glob: string, name: string): boolean {
 /** Чи пускає пресет провайдера одиницю класу `cls` на цю таблицю (§6.9). */
 export function onSurface(
   cls: "policy" | "trigger",
-  target: UnitTarget
+  target: UnitTarget,
+  provider: DatabaseProvider
 ): boolean {
-  return SUPABASE_SURFACES.some(
+  return PROVIDER_SURFACES[provider].some(
     (surface) =>
       surface.schema === target.schema &&
       surface.classes.includes(cls) &&
@@ -213,11 +218,12 @@ function outOfScope(
  * без `IN SCHEMA` і розширення провайдера.
  */
 function outOfScopeDiagnostics(
-  model: Pick<CompiledModel, "physical" | "sqlUnits">,
+  model: Pick<CompiledModel, "project" | "physical" | "sqlUnits">,
   parse: SqlParser
 ): EngineDiagnostic[] {
-  const provider = new Set(PROVIDER_SCHEMAS.supabase)
-  const extensions = new Set(SUPABASE_EXTENSIONS)
+  const databaseProvider = model.project.database.provider
+  const provider = new Set(PROVIDER_SCHEMAS[databaseProvider])
+  const extensions = new Set(PROVIDER_UNMANAGED_EXTENSIONS[databaseProvider])
   const out: EngineDiagnostic[] = []
   for (const [kind, objects] of [
     ["table", model.physical.tables],
@@ -243,7 +249,7 @@ function outOfScopeDiagnostics(
       const [target] = targets
       if (target === undefined || !provider.has(target.schema)) continue
       const fnSchema = triggerFunctionSchema(unit, parse)
-      if (!onSurface(unit.class, target))
+      if (!onSurface(unit.class, target, databaseProvider))
         out.push(
           outOfScope(unit.identity, "provider-surface", {
             class: unit.class,
@@ -267,7 +273,7 @@ function outOfScopeDiagnostics(
         !(
           unit.class === "comment" &&
           t.kind === "policy" &&
-          onSurface("policy", t)
+          onSurface("policy", t, databaseProvider)
         )
     )
     for (const schema of new Set(outside.map((t) => t.schema)))
@@ -293,7 +299,7 @@ export async function engineScope(
   model: Pick<CompiledModel, "project" | "physical" | "sqlUnits">
 ): Promise<ModelScope> {
   const parse = await loadSqlParser()
-  const provider = new Set(PROVIDER_SCHEMAS.supabase)
+  const provider = new Set(PROVIDER_SCHEMAS[model.project.database.provider])
   const schemas = new Set([
     model.project.defaultSchema,
     ...model.physical.tables.map((table) => table.schema),

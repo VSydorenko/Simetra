@@ -2,7 +2,8 @@
 // `simetra-pg`). Compose і ініціалізація йдуть під тим самим замком, що й
 // DB-прогін (`packages/simetra/test/db/stack-guard.ts`): інакше `stop` міг би
 // зупинити стек посеред прогону, а прогін — стартувати на напівготовому стеку.
-// Без залежностей: команди кличуть його до `pnpm install` у CI.
+// Без залежностей, крім `start postgres`: він кличе `simetra roles` і міграцію
+// Better Auth, тож потребує `pnpm install`.
 //
 //   node scripts/db-stack.mjs start postgres
 //   node scripts/db-stack.mjs stop postgres [--volumes]
@@ -185,19 +186,27 @@ const garageApi = (endpoint, payload) =>
     )
   )
 
-/** @returns {Record<string, string>} */
-function devSecrets() {
+/**
+ * @param {string} file ім'я .env-файла в теці стека
+ * @param {string[]} required обов'язкові змінні
+ * @returns {Record<string, string>}
+ */
+function readEnvFile(file, required) {
   /** @type {Record<string, string>} */
   const secrets = {}
-  const text = readFileSync(join(STACK_DIR, "dev-secrets.env"), "utf8")
+  const text = readFileSync(join(STACK_DIR, file), "utf8")
   for (const line of text.split(/\r?\n/)) {
     const m = /^([A-Z0-9_]+)=(.*)$/.exec(line)
     if (m !== null) secrets[m[1]] = m[2].trim()
   }
-  for (const name of ["GARAGE_DEV_KEY_ID", "GARAGE_DEV_KEY_SECRET"])
-    if (!secrets[name]) throw new Error(`${name} is not set in dev-secrets.env`)
+  for (const name of required)
+    if (!secrets[name]) throw new Error(`${name} is not set in ${file}`)
   return secrets
 }
+
+/** Секрети Garage: їх читає і compose (`env_file`), тож паролів ролей тут нема. */
+const devSecrets = () =>
+  readEnvFile("dev-secrets.env", ["GARAGE_DEV_KEY_ID", "GARAGE_DEV_KEY_SECRET"])
 
 // Кожен крок спершу дивиться на стан: повторний `db:pg:start` на запущеному
 // стеку нічого не змінює
@@ -247,26 +256,124 @@ function initGarage() {
     ])
 }
 
+// Адреса стека для кроків після `compose up`: порт і пароль суперкористувача
+// — з compose.yaml; база `simetra` — база застосунку стека (спека профілю §3.1)
+const STACK_HOST = "127.0.0.1:54422"
+const STACK_DATABASE = "simetra"
+
+/** @param {string} user @param {string} password */
+const stackUrl = (user, password) =>
+  `postgresql://${user}:${password}@${STACK_HOST}/${STACK_DATABASE}`
+
+// Ролі входу Simetra й змінні їхніх dev-паролів. Імена — ті самі, що дають
+// `PROVIDER_OWNER_ROLES`, `PROVIDER_LOGIN_ROLES` і `PLATFORM_LOGIN_ROLES`;
+// збіг тримає unit-тест
+const LOGIN_ROLES = [
+  { role: "simetra_owner", secret: "SIMETRA_OWNER_DEV_PASSWORD" },
+  { role: "simetra_runtime", secret: "SIMETRA_RUNTIME_DEV_PASSWORD" },
+  { role: "simetra_auth", secret: "SIMETRA_AUTH_DEV_PASSWORD" },
+]
+
+/**
+ * @param {string} command
+ * @param {string[]} args
+ * @param {Record<string, string>} env
+ * @param {string} [cwd]
+ */
+function run(command, args, env, cwd = ROOT) {
+  const result = spawnSync(command, args, {
+    cwd,
+    stdio: "inherit",
+    env: { ...process.env, ...env },
+  })
+  if (result.error !== undefined)
+    throw new Error(`${command} failed: ${result.error.message}`)
+  if (result.status !== 0)
+    throw new Error(
+      `${command} ${args[0]} exited with ${result.status ?? result.signal}`
+    )
+}
+
+/** Пароль у `\set` без екранування: лише безпечні символи, інакше SQL зламався б. */
+const SAFE_PASSWORD = /^[A-Za-z0-9._-]+$/
+
+/** Аргументи `docker compose exec … psql`: пароль ніколи не тут (він іде у stdin). */
+export const POSTGRES_PSQL_ARGS = [
+  "exec",
+  "-T",
+  "postgres",
+  "psql",
+  "-v",
+  "ON_ERROR_STOP=1",
+  "-U",
+  "postgres",
+  "-d",
+  "postgres",
+  "-f",
+  "-",
+]
+
+/**
+ * Команда кроку Better Auth: DSN лише в середовищі дочірнього процесу, не в argv.
+ *
+ * @param {Record<string, string>} secrets
+ * @param {string} superuserUrl
+ */
+export function betterAuthCommand(secrets, superuserUrl) {
+  return {
+    args: [
+      "--import",
+      "tsx",
+      join(ROOT, "packages/simetra/test/db/better-auth-cli.ts"),
+    ],
+    env: {
+      SIMETRA_SUPERUSER_URL: superuserUrl,
+      SIMETRA_AUTH_URL: stackUrl(
+        "simetra_auth",
+        secrets.SIMETRA_AUTH_DEV_PASSWORD
+      ),
+    },
+  }
+}
+
 async function startPostgres() {
   compose(PROFILES.postgres, ["up", "-d", "--build", "--wait"])
   initGarage()
-  compose(
-    PROFILES.postgres,
+  const psql = (/** @type {string} */ input) =>
+    compose(PROFILES.postgres, POSTGRES_PSQL_ARGS, { input })
+  psql(readFileSync(join(STACK_DIR, "dev-environment.sql"), "utf8"))
+  const secrets = readEnvFile(
+    "login-secrets.env",
+    LOGIN_ROLES.map((r) => r.secret)
+  )
+  const superuserUrl = stackUrl("postgres", "postgres")
+  run(
+    process.execPath,
     [
-      "exec",
-      "-T",
-      "postgres",
-      "psql",
-      "-v",
-      "ON_ERROR_STOP=1",
-      "-U",
-      "postgres",
-      "-d",
-      "postgres",
-      "-f",
-      "-",
+      join(ROOT, "packages/designer/bin/simetra.mjs"),
+      "roles",
+      join(STACK_DIR, "project"),
     ],
-    { input: readFileSync(join(STACK_DIR, "dev-environment.sql")) }
+    { SIMETRA_DATABASE_URL: superuserUrl }
+  )
+  // Пароль іде у stdin `psql` (`\set` + `:'pw'`), а не в `-v`: argv видно в `ps`
+  psql(
+    LOGIN_ROLES.map(({ role, secret }, i) => {
+      const password = secrets[secret]
+      if (!SAFE_PASSWORD.test(password))
+        throw new Error(
+          `${secret} in login-secrets.env has unsupported characters`
+        )
+      return `\\set pw${i} '${password}'\nALTER ROLE ${role} PASSWORD :'pw${i}';\n`
+    }).join("")
+  )
+  const step = betterAuthCommand(secrets, superuserUrl)
+  run(
+    process.execPath,
+    step.args,
+    step.env,
+    // `tsx` — залежність пакета simetra, не кореня: звідти її й резолвить `--import`
+    join(ROOT, "packages/simetra")
   )
 }
 

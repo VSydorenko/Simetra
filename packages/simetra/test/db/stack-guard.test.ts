@@ -6,7 +6,7 @@ import designerConfig from "../../../designer/vitest.config"
 import simetraConfig from "../../vitest.config"
 import { TEST_STACKS, type TestProvider } from "./profile"
 import { diff, leakMessage, leftoverReport, lockPath } from "./stack-guard"
-import { manualSweepSql, stackMismatch } from "./sweep"
+import { dropRunDatabase, manualSweepSql, stackMismatch } from "./sweep"
 
 const PROVIDERS: TestProvider[] = ["supabase", "postgres"]
 
@@ -83,6 +83,50 @@ describe("external resources", () => {
   })
 })
 
+describe("dropping a tagged database", () => {
+  const statements = async (isTemplate: boolean): Promise<string[]> => {
+    const sql: string[] = []
+    const client = {
+      query: async (text: string) => {
+        sql.push(text)
+        return { rows: [] }
+      },
+      escapeIdentifier: (name: string) => `"${name}"`,
+    }
+    await dropRunDatabase(client, "simetra_tpl_abc123_k3j2h1", isTemplate)
+    return sql
+  }
+
+  // Postgres відмовляє `DROP` бази з `datistemplate`: без зняття ознаки шаблон
+  // тегованого прогону лишався б на стеку назавжди
+  it("clears the template flag before the DROP", async () => {
+    expect(await statements(true)).toEqual([
+      'ALTER DATABASE "simetra_tpl_abc123_k3j2h1" WITH IS_TEMPLATE false',
+      'DROP DATABASE "simetra_tpl_abc123_k3j2h1" WITH (FORCE)',
+    ])
+  })
+
+  it("a plain database is only dropped", async () => {
+    expect(await statements(false)).toEqual([
+      'DROP DATABASE "simetra_tpl_abc123_k3j2h1" WITH (FORCE)',
+    ])
+  })
+
+  it("the manual sweep SQL and the leak message clear the flag first", () => {
+    expect(manualSweepSql("abc123", "postgres")).toContain(
+      "ALTER DATABASE %I WITH IS_TEMPLATE false; DROP DATABASE %I WITH (FORCE);"
+    )
+    const message = leakMessage(
+      [{ kind: "databases", name: "t_abc123", change: "added" }],
+      "postgres"
+    )
+    expect(message.indexOf("IS_TEMPLATE false")).toBeGreaterThan(-1)
+    expect(message.indexOf("IS_TEMPLATE false")).toBeLessThan(
+      message.indexOf("DROP DATABASE")
+    )
+  })
+})
+
 describe("manualSweepSql", () => {
   it.each(PROVIDERS)("runs as the %s superuser", (p) => {
     expect(manualSweepSql("abc123", p).split("\n")[0]).toBe(
@@ -152,6 +196,7 @@ describe("vitest configs", () => {
         "simetra/bench",
         "designer/db",
         "designer/db-supabase",
+        "designer/db-pg",
       ])
     )
   })

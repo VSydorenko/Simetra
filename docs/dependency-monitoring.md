@@ -116,6 +116,20 @@ issue закрили.
 — аліас на TypeScript 6, бо typescript-eslint потребує JS API TS 6. Умова
 зняття аліаса: мажор typescript-eslint, що працює з JS API TS 7.
 
+## `better-auth` і `kysely` — тестові залежності
+
+Лише `devDependencies` пакета `simetra`, точні піни (`better-auth` 1.7.12,
+`kysely` — найновіша версія в межах `^0.28.17 || ^0.29`, опублікована щонайменше
+за 14 днів до піна). Потрібні DB-тестам стека `postgres`: хелпер
+`packages/simetra/test/db/better-auth.ts` запускає міграцію Better Auth, щоб
+перевірити колонки джерела подій `better_auth.user`. Оновлюються разом.
+Production-джерела їх не імпортують (лінт-зони `packages/simetra/eslint.tier-zones.js`
+і `packages/designer/eslint.zones.js`) і тарболи не оголошують (гейт пакування).
+Міграція йде без `schemaName`: з ним Better Auth шле `CREATE SCHEMA IF NOT EXISTS`,
+а Postgres перевіряє `CREATE` на базі раніше за `IF NOT EXISTS`. На оновленні —
+звірити `getMigrations`, порядок колонок `user` з `PROVIDER_EVENT_SOURCES.postgres`
+і поведінку `search_path`.
+
 ## Драйвер `pg`
 
 `TRANSPORT_MESSAGE` (`packages/designer/src/schema-engine/apply-database.ts`)

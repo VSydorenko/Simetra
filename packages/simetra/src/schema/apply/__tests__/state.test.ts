@@ -225,7 +225,7 @@ describe("renderApplyState: epoch of row versions", () => {
         `GRANT EXECUTE ON FUNCTION simetra.row_version_epoch() TO ${quoteIdent(role)};`
       )
     expect(lines).not.toContain(
-      `GRANT EXECUTE ON FUNCTION simetra.row_version_epoch() TO ${quoteIdent(PROVIDER_API_ROLES.supabase.service)};`
+      `GRANT EXECUTE ON FUNCTION simetra.row_version_epoch() TO ${quoteIdent(PROVIDER_API_ROLES.supabase.service ?? "service_role")};`
     )
     expect(
       lines.filter((l) =>

@@ -120,8 +120,19 @@ export const introspectTool = defineTool({
   destructive: false,
   async run({ dir, database }, input) {
     const existing = await readFolder(dir)
-    const provider = new Set(PROVIDER_SCHEMAS.supabase)
-    const foreign = (input.schemas ?? []).filter((s) => provider.has(s))
+    // Провайдер потрібен до перевірки схем: межа «чужих» схем — його пресет.
+    // Існуючий проєкт несе його у файлі, тека без проєкту — у вході.
+    const compiled = existing.has(PROJECT_FILE)
+      ? await compile(existing)
+      : undefined
+    if (compiled !== undefined && compiled.model === undefined)
+      return { ok: false, changes: [], diagnostics: compiled.diagnostics }
+    const databaseProvider: DatabaseProvider =
+      compiled?.model?.project.database.provider ??
+      input.project?.database?.provider ??
+      "supabase"
+    const providerSchemas = new Set(PROVIDER_SCHEMAS[databaseProvider])
+    const foreign = (input.schemas ?? []).filter((s) => providerSchemas.has(s))
     if (foreign.length > 0)
       throw new UsageError(
         `Provider schemas are not introspected: ${foreign.join(", ")}. Nothing changed.`
@@ -140,11 +151,8 @@ export const introspectTool = defineTool({
       databaseProvider: DatabaseProvider
     }
     let scope: EngineScope
-    if (existing.has(PROJECT_FILE)) {
+    if (compiled?.model !== undefined) {
       // Межа — та сама, що в `diff`: схеми наявної теки, плюс названі
-      const compiled = await compile(existing)
-      if (compiled.model === undefined)
-        return { ok: false, changes: [], diagnostics: compiled.diagnostics }
       const own = compiled.model.project
       // Файл проєкту не переписується: без явного входу діють його значення,
       // а явно назване інше значення генератор звітує помилкою
@@ -178,7 +186,7 @@ export const introspectTool = defineTool({
         attributeCase: input.project?.attributeCase ?? "camelCase",
         // Дефолт лише тут, на межі інструмента для теки без проєкту: файл, що
         // його запише генератор, несе провайдера явно.
-        databaseProvider: input.project?.database?.provider ?? "supabase",
+        databaseProvider,
       }
       scope = {
         schemas: [...new Set(input.schemas)].sort(),
@@ -489,7 +497,8 @@ export const diffTool = defineTool({
           db.target,
           db.shadowBase,
           desired.sql,
-          await loadSqlParser()
+          await loadSqlParser(),
+          desired.scope.provider
         )
         if (roles.refusal !== undefined) return { refusal: roles.refusal }
         return {

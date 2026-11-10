@@ -73,14 +73,18 @@ designer, щоб тест-обгортка її бачила. Підготовк
   доходить у `pg_hba` правилом `scram-sha-256`), пароль ставить
   `setTestPasswords` у `beforeAll`.
 - Кожна транзакція `roles` у профілі `postgres` першими виконує
-  `SET LOCAL ROLE NONE`, `SET LOCAL search_path = pg_catalog, pg_temp`,
-  `SET LOCAL statement_timeout = 0`, `SET LOCAL lock_timeout = 0`, потім
-  звіряє `current_user = session_user` і `rolsuper`. Оператор
-  `ApplyDatabase.statement` іде лише на `conns.maintenance`; його прелюдія —
-  `SET ROLE NONE`, `SET search_path = pg_catalog, pg_temp`,
-  `SET default_transaction_read_only = off`, `SET statement_timeout = 0`, без
-  звірки `rolsuper`: звірку дає транзакція службової бази фази читання з тим
-  самим DSN. Кожне ім'я в SQL — кваліфіковане й через `quoteIdent`.
+  `SET LOCAL ROLE NONE`, `SET LOCAL search_path = pg_catalog, pg_temp` і
+  `SET LOCAL <guc> = 0` для кожного таймауту з `ENGINE_SESSION_TIMEOUTS`
+  (`statement_timeout`, `lock_timeout`, `idle_in_transaction_session_timeout`,
+  `transaction_timeout`; рішення архітекторки на прийманні: замок не губиться
+  через таймаут кластера), потім звіряє `current_user = session_user` і
+  `rolsuper`. Оператор `ApplyDatabase.statement` іде лише на
+  `conns.maintenance`; його прелюдія (`STATEMENT_PRELUDE`) — `SET ROLE NONE`,
+  `SET search_path = pg_catalog, pg_temp`,
+  `SET default_transaction_read_only = off` і `SET <guc> = 0` з того самого
+  переліку, без звірки `rolsuper`: звірку дає транзакція службової бази фази
+  читання з тим самим DSN. Кожне ім'я в SQL — кваліфіковане й через
+  `quoteIdent`.
 - 🔴 Без `--` перед шаблоном vitest у `pnpm --filter` (`AGENTS.md`).
 - Без shims: замінене прибирається в тій самій зміні (`AGENTS.md` принцип 5).
 
