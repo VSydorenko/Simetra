@@ -136,6 +136,15 @@
   рахує (`packages/designer/src/schema-engine/__tests__/apply-backfill.db.test.ts`
   фіксує форму). Кандидат: перевірка перед кроком і для `ADD COLUMN … NOT
   NULL` (`packages/simetra/src/schema/apply/backfill.ts`, `withNotNullChecks`).
+- **Хеш збереження промоції не розрізняє композитний `ROW(NULL, NULL)` і
+  `NULL`.** Замір збереження
+  (`packages/simetra/src/schema/apply/promotion/preservation.ts`,
+  `preservationQuery`) позначає значення `CASE WHEN x IS NULL`, а для
+  композитного типу `ROW(NULL, NULL) IS NULL` істинне: рядок з усіма полями
+  `NULL` і справжній `NULL` дають однаковий внесок у хеш, тож перевірка
+  збереження не бачить заміни одного іншим. Поза шляхом заповнення.
+  Кандидат: той самий предикат `IS NOT DISTINCT FROM NULL`, що й у кроці
+  заповнення (`nullDatum` у `packages/simetra/src/schema/apply/steps.ts`).
 
 ## 2. Двигун схеми й апстрім
 
