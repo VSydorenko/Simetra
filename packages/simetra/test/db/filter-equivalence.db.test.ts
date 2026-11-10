@@ -70,11 +70,13 @@ async function serverRows(
       (await client.query(statement.text, statement.params)).rows as Record<
         string,
         unknown
-      >[]
+      >[],
+    null
   )
   if ("error" in result) return { error: errorOf(result.error) }
   if (!("rows" in result)) throw new Error("a list read counted")
-  return { rows: result.rows }
+  // Без `known` маркерів нема.
+  return { rows: result.rows as Record<string, unknown>[] }
 }
 
 /** Множина ключів будівника T3. */

@@ -2,6 +2,7 @@ import {
   INTEGER_TEXT,
   isPlainObject,
   decodeRow,
+  type KnownMarker,
   type LogicalRow,
   type RuntimeObject,
   type RuntimeSection,
@@ -105,6 +106,52 @@ export function decodeReadRow(
   const wire = headWire(object, parse(json))
   if (sections !== undefined) wire.set("tabularSections", sections)
   return decodeStrict(object, Object.fromEntries(wire))
+}
+
+/** The key of a marker's position in a partial marker (P4-B spec §4.1). */
+export const KNOWN_MARKER = "$known"
+
+/**
+ * Decodes a read row that may be a marker of a row the client holds (P4-B
+ * spec §4.1): an integer is its position in `known`; an object with
+ * `$known` and without the key column is a partial marker with its copies
+ * by logical name; anything else is a row, as {@link decodeReadRow}.
+ * `known` — the number of positions of the statement's `known`, 0 when it
+ * had none: a position outside it is `command.internal`.
+ */
+export function decodeReadRowOrMarker(
+  object: RuntimeObject,
+  json: string,
+  known: number
+): LogicalRow | KnownMarker {
+  const raw = parse(json)
+  // Маркер шле лише умовний оператор і лише з позицією з `unnest` — інше
+  // значення є дефектом, а не рядком.
+  const position = (value: unknown): number => {
+    if (
+      typeof value !== "number" ||
+      !Number.isSafeInteger(value) ||
+      value < 0 ||
+      value >= known
+    ) {
+      throw internal()
+    }
+    return value
+  }
+  if (typeof raw === "number") return { known: position(raw) }
+  // Повний рядок завжди має колонку ключа, тож фізична колонка `$known` його
+  // за маркер не видає.
+  if (
+    isPlainObject(raw) &&
+    !Object.hasOwn(raw, object.key) &&
+    Object.hasOwn(raw, KNOWN_MARKER)
+  ) {
+    const { [KNOWN_MARKER]: at, ...copies } = raw
+    return Object.keys(copies).length === 0
+      ? { known: position(at) }
+      : { known: position(at), copies: decodeStrict(object, copies) }
+  }
+  return decodeStrict(object, Object.fromEntries(headWire(object, raw)))
 }
 
 /**

@@ -53,11 +53,11 @@ const isRead = (text: string) => text.includes(READ)
 const CARD = `SELECT to_jsonb(t)::text AS row ${READ}`
 const LIST = `SELECT jsonb_build_object('id', t."id", 'version', t."version", 'code', t."code")::text AS row ${READ}`
 const byId = {
-  text: `${CARD} WHERE "id" = $1::uuid LIMIT 1`,
+  text: `${CARD} WHERE t."id" = $1::uuid LIMIT 1`,
   params: [OTHER],
 }
 const byCode = {
-  text: `${LIST} WHERE ("code" = $1::text AND "id" > $2::uuid) ORDER BY t."id" LIMIT $3`,
+  text: `${LIST} WHERE (t."code" = $1::text AND t."id" > $2::uuid) ORDER BY t."id" LIMIT $3`,
   params: ["R", ID, "200"],
 }
 const page: ReadQuery = {
@@ -455,7 +455,7 @@ describe("CommandRuntime.read", () => {
   describe("include", () => {
     const R1 = "77777777-7777-4777-8777-777777777777"
     const linkCard = {
-      text: `SELECT to_jsonb(t)::text AS row FROM "public"."link" t WHERE "id" = $1::uuid LIMIT 1`,
+      text: `SELECT to_jsonb(t)::text AS row FROM "public"."link" t WHERE t."id" = $1::uuid LIMIT 1`,
       params: [ID],
     }
     const regions = {

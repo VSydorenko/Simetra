@@ -15,6 +15,7 @@ import {
   type Operation,
   type ProviderApiRoles,
   type ReadQuery,
+  type ReadPartValue,
   type ReadResult,
   type ReadResultOf,
   type RequestRolePurpose,
@@ -405,7 +406,7 @@ async function readRows(
       throw new Refused(fail(raw, phase))
     }
   }
-  let result: ReadResult | { error: CommandError }
+  let result: ReadPartValue | { error: CommandError }
   let tag: string
   try {
     await send({ text: BEGIN_READ_ONLY, params: [] })
@@ -419,7 +420,9 @@ async function readRows(
       object,
       plan,
       async (statement, target) =>
-        (await send(statement, { kind: "read", object: target })).rows
+        (await send(statement, { kind: "read", object: target })).rows,
+      // Одиночне читання `known` не має: епоха бази оператора не змінює.
+      null
     )
     ;({ command: tag } = await send(COMMIT))
   } catch (error) {
@@ -439,5 +442,6 @@ async function readRows(
     throw new CommandFailure({ code: "command.internal" })
   }
   if ("error" in result) throw new CommandFailure(result.error)
-  return result
+  // План без `known`: маркерів серед рядків нема.
+  return result as ReadResult
 }
