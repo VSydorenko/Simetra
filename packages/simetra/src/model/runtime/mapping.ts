@@ -900,7 +900,7 @@ function encodeMarker(entry: CatalogEntry, marker: KnownMarker): unknown {
   return Object.fromEntries([[MARKER, marker.known], ...Object.entries(copies)])
 }
 
-function decodeMarker(
+function decodeRowOrMarker(
   entry: CatalogEntry,
   raw: unknown
 ): LogicalRow | KnownMarker {
@@ -1000,7 +1000,7 @@ export function readResultFromWire(
   const out: ReadPartValue = {
     rows:
       section === undefined
-        ? wire.rows.map((row) => decodeMarker(entry, row))
+        ? wire.rows.map((row) => decodeRowOrMarker(entry, row))
         : decodeLines(entry, section, wire.rows as WireRow[]),
   }
   if (wire.included !== undefined) {
