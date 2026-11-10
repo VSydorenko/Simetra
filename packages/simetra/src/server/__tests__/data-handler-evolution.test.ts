@@ -199,7 +199,8 @@ describe("data handler between catalogs A and A′", () => {
     })
     const decoded = readResultFromWire(client, query, value as never)
     if (!("rows" in decoded)) throw new Error("expected rows")
-    const row = decoded.rows[0]!
+    // Запит без `known`: маркерів у відповіді немає.
+    const row = decoded.rows[0] as Record<string, unknown>
     expect(row).toMatchObject({
       [ticket.keyName]: ID,
       [attribute.from]: TARGET,
