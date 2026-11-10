@@ -698,6 +698,51 @@ describe("core: the epoch switch", () => {
     })
   })
 
+  it("a receiver answer with versionEpoch null and a row of an abandoned epoch is discarded", async () => {
+    const h = await proven()
+    const old: ServerRow = {
+      key: key(1),
+      version: 99,
+      versionEpoch: EA,
+      values: { ref: key(1), version: 99, org: S, title: "old" },
+    }
+    expect(receive(h, { rows: [old], absent: [] }, null)).toBe("discarded")
+    expect(h.handle.getSnapshot().rows[0]).toMatchObject({
+      state: "synced",
+      values: { title: "t1" },
+    })
+  })
+
+  it("a receiver answer of the current epoch with a row of an abandoned epoch is discarded whole", async () => {
+    const h = await proven()
+    const old: ServerRow = {
+      key: key(1),
+      version: 99,
+      versionEpoch: EA,
+      values: { ref: key(1), version: 99, org: S, title: "old" },
+    }
+    expect(receive(h, { rows: [old], absent: [key(2)] }, EB)).toBe("discarded")
+    expect(h.handle.getSnapshot().rows).toMatchObject([
+      { state: "synced", values: { title: "t1" } },
+      { state: "synced", values: { title: "t2" } },
+    ])
+  })
+
+  it("a receiver answer with versionEpoch null and rows of the current epoch applies", async () => {
+    const h = await proven()
+    const fresh: ServerRow = {
+      key: key(1),
+      version: 99,
+      versionEpoch: EB,
+      values: { ref: key(1), version: 99, org: S, title: "new" },
+    }
+    expect(receive(h, { rows: [fresh], absent: [] }, null)).toBe("applied")
+    expect(h.handle.getSnapshot().rows[0]).toMatchObject({
+      state: "synced",
+      values: { title: "new" },
+    })
+  })
+
   it("a receiver answer after the session became unavailable is discarded", async () => {
     const h = await proven()
     for (let i = 0; i < DISCARDS_MAX; i++)

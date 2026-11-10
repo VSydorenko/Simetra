@@ -212,7 +212,11 @@ export function createWriter(ctx: WriterContext, scope: Scope): Writer {
       const o = ctx.objectOf(object)
       // Один шлюз на відповідь (Р7, Р12): і «рядка немає» без жодного рядка
       // проходить його, а відкинута відповідь не пише нічого й каже про це.
-      if (ctx.session.acceptEpoch(versionEpoch, readEpoch) === "discard")
+      // Шлюз бачить і епохи рядків: рядок пишеться з власною епохою, коли
+      // параметр `null`, тож рядок покинутої епохи відкидає всю відповідь.
+      const epochs = new Set<string | null>([versionEpoch])
+      for (const row of answer.rows) epochs.add(row.versionEpoch ?? null)
+      if (ctx.session.acceptEpochs(epochs, readEpoch) === "discard")
         return "discarded"
       patchRows(ctx, scope, o, answer.rows, readEpoch, versionEpoch)
       removeKeys(ctx, scope, o, answer.absent, readEpoch)
