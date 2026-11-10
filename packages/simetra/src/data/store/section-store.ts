@@ -1,5 +1,5 @@
 import { keyId, pairId } from "./epoch"
-import { differentEpochs, type RowEntry } from "./object-store"
+import { differentEpochs, effectiveEpoch, type RowEntry } from "./object-store"
 import type { ObjectStore } from "./object-store"
 import type { Scope, Session } from "./session"
 import type { Key, ObjectName, SectionLine } from "./types"
@@ -75,7 +75,7 @@ export function createSectionStore(options: {
   // з якою його прочитано.
   const ownerVersions = new Map<
     Key,
-    { version: number; epoch: string | null }
+    { version: number; versionEpoch: string | null }
   >()
 
   session.onClose(() => {
@@ -130,7 +130,7 @@ export function createSectionStore(options: {
     const seen = ownerVersions.get(owner)
     if (seen === undefined) return false
     // Нова непорожня епоха заміняє запис старої незалежно від версії.
-    if (differentEpochs(seen.epoch, versionEpoch)) return false
+    if (differentEpochs(seen.versionEpoch, versionEpoch)) return false
     return ownerVersion < seen.version
   }
 
@@ -149,24 +149,29 @@ export function createSectionStore(options: {
       scope.assert()
       if (stale(owner, ownerVersion, versionEpoch, readEpoch, ownerScope))
         return "rejected"
+      const seen = ownerVersions.get(owner)
+      // `null` останньої баченої епохи не змінює (Р6): тримана — запис
+      // власника, а без нього — епоха шапки в сховищі.
+      const held = seen?.versionEpoch ?? rows.get(owner)?.versionEpoch
       const sections = owners.get(owner) ?? new Map<string, SectionEntry>()
       sections.set(section, {
         lines,
         ownerVersion,
-        versionEpoch,
+        versionEpoch: effectiveEpoch(versionEpoch, held),
         complete: source === "owner-section",
         scope: ownerScope,
       })
       owners.set(owner, sections)
-      const seen = ownerVersions.get(owner)
       ownerVersions.set(
         owner,
-        seen === undefined || differentEpochs(seen.epoch, versionEpoch)
-          ? { version: ownerVersion, epoch: versionEpoch }
+        seen === undefined || differentEpochs(seen.versionEpoch, versionEpoch)
+          ? {
+              version: ownerVersion,
+              versionEpoch: effectiveEpoch(versionEpoch, held),
+            }
           : {
               version: Math.max(seen.version, ownerVersion),
-              // `null` останньої баченої епохи не змінює (Р6).
-              epoch: versionEpoch ?? seen.epoch,
+              versionEpoch: effectiveEpoch(versionEpoch, held),
             }
       )
       return "written"

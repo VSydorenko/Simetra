@@ -17,6 +17,19 @@ export function differentEpochs(
 }
 
 /**
+ * The epoch a write keeps in store state (P4-B plan B1c, Р5, Р6): the incoming
+ * one, and for a `null` answer (a replica, a database without an epoch) the
+ * epoch already held. Every write of an epoch into the store goes through it
+ * (guarded by `__tests__/epoch-write-guard.test.ts`).
+ */
+export function effectiveEpoch(
+  incoming: string | null | undefined,
+  held: string | null | undefined
+): string | null {
+  return incoming ?? held ?? null
+}
+
+/**
  * The version rule (P4-B spec §6.2 rule 1, Рд24) — one function for every
  * write path. Returns `undefined` when `incoming` is older; an equal or newer
  * version merges partially: a missing (lazy) field stays, an explicit `null`
@@ -33,7 +46,7 @@ export function mergeVersioned(
   return {
     key: current.key,
     version: incoming.version,
-    versionEpoch: incoming.versionEpoch ?? current.versionEpoch ?? null,
+    versionEpoch: effectiveEpoch(incoming.versionEpoch, current.versionEpoch),
     values: { ...current.values, ...incoming.values },
   }
 }
@@ -71,8 +84,8 @@ export interface RowEntry {
   owners: number
   /** The row version each lazy field was read with. */
   lazyVersions: Map<string, number>
-  /** The version epoch each lazy field was read in; a field not listed — `null`. */
-  lazyEpochs: Map<string, string>
+  /** The version epoch each lazy field was read in; not listed — `null`. */
+  lazyEpochs: Map<string, string | null>
   /** `divergent` — the remove came from a read older than the last write (П15). */
   removed?: { epoch: number; divergent: boolean }
   /**
@@ -220,8 +233,9 @@ export function createObjectStore(options: {
     for (const field of lazyFields) {
       if (!Object.hasOwn(row.values, field)) continue
       e.lazyVersions.set(field, row.version)
-      if (row.versionEpoch != null) e.lazyEpochs.set(field, row.versionEpoch)
-      else e.lazyEpochs.delete(field)
+      // Поле прочитано з версією рядка, тож і епоху бере рядка: `null`
+      // відповідь лишає епоху слота, а не стирає її.
+      e.lazyEpochs.set(field, effectiveEpoch(row.versionEpoch, e.versionEpoch))
     }
   }
 
@@ -254,7 +268,8 @@ export function createObjectStore(options: {
       row,
       scope: scopeId,
       version: row.version,
-      versionEpoch: row.versionEpoch ?? null,
+      // Нового ключа слот не тримає — епоха лише з відповіді.
+      versionEpoch: effectiveEpoch(row.versionEpoch, null),
       writtenEpoch: readEpoch,
       owners: 0,
       lazyVersions: new Map(),
@@ -338,7 +353,10 @@ export function createObjectStore(options: {
         if (e.removed.divergent) restored++
         delete e.removed
         // Репліка без епохи не стирає епохи слота (Р6).
-        e.row = { ...row, versionEpoch: row.versionEpoch ?? e.versionEpoch }
+        e.row = {
+          ...row,
+          versionEpoch: effectiveEpoch(row.versionEpoch, e.versionEpoch),
+        }
       } else {
         const merged =
           mergeVersioned(e.row, row) ??
@@ -349,7 +367,7 @@ export function createObjectStore(options: {
         e.row = merged
       }
       e.version = e.row.version
-      e.versionEpoch = e.row.versionEpoch ?? null
+      e.versionEpoch = effectiveEpoch(e.row.versionEpoch, e.versionEpoch)
       if (incomingScope !== undefined) e.scope = incomingScope
       e.writtenEpoch = Math.max(e.writtenEpoch, readEpoch)
       setLazy(e, row, lazyRead)
