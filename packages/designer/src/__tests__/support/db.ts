@@ -179,6 +179,25 @@ export async function waitForLock(
   throw new Error(`backend ${pid} never waited on a lock`)
 }
 
+/**
+ * Waits until backend `pid` is gone from `pg_stat_activity`, observed from
+ * another session; throws when it is still there after the wait.
+ */
+export async function waitForBackendExit(
+  observer: pg.Client,
+  pid: number
+): Promise<void> {
+  for (let waited = 0; waited < 10_000; waited += 25) {
+    const { rows } = await observer.query(
+      "SELECT 1 FROM pg_stat_activity WHERE pid = $1",
+      [pid]
+    )
+    if (rows.length === 0) return
+    await new Promise((resolve) => setTimeout(resolve, 25))
+  }
+  throw new Error(`backend ${pid} did not exit`)
+}
+
 const quoted = (name: string) => `"${name.replaceAll('"', '""')}"`
 
 /**

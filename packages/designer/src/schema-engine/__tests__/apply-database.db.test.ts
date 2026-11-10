@@ -1,3 +1,4 @@
+import pg from "pg"
 import { describe, expect, it } from "vitest"
 import {
   ApplyConnectionLost,
@@ -5,7 +6,12 @@ import {
   type EngineScope,
 } from "simetra/schema"
 import { createApplyDatabase } from ".."
-import { asSuperuser, inTarget, query } from "../../__tests__/support/db"
+import {
+  asSuperuser,
+  inTarget,
+  query,
+  waitForBackendExit,
+} from "../../__tests__/support/db"
 import { testProvider } from "../../../../simetra/test/support"
 
 /**
@@ -175,13 +181,14 @@ describe("ApplyDatabase (pg)", () => {
           // робить після тесту, може наштовхнутися на нього під навантаженням
           // (збій прибирання двигун ковтає, тінь лишається сиротою). Тож
           // чекаємо, поки бекенда справді нема
-          for (let waited = 0; waited < 10_000; waited += 25) {
-            const [alive] = await query<{ alive: boolean }>(
-              asSuperuser(url),
-              `select exists (select 1 from pg_stat_activity where pid = ${String(pid)}) as alive`
-            )
-            if (alive?.alive !== true) break
-            await new Promise((resolve) => setTimeout(resolve, 25))
+          const observer = new pg.Client({
+            connectionString: asSuperuser(url),
+          })
+          await observer.connect()
+          try {
+            await waitForBackendExit(observer, pid!)
+          } finally {
+            await observer.end()
           }
           await tx.query("select 1")
         })
