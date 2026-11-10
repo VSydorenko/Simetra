@@ -793,6 +793,64 @@ describe("write facts of a backfill", () => {
   })
 })
 
+describe("backfill rights guard refusal", () => {
+  const items = { schema: "app", name: "items" }
+  const guard = platformTriggers(items).find(
+    (t) => t.family === "rightsGuards"
+  )!.trigger
+  const mechanics = platformTriggers(items).find(
+    (t) => t.family === "mechanics"
+  )!.trigger
+  const drop = (id: string, sql: string): PlanStep => ({
+    ...intentStep(sql, []),
+    id,
+    origin: "engine",
+  })
+  const refusals = (steps: PlanStep[]) =>
+    backfillStepRefusals(steps, parse).map((d) => [d.code, d.params])
+
+  it("refuses a fill after a step that drops a rights guard of its table", () => {
+    const steps = stepsOf({ actions: [SET_NOT_NULL, SET_DEFAULT] })
+    expect(
+      refusals([
+        drop("s0", `DROP TRIGGER "${guard}" ON "app"."items"`),
+        ...steps,
+      ])
+    ).toEqual([
+      [
+        "plan.backfill-rights-guard",
+        {
+          table: "app.items",
+          column: "note",
+          step: "s2",
+          by: "s0",
+          trigger: guard,
+        },
+      ],
+    ])
+  })
+
+  it("lets other drops through", () => {
+    const steps = stepsOf({ actions: [SET_NOT_NULL, SET_DEFAULT] })
+    const CASES: [string, PlanStep[]][] = [
+      // Родина з реєстру: платформний тригер не прав — не запобіжник
+      [
+        "a mechanics trigger",
+        [drop("s0", `DROP TRIGGER "${mechanics}" ON "app"."items"`), ...steps],
+      ],
+      [
+        "the guard of another table",
+        [drop("s0", `DROP TRIGGER "${guard}" ON "app"."other"`), ...steps],
+      ],
+      [
+        "the guard after the fill",
+        [...steps, drop("s9", `DROP TRIGGER "${guard}" ON "app"."items"`)],
+      ],
+    ]
+    for (const [, plan] of CASES) expect(refusals(plan)).toEqual([])
+  })
+})
+
 describe("sameDefault", () => {
   // Знімок компілятора проти default бажаної тіні у формі каталогу
   const SAME: [string, string][] = [

@@ -4830,6 +4830,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "План не записано. Заповніть значення NULL до застосування.",
     },
   },
+  "plan.backfill-rights-guard": {
+    en: (p) =>
+      `Column ${p.column} of ${p.table} becomes NOT NULL and step ${p.step} would fill its NULL values with the default, but step ${p.by} drops the rights guard trigger ${p.trigger} of the table before the fill: the guard also keeps the rights version, so the clients' rights snapshot would not follow the filled value`,
+    uk: (p) =>
+      `Колонка ${p.column} таблиці ${p.table} стає NOT NULL, і крок ${p.step} заповнив би її NULL значенням default, але крок ${p.by} до заповнення знімає запобіжник прав ${p.trigger} таблиці: запобіжник веде й версію прав, тож знімок прав клієнтів не підхопив би заповнене значення`,
+    hint: {
+      en: "No plan was written. Fill the NULL values before applying.",
+      uk: "План не записано. Заповніть значення NULL до застосування.",
+    },
+  },
   "plan.backfill-count-failed": {
     en: (p) =>
       `The plan could not count the NULL values of column ${p.column} of ${p.table} with row security off: ${p.error} (SQLSTATE ${p.sqlstate})`,

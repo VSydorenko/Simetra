@@ -610,25 +610,94 @@ export function planBackfills(
 }
 
 /**
+ * Тригери, які знімає `DROP TRIGGER` кроку, — за деревом оператора, як
+ * класи кроків у `steps.ts`: `[схема?, таблиця, тригер]`.
+ */
+function droppedTriggers(
+  step: PlanStep,
+  parse: SqlParser
+): { schema?: string; table: string; name: string }[] {
+  const result = parse(step.sql)
+  if (!result.ok)
+    throw new Error(`plan step ${step.id} does not parse: ${result.message}`)
+  return result.statements.flatMap(({ stmt }) => {
+    if (!("DropStmt" in stmt)) return []
+    const { removeType, objects } = stmt.DropStmt
+    if (removeType !== "OBJECT_TRIGGER") return []
+    return (objects ?? []).flatMap((object) => {
+      const names = "List" in object ? stringsOf(object.List.items) : []
+      const [name, table, schema] = [names.at(-1), names.at(-2), names.at(-3)]
+      return name === undefined || table === undefined
+        ? []
+        : [{ schema, table, name }]
+    })
+  })
+}
+
+/**
+ * Запобіжник прав, який знімає крок до заповнення (платформна спека §6.6,
+ * спека промоції §7.2): ці тригери не лише перевіряють запис, а й ведуть
+ * версію прав. Заповнення без тригера лишило б знімок прав клієнтів
+ * старим, коли колонка входить в обчислення прав, і цього не було б
+ * видно. Родина — з реєстру `platformTriggers()`, не з імені.
+ */
+function rightsGuardRefusals(
+  steps: readonly PlanStep[],
+  parse: SqlParser
+): EngineDiagnostic[] {
+  return steps.flatMap((step, index) => {
+    if (step.backfill === undefined) return []
+    const { table, column } = step.backfill
+    const guards = new Set(
+      platformTriggers(table)
+        .filter((t) => t.family === "rightsGuards")
+        .map((t) => t.trigger)
+    )
+    return steps.slice(0, index).flatMap((by) =>
+      droppedTriggers(by, parse)
+        .filter(
+          (d) =>
+            d.table === table.name &&
+            (d.schema === undefined || d.schema === table.schema) &&
+            guards.has(d.name)
+        )
+        .map((d) =>
+          applyDiagnostic("plan.backfill-rights-guard", "error", {
+            table: qualified(table),
+            column: quoteIdent(column),
+            step: step.id,
+            by: by.id,
+            trigger: quoteIdent(d.name),
+          })
+        )
+    )
+  })
+}
+
+/**
  * Відмови кроків заповнення за кроками плану (Р13): default, що кличе
  * функцію моделі, яку змінює крок плану, — заповнення порахувало б інше
- * тіло. Тип запису не перевіряється: тимчасової таблиці немає.
+ * тіло; запобіжник прав таблиці, який знімає крок до заповнення. Тип
+ * запису не перевіряється: тимчасової таблиці немає.
  */
 export function backfillStepRefusals(
   steps: readonly PlanStep[],
   parse: SqlParser
 ): EngineDiagnostic[] {
-  return steps.flatMap((s) =>
-    s.backfill === undefined
-      ? []
-      : functionChangeRefusals(
-          s.id,
-          s.backfill.default,
-          steps,
-          parse,
-          "backfill"
-        )
-  )
+  return [
+    ...steps.flatMap((s) =>
+      s.backfill === undefined
+        ? []
+        : functionChangeRefusals(
+            s.id,
+            s.backfill.default,
+            steps,
+            parse,
+            "backfill"
+          )
+    ),
+    ...rightsGuardRefusals(steps, parse),
+  ]
 }
 
 /**

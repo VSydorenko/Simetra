@@ -355,6 +355,7 @@ export const COMPILER_RULES = [
   "plan.backfill-order",
   "plan.backfill-unique",
   "plan.backfill-carrier-source",
+  "plan.backfill-rights-guard",
   "plan.backfill-count-failed",
   "plan.rights-source-access",
   "plan.rights-source-unknown-keys",
