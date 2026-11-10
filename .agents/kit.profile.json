@@ -1,0 +1,104 @@
+{
+  "pr": {
+    "base": "main",
+    "mergeMethod": "merge",
+    "archiveDir": "~/simetra-private/ledgers",
+    "waitTimeout": 1800
+  },
+  "tests": {
+    "default": "unit",
+    "packages": {
+      "simetra": "packages/simetra",
+      "designer": "packages/designer"
+    },
+    "levels": {
+      "unit": {
+        "command": ["pnpm", "exec", "vitest", "run", "--project", "unit"],
+        "reporter": "vitest-json",
+        "packages": ["simetra", "designer"],
+        "timeout": 900
+      },
+      "db": {
+        "command": ["pnpm", "exec", "vitest", "run", "--project", "db"],
+        "reporter": "vitest-json",
+        "packages": ["simetra", "designer"],
+        "lock": "{tmpdir}/simetra-db-stack.lock",
+        "lockWait": 2700,
+        "timeout": 2400
+      },
+      "db-supabase": {
+        "command": [
+          "pnpm",
+          "exec",
+          "vitest",
+          "run",
+          "--project",
+          "db-supabase",
+          "--passWithNoTests"
+        ],
+        "reporter": "vitest-json",
+        "packages": ["simetra", "designer"],
+        "lock": "{tmpdir}/simetra-db-stack.lock",
+        "lockWait": 2700,
+        "timeout": 1800
+      },
+      "db-pg": {
+        "command": ["pnpm", "exec", "vitest", "run", "--project", "db-pg"],
+        "reporter": "vitest-json",
+        "packages": ["simetra"],
+        "lock": "{tmpdir}/simetra-db-stack-postgres.lock",
+        "lockWait": 2700,
+        "timeout": 1800
+      }
+    }
+  },
+  "docs": {
+    "specs": "docs/superpowers/specs",
+    "plans": "docs/superpowers/plans",
+    "docs": "docs",
+    "glossary": "docs/GLOSSARY.md",
+    "adr": "docs/adr",
+    "skills": [".agents/skills", "packages/*/skills"],
+    "anchors": {
+      "include": [
+        "AGENTS.md",
+        "CLAUDE.md",
+        "README.md",
+        "CONTRIBUTING.md",
+        "docs/**/*.md",
+        ".agents/**/*.md",
+        "packages/*/skills/**/*.md",
+        ".claude/**/*.md"
+      ],
+      "exclude": ["docs/research/**", "docs/superpowers/**"],
+      "roots": [
+        "packages",
+        "docs",
+        "scripts",
+        ".agents",
+        ".claude",
+        ".github",
+        "supabase",
+        "docker",
+        "examples",
+        "legacy"
+      ],
+      "external": ["MEMORY.md", "SKILL.md", "CLAUDE.local.md"]
+    }
+  },
+  "review": {
+    "exclude": ["pnpm-lock.yaml", "**/*.snap"],
+    "criteria": ".agents/review-criteria.md"
+  },
+  "research": {
+    "corpus": [
+      "AGENTS.md",
+      "CLAUDE.md",
+      "README.md",
+      "docs/**/*.md",
+      ".agents/review-criteria.md",
+      ".agents/skills/*/SKILL.md",
+      "packages/*/README.md"
+    ]
+  }
+}
