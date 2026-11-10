@@ -4798,8 +4798,8 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     uk: (p) =>
       `Роль підключення не є суперкористувачем у ${p.database}: профіль postgres готує кластер лише від суперкористувача, що входить під власним іменем`,
     hint: {
-      en: "This step was refused before it ran; roles or the database created earlier stay. Run `simetra roles` with the superuser DSN of the server (the same variable as for the other commands). A role that is not a superuser, or a session whose current role differs from the login role, is refused because half of the roles without BYPASSRLS would silently change how rights work.",
-      uk: "Цей крок відхилено до його виконання; створені раніше ролі чи база лишаються. Запустіть `simetra roles` з DSN суперкористувача сервера (та сама змінна, що й для інших команд). Роль без SUPERUSER чи сесію, у якої поточна роль відрізняється від ролі входу, відхилено: половина ролей без BYPASSRLS мовчки змінила б поведінку прав.",
+      en: "This step was refused before it ran; roles or the database created earlier stay. Run `simetra roles` with a superuser DSN of the server through `--database-url-env`, naming a variable other than the owner's.",
+      uk: "Цей крок відхилено до його виконання; створені раніше ролі чи база лишаються. Запустіть `simetra roles` з DSN суперкористувача сервера через `--database-url-env`, указавши змінну, відмінну від змінної власника.",
     },
   },
   "roles.unsafe-schema": {

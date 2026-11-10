@@ -168,7 +168,7 @@ function classify(
   if (error instanceof ShadowCreateRefusedError) {
     const where = error.onShadowBase ? (names.shadow ?? describe) : describe
     return refusal(
-      `A shadow database cannot be created on ${where}: the connecting role lacks CREATEDB.${error.onShadowBase ? "" : " Point --shadow-url-env at a server where it has it."}`
+      `A shadow database cannot be created on ${where}: the connecting role lacks CREATEDB.${error.onShadowBase ? "" : " Grant CREATEDB to the role or, where the provider allows a separate shadow server, point --shadow-url-env at a server where it has it."}`
     )
   }
   // Збій тіні — та сама класифікація з адресою сервера, де мала з'явитися

@@ -226,7 +226,7 @@ describe("classifyDatabaseError", () => {
     )
     expect(own).toMatchObject({ kind: "refusal" })
     expect(own.kind === "refusal" && own.message).toContain(
-      `created on ${DESCRIBE}: the connecting role lacks CREATEDB. Point --shadow-url-env`
+      `created on ${DESCRIBE}: the connecting role lacks CREATEDB. Grant CREATEDB to the role or, where the provider allows a separate shadow server, point --shadow-url-env`
     )
     const base = classifyDatabaseError(
       new ShadowCreateRefusedError(true),
