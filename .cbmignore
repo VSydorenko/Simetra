@@ -8,6 +8,8 @@
 # білд-артефакти й кеші (індексатор читає диск, а не git)
 **/node_modules/
 **/dist/
+**/.next/
+**/.output/
 **/.turbo/
 **/build/
 **/coverage/
@@ -19,3 +21,4 @@
 temp/
 .agents/
 .claude/
+.superpowers/

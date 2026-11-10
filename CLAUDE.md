@@ -25,18 +25,19 @@
   subagents. Every `agent()` gets an explicit `model` and `effort`:
   recon / collection → **Sonnet**; analysis / verification / synthesis →
   **Opus**; trivial mechanics → low effort. Match agent strength to task
-  difficulty. A named agent (`Agent(subagent_type: …)`) takes its model from
-  its frontmatter in `.claude/agents/`, and that frontmatter follows the same
-  rule: `codebase-research` (recon) is Sonnet, `code-review` and
-  `code-review-verifier` (analysis, verification) are Opus.
-- **Code research — two surfaces.** Code ("where does it live", "what does a
-  change affect") — `codebase-memory-mcp` tools; docs and plan-anchor checks —
-  `.agents/skills/codebase-research/scripts/orient` (`--map "<topic>"`,
-  `--plan <file>`), which is agent-neutral and works without MCP. Procedure and
-  report format — skill `codebase-research`; for large multi-file recon — the
-  subagent of the same name (`Agent(subagent_type: "codebase-research")`,
-  Sonnet, read-only). Role matrix (who uses code tooling, who re-checks the
-  plan) — `AGENTS.md` § "Code research". Library docs — `context7`.
+  difficulty. A named agent (`Agent(subagent_type: "agent-kit:…")`) takes its
+  model from its frontmatter in agent-kit: `researcher` and `code-reviewer` are
+  Sonnet, `code-review-verifier` is Opus. Raise `code-reviewer` to Opus in the
+  Agent call for the `data-layer` lens and for any lens on SQL, locks or rights
+  (skill `agent-kit:code-review`).
+- **Code research.** One entry point, `orient` (agent-kit): `orient <Symbol>`
+  for "where does it live, who calls it" over the `codebase-memory-mcp` graph,
+  `orient --map "<topic>"` for docs, `orient --plan <file>` for plan anchors.
+  An open question that needs several sources (code, database, library code,
+  the web) — skill `agent-kit:research`, agent `agent-kit:researcher`. Role
+  matrix (who uses code tooling, who re-checks the plan) — `AGENTS.md`
+  § "Code research". Library docs — `context7`; published library code —
+  `pkg-src`.
 - **Committing agents run sequentially.** Never let two agents that commit
   work on the same checkout at the same time. The same holds for a gate run:
   do not run the gates while an agent edits the checkout, or the result is not
@@ -46,7 +47,7 @@
   long-term architectural rationale, not short-term hacks.
 - **Plans are self-contained.** A plan for implementation in another session
   lists every file, step and acceptance criterion — the executor has none of
-  this conversation's context. Use `superpowers:writing-plans`.
+  this conversation's context. Use the `agent-kit:plan` skill.
 
 ## Behavioural conventions
 
@@ -56,13 +57,14 @@
   exception is the author's own DCO `Signed-off-by`, added by `git commit -s`
   under the author's git identity; an agent never adds it on its own or signs
   off for the owner.
-- **Commit or push only when the owner explicitly asks.** Launching
-  `/виконай-задачу` or `/архівуй-виконані-задачі` (owner-only commands) counts
-  as the request to commit their work; push and PRs still need an explicit ask.
+- **Commit or push only when the owner explicitly asks.** The owner handing a
+  plan to `agent-kit:execute`, or launching `/архівуй-виконані-задачі`
+  (owner-only command), counts as the request to commit that work; push and
+  PRs still need an explicit ask, and go through `pr-gate`.
   Fix branches start from the current working branch, not `main` (`AGENTS.md`).
-- **Brainstorming asks only high-level, direction-setting questions** via
-  `AskUserQuestion`; secondary details are decided by a sensible default
-  without discussion.
+- **A discussion (`agent-kit:discuss`) asks only high-level,
+  direction-setting questions** via `AskUserQuestion`; secondary details are
+  decided by a sensible default without discussion.
 - **Reviewing sibling work** (code from a parallel agent in another session):
   skip typecheck/lint/test, focus on the code and its conformance to the spec.
 
@@ -87,25 +89,35 @@
 - The repo is indexed as a codebase-memory project; there is deliberately **no
   `.mcp.json`** in the repo — the server is installed per machine. What the
   graph must not index is listed in `.cbmignore`.
-- 🔴 **Among our agents only `codebase-research` gets `codebase-memory-mcp`.**
-  `code-review` and `code-review-verifier` work with `Read` / `Grep` / `Bash`.
+- 🔴 **Graph questions go through `orient`.** Reviewers and verifiers work
+  with `Read` / `Grep` / `Bash`; they may run `orient <Symbol>` only to check
+  coverage (a forgotten consumer), not to search.
 
-## Agents (`.claude/agents/`)
+## agent-kit
 
-| Agent | Role |
+The way of working comes from the **agent-kit** plugin (the owner's toolset,
+installed per machine); the kit's plugin map lists every stage → skill /
+agent / script. The project side is the profile `.agents/kit.profile.json`
+(tests, PR, docs, review, research); machine values live in a git-ignored
+local profile next to it.
+
+| Stage | Kit part |
 | --- | --- |
-| `codebase-research` | Read-only recon (Sonnet, plan mode); the only one with the code graph. Use instead of generic Explore when the reading volume is unknown |
-| `code-review` | Reviews landed work through one lens chosen by the caller (Opus); read-only, finds and proves defects, fixes nothing |
-| `code-review-verifier` | Adversarial skeptic (Opus): tries to refute one finding against the real code; one finding per call |
+| discussion, open questions | skills `discuss`, `research` |
+| spec, glossary, ADR | skill `spec` |
+| plan, plan audit | skills `plan`, `plan-audit` |
+| execution | skill `execute` (script `sdd`) |
+| review of landed work | skill `code-review`; agents `code-reviewer`, `code-review-verifier`; project criteria — `.agents/review-criteria.md` |
+| status, milestones, bugs, ideas | skill `track` (GitHub) |
+| tests, PR, docs, Codex | scripts `run-tests`, `pr-gate`, `doc`, `codex-audit` |
+
+The project has no agents of its own. A gap in the kit goes to agent-kit
+through the `agent-kit:kit-contribute` skill, not into a project copy.
 
 ## Slash commands (`.claude/commands/`)
 
 | Command | Purpose |
 | --- | --- |
-| `/виконай-задачу` | Execute a task end to end (required argument: task/plan file): plan check with `orient`, implementation Workflow, legacy cleanup, docs/skills sync, review and verification, ticks in the task file |
-| `/перевір-роботу-агента-кодування` | Review landed work — against a task checklist if given, otherwise the current branch; lenses per `code-review`, every finding verified |
-| `/discuss` | Architecture discussion without code |
-| `/проведи-додаткове-дослідження` | Deep research on the open issues of the conversation |
 | `/архівуй-виконані-задачі` | Remove a finished block of tasks/specs/plans and bring the canon to current state: collect live debt, fix links in docs and code comments, strip phase narrative, verify adversarially |
 
 🔴 **Guarantees are set by frontmatter, not by the prompt text.** "Don't write
@@ -142,12 +154,12 @@ environment-level dependencies; install them per machine:
 
 | Dependency | Named by | Install |
 | --- | --- | --- |
-| `superpowers` plugin (`superpowers:brainstorming`, `superpowers:writing-plans`) | § "Workflow" above, `/discuss` | `claude plugin marketplace add obra/superpowers-marketplace`, then `claude plugin install superpowers@superpowers-marketplace` |
-| `vitest` skill | `/виконай-задачу` (test work) | `npx skills add antfu/skills -g -s vitest -y` |
+| `agent-kit` plugin and its scripts on `PATH` | § "Workflow", § "agent-kit" above | the owner's toolset, per machine |
+| `vitest` skill | test work in `agent-kit:execute` | `npx skills add antfu/skills -g -s vitest -y` |
 | `codebase-memory-mcp` | § "MCP" above | user-level binary, installed per machine |
 
-Where a dependency is missing (a fresh clone, a cloud session), the command
-still runs: follow its steps without the named skill.
+Where a dependency is missing (a fresh clone, a cloud session), work by
+`AGENTS.md` alone: its § "Commands and gates" lists what the kit scripts run.
 
 Skills for **consumers** of the platform ship inside their package, versioned
 with the code; they are not used when developing the platform itself — the repo

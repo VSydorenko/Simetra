@@ -1,4 +1,37 @@
-# Simetra domain criteria — per lens
+# Simetra review criteria — per lens
+
+The project criteria file for the agent-kit `code-review` skill (profile field
+`review.criteria`). The procedure — scale, lenses, verification, report — is
+the skill's; this file holds only what is specific to Simetra.
+
+## Project notes
+
+- **Prototype vs target.** The packages in this repo are a prototype; the
+  target is the platform spec,
+  `docs/superpowers/specs/2026-09-24-simetra-platform-design.md` (tiers T0–T6).
+  Pre-existing prototype divergence from the target is outside the boundary.
+  What the diff *adds* is judged by the rules below, which say when target
+  rules apply and when prototype rules do. Judging the prototype by the target
+  (the prototype generator not emitting RLS) is not a finding; new target-tier
+  code copying a prototype convention the spec replaced is one.
+- **`drift` starts with the guards.** Run `./scripts/check-doc-anchors.py`
+  (dead paths, `§` pointers, duplicated blocks, skill limits) and
+  `doc anchors`; then look for what they cannot see: claims that lie rather
+  than point.
+- **`data-layer` here covers** metamodel invariants (Zod as source of truth,
+  standard attributes, the Ref model, naming), generated DDL/RLS/triggers/
+  grants, identifier and literal escaping, identity and rename safety, write
+  patterns.
+- **Sensitive code** — generated DDL, RLS templates, grants, schema plans, the
+  metamodel's public contracts, tier boundaries — gets all relevant lenses plus
+  `history`, and two independent verifiers per `blocker`.
+- **React memoization changes are not gated.** A diff that adds or removes
+  `useMemo`/`useCallback` or disables `react-hooks/*` rules is caught by
+  neither lint nor tests in this repo. Until a compiler cache-size gate exists
+  here, a claim that such a change is performance-neutral is **NOT COVERED**,
+  not accepted on reasoning.
+
+## Criteria per lens
 
 Contents: how to apply these rules · `architecture` · `data-layer` (metamodel,
 physical naming and SQL, target schema engine) · `test-honesty` · `drift`.
@@ -11,7 +44,7 @@ spec, `docs/superpowers/specs/2026-09-24-simetra-platform-design.md` (cited
 below as "spec §N"), and in the code named in each row; the code is the truth.
 A contradiction between code and a doc is itself a `drift` finding.
 
-## How to apply these rules
+### How to apply these rules
 
 Simetra is a general metadata platform for any business application, in the
 spirit of 1C:Enterprise; MetaHub is its first consumer, not its goal. The
@@ -27,7 +60,7 @@ not name has an open fate — the owner decides). Two rule sets follow from that
   (confidence 0). A diff that *copies* a prototype convention into target code
   where the spec replaced it is a finding.
 
-## Lens `architecture`
+### Lens `architecture`
 
 | Check | Defect signal | Model |
 | --- | --- | --- |
@@ -43,9 +76,9 @@ not name has an open fate — the owner decides). Two rule sets follow from that
 | no dual code path | "old + new" mechanisms live in parallel, a migration left half done, dead code left behind | `AGENTS.md` |
 | no investment in a dead path | new features or abstractions added to a package spec §14 slates for deletion, unless the task asked for it; fixes that keep gates green are fine | spec §14 |
 
-## Lens `data-layer`
+### Lens `data-layer`
 
-### Metamodel (*prototype*, verified in `packages/simetra/src/model`)
+#### Metamodel (*prototype*, verified in `packages/simetra/src/model`)
 
 | Check | Defect signal | Model |
 | --- | --- | --- |
@@ -61,7 +94,7 @@ not name has an open fate — the owner decides). Two rule sets follow from that
 | every field has a consumer | a metamodel schema field (new or changed) that no compiler stage, contract, presentation block or codegen reads; the field ratchet loosened to pass: a new exception, a hash or bulk walk counted as a read, a kitchen-sink fixture that leaves the field unset | `packages/simetra/test/field-ratchet.test.ts`; P2 spec §8.6 |
 | posting expressions and movement queries | a movement expression handled by anything but the AST from the expression parser (a regex, string splicing, a second walker that bypasses the AST and its position-carrying errors); the grammar widened in the translator or stage 4 but not in the parser and its tests; a movement that writes a shell-filled column (recorder, line number, activity, scope carrier, singleton key) instead of leaving it to the post shell; a movement-query block whose result columns differ from the ones derived from the register, or two sources of movements for one register | `packages/simetra/src/model/posting/parse.ts`, `packages/simetra/src/compiler/movement-functions.ts`, `packages/simetra/src/compiler/movement-blocks.ts` |
 
-### Physical naming and SQL
+#### Physical naming and SQL
 
 | Check | Defect signal | Model |
 | --- | --- | --- |
@@ -70,7 +103,7 @@ not name has an open fate — the owner decides). Two rule sets follow from that
 | verbatim SQL (*target*) | a statement in a `.sql` file accepted without passing the statement-class gate, or the gate widened without a reject test | `packages/simetra/src/compiler/sql/units.ts` (rule `sql.statement-not-allowed`) |
 | escaping (*target*) | a metadata identifier interpolated into SQL without `quoteIdent` | `packages/simetra/src/model/physical/` |
 
-### Schema engine and data runtime (*target*)
+#### Schema engine and data runtime (*target*)
 
 | Check | Defect signal | Model |
 | --- | --- | --- |
@@ -86,7 +119,7 @@ not name has an open fate — the owner decides). Two rule sets follow from that
 | accumulation registers (Р26) | balances computed by window-function views over the whole movement history instead of the derived tables (`_turnovers_month` for both kinds, `_totals` for the balance kind); a derived-table key declared as a PK instead of `UNIQUE NULLS NOT DISTINCT`; a totals trigger per row instead of per statement with transition tables, or an upsert without a sorted key order; a virtual table without the recorder boundary parameters; a month bucket computed outside the project time zone | spec §4; P2 spec §7 |
 | writes | a browser write outside generated or explicit server commands; a Server Function source that serializes data before authorizing it | spec §8.3, §8.4 |
 
-## Lens `test-honesty`
+### Lens `test-honesty`
 
 | Check | Defect signal |
 | --- | --- |
@@ -97,7 +130,7 @@ not name has an open fate — the owner decides). Two rule sets follow from that
 | generated SQL assertions | `toContain` on a fragment proves presence, not the statement; mutate the generator branch and confirm red |
 | tests do not time the machine | an assertion that depends on wall-clock speed or contention |
 
-## Lens `drift`
+### Lens `drift`
 
 Documentation style, per `AGENTS.md`:
 
