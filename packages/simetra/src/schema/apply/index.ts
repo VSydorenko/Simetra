@@ -133,6 +133,7 @@ export {
 } from "./environment"
 export { isRetryable, RETRYABLE_SQLSTATES } from "./retry"
 export {
+  BACKFILL_SETTINGS,
   DATA_SETTINGS,
   readSessionSearchPath,
   revalidationSettings,
@@ -191,11 +192,18 @@ export {
 } from "./rehearsal"
 export {
   backfillStepRefusals,
+  backfillTargetKey,
   backfillTargets,
   backfillWriteTables,
   columnKey,
   defaultsBeforeNotNull,
+  isPlatformTrigger,
   planBackfills,
+  readBackfillCounts,
+  sameDefault,
+  withNotNullChecks,
+  withShownTriggers,
+  type BackfillCounts,
   type BackfillInput,
   type BackfillTarget,
 } from "./backfill"

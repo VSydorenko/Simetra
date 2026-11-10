@@ -4770,6 +4770,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "План не записано. Заповніть значення NULL до застосування.",
     },
   },
+  "plan.backfill-count-failed": {
+    en: (p) =>
+      `The plan could not count the NULL values of column ${p.column} of ${p.table} with row security off: ${p.error} (SQLSTATE ${p.sqlstate})`,
+    uk: (p) =>
+      `План не зміг порахувати NULL колонки ${p.column} таблиці ${p.table} з вимкненою безпекою рядків: ${p.error} (SQLSTATE ${p.sqlstate})`,
+    hint: {
+      en: "No plan was written. The count must see every row: plan with a role that bypasses row security on this table (its owner without FORCE ROW LEVEL SECURITY, or a role with BYPASSRLS).",
+      uk: "План не записано. Підрахунок мусить бачити всі рядки: плануйте роллю, що обходить безпеку рядків цієї таблиці (власником без FORCE ROW LEVEL SECURITY чи роллю з BYPASSRLS).",
+    },
+  },
   "plan.numbering-not-generated": {
     en: (p) =>
       `${p.object} (${p.table}) numbers rows on first write, but counters are not generated yet: the number stays empty`,

@@ -192,6 +192,22 @@ export function renderPlan(
     const first = s.sql.trim().split("\n")[0] ?? ""
     return `  ${s.id} ${s.origin} ${s.class} (${tags.join("; ")}) ${first}`
   }
+  // Заповнення (платформна спека §6.6): скільки `NULL` план порахував і які
+  // тригери користувача вимкнено на час кроку; default — коли крок просить
+  // дозволу, бо прийнята таблиця отримає вираз, який людина ще не бачила
+  const backfillLines = (s: PlanData["steps"][number]): string[] => {
+    const b = s.backfill
+    if (b === undefined) return []
+    return [
+      `    backfill ${qualified(b.table.schema, b.table.name)}.${quoteIdent(b.column)}: ${b.rowsAtPlan} row(s) with NULL at plan`,
+      ...(needs.has(s.id) ? [`    default: ${b.default}`] : []),
+      ...(b.triggers.length > 0
+        ? [
+            `    triggers disabled during the fill: ${b.triggers.map((x) => quoteIdent(x.name)).join(", ")}`,
+          ]
+        : []),
+    ]
+  }
   // Кроки середовища — окремою групою (спека промоції §7.2): вони не
   // з метаданих, а з глобальних типових привілеїв ролі на цілі, і без цього
   // пояснення пара `REVOKE ALL` + `GRANT` виглядала б зайвою. Пара не
@@ -201,7 +217,7 @@ export function renderPlan(
   if (steps.length === 0) lines.push("steps: none")
   else {
     lines.push(`steps (${steps.length}):`)
-    lines.push(...steps.map(stepLine))
+    lines.push(...steps.flatMap((s) => [stepLine(s), ...backfillLines(s)]))
   }
   if (environment.length > 0) {
     lines.push(

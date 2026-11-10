@@ -72,10 +72,13 @@ export interface PlanPromotion {
   data: PromotionSection["data"]
 }
 
-/** Крок плану для перегляду; клас конверсії — лише біля кроку видалення. */
+/**
+ * Крок плану для перегляду; клас конверсії — лише біля кроку видалення,
+ * факти заповнення — лише біля кроку заповнення.
+ */
 export type PlanDataStep = Pick<
   PlanStep,
-  "id" | "origin" | "class" | "lockClass" | "sql"
+  "id" | "origin" | "class" | "lockClass" | "sql" | "backfill"
 > & { conversion?: ConversionClass }
 
 /** Те з артефакту, що людина чи агент переглядає перед `apply`. */
@@ -197,17 +200,20 @@ function planData(
       artifact.promotion === null
         ? null
         : planPromotion(artifact.promotion, model),
-    steps: artifact.steps.map(({ id, origin, class: cls, lockClass, sql }) => {
-      const conversion = conversions.get(id)
-      return {
-        id,
-        origin,
-        class: cls,
-        lockClass,
-        sql,
-        ...(conversion === undefined ? {} : { conversion }),
+    steps: artifact.steps.map(
+      ({ id, origin, class: cls, lockClass, sql, backfill }) => {
+        const conversion = conversions.get(id)
+        return {
+          id,
+          origin,
+          class: cls,
+          lockClass,
+          sql,
+          ...(conversion === undefined ? {} : { conversion }),
+          ...(backfill === undefined ? {} : { backfill }),
+        }
       }
-    }),
+    ),
     locks: artifact.locks,
     implicitLocks: artifact.implicitLocks,
     requiredPermissions: artifact.requiredPermissions,

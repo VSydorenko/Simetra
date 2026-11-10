@@ -847,6 +847,66 @@ describe("cli adapter", TOOL_PIPELINE, () => {
       ])
     })
 
+    it("renders the count, the triggers and the default of a backfill step", () => {
+      // Платформна спека §6.6: крок, таблиця, колонка й кількість `NULL`;
+      // default — лише біля кроку, що просить дозволу (прийнята таблиця)
+      const backfill = (id: string, table: string, permission: boolean) => ({
+        id,
+        origin: "backfill" as const,
+        class: "dataStep" as const,
+        lockClass: "accessExclusive",
+        sql: `UPDATE "app"."${table}" SET "note" = DEFAULT WHERE "note" IS NULL`,
+        backfill: {
+          table: { schema: "app", name: table },
+          column: "note",
+          rowsAtPlan: 3,
+          permission,
+          default: "''::text",
+          triggers: permission
+            ? [{ name: "audit", enabled: "O" as const }]
+            : [],
+        },
+      })
+      const data: PlanData = {
+        file: "plans/0123456789ab-ba9876543210.plan.json",
+        planHash: hash,
+        fromHash: "0123456789ab".padEnd(64, "0"),
+        toHash: "ba9876543210".padEnd(64, "0"),
+        drift: null,
+        promotion: null,
+        steps: [backfill("s1", "party", false), backfill("s2", "notes", true)],
+        locks: [],
+        implicitLocks: [],
+        requiredPermissions: ["s2"],
+        environment: { role: "postgres", defaultPrivileges: [] },
+        plpgsqlCheck: "installed",
+        expectedBlindFunctions: 0,
+        rightsOrphans: NO_ORPHANS,
+      }
+      const { stdout } = renderResult(
+        tool("plan"),
+        {
+          ok: true,
+          written: true,
+          changes: [],
+          artifacts: [data.file],
+          diagnostics: [],
+          data,
+        },
+        { dir: "metadata", locale: "en", format: "text" }
+      )
+      const lines = stdout.split("\n")
+      const steps = lines.indexOf("steps (2):")
+      expect(lines.slice(steps + 1, steps + 7)).toEqual([
+        '  s1 backfill dataStep (lock accessExclusive) UPDATE "app"."party" SET "note" = DEFAULT WHERE "note" IS NULL',
+        "    backfill app.party.note: 3 row(s) with NULL at plan",
+        '  s2 backfill dataStep (lock accessExclusive; needs allow: s2) UPDATE "app"."notes" SET "note" = DEFAULT WHERE "note" IS NULL',
+        "    backfill app.notes.note: 3 row(s) with NULL at plan",
+        "    default: ''::text",
+        "    triggers disabled during the fill: audit",
+      ])
+    })
+
     it("renders an unchanged plan with orphans", () => {
       // Артефакту немає, але сироти прав клієнт бере саме з незмінного плану
       const data: UnchangedPlanData = {

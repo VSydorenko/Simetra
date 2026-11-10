@@ -1,5 +1,9 @@
 import type { Node } from "libpg-query"
-import type { SqlParser } from "simetra/compiler"
+import {
+  platformTriggers,
+  withoutLocations,
+  type SqlParser,
+} from "simetra/compiler"
 import {
   KIND_REGISTRY,
   quoteIdent,
@@ -12,7 +16,14 @@ import {
 import type { EngineAction, EngineDiagnostic } from "../engine"
 import { createdByPlan } from "./carrier-backfill"
 import { applyDiagnostic } from "./diagnostic"
-import { functionChangeRefusals, type WriteTable } from "./promotion/data"
+import { ApplyDbError, type ApplyTransaction } from "./port"
+import {
+  functionChangeRefusals,
+  type DataTable,
+  type WriteTable,
+} from "./promotion/data"
+import { withoutRowTextCasts } from "./promotion/replacements"
+import { BACKFILL_SETTINGS, withLocalSettings } from "./settings"
 import {
   backfillAction,
   notNullColumns,
@@ -21,6 +32,7 @@ import {
   type PlanStep,
 } from "./steps"
 import { tableKey } from "./table-key"
+import { stringsOf } from "./type-guard"
 
 /**
  * Що план рахує на цілі перед кроком, що робить колонку `NOT NULL`
@@ -311,13 +323,53 @@ function isNewUuid(expression: string, parse: SqlParser): boolean {
   )
 }
 
-/** Чи колонку покриває унікальний ключ чи унікальний індекс таблиці. */
-const isUnique = (table: CatalogTable | undefined, column: string): boolean =>
+/** Імена колонок усіх `ColumnRef` дерева: останнє поле посилання. */
+function columnRefs(node: unknown, out: string[] = []): string[] {
+  if (Array.isArray(node)) for (const n of node) columnRefs(n, out)
+  else if (node !== null && typeof node === "object") {
+    if ("ColumnRef" in node) {
+      const name = stringsOf(
+        (node as { ColumnRef: { fields?: Node[] } }).ColumnRef.fields
+      ).at(-1)
+      if (name !== undefined) out.push(name)
+    }
+    for (const v of Object.values(node)) columnRefs(v, out)
+  }
+  return out
+}
+
+/**
+ * Чи вираз моделі (ключ чи предикат індексу) посилається на колонку — з
+ * дерева розбору, а не з тексту. Нерозбірний вираз вважається таким, що
+ * посилається: відмова плану краща за `23505` на кроці.
+ */
+function mentions(expression: string, column: string, parse: SqlParser) {
+  const result = parse(`SELECT ${expression}`)
+  return !result.ok || columnRefs(result.statements).includes(column)
+}
+
+/**
+ * Чи колонку покриває унікальний ключ чи унікальний індекс таблиці: простий
+ * ключ, вираз ключа над колонкою (`lower(c)`) чи предикат індексу, що на неї
+ * посилається, — заповнення змінює і значення ключа, і те, які рядки
+ * індекс охоплює.
+ */
+const isUnique = (
+  table: CatalogTable | undefined,
+  column: string,
+  parse: SqlParser
+): boolean =>
   table !== undefined &&
   (table.uniques.some((u) => u.columns.includes(column)) ||
     table.indexes.some(
       (i) =>
-        i.unique && i.keys.some((k) => "column" in k && k.column === column)
+        i.unique &&
+        (i.keys.some((k) =>
+          "column" in k
+            ? k.column === column
+            : mentions(k.expression, column, parse)
+        ) ||
+          (i.where !== undefined && mentions(i.where, column, parse)))
     ))
 
 /**
@@ -346,6 +398,57 @@ function carrierReader(
 }
 
 /**
+ * Default як дерево без приведень сталих і з одним записом значення сталої
+ * (`undefined` — не розбирається). Знімок компілятора пише `''`, а каталог —
+ * `''::text`; `-1` каталог друкує як `'-1'::integer`. Приведення сталої
+ * знімається, бо обидва default належать одній колонці: тип сталої дає
+ * тип колонки. Решта дерева — як є, тож інший вираз лишається іншим.
+ */
+function defaultTree(expression: string, parse: SqlParser): string | undefined {
+  const result = parse(`SELECT ${expression}`)
+  if (!result.ok || result.statements.length !== 1) return undefined
+  const constant = (c: Record<string, unknown>): unknown => {
+    if (c.isnull === true) return { null: true }
+    const ival = c.ival as { ival?: number } | undefined
+    if (ival !== undefined) return { value: String(ival.ival ?? 0) }
+    const fval = c.fval as { fval?: string } | undefined
+    if (fval !== undefined) return { value: fval.fval ?? "" }
+    const sval = c.sval as { sval?: string } | undefined
+    if (sval !== undefined) return { value: sval.sval ?? "" }
+    const boolval = c.boolval as { boolval?: boolean } | undefined
+    if (boolval !== undefined)
+      return { value: String(boolval.boolval ?? false) }
+    return c
+  }
+  const strip = (node: unknown): unknown => {
+    if (Array.isArray(node)) return node.map(strip)
+    if (node === null || typeof node !== "object") return node
+    const n = node as Record<string, unknown>
+    const cast = n.TypeCast as { arg?: Record<string, unknown> } | undefined
+    if (cast?.arg !== undefined && "A_Const" in cast.arg) return strip(cast.arg)
+    if ("A_Const" in n)
+      return { A_Const: constant(n.A_Const as Record<string, unknown>) }
+    return Object.fromEntries(Object.entries(n).map(([k, v]) => [k, strip(v)]))
+  }
+  return JSON.stringify(strip(withoutLocations(result.statements[0]!.stmt)))
+}
+
+/**
+ * Чи default бажаної колонки — той самий вираз, що default знімка
+ * компілятора (Р3): канонічна форма `defaultTree` з обох боків, бо витяг
+ * друкує default у формі каталогу, а знімок — у формі компілятора.
+ */
+export function sameDefault(
+  snapshot: string | undefined,
+  desired: string,
+  parse: SqlParser
+): boolean {
+  if (snapshot === undefined) return false
+  const a = defaultTree(snapshot, parse)
+  return a !== undefined && a === defaultTree(desired, parse)
+}
+
+/**
  * Чи заповнення потребує дозволу (Р3): прийнята таблиця — поза таблицями
  * знімка (SQL-модуль), невідомого походження чи виду з фактом реєстру
  * «дані споживача»; таблиця виду, чий бажаний default розходиться з default
@@ -363,7 +466,11 @@ function needsPermission(
   const kind = p.objects.find((o) => o.id === table.origin.objectId)?.kind
   if (kind === undefined || KIND_REGISTRY[kind].consumerData === true)
     return true
-  return table.columns.find((c) => c.name === fill.column)?.default !== desired
+  return !sameDefault(
+    table.columns.find((c) => c.name === fill.column)?.default,
+    desired,
+    p.parse
+  )
 }
 
 const refusal = (
@@ -385,7 +492,11 @@ const refusal = (
  * `SET NOT NULL`, переставленою за потреби (`defaultsBeforeNotNull`).
  */
 export function planBackfills(
-  p: BackfillInput & { rows: (target: BackfillTarget) => number }
+  p: BackfillInput & {
+    rows: (target: BackfillTarget) => number
+    /** Колонка під живим обмеженням `EXCLUDE` (`readBackfillCounts`). */
+    excluded?: (target: BackfillTarget) => boolean
+  }
 ): { actions: PlanAction[]; refusals: EngineDiagnostic[] } {
   const refusals: EngineDiagnostic[] = []
   const fills: (Fill & {
@@ -448,11 +559,13 @@ export function planBackfills(
     }
     if (
       rows > 1 &&
-      (isUnique(site.table, target.column) ||
+      (isUnique(site.table, target.column, p.parse) ||
         isUnique(
           findTable(p.desired, target.table.schema, target.table.name),
-          target.column
-        )) &&
+          target.column,
+          p.parse
+        ) ||
+        p.excluded?.(target) === true) &&
       !isNewUuid(desired.default, p.parse)
     ) {
       refusals.push(refusal("plan.backfill-unique", params))
@@ -484,6 +597,9 @@ export function planBackfills(
         rowsAtPlan: fill.rows,
         permission: needsPermission(p, fill, fill.default),
         default: fill.default,
+        // Показаний перелік рахує `withShownTriggers` за остаточним списком
+        // кроків: йому потрібні живі тригери й кроки до заповнення
+        triggers: [],
       }),
     ])
   }
@@ -541,4 +657,255 @@ export function backfillWriteTables(steps: readonly PlanStep[]): WriteTable[] {
           },
         ]
   )
+}
+
+const EXCLUDED_SQL = `
+select distinct x.i
+from pg_catalog.json_to_recordset($1::pg_catalog.json)
+  as x(i int, schema text, "table" text, "column" text)
+join pg_catalog.pg_namespace n on n.nspname = x.schema
+join pg_catalog.pg_class c on c.relnamespace = n.oid and c.relname = x."table"
+join pg_catalog.pg_attribute a
+  on a.attrelid = c.oid and a.attname = x."column" and not a.attisdropped
+join pg_catalog.pg_constraint k on k.conrelid = c.oid and k.contype = 'x'
+join pg_catalog.pg_depend d
+  on d.refclassid = 'pg_catalog.pg_class'::pg_catalog.regclass
+ and d.refobjid = c.oid and d.refobjsubid = a.attnum
+ and ((d.classid = 'pg_catalog.pg_constraint'::pg_catalog.regclass and d.objid = k.oid)
+   or (d.classid = 'pg_catalog.pg_class'::pg_catalog.regclass and d.objid = k.conindid))
+`
+
+/** Що план прочитав на цілі для `planBackfills`; ключ — `columnKey` імен цілі. */
+export interface BackfillCounts {
+  rows: Map<string, number>
+  /** Колонки під обмеженням `EXCLUDE`: модель каталогу його не несе. */
+  excluded: Set<string>
+}
+
+/** Ключ цілі заповнення: колонка й вид підрахунку. */
+export const backfillTargetKey = (t: BackfillTarget): string =>
+  JSON.stringify([t.table.schema, t.table.name, t.column, t.count])
+
+/**
+ * Кількості цілей `backfillTargets` на цілі (платформна спека §6.2 п. 4):
+ * `count(*)` рядків з `NULL` чи всіх рядків таблиці під
+ * `BACKFILL_SETTINGS` — роль бачить усі рядки або дає гучне `42501`, а не
+ * неправдивий нуль. Обмеження `EXCLUDE` на колонці — тією самою
+ * транзакцією, структурно за залежностями `pg_depend` обмеження й його
+ * індексу: модель каталогу його не несе (`engine.unrepresentable`). Цілі —
+ * в іменах цілі; викликач відкриває транзакцію `READ ONLY` з відкатом.
+ * Збій підрахунку — відмова `plan.backfill-count-failed` з SQLSTATE.
+ */
+export async function readBackfillCounts(
+  tx: ApplyTransaction,
+  targets: readonly BackfillTarget[]
+): Promise<{ counts: BackfillCounts } | { refusal: EngineDiagnostic }> {
+  const nulls = targets.filter((t) => t.count === "nulls")
+  const excluded = new Set(
+    nulls.length === 0
+      ? []
+      : (
+          await tx.query<{ i: number }>(EXCLUDED_SQL, [
+            JSON.stringify(
+              nulls.map((t, i) => ({
+                i,
+                schema: t.table.schema,
+                table: t.table.name,
+                column: t.column,
+              }))
+            ),
+          ])
+        ).map((r) => backfillTargetKey(nulls[r.i]!))
+  )
+  let current: BackfillTarget | undefined
+  try {
+    const rows = await withLocalSettings(tx, BACKFILL_SETTINGS, async () => {
+      const out = new Map<string, number>()
+      for (const t of targets) {
+        current = t
+        const column = quoteIdent(t.column)
+        const [row] = await tx.query<{ n: string | number }>(
+          `SELECT pg_catalog.count(*) AS n FROM ${qualified(t.table)}${
+            t.count === "nulls" ? ` WHERE ${column} IS NULL` : ""
+          }`
+        )
+        if (row === undefined) throw new Error("count(*) returned no row")
+        out.set(backfillTargetKey(t), Number(row.n))
+      }
+      current = undefined
+      return out
+    })
+    return { counts: { rows, excluded } }
+  } catch (error) {
+    // Транзакцію після збою вже не продовжити, тож відмова — одна, за
+    // ціллю, на якій впав підрахунок
+    if (!(error instanceof ApplyDbError) || current === undefined) throw error
+    return {
+      refusal: applyDiagnostic("plan.backfill-count-failed", "error", {
+        table: qualified(current.table),
+        column: quoteIdent(current.column),
+        sqlstate: error.sqlstate ?? "unknown",
+        error: error.message,
+      }),
+    }
+  }
+}
+
+/** Дерево `CREATE TRIGGER` з тексту каталогу без позицій і `::text` умови. */
+function triggerTree(sql: string, parse: SqlParser): Node | undefined {
+  const result = parse(sql)
+  if (!result.ok || result.statements.length !== 1) return undefined
+  const stmt = withoutLocations(result.statements[0]!.stmt) as Node
+  return "CreateTrigStmt" in stmt ? withoutRowTextCasts(stmt) : undefined
+}
+
+const triggerIdentity = (
+  table: { schema: string; name: string },
+  name: string
+): string => `trigger:${table.schema}.${table.name}.${name}`
+
+/**
+ * Чи тригер таблиці — платформний за визначенням (платформна спека §6.6):
+ * його ім'я є в реєстрі `platformTriggers()` таблиці, бажаний тригер з цим
+ * іменем кличе функцію реєстру, а живе визначення (`pg_get_triggerdef`, з
+ * моделі каталогу) дорівнює бажаному деревом. Тригер з платформним іменем,
+ * але іншим визначенням чи функцією — тригер користувача. `live` немає —
+ * тригер створює крок плану, тож визначення бажане за побудовою. `desired`
+ * — модель бажаного стану в іменах `table`.
+ */
+export function isPlatformTrigger(p: {
+  table: { schema: string; name: string }
+  name: string
+  live?: string
+  desired: CatalogModel
+  parse: SqlParser
+}): boolean {
+  const entry = platformTriggers(p.table).find((t) => t.trigger === p.name)
+  if (entry === undefined) return false
+  const unit = p.desired.units.find(
+    (u) =>
+      u.class === "trigger" && u.identity === triggerIdentity(p.table, p.name)
+  )
+  const wanted = unit === undefined ? undefined : triggerTree(unit.sql, p.parse)
+  if (wanted === undefined || !("CreateTrigStmt" in wanted)) return false
+  const fn = stringsOf(wanted.CreateTrigStmt.funcname)
+  if (fn.length !== 2 || fn[0] !== entry.function.schema) return false
+  if (fn[1] !== entry.function.name) return false
+  if (p.live === undefined) return true
+  const live = triggerTree(p.live, p.parse)
+  return live !== undefined && JSON.stringify(live) === JSON.stringify(wanted)
+}
+
+const byCodeUnit = (a: string, b: string): number =>
+  a < b ? -1 : a > b ? 1 : 0
+
+/**
+ * Показаний перелік тригерів кожного кроку заповнення (платформна спека
+ * §6.6): тригери користувача таблиці в живій цілі на плані (`user` —
+ * `readUserTriggers` за ім'ям цілі) разом із тими, що створюють кроки до
+ * заповнення, без платформних за визначенням. Створений кроком тригер —
+ * режиму `O`, як після `CREATE TRIGGER`. `liveName` — ім'я таблиці на
+ * цілі, коли воно інше за ім'я кроку.
+ */
+export function withShownTriggers(
+  steps: readonly PlanStep[],
+  p: {
+    user: (table: { schema: string; name: string }) => DataTable["triggers"]
+    /** Модель живої цілі: визначення живих тригерів. */
+    live: CatalogModel
+    /** Модель бажаного стану в іменах кроків. */
+    desired: CatalogModel
+    parse: SqlParser
+    liveName?: (t: { schema: string; name: string }) => {
+      schema: string
+      name: string
+    }
+  }
+): PlanStep[] {
+  const liveName = p.liveName ?? ((t) => t)
+  return steps.map((step, index) => {
+    if (step.backfill === undefined) return step
+    const { table } = step.backfill
+    const onTarget = liveName(table)
+    const platform = (name: string, live?: string) =>
+      isPlatformTrigger({
+        table,
+        name,
+        live,
+        desired: p.desired,
+        parse: p.parse,
+      })
+    const shown = new Map<string, DataTable["triggers"][number]>()
+    for (const t of p.user(onTarget)) {
+      const def = p.live.units.find(
+        (u) =>
+          u.class === "trigger" &&
+          u.identity === triggerIdentity(onTarget, t.name)
+      )?.sql
+      // Живий тригер без визначення в моделі — тригер користувача: вимкнути
+      // показаний тригер безпечніше, ніж мовчки лишити чужий
+      if (def === undefined || !platform(t.name, def)) shown.set(t.name, t)
+    }
+    for (const s of steps.slice(0, index))
+      for (const r of s.produced)
+        if (
+          r.kind === "trigger" &&
+          r.schema === table.schema &&
+          r.table === table.name &&
+          !shown.has(r.name) &&
+          !platform(r.name)
+        )
+          shown.set(r.name, { name: r.name, enabled: "O" })
+    return {
+      ...step,
+      backfill: {
+        ...step.backfill,
+        triggers: [...shown.values()].sort((a, b) =>
+          byCodeUnit(a.name, b.name)
+        ),
+      },
+    }
+  })
+}
+
+/**
+ * Поле `notNull` кроків двигуна з `SET NOT NULL` без заповнення перед ними
+ * (платформна спека §6.6): `NULL` могли з'явитися після плану, зокрема від
+ * `USING` зміни типу в тому самому плані. Колонка з кроком заповнення
+ * безпосередньо перед кроком перевірки не має: заповнення в тій самій
+ * транзакції під `ACCESS EXCLUSIVE` закриває вікно. Схему таблиці без
+ * кваліфікації дає `lockedTables` кроку.
+ */
+export function withNotNullChecks(
+  steps: readonly PlanStep[],
+  parse: SqlParser
+): PlanStep[] {
+  return steps.map((step, index) => {
+    if (step.origin !== "engine") return step
+    const result = parse(step.sql)
+    if (!result.ok)
+      throw new Error(`plan step ${step.id} does not parse: ${result.message}`)
+    const filled: Fill[] = []
+    for (let i = index - 1; i >= 0 && steps[i]!.backfill !== undefined; i--)
+      filled.push(steps[i]!.backfill!)
+    const columns = notNullColumns(result.statements.map((s) => s.stmt))
+      .filter((c) => c.via === "setNotNull")
+      .map((c) => {
+        const schema =
+          c.schema ?? step.lockedTables.find((t) => t.name === c.table)?.schema
+        if (schema === undefined)
+          throw new Error(`plan step ${step.id}: no schema for ${c.table}`)
+        return { table: { schema, name: c.table }, column: c.column }
+      })
+      .filter(
+        (c) =>
+          !filled.some(
+            (f) =>
+              f.column === c.column &&
+              f.table.schema === c.table.schema &&
+              f.table.name === c.table.name
+          )
+      )
+    return columns.length === 0 ? step : { ...step, notNull: columns }
+  })
 }

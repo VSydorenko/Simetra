@@ -1,5 +1,9 @@
 import { beforeAll, describe, expect, it } from "vitest"
-import { loadSqlParser, type SqlParser } from "simetra/compiler"
+import {
+  loadSqlParser,
+  platformTriggers,
+  type SqlParser,
+} from "simetra/compiler"
 import type {
   CatalogColumn,
   CatalogModel,
@@ -9,17 +13,24 @@ import type {
   PhysicalTable,
 } from "simetra/model"
 import {
+  ApplyDbError,
   backfillStepRefusals,
+  backfillTargetKey,
   backfillTargets,
   backfillWriteTables,
   classifySteps,
   columnKey,
   intentStep,
   notNullColumns,
+  isPlatformTrigger,
   planBackfills,
+  readBackfillCounts,
   readWriteFacts,
   requiredPermissions,
+  sameDefault,
   tableKey,
+  withNotNullChecks,
+  withShownTriggers,
   writeFactRefusals,
   type ApplyTransaction,
   type BackfillInput,
@@ -488,6 +499,37 @@ describe("planBackfills", () => {
       unique({ uniques: [key] }),
     ])
       expect(codes(run({ source }))).toEqual(["plan.backfill-unique"])
+    // Вираз ключа чи предикат унікального індексу над колонкою — з дерева
+    const expression = { ...index, keys: [{ expression: "lower(note)" }] }
+    const predicate = {
+      ...index,
+      keys: [{ column: "code" }],
+      where: "(note IS NOT NULL)",
+    }
+    for (const source of [
+      unique({ indexes: [expression] }),
+      unique({ indexes: [predicate] }),
+    ])
+      expect(codes(run({ source }))).toEqual(["plan.backfill-unique"])
+    // Не унікальний індекс над колонкою і унікальний над іншою — не межа
+    for (const source of [
+      unique({ indexes: [{ ...expression, unique: false }] }),
+      unique({
+        indexes: [{ ...expression, keys: [{ expression: "lower(code)" }] }],
+      }),
+      unique({ indexes: [{ ...predicate, where: "(code <> 'note')" }] }),
+    ])
+      expect(codes(run({ source }))).toEqual([])
+    // Обмеження `EXCLUDE` модель не несе: факт приходить із цілі
+    expect(
+      codes(
+        planBackfills({
+          ...input(),
+          rows: counts({ note: 3 }),
+          excluded: (t) => t.column === "note",
+        })
+      )
+    ).toEqual(["plan.backfill-unique"])
     const source = unique({ indexes: [index] })
     expect(codes(run({ source }, { note: 1 }))).toEqual([])
     // Кожен рядок отримує власний `newUuid`
@@ -605,6 +647,12 @@ describe("backfill permission", () => {
 
   const CASES: [string, Partial<BackfillInput>, string[]][] = [
     ["a kind table with the compiler's default", {}, []],
+    // Знімок пише default у формі компілятора, витяг — у формі каталогу
+    [
+      "a kind table whose compiler default is in the compiler's form",
+      { physical: physical("''") },
+      [],
+    ],
     [
       "an adopted table (consumer data kind)",
       { objects: [{ id: OBJECT_ID, kind: "CustomTable" }] },
@@ -741,5 +789,245 @@ describe("write facts of a backfill", () => {
         d.params.write,
       ])
     ).toEqual([["plan.data-step-function-changed", "s2", "s9", "backfill"]])
+  })
+})
+
+describe("sameDefault", () => {
+  // Знімок компілятора проти default бажаної тіні у формі каталогу
+  const SAME: [string, string][] = [
+    ["''", "''::text"],
+    ["''", "''::character varying"],
+    ["-1", "'-1'::integer"],
+    ["0", "0"],
+    ["1.5", "1.5"],
+    ["true", "true"],
+    ["'{}'::jsonb", "'{}'::jsonb"],
+    ["'{}'", "'{}'::text[]"],
+    ["now()", "now()"],
+    ["gen_random_uuid()", "gen_random_uuid()"],
+    [
+      "(now() AT TIME ZONE 'Europe/Kyiv')::date",
+      "((now() AT TIME ZONE 'Europe/Kyiv'::text))::date",
+    ],
+  ]
+  it.each(SAME)("%s is %s", (snapshot, desired) => {
+    expect(sameDefault(snapshot, desired, parse)).toBe(true)
+  })
+  const OTHER: [string | undefined, string][] = [
+    ["''", "'x'::text"],
+    ["0", "1"],
+    ["now()", "statement_timestamp()"],
+    ["'{}'::jsonb", "'[]'::jsonb"],
+    [undefined, "''::text"],
+    ["''", "current_user"],
+  ]
+  it.each(OTHER)("%s is not %s", (snapshot, desired) => {
+    expect(sameDefault(snapshot, desired, parse)).toBe(false)
+  })
+})
+
+describe("readBackfillCounts", () => {
+  const TARGETS: BackfillTarget[] = [
+    { table: { schema: "app", name: "items" }, column: "note", count: "nulls" },
+    { table: { schema: "app", name: "items" }, column: "code", count: "rows" },
+  ]
+  const fake = (fail?: string) => {
+    const log: { sql: string; params: readonly unknown[] }[] = []
+    const tx = {
+      query: (sql: string, params: readonly unknown[] = []) => {
+        log.push({ sql, params })
+        if (fail !== undefined && sql.includes(fail))
+          return Promise.reject(
+            new ApplyDbError(
+              "query would be affected by row-level security policy",
+              "42501"
+            )
+          )
+        if (sql.includes("contype = 'x'")) return Promise.resolve([{ i: 0 }])
+        if (sql.includes("current_setting"))
+          return Promise.resolve([{ value: "on" }])
+        if (sql.includes("count(*)"))
+          return Promise.resolve([{ n: sql.includes("IS NULL") ? "2" : "5" }])
+        return Promise.resolve([])
+      },
+    } as unknown as ApplyTransaction
+    return { tx, log }
+  }
+
+  it("counts with row security off and reads EXCLUDE from the target", async () => {
+    const { tx, log } = fake()
+    const read = await readBackfillCounts(tx, TARGETS)
+    if ("refusal" in read) throw new Error("unexpected refusal")
+    expect(read.counts.rows).toEqual(
+      new Map([
+        [backfillTargetKey(TARGETS[0]!), 2],
+        [backfillTargetKey(TARGETS[1]!), 5],
+      ])
+    )
+    expect([...read.counts.excluded]).toEqual([backfillTargetKey(TARGETS[0]!)])
+    const counts = log.filter((q) => q.sql.includes("count(*) AS n"))
+    expect(counts.map((q) => q.sql)).toEqual([
+      "SELECT pg_catalog.count(*) AS n FROM app.items WHERE note IS NULL",
+      "SELECT pg_catalog.count(*) AS n FROM app.items",
+    ])
+    // `row_security = off` ставиться до першого підрахунку (Р5)
+    const set = log.findIndex(
+      (q) =>
+        q.sql.includes("set_config") &&
+        JSON.stringify(q.params) === JSON.stringify([["row_security"], ["off"]])
+    )
+    expect(set).toBeGreaterThan(-1)
+    expect(set).toBeLessThan(log.indexOf(counts[0]!))
+    // EXCLUDE питається лише для `SET NOT NULL`: `ADD COLUMN` рахує рядки
+    const excluded = log.find((q) => q.sql.includes("contype = 'x'"))!
+    expect(JSON.parse(excluded.params[0] as string)).toEqual([
+      { i: 0, schema: "app", table: "items", column: "note" },
+    ])
+  })
+
+  it("refuses with the SQLSTATE of the failed count, not a zero", async () => {
+    const { tx } = fake("IS NULL")
+    const read = await readBackfillCounts(tx, TARGETS)
+    expect(read).toEqual({
+      refusal: expect.objectContaining({
+        code: "plan.backfill-count-failed",
+        severity: "error",
+        params: {
+          table: "app.items",
+          column: "note",
+          sqlstate: "42501",
+          error: "query would be affected by row-level security policy",
+        },
+      }),
+    })
+  })
+})
+
+describe("platform triggers of a backfill", () => {
+  const ITEMS = { schema: "app", name: "items" }
+  const mechanics = platformTriggers(ITEMS)[0]!
+  const fn = `${mechanics.function.schema}.${mechanics.function.name}`
+  const def = (name: string, f = fn, when = "BEFORE UPDATE") =>
+    `CREATE TRIGGER ${name} ${when} ON app.items FOR EACH ROW EXECUTE FUNCTION ${f}()`
+  const unit = (name: string, sql: string) => ({
+    class: "trigger" as const,
+    identity: `trigger:app.items.${name}`,
+    schema: "app",
+    name,
+    sql,
+  })
+  const withUnits = (...units: ReturnType<typeof unit>[]): CatalogModel => ({
+    ...model(table([column("id"), column("note")])),
+    units,
+  })
+  const DESIRED_UNITS = withUnits(
+    unit(mechanics.trigger, def(mechanics.trigger))
+  )
+
+  it("matches the name, the function and the definition of the registry", () => {
+    const platform = (
+      live?: string,
+      desired = DESIRED_UNITS,
+      name = mechanics.trigger
+    ) => isPlatformTrigger({ table: ITEMS, name, live, desired, parse })
+    expect(platform(def(mechanics.trigger))).toBe(true)
+    // Тригер створює крок плану: визначення бажане за побудовою
+    expect(platform(undefined)).toBe(true)
+    // Платформне ім'я з іншим визначенням чи функцією — тригер користувача
+    expect(platform(def(mechanics.trigger, fn, "AFTER UPDATE"))).toBe(false)
+    const foreign = withUnits(
+      unit(mechanics.trigger, def(mechanics.trigger, "app.mine"))
+    )
+    expect(platform(def(mechanics.trigger, "app.mine"), foreign)).toBe(false)
+    expect(platform(undefined, foreign)).toBe(false)
+    // Ім'я поза реєстром — тригер користувача, хоч би й кликав функцію платформи
+    const other = withUnits(unit("audit", def("audit")))
+    expect(platform(def("audit"), other, "audit")).toBe(false)
+  })
+
+  it("shows the live user triggers and those created before the fill", () => {
+    const steps = stepsOf({ actions: [SET_NOT_NULL, SET_DEFAULT] })
+    const create = (name: string): PlanStep => ({
+      ...steps[0]!,
+      id: "s0",
+      produced: [{ kind: "trigger", schema: "app", table: "items", name }],
+    })
+    const plan = [
+      create("made_before"),
+      create(mechanics.trigger),
+      ...steps,
+      create("made_after"),
+    ]
+    const live = withUnits(
+      unit(mechanics.trigger, def(mechanics.trigger)),
+      unit("audit", def("audit", "app.audit"))
+    )
+    const shown = withShownTriggers(plan, {
+      user: (t) =>
+        t.name === "items"
+          ? [
+              { name: "audit", enabled: "A" },
+              { name: mechanics.trigger, enabled: "O" },
+            ]
+          : [],
+      live,
+      desired: DESIRED_UNITS,
+      parse,
+    })
+    expect(
+      shown.find((s) => s.backfill !== undefined)!.backfill!.triggers
+    ).toEqual([
+      { name: "audit", enabled: "A" },
+      { name: "made_before", enabled: "O" },
+    ])
+    // Живий платформний тригер, чиє визначення інше, — показаний і вимкнений
+    const drifted = withShownTriggers(plan, {
+      user: () => [{ name: mechanics.trigger, enabled: "O" }],
+      live: withUnits(
+        unit(mechanics.trigger, def(mechanics.trigger, fn, "AFTER UPDATE"))
+      ),
+      desired: DESIRED_UNITS,
+      parse,
+    })
+    expect(
+      drifted.find((s) => s.backfill !== undefined)!.backfill!.triggers
+    ).toEqual([
+      { name: mechanics.trigger, enabled: "O" },
+      { name: "made_before", enabled: "O" },
+    ])
+  })
+})
+
+describe("withNotNullChecks", () => {
+  it("marks SET NOT NULL without a fill right before it", () => {
+    const steps = withNotNullChecks(
+      classifySteps(
+        run({ actions: [SET_DEFAULT, SET_NOT_NULL, OTHER] }, { note: 2 })
+          .actions,
+        SOURCE,
+        parse
+      ),
+      parse
+    )
+    expect(steps.map((s) => [s.id, s.origin, s.notNull])).toEqual([
+      ["s1", "engine", undefined],
+      ["s2", "backfill", undefined],
+      // Заповнення в тій самій транзакції під замком закриває вікно
+      ["s3", "engine", undefined],
+      [
+        "s4",
+        "engine",
+        [{ table: { schema: "app", name: "items" }, column: "code" }],
+      ],
+    ])
+    // Без `NULL` на плані заповнення немає — перевірка є
+    const none = withNotNullChecks(
+      classifySteps(run({}, { note: 0 }).actions, SOURCE, parse),
+      parse
+    )
+    expect(none.map((s) => s.notNull)).toEqual([
+      undefined,
+      [{ table: { schema: "app", name: "items" }, column: "note" }],
+    ])
   })
 })

@@ -49,7 +49,9 @@ import { STEP_CLASSES, type PermissionItem, type PlanStep } from "./steps"
  * платформи (`platformFunctions`) — раннер виключає їх з `plpgsql_check` і
  * переліку сліпих — кроки копій носіїв (`origin: "carriers"`) та блок `versions`
  * (засів послідовності версій і епоха), кроки заповнення перед `NOT NULL`
- * (`origin: "backfill"`): раннер старішого формату не знав би їхніх блоків.
+ * (`origin: "backfill"`) з кількістю `NULL` на плані й показаними тригерами
+ * та колонки `notNull` кроків `SET NOT NULL` без заповнення: раннер
+ * старішого формату не знав би їхніх блоків.
  */
 export const PLAN_FORMAT = 8
 
@@ -385,7 +387,16 @@ const stepSchema = z.strictObject({
       rowsAtPlan: z.number().int().nonnegative(),
       permission: z.boolean(),
       default: z.string(),
+      triggers: dataTriggers,
     })
+    .optional(),
+  notNull: z
+    .array(
+      z.strictObject({
+        table: z.strictObject({ schema: z.string(), name: z.string() }),
+        column: z.string(),
+      })
+    )
     .optional(),
 })
 
