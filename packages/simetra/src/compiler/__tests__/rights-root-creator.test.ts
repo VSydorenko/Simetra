@@ -106,7 +106,7 @@ function grantSteps(m: CompiledModel, fullAccess: boolean): Step[] {
   const values = columns.map(
     (c) =>
       forced.get(c) ??
-      `CASE WHEN p_member ? '${c}' THEN v_in.${c} ELSE NULL END`
+      `CASE WHEN p_member ? '${c}' THEN v_in.${c} ELSE ${member.table.columns.find((col) => col.name === c)?.default ?? "NULL"} END`
   )
   const header = (fact: string) =>
     `NOT EXISTS (SELECT 1 FROM simetra.rights_tx_header h WHERE h.xid = txid_current() AND h.fact = '${fact}' AND h.actor = ${ME})`

@@ -439,6 +439,10 @@ describe("promoteObject: catalog from one CustomTable", () => {
       files,
       mapping((m) => {
         m.columns.createdAt = { to: "retire" }
+        // Найменування само NOT NULL, тож пом'якшення показує код: його колонка
+        // в реєстрі виду допускає NULL, а джерело — ні.
+        m.into.data = { codeLength: 150, descriptionLength: 0 }
+        m.columns.name = { to: "standard", name: "code" }
       })
     )
     expect(errors(result)).toEqual([])
@@ -454,7 +458,7 @@ describe("promoteObject: catalog from one CustomTable", () => {
       {
         schema: "app",
         table: "counterparty",
-        column: "description",
+        column: "code",
         constraint: "notNull",
       },
     ])

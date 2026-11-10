@@ -177,10 +177,11 @@ const CASES: Case[] = [
     orderBy: [{ attribute: "description", direction: "asc" }],
     index: "org_id, description, id",
     sort: "none",
-    // `description` у реєстрі видів nullable, тож межа курсора містить
-    // `OR description IS NULL` і не діапазон — відоме обмеження Р8(2), як у
-    // `n`; чи стане стандартний `description` NOT NULL, вирішує архітектор.
-    record: true,
+    // Стандартне найменування — NOT NULL DEFAULT '' (Р9): keyset без гілки
+    // NULL, межа — діапазон індексу, критерій як у `a` (значення унікальні).
+    bound: "description",
+    group: 1,
+    readBudget: PAGE + 1 + 1,
   },
   {
     name: "u",
@@ -492,7 +493,9 @@ describe("list order plans under RLS", () => {
       page !== "first" &&
       !tail
     ) {
-      const leading = new RegExp(`\\b${c.bound}\\)?\\s*[<>]=`)
+      // `varchar` порівнюється як `(description)::text >= …`: дужка й приведення
+      // типу стоять між іменем колонки і знаком
+      const leading = new RegExp(`\\b${c.bound}\\)?(::\\w+)?\\s*[<>]=`)
       if (!wanted.some((a) => leading.test(a.condition)))
         found.push(`no leading bound on ${c.bound} in Index Cond`)
     }

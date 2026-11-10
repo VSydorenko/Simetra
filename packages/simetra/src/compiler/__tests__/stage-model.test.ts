@@ -154,8 +154,8 @@ describe("stage 3: physical snapshot", () => {
       {
         name: "description",
         type: "character varying(150)",
-        notNull: false,
-        default: undefined,
+        notNull: true,
+        default: "''",
       },
       {
         name: "deletion_mark",

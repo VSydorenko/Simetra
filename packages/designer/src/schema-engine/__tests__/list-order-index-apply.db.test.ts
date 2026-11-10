@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
-import { readFingerprint, type EngineScope } from "simetra/schema"
+import { executePlan, readFingerprint, type EngineScope } from "simetra/schema"
+import { canonicalSnapshot } from "simetra/compiler"
 import { createApplyDatabase } from ".."
 import { asSuperuser, query } from "../../__tests__/support/db"
 import {
@@ -14,6 +15,7 @@ import {
   planned,
   applyArtifact,
   stepMatching,
+  writer,
   useBuildPlanRoles,
 } from "./build-plan.support"
 
@@ -141,6 +143,100 @@ describe.concurrent("list-order index on an existing database", () => {
       expect(drop?.class).toBe("relaxation")
       expect(drop).toBeDefined()
       expect(artifact.requiredPermissions).toContain(drop!.id)
+    })
+  })
+})
+
+/**
+ * Найменування довідника стало `NOT NULL DEFAULT ''` (рішення Р9). База,
+ * застосована старою платформою, має nullable колонку без типового значення.
+ * Рушій не робить backfill перед `SET NOT NULL`, тож `NULL`-рядок дає збій
+ * кроку, як і для будь-якого реквізиту, що став обов'язковим. DB-рівень
+ * потрібен: збій і успіх `SET NOT NULL` на даних доводить лише справжній Postgres.
+ */
+describe.concurrent("description NOT NULL on an existing database", () => {
+  const A = "00000000-0000-4000-8000-0000000000a1"
+  const B = "00000000-0000-4000-8000-0000000000a2"
+
+  async function inNullableTarget(
+    withNull: boolean,
+    fn: (url: string) => Promise<void>
+  ): Promise<void> {
+    const model = await compiled({ [PARTY]: party() })
+    await inTarget(EMPTY, async (url) => {
+      await establish(url, model)
+      await query(
+        asSuperuser(url),
+        `alter table app.party alter column description drop not null,
+           alter column description drop default;
+         insert into app.party (id, description, code) values
+           ('${A}', 'x', '1'),
+           ('${B}', ${withNull ? "null" : "'y'"}, '2');`
+      )
+      await recordLiveState(url)
+      await fn(url)
+    })
+  }
+
+  const descriptionColumn = async (url: string) =>
+    (
+      await query(
+        url,
+        `select is_nullable, column_default from information_schema.columns
+         where table_schema = 'app' and table_name = 'party' and column_name = 'description'`
+      )
+    )[0]
+
+  const snapshotOf = (url: string) =>
+    query(url, "select id, description from app.party order by id")
+
+  it("fails the SET NOT NULL step on a NULL row and changes nothing", async () => {
+    const model = await compiled({ [PARTY]: party() })
+    await inNullableTarget(true, async (url) => {
+      const artifact = planned(await plan(url, model))
+      const [notNull] = stepMatching(artifact, /SET NOT NULL/)
+      expect(notNull?.class).toBe("validationScan")
+      const before = await snapshotOf(url)
+
+      const outcome = await executePlan(writer, { url }, artifact, {
+        mode: "apply",
+        planHash: artifact.planHash,
+        allow: artifact.requiredPermissions,
+        snapshot: canonicalSnapshot(model),
+      })
+
+      expect(outcome.diagnostics.map((d) => d.code)).toEqual([
+        "apply.step-failed",
+      ])
+      expect(outcome.diagnostics[0]?.params).toMatchObject({
+        step: notNull!.id,
+        sqlstate: "23502",
+      })
+      expect(await snapshotOf(url)).toEqual(before)
+      expect(await descriptionColumn(url)).toMatchObject({ is_nullable: "YES" })
+    })
+  })
+
+  it("applies when no row holds NULL", async () => {
+    const model = await compiled({ [PARTY]: party() })
+    await inNullableTarget(false, async (url) => {
+      const artifact = planned(await plan(url, model))
+      const [notNull] = stepMatching(artifact, /SET NOT NULL/)
+      expect(notNull?.class).toBe("validationScan")
+      // `validationScan` лише перевіряє рядки: дозволу не потребує
+      expect(artifact.requiredPermissions).toEqual([])
+      const before = await snapshotOf(url)
+
+      await applyArtifact(url, artifact, model)
+
+      expect(await descriptionColumn(url)).toMatchObject({
+        is_nullable: "NO",
+        column_default: "''::character varying",
+      })
+      expect(await snapshotOf(url)).toEqual(before)
+      const again = await plan(url, model)
+      expect(again.status).toBe("unchanged")
+      expect(again.diagnostics.map((d) => d.code)).not.toContain("apply.drift")
     })
   })
 })

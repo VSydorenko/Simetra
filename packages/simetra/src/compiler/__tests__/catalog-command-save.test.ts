@@ -1170,6 +1170,9 @@ describe("<membership>_simetra_member_check", () => {
       shape,
       "v_new.contact_type IS NOT NULL AND v_new.contact_type <> ALL (ARRAY['users', 'country']::text[])"
     )
+    // Пропущений ключ дає типове значення колонки (`''` для найменування).
+    const defaultOf = (c: string) =>
+      member.table.columns.find((col) => col.name === c)?.default ?? "NULL"
     const order = [formAt, keysAt, castAt, afterAt, scopeAt, referenceAt]
     expect(order.every((i) => i >= 0)).toBe(true)
     expect([...order].sort((a, b) => a - b)).toEqual(order)
@@ -1187,7 +1190,9 @@ describe("<membership>_simetra_member_check", () => {
     ).toEqual(
       keys.map((c) => [
         `v_new.${c}`,
-        tree(`SELECT CASE WHEN p_member ? '${c}' THEN v_in.${c} ELSE NULL END`),
+        tree(
+          `SELECT CASE WHEN p_member ? '${c}' THEN v_in.${c} ELSE ${defaultOf(c)} END`
+        ),
       ])
     )
     const returns = shape.filter(

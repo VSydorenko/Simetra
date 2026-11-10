@@ -120,7 +120,7 @@ function contact() {
         type: "UUID",
         notNull: true,
       }),
-      column(uuid(7104), "phone", "phone", { type: "Text" }),
+      column(uuid(7104), "phone", "phone", { type: "Text", notNull: true }),
     ],
     primaryKey: { name: "counterparty_contacts_pkey", columns: ["id"] },
     foreignKeys: [

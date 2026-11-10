@@ -45,7 +45,11 @@ function standardColumns(obj: unknown): StandardColumnDef[] {
       logicalName: "description",
       physicalName: "description",
       type: { type: "String", length: catalog.descriptionLength },
-      notNull: false,
+      // Порожнє найменування в довіднику — `''`, а не `NULL`: діапазон keyset
+      // за найменуванням тоді не потребує гілки NULL. Прийняті таблиці беруть
+      // nullability з факту своєї колонки, а не з цього реєстру.
+      notNull: true,
+      default: "''",
       // Список довідника впорядковують і шукають за найменуванням, тож
       // індекс походить від виду, а не від налаштувань кожного довідника.
       indexed: true,

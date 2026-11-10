@@ -44,6 +44,41 @@ const refusal = (fn: () => unknown) => {
   throw new Error("no refusal")
 }
 
+describe("nullableOf", () => {
+  // `required` — «обов'язкова при вставці»: NOT NULL з DEFAULT не обов'язкова,
+  // але NULL не вміщає, тож гілку `isNull` keyset не повинен брати.
+  const withNotNull = fieldInfoOf({
+    ...filterObject,
+    attributes: filterObject.attributes.map((a) =>
+      a.name === "count" ? { ...a, required: false, notNull: true as const } : a
+    ),
+  })
+
+  it("treats a NOT NULL column with a default as not nullable", () => {
+    expect(nullableOf(withNotNull)("count")).toBe(false)
+  })
+
+  it("treats a column without the NOT NULL fact as nullable", () => {
+    expect(nullableOf(withNotNull)("small")).toBe(true)
+    expect(nullableOf(info)("count")).toBe(true)
+  })
+
+  it("takes no isNull branch for the NOT NULL column only", () => {
+    const orderBy: OrderBy = [{ attribute: "count", direction: "asc" }]
+    const hasIsNull = (nullable: (name: string) => boolean) =>
+      JSON.stringify(
+        keysetFilter(
+          orderBy,
+          { values: FILTER_ROWS[0]!, key: key(1), direction: "after" },
+          "ref",
+          nullable
+        )
+      ).includes('"isNull"')
+    expect(hasIsNull(nullableOf(withNotNull))).toBe(false)
+    expect(hasIsNull(nullableOf(info))).toBe(true)
+  })
+})
+
 describe("evaluateFilter", () => {
   it.each(FILTER_CASES)("%s", (_, filter, expected) => {
     expect(selected(filter)).toEqual(expected)
