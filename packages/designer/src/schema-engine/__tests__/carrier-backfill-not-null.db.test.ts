@@ -6,6 +6,7 @@ import {
   COMMENT_FILE,
   COMMENT_TABLE,
   policyDomain,
+  profileLayer,
   refAttribute,
   uuid,
 } from "../../../../simetra/test/support"
@@ -47,16 +48,22 @@ describe.concurrent("carrier copy steps ordering on live rows", () => {
     })
     const task = refAttribute(6051, "task", "task_id", ref("Document", "Task"))
     const before = await compiledFiles(
-      policyDomain({
-        [COMMENT_FILE]: { ownership: undefined, attributes: [task, note()] },
-      })
+      policyDomain(
+        {
+          [COMMENT_FILE]: { ownership: undefined, attributes: [task, note()] },
+        },
+        profileLayer()
+      )
     )
     const after = await compiledFiles(
-      policyDomain({
-        [COMMENT_FILE]: {
-          attributes: [task, note({ required: true, defaultValue: "n/a" })],
+      policyDomain(
+        {
+          [COMMENT_FILE]: {
+            attributes: [task, note({ required: true, defaultValue: "n/a" })],
+          },
         },
-      })
+        profileLayer()
+      )
     )
     const id = {
       org: randomUUID(),

@@ -71,6 +71,7 @@ import {
   options,
   OWNER,
   PLAN_HASH,
+  PLAN_ROLE,
   planFor,
   read,
   sessionLeftover,
@@ -2258,7 +2259,7 @@ describe.concurrent("executePlan", () => {
         // якої цей прогін не створив
         await query(
           testSuperuserUrl(),
-          `create role ${COPY_OWNER} nologin; grant ${COPY_OWNER} to postgres;`
+          `create role ${COPY_OWNER} nologin; grant ${COPY_OWNER} to ${PLAN_ROLE} with inherit true;`
         )
         try {
           await inTarget(BASE, (url) =>
@@ -2503,8 +2504,10 @@ describe.concurrent("executePlan", () => {
           })
           let waiting: { query: string; mode: string } | undefined
           await until("the apply to wait on the partition", async () => {
+            // Сесія очікувача — суперкористувач стека, а ролі власника
+            // `pg_stat_activity` чужого backend не показує
             ;[waiting] = await query<{ query: string; mode: string }>(
-              url,
+              asSuperuser(url),
               `select a.query, l.mode from pg_locks l
                join pg_stat_activity a on a.pid = l.pid
               where l.relation = 'app.pt_1'::regclass and not l.granted
@@ -2574,8 +2577,10 @@ describe.concurrent("executePlan", () => {
           })
           let waiting: { query: string; mode: string } | undefined
           await until("the apply to wait on the FK target", async () => {
+            // Сесія очікувача — суперкористувач стека, а ролі власника
+            // `pg_stat_activity` чужого backend не показує
             ;[waiting] = await query<{ query: string; mode: string }>(
-              url,
+              asSuperuser(url),
               `select a.query, l.mode from pg_locks l
                join pg_stat_activity a on a.pid = l.pid
               where l.relation = 'app.p'::regclass and not l.granted
@@ -2814,11 +2819,15 @@ describe.concurrent("executePlan", () => {
       // оператор репетиції — замір великої таблиці, і саме він, а не сума
       // фази, входить у формулу тайм-ауту застосування
       const record: PromotionRecord = { ...RECORD, typeChanges: [] }
+      // Таблиця «велика» відносно читання відбитка: на стеку postgres JIT
+      // додає до запиту відбитка сотні мілісекунд, і замір меншої таблиці не
+      // був би найдовшим оператором
+      const ROWS = 4_000_000
       const setup = `${BASE};
         create table app.pt (id int primary key, c text, x bigint);
         alter table app.pt set (autovacuum_enabled = false);
         insert into app.pt
-          select g, md5(g::text), g from generate_series(1, 500000) g;`
+          select g, md5(g::text), g from generate_series(1, ${ROWS}) g;`
       await inTarget(setup, async (url) => {
         const newToOld = new Map([
           [tableKey("app", "pu"), tableKey("app", "pt")],
@@ -2865,7 +2874,7 @@ describe.concurrent("executePlan", () => {
           )
         const { evidence } = outcome
         expect(evidence.rows).toEqual([
-          { schema: "app", table: "pt", rows: 500000 },
+          { schema: "app", table: "pt", rows: ROWS },
         ])
         expect(evidence.preservation).toEqual(evidence.rows)
         // Найдовший — за сирим виміром: округлення звіту могло б зрівняти

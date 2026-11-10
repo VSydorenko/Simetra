@@ -9,6 +9,7 @@ import {
   COMMENT_FILE,
   COMMENT_TABLE,
   policyDomain,
+  profileLayer,
   promotableTaskNote,
   refAttribute,
   TASK_FILE,
@@ -48,25 +49,28 @@ import {
  * й `assignee` рядка ТЧ, яких цільова модель не має.
  */
 function sourceFiles(): Map<string, string> {
-  const files = policyDomain({
-    [TASK_FILE]: {
-      ownership: undefined,
-      access: undefined,
-      containerBinding: undefined,
+  const files = policyDomain(
+    {
+      [TASK_FILE]: {
+        ownership: undefined,
+        access: undefined,
+        containerBinding: undefined,
+      },
+      [COMMENT_FILE]: {
+        ownership: undefined,
+        attributes: [
+          refAttribute(6051, "task", "task_id", ref("Document", "Task")),
+          refAttribute(
+            6901,
+            "legacyOwner",
+            "task_id_assignee_id",
+            ref("Catalog", "OrgMember")
+          ),
+        ],
+      },
     },
-    [COMMENT_FILE]: {
-      ownership: undefined,
-      attributes: [
-        refAttribute(6051, "task", "task_id", ref("Document", "Task")),
-        refAttribute(
-          6901,
-          "legacyOwner",
-          "task_id_assignee_id",
-          ref("Catalog", "OrgMember")
-        ),
-      ],
-    },
-  })
+    profileLayer()
+  )
   // Рядок ТЧ `checklist` дописано у файл домену: шар зливає лише верхні ключі,
   // а повторювати всю ТЧ тут означало б копіювати фікстуру
   const task = JSON.parse(files.get(TASK_FILE)!) as {
@@ -89,7 +93,7 @@ const LINKS_TABLE = "task_comment_links"
  * створених таблиць у плані ніщо б не тримало.
  */
 function targetFiles(): Map<string, string> {
-  const files = policyDomain()
+  const files = policyDomain(profileLayer())
   const comment = JSON.parse(files.get(COMMENT_FILE)!) as {
     tabularSections: unknown[]
   }
@@ -361,7 +365,7 @@ describe.concurrent("carrier copy steps on live rows", () => {
 
   it("a promotion backfills the copy of the renamed table", async () => {
     const p = await promoted(
-      policyDomain(promotableTaskNote()),
+      policyDomain(promotableTaskNote(), profileLayer()),
       taskNoteMapping()
     )
     const id = {

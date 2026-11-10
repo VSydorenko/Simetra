@@ -24,6 +24,7 @@ import {
   engine,
   errors,
   establish,
+  ANON,
   inTarget,
   Json,
   OLD,
@@ -34,7 +35,9 @@ import {
   promoted,
   Promoted,
   readerWithoutPlpgsqlCheck,
+  SESSION_OWNER,
   stepMatching,
+  USER,
   useBuildPlanRoles,
   WRITERS,
 } from "./build-plan.support"
@@ -370,18 +373,15 @@ describe.concurrent("buildPlan", () => {
       // залишок двигуна — у нових іменах, а доказ засіяний тим самим переліком
       const p = await promoted()
       const outcome = await planPromotion(p, {
-        drift:
-          "alter default privileges for role postgres grant select on tables to anon",
+        drift: `alter default privileges for role ${SESSION_OWNER} grant select on tables to ${ANON}`,
       })
       const artifact = planned(outcome)
       expect(
-        artifact.environment.defaultPrivileges.filter(
-          (d) => d.grantee === "anon"
-        )
+        artifact.environment.defaultPrivileges.filter((d) => d.grantee === ANON)
       ).toEqual([
         {
           objtype: "r",
-          grantee: "anon",
+          grantee: ANON,
           privilege: "SELECT",
           grantable: false,
         },
@@ -415,7 +415,7 @@ describe.concurrent("buildPlan", () => {
 
     it("refuses a promotion when an API role can write the adopted table", async () => {
       const outcome = await planPromotion(await promoted(), {
-        drift: `GRANT INSERT ON ${OLD} TO authenticated`,
+        drift: `GRANT INSERT ON ${OLD} TO ${USER}`,
       })
       expect(outcome.status).toBe("refused")
       expect(errors(outcome)).toEqual(["plan.write-path"])
@@ -423,7 +423,7 @@ describe.concurrent("buildPlan", () => {
         {
           // Лише таблиця зі знахідкою: контакти на запис закриті
           table: "app.counterparties",
-          detail: "grant INSERT to authenticated on app.counterparties",
+          detail: `grant INSERT to ${USER} on app.counterparties`,
         },
       ])
     })
@@ -448,33 +448,33 @@ describe.concurrent("buildPlan", () => {
     it.each([
       [
         "a column-level write grant",
-        `GRANT UPDATE (name) ON ${OLD} TO authenticated`,
-        "column grant UPDATE to authenticated on app.counterparties",
+        `GRANT UPDATE (name) ON ${OLD} TO ${USER}`,
+        `column grant UPDATE to ${USER} on app.counterparties`,
       ],
       [
         "schema default privileges",
-        "ALTER DEFAULT PRIVILEGES IN SCHEMA app GRANT INSERT ON TABLES TO anon",
-        "in schema app grant INSERT to anon",
+        `ALTER DEFAULT PRIVILEGES IN SCHEMA app GRANT INSERT ON TABLES TO ${ANON}`,
+        `in schema app grant INSERT to ${ANON}`,
       ],
       [
         "global default privileges of the applying role",
-        "ALTER DEFAULT PRIVILEGES GRANT INSERT ON TABLES TO authenticated",
-        "grant INSERT to authenticated",
+        `ALTER DEFAULT PRIVILEGES GRANT INSERT ON TABLES TO ${USER}`,
+        `grant INSERT to ${USER}`,
       ],
       [
         "an insert policy",
-        `CREATE POLICY p ON ${OLD} FOR INSERT TO authenticated WITH CHECK (true)`,
+        `CREATE POLICY p ON ${OLD} FOR INSERT TO ${USER} WITH CHECK (true)`,
         "policy app.counterparties.p (INSERT)",
       ],
       [
         "a grant to PUBLIC",
         `GRANT DELETE ON ${OLD} TO PUBLIC`,
-        "grant DELETE to anon on app.counterparties",
+        `grant DELETE to ${ANON} on app.counterparties`,
       ],
       [
         "TRUNCATE",
-        `GRANT TRUNCATE ON ${OLD} TO service_role`,
-        "grant TRUNCATE to service_role on app.counterparties",
+        `GRANT TRUNCATE ON ${OLD} TO ${USER}`,
+        `grant TRUNCATE to ${USER} on app.counterparties`,
       ],
     ])("refuses through %s", async (_, drift, detail) => {
       const outcome = await planPromotion(await promoted(), { drift })
@@ -725,9 +725,8 @@ describe.concurrent("buildPlan", () => {
         // Статичний гейт Пр21 бачить запис у тексті прийнятої одиниці ще в
         // `promote`, незалежно від того, чи рівна вона ADP цілі
         const files = contactsProject()
-        files.set(MODULE, `GRANT ALL ON TABLE ${OLD} TO authenticated;\n`)
-        const identity =
-          "grant:grant:table:app.counterparties:authenticated:all"
+        files.set(MODULE, `GRANT ALL ON TABLE ${OLD} TO ${USER};\n`)
+        const identity = `grant:grant:table:app.counterparties:${USER}:all`
         files.set(
           "sql-debt.json",
           `${JSON.stringify({ units: [identity] }, null, 2)}\n`
@@ -748,27 +747,27 @@ describe.concurrent("buildPlan", () => {
         // Той самий грант на цілі, рівний ADP схеми (витяг його не показує),
         // ловить гейт шляху запису наживо
         const outcome = await planPromotion(await promoted(), {
-          drift: `ALTER DEFAULT PRIVILEGES IN SCHEMA app GRANT ALL ON TABLES TO authenticated;
-                  GRANT ALL ON ${OLD} TO authenticated`,
+          drift: `ALTER DEFAULT PRIVILEGES IN SCHEMA app GRANT ALL ON TABLES TO ${USER};
+                  GRANT ALL ON ${OLD} TO ${USER}`,
         })
         expect(outcome.status).toBe("refused")
         expect(errors(outcome)).toEqual(["plan.write-path"])
         expect(params(outcome, "plan.write-path")[0]?.detail).toContain(
-          "grant INSERT to authenticated on app.counterparties"
+          `grant INSERT to ${USER} on app.counterparties`
         )
       })
 
       it("refuses an adopted read policy for anon that the kind does not replace", async () => {
-        // `anon` читав таблицю грантом з ADP і політикою; вид без `publicRead`
+        // `гість читав таблицю грантом з ADP і політикою; вид без `publicRead`
         // гостю нічого не дає — відмова називає політику
         const p = await withModule(
-          `CREATE POLICY counterparties_anon ON ${OLD} FOR SELECT TO anon USING (true);\n`,
+          `CREATE POLICY counterparties_anon ON ${OLD} FOR SELECT TO ${ANON} USING (true);\n`,
           { "policy:app.counterparties.counterparties_anon": "platform" }
         )
         const outcome = await planPromotion(p, {
-          drift: `ALTER DEFAULT PRIVILEGES IN SCHEMA app GRANT SELECT ON TABLES TO anon;
-                  GRANT SELECT ON ${OLD} TO anon;
-                  GRANT SELECT ON app.counterparty_contacts TO anon`,
+          drift: `ALTER DEFAULT PRIVILEGES IN SCHEMA app GRANT SELECT ON TABLES TO ${ANON};
+                  GRANT SELECT ON ${OLD} TO ${ANON};
+                  GRANT SELECT ON app.counterparty_contacts TO ${ANON}`,
         })
         expect(outcome.status).toBe("refused")
         expect(errors(outcome)).toEqual(["plan.platform-replacement-missing"])
@@ -786,9 +785,9 @@ describe.concurrent("buildPlan", () => {
           { "policy:app.counterparties.counterparties_all": "removed" }
         )
         const outcome = await planPromotion(p, {
-          drift: `ALTER DEFAULT PRIVILEGES IN SCHEMA app GRANT SELECT ON TABLES TO anon;
-                  GRANT SELECT ON ${OLD} TO anon;
-                  GRANT SELECT ON app.counterparty_contacts TO anon`,
+          drift: `ALTER DEFAULT PRIVILEGES IN SCHEMA app GRANT SELECT ON TABLES TO ${ANON};
+                  GRANT SELECT ON ${OLD} TO ${ANON};
+                  GRANT SELECT ON app.counterparty_contacts TO ${ANON}`,
         })
         const artifact = planned(outcome)
         const drops = stepMatching(artifact, /DROP POLICY .*counterparties_all/)

@@ -20,6 +20,18 @@ export const ON_POSTGRES: string[] = [
   "src/schema-engine/__tests__/engine-census.db.test.ts",
   "src/schema-engine/__tests__/engine-extract.db.test.ts",
   "src/schema-engine/__tests__/round-trip.db.test.ts",
+  // План і застосування (задача 11)
+  "src/schema-engine/__tests__/build-plan.db.test.ts",
+  "src/schema-engine/__tests__/build-plan-provider.db.test.ts",
+  "src/schema-engine/__tests__/build-plan-promotion.db.test.ts",
+  "src/schema-engine/__tests__/build-plan-promotion-data.db.test.ts",
+  "src/schema-engine/__tests__/build-plan-backfill.db.test.ts",
+  "src/schema-engine/__tests__/execute-plan.db.test.ts",
+  "src/schema-engine/__tests__/carrier-backfill.db.test.ts",
+  "src/schema-engine/__tests__/carrier-backfill-not-null.db.test.ts",
+  "src/schema-engine/__tests__/promotion-access.db.test.ts",
+  "src/schema-engine/__tests__/apply-backfill.db.test.ts",
+  "src/schema-engine/__tests__/list-order-index-apply.db.test.ts",
 ]
 
 export default defineConfig({

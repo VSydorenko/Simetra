@@ -30,6 +30,7 @@ import {
   type RehearsalProof,
   type TableLock,
 } from "simetra/schema"
+import { PROVIDER_OWNER_ROLES } from "simetra/model"
 import { createApplyDatabase, createPgDeltaEngine } from ".."
 import {
   catalog,
@@ -37,6 +38,7 @@ import {
   metaFiles,
   project,
   testDatabaseUrl,
+  testProvider,
   testRoleName,
   testSuperuserUrl,
   loginUrl,
@@ -56,6 +58,9 @@ import {
 export const engine = createPgDeltaEngine()
 export const stack = { url: testDatabaseUrl() }
 export const apply = createApplyDatabase({ readOnly: false })
+
+/** Роль плану: власник профілю, від якого сесія застосування. */
+export const PLAN_ROLE = PROVIDER_OWNER_ROLES[testProvider()]
 
 /** Роль-власник для підміни власника на цілі. */
 export const OWNER = testRoleName("execute_owner")
@@ -112,7 +117,10 @@ export function useExecutePlanSetup(): void {
   beforeAll(async () => {
     const compiled = await compile(
       metaFiles({
-        "project.meta.json": project({ defaultSchema: "app" }),
+        "project.meta.json": project({
+          defaultSchema: "app",
+          database: { provider: testProvider() },
+        }),
         "catalogs/Party/Party.meta.json": catalog("Party"),
       })
     )
@@ -120,7 +128,7 @@ export function useExecutePlanSetup(): void {
     desired = await desiredForApply(compiled.model!)
     await query(
       testSuperuserUrl(),
-      `create role ${OWNER} nologin; grant ${OWNER} to postgres;
+      `create role ${OWNER} nologin; grant ${OWNER} to ${PLAN_ROLE} with inherit true;
        create role ${LOCKER} login bypassrls password '${LOCKER_PASSWORD}';`
     )
   })
@@ -252,12 +260,12 @@ export function locksOf(
  */
 export const providerList = (
   url: string,
-  role = "postgres"
+  role = PLAN_ROLE
 ): Promise<ProviderLockSet[]> =>
   createApplyDatabase({ readOnly: true }).transaction(
     { url },
     "rollback",
-    (tx) => readProviderLocks(tx, role, PROVIDER_LOCKS.supabase)
+    (tx) => readProviderLocks(tx, role, PROVIDER_LOCKS[testProvider()])
   )
 
 /** Шлях пошуку сесії цілі — як його записав би план для ревалідації. */
@@ -298,7 +306,7 @@ export async function planFor(
     steps,
     requiredPermissions: [],
     drift: null,
-    role: "postgres",
+    role: PLAN_ROLE,
     locks: locksOf(steps),
     implicitLocks: [],
     foreignKeys: { subjects: [], live: [] },
@@ -314,7 +322,7 @@ export async function planFor(
     ...(await identityOf(url)),
     ...over,
     providerLocks:
-      over.providerLocks ?? (await providerList(url, over.role ?? "postgres")),
+      over.providerLocks ?? (await providerList(url, over.role ?? PLAN_ROLE)),
     revalidationSearchPath:
       over.revalidationSearchPath ?? (await sessionPath(url)),
     targetFingerprint: over.targetFingerprint ?? (await read(url)),
@@ -358,7 +366,7 @@ export async function establish(url: string, hash: string): Promise<void> {
       steps: [],
       requiredPermissions: [],
       drift: null,
-      role: "postgres",
+      role: PLAN_ROLE,
       ...(await identityOf(url)),
       locks: [],
       implicitLocks: [],

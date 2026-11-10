@@ -4,6 +4,7 @@ import { project } from "../../../../simetra/test/support"
 import { asSuperuser, query } from "../../__tests__/support/db"
 import {
   BLIND_SETUP,
+  codes,
   compiled,
   EMPTY,
   errors,
@@ -11,6 +12,7 @@ import {
   party,
   PARTY,
   plan,
+  planned,
   SERVICE_ROLE,
   useBuildPlanRoles,
 } from "./build-plan.support"
@@ -54,6 +56,16 @@ describe.concurrent("buildPlan", () => {
           },
         },
       ])
+    })
+  })
+
+  it("carries the plpgsql_check mode of the target", async () => {
+    // Розширення на стеку доступне, а supautils дає ролі його поставити
+    const model = await compiled({ [PARTY]: party() })
+    await inTarget(EMPTY, async (url) => {
+      const outcome = await plan(url, model)
+      expect(planned(outcome).plpgsqlCheck).toBe("transient")
+      expect(codes(outcome)).not.toContain("plan.plpgsql-check-unavailable")
     })
   })
 

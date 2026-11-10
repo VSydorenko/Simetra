@@ -1,4 +1,5 @@
 import { promoteInput, type PromoteInput } from "simetra/compiler"
+import { PROVIDER_API_ROLES, type DatabaseProvider } from "simetra/model"
 import { metaFiles, project, uuid } from "../helpers"
 
 /**
@@ -19,6 +20,11 @@ export interface PromotionParts {
    * класифікує й значення за замовчуванням (`#default/isDeleted`).
    */
   fill?: boolean
+  /**
+   * Провайдер проєкту: від нього залежать роль API в модулі боргу й
+   * ідентичність його гранту. Типово `supabase`.
+   */
+  provider?: DatabaseProvider
 }
 
 export const COUNTERPARTY_ID = uuid(7001)
@@ -43,13 +49,19 @@ export const SHARED_SQL = "sql/app/counterparty_names.sql"
 export const CATALOG_FILE = "catalogs/Counterparty/Counterparty.meta.json"
 
 /** Ідентичності одиниць модуля `Counterparty` — ключі `conversions`. */
-export const COUNTERPARTY_UNITS = {
-  trigger: "trigger:app.counterparties.counterparty_touch",
-  policy: "policy:app.counterparties.counterparties_read",
-  grant: "grant:grant:table:app.counterparties:authenticated:select",
+export function counterpartyUnits(provider: DatabaseProvider = "supabase") {
+  return {
+    trigger: "trigger:app.counterparties.counterparty_touch",
+    policy: "policy:app.counterparties.counterparties_read",
+    grant: `grant:grant:table:app.counterparties:${PROVIDER_API_ROLES[provider].user}:select`,
+  }
 }
 
-const COUNTERPARTY_MODULE = `CREATE FUNCTION app.counterparty_touch() RETURNS trigger LANGUAGE plpgsql VOLATILE AS $fn$
+export const COUNTERPARTY_UNITS = counterpartyUnits()
+
+const counterpartyModule = (provider: DatabaseProvider) => {
+  const user = PROVIDER_API_ROLES[provider].user
+  return `CREATE FUNCTION app.counterparty_touch() RETURNS trigger LANGUAGE plpgsql VOLATILE AS $fn$
 BEGIN
   NEW.name := btrim(NEW.name);
   RETURN NEW;
@@ -59,10 +71,11 @@ $fn$;
 CREATE TRIGGER counterparty_touch BEFORE INSERT OR UPDATE ON app.counterparties
   FOR EACH ROW EXECUTE FUNCTION app.counterparty_touch();
 
-CREATE POLICY counterparties_read ON app.counterparties FOR SELECT TO authenticated USING (true);
+CREATE POLICY counterparties_read ON app.counterparties FOR SELECT TO ${user} USING (true);
 
-GRANT SELECT ON app.counterparties TO authenticated;
+GRANT SELECT ON app.counterparties TO ${user};
 `
+}
 
 const COUNTERPARTY_NAMES = `CREATE FUNCTION app.counterparty_names() RETURNS TABLE (name text, inn text) LANGUAGE sql STABLE AS $fn$
   SELECT c.name, c.inn FROM app.counterparties c
@@ -181,16 +194,21 @@ function invoice() {
 
 /** Тека фікстури; усі частини типово ввімкнено. */
 export function promotionProject(o: PromotionParts = {}): Map<string, string> {
-  const { module = true, contacts = true, invoice: withInvoice = true } = o
+  const {
+    module = true,
+    contacts = true,
+    invoice: withInvoice = true,
+    provider = "supabase",
+  } = o
   return metaFiles({
-    "project.meta.json": project(),
+    "project.meta.json": project({ database: { provider } }),
     [COUNTERPARTY_FILE]: counterparty(),
     ...(module
       ? {
-          [COUNTERPARTY_SQL]: COUNTERPARTY_MODULE,
+          [COUNTERPARTY_SQL]: counterpartyModule(provider),
           [SHARED_SQL]: COUNTERPARTY_NAMES,
           "sql-debt.json": {
-            units: Object.values(COUNTERPARTY_UNITS).sort(),
+            units: Object.values(counterpartyUnits(provider)).sort(),
           },
         }
       : {}),
@@ -210,7 +228,8 @@ export const CREATED_AT_FILL =
   "coalesce(created_at, '2000-01-01 00:00:00+00'::timestamptz)"
 
 export function counterpartyMapping(o: PromotionParts = {}): PromoteInput {
-  const { module = true, fill = true } = o
+  const { module = true, fill = true, provider = "supabase" } = o
+  const units = counterpartyUnits(provider)
   return promoteInput.parse({
     target: { name: "Counterparty" },
     into: {
@@ -242,9 +261,9 @@ export function counterpartyMapping(o: PromotionParts = {}): PromoteInput {
       ...(fill ? {} : { "Counterparty#default/isDeleted": "removed" }),
       ...(module
         ? {
-            [COUNTERPARTY_UNITS.trigger]: "platform",
-            [COUNTERPARTY_UNITS.policy]: "platform",
-            [COUNTERPARTY_UNITS.grant]: "platform",
+            [units.trigger]: "platform",
+            [units.policy]: "platform",
+            [units.grant]: "platform",
           }
         : {}),
     },

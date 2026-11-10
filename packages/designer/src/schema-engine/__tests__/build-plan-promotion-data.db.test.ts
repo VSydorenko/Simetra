@@ -22,6 +22,7 @@ import {
   CONTACT_FILE,
   metaFiles,
   project,
+  testProvider,
   uuid,
 } from "../../../../simetra/test/support"
 import {
@@ -39,8 +40,10 @@ import {
   planPromotion,
   Promoted,
   promoted,
+  SESSION_OWNER,
   stepMatching,
   targetScope,
+  USER,
   useBuildPlanRoles,
 } from "./build-plan.support"
 
@@ -112,7 +115,9 @@ describe.concurrent("buildPlan", () => {
       ): Promise<Map<string, string>> =>
         acceptDebt(
           metaFiles({
-            "project.meta.json": project(),
+            "project.meta.json": project({
+              database: { provider: testProvider() },
+            }),
             [ITEM_FILE]: item(o.extra),
             ...o.sql,
           })
@@ -365,12 +370,12 @@ describe.concurrent("buildPlan", () => {
         // Власник бази має право окремо, тож лише `PUBLIC` не досить
         const outcome = await planPromotion(await promotedItems(), {
           superuser: true,
-          drift: `do $$ begin execute format('revoke temp on database %I from public, postgres', current_database()); end $$;`,
+          drift: `do $$ begin execute format('revoke temp on database %I from public, ${SESSION_OWNER}', current_database()); end $$;`,
         })
         expect(outcome.status).toBe("refused")
         expect(errors(outcome)).toEqual(["plan.temp-privilege"])
         expect(params(outcome, "plan.temp-privilege")).toEqual([
-          { role: "postgres" },
+          { role: SESSION_OWNER },
         ])
       })
 
@@ -647,6 +652,36 @@ describe.concurrent("buildPlan", () => {
         // `parent_id` — лише у вставці. Тригери незмінності ключа (спека прав §7)
         // нові для кожної таблиці виду, тож двигун бере той самий замок;
         // неявний замок нижче все одно належить кроку даних.
+        // Гранти двигун видає за іменем одержувача: порядок блоків залежить від
+        // імені ролі API профілю, тож блоки впорядковано так само
+        const grantsByGrantee = (
+          [
+            [
+              USER,
+              [
+                `REVOKE ALL ON TABLE "app"."counterparty_contacts" FROM "${USER}"`,
+                `GRANT SELECT ON TABLE "app"."counterparty_contacts" TO "${USER}"`,
+              ],
+            ],
+            [
+              "simetra_command",
+              [
+                'REVOKE ALL ON TABLE "app"."counterparty_contacts" FROM "simetra_command"',
+                'REVOKE ALL ("id") ON TABLE "app"."counterparty_contacts" FROM "simetra_command"',
+                'GRANT INSERT ("id") ON TABLE "app"."counterparty_contacts" TO "simetra_command"',
+                'REVOKE ALL ("line_number") ON TABLE "app"."counterparty_contacts" FROM "simetra_command"',
+                'GRANT INSERT ("line_number"), UPDATE ("line_number") ON TABLE "app"."counterparty_contacts" TO "simetra_command"',
+                'REVOKE ALL ("parent_id") ON TABLE "app"."counterparty_contacts" FROM "simetra_command"',
+                'GRANT INSERT ("parent_id") ON TABLE "app"."counterparty_contacts" TO "simetra_command"',
+                'REVOKE ALL ("phone") ON TABLE "app"."counterparty_contacts" FROM "simetra_command"',
+                'GRANT INSERT ("phone"), UPDATE ("phone") ON TABLE "app"."counterparty_contacts" TO "simetra_command"',
+                'GRANT DELETE, SELECT ON TABLE "app"."counterparty_contacts" TO "simetra_command"',
+              ],
+            ],
+          ] satisfies [string, string[]][]
+        )
+          .sort(([x], [y]) => (x < y ? -1 : x > y ? 1 : 0))
+          .flatMap(([, sqls]) => sqls.map((sql) => ["engine", "none", sql]))
         expect(touching.map((s) => [s.origin, s.lockClass, s.sql])).toEqual([
           [
             "engine",
@@ -658,66 +693,7 @@ describe.concurrent("buildPlan", () => {
             "shareRowExclusive",
             "CREATE TRIGGER counterparty_contacts_simetra_key BEFORE UPDATE ON app.counterparty_contacts FOR EACH ROW WHEN ((new.id IS DISTINCT FROM old.id)) EXECUTE FUNCTION simetra.key_immutable('id')",
           ],
-          [
-            "engine",
-            "none",
-            'REVOKE ALL ON TABLE "app"."counterparty_contacts" FROM "authenticated"',
-          ],
-          [
-            "engine",
-            "none",
-            'GRANT SELECT ON TABLE "app"."counterparty_contacts" TO "authenticated"',
-          ],
-          [
-            "engine",
-            "none",
-            'REVOKE ALL ON TABLE "app"."counterparty_contacts" FROM "simetra_command"',
-          ],
-          [
-            "engine",
-            "none",
-            'REVOKE ALL ("id") ON TABLE "app"."counterparty_contacts" FROM "simetra_command"',
-          ],
-          [
-            "engine",
-            "none",
-            'GRANT INSERT ("id") ON TABLE "app"."counterparty_contacts" TO "simetra_command"',
-          ],
-          [
-            "engine",
-            "none",
-            'REVOKE ALL ("line_number") ON TABLE "app"."counterparty_contacts" FROM "simetra_command"',
-          ],
-          [
-            "engine",
-            "none",
-            'GRANT INSERT ("line_number"), UPDATE ("line_number") ON TABLE "app"."counterparty_contacts" TO "simetra_command"',
-          ],
-          [
-            "engine",
-            "none",
-            'REVOKE ALL ("parent_id") ON TABLE "app"."counterparty_contacts" FROM "simetra_command"',
-          ],
-          [
-            "engine",
-            "none",
-            'GRANT INSERT ("parent_id") ON TABLE "app"."counterparty_contacts" TO "simetra_command"',
-          ],
-          [
-            "engine",
-            "none",
-            'REVOKE ALL ("phone") ON TABLE "app"."counterparty_contacts" FROM "simetra_command"',
-          ],
-          [
-            "engine",
-            "none",
-            'GRANT INSERT ("phone"), UPDATE ("phone") ON TABLE "app"."counterparty_contacts" TO "simetra_command"',
-          ],
-          [
-            "engine",
-            "none",
-            'GRANT DELETE, SELECT ON TABLE "app"."counterparty_contacts" TO "simetra_command"',
-          ],
+          ...grantsByGrantee,
         ])
         expect(artifact.promotion!.data.map((t) => t.columns[0]!.step)).toEqual(
           ["d1"]
@@ -1071,7 +1047,7 @@ describe.concurrent("buildPlan", () => {
                 name: "Adopted",
                 defaultSchema: "app",
                 attributeCase: "camelCase",
-                databaseProvider: "supabase",
+                databaseProvider: testProvider(),
               },
               existing: new Map(),
               newId: () => randomUUID(),

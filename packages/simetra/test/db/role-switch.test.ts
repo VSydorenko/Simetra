@@ -208,22 +208,6 @@ const ROLE_SWITCH_EXCEPTIONS: Exception[] = [
 const POSTGRES_LITERAL_EXCEPTIONS: Exception[] = [
   ...(
     [
-      [
-        "packages/designer/src/schema-engine/__tests__/build-plan.db.test.ts",
-        11,
-      ],
-      [
-        "packages/designer/src/schema-engine/__tests__/build-plan-provider.db.test.ts",
-        11,
-      ],
-      [
-        "packages/designer/src/schema-engine/__tests__/build-plan-promotion.db.test.ts",
-        11,
-      ],
-      [
-        "packages/designer/src/schema-engine/__tests__/execute-plan.db.test.ts",
-        11,
-      ],
       ["packages/designer/src/__tests__/apply-lifecycle.db.test.ts", 12],
       ["packages/designer/src/__tests__/apply-tools.db.test.ts", 12],
       ["packages/designer/src/__tests__/database-tools.db.test.ts", 12],
