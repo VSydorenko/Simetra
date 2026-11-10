@@ -5,7 +5,10 @@ import {
   quoteIdent,
 } from "simetra/model"
 import type { DbConnection, EngineDiagnostic } from "../engine"
-import { PROVIDER_SHADOW_TEMPLATES } from "../engine/provider/presets"
+import {
+  PROVIDER_DATABASE_LOCALES,
+  PROVIDER_SHADOW_TEMPLATES,
+} from "../engine/provider/presets"
 import { applyDiagnostic } from "./diagnostic"
 import { CLUSTER_ADVISORY_LOCK } from "./execute"
 import {
@@ -248,6 +251,33 @@ export interface TemplateRow {
   allowConnections: boolean
 }
 
+/** Рядок `pg_database` разом з власником і колляцією бази. */
+export interface DatabaseRow extends TemplateRow {
+  /** Провайдер локалі за назвою `CREATE DATABASE`: `icu`, `libc`, `builtin`. */
+  localeProvider: string
+  /** `datlocale`, а для `libc` (там його немає) — `datcollate`. */
+  locale: string
+}
+
+// Колляція баз, які створює `roles`: одне джерело для `CREATE DATABASE` і
+// звірки наявних
+const DATABASE_LOCALE = PROVIDER_DATABASE_LOCALES.postgres
+const localeName = (provider: string, locale: string) => `${provider} ${locale}`
+
+/**
+ * Інша колляція наявної бази, ніж та, з якою `roles` її створив би:
+ * `undefined` — збіг. Перестворити базу платформа не може без втрати даних
+ * (колляцію бази не змінює `ALTER`), тож це відмова, а не крок.
+ */
+export function databaseLocaleViolation(
+  found: Pick<DatabaseRow, "localeProvider" | "locale">
+): string | undefined {
+  return found.localeProvider === DATABASE_LOCALE.provider &&
+    found.locale === DATABASE_LOCALE.locale
+    ? undefined
+    : localeName(found.localeProvider, found.locale)
+}
+
 /**
  * Стан шаблону: `sealed` — довірений без з'єднання (його вміст міг змінити
  * лише суперкористувач); `unsealed` — перерваний запуск суперкористувача,
@@ -342,6 +372,15 @@ async function enterSession(
 }
 
 const q = quoteIdent
+const literal = (value: string): string => `'${value.replaceAll("'", "''")}'`
+
+// Колляцію задають лише від `template0`: інший шаблон несе свою, і Postgres
+// відхилив би несумісну
+const CREATE_DATABASE_OPTIONS = [
+  `TEMPLATE ${q("template0")}`,
+  `LOCALE_PROVIDER ${DATABASE_LOCALE.provider}`,
+  `ICU_LOCALE ${literal(DATABASE_LOCALE.locale)}`,
+].join(" ")
 
 interface DatabaseFacts {
   extensionsSchema: boolean
@@ -479,21 +518,22 @@ async function readAuthFacts(
   }
 }
 
-/** Рядки `pg_database` цілі й шаблону разом з власником. */
+/** Рядки `pg_database` цілі й шаблону разом з власником і колляцією. */
 async function readDatabases(
   tx: ApplyTransaction,
   names: readonly string[]
-): Promise<Map<string, TemplateRow>> {
-  const rows = await tx.query<{
-    name: string
-    owner: string
-    ownerSuper: boolean
-    isTemplate: boolean
-    allowConnections: boolean
-  }>(
+): Promise<Map<string, DatabaseRow>> {
+  // `Pick` дає тип без оголошення інтерфейсу: порт вимагає `Record<string, unknown>`
+  const rows = await tx.query<
+    { name: string } & Pick<DatabaseRow, keyof DatabaseRow>
+  >(
     [
       'SELECT d.datname::text AS name, o.rolname::text AS owner, o.rolsuper AS "ownerSuper",',
-      '  d.datistemplate AS "isTemplate", d.datallowconn AS "allowConnections"',
+      '  d.datistemplate AS "isTemplate", d.datallowconn AS "allowConnections",',
+      "  CASE d.datlocprovider WHEN 'i' THEN 'icu' WHEN 'c' THEN 'libc'",
+      "    WHEN 'b' THEN 'builtin' ELSE d.datlocprovider::text END",
+      '    AS "localeProvider",',
+      "  COALESCE(d.datlocale, d.datcollate)::text AS locale",
       "FROM pg_catalog.pg_database d JOIN pg_catalog.pg_roles o ON o.oid = d.datdba",
       "WHERE d.datname = ANY($1::text[])",
     ].join("\n"),
@@ -614,6 +654,27 @@ async function readPhase(
         actual: targetRow.owner,
       })
     )
+  // Колляцію звіряють і в цілі, і в шаблоні: тінь і копія доказу беруть її
+  // з шаблону, і план на іншій колляції розійшовся б з ціллю
+  for (const [name, kind] of [
+    [set.database, "database"],
+    [set.template, "template"],
+  ] as const) {
+    const row = databases.get(name)
+    const actual = row && databaseLocaleViolation(row)
+    if (actual !== undefined)
+      refusal.push(
+        applyDiagnostic("roles.database-locale", "error", {
+          database: name,
+          kind,
+          expected: localeName(
+            DATABASE_LOCALE.provider,
+            DATABASE_LOCALE.locale
+          ),
+          actual,
+        })
+      )
+  }
   const template = templateState(databases.get(set.template))
   if (template.state === "unsafe")
     refusal.push(
@@ -823,7 +884,7 @@ async function writePhase(
   else {
     await dbs.statement(
       conns.maintenance,
-      `CREATE DATABASE ${q(set.database)} OWNER ${q(set.owner)} TEMPLATE ${q("template0")}`
+      `CREATE DATABASE ${q(set.database)} OWNER ${q(set.owner)} ${CREATE_DATABASE_OPTIONS}`
     )
     created.push(set.database)
   }
@@ -852,7 +913,7 @@ async function writePhase(
     if (snapshot.template === "absent") {
       await dbs.statement(
         conns.maintenance,
-        `CREATE DATABASE ${q(set.template)} TEMPLATE ${q("template0")}`
+        `CREATE DATABASE ${q(set.template)} ${CREATE_DATABASE_OPTIONS}`
       )
       created.push(set.template)
     } else present.push(set.template)

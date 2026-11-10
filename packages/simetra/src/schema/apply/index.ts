@@ -165,6 +165,7 @@ export {
 } from "./execute"
 export {
   clusterRoleViolation,
+  databaseLocaleViolation,
   ENGINE_SESSION_TIMEOUTS,
   ensurePostgresCluster,
   explicitConnectDatabases,
@@ -173,6 +174,7 @@ export {
   postgresClusterSet,
   templateState,
   type AuthSchemaFacts,
+  type DatabaseRow,
   type ExtensionsSchemaFacts,
   type PostgresClusterOutcome,
   type PostgresClusterResult,

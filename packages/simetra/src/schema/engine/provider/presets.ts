@@ -81,6 +81,23 @@ export const PROVIDER_SHADOW_TEMPLATES: Readonly<
   Record<DatabaseProvider, string | null>
 > = { supabase: null, postgres: "simetra_template" }
 
+/** Колляція бази: провайдер локалі `CREATE DATABASE` і локаль. */
+export interface DatabaseLocale {
+  provider: "icu"
+  locale: string
+}
+
+/**
+ * Колляція баз, які створює `roles` (спека профілю §3.4): обчислювач фільтра
+ * на клієнті порівнює рядки колатором `en-US` (спека П4-B §4.2), тож база
+ * мусить сортувати так само. `null` — бази створює провайдер, і `roles` їх не
+ * створює.
+ */
+export const PROVIDER_DATABASE_LOCALES = {
+  supabase: null,
+  postgres: { provider: "icu", locale: "en-US" },
+} as const satisfies Readonly<Record<DatabaseProvider, DatabaseLocale | null>>
+
 /**
  * Розширення, якими межа не керує (їх ставить провайдер): перепис і політика
  * двигуна виключають їх з обох боків звірки.

@@ -4832,6 +4832,22 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Нічого не змінено. Власник створює схеми застосунку правом CREATE на базу, тож інший власник зламав би план. Від суперкористувача виконайте `ALTER DATABASE … OWNER TO <власник>`, перевіривши, що встиг змінити поточний власник, або вкажіть базу, яку створює `simetra roles`.",
     },
   },
+  "roles.database-locale": {
+    en: (p) =>
+      `The database ${p.database} has the collation ${p.actual}, not ${p.expected}: the client filter compares text with the ${p.expected} collation, so rows would sort differently in the database and in the client`,
+    uk: (p) =>
+      `База ${p.database} має колляцію ${p.actual}, а не ${p.expected}: фільтр на клієнті порівнює текст колляцією ${p.expected}, тож рядки сортувалися б у базі й на клієнті по-різному`,
+    hint: {
+      en: (p) =>
+        p.kind === "template"
+          ? "Nothing was changed. The collation of a database cannot be altered, and `simetra roles` never drops a database. As a superuser drop the template (`ALTER DATABASE … IS_TEMPLATE false`, then `DROP DATABASE … WITH (FORCE)`) and run `simetra roles` again: it recreates the template from template0 with the expected collation."
+          : "Nothing was changed. The collation of a database cannot be altered, and `simetra roles` never drops a database. As a superuser dump the database (`pg_dump`), drop it, run `simetra roles` again (it creates the database from template0 with the expected collation), then restore the dump into it.",
+      uk: (p) =>
+        p.kind === "template"
+          ? "Нічого не змінено. Колляцію бази не змінити, а `simetra roles` ніколи не видаляє базу. Від суперкористувача видаліть шаблон (`ALTER DATABASE … IS_TEMPLATE false`, потім `DROP DATABASE … WITH (FORCE)`) і запустіть `simetra roles` знову: він створить шаблон із template0 з потрібною колляцією."
+          : "Нічого не змінено. Колляцію бази не змінити, а `simetra roles` ніколи не видаляє базу. Від суперкористувача зніміть дамп бази (`pg_dump`), видаліть її, запустіть `simetra roles` знову (він створить базу з template0 з потрібною колляцією), потім відновіть у неї дамп.",
+    },
+  },
   "roles.shared-cluster": {
     en: (p) =>
       `A Simetra login role has an explicit CONNECT on other databases of this cluster (${p.databases}): one cluster serves one Simetra application`,

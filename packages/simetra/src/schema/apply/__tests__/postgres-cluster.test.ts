@@ -4,10 +4,12 @@ import {
   PROVIDER_LOGIN_ROLES,
   PROVIDER_OWNER_ROLES,
   PROVIDER_SCHEMAS,
+  quoteIdent,
 } from "simetra/model"
 import {
   authSchemaViolation,
   clusterRoleViolation,
+  databaseLocaleViolation,
   ensurePostgresCluster,
   explicitConnectDatabases,
   extensionsSchemaViolation,
@@ -21,7 +23,10 @@ import {
   type PostgresClusterSet,
   type TemplateRow,
 } from "simetra/schema"
-import { PROVIDER_SHADOW_TEMPLATES } from "../../engine/provider/presets"
+import {
+  PROVIDER_DATABASE_LOCALES,
+  PROVIDER_SHADOW_TEMPLATES,
+} from "../../engine/provider/presets"
 import { CLUSTER_ADVISORY_LOCK } from "../execute"
 import {
   CLUSTER_TRANSACTION_PRELUDE,
@@ -398,7 +403,103 @@ const allRoleNames = [
   ...set.roles.login.map((l) => l.name),
 ]
 
+describe("databaseLocaleViolation", () => {
+  it.each([
+    ["ICU en-US", { localeProvider: "icu", locale: "en-US" }, undefined],
+    [
+      "libc of the same language",
+      { localeProvider: "libc", locale: "en_US.utf8" },
+      "libc en_US.utf8",
+    ],
+    [
+      "ICU of another locale",
+      { localeProvider: "icu", locale: "uk-UA" },
+      "icu uk-UA",
+    ],
+    [
+      "the builtin provider",
+      { localeProvider: "builtin", locale: "C.UTF-8" },
+      "builtin C.UTF-8",
+    ],
+  ] as const)("%s", (_title, found, expected) => {
+    expect(databaseLocaleViolation(found)).toBe(expected)
+  })
+})
+
+const icu = { localeProvider: "icu", locale: "en-US" }
+
+/** Рядок `pg_database`, на який відповідає порт-пастка. */
+const databaseRow = (
+  name: string,
+  over: Record<string, unknown> = {}
+): Record<string, unknown> => ({
+  name,
+  owner: "postgres",
+  ownerSuper: true,
+  isTemplate: false,
+  allowConnections: true,
+  ...icu,
+  ...over,
+})
+
 describe("ensurePostgresCluster", () => {
+  it("creates the target database and the template from template0 with the ICU locale of the profile", async () => {
+    const { dbs, calls } = trapPort((sql) =>
+      sql.includes("session_user") ? [{ ok: true, database: "x" }] : []
+    )
+    const result = await ensurePostgresCluster(dbs, conns, set)
+    expect(result).toMatchObject({ ok: true })
+    const { provider, locale } = PROVIDER_DATABASE_LOCALES.postgres
+    const q = quoteIdent
+    const options = `TEMPLATE ${q("template0")} LOCALE_PROVIDER ${provider} ICU_LOCALE '${locale}'`
+    expect(
+      calls
+        .filter((c) => c.kind === "statement")
+        .flatMap((c) => c.sql)
+        .filter((s) => s.startsWith("CREATE DATABASE"))
+    ).toEqual([
+      `CREATE DATABASE ${q(set.database)} OWNER ${q(set.owner)} ${options}`,
+      `CREATE DATABASE ${q(set.template)} ${options}`,
+    ])
+  })
+
+  it.each([
+    ["the target database", "database"],
+    ["the template", "template"],
+  ] as const)(
+    "refuses %s with another collation before it writes anything",
+    async (_title, kind) => {
+      const name = kind === "database" ? set.database : set.template
+      const { dbs, calls } = trapPort((sql) => {
+        if (sql.includes("session_user")) return [{ ok: true, database: "x" }]
+        if (sql.includes("FROM pg_catalog.pg_database d JOIN"))
+          return [
+            databaseRow(name, {
+              localeProvider: "libc",
+              locale: "en_US.utf8",
+              ...(kind === "database"
+                ? { owner: set.owner, ownerSuper: false }
+                : { isTemplate: true, allowConnections: false }),
+            }),
+          ]
+        return []
+      })
+      const result = await ensurePostgresCluster(dbs, conns, set)
+      expect(result).toMatchObject({
+        ok: false,
+        error: [
+          {
+            code: "roles.database-locale",
+            params: { database: name, kind, actual: "libc en_US.utf8" },
+          },
+        ],
+      })
+      // Жодного запису: лише транзакції з відкатом, жодного оператора
+      expect(calls.filter((c) => c.kind === "statement")).toEqual([])
+      expect(calls.filter((c) => c.end === "commit")).toEqual([])
+    }
+  )
+
   it("refuses a session that is not a superuser before it takes the lock or writes", async () => {
     const { dbs, calls } = trapPort((sql) =>
       sql.includes("session_user") ? [{ ok: false, database: "postgres" }] : []
@@ -493,6 +594,7 @@ describe("ensurePostgresCluster", () => {
             ownerSuper: false,
             isTemplate: false,
             allowConnections: true,
+            ...icu,
           },
           {
             name: set.template,
@@ -500,6 +602,7 @@ describe("ensurePostgresCluster", () => {
             ownerSuper: true,
             isTemplate: true,
             allowConnections: false,
+            ...icu,
           },
         ]
       if (sql.includes("aclexplode(d.datacl)")) return []

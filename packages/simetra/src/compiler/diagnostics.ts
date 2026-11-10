@@ -359,6 +359,7 @@ export const COMPILER_RULES = [
   "roles.unsafe-schema",
   "roles.unsafe-template",
   "roles.database-owner",
+  "roles.database-locale",
   "roles.shared-cluster",
   "maintenance.model-mismatch",
   "maintenance.unknown-role",
