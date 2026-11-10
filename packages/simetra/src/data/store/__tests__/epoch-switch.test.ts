@@ -218,6 +218,40 @@ describe("acceptEpochs: one answer of several epochs (Р12)", () => {
     }
   })
 
+  it.each([
+    ["current, abandoned", [EB, EA]],
+    ["abandoned, current", [EA, EB]],
+  ])(
+    `${DISCARDS_MAX} passes of a discarded answer (%s): unavailable`,
+    (_, order) => {
+      const h = harness()
+      accept(h, EA)
+      accept(h, EB)
+      for (let i = 0; i < DISCARDS_MAX; i++) {
+        expect(h.write(() => h.session.acceptEpochs(order, h.now()))).toBe(
+          "discard"
+        )
+        expect(h.session.versions.discards()).toBe(i + 1)
+      }
+      expect(h.session.versions.unavailable()).toBe(true)
+    }
+  )
+
+  it.each([
+    ["A, B", [EA, EB]],
+    ["A, B, A", [EA, EB, EA]],
+  ])(
+    "an answer discarded by its own switch (%s) counts as a discarded pass",
+    (_, order) => {
+      const h = harness()
+      accept(h, EA)
+      expect(h.write(() => h.session.acceptEpochs(order, h.now()))).toBe(
+        "discard"
+      )
+      expect(h.session.versions.discards()).toBe(1)
+    }
+  )
+
   it("epochs of one answer that leave nothing abandoned apply", () => {
     const h = harness()
     accept(h, EA)

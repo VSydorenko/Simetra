@@ -79,6 +79,8 @@ export interface Session {
    * requests): `acceptEpoch` for each, then the answer is discarded when any
    * of its epochs is abandoned — also one this answer's own switch left, so
    * the result does not depend on the order the epochs arrived in (Р12).
+   * A discarded answer applied nothing: its accepted epochs do not make the
+   * pass applied, so it counts toward `VersionEpochs.discards`.
    */
   acceptEpochs(
     epochs: Iterable<string | null>,
@@ -254,15 +256,23 @@ export function createSession(options: {
     versions,
     acceptEpoch,
     acceptEpochs(answer, startEpoch) {
+      // Відкинута відповідь не застосувала нічого: прийняті до відмови епохи
+      // не роблять прохід застосованим, інакше лічильник скидався б щоразу.
+      const applied = passApplied
       const seen: (string | null)[] = []
       for (const epoch of answer) {
-        if (acceptEpoch(epoch, startEpoch) === "discard") return "discard"
+        if (acceptEpoch(epoch, startEpoch) === "discard") {
+          passApplied = applied
+          return "discard"
+        }
         seen.push(epoch)
       }
       // Пізня частина покинутої епохи могла прийти після тієї, що її
       // покинула: перевірка за множиною, а не за порядком приходу.
-      if (seen.some((epoch) => epoch !== null && abandoned.has(epoch)))
+      if (seen.some((epoch) => epoch !== null && abandoned.has(epoch))) {
+        passApplied = applied
         return discard(startEpoch)
+      }
       return "apply"
     },
     onSwitch(listener) {
