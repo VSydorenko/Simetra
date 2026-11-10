@@ -33,6 +33,11 @@ export const ON_POSTGRES: string[] = [
   "test/db/promote-rewrite.db.test.ts",
   "test/db/row-version.db.test.ts",
   "test/db/filter-equivalence.db.test.ts",
+  // Схема й стек (задача 9)
+  "src/schema/__tests__/deploy.db.test.ts",
+  "src/schema/__tests__/paper-test.db.test.ts",
+  "src/schema/__tests__/reference-domain.db.test.ts",
+  "test/db/stack.db.test.ts",
   // План keyset-сторінки не залежить від провайдера: лише postgres (Р19)
   "test/db/list-order-plan.db.test.ts",
 ]

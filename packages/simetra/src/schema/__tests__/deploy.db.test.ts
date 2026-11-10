@@ -1,11 +1,17 @@
 import { describe, expect, it } from "vitest"
 import type pg from "pg"
 import { compile, type CompiledModel } from "simetra/compiler"
-import type { PhysicalTable } from "simetra/model"
+import {
+  PROVIDER_IDENTITY_SOURCES,
+  PROVIDER_OWNER_ROLES,
+  quoteIdent,
+  type PhysicalTable,
+} from "simetra/model"
 import { renderDesiredState } from "simetra/schema"
 import { readCatalog } from "../../../test/db/catalog"
 import { expectCatalogMatchesSnapshot } from "../../../test/db/compare"
-import { withRollback } from "../../../test/db/connection"
+import { asStackSuperuser, withRollback } from "../../../test/db/connection"
+import { testProvider } from "../../../test/db/profile"
 import {
   accumulationRegisters,
   customTables,
@@ -32,6 +38,17 @@ async function deploy(
   client: pg.Client,
   model: CompiledModel
 ): Promise<string[]> {
+  // Власник на `postgres` не має `REFERENCES` на таблицю ідентичності Better
+  // Auth (стек дає йому лише тимчасові `USAGE`/`TRIGGER` для провізії), тож
+  // FK власної таблиці на неї вимагає гранту; транзакція тесту його відкотить
+  if (testProvider() === "postgres") {
+    const { schema, name } = PROVIDER_IDENTITY_SOURCES.postgres.table
+    await asStackSuperuser(client, () =>
+      client.query(
+        `GRANT REFERENCES ON ${quoteIdent(schema)}.${quoteIdent(name)} TO ${quoteIdent(PROVIDER_OWNER_ROLES.postgres)}`
+      )
+    )
+  }
   await client.query(renderDesiredState(model).sql)
   return [
     ...new Set([
@@ -68,7 +85,7 @@ async function insertOrganization(client: pg.Client): Promise<string> {
 describe("deploy the desired state to the stack database", () => {
   for (const [name, fixture] of FIXTURES) {
     it(name, async () => {
-      const model = await compiled(fixture())
+      const model = await compiled(fixture(testProvider()))
       await withRollback(async (client) => {
         const schemas = await deploy(client, model)
         const catalog = await readCatalog(client, schemas)
@@ -90,7 +107,7 @@ describe("deploy the desired state to the stack database", () => {
   }
 
   it("the comparison notices a snapshot that differs from the catalog", async () => {
-    const model = await compiled(customTables())
+    const model = await compiled(customTables(testProvider()))
     await withRollback(async (client) => {
       const catalog = await readCatalog(client, await deploy(client, model))
       const audit = model.physical.tables.find((t) => t.name === "audit")!
@@ -150,7 +167,7 @@ describe("deploy the desired state to the stack database", () => {
   })
 
   it("the comparison notices enum values in another order", async () => {
-    const model = await compiled(enumerations())
+    const model = await compiled(enumerations(testProvider()))
     await withRollback(async (client) => {
       const catalog = await readCatalog(client, await deploy(client, model))
       expect(model.physical.enumTypes).not.toEqual([])
@@ -166,7 +183,7 @@ describe("deploy the desired state to the stack database", () => {
   })
 
   it("nulls not distinct rejects a second row with null dimension", async () => {
-    const model = await compiled(accumulationRegisters())
+    const model = await compiled(accumulationRegisters(testProvider()))
     await withRollback(async (client) => {
       await deploy(client, model)
       const org = await insertOrganization(client)
@@ -185,7 +202,7 @@ describe("deploy the desired state to the stack database", () => {
   })
 
   it("number_period is generated in the project time zone", async () => {
-    const model = await compiled(saleDocument())
+    const model = await compiled(saleDocument(testProvider()))
     await withRollback(async (client) => {
       await deploy(client, model)
       const org = await insertOrganization(client)
@@ -201,7 +218,7 @@ describe("deploy the desired state to the stack database", () => {
   })
 
   it("movement wrapper returns rows", async () => {
-    const model = await compiled(movementQuery())
+    const model = await compiled(movementQuery(testProvider()))
     await withRollback(async (client) => {
       await deploy(client, model)
       // Текст `timestamptz` залежить від поясу сесії — фіксуємо його.

@@ -4,6 +4,7 @@ import { compile } from "simetra/compiler"
 import { renderDesiredState } from "simetra/schema"
 import { readCatalog } from "../../../test/db/catalog"
 import { withRollback } from "../../../test/db/connection"
+import { testProvider } from "../../../test/db/profile"
 import {
   diffCatalogs,
   scopeReplacementViolations,
@@ -40,7 +41,15 @@ const TABLES = [
 
 describe("paper test", () => {
   it("compiled minus accepted is exactly the kind's standard elements", async () => {
-    const result = await compile(readReferenceDomain())
+    // Референсний домен лежить на диску з провайдером `supabase`; тест
+    // розгортає його на стеку прогону
+    const files = readReferenceDomain()
+    const project = JSON.parse(files.get("project.meta.json")!) as {
+      database: { provider: string }
+    }
+    project.database.provider = testProvider()
+    files.set("project.meta.json", JSON.stringify(project))
+    const result = await compile(files)
     expectClean(result, { allow: ["rights.scope-kind-unread"] })
     const expected = JSON.parse(
       readFileSync(new URL("expected-diff.json", ACCEPTED), "utf8")
