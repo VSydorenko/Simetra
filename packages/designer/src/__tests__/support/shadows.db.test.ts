@@ -5,6 +5,7 @@ import {
   runObjectPatterns,
   runTag,
   testDatabaseUrl,
+  testProvider,
 } from "../../../../simetra/test/support"
 import { inTarget, query } from "./db"
 import {
@@ -19,7 +20,7 @@ import {
  * після файлу ловить лише тіні цього файлу.
  */
 
-const scope: EngineScope = { schemas: ["app"], provider: "supabase" }
+const scope: EngineScope = { schemas: ["app"], provider: testProvider() }
 
 async function exists(name: string): Promise<boolean> {
   const rows = await query<{ n: number }>(

@@ -3,17 +3,19 @@ import pg from "pg"
 import { describe, expect, it } from "vitest"
 import { buildRuntimeCatalog, compile } from "simetra/compiler"
 import { PLATFORM_ROLES, type MetadataRef } from "simetra/model"
-import { desiredForApply } from "simetra/schema"
 import { createCommandRuntime, fromPgPool, readRoleOf } from "simetra/server"
 import {
+  claimsFor,
   policyDomain,
+  profileLayer,
+  testProvider,
   wideBigintLayer,
   wideBigintNames,
 } from "../../../simetra/test/support"
 import {
-  inTarget,
   seedMarker,
   seedRuntimeActor,
+  withModelTarget,
   withRuntimeLogin,
 } from "./support/db"
 
@@ -25,7 +27,7 @@ import {
  */
 
 const GAUGE: MetadataRef = { kind: "Catalog", name: "Gauge" }
-const REQUEST_ROLE = readRoleOf("supabase")!
+const REQUEST_ROLE = readRoleOf(testProvider())!
 const WIDE = wideBigintNames(60)
 /** Більше за 2^53: значення доходить текстом без втрат. */
 const BIG = 2n ** 53n + 1n
@@ -35,17 +37,18 @@ const valuesOf = (shift: bigint) =>
 
 describe("command core with more than 50 text columns", () => {
   it("create and update round-trip 60 BigInt attributes", async () => {
-    const result = await compile(policyDomain(wideBigintLayer(60)))
+    const result = await compile(
+      policyDomain(wideBigintLayer(60), profileLayer())
+    )
     expect(result.diagnostics).toEqual([])
     const model = result.model!
-    const desired = await desiredForApply(model)
-    await inTarget(desired.sql, desired.scope, async (url) => {
+    await withModelTarget(model, async (url) => {
       const owner = new pg.Client({ connectionString: url })
       await owner.connect()
       try {
         await seedMarker(owner, model.hash)
         const actor = await seedRuntimeActor(owner)
-        const session = { sub: actor.user, role: REQUEST_ROLE }
+        const session = { ...claimsFor("user", actor.user), sub: actor.user }
         await withRuntimeLogin(
           url,
           [PLATFORM_ROLES.command, REQUEST_ROLE],

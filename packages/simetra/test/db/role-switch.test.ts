@@ -195,30 +195,11 @@ const ROLE_SWITCH_EXCEPTIONS: Exception[] = [
     reason:
       "the roles tool on a tagged cluster (ПГ-2a): its check reads as the superuser, a database-level SET role is the case under test, and a login role reaches a request role only by SET ROLE",
   },
-  // Тимчасові: форми переписує задача, що володіє файлом
-  {
-    file: "packages/designer/src/__tests__/roles-tool.db.test.ts",
-    reason: "SET LOCAL ROLE authenticated and a role returned by a helper",
-    task: 12,
-  },
 ]
 
 // Літерал ролі `postgres` у SQL файлів `db`: ім'я — дані профілю
 // (`PROVIDER_OWNER_ROLES[testProvider()]`). Тимчасові — до задачі-власника
-const POSTGRES_LITERAL_EXCEPTIONS: Exception[] = [
-  ...(
-    [
-      ["packages/designer/src/__tests__/apply-lifecycle.db.test.ts", 12],
-      ["packages/designer/src/__tests__/apply-tools.db.test.ts", 12],
-      ["packages/designer/src/__tests__/database-tools.db.test.ts", 12],
-      ["packages/designer/src/__tests__/roles-tool.db.test.ts", 12],
-    ] as const
-  ).map(([file, task]) => ({
-    file,
-    reason: "the Supabase owner role postgres in SQL or an expected message",
-    task,
-  })),
-]
+const POSTGRES_LITERAL_EXCEPTIONS: Exception[] = []
 
 // `options` адреси тестів дописує лише `withSessionOptions`, DSN ролі входу
 // будує лише `loginUrl`
@@ -245,11 +226,6 @@ const OPTIONS_EXCEPTIONS: Exception[] = [
     file: "packages/designer/src/__tests__/support/db.ts",
     reason: "throughPoolerAs derives the user of the pooler from the login",
     within: ["throughPoolerAs"],
-  },
-  {
-    file: "packages/designer/src/__tests__/data-tools.db.test.ts",
-    reason:
-      "options go on env.login, a login role URL without -c role=, not on the test URL",
   },
 ]
 

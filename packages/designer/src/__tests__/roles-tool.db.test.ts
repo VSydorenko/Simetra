@@ -1,5 +1,9 @@
 import type pg from "pg"
-import { PLATFORM_ROLES } from "simetra/model"
+import {
+  PLATFORM_ROLES,
+  PROVIDER_API_ROLES,
+  PROVIDER_OWNER_ROLES,
+} from "simetra/model"
 import {
   ensurePlatformRoles,
   platformRoleGate,
@@ -11,8 +15,10 @@ import { describe, expect, it } from "vitest"
 import {
   rollbackDatabase,
   testDatabaseUrl,
+  testProvider,
   testRoleName,
   withRollback,
+  asStackSuperuser,
   restoreOwnerRole,
 } from "../../../simetra/test/support"
 
@@ -23,9 +29,46 @@ import {
  */
 const TARGET = [{ server: "target" as const, db: { url: testDatabaseUrl() } }]
 
+/** Роль сесії тестів: власник профілю. Він може не мати `CREATEROLE`. */
+const SESSION_OWNER = PROVIDER_OWNER_ROLES[testProvider()]
+const USER_ROLE = PROVIDER_API_ROLES[testProvider()].user
+
+/**
+ * Оператор від суперкористувача стека в точці збереження транзакції тесту:
+ * роль власника профілю не створює ролей (на `postgres` вона без
+ * `CREATEROLE`), а творець ролей — частина умови кейсу, а не предмет.
+ */
+const asStack = (client: pg.Client, sql: string) =>
+  asStackSuperuser(client, () => client.query(sql))
+
+/**
+ * Тегований виконавець з CREATEROLE без SUPERUSER і без ADMIN на чужих
+ * ролях: так `roles` запускає оператор, а не власник кластера. Сесія
+ * переходить у нього; `adminOn` дає йому ADMIN на ролях, на які оператор його
+ * має (роль запиту).
+ */
+const EXECUTOR = testRoleName("roles_exec")
+/** Посередник ланцюга запиту: роль з CREATEROLE, до якої сесія переходить `SET ROLE`. */
+const MIDDLE = testRoleName("middle")
+
+async function asExecutor(
+  client: pg.Client,
+  adminOn: readonly string[] = []
+): Promise<void> {
+  await asStack(client, `CREATE ROLE ${EXECUTOR} NOLOGIN CREATEROLE`)
+  await asStack(client, `GRANT ${EXECUTOR} TO ${SESSION_OWNER} WITH SET TRUE`)
+  for (const role of adminOn)
+    await asStack(
+      client,
+      `GRANT ${role} TO ${EXECUTOR} WITH ADMIN TRUE, INHERIT FALSE, SET FALSE`
+    )
+  await client.query(`SET LOCAL ROLE ${EXECUTOR}`)
+}
+
 describe("roles", () => {
   it("creates a missing role NOLOGIN NOINHERIT and is idempotent", async () => {
     await withRollback(async (client) => {
+      await asExecutor(client)
       const dbs = rollbackDatabase(client)
       const name = testRoleName("command")
       expect(
@@ -59,18 +102,9 @@ describe("roles", () => {
 
   it("creates the role with an ADMIN-only self grant whatever createrole_self_grant says", async () => {
     await withRollback(async (client) => {
-      const [{ rolsuper }] = (
-        await client.query<{ rolsuper: boolean }>(
-          "SELECT rolsuper FROM pg_roles WHERE rolname = current_user"
-        )
-      ).rows as [{ rolsuper: boolean }]
-      // Налаштування діє лише на творця без SUPERUSER: від суперкористувача
-      // тест перемикається в тегову роль з CREATEROLE тієї ж транзакції
-      if (rolsuper) {
-        const creator = testRoleName("creator")
-        await client.query(`CREATE ROLE ${creator} NOLOGIN CREATEROLE`)
-        await client.query(`SET LOCAL ROLE ${creator}`)
-      }
+      // Налаштування діє лише на творця без SUPERUSER: сесія переходить у
+      // тегову роль з CREATEROLE тієї ж транзакції
+      await asExecutor(client)
       await client.query("SET LOCAL createrole_self_grant = 'set, inherit'")
       const dbs = rollbackDatabase(client)
       const name = testRoleName("command")
@@ -87,7 +121,7 @@ describe("roles", () => {
     await withRollback(async (client) => {
       const dbs = rollbackDatabase(client)
       const name = testRoleName("command")
-      await client.query("SET LOCAL ROLE authenticated")
+      await client.query(`SET LOCAL ROLE ${USER_ROLE}`)
       expect(
         await ensurePlatformRoles(dbs, TARGET, { names: [name], login: [] })
       ).toMatchObject({
@@ -114,7 +148,7 @@ describe("roles", () => {
   it("reads a role attribute from its own catalog column", async () => {
     await withRollback(async (client) => {
       const name = testRoleName("command")
-      await client.query(`CREATE ROLE ${name} NOLOGIN NOINHERIT CREATEDB`)
+      await asStack(client, `CREATE ROLE ${name} NOLOGIN NOINHERIT CREATEDB`)
       const found = await rollbackDatabase(client).transaction(
         TARGET[0]!.db,
         "rollback",
@@ -147,7 +181,7 @@ describe("roles", () => {
             platformRoleGate(
               tx,
               [PLATFORM_ROLES.command],
-              platformRoleSet("supabase").login,
+              platformRoleSet(testProvider()).login,
               "target"
             )
         )
@@ -194,18 +228,6 @@ describe("roles: the login role", () => {
     (await client.query("SELECT 1 FROM pg_roles WHERE rolname = $1", [name]))
       .rows.length > 0
 
-  /**
-   * Тегований виконавець з CREATEROLE без SUPERUSER і без ADMIN на чужих
-   * ролях: так `roles` запускає оператор, а не власник кластера.
-   */
-  async function asExecutor(client: pg.Client): Promise<string> {
-    const executor = testRoleName("roles_exec")
-    await client.query(`CREATE ROLE ${executor} NOLOGIN CREATEROLE`)
-    await client.query(`GRANT ${executor} TO postgres WITH SET TRUE`)
-    await client.query(`SET LOCAL ROLE ${executor}`)
-    return executor
-  }
-
   const asCode = (d: { code: string; params?: Record<string, unknown> }) =>
     `${d.code}:${String(d.params?.role)}:${String(d.params?.violation)}`
 
@@ -238,16 +260,17 @@ describe("roles: the login role", () => {
 
   it("makes the login role a member of the real request role with INHERIT FALSE, SET TRUE", async () => {
     await withRollback(async (client) => {
-      // Виконавець — `postgres`: ADMIN на `authenticated` має лише він (спека П4 §6.2)
+      // Виконавець має ADMIN на ролі запиту (спека П4 §6.2)
+      await asExecutor(client, [USER_ROLE])
       const dbs = rollbackDatabase(client)
-      const login = [{ name: runtime, memberOf: [command, "authenticated"] }]
+      const login = [{ name: runtime, memberOf: [command, USER_ROLE] }]
       expect(
         await ensurePlatformRoles(dbs, TARGET, { names: [command], login })
       ).toMatchObject({ created: [{ name: command }, { name: runtime }] })
       const row = (await at(dbs)).find((r) => r.name === runtime)
       expect(
         row?.memberOf
-          .filter((m) => m.role === "authenticated")
+          .filter((m) => m.role === USER_ROLE)
           .map((m) => [m.admin, m.inherit, m.set])
       ).toEqual([[false, false, true]])
       expect(
@@ -259,19 +282,19 @@ describe("roles: the login role", () => {
   // Другий grantor з INHERIT
   it("refuses a second grantor of the pair with INHERIT TRUE", async () => {
     await withRollback(async (client) => {
-      const executor = await asExecutor(client)
+      await asExecutor(client)
       const dbs = rollbackDatabase(client)
       const login = [{ name: runtime, memberOf: [command] }]
       await ensurePlatformRoles(dbs, TARGET, { names: [command], login })
       const manager = testRoleName("mgr")
       await client.query(`CREATE ROLE ${manager} NOLOGIN CREATEROLE`)
-      await client.query(`GRANT ${manager} TO ${executor} WITH SET TRUE`)
+      await client.query(`GRANT ${manager} TO ${EXECUTOR} WITH SET TRUE`)
       await client.query(
         `GRANT ${command} TO ${manager} WITH ADMIN TRUE, INHERIT FALSE, SET FALSE`
       )
       await client.query(`SET LOCAL ROLE ${manager}`)
       await client.query(`GRANT ${command} TO ${runtime} WITH INHERIT TRUE`)
-      await client.query(`SET LOCAL ROLE ${executor}`)
+      await client.query(`SET LOCAL ROLE ${EXECUTOR}`)
       const again = await ensurePlatformRoles(dbs, TARGET, {
         names: [command],
         login,
@@ -292,7 +315,7 @@ describe("roles: the login role", () => {
   it("refuses the login role without ADMIN on its request role but creates the grant role", async () => {
     await withRollback(async (client) => {
       const request = testRoleName("request")
-      await client.query(`CREATE ROLE ${request} NOLOGIN`)
+      await asStack(client, `CREATE ROLE ${request} NOLOGIN`)
       await asExecutor(client)
       const dbs = rollbackDatabase(client)
       expect(
@@ -316,7 +339,7 @@ describe("roles: the login role", () => {
   it("refuses the login role without ADMIN on a grant role another executor created", async () => {
     await withRollback(async (client) => {
       await client.query("SET LOCAL createrole_self_grant = ''")
-      await client.query(`CREATE ROLE ${command} NOLOGIN NOINHERIT`)
+      await asStack(client, `CREATE ROLE ${command} NOLOGIN NOINHERIT`)
       await asExecutor(client)
       const dbs = rollbackDatabase(client)
       expect(
@@ -365,11 +388,13 @@ describe("roles: the login role", () => {
   // §6.16 п. 2: що член з ADMIN має CREATEROLE, бачить лише каталог Postgres
   it("the gate refuses a request role with CREATEROLE that administers the command role", async () => {
     await withRollback(async (client) => {
+      await asExecutor(client)
       const dbs = rollbackDatabase(client)
       await ensurePlatformRoles(dbs, TARGET, { names: [command], login: [] })
       const request = testRoleName("request")
-      await client.query(`CREATE ROLE ${request} NOLOGIN CREATEROLE`)
-      await client.query(
+      await asStack(client, `CREATE ROLE ${request} NOLOGIN CREATEROLE`)
+      await asStack(
+        client,
         `GRANT ${command} TO ${request} WITH ADMIN TRUE, INHERIT FALSE, SET FALSE`
       )
       const gate = await dbs.transaction(TARGET[0]!.db, "rollback", (tx) =>
@@ -394,21 +419,23 @@ describe("roles: the login role", () => {
    */
   async function requestPath(client: pg.Client) {
     const request = testRoleName("request")
-    const middle = testRoleName("middle")
     const manager = testRoleName("manager")
-    await client.query(`CREATE ROLE ${request} NOLOGIN`)
-    await client.query(`CREATE ROLE ${middle} NOLOGIN CREATEROLE`)
-    await client.query(`CREATE ROLE ${manager} NOLOGIN CREATEROLE`)
-    await client.query(
-      `GRANT ${middle} TO ${request} WITH INHERIT FALSE, SET TRUE`
+    await asStack(client, `CREATE ROLE ${request} NOLOGIN`)
+    await asStack(client, `CREATE ROLE ${MIDDLE} NOLOGIN CREATEROLE`)
+    await asStack(client, `CREATE ROLE ${manager} NOLOGIN CREATEROLE`)
+    await asStack(
+      client,
+      `GRANT ${MIDDLE} TO ${request} WITH INHERIT FALSE, SET TRUE`
     )
-    await client.query(
-      `GRANT ${manager} TO ${middle} WITH ADMIN FALSE, INHERIT FALSE, SET FALSE`
+    await asStack(
+      client,
+      `GRANT ${manager} TO ${MIDDLE} WITH ADMIN FALSE, INHERIT FALSE, SET FALSE`
     )
-    await client.query(
+    await asStack(
+      client,
       `GRANT ${command} TO ${manager} WITH ADMIN TRUE, INHERIT FALSE, SET FALSE`
     )
-    return { request, middle, manager }
+    return { request, manager }
   }
 
   const gateFor = (
@@ -427,6 +454,7 @@ describe("roles: the login role", () => {
 
   it("the gate refuses a request role that reaches a manager of the command role through any membership", async () => {
     await withRollback(async (client) => {
+      await asExecutor(client)
       const dbs = rollbackDatabase(client)
       await ensurePlatformRoles(dbs, TARGET, { names: [command], login: [] })
       const { request, manager } = await requestPath(client)
@@ -435,7 +463,7 @@ describe("roles: the login role", () => {
       ])
       // Роль запиту без ребер до керівника — без відмови.
       const alone = testRoleName("alone")
-      await client.query(`CREATE ROLE ${alone} NOLOGIN`)
+      await asStack(client, `CREATE ROLE ${alone} NOLOGIN`)
       expect(await gateFor(dbs, [alone])).toEqual([])
     })
   })
@@ -448,14 +476,18 @@ describe("roles: the login role", () => {
   // Опора на цю помилку — не захист, тож шлях відхиляє гейт.
   it("a CREATEROLE member of the manager administers the command role", async () => {
     await withRollback(async (client) => {
+      await asExecutor(client)
       const dbs = rollbackDatabase(client)
       await ensurePlatformRoles(dbs, TARGET, { names: [command], login: [] })
-      const { request, middle } = await requestPath(client)
+      const { request } = await requestPath(client)
       const x = testRoleName("x")
-      await client.query(`CREATE ROLE ${x} NOLOGIN`)
+      await asStack(client, `CREATE ROLE ${x} NOLOGIN`)
       // Сесія входить як роль запиту, а з неї — `SET ROLE` на посередника.
-      await client.query(`GRANT ${request} TO postgres WITH SET TRUE`)
-      await client.query(`SET LOCAL ROLE ${middle}`)
+      await asStack(
+        client,
+        `GRANT ${request} TO ${SESSION_OWNER} WITH SET TRUE`
+      )
+      await client.query(`SET LOCAL ROLE ${MIDDLE}`)
       const attempt = async (sql: string) => {
         await client.query("SAVEPOINT attempt")
         try {
@@ -478,35 +510,39 @@ describe("roles: the login role", () => {
   // ньому не перевірити; `UNION` у запиті лишається запобіжником.
   it("Postgres refuses a membership cycle the walk would have to end", async () => {
     await withRollback(async (client) => {
+      await asExecutor(client)
       const dbs = rollbackDatabase(client)
       await ensurePlatformRoles(dbs, TARGET, { names: [command], login: [] })
       const a = testRoleName("cycle_a")
       const b = testRoleName("cycle_b")
-      await client.query(`CREATE ROLE ${a} NOLOGIN`)
-      await client.query(`CREATE ROLE ${b} NOLOGIN`)
-      await client.query(`GRANT ${b} TO ${a}`)
-      await expect(client.query(`GRANT ${a} TO ${b}`)).rejects.toMatchObject({
-        code: "0LP01",
-      })
+      await asStack(client, `CREATE ROLE ${a} NOLOGIN`)
+      await asStack(client, `CREATE ROLE ${b} NOLOGIN`)
+      await asStack(client, `GRANT ${b} TO ${a}`)
+      await expect(asStack(client, `GRANT ${a} TO ${b}`)).rejects.toMatchObject(
+        {
+          code: "0LP01",
+        }
+      )
     })
   })
 
   it("the gate refuses a request role membership with INHERIT TRUE", async () => {
     await withRollback(async (client) => {
+      await asExecutor(client, [USER_ROLE])
       const dbs = rollbackDatabase(client)
-      const login = [{ name: runtime, memberOf: [command, "authenticated"] }]
+      const login = [{ name: runtime, memberOf: [command, USER_ROLE] }]
       await ensurePlatformRoles(dbs, TARGET, {
         names: [command],
         login: [{ name: runtime, memberOf: [command] }],
       })
       await client.query(
-        `GRANT authenticated TO ${runtime} WITH INHERIT TRUE, SET TRUE`
+        `GRANT ${USER_ROLE} TO ${runtime} WITH INHERIT TRUE, SET TRUE`
       )
       const gate = await dbs.transaction(TARGET[0]!.db, "rollback", (tx) =>
         platformRoleGate(tx, [command], login, "target")
       )
       expect(gate.map(asCode)).toEqual([
-        `plan.platform-role-shape:${runtime}:membership-option:authenticated`,
+        `plan.platform-role-shape:${runtime}:membership-option:${USER_ROLE}`,
       ])
     })
   })

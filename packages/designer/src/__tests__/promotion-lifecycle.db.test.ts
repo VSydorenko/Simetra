@@ -14,6 +14,7 @@ import {
   promotionRecordSchema,
   type PromoteInput,
 } from "simetra/compiler"
+import { PROVIDER_API_ROLES } from "simetra/model"
 import {
   parseRehearsal,
   REHEARSAL_FORMAT,
@@ -33,6 +34,7 @@ import {
   catalog,
   metaFiles,
   project as projectFile,
+  testProvider,
   uuid,
 } from "../../../simetra/test/support"
 import { inTarget, query } from "./support/db"
@@ -49,7 +51,9 @@ import { inTarget, query } from "./support/db"
 
 const SIMETRA = resolve(__dirname, "../../../simetra")
 const ENV = "SIMETRA_DATABASE_URL"
-const scope: EngineScope = { schemas: ["app"], provider: "supabase" }
+const scope: EngineScope = { schemas: ["app"], provider: testProvider() }
+/** Роль користувача профілю: її читання через API промоція знімає й видає знову. */
+const USER = PROVIDER_API_ROLES[testProvider()].user
 
 // Теки проєктів прибираються після файлу, а не після тесту: тести йдуть
 // конкурентно, і `afterEach` одного стер би теку сусіда посеред його роботи
@@ -156,16 +160,16 @@ function itemLine() {
 }
 
 /**
- * Читання через API до промоції: грант ролі `authenticated` і політика
+ * Читання через API до промоції: грант ролі користувача профілю і політика
  * читання — дослівний модуль таблиці, який промоція знімає (клас `removed`).
  */
-const READ_MODULE = `CREATE POLICY items_read ON app.items FOR SELECT TO authenticated USING (true);
+const READ_MODULE = `CREATE POLICY items_read ON app.items FOR SELECT TO ${USER} USING (true);
 
-GRANT SELECT ON app.items TO authenticated;
+GRANT SELECT ON app.items TO ${USER};
 `
 const READ_UNITS = {
   policy: "policy:app.items.items_read",
-  grant: "grant:grant:table:app.items:authenticated:select",
+  grant: `grant:grant:table:app.items:${USER}:select`,
 }
 
 /**
@@ -255,7 +259,10 @@ async function projectWith(entries: Record<string, unknown>): Promise<string> {
   // Дослівні одиниці фікстури — прийнятий борг
   const files = await acceptDebt(
     metaFiles({
-      "project.meta.json": projectFile({ defaultSchema: "app" }),
+      "project.meta.json": projectFile({
+        defaultSchema: "app",
+        database: { provider: testProvider() },
+      }),
       ...entries,
     })
   )
@@ -452,31 +459,34 @@ describe.concurrent("promotion lifecycle", () => {
       // Таблиці виду читає роль користувача (згенерований `GRANT SELECT`),
       // а пише роль команд поколонково (спека П4 §6.2); прийнята таблиця
       // таких грантів не мала — новий доступ під `access:`
+      // Рядки пункту йдуть за кодовими одиницями (як сортує промоція), тож
+      // місце гранту ролі користувача залежить від імені ролі профілю
+      const byCodeUnits = (lines: string[]) => [...lines].sort()
       const command = (table: string, privileges: string) =>
         `extra grant:grant:table:app.${table}:simetra_command:${privileges}`
       expect(promotion.permissionItems).toEqual([
         {
           token: "access:app.item",
-          summary: [
-            "extra grant:grant:table:app.item:authenticated:select",
+          summary: byCodeUnits([
+            `extra grant:grant:table:app.item:${USER}:select`,
             command("item", "insert(code),update(code)"),
             command("item", "insert(description),update(description)"),
             command("item", "insert(group_id),update(group_id)"),
             command("item", "insert(id)"),
             command("item", "select"),
             command("item", "update(deletion_mark)"),
-          ],
+          ]),
         },
         {
           token: "access:app.item_lines",
-          summary: [
-            "extra grant:grant:table:app.item_lines:authenticated:select",
+          summary: byCodeUnits([
+            `extra grant:grant:table:app.item_lines:${USER}:select`,
             command("item_lines", "delete,select"),
             command("item_lines", "insert(id)"),
             command("item_lines", "insert(line_number),update(line_number)"),
             command("item_lines", "insert(parent_id)"),
             command("item_lines", "insert(qty),update(qty)"),
-          ],
+          ]),
         },
         {
           token: "delete:app.item.item_group_id_fkey",

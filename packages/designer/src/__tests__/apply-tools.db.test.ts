@@ -37,6 +37,7 @@ import {
 import { runTool } from "../cli/command"
 import { databaseResource } from "../io/database"
 import { readMetadataDir } from "../io/metadata-dir"
+import { PROVIDER_OWNER_ROLES } from "simetra/model"
 import { createMcpServer } from "../mcp/server"
 import { createPgDeltaEngine } from "../schema-engine"
 import type { ApplyData, PlanData } from "../tools/apply-tools"
@@ -54,6 +55,7 @@ import {
   customTable,
   metaFiles,
   project as projectFile,
+  testProvider,
   testRoleName,
   testSuperuserUrl,
   uuid,
@@ -136,7 +138,10 @@ vi.mock("../schema-engine", async (importOriginal) => {
 const engine = createPgDeltaEngine()
 const SIMETRA = resolve(__dirname, "../../../simetra")
 const ENV = "SIMETRA_DATABASE_URL"
-const scope: EngineScope = { schemas: ["app"], provider: "supabase" }
+const scope: EngineScope = { schemas: ["app"], provider: testProvider() }
+
+/** Роль плану: власник профілю, від якого сесія застосування. */
+const SESSION_OWNER = PROVIDER_OWNER_ROLES[testProvider()]
 
 /** Роль, якій за спиною платформи передають таблицю цілі. */
 const OWNER = testRoleName("apply_tools_owner")
@@ -144,7 +149,7 @@ const OWNER = testRoleName("apply_tools_owner")
 beforeAll(() =>
   query(
     testSuperuserUrl(),
-    `create role ${OWNER} nologin; grant ${OWNER} to postgres;`
+    `create role ${OWNER} nologin; grant ${OWNER} to ${SESSION_OWNER} with inherit true;`
   )
 )
 afterAll(() => dropRoles(OWNER))
@@ -187,7 +192,10 @@ async function writeMetadata(
 ): Promise<void> {
   const files = await acceptDebt(
     metaFiles({
-      "project.meta.json": projectFile({ defaultSchema: "app" }),
+      "project.meta.json": projectFile({
+        defaultSchema: "app",
+        database: { provider: testProvider() },
+      }),
       ...entries,
     })
   )
@@ -393,7 +401,7 @@ describe.concurrent("plan", () => {
         expect(
           r.diagnostics.find((d) => d.code === "plan.owner-mismatch")?.params
             ?.objects
-        ).toBe(`relation app.party (owner ${OWNER}, expected postgres)`)
+        ).toBe(`relation app.party (owner ${OWNER}, expected ${SESSION_OWNER})`)
         expect(r.written).toBe(false)
         expect(existsSync(join(dirname(dir), "plans"))).toBe(false)
       }

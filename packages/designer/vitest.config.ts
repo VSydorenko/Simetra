@@ -32,6 +32,18 @@ export const ON_POSTGRES: string[] = [
   "src/schema-engine/__tests__/promotion-access.db.test.ts",
   "src/schema-engine/__tests__/apply-backfill.db.test.ts",
   "src/schema-engine/__tests__/list-order-index-apply.db.test.ts",
+  // Інструменти й життєвий цикл (задача 12)
+  "src/__tests__/apply-lifecycle.db.test.ts",
+  "src/__tests__/apply-tools.db.test.ts",
+  "src/__tests__/database-tools.db.test.ts",
+  "src/__tests__/data-handler.db.test.ts",
+  "src/__tests__/wide-text-columns.db.test.ts",
+  "src/__tests__/read-query.db.test.ts",
+  "src/__tests__/data-tools.db.test.ts",
+  "src/__tests__/roles-tool.db.test.ts",
+  "src/__tests__/support/shadows.db.test.ts",
+  "src/__tests__/promotion-lifecycle.db.test.ts",
+  "src/__tests__/promotion-commit.db.test.ts",
 ]
 
 export default defineConfig({

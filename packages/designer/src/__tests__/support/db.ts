@@ -1,5 +1,7 @@
 import { randomBytes, randomUUID } from "node:crypto"
+import { withDatabaseName } from "@supabase/pg-delta"
 import pg from "pg"
+import { canonicalSnapshot, type CompiledModel } from "simetra/compiler"
 import {
   CommandFailure,
   PROVIDER_IDENTITY_SOURCES,
@@ -9,12 +11,15 @@ import {
   type CommandError,
 } from "simetra/model"
 import {
+  buildPlan,
+  desiredForApply,
+  executePlan,
   PROVIDER_SHADOW_TEMPLATES,
   type EngineScope,
   type SchemaEngine,
 } from "simetra/schema"
 import type { CommandDatabase } from "simetra/server"
-import { createPgDeltaEngine } from "../../schema-engine"
+import { createApplyDatabase, createPgDeltaEngine } from "../../schema-engine"
 import {
   asSessionLogin,
   authLoginRole,
@@ -27,6 +32,7 @@ import {
   superuserClient,
   testDatabaseName,
   testDatabaseUrl,
+  testOwnerLoginUrl,
   testPoolerUrl,
   testProvider,
   testRoleName,
@@ -152,6 +158,62 @@ export async function withTemplateTarget<T>(
   if (template === null)
     throw new Error(`Profile "${testProvider()}" has no shadow template`)
   return withCopy(`template ${quoteIdent(template)}`, fn)
+}
+
+/**
+ * Runs `fn` against a target that holds `model` and can take an identity
+ * (`signUp`, `seedRuntimeActor`): on `postgres` a bare target gets the Better
+ * Auth identity, then the plan and the apply of `model` as the owner login
+ * (Р17 order); on a profile whose provider gives the identity, the target is
+ * the engine shadow of the desired state. `model` must be compiled for the
+ * profile of the run (`profileLayer`).
+ */
+export async function withModelTarget<T>(
+  model: CompiledModel,
+  fn: (url: string) => Promise<T>
+): Promise<T> {
+  if (testProvider() !== "postgres") {
+    const desired = await desiredForApply(model)
+    return inTarget(desired.sql, desired.scope, fn)
+  }
+  return withTemplateTarget(async (url) => {
+    await withTargetIdentity(url)
+    const target = {
+      url: withDatabaseName(testOwnerLoginUrl(), databaseOf(url)),
+    }
+    const outcome = await buildPlan(
+      defaultEngine,
+      {
+        reader: createApplyDatabase({ readOnly: true }),
+        scratch: createApplyDatabase({ readOnly: false }),
+      },
+      model,
+      { target },
+      []
+    )
+    if (outcome.status !== "planned")
+      throw new Error(
+        `${outcome.status}: ${outcome.diagnostics
+          .filter((d) => d.severity === "error")
+          .map((d) => `${d.code} ${d.message}`)
+          .join("; ")}`
+      )
+    const artifact = outcome.artifact
+    const applied = await executePlan(
+      createApplyDatabase({ readOnly: false }),
+      target,
+      artifact,
+      {
+        mode: "apply",
+        planHash: artifact.planHash,
+        allow: artifact.requiredPermissions,
+        snapshot: canonicalSnapshot(model),
+      }
+    )
+    if (applied.status !== "committed")
+      throw new Error(`the model did not apply: ${applied.status}`)
+    return fn(url)
+  })
 }
 
 /** Drops the given roles, if they exist, as the stack superuser. */

@@ -17,7 +17,6 @@ import {
   type RuntimeCatalog,
   type SessionClaims,
 } from "simetra/model"
-import { desiredForApply } from "simetra/schema"
 import {
   createCommandRuntime,
   fromPgPool,
@@ -27,19 +26,22 @@ import {
   type CommandRuntimeOptions,
 } from "simetra/server"
 import {
+  claimsFor,
   GAUGE_LOG_TABLE,
   GAUGE_TABLE,
   policyDomain,
+  profileLayer,
   readQueryLayer,
   setLocalSetting,
+  testProvider,
 } from "../../../simetra/test/support"
 import {
   beforeStatement,
   commandRefusal,
   heldResource,
-  inTarget,
   seedMarker,
   seedRuntimeActor,
+  withModelTarget,
   withRuntimeLogin,
 } from "./support/db"
 
@@ -53,7 +55,7 @@ import {
 
 const GAUGE: MetadataRef = { kind: "Catalog", name: "Gauge" }
 const GAUGE_LOG: MetadataRef = { kind: "Catalog", name: "GaugeLog" }
-const REQUEST_ROLE = readRoleOf("supabase")!
+const REQUEST_ROLE = readRoleOf(testProvider())!
 
 interface Actor {
   org: string
@@ -75,16 +77,15 @@ interface Env {
 
 async function seedActor(owner: pg.Client): Promise<Actor> {
   const { org, user } = await seedRuntimeActor(owner)
-  return { org, session: { sub: user, role: REQUEST_ROLE } }
+  return { org, session: { ...claimsFor("user", user), sub: user } }
 }
 
 const heldEnv = () =>
   heldResource<Env>(async (use) => {
-    const result = await compile(policyDomain(readQueryLayer()))
+    const result = await compile(policyDomain(readQueryLayer(), profileLayer()))
     expect(result.diagnostics).toEqual([])
     const model = result.model!
-    const desired = await desiredForApply(model)
-    await inTarget(desired.sql, desired.scope, async (url) => {
+    await withModelTarget(model, async (url) => {
       const owner = new pg.Client({ connectionString: url })
       await owner.connect()
       try {

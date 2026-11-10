@@ -9,6 +9,7 @@ import {
 import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { compile } from "simetra/compiler"
+import { PROVIDER_API_ROLES, PROVIDER_OWNER_ROLES } from "simetra/model"
 import { desiredForApply, type EngineScope } from "simetra/schema"
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest"
 import { databaseResource } from "../io/database"
@@ -28,6 +29,7 @@ import {
   metaFiles,
   project as projectFile,
   testDatabaseUrl,
+  testProvider,
   testRoleName,
   testSuperuserUrl,
   uuid,
@@ -45,7 +47,11 @@ const engine = createPgDeltaEngine()
 const stack = { url: testDatabaseUrl() }
 const SIMETRA = resolve(__dirname, "../../../simetra")
 const ENV = "SIMETRA_DATABASE_URL"
-const scope: EngineScope = { schemas: ["app"], provider: "supabase" }
+const scope: EngineScope = { schemas: ["app"], provider: testProvider() }
+
+/** Роль плану: власник профілю, від якого сесія застосування. */
+const SESSION_OWNER = PROVIDER_OWNER_ROLES[testProvider()]
+const ANON = PROVIDER_API_ROLES[testProvider()].anonymous
 
 /** Роль, якій за спиною платформи передають таблицю цілі. */
 const OWNER = testRoleName("apply_lifecycle_owner")
@@ -53,7 +59,7 @@ const OWNER = testRoleName("apply_lifecycle_owner")
 beforeAll(() =>
   query(
     testSuperuserUrl(),
-    `create role ${OWNER} nologin; grant ${OWNER} to postgres;`
+    `create role ${OWNER} nologin; grant ${OWNER} to ${SESSION_OWNER} with inherit true;`
   )
 )
 afterAll(() => dropRoles(OWNER))
@@ -93,7 +99,10 @@ async function writeMetadata(
 ): Promise<void> {
   const files = await acceptDebt(
     metaFiles({
-      "project.meta.json": projectFile({ defaultSchema: "app" }),
+      "project.meta.json": projectFile({
+        defaultSchema: "app",
+        database: { provider: testProvider() },
+      }),
       [PARTY]: entry,
       ...extra,
     })
@@ -402,7 +411,7 @@ describe("apply lifecycle", () => {
       // Грант на схему був лише для ALTER OWNER; лишений, він сам став би дрейфом ACL
       await query(
         url,
-        `alter table app.party owner to postgres; revoke create on schema app from ${OWNER};`
+        `alter table app.party owner to ${SESSION_OWNER}; revoke create on schema app from ${OWNER};`
       )
       await expectUnchanged(dir, url)
 
@@ -644,7 +653,7 @@ describe("global default privileges", () => {
     await inTarget(EMPTY, scope, async (url) => {
       await query(
         url,
-        "alter default privileges for role postgres revoke all on functions from public"
+        `alter default privileges for role ${SESSION_OWNER} revoke all on functions from public`
       )
       const dir = await newProject()
       await writeMetadata(dir, party("Party", null))
@@ -655,7 +664,7 @@ describe("global default privileges", () => {
       expect(data.environment.defaultPrivileges).toEqual([
         {
           objtype: "f",
-          grantee: "postgres",
+          grantee: SESSION_OWNER,
           privilege: "EXECUTE",
           grantable: false,
         },
@@ -673,7 +682,7 @@ describe("global default privileges", () => {
         (
           await query<{ ok: boolean }>(
             url,
-            "select has_function_privilege('anon', 'app.f()', 'EXECUTE') as ok"
+            `select has_function_privilege('${ANON}', 'app.f()', 'EXECUTE') as ok`
           )
         )[0]?.ok
       ).toBe(true)
@@ -685,7 +694,7 @@ describe("global default privileges", () => {
     await inTarget(EMPTY, scope, async (url) => {
       await query(
         url,
-        "alter default privileges for role postgres grant select on tables to anon"
+        `alter default privileges for role ${SESSION_OWNER} grant select on tables to ${ANON}`
       )
       const dir = await newProject()
       await writeMetadata(dir, party("Party", null))
@@ -696,8 +705,8 @@ describe("global default privileges", () => {
         data.steps.filter((s) => s.origin === "environment").map((s) => s.sql)
       ).toEqual(
         expect.arrayContaining([
-          'REVOKE ALL ON TABLE "simetra"."marker" FROM "anon"',
-          'REVOKE ALL ON TABLE "simetra"."ledger" FROM "anon"',
+          `REVOKE ALL ON TABLE "simetra"."marker" FROM "${ANON}"`,
+          `REVOKE ALL ON TABLE "simetra"."ledger" FROM "${ANON}"`,
         ])
       )
       // Кроки середовища займають лише таблиці, які створює сам план, —
@@ -716,8 +725,8 @@ describe("global default privileges", () => {
       expect(
         await query<{ marker: boolean; ledger: boolean }>(
           url,
-          `select has_table_privilege('anon', 'simetra.marker', 'SELECT') as marker,
-             has_table_privilege('anon', 'simetra.ledger', 'SELECT') as ledger`
+          `select has_table_privilege('${ANON}', 'simetra.marker', 'SELECT') as marker,
+             has_table_privilege('${ANON}', 'simetra.ledger', 'SELECT') as ledger`
         )
       ).toEqual([{ marker: false, ledger: false }])
       await expectUnchanged(dir, url)
@@ -732,7 +741,7 @@ describe("global default privileges", () => {
       expect(data.environment.defaultPrivileges).toEqual([])
       await query(
         url,
-        "alter default privileges for role postgres grant select on sequences to anon"
+        `alter default privileges for role ${SESSION_OWNER} grant select on sequences to ${ANON}`
       )
       const r = await applyCall(dir, url, data, {
         allow: data.requiredPermissions,
