@@ -70,8 +70,9 @@
 
 ## Перевірка посилань
 
-`scripts/check-doc-anchors.py` не перевіряє якорі всередині `docs/research`
-(це чужий текст на свою дату), але перевіряє посилання **на** research з
-`AGENTS.md`, `CLAUDE.md`, README, `docs/*.md` і скілів. Посилання зі спек
-(`docs/superpowers/**`) і з `CONTRIBUTING.md` гард не перевіряє: після
-перейменування чи переносу файлу звіряй їх вручну, а решту — запуском гарда.
+`doc anchors` не перевіряє якорі всередині `docs/research` (це чужий текст на
+свою дату), але перевіряє посилання **на** research з `AGENTS.md`,
+`CLAUDE.md`, README, `CONTRIBUTING.md`, `docs/*.md` і скілів (корпус —
+`docs.anchors` у `.agents/kit.profile.json`). Посилання зі спек і планів
+(`docs/superpowers/**`) гард не перевіряє: після перейменування чи переносу
+файлу знайди їх через `doc refs <path>`, а решту перевір запуском гарда.

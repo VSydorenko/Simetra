@@ -58,9 +58,9 @@
   under the author's git identity; an agent never adds it on its own or signs
   off for the owner.
 - **Commit or push only when the owner explicitly asks.** The owner handing a
-  plan to `agent-kit:execute`, or launching `/архівуй-виконані-задачі`
-  (owner-only command), counts as the request to commit that work; push and
-  PRs still need an explicit ask, and go through `pr-gate`.
+  plan to `agent-kit:execute`, or asking to close a merged block
+  (`agent-kit:close-block`), counts as the request to commit that work; push
+  and PRs still need an explicit ask, and go through `pr-gate`.
   Fix branches start from the current working branch, not `main` (`AGENTS.md`).
 - **A discussion (`agent-kit:discuss`) asks only high-level,
   direction-setting questions** via `AskUserQuestion`; secondary details are
@@ -108,21 +108,18 @@ local profile next to it.
 | plan, plan audit | skills `plan`, `plan-audit` |
 | execution | skill `execute` (script `sdd`) |
 | review of landed work | skill `code-review`; agents `code-reviewer`, `code-review-verifier`; project criteria — `.agents/review-criteria.md` |
+| closing a merged block: live debt, finished plans, references, narration | skill `close-block` |
 | status, milestones, bugs, ideas | skill `track` (GitHub) |
 | tests, PR, docs, Codex | scripts `run-tests`, `pr-gate`, `doc`, `codex-audit` |
 
-The project has no agents of its own. A gap in the kit goes to agent-kit
+The project has no agents or commands of its own. A gap in the kit goes to agent-kit
 through the `agent-kit:kit-contribute` skill, not into a project copy.
 
-## Slash commands (`.claude/commands/`)
-
-| Command | Purpose |
-| --- | --- |
-| `/архівуй-виконані-задачі` | Remove a finished block of tasks/specs/plans and bring the canon to current state: collect live debt, fix links in docs and code comments, strip phase narrative, verify adversarially |
+## Slash commands
 
 🔴 **Guarantees are set by frontmatter, not by the prompt text.** "Don't write
-code" in a command body guarantees nothing. Each command's guarantees are in
-its own frontmatter; the canon for choosing them:
+code" in a command body guarantees nothing. A new project command carries
+its guarantees in its own frontmatter; the canon for choosing them:
 
 | Need | Field |
 | --- | --- |
