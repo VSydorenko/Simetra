@@ -30,6 +30,8 @@ import {
   testOwnerLoginUrl,
   testRoleName,
   testSuperuserUrl,
+  trackClient,
+  useTestHooks,
   withRollback,
   withSessionOptions,
 } from "./connection"
@@ -501,5 +503,48 @@ describe("withRollback", () => {
         "postgresql://u@h/db"
       )
     ).rejects.toThrow("root cause")
+  })
+})
+
+describe("trackClient", () => {
+  afterEach(() => {
+    useTestHooks({ current: () => undefined, onFinished: () => undefined })
+  })
+
+  // Регресія з двох тестів: перший лишає сесійну роль на клієнті хелпера, і
+  // падати має саме він — перевірка реєструється в тесті, що відкрив клієнт
+  it("binds the check to the sequential test that opened the client", async () => {
+    let role = "simetra_owner"
+    const checks: (() => Promise<void>)[] = []
+    useTestHooks({
+      current: () => ({ concurrent: false }),
+      onFinished: (check) => checks.push(check),
+    })
+    const client = fakeClient(
+      () => [{ role }],
+      () => "I"
+    )
+    await trackClient(
+      Object.assign(client, { once: () => client }) as unknown as pg.Client
+    )
+    expect(checks).toHaveLength(1)
+    role = "postgres"
+    await expect(checks[0]!()).rejects.toThrow(/left as postgres/)
+  })
+
+  it("does not bind a client of a concurrent test", async () => {
+    const checks: (() => Promise<void>)[] = []
+    useTestHooks({
+      current: () => ({ concurrent: true }),
+      onFinished: (check) => checks.push(check),
+    })
+    const client = fakeClient(
+      () => [{ role: "simetra_owner" }],
+      () => "I"
+    )
+    await trackClient(
+      Object.assign(client, { once: () => client }) as unknown as pg.Client
+    )
+    expect(checks).toEqual([])
   })
 })
