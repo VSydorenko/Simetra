@@ -1,8 +1,17 @@
 // Раннер наборів pgTAP у Vitest: набір іде одним простим запитом у
 // транзакції, яку відкриває й відкочує раннер, тож набір не лишає на стеку
 // нічого, навіть розширення `pgtap`. Вивід TAP — текст рядків результатів.
+// Набір під роллю запиту йде в тегованій копії `simetra_template`: так він
+// бачить стан, який платформа дає новій базі, а не базу тестів прогону
 import { randomUUID } from "node:crypto"
 import pg from "pg"
+import {
+  PROVIDER_API_ROLES,
+  quoteIdent,
+  SESSION_CLAIMS_SETTING,
+  type ApiRolePurpose,
+} from "simetra/model"
+import { testDatabaseName } from "./connection"
 
 /** What a pgTAP suite reported. */
 export interface TapResult {
@@ -54,19 +63,82 @@ export function parseTap(lines: readonly string[]): TapResult {
 const FORBIDDEN =
   /^(begin|start\s+transaction|commit|end|rollback|abort|savepoint|release|prepare\s+transaction|alter\s+system)\b/i
 
+// Під роллю запиту набір не змінює роль сам: сесія раннера — суперкористувач,
+// і `set role`/`set session authorization` у наборі пройшли б, а повернення
+// до ролі запиту перед кінцем сховало б це від звірки `current_user`.
+// `set_config('role', …)` статично не видно (рядок), його ловить та звірка
+const ROLE_SWITCH =
+  /^(re)?set\s+((local|session)\s+)?(role|session\s+authorization)\b/i
+
 /**
  * Throws when a statement of the suite controls the transaction or is
- * `alter system`: the runner owns the transaction of the suite. Comments,
- * strings, quoted identifiers and dollar-quoted bodies are not statements.
+ * `alter system`: the runner owns the transaction of the suite. With `role`,
+ * a role switch (`set role`, `reset role`, `set session authorization`) is
+ * refused too: the runner owns the role of the suite. Comments, strings,
+ * quoted identifiers and dollar-quoted bodies are not statements.
  */
-export function checkSuite(sql: string): void {
+export function checkSuite(sql: string, opts: { role?: boolean } = {}): void {
   for (const statement of statements(sql)) {
     const match = FORBIDDEN.exec(statement)
     if (match !== null)
       throw new Error(
         `A pgTAP suite must not contain ${/^alter/i.test(match[1] ?? "") ? "alter system" : "transaction control"} ("${statement.slice(0, 60)}"): the runner opens the transaction and rolls it back`
       )
+    if (opts.role === true && ROLE_SWITCH.test(statement))
+      throw new Error(
+        `A pgTAP suite under a request role must not contain a role switch ("${statement.slice(0, 60)}"): the runner sets the role and checks it after the suite`
+      )
   }
+}
+
+/** How the runner runs a suite: under a request role, with session claims. */
+export interface PgTapOptions {
+  role?: string
+  claims?: Record<string, unknown>
+}
+
+// Заголовок — перший рядок набору: так його видно, не розбираючи SQL
+const HEADER = /^--\s*pgtap:(.*)$/
+const HEADER_BODY = /^\s*role=(\S+)\s+claims=(.+?)\s*$/
+
+/**
+ * Options of suite `sql` from its first line
+ * `-- pgtap: role=<purpose> claims=<json>`; `undefined` — no header, the
+ * suite runs as is. `roleFor` maps a purpose to the role of the profile.
+ */
+export function suiteOptions(
+  sql: string,
+  roleFor: (purpose: ApiRolePurpose) => string | null
+): PgTapOptions | undefined {
+  const header = HEADER.exec(sql.split("\n", 1)[0] ?? "")
+  if (header === null) return undefined
+  const body = HEADER_BODY.exec(header[1] ?? "")
+  if (body === null)
+    throw new Error(
+      `A malformed pgtap header "${header[0]}": write -- pgtap: role=<purpose> claims=<json>`
+    )
+  const purpose = body[1] ?? ""
+  // Перелік призначень — ключі ролей API профілю, однакові в усіх профілях
+  if (!Object.hasOwn(PROVIDER_API_ROLES.postgres, purpose))
+    throw new Error(
+      `An unknown role purpose "${purpose}" in the pgtap header: use ${Object.keys(PROVIDER_API_ROLES.postgres).join(", ")}`
+    )
+  const role = roleFor(purpose as ApiRolePurpose)
+  if (role === null)
+    throw new Error(
+      `The pgtap header asks for the ${purpose} role, and the profile has no ${purpose} role`
+    )
+  let claims: unknown
+  try {
+    claims = JSON.parse(body[2] ?? "")
+  } catch {
+    claims = undefined
+  }
+  if (typeof claims !== "object" || claims === null || Array.isArray(claims))
+    throw new Error(
+      `The claims of the pgtap header must be a JSON object: ${body[2]}`
+    )
+  return { role, claims: claims as Record<string, unknown> }
 }
 
 // Символ, що може стояти в ідентифікаторі чи числі: після нього `$y$` — ще
@@ -194,33 +266,56 @@ function statements(sql: string): string[] {
 // Ім'я локального налаштування-позначки транзакції раннера
 const MARKER = "simetra.pgtap_runner"
 
+/** The part of a client the runner uses on its connection. */
+export interface SuiteClient {
+  query(
+    text: string,
+    params?: unknown[]
+  ): Promise<{ rows: Record<string, unknown>[] }>
+}
+
 /**
- * Runs suite `sql` at `url` in a transaction it rolls back, on a new client
- * per suite, and parses the text of every result row as TAP. An SQL error of
- * the suite rejects with the Postgres message; so does a suite that ended the
- * runner's transaction.
+ * Runs suite `sql` on `client` in a transaction it rolls back. With `role`:
+ * `pgtap` first (the request role cannot create it), the claims as
+ * `SESSION_CLAIMS_SETTING`, `SET LOCAL ROLE`, the suite, then a check that
+ * the suite ended as `role`.
  */
-export async function runPgTap(url: string, sql: string): Promise<TapResult> {
-  checkSuite(sql)
-  const client = new pg.Client({ connectionString: url })
-  await client.connect()
+export async function runSuite(
+  client: SuiteClient,
+  sql: string,
+  opts: PgTapOptions = {}
+): Promise<TapResult> {
+  checkSuite(sql, { role: opts.role !== undefined })
   try {
     await client.query("BEGIN")
     // Локальне налаштування живе лише до кінця транзакції: `commit` чи
     // `rollback`, що проскочив повз `checkSuite`, його скидає
     const marker = randomUUID()
     await client.query("select set_config($1, $2, true)", [MARKER, marker])
+    if (opts.role !== undefined)
+      await client.query("create extension if not exists pgtap")
+    if (opts.claims !== undefined)
+      await client.query("select set_config($1, $2, true)", [
+        SESSION_CLAIMS_SETTING,
+        JSON.stringify(opts.claims),
+      ])
+    if (opts.role !== undefined)
+      await client.query(`SET LOCAL ROLE ${quoteIdent(opts.role)}`)
     // Без параметрів node-postgres шле простий запит: увесь набір — одним
     // викликом, і результат — масив, по одному на оператор
     const results = (await client.query(sql)) as unknown as
       pg.QueryResult | pg.QueryResult[]
-    const { rows } = await client.query<{ value: string | null }>(
-      "select current_setting($1, true) as value",
+    const { rows } = await client.query(
+      "select current_setting($1, true) as value, current_user::text as role",
       [MARKER]
     )
     if (rows[0]?.value !== marker)
       throw new Error(
         "The pgTAP suite ended the runner's transaction (a commit or rollback got past checkSuite): what it did may be committed on the stack — check it by hand"
+      )
+    if (opts.role !== undefined && rows[0]?.role !== opts.role)
+      throw new Error(
+        `The pgTAP suite ended as ${String(rows[0]?.role)}, not ${opts.role}: a role switch got past checkSuite`
       )
     const lines = (Array.isArray(results) ? results : [results]).flatMap(
       (result) =>
@@ -236,6 +331,60 @@ export async function runPgTap(url: string, sql: string): Promise<TapResult> {
     // сервер і так відкочує транзакцію клієнта, що від'єднався. Кінець
     // транзакції набором ловить позначка вище, а не цей виклик
     await client.query("ROLLBACK").catch(() => {})
+  }
+}
+
+/**
+ * Runs suite `sql` on a new client per suite and parses the text of every
+ * result row as TAP. `url` is the stack superuser. Without options the suite
+ * runs in the database of `url`; with `role` or `claims` the runner creates a
+ * run-tagged copy of `simetra_template`, runs the suite there and drops the
+ * copy. An SQL error of the suite rejects with the Postgres message; so does
+ * a suite that ended the runner's transaction or its role.
+ */
+export async function runPgTap(
+  url: string,
+  sql: string,
+  opts: PgTapOptions = {}
+): Promise<TapResult> {
+  if (opts.role === undefined && opts.claims === undefined)
+    return onClient(url, (client) => runSuite(client, sql))
+  // Перевірка до створення бази: відхилений набір не коштує копії шаблону
+  checkSuite(sql, { role: opts.role !== undefined })
+  const name = testDatabaseName("pgtap")
+  const admin = new pg.Client({ connectionString: url })
+  await admin.connect()
+  try {
+    // Копію створює й видаляє суперкористувач: до шаблону з
+    // `datallowconn = false` раннер не під'єднується, а `TEMPLATE` його
+    // копіює без з'єднання
+    await admin.query(
+      `CREATE DATABASE ${quoteIdent(name)} TEMPLATE simetra_template`
+    )
+    const target = new URL(url)
+    target.pathname = `/${name}`
+    return await onClient(target.toString(), (client) =>
+      runSuite(client, sql, opts)
+    )
+  } finally {
+    // `FORCE` — на випадок бекенда клієнта набору, що ще не завершився після
+    // обірваного з'єднання: копія — лише цього раннера
+    await admin.query(
+      `DROP DATABASE IF EXISTS ${quoteIdent(name)} WITH (FORCE)`
+    )
+    await admin.end()
+  }
+}
+
+async function onClient<T>(
+  url: string,
+  fn: (client: pg.Client) => Promise<T>
+): Promise<T> {
+  const client = new pg.Client({ connectionString: url })
+  await client.connect()
+  try {
+    return await fn(client)
+  } finally {
     await client.end()
   }
 }

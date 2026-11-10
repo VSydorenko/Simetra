@@ -116,7 +116,12 @@ const ROLE_SWITCH_EXCEPTIONS: Exception[] = [
   {
     file: "packages/simetra/test/db/pgtap.ts",
     reason:
-      "the runner's own marker set_config($1 and the forms it refuses inside a suite",
+      "the runner's own marker and claims set_config($1, SET LOCAL ROLE of the suite's request role, and the forms it refuses inside a suite",
+  },
+  {
+    file: "packages/simetra/test/db/pgtap.test.ts",
+    reason:
+      "the statement order of the runner and the role switches it refuses inside a suite",
   },
   // Продовий SQL з власних спек
   {

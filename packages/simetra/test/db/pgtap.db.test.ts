@@ -4,8 +4,8 @@ import { existsSync, readdirSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { describe, expect, it } from "vitest"
-import { testSuperuserUrl } from "./connection"
-import { runPgTap } from "./pgtap"
+import { testRoleFor, testSuperuserUrl } from "./connection"
+import { runPgTap, suiteOptions } from "./pgtap"
 import { testProvider } from "./profile"
 
 const provider = testProvider()
@@ -26,14 +26,14 @@ describe(`pgTAP suites of the ${provider} stack`, () => {
     it.skip("none here: `supabase test db` checks the Supabase base state", () => {})
 
   it.each(suites)("%s", async (file) => {
-    // Базовий стан — у базі `postgres` (кластерні факти й
+    const sql = readFileSync(join(dir, file), "utf8")
+    const opts = suiteOptions(sql, testRoleFor)
+    // Набір із заголовком ролі раннер веде в тегованій копії шаблону сам;
+    // базовий стан — у базі `postgres` (кластерні факти й
     // `simetra.environment` стоять там), а не в базі тестів профілю
     const url = new URL(testSuperuserUrl())
-    url.pathname = "/postgres"
-    const result = await runPgTap(
-      url.toString(),
-      readFileSync(join(dir, file), "utf8")
-    )
+    if (opts === undefined) url.pathname = "/postgres"
+    const result = await runPgTap(url.toString(), sql, opts)
 
     expect(result.failed).toEqual([])
     expect(result.bailOut).toBeNull()
