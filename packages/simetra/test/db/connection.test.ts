@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs"
+import pg from "pg"
 import {
   PROVIDER_OWNER_ROLES,
   RIGHTS_MAINTENANCE_SETTING,
@@ -29,6 +30,7 @@ import {
   testOwnerLoginUrl,
   testRoleName,
   testSuperuserUrl,
+  withRollback,
   withSessionOptions,
 } from "./connection"
 import { PROVIDER_ENV, TEST_STACKS } from "./profile"
@@ -454,5 +456,50 @@ describe("role drift checks", () => {
       undefined
     )
     expect(busy.sql).toEqual([])
+  })
+})
+
+describe("withRollback", () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  // Підставний `pg.Client`: стартова роль — власник, а перед відкатом поточна
+  // роль — суперкористувач (дрейф)
+  const driftingClient = (): string[] => {
+    const sql: string[] = []
+    vi.spyOn(pg.Client.prototype, "connect").mockResolvedValue(undefined)
+    vi.spyOn(pg.Client.prototype, "end").mockResolvedValue(undefined)
+    vi.spyOn(pg.Client.prototype, "query").mockImplementation((async (
+      text: string
+    ) => {
+      sql.push(text)
+      if (text.startsWith("SELECT current_user AS role, rolsuper"))
+        return { rows: [{ role: "simetra_owner", superuser: false }] }
+      if (text.startsWith("SELECT NOT rolsuper"))
+        return { rows: [{ ok: false }] }
+      if (text.startsWith("SELECT current_user"))
+        return { rows: [{ role: "simetra_owner" }] }
+      return { rows: [] }
+    }) as never)
+    return sql
+  }
+
+  it("fails a successful fn whose transaction ends as a superuser", async () => {
+    const sql = driftingClient()
+    await expect(
+      withRollback(async () => 1, "postgresql://u@h/db")
+    ).rejects.toThrow(/ends as a superuser/)
+    expect(sql).toContain("ROLLBACK")
+  })
+
+  it("rethrows the error of a failed fn, not the drift", async () => {
+    driftingClient()
+    await expect(
+      withRollback(
+        () => Promise.reject(new Error("root cause")),
+        "postgresql://u@h/db"
+      )
+    ).rejects.toThrow("root cause")
   })
 })
