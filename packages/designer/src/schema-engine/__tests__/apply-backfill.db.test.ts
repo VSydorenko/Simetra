@@ -121,6 +121,34 @@ const ledgerRows = async (url: string) =>
   )[0]!.n
 
 describe.concurrent("apply backfill", () => {
+  // Таблиця виду з атрибутом `note` і підпискою на запис
+  const party = (over: Json = {}) =>
+    catalog("Party", {
+      id: uuid(9001),
+      attributes: [
+        attribute("note", {
+          id: uuid(9002),
+          type: "String",
+          length: 20,
+          ...over,
+        }),
+      ],
+    })
+  const subscription = {
+    "event-subscriptions/PartyWritten/PartyWritten.meta.json": {
+      id: uuid(9020),
+      kind: "EventSubscription",
+      name: "PartyWritten",
+      physicalName: "party_written",
+      sources: [{ kind: "Catalog", name: "Party" }],
+      event: "onWrite",
+      handler: { schema: "app", name: "party_written" },
+    },
+    // Обробник лише перевіряє рядок (спека прав §5.3): спрацювання на
+    // заповненому значенні видно відмовою
+    "sql/app/party.sql": `CREATE FUNCTION app.party_written() RETURNS trigger LANGUAGE plpgsql VOLATILE SET search_path = '' AS $$ BEGIN IF NEW.note = 'n/a' THEN RAISE EXCEPTION 'party_written: fired on %', NEW.note; END IF; RETURN NEW; END $$;`,
+  }
+
   it("fills only the NULL values of an adopted table under its permission, with the shown triggers off", async () => {
     // І1, І10, І14, Р8: дані споживача — під дозволом за id кроку; порожній
     // рядок — наявне значення; показаний тригер вимкнено на час `UPDATE`
@@ -209,32 +237,6 @@ describe.concurrent("apply backfill", () => {
     // визначенням (функція кваліфікована схемою), тож не показаний і
     // підвищує версію заповненого рядка, а тригер підписки — тригер
     // користувача: вимкнений на заповненні й знову ввімкнений після
-    const party = (over: Json = {}) =>
-      catalog("Party", {
-        id: uuid(9001),
-        attributes: [
-          attribute("note", {
-            id: uuid(9002),
-            type: "String",
-            length: 20,
-            ...over,
-          }),
-        ],
-      })
-    const subscription = {
-      "event-subscriptions/PartyWritten/PartyWritten.meta.json": {
-        id: uuid(9020),
-        kind: "EventSubscription",
-        name: "PartyWritten",
-        physicalName: "party_written",
-        sources: [{ kind: "Catalog", name: "Party" }],
-        event: "onWrite",
-        handler: { schema: "app", name: "party_written" },
-      },
-      // Обробник лише перевіряє рядок (спека прав §5.3): спрацювання на
-      // заповненому значенні видно відмовою
-      "sql/app/party.sql": `CREATE FUNCTION app.party_written() RETURNS trigger LANGUAGE plpgsql VOLATILE SET search_path = '' AS $$ BEGIN IF NEW.note = 'n/a' THEN RAISE EXCEPTION 'party_written: fired on %', NEW.note; END IF; RETURN NEW; END $$;`,
-    }
     const before = await compiled({ [PARTY]: party(), ...subscription })
     const after = await compiled({
       [PARTY]: party({ required: true, defaultValue: "n/a" }),
@@ -282,6 +284,73 @@ describe.concurrent("apply backfill", () => {
       expect(BigInt(now[empty]!)).toBeGreaterThan(BigInt(was[empty]!))
       expect(BigInt(now[kept]!)).toBeGreaterThan(BigInt(was[kept]!))
       // Після кроку підписка знову ввімкнена
+      await expect(
+        query(url, "update app.party set note = 'n/a' where note = 'x'")
+      ).rejects.toThrow(/party_written: fired/)
+    })
+  })
+
+  it("re-enables a disabled subscription trigger in the engine block after the fill and before the version bump", async () => {
+    // Тригер моделі, вимкнений на живій базі, — дрейф: крок двигуна
+    // `ENABLE TRIGGER` повертає йому режим бажаної моделі (`O`) ще до блоку
+    // `versions`, тож звірка тригерів кроку підвищення бачить `O` і хибного
+    // `apply.target-changed` не дає
+    const before = await compiled({ [PARTY]: party(), ...subscription })
+    const after = await compiled({
+      [PARTY]: party({ required: true, defaultValue: "n/a" }),
+      ...subscription,
+    })
+    const [empty, kept] = [uuid(9012), uuid(9013)]
+    const modes = (url: string) =>
+      query<{ name: string; enabled: string }>(
+        url,
+        `select tgname::text as name, tgenabled::text as enabled from pg_trigger
+         where tgrelid = 'app.party'::regclass and not tgisinternal order by tgname`
+      )
+    await inTarget(EMPTY, async (url) => {
+      await establish(url, before)
+      await query(
+        url,
+        `insert into app.party (id, note) values ('${empty}', null), ('${kept}', 'x');
+         alter table app.party disable trigger party_written;`
+      )
+      const was = await modes(url)
+      expect(was).toContainEqual({ name: "party_written", enabled: "D" })
+      const versions = async () =>
+        Object.fromEntries(
+          (
+            await query<{ id: string; version: string }>(
+              url,
+              "select id, version::text from app.party"
+            )
+          ).map((r) => [r.id, r.version])
+        )
+      const old = await versions()
+      const artifact = planned(await plan(url, after))
+      const fill = backfillOf(artifact)
+      // Вимкнений тригер не показано: крок заповнення його не вимикає
+      expect(fill.backfill!.triggers).toEqual([])
+      const at = (sql: string) => artifact.steps.findIndex((s) => s.sql === sql)
+      const enable = at(
+        'ALTER TABLE "app"."party" ENABLE TRIGGER "party_written"'
+      )
+      expect(artifact.steps[enable]?.origin).toBe("engine")
+      expect(enable).toBeGreaterThan(artifact.steps.indexOf(fill))
+      expect(enable).toBeLessThan(
+        artifact.steps.findIndex((s) => s.origin === "versions")
+      )
+      const outcome = await apply(url, artifact, after)
+      // Без діагностик, зокрема без `apply.target-changed`
+      expect(outcome.diagnostics).toEqual([])
+      expect(outcome).toMatchObject({
+        status: "committed",
+        backfills: [{ step: fill.id, rows: 1, rowsAtPlan: 1 }],
+      })
+      const now = await versions()
+      expect(BigInt(now[empty]!)).toBeGreaterThan(BigInt(old[empty]!))
+      expect(BigInt(now[kept]!)).toBeGreaterThan(BigInt(old[kept]!))
+      // Кожен тригер — у режимі бажаної моделі `O`, підписка теж
+      expect(await modes(url)).toEqual(was.map((t) => ({ ...t, enabled: "O" })))
       await expect(
         query(url, "update app.party set note = 'n/a' where note = 'x'")
       ).rejects.toThrow(/party_written: fired/)
@@ -610,18 +679,6 @@ CREATE CONSTRAINT TRIGGER fills_rls AFTER INSERT ON app.fills DEFERRABLE INITIAL
   it("refuses a platform trigger disabled before the fill", async () => {
     // І16: вимкнений тригер механіки (прийнятий дрейф) пропустив би підвищення
     // версії заповненого рядка, а в режимі `D` його ніхто не ввімкне
-    const party = (over: Json = {}) =>
-      catalog("Party", {
-        id: uuid(9001),
-        attributes: [
-          attribute("note", {
-            id: uuid(9002),
-            type: "String",
-            length: 20,
-            ...over,
-          }),
-        ],
-      })
     const before = await compiled({ [PARTY]: party() })
     const after = await compiled({
       [PARTY]: party({ required: true, defaultValue: "n/a" }),
