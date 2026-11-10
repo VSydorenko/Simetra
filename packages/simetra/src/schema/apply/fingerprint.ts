@@ -565,7 +565,12 @@ ${FINGERPRINT_SECTIONS.map((s) => `  ${digest(SECTION_ROWS[s])} as "${s}"`).join
 export interface ObjectOwner {
   object: string
   owner: string
-  /** Роль сесії — член ролі-власника (`pg_has_role … MEMBER`): може змінити чи зняти об'єкт. */
+  /**
+   * Роль сесії має привілеї ролі-власника (`pg_has_role … USAGE`): може
+   * змінити чи зняти об'єкт. Членства без успадкування (`MEMBER`) замало:
+   * Postgres перевіряє власника `ALTER`/`DROP` через `has_privs_of_role`, а
+   * роль `NOINHERIT` (`simetra_owner`) привілеїв простого члена не отримує.
+   */
   member: boolean
 }
 
@@ -591,7 +596,7 @@ export async function readOwners(
     `with${SCOPE_CTES}
     select format('%s %s', o.kind, o.ident) as object,
       pg_get_userbyid(o.owner) as owner,
-      pg_has_role(current_user, o.owner, 'MEMBER') as member
+      pg_has_role(current_user, o.owner, 'USAGE') as member
     from (${OWNED_OBJECTS}) o
     where not o.dependent and o.kind <> 'extension'
       and not exists (

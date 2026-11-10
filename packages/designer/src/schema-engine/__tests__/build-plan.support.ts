@@ -85,6 +85,11 @@ export const ANON = requiredRole("anonymous")
 export const OWNER = testRoleName("build_plan_owner")
 /** Роль, членом якої роль сесії не є: об'єкт такого власника план не зніме. */
 export const STRANGER = testRoleName("build_plan_stranger")
+/**
+ * Роль, членом якої роль сесії є без успадкування (`INHERIT FALSE`): `ALTER`
+ * і `DROP` її об'єктів вимагають привілеїв ролі, а не лише членства.
+ */
+export const NOINHERIT_OWNER = testRoleName("build_plan_noinherit")
 
 /** Роль-група, членом якої є роль API: її привілеї роль API успадковує. */
 export const WRITERS = testRoleName("build_plan_writers")
@@ -107,11 +112,12 @@ export function useBuildPlanRoles(): void {
       testSuperuserUrl(),
       `create role ${OWNER} nologin; grant ${OWNER} to ${SESSION_OWNER} with inherit true;
        create role ${STRANGER} nologin;
+       create role ${NOINHERIT_OWNER} nologin; grant ${NOINHERIT_OWNER} to ${SESSION_OWNER} with inherit false;
        create role ${WRITERS} nologin; grant ${WRITERS} to ${USER};
        create role ${COPIER} login password '${COPIER_PASSWORD}';`
     )
   )
-  afterAll(() => dropRoles(OWNER, STRANGER, WRITERS, COPIER))
+  afterAll(() => dropRoles(OWNER, STRANGER, NOINHERIT_OWNER, WRITERS, COPIER))
 }
 
 /**

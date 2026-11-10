@@ -29,6 +29,7 @@ import {
   establish,
   inTarget,
   ANON,
+  NOINHERIT_OWNER,
   OWNER,
   party,
   PARTY,
@@ -324,6 +325,30 @@ describe.concurrent("buildPlan", () => {
       ).toEqual({
         count: 1,
         objects: `relation app.stray (owner ${STRANGER}, not a role ${SESSION_OWNER} is a member of)`,
+      })
+    })
+  })
+
+  it("refuses to drop an object of a role the session is a member of without inheritance", async () => {
+    const model = await compiled({ [PARTY]: party() })
+    await inTarget(EMPTY, async (url) => {
+      await establish(url, model)
+      // Членство без успадкування не дає прав власника: `DROP` упав би на
+      // застосуванні з «must be owner», тож план відмовляє наперед
+      await query(
+        asSuperuser(url),
+        `create table app.stray (id int);
+         alter table app.stray owner to ${NOINHERIT_OWNER};`
+      )
+      const outcome = await plan(url, model)
+      expect(outcome.status).toBe("refused")
+      expect(errors(outcome)).toEqual(["plan.owner-mismatch"])
+      expect(
+        outcome.diagnostics.find((d) => d.code === "plan.owner-mismatch")
+          ?.params
+      ).toEqual({
+        count: 1,
+        objects: `relation app.stray (owner ${NOINHERIT_OWNER}, not a role ${SESSION_OWNER} is a member of)`,
       })
     })
   })
