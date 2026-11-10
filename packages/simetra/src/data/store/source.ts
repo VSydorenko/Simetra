@@ -163,8 +163,10 @@ const retryReason = (item: CoreReadItem): string | undefined =>
  * is `command.internal` of that part.
  *
  * Parts the server did not run (`batch-aborted` after a failed part,
- * `batch-budget`) go again as a next request through the limiter, the first
- * after a pause that doubles every round. `response-too-large` is not
+ * `batch-budget`) go again through the limiter: `batch-aborted` parts in a
+ * next request, the first after a pause that doubles every round; a
+ * `batch-budget` part in a request of its own, where no other part shares
+ * the budget. `response-too-large` is not
  * retried: the caller halves its keys.
  */
 export function createCoreSource(
@@ -231,11 +233,18 @@ export function createCoreSource(
     out: CoreReadItem[]
   ): Promise<void> => {
     let pending = slots
+    // Частини, що отримали `batch-budget`: наступного разу кожна йде
+    // окремим запитом. Сама в запиті частина не ділить бюджет ні з ким і
+    // `batch-budget` вже не отримає; той самий склад запиту знову не вмістив
+    // би її (резерв невиконаних частин) чи пропускав би по одній за прохід.
+    const apart = new Set<number>()
     for (let round = 0; pending.length > 0; round++) {
       const requests: number[][] = []
-      for (let i = 0; i < pending.length; i += READ_BATCH_MAX) {
-        requests.push(pending.slice(i, i + READ_BATCH_MAX))
+      const together = pending.filter((slot) => !apart.has(slot))
+      for (let i = 0; i < together.length; i += READ_BATCH_MAX) {
+        requests.push(together.slice(i, i + READ_BATCH_MAX))
       }
+      for (const slot of pending) if (apart.has(slot)) requests.push([slot])
       const again: number[] = []
       let aborted = false
       await Promise.all(
@@ -250,6 +259,7 @@ export function createCoreSource(
             const reason = retryReason(items[i]!)
             if (reason === undefined) return
             again.push(slot)
+            if (reason === BATCH_BUDGET) apart.add(slot)
             aborted ||= reason === BATCH_ABORTED
           })
         })
