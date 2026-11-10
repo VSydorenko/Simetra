@@ -300,12 +300,12 @@ export function createCoreSource(
 export async function readOne(
   source: CoreSource,
   query: RowsQuery
-): Promise<ReadRows> {
+): Promise<ReadRows & { epoch: string | null }> {
   const [item] = (await source.read([query])).items
   if (item === undefined || !item.ok) {
     throw new CommandFailure(item?.error ?? { code: "command.internal" })
   }
-  return item.rows
+  return { ...item.rows, epoch: item.epoch }
 }
 
 /**
@@ -329,7 +329,7 @@ export function rowFromMarker(
       values[attribute.name] = marker.copies[attribute.name]
     }
   }
-  return { key: held.key, version: held.version, values }
+  return { ...held, values }
 }
 
 /** The most keys one list request by keys may carry. */
@@ -354,14 +354,15 @@ const isTooLarge = (error: CommandError): boolean =>
  */
 export function serverRow(
   entry: CatalogEntry,
-  values: Record<string, unknown>
+  values: Record<string, unknown>,
+  versionEpoch: string | null
 ): ServerRow {
   const key = values[entry.keyName]
   const version = values[entry.versionName]
   if (typeof key !== "string" || typeof version !== "number") {
     throw new CommandFailure({ code: "command.internal" })
   }
-  return { key, version, values }
+  return { key, version, versionEpoch, values }
 }
 
 /**
@@ -379,8 +380,8 @@ export async function readKeys(
 ): Promise<ServerRow[]> {
   // Об'єкт — із запису каталогу: окремий параметр міг би з ним розійтися.
   const object: MetadataRef = { kind: entry.kind, name: entry.name }
-  const toRows = (result: ReadRows) =>
-    result.rows.map((values) => serverRow(entry, values))
+  const toRows = (result: ReadRows, epoch: string | null) =>
+    result.rows.map((values) => serverRow(entry, values, epoch))
   // Усі частини — одним викликом: запити по `READ_BATCH_MAX` і слот на запит
   // вирішує джерело. Перша відмова за порядком частин — відмова читання.
   const readAll = async (queries: readonly RowsQuery[]) => {
@@ -394,7 +395,9 @@ export async function readKeys(
   if (options.form === "card") {
     // Форма картки читає один ключ: ділити нічого, понад бюджет — відмова.
     const items = await readAll(keys.map((id) => ({ object, id })))
-    return items.flatMap((item) => (item.ok ? toRows(item.rows) : []))
+    return items.flatMap((item) =>
+      item.ok ? toRows(item.rows, item.epoch) : []
+    )
   }
   const { keysPerRequest } = options
   if (
@@ -424,7 +427,7 @@ export async function readKeys(
     for (const [at, item] of items.entries()) {
       const chunk = chunks[at]!
       if (item.ok) {
-        rows[at] = toRows(item.rows)
+        rows[at] = toRows(item.rows, item.epoch)
       } else if (isTooLarge(item.error) && chunk.length > 1) {
         const half = Math.ceil(chunk.length / 2)
         halved.push(at)

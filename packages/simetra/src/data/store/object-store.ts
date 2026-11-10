@@ -5,20 +5,35 @@ import type { Scope, Session } from "./session"
 import type { CoreLogEntry, Key, ObjectName, ServerRow, Values } from "./types"
 
 /**
+ * Two version epochs that cannot be ordered: both non-empty and different
+ * (P4-B plan B1c, Р5, Р6). `null` or absent — a replica or a database without
+ * an epoch — compares with any epoch by version as usual.
+ */
+export function differentEpochs(
+  a: string | null | undefined,
+  b: string | null | undefined
+): boolean {
+  return a != null && b != null && a !== b
+}
+
+/**
  * The version rule (P4-B spec §6.2 rule 1, Рд24) — one function for every
  * write path. Returns `undefined` when `incoming` is older; an equal or newer
  * version merges partially: a missing (lazy) field stays, an explicit `null`
- * is written.
+ * is written. A row of another non-empty epoch replaces the current one
+ * whatever its version; a `null` epoch keeps the epoch of the current row.
  */
 export function mergeVersioned(
   current: ServerRow | undefined,
   incoming: ServerRow
 ): ServerRow | undefined {
   if (current === undefined) return incoming
-  if (incoming.version < current.version) return undefined
+  const switched = differentEpochs(current.versionEpoch, incoming.versionEpoch)
+  if (!switched && incoming.version < current.version) return undefined
   return {
     key: current.key,
     version: incoming.version,
+    versionEpoch: incoming.versionEpoch ?? current.versionEpoch ?? null,
     values: { ...current.values, ...incoming.values },
   }
 }
@@ -49,11 +64,15 @@ export interface RowEntry {
   row: ServerRow | undefined
   scope: string | null
   version: number
+  /** The epoch `version` belongs to; `null` — the database has none. */
+  versionEpoch: string | null
   /** The largest read epoch of an accepted write. */
   writtenEpoch: number
   owners: number
   /** The row version each lazy field was read with. */
   lazyVersions: Map<string, number>
+  /** The version epoch each lazy field was read in; a field not listed — `null`. */
+  lazyEpochs: Map<string, string>
   /** `divergent` — the remove came from a read older than the last write (П15). */
   removed?: { epoch: number; divergent: boolean }
   /**
@@ -70,6 +89,18 @@ export interface RowEntry {
     disconnect?: Map<string, number>
     seen?: { epoch: number }
   }
+}
+
+/**
+ * A lazy field read with an older row version, or in another version epoch
+ * (versions of different epochs are not ordered); a field never read counts
+ * as older.
+ */
+export function lazyFieldStale(e: RowEntry, field: string): boolean {
+  return (
+    differentEpochs(e.lazyEpochs.get(field), e.versionEpoch) ||
+    (e.lazyVersions.get(field) ?? -Infinity) < e.version
+  )
 }
 
 /**
@@ -187,8 +218,10 @@ export function createObjectStore(options: {
   function setLazy(e: RowEntry, row: ServerRow, lazyRead: boolean) {
     if (!lazyRead) return
     for (const field of lazyFields) {
-      if (Object.hasOwn(row.values, field))
-        e.lazyVersions.set(field, row.version)
+      if (!Object.hasOwn(row.values, field)) continue
+      e.lazyVersions.set(field, row.version)
+      if (row.versionEpoch != null) e.lazyEpochs.set(field, row.versionEpoch)
+      else e.lazyEpochs.delete(field)
     }
   }
 
@@ -221,9 +254,11 @@ export function createObjectStore(options: {
       row,
       scope: scopeId,
       version: row.version,
+      versionEpoch: row.versionEpoch ?? null,
       writtenEpoch: readEpoch,
       owners: 0,
       lazyVersions: new Map(),
+      lazyEpochs: new Map(),
       stale: {},
     }
     setLazy(e, row, lazyRead)
@@ -292,7 +327,10 @@ export function createObjectStore(options: {
       if (e.removed !== undefined) {
         // Значення стерто, тож зливати нема з чим; версію рядка після позначки
         // меншою за пам'ятну все одно не показуємо підтвердженою.
-        if (row.version < e.version) {
+        if (
+          row.version < e.version &&
+          !differentEpochs(e.versionEpoch, row.versionEpoch)
+        ) {
           e.stale.minVersion = { v: e.version, epoch: epochs.next() }
           tail.add(row.key)
           result = "stale-inserted"
@@ -310,6 +348,7 @@ export function createObjectStore(options: {
         e.row = merged
       }
       e.version = e.row.version
+      e.versionEpoch = e.row.versionEpoch ?? null
       if (incomingScope !== undefined) e.scope = incomingScope
       e.writtenEpoch = Math.max(e.writtenEpoch, readEpoch)
       setLazy(e, row, lazyRead)
@@ -343,6 +382,7 @@ export function createObjectStore(options: {
       }
       e.row = undefined
       e.lazyVersions.clear()
+      e.lazyEpochs.clear()
       e.removed = { epoch: epochs.next(), divergent }
     },
 

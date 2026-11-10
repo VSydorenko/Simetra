@@ -1,5 +1,5 @@
 import { keyId } from "./epoch"
-import { visibleRow, type RowEntry } from "./object-store"
+import { lazyFieldStale, visibleRow, type RowEntry } from "./object-store"
 import type {
   CloseReason,
   Key,
@@ -98,9 +98,7 @@ export function computeRowView(
     shown === undefined
       ? NO_FIELDS
       : lazyFields.filter(
-          (f) =>
-            Object.hasOwn(shown, f) &&
-            (e.lazyVersions.get(f) ?? -Infinity) < e.version
+          (f) => Object.hasOwn(shown, f) && lazyFieldStale(e, f)
         )
   const base = prev?.state === "removed" ? undefined : prev
   const nextValues =

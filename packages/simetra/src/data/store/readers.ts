@@ -52,6 +52,7 @@ export interface StoreOps {
     section: string,
     lines: readonly SectionLine[],
     ownerVersion: number,
+    versionEpoch: string | null,
     readEpoch: number,
     ownerScope: OwnerScope
   ): void
@@ -238,7 +239,7 @@ export async function fetchFull(
   const o = form.object
   const spec = form.spec as Extract<ViewSpec, { kind: "full" }>
   const orderBy = spec.orderBy ?? []
-  const pages: Record<string, unknown>[] = []
+  const pages: { values: Record<string, unknown>; epoch: string | null }[] = []
   let last: Record<string, unknown> | undefined
   // Сторінки — поза сховищем до кінця вибірки; зупинка лише на сторінці
   // без `more` і коротшій за `limit` (§6.1).
@@ -265,7 +266,7 @@ export async function fetchFull(
     // Звільнений чи перезапитаний вигляд далі не читає: наступна сторінка
     // була б запитом, результат якого нікуди не запишеться.
     if (!token.valid) return undefined
-    pages.push(...page.rows)
+    pages.push(...page.rows.map((values) => ({ values, epoch: page.epoch })))
     if (pages.length > limits.fullLimit) break
     const tail = page.rows.at(-1)
     if (tail === undefined) break
@@ -273,7 +274,7 @@ export async function fetchFull(
     last = tail
   }
   return {
-    rows: pages.map((values) => serverRow(o.entry, values)),
+    rows: pages.map((p) => serverRow(o.entry, p.values, p.epoch)),
     over: pages.length > limits.fullLimit,
   }
 }
@@ -423,6 +424,7 @@ async function readSection(
       spec.section,
       lines,
       result.ownerVersion,
+      result.epoch,
       readEpoch,
       header === undefined ? "unknown" : header.scope
     )

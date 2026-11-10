@@ -6,6 +6,7 @@ import {
 import { DataError } from "../errors"
 import { formOf, type Form, type ObjectState } from "./forms"
 import { refsOf } from "./include"
+import { lazyFieldStale } from "./object-store"
 import { diffOwn, readForm, type ReaderTarget, type StoreOps } from "./readers"
 import type { Session } from "./session"
 import {
@@ -245,9 +246,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
     if (e.stale.seen !== undefined) return false
     const values = e.row.values
     return o.lazyFields.some(
-      (f) =>
-        !Object.hasOwn(values, f) ||
-        (e.lazyVersions.get(f) ?? -Infinity) < e.version
+      (f) => !Object.hasOwn(values, f) || lazyFieldStale(e, f)
     )
   }
 

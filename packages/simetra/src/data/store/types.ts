@@ -14,6 +14,11 @@ export type Values = Readonly<Record<string, unknown>>
 export interface ServerRow {
   readonly key: Key
   readonly version: number
+  /**
+   * The row version epoch of the database that answered (P4-B plan B1c, Р5);
+   * absent or `null` — the database has none, so versions compare as usual.
+   */
+  readonly versionEpoch?: string | null
   readonly values: Values
 }
 

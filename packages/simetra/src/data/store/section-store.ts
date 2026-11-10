@@ -1,4 +1,5 @@
 import { keyId, pairId } from "./epoch"
+import { differentEpochs } from "./object-store"
 import type { ObjectStore } from "./object-store"
 import type { Scope, Session } from "./session"
 import type { Key, ObjectName, SectionLine } from "./types"
@@ -23,6 +24,7 @@ export interface SectionStore {
     section: string,
     lines: readonly SectionLine[],
     ownerVersion: number,
+    versionEpoch: string | null,
     readEpoch: number,
     ownerScope: OwnerScope,
     source: "owner-section" | "other"
@@ -53,7 +55,12 @@ export function createSectionStore(options: {
   const owners = new Map<Key, Map<string, SectionEntry>>()
   // Найбільша бачена `ownerVersion` власника; живе, доки живі його ТЧ:
   // після clearOwner і purge стару відповідь відкидають removed і надгробки.
-  const ownerVersions = new Map<Key, number>()
+  // Версії різних непорожніх епох не впорядковані (Р5): запис несе епоху,
+  // з якою його прочитано.
+  const ownerVersions = new Map<
+    Key,
+    { version: number; epoch: string | null }
+  >()
 
   session.onClose(() => {
     owners.clear()
@@ -71,6 +78,7 @@ export function createSectionStore(options: {
   function stale(
     owner: Key,
     ownerVersion: number,
+    versionEpoch: string | null,
     readEpoch: number,
     ownerScope: OwnerScope
   ): boolean {
@@ -103,7 +111,11 @@ export function createSectionStore(options: {
     // ТЧ не пишуться за будь-якої епохи читання, доки слот не зніме
     // перечитування шапки (П15) — читання ТЧ шапки не відновлює.
     if (e?.removed !== undefined) return true
-    return ownerVersion < (ownerVersions.get(owner) ?? -Infinity)
+    const seen = ownerVersions.get(owner)
+    if (seen === undefined) return false
+    // Нова непорожня епоха заміняє запис старої незалежно від версії.
+    if (differentEpochs(seen.epoch, versionEpoch)) return false
+    return ownerVersion < seen.version
   }
 
   return {
@@ -113,12 +125,14 @@ export function createSectionStore(options: {
       section,
       lines,
       ownerVersion,
+      versionEpoch,
       readEpoch,
       ownerScope,
       source
     ) {
       scope.assert()
-      if (stale(owner, ownerVersion, readEpoch, ownerScope)) return "rejected"
+      if (stale(owner, ownerVersion, versionEpoch, readEpoch, ownerScope))
+        return "rejected"
       const sections = owners.get(owner) ?? new Map<string, SectionEntry>()
       sections.set(section, {
         lines,
@@ -127,9 +141,16 @@ export function createSectionStore(options: {
         scope: ownerScope,
       })
       owners.set(owner, sections)
+      const seen = ownerVersions.get(owner)
       ownerVersions.set(
         owner,
-        Math.max(ownerVersions.get(owner) ?? ownerVersion, ownerVersion)
+        seen === undefined || differentEpochs(seen.epoch, versionEpoch)
+          ? { version: ownerVersion, epoch: versionEpoch }
+          : {
+              version: Math.max(seen.version, ownerVersion),
+              // `null` останньої баченої епохи не змінює (Р6).
+              epoch: versionEpoch ?? seen.epoch,
+            }
       )
       return "written"
     },

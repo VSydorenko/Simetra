@@ -140,8 +140,20 @@ describe("readKeys", () => {
     expect(row).toEqual({
       key: key(1),
       version,
+      versionEpoch: null,
       values: { ref: key(1), version, org: S, title: "x" },
     })
+  })
+
+  it("carries the epoch of the answer into the ServerRow", async () => {
+    const epoch = "c".repeat(64)
+    const fake = createFakeSource({ objects: OBJECTS, epoch })
+    const { source } = setup({ fake })
+    seedTasks(fake, 1)
+    const [row] = await readKeys(source, task, [key(1)], {
+      keysPerRequest: 200,
+    })
+    expect(row?.versionEpoch).toBe(epoch)
   })
 
   it("returns no row for an absent key and sends nothing for no keys", async () => {

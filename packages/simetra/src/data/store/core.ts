@@ -291,6 +291,7 @@ export function createCore(options: {
       section,
       lines,
       ownerVersion,
+      versionEpoch,
       readEpoch,
       ownerScope
     ) {
@@ -300,6 +301,7 @@ export function createCore(options: {
         section,
         lines,
         ownerVersion,
+        versionEpoch,
         readEpoch,
         ownerScope,
         "owner-section"
