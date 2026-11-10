@@ -384,9 +384,8 @@ export function createCore(options: {
             (scope) => {
               // Відкинута відповідь (Р7, Р12) не пише нічого; без автоповтору
               // (§6.3) ключі перечитує вигляд.
-              for (const epoch of read.epochs) {
-                if (session.acceptEpoch(epoch, readEpoch) === "discard") return
-              }
+              if (session.acceptEpochs(read.epochs, readEpoch) === "discard")
+                return
               const got = new Set<Key>()
               for (const row of rows) {
                 got.add(row.key)

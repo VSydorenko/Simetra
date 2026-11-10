@@ -75,6 +75,16 @@ export interface Session {
    */
   acceptEpoch(epoch: string | null, startEpoch: number): "apply" | "discard"
   /**
+   * The gate of one answer that carries several epochs (a read of several
+   * requests): `acceptEpoch` for each, then the answer is discarded when any
+   * of its epochs is abandoned — also one this answer's own switch left, so
+   * the result does not depend on the order the epochs arrived in (Р12).
+   */
+  acceptEpochs(
+    epochs: Iterable<string | null>,
+    startEpoch: number
+  ): "apply" | "discard"
+  /**
    * Called inside the `commit` of a switch with the epoch it left, before the
    * answer that caused it is written.
    */
@@ -164,6 +174,32 @@ export function createSession(options: {
     passDiscarded = false
   }
 
+  function acceptEpoch(
+    epoch: string | null,
+    startEpoch: number
+  ): "apply" | "discard" {
+    if (!inCommit) throw new Error("acceptEpoch outside commit")
+    if (unavailable) return "discard"
+    if (epoch === null || epoch === current) return apply()
+    if (current === null) {
+      // Перша непорожня епоха: `null`-відповіді до неї порівнювались як
+      // завжди (Р6), тож скидати нічого.
+      current = epoch
+      return apply()
+    }
+    // Відповідь покинутої епохи чи читання, що почалось до перемикання,
+    // не впорядкована з рядками поточної (Р7, Р12).
+    if (abandoned.has(epoch) || startEpoch < switchedAt)
+      return discard(startEpoch)
+    abandoned.add(current)
+    previous = current
+    current = epoch
+    switchedAt = epochs.next()
+    epochs.adopt(previous)
+    for (const listener of switchListeners) listener(previous)
+    return apply()
+  }
+
   const sessionToken: GenerationToken = {
     get valid() {
       return closed === undefined && !closing
@@ -216,27 +252,18 @@ export function createSession(options: {
     },
     epochs,
     versions,
-    acceptEpoch(epoch, startEpoch) {
-      if (!inCommit) throw new Error("acceptEpoch outside commit")
-      if (unavailable) return "discard"
-      if (epoch === null || epoch === current) return apply()
-      if (current === null) {
-        // Перша непорожня епоха: `null`-відповіді до неї порівнювались як
-        // завжди (Р6), тож скидати нічого.
-        current = epoch
-        return apply()
+    acceptEpoch,
+    acceptEpochs(answer, startEpoch) {
+      const seen: (string | null)[] = []
+      for (const epoch of answer) {
+        if (acceptEpoch(epoch, startEpoch) === "discard") return "discard"
+        seen.push(epoch)
       }
-      // Відповідь покинутої епохи чи читання, що почалось до перемикання,
-      // не впорядкована з рядками поточної (Р7, Р12).
-      if (abandoned.has(epoch) || startEpoch < switchedAt)
+      // Пізня частина покинутої епохи могла прийти після тієї, що її
+      // покинула: перевірка за множиною, а не за порядком приходу.
+      if (seen.some((epoch) => epoch !== null && abandoned.has(epoch)))
         return discard(startEpoch)
-      abandoned.add(current)
-      previous = current
-      current = epoch
-      switchedAt = epochs.next()
-      epochs.adopt(previous)
-      for (const listener of switchListeners) listener(previous)
-      return apply()
+      return "apply"
     },
     onSwitch(listener) {
       if (closed === undefined) switchListeners.push(listener)

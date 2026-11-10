@@ -73,7 +73,7 @@ export interface StoreOps {
 
 /** What the readers need from the core. */
 export interface ReaderContext {
-  readonly session: Pick<Session, "acceptEpoch">
+  readonly session: Pick<Session, "acceptEpoch" | "acceptEpochs">
   readonly source: CoreSource
   readonly limits: CoreLimits
   readonly strict: boolean
@@ -105,8 +105,8 @@ export type Apply = (scope: Scope) => boolean
 
 /**
  * Runs `read` over a source that records the epoch of every answer; the
- * returned `Apply` writes only after the session accepted each of them, in
- * the order they arrived (`acceptEpoch` — the single check before a write).
+ * returned `Apply` writes only after the session accepted each of them and
+ * none is abandoned (`acceptEpochs` — the single check before a write).
  */
 export async function gated<C extends ReaderContext>(
   ctx: C,
@@ -116,9 +116,7 @@ export async function gated<C extends ReaderContext>(
   const { source, epochs } = tracked(ctx.source)
   const write = await read({ ...ctx, source })
   return (scope) => {
-    for (const epoch of epochs) {
-      if (ctx.session.acceptEpoch(epoch, readEpoch) === "discard") return false
-    }
+    if (ctx.session.acceptEpochs(epochs, readEpoch) === "discard") return false
     write(scope)
     return true
   }

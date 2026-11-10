@@ -1,7 +1,13 @@
+import { READ_BATCH_MAX } from "simetra/model"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { coreInternals, createCore, inspectCore } from "../core"
 import { keyId } from "../epoch"
-import { createCoreSource, createReadLimiter } from "../source"
+import {
+  createCoreSource,
+  createReadLimiter,
+  tracked,
+  type CoreSource,
+} from "../source"
 import { DISCARD_PAUSE_MS, DISCARDS_MAX } from "../session"
 import { computeRowView } from "../snapshot"
 import type { ServerRow, ViewSpec } from "../types"
@@ -26,6 +32,7 @@ import { harness, K1, row, S, type Harness } from "./store-support"
 
 const EA = "a".repeat(64)
 const EB = "b".repeat(64)
+const EC = "c".repeat(64)
 const epoch = (n: number) => n.toString(16).padStart(64, "0")
 
 const inEpoch = (r: ServerRow, versionEpoch: string | null): ServerRow => ({
@@ -159,6 +166,70 @@ describe("acceptEpoch (Р6, Р7, Р12)", () => {
     expect(() => h.session.acceptEpoch(EA, 0)).toThrow(
       "acceptEpoch outside commit"
     )
+  })
+})
+
+describe("acceptEpochs: one answer of several epochs (Р12)", () => {
+  /** Джерело, що відповідає на кожне читання наступною епохою з `order`. */
+  const answering = (order: readonly (string | null)[]): CoreSource => {
+    let at = 0
+    return {
+      close: () => {},
+      read: async (parts) => ({
+        items: parts.map(() => ({
+          ok: true as const,
+          rows: { rows: [] },
+          epoch: order[at++] ?? null,
+        })),
+      }),
+    }
+  }
+
+  it("tracked A → B → A: the answer is discarded although B switched", async () => {
+    const h = harness()
+    accept(h, EA)
+    const start = h.now()
+    const read = tracked(answering([EA, EB, EA]))
+    for (let i = 0; i < 3; i++)
+      await read.source.read([
+        { object: { kind: "Catalog", name: "Task" }, id: key(1) },
+      ])
+    expect(h.write(() => h.session.acceptEpochs(read.epochs, start))).toBe(
+      "discard"
+    )
+    expect(h.session.versions.current()).toBe(EB)
+    // Покинута епоха лишається відкинутою й окремою відповіддю.
+    expect(accept(h, EA)).toBe("discard")
+  })
+
+  it("the order of the epochs does not change the outcome", () => {
+    for (const order of [
+      [EA, EB],
+      [EB, EA],
+      [EA, EB, EA],
+      [null, EA, EB],
+    ]) {
+      const h = harness()
+      accept(h, EA)
+      const start = h.now()
+      expect(h.write(() => h.session.acceptEpochs(order, start))).toBe(
+        "discard"
+      )
+    }
+  })
+
+  it("epochs of one answer that leave nothing abandoned apply", () => {
+    const h = harness()
+    accept(h, EA)
+    expect(h.write(() => h.session.acceptEpochs([EA, null, EA], h.now()))).toBe(
+      "apply"
+    )
+    // Перша непорожня епоха стає поточною без перемикання.
+    const fresh = harness()
+    expect(
+      fresh.write(() => fresh.session.acceptEpochs([null, EB], fresh.now()))
+    ).toBe("apply")
+    expect(fresh.session.versions.current()).toBe(EB)
   })
 })
 
@@ -413,6 +484,86 @@ describe("core: the epoch switch", () => {
       values: { title: "t1" },
     })
     other.unsubscribe()
+  })
+
+  const MANY = 2 * READ_BATCH_MAX + 1
+
+  /** Ядро з видимим списком MANY рядків в епосі A; ключ на частину. */
+  async function loadedMany() {
+    const h = setup({
+      mode: "manual",
+      limits: { revalidateIntervalMs: INTERVAL, keysPerRequest: 1 },
+    })
+    seed(h.fake, 1, MANY)
+    h.fake.epoch = EA
+    const handle = h.core.view(
+      keysView(...Array.from({ length: MANY }, (_, i) => i + 1))
+    )
+    const sub = watch(handle)
+    await deliver(h)
+    return { ...h, handle, sub }
+  }
+
+  /** Відповідає на запити утриманого читання по черзі, кожен — своєю епохою. */
+  async function answerRequests(
+    h: CoreHarness,
+    order: readonly (string | null)[]
+  ) {
+    await settle()
+    const requests = [...new Set(h.fake.pending.map((r) => r.log.request))]
+    expect(requests).toHaveLength(order.length)
+    for (const [i, epoch] of order.entries()) {
+      h.fake.epoch = epoch
+      while (h.fake.pending.some((r) => r.log.request === requests[i]))
+        h.fake.take((r) => r.log.request === requests[i]).answer()
+      await settle()
+    }
+  }
+
+  it("one read answered A → B → A: the late A part is not written, not even as stale", async () => {
+    const h = await loadedMany()
+    // У третьому запиті — ключ, змінений у старій базі.
+    h.fake.edit(TASK, key(MANY), { title: "late" })
+    h.handle.refresh()
+    await answerRequests(h, [EA, EB, EA])
+    expect(h.inspect.versionEpochs()).toMatchObject({
+      current: EB,
+      previous: EA,
+    })
+    const rows = h.handle.getSnapshot().rows
+    expect(rows[MANY - 1]).toMatchObject({
+      state: "stale",
+      values: { title: `t${MANY}` },
+    })
+    expect(rows.every((r) => r.state === "stale")).toBe(true)
+    h.sub.unsubscribe()
+  })
+
+  it("a tail re-read answered B → C → B: the late B part is not written", async () => {
+    const h = await loadedMany()
+    vi.spyOn(Math, "random").mockReturnValue(0.99)
+    h.fake.epoch = EB
+    h.handle.refresh()
+    await deliver(h)
+    vi.advanceTimersByTime(INTERVAL)
+    await deliver(h)
+    expect(h.handle.getSnapshot().rows.every((r) => r.state === "synced")).toBe(
+      true
+    )
+    // `null`-відповідь над рядками поточної епохи — `stale` і хвіст.
+    h.fake.epoch = null
+    h.handle.refresh()
+    await answerRequests(h, [null, null, null])
+    h.fake.edit(TASK, key(MANY), { title: "late" })
+    await answerRequests(h, [EB, EC, EB])
+    expect(h.inspect.versionEpochs()).toMatchObject({
+      current: EC,
+      previous: EB,
+    })
+    expect(h.handle.getSnapshot().rows[MANY - 1]).toMatchObject({
+      values: { title: `t${MANY}` },
+    })
+    h.sub.unsubscribe()
   })
 
   it(`${DISCARDS_MAX} discarded answers in a row: command.unavailable; a new session works`, async () => {
