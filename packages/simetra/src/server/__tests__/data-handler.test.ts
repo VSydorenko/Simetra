@@ -763,9 +763,9 @@ describe("createDataHandler: steps 4–6", () => {
   it("a batch [small, too large, small]: two values and one response-too-large, within the budget", async () => {
     const { handle } = await harness(
       sizedCards({
-        [cardId(1)]: 10,
+        [cardId(1)]: 1_900_000,
         [cardId(2)]: 5_000_000,
-        [cardId(3)]: 10,
+        [cardId(3)]: 1_900_000,
       })
     )
     const response = await handle(
@@ -783,9 +783,9 @@ describe("createDataHandler: steps 4–6", () => {
       },
     })
     // `finish` мірює всю відповідь: оверфлоу однієї частини бюджет не рве.
-    expect(JSON.stringify(response).length).toBeLessThanOrEqual(
-      RESPONSE_BUDGET_BYTES
-    )
+    expect(
+      new TextEncoder().encode(JSON.stringify(response)).length
+    ).toBeLessThanOrEqual(RESPONSE_BUDGET_BYTES)
   })
 
   it("a runtime that ignores overflow still yields batch-budget, never the rows", async () => {

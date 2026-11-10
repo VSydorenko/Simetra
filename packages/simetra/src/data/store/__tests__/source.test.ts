@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest"
 import {
   CommandFailure,
   catalogIndex,
+  readPartToWire,
   type CatalogEntry,
   type CommandErrorCode,
   type MetadataRef,
@@ -856,6 +857,73 @@ describe("CoreSource on read parts", () => {
       })
       expect(items[2]?.ok).toBe(true)
     })
+  })
+})
+
+describe("createFakeSource: known markers", () => {
+  const EPOCH = "a".repeat(64)
+  const OTHER = "b".repeat(64)
+  const copyEntry = catalogEntry({
+    attributes: [
+      ...task.attributes,
+      catalogEntryAttribute({
+        name: "ownerOrg",
+        column: "owner_org_id",
+        insert: false,
+        update: false,
+        copy: true,
+      }),
+    ],
+  })
+
+  /** Читає картку з `known` і повертає сирі рядки відповіді. */
+  const readKnown = async (
+    objects: CatalogEntry[],
+    options: { epoch: string | null; known: string; version?: number }
+  ) => {
+    const fake = createFakeSource({ objects, epoch: options.epoch })
+    fake.insert(TASK, { ref: key(1), org: S, title: "t", ownerOrg: S })
+    const version = options.version ?? fake.row(TASK, key(1))!.version
+    const part = readPartToWire(catalogIndex(objects), {
+      type: "query",
+      query: { object: TASK, id: key(1) },
+      known: {
+        epoch: options.known,
+        keys: [key(1)],
+        versions: [String(version)],
+      },
+    })
+    if (!part.ok) throw new Error("fake: mapping failed")
+    const answer = await fake.adapter.read([part.value])
+    const item = answer.items[0]!
+    if (!item.ok || !("rows" in item.value)) throw new Error("fake: not rows")
+    return item.value.rows as unknown[]
+  }
+
+  it("answers a marker for an equal epoch and a matching version", async () => {
+    expect(
+      await readKnown([task, org], { epoch: EPOCH, known: EPOCH })
+    ).toEqual([0])
+  })
+
+  it.each([
+    ["another epoch", { epoch: EPOCH, known: OTHER }],
+    ["a database without an epoch", { epoch: null, known: EPOCH }],
+    ["another version", { epoch: EPOCH, known: EPOCH, version: 999 }],
+  ])("answers the full row for %s", async (_name, options) => {
+    const rows = await readKnown([task, org], options)
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toHaveProperty("title", "t")
+  })
+
+  it("answers a partial marker with the copy columns", async () => {
+    const [row] = await readKnown([copyEntry, org], {
+      epoch: EPOCH,
+      known: EPOCH,
+    })
+    expect(row).toMatchObject({ $known: 0 })
+    expect(row).not.toHaveProperty("title")
+    expect(Object.keys(row as object)).toHaveLength(2)
   })
 })
 
