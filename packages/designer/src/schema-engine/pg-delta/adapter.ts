@@ -20,6 +20,7 @@ import pg from "pg"
 import { loadSqlParser, localize, type RuleCode } from "simetra/compiler"
 import {
   ENGINE_PREAMBLE_ALLOWED,
+  PROVIDER_SHADOW_TEMPLATES,
   censusDiagnostics,
   renderProviderSeed,
   tableKey,
@@ -52,6 +53,7 @@ import {
 } from "./census-facts"
 import { readExtensionComments } from "../extension-comments"
 import { readOnlyQuery, readOnlyTransactionPool } from "../read-only"
+import { provisionTemplateShadow } from "./template-shadow"
 import { closeSavepoint, savepointPool } from "../savepoint-pool"
 import { readRoutineVolatility } from "../routine-volatility"
 import { withColumnOrder } from "./column-order"
@@ -60,9 +62,11 @@ import type { MappingIssue } from "./map-tables"
 import { aclDefaultsOf, producedBy } from "./map-units"
 import { scopeProfile } from "./policy"
 import {
+  ShadowBaseUnsupportedError,
   ShadowCreateRefusedError,
   ShadowServerError,
   ShadowServerMismatchError,
+  ShadowTemplateMissingError,
 } from "../errors"
 
 const ENGINE = "pg-delta"
@@ -765,7 +769,11 @@ async function cloneAndRun<T>(
         [
           {
             name: "provider-seed.sql",
-            sql: renderProviderSeed(scope.provider),
+            // Тінь з шаблону засіву не має, а pg-delta відмовляє входу без
+            // жодного виконуваного оператора (захист від порожнього бажаного
+            // стану). План засіву тут відкидається, тож порожній засів
+            // замінює оператор без дії
+            sql: renderProviderSeed(scope.provider) || "SELECT 1;\n",
           },
         ],
         {
@@ -852,6 +860,16 @@ async function dropAfter<T>(
 }
 
 /**
+ * Профіль `postgres` копіює тінь із шаблону кластера цілі; окремий сервер
+ * тіней там не підтримано (Р9). Відмова йде до будь-якого звернення до бази,
+ * зокрема до перевірки версії сервера тіней.
+ */
+function refuseShadowBase(o: ShadowOptions, scope: EngineScope): void {
+  if (scope.provider === "postgres" && o.shadowBase !== undefined)
+    throw new ShadowBaseUnsupportedError()
+}
+
+/**
  * Провізія тіні — обидві її сесійні вимоги: `CREATE DATABASE` і підключення
  * до нової бази за іменем. Збій називає сервер, на якому він стався: без
  * `CREATEDB` — відмова з причиною, будь-який інший — `ShadowServerError` з
@@ -859,13 +877,22 @@ async function dropAfter<T>(
  * `diff`), тож збій тут — збій тіні, а не недосяжна ціль.
  */
 async function provisionShadow(
-  o: ShadowOptions
+  o: ShadowOptions,
+  scope: EngineScope
 ): Promise<Awaited<ReturnType<typeof provisionCoLocatedShadow>>> {
+  refuseShadowBase(o, scope)
+  const template = o.shadowTemplate ?? PROVIDER_SHADOW_TEMPLATES[scope.provider]
   const onShadowBase = o.shadowBase !== undefined
   let shadow: Awaited<ReturnType<typeof provisionCoLocatedShadow>>
   try {
-    shadow = await provisionCoLocatedShadow((o.shadowBase ?? o.target).url)
+    const baseUrl = (o.shadowBase ?? o.target).url
+    shadow =
+      template === null
+        ? await provisionCoLocatedShadow(baseUrl)
+        : await provisionTemplateShadow(baseUrl, template)
   } catch (error) {
+    // Відсутній шаблон — окрема відмова з порадою, а не збій тіні
+    if (error instanceof ShadowTemplateMissingError) throw error
     if (isShadowProvisionError(error))
       throw new ShadowCreateRefusedError(onShadowBase)
     throw new ShadowServerError(error, onShadowBase)
@@ -924,10 +951,11 @@ export function createPgDeltaEngine(): SchemaEngine {
       scope: EngineScope,
       fn: (shadow: DbConnection, plan: EnginePlan) => Promise<T>
     ): Promise<ShadowOutcome<T>> {
+      refuseShadowBase(o, scope)
       await assertShadowServer(o)
       // Адміністративна сесія тіні — окремий пул двигуна з правом
       // `CREATE DATABASE`; сесія цілі лишається лише для читання
-      const shadow = await provisionShadow(o)
+      const shadow = await provisionShadow(o, scope)
       return dropAfter(shadow, () =>
         planAndRun(o.target, shadow.url, desiredSql, scope, fn)
       )
@@ -939,12 +967,13 @@ export function createPgDeltaEngine(): SchemaEngine {
       scope: EngineScope,
       fn: (clone: DbConnection) => Promise<T>
     ): Promise<ShadowOutcome<T>> {
+      refuseShadowBase(o, scope)
       const catalog = asOwnCatalog(target.catalog)
       if (catalog.scopeKey !== scopeKeyOf(scope))
         throw new Error("catalogs were extracted under a different scope")
       await assertShadowServer(o)
       // Друга тінь тією самою провізією: копія пише, ціль лише читається
-      const clone = await provisionShadow(o)
+      const clone = await provisionShadow(o, scope)
       return dropAfter(clone, () =>
         cloneAndRun(o.target, clone.url, catalog, scope, fn)
       )

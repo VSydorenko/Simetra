@@ -1,9 +1,11 @@
 import { diagnostic, localize, type Diagnostic } from "simetra/compiler"
 import { ApplyConnectionLost, ApplyDbError } from "simetra/schema"
 import {
+  ShadowBaseUnsupportedError,
   ShadowCreateRefusedError,
   ShadowServerError,
   ShadowServerMismatchError,
+  ShadowTemplateMissingError,
 } from "../schema-engine/errors"
 import type { DatabaseContext, DatabaseResource } from "../tools/types"
 import { UsageError } from "./usage-error"
@@ -154,6 +156,15 @@ function classify(
     return { kind: "refusal", message: error.message }
   if (error instanceof ShadowServerMismatchError)
     return { kind: "refusal", message: error.message }
+  if (error instanceof ShadowBaseUnsupportedError)
+    return refusal(
+      localize({ code: "plan.shadow-base-unsupported", params: {} }, "en")
+        .message
+    )
+  if (error instanceof ShadowTemplateMissingError)
+    return refusal(
+      `The shadow template database "${error.template}" is missing or is not sealed by a superuser. Run \`simetra roles\` as a superuser to prepare it.`
+    )
   if (error instanceof ShadowCreateRefusedError) {
     const where = error.onShadowBase ? (names.shadow ?? describe) : describe
     return refusal(

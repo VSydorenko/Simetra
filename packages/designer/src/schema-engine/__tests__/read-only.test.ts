@@ -70,7 +70,7 @@ describe("target reads carry no session state", () => {
   // пул даних — роль входу рантайму, не мігратор, і за запобіжниками бази
   // розробника (`io/data.ts`). Рахується кількість, а не файли: другий пул
   // у дозволеному файлі теж мусить провалити перевірку
-  it("pools are created only by the guard, the shadow, the apply runner and the data resource", () => {
+  it("pools are created only by the guard, the shadows, the apply runner and the data resource", () => {
     const counts: Record<string, number> = {}
     for (const path of sources(SRC)) {
       const n = readFileSync(path, "utf8").match(/new pg\.Pool\(/g)?.length
@@ -80,6 +80,7 @@ describe("target reads carry no session state", () => {
       [join("io", "data.ts")]: 1,
       [join("schema-engine", "apply-database.ts")]: 1,
       [join("schema-engine", "pg-delta", "adapter.ts")]: 1,
+      [join("schema-engine", "pg-delta", "template-shadow.ts")]: 1,
       [join("schema-engine", "read-only.ts")]: 1,
     })
   })

@@ -266,6 +266,43 @@ describe("buildPlan", () => {
     expect(statements[0]).toContain("server_version_num")
   })
 
+  it("refuses a separate shadow server on the postgres profile before any database access", async () => {
+    // Р9: тіні профілю будують із шаблону кластера цілі. Відмова — до
+    // платформних ролей, тож підставний порт не отримує жодного запиту
+    const compiled = await compile(
+      metaFiles({
+        "project.meta.json": project({ database: { provider: "postgres" } }),
+        "catalogs/Party/Party.meta.json": catalog("Party"),
+      })
+    )
+    expect(compiled.diagnostics).toEqual([])
+    const never = (what: string) => () =>
+      Promise.reject(new Error(`no ${what} expected`))
+    const reader: ApplyDatabase = {
+      statement: never("statement"),
+      transaction: never("transaction"),
+    }
+    const engine = new Proxy({} as SchemaEngine, {
+      get: (_, name) => {
+        throw new Error(`no engine call expected: ${String(name)}`)
+      },
+    })
+    const outcome = await buildPlan(
+      engine,
+      { reader, scratch: reader },
+      compiled.model!,
+      {
+        target: { url: "postgres://target" },
+        shadowBase: { url: "postgres://shadow" },
+      },
+      []
+    )
+    expect(outcome).toMatchObject({
+      status: "refused",
+      diagnostics: [{ code: "plan.shadow-base-unsupported" }],
+    })
+  })
+
   it.each([
     { server: "target", promotions: false },
     { server: "shadow", promotions: false },

@@ -130,6 +130,7 @@ type ApplyRun =
   | { outcome: ExecuteOutcome }
   | { shadowFailed: EngineDiagnostic[] }
   | { rolesRefused: EngineDiagnostic[] }
+  | { unsupported: Diagnostic }
 
 export interface ApplyData {
   status: "committed" | "rolledBack"
@@ -564,6 +565,15 @@ export const applyTool = defineTool({
       required(database),
       "apply",
       async (db): Promise<ApplyRun> => {
+        // Профіль `postgres` не має окремого сервера тіней (Р9): відмова до
+        // будь-якого звернення до бази, і для застосування, і для репетиції
+        if (
+          artifact.scope.provider === "postgres" &&
+          db.shadowBase !== undefined
+        )
+          return {
+            unsupported: diagnostic("plan.shadow-base-unsupported", "", ""),
+          }
         if (input.rehearse !== true)
           return {
             outcome: await executePlan(writer, db.target, artifact, {
@@ -609,6 +619,8 @@ export const applyTool = defineTool({
     if (!executed.ok) return refusedWith([executed.diagnostic])
     if ("shadowFailed" in executed.value)
       return refusedWith(executed.value.shadowFailed.map(fromEngine))
+    if ("unsupported" in executed.value)
+      return refusedWith([executed.value.unsupported])
     if ("rolesRefused" in executed.value)
       return refusedWith(executed.value.rolesRefused.map(fromEngine))
     const outcome = executed.value.outcome

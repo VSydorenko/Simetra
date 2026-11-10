@@ -426,6 +426,11 @@ export async function buildPlan(
   // 1–2. Бажаний стан і стан застосування цілі; пошкоджений стан лагодять
   // вручну, а не дозволом
   const desired = await desiredForApply(model)
+  // Профіль `postgres` будує тіні з шаблону кластера цілі й окремого сервера
+  // тіней не знає (Р9): відмова до платформних ролей і до будь-якого звернення
+  // до бази
+  if (desired.scope.provider === "postgres" && o.shadowBase !== undefined)
+    return refused([applyDiagnostic("plan.shadow-base-unsupported", "error")])
   // Факти сервера й голова ledger — тією самою транзакцією READ ONLY, що й
   // стан: доказ копії репетиції (спека промоції §8) звіряє з ними базу
   // того самого моменту, що й ланцюжок. Сервер, старіший за мінімум
