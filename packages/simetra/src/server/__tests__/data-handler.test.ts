@@ -10,6 +10,7 @@ import {
   runtimeCatalogSchema,
   READ_BATCH_MAX,
   versionValueSchema,
+  WireEncodeError,
   wireReadPartsResultSchema,
   wireReadResultSchema,
   type CommandError,
@@ -944,18 +945,6 @@ describe("createDataHandler: steps 4–6", () => {
       readOf({}),
     ],
     [
-      // Маркер з позицією поза `known` кодек відхиляє: дефект сервера.
-      "a part value the codec rejects",
-      {
-        readParts: (_claims, _parts, options) => {
-          const value = { rows: [{ known: -1 }] }
-          options?.fit?.(0, value)
-          return Promise.resolve({ epoch: null, items: [{ ok: true, value }] })
-        },
-      },
-      readOf({}),
-    ],
-    [
       "a part error with a field outside the wire error",
       {
         readParts: () =>
@@ -1059,6 +1048,28 @@ describe("createDataHandler: steps 4–6", () => {
       changes: [],
     })
     expect(log).not.toHaveBeenCalled()
+  })
+
+  // Маркер з позицією поза `known` кодек відхиляє: дефект сервера.
+  it("a part value the codec rejects stops the parts and logs the codec error", async () => {
+    const { runtime } = await harness()
+    const log = vi.fn()
+    let verdict: string | undefined
+    const handle = createDataHandler(
+      {
+        ...runtime,
+        readParts: (_claims, _parts, options) => {
+          const value = { rows: [{ known: -1 }] }
+          verdict = options?.fit?.(0, value)
+          return Promise.resolve({ epoch: null, items: [{ ok: true, value }] })
+        },
+      },
+      { log }
+    )
+    const response = await handle(session, readOf({}), HTTP)
+    expect(errorOf(response)).toStrictEqual({ code: "command.internal" })
+    expect(verdict).toBe("overflow")
+    expect(log.mock.calls).toEqual([[expect.any(WireEncodeError)]])
   })
 
   it("logs to console.error by default", async () => {

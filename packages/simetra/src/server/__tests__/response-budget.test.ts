@@ -438,12 +438,27 @@ describe("fitParts: кілька частин", () => {
     expect(itemsOf(alone.finish(EPOCH, new Map()))).toStrictEqual([
       { ok: true, value: exact },
     ])
+    // Рівно в бюджеті разом із короткою помилкою другої частини: резерв під
+    // невиконану частину більший за таку помилку, тож місця частині немає.
+    const pair = (code: string) =>
+      jsonBytes({
+        ok: true,
+        value: {
+          epoch: EPOCH,
+          items: [
+            { ok: true, value: shape(code) },
+            { ok: false, error: BATCH_BUDGET },
+          ],
+        },
+        serverHash: HASH,
+      })
+    const tight = shape("z".repeat(RESPONSE_BUDGET_BYTES - pair("")))
     const batch = fitParts(
       index,
       [{ query: card(1) }, { query: card(2) }],
       HASH
     )
-    expect(batch.fit(0, exact)).toBe("overflow")
+    expect(batch.fit(0, tight)).toBe("overflow")
     expect(
       itemsOf(batch.finish(EPOCH, new Map([[1, BATCH_BUDGET]])))
     ).toStrictEqual([
