@@ -112,6 +112,7 @@ function counted(runtime: CommandRuntime) {
       calls.read++
       return runtime.read(...args)
     },
+    readParts: (...args) => runtime.readParts(...args),
   }
   return { runtime: wrapped, calls }
 }

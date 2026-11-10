@@ -1,42 +1,55 @@
 import {
   APPLIED_SNAPSHOT_HASH_FUNCTION_NAME,
   BATCH_MAX,
+  LIMIT_REASONS,
   LOGIN_ROLE_REQUEST_PURPOSES,
   OBJECT_MODULE_KEYS,
+  PLATFORM_ROLES,
   PLATFORM_SCHEMA,
   PROVIDER_API_ROLES,
+  READ_BATCH_STATEMENTS_MAX,
   TABULAR_LINES_MAX,
   runtimeCatalogSchema,
   sessionClaimsSchema,
+  versionEpochSchema,
   type CommandError,
   type CommandResult,
   type DatabaseProvider,
   type ObjectModule,
   type Operation,
   type ProviderApiRoles,
-  type ReadQuery,
+  type ReadPart,
   type ReadPartValue,
-  type ReadResult,
+  type ReadQuery,
   type ReadResultOf,
   type RequestRolePurpose,
   type RuntimeCatalog,
+  type RuntimeObject,
   type SessionClaims,
   CommandFailure,
 } from "simetra/model"
 import { z } from "zod"
-import { logsDatabaseError, mapDatabaseError, type ErrorPhase } from "./errors"
+import { logsDatabaseError, type ErrorPhase } from "./errors"
 import { rejectNested } from "./hook-context"
 import {
   normalizeError,
   type CommandDatabase,
   type DatabaseClient,
 } from "./port"
-import { executeRead, ident, prepareRead } from "./read"
+import {
+  executeRead,
+  ident,
+  prepareRead,
+  type ReadPlan,
+  type ReadStatementRunner,
+} from "./read"
 import {
   COMMAND_ROLE,
   COMMIT,
-  claimsStatement,
+  ReadBudget,
   endFailed,
+  readRefusal,
+  readSetupStatement,
   runCommand,
   type LogEntry,
   type RuntimeState,
@@ -58,10 +71,17 @@ export interface CommandRuntimeOptions {
   /** Depth limit of phases started by hooks; default 8. */
   maxDepth?: number
   /**
-   * `statement_timeout` of a server read in milliseconds (integer ≥ 1);
-   * default 15 000. A read past it rejects with `command.timeout`.
+   * `statement_timeout` ceiling of a server read statement in milliseconds
+   * (integer ≥ 1); default 15 000. A statement past it fails its part with
+   * `command.timeout`.
    */
   readStatementTimeoutMs?: number
+  /**
+   * Time budget of one server read transaction, all its parts, in
+   * milliseconds (integer ≥ 1000); default 15 000. A part not started
+   * before it fails with `command.timeout`.
+   */
+  readBudgetMs?: number
   /**
    * Time budget of one `run` call, retries and their pauses included, in
    * milliseconds (integer ≥ 1000); default 60 000. A command past it rejects
@@ -104,6 +124,31 @@ export interface CommandRunOptions {
   fullTabularArrays?: true
 }
 
+/** The outcome of one part of {@link CommandRuntime.readParts}. */
+export type ReadPartOutcome =
+  { ok: true; value: ReadPartValue } | { ok: false; error: CommandError }
+
+/**
+ * The result of {@link CommandRuntime.readParts}: the row version epoch of
+ * its transaction (`null` without an epoch or without a transaction) and an
+ * outcome per part, in request order.
+ */
+export interface ReadPartsResult {
+  epoch: string | null
+  items: ReadPartOutcome[]
+}
+
+/** Options of one {@link CommandRuntime.readParts} call. */
+export interface ReadPartsOptions {
+  /**
+   * Called after each part that read its value, before the next part runs;
+   * `"overflow"` stops the transaction there: the parts after it fail with
+   * `command.unavailable` `reason: "batch-budget"` without running, and the
+   * part keeps its value for the caller to cut or drop.
+   */
+  fit?: (index: number, value: ReadPartValue) => "accept" | "overflow"
+}
+
 /** The command runtime of one catalog and database. */
 export interface CommandRuntime {
   /**
@@ -125,6 +170,21 @@ export interface CommandRuntime {
     session: SessionClaims,
     query: Q
   ): Promise<ReadResultOf<Q>>
+  /**
+   * Reads the parts in one `REPEATABLE READ READ ONLY` transaction (P4-B spec
+   * §4.2): every part sees the same snapshot. An invalid part fails alone,
+   * before the database; past the deadline a part and those after it fail
+   * with `command.timeout`; a database error fails its part, and those after
+   * it fail with `command.unavailable` `reason: "batch-aborted"` (or without
+   * a reason on a lost connection). Rejects with `CommandFailure` for the
+   * whole request: `command.unauthenticated`, `command.invalid`
+   * `reason: "batch-too-large"` over `READ_BATCH_STATEMENTS_MAX` statements.
+   */
+  readParts(
+    session: SessionClaims,
+    parts: readonly ReadPart[],
+    options?: ReadPartsOptions
+  ): Promise<ReadPartsResult>
 }
 
 /**
@@ -166,8 +226,12 @@ function checkModules(
 }
 
 const BEGIN_READ_ONLY = "BEGIN ISOLATION LEVEL READ COMMITTED READ ONLY"
-// Значення — зв'язаним параметром: текстовий `SET` не приймає `$1`.
-const READ_TIMEOUT = "SELECT set_config('statement_timeout', $1, true)"
+// Читання частин: один знімок на всі; транзакція лише для читання на цьому
+// рівні помилок серіалізації не дає (Рд41).
+const BEGIN_READ = "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY"
+// Окремим оператором під роллю читання: `EXECUTE` функції перевіряється на
+// старті виконавця, а в операторі налаштування роль ще — роль входу (Р1).
+const EPOCH = `SELECT ${ident(PLATFORM_SCHEMA)}.${ident("row_version_epoch")}() AS epoch`
 const MEMBER = "SELECT pg_has_role(session_user, $1, 'SET') AS member"
 const APPLIED_HASH = `SELECT ${ident(PLATFORM_SCHEMA)}.${ident(APPLIED_SNAPSHOT_HASH_FUNCTION_NAME)}() AS hash`
 // База до функції хеша (`42883`) чи без схеми платформи (`3F000`) — модель
@@ -278,6 +342,7 @@ export async function createCommandRuntime(
   const maxDepth = limitSchema.parse(options.maxDepth) ?? 8
   const readTimeout =
     limitSchema.parse(options.readStatementTimeoutMs) ?? 15_000
+  const readBudgetMs = budgetSchema.parse(options.readBudgetMs) ?? 15_000
   const budgetMs = budgetSchema.parse(options.commandBudgetMs) ?? 60_000
   const lockTimeoutMs = limitSchema.parse(options.lockTimeoutMs) ?? 5_000
   const maxBatch = maxBatchSchema.parse(options.maxBatch) ?? BATCH_MAX
@@ -314,6 +379,7 @@ export async function createCommandRuntime(
     maxBatch,
     maxTabularLines,
     readTimeout,
+    readBudgetMs,
     budgetMs,
     lockTimeoutMs,
     // Профіль без ролі запиту чи явний запасний шлях — читання під роллю команд.
@@ -323,9 +389,22 @@ export async function createCommandRuntime(
     catalog,
     run: (session, input, options) =>
       runCommand(state, session, input, options?.fullTabularArrays === true),
-    // Форму результату задає форма запиту; `readRows` будує її з плану.
-    read: <Q extends ReadQuery>(session: SessionClaims, query: Q) =>
-      readRows(state, session, query) as Promise<ReadResultOf<Q>>,
+    // Одиночне читання — пакет з однієї частини (Р3): та сама транзакційна
+    // дисципліна; відмова частини — відмова читання.
+    read: async <Q extends ReadQuery>(session: SessionClaims, query: Q) => {
+      const { items } = await readParts(
+        state,
+        session,
+        [{ type: "query", query }],
+        undefined
+      )
+      const item = items[0]!
+      if (!item.ok) throw new CommandFailure(item.error)
+      // Форму результату задає форма запиту; без `known` маркерів нема.
+      return item.value as ReadResultOf<Q>
+    },
+    readParts: (session, parts, options) =>
+      readParts(state, session, parts, options),
   }
 }
 
@@ -340,61 +419,109 @@ function deepFreeze<T>(value: T): T {
 
 /** Відмова бази в читанні, уже змапована; будь-що інше в транзакції — аномалія. */
 class Refused {
-  constructor(
-    readonly refusal: { failure: CommandFailure; destroy: boolean }
-  ) {}
+  constructor(readonly refusal: ReturnType<typeof readRefusal>) {}
 }
 
-/**
- * Серверне читання (спека П4 §6.11): одна транзакція `READ ONLY` під роллю
- * запиту — політики бачать рівно те, що PostgREST з тими самими claims
- * (інваріант 10). Без повтору: §6.11 його не передбачає, `40001` тут — `command.internal`.
- */
-async function readRows(
-  state: RuntimeState,
-  session: SessionClaims,
-  query: unknown
-): Promise<ReadResult> {
-  // До будь-якого I/O: друге з'єднання в хуку чекало б на замок своєї ж
-  // команди (Р-A3-11).
-  rejectNested()
-  let claims: string
+// Дедлайн перед оператором частини: транзакція ціла, частина не виконана.
+const EXPIRED = Symbol("expired")
+const TIMEOUT: CommandError = { code: "command.timeout" }
+const INTERNAL: CommandError = { code: "command.internal" }
+const UNAVAILABLE: CommandError = { code: "command.unavailable" }
+const ABORTED: CommandError = {
+  code: "command.unavailable",
+  reason: "batch-aborted",
+}
+const OVER_BUDGET: CommandError = {
+  code: "command.unavailable",
+  reason: "batch-budget",
+}
+
+/** Claims сесії текстом; без `sub` — відмова до бази (Рт8). */
+function claimsOf(session: SessionClaims): string {
   try {
     // Без `sub` політики бачили б анонімний запит, а не користувача: читання
     // не йде в базу, як і команда без користувача (Рт8).
     if (!sessionClaimsSchema.safeParse(session).success) {
       throw new CommandFailure({ code: "command.unauthenticated" })
     }
-    claims = JSON.stringify(session)
+    return JSON.stringify(session)
   } catch (error) {
     if (error instanceof CommandFailure) throw error
-    throw new CommandFailure({ code: "command.internal" })
+    throw new CommandFailure(INTERNAL)
   }
-  const prepared = prepareRead(state.catalog, query)
-  if ("error" in prepared) throw new CommandFailure(prepared.error)
-  const { object, plan } = prepared
-  const fail = (raw: unknown, phase: ErrorPhase | undefined) => {
-    const error = normalizeError(raw)
-    const mapped = mapDatabaseError(error, state.catalog, phase)
-    if (logsDatabaseError(error, mapped)) {
-      state.log({ kind: "database", error: raw })
+}
+
+/** Епоха з відповіді оператора епохи: 64 hex чи `NULL` — інше аномалія. */
+function epochOf(rows: readonly Record<string, unknown>[]): string | null {
+  const epoch = rows[0]?.epoch
+  if (rows.length === 1 && epoch === null) return null
+  const parsed = versionEpochSchema.safeParse(epoch)
+  if (rows.length !== 1 || !parsed.success) {
+    throw new Error("row version epoch is not 64 hex")
+  }
+  return parsed.data
+}
+
+/**
+ * Серверне читання (спека П4 §6.11, П4-B §4.2): усі частини — одна
+ * транзакція `REPEATABLE READ READ ONLY` під роллю запиту, тож частини
+ * бачать один знімок, а політики — рівно те, що PostgREST з тими самими
+ * claims (інваріант 10). Без повтору: §6.11 його не передбачає.
+ */
+async function readParts(
+  state: RuntimeState,
+  session: SessionClaims,
+  parts: readonly ReadPart[],
+  options: ReadPartsOptions | undefined
+): Promise<ReadPartsResult> {
+  // До будь-якого I/O: друге з'єднання в хуку чекало б на замок своєї ж
+  // команди (Р-A3-11).
+  rejectNested()
+  const claims = claimsOf(session)
+  // Перевірка частин — до `BEGIN` (Р11): хибна частина відмовляє лише собі
+  // й не займає з'єднання.
+  const items: ReadPartOutcome[] = new Array(parts.length)
+  const planned: { index: number; object: RuntimeObject; plan: ReadPlan }[] = []
+  let statements = 0
+  parts.forEach((part, index) => {
+    const prepared = prepareRead(state.catalog, part.query, part.known)
+    if ("error" in prepared) {
+      items[index] = { ok: false, error: prepared.error }
+      return
     }
-    return {
-      failure: new CommandFailure(mapped),
-      destroy: error.connectionLost,
+    planned.push({ index, ...prepared })
+    statements += 1 + (prepared.plan.include?.length ?? 0)
+  })
+  // Межа — за найбільшим числом операторів: ціль `include` без id оператора
+  // не шле, але знати це можна лише після бази.
+  if (statements > READ_BATCH_STATEMENTS_MAX) {
+    throw new CommandFailure({
+      code: "command.invalid",
+      reason: LIMIT_REASONS.batchTooLarge,
+    })
+  }
+  if (planned.length === 0) return { epoch: null, items }
+  // Невиконаним частинам, починаючи з `from`-ї з плану, — `error`.
+  const rest = (from: number, error: CommandError) => {
+    for (const { index } of planned.slice(from)) {
+      items[index] = { ok: false, error }
     }
   }
+  const refusalOf = (error: unknown) => {
+    if (error instanceof Refused) return error.refusal
+    // Відповідь не тієї форми: транзакцію відкочено, назовні — лише код.
+    state.log({ kind: "database", error })
+    return { error: INTERNAL, destroy: false, lost: false }
+  }
+  // Бюджет — на всю транзакцію разом із чеканням з'єднання, як і в команди.
+  const deadline = performance.now() + state.readBudgetMs
   let client: DatabaseClient
   try {
     client = await state.database.connect()
   } catch (raw) {
-    throw fail(raw, undefined).failure
+    rest(0, readRefusal(raw, state, undefined).error)
+    return { epoch: null, items }
   }
-  // Запасний шлях — роль команд одразу після claims, без `simetra.command`.
-  const role =
-    state.readRole === undefined
-      ? COMMAND_ROLE
-      : { text: `SET LOCAL ROLE ${ident(state.readRole)}`, params: [] }
   // Фаза читання — лише для операторів будівника: `22P02` там — вхід клієнта.
   const send = async (
     statement: { text: string; params: readonly (string | null)[] },
@@ -403,45 +530,82 @@ async function readRows(
     try {
       return await client.query(statement.text, statement.params)
     } catch (raw) {
-      throw new Refused(fail(raw, phase))
+      throw new Refused(readRefusal(raw, state, phase))
     }
   }
-  let result: ReadPartValue | { error: CommandError }
+  let budget: ReadBudget
+  let epoch: string | null
+  try {
+    await send({ text: BEGIN_READ, params: [] })
+    budget = new ReadBudget(deadline, state.readTimeout)
+    // Запасний шлях — роль команд, без `simetra.command`.
+    await send(
+      readSetupStatement(
+        claims,
+        budget.setup,
+        state.readBudgetMs + 1000,
+        state.readRole ?? PLATFORM_ROLES.command
+      )
+    )
+    // Епоху бази знає лише транзакція: проєкцію з `known` будівник рендерить
+    // після цього оператора (Р11).
+    epoch = epochOf((await send({ text: EPOCH, params: [] })).rows)
+  } catch (error) {
+    // Жодна частина не виконана: збій прелюдії — помилка кожної.
+    const refusal = refusalOf(error)
+    await endFailed(client, refusal.destroy)
+    rest(0, refusal.error)
+    return { epoch: null, items }
+  }
+  const run: ReadStatementRunner = async (statement, target) => {
+    const step = budget.next()
+    if (step === "expired") throw EXPIRED
+    if (step !== undefined) await send(step)
+    return (await send(statement, { kind: "read", object: target })).rows
+  }
+  for (const [n, { index, object, plan }] of planned.entries()) {
+    try {
+      // Рядки декодуються до `COMMIT`: з них оператор `include` бере id.
+      const value = await executeRead(object, plan, run, epoch)
+      // Відмова частини без бази (`tabular-too-large`) транзакції не рве.
+      if ("error" in value) {
+        items[index] = { ok: false, error: value.error }
+        continue
+      }
+      items[index] = { ok: true, value }
+      if (options?.fit?.(index, value) === "overflow") {
+        rest(n + 1, OVER_BUDGET)
+        break
+      }
+    } catch (error) {
+      // Дедлайн: транзакція ціла, виконані частини лишають результати.
+      if (error === EXPIRED) {
+        rest(n, TIMEOUT)
+        break
+      }
+      // Помилка бази скасовує транзакцію (точок збереження немає): частина —
+      // зі своєю помилкою, наступні — без виконання.
+      const refusal = refusalOf(error)
+      items[index] = { ok: false, error: refusal.error }
+      rest(n + 1, refusal.lost ? UNAVAILABLE : ABORTED)
+      await endFailed(client, refusal.destroy)
+      return { epoch, items }
+    }
+  }
   let tag: string
   try {
-    await send({ text: BEGIN_READ_ONLY, params: [] })
-    // `SET LOCAL`-семантика (`true`): межа живе до кінця транзакції читання й
-    // не переходить на наступного користувача з'єднання пулу.
-    await send({ text: READ_TIMEOUT, params: [String(state.readTimeout)] })
-    await send(claimsStatement(claims))
-    await send(role)
-    // Рядки декодуються до `COMMIT`: з них оператор `include` бере id.
-    result = await executeRead(
-      object,
-      plan,
-      async (statement, target) =>
-        (await send(statement, { kind: "read", object: target })).rows,
-      // Одиночне читання `known` не має: епоха бази оператора не змінює.
-      null
-    )
     ;({ command: tag } = await send(COMMIT))
   } catch (error) {
-    if (error instanceof Refused) {
-      await endFailed(client, error.refusal.destroy)
-      throw error.refusal.failure
-    }
-    // Відповідь не тієї форми: транзакцію відкочено, назовні — лише код.
-    state.log({ kind: "database", error })
-    await endFailed(client, false)
-    throw new CommandFailure({ code: "command.internal" })
+    const refusal = refusalOf(error)
+    await endFailed(client, refusal.destroy)
+    throw new CommandFailure(refusal.error)
   }
   client.release()
-  // Перервана транзакція відповідає на `COMMIT` тегом `ROLLBACK`.
+  // Перервана транзакція відповідає на `COMMIT` тегом `ROLLBACK`: частини
+  // вже не довести, тож відмова всього запиту.
   if (tag !== "COMMIT") {
     state.log({ kind: "database", error: new Error(`COMMIT answered ${tag}`) })
-    throw new CommandFailure({ code: "command.internal" })
+    throw new CommandFailure(INTERNAL)
   }
-  if ("error" in result) throw new CommandFailure(result.error)
-  // План без `known`: маркерів серед рядків нема.
-  return result as ReadResult
+  return { epoch, items }
 }
