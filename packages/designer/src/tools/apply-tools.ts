@@ -48,7 +48,7 @@ import {
   type TableLock,
 } from "simetra/schema"
 import { z } from "zod"
-import { withDatabase } from "../io/database"
+import { failureDiagnostics, withDatabase } from "../io/database"
 import { readMetadataDir } from "../io/metadata-dir"
 import { UsageError } from "../io/usage-error"
 import { fromEngine, hasErrors, loadEngine, required } from "./database-tools"
@@ -346,7 +346,10 @@ export const planTool = defineTool({
       )
     )
     if (!built.ok)
-      return refusedWith([...compiled.diagnostics, built.diagnostic])
+      return refusedWith([
+        ...compiled.diagnostics,
+        ...failureDiagnostics(built),
+      ])
     const outcome = built.value
     const diagnostics = [
       ...compiled.diagnostics,
@@ -636,7 +639,7 @@ export const applyTool = defineTool({
         }
       }
     )
-    if (!executed.ok) return refusedWith([executed.diagnostic])
+    if (!executed.ok) return refusedWith(failureDiagnostics(executed))
     if ("shadowFailed" in executed.value)
       return refusedWith(executed.value.shadowFailed.map(fromEngine))
     if ("unsupported" in executed.value)

@@ -4,6 +4,8 @@
  * CLI, а двигун вантажиться лише інструментом бази.
  */
 
+import type { EngineDiagnostic } from "simetra/schema"
+
 /** Тінь на сервері іншої мажорної версії: каталоги двох версій не порівнюються. */
 export class ShadowServerMismatchError extends Error {
   override name = "ShadowServerMismatchError"
@@ -31,10 +33,31 @@ export class ShadowServerError extends Error {
   constructor(
     cause: unknown,
     /** Сервер — окремий `--shadow-url-env`, а не сервер цілі. */
-    readonly onShadowBase: boolean
+    readonly onShadowBase: boolean,
+    /** Тінь, створену до збою, не вдалося видалити (`engine.shadow-drop-failed`). */
+    readonly shadowDrop?: EngineDiagnostic
   ) {
     super("the shadow could not be created or reached", { cause })
   }
+}
+
+/**
+ * Збій видалення тіні на шляху винятку: виняток лишається тим самим (його
+ * клас розпізнає межа), а попередження `engine.shadow-drop-failed` стає його
+ * полем `shadowDrop`. Значення, що не є `Error`, поля не несе.
+ */
+export function withShadowDrop(
+  error: unknown,
+  drop: EngineDiagnostic
+): unknown {
+  if (error instanceof Error) Object.assign(error, { shadowDrop: drop })
+  return error
+}
+
+/** Попередження про невидалену тінь, яке несе виняток, якщо несе. */
+export function shadowDropOf(error: unknown): EngineDiagnostic | undefined {
+  if (!(error instanceof Error)) return undefined
+  return (error as { shadowDrop?: EngineDiagnostic }).shadowDrop
 }
 
 /** Шаблон тіні профілю відсутній або не запечатаний суперкористувачем: його готує `simetra roles`. */

@@ -54,7 +54,11 @@ import {
 } from "./census-facts"
 import { readExtensionComments } from "../extension-comments"
 import { readOnlyQuery, readOnlyTransactionPool } from "../read-only"
-import { provisionTemplateShadow } from "./template-shadow"
+import {
+  provisionTemplateShadow,
+  type ProvisionedShadow,
+  type ShadowDropFailure,
+} from "./template-shadow"
 import { closeSavepoint, savepointPool } from "../savepoint-pool"
 import { readRoutineVolatility } from "../routine-volatility"
 import { withColumnOrder } from "./column-order"
@@ -68,6 +72,7 @@ import {
   ShadowServerError,
   ShadowServerMismatchError,
   ShadowTemplateMissingError,
+  withShadowDrop,
 } from "../errors"
 
 const ENGINE = "pg-delta"
@@ -839,21 +844,37 @@ async function cloneAndRun<T>(
   }
 }
 
+/** Невидалена тінь — попередження з її іменем: прибиральника тіней немає. */
+function shadowDropDiagnostic(failure: ShadowDropFailure): EngineDiagnostic {
+  return engineDiagnostic(
+    "engine.shadow-drop-failed",
+    {
+      shadow: failure.shadow,
+      ...(failure.sqlstate === undefined ? {} : { sqlstate: failure.sqlstate }),
+    },
+    "warning",
+    undefined
+  )
+}
+
 /**
- * Виконує тіло над тінню й прибирає її завжди. Збій прибирання не має
- * затирати першопричину: вона перша в `errors`, а `cause` — збій прибирання,
- * який і перервав нормальний шлях.
+ * Виконує тіло над тінню й прибирає її завжди. Невдалий `DROP` тіні не
+ * затирає результат: на звичайному шляху він — попередження в діагностиках
+ * результату, на шляху винятку — поле `shadowDrop` того самого винятку.
+ * Виняток самого прибирання не має затирати першопричину: вона перша в
+ * `errors`, а `cause` — збій прибирання, який і перервав нормальний шлях.
  */
-async function dropAfter<T>(
-  shadow: { cleanup: () => Promise<void> },
-  body: () => Promise<T>
-): Promise<T> {
-  let result: T
+export async function dropAfter<T>(
+  shadow: ProvisionedShadow,
+  body: () => Promise<ShadowOutcome<T>>
+): Promise<ShadowOutcome<T>> {
+  let result: ShadowOutcome<T>
   try {
     result = await body()
   } catch (error) {
+    let failure: ShadowDropFailure | undefined
     try {
-      await shadow.cleanup()
+      failure = await shadow.cleanup()
     } catch (cleanupError) {
       throw new AggregateError(
         [error, cleanupError],
@@ -861,10 +882,36 @@ async function dropAfter<T>(
         { cause: cleanupError }
       )
     }
-    throw error
+    throw failure === undefined
+      ? error
+      : withShadowDrop(error, shadowDropDiagnostic(failure))
   }
-  await shadow.cleanup()
-  return result
+  const failure = await shadow.cleanup()
+  return failure === undefined
+    ? result
+    : {
+        ...result,
+        diagnostics: [...result.diagnostics, shadowDropDiagnostic(failure)],
+      }
+}
+
+/**
+ * Тінь pg-delta (Supabase): її `cleanup` ковтає збій `DROP` у самій бібліотеці,
+ * тож про невидалену тінь цього шляху адаптер не дізнається й не повідомить.
+ */
+function coLocated(shadow: {
+  url: string
+  name: string
+  cleanup: () => Promise<void>
+}): ProvisionedShadow {
+  return {
+    url: shadow.url,
+    name: shadow.name,
+    cleanup: async () => {
+      await shadow.cleanup()
+      return undefined
+    },
+  }
 }
 
 /**
@@ -887,16 +934,16 @@ function refuseShadowBase(o: ShadowOptions, scope: EngineScope): void {
 async function provisionShadow(
   o: ShadowOptions,
   scope: EngineScope
-): Promise<Awaited<ReturnType<typeof provisionCoLocatedShadow>>> {
+): Promise<ProvisionedShadow> {
   refuseShadowBase(o, scope)
   const template = o.shadowTemplate ?? PROVIDER_SHADOW_TEMPLATES[scope.provider]
   const onShadowBase = o.shadowBase !== undefined
-  let shadow: Awaited<ReturnType<typeof provisionCoLocatedShadow>>
+  let shadow: ProvisionedShadow
   try {
     const baseUrl = (o.shadowBase ?? o.target).url
     shadow =
       template === null
-        ? await provisionCoLocatedShadow(baseUrl)
+        ? coLocated(await provisionCoLocatedShadow(baseUrl))
         : await provisionTemplateShadow(baseUrl, template)
   } catch (error) {
     // Відсутній шаблон — окрема відмова з порадою, а не збій тіні
@@ -912,8 +959,12 @@ async function provisionShadow(
     await probe.query("select 1")
   } catch (error) {
     await probe.end()
-    await shadow.cleanup()
-    throw new ShadowServerError(error, onShadowBase)
+    const failure = await shadow.cleanup()
+    throw new ShadowServerError(
+      error,
+      onShadowBase,
+      failure === undefined ? undefined : shadowDropDiagnostic(failure)
+    )
   }
   await probe.end()
   return shadow

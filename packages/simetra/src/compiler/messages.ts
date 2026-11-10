@@ -3573,6 +3573,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Виправте SQL-оператор, названий у повідомленні; тінь — свіжа база, засіяна базовим станом провайдера.",
     },
   },
+  "engine.shadow-drop-failed": {
+    en: (p) =>
+      `The shadow database ${p.shadow} could not be dropped${p.sqlstate === undefined ? "" : ` (SQLSTATE ${p.sqlstate})`}; it is left on the cluster.`,
+    uk: (p) =>
+      `Тіньову базу ${p.shadow} не вдалося видалити${p.sqlstate === undefined ? "" : ` (SQLSTATE ${p.sqlstate})`}; вона лишилась на кластері.`,
+    hint: {
+      en: "The run's result stands; drop the named database as a role that may drop it (for example a superuser).",
+      uk: "Результат запуску чинний; видаліть названу базу від ролі, якій це дозволено (наприклад, суперкористувача).",
+    },
+  },
   "engine.desired-rejected": {
     en: (p) => `Desired state was rejected: ${p.detail}`,
     uk: (p) => `Бажаний стан відхилено: ${p.detail}`,

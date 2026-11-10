@@ -42,7 +42,8 @@ vi.mock("@supabase/pg-delta", async (importOriginal) => {
 /**
  * Те саме для тіні з шаблону (профіль `postgres`): двигун створює її власною
  * `provisionTemplateShadow`, яку `vi.mock` pg-delta не бачить. Обгортка
- * додає тег прогону й записує ім'я в той самий облік; решта — без змін.
+ * додає тег прогону, записує ім'я в той самий облік, а невдалий `DROP` її
+ * прибирання — під іменем тіні; решта — без змін.
  */
 vi.mock(
   "../../schema-engine/pg-delta/template-shadow",
@@ -51,7 +52,7 @@ vi.mock(
       await importOriginal<
         typeof import("../../schema-engine/pg-delta/template-shadow")
       >()
-    const { recordProvision } = await import("./shadows")
+    const { recordDropFailures, recordProvision } = await import("./shadows")
     const { shadowSuffix } = await import("../../../../simetra/test/support")
     return {
       ...actual,
@@ -61,10 +62,12 @@ vi.mock(
         opts?: Parameters<typeof actual.provisionTemplateShadow>[2]
       ) =>
         recordProvision(
-          actual.provisionTemplateShadow(baseUrl, template, {
-            ...opts,
-            uniqueSuffix: opts?.uniqueSuffix ?? shadowSuffix(),
-          })
+          actual
+            .provisionTemplateShadow(baseUrl, template, {
+              ...opts,
+              uniqueSuffix: opts?.uniqueSuffix ?? shadowSuffix(),
+            })
+            .then(recordDropFailures)
         ),
     }
   }

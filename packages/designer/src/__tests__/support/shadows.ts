@@ -46,6 +46,35 @@ export function recordProvision<T extends { name: string }>(
   return recorded
 }
 
+/** Невдалі `DROP` тіней цього файлу: ім'я → SQLSTATE (або його відсутність). */
+const dropFailures = new Map<string, string>()
+
+/**
+ * Wraps the `cleanup` of a template shadow so that a failed drop is recorded
+ * under the shadow's name; the leftover check then names its cause. Called
+ * only by the `provisionTemplateShadow` wrapper in `db-setup.ts`.
+ */
+export function recordDropFailures<
+  T extends {
+    cleanup(): Promise<{ shadow: string; sqlstate?: string } | undefined>
+  },
+>(shadow: T): T {
+  return {
+    ...shadow,
+    cleanup: async () => {
+      const failure = await shadow.cleanup()
+      if (failure !== undefined)
+        dropFailures.set(
+          failure.shadow,
+          failure.sqlstate === undefined
+            ? "no SQLSTATE"
+            : `SQLSTATE ${failure.sqlstate}`
+        )
+      return failure
+    },
+  }
+}
+
 /** Names of every shadow provisioned in this test file, in order. */
 export function provisionedShadows(): readonly string[] {
   return [...provisioned]
@@ -102,7 +131,13 @@ export async function expectNoLeftoverShadows(): Promise<void> {
       failures.push(error)
     }
   }
-  const message = `Shadow databases this test file left behind: ${leftovers.join(", ")}`
+  // Причина, якщо прибирання двигуна її повідомило: інакше тінь лишилась
+  // без `DROP` (виняток до прибирання) або `DROP` іншого шляху змовчав
+  const named = leftovers.map((name) => {
+    const cause = dropFailures.get(name)
+    return cause === undefined ? name : `${name} (engine drop failed: ${cause})`
+  })
+  const message = `Shadow databases this test file left behind: ${named.join(", ")}`
   if (failures.length > 0)
     throw new AggregateError(
       failures,

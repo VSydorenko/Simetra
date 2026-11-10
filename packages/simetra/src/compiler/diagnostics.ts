@@ -252,6 +252,7 @@ export const COMPILER_RULES = [
   "engine.diagnostic",
   "engine.unmodeled-drift",
   "engine.shadow-load-failed",
+  "engine.shadow-drop-failed",
   "engine.desired-rejected",
   "engine.clone-failed",
   "engine.preamble-unknown",
@@ -502,6 +503,7 @@ const WARNING_RULES: ReadonlySet<RuleCode> = new Set<RuleCode>([
   "sql.definer-reads-rls",
   "promote.cascade-to-restrict",
   "attribute.lazy-over-budget",
+  "engine.shadow-drop-failed",
 ])
 
 /** Діагностика з каталогу повідомлень; серйозність — властивість правила. */

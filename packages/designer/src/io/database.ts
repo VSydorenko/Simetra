@@ -6,6 +6,7 @@ import {
   ShadowServerError,
   ShadowServerMismatchError,
   ShadowTemplateMissingError,
+  shadowDropOf,
 } from "../schema-engine/errors"
 import type { DatabaseContext, DatabaseResource } from "../tools/types"
 import { UsageError } from "./usage-error"
@@ -113,6 +114,8 @@ export type DatabaseErrorClass =
   | {
       kind: "failure"
       params: { database: string; error: string; sqlstate?: string }
+      /** Тінь, яку не вдалося видалити (`engine.shadow-drop-failed`). */
+      shadowDrop?: Diagnostic
     }
 
 const refusal = (message: string, note = ""): DatabaseErrorClass => ({
@@ -141,7 +144,20 @@ export function classifyDatabaseError(
   error: unknown,
   names: DatabaseNames
 ): DatabaseErrorClass {
-  return classify(error, names, "")
+  const c = classify(error, names, "")
+  // Невидалена тінь — не причина відмови, а залишок на кластері: її ім'я
+  // йде поруч із причиною, а не замість неї
+  const drop = shadowDropOf(error)
+  if (drop === undefined) return c
+  const shadowDrop = diagnostic(
+    "engine.shadow-drop-failed",
+    "",
+    "",
+    drop.params
+  )
+  return c.kind === "refusal"
+    ? { kind: "refusal", message: `${c.message} ${shadowDrop.message}` }
+    : { ...c, shadowDrop }
 }
 
 /** `note` — речення перед «Nothing changed.» у кожній відмові. */
@@ -244,10 +260,14 @@ export function connectionErrorMessage(
   tool = "database"
 ): string {
   const c = classifyDatabaseError(error, { target: describe })
-  return c.kind === "refusal"
-    ? c.message
-    : localize({ code: "database.failed", params: { tool, ...c.params } }, "en")
-        .message
+  if (c.kind === "refusal") return c.message
+  const failed = localize(
+    { code: "database.failed", params: { tool, ...c.params } },
+    "en"
+  ).message
+  return c.shadowDrop === undefined
+    ? failed
+    : `${failed} ${c.shadowDrop.message}`
 }
 
 /**
@@ -267,7 +287,18 @@ export function isProgramBug(error: unknown): boolean {
 }
 
 export type DatabaseOutcome<T> =
-  { ok: true; value: T } | { ok: false; diagnostic: Diagnostic }
+  | { ok: true; value: T }
+  | { ok: false; diagnostic: Diagnostic; shadowDrop?: Diagnostic }
+
+/** Діагностики невдалого виклику: збій і, якщо була, невидалена тінь. */
+export function failureDiagnostics(outcome: {
+  diagnostic: Diagnostic
+  shadowDrop?: Diagnostic
+}): Diagnostic[] {
+  return outcome.shadowDrop === undefined
+    ? [outcome.diagnostic]
+    : [outcome.diagnostic, outcome.shadowDrop]
+}
 
 /**
  * Підключення одного виклику — єдина межа помилок бази. Відмова
@@ -295,6 +326,7 @@ export async function withDatabase<T>(
     return {
       ok: false,
       diagnostic: diagnostic("database.failed", "", "", { tool, ...c.params }),
+      ...(c.shadowDrop === undefined ? {} : { shadowDrop: c.shadowDrop }),
     }
   }
 }
