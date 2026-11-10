@@ -269,6 +269,27 @@ describe("stepFootprint", () => {
   })
 })
 
+describe("backfill steps", () => {
+  // Крок заповнення (платформна спека §6.6) займає лише свою таблицю, як
+  // крок двигуна: `ACCESS EXCLUSIVE`, який однаково бере наступний
+  // `SET NOT NULL`, у вихідних іменах. FK таблиці `UPDATE` не перебудовує,
+  // а перевірка посилання бере `ROW SHARE` — слабше за звірку сліду
+  const fill = engineStep("s2", "accessExclusive", [t("app", "c")], {
+    origin: "backfill",
+    class: "dataStep",
+    sql: 'UPDATE app.c SET "p_id" = DEFAULT WHERE "p_id" IS NULL',
+  })
+
+  // Моделі типово несуть FK `c.p_id → p.id`
+  it("takes its own table in old names and nothing for its foreign keys", () => {
+    const newToOld = new Map([[tableKey("app", "c"), tableKey("app", "old")]])
+    expect(stepFootprint(fill, models({ newToOld }))).toEqual([
+      { schema: "app", name: "old", mode: "accessExclusive" },
+    ])
+    expect(footprintSubjects([fill], models())).toEqual([])
+  })
+})
+
 describe("environment steps", () => {
   // Об'єкти кроку середовища створює той самий
   // план у тій самій транзакції, тож крок нікого на цілі не блокує

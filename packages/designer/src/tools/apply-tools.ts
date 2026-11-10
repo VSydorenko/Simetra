@@ -31,6 +31,7 @@ import {
   serializeRehearsal,
   verifyPlanHash,
   type ApplyTimeouts,
+  type BackfillResult,
   type DriftReport,
   type EngineDiagnostic,
   type EngineIdentity,
@@ -74,10 +75,13 @@ export interface PlanPromotion {
   data: PromotionSection["data"]
 }
 
-/** Крок плану для перегляду; клас конверсії — лише біля кроку видалення. */
+/**
+ * Крок плану для перегляду; клас конверсії — лише біля кроку видалення,
+ * факти заповнення — лише біля кроку заповнення.
+ */
 export type PlanDataStep = Pick<
   PlanStep,
-  "id" | "origin" | "class" | "lockClass" | "sql"
+  "id" | "origin" | "class" | "lockClass" | "sql" | "backfill"
 > & { conversion?: ConversionClass }
 
 /** Те з артефакту, що людина чи агент переглядає перед `apply`. */
@@ -142,6 +146,12 @@ export interface ApplyData {
    * застосування чи репетиція, звіту якої не записано.
    */
   report: string | null
+  /**
+   * Кроки заповнення перед `NOT NULL` (платформна спека §6.6): фактичний
+   * `rowCount` поруч із кількістю `NULL` на плані. Порожньо — кроків
+   * заповнення немає або після обриву з'єднання лічильники невідомі.
+   */
+  backfills: BackfillResult[]
 }
 
 /**
@@ -200,17 +210,20 @@ function planData(
       artifact.promotion === null
         ? null
         : planPromotion(artifact.promotion, model),
-    steps: artifact.steps.map(({ id, origin, class: cls, lockClass, sql }) => {
-      const conversion = conversions.get(id)
-      return {
-        id,
-        origin,
-        class: cls,
-        lockClass,
-        sql,
-        ...(conversion === undefined ? {} : { conversion }),
+    steps: artifact.steps.map(
+      ({ id, origin, class: cls, lockClass, sql, backfill }) => {
+        const conversion = conversions.get(id)
+        return {
+          id,
+          origin,
+          class: cls,
+          lockClass,
+          sql,
+          ...(conversion === undefined ? {} : { conversion }),
+          ...(backfill === undefined ? {} : { backfill }),
+        }
       }
-    }),
+    ),
     locks: artifact.locks,
     implicitLocks: artifact.implicitLocks,
     requiredPermissions: artifact.requiredPermissions,
@@ -643,6 +656,7 @@ export const applyTool = defineTool({
             status: outcome.status,
             attempts: outcome.attempts,
             report: null,
+            backfills: outcome.backfills ?? [],
           },
         }
       // Звіт успішної репетиції — поруч із файлом плану (спека промоції
@@ -658,6 +672,19 @@ export const applyTool = defineTool({
             status: outcome.status,
             attempts: outcome.attempts,
             report: ok ? report : null,
+            // Звіт репетиції лічить лише фактичне; план — з артефакту
+            backfills: outcome.evidence.backfills.map((b) => {
+              const facts = artifact.steps.find(
+                (s) => s.id === b.step
+              )?.backfill
+              // Доказ назвав крок без фактів заповнення — зламаний конвеєр,
+              // а не нуль рядків на плані
+              if (facts === undefined)
+                throw new Error(
+                  `rehearsal evidence names ${b.step}, which is not a backfill step of the plan`
+                )
+              return { ...b, rowsAtPlan: facts.rowsAtPlan }
+            }),
           },
           artifacts: ok
             ? [

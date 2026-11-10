@@ -7,7 +7,11 @@ import { TOOL_PIPELINE } from "./helpers/budget"
 import { commandByName, runTool, toolCommand } from "../cli/command"
 import { cliInput } from "../cli/input"
 import { renderResult } from "../cli/render"
-import type { PlanData, UnchangedPlanData } from "../tools/apply-tools"
+import type {
+  ApplyData,
+  PlanData,
+  UnchangedPlanData,
+} from "../tools/apply-tools"
 import { TOOLS, toolByName, type Tool } from "../tools/catalog"
 import { TOOL_NAMES } from "../tools/types"
 import {
@@ -844,6 +848,94 @@ describe("cli adapter", TOOL_PIPELINE, () => {
         "environment rights: the global default privileges of role postgres:",
         '  s2 environment catalogOnly (lock none) REVOKE ALL ON FUNCTION "app"."f"() FROM PUBLIC',
         '  s3 environment catalogOnly (lock none) GRANT EXECUTE ON FUNCTION "app"."f"() TO PUBLIC',
+      ])
+    })
+
+    it("renders the count, the triggers and the default of a backfill step", () => {
+      // Платформна спека §6.6: крок, таблиця, колонка й кількість `NULL`;
+      // default — лише біля кроку, що просить дозволу (прийнята таблиця)
+      const backfill = (id: string, table: string, permission: boolean) => ({
+        id,
+        origin: "backfill" as const,
+        class: "dataStep" as const,
+        lockClass: "accessExclusive",
+        sql: `UPDATE "app"."${table}" SET "note" = DEFAULT WHERE "note" IS NULL`,
+        backfill: {
+          table: { schema: "app", name: table },
+          column: "note",
+          rowsAtPlan: 3,
+          permission,
+          default: "''::text",
+          triggers: permission
+            ? [{ name: "audit", enabled: "O" as const }]
+            : [],
+        },
+      })
+      const data: PlanData = {
+        file: "plans/0123456789ab-ba9876543210.plan.json",
+        planHash: hash,
+        fromHash: "0123456789ab".padEnd(64, "0"),
+        toHash: "ba9876543210".padEnd(64, "0"),
+        drift: null,
+        promotion: null,
+        steps: [backfill("s1", "party", false), backfill("s2", "notes", true)],
+        locks: [],
+        implicitLocks: [],
+        requiredPermissions: ["s2"],
+        environment: { role: "postgres", defaultPrivileges: [] },
+        plpgsqlCheck: "installed",
+        expectedBlindFunctions: 0,
+        rightsOrphans: NO_ORPHANS,
+      }
+      const { stdout } = renderResult(
+        tool("plan"),
+        {
+          ok: true,
+          written: true,
+          changes: [],
+          artifacts: [data.file],
+          diagnostics: [],
+          data,
+        },
+        { dir: "metadata", locale: "en", format: "text" }
+      )
+      const lines = stdout.split("\n")
+      const steps = lines.indexOf("steps (2):")
+      expect(lines.slice(steps + 1, steps + 7)).toEqual([
+        '  s1 backfill dataStep (lock accessExclusive) UPDATE "app"."party" SET "note" = DEFAULT WHERE "note" IS NULL',
+        "    backfill app.party.note: 3 row(s) with NULL at plan",
+        '  s2 backfill dataStep (lock accessExclusive; needs allow: s2) UPDATE "app"."notes" SET "note" = DEFAULT WHERE "note" IS NULL',
+        "    backfill app.notes.note: 3 row(s) with NULL at plan",
+        "    default: ''::text",
+        "    triggers disabled during the fill: audit",
+      ])
+    })
+
+    it("renders the filled rows of a backfill step after apply", () => {
+      // Р8: фактичний `rowCount` поруч із кількістю `NULL` на плані
+      const data: ApplyData = {
+        status: "committed",
+        attempts: 1,
+        report: null,
+        backfills: [
+          {
+            step: "s2",
+            schema: "app",
+            table: "notes",
+            column: "note",
+            rowsAtPlan: 2,
+            rows: 3,
+          },
+        ],
+      }
+      const { stdout } = renderResult(
+        tool("apply"),
+        { ok: true, written: false, changes: [], diagnostics: [], data },
+        { dir: "metadata", locale: "en", format: "text" }
+      )
+      expect(stdout.split("\n").slice(0, 2)).toEqual([
+        "apply: committed in 1 attempt(s)",
+        "  backfill s2 app.notes.note: 3 row(s) filled with the default; 2 with NULL at plan",
       ])
     })
 
