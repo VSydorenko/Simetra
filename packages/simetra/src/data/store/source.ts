@@ -294,6 +294,30 @@ export function createCoreSource(
 }
 
 /**
+ * A view of `source` that records the epoch of every answered part, in the
+ * order of arrival: a read applies only after the session accepted every
+ * epoch it carries (P4-B plan B1c, Р7) — a key absent from an answer has no
+ * row to carry it.
+ */
+export function tracked(source: CoreSource): {
+  source: CoreSource
+  epochs: Set<string | null>
+} {
+  const epochs = new Set<string | null>()
+  return {
+    epochs,
+    source: {
+      close: () => source.close(),
+      async read(parts) {
+        const result = await source.read(parts)
+        for (const item of result.items) if (item.ok) epochs.add(item.epoch)
+        return result
+      },
+    },
+  }
+}
+
+/**
  * Reads one part and returns its rows; a failed part is `CommandFailure` of
  * its error. For the callers that read one query at a time.
  */

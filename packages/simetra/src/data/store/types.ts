@@ -118,6 +118,12 @@ export interface CoreLimits {
   readonly fullLimit: number
   readonly releaseDelayMs: number
   readonly preloadTtlMs: number
+  /**
+   * After a version epoch switch, visible views are re-read at a moment
+   * uniform on `[0, revalidateIntervalMs)` (P4-B plan B1c, Р8): a primary
+   * restart switches every client at once. The interval tick itself is B5.
+   */
+  readonly revalidateIntervalMs: number
 }
 
 export const DEFAULT_CORE_LIMITS: CoreLimits = {
@@ -131,6 +137,7 @@ export const DEFAULT_CORE_LIMITS: CoreLimits = {
   fullLimit: 5_000,
   releaseDelayMs: 1_000,
   preloadTtlMs: 5_000,
+  revalidateIntervalMs: 60_000,
 }
 
 /** Diagnostic events of the core. */

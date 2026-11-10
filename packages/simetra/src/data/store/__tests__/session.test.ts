@@ -163,7 +163,7 @@ describe("session.close", () => {
 
   it("clears epochs and runs onClose hooks", () => {
     const { session } = make()
-    session.epochs.remember("o\u0000k", 3)
+    session.epochs.remember("o\u0000k", 3, null)
     const hook = vi.fn()
     session.onClose(hook)
     session.close("signed-out", () => {})

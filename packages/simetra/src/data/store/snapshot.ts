@@ -89,9 +89,12 @@ export function computeRowView(
   }
   const shown = visibleRow(e)
   const values = shown ?? EMPTY_VALUES
-  const { minVersion, disconnect, seen } = e.stale
+  const { minVersion, disconnect, seen, epoch } = e.stale
   const state =
-    minVersion !== undefined || disconnect !== undefined || seen !== undefined
+    minVersion !== undefined ||
+    disconnect !== undefined ||
+    seen !== undefined ||
+    epoch !== undefined
       ? "stale"
       : "synced"
   const stale =

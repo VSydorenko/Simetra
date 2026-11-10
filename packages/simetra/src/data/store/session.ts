@@ -13,6 +13,40 @@ export interface Scope {
   assert(): void
 }
 
+/** Discarded answers in a row after which the session is unavailable (Р12). */
+export const DISCARDS_MAX = 8
+
+/** The pause before the first re-read after a discarded answer; doubles. */
+export const DISCARD_PAUSE_MS = 100
+
+/**
+ * The version epoch state of a session (P4-B plan B1c, Р5–Р8, Р12, Р13).
+ * Versions compare only within one epoch; the session follows one current
+ * epoch and keeps every epoch it switched from until it closes.
+ */
+export interface VersionEpochs {
+  /** The current version epoch; `null` until the first non-empty one. */
+  current(): string | null
+  /** The epoch the last switch left; `null` — the session never switched. */
+  previous(): string | null
+  /** The session epoch of the last switch; 0 — never. */
+  switchedAt(): number
+  /**
+   * An answer proves a row of the current epoch: its epoch is the current
+   * non-empty one and its read started after the last switch (Р13).
+   */
+  proves(epoch: string | null | undefined, startEpoch: number): boolean
+  /** Answers discarded in a row; an applied answer resets it. */
+  discards(): number
+  /**
+   * {@link DISCARDS_MAX} answers in a row were discarded: every later answer
+   * is discarded too and views get `command.unavailable`. The only way out
+   * is a new session (Р12, exception Р36): the database keeps answering from
+   * an epoch the session already left.
+   */
+  unavailable(): boolean
+}
+
 /** The session of the core: the single change point (P4-B spec §6.1). */
 export interface Session {
   readonly subject: string
@@ -20,6 +54,22 @@ export interface Session {
   readonly signal: AbortSignal
   readonly closed: CloseReason | undefined
   readonly epochs: Epochs
+  readonly versions: VersionEpochs
+  /**
+   * The single check before an answer is written to the store (P4-B plan
+   * B1c, Р6, Р7, Р12), called inside `commit` once per answer in the order
+   * of application. `null` applies and changes nothing. The first non-empty
+   * epoch becomes current without a switch. Another non-empty epoch is a
+   * switch (the session epoch moves, `onSwitch` listeners run) and the
+   * answer applies — unless the epoch was left before or the read started
+   * before the last switch: then the answer is discarded.
+   */
+  acceptEpoch(epoch: string | null, startEpoch: number): "apply" | "discard"
+  /**
+   * Called inside the `commit` of a switch with the epoch it left, before the
+   * answer that caused it is written.
+   */
+  onSwitch(listener: (previous: string) => void): void
   token(): GenerationToken
   /** Valid while the session is alive and `isValid()` is true. */
   childToken(isValid: () => boolean): GenerationToken
@@ -56,6 +106,32 @@ export function createSession(options: {
   let closed: CloseReason | undefined
   let closing = false
   let inCommit = false
+
+  let current: string | null = null
+  let previous: string | null = null
+  let switchedAt = 0
+  let discards = 0
+  let unavailable = false
+  // Усі покинуті епохи до кінця сесії (Р12): витіснена могла б повернутись
+  // як нова й перемикати епоху на кожній відповіді під час PITR.
+  const abandoned = new Set<string>()
+  const switchListeners: Array<(previous: string) => void> = []
+
+  const versions: VersionEpochs = {
+    current: () => current,
+    previous: () => previous,
+    switchedAt: () => switchedAt,
+    proves: (epoch, startEpoch) =>
+      current !== null && epoch === current && startEpoch >= switchedAt,
+    discards: () => discards,
+    unavailable: () => unavailable,
+  }
+
+  function discard(): "discard" {
+    discards++
+    if (discards >= DISCARDS_MAX) unavailable = true
+    return "discard"
+  }
 
   const sessionToken: GenerationToken = {
     get valid() {
@@ -106,6 +182,36 @@ export function createSession(options: {
       return closed
     },
     epochs,
+    versions,
+    acceptEpoch(epoch, startEpoch) {
+      if (!inCommit) throw new Error("acceptEpoch outside commit")
+      if (unavailable) return "discard"
+      if (epoch === null || epoch === current) {
+        discards = 0
+        return "apply"
+      }
+      if (current === null) {
+        // Перша непорожня епоха: `null`-відповіді до неї порівнювались як
+        // завжди (Р6), тож скидати нічого.
+        current = epoch
+        discards = 0
+        return "apply"
+      }
+      // Відповідь покинутої епохи чи читання, що почалось до перемикання,
+      // не впорядкована з рядками поточної (Р7, Р12).
+      if (abandoned.has(epoch) || startEpoch < switchedAt) return discard()
+      abandoned.add(current)
+      previous = current
+      current = epoch
+      switchedAt = epochs.next()
+      discards = 0
+      epochs.adopt(previous)
+      for (const listener of switchListeners) listener(previous)
+      return "apply"
+    },
+    onSwitch(listener) {
+      if (closed === undefined) switchListeners.push(listener)
+    },
     token: () => sessionToken,
     childToken: (isValid) => ({
       get valid() {
@@ -163,6 +269,10 @@ export function createSession(options: {
         }
         closeHooks.length = 0
         listeners.clear()
+        switchListeners.length = 0
+        abandoned.clear()
+        current = null
+        previous = null
       }
     },
   }

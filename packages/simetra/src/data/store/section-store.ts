@@ -1,5 +1,5 @@
-import { keyId, pairId } from "./epoch"
-import { differentEpochs, effectiveEpoch, type RowEntry } from "./object-store"
+import { differentEpochs, effectiveEpoch, keyId, pairId } from "./epoch"
+import type { RowEntry } from "./object-store"
 import type { ObjectStore } from "./object-store"
 import type { Scope, Session } from "./session"
 import type { Key, ObjectName, SectionLine } from "./types"
@@ -63,11 +63,11 @@ export interface SectionStore {
 
 export function createSectionStore(options: {
   object: ObjectName
-  session: Pick<Session, "epochs" | "onClose">
+  session: Pick<Session, "epochs" | "versions" | "onClose" | "onSwitch">
   rows: Pick<ObjectStore, "get">
 }): SectionStore {
   const { object, session, rows } = options
-  const { epochs } = session
+  const { epochs, versions } = session
   const owners = new Map<Key, Map<string, SectionEntry>>()
   // Найбільша бачена `ownerVersion` власника; живе, доки живі його ТЧ:
   // після clearOwner і purge стару відповідь відкидають removed і надгробки.
@@ -81,6 +81,25 @@ export function createSectionStore(options: {
   session.onClose(() => {
     owners.clear()
     ownerVersions.clear()
+  })
+
+  // Перемикання епохи (Р5): записи без епохи читались до нього, тож належать
+  // покинутій — відповідь нової їх заміняє, а `null` порівнюється як завжди.
+  session.onSwitch((previous) => {
+    for (const sections of owners.values()) {
+      for (const [name, e] of sections) {
+        sections.set(name, {
+          ...e,
+          versionEpoch: effectiveEpoch(e.versionEpoch, previous),
+        })
+      }
+    }
+    for (const [owner, seen] of ownerVersions) {
+      ownerVersions.set(owner, {
+        ...seen,
+        versionEpoch: effectiveEpoch(seen.versionEpoch, previous),
+      })
+    }
   })
 
   const pairBuried = (scopeId: string | null, readEpoch: number) =>
@@ -151,8 +170,20 @@ export function createSectionStore(options: {
         return "rejected"
       const seen = ownerVersions.get(owner)
       // `null` останньої баченої епохи не змінює (Р6): тримана — запис
-      // власника, а без нього — епоха шапки в сховищі.
-      const held = seen?.versionEpoch ?? rows.get(owner)?.versionEpoch
+      // власника, без нього — епоха шапки в сховищі, а після перемикання
+      // без обох — покинута, бо `null` не доводить поточної (Р5).
+      const held =
+        seen?.versionEpoch ??
+        rows.get(owner)?.versionEpoch ??
+        versions.previous()
+      // Після перемикання `null`-відповідь не впорядкована з даними поточної
+      // епохи (Р5): рядки ТЧ не пишуться.
+      if (
+        versionEpoch === null &&
+        versions.previous() !== null &&
+        held === versions.current()
+      )
+        return "rejected"
       const sections = owners.get(owner) ?? new Map<string, SectionEntry>()
       sections.set(section, {
         lines,

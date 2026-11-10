@@ -9,8 +9,14 @@ import { nullableOf } from "./filter"
 import { includeKeys, readIncluded, type Included } from "./include"
 import { visibleRow, type PutResult } from "./object-store"
 import type { OwnerScope } from "./section-store"
-import type { Scope } from "./session"
-import { readKeys, readOne, serverRow, type CoreSource } from "./source"
+import type { Scope, Session } from "./session"
+import {
+  readKeys,
+  readOne,
+  serverRow,
+  tracked,
+  type CoreSource,
+} from "./source"
 import type {
   GenerationToken,
   CoreLimits,
@@ -67,6 +73,7 @@ export interface StoreOps {
 
 /** What the readers need from the core. */
 export interface ReaderContext {
+  readonly session: Pick<Session, "acceptEpoch">
   readonly source: CoreSource
   readonly limits: CoreLimits
   readonly strict: boolean
@@ -87,8 +94,35 @@ export interface ReaderTarget {
   atEnd: boolean
 }
 
-/** Applies a read result inside one `commit`. */
-export type Apply = (scope: Scope) => void
+/** Writes a read result inside one `commit`. */
+export type Write = (scope: Scope) => void
+
+/**
+ * Applies a read result inside one `commit`; `false` — the session discarded
+ * an epoch of the answer (P4-B plan B1c, Р7, Р12) and nothing was written.
+ */
+export type Apply = (scope: Scope) => boolean
+
+/**
+ * Runs `read` over a source that records the epoch of every answer; the
+ * returned `Apply` writes only after the session accepted each of them, in
+ * the order they arrived (`acceptEpoch` — the single check before a write).
+ */
+export async function gated<C extends ReaderContext>(
+  ctx: C,
+  readEpoch: number,
+  read: (ctx: C) => Promise<Write>
+): Promise<Apply> {
+  const { source, epochs } = tracked(ctx.source)
+  const write = await read({ ...ctx, source })
+  return (scope) => {
+    for (const epoch of epochs) {
+      if (ctx.session.acceptEpoch(epoch, readEpoch) === "discard") return false
+    }
+    write(scope)
+    return true
+  }
+}
 
 /** The size of the first page of a truncated `full` (P4-B plan П5). */
 const WINDOW_PAGE = 100
@@ -223,7 +257,7 @@ function fullLayout(s: ReaderTarget, fetched: ReadonlyMap<Key, Values>): Key[] {
   return layout
 }
 
-const NOTHING: Apply = () => {}
+const NOTHING: Write = () => {}
 
 /**
  * The keyset fetch of a `full` form (§6.1): pages in the view's order up to
@@ -284,7 +318,7 @@ async function readFull(
   s: ReaderTarget,
   readEpoch: number,
   token: GenerationToken
-): Promise<Apply> {
+): Promise<Write> {
   const { limits, ops } = ctx
   const { form } = s
   const o = form.object
@@ -353,7 +387,7 @@ async function readKeysForm(
   ctx: ReaderContext,
   s: ReaderTarget,
   readEpoch: number
-): Promise<Apply> {
+): Promise<Write> {
   const { ops } = ctx
   const { form } = s
   const o = form.object
@@ -382,7 +416,7 @@ async function readCard(
   ctx: ReaderContext,
   s: ReaderTarget,
   readEpoch: number
-): Promise<Apply> {
+): Promise<Write> {
   const { ops } = ctx
   const o = s.form.object
   const key = s.form.keys[0]!
@@ -399,7 +433,7 @@ async function readSection(
   ctx: ReaderContext,
   s: ReaderTarget,
   readEpoch: number
-): Promise<Apply> {
+): Promise<Write> {
   const { ops } = ctx
   const o = s.form.object
   const spec = s.form.spec as Extract<ViewSpec, { kind: "section" }>
@@ -432,8 +466,8 @@ async function readSection(
 }
 
 /**
- * Reads the form of `s`; the result is applied by one `commit`. A
- * multi-request read stops once `token` is invalid.
+ * Reads the form of `s`; the result is applied by one `commit`, gated by the
+ * epochs of its answers. A multi-request read stops once `token` is invalid.
  */
 export function readForm(
   ctx: ReaderContext,
@@ -441,6 +475,16 @@ export function readForm(
   readEpoch: number,
   token: GenerationToken
 ): Promise<Apply> {
+  return gated(ctx, readEpoch, (c) => readFormWrite(c, s, readEpoch, token))
+}
+
+/** {@link readForm} without the epoch gate: the caller gates the whole read. */
+export function readFormWrite(
+  ctx: ReaderContext,
+  s: ReaderTarget,
+  readEpoch: number,
+  token: GenerationToken
+): Promise<Write> {
   switch (s.form.spec.kind) {
     case "keys":
       return readKeysForm(ctx, s, readEpoch)

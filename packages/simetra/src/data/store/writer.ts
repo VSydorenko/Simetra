@@ -6,14 +6,21 @@ import { visibleRow, type RowEntry } from "./object-store"
 import {
   applyIncluded,
   fetchFull,
-  readForm,
+  gated,
+  readFormWrite,
   type Apply,
   type ReaderContext,
+  type Write,
 } from "./readers"
-import type { Scope, Session } from "./session"
+import { DISCARD_PAUSE_MS, type Scope, type Session } from "./session"
 import type { RowViews } from "./snapshot"
 import { ReadLimiterClosed, readKeys } from "./source"
-import { errorOf, type Subset, type SubsetRegistry } from "./subsets"
+import {
+  EPOCH_UNAVAILABLE,
+  errorOf,
+  type Subset,
+  type SubsetRegistry,
+} from "./subsets"
 import type {
   ActiveView,
   GenerationToken,
@@ -166,6 +173,12 @@ export function createWriter(ctx: WriterContext, scope: Scope): Writer {
     patch(object, rows, readEpoch) {
       scope.assert()
       const o = ctx.objectOf(object)
+      // Епохи відповіді — до запису, у порядку рядків (Р7): відкинута
+      // відповідь не пише нічого.
+      const epochs = new Set(rows.map((row) => row.versionEpoch ?? null))
+      for (const epoch of epochs) {
+        if (ctx.session.acceptEpoch(epoch, readEpoch) === "discard") return
+      }
       // Перечитування лише латає ключі з власником (§6.2): нового ключа
       // сигнал у сховище не вносить.
       for (const row of rows) {
@@ -317,7 +330,7 @@ function applyKeys(
   rows: readonly ServerRow[],
   startEpoch: number,
   marksNew: boolean
-): Apply {
+): Write {
   const o = s.form.object
   return (scope) => {
     const got = new Set<Key>()
@@ -360,7 +373,7 @@ async function readFullAgain(
   s: Subset,
   startEpoch: number,
   token: GenerationToken
-): Promise<Apply> {
+): Promise<Write> {
   const { form } = s
   const o = form.object
   const { keysPerRequest } = ctx.limits
@@ -434,12 +447,21 @@ async function readFullAgain(
   }
 }
 
-async function readAgain(
+function readAgain(
   ctx: WriterContext,
   s: Subset,
   startEpoch: number,
   token: GenerationToken
 ): Promise<Apply> {
+  return gated(ctx, startEpoch, (c) => writeAgain(c, s, startEpoch, token))
+}
+
+async function writeAgain(
+  ctx: WriterContext,
+  s: Subset,
+  startEpoch: number,
+  token: GenerationToken
+): Promise<Write> {
   const spec = s.form.spec
   const o = s.form.object
   const { keysPerRequest } = ctx.limits
@@ -460,7 +482,7 @@ async function readAgain(
       return applyKeys(ctx, s, [spec.key], rows, startEpoch, false)
     }
     case "section":
-      return readForm(ctx, s, startEpoch, token)
+      return readFormWrite(ctx, s, startEpoch, token)
     case "full":
       return readFullAgain(ctx, s, startEpoch, token)
   }
@@ -524,6 +546,7 @@ async function revalidateViews(
     )
   )
   const again: Subset[] = []
+  const discarded: Subset[] = []
   session.commit(
     (scope) => {
       try {
@@ -552,7 +575,15 @@ async function revalidateViews(
             continue
           }
           try {
-            result.apply(scope)
+            if (!result.apply(scope)) {
+              // Відкинута відповідь (Р12): перечитування з паузою, а після
+              // межі відкинутих поспіль — `command.unavailable`.
+              if (session.versions.unavailable()) {
+                s.status = "error"
+                s.error = EPOCH_UNAVAILABLE
+              } else discarded.push(s)
+              continue
+            }
             if (s.status === "error") {
               s.status = "ready"
               s.error = undefined
@@ -570,6 +601,19 @@ async function revalidateViews(
     token,
     `revalidate ${o.name}`
   )
+  if (discarded.length > 0) {
+    const pause =
+      DISCARD_PAUSE_MS * 2 ** Math.max(0, session.versions.discards() - 1)
+    // Не чекаємо паузи: `revalidate` завершується, а повтор іде тим самим
+    // системним шляхом (склад не змінюється).
+    setTimeout(() => {
+      revalidateViews(
+        ctx,
+        o,
+        discarded.filter((s) => s.alive && !s.purged)
+      ).catch((error: unknown) => ctx.log({ kind: "listener-failed", error }))
+    }, pause)
+  }
   // Дефект самотесту «системне перечитування через завантаження».
   if (ctx.defects.has("system-reread-via-load")) {
     for (const { s } of results) {

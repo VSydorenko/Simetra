@@ -46,9 +46,6 @@ const ALLOWED: Record<string, string> = {
   // Маркер підтверджує збережений рядок як є: сервер шле його лише в епосі,
   // рівній епосі `known`, тож епоха збереженого рядка — епоха відповіді.
   "source.ts rowFromMarker row-spread": "a marker confirms the held row",
-  // Новий ключ: слот нічого не тримає, тож вхідна епоха і є ефективною
-  // (`effectiveEpoch(e, null) === e`); епоху пам'яті версій веде ядро.
-  "object-store.ts insert row-value": "a new key holds no epoch",
   // Копія запису з власною епохою без змін — лише `complete` скидається.
   "section-store.ts resetCompleteness row-spread": "copies its own epoch",
   "section-store.ts resetCompleteness row-value": "copies its own epoch",

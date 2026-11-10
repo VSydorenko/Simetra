@@ -1,33 +1,8 @@
 import type { CatalogEntry } from "simetra/model"
 import { NO_DEFECTS, type Defects } from "./defects"
-import { keyId, pairId } from "./epoch"
+import { differentEpochs, effectiveEpoch, keyId, pairId } from "./epoch"
 import type { Scope, Session } from "./session"
 import type { CoreLogEntry, Key, ObjectName, ServerRow, Values } from "./types"
-
-/**
- * Two version epochs that cannot be ordered: both non-empty and different
- * (P4-B plan B1c, Р5, Р6). `null` or absent — a replica or a database without
- * an epoch — compares with any epoch by version as usual.
- */
-export function differentEpochs(
-  a: string | null | undefined,
-  b: string | null | undefined
-): boolean {
-  return a != null && b != null && a !== b
-}
-
-/**
- * The epoch a write keeps in store state (P4-B plan B1c, Р5, Р6): the incoming
- * one, and for a `null` answer (a replica, a database without an epoch) the
- * epoch already held. Every write of an epoch into the store goes through it
- * (guarded by `__tests__/epoch-write-guard.test.ts`).
- */
-export function effectiveEpoch(
-  incoming: string | null | undefined,
-  held: string | null | undefined
-): string | null {
-  return incoming ?? held ?? null
-}
 
 /**
  * The version rule (P4-B spec §6.2 rule 1, Рд24) — one function for every
@@ -93,7 +68,8 @@ export interface RowEntry {
    * `seen` (the eviction horizon, §6.2 rule 1) is set, the values are hidden.
    */
   stale: {
-    minVersion?: { v: number; epoch: number }
+    /** `versionEpoch` — the version epoch `v` belongs to (Р5). */
+    minVersion?: { v: number; epoch: number; versionEpoch: string | null }
     /**
      * Channel → mark epoch. Per channel: a row that moved keeps the mark of
      * its old channel until that channel clears it, so marking and clearing
@@ -101,6 +77,12 @@ export interface RowEntry {
      */
     disconnect?: Map<string, number>
     seen?: { epoch: number }
+    /**
+     * The version epoch switched and no answer proved the row since (P4-B
+     * plan B1c, Р8, Р13): only an answer of the current epoch whose read
+     * started after the switch clears it.
+     */
+    epoch?: true
   }
 }
 
@@ -181,14 +163,17 @@ export interface ObjectStore {
 export function createObjectStore(options: {
   object: ObjectName
   entry: CatalogEntry
-  session: Pick<Session, "epochs" | "onFlush" | "onClose">
+  session: Pick<
+    Session,
+    "epochs" | "versions" | "onFlush" | "onClose" | "onSwitch"
+  >
   log: (entry: CoreLogEntry) => void
   defects?: Defects
   /** Inspection only: a fresh "row absent" answer re-marked a `removed` slot. */
   onRemark?: (key: Key) => void
 }): ObjectStore {
   const { object, entry, session, log, onRemark } = options
-  const { epochs } = session
+  const { epochs, versions } = session
   const defects = options.defects ?? NO_DEFECTS
   const bury = (id: string) => {
     if (!defects.has("no-tombstone")) epochs.bury(id)
@@ -224,6 +209,41 @@ export function createObjectStore(options: {
     hidden = 0
   })
 
+  // Перемикання епохи (Р5, Р8): рядки без епохи читались до нього, тож
+  // належать покинутій; позначки мінімальної версії старої епохи скидаються,
+  // а кожен рядок — `stale`, доки його не підтвердить читання нової.
+  session.onSwitch((previous) => {
+    for (const e of rows.values()) {
+      e.versionEpoch = effectiveEpoch(e.versionEpoch, previous)
+      if (e.row !== undefined)
+        e.row = {
+          ...e.row,
+          versionEpoch: effectiveEpoch(e.row.versionEpoch, previous),
+        }
+      for (const field of lazyFields) {
+        if (e.lazyVersions.has(field))
+          e.lazyEpochs.set(
+            field,
+            effectiveEpoch(e.lazyEpochs.get(field), previous)
+          )
+      }
+      delete e.stale.minVersion
+      e.stale.epoch = true
+    }
+  })
+
+  // Епоха, яку тримає новий слот: до перемикання — епоха пам'яті версій; після
+  // — покинута, бо `null`-відповідь не доводить, що рядок з поточної (Р5).
+  const freshHeld = (id: string) =>
+    versions.previous() ?? epochs.seen(id)?.versionEpoch ?? null
+
+  // Позначка `epoch` після запису: підтвердження знімає, інше після
+  // перемикання ставить (Р13).
+  function markEpoch(e: RowEntry, row: ServerRow, readEpoch: number) {
+    if (versions.proves(row.versionEpoch, readEpoch)) delete e.stale.epoch
+    else if (versions.previous() !== null) e.stale.epoch = true
+  }
+
   const buried = (key: Key, scopeId: string | null, readEpoch: number) =>
     epochs.buriedSince(keyId(object, key), readEpoch) ||
     epochs.buriedSince(pairId(object, scopeId), readEpoch)
@@ -241,10 +261,11 @@ export function createObjectStore(options: {
 
   function clearMarks(e: RowEntry, readEpoch: number) {
     const { minVersion, seen } = e.stale
+    // Позначка іншої епохи версій не порівнюється з версією рядка (Р5).
     if (
       minVersion !== undefined &&
-      e.version >= minVersion.v &&
-      readEpoch >= minVersion.epoch
+      (differentEpochs(minVersion.versionEpoch, e.versionEpoch) ||
+        (e.version >= minVersion.v && readEpoch >= minVersion.epoch))
     )
       delete e.stale.minVersion
     if (seen !== undefined && readEpoch >= seen.epoch) delete e.stale.seen
@@ -263,13 +284,20 @@ export function createObjectStore(options: {
     lazyRead: boolean
   ): PutResult {
     const id = keyId(object, row.key)
-    const known = epochs.seen(id)?.version
+    const memory = epochs.seen(id)
+    // Пам'ять іншої непорожньої епохи відповіді не стосується (Р5); `null`
+    // порівнюється з пам'яттю будь-якої епохи.
+    const known =
+      memory === undefined ||
+      differentEpochs(memory.versionEpoch, row.versionEpoch)
+        ? undefined
+        : memory
+    const held = freshHeld(id)
     const e: RowEntry = {
-      row,
+      row: { ...row, versionEpoch: effectiveEpoch(row.versionEpoch, held) },
       scope: scopeId,
       version: row.version,
-      // Нового ключа слот не тримає — епоха лише з відповіді.
-      versionEpoch: effectiveEpoch(row.versionEpoch, null),
+      versionEpoch: effectiveEpoch(row.versionEpoch, held),
       writtenEpoch: readEpoch,
       owners: 0,
       lazyVersions: new Map(),
@@ -277,8 +305,14 @@ export function createObjectStore(options: {
       stale: {},
     }
     setLazy(e, row, lazyRead)
-    const lower = known !== undefined && row.version < known
-    if (lower) e.stale.minVersion = { v: known, epoch: epochs.next() }
+    markEpoch(e, row, readEpoch)
+    const lower = known !== undefined && row.version < known.version
+    if (lower)
+      e.stale.minVersion = {
+        v: known.version,
+        epoch: epochs.next(),
+        versionEpoch: effectiveEpoch(known.versionEpoch, null),
+      }
     // Читання старше за горизонт кошика ключа чи пари: витіснений надгробок
     // міг належати видаленому чи прибраному рядку, тож значення ховаємо до
     // перечитування — навіть коли пам'ять версій ключ ще знає.
@@ -322,6 +356,19 @@ export function createObjectStore(options: {
       }
       if (e === undefined)
         return insert(row, incomingScope ?? null, readEpoch, lazyRead)
+      // Після перемикання `null`-відповідь не впорядкована з рядком поточної
+      // епохи (Р5): не заміняє його, а ключ стає `stale`. Перечитування —
+      // одне на позначку: репліка знову відповіла б `null`.
+      if (
+        row.versionEpoch == null &&
+        versions.previous() !== null &&
+        e.versionEpoch === versions.current()
+      ) {
+        if (e.stale.epoch !== undefined) return "rejected"
+        e.stale.epoch = true
+        tail.add(row.key)
+        return "stale-inserted"
+      }
       // `removed` знімає лише читання після позначки — будь-якої версії.
       if (
         e.removed !== undefined &&
@@ -346,7 +393,11 @@ export function createObjectStore(options: {
           row.version < e.version &&
           !differentEpochs(e.versionEpoch, row.versionEpoch)
         ) {
-          e.stale.minVersion = { v: e.version, epoch: epochs.next() }
+          e.stale.minVersion = {
+            v: e.version,
+            epoch: epochs.next(),
+            versionEpoch: effectiveEpoch(e.versionEpoch, null),
+          }
           tail.add(row.key)
           result = "stale-inserted"
         }
@@ -379,6 +430,7 @@ export function createObjectStore(options: {
       e.writtenEpoch = Math.max(e.writtenEpoch, readEpoch)
       setLazy(e, row, lazyRead)
       clearMarks(e, readEpoch)
+      markEpoch(e, row, readEpoch)
       if (!moved) return result
       hide(e, row.key)
       return "stale-inserted"
@@ -448,7 +500,12 @@ export function createObjectStore(options: {
         const e = rows.get(key)
         if (e === undefined || e.version >= minVersion) continue
         const v = Math.max(e.stale.minVersion?.v ?? minVersion, minVersion)
-        e.stale.minVersion = { v, epoch: epochs.next() }
+        // Версія сигналу — версія поточної епохи (Р13).
+        e.stale.minVersion = {
+          v,
+          epoch: epochs.next(),
+          versionEpoch: effectiveEpoch(versions.current(), e.versionEpoch),
+        }
       }
     },
 
@@ -488,11 +545,18 @@ export function createObjectStore(options: {
       if (e.owners > 0 || defects.has("row-without-owner")) return
       const id = keyId(object, key)
       // Пам'ятна версія не менша за очікувану: інакше stale-вставка після
-      // повернення ключа втратила б свою мінімальну версію.
-      epochs.remember(
-        id,
-        Math.max(e.version, e.stale.minVersion?.v ?? e.version)
-      )
+      // повернення ключа втратила б свою мінімальну версію. Пам'ять — лише
+      // поточної епохи: версія покинутої не впорядкована з відповідями нової,
+      // а пам'ять поточної вона б витіснила (Р5).
+      const min = e.stale.minVersion
+      if (!differentEpochs(e.versionEpoch, versions.current()))
+        epochs.remember(
+          id,
+          min === undefined || differentEpochs(min.versionEpoch, e.versionEpoch)
+            ? e.version
+            : Math.max(e.version, min.v),
+          e.versionEpoch
+        )
       // Слот removed без надгробка дав би старій відповіді повернути значення.
       if (e.removed !== undefined) bury(id)
       rows.delete(key)
