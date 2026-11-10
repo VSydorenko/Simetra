@@ -1,21 +1,24 @@
 import {
   CommandFailure,
+  errorFromWire,
+  type CatalogIndex,
   type DatabaseProvider,
   type SourceAdapter,
-  type WireReadResult,
+  type WireReadParts,
 } from "simetra/model"
 import { runtimeHandleOf, type RuntimeHandle } from "./runtime/handle"
 import type { DataRuntime } from "./runtime/runtime"
 
 /**
  * The Server Function source adapter (P4-B spec §5.2): a read goes through
- * the runtime transport wrapper; a failure is a `CommandFailure` of the same
- * code.
+ * the runtime transport wrapper as a one-part `read`; a failure of the
+ * request or of its part is a `CommandFailure` of the same code.
  */
 export function createServerFunctionAdapter(
   runtime: DataRuntime
 ): SourceAdapter {
-  return serverFunctionAdapter(runtimeHandleOf(runtime).send)
+  const { send, index } = runtimeHandleOf(runtime)
+  return serverFunctionAdapter(send, index)
 }
 
 /**
@@ -23,19 +26,29 @@ export function createServerFunctionAdapter(
  * builds its default source with it before the runtime handle exists.
  */
 export function serverFunctionAdapter(
-  send: RuntimeHandle["send"]
+  send: RuntimeHandle["send"],
+  index: CatalogIndex
 ): SourceAdapter {
   return {
     // Сервер повертає `included` сам (§4.2, Р5).
     capabilities: { include: true },
     async read(query) {
+      // Одна частина `query`: пакет частин адаптер шле разом із ядром (B1c-2).
+      const value = (await send({
+        type: "read",
+        items: [{ type: "query", query }],
+      })) as WireReadParts
       // Форму значення тримає обробник T3; тут лише звуження до рядків:
       // лічильник на рядковий запит — порушення контракту сервера.
-      const value = (await send({ type: "read", query })) as WireReadResult
-      if ("count" in value) {
+      const item = value.items[0]
+      if (item === undefined) {
         throw new CommandFailure({ code: "command.internal" })
       }
-      return value
+      if (!item.ok) throw new CommandFailure(errorFromWire(index, item.error))
+      if (!("rows" in item.value)) {
+        throw new CommandFailure({ code: "command.internal" })
+      }
+      return item.value
     },
   }
 }

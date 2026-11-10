@@ -50,8 +50,12 @@ const SESSION_CHANGED = {
 
 const card = (id = ID): DataRequest["request"] => ({
   type: "read",
-  query: { object: OBJECT_ID, id },
+  items: [{ type: "query", query: { object: OBJECT_ID, id } }],
 })
+const VERSION: DataRequest["request"] = {
+  type: "read",
+  items: [{ type: "version" }],
+}
 
 // Відмову перевіряємо за кодом і причиною, а не за текстом.
 async function failureOf(promise: Promise<unknown>) {
@@ -97,10 +101,10 @@ describe("runtime transport wrapper", () => {
     })
     const { send } = runtimeHandleOf(runtime)
     await expect(send(card())).resolves.toEqual({ rows: [] })
-    await expect(send({ type: "version" })).resolves.toEqual({ rows: [] })
+    await expect(send(VERSION)).resolves.toEqual({ rows: [] })
     expect(calls).toEqual([
       { subject: SUBJECT, request: card() },
-      { subject: SUBJECT, request: { type: "version" } },
+      { subject: SUBJECT, request: VERSION },
     ])
   })
 
@@ -429,8 +433,15 @@ function serverTransport(fake: FakeSource) {
     const reply = replies.shift()
     if (reply !== undefined) return reply
     if (body.request.type !== "read") return ok(null)
-    const query = body.request.query as Parameters<SourceAdapter["read"]>[0]
-    return ok(await fake.adapter.read(query))
+    // Адаптер Server Function шле одну частину `query`; інша частина
+    // (`version` фабрики-перевизначення) — без читання.
+    const [part] = body.request.items as {
+      type: string
+      query: Parameters<SourceAdapter["read"]>[0]
+    }[]
+    if (part?.type !== "query") return ok(null)
+    const value = await fake.adapter.read(part.query)
+    return ok({ epoch: null, items: [{ ok: true, value }] })
   }
   return { transport, calls, replies }
 }
@@ -607,7 +618,11 @@ describe("runtime core", () => {
     expect(orgView.getSnapshot().rows).toHaveLength(1)
     expect(reads).toEqual([org.id])
     expect(
-      calls.map((c) => c.request.type === "read" && c.request.query.object)
+      calls.map(
+        (c) =>
+          c.request.type === "read" &&
+          (c.request.items[0] as { query: { object: string } }).query.object
+      )
     ).toEqual([task.id])
   })
 
@@ -707,7 +722,7 @@ describe("runtime core", () => {
         subject: string
         send: (request: DataRequest["request"]) => Promise<unknown>
       }) => {
-        void context.send({ type: "version" })
+        void context.send(VERSION)
         return fake.adapter
       }
     )
@@ -717,7 +732,7 @@ describe("runtime core", () => {
     })
     expect(factory).toHaveBeenCalledTimes(1)
     expect(factory.mock.calls[0]![0].subject).toBe("user-2")
-    expect(calls).toEqual([{ subject: "user-2", request: { type: "version" } }])
+    expect(calls).toEqual([{ subject: "user-2", request: VERSION }])
     const handle = core.view({ kind: "card", object: ORG, key: S })
     handle.subscribe(() => {})
     await settle()

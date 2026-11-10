@@ -136,10 +136,10 @@ describe("issueReason over the data envelope", () => {
 
   it.each<[string, unknown, string | undefined, (string | number)[]]>([
     [
-      "a read with a bad query",
-      { subject: "s", request: { type: "read", query: { bad: 1 } } },
+      "a read without parts",
+      { subject: "s", request: { type: "read", items: [] } },
       undefined,
-      ["request", "query", "object"],
+      ["request", "items"],
     ],
     [
       "a batch over BATCH_MAX",

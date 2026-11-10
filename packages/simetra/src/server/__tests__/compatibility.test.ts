@@ -3,7 +3,8 @@ import {
   dataRequestSchema,
   operationFromWire,
   runtimeCatalogSchema,
-  type DataRequest,
+  wireReadPartSchema,
+  type WireReadPart,
 } from "simetra/model"
 import { describe, expect, it } from "vitest"
 import { checkCompatibility } from "../compatibility"
@@ -28,8 +29,9 @@ const KERNELS = {
 }
 
 // Вхід — через схему конверта, як в обробнику: звірка бачить розібраний запит.
-const request = (body: unknown): DataRequest["request"] =>
-  dataRequestSchema.parse({ subject: "user-1", request: body }).request
+const request = (body: unknown) =>
+  dataRequestSchema.parse({ subject: "user-1", request: body })
+    .request as Checked
 
 const run = (operation: object, kernels: object | null = KERNELS) =>
   request({ type: "run", operation, ...(kernels === null ? {} : { kernels }) })
@@ -37,8 +39,11 @@ const create = (fields: object = {}, object = sample.id) =>
   run({ action: "create", object, ...fields })
 const update = (fields: object = {}, object = sample.id) =>
   run({ action: "update", object, id: ID, expectedVersion: 1, ...fields })
+// Частину читання конверт бере будь-якою; звірка бачить її після схеми частини.
+const part = (body: unknown): WireReadPart => wireReadPartSchema.parse(body)
+type Checked = Parameters<typeof checkCompatibility>[1]
 const read = (query: object) =>
-  request({ type: "read", query: { object: sample.id, limit: 10, ...query } })
+  part({ type: "query", query: { object: sample.id, limit: 10, ...query } })
 const lines = (query: object) => read({ tabularSection: SECTION, ...query })
 
 const staleOf = (object: string) => ({ code: "command.stale-client", object })
@@ -47,7 +52,7 @@ const staleOf = (object: string) => ({ code: "command.stale-client", object })
 const HOSTILE = ["nope", '"code_col"', "public.code_col", "code_col;", "ctid"]
 
 describe("checkCompatibility: run", () => {
-  it.each<[string, DataRequest["request"]]>([
+  it.each<[string, Checked]>([
     ["create з колонками вставки", create({ values: { code_col: "a" } })],
     [
       "create з парою",
@@ -96,7 +101,7 @@ describe("checkCompatibility: run", () => {
     expect(checkCompatibility(index, body)).toBeUndefined()
   })
 
-  it.each<[string, DataRequest["request"], string]>([
+  it.each<[string, Checked, string]>([
     ["невідомий UUID об'єкта", create({}, UNKNOWN), UNKNOWN],
     [
       "kernels відсутні",
@@ -130,7 +135,7 @@ describe("checkCompatibility: run", () => {
       sample.id,
     ],
     ["update: ключ шапки у values", update({ values: { id: ID } }), sample.id],
-    ...HOSTILE.map((name): [string, DataRequest["request"], string] => [
+    ...HOSTILE.map((name): [string, Checked, string] => [
       `шапка: вороже ім'я ${name}`,
       create({ values: { [name]: 1 } }),
       sample.id,
@@ -152,7 +157,7 @@ describe("checkCompatibility: run", () => {
       create({ tabularSections: { [SECTION]: [{ ...LINE, parent_id: ID }] } }),
       sample.id,
     ],
-    ...HOSTILE.map((name): [string, DataRequest["request"], string] => [
+    ...HOSTILE.map((name): [string, Checked, string] => [
       `рядок ТЧ: вороже ім'я ${name}`,
       update({ tabularSections: { [SECTION]: [{ ...LINE, [name]: 1 }] } }),
       sample.id,
@@ -223,8 +228,8 @@ describe("checkCompatibility: values.__proto__", () => {
   })
 })
 
-describe("checkCompatibility: read", () => {
-  it.each<[string, DataRequest["request"]]>([
+describe("checkCompatibility: a read part", () => {
+  it.each<[string, Checked]>([
     [
       "in за ключем і за версією",
       read({
@@ -252,8 +257,8 @@ describe("checkCompatibility: read", () => {
     ],
     [
       "фільтр за лінивою колонкою — далі command.invalid, не звірка",
-      request({
-        type: "read",
+      part({
+        type: "query",
         query: {
           object: link.id,
           limit: 10,
@@ -263,22 +268,22 @@ describe("checkCompatibility: read", () => {
     ],
     [
       "include",
-      request({
-        type: "read",
+      part({
+        type: "query",
         query: { object: link.id, limit: 10, include: ["region_id"] },
       }),
     ],
     [
       "картка з ТЧ за id",
-      request({
-        type: "read",
+      part({
+        type: "query",
         query: { object: sample.id, id: ID, tabularSections: [SECTION] },
       }),
     ],
     [
       "картка з усіма ТЧ",
-      request({
-        type: "read",
+      part({
+        type: "query",
         query: { object: sample.id, id: ID, tabularSections: true },
       }),
     ],
@@ -291,27 +296,31 @@ describe("checkCompatibility: read", () => {
     ],
     [
       "ТЧ власника",
-      request({
-        type: "read",
+      part({
+        type: "query",
         query: { object: sample.id, tabularSection: SECTION, owner: ID },
       }),
     ],
     [
       "лічильник",
-      request({ type: "read", query: { object: sample.id, count: true } }),
+      part({ type: "query", query: { object: sample.id, count: true } }),
     ],
-    ["version", request({ type: "version" })],
+    [
+      "список з known — ключі known звірка не дивиться",
+      read({ known: { epoch: "a".repeat(64), keys: [ID], versions: ["1"] } }),
+    ],
+    ["version", part({ type: "version" })],
   ])("%s — сумісно", (_, body) => {
     expect(checkCompatibility(index, body)).toBeUndefined()
   })
 
-  it.each<[string, DataRequest["request"], string]>([
+  it.each<[string, Checked, string]>([
     [
       "невідомий UUID об'єкта",
-      request({ type: "read", query: { object: UNKNOWN, limit: 1 } }),
+      part({ type: "query", query: { object: UNKNOWN, limit: 1 } }),
       UNKNOWN,
     ],
-    ...HOSTILE.map((name): [string, DataRequest["request"], string] => [
+    ...HOSTILE.map((name): [string, Checked, string] => [
       `фільтр: вороже ім'я ${name}`,
       read({
         where: {
@@ -330,8 +339,8 @@ describe("checkCompatibility: read", () => {
     ],
     [
       "include: невідома колонка",
-      request({
-        type: "read",
+      part({
+        type: "query",
         query: { object: link.id, limit: 1, include: ["ctid"] },
       }),
       link.id,
@@ -355,16 +364,16 @@ describe("checkCompatibility: read", () => {
     ],
     [
       "картка: невідомий id ТЧ",
-      request({
-        type: "read",
+      part({
+        type: "query",
         query: { object: sample.id, id: ID, tabularSections: [UNKNOWN] },
       }),
       sample.id,
     ],
     [
       "сторінка ТЧ: невідомий id ТЧ",
-      request({
-        type: "read",
+      part({
+        type: "query",
         query: { object: sample.id, tabularSection: UNKNOWN, limit: 1 },
       }),
       sample.id,
@@ -381,8 +390,8 @@ describe("checkCompatibility: read", () => {
     ],
     [
       "лічильник: невідома колонка",
-      request({
-        type: "read",
+      part({
+        type: "query",
         query: {
           object: sample.id,
           count: true,

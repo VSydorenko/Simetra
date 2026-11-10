@@ -8,7 +8,9 @@ import {
   pathFromWire,
   pathToWire,
   runtimeCatalogSchema,
+  READ_BATCH_MAX,
   versionValueSchema,
+  wireReadPartsResultSchema,
   wireReadResultSchema,
   type CommandError,
   type DataResponse,
@@ -76,9 +78,14 @@ const runOf = (operation: object, kernels: object = KERNELS) =>
   envelope({ type: "run", operation, kernels })
 const batchOf = (batch: object[], kernels: object = KERNELS) =>
   envelope({ type: "run", batch, kernels })
-const readOf = (query: object) =>
-  envelope({ type: "read", query: { object: region.id, limit: 10, ...query } })
-const sampleRead = (query: object) => readOf({ object: sample.id, ...query })
+const readItems = (items: unknown[]) => envelope({ type: "read", items })
+const queryPart = (query: object) => ({
+  type: "query",
+  query: { object: region.id, limit: 10, ...query },
+})
+const readOf = (query: object) => readItems([queryPart(query)])
+const samplePart = (query: object) => queryPart({ object: sample.id, ...query })
+const VERSION_PART = { type: "version" }
 
 const createClient = {
   action: "create",
@@ -101,7 +108,7 @@ const regionRows: Override = (text) =>
 
 /** Лічильник викликів рантайму поверх справжнього: «порт не викликано». */
 function counted(runtime: CommandRuntime) {
-  const calls = { run: 0, read: 0 }
+  const calls = { run: 0, read: 0, readParts: 0 }
   const wrapped: CommandRuntime = {
     catalog: runtime.catalog,
     run: (...args) => {
@@ -112,7 +119,10 @@ function counted(runtime: CommandRuntime) {
       calls.read++
       return runtime.read(...args)
     },
-    readParts: (...args) => runtime.readParts(...args),
+    readParts: (...args) => {
+      calls.readParts++
+      return runtime.readParts(...args)
+    },
   }
   return { runtime: wrapped, calls }
 }
@@ -150,6 +160,26 @@ const valueOf = (response: DataResponse) => {
   if (!response.ok)
     throw new Error(`expected a value: ${JSON.stringify(response.error)}`)
   return response.value
+}
+
+/** Елементи відповіді `read`: значення кожної частини чи її помилка. */
+const itemsOf = (response: DataResponse) =>
+  wireReadPartsResultSchema.parse(valueOf(response)).items
+
+/** Значення єдиної частини відповіді `read`. */
+const partValueOf = (response: DataResponse) => {
+  const [item] = itemsOf(response)
+  if (item?.ok !== true)
+    throw new Error(`expected a part value: ${JSON.stringify(item)}`)
+  return item.value
+}
+
+/** Помилка єдиної частини відповіді `read`. */
+const partErrorOf = (response: DataResponse) => {
+  const [item] = itemsOf(response)
+  if (item?.ok !== false)
+    throw new Error(`expected a part error: ${JSON.stringify(item)}`)
+  return item.error
 }
 
 /** Значення, будь-яке читання якого кидає. */
@@ -198,7 +228,7 @@ describe("createDataHandler: steps 0–3 never reach the runtime or the port", (
     ],
     [
       "без subject",
-      { request: { type: "version" } },
+      { request: { type: "read", items: [VERSION_PART] } },
       HTTP,
       { code: "command.invalid", path: "subject" },
     ],
@@ -259,17 +289,51 @@ describe("createDataHandler: steps 0–3 never reach the runtime or the port", (
       HTTP,
       { code: "command.invalid", path: "object" },
     ],
+    // Старий запит — нове розгортання: вкладка перезавантажується (без шимів).
     [
-      "читання: шлях від запиту, з object",
-      readOf({ limit: 0 }),
+      "окремий запит version — stale-client",
+      envelope({ type: "version" }),
       HTTP,
-      { code: "command.invalid", path: "limit", object: region.id },
+      { code: "command.stale-client" },
+    ],
+    [
+      "read з query замість items — stale-client",
+      envelope({ type: "read", query: { object: region.id, limit: 10 } }),
+      HTTP,
+      { code: "command.stale-client" },
+    ],
+    [
+      "невідомий тип запиту — stale-client",
+      envelope({ type: "receipt" }),
+      HTTP,
+      { code: "command.stale-client" },
+    ],
+    [
+      "read понад READ_BATCH_MAX частин — batch-too-large без path",
+      readItems(Array.from({ length: READ_BATCH_MAX + 1 }, () => VERSION_PART)),
+      HTTP,
+      { code: "command.invalid", reason: LIMIT_REASONS.batchTooLarge },
+    ],
+    [
+      "read без частин — invalid",
+      readItems([]),
+      HTTP,
+      { code: "command.invalid", path: "items" },
     ],
     // Крок 2: сесія.
     [
       "subject ≠ sub сесії — session-changed до звірки",
       // Запит ще й несумісний: відмова сесії йде раніше за звірку.
       { ...runOf({ ...createClient, object: UNKNOWN }, {}), subject: "user-2" },
+      HTTP,
+      {
+        code: "command.unauthenticated",
+        reason: LIMIT_REASONS.sessionChanged,
+      },
+    ],
+    [
+      "read: subject ≠ sub — відмова всього запиту",
+      { ...readItems([VERSION_PART, queryPart({})]), subject: "user-2" },
       HTTP,
       {
         code: "command.unauthenticated",
@@ -301,40 +365,80 @@ describe("createDataHandler: steps 0–3 never reach the runtime or the port", (
       HTTP,
       { code: "command.stale-client", object: client.id },
     ]),
-    ...HOSTILE.map((name): [string, unknown, RequestOrigin, object] => [
-      `read where: вороже ім'я ${name}`,
-      sampleRead({ where: { attribute: name, op: "eq", value: "x" } }),
-      HTTP,
-      { code: "command.stale-client", object: sample.id },
-    ]),
-    [
-      "read where: колонка мітки пари",
-      sampleRead({
-        where: { attribute: "subject_type", op: "eq", value: "x" },
-      }),
-      HTTP,
-      { code: "command.stale-client", object: sample.id },
-    ],
-    [
-      "read orderBy: колонка мітки пари",
-      sampleRead({
-        orderBy: [{ attribute: "subject_type", direction: "asc" }],
-      }),
-      HTTP,
-      { code: "command.stale-client", object: sample.id },
-    ],
-    [
-      "read include: колонка мітки пари",
-      sampleRead({ include: ["subject_type"] }),
-      HTTP,
-      { code: "command.stale-client", object: sample.id },
-    ],
   ])("%s", async (_, request, origin, expected) => {
     const { db, calls, handle } = await harness()
     expect(errorOf(await handle(session, request, origin))).toStrictEqual(
       expected
     )
-    expect(calls).toStrictEqual({ run: 0, read: 0 })
+    expect(calls).toStrictEqual({ run: 0, read: 0, readParts: 0 })
+    expect(db.calls).toStrictEqual([])
+  })
+
+  // Відмова частини — лише цій частині: відповідь `ok`, частина з помилкою.
+  it.each<[string, unknown, object]>([
+    [
+      "читання: шлях від запиту, з object",
+      queryPart({ limit: 0 }),
+      { code: "command.invalid", path: "limit", object: region.id },
+    ],
+    [
+      "known у формі, що його не бере — known-form",
+      {
+        type: "query",
+        query: {
+          object: region.id,
+          count: true,
+          known: { epoch: "a".repeat(64), keys: [], versions: [] },
+        },
+      },
+      {
+        code: "command.invalid",
+        reason: "known-form",
+        path: "known",
+        object: region.id,
+      },
+    ],
+    [
+      "частина без query",
+      { type: "query" },
+      { code: "command.invalid", path: "query" },
+    ],
+    ["частина не об'єкт", "version", { code: "command.invalid" }],
+    ["частина, що кидає при читанні", revoked(), { code: "command.invalid" }],
+    ...HOSTILE.map((name): [string, unknown, object] => [
+      `read where: вороже ім'я ${name}`,
+      samplePart({ where: { attribute: name, op: "eq", value: "x" } }),
+      { code: "command.stale-client", object: sample.id },
+    ]),
+    [
+      "read where: колонка мітки пари",
+      samplePart({
+        where: { attribute: "subject_type", op: "eq", value: "x" },
+      }),
+      { code: "command.stale-client", object: sample.id },
+    ],
+    [
+      "read orderBy: колонка мітки пари",
+      samplePart({
+        orderBy: [{ attribute: "subject_type", direction: "asc" }],
+      }),
+      { code: "command.stale-client", object: sample.id },
+    ],
+    [
+      "read include: колонка мітки пари",
+      samplePart({ include: ["subject_type"] }),
+      { code: "command.stale-client", object: sample.id },
+    ],
+    [
+      "невідомий UUID об'єкта частини",
+      queryPart({ object: UNKNOWN }),
+      { code: "command.stale-client", object: UNKNOWN },
+    ],
+  ])("частина: %s", async (_, part, expected) => {
+    const { db, calls, handle } = await harness()
+    const response = await handle(session, readItems([part]), HTTP)
+    expect(itemsOf(response)).toStrictEqual([{ ok: false, error: expected }])
+    expect(calls).toStrictEqual({ run: 0, read: 0, readParts: 0 })
     expect(db.calls).toStrictEqual([])
   })
 
@@ -350,7 +454,7 @@ describe("createDataHandler: steps 0–3 never reach the runtime or the port", (
       HTTP
     )
     expect(errorOf(response)).toStrictEqual({ code: "command.unauthenticated" })
-    expect(calls).toStrictEqual({ run: 0, read: 0 })
+    expect(calls).toStrictEqual({ run: 0, read: 0, readParts: 0 })
     expect(db.calls).toStrictEqual([])
   })
 
@@ -371,29 +475,33 @@ describe("createDataHandler: steps 0–3 never reach the runtime or the port", (
       code: "command.forbidden",
       reason: LIMIT_REASONS.origin,
     })
-    expect(calls).toStrictEqual({ run: 0, read: 0 })
+    expect(calls).toStrictEqual({ run: 0, read: 0, readParts: 0 })
     expect(db.calls).toStrictEqual([])
   })
 
   it("without the origin argument does not compile and is forbidden at runtime", async () => {
     const { calls, handle } = await harness()
     // @ts-expect-error походження — обов'язковий аргумент обробника
-    const response = await handle(session, envelope({ type: "version" }))
+    const response = await handle(session, readItems([VERSION_PART]))
     expect(errorOf(response)).toStrictEqual({
       code: "command.forbidden",
       reason: LIMIT_REASONS.origin,
     })
-    expect(calls).toStrictEqual({ run: 0, read: 0 })
+    expect(calls).toStrictEqual({ run: 0, read: 0, readParts: 0 })
   })
 })
 
 describe("createDataHandler: steps 4–6", () => {
-  it("version — the runtime catalog, without the runtime or the port", async () => {
+  it("a version part — the runtime catalog, without the runtime or the port", async () => {
     const { db, calls, handle } = await harness()
-    const value = valueOf(
-      await handle(session, envelope({ type: "version" }), IN_PROCESS)
+    const response = await handle(
+      session,
+      readItems([VERSION_PART]),
+      IN_PROCESS
     )
-    expect(versionValueSchema.parse(value)).toStrictEqual({
+    // Без частин `query` транзакції немає: епохи теж.
+    expect(valueOf(response)).toMatchObject({ epoch: null })
+    expect(versionValueSchema.parse(partValueOf(response))).toStrictEqual({
       snapshotHash: HASH,
       objects: {
         [client.id]: client.kernelHash,
@@ -402,7 +510,7 @@ describe("createDataHandler: steps 4–6", () => {
         [sample.id]: sample.kernelHash,
       },
     })
-    expect(calls).toStrictEqual({ run: 0, read: 0 })
+    expect(calls).toStrictEqual({ run: 0, read: 0, readParts: 0 })
     expect(db.calls).toStrictEqual([])
   })
 
@@ -410,9 +518,126 @@ describe("createDataHandler: steps 4–6", () => {
     const { calls, handle } = await harness(regionRows)
     const value = valueOf(await handle(session, readOf({}), IN_PROCESS))
     expect(value).toStrictEqual({
-      rows: [{ id: ID, version: "2", code: "R" }],
+      epoch: null,
+      items: [
+        { ok: true, value: { rows: [{ id: ID, version: "2", code: "R" }] } },
+      ],
     })
-    expect(calls).toStrictEqual({ run: 0, read: 1 })
+    expect(calls).toStrictEqual({ run: 0, read: 0, readParts: 1 })
+  })
+
+  it("parts in request order: a refused part, a version and a read — one runtime call", async () => {
+    const { calls, handle, runtime } = await harness(regionRows)
+    const readParts = vi.spyOn(runtime, "readParts")
+    const items = itemsOf(
+      await handle(
+        session,
+        readItems([
+          queryPart({ limit: 0 }),
+          VERSION_PART,
+          { type: "rights" },
+          queryPart({}),
+        ]),
+        HTTP
+      )
+    )
+    expect(items[0]).toStrictEqual({
+      ok: false,
+      error: { code: "command.invalid", path: "limit", object: region.id },
+    })
+    expect(items[1]).toMatchObject({ ok: true, value: { snapshotHash: HASH } })
+    // Невідомий тип частини — новіший клієнт: відмова лише їй, не stale-client.
+    expect(items[2]).toMatchObject({
+      ok: false,
+      error: { code: "command.invalid" },
+    })
+    expect(items[3]).toStrictEqual({
+      ok: true,
+      value: { rows: [{ id: ID, version: "2", code: "R" }] },
+    })
+    expect(calls.readParts).toBe(1)
+    // У рантайм іде лише частина `query`, і без `known`.
+    expect(readParts.mock.calls[0]![1]).toStrictEqual([
+      {
+        type: "query",
+        query: { object: { kind: "Catalog", name: "Region" }, limit: 10 },
+      },
+    ])
+  })
+
+  it("a stale part fails alone; the other part reads", async () => {
+    const { handle } = await harness(regionRows)
+    const items = itemsOf(
+      await handle(
+        session,
+        readItems([
+          samplePart({ where: { attribute: "ctid", op: "isNull" } }),
+          queryPart({}),
+        ]),
+        HTTP
+      )
+    )
+    expect(items).toStrictEqual([
+      { ok: false, error: { code: "command.stale-client", object: sample.id } },
+      { ok: true, value: { rows: [{ id: ID, version: "2", code: "R" }] } },
+    ])
+  })
+
+  it("known goes to the runtime beside the logical query", async () => {
+    const { handle, runtime } = await harness()
+    const readParts = vi.spyOn(runtime, "readParts")
+    const known = { epoch: "a".repeat(64), keys: [ID], versions: ["2"] }
+    itemsOf(
+      await handle(
+        session,
+        readItems([
+          { type: "query", query: { object: region.id, limit: 10, known } },
+        ]),
+        HTTP
+      )
+    )
+    expect(readParts.mock.calls[0]![1]).toStrictEqual([
+      {
+        type: "query",
+        query: { object: { kind: "Catalog", name: "Region" }, limit: 10 },
+        known,
+      },
+    ])
+  })
+
+  it("over READ_BATCH_STATEMENTS_MAX statements — batch-too-large before the database", async () => {
+    // Дві різні цілі `include` — два оператори понад запит частини: у
+    // каталозі обробника `backup` веде на `client`, а не на `region`.
+    const wide = {
+      ...link,
+      attributes: link.attributes.map((a) =>
+        a.name === "backup"
+          ? { ...a, ref: { ...a.ref!, object: client.id } }
+          : a
+      ),
+    }
+    const { db, runtime } = await setup(undefined, {
+      catalog: runtimeCatalogSchema.parse({
+        ...handlerCatalog,
+        objects: [client, region, wide, sample],
+      }),
+    })
+    const handle = createDataHandler(runtime)
+    // Частина — до трьох операторів; 11 × 3 > READ_BATCH_STATEMENTS_MAX.
+    const part = queryPart({
+      object: link.id,
+      include: ["region_id", "backup_id"],
+    })
+    const response = await handle(
+      session,
+      readItems(Array.from({ length: 11 }, () => part)),
+      HTTP
+    )
+    expect(errorOf(response)).toStrictEqual({
+      code: "command.invalid",
+      reason: LIMIT_REASONS.batchTooLarge,
+    })
+    expect(db.calls).toStrictEqual([])
   })
 
   // Рядки по ~1,5 МіБ: два вміщуються в бюджет відповіді, три — ні.
@@ -434,7 +659,7 @@ describe("createDataHandler: steps 4–6", () => {
   it("a page over the response budget is a strict prefix with more", async () => {
     const { handle } = await harness(bigRegionRows(3))
     const value = wireReadResultSchema.parse(
-      valueOf(await handle(session, readOf({}), IN_PROCESS))
+      partValueOf(await handle(session, readOf({}), IN_PROCESS))
     )
     if (!("rows" in value)) throw new Error("expected rows")
     expect(value.more).toBe(true)
@@ -452,11 +677,109 @@ describe("createDataHandler: steps 4–6", () => {
       readOf({ where: { attribute: "id", op: "in", value: ids } }),
       IN_PROCESS
     )
-    expect(errorOf(response)).toMatchObject({
+    expect(partErrorOf(response)).toMatchObject({
       code: "command.invalid",
       reason: LIMIT_REASONS.responseTooLarge,
     })
     expect(response.serverHash).toBe(HASH)
+  })
+
+  // Картки `region` за id: рядок заданого розміру для кожного id.
+  const sizedCards =
+    (sizes: Record<string, number>): Override =>
+    (text, params) => {
+      if (!text.includes('"public"."region" t')) return undefined
+      const id = Object.keys(sizes).find((key) => params.includes(key))
+      if (id === undefined) return undefined
+      return {
+        rows: [
+          {
+            row: JSON.stringify({
+              id,
+              version: 1,
+              code: "x".repeat(sizes[id]!),
+            }),
+          },
+        ],
+      }
+    }
+  const cardId = (n: number) =>
+    `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`
+  const cardPart = (n: number) => ({
+    type: "query",
+    query: { object: region.id, id: cardId(n) },
+  })
+  const sentFor = (db: { calls: unknown[] }, n: number) =>
+    db.calls.some(
+      (call) =>
+        typeof call === "object" &&
+        call !== null &&
+        "params" in call &&
+        (call.params as unknown[]).includes(cardId(n))
+    )
+  const BATCH_BUDGET = { code: "command.unavailable", reason: "batch-budget" }
+
+  it("a part over the remaining budget that fits alone — batch-budget; the next part does not run", async () => {
+    const { db, handle } = await harness(
+      sizedCards({
+        [cardId(1)]: 3_000_000,
+        [cardId(2)]: 2_000_000,
+        [cardId(3)]: 10,
+      })
+    )
+    const items = itemsOf(
+      await handle(session, readItems([1, 2, 3].map(cardPart)), HTTP)
+    )
+    expect(items[0]).toMatchObject({ ok: true })
+    expect(items.slice(1)).toStrictEqual([
+      { ok: false, error: BATCH_BUDGET },
+      { ok: false, error: BATCH_BUDGET },
+    ])
+    // Друга частина виконана один раз і відкинута; третьої порт не бачив.
+    expect(sentFor(db, 2)).toBe(true)
+    expect(sentFor(db, 3)).toBe(false)
+  })
+
+  it("a part that does not fit even alone — response-too-large; the next part runs", async () => {
+    const { db, handle } = await harness(
+      sizedCards({ [cardId(1)]: 5_000_000, [cardId(2)]: 10 })
+    )
+    const items = itemsOf(
+      await handle(session, readItems([1, 2].map(cardPart)), HTTP)
+    )
+    expect(items[0]).toStrictEqual({
+      ok: false,
+      error: {
+        code: "command.invalid",
+        reason: LIMIT_REASONS.responseTooLarge,
+      },
+    })
+    expect(items[1]).toMatchObject({ ok: true })
+    expect(sentFor(db, 2)).toBe(true)
+  })
+
+  it("a runtime that ignores overflow still yields batch-budget, never the rows", async () => {
+    const { runtime } = await harness(
+      sizedCards({
+        [cardId(1)]: 3_000_000,
+        [cardId(2)]: 2_000_000,
+        [cardId(3)]: 10,
+      })
+    )
+    // Рантайм без `fit`: виконує всі частини й повертає всі рядки.
+    const handle = createDataHandler({
+      ...runtime,
+      readParts: (claims, parts) => runtime.readParts(claims, parts),
+    })
+    const response = await handle(
+      session,
+      readItems([1, 2, 3].map(cardPart)),
+      HTTP
+    )
+    expect(itemsOf(response).slice(1)).toStrictEqual([
+      { ok: false, error: BATCH_BUDGET },
+      { ok: false, error: BATCH_BUDGET },
+    ])
   })
 
   it("a run result over the response budget has changes and no rows", async () => {
@@ -535,9 +858,9 @@ describe("createDataHandler: steps 4–6", () => {
     ])
   })
 
-  it("a filter by a lazy attribute is command.invalid, not stale-client", async () => {
+  it("a filter by a lazy attribute is command.invalid of the part, not stale-client", async () => {
     const { db, handle } = await harness()
-    const error = errorOf(
+    const error = partErrorOf(
       await handle(
         session,
         readOf({
@@ -574,7 +897,7 @@ describe("createDataHandler: steps 4–6", () => {
       path: "status_col",
       object: sample.id,
     })
-    expect(calls).toStrictEqual({ run: 0, read: 0 })
+    expect(calls).toStrictEqual({ run: 0, read: 0, readParts: 0 })
   })
 
   it("a CommandFailure is an error value with physical fields", async () => {
@@ -610,14 +933,31 @@ describe("createDataHandler: steps 4–6", () => {
     )
     expect(error).toStrictEqual({ code: "command.internal" })
     expect(log).toHaveBeenCalledOnce()
-    expect(calls).toStrictEqual({ run: 0, read: 0 })
+    expect(calls).toStrictEqual({ run: 0, read: 0, readParts: 0 })
   })
 
   const SECRET = "relation secret_table does not exist"
   it.each<[string, Partial<CommandRuntime>, unknown]>([
     [
-      "read throws a plain Error",
-      { read: () => Promise.reject(new Error(SECRET)) },
+      "readParts throws a plain Error",
+      { readParts: () => Promise.reject(new Error(SECRET)) },
+      readOf({}),
+    ],
+    [
+      // Маркер з позицією поза `known` кодек відхиляє: дефект сервера.
+      "a part value the codec rejects",
+      {
+        readParts: (_claims, _parts, options) => {
+          const value = { rows: [{ known: -1 }] }
+          options?.fit?.(0, value)
+          return Promise.resolve({ epoch: null, items: [{ ok: true, value }] })
+        },
+      },
+      readOf({}),
+    ],
+    [
+      "readParts returns a part without an outcome",
+      { readParts: () => Promise.resolve({ epoch: null, items: [] }) },
       readOf({}),
     ],
     [
@@ -655,14 +995,21 @@ describe("createDataHandler: steps 4–6", () => {
 
   it("version is frozen: a caller that mutates it does not change later responses", async () => {
     const { handle } = await harness()
-    const first = valueOf(
-      await handle(session, envelope({ type: "version" }), IN_PROCESS)
-    ) as { objects: Record<string, string> }
+    // Значення частини — той самий об'єкт, що віддає обробник у процесі.
+    const firstOf = async () => {
+      const response = await handle(
+        session,
+        readItems([VERSION_PART]),
+        IN_PROCESS
+      )
+      if (!response.ok) throw new Error("expected a value")
+      return (response.value as { items: { value: unknown }[] }).items[0]!
+        .value as { objects: Record<string, string> }
+    }
+    const first = await firstOf()
     expect(Object.isFrozen(first)).toBe(true)
     expect(Object.isFrozen(first.objects)).toBe(true)
-    const second = valueOf(
-      await handle(session, envelope({ type: "version" }), IN_PROCESS)
-    )
+    const second = await firstOf()
     expect(second).toStrictEqual(first)
   })
 
@@ -704,7 +1051,7 @@ describe("createDataHandler: steps 4–6", () => {
     const failure = new Error(SECRET)
     const handle = createDataHandler({
       ...runtime,
-      read: () => Promise.reject(failure),
+      readParts: () => Promise.reject(failure),
     })
     expect(errorOf(await handle(session, readOf({}), HTTP))).toStrictEqual({
       code: "command.internal",

@@ -1,4 +1,5 @@
 import {
+  READ_BATCH_MAX,
   runtimeCatalogSchema,
   type ReadPart,
   type ReadQuery,
@@ -18,6 +19,7 @@ import {
   catalog,
   client,
   commandObject,
+  link,
   linkCatalog,
   rootCatalog,
   taskCatalog,
@@ -866,45 +868,73 @@ describe("CommandRuntime.readParts", () => {
     expect(log.mock.calls).toEqual([[{ kind: "database", error: raw }]])
   })
 
+  // `backup` веде на іншу ціль, ніж `region`: частина з обома `include` —
+  // три оператори, тож межу операторів видно в межах READ_BATCH_MAX частин.
+  const wideCatalog = runtimeCatalogSchema.parse({
+    ...linkCatalog,
+    objects: linkCatalog.objects.map((o) =>
+      o.id !== link.id
+        ? o
+        : {
+            ...o,
+            attributes: o.attributes.map((a) =>
+              a.name === "backup"
+                ? { ...a, ref: { ...a.ref!, object: client.id } }
+                : a
+            ),
+          }
+    ),
+  })
+  const linkPart = (include: string[]): ReadPart => ({
+    type: "query",
+    query: { object: LINK, id: ID, include },
+  })
+  const wide = linkPart(["region", "backup"])
   it.each<[string, ReadPart[], boolean]>([
     [
+      // Ціль `include` — свій оператор: 16 × 2.
       "32 statements of parts",
-      Array.from({ length: 32 }, () => card(OTHER)),
+      Array.from({ length: 16 }, () => linkPart(["region"])),
       true,
     ],
     [
       "32 statements and an invalid part",
       [
-        ...Array.from({ length: 32 }, () => card(OTHER)),
+        ...Array.from({ length: 10 }, () => wide),
+        linkPart(["region"]),
         { type: "query", query: { ...page, limit: 201 } },
       ],
       true,
     ],
+    ["33 statements of parts", Array.from({ length: 11 }, () => wide), false],
     [
-      "33 statements of parts",
-      Array.from({ length: 33 }, () => card(OTHER)),
+      "33 statements with include targets",
+      [
+        ...Array.from({ length: 10 }, () => wide),
+        card(OTHER),
+        card(R2),
+        card(R3),
+      ],
       false,
     ],
     [
-      // Ціль `include` — свій оператор: 16 × 2 + 1.
-      "33 statements with include targets",
-      [
-        ...Array.from({ length: 16 }, (): ReadPart => ({
-          type: "query",
-          query: { object: LINK, id: ID, include: ["region"] },
-        })),
-        card(OTHER),
-      ],
+      // Межа частин — і тут, не лише в конверті: викликач у процесі його
+      // не проходить.
+      "READ_BATCH_MAX + 1 parts",
+      Array.from({ length: READ_BATCH_MAX + 1 }, () => card(OTHER)),
       false,
     ],
   ])(
     "bounds the statements by READ_BATCH_STATEMENTS_MAX: %s",
     async (_, parts, accepted) => {
-      const { db, runtime } = await setup(cards, { catalog: linkCatalog })
+      const { db, runtime } = await setup(cards, { catalog: wideCatalog })
       const read = runtime.readParts(session, parts)
       if (accepted) {
+        // Без рядків цілі `include` оператора не шлють: видно лише, що
+        // транзакція відкрита й закомічена.
         await read
-        expect(db.calls.length).toBe(4 + 32 + 2)
+        expect(db.calls).toContainEqual(EPOCH)
+        expect(db.calls).toContainEqual(COMMIT)
       } else {
         expect(await failureOf(read)).toEqual({
           code: "command.invalid",

@@ -1,4 +1,4 @@
-import type { DataRequest } from "simetra/model"
+import type { CatalogIndex, DataRequest } from "simetra/model"
 import type { CoreSession } from "../store/core"
 import type { DataRuntime } from "./runtime"
 
@@ -23,6 +23,8 @@ export interface RuntimeHandle {
    * (`disposed`) and by `session-changed`.
    */
   readonly core: CoreSession
+  /** The catalog index of the runtime: wire errors of read parts map through it. */
+  readonly index: CatalogIndex
 }
 
 // Хендл живе в окремому модулі, а не в `runtime.ts`: `runtime.ts` входить у

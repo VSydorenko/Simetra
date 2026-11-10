@@ -7,6 +7,7 @@ import {
   PLATFORM_ROLES,
   PLATFORM_SCHEMA,
   PROVIDER_API_ROLES,
+  READ_BATCH_MAX,
   READ_BATCH_STATEMENTS_MAX,
   ROW_VERSION_EPOCH_FUNCTION_NAME,
   TABULAR_LINES_MAX,
@@ -179,7 +180,8 @@ export interface CommandRuntime {
    * it fail with `command.unavailable` `reason: "batch-aborted"` (or without
    * a reason on a lost connection). Rejects with `CommandFailure` for the
    * whole request: `command.unauthenticated`, `command.invalid`
-   * `reason: "batch-too-large"` over `READ_BATCH_STATEMENTS_MAX` statements.
+   * `reason: "batch-too-large"` over `READ_BATCH_MAX` parts or
+   * `READ_BATCH_STATEMENTS_MAX` statements.
    */
   readParts(
     session: SessionClaims,
@@ -479,6 +481,13 @@ async function readParts(
   // команди (Р-A3-11).
   rejectNested()
   const claims = claimsOf(session)
+  // Межу частин тримає й конверт, але викликач у процесі його не проходить.
+  if (parts.length > READ_BATCH_MAX) {
+    throw new CommandFailure({
+      code: "command.invalid",
+      reason: LIMIT_REASONS.batchTooLarge,
+    })
+  }
   // Перевірка частин — до `BEGIN` (Р11): хибна частина відмовляє лише собі
   // й не займає з'єднання.
   const items: ReadPartOutcome[] = new Array(parts.length)

@@ -43,14 +43,34 @@ async function failureOf(promise: Promise<unknown>) {
   return (error as CommandFailure).error
 }
 
+// Відповідь `read` з однією частиною.
+const part = (item: unknown) => ok({ epoch: null, items: [item] })
+
 describe("createServerFunctionAdapter", () => {
-  it("sends a read with the subject and returns the rows unchanged", async () => {
+  it("sends a one-part read with the subject and returns the rows unchanged", async () => {
     const value = { rows: [{ id: ID }], more: true }
-    const { adapter, calls } = adapterOver(ok(value))
+    const { adapter, calls } = adapterOver(part({ ok: true, value }))
     await expect(adapter.read(QUERY)).resolves.toEqual(value)
     expect(calls).toEqual([
-      { subject: SUBJECT, request: { type: "read", query: QUERY } },
+      {
+        subject: SUBJECT,
+        request: { type: "read", items: [{ type: "query", query: QUERY }] },
+      },
     ])
+  })
+
+  it("maps a failed part to a logical CommandFailure by the catalog", async () => {
+    const { adapter } = adapterOver(
+      part({
+        ok: false,
+        error: { code: "command.forbidden", object: OBJECT_ID, path: "org_id" },
+      })
+    )
+    expect(await failureOf(adapter.read(QUERY))).toEqual({
+      code: "command.forbidden",
+      object: { kind: "Catalog", name: "Task" },
+      path: "org",
+    })
   })
 
   it("maps a failed response to a logical CommandFailure by the catalog", async () => {
@@ -65,7 +85,12 @@ describe("createServerFunctionAdapter", () => {
   })
 
   it("refuses a count result for a rows query as command.internal", async () => {
-    const { adapter } = adapterOver(ok({ count: 3 }))
+    const { adapter } = adapterOver(part({ ok: true, value: { count: 3 } }))
+    expect((await failureOf(adapter.read(QUERY))).code).toBe("command.internal")
+  })
+
+  it("refuses a value without parts as command.internal", async () => {
+    const { adapter } = adapterOver(ok({ epoch: null, items: [] }))
     expect((await failureOf(adapter.read(QUERY))).code).toBe("command.internal")
   })
 

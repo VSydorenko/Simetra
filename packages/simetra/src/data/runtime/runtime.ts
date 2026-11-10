@@ -224,7 +224,7 @@ export function createDataRuntime(options: DataRuntimeOptions): DataRuntime {
     throw new CommandFailure(error)
   }
 
-  const serverFunction = serverFunctionAdapter(send)
+  const serverFunction = serverFunctionAdapter(send, index)
   const adapters = new Map<string, SourceAdapter>()
   const source = createCoreSource(
     (object) =>
@@ -257,6 +257,6 @@ export function createDataRuntime(options: DataRuntimeOptions): DataRuntime {
     },
     dispose: () => close(DISPOSED, "disposed"),
   }
-  bindRuntimeHandle(runtime, { send, core })
+  bindRuntimeHandle(runtime, { send, core, index })
   return runtime
 }
