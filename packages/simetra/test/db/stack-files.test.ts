@@ -33,6 +33,7 @@ import {
   runChild,
   scramKeys,
   STACK_LOCK_ENV,
+  STACK_REFUSAL,
   stackFilesHash,
   startPostgres,
   withStackLock,
@@ -629,6 +630,41 @@ describe("runChild with a grandchild in the group", () => {
   })
 })
 
+describe("runChild when the group cannot be signalled", () => {
+  // EPERM зі слухача сигналу чи таймера SIGKILL не має стати неперехопленим
+  // винятком і не тримає замок без кінця
+  it("warns and stops waiting instead of throwing", async () => {
+    const realKill = process.kill.bind(process)
+    const kill = vi
+      .spyOn(process, "kill")
+      .mockImplementation((pid: number, signal?: string | number) => {
+        if (pid < 0) throw Object.assign(new Error("EPERM"), { code: "EPERM" })
+        return realKill(pid, signal)
+      })
+    const warn = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation(() => true)
+    try {
+      const signals = new EventEmitter()
+      const child = new EventEmitter() as ChildProcess
+      Object.assign(child, { pid: 4242 })
+      const done = runChild("x", [], { signals, killAfterMs: 20 }, () => child)
+      signals.emit("SIGTERM", "SIGTERM")
+      // Таймер SIGKILL спрацьовує, поки дочірній ще живий
+      await new Promise((resolve) => setTimeout(resolve, 60))
+      child.emit("close", 0, null)
+      expect(await done).toBe(0)
+      expect(kill).toHaveBeenCalledWith(-4242, "SIGKILL")
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining("cannot signal process group 4242 (EPERM)")
+      )
+    } finally {
+      kill.mockRestore()
+      warn.mockRestore()
+    }
+  })
+})
+
 // RFC 7677 §3: користувач `user`, пароль `pencil`
 const RFC7677 = {
   salt: "W22ZaJ0SNY7soEsUEjb6gQ==",
@@ -703,7 +739,10 @@ const loginSecrets = Object.fromEntries(
 function fakeStack(
   o: {
     running?: boolean
-    labels?: Partial<Record<(typeof SERVICES)[number], Record<string, string>>>
+    /** `undefined` — мітки немає на контейнері. */
+    labels?: Partial<
+      Record<(typeof SERVICES)[number], Record<string, string | undefined>>
+    >
     verifiers?: Record<string, string>
     fail?: (call: Call) => boolean
     /** Справжній дочірній замість підставного для виклику, що підходить. */
@@ -894,9 +933,10 @@ describe("startPostgres", () => {
         running: true,
         labels: { garage: { "simetra.stack-files-hash": other } },
       })
-      await expect(start(stack)).rejects.toThrow(
-        /garage: simetra\.stack-files-hash.*stopping the stack is the owner's call/
-      )
+      await expect(start(stack)).rejects.toMatchObject({
+        code: STACK_REFUSAL.differs,
+        message: expect.stringContaining("garage: simetra.stack-files-hash"),
+      })
       expect(stack.ups()).toEqual([])
     } finally {
       rmSync(copy, { recursive: true, force: true })
@@ -905,20 +945,40 @@ describe("startPostgres", () => {
 
   it.each([
     [
-      "the stack-files hash of postgres",
+      "a differing stack-files label of postgres",
       { postgres: { "simetra.stack-files-hash": "other" } },
+      STACK_REFUSAL.differs,
     ],
     [
-      "a missing stack-files hash of centrifugo",
+      "a missing container",
+      { garage: { "com.docker.compose.service": "other" } },
+      STACK_REFUSAL.differs,
+    ],
+    [
+      "no stack-files label on any container (built before the label)",
+      Object.fromEntries(
+        SERVICES.map((s) => [s, { "simetra.stack-files-hash": undefined }])
+      ),
+      STACK_REFUSAL.unlabelled,
+    ],
+    [
+      "an empty stack-files label of centrifugo",
       { centrifugo: { "simetra.stack-files-hash": "" } },
+      STACK_REFUSAL.unlabelled,
+    ],
+    [
+      "one unlabelled container beside a differing one",
+      {
+        postgres: { "simetra.stack-files-hash": "other" },
+        garage: { "simetra.stack-files-hash": undefined },
+      },
+      STACK_REFUSAL.unlabelled,
     ],
   ])(
-    "refuses a running stack whose %s differs, without up",
-    async (_title, labels) => {
+    "refuses a running stack with %s, without up",
+    async (_title, labels, code) => {
       const stack = fakeStack({ running: true, labels })
-      await expect(start(stack)).rejects.toThrow(
-        "stopping the stack is the owner's call"
-      )
+      await expect(start(stack)).rejects.toMatchObject({ code })
       expect(stack.ups()).toEqual([])
       expect(stack.psqls()).toEqual([])
     }

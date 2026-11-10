@@ -156,6 +156,17 @@ function removeLockFile(path) {
  * @property {number} [killAfterMs]
  */
 
+// EPERM на групі дочірнього — у ній процес, якому скрипт не може слати
+// сигнали (інший користувач, setuid): чекати на нього марно, тож групу
+// вважаємо завершеною й попереджаємо. Кидати не можна: виклики йдуть зі
+// слухача сигналу й таймера, і виняток там був би неперехопленим
+/** @param {number} pid @param {unknown} error */
+function warnGroup(pid, error) {
+  process.stderr.write(
+    `db-stack: cannot signal process group ${pid} (${/** @type {NodeJS.ErrnoException} */ (error).code ?? String(error)}); not waiting for it\n`
+  )
+}
+
 /** @param {number | undefined} pid @param {NodeJS.Signals} signal */
 function killGroup(pid, signal) {
   if (pid === undefined) return
@@ -163,7 +174,7 @@ function killGroup(pid, signal) {
     process.kill(-pid, signal)
   } catch (error) {
     if (/** @type {NodeJS.ErrnoException} */ (error).code !== "ESRCH")
-      throw error
+      warnGroup(pid, error)
   }
 }
 
@@ -174,7 +185,9 @@ function groupAlive(pid) {
     process.kill(-pid, 0)
     return true
   } catch (error) {
-    return /** @type {NodeJS.ErrnoException} */ (error).code === "EPERM"
+    if (/** @type {NodeJS.ErrnoException} */ (error).code !== "ESRCH")
+      warnGroup(pid, error)
+    return false
   }
 }
 
@@ -379,6 +392,17 @@ export function stackFilesHash(dir = PROFILES.postgres.dir) {
 }
 
 const STACK_FILES_LABEL = "simetra.stack-files-hash"
+
+/** Codes of the refusals of `start postgres` on a running stack. */
+export const STACK_REFUSAL = {
+  /** A container has no `simetra.stack-files-hash`: built before the label. */
+  unlabelled: "STACK_UNLABELLED",
+  /** A container is missing, or its label differs from this branch. */
+  differs: "STACK_DIFFERS",
+}
+
+/** @param {string} code @param {string} message */
+const refusal = (code, message) => Object.assign(new Error(message), { code })
 const SERVICE_LABEL = "com.docker.compose.service"
 
 /**
@@ -433,15 +457,28 @@ async function assertSameStack(ctx, containers) {
   const expected = stackFilesHash()
   /** @type {string[]} */
   const differences = []
+  /** @type {string[]} */
+  const unlabelled = []
   if (services.length === 0) differences.push("compose printed no services")
   for (const service of services) {
     const labels = containers.get(service)
+    const label = labels?.[STACK_FILES_LABEL]
     if (labels === undefined) differences.push(`${service}: no container`)
-    else if (labels[STACK_FILES_LABEL] !== expected)
+    // Порожнє значення — контейнер, створений compose без скрипту старту
+    else if (label === undefined || label === "") unlabelled.push(service)
+    else if (label !== expected)
       differences.push(`${service}: ${STACK_FILES_LABEL}`)
   }
+  // Стек без мітки походить з версії скрипту до неї: звірити нічого, лише
+  // перебудувати, і що саме виконати — відомо
+  if (unlabelled.length > 0)
+    throw refusal(
+      STACK_REFUSAL.unlabelled,
+      `the stack was built before the ${STACK_FILES_LABEL} label (${unlabelled.join(", ")}); rebuild it: node scripts/db-stack.mjs stop postgres --volumes, then pnpm db:pg:start (this deletes the stack's data)`
+    )
   if (differences.length > 0)
-    throw new Error(
+    throw refusal(
+      STACK_REFUSAL.differs,
       `stack config differs from this branch (${differences.join(", ")}); stopping the stack is the owner's call`
     )
 }

@@ -71,3 +71,9 @@ export function startPostgres(options?: {
   noBuild?: boolean
   cleanupTimeoutMs?: number
 }): Promise<void>
+
+/** Codes of the refusals of `start postgres` on a running stack (`error.code`). */
+export const STACK_REFUSAL: {
+  readonly unlabelled: string
+  readonly differs: string
+}
