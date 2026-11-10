@@ -101,7 +101,7 @@ B1c](2026-11-08-p4-b1c-conditional-batched-reads.md).
 
 **Files:**
 - Create: `packages/simetra/src/data/store/window.ts`
-- Modify: `packages/simetra/src/data/store/types.ts` (`ViewSpec` з `kind: "window"`; `ViewSnapshot` — `chain`, `target`, `atStart`, `count?`), `snapshot.ts` (`shareSnapshot` порівнює й нові поля), `forms.ts` (`formOf` для `window`; бюджет фільтра — фільтр користувача з найбільшою keyset-умовою цього `orderBy`), `filter.ts` (`keysetFromValue`, `reverseOrder` поряд з `keysetAfter`, повний кортеж з `NULL`), `subsets.ts`, `readers.ts` (прибрати заглушку), `packages/simetra/src/data/runtime/runtime.ts` (`residency`)
+- Modify: `packages/simetra/src/data/store/types.ts` (`ViewSpec` з `kind: "window"`; `ViewSnapshot` — `chain`, `target`, `atStart`, `count?`), `snapshot.ts` (`shareSnapshot` порівнює й нові поля), `forms.ts` (`formOf` для `window`; бюджет фільтра для `window` повторно бере наявну перевірку з `keysetNodesMax` (B1d), без нової), `filter.ts` (`keysetFromValue`: межа з видимого значення через `keysetFilter(orderBy, cursor, keyName, nullableOf(info))` з `direction: "before"` — без окремого `reverseOrder`; повний кортеж з `NULL`), `subsets.ts`, `readers.ts` (прибрати заглушку), `packages/simetra/src/data/runtime/runtime.ts` (`residency`)
 - Test: `packages/simetra/src/data/store/__tests__/window.test.ts` (Create), `filter.test.ts`, `full.test.ts` (оновити кейс заглушки)
 
 **Interfaces:**
