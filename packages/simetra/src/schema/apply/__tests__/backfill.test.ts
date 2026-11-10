@@ -396,6 +396,14 @@ describe("planBackfills", () => {
       ])
     })
 
+    it("refuses SET DEFAULT in the same action as SET NOT NULL", () => {
+      // Заповнення перед такою дією бачило б ще старий default
+      const both = action(
+        'ALTER TABLE "app"."items" ALTER COLUMN "note" SET DEFAULT \'\'::text, ALTER COLUMN "note" SET NOT NULL'
+      )
+      expect(codes(run({ actions: [both] }))).toEqual(["plan.backfill-order"])
+    })
+
     it("refuses a default dropped after it was set", () => {
       const drop = action(
         'ALTER TABLE "app"."items" ALTER COLUMN "note" DROP DEFAULT'
