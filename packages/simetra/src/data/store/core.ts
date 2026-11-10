@@ -122,6 +122,7 @@ export interface CoreInspection {
   versionEpochs(): {
     current: string | null
     previous: string | null
+    discards: number
     unavailable: boolean
   }
   /**
@@ -567,6 +568,7 @@ export function createCore(options: {
     versionEpochs: () => ({
       current: session.versions.current(),
       previous: session.versions.previous(),
+      discards: session.versions.discards(),
       unavailable: session.versions.unavailable(),
     }),
     serviceSizes() {

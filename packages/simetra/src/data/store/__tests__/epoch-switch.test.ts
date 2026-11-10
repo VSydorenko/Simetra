@@ -110,6 +110,50 @@ describe("acceptEpoch (Р6, Р7, Р12)", () => {
     expect(h.session.versions.discards()).toBe(DISCARDS_MAX - 1)
   })
 
+  it(`one pass with ${DISCARDS_MAX} discarded answers counts once`, () => {
+    const h = harness()
+    accept(h, EA)
+    accept(h, EB)
+    const start = h.now()
+    h.write(() => {
+      for (let i = 0; i < DISCARDS_MAX; i++)
+        expect(h.session.acceptEpoch(EA, start)).toBe("discard")
+    })
+    expect(h.session.versions.discards()).toBe(1)
+    expect(h.session.versions.unavailable()).toBe(false)
+  })
+
+  it("a pass with one applied answer of the current epoch resets the counter", () => {
+    const h = harness()
+    accept(h, EA)
+    accept(h, EB)
+    for (let i = 1; i < DISCARDS_MAX; i++) accept(h, EA)
+    expect(h.session.versions.discards()).toBe(DISCARDS_MAX - 1)
+    const start = h.now()
+    h.write(() => {
+      expect(h.session.acceptEpoch(EA, start)).toBe("discard")
+      expect(h.session.acceptEpoch(EB, start)).toBe("apply")
+      expect(h.session.acceptEpoch(EA, start)).toBe("discard")
+    })
+    expect(h.session.versions.discards()).toBe(0)
+    for (let i = 1; i < DISCARDS_MAX; i++) accept(h, EA)
+    expect(h.session.versions.unavailable()).toBe(false)
+  })
+
+  it("a pass whose reads started before the last counted pass does not count again", () => {
+    const h = harness()
+    accept(h, EA)
+    accept(h, EB)
+    const start = h.now()
+    for (let i = 0; i < DISCARDS_MAX; i++)
+      expect(accept(h, EA, start)).toBe("discard")
+    expect(h.session.versions.discards()).toBe(1)
+    // Читання, що почалось після врахованого проходу, — наступний прохід.
+    accept(h, EA)
+    expect(h.session.versions.discards()).toBe(2)
+    expect(h.session.versions.unavailable()).toBe(false)
+  })
+
   it("throws outside commit", () => {
     const h = harness()
     expect(() => h.session.acceptEpoch(EA, 0)).toThrow(
@@ -540,6 +584,116 @@ describe("core: the epoch switch", () => {
     h.fake.epoch = EB
     await deliver(h)
     expect(h.handle.getSnapshot()).toMatchObject({ status: "ready" })
+  })
+
+  /** Відповідає, доки обмежувач читань не випустить усі. */
+  async function drain(h: CoreHarness) {
+    await settle()
+    for (let i = 0; i < 10 && h.fake.pending.length > 0; i++) await deliver(h)
+    await settle()
+    expect(h.fake.pending).toHaveLength(0)
+  }
+
+  /** Ще `DISCARDS_MAX + 1` карток, завантажених у поточній епосі B. */
+  async function manyViews(h: CoreHarness) {
+    const many = Array.from({ length: DISCARDS_MAX + 1 }, (_, i) => i + 3)
+    seed(h.fake, 3, DISCARDS_MAX + 3)
+    const handles = many.map((n) => h.core.view(keysView(n)))
+    for (const handle of handles) watch(handle)
+    await drain(h)
+    for (const handle of handles)
+      expect(handle.getSnapshot()).toMatchObject({ status: "ready" })
+    return handles
+  }
+
+  it(`one revalidate pass over more than ${DISCARDS_MAX} views at a switch counts once`, async () => {
+    const h = await proven()
+    const handles = await manyViews(h)
+    h.fake.epoch = EA
+    void h.core.revalidate(TASK, { visibleOnly: false })
+    await drain(h)
+    expect(h.inspect.versionEpochs()).toMatchObject({
+      discards: 1,
+      unavailable: false,
+    })
+    for (const handle of handles)
+      expect(handle.getSnapshot().status).not.toBe("error")
+  })
+
+  it(`more than ${DISCARDS_MAX} views loading together at a switch count once`, async () => {
+    const h = await proven()
+    h.fake.epoch = EA
+    seed(h.fake, 3, DISCARDS_MAX + 3)
+    const handles = Array.from({ length: DISCARDS_MAX + 1 }, (_, i) =>
+      h.core.view(keysView(i + 3))
+    )
+    for (const handle of handles) watch(handle)
+    await drain(h)
+    expect(h.inspect.versionEpochs()).toMatchObject({
+      discards: 1,
+      unavailable: false,
+    })
+    // Повтори після паузи — наступний прохід, теж один.
+    vi.advanceTimersByTime(DISCARD_PAUSE_MS)
+    await drain(h)
+    expect(h.inspect.versionEpochs()).toMatchObject({
+      discards: 2,
+      unavailable: false,
+    })
+    h.fake.epoch = EB
+    vi.advanceTimersByTime(2 * DISCARD_PAUSE_MS)
+    await drain(h)
+    expect(h.inspect.versionEpochs().discards).toBe(0)
+    for (const handle of handles)
+      expect(handle.getSnapshot()).toMatchObject({ status: "ready" })
+  })
+
+  it(`${DISCARDS_MAX} revalidate passes in a row with the pause: command.unavailable; a new session works`, async () => {
+    const h = await proven()
+    const handles = await manyViews(h)
+    h.fake.epoch = EA
+    void h.core.revalidate(TASK, { visibleOnly: false })
+    await drain(h)
+    for (let pass = 1; pass < DISCARDS_MAX; pass++) {
+      expect(h.inspect.versionEpochs()).toMatchObject({
+        discards: pass,
+        unavailable: false,
+      })
+      // Пауза росте: раніше за неї повтору немає.
+      const pause = DISCARD_PAUSE_MS * 2 ** (pass - 1)
+      vi.advanceTimersByTime(pause - 1)
+      await settle()
+      expect(h.fake.pending).toHaveLength(0)
+      vi.advanceTimersByTime(1)
+      await drain(h)
+    }
+    expect(h.inspect.versionEpochs()).toMatchObject({
+      discards: DISCARDS_MAX,
+      unavailable: true,
+    })
+    for (const handle of [h.handle, ...handles])
+      expect(handle.getSnapshot()).toMatchObject({
+        status: "error",
+        error: { code: "command.unavailable" },
+      })
+    vi.advanceTimersByTime(60_000)
+    await settle()
+    expect(h.fake.pending).toHaveLength(0)
+
+    const core = createCore({
+      subject: "u1",
+      source: createCoreSource(
+        () => h.fake.adapter,
+        h.fake.index,
+        createReadLimiter(4)
+      ),
+      index: h.fake.index,
+    })
+    watch(core.view(keysView(1, 2)))
+    await drain(h)
+    expect(core.view(keysView(1, 2)).getSnapshot()).toMatchObject({
+      status: "ready",
+    })
   })
 
   it("a null section answer after a switch marks the lines stale and re-reads them once", async () => {

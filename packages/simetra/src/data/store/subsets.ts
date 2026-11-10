@@ -224,6 +224,20 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
             what
           )
           if (!discarded || !token.valid) return
+          // Цей прохід вичерпав межу (лічильник рухається після commit):
+          // повтору не буде, вигляд — `command.unavailable`.
+          if (session.versions.unavailable()) {
+            session.commit(
+              () => {
+                s.status = "error"
+                s.error = EPOCH_UNAVAILABLE
+                s.dirty = true
+              },
+              token,
+              what
+            )
+            return
+          }
           const pause =
             DISCARD_PAUSE_MS * 2 ** Math.max(0, session.versions.discards() - 1)
           return new Promise<void>((resolve) => {

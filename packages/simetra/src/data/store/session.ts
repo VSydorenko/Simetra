@@ -13,10 +13,13 @@ export interface Scope {
   assert(): void
 }
 
-/** Discarded answers in a row after which the session is unavailable (Р12). */
+/**
+ * Passes in a row with a discarded answer and no applied one, after which the
+ * session is unavailable (Р12).
+ */
 export const DISCARDS_MAX = 8
 
-/** The pause before the first re-read after a discarded answer; doubles. */
+/** The pause before the first re-read after a discarded pass; doubles. */
 export const DISCARD_PAUSE_MS = 100
 
 /**
@@ -36,10 +39,15 @@ export interface VersionEpochs {
    * non-empty one and its read started after the last switch (Р13).
    */
   proves(epoch: string | null | undefined, startEpoch: number): boolean
-  /** Answers discarded in a row; an applied answer resets it. */
+  /**
+   * Discarded passes in a row. A pass is one `commit`: it counts when it
+   * discarded an answer and applied none, and only when that answer's read
+   * started after the last counted pass (reads in flight together are one
+   * pass). A commit that applied an answer resets it.
+   */
   discards(): number
   /**
-   * {@link DISCARDS_MAX} answers in a row were discarded: every later answer
+   * {@link DISCARDS_MAX} passes in a row were discarded: every later answer
    * is discarded too and views get `command.unavailable`. The only way out
    * is a new session (Р12, exception Р36): the database keeps answering from
    * an epoch the session already left.
@@ -62,7 +70,8 @@ export interface Session {
    * epoch becomes current without a switch. Another non-empty epoch is a
    * switch (the session epoch moves, `onSwitch` listeners run) and the
    * answer applies — unless the epoch was left before or the read started
-   * before the last switch: then the answer is discarded.
+   * before the last switch: then the answer is discarded. The discard
+   * counter moves once per `commit`, after it (see `VersionEpochs.discards`).
    */
   acceptEpoch(epoch: string | null, startEpoch: number): "apply" | "discard"
   /**
@@ -112,6 +121,13 @@ export function createSession(options: {
   let switchedAt = 0
   let discards = 0
   let unavailable = false
+  // Одиниця лічильника — прохід (commit), не відповідь: один прохід над
+  // багатьма виглядами під час PITR інакше вичерпав би межу без паузи.
+  let passApplied = false
+  let passDiscarded = false
+  // Епоха сесії останнього врахованого проходу: відкинуте читання, що
+  // почалось раніше, летіло разом із ним і нового проходу не дає.
+  let countedAt = 0
   // Усі покинуті епохи до кінця сесії (Р12): витіснена могла б повернутись
   // як нова й перемикати епоху на кожній відповіді під час PITR.
   const abandoned = new Set<string>()
@@ -127,10 +143,25 @@ export function createSession(options: {
     unavailable: () => unavailable,
   }
 
-  function discard(): "discard" {
-    discards++
-    if (discards >= DISCARDS_MAX) unavailable = true
+  function discard(startEpoch: number): "discard" {
+    if (startEpoch >= countedAt) passDiscarded = true
     return "discard"
+  }
+
+  function apply(): "apply" {
+    passApplied = true
+    return "apply"
+  }
+
+  function endPass() {
+    if (passApplied) discards = 0
+    else if (passDiscarded) {
+      discards++
+      countedAt = epochs.next()
+      if (discards >= DISCARDS_MAX) unavailable = true
+    }
+    passApplied = false
+    passDiscarded = false
   }
 
   const sessionToken: GenerationToken = {
@@ -170,6 +201,8 @@ export function createSession(options: {
     } finally {
       open = false
       inCommit = false
+      // До flush: слухачі пачки бачать лічильник і `unavailable` проходу.
+      endPass()
       // Сповіщаємо й після збою fn: часткові зміни вже у сховищі.
       flush()
     }
@@ -186,28 +219,24 @@ export function createSession(options: {
     acceptEpoch(epoch, startEpoch) {
       if (!inCommit) throw new Error("acceptEpoch outside commit")
       if (unavailable) return "discard"
-      if (epoch === null || epoch === current) {
-        discards = 0
-        return "apply"
-      }
+      if (epoch === null || epoch === current) return apply()
       if (current === null) {
         // Перша непорожня епоха: `null`-відповіді до неї порівнювались як
         // завжди (Р6), тож скидати нічого.
         current = epoch
-        discards = 0
-        return "apply"
+        return apply()
       }
       // Відповідь покинутої епохи чи читання, що почалось до перемикання,
       // не впорядкована з рядками поточної (Р7, Р12).
-      if (abandoned.has(epoch) || startEpoch < switchedAt) return discard()
+      if (abandoned.has(epoch) || startEpoch < switchedAt)
+        return discard(startEpoch)
       abandoned.add(current)
       previous = current
       current = epoch
       switchedAt = epochs.next()
-      discards = 0
       epochs.adopt(previous)
       for (const listener of switchListeners) listener(previous)
-      return "apply"
+      return apply()
     },
     onSwitch(listener) {
       if (closed === undefined) switchListeners.push(listener)

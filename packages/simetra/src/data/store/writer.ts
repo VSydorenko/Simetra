@@ -627,7 +627,22 @@ async function revalidateViews(
     token,
     `revalidate ${o.name}`
   )
-  if (discarded.length > 0) {
+  // Цей прохід вичерпав межу (лічильник рухається після commit): повтору
+  // не буде, відкинуті вигляди — `command.unavailable`.
+  if (discarded.length > 0 && session.versions.unavailable()) {
+    session.commit(
+      () => {
+        for (const s of discarded) {
+          if (!s.alive || s.purged) continue
+          s.status = "error"
+          s.error = EPOCH_UNAVAILABLE
+          s.dirty = true
+        }
+      },
+      token,
+      `revalidate ${o.name}`
+    )
+  } else if (discarded.length > 0) {
     const pause =
       DISCARD_PAUSE_MS * 2 ** Math.max(0, session.versions.discards() - 1)
     // Не чекаємо паузи: `revalidate` завершується, а повтор іде тим самим

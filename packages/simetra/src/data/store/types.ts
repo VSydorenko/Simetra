@@ -160,12 +160,12 @@ export interface ActiveView {
 export interface Writer {
   /**
    * Applies one answer of a receiver re-read (P4-B plan B1c, Р7, Р12): the
-   * session gates it once by `versionEpoch` (`acceptEpoch`) and counts a
-   * discard once per answer. `rows` patch keys that have an owner (a signal
-   * brings no new key in); `absent` are keys the answer did not return
-   * (`removed`). `"discarded"` — nothing was written: the answer came from an
-   * abandoned epoch, from a read started before a switch, or the session is
-   * unavailable.
+   * session gates it once by `versionEpoch` (`acceptEpoch`); a discard counts
+   * toward the pass of its `commit`, not once per answer. `rows` patch keys
+   * that have an owner (a signal brings no new key in); `absent` are keys the
+   * answer did not return (`removed`). `"discarded"` — nothing was written:
+   * the answer came from an abandoned epoch, from a read started before a
+   * switch, or the session is unavailable.
    */
   apply(
     object: ObjectName,
