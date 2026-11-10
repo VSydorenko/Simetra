@@ -10,7 +10,6 @@ import {
 } from "../../src/compiler/__tests__/helpers"
 import { RAISE_SYNCHRONOUS_COMMIT_SQL } from "../../src/schema/apply/settings"
 import { withRollback } from "./connection"
-import { testProvider } from "./profile"
 
 /**
  * Механіка рядка на справжньому Postgres (спека промоції §9.2): `version` і
@@ -20,12 +19,10 @@ import { testProvider } from "./profile"
  * тригер спрацьовує в будь-якій ролі, що пише.
  */
 
-const provider = testProvider()
-
 async function deploy(client: pg.Client): Promise<void> {
   const result = await compile(
     metaFiles({
-      "project.meta.json": project({ database: { provider } }),
+      "project.meta.json": project(),
       "catalogs/Item/Item.meta.json": catalog("Item"),
     })
   )
@@ -172,7 +169,7 @@ describe("row mechanics in Postgres", () => {
 
   const WRITERS = [
     ["the command role", PLATFORM_ROLES.command],
-    ["the API user role", PROVIDER_API_ROLES[provider].user],
+    ["the API user role", PROVIDER_API_ROLES.supabase.user],
   ] as const
 
   it.each(WRITERS)(
