@@ -24,7 +24,12 @@ import { applyDiagnostic } from "./diagnostic"
 import type { DriftReport } from "./drift"
 import type { CatalogFingerprint, FingerprintSection } from "./fingerprint"
 import type { ApplyTransaction } from "./port"
-import { rowVersionSeedBlock, rowVersionTables } from "./row-version"
+import {
+  rowVersionSeedBlock,
+  rowVersionTables,
+  SEQUENCE_ID,
+} from "./row-version"
+import { RAISE_SYNCHRONOUS_COMMIT_PLPGSQL } from "./settings"
 import { PLATFORM_VERSION } from "./version"
 
 /**
@@ -44,7 +49,6 @@ const EPOCH_SIGNATURE = `${SCHEMA}.row_version_epoch()`
 const RESET_FUNCTION = `${PLATFORM_SCHEMA}.reset_row_version_epoch()`
 const RESET_SIGNATURE = `${SCHEMA}.reset_row_version_epoch()`
 const SEQUENCE_NAME = `${PLATFORM_SCHEMA}.${ROW_VERSION_SEQUENCE.name}`
-const SEQUENCE_ID = `sequence:${PLATFORM_SCHEMA}.${ROW_VERSION_SEQUENCE.name}`
 
 /**
  * Функції платформи плану (`platformFunctions` артефакту): функції шару з
@@ -222,6 +226,7 @@ function resetFunction(
   model: Pick<CompiledModel, "project" | "physical">
 ): string {
   const block = rowVersionSeedBlock(rowVersionTables(model), "fresh", [
+    RAISE_SYNCHRONOUS_COMMIT_PLPGSQL,
     `UPDATE ${VERSION_EPOCH} SET epoch = gen_random_uuid();`,
     "IF NOT FOUND THEN",
     `  INSERT INTO ${VERSION_EPOCH} DEFAULT VALUES;`,

@@ -228,6 +228,26 @@ describe("reset_row_version_epoch in Postgres", () => {
     })
   })
 
+  // Ручний виклик пише послідовність і UUID епохи: асинхронний коміт губив би
+  // їх після збою, тож правило те саме, що в раннера й `touch`
+  it.each([
+    ["off", "on"],
+    ["local", "on"],
+    ["on", "on"],
+    ["remote_write", "remote_write"],
+    ["remote_apply", "remote_apply"],
+  ])("raises synchronous_commit %s to %s", async (from, to) => {
+    await withRollback(async (client) => {
+      await deploy(client)
+      await client.query(`SET LOCAL synchronous_commit = ${from}`)
+      await client.query(RESET)
+      const { rows } = await client.query<{ v: string }>(
+        "SELECT current_setting('synchronous_commit') AS v"
+      )
+      expect(rows[0]!.v).toBe(to)
+    })
+  })
+
   for (const [label, role] of READERS)
     it.skipIf(role === undefined)(`${label} cannot run it: 42501`, async () => {
       await withRollback(async (client) => {

@@ -34,7 +34,8 @@ export interface RowVersionInput {
   rewritten: readonly RewrittenTable[]
 }
 
-const SEQUENCE_ID = `sequence:${ROW_VERSION_SEQUENCE.schema}.${ROW_VERSION_SEQUENCE.name}`
+/** Ідентичність одиниці послідовності версій у моделі двигуна. */
+export const SEQUENCE_ID = `sequence:${ROW_VERSION_SEQUENCE.schema}.${ROW_VERSION_SEQUENCE.name}`
 
 /** Чи є послідовність версій у моделі живої цілі. */
 export const hasRowVersionSequence = (model: CatalogModel): boolean =>

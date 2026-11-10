@@ -257,6 +257,10 @@ describe("renderApplyState: epoch of row versions", () => {
       "UPDATE simetra.version_epoch SET epoch = gen_random_uuid();"
     )
     expect(fn).toContain("INSERT INTO simetra.version_epoch DEFAULT VALUES;")
+    // Ручний виклик пише послідовність, тож коміт синхронний за правилом раннера
+    expect(fn).toContain(
+      "PERFORM pg_catalog.set_config('synchronous_commit', 'on', true) WHERE pg_catalog.current_setting('synchronous_commit') IN ('off', 'local');"
+    )
     // Замки йдуть до повторного сканування й до `setval`; epoха — після засіву
     expect(fn.indexOf("LOCK TABLE")).toBeLessThan(fn.indexOf("ALTER SEQUENCE"))
     expect(fn.indexOf("ALTER SEQUENCE")).toBeLessThan(fn.indexOf("setval("))
